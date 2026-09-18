@@ -1,12 +1,30 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 第一刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签四个对话框均可用，**111 单测 + 22 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前四刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口均可用，**121 单测 + 25 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第四刀（P2.3 余项）：五个排序键（+ 归档登记体积）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 行带原始值 ✅ | `ArchiveRow` 加 `updated_epoch` / `archived_epoch` / `size_bytes`（时间为 Unix 秒、体积为字节）——排序比原始值，**不解析格式化过的尾巴**（`1.2 KB` 与 `900 B` 比会静默排错）；`present::to_row` 从行模型填 | `src/resource_view.rs`、`src/present.rs` |
+| 五个排序键 ✅ | `SortField` 扩为 名称 / 归档时间 / 更新时间 / 大小 / 版本（原型 §2.2 口径）+ `SortField::ALL`（菜单顺序与文案的单一来源）；`apply_view` 逐键按原始值比较，同键名称兜底且**不随方向翻转** | `src/filter.rs` |
+| 缺值排最后 ✅ | `opt_key(Option<i64>, order)`：没有体积 / 没记归档时间的行在**两个方向上都排最后**——降序把“未知”顶到最前，等于让它冒充“最大” | 同上 |
+| 排序菜单 ✅ | 菜单遍历 `SortField::ALL`（原来硬编码两项），当前项带方向箭头 | `src/resource_view.rs` |
+| **体积真的被登记** ✅ | 「大小」排序要有真数据：`PayloadStore::file_size`（可传任意路径；读不到给 `None`，不假装 0）。归档（首次 / 再归档）、还原到历史版本、补登为存档、接受当前内容**五条路径都指纹与体积同批写**——只换指纹不换体积会让「大小」永远停在旧值上（错得比没数据还难发现）；写入前夹紧到 `i32` 上限（列是 64 位、模型是 `i32`，不夹会在读回时变出负数） | `src/payload.rs`、`src/model.rs`、`src/resource.rs`、`src/service.rs`、`src/indexer.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 1` → **121 单测 + 16 面板窗口 + 9 对话框窗口全绿**（+3 排序单测：三个键的原始值口径 / 缺值两方向都排最后 / 同键兜底不翻转；+1 面板窗口：名称与时间·体积反着排，证明没落到名称兜底上；+3 存储断言：归档登记体积、再归档换体积、还原回历史体积）；`cargo check -p rds-workbench --all-targets -j 1` 通过（3 条告警在编辑器补全的 WIP 里，与本批无关） | — |
+
+**两处刻意的取舍**：
+
+1. **体积写在归档时而不是渲染时**：面板取数在后台线程上，但为排序逐行 stat 等于每次刷新都把本体全读一遍元数据；归档一次记下来，行上就是纯数据（索引可重建：重建索引的 `adopt_file` 同样登记）；
+2. **缺值排最后而不是给 0 / 空字符串**：分析表与引用型本来就没有字节数，拿 0 参与排序会把它们混进“最小”一类——那是在编数据。
+
+**未落地**：搜索匹配别名 / 标签 / 来源表（P2.3 余项的另一半，需 `ArchiveRow` 再带这几个字段）、`keepVersions` 接设置项（P2.4）、分组折叠状态持久化（P2.4）、拖拽到分组头、批量打标签（P2.5）、`F2` 重命名。
 
 ### 2026-09-18 — Phase 2 第三刀：组织方式的管理入口（标签改名 / 删除 + 分组建 / 改 / 删 / 移动）
 
@@ -518,7 +536,7 @@
 | --- | --- | --- | --- |
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
 | P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染与管理入口已落**（第二 / 三刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
-| P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本） | `src/resource.rs`、`src/resource_view.rs` | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
+| P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **排序已落全五个键**（第四刀，含归档时登记体积）；**余**：搜索匹配别名 / 标签 / 来源表 | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
 | P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1） | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
 

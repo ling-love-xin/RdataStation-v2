@@ -106,6 +106,14 @@ fn escape_like(term: &str) -> String {
     escaped
 }
 
+/// 体积写入前的夹紧。
+///
+/// 列在 SQLite 里是 64 位，而模型（v1 遗留）是 `i32`——直接把大文件的值写进去，
+/// 读回时 `as i32` 会变出一个负数体积。超过 2 GiB 就记为 2 GiB（显示与排序都不失真到不可读）。
+fn clamp_file_size(bytes: Option<i64>) -> Option<i64> {
+    bytes.map(|value| value.clamp(0, i32::MAX as i64))
+}
+
 impl AnalyticsResourceStore {
     pub async fn create_resource(
         &self,
@@ -268,12 +276,12 @@ impl AnalyticsResourceStore {
             .execute(
                 r#"
             INSERT INTO analytics_resources (
-                id, resource_type, name, alias, config, scope,
+                id, resource_type, name, alias, config, scope, file_size,
                 version, parent_version_id, parent_resource_id, source_query,
                 created_at, updated_at,
                 kind, content_hash, file_rel_path, readonly,
                 promoted_from, source_connection_id, source_table, archived_at
-            ) VALUES (?, ?, ?, ?, '{}', ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, '{}', ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
             "#,
                 rusqlite::params![
                     &id,
@@ -281,6 +289,7 @@ impl AnalyticsResourceStore {
                     &input.name,
                     &input.alias,
                     &input.scope,
+                    clamp_file_size(input.file_size),
                     &now,
                     &now,
                     input.kind.as_db_str(),
@@ -300,11 +309,14 @@ impl AnalyticsResourceStore {
     /// 再归档：把新内容指纹写入已有存档行（版本 +1），`parent_version_id` 指向写前快照行。
     ///
     /// 只动索引行，**不碰文件系统**：旧内容的版本副本与本体覆盖由调用方（归档服务）负责。
+    /// `file_size` 必须与新内容一起给：**只换指纹不换体积**会让「大小」排序与行的尾巴
+    /// 永远停在旧值上（错得比没数据还难发现）。
     pub async fn update_archive_content(
         &self,
         id: &str,
         content_hash: &str,
         snapshot_id: &str,
+        file_size: Option<i64>,
     ) -> Result<AnalyticsResource, CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
@@ -314,10 +326,17 @@ impl AnalyticsResourceStore {
             .execute(
                 r#"
             UPDATE analytics_resources
-            SET content_hash = ?, version = version + 1, parent_version_id = ?, updated_at = ?
+            SET content_hash = ?, version = version + 1, parent_version_id = ?, updated_at = ?,
+                file_size = ?
             WHERE id = ? AND deleted_at IS NULL
             "#,
-                rusqlite::params![content_hash, snapshot_id, &now, id],
+                rusqlite::params![
+                    content_hash,
+                    snapshot_id,
+                    &now,
+                    clamp_file_size(file_size),
+                    id
+                ],
             )
             .map_err(|e| persistence_err("update", e))?;
 

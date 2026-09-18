@@ -67,6 +67,14 @@ pub struct ArchiveRow {
     /// 单层分组（架构 D8）：最多一个，所以是 `Option` 而不是集合——类型上就把
     /// “一个资源同时属于两个分组”这种不存在的状态挡掉。
     pub folder_id: Option<String>,
+    /// 最近更新时间（Unix 秒）——「更新时间」排序用。
+    ///
+    /// 排序比的是**原始值**：尾巴里是“3 天前”这种人读的字符串，比它等于没比（见 `filter::SortField`）。
+    pub updated_epoch: i64,
+    /// 归档时刻（Unix 秒，`None` = 没记录：未归档过的旧行）——「归档时间」排序用。
+    pub archived_epoch: Option<i64>,
+    /// 本体字节数（`None` = 未知：分析表 / 引用型 / 没记体积的旧行）——「大小」排序用。
+    pub size_bytes: Option<i64>,
 }
 
 /// 分组字典项（分组折叠区与「移动到分组」菜单共用）。
@@ -1568,7 +1576,7 @@ impl ResourcesPanel {
             dims => format!("筛选 {dims} ▾"),
         };
         let (field, order) = (self.sort_field, self.sort_order);
-        let sort_label = format!("{} {} ▾", field.label(), order.arrow());
+        let sort_label = format!("{} {} ▾", field.short_label(), order.arrow());
 
         let filter_button = Button::new("archive-filter")
             .ghost()
@@ -1631,7 +1639,7 @@ impl ResourcesPanel {
                 let panel = panel.clone();
                 move |menu, _window, _cx| {
                     let mut menu = menu.item(PopupMenuItem::label("排序"));
-                    for candidate in [SortField::Name, SortField::Version] {
+                    for candidate in SortField::ALL {
                         let target = panel.clone();
                         let is_current = candidate == field;
                         // 当前字段带上方向箭头：不然用户得回忆上次点的是哪个方向。

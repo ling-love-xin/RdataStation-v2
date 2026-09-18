@@ -154,6 +154,9 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
         tail: "1.2 KB · 3 天前".to_string(),
         tag_ids: Vec::new(),
         folder_id: None,
+        updated_epoch: 1_700_000_000,
+        archived_epoch: Some(1_700_000_000),
+        size_bytes: Some(1_228),
     }
 }
 
@@ -746,6 +749,89 @@ fn sort_click_flips_direction_and_keeps_it_across_fields(cx: &mut TestAppContext
     });
     assert_eq!(versions, vec![1, 2, 8]);
     assert!(host.calls().is_empty());
+}
+
+#[gpui_kit::test]
+fn sort_by_time_and_size_uses_raw_values(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    // 两条行的名称与时间 / 体积故意反着排：排序若落到名称兜底上就会被看出来。
+    let mut big = row("ar_big", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    big.name = "a_big.sql".to_string();
+    big.updated_epoch = 300;
+    big.archived_epoch = Some(30);
+    big.size_bytes = Some(1_228_800);
+
+    let mut small = row("ar_small", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    small.name = "z_small.sql".to_string();
+    small.updated_epoch = 100;
+    small.archived_epoch = Some(10);
+    small.size_bytes = Some(900);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(snapshot(vec![big, small], false), cx);
+        });
+    });
+
+    // 默认名称升序：a_big 在前（作为后面“确实换了口径”的对照）。
+    let order = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec!["ar_big".to_string(), "ar_small".to_string()]);
+
+    // 更新时间升序：时间早的在前（与名称顺序相反）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.choose_sort(SortField::UpdatedAt, cx));
+    });
+    let order = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec!["ar_small".to_string(), "ar_big".to_string()]);
+
+    // 换到大小（沿用升序）：900 B 在 1.2 KB 之前——拿尾巴字符串比就会反过来。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.choose_sort(SortField::Size, cx));
+    });
+    let order = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec!["ar_small".to_string(), "ar_big".to_string()]);
+
+    // 再点一次翻转：大的在前。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.choose_sort(SortField::Size, cx));
+    });
+    let order = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec!["ar_big".to_string(), "ar_small".to_string()]);
+    assert!(host.calls().is_empty(), "排序是纯视图动作，不该惊动宿主");
 }
 
 #[gpui_kit::test]

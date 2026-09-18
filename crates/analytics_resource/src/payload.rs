@@ -334,6 +334,17 @@ impl PayloadStore {
             .unwrap_or(false)
     }
 
+    /// 文件字节数（登记 `file_size` 用）：本体是目录或读不到时给 `None`——不假装 0。
+    ///
+    /// 传的是**任意路径**（归档时是工作区源文件，修复时是本体）：与 [`content_hash`](Self::content_hash)
+    /// 同一口径，本层只管字节，不管它住在哪。
+    pub async fn file_size(&self, path: &Path) -> Result<Option<i64>, CoreError> {
+        let meta = fs::metadata(path)
+            .await
+            .map_err(|e| io_err(path, "file_size", e))?;
+        Ok(meta.is_file().then(|| meta.len() as i64))
+    }
+
     /// 内容指纹（sha256，小写十六进制）：版本是否递增、是否"内容已变"的唯一依据（架构 §5.1）。
     pub async fn content_hash(&self, path: &Path) -> Result<String, CoreError> {
         let mut file = fs::File::open(path)

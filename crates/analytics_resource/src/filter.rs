@@ -121,23 +121,51 @@ pub fn build_visible_items(
     items
 }
 
-/// 排序字段。
+/// 排序字段（原型 §2.2 的五项）。
 ///
-/// 目前只支持**行上真实存在的键**（名称 / 版本号）。归档时间与大小需要 `ArchiveRow` 另带原始值
-/// （`updated_epoch` / `size_bytes`）——拿格式化后的尾巴字符串比较，会在 `1.2 KB` 与 `900 B`
-/// 之间得出错误顺序；宁可先不支持，也不做一个会静默排错的字段。
+/// 比的是**行上的原始值**（时间戳 / 字节数），不是格式化后的尾巴字符串——
+/// 拿 `1.2 KB` 与 `900 B` 比较会静默排错（前者小于后者的字节数）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortField {
     #[default]
     Name,
+    ArchivedAt,
+    UpdatedAt,
+    Size,
     Version,
 }
 
 impl SortField {
+    /// 菜单里的顺序（原型 §2.2 的“名称 / 归档时间 / 更新时间 / 大小 / 版本号”）。
+    pub const ALL: [SortField; 5] = [
+        Self::Name,
+        Self::ArchivedAt,
+        Self::UpdatedAt,
+        Self::Size,
+        Self::Version,
+    ];
+
     /// 菜单文案（与 `ui.rs` 的尺寸常量为同一类"就近常量"）。
     pub fn label(self) -> &'static str {
         match self {
             Self::Name => "名称",
+            Self::ArchivedAt => "归档时间",
+            Self::UpdatedAt => "更新时间",
+            Self::Size => "大小",
+            Self::Version => "版本号",
+        }
+    }
+
+    /// 工具栏按钮上的短文案。
+    ///
+    /// 按钮要跟着搜索框抢 240px 面板的宽度：四个字的「归档时间」会把搜索框挤到没法用
+    /// （菜单里有全名，不靠按钮认字段）。
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Name => "名称",
+            Self::ArchivedAt => "归档",
+            Self::UpdatedAt => "更新",
+            Self::Size => "大小",
             Self::Version => "版本",
         }
     }
@@ -278,6 +306,17 @@ pub fn needs_attention(row: &ArchiveRow) -> bool {
     row.status != ArchiveStatus::Normal
 }
 
+/// 缺值（没记体积 / 没记归档时间的旧行）的排序键：**两个方向上都排最后**。
+///
+/// 降序时把未知值顶到最前，等于让“不知道”冒充“最大”——那不是用户点「大小 ↓」想看的东西。
+fn opt_key(value: Option<i64>, order: SortOrder) -> i64 {
+    match (value, order) {
+        (Some(value), _) => value,
+        (None, SortOrder::Asc) => i64::MAX,
+        (None, SortOrder::Desc) => i64::MIN,
+    }
+}
+
 /// 筛选 → 排序（返回新集合，不改入参）。
 ///
 /// 排序**带名称兜底且兜底键不随方向翻转**：否则同一版本号的多行顺序不可预测，
@@ -298,6 +337,13 @@ pub fn apply_view(
         let primary = match field {
             SortField::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
             SortField::Version => left.version.cmp(&right.version),
+            SortField::UpdatedAt => left.updated_epoch.cmp(&right.updated_epoch),
+            SortField::ArchivedAt => {
+                opt_key(left.archived_epoch, order).cmp(&opt_key(right.archived_epoch, order))
+            }
+            SortField::Size => {
+                opt_key(left.size_bytes, order).cmp(&opt_key(right.size_bytes, order))
+            }
         };
         let primary = match order {
             SortOrder::Asc => primary,
@@ -330,6 +376,10 @@ mod tests {
             tail: tail.to_string(),
             tag_ids: Vec::new(),
             folder_id: None,
+            // 原始值默认给中性值：只有排序用例关心它们（需要时用结构体更新语法盖掉）。
+            updated_epoch: 0,
+            archived_epoch: None,
+            size_bytes: None,
         }
     }
 
@@ -417,12 +467,112 @@ mod tests {
         );
     }
 
+    /// 造一条带原始值的行（名称故意与时间 / 体积反着排，这样“按名称兜底”不会被误认为排对了）。
+    fn row_with_raw(
+        id: &str,
+        name: &str,
+        updated: i64,
+        archived: Option<i64>,
+        size: Option<i64>,
+    ) -> ArchiveRow {
+        ArchiveRow {
+            updated_epoch: updated,
+            archived_epoch: archived,
+            size_bytes: size,
+            ..row(id, name, ArchiveKind::File, ArchiveStatus::Normal, 1, "")
+        }
+    }
+
+    #[test]
+    fn time_and_size_sorts_use_the_raw_values() {
+        let rows = vec![
+            row_with_raw("ar_1", "a_big.sql", 300, Some(30), Some(1_228_800)),
+            row_with_raw("ar_2", "z_small.sql", 100, Some(10), Some(900)),
+            row_with_raw("ar_3", "m_mid.sql", 200, Some(20), Some(4096)),
+        ];
+        let none = ResourcesFilter::default();
+        let ids = |sorted: Vec<ArchiveRow>| {
+            sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+        };
+
+        // 时间：新的在前（降序是这一列的常态口径）。
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::UpdatedAt, SortOrder::Desc)),
+            vec!["ar_1", "ar_3", "ar_2"]
+        );
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::ArchivedAt, SortOrder::Asc)),
+            vec!["ar_2", "ar_3", "ar_1"]
+        );
+
+        // 大小按字节比：900 B 在 1.2 KB 之前（若拿尾巴字符串比就会反过来）。
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::Size, SortOrder::Asc)),
+            vec!["ar_2", "ar_3", "ar_1"]
+        );
+    }
+
+    #[test]
+    fn unknown_time_and_size_rows_stay_last_in_both_directions() {
+        let rows = vec![
+            row_with_raw("ar_unknown", "a_unknown.sql", 0, None, None),
+            row_with_raw("ar_small", "z_small.sql", 100, Some(10), Some(900)),
+            row_with_raw("ar_big", "m_big.sql", 200, Some(20), Some(4096)),
+        ];
+        let none = ResourcesFilter::default();
+        let ids = |sorted: Vec<ArchiveRow>| {
+            sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+        };
+
+        // 缺值不随方向翻转：升序降序都在末尾（“不知道”不当“最大”）。
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::Size, SortOrder::Asc)),
+            vec!["ar_small", "ar_big", "ar_unknown"]
+        );
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::Size, SortOrder::Desc)),
+            vec!["ar_big", "ar_small", "ar_unknown"]
+        );
+        assert_eq!(
+            ids(apply_view(&rows, &none, SortField::ArchivedAt, SortOrder::Desc)),
+            vec!["ar_big", "ar_small", "ar_unknown"]
+        );
+    }
+
+    /// 同一排序值（含两个都缺值）时按名称兜底，且兜底键不随方向翻转。
+    #[test]
+    fn ties_fall_back_to_name_without_flipping() {
+        let rows = vec![
+            row_with_raw("ar_b", "beta.sql", 0, None, None),
+            row_with_raw("ar_a", "Alpha.sql", 0, None, None),
+        ];
+        let none = ResourcesFilter::default();
+
+        for order in [SortOrder::Asc, SortOrder::Desc] {
+            let sorted = apply_view(&rows, &none, SortField::ArchivedAt, order);
+            assert_eq!(
+                sorted.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+                vec!["ar_a", "ar_b"],
+                "兜底键恒为名称升序（{order:?}）"
+            );
+        }
+    }
+
     #[test]
     fn order_flips_on_repeat_click() {
         assert_eq!(SortOrder::Asc.flipped(), SortOrder::Desc);
         assert_eq!(SortOrder::Desc.flipped(), SortOrder::Asc);
         assert_eq!(SortField::Name.label(), "名称");
-        assert_eq!(SortField::Version.label(), "版本");
+        // 菜单按原型 §2.2 的顺序：名称 / 归档时间 / 更新时间 / 大小 / 版本号。
+        assert_eq!(
+            SortField::ALL.map(SortField::label),
+            ["名称", "归档时间", "更新时间", "大小", "版本号"]
+        );
+        // 工具栏按钮用两字短文案（240px 面板里要跟搜索框分宽度）。
+        assert_eq!(
+            SortField::ALL.map(SortField::short_label),
+            ["名称", "归档", "更新", "大小", "版本"]
+        );
         assert_eq!(SortOrder::Asc.arrow(), "↑");
         assert_eq!(SortOrder::Desc.arrow(), "↓");
     }

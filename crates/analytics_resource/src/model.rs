@@ -258,6 +258,11 @@ pub struct NewArchiveInput {
     pub content_hash: String,
     /// 本体相对路径。
     pub file_rel_path: String,
+    /// 本体字节数（登记时现读；读不到给 `None`，不假装 0）。
+    ///
+    /// 三个去处：行的体积尾巴、详情面板的大小、列表的「大小」排序——排序比的是这个原始值，
+    /// 而不是格式化后的 `1.2 KB`（那会静默排错）。
+    pub file_size: Option<i64>,
     /// 来源绑定（归档凭证的"出处"）。
     pub binding: ArchiveBinding,
     /// 作用域（派生只读量，当前只产 `project`；架构 §4.3）。

@@ -221,6 +221,10 @@ pub fn to_row(
             .map(|list| list.iter().map(|tag| tag.id.clone()).collect())
             .unwrap_or_default(),
         folder_id: folders.get(&resource.id).cloned(),
+        // 原始值原样带上（视图层排序只看它们，不去解析格式化过的尾巴）。
+        updated_epoch: resource.updated_at.timestamp(),
+        archived_epoch: resource.archived_at.map(|when| when.timestamp()),
+        size_bytes: resource.file_size.map(i64::from),
     }
 }
 

@@ -72,10 +72,15 @@ impl ArchiveService {
             return Err(service_err("archive", "源文件不存在或不是普通文件"));
         }
         let content_hash = self.payload.content_hash(&req.source_path).await?;
+        // 体积也在搬运前读：本体随后会被 move 进 `resources/`，读的是同一个文件。
+        let file_size = self.payload.file_size(&req.source_path).await?;
 
         match req.existing_resource_id.clone() {
-            None => self.archive_new(req, content_hash).await,
-            Some(resource_id) => self.archive_into_existing(&resource_id, req, content_hash).await,
+            None => self.archive_new(req, content_hash, file_size).await,
+            Some(resource_id) => {
+                self.archive_into_existing(&resource_id, req, content_hash, file_size)
+                    .await
+            }
         }
     }
 
@@ -84,6 +89,7 @@ impl ArchiveService {
         &self,
         req: ArchiveRequest,
         content_hash: String,
+        file_size: Option<i64>,
     ) -> Result<ArchiveOutcome, CoreError> {
         if let Some(existing) = self.store.find_archive_by_rel_path(&req.rel_path).await? {
             return Err(service_err(
@@ -107,6 +113,7 @@ impl ArchiveService {
             kind: req.kind,
             content_hash: content_hash.clone(),
             file_rel_path: req.rel_path.clone(),
+            file_size,
             binding: req.binding.clone(),
             // 作用域为派生只读量：数据住项目库 → project（架构 §4.3）。
             scope: "project".to_string(),
@@ -152,6 +159,7 @@ impl ArchiveService {
         resource_id: &str,
         req: ArchiveRequest,
         content_hash: String,
+        file_size: Option<i64>,
     ) -> Result<ArchiveOutcome, CoreError> {
         let current = self.store.get_resource_by_id(resource_id).await?;
         if current.deleted_at.is_some() {
@@ -195,7 +203,7 @@ impl ArchiveService {
 
         let updated = self
             .store
-            .update_archive_content(resource_id, &content_hash, &snapshot_id)
+            .update_archive_content(resource_id, &content_hash, &snapshot_id, file_size)
             .await?;
 
         if let Err(e) = self
@@ -276,6 +284,8 @@ impl ArchiveService {
                 )
             })?;
         let copy_hash = self.payload.content_hash(&copy).await?;
+        // 还原后的体积就是副本的体积（写回后本体与副本同内容）。
+        let file_size = self.payload.file_size(&copy).await?;
         if copy_hash == current.content_hash.clone().unwrap_or_default() {
             // 幂等：要还原的内容就是当前内容，什么都不做（与再归档的指纹守卫同一口径）。
             return Ok(ArchiveOutcome {
@@ -316,7 +326,7 @@ impl ArchiveService {
 
         let updated = self
             .store
-            .update_archive_content(resource_id, &copy_hash, &snapshot_id)
+            .update_archive_content(resource_id, &copy_hash, &snapshot_id, file_size)
             .await?;
 
         if let Err(e) = self
@@ -782,6 +792,7 @@ mod tests {
         assert_eq!(row.file_rel_path.as_deref(), Some("reports/dau.sql"));
         assert_eq!(row.readonly, 1);
         assert!(row.archived_at.is_some(), "归档时刻应记录");
+        assert_eq!(row.file_size, Some(9), "归档时登记本体字节数（「大小」排序与行的尾巴都读它）");
         assert_eq!(row.promoted_from.as_deref(), Some("scratchpad/dau.sql"));
         assert_eq!(row.source_connection_id.as_deref(), Some("conn_1"));
 
@@ -950,7 +961,8 @@ mod tests {
             events.recv().await.expect("checked out event").reason,
             ChangeReason::CheckedOut
         );
-        fs::write(&copy, b"select 2;").await.expect("edit copy");
+        // 特意改成长度不同的内容：体积是否跟着换，看的是这个数。
+        fs::write(&copy, b"select 22;").await.expect("edit copy");
 
         let second = service
             .archive(archive_req(&copy, "dau.sql", Some(&first.resource_id)))
@@ -983,6 +995,7 @@ mod tests {
             .await
             .expect("row");
         assert_eq!(row.version, 2);
+        assert_eq!(row.file_size, Some(10), "体积跟着新内容一起换（不与指纹脱节）");
         assert_eq!(
             row.parent_version_id.as_deref(),
             Some(versions[0].id.as_str()),
@@ -1151,6 +1164,14 @@ mod tests {
         let payload = service.payload().resources_dir().join("dau.sql");
         assert_eq!(fs::read(&payload).await.expect("read"), b"select 1;");
         assert!(service.payload().is_readonly(&payload), "还原后的本体仍只读");
+
+        // 体积也回到 v1 的字节数（9 而不再是 v2 的）：「大小」一列不能停在还原前的值上。
+        let row = service
+            .store()
+            .get_resource_by_id(&first.resource_id)
+            .await
+            .expect("row");
+        assert_eq!(row.file_size, Some(9), "体积随本体一起回到历史值");
 
         // 历史：v1、v2 都有行（写前快照语义），且两份副本都还在（还原不消耗副本）。
         let versions = service

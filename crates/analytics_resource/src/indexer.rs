@@ -183,6 +183,7 @@ impl<'a> IndexRepair<'a> {
         }
 
         let content_hash = self.payload.content_hash(&path).await?;
+        let file_size = self.payload.file_size(&path).await?;
         let display_name = name.map(str::to_string).unwrap_or_else(|| {
             path.file_stem()
                 .map(|stem| stem.to_string_lossy().to_string())
@@ -197,6 +198,7 @@ impl<'a> IndexRepair<'a> {
                 kind,
                 content_hash,
                 file_rel_path: rel_path.to_string(),
+                file_size,
                 binding: ArchiveBinding::default(),
                 scope: "project".to_string(),
             })
@@ -230,6 +232,8 @@ impl<'a> IndexRepair<'a> {
         }
 
         let actual_hash = self.payload.content_hash(&path).await?;
+        // 实际内容也跟着换：体积必须与指纹同批更新，否则列表里的「大小」永远停在旧值。
+        let actual_size = self.payload.file_size(&path).await?;
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(shared::error::StorageError::Serialization {
                 format: "JSON".to_string(),
@@ -242,7 +246,7 @@ impl<'a> IndexRepair<'a> {
             .await?;
 
         self.store
-            .update_archive_content(resource_id, &actual_hash, &snapshot_id)
+            .update_archive_content(resource_id, &actual_hash, &snapshot_id, actual_size)
             .await
     }
 
@@ -404,6 +408,7 @@ mod tests {
         assert_eq!(adopted.name, "dau", "默认取文件名（去扩展名）");
         assert_eq!(adopted.file_rel_path.as_deref(), Some("reports/dau.sql"));
         assert!(adopted.content_hash.is_some(), "补登应现算指纹");
+        assert_eq!(adopted.file_size, Some(9), "补登也登记体积（否则「大小」一列永远是空的）");
         assert_eq!(adopted.kind, "file");
         assert_eq!(
             ArchiveKind::from_db_str(&adopted.kind).strength(),
@@ -439,6 +444,11 @@ mod tests {
 
         assert_eq!(accepted.version, 2, "接受当前内容 = 生成新版本");
         assert_eq!(accepted.content_hash.as_deref(), Some(actual.as_str()));
+        assert_eq!(
+            accepted.file_size,
+            Some(10),
+            "接受的是当前文件的实际体积（外部改动往往也改了长度）"
+        );
         assert!(
             service.payload().is_readonly(&payload),
             "修复后应重新加回只读"
