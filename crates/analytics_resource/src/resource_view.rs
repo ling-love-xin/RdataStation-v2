@@ -247,8 +247,11 @@ pub trait ResourcesHost: 'static {
     ///
     /// 凭据里的原路径只在内存里活一会儿（见 [`ArchiveUndo`]）：失效了就调不到这里。
     fn request_undo_archive(&self, undo: &ArchiveUndo, window: &mut Window, cx: &mut App);
-    /// 移入回收站。
-    fn request_delete(&self, resource_id: &str, window: &mut Window, cx: &mut App);
+    /// 移入回收站（单选一行或多选 N 行）。
+    ///
+    /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）。
+    /// 回收站只有一套（模块硬约束 5）：入口先留着，等 `ProjectTrash` 上提后接上。
+    fn request_delete(&self, resource_ids: &[String], window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段的「修复…」与面板头「⋯ → 重建索引…」共用）。
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
     /// 用系统文件管理器打开受管内容根（面板头「⋯ → 打开资源目录」）。
@@ -263,6 +266,101 @@ pub trait ResourcesHost: 'static {
     ///
     /// 与「打开 / 切换项目」同一条取数路径；不做局部刷新——列表是一整份快照。
     fn request_refresh(&self, window: &mut Window, cx: &mut App);
+}
+
+/// 行点击归一化后的语义（修饰键与点击数 → 四种行为；纯数据便于单测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowClick {
+    /// 无修饰：单选这一行。
+    Select,
+    /// `Ctrl` / `Cmd`：切换这一行的多选状态。
+    Toggle,
+    /// `Shift`：从锚点到这一行的区间选择。
+    Range,
+    /// 双击：打开（只读）。
+    Open,
+}
+
+/// 归一化行点击（原型 §2.3：单击选中 / `Ctrl`·`Shift` 多选 / 双击打开）。
+///
+/// 判定顺序：**双击优先**（双击必然也带 click_count ≥ 2）——打开是更强的意图；
+/// `Shift` 优先于 `Ctrl`（两个都按时按区间处理，与多数桌面应用一致）。
+pub fn classify_row_click(event: &ClickEvent) -> RowClick {
+    classify_click(event.click_count(), event.modifiers())
+}
+
+/// [`classify_row_click`] 的纯函数内核（事件取值与判定分开：判定可单测）。
+fn classify_click(click_count: usize, modifiers: Modifiers) -> RowClick {
+    if click_count >= 2 {
+        return RowClick::Open;
+    }
+    if modifiers.shift {
+        return RowClick::Range;
+    }
+    if modifiers.secondary() {
+        return RowClick::Toggle;
+    }
+    RowClick::Select
+}
+
+/// 行点击对选择集的变换（纯函数）：`multi` 始终按可见行顺序维护，`anchor` 是区间锚点。
+///
+/// 返回**焦点行**（= 最后点的那条；选择集为空时 `None`）。`order` 是当前可见行顺序。
+fn apply_row_click(
+    multi: &mut Vec<String>,
+    anchor: &mut Option<String>,
+    order: &[String],
+    id: &str,
+    click: RowClick,
+) -> Option<String> {
+    match click {
+        RowClick::Select | RowClick::Open => {
+            *multi = vec![id.to_string()];
+            *anchor = Some(id.to_string());
+        }
+        RowClick::Toggle => {
+            if let Some(index) = multi.iter().position(|candidate| candidate == id) {
+                // 取消最后一条 = 回到无选中（与多数列表一致）。
+                multi.remove(index);
+            } else {
+                multi.push(id.to_string());
+                sort_multi_by_order(multi, order);
+            }
+            *anchor = Some(id.to_string());
+        }
+        RowClick::Range => {
+            let target = order.iter().position(|candidate| candidate == id);
+            let from = anchor
+                .as_deref()
+                .and_then(|anchor| order.iter().position(|candidate| candidate == anchor));
+            match (from, target) {
+                (Some(from), Some(target)) => {
+                    let (low, high) = if from <= target {
+                        (from, target)
+                    } else {
+                        (target, from)
+                    };
+                    *multi = order[low..=high].to_vec();
+                }
+                // 锚点不在了（被筛掉 / 从没点过）：退化为单选。
+                _ => {
+                    *multi = vec![id.to_string()];
+                    *anchor = Some(id.to_string());
+                }
+            }
+        }
+    }
+    (!multi.is_empty()).then(|| id.to_string())
+}
+
+/// 按可见行顺序排序（不在列表里的排最后：集合语义，但顺序影响批量回执与测试）。
+fn sort_multi_by_order(multi: &mut Vec<String>, order: &[String]) {
+    multi.sort_by_key(|id| {
+        order
+            .iter()
+            .position(|candidate| candidate == id)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 /// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。
@@ -336,6 +434,9 @@ struct ArchiveListDelegate {
     details: std::collections::HashMap<String, ArchiveDetail>,
     /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
     selected_id: Option<String>,
+    /// 多选集合（**含焦点行**）：行背景与右键菜单的“多选态”靠它；
+    /// 选中变更时由面板推一份新副本过来（`render_item` 里读不了面板）。
+    multi_ids: std::collections::HashSet<String>,
     /// 面板正在把自己的选中镜像进列表。
     ///
     /// 此间组件回调的 `set_selected_index` **不再回写面板**：镜像发生在面板渲染期，
@@ -352,14 +453,21 @@ impl ArchiveListDelegate {
         rows: Vec<ArchiveRow>,
         details: std::collections::HashMap<String, ArchiveDetail>,
         selected_id: Option<String>,
+        multi_ids: std::collections::HashSet<String>,
         read_only: bool,
         cx: &mut Context<ListState<Self>>,
     ) {
         self.rows = rows;
         self.details = details;
         self.selected_id = selected_id;
+        self.multi_ids = multi_ids;
         self.read_only = read_only;
         cx.notify();
+    }
+
+    /// 多选态（> 1 条）且这一行在其中：行背景由我们画（组件的选中样式只认它的单选索引）。
+    fn multi_selected(&self, id: &str) -> bool {
+        self.multi_ids.len() > 1 && self.multi_ids.contains(id)
     }
 
     /// 索引 → 行（越界返回 `None`：行集合刚变的那一帧可能还拿着旧索引）。
@@ -407,6 +515,21 @@ impl ListDelegate for ArchiveListDelegate {
             foreground
         };
         let host = self.host.clone();
+        let multi_bg = cx.theme().colors.list_active;
+        // 多选态（> 1 条）：单行动作一律置灰（原型 §3.2“单/多选 → 单选可用”），
+        // 删除项改为对**整个选择集**生效并带数量。
+        let multi_count = self.multi_ids.len();
+        let multi_selected = self.multi_selected(&row.id);
+        let multi_delete_ids: Vec<String> = if multi_selected {
+            // 按可见行顺序过滤（HashSet 迭代序不定）：回执与测试都要确定性。
+            self.rows
+                .iter()
+                .filter(|candidate| self.multi_ids.contains(&candidate.id))
+                .map(|candidate| candidate.id.clone())
+                .collect()
+        } else {
+            vec![row.id.clone()]
+        };
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
         let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
         // 打开 / 取回都要整条详情（本体路径 / 扩展名在它身上）：渲染期提前拷一份——
@@ -422,7 +545,6 @@ impl ListDelegate for ArchiveListDelegate {
         // 「查看统计」只对**数据可得**的行摆出来（口径见 `can_view_stats`）。
         let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
         let checkout_detail = open_detail.clone();
-        let id_delete = row.id.clone();
         // 版本历史的入口只带 id（对话框的显示名由宿主查库得到）。
         let id_versions = row.id.clone();
 
@@ -477,6 +599,26 @@ impl ListDelegate for ArchiveListDelegate {
             );
         }
 
+        // 行点击自己接管（原型 §2.3）：组件默认把**单击**接到 `confirm`（= 打开），
+        // 而我们要求“单击=选中、双击=打开”——从源头掐掉它，外层的确认通道只留给 `Enter`。
+        let click_detail = open_detail.clone();
+        let click_id = row.id.clone();
+        let click_handler = {
+            let host = host.clone();
+            let panel = self.panel.clone();
+            move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                let click = classify_row_click(event);
+                let id = click_id.clone();
+                let _ = panel.update(cx, |panel, cx| panel.handle_row_click(&id, click, cx));
+                if click == RowClick::Open {
+                    if let Some(detail) = click_detail.as_ref() {
+                        host.request_open(detail, window, cx);
+                    }
+                }
+            }
+        };
+
         Some(
             ListItem::new(SharedString::from(format!("archive-row-{}", row.id))).child(
                 // 行的动作入口是右键菜单（原型 §3.2）：行本身只承载信息——240px 面板里
@@ -488,12 +630,15 @@ impl ListDelegate for ArchiveListDelegate {
                 div()
                     .id(SharedString::from(format!("archive-row-menu-{}", row.id)))
                     .w_full()
+                    // 多选高亮自己画：组件的选中样式只认它的**单选**索引（= 焦点行）。
+                    .when(multi_selected, |container| container.bg(multi_bg))
+                    .on_click(click_handler)
                     .child(line)
                     .context_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
                         menu = menu.item(
                             PopupMenuItem::new("打开（只读）")
-                                .disabled(!can_open)
+                                .disabled(!can_open || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -506,7 +651,7 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         menu = menu.item(
                             PopupMenuItem::new("查看统计")
-                                .disabled(!can_stats)
+                                .disabled(!can_stats || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -519,7 +664,7 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         menu = menu.item(
                             PopupMenuItem::new("取回（检出）…")
-                                .disabled(!can_checkout)
+                                .disabled(!can_checkout || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = checkout_detail.clone();
@@ -532,6 +677,7 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         menu = menu.item(
                             PopupMenuItem::new("版本历史…")
+                                .disabled(multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let id = id_versions.clone();
@@ -543,7 +689,7 @@ impl ListDelegate for ArchiveListDelegate {
                         // 破坏性项用分隔线隔离；其上的两项是"本体在哪儿"的日常动作（原型 §3.2）。
                         menu = menu.item(
                             PopupMenuItem::new("复制路径")
-                                .disabled(!can_open)
+                                .disabled(!can_open || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -556,7 +702,7 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         menu = menu.item(
                             PopupMenuItem::new("在系统中显示")
-                                .disabled(!can_open)
+                                .disabled(!can_open || multi_count > 1)
                                 .on_click({
                                     let host = host.clone();
                                     let detail = open_detail.clone();
@@ -567,10 +713,16 @@ impl ListDelegate for ArchiveListDelegate {
                                     }
                                 }),
                         );
-                        menu.separator().item(PopupMenuItem::new("移入回收站").on_click({
+                        // 删除是**唯一**多选可用的项（原型 §3.2）：多选时带上数量。
+                        let delete_ids = multi_delete_ids.clone();
+                        let delete_label = if multi_count > 1 {
+                            format!("移入回收站（{multi_count} 项）")
+                        } else {
+                            "移入回收站".to_string()
+                        };
+                        menu.separator().item(PopupMenuItem::new(delete_label).on_click({
                             let host = host.clone();
-                            let id = id_delete.clone();
-                            move |_, window, cx| host.request_delete(&id, window, cx)
+                            move |_, window, cx| host.request_delete(&delete_ids, window, cx)
                         }))
                     }),
             ),
@@ -647,6 +799,13 @@ pub struct ResourcesPanel {
     /// 行列表状态（**首帧渲染时创建**：`ListState` 同样需要窗口；空态不渲染它）。
     list: Option<Entity<ListState<ArchiveListDelegate>>>,
     selected: Option<String>,
+    /// 多选集合（按可见行顺序；单选时就是 `selected` 那一条，空 = 无选中）。
+    ///
+    /// 与 `selected` 并存：`selected` 是**焦点行**（详情面板读它），多选只是额外的选择集
+    /// （原型 §3.2：多选可用的动作只有批量删除，其余仍是单行语义）。
+    multi: Vec<String>,
+    /// `Shift` 区间的锚点：最后一次“无修饰 / Ctrl”点击的行。
+    anchor: Option<String>,
     notice: Option<String>,
     /// 正在取数（宿主在事件路径置位；原型 §5 的"加载中"行）。
     ///
@@ -676,6 +835,8 @@ impl ResourcesPanel {
             _search_sub: None,
             list: None,
             selected: None,
+            multi: Vec::new(),
+            anchor: None,
             notice: None,
             loading: false,
             undo: None,
@@ -726,6 +887,7 @@ impl ResourcesPanel {
             rows: self.view_rows.clone(),
             details: self.snapshot.details.clone(),
             selected_id: self.selected.clone(),
+            multi_ids: self.multi.iter().cloned().collect(),
             syncing_from_panel: false,
             read_only: self.snapshot.read_only,
         };
@@ -772,6 +934,14 @@ impl ResourcesPanel {
                 self.selected = None;
             }
         }
+        // 多选集合同样清悬空项（筛选 / 排序也会让行消失）。
+        self.multi.retain(|id| self.view_rows.iter().any(|row| &row.id == id));
+        if self.multi.is_empty() {
+            self.anchor = None;
+        } else if self.multi.len() == 1 {
+            // 只剩一条 = 回到单选态：焦点行就是它（不然详情面板与列表会各指一个）。
+            self.selected = self.multi.first().cloned();
+        }
         self.push_rows_to_list(cx);
     }
 
@@ -785,11 +955,12 @@ impl ResourcesPanel {
         let rows = self.view_rows.clone();
         let details = self.snapshot.details.clone();
         let selected = self.selected.clone();
+        let multi = self.multi.iter().cloned().collect();
         let read_only = self.snapshot.read_only;
         list.update(cx, |state, cx| {
             state
                 .delegate_mut()
-                .set_rows(rows, details, selected, read_only, cx);
+                .set_rows(rows, details, selected, multi, read_only, cx);
         });
     }
 
@@ -937,9 +1108,45 @@ impl ResourcesPanel {
     }
 
     /// 宿主驱动选中（生产入口；列表选中变化也走它）。
+    ///
+    /// 单选语义：选择集重置为这一条（多选是用户手势的产物，不由宿主推入）。
     pub fn set_selected(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        self.multi = id.iter().cloned().collect();
+        self.anchor = id.clone();
         self.selected = id;
         cx.notify();
+    }
+
+    /// 行点击（生产入口：行的 `on_click` 归一化后调它；窗口测试也走这里）。
+    ///
+    /// 四种语义见 [`RowClick`]；双击只更新选中，**打开由行的回调直接转给宿主**
+    /// （面板不认识服务层，也不该在这里再拼一条打开请求）。
+    pub fn handle_row_click(&mut self, id: &str, click: RowClick, cx: &mut Context<Self>) {
+        let order: Vec<String> = self.view_rows.iter().map(|row| row.id.clone()).collect();
+        let focus = apply_row_click(&mut self.multi, &mut self.anchor, &order, id, click);
+        // 焦点行总是最后点的那条：详情面板跟它走；选择集空 = 没有焦点。
+        self.selected = focus;
+        cx.notify();
+    }
+
+    /// 全选当前可见行（`Ctrl+A`；原型 §2.3 说“当前分组”，分组未落 → 即全部可见行）。
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.multi = self.view_rows.iter().map(|row| row.id.clone()).collect();
+        // 焦点行：原来的还在就保留（详情面板不跳），否则取第一条。
+        let keep = self
+            .selected
+            .as_deref()
+            .is_some_and(|selected| self.multi.iter().any(|id| id == selected));
+        if !keep {
+            self.selected = self.multi.first().cloned();
+        }
+        self.anchor = self.selected.clone();
+        cx.notify();
+    }
+
+    /// 当前选择集（多选优先；空 = 没有选中）——批量动作与窗口测试读它。
+    pub fn selected_ids(&self) -> Vec<String> {
+        self.multi.clone()
     }
 
     // ==================== 区域渲染 ====================
@@ -1479,9 +1686,17 @@ impl Render for ResourcesPanel {
             .on_action(cx.listener({
                 let host = host.clone();
                 move |panel: &mut Self, _: &commands::DeleteSelected, window, cx| {
-                    if let Some(id) = panel.selected.clone() {
-                        host.request_delete(&id, window, cx);
+                    // 多选时对整个选择集生效（原型 §3.2：删除是唯一多选可用的项）。
+                    let ids = panel.selected_ids();
+                    if !ids.is_empty() {
+                        host.request_delete(&ids, window, cx);
                     }
+                }
+            }))
+            .on_action(cx.listener({
+                // `Ctrl+A`：全选当前可见行（分组未落，即全部可见行）。
+                move |panel: &mut Self, _: &commands::SelectAllRows, _window, cx| {
+                    panel.select_all(cx);
                 }
             }))
             .on_action(cx.listener({
@@ -1516,11 +1731,101 @@ impl Render for ResourcesPanel {
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
     use super::{
-        ArchiveCounts, BadgeTone, HeaderMenuAction, badge_tone, can_view_stats, kind_icon,
-        row_tail, strength_badge,
+        ArchiveCounts, BadgeTone, HeaderMenuAction, RowClick, apply_row_click, badge_tone,
+        can_view_stats, classify_click, kind_icon, row_tail, strength_badge,
     };
     use crate::detail_view::ArchiveDetail;
     use crate::model::{ArchiveKind, ArchiveStatus};
+    use gpui_kit::Modifiers;
+
+    #[test]
+    fn row_click_classification_follows_the_prototype() {
+        let none = Modifiers::default();
+        // 次修饰键按平台取（macOS = Cmd，其余 = Ctrl）：测试不能写死一个平台。
+        let secondary = if cfg!(target_os = "macos") {
+            Modifiers {
+                platform: true,
+                ..none
+            }
+        } else {
+            Modifiers {
+                control: true,
+                ..none
+            }
+        };
+
+        assert_eq!(classify_click(1, none), RowClick::Select);
+        assert_eq!(classify_click(2, none), RowClick::Open, "双击优先");
+        assert_eq!(
+            classify_click(1, Modifiers { shift: true, ..none }),
+            RowClick::Range
+        );
+        assert_eq!(classify_click(1, secondary), RowClick::Toggle);
+        assert_eq!(
+            classify_click(
+                1,
+                Modifiers {
+                    shift: true,
+                    ..secondary
+                }
+            ),
+            RowClick::Range,
+            "两个修饰键都按：区间优先"
+        );
+        assert_eq!(
+            classify_click(2, Modifiers { shift: true, ..none }),
+            RowClick::Open,
+            "双击带修饰键仍是打开"
+        );
+    }
+
+    #[test]
+    fn row_click_updates_the_selection_set() {
+        let order: Vec<String> = ["ar_1", "ar_2", "ar_3"]
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        let mut multi = Vec::new();
+        let mut anchor = None;
+
+        // 单击：单选（多选被重置）。
+        assert_eq!(
+            apply_row_click(&mut multi, &mut anchor, &order, "ar_2", RowClick::Select),
+            Some("ar_2".to_string())
+        );
+        assert_eq!(multi, vec!["ar_2"]);
+
+        // Ctrl 点击：加入，并按**可见行顺序**排（不是点击顺序）。
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_1", RowClick::Toggle);
+        assert_eq!(multi, vec!["ar_1", "ar_2"]);
+        assert_eq!(anchor.as_deref(), Some("ar_1"));
+
+        // Ctrl 再点同一条：移出；最后一条被取消 = 无选中。
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_1", RowClick::Toggle);
+        assert_eq!(multi, vec!["ar_2"]);
+        let focus = apply_row_click(&mut multi, &mut anchor, &order, "ar_2", RowClick::Toggle);
+        assert!(multi.is_empty() && focus.is_none());
+
+        // Shift：从锚点到被点行的区间（反向也成立）。
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_1", RowClick::Select);
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_3", RowClick::Range);
+        assert_eq!(multi, vec!["ar_1", "ar_2", "ar_3"]);
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_1", RowClick::Select);
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_2", RowClick::Select);
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_3", RowClick::Range);
+        assert_eq!(multi, vec!["ar_2", "ar_3"], "锚点跟着最后一次单选走");
+
+        // 锚点不在了（被筛掉）：区间退化为单选。
+        let mut anchor = Some("ar_gone".to_string());
+        let mut multi = vec!["ar_1".to_string()];
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_3", RowClick::Range);
+        assert_eq!(multi, vec!["ar_3"]);
+
+        // 双击：与单击同样落到单选（打开由行回调直接转给宿主）。
+        let mut multi = vec!["ar_1".to_string(), "ar_2".to_string()];
+        apply_row_click(&mut multi, &mut anchor, &order, "ar_3", RowClick::Open);
+        assert_eq!(multi, vec!["ar_3"]);
+    }
 
     #[test]
     fn header_menu_actions_follow_the_prototype_order() {

@@ -14,7 +14,7 @@
 //! 数据根位置见 `docs/architecture/runtime/data-paths.md`：默认 = 可执行文件所在目录
 //! （安装目录），`RDS_HOME` 可覆盖；日志见 `docs/architecture/runtime/logging.md`。
 
-use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch};
+use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch, SelectAllRows};
 use editor::commands::{
     CloseDocument, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument, SaveDocument,
     SaveDocumentAs, ToggleComment,
@@ -189,6 +189,8 @@ fn run_app() {
                 KeyBinding::new("ctrl-f", FocusSearch, Some("analytics-resource")),
                 KeyBinding::new("escape", ClearSearch, Some("analytics-resource")),
                 KeyBinding::new("delete", DeleteSelected, Some("analytics-resource")),
+                // 全选可见行（多选态；行的多选手势见 `classify_row_click`）。
+                KeyBinding::new("ctrl-a", SelectAllRows, Some("analytics-resource")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),

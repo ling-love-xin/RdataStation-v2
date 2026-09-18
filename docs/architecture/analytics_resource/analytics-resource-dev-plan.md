@@ -8,6 +8,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 1 第十四刀：批量多选与行点击归位（原型 §2.3 / §3.2 / §9）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **单击不再打开** ✅ | 组件（`list::List`）把**单击**接到 `confirm`，而面板的 confirm 是「打开（只读）」——点一行就开文件，与原型“单击=选中、双击=打开”相反。行自己接管点击（`on_click` + `stop_propagation`），外层的确认通道只留给 `Enter` | `src/resource_view.rs`（`classify_row_click`） |
+| 点击语义 ✅ | `RowClick` 四态：单击=单选、`Ctrl`=切换入选择集、`Shift`=从锚点到该行的区间、双击=打开；判定用纯函数 `classify_click(click_count, modifiers)`（双击优先、`Shift` 优先于 `Ctrl`），变换用 `apply_row_click`（选择集按可见行顺序维护）——两者都有单测 | 同上 |
+| 多选状态 ✅ | 面板 `multi`（选择集，有序）+ `anchor`（区间锚点）与 `selected`（焦点行，详情面板读它）并存；空集时清锚点、只剩一条时焦点回归它；筛选/排序同样清悬空项 | 同上 |
+| `Ctrl+A` ✅ | 全选当前可见行（原型 §2.3 说“当前分组”，分组未落 → 即全部可见行）；新 Action `SelectAllRows`，app 层绑 `ctrl-a` | `src/commands.rs`、`crates/app/src/main.rs` |
+| 多选视觉与菜单 ✅ | 多选行自己画背景（组件的选中样式只认它的单选索引）；多选时单行动作（打开 / 查看统计 / 取回 / 版本历史 / 复制路径 / 在系统中显示）一律置灰，删除项改文案为“移入回收站（N 项）”并对整个选择集生效（原型 §3.2“单/多选 → 单选可用”） | `src/resource_view.rs` |
+| 批量删除链路 ✅ | `ResourcesHost::request_delete` 改收 `&[String]`（单条与批量同一条路）；`DeleteSelected` 改成对整个选择集生效；回执带数量（真删除仍等 P0.8） | 同上、`crates/workbench/src/components/resource_host.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **95 单测 + 6 对话框窗口测试 + 12 面板窗口测试全绿**（+2 单测：点击判定与选择集变换；+1 窗口测试：手势 → `Ctrl+A` → `Delete` 整批到宿主，且选中不触发打开）；`cargo test -p rds-workbench --test ui_contract -j 2` 7 项全绿；`cargo check -p rds-workbench --all-targets` 与 `cargo check -p rds-app` 零告警 | — |
+
+**两处刻意的克制**：
+
+1. **不做批量取回**：原型 §3.2 把取回定为“单选”（多选在原型里只解锁批量删除与后续的批量标签/移动），不自己加一套；
+2. **`Esc` 不清多选**：原型里 `Esc` 只负责清搜索 / 关菜单，不抢它的语义（清多选等真实需要时再说）。
+
+**未落地**：`F2` 重命名（等重命名入口，Phase 2）；批量打标签 / 批量移动（等标签与分组批）；批量删除的真执行（等 P0.8）。
+
 ### 2026-09-17 — Phase 3 第二刀：索引修复对话框（原型 §4.5）
 
 | 项 | 内容 | 落点 |

@@ -15,13 +15,13 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Focusable as _, TestAppContext, Window};
 
-use rds_analytics_resource::commands::{ClearSearch, OpenSelected};
+use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected, SelectAllRows};
 use rds_analytics_resource::detail_view::ArchiveDetail;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, HeaderMenuAction, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
-    dispatch_header_action,
+    RowClick, dispatch_header_action,
 };
 
 /// 宿主替身：只记录调用，不接真实服务（窗口测试不碰后端）。
@@ -69,8 +69,10 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("versions:{resource_id}"));
     }
-    fn request_delete(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
-        self.calls.borrow_mut().push(format!("delete:{resource_id}"));
+    fn request_delete(&self, resource_ids: &[String], _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("delete:{}", resource_ids.join(",")));
     }
     fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, _cx: &mut App) {
         self.calls
@@ -453,6 +455,68 @@ fn host_selection_mirrors_into_list_without_reentry(cx: &mut TestAppContext) {
     let selected = cx.update(|_window, cx| panel.read(cx).selected_id().map(str::to_string));
     assert_eq!(selected, None);
     assert!(host.calls().is_empty(), "仅渲染与选中不应触发任何宿主动作");
+}
+
+#[gpui_kit::test]
+fn multi_selection_and_select_all_reach_the_host_on_delete(cx: &mut TestAppContext) {
+    // 多选批的第一条**真链路**：手势 → 选择集 → `Ctrl+A` → `Delete` → 整批到宿主。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2),
+                        row("ar_3", ArchiveKind::File, ArchiveStatus::Normal, 3),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+        });
+    });
+
+    // 单击 → 单选；Ctrl 点击 → 加一条（按可见行顺序）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.handle_row_click("ar_2", RowClick::Select, cx);
+            panel.handle_row_click("ar_1", RowClick::Toggle, cx);
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).selected_ids()),
+        vec!["ar_1", "ar_2"]
+    );
+
+    // `Ctrl+A` 全选（生产入口：app 层的键绑定就是派发它）。
+    cx.update(|window, cx| {
+        let handle = panel.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(SelectAllRows), cx);
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).selected_ids()),
+        vec!["ar_1", "ar_2", "ar_3"]
+    );
+
+    // `Delete`：整批交给宿主（真删除等 P0.8，回执带数量）。
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(DeleteSelected), cx);
+    });
+    assert_eq!(host.calls(), vec!["delete:ar_1,ar_2,ar_3"]);
+    assert!(
+        !host.calls().iter().any(|call| call.starts_with("open:")),
+        "选中不是打开：单击只改选中（打开在双击 / Enter）"
+    );
 }
 
 #[gpui_kit::test]

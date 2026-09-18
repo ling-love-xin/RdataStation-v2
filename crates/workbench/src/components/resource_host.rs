@@ -484,9 +484,15 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.notice("资产库：正在读取版本历史…", cx);
     }
 
-    fn request_delete(&self, _resource_id: &str, _window: &mut Window, cx: &mut App) {
+    fn request_delete(&self, resource_ids: &[String], _window: &mut Window, cx: &mut App) {
+        // 多选批量与单选同一条路：批量时把数量说清楚（回执是当前唯一的反馈）。
+        let scope = match resource_ids.len() {
+            0 => return,
+            1 => String::new(),
+            count => format!("（已选 {count} 项）"),
+        };
         self.pending(
-            "移入回收站尚未接入",
+            &format!("移入回收站尚未接入{scope}"),
             "（等项目级回收站上提，P0.8；不做两套回收站）",
             cx,
         );
