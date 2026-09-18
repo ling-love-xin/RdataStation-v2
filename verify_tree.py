@@ -33,6 +33,7 @@ VERIFY = os.path.abspath(os.path.join("target", "verify-tree"))
 # 本次改动涉及的文件（**每次改完要同步**）
 MINE = [
     # 引擎：影响行数（B5-1）与错误位置（B6）
+    "crates/engine/tests/duckdb_extensions_probe.rs",
     "crates/engine/src/driver/utils.rs",
     "crates/engine/src/driver/native/mysql.rs",
     "crates/engine/src/driver/native/mysql_native.rs",
