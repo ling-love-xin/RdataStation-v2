@@ -3,6 +3,7 @@
 > 状态：**规则编写部分为现行契约**（2026-09-15，与代码逐字段核对）；**界面部分已落地**（Phase 1–5，含 2026-09-18 的四个入口接线、**文件类数据源**与**结构洞察入口**，见 `insight-dev-plan.md` §0）
 > 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-architecture.md`（设计理念与不变式）、`insight-dev-plan.md`（开发方案与进度）
 >
+> **第一次接触这个模块？先看「一页看懂」**：`insight-showcase.md`（可贴版，带流程图）· `insight-showcase.html`（视觉版，双击即开）。
 > **给写规则的人**：直接跳到 §4。规则格式是**带 `deny_unknown_fields` 的严格 schema**——字段名或位置写错，整条规则会被拒绝加载（不会“部分生效”）。§4.6 有完整可照抄的示例。
 
 ## 1. 入口

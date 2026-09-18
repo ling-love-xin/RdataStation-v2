@@ -149,7 +149,8 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 16 条一览** / FAQ 排查 / USIT 验收清单 |
 | `insight-prototype.html` | 可交互示意稿（明暗双主题；列画像 / 质量卡 / 表探查 / 规则管理含禁用与校验失败态） |
-| `insight-showcase.html` | **一页看懂（宣传 / 分享用）**：定位与关键数字 / 三个问题 / 面板骨架 / 五 Tab / 五步旅程 / 分层架构 / 八个特点 / 规则示例 / 入口矩阵 / 质量与验证 / 二期路线。**宣传稿，数字以本目录其他文档为准**；带主题切换，可与原型页对照看 |
+| `insight-showcase.md` | **一页看懂（可贴版）**：关键数字 / 三个问题 / 五 Tab / 五步旅程与分层架构（**mermaid 图**）/ 八个特点 / 规则 TOML / 入口矩阵 / 质量与验证 / 二期路线 / 文档地图。适合贴进 PR、wiki 与聊天 |
+| `insight-showcase.html` | **一页看懂（视觉版）**：同一套内容的卡片化排版 + 面板骨架线框 + 主题切换（自包含、离线可开）。**宣传稿：数字以本目录其他文档为准** |
 | `../overview.md` | M8 定位与 crate 依赖方向（§九大模块与 crate 对应） |
 | `../connection/connection-dialog-architecture.md` | 作用域与快照（`G_`/`P_`/`GP_`）的既有范式参照 |
 | `../ui/ui-design-spec.md` | 三层约束（主题 token / 尺寸常量 / 组件规格） |
