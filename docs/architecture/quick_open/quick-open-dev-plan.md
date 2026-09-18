@@ -1,11 +1,26 @@
 # Quick Open · 开发方案（Phase 0–2）
 
-> 状态：**Phase 1 第二刀（截断提示 + 命令目录）已落地（2026-09-19）**；下一刀：草稿箱文件源（需扁平清单通道）
+> 状态：**Phase 1 第三刀（引擎侧名称档提速：两段式 + 名序窗口 + 表达式索引）已落地（2026-09-19）**；下一刀：草稿箱文件源（需扁平清单通道）
 > 关联：`quick-open-prototype-design.md`（原型设计 = 权威规格）、`quick-open-prototype.html`（交互稿）、`../layout/layout-design.md` §2.1/§3.3（入口承诺）
 > 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs`
 > 说明：本文件记录**做什么、做到哪**；「长什么样」看原型设计，「为什么这样设计」待 `quick-open-architecture.md`
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19 — Phase 1 第三刀：名称档提速（两段式 + 名序窗口 + 表达式索引）
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P1.10 | 迁移 012：`metadata_index` 加 `(connection_id, LOWER(object_name))` 复合索引。**初版单列 `(LOWER(object_name))` 被规划器弃用**（实测 `EXPLAIN QUERY PLAN` 仍选 `idx_metadata_index_level`，只吃 `connection_id` 等值、范围条件退化成逐行过滤）→ 等值列必须做前导 | `crates/engine/migrations/connection_metadata/012_index_object_name_lower.sql`（新） | ✅ |
+| P1.11 | 名称档改**两段式**：前缀段用 `>= needle AND <= needle||U+10FFFF` 的范围比较（走索引，LIKE 走不上）；装满 `limit` 即早退，没装满才回落中缀 LIKE 全扫补名额 | `metadata_cache.rs::search_index`（`SQL_SEARCH_INDEX_PREFIX` / `SQL_SEARCH_INDEX_FALLBACK`） | ✅ |
+| P1.12 | 前缀段加**名序窗口**（`SEARCH_INDEX_PREFIX_WINDOW = 2000`）：内层按 `LOWER(object_name)` 名序取窗口（索引可提前停），外层只在窗口内做完整排序。**只加索引不够**：排序键含 `LENGTH` + 类别，索引加速不了排序——8 万前缀命中时「扫索引 + 全排序」仍要 178 ms | 同上 | ✅ |
+| P1.13 | 排序补 `mi.id` 兜底：同名同长同类的列（各表的 `id` / `created_at`）原先完全同分、次序由扫描路径决定 → 按键重搜会跳；两段拼接也要求它确定 | 同上 | ✅ |
+| P1.14 | 搜索单测 +3：**两段式 vs 优化前单条查询逐条等价**（前缀装满 / 前缀不足 / 零前缀 / 转义 / 大小写 / 同分列）、**窗口边界口径**（≤ 窗口精确、超窗口取窗口内最优）、**计划断言**（真走复合索引、范围条件参与定位） | `metadata_cache.rs` 内 `tests` | ✅ 全绿 |
+| 验证 | `cargo test -p rds-engine --lib` → **443 项全绿**（另 24 项 `#[ignore]` 存量）；基线（10 万对象 / debug）：`table_`（8 万前缀命中）**178 ms → 4–6 ms**；写入 6.5 s（索引代价可忽略）；纯中缀档多跑一趟前缀段，约 +20%（~30–40 ms，debug） | — | ✅ |
+
+**取舍记录（窗口）**：窗口 = 拿「超大命中集的尾部精度」换「按键响应时间」。前缀命中 ≤ 2000 时结果与全量排序**逐条相同**；超出时只在「名序靠后的名字反而更短」这一形态下有差异（`win_zz` 型，用例 `search_index_prefix_window_is_exact_within_bound` 钉住）。要更极致的按名序精确 + 更快，得把排序键里的 `LENGTH` 拿掉（排序退化为「类别 + 名序」，可索引直出）——**属产品可见的排序改动，待拍板**。
+
+**未做（仍在 §18.2）**：中缀档仍是全表扫（无索引可用）；要再降只能靠 trigram 兜底或短时缓存。
 
 ### 2026-09-19 — Phase 1 第二刀（一）：截断不再静默 + 命令目录外提
 
