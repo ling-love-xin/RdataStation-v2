@@ -1,0 +1,109 @@
+# 第三方声明（Third-Party Notices）
+
+本文件覆盖**不随代码许可走的**第三方素材：内置图标资产、预编译第三方库，以及数据库名称与
+图标的商标口径。本产品自身代码许可见 `LICENSE`（MIT）。
+
+> 依赖许可（Rust / npm 包）各自随包分发；需要一份汇总清单时用
+> `cargo about generate`（或 `cargo metadata` + 许可字段）生成，本文件不逐条复制它们。
+
+## 1. 内置图标资产：Lucide（含 Feather 派生部分）与 GPUI Kit
+
+界面内置的图标来自 GPUI Kit 打包的 Lucide 目录：**Lucide 1.43.0** 的 1818 个图标，
+另加 **12 个 GPUI Kit** 自带图标（合计 1830 个，由 `gpui-kit-assets` 以 rust_embed 内嵌）。
+
+- Lucide SVG：**ISC**（`Copyright (c) 2026 Lucide Icons and Contributors`）；
+- 其中**派生自 Feather** 的图标：**MIT**（`Copyright (c) 2013-present Cole Bemis`）；
+- GPUI Kit 的 crate 代码与其新增图标：**Apache-2.0**。
+
+按上游要求，以下许可与归属文本随本产品一并保留（与 `gpui-kit-assets` 的
+`LICENSE-LUCIDE` 一致）：
+
+```text
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+The following Lucide icons are derived from the Feather project:
+
+airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle,
+arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left,
+arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right,
+arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right,
+chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle,
+clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right,
+corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left,
+corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign,
+download, external-link, feather, frown, hash, headphones, help-circle, info, italic,
+key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh,
+minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal,
+more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent,
+plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag,
+sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash,
+triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
+
+The MIT License (MIT) (for the icons listed above)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## 2. 预编译第三方库：DuckDB
+
+DuckDB 内核以**预编译动态库**随构建分发（`third_party/duckdb/<版本>/`，由
+`tools/fetch-duckdb.sh` 从官方 release 取得，见 `docs/architecture/dependencies/duckdb-linking.md`）。
+DuckDB 采用 MIT 许可：
+
+```text
+Copyright 2018-2026 Stichting DuckDB Foundation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+DuckDB 扩展（`mysql` / `postgres` / `sqlite` / `httpfs` 等）由用户在运行时按需
+`INSTALL` / `LOAD`，各自遵循上游许可。
+
+## 3. 数据库名称与品牌图标（商标）
+
+- **本产品不包含、也不分发数据库品牌图标。** 界面默认使用第 1 节的中性图标，以及数据目录里
+  的 emoji 标识；品牌图标属**用户可选素材**——用户可自行放入运行时资源目录
+  `<RDS_HOME>/icons/db/<type_id>.svg`，其影响范围仅限该用户本机。
+- 各数据库 / 产品名称与图标均为其**各自所有者的商标或注册商标**。本产品在提及这些名称、
+  或（经用户配置）显示对应图标时，**仅为指代所连接的产品**，不代表任何厂商的赞助、认可或
+  背书；相关商标权利归各所有者所有。
+- 若将来在仓库或安装包中收录品牌图标，须逐个登记素材来源与厂商品牌政策，并遵守其使用条款
+  ——台账与落地配方见 `docs/architecture/ui/db-icons.md` §2.3。

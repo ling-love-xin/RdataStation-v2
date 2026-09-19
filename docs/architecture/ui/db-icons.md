@@ -86,7 +86,7 @@ DBeaver Community 是 **Apache-2.0** 开源，品牌图标就在各 driver 扩�
 | --- | --- | --- | --- |
 | 1 | **建来源台账** | 下表逐行填：素材来源 URL、厂商商标政策链接、收录日期、收录人 | 工程（零风险，**先做**） |
 | 2 | **逐厂商核 brand kit** | 政策允许指代使用的 → 收；不明确的 → 不收（**不要凭「别人也这么干」收**） | 产品 / 法务（中风险，逐条核） |
-| 3 | **加第三方商标声明** | 仓库 `NOTICE` 或设置页「关于」一段：「各数据库名称与图标为其各自所有者的商标；本产品使用它们仅为指代所连接的产品，不代表任何厂商赞助或背书」 | 产品 / 法务（零风险） |
+| 3 | **加第三方商标声明** | 仓库 `NOTICE`（✅ **已落地 2026-09-20**，见其 §3）或设置页「关于」一段：「各数据库名称与图标为其各自所有者的商标；本产品使用它们仅为指代所连接的产品，不代表任何厂商赞助或背书」 | 产品 / 法务（零风险；文本已就绪，口径需过目） |
 | 4 | **（可选，最优雅）品牌图标走运行时资源包** | 默认发中性标；用户 / 企业把品牌 SVG 放进资源目录（`RDS_HOME/icons/db/<type_id>.svg`），AssetSource 先查磁盘再委派内置 | 工程（一次小改动，见 §3） |
 
 **为什么第 4 步值一提**：它把「是否用品牌标」变成**配置**而不是发布内容——仓库与安装包
@@ -171,9 +171,10 @@ DBeaver Community 是 **Apache-2.0** 开源，品牌图标就在各 driver 扩�
 | 内容 | 落点 |
 | --- | --- |
 | 通用图标资产（Lucide 全量 1830 个） | 依赖 `gpui-kit-assets`；由 `assets::AppAssets` 委派（不在 `main.rs` 直接注册 `AllAssets`） |
-| **资产源（内置 + 运行时品牌包）** | `crates/app/src/assets.rs`（`AppAssets`：品牌包 → 内置；路径解析、缓存、`currentColor` 归一化与 6 条单测）；注册点 `crates/app/src/main.rs`（`.with_assets(assets::AppAssets)`） |
+| 资产源（内置 + 运行时品牌包） | `crates/app/src/assets.rs`（`AppAssets`：品牌包 → 内置；路径解析、缓存、`currentColor` 归一化与 6 条单测）；注册点 `crates/app/src/main.rs`（`.with_assets(assets::AppAssets)`） |
 | 品牌包目录 | `<RDS_HOME>/icons/db/<type_id>.svg`（`paths::home()` 解析，见 `docs/architecture/runtime/data-paths.md`） |
 | 类型 → 图标映射、品牌标落点、守卫测试 | `crates/workbench_shell/src/db_icons.rs` |
 | 类型目录（`id` / `name` / `category` / `icon`） | `data_source_types` 表；种子 `crates/engine/migrations/global/008_add_data_source_module.sql`；读侧 `engine::persistence::{driver_store, driver_catalog}` |
 | 徽标渲染现状（emoji） | `crates/workbench/src/components/connection_dialog/helpers.rs::type_badge`；导航侧「形状 + 2 字母」在 `crates/database/src/nav_view.rs` |
 | 图标尺寸 / 取色 | `crates/workbench_shell/src/ui.rs`（`ICON_SIZE_SM` / `ICON_SIZE_MD`）+ 主题 token |
+| 第三方声明（图标资产许可 + 商标口径） | 仓库根 `NOTICE`（§1 Lucide / Feather / GPUI Kit、§2 DuckDB、§3 商标） |
