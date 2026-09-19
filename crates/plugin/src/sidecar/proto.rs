@@ -99,6 +99,11 @@ pub enum ProtocolError {
     PayloadTooLarge { len: usize, max: usize },
     /// 缓冲区长度与帧头声明的长度不一致（整帧解码时）。
     LengthMismatch { declared: u32, actual: usize },
+    /// 构造帧时自身的 JSON 编码失败。
+    ///
+    /// 实践中不会发生（输入本来就是解析好的 `Value`），但**不 panic**：
+    /// 一个能报错的返回面比一个可能把宿主拉下去的分支更划算。
+    Serialization { detail: String },
 }
 
 impl fmt::Display for ProtocolError {
@@ -118,6 +123,7 @@ impl fmt::Display for ProtocolError {
             Self::LengthMismatch { declared, actual } => {
                 write!(f, "帧头声明 {declared} 字节，缓冲区实际 {actual} 字节")
             }
+            Self::Serialization { detail } => write!(f, "帧载荷 JSON 编码失败：{detail}"),
         }
     }
 }

@@ -11,6 +11,7 @@ pub mod health_checker;
 pub mod hot_reload_manager;
 pub mod manager;
 pub mod proto;
+pub mod router;
 
 use serde::{Deserialize, Serialize};
 

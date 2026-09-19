@@ -242,6 +242,14 @@ Frame = [u32 BE total_len][u8 kind][payload]
 （Windows Job Object / Linux PDEATHSIG 都不必）。
 参考实现（Rdata-Sidecar）只处理了 SIGINT/SIGTERM、没有父进程死亡检测 —— 这正是我们要补的那一项（§3.5）。
 
+**附件语义的实现口径**（`crates/plugin/src/sidecar/router.rs`；两个方向同一条规则：宿主侧 `Router` 消费帧、sidecar 侧 `encode_response_with_arrow` 切帧，两者互为逆运算，有往返测试）：
+
+| # | 口径 | 不这么做会怎样 |
+| --- | --- | --- |
+| 1 | **响应在附件收齐之前不交付**，但“在飞”的定义要跟着改：**被附件扣住的响应仍算在飞** | 若一收到响应就把 id 移出在飞集合，连接断掉时那个 id 交还不了 → 调用方**永远等一个不会来的响应** |
+| 2 | `frames: 0` 的声明必须**立即**交付（空结果集仍有 schema） | 若靠“下一帧到来”触发推进，就永远不会完成 |
+| 3 | 任何错位都要产出 `Issue` / `UnknownError`，不 panic 也不静默丢 | 孤儿附件帧、等附件时先来 JSON 帧、未知 `kind`、未知错误码、超时后姗姗来迟的响应 —— 这些正是最难查的一类 bug |
+
 #### 4.2.1.1 混合的三层，代价差一个量级
 
 JSON 与 Arrow 必然共存（控制面 vs 数据面）。区别在**混在哪一层**：
@@ -762,7 +770,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议层已落地） | `sidecar/proto.rs`：帧（4B 大端长度 + 1B kind）/ 增量解码器 / `read_frame`+`write_frame`（async，短读与“先校验再分配”都有单测）/ 版本闸 / 内联阈值 / 错误码表；`cargo test -p rds-plugin` 34/34（新增 15 条）。待办：三层对象模型 · 拿 PostgreSQL 包一层做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · 把 `client.rs` 从 HTTP 换成走 proto 的 stdio 客户端 |
+| P1 | 🟡 进行中（协议层 + 附件语义已落地） | `sidecar/proto.rs`：帧（4B 大端长度 + 1B kind）/ 增量解码器 / `read_frame`+`write_frame`（async，短读与“先校验再分配”都有单测）/ 版本闸 / 内联阈值 / 错误码表。`sidecar/router.rs`：附件语义两个方向（`Router` + `encode_response_with_arrow`）+ 错位上报 + 断线交还 + 往返测试。`cargo test -p rds-plugin` 49/49（新增 30 条）。待办：三层对象模型 · 拿 PostgreSQL 包一层做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · 把 `client.rs` 从 HTTP 换成走 proto 的 stdio 客户端 |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
