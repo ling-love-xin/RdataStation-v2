@@ -358,8 +358,8 @@ L2 缓存文件（每连接一个 SQLite）
 | **真机回归** | 四类数据库 × 项目 / 全局 / 共享，按**树的实际层级**逐条核对；每轮真实端点跑出的问题 → 结论 → 文档与测试同步 |
 
 ```
-引擎侧单测    cargo test -p rds-engine --lib      → 446 passed / 0 failed（24 ignored）
-导航侧单测    cargo test -p rds-database --lib    →  55 passed / 0 failed
+引擎侧单测    cargo test -p rds-engine --lib      → 452 passed / 0 failed（24 ignored）
+导航侧单测    cargo test -p rds-database --lib    →  59 passed / 0 failed
 契约检查      cargo check -p rds-engine -p rds-database --lib（零警告）
 ```
 

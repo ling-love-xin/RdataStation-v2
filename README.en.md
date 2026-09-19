@@ -387,8 +387,8 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 
 | Suite | Measured this round (2026-09-19) |
 | --- | --- |
-| **Whole workspace** | **84 targets · 1990 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
-| `rds-engine --lib` | **446 passed / 24 ignored** |
+| **Whole workspace** | **85 targets · 2005 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
+| `rds-engine --lib` | **452 passed / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + end-to-end **14** |
 | `rds-mock` | lib **190** + engine integration **37** + persistence round-trip **5** + history/templates **4** + cleanup **2** |
@@ -396,14 +396,14 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 | `rds-analytics-resource` | lib **125** + panel window **18** + dialog window **9** |
 | `rds-connection` | lib **48** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + integration **5** |
-| `rds-database` | lib **55** |
+| `rds-database` | lib **59** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract` | **7** (no raw sizes / no raw colors / panel registry / shared-field allowlist) |
 
 > The table above comes from **one single `cargo test-all` run** (Windows · stable · `-j 2`). **The per-target ledger and the reproduction commands are in [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**; the workspace currently compiles with zero warnings (`cargo check --workspace --all-targets`).
 >
-> **Scope**: 1 of those 84 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 83 targets / 1989 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
+> **Scope**: 1 of those 85 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 84 targets / 2004 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
 
 Real-machine probes (environment variables required, not run by default): `editor_exec_real` (6 drivers) · `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`.
 

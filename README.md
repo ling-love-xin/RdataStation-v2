@@ -387,8 +387,8 @@ cargo clippy-all            # = clippy --workspace --all-targets
 
 | 套件 | 本轮实测（2026-09-19） |
 | --- | --- |
-| **全工作区** | **84 个目标 · 1990 通过 · 51 忽略 · 0 失败**（含 1 项本机诊断脚本，见下） |
-| `rds-engine --lib` | **446 通过 / 24 ignored** |
+| **全工作区** | **85 个目标 · 2005 通过 · 51 忽略 · 0 失败**（含 1 项本机诊断脚本，见下） |
+| `rds-engine --lib` | **452 通过 / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + 端到端集成 **14** |
 | `rds-mock` | lib **190** + 引擎集成 **37** + 持久化往返 **5** + 历史模板 **4** + 清理 **2** |
@@ -396,14 +396,14 @@ cargo clippy-all            # = clippy --workspace --all-targets
 | `rds-analytics-resource` | lib **125** + 面板窗口 **18** + 对话框窗口 **9** |
 | `rds-connection` | lib **48** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + 集成 **5** |
-| `rds-database` | lib **55** |
+| `rds-database` | lib **59** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
 > 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；当前全仓编译零告警（`cargo check --workspace --all-targets`）。
 >
-> **口径**：84 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 83 个目标 / 1989 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
+> **口径**：85 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 84 个目标 / 2004 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
 
 真机探针（需环境变量，默认不跑）：`editor_exec_real`（6 驱动）· `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`。
 

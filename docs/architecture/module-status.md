@@ -13,13 +13,13 @@
 
 | 项 | 实测值 |
 | --- | --- |
-| 工作区测试目标 | **84**（含 16 个 Doc-tests 目标） |
-| 通过 | **1990** |
+| 工作区测试目标 | **85**（含 16 个 Doc-tests 目标） |
+| 通过 | **2005** |
 | 失败 | **0**（本轮全绿） |
 | 忽略 | **51**（真机探针 24 + Doc-tests 27） |
 | 编译告警 | `cargo check --workspace --all-targets` 零告警 |
 | 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；2026-09-19 第二次复跑时实测） |
-| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1989 项**，见 §2 的表下注 |
+| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 84 个目标 / 2004 项**，见 §2 的表下注 |
 
 ---
 
@@ -53,19 +53,19 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 ---
 
-## 2. 逐包基线（2026-09-19 第三次复跑）
+## 2. 逐包基线（2026-09-19 第四次复跑）
 
 「本包合计」= lib 单测 + 本包 `tests/` 下各集成目标。
 
 | 包 | lib 单测 | 集成目标（`tests/`） | 本包合计 | 忽略 |
 | --- | --- | --- | --- | --- |
-| `rds-engine` | **446** | 32（8 个目标） | **478** | 24 |
+| `rds-engine` | **452** | 32（8 个目标） | **484** | 24 |
 | `rds-editor` | **377** | — | **377** | — |
-| `rds-workbench` | **116** | 130（32 个目标） | **246** | — |
+| `rds-workbench` | **116** | 135（33 个目标） | **251** | — |
 | `rds-insight` | **227** | 14（`column_profile_e2e`） | **241** | — |
 | `rds-mock` | **190** | 48（4 个目标） | **238** | — |
 | `rds-analytics-resource` | **125** | 27（`panel_window` 18 · `dialog_window` 9） | **152** | — |
-| `rds-database` | **55** | — | **55** | — |
+| `rds-database` | **59** | — | **59** | — |
 | `rds-connection` | **48** | 4（`tunnel_roundtrip`） | **52** | — |
 | `rds-project` | **43** | 5（`project_registry` 1 · `project_store` 4） | **48** | — |
 | `rds-scratchpad` | **37** | — | **37** | — |
@@ -75,10 +75,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-paths` | **10** | 1（`test_support_is_wired`） | **11** | — |
 | `rds-workbench-shell` | **1** | — | **1** | — |
 | `rds-app` | 0 | — | 0 | — |
-| **合计** | **1729** | **261** | **1990** | **51** |
+| **合计** | **1739** | **266** | **2005** | **51** |
 
-> **口径注（重要）**：合计里的 `rds-workbench` 集成 130 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
-> 去掉它：**项目自身套件 = 83 个目标 / 1989 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
+> **口径注（重要）**：合计里的 `rds-workbench` 集成 135 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
+> 去掉它：**项目自身套件 = 84 个目标 / 2004 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
 >
 > `rds-plugin` 有 11 项单测且全绿，但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
 
@@ -270,10 +270,9 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 为支持它，`crates/database/Cargo.toml` 的 dev-deps 开了 gpui-kit 的 `test-support`
 特性（与 workbench / editor 同一写法）。`rds-database` lib **55 → 59**（本批 +3，另一条来自并行会话）。
 
-> **本批未重跑全量**：并行会话正在重构 `connection_dialog` 的 `CapabilityRow`，
-> `rds-workbench` 的 lib test 在那期间不可编译（与本批无关）。
-> 因此 §0 / §2 仍是上一次全量（第 6.3.2 节那个工作树）的值，**不按推测累加**；
-> `rds-database`（59）与 `ui_contract`（7）本批各自跑过且全绿。
+> **本批已重跑全量**（并行会话的驱动批次已提交，工作树自洽）：**85 目标 / 2005 通过 / 0 失败 / 51 忽略**（§0 / §2 已按它更新）。
+> 相对第三次复跑的 **+15** 里：本批占 **+4**（database **+3** 窗口级定位验收 + workbench **+1** `editor_session_real` 的窗口退出兜底），
+> 其余 **+11** 来自并行会话（engine **446→452** · 新增 workbench 集成目标 `official_driver_real` **4 项**等）。
 
 ---
 

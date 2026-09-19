@@ -292,7 +292,7 @@ mark{background:var(--primary-soft);color:var(--fg-strong);border-radius:3px;pad
           <span class="chip">单组 ≤ 8 · 总计 ≤ 50</span>
           <span class="chip">150 ms 防抖</span>
           <span class="chip">渲染期零 I/O</span>
-          <span class="chip">446 + 116 项测试</span>
+          <span class="chip">452 + 116 项测试</span>
         </div>
         <div class="cta">
           <a class="pri" href="#s4">看四个剧本 ↓</a>
@@ -761,9 +761,9 @@ mark{background:var(--primary-soft);color:var(--fg-strong);border-radius:3px;pad
         <td>新模块必须登记进<b>尺寸 + 颜色</b>两份清单（漏登 = 契约对该文件静默失效）；视图层零裸尺寸、零裸色值</td></tr>
       <tr><td>Quick Open 窗口测试</td><td><b>5 项</b></td>
         <td>真按键走生产入口：打开即聚焦 / <code>↑</code> <code>↓</code> + <code>↵</code> 经端口执行并关面板 / <code>Esc</code> 关闭 / 单字符门槛 / 文件源</td></tr>
-      <tr><td><code>rds-engine --lib</code></td><td><b>446 项</b></td>
+      <tr><td><code>rds-engine --lib</code></td><td><b>452 项</b></td>
         <td>含搜索专项：两段式 vs 单条查询<b>逐条等价</b>、窗口取消后的「精确 + 类别优先」、两段 <code>EXPLAIN QUERY PLAN</code> 断言（走索引且无 <code>TEMP B-TREE</code>）、FTS 写入幂等与读侧身份 + snippet + 中文门槛</td></tr>
-      <tr><td><code>rds-database --lib</code></td><td><b>55 项</b></td>
+      <tr><td><code>rds-database --lib</code></td><td><b>59 项</b></td>
         <td>含 FTS 命中映射（空串 → None、catalog 缺位）与分槽通道</td></tr>
     </table>
     <div class="sec-sub" style="margin:16px 0 10px">
@@ -841,9 +841,9 @@ mark{background:var(--primary-soft);color:var(--fg-strong);border-radius:3px;pad
         <div class="verify">cargo test -p rds-workbench --lib --test ui_contract
   → 110 + 7（model.rs 纯逻辑 13 · UI 契约 7）
 cargo test -p rds-engine --lib
-  → 446（含名称档 / FTS 搜索专项）
+  → 452（含名称档 / FTS 搜索专项）
 cargo test -p rds-database --lib
-  → 55（含 FTS 命中映射与分槽通道）
+  → 59（含 FTS 命中映射与分槽通道）
 Quick Open 窗口测试
   → 5 项（真按键走生产入口）</div>
       </div>
