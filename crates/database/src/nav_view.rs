@@ -1045,6 +1045,8 @@ pub struct NavView {
     /// 为何存在实体字段而不是每帧传给列表：`v_virtual_list` 的 item 渲染器在**布局期**
     /// 才被调用（拿得到 `&mut Context<Self>`），那时没有再传一次的机会。
     rows: Vec<NavRow>,
+    /// 待兑现的滚动意图（行 key）：定位跨帧推进，行集合下一帧才包含目标。
+    nav_pending_scroll: Option<String>,
     /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
     list_scroll: Rc<VirtualListScrollHandle>,
     /// 正在轮询预热进度的后台任务（避免重复启动）。
@@ -1082,6 +1084,7 @@ impl NavView {
             _nav_group_sub: None,
             nav_order: Rc::new(RefCell::new(Vec::new())),
             rows: Vec::new(),
+            nav_pending_scroll: None,
             list_scroll: Rc::new(VirtualListScrollHandle::new()),
             warm_poll: None,
             nav_pump: RefCell::new(None),
@@ -1132,7 +1135,9 @@ impl NavView {
         };
         let key = order[next].key.clone();
         drop(order);
-        self.nav.borrow_mut().selected_key = Some(key);
+        self.nav.borrow_mut().selected_key = Some(key.clone());
+        // 键盘漫游跟着滚：列表只画视口内的行，不滚的话选中会跑到屏外。
+        self.nav_scroll_to_key(&key);
         cx.notify();
     }
 
@@ -1633,6 +1638,12 @@ impl NavView {
         // 可见行一次算好（顺序权威）：虚拟列表、键盘漫游序列、滚动定位都读它。
         self.rows = self.collect_nav_rows(source_filter, cx);
         self.sync_nav_order();
+        // 跨帧的滚动意图（定位）到这里才能兑现：行集合刚刚才包含目标。
+        if let Some(key) = self.nav_pending_scroll.clone() {
+            if self.nav_scroll_to_key(&key) {
+                self.nav_pending_scroll = None;
+            }
+        }
         let body = self.render_nav_body(window, cx);
 
         // 搜索行：输入框 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签；归属域由上方 chips 承担）。
@@ -2050,6 +2061,22 @@ impl NavView {
         let mut drivers: Vec<(String, String)> = drivers.into_iter().collect();
         drivers.sort_by(|a, b| a.1.cmp(&b.1));
         (types, drivers, tags.into_iter().collect())
+    }
+
+    /// 把某一行滚进视口（虚拟列表换来的可编程滚动入口）。
+    ///
+    /// 返回是否找到了这一行：定位是跨帧推进的（行集合下一帧才包含目标），
+    /// 找不到就把意图留着，别把一次有效请求丢掉。
+    ///
+    /// 为何值得单独接：以前树是自绘递归，没有这个入口——「在树中定位」只能保证
+    /// 选中 + 渲染窗口罩住目标，不能保证它在**可视区**。
+    fn nav_scroll_to_key(&self, key: &str) -> bool {
+        let Some(ix) = self.rows.iter().position(|row| row.key() == key) else {
+            return false;
+        };
+        // Center：目标放中间，父节点与邻行一起可见（Top 会把上下文切在屏外）。
+        self.list_scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        true
     }
 
     /// 画第 `ix` 行（虚拟列表的 item 渲染器）。
@@ -4999,10 +5026,13 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // 渲染窗口必须罩住它，否则「选中了」却在屏外，看上去仍然像没动作
             let window = view.page_limit.entry(parent_key.clone()).or_insert(0);
             *window = (*window).max(idx + 1);
-            view.selected_key = Some(target_key);
+            view.selected_key = Some(target_key.clone());
             view.reveal = None;
             view.reveal_note = None;
             drop(view);
+            // 滚到眼前：行集合下一帧才包含目标（上面刚改了展开 / 窗口），
+            // 所以这里只登记意图，由 `render_nav` 在收集之后兑现。
+            self.nav_pending_scroll = Some(target_key);
             cx.notify();
             return;
         }
@@ -6420,6 +6450,48 @@ mod tests {
             "行高分级：连接行（{}rem）＞ 对象行（{}rem）",
             super::ui::NAV_ROW_CONNECTION,
             super::ui::NAV_ROW_TREE
+        );
+    }
+
+    /// 窗口级：定位到**屏外**的行时，列表真的滚过去了（虚拟列表换来的能力）。
+    ///
+    /// 为何单独一条：以前树是自绘递归，定位只能保证「选中 + 渲染窗口罩住目标」，
+    /// 目标仍在屏外时看上去像没动作。现在多了可编程滚动入口，这条把它钉住。
+    #[gpui_kit::test]
+    fn reveal_scrolls_a_row_that_is_out_of_view(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        let last = "t59";
+        cx.update(|_window, cx| {
+            let tables: Vec<NavNode> = (0..60)
+                .map(|i| table_node(conn, "shop", "public", &format!("t{i}")))
+                .collect();
+            seed_reveal_state(&view.read(cx), conn, "shop", "public", tables, None);
+        });
+        redraw(cx);
+        let before = cx.update(|_window, cx| view.read(cx).list_scroll.base_handle().offset().y);
+        assert_eq!(before, Pixels::ZERO, "还没定位时不该自己滚");
+
+        let object = ObjectRef::new(conn, ObjectKind::Table, "shop", "public", "", last);
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.reveal_ref(&object, cx));
+        });
+        redraw(cx);
+
+        let (selected, after) = cx.update(|_window, cx| {
+            (
+                view.read(cx).nav.borrow().selected_key.clone(),
+                view.read(cx).list_scroll.base_handle().offset().y,
+            )
+        });
+        assert_eq!(
+            selected.as_deref(),
+            Some(NavNode::child_key(conn, &["shop", "public", last]).as_str()),
+            "定位应选中目标行"
+        );
+        assert!(
+            after < Pixels::ZERO,
+            "目标在屏外时要把列表滚下去（gpui 的滚动偏移向下为负，实际 {after:?}）"
         );
     }
 
