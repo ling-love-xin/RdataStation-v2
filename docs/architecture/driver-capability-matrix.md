@@ -165,8 +165,9 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | 运行时位 | `DataSourceMeta` **按驱动**给：`mysql()` 与 `mysql_native()`、`postgres()` 与 `postgres_native()` 各自一份（目前同值，单列一份是为让差异可表达） |
 | 键 ⇄ 位一致性 | 单测 `capability::tests::declared_capabilities_and_runtime_bits_agree` **直接读代码声明**双向盯住（声明了键 ⇒ 位为 true；位为 true 且有键 ⇒ 必须声明） |
 | 归属（驱动能力 / 应用级） | `CapabilitySpec::scope`：`export` / `mock` / `resource` 是**应用级**（与驱动无关，没有驱动声明它们），不进能力矩阵逐行对比，改由一句说明带出；单测盯住「应用级键不得被任何驱动声明」+「驱动声明的键必须在驱动能力字典里（否则矩阵漏行）」 |
+| 功能是否存在（`Stage`） | `CapabilitySpec::stage`：`Ready`（有功能）/ `NotBuilt`（**字典里留着只为记「打算做什么」，但谁都不许声明**）。当前 `NotBuilt`：`index_analysis`（索引分析）、`table_editor`（表编辑器）——产品里没有这两个入口，此前被六个驱动声明（11 处）是**假承诺**（矩阵里读成「这个驱动支持」），2026-09-20 已全部撤掉；界面显示成「（功能未实现）」且恒不打勾；单测 `capability::tests::not_built_keys_are_claimed_by_nobody` 盯住 |
 | 没有界面的位 | `META_BITS_WITHOUT_UI_KEY`（`streaming` / `arrow` / `concurrent_write` / `in_memory`）+ 单测穷尽性检查：新增一个位不表态就红 |
-| 门控（键真管事的处） | `federation` → `SqlService::{register_external_database, create_external_table}` 拒非联邦源；`transactions` → `EngineQueryRunner::supports_transactions()` **改读连接的实际 `supports_transaction`**（此前恒 `true`）。**其余 10 个键目前只展示、没有消费者**（2026-09-20 实查：`index_analysis` / `table_editor` / `sql_autocomplete` / `schema_browser` / `analytics` / `health_check` / `tree` / 三个网络键在 crates 内无读者）——要门控得先定「哪个键管哪个入口」，属产品拍板，不是接线活 |
+| 门控（键真管事的处） | `federation` → `SqlService::{register_external_database, create_external_table}` 拒非联邦源；`transactions` → `EngineQueryRunner::supports_transactions()` **改读连接的实际 `supports_transaction`**（此前恒 `true`）。**其余 8 个键目前只展示、没有键级消费者**（2026-09-20 实查：`sql_autocomplete` / `schema_browser` / `analytics` / `health_check` / `tree` 在 crates 内无读者；三个网络键的实际闸门在**连接对话框**——文件型驱动隐藏网络 Tab，不是键级门控）——要门控得先定「哪个键管哪个入口」，属产品拍板，不是接线活 |
 | 验收标记 | 能力 Tab 行尾 `✓` = 已真机验收（文字另带可复现用例名）；键声明了但无真机证据的键不给 `✓`（D10） |
 | 验收证据不烂掉 | `crates/engine/tests/acceptance_evidence_is_real.rs`：字典里每个已验收键引用的用例名必须在工作区真实存在（测试目标文件名或 fn 名）；引用的测试被改名 / 删除而忘了同步字典 → 红。写法约定写在 `Acceptance::verified` 的文档上（多个用 ` + ` 连，补充说明放全角括号） |
 | 依赖源码引用不烂掉 | `crates/engine/tests/dependency_citations_match_lock.rs`：代码里形如 `sqlx-mysql-0.9.0/src/…` 的引用必须与 `Cargo.lock` 一致（扫 `crates/**`）；升依赖而没复读源码 → 红（带 `文件:行号` 与“复读结论”的提醒）。行号本身不校验（CI 上未必有源码） |
@@ -275,6 +276,7 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | 10 | ✅ | ~~**导航类型显示硬编码**~~（**已处置 2026-09-19**）：`driver_catalog::DriverMeta` 增 `type_name` / `type_category`（同一次只读扫描带出 `data_source_types`，**不按 `enabled` 过滤**——已保存的连接可能引用已禁用类型）；`nav_view::{nav_type_label, nav_type_short_label}` 改目录优先、内置表降为兜底（新增库族不用改 UI）；属性面板「数据库类型」行也改显目录名（`panels/editor.rs`） | 同一库在对话框 / 导航 / 属性面板三处不再出现两套名字 | **保留**：徽标**形状 + 2 字母**仍为硬编码映射——那是原型 §2.3 的有意设计（「字母是权威识别，形状是冗余强化」），不是遗漏；后续若要接类型目录的 emoji 图标，属产品决策 |
 | 11 | 🟡→⚪ | **`driver` 与 `driver_id` 双列**（global `global_connections` / project `connections`）：两条写入路径写同一个值（驱动 id），而**读路径走的是旧的 `driver`** | 一列一个概念存两份，改一处不知另一处是否也该改 | **已登记待办（需拍板）**：建议分三步收敛——① 读改 `COALESCE(NULLIF(driver_id,''), driver)`（老库兼容，无迁移）；② 新写入只写 `driver_id`；③ 列永不删，文档标 legacy。**字段改名**（`db_type` → `driver_id`）与列收口同批做（v2 无 TS 绑定消费者，属编译器兜底的机械改）；待并发会话落地后再动，避免合并冲突 |
 | 12 | ✅ | ~~**能力/属性声明的单源未定**~~（**决策 ②/③ 已落地 2026-09-19**）：① 代码声明为准 + 启动幂等 upsert（`driver/declaration.rs`，启动失败仅告警）；② 属性键按各库真认的名字重写（§7 #9）；③ 网络能力键（`ssh_tunnel` / `ssl_tls` / `proxy`）进入能力字典，并由 `supports_*` 布尔位**派生**（不再手写第三份）；④ 能力键 ↔ 运行时位的双向一致由 `capability::tests::declared_capabilities_and_runtime_bits_agree` 直接读代码声明盯住 | 改能力 / 属性只需改 `descriptors.rs`；「声明了但没证据」仍如实展示（`✓` 只给有真机用例的键） | 已落地；剩余待办是 §7 #9 的阶段 2（属性规格化）与「用能力键门控 UI」（当前只展示，不做门控——有意，需产品拍板） |
+| 13 | ✅ | ~~**声明跑在功能前面（假承诺）**~~（**已处置 2026-09-20**）：`index_analysis`（索引分析）与 `table_editor`（表编辑器）产品里没有入口（全仓无索引分析功能、无表编辑器），却被**六个驱动**声明（11 处） | 能力矩阵里读成「这个驱动能做这件事」——测试者会去找一个不存在的入口，或者把「没实现」当缺陷报回来 | 已落地：字典加 `Stage`（`Ready` / `NotBuilt`），两键标 `NotBuilt` 并从六个驱动撤掉声明；界面标「（功能未实现）」；`capability::tests::not_built_keys_are_claimed_by_nobody` 盯住「未实现的键不许被声明、不得标已验收」 |
 
 ---
 
@@ -287,7 +289,7 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | 驱动注册与发现 | `crates/engine/src/driver/{registry/,loader.rs,auto_register.rs,missing_driver.rs}` |
 | 驱动声明（**权威在代码**） | `crates/engine/src/driver/registry/descriptors.rs`（声明）+ `crates/engine/src/driver/declaration.rs`（启动幂等 upsert） |
 | 驱动目录（读模型） | `drivers` 表：读侧 `engine::persistence::{driver_store, driver_catalog}`；表结构与首装兜底种子 `engine/migrations/global/{008,013,014,016,017}_*.sql`（改声明**不要**改这里） |
-| 能力字典（键 ⇄ 运行时位 ⇄ 验收） | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY` 15 键 / `MetaBit` / `Acceptance` / `META_BITS_WITHOUT_UI_KEY`）；消费：`connection_dialog::{helpers::capability_rows, render.rs}`、`services::editor_exec::supports_transactions` |
+| 能力字典（键 ⇄ 运行时位 ⇄ 验收 ⇄ 功能是否存在） | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY` 15 键 / `MetaBit` / `Acceptance` / `Stage` / `META_BITS_WITHOUT_UI_KEY`）；消费：`connection_dialog::{helpers::capability_rows, render.rs}`、`services::editor_exec::supports_transactions` |
 | 运行时能力位（按驱动） | `crates/engine/src/driver/traits.rs`（`DataSourceMeta::{mysql, mysql_native, postgres, postgres_native, sqlite, duckdb}`）+ 各驱动 `meta()` |
 | 驱动 id → 数据库族 | `engine::persistence::driver_store::get_type_id`（SQL） · `driver_catalog::type_id_of`（只读入口） |
 | 属性规格（键 → 去向） | `crates/engine/src/driver/property_spec.rs`（`verdict` / `known_keys` / `accepts`；依据 = 各客户端库源码，行号引用写在模块头）；消费：对话框属性页（`connection_dialog::{helpers::property_note, render.rs}`）、声明自检（`driver/declaration.rs` 的接受键测试） |

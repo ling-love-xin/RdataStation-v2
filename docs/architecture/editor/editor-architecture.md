@@ -142,7 +142,7 @@
 | --- | --- | --- |
 | M4 导航「在 SQL 编辑器中打开」 | `EditorService::open_sql(conn_id, sql) -> DocumentId` | 现有 `Shared::editor_set` + `SidebarEvent::OpenSqlEditor` 的语义升级 |
 | M4 「查看数据」 | `execute(OpenSql, conn_id, sql, Target::All)`（可自动执行） | 关闭 dev-plan 遗留项“查看数据仅注入不执行” |
-| M4 表数据浏览 / 编辑（驱动能力位 `table_editor`，已声明零消费） | 结果集**只读**；行内编辑 + 写回源库 + row identity + 事务属 M4 | 避免重演 V1 的“结果集与表数据语义纠缠 + 脏状态双轨（`dirtyRows` vs `dirtyCells`）”；两者共享网格**渲染层**，各自持有数据（见 §3.6） |
+| M4 表数据浏览 / 编辑（驱动能力位 `table_editor`；字典标 `NotBuilt`、驱动已不再声明，见能力矩阵 §3.3 / §7 #13） | 结果集**只读**；行内编辑 + 写回源库 + row identity + 事务属 M4 | 避免重演 V1 的“结果集与表数据语义纠缠 + 脏状态双轨（`dirtyRows` vs `dirtyCells`）”；两者共享网格**渲染层**，各自持有数据（见 §3.6） |
 | M5 草稿箱打开文件 | `open_path(path) -> DocumentId`（按 §1.2 规则定模式） | 草稿箱不再自己造"草稿文件模式" |
 | M1 项目管理（未保存拦截） | `ProjectEditorBridge`（`is_dirty` / `sql` / `clear` / `mark_clean`） | **契约不变**，实现改由 `EditorService` 提供（M1 侧零改动） |
 | M7 Mock / M8 洞察 | 输出类型 `Output::Insight` / `Output::Table` | 第二期 |
@@ -182,7 +182,7 @@ crates/editor/src/
 | 数据来源 | 一次执行的产物（`ResultSet`，驻 DuckDB 临时表） | 源库某表的分页抓取 | 无关（由数据源 trait 提供） |
 | 生命周期 | 结果集（会话内 / 可持久化引用） | 面板/标签（+ 事务） | 无状态 |
 | 可写性 | **只读**（D23） | 可编辑并写回源库（row identity + 事务） | 不适用 |
-| 归属 | `crates/editor` | `crates/database`（M4 后续项；驱动能力位 `table_editor` 已声明零消费） | 先放 `editor/src/view/widgets/grid/` |
+| 归属 | `crates/editor` | `crates/database`（M4 后续项；驱动能力位 `table_editor`，字典标 `NotBuilt`、驱动未声明） | 先放 `editor/src/view/widgets/grid/` |
 
 **为什么不建独立 grid crate（现在）**：① 项目判定标准明确“**不建 crate 的对象：无独立状态的能力**”（如主题）——纯渲染+交互层无独立业务状态；② 1a/1b 期只有**一个**真实使用方，此时冻结接口基本必错；③ 重活（虚拟滚动、表格基座）已由 gpui-component 的 `table::{DataTable, TableState, TableDelegate}` 提供，自写部分只是 delegate + 交互，量级撑不起 crate 边界。
 
