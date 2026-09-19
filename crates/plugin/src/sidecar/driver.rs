@@ -35,8 +35,8 @@ use serde_json::{Value, json};
 
 use super::conn::{CallError, SidecarConn};
 use super::meta::{
-    MetaObject, MetaObjectDetail, MetaSchema, parse_catalogs, parse_object_detail, parse_objects,
-    parse_routine_source, parse_schemas,
+    MetaObject, MetaObjectDetail, MetaObjectKind, MetaSchema, parse_catalogs,
+    parse_object_detail, parse_objects, parse_routine_source, parse_schemas,
 };
 use super::proto::RpcErrorCode;
 use super::supervisor::SidecarSupervisor;
@@ -761,7 +761,10 @@ use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use engine::driver::{DataSourceMeta, Database, DynDatabase, Transaction};
+use engine::driver::{
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, DynDatabase, IndexDetail, NodeInfo,
+    SchemaObjectKind, Transaction,
+};
 use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError, PluginError};
 use shared::models::{QueryResult, Value as SharedValue};
 
@@ -792,6 +795,17 @@ impl QueryPage {
             is_read_only: Some(affected_rows.is_none()),
         })
     }
+}
+
+/// 从一次 `meta.objects` 里挑出一类对象，翻成引擎的对象项。
+///
+/// 认不出的类别在 [`MetaObject::into_node_info`] 里被跳过并留痕（导航摆不下它）。
+fn take_kind(objects: Vec<MetaObject>, want: fn(&MetaObjectKind) -> bool) -> Vec<NodeInfo> {
+    objects
+        .into_iter()
+        .filter(|o| want(&o.kind))
+        .filter_map(MetaObject::into_node_info)
+        .collect()
 }
 
 /// 数据面归一：Arrow 附件原样拿走，内联 JSON 补成一个批。
@@ -895,6 +909,46 @@ impl SidecarDatabase {
         }
 
         page.into_query_result().map_err(|e| self.map_error(sql, e))
+    }
+
+    /// 「索引 / 约束明细还没接」的那句错话（两处用，措辞要一致）。
+    fn no_index_detail(&self, what: &str) -> CoreError {
+        CoreError::common(CommonError::not_supported(format!(
+            "驱动 {} 的{what}明细还没接（P2 的 meta 面只给个数）",
+            self.db_type
+        )))
+    }
+
+    /// 线格式里的 schema 名。
+    ///
+    /// 没给 schema 时用 `driver.describe` 的 `default_schema`；两者都没有就传**空串** ——
+    /// 空串是有含义的：「这个驱动没有 schema 层，用你自己的默认」（MySQL / SQLite / DuckDB 类，
+    /// 见 dev-plan §4.4 的 `schemas` 能力）。宿主**不替驱动猜**一个 schema 名。
+    fn wire_schema(&self, schema: Option<&str>) -> String {
+        schema
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.descriptor.default_schema.clone())
+            .unwrap_or_default()
+    }
+
+    /// 一次 `meta.objects`。
+    ///
+    /// 五个文件夹（表 / 视图 / 例程 / 序列 / 触发器）都从这里挑，因为协议规定它**一次给全**：
+    /// 按文件夹分家就要跑五遍内省，而它们在内省层面本来就是一条查询。代价是展开一个 schema
+    /// 会按文件夹各问一次（导航是逐文件夹收集的）；驱动侧那条内省该是快的，重复展开由
+    /// 导航的 L1 / L2 缓存挡住。
+    async fn objects_of(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<MetaObject>, CoreError> {
+        let conn = self.connection()?;
+        let schema = self.wire_schema(schema);
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_objects(catalog, &schema)
+            .await
+            .map_err(|e| self.map_error("meta.objects", e))
     }
 
     /// 驱动错误 → 引擎错误域的映射。
@@ -1049,6 +1103,155 @@ impl Database for SidecarDatabase {
             supports_concurrent_write: self.descriptor.supports("concurrent_write"),
             is_in_memory: false,
         }
+    }
+
+    /* ===== 对象树能力（导航树 / 属性面板 / `#` 内容档）===== */
+
+    /// 全部走 `meta.*`（P2 落地，§4.2.2.1）；错误按域映射，能力的门控在 P2 收尾那一刀接。
+
+    /// 列举 catalog。
+    ///
+    /// 协议口径：**拿不出 catalog 概念的驱动把 schema 名当 catalog 回** —— 导航第一层不能是空的
+    /// （MySQL / SQLite / DuckDB 的原生驱动就是这么做的）。
+    async fn list_catalogs(&self) -> Result<Vec<String>, CoreError> {
+        let conn = self.connection()?;
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_catalogs()
+            .await
+            .map_err(|e| self.map_error("meta.catalogs", e))
+    }
+
+    async fn list_schemas(&self, catalog: &str) -> Result<Vec<String>, CoreError> {
+        let conn = self.connection()?;
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_schemas(catalog)
+            .await
+            .map(|schemas| schemas.into_iter().map(|s| s.name).collect())
+            .map_err(|e| self.map_error("meta.schemas", e))
+    }
+
+    /// 表与视图一次拿全：导航按 `kind == View` 把这一份结果分成两个文件夹
+    /// （`NavigatorService::collect_objects`），所以这里**两类都要返回**。
+    async fn list_tables(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(take_kind(self.objects_of(catalog, schema).await?, |k| {
+            k.is_table_like()
+        }))
+    }
+
+    /// 列（展开表 / 属性面板）。
+    ///
+    /// 属性面板显示的是**原始类型名**（`numeric(38,10)`），归一化类型在 `extra.canonical`
+    /// 里 —— 「给用户看的」与「给程序判的」不互相迁就（§4.5.1）。
+    async fn list_columns(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ColumnDetail>, CoreError> {
+        let conn = self.connection()?;
+        let schema = self.wire_schema(schema);
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_object_detail(catalog, &schema, table)
+            .await
+            .map(|detail| {
+                detail
+                    .columns
+                    .into_iter()
+                    .map(|c| c.into_column_detail())
+                    .collect()
+            })
+            .map_err(|e| self.map_error("meta.object_detail", e))
+    }
+
+    async fn list_procedures(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(take_kind(self.objects_of(catalog, schema).await?, |k| {
+            matches!(k, MetaObjectKind::Procedure)
+        }))
+    }
+
+    async fn list_functions(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(take_kind(self.objects_of(catalog, schema).await?, |k| {
+            matches!(k, MetaObjectKind::Function)
+        }))
+    }
+
+    async fn list_sequences(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(take_kind(self.objects_of(catalog, schema).await?, |k| {
+            matches!(k, MetaObjectKind::Sequence)
+        }))
+    }
+
+    /// 触发器（带所属表：`NodeInfo::parent_name`，属性面板与缓存都靠它）。
+    async fn list_triggers(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(take_kind(self.objects_of(catalog, schema).await?, |k| {
+            matches!(k, MetaObjectKind::Trigger)
+        }))
+    }
+
+    /// 例程源码。`kind` 不往协议里带：名字是驱动的唯一标识，它自己清楚那是过程还是函数
+    /// （原生驱动也把这一位当摆设）。
+    async fn get_routine_source(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+        name: &str,
+        kind: SchemaObjectKind,
+    ) -> Result<Option<String>, CoreError> {
+        if !matches!(
+            kind,
+            SchemaObjectKind::Procedure | SchemaObjectKind::Function
+        ) {
+            // 表 / 视图没有源码可看：**不装作查到了**，也不白跑一趟 RPC
+            return Ok(None);
+        }
+        let conn = self.connection()?;
+        let schema = self.wire_schema(schema);
+        SessionDriver::new(&conn, &self.session_id)
+            .meta_routine_source(catalog, &schema, name)
+            .await
+            .map_err(|e| self.map_error("meta.routine_source", e))
+    }
+
+    /// 索引 / 约束的**明细**：协议面还没定（`meta.object_detail` 只给个数）。
+    ///
+    /// 如实报不支持，**不返回空** —— 「没有索引」与「没这个能力」在界面上的意思完全不同
+    /// （§4.4 的不得静默退化）。明细面留给 P4（属性面板要列的时候一起定）。
+    async fn list_indexes(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<IndexDetail>, CoreError> {
+        Err(self.no_index_detail("索引"))
+    }
+
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        Err(self.no_index_detail("约束"))
     }
 
     async fn ping(&self) -> Result<(), CoreError> {
@@ -1476,6 +1679,65 @@ mod database_tests {
             },
         );
         assert!(matches!(broken, CoreError::Plugin(_)), "{broken:?}");
+    }
+
+    /// 文件夹各挑各的类别，认不出的类别一律不落进树（导航摆不下它）。
+    #[test]
+    fn folders_take_their_own_kinds() {
+        let object = |name: &str, kind: MetaObjectKind| MetaObject {
+            name: name.to_string(),
+            kind,
+            comment: None,
+            parent: None,
+        };
+        let objects = vec![
+            object("orders", MetaObjectKind::Table),
+            object("recent", MetaObjectKind::View),
+            object("mv_daily", MetaObjectKind::MaterializedView),
+            object("orders_seq", MetaObjectKind::Sequence),
+            object("trg", MetaObjectKind::Trigger),
+            object("order_state", MetaObjectKind::Other("domain".into())),
+        ];
+        let names = |nodes: Vec<NodeInfo>| -> Vec<String> {
+            nodes.into_iter().map(|n| n.name).collect()
+        };
+
+        // 表与视图是**一次调用**的结果，导航自己按 kind 分成两个文件夹
+        assert_eq!(
+            names(take_kind(objects.clone(), MetaObjectKind::is_table_like)),
+            vec!["orders", "recent", "mv_daily"]
+        );
+        assert_eq!(
+            names(take_kind(objects.clone(), |k| matches!(
+                k,
+                MetaObjectKind::Sequence
+            ))),
+            vec!["orders_seq"]
+        );
+        // 认不出的类别不被归进任何文件夹
+        for want in [
+            MetaObjectKind::is_table_like as fn(&MetaObjectKind) -> bool,
+            |k| matches!(k, MetaObjectKind::Sequence),
+            |k| matches!(k, MetaObjectKind::Trigger),
+            |k| matches!(k, MetaObjectKind::Procedure),
+            |k| matches!(k, MetaObjectKind::Function),
+        ] {
+            let picked = names(take_kind(objects.clone(), want));
+            assert!(!picked.iter().any(|n| n == "order_state"), "{picked:?}");
+        }
+    }
+
+    /// schema 的取值顺序：显式给的 → descriptor 里的默认 → 空串（由驱动自己决定默认）。
+    #[tokio::test]
+    async fn schema_falls_back_to_the_drivers_default() {
+        let mut db = SidecarDatabase::new(&Arc::new(dummy_conn()), "s1", "fixture", descriptor());
+        assert_eq!(db.wire_schema(Some("sales")), "sales");
+        assert_eq!(db.wire_schema(None), "public", "descriptor 给了 default_schema");
+        assert_eq!(db.wire_schema(Some("")), "public", "空串按没给算");
+
+        // 驱动自己没说默认 schema：传空串，别替它猜一个
+        db.descriptor.default_schema = None;
+        assert_eq!(db.wire_schema(None), "");
     }
 
     /// 二进制参数与 NaN 明确拒绝（口径没定就别猜）。
