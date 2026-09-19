@@ -7961,7 +7961,6 @@ dependencies = [
  "chrono",
  "dashmap",
  "duckdb",
- "flate2",
  "futures",
  "hex",
  "include_dir",

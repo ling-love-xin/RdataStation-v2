@@ -142,7 +142,8 @@ rand = "0.10.2"
 regex = "1.13.1"
 include_dir = "0.7.4"
 toml = "1.1.5"
-flate2 = "1.1.10"
+# flate2 已于 2026-09-19 移除：唯一使用者 `persistence::metadata_cache` 的压缩分支
+# （`compressed_metadata` 表那套）零调用，随 V7 同步那批一并删除。
 # SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
 # （接入点唯一，见 crates/engine/src/sql/；升大版本前先跑 SQL 回归）
 sqlglot-rust = "=0.10.29"

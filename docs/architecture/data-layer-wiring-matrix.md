@@ -82,9 +82,10 @@
 | 规范化读写（表 / 列 / 视图 / 例程 / 序列 / 触发器 / schema） | `save_table` / `list_tables_normalized` / … | ✅ 活（本轮补齐例程 / 序列 / 触发器的读侧） |
 | 索引与约束 | `save_table_indexes` / `load_table_foreign_keys` / … | 🔒 有实现、无消费者（见 §2.2） |
 | 索引与搜索（V6） | `rebuild_schema_index` / `search_index` / `search_fts` / `get_objects_chunk` | ✅ 活 |
-| 旧接口（v1 `metadata` 单表） | `save_table_metadata` / `save_column_metadata` / `list_tables` / `list_columns` | ❌ 零调用（被 004 的规范化表取代） |
-| 同步与变更检测（V7） | `create_snapshot` / `apply_sync_operations` / `detect_changes` / `update_sync_status` | ❌ 零调用 |
-| 压缩（V2） | `compress_data` / `decompress_data` | ⚠️ 内部使用（`compression_threshold`），无外部消费者 |
+| 旧接口（v1 `metadata` 单表） | `save_table_metadata` / `save_column_metadata` / `list_tables` / `list_columns` | ✅ **已删除**（2026-09-19；被 004 的规范化表取代） |
+| 同步与变更检测（V7） | `incremental_sync` / `detect_changes` / `apply_sync_operations` … | ✅ **已删除**（2026-09-19，整块约 620 行） |
+| 同步状态与任务队列（V6） | `update_sync_status` / `enqueue_sync_task` … | ✅ **已删除**（2026-09-19，约 380 行） |
+| 压缩（V2） | `compress_data` / `decompress_data` | ✅ **已删除**（2026-09-19，连带 `flate2` 依赖） |
 
 > **纪律推论**：本文件的每一行 ❌ 都是「先写实现、后找消费者」的产物。新增持久化表 / 方法时，
 > **同一批里给出消费者**——否则它大概率会加入这张表。这不是洁癖：本轮接线就是被这些
@@ -211,6 +212,25 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 
 **净效果**：engine 测试 451 → **441**（删掉 12 个仅测试死代码的用例 + 新增 2 个 `file_reader` 用例），
 代码净减约 **2700 行**，而**功能一条没少**（所有外部调用方改一个导入路径即可）。
+
+### 6.2 持久化层零调用清理（2026-09-19）
+
+`persistence/metadata_cache.rs` 单文件 **净减 1636 行**（约 5.6k → 4.0k）。删除的五组：
+
+| 组 | 内容 | 依据 |
+| --- | --- | --- |
+| **v1 单表接口** | `list_tables` / `list_columns` / `save_table_metadata` / `save_column_metadata` + `TableInfo` / `ColumnInfo` | 004 迁移的规范化表已取代 `metadata` 单表 |
+| **V7 增量同步**（整块） | `calculate_object_hash` / `incremental_sync` / `detect_changes` / 快照与变更操作那套 + `ChangeDetectionResult` / `SyncOperation` / `SyncSnapshot` | `core-design-current.md` 已记「增量同步有意不补」 |
+| **V6 同步状态与任务队列** | `update_sync_status` / `get_sync_status` / `is_syncing` / `cancel_sync` / `enqueue_sync_task(s)` / `get_next_sync_task` / `claim_sync_task` / `complete_sync_task` / `get_pending_task_count` / `enqueue_indexing_tasks` + `SyncStatusInfo` / `SyncTaskInput` / `SyncTaskInfo` | 同一批（状态表与任务表都没有写入方之外的消费者） |
+| **压缩** | `compress_data` / `decompress_data` / `is_compressed` / `with_compression` / `compression_threshold` 字段（**以及 `flate2` 依赖**） | `compressed_metadata` 表那套零调用 |
+| **杂项** | `log_sync` / `build_metadata_index` / `save_index_entries_internal` / `get_cache_stats` / `get_last_sync_time` / `CacheStats`（persistence 版） | 内部互调链的根零调用 |
+
+**保留的**：`save_index_entries_batch`（被活的 `rebuild_schema_index` 用）、`get_connection`（迁移与测试路径用）、
+`clear_metadata`、索引 / 搜索 / 分页 / 预热那批（全部有生产消费者）。
+
+**教训（值得单独记一笔）**：这次有一条**误删**——`get_connection` 与压缩方法相邻，被一起删掉，靠**测试编译失败**才发现
+（`cargo check` 不会报，因为它是 `pub`）。按行号批量删除时，**边界必须从文件里读出来**（不能凭 grep 的行号推断），
+且**删完立刻跑测试**（而不只是 `check`）。
 
 ---
 
