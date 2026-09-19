@@ -1,31 +1,25 @@
 use sqlx::{Column, MySql, Pool, Row, TypeInfo as _};
 
-fn names_to_schema_objects(
+/// 单列名字结果集 → 对象列表（例程 / 序列等只在内省里露名字的类别）。
+fn names_to_nodes(
     result: &QueryResult,
     kind: crate::driver::SchemaObjectKind,
-) -> Vec<crate::driver::SchemaObject> {
+) -> Vec<crate::driver::NodeInfo> {
     use arrow::array::StringArray;
-    let mut objects: Vec<crate::driver::SchemaObject> = Vec::new();
+    let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
         if let Some(batch) = result.batches.first() {
             if row_idx < batch.num_rows() {
                 if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     let name = arr.value(row_idx);
                     if !name.is_empty() {
-                        objects.push(crate::driver::SchemaObject {
-                            name: name.to_string(),
-                            kind: kind.clone(),
-                            children: None,
-                            comment: None,
-                            table_name: None,
-                            event: None,
-                        });
+                        nodes.push(crate::driver::NodeInfo::new(name.to_string(), kind.clone()));
                     }
                 }
             }
         }
     }
-    objects
+    nodes
 }
 use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -35,7 +29,7 @@ use std::sync::Arc;
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{affected_rows_result, returns_rows};
 use crate::driver::{ColumnDetail, DataSourceMeta, Database, PoolStatus, Transaction};
-use crate::driver::{IndexDetail, SchemaObject, SchemaObjectKind};
+use crate::driver::{IndexDetail, SchemaObjectKind};
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -302,19 +296,9 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::SchemaObject>, CoreError> {
-        let nodes = self.get_tables(catalog, catalog).await?;
-        Ok(nodes
-            .into_iter()
-            .map(|n| crate::driver::SchemaObject {
-                name: n.name,
-                kind: n.kind,
-                children: None,
-                comment: n.comment,
-                table_name: None,
-                event: None,
-            })
-            .collect())
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+        // MySQL 的 database 即 schema（见 `has_schema_level`）。
+        self.get_tables(catalog, catalog).await
     }
 
     async fn list_columns(
@@ -382,7 +366,7 @@ impl Database for MySqlDatabase {
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let sql = "\
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE' \
@@ -390,17 +374,14 @@ impl Database for MySqlDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(catalog.to_string())])
             .await?;
-        Ok(names_to_schema_objects(
-            &result,
-            SchemaObjectKind::Procedure,
-        ))
+        Ok(names_to_nodes(&result, SchemaObjectKind::Procedure))
     }
 
     async fn list_functions(
         &self,
         catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let sql = "\
             SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
              WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION' \
@@ -408,7 +389,7 @@ impl Database for MySqlDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(catalog.to_string())])
             .await?;
-        Ok(names_to_schema_objects(&result, SchemaObjectKind::Function))
+        Ok(names_to_nodes(&result, SchemaObjectKind::Function))
     }
 
     async fn get_routine_source(
@@ -859,11 +840,11 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                             .column(0)
                             .as_any()
                             .downcast_ref::<StringArray>()
-                            .map(|arr| crate::driver::NodeInfo {
-                                name: arr.value(row_idx).to_string(),
-                                kind: crate::driver::SchemaObjectKind::Catalog,
-                                icon: Some("database".to_string()),
-                                comment: None,
+                            .map(|arr| {
+                                crate::driver::NodeInfo::new(
+                                    arr.value(row_idx).to_string(),
+                                    crate::driver::SchemaObjectKind::Catalog,
+                                )
                             })
                     } else {
                         None
@@ -903,16 +884,10 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                             } else {
                                 crate::driver::SchemaObjectKind::Table
                             };
-                            Some(crate::driver::NodeInfo {
-                                name: name_arr.value(row_idx).to_string(),
+                            Some(crate::driver::NodeInfo::new(
+                                name_arr.value(row_idx).to_string(),
                                 kind,
-                                icon: Some(if table_type == "VIEW" {
-                                    "view".to_string()
-                                } else {
-                                    "table".to_string()
-                                }),
-                                comment: None,
-                            })
+                            ))
                         } else {
                             None
                         }
@@ -1006,12 +981,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
             .collect();
 
         Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo {
-                name: table.to_string(),
-                kind: crate::driver::SchemaObjectKind::Table,
-                icon: Some("table".to_string()),
-                comment: None,
-            },
+            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,

@@ -1,7 +1,7 @@
 //! rds-database — 导航领域模型（M4）
 //!
 //! 面向 GPUI 视图的导航树模型：节点携带稳定 key（用于展开态持久化）、
-//! 来源标识与懒加载状态；与 engine `SchemaObject` / `ColumnDetail` 解耦，
+//! 来源标识与懒加载状态；与 engine 的 `NodeInfo` / `ColumnDetail` 解耦，
 //! 由 `navigator_service` 负责映射。
 //!
 //! 设计对应 `docs/architecture/database/database-navigator-prototype-design.md`：

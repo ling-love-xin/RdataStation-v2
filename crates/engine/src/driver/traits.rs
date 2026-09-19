@@ -23,21 +23,6 @@ pub enum SchemaObjectKind {
     Trigger,
 }
 
-/// Schema 对象（对象树模型）
-///
-/// 前端友好的统一结构，支持懒加载（children = None 表示未加载）
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct SchemaObject {
-    pub name: String,
-    pub kind: SchemaObjectKind,
-    pub children: Option<Vec<SchemaObject>>,
-    pub comment: Option<String>,
-    /// 触发器关联的表名（仅 Trigger 类型）
-    pub table_name: Option<String>,
-    /// 触发器事件（INSERT/UPDATE/DELETE，仅 Trigger 类型）
-    pub event: Option<String>,
-}
-
 /// 列详情（完整元数据）
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ColumnDetail {
@@ -83,13 +68,46 @@ pub struct ConstraintDetail {
     pub delete_rule: Option<String>,
 }
 
-/// 对象树节点（轻量级，用于快速树渲染）
+/// 对象列表项（对象树 / 元数据缓存 / 属性面板共用的**唯一**结构对象表示）
+///
+/// 取代了 v1 的 `SchemaObject`。那个类型多带三个字段，全都是死字段：
+/// `children`（懒加载整棵树）无人读取、`table_name` / `event`（触发器专有）无人填充，
+/// 而 5 个原生驱动的 `list_tables` 都在做「`NodeInfo` 降级成 `SchemaObject`」的空转。
+/// 一个对象只留一份表示：名字 + 类别 + 注释。
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct NodeInfo {
     pub name: String,
     pub kind: SchemaObjectKind,
-    pub icon: Option<String>,
     pub comment: Option<String>,
+    /// 关联父对象（触发器的所属表；其他类别为空——列的父对象由路径决定，不在这里）。
+    ///
+    /// 不演成任意 KV 背包：只放驱动内省时**已经查到**、界面真会显示的那一项。
+    pub parent_name: Option<String>,
+}
+
+impl NodeInfo {
+    /// 只带身份的对象项（绝大多数内省点只需要名字与类别）。
+    pub fn new(name: impl Into<String>, kind: SchemaObjectKind) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            comment: None,
+            parent_name: None,
+        }
+    }
+
+    /// 带注释。
+    pub fn with_comment(mut self, comment: Option<String>) -> Self {
+        self.comment = comment;
+        self
+    }
+
+    /// 带关联父对象（目前只有触发器用：所属表）。
+    pub fn with_parent(mut self, parent: impl Into<String>) -> Self {
+        let parent = parent.into();
+        self.parent_name = (!parent.is_empty()).then_some(parent);
+        self
+    }
 }
 
 /// 对象详情（完整元数据，按需加载）
@@ -346,11 +364,14 @@ pub trait Database: Send + Sync {
     }
 
     /// 列举表 / 视图
+    ///
+    /// 与 [`MetadataBrowser::get_tables`] 返回同一类型：实现了浏览器的驱动直接转发，
+    /// 只实现本方法的驱动（自定义 / 桥接驱动）也不必再降级成另一套结构。
     async fn list_tables(
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -389,7 +410,7 @@ pub trait Database: Send + Sync {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -398,7 +419,7 @@ pub trait Database: Send + Sync {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -407,7 +428,7 @@ pub trait Database: Send + Sync {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 
@@ -416,7 +437,7 @@ pub trait Database: Send + Sync {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 

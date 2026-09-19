@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use super::{CachePolicy, CacheStats, LruCache, MemoryEstimate};
-use crate::driver::{ColumnDetail, ConstraintDetail, IndexDetail};
-use crate::{DataSourceMeta, SchemaObject};
+use crate::driver::{ColumnDetail, ConstraintDetail, IndexDetail, NodeInfo};
+use crate::DataSourceMeta;
 
 /// 元数据缓存键
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -237,8 +237,8 @@ impl MetadataCacheKey {
 pub enum MetadataCacheValue {
     /// 字符串列表（数据库名、Schema名等）
     StringList(Vec<String>),
-    /// Schema 对象列表（表、列等）
-    SchemaObjects(Vec<SchemaObject>),
+    /// 对象列表（表 / 视图 / 列 / 例程 / 序列 / 触发器，一律 `NodeInfo`）
+    Nodes(Vec<NodeInfo>),
     /// 列详细信息列表
     ColumnDetails(Vec<ColumnDetail>),
     /// 索引详情列表
@@ -257,7 +257,7 @@ impl MemoryEstimate for MetadataCacheValue {
             MetadataCacheValue::StringList(list) => {
                 list.iter().map(|s| s.len() + 32).sum::<usize>()
             }
-            MetadataCacheValue::SchemaObjects(objects) => objects.len() * 200,
+            MetadataCacheValue::Nodes(nodes) => nodes.len() * 200,
             MetadataCacheValue::ColumnDetails(columns) => columns.len() * 250,
             MetadataCacheValue::IndexDetails(indexes) => indexes.len() * 200,
             MetadataCacheValue::ConstraintDetails(constraints) => constraints.len() * 220,
@@ -318,10 +318,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::tables(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -332,26 +332,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::views(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
-            _ => None,
-        })
-    }
-
-    /// 获取列列表
-    pub fn get_columns(
-        &mut self,
-        conn_id: &str,
-        database: &str,
-        schema: Option<&str>,
-        table: &str,
-    ) -> Option<Vec<SchemaObject>> {
-        let key =
-            MetadataCacheKey::columns(conn_id, database, schema.map(|s| s.to_string()), table);
-        self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -378,10 +362,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::procedures(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -392,10 +376,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::functions(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -406,10 +390,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::sequences(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -420,10 +404,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-    ) -> Option<Vec<SchemaObject>> {
+    ) -> Option<Vec<NodeInfo>> {
         let key = MetadataCacheKey::triggers(conn_id, database, schema.map(|s| s.to_string()));
         self.cache.get(&key).and_then(|v| match v {
-            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            MetadataCacheValue::Nodes(list) => Some(list),
             _ => None,
         })
     }
@@ -523,10 +507,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        tables: Vec<SchemaObject>,
+        tables: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::tables(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(tables);
+        let value = MetadataCacheValue::Nodes(tables);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -536,25 +520,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        views: Vec<SchemaObject>,
+        views: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::views(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(views);
-        self.cache.put_with_ttl(key, value, Some(self.default_ttl));
-    }
-
-    /// 设置列列表
-    pub fn set_columns(
-        &mut self,
-        conn_id: &str,
-        database: &str,
-        schema: Option<&str>,
-        table: &str,
-        columns: Vec<SchemaObject>,
-    ) {
-        let key =
-            MetadataCacheKey::columns(conn_id, database, schema.map(|s| s.to_string()), table);
-        let value = MetadataCacheValue::SchemaObjects(columns);
+        let value = MetadataCacheValue::Nodes(views);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -579,10 +548,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        procedures: Vec<SchemaObject>,
+        procedures: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::procedures(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(procedures);
+        let value = MetadataCacheValue::Nodes(procedures);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -592,10 +561,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        functions: Vec<SchemaObject>,
+        functions: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::functions(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(functions);
+        let value = MetadataCacheValue::Nodes(functions);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -643,10 +612,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        sequences: Vec<SchemaObject>,
+        sequences: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::sequences(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(sequences);
+        let value = MetadataCacheValue::Nodes(sequences);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -656,10 +625,10 @@ impl MetadataCache {
         conn_id: &str,
         database: &str,
         schema: Option<&str>,
-        triggers: Vec<SchemaObject>,
+        triggers: Vec<NodeInfo>,
     ) {
         let key = MetadataCacheKey::triggers(conn_id, database, schema.map(|s| s.to_string()));
-        let value = MetadataCacheValue::SchemaObjects(triggers);
+        let value = MetadataCacheValue::Nodes(triggers);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 
@@ -752,7 +721,7 @@ impl MetadataCache {
 
     /// 估算内存使用量（字节）
     pub fn estimated_memory_usage(&self) -> usize {
-        // 粗略估算：每个 SchemaObject 约 200 字节，每个 String 约 50 字节
+        // 粗略估算：每个对象项约 200 字节，每个 String 约 50 字节
         let mut total = 0;
         for key in self.cache.keys() {
             match key {

@@ -126,7 +126,7 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 | --- | --- | --- |
 | **值 / 结果** | `QueryResult` · `Row` · `Value` · `ArrowBatch` · `Stream` | `shared/src/{models,stream,arrow}.rs` |
 | **连接** | `ConnectionConfig` / `ConnectionInfo`（运行时）· `ConnectionInfo` / `ConnectionRecord`（持久化）· `ConnectionDraftRow` · `AuthConfig` / `Environment` · `Ssl/Ssh/ProxyConfig`（connection crate） | 各自 store |
-| **结构** | 驱动侧 `SchemaObject` / `ColumnDetail` / `IndexDetail` / `ConstraintDetail` · 落盘侧 `IndexEntry` / `IndexSearchHit` · L1 `MetadataCacheKey/Value` · 视图侧 `NavNode` / `NavPath` / `PropertyRef` | `driver/traits.rs`、`persistence/metadata_cache.rs`、`cache/`、`database/model.rs` |
+| **结构** | 驱动侧 `NodeInfo` / `ColumnDetail` / `IndexDetail` / `ConstraintDetail` · 落盘侧 `IndexEntry` / `IndexSearchHit` · L1 `MetadataCacheKey/Value` · 视图侧 `NavNode` / `NavPath` / `PropertyRef` | `driver/traits.rs`、`persistence/metadata_cache.rs`、`cache/`、`database/model.rs` |
 | **结论** | `TableProfile` / `ColumnStats` / `QualityScore` … | `insight/src/model/types.rs` |
 | **引用**（跨模块寻址） | `ObjectRef` + `ObjectKind`（连接 + 类别 + catalog / schema / 父对象 / 名字）· `key()`（与导航树节点 key 同构）· `from_index_hit()`（索引命中 → 引用） | `engine/src/refs.rs`，`pub use` 到 engine 根 |
 
@@ -135,7 +135,17 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 `ObjectKind → PropertyKind` 的映射只留 `database::model::property_ref_of` 一处；Quick Open 的元数据行键改用 `ObjectRef::key()`
 （它之前自拼「连接 + 种类 + 父对象 + 名字」，**不含 catalog / schema**，`sales.orders` 与 `archive.orders` 会撞键）。
 
-**仍存的多份表示（未收敛）**：表的五份（驱动 `SchemaObject` / L2 `tables` / `IndexEntry` / `NavNode` / `Insight TableColumnMeta`）；
+**驱动接口面已收敛**（2026-09-19 第二批）：删掉 v1 的 `SchemaObject`——它多带的 `children`（懒加载整棵树，无人读取）、
+`table_name` / `event`（触发器专有，无人填充，而 postgres 真填的那份又被上层丢掉）三个字段都是死字段，
+且 5 个原生驱动的 `list_tables` 都在做「`NodeInfo` 降级成 `SchemaObject`」的空转。现在 `Database::list_*` 与 `MetadataBrowser::get_*`
+返回**同一套** `NodeInfo`：实现了浏览器的驱动直接转发，`MetadataService` 的三处手工映射随之消失；L1 的
+`MetadataCacheValue::SchemaObjects` 改名 `Nodes`，并删掉零消费者的 `get_columns` / `set_columns`（它们与 `get_columns_detail`
+共用同一个 key，是**同一个键两种值类型**的二义性）。**顺带接通**：触发器所属表从驱动内省（`event_object_table`）
+经 `NodeInfo::parent_name` 走到 `PropertyRef.parent` → 属性面板「关联表」。
+
+**仍存的差异（关注点不同，不是重复类型）**：表在本仓仍有四份——L2 `tables` 行（带 id / `last_sync` 存储元数据）、
+`IndexEntry`（索引行）、`NavNode`（UI 状态：展开态 / 错误位）、`Insight TableColumnMeta`（来源是 DuckDB `DESCRIBE`，
+不是元数据内省，带 `ordinal_position`）；
 `shared/src/types.rs` 整模块（27 个 v1 DTO：`DatabaseMeta` / `SchemaMeta` / `TableMeta` / `ColumnMeta` …）在 v2 **零消费**；
 无 `TableId` / `SchemaId` 这类稳定 ID（跨模块引用靠名字，L2 自增 id 与导航拼串 key 不互通）。
 
@@ -225,8 +235,10 @@ Database（能力面）                      MetadataBrowser（对象树面）
 
 - 6 个实现：`native/{mysql, postgres, sqlite, duckdb, mysql_native, postgres_native}.rs`。
 - `has_schema_level()`：MySQL / SQLite / DuckDB = `false`（Catalog 直接挂文件夹）；PostgreSQL = `true`。
-- 统一结构：`SchemaObject` / `ColumnDetail` / `NodeInfo` / `NodeDetail` / `IndexDetail` / `ConstraintDetail`。
-- **两代并存**：`Database::list_*`（返 `SchemaObject`）与 `MetadataBrowser::get_*`（返 `NodeInfo`）；`MetadataService` 每个方法都是「browser 优先 → list_* 兜底」，序列/触发器还需「浏览器层空则回退」以解默认空实现的遮蔽。
+- 统一结构：`NodeInfo` / `ColumnDetail` / `NodeDetail` / `IndexDetail` / `ConstraintDetail`（**一个对象一份表示**，2026-09-19 起）。
+- `Database::list_*` 与 `MetadataBrowser::get_*` **返回同一套类型**：实现了浏览器的驱动直接转发（`list_tables` → `get_tables`），
+  只实现 `list_*` 的桥接驱动（JDBC 那类）也不会被降级。`MetadataService` 的每个方法都是「browser 优先 → list_* 兜底」的**纯转发**；
+  序列 / 触发器保留「浏览器层空则回退」，以解 trait 默认空实现的遮蔽（PostgreSQL 的序列 / 触发器即如此）。
 
 ### 5.2 唯一闸门与消费链［验］
 

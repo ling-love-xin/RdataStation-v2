@@ -2,17 +2,18 @@
 //!
 //! 每个驱动通过实现 `driver::traits::Database` trait 接入系统。
 //!
-//! ## list_* 方法设计模式
+//! ## list_* 与 get_* 的关系
 //!
 //! 每个驱动包含两套元数据浏览方法：
 //! | 方法 | 返回类型 | 用途 |
 //! |------|---------|------|
-//! | `get_*` | Vec<NodeInfo> / TableDetail | 完整元数据，DriverEngine 调用 |
-//! | `list_*` | Vec<String> / SchemaObject / ColumnDetail | 精简版，MetadataBrowser trait |
+//! | `get_*` | Vec<NodeInfo> / NodeDetail | 完整元数据，`MetadataBrowser` trait |
+//! | `list_*` | Vec<NodeInfo> / Vec<String> / ColumnDetail | `Database` trait 的对象树能力 |
 //!
-//! `list_*` 是 `get_*` 的薄封装，将完整结果转换为前端友好的结构。
-//! 4 个驱动中该模式存在结构性重复（~120 行），因 `#[async_trait]` 添加的
-//! 隐式生命周期约束阻止了 macro 自动生成，属于已知的可接受架构折衷。
+//! 两套返回**同一套结构对象**（`NodeInfo` / `ColumnDetail`）：实现了浏览器的驱动
+//! 直接转发（`list_tables` → `get_tables`），方言特有的类别（例程 / 序列 / 触发器）
+//! 才写独立查询。2026-09-19 统一前，`list_*` 返回的是另一套 `SchemaObject`，
+//! 每个驱动都要写一遍「`NodeInfo` 降级」的空转映射（约 120 行），现已消除。
 
 pub mod duckdb;
 pub mod duckdb_pool;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use engine::driver::traits::{
-    ColumnDetail, ConstraintDetail, DynDatabase, IndexDetail, SchemaObject, SchemaObjectKind,
+    ColumnDetail, ConstraintDetail, DynDatabase, IndexDetail, NodeInfo, SchemaObjectKind,
 };
 use shared::error::{ConnectionError, CoreError};
 use engine::connection_manager::ConnectionManager;
@@ -55,26 +55,19 @@ impl MetadataService {
         db.list_schemas(catalog).await
     }
 
+    /// 列举表 / 视图。
+    ///
+    /// 浏览器与回退返回**同一套结构对象**（`NodeInfo`），所以这里是纯转发——
+    /// 2026-09-19 之前两边各一套类型，中间要写一遍丢掉字段的映射。
     pub async fn list_tables(
         &self,
         conn_id: &str,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
-            let nodes = browser.get_tables(catalog, schema).await?;
-            return Ok(nodes
-                .into_iter()
-                .map(|n| SchemaObject {
-                    name: n.name,
-                    kind: n.kind,
-                    children: None,
-                    comment: n.comment,
-                    table_name: None,
-                    event: None,
-                })
-                .collect());
+            return browser.get_tables(catalog, schema).await;
         }
         db.list_tables(catalog, Some(schema)).await
     }
@@ -127,7 +120,7 @@ impl MetadataService {
         conn_id: &str,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let db = self.get_database(conn_id).await?;
         db.list_procedures(catalog, Some(schema)).await
     }
@@ -137,7 +130,7 @@ impl MetadataService {
         conn_id: &str,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let db = self.get_database(conn_id).await?;
         db.list_functions(catalog, Some(schema)).await
     }
@@ -147,22 +140,12 @@ impl MetadataService {
         conn_id: &str,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_sequences(catalog, schema).await?;
             if !nodes.is_empty() {
-                return Ok(nodes
-                    .into_iter()
-                    .map(|n| SchemaObject {
-                        name: n.name,
-                        kind: n.kind,
-                        children: None,
-                        comment: n.comment,
-                        table_name: None,
-                        event: None,
-                    })
-                    .collect());
+                return Ok(nodes);
             }
             // 浏览器层返回空：可能是 trait 默认实现（未支持）而非真的没有序列。
             // 回退 `Database::list_sequences`——否则驱动的真实实现会被默认空实现遮蔽
@@ -176,22 +159,12 @@ impl MetadataService {
         conn_id: &str,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_triggers(catalog, schema).await?;
             if !nodes.is_empty() {
-                return Ok(nodes
-                    .into_iter()
-                    .map(|n| SchemaObject {
-                        name: n.name,
-                        kind: n.kind,
-                        children: None,
-                        comment: n.comment,
-                        table_name: None,
-                        event: None,
-                    })
-                    .collect());
+                return Ok(nodes);
             }
             // 同上：回退 `Database::list_triggers`（PostgreSQL 有真实实现，曾被遮蔽）。
         }

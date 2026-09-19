@@ -365,7 +365,7 @@ impl Database for SqliteDatabase {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let conn = self.conn.lock().map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "sqlite".to_string(),
@@ -396,14 +396,7 @@ impl Database for SqliteDatabase {
                         "view" => crate::driver::SchemaObjectKind::View,
                         _ => crate::driver::SchemaObjectKind::Table,
                     };
-                    objects.push(crate::driver::SchemaObject {
-                        name,
-                        kind,
-                        children: None,
-                        comment: None,
-                        table_name: None,
-                        event: None,
-                    });
+                    objects.push(crate::driver::NodeInfo::new(name, kind));
                 }
                 Err(e) => {
                     tracing::warn!("SQLite list_tables row error: {}", e);
@@ -583,12 +576,10 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
     }
 
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        Ok(vec![crate::driver::NodeInfo {
-            name: "main".to_string(),
-            kind: crate::driver::SchemaObjectKind::Catalog,
-            icon: Some("database".to_string()),
-            comment: None,
-        }])
+        Ok(vec![crate::driver::NodeInfo::new(
+            "main",
+            crate::driver::SchemaObjectKind::Catalog,
+        )])
     }
 
     async fn get_schemas(
@@ -603,23 +594,9 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         catalog: &str,
         _schema: &str,
     ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        let objects = self.list_tables(catalog, None).await?;
-        Ok(objects
-            .into_iter()
-            .map(|obj| {
-                let is_view = matches!(obj.kind, crate::driver::SchemaObjectKind::View);
-                crate::driver::NodeInfo {
-                    name: obj.name,
-                    kind: obj.kind,
-                    icon: Some(if is_view {
-                        "view".to_string()
-                    } else {
-                        "table".to_string()
-                    }),
-                    comment: obj.comment,
-                }
-            })
-            .collect())
+        // 一次内省：本方法不再重写 SQL（2026-09-19 统一前这里是「调 list_tables 再加 icon」，
+        // 而 icon 没有任何消费者）。
+        self.list_tables(catalog, None).await
     }
 
     async fn get_table_detail(
@@ -630,12 +607,7 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
     ) -> Result<crate::driver::NodeDetail, CoreError> {
         let columns = self.list_columns(catalog, None, table).await?;
         Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo {
-                name: table.to_string(),
-                kind: crate::driver::SchemaObjectKind::Table,
-                icon: Some("table".to_string()),
-                comment: None,
-            },
+            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,

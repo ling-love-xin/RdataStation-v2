@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
 use crate::driver::{
-    ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
+    ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObjectKind, Transaction,
 };
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -284,22 +284,11 @@ impl Database for PostgresDatabase {
 
     async fn list_tables(
         &self,
-        catalog: &str,
+        _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
-        let nodes = self.get_tables(catalog, schema_name).await?;
-        Ok(nodes
-            .into_iter()
-            .map(|n| crate::driver::SchemaObject {
-                name: n.name,
-                kind: n.kind,
-                children: None,
-                comment: n.comment,
-                table_name: None,
-                event: None,
-            })
-            .collect())
+        self.get_tables(_catalog, schema_name).await
     }
 
     async fn list_columns(
@@ -317,7 +306,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -326,7 +315,7 @@ impl Database for PostgresDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(
+         Ok(names_to_nodes(
             &result,
             SchemaObjectKind::Procedure,
         ))
@@ -336,7 +325,7 @@ impl Database for PostgresDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -345,36 +334,37 @@ impl Database for PostgresDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(&result, SchemaObjectKind::Function))
+        Ok(names_to_nodes(&result, SchemaObjectKind::Function))
     }
 
     async fn list_sequences(
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT sequence_name FROM information_schema.sequences \
                    WHERE sequence_schema = $1 ORDER BY sequence_name";
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(&result, SchemaObjectKind::Sequence))
+        Ok(names_to_nodes(&result, SchemaObjectKind::Sequence))
     }
 
     async fn list_triggers(
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
-        let sql = "SELECT trigger_name, event_object_table, event_manipulation \
+        // 只取「名字 + 所属表」：触发事件（event_manipulation）当前没有展示位，不查。
+        let sql = "SELECT trigger_name, event_object_table \
                    FROM information_schema.triggers \
                    WHERE trigger_schema = $1 ORDER BY trigger_name";
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(&result, SchemaObjectKind::Trigger))
+        Ok(names_to_trigger_nodes(&result))
     }
 
     async fn get_routine_source(
@@ -671,7 +661,6 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         Ok(rows_to_node_info(
             &result,
             crate::driver::SchemaObjectKind::Catalog,
-            "database",
         ))
     }
 
@@ -685,7 +674,6 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         Ok(rows_to_node_info(
             &result,
             crate::driver::SchemaObjectKind::Schema,
-            "schema",
         ))
     }
 
@@ -719,16 +707,10 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
                         } else {
                             crate::driver::SchemaObjectKind::Table
                         };
-                        nodes.push(crate::driver::NodeInfo {
-                            name: name_arr.value(row_idx).to_string(),
+                        nodes.push(crate::driver::NodeInfo::new(
+                            name_arr.value(row_idx).to_string(),
                             kind,
-                            icon: Some(if table_type == "VIEW" {
-                                "view".to_string()
-                            } else {
-                                "table".to_string()
-                            }),
-                            comment: None,
-                        });
+                        ));
                     }
                 }
             }
@@ -820,12 +802,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         }
 
         Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo {
-                name: table.to_string(),
-                kind: crate::driver::SchemaObjectKind::Table,
-                icon: Some("table".to_string()),
-                comment: None,
-            },
+            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
@@ -854,7 +831,6 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
 fn rows_to_node_info(
     result: &QueryResult,
     kind: crate::driver::SchemaObjectKind,
-    icon: &str,
 ) -> Vec<crate::driver::NodeInfo> {
     let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
@@ -863,12 +839,7 @@ fn rows_to_node_info(
                 if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     let name = arr.value(row_idx);
                     if !name.is_empty() {
-                        nodes.push(crate::driver::NodeInfo {
-                            name: name.to_string(),
-                            kind: kind.clone(),
-                            icon: Some(icon.to_string()),
-                            comment: None,
-                        });
+                        nodes.push(crate::driver::NodeInfo::new(name.to_string(), kind.clone()));
                     }
                 }
             }
@@ -877,59 +848,41 @@ fn rows_to_node_info(
     nodes
 }
 
-fn names_to_schema_objects(
+/// 单列名字结果集 → 对象列表（例程 / 序列）。
+fn names_to_nodes(
     result: &QueryResult,
     kind: crate::driver::SchemaObjectKind,
-) -> Vec<crate::driver::SchemaObject> {
-    let mut objects: Vec<crate::driver::SchemaObject> = Vec::new();
-    let is_trigger = kind == crate::driver::SchemaObjectKind::Trigger;
+) -> Vec<crate::driver::NodeInfo> {
+    rows_to_node_info(result, kind)
+}
+
+/// 触发器结果集 → 对象列表（第 2 列是所属表，进 `parent_name`）。
+fn names_to_trigger_nodes(result: &QueryResult) -> Vec<crate::driver::NodeInfo> {
+    let mut nodes: Vec<crate::driver::NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
-        if let Some(batch) = result.batches.first() {
-            if row_idx < batch.num_rows() {
-                if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    let name = arr.value(row_idx);
-                    if !name.is_empty() {
-                        let (table_name, event) = if is_trigger {
-                            let tn = batch
-                                .column(1)
-                                .as_any()
-                                .downcast_ref::<StringArray>()
-                                .and_then(|a| {
-                                    if a.is_null(row_idx) {
-                                        None
-                                    } else {
-                                        Some(a.value(row_idx).to_string())
-                                    }
-                                });
-                            let ev = batch
-                                .column(2)
-                                .as_any()
-                                .downcast_ref::<StringArray>()
-                                .and_then(|a| {
-                                    if a.is_null(row_idx) {
-                                        None
-                                    } else {
-                                        Some(a.value(row_idx).to_string())
-                                    }
-                                });
-                            (tn, ev)
-                        } else {
-                            (None, None)
-                        };
-                        objects.push(crate::driver::SchemaObject {
-                            name: name.to_string(),
-                            kind: kind.clone(),
-                            children: None,
-                            comment: None,
-                            table_name,
-                            event,
-                        });
-                    }
-                }
+        let Some(batch) = result.batches.first() else {
+            break;
+        };
+        if row_idx >= batch.num_rows() {
+            continue;
+        }
+        let Some(name_arr) = batch.column(0).as_any().downcast_ref::<StringArray>() else {
+            continue;
+        };
+        let name = name_arr.value(row_idx);
+        if name.is_empty() {
+            continue;
+        }
+        let mut node =
+            crate::driver::NodeInfo::new(name.to_string(), crate::driver::SchemaObjectKind::Trigger);
+        if let Some(table_arr) = batch.column(1).as_any().downcast_ref::<StringArray>() {
+            if !table_arr.is_null(row_idx) {
+                node = node.with_parent(table_arr.value(row_idx));
             }
         }
+        nodes.push(node);
     }
-    objects
+    nodes
 }
 
 #[cfg(test)]

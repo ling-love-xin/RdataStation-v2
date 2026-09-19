@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::traits::{
-    ColumnDetail, DataSourceMeta, Database, SchemaObject, Transaction,
-};
+use crate::driver::traits::{ColumnDetail, DataSourceMeta, Database, NodeInfo, Transaction};
 use shared::error::{CommonError, CoreError};
 use shared::models::QueryResult;
 
@@ -61,7 +59,7 @@ impl Database for WasmDriver {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
 

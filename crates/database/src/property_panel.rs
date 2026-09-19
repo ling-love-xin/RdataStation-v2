@@ -200,6 +200,12 @@ pub async fn load_properties(
             properties.push(row("限定名", qualify(ref_)));
             properties.push(row("类型", object_type.clone()));
             properties.push(row("归属域", source.clone()));
+            // 触发器必属于一张表：驱动内省已查到（`NodeInfo::parent_name`），不展示就白查。
+            if ref_.kind == PropertyKind::Trigger {
+                if let Some(table) = ref_.parent.as_deref().filter(|t| !t.is_empty()) {
+                    properties.push(row("关联表", table.to_string()));
+                }
+            }
         }
         PropertyKind::Routine => {
             let catalog = ref_.catalog.clone().unwrap_or_default();

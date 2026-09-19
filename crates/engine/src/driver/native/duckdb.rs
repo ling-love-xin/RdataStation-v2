@@ -477,19 +477,9 @@ impl Database for DuckDbDatabase {
         &self,
         _catalog: &str,
         _schema: Option<&str>,
-    ) -> Result<Vec<crate::driver::SchemaObject>, CoreError> {
-        let nodes = self.get_tables("main", "main").await?;
-        Ok(nodes
-            .into_iter()
-            .map(|n| crate::driver::SchemaObject {
-                name: n.name,
-                kind: n.kind,
-                children: None,
-                comment: n.comment,
-                table_name: None,
-                event: None,
-            })
-            .collect())
+    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+        // 与浏览器同一份实现：单库场景下 catalog / schema 都是 `main`。
+        self.get_tables("main", "main").await
     }
 
     async fn list_columns(
@@ -802,12 +792,10 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
     }
 
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        Ok(vec![crate::driver::NodeInfo {
-            name: "main".to_string(),
-            kind: crate::driver::SchemaObjectKind::Catalog,
-            icon: Some("database".to_string()),
-            comment: None,
-        }])
+        Ok(vec![crate::driver::NodeInfo::new(
+            "main",
+            crate::driver::SchemaObjectKind::Catalog,
+        )])
     }
 
     async fn get_schemas(
@@ -838,16 +826,10 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
                             } else {
                                 crate::driver::SchemaObjectKind::Table
                             };
-                            Some(crate::driver::NodeInfo {
-                                name: name_arr.value(row_idx).to_string(),
+                            Some(crate::driver::NodeInfo::new(
+                                name_arr.value(row_idx).to_string(),
                                 kind,
-                                icon: Some(if table_type == "VIEW" {
-                                    "view".to_string()
-                                } else {
-                                    "table".to_string()
-                                }),
-                                comment: None,
-                            })
+                            ))
                         } else {
                             None
                         }
@@ -916,12 +898,7 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
             .collect();
 
         Ok(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo {
-                name: table.to_string(),
-                kind: crate::driver::SchemaObjectKind::Table,
-                icon: Some("table".to_string()),
-                comment: None,
-            },
+            node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,

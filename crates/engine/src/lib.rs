@@ -34,8 +34,8 @@ pub use shared::error::{
 // 重新导出驱动层
 pub use driver::{
     AutoDriverRegistrar, DataSourceMeta, Database, DbPool, DriverConnectionConfig,
-    DriverDescriptor, DriverFactory, DriverRegistry, DynDatabase, PoolStatus, SchemaObject,
-    SchemaObjectKind, Transaction,
+    DriverDescriptor, DriverFactory, DriverRegistry, DynDatabase, PoolStatus, SchemaObjectKind,
+    Transaction,
 };
 
 // 重新导出驱动注册表函数

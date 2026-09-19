@@ -256,7 +256,7 @@ mod tests {
     use database::cache::NavCache;
     use editor::channel::ExecChannel;
     use editor::completion::{CandidateKind, CompletionPort};
-    use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
+    use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
 
     use crate::panels::Shared;
 
@@ -275,22 +275,9 @@ mod tests {
         cache.put_objects(
             sid,
             &[
-                SchemaObject {
-                    name: "orders".to_string(),
-                    kind: SchemaObjectKind::Table,
-                    children: None,
-                    comment: Some("订单".to_string()),
-                    table_name: None,
-                    event: None,
-                },
-                SchemaObject {
-                    name: "order_stats".to_string(),
-                    kind: SchemaObjectKind::View,
-                    children: None,
-                    comment: None,
-                    table_name: None,
-                    event: None,
-                },
+                NodeInfo::new("orders", SchemaObjectKind::Table)
+                    .with_comment(Some("订单".to_string())),
+                NodeInfo::new("order_stats", SchemaObjectKind::View),
             ],
         );
         cache.put_columns(

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use engine::cache::{CacheManager, MetadataCache};
 use engine::connection_manager::ConnectionManager;
-use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
+use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
 use engine::persistence::SchemaObjectCounts;
 use shared::error::CoreError;
 
@@ -270,20 +270,18 @@ impl NavigatorService {
 
         // 索引只有名字（没有注释列），故这里只映射名称与类别；
         // 排序按索引的稳定顺序（名称升序）——分块翻页不能有随机顺序。
-        let objects: Vec<SchemaObject> = chunk
+        let objects: Vec<NodeInfo> = chunk
             .items
             .iter()
-            .map(|entry| SchemaObject {
-                name: entry.object_name.clone(),
-                kind: if want_view {
-                    SchemaObjectKind::View
-                } else {
-                    SchemaObjectKind::Table
-                },
-                children: None,
-                comment: None,
-                table_name: None,
-                event: None,
+            .map(|entry| {
+                NodeInfo::new(
+                    entry.object_name.clone(),
+                    if want_view {
+                        SchemaObjectKind::View
+                    } else {
+                        SchemaObjectKind::Table
+                    },
+                )
             })
             .collect();
         let nodes = Self::object_nodes(conn_id, catalog, schema, folder, objects);
@@ -513,7 +511,7 @@ impl NavigatorService {
         catalog: &str,
         schema: &str,
         folder: NavFolder,
-        objects: Vec<SchemaObject>,
+        objects: Vec<NodeInfo>,
     ) -> Vec<NavNode> {
         objects
             .into_iter()
@@ -534,12 +532,14 @@ impl NavigatorService {
                 let key = NavNode::child_key(conn_id, &[catalog, schema, name.as_str()]);
                 // 所有类别对象都带属性定位信息：此前仅表 / 视图带，导致例程 / 序列 /
                 // 触发器节点既无「查看属性」也无「查看源码」。
+                // `parent_name`（驱动内省给的所属表，目前只有触发器有）进 `PropertyRef.parent`，
+                // 属性面板据此显示「关联表」——引用族里 `ObjectRef::trigger` 的 `parent` 同理。
                 let kind_prop = PropertyRef {
                     conn_id: conn_id.to_string(),
                     source: NavSource::from_conn_id(conn_id),
                     catalog: Some(catalog.to_string()),
                     schema: Some(schema.to_string()),
-                    parent: None,
+                    parent: obj.parent_name.clone(),
                     name: name.clone(),
                     kind: match folder {
                         NavFolder::Tables => PropertyKind::Table,
@@ -654,7 +654,7 @@ impl NavigatorService {
         catalog: &str,
         schema: &str,
         folder: NavFolder,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         match folder {
             NavFolder::Tables | NavFolder::Views => {
                 let want_view = folder == NavFolder::Views;
@@ -675,19 +675,18 @@ impl NavigatorService {
                 if !self.fresh {
                     if let (Some(c), Some(sid)) = (&cache, schema_id) {
                         if let Some(rows) = c.objects(sid, want_view) {
-                            let objs: Vec<SchemaObject> = rows
+                            let objs: Vec<NodeInfo> = rows
                                 .into_iter()
-                                .map(|(name, comment)| SchemaObject {
-                                    name,
-                                    kind: if want_view {
-                                        SchemaObjectKind::View
-                                    } else {
-                                        SchemaObjectKind::Table
-                                    },
-                                    children: None,
-                                    comment,
-                                    table_name: None,
-                                    event: None,
+                                .map(|(name, comment)| {
+                                    NodeInfo::new(
+                                        name,
+                                        if want_view {
+                                            SchemaObjectKind::View
+                                        } else {
+                                            SchemaObjectKind::Table
+                                        },
+                                    )
+                                    .with_comment(comment)
                                 })
                                 .collect();
                             // 命中 L2 → 回填 L1
@@ -716,15 +715,15 @@ impl NavigatorService {
                 );
                 // 一次实时内省同时拿到表与视图：两半都进 L1，
                 // 下次展开另一半也是进程内命中（不用再跑这条 SQL）。
-                let (tables_half, views_half): (Vec<SchemaObject>, Vec<SchemaObject>) = objects
+                let (tables_half, views_half): (Vec<NodeInfo>, Vec<NodeInfo>) = objects
                     .into_iter()
                     .partition(|o| o.kind != SchemaObjectKind::View);
-                let filtered: Vec<SchemaObject> = if want_view {
+                let filtered: Vec<NodeInfo> = if want_view {
                     views_half.clone()
                 } else {
                     tables_half.clone()
                 };
-                // **大 schema 不进 L1**：L1 是进程内常驻，万级对象的 `Vec<SchemaObject>`
+                // **大 schema 不进 L1**：L1 是进程内常驻，万级对象的 `Vec<NodeInfo>`
                 // 会一直占着内存；而这类 schema 的下一次展开会走索引分块（`index_page`），
                 // 本来就不读 L1，写了也白占。
                 // L2 照写不误（落到磁盘，按需分页读），只是不在内存里留整份。
@@ -855,6 +854,52 @@ impl NavigatorService {
 }
 
 #[cfg(test)]
+mod object_node_tests {
+    //! 对象 → 导航节点的字段搬运（纯函数，不涉及缓存与连接）。
+
+    use super::*;
+
+    /// 触发器节点的属性定位带上驱动内省给的所属表（`NodeInfo::parent_name` → `PropertyRef.parent`）。
+    ///
+    /// 这条链路此前是断的：postgres 的 `list_triggers` 查了 `event_object_table`、
+    /// 也填进了旧类型 `SchemaObject.table_name`，但上层两处转换都把它丢掉，
+    /// 属性面板只能显示「名称 / 限定名 / 归属域」。现在它一路走到 `PropertyRef.parent`。
+    #[test]
+    fn trigger_nodes_carry_their_table_into_the_property_ref() {
+        let nodes = NavigatorService::object_nodes(
+            "P_1",
+            "main",
+            "public",
+            NavFolder::Triggers,
+            vec![NodeInfo::new("audit_trg", SchemaObjectKind::Trigger).with_parent("orders")],
+        );
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].property.as_ref().and_then(|p| p.parent.as_deref()),
+            Some("orders"),
+            "所属表要进属性定位，属性面板据此显示「关联表」"
+        );
+    }
+
+    /// 表 / 视图没有父对象：`parent` 必须保持 `None`（而不是被填成空串）。
+    #[test]
+    fn table_nodes_have_no_parent() {
+        let nodes = NavigatorService::object_nodes(
+            "P_1",
+            "main",
+            "public",
+            NavFolder::Tables,
+            vec![NodeInfo::new("t1", SchemaObjectKind::Table)],
+        );
+        assert_eq!(
+            nodes[0].property.as_ref().and_then(|p| p.parent.clone()),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
 mod l1_tests {
     //! L1（进程内元数据缓存）接线测试。
     //!
@@ -883,15 +928,8 @@ mod l1_tests {
         NavigatorService::with_context(Arc::new(ConnectionManager::new()), None, fresh)
     }
 
-    fn table(name: &str) -> SchemaObject {
-        SchemaObject {
-            name: name.to_string(),
-            kind: SchemaObjectKind::Table,
-            children: None,
-            comment: None,
-            table_name: None,
-            event: None,
-        }
+    fn table(name: &str) -> NodeInfo {
+        NodeInfo::new(name, SchemaObjectKind::Table)
     }
 
     fn column(name: &str) -> ColumnDetail {
@@ -1025,7 +1063,7 @@ mod paging_tests {
     use std::sync::Arc;
 
     use engine::connection_manager::ConnectionManager;
-    use engine::driver::traits::{SchemaObject, SchemaObjectKind};
+    use engine::driver::traits::{NodeInfo, SchemaObjectKind};
     use engine::persistence::{ConnectionType, MetadataCacheManager, MetadataCachePool};
 
     use super::*;
@@ -1043,15 +1081,8 @@ mod paging_tests {
         dir
     }
 
-    fn object(name: String, kind: SchemaObjectKind) -> SchemaObject {
-        SchemaObject {
-            name,
-            kind,
-            children: None,
-            comment: None,
-            table_name: None,
-            event: None,
-        }
+    fn object(name: String, kind: SchemaObjectKind) -> NodeInfo {
+        NodeInfo::new(name, kind)
     }
 
     /// 在项目缓存里写入一个 schema 与 `count` 个对象（模拟冷启动内省之后的落盘状态）。
@@ -1076,7 +1107,7 @@ mod paging_tests {
             let mut cache = NavCache::open(conn_id, Some(root)).expect("打开缓存");
             cache.put_schemas("main", &[schema.to_string()]);
             let sid = cache.schema_id("main", schema).expect("schema_id");
-            let objects: Vec<SchemaObject> = names
+            let objects: Vec<NodeInfo> = names
                 .iter()
                 .map(|n| object(n.clone(), kind.clone()))
                 .collect();

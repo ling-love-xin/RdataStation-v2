@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | `overview.md` | 架构总览 | 三层架构 / 双层数据 / 双引擎 / crate 依赖方向 |
 | `core-design-current.md` | 核心设计**现状版** | 与各 `*-architecture.md`（设计意图）并列的「实际如此」版本：crate 图与实测违规 / 落盘真相表（**含 §3.1 对象模型：四族 + `ObjectRef` 引用**）/ **三层缓存（L1·L2·L3 词表澄清）** / 驱动与元数据闸门 / 迁移双账本 / 视图层宿主端口模式 / 逐模块接通状态 / 横切机制 / 健康度总表 / 文档新鲜度偏差清单 |
+| `driver-capability-matrix.md` | 驱动能力**横向台账** | **谁连得上、看得见什么**：三条接入路径（原生 / 联邦 scanner / L3 桥接）与判据 / `DriverKind` 8 取值 vs 1 个实现 / 6 个原生驱动的引擎与备注 / **元数据内省覆盖矩阵（catalogs…触发器…例程源码）** / 能力位（事务·流式·Arrow·联邦）/ 补一个驱动要签的 4 个 trait / 联邦三层 scanner 与验收状态 / **空壳与死路（JDBC·WASM·Sidecar 死代码）** / 三步接新驱动 / 已知缺口 6 条 |
 | `crate-ownership-proposal.html` | crate 归属 | app / workbench / settings / Feature / shared / 资产 归属示意 |
 | `module-status.md` | 模块状态与测试基线（**实测版**） | **全仓唯一一份「刚跑过」的台账**：工作区 `84 目标 / 1963 通过 / 51 忽略` · 逐包基线（lib + 集成）· 工作台 32 个集成目标明细 · 模块接通状态 · 零调用清单 · **复现命令（含 rustup shim `Permission denied` 的绕行）** · 本轮实测发现（本机诊断脚本入库事件 / 唯一失败目标 / 文档数字漂移修正表）· 维护约定 |
 | `layout/layout-proposal.html` | 布局示意（v5） | 五段布局最终共识的可视化示意 |

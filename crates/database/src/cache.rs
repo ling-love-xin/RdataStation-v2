@@ -13,7 +13,7 @@
 //! 范围（C3 首版）：schema / 表 / 视图 / 列；存储过程、序列、触发器仍走实时内省。
 //! 缓存**永不自动删除**（设计 §5.2），清理只经「缓存管理」对话框。
 
-use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
+use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
 use engine::persistence::{
     ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
     MetadataCacheOps,
@@ -255,7 +255,7 @@ impl NavCache {
     }
 
     /// 回写表 / 视图对象。
-    pub fn put_objects(&self, schema_id: i64, objects: &[SchemaObject]) {
+    pub fn put_objects(&self, schema_id: i64, objects: &[NodeInfo]) {
         for obj in objects {
             let is_view = obj.kind == SchemaObjectKind::View;
             let table_type = if is_view {
@@ -371,14 +371,7 @@ mod tests {
         let sid = cache.schema_id("main", "public").expect("schema_id");
         cache.put_objects(
             sid,
-            &[SchemaObject {
-                name: "order_items".to_string(),
-                kind: SchemaObjectKind::Table,
-                children: None,
-                comment: None,
-                table_name: None,
-                event: None,
-            }],
+            &[NodeInfo::new("order_items", SchemaObjectKind::Table)],
         );
         cache.put_columns(sid, "order_items", &[col("order_id", true)]);
         cache.rebuild_index("main", "public");
@@ -425,14 +418,8 @@ mod tests {
 
         cache.put_objects(
             sid,
-            &[SchemaObject {
-                name: "t1".to_string(),
-                kind: SchemaObjectKind::Table,
-                children: None,
-                comment: Some("表注释".to_string()),
-                table_name: None,
-                event: None,
-            }],
+            &[NodeInfo::new("t1", SchemaObjectKind::Table)
+                .with_comment(Some("表注释".to_string()))],
         );
         assert_eq!(
             cache.objects(sid, false),
@@ -472,17 +459,7 @@ mod tests {
         let mut cache = NavCache::open("P_conn_prune", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("main", &["public".to_string()]);
         let sid = cache.schema_id("main", "public").expect("schema_id");
-        cache.put_objects(
-            sid,
-            &[SchemaObject {
-                name: "t_old".to_string(),
-                kind: SchemaObjectKind::Table,
-                children: None,
-                comment: None,
-                table_name: None,
-                event: None,
-            }],
-        );
+        cache.put_objects(sid, &[NodeInfo::new("t_old", SchemaObjectKind::Table)]);
         cache.put_columns(sid, "t_old", &[col("id", true)]);
         assert!(cache.objects(sid, false).is_some(), "前置：应命中表");
         assert!(cache.columns(sid, "t_old").is_some(), "前置：应命中列");

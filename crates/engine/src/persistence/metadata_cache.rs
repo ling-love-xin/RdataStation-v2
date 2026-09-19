@@ -2231,16 +2231,8 @@ impl MetadataCacheOps {
         let index_count = self.load_index_count(table_id)?;
 
         Ok(Some(crate::driver::NodeDetail {
-            node: crate::driver::NodeInfo {
-                name: table_name.to_string(),
-                kind,
-                icon: Some(if table_type == "VIEW" {
-                    "view".to_string()
-                } else {
-                    "table".to_string()
-                }),
-                comment: table_comment,
-            },
+            node: crate::driver::NodeInfo::new(table_name.to_string(), kind)
+                .with_comment(table_comment),
             columns,
             index_count: Some(index_count as u32),
             row_count_estimate: row_count_estimate.map(|n| n as u32),

@@ -2,14 +2,19 @@
 //!
 //! ## 为什么需要它
 //!
-//! 同一张表在本仓有五份表示——驱动内省 `SchemaObject`、L2 `tables` 行、
-//! `metadata_index` 行、导航 `NavNode`、洞察 `TableColumnMeta`。跨模块「引用一个对象」时
+//! 同一张表在本仓有多份表示——驱动内省的 `NodeInfo` / `ColumnDetail`、L2 的 `tables`
+//! 行、`metadata_index` 行、导航 `NavNode`、洞察 `TableColumnMeta`。跨模块「引用一个对象」时
 //! 各处自己拼名字，代价是两条：
 //!
 //! 1. **同形类型重复**：`database::model::{TableRef, SchemaRef}` 都是「连接 + 名字段」，
 //!    搜索/命令等新消费者每来一个就要再抄一份；
 //! 2. **无法判断两个表示是不是同一个对象**：属性面板拿到的是名字，导航树用拼串 key，
 //!    索引行给的是 `schema/table` 路径——三者没有共同的比较基准。
+//!
+//! （2026-09-19 之前驱动内省那层还多一份 `SchemaObject`（与 `NodeInfo` 重叠），现已删除：
+//! 「一个对象一份表示」在驱动接口面已经成立，剩下的差异是**关注点不同**——L2 行带存储
+//! 元数据（id / `last_sync`）、`NavNode` 带 UI 状态（展开态 / 错误位）、`TableColumnMeta`
+//! 来自 DuckDB `DESCRIBE` 而非元数据内省，不是重复类型。）
 //!
 //! [`ObjectRef`] 只回答「是哪一个对象」：**连接 + 类别 + catalog / schema / 父对象 / 名字**。
 //! 它刻意**不携带**驱动名、显示名、行数估算这类会随时间变化的字段——那些由宿主按

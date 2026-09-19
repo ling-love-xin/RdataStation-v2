@@ -19,7 +19,7 @@ use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
-    PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
+    PoolStatus, SchemaObjectKind, Transaction,
 };
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -337,7 +337,7 @@ fn build_query_result(
     })
 }
 
-fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind, icon: &str) -> Vec<NodeInfo> {
+fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind) -> Vec<NodeInfo> {
     use arrow::array::StringArray;
     let mut nodes: Vec<NodeInfo> = Vec::new();
     for row_idx in 0..result.total_rows() {
@@ -346,43 +346,13 @@ fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind, icon: &str) -
                 if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     let name = arr.value(row_idx);
                     if !name.is_empty() {
-                        nodes.push(NodeInfo {
-                            name: name.to_string(),
-                            kind: kind.clone(),
-                            icon: Some(icon.to_string()),
-                            comment: None,
-                        });
+                        nodes.push(NodeInfo::new(name.to_string(), kind.clone()));
                     }
                 }
             }
         }
     }
     nodes
-}
-
-fn names_to_schema_objects(result: &QueryResult, kind: SchemaObjectKind) -> Vec<SchemaObject> {
-    use arrow::array::StringArray;
-    let mut objects: Vec<SchemaObject> = Vec::new();
-    for row_idx in 0..result.total_rows() {
-        if let Some(batch) = result.batches.first() {
-            if row_idx < batch.num_rows() {
-                if let Some(arr) = batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    let name = arr.value(row_idx);
-                    if !name.is_empty() {
-                        objects.push(SchemaObject {
-                            name: name.to_string(),
-                            kind: kind.clone(),
-                            children: None,
-                            comment: None,
-                            table_name: None,
-                            event: None,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    objects
 }
 
 // ============================================================================
@@ -596,20 +566,9 @@ impl Database for PostgresNativeDatabase {
         &self,
         catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
-        let nodes = self.get_tables(catalog, schema_name).await?;
-        Ok(nodes
-            .into_iter()
-            .map(|n| SchemaObject {
-                name: n.name,
-                kind: n.kind,
-                children: None,
-                comment: n.comment,
-                table_name: None,
-                event: None,
-            })
-            .collect())
+        self.get_tables(catalog, schema_name).await
     }
 
     async fn list_columns(
@@ -627,7 +586,7 @@ impl Database for PostgresNativeDatabase {
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -636,17 +595,14 @@ impl Database for PostgresNativeDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(
-            &result,
-            SchemaObjectKind::Procedure,
-        ))
+        Ok(rows_to_node_info(&result, SchemaObjectKind::Procedure))
     }
 
     async fn list_functions(
         &self,
         _catalog: &str,
         schema: Option<&str>,
-    ) -> Result<Vec<SchemaObject>, CoreError> {
+    ) -> Result<Vec<NodeInfo>, CoreError> {
         let schema_name = schema.unwrap_or("public");
         let sql = "SELECT p.proname FROM pg_catalog.pg_proc p \
                    JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
@@ -655,7 +611,7 @@ impl Database for PostgresNativeDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
-        Ok(names_to_schema_objects(&result, SchemaObjectKind::Function))
+        Ok(rows_to_node_info(&result, SchemaObjectKind::Function))
     }
 
     async fn get_routine_source(
@@ -810,11 +766,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
         let result = self
             .query("SELECT current_database()::text AS datname")
             .await?;
-        Ok(rows_to_node_info(
-            &result,
-            SchemaObjectKind::Catalog,
-            "database",
-        ))
+        Ok(rows_to_node_info(&result, SchemaObjectKind::Catalog))
     }
 
     async fn get_schemas(&self, catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
@@ -824,11 +776,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
         let result = self
             .query_with_params(sql, vec![Value::Text(catalog.to_string())])
             .await?;
-        Ok(rows_to_node_info(
-            &result,
-            SchemaObjectKind::Schema,
-            "schema",
-        ))
+        Ok(rows_to_node_info(&result, SchemaObjectKind::Schema))
     }
 
     async fn get_tables(&self, catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
@@ -858,16 +806,10 @@ impl MetadataBrowser for PostgresNativeDatabase {
                         } else {
                             SchemaObjectKind::Table
                         };
-                        nodes.push(NodeInfo {
-                            name: name_arr.value(row_idx).to_string(),
+                        nodes.push(NodeInfo::new(
+                            name_arr.value(row_idx).to_string(),
                             kind,
-                            icon: Some(if table_type == "VIEW" {
-                                "view".to_string()
-                            } else {
-                                "table".to_string()
-                            }),
-                            comment: None,
-                        });
+                        ));
                     }
                 }
             }
@@ -960,12 +902,7 @@ impl MetadataBrowser for PostgresNativeDatabase {
         }
 
         Ok(NodeDetail {
-            node: NodeInfo {
-                name: table.to_string(),
-                kind: SchemaObjectKind::Table,
-                icon: Some("table".to_string()),
-                comment: None,
-            },
+            node: NodeInfo::new(table, SchemaObjectKind::Table),
             columns,
             index_count: None,
             row_count_estimate: None,
