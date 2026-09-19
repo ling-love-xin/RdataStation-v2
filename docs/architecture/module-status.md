@@ -259,6 +259,22 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 相对第三次的 **+7** 里，本批改动占 **+3**（database **+1**：两条入口映射一致性；workbench **+2**：`⌥↵` 定位的判别性窗口测试两条），
 其余 **+4** 来自并行会话（engine **443→446** · workbench **113→116** 中的另一条）。
 
+#### 6.3.3 定位的窗口级验收（本批）：`rds-database` lib **55 → 59**
+
+本批给「搜索结果在树中定位」补了 **3 条窗口级测试**（`nav_view.rs` 内 `#[gpui_kit::test]`：stub 宿主 + 播种连接 / catalog / schema / 文件夹四层状态）：
+
+- 展开链路 + 选中 + **渲染窗口覆盖目标**（否则选中了也在屏外）；
+- 目标在已全部加载的文件夹里也不存在 → **如实说一句并收尾**（不留悬念）；
+- 大 schema（分页）下目标不在窗口里 → **发「跳页」请求并等回执**。
+
+为支持它，`crates/database/Cargo.toml` 的 dev-deps 开了 gpui-kit 的 `test-support`
+特性（与 workbench / editor 同一写法）。`rds-database` lib **55 → 59**（本批 +3，另一条来自并行会话）。
+
+> **本批未重跑全量**：并行会话正在重构 `connection_dialog` 的 `CapabilityRow`，
+> `rds-workbench` 的 lib test 在那期间不可编译（与本批无关）。
+> 因此 §0 / §2 仍是上一次全量（第 6.3.2 节那个工作树）的值，**不按推测累加**；
+> `rds-database`（59）与 `ui_contract`（7）本批各自跑过且全绿。
+
 ---
 
 ## 7. 维护约定

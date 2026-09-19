@@ -413,8 +413,24 @@ fn nav_badge_hover_card(
         })
 }
 
-/// 类型文案（徽标 hover 卡用）：已知类型给出「名称（分类）」，否则回退类型 id。
-fn nav_type_label(type_id: &str) -> String {
+/// 类型文案（徽标 hover 卡 / facet 菜单用）：**目录优先**，硬编码表降为兜底。
+///
+/// `from_catalog` = `(类型显示名, 类型分类键)`，来自驱动目录（`data_source_types`）。
+/// 为什么目录优先：新增一个库族只需往库里加一行，UI 不必改代码；
+/// 且同一个库在连接对话框（读目录）与导航（曾硬编码）不再出现两套名字。
+fn nav_type_label(type_id: &str, from_catalog: Option<(&str, &str)>) -> String {
+    if let Some((name, category)) = from_catalog {
+        let name = name.trim();
+        if !name.is_empty() {
+            let cat = nav_type_category_label(category);
+            return if cat.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name}（{cat}）")
+            };
+        }
+    }
+    // 兜底：目录未就绪 / 旧数据（类型不在目录里）时用内置表，仍认不出就原样显示 id。
     let known = match type_id {
         "postgresql" => "PostgreSQL（关系型）",
         "mysql" => "MySQL（关系型）",
@@ -435,9 +451,28 @@ fn nav_type_label(type_id: &str) -> String {
     }
 }
 
-/// 类型短名（去掉「（关系型）」等分类后缀），facet 菜单用。
-fn nav_type_short_label(type_id: &str) -> String {
-    let full = nav_type_label(type_id);
+/// 类型分类键 → 中文（视图层词汇；`data_source_types.category` 的已知取值）。
+///
+/// 未知分类返回空字符串（调用方就不加后缀，不编造分类）。
+fn nav_type_category_label(category: &str) -> &'static str {
+    match category {
+        "relational" => "关系型",
+        "file-based" => "文件型",
+        "analytics" => "分析型",
+        "nosql" => "非关系型",
+        _ => "",
+    }
+}
+
+/// 类型短名（无分类后缀），facet 菜单 / 筛选药丸用。
+fn nav_type_short_label(type_id: &str, from_catalog: Option<(&str, &str)>) -> String {
+    if let Some((name, _)) = from_catalog {
+        let name = name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    let full = nav_type_label(type_id, None);
     full.split('（').next().unwrap_or(&full).to_string()
 }
 
@@ -1460,7 +1495,13 @@ impl NavView {
         let tag_pairs: Vec<(String, String)> =
             tag_cands.iter().map(|t| (t.clone(), t.clone())).collect();
         let type_menu_label = match &cur_type {
-            Some(t) => format!("类型：{}", nav_type_short_label(t)),
+            Some(t) => {
+                let from_catalog = self.nav_type_from_catalog(t);
+                let from_catalog = from_catalog
+                    .as_ref()
+                    .map(|(name, cat)| (name.as_str(), cat.as_str()));
+                format!("类型：{}", nav_type_short_label(t, from_catalog))
+            }
             None => "类型".to_string(),
         };
         let driver_menu_label = match &cur_driver {
@@ -1781,6 +1822,18 @@ impl NavView {
 
     /// 计算 facet 候选清单（类型 / 驱动 / 标签），值 → 展示名，已排序去重。
     ///
+    /// 从驱动目录取该类型的（显示名, 分类）——同一 `type_id` 下多个驱动共享一份类型元数据。
+    ///
+    /// 用于只有类型 id、手上没有 `DriverMeta` 的场合（如筛选药丸文案）；
+    /// 目录未就绪 / 类型不在目录里 → `None`（调用方回退到内置表）。
+    fn nav_type_from_catalog(&self, type_id: &str) -> Option<(String, String)> {
+        self.driver_catalog
+            .borrow()
+            .values()
+            .find(|m| m.type_id == type_id)
+            .and_then(|m| Some((m.type_name.clone()?, m.type_category.clone()?)))
+    }
+
     /// 类型 / 驱动以驱动目录为主、连接实际使用值为兜底（目录未就绪时不落空）；
     /// 标签来自已缓存的组织数据。
     fn nav_facet_candidates(&self) -> (Vec<(String, String)>, Vec<(String, String)>, Vec<String>) {
@@ -1793,22 +1846,32 @@ impl NavView {
                 drivers
                     .entry(id.clone())
                     .or_insert_with(|| meta.name.clone());
-                types
-                    .entry(meta.type_id.clone())
-                    .or_insert_with(|| nav_type_short_label(&meta.type_id));
+                types.entry(meta.type_id.clone()).or_insert_with(|| {
+                    nav_type_short_label(
+                        &meta.type_id,
+                        meta.type_name.as_deref().zip(meta.type_category.as_deref()),
+                    )
+                });
             }
         }
         let conns: Vec<ConnectionItem> = self.host.connections();
         {
             let catalog = self.driver_catalog.borrow();
             for c in &conns {
-                let tid = catalog
+                // 一次取齐（不能在这里再借 `self.driver_catalog`：已持锁，会 double borrow）
+                let (tid, tname, tcat) = catalog
                     .get(&c.driver)
-                    .map(|m| m.type_id.clone())
-                    .unwrap_or_else(|| c.driver.clone());
-                types
-                    .entry(tid.clone())
-                    .or_insert_with(|| nav_type_short_label(&tid));
+                    .map(|m| {
+                        (
+                            m.type_id.clone(),
+                            m.type_name.clone(),
+                            m.type_category.clone(),
+                        )
+                    })
+                    .unwrap_or_else(|| (c.driver.clone(), None, None));
+                types.entry(tid.clone()).or_insert_with(|| {
+                    nav_type_short_label(&tid, tname.as_deref().zip(tcat.as_deref()))
+                });
                 drivers
                     .entry(c.driver.clone())
                     .or_insert_with(|| c.driver.clone());
@@ -2702,16 +2765,23 @@ impl NavView {
         });
 
         // ---- v7：行内只常驻「徽标 + 名称 + 归属域列」；`+` 与行操作仅 hover / 选中显 ----
-        let nav_view = self
-            .driver_catalog
-            .borrow()
-            .get(&conn.driver)
-            .map(|m| (m.type_id.clone(), m.name.clone()));
+        let nav_view = self.driver_catalog.borrow().get(&conn.driver).map(|m| {
+            (
+                m.type_id.clone(),
+                m.name.clone(),
+                m.type_name.clone(),
+                m.type_category.clone(),
+            )
+        });
         let type_id = nav_view
             .as_ref()
-            .map(|(t, _)| t.clone())
+            .map(|(t, ..)| t.clone())
             .unwrap_or_else(|| conn.driver.clone());
-        let driver_name = nav_view.map(|(_, n)| n);
+        // 类型显示名：目录优先（`data_source_types.name` + 分类）——与连接对话框同源
+        let type_from_catalog: Option<(String, String)> = nav_view
+            .as_ref()
+            .and_then(|(_, _, name, cat)| Some((name.clone()?, cat.clone()?)));
+        let driver_name = nav_view.map(|(_, n, ..)| n);
         let nav_view = self.nav.borrow();
         let badge_status = if nav_view.loading.contains(&conn.id) {
             NavBadgeStatus::Connecting
@@ -2762,7 +2832,12 @@ impl NavView {
         // 徽标 hover 卡：类型 / 状态 / 驱动的完整事实（gpui-kit 0.6.1 无通用 `.tooltip` 扩展，
         // 故用 `HoverCard` 承载；行内仍只显颜色 + 形状）。
         let badge = {
-            let type_label = nav_type_label(&type_id);
+            let type_label = nav_type_label(
+                &type_id,
+                type_from_catalog
+                    .as_ref()
+                    .map(|(name, cat)| (name.as_str(), cat.as_str())),
+            );
             let status_label = badge_status.label();
             let driver_label = driver_name
                 .clone()
@@ -5634,11 +5709,335 @@ mod tests {
     use super::{
         insight_schema_target, nav_data_target, nav_merge_page, nav_object_type_label,
         nav_order_members, nav_reorder, nav_search_hit_property, nav_search_hit_ref,
-        nav_search_query_ready, nav_step, nav_type_short_label, parse_nav_search, RevealTarget,
+        nav_search_query_ready, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
+        RevealTarget,
     };
     use crate::model::{
-        NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
+        NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
     };
+    // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
+    use gpui_kit::{AppContext as _, ParentElement as _, Styled as _};
+
+    /// 定位验收用的最小宿主：只回答定位路径真会问到的两件事（是否已连 / 项目根）。
+    ///
+    /// 单独放一层子模块：31 个方法全是样板，不污染本模块的可读性。
+    mod stub_host {
+        use std::cell::RefCell;
+        use std::collections::HashSet;
+        use std::path::PathBuf;
+        use std::rc::Rc;
+
+        use gpui_kit::{App, Window};
+
+        use crate::model::{ObjectRef, PropertyRequest};
+        use crate::nav_host::{ConnectionProbe, NavFilters, NavHost};
+        use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
+
+        pub(super) struct StubNavHost {
+            connected: RefCell<HashSet<String>>,
+        }
+
+        impl StubNavHost {
+            pub(super) fn new(conn_id: &str) -> Self {
+                let mut set = HashSet::new();
+                set.insert(conn_id.to_string());
+                Self {
+                    connected: RefCell::new(set),
+                }
+            }
+        }
+
+        impl NavHost for StubNavHost {
+            fn connections(&self) -> Vec<ConnectionItem> {
+                Vec::new()
+            }
+            fn selected_index(&self) -> Option<usize> {
+                None
+            }
+            fn project_root(&self) -> Option<PathBuf> {
+                None
+            }
+            fn select_connection(&self, _index: Option<usize>, _cx: &mut App) {}
+            fn notice(&self, _message: String, _cx: &mut App) {}
+            fn notify_host(&self, _cx: &mut App) {}
+            fn show_tags(&self, _cx: &App) -> bool {
+                false
+            }
+            fn set_show_tags(&self, _value: bool, _cx: &mut App) {}
+            fn show_scope(&self, _cx: &App) -> bool {
+                false
+            }
+            fn set_show_scope(&self, _value: bool, _cx: &mut App) {}
+            fn source_short_code(&self, _cx: &App) -> bool {
+                false
+            }
+            fn nav_filters(&self, _cx: &App) -> NavFilters {
+                NavFilters::default()
+            }
+            fn set_nav_filters(&self, _filters: NavFilters, _cx: &mut App) {}
+            fn is_connected(&self, conn_id: &str) -> bool {
+                self.connected.borrow().contains(conn_id)
+            }
+            fn connect(&self, _conn_id: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn disconnect(&self, _conn_id: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn connection_probe(&self) -> ConnectionProbe {
+                |_, _| Err("stub 不做真探测".to_string())
+            }
+            fn reload_connections(&self, _cx: &mut App) {}
+            fn copy_connection(&self, _from_id: &str, _new_name: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn share_connection(&self, _conn_id: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn delete_connection(&self, _conn_id: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            fn show_properties(&self, _request: PropertyRequest, _cx: &mut App) {}
+            fn open_query(&self, _request: QueryRequest, _cx: &mut App) {}
+            fn edit_connection(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
+            fn new_connection(&self, _window: &mut Window, _cx: &mut App) {}
+            fn open_group_form(
+                &self,
+                _seed: GroupFormSeed,
+                _window: &mut Window,
+                _cx: &mut App,
+                _on_submit: Rc<dyn Fn(Option<String>, String, Option<String>, &mut App)>,
+            ) {
+            }
+            fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
+            fn open_right_panel(&self, _panel: RightPanel, _cx: &mut App) {}
+            fn open_mock_panel(&self, _source: Option<ObjectRef>, _cx: &mut App) {}
+            fn open_insight_table(&self, _source: ObjectRef, _cx: &mut App) {}
+            fn open_insight_schema(&self, _schema: ObjectRef, _cx: &mut App) {}
+        }
+    }
+
+    /// 播种定位要用的四层（连接 → catalog → schema → 表文件夹）已加载状态。
+    ///
+    /// 为什么不用真连接：真链路要驱动 + 冷启动内省；定位的**决策**只依赖这四层的存在与否，
+    /// 所以把状态直接摆好，测的就是决策本身（真正的取数已由 engine / database 的分页测试钉住）。
+    fn seed_reveal_state(
+        view: &super::NavView,
+        conn: &str,
+        catalog: &str,
+        schema: &str,
+        folder_children: Vec<NavNode>,
+        folder_total: Option<usize>,
+    ) {
+        let catalog_key = NavNode::child_key(conn, &[catalog]);
+        let schema_key = NavNode::child_key(conn, &[catalog, schema]);
+        let folder_key = NavNode::child_key(conn, &[catalog, schema, NavFolder::Tables.key()]);
+        let mut s = view.nav.borrow_mut();
+        s.children.insert(
+            conn.to_string(),
+            vec![NavNode::new(
+                catalog_key.clone(),
+                catalog,
+                conn,
+                NavNodeKind::Catalog,
+                true,
+            )],
+        );
+        s.children.insert(
+            catalog_key,
+            vec![NavNode::new(
+                schema_key.clone(),
+                schema,
+                conn,
+                NavNodeKind::Schema,
+                true,
+            )],
+        );
+        s.children.insert(
+            schema_key,
+            vec![NavNode::new(
+                folder_key.clone(),
+                "表",
+                conn,
+                NavNodeKind::Folder(NavFolder::Tables),
+                true,
+            )],
+        );
+        s.children.insert(folder_key.clone(), folder_children);
+        if let Some(total) = folder_total {
+            s.child_total.insert(folder_key, total);
+        }
+    }
+
+    fn table_node(conn: &str, catalog: &str, schema: &str, name: &str) -> NavNode {
+        NavNode::new(
+            NavNode::child_key(conn, &[catalog, schema, name]),
+            name,
+            conn,
+            NavNodeKind::Table {
+                row_estimate: None,
+            },
+            true,
+        )
+    }
+
+    /// 极小 root view：只为把 `NavView` 挂进窗口（断言都在状态上，不靠它渲染）。
+    struct RevealHarness {
+        view: gpui_kit::Entity<super::NavView>,
+    }
+
+    impl gpui_kit::Render for RevealHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui_kit::Window,
+            _cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            gpui_kit::div().size_full().child(self.view.clone())
+        }
+    }
+
+    /// 造一个挂着 `NavView` 的窗口（带 stub 宿主）。
+    fn open_nav_view<'a>(
+        cx: &'a mut gpui_kit::TestAppContext,
+        conn: &str,
+    ) -> (
+        gpui_kit::Entity<super::NavView>,
+        &'a mut gpui_kit::VisualTestContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let host: std::rc::Rc<dyn crate::nav_host::NavHost> =
+            std::rc::Rc::new(stub_host::StubNavHost::new(conn));
+        let (harness, cx) = cx.add_window_view(|_window, cx| {
+            let view = cx.new(|cx| super::NavView::new(host, cx));
+            RevealHarness { view }
+        });
+        cx.update(|_window, cx| window_draw(cx));
+        let view = cx.update(|_window, cx| harness.read(cx).view.clone());
+        (view, cx)
+    }
+
+    /// 空实现：窗口级用例不靠渲染断言，只需要窗口存在（焦点与实体生命周期）。
+    fn window_draw(_cx: &mut gpui_kit::App) {}
+
+    /// 窗口级：`reveal_ref` 把链路**逐层展开**并选中目标，且收尾干净。
+    #[gpui_kit::test]
+    fn reveal_ref_expands_the_chain_and_selects_the_target(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        let target = NavNode::child_key(conn, &["shop", "public", "orders"]);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![
+                    table_node(conn, "shop", "public", "customers"),
+                    table_node(conn, "shop", "public", "orders"),
+                ],
+                None,
+            );
+        });
+
+        let object = ObjectRef::new(conn, ObjectKind::Table, "shop", "public", "", "orders");
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.reveal_ref(&object, cx));
+        });
+
+        cx.update(|_window, cx| {
+            let nav = view.read(cx).nav.borrow();
+            assert_eq!(
+                nav.selected_key.as_deref(),
+                Some(target.as_str()),
+                "定位应选中目标行"
+            );
+            for key in [conn, "G_1/shop", "G_1/shop/public", "G_1/shop/public/tables"] {
+                assert!(
+                    nav.expanded.contains(key),
+                    "{key} 应被展开（否则选中了也看不到）"
+                );
+            }
+            // 渲染窗口要罩住目标（它在第 2 行）：窗口不足时选中行会在屏外，看上去像没动作
+            assert!(
+                nav.page_limit
+                    .get("G_1/shop/public/tables")
+                    .copied()
+                    .unwrap_or(0)
+                    >= 2,
+                "渲染窗口要抬到目标所在行之后"
+            );
+            assert!(nav.reveal.is_none(), "成功后意图要收尾，不能挂着");
+            assert!(nav.reveal_note.is_none(), "成功不该留提示");
+        });
+    }
+
+    /// 窗口级：目标在**已全部加载**的文件夹里也找不到时，如实说一句并不留悬念。
+    #[gpui_kit::test]
+    fn reveal_ref_reports_when_the_object_is_missing(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![table_node(conn, "shop", "public", "customers")],
+                // 全量已加载（total == loaded）→ 不可能再翻页，只能如实说没有
+                Some(1),
+            );
+        });
+
+        let object = ObjectRef::new(conn, ObjectKind::Table, "shop", "public", "", "orders");
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.reveal_ref(&object, cx));
+        });
+
+        cx.update(|_window, cx| {
+            let nav = view.read(cx).nav.borrow();
+            assert!(nav.reveal.is_none(), "找不到必须收尾（不能永远转圈）");
+            let note = nav.reveal_note.clone().expect("要给一句可读说明");
+            assert!(note.contains("未在索引里找到"), "说明要具体：{note}");
+        });
+    }
+
+    /// 窗口级：大 schema（分页）下目标不在已加载窗口里 → 应发出「跳页」请求并等回执。
+    #[gpui_kit::test]
+    fn reveal_ref_asks_for_the_target_page_in_a_paged_folder(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![table_node(conn, "shop", "public", "customers")],
+                // 数据侧还有一大截：目标可能在没取回来的那部分里
+                Some(600),
+            );
+        });
+
+        let object = ObjectRef::new(conn, ObjectKind::Table, "shop", "public", "", "orders");
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.reveal_ref(&object, cx));
+        });
+
+        cx.update(|_window, cx| {
+            let nav = view.read(cx).nav.borrow();
+            let target = nav.reveal.as_ref().expect("分页时要挂着待完成的定位");
+            assert!(
+                target.jumping,
+                "应已发出跳页请求（位次 → 那一页）并等回执"
+            );
+            assert!(
+                nav.reveal_note.is_none(),
+                "还没到放弃的时候，不该先写提示"
+            );
+        });
+    }
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -6113,6 +6512,36 @@ mod tests {
     }
 
     #[test]
+    fn type_labels_prefer_the_catalog_over_the_builtin_table() {
+        // 目录就绪：新增类型不必改代码就有正确名称与分类
+        assert_eq!(
+            nav_type_label("snowflake", Some(("Snowflake", "analytics"))),
+            "Snowflake（分析型）"
+        );
+        // 目录里分类未知 / 为空：只给名称，不编造分类
+        assert_eq!(nav_type_label("weird", Some(("WeirdDB", ""))), "WeirdDB");
+        assert_eq!(
+            nav_type_label("snowflake", Some(("Snowflake", "whatever"))),
+            "Snowflake"
+        );
+        // 目录里的名称是空白 → 当没给（回退内置表）
+        assert_eq!(nav_type_label("mysql", Some(("   ", "relational"))), "MySQL（关系型）");
+
+        // 目录未就绪 / 类型不在目录：内置表兜底，认不出就原样显示 id
+        assert_eq!(nav_type_label("mysql", None), "MySQL（关系型）");
+        assert_eq!(nav_type_label("postgresql", None), "PostgreSQL（关系型）");
+        assert_eq!(nav_type_label("snowflake", None), "snowflake");
+
+        // 短名（facet 菜单 / 筛选药丸）：目录名优先，无分类后缀
+        assert_eq!(nav_type_short_label("mysql", None), "MySQL");
+        assert_eq!(
+            nav_type_short_label("snowflake", Some(("Snowflake", "analytics"))),
+            "Snowflake"
+        );
+        assert_eq!(nav_type_short_label("snowflake", None), "snowflake");
+    }
+
+    #[test]
     fn type_badge_maps_known_types_and_falls_back() {
         // 已知类型：形状与 2 字母按映射表（原型设计 §2.3）。
         assert_eq!(
@@ -6151,8 +6580,8 @@ mod tests {
 
     #[test]
     fn type_short_label_strips_category_suffix() {
-        assert_eq!(nav_type_short_label("postgresql"), "PostgreSQL");
+        assert_eq!(nav_type_short_label("postgresql", None), "PostgreSQL");
         // 未知类型回退原 id。
-        assert_eq!(nav_type_short_label("snowflake"), "snowflake");
+        assert_eq!(nav_type_short_label("snowflake", None), "snowflake");
     }
 }

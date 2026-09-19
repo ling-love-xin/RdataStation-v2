@@ -15,9 +15,9 @@
 | 行 | `Row.locate: Option<engine::ObjectRef>`（只有元数据行有）+ 选中行上的「⌥↵ 定位」提示。**不做行内按钮**：`List` 自己管指针与确认，行内可点元素会和它抢事件 | `quick_open/{model,delegate}.rs` |
 | 跨面板 | 浮层 `confirm_locate` → 宿主端口 `Action::RevealMetadata` → 左 Dock 切数据源 + `Shared::request_reveal` → 侧栏 render 消费 → `NavView::reveal_ref`（字段私有，与 `request_open_in_editor` 同一口径） | `quick_open/palette.rs`、`view.rs`、`panels/{shared,mod}.rs` |
 | 映射收口 | 两条入口（导航结果行 / Quick Open）共用 `RevealTarget::from_ref`；命中先经 `ObjectRef::from_index_hit` 归一（搜索 ↔ 导航 / 属性面板的唯一对接口） | `crates/database/src/nav_view.rs` |
-| 测试 | 工作台 **+2**：`⌥↵` 在元数据行派发 `RevealMetadata`（**判别性**：自注册生产那份键位 + 伪造一批真命中），在不可定位的行上不派发也不关面板；database **+1**：两条入口算出的目标逐字段相等 | `quick_open/tests.rs`、`nav_view.rs` |
-| 验证 | 全量 **84 目标 / 1990 通过 / 0 失败 / 51 忽略**；`ui_contract` 7 项全绿 | — |
-| 遗留 | ① 把目标「滚到眼前」的窗口级验收；② 导航树自身的窗口级定位测试 | — |
+| 测试 | 工作台 **+2**：`⌥↵` 在元数据行派发 `RevealMetadata`（**判别性**：自注册生产那份键位 + 伪造一批真命中），在不可定位的行上不派发也不关面板；database **+1**：两条入口算出的目标逐字段相等；**database 窗口级 +3**：展开链路 + 选中 + 渲染窗口覆盖、找不到时如实说一句、分页时应发「跳页」请求（stub 宿主 + 播种四层状态，不牵驱动/磁盘） | `quick_open/tests.rs`、`nav_view.rs` |
+| 验证 | 工作台 **+2** 与 database **+3** 全绿（database lib 59）；`ui_contract` 7 项全绿 | — |
+| 遗留 | ① **视觉上的「滚到眼前」仍缺**：导航树是自绘递归（不是 `List`），没有可编程滚动入口——选中 + 渲染窗口已钉住，但「目标出现在可视区」需要先有虚拟列表或树内滚动定位；② 导航结果行的「定位」按钮的点击路径（本批的窗口测试直接调 `reveal_ref` / 经 `⌥↵` 动作，未模拟鼠标点击） | — |
 
 ### 2026-09-19 — 文档：宣传件两版（对齐编辑器宣传页体例）
 

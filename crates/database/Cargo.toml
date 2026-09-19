@@ -31,3 +31,6 @@ tracing.workspace = true
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }
+# 窗口级测试（`#[gpui_kit::test]` / `TestAppContext`）：与 workbench / editor 同一写法。
+# 定位的窗口级验收需要它（`nav_view` 内 `mod tests`）。
+gpui-kit = { workspace = true, features = ["test-support"] }
