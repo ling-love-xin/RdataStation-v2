@@ -201,7 +201,7 @@ PluginProcess              一个可执行文件的一个运行实例（按 plug
 | --- | --- |
 | 1 | 进程按 `plugin_id` 去重，**不是每连接一进程**；`max_instances` 由清单声明（默认 1），需要并行时按上限起多实例、session 轮询分配 |
 | 2 | 一个插件 = 一个进程 = 一个或多个 driver（由 `contributes.drivers` 决定） |
-| 3 | 并发由清单声明：`concurrency = "serial"｜"parallel"`。`serial` 时宿主在该进程上排队（JDBC 单 `Connection` 属此类） |
+| 3 | 并发由清单声明：`concurrency = "serial"｜"parallel"`（家在 `[capabilities.driver]`，§4.3.1）。`serial` 时宿主在该进程上排队（JDBC 单 `Connection` 属此类）；**排队项连 driver 一起记** —— 一个插件声明多个驱动是常态，放行时才知道该开哪一个 |
 | 4 | 空闲回收与 `ConnectionManager` 对齐（30min，`connection_manager.rs:765-826`）；进程退出 → 全部 session 失效 → **如实报错，不静默重连** |
 | 5 | 崩溃检测走 `session.ping`（默认 30s 间隔，连续 2 次失败 → 标记 `Error` + 通知 + 允许手动重启） |
 
@@ -787,7 +787,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` 六块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`cargo test -p rds-plugin` 89/89 + 集成 8/8（P1 新增 70 条单测 + 8 条真进程集成测试）。待办：把决策内核接到 I/O（`Registry → Action` 执行器）· RPC 方法表（`session.open` / `query.execute` / `query.cancel` …）· 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
+| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` 六块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`cargo test -p rds-plugin` 91/91 + 集成 8/8（P1 新增 72 条单测 + 8 条真进程集成测试）。待办：把决策内核接到 I/O（`Registry → Action` 执行器）· RPC 方法表（`session.open` / `query.execute` / `query.cancel` …）· 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |

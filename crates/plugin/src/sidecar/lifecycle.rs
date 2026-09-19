@@ -104,6 +104,17 @@ pub enum ProcessState {
     Error,
 }
 
+/// 排队中的一个会话。
+///
+/// **连 driver 一起记**：早期版本只记 session_id，放行时用「清单里的第一个 driver」顶替 ——
+/// 单 driver 插件看不出问题，多 driver 插件（一个插件装一族 JDBC 驱动是常态）就会把会话
+/// 开到错的驱动上。排队时已经知道的信息，不要在放行时猜。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedSession {
+    pub session_id: SessionId,
+    pub driver_id: DriverId,
+}
+
 /// 一个进程实例（`PluginProcess` 的一次运行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessInstance {
@@ -118,7 +129,7 @@ pub struct ProcessInstance {
     pub ping_failures: u32,
     last_active: Instant,
     sessions: BTreeSet<SessionId>,
-    queue: VecDeque<SessionId>,
+    queue: VecDeque<QueuedSession>,
 }
 
 impl ProcessInstance {
@@ -144,7 +155,7 @@ impl ProcessInstance {
         self.sessions.len()
     }
 
-    pub fn queued(&self) -> impl Iterator<Item = &SessionId> {
+    pub fn queued(&self) -> impl Iterator<Item = &QueuedSession> {
         self.queue.iter()
     }
 
@@ -217,6 +228,24 @@ pub enum RejectReason {
     NeedsManualRestart,
     /// 该实例的排队已满（`QUEUE_MAX_LEN`）。
     QueueFull { index: usize },
+}
+
+impl std::fmt::Display for RejectReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownPlugin => write!(f, "没有登记过这个插件（未安装或未启用）"),
+            Self::UnknownDriver { driver_id } => {
+                write!(f, "该插件没有声明驱动 {driver_id}（声明与实现不一致）")
+            }
+            Self::SessionIdReused => write!(f, "会话 id 重复"),
+            Self::NeedsManualRestart => {
+                write!(f, "该插件的实例已判死，需要先手动重启（不静默重连）")
+            }
+            Self::QueueFull { index } => {
+                write!(f, "实例 #{index} 的等待队列已满（{QUEUE_MAX_LEN}）")
+            }
+        }
+    }
 }
 
 /// I/O 层要执行的动作。
@@ -365,7 +394,7 @@ impl Registry {
                                 self.instances[&(plugin_id.to_string(), **i)].queue_len()
                             })
                             .expect("ready 非空");
-                        return self.enqueue(plugin_id, target, session_id, now);
+                        return self.enqueue(plugin_id, target, session_id, driver_id, now);
                     }
                 },
             };
@@ -384,7 +413,10 @@ impl Registry {
                 .find(|i| !indexes.contains(i))
                 .unwrap_or(indexes.len());
             let mut inst = ProcessInstance::new(plugin_id, index, now);
-            inst.queue.push_back(session_id.to_string());
+            inst.queue.push_back(QueuedSession {
+                session_id: session_id.to_string(),
+                driver_id: driver_id.to_string(),
+            });
             self.instances.insert((plugin_id.to_string(), index), inst);
             return Decision::Spawn {
                 plugin_id: plugin_id.to_string(),
@@ -398,7 +430,7 @@ impl Registry {
             .iter()
             .min_by_key(|i| self.instances[&(plugin_id.to_string(), **i)].queue_len())
             .expect("indexes 非空");
-        self.enqueue(plugin_id, target, session_id, now)
+        self.enqueue(plugin_id, target, session_id, driver_id, now)
     }
 
     fn indexes_of(&self, plugin_id: &str) -> Vec<usize> {
@@ -414,6 +446,7 @@ impl Registry {
         plugin_id: &str,
         index: usize,
         session_id: &str,
+        driver_id: &str,
         now: Instant,
     ) -> Decision {
         let key = (plugin_id.to_string(), index);
@@ -424,7 +457,10 @@ impl Registry {
                 reason: RejectReason::QueueFull { index },
             };
         }
-        inst.queue.push_back(session_id.to_string());
+        inst.queue.push_back(QueuedSession {
+            session_id: session_id.to_string(),
+            driver_id: driver_id.to_string(),
+        });
         inst.last_active = now;
         Decision::Queued {
             plugin_id: plugin_id.to_string(),
@@ -516,18 +552,15 @@ impl Registry {
             return Vec::new();
         }
 
-        let Some(session_id) = inst.queue.pop_front() else {
+        let Some(queued) = inst.queue.pop_front() else {
             return Vec::new();
         };
 
-        // 队首要拿哪个 driver？排队时没记，这里用清单的第一个（单 driver 插件是常态；
-        // 多 driver 的排队放行需要更细的记录，留到接真实靶子时再补）。
-        let driver_id = spec.drivers.first().cloned().unwrap_or_default();
-        self.open_session(plugin_id, &driver_id, &session_id, index, now);
+        self.open_session(plugin_id, &queued.driver_id, &queued.session_id, index, now);
         vec![Decision::Open {
             plugin_id: plugin_id.to_string(),
             index,
-            session_id,
+            session_id: queued.session_id,
         }]
     }
 
@@ -554,7 +587,11 @@ impl Registry {
         };
 
         // 在跑的和排队的都要交还调用方
-        for session_id in inst.sessions.iter().chain(inst.queue.iter()) {
+        for session_id in inst
+            .sessions
+            .iter()
+            .chain(inst.queue.iter().map(|q| &q.session_id))
+        {
             self.sessions.remove(session_id);
             events.push(Event::SessionInvalidated {
                 session_id: session_id.clone(),
@@ -608,7 +645,7 @@ impl Registry {
             .sessions
             .iter()
             .cloned()
-            .chain(inst.queue.iter().cloned())
+            .chain(inst.queue.iter().map(|q| q.session_id.clone()))
             .collect();
         inst.sessions.clear();
         inst.queue.clear();
@@ -790,6 +827,70 @@ mod tests {
             other => panic!("应放行队首：{other:?}"),
         }
         assert_eq!(r.session("s2").map(|s| s.index), Some(0));
+    }
+
+    /// 排队放行要**用排到的那条记录里的 driver**，而不是「清单里的第一个 driver」。
+    ///
+    /// 一个插件声明多个驱动是常态（JDBC 族）；早期版本放行时拿清单第一个顶替 ——
+    /// 那样第二个会话会被开到错的驱动上，而且一声不呼。
+    #[test]
+    fn a_released_session_keeps_the_driver_it_queued_with() {
+        let now = t0();
+        let mut r = Registry::new();
+        r.register_spec(
+            "jdbc-bundle",
+            ProcessSpec::serial_single(["mssql", "oracle"]),
+        );
+        let mut inst = ProcessInstance::new("jdbc-bundle", 0, now);
+        inst.state = ProcessState::Ready;
+        r.instances.insert(("jdbc-bundle".into(), 0), inst);
+
+        let d1 = r.acquire("jdbc-bundle", "mssql", "s1", now);
+        assert!(matches!(d1, Decision::Open { .. }), "{d1:?}");
+
+        let d2 = r.acquire("jdbc-bundle", "oracle", "s2", now);
+        assert!(matches!(d2, Decision::Queued { .. }), "{d2:?}");
+
+        let released = r.release("s1", now);
+        assert_eq!(released.len(), 1);
+        assert_eq!(
+            r.session("s2").map(|s| s.driver_id.as_str()),
+            Some("oracle"),
+            "放行的会话必须还用当初排队的那个 driver"
+        );
+        // 排队项本身也要能看出来（诊断用）
+        let queued: Vec<_> = r
+            .instances_of("jdbc-bundle")
+            .into_iter()
+            .flat_map(|i| i.queued())
+            .map(|q| (q.session_id.as_str(), q.driver_id.as_str()))
+            .collect();
+        assert!(queued.is_empty(), "s2 已经被放行了：{queued:?}");
+    }
+
+    /// 拒绝理由要能给人看（「不排队的理由必须说清」）。
+    #[test]
+    fn reject_reasons_render_distinct_readable_text() {
+        let reasons = [
+            RejectReason::UnknownPlugin,
+            RejectReason::UnknownDriver {
+                driver_id: "mssql".into(),
+            },
+            RejectReason::SessionIdReused,
+            RejectReason::NeedsManualRestart,
+            RejectReason::QueueFull { index: 0 },
+        ];
+        let mut seen = BTreeSet::new();
+        for reason in &reasons {
+            let text = reason.to_string();
+            assert!(text.chars().count() >= 4, "太短的文案等于没说：{text}");
+            assert!(seen.insert(text.clone()), "理由不能撞车：{text}");
+        }
+        assert!(
+            reasons[1].to_string().contains("mssql"),
+            "要说清是哪个 driver：{}",
+            reasons[1]
+        );
     }
 
     /// 没有 Ready 实例但还有额度 → 起新实例；**不抢跑**已有的 Ready。
