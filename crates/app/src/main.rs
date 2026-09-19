@@ -33,6 +33,8 @@ use workbench::commands::{
     ToggleQuickOpen,
 };
 
+mod assets;
+
 fn main() {
     // 0. panic 落盘：真机 GUI 崩溃（尤其 `0xc0000409` 这类 fastfail）在终端之外什么都不留，
     //    事后只能靠“点了就没了”发梦。先装钩子，后面任何 panic 都有消息 + 回溯可查。
@@ -118,10 +120,13 @@ fn install_panic_logger() {
 
 /// 应用主循环（运行于大栈线程，见 `main`）。
 fn run_app() {
-    // 注册内置图标资产源：gpui-kit 组件与 IconName 的 SVG 均从 AssetSource 加载，
+    // 注册资产源：gpui-kit 组件与 IconName 的 SVG 均从 AssetSource 加载，
     // 未注册时所有图标静默渲染为空（元素在但看不到）。
+    // 本仓的 [`assets::AppAssets`] 在内置资产前多查一层**运行时品牌包**
+    // （`<RDS_HOME>/icons/db/<type_id>.svg`）：数据库品牌标是厂商注册商标、不随包发布，
+    // 用户丢文件即生效，没放就回落到内置通用图标（见 `docs/architecture/ui/db-icons.md`）。
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(assets::AppAssets)
         .run(move |cx| {
             // 日志级别变更的出口：设置层与 engine 互不依赖（依赖只向下），装配点在这里。
             // 设置页改级别 → 落盘 + 调这个 sink → 日志系统 reload（即时生效，不用重启）。

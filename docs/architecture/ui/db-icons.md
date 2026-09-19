@@ -107,35 +107,59 @@ DBeaver Community 是 **Apache-2.0** 开源，品牌图标就在各 driver 扩�
 | `mongodb` | MongoDB Inc. | 待填 | MongoDB 品牌指南 | ⏳ 待核 | |
 | `redis` | Redis Ltd. | 待填 | Redis 商标指南 | ⏳ 待核 | |
 
-> 上表「厂商 / 政策」是**已知存在、需逐个点开核**的入口名，不是核实过的结论；本机无法出网核实
-> （GitHub / 官网均被限制），填表时请把政策原文链接与关键条款摘一句进来。
+> 上表「厂商 / 政策」是**已知存在、需逐个点开核**的入口名，不是核实过的结论；
+> 填表时请把政策原文链接与关键条款摘一句进来。
 >
 > **不建议整包拷贝参考产品的图标目录**：版权上可行（保留归属），但它并不能解决商标问题，
 > 还会引入一堆你不支持的数据库图标 —— 维护与合规双重负担。
 
+### 又一个能带品牌标的项目：`t8y2/dbx`（实查）
+
+[Rust + Tauri 的跨平台客户端](https://github.com/t8y2/dbx)，同样带 90+ 家数据库 logo。实查结论：
+
+- 图标是**前端静态资源**：`apps/desktop/public/icons/database/*.svg|png|webp`（含 `dm.svg` 达梦、
+  `apache_kylin.svg`），另有 `icons/ai/`；
+- 仓库里**没有**针对这些 logo 的归属 / 许可 / 声明文件 —— 那两个目录只有图片，全仓的
+  `LICENSE` / `NOTICE` 只覆盖代码、vendored Rust crate 与一个字体（Geist）；
+- 所以他们「能」用：不是因为拿到了授权（也没有披露），而是这类「指代所连接产品」的用法
+  通常落在容忍区，且他们选择不披露。**风险的真实形态是「被要求停用 / 换标」**（厂商先发函，
+  应用商店收到投诉会下架），不是跑不起来。
+- 旁证（同一次实查）：simple-icons 里 **`oracle` / `sqlserver` / `microsoftsqlserver` 已不存在
+  （HTTP 404）**，而 `mysql` / `postgresql` / `mariadb` / `sqlite` / `duckdb` / `clickhouse` /
+  `mongodb` / `redis` / `databricks` / `snowflake` 都在 —— 连 CC0 图标集也会被要求撤下，
+  说明商标确实有人管，而不是「大家都放着所以没事」。
+
 ## 3. 落地配方：一张品牌图标 = 三步
 
-工程侧管线已铺好（`crates/workbench_shell/src/db_icons.rs`），拿到授权 SVG 后：
+工程侧管线已铺好（映射 `crates/workbench_shell/src/db_icons.rs` + 资产源
+`crates/app/src/assets.rs`），拿到 SVG 后：
 
-1. **放文件**：`assets/icons/db/<type_id>.svg`（独立命名空间，避开 Lucide 的平铺名）。
-2. **登记资产源**：把 `crates/app/src/main.rs` 的 `.with_assets(...)` 换成**组合 AssetSource**——
-   先查自备目录，未命中再委托 `gpui_kit::assets::AllAssets::get(path)`。
-   注意 `AllAssets::load()` 对未知路径返回 **Err（不是 `Ok(None)`）**，组合器要自己吞掉未命中；
-   自备图标只有几张，用 `include_bytes!` + 一张 `match` 表即可，不必给 `app` 加 `rust_embed` 依赖。
+1. **放文件**：品牌图标放**运行时目录** `<RDS_HOME>/icons/db/<type_id>.svg`
+   （默认可执行文件所在目录，开发期是 `<repo>/.rds/icons/db/`）。
+   —— 这是 §2.3 第 4 步的实现：**仓库与安装包不含第三方素材**，不重编译，重启应用即生效。
+2. **资产源（已实现）**：`crates/app/src/main.rs` 注册的是 `assets::AppAssets`（`crates/app/src/assets.rs`）——
+   先查运行时品牌包、未命中再委派 `gpui_kit::assets::AllAssets`。三条行为约定：
+   - **未命中不静默**：品牌包缺这张图时交给内置源，内置也没有就 **Err**（名字写错能在日志里看见）；
+   - **不在渲染路径读盘**：按路径**只读一次**并缓存（含“不存在”的结论）——代价是换图要重启应用；
+   - **颜色跟主题**：加载时给「根标签既无 `fill` 也无 `stroke`」的单色 SVG 补 `fill="currentColor"`
+     （gpui 用元素的 `text_color` 解析 `currentColor`，见 `elements/svg.rs`）。
+     simple-icons 这类 fill 路径图**直接能用**；Lucide 风格（`stroke="currentColor"`）与
+     自带配色的彩色品牌标**一律不动**。
 3. **改一行映射**：`db_icons::db_icon_of` 里把该类型的 `Catalog(IconName::…)` 换成
    `DbIcon::Brand { type_id: "mysql" }`——路径由 `DbIcon::brand_path` 推导，**调用点不动**。
 
-**若走 §2.3 第 4 步（运行时资源包）**：映射与路径约定**不变**，变的只是「资产从哪儿取」——
-AssetSource 先查磁盘目录（如 `RDS_HOME/icons/db/`），未命中再委派 `AllAssets`。
-好处是不用重编译、仓库与安装包不含第三方素材；代价是启动时要能容忍该目录不存在（当成未配置）。
-未配置 / 文件缺失时，`DbIcon::Brand` 会渲染成空——所以调用点取值时要先确认资产可用
-（或按「品牌标 → 通用标 → emoji」的顺序逐级回退）。
+**来源建议**：优先用 [simple-icons](https://github.com/simple-icons/simple-icons)（CC0，单色路径，
+写明了版权许可；但注意 CC0 **不授予商标许可**）。实测可用的 slug：`mysql` / `postgresql` /
+`mariadb` / `sqlite` / `duckdb` / `clickhouse` / `mongodb` / `redis` / `databricks` / `snowflake`；
+**`oracle` / `sqlserver` / `microsoftsqlserver` 不在里面（已 404）**——那两家要另外找（厂商 brand kit
+或自绘）。彩色品牌标（DataGrip / dbx 那种）要走各厂商 brand kit，并记得先把 `fill` 做进根标签或
+保住原色（本层的补 `fill` 规则只作用于“无 fill / 无 stroke”的单色图）。
 
 ## 4. 现状与边界
 
 - **尚未接线**：导航 / 对话框的类型徽标今天仍走库里 `data_source_types.icon` 列的 **emoji**
-  （MySQL=🐬…）与「形状 + 2 字母」（能力矩阵 §7 #10 记为有意设计）。`db_icons` 当前**只入表不接**，
-  接线属各自视图轮次（当时 `crates/database/src/nav_view.rs` 正被并发会话修改）。
+  （MySQL=🐬…）与「形状 + 2 字母」（能力矩阵 §7 #10 记为有意设计）。`db_icons` 当前**只入表不接**
+  （所有类型都还是 `Catalog(..)`），接线属各自视图轮次。
 - **emoji 仍是数据**：它是类型目录的一列，也是"没有 SVG 时的兜底"，本模块不碰它。
   渲染优先级（品牌标 > 通用标 > emoji > 形状 + 字母）由调用点决定。
 - **漂移有守卫**：种子里加/删类型而图标表没跟上 → `every_seed_type_has_an_explicit_icon_row` 红；
@@ -146,7 +170,9 @@ AssetSource 先查磁盘目录（如 `RDS_HOME/icons/db/`），未命中再委�
 
 | 内容 | 落点 |
 | --- | --- |
-| 通用图标资产（Lucide 全量 1830 个） | 依赖 `gpui-kit-assets`；注册点 `crates/app/src/main.rs`（`.with_assets(gpui_kit::assets::AllAssets)`）；运行时品牌包需在此换成组合 AssetSource |
+| 通用图标资产（Lucide 全量 1830 个） | 依赖 `gpui-kit-assets`；由 `assets::AppAssets` 委派（不在 `main.rs` 直接注册 `AllAssets`） |
+| **资产源（内置 + 运行时品牌包）** | `crates/app/src/assets.rs`（`AppAssets`：品牌包 → 内置；路径解析、缓存、`currentColor` 归一化与 6 条单测）；注册点 `crates/app/src/main.rs`（`.with_assets(assets::AppAssets)`） |
+| 品牌包目录 | `<RDS_HOME>/icons/db/<type_id>.svg`（`paths::home()` 解析，见 `docs/architecture/runtime/data-paths.md`） |
 | 类型 → 图标映射、品牌标落点、守卫测试 | `crates/workbench_shell/src/db_icons.rs` |
 | 类型目录（`id` / `name` / `category` / `icon`） | `data_source_types` 表；种子 `crates/engine/migrations/global/008_add_data_source_module.sql`；读侧 `engine::persistence::{driver_store, driver_catalog}` |
 | 徽标渲染现状（emoji） | `crates/workbench/src/components/connection_dialog/helpers.rs::type_badge`；导航侧「形状 + 2 字母」在 `crates/database/src/nav_view.rs` |
