@@ -309,6 +309,68 @@ fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn driver_property_defaults_follow_the_declaration_and_keep_user_edits(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    // 走生产入口打开对话框：属性默认值同步写在 render builder 里，不打开就不会执行。
+    let editor = cx.update(|_, cx| harness.read(cx).editor.clone());
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| e.request_new_connection(window, cx));
+    });
+    let dialog = cx.update(|_, cx| editor.read(cx).dialog_state().expect("对话框状态已创建"));
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![ds_type("mysql", "MySQL", "🐬")];
+        // sqlx 实现不声明属性（默认已是 utf8mb4 / statement cache 100）；
+        // Official 声明了 `max_allowed_packet`（mysql_async 真认的键）。
+        let sqlx = driver("mysql", "mysql", "MySQL (sqlx)", true);
+        let mut official = driver("mysql_native", "mysql", "MySQL (Official)", true);
+        official.driver_properties = Some(r#"{"max_allowed_packet":"67108864"}"#.to_string());
+        *dialog.drivers.borrow_mut() = vec![sqlx, official];
+    });
+
+    // 默认驱动（sqlx）：属性页为空——**不能**是 UI 自己编的键（§15）。
+    // 曾经的初值是 `ssl_mode=prefer` + `connect_timeout=10`，两个键对 mysql_async 都是
+    // 未知参数（连接直接报错），对 sqlx 则静默无效。
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let props = cx.update(|_, _cx| dialog.props.borrow().clone());
+    assert!(props.is_empty(), "未声明属性的驱动应留空：{props:?}");
+
+    // 换到 Official：按驱动声明重填。
+    cx.update(|window, cx| {
+        dialog.set_driver_by_value("mysql", "mysql_native", window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let props = cx.update(|_, _cx| dialog.props.borrow().clone());
+    assert_eq!(
+        props,
+        vec![("max_allowed_packet".to_string(), "67108864".to_string())],
+        "属性页默认值应取驱动声明"
+    );
+
+    // 用户手改过 → 换驱动也**不覆盖**（不静默丢用户的输入）。
+    cx.update(|_, _cx| {
+        dialog
+            .props
+            .borrow_mut()
+            .push(("custom_key".to_string(), "1".to_string()));
+    });
+    cx.update(|window, cx| {
+        dialog.set_driver_by_value("mysql", "mysql", window, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let props = cx.update(|_, _cx| dialog.props.borrow().clone());
+    assert!(
+        props.iter().any(|(k, _)| k == "custom_key"),
+        "手改过的属性不得被重置掉：{props:?}"
+    );
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
 fn connection_fields_and_uri_stay_in_sync(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

@@ -6,11 +6,14 @@
 //! 正是走那条路径：`connection::url::build_connection_url` 拿**驱动 id** 当 scheme，
 //! 拼出 `mysql_native://…`，而 `mysql_async` 只认 `mysql://`（`tokio-postgres` 同理）。
 //!
-//! 覆盖三条线（对应 2026-09-19 两轮修复）：
+//! 覆盖四条线（对应 2026-09-19 两轮修复）：
 //! 1. record → `{驱动 id}://…` → 工厂归一 → 真机连接 + 真实查询；
 //! 2. TLS：`require` 能连（服务端支持时）；一旦 `require` 成功，`verify-full` 无 CA
 //!    **必须失败**——否则说明证书校验被跳过（这正是修复前 `postgres_native` 的行为）；
-//! 3. `secret_type_of` 在**真实驱动目录**下把 `mysql_native` 归到 `MYSQL`。
+//! 3. `secret_type_of` 在**真实驱动目录**下把 `mysql_native` 归到 `MYSQL`；
+//! 4. 驱动属性：声明里的键（`drivers.driver_properties`）下发后能连，而对话框**旧初值**
+//!    （`ssl_mode` / `connect_timeout`）会被驱动拒下——两个 Official 驱动对未知参数是报错而非忽略
+//!    （能力矩阵 §2.1；旧初值已由对话框架构决策 #90 删除）。
 //!
 //! 跑法（sh / bash 下路径与 URL 一律单引号，反斜杠会被吃）：
 //!
@@ -40,7 +43,8 @@ const TARGETS: [(&str, &str); 2] = [
 
 /// 按 record 组装的 URL 建连（生产路径：`build_connection_url` → 工厂）。
 ///
-/// 返回 `(连接 ID, 数据库实例)`；`advanced_options` 用于带「连接安全」的 SSL 覆盖。
+/// 返回 `(连接 ID, 数据库实例)`；`advanced_options` 用于带「连接安全」的 SSL 覆盖，
+/// `driver_properties` 用于带属性页的键（两者都按生产路径下发到连接串）。
 /// **必须传同一个 runtime**：`mysql_async` 的连接池绑定在创建它的 runtime 上，
 /// 换一个 runtime 查询会得到 `Pool was disconnected`（第一次写这个测试就踩了）。
 fn connect_via_record(
@@ -48,6 +52,7 @@ fn connect_via_record(
     driver: &str,
     url: &str,
     advanced_options: Option<&str>,
+    driver_properties: Option<&str>,
 ) -> Result<(String, engine::driver::DynDatabase), String> {
     engine::driver::AutoDriverRegistrar::auto_register();
 
@@ -74,7 +79,7 @@ fn connect_via_record(
         auth_config_id: None,
         auth_method: None,
         network_config_id: None,
-        driver_properties: None,
+        driver_properties: driver_properties.map(str::to_string),
         advanced_options: advanced_options.map(str::to_string),
         options: None,
         tags: None,
@@ -108,7 +113,7 @@ fn connect_via_record(
         auth_config_id: None,
         auth_method: None,
         network_config_id: None,
-        driver_properties: None,
+        driver_properties: driver_properties.map(str::to_string),
         advanced_options: advanced_options.map(str::to_string),
         options: None,
         tags: None,
@@ -136,6 +141,66 @@ fn query_one(
         .map_err(|e| e.to_string())
 }
 
+/// 线路 ④：驱动属性（`driver_properties`）真机验收——**声明的键真能连，UI 编的键会被拒**。
+///
+/// 为什么单列一条：属性键的“真伪”只取决于客户端库的解析器——sqlx 静默忽略未知键，
+/// 而 `mysql_async` / `tokio-postgres` **直接报错**（`UnknownParameter` / `UnknownOption`，
+/// 见 `driver-capability-matrix.md` §2.1）。对话框属性页的默认值现在取**驱动声明**
+/// （`drivers.driver_properties`，由 `driver/declaration.rs` 从 `descriptors.rs` 灌入），
+/// 所以「声明里的键下发后连得上」必须由真机钉住。
+///
+/// 反向用例用的是对话框**旧初值**（`ssl_mode=prefer` + `connect_timeout=10`，决策 #90 已删）：
+/// 它们在 Official 驱动上必须报错——若以后有人把“猜测型默认值”加回 UI，本条提供反例。
+#[test]
+fn declared_driver_properties_connect_and_ui_fabricated_keys_are_rejected() {
+    engine::driver::AutoDriverRegistrar::auto_register();
+    let rt = runtime();
+    let mut checked = 0;
+
+    for (driver, env) in TARGETS {
+        let Ok(url) = std::env::var(env) else {
+            eprintln!("⏭️  {driver}：未设 {env}，跳过");
+            continue;
+        };
+        checked += 1;
+
+        // ① 声明里写的键（直接从声明读，不在这里手抄一份）
+        let declared = declared_properties_json(driver)
+            .unwrap_or_else(|| panic!("{driver} 的声明里没有 driver_properties——属性页就无默认值可填"));
+        let (_, db) = connect_via_record(&rt, driver, &url, None, Some(&declared)).unwrap_or_else(|e| {
+            panic!("{driver} 带声明属性 {declared} 真机连接失败：{e}")
+        });
+        query_one(&rt, &db).expect("带声明属性时应能查询");
+        eprintln!("✅ {driver}：声明的驱动属性 {declared} 下发后连接与查询均正常");
+
+        // ② 旧 UI 初值（两个键对两个 Official 驱动都不是它们的参数名）必须被拒
+        let fabricated = r#"{"ssl_mode":"prefer","connect_timeout":"10"}"#;
+        match connect_via_record(&rt, driver, &url, None, Some(fabricated)) {
+            Err(e) => eprintln!(
+                "✅ {driver}：UI 旧初值被驱动拒下（{e}）——这正是决策 #90 要防的形态"
+            ),
+            Ok(_) => panic!(
+                "{driver}：UI 编的属性键居然被接受了——能力矩阵 §2.1 的「未知参数」判断需要重查"
+            ),
+        }
+    }
+
+    if checked == 0 {
+        eprintln!("⚠️  未设 RDS_TEST_MYSQL_URL / RDS_TEST_PG_URL，本项未覆盖（不算失败）");
+    }
+}
+
+/// 从**驱动声明**取该驱动声明的属性默认值（JSON 对象文本）。
+fn declared_properties_json(driver: &str) -> Option<String> {
+    let d = engine::driver::DriverRegistry::all_descriptors()
+        .into_iter()
+        .find(|d| d.id == driver)?;
+    if d.driver_properties.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&d.driver_properties).ok()
+}
+
 /// 一个测试用 runtime（与池同生共死）。
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Runtime::new().expect("tokio runtime")
@@ -153,7 +218,7 @@ fn official_drivers_connect_from_a_record_built_url() {
         };
         checked += 1;
 
-        let (conn_id, db) = connect_via_record(&rt, driver, &url, None)
+        let (conn_id, db) = connect_via_record(&rt, driver, &url, None, None)
             .unwrap_or_else(|e| panic!("{driver} 真机连接失败：{e}"));
         query_one(&rt, &db).unwrap_or_else(|e| panic!("{driver} 查询失败：{e}"));
         eprintln!("✅ {driver}：驱动 id 当 scheme 也能连上（conn_id={conn_id}）且查询可用");
@@ -173,7 +238,13 @@ fn official_driver_tls_require_connects_and_verify_is_real() {
             continue;
         };
 
-        let require = connect_via_record(&rt, driver, &url, Some(r#"{"ssl":{"mode":"require"}}"#));
+        let require = connect_via_record(
+            &rt,
+            driver,
+            &url,
+            Some(r#"{"ssl":{"mode":"require"}}"#),
+            None,
+        );
         match require {
             Ok((_, db)) => {
                 query_one(&rt, &db).expect("require 模式下查询应可用");
@@ -186,6 +257,7 @@ fn official_driver_tls_require_connects_and_verify_is_real() {
                     driver,
                     &url,
                     Some(r#"{"ssl":{"mode":"verify-full"}}"#),
+                    None,
                 );
                 match verify {
                     Err(e) => eprintln!("✅ {driver}：verify-full 如预期失败（{e}）"),

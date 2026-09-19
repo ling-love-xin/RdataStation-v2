@@ -88,6 +88,7 @@ impl ConnectionDialogState {
         let duckdb_fed = self.duckdb_fed.clone();
         let cache_path = self.cache_path.clone();
         let props = self.props.clone();
+        let props_synced = self.props_synced.clone();
         let prop_key = self.prop_key.clone();
         let prop_val = self.prop_val.clone();
         let mgr = self.mgr.clone();
@@ -276,6 +277,29 @@ impl ConnectionDialogState {
                 }
             }
             let selected_type_id = selected_type.borrow().clone();
+
+            // ---- 驱动属性页默认值同步（render 为权威同步点，§15：UI 不造数据）----
+            // 默认值 = 该驱动声明的 `drivers.driver_properties`；换驱动就重填，见 `props_synced` 字段文档。
+            {
+                let want_id = current_driver.as_ref().map(|d| d.id.clone());
+                let (synced_id, written) = props_synced.borrow().clone();
+                if synced_id != want_id {
+                    let now = props.borrow().clone();
+                    let mut marker = (want_id, written.clone());
+                    if now == written {
+                        // 未被用户改过（仍是上次写入的默认值）→ 可重填
+                        if let Some(d) = &current_driver {
+                            let defaults =
+                                driver_property_defaults(d.driver_properties.as_deref());
+                            if defaults != now {
+                                *props.borrow_mut() = defaults.clone();
+                            }
+                            marker = (Some(d.id.clone()), defaults);
+                        }
+                    }
+                    *props_synced.borrow_mut() = marker;
+                }
+            }
             // 类型徽标（缩小的数据库类型 UI）：Header 与暂存条目共用。
             let type_badge_now = type_badge(&types_snapshot, &selected_type_id);
             // 文件型判定优先用驱动元数据（drivers.is_file），无驱动记录时回退类型名。
@@ -630,7 +654,10 @@ impl ConnectionDialogState {
                     div().v_flex().gap_2()
                         .child(
                             div().text_xs().text_color(theme.colors.muted_foreground)
-                                .child("driver_properties · key-value（随连接落库，覆盖驱动默认）"),
+                                .child(
+                                    "driver_properties · key-value（随连接落库，覆盖驱动默认；\
+                                     默认值取驱动声明）",
+                                ),
                         )
                         .child(props_ui)
                         .child(add_prop)

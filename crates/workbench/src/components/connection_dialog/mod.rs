@@ -304,6 +304,14 @@ pub struct ConnectionDialogState {
     /// 策略清单已按哪个环境加载（环境切换时重查；None = 尚未加载）。
     pub env_policies_loaded_for: Rc<RefCell<Option<String>>>,
     pub props: Rc<RefCell<Vec<(String, String)>>>,
+    /// 驱动属性页的**默认值同步标记**：`(上次同步的驱动 id, 当时写入的默认值)`。
+    ///
+    /// 属性页的默认值来自**驱动声明**（`drivers.driver_properties`，见
+    /// `engine/src/driver/declaration.rs`）：换驱动时按新驱动重填，避免把上一个实现的键留在页面上
+    /// （sqlx 静默忽略未知键，`mysql_async` / `tokio-postgres` **直接报错**——留着就是连不上）。
+    /// 当前值 ≠ 当时写入的默认值 = 用户手改过 → **不覆盖**（不静默丢用户的输入）。
+    /// 同步点在 `render`（与 `auth_method_loaded_for` / `fields_synced_for` 同一约定）。
+    pub props_synced: Rc<RefCell<(Option<String>, Vec<(String, String)>)>>,
     pub prop_key: Entity<InputState>,
     pub prop_val: Entity<InputState>,
     pub mgr: Rc<RefCell<ManagerWorkspace>>,

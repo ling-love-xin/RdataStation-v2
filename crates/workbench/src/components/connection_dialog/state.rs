@@ -103,10 +103,8 @@ impl ConnectionDialogState {
             env_policies: Rc::new(RefCell::new(Vec::new())),
             policy_override_keys: Rc::new(RefCell::new(Vec::new())),
             env_policies_loaded_for: Rc::new(RefCell::new(None)),
-            props: Rc::new(RefCell::new(vec![
-                ("connect_timeout".to_string(), "10".to_string()),
-                ("ssl_mode".to_string(), "prefer".to_string()),
-            ])),
+            props: Rc::new(RefCell::new(Vec::new())),
+            props_synced: Rc::new(RefCell::new((None, Vec::new()))),
             prop_key,
             prop_val,
             mgr: Rc::new(RefCell::new(ManagerWorkspace {
@@ -830,15 +828,14 @@ impl ConnectionDialogState {
         }
 
         // 驱动属性（JSON → key-value 列表）。
+        // **不造默认值**（§15）：库里没有就留空，由 render 的同步点按**驱动声明**填
+        // （`drivers.driver_properties`）——以前这里会在空值塞一条 `connect_timeout`，
+        // 而该键对 `mysql_native` 是未知参数（连接直接报错）。
         if let Some(props_json) = &ds.driver_properties {
             if let Ok(map) =
                 serde_json::from_str::<std::collections::BTreeMap<String, String>>(props_json)
             {
-                let mut list: Vec<(String, String)> = map.into_iter().collect();
-                if list.is_empty() {
-                    list.push(("connect_timeout".into(), "10".into()));
-                }
-                *self.props.borrow_mut() = list;
+                *self.props.borrow_mut() = map.into_iter().collect();
             }
         }
 

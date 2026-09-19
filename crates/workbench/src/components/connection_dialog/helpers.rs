@@ -136,6 +136,30 @@ pub(crate) fn driver_short_name(name: &str) -> String {
     trimmed.to_string()
 }
 
+/// 解析驱动声明的属性默认值（`drivers.driver_properties`：SQL 对象 → **按键排序**的键值列表）。
+///
+/// 空 / 非法 JSON / 空键 → 空列表（**不造默认值**）：属性页的默认值必须来自驱动声明
+/// （`descriptors.rs` 里各驱动只声明该客户端库真认的键），UI 编造一个键就是“写了不生效”
+/// 或“写了就连不上”（能力矩阵 §2.1 的「未知参数」列）。
+/// 非字符串值按 JSON 文本给出（与落库路径 `connection_service::apply_driver_properties` 同口径）。
+pub(crate) fn driver_property_defaults(json: Option<&str>) -> Vec<(String, String)> {
+    let Some(map) = json.and_then(|s| {
+        serde_json::from_str::<std::collections::BTreeMap<String, serde_json::Value>>(s).ok()
+    }) else {
+        return Vec::new();
+    };
+    map.into_iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| {
+            let value = match v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            (k, value)
+        })
+        .collect()
+}
+
 /// 指定数据库类型下的启用驱动（保持 drivers 目录顺序）。
 pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<Driver> {
     drivers
