@@ -161,11 +161,12 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | 面 | 现在 |
 | --- | --- |
 | 键的语义 | `CAPABILITY_DICTIONARY`（键 → 中文标签 + 可选运行时位 + 真机验收状态）**唯一一处**；对话框不再另存 12 键标签表 |
-| 声明（哪个驱动有哪些键） | `drivers.capabilities`（读模型；决策 ② 落地后改由代码 upsert，键声明也进字典） |
+| 声明（哪个驱动有哪些键） | `drivers.capabilities`（读模型）：权威在代码（`registry/descriptors.rs` 的 `capability_keys()`），启动幂等 upsert 进表——键由 `capabilities` 显式声明 + 网络布尔位派生 |
 | 运行时位 | `DataSourceMeta` **按驱动**给：`mysql()` 与 `mysql_native()`、`postgres()` 与 `postgres_native()` 各自一份（目前同值，单列一份是为让差异可表达） |
-| 键 ⇄ 位一致性 | 单测 `capability::tests::seed_declarations_and_runtime_bits_agree` 双向盯住（声明了键 ⇒ 位为 true；位为 true 且有键 ⇒ 必须在种子里声明） |
+| 键 ⇄ 位一致性 | 单测 `capability::tests::declared_capabilities_and_runtime_bits_agree` **直接读代码声明**双向盯住（声明了键 ⇒ 位为 true；位为 true 且有键 ⇒ 必须声明） |
+| 归属（驱动能力 / 应用级） | `CapabilitySpec::scope`：`export` / `mock` / `resource` 是**应用级**（与驱动无关，没有驱动声明它们），不进能力矩阵逐行对比，改由一句说明带出；单测盯住「应用级键不得被任何驱动声明」+「驱动声明的键必须在驱动能力字典里（否则矩阵漏行）」 |
 | 没有界面的位 | `META_BITS_WITHOUT_UI_KEY`（`streaming` / `arrow` / `concurrent_write` / `in_memory`）+ 单测穷尽性检查：新增一个位不表态就红 |
-| 门控（键真管事的处） | `federation` → `SqlService::{register_external_database, create_external_table}` 拒非联邦源；`transactions` → `EngineQueryRunner::supports_transactions()` **改读连接的实际 `supports_transaction`**（此前恒 `true`） |
+| 门控（键真管事的处） | `federation` → `SqlService::{register_external_database, create_external_table}` 拒非联邦源；`transactions` → `EngineQueryRunner::supports_transactions()` **改读连接的实际 `supports_transaction`**（此前恒 `true`）。**其余 10 个键目前只展示、没有消费者**（2026-09-20 实查：`index_analysis` / `table_editor` / `sql_autocomplete` / `schema_browser` / `analytics` / `health_check` / `tree` / 三个网络键在 crates 内无读者）——要门控得先定「哪个键管哪个入口」，属产品拍板，不是接线活 |
 | 验收标记 | 能力 Tab 行尾 `✓` = 已真机验收（文字另带可复现用例名）；键声明了但无真机证据的键不给 `✓`（D10） ||
 
 ### 3.4 trait 实现面（补一个驱动要写什么）
@@ -188,8 +189,9 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 
 | 层 | 库 | 扩展 | 挂载形态 | 只读 | 验收状态 |
 | --- | --- | --- | --- | --- | --- |
-| **L1 官方** | MySQL | `mysql` | `ATTACH … (TYPE mysql, READ_ONLY)` | ✅ | ✅ INSTALL + LOAD 通过 |
+| **L1 官方** | MySQL | `mysql` | `ATTACH … (TYPE mysql, READ_ONLY)` | ✅ | ✅ INSTALL + LOAD 通过；**跨源真机验收**（见下） |
 | **L1 官方** | PostgreSQL | `postgres` | 同上 | ✅ | ✅ |
+| **L1 官方** | SQLite | `sqlite` | 同上 | ✅ | ✅ INSTALL + LOAD 通过；**跨源真机验收**（见下） |
 | **L1 官方** | SQLite | `sqlite` | 同上 | ✅ | ✅ |
 | **L1 官方** | 文件（CSV / Parquet / JSON / httpfs） | 内核自带 / `httpfs` | `read_*` 表函数 | 天然只读 | ✅ |
 | **L2 社区** | **Oracle** | `oracle_scanner`（`INSTALL … FROM community`） | `ATTACH '<secret>' AS 别名 (TYPE oracle_scanner)`，**凭据只能走会话级 Secret**，表挂 `main` schema ⇒ **两段名** | ⛔ **扩展不接受 `READ_ONLY`** | ✅ **真机验收完成**（v0.2.2，2026-09-18，见 §2.1）；引擎侧写拒绝 + 编辑器闸门 + 只读账号三道兜底 |
@@ -200,6 +202,20 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 **联邦硬约束**（改这块前先读 `federation/README.md`）：一律只读；扩展显式管理（关掉 `autoinstall_known_extensions` /
 `autoload_known_extensions`，否则 SQL 里一出现扩展函数名就**静默联网下载**）；主源语义（未限定名只在主源解析，同名表报错）；
 资源边界（会话级 `memory_limit` / `temp_directory`）；状态如实（挂不上的源留清单 + 原话原因）。
+
+**L1 跨源真机验收（2026-09-20，端点 `192.168.3.138` + `D:\FossilT\T.fossil`）**：
+`crates/workbench/tests/federation_sources.rs`（`RDS_TEST_MYSQL_URL` + `RDS_TEST_SQLITE_PATH`，**两个变量都要设**，
+只设一个时用例会静默跳过——只看“测试通过”会被跳过骗到）验了四条：
+
+| 项 | 结果 |
+| --- | --- |
+| 跨源查询（两条标记过的连接，**应用不先建连**，由 DuckDB 自己 `ATTACH`） | ✅ `mysql_src.mysql.user JOIN sqlite_src.main.blob` 聚合回 1 行（count = 5）；结果区小字如实列出两个源 |
+| 换主源（未限定名的解析者） | ✅ 切到 `sqlite_src` 后全限定名查询照常 |
+| 重挂（新表可见） | ✅ 重新挂载 `mysql_src` → 354 张表 |
+| 撤掉标记后如实拒绝 | ✅ “联邦查询至少需要两个源（现在只有 mysql_src）” |
+
+这是在本轮驱动侧改动（声明单源 / 属性下发 / 连接串拼装）之后复跑的——即 §2.1 那条
+“源组装时把驱动 id 归一成扫描器认的 scheme”（`accel::normalize_scheme`）仍然成立。
 
 ---
 

@@ -459,6 +459,7 @@ flowchart LR
 | 96 | **驱动属性页默认值改取驱动声明（§15 漏网修复）**：属性页初值不再由 UI 提供，改为**按当前驱动**填 `drivers.driver_properties`（`helpers::driver_property_defaults` 解析，键序稳定）；换驱动即重填，`props_synced` 记「上次写入的驱动 id + 默认值」，当前值不等于它 = 用户手改过 → **不覆盖**；`new()` 的 `ssl_mode=prefer` / `connect_timeout=10` 初值与 `load_for_edit` 对空属性的 `connect_timeout=10` 兜底**一并删除**；属性页提示行注明「默认值取驱动声明」 | 旧初值是 UI 自己编的两个键，对 `mysql_async` / `tokio-postgres` 都是**未知参数**（连接直接报错，见能力矩阵 §2.1 的「未知参数」列），对 sqlx 则静默无效——同一对键在两个实现上一种报错一种无声，“属性页写了不生效”的最后一段就在这儿。配合引擎侧「声明以代码为准 + 启动 upsert」（`engine/src/driver/declaration.rs`），属性页展示的默认值与真下发的键**同一份声明**（拿掉一个键只需改 `descriptors.rs`） |
 | 97 | **属性行标注「去向」+ 常用键提示（能力矩阵 §7 #9 阶段 2）**：引擎新增 `property_spec`（每驱动：库认的键清单 + 中文标签 + 副作用提醒 + 未知键的效果），对话框属性页：① 每行下方标一句去向（会下发 / 会忽略 / **会报错** / 不下发，弱化/警告/危险三色，锚点 `conn-prop-note-{key}`）；② Tab 底部列该驱动常用键（`known_keys`，最多 8 条）；③ 添加属性时立即给分级反馈（危险 → 错误行、忽略/不下发 → 警告行、真下发 → 成功行）。**不在下发路径上过滤**：用户写的键照原样进连接串（静默丢弃用户配置比报错更糟） | 同一个键在四个客户端库上有**四种命运**（sqlx 静默忽略 / 两个 native 直接报错 / 文件型不下发），而属性页只显示 `key = value`——用户只能等连接失败（或默默不生效）才知道，且无法区分“我写错了”与“这个驱动不支持”。加上 #90 之后，属性页已经是“默认值取声明”，不给“去向”就只算一半诚实 |
 | 98 | **文件型属性真下发（能力矩阵 §7 #9 阶段 3）**：SQLite → `native/sqlite.rs::plan_connection`（`journal_mode` / `synchronous` / `busy_timeout` / `foreign_keys` / `cache_size` / `temp_store` 转 PRAGMA，`mode` 转开库标志）；DuckDB → `native/duckdb.rs::plan_connection`（`access_mode` 转开库配置，`threads` / `memory_limit` / `temp_directory` / `max_temp_directory_size` / `preserve_insertion_order` 转 `SET`）。取值**白名单校验**后才拼 SQL（用户输入不能直接进语句），应用后**读回比对**（做不到就报错，不静默降级）；旧驼峰名（`journalMode` / `busyTimeout` / `memoryLimit`…）作为别名仍能生效并在属性页标出映射；清单外的键不执行（记 warn + 属性页标「不认这个键」）；DuckDB 的 `SET` 有意排在 `DuckDBManager::configure_connection` **之后**（用户写的值胜过应用默认）。｜ 属性页从“写下就存在”变成“写下就生效”：`foreign_keys=ON` / `busy_timeout=3000` / `access_mode=read_only` 这些以前只是字符串，现在真作用在开库上。**声明默认值有意不设**：`journal_mode=WAL` 会改库文件落盘格式、`foreign_keys=ON` 会让既有违规写入开始报错，这类改变用户数据的决定不该由默认值静默做——要改的人在属性页写 |
+| 99 | **能力键分归属：驱动能力 vs 应用级功能（§15 漏网修复）**：`CapabilitySpec::scope`（`Driver` / `App`）——`export` / `mock` / `resource` 标为 `App`，能力矩阵不再把它们当驱动行逐行对比（否则界面上会被读成「MySQL 不支持数据导出」：它们与驱动无关，且**没有任何驱动声明它们**），改由 Tab 底部一句说明带出；两个新单测盯住：应用级键不得被任何驱动声明、驱动声明过的键必须在驱动能力字典里（否则矩阵漏行）；矩阵渲染改走 `engine::driver::driver_capability_keys()` | 审计口径是「UI 不造数据」，这条是反例：字典里三个应用级键 + “声明过就打勾”的渲染方式，**共同编出了一个驱动能力**。分开之后能力矩阵才真的是“这个驱动能不能做这件事”，而不是“这个键有没有被谁声明过” |
 
 
 ---
@@ -939,8 +940,8 @@ flowchart LR
 | --- | --- | --- |
 | 类型树（分类 / 类型 / 图标 / 可选性） | `data_source_types`（`enabled=1`）+ `drivers`（可用性判定） | ✅ |
 | 驱动下拉（实现短名） | `drivers`（`type_id` 过滤 + `enabled`） | ✅ |
-| 能力矩阵 | **`drivers.capabilities`（本轮修复）** | ✅（旧为硬编码 6 项） |
-| 属性行下方标「去向」 | **`engine::driver::property_spec`**（键 → 会下发 / 会被忽略 / 会报错 / 不下发；依据 = 各客户端库源码）+ 该驱动常用键清单 | ✅（**2026-09-19**：#91——此前用户只能等连接失败或默默不生效才知道；属性页旧初值也是 UI 编的，见 #90） |
+| 能力矩阵 | **`drivers.capabilities`（本批修复）** | ✅（旧为硬编码 6 项）；**只列驱动能力**：`export` / `mock` / `resource` 三个应用级功能与驱动无关，改由一句说明带出（旧把它们当驱动行，会被读成“该驱动不支持数据导出”） |
+| 属性行下方标「去向」 | **`engine::driver::property_spec`**（键 → 会下发 / 由驱动应用 / 不生效 / 会报错；依据 = 各客户端库源码与驱动实现）+ 该驱动常用键清单 | ✅（**2026-09-19**：#97——此前用户只能等连接失败或默默不生效才知道；属性页旧初值也是 UI 编的，见 #96） |
 | 认证/网络/环境引用下拉 | `auth_configs` / `network_configs` / `environments` | ✅ |
 | 管理器列表（认证 / 网络 / 环境）与「被引用 N」 | 列表来自 `auth_configs` / `network_configs` / `environments`（名称 / 类型 / 内容）；认证列表的 `auth_data`、网络列表的 `config` 在服务层**置空脱敏**（A5 / #34）；计数为真实统计（`global_connections` + 当前项目库 `connections`） | ✅（计数与脱敏不再由 UI 估算） |
 | 网络档案 `config` 内的密码 | 用户填写 → 服务层组装 → 存储层**加密后**落库（`AES:` 前缀）；连接解析 / 编辑回填走解密读路径 | ✅（#34：旧为明文落库） |

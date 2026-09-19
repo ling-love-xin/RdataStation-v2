@@ -284,11 +284,14 @@ pub(crate) fn driver_capabilities(json: Option<&str>) -> Vec<String> {
 
 /// 能力矩阵行（**字典唯一来源**：`engine::driver::CAPABILITY_DICTIONARY`）。
 ///
-/// 字典内每个键都出一行（声明与否均可视），并带出运行时位与真机验收状态；
+/// 字典内的**驱动能力**键逐个出一行（声明与否均可视），并带出运行时位与真机验收状态；
 /// 驱动声明了字典以外的键时追加在尾部（键名原样，`declared = true`），
 /// 保证「驱动新增能力但字典未收录」时也不丢信息。
+///
+/// **只列 `Scope::Driver` 的键**：应用级功能（导出 / Mock 生成 / 资源分析）与驱动无关，
+/// 在这里逐行列出来会被读成「该驱动不支持它」（假信息）——它们走 [`app_level_capabilities`]。
 pub(crate) fn capability_rows(declared: &[String]) -> Vec<CapabilityRow> {
-    let mut rows: Vec<CapabilityRow> = engine::driver::CAPABILITY_DICTIONARY
+    let mut rows: Vec<CapabilityRow> = engine::driver::driver_capability_keys()
         .iter()
         .map(|spec| CapabilityRow {
             label: spec.label.to_string(),
@@ -308,6 +311,14 @@ pub(crate) fn capability_rows(declared: &[String]) -> Vec<CapabilityRow> {
         }
     }
     rows
+}
+
+/// 应用级功能的中文标签（与驱动无关；能力 Tab 用一句说明带过）。
+pub(crate) fn app_level_capabilities() -> Vec<String> {
+    engine::driver::app_level_capability_keys()
+        .iter()
+        .map(|s| s.label.to_string())
+        .collect()
 }
 
 /// 解析驱动声明的认证方法（`drivers.supported_auth_types`，JSON 数组）。
@@ -1208,6 +1219,7 @@ mod tests {
         build_auth_config_json, build_network_config_json, conn_display_name, create_new_db_file,
         dialog_tab_defs, network_config_values, network_field_specs, new_db_file_suggested_name,
         property_note, result_needs_detail, saved_result, visible_tab_index, DriverDerived,
+        app_level_capabilities,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1813,6 +1825,29 @@ mod tests {
         assert!(!type_has_driver(&drivers, "clickhouse"));
     }
 
+    /// 能力矩阵只列**驱动能力**：应用级功能（导出 / Mock / 资源）不能当行出现，
+    /// 否则界面上会被读成「这个驱动不支持数据导出」。
+    #[test]
+    fn capability_rows_exclude_app_level_features() {
+        let rows = capability_rows(&[]);
+        assert!(
+            !rows.iter().any(|r| r.label == "数据导出"),
+            "应用级功能不该出现在驱动能力矩阵里：{:?}",
+            rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>()
+        );
+        assert!(!rows.iter().any(|r| r.label == "Mock 生成"));
+        assert!(!rows.iter().any(|r| r.label == "资源分析"));
+        // 驱动能力仍在（能逐行对比）
+        assert!(rows.iter().any(|r| r.label == "事务"));
+        assert!(rows.iter().any(|r| r.label == "数据库导航"));
+
+        // 三个应用级功能走另一句说明
+        let app = app_level_capabilities();
+        assert!(app.contains(&"数据导出".to_string()), "{app:?}");
+        assert!(app.contains(&"Mock 生成".to_string()));
+        assert!(app.contains(&"资源分析".to_string()));
+    }
+
     #[test]
     fn capabilities_come_from_driver_json_with_label_dictionary() {
         // 解析：来自库里的 JSON 数组（非法 / 空 → 空列表，不造默认能力）。
@@ -1822,8 +1857,9 @@ mod tests {
             driver_capabilities(Some(r#"["tree","health_check"]"#)),
             vec!["tree".to_string(), "health_check".to_string()]
         );
-        // 矩阵：字典（引擎侧唯一一份）内每种能力都出一行（声明与否），
+        // 矩阵：字典（引擎侧唯一一份）内的**驱动能力**逐个出一行（声明与否），
         // 驱动自带的未知键追加在尾部；行里同时带出运行时位与真机验收状态。
+        // （应用级功能不在这里：见 `capability_rows_exclude_app_level_features`）
         let declared = vec!["tree".to_string(), "brand_new".to_string()];
         let rows = capability_rows(&declared);
         assert!(
@@ -1833,7 +1869,7 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|r| r.label == "Mock 生成" && !r.declared),
+                .any(|r| r.label == "模式浏览" && !r.declared),
             "字典内未声明项应标记未声明"
         );
         assert_eq!(rows.last().map(|r| r.label.as_str()), Some("brand_new"));

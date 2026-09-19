@@ -577,9 +577,20 @@ impl ConnectionDialogState {
                             driver_short_name(&d.name)
                         ),
                     };
-                    div().v_flex().gap_2()
+                    // 应用级功能单独一句：它们与驱动无关，混进矩阵会被读成“该驱动不支持”
+                    let app_level = app_level_capabilities();
+                    let mut capability_tab = div().v_flex().gap_2()
                         .child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint))
-                        .child(chips)
+                        .child(chips);
+                    if !app_level.is_empty() {
+                        capability_tab = capability_tab.child(
+                            div().text_xs().text_color(theme.colors.muted_foreground).child(format!(
+                                "另有应用级功能（与驱动无关，全部驱动可用）：{}",
+                                app_level.join(" · ")
+                            )),
+                        );
+                    }
+                    capability_tab
                 }
                 3 => {
                     // ===== 驱动属性：key-value 动态增删 =====

@@ -98,6 +98,19 @@ impl Acceptance {
     }
 }
 
+/// 能力键的归属：**驱动能力**还是**应用级功能**。
+///
+/// 这一档不是为了分类好看：`export` / `mock` / `resource` 是应用自己的功能（导出结果、
+/// 生成测试数据、看资产库），**每个驱动都能用**——没有驱动声明它们，也不会随驱动变。
+/// 把它们混在驱动能力矩阵里，界面上会被读成「MySQL 不支持数据导出」（假信息）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// 驱动能力：逐驱动声明，可在能力矩阵里逐行对比。
+    Driver,
+    /// 应用级功能：与驱动无关（不进驱动能力矩阵，单独一句说明）。
+    App,
+}
+
 /// 一个能力键的定义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilitySpec {
@@ -105,6 +118,8 @@ pub struct CapabilitySpec {
     pub key: &'static str,
     /// 中文标签（界面唯一来源）。
     pub label: &'static str,
+    /// 归属（驱动能力 / 应用级功能）。
+    pub scope: Scope,
     /// 对应的运行时能力位；`None` = 纯界面能力。
     pub meta_bit: Option<MetaBit>,
     /// 真机验收状态。
@@ -116,6 +131,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "tree",
         label: "数据库导航",
+        scope: Scope::Driver,
         meta_bit: None,
         // 导航树读元数据：真机覆盖面见 `db_navigator` / `editor_exec_real`（四库导航对象已跑通）
         acceptance: Acceptance::verified("db_navigator + editor_exec_real"),
@@ -123,6 +139,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "health_check",
         label: "健康检查",
+        scope: Scope::Driver,
         meta_bit: None,
         // 连接探测：真机 192.168.3.138（MySQL/PG）+ 本地 SQLite/DuckDB 均有探测用例
         acceptance: Acceptance::verified("data_source_lifecycle + official_driver_real"),
@@ -130,24 +147,28 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "transactions",
         label: "事务",
+        scope: Scope::Driver,
         meta_bit: Some(MetaBit::Transaction),
         acceptance: Acceptance::verified("editor_exec_real（四库事务：回滚作废/提交生效）"),
     },
     CapabilitySpec {
         key: "index_analysis",
         label: "索引分析",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "sql_autocomplete",
         label: "SQL 补全",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "schema_browser",
         label: "模式浏览",
+        scope: Scope::Driver,
         meta_bit: None,
         // PG/SQLite/DuckDB 的 schema 层：`insight_schema_real` 有真机覆盖
         acceptance: Acceptance::verified("insight_schema_real"),
@@ -155,12 +176,14 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "table_editor",
         label: "表编辑器",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "analytics",
         label: "分析查询",
+        scope: Scope::Driver,
         meta_bit: None,
         // 结果二次分析/本地加速：`editor_exec_real` 的加速通道（DuckDB 真机）
         acceptance: Acceptance::verified("editor_exec_real（本地加速通道）"),
@@ -168,24 +191,28 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "federation",
         label: "联邦查询",
+        scope: Scope::Driver,
         meta_bit: Some(MetaBit::Federated),
         acceptance: Acceptance::verified("federation_sources（mysql_native 跨源）"),
     },
     CapabilitySpec {
         key: "export",
         label: "数据导出",
+        scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "mock",
         label: "Mock 生成",
+        scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "resource",
         label: "资源分析",
+        scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
@@ -197,18 +224,21 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "ssh_tunnel",
         label: "SSH 隧道",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "ssl_tls",
         label: "TLS 加密",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
     CapabilitySpec {
         key: "proxy",
         label: "网络代理",
+        scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
@@ -233,6 +263,22 @@ pub const META_BITS_WITHOUT_UI_KEY: [MetaBit; 4] = [
 /// 按键取定义（未收录 → `None`，调用方原样展示键，不丢信息）。
 pub fn spec(key: &str) -> Option<&'static CapabilitySpec> {
     CAPABILITY_DICTIONARY.iter().find(|s| s.key == key)
+}
+
+/// **驱动能力**键（[`Scope::Driver`]）——能力矩阵逐行对比用的就是这一批。
+pub fn driver_keys() -> Vec<&'static CapabilitySpec> {
+    CAPABILITY_DICTIONARY
+        .iter()
+        .filter(|s| s.scope == Scope::Driver)
+        .collect()
+}
+
+/// **应用级功能**键（[`Scope::App`]）——与驱动无关，界面上不能拿它们当“该驱动不支持”说事。
+pub fn app_level_keys() -> Vec<&'static CapabilitySpec> {
+    CAPABILITY_DICTIONARY
+        .iter()
+        .filter(|s| s.scope == Scope::App)
+        .collect()
 }
 
 /// 按键取中文标签（未收录 → 原样返回键）。
@@ -260,6 +306,44 @@ mod tests {
         assert_eq!(keys.len(), n, "能力键必须唯一");
         for s in CAPABILITY_DICTIONARY {
             assert!(!s.label.trim().is_empty(), "{} 缺中文标签", s.key);
+        }
+    }
+
+    /// 应用级功能键**不能**被任何驱动声明：声明了就是自相矛盾（它们与驱动无关），
+    /// 也会让能力矩阵把它们当驱动能力逐行对比（界面读成“该驱动不支持”）。
+    #[test]
+    fn app_level_keys_are_declared_by_no_driver() {
+        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        let app_keys: Vec<&str> = app_level_keys().iter().map(|s| s.key).collect();
+        assert!(
+            app_keys.contains(&"export") && app_keys.contains(&"mock") && app_keys.contains(&"resource"),
+            "三个应用级键应在字典里标成 Scope::App：{app_keys:?}"
+        );
+        for d in crate::driver::DriverRegistry::all_descriptors() {
+            for key in d.capability_keys() {
+                assert!(
+                    !app_keys.contains(&key.as_str()),
+                    "{} 声明了应用级键 {key}——它不该出现在驱动声明里",
+                    d.id
+                );
+            }
+        }
+    }
+
+    /// `driver_keys()` 只给驱动能力，且必须覆盖所有驱动声明过的键
+    /// （否则能力矩阵会漏行——声明的键在矩阵里找不到位置）。
+    #[test]
+    fn driver_keys_cover_every_declared_key() {
+        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        let scope_driver: Vec<&str> = driver_keys().iter().map(|s| s.key).collect();
+        for d in crate::driver::DriverRegistry::all_descriptors() {
+            for key in d.capability_keys() {
+                assert!(
+                    scope_driver.contains(&key.as_str()),
+                    "{} 声明的 {key} 不在驱动能力字典里（能力矩阵会漏行）",
+                    d.id
+                );
+            }
         }
     }
 
