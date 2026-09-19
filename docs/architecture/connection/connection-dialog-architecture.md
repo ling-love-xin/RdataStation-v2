@@ -177,7 +177,7 @@ flowchart TB
 | 状态 | 存放 | 生命周期 | 谁写 | 谁读 |
 | --- | --- | --- | --- | --- |
 | 连接列表 / 选中 / 通知文案 | `Shared`（`Rc`） | 应用 | `workspace_loader`、对话框保存 / 删除后 | 侧栏、编辑区、状态栏 |
-| 宿主重绘桥 `host_redraw` | `Shared`（`Rc<dyn Fn(&mut App)>`） | 应用 | `WorkbenchView::new` 注入 | 对话框打开 / 关闭、暂存操作 |
+| 宿主重绘桥 `host_redraw` | `Shared`（`Rc<dyn Fn(&mut App)>`） | 应用 | `panels::install_host_redraw_bridge`（由 `WorkbenchView::new` 与 `tests/dialog_host_layer.rs` **共用同一份**） | 对话框打开 / 关闭、暂存操作、导航选中 |
 | 对话框状态（含草稿列表） | `EditorPanel.dialog: Option<Rc<ConnectionDialogState>>` | 首次打开 → 应用退出 | 对话框自身 | 对话框渲染、侧栏回调 |
 | 草稿列表 / 光标 | `ConnectionDialogState.{drafts, draft_cursor}` | 同上 | `staging_*` 方法 | 暂存列表渲染 |
 | 三类引用 / 驱动目录 | `ConnectionDialogState.{auth_list, network_list, env_list, types, drivers}` | 对话框打开时刷新 | `refresh_meta` | 各 Tab / 侧栏 |
@@ -200,7 +200,11 @@ flowchart TB
 
 - **打开 / 关闭**都必须通知宿主：打开漏通知 → 点了没反应；关闭漏通知 → 层残留。
 - 对话框**内部**状态刷新（切 Tab、暂存切换、测试结果）走 `EditorPanel` 的 notify，由 `WorkbenchView` 的 `cx.observe` 级联到宿主。
-- `WorkbenchView` 的事件回调（如侧边栏「编辑」）本身处于宿主 update 上下文，**不能**回调 `notify_host`（借用重入），依赖该回调末尾既有的 `cx.notify()`。
+- `notify_host` **可以从任何地方调**（含“已经在编辑区自己的 update 里”的调用栈，如导航栏「＋」→ 命令端口 → `request_new_connection`）：
+  桥内一律 `cx.defer` 到下一帧再唤醒编辑区 / 宿主。这条曾经是硬约束的反面——2026-09-20 的真机崩溃（点「新增数据源」得 `0xc0000409`）
+  就是桥里同步再进编辑区撞上 GPUI 的 double-lease（`cannot update … while it is already being updated`），
+  而那个 panic 从窗口过程里 unwind 出去会被 abort（详见连接开发方案 运行时稳定性 ㉖）。
+  通用规则：**跨实体 `update` 唤醒一律 defer**，不靠调用方自己记得“此刻我在哪个 update 里”。
 
 ### 4.3 对话框打开 / 关闭语义
 

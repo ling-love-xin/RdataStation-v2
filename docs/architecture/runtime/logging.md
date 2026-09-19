@@ -91,6 +91,24 @@ v2 去掉的是 Tauri 侧：v1 通过 command 把日志查给前端，v2 改用*
 | “刚才那一下怎么了” | 设置页 → 日志 → **查看日志…** | 全局库 `app_logs`（最近 500 条，级别门槛 + 关键字） |
 | “完整原文 / 崩溃前的” | 设置页 → 日志 → **打开日志目录** | 文件 `app.YYYY-MM-DD`（含崩前已写入的部分） |
 | “现在采到多细” | 设置页 → 日志 → **日志级别** | 改完即时生效（`reload_log_level`） |
+| “刚才崩了（panic）” | 直接看 `<RDS_HOME>/logs/panic-<unix秒>.log` | **panic 消息 + 回溯**（见 §5.1） |
+
+### 5.1 panic 落盘（崩溃为什么单开一条通道）
+
+`tracing` 那三个出口都是**正常路径**：崩溃时进程可能在 trait 冻结（`0xc0000409` = fastfail）
+或栈耗尽中直接死掉，什么都来不及 flush。而 GUI 应用还有一个额外问题：终端往往不在手边，
+“点了就没了”之后开发者手里什么都没有。
+
+所以 `crates/app/src/main.rs` 在 `main` 的第一条语句装了一个 panic 钩子（`install_panic_logger`）：
+保留默认 stderr 输出（终端里仍是熟悉的 panic 段），并额外写一份到
+`<RDS_HOME>/logs/panic-<unix秒>.log`：**线程名 + panic 信息 + `Backtrace::force_capture()`**。
+
+- 写日志失败（目录不可建 / 磁盘满）只往 stderr 说一声，**不影响原 panic 的传播**；
+- 只接 panic，不接 `abort`：栈溢出被系统直接终结时这里也不会有文件——那种情况看
+  事件日志（`Get-WinEvent` 的 Application Error 里的出错模块 + 偏移，可用 `dumpbin //disasm` 翻符号）。
+
+配套的另一个诊断旋钮：`RDS_UI_STACK_MB`（默认 64）控制 UI 主循环线程的栈大小，
+用来区分“栈不够”与“递归/逻辑错误”，改环境变量即可，不必重编。
 
 对话框（`components/log_dialog.rs`）的两个有意选择：
 

@@ -15,11 +15,13 @@ use std::rc::Rc;
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _,
+    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _,
     Subscription, TestAppContext, VisualTestContext, Window, div,
 };
 
-use rds_workbench::panels::{EditorPanel, Shared, install_editor_bridge};
+use rds_workbench::panels::{
+    EditorPanel, Shared, install_editor_bridge, install_host_redraw_bridge,
+};
 
 /// 简化宿主：与 `WorkbenchView` 同构——挂对话框层 + 注入宿主重绘桥 + 观察编辑面板。
 struct HostView {
@@ -37,12 +39,10 @@ impl HostView {
             cx.set_global(settings::model::Settings::default());
         }
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
-        // 宿主重绘桥（生产由 `WorkbenchView::new` 注入）。
-        let weak = cx.entity().downgrade();
-        let bridge: Rc<dyn Fn(&mut App)> = Rc::new(move |cx: &mut App| {
-            let _ = weak.update(cx, |_, cx| cx.notify());
-        });
-        *shared.host_redraw.borrow_mut() = Some(bridge);
+        // 宿主重绘桥：**调生产同一份接线**（不只写一份“长得像”的）——
+        // 曾经这里只唤醒宿主、不唤醒编辑区，于是漏掉了「在编辑区 update 里调
+        // notify_host」的 double-lease（真机 0xc0000409）。
+        install_host_redraw_bridge(&shared, cx.entity().downgrade(), editor.clone());
         // 编辑区命令端口（与生产 `WorkbenchView::init_workspace` 同一份接线）。
         install_editor_bridge(&shared, editor.clone());
         let subscription = cx.observe(&editor, |_, _, cx| cx.notify());
@@ -114,6 +114,53 @@ fn new_connection_request_renders_dialog_layer(cx: &mut TestAppContext) {
     );
 }
 
+/// 回归：从**编辑区自己的 `update` 里**发起的宿主重绘不得双租。
+///
+/// 真机路径（2026-09-20 定位，事件日志 `0xc0000409` + panic 日志）：导航栏「＋」
+/// → `install_editor_bridge` 的 `editor.update` → `EditorPanel::request_new_connection`
+/// → `Shared::notify_host` → 宿主重绘桥。桥里若**同步**再进一次编辑区，GPUI 会以
+/// `cannot update … while it is already being updated` panic；而那个 panic 从窗口
+/// 过程里 unwind 出去拿不到捕获 → abort（真机表现为点一下就没了）。
+///
+/// 本用例对桥装的**是生产那一份**（`install_host_redraw_bridge`），所以桥里再把
+/// `defer` 去掉就会当场复现。
+#[gpui_kit::test]
+fn host_redraw_from_inside_the_editor_update_does_not_double_lease(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (host, cx) = open_host(cx);
+    let (shared, editor) = cx.update(|_, cx| {
+        let host = host.read(cx);
+        (host.shared.clone(), host.editor.clone())
+    });
+    // 先渲染一帧完成装配（端口在首帧注入）。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // ① 走端口（导航栏「＋」的同一条链：update 内 → 面板内部 notify_host）。
+    cx.update(|window, cx| {
+        let bridge = shared
+            .editor_bridge
+            .borrow()
+            .clone()
+            .expect("编辑区端口已注入");
+        (*bridge.new_connection)(window, cx);
+    });
+    // ② 再显式来一次「在编辑区 update 里调 notify_host」（面板内有几处这个形状）。
+    cx.update(|_, cx| {
+        editor.update(cx, |_panel, cx| shared.notify_host(cx));
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "双租被修掉后，这条链应正常打开对话框（而不是 panic/abort）"
+    );
+    assert!(
+        cx.debug_bounds("dialog-layer").is_some(),
+        "延迟一帧后对话框层仍应进入元素树"
+    );
+}
+
 #[gpui_kit::test]
 fn editor_notify_cascades_to_host_layer(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -153,7 +200,11 @@ fn sidebar_edit_request_renders_dialog_layer(cx: &mut TestAppContext) {
 
     // 模拟侧边栏「编辑」入口：走命令端口（与导航点击同一路径；对话框在事件路径直接打开）。
     cx.update(|window, cx| {
-        let bridge = shared.editor_bridge.borrow().clone().expect("编辑区端口已注入");
+        let bridge = shared
+            .editor_bridge
+            .borrow()
+            .clone()
+            .expect("编辑区端口已注入");
         (*bridge.edit_connection)("G_conn_demo".to_string(), window, cx);
     });
 
@@ -184,7 +235,11 @@ fn sidebar_new_connection_request_renders_dialog_layer(cx: &mut TestAppContext) 
 
     // 模拟导航面板头「＋」/ 空态「新建连接」：走命令端口（对话框在事件路径直接打开）。
     cx.update(|window, cx| {
-        let bridge = shared.editor_bridge.borrow().clone().expect("编辑区端口已注入");
+        let bridge = shared
+            .editor_bridge
+            .borrow()
+            .clone()
+            .expect("编辑区端口已注入");
         (*bridge.new_connection)(window, cx);
     });
 

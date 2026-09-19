@@ -496,7 +496,8 @@ impl WorkbenchView {
     /// 有完整的三态确认）。存失败不阻断退出——绝不能因为写库失败把人关在窗口里。
     pub fn save_all_editor_sessions(&mut self, cx: &mut Context<Self>) {
         // 先清掉已关掉的面板（与 `close_active_editor` 同一收尾），免得对尸体调保存
-        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        self.editor_hosts
+            .retain(|panel| !panel.read(cx).is_closed());
         let panels = self.editor_hosts.clone();
         editor::view::host::save_sessions_for(&panels, cx);
     }
@@ -685,16 +686,10 @@ impl WorkbenchView {
         // 导航树缓存）；原先由 `SidebarEvent::SelectConnection` 的订阅回调顺带
         // `editor.notify()` 驱动，事件通道退役后收到这里：只唤醒“脏了但自己不知道”
         // 的编辑区，不再依赖它恰好因别的原因重渲染。
-        {
-            let weak = cx.entity().downgrade();
-            let editor_for_redraw = editor.clone();
-            *shared.host_redraw.borrow_mut() = Some(Rc::new(move |cx: &mut App| {
-                editor_for_redraw.update(cx, |_, cx| cx.notify());
-                if let Some(view) = weak.upgrade() {
-                    view.update(cx, |_, cx| cx.notify());
-                }
-            }));
-        }
+        //
+        // 为什么这层要 defer、而不是直接同步 notify：见 `install_host_redraw_bridge`
+        // 的注释（它会被「编辑区自己 update 里」的动作调到，同步就是 double-lease）。
+        crate::panels::install_host_redraw_bridge(&shared, cx.entity().downgrade(), editor.clone());
 
         // 导航面板的事件通道（`SidebarEvent`）已退役：选中 / 编辑 / 新建 / 开右栏
         // 都改走宿主端口（`database::nav_host::NavHost`，实现在 `components/nav_host.rs`），

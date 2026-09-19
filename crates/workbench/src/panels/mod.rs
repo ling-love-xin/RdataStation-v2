@@ -13,11 +13,10 @@ use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
-
 
 use crate::view::LeftPanel;
 
@@ -40,10 +39,12 @@ mod shared;
 pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use right::RightSidebarPanel;
-pub use scratchpad::ScratchpadSearchView;
 pub use scratchpad::ScratchpadDiffView;
+pub use scratchpad::ScratchpadSearchView;
 pub use shared::append_sql;
-pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, ScratchpadBridge, Shared};
+pub use shared::{
+    EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, ScratchpadBridge, Shared,
+};
 
 /// 侧边栏面板：按活动工具渲染内容。
 ///
@@ -63,11 +64,7 @@ pub struct SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub fn new(
-        shared: Shared,
-        editor: &EditorShared,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(shared: Shared, editor: &EditorShared, cx: &mut Context<Self>) -> Self {
         // M4：导航面板实体——宿主端口在此注入（视图在 `database` crate，不依赖 workbench）。
         let nav_host = Rc::new(crate::components::nav_host::WorkbenchNavHost::new(
             shared.clone(),
@@ -178,7 +175,9 @@ impl SidebarPanel {
         state.set_rows(scan.rows.clone());
         {
             let mut flow = self.shared.repair_dialog.borrow_mut();
-            flow.session = Some(shared::RepairDialogSession { state: state.clone() });
+            flow.session = Some(shared::RepairDialogSession {
+                state: state.clone(),
+            });
         }
 
         let entity = cx.entity();
@@ -211,7 +210,9 @@ impl SidebarPanel {
         state.set_foreign(seed.foreign.clone());
         {
             let mut flow = self.shared.trash_dialog.borrow_mut();
-            flow.session = Some(shared::TrashDialogSession { state: state.clone() });
+            flow.session = Some(shared::TrashDialogSession {
+                state: state.clone(),
+            });
         }
 
         let entity = cx.entity();
@@ -390,6 +391,38 @@ pub fn install_resources_bridge(shared: &Shared, sidebar: Entity<SidebarPanel>) 
     });
 }
 
+/// 注入宿主重绘桥（装配期调用）：`Shared::notify_host` 的去处。
+///
+/// 为何需要它：模态层的挂载点在**宿主 render** 里，而 `cx.notify()` 只重渲染该视图
+/// 子树——只通知 `Root` 的话，对话框状态激活了但层不进元素树（表现为「点了没反应」）。
+///
+/// **必须 `defer`，这是本条桥的硬约束**：它也会被「在编辑区自己的 update 里」发起的
+/// 动作调到——典型是导航栏「＋」→ `install_editor_bridge` 的 `editor.update` →
+/// `EditorPanel::request_new_connection` → `Shared::notify_host`。若桥里同步再进一次
+/// 编辑区，GPUI 的 double-lease 检查会 panic（`cannot update … while it is already
+/// being updated`），而那个 panic 会从**窗口过程**里 unwind 出去拿不到捕获 → abort。
+/// 真机表现就是：点「新增数据源」直接 `0xc0000409`（2026-09-20 定位，见连接开发方案
+/// 运行时稳定性 ㉒）。
+///
+/// 生产与同构测试宿主（`tests/dialog_host_layer.rs`）调的就是这一份：接线只此一处。
+pub fn install_host_redraw_bridge<T: Render + 'static>(
+    shared: &Shared,
+    view: gpui_kit::WeakEntity<T>,
+    editor: Entity<EditorPanel>,
+) {
+    *shared.host_redraw.borrow_mut() = Some(Rc::new(move |cx: &mut App| {
+        // 每次调用先克隆句柄（闭包是 `Fn`，会被反复调）。
+        let editor = editor.clone();
+        let view = view.clone();
+        cx.defer(move |cx| {
+            editor.update(cx, |_, cx| cx.notify());
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |_, cx| cx.notify());
+            }
+        });
+    }));
+}
+
 /// 注入编辑区命令端口（装配期调用）。
 ///
 /// 生产入口：`WorkbenchView::init_workspace`；与宿主同构的测试宿主（`tests/dialog_host_layer.rs`）
@@ -401,8 +434,9 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_diff = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
-            editor_for_edit
-                .update(cx, |panel, cx| panel.request_edit_connection(id, window, cx));
+            editor_for_edit.update(cx, |panel, cx| {
+                panel.request_edit_connection(id, window, cx)
+            });
         }),
         new_connection: Rc::new(move |window: &mut Window, cx: &mut App| {
             editor_for_new.update(cx, |panel, cx| panel.request_new_connection(window, cx));
@@ -410,11 +444,9 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         show_properties: Rc::new(move |request: PropertyRequest, cx: &mut App| {
             editor.update(cx, |panel, cx| panel.request_properties(request, cx));
         }),
-        show_search_results: Rc::new(
-            move |view: Option<ScratchpadSearchView>, cx: &mut App| {
-                editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
-            },
-        ),
+        show_search_results: Rc::new(move |view: Option<ScratchpadSearchView>, cx: &mut App| {
+            editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
+        }),
         show_diff: Rc::new(move |view: Option<ScratchpadDiffView>, cx: &mut App| {
             editor_for_diff.update(cx, |panel, cx| panel.set_scratchpad_diff(view, cx));
         }),
