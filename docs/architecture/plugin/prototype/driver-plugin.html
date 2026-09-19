@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation · 驱动插件原型（native sidecar：三轨来源 / 能力声明 / 进程健康）</title>
+<!--
+  ============================================================================
+  RdataStation v2 · 插件系统 M9 · 「驱动插件」原型
+  ============================================================================
+
+  这是什么
+    驱动插件这一轨（D1 里的 **native sidecar**）在产品里长什么样：
+    · 新建连接时「驱动来源」怎么选（三轨并列，wasm 轨如实标注已冻结）
+    · 驱动的**能力声明**怎么呈现（哪些是真门控：事务 / 取消 / 游标 / Arrow）
+    · 进程健康与重启（sidecar 是独立进程，会死、会重启）
+    · native 权限与扩展轨权限**不同**（进程 / 网络 / 文件 / 环境）
+
+  对应设计文档
+    - plugin-dev-plan.md §4.1 三层对象模型（PluginProcess → DriverInstance → Session）
+    - plugin-dev-plan.md D2「边界按 trait 画」：需要元数据全量 / 真事务 / 真取消 / 游标的走 sidecar
+    - plugin-dev-plan.md §4.2.4 Arrow IPC 兼容子集 · §4.5 Arrow 与类型
+    - plugin-dev-plan.md §4.6.3 凭据口径：只有驱动进程拿得到凭据
+    - engine/src/driver/traits.rs：`Database` / `MetadataBrowser` 必需方法
+    - engine/src/driver/capability.rs：`META_BITS_WITHOUT_UI_KEY`（Arrow 位只在插件通信里声明）
+
+  尺寸 / 色值出处
+    尺寸：rds-ui-spec skill（树行 1.375rem=22、连接行 1.625rem=26、缩进 0.5rem+0.875rem×depth）
+    色值：assets/themes/rds-theme.json + product-tokens.json
+
+  点击指南
+    ① 左树里点「Oracle 生产库」→ 中间显示该驱动的详情
+    ② 「杀掉桥进程」→ 状态变红 → 自动重启 → 连接「重连中」→ 恢复
+    ③ 「回传格式」卡片：展开看 JSON 回传 vs Arrow 回传的区别（含本仓现状）
+    ④ 关掉某项 native 权限 → 说明「下次用到会 -32006」，不是静默
+    ⑤ 「安装驱动插件」→ 安装前的 native 权限明示对话框（凭据口径也在这里写清）
+  ============================================================================
+-->
+<style>
+  :root[data-theme="dark"] {
+    --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --border-strong:#4F4F4F;
+    --title-bar:#323233; --sidebar:#252526; --sidebar-accent:#37373D; --sidebar-fg:#CCCCCC;
+    --list-hover:#2A2D2E; --list-active:#37373D; --list-active-border:#E8846F;
+    --tab-bar:#252526; --tab-bg:#2D2D30; --tab-active-bg:#1E1E1E; --tab-fg:#969696;
+    --popover:#252526; --primary:#E8846F; --primary-fg:#1E1E1E; --muted-fg:#8A8A8A;
+    --ok:#89D185; --warn:#CCA700; --danger:#F14C4C;
+    --ok-bg:#14532D; --ok-fg:#F0FDF4; --warn-bg:#5A4D08; --warn-fg:#FFFBEB;
+    --danger-bg:#5A1D1D; --danger-fg:#FEF2F2; --info-bg:#1A3D5C; --info-fg:#EFF6FF;
+    --group-box:#171717; --slot-bg:#252526; --activity-bar:#333333;
+  }
+  :root[data-theme="light"] {
+    --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --border-strong:#B0B0B0;
+    --title-bar:#DDDDDD; --sidebar:#F3F3F3; --sidebar-accent:#E4E4E4; --sidebar-fg:#616161;
+    --list-hover:#F0F0F0; --list-active:#E4E4E4; --list-active-border:#C25B46;
+    --tab-bar:#F3F3F3; --tab-bg:#ECECEC; --tab-active-bg:#FFFFFF; --tab-fg:#616161;
+    --popover:#FFFFFF; --primary:#C25B46; --primary-fg:#FFFFFF; --muted-fg:#8E8E8E;
+    --ok:#16A34A; --warn:#B45309; --danger:#DC2626;
+    --ok-bg:#DCFCE7; --ok-fg:#14532D; --warn-bg:#FEF3C7; --warn-fg:#713F12;
+    --danger-bg:#FEE2E2; --danger-fg:#7F1D1D; --info-bg:#DBEAFE; --info-fg:#1E3A8A;
+    --group-box:#F5F5F5; --slot-bg:#F3F3F3; --activity-bar:#ECECEC;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin:0; padding:14px; background:var(--activity-bar); color:var(--fg);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    display:flex; flex-direction:column; gap:12px;
+  }
+  .mono { font-family:Consolas,"Cascadia Mono",monospace; }
+  .dim { color:var(--muted-fg); }
+
+  .workbench {
+    border:1px solid var(--border); border-radius:4px; overflow:hidden;
+    display:flex; flex-direction:column; height:640px; background:var(--bg);
+  }
+  .title-bar {
+    flex:0 0 auto; height:36px; display:flex; align-items:center; gap:8px; padding:0 10px;
+    background:var(--title-bar); border-bottom:1px solid var(--border); font-size:12px;
+  }
+  .logo { width:20px; height:20px; border-radius:4px; background:var(--primary); }
+  .title-slot { height:26px; display:flex; align-items:center; gap:6px; padding:0 14px; border-radius:4px; background:var(--slot-bg); color:var(--sidebar-fg); }
+  .title-slot b { color:var(--fg); }
+  .qo-entry { width:320px; height:26px; margin:0 auto; display:flex; align-items:center; gap:6px; padding:0 10px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--muted-fg); }
+  .win-ctrl { display:flex; gap:10px; color:var(--muted-fg); }
+
+  .middle { flex:1 1 auto; display:flex; min-height:0; }
+  .activity-bar { flex:0 0 48px; display:flex; flex-direction:column; align-items:center; padding:4px 0; gap:2px; background:var(--activity-bar); border-right:1px solid var(--border); }
+  .act-item { position:relative; width:44px; height:40px; display:flex; align-items:center; justify-content:center; color:var(--sidebar-fg); background:none; border:0; cursor:pointer; }
+  .act-item.active { color:var(--fg); }
+  .act-item.active::before { content:""; position:absolute; left:0; top:8px; bottom:8px; width:2px; background:var(--primary); border-radius:1px; }
+  .act-item svg { width:19px; height:19px; }
+  .act-spacer { flex:1 1 auto; }
+
+  .dock-left { flex:0 0 250px; display:flex; flex-direction:column; min-height:0; background:var(--sidebar); border-right:1px solid var(--border); }
+  .panel-header { flex:0 0 auto; height:36px; display:flex; align-items:center; gap:6px; padding:0 8px 0 12px; border-bottom:1px solid var(--border); font-size:12px; font-weight:600; }
+  .panel-header .sp { flex:1 1 auto; }
+  .list { flex:1 1 auto; overflow:auto; padding-bottom:6px; }
+
+  /* 树/连接行尺寸取自 ui.rs：连接行 26px、树行 22px、缩进 8 + 14×depth */
+  .conn { height:26px; display:flex; align-items:center; gap:6px; padding:0 8px 0 8px; cursor:pointer; font-size:12.5px; }
+  .conn:hover { background:var(--list-hover); }
+  .conn.sel { background:var(--list-active); }
+  .conn .name { flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tree { height:22px; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sidebar-fg); cursor:default; }
+  .tree:hover { background:var(--list-hover); }
+  .group-head { height:24px; display:flex; align-items:center; gap:6px; padding-left:8px; color:var(--muted-fg); font-size:11px; }
+
+  .badge { width:18px; height:18px; border-radius:3px; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; flex:0 0 18px; }
+  .badge.on  { background:var(--primary); color:var(--primary-fg); }
+  .badge.off { background:var(--sidebar-accent); color:var(--muted-fg); }
+  .badge.plug { background:var(--info-bg); color:var(--info-fg); }
+
+  .chip { font-size:10px; line-height:16px; padding:0 5px; border-radius:3px; border:1px solid var(--border-strong); color:var(--muted-fg); }
+  .chip.ok { background:var(--ok-bg); color:var(--ok-fg); border-color:transparent; }
+  .chip.warn { background:var(--warn-bg); color:var(--warn-fg); border-color:transparent; }
+  .chip.danger { background:var(--danger-bg); color:var(--danger-fg); border-color:transparent; }
+  .chip.info { background:var(--info-bg); color:var(--info-fg); border-color:transparent; }
+
+  .dock-area { flex:1 1 auto; display:flex; flex-direction:column; min-width:0; }
+  .tab-bar { flex:0 0 auto; height:36px; display:flex; background:var(--tab-bar); border-bottom:1px solid var(--border); }
+  .tab { display:flex; align-items:center; gap:8px; padding:0 12px; font-size:12px; color:var(--tab-fg); background:var(--tab-bg); border-right:1px solid var(--border); }
+  .tab.active { background:var(--tab-active-bg); color:var(--fg); }
+
+  .detail { flex:1 1 auto; overflow:auto; padding:16px 18px; }
+  .detail h2 { margin:0; font-size:16px; }
+  .detail h3 { margin:18px 0 8px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted-fg); }
+  .head { display:flex; align-items:flex-start; gap:12px; }
+  .head .avatar { width:40px; height:40px; border-radius:8px; background:var(--info-bg); color:var(--info-fg); display:flex; align-items:center; justify-content:center; font-weight:700; }
+  .head .meta { flex:1 1 auto; }
+  .head .acts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+
+  .btn { font:inherit; font-size:12px; color:var(--fg); background:transparent; border:1px solid var(--border-strong); border-radius:3px; padding:2px 7px; cursor:pointer; }
+  .btn:hover { border-color:var(--primary); }
+  .btn.primary { background:var(--primary); border-color:var(--primary); color:var(--primary-fg); }
+  .btn.danger { color:var(--danger); border-color:var(--danger); }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+
+  .kv { display:grid; grid-template-columns:120px 1fr; gap:4px 10px; font-size:12px; }
+  .kv dt { color:var(--muted-fg); }
+  .kv dd { margin:0; }
+
+  table.grid { width:100%; border-collapse:collapse; font-size:12px; }
+  table.grid th, table.grid td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+  table.grid th { color:var(--muted-fg); font-weight:500; font-size:11px; }
+  table.grid tr:last-child td { border-bottom:0; }
+  .yes { color:var(--ok); }
+  .no { color:var(--muted-fg); }
+
+  .card { background:var(--group-box); border:1px solid var(--border); border-radius:6px; padding:12px; margin-top:8px; }
+  .card .card-title { display:flex; align-items:center; gap:8px; font-size:12.5px; margin-bottom:6px; font-weight:600; }
+
+  /* 三轨来源 */
+  .track { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border:1px solid var(--border); border-radius:4px; margin-top:6px; background:var(--bg); }
+  .track .n { width:20px; height:20px; border-radius:50%; background:var(--sidebar-accent); display:flex; align-items:center; justify-content:center; font-size:11px; flex:0 0 20px; }
+  .track .body { flex:1 1 auto; font-size:12px; }
+  .track.frozen { opacity:.72; }
+  .track.frozen .body b { text-decoration:line-through; text-decoration-thickness:1px; text-decoration-color:var(--muted-fg); }
+
+  .log {
+    background:var(--bg); border:1px solid var(--border); border-radius:4px;
+    padding:8px; font-family:Consolas,monospace; font-size:11px; line-height:1.6;
+    height:120px; overflow:auto;
+  }
+  .log .t { color:var(--muted-fg); }
+  .log .e { color:var(--danger); }
+  .log .w { color:var(--warn); }
+
+  .status-bar { flex:0 0 auto; min-height:24px; display:flex; align-items:center; gap:14px; padding:0 10px; background:var(--primary); color:var(--primary-fg); font-size:11px; }
+  .status-bar .sp { flex:1 1 auto; }
+
+  .overlay { position:fixed; inset:0; background:#00000080; display:none; align-items:center; justify-content:center; z-index:20; }
+  .overlay.show { display:flex; }
+  .dialog { width:580px; max-width:calc(100vw - 40px); background:var(--popover); border:1px solid var(--border); border-radius:6px; overflow:hidden; box-shadow:0 12px 40px #00000066; }
+  .dialog header { padding:12px 14px; border-bottom:1px solid var(--border); font-weight:600; }
+  .dialog .d-body { padding:14px; max-height:440px; overflow:auto; font-size:12px; }
+  .dialog footer { padding:10px 14px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; }
+  .perm-list { margin:8px 0 0; padding:0; list-style:none; }
+  .perm-list li { display:flex; gap:10px; padding:7px 0; border-bottom:1px solid var(--border); }
+  .perm-list li:last-child { border-bottom:0; }
+  .perm-list .code { flex:0 0 190px; color:var(--primary); font-family:Consolas,monospace; }
+  .perm-list .why { color:var(--muted-fg); }
+
+  details.notes { border:1px solid var(--border); border-radius:4px; background:var(--sidebar); }
+  details.notes > summary { cursor:pointer; padding:8px 12px; font-weight:600; font-size:12.5px; background:var(--sidebar-accent); }
+  details.notes > summary .hint { font-weight:400; color:var(--muted-fg); margin-left:8px; }
+  .notes-body { padding:12px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:900px) { .notes-body { grid-template-columns:1fr; } }
+  .notes-body h4 { margin:0 0 6px; font-size:12px; color:var(--muted-fg); text-transform:uppercase; letter-spacing:.04em; }
+  .notes-body ul { margin:0; padding-left:18px; font-size:12px; line-height:1.75; }
+  pre.code { margin:0; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px; font-family:Consolas,monospace; font-size:11.5px; line-height:1.6; overflow:auto; }
+</style>
+</head>
+<body>
+
+<div class="workbench">
+  <div class="title-bar">
+    <div class="logo"></div>
+    <div class="title-slot"><span class="dim">项目</span> <b>零售数据仓库</b></div>
+    <div class="qo-entry mono">🔍 快速打开…（Ctrl+P）</div>
+    <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
+  </div>
+
+  <div class="middle">
+    <div class="activity-bar">
+      <button class="act-item" title="草稿箱"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4" width="11" height="9" rx="1.5"/><path d="M2.5 7h11M6 4V2.5h4V4"/></svg></button>
+      <button class="act-item active" title="数据库导航"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><ellipse cx="8" cy="4" rx="5.2" ry="2"/><path d="M2.8 4v8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V4"/><path d="M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg></button>
+      <button class="act-item" title="资源分析"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13V6.2L8 3l5 3.2V13"/><path d="M6 13v-4h4v4"/></svg></button>
+      <button class="act-item" title="插件"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M6 2v3M10 2v3"/><path d="M4 5h8v3.2a4 4 0 0 1-8 0V5Z"/><path d="M8 12.2V14.5"/></svg></button>
+      <span class="act-spacer"></span>
+      <button class="act-item" title="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="11.5" r="1.4" fill="currentColor" stroke="none"/></svg></button>
+    </div>
+
+    <!-- 左：数据源树（插件驱动的连接带徽标） -->
+    <div class="dock-left">
+      <div class="panel-header">数据源 <span class="sp"></span>
+        <button class="btn" id="btn-add" title="新建数据源连接">＋</button>
+      </div>
+      <div class="list">
+        <div class="group-head">核心库</div>
+        <div class="conn" data-conn="pg">
+          <span class="badge on">PG</span>
+          <span class="name">生产 PG</span>
+          <span class="chip">内置驱动</span>
+        </div>
+        <div class="tree" style="padding-left:22px">▾ 📁 public</div>
+        <div class="tree" style="padding-left:36px">▾ ▦ 表 <span class="dim">23</span></div>
+        <div class="conn sel" data-conn="oracle">
+          <span class="badge plug">O</span>
+          <span class="name">Oracle 生产库</span>
+          <span class="chip info">插件驱动</span>
+        </div>
+        <div class="tree" style="padding-left:22px" id="oracle-tree">
+          <span class="dim">▾ 📁 WMS</span>
+        </div>
+        <div class="tree" style="padding-left:36px" id="oracle-state">
+          <span class="dim">▾ ▦ 表 <span id="oracle-tcount">41</span></span>
+        </div>
+        <div class="group-head">未分组</div>
+        <div class="conn" data-conn="sqlite">
+          <span class="badge off">L</span>
+          <span class="name">本地 SQLite</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中：驱动详情 -->
+    <div class="dock-area">
+      <div class="tab-bar"><div class="tab active">驱动 · Oracle JDBC 桥 <span class="dim">·</span> oracle-jdbc-bridge</div></div>
+      <div class="detail" id="detail"></div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>« 完全隐藏</span>
+    <span>|</span>
+    <span id="st-conn">零售数据仓库 / Oracle 生产库（插件驱动）</span>
+    <span class="sp"></span>
+    <span id="st-driver">oracle-jdbc-bridge：运行中 · PID 42188 · 心跳 2s 前</span>
+    <span>|</span>
+    <span>UTF-8</span>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="dialog">
+    <header id="dlg-title">安装驱动插件</header>
+    <div class="d-body" id="dlg-body"></div>
+    <footer>
+      <button class="btn" id="dlg-cancel">取消</button>
+      <button class="btn primary" id="dlg-ok">安装</button>
+    </footer>
+  </div>
+</div>
+
+<details class="notes" open>
+  <summary>本稿演示了什么 <span class="hint">（驱动这一轨和扩展那一轨的区别都在这里）</span></summary>
+  <div class="notes-body">
+    <div>
+      <h4>三轨来源：UI 上必须一眼可辨</h4>
+      <ul>
+        <li>① 内置 Rust 驱动（PG / MySQL / SQLite / DuckDB）：编译进主程序，能力最全</li>
+        <li>② <b>插件驱动（native sidecar）</b>：独立子进程（本例 Oracle JDBC 桥，自带 JRE）</li>
+        <li>③ 插件驱动（wasm）：<b>已冻结</b>（Q10 建议），UI 上如实标注，不假装可用</li>
+        <li>④ 自动下载 JDBC agent（DBX 的做法）：<b>本轮不做</b>，也如实列出「未实现」</li>
+      </ul>
+      <h4 style="margin-top:12px">能力声明：哪些是真门控</h4>
+      <ul>
+        <li>只看两个：<code>supports_transaction</code> 与 <code>supports_federated</code>；
+            其余能力位只是声明，宿主按声明隐藏功能（不假装支持）</li>
+        <li><code>arrow</code> 位在 <code>META_BITS_WITHOUT_UI_KEY</code> 里被<b>显式排除</b>在 UI 之外 —— 它服务于插件通信</li>
+      </ul>
+    </div>
+    <div>
+      <h4>进程与凭据</h4>
+      <ul>
+        <li>sidecar 是独立进程：会死、会重启、会吃内存 —— 所以要有健康检查与重启计数（本稿可点「杀掉桥进程」）</li>
+        <li><b>凭据只在驱动进程里</b>：扩展宿主与 webview 都拿不到（§4.6.3）</li>
+        <li>native 权限（进程 / 网络 / 文件 / 环境）在<b>安装时</b>逐项明示，与扩展轨的能力不是一回事</li>
+      </ul>
+      <h4 style="margin-top:12px">回传格式（本仓现状，别记反）</h4>
+      <pre class="code">声明 supports_arrow = true
+  结果集 → Arrow IPC（二进制帧，不走 JSON）
+  控制面 → JSON（方法调用 / 错误 / 进度）
+
+本仓现状：
+  crates/plugin/src/sidecar/driver.rs:41
+    supports_arrow: false      <span class="dim">// 现状</span>
+  shared/src/models.rs 的 QueryResult 手写 Serialize
+    只输出 6 个字段，<b>排除 batches</b>
+  ⇒ 即使驱动回了 Arrow，现在这条链也是 JSON 化的
+  ⇒ 这是 P2.5 要改的事，不是"已经支持了"</pre>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+const DRIVER = {
+  id: "oracle-jdbc-bridge",
+  name: "Oracle JDBC 桥",
+  driverId: "oracle-jdbc",            // contributes.drivers 里的 id
+  version: "1.2.0",
+  publisher: "rds-verified",
+  engine: "JDBC（自带 JRE 21）",
+  child: null,
+  capabilities: [
+    { key: "query",             label: "查询",       ok: true,  note: "必需（Database::query）" },
+    { key: "transaction",       label: "真事务",     ok: true,  note: "begin_transaction / commit / rollback" },
+    { key: "cancel",           label: "真取消",     ok: true,  note: "query_with_cancel（不是「关连接」式假取消）" },
+    { key: "metadata",          label: "元数据浏览", ok: true,  note: "get_catalogs/schemas/tables/table_detail 全量" },
+    { key: "cursor",            label: "流式游标",   ok: true,  note: "大结果集边读边回，不整包进内存" },
+    { key: "arrow",             label: "Arrow 数据面", ok: true, note: "结果集走 Arrow IPC（见表头小字：现状是 false）" },
+    { key: "federated",         label: "联邦查询",   ok: false, note: "不下推，留给 DuckDB 做" },
+  ],
+  native: [
+    { code: "spawn.child_process", granted: true,  why: "启动 JDBC 桥进程（自带 JRE 21）" },
+    { code: "net.connect",         granted: true,  why: "连接数据库主机（仅清单声明的端口段）" },
+    { code: "fs.read_plugin_data", granted: true,  why: "读取插件数据目录（JDBC jar 缓存）" },
+    { code: "env.inherit",         granted: false, why: "继承宿主环境变量（默认关闭；仅 TNS_ADMIN 等白名单）" },
+  ],
+  proc: { pid: 42188, rss: "184 MB", restarts: 0, heartbeat: "2 秒前", health: "ok" },
+  cred: { source: "连接对话框输入 → 直接进驱动进程的密钥环", exposure: "宿主 UI 只保存引用，不保存明文" },
+};
+
+const TRACKS = [
+  { n: "1", title: "内置 Rust 驱动", state: "稳定", note: "编译进主程序：PostgreSQL / MySQL / SQLite / DuckDB。能力最全，无插件授权。" },
+  { n: "2", title: "插件驱动（native sidecar）", state: "v1 目标", note: "独立子进程 + stdio 二进制分帧。本例：Oracle JDBC 桥（自带 JRE 21）。凭据只在这一侧。" },
+  { n: "3", title: "插件驱动（wasm）", state: "已冻结", note: "纯计算/性能轨；Q10 建议冻结现状（crates/plugin/src/wasm/ 不自建不扩建）。", frozen: true },
+  { n: "4", title: "自动下载 JDBC agent", state: "未实现", note: "DBX 的做法（自动拉 JRE）。我们暂不做——先把 ② 做扎实。", frozen: true },
+];
+
+function log(lines) {
+  return `<div class="log" id="drv-log">${lines.join("<br>")}</div>`;
+}
+
+function procLines() {
+  const p = DRIVER.proc;
+  const out = [];
+  if (p.health === "dead") {
+    out.push(`<span class="t">12:41:07</span> <span class="e">桥进程退出（exit code 137）—— 连接标记为「重连中」</span>`);
+    out.push(`<span class="t">12:41:07</span> 健康检查失败：心跳超时 5s`);
+    out.push(`<span class="t">12:41:08</span> <span class="w">第 ${p.restarts} 次自动重启：重新拉起 oracle-jdbc-bridge…</span>`);
+    return out;
+  }
+  out.push(`<span class="t">12:38:55</span> 心跳 ok（interval 5s，连续 26 次）`);
+  out.push(`<span class="t">12:39:02</span> query ok：SELECT … 返回 4,120 行 / 186 KB（Arrow，0.42s）`);
+  if (p.restarts > 0) out.push(`<span class="t">12:41:08</span> <span class="w">已重启 ${p.restarts} 次并恢复</span>`);
+  out.push(`<span class="t">12:41:30</span> 无新增错误`);
+  return out;
+}
+
+function render() {
+  const d = DRIVER;
+  const caps = d.capabilities.map(c => `
+    <tr>
+      <td class="mono">${c.key}</td>
+      <td>${c.ok ? '<span class="yes">✔</span>' : '<span class="no">✘</span>'}</td>
+      <td class="dim">${c.note}</td>
+    </tr>`).join("");
+
+  const nat = d.native.map(c => `
+    <tr>
+      <td class="mono">${c.code}</td>
+      <td>${c.granted ? '<span class="yes">已授予</span>' : '<span class="no">未授予</span>'}</td>
+      <td class="dim">${c.why}</td>
+      <td style="text-align:right">
+        <button class="btn" data-nat="${c.code}" data-on="${c.granted ? "0" : "1"}">${c.granted ? "关闭" : "允许"}</button>
+      </td>
+    </tr>`).join("");
+
+  const tracks = TRACKS.map(t => `
+    <div class="track ${t.frozen ? "frozen" : ""}">
+      <div class="n">${t.n}</div>
+      <div class="body">
+        <b>${t.title}</b>
+        <span class="chip ${t.frozen ? "" : "ok"}" style="margin-left:6px">${t.state}</span>
+        <div class="dim" style="margin-top:2px">${t.note}</div>
+      </div>
+    </div>`).join("");
+
+  const health = d.proc.health === "ok"
+    ? `<span class="chip ok">运行中</span>`
+    : `<span class="chip danger">已退出，重启中</span>`;
+
+  $("detail").innerHTML = `
+    <div class="head">
+      <div class="avatar">JD</div>
+      <div class="meta">
+        <h2>${d.name}</h2>
+        <div class="dim" style="font-size:12px">
+          ${d.publisher} · v${d.version} · <span class="mono">${d.id}</span> · 驱动 id <span class="mono">${d.driverId}</span>
+        </div>
+      </div>
+      <div class="acts">
+        <button class="btn" data-act="test">测试连接</button>
+        <button class="btn danger" data-act="kill">杀掉桥进程</button>
+        <button class="btn" data-act="restart">重启桥进程</button>
+      </div>
+    </div>
+
+    <h3>驱动来源（新建连接时的四条路）</h3>
+    ${tracks}
+
+    <h3>能力声明 · 声明式，不假装</h3>
+    <table class="grid">
+      <tr><th>能力</th><th></th><th>说明</th></tr>
+      ${caps}
+    </table>
+    <p class="dim" style="font-size:11px;margin:6px 0 0">
+      表头里 <span class="mono">arrow</span> 这一行是<b>声明</b>；本仓 <span class="mono">sidecar/driver.rs</span> 目前写的是
+      <span class="mono">supports_arrow: false</span> —— 别把「设计里要有」当成「现在就有」。
+    </p>
+
+    <h3>进程健康</h3>
+    <div class="card">
+      <div class="card-title">oracle-jdbc-bridge ${health}</div>
+      <dl class="kv">
+        <dt>PID</dt><dd class="mono">${d.proc.pid}</dd>
+        <dt>常驻内存</dt><dd class="mono">${d.proc.rss}</dd>
+        <dt>心跳</dt><dd class="mono">${d.proc.heartbeat}（interval 5s）</dd>
+        <dt>重启次数</dt><dd class="mono">${d.proc.restarts}</dd>
+        <dt>工作目录</dt><dd class="mono">&lt;RDS_HOME&gt;/plugins/${d.id}/data</dd>
+      </dl>
+      <div style="margin-top:10px">${log(procLines())}</div>
+    </div>
+
+    <h3>权限 · native 轨（与扩展轨不是一回事）</h3>
+    <table class="grid">
+      <tr><th>能力</th><th>状态</th><th>用途</th><th></th></tr>
+      ${nat}
+    </table>
+
+    <h3>凭据口径</h3>
+    <div class="card">
+      <div class="card-title">谁拿得到密码</div>
+      <dl class="kv">
+        <dt>来源</dt><dd>${d.cred.source}</dd>
+        <dt>宿主侧</dt><dd>${d.cred.exposure}</dd>
+        <dt>扩展宿主</dt><dd><b>拿不到</b>（它不连库；这是扩展宿主与驱动进程分开的直接收益）</dd>
+        <dt>webview</dt><dd><b>拿不到</b>（webview 里没有 <span class="mono">rds.*</span>，只有窄桥）</dd>
+      </dl>
+    </div>
+  `;
+}
+
+/* ---- 交互 ---- */
+document.addEventListener("click", (ev) => {
+  const t = ev.target.closest("[data-act],[data-nat],[data-conn]");
+  if (!t) return;
+
+  if (t.dataset.conn) {
+    document.querySelectorAll(".conn").forEach(c => c.classList.toggle("sel", c === t));
+    if (t.dataset.conn !== "oracle") {
+      $("st-conn").textContent = `零售数据仓库 / ${t.dataset.conn === "pg" ? "生产 PG" : "本地 SQLite"}（内置驱动）`;
+      $("st-driver").textContent = t.dataset.conn === "pg" ? "postgres（内置）：运行中" : "sqlite（内置）：未连接";
+      return;
+    }
+    $("st-conn").textContent = "零售数据仓库 / Oracle 生产库（插件驱动）";
+    return;
+  }
+
+  if (t.dataset.nat) {
+    const on = t.dataset.on === "1";
+    const c = DRIVER.native.find(x => x.code === t.dataset.nat);
+    c.granted = on;
+    render();
+    toast(on
+      ? `已允许 native 能力 ${c.code}`
+      : `已关闭 ${c.code}：该能力下次被调用时会以 -32006 capability_denied 失败，并提示原因（不是静默失败）`,
+      on ? "" : "warn");
+    return;
+  }
+
+  const act = t.dataset.act;
+  if (act === "kill") {
+    DRIVER.proc.health = "dead";
+    DRIVER.proc.restarts += 1;
+    $("st-driver").textContent = "oracle-jdbc-bridge：已退出（重启中）";
+    $("st-conn").textContent = "零售数据仓库 / Oracle 生产库（重连中…）";
+    $("oracle-state").innerHTML = `<span class="dim">▾ ▦ 表 <span style="color:var(--warn)">—</span></span>`;
+    render();
+    toast("桥进程被杀：连接标记为「重连中」，健康检查器已在重启它", "danger");
+    setTimeout(() => {
+      DRIVER.proc.health = "ok";
+      DRIVER.proc.heartbeat = "刚刚";
+      $("st-driver").textContent = `oracle-jdbc-bridge：运行中 · PID ${DRIVER.proc.pid + 1} · 心跳 刚刚`;
+      $("st-conn").textContent = "零售数据仓库 / Oracle 生产库（插件驱动）";
+      $("oracle-state").innerHTML = `<span class="dim">▾ ▦ 表 <span>41</span></span>`;
+      render();
+      toast("已重启并恢复；本次重启对已打开的结果集无影响（它们不在驱动进程里）");
+    }, 2600);
+  }
+  if (act === "restart") toast("已请求重启桥进程（下次查询前生效）");
+  if (act === "test") toast("测试连接：握手 ok（driver id oracle-jdbc，协议版本 1）");
+});
+
+/* ---- 安装驱动插件：native 权限明示 ---- */
+$("btn-add").addEventListener("click", () => {
+  $("dlg-body").innerHTML = `
+    <p style="margin:0 0 10px">安装 <b>Oracle JDBC 桥</b>（驱动插件）。它会在你的机器上<b>启动独立子进程</b>，
+      这比扩展插件的权限更重，所以安装前逐项确认：</p>
+    <ul class="perm-list">
+      ${DRIVER.native.map(c => `<li><span class="code">${c.code}</span><span class="why">${c.why}</span></li>`).join("")}
+    </ul>
+    <h3 style="margin:14px 0 6px;font-size:12px;color:var(--muted-fg)">另需确认</h3>
+    <ul class="perm-list">
+      <li><span class="code">发布者</span><span class="why">rds-verified（已验证）· Ed25519 签名 + 逐资源 SHA-256 校验通过</span></li>
+      <li><span class="code">自带运行时</span><span class="why">插件自带 JRE 21（约 180 MB），不下载、不联网安装</span></li>
+      <li><span class="code">凭据</span><span class="why">连接密码只存进驱动进程能读的密钥环；宿主 UI 只保留引用</span></li>
+    </ul>
+  `;
+  $("overlay").classList.add("show");
+});
+$("dlg-cancel").addEventListener("click", () => $("overlay").classList.remove("show"));
+$("dlg-ok").addEventListener("click", () => {
+  $("overlay").classList.remove("show");
+  toast("已安装 Oracle JDBC 桥：驱动注册面已出现 oracle-jdbc，新建连接可选");
+});
+
+function toast(text, tone) {
+  const el = document.createElement("div");
+  el.textContent = text;
+  el.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:60;max-width:420px;"
+    + "background:var(--popover);color:var(--fg);border:1px solid var(--border);border-left:3px solid "
+    + (tone === "warn" ? "var(--warn)" : tone === "danger" ? "var(--danger)" : "var(--primary)")
+    + ";border-radius:4px;padding:8px 12px;font-size:12px;box-shadow:0 8px 24px #00000055";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4600);
+}
+
+render();
+</script>
+</body>
+</html>

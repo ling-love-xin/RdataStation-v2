@@ -206,8 +206,8 @@ graph TD
 | --- | --- |
 | 不在 app 依赖图 | 根 `Cargo.toml`：`default-members = ["crates/app"]`，注释明写 plugin 不在图上（避免 extism/wasmtime 编译成本） |
 | 无视图 | workbench 侧「插件」是 `render_plugin_placeholder`；`plugin/src/plugin_view.rs` 只有一句 TODO |
-| 未参与编译 | `lib.rs` 未声明 `commands / host / model / plugin_view / storage` → **5 个孤儿文件**（`storage.rs` 为迁移期产出） |
-| 无 v2 设计文档 | `docs/architecture/` 无 `plugin/`；导航 README 的模块缺口表也没有 plugin 行 |
+| 未参与编译 | P0 后剩 **4 个孤儿文件**（`commands / host / model / plugin_view`，`lib.rs` 未声明）；`storage.rs` 已于 P0 删除 |
+| v2 设计文档 | ✅ **已建**（2026-09-20）：`docs/architecture/plugin/` 五件 + 5 张原型；本节所述“无文档”已失效 |
 | v1 遗产仍在 | `specta` 的唯一保留理由写成"M9 或未来类型导出可能复用"；`extism` / `reqwest` 为单使用方依赖 |
 
 **规则**：

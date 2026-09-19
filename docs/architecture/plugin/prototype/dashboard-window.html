@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation · 插件独立窗口原型（档②：图表仪表盘 + 分帧投喂）</title>
+<!--
+  ============================================================================
+  RdataStation v2 · 插件系统 M9 · 「独立窗口」原型（Q8 的档②）
+  ============================================================================
+
+  这是什么
+    webview 承载的**第二种形态**：独立窗口。它比档①（全屏面板）多两条好处：
+      ① 没有 z-order 问题（不跟 GPUI 元素同屏竞争层级）
+      ② 用户可以把仪表盘拖到第二块屏
+    并且本稿演示**大结果集怎么进 webview**：不是把几 MB 的 JSON 塞进 JS，而是分帧投喂。
+
+  对应设计文档
+    - plugin-prototype-design.md §11.2 承载三档（本稿 = 档②）
+    - plugin-dev-plan.md §4.2.1.1 混合的三层（控制面 JSON / 数据面 Arrow）
+    - plugin-dev-plan.md §4.2.1.2 阈值：小结果内联 JSON（≤ 200 行 / 256 KiB），其余走 IPC 分块
+    - plugin-dev-plan.md §4.2.4 Arrow IPC 兼容子集
+
+  协议（本稿用到的四种帧，名字与 dev-plan 对齐）
+    宿主 → 面板  resultBegin  { format: "arrow-ipc" | "inline-json", chunks, rowCount, schema }
+    宿主 → 面板  resultChunk  { seq, bytes }        ← 真实现里这里是 Arrow IPC 字节，不是行
+    宿主 → 面板  resultEnd    { elapsedMs }
+    面板 → 宿主  command      { id: "chart.cancel" }
+
+  点击指南
+    ① 「模拟慢查询」→ 宿主按块投喂，进度条显示「接收中 n/N 块」
+    ② 投喂中「取消」→ 面板发 chart.cancel，宿主真的停（不是只把进度条藏起来）
+    ③ 「投喂方式」切到内联 JSON → 面板提示这是小结果通道（有阈值）
+    ④ 右上 ✕ → 窗口销毁，webview 的 JS 上下文随之消失（生命周期绑定）
+  ============================================================================
+-->
+<style>
+  :root[data-theme="dark"] {
+    --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --border-strong:#4F4F4F;
+    --surface-2:#252526; --surface-3:#37373D; --title-bar:#323233;
+    --primary:#E8846F; --primary-fg:#1E1E1E; --muted-fg:#8A8A8A;
+    --ok:#89D185; --warn:#CCA700; --danger:#F14C4C;
+    --warn-bg:#5A4D08; --warn-fg:#FFFBEB; --danger-bg:#5A1D1D; --danger-fg:#FEF2F2;
+    --grid:#3C3C3C;
+    --series-1:#3794FF; --series-2:#4EC9B0; --series-3:#CCA700; --series-4:#C586C0;
+  }
+  :root[data-theme="light"] {
+    --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --border-strong:#B0B0B0;
+    --surface-2:#F3F3F3; --surface-3:#E4E4E4; --title-bar:#DDDDDD;
+    --primary:#C25B46; --primary-fg:#FFFFFF; --muted-fg:#8E8E8E;
+    --ok:#16A34A; --warn:#B45309; --danger:#DC2626;
+    --warn-bg:#FEF3C7; --warn-fg:#713F12; --danger-bg:#FEE2E2; --danger-fg:#7F1D1D;
+    --grid:#E1E1E1;
+    --series-1:#2563EB; --series-2:#0891B2; --series-3:#B45309; --series-4:#9333EA;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:14px; background:#00000033; color:var(--fg);
+    font:13px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    display:flex; flex-direction:column; gap:12px;
+  }
+  .mono { font-family:Consolas,"Cascadia Mono",monospace; }
+  .dim { color:var(--muted-fg); }
+
+  /* 独立窗口（真实现：宿主另开一个 GPUI window，webview 占满内容区） */
+  .window {
+    position:relative;
+    border:1px solid var(--border); border-radius:6px; overflow:hidden;
+    background:var(--bg); height:660px;
+    display:flex; flex-direction:column;
+    box-shadow:0 18px 60px #00000055;
+  }
+  .window.bounds-tag::after {
+    content:"独立窗口（宿主另开一个 GPUI window，webview 占满内容区）";
+    position:absolute; right:0; top:36px;
+    font-size:10px; color:var(--muted-fg); background:var(--surface-3);
+    border-left:1px dashed var(--border-strong); border-bottom:1px dashed var(--border-strong);
+    padding:1px 6px; border-radius:0 0 0 4px; pointer-events:none;
+  }
+  .win-title {
+    flex:0 0 auto; height:36px; display:flex; align-items:center; gap:8px; padding:0 12px;
+    background:var(--title-bar); border-bottom:1px solid var(--border); font-size:12px;
+  }
+  .win-title .dot { width:20px; height:20px; border-radius:4px; background:var(--primary); }
+  .win-title .sp { flex:1 1 auto; }
+  .win-title .ctrl { color:var(--muted-fg); cursor:pointer; padding:0 6px; }
+  .win-title .ctrl:hover { color:var(--fg); }
+
+  .toolbar {
+    flex:0 0 auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:8px 12px; border-bottom:1px solid var(--border); background:var(--surface-2);
+  }
+  .field { display:flex; align-items:center; gap:5px; color:var(--muted-fg); font-size:12px; }
+  select, button {
+    font:inherit; font-size:12px; color:var(--fg); background:var(--surface-3);
+    border:1px solid var(--border-strong); border-radius:3px; padding:3px 8px; cursor:pointer;
+  }
+  button:hover:not(:disabled) { border-color:var(--primary); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .sp { flex:1 1 auto; }
+
+  .grid4 {
+    flex:1 1 auto; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
+    gap:1px; background:var(--border); min-height:0;
+  }
+  .grid4.one-row { grid-template-columns:repeat(4,1fr); grid-template-rows:1fr; }
+  .cell { position:relative; background:var(--bg); padding:8px 10px 2px; display:flex; flex-direction:column; min-height:0; }
+  .cell h4 { margin:0 0 2px; font-size:12px; font-weight:600; }
+  .cell .sub { color:var(--muted-fg); font-size:11px; margin-bottom:2px; }
+  .cell canvas { flex:1 1 auto; width:100%; min-height:0; display:block; }
+  .cell.hidden { display:none; }
+
+  .rx {
+    flex:0 0 auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    padding:6px 12px; border-top:1px solid var(--border); background:var(--surface-2);
+    font-size:11px; color:var(--muted-fg);
+  }
+  .rx .track { width:180px; height:5px; border-radius:3px; background:var(--surface-3); overflow:hidden; }
+  .rx .track > i { display:block; height:100%; width:0; background:var(--primary); }
+  .rx .k { color:var(--fg); }
+
+  .dim-cover {
+    position:absolute; inset:0; background:#00000066; display:none;
+    align-items:center; justify-content:center; text-align:center; padding:24px; z-index:5;
+  }
+  .dim-cover.show { display:flex; }
+  .dim-cover .box {
+    background:var(--bg); border:1px solid var(--border); border-radius:6px;
+    padding:18px 22px; max-width:460px; font-size:12.5px; line-height:1.7;
+    box-shadow:0 12px 40px #00000066;
+  }
+  .dim-cover .box b { display:block; margin-bottom:6px; font-size:13.5px; }
+
+  .toasts { position:fixed; right:18px; bottom:18px; display:flex; flex-direction:column; gap:8px; z-index:60; }
+  .toast {
+    background:var(--surface-2); color:var(--fg); border:1px solid var(--border);
+    border-left:3px solid var(--primary); border-radius:4px; padding:8px 12px;
+    font-size:12px; max-width:380px; box-shadow:0 8px 24px #00000055;
+  }
+  .toast.warn { border-left-color:var(--warn); }
+  .toast.danger { border-left-color:var(--danger); }
+
+  details.notes { border:1px solid var(--border); border-radius:4px; background:var(--surface-2); }
+  details.notes > summary { cursor:pointer; padding:8px 12px; font-weight:600; font-size:12.5px; background:var(--surface-3); }
+  details.notes > summary .hint { font-weight:400; color:var(--muted-fg); margin-left:8px; }
+  .notes-body { padding:12px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:900px) { .notes-body { grid-template-columns:1fr; } }
+  .notes-body h4 { margin:0 0 6px; font-size:12px; color:var(--muted-fg); text-transform:uppercase; letter-spacing:.04em; }
+  .notes-body ul { margin:0; padding-left:18px; font-size:12px; line-height:1.75; }
+  pre.code { margin:0; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:10px; font-family:Consolas,monospace; font-size:11.5px; line-height:1.6; overflow:auto; }
+</style>
+</head>
+<body>
+
+<div class="window bounds-tag">
+  <div class="win-title">
+    <span class="dot"></span>
+    <b>图表仪表盘</b>
+    <span class="dim">插件 chart-dashboard · 档② 独立窗口</span>
+    <span class="sp"></span>
+    <span class="ctrl" id="btn-close" title="关闭窗口">✕</span>
+  </div>
+
+  <div class="toolbar">
+    <div class="field"><label for="sel-range">时间范围</label>
+      <select id="sel-range">
+        <option value="12">近 12 个月</option>
+        <option value="6">近 6 个月</option>
+        <option value="3">近 3 个月</option>
+      </select>
+    </div>
+    <div class="field"><label for="sel-layout">布局</label>
+      <select id="sel-layout"><option value="2x2">2 × 2</option><option value="1x4">1 × 4</option></select>
+    </div>
+    <div class="field"><label for="sel-format">投喂方式</label>
+      <select id="sel-format">
+        <option value="arrow">Arrow IPC 分块（大结果）</option>
+        <option value="inline">内联 JSON（小结果）</option>
+      </select>
+    </div>
+    <span class="sp"></span>
+    <button id="btn-slow">模拟慢查询</button>
+    <button id="btn-cancel" disabled>取消</button>
+  </div>
+
+  <div class="grid4" id="grid">
+    <div class="cell" data-cell="0"><h4>月销售额</h4><div class="sub">柱状 · sum(amount)</div><canvas></canvas></div>
+    <div class="cell" data-cell="1"><h4>订单量</h4><div class="sub">折线 · sum(orders)</div><canvas></canvas></div>
+    <div class="cell" data-cell="2"><h4>客单价 × 订单量</h4><div class="sub">散点 · 每个点 = 一个区域月</div><canvas></canvas></div>
+    <div class="cell" data-cell="3"><h4>区域占比</h4><div class="sub">横向条 · Top 3</div><canvas></canvas></div>
+  </div>
+
+  <div class="rx">
+    <span>上次投喂：<span class="k" id="rx-format">—</span></span>
+    <span>行数 <span class="k mono" id="rx-rows">—</span></span>
+    <span>宿主用时 <span class="k mono" id="rx-elapsed">—</span></span>
+    <span>通道 <span class="k" id="rx-channel">evaluate_script / IPC</span></span>
+    <span class="sp"></span>
+    <span id="rx-progress-text">空闲</span>
+    <span class="track"><i id="rx-progress-bar"></i></span>
+  </div>
+
+  <div class="dim-cover" id="cover"><div class="box" id="cover-box"></div></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<details class="notes" open>
+  <summary>本稿演示了什么 <span class="hint">（重点是「大结果怎么进 webview」这条）</span></summary>
+  <div class="notes-body">
+    <div>
+      <h4>为什么独立窗口是档②</h4>
+      <ul>
+        <li>它是原生子窗口/独立窗口，**不与 GPUI 元素同屏竞争层级** → 没有档③的 z-order 问题</li>
+        <li>代价：多一个窗口要管生命周期（本稿点右上 ✕ 看销毁行为）</li>
+        <li>OAuth 登录、第二屏仪表盘是它的天然场景</li>
+      </ul>
+      <h4 style="margin-top:12px">分帧投喂（本稿的核心）</h4>
+      <ul>
+        <li>宿主先发 <span class="mono">resultBegin</span>（schema + 块数），再逐块 <span class="mono">resultChunk</span>，最后 <span class="mono">resultEnd</span></li>
+        <li>真实现里 chunk 里装的是 <b>Arrow IPC 字节</b>，不是行 —— 面板不该看见一坨 JSON 行</li>
+        <li>好处：内存峰值不翻倍、可中途取消、可边到边画</li>
+      </ul>
+    </div>
+    <div>
+      <h4>阈值（dev-plan §4.2.1.2）</h4>
+      <pre class="code">小结果：inline_json_max_rows = 200
+        或 &lt;= 256 KiB
+  → 直接内联 JSON，省一次往返
+
+大结果：走 IPC 分块（Arrow）
+  → 控制面仍然只有方法名/错误/进度
+  → 数据面是二进制，不 base64
+
+反面做法（明确不做）：
+  base64 把 Arrow 塞进 JSON
+    +33% 体积 / 内存双份 / 不可流式</pre>
+      <h4 style="margin-top:12px">取消</h4>
+      <ul>
+        <li>面板发 <span class="mono">chart.cancel</span>，宿主把取消信号交给真正的查询（DuckDB / sidecar）</li>
+        <li>不是"把进度条藏起来"——查询要真的停</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+
+/* ============================================================================
+   面板侧状态（只有渲染需要的东西）
+   ========================================================================== */
+const state = {
+  range: 12,
+  layout: "2x2",
+  format: "arrow",
+  rx: null,            // { rows, elapsed, format }
+  receiving: null,     // { seq, chunks, requestId, cancelled }
+  windowOpen: true,
+};
+
+const $ = (id) => document.getElementById(id);
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ============================================================================
+   宿主侧数据（模拟 DuckDB 聚合结果；真实现里这是查询回传）
+   ========================================================================== */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const MONTHS = ["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06",
+                "2026-07","2026-08","2026-09","2026-10","2026-11","2026-12"];
+
+function buildData(range) {
+  const rnd = mulberry32(20260920);
+  const months = MONTHS.slice(-range);
+  const amount = months.map((_, i) => Math.round(130000 + rnd() * 90000 + i * 3500));
+  const orders = months.map(() => Math.round(900 + rnd() * 500));
+  const regions = [
+    { label: "华东", value: 0.42 }, { label: "华南", value: 0.31 }, { label: "华北", value: 0.27 },
+  ];
+  return {
+    months,
+    amount,
+    orders,
+    scatter: months.map((m, i) => ({ x: orders[i], y: Math.round(amount[i] / orders[i]) })),
+    regions,
+  };
+}
+
+let DATA = buildData(12);
+
+/* ============================================================================
+   绘制（四种图共用一个画布函数；无外部图表库，保证离线可看）
+   ========================================================================== */
+function fit(canvas) {
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+
+function nice(max) {
+  const mag = Math.pow(10, Math.floor(Math.log10(max || 1)));
+  const n = max / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  const hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= hi + step * .5; v += step) ticks.push(v);
+  return { hi, ticks };
+}
+
+function fmtAxis(v) {
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(1).replace(/\.0$/, "") + "亿";
+  if (a >= 1e4) return (v / 1e4).toFixed(1).replace(/\.0$/, "") + "万";
+  return String(Math.round(v));
+}
+
+function drawChart(canvas, spec) {
+  const { ctx, w, h } = fit(canvas);
+  ctx.clearRect(0, 0, w, h);
+  const pad = { l: spec.kind === "hbar" ? 54 : 52, r: 10, t: 8, b: 24 };
+  const pw = Math.max(8, w - pad.l - pad.r), ph = Math.max(8, h - pad.t - pad.b);
+  const muted = cssVar("--muted-fg"), grid = cssVar("--grid");
+  ctx.font = '10px "Segoe UI","Microsoft YaHei",sans-serif';
+
+  if (spec.kind === "hbar") {
+    const total = spec.items.reduce((a, b) => a + b.value, 0) || 1;
+    const rowH = ph / spec.items.length;
+    spec.items.forEach((it, i) => {
+      const y = pad.t + i * rowH + rowH * .18;
+      const bh = Math.max(4, rowH * .44);
+      ctx.fillStyle = cssVar("--series-" + (i + 1));
+      ctx.fillRect(pad.l, y, Math.max(2, (it.value / total) * pw), bh);
+      ctx.fillStyle = muted; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      ctx.fillText(it.label, pad.l - 6, y + bh / 2);
+      ctx.textAlign = "left";
+      ctx.fillStyle = cssVar("--fg");
+      ctx.fillText((it.value * 100).toFixed(0) + "%", pad.l + (it.value / total) * pw + 6, y + bh / 2);
+    });
+    return;
+  }
+
+  // 三类共用直角坐标
+  const values = spec.kind === "scatter" ? spec.points.map(p => p.y)
+                                         : spec.series.flatMap(s => s.values);
+  const { hi, ticks } = nice(Math.max.apply(null, values) * 1.08);
+  const yOf = v => pad.t + ph - (v / hi) * ph;
+
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const t of ticks) {
+    const py = Math.round(yOf(t)) + .5;
+    ctx.strokeStyle = grid; ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(pad.l + pw, py); ctx.stroke();
+    ctx.fillStyle = muted; ctx.fillText(fmtAxis(t), pad.l - 6, py);
+  }
+
+  if (spec.kind === "scatter") {
+    ctx.fillStyle = cssVar("--series-4");
+    const xs = spec.points.map(p => p.x);
+    const xmin = Math.min.apply(null, xs) * .98, xmax = Math.max.apply(null, xs) * 1.02;
+    for (const p of spec.points) {
+      const px = pad.l + ((p.x - xmin) / (xmax - xmin || 1)) * pw;
+      ctx.beginPath(); ctx.arc(px, yOf(p.y), 3.2, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = muted; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText("订单量 →", pad.l + pw / 2, pad.t + ph + 6);
+    ctx.save();
+    ctx.translate(12, pad.t + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textBaseline = "middle"; ctx.fillText("客单价", 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  const labels = spec.labels;
+  const band = pw / labels.length;
+  ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = muted;
+  const step = Math.ceil(labels.length / Math.max(1, Math.floor(pw / 46)));
+  labels.forEach((l, i) => { if (i % step === 0) ctx.fillText(l.slice(5) + "月", pad.l + band * i + band / 2, pad.t + ph + 5); });
+
+  if (spec.kind === "bar") {
+    const s = spec.series[0];
+    const bw = Math.max(2, band * .6);
+    ctx.fillStyle = cssVar("--series-1");
+    s.values.forEach((v, i) => {
+      const x = pad.l + band * i + (band - bw) / 2;
+      ctx.fillRect(x, yOf(v), bw, Math.max(1, pad.t + ph - yOf(v)));
+    });
+    return;
+  }
+
+  // line
+  const s = spec.series[0];
+  ctx.strokeStyle = cssVar("--series-2"); ctx.lineWidth = 2;
+  ctx.beginPath();
+  s.values.forEach((v, i) => {
+    const px = pad.l + band * i + band / 2, py = yOf(v);
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  });
+  ctx.stroke();
+  ctx.fillStyle = cssVar("--series-2");
+  s.values.forEach((v, i) => {
+    ctx.beginPath(); ctx.arc(pad.l + band * i + band / 2, yOf(v), 2.6, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+function renderAll() {
+  const specs = [
+    { kind: "bar", labels: DATA.months, series: [{ values: DATA.amount }] },
+    { kind: "line", labels: DATA.months, series: [{ values: DATA.orders }] },
+    { kind: "scatter", points: DATA.scatter },
+    { kind: "hbar", items: DATA.regions },
+  ];
+  document.querySelectorAll(".cell").forEach((cell, i) => {
+    if (cell.classList.contains("hidden")) return;
+    drawChart(cell.querySelector("canvas"), specs[i]);
+  });
+}
+
+new ResizeObserver(() => renderAll()).observe($("grid"));
+
+/* ============================================================================
+   桥：宿主 → 面板
+   ========================================================================== */
+window.__rds_receive = function (json) {
+  let msg; try { msg = JSON.parse(json); } catch (e) { return; }
+
+  if (msg.kind === "resultBegin") {
+    // 真实现：format=arrow-ipc 时后续 chunk 是二进制；这里用块计数演示协议形状
+    state.receiving = { seq: 0, chunks: msg.chunks, requestId: msg.requestId, cancelled: false };
+    $("rx-format").textContent = msg.format === "arrow-ipc" ? "Arrow IPC 分块" : "内联 JSON";
+    $("rx-rows").textContent = msg.rowCount.toLocaleString("zh-CN");
+    $("rx-progress-text").textContent = `接收中 0/${msg.chunks} 块`;
+    $("rx-progress-bar").style.width = "0%";
+    $("btn-cancel").disabled = !state.receiving;
+    if (msg.format === "inline-json" && msg.rowCount > 200) {
+      toast("宿主用内联 JSON 投喂了 > 200 行 —— 这违反 §4.2.1.2 的阈值，真实现里应走 IPC 分块", "warn");
+    }
+    return;
+  }
+
+  if (msg.kind === "resultChunk") {
+    if (!state.receiving || state.receiving.cancelled) return;
+    state.receiving.seq = msg.seq;
+    const pct = (msg.seq / state.receiving.chunks) * 100;
+    $("rx-progress-text").textContent = `接收中 ${msg.seq}/${state.receiving.chunks} 块`;
+    $("rx-progress-bar").style.width = pct + "%";
+    return;
+  }
+
+  if (msg.kind === "resultEnd") {
+    if (!state.receiving || state.receiving.cancelled) return;
+    state.receiving = null;
+    $("rx-progress-text").textContent = `完成（${msg.elapsedMs} ms）`;
+    $("rx-progress-bar").style.width = "100%";
+    $("btn-cancel").disabled = true;
+    $("rx-elapsed").textContent = msg.elapsedMs + " ms";
+    DATA = buildData(state.range);
+    renderAll();
+    return;
+  }
+
+  if (msg.kind === "cancelled") {
+    $("rx-progress-text").textContent = "已取消（宿主已停止投喂）";
+    $("rx-progress-bar").style.width = "0%";
+    $("btn-cancel").disabled = true;
+    toast("已取消：宿主停掉了查询与投喂，面板不再等后续块");
+    return;
+  }
+
+  if (msg.kind === "capabilityDenied") {
+    toast(`${msg.message}（${msg.code}）`, "warn");
+    return;
+  }
+};
+
+/* ============================================================================
+   宿主侧（模拟）
+   ========================================================================== */
+let slowTimer = null;
+const HOST = {
+  feed(mode) {
+    const requestId = "q-" + Date.now();
+    const rows = mode === "slow" ? 120000 : DATA.months.length;
+    const chunks = mode === "slow" ? 8 : 1;
+    const format = state.format === "arrow" ? "arrow-ipc" : "inline-json";
+    const t0 = performance.now();
+    window.__rds_receive(JSON.stringify({
+      kind: "resultBegin", requestId, format, chunks, rowCount: rows,
+      schema: [{ name: "month", type: "Utf8" }, { name: "amount", type: "Decimal128(18,2)" }],
+    }));
+    let seq = 0;
+    const step = () => {
+      if (!state.receiving) return;                    // 被取消
+      seq += 1;
+      window.__rds_receive(JSON.stringify({ kind: "resultChunk", requestId, seq, bytes: 262144 }));
+      if (seq >= chunks) {
+        window.__rds_receive(JSON.stringify({
+          kind: "resultEnd", requestId,
+          elapsedMs: Math.round(performance.now() - t0),
+        }));
+        clearInterval(slowTimer); slowTimer = null;
+        return;
+      }
+      slowTimer = setTimeout(step, mode === "slow" ? 420 : 0);
+    };
+    if (mode === "slow") slowTimer = setTimeout(step, 420); else step();
+  },
+  cancel() {
+    if (slowTimer) { clearTimeout(slowTimer); slowTimer = null; }
+    state.receiving = null;
+    window.__rds_receive(JSON.stringify({ kind: "cancelled" }));
+  },
+};
+
+/* ============================================================================
+   交互
+   ========================================================================== */
+$("sel-range").addEventListener("change", (e) => { state.range = Number(e.target.value); HOST.feed("fast"); });
+$("sel-layout").addEventListener("change", (e) => {
+  state.layout = e.target.value;
+  $("grid").classList.toggle("one-row", state.layout === "1x4");
+  renderAll();
+});
+$("sel-format").addEventListener("change", (e) => {
+  state.format = e.target.value;
+  toast(state.format === "arrow"
+    ? "切换到 Arrow 分块：控制面仍走 JSON，数据面走二进制帧"
+    : "切换到内联 JSON：只适合小结果（≤ 200 行 / 256 KiB）");
+});
+$("btn-slow").addEventListener("click", () => { $("btn-slow").disabled = true; HOST.feed("slow"); setTimeout(() => { $("btn-slow").disabled = false; }, 4200); });
+$("btn-cancel").addEventListener("click", () => HOST.cancel());
+
+/* ---- 窗口销毁：webview 的生命周期绑定 ---- */
+$("btn-close").addEventListener("click", () => {
+  $("cover").classList.add("show");
+  $("cover-box").innerHTML = `<b>窗口已关闭</b>
+    宿主释放了这个 webview（<span class="mono">WebView::hide()</span> + 句柄随窗口销毁）。
+    面板里的 JS 状态（已接收的块、图表缓存）<b>不会保留</b> —— 重新打开是一次干净的加载。
+    <div style="margin-top:12px;text-align:center">
+      <button id="btn-reopen">重新打开窗口</button>
+    </div>`;
+  $("btn-reopen").addEventListener("click", () => {
+    $("cover").classList.remove("show");
+    state.receiving = null;
+    $("rx-progress-text").textContent = "空闲";
+    $("rx-progress-bar").style.width = "0%";
+    HOST.feed("fast");
+    toast("窗口重新打开：宿主重新创建 webview，面板重新 ready");
+  });
+});
+
+function toast(text, tone) {
+  const el = document.createElement("div");
+  el.className = "toast" + (tone ? " " + tone : "");
+  el.textContent = text;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+/* ---- 启动握手：面板先 ready，宿主再投喂 ---- */
+(async () => {
+  renderAll();
+  window.__rds_receive(JSON.stringify({ kind: "theme", mode: "dark" }));
+  HOST.feed("fast");
+})();
+</script>
+</body>
+</html>

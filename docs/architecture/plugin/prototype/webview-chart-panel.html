@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation · 插件 Webview 面板原型（档① 全屏面板）</title>
+<!--
+  ============================================================================
+  RdataStation v2 · 插件系统 M9 · Webview 面板原型
+  ============================================================================
+
+  这是什么
+    一个**单文件、离线可看**的形态原型：演示 Q8 档①（全屏面板）下，
+    「宿主投喂结果集 → webview 只负责画」这条链路长什么样。
+
+  对应设计文档
+    - docs/architecture/plugin/plugin-prototype-design.md §11.2（Q8 定案依据）
+    - docs/architecture/plugin/plugin-dev-plan.md §4.2.4（Arrow IPC 兼容子集）、§4.5（Arrow 与类型）
+
+  怎么打开
+    双击本文件即可（无网络依赖、无构建、无 CDN）。
+
+  本原型刻意演示的四件事（也正是真插件必须遵守的四条）
+    ① 面板不查库、不聚合：X/Y/聚合方式变更 = 向宿主发命令，宿主用 DuckDB 算完再把结果集投回来。
+       （真宿主这里是 sidecar/核心引擎，本原型的「宿主模拟器」只是它的替身。）
+    ② webview 里没有 rds.*：那是「宿主 ↔ 扩展宿主」的 RPC。webview 只有一条窄桥
+       （真实现里是 WebViewHandle::raw() → evaluate_script / IPC handler），桥窄=攻击面小。
+    ③ 能力必须门控：点「导出 PNG」会检查 webview.export；未授予就回 -32006 capability_denied，
+       而不是"悄悄失败"。（对照 plugin-dev-plan §4.2.2 的错误码。）
+    ④ 主题跟宿主走：色值全部走 CSS 变量（真插件经 rds.theme 取角色 token），
+       所以不会出现「插件一套配色、产品另一套配色」。
+
+  与真插件的差异（诚实标注）
+    - 真插件是 plugin.toml + dist/extension.js（QuickJS 扩展宿主）+ webview 资源目录；
+      这里把桥压缩成一个 HTML 文件，方便评审时直接看。
+    - 真插件的图表会 import ECharts / Vega / D3；本原型手绘 canvas，
+      一是保证离线可看，二是证明「不引入图表库也够用这个 v1 面板」。
+    - 数据是确定性伪随机生成的假数据（固定种子），不是真查询结果。
+
+  本文件是**评审用原型，不是产品代码**。这里出现的色值全部取自本仓主题资产
+  （rds-theme.json / product-tokens.json），真插件由宿主注入同一套角色值；
+  产品代码里仍然禁止任何裸色值（见 docs/architecture/theme/ 与 rds-theme skill）。
+  ============================================================================
+-->
+<style>
+  /* ==========================================================================
+     主题 token
+     --------------------------------------------------------------------------
+     色值**全部取自本仓真实资产**（不是我自己挑的）：
+       assets/themes/rds-theme.json          → RDS Dark / RDS Light 的角色值
+       assets/themes/product-tokens.json     → 产品语义 token（活动栏 / 标题栏槽等）
+     角色名沿用 rds-theme skill 的叫法。真插件由宿主注入同一套值（`rds.theme`），
+     所以插件的图不会出现「和产品不是一套配色」。
+     ========================================================================== */
+  :root[data-theme="dark"] {
+    /* —— product-tokens.json —— */
+    --title-bar-slot-bg: #252526;   /* title_bar.slot.background */
+    --search-match-bg:   #4A3F00;   /* search.match.background  */
+    --activity-bar-bg:   #333333;   /* activity_bar.background  */
+    /* —— rds-theme.json · RDS Dark —— */
+    --surface:      #1E1E1E;   /* background                */
+    --surface-2:    #252526;   /* sidebar.background        */
+    --surface-3:    #37373D;   /* sidebar.accent.background */
+    --border:       #3C3C3C;   /* border                    */
+    --border-strong:#4F4F4F;   /* input.border              */
+    --text:         #CCCCCC;   /* foreground                */
+    --text-dim:     #969696;   /* tab.foreground            */
+    --text-muted:   #8A8A8A;   /* muted.foreground          */
+    --accent:       #E8846F;   /* primary.background        */
+    --ok:           #89D185;   /* base.green                */
+    --warn:         #CCA700;   /* base.yellow               */
+    --danger:       #F14C4C;   /* base.red                  */
+    --series-1:     #3794FF;   /* base.blue                 */
+    --series-2:     #4EC9B0;   /* base.cyan                 */
+    --series-3:     #CCA700;   /* base.yellow               */
+    --series-4:     #C586C0;   /* base.magenta              */
+    --grid:         #3C3C3C;   /* table.row.border          */
+  }
+  :root[data-theme="light"] {
+    --title-bar-slot-bg: #F3F3F3;   /* title_bar.slot.background */
+    --search-match-bg:   #FFF3C4;   /* search.match.background  */
+    --activity-bar-bg:   #ECECEC;   /* activity_bar.background  */
+    --surface:      #FFFFFF;   /* background                */
+    --surface-2:    #F3F3F3;   /* sidebar.background        */
+    --surface-3:    #E4E4E4;   /* sidebar.accent.background */
+    --border:       #D4D4D4;   /* border                    */
+    --border-strong:#B0B0B0;   /* input.border              */
+    --text:         #333333;   /* foreground                */
+    --text-dim:     #616161;   /* tab.foreground            */
+    --text-muted:   #8E8E8E;   /* muted.foreground          */
+    --accent:       #C25B46;   /* primary.background        */
+    --ok:           #16A34A;   /* base.green                */
+    --warn:         #B45309;   /* base.yellow               */
+    --danger:       #DC2626;   /* base.red                  */
+    --series-1:     #2563EB;   /* base.blue                 */
+    --series-2:     #0891B2;   /* base.cyan                 */
+    --series-3:     #B45309;   /* base.yellow               */
+    --series-4:     #9333EA;   /* base.magenta              */
+    --grid:         #E1E1E1;   /* table.row.border          */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--activity-bar-bg);
+    color: var(--text);
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 100%;
+  }
+
+  /* --------------------------------------------------------------------------
+     ① webview 内容区：真机上这块是 gpui-wry 的 WebViewElement 占据的 bounds。
+        档① 的要点是「背后没有需要露出的 GPUI 元素」，所以这里边界之外不留真空。
+     -------------------------------------------------------------------------- */
+  .webview-bounds {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 380px;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bounds-tag {
+    position: absolute;
+    top: 0; right: 0;
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--surface-3);
+    border-left: 1px dashed var(--border-strong);
+    border-bottom: 1px dashed var(--border-strong);
+    padding: 1px 6px;
+    border-radius: 0 0 0 4px;
+    pointer-events: none;
+  }
+
+  /* 面板头：由**插件自己的 HTML** 画（档① 下插件的自由度就到这层为止） */
+  .panel-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-title { font-weight: 600; font-size: 13px; }
+  .panel-sub { color: var(--text-muted); font-size: 11px; }
+  .spacer { flex: 1 1 auto; }
+
+  button, select {
+    font: inherit;
+    color: var(--text);
+    background: var(--surface-3);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.denied { border-color: var(--warn); color: var(--warn); }
+
+  .toolbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .field { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 12px; }
+
+  /* 图表区 */
+  .chart-wrap { position: relative; flex: 1 1 auto; min-height: 200px; padding: 6px 8px 0; }
+  #chart { width: 100%; height: 100%; display: block; }
+
+  .tooltip {
+    position: absolute; pointer-events: none; opacity: 0;
+    transition: opacity .08s linear;
+    background: var(--surface-3);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    min-width: 120px;
+    z-index: 3;
+  }
+  .tooltip .tt-head { color: var(--text-dim); margin-bottom: 4px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 6px; }
+  .tooltip .tt-row .swatch { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+  .tooltip .tt-row .name { color: var(--text-dim); }
+  .tooltip .tt-row .val { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    padding: 4px 12px 8px;
+    font-size: 12px; color: var(--text-dim);
+  }
+  .legend .item { display: flex; align-items: center; gap: 5px; }
+  .legend .swatch { width: 9px; height: 9px; border-radius: 2px; }
+
+  .status-bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 5px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+    font-size: 11px; color: var(--text-muted);
+  }
+  .status-bar .k { color: var(--text-dim); }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+
+  /* 通道断开横幅（演示 webview 与宿主进程同生共死） */
+  .banner {
+    display: none;
+    align-items: center; gap: 8px;
+    padding: 6px 12px;
+    background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+    border-bottom: 1px solid var(--danger);
+    color: var(--danger); font-size: 12px;
+  }
+  .banner.show { display: flex; }
+
+  .toast-host { position: absolute; right: 12px; bottom: 44px; display: flex; flex-direction: column; gap: 6px; z-index: 4; }
+  .toast {
+    background: var(--surface-3);
+    border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 6px 10px; font-size: 12px; max-width: 380px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  }
+  .toast.warn { border-left-color: var(--warn); }
+  .toast.fade { opacity: 0; transition: opacity .3s linear; }
+
+  /* --------------------------------------------------------------------------
+     宿主模拟器（真机上这段是 GPUI 进程，**不在 webview 里**）
+     -------------------------------------------------------------------------- */
+  .host-sim {
+    flex: 0 0 auto;
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .host-sim > summary {
+    cursor: pointer; padding: 7px 12px; font-weight: 600;
+    background: var(--surface-3); user-select: none;
+  }
+  .host-sim > summary .hint { font-weight: 400; color: var(--text-muted); margin-left: 8px; }
+  .host-body { padding: 10px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 860px) { .host-body { grid-template-columns: 1fr; } }
+  .host-col h4 { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); font-weight: 600; }
+  .host-col .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .host-col label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
+  .log {
+    height: 172px; overflow: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  .log .line { white-space: pre-wrap; word-break: break-word; }
+  .log .dir-h { color: var(--accent); }   /* 宿主 → 面板 */
+  .log .dir-p { color: var(--ok); }       /* 面板 → 宿主 */
+  .log .err { color: var(--danger); }
+  .note { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; }
+</style>
+</head>
+<body>
+
+<!-- ==========================================================================
+     ① webview 内容区（gpui-wry 的 WebViewElement 的 bounds）
+     ========================================================================== -->
+<div class="webview-bounds">
+  <div class="bounds-tag">webview 内容区（宿主给的 bounds）</div>
+
+  <div class="panel-header">
+    <span class="panel-title">月销售趋势</span>
+    <span class="panel-sub">插件 chart-panel · 档① 全屏面板</span>
+    <span class="spacer"></span>
+    <button id="btn-refresh" title="向宿主发 chart.refresh">刷新</button>
+    <button id="btn-export" title="需要能力 webview.export">导出 PNG</button>
+  </div>
+
+  <div class="banner" id="banner">
+    <strong>通道已断开</strong>
+    <span id="banner-detail">宿主进程已退出或 webview 已失效 —— 面板的所有动作都会失败。</span>
+  </div>
+
+  <div class="toolbar">
+    <div class="field">
+      <label for="sel-x">维度 X</label>
+      <select id="sel-x">
+        <option value="month">month</option>
+        <option value="region">region</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="sel-measure">度量</label>
+      <select id="sel-measure">
+        <option value="amount">amount</option>
+        <option value="orders">orders</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="sel-agg">聚合</label>
+      <select id="sel-agg">
+        <option value="sum">SUM</option>
+        <option value="avg">AVG</option>
+        <option value="max">MAX</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="sel-type">图型</label>
+      <select id="sel-type">
+        <option value="bar">柱状</option>
+        <option value="line">折线</option>
+        <option value="scatter">散点</option>
+      </select>
+    </div>
+    <span class="spacer"></span>
+    <div class="field" id="cap-state"></div>
+  </div>
+
+  <div class="chart-wrap">
+    <canvas id="chart"></canvas>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="toast-host" id="toasts"></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="status-bar">
+    <span><span class="k">行数</span> <span class="mono" id="st-rows">—</span></span>
+    <span><span class="k">序列</span> <span class="mono" id="st-series">—</span></span>
+    <span><span class="k">宿主用时</span> <span class="mono" id="st-elapsed">—</span></span>
+    <span><span class="k">通道</span> <span class="mono" id="st-channel">—</span></span>
+    <span><span class="k">主题</span> <span class="mono" id="st-theme">—</span></span>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     宿主模拟器：真机上这一段是 GPUI 进程里的 Rust 代码，不在 webview 内
+     ========================================================================== -->
+<details class="host-sim" open>
+  <summary>宿主模拟器 <span class="hint">（真机上这段在 GPUI 进程里：WebViewHandle::raw() + 核心引擎/DuckDB）</span></summary>
+  <div class="host-body">
+    <div class="host-col">
+      <h4>宿主侧可做的事</h4>
+      <div class="row">
+        <button id="h-feed">重新投喂结果集</button>
+        <button id="h-theme">切换明暗主题</button>
+        <button id="h-break">断开通道</button>
+        <button id="h-restore" disabled>恢复通道</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="h-cap-export" checked> 已授予能力 webview.export</label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="h-truncate"> 模拟结果被截断（meta.truncated）</label>
+      </div>
+      <p class="note">
+        面板发来的每个 <span class="mono">command</span> 都由宿主在这里处理：真实实现是
+        <strong>宿主用 DuckDB 聚合</strong>（SQL 重写）再回投结果集，<strong>不是</strong>把原始行塞进 webview 自己算。
+        这正是 D4「数据面 Arrow / 控制面 JSON」与「重计算下沉 DuckDB」的落点。
+      </p>
+    </div>
+    <div class="host-col">
+      <h4>桥上的消息（面板 ↔ 宿主）</h4>
+      <div class="log" id="log"></div>
+      <p class="note">
+        <span class="dir-h">宿主 → 面板</span> = 真实现里的 <span class="mono">evaluate_script</span>；
+        <span class="dir-p">面板 → 宿主</span> = 真实现里的 IPC handler。
+        本原型里 <span class="mono">result</span> 帧带的是 JSON 行；真实现里大结果集走 Arrow IPC，只把 schema + 摘要放进控制面（阈值见 plugin-dev-plan §4.2.1.2）。
+      </p>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+
+/* ============================================================================
+   第 0 节 · 本面板的完整 API 面
+   ----------------------------------------------------------------------------
+   真插件里，宿主注入的桥**只有三个成员**（这就是</summary>"窄桥"的全部）：
+     rdsWebview.postMessage(obj)   → 发</h4></button>往宿主
+     rdsWebview.onMessage(cb)      → 接收宿主投喂
+     rdsWebview.capabilities       → 已授予的能力集合（只读）
+   没有</strong> rds.db / rds.file / rds.metadata —— 那些属于扩展宿主进程，不属于 webview。
+   本文件把它们就地实现，以便离线演示。
+   ========================================================================== */
+const RDS_API_VERSION = "rds/v1";
+
+/* ============================================================================
+   第 1 节 · 宿主模拟器（真机上 = Rust 侧）
+   ========================================================================== */
+
+/** 确定性伪随机：保证每次打开</strong></h4>看到的图一样，方便评审对比截图。 */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const MONTHS  = ["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06",
+                 "2026-07","2026-08","2026-09","2026-10","2026-11","2026-12"];
+const REGIONS = ["华东", "华南", "华北"];
+
+/** 宿主持有的"底层表"：真实现里这是查询结果或已落地的 Arrow 批。 */
+const RAW_ROWS = (() => {
+  const rnd = mulberry32(20260920);
+  const rows = [];
+  for (const month of MONTHS) {
+    for (const region of REGIONS) {
+      const base = 120000 + rnd() * 90000;
+      const season = 1 + 0.35 * Math.sin((MONTHS.indexOf(month) / 12) * Math.PI * 2);
+      const amount = Math.round(base * season * (region === "华东" ? 1.35 : region === "华南" ? 1.1 : 0.85));
+      rows.push({ month, region, amount, orders: Math.round(amount / (220 + rnd() * 90)) });
+    }
+  }
+  return rows;
+})();
+
+/**
+ * 宿主侧的"SQL"：把 {维度, 度量, 聚合} 变成一组结果列。
+ * 真实现里这条 SQL 由宿主生成并交给 DuckDB 执行 —— 面板一行聚合代码都没有。
+ */
+function hostRunQuery({ dim, measure, agg }) {
+  // 维度 = month 时，按 region 支成多列（等价于 SQL 的条件聚合 / PIVOT），
+  // 这样图上就有多条序列 —— 面板侧只认「第 1 列是维度，其余数值列是序列」。
+  if (dim === "month") {
+    const schema = [{ name: "month", type: "Utf8" }].concat(
+      REGIONS.map(r => ({ name: `${agg}(${measure}) · ${r}`, type: "Decimal128(18,2)" }))
+    );
+    const rows = MONTHS.map(month => {
+      const row = [month];
+      for (const region of REGIONS) {
+        const vals = RAW_ROWS.filter(r => r.month === month && r.region === region).map(r => r[measure]);
+        row.push(reduceAgg(vals, agg));
+      }
+      return row;
+    });
+    return { schema, rows };
+  }
+
+  const schema = [
+    { name: "region", type: "Utf8" },
+    { name: `${agg}(${measure})`, type: "Decimal128(18,2)" },
+  ];
+  const rows = REGIONS.map(region => {
+    const vals = RAW_ROWS.filter(r => r.region === region).map(r => r[measure]);
+    return [region, reduceAgg(vals, agg)];
+  });
+  return { schema, rows };
+}
+
+function reduceAgg(vals, agg) {
+  if (!vals.length) return null;
+  if (agg === "sum") return vals.reduce((a, b) => a + b, 0);
+  if (agg === "avg") return vals.reduce((a, b) => a + b, 0) / vals.length;
+  return Math.max.apply(null, vals);
+}
+
+/** 宿主 → 面板：真实现里这是 WebView::evaluate_script("__rds_receive(...)")。 */
+function hostToPanel(payload) {
+  HOST.log("h", payload.kind, summarize(payload));
+  if (HOST.broken) return;                       // 通道断了，投喂自然到不了
+  window.__rds_receive(JSON.stringify(payload));
+}
+
+function summarize(p) {
+  if (p.kind === "result") return `${p.schema.length} 列 / ${p.rows.length} 行 · ${p.meta.elapsedMs} ms`;
+  if (p.kind === "capabilities") return `granted=[${p.granted.join(", ")}] denied=[${p.denied.join(", ")}]`;
+  if (p.kind === "theme") return p.mode;
+  return "";
+}
+
+const HOST = {
+  broken: false,
+  truncated: false,
+  granted: new Set(["webview.export"]),
+  query: { dim: "month", measure: "amount", agg: "sum" },
+
+  log(dir, kind, detail) {
+    const el = document.getElementById("log");
+    const line = document.createElement("div");
+    line.className = "line";
+    const arrow = dir === "h" ? "宿主 → 面板" : "面板 → 宿主";
+    line.innerHTML = `<span class="${dir === "h" ? "dir-h" : "dir-p"}">${arrow}</span>`
+      + `  <strong>${kind}</strong>  <span style="color:var(--text-muted)">${escapeHtml(detail || "")}</span>`;
+    el.appendChild(line);
+    while (el.childElementCount > 60) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  /** 处理面板发来的 command：真实现里宿主在这里做权限门控 + 查库 + 回投。 */
+  onCommand(msg) {
+    this.log("p", msg.id, JSON.stringify(msg.args || {}));
+
+    if (this.broken) {
+      // 通道断了：面板应当自己也在横幅里提示，这里只是宿主侧的记录
+      this.log("h", "error", "宿主已离线，命令被丢弃");
+      return;
+    }
+
+    if (msg.id === "chart.rerender") {
+      Object.assign(this.query, msg.args);
+      this.pushResult();
+      return;
+    }
+    if (msg.id === "chart.refresh") { this.pushResult(); return; }
+
+    if (msg.id === "chart.exportPng") {
+      // —— 能力门控：这就是「权限可精确到方法」的落点 ——
+      if (!this.granted.has("webview.export")) {
+        hostToPanel({
+          kind: "commandResult",
+          requestId: msg.requestId,
+          error: {
+            code: -32006,
+            message: "capability_denied",
+            data: { required: "webview.export", hint: "在插件详情页授予，或改用「复制数据」" },
+          },
+        });
+        return;
+      }
+      hostToPanel({ kind: "commandResult", requestId: msg.requestId, result: { ok: true } });
+      return;
+    }
+
+    hostToPanel({
+      kind: "commandResult",
+      requestId: msg.requestId,
+      error: { code: -32601, message: "method_not_found", data: { method: msg.id } },
+    });
+  },
+
+  pushResult() {
+    const t0 = performance.now();
+    const { schema, rows } = hostRunQuery(this.query);
+    const payload = {
+      kind: "result",
+      requestId: "q-" + (++this.seq),
+      sql: buildSql(this.query),
+      schema,
+      rows,
+      meta: { elapsedMs: Math.round((performance.now() - t0) * 10) / 10, truncated: this.truncated, rowCount: rows.length },
+    };
+    hostToPanel(payload);
+  },
+
+  pushCapabilities() {
+    const granted = Array.from(this.granted);
+    const denied = ["webview.export", "net.fetch", "file.write"].filter(c => !this.granted.has(c));
+    hostToPanel({ kind: "capabilities", granted, denied });
+  },
+
+  seq: 0,
+};
+
+function buildSql(q) {
+  // 展示用：真实现里这条 SQL 由宿主拼并交给 DuckDB（含引号转义与方言处理）
+  if (q.dim === "month") {
+    return REGIONS.map(r => `${q.agg}(CASE WHEN region = '${r}' THEN ${q.measure} END) AS "${q.agg}(${q.measure}) · ${r}"`).join(",\n       ");
+  }
+  return `${q.agg}(${q.measure}) AS "${q.agg}(${q.measure})"`;
+}
+
+/* ============================================================================
+   第 2 节 · 面板侧：桥 + 状态
+   ========================================================================== */
+
+const bridge = {
+  capabilities: new Set(),
+  onMessage(cb) { this._cb = cb; },
+  postMessage(obj) {
+    HOST.log("p", obj.kind === "command" ? "command" : obj.kind,
+             obj.kind === "command" ? obj.id : (obj.message || ""));
+    if (obj.kind === "command") HOST.onCommand(obj);
+    if (obj.kind === "error") { /* 真宿主会记入插件日志 */ }
+  },
+};
+
+/** 状态：**只有渲染需要的东西**，没有任何连接/凭据/游标。 */
+const state = {
+  theme: "dark",
+  schema: [],
+  rows: [],
+  meta: null,
+  view: { type: "bar" },
+  hover: -1,
+  pending: new Map(),   // requestId → 用途（用于把 commandResult 关联回来）
+};
+
+/* ============================================================================
+   第 3 节 · 绘制
+   ========================================================================== */
+
+const canvas = document.getElementById("chart");
+const tooltip = document.getElementById("tooltip");
+let chartGeom = null;   // {pad, xBand, yScale...} 供 hover 反查
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function fitCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.round(rect.width * dpr));
+  canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: rect.width, h: rect.height };
+}
+
+function niceTicks(min, max, count) {
+  if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1, ticks: [0, 1] };
+  if (min === max) { max = min + 1; }
+  const rawStep = (max - min) / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  const lo = Math.floor(min / step) * step;
+  const hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step * 0.5; v += step) ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+  return { min: lo === hi ? lo - step : lo, max: hi === lo ? hi + step : hi, ticks };
+}
+
+function fmtAxis(v) {
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(1).replace(/\.0$/, "") + "亿";
+  if (a >= 1e4) return (v / 1e4).toFixed(1).replace(/\.0$/, "") + "万";
+  return String(Math.round(v * 100) / 100);
+}
+
+function fmtValue(v) {
+  if (v === null || v === undefined) return "—";
+  return Number(v).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function seriesDefs() {
+  // 约定：第 1 列是维度，其余列是数值序列。
+  if (!state.schema.length) return [];
+  const colors = [cssVar("--series-1"), cssVar("--series-2"), cssVar("--series-3"), cssVar("--series-4")];
+  return state.schema.slice(1).map((col, i) => ({
+    name: col.name, type: col.type, index: i + 1, color: colors[i % colors.length],
+  }));
+}
+
+function draw() {
+  const { ctx, w, h } = fitCanvas();
+  ctx.clearRect(0, 0, w, h);
+
+  const textMuted = cssVar("--text-muted");
+  const grid = cssVar("--grid");
+  const textDim = cssVar("--text-dim");
+
+  if (!state.rows.length) {
+    ctx.fillStyle = textMuted;
+    ctx.font = '13px "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("暂无数据：等待宿主投喂结果集…", w / 2, h / 2);
+    chartGeom = null;
+    return;
+  }
+
+  const pad = { l: 62, r: 16, t: 16, b: 34 };
+  const plotW = Math.max(10, w - pad.l - pad.r);
+  const plotH = Math.max(10, h - pad.t - pad.b);
+  const series = seriesDefs();
+  const n = state.rows.length;
+
+  let vmin = Infinity, vmax = -Infinity;
+  for (const row of state.rows) {
+    for (let i = 1; i < row.length; i++) {
+      const v = row[i];
+      if (typeof v === "number" && isFinite(v)) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
+    }
+  }
+  if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
+  const y = niceTicks(Math.min(0, vmin), vmax, 5);
+  const yOf = v => pad.t + plotH - ((v - y.min) / (y.max - y.min)) * plotH;
+
+  const band = plotW / n;
+
+  // 网格 + Y 轴刻度
+  ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const t of y.ticks) {
+    const py = Math.round(yOf(t)) + 0.5;
+    ctx.strokeStyle = grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(pad.l + plotW, py); ctx.stroke();
+    ctx.fillStyle = textMuted;
+    ctx.fillText(fmtAxis(t), pad.l - 8, py);
+  }
+
+  // X 轴标签（条目过多时抽稀）
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.fillStyle = textMuted;
+  const labelStep = Math.ceil(n / Math.max(1, Math.floor(plotW / 56)));
+  for (let i = 0; i < n; i++) {
+    if (i % labelStep !== 0) continue;
+    const cx = pad.l + band * i + band / 2;
+    ctx.fillText(String(state.rows[i][0]), cx, pad.t + plotH + 8);
+  }
+
+  // 序列
+  if (state.view.type === "bar") {
+    const groupW = band * 0.68;
+    const barW = Math.max(1, groupW / Math.max(1, series.length));
+    series.forEach((s, si) => {
+      ctx.fillStyle = s.color;
+      for (let i = 0; i < n; i++) {
+        const v = state.rows[i][s.index];
+        if (typeof v !== "number") continue;
+        const x = pad.l + band * i + (band - groupW) / 2 + barW * si;
+        const yTop = yOf(Math.max(0, v));
+        const yZero = yOf(0);
+        ctx.fillRect(x, yTop, Math.max(1, barW - 2), Math.max(1, Math.abs(yZero - yTop)));
+      }
+    });
+  } else {
+    series.forEach(s => {
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const v = state.rows[i][s.index];
+        if (typeof v !== "number") continue;
+        pts.push([pad.l + band * i + band / 2, yOf(v)]);
+      }
+      if (state.view.type === "line") {
+        ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+        ctx.beginPath();
+        pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+        ctx.stroke();
+      }
+      ctx.fillStyle = s.color;
+      const r = state.view.type === "scatter" ? 4 : 3;
+      for (const [px, py] of pts) {
+        ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      }
+    });
+  }
+
+  // 悬停高亮
+  if (state.hover >= 0 && state.hover < n) {
+    const cx = pad.l + band * state.hover + band / 2;
+    ctx.strokeStyle = textDim; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(cx) + 0.5, pad.t);
+    ctx.lineTo(Math.round(cx) + 0.5, pad.t + plotH);
+    ctx.stroke();
+  }
+
+  chartGeom = { pad, plotW, plotH, band, n };
+  renderLegend(series);
+  updateStatus();
+}
+
+function renderLegend(series) {
+  const el = document.getElementById("legend");
+  el.innerHTML = series.map(s =>
+    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${escapeHtml(s.name)}`
+    + `<span style="color:var(--text-muted)"> · ${escapeHtml(s.type)}</span></span>`
+  ).join("") + `<span class="item" style="color:var(--text-muted)">（共 ${state.rows.length} 行）</span>`;
+}
+
+function updateStatus() {
+  document.getElementById("st-rows").textContent = state.meta ? String(state.meta.rowCount) : "—";
+  document.getElementById("st-series").textContent = String(Math.max(0, state.schema.length - 1));
+  document.getElementById("st-elapsed").textContent = state.meta ? state.meta.elapsedMs + " ms" : "—";
+  document.getElementById("st-channel").textContent = HOST.broken ? "断开" : "已连接（evaluate_script / IPC）";
+  document.getElementById("st-theme").textContent = state.theme;
+  const cap = document.getElementById("cap-state");
+  cap.innerHTML = HOST.granted.has("webview.export")
+    ? `<span style="color:var(--ok)">能力 webview.export：已授予</span>`
+    : `<span style="color:var(--warn)">能力 webview.export：未授予</span>`;
+  document.getElementById("btn-export").classList.toggle("denied", !HOST.granted.has("webview.export"));
+}
+
+/* ---------------- 悬停 ---------------- */
+canvas.addEventListener("mousemove", (ev) => {
+  if (!chartGeom) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = ev.clientX - rect.left;
+  const my = ev.clientY - rect.top;
+  const { pad, plotW, band, n } = chartGeom;
+  if (mx < pad.l || mx > pad.l + plotW) { hideTooltip(); return; }
+  const idx = Math.min(n - 1, Math.max(0, Math.floor((mx - pad.l) / band)));
+  if (idx !== state.hover) { state.hover = idx; draw(); }
+  showTooltip(idx, ev.clientX - rect.left, my);
+});
+canvas.addEventListener("mouseleave", () => { hideTooltip(); });
+
+function showTooltip(idx, mx, my) {
+  const row = state.rows[idx];
+  if (!row) return;
+  const series = seriesDefs();
+  tooltip.innerHTML = `<div class="tt-head">${escapeHtml(String(row[0]))}</div>`
+    + series.map(s => `<div class="tt-row"><span class="swatch" style="background:${s.color}"></span>`
+        + `<span class="name">${escapeHtml(s.name)}</span><span class="val">${fmtValue(row[s.index])}</span></div>`).join("");
+  tooltip.style.opacity = "1";
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  const wrapW = canvas.getBoundingClientRect().width;
+  const left = Math.min(Math.max(4, mx + 14), Math.max(4, wrapW - tw - 4));
+  const top = Math.max(4, my - th - 10);
+  tooltip.style.left = left + "px";
+  tooltip.style.top = top + "px";
+}
+function hideTooltip() {
+  tooltip.style.opacity = "0";
+  if (state.hover !== -1) { state.hover = -1; draw(); }
+}
+
+/* ============================================================================
+   第 4 节 · 面板收到的消息（宿主 evaluate_script 的落点）
+   ========================================================================== */
+
+window.__rds_receive = function (json) {
+  let msg;
+  try { msg = JSON.parse(json); } catch (e) { console.error("坏帧", e); return; }
+
+  switch (msg.kind) {
+    case "result":
+      state.schema = msg.schema;
+      state.rows = msg.rows;
+      state.meta = msg.meta;
+      draw();
+      if (msg.meta && msg.meta.truncated) {
+        toast("结果集被截断（meta.truncated）：图表只反映前 " + msg.meta.rowCount + " 行", "warn");
+      }
+      break;
+
+    case "capabilities":
+      state.capabilities = new Set(msg.granted);
+      HOST.granted = new Set(msg.granted);
+      updateStatus();
+      break;
+
+    case "theme":
+      state.theme = msg.mode;
+      document.documentElement.setAttribute("data-theme", msg.mode);
+      draw();
+      break;
+
+    case "commandResult": {
+      const usage = state.pending.get(msg.requestId);
+      state.pending.delete(msg.requestId);
+      if (msg.error) {
+        // —— 能力拒绝要以「可解释的状态」呈现，不能悄悄失败 ——
+        toast(`${msg.error.message}（${msg.error.code}）：${msg.error.data.required || msg.error.data.method}`
+              + ` —— ${msg.error.data.hint || "该命令未被授予"}`, "warn");
+      } else if (usage === "export") {
+        doExport();
+      }
+      break;
+    }
+
+    default:
+      console.warn("未知帧", msg.kind);
+  }
+};
+
+/* ============================================================================
+   第 5 节 · 面板 → 宿主
+   ========================================================================== */
+
+let reqSeq = 0;
+
+function sendCommand(id, args, usage) {
+  const requestId = "req-" + (++reqSeq);
+  if (usage) state.pending.set(requestId, usage);
+  bridge.postMessage({ kind: "command", apiVersion: RDS_API_VERSION, requestId, id, args: args || {} });
+}
+
+function doExport() {
+  // 真插件这里是把图表交给宿主导出（宿主已有导出链路），原型里直接落 PNG。
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL("image/png");
+  a.download = "chart-panel.png";
+  a.click();
+  toast("已导出 chart-panel.png");
+}
+
+function toast(text, tone) {
+  const el = document.createElement("div");
+  el.className = "toast" + (tone === "warn" ? " warn" : "");
+  el.textContent = text;
+  document.getElementById("toasts").appendChild(el);
+  setTimeout(() => { el.classList.add("fade"); setTimeout(() => el.remove(), 320); }, 4200);
+}
+
+/* ============================================================================
+   第 6 节 · 本地交互（一律不查库、不聚合：交给宿主）
+   ========================================================================== */
+
+document.getElementById("sel-x").addEventListener("change", askRerender);
+document.getElementById("sel-measure").addEventListener("change", askRerender);
+document.getElementById("sel-agg").addEventListener("change", askRerender);
+
+function askRerender() {
+  sendCommand("chart.rerender", {
+    dim: document.getElementById("sel-x").value,
+    measure: document.getElementById("sel-measure").value,
+    agg: document.getElementById("sel-agg").value,
+  });
+}
+
+document.getElementById("sel-type").addEventListener("change", (e) => {
+  state.view.type = e.target.value;
+  draw();   // 纯渲染变化，无需打扰宿主
+});
+
+document.getElementById("btn-refresh").addEventListener("click", () => sendCommand("chart.refresh", {}));
+document.getElementById("btn-export").addEventListener("click", () => sendCommand("chart.exportPng", { format: "png", scale: 2 }, "export"));
+
+/* ---------------- 宿主模拟器的按钮 ---------------- */
+document.getElementById("h-feed").addEventListener("click", () => HOST.pushResult());
+document.getElementById("h-theme").addEventListener("click", () => {
+  const next = state.theme === "dark" ? "light" : "dark";
+  hostToPanel({ kind: "theme", mode: next });
+});
+document.getElementById("h-break").addEventListener("click", () => {
+  HOST.broken = true;
+  document.getElementById("banner").classList.add("show");
+  document.getElementById("h-restore").disabled = false;
+  document.getElementById("btn-refresh").disabled = true;
+  document.getElementById("btn-export").disabled = true;
+  updateStatus();
+});
+document.getElementById("h-restore").addEventListener("click", () => {
+  HOST.broken = false;
+  document.getElementById("banner").classList.remove("show");
+  document.getElementById("h-restore").disabled = true;
+  document.getElementById("btn-refresh").disabled = false;
+  document.getElementById("btn-export").disabled = false;
+  HOST.pushCapabilities();
+  HOST.pushResult();
+  updateStatus();
+});
+document.getElementById("h-cap-export").addEventListener("change", (e) => {
+  if (e.target.checked) HOST.granted.add("webview.export"); else HOST.granted.delete("webview.export");
+  HOST.pushCapabilities();
+  updateStatus();
+});
+document.getElementById("h-truncate").addEventListener("change", (e) => {
+  HOST.truncated = e.target.checked;
+  HOST.pushResult();
+});
+
+/* ============================================================================
+   第 7 节 · 启动握手
+   ----------------------------------------------------------------------------
+   VS Code 的 Webview 也是这套：面板先 ready，宿主再注入能力与首帧数据。
+   顺序很重要 —— 能力必须在任何命令之前到达，否则第一个命令就可能被误拒。
+   ========================================================================== */
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+new ResizeObserver(() => draw()).observe(canvas);
+
+bridge.postMessage({ kind: "ready", apiVersion: RDS_API_VERSION, ui: "chart-panel", features: ["canvas2d"] });
+HOST.pushCapabilities();
+hostToPanel({ kind: "theme", mode: "dark" });
+HOST.pushResult();
+</script>
+</body>
+</html>

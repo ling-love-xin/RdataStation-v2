@@ -229,7 +229,7 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | `engine/src/driver/wasm/` | WASM 驱动宿主 | 同 JDBC 形态（`WasmDriver` 全 `NotSupported`） |
 | `engine/src/driver/manager.rs` | 驱动生命周期管理（load / unload / status） | **零调用**（`DriverManager` / `init_driver_manager` / `DRIVER_MANAGER` 只有定义与重导出；运行时注册走 `DriverRegistry`）——留作 M9 插件驱动的接口预演，**不要当成现成能力用** |
 | `engine/src/driver/loader.rs` 的 `DriverLoader` / `WasmDriverDiscovery` / `JdbcDriverDiscovery` | 多类型驱动发现 | **零调用**（唯一活的是 `BuiltinDriverDiscovery::builtin_factories()`）；且两个 discovery 的目录是 CWD 相对路径 + `~` 不展开 |
-| `plugin/src/sidecar/driver.rs` | Sidecar 数据库驱动 | **v1 死代码（未编译）**：用的 `DriverFactory` 签名（`id/name/kind/default_port/create_pool`）与 v2（`descriptor/create`）不匹配 |
+| `plugin/src/sidecar/driver.rs` | Sidecar 数据库驱动 | **已于 P0（2026-09-20）删除**：用的 `DriverFactory` 签名（`id/name/kind/default_port/create_pool`）与 v2（`descriptor/create`）不匹配，而且它的传输假设（HTTP + 单端口 + JSON 行）与 D5/D4（stdio 分帧 + Arrow）相反 —— 不是“补个声明”能救的。驱动桥在 P1 按三层对象模型**新建** |
 | `plugin/src/{host,model,plugin_view}.rs` | 插件宿主 | 3 行空壳；`health_checker.rs` / `hot_reload_manager.rs` 为 **0 字节** |
 | `plugin/src/federation/legacy.rs` | 联邦旧实现 | 标「已被取代」，待退役 |
 

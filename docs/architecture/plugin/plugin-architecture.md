@@ -1,7 +1,10 @@
 # 插件系统架构（M9）
 
-状态：**三期（Phase 3）设计文档**。本文档只记录现状与设计，**不实施**；实现排在三期。
-路径与进程约束见 `../runtime/data-paths.md` §8（同样归三期）；**全局与项目引用**见本文 §7（2026-09-18 补）。
+状态：**设计意图文档**（本文只记录现状与设计，**不含排期**）。
+落地顺序、阶段任务、验收与风险见 **`plugin-dev-plan.md`**（2026-09-20 建，含与既有设计的对照与代价）。
+路径与进程约束见 `../runtime/data-paths.md` §8；**全局与项目引用**见本文 §7（2026-09-18 补）。
+
+> **2026-09-20 修订**：本文 §2 行数、§8「项目引用」、注册表表名、以及两个未参与编译的模块已按代码实测更正；§9 的排期骨架由 `plugin-dev-plan.md` §5 取代。
 
 ## 1. 定位
 
@@ -16,7 +19,15 @@
 
 ## 2. 模块与代码位置
 
-`crates/plugin`（7488 行，依赖方向 `plugin → engine → shared`，符合三层约束）
+`crates/plugin`（**4395 行**，P0 后数字；依赖方向 `plugin → engine → shared`，符合三层约束）
+
+**未参与编译的文件**（实测：不在 `lib.rs` / `mod.rs` 的 `pub mod` 列表里，改它们不会报错也不会生效）：
+
+| 文件 | 行数 | 说明 |
+| --- | --- | --- |
+| ~~`src/sidecar/driver.rs`~~ | ~~311~~ | ✅ **已于 P0（2026-09-20）删除**：旧的 `DriverFactory` 接口 + 「HTTP / 单端口 / JSON 行」的传输假设与 D5/D4（stdio 分帧 + Arrow）相反；驱动桥在 P1 按三层对象模型**新建**（见 `plugin-dev-plan.md` §1.2） |
+| ~~`src/storage.rs`~~ | ~~107~~ | ✅ **已于 P0 删除**：全仓零引用，且 `flush_to_disk()` 是 TODO 空壳、`get_storage_path()` 从未被用过；插件持久数据的落点是 `paths::plugin_data_dir(id)` |
+| `src/{commands,host,model,plugin_view}.rs` | 各 3 | 占位；是「宿主端口 + 自带视图」该补的位置 |
 
 | 子系统 | 文件 | 职责 |
 | --- | --- | --- |
@@ -29,10 +40,11 @@
 | 事件 | `src/events.rs` | 插件事件总线 |
 | 服务 | `src/plugin_service.rs`（419） | `PluginService::new(global_db)`：`InstallPluginInput` / `PluginStatus` / `PluginWithStatus` |
 | 桥接 | `src/plugin_bridge.rs` | 与宿主 / 编辑器的桥接 |
-| WASM 适配 | `src/wasm/{plugin_manager,extism,api,host_functions}.rs` | Extism 运行时（wasmtime 底座）+ 宿主函数注入 |
-| Sidecar 适配 | `src/sidecar/{manager,driver,client,health_checker,hot_reload_manager}.rs` | 独立进程 + **JSON-RPC**；驱动适配 |
+| WASM 适配 | `src/wasm/{plugin_manager,extism,api}.rs` | Extism 运行时（wasmtime 底座）。**host function 面现在为空**：`host_functions.rs` 已于 P0 删除（零调用 + 签名本就不对），P3 按 Q4 收敛后重建 |
+| Sidecar 适配 | `src/sidecar/{manager,client,health_checker,hot_reload_manager}.rs` | 独立进程 + JSON-RPC 客户端（**现走 HTTP/端口，与 D5 的 stdio 分帧相反，P1 换**）；驱动适配待建 |
 | 驱动发现 | `crates/engine/src/driver/loader.rs` | `WasmDriverDiscovery::plugin_dirs`（默认目录见 §6） |
-| 注册表 | `crates/engine/src/persistence/plugin_store.rs` | 插件记录落 `global.sqlite`（含 `manifest_json`） |
+| 注册表 | `crates/engine/src/persistence/plugin_store.rs` | 插件记录落全局库，**表名是 `plugins`**（`plugin_store` 只是 Rust 模块名；建表见 `migrations/global/001_init.sql:128`，另有 `plugin_dependencies`/`plugin_global_config`） |
+| 项目引用 | 同上 + `project_connection_store.rs` | **V2 已有**：表在 `migrations/project_meta/001_init.sql:112/121`（`project_used_plugins`/`project_plugin_config`），持久化 6 方法 + service 6 方法均在，**只是无生产调用方**（见 §8 与 `plugin-dev-plan.md` §3.1） |
 
 ## 3. 两种运行形态
 
@@ -186,10 +198,12 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 | 版本与依赖 | `dependency.rs` 从清单解析，未定版本范围与冲突策略 | 三期做：语义化版本 + 冲突报错口径 |
 | 端口/进程回收 | stdout 自报端口，无段位约束 | 见 §6 |
 | 安全边界 | 权限模型有结构与授权状态，但缺少"插件能碰哪些宿主 API"的完整清单 | 三期做：宿主函数 / JSON-RPC 方法的权限映射表 |
-| **项目引用** | **V2 无**：只有全局 `plugin_store`（V1 有 `project_used_plugins` + `project_plugin_config` + 六条命令） | 三期做：`project_resources` + `ProjectResourceService`（见 §7） |
+| **项目引用** | **V2 表与 API 均已存在**：`project_used_plugins`（含 `required` 位）+ `project_plugin_config` + `PluginService` 的 6 个方法（`enable_plugin_in_project` 等），**但无生产调用方** | 待定：迁移到单表 `project_resources`（含 `kind`，可容纳引擎扩展）或沿用两表——见 `plugin-dev-plan.md` §2.2 Q1 |
 | **引擎扩展与项目的关系** | 扩展状态只有 DuckDB 的真值（`duckdb_extensions()`）与内存失败态；项目无法声明“需要哪些扩展” | 三期做：`project_resources` 里的 `kind = 'engine_extension'`（**不建镜像表**，见 §7.2） |
 
-## 9. 三期计划骨架（不实施，仅排布）
+## 9. 排期骨架（已由 `plugin-dev-plan.md` §5 取代）
+
+> 下表保留为历史记录：实际阶段划分、顺序与理由见 `plugin-dev-plan.md` §5（P0 地基 → P1 sidecar 端到端 → P2 元数据与类型 → P2.5 二次分析直灌 → P3 wasm 收紧 → P4 注册表/引用/网格 → P5 分发与签名）。
 
 | 编号 | 内容 | 前置 |
 | --- | --- | --- |

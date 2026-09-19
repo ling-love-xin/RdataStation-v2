@@ -147,4 +147,11 @@
 | `settings-user-guide.md`（使用手册） | ⬜ 实现后补（与 `editor/` 同例） |
 | `settings-prototype.html`（可交互原型） | ✅ 首版（示意稿，非权威；规格仍以 `ui/` + 原型设计文档为准） |
 
-> 插件（M9）不在本表：v2 尚未为其建立文档集，等 beta3 立项时补（见 `settings-architecture.md` §10）。
+> 插件（M9）**已建五件 + 五张可交互原型**（2026-09-20 补齐）：
+> `plugin/README.md`（模块入口：一句话形态 / 文档地图 / 已定未定 / 代码地图 / 硬约束 / 命令）+
+> `plugin/plugin-architecture.md`（设计意图）+ `plugin/plugin-dev-plan.md`（开发方案：现状/决策/对照/阶段/验收）+
+> `plugin/plugin-prototype-design.md`（原型设计：VS Code 模式的进程边界 / 清单 / `rds` API 面 / 激活时机 / 贡献点映射 / Q7–Q10 定案依据）+
+> `plugin/plugin-user-guide.md`（使用手册：使用者入口与排障 + 插件作者从零写一个插件）。
+>
+> 可交互原型 5 张（`plugin/prototype/`）：插件入口 / 宿主渲染的面板 / webview 全屏面板（档①）/ webview 独立窗口（档②）/ 驱动 sidecar；
+> 索引与自查见 `plugin/prototype/README.md`。原型自带 `node check-prototypes.mjs`（语法 + 加载 + 交互探针），当前 5/5 通过。

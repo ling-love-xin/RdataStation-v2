@@ -102,7 +102,7 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 | 落点 | 内容 | 唯一定义处 | 现状 |
 |---|---|---|---|
 | `<RDS_HOME>/config/settings.json` | 应用级偏好（5 节 10 项） | `settings/src/lib.rs` | 原子写 ✅ |
-| `<RDS_HOME>/data/system/global.db` | `project_info`、`global_connections`、`data_source_types`、`drivers`、`auth_configs`、`network_configs`、`environments(+policies)`、`connection_tags`、`connection_drafts`、`app_logs`、`plugin_store` | `migrations/global/*` | ✅ |
+| `<RDS_HOME>/data/system/global.db` | `project_info`、`global_connections`、`data_source_types`、`drivers`、`auth_configs`、`network_configs`、`environments(+policies)`、`connection_tags`、`connection_drafts`、`app_logs`、`plugins`（**表名是 `plugins`**；`plugin_store` 只是 Rust 模块名） | `migrations/global/*` | ✅ |
 | `<RDS_HOME>/data/system/analytics.duckdb` | 系统级分析库 | `migration/global_init.rs:24` | ✅（DuckDB 原生格式） |
 | `<RDS_HOME>/data/system/global_metadata/conn_{id}.sqlite` | 全局连接的 **L2 元数据缓存** | `persistence/metadata_cache.rs:82-115` | ✅ 4 类对象 |
 | `{项目}/.RSmeta/project.db` | `project`、`connections`、`connection_tags/groups`、`queries`、`project_versions`、`analytics_resources(+versions/folders/tags)`、mock 生成记录 | `migrations/project_meta/*` | ⚠️ M1 用 rusqlite 直开（6 处）与 engine 池并存 |
@@ -373,7 +373,7 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | `editor` README §3 / 架构 §3.1 | `editor → database` 依赖、`completion.rs` 存在 | `Cargo.toml` 无该依赖；文件不存在（补全未做） |
 | `editor` 架构 §3.6 | `GridDataSource` / `GridEditSink`、`view/widgets/grid/` | 零匹配；实际在 `view/results/` |
 | `analytics-resource-architecture.md:4` 等 | `indexer.rs` / `detail_view.rs` / `service.rs` 未创建 | 均已落地（498 / 496 / 997 行） |
-| `plugin-architecture.md` §2 | plugin 7488 行 | 实际 4630 行；两个文件 0 字节 |
+| ~~`plugin-architecture.md` §2~~ | plugin 7488 行 | 实际 4395 行（P0 后又删 516 行死代码；0 字节空文件仍有 2 个） | ✅ 已修正（2026-09-20） |
 | `layout/panels-modules.md` | 4 个路径（`panels/nav.rs`、`panels/scratchpad_panel.rs`、`services/scratchpad_jobs.rs`、`services/nav_jobs.rs`） | 均已不存在（3 个未标注去向） |
 | `connection-dialog-architecture.md` §16 | L2 缓存"无调用方 ⛔ 未接" | 读路径已接（写侧 `ensure_metadata_cache` 确实零调用） |
 | `settings-architecture.md` K1 / §8 | 构造期直读、分节含 `general`/`engine` | 已改走 service；实际分节无这两节、有 `logging` |

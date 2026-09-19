@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RdataStation · 插件入口原型（宿主 UI：安装 / 启用 / 授权 / 详情）</title>
+<!--
+  ============================================================================
+  RdataStation v2 · 插件系统 M9 · 插件入口原型
+  ============================================================================
+
+  这是什么
+    「插件」这个功能在产品里的**入口与管理界面**长什么样。整页都是**宿主 UI** ——
+    一行都不是插件画的（这条本身就是插件系统最容易踩错的地方：管理界面必须由宿主
+    用既有控件与主题 token 渲染，否则插件能把自己伪装成宿主）。
+
+  对应设计文档
+    - plugin-prototype-design.md §3 清单 / §4 能力与权限 / §5 激活与生命周期 / §8 项目引用对账
+    - plugin-dev-plan.md §4.4 能力矩阵 / §4.6 权限与信任双轨 / §4.8 项目引用对账 / P5 发布与签名
+    - 布局与尺寸：docs/architecture/layout/layout-design.md、rds-ui-spec skill
+
+  尺寸出处（不自己编）
+    标题栏 2.25rem=36 · 活动栏 3rem=48 · 左 Dock 15rem=240 · 面板头 2.25rem=36 ·
+    列表行 1.5rem=24（两行式行 2.75rem=44）· 小控件 1.625rem=26 · 细线 1px
+    状态栏高度由 gpui-kit `StatusBar` 组件决定（本稿取 1.5rem 只为比例接近）
+
+  色值出处
+    assets/themes/rds-theme.json（RDS Dark / RDS Light）+ assets/themes/product-tokens.json。
+    状态栏取 `theme.colors.primary` + `primary_foreground`（crates/workbench/src/view.rs:1465-1468）。
+
+  点击指南（本稿演示的五件事都在这几处）
+    ① 左活动栏「插件」→ 面板已在展开态；工具栏「从磁盘安装」→ 签名校验流程
+    ② 列表里点第 2 条「表大小看板」→ 它被项目引用但已禁用 → 详情页给对账提示
+    ③ 详情页「权限」区点「授予」→ 状态从「待授权」变「已启用」
+    ④ 列表里把某条「禁用」→ 面板里出现「被项目引用」警告行（不对用户静默）
+    ⑤ 状态栏右侧「扩展宿主」chip → 模拟宿主进程崩溃/重启（插件全灭，宿主 UI 照常）
+  ============================================================================
+-->
+<style>
+  :root[data-theme="dark"] {
+    /* —— rds-theme.json · RDS Dark —— */
+    --bg:            #1E1E1E;
+    --fg:            #CCCCCC;
+    --border:        #3C3C3C;
+    --border-strong: #4F4F4F;
+    --title-bar:     #323233;
+    --sidebar:       #252526;
+    --sidebar-accent:#37373D;
+    --sidebar-fg:    #CCCCCC;
+    --list-hover:    #2A2D2E;
+    --list-active:   #37373D;
+    --list-active-border: #E8846F;
+    --tab-bar:       #252526;
+    --tab-bg:        #2D2D30;
+    --tab-active-bg: #1E1E1E;
+    --tab-fg:        #969696;
+    --popover:       #252526;
+    --primary:       #E8846F;   /* 品牌珊瑚色 */
+    --primary-fg:    #1E1E1E;
+    --muted-fg:      #8A8A8A;
+    --ok:            #89D185;
+    --warn:          #CCA700;
+    --danger:        #F14C4C;
+    --ok-bg:         #14532D;  --ok-fg:     #F0FDF4;
+    --warn-bg:       #5A4D08;  --warn-fg:   #FFFBEB;
+    --danger-bg:     #5A1D1D;  --danger-fg: #FEF2F2;
+    --info-bg:       #1A3D5C;  --info-fg:   #EFF6FF;
+    --group-box:     #171717;
+    --accent-soft:   #E8846F1A;
+    /* product-tokens.json */
+    --slot-bg:       #252526;   /* title_bar.slot.background  */
+    --activity-bar:  #333333;   /* activity_bar.background    */
+  }
+  :root[data-theme="light"] {
+    --bg:            #FFFFFF;
+    --fg:            #333333;
+    --border:        #D4D4D4;
+    --border-strong: #B0B0B0;
+    --title-bar:     #DDDDDD;
+    --sidebar:       #F3F3F3;
+    --sidebar-accent:#E4E4E4;
+    --sidebar-fg:    #616161;
+    --list-hover:    #F0F0F0;
+    --list-active:   #E4E4E4;
+    --list-active-border: #C25B46;
+    --tab-bar:       #F3F3F3;
+    --tab-bg:        #ECECEC;
+    --tab-active-bg: #FFFFFF;
+    --tab-fg:        #616161;
+    --popover:       #FFFFFF;
+    --primary:       #C25B46;
+    --primary-fg:    #FFFFFF;
+    --muted-fg:      #8E8E8E;
+    --ok:            #16A34A;
+    --warn:          #B45309;
+    --danger:        #DC2626;
+    --ok-bg:         #DCFCE7;  --ok-fg:     #14532D;
+    --warn-bg:       #FEF3C7;  --warn-fg:   #713F12;
+    --danger-bg:     #FEE2E2;  --danger-fg: #7F1D1D;
+    --info-bg:       #DBEAFE;  --info-fg:   #1E3A8A;
+    --group-box:     #F5F5F5;
+    --accent-soft:   #C25B461A;
+    --slot-bg:       #F3F3F3;
+    --activity-bar:  #ECECEC;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 14px;
+    background: var(--activity-bar);
+    color: var(--fg);
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+  .dim { color: var(--muted-fg); }
+
+  /* ---------------------------------------------------------------- 工作台框架 */
+  .workbench {
+    border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden;
+    display: flex; flex-direction: column;
+    height: 620px;
+    background: var(--bg);
+  }
+  .title-bar {
+    flex: 0 0 auto; height: 36px;
+    display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    background: var(--title-bar);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .logo { width: 20px; height: 20px; border-radius: 4px; background: var(--primary); }
+  .title-slot {
+    height: 26px; display: flex; align-items: center; gap: 6px;
+    padding: 0 14px; border-radius: 4px;
+    background: var(--slot-bg); color: var(--sidebar-fg);
+  }
+  .title-slot b { color: var(--fg); font-weight: 600; }
+  .qo-entry {
+    width: 320px; height: 26px; margin: 0 auto;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 10px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--muted-fg);
+  }
+  .win-ctrl { display: flex; gap: 10px; color: var(--muted-fg); }
+  .win-ctrl span { width: 12px; text-align: center; }
+
+  .middle { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  /* 活动栏 48px：左 4 图标（草稿箱 / 数据库导航 / 资源分析 / 插件）+ 底部设置 */
+  .activity-bar {
+    flex: 0 0 48px; display: flex; flex-direction: column; align-items: center;
+    padding: 4px 0; gap: 2px;
+    background: var(--activity-bar);
+    border-right: 1px solid var(--border);
+  }
+  .act-item {
+    position: relative;
+    width: 44px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--sidebar-fg); cursor: pointer; border: 0; background: none;
+  }
+  .act-item:hover { color: var(--fg); }
+  .act-item.active { color: var(--fg); }
+  /* 激活条：2px，左栏在左（rds-layout skill） */
+  .act-item.active::before {
+    content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+    width: 2px; background: var(--primary); border-radius: 1px;
+  }
+  .act-item svg { width: 19px; height: 19px; }
+  .act-spacer { flex: 1 1 auto; }
+  .act-item .dot {
+    position: absolute; top: 6px; right: 8px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--warn);
+  }
+
+  /* 左 Dock 240px */
+  .dock-left {
+    flex: 0 0 240px; display: flex; flex-direction: column; min-height: 0;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+  }
+  .panel-header {
+    flex: 0 0 auto; height: 36px;
+    display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-header .t { flex: 1 1 auto; font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted-fg); }
+
+  .btn {
+    font: inherit; font-size: 12px; color: var(--fg);
+    background: transparent; border: 1px solid var(--border-strong);
+    border-radius: 3px; padding: 2px 7px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--primary); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+  .btn.danger { color: var(--danger); border-color: var(--danger); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .icon-btn { width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+
+  .search-row { flex: 0 0 auto; padding: 8px 8px 6px; }
+  .search {
+    height: 26px; display: flex; align-items: center; gap: 6px;
+    padding: 0 8px; border: 1px solid var(--border); border-radius: 3px;
+    background: var(--bg); color: var(--muted-fg);
+  }
+  .search input { flex: 1 1 auto; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; font-size: 12px; }
+
+  .segmented { display: flex; gap: 2px; padding: 0 8px 8px; }
+  .segmented button {
+    flex: 1 1 0; font: inherit; font-size: 11px; padding: 3px 0;
+    background: transparent; border: 1px solid transparent; border-radius: 3px;
+    color: var(--sidebar-fg); cursor: pointer;
+  }
+  .segmented button.on { background: var(--sidebar-accent); color: var(--fg); }
+  .segmented button .n { color: var(--muted-fg); }
+
+  .list { flex: 1 1 auto; overflow: auto; padding-bottom: 6px; }
+  .row {
+    position: relative;
+    display: flex; align-items: center; gap: 8px;
+    min-height: 24px; padding: 5px 10px 5px 12px;
+    cursor: pointer;
+  }
+  .row:hover { background: var(--list-hover); }
+  .row.sel { background: var(--list-active); }
+  .row-group {
+    font-size: 11px; color: var(--muted-fg); padding: 6px 10px 2px 12px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .row-group::before { content: ""; width: 2px; height: 10px; background: var(--border-strong); border-radius: 1px; }
+
+  /* 两行式条目（宿主 List 要求同行同高，故这类条目统一 44px） */
+  .plugin-row { min-height: 44px; align-items: flex-start; }
+  .plugin-row .avatar {
+    flex: 0 0 22px; width: 22px; height: 22px; border-radius: 4px;
+    background: var(--sidebar-accent); color: var(--fg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; margin-top: 1px;
+  }
+  .plugin-row .body { flex: 1 1 auto; min-width: 0; }
+  .plugin-row .name { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+  .plugin-row .name .ver { color: var(--muted-fg); font-size: 11px; }
+  .plugin-row .sub { color: var(--muted-fg); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .plugin-row .tail { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-top: 2px; }
+
+  .chip {
+    font-size: 10px; line-height: 16px; padding: 0 5px; border-radius: 3px;
+    border: 1px solid var(--border-strong); color: var(--muted-fg);
+  }
+  .chip.ok      { background: var(--ok-bg);     color: var(--ok-fg);     border-color: transparent; }
+  .chip.warn    { background: var(--warn-bg);   color: var(--warn-fg);   border-color: transparent; }
+  .chip.danger  { background: var(--danger-bg); color: var(--danger-fg); border-color: transparent; }
+  .chip.info    { background: var(--info-bg);   color: var(--info-fg);   border-color: transparent; }
+  .chip.verified::before { content: "✓ "; }
+
+  .warn-line {
+    margin: 2px 10px 6px 42px; padding: 5px 8px;
+    background: var(--warn-bg); color: var(--warn-fg);
+    border-radius: 3px; font-size: 11px; line-height: 1.45;
+  }
+  .warn-line .acts { margin-top: 4px; display: flex; gap: 6px; }
+  .warn-line .btn { color: inherit; border-color: currentColor; font-size: 11px; padding: 1px 6px; }
+
+  .panel-footer {
+    flex: 0 0 auto; padding: 6px 8px; border-top: 1px solid var(--border);
+    display: flex; gap: 6px;
+  }
+  .panel-footer .btn { flex: 1 1 auto; }
+
+  /* 中央区：tab + 详情 */
+  .dock-area { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+  .tab-bar {
+    flex: 0 0 auto; height: 36px; display: flex; align-items: stretch;
+    background: var(--tab-bar); border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 12px; font-size: 12px; color: var(--tab-fg);
+    background: var(--tab-bg); border-right: 1px solid var(--border); cursor: pointer;
+  }
+  .tab.active { background: var(--tab-active-bg); color: var(--fg); }
+  .tab .x { color: var(--muted-fg); }
+  .tab-spacer { flex: 1 1 auto; }
+
+  .detail { flex: 1 1 auto; overflow: auto; padding: 16px 18px; }
+  .detail h2 { margin: 0 0 2px; font-size: 16px; }
+  .detail h3 {
+    margin: 18px 0 8px; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--muted-fg);
+  }
+  .detail-head { display: flex; align-items: flex-start; gap: 12px; }
+  .detail-head .avatar {
+    width: 40px; height: 40px; border-radius: 8px; flex: 0 0 40px;
+    background: var(--sidebar-accent); display: flex; align-items: center; justify-content: center;
+    font-weight: 700;
+  }
+  .detail-head .meta { flex: 1 1 auto; }
+  .detail-head .pub { color: var(--muted-fg); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .detail-head .acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+  .kv { display: grid; grid-template-columns: 108px 1fr; gap: 4px 10px; font-size: 12px; }
+  .kv dt { color: var(--muted-fg); }
+  .kv dd { margin: 0; }
+
+  table.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.grid th, table.grid td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  table.grid th { color: var(--muted-fg); font-weight: 500; font-size: 11px; }
+  table.grid tr:last-child td { border-bottom: 0; }
+  .yes { color: var(--ok); }
+  .no  { color: var(--muted-fg); }
+
+  .card {
+    background: var(--group-box); border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px; margin-top: 8px;
+  }
+  .card .card-title { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 6px; }
+
+  .status-bar {
+    flex: 0 0 auto; min-height: 24px;
+    display: flex; align-items: center; gap: 14px; padding: 0 10px;
+    background: var(--primary); color: var(--primary-fg); font-size: 11px;
+  }
+  .status-bar .sp { flex: 1 1 auto; }
+  .status-bar .item { display: flex; align-items: center; gap: 5px; cursor: default; }
+  .status-bar .item.click { cursor: pointer; text-decoration: underline dotted; }
+  .status-bar .sep { opacity: .45; }
+
+  /* 弹层：从磁盘安装 / 授权对话框 */
+  .overlay {
+    position: fixed; inset: 0; background: #00000080;
+    display: none; align-items: center; justify-content: center; z-index: 20;
+  }
+  .overlay.show { display: flex; }
+  .dialog {
+    width: 560px; max-width: calc(100vw - 40px);
+    background: var(--popover); border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 12px 40px #00000066;
+    overflow: hidden;
+  }
+  .dialog header { padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .dialog .d-body { padding: 14px; max-height: 420px; overflow: auto; }
+  .dialog footer { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+  .perm-list { margin: 8px 0 0; padding: 0; list-style: none; }
+  .perm-list li { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .perm-list li:last-child { border-bottom: 0; }
+  .perm-list .code { flex: 0 0 190px; color: var(--primary); }
+  .perm-list .why { color: var(--muted-fg); }
+
+  .file-path {
+    display: flex; gap: 8px; align-items: center;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; padding: 6px 8px; font-size: 12px; margin-bottom: 10px;
+  }
+
+  /* toast */
+  .toasts { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
+  .toast {
+    background: var(--popover); border: 1px solid var(--border); border-left: 3px solid var(--primary);
+    border-radius: 4px; padding: 8px 12px; font-size: 12px; max-width: 380px;
+    box-shadow: 0 8px 24px #00000055;
+  }
+  .toast.warn { border-left-color: var(--warn); }
+  .toast.danger { border-left-color: var(--danger); }
+
+  /* 说明区（本稿演示了什么） */
+  details.notes {
+    border: 1px solid var(--border); border-radius: 4px; background: var(--sidebar);
+  }
+  details.notes > summary { cursor: pointer; padding: 8px 12px; font-weight: 600; font-size: 12.5px; background: var(--sidebar-accent); }
+  details.notes > summary .hint { font-weight: 400; color: var(--muted-fg); margin-left: 8px; }
+  .notes-body { padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .notes-body { grid-template-columns: 1fr; } }
+  .notes-body h4 { margin: 0 0 6px; font-size: 12px; color: var(--muted-fg); text-transform: uppercase; letter-spacing: .04em; }
+  .notes-body ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+  .notes-body code { font-family: Consolas, monospace; background: var(--bg); padding: 0 3px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="workbench">
+  <!-- ===== 标题栏 36px ===== -->
+  <div class="title-bar">
+    <div class="logo"></div>
+    <div class="title-slot"><span class="dim">项目</span> <b>零售数据仓库</b></div>
+    <div class="qo-entry mono">🔍 快速打开…（Ctrl+P）</div>
+    <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
+  </div>
+
+  <div class="middle">
+    <!-- ===== 左活动栏 48px ===== -->
+    <div class="activity-bar">
+      <button class="act-item" title="草稿箱">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="4" width="11" height="9" rx="1.5"/><path d="M2.5 7h11M6 4V2.5h4V4"/></svg>
+      </button>
+      <button class="act-item" title="数据库导航">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><ellipse cx="8" cy="4" rx="5.2" ry="2"/><path d="M2.8 4v8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V4"/><path d="M2.8 8c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2"/></svg>
+      </button>
+      <button class="act-item" title="资源分析">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 13V6.2L8 3l5 3.2V13"/><path d="M6 13v-4h4v4"/></svg>
+      </button>
+      <button class="act-item active" title="插件">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M6 2v3M10 2v3"/><path d="M4 5h8v3.2a4 4 0 0 1-8 0V5Z"/><path d="M8 12.2V14.5"/></svg>
+        <span class="dot" title="有 1 个待授予的权限"></span>
+      </button>
+      <span class="act-spacer"></span>
+      <button class="act-item" title="设置">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="11.5" r="1.4" fill="currentColor" stroke="none"/></svg>
+      </button>
+    </div>
+
+    <!-- ===== 左 Dock 240px：插件面板（宿主渲染） ===== -->
+    <div class="dock-left">
+      <div class="panel-header">
+        <span class="t">插件</span>
+        <button class="btn icon-btn" id="btn-refresh" title="重新扫描扩展目录">⟳</button>
+        <button class="btn icon-btn" title="更多：检查更新 / 显示已弃用 / 打开扩展目录">⋯</button>
+      </div>
+
+      <div class="search-row">
+        <label class="search">
+          <span>🔍</span>
+          <input id="q" placeholder="搜索已安装 / 市场（名称、发布者、命令 id）">
+        </label>
+      </div>
+
+      <div class="segmented" id="seg">
+        <button data-tab="installed" class="on">已安装 <span class="n" id="n-installed"></span></button>
+        <button data-tab="updates">待更新 <span class="n" id="n-updates"></span></button>
+        <button data-tab="market">市场</button>
+      </div>
+
+      <div class="list" id="list"></div>
+
+      <div class="panel-footer">
+        <button class="btn" id="btn-install-disk">从磁盘安装…</button>
+        <button class="btn" title="打开 &lt;RDS_HOME&gt;/plugins（paths::plugins_dir 待补）">目录</button>
+      </div>
+    </div>
+
+    <!-- ===== 中央：详情 tab ===== -->
+    <div class="dock-area">
+      <div class="tab-bar">
+        <div class="tab active" id="tab-title">插件 · 未选择</div>
+        <div class="tab-spacer"></div>
+      </div>
+      <div class="detail" id="detail"></div>
+    </div>
+  </div>
+
+  <!-- ===== 状态栏（primary + primary_foreground） ===== -->
+  <div class="status-bar">
+    <span class="item">« 完全隐藏</span>
+    <span class="sep">|</span>
+    <span class="item">零售数据仓库 / 生产 PG</span>
+    <span class="sp"></span>
+    <span class="item" id="st-host">扩展宿主：运行中 · 12.4 MB · 2 个插件已激活</span>
+    <span class="sep">|</span>
+    <span class="item">UTF-8</span>
+  </div>
+</div>
+
+<!-- ===== 弹层：授权 / 从磁盘安装 ===== -->
+<div class="overlay" id="overlay">
+  <div class="dialog">
+    <header id="dlg-title">标题</header>
+    <div class="d-body" id="dlg-body"></div>
+    <footer>
+      <button class="btn" id="dlg-cancel">取消</button>
+      <button class="btn primary" id="dlg-ok">确定</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<details class="notes" open>
+  <summary>本稿演示了什么 <span class="hint">（点击上面这些地方；下面写的是每条对应哪条设计约束）</span></summary>
+  <div class="notes-body">
+    <div>
+      <h4>入口与生命周期</h4>
+      <ul>
+        <li>活动栏第 4 个图标（插件）→ 左 Dock 面板；图标上的黄点是「有待授予的权限」</li>
+        <li>列表三档：<b>已安装 / 待更新 / 市场</b>；条目是两行式（宿主 <code>List</code> 要求同行同高，故统一 44px）</li>
+        <li><b>禁用</b>一条 → 若它被当前项目引用，面板出现「被项目引用」警告行（<code>plugin-dev-plan §4.8</code> 对账；不对用户静默）</li>
+        <li><b>卸载</b>同样触发对账：插件没了，项目引用还在 → 占位与「移除引用」两个出路</li>
+        <li>插件根目录是 <code>&lt;RDS_HOME&gt;/plugins/</code>（<b>待补</b> <code>paths::plugins_dir</code>）；
+            注意仓里已有的 <code>extensions_dir()</code> 是 <b>DuckDB 扩展</b>的目录，两者不要混用</li>
+      </ul>
+    </div>
+    <div>
+      <h4>权限与信任（双轨，语义不通用）</h4>
+      <ul>
+        <li>扩展（JS）轨：<code>rds.metadata.read</code> / <code>rds.editor.completion</code> / <code>webview.export</code> / <code>net.fetch</code> …</li>
+        <li>驱动（native）轨：<code>spawn.child_process</code> / <code>net.connect</code> / <code>fs.read_plugin_data</code> / <code>env.inherit</code></li>
+        <li>两轨<b>不互相折算</b>：能读元数据不等于能开子进程（<code>§4.6.1</code>）</li>
+        <li>签名：Ed25519 + 逐资源 SHA-256；未验证发布者带显式标签，不靠颜色区分</li>
+        <li>点「授予」→ 状态从「待授权」变「已启用」，活动栏黄点消失</li>
+      </ul>
+    </div>
+    <div>
+      <h4>崩了会怎样</h4>
+      <ul>
+        <li>状态栏右侧「扩展宿主」是<b>可点</b>的：点一下模拟宿主进程崩溃</li>
+        <li>崩溃时：插件贡献的面板全部变灰 + 横幅提示 + 3 秒后自动重启；<b>宿主自己的界面全程可用</b></li>
+        <li>这正是 D1「独立扩展宿主进程」要买的东西（崩溃隔离），不是架构洁癖</li>
+      </ul>
+    </div>
+    <div>
+      <h4>本稿刻意没画的</h4>
+      <ul>
+        <li>评分 / 下载量 / 排行榜 —— 市场形态未定（本轮不做在线市场，只做「目录 + 本地安装 + 签名校验」）</li>
+        <li>「一键更新全部」—— 更新策略待定（<code>§11 Q9</code> 与更新策略都还没拍板）</li>
+        <li>任何插件自己画的像素 —— 管理界面必须由宿主渲染，否则插件能伪装成宿主</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+
+/* ============================================================================
+   数据：三件插件（覆盖「扩展轨」与「驱动轨」两种，以及三种状态）
+   ----------------------------------------------------------------------------
+   字段名刻意贴近设计文档：capabilities / nativeCapabilities 两轨分开，
+   贡献点用 VS Code 的 contribute 词汇（commands / views / configuration / menus / drivers）。
+   ========================================================================== */
+const PLUGINS = [
+  {
+    id: "sql-dialect",
+    name: "SQL 方言增强",
+    publisher: "rds-labs",
+    publisherVerified: true,
+    avatar: "SQL",
+    version: "0.4.1",
+    latest: "0.4.2",
+    kind: "extension",              // extension = 走扩展宿主（JS）；driver = 走 sidecar 进程
+    enabled: true,
+    installed: true,
+    signed: "ed25519 · 逐资源 SHA-256 校验通过",
+    desc: "为 12 种方言补全关键字与函数签名，并对非 ANSI 语法给出提示。",
+    contributes: {
+      commands: ["rdsDialect.format", "rdsDialect.explain", "rdsDialect.switchDialect"],
+      views: [],
+      configuration: ["rdsDialect.defaultDialect", "rdsDialect.checkOnSave"],
+      menus: ["editor/title", "editor/context"],
+      drivers: [],
+    },
+    capabilities: [
+      { code: "rds.metadata.read", granted: true,  why: "读取当前连接的表/列名用于补全" },
+      { code: "rds.editor.completion", granted: true, why: "向编辑器提供补全项" },
+      { code: "rds.editor.diagnostics", granted: true, why: "对非 ANSI 语法报提示" },
+      { code: "webview.export", granted: false, why: "把「方言对照表」导出为图片（可选功能）" },
+    ],
+    nativeCapabilities: [],
+    runtime: { activatedBy: "onCommand:rdsDialect.format", lastActivation: "12 分钟前", mem: "6.1 MB" },
+  },
+  {
+    id: "table-board",
+    name: "表大小看板",
+    publisher: "community / zhangwei",
+    publisherVerified: false,
+    avatar: "TB",
+    version: "1.0.0",
+    latest: "1.0.0",
+    kind: "extension",
+    enabled: false,                  // 被禁用，但项目仍引用它 → 触发对账
+    installed: true,
+    referenced: true,                // 本项目引用了它贡献的面板（卸载后仍要可见，否则对账没地方显示）
+    signed: "ed25519 · 校验通过（发布者未验证）",
+    desc: "把库里最大的 N 张表列成一个面板（宿主渲染），行数变化时提示。",
+    contributes: {
+      commands: ["tableBoard.refresh", "tableBoard.copyCreate"],
+      views: ["tableBoard.explorer"],
+      configuration: ["tableBoard.topN"],
+      menus: ["nav/item/context"],
+      drivers: [],
+    },
+    capabilities: [
+      { code: "rds.metadata.read", granted: true, why: "读取表与行数估计" },
+    ],
+    nativeCapabilities: [],
+    runtime: { activatedBy: "onView:tableBoard.explorer", lastActivation: "3 天前", mem: "—" },
+  },
+  {
+    id: "oracle-jdbc-bridge",
+    name: "Oracle JDBC 桥",
+    publisher: "rds-verified",
+    publisherVerified: true,
+    avatar: "JD",
+    version: "1.2.0",
+    latest: "1.2.0",
+    kind: "driver",                 // native sidecar：独立进程，不经扩展宿主
+    enabled: true,
+    installed: true,
+    signed: "ed25519 · 逐资源 SHA-256 校验通过",
+    desc: "用自带 JRE 21 的 JDBC 子进程连接 Oracle；结果集以 Arrow IPC 回传，不经过 JSON。",
+    contributes: {
+      commands: [],
+      views: [],
+      configuration: ["oracleJdbc.jrePath"],
+      menus: [],
+      drivers: ["oracle-jdbc"],
+    },
+    capabilities: [],
+    nativeCapabilities: [
+      { code: "spawn.child_process", granted: true, why: "启动 JDBC 桥进程（自带 JRE）" },
+      { code: "net.connect", granted: true, why: "连接数据库主机（仅清单声明的端口段）" },
+      { code: "fs.read_plugin_data", granted: true, why: "读取插件数据目录（JDBC 驱动 jar 缓存）" },
+      { code: "env.inherit", granted: false, why: "继承宿主环境变量（默认关闭，仅 TNS_ADMIN 等白名单）" },
+    ],
+    runtime: { activatedBy: "onConnection:oracle", lastActivation: "运行中 2 小时 14 分", mem: "184 MB（子进程）" },
+  },
+];
+
+/* 市场（本轮范围：目录 + 本地安装；不做在线商店） */
+const MARKET = [
+  { id: "csv-quick-import", name: "CSV 快速导入", publisher: "rds-labs", publisherVerified: true, avatar: "CS",
+    desc: "把 CSV 直接灌进 DuckDB 临时表并生成 SELECT。", caps: ["rds.metadata.read", "rds.duckdb.compute"], needsReview: true },
+  { id: "slack-notify", name: "告警到 Slack", publisher: "community / li", publisherVerified: false, avatar: "SL",
+    desc: "查询失败时发消息到 Slack（需要出网权限）。", caps: ["net.fetch", "rds.metadata.read"], needsReview: true },
+];
+
+const state = {
+  tab: "installed",
+  selected: "sql-dialect",
+  q: "",
+  host: "running",     // running | restarting
+};
+
+/* ============================================================================
+   渲染
+   ========================================================================== */
+const $ = (id) => document.getElementById(id);
+
+function visiblePlugins() {
+  const q = state.q.trim().toLowerCase();
+  // 关键：**没装但被项目引用的**也必须在列表里出现 —— 否则对账提示无处可去
+  let list = PLUGINS.filter(p => p.installed || p.referenced);
+  if (state.tab === "updates") list = list.filter(p => p.installed && p.version !== p.latest);
+  if (q) list = list.filter(p => (p.name + p.id + p.publisher).toLowerCase().includes(q));
+  return list;
+}
+
+function renderList() {
+  const el = $("list");
+  el.innerHTML = "";
+  $("n-installed").textContent = String(PLUGINS.filter(p => p.installed).length);
+  $("n-updates").textContent = String(PLUGINS.filter(p => p.installed && p.version !== p.latest).length);
+
+  if (state.tab === "market") {
+    const g = document.createElement("div");
+    g.className = "row-group";
+    g.textContent = "本轮市场 = 目录 + 本地安装 + 签名校验（不做在线商店）";
+    el.appendChild(g);
+    for (const m of MARKET) el.appendChild(marketRow(m));
+    return;
+  }
+
+  const list = visiblePlugins();
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "row dim";
+    empty.style.padding = "18px 12px";
+    empty.textContent = state.tab === "updates" ? "没有可更新的插件" : "没有匹配的插件";
+    el.appendChild(empty);
+    return;
+  }
+
+  const groupName = state.tab === "updates" ? "待更新" : "已安装";
+  const installed = list.filter(p => p.installed);
+  const missing = list.filter(p => !p.installed);
+
+  if (installed.length) {
+    const g = document.createElement("div");
+    g.className = "row-group";
+    g.textContent = groupName;
+    el.appendChild(g);
+    for (const p of installed) el.appendChild(pluginRow(p));
+    for (const p of installed) {
+      // 对账：被禁用但项目仍引用 → 在条目下方直接说明，并给出两个出路
+      if (!p.enabled && p.referenced) {
+        const w = document.createElement("div");
+        w.className = "warn-line";
+        w.innerHTML = `本项目引用了 <b>${p.name}</b> 贡献的面板，但它现在是<b>禁用</b>状态。`
+          + `<div class="acts"><button class="btn" data-enable="${p.id}">重新启用</button>`
+          + `<button class="btn" data-unref="${p.id}">从项目移除引用</button></div>`;
+        el.appendChild(w);
+      }
+    }
+  }
+
+  // 没装但仍被引用：单独一组，避免它从界面上消失（消失 = 用户以为问题不存在了）
+  if (missing.length) {
+    const g2 = document.createElement("div");
+    g2.className = "row-group";
+    g2.textContent = "项目引用 · 未安装";
+    el.appendChild(g2);
+    for (const p of missing) {
+      el.appendChild(pluginRow(p));
+      const w = document.createElement("div");
+      w.className = "warn-line";
+      w.innerHTML = `已卸载，但<b>本项目仍引用它</b>（贡献点会被替换为占位面板）。`
+        + `<div class="acts"><button class="btn" data-reinstall="${p.id}">重新安装</button>`
+        + `<button class="btn" data-unref="${p.id}">从项目移除引用</button></div>`;
+      el.appendChild(w);
+    }
+  }
+}
+
+function pluginRow(p) {
+  const row = document.createElement("div");
+  row.className = "row plugin-row" + (state.selected === p.id ? " sel" : "");
+  row.dataset.id = p.id;
+
+  const states = [];
+  if (!p.installed) states.push(`<span class="chip danger">已卸载</span>`);
+  else if (!p.enabled) states.push(`<span class="chip warn">已禁用</span>`);
+  else if (p.capabilities.some(c => !c.granted)) states.push(`<span class="chip warn">待授权</span>`);
+  else states.push(`<span class="chip ok">已启用</span>`);
+  if (p.version !== p.latest) states.push(`<span class="chip info">可更新 ${p.latest}</span>`);
+  if (p.kind === "driver") states.push(`<span class="chip">native 驱动</span>`);
+  if (!p.publisherVerified) states.push(`<span class="chip">发布者未验证</span>`);
+
+  row.innerHTML = `
+    <div class="avatar">${p.avatar}</div>
+    <div class="body">
+      <div class="name"><b>${p.name}</b><span class="ver">${p.version}</span></div>
+      <div class="sub">${p.publisher}${p.kind === "driver" ? " · 独立进程（sidecar）" : ""}</div>
+      <div class="tail">${states.join("")}</div>
+    </div>
+    <div class="tail">
+      <button class="btn" data-toggle="${p.id}">${p.enabled ? "禁用" : "启用"}</button>
+    </div>`;
+  return row;
+}
+
+function marketRow(m) {
+  const row = document.createElement("div");
+  row.className = "row plugin-row";
+  row.innerHTML = `
+    <div class="avatar">${m.avatar}</div>
+    <div class="body">
+      <div class="name"><b>${m.name}</b></div>
+      <div class="sub">${m.publisher}</div>
+      <div class="tail">${m.publisherVerified ? '<span class="chip verified">已验证</span>' : '<span class="chip">发布者未验证</span>'}
+        <span class="chip">需要 ${m.caps.length} 项能力</span></div>
+    </div>
+    <div class="tail"><button class="btn primary" data-install="${m.id}">安装…</button></div>`;
+  return row;
+}
+
+function renderDetail() {
+  const p = PLUGINS.find(x => x.id === state.selected);
+  $("tab-title").textContent = p ? `插件 · ${p.name}` : "插件 · 未选择";
+  const el = $("detail");
+  if (!p) { el.innerHTML = `<p class="dim">从左边选一个插件。</p>`; return; }
+
+  const pending = p.capabilities.filter(c => !c.granted);
+  const capRows = p.capabilities.map(c => `
+    <tr><td class="mono">${c.code}</td>
+        <td>${c.granted ? '<span class="yes">已授予</span>' : '<b style="color:var(--warn)">待授予</b>'}</td>
+        <td class="dim">${c.why}</td>
+        <td style="text-align:right">${c.granted ? '<button class="btn" data-revoke="' + c.code + '">撤销</button>'
+                                                   : '<button class="btn primary" data-grant="' + c.code + '">授予</button>'}</td></tr>`).join("");
+  const natRows = p.nativeCapabilities.map(c => `
+    <tr><td class="mono">${c.code}</td>
+        <td>${c.granted ? '<span class="yes">已授予</span>' : '<span class="no">未授予</span>'}</td>
+        <td class="dim">${c.why}</td>
+        <td style="text-align:right">${c.granted ? '<button class="btn" data-nrevoke="' + c.code + '">关闭</button>'
+                                                  : '<button class="btn" data-ngrant="' + c.code + '">允许</button>'}</td></tr>`).join("");
+
+  el.innerHTML = `
+    <div class="detail-head">
+      <div class="avatar">${p.avatar}</div>
+      <div class="meta">
+        <h2>${p.name}</h2>
+        <div class="pub">
+          ${p.publisherVerified ? '<span class="chip verified">已验证发布者</span>' : '<span class="chip">发布者未验证</span>'}
+          <span>${p.publisher}</span><span class="dim">·</span>
+          <span class="mono">${p.id}</span>
+        </div>
+      </div>
+      <div class="acts">
+        <button class="btn primary" data-toggle="${p.id}">${p.enabled ? "禁用" : "启用"}</button>
+        ${p.version !== p.latest ? `<button class="btn" data-update="${p.id}">更新到 ${p.latest}</button>` : ""}
+        <button class="btn" data-settings="${p.id}">设置</button>
+        <button class="btn danger" data-uninstall="${p.id}">卸载</button>
+      </div>
+    </div>
+
+    <h3>基本信息</h3>
+    <dl class="kv">
+      <dt>版本</dt><dd>${p.version}${p.version !== p.latest ? ` <span class="dim">（最新 ${p.latest}）</span>` : " <span class=\"dim\">（最新）</span>"}</dd>
+      <dt>类型</dt><dd>${p.kind === "driver" ? "驱动插件 —— 独立进程（native sidecar），<b>不经扩展宿主</b>" : "扩展插件 —— 跑在扩展宿主进程里（内置 QuickJS）"}</dd>
+      <dt>签名</dt><dd>${p.signed}</dd>
+      <dt>安装位置</dt><dd class="mono">&lt;RDS_HOME&gt;/plugins/${p.id}</dd>
+      <dt>激活时机</dt><dd class="mono">${p.runtime.activatedBy}</dd>
+    </dl>
+
+    <h3>贡献点</h3>
+    <table class="grid">
+      <tr><th>类型</th><th>内容</th></tr>
+      ${["commands", "views", "configuration", "menus", "drivers"].map(k => {
+        const vals = p.contributes[k];
+        if (!vals.length) return "";
+        return `<tr><td class="mono">${k}</td><td class="mono dim">${vals.join(" · ")}</td></tr>`;
+      }).join("")}
+    </table>
+
+    <h3>权限 · 扩展轨（能力可精确到方法）</h3>
+    ${p.capabilities.length ? `<table class="grid">
+      <tr><th>能力</th><th>状态</th><th>用途</th><th></th></tr>${capRows}</table>`
+      : `<p class="dim">该插件不申请扩展能力（它是驱动插件，走 native 轨）。</p>`}
+
+    <h3>权限 · 驱动轨（native：进程 / 网络 / 文件 / 环境）</h3>
+    ${p.nativeCapabilities.length ? `<table class="grid">
+      <tr><th>能力</th><th>状态</th><th>用途</th><th></th></tr>${natRows}</table>`
+      : `<p class="dim">该插件不申请 native 能力。</p>`}
+    <p class="dim" style="font-size:11px;margin:6px 0 0">
+      两轨不互相折算：能读元数据 ≠ 能开子进程；native 轨的授权发生在<b>安装时</b>并逐项明示。
+    </p>
+
+    <h3>项目引用</h3>
+    <div class="card">
+      <div class="card-title">零售数据仓库</div>
+      <div style="font-size:12px">
+        ${p.id === "table-board"
+          ? `<b style="color:var(--warn)">本项目引用了它贡献的面板，但它当前未启用</b> —— 打开该面板会显示占位（「项目引用了 X，未安装/未启用」），不会静默什么都不做。`
+          : (p.contributes.views.length || p.contributes.drivers.length
+              ? `本项目引用了：${[].concat(p.contributes.views, p.contributes.drivers).join(" · ")}`
+              : "本项目未引用其贡献点（它是全局启用）。")}
+      </div>
+    </div>
+
+    <h3>运行状态</h3>
+    <dl class="kv">
+      <dt>最近激活</dt><dd>${p.runtime.lastActivation}</dd>
+      <dt>内存</dt><dd>${p.runtime.mem}</dd>
+      <dt>宿主</dt><dd>${p.kind === "driver" ? "自身子进程（由驱动注册面管理）" : "扩展宿主进程"}</dd>
+      <dt>日志</dt><dd><button class="btn" data-log="${p.id}">查看插件日志…</button></dd>
+    </dl>
+
+    ${pending.length ? `<div class="card" style="border-color:var(--warn)">
+      <div class="card-title" style="color:var(--warn)">有 ${pending.length} 项能力等待授予</div>
+      <div style="font-size:12px">未授予的能力对应功能会<b>以可解释的失败</b>呈现（错误码 <code class="mono">-32006 capability_denied</code>），而不是静默失效。</div>
+    </div>` : ""}
+  `;
+}
+
+function renderStatus() {
+  const running = state.host === "running";
+  $("st-host").textContent = running
+    ? "扩展宿主：运行中 · 12.4 MB · 2 个插件已激活"
+    : "扩展宿主：重启中…（插件全部不可用，宿主 UI 不受影响）";
+  $("st-host").className = "item click";
+  $("st-host").title = running ? "点一下模拟扩展宿主崩溃" : "点一下立刻完成重启";
+}
+
+function render() { renderList(); renderDetail(); renderStatus(); }
+
+/* ============================================================================
+   交互
+   ========================================================================== */
+
+document.addEventListener("click", (ev) => {
+  const t = ev.target.closest("[data-id],[data-toggle],[data-enable],[data-install],[data-update],[data-uninstall],[data-reinstall],[data-unref],[data-settings],[data-log],[data-grant],[data-revoke],[data-ngrant],[data-nrevoke]");
+  if (!t) return;
+
+  const openPlugin = (id) => { state.selected = id; render(); };
+
+  if (t.dataset.toggle) { togglePlugin(t.dataset.toggle); return; }
+  if (t.dataset.enable) { togglePlugin(t.dataset.enable, true); return; }
+  if (t.dataset.unref)  { toast(`已从项目移除对「${nameOf(t.dataset.unref)}」的引用（写入 project_resources，不再显示占位）`); render(); return; }
+  if (t.dataset.reinstall) { const p = PLUGINS.find(x => x.id === t.dataset.reinstall); p.installed = true; toast(`「${p.name}」已重新安装并校验签名`); render(); return; }
+  if (t.dataset.update) { updatePlugin(t.dataset.update); return; }
+  if (t.dataset.uninstall) { uninstallPlugin(t.dataset.uninstall); return; }
+  if (t.dataset.settings) { toast(`打开设置页并定位到「插件 → ${nameOf(t.dataset.settings)}」（settings 登记的贡献项）`); return; }
+  if (t.dataset.log) { toast(`打开日志对话框，过滤 target = plugin:${t.dataset.log}`); return; }
+  if (t.dataset.install) { showInstallDialog(t.dataset.install); return; }
+
+  if (t.dataset.grant)   { setCap(t.dataset.grant, true);   return; }
+  if (t.dataset.revoke)  { setCap(t.dataset.revoke, false);  return; }
+  if (t.dataset.ngrant)  { setNatCap(t.dataset.ngrant, true);  return; }
+  if (t.dataset.nrevoke) { setNatCap(t.dataset.nrevoke, false); return; }
+
+  if (t.dataset.id) openPlugin(t.dataset.id);
+});
+
+function nameOf(id) { const p = PLUGINS.find(x => x.id === id); return p ? p.name : id; }
+
+function togglePlugin(id, onlyEnable) {
+  const p = PLUGINS.find(x => x.id === id);
+  p.enabled = onlyEnable ? true : !p.enabled;
+  // 启用前若还有未授予的能力 → 让用户先看到（不阻断，但要说清）
+  const pending = p.capabilities.filter(c => !c.granted).length;
+  if (p.enabled && pending) toast(`「${p.name}」已启用，但仍有 ${pending} 项能力未授予 → 相关功能会返回 -32006`, "warn");
+  else toast(`「${p.name}」已${p.enabled ? "启用" : "禁用"}${p.enabled ? "" : "（贡献点从宿主 UI 上撤下；被项目引用的部分显示占位）"}`);
+  render();
+}
+
+function setCap(code, on) {
+  const p = PLUGINS.find(x => x.id === state.selected);
+  const c = p.capabilities.find(x => x.code === code);
+  c.granted = on;
+  toast(`${on ? "已授予" : "已撤销"}能力 ${code}`);
+  render();
+}
+
+function setNatCap(code, on) {
+  const p = PLUGINS.find(x => x.id === state.selected);
+  const c = p.nativeCapabilities.find(x => x.code === code);
+  c.granted = on;
+  toast(`${on ? "已允许" : "已关闭"} native 能力 ${code}`
+    + (on ? "" : "（下次该能力被用到时会以 -32006 失败，并提示原因）"));
+  render();
+}
+
+function updatePlugin(id) {
+  const p = PLUGINS.find(x => x.id === id);
+  showDialog(`更新 ${p.name} ${p.version} → ${p.latest}`, `
+    <p style="font-size:12px;margin:0 0 8px">更新会重新校验签名与逐资源 SHA-256；权限<b>不会</b>被静默扩大 —— 若新版申请了新的能力，会单独列出等你确认。</p>
+    <div class="card"><div class="card-title">本次更新</div>
+      <div style="font-size:12px" class="dim">签名校验通过 · 无新增能力 · 需重启扩展宿主</div></div>
+  `, () => { p.version = p.latest; toast(`「${p.name}」已更新到 ${p.latest}`); render(); });
+}
+
+function uninstallPlugin(id) {
+  const p = PLUGINS.find(x => x.id === id);
+  const referenced = p.id === "table-board";
+  showDialog(`卸载 ${p.name}`, `
+    <p style="font-size:12px;margin:0 0 8px">卸载会移除插件本体与它的数据目录（可保留数据，见设置）。</p>
+    ${referenced ? `<div class="warn-line" style="margin:0">本项目仍引用它贡献的面板 —— 卸载后该面板会变成占位，直到你重新安装或移除引用。</div>` : ""}
+  `, () => { p.installed = false; p.enabled = false; toast(`「${p.name}」已卸载`); render(); }, true);
+}
+
+/* ---- 从磁盘安装（签名校验流程的可见化） ---- */
+function showInstallDialog(marketId) {
+  const p = MARKET.find(m => m.id === marketId);
+  const caps = p.caps.map(c => `<li><span class="code mono">${c.split(".").slice(1).join(".")}</span>
+      <span class="why">${c === "net.fetch" ? "联网抓取（可执行的 SSRF 面，需谨慎）" : c === "rds.duckdb.compute" ? "使用宿主的 DuckDB 做计算" : "读取连接的表/列元数据"}</span></li>`).join("");
+  showDialog(`安装 ${p.name}`, `
+    <div class="file-path mono"><span class="dim">来源</span> 本地目录 ~/Downloads/${marketId}/ <span class="dim">· 清单 plugin.toml 已找到</span></div>
+    <dl class="kv">
+      <dt>发布者</dt><dd>${p.publisher} ${p.publisherVerified ? '<span class="chip verified">已验证</span>' : '<span class="chip">未验证</span>'}</dd>
+      <dt>签名</dt><dd>${p.publisherVerified ? "Ed25519 校验通过，逐资源 SHA-256 一致" : '<b style="color:var(--warn)">发布者未验证</b>：签名自洽，但无法证明身份'}</dd>
+      <dt>引擎要求</dt><dd class="mono">engines.rds = ">=0.1 &lt;0.2"（满足）</dd>
+    </dl>
+    <h3 style="margin:14px 0 4px;font-size:12px;color:var(--muted-fg)">它申请的能力</h3>
+    <ul class="perm-list">${caps}</ul>
+    <p class="dim" style="font-size:11px;margin:10px 0 0">安装即授予上述能力；之后可在插件详情里逐项撤销。撤销后相关功能以 <code class="mono">-32006</code> 失败。</p>
+  `, () => toast(`「${p.name}」已安装并从磁盘加载（扩展宿主已热重载）`), true);
+}
+
+/* ---- 通用弹层 ---- */
+let dlgOk = null;
+function showDialog(title, body, onOk, danger) {
+  $("dlg-title").textContent = title;
+  $("dlg-body").innerHTML = body;
+  $("dlg-ok").textContent = danger ? "确定" : "继续";
+  dlgOk = onOk;
+  $("overlay").classList.add("show");
+}
+$("dlg-cancel").addEventListener("click", () => $("overlay").classList.remove("show"));
+$("dlg-ok").addEventListener("click", () => {
+  $("overlay").classList.remove("show");
+  if (dlgOk) dlgOk();
+});
+
+/* ---- 市场 tab 里也支持「从磁盘安装」 ---- */
+$("btn-install-disk").addEventListener("click", () => {
+  state.tab = "market";
+  render();
+  showDialog("从磁盘安装插件", `
+    <p style="font-size:12px;margin:0 0 10px">选一个目录或 <code class="mono">.rdsx</code> 包。宿主读 <code class="mono">plugin.toml</code>，
+      校验 Ed25519 与逐资源 SHA-256，再列出它申请的权限。</p>
+    <div class="file-path mono"><span class="dim">已选择</span> ~/Downloads/csv-quick-import/</div>
+    <p class="dim" style="font-size:11px">若清单缺 <code>engines.rds</code> 或版本不满足 → 安装期就拒绝（不是加载时才报错）。</p>
+  `, () => showInstallDialog("csv-quick-import"));
+});
+
+$("seg").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-tab]");
+  if (!b) return;
+  state.tab = b.dataset.tab;
+  [...$("seg").children].forEach(x => x.classList.toggle("on", x === b));
+  renderList();
+});
+
+$("q").addEventListener("input", (ev) => { state.q = ev.target.value; renderList(); });
+$("btn-refresh").addEventListener("click", () => toast("已重新扫描 <RDS_HOME>/plugins（清单重读，未变的插件不重新加载）"));
+
+/* ---- 扩展宿主崩溃 / 重启（崩溃隔离的形状） ---- */
+$("st-host").addEventListener("click", () => {
+  if (state.host === "running") {
+    state.host = "restarting";
+    renderStatus();
+    toast("扩展宿主已崩溃：插件贡献的面板/命令全部不可用；宿主自身的界面与已打开的数据不受影响", "danger");
+    document.querySelectorAll(".plugin-row").forEach(r => r.style.opacity = ".45");
+    setTimeout(() => {
+      state.host = "running";
+      document.querySelectorAll(".plugin-row").forEach(r => r.style.opacity = "");
+      renderStatus();
+      toast("扩展宿主已自动重启（第 1 次），2 个插件重新激活");
+    }, 3000);
+  }
+});
+
+/* ---- toast ---- */
+function toast(text, tone) {
+  const el = document.createElement("div");
+  el.className = "toast" + (tone ? " " + tone : "");
+  el.textContent = text;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 5200);
+}
+
+render();
+</script>
+</body>
+</html>
