@@ -355,6 +355,35 @@ fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind) -> Vec<NodeIn
     nodes
 }
 
+/// 触发器结果集 → 对象列表（第 2 列是所属表，进 `parent_name`）。
+fn names_to_trigger_nodes(result: &QueryResult) -> Vec<NodeInfo> {
+    use arrow::array::{Array, StringArray};
+    let mut nodes: Vec<NodeInfo> = Vec::new();
+    for row_idx in 0..result.total_rows() {
+        let Some(batch) = result.batches.first() else {
+            break;
+        };
+        if row_idx >= batch.num_rows() {
+            continue;
+        }
+        let Some(name_arr) = batch.column(0).as_any().downcast_ref::<StringArray>() else {
+            continue;
+        };
+        let name = name_arr.value(row_idx);
+        if name.is_empty() {
+            continue;
+        }
+        let mut node = NodeInfo::new(name.to_string(), SchemaObjectKind::Trigger);
+        if let Some(table_arr) = batch.column(1).as_any().downcast_ref::<StringArray>() {
+            if !table_arr.is_null(row_idx) {
+                node = node.with_parent(table_arr.value(row_idx));
+            }
+        }
+        nodes.push(node);
+    }
+    nodes
+}
+
 // ============================================================================
 // Database trait 实现
 // ============================================================================
@@ -612,6 +641,24 @@ impl Database for PostgresNativeDatabase {
             .query_with_params(sql, vec![Value::Text(schema_name.to_string())])
             .await?;
         Ok(rows_to_node_info(&result, SchemaObjectKind::Function))
+    }
+
+    async fn list_sequences(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        self.get_sequences(catalog, schema.unwrap_or("public"))
+            .await
+    }
+
+    async fn list_triggers(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<NodeInfo>, CoreError> {
+        self.get_triggers(catalog, schema.unwrap_or("public"))
+            .await
     }
 
     async fn get_routine_source(
@@ -926,6 +973,29 @@ impl MetadataBrowser for PostgresNativeDatabase {
     ) -> Result<Vec<ConstraintDetail>, CoreError> {
         self.list_constraints(catalog, Some(schema), table).await
     }
+
+    /// 序列与触发器在 PostgreSQL 走**浏览器层**（而不是 `Database::list_*` 回退）：
+    /// 回退路径要先让 `get_sequences` 返回空才算数，而 trait 默认实现就是空——
+    /// 那是“未支持”与“真的没有”分辨不清的写法。这里直接给真实实现。
+    async fn get_sequences(&self, _catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        let sql = "SELECT sequence_name FROM information_schema.sequences \
+                   WHERE sequence_schema = $1 ORDER BY sequence_name";
+        let result = self
+            .query_with_params(sql, vec![Value::Text(schema.to_string())])
+            .await?;
+        Ok(rows_to_node_info(&result, SchemaObjectKind::Sequence))
+    }
+
+    async fn get_triggers(&self, _catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        // 只取「名字 + 所属表」：触发事件（event_manipulation）当前没有展示位，不查。
+        let sql = "SELECT trigger_name, event_object_table \
+                   FROM information_schema.triggers \
+                   WHERE trigger_schema = $1 ORDER BY trigger_name";
+        let result = self
+            .query_with_params(sql, vec![Value::Text(schema.to_string())])
+            .await?;
+        Ok(names_to_trigger_nodes(&result))
+    }
 }
 
 #[cfg(test)]
@@ -934,6 +1004,38 @@ mod tests {
     use crate::driver::Database;
 
     const PG_URL: &str = "postgresql://postgres:postgresql@localhost:5432/business_db";
+
+    /// 触发器结果集 → 对象列表：第 2 列（所属表）进 `parent_name`，NULL 时不填。
+    /// 与 sqlx 驱动那份是各自的实现，所以两边各钉一遍。
+    #[test]
+    fn trigger_rows_carry_their_table_into_parent_name() {
+        let schema = std::sync::Arc::new(Schema::new(vec![
+            Field::new("trigger_name", DataType::Utf8, false),
+            Field::new("event_object_table", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                std::sync::Arc::new(StringArray::from(vec!["audit_trg", "orphan_trg"])),
+                std::sync::Arc::new(StringArray::from(vec![Some("orders"), None])),
+            ],
+        )
+        .expect("构造批次");
+        let result = QueryResult {
+            columns: vec![
+                "trigger_name".to_string(),
+                "event_object_table".to_string(),
+            ],
+            batches: vec![batch],
+            ..Default::default()
+        };
+
+        let nodes = names_to_trigger_nodes(&result);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].name, "audit_trg");
+        assert_eq!(nodes[0].parent_name.as_deref(), Some("orders"));
+        assert_eq!(nodes[1].parent_name, None, "NULL 所属表不该被填成空串");
+    }
 
     #[tokio::test]
     #[ignore = "需要运行中的 PostgreSQL 服务"]

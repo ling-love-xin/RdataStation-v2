@@ -238,7 +238,8 @@ Database（能力面）                      MetadataBrowser（对象树面）
 - 统一结构：`NodeInfo` / `ColumnDetail` / `NodeDetail` / `IndexDetail` / `ConstraintDetail`（**一个对象一份表示**，2026-09-19 起）。
 - `Database::list_*` 与 `MetadataBrowser::get_*` **返回同一套类型**：实现了浏览器的驱动直接转发（`list_tables` → `get_tables`），
   只实现 `list_*` 的桥接驱动（JDBC 那类）也不会被降级。`MetadataService` 的每个方法都是「browser 优先 → list_* 兜底」的**纯转发**；
-  序列 / 触发器保留「浏览器层空则回退」，以解 trait 默认空实现的遮蔽（PostgreSQL 的序列 / 触发器即如此）。
+  序列 / 触发器仍保留「浏览器层空则回退」这道兜底（防只实现 `list_*` 的驱动被默认空实现遮蔽），
+  但 PostgreSQL 两个驱动已直接实现 `get_sequences` / `get_triggers`（2026-09-19 补齐，不再依赖回退）。
 
 ### 5.2 唯一闸门与消费链［验］
 

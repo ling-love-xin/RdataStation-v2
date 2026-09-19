@@ -67,16 +67,16 @@
 | `sqlite` | MB | MB（空¹） | MB | MB | MB | MB | —³ | —³ | —³ |
 | `mysql` | MB | MB（空¹） | MB | MB | MB | MB | —³ | —³ | list |
 | `mysql_native` | MB | MB（空¹） | MB | MB | MB | MB | —³ | —³ | list |
-| `postgres` | MB | MB（真层级） | MB | MB | MB | MB | **list** | **list（含所属表）** | list |
-| `postgres_native` | MB | MB（真层级） | MB | MB | MB | MB | ⚠️ **缺** | ⚠️ **缺** | list |
+| `postgres` | MB | MB（真层级） | MB | MB | MB | MB | MB | MB（含所属表） | list |
+| `postgres_native` | MB | MB（真层级） | MB | MB | MB | MB | MB | MB（含所属表） | list |
 
 ¹ `has_schema_level() = false`：Catalog 即 schema（MySQL 的 database、SQLite / DuckDB 的单库），导航树跳过 Schema 层——`get_schemas` 返回空是**有意**的，不是没实现。
 ² DuckDB 索引从 `duckdb_indexes()` 表函数取，列名从 `expression` 解析。
 ³ 该库没有这类对象（DuckDB / SQLite 无存储过程与序列；MySQL 无序列）。
 
-> **已知不一致（待补）**：`postgres` 的序列与触发器走 `Database::list_*` 回退（因为它没覆盖 `get_sequences` / `get_triggers`，
-> 而 trait 默认返回空 ⇒ `MetadataService` 会回退），`postgres_native` **两个都没有** ⇒ 用原生驱动连 PG 时「序列 / 触发器」文件夹恒空。
-> 触发器的所属表已由 `NodeInfo::parent_name` 带到属性面板（2026-09-19 接通）。
+> **序列 / 触发器为什么要写进 `MetadataBrowser`**：`Database::list_*` 回退路径的前提是「浏览器层返回空」——
+> 而 trait 默认实现恰好就是空，「未支持」与「真的没有」分不清。两个 PG 驱动此前一个靠回退、一个完全没有，
+> 现在都在浏览器层给真实实现（2026-09-19 补齐）。触发器的所属表由 `NodeInfo::parent_name` 带到属性面板。
 
 ### 3.3 能力位（`DataSourceMeta`）
 
@@ -154,11 +154,10 @@
 | # | 级别 | 缺口 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | 🟡 | **JDBC / ODBC / ADBC / HTTP / Python / JS 六种 `DriverKind` 无实现** | 长尾库（DB2 / 国产库）只能靠 L3 桥接，而 L3 仍需自家驱动 | 按 §1 判据决定：先推 L3 桥接，JDBC 留到有客户点名再做 |
-| 2 | 🟡 | **`postgres_native` 缺序列 / 触发器**，`postgres` / `postgres_native` 缺 `get_sequences` / `get_triggers`（走 list 回退） | 原生驱动连 PG 时这两类文件夹恒空 | 补齐两处：把 `list_*` 的实现上移为 `get_*`（类型已统一，是纯搬运） |
-| 3 | 🟡 | **L2 scanner 未真机验收**（SQL Server / Firebird / Snowflake / BigQuery / Mongo） | 「装得上」≠「连得上、推得下去」 | 有端点就补真机用例；界面按 D10 如实标注 |
-| 4 | ⚪ | **`JdbcDriverDiscovery` 路径依赖 CWD**（`./jdbc-drivers`）+ `~` 不展开 | 空实现，暂无影响 | 随 P3-a（插件路径统一）一起定 |
-| 5 | ⚪ | **`DriverKind` 里 7 个无实现的取值** | 读代码的人容易高估覆盖面 | 保留（前瞻），但**新文档不要再写「支持 JDBC」** |
-| 6 | ⚪ | **DuckDB / SQLite 无 `get_routine_source`** | 无影响（这两库没有存储过程） | 不做 |
+| 2 | 🟡 | **L2 scanner 未真机验收**（SQL Server / Firebird / Snowflake / BigQuery / Mongo） | 「装得上」≠「连得上、推得下去」 | 有端点就补真机用例；界面按 D10 如实标注 |
+| 3 | ⚪ | **`JdbcDriverDiscovery` 路径依赖 CWD**（`./jdbc-drivers`）+ `~` 不展开 | 空实现，暂无影响 | 随 P3-a（插件路径统一）一起定 |
+| 4 | ⚪ | **`DriverKind` 里 7 个无实现的取值** | 读代码的人容易高估覆盖面 | 保留（前瞻），但**新文档不要再写「支持 JDBC」** |
+| 5 | ⚪ | **DuckDB / SQLite 无 `get_routine_source`** | 无影响（这两库没有存储过程） | 不做 |
 
 ---
 
