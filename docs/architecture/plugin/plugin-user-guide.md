@@ -294,6 +294,19 @@ cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
 ```
 
 跑通那五条 = P1 的退出标准（能连 → 3000 行 Arrow → 能取消 → 无孤儿进程）。
+
+**导航要用的 `meta.*`（P2）**：五件 —— `meta.catalogs` / `meta.schemas` / `meta.objects` /
+`meta.object_detail` / `meta.routine_source`。少一件，导航树或属性面板就少一块。三条最容易踩的：
+
+1. `meta.objects` **一次给全、含 `kind`**（`table` / `view` / `materialized_view` / `procedure` /
+   `function` / `sequence` / `trigger`）—— 五个文件夹共用这一次内省，别按文件夹分家；
+2. **列一定带 `type_raw`，能给就给 `canonical`**（`DECIMAL` / `TIMESTAMP` …）：属性面板显示原始类型，
+   程序按 `canonical` 判类型（少了它，mock 与质量分只能猜首词，最后全落成文本）；
+3. 能力没声明的东西**别报**：`sequences = false` 就不要在 `meta.objects` 里给序列，
+   被点名的调用（`meta.routine_source` 等）如实回 `-32006 capability_denied` ——
+   宿主据此置灰并说明，而不是把「不支持」画成「没有」。
+
+连不上库请用 `-32009 connect_failed`（别用 `-32003`）：界面要把它与「SQL 写错了」分开呈现。
 清单怎么写（`[backend]` + `[[contributes.drivers]]`）见 §2.2 与 `plugin-dev-plan.md` §4.3。
 
 ---

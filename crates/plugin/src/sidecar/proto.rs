@@ -395,8 +395,8 @@ pub fn should_inline_json(row_count: usize, byte_len: usize) -> bool {
 /// 协议错误码（挂在 JSON-RPC `error.code` 上，dev-plan §4.2.2）。
 ///
 /// ⚠️ **号段纪律**：参考实现（`Rdata-Sidecar`）按模块切段（JDBC -32000~-32019、
-/// LSP -32020~-32039、Connectors -32040~-32059）。我们目前只有一个模块，
-/// 但扩展宿主（JS）上线后要**另起一段**，不要挤进这里。
+/// LSP -32020~-32039、Connectors -32040~-32059）。本段 -32001…-32009 是**驱动**的；
+/// 扩展宿主（JS）上线后要**另起一段**，不要挤进这里。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RpcErrorCode {
     DriverNotSupported,
@@ -407,6 +407,12 @@ pub enum RpcErrorCode {
     CapabilityDenied,
     ProtocolVersionMismatch,
     ResourceLimit,
+    /// 连不上目标库（坏地址 / 口令错 / TLS 失败 / 握手期就断了）。
+    ///
+    /// P1 曾经没有这个码：连接失败只能落进 `sql_error`（-32003）或 `timeout`（-32005），
+    /// 于是界面把「连不上库」画成「SQL 写错了」。连接失败是驱动**最常见**的失败，
+    /// 必须与 SQL 错分得开（P2 补，见 dev-plan §4.2.2「已知缺口」）。
+    ConnectFailed,
 }
 
 impl RpcErrorCode {
@@ -420,6 +426,7 @@ impl RpcErrorCode {
             Self::CapabilityDenied => -32006,
             Self::ProtocolVersionMismatch => -32007,
             Self::ResourceLimit => -32008,
+            Self::ConnectFailed => -32009,
         }
     }
 
@@ -433,6 +440,7 @@ impl RpcErrorCode {
             Self::CapabilityDenied => "capability_denied",
             Self::ProtocolVersionMismatch => "protocol_version_mismatch",
             Self::ResourceLimit => "resource_limit",
+            Self::ConnectFailed => "connect_failed",
         }
     }
 
@@ -446,6 +454,7 @@ impl RpcErrorCode {
             -32006 => Self::CapabilityDenied,
             -32007 => Self::ProtocolVersionMismatch,
             -32008 => Self::ResourceLimit,
+            -32009 => Self::ConnectFailed,
             _ => return None,
         })
     }
@@ -625,6 +634,7 @@ mod tests {
             RpcErrorCode::CapabilityDenied,
             RpcErrorCode::ProtocolVersionMismatch,
             RpcErrorCode::ResourceLimit,
+            RpcErrorCode::ConnectFailed,
         ];
         for (i, a) in all.iter().enumerate() {
             assert_eq!(RpcErrorCode::from_code(a.code()), Some(*a));

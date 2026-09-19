@@ -15,9 +15,13 @@
 //!
 //! - `--ignore-eof`：读到 stdin EOF 也不退（验证「强杀兜底」这一路）
 //! - `--exit-ms=<n>`：启动 n 毫秒后自行退出，退出码 3（验证「没调用也会发现它死了」）
-//! - `session.open` 的连接参数给 `{"fail": true}` → 回错（验证「开会话失败要如实撤销」；
-//!   错误码表里**还没有「连接失败」这一码** —— 先用 -32003 顶上）
+//! - `session.open` 的连接参数给 `{"fail": true}` → 回 `-32009 connect_failed`
+//!   （验证「开会话失败要如实撤销」；P1 时这一码还没有，先用 -32003 顶的）
 //! - `--force-inline`：大结果也走内联 JSON（内联只是**线格式**，消费方不该看出区别）
+//! - `--cap-na=<键>`：把某个能力报成 `false`（键取自 dev-plan §4.4）。连带把对应的方法也
+//!   如实回 `-32006`：`schemas` → `meta.schemas`、`routines` → `meta.routine_source`、
+//!   `cancel` → `query.cancel`；`views` / `sequences` / `triggers` 则是**不报**那类对象
+//!   （驱动看不到与没有，在驱动侧本来就是同一件事）
 //!
 //! `sql` 是脚本化的（不连任何真库）：
 //!
@@ -25,6 +29,10 @@
 //! - `select hold_ms=<n>` → 慢查询：`n` 毫秒后回；期间收到 `query.cancel` 就回 `-32004`
 //! - `select fail` → `-32003`（带 `sqlstate`，模拟真驱动）
 //! - 其他 `select …` → 一行结果，`notices` 里带回收到的 SQL（测试用它确认 SQL 过了边界）
+//!
+//! `meta.*` 是一份写死的假 schema（`main` / `public` + `sales`），覆盖导航能摆的全部类别
+//! （表 / 视图 / 物化视图 / 过程 / 函数 / 序列 / 触发器）+ 一个**摆不下**的 `domain` ——
+//! 后者用来验证宿主「认不出就跳过并留痕」，而不是把它画成表。
 //!
 //! 真库（PostgreSQL）那条靶子在 `dev-plan` §5 P1 的实机验收清单里 —— 那一步要真库在场，
 //! 进不了这一层自动化。
@@ -87,6 +95,8 @@ struct Fixture {
     out: Arc<Mutex<Stdout>>,
     /// 被 `query.cancel` 标记过的 request id。
     cancelled: Arc<Mutex<HashSet<String>>>,
+    /// 报成 `false` 的能力键（`--cap-na=` 给的）。
+    cap_na: Vec<String>,
 }
 
 impl Fixture {
@@ -109,6 +119,11 @@ impl Fixture {
             .expect("取消表锁中毒")
             .contains(request_id)
     }
+
+    /// 这个能力报成不支持吗（测试用它验证「门控落到了真实的拒绝上」）。
+    fn lacks(&self, key: &str) -> bool {
+        self.cap_na.iter().any(|k| k == key)
+    }
 }
 
 fn main() {
@@ -128,8 +143,14 @@ fn main() {
     eprintln!("fixture 启动 pid={}", std::process::id());
 
     let force_inline = args.iter().any(|a| a == "--force-inline");
+    let cap_na: Vec<String> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--cap-na="))
+        .map(str::to_string)
+        .collect();
     let fixture = Fixture {
         force_inline,
+        cap_na,
         out: Arc::new(Mutex::new(io::stdout())),
         cancelled: Arc::new(Mutex::new(HashSet::new())),
     };
@@ -219,9 +240,10 @@ fn handle(fixture: &Fixture, payload: &[u8]) -> Option<Vec<OutFrame>> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
+                // 「连接失败」有一等码了（P2 补的 -32009）：连不上与 SQL 写错必须分得开
                 Some(vec![OutFrame::json(error(
                     id,
-                    -32003,
+                    -32009,
                     "fixture：连接失败（故意）",
                 ))])
             } else {
@@ -250,18 +272,102 @@ fn handle(fixture: &Fixture, payload: &[u8]) -> Option<Vec<OutFrame>> {
                     "id": driver_id,
                     "display_name": "Fixture Driver",
                     "server_version": "fixture-1",
-                    "capabilities": {
-                        "schemas": true, "tables": true, "transactions": true,
-                        "cancel": true, "cursor": true, "affected_rows": true,
-                        "streaming": false,
-                    },
+                    "capabilities": capabilities(fixture),
                     "identifier_quote": "\"",
                     "default_schema": "public",
                 }),
             ))])
         }
 
+        "meta.catalogs" => Some(vec![OutFrame::json(reply(
+            id,
+            json!({ "catalogs": ["main"] }),
+        ))]),
+
+        "meta.schemas" => {
+            if fixture.lacks("schemas") {
+                Some(vec![OutFrame::json(error(
+                    id,
+                    -32006,
+                    "fixture：这个驱动没声明 schemas 能力",
+                ))])
+            } else {
+                Some(vec![OutFrame::json(reply(
+                    id,
+                    json!({ "schemas": [
+                        { "name": "public", "comment": "默认 schema" },
+                        { "name": "sales" },
+                    ] }),
+                ))])
+            }
+        }
+
+        // 一次给全、含 kind：宿主按 kind 分流到五个文件夹（口径见 meta.rs 模块文档）
+        "meta.objects" => {
+            let schema = params.get("schema").and_then(Value::as_str).unwrap_or("public");
+            let mut objects = meta_objects(schema);
+            // 没声明的能力：**不报**那一类（驱动「看不到」与「没有」是同一件事）
+            for (key, kinds) in [
+                ("views", &["view", "materialized_view"][..]),
+                ("routines", &["procedure", "function"][..]),
+                ("sequences", &["sequence"][..]),
+                ("triggers", &["trigger"][..]),
+            ] {
+                if fixture.lacks(key) {
+                    objects.retain(|o| !kinds.contains(&o["kind"].as_str().unwrap_or_default()));
+                }
+            }
+            Some(vec![OutFrame::json(reply(id, json!({ "objects": objects })))])
+        }
+
+        "meta.object_detail" => {
+            let schema = params.get("schema").and_then(Value::as_str).unwrap_or("public");
+            let object = params.get("object").and_then(Value::as_str).unwrap_or_default();
+            match (meta_object(schema, object), meta_columns(object)) {
+                (Some(object), Some(columns)) => Some(vec![OutFrame::json(reply(
+                    id,
+                    json!({
+                        "object": object,
+                        "columns": columns,
+                        "indexes": 3,
+                        "row_count": 12000,
+                    }),
+                ))]),
+                _ => Some(vec![OutFrame::json(error(
+                    id,
+                    -32003,
+                    &format!("fixture：没有对象 {object}"),
+                ))]),
+            }
+        }
+
+        "meta.routine_source" => {
+            if fixture.lacks("routines") {
+                Some(vec![OutFrame::json(error(
+                    id,
+                    -32006,
+                    "fixture：这个驱动没声明 routines 能力",
+                ))])
+            } else {
+                // 形状只有两种：字符串，或 null（驱动查不到这个例程）
+                match params.get("name").and_then(Value::as_str) {
+                    Some("order_total") => Some(vec![OutFrame::json(reply(
+                        id,
+                        json!("CREATE FUNCTION order_total(orders.id) RETURNS numeric AS 'SELECT …'"),
+                    ))]),
+                    _ => Some(vec![OutFrame::json(reply(id, Value::Null))]),
+                }
+            }
+        }
+
         "query.cancel" => {
+            if fixture.lacks("cancel") {
+                return Some(vec![OutFrame::json(error(
+                    id,
+                    -32006,
+                    "fixture：这个驱动没声明 cancel 能力",
+                ))]);
+            }
             let request_id = params
                 .get("request_id")
                 .and_then(Value::as_str)
@@ -316,6 +422,7 @@ fn execute(fixture: &Fixture, id: Value, params: &Value) -> Option<Vec<OutFrame>
             force_inline: fixture.force_inline,
             out: Arc::clone(&fixture.out),
             cancelled: Arc::clone(&fixture.cancelled),
+            cap_na: fixture.cap_na.clone(),
         };
         std::thread::spawn(move || {
             // 每 10ms 醒一次看有没有被取消：真驱动会把取消下到库里，靶子用轮询模拟。
@@ -555,6 +662,133 @@ fn error_with_data(id: Value, code: i32, message: &str, data: Value) -> Vec<u8> 
 /// 读一帧；`Ok(None)` = 管道到头了（EOF）。
 ///
 /// 手写这一段的用意见文件头：这是协议的第二份独立实现。
+/// 能力表（dev-plan §4.4 的形状）：`--cap-na=<键>` 把某一个报成 false。
+///
+/// `streaming` 恒为 false —— 与真实驱动一致：本仓 `Database` trait 上没有流式接口。
+fn capabilities(fixture: &Fixture) -> Value {
+    let mut map = serde_json::Map::new();
+    for key in [
+        "schemas",
+        "tables",
+        "views",
+        "materialized_views",
+        "routines",
+        "sequences",
+        "triggers",
+        "indexes",
+        "constraints",
+        "comments",
+        "transactions",
+        "cancel",
+        "cursor",
+        "explain",
+        "affected_rows",
+    ] {
+        map.insert(key.to_string(), json!(!fixture.lacks(key)));
+    }
+    map.insert("streaming".to_string(), json!(false));
+    Value::Object(map)
+}
+
+/// 假 schema 里的对象：(名字, 类别, 注释, 所属表)。
+fn meta_objects(schema: &str) -> Vec<Value> {
+    let objects: &[(&str, &str, Option<&str>, Option<&str>)] = match schema {
+        "public" => &[
+            ("orders", "table", Some("订单"), None),
+            ("customers", "table", None, None),
+            ("recent_orders", "view", Some("近期订单"), None),
+            ("mv_daily", "materialized_view", None, None),
+            ("refresh_orders", "procedure", None, None),
+            ("order_total", "function", None, None),
+            ("orders_seq", "sequence", None, None),
+            ("trg_orders_audit", "trigger", None, Some("orders")),
+            // 导航摆不下的类别：宿主该跳过它并留一条日志
+            ("order_state", "domain", None, None),
+        ],
+        "sales" => &[("deals", "table", None, None)],
+        _ => &[],
+    };
+    objects
+        .iter()
+        .map(|(name, kind, comment, parent)| {
+            let mut object = json!({ "name": name, "kind": kind });
+            if let Some(comment) = comment {
+                object["comment"] = json!(comment);
+            }
+            if let Some(parent) = parent {
+                object["parent"] = json!(parent);
+            }
+            object
+        })
+        .collect()
+}
+
+/// 单个对象的线格式（`meta.object_detail` 要把它回声给宿主）。
+fn meta_object(schema: &str, object: &str) -> Option<Value> {
+    meta_objects(schema)
+        .into_iter()
+        .find(|o| o["name"].as_str() == Some(object))
+}
+
+/// 列定义：(名字, 原始类型, 归一化类型, 可空, 主键, 格式化提示, 注释)。
+fn meta_columns(object: &str) -> Option<Vec<Value>> {
+    let columns: &[(&str, &str, &str, bool, bool, Option<&str>, Option<&str>)] = match object {
+        "orders" => &[
+            ("id", "bigint", "BIGINT", false, true, None, Some("主键")),
+            ("customer_id", "bigint", "BIGINT", false, false, None, None),
+            (
+                "amount",
+                "numeric(38,10)",
+                "DECIMAL",
+                true,
+                false,
+                Some("decimal(scale=10)"),
+                Some("订单金额"),
+            ),
+            (
+                "created_at",
+                "timestamp with time zone",
+                "TIMESTAMP",
+                false,
+                false,
+                None,
+                None,
+            ),
+            ("note", "text", "TEXT", true, false, None, None),
+        ],
+        "recent_orders" | "mv_daily" => &[
+            ("id", "bigint", "BIGINT", false, true, None, None),
+            ("amount", "numeric(38,10)", "DECIMAL", true, false, None, None),
+        ],
+        "deals" => &[
+            ("id", "bigint", "BIGINT", false, true, None, None),
+            ("name", "text", "TEXT", true, false, None, None),
+        ],
+        _ => return None,
+    };
+    Some(
+        columns
+            .iter()
+            .map(|(name, raw, canonical, nullable, is_pk, format, comment)| {
+                let mut column = json!({
+                    "name": name,
+                    "type_raw": raw,
+                    "canonical": canonical,
+                    "nullable": nullable,
+                    "is_pk": is_pk,
+                });
+                if let Some(format) = format {
+                    column["format"] = json!(format);
+                }
+                if let Some(comment) = comment {
+                    column["comment"] = json!(comment);
+                }
+                column
+            })
+            .collect(),
+    )
+}
+
 fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut header = [0u8; 5];
     match reader.read_exact(&mut header) {

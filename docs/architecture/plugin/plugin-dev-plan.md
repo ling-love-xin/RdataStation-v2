@@ -325,7 +325,7 @@ progress({request_id, phase, done, total})
 -32003 sql_error {code, sqlstate, position}
 -32004 cancelled                 -32005 timeout
 -32006 capability_denied         -32007 protocol_version_mismatch
--32008 resource_limit
+-32008 resource_limit            -32009 connect_failed
 ```
 
 > `capability_denied` 单独成码：让「驱动不支持 X」与「出错了」在 UI 上能分开呈现。
@@ -347,8 +347,33 @@ progress({request_id, phase, done, total})
 | 表单字段谁定 | P1 由宿主给**标准五件套 + 文件路径**，且**一律不标必填**；清单里的 `connection_schema` 还没翻成 `DriverField`（P2 做） | 宿主并不知道某个驱动到底需要哪几项；标了必填反而挡住合法配置（靠 options 拼 DSN 的驱动）。宁可让插件报错 —— 它比宿主清楚 |
 | 串行驱动排队的上限 | 第二条连接最多等 **30s**（`DEFAULT_QUEUE_WAIT`），等不到就**撤掉排队并如实报超时** | 不能让用户挂在一个永远不会来的连接上；撤排队这条同时要求内核能撤掉「还在队列里」的会话（P1 修过：`Registry::release` 会从队列里摘掉它） |
 | 句柄丢掉 = 关连接 | `SidecarDatabase` 带 `owner` 时在 `Drop` 里把会话交还内核（`tokio::spawn` 一个关闭任务）；不带 `owner` 的是借用式用法，由调用方安排 | 会话是宿主的资源：不交还就会一直占着那个串行实例，后续连接全排住 | SQL 错 → `DatabaseError::Query`（`position` 由 1 基**字符**换算成 0 基**字节**）；断线 → `ConnectionError::Network`；缺能力 → `CommonError::NotSupported`；对端说话不算话 → `PluginError::ExecutionFailed` | UI 要能按域分流：SQL 错跳光标、缺能力置灰、断线提示重连，不能都堆成一句「查询失败」 |
-| **已知缺口** | **没有「连接失败」错误码**：坏地址 / 密码错 / TLS 失败 / 连不上，现在只能落进 `-32003 sql_error` 或 `-32005 timeout` | 驱动最常见的失败就是连接失败，UI 需要把它与 SQL 错分开呈现。P2 定码段时补 `-32009 connect_failed` |
+| 连接失败 | ✅ **P2 已补一等码 `-32009 connect_failed`**，落 `ConnectionError::Refused`；细因（拒连 / 口令 / TLS）由驱动写在 `message` 里，**宿主不按子串猜**分类 | 连接失败是驱动最常见的失败，界面上的动作与 SQL 错不同（改配置 / 重连 vs 改 SQL）。参考实现就是靠 `containsAny` 猜的（§3.5），那套我们不要 |
 
+#### 4.2.2.1 `meta.*` 的线格式（P2 落地，2026-09-20）
+
+| 方法 | 请求 | 返回 |
+| --- | --- | --- |
+| `meta.catalogs` | `{session_id}` | `{catalogs: [string]}` |
+| `meta.schemas` | `{session_id, catalog}` | `{schemas: [{name, comment?}]}` |
+| `meta.objects` | `{session_id, catalog, schema}` | `{objects: [{name, kind, comment?, parent?}]}` |
+| `meta.object_detail` | `{session_id, catalog, schema, object}` | `{object: {name, kind}, columns: [ColumnMeta], indexes?, row_count?}` |
+| `meta.routine_source` | `{session_id, catalog, schema, name}` | 字符串 或 `null` |
+
+`kind` 取值：`table` / `view` / `materialized_view` / `procedure` / `function` / `sequence` / `trigger`。
+`ColumnMeta`：`{name, type_raw, canonical?, nullable?, is_pk?, is_fk?, default?, format?, comment?}`。
+
+| 口径 | 依据 |
+| --- | --- |
+| `meta.objects` **一次给全、含 `kind`** | 五个文件夹（表 / 视图 / 例程 / 序列 / 触发器）共用这一次内省；按文件夹分家就要跑五遍，而它们在内省层面本来就是一条查询 |
+| 认不出的 `kind` **不丢也不摆** | 解出来（`MetaObjectKind::Other`）但跳过，并记一条带对象名的日志：摆进树会被画成「表」（假信息），直接丢掉则没人知道驱动报了新东西 |
+| 物化视图归到**视图**文件夹 | 导航只有五处（`NavFolder::ALL`），单开一层要多动导航与定位两处；原始类别在 `kind` 里没丢（属性面板说实话） |
+| 形状严格 | 缺 `catalogs` / `objects` / `columns`、元素不是对象、`name` 为空 —— 一律协议错并点名哪个字段。「空」与「对端没说」是两回事 |
+| 列少了 `type_raw` 退化成 `unknown` | 属性面板少一列类型，好过整张详情打不开（与 `parse_page` 同一条口径） |
+| `routine_source` 只有两种形状 | 字符串或 `null`。包一层对象看着无害，但多一种形状就是两份契约（§3.5） |
+| 元数据调用**不收附件** | 元数据是控制面；带 Arrow 附件说明对端把两条路搅在一起了，报协议错而不是猜它想说什么 |
+| 能力为假 → 方法回 `-32006`、那类对象**不报** | 「驱动看不到」与「没有」在驱动侧是同一件事；宿主侧的门控口径见 §4.4 |
+| 超时用 `DESCRIBE_RPC_TIMEOUT`（20s） | 内省该是快的：慢到超时说明对端那条内省查询有问题，该如实报出来，而不是让界面按查询的超时（600s）一直转圈 |
+| 索引 / 约束**明细**暂无协议面 | `object_detail` 只给个数（`indexes`）；属性面板要列明细时再补 `meta.indexes` / `meta.constraints`（P4）。在那之前 `Database::list_indexes` 如实报不支持 |
 #### 4.2.3 版本闸
 
 `initialize` 交换 `protocol = "rds-driver/1"`；不匹配则**拒绝加载，并同时报出两个版本号**（对照 Zed 的 `zed:api-version` 做法：`extension_api/wit/since_v0.0.x` 目录冻结 + 加载期拒绝）。
@@ -772,6 +797,7 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | sidecar 运行时接线 | `crates/plugin/src/sidecar/supervisor.rs`（✅ **P1 已落地**：`Deployment`（清单 → 进程规格 + 命令）+ `SidecarSupervisor` —— 执行内核动作、兑现放行、事件如实上报、generation 防旧事件误伤、起不来不留僵尸 `Starting`） |
 | 真实进程验收 | `crates/plugin/tests/fixture/sidecar.rs`（`[[bin]] rds-sidecar-fixture`：**独立实现**一遍帧编解码的测试对端）+ `crates/plugin/tests/spawn_real_process.rs`（8 条：起收摊 / 超时不断连 / 崩溃交还 + 退出码 / 未调用也发现它死 / 强杀兜底 / stderr 落盘）+ `crates/plugin/tests/supervisor_real_process.rs`（8 条：开会话 / 串行排队放行 / 放行失败 / 崩溃要手动重启 / 心跳判死 / 空闲回收不误伤新实例 / 起不来不留僵尸 / 收摊） |
 | 跨实现一致性验收 | `crates/plugin/tests/sidecar_conformance.rs`（✅ **P1 已落地**：同一套检查跑**任何** sidecar —— `RDS_SIDECAR_BIN` 换个二进制就行。五条 = 握手与描述 / 大结果必须走 Arrow 且解得成 `RecordBatch` / 取消要真的停 / stdin EOF 必须自退 / 强杀兜底。**这五条就是 P1 的退出标准**，可反复执行；写法见用户手册 §2.8） |
+| `meta.*` 元数据面 | `crates/plugin/src/sidecar/meta.rs`（✅ **P2 已落地**：线格式 ↔ 引擎类型；认不出的类别进 `MetaObjectKind::Other` 并跳过；`into_node_info` 把物化视图并到视图、`into_column_detail` 把 `canonical`/`format` 放进 `extra`）+ `crates/plugin/src/sidecar/driver.rs`（`SessionDriver::{meta_catalogs, meta_schemas, meta_objects, meta_object_detail, meta_routine_source}`，统一 `call_meta`：同一超时、不收附件）+ `crates/plugin/tests/meta_bridge_real_process.rs`（9 条真进程） |
 | RPC 方法表 | `crates/plugin/src/sidecar/*`（+ `jsonrpsee-core` 的 `RpcModule`/`Methods`） |
 | 注册路径（引擎侧选得到） | `crates/plugin/src/sidecar/factory.rs`（✅ **P1 已落地**：`SidecarDriverFactory` + `register_sidecar_drivers()`；`DriverKind::Sidecar` 是它在引擎里的身份，见 `crates/engine/src/driver/registry/descriptors.rs`） |
 | 驱动桥（RPC 方法表） | `crates/plugin/src/sidecar/driver.rs`（✅ **P1 已落地**：`SessionDriver` = 会话之上的 `driver.describe` / `query.execute` / `query.fetch` / `query.cancel` / `session.ping`，`QueryPage`/`PageData` 把内联 JSON 与 Arrow 附件统一成同一个类型，`DriverError` 按错误码分流。旧 HTTP 版已于 P0 删除，见 §1.2） |
@@ -811,7 +837,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
 | P1 | 🟡 进行中，**代码面已齐**（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` / 运行时接线 / 驱动桥 / 接引擎 / 注册路径十块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`sidecar/supervisor.rs`：运行时接线（`Deployment` + `SidecarSupervisor`：执行内核动作、把 `Decision::Open` 兑现成 `session.open`、事件显式 `drain_events`、generation 防旧事件误伤、起不来告诉内核不留僵尸）。`lifecycle.rs` 的 `acquire` 按规则 1 修正分流（并行共享 / 串行有额度就起新实例）。`sidecar/driver.rs`：驱动桥（`SessionDriver`：describe / execute / fetch / cancel / session.ping；`PageData` 把内联 JSON 与 Arrow 统一成一个类型；Arrow 在宿主侧解成 `RecordBatch`；`DriverError` 按错误码分流）。`cargo test -p rds-plugin` 103/103 + 集成 22/22（P1 新增 86 条单测 + 22 条真进程集成测试）。`sidecar/factory.rs`：注册路径（`SidecarDriverFactory` + `register_sidecar_drivers`；`create` = 起进程 → 握手 → 会话 → describe；排队超时明确失败并撤排队；`Drop` 交还会话）。`lifecycle.rs` 修一处内核缺口：撤掉**还在排队**的会话（原先从队列里摘不掉，别人关闭时会被放行成幽灵会话）。`sidecar/driver.rs` 再接上引擎：`SidecarDatabase` 实现 `engine::driver::Database`（`QueryPage` → `QueryResult` 只填 `batches`；错误按域映射；弱引用连接；令牌取消走**真取消**）。HTTP 旧路径两个文件（`client.rs` + 旧 `manager.rs`）已删，`reqwest` 依赖随之去掉。`cargo test -p rds-plugin` 106/106 + 集成 44/44（新增 `tests/sidecar_conformance.rs`：5 条把 P1 退出标准做成可反复执行的检查，换 `RDS_SIDECAR_BIN` 就能拿同一套检查去验任何语言的 sidecar）。**代码面到此齐了**；剩下的要在真机上做：**PostgreSQL 靶子**（真库 + 真 Arrow）、**跨语言 Arrow 互通**（Go `arrow-go` / Python `pyarrow`，本机拉不到依赖）、把这两条固化成验收脚本。之后进 P2（`meta.*` + `DriverCapability` 门控 + 导航树） |
-| P2 | ⬜ 未开始 | — |
+| P2 | 🟡 进行中（第一刀：`meta.*` 协议与驱动桥） | `sidecar/meta.rs`：五个方法的线格式与解析、`MetaObjectKind`（含 `Other` 留痕）、`nav_kind`（物化视图并到视图）、`into_node_info` / `into_column_detail`（`canonical`/`format` 进 `extra`，属性面板仍看原始类型）、6 条单测。`driver.rs`：`SessionDriver::{meta_catalogs, meta_schemas, meta_objects, meta_object_detail, meta_routine_source}` + `call_meta`（同一超时、**不收附件**）。`proto.rs`：补 `-32009 connect_failed`（P1 记下的缺口）→ `map_error` 落 `ConnectionError::Refused`。靶子：`meta.*` 的假 schema（覆盖七个类别 + 一个摆不下的 `domain`）+ `--cap-na=<键>` 能力开关（连带的 meta / cancel 调用也如实回 `-32006`）。`cargo test -p rds-plugin` = 112/112 + 集成 47/47（其中 `meta_bridge_real_process.rs` 9 条）。下一步：`SidecarDatabase` 的 `Database` 元数据面（导航树真的接上）→ 能力门控 → `rds.*` 类型映射读到面板 |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
 | P4 | ⬜ 未开始 | — |

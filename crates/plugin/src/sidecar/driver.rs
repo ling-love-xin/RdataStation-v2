@@ -34,6 +34,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::conn::{CallError, SidecarConn};
+use super::meta::{
+    MetaObject, MetaObjectDetail, MetaSchema, parse_catalogs, parse_object_detail, parse_objects,
+    parse_routine_source, parse_schemas,
+};
 use super::proto::RpcErrorCode;
 use super::supervisor::SidecarSupervisor;
 use shared::arrow::ArrowBatch;
@@ -327,6 +331,110 @@ impl<'a> SessionDriver<'a> {
         parse_descriptor(driver_id, &outcome.result)
     }
 
+    /// 元数据：catalog 清单（§4.2.2 `meta.catalogs`）。
+    pub async fn meta_catalogs(&self) -> Result<Vec<String>, DriverError> {
+        let result = self
+            .call_meta("meta.catalogs", json!({ "session_id": self.session_id }))
+            .await?;
+        parse_catalogs(&result)
+    }
+
+    /// 元数据：某 catalog 下的 schema（`meta.schemas`）。
+    pub async fn meta_schemas(&self, catalog: &str) -> Result<Vec<MetaSchema>, DriverError> {
+        let result = self
+            .call_meta(
+                "meta.schemas",
+                json!({ "session_id": self.session_id, "catalog": catalog }),
+            )
+            .await?;
+        parse_schemas(&result)
+    }
+
+    /// 元数据：某 schema 下的**全部**对象，含类别（`meta.objects`）。
+    ///
+    /// 「一次给全」是硬口径（§4.2.2）：五个文件夹共用这一次内省，宿主按 `kind` 分流。
+    /// 按文件夹分家的话，宿主要跑五遍内省 —— 而它们在内省层面本来就是一条查询。
+    pub async fn meta_objects(
+        &self,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<Vec<MetaObject>, DriverError> {
+        let result = self
+            .call_meta(
+                "meta.objects",
+                json!({
+                    "session_id": self.session_id,
+                    "catalog": catalog,
+                    "schema": schema,
+                }),
+            )
+            .await?;
+        parse_objects(&result)
+    }
+
+    /// 元数据：一个对象的详情（`meta.object_detail`）—— 列、索引数、行数估计。
+    pub async fn meta_object_detail(
+        &self,
+        catalog: &str,
+        schema: &str,
+        object: &str,
+    ) -> Result<MetaObjectDetail, DriverError> {
+        let result = self
+            .call_meta(
+                "meta.object_detail",
+                json!({
+                    "session_id": self.session_id,
+                    "catalog": catalog,
+                    "schema": schema,
+                    "object": object,
+                }),
+            )
+            .await?;
+        parse_object_detail(&result)
+    }
+
+    /// 元数据：例程（过程 / 函数）源码（`meta.routine_source`）；对端查不到返回 `None`。
+    pub async fn meta_routine_source(
+        &self,
+        catalog: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<Option<String>, DriverError> {
+        let result = self
+            .call_meta(
+                "meta.routine_source",
+                json!({
+                    "session_id": self.session_id,
+                    "catalog": catalog,
+                    "schema": schema,
+                    "name": name,
+                }),
+            )
+            .await?;
+        parse_routine_source(&result)
+    }
+
+    /// 元数据调用的公共部分。
+    ///
+    /// 一律用 [DESCRIBE_RPC_TIMEOUT]：内省该是快的，慢到超时说明对端那条内省查询有问题，
+    /// 该如实报出来而不是让界面一直转圈。**不收附件** —— 元数据是控制面，
+    /// 带 Arrow 附件说明对端把两条路搅在一起了（那是我们没法按语义解释的响应）。
+    async fn call_meta(&self, method: &'static str, params: Value) -> Result<Value, DriverError> {
+        let outcome = self
+            .conn
+            .call(method, params, DESCRIBE_RPC_TIMEOUT)
+            .await
+            .map_err(|e| DriverError::from_call(method, e))?;
+        if !outcome.attachments.is_empty() {
+            return Err(DriverError::Protocol {
+                detail: format!(
+                    "{method} 的响应带了 {} 个 Arrow 附件（元数据是控制面，不走数据面）",
+                    outcome.attachments.len()
+                ),
+            });
+        }
+        Ok(outcome.result)
+    }
     /// 执行一条查询（§4.2.2 `query.execute`）。
     pub async fn execute(&self, request: &QueryRequest) -> Result<QueryPage, DriverError> {
         let params = json!({
@@ -832,6 +940,14 @@ impl SidecarDatabase {
                 RpcErrorCode::SessionNotFound => {
                     CoreError::connection(ConnectionError::NoActiveConnection)
                 }
+                // 连不上目标库（P2 补的码）：与「原本连着、现在断了」分开 ——
+                // 前者是「没连上」，后者是「掉线」，界面上的动作不一样（改配置 vs 重连）。
+                // 没连上的细因（拒连 / 口令 / TLS）由驱动写在 message 里：宿主**不按子串猜**
+                // 分类（§3.5 参考实现就是靠 containsAny 猜的，那套我们不要）。
+                RpcErrorCode::ConnectFailed => CoreError::connection(ConnectionError::Refused {
+                    conn_id: self.session_id.clone(),
+                    reason: format!("连不上 {db_type}：{message}"),
+                }),
                 RpcErrorCode::ProtocolVersionMismatch | RpcErrorCode::ResourceLimit => {
                     CoreError::database(DatabaseError::Driver {
                         db_type,
@@ -1336,6 +1452,22 @@ mod database_tests {
             matches!(gone, CoreError::Connection(ConnectionError::Network { .. })),
             "{gone:?}"
         );
+
+        // 连不上库：进连接域，且**不是** Query（用户看到的该是「连不上」而不是「SQL 错了」）
+        let refused = db.map_error(
+            sql,
+            DriverError::Rpc {
+                code: RpcErrorCode::ConnectFailed,
+                message: "password authentication failed".into(),
+                data: None,
+            },
+        );
+        match refused {
+            CoreError::Connection(ConnectionError::Refused { reason, .. }) => {
+                assert!(reason.contains("password"), "{reason}");
+            }
+            other => panic!("连不上库应当进 ConnectionError::Refused：{other:?}"),
+        }
 
         let broken = db.map_error(
             sql,
