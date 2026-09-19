@@ -274,6 +274,25 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 > 相对第三次复跑的 **+15** 里：本批占 **+4**（database **+3** 窗口级定位验收 + workbench **+1** `editor_session_real` 的窗口退出兜底），
 > 其余 **+11** 来自并行会话（engine **446→452** · 新增 workbench 集成目标 `official_driver_real` **4 项**等）。
 
+#### 6.3.4 虚拟列表切片（S1–S3）：`rds-database` lib **59 → 62**
+
+- `843b5e1` 扁平静态 + 8 阶段行序契约（`collected_rows_match_render_order`，**+1**）；
+- `2f51176` 改装 `v_virtual_list` 后 **+1**：窗口级「行被真的画出来」（尺寸 / 次序 / 行高分级）；
+- 余 **+1** 来自并行会话（本批两条改动均在 `nav_view.rs` 内，可直接归属）。
+
+**本次全量重跑本机记录**（`cargo test-all`，未含并行会话未提交改动）：
+
+```
+37 个测试目标 / 1901 通过 / 1 失败 / 24 忽略
+失败：workbench quick_open::tests::opening_the_palette_loads_scratchpad_files
+```
+
+该失败是**并行满载下的超时抖动**（该用例自述「文件清单应在 20 s 内回填」，全量满载时后台任务没在窗口内跑完）；
+**单跑即过**（`cargo test -p rds-workbench quick_open::tests` 绿），且与本次改动的模块无关（quick_open / 草稿盘，不经导航树）。
+
+> **口径差异（重要）**：本节数字是本机 `cargo test-all` 的**目标计数**（37）；§0 / §2 的「85 目标 / 2005 通过」
+> 是含集成目标与并行会话已提交内容的旧口径，两者**不可直接相减**。下次系统复跑时以 §1 命令、逐目标落数。
+
 ---
 
 ## 7. 维护约定

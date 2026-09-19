@@ -275,49 +275,73 @@
 | C1 | 预热方案 C（仅 databases/schemas）+ 进度 + 取消 | `navigator_service.rs`（`build_metadata_index` / `is_syncing` / `get_sync_status` / `cancel_sync`） | 首连后台预热；进度可见可取消 |
 | C2 | 邻接节点预加载 | `navigator_service.rs` | 展开表后相邻预取，失败静默 |
 | C3 | 增量刷新接入（`detect_all_changes` / `incremental_sync` + 快照） | `navigator_service.rs` | 二次刷新只落变更 |
-| C4 | 大 schema 分页 + **虚拟列表** | `navigator_service.rs` + `nav_view.rs`（视图已下沉到 `crates/database`） | ⏳ **分页已接**（2026-09-18）：`get_object_chunk` 索引分块 + `offset` 追加 + 「加载更多」；**虚拟列表未做**（今天靠分页限制条数，不是虚拟滚动）——实施规格见 §2.5 |
+| C4 | 大 schema 分页 + **虚拟列表** | `navigator_service.rs` + `nav_view.rs`（视图已下沉到 `crates/database`） | ✅ **分页 + 虚拟滚动已接**（2026-09-20）：`get_object_chunk` 索引分块 + 「加载更多」行 + `v_virtual_list` 虚拟滚动（S1–S3 见 §2.5；S4/S5 待做） |
 | C5 | 主题 token：注册 `search.match.background`；明暗核对 | `assets/themes/rds-theme.json`、`app` | 两套主题对比度达标 |
 | C6 | 收敛遗留：移除 `panels/` 导航占位；`db_navigator.rs` 移出本模块 | `crates/workbench` | 无死代码残留 |
 | C7 | 快捷键与无障碍（↑↓/→←/Enter/F4/Ctrl+F） | `crates/workbench/src/commands.rs`、导航面板 | 键位走通 |
 | C8 | **元数据缓存键切身份指纹**（规则已冻结，见 `connection-dialog-architecture.md` §3.6）：L2 路径 `conn_{id}.sqlite` → `meta_{fp}.sqlite`（`engine::persistence::metadata_identity`）；新增 `metadata_cache_index`（`canonical_desc` 可读描述 / `ref_conn_ids` 引用计数 / `last_used_at` / `size_bytes`）；同指纹并发预热互斥（进程内 + WAL / `busy_timeout`）；旧 `conn_*.sqlite` 按 legacy 保留（copy 不 move） | `crates/engine/src/persistence/{metadata_identity.rs,metadata_cache.rs,metadata_cache_pool.rs}`、`crates/workbench/src/services/connection_service.rs` | 改名 / 改密 / 换驱动实现后命中同一份 L2；同库两条连接不重复预热；孤儿缓存（引用为 0）可见且不自动删 |
 
-### 2.5 C4 实施规格：导航树虚拟列表
+### 2.5 C4 实施规格与实施记录：导航树虚拟列表
 
 **目标**：树不再靠「首屏 200 + 加载更多」限流，而是**扁平静态 + 虚拟滚动**；顺带解掉「滚到眼前」——
-`ListState::scroll_to_item` 是今天**缺的那一个可编程滚动入口**（导航树现在是自绘递归，不是 `List`）。
+需要一个**可编程滚动入口**（导航树以前是自绘递归，没有）。
 
-**已就绪的三块**（重构不用从零开始）：
+**状态：S1–S3 已落**（2026-09-20）：`843b5e1`（扁平静态 + 契约）· `2f51176`（改渲染）。
 
-1. **扁平静态已经存在**：`nav_order: Vec<NavOrderItem>` 就是「可见行的线性顺序」（渲染期累积，父在前、子随后），
-   带 `key / conn_id / path / property / has_children / expanded`。它就是 List 的 item 源；
-   已用窗口测试钉住：`nav_view::tests::visible_rows_follow_expansion_parent_before_child`。
+#### 决策：用 `gpui-base::v_virtual_list`，**不用** `gpui-component::List`
+
+原计划是 `List` + `NavTreeDelegate`（新文件 `nav_tree.rs`）。动手前核实两边的实际能力后改掉了：
+
+| | `List`（gpui-component） | `v_virtual_list`（gpui-base，已采用） |
+| --- | --- | --- |
+| item 渲染期拿得到面板吗 | 拿不到（`render_item` 在面板被借用时跑，回头读面板会 panic）→ **行数据得拷一份进委托** | 拿得到（闭包签名 `Fn(&mut V, Range<usize>, &mut Window, &mut Context<V>)`） |
+| 行高 | 按一个被测量的 item 定全表行高（文档明写「Every item should have same height」） | 按索引给高度（`Rc<Vec<Size<Pixels>>>`），支持不齐 |
+| 鼠标事件 | 组件自己消费（拖拽是最大不确定项） | 不管事件（行还是行，现有 `on_drag` / `on_click` / 右键菜单全部原样） |
+| 选中 | 组件维护选中索引，需镜像 + 防重入守卫 | 不维护（选中仍由 `selected_key` 一处管） |
+
+代价：滚动 / 定位要自己写（`VirtualListScrollHandle::scroll_to_item`，列在 S5）；
+行高要自己算准（`v_virtual_list` **不回写**测量结果，见下）。
+
+#### 已就绪的三块（重构没从零开始）
+
+1. **扁平静态**：`NavView::collect_nav_rows` 一次算出 `Vec<NavRow>`（六类行：分组头 / 连接 / 引用 /
+   对象 / 「更多」/「已定位」，带 `key / conn_id / depth / 载荷`）。它是顺序**唯一权威**——
+   `render_*` 不再递归、不再推顺序，键盘漫游序列（`nav_order`）是它的**投影**。
 2. **可见性规则已集中**：`nav_node_matches`（本地过滤）· `child_total` vs 已加载（`pending_more`）·
    `folder_limit`（渲染窗口）· `jumped`（定位窗口）· `skip`（过滤时不得整支隐藏）。
-3. **组件能力已核**（gpui-component 0.6.1 `list/delegate.rs` / `list/list.rs`）：
-   `items_count` / `render_item` / `render_section_header|footer` / `set_selected_index` /
-   `set_right_clicked_index` / `confirm(secondary)` / `has_more` + `load_more`（无限滚动，正好替掉「加载更多」行）/
-   **`scroll_to_item`** / `scroll_to_selected_item` / `set_item_to_measure_index`（变高行）。
+3. **副作用跟着顺序走**：展开即排队加载、索引搜索排程都在 `collect_nav_rows` 里——
+   留在旧渲染路径上，切换后就会静默失效。
 
-**实施步骤**（顺序即提交顺序）：
+#### 实施步骤（实际）
 
-| # | 做什么 | 落点 | 验收 |
+| # | 做什么 | 状态 | 验收 |
 | --- | --- | --- | --- |
-| S1 | `NavOrderItem` → `NavRow`：补 `depth`、`node: Option<NavNode>`、`kind: NavRowKind`（Connection / GroupHeader / Ref / Folder / Object / Column / More / Jump / SearchHit）；「渲染期 push」改成「渲染前一次性 flatten」 | `nav_view.rs`（纯函数，可单测） | 新旧两条路算出的顺序**逐条相等** |
-| S2 | 委托 `NavTreeDelegate`：`items_count = rows.len()`；`render_item` 按 kind 分发到现有 `render_*`（它们改成只画自己这一行，不再递归）；`confirm` = 双击（属性 / 展开）；`set_selected_index` 回写 `selected_key` | 新文件 `nav_tree.rs` | 窗口测试：选中镜像、双击开属性 |
-| S3 | 装配：`render_nav` 的树段换 `List::new(&state).flex_1().min_h_0()`；面板头 / facet / 搜索框留在 List 外 | `nav_view.rs` | 面板能渲染；现有 130 项工作台测试过 |
-| S4 | 逐项对齐交互（缺一不可）：展开/折叠（点击箭头 + →/←）· 右键菜单（`set_right_clicked_index`）· **拖拽**（对象→编辑器、连接行→分组）· 行内编辑器（标签 / 复制模板 / 分组重命名）· 「更多」/「已定位」行 · 引用行 | `nav_view.rs` | 每条都有窗口测试或真机确认 |
-| S5 | 收尾：键盘漫游改走 `set_selected_index` + `scroll_to_selected_item`；定位收尾改用 **`scroll_to_item`**（**这同时解掉「滚到眼前」**）；`page_limit` 逐步退场（虚拟滚动后不再需要「已到手只放大窗口」那半套） | `nav_view.rs` | 定位→目标在可视区（新窗口测试） |
+| S1 | `NavRow` 六类行 + `collect_nav_rows`（复刻原递归遍历的顺序与副作用）+ 抽 `NavConnFilter`（树与索引搜索共用一份连接级判据） | ✅ `843b5e1` | 8 阶段等价验收：收集序与渲染序逐步相等（分组 / 引用行 / 分页 / 定位窗口 / 过滤 / 无匹配） |
+| S2 | 行渲染器只画自己这一行（去递归 / 去 push / 去排队加载）；`sync_nav_order` 把行投影成漫游序列 | ✅ `2f51176` | 上项 + 键盘漫游覆盖引用行 / 「更多」/「已定位」行 |
+| S3 | 装配：`v_virtual_list` + `nav_row_sizes`；面板头 / facet / 搜索框 / 搜索结果区 / 空态都在列表外 | ✅ `2f51176` | 窗口级验收：行被真的画出来、次序自上而下、行高分级 |
+| S4 | 拖拽（对象→编辑器、连接行→分组）· 右键菜单 · 行内编辑器——**逐个真机确认**（测试盖不到鼠标） | ⏳ 待做 | 真机走一遍，不是“应该没事” |
+| S5 | `scroll_to_item` 落地（定位收尾滚到目标）· `page_limit` 退场 · `load_more` 替「加载更多」行 | ⏳ 待做 | 定位→目标在可视区（新窗口测试） |
 
-**风险与对策**：
+#### 行高是一条硬约束（换组件时最大的坑）
 
-- **拖拽是最大不确定项**（`List` 自己消费鼠标事件）：先写一个最小窗口测试看 drag 能否到达 item；不行则在 item 上显式挂 `on_drag`。
-  Quick Open 已踩过同类坑（行内可点元素会被 List 抢事件，所以那里改成了选中行提示 + 键位）。
-- **行高不齐**（引用行 / 搜索命中行 / 错误行比常规行高）：用 `set_item_to_measure_index` 按行测量，不假设统一行高。
-- **回归面大**：动手前先补三条窗口测试——可见行顺序（已补）· 键盘漫游跨层 · 展开/折叠；`ui_contract` 两份清单需同步新文件。
-- **不做的事**：不把连接分组层也塞进 List 以外的新框架；不重写元数据取数（它已接好）。
+`v_virtual_list` 按给定高度**定义**每行槽位（`AvailableSpace::Definite`），**不会**反过来测量并写回：
+估小 → 下一行压上来，估大 → 多留一段空隙。所以：
 
-**收益（为什么值）**：① 十万行同屏不再靠分页限流；② 得回 `scroll_to_item` → 「滚动到定位目标」可做；
-③ 「加载更多」行可以由 `has_more`/`load_more` 原生承担，交互少一层自制。
+- 每种行高在 `crates/workbench_shell/src/ui.rs` 有常量（`NAV_ROW_GROUP` / `NAV_ROW_CONNECTION` /
+  `NAV_ROW_TREE`），渲染里的 `h(rems(…))` 与 `nav_row_height` **成对维护**；
+- 行下附加行（加载中 / 错误 / 未连接 / 标签 chip）与行内编辑器（标签 / 复制模板 / 归组）改成**钉高**
+  （`NAV_SUBLINE` / `NAV_EDITOR_*`，超出内部滚动）——否则高度由字体排版决定，算不出来。
+
+#### 风险与对策（更新）
+
+- ~~拖拽是最大不确定项~~ → 未换组件，拖拽仍是原来的行内 `on_drag`，**风险降级为“待真机确认”（S4）**。
+- **行高不齐** → 已按上节钉成常量；新增行类时必须同时加常量与分支。
+- **回归面大** → 已补：可见行顺序 · 定位链路（3 条）· 行被真的画出来（本切片）；`ui_contract` 两份清单**无需**改动
+  （没有新建视图文件，渲染仍全在 `nav_view.rs`，已在扫描清单里）。
+- **不做的事**：不把连接分组层塞进另一套框架；不重写元数据取数（它已接好）。
+
+**收益**：① 十万行同屏不再靠分页限流；② 得回可编程滚动（S5 用）；③ 顺序与副作用单源，
+过滤 / 分组 / 定位的判据只有一份。
 
 ## 3. 测试场景清单
 
@@ -342,7 +366,7 @@
 | --- | --- |
 | 缓存只增不删导致磁盘膨胀 | 「缓存管理」显示占用 + 孤儿缓存提示（**不自动删**）；`CacheVersionManager` 治理 |
 | M:N 分组 + 多标签查询性能 | `connection_group_members(group_id, connection_id)` 与 `connection_tags(connection_id, tag)` 建唯一索引 |
-| 大 schema（10 万+ 表）渲染卡顿 | `get_tables_chunk` 分页 + 虚拟列表；列内联仅在 ≤50 列时展开 |
+| 大 schema（10 万+ 表）渲染卡顿 | 已落：`get_object_chunk` 分页 + `v_virtual_list` 虚拟滚动（只画视口内的行，见 §2.5）；列内联仅在 ≤50 列时展开 |
 | 连接/内省阻塞 UI | 后台任务 + 进度/取消；复用 `get_sync_status`；L2 命中先渲染 |
 | 遗留 `ConnectionService` 职责重叠 | 传输/协议层已按 connection-dev-plan C3 全部下沉 `crates/connection`（url / url_params / chain）；服务内仅剩依赖 engine 的会话编排（50KB），职责边界清晰 |
 | L2 缓存陈旧 | TTL 标记（非删除）+ 手动刷新 + 增量 diff |

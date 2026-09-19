@@ -57,6 +57,14 @@
 | | `NAV_SCOPE_COL_SHORT` | 2.4 | 38 | — |
 | | `NAV_SCOPE_COL_TEXT` | 3.4 | 54 | — |
 | | `NAV_ADD_TAG_SIZE` | 1.0 | 16 | `size_4` |
+| 导航树行高（虚拟列表） | `NAV_ROW_GROUP` | 1.5 | 24 | `h(rems(…))` |
+| | `NAV_ROW_CONNECTION` | 1.625 | 26 | `h(rems(…))` |
+| | `NAV_ROW_TREE` | 1.375 | 22 | `h(rems(…))` |
+| | `NAV_SUBLINE` | 1.125 | 18 | `h(rems(…))` |
+| | `NAV_EDITOR_TAG` | 3.5 | 56 | `h(rems(…))` |
+| | `NAV_EDITOR_COPY` | 4.5 | 72 | `h(rems(…))` |
+| | `NAV_EDITOR_GROUP` | 5.5 | 88 | `h(rems(…))` |
+| | `NAV_SEARCH_SECTION_MAX` | 8.0 | 128 | `max_h(rems(…))` |
 | 控件 / 图标 | `CONTROL_HEIGHT_SM` | 1.625 | 26 | `rems(1.625)` |
 | | `CONTROL_HEIGHT_MD` | 2.0 | 32 | `h_8` |
 | | `ICON_SIZE_SM` | 0.875 | 14 | `size_3p5` |
