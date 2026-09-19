@@ -29,6 +29,7 @@ use crate::model::NavNode;
 ///
 /// 载荷按类别带：分组头要计数、连接 / 引用行要连接本体、树行要节点与层级。
 /// 不共用「大结构 + 一堆 Option 字段」：那样每个调用点都得判「这个字段这行有没有」。
+#[derive(Clone)]
 pub(crate) enum NavRow {
     /// 分组头（含「未分组」容器）。
     GroupHeader {

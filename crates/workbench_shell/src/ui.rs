@@ -106,6 +106,27 @@ pub const NAV_SCOPE_COL_SHORT: f32 = 2.4;
 pub const NAV_SCOPE_COL_TEXT: f32 = 3.4;
 /// 连接行尾「加标签」按钮尺寸（1rem = 16px）。
 pub const NAV_ADD_TAG_SIZE: f32 = 1.0;
+/// 分组头行高（1.5rem = 24px）。
+pub const NAV_ROW_GROUP: f32 = 1.5;
+/// 连接行高（1.625rem = 26px；与旧的 `h(rems(1.625))` 同值）。
+pub const NAV_ROW_CONNECTION: f32 = 1.625;
+/// 对象树行高（1.375rem = 22px；与旧的 `h(rems(1.375))` 同值）。
+pub const NAV_ROW_TREE: f32 = 1.375;
+/// 树行下附加行高（「加载中…」/错误 / 标签 chip / 未连接提示；1.125rem = 18px）。
+///
+/// 虚拟列表不会反过来测量行高（`v_virtual_list` 按给定高度定义布局），所以这些附加行
+/// 在渲染里也显式钉高：改这里就要同步改渲染（见 `nav_row_height`）。
+pub const NAV_SUBLINE: f32 = 1.125;
+/// 行内标签编辑器块高（3.5rem = 56px；内容超出时内部滚动）。
+pub const NAV_EDITOR_TAG: f32 = 3.5;
+/// 行内「复制为模板」编辑器块高（4.5rem = 72px）。
+pub const NAV_EDITOR_COPY: f32 = 4.5;
+/// 行内归组编辑器块高（5.5rem = 88px；分组多时内部滚动）。
+pub const NAV_EDITOR_GROUP: f32 = 5.5;
+/// 搜索结果区最大高度（8rem = 128px；超出内部滚动）。
+///
+/// 结果区在虚拟列表**之上**，不能随命中数无限长——否则树区被挤成一条缝。
+pub const NAV_SEARCH_SECTION_MAX: f32 = 8.0;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 

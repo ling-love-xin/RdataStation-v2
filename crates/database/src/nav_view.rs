@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
+use gpui_kit::base::{VirtualListScrollHandle, v_virtual_list};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -115,10 +116,9 @@ impl RevealTarget {
     /// 目标节点的 key（与 `NavNode::child_key` 同构）。
     fn node_key(&self, catalog: &str) -> String {
         match (&self.parent, self.folder) {
-            (Some(parent), _) => NavNode::child_key(
-                &self.conn_id,
-                &[catalog, &self.schema, parent, &self.name],
-            ),
+            (Some(parent), _) => {
+                NavNode::child_key(&self.conn_id, &[catalog, &self.schema, parent, &self.name])
+            }
             (None, Some(_)) => {
                 NavNode::child_key(&self.conn_id, &[catalog, &self.schema, &self.name])
             }
@@ -931,6 +931,83 @@ fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div
     div().min_w_0().text_color(fg).child(name.to_string())
 }
 
+/// 树行下的附加行（「加载中…」/ 错误 / 未连接提示），带缩进。
+///
+/// 高度**钉成常量**（`ui::NAV_SUBLINE`）：虚拟列表按估算高度给每行分槽位，
+/// 内容高过槽位就会压到下一行——附加行的高度不能交给排版自己定。
+fn nav_subline_at(text: &str, color: Hsla, indent: f32) -> Div {
+    div()
+        .h_flex()
+        .items_center()
+        .w_full()
+        .h(rems(ui::NAV_SUBLINE))
+        .pl(rems(indent))
+        .pr_1()
+        .text_xs()
+        .text_color(color)
+        .overflow_hidden()
+        .child(text.to_string())
+}
+
+/// 固定缩进的附加行（连接行用；1.5rem 与旧的 `pl_6` 同值）。
+fn nav_subline(text: &str, color: Hsla) -> Div {
+    nav_subline_at(text, color, 1.5)
+}
+
+/// 一行的估算高度（rem → px）。
+///
+/// 必须与渲染里那几处的显式高度**成对维护**（`ui::NAV_ROW_*` / `ui::NAV_SUBLINE` /
+/// `ui::NAV_EDITOR_*`）：虚拟列表按估算高度给每行分槽位，内容高过槽位就会压到下一行。
+/// 不写成 `NavView` 方法：它只读状态（借用一份即可，不必拿整个面板）。
+fn nav_row_height(row: &NavRow, view: &NavViewState, show_tags: bool, rem: Pixels) -> Pixels {
+    let mut unit = match row {
+        NavRow::GroupHeader { .. } => ui::NAV_ROW_GROUP,
+        NavRow::Connection { .. } | NavRow::Reference { .. } => ui::NAV_ROW_CONNECTION,
+        NavRow::Tree { .. } | NavRow::More { .. } | NavRow::Jump { .. } => ui::NAV_ROW_TREE,
+    };
+    match row {
+        NavRow::Connection { conn, .. } => {
+            let connected = view.connected.contains(&conn.id) || conn.connected;
+            let loading = view.loading.contains(&conn.id);
+            let error = view.errors.contains_key(&conn.id);
+            if loading {
+                unit += ui::NAV_SUBLINE;
+            }
+            if show_tags && view.tags.get(&conn.id).is_some_and(|t| !t.is_empty()) {
+                unit += ui::NAV_SUBLINE;
+            }
+            if view.group_picker_for.as_deref() == Some(conn.id.as_str()) {
+                unit += ui::NAV_EDITOR_GROUP;
+            }
+            if view.tag_editor_for.as_deref() == Some(conn.id.as_str()) {
+                unit += ui::NAV_EDITOR_TAG;
+            }
+            if view.copy_for.as_deref() == Some(conn.id.as_str()) {
+                unit += ui::NAV_EDITOR_COPY;
+            }
+            // 「未连接 · 右键连接」提示：展开、没连上、也没孩子、没报错、没在加载。
+            let expanded = view.expanded.contains(&conn.id);
+            let has_children = view.children.get(&conn.id).is_some_and(|c| !c.is_empty());
+            if expanded && !connected && !has_children && !error && !loading {
+                unit += ui::NAV_SUBLINE;
+            }
+            if error {
+                unit += ui::NAV_SUBLINE;
+            }
+        }
+        NavRow::Tree { node, .. } => {
+            if view.loading.contains(&node.key) {
+                unit += ui::NAV_SUBLINE;
+            }
+            if view.errors.contains_key(&node.key) {
+                unit += ui::NAV_SUBLINE;
+            }
+        }
+        _ => {}
+    }
+    rems(unit).to_pixels(rem)
+}
+
 /// 数据源导航面板（M4）。
 ///
 /// 视图归本 crate；宿主能力经 [`NavHost`] 注入（与 `mock` / `insight` /
@@ -963,6 +1040,13 @@ pub struct NavView {
     _nav_group_sub: Option<Subscription>,
     /// 渲染顺序重建的可见项（键盘 ↑↓ 移动 / 展开折叠 / 打开属性）。
     nav_order: Rc<RefCell<Vec<NavOrderItem>>>,
+    /// 本次可见行（[`Self::collect_nav_rows`] 在 render 里写入；虚拟列表与漫游序列都读它）。
+    ///
+    /// 为何存在实体字段而不是每帧传给列表：`v_virtual_list` 的 item 渲染器在**布局期**
+    /// 才被调用（拿得到 `&mut Context<Self>`），那时没有再传一次的机会。
+    rows: Vec<NavRow>,
+    /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
+    list_scroll: Rc<VirtualListScrollHandle>,
     /// 正在轮询预热进度的后台任务（避免重复启动）。
     warm_poll: Option<Task<()>>,
     /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
@@ -997,6 +1081,8 @@ impl NavView {
             nav_group_input: None,
             _nav_group_sub: None,
             nav_order: Rc::new(RefCell::new(Vec::new())),
+            rows: Vec::new(),
+            list_scroll: Rc::new(VirtualListScrollHandle::new()),
             warm_poll: None,
             nav_pump: RefCell::new(None),
             nav_search_focus_pending: false,
@@ -1544,7 +1630,10 @@ impl NavView {
                 cx,
             ));
 
-        let body = self.render_nav_tree(source_filter, cx);
+        // 可见行一次算好（顺序权威）：虚拟列表、键盘漫游序列、滚动定位都读它。
+        self.rows = self.collect_nav_rows(source_filter, cx);
+        self.sync_nav_order();
+        let body = self.render_nav_body(window, cx);
 
         // 搜索行：输入框 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签；归属域由上方 chips 承担）。
         let active_facets = self.nav_active_facet_count();
@@ -1963,250 +2052,260 @@ impl NavView {
         (types, drivers, tags.into_iter().collect())
     }
 
-    /// 树主体：一级为自定义分组（含「未分组」），下设连接节点。
+    /// 画第 `ix` 行（虚拟列表的 item 渲染器）。
     ///
-    /// 连接可属于多个分组（多对多）：只在**主组**全亮呈现，其余分组以**引用行**出现
-    /// （`∈ 主组名`），避免多对多线性撑高树；归属无任何分组的连接收进「未分组」。
-    fn render_nav_tree(&self, source_filter: Option<NavSource>, cx: &mut Context<Self>) -> Div {
-        // 键盘导航的可见序列每帧重建（渲染是顺序权威来源）。
-        self.nav_order.borrow_mut().clear();
-        let muted = cx.theme().colors.muted_foreground;
-        let fg = cx.theme().colors.foreground;
-        // 分组 / 成员 / 标签尚未就绪（首次渲染由 `render_nav` 的 defer 加载）。
-        if !self.nav.borrow().groups_loaded {
-            return div()
-                .v_flex()
-                .w_full()
-                .min_h_0()
-                .px_1()
-                .pt_1()
-                .child(div().text_xs().text_color(muted).child("加载中…"));
+    /// 顺序 / 归属 / 深度来自 [`Self::collect_nav_rows`]；这里只管「这一行长什么样」。
+    /// 实体会在**布局期**（不是 render 期）被借用进来，所以这里只读状态、不写状态。
+    fn render_nav_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(row) = self.rows.get(ix) else {
+            // 行集合刚变的那一帧可能还拿旧索引来问：给空元素，不 panic。
+            return div().into_any_element();
+        };
+        match row {
+            NavRow::GroupHeader {
+                id,
+                name,
+                count,
+                connected,
+                failed,
+            } => self
+                .render_group_header(id, name, *count, *connected, *failed, cx)
+                .into_any_element(),
+            NavRow::Connection { conn, scope_key } => self
+                .render_connection_row(conn, scope_key, cx)
+                .into_any_element(),
+            NavRow::Reference {
+                conn,
+                scope_key,
+                primary_name,
+            } => self
+                .render_reference_row(conn, scope_key, primary_name, cx)
+                .into_any_element(),
+            NavRow::Tree {
+                node,
+                depth,
+                scope_key,
+            } => self
+                .render_nav_node(node, *depth, scope_key, cx)
+                .into_any_element(),
+            NavRow::More { node, depth, .. } => {
+                let (loaded, total, limit) = self.nav_more_numbers(node);
+                self.render_more_row(node, loaded, total, limit, *depth, cx)
+                    .into_any_element()
+            }
+            NavRow::Jump {
+                node,
+                depth,
+                position,
+                ..
+            } => {
+                let loaded = self.nav_node_loaded(&node.key);
+                self.render_jumped_row(node, *position, loaded, *depth, cx)
+                    .into_any_element()
+            }
         }
-        let (filter, groups, membership, group_order, ungrouped_order, tags) = {
-            let view = self.nav.borrow();
-            (
-                view.filter.to_lowercase(),
-                view.groups.clone(),
-                view.membership.clone(),
-                view.group_order.clone(),
-                view.ungrouped_order.clone(),
-                view.tags.clone(),
-            )
-        };
-        let conns: Vec<ConnectionItem> = self.host.connections();
-        let by_id: HashMap<&str, &ConnectionItem> =
-            conns.iter().map(|c| (c.id.as_str(), c)).collect();
+    }
 
-        // 显式主组（连接 ID → 分组 ID）。
-        let primary_explicit = self.nav.borrow().primary_group.clone();
+    /// 某节点当前已加载的子节点条数。
+    fn nav_node_loaded(&self, key: &str) -> usize {
+        self.nav
+            .borrow()
+            .children
+            .get(key)
+            .map(|c| c.len())
+            .unwrap_or(0)
+    }
 
-        // 主组：用户**显式指定**优先；未指定时回退到分组排序最靠前的一个
-        // （`membership` 按分组排序构建）。显式值若已不在所属分组（被移出）则忽略。
-        // 主组用于「多组只全亮呈现一次，其余组以引用行出现」。
-        let primary_gid =
-            |conn_id: &str| nav_primary_scope(&membership, &primary_explicit, conn_id);
+    /// 「加载更多」行的三个数：已加载 / 数据侧总数 / 渲染窗口上限。
+    fn nav_more_numbers(&self, node: &NavNode) -> (usize, usize, usize) {
+        let loaded = self.nav_node_loaded(&node.key);
+        if !matches!(&node.kind, NavNodeKind::Folder(_)) {
+            return (loaded, loaded, usize::MAX);
+        }
+        (
+            loaded,
+            self.node_total(&node.key, loaded),
+            self.folder_limit(&node.key),
+        )
+    }
 
-        // 连接级约束：归属域 chips + 附加 facet（类型 / 驱动 / 标签）。
-        // 索引搜索也吃这一套（它回答“在哪些连接里找”），**不吃**搜索词——
-        // 搜索词是**对象级**查询，若拿它去筛连接，搜表名时会因连接名不匹配而搜不到任何东西。
-        let conn_filter = NavConnFilter::snapshot(&self.nav.borrow(), source_filter);
+    /// 虚拟列表的每行高度（`v_virtual_list` 只吃「每行多高」：它按给定高度定义布局，
+    /// 不会反过来测量行内容）。
+    ///
+    /// 与渲染**成对维护**：附加行（[`nav_subline`]）与行内编辑器（`render_*_editor`）的
+    /// 实际高度都已钉成 `ui::NAV_*` 常量，这里按同一组常量相加。
+    /// 估大只会多留一段空隙；估小会让下一行压上来。
+    fn nav_row_sizes(&self, rem: Pixels, cx: &App) -> Rc<Vec<Size<Pixels>>> {
+        let view = self.nav.borrow();
+        let show_tags = self.host.show_tags(cx);
+        Rc::new(
+            self.rows
+                .iter()
+                .map(|row| Size::new(Pixels::ZERO, nav_row_height(row, &view, show_tags, rem)))
+                .collect(),
+        )
+    }
 
-        // 树里的连接行：在连接级约束之上，搜索词也顺手命中连接名 / 标签
-        // （否则搜连接名时整棵树会被清空，看起来像坏了）。
-        let passes = |conn: &ConnectionItem| -> bool {
-            self.nav_conn_passes_tree_row(&conn_filter, conn, &tags, &filter)
-        };
+    /// 把可见行投影成**键盘漫游序列**（`nav_order`）。
+    ///
+    /// 为何是投影而不是渲染副产物：渲染现在只画视口内那几行，没被画到的行也得能
+    /// ↑↓ 走到（否则“滚到哪才能选到哪”，与「在树中定位」的需求直接冲突）。
+    ///
+    /// 分组头是容器标题（[`NavRow::selectable`] 为假）不进序列；引用行 / 「更多」/
+    /// 「已定位」行**进**序列——它们可点可选中，旧口径漏列会让 ↓ 跳过一行看得见的行。
+    fn sync_nav_order(&self) {
+        let view = self.nav.borrow();
+        let mut order = self.nav_order.borrow_mut();
+        order.clear();
+        for row in &self.rows {
+            let (conn_id, path, property, has_children) = match row {
+                NavRow::GroupHeader { .. } => continue,
+                NavRow::Connection { conn, .. } => (
+                    conn.id.clone(),
+                    Some(NavPath::Connection),
+                    Some(PropertyRef {
+                        conn_id: conn.id.clone(),
+                        source: NavSource::from_conn_id(&conn.id),
+                        catalog: None,
+                        schema: None,
+                        parent: None,
+                        name: conn.name.clone(),
+                        kind: PropertyKind::Connection,
+                    }),
+                    true,
+                ),
+                // 引用行只指路：不展开、不打开属性（Enter / ←→ 落在它上面是无操作）。
+                NavRow::Reference { conn, .. } => (conn.id.clone(), None, None, false),
+                NavRow::Tree { node, .. } => (
+                    node.connection_id.clone(),
+                    node.expand_path.clone(),
+                    node.property.clone(),
+                    node.has_children,
+                ),
+                // 「更多」/「已定位」行自己带点击行为（见 `render_more_row`）。
+                NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
+                    (node.connection_id.clone(), None, None, false)
+                }
+            };
+            order.push(NavOrderItem {
+                key: row.key(),
+                expanded: view.expanded.contains(&row.key()),
+                conn_id,
+                path,
+                property,
+                has_children,
+            });
+        }
+    }
 
-        // ——— 索引搜索（树顶结果区）———
-        // 本地过滤命中的是**已加载**节点（零往返、即时）；索引搜索补的是「尚未展开到的那部分」。
-        // 只在查询词变化时排一次后台任务；过期批次在回填处丢弃。
-        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
-
-        let mut column = div()
+    /// 树主体：搜索结果区（若有）+「加载中…」/ 虚拟列表 / 空态。
+    ///
+    /// 列表是**虚拟滚动**：只画视口内那几行，行集合与顺序由 [`Self::collect_nav_rows`]
+    /// 一次算好（见 `docs/architecture/database/database-nav-dev-plan.md` §2.5）。
+    /// 面板头 / 来源 chips / 搜索框 / 筛选弹层都在列表之外。
+    fn render_nav_body(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let mut body = div()
             .v_flex()
             .w_full()
+            .flex_1()
             .min_h_0()
             .gap_0p5()
             .px_1()
             .pt_0p5()
             .pb_1();
-        let mut shown = 0usize;
-
-        // 运行时连接状态与错误集（分组头聚合健康度用；一次算完避免逐条查询）。
-        let connected_set: HashSet<String> = {
-            let mut set: HashSet<String> = self.nav.borrow().connected.iter().cloned().collect();
-            for c in &conns {
-                if c.connected {
-                    set.insert(c.id.clone());
-                }
-            }
-            set
-        };
-        let error_set: HashSet<String> = self.nav.borrow().errors.keys().cloned().collect();
-
-        // 搜索结果区（树顶）：索引里搜到的对象，含尚未展开到的 schema / 连接。
+        // 搜索结果区（索引搜索）：固定块，不随树滚（命中可能上百条，所以自带一个上限高度）。
         if let Some(section) = self.render_search_section(cx) {
-            column = column.child(section);
+            body = body.child(
+                div()
+                    .id("nav-search-section")
+                    .flex_none()
+                    .w_full()
+                    .max_h(rems(ui::NAV_SEARCH_SECTION_MAX))
+                    .overflow_y_scroll()
+                    .child(section),
+            );
         }
-
-        for group in &groups {
-            // 组内顺序以存储的手动排序为准（缺省无成员）。
-            let members: Vec<&ConnectionItem> = group_order
-                .get(&group.id)
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(|id| by_id.get(id.as_str()).copied())
-                        .filter(|c| passes(c))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if members.is_empty() {
-                continue;
-            }
-            shown += members.len();
-            let ok_count = members
-                .iter()
-                .filter(|c| connected_set.contains(&c.id))
-                .count();
-            let fail_count = members.iter().filter(|c| error_set.contains(&c.id)).count();
-            column = column.child(self.render_group_header(
-                &group.id,
-                &group.name,
-                members.len(),
-                ok_count,
-                fail_count,
-                cx,
-            ));
-            if !self.group_collapsed(&group.id) {
-                for conn in members {
-                    if primary_gid(&conn.id).as_deref() == Some(group.id.as_str()) {
-                        column = column.child(self.render_connection_row(conn, &group.id, cx));
-                    } else {
-                        // 引用行：全亮行在主组，这里只指路。
-                        let primary_name = primary_gid(&conn.id)
-                            .and_then(|gid| {
-                                groups.iter().find(|g| g.id == gid).map(|g| g.name.clone())
-                            })
-                            .unwrap_or_else(|| "未分组".to_string());
-                        column = column.child(self.render_reference_row(
-                            conn,
-                            &group.id,
-                            &primary_name,
-                            cx,
-                        ));
-                    }
-                }
-            }
+        // 分组 / 成员 / 标签尚未就绪（首帧由 `render_nav` 的 defer 加载）。
+        if !self.nav.borrow().groups_loaded {
+            return body.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().colors.muted_foreground)
+                    .child("加载中…"),
+            );
         }
-
-        // 「未分组」固定分组：收纳不属于任何自定义分组的连接。
-        // 顺序与分组内同一条规则（`nav_order_members`）：手动排序在前，未排过的按名称升序。
-        let candidates: Vec<&ConnectionItem> = conns
-            .iter()
-            .filter(|c| {
-                membership
-                    .get(&c.id)
-                    .map(|gs| gs.is_empty())
-                    .unwrap_or(true)
-                    && passes(c)
-            })
-            .collect();
-        let ranked: HashMap<&str, i64> = ungrouped_order
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.as_str(), i as i64))
-            .collect();
-        let stored: Vec<(String, Option<i64>)> = candidates
-            .iter()
-            .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
-            .collect();
-        let ungrouped: Vec<&ConnectionItem> = nav_order_members(&stored, |id| {
-            by_id
-                .get(id)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| id.to_string())
-        })
-        .iter()
-        .filter_map(|id| by_id.get(id.as_str()).copied())
-        .collect();
-        // 已有自定义分组时也渲染（空）未分组头：它是「拖拽移出分组」的常驻落点。
-        let groups_shown = shown > 0;
-        if !ungrouped.is_empty() || (!groups.is_empty() && groups_shown) {
-            shown += ungrouped.len();
-            let ok_count = ungrouped
-                .iter()
-                .filter(|c| connected_set.contains(&c.id))
-                .count();
-            let fail_count = ungrouped
-                .iter()
-                .filter(|c| error_set.contains(&c.id))
-                .count();
-            column = column.child(self.render_group_header(
-                GROUP_UNGROUPED,
-                "未分组",
-                ungrouped.len(),
-                ok_count,
-                fail_count,
-                cx,
-            ));
-            if !self.group_collapsed(GROUP_UNGROUPED) {
-                for conn in ungrouped {
-                    column = column.child(self.render_connection_row(conn, GROUP_UNGROUPED, cx));
-                }
-            }
+        if self.rows.is_empty() {
+            return body.child(self.render_nav_empty_state(cx));
         }
+        let sizes = self.nav_row_sizes(window.rem_size(), cx);
+        let entity = cx.entity();
+        let scroll = self.list_scroll.clone();
+        body.child(
+            div().flex_1().min_h_0().w_full().child(
+                v_virtual_list(
+                    entity,
+                    "nav-tree-rows",
+                    sizes,
+                    move |this, range: std::ops::Range<usize>, _window, cx| {
+                        range
+                            .map(|ix| this.render_nav_row(ix, cx))
+                            .collect::<Vec<AnyElement>>()
+                    },
+                )
+                .track_scroll(&scroll),
+            ),
+        )
+    }
 
-        if shown == 0 {
-            if conns.is_empty() {
-                // 空态引导（设计 §2.4）：标题 + 说明 + 面板内「新建连接」按钮。
-                let host = self.host.clone();
-                column = column.child(
+    /// 空态：没有任何连接（引导新建）/ 有连接但都过不了筛选。
+    fn render_nav_empty_state(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let fg = cx.theme().colors.foreground;
+        if self.host.connections().is_empty() {
+            let host = self.host.clone();
+            return div()
+                .w_full()
+                .pt_5()
+                .px_3()
+                .v_flex()
+                .items_start()
+                .gap_1p5()
+                .child(
                     div()
-                        .w_full()
-                        .pt_5()
-                        .px_3()
-                        .v_flex()
-                        .items_start()
-                        .gap_1p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(fg)
-                                .child("还没有数据源"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("当前项目与全局库均无连接。点击右上角「＋」新建。"),
-                        )
-                        .child(
-                            Button::new("nav-empty-new-connection")
-                                .primary()
-                                .small()
-                                .icon(IconName::Plus)
-                                .label("新建连接")
-                                .on_click(move |_, window, app: &mut App| {
-                                    host.new_connection(window, app);
-                                }),
-                        ),
-                );
-            } else if self.nav.borrow().search_hits.is_empty() {
-                // 有命中时不说这句：结果区在树顶已经给了答案，
-                // 同时出现“没有匹配的数据源”与一批命中会自相矛盾。
-                column = column.child(
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(fg)
+                        .child("还没有数据源"),
+                )
+                .child(
                     div()
-                        .w_full()
-                        .pt_5()
-                        .px_3()
                         .text_xs()
                         .text_color(muted)
-                        .child("没有匹配的数据源。"),
+                        .child("当前项目与全局库均无连接。点击右上角「＋」新建。"),
+                )
+                .child(
+                    Button::new("nav-empty-new-connection")
+                        .primary()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("新建连接")
+                        .on_click(move |_, window, app: &mut App| {
+                            host.new_connection(window, app);
+                        }),
                 );
-            }
         }
-        column
+        if self.nav.borrow().search_hits.is_empty() {
+            // 有命中时不说这句：结果区在树顶已经给了答案，同时出现
+            // 「没有匹配的数据源」与一批命中会自相矛盾。
+            return div()
+                .w_full()
+                .pt_5()
+                .px_3()
+                .text_xs()
+                .text_color(muted)
+                .child("没有匹配的数据源。");
+        }
+        div()
     }
 
     /// 驱动 id → 数据源类型 id（目录优先；目录还没到时退化为驱动 id 本身）。
@@ -2257,9 +2356,6 @@ impl NavView {
 
     /// 索引搜索排程（查询词变了才排队；结果区由 [`Self::render_search_section`] 呈现）。
     ///
-    /// 与本地过滤的分工（两者同时生效，互不替代）：本地过滤命中**已加载**节点
-    /// （零往返、即时）；索引搜索命中**索引里的全部对象**（含尚未展开到的 schema），跨连接。
-    ///
     /// 方向（已拍板）：搜索 / 命令这类“先输入再选”的交互后续要**独立成一个 crate**
     /// （类 VS Code 的 Quick Open / 命令面板），导航面板只保留这个“够用”版本；
     /// 新特性不要再往这里加。
@@ -2291,9 +2387,10 @@ impl NavView {
         if !started {
             return;
         }
+        let tags = self.nav.borrow().tags.clone();
         let targets: Vec<nav_jobs::SearchTarget> = conns
             .iter()
-            .filter(|c| self.nav_conn_passes_facets(conn_filter, c, &self.nav.borrow().tags))
+            .filter(|c| self.nav_conn_passes_facets(conn_filter, c, &tags))
             .map(|c| nav_jobs::SearchTarget {
                 conn_id: c.id.clone(),
                 label: c.name.clone(),
@@ -2314,14 +2411,14 @@ impl NavView {
         self.ensure_nav_pump(cx);
     }
 
-    /// 收集本次**可见行**（顺序权威；虚拟列表的 item 源）。
+    /// 收集本次**可见行**（顺序权威；虚拟列表的 item 源与漫游序列都读它）。
     ///
     /// 这是原递归渲染里「顺序与身份」的那一半：哪些行可见、按什么顺序、属于哪个容器 / 分组。
-    /// 「这一行长什么样」仍归既有的 `render_*`（选中 / 展开 / 错误 / 悬停都由它们自己读），
+    /// 「这一行长什么样」仍归 `render_*`（选中 / 展开 / 错误 / 悬停都由它们自己读），
     /// 本函数不复制那些判据，否则两份口径会各自漂移。
     ///
     /// 两处副作用跟着顺序走（[`Self::ensure_nav_loaded`] / [`Self::nav_schedule_index_search`]）：
-    /// 把它们留在旧渲染路径上，切换后就会静默失效——展开不再加载、搜索不再排队。
+    /// 把它们留在旧渲染路径上，切到虚拟列表后就会静默失效——展开不再加载、搜索不再排队。
     ///
     /// 分组 / 成员尚未就绪时返回空（调用方负责显「加载中…」）。
     pub(crate) fn collect_nav_rows(
@@ -2377,9 +2474,7 @@ impl NavView {
                 .map(|ids| {
                     ids.iter()
                         .filter_map(|id| by_id.get(id.as_str()).copied())
-                        .filter(|c| {
-                            self.nav_conn_passes_tree_row(&conn_filter, c, &tags, &filter)
-                        })
+                        .filter(|c| self.nav_conn_passes_tree_row(&conn_filter, c, &tags, &filter))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -2391,7 +2486,10 @@ impl NavView {
                 id: group.id.clone(),
                 name: group.name.clone(),
                 count: members.len(),
-                connected: members.iter().filter(|c| connected_set.contains(&c.id)).count(),
+                connected: members
+                    .iter()
+                    .filter(|c| connected_set.contains(&c.id))
+                    .count(),
                 failed: members.iter().filter(|c| error_set.contains(&c.id)).count(),
             });
             if self.group_collapsed(&group.id) {
@@ -2454,7 +2552,10 @@ impl NavView {
                     .iter()
                     .filter(|c| connected_set.contains(&c.id))
                     .count(),
-                failed: ungrouped.iter().filter(|c| error_set.contains(&c.id)).count(),
+                failed: ungrouped
+                    .iter()
+                    .filter(|c| error_set.contains(&c.id))
+                    .count(),
             });
             if !self.group_collapsed(GROUP_UNGROUPED) {
                 for conn in ungrouped {
@@ -2467,7 +2568,7 @@ impl NavView {
 
     /// 连接行 + （展开时）它的子树。
     ///
-    /// 与 [`Self::render_connection_row`] 同一条门：**仅在运行时已连接时**才排加载。
+    /// 与旧渲染同一条门：**仅在运行时已连接时**才排加载。
     /// 为何加这道门：展开态会跨重启从 `navigator_state` 恢复，但运行时连接不跨重启；
     /// 若此时仍排队，`NavigatorService` → `MetadataService` 取不到句柄，
     /// 会冒泡为用户看到的 `[CONN_NOT_FOUND]`。
@@ -2501,7 +2602,7 @@ impl NavView {
         }
     }
 
-    /// 对象树行 + （展开时）它的子树（`depth` 决定缩进；与 [`Self::render_nav_node`] 逐条对应）。
+    /// 对象树行 + （展开时）它的子树（`depth` 决定缩进；与旧 `render_nav_node` 逐条对应）。
     fn collect_node_rows(
         &self,
         rows: &mut Vec<NavRow>,
@@ -2543,7 +2644,7 @@ impl NavView {
         if !expanded_eff {
             return;
         }
-        // 类别文件夹分页：大 schema 只渲染首批，其余用「加载更多」逐页展开。
+        // 类别文件夹分页：大 schema 只处理首批，其余用「加载更多」逐页展开。
         let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
         let loaded = children.len();
         let total = if is_folder {
@@ -2614,10 +2715,11 @@ impl NavView {
 
         let mut header = div()
             .id(format!("nav-group-{group_id}"))
+            .debug_selector(|| "nav-row-group".to_string())
             .h_flex()
             .items_center()
             .w_full()
-            .h(rems(1.5))
+            .h(rems(ui::NAV_ROW_GROUP))
             .px_1()
             .gap_1()
             .rounded_md()
@@ -2950,10 +3052,11 @@ impl NavView {
         let label = format!("\u{2208} {primary_name}");
         div()
             .id(format!("nav-ref-{}::{}", group_id, conn.id))
+            .debug_selector(|| "nav-row-ref".to_string())
             .h_flex()
             .items_center()
             .w_full()
-            .h(rems(1.625))
+            .h(rems(ui::NAV_ROW_CONNECTION))
             .px_1()
             .gap_1()
             .rounded_md()
@@ -3034,13 +3137,8 @@ impl NavView {
                 view.children.get(&conn.id).cloned().unwrap_or_default(),
             )
         };
-        // 仅在**运行时已连接**时才在渲染期排后台加载。
-        // 为何加这道门：展开态会跨重启从 `navigator_state` 恢复，但运行时连接不跨重启；
-        // 若此时仍排队，`NavigatorService` → `MetadataService` 取不到句柄，
-        // 会冒泡为用户看到的 `[CONN_NOT_FOUND]`。
-        if expanded && connected {
-            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
-        }
+        // 展开未加载时的「排一次后台加载」不在这里：它已随顺序一起搬到 `collect_nav_rows`
+        //（渲染只画一行，副作用不能藏在「这一行恰好被画到」里）。
 
         let source = NavSource::from_conn_id(&conn.id);
         // 来源标识：短码 `P/G/GP` 或文字（设置项，默认短码）。
@@ -3059,23 +3157,6 @@ impl NavView {
         let scope_key = scope_key.to_string();
         let selected = self.nav.borrow().selected_key.as_deref() == Some(conn.id.as_str());
         let selected_bg = cx.theme().colors.list_active;
-        // 键盘导航序列（父在前，子随渲染加入）。
-        self.nav_order.borrow_mut().push(NavOrderItem {
-            key: conn.id.clone(),
-            conn_id: conn.id.clone(),
-            path: Some(NavPath::Connection),
-            property: Some(PropertyRef {
-                conn_id: conn.id.clone(),
-                source,
-                catalog: None,
-                schema: None,
-                parent: None,
-                name: conn.name.clone(),
-                kind: PropertyKind::Connection,
-            }),
-            has_children: true,
-            expanded,
-        });
 
         // ---- v7：行内只常驻「徽标 + 名称 + 归属域列」；`+` 与行操作仅 hover / 选中显 ----
         let nav_view = self.driver_catalog.borrow().get(&conn.driver).map(|m| {
@@ -3306,10 +3387,11 @@ impl NavView {
         block = block.child(
             div()
                 .id(format!("nav-conn-{}::{}", scope_key, conn.id))
+                .debug_selector(|| "nav-row-conn".to_string())
                 .h_flex()
                 .items_center()
                 .w_full()
-                .h(rems(1.625))
+                .h(rems(ui::NAV_ROW_CONNECTION))
                 .px_1()
                 .gap_1()
                 .rounded_md()
@@ -3716,14 +3798,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
 
         // 后台加载占位（避免展开后空白，误导为已加载完）。
         if self.nav.borrow().loading.contains(&conn.id) {
-            block = block.child(
-                div()
-                    .pl_6()
-                    .pb_0p5()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("加载中…"),
-            );
+            block = block.child(nav_subline("加载中…", muted));
         }
 
         // 标签（v7 修订）：显示在连接名**下一行**（不在名称行内），仅 `⋯ → 显示标签`
@@ -3731,16 +3806,20 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         if let Some(chips) = tag_chips {
             block = block.child(
                 div()
-                    .pl_6()
-                    .pb_0p5()
+                    .h_flex()
+                    .items_center()
+                    .h(rems(ui::NAV_SUBLINE))
                     .w_full()
                     .min_w_0()
+                    .pl_6()
                     .overflow_hidden()
                     .child(chips),
             );
         }
 
         // 行内编辑器：归组（右键「移动到分组…」）与标签（行尾 `+`）分开，各司其职。
+        // 块高在各自的渲染里钉成常量（见 `ui::NAV_EDITOR_*`）：虚拟列表按估算高度
+        // 定义行槽位，内容高过槽位会压到下一行，所以不能是「内容说多少就多少」。
         let picker_open = self.nav.borrow().group_picker_for.as_deref() == Some(conn.id.as_str());
         if picker_open {
             block = block.child(self.render_group_editor(conn, &scope_key, cx));
@@ -3757,23 +3836,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
         let loading_here = self.nav.borrow().loading.contains(&conn.id);
         if expanded && !connected && children.is_empty() && error.is_none() && !loading_here {
-            block = block.child(
-                div()
-                    .pl_6()
-                    .pb_0p5()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("未连接 · 右键「连接」或再次展开"),
-            );
+            block = block.child(nav_subline("未连接 · 右键「连接」或再次展开", muted));
         }
         if let Some(err) = error {
-            block = block.child(div().pl_6().pb_1().text_xs().text_color(danger).child(err));
-        }
-
-        if expanded {
-            for child in children {
-                block = block.child(self.render_nav_node(&child, 1, &scope_key, cx));
-            }
+            block = block.child(nav_subline(&err, danger));
         }
 
         block
@@ -3788,7 +3854,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         conn: &ConnectionItem,
         scope_key: &str,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> Stateful<Div> {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
@@ -3806,8 +3872,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let root = self.host.project_root();
 
         let mut panel = div()
+            .id(SharedString::from(format!("nav-group-editor-{}", conn.id)))
             .v_flex()
             .w_full()
+            .h(rems(ui::NAV_EDITOR_GROUP))
+            .overflow_y_scroll()
             .ml_6()
             .mr_1()
             .mb_1()
@@ -3817,7 +3886,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .border_1()
             .border_color(border)
             .bg(bg)
-            .child(div().text_xs().text_color(muted).child("归组"));
+            .child(div().flex_none().text_xs().text_color(muted).child("归组"));
 
         for group in &groups {
             let checked = membership.iter().any(|g| g == &group.id);
@@ -3950,13 +4019,16 @@ this.host.open_right_panel(RightPanel::Insight, cx);
     }
 
     /// 行内**标签**编辑器（行尾 `+` 打开）：仅标签输入，回车保存。
-    fn render_tag_editor(&self, cx: &mut Context<Self>) -> Div {
+    fn render_tag_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
         let bg = cx.theme().colors.popover;
         let mut panel = div()
+            .id("nav-tag-editor")
             .v_flex()
             .w_full()
+            .h(rems(ui::NAV_EDITOR_TAG))
+            .overflow_y_scroll()
             .ml_6()
             .mr_1()
             .mb_1()
@@ -3968,6 +4040,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .bg(bg)
             .child(
                 div()
+                    .flex_none()
                     .text_xs()
                     .text_color(muted)
                     .child("标签（逗号分隔，回车保存）"),
@@ -3979,14 +4052,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
     }
 
     /// 行内「复制为模板」编辑器（右键「复制连接（模板）…」打开）：输入新名，回车提交。
-    fn render_copy_editor(&self, cx: &mut Context<Self>) -> Div {
+    fn render_copy_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
         let bg = cx.theme().colors.popover;
         let entity = cx.entity();
         let mut panel = div()
+            .id("nav-copy-editor")
             .v_flex()
             .w_full()
+            .h(rems(ui::NAV_EDITOR_COPY))
+            .overflow_y_scroll()
             .ml_6()
             .mr_1()
             .mb_1()
@@ -3998,6 +4074,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .bg(bg)
             .child(
                 div()
+                    .flex_none()
                     .text_xs()
                     .text_color(muted)
                     .child("复制为模板（不带密码；回车提交）"),
@@ -4039,39 +4116,15 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         };
 
         let filter = self.nav.borrow().filter.to_lowercase();
-        let expanded = {
+        // 展开态按**过滤生效后**的那份看：带筛选时所有行都当展开（否则命中的行藏在关着的支里）。
+        // 「要不要加载」「这一行可不可见」不在这里——它们归 `collect_nav_rows`。
+        let (expanded, error) = {
             let view = self.nav.borrow();
-            view.expanded.contains(&node.key)
-        };
-        if expanded && node.has_children {
-            if let Some(p) = node.expand_path.clone() {
-                self.ensure_nav_loaded(&node.connection_id, &node.key, p, false, cx);
-            }
-        }
-        let (skip, expanded_eff, error, children) = {
-            let view = self.nav.borrow();
-            let children = view.children.get(&node.key).cloned().unwrap_or_default();
-            // 分页未拉完时，本地过滤只能覆盖**已加载**部分：此时不能因“已加载的都不匹配”
-            // 就把整支隐藏——那会让用户连「加载更多」都点不到，看上去像对象不存在。
-            let pending_more = view
-                .child_total
-                .get(&node.key)
-                .map(|total| *total > children.len())
-                .unwrap_or(false);
-            let skip = !filter.is_empty()
-                && !pending_more
-                && !nav_node_matches(&view.children, node, &filter);
-            let expanded_now = view.expanded.contains(&node.key);
             (
-                skip,
-                expanded_now || !filter.is_empty(),
+                view.expanded.contains(&node.key) || !filter.is_empty(),
                 view.errors.get(&node.key).cloned(),
-                children,
             )
         };
-        if skip {
-            return div();
-        }
 
         let entity = cx.entity();
         let n_conn_id = node.connection_id.clone();
@@ -4131,23 +4184,15 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let indent = ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT;
         let selected = self.nav.borrow().selected_key.as_deref() == Some(node.key.as_str());
         let selected_bg = cx.theme().colors.list_active;
-        // 键盘导航序列（父在前，子随递归渲染加入）。
-        self.nav_order.borrow_mut().push(NavOrderItem {
-            key: node.key.clone(),
-            conn_id: node.connection_id.clone(),
-            path: node.expand_path.clone(),
-            property: node.property.clone(),
-            has_children: node.has_children,
-            expanded: expanded_eff,
-        });
         let mut block = div().v_flex().w_full();
         let mut row =
             div()
                 .id(format!("nav-node-{}::{}", scope_key, node.key))
+                .debug_selector(|| "nav-row-tree".to_string())
                 .h_flex()
                 .items_center()
                 .w_full()
-                .h(rems(1.375))
+                .h(rems(ui::NAV_ROW_TREE))
                 .pr_1()
                 .pl(rems(indent))
                 .gap_1()
@@ -4157,7 +4202,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 .hover(move |s| s.bg(hover))
                 .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
                     if node.has_children {
-                        if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
+                        if expanded { "\u{25be}" } else { "\u{25b8}" }
                     } else {
                         ""
                     },
@@ -4254,11 +4299,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let insight_schema = insight_schema_target(&node.kind, menu_path.as_ref(), &conn_id);
             // Mock / 洞察表入口的引用靶同理；**kind 按节点类型给**：视图不能标成表
             // ——引用是跨屏身份，标错会传染到属性面板 / 洞察 / 将来的“在树中定位”。
-            let data_target = dml_target
-                .clone()
-                .and_then(|(catalog, schema, name)| {
-                    nav_data_target(&node.kind, &conn_id, catalog, schema, name)
-                });
+            let data_target = dml_target.clone().and_then(|(catalog, schema, name)| {
+                nav_data_target(&node.kind, &conn_id, catalog, schema, name)
+            });
             move |menu, window, cx| {
                 let mut menu = menu;
                 if let Some(prop0) = menu_prop.clone() {
@@ -4445,55 +4488,15 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             }
         }));
 
+        let indent_px = indent + ui::TREE_INDENT;
         if self.nav.borrow().loading.contains(&node.key) {
-            block = block.child(
-                div()
-                    .pl(rems(indent + ui::TREE_INDENT))
-                    .pb_0p5()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("加载中…"),
-            );
+            block = block.child(nav_subline_at("加载中…", muted, indent_px));
         }
         if let Some(err) = error {
-            block = block.child(
-                div()
-                    .pl(rems(indent + ui::TREE_INDENT))
-                    .pb_1()
-                    .text_xs()
-                    .text_color(danger)
-                    .child(err),
-            );
+            block = block.child(nav_subline_at(&err, danger, indent_px));
         }
-        if expanded_eff {
-            // 类别文件夹分页：大 schema 只渲染首批，其余用「加载更多」逐页展开。
-            let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
-            let loaded = children.len();
-            let total = if is_folder {
-                self.node_total(&node.key, loaded)
-            } else {
-                loaded
-            };
-            let limit = if is_folder {
-                self.folder_limit(&node.key)
-            } else {
-                usize::MAX
-            };
-            // 定位窗口：先摆说明与回头路，再摆这一窗的行。
-            let jumped_to = self.nav.borrow().jumped.get(&node.key).copied();
-            if let Some(position) = jumped_to {
-                block = block.child(self.render_jumped_row(node, position, loaded, depth, cx));
-            }
-            for child in children.iter().take(limit) {
-                block = block.child(self.render_nav_node(child, depth + 1, scope_key, cx));
-            }
-            // 两种「还有更多」：数据侧的（要取）与渲染窗口的（已到手，只放大窗口）。
-            // **定位窗口例外**：那时的行集是一窗不是前缀，按条数往后翻会跳错地方，
-            // 回头路走顶上那行「点此回到开头」。
-            if is_folder && jumped_to.is_none() && (limit < loaded || loaded < total) {
-                block = block.child(self.render_more_row(node, loaded, total, limit, depth, cx));
-            }
-        }
+        // 子树与「加载更多」/「已定位」行不在这一行里：它们是**同桌的其它行**
+        //（`collect_nav_rows` 把它们摆在同一层），所以这里不递归、不再往下画。
         block
     }
 
@@ -4534,10 +4537,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let path = node.expand_path.clone();
         div()
             .id(format!("nav-more-{key}"))
+            .debug_selector(|| "nav-row-more".to_string())
             .h_flex()
             .items_center()
             .w_full()
-            .h(rems(1.375))
+            .h(rems(ui::NAV_ROW_TREE))
             .pl(rems(indent))
             .pr_1()
             .rounded_md()
@@ -4886,12 +4890,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
     }
 
     /// 两个入口共用的一段：置意图并推一步；不可定位就**当场回一句可读理由**。
-    fn begin_reveal(
-        &mut self,
-        target: Option<RevealTarget>,
-        name: &str,
-        cx: &mut Context<Self>,
-    ) {
+    fn begin_reveal(&mut self, target: Option<RevealTarget>, name: &str, cx: &mut Context<Self>) {
         match target {
             Some(target) => {
                 {
@@ -5079,10 +5078,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let path = node.expand_path.clone();
         div()
             .id(format!("nav-jumped-{key}"))
+            .debug_selector(|| "nav-row-jump".to_string())
             .h_flex()
             .items_center()
             .w_full()
-            .h(rems(1.375))
+            .h(rems(ui::NAV_ROW_TREE))
             .pl(rems(indent))
             .pr_1()
             .rounded_md()
@@ -6020,17 +6020,17 @@ mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
     use super::{
-        insight_schema_target, nav_data_target, nav_merge_page, nav_object_type_label,
-        nav_order_members, nav_reorder, nav_search_hit_property, nav_search_hit_ref,
-        nav_search_query_ready, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
-        RevealTarget,
+        RevealTarget, insight_schema_target, nav_data_target, nav_merge_page,
+        nav_object_type_label, nav_order_members, nav_reorder, nav_search_hit_property,
+        nav_search_hit_ref, nav_search_query_ready, nav_step, nav_type_label, nav_type_short_label,
+        parse_nav_search,
     };
     use crate::model::{
         NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
     };
     use crate::nav_rows::NavRow;
     // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
-    use gpui_kit::{AppContext as _, ParentElement as _, Styled as _};
+    use gpui_kit::{AppContext as _, ParentElement as _, Pixels, Styled as _};
 
     /// 定位验收用的最小宿主：只回答定位路径真会问到的两件事（是否已连 / 项目根）。
     ///
@@ -6203,9 +6203,7 @@ mod tests {
             NavNode::child_key(conn, &[catalog, schema, name]),
             name,
             conn,
-            NavNodeKind::Table {
-                row_estimate: None,
-            },
+            NavNodeKind::Table { row_estimate: None },
             true,
         )
     }
@@ -6295,7 +6293,12 @@ mod tests {
         // 展开连接 → catalog 行；再依次展开 catalog / schema / 表文件夹 → 对象行
         cx.update(|_window, cx| {
             view.update(cx, |view, cx| {
-                for key in [conn, "G_1/shop", "G_1/shop/public", "G_1/shop/public/tables"] {
+                for key in [
+                    conn,
+                    "G_1/shop",
+                    "G_1/shop/public",
+                    "G_1/shop/public/tables",
+                ] {
                     view.nav.borrow_mut().expanded.insert(key.to_string());
                 }
                 cx.notify();
@@ -6324,22 +6327,19 @@ mod tests {
         view.update(cx, |view, cx| view.collect_nav_rows(None, cx))
     }
 
-    /// 收集序里**旧口径也会列**的行（连接行 + 对象行）。
+    /// 行序里**可漫游**的那些（键盘 ↑↓ 走得到的序列）。
     ///
-    /// `nav_order` 是「键盘漫游序列」，旧代码只往里推了这两类。新口径的可见行多了三种：
-    /// 分组头（容器标题，不参与漫游），以及引用行 / 「更多」/ 「已定位」行——后三种可点可选中，
-    /// 但旧口径漏列入列（按 ↓ 会“跳过”一行看得见的行），新口径把它们纳入漫游。
-    /// 两套序列的可比部分因此是：**连接行与对象行逐步相等，且相对次序不变**。
+    /// 契约：它必须与 `nav_order`（[`super::NavView::sync_nav_order`] 的投影）逐步相等。
+    /// 分组头是容器标题（`selectable()` 为假）；引用行 / 「更多」/「已定位」行
+    /// 可点可选中，所以**进**序列（旧口径漏列会让 ↓ 跳过一行看得见的行）。
     fn roam_keys(rows: &[NavRow]) -> Vec<String> {
         rows.iter()
-            .filter_map(|row| match row {
-                NavRow::Connection { .. } | NavRow::Tree { .. } => Some(row.key()),
-                _ => None,
-            })
+            .filter(|row| row.selectable())
+            .map(|row| row.key())
             .collect()
     }
 
-    /// 一行行的键（包括分组头与附加行）。
+    /// 一行行的键（包括分组头等不可漫游的行）。
     fn all_keys(rows: &[NavRow]) -> Vec<String> {
         rows.iter().map(|row| row.key()).collect()
     }
@@ -6361,21 +6361,66 @@ mod tests {
         });
     }
 
-    /// 重画一帧 + 收集一次，断言「收集序 = 渲染序」（去掉附加行后逐步相等）。
+    /// 重画一帧 + 收集一次，断言「行序的可漫游部分 = 漫游投影（`nav_order`）」。
     fn assert_collect_matches_render(
         view: &gpui_kit::Entity<super::NavView>,
         cx: &mut gpui_kit::VisualTestContext,
         phase: &str,
     ) -> Vec<NavRow> {
         redraw(cx);
-        let rendered = cx.update(|_window, cx| visible_keys(&view.read(cx)));
+        let projected = cx.update(|_window, cx| visible_keys(&view.read(cx)));
         let rows = cx.update(|_window, cx| collected_rows(view, cx));
         assert_eq!(
             roam_keys(&rows),
-            rendered,
-            "阶段「{phase}」：收集得到的可见行与渲染累积的顺序不一致"
+            projected,
+            "阶段「{phase}」：漫游投影与可见行序不一致"
         );
         rows
+    }
+
+    /// 虚拟列表真的把行**画到页面上**了（有元素、有非零尺寸、上下顺序对）。
+    ///
+    /// 为何单独一条：状态类断言看不见这一层——行集合算对了、漫游序列也对，但列表
+    /// 完全可能因为高度算成 0 / 容器没高度而什么都不画（而两者都会让其它用例保持绿色）。
+    #[gpui_kit::test]
+    fn nav_tree_rows_are_laid_out_by_the_virtual_list(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![table_node(conn, "shop", "public", "customers")],
+                None,
+            );
+            let mut state = view.read(cx).nav.borrow_mut();
+            state.expanded.clear();
+            for key in [conn, "G_1/shop"] {
+                state.expanded.insert(key.to_string());
+            }
+        });
+        redraw(cx);
+        let header = cx.debug_bounds("nav-row-group").expect("分组头应被画出");
+        let conn_row = cx.debug_bounds("nav-row-conn").expect("连接行应被画出");
+        let tree_row = cx.debug_bounds("nav-row-tree").expect("对象行应被画出");
+        assert!(
+            header.size.height > Pixels::ZERO
+                && conn_row.size.height > Pixels::ZERO
+                && tree_row.size.height > Pixels::ZERO,
+            "行高由列表按估算高度定（0 = 估出来了也没生效）"
+        );
+        assert!(
+            conn_row.origin.y > header.origin.y && tree_row.origin.y > conn_row.origin.y,
+            "自上而下：分组头 → 连接行 → 对象行"
+        );
+        assert!(
+            conn_row.size.height > tree_row.size.height,
+            "行高分级：连接行（{}rem）＞ 对象行（{}rem）",
+            super::ui::NAV_ROW_CONNECTION,
+            super::ui::NAV_ROW_TREE
+        );
     }
 
     /// S1 验收：`NavView::collect_nav_rows` 与渲染期累积的 `nav_order` **逐步相等**。
@@ -6435,7 +6480,10 @@ mod tests {
         // 分页未拉完：数据侧 5 条、只加载了 2 条 → 末行是「加载更多」
         cx.update(|_window, cx| {
             view.update(cx, |view, cx| {
-                view.nav.borrow_mut().child_total.insert(folder_key.to_string(), 5);
+                view.nav
+                    .borrow_mut()
+                    .child_total
+                    .insert(folder_key.to_string(), 5);
                 cx.notify();
             });
         });
@@ -6449,7 +6497,10 @@ mod tests {
         // 定位窗口：「已定位」行在子节点前，且这一窗里不摆「加载更多」
         cx.update(|_window, cx| {
             view.update(cx, |view, cx| {
-                view.nav.borrow_mut().jumped.insert(folder_key.to_string(), 3);
+                view.nav
+                    .borrow_mut()
+                    .jumped
+                    .insert(folder_key.to_string(), 3);
                 cx.notify();
             });
         });
@@ -6607,7 +6658,12 @@ mod tests {
                 Some(target.as_str()),
                 "定位应选中目标行"
             );
-            for key in [conn, "G_1/shop", "G_1/shop/public", "G_1/shop/public/tables"] {
+            for key in [
+                conn,
+                "G_1/shop",
+                "G_1/shop/public",
+                "G_1/shop/public/tables",
+            ] {
                 assert!(
                     nav.expanded.contains(key),
                     "{key} 应被展开（否则选中了也看不到）"
@@ -6659,9 +6715,7 @@ mod tests {
 
     /// 窗口级：大 schema（分页）下目标不在已加载窗口里 → 应发出「跳页」请求并等回执。
     #[gpui_kit::test]
-    fn reveal_ref_asks_for_the_target_page_in_a_paged_folder(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
+    fn reveal_ref_asks_for_the_target_page_in_a_paged_folder(cx: &mut gpui_kit::TestAppContext) {
         let conn = "G_1";
         let (view, cx) = open_nav_view(cx, conn);
         cx.update(|_window, cx| {
@@ -6684,14 +6738,8 @@ mod tests {
         cx.update(|_window, cx| {
             let nav = view.read(cx).nav.borrow();
             let target = nav.reveal.as_ref().expect("分页时要挂着待完成的定位");
-            assert!(
-                target.jumping,
-                "应已发出跳页请求（位次 → 那一页）并等回执"
-            );
-            assert!(
-                nav.reveal_note.is_none(),
-                "还没到放弃的时候，不该先写提示"
-            );
+            assert!(target.jumping, "应已发出跳页请求（位次 → 那一页）并等回执");
+            assert!(nav.reveal_note.is_none(), "还没到放弃的时候，不该先写提示");
         });
     }
 
@@ -6753,18 +6801,24 @@ mod tests {
         assert_eq!(c.node_key("shop"), "G_1/shop/public/orders/amount");
 
         // 视图与表同 schema 但分属不同文件夹：末层必须落在 /views
-        let v = RevealTarget::from_hit(&hit("view", "v_orders", None, Some("public"), Some("shop")))
-            .expect("视图可定位");
+        let v =
+            RevealTarget::from_hit(&hit("view", "v_orders", None, Some("public"), Some("shop")))
+                .expect("视图可定位");
         assert_eq!(
             v.levels("shop").last().map(|(k, _)| k.clone()),
             Some("G_1/shop/public/views".to_string())
         );
 
         // schema：目标就是 schema 节点，不再往文件夹里走（层级只到 catalog）
-        let s = RevealTarget::from_hit(&hit("schema", "public", None, Some("public"), Some("shop")))
-            .expect("schema 可定位");
+        let s =
+            RevealTarget::from_hit(&hit("schema", "public", None, Some("public"), Some("shop")))
+                .expect("schema 可定位");
         assert_eq!(s.node_key("shop"), "G_1/shop/public");
-        assert_eq!(s.levels("shop").len(), 2, "schema 目标只需连接与 catalog 两层");
+        assert_eq!(
+            s.levels("shop").len(),
+            2,
+            "schema 目标只需连接与 catalog 两层"
+        );
 
         // 例程 / 序列 / 触发器各有自己的文件夹（它们不分页，但也得能选中）
         for (kind, folder) in [
@@ -6839,13 +6893,27 @@ mod tests {
 
         // 引用入口的拒绝面（与命中入口一致）
         assert!(
-            RevealTarget::from_ref(&ObjectRef::new("G_1", ObjectKind::Catalog, "shop", "", "", "shop"))
-                .is_none(),
+            RevealTarget::from_ref(&ObjectRef::new(
+                "G_1",
+                ObjectKind::Catalog,
+                "shop",
+                "",
+                "",
+                "shop"
+            ))
+            .is_none(),
             "catalog 层没有可定位的“那一行” → 拒绝"
         );
         assert!(
-            RevealTarget::from_ref(&ObjectRef::new("G_1", ObjectKind::Table, "shop", "", "", "t"))
-                .is_none(),
+            RevealTarget::from_ref(&ObjectRef::new(
+                "G_1",
+                ObjectKind::Table,
+                "shop",
+                "",
+                "",
+                "t"
+            ))
+            .is_none(),
             "无 schema 归属 → 拒绝"
         );
     }
@@ -6977,7 +7045,13 @@ mod tests {
     #[test]
     fn data_target_kind_follows_the_node() {
         let target = |kind: NavNodeKind| {
-            nav_data_target(&kind, "P_1", "shop".into(), "public".into(), "orders".into())
+            nav_data_target(
+                &kind,
+                "P_1",
+                "shop".into(),
+                "public".into(),
+                "orders".into(),
+            )
         };
         assert_eq!(
             target(NavNodeKind::Table { row_estimate: None })
@@ -6990,10 +7064,7 @@ mod tests {
             ObjectKind::View,
             "视图不能标成表（跨屏身份靠 kind 区分）"
         );
-        assert!(
-            target(NavNodeKind::Schema).is_none(),
-            "非数据类节点不给靶"
-        );
+        assert!(target(NavNodeKind::Schema).is_none(), "非数据类节点不给靶");
     }
 
     /// `ObjectRef` 的 key 与导航树节点 key **同构**——这是搜索命中与树节点
@@ -7181,7 +7252,10 @@ mod tests {
             "Snowflake"
         );
         // 目录里的名称是空白 → 当没给（回退内置表）
-        assert_eq!(nav_type_label("mysql", Some(("   ", "relational"))), "MySQL（关系型）");
+        assert_eq!(
+            nav_type_label("mysql", Some(("   ", "relational"))),
+            "MySQL（关系型）"
+        );
 
         // 目录未就绪 / 类型不在目录：内置表兜底，认不出就原样显示 id
         assert_eq!(nav_type_label("mysql", None), "MySQL（关系型）");
