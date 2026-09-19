@@ -237,10 +237,12 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 
 故落到 `engine::persistence::driver_catalog::{DriverMeta, load}`（`persistence/mod.rs` 重导为
 `DriverMeta` / `load_driver_catalog`），`nav_runtime` 不再持有该实现。
-**2026-09-19 补**：这里如今是**驱动声明的唯一真相源**（`drivers` 表）的读入口，并额外提供
-「驱动实现 id → 数据库族 id」的唯一映射（`driver_catalog::type_id_of`）；
+**2026-09-19 补**：这里是驱动目录（`drivers` 表，`driver-capability-matrix.md` §2 的**读模型**）的读入口，
+并额外提供「驱动实现 id → 数据库族 id」的唯一映射（`driver_catalog::type_id_of`）；
 当时提到的对照组 `engine::driver::metadata::DriverMetadata`（内置驱动静态描述）**已删除**
-（零引用且与 `registry/descriptors.rs` 重复，见 `driver-capability-matrix.md` §2）。
+（零引用且与 `registry/descriptors.rs` 重复）。
+**同日再补**：声明的权威在代码（`registry/descriptors.rs`）+ 启动幂等 upsert（`driver/declaration.rs`），
+本目录只是它的读模型，不再是真相源。
 
 顺带修掉一个副作用：读目录改用 `SQLITE_OPEN_READ_ONLY` 打开全局库，全局库未初始化时
 不再在用户目录里凭空建出一个空 `global.db`。
