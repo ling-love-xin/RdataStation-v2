@@ -330,6 +330,13 @@ impl Render for SidebarPanel {
         self.ensure_repair_dialog(window, cx);
         self.ensure_trash_dialog(window, cx);
         self.ensure_tag_dialog(window, cx);
+        // 「在导航树中定位」（Quick Open 的 ⌥↵）在这一帧被消费：render 是权威同步点，
+        // 不在事件路径上碰面板状态。发起侧已把左 Dock 切到数据源；这里不再判断面板是否在前台，
+        // 因为请求一旦落在这里就应当被完成（漏掉就会「点了没反应」）。
+        if let Some(object) = self.shared.take_reveal() {
+            let panel = self.nav_panel.clone();
+            panel.update(cx, |panel, cx| panel.reveal_ref(&object, cx));
+        }
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();

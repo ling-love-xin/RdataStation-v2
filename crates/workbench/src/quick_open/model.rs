@@ -146,6 +146,11 @@ pub(crate) enum Action {
     RestoreSidebars,
     /// 选中数据源连接（切到导航并选中；**不自动连接**）。
     SelectConnection(usize),
+    /// 在导航树中定位一个对象（Quick Open 元数据命中行；`⌥↵`）。
+    ///
+    /// 带的是**统一引用**而不是搜索命中：执行侧（工作台）只需把它转给导航面板，
+    /// 不必认识 `SearchHit`。
+    RevealMetadata(engine::ObjectRef),
     /// 在中央编辑区打开一份草稿（绝对路径；可写 / 只读由编辑器按路径自己判定）。
     OpenDocument(std::path::PathBuf),
 }
@@ -168,6 +173,11 @@ pub(crate) struct Row {
     pub snippet: Option<String>,
     /// 「为什么命中」标签（内容档才填：名称命中 / 内容命中——名称是名称档的默认，不标）。
     pub why: Option<&'static str>,
+    /// 这行能不能「在树中定位」（元数据行才有：带统一引用）。
+    ///
+    /// 与 `action` 分开而不是从它反推：属性面板请求里的是 `PropertyRef`（另一族类型），
+    /// 反推要再写一份 `PropertyKind → ObjectKind` 映射，两处口径早晚会分叉。
+    pub locate: Option<engine::ObjectRef>,
     pub action: Action,
 }
 
@@ -320,6 +330,7 @@ fn file_rows(files: &[FileObject]) -> Vec<Row> {
             secondary: file.folder.clone(),
             snippet: None,
             why: None,
+            locate: None,
             action: Action::OpenDocument(file.path.clone()),
         })
         .collect()
@@ -336,6 +347,7 @@ fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
             secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
             snippet: None,
             why: None,
+            locate: Some(m.object.clone()),
             action: Action::ShowProperties(Box::new(m.request.clone())),
         })
         .collect()
@@ -358,6 +370,7 @@ fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
                 secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
                 snippet: m.snippet.clone(),
                 why: Some(if matched_name { "名称" } else { "内容" }),
+                locate: Some(m.object.clone()),
                 action: Action::ShowProperties(Box::new(m.request.clone())),
             }
         })
@@ -483,6 +496,7 @@ fn connection_rows(connections: &[(String, String)]) -> Vec<Row> {
             secondary: driver.clone(),
             snippet: None,
             why: None,
+            locate: None,
             action: Action::SelectConnection(ix),
         })
         .collect()
@@ -667,6 +681,7 @@ mod tests {
                         secondary: String::new(),
                         snippet: None,
                         why: None,
+                        locate: None,
                         action: Action::OpenSettings,
                     })
                     .collect(),
@@ -876,6 +891,20 @@ mod tests {
             }
             other => panic!("列行动作应是属性面板，实际 {other:?}"),
         }
+        // 同一行还带「在树中定位」的引用（Quick Open 的 ⌥↵）：列必须带父表，
+        // 否则树里挂在表下那一层找不到它（定位会停在文件夹那一层）。
+        let locate = col.locate.as_ref().expect("元数据行应带定位引用");
+        assert_eq!(locate.parent, "orders", "列的定位引用要带父表");
+        assert_eq!(locate.name, "order_id");
+        assert_eq!(locate.schema, "public");
+        // 表行同样可定位（不带父对象）
+        let table = groups[0]
+            .rows
+            .iter()
+            .find(|r| r.kind == RowKind::Table)
+            .expect("表行");
+        let table_locate = table.locate.as_ref().expect("表行应可定位");
+        assert!(table_locate.parent.is_empty(), "表没有父对象");
 
         // 例程行：类目标签与属性类别都要对（曾经被白名单挡掉）
         let routine = objects

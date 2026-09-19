@@ -701,6 +701,16 @@ pub fn has_pending_search(consumer: SearchConsumer) -> bool {
     shared().pending_search[consumer.ix()].load(Ordering::SeqCst) > 0
 }
 
+/// 直接投递一批搜索命中（`SearchConsumer::QuickOpen` 的定位窗口测试用）。
+///
+/// **为什么开这个小口**：`⌥↵ 在树中定位` 的窗口级测试需要一行**真元数据命中**；
+/// 而真命中的前置是「连接 + 冷启动内省 + 索引重建」——在窗口测试里不现实。
+/// 伪造队列里的那一批，比伪造整条搜索链路或整棵导航树诚实得多。
+/// 生产路径上只有 worker 会调 `push_search_result`。
+pub fn push_search_results_for_test(consumer: SearchConsumer, result: SearchResult) {
+    shared().push_search_result(consumer, result);
+}
+
 /// 提交跨连接索引搜索（按消费方分槽）。
 ///
 /// 空目标（无可见连接）也走一趟：回传一个 `searched = 0` 的空结果，

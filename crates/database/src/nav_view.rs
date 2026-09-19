@@ -68,29 +68,47 @@ pub(crate) struct RevealTarget {
 }
 
 impl RevealTarget {
-    /// 搜索命中 → 定位目标；`None` = 这一条**不可定位**（类型不认识 / 没有 schema 归属）。
-    ///
-    /// 判据集中在这里：调用方据此决定是否摆出「定位」入口，而不是让人点了没反应。
-    fn from_hit(hit: &nav_jobs::SearchHit) -> Option<Self> {
-        let schema = hit.schema.clone().filter(|s| !s.is_empty())?;
-        let folder = match hit.object_type.as_str() {
-            "schema" => None,
-            "table" | "column" => Some(NavFolder::Tables),
-            "view" => Some(NavFolder::Views),
-            "routine" => Some(NavFolder::Routines),
-            "sequence" => Some(NavFolder::Sequences),
-            "trigger" => Some(NavFolder::Triggers),
-            _ => return None,
+    /// 统一引用 → 定位目标。**两个入口（导航结果行 / Quick Open）共用这一处映射**：
+    /// 类别 → 文件夹只判一次，不会两边各写一套而后分叉。
+    fn from_ref(object: &ObjectRef) -> Option<Self> {
+        // 没有 schema 归属的对象定位不了：树的第一层是 catalog，第二层就是 schema。
+        let schema = (!object.schema.is_empty()).then(|| object.schema.clone())?;
+        let folder = match object.kind {
+            ObjectKind::Schema => None,
+            ObjectKind::Table | ObjectKind::Column => Some(NavFolder::Tables),
+            ObjectKind::View => Some(NavFolder::Views),
+            ObjectKind::Routine => Some(NavFolder::Routines),
+            ObjectKind::Sequence => Some(NavFolder::Sequences),
+            ObjectKind::Trigger => Some(NavFolder::Triggers),
+            // catalog 层不做定位：它在树上只有「唯一容器」这一层语义，没有可定位的“那一行”。
+            ObjectKind::Catalog => return None,
         };
         Some(Self {
-            conn_id: hit.conn_id.clone(),
-            catalog: hit.catalog.clone().unwrap_or_default(),
+            conn_id: object.conn_id.clone(),
+            // 空串 = 该命中没有 catalog（内容档没有这一列），定位时从连接已加载的 catalog 取
+            catalog: object.catalog.clone(),
             schema,
             folder,
-            parent: hit.parent_name.clone().filter(|p| !p.is_empty()),
-            name: hit.object_name.clone(),
+            parent: (!object.parent.is_empty()).then(|| object.parent.clone()),
+            name: object.name.clone(),
             jumping: false,
         })
+    }
+
+    /// 搜索命中 → 定位目标（导航面板的搜索结果行）。
+    ///
+    /// 先把命中归一成统一引用（`ObjectRef::from_index_hit` —— 搜索与导航 / 属性面板之间的
+    /// **唯一对接口**），再走 [`Self::from_ref`]：类别 → 文件夹只判一处。
+    fn from_hit(hit: &nav_jobs::SearchHit) -> Option<Self> {
+        let object = ObjectRef::from_index_hit(
+            &hit.conn_id,
+            &hit.object_type,
+            &hit.object_name,
+            hit.parent_name.as_deref(),
+            hit.catalog.as_deref(),
+            hit.schema.as_deref(),
+        )?;
+        Self::from_ref(&object)
     }
 
     /// 目标节点的 key（与 `NavNode::child_key` 同构）。
@@ -4469,20 +4487,39 @@ this.host.open_right_panel(RightPanel::Insight, cx);
     /// 不可定位的命中会当场回一句可读理由：结果行上那个入口本就只在可定位时摆出，
     /// 这里再兜一层是因为「摆了入口却点了没反应」是最伤的交互。
     pub fn reveal_hit(&mut self, hit: &nav_jobs::SearchHit, cx: &mut Context<Self>) {
-        let Some(target) = RevealTarget::from_hit(hit) else {
-            self.nav.borrow_mut().reveal_note = Some(format!(
-                "「{}」没有可定位的位置（缺 schema 归属或类别未知）",
-                hit.object_name
-            ));
-            cx.notify();
-            return;
-        };
-        {
-            let mut view = self.nav.borrow_mut();
-            view.reveal_note = None;
-            view.reveal = Some(target);
+        let target = RevealTarget::from_hit(hit);
+        self.begin_reveal(target, &hit.object_name, cx);
+    }
+
+    /// 从一条**统一引用**在树中定位（Quick Open 的 `⌥↵` 等入口）。
+    pub fn reveal_ref(&mut self, object: &ObjectRef, cx: &mut Context<Self>) {
+        let target = RevealTarget::from_ref(object);
+        self.begin_reveal(target, &object.name, cx);
+    }
+
+    /// 两个入口共用的一段：置意图并推一步；不可定位就**当场回一句可读理由**。
+    fn begin_reveal(
+        &mut self,
+        target: Option<RevealTarget>,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            Some(target) => {
+                {
+                    let mut view = self.nav.borrow_mut();
+                    view.reveal_note = None;
+                    view.reveal = Some(target);
+                }
+                self.pump_reveal(cx);
+            }
+            None => {
+                self.nav.borrow_mut().reveal_note = Some(format!(
+                    "「{name}」没有可定位的位置（缺 schema 归属或类别未知）"
+                ));
+                cx.notify();
+            }
         }
-        self.pump_reveal(cx);
     }
 
     /// 定位状态机（跨帧推进）。
@@ -5690,6 +5727,38 @@ mod tests {
         }
     }
 
+    /// 两个入口（导航搜索结果行 / Quick Open 的 `⌥↵`）必须落到**同一个**定位目标。
+    ///
+    /// 它们是两条不同的路径：一条拿字符串类别（落库口径），一条拿 `ObjectKind`（枚举口径）。
+    /// 映射真只写了一处的话，两条路算出的东西应当逐字段相等——不等就说明有人加了第二套判定。
+    #[test]
+    fn reveal_ref_and_hit_resolve_to_the_same_target() {
+        let cases = [
+            ("table", "orders", None, ObjectKind::Table),
+            ("view", "v_orders", None, ObjectKind::View),
+            ("column", "amount", Some("orders"), ObjectKind::Column),
+            ("routine", "fn_x", None, ObjectKind::Routine),
+            ("sequence", "seq_a", None, ObjectKind::Sequence),
+            ("trigger", "trg_a", None, ObjectKind::Trigger),
+            ("schema", "public", None, ObjectKind::Schema),
+        ];
+        for (type_str, name, parent, kind) in cases {
+            let via_hit =
+                RevealTarget::from_hit(&hit(type_str, name, parent, Some("public"), Some("shop")))
+                    .unwrap_or_else(|| panic!("{type_str} 从命中应可定位"));
+            let via_ref = RevealTarget::from_ref(&ObjectRef::new(
+                "G_1",
+                kind,
+                "shop",
+                "public",
+                parent.unwrap_or(""),
+                name,
+            ))
+            .unwrap_or_else(|| panic!("{type_str} 从引用应可定位"));
+            assert_eq!(via_hit, via_ref, "{type_str}：两条入口必须落到同一个目标");
+        }
+    }
+
     /// 不可定位的命中必须**当场判否**：结果行上那个入口就不摆出来，而不是点了没反应。
     #[test]
     fn reveal_target_refuses_unlocatable_hits() {
@@ -5712,6 +5781,18 @@ mod tests {
         let fts = RevealTarget::from_hit(&hit("table", "orders", None, Some("public"), None))
             .expect("内容档命中同样可定位");
         assert!(fts.catalog.is_empty(), "catalog 留空，由定位时解析");
+
+        // 引用入口的拒绝面（与命中入口一致）
+        assert!(
+            RevealTarget::from_ref(&ObjectRef::new("G_1", ObjectKind::Catalog, "shop", "", "", "shop"))
+                .is_none(),
+            "catalog 层没有可定位的“那一行” → 拒绝"
+        );
+        assert!(
+            RevealTarget::from_ref(&ObjectRef::new("G_1", ObjectKind::Table, "shop", "", "", "t"))
+                .is_none(),
+            "无 schema 归属 → 拒绝"
+        );
     }
 
     /// 「结构洞察」的靶：表 / 视图用它所在的 schema，schema 节点用自己；列 / 例行与

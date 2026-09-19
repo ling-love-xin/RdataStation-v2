@@ -212,6 +212,11 @@ pub struct Shared {
     /// “这条路径能不能改”由发起方说（M6 的存档本体 = 编辑器只读）。
     /// 字段已收为私有：外部只能走 `request_open_in_editor` / `take_open_in_editor`。
     open_file_request: Rc<RefCell<Option<OpenInEditorRequest>>>,
+    /// M4：请求在导航树中**定位一个对象**（Quick Open 的元数据命中行发起，导航面板 render 消费）。
+    ///
+    /// 只传统一引用：展开链路（连接 → catalog → schema → 文件夹）是导航面板自己的事。
+    /// 与 `open_file_request` 同一口径（字段私有，走 `request_reveal` / `take_reveal`）。
+    reveal_request: Rc<RefCell<Option<engine::ObjectRef>>>,
     /// B11：请求在中央编辑器里打开一条查询（导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」
     /// 与拖拽都入这里，宿主 render 消费）。字段同样私有，走 `request_query` / `take_query_request`。
     query_request: Rc<RefCell<Option<QueryRequest>>>,
@@ -280,6 +285,7 @@ impl Shared {
             project: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
+            reveal_request: Rc::new(RefCell::new(None)),
             query_request: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_bridge: Rc::new(RefCell::new(None)),
@@ -331,6 +337,21 @@ impl Shared {
     /// 与 `take_project_action_request` 同口径：取出即清空，同一次请求不会重复打开。
     pub fn take_open_in_editor(&self) -> Option<OpenInEditorRequest> {
         self.open_file_request.borrow_mut().take()
+    }
+
+    /// 取出（并清空）「在导航树中定位」请求：导航面板 render 每帧调用一次。
+    ///
+    /// 取出即清空（与 `take_open_in_editor` 同口径）：同一次请求不会重复定位。
+    pub fn take_reveal(&self) -> Option<engine::ObjectRef> {
+        self.reveal_request.borrow_mut().take()
+    }
+
+    /// 请求在导航树中定位一个对象（Quick Open 的 `⌥↵`）。
+    ///
+    /// 不直接调导航面板：发起侧（浮层 / 结果行）拿不到面板实体，也不该知道它有哪种状态；
+    /// 用户看到的是「左 Dock 切到数据源 + 树展开并选中目标」这一个动作。
+    pub fn request_reveal(&self, object: engine::ObjectRef) {
+        *self.reveal_request.borrow_mut() = Some(object);
     }
 
     /// 请求在中央编辑器中打开文件（草稿箱双击 / Enter / 右键「打开」）——**可写**。

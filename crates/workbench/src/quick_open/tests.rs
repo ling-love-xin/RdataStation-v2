@@ -12,10 +12,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    TestAppContext, VisualTestContext, Window, div,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
+use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
@@ -51,7 +52,27 @@ struct Harness {
 
 impl Render for Harness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.palette.clone())
+        // 与生产同形：工作台根带 `workbench` 键上下文（`WorkbenchView::render` 里那个），
+        // 工作台级键位（如 `alt-enter`）才会沿焦点链生效。
+        div()
+            .size_full()
+            .key_context("workbench")
+            .child(self.palette.clone())
+    }
+}
+
+/// 造一条命中：`orders` 表（带 catalog / schema，这两种信息行与定位都要用）。
+fn table_hit() -> database::nav_jobs::SearchHit {
+    database::nav_jobs::SearchHit {
+        conn_id: "P_1".into(),
+        conn_label: "营销".into(),
+        driver: "mysql".into(),
+        object_type: "table".into(),
+        object_name: "orders".into(),
+        parent_name: None,
+        catalog: Some("shop".into()),
+        schema: Some("public".into()),
+        snippet: None,
     }
 }
 
@@ -185,6 +206,133 @@ fn arrow_keys_move_selection_and_enter_executes(cx: &mut TestAppContext) {
         !shared.quick_open.get(),
         "执行后面板要关（下一次打开是全新的）"
     );
+}
+
+/// `⌥↵`（在树中定位）真按键：元数据命中行上派发 `RevealMetadata`，不可定位的行上不动。
+///
+/// 这条用例是**判别性**的：它自己注册生产那份键位（app 层的 `alt-enter` / 上下文 `workbench`），
+/// 并伪造一批真元数据命中（见 `push_search_results_for_test` 的理由）——若键位、λ 处理或
+/// 行上的定位引用任一断，它都会挂。
+#[gpui_kit::test]
+fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
+    use std::time::Duration;
+
+    let (host, shared, harness, cx) = open_palette(cx);
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    // 与生产同形：键位绑在 `workbench` 上下文，调度沿焦点链向上找。
+    cx.update(|_, cx| {
+        cx.bind_keys([KeyBinding::new(
+            "alt-enter",
+            QuickOpenLocate,
+            Some("workbench"),
+        )]);
+    });
+
+    cx.simulate_keystrokes("o");
+    cx.simulate_keystrokes("r");
+    // 先等真搜索收尾（没有缓存连接 → 空结果）：它会写同一槽 `self.meta`，
+    // 不等它就把伪造批覆盖掉，用例会随机绿/红。
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while database::nav_jobs::has_pending_search(database::nav_jobs::SearchConsumer::QuickOpen)
+        && std::time::Instant::now() < deadline
+    {
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+
+    // 伪造一批命中回来（生产：worker → 队列 → 浮层泵）。词要与输入框一致，
+    // 否则泵会当过期批丢掉。
+    database::nav_jobs::push_search_results_for_test(
+        database::nav_jobs::SearchConsumer::QuickOpen,
+        database::nav_jobs::SearchResult {
+            consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+            query: "or".to_string(),
+            searched: 1,
+            hits: vec![table_hit()],
+        },
+    );
+
+    // 推泵 + 重画，直到元数据行出现。
+    //
+    // 每轮都**重投一次**：真搜索（无缓存连接 → 空结果）可能晚于我们投批到达并清空 `meta`，
+    // 重投保证「最后一次入队的总是我们这一批」，用例不会因调度顺序时绿时红。
+    let mut keys: Vec<String> = Vec::new();
+    for _ in 0..20 {
+        database::nav_jobs::push_search_results_for_test(
+            database::nav_jobs::SearchConsumer::QuickOpen,
+            database::nav_jobs::SearchResult {
+                consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+                query: "or".to_string(),
+                searched: 1,
+                hits: vec![table_hit()],
+            },
+        );
+        cx.update(|_window, cx| {
+            palette.update(cx, |palette, cx| palette.pump_results(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        keys = cx.update(|_window, cx| palette.read(cx).row_keys(cx));
+        if keys.iter().any(|key| key.starts_with("meta:")) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let meta_key = keys
+        .iter()
+        .find(|key| key.starts_with("meta:"))
+        .unwrap_or_else(|| {
+            let q = cx.update(|_window, cx| palette.read(cx).query_text(cx));
+            panic!("元数据行应已入列（输入={q:?}）；实际行：{keys:?}")
+        })
+        .clone();
+
+    // 选中那一行后按 `⌥↵`：应派出「在树中定位」而不是打开属性面板
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    cx.update(|_window, cx| {
+        palette.update(cx, |palette, cx| palette.set_selection(Some(meta_key.clone()), cx));
+    });
+    cx.simulate_keystrokes("alt-enter");
+
+    let executed = host.taken();
+    assert_eq!(executed.len(), 1, "⌥↵ 应经宿主端口执行一次：{executed:?}");
+    match &executed[0].0 {
+        Action::RevealMetadata(object) => {
+            assert_eq!(object.name, "orders");
+            assert_eq!(object.schema, "public");
+            assert_eq!(object.catalog, "shop");
+        }
+        other => panic!("⌥↵ 应派发 RevealMetadata，实际 {other:?}"),
+    }
+    assert!(!executed[0].1, "定位不保留面板");
+    assert!(!shared.quick_open.get(), "定位后面板要关（下一拍才看得到树）");
+}
+
+/// `⌥↵` 在不支持定位的行上**什么都不做**：不派发动作、也不关面板。
+#[gpui_kit::test]
+fn locate_key_is_a_no_op_on_rows_that_cannot_be_located(cx: &mut TestAppContext) {
+    let (host, shared, _harness, cx) = open_palette(cx);
+    cx.update(|_, cx| {
+        cx.bind_keys([KeyBinding::new(
+            "alt-enter",
+            QuickOpenLocate,
+            Some("workbench"),
+        )]);
+    });
+    cx.simulate_keystrokes("s");
+
+    cx.simulate_keystrokes("alt-enter");
+
+    assert!(
+        host.taken().is_empty(),
+        "连接 / 命令行不可定位，⌥↵ 不该派发动作：{:?}",
+        host.taken()
+    );
+    assert!(shared.quick_open.get(), "⌥↵ 在不可定位的行上不该关面板");
 }
 
 /// Esc 关闭（单行 Input 不消费 Esc，会冒泡到浮层根）。

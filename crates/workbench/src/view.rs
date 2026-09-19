@@ -1338,6 +1338,13 @@ impl WorkbenchView {
                 // 与导航搜索结果同一去向：编辑区右侧属性面板（请求已带全定位信息）。
                 self.shared.show_properties(*request, cx);
             }
+            Action::RevealMetadata(object) => {
+                // 与「打开左面板」同一口径（切到数据源 + 展开），再把请求交给导航面板：
+                // 展开链路与选中都在那边做，工作台不重复一份“树长什么样”。
+                self.shared.active_left.set(LeftPanel::Database);
+                self.shared.left_mode.set(SidebarMode::Expanded);
+                self.shared.request_reveal(object);
+            }
             Action::OpenLeftPanel(panel) => {
                 self.shared.active_left.set(panel);
                 self.shared.left_mode.set(SidebarMode::Expanded);

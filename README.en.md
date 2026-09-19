@@ -272,7 +272,7 @@ Status vocabulary: **✅ main line live** · **🟡 partial** (with named gaps) 
 | **M9 plugin** | WASM / Sidecar host with four extension points | ⛔ | Design docs and package structure are in place | **No crate depends on it**; two zero-byte modules; awaiting beta 3 planning |
 | **editor** | One kernel, three capability tiers | ✅ | Three execution channels · segmented fetch · real transactions and cancellation · five export formats · formatting / transpiling to 10 dialects / execution plans · completion and snippets · sessions surviving restart | Phase 1c analysis units (deferred) · value preview / editing · lineage persistence |
 | **federation** | Multiple sources attached to one DuckDB session, read-only | 🟡 | Source list overlay · primary-source semantics · tiered strategy L1 / L2 · explicit extension management (auto-download disabled) · credential scrubbing at the exit | L3 bridge · SQL Server on real hardware · scan-volume visibility |
-| **quick_open** | Metadata search and command palette | ✅ | Three prefixes (`>` commands / `#` full-text / `@`) · the name tier runs on `metadata_index` · the content tier runs on `metadata_fts` (trigram) · 100k-object latency **158 ms → 1.5 ms** | View / routine definition text is not in the FTS corpus · locating a hit in the tree (wired in the navigation panel, **not yet from Quick Open**) · `@` current-connection scoping (Phase 2) |
+| **quick_open** | Metadata search and command palette | ✅ | Three prefixes (`>` commands / `#` full-text / `@`) · the name tier runs on `metadata_index` · the content tier runs on `metadata_fts` (trigram) · 100k-object latency **158 ms → 1.5 ms** · **`⌥↵` locates a hit in the tree** | View / routine definition text is not in the FTS corpus · `@` current-connection scoping (Phase 2) · recent items / empty-state suggestions |
 | **settings** | Preference registry + atomic persistence + settings page | ✅ | Three-way scope split (app / project / session) · a registry with five admission rules · atomic writes | The `effect` field has no consumer · no cross-process write lock |
 
 ### The full picture of what isn't wired
@@ -387,23 +387,23 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 
 | Suite | Measured this round (2026-09-19) |
 | --- | --- |
-| **Whole workspace** | **84 targets · 1983 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
-| `rds-engine --lib` | **443 passed / 24 ignored** |
+| **Whole workspace** | **84 targets · 1990 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
+| `rds-engine --lib` | **446 passed / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + end-to-end **14** |
 | `rds-mock` | lib **190** + engine integration **37** + persistence round-trip **5** + history/templates **4** + cleanup **2** |
-| `rds-workbench --lib` | **113** |
+| `rds-workbench --lib` | **116** |
 | `rds-analytics-resource` | lib **125** + panel window **18** + dialog window **9** |
 | `rds-connection` | lib **48** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + integration **5** |
-| `rds-database` | lib **54** |
+| `rds-database` | lib **55** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract` | **7** (no raw sizes / no raw colors / panel registry / shared-field allowlist) |
 
 > The table above comes from **one single `cargo test-all` run** (Windows · stable · `-j 2`). **The per-target ledger and the reproduction commands are in [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**; the workspace currently compiles with zero warnings (`cargo check --workspace --all-targets`).
 >
-> **Scope**: 1 of those 84 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 83 targets / 1982 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
+> **Scope**: 1 of those 84 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 83 targets / 1989 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
 
 Real-machine probes (environment variables required, not run by default): `editor_exec_real` (6 drivers) · `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`.
 
@@ -436,7 +436,7 @@ This project **labels what it has not done yet**, ordered here by how close each
 
 - **Editor analysis units (Phase 1c, deferred)**: making analysis mode a notebook-style collection of units, sessions, and outputs.
 - **Full-text metadata search**: **wired** (name tier on `metadata_index` with infix matching; content tier on `metadata_fts` using trigram, covering comments and data types, via Quick Open's `#` mode with a 3-character minimum). **Still missing**: view / routine definition text is not in the FTS corpus.
-- **Locating a search hit in the tree**: **wired in the navigation panel** (the "locate" action on a search result expands the chain and selects the node; large schemas jump straight to the target's page). **Still missing**: the same from a Quick Open hit (cross-panel: needs the left dock expanded and focus handed to the tree).
+- **Locating a search hit in the tree**: **both entry points are wired** — the "locate" action on a navigation search result, and `⌥↵` on a Quick Open metadata hit (both expand the chain and select the node; large schemas jump straight to the target's page). **Still missing**: a window-level check that the tree actually scrolls the target into view (selection and render window are pinned by unit tests).
 - **Virtual list for the navigation tree**: today the row count is bounded by paging (one page plus "load more"); 100k rows on screen is not yet verified.
 - **Federation L3 bridge**: pulling rows into temp tables to bring in sources that have no scanner.
 

@@ -140,6 +140,7 @@ pub(crate) fn command_rows() -> Vec<Row> {
             match_text: format!("{} {}", spec.label, spec.keywords),
             snippet: None,
             why: None,
+            locate: None,
             action: spec.action,
         })
         .collect()

@@ -14,12 +14,12 @@
 | 项 | 实测值 |
 | --- | --- |
 | 工作区测试目标 | **84**（含 16 个 Doc-tests 目标） |
-| 通过 | **1983** |
+| 通过 | **1990** |
 | 失败 | **0**（本轮全绿） |
 | 忽略 | **51**（真机探针 24 + Doc-tests 27） |
 | 编译告警 | `cargo check --workspace --all-targets` 零告警 |
 | 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；2026-09-19 第二次复跑时实测） |
-| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1982 项**，见 §2 的表下注 |
+| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1989 项**，见 §2 的表下注 |
 
 ---
 
@@ -59,13 +59,13 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 | 包 | lib 单测 | 集成目标（`tests/`） | 本包合计 | 忽略 |
 | --- | --- | --- | --- | --- |
-| `rds-engine` | **443** | 32（8 个目标） | **475** | 24 |
+| `rds-engine` | **446** | 32（8 个目标） | **478** | 24 |
 | `rds-editor` | **377** | — | **377** | — |
-| `rds-workbench` | **113** | 130（32 个目标） | **243** | — |
+| `rds-workbench` | **116** | 130（32 个目标） | **246** | — |
 | `rds-insight` | **227** | 14（`column_profile_e2e`） | **241** | — |
 | `rds-mock` | **190** | 48（4 个目标） | **238** | — |
 | `rds-analytics-resource` | **125** | 27（`panel_window` 18 · `dialog_window` 9） | **152** | — |
-| `rds-database` | **54** | — | **54** | — |
+| `rds-database` | **55** | — | **55** | — |
 | `rds-connection` | **48** | 4（`tunnel_roundtrip`） | **52** | — |
 | `rds-project` | **43** | 5（`project_registry` 1 · `project_store` 4） | **48** | — |
 | `rds-scratchpad` | **37** | — | **37** | — |
@@ -75,10 +75,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-paths` | **10** | 1（`test_support_is_wired`） | **11** | — |
 | `rds-workbench-shell` | **1** | — | **1** | — |
 | `rds-app` | 0 | — | 0 | — |
-| **合计** | **1722** | **261** | **1983** | **51** |
+| **合计** | **1729** | **261** | **1990** | **51** |
 
 > **口径注（重要）**：合计里的 `rds-workbench` 集成 130 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
-> 去掉它：**项目自身套件 = 83 个目标 / 1982 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
+> 去掉它：**项目自身套件 = 83 个目标 / 1989 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
 >
 > `rds-plugin` 有 11 项单测且全绿，但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
 
@@ -95,7 +95,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `federation_credentials_probe` | 1 | 凭据脱敏出口 |
 | `oracle_probe` | 1 | Oracle 扩展腿 |
 
-### 2.2 `rds-workbench` 的 32 个集成目标（130 项）
+### 2.2 `rds-workbench` 的 33 个集成目标（134 项）
 
 | 目标 | 数量 | | 目标 | 数量 |
 | --- | --- | --- | --- | --- |
@@ -112,9 +112,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `connection_edit_backfill` | 1 | | `connection_template` | 2 |
 | `db_navigator` | 2 | | `global_service_singleton` | 2 |
 | `editor_exec_real` | 1 | | `insight_source_real` | 2 |
-| `federation_sources` | 1 | | `insight_schema_real` | 1 |
-| `log_dialog_layer` | 1 | | `mock_job_cancel` | 1 |
-| `oracle_federation` | 1 | | `zz_fixture_probe` | 1（本机诊断，未跟踪） |
+| `official_driver_real` | 4 | | `insight_schema_real` | 1 |
+| `federation_sources` | 1 | | `log_dialog_layer` | 1 |
+| `oracle_federation` | 1 | | `mock_job_cancel` | 1 |
+| `zz_fixture_probe` | 1（本机诊断，未跟踪） | | | |
 
 > 真机目标（`*_real` / `*_probe` / `oracle_*` / `federation_*`）在无环境变量或无服务时按设计跳过或空跑；
 > `zz_fixture_probe` 是**本机专用**脚本（未跟踪、`.gitignore` 已挡），**不属于项目测试套件**——它出现在上表只是因为本机命令输出里确实有它。
@@ -138,7 +139,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | M9 插件宿主 | `plugin` | ⛔ | **整包无调用方**，等 beta3 立项 |
 | SQL 编辑器 | `editor` | ✅ | Phase 1c 分析单元（搁置）· 值预览 / 编辑 · 血缘持久化 |
 | 联邦查询 | `engine/duckdb/federation` | 🟡 | L3 桥接 · SQL Server 真机 · 扫描量可见 |
-| Quick Open | `workbench/quick_open` | ✅ | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位（**导航面板已接，Quick Open 命中行未接**）· `@` 当前连接限定 · 最近使用 / 空态建议（Phase 2） |
+| Quick Open | `workbench/quick_open` | ✅ | 源码（视图 / 例程定义）未进 FTS · `@` 当前连接限定 · 最近使用 / 空态建议（Phase 2） |
 | 设置 | `settings` | ✅ | `effect` 字段无人消费 · 无跨进程写锁 |
 
 ---
@@ -253,6 +254,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 相对第二次的 **+13 项**里，本次改动只占 **4 项**（engine **+1**：对象位次查询；database **+3**：定位目标映射 2 + 位次→页 1），
 其余 **+9 项**来自并行会话的驱动 / 连接重构（connection **44→48** · engine **440→443** · workbench **110→113**）。
 **引用本表时须知**：这些数字描述的是**那一刻的工作树**，不是某一个提交。
+
+**本轮（`641c33b5` + 定位入口接入）**：84 目标 / **1990** 通过 / 0 失败 / 51 忽略。
+相对第三次的 **+7** 里，本批改动占 **+3**（database **+1**：两条入口映射一致性；workbench **+2**：`⌥↵` 定位的判别性窗口测试两条），
+其余 **+4** 来自并行会话（engine **443→446** · workbench **113→116** 中的另一条）。
 
 ---
 

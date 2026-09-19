@@ -7,6 +7,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-19 — 命中行 `⌥↵`：在导航树中定位（跨面板，Phase 2 前奏）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 键位 | 新增动作 `QuickOpenLocate`；`alt-enter` 绑在 `workbench` 上下文（浮层不单独占 key_context，它渲染在工作台根下，焦点链穿过工作台根到浮层根的 `on_action`） | `crates/workbench/src/commands.rs`、`crates/app/src/main.rs`、`quick_open/palette.rs` |
+| 行 | `Row.locate: Option<engine::ObjectRef>`（只有元数据行有）+ 选中行上的「⌥↵ 定位」提示。**不做行内按钮**：`List` 自己管指针与确认，行内可点元素会和它抢事件 | `quick_open/{model,delegate}.rs` |
+| 跨面板 | 浮层 `confirm_locate` → 宿主端口 `Action::RevealMetadata` → 左 Dock 切数据源 + `Shared::request_reveal` → 侧栏 render 消费 → `NavView::reveal_ref`（字段私有，与 `request_open_in_editor` 同一口径） | `quick_open/palette.rs`、`view.rs`、`panels/{shared,mod}.rs` |
+| 映射收口 | 两条入口（导航结果行 / Quick Open）共用 `RevealTarget::from_ref`；命中先经 `ObjectRef::from_index_hit` 归一（搜索 ↔ 导航 / 属性面板的唯一对接口） | `crates/database/src/nav_view.rs` |
+| 测试 | 工作台 **+2**：`⌥↵` 在元数据行派发 `RevealMetadata`（**判别性**：自注册生产那份键位 + 伪造一批真命中），在不可定位的行上不派发也不关面板；database **+1**：两条入口算出的目标逐字段相等 | `quick_open/tests.rs`、`nav_view.rs` |
+| 验证 | 全量 **84 目标 / 1990 通过 / 0 失败 / 51 忽略**；`ui_contract` 7 项全绿 | — |
+| 遗留 | ① 把目标「滚到眼前」的窗口级验收；② 导航树自身的窗口级定位测试 | — |
+
 ### 2026-09-19 — 文档：宣传件两版（对齐编辑器宣传页体例）
 
 | 项 | 内容 | 落点 |
@@ -14,7 +26,7 @@
 | 可贴版 ✅ | 15 节：一句话 + 它替你做到的事 / 为什么不是一个「搜索框」（V1 对照）/ 三档模式与 2·3 字门槛 / 三个高光 / **四个剧本**（每步都能照着敲）/ 一次搜索全流程（ASCII + 落点表）/ 结果区怎么读 / 名称档两段式与索引直出（含 10 万对象对照表）/ 全文档 FTS5 trigram（含**语料边界**与两处底座缺陷）/ 键盘与选中 / 异步与状态 / 架构（ASCII 分层 + 五条纪律）/ 尺寸与主题 / 质量与证据 / 边界与待办 / 文档地图；纯文本 + ASCII，适合贴 PR / wiki / 聊天 | `quick-open-showcase.md`（新） |
 | 视觉版 ✅ | 同一套内容卡片化：吸顶导航（15 锚点）+ 页头 + KPI chips + **首屏浮层线框可切三档**（默认四组 / `>` 命令 / `#` 两行式 snippet，只换面板内容）+ ASCII 流程与分层图 + 数字卡 + 缺陷卡 + 页脚验证命令；单文件、零外链、明暗双主题、带打印样式 | `quick-open-showcase.html`（新） |
 | 诚实标注 ✅ | ① 全文档语料 =**注释与类型**，`view_definition` / `routine_definition` **未进 FTS**（Q8）——分组标题里的「注释 / 定义」是既有 UI 文案，两版都写明；② 未落地项（`@` 前缀 / 行内动作 / 短时缓存 / trigram 中缀兜底…）单列，不拿规划当卖点 | 两版 §8 / §14 |
-| 数字口径 ✅ | 全部取自本文上一节与引擎基线：158 ms → 1.5 ms / 12 ms / 45 ms · 13 条命令 · 2·3 字门槛 · 8·50 上限 · 150 ms 防抖 · 443 + 113 + 54 + 18 项测试；页脚写明「改实现请顺手核对」 | 两版 §13 / 页脚 |
+| 数字口径 ✅ | 全部取自本文上一节与引擎基线：158 ms → 1.5 ms / 12 ms / 45 ms · 13 条命令 · 2·3 字门槛 · 8·50 上限 · 150 ms 防抖 · 446 + 116 + 55 + 18 项测试；页脚写明「改实现请顺手核对」 | 两版 §13 / 页脚 |
 | 入口登记 ✅ | 文档索引（可贴版 / 视觉版分行，并顺带刷新 prototype-design 与 dev-plan 两行的过期描述） | `docs/architecture/README.md` |
 
 ### 2026-09-19 — Phase 1 第四刀：名称档彻底提速（分类索引序直出，去掉窗口与排序）

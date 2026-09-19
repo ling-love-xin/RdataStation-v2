@@ -27,9 +27,10 @@ use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings};
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
-    NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, SaveConnection, ScratchpadCancelEdit,
-    ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen, ScratchpadRename,
-    ScratchpadSelectAll, ScratchpadUp, SwitchProject, TestConnection, ToggleQuickOpen,
+    NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate, SaveConnection,
+    ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
+    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject, TestConnection,
+    ToggleQuickOpen,
 };
 
 fn main() {
@@ -130,6 +131,10 @@ fn run_app() {
             //    只有焦点在工作区编辑面板内才生效，不抢导航树/草稿箱的同名键。
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
+                // 浮层里的 `⌥↵`：在导航树中定位选中的元数据命中（只有元数据行可定位）。
+                // 绑在 workbench 而不是浮层自己的 context：浮层不单独占 key_context，
+                // 它渲染在工作台根下，焦点链会穿过工作台根到这个 on_action。
+                KeyBinding::new("alt-enter", QuickOpenLocate, Some("workbench")),
                 KeyBinding::new("ctrl-, ", OpenSettings, Some("workbench")),
                 // 设置页内（更深的 key_context 先拿到键）：`Esc` 关闭、`Ctrl+F` 聚焦搜索。
                 // 与 workbench 的 `Ctrl+F`（聚焦数据源导航搜索）不冲突——那只在设置页外生效。

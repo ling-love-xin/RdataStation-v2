@@ -18,6 +18,7 @@ actions!(
     workbench,
     [
         ToggleQuickOpen,
+        QuickOpenLocate,
         HideSidebars,
         RestoreSidebars,
         SwitchProject,

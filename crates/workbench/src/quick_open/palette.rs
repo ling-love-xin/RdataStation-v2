@@ -22,6 +22,7 @@ use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath};
 use gpui_kit::*;
 
+use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
 use crate::quick_open::delegate::QuickOpenDelegate;
 use crate::quick_open::model::{self, Action};
@@ -147,6 +148,28 @@ impl QuickOpenPalette {
     fn selected_action(&self, cx: &App) -> Option<Action> {
         let key = self.selected_key.as_deref()?;
         Some(self.list.as_ref()?.read(cx).delegate().action_of(key)?)
+    }
+
+    /// `⌥↵`：在导航树中定位选中行（只有元数据命中行可定位）。
+    ///
+    /// 与 `confirm` 分开而不是把它塞进 `Row.action`：同一行有两个动作（↵ 看属性 /
+    /// ⌥↵ 定位入树），挤进一个字段执行侧就得猜“用户按的是哪个键”。
+    fn confirm_locate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected_key.clone() else {
+            return;
+        };
+        let Some(object) = self
+            .list
+            .as_ref()
+            .and_then(|list| list.read(cx).delegate().locate_of(&key))
+        else {
+            // 命令 / 连接 / 文件行不支持定位：不动选中也不关面板（当没按）。
+            // 行上那条「⌥↵ 定位」提示本就只在可定位的行出现。
+            return;
+        };
+        self.host
+            .execute(Action::RevealMetadata(object), false, window, cx);
+        self.close(cx);
     }
 
     /// 懒创建输入框与结果列表（首帧渲染；两者都需要 `&mut Window`）。
@@ -389,7 +412,10 @@ impl QuickOpenPalette {
     }
 
     /// 取走元数据搜索结果 + 文件清单（过期批次丢弃；不碰 UI，只置脏标记）。
-    fn pump_results(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `pub(crate)`：定位的窗口级测试直接调它（键位与泵的定时器各自已有覆盖），
+    /// 免得测一个业务逻辑还要跟 60ms 的轮询时钟赛跑。
+    pub(crate) fn pump_results(&mut self, cx: &mut Context<Self>) {
         let results = database::nav_jobs::drain_search_results(
             database::nav_jobs::SearchConsumer::QuickOpen,
         );
@@ -624,6 +650,9 @@ impl Render for QuickOpenPalette {
                 this.move_selection(1, window, cx)
             }))
             .on_action(cx.listener(|this, _: &Escape, _window, cx| this.close(cx)))
+            .on_action(cx.listener(|this, _: &QuickOpenLocate, window, cx| {
+                this.confirm_locate(window, cx)
+            }))
             .into_any_element()
     }
 }
