@@ -484,67 +484,25 @@ mod tests {
 
     /// `driver_properties` 的键必须是**该客户端库真认**的参数名。
     ///
-    /// 清单来自依赖源码（读到哪一行写在 `descriptors.rs` 对应驱动的注释里），
-    /// **升依赖后要复查**：sqlx 会静默忽略未知键、`mysql_async` 与 `tokio-postgres` 会直接报错——
-    /// 所以一个不认的键要么无声失效、要么弄坏连接，两种都不能留在这里。
+    /// 清单的唯一来源是 [`crate::driver::property_spec`]（依据依赖源码，见那里的模块头）；
+    /// 本测试只盯住声明与清单不漂：sqlx 会静默忽略未知键、`mysql_async` 与 `tokio-postgres`
+    /// 会直接报错——所以一个不认的键要么无声失效、要么弄坏连接，两种都不能出现在默认值里。
     #[test]
     fn declared_property_keys_are_accepted_by_the_client_library() {
-        // 各库 URL 解析器认的键（详见 `docs/architecture/driver-capability-matrix.md` §2.1）
-        let accepted: HashMap<&str, &[&str]> = [
-            (
-                "mysql",
-                &[
-                    "sslmode", "ssl-mode", "sslca", "ssl-ca", "sslcert", "ssl-cert", "sslkey",
-                    "ssl-key", "charset", "collation", "statement-cache-capacity", "socket",
-                    "timezone", "time-zone",
-                ][..],
-            ),
-            (
-                "postgres",
-                &[
-                    "sslmode", "ssl-mode", "sslrootcert", "ssl-root-cert", "ssl-ca", "sslcert",
-                    "ssl-cert", "sslkey", "ssl-key", "statement-cache-capacity", "host",
-                    "hostaddr", "port", "dbname", "user", "password", "application_name", "options",
-                ][..],
-            ),
-            (
-                "mysql_native",
-                &[
-                    "pool_min", "pool_max", "inactive_connection_ttl", "ttl_check_interval",
-                    "conn_ttl", "abs_conn_ttl", "abs_conn_ttl_jitter", "tcp_keepalive",
-                    "max_allowed_packet", "wait_timeout", "enable_cleartext_plugin",
-                    "reset_connection", "tcp_nodelay", "stmt_cache_size", "prefer_socket",
-                    "secure_auth", "client_found_rows", "socket", "compression", "require_ssl",
-                    "verify_ca", "verify_identity", "built_in_roots",
-                ][..],
-            ),
-            (
-                "postgres_native",
-                &[
-                    "user", "password", "dbname", "options", "application_name", "sslmode", "host",
-                    "sslnegotiation", "hostaddr", "port", "connect_timeout", "tcp_user_timeout",
-                    "keepalives", "keepalives_idle", "keepalives_interval", "keepalives_retries",
-                    "target_session_attrs", "channel_binding", "load_balance_hosts",
-                ][..],
-            ),
-            // 文件型：路径由工厂取，查询串会被剥掉 → 一个键都不该声明
-            ("sqlite", &[][..]),
-            ("duckdb", &[][..]),
-        ]
-        .into_iter()
-        .collect();
+        use crate::driver::property_spec;
 
         for d in declarations() {
             let keys: serde_json::Map<String, Value> =
                 serde_json::from_str(&d.driver_properties).expect("driver_properties 应是 JSON 对象");
-            let allowed = accepted
-                .get(d.id.as_str())
-                .unwrap_or_else(|| panic!("未预期的驱动 {}（新增驱动请同步本测试）", d.id));
             for key in keys.keys() {
                 assert!(
-                    allowed.contains(&key.as_str()),
-                    "{} 声明了客户端库不认的属性键 {key}（认的键：{allowed:?}）",
-                    d.id
+                    property_spec::accepts(&d.id, key),
+                    "{} 声明了客户端库不认的属性键 {key}（该驱动认的键：{:?}）",
+                    d.id,
+                    property_spec::known_keys(&d.id)
+                        .iter()
+                        .map(|k| k.key)
+                        .collect::<Vec<_>>()
                 );
             }
         }

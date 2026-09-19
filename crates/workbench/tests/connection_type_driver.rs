@@ -371,6 +371,48 @@ fn driver_property_defaults_follow_the_declaration_and_keep_user_edits(
 }
 
 #[gpui_kit::test]
+fn property_rows_show_whether_the_key_will_be_delivered(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let editor = cx.update(|_, cx| harness.read(cx).editor.clone());
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| e.request_new_connection(window, cx));
+    });
+    let dialog = cx.update(|_, cx| editor.read(cx).dialog_state().expect("对话框状态已创建"));
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![ds_type("mysql", "MySQL", "🐬")];
+        *dialog.drivers.borrow_mut() =
+            vec![driver("mysql_native", "mysql", "MySQL (Official)", true)];
+        // 三个典型命运：会报错（对话框旧初值同形）/ 直通 / 会报错（旧初值同形）
+        *dialog.props.borrow_mut() = vec![
+            ("ssl_mode".to_string(), "prefer".to_string()),
+            ("max_allowed_packet".to_string(), "67108864".to_string()),
+            ("connect_timeout".to_string(), "10".to_string()),
+        ];
+    });
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    // 切到「驱动属性」Tab（0 常规 / 1 网络 / 2 能力 / 3 属性 / 4 高级）
+    dialog.active_tab.set(3);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 未知参数会报错的键：必须有可见提示（否则只能等连接失败）。
+    // 注意：断言只能锚在 `.debug_selector(...)` 上——`.id(...)` 不往 debug_bounds 表写
+    // （决策 #83）。
+    assert!(
+        cx.debug_bounds("conn-prop-note-ssl_mode").is_some(),
+        "会报错的键应有去向提示"
+    );
+    assert!(cx.debug_bounds("conn-prop-note-connect_timeout").is_some());
+    // 直通的键不给提示（不啰嗝）
+    assert!(
+        cx.debug_bounds("conn-prop-note-max_allowed_packet").is_none(),
+        "会下发的键不必提示"
+    );
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
 fn connection_fields_and_uri_stay_in_sync(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

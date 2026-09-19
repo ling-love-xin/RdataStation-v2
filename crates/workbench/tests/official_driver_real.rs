@@ -13,7 +13,8 @@
 //! 3. `secret_type_of` 在**真实驱动目录**下把 `mysql_native` 归到 `MYSQL`；
 //! 4. 驱动属性：声明里的键（`drivers.driver_properties`）下发后能连，而对话框**旧初值**
 //!    （`ssl_mode` / `connect_timeout`）会被驱动拒下——两个 Official 驱动对未知参数是报错而非忽略
-//!    （能力矩阵 §2.1；旧初值已由对话框架构决策 #90 删除）。
+//!    （能力矩阵 §2.1；旧初值已由对框架构决策 #90 删除）；同一对键交给同族的 sqlx 驱动则**静默忽略**，
+//!    这正是「同一个键四种命运」（`engine::driver::property_spec`）的真机对照。
 //!
 //! 跑法（sh / bash 下路径与 URL 一律单引号，反斜杠会被吃）：
 //!
@@ -182,6 +183,20 @@ fn declared_driver_properties_connect_and_ui_fabricated_keys_are_rejected() {
             Ok(_) => panic!(
                 "{driver}：UI 编的属性键居然被接受了——能力矩阵 §2.1 的「未知参数」判断需要重查"
             ),
+        }
+
+        // ③ 对照：同一对键交给**同族的 sqlx 驱动** → 静默忽略、连接照常
+        //    （这就是 `driver-capability-matrix` §2.1 那张「未知参数」表的真机形态：
+        //    同一个键一个报错、一个无声）
+        let sqlx_driver = driver.strip_suffix("_native").unwrap_or(driver);
+        match connect_via_record(&rt, sqlx_driver, &url, None, Some(fabricated)) {
+            Ok((_, db)) => {
+                query_one(&rt, &db).expect("sqlx 忽略未知属性后应能查询");
+                eprintln!(
+                    "✅ {sqlx_driver}：同一对键被**静默忽略**、连接照常（与 {driver} 形成对照）"
+                );
+            }
+            Err(e) => panic!("{sqlx_driver}：未知属性按 §2.1 应被忽略，实测却失败：{e}"),
         }
     }
 

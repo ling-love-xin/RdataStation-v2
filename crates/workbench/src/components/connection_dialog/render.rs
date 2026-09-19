@@ -583,17 +583,25 @@ impl ConnectionDialogState {
                 }
                 3 => {
                     // ===== 驱动属性：key-value 动态增删 =====
+                    // 每行下方标注**去向**（判决来自 `engine::driver::property_spec`）：
+                    // 会下发 / 当前实现会忽略 / 当前实现会报错 / 当前实现不下发。
+                    // 为什么要有这行：同一个键在四个客户端库上有四种命运（能力矩阵 §2.1），
+                    // 不标注就只能等连接失败（或静默不生效）才知道。
+                    let props_driver = current_driver
+                        .as_ref()
+                        .map(|d| d.id.clone())
+                        .unwrap_or_default();
                     let props_ui = {
                         let props_outer = props.clone();
                         let props_ref = props.borrow();
-                        let mut rows = div().v_flex().gap_1();
+                        let mut rows = div().v_flex().gap_2();
                         for (i, (k, v)) in props_ref.iter().enumerate() {
                             let idx = i;
                             let k = k.clone();
                             let v = v.clone();
                             let props = props_outer.clone();
                             let entity = entity.clone();
-                            rows = rows.child(
+                            let mut row = div().v_flex().gap_1().child(
                                 div().h_flex().items_center().gap_2()
                                     .child(div().text_xs().child(k.clone()))
                                     .child(div().text_xs().text_color(theme.colors.muted_foreground).child("="))
@@ -613,6 +621,24 @@ impl ConnectionDialogState {
                                             }),
                                     ),
                             );
+                            if let Some((text, level)) = property_note(&props_driver, &k) {
+                                let color = match level {
+                                    PropertyNoteLevel::Info => theme.colors.muted_foreground,
+                                    PropertyNoteLevel::Warn => theme.colors.warning,
+                                    PropertyNoteLevel::Danger => theme.colors.danger,
+                                };
+                                let selector_key = k.clone();
+                                row = row.child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("conn-prop-note-{selector_key}")
+                                        })
+                                        .text_xs()
+                                        .text_color(color)
+                                        .child(text),
+                                );
+                            }
+                            rows = rows.child(row);
                         }
                         rows
                     };
@@ -629,6 +655,7 @@ impl ConnectionDialogState {
                                     let prop_key = prop_key.clone();
                                     let prop_val = prop_val.clone();
                                     let result = result.clone();
+                                    let prop_driver = props_driver.clone();
                                     move |_, window, app| {
                                         let k = prop_key.read(app).value().to_string();
                                         let v = prop_val.read(app).value().to_string();
@@ -646,21 +673,47 @@ impl ConnectionDialogState {
                                         drop(p);
                                         prop_key.update(app, |s, cx| s.set_value("", window, cx));
                                         prop_val.update(app, |s, cx| s.set_value("", window, cx));
-                                        set_result_ok(&result, true, "驱动属性已更新");
+                                        // 立即把「去向」告诉用户（不等连接失败才发现）：
+                                        // 忽略 / 不下发 → 警告，会报错 → 错误；直接下发才报成功。
+                                        match property_note(&prop_driver, &k) {
+                                            Some((text, PropertyNoteLevel::Danger)) => {
+                                                set_result(&result, ResultLevel::Error, text)
+                                            }
+                                            Some((text, PropertyNoteLevel::Warn)) => {
+                                                set_result(&result, ResultLevel::Warning, text)
+                                            }
+                                            _ => set_result_ok(&result, true, "驱动属性已更新"),
+                                        }
                                         entity.update(app, |_, cx| cx.notify());
                                     }
                                 }),
                         );
-                    div().v_flex().gap_2()
+                    // 常用键提示：来自驱动属性规格的**标签子集**（`property_spec::known_keys`），
+                    // 解释这个驱动能配什么；写「常用」而不是「可用」——完整清单比这长。
+                    let known = engine::driver::driver_property_keys(&props_driver);
+                    let known_hint = known.first().map(|_| {
+                        let list = known
+                            .iter()
+                            .take(8)
+                            .map(|k| format!("{}（{}）", k.key, k.label))
+                            .collect::<Vec<_>>()
+                            .join(" · ");
+                        format!("该驱动常用键：{list}")
+                    });
+                    let mut tab = div().v_flex().gap_2()
                         .child(
                             div().text_xs().text_color(theme.colors.muted_foreground)
                                 .child(
                                     "driver_properties · key-value（随连接落库，覆盖驱动默认；\
-                                     默认值取驱动声明）",
+                                     默认值取驱动声明，每行下方标注会怎么下发）",
                                 ),
                         )
                         .child(props_ui)
-                        .child(add_prop)
+                        .child(add_prop);
+                    if let Some(hint) = known_hint {
+                        tab = tab.child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint));
+                    }
+                    tab
                 }
                 4 => {
                     // ===== 高级：环境 + 策略覆盖 + DuckDB 加速 =====

@@ -54,6 +54,7 @@ pub mod jdbc;
 pub mod loader;
 pub mod manager;
 pub mod native;
+pub mod property_spec;
 pub mod registry;
 pub mod router;
 pub mod smart_pool;
@@ -76,6 +77,7 @@ pub use manager::{
 };
 pub use capability::{label as capability_label, meta_bit as capability_meta_bit, spec as capability_spec, Acceptance, CapabilitySpec, MetaBit, CAPABILITY_DICTIONARY};
 pub use declaration::{sync_driver_declarations, DeclarationSync, DriverDeclaration};
+pub use property_spec::{known_keys as driver_property_keys, verdict as driver_property_verdict, PropertySpec, UnknownEffect, Verdict as PropertyVerdict};
 pub use registry::{
     DriverConnectionConfig, DriverDescriptor, DriverFactory, DriverKind, DriverRegistry,
 };

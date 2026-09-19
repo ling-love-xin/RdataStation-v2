@@ -270,7 +270,16 @@ impl DriverConnectionConfig {
         }
 
         if !params.is_empty() {
-            url.push('?');
+            // 分隔符要看 URL 里**已经有没有**查询串：硬拼 `?` 会把已有参数变成前一个键的值，
+            // 例：`…/?ssl-mode=DISABLED` + `?ssl_mode=prefer` → sqlx 读到
+            // `ssl-mode = "DISABLED?ssl_mode=prefer"` → `unknown value` 连接失败（真机踩到）。
+            // 已有查询串的 URL 有三条来源：连接行自己带的参数、`apply_lan_tls_default`
+            // 追加的 LAN 关 TLS、`append_ssl_params` 追加的 TLS 参数。
+            if url.contains('?') {
+                url.push('&');
+            } else {
+                url.push('?');
+            }
             url.push_str(&params.join("&"));
         }
     }
@@ -350,5 +359,38 @@ impl DriverConnectionConfig {
             .as_ref()
             .ok_or("File path is required for DuckDB")?;
         Ok(format!("duckdb://{}", path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 已有查询串的 URL 追加属性时要用 `&`，不能硬拼 `?`。
+    ///
+    /// 硬拼会把已有参数并进前一个键的值里：真机形态是 `…?ssl-mode=DISABLED` 再接
+    /// `?ssl_mode=prefer` → sqlx 读成 `ssl-mode = "DISABLED?ssl_mode=prefer"` →
+    /// `unknown value` 连接失败（属性页里只要有一条属性就会踩到，因为
+    /// `apply_lan_tls_default` 已经先给 LAN 目标关过 TLS）。
+    #[test]
+    fn appending_params_keeps_existing_query_string_intact() {
+        let cfg = DriverConnectionConfig::new("mysql")
+            .with_url_override("mysql://root:pw@h:3306/db?ssl-mode=DISABLED")
+            .with_driver_property("charset", "utf8mb4");
+        let url = cfg.to_url().expect("url");
+        assert_eq!(
+            url,
+            "mysql://root:pw@h:3306/db?ssl-mode=DISABLED&charset=utf8mb4"
+        );
+        assert_eq!(url.matches('?').count(), 1, "查询串起点只能有一个：{url}");
+
+        // 没有查询串时仍是 `?`
+        let cfg = DriverConnectionConfig::new("mysql")
+            .with_url_override("mysql://root:pw@h:3306/db")
+            .with_driver_property("charset", "utf8mb4");
+        assert_eq!(
+            cfg.to_url().expect("url"),
+            "mysql://root:pw@h:3306/db?charset=utf8mb4"
+        );
     }
 }

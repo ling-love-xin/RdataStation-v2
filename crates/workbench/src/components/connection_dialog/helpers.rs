@@ -160,6 +160,74 @@ pub(crate) fn driver_property_defaults(json: Option<&str>) -> Vec<(String, Strin
         .collect()
 }
 
+/// 属性行「去向」提示的严重程度（决定颜色：Info = 弱化 / Warn = 警告 / Danger = 危险）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PropertyNoteLevel {
+    Info,
+    Warn,
+    Danger,
+}
+
+/// 属性行下方的「去向」提示：这个键到底会怎样（`None` = 按原样下发且无需说明）。
+///
+/// 判据全部来自引擎的 [`engine::driver::property_spec`]（依据客户端库源码，唯一真相源）——
+/// 这里只把判决翻译成一句人话，不自己判断键的真伪（§15：UI 不造数据）。
+pub(crate) fn property_note(
+    driver_id: &str,
+    key: &str,
+) -> Option<(String, PropertyNoteLevel)> {
+    match engine::driver::driver_property_verdict(driver_id, key) {
+        engine::driver::PropertyVerdict::Delivered {
+            param,
+            label,
+            note,
+            caution,
+        } => {
+            let renamed = param != key.trim();
+            if !renamed && note.is_none() && caution.is_none() {
+                // 原名直通、没有要说明的 → 不必给提示（不啰嗝）
+                return None;
+            }
+            let mut text = if renamed {
+                format!("下发为 {param}")
+            } else {
+                "会下发".to_string()
+            };
+            if let Some(l) = label {
+                text = format!("{l} · {text}");
+            }
+            // 副作用（会覆盖别的设置）按警告色；中性说明按弱化色
+            match (caution, note) {
+                (Some(c), _) => Some((format!("{text}（{c}）"), PropertyNoteLevel::Warn)),
+                (None, Some(n)) => Some((format!("{text}（{n}）"), PropertyNoteLevel::Info)),
+                (None, None) => Some((text, PropertyNoteLevel::Info)),
+            }
+        }
+        engine::driver::PropertyVerdict::Unsupported { reason, .. } => Some((
+            format!("当前实现不会用它：{reason}"),
+            PropertyNoteLevel::Warn,
+        )),
+        engine::driver::PropertyVerdict::Unknown { effect } => Some(match effect {
+            engine::driver::UnknownEffect::SilentlyIgnored => (
+                "当前实现不认这个键，会被忽略（写了不生效）".to_string(),
+                PropertyNoteLevel::Warn,
+            ),
+            engine::driver::UnknownEffect::ConnectionError => (
+                "当前实现不认这个键：连接会因未知参数**直接报错**".to_string(),
+                PropertyNoteLevel::Danger,
+            ),
+            engine::driver::UnknownEffect::NotDelivered => (
+                "当前实现不会下发这个键".to_string(),
+                PropertyNoteLevel::Warn,
+            ),
+        }),
+        engine::driver::PropertyVerdict::Unclassified => Some((
+            "未收录该驱动的属性规格，去向未知（按原样下发）".to_string(),
+            PropertyNoteLevel::Info,
+        )),
+    }
+}
+
 /// 指定数据库类型下的启用驱动（保持 drivers 目录顺序）。
 pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<Driver> {
     drivers
@@ -1126,7 +1194,7 @@ mod tests {
         type_has_driver, url_template_example, auth_config_values, auth_field_specs,
         build_auth_config_json, build_network_config_json, conn_display_name, create_new_db_file,
         dialog_tab_defs, network_config_values, network_field_specs, new_db_file_suggested_name,
-        result_needs_detail, saved_result, visible_tab_index, DriverDerived,
+        property_note, result_needs_detail, saved_result, visible_tab_index, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1537,6 +1605,49 @@ mod tests {
         assert!(!result_needs_detail(&"字".repeat(80)), "刚好 80 字不展开");
         assert!(result_needs_detail(&"字".repeat(81)), "超 80 字提供详情");
         assert!(result_needs_detail("第一行\n第二行"), "换行必须可展开");
+    }
+
+    /// 属性行的「去向」提示：四种命运各给一句人话，直通的不啰嗝。
+    ///
+    /// 判据全部在引擎的 `property_spec`（库认的键 + 未知键的效果），这里只验证翻译层。
+    #[test]
+    fn property_notes_state_what_will_actually_happen() {
+        use super::PropertyNoteLevel as L;
+
+        // 直通同名、无说明 → 不给提示（不啰嗝）；带中性说明 → Info
+        assert!(property_note("mysql", "collation").is_none());
+        assert!(property_note("mysql_native", "stmt_cache_size").is_none());
+        let (text, level) = property_note("mysql", "charset").expect("charset 有说明");
+        assert!(text.contains("utf8mb4"), "{text}");
+        assert_eq!(level, L::Info);
+
+        // 带副作用的键（会覆盖别的设置）：警告级
+        let (text, level) = property_note("mysql_native", "require_ssl").expect("TLS 键应有提醒");
+        assert!(text.contains("连接安全"), "{text}");
+        assert_eq!(level, L::Warn);
+
+        // sqlx：未知键被静默忽略 → 警告（写了不生效）
+        let (text, level) = property_note("mysql", "connectTimeout").expect("未知键应提示");
+        assert!(text.contains("忽略"), "{text}");
+        assert_eq!(level, L::Warn);
+
+        // native：未知键会报错 → 危险（连接失败）
+        let (text, level) =
+            property_note("mysql_native", "ssl_mode").expect("未知键应提示");
+        assert!(text.contains("报错"), "{text}");
+        assert_eq!(level, L::Danger);
+        let (_, level) = property_note("postgres_native", "connectTimeout").expect("应提示");
+        assert_eq!(level, L::Danger);
+
+        // 文件型：不下发 → 警告（不是错误：它不会弄坏连接）
+        let (text, level) = property_note("sqlite", "journalMode").expect("应提示");
+        assert!(text.contains("不会用它"), "{text}");
+        assert_eq!(level, L::Warn);
+
+        // 未收录的驱动：不装作知道
+        let (text, level) = property_note("some_plugin_driver", "charset").expect("应提示");
+        assert!(text.contains("未收录"), "{text}");
+        assert_eq!(level, L::Info);
     }
 
     #[test]
