@@ -325,6 +325,122 @@ impl NavCache {
             );
         }
     }
+
+    // ==================== 例程 / 序列 / 触发器 ====================
+    //
+    // 写侧一律**尽力而为**（写不进去下次仍会回源库，不影响正确性）——与
+    // `put_objects` / `put_columns` 同一口径：缓存是加速设施，失败不阻断导航。
+    //
+    // 索引 / 约束**有意不在这里**：它们的消费方是属性面板，而属性面板按设计走
+    // 实时内省（见 `property_panel.rs` 模块文档）——给实时语义套一层缓存是错的。
+
+    /// 读取某 schema 的例程（存储过程 + 函数，空结果视为未命中）。
+    pub fn routines(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
+        let rows = self.ops.list_routines(schema_id, None).ok()?;
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            rows.into_iter()
+                .map(|r| {
+                    NodeInfo::new(r.routine_name, routine_kind(&r.routine_type))
+                        .with_comment(r.routine_comment)
+                })
+                .collect(),
+        )
+    }
+
+    /// 回写某 schema 的例程（只登记名字 / 类型 / 注释）。
+    ///
+    /// `save_routine` 是 `INSERT OR REPLACE`，而这里不给 `routine_definition`——
+    /// 会把同名例程的定义列置空。当前**没有任何路径往 L2 写定义**（例程源码走
+    /// `get_routine_source` 实时查询），所以无损；将来若要缓存定义，这里必须改成
+    /// 「先查后增量更新」，否则展开一次例程文件夹就会把定义抹掉。
+    pub fn put_routines(&self, schema_id: i64, routines: &[NodeInfo]) {
+        for r in routines {
+            let _ = self.ops.save_routine(
+                schema_id,
+                &r.name,
+                routine_type_str(&r.kind),
+                None,
+                None,
+                None,
+                None,
+                r.comment.as_deref(),
+            );
+        }
+    }
+
+    /// 读取某 schema 的序列名（空结果视为未命中）。
+    pub fn sequences(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
+        let names = self.ops.list_sequences(schema_id).ok()?;
+        if names.is_empty() {
+            return None;
+        }
+        Some(
+            names
+                .into_iter()
+                .map(|n| NodeInfo::new(n, SchemaObjectKind::Sequence))
+                .collect(),
+        )
+    }
+
+    /// 回写某 schema 的序列（只登记名字）。
+    pub fn put_sequences(&self, schema_id: i64, sequences: &[NodeInfo]) {
+        for s in sequences {
+            let _ = self.ops.save_sequence_name(schema_id, &s.name);
+        }
+    }
+
+    /// 读取某 schema 的触发器（含所属表——回到 `NodeInfo::parent_name`）。
+    pub fn triggers(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
+        let rows = self.ops.list_triggers(schema_id).ok()?;
+        if rows.is_empty() {
+            return None;
+        }
+        Some(
+            rows.into_iter()
+                .map(|t| {
+                    NodeInfo::new(t.name, SchemaObjectKind::Trigger)
+                        .with_comment(t.comment)
+                        .with_parent(t.table_name)
+                })
+                .collect(),
+        )
+    }
+
+    /// 回写某 schema 的触发器。
+    ///
+    /// **没有所属表的触发器不写**：`triggers.table_id` 是 `NOT NULL`，而所属表是
+    /// 驱动内省给的（`NodeInfo::parent_name`）——MySQL 那类不提供它的驱动就停在
+    /// 「不缓存」（如实降级：下次仍回源库，不是丢数据）。
+    pub fn put_triggers(&self, schema_id: i64, triggers: &[NodeInfo]) {
+        for t in triggers {
+            let Some(table) = t.parent_name.as_deref().filter(|p| !p.is_empty()) else {
+                continue;
+            };
+            let _ = self.ops.save_trigger_for_table(schema_id, table, &t.name);
+        }
+    }
+}
+
+/// `routines.routine_type` → 导航类别（与 [`routine_type_str`] 互逆）。
+fn routine_kind(routine_type: &str) -> SchemaObjectKind {
+    match routine_type.to_ascii_uppercase().as_str() {
+        "FUNCTION" => SchemaObjectKind::Function,
+        _ => SchemaObjectKind::Procedure,
+    }
+}
+
+/// 导航类别 → `routines.routine_type`。
+///
+/// 取引用而不是取值：`SchemaObjectKind` 带数据（`Copy` 不成立），
+/// 而调用点只是从 `&NodeInfo` 上读一个字段。
+fn routine_type_str(kind: &SchemaObjectKind) -> &'static str {
+    match kind {
+        SchemaObjectKind::Function => "FUNCTION",
+        _ => "PROCEDURE",
+    }
 }
 
 #[cfg(test)]

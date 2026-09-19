@@ -565,6 +565,39 @@ impl NavigatorService {
             .collect()
     }
 
+    /// 例程的 L1 读（L1 分「过程」「函数」两个键，这里合并为一份）。
+    ///
+    /// 合并只在这两个方法里发生：导航的「存储过程 / 函数」是一个文件夹，
+    /// 而 L1 的键按类别分开（写侧也分开）。
+    fn l1_read_routines(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+    ) -> Option<Vec<NodeInfo>> {
+        self.l1_read(|c| {
+            let procs = c.get_procedures(conn_id, catalog, Some(schema));
+            let funcs = c.get_functions(conn_id, catalog, Some(schema));
+            if procs.is_none() && funcs.is_none() {
+                return None;
+            }
+            let mut all = procs.unwrap_or_default();
+            all.extend(funcs.unwrap_or_default());
+            Some(all)
+        })
+    }
+
+    /// 例程的 L1 写（按类别分写两个键）。
+    fn l1_write_routines(&self, conn_id: &str, catalog: &str, schema: &str, objs: Vec<NodeInfo>) {
+        let (funcs, procs): (Vec<NodeInfo>, Vec<NodeInfo>) = objs
+            .into_iter()
+            .partition(|o| o.kind == SchemaObjectKind::Function);
+        self.l1_write(move |l1| {
+            l1.set_procedures(conn_id, catalog, Some(schema), procs);
+            l1.set_functions(conn_id, catalog, Some(schema), funcs);
+        });
+    }
+
     /// 表 / 视图 → 列（cache-aside）。
     async fn load_columns(
         &self,
@@ -754,6 +787,20 @@ impl NavigatorService {
                 Ok(filtered)
             }
             NavFolder::Routines => {
+                // 与表 / 视图同一套 cache-aside：L1 → L2 → L3（回填两处）
+                if let Some(objs) = self.l1_read_routines(conn_id, catalog, schema) {
+                    return Ok(objs);
+                }
+                let cache = self.cache(conn_id);
+                let schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
+                if !self.fresh {
+                    if let (Some(c), Some(sid)) = (&cache, schema_id) {
+                        if let Some(objs) = c.routines(sid) {
+                            self.l1_write_routines(conn_id, catalog, schema, objs.clone());
+                            return Ok(objs);
+                        }
+                    }
+                }
                 let mut procedures = self
                     .metadata
                     .list_procedures(conn_id, catalog, schema)
@@ -763,10 +810,62 @@ impl NavigatorService {
                     .list_functions(conn_id, catalog, schema)
                     .await?;
                 procedures.extend(functions);
+                if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
+                    c.put_routines(sid, &procedures);
+                }
+                self.l1_write_routines(conn_id, catalog, schema, procedures.clone());
                 Ok(procedures)
             }
-            NavFolder::Sequences => self.metadata.list_sequences(conn_id, catalog, schema).await,
-            NavFolder::Triggers => self.metadata.list_triggers(conn_id, catalog, schema).await,
+            NavFolder::Sequences => {
+                if let Some(objs) = self.l1_read(|c| c.get_sequences(conn_id, catalog, Some(schema))) {
+                    return Ok(objs);
+                }
+                let cache = self.cache(conn_id);
+                let schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
+                if !self.fresh {
+                    if let (Some(c), Some(sid)) = (&cache, schema_id) {
+                        if let Some(objs) = c.sequences(sid) {
+                            let backfill = objs.clone();
+                            self.l1_write(move |l1| {
+                                l1.set_sequences(conn_id, catalog, Some(schema), backfill)
+                            });
+                            return Ok(objs);
+                        }
+                    }
+                }
+                let objs = self.metadata.list_sequences(conn_id, catalog, schema).await?;
+                if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
+                    c.put_sequences(sid, &objs);
+                }
+                let store = objs.clone();
+                self.l1_write(move |l1| l1.set_sequences(conn_id, catalog, Some(schema), store));
+                Ok(objs)
+            }
+            NavFolder::Triggers => {
+                if let Some(objs) = self.l1_read(|c| c.get_triggers(conn_id, catalog, Some(schema))) {
+                    return Ok(objs);
+                }
+                let cache = self.cache(conn_id);
+                let schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
+                if !self.fresh {
+                    if let (Some(c), Some(sid)) = (&cache, schema_id) {
+                        if let Some(objs) = c.triggers(sid) {
+                            let backfill = objs.clone();
+                            self.l1_write(move |l1| {
+                                l1.set_triggers(conn_id, catalog, Some(schema), backfill)
+                            });
+                            return Ok(objs);
+                        }
+                    }
+                }
+                let objs = self.metadata.list_triggers(conn_id, catalog, schema).await?;
+                if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
+                    c.put_triggers(sid, &objs);
+                }
+                let store = objs.clone();
+                self.l1_write(move |l1| l1.set_triggers(conn_id, catalog, Some(schema), store));
+                Ok(objs)
+            }
         }
     }
 
@@ -1345,6 +1444,187 @@ mod paging_tests {
                 .get_tables(conn_id, "main", Some("public"))
                 .is_none(),
             "大 schema 不得驻留 L1（万级对象会一直占着内存）"
+        );
+
+        cleanup(&root, conn_id);
+    }
+}
+
+#[cfg(test)]
+mod cached_folder_tests {
+    //! 例程 / 序列 / 触发器的 L2 命中（2026-09-19 接线）。
+    //!
+    //! 手法同 `paging_tests`：连接管理器是**空的**，任何实时内省都会失败——
+    //! 所以「返回 Ok」本身证明结果来自缓存，没有回源库。
+
+    use std::sync::Arc;
+
+    use engine::cache::CacheManager;
+    use engine::connection_manager::ConnectionManager;
+    use engine::driver::traits::{NodeInfo, SchemaObjectKind};
+    use engine::persistence::{ConnectionType, MetadataCacheManager, MetadataCachePool};
+
+    use super::*;
+    use crate::cache::NavCache;
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_navfolder_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建临时项目根");
+        dir
+    }
+
+    /// 空连接管理器的服务；先清该连接的 L1（进程内单例在测试间共享，不清会串味）。
+    fn service(conn_id: &str, root: &str, fresh: bool) -> NavigatorService {
+        if let Ok(manager) = CacheManager::instance().lock() {
+            manager.invalidate_connection(conn_id);
+        }
+        NavigatorService::with_context(
+            Arc::new(ConnectionManager::new()),
+            Some(root.to_string()),
+            fresh,
+        )
+    }
+
+    fn folder(schema: &str, folder: NavFolder) -> NavPath {
+        NavPath::Folder {
+            catalog: "main".to_string(),
+            schema: schema.to_string(),
+            folder,
+        }
+    }
+
+    fn cleanup(root: &std::path::Path, conn_id: &str) {
+        // 先丢池（Windows 上句柄不释放就删不掉文件），再删临时根。
+        if let Ok(manager) = MetadataCacheManager::new(
+            conn_id,
+            ConnectionType::Project,
+            Some(root.to_string_lossy().as_ref()),
+        ) {
+            MetadataCachePool::drop_pool(manager.db_path());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn routines_come_from_l2_without_touching_the_source() {
+        let conn_id = "P_folder_routines";
+        let root = temp_root("routines");
+        let root_s = root.to_string_lossy().to_string();
+        {
+            let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+            cache.put_schemas("main", &["public".to_string()]);
+            let sid = cache.schema_id("main", "public").expect("schema_id");
+            cache.put_routines(
+                sid,
+                &[
+                    NodeInfo::new("refresh_stats", SchemaObjectKind::Procedure),
+                    NodeInfo::new("order_total", SchemaObjectKind::Function),
+                ],
+            );
+        }
+
+        let svc = service(conn_id, &root_s, false);
+        let nodes = svc
+            .load_children(conn_id, &folder("public", NavFolder::Routines))
+            .await
+            .expect("例程文件夹应从 L2 命中");
+
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"refresh_stats"), "{names:?}");
+        assert!(names.contains(&"order_total"), "{names:?}");
+        // 类别往返：过程 / 函数在 L2 用 `routine_type` 区分，回读不得混成一类。
+        let kinds: Vec<String> = nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NavNodeKind::Routine { routine_type } => Some(routine_type.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(kinds.contains(&"Procedure".to_string()), "{kinds:?}");
+        assert!(kinds.contains(&"Function".to_string()), "{kinds:?}");
+
+        cleanup(&root, conn_id);
+    }
+
+    #[tokio::test]
+    async fn sequences_come_from_l2_without_touching_the_source() {
+        let conn_id = "P_folder_sequences";
+        let root = temp_root("sequences");
+        let root_s = root.to_string_lossy().to_string();
+        {
+            let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+            cache.put_schemas("main", &["public".to_string()]);
+            let sid = cache.schema_id("main", "public").expect("schema_id");
+            cache.put_sequences(sid, &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)]);
+        }
+
+        let svc = service(conn_id, &root_s, false);
+        let nodes = svc
+            .load_children(conn_id, &folder("public", NavFolder::Sequences))
+            .await
+            .expect("序列文件夹应从 L2 命中");
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "order_seq");
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 触发器连**所属表**一起往返（`NodeInfo::parent_name` ↔ `triggers.table_id`）。
+    ///
+    /// 这条不只是显示问题：`triggers.table_id` 是 `NOT NULL`，所属表丢了就等于这条
+    /// 触发器根本存不进去（写侧会跳过它）——所以这里断言的是「能不能缓存」本身。
+    #[tokio::test]
+    async fn triggers_come_from_l2_and_keep_their_table() {
+        let conn_id = "P_folder_triggers";
+        let root = temp_root("triggers");
+        let root_s = root.to_string_lossy().to_string();
+        {
+            let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+            cache.put_schemas("main", &["public".to_string()]);
+            let sid = cache.schema_id("main", "public").expect("schema_id");
+            cache.put_triggers(
+                sid,
+                &[NodeInfo::new("audit_trg", SchemaObjectKind::Trigger).with_parent("orders")],
+            );
+        }
+
+        let svc = service(conn_id, &root_s, false);
+        let nodes = svc
+            .load_children(conn_id, &folder("public", NavFolder::Triggers))
+            .await
+            .expect("触发器文件夹应从 L2 命中");
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].property.as_ref().and_then(|p| p.parent.as_deref()),
+            Some("orders"),
+            "所属表要跟着触发器一起往返"
+        );
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 刷新模式不得吃这三类缓存（与表 / 视图同一口径：刷新以实时内省为准）。
+    #[tokio::test]
+    async fn fresh_mode_ignores_the_folder_cache() {
+        let conn_id = "P_folder_fresh";
+        let root = temp_root("fresh");
+        let root_s = root.to_string_lossy().to_string();
+        {
+            let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+            cache.put_schemas("main", &["public".to_string()]);
+            let sid = cache.schema_id("main", "public").expect("schema_id");
+            cache.put_sequences(sid, &[NodeInfo::new("order_seq", SchemaObjectKind::Sequence)]);
+        }
+
+        let svc = service(conn_id, &root_s, true);
+        assert!(
+            svc.load_children(conn_id, &folder("public", NavFolder::Sequences))
+                .await
+                .is_err(),
+            "刷新模式应走实时内省（空连接管理器下必然失败）"
         );
 
         cleanup(&root, conn_id);

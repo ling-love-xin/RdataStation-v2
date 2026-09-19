@@ -1474,8 +1474,8 @@ impl MetadataCacheOps {
 
         self.conn.execute(
             "INSERT OR REPLACE INTO triggers
-             (table_id, trigger_name, trigger_event, trigger_timing, trigger_body, introspect_level, is_loaded, last_sync, last_accessed)
-             VALUES (?1, ?2, ?3, ?4, ?5, 3, 1, ?6, ?6)",
+             (table_id, trigger_name, trigger_event, trigger_timing, trigger_body, introspect_level, is_loaded, last_sync)
+             VALUES (?1, ?2, ?3, ?4, ?5, 3, 1, ?6)",
             rusqlite::params![table_id, name, event_manipulation, action_timing, action_statement, now],
         ).map_err(|e| CoreError::storage(
             StorageError::Persistence {
@@ -1488,9 +1488,32 @@ impl MetadataCacheOps {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// 按「schema + 表名」登记一个触发器（导航路径）。
+    ///
+    /// `triggers.table_id` 是 `NOT NULL REFERENCES tables(id)`——触发器必须先有表行，
+    /// 而导航展开「触发器」文件夹时未必展开过表文件夹。所以这里**补齐最小表行**：
+    /// 只写名字与类型，其余留空。这不是“伪造元数据”——它是同一张表在缓存里的占位行，
+    /// 后续真正展开表时会走 `save_table` 的 `ON CONFLICT` 更新同一行。
+    pub fn save_trigger_for_table(
+        &self,
+        schema_id: i64,
+        table_name: &str,
+        trigger_name: &str,
+    ) -> Result<i64, CoreError> {
+        let table_id = match self.get_table_id(schema_id, table_name)? {
+            Some(id) => id,
+            None => self.save_table(schema_id, table_name, "TABLE", None, None, None)?,
+        };
+        self.save_trigger(schema_id, Some(table_id), trigger_name, "", "", None)
+    }
+
     // ==================== Sequence 操作 ====================
 
     /// 保存 Sequence 元数据（基础版）
+    ///
+    /// 2026-09-19：本方法与 `save_trigger` 的 SQL 曾引用 `last_accessed` 列，
+    /// 而 `sequences` / `triggers` 两张表**没有这一列**（004 建表时就没给）——
+    /// 语句一直报 `no such column`，因为零调用而被掩盖。接线时发现并修正。
     pub fn save_sequence(
         &self,
         schema_id: i64,
@@ -1508,8 +1531,8 @@ impl MetadataCacheOps {
 
         self.conn.execute(
             "INSERT OR REPLACE INTO sequences
-             (schema_id, sequence_name, data_type, start_value, increment_by, introspect_level, is_loaded, last_sync, last_accessed)
-             VALUES (?1, ?2, ?3, ?4, ?5, 3, 1, ?6, ?6)",
+             (schema_id, sequence_name, data_type, start_value, increment_by, introspect_level, is_loaded, last_sync)
+             VALUES (?1, ?2, ?3, ?4, ?5, 3, 1, ?6)",
             rusqlite::params![schema_id, name, data_type, start_value, increment.unwrap_or(1), now],
         ).map_err(|e| CoreError::storage(
             StorageError::Persistence {
@@ -1520,6 +1543,125 @@ impl MetadataCacheOps {
         ))?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 只存名字的序列行（导航路径）：驱动内省只给名字，其余字段留 NULL。
+    ///
+    /// 为什么单独一个方法：`save_sequence` 要求 `data_type: &str`——导航没有这个信息，
+    /// 硬填一个“BIGINT”之类就是造数据。多了这个方法，导航侧可以只登记“存在这个序列”。
+    pub fn save_sequence_name(&self, schema_id: i64, name: &str) -> Result<i64, CoreError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!("获取系统时间失败: {}", e)))
+            })?
+            .as_secs() as i64;
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sequences
+             (schema_id, sequence_name, data_type, start_value, increment_by, introspect_level, is_loaded, last_sync)
+             VALUES (?1, ?2, NULL, NULL, NULL, 3, 1, ?3)",
+            rusqlite::params![schema_id, name, now],
+        ).map_err(|e| CoreError::storage(
+            StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "save_sequence_name".to_string(),
+                reason: e.to_string(),
+            }
+        ))?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 获取某 schema 的序列名（导航树只需要名字）。
+    ///
+    /// 写入侧 [`Self::save_sequence`] 一直存在，读取侧此前**缺失**——表与写入都在、
+    /// 只有读没有，结果就是缓存接不上、每次展开序列文件夹都回源库。
+    pub fn list_sequences(&self, schema_id: i64) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT sequence_name FROM sequences WHERE schema_id = ?1 ORDER BY sequence_name",
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "prepare_list_sequences".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![schema_id], |row| row.get::<_, String>(0))
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "query_sequences".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            names.push(row.map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "fetch_sequence".to_string(),
+                    reason: e.to_string(),
+                })
+            })?);
+        }
+        Ok(names)
+    }
+
+    /// 获取某 schema 的触发器（名字 + 所属表 + 注释）。
+    ///
+    /// 触发器行挂在 `tables` 上（`table_id NOT NULL`），所以这里 JOIN 取所属表名；
+    /// 写侧（[`NavCache::put_triggers`](crate::persistence) 的上游）对“所属表不在缓存”的
+    /// 触发器会选择不写——那时这里读不到它们是如实降级，不是丢数据。
+    pub fn list_triggers(&self, schema_id: i64) -> Result<Vec<TriggerInfo>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT t.trigger_name, tb.table_name, t.trigger_comment \
+                 FROM triggers t INNER JOIN tables tb ON t.table_id = tb.id \
+                 WHERE tb.schema_id = ?1 ORDER BY t.trigger_name",
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "prepare_list_triggers".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![schema_id], |row| {
+                Ok(TriggerInfo {
+                    name: row.get(0)?,
+                    table_name: row.get(1)?,
+                    comment: row.get(2)?,
+                })
+            })
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "query_triggers".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let mut triggers = Vec::new();
+        for row in rows {
+            triggers.push(row.map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "fetch_trigger".to_string(),
+                    reason: e.to_string(),
+                })
+            })?);
+        }
+        Ok(triggers)
     }
 
     /// 记录同步日志
@@ -4347,6 +4489,15 @@ pub struct IndexEntryInput {
     pub row_count_estimate: Option<i64>,
     pub sort_weight: Option<i32>,
     pub last_sync: Option<i64>,
+}
+
+/// 触发器缓存行（读侧视图：`triggers` JOIN `tables`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerInfo {
+    pub name: String,
+    /// 所属表（`triggers.table_id` 指向的表名）
+    pub table_name: String,
+    pub comment: Option<String>,
 }
 
 /// V6: 索引表条目

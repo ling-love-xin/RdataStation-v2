@@ -112,7 +112,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- 快照（2026-09-19 实测）：`rds-database --lib` **47** / `rds-workbench --lib` **110** 全绿；`ui_contract` 7/7（含尺寸与颜色两份清单，已覆盖下沉后的 `crates/database/src/nav_view.rs`）。数字随迭代变化，跑一次即准；全量台账见 `../module-status.md`。
+- 快照（2026-09-19 实测）：`rds-database --lib` **51** / `rds-workbench --lib` **110** 全绿；`ui_contract` 7/7（含尺寸与颜色两份清单，已覆盖下沉后的 `crates/database/src/nav_view.rs`）。数字随迭代变化，跑一次即准；全量台账见 `../module-status.md`。
 - 导航模型单测在 `crates/database/src/{model.rs,cache.rs}`（来源短码、`child_key`、schema 缓存往返）。
 - **真机回归**（4 类数据库 × 项目 / 全局 / 共享，均按树的实际层级核对）：
 
