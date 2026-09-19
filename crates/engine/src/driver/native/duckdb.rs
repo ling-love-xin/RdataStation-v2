@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use arrow::array::StringArray;
-use duckdb::Connection;
+use duckdb::{AccessMode, Config, Connection};
 
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{affected_rows_result, escape_sql_string, returns_rows};
@@ -20,6 +20,183 @@ use crate::driver::{ColumnDetail, DataSourceMeta, Database, IndexDetail, Transac
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{QueryResult, Value};
 use crate::duckdb::row_to_arrow::duckdb_rows_to_arrow;
+
+/// 连接属性 → 开库动作（纯函数产物，可测）。
+///
+/// 键与取值都**白名单校验**后才拼成常量 SQL：属性值来自用户输入，直接拼串就是注入口。
+/// 允许的键就是 [`crate::driver::property_spec`] 里 duckdb 条目声明的那些。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DuckDbPlan {
+    /// 开库时定的模式（`access_mode`，运行期改不了）
+    pub access_mode: Option<AccessMode>,
+    /// 开库后逐条执行的 `SET`（用户值排在 `DuckDBManager::configure_connection` 之后 → 用户赢）
+    pub settings: Vec<PlannedSetting>,
+    /// 清单外的键：不执行（调用方记 warn）
+    pub unknown: Vec<String>,
+}
+
+/// 一条待执行的 `SET`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedSetting {
+    /// 用户写的键（含别名）
+    pub key: String,
+    /// 规范名（DuckDB 认的设置名）
+    pub applied_as: &'static str,
+    /// 设置语句
+    pub sql: String,
+    /// 应用后读回比对的值（字符串比对；`None` = 不校验）
+    pub verify: Option<String>,
+}
+
+/// 规划连接属性（不碰数据库，纯函数）。
+///
+/// 取值非法 → 报错带键与值；清单外的键 → 记入 `unknown`（不执行）。
+pub(crate) fn plan_connection(
+    props: &std::collections::HashMap<String, String>,
+) -> Result<DuckDbPlan, CoreError> {
+    let mut plan = DuckDbPlan {
+        access_mode: None,
+        settings: Vec::new(),
+        unknown: Vec::new(),
+    };
+
+    // 按 key 排序后应用：HashMap 迭代顺序不定，顺序稳定才可复现（也让日志可读）
+    let mut ordered: Vec<&String> = props.keys().collect();
+    ordered.sort();
+    for raw_key in ordered {
+        let raw_value = &props[raw_key];
+        let key = raw_key.trim();
+        let value = raw_value.trim();
+        match key.to_ascii_lowercase().as_str() {
+            "access_mode" | "accessmode" => {
+                let mode = match value.to_ascii_lowercase().as_str() {
+                    "automatic" | "auto" => AccessMode::Automatic,
+                    "read_only" | "readonly" | "ro" => AccessMode::ReadOnly,
+                    "read_write" | "readwrite" | "rw" => AccessMode::ReadWrite,
+                    _ => {
+                        return Err(attr_err(
+                            key,
+                            value,
+                            "只支持 automatic / read_only / read_write",
+                        ))
+                    }
+                };
+                plan.access_mode = Some(mode);
+            }
+            "threads" => {
+                let n: i64 = value.parse().map_err(|_| {
+                    attr_err(key, value, "应是线程数（正整数）")
+                })?;
+                if n < 1 {
+                    return Err(attr_err(key, value, "至少为 1"));
+                }
+                plan.settings.push(set_number(raw_key, "threads", n));
+            }
+            "memory_limit" | "memorylimit" => {
+                let size = size_literal(value).map_err(|e| attr_err(key, value, e))?;
+                plan.settings.push(PlannedSetting {
+                    key: raw_key.clone(),
+                    applied_as: "memory_limit",
+                    sql: format!("SET memory_limit = '{size}'"),
+                    // 读回是归一化后的文本（如 `256.0 MiB`），只校验“非空且不报错”
+                    verify: None,
+                });
+            }
+            "max_temp_directory_size" | "maxtempdirectorysize" => {
+                let size = size_literal(value).map_err(|e| attr_err(key, value, e))?;
+                plan.settings.push(PlannedSetting {
+                    key: raw_key.clone(),
+                    applied_as: "max_temp_directory_size",
+                    sql: format!("SET max_temp_directory_size = '{size}'"),
+                    verify: None,
+                });
+            }
+            "temp_directory" | "tempdirectory" => {
+                let dir = directory_literal(value).map_err(|e| attr_err(key, value, e))?;
+                plan.settings.push(PlannedSetting {
+                    key: raw_key.clone(),
+                    applied_as: "temp_directory",
+                    sql: format!("SET temp_directory = '{dir}'"),
+                    verify: Some(value.to_string()),
+                });
+            }
+            "preserve_insertion_order" | "preserveinsertionorder" => {
+                let on = match value.to_ascii_lowercase().as_str() {
+                    "1" | "true" | "on" | "yes" => true,
+                    "0" | "false" | "off" | "no" => false,
+                    _ => return Err(attr_err(key, value, "只支持 true/false（或 on/off、1/0）")),
+                };
+                plan.settings.push(PlannedSetting {
+                    key: raw_key.clone(),
+                    applied_as: "preserve_insertion_order",
+                    sql: format!("SET preserve_insertion_order = {on}"),
+                    verify: Some(if on { "true" } else { "false" }.to_string()),
+                });
+            }
+            _ => plan.unknown.push(raw_key.clone()),
+        }
+    }
+
+    Ok(plan)
+}
+
+fn set_number(key: &str, applied_as: &'static str, n: i64) -> PlannedSetting {
+    PlannedSetting {
+        key: key.to_string(),
+        applied_as,
+        sql: format!("SET {applied_as} = {n}"),
+        verify: Some(n.to_string()),
+    }
+}
+
+/// 尺寸字面量白名单（如 `1GB` / `512MB` / `1024`）——防止任意文本进 SQL。
+fn size_literal(value: &str) -> Result<String, &'static str> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err("不能为空");
+    }
+    let (num, unit) = v.split_at(
+        v.find(|c: char| c.is_ascii_alphabetic())
+            .unwrap_or(v.len()),
+    );
+    let ok_num = !num.is_empty()
+        && num
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.')
+        && num.chars().any(|c| c.is_ascii_digit());
+    let ok_unit = matches!(
+        unit.to_ascii_uppercase().as_str(),
+        "" | "B" | "KB" | "MB" | "GB" | "TB" | "KIB" | "MIB" | "GIB" | "TIB"
+    );
+    if !ok_num || !ok_unit {
+        return Err("应形如 1GB / 512MB / 1024");
+    }
+    Ok(v.to_string())
+}
+
+/// 目录字面量：转义单引号并**拒绝分号**（单语句执行下也不给拼接留余地）。
+fn directory_literal(value: &str) -> Result<String, &'static str> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err("不能为空");
+    }
+    if v.contains(';') {
+        return Err("不能含分号");
+    }
+    if v.contains('\'') {
+        return Err("不能含单引号");
+    }
+    Ok(v.to_string())
+}
+
+/// 属性不合法的统一错误（带键与值）。
+fn attr_err(key: &str, value: &str, reason: &str) -> CoreError {
+    CoreError::database(DatabaseError::Driver {
+        db_type: "duckdb".to_string(),
+        operation: "driver_properties".to_string(),
+        source: format!("属性 `{key} = {value}` 不合法：{reason}"),
+    })
+}
 
 /// DuckDB 数据库连接
 ///
@@ -36,11 +213,26 @@ pub struct DuckDbDatabase {
 
 impl DuckDbDatabase {
     pub fn new(url: &str) -> Result<Self, CoreError> {
+        Self::new_with_properties(url, &std::collections::HashMap::new())
+    }
+
+    /// 带**连接属性**开库：属性由本仓驱动侧落实（开库配置 + `SET`）。
+    ///
+    /// 应用顺序有意如此：先按 `access_mode` 开库（运行期改不了）→ 跑
+    /// `DuckDBManager::configure_connection`（扩展目录 / Secret 目录 / 内存闸等应用默认）→
+    /// **最后**逐条 `SET` 用户的属性（所以 `memory_limit` / `temp_directory` 这类键能覆盖应用默认，
+    /// 这正是属性页标注“会覆盖”的含义）。
+    /// 清单内的键必须生效：取值非法或读回不符 → 报错（不静默降级）。
+    pub fn new_with_properties(
+        url: &str,
+        props: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, CoreError> {
         let path = if url.starts_with("duckdb://") {
             url.trim_start_matches("duckdb://")
         } else {
             url
         };
+        let path = path.split('?').next().unwrap_or(path);
 
         // 确保父目录存在
         if let Some(parent) = std::path::Path::new(path).parent() {
@@ -55,7 +247,20 @@ impl DuckDbDatabase {
             }
         }
 
-        let conn = Connection::open(path).map_err(|e| {
+        let plan = plan_connection(props)?;
+        // `AccessMode` 不是 Copy：先取一份给开库配置，`plan` 后续还要用（applied 日志 / 未知键）
+        let open_mode = plan.access_mode.clone();
+        let conn = match open_mode {
+            Some(mode) => {
+                let described = mode.to_string();
+                let config = Config::default().access_mode(mode).map_err(|e| {
+                    attr_err("access_mode", &described, &e.to_string())
+                })?;
+                Connection::open_with_flags(path, config)
+            }
+            None => Connection::open(path),
+        }
+        .map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "duckdb".to_string(),
                 operation: "connect".to_string(),
@@ -71,6 +276,15 @@ impl DuckDbDatabase {
                 source: error.to_string(),
             })
         })?;
+        // 用户属性排在应用默认之后：显式写的值赢（见函数头注释）
+        apply_settings(&conn, &plan)?;
+        if !plan.unknown.is_empty() {
+            tracing::warn!(
+                driver = "duckdb",
+                keys = ?plan.unknown,
+                "属性键不在支持清单里，未应用（属性页会标注「不认这个键」）"
+            );
+        }
         let server_version = conn
             .query_row("PRAGMA version", [], |row| row.get::<_, String>(0))
             .ok();
@@ -86,6 +300,57 @@ impl DuckDbDatabase {
             server_version: None,
         }
     }
+}
+
+/// 逐条应用 `SET` 并**读回校验**（做不到就报错，不静默降级）。
+///
+/// 读回用 `current_setting('名字')`：DuckDB 会把值归一化（`256MB` → `256.0 MiB`），
+/// 所以只对**能精确比对**的键（整数 / 布尔 / 目录路径）校验；尺寸类不比对（写过即认）。
+fn apply_settings(conn: &Connection, plan: &DuckDbPlan) -> Result<(), CoreError> {
+    let mut applied: Vec<&str> = Vec::new();
+    for s in &plan.settings {
+        conn.execute(&s.sql, [])
+            .map_err(|e| setting_err(&s.key, &s.sql, e.to_string()))?;
+
+        if let Some(want) = &s.verify {
+            // `current_setting` 的原生类型五花八门（threads → 整数、preserve_insertion_order → 布尔），
+            // 统一 `CAST(... AS VARCHAR)` 再比对。
+            let got = conn
+                .query_row(
+                    &format!(
+                        "SELECT CAST(current_setting('{}') AS VARCHAR)",
+                        s.applied_as
+                    ),
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| setting_err(&s.key, &s.sql, e.to_string()))?;
+            if !got.eq_ignore_ascii_case(want) {
+                return Err(setting_err(
+                    &s.key,
+                    &s.sql,
+                    format!("读回值是 `{got}`（期望 `{want}`）——未生效"),
+                ));
+            }
+        }
+        applied.push(s.applied_as);
+    }
+
+    if plan.access_mode.is_some() {
+        applied.push("access_mode");
+    }
+    if !applied.is_empty() {
+        tracing::info!(driver = "duckdb", applied = ?applied, "连接属性已应用（驱动侧 SET）");
+    }
+    Ok(())
+}
+
+fn setting_err(key: &str, sql: &str, reason: String) -> CoreError {
+    CoreError::database(DatabaseError::Driver {
+        db_type: "duckdb".to_string(),
+        operation: "driver_properties".to_string(),
+        source: format!("属性 `{key}`（{sql}）应用失败：{reason}"),
+    })
 }
 
 fn is_read_only_sql(sql: &str) -> bool {
@@ -931,6 +1196,136 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn props(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// 取开库错误的消息（`DuckDbDatabase` 不是 `Debug`，用不了 `expect_err`）。
+    fn open_err(url: &str, props: &std::collections::HashMap<String, String>) -> String {
+        match DuckDbDatabase::new_with_properties(url, props) {
+            Ok(_) => panic!("本该开库失败却成功了：{url}"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// 取值白名单：合法值能规划出 `SET`，非法值报错并带上键与值。
+    #[test]
+    fn planning_accepts_whitelisted_values_and_rejects_the_rest() {
+        let plan = plan_connection(&props(&[
+            ("memoryLimit", "256MB"), // 旧驼峰名 → 规范名
+            ("threads", "2"),
+            ("preserveInsertionOrder", "false"),
+            ("accessMode", "read_only"),
+            ("无关键", "1"),
+        ]))
+        .expect("合法属性应能规划");
+        let applied: Vec<&str> = plan.settings.iter().map(|s| s.applied_as).collect();
+        assert_eq!(
+            applied,
+            vec!["memory_limit", "preserve_insertion_order", "threads"],
+            "按 key 排序、别名归到规范名"
+        );
+        assert_eq!(plan.access_mode, Some(AccessMode::ReadOnly));
+        assert_eq!(plan.unknown, vec!["无关键".to_string()]);
+
+        // 非法值：报错要能看见键与值
+        let err = plan_connection(&props(&[("threads", "many")]))
+            .expect_err("线程数必须是整数")
+            .to_string();
+        assert!(err.contains("threads") && err.contains("many"), "{err}");
+        let err = plan_connection(&props(&[("memory_limit", "lots")]))
+            .expect_err("尺寸字面量必须白名单")
+            .to_string();
+        assert!(err.contains("1GB"), "{err}");
+        let err = plan_connection(&props(&[("temp_directory", "C:\\tmp'; DROP TABLE t")]))
+            .expect_err("目录不能带引号 / 分号")
+            .to_string();
+        assert!(err.contains("temp_directory"), "{err}");
+        assert!(plan_connection(&props(&[("access_mode", "maybe")])).is_err());
+    }
+
+    /// 端到端：`SET` 真的落了（读回为准），且未知键不影响开库。
+    #[tokio::test]
+    async fn driver_properties_are_applied_and_verifiable() -> Result<(), CoreError> {
+        let dir = std::env::temp_dir().join(format!(
+            "rd_duckdb_props_{}",
+            TEST_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).ok();
+        let spill = dir.join("spill");
+        std::fs::create_dir_all(&spill).ok();
+
+        let db = DuckDbDatabase::new_with_properties(
+            &dir.join("props.duckdb").to_string_lossy(),
+            &props(&[
+                ("threads", "2"),
+                ("temp_directory", &spill.to_string_lossy()),
+                ("preserve_insertion_order", "false"),
+                ("memory_limit", "256MB"),
+                ("无关键", "1"),
+            ]),
+        )?;
+
+        let read = |name: &str| -> String {
+            let conn = db.conn.lock().expect("lock");
+            conn.query_row(
+                &format!("SELECT CAST(current_setting('{name}') AS VARCHAR)"),
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+        };
+        assert_eq!(read("threads"), "2", "用户写的线程数应胜过应用默认");
+        assert_eq!(read("preserve_insertion_order"), "false");
+        assert_eq!(
+            read("temp_directory"),
+            spill.to_string_lossy().to_string(),
+            "用户写的溢写目录应胜过应用默认"
+        );
+        assert!(
+            read("memory_limit").to_lowercase().contains("mi"),
+            "内存上限应已设置：{}",
+            read("memory_limit")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// `access_mode=read_only` 在开库时定：只读连接写不进去（证明它真的生效）。
+    #[tokio::test]
+    async fn read_only_access_mode_rejects_writes() -> Result<(), CoreError> {
+        let dir = std::env::temp_dir().join(format!(
+            "rd_duckdb_ro_{}",
+            TEST_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("ro.duckdb");
+        let path_str = path.to_string_lossy().to_string();
+        {
+            let seed = DuckDbDatabase::new(&path_str)?;
+            seed.query("CREATE TABLE t AS SELECT 1 AS a").await?;
+        }
+
+        let ro = DuckDbDatabase::new_with_properties(
+            &path_str,
+            &props(&[("access_mode", "read_only")]),
+        )?;
+        let ok = ro.query("SELECT a FROM t").await;
+        assert!(ok.is_ok(), "只读连接应能查询：{ok:?}");
+        let write = ro.query("INSERT INTO t VALUES (2)").await;
+        assert!(write.is_err(), "只读连接必须拒绝写入：{write:?}");
+
+        // 非法取值不静默忽略
+        let err = open_err(&path_str, &props(&[("access_mode", "maybe")]));
+        assert!(err.contains("access_mode"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 
     fn unique_db_path() -> String {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);

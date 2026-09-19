@@ -178,8 +178,8 @@ impl DriverFactory for SqliteDriverFactory {
                 }));
             }
 
-            // 创建 SQLite 数据库连接
-            let db = SqliteDatabase::new(&path).map_err(|e| {
+            // 创建 SQLite 数据库连接（连接属性由驱动侧落实：PRAGMA / 打开标志）
+            let db = SqliteDatabase::new_with_properties(&path, &config.driver_properties).map_err(|e| {
                 CoreError::connection(ConnectionError::InvalidConfig {
                     conn_id: config.name.clone().unwrap_or_else(|| "sqlite".to_string()),
                     reason: e.to_string(),
@@ -236,8 +236,8 @@ impl DriverFactory for DuckDbDriverFactory {
             let path = without_scheme.split('?').next().unwrap_or(without_scheme);
             let path = if path.trim().is_empty() { ":memory:" } else { path };
 
-            // 创建 DuckDB 数据库连接
-            let db = DuckDbDatabase::new(path).map_err(|e| {
+            // 创建 DuckDB 数据库连接（连接属性由驱动侧落实：开库配置 + SET）
+            let db = DuckDbDatabase::new_with_properties(path, &config.driver_properties).map_err(|e| {
                 CoreError::connection(ConnectionError::InvalidConfig {
                     conn_id: config.name.clone().unwrap_or_else(|| "duckdb".to_string()),
                     reason: e.to_string(),
@@ -358,6 +358,37 @@ impl DriverFactory for PostgresNativeDriverFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 接线回归：**工厂**必须把连接属性交给驱动（文件型属性靠驱动侧落实，不走 URL）。
+    ///
+    /// 单测只盖到 `SqliteDatabase::new_with_properties` 的话，“工厂忘了传”这类接线缺陷
+    /// 会一路漏到真机（历史同类：启动漏调驱动注册、内联 SSL 只落库不生效）。
+    #[tokio::test]
+    async fn file_driver_properties_reach_the_driver_through_the_factory() {
+        let dir = std::env::temp_dir().join(format!("rds_factory_props_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("wired.db");
+        let _ = std::fs::remove_file(&path);
+
+        let config = DriverConnectionConfig::new("sqlite")
+            .with_url_override(format!("sqlite://{}", path.display()))
+            .with_driver_property("journal_mode", "wal");
+
+        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        let _db = crate::driver::DataSourceRouter::route(config)
+            .await
+            .expect("路由建连");
+
+        // WAL 是**写在库文件里**的（非会话级）：另开一个独立连接读一次，
+        // 证明“工厂 → 驱动 → PRAGMA”这条链路真的通了（不依赖 QueryResult 的形状）。
+        let check = rusqlite::Connection::open(&path).expect("open");
+        let mode: String = check
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .expect("read journal_mode");
+        assert_eq!(mode.to_lowercase(), "wal", "工厂应把属性交给驱动");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// 真机踩到的形态：连接记录里存的是驱动 id，`build_connection_url` 把它当 scheme，
     /// 而 mysql_async / tokio-postgres 都不认——两个工厂必须在建连前归一。

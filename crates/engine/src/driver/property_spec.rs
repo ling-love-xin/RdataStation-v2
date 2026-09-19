@@ -4,38 +4,49 @@
 //!
 //! 连接行与驱动行里的 `driver_properties` 在建连时被**原样追加到连接串**
 //! （`DriverConnectionConfig::append_query_params`），而这条串最终由**客户端库**解析
-//! （源码依据见 `docs/architecture/driver-capability-matrix.md` §2.1）。同一个键在四个实现上
-//! 有四种命运：
+//! （源码依据见 `docs/architecture/driver-capability-matrix.md` §2.1）。同一个键在不同实现上命运不同：
 //!
 //! | 客户端库（驱动） | 未知参数的行为 |
 //! | --- | --- |
 //! | sqlx 0.9（`mysql` / `postgres`） | **静默忽略**（PG 打一条 `ignoring unrecognized connect parameter`） |
 //! | mysql_async 0.37（`mysql_native`） | **报错** `UrlError::UnknownParameter` |
 //! | tokio-postgres 0.7（`postgres_native`） | **报错** `UnknownOption` |
-//! | rusqlite / duckdb-rs（`sqlite` / `duckdb`） | 查询串被工厂剥掉 → **全部不下发** |
+//! | rusqlite / duckdb-rs（`sqlite` / `duckdb`） | 查询串被剥掉 → URL 上不下发；改由本仓驱动侧应用（PRAGMA / SET），**清单外的键不应用**（记 warn） |
 //!
-//! 于是「属性页写了不生效」只是四种命运里最轻的一种，重的是**连接直接失败**。本模块把命运
+//! 于是「属性页写了不生效」只是最轻的一种命运，重的是**连接直接失败**。本模块把命运
 //! 固定成一处（库认的键清单 + 中文标签 + 未知键的效果），供三处消费：
 //! 界面（属性行下方的「去向」提示）、声明自检（`declaration` 的测试：声明里写的键必须在清单内）、
-//! 以及以后真要加「由驱动侧落实」的键时（见下）。
+//! 以及驱动侧落实（文件型驱动按这里的键名逐条应用：SQLite PRAGMA / DuckDB SET）。
+//!
+//! ## 两档路线
+//!
+//! - [`Route::Url`]：写进连接串，由客户端库自己解析（网络型驱动）；
+//! - [`Route::DriverSide`]：由**本仓驱动**在开库时应用（文件型的 PRAGMA / SET）——
+//!   URL 上不出现，实现分别在 `driver/native/{sqlite,duckdb}.rs`。
 //!
 //! ## 不做的事（有意）
 //!
 //! - **不在下发路径上过滤**：用户写的键照原样进连接串——静默丢弃用户的配置比报错更糟
 //!   （本仓的规矩是「做不到就报错，不静默降级」）。本模块只回答「它会怎样」，由界面说清楚。
-//! - **不提供 `Builder`（驱动侧落实）这一档**：文件型驱动的 PRAGMA / 会话参数目前**一个都不下发**，
-//!   真要做需要先在各驱动里实现「打开连接后应用属性」，属于新能力而非规格；届时在这里加一档
-//!   `DriverSide`，而不是先摆一个没人走的分支（§5「空壳与死路」）。
+//! - **不把“未知键”当 PRAGMA 名去试**：文件型驱动只应用清单里的键，其余键**记 warn 且不执行**
+//!   （用户键值直接拼 SQL 既危险又会把只读型 PRAGMA 当配置用）。
 
-/// 键不在库的接受清单里时，客户端库的实际行为（源码依据见模块头表格）。
+/// 键不在接受清单里时的实际行为（依据见模块头表格）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownEffect {
-    /// 静默忽略（sqlx）：写了不生效，不报错
-    SilentlyIgnored,
-    /// 直接报错（mysql_async / tokio-postgres）：连接失败
+    /// sqlx 静默忽略；文件型驱动侧不应用（记 warn）——两种都是“写了不生效、不报错”。
+    Ignored,
+    /// `mysql_async` / `tokio-postgres`：报错（连接失败）。
     ConnectionError,
-    /// 不下发（文件型：查询串被剥掉）
-    NotDelivered,
+}
+
+/// 一个键靠什么落实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// 写进连接串，由客户端库解析（网络型驱动）。
+    Url,
+    /// 由本仓驱动在开库时应用（文件型的 PRAGMA / SET）——URL 上不出现。
+    DriverSide,
 }
 
 /// 一个键在某个驱动上的去向（界面按此如实标注）。
@@ -49,10 +60,12 @@ pub enum Verdict {
         note: Option<&'static str>,
         caution: Option<&'static str>,
     },
-    /// 当前实现不会用它（文件型驱动不解析属性）。
-    Unsupported {
+    /// 由本仓驱动侧应用（文件型的 PRAGMA / SET）。`applied_as` 是实际应用的名字。
+    DriverSide {
+        applied_as: &'static str,
         label: Option<&'static str>,
-        reason: &'static str,
+        note: Option<&'static str>,
+        caution: Option<&'static str>,
     },
     /// 库不认这个键（后果由 `effect` 给）。
     Unknown { effect: UnknownEffect },
@@ -74,8 +87,13 @@ pub struct PropertySpec {
     pub key: &'static str,
     /// 中文标签（界面提示用）。
     pub label: &'static str,
-    /// 下发时的参数名；`None` = 与 `key` 同名。
-    pub param: Option<&'static str>,
+    /// 等价写法（旧种子的驼峰名 / 客户端库的另一种写法）：判定时与 `key` 等价，
+    /// 界面会提示「下发为 `key`」。
+    pub aliases: &'static [&'static str],
+    /// 靠什么落实。
+    pub route: Route,
+    /// 下发 / 应用时用的名字；`None` = 与 `key` 同名。
+    pub as_name: Option<&'static str>,
     /// 额外说明（中性：解释默认值 / 等价写法 / 平台限制）。
     pub note: Option<&'static str>,
     /// 需要注意的副作用（如「会覆盖「连接安全」里的档位」）——界面按警告色标注。
@@ -93,15 +111,13 @@ struct DriverSpec {
     params: &'static [&'static str],
     /// 有中文标签 / 提醒的键（必须是 `params` 的子集，有测试盯住）。
     curated: &'static [PropertySpec],
-    /// 当前实现不解析属性（文件型）时的原因；`Some` 时所有键都判 `Unsupported`。
-    not_consumed: Option<&'static str>,
 }
 
 /// 各驱动的规格（依据：模块头引用的依赖源码 + 能力矩阵 §2.1）。
 const DRIVERS: [DriverSpec; 6] = [
     DriverSpec {
         driver: "mysql",
-        unknown: UnknownEffect::SilentlyIgnored,
+        unknown: UnknownEffect::Ignored,
         // `sqlx-mysql-0.9.0/src/options/parse.rs:50-79`（`_ => {}` 分支 = 静默忽略）
         params: &[
             "sslmode",
@@ -123,51 +139,62 @@ const DRIVERS: [DriverSpec; 6] = [
             PropertySpec {
                 key: "charset",
                 label: "字符集",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("sqlx 默认已是 utf8mb4"),
                 caution: None,
             },
             PropertySpec {
                 key: "collation",
                 label: "排序规则",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "timezone",
                 label: "连接时区",
-                param: None,
-                note: Some("等价写法 time-zone 也认"),
+                aliases: &["time-zone"],
+                route: Route::Url,
+                as_name: None,
+                note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "socket",
                 label: "Unix socket 路径",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("Windows 上无效"),
                 caution: None,
             },
             PropertySpec {
                 key: "statement-cache-capacity",
                 label: "语句缓存条数",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("sqlx 默认 100"),
                 caution: None,
             },
             PropertySpec {
                 key: "ssl-mode",
                 label: "TLS 模式",
-                param: None,
+                aliases: &["sslmode"],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
         ],
-        not_consumed: None,
     },
     DriverSpec {
         driver: "postgres",
-        unknown: UnknownEffect::SilentlyIgnored,
+        unknown: UnknownEffect::Ignored,
         // `sqlx-postgres-0.9.0/src/options/parse.rs:52-100`（未知键 warn 后忽略）
         params: &[
             "sslmode",
@@ -193,54 +220,67 @@ const DRIVERS: [DriverSpec; 6] = [
             PropertySpec {
                 key: "application_name",
                 label: "应用名",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("PG 服务端会话标识（pg_stat_activity 里可见）"),
                 caution: None,
             },
             PropertySpec {
                 key: "options",
                 label: "服务端命令行选项",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "statement-cache-capacity",
                 label: "语句缓存条数",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("sqlx 默认 100"),
                 caution: None,
             },
             PropertySpec {
                 key: "sslmode",
                 label: "TLS 模式",
-                param: None,
+                aliases: &["ssl-mode"],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
             PropertySpec {
                 key: "host",
                 label: "主机（覆盖连接串）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖连接串里的地址，谨慎使用"),
             },
             PropertySpec {
                 key: "port",
                 label: "端口（覆盖连接串）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖连接串里的端口，谨慎使用"),
             },
             PropertySpec {
                 key: "dbname",
                 label: "数据库（覆盖连接串）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖连接串里的数据库，谨慎使用"),
             },
         ],
-        not_consumed: None,
     },
     DriverSpec {
         driver: "mysql_native",
@@ -275,89 +315,112 @@ const DRIVERS: [DriverSpec; 6] = [
             PropertySpec {
                 key: "max_allowed_packet",
                 label: "客户端最大包（字节）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "wait_timeout",
                 label: "服务端空闲超时（秒）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "tcp_keepalive",
                 label: "TCP keepalive（毫秒）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "tcp_nodelay",
                 label: "禁用 Nagle（true/false）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "compression",
                 label: "协议压缩",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("on/fast/best 或 0-9"),
                 caution: None,
             },
             PropertySpec {
                 key: "stmt_cache_size",
                 label: "语句缓存条数",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "prefer_socket",
                 label: "优先 unix socket",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("工厂建连时默认写 false（避免走 localhost 的 socket）"),
                 caution: None,
             },
             PropertySpec {
                 key: "pool_min",
                 label: "连接池下限",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "pool_max",
                 label: "连接池上限",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "require_ssl",
                 label: "要求加密",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
             PropertySpec {
                 key: "verify_ca",
                 label: "校验证书链",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
             PropertySpec {
                 key: "verify_identity",
                 label: "校验主机名",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
         ],
-        not_consumed: None,
     },
     DriverSpec {
         driver: "postgres_native",
@@ -388,97 +451,228 @@ const DRIVERS: [DriverSpec; 6] = [
             PropertySpec {
                 key: "application_name",
                 label: "应用名",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("PG 服务端会话标识（pg_stat_activity 里可见）"),
                 caution: None,
             },
             PropertySpec {
                 key: "connect_timeout",
                 label: "连接超时（秒）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "tcp_user_timeout",
                 label: "TCP 未确认超时（秒）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "keepalives",
                 label: "启用 TCP keepalive（0/1）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "keepalives_idle",
                 label: "keepalive 空闲（秒）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "target_session_attrs",
                 label: "会话要求",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("read-write = 只要主库"),
                 caution: None,
             },
             PropertySpec {
                 key: "channel_binding",
                 label: "通道绑定",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: Some("disable/prefer/require"),
                 caution: None,
             },
             PropertySpec {
                 key: "options",
                 label: "服务端命令行选项",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: None,
             },
             PropertySpec {
                 key: "sslmode",
                 label: "TLS 模式",
-                param: None,
+                aliases: &["ssl-mode"],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖「连接安全」里的档位；建议在那里配"),
             },
             PropertySpec {
                 key: "host",
                 label: "主机（覆盖连接串）",
-                param: None,
+                aliases: &[],
+                route: Route::Url,
+                as_name: None,
                 note: None,
                 caution: Some("会覆盖连接串里的地址，谨慎使用"),
             },
         ],
-        not_consumed: None,
     },
     DriverSpec {
         driver: "sqlite",
-        unknown: UnknownEffect::NotDelivered,
-        // 文件型：属性不会下发（查询串被工厂剥掉，见 `driver/factory.rs::sqlite_path_from_config`）
+        unknown: UnknownEffect::Ignored,
+        // URL 上没有参数：文件型驱动的地址由工厂从连接串直接取，查询串会被剥掉。
+        // 属性靠**驱动侧**应用（`native/sqlite.rs` 的 PRAGMA 规划器）。
         params: &[],
-        curated: &[],
-        not_consumed: Some(
-            "文件型驱动的地址由工厂从连接串直接取（查询串会被剥掉），属性不会下发；\
-             PRAGMA 型设置（journalMode / busyTimeout…）当前实现不应用",
-        ),
+        curated: &[
+            PropertySpec {
+                key: "journal_mode",
+                label: "日志模式",
+                aliases: &["journalMode"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("WAL/DELETE/TRUNCATE/PERSIST/MEMORY/OFF；:memory: 库不支持 WAL"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "synchronous",
+                label: "同步级别",
+                aliases: &[],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("OFF/NORMAL/FULL/EXTRA；WAL 下常用 NORMAL"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "busy_timeout",
+                label: "忙等超时（毫秒）",
+                aliases: &["busyTimeout"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("并发写时等待锁的时间（默认 0 = 立即报 database is locked）"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "foreign_keys",
+                label: "外键约束",
+                aliases: &["foreignKeys"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: None,
+                caution: Some("SQLite 默认关；开启后既有的违规写入会开始报错"),
+            },
+            PropertySpec {
+                key: "cache_size",
+                label: "页缓存（负数 = KB）",
+                aliases: &["cacheSize"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: None,
+                caution: None,
+            },
+            PropertySpec {
+                key: "temp_store",
+                label: "临时表位置",
+                aliases: &["tempStore"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("DEFAULT/FILE/MEMORY"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "mode",
+                label: "打开模式",
+                aliases: &[],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("ro/rw/rwc（开库时定，之后改不了）"),
+                caution: Some("ro 会拒绝一切写入（含 PRAGMA 写），连表都建不了"),
+            },
+        ],
     },
     DriverSpec {
         driver: "duckdb",
-        unknown: UnknownEffect::NotDelivered,
-        // 同上（`factory.rs` 的 duckdb 分支）
+        unknown: UnknownEffect::Ignored,
+        // URL 同上；属性靠驱动侧应用（`native/duckdb.rs` 的 SET 规划器）。
         params: &[],
-        curated: &[],
-        not_consumed: Some(
-            "文件型驱动的地址由工厂从连接串直接取（查询串会被剥掉），属性不会下发；\
-             会话级设置由 `duckdb::manager` 统一钉（memory_limit / temp_directory…）",
-        ),
+        curated: &[
+            PropertySpec {
+                key: "access_mode",
+                label: "打开模式",
+                aliases: &["accessMode"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("automatic/read_only/read_write（开库时定，之后改不了）"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "threads",
+                label: "线程数",
+                aliases: &[],
+                route: Route::DriverSide,
+                as_name: None,
+                note: None,
+                caution: None,
+            },
+            PropertySpec {
+                key: "memory_limit",
+                label: "内存上限",
+                aliases: &["memoryLimit"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("如 1GB / 512MB"),
+                caution: Some("覆盖应用默认的内存闸（`duckdb::manager`）"),
+            },
+            PropertySpec {
+                key: "temp_directory",
+                label: "溢写目录",
+                aliases: &["tempDirectory"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: None,
+                caution: Some("覆盖应用默认的溢写目录（仓库内 .rds/tmp）"),
+            },
+            PropertySpec {
+                key: "max_temp_directory_size",
+                label: "溢写上限",
+                aliases: &[],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("如 10GB"),
+                caution: None,
+            },
+            PropertySpec {
+                key: "preserve_insertion_order",
+                label: "保持插入顺序",
+                aliases: &["preserveInsertionOrder"],
+                route: Route::DriverSide,
+                as_name: None,
+                note: Some("true/false"),
+                caution: None,
+            },
+        ],
     },
 ];
 
@@ -487,18 +681,27 @@ fn spec_of(driver: &str) -> Option<&'static DriverSpec> {
     DRIVERS.iter().find(|d| d.driver == driver)
 }
 
+/// 这个键（含别名）在该驱动上有没有标签条目。
+fn curated_of(d: &DriverSpec, key: &str) -> Option<&'static PropertySpec> {
+    d.curated
+        .iter()
+        .find(|c| c.key == key || c.aliases.contains(&key))
+}
+
 /// 驱动里**有中文标签**的键（界面提示「常用键」用；未收录的驱动 → 空）。
+///
+/// 只列规范写法：别名（旧驼峰名 / 客户端库的另一种写法）在条目的 `aliases` 里，不另占一行。
 pub fn known_keys(driver: &str) -> &'static [PropertySpec] {
     spec_of(driver).map(|d| d.curated).unwrap_or(&[])
 }
 
-/// 客户端库是否认这个键（`declaration` 的自检用它盯住「声明的默认属性必须落在清单内」）。
+/// 客户端库 / 驱动侧是否认这个键（`declaration` 的自检用它盯住「声明的默认属性必须落在清单内」）。
 ///
 /// 未收录的驱动 → `false`（自检会因此报错，提醒把新驱动补进 [`DRIVERS`]）。
 pub fn accepts(driver: &str, key: &str) -> bool {
     let key = key.trim();
     spec_of(driver)
-        .map(|d| d.params.contains(&key) || d.curated.iter().any(|c| c.key == key))
+        .map(|d| d.params.contains(&key) || curated_of(d, key).is_some())
         .unwrap_or(false)
 }
 
@@ -512,20 +715,21 @@ pub fn verdict(driver: &str, key: &str) -> Verdict {
         return Verdict::Unclassified;
     };
 
-    let curated = d.curated.iter().find(|c| c.key == key);
-    let label = curated.map(|c| c.label);
-
-    // 当前实现压根不解析属性（文件型）：无论键是什么都不下发。
-    if let Some(reason) = d.not_consumed {
-        return Verdict::Unsupported { label, reason };
-    }
-
-    if let Some(c) = curated {
-        return Verdict::Delivered {
-            param: c.param.unwrap_or(c.key).to_string(),
-            label: Some(c.label),
-            note: c.note,
-            caution: c.caution,
+    if let Some(c) = curated_of(d, key) {
+        let applies_as = c.as_name.unwrap_or(c.key);
+        return match c.route {
+            Route::Url => Verdict::Delivered {
+                param: applies_as.to_string(),
+                label: Some(c.label),
+                note: c.note,
+                caution: c.caution,
+            },
+            Route::DriverSide => Verdict::DriverSide {
+                applied_as: applies_as,
+                label: Some(c.label),
+                note: c.note,
+                caution: c.caution,
+            },
         };
     }
     if d.params.contains(&key) {
@@ -536,6 +740,7 @@ pub fn verdict(driver: &str, key: &str) -> Verdict {
             caution: None,
         };
     }
+    // 既不在 URL 参数里、也没在驱动侧落实（文件型的不认键走这里）
     Verdict::Unknown { effect: d.unknown }
 }
 
@@ -563,33 +768,65 @@ mod tests {
         }
     }
 
-    /// 有中文标签的键必须是「库认的键」的子集——标签写着能用、实际被库拒下是最糟的组合。
+    /// 标签键与它们的别名都得有出处：
+    /// - `Route::Url` 的键必须在库的接受清单里；
+    /// - `Route::DriverSide` 的键由本仓驱动落实（该驱动必须不是「不解析属性」那一类）。
     #[test]
-    fn curated_keys_are_accepted_by_the_library() {
+    fn curated_keys_have_a_known_home() {
         for d in &DRIVERS {
-            if d.not_consumed.is_some() {
-                assert!(
-                    d.curated.is_empty(),
-                    "{}：不下发属性的驱动不该有「常用键」标签",
-                    d.driver
-                );
-                continue;
-            }
             for c in d.curated {
-                assert!(
-                    d.params.contains(&c.key),
-                    "{}：标签键 {} 不在库的接受清单里（清单：{:?}）",
-                    d.driver,
-                    c.key,
-                    d.params
-                );
-                if let Some(param) = c.param {
-                    assert!(
-                        d.params.contains(&param),
-                        "{}：{} 的下发参数名 {} 不在清单里",
+                match c.route {
+                    Route::Url => {
+                        assert!(
+                            d.params.contains(&c.key),
+                            "{}：标签键 {} 不在库的接受清单里（清单：{:?}）",
+                            d.driver,
+                            c.key,
+                            d.params
+                        );
+                        if let Some(name) = c.as_name {
+                            assert!(
+                                d.params.contains(&name),
+                                "{}：{} 的下发参数名 {} 不在清单里",
+                                d.driver,
+                                c.key,
+                                name
+                            );
+                        }
+                    }
+                    Route::DriverSide => assert!(
+                        d.params.is_empty(),
+                        "{}：驱动侧落实的键不该同时声明 URL 参数 {:?}",
                         d.driver,
-                        c.key,
-                        param
+                        d.params
+                    ),
+                }
+            }
+        }
+    }
+
+    /// 别名（旧驼峰名 / 客户端库的另一种写法）不能与规范名或别的键撞车，
+    /// 否则属性页两行等价、或一个键有两个去向。
+    #[test]
+    fn aliases_do_not_collide() {
+        for d in &DRIVERS {
+            for c in d.curated {
+                for alias in c.aliases {
+                    assert_ne!(alias, &c.key, "{}：{} 的别名与规范名相同", d.driver, c.key);
+                    let hits = d
+                        .curated
+                        .iter()
+                        .filter(|other| other.key == *alias || other.aliases.contains(alias))
+                        .count();
+                    assert_eq!(
+                        hits, 1,
+                        "{}：别名 {alias} 命中 {hits} 个条目（应恰好 1 个）",
+                        d.driver
+                    );
+                    assert!(
+                        accepts(d.driver, alias),
+                        "{}：别名 {alias} 应被判为可接受",
+                        d.driver
                     );
                 }
             }
@@ -603,13 +840,13 @@ mod tests {
         assert_eq!(
             verdict("mysql", "connectTimeout"),
             Verdict::Unknown {
-                effect: UnknownEffect::SilentlyIgnored
+                effect: UnknownEffect::Ignored
             }
         );
         assert_eq!(
             verdict("postgres", "applicationName"), // 旧种子里的驼峰写法
             Verdict::Unknown {
-                effect: UnknownEffect::SilentlyIgnored
+                effect: UnknownEffect::Ignored
             }
         );
         // native：直接报错
@@ -625,24 +862,33 @@ mod tests {
                 effect: UnknownEffect::ConnectionError
             }
         );
-        // 文件型：不下发
-        assert!(matches!(
-            verdict("sqlite", "journalMode"),
-            Verdict::Unsupported { .. }
-        ));
+        // 文件型：不该出现在 URL 参数里，但**头部键由驱动侧落实**（PRAGMA / SET）
+        assert_eq!(
+            verdict("sqlite", "journalMode").clone(),
+            Verdict::DriverSide {
+                applied_as: "journal_mode",
+                label: Some("日志模式"),
+                note: Some("WAL/DELETE/TRUNCATE/PERSIST/MEMORY/OFF；:memory: 库不支持 WAL"),
+                caution: None,
+            }
+        );
         assert!(matches!(
             verdict("duckdb", "memoryLimit"),
-            Verdict::Unsupported { .. }
+            Verdict::DriverSide { .. }
         ));
+        // 不在清单里的键：驱动侧不执行（记 warn），界面也不能说它会生效
+        assert_eq!(
+            verdict("sqlite", "magic_setting"),
+            Verdict::Unknown {
+                effect: UnknownEffect::Ignored
+            }
+        );
     }
 
     /// 库认的键一律判「会下发」，并带上标签 / 提醒。
     #[test]
     fn accepted_keys_are_delivered() {
         for d in &DRIVERS {
-            if d.not_consumed.is_some() {
-                continue;
-            }
             for p in d.params {
                 let v = verdict(d.driver, p);
                 assert!(
@@ -700,7 +946,14 @@ mod tests {
         for k in keys {
             assert!(!k.label.trim().is_empty(), "{} 缺中文标签", k.key);
         }
-        assert!(known_keys("sqlite").is_empty(), "文件型不下发属性，无常用键");
+        // 文件型也有常用键（驱动侧落实的 PRAGMA / SET）
+        let sqlite = known_keys("sqlite");
+        assert!(sqlite.iter().any(|k| k.key == "journal_mode"));
+        assert!(sqlite.iter().any(|k| k.key == "busy_timeout"));
+        let duck = known_keys("duckdb");
+        assert!(duck.iter().any(|k| k.key == "access_mode"));
+        assert!(duck.iter().any(|k| k.key == "memory_limit"));
+
         assert!(known_keys("some_plugin_driver").is_empty());
     }
 }

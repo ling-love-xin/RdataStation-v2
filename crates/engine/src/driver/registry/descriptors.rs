@@ -580,9 +580,10 @@ pub fn sqlite_driver() -> DriverDescriptor {
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
-        // 不声明属性默认值：文件型驱动的路径由工厂 `sqlite_path_from_config` 取，
-        // 查询串会被剥掉——旧种子那套 pragma 名（journalMode / busyTimeout…）当前
-        // 没有任何一条会下发（能力矩阵 §7 #9）。
+        // 声明层面**不带默认属性**（有意）：属性现在真生效了（驱动侧 PRAGMA，见
+        // `native/sqlite.rs::plan_connection`），而 `journal_mode=WAL` / `foreign_keys=ON`
+        // 会让用户库里已有数据"开始报错"或改变落盘格式——那是产品决策，不该由声明静默替用户做主。
+        // 想改的用户在属性页写（可用键见 `driver/property_spec.rs`，行上方会标"由驱动应用"）。
         .with_field(DriverField {
             key: "file_path".to_string(),
             label: "数据库文件".to_string(),
@@ -623,8 +624,9 @@ pub fn duckdb_driver() -> DriverDescriptor {
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
-        // 同 SQLite：属性不会下发（工厂剥查询串），不写不生效的键。
-        // `memory_limit` 由会话侧统一钉（`duckdb::manager`），也不在这里写第二份。
+        // 同 SQLite：属性真生效（驱动侧 `SET`，见 `native/duckdb.rs::plan_connection`），
+        // 但默认值不由声明给——`memory_limit` / `temp_directory` 这类键会**覆盖应用默认的**
+        // 资源边界（`duckdb::manager` 钉的内存闸 / 溢写目录），要改的人自己写。
         .with_field(DriverField {
             key: "file_path".to_string(),
             label: "数据库文件".to_string(),

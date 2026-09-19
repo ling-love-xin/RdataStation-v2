@@ -203,22 +203,35 @@ pub(crate) fn property_note(
                 (None, None) => Some((text, PropertyNoteLevel::Info)),
             }
         }
-        engine::driver::PropertyVerdict::Unsupported { reason, .. } => Some((
-            format!("当前实现不会用它：{reason}"),
-            PropertyNoteLevel::Warn,
-        )),
+        engine::driver::PropertyVerdict::DriverSide {
+            applied_as,
+            label,
+            note,
+            caution,
+        } => {
+            let renamed = applied_as != key.trim();
+            let mut text = if renamed {
+                format!("由驱动应用为 {applied_as}")
+            } else {
+                "由驱动应用".to_string()
+            };
+            if let Some(l) = label {
+                text = format!("{l} · {text}");
+            }
+            match (caution, note) {
+                (Some(c), _) => Some((format!("{text}（{c}）"), PropertyNoteLevel::Warn)),
+                (None, Some(n)) => Some((format!("{text}（{n}）"), PropertyNoteLevel::Info)),
+                (None, None) => Some((text, PropertyNoteLevel::Info)),
+            }
+        }
         engine::driver::PropertyVerdict::Unknown { effect } => Some(match effect {
-            engine::driver::UnknownEffect::SilentlyIgnored => (
-                "当前实现不认这个键，会被忽略（写了不生效）".to_string(),
+            engine::driver::UnknownEffect::Ignored => (
+                "当前实现不认这个键，不会被应用（写了不生效）".to_string(),
                 PropertyNoteLevel::Warn,
             ),
             engine::driver::UnknownEffect::ConnectionError => (
                 "当前实现不认这个键：连接会因未知参数**直接报错**".to_string(),
                 PropertyNoteLevel::Danger,
-            ),
-            engine::driver::UnknownEffect::NotDelivered => (
-                "当前实现不会下发这个键".to_string(),
-                PropertyNoteLevel::Warn,
             ),
         }),
         engine::driver::PropertyVerdict::Unclassified => Some((
@@ -1626,9 +1639,9 @@ mod tests {
         assert!(text.contains("连接安全"), "{text}");
         assert_eq!(level, L::Warn);
 
-        // sqlx：未知键被静默忽略 → 警告（写了不生效）
+        // sqlx：未知键不会被应用 → 警告（写了不生效）
         let (text, level) = property_note("mysql", "connectTimeout").expect("未知键应提示");
-        assert!(text.contains("忽略"), "{text}");
+        assert!(text.contains("不会被应用"), "{text}");
         assert_eq!(level, L::Warn);
 
         // native：未知键会报错 → 危险（连接失败）
@@ -1639,9 +1652,18 @@ mod tests {
         let (_, level) = property_note("postgres_native", "connectTimeout").expect("应提示");
         assert_eq!(level, L::Danger);
 
-        // 文件型：不下发 → 警告（不是错误：它不会弄坏连接）
+        // 文件型：PRAGMA / SET 由驱动侧在开库时应用（“会生效”，不是“不理”）
         let (text, level) = property_note("sqlite", "journalMode").expect("应提示");
-        assert!(text.contains("不会用它"), "{text}");
+        assert!(text.contains("由驱动应用为 journal_mode"), "{text}");
+        assert_eq!(level, L::Info);
+        assert!(property_note("duckdb", "threads").is_some());
+        // 文件型里带副作用的键（会覆盖应用默认）：警告级
+        let (text, level) = property_note("sqlite", "foreign_keys").expect("应提示");
+        assert!(text.contains("违规写入"), "{text}");
+        assert_eq!(level, L::Warn);
+        // 文件型里**不在清单**的键：驱动不应用（界面不能说它会生效）
+        let (text, level) = property_note("sqlite", "magic").expect("应提示");
+        assert!(text.contains("不会被应用"), "{text}");
         assert_eq!(level, L::Warn);
 
         // 未收录的驱动：不装作知道
