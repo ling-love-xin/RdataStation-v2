@@ -604,7 +604,7 @@ flowchart TD
 | 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels/` / `view.rs` 消费） |
 | 新建数据源入口（面板头 `＋` / 空态按钮） | `database/src/nav_view.rs::render_database_nav` / `render_nav_tree`（置位 `Shared::new_connection_request` + `SidebarEvent::NewConnectionRequest`），`EditorPanel::render` 消费并 `request_new_connection` |
 | 面板头 `⟳ 刷新` / `断开当前连接` | `database/src/nav_view.rs::render_database_nav`（`Button::new("nav-refresh")` / `Button::new("nav-disconnect")`）+ `SidebarPanel::nav_current_connection`（选中节点为连接根）；动作走 `refresh_node` / `toggle_connection`，未选中 / 未连接时 `disabled` |
-| 大 schema 分页（「加载更多」） | `database/src/nav_view.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
+| 大 schema 分页（「加载更多」） | `database/src/nav_view.rs::{collect_node_rows, render_more_row}` + `ui.rs::NAV_FOLDER_PAGE_SIZE`（取数每批 200；渲染窗口已在 2026-09-20 退场） |
 | 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`database/src/nav_view.rs::{nav_move, nav_order, nav_open_properties}` |
 | 导航 L2 缓存（cache-aside） | `crates/database/src/cache.rs`（`NavCache`）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；底层 `engine::persistence::MetadataCacheOps` |
 | 后台任务（C1 预热 / C2 预取 / 树加载 / 属性加载） | `crates/workbench/src/services/nav_jobs.rs`（工作线程 + 队列 + 结果队列 + 进度/取消）+ `navigator_service::{warm_schemas, prefetch_columns}`；render 不再做 I/O |

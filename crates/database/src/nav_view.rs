@@ -196,14 +196,14 @@ pub struct NavViewState {
     ungrouped_order: Vec<String>,
     /// 连接 ID → **显式主组** ID（仅用户显式指定过的连接；缺省回退到分组排序推导）。
     primary_group: HashMap<String, String>,
-    /// 类别文件夹节点 key → 已渲染条数上限（大 schema 客户端分页）。
-    ///
-    /// 与 [`Self::child_total`] 配合：`page_limit` 是「屏上允许出现多少条」的渲染窗口，
-    /// `child_total` 是「数据侧一共有多少条」；前者可以小于后者（分批拉取中）。
-    page_limit: HashMap<String, usize>,
     /// 节点 key → 该路径下的对象总数（来自 `metadata_index` 计数或全量结果长度）。
     ///
     /// 大 schema 只加载首屏时，仅靠 `children` 长度无法判断“还有没有”，必须由数据侧告知。
+    ///
+    /// 旧的 `page_limit`（「屏上允许出现多少条」的渲染窗口）已退场（2026-09-20）：
+    /// 虚拟列表只画视口内那几行，已加载的行全部进列表也不会多花代价；
+    /// 于是双轨（`child_total` 与 `page_limit`）与「显示更多（只放大窗口）」半套一起删掉，
+    /// 「加载更多」只剩一个意思：**数据侧还有没取的**。
     child_total: HashMap<String, usize>,
     /// 已发给后台的索引搜索词（`None` = 当前无搜索；用于“查询词变了才重搜”）。
     search_query: Option<String>,
@@ -2116,8 +2116,8 @@ impl NavView {
                 .render_nav_node(node, *depth, scope_key, cx)
                 .into_any_element(),
             NavRow::More { node, depth, .. } => {
-                let (loaded, total, limit) = self.nav_more_numbers(node);
-                self.render_more_row(node, loaded, total, limit, *depth, cx)
+                let (loaded, total) = self.nav_more_numbers(node);
+                self.render_more_row(node, loaded, total, *depth, cx)
                     .into_any_element()
             }
             NavRow::Jump {
@@ -2143,17 +2143,13 @@ impl NavView {
             .unwrap_or(0)
     }
 
-    /// 「加载更多」行的三个数：已加载 / 数据侧总数 / 渲染窗口上限。
-    fn nav_more_numbers(&self, node: &NavNode) -> (usize, usize, usize) {
+    /// 「加载更多」行的两个数：已加载 / 数据侧总数。
+    fn nav_more_numbers(&self, node: &NavNode) -> (usize, usize) {
         let loaded = self.nav_node_loaded(&node.key);
         if !matches!(&node.kind, NavNodeKind::Folder(_)) {
-            return (loaded, loaded, usize::MAX);
+            return (loaded, loaded);
         }
-        (
-            loaded,
-            self.node_total(&node.key, loaded),
-            self.folder_limit(&node.key),
-        )
+        (loaded, self.node_total(&node.key, loaded))
     }
 
     /// 虚拟列表的每行高度（`v_virtual_list` 只吃「每行多高」：它按给定高度定义布局，
@@ -2671,18 +2667,16 @@ impl NavView {
         if !expanded_eff {
             return;
         }
-        // 类别文件夹分页：大 schema 只处理首批，其余用「加载更多」逐页展开。
+        // 类别文件夹分页：大 schema 分批取，「加载更多」逐页拉。
+        //
+        // 这里**不再有渲染窗口**（旧的 `page_limit`）：已加载的行全部进列表，
+        // 只画视口内那几行是虚拟列表的事。
         let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
         let loaded = children.len();
         let total = if is_folder {
             self.node_total(&node.key, loaded)
         } else {
             loaded
-        };
-        let limit = if is_folder {
-            self.folder_limit(&node.key)
-        } else {
-            usize::MAX
         };
         // 定位窗口：先摆说明与回头路，再摆这一窗的行。
         let jumped_to = self.nav.borrow().jumped.get(&node.key).copied();
@@ -2694,13 +2688,13 @@ impl NavView {
                 position,
             });
         }
-        for child in children.iter().take(limit) {
+        for child in &children {
             self.collect_node_rows(rows, child, depth + 1, scope_key, cx);
         }
-        // 两种「还有更多」：数据侧的（要取）与渲染窗口的（已到手，只放大窗口）。
+        // 「加载更多」只剩一个意思：数据侧还有没取的。
         // **定位窗口例外**：那时的行集是一窗不是前缀，按条数往后翻会跳错地方，
         // 回头路走顶上那行「点此回到开头」。
-        if is_folder && jumped_to.is_none() && (limit < loaded || loaded < total) {
+        if is_folder && jumped_to.is_none() && loaded < total {
             rows.push(NavRow::More {
                 node: Box::new(node.clone()),
                 depth,
@@ -4537,7 +4531,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         node: &NavNode,
         loaded: usize,
         total: usize,
-        window: usize,
         depth: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -4546,20 +4539,15 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let entity = cx.entity();
         let key = node.key.clone();
         let to_fetch = total.saturating_sub(loaded);
-        let hidden = loaded.saturating_sub(window);
         // 带筛选时，本地过滤只能命中**已加载**的那些：这一点必须说出口，
-        // 否则用户会以为“搜不到 = 库里没有”（索引/FTS 搜索尚未接，见文档 §4.5）。
+        // 否则用户会以为“搜不到 = 库里没有”。
         let filtering = !self.nav.borrow().filter.is_empty();
-        let label = if to_fetch > 0 {
-            let scope = if filtering {
-                "；筛选仅覆盖已加载"
-            } else {
-                ""
-            };
-            format!("加载更多（余 {to_fetch} / 共 {total}{scope}）")
+        let scope = if filtering {
+            "；筛选仅覆盖已加载"
         } else {
-            format!("显示更多（余 {hidden}）")
+            ""
         };
+        let label = format!("加载更多（余 {to_fetch} / 共 {total}{scope}）");
         let conn_id = node.connection_id.clone();
         let path = node.expand_path.clone();
         div()
@@ -4585,29 +4573,22 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     if this.nav.borrow().loading.contains(&k) {
                         return;
                     }
-                    if to_fetch > 0 {
-                        let Some(path) = path.clone() else { return };
-                        let root = this
-                            .host
-                            .project_root()
-                            .map(|p| p.to_string_lossy().to_string());
-                        this.nav.borrow_mut().loading.insert(k.clone());
-                        nav_jobs::enqueue_load_page(
-                            &conn_id,
-                            root.as_deref(),
-                            &k,
-                            path,
-                            false,
-                            loaded,
-                            nav_jobs::PAGE_SIZE,
-                        );
-                        this.ensure_nav_pump(cx);
-                    } else {
-                        let mut view = this.nav.borrow_mut();
-                        view.page_limit
-                            .insert(k.clone(), window + ui::NAV_FOLDER_PAGE_SIZE);
-                        drop(view);
-                    }
+                    let Some(path) = path.clone() else { return };
+                    let root = this
+                        .host
+                        .project_root()
+                        .map(|p| p.to_string_lossy().to_string());
+                    this.nav.borrow_mut().loading.insert(k.clone());
+                    nav_jobs::enqueue_load_page(
+                        &conn_id,
+                        root.as_deref(),
+                        &k,
+                        path,
+                        false,
+                        loaded,
+                        nav_jobs::PAGE_SIZE,
+                    );
+                    this.ensure_nav_pump(cx);
                     cx.notify();
                 });
             })
@@ -5021,11 +5002,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .cloned()
             .unwrap_or_default();
         let target_key = target.node_key(&catalog);
-        if let Some(idx) = children.iter().position(|n| n.key == target_key) {
+        if children.iter().any(|n| n.key == target_key) {
             let mut view = self.nav.borrow_mut();
-            // 渲染窗口必须罩住它，否则「选中了」却在屏外，看上去仍然像没动作
-            let window = view.page_limit.entry(parent_key.clone()).or_insert(0);
-            *window = (*window).max(idx + 1);
             view.selected_key = Some(target_key.clone());
             view.reveal = None;
             view.reveal_note = None;
@@ -5249,7 +5227,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             // 定位：**换窗**（当前只展示含目标的那一页），不是追加——
                             // 追加会把一窗行拼在前缀后面，既不对也不好解释。
                             view.jumped.insert(key.clone(), pos);
-                            view.page_limit.insert(key.clone(), page.nodes.len());
                             view.children.insert(key.clone(), page.nodes);
                             view.child_total.insert(key.clone(), page.total);
                         } else if r.offset == 0 {
@@ -5267,8 +5244,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             // 实际已加载数，否则「加载更多」会永远挂在树上、点了没反应。
                             let total = if appended == 0 { loaded } else { page.total };
                             view.child_total.insert(key.clone(), total);
-                            // 追加页到位后把渲染窗口抬到已加载数，否则新到的行落在窗口外看不见。
-                            view.page_limit.insert(key.clone(), loaded);
                         }
                     }
                     Err(e) => {
@@ -5671,16 +5646,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         self.nav.borrow().collapsed_groups.contains(group_id)
     }
 
-    /// 类别文件夹当前渲染条数上限（缺省 `NAV_FOLDER_PAGE_SIZE`）。
-    fn folder_limit(&self, key: &str) -> usize {
-        self.nav
-            .borrow()
-            .page_limit
-            .get(key)
-            .copied()
-            .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
-    }
-
     /// 该节点的对象总数（数据侧）；未知时回落到已加载条数。
     fn node_total(&self, key: &str, loaded: usize) -> usize {
         self.nav
@@ -6008,8 +5973,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // 报出已不存在的余量（甚至对着空列表显示“余 5000”）。
             view.child_total
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
-            view.page_limit
-                .retain(|k, _| k != key && !k.starts_with(&prefix));
         }
         if let Some(p) = path {
             self.ensure_nav_loaded(conn_id, key, p, true, cx);
@@ -6035,7 +5998,6 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             view.attempted.clear();
             view.errors.clear();
             view.child_total.clear();
-            view.page_limit.clear();
         }
         for cid in roots {
             self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, cx);
@@ -6741,18 +6703,16 @@ mod tests {
                     "{key} 应被展开（否则选中了也看不到）"
                 );
             }
-            // 渲染窗口要罩住目标（它在第 2 行）：窗口不足时选中行会在屏外，看上去像没动作
-            assert!(
-                nav.page_limit
-                    .get("G_1/shop/public/tables")
-                    .copied()
-                    .unwrap_or(0)
-                    >= 2,
-                "渲染窗口要抬到目标所在行之后"
-            );
+            // 可选：目标已是**已加载**的行，于是会进可见行（以前靠抬渲染窗口，
+            // 现在已加载的行全进列表，虚拟滚动只画视口内那几行）
             assert!(nav.reveal.is_none(), "成功后意图要收尾，不能挂着");
             assert!(nav.reveal_note.is_none(), "成功不该留提示");
         });
+        let rows = cx.update(|_window, cx| collected_rows(&view, cx));
+        assert!(
+            rows.iter().any(|row| row.key() == target),
+            "目标行应在可见行里，否则选中了也在屏外"
+        );
     }
 
     /// 窗口级：目标在**已全部加载**的文件夹里也找不到时，如实说一句并不留悬念。

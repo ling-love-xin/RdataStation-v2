@@ -94,7 +94,10 @@ pub const ROW_HEIGHT: f32 = 1.5;
 pub const TREE_INDENT: f32 = 0.875;
 /// 树基础左内边距（0.5rem = 8px）
 pub const TREE_BASE_PADDING: f32 = 0.5;
-/// 导航树类别文件夹（表/视图等）首批渲染条数；超出时显示「加载更多」（非 rem 尺寸，是条目计数）。
+/// 导航树类别文件夹的**取数**每批条数（非 rem 尺寸，是条目计数）。
+///
+/// 用法已收窄（2026-09-20）：它只是 `nav_jobs::PAGE_SIZE`（每次拉多少条），
+/// **不再**是「屏上允许出现多少条」的渲染窗口——那个半套（`page_limit`）已随虚拟列表退场。
 pub const NAV_FOLDER_PAGE_SIZE: usize = 200;
 /// 导航搜索结果区最多渲染多少条命中（超出只提示“缩小搜索词”）。
 pub const NAV_SEARCH_MAX_ROWS: usize = 100;

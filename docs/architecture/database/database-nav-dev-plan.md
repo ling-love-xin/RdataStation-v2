@@ -157,7 +157,7 @@
 
 | 任务 | 状态 | 落点 |
 | --- | --- | --- |
-| C4 大 schema 客户端分页（「加载更多」） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels/`（`render_more_row`、`folder_limit`、`page_limit`）+ `ui.rs::NAV_FOLDER_PAGE_SIZE`（200/页） |
+| C4 大 schema 客户端分页（「加载更多」） | ✅ 已实现（2026-09-12；渲染窗口 2026-09-20 退场） | `crates/database/src/nav_view.rs`（`collect_node_rows` 的 More 行 + `render_more_row`）+ `ui.rs::NAV_FOLDER_PAGE_SIZE`（取数每批 200）/ `nav_jobs::PAGE_SIZE` |
 | C6 收敛遗留：移除死代码 | ✅ 部分（2026-09-12） | `database/src/nav_view.rs::render_connection_list` 已删（无调用点）；`db_navigator.rs` **保留**（仍被 Mock 面板与 `mock_generator` 消费，属 M5/M6 范围） |
 | C7 快捷键：Ctrl+F 聚焦搜索 + 导航树键盘操作 | ✅ 已实现（2026-09-12） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}` + `app/main.rs` 绑定（`database-nav` context）+ `database/src/nav_view.rs::{nav_move, nav_expand, nav_collapse, nav_open_properties, nav_order}`（选中高亮 + 行点击聚焦面板） |
 | C1 预热方案 C（仅 catalogs/schemas）+ 进度 + 取消 | ✅ 已实现（2026-09-12） | `crates/database/src/navigator_service.rs::warm_schemas`；`crates/workbench/src/services/nav_jobs.rs`（后台任务）；面板头显示「预热 d/t + 取消」 |
@@ -321,7 +321,7 @@
 | S2 | 行渲染器只画自己这一行（去递归 / 去 push / 去排队加载）；`sync_nav_order` 把行投影成漫游序列 | ✅ `2f51176` | 上项 + 键盘漫游覆盖引用行 / 「更多」/「已定位」行 |
 | S3 | 装配：`v_virtual_list` + `nav_row_sizes`；面板头 / facet / 搜索框 / 搜索结果区 / 空态都在列表外 | ✅ `2f51176` | 窗口级验收：行被真的画出来、次序自上而下、行高分级 |
 | S4 | 拖拽（对象→编辑器、连接行→分组）· 右键菜单 · 行内编辑器——**逐个真机确认**（测试盖不到鼠标） | ⏳ 待做 | 真机走一遍，不是“应该没事” |
-| S5 | `scroll_to_item` 落地（定位 + 键盘漫游把行滚进视口）· `page_limit` 退场 · `load_more` 替「加载更多」行 | 🟡 **滚动已落**（`nav_pending_scroll` + `VirtualListScrollHandle::scroll_to_item`，窗口级验收：屏外定位会把列表滚下去）；`page_limit` / `load_more` 未做 | 定位→目标在可视区（无窗口测试 ✅） |
+| S5 | `scroll_to_item` 落地（定位 + 键盘漫游把行滚进视口）· `page_limit` 退场 · 「加载更多」只留数据侧含义 | ✅ **全部已落**（滚动见上；`page_limit` / `folder_limit` / 「显示更多」分支已删——虚拟列表只画视口内那几行，已加载的行全进列表也不会多花代价。`v_virtual_list` 没有 `load_more` 钩子，所以「加载更多」行仍是显式入口：这是选择，不是遗留） | 定位→目标在可视区（窗口测试 ✅） |
 
 #### 行高是一条硬约束（换组件时最大的坑）
 
@@ -333,6 +333,10 @@
 - 行下附加行（加载中 / 错误 / 未连接 / 标签 chip）与行内编辑器（标签 / 复制模板 / 归组）改成**钉高**
   （`NAV_SUBLINE` / `NAV_EDITOR_*`，超出内部滚动）——否则高度由字体排版决定，算不出来。
 
+**已知代价**：行集合每帧重算（含按行克隆节点），上界是**已加载**条数——分页每批
+`NAV_FOLDER_PAGE_SIZE`（200）且“加载更多”只拉一次，实际用量在千级以内。真出现万级已加载行时
+再加一层脏标记缓存（不预先做）；渲染侧已经与条数无关（只画视口内那几行）。
+
 #### 风险与对策（更新）
 
 - ~~拖拽是最大不确定项~~ → 未换组件，拖拽仍是原来的行内 `on_drag`，**风险降级为“待真机确认”（S4）**。
@@ -342,7 +346,8 @@
 - **不做的事**：不把连接分组层塞进另一套框架；不重写元数据取数（它已接好）。
 
 **收益**：① 十万行同屏不再靠分页限流；② 得回可编程滚动（S5 已接：定位与键盘漫游都把行滚进视口）；
-③ 顺序与副作用单源，过滤 / 分组 / 定位的判据只有一份。
+③ 顺序与副作用单源，过滤 / 分组 / 定位的判据只有一份；④ 「加载更多」从两个意思（取数 / 放大窗口）
+收敛成一个（取数），少一个会让人误以为“数据已经拿全了”。
 
 ## 3. 测试场景清单
 
