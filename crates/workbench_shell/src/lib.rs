@@ -15,8 +15,10 @@
 //! 现有资产：
 //! - [`ui`]：面板 / 控件尺寸常量；
 //! - [`model`]：面板枚举、边栏模式、连接条目等**纯数据**；
-//! - [`product_tokens`]：产品语义 token（主题取色的产品角色层）。
+//! - [`product_tokens`]：产品语义 token（主题取色的产品角色层）；
+//! - [`db_icons`]：数据库类型 → 图标（微标）。
 
+pub mod db_icons;
 pub mod model;
 pub mod product_tokens;
 pub mod ui;

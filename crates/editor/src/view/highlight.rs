@@ -2,9 +2,12 @@
 //!
 //! ## 为什么走「语义 token」而不是注册 grammar
 //!
-//! 组件库自带的高亮器**不含 SQL grammar**（只有 go / js / json / rust / markdown 等），而我们的
-//! 词法区间是现成的（`engine::sql::highlight`，sqlglot tokenizer 驱动，见架构 D12）。gpui-base
-//! 正好提供了外部语义着色接口 `DocumentRangeSemanticTokensProvider`：本模块只声明**区间 + 类型名**，
+//! 组件库**带** SQL grammar（`tree-sitter-sequel`，见 `gpui-component` 的 `tree-sitter-sql`
+//! feature），但它是**单方言**的：本仓要同时面对 MySQL / PG / SQLite / DuckDB 的语法差异，
+//! 且表名 / 列名补全本来就要靠 schema 目录。我们的词法区间是现成的（`engine::sql::highlight`，
+//! sqlglot tokenizer 驱动，见架构 D12），**跟补全共用同一份词法**——所以走语义 token，
+//! 而不是再引一个 grammar（两套词法必然漂）。gpui-base 正好提供了外部语义着色接口
+//! `DocumentRangeSemanticTokensProvider`：本模块只声明**区间 + 类型名**，
 //! **颜色由活跃 `HighlightTheme` 按名字解析**——主题切换自动重着色，视图层不出现任何色值
 //! （零裸色值约束由此天然满足）。
 //!
@@ -37,7 +40,7 @@ use gpui_kit::component::input::{
     DocumentRangeSemanticTokensProvider, EditorState, Rope, RopeExt as _,
 };
 use gpui_kit::*;
-use lsp_types::{SemanticToken, SemanticTokens, SemanticTokensLegend, SemanticTokenType};
+use lsp_types::{SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend};
 
 use engine::sql::{HighlightSpan, TokenClass, highlight_spans};
 
@@ -234,7 +237,9 @@ mod tests {
     use gpui_kit::component::input::{DocumentRangeSemanticTokensProvider as _, Rope};
     use lsp_types::SemanticToken;
 
-    use super::{HIGHLIGHT_MAX_BYTES, SqlSemanticTokensProvider, TOKEN_NAMES, token_name, tokens_for};
+    use super::{
+        HIGHLIGHT_MAX_BYTES, SqlSemanticTokensProvider, TOKEN_NAMES, token_name, tokens_for,
+    };
 
     fn tokens(sql: &str) -> Vec<SemanticToken> {
         let rope = Rope::from(sql);
@@ -273,10 +278,7 @@ mod tests {
         // 主题认识的词汇：keyword / type / function / string / number / comment / operator / punctuation / variable
         for name in TOKEN_NAMES {
             assert!(
-                legend
-                    .token_types
-                    .iter()
-                    .any(|t| t.as_str() == name),
+                legend.token_types.iter().any(|t| t.as_str() == name),
                 "图例缺少 {name}"
             );
         }

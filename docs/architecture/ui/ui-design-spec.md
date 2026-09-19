@@ -115,6 +115,7 @@
 | **输入框** | 高 `CONTROL_HEIGHT_MD`（紧凑 `CONTROL_HEIGHT_SM`） | 圆角 `theme.radius`；边 `border` / `input_border`；底 `background` |
 | **下拉框** | 同输入框 | 弹层 `popover` + 圆角 `theme.radius` + 内距 `PANEL_PADDING`，最大高 ≈ `ROW_HEIGHT` × 10 |
 | **Tab 标签** | 头高 `PANEL_HEADER_HEIGHT`；内距 `GAP_LG` / `GAP_SM` | 激活 `tab_active` + `tab_active_foreground`；非激活 `tab` + `tab_foreground`；底 `tab_bar` |
+| **图标（微标）** | `ICON_SIZE_SM` / `ICON_SIZE_MD` | 取色由调用点定（文字色 / 语义色）；**通用图标用组件库自带的 Lucide 全量集**，数据库类型图标与品牌标口径见 `db-icons.md` |
 | **Quick Open 弹层** | 宽 `QUICK_OPEN_PANEL_WIDTH`；顶部 `QUICK_OPEN_PANEL_TOP`；最大高 `QUICK_OPEN_PANEL_MAX_HEIGHT` | `popover` + `border` + `shadow_lg` |
 
 ## 5. 落地方式
