@@ -358,6 +358,10 @@ impl DriverDescriptor {
     ///
     /// 网络键走派生而不是再手写一份：布尔位与能力键本来就是同一件事的两种形态，
     /// 两份手写必然漂（017 与 008 就漂过）。排列顺序与 017 写的字面量一致，升级时行内容不变。
+    ///
+    /// **两个键谁都不声明**（2026-09-20）：`index_analysis`（索引分析）与 `table_editor`（表编辑器）
+    /// ——产品里没有这两个入口（字典里记为 `capability::Stage::NotBuilt`），声明了就是假承诺；
+    /// 功能落地后在各驱动的 `with_capabilities` 里加回来即可。
     pub fn capability_keys(&self) -> Vec<String> {
         let mut keys = self.capabilities.clone();
         let mut push = |declared: bool, key: &str| {
@@ -367,7 +371,10 @@ impl DriverDescriptor {
         };
         push(self.supports_ssh_tunnel, "ssh_tunnel");
         push(self.supports_ssl, "ssl_tls");
-        push(self.supports_http_proxy || self.supports_socks_proxy, "proxy");
+        push(
+            self.supports_http_proxy || self.supports_socks_proxy,
+            "proxy",
+        );
         keys
     }
 
@@ -403,9 +410,7 @@ pub fn mysql_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
-            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
         // 不声明属性默认值：sqlx 认的键里没有一条我们要改默认
@@ -489,10 +494,8 @@ pub fn postgres_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
-            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
             "schema_browser".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec![
             "password".to_string(),
@@ -574,10 +577,7 @@ pub fn sqlite_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
-            // rusqlite 支持 `EXPLAIN QUERY PLAN`（种子迁移 016 已声明，声明侧先前漏了）
-            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 声明层面**不带默认属性**（有意）：属性现在真生效了（驱动侧 PRAGMA，见
@@ -621,7 +621,6 @@ pub fn duckdb_driver() -> DriverDescriptor {
             "schema_browser".to_string(),
             "analytics".to_string(),
             "federation".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
         // 同 SQLite：属性真生效（驱动侧 `SET`，见 `native/duckdb.rs::plan_connection`），
@@ -675,9 +674,7 @@ pub fn mysql_native_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
-            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
         // mysql_async **不忽略未知参数**（`UrlError::UnknownParameter`），只声明它认的：
@@ -749,10 +746,8 @@ pub fn postgres_native_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
-            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
             "schema_browser".to_string(),
-            "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec![
             "password".to_string(),

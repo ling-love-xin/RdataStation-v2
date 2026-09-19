@@ -120,6 +120,20 @@ pub enum Scope {
     App,
 }
 
+/// 功能是否已经存在（与 "验收没验收" 是两回事，后者见 [`Acceptance`]）。
+///
+/// 为什么要有这一档：声明跑在功能前面就会变成**假承诺**——能力矩阵里“声明了”的一行，
+/// 读起来就是“这个驱动能做这件事”，而如果产品里压根没有这个入口（如索引分析 / 表编辑器），
+/// 测试者会去找一个不存在的东西，或者把“没实现”当成缺陷报回来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// 功能已存在（可能尚未真机验收）。
+    Ready,
+    /// 功能尚未实现：字典里保留这个键是为了记“打算做什么”，但它**不得被任何驱动声明**，
+    /// 界面上也不能显示成“支持”。
+    NotBuilt,
+}
+
 /// 一个能力键的定义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilitySpec {
@@ -129,6 +143,8 @@ pub struct CapabilitySpec {
     pub label: &'static str,
     /// 归属（驱动能力 / 应用级功能）。
     pub scope: Scope,
+    /// 功能是否已经存在。
+    pub stage: Stage,
     /// 对应的运行时能力位；`None` = 纯界面能力。
     pub meta_bit: Option<MetaBit>,
     /// 真机验收状态。
@@ -140,6 +156,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "tree",
         label: "数据库导航",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         // 导航树读元数据：真机覆盖面见 `db_navigator` / `editor_exec_real`（四库导航对象已跑通）
@@ -148,6 +165,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "health_check",
         label: "健康检查",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         // 连接探测：真机 192.168.3.138（MySQL/PG）+ 本地 SQLite/DuckDB 均有探测用例
@@ -156,6 +174,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "transactions",
         label: "事务",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: Some(MetaBit::Transaction),
         acceptance: Acceptance::verified("editor_exec_real（四库事务：回滚作废/提交生效）"),
@@ -163,6 +182,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "index_analysis",
         label: "索引分析",
+        stage: Stage::NotBuilt,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -170,6 +190,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "sql_autocomplete",
         label: "SQL 补全",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -177,6 +198,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "schema_browser",
         label: "模式浏览",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         // PG/SQLite/DuckDB 的 schema 层：`insight_schema_real` 有真机覆盖
@@ -185,6 +207,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "table_editor",
         label: "表编辑器",
+        stage: Stage::NotBuilt,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -192,6 +215,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "analytics",
         label: "分析查询",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         // 结果二次分析/本地加速：`editor_exec_real` 的加速通道（DuckDB 真机）
@@ -200,6 +224,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "federation",
         label: "联邦查询",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: Some(MetaBit::Federated),
         acceptance: Acceptance::verified("federation_sources（mysql_native 跨源）"),
@@ -207,6 +232,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "export",
         label: "数据导出",
+        stage: Stage::Ready,
         scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -214,6 +240,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "mock",
         label: "Mock 生成",
+        stage: Stage::Ready,
         scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -221,6 +248,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "resource",
         label: "资源分析",
+        stage: Stage::Ready,
         scope: Scope::App,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -233,6 +261,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "ssh_tunnel",
         label: "SSH 隧道",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -240,6 +269,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "ssl_tls",
         label: "TLS 加密",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -247,6 +277,7 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "proxy",
         label: "网络代理",
+        stage: Stage::Ready,
         scope: Scope::Driver,
         meta_bit: None,
         acceptance: Acceptance::unverified(),
@@ -318,6 +349,42 @@ mod tests {
         }
     }
 
+    /// 功能未实现（`Stage::NotBuilt`）的键：
+    /// - **不得被任何驱动声明**（声明就是假承诺，能力矩阵会读成“这个驱动支持”）；
+    /// - 不得标已验收（没功能，谈不上验收）。
+    #[test]
+    fn not_built_keys_are_claimed_by_nobody() {
+        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        let not_built: Vec<&str> = CAPABILITY_DICTIONARY
+            .iter()
+            .filter(|s| s.stage == Stage::NotBuilt)
+            .map(|s| s.key)
+            .collect();
+        assert!(
+            not_built.contains(&"index_analysis") && not_built.contains(&"table_editor"),
+            "这两个键目前没有对应功能，应在字典里标 NotBuilt：{not_built:?}"
+        );
+        for spec in CAPABILITY_DICTIONARY
+            .iter()
+            .filter(|s| s.stage == Stage::NotBuilt)
+        {
+            assert!(
+                !spec.acceptance.verified,
+                "{}：功能未实现就不可能已验收",
+                spec.key
+            );
+        }
+        for d in crate::driver::DriverRegistry::all_descriptors() {
+            for key in d.capability_keys() {
+                assert!(
+                    !not_built.contains(&key.as_str()),
+                    "{} 声明了尚未实现的 {key}——功能落地后再声明",
+                    d.id
+                );
+            }
+        }
+    }
+
     /// 应用级功能键**不能**被任何驱动声明：声明了就是自相矛盾（它们与驱动无关），
     /// 也会让能力矩阵把它们当驱动能力逐行对比（界面读成“该驱动不支持”）。
     #[test]
@@ -325,7 +392,9 @@ mod tests {
         crate::driver::AutoDriverRegistrar::register_builtin_drivers();
         let app_keys: Vec<&str> = app_level_keys().iter().map(|s| s.key).collect();
         assert!(
-            app_keys.contains(&"export") && app_keys.contains(&"mock") && app_keys.contains(&"resource"),
+            app_keys.contains(&"export")
+                && app_keys.contains(&"mock")
+                && app_keys.contains(&"resource"),
             "三个应用级键应在字典里标成 Scope::App：{app_keys:?}"
         );
         for d in crate::driver::DriverRegistry::all_descriptors() {
@@ -501,7 +570,10 @@ mod tests {
 
         let mysql = mysql_driver().capability_keys();
         for key in ["ssh_tunnel", "ssl_tls", "proxy"] {
-            assert!(mysql.iter().any(|k| k == key), "mysql 应派生 {key}：{mysql:?}");
+            assert!(
+                mysql.iter().any(|k| k == key),
+                "mysql 应派生 {key}：{mysql:?}"
+            );
         }
         for d in [sqlite_driver(), duckdb_driver()] {
             for key in ["ssh_tunnel", "ssl_tls", "proxy"] {

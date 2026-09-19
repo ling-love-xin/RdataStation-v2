@@ -42,10 +42,10 @@ pub(crate) fn set_select_value(
 // 本模块只做别名（保持既有调用点可读），不再自己声明数值。
 
 pub(crate) use crate::ui::{
-    DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W,
-    DIALOG_BODY_HEIGHT as BODY_H, DIALOG_DRIVER_WIDTH as DRIVER_W,
-    DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W, DIALOG_PROJECT_WIDTH as PROJECT_W,
-    DIALOG_ROW_HEIGHT as ROW_H, DIALOG_STAGING_HEIGHT as STAGING_H, GAP_LG, GAP_MD, GAP_SM,
+    DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W, DIALOG_BODY_HEIGHT as BODY_H,
+    DIALOG_DRIVER_WIDTH as DRIVER_W, DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W,
+    DIALOG_PROJECT_WIDTH as PROJECT_W, DIALOG_ROW_HEIGHT as ROW_H,
+    DIALOG_STAGING_HEIGHT as STAGING_H, GAP_LG, GAP_MD, GAP_SM,
 };
 
 /// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / 地址），
@@ -172,10 +172,7 @@ pub(crate) enum PropertyNoteLevel {
 ///
 /// 判据全部来自引擎的 [`engine::driver::property_spec`]（依据客户端库源码，唯一真相源）——
 /// 这里只把判决翻译成一句人话，不自己判断键的真伪（§15：UI 不造数据）。
-pub(crate) fn property_note(
-    driver_id: &str,
-    key: &str,
-) -> Option<(String, PropertyNoteLevel)> {
+pub(crate) fn property_note(driver_id: &str, key: &str) -> Option<(String, PropertyNoteLevel)> {
     match engine::driver::driver_property_verdict(driver_id, key) {
         engine::driver::PropertyVerdict::Delivered {
             param,
@@ -260,12 +257,19 @@ pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<
 /// 那里同时定义「键 → 运行时能力位」与「真机验收状态」，避免界面另存一份键表
 /// （本段只留 JSON 解析与行组装）。
 
-/// 能力矩阵行：标签 + 是否由该驱动声明 + 运行时位 + 真机验收状态。
+/// 能力矩阵行（**字典唯一来源**：`engine::driver::CAPABILITY_DICTIONARY`）：
+/// 标签 + 是否由该驱动声明 + 运行时位 + 真机验收状态 + 功能是否存在。
+///
+/// - `declared` 来自驱动声明（`drivers.capabilities`）；**功能未实现**的键
+///   （`Stage::NotBuilt`）恒为 `false`：它们谁也不声明，界面也不该显示成「支持」；
+/// - `meta_bit` / `acceptance` 直接取字典：运行时位与真机验收状态（`✓` 只给已验收）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CapabilityRow {
     pub label: String,
     /// 驱动是否声明了该能力（`drivers.capabilities`）。
     pub declared: bool,
+    /// 功能是否已经存在（未实现的键在界面上要说明白，不要让测试者去找）。
+    pub not_built: bool,
     /// 对应的运行时能力位（无 → 纯界面能力）。
     pub meta_bit: Option<engine::driver::MetaBit>,
     /// 真机验收状态（D10：未验收不算可用，界面如实标注）。
@@ -296,6 +300,7 @@ pub(crate) fn capability_rows(declared: &[String]) -> Vec<CapabilityRow> {
         .map(|spec| CapabilityRow {
             label: spec.label.to_string(),
             declared: declared.iter().any(|d| d == spec.key),
+            not_built: spec.stage == engine::driver::CapabilityStage::NotBuilt,
             meta_bit: spec.meta_bit,
             acceptance: spec.acceptance,
         })
@@ -305,6 +310,7 @@ pub(crate) fn capability_rows(declared: &[String]) -> Vec<CapabilityRow> {
             rows.push(CapabilityRow {
                 label: key.clone(),
                 declared: true,
+                not_built: false,
                 meta_bit: None,
                 acceptance: engine::driver::Acceptance::unverified(),
             });
@@ -453,7 +459,10 @@ pub(crate) fn section_header(
             .size(rems(crate::ui::ICON_SIZE_SM))
             .text_color(theme.colors.muted_foreground),
         )
-        .child(icon.size(rems(crate::ui::ICON_SIZE_SM)).text_color(icon_color))
+        .child(
+            icon.size(rems(crate::ui::ICON_SIZE_SM))
+                .text_color(icon_color),
+        )
         .child(
             div()
                 .text_xs()
@@ -544,11 +553,7 @@ pub(crate) fn reuse_note(theme: &Theme, text: &str) -> Div {
 /// 地址列标签：文件型 = 「地址」（本地文件路径），网络型 = 「URI」
 /// （真机反馈：SQLite 下仍显示 URI 与 mysql 示例，语义与噪声都不对）。
 pub(crate) fn address_label(is_file: bool) -> &'static str {
-    if is_file {
-        "地址"
-    } else {
-        "URI"
-    }
+    if is_file { "地址" } else { "URI" }
 }
 
 /// 地址输入占位：**随当前驱动推导**（占位是 UI 文案字典，不是业务数据；见架构 §15）。
@@ -703,10 +708,11 @@ impl DriverDerived {
 
 /// 地址字段：优先 `type = file`，否则按常见键名（`file_path` / `path` / `file`）。
 pub(crate) fn address_field(fields: &[FormField]) -> Option<&FormField> {
-    fields
-        .iter()
-        .find(|f| f.kind == "file")
-        .or_else(|| fields.iter().find(|f| matches!(f.key.as_str(), "file_path" | "path" | "file")))
+    fields.iter().find(|f| f.kind == "file").or_else(|| {
+        fields
+            .iter()
+            .find(|f| matches!(f.key.as_str(), "file_path" | "path" | "file"))
+    })
 }
 
 // ===== 网络配置字段（`network_configs.config` 的结构化编辑）=====
@@ -767,13 +773,55 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
     let port = NetFieldKind::Port;
     match type_key.trim().to_ascii_lowercase().as_str() {
         "ssh" | "ssh_tunnel" => vec![
-            net_spec("host", "SSH 主机", &["host"], NetFieldKind::Text, true, "jump.example.com"),
+            net_spec(
+                "host",
+                "SSH 主机",
+                &["host"],
+                NetFieldKind::Text,
+                true,
+                "jump.example.com",
+            ),
             net_spec("port", "SSH 端口", &["port"], port, false, "22"),
-            net_spec("username", "SSH 用户名", &["username"], NetFieldKind::Text, true, "deploy"),
-            net_spec("password", "SSH 密码", &["password"], NetFieldKind::Password, false, "与私钥二选一"),
-            net_spec("key_path", "私钥路径", &["key_path"], NetFieldKind::Text, false, "~/.ssh/id_ed25519"),
-            net_spec("remote_host", "目标主机", &["remote_host"], NetFieldKind::Text, true, "数据库主机（隧道出口）"),
-            net_spec("remote_port", "目标端口", &["remote_port"], port, true, "5432"),
+            net_spec(
+                "username",
+                "SSH 用户名",
+                &["username"],
+                NetFieldKind::Text,
+                true,
+                "deploy",
+            ),
+            net_spec(
+                "password",
+                "SSH 密码",
+                &["password"],
+                NetFieldKind::Password,
+                false,
+                "与私钥二选一",
+            ),
+            net_spec(
+                "key_path",
+                "私钥路径",
+                &["key_path"],
+                NetFieldKind::Text,
+                false,
+                "~/.ssh/id_ed25519",
+            ),
+            net_spec(
+                "remote_host",
+                "目标主机",
+                &["remote_host"],
+                NetFieldKind::Text,
+                true,
+                "数据库主机（隧道出口）",
+            ),
+            net_spec(
+                "remote_port",
+                "目标端口",
+                &["remote_port"],
+                port,
+                true,
+                "5432",
+            ),
         ],
         "proxy" | "http" | "http_proxy" => {
             let mut specs = proxy_field_specs("8080");
@@ -786,10 +834,38 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
             specs
         }
         "ssl" | "tls" => vec![
-            net_spec("verify", "校验服务器证书", &["verify_server_cert"], NetFieldKind::Bool, false, "true"),
-            net_spec("ca", "CA 证书路径", &["ca_cert_path"], NetFieldKind::Text, false, "/etc/ssl/ca.pem"),
-            net_spec("cert", "客户端证书", &["client_cert_path"], NetFieldKind::Text, false, "（可选）"),
-            net_spec("key", "客户端私钥", &["client_key_path"], NetFieldKind::Text, false, "（可选）"),
+            net_spec(
+                "verify",
+                "校验服务器证书",
+                &["verify_server_cert"],
+                NetFieldKind::Bool,
+                false,
+                "true",
+            ),
+            net_spec(
+                "ca",
+                "CA 证书路径",
+                &["ca_cert_path"],
+                NetFieldKind::Text,
+                false,
+                "/etc/ssl/ca.pem",
+            ),
+            net_spec(
+                "cert",
+                "客户端证书",
+                &["client_cert_path"],
+                NetFieldKind::Text,
+                false,
+                "（可选）",
+            ),
+            net_spec(
+                "key",
+                "客户端私钥",
+                &["client_key_path"],
+                NetFieldKind::Text,
+                false,
+                "（可选）",
+            ),
         ],
         _ => Vec::new(),
     }
@@ -797,10 +873,38 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
 
 fn proxy_field_specs(default_port: &'static str) -> Vec<NetFieldSpec> {
     vec![
-        net_spec("host", "代理主机", &["host"], NetFieldKind::Text, true, "127.0.0.1"),
-        net_spec("port", "代理端口", &["port"], NetFieldKind::Port, true, default_port),
-        net_spec("username", "代理用户名", &["auth", "username"], NetFieldKind::Text, false, "（可选）"),
-        net_spec("password", "代理密码", &["auth", "password"], NetFieldKind::Password, false, "（可选）"),
+        net_spec(
+            "host",
+            "代理主机",
+            &["host"],
+            NetFieldKind::Text,
+            true,
+            "127.0.0.1",
+        ),
+        net_spec(
+            "port",
+            "代理端口",
+            &["port"],
+            NetFieldKind::Port,
+            true,
+            default_port,
+        ),
+        net_spec(
+            "username",
+            "代理用户名",
+            &["auth", "username"],
+            NetFieldKind::Text,
+            false,
+            "（可选）",
+        ),
+        net_spec(
+            "password",
+            "代理密码",
+            &["auth", "password"],
+            NetFieldKind::Password,
+            false,
+            "（可选）",
+        ),
         NetFieldSpec {
             key: "no_proxy",
             label: "直连主机",
@@ -840,10 +944,7 @@ pub(crate) fn build_network_config_json(
         if spec.required && raw.is_empty() {
             return Err(format!("「{}」为必填项", spec.label));
         }
-        if spec.kind == NetFieldKind::Port
-            && !raw.is_empty()
-            && raw.parse::<u16>().is_err()
-        {
+        if spec.kind == NetFieldKind::Port && !raw.is_empty() && raw.parse::<u16>().is_err() {
             return Err(format!("「{}」需要 1-65535 的端口号", spec.label));
         }
         if spec.kind == NetFieldKind::Bool && !raw.is_empty() && !is_bool_text(&raw) {
@@ -904,7 +1005,10 @@ pub(crate) fn build_network_config_json(
 }
 
 /// config JSON → 字段值（编辑回填；缺失 / 非法 JSON → 全空，不报错）。
-pub(crate) fn network_config_values(network_type: &str, config_json: &str) -> Vec<(String, String)> {
+pub(crate) fn network_config_values(
+    network_type: &str,
+    config_json: &str,
+) -> Vec<(String, String)> {
     spec_field_values(network_field_specs(network_type), config_json)
 }
 
@@ -949,26 +1053,110 @@ fn spec_field_values(specs: Vec<NetFieldSpec>, json: &str) -> Vec<(String, Strin
 pub(crate) fn auth_field_specs(auth_type: &str) -> Vec<NetFieldSpec> {
     match auth_type.trim().to_ascii_lowercase().as_str() {
         "password" | "ldap" => vec![
-            net_spec("username", "用户名", &["username"], NetFieldKind::Text, true, "数据库账号"),
-            net_spec("password", "密码", &["password"], NetFieldKind::Password, true, "登录密码"),
+            net_spec(
+                "username",
+                "用户名",
+                &["username"],
+                NetFieldKind::Text,
+                true,
+                "数据库账号",
+            ),
+            net_spec(
+                "password",
+                "密码",
+                &["password"],
+                NetFieldKind::Password,
+                true,
+                "登录密码",
+            ),
         ],
         "ssh_key" | "ssh" => vec![
-            net_spec("username", "SSH 用户名", &["username"], NetFieldKind::Text, false, "（可选）覆盖档案里的用户名"),
-            net_spec("key_path", "私钥路径", &["keyPath"], NetFieldKind::Text, false, "与密码二选一"),
-            net_spec("passphrase", "私钥口令", &["passphrase"], NetFieldKind::Password, false, "（可选）随私钥使用"),
-            net_spec("password", "SSH 密码", &["password"], NetFieldKind::Password, false, "与私钥二选一"),
+            net_spec(
+                "username",
+                "SSH 用户名",
+                &["username"],
+                NetFieldKind::Text,
+                false,
+                "（可选）覆盖档案里的用户名",
+            ),
+            net_spec(
+                "key_path",
+                "私钥路径",
+                &["keyPath"],
+                NetFieldKind::Text,
+                false,
+                "与密码二选一",
+            ),
+            net_spec(
+                "passphrase",
+                "私钥口令",
+                &["passphrase"],
+                NetFieldKind::Password,
+                false,
+                "（可选）随私钥使用",
+            ),
+            net_spec(
+                "password",
+                "SSH 密码",
+                &["password"],
+                NetFieldKind::Password,
+                false,
+                "与私钥二选一",
+            ),
         ],
         "proxy_pwd" | "proxy" => vec![
-            net_spec("username", "代理用户名", &["username"], NetFieldKind::Text, true, "代理账号"),
-            net_spec("password", "代理密码", &["password"], NetFieldKind::Password, true, "代理密码"),
+            net_spec(
+                "username",
+                "代理用户名",
+                &["username"],
+                NetFieldKind::Text,
+                true,
+                "代理账号",
+            ),
+            net_spec(
+                "password",
+                "代理密码",
+                &["password"],
+                NetFieldKind::Password,
+                true,
+                "代理密码",
+            ),
         ],
         "pg_class" => vec![
-            net_spec("cert_path", "客户端证书", &["certPath"], NetFieldKind::Text, true, "/etc/ssl/client.crt"),
-            net_spec("cert_key_path", "客户端私钥", &["certKeyPath"], NetFieldKind::Text, false, "（可选）"),
+            net_spec(
+                "cert_path",
+                "客户端证书",
+                &["certPath"],
+                NetFieldKind::Text,
+                true,
+                "/etc/ssl/client.crt",
+            ),
+            net_spec(
+                "cert_key_path",
+                "客户端私钥",
+                &["certKeyPath"],
+                NetFieldKind::Text,
+                false,
+                "（可选）",
+            ),
         ],
         "kerberos" => vec![
-            net_spec("principal", "Principal", &["principal"], NetFieldKind::Text, true, "user@REALM"),
-            net_spec("keytab_path", "Keytab 路径", &["keytabPath"], NetFieldKind::Text, false, "（可选）"),
+            net_spec(
+                "principal",
+                "Principal",
+                &["principal"],
+                NetFieldKind::Text,
+                true,
+                "user@REALM",
+            ),
+            net_spec(
+                "keytab_path",
+                "Keytab 路径",
+                &["keytabPath"],
+                NetFieldKind::Text,
+                false,
+                "（可选）",
+            ),
         ],
         _ => Vec::new(),
     }
@@ -1078,7 +1266,10 @@ fn is_bool_text(raw: &str) -> bool {
 }
 
 fn parse_bool_text(raw: &str) -> bool {
-    matches!(raw.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes")
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "yes"
+    )
 }
 
 fn insert_json_path(
@@ -1211,15 +1402,15 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
-        address_field, address_label, address_placeholder, capability_rows, driver_auth_types,
+        DriverDerived, address_field, address_label, address_placeholder, app_level_capabilities,
+        auth_config_values, auth_field_specs, build_auth_config_json, build_network_config_json,
+        capability_rows, conn_display_name, create_new_db_file, dialog_tab_defs, driver_auth_types,
         driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
-        field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
-        staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
-        type_has_driver, url_template_example, auth_config_values, auth_field_specs,
-        build_auth_config_json, build_network_config_json, conn_display_name, create_new_db_file,
-        dialog_tab_defs, network_config_values, network_field_specs, new_db_file_suggested_name,
-        property_note, result_needs_detail, saved_result, visible_tab_index, DriverDerived,
-        app_level_capabilities,
+        field_spec, find_driver_by_value, network_config_values, network_field_specs,
+        new_db_file_suggested_name, policy_summary, policy_type_from_label, policy_type_label,
+        property_note, result_needs_detail, saved_result, staging_display_type_id,
+        strip_file_db_noise, tags_from_json, tags_to_json, type_badge, type_has_driver,
+        url_template_example, visible_tab_index,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1284,7 +1475,16 @@ mod tests {
 
     #[test]
     fn network_field_specs_cover_supported_types() {
-        for t in ["ssh", "SSH", "ssh_tunnel", "proxy", "http", "socks5", "TLS", "ssl"] {
+        for t in [
+            "ssh",
+            "SSH",
+            "ssh_tunnel",
+            "proxy",
+            "http",
+            "socks5",
+            "TLS",
+            "ssl",
+        ] {
             assert!(!network_field_specs(t).is_empty(), "{t} 应有字段声明");
         }
         assert!(
@@ -1396,8 +1596,7 @@ mod tests {
         .expect_err("无凭据应报错");
         assert!(err.contains("密码") && err.contains("私钥"), "{err}");
 
-        let err = build_network_config_json("chain", &[])
-            .expect_err("协议链不走字段编辑");
+        let err = build_network_config_json("chain", &[]).expect_err("协议链不走字段编辑");
         assert!(err.contains("chain"), "{err}");
     }
 
@@ -1433,8 +1632,15 @@ mod tests {
     #[test]
     fn auth_field_specs_cover_supported_types() {
         for t in [
-            "password", "PASSWORD", "ldap", "pg_class", "kerberos", "ssh_key", "ssh",
-            "proxy_pwd", "proxy",
+            "password",
+            "PASSWORD",
+            "ldap",
+            "pg_class",
+            "kerberos",
+            "ssh_key",
+            "ssh",
+            "proxy_pwd",
+            "proxy",
         ] {
             assert!(!auth_field_specs(t).is_empty(), "{t} 应有字段声明");
         }
@@ -1484,7 +1690,11 @@ mod tests {
         // SSH：私钥路径 + 口令；未填字段不写空值
         let json = build_auth_config_json(
             "ssh_key",
-            &v(&[("username", "deploy"), ("key_path", "~/.ssh/id"), ("passphrase", "pp")]),
+            &v(&[
+                ("username", "deploy"),
+                ("key_path", "~/.ssh/id"),
+                ("passphrase", "pp"),
+            ]),
         )
         .expect("ssh 组装");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
@@ -1522,19 +1732,16 @@ mod tests {
             .expect_err("缺密码应报错");
         assert!(err.contains("密码"), "{err}");
         // SSH 凭据二选一
-        let err = build_auth_config_json("ssh_key", &v(&[("username", "u")]))
-            .expect_err("无凭据应报错");
+        let err =
+            build_auth_config_json("ssh_key", &v(&[("username", "u")])).expect_err("无凭据应报错");
         assert!(err.contains("私钥") || err.contains("密码"), "{err}");
         // 未声明字段的类型：明确提示走原始 JSON
         let err = build_auth_config_json("oauth2", &[]).expect_err("未知类型应拒绝字段编辑");
         assert!(err.contains("不支持字段编辑"), "{err}");
 
         // 回填往返（proxy_pwd）
-        let json = build_auth_config_json(
-            "proxy_pwd",
-            &v(&[("username", "u"), ("password", "p")]),
-        )
-        .expect("build");
+        let json = build_auth_config_json("proxy_pwd", &v(&[("username", "u"), ("password", "p")]))
+            .expect("build");
         let values = auth_config_values("proxy_pwd", &json);
         let get = |k: &str| {
             values
@@ -1561,12 +1768,9 @@ mod tests {
             ],
         )
         .expect("build");
-        let url = connection::url_params::inject_auth_into_url(
-            "postgres://h:5432/db",
-            "password",
-            &json,
-        )
-        .expect("注入凭据");
+        let url =
+            connection::url_params::inject_auth_into_url("postgres://h:5432/db", "password", &json)
+                .expect("注入凭据");
         assert_eq!(url, "postgres://alice:pwd@h:5432/db");
 
         // SSH 私钥分支：键名必须是后端读的 `keyPath`（驼峰），否则等于没配。
@@ -1593,7 +1797,11 @@ mod tests {
         assert!(line.detail.is_some(), "有详情才会出现「详情 / 复制」入口");
 
         // 空名回退占位，不出现空引号。
-        assert!(saved_result("  ", "P_conn_1").summary.contains("未命名连接"));
+        assert!(
+            saved_result("  ", "P_conn_1")
+                .summary
+                .contains("未命名连接")
+        );
         assert_eq!(conn_display_name(" x "), "x");
     }
 
@@ -1610,7 +1818,11 @@ mod tests {
         assert_eq!(file.len(), 4, "文件型不显示网络 Tab");
         assert!(!file.iter().any(|(label, _)| *label == "网络"));
         assert_eq!(visible_tab_index(&file, 0), 0);
-        assert_eq!(visible_tab_index(&file, 2), 1, "能力在文件型里是第 2 个可见项");
+        assert_eq!(
+            visible_tab_index(&file, 2),
+            1,
+            "能力在文件型里是第 2 个可见项"
+        );
         assert_eq!(visible_tab_index(&file, 4), 3);
         // 隐藏的「网络」被选中（旧草稿 / 切类型后）回退到第一个可见项，不越界。
         assert_eq!(visible_tab_index(&file, 1), 0);
@@ -1657,8 +1869,7 @@ mod tests {
         assert_eq!(level, L::Warn);
 
         // native：未知键会报错 → 危险（连接失败）
-        let (text, level) =
-            property_note("mysql_native", "ssl_mode").expect("未知键应提示");
+        let (text, level) = property_note("mysql_native", "ssl_mode").expect("未知键应提示");
         assert!(text.contains("报错"), "{text}");
         assert_eq!(level, L::Danger);
         let (_, level) = property_note("postgres_native", "connectTimeout").expect("应提示");
@@ -1690,7 +1901,11 @@ mod tests {
         assert_eq!(new_db_file_suggested_name("duckdb"), "new_database.duckdb");
         assert_eq!(new_db_file_suggested_name("DUCKDB"), "new_database.duckdb");
         assert_eq!(new_db_file_suggested_name("sqlite"), "new_database.db");
-        assert_eq!(new_db_file_suggested_name(""), "new_database.db", "未知驱动回退 .db");
+        assert_eq!(
+            new_db_file_suggested_name(""),
+            "new_database.db",
+            "未知驱动回退 .db"
+        );
     }
 
     #[test]
@@ -1707,14 +1922,22 @@ mod tests {
             value.as_deref(),
             Some(path.to_string_lossy().to_string().as_str())
         );
-        assert_eq!(std::fs::metadata(&path).expect("meta").len(), 0, "必须是空文件");
+        assert_eq!(
+            std::fs::metadata(&path).expect("meta").len(),
+            0,
+            "必须是空文件"
+        );
 
         // 已存在：不采用、不覆盖（「新建」与「打开」职责互斥：真机反馈“新建为什么还是打开”）
         std::fs::write(&path, b"keep-me").expect("write");
         let (msg, ok, value) = create_new_db_file(&path);
         assert!(!ok && value.is_none(), "{msg}");
         assert!(msg.contains("已存在"), "{msg}");
-        assert_eq!(std::fs::read(&path).expect("read"), b"keep-me", "不得清空原文件");
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            b"keep-me",
+            "不得清空原文件"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1746,14 +1969,20 @@ mod tests {
         assert_eq!(fields[0].label, "数据库文件");
         assert_eq!(fields[0].kind, "file");
         assert!(fields[0].required);
-        assert_eq!(address_field(&fields).map(|f| f.key.as_str()), Some("file_path"));
+        assert_eq!(
+            address_field(&fields).map(|f| f.key.as_str()),
+            Some("file_path")
+        );
         // 真实种子：MySQL 声明 host/port/database/username/password（顺序保留）。
         let mysql = r#"{"fields":[{"key":"host","label":"主机","type":"text","required":true},{"key":"port","label":"端口","type":"number","required":true},{"key":"database","label":"数据库","type":"text"},{"key":"username","label":"用户名","type":"text"},{"key":"password","label":"密码","type":"password"}]}"#;
         let fields = driver_form_fields(mysql);
         assert_eq!(fields.len(), 5);
         assert_eq!(fields[1].kind, "number");
         assert_eq!(fields[4].kind, "password");
-        assert_eq!(field_spec(&fields, "database").map(|f| f.label.as_str()), Some("数据库"));
+        assert_eq!(
+            field_spec(&fields, "database").map(|f| f.label.as_str()),
+            Some("数据库")
+        );
         // 未声明的键 → None（调用方据此不出该行，而不是造默认行）。
         assert!(field_spec(&fields, "file_path").is_none());
         // 缺 key / key 为空 → 丢弃该字段。
@@ -1826,7 +2055,7 @@ mod tests {
     }
 
     /// 能力矩阵只列**驱动能力**：应用级功能（导出 / Mock / 资源）不能当行出现，
-    /// 否则界面上会被读成「这个驱动不支持数据导出」。
+    /// 否则界面上会被读成「这个驱动不支持数据导出」；功能未实现的键要标明白。
     #[test]
     fn capability_rows_exclude_app_level_features() {
         let rows = capability_rows(&[]);
@@ -1840,6 +2069,22 @@ mod tests {
         // 驱动能力仍在（能逐行对比）
         assert!(rows.iter().any(|r| r.label == "事务"));
         assert!(rows.iter().any(|r| r.label == "数据库导航"));
+
+        // 功能未实现的键：行里带 not_built，且**永不**是 declared（谁都不能声明它）
+        let index_row = rows
+            .iter()
+            .find(|r| r.label == "索引分析")
+            .expect("索引分析应在矩阵里（带“功能未实现”说明）");
+        assert!(index_row.not_built);
+        assert!(!index_row.declared);
+        let editor_row = rows
+            .iter()
+            .find(|r| r.label == "表编辑器")
+            .expect("表编辑器应存在");
+        assert!(editor_row.not_built && !editor_row.declared);
+        // 已实现的键不带这个标记
+        let tx = rows.iter().find(|r| r.label == "事务").expect("事务应存在");
+        assert!(!tx.not_built);
 
         // 三个应用级功能走另一句说明
         let app = app_level_capabilities();
@@ -1863,26 +2108,24 @@ mod tests {
         let declared = vec!["tree".to_string(), "brand_new".to_string()];
         let rows = capability_rows(&declared);
         assert!(
-            rows.iter()
-                .any(|r| r.label == "数据库导航" && r.declared),
+            rows.iter().any(|r| r.label == "数据库导航" && r.declared),
             "声明项应命中"
         );
         assert!(
-            rows.iter()
-                .any(|r| r.label == "模式浏览" && !r.declared),
+            rows.iter().any(|r| r.label == "模式浏览" && !r.declared),
             "字典内未声明项应标记未声明"
         );
         assert_eq!(rows.last().map(|r| r.label.as_str()), Some("brand_new"));
         // 未收录的键不假装验收（也不丢信息）
         assert!(!rows.last().expect("尾部行").acceptance.verified);
         // 事务 / 联邦两个键带运行时位；已验收项带用例名（D10 口径）
-        let tx = rows
-            .iter()
-            .find(|r| r.label == "事务")
-            .expect("事务行");
+        let tx = rows.iter().find(|r| r.label == "事务").expect("事务行");
         assert_eq!(tx.meta_bit, Some(engine::driver::MetaBit::Transaction));
         assert!(tx.acceptance.verified);
-        assert!(!tx.acceptance.evidence.is_empty(), "已验收必须给出可复现用例");
+        assert!(
+            !tx.acceptance.evidence.is_empty(),
+            "已验收必须给出可复现用例"
+        );
     }
 
     #[test]
@@ -1926,9 +2169,8 @@ mod tests {
 
         // 网络型：占位来自驱动声明的 url_template + 默认端口（不再固定 mysql 示例）。
         let mut mysql = driver("mysql", "mysql", "MySQL (sqlx)", true);
-        mysql.url_template = Some(
-            "mysql://{username}:{password}@{host}:{port}/{database}".to_string(),
-        );
+        mysql.url_template =
+            Some("mysql://{username}:{password}@{host}:{port}/{database}".to_string());
         mysql.default_port = Some(3306);
         assert_eq!(
             address_placeholder(Some(&mysql), "mysql"),
@@ -1936,8 +2178,14 @@ mod tests {
         );
         // 无模板/无驱动：退回类型前缀示例与引导文案（不造连接数据）。
         let pg = driver("postgres", "postgresql", "PostgreSQL (sqlx)", true);
-        assert_eq!(address_placeholder(Some(&pg), "postgresql"), "postgresql://主机:端口/数据库");
-        assert_eq!(address_placeholder(None, "mysql"), "选择数据库类型与驱动后填写连接地址");
+        assert_eq!(
+            address_placeholder(Some(&pg), "postgresql"),
+            "postgresql://主机:端口/数据库"
+        );
+        assert_eq!(
+            address_placeholder(None, "mysql"),
+            "选择数据库类型与驱动后填写连接地址"
+        );
 
         // 文件型：提示是文件路径（选了 SQLite 不会再出现 mysql:// 示例）。
         let mut sqlite = driver("sqlite", "sqlite", "SQLite (rusqlite)", true);
@@ -2002,7 +2250,10 @@ mod tests {
 
     #[test]
     fn type_badge_uses_icon_with_default_fallback() {
-        let types = vec![ds_type("mysql", "MySQL", Some("🐬")), ds_type("oracle", "Oracle", None)];
+        let types = vec![
+            ds_type("mysql", "MySQL", Some("🐬")),
+            ds_type("oracle", "Oracle", None),
+        ];
         assert_eq!(
             type_badge(&types, "mysql"),
             Some(("🐬".to_string(), "MySQL".to_string()))

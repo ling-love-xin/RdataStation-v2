@@ -551,9 +551,12 @@ impl ConnectionDialogState {
                             .declared
                             .then_some(row.acceptance)
                             .filter(|a| a.verified);
-                        let label = match &acceptance {
-                            Some(_) => format!("{} ✓", row.label),
-                            None => row.label.clone(),
+                        // 功能未实现的键：直接写在标签上（测试者不该去找一个不存在的入口），
+                        // 也不把它画成“支持”（颜色按未声明走）。
+                        let label = match (&acceptance, row.not_built) {
+                            (Some(_), _) => format!("{} ✓", row.label),
+                            (None, true) => format!("{}（功能未实现）", row.label),
+                            (None, false) => row.label.clone(),
                         };
                         chips = chips.child(
                             div()

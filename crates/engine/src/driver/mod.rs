@@ -53,37 +53,38 @@ pub mod introspection;
 pub mod jdbc;
 pub mod loader;
 pub mod manager;
+pub mod missing_driver;
 pub mod native;
 pub mod property_spec;
 pub mod registry;
 pub mod router;
 pub mod smart_pool;
 pub mod standard_pool;
-pub mod missing_driver;
 pub use missing_driver::MissingDriver;
 pub mod traits;
 pub mod utils;
 pub mod wasm;
 pub use auto_register::AutoDriverRegistrar;
+pub use capability::{
+    Acceptance, CAPABILITY_DICTIONARY, CapabilitySpec, MetaBit, Scope as CapabilityScope,
+    Stage as CapabilityStage, app_level_keys as app_level_capability_keys,
+    driver_keys as driver_capability_keys, label as capability_label,
+    meta_bit as capability_meta_bit, spec as capability_spec,
+};
+pub use declaration::{DeclarationSync, DriverDeclaration, sync_driver_declarations};
 pub use factory::{
     DuckDbDriverFactory, MySqlDriverFactory, MySqlNativeDriverFactory, PostgresDriverFactory,
     PostgresNativeDriverFactory, SqliteDriverFactory,
 };
-pub use introspection::{get_level, remove_level, set_level, IntrospectionLevel};
+pub use introspection::{IntrospectionLevel, get_level, remove_level, set_level};
 pub use loader::{BuiltinDriverDiscovery, DriverLoader, JdbcDriverDiscovery, WasmDriverDiscovery};
 pub use manager::{
-    get_driver_manager, init_driver_manager, DriverInfo, DriverManager, DriverStatus,
-    DRIVER_MANAGER,
+    DRIVER_MANAGER, DriverInfo, DriverManager, DriverStatus, get_driver_manager,
+    init_driver_manager,
 };
-pub use capability::{
-    app_level_keys as app_level_capability_keys, driver_keys as driver_capability_keys,
-    label as capability_label, meta_bit as capability_meta_bit, spec as capability_spec, Acceptance,
-    CapabilitySpec, MetaBit, Scope as CapabilityScope, CAPABILITY_DICTIONARY,
-};
-pub use declaration::{sync_driver_declarations, DeclarationSync, DriverDeclaration};
 pub use property_spec::{
-    known_keys as driver_property_keys, verdict as driver_property_verdict, PropertySpec,
-    Route as PropertyRoute, UnknownEffect, Verdict as PropertyVerdict,
+    PropertySpec, Route as PropertyRoute, UnknownEffect, Verdict as PropertyVerdict,
+    known_keys as driver_property_keys, verdict as driver_property_verdict,
 };
 pub use registry::{
     DriverConnectionConfig, DriverDescriptor, DriverFactory, DriverKind, DriverRegistry,
