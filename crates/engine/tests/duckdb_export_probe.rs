@@ -113,7 +113,7 @@ fn xlsx_export_lands_and_reads_back() {
     if !install_allowed {
         // 预检只用离线那一步：没装就跳过，不触发下载
         let duckdb = DuckDbService::get_or_create_duckdb().expect("内存库");
-        let mut conn = duckdb.lock().expect("锁");
+        let conn = duckdb.lock().expect("锁");
         if conn.execute_batch("LOAD excel").is_err() {
             println!(
                 "⏭️ XLSX 跳过：excel 扩展没装（设 RDS_TEST_EXCEL_INSTALL=1 才走 INSTALL，会联网下载）"

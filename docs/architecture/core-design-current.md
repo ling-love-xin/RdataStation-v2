@@ -4,7 +4,7 @@
 > 每一节都区分三件事：**［档］**设计文档这么写 / **［验］**代码实测如此 / **［偏］**两者有偏差。
 > **权威冲突时**：模块 `README.md` 与 `<模块>-dev-plan.md` §0 最新，`*-architecture.md` 的头部状态行与「实现位置」列最易过期。
 >
-> 基线：2026-09-17。本会话已修项见文末《附录 A》。
+> 基线：2026-09-17（**测试与代码规模数字于 2026-09-19 按 `module-status.md` 复核过**）。本会话已修项见文末《附录 A》。
 
 ---
 
@@ -14,7 +14,7 @@
 2. **数据层是「双层 × 双引擎」**：系统级共享 + 项目级物理隔离；SQLite 记事务元数据、DuckDB 做分析；**两套迁移器、两本版本账本，不可混用**。
 3. **视图层的核心模式是「宿主端口」**：feature crate 定义 `trait XxxHost` + 自带视图，`workbench` 实现端口只做转接；`workbench_shell` 只放两侧共用的纯数据。
 4. **元数据访问有唯一闸门** `database::MetadataService`，下接驱动 `MetadataBrowser`；导航侧再套 `NavCache`（cache-aside）。缓存是**三层**：L1 内存 / L2 每连接 SQLite / L3 实时内省（**L3 不是缓存**）。
-5. **接通度极不平均**：M1/M3/M4/M5/M6/M7 与编辑器执行链是活的；**M9 plugin 整包未接通**；engine 缓存层约 150 个公开项零调用；L1 只有失效没有填充。
+5. **接通度极不平均**：M1/M3/M4/M5/M6/M7 与编辑器执行链是活的；**M9 plugin 整包未接通**；engine 仍有零调用项（**旧口径「约 150 个」本轮未重数，不要引用具体数字**，逐项见 `data-layer-wiring-matrix.md` §7）；**L1 的 9 组 key 读写都通了**（2026-09-19 接线，见同文件 §2.1）。
 
 ---
 
@@ -297,7 +297,7 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | 模块 | 一句话 | 入口 / 端口 | 状态［验］ |
 |---|---|---|---|
 | **M1 project** | 一实例一项目；名册在全局库、本体在 `.RSmeta`；OS 字节锁排他 | `project::service::*` + `ProjectUiHost` | 主线活；`project.json` 非原子写、render 期查库仍在 |
-| **M2 engine** | 双引擎基础设施 + 统一数据访问层 | `SqlService` / `ConnectionManager` / `DuckDBManager` / `MetadataCacheManager` | 活的 11 个缓存方法 + 6 个 Manager 方法；~150 项零调用 |
+| **M2 engine** | 双引擎基础设施 + 统一数据访问层 | `SqlService` / `ConnectionManager` / `DuckDBManager` / `MetadataCacheManager` | 缓存读写面已通（L1 **9 组 key** / L2 **7 类对象**，2026-09-19 接线）；仍有零调用项，逐项见 `data-layer-wiring-matrix.md` §2.2 / §7 |
 | **M3 connection** | 传输层：协议链 + URL + DuckDB Secret | `chain::apply_network_method` / `TunnelRegistry` / `SecretManager` | 编排在 workbench；SSH 主机密钥默认放行、Secret 无门控不清理 |
 | **M4 database** | 元数据导航 + 属性面板 | `MetadataService` / `NavigatorService` / `NavCache` | 最健康；`delete_schema` / `prune_schema` 已修 |
 | **M5 scratchpad** | 文件语义草稿区 + 项目级回收站（按来源只看自己的） | `ScratchpadStore` / `jobs` / `ScratchpadHost` | 活；`config.json` 非原子写、删除/改名不查编辑器脏状态；回收站类型已上提到 `engine::persistence::trash`（P0.8） |
@@ -333,11 +333,11 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | 错误纪律 | 写路径允许 `let _ =` | `delete_schema` / `save_view` / `resource_jobs` |
 | 运行时纪律 | 未禁 `Runtime::new()` 与 render 期 I/O | workbench 10 处 |
 | 单一来源 | `.RSmeta` / 前缀判定 / 尺寸常量有第二实现 | 6 / 4 / 9 处 |
-| 死代码 | 无「零调用冻结」机制 | engine ~150 项、plugin 整包 |
+| 死代码 | 无「零调用冻结」机制 | engine 零调用项（本轮已删 ~4.3k 行：`dbi` / 扩展管理 / 持久化 v1，余项见 `data-layer-wiring-matrix.md` §7）、plugin 整包 |
 | 文档新鲜度 | `*-architecture.md` 头部状态行最易过期 | 见 §12 |
-| 门禁 | **无 CI**；无 fmt 门（244/401 文件待格式化） | 无 `.github/` |
+| 门禁 | **无 CI**；无 fmt 门（`cargo fmt --all --check`：**258/440** 文件待格式化，2026-09-19 实测） | 无 `.github/` |
 | 本机脚本入库 | 本机诊断脚本（含内网地址与明文口令）曾被提交并**已推到公开仓库**；「未跟踪」不能靠文件头自己声明 | `crates/workbench/tests/zz_fixture_probe.rs`（commit `7814b9b6`）；已 `git rm --cached` + `.gitignore` 新增 `**/tests/zz_*.rs`，详见 `module-status.md` §6.1 |
-| 测试基线分散 | 各模块文档里的数字是不同日期的快照，长期漂移（本轮实测：engine 382→443、database 38→42、workbench 106→110、mock 165→190…） | `module-status.md` §6.3；现已收拢为一份可复现台账 |
+| 测试基线分散 | 各模块文档里的数字是不同日期的快照，长期漂移（2026-09-19 两次复跑累计：engine 382→**440**、database 20→**51**、workbench 106→**110**、mock 165→**190**…） | `module-status.md` §6.3 / §6.3.1；现已收拢为一份可复现台账 |
 
 ---
 

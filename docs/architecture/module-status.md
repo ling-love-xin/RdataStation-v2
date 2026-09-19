@@ -5,7 +5,7 @@
 > - 各模块 `README.md` / `*-dev-plan.md` §0 仍是该模块的**语义权威**；本文件的数字是**某一时刻的实测快照**，两者冲突时：语义看模块文档，**数字看本文件**（或照 §1 重跑一遍）。
 > - 约定：本文件的每个数字都必须能在**本机一条命令重跑出来**；跑不出来的一律不写。
 >
-> 基线：**2026-09-19**（Windows · stable · `-j 2`）· 维护方式见 §7。
+> 基线：**2026-09-19**（Windows · stable · `-j 2`）· 当日**两次复跑**，下表是**第二次**（死代码清理三批之后）的数字 · 维护方式见 §7。
 
 ---
 
@@ -14,11 +14,12 @@
 | 项 | 实测值 |
 | --- | --- |
 | 工作区测试目标 | **84**（含 16 个 Doc-tests 目标） |
-| 通过 | **1963** |
-| 失败 | **1**（`rds-workbench --test zz_fixture_probe`，本机诊断脚本，环境原因——见 §6.1） |
-| 忽略 | **51**（真机探针，需环境变量与真实数据库） |
+| 通过 | **1970** |
+| 失败 | **0**（本轮全绿） |
+| 忽略 | **51**（真机探针 24 + Doc-tests 27） |
 | 编译告警 | `cargo check --workspace --all-targets` 零告警 |
-| 代码规模 | 225,344 行 Rust / 448 个 `.rs` 文件（`crates/`，不含 `v1/`） |
+| 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`） |
+| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1969 项**，见 §2 的表下注 |
 
 ---
 
@@ -52,21 +53,21 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 ---
 
-## 2. 逐包基线（2026-09-19 实测）
+## 2. 逐包基线（2026-09-19 第二次复跑）
 
 「本包合计」= lib 单测 + 本包 `tests/` 下各集成目标。
 
 | 包 | lib 单测 | 集成目标（`tests/`） | 本包合计 | 忽略 |
 | --- | --- | --- | --- | --- |
-| `rds-engine` | **443** | 32（8 个目标） | **475** | 24 |
+| `rds-engine` | **440** | 32（8 个目标） | **472** | 24 |
 | `rds-editor` | **377** | — | **377** | — |
-| `rds-workbench` | **110** | 129（32 个目标） | **239** | — |
+| `rds-workbench` | **110** | 130（32 个目标） | **240** | — |
 | `rds-insight` | **227** | 14（`column_profile_e2e`） | **241** | — |
 | `rds-mock` | **190** | 48（4 个目标） | **238** | — |
 | `rds-analytics-resource` | **125** | 27（`panel_window` 18 · `dialog_window` 9） | **152** | — |
 | `rds-connection` | **44** | 4（`tunnel_roundtrip`） | **48** | — |
 | `rds-project` | **43** | 5（`project_registry` 1 · `project_store` 4） | **48** | — |
-| `rds-database` | **42** | — | **42** | — |
+| `rds-database` | **51** | — | **51** | — |
 | `rds-scratchpad` | **37** | — | **37** | — |
 | `rds-shared` | **22** | — | **22** | 9（doctest） |
 | `rds-settings` | **21** | — | **21** | — |
@@ -74,8 +75,11 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-paths` | **10** | 1（`test_support_is_wired`） | **11** | — |
 | `rds-workbench-shell` | **1** | — | **1** | — |
 | `rds-app` | 0 | — | 0 | — |
-| **合计** | **1703** | **260** | **1963** | **51** |
+| **合计** | **1709** | **261** | **1970** | **51** |
 
+> **口径注（重要）**：合计里的 `rds-workbench` 集成 130 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
+> 去掉它：**项目自身套件 = 83 个目标 / 1969 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
+>
 > `rds-plugin` 有 11 项单测且全绿，但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
 
 ### 2.1 `rds-engine` 的 8 个探针目标
@@ -91,7 +95,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `federation_credentials_probe` | 1 | 凭据脱敏出口 |
 | `oracle_probe` | 1 | Oracle 扩展腿 |
 
-### 2.2 `rds-workbench` 的 32 个集成目标（129 项）
+### 2.2 `rds-workbench` 的 32 个集成目标（130 项）
 
 | 目标 | 数量 | | 目标 | 数量 |
 | --- | --- | --- | --- | --- |
@@ -110,9 +114,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `editor_exec_real` | 1 | | `insight_source_real` | 2 |
 | `federation_sources` | 1 | | `insight_schema_real` | 1 |
 | `log_dialog_layer` | 1 | | `mock_job_cancel` | 1 |
-| `oracle_federation` | 1 | | `zz_fixture_probe` | ⚠️ 0 通过 / 1 失败（见 §6.1） |
+| `oracle_federation` | 1 | | `zz_fixture_probe` | 1（本机诊断，未跟踪） |
 
-> 真机目标（`*_real` / `*_probe` / `oracle_*` / `federation_*`）在无环境变量或无服务时按设计跳过或空跑；`zz_fixture_probe` 是**本机专用**脚本，不属于项目测试套件。
+> 真机目标（`*_real` / `*_probe` / `oracle_*` / `federation_*`）在无环境变量或无服务时按设计跳过或空跑；
+> `zz_fixture_probe` 是**本机专用**脚本（未跟踪、`.gitignore` 已挡），**不属于项目测试套件**——它出现在上表只是因为本机命令输出里确实有它。
 
 ---
 
@@ -123,7 +128,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | 模块 | crate | 状态 | 已知缺口（权威清单在各模块文档） |
 | --- | --- | --- | --- |
 | M1 项目管理 | `project` | ✅ | 窗口退出草稿兜底 · 项目目录移动 · 提升 / 快照 |
-| M2 双引擎底座 | `engine` | ✅ | 缓存层约 150 个公开项零调用 · FTS 写入侧待修 · 增量同步未接 |
+| M2 双引擎底座 | `engine` | ✅ | 缓存层与持久化层**仍有零调用项**（权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7；本轮已处置约 4.3k 行，见其 §6）· FTS 写入侧待修 · 增量同步未接 |
 | M3 数据源连接 | `connection` | ✅ | SSH 主机密钥默认放行 · Secret 无门控不清理 |
 | M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · 全文元数据搜索 · 命中后树内定位 · PG 跨库浏览 |
 | M5 草稿箱 | `scratchpad` | ✅ | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
@@ -153,7 +158,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 ## 5. 未接通与零调用（如实口径）
 
 - **M9 `plugin` 整包未接通**：无任何 crate 依赖它；`plugin/src/sidecar/{health_checker,hot_reload_manager}.rs` 为 0 字节。
-- **`engine` 缓存层约 150 个公开项零调用**：`CacheLevel` 枚举、`l2_enabled` / `l3_enabled`、`CacheVersionManager`（L2 版本链）等；查询缓存的 `use_cache` 默认 `false`，生产路径从不触发。
+- **`engine` 仍有零调用项**：`CacheLevel` 枚举、`l2_enabled` / `l3_enabled`、`CacheVersionManager`（L2 版本链）；查询缓存的 `use_cache` 默认 `false`，生产路径从不触发；L2 还有 5 张 v1 遗留表（`compressed_metadata` 等）无消费者。**旧口径「约 150 个公开项」本轮未重数，不要引用具体数字**——逐项权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7，已处置的那批见其 §6.1 / §6.2（`dbi` 死层 2124 行 · 重复的扩展管理 570 行 · 持久化 v1/V7 1636 行 · L1 四组零调用）。
 - **元数据 FTS 写入侧未接**，且其「视图」插入语句引用了一张迁移里不存在的表——接线前必须先修。
 - **缓存身份指纹（`meta_{fp}.sqlite`）**：`metadata_identity` 已写并有 13 项单测，但**未接线**，L2 仍按 `conn_{id}` 命名。
 - **增量同步 / 快照表**：有意不补，等真实消费者。
@@ -170,7 +175,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 1. `git rm --cached crates/workbench/tests/zz_fixture_probe.rs` —— **取消跟踪，保留本机文件**；
 2. `.gitignore` 增加规则 `**/tests/zz_*.rs` —— 本机诊断按 `zz_` 前缀命名即自动不入库；
-3. 该目标也是全仓**唯一失败**的测试目标（见 §6.2）。
+3. 该目标此前是全仓**唯一失败**的测试目标（见 §6.2）；**本次复跑它通过了**（同机同代码，只是 DBeaver 不再占用目标文件）——所以它是**环境相关**的，不能当作代码健康度指标。这也正是它被取消跟踪的理由：项目套件不该依赖本机内网与某个文件的占用状态。
 
 **仍待用户处理（超出文档与代码修复范围）**：
 
@@ -178,7 +183,9 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 - 若需从历史中清除，需 `git filter-repo` / BFG 改写历史 + 强推，并请求 GitHub 清理缓存视图；
 - 该文件在无 `D:\data\123` 与内网服务的机器上必然失败，本就不应进入任何「全绿」口径。
 
-### 6.2 唯一失败的测试目标：环境原因，非代码缺陷
+### 6.2 上一轮的唯一失败目标：环境原因，非代码缺陷（本轮已复跑通过）
+
+上一轮的输出（保留作为连接链路的真机正面证据）：
 
 ```
 [测试连接] MySQL      success=true  版本=9.7.2
@@ -193,6 +200,9 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 ```
 
 结论：**DuckDB 腿失败的原因是目标库文件被 DBeaver 占用**，与代码无关。四条链路里 MySQL / PostgreSQL / SQLite 的「测试连接」与「真实连接」**全部通过**——这同时是本仓连接链路的真机正面证据。
+
+**当日第二次复跑：该目标 `1 passed`，全仓失败数归 0。** 同机、同代码、同命令，唯一差别是 DBeaver 不再占用 `D:\data\123`。
+因此 §0 的「失败 0」与上一轮的「失败 1」不矛盾：**这一项的结果取决于本机环境**。
 
 ### 6.3 文档数字漂移（本轮已修）
 
@@ -217,12 +227,32 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 > 规律与 `core-design-current.md` §12 一致：**模块 `README.md` 与 `dev-plan.md` §0 较新；`*-showcase.*`（宣传页）与 `crates/*/README.md` 的数字最易过期**。
 > 本表更新后，若再发现冲突，请以 §1 重跑为准并顺手更新本表。
 
+#### 6.3.1 第二次复跑新校正的数字（同日，死代码清理之后）
+
+`9edd66a8`（本文件初版）之后落了 6 个改 `engine/src` 的提交，其中三批是死代码清理（合计约 −4.7k 行，见 `data-layer-wiring-matrix.md` §6）。数字随之变化，**§0 / §2 已换成第二次的值**，差异归因如下：
+
+| 项 | 第一次实测 | 第二次实测 | 归因 |
+| --- | --- | --- | --- |
+| 工作区通过 | 1963 | **1970** | = 下列三项之和 |
+| 失败 | 1（`zz_fixture_probe`） | **0** | 本机环境（§6.2） |
+| `rds-engine` lib | 443 | **440** | 清理批次删掉的测试（`duckdb/extensions.rs` **12 项** + 持久化层 **1 项**，`dbi/` 本就 **0 项测试**）多于同期新增（L2 接线、PG 内省）；净值 **−3** |
+| `rds-database` lib | 42 | **51** | `68bd7610` 新增 6 项（L2 命中与触发器往返）+ `68853de` 新增 3 项（写侧留痕） |
+| `rds-workbench` 集成 | 129 | **130** | `zz_fixture_probe` 由失败转通过（§6.2） |
+| 其余包 | —— | 不变 | —— |
+
+**三个已核实的漂移点**（本轮已顺手改）：`crates/engine/README.md`（库单测写的 **301**，实际 440）·
+`docs/architecture/database/database-navigator-showcase.{md,html}`（engine 443 → **440**、database 42 → **51**，KPI「测试 485 项」→ **491**）·
+`docs/architecture/{editor,insight,quick_open}/*` 里引用 engine **443** 的位置（→ 440）。
+
+**有意不动的**：`*-dev-plan.md` / `*-architecture.md` 里**带日期的进度记录**（如「engine 428 → 435」）——它们是当日快照，改掉等于篡改历史；
+`docs/architecture/connection/*` 的 5 个文件本轮带他人的未提交改动，**为避免冲突未动**（它们写的 443 / 1963 属于上一轮快照）。
+
 ---
 
 ## 7. 维护约定
 
 1. **数字变了就重跑 §1 的命令**，并更新 §0 / §2；不要手改数字。
 2. **新增测试目标**（`tests/*.rs`）请同时更新 §2 的「集成目标」列。
-3. **本机专用诊断一律用 `zz_` 前缀**（`.gitignore` 已挡住），且**不要**写进 §2——它们不属于项目测试套件。
+3. **本机专用诊断一律用 `zz_` 前缀**（`.gitignore` 已挡住）；它们会出现在**原始命令输出**里，所以 §2 的合计按原样记录，但**必须同时给出「项目自身套件」口径**（去掉那一行）——两个数都写，别只写一个。
 4. **接通状态变化时**（某能力从「零调用」变「活」）：更新 §3 / §5，并在模块文档留痕。
 5. 本文件**只放能复现的数字**；口径不清的（例如跨 crate 组合出来的「N 个目标 / M 用例」）要么删掉，要么在 §2 里拆成可归属的逐目标数。

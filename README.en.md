@@ -71,7 +71,7 @@ Charts / dashboards / reports (left to the plugin ecosystem) · cross-source wri
 | Metric | Value |
 | --- | --- |
 | Workspace crates | **16** (15 business/foundation crates + the `app` assembly layer) |
-| Rust code | **225,344 lines** across 448 `.rs` files (excluding the `v1/` archive) |
+| Rust code | **221,971 lines** across 440 `.rs` files (excluding the `v1/` archive) |
 | Migration assets | **4** SQLite / DuckDB migration sets, with two separate version ledgers |
 | Built-in drivers | **6**, covering 4 engine families |
 | Documentation | 5 kinds of module docs (entry / prototype / interactive mockup / architecture / dev plan / user guide) |
@@ -262,7 +262,7 @@ Status vocabulary: **✅ main line live** · **🟡 partial** (with named gaps) 
 | Module | One-line positioning | Status | Representative capabilities | Known gaps |
 | --- | --- | --- | --- | --- |
 | **M1 project** | One instance, one project; registry and body kept apart; OS byte lock | ✅ | Project picker (facet search / pin / recent) · unsaved-draft interception and read-only escape hatch · rename without changing the on-disk directory name · bundled sample project | Window-exit draft fallback · moving a project directory · promote / snapshot |
-| **M2 engine** | Dual-engine foundation + unified data access layer | ✅ | 6 drivers behind two trait faces · dual migration ledgers · the single `sqlglot` entry point · hand-written statement splitter that handles half-typed SQL | ~150 public cache-layer items with zero callers · FTS write side to be fixed · incremental sync not wired |
+| **M2 engine** | Dual-engine foundation + unified data access layer | ✅ | 6 drivers behind two trait faces · dual migration ledgers · the single `sqlglot` entry point · hand-written statement splitter that handles half-typed SQL | Cache and persistence layers still hold zero-caller items (authoritative list in the wiring matrix §7; ~4.3k lines were cleaned up this round) · FTS write side to be fixed · incremental sync not wired |
 | **M3 connection** | Getting "how to connect to a data source" right, and honest | ✅ | Five-tab dialog · **test connection performs a real connection** · protocol chain and tunnel registry · DuckDB Secret acceleration channel · zero UI-fabricated data | SSH host keys allowed by default · Secrets lack a gated cleanup |
 | **M4 database** | Making "which sources exist and what's inside" a readable tree | ✅ | Ownership domain `P/G/GP` column · groups = structure, tags = retrieval · dual-channel badge · three-tier cache + index paging · cross-connection name search · warm-up and adjacency prefetch | Virtual list · full-text metadata search · locating a hit in the tree · PostgreSQL cross-database browsing |
 | **M5 scratchpad** | A scratch area private to a single project | ✅ | Import vs. reference · project-level trash with an undo bar · content search and replace-all · file watching · conflict strip plus line-level diff (judged by content, not mtime) | Phase D (archive / checkout / versions) · OS drag-in import · jumping to a hit's line |
@@ -387,8 +387,8 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 
 | Suite | Measured this round (2026-09-19) |
 | --- | --- |
-| **Whole workspace** | **84 targets · 1963 passed · 51 ignored · 1 failed** (the failure is a local-only diagnostic script, see below) |
-| `rds-engine --lib` | **443 passed / 24 ignored** |
+| **Whole workspace** | **84 targets · 1970 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
+| `rds-engine --lib` | **440 passed / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + end-to-end **14** |
 | `rds-mock` | lib **190** + engine integration **37** + persistence round-trip **5** + history/templates **4** + cleanup **2** |
@@ -396,14 +396,14 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 | `rds-analytics-resource` | lib **125** + panel window **18** + dialog window **9** |
 | `rds-connection` | lib **44** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + integration **5** |
-| `rds-database` | lib **42** |
+| `rds-database` | lib **51** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract` | **7** (no raw sizes / no raw colors / panel registry / shared-field allowlist) |
 
 > The table above comes from **one single `cargo test-all` run** (Windows · stable · `-j 2`). **The per-target ledger and the reproduction commands are in [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**; the workspace currently compiles with zero warnings (`cargo check --workspace --all-targets`).
 >
-> The one failing target is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections), failing because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`). It is **unrelated to the code**. It has been removed from version control and added to the ignore rules (the local file is kept). In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
+> **Scope**: 1 of those 84 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 83 targets / 1969 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
 
 Real-machine probes (environment variables required, not run by default): `editor_exec_real` (6 drivers) · `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`.
 
@@ -443,7 +443,7 @@ This project **labels what it has not done yet**, ordered here by how close each
 
 - **Plugin host (M9)**: the four extension points (driver / panel / command / setting) have designs and package structure, but **nothing is wired up**; awaiting beta 3 planning.
 - **Analysis-table archive (M6 Phase 4)**: letting mock output and editor results be archived as "query / analysis" assets.
-- **Freezing dead code**: roughly 150 public items in the engine's cache layer currently have zero callers; a mechanism is needed to stop further growth.
+- **Freezing dead code**: zero-caller items remain in the engine's cache and persistence layers (including 5 leftover v1 tables); a mechanism is needed to stop further growth. About 4.3k lines were cleaned up first this round (the `dbi` dead layer, duplicated extension management, persistence v1) — item-by-item list in [`data-layer-wiring-matrix.md`](docs/architecture/data-layer-wiring-matrix.md) §7.
 
 **Engineering to-dos**
 

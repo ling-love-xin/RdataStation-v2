@@ -71,7 +71,7 @@ RdataStation v2 是用 **Rust + GPUI-kit** 重构的桌面数据库工作台：�
 | 指标 | 数值 |
 | --- | --- |
 | 工作区 crate | **16**（15 个业务/基础 crate + `app` 装配层） |
-| Rust 代码 | **225,344 行**，448 个 `.rs` 文件（不含 `v1/` 历史区） |
+| Rust 代码 | **221,971 行**，440 个 `.rs` 文件（不含 `v1/` 历史区） |
 | 迁移资产 | **4 套** SQLite / DuckDB 迁移目录，双版本账本 |
 | 内置驱动 | **6 个**，覆盖 4 类引擎 |
 | 文档 | 5 类模块文档集（入口 / 原型 / 交互稿 / 架构 / 开发方案 / 手册） |
@@ -387,8 +387,8 @@ cargo clippy-all            # = clippy --workspace --all-targets
 
 | 套件 | 本轮实测（2026-09-19） |
 | --- | --- |
-| **全工作区** | **84 个目标 · 1963 通过 · 51 忽略 · 1 失败**（失败项为本机诊断脚本，见下） |
-| `rds-engine --lib` | **443 通过 / 24 ignored** |
+| **全工作区** | **84 个目标 · 1970 通过 · 51 忽略 · 0 失败**（含 1 项本机诊断脚本，见下） |
+| `rds-engine --lib` | **440 通过 / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + 端到端集成 **14** |
 | `rds-mock` | lib **190** + 引擎集成 **37** + 持久化往返 **5** + 历史模板 **4** + 清理 **2** |
@@ -396,14 +396,14 @@ cargo clippy-all            # = clippy --workspace --all-targets
 | `rds-analytics-resource` | lib **125** + 面板窗口 **18** + 对话框窗口 **9** |
 | `rds-connection` | lib **44** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + 集成 **5** |
-| `rds-database` | lib **42** |
+| `rds-database` | lib **51** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
 > 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；当前全仓编译零告警（`cargo check --workspace --all-targets`）。
 >
-> 唯一的 1 个失败目标是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。它已从版本控制中移除并加入忽略规则（本机文件保留）。同一轮里，该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
+> **口径**：84 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 83 个目标 / 1969 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
 
 真机探针（需环境变量，默认不跑）：`editor_exec_real`（6 驱动）· `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`。
 
@@ -443,7 +443,7 @@ cargo clippy-all            # = clippy --workspace --all-targets
 
 - **插件宿主（M9）**：WASM / Sidecar 四类扩展点（驱动 / 面板 / 命令 / 设置）已有设计与包结构，**整包尚未接通**，等 beta3 立项。
 - **分析表型存档（M6 Phase 4）**：让 M7 Mock 产物与 M5 编辑器结果能归档为「查询 / 分析」类存档。
-- **冻结零调用**：engine 缓存层约 150 个公开项目前零调用，需要一套机制阻止继续增长。
+- **冻结零调用**：engine 缓存层与持久化层仍有零调用项（含 5 张 v1 遗留表），需要一套机制阻止继续增长；本轮已先清理约 4.3k 行（`dbi` 死层 / 重复的扩展管理 / 持久化 v1），逐项清单见 [`data-layer-wiring-matrix.md`](docs/architecture/data-layer-wiring-matrix.md) §7。
 
 **工程化待补**
 

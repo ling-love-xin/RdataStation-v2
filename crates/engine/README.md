@@ -91,16 +91,17 @@ commands ──► services ──► driver ──► native
 2. `sqlglot-rust` 只允许出现在本 crate；其它 crate 需要新能力时，先按「先实测再封装」提升为 `engine::sql::*`
 3. 改表结构必须**新增**迁移文件；库文件路径只从 `migration::global_init` 取
 4. 全量编译与测试必须限制并发（`cargo check-all` / `cargo test-all` 别名已含 `-j 2`）：并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）（`LNK1102` / `STATUS_STACK_BUFFER_OVERRUN`）
-5. 需要外部服务的用例用 `#[ignore = "需要运行中的 MySQL 服务"]` 或环境变量守卫，默认 `cargo test` 不得依赖外部服务（现基线：`--lib` 23 项忽略）
+5. 需要外部服务的用例用 `#[ignore = "需要运行中的 MySQL 服务"]` 或环境变量守卫，默认 `cargo test` 不得依赖外部服务（现基线：`--lib` 24 项忽略）
 
 ## 测试与验证
 
 | 目标 | 命令 | 基线 |
 | --- | --- | --- |
-| 库单测 | `cargo test -p rds-engine --lib -j 2` | 301 通过 / 23 忽略 |
+| 库单测 | `cargo test -p rds-engine --lib -j 2` | **440 通过 / 24 忽略** |
+| 8 个真机探针 | `cargo test -p rds-engine --tests -j 2` | 32 通过（无端点时逐项跳过） |
 | sqlglot 探针 | `cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1` | 10 通过（报告式输出） |
 | 事务探针 | `cargo test -p rds-engine --test transaction_affinity -j 2` | 12 通过（无端点时逐项跳过） |
-| 全量 | `cargo test-all` | 以重测为准（2026-09-19 实测：**84 个目标 1963 通过 / 51 忽略 / 1 失败**；失败项是本机诊断脚本 `zz_fixture_probe`，属环境原因且已取消跟踪。全量台账见 `../../docs/architecture/module-status.md`） |
+| 全量 | `cargo test-all` | 以重测为准（2026-09-19 第二次复跑：**84 个目标 1970 通过 / 51 忽略 / 0 失败**；含本机诊断 `zz_fixture_probe` 1 项，项目自身套件为 83 目标 / 1969 项。全量台账见 `../../docs/architecture/module-status.md`） |
 
 ## 文档地图
 

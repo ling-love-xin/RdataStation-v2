@@ -396,7 +396,7 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
       <div class="kpi"><div class="n">200<small> 条</small></div><div class="l">大 schema 首屏</div><div class="d">超过 500 个对象就改走索引分页，「加载更多」按 <span class="mono">offset</span> 追加；大 schema 不进内存</div></div>
       <div class="kpi"><div class="n">1<small> 份索引</small></div><div class="l">分页 / 计数 / 搜索</div><div class="d"><span class="mono">metadata_index</span> 同时供三件事，冷启动内省后按 schema 幂等重建</div></div>
       <div class="kpi"><div class="n">1<small> 次</small></div><div class="l">每个缓存文件的固定开销</div><div class="d">连接池化后，「开文件 + 5 条 PRAGMA + 迁移校验」不再每次访问都付</div></div>
-      <div class="kpi"><div class="n">485<small> 项</small></div><div class="l">测试基线</div><div class="d">引擎 443 + 导航 42（2026-09-19 实测）；缓存与分页用「空连接管理器」反证命中</div></div>
+      <div class="kpi"><div class="n">491<small> 项</small></div><div class="l">测试基线</div><div class="d">引擎 440 + 导航 51（2026-09-19 实测）；缓存与分页用「空连接管理器」反证命中</div></div>
     </div>
   </div>
 
@@ -925,8 +925,8 @@ Feature ▸ workbench_shell     <span class="cm">视图共用资产：尺寸常�
         <div class="foot">修门禁时先临时撤掉它，确认测试<b>变红</b>再恢复——避免「测了但测不到」</div>
       </div>
     </div>
-    <div class="code">引擎侧单测   cargo test -p rds-engine --lib     <span class="cm">→ 443 passed / 0 failed（24 ignored）</span>
-导航侧单测   cargo test -p rds-database --lib   <span class="cm">→  42 passed / 0 failed</span>
+    <div class="code">引擎侧单测   cargo test -p rds-engine --lib     <span class="cm">→ 440 passed / 0 failed（24 ignored）</span>
+导航侧单测   cargo test -p rds-database --lib   <span class="cm">→  51 passed / 0 failed</span>
 契约检查     cargo check -p rds-engine -p rds-database --lib   <span class="cm">→ 零警告</span></div>
     <div class="code"><b>真机回归口径</b>（四类库 × 项目 / 全局 / 共享，按树的实际层级逐条核对）
 MySQL       mall_business → 表 (7) / 存储过程·函数 (4) → order → 16 列
