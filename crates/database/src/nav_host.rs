@@ -36,7 +36,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Window};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
-use crate::model::{PropertyRequest, SchemaRef, TableRef};
+use crate::model::{ObjectRef, PropertyRequest};
 
 /// 独立会话探测入口（连接 id + 项目根 → 可展示结果文案）。
 ///
@@ -168,18 +168,20 @@ pub trait NavHost: 'static {
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App);
 
     /// 打开 Mock 面板；`source` 给定时按**源库表**定向（读源库结构 + 预填目标表名）。
-    fn open_mock_panel(&self, source: Option<TableRef>, cx: &mut App);
+    ///
+    /// 期望 `kind` = `Table` / `View`（宿主只按限定名取结构，不区分类别）。
+    fn open_mock_panel(&self, source: Option<ObjectRef>, cx: &mut App);
 
     /// 【M8】在洞察面板里看一张源表的统计（导航右键「查看统计」）。
     ///
     /// 取样 SQL 由**宿主**构造（只有它知道该驱动方言下的限定名写法），
     /// 洞察侧负责取样成临时表并出画像（架构 D58）。
-    fn open_insight_table(&self, source: TableRef, cx: &mut App);
+    fn open_insight_table(&self, source: ObjectRef, cx: &mut App);
 
     /// 【M8】在洞察面板里看这个 Schema 的**结构**（导航右键「结构洞察」）。
     ///
-    /// 与 [`Self::open_insight_table`] 分工：那个看**数据**（取样 → 表探查），
+    /// 期望 `kind` = `Schema`。与上一条的区别：那个看**数据**（取样 → 表探查），
     /// 这个看**结构**（源库内省 `information_schema` → 外键候选 / 类型不一致 /
     /// 孤立表 / 冗余列）——两套完全不同的取数，不共用通道。
-    fn open_insight_schema(&self, schema: SchemaRef, cx: &mut App);
+    fn open_insight_schema(&self, schema: ObjectRef, cx: &mut App);
 }

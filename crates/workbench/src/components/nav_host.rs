@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 
-use database::model::{PropertyRequest, SchemaRef, TableRef};
+use database::model::{ObjectRef, PropertyRequest};
 use database::nav_host::{ConnectionProbe, NavFilters, NavHost};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
@@ -238,37 +238,34 @@ impl NavHost for WorkbenchNavHost {
         self.shared.open_right_panel(panel, cx);
     }
 
-    fn open_mock_panel(&self, source: Option<TableRef>, cx: &mut App) {
-        // `database::model::TableRef` → `mock::mock_view::SchemaRequest`：
+    fn open_mock_panel(&self, source: Option<ObjectRef>, cx: &mut App) {
+        // `engine::ObjectRef` → `mock::mock_view::SchemaRequest`：
         // 两侧不想互相依赖，转换落在宿主。
         let source = source.map(|t| mock::mock_view::SchemaRequest {
             conn_id: t.conn_id,
             catalog: t.catalog,
             schema: t.schema,
-            table: t.table,
+            table: t.name,
         });
         self.shared.open_mock_panel(source, cx);
     }
 
-    fn open_insight_table(&self, source: TableRef, cx: &mut App) {
+    fn open_insight_table(&self, source: ObjectRef, cx: &mut App) {
         // 采集 SQL 在宿主拼：只有这里同时知道「连接是什么驱动」与「洞察要什么形状」（D58）。
         // 引号与拼装口径在 `Shared::insight_sample_sql`（与分析存档的「查看统计」同一处）。
         let qualified_sql = self.shared.insight_sample_sql(
             &source.conn_id,
-            &[&source.catalog, &source.schema, &source.table],
+            &[&source.catalog, &source.schema, &source.name],
         );
 
-        let label = if source.schema.is_empty() {
-            format!("{}.{}", source.catalog, source.table)
-        } else {
-            format!("{}.{}.{}", source.catalog, source.schema, source.table)
-        };
+        // 展示文案用引用的点分限定名（空段略去）——与 `insight_sample_sql` 同一口径。
+        let label = source.dotted();
         let sample = insight::SampleSource::new(source.conn_id.clone(), qualified_sql, label);
         self.shared
-            .open_insight_source_table(sample, source.table, cx);
+            .open_insight_source_table(sample, source.name, cx);
     }
 
-    fn open_insight_schema(&self, schema: SchemaRef, cx: &mut App) {
+    fn open_insight_schema(&self, schema: ObjectRef, cx: &mut App) {
         self.shared.open_insight_schema(schema, cx);
     }
 }

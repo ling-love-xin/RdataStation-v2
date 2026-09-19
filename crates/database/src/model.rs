@@ -305,31 +305,46 @@ pub struct PropertyRequest {
     pub driver: String,
 }
 
-/// 数据类对象的四元组定位（Mock 生成 / 洞察的入口参数）。
+/// 统一引用 → 属性面板定位：`ObjectKind` 与 `PropertyKind` 的**唯一映射处**。
 ///
-/// 与 [`PropertyRef`] 的区别：这里只要「连哪个库的哪张表」，不带来源域与对象种类。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TableRef {
-    pub conn_id: String,
-    /// Catalog / 数据库
-    pub catalog: String,
-    pub schema: String,
-    /// 表 / 视图名
-    pub table: String,
+/// 两个枚举属于不同域，不该合并：`ObjectKind`（engine）是数据层的**可寻址闭集**，
+/// `PropertyKind`（本 crate）是属性面板的**展示类别**（多一个 `Connection`，并被面板的分支判断用）。
+/// 所以映射只留这一份，导航搜索结果（`nav_view`）与 Quick Open（`workbench`）都调它。
+pub fn property_ref_of(object: &ObjectRef) -> PropertyRef {
+    let kind = match object.kind {
+        ObjectKind::Catalog => PropertyKind::Catalog,
+        ObjectKind::Schema => PropertyKind::Schema,
+        ObjectKind::Table => PropertyKind::Table,
+        ObjectKind::View => PropertyKind::View,
+        ObjectKind::Column => PropertyKind::Column,
+        ObjectKind::Routine => PropertyKind::Routine,
+        ObjectKind::Sequence => PropertyKind::Sequence,
+        ObjectKind::Trigger => PropertyKind::Trigger,
+    };
+    // 空串 = 该层不存在（引用用普通字符串表达同一件事，`PropertyRef` 用 `Option`）。
+    let opt = |segment: &str| Some(segment.to_string()).filter(|value| !value.is_empty());
+    PropertyRef {
+        conn_id: object.conn_id.clone(),
+        source: NavSource::from_conn_id(&object.conn_id),
+        catalog: opt(&object.catalog),
+        schema: opt(&object.schema),
+        parent: opt(&object.parent),
+        name: object.name.clone(),
+        kind,
+    }
 }
 
-/// Schema 定位（M8 结构洞察用）：连接 + catalog + schema。
+/// 数据类对象的引用（Mock 生成 / 洞察的入口参数）——**用 `engine::ObjectRef`**。
 ///
-/// 与 [`TableRef`] 同形但停在 schema 层：结构报告是 **schema 级**的
-/// （外键候选 / 类型不一致 / 孤立表 / 冗余列按 schema 汇总）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaRef {
-    pub conn_id: String,
-    /// Catalog / 数据库（MySQL 里就是库名）
-    pub catalog: String,
-    /// Schema（MySQL 侧可能为空——那边库即 schema）
-    pub schema: String,
-}
+/// 历史上这里是 `TableRef`（四元组）与 `SchemaRef`（三元组）两个同形类型；
+/// 它们与「搜索命中」「索引行」无法对口（各自拼名字、没有共同比较基准），
+/// 已收敛为 [`engine::ObjectRef`]（连接 + 类别 + catalog / schema / 父对象 / 名字）：
+/// - 表 / 视图 → `ObjectRef::table` / `ObjectRef::view`（`kind` 区分）；
+/// - 结构洞察 → `ObjectRef::schema`。
+///
+/// 引用类型放在 `engine` 而不是本 crate：它是**数据层身份**，新消费者（如搜索 / 命令 crate）
+/// 属于 Feature 层，不应为了一个寻址类型反向依赖导航视图。
+pub use engine::{ObjectKind, ObjectRef};
 
 /// 导航状态（展开态 / 选中 / 过滤），持久化到 `navigator_state`。
 ///

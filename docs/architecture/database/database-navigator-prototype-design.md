@@ -380,8 +380,8 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 | `start_cache_warming` / `get_warming_progress` / `cancel_cache_warming` | 导航服务编排 `build_metadata_index` + `is_syncing` / `cancel_sync`（预热调度器为本模块新增） |
 | `check_cache_version` / `execute_cache_migration` | `CacheVersionManager` / `CURRENT_CACHE_VERSION` |
 | 增量同步（V7） | `detect_all_changes` / `incremental_sync` / `save_snapshot` |
-| 分块读取 | `get_tables_chunk` |
-| FTS 搜索 | `search_fts` |
+| 分块读取 | `get_objects_chunk`（表 / 视图各自分块；2026-09-18 接） |
+| FTS 搜索 | `search_fts` + `rebuild_fts_schema`（写入侧 schema 级；2026-09-19 接，消费方 = Quick Open `#` 档） |
 | 内省级别 | `IntrospectionLevel` + `set_level` / `get_level` |
 
 ## 5. 连接 / 断开
@@ -452,7 +452,10 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 - 本地筛选：过滤已加载节点的名称与标签，命中自动展开祖先链。
 - **facet 语法（v7，✅ 已实现 2026-09-13）**：`scope:global` / `type:postgres` / `driver:native` / `tag:prod`（`source:` 为 `scope:` 历史别名）。解析出的 token 作为**额外约束与面板 chips 叠加（AND）**，不写回 chips；未识别的 token 原样留在自由文本，避免“输入中丢字”。另：chips 侧的 `type` 存 `drivers.type_id`、`driver` 存驱动 id。
 - **已保存视图（规划）**：可把 `scope:project tag:prod type:mysql` 存为命名视图，避免重复点 chips（存储与交互待定，见 §11）。
-- FTS 全量搜索（≥2 字符）：`MetadataCacheOps::search_fts`，snippet 高亮；结果落**中央编辑区**专用面板。
+- ~~FTS 全量搜索（≥2 字符）：`MetadataCacheOps::search_fts`，snippet 高亮；结果落**中央编辑区**专用面板。~~
+  **已按实现更新**（2026-09-19）：名称档（`search_index`，≥ 2 字）落**导航面板树顶结果区**；
+  内容档（`search_fts`，trigram，≥ 3 字）在 **Quick Open 的 `#` 档**（`workbench/src/quick_open/`），
+  两档都不落编辑区，命中行单击开属性面板。
 - `↑↓` 选择、`Enter` 打开、`Esc` 清空；300ms 防抖、上限 500。
 
 ### 6.4 状态持久化：SQLite 表 vs K-V 文件（选型建议）
@@ -547,7 +550,7 @@ flowchart TD
     K -- 是 --> L[即时渲染]
     K -- 否 --> M[L3 内省 + 进度] --> N[增量回写 L2/L1] --> L
     E --> O[右键 → 查看数据 / 生成 SQL / Mock / 移动到分组]
-    E --> P[搜索 → FTS → 结果落编辑区]
+    E --> P[搜索 → 名称档落树顶结果区 / 内容档在 Quick Open # 档]
     E --> Q[刷新 → 清 L1 / L2 stale → 增量重载]
     F --> R[断开 → 关闭运行时连接, 保留 L2 与状态]
 ```

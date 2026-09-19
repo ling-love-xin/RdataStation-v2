@@ -118,6 +118,27 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 
 **全局纪律［档］**：路径只走 `paths::*`；启动**第一条语句**重定向进程 `TEMP/TMP/TMPDIR`（`app/src/main.rs:34`）；测试数据根由 `paths` 的 `test-support` 自动隔离（有静态契约测试）。
 
+### 3.1 对象模型：四族 + 一条引用［验］
+
+数据层封装的不是「一套 Database / Schema / Table 领域对象」，而是四族 + 一条引用（2026-09-19 实查）：
+
+| 族 | 类型 | 定义处 |
+| --- | --- | --- |
+| **值 / 结果** | `QueryResult` · `Row` · `Value` · `ArrowBatch` · `Stream` | `shared/src/{models,stream,arrow}.rs` |
+| **连接** | `ConnectionConfig` / `ConnectionInfo`（运行时）· `ConnectionInfo` / `ConnectionRecord`（持久化）· `ConnectionDraftRow` · `AuthConfig` / `Environment` · `Ssl/Ssh/ProxyConfig`（connection crate） | 各自 store |
+| **结构** | 驱动侧 `SchemaObject` / `ColumnDetail` / `IndexDetail` / `ConstraintDetail` · 落盘侧 `IndexEntry` / `IndexSearchHit` · L1 `MetadataCacheKey/Value` · 视图侧 `NavNode` / `NavPath` / `PropertyRef` | `driver/traits.rs`、`persistence/metadata_cache.rs`、`cache/`、`database/model.rs` |
+| **结论** | `TableProfile` / `ColumnStats` / `QualityScore` … | `insight/src/model/types.rs` |
+| **引用**（跨模块寻址） | `ObjectRef` + `ObjectKind`（连接 + 类别 + catalog / schema / 父对象 / 名字）· `key()`（与导航树节点 key 同构）· `from_index_hit()`（索引命中 → 引用） | `engine/src/refs.rs`，`pub use` 到 engine 根 |
+
+**引用为什么放 engine**：它是数据层身份，不能住在导航视图里——搜索 / 命令这类 Feature 不该为了一个寻址类型反向依赖 `database`。
+**本次收敛**（2026-09-19）：删掉 `database::model::{TableRef, SchemaRef}` 两个同形类型 → `ObjectRef`；
+`ObjectKind → PropertyKind` 的映射只留 `database::model::property_ref_of` 一处；Quick Open 的元数据行键改用 `ObjectRef::key()`
+（它之前自拼「连接 + 种类 + 父对象 + 名字」，**不含 catalog / schema**，`sales.orders` 与 `archive.orders` 会撞键）。
+
+**仍存的多份表示（未收敛）**：表的五份（驱动 `SchemaObject` / L2 `tables` / `IndexEntry` / `NavNode` / `Insight TableColumnMeta`）；
+`shared/src/types.rs` 整模块（27 个 v1 DTO：`DatabaseMeta` / `SchemaMeta` / `TableMeta` / `ColumnMeta` …）在 v2 **零消费**；
+无 `TableId` / `SchemaId` 这类稳定 ID（跨模块引用靠名字，L2 自增 id 与导航拼串 key 不互通）。
+
 ---
 
 ## 4. 缓存设计
@@ -150,13 +171,13 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 | 多 schema 并发预热 | `MetadataCachePool`（连接复用） | ✅ **本日接线**（同步形态；旧版的异步+信号量正是它零调用的原因） |
 | schema 级统计 | `get_schema_object_counts` | ✅ **已接线**（2026-09-18）：`NavCache::object_counts` 供文件夹标题计数与分页阈值判断。注：索引只写 schema/table/view/column，故 `routine_count` 恒 0（例程仍走实时内省） |
 | 同步状态与进度 | `update_sync_status` / `get_sync_status` | ❌ 零调用（进度今天走 `nav_jobs` 的原子量，不落表） |
-| 元数据搜索 | FTS（`sync_fts_index` / `search_fts`） | ❌ 写侧从未插入（只有 `delete_schema` 在删），**且其“视图”插入语句引用了不存在的 `views` 表**（迁移里只有 `view_definitions`）——真接线前先要修。⚠️ 名称搜索已于 2026-09-18 接上（走 `metadata_index`，见“分页”行） |
+| 元数据搜索 | FTS（`rebuild_fts_schema` / `search_fts`） | ✅ **内容档已接**（2026-09-19）：迁移 011 改存内容 + trigram；写入挂在 `rebuild_schema_index` 同批（schema 级幂等）；消费方 = Quick Open 的 `#` 档（≥ 3 字）。两个旧硬伤已修：旧写侧引用不存在的 `views` 表、旧表 contentless 读不到身份。**仍缺**：源码（定义文本）搜索 |
 | 增量同步（只拉变化） | `incremental_sync` + 快照 + `sync_operations` | ❌ 零调用（有意不补，同上） |
 | **预热 / 邻接预取** | C1 `warm_schemas` / C2 `prefetch_columns` | ✅ **已接线**（`nav_jobs.rs:234,252`、`nav_view.rs:4056`） |
 | 首屏只取当前层 | cache-aside 懒加载 | ✅ 活（schema / 表 / 视图 / 列） |
 
-**结论（2026-09-18 更新）**：意图里“让大库依然快”的几件关键事现已落地——**L1 回填、分块索引 + 导航侧分页消费、内省级别、连接池、计数、名称搜索**；仍故意不补的是 **FTS 内容搜索与增量同步**（导航侧尚无消费者），
-因而今天能保证“小库秒开”且**大 schema 首屏可控（只取一页）**、**跨连接按名称找对象**；尚未兑现的是“按注释 / 数据类型搜”与“搜到的对象在树中定位”。
+**结论（2026-09-19 更新）**：意图里“让大库依然快”的几件关键事现已落地——**L1 回填、分块索引 + 导航侧分页消费、内省级别、连接池、计数、搜索两档（名称 + 内容）**；仍故意不补的是 **增量同步与身份指纹键**（尚无消费者），
+因而今天能保证“小库秒开”且**大 schema 首屏可控（只取一页）**、**跨连接按名称 / 按注释找对象**；尚未兑现的是“搜索后一键定位到树上那一层”与“源码（定义文本）搜索”。
 
 **L2 路径［验］**：全局 `{system}/global_metadata/conn_{id}.sqlite`；项目 `{project}/meta/connection_metadata/conn_{id}.sqlite`。
 

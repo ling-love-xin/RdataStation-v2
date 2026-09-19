@@ -35,8 +35,8 @@ use crate::commands::{
     NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
 };
 use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
-    PropertyRequest, SchemaRef, TableRef,
+    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
+    PropertyRef, PropertyRequest,
 };
 use crate::nav_host::{NavFilters, NavHost};
 use crate::sql_gen::DmlKind;
@@ -388,21 +388,36 @@ fn insight_schema_target(
     kind: &NavNodeKind,
     path: Option<&NavPath>,
     conn_id: &str,
-) -> Option<SchemaRef> {
+) -> Option<ObjectRef> {
     match (kind, path) {
         (
             NavNodeKind::Table { .. } | NavNodeKind::View,
-            Some(NavPath::Table { catalog, schema, .. }),
-        ) => Some(SchemaRef {
-            conn_id: conn_id.to_string(),
-            catalog: catalog.clone(),
-            schema: schema.clone(),
-        }),
-        (NavNodeKind::Schema, Some(NavPath::Schema { catalog, schema })) => Some(SchemaRef {
-            conn_id: conn_id.to_string(),
-            catalog: catalog.clone(),
-            schema: schema.clone(),
-        }),
+            Some(NavPath::Table {
+                catalog, schema, ..
+            }),
+        )
+        | (NavNodeKind::Schema, Some(NavPath::Schema { catalog, schema })) => {
+            Some(ObjectRef::schema(conn_id, catalog.clone(), schema.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// 表 / 视图节点 → Mock · 洞察表入口的引用靶。
+///
+/// **kind 按节点类型给**：视图必须标成 `View`——引用是跨屏身份，标成表会传染到
+/// 属性面板 / 洞察 / 将来的“在树中定位”（曾经就一律标成了 `Table`）。
+/// 非数据类节点不给靶。
+fn nav_data_target(
+    kind: &NavNodeKind,
+    conn_id: &str,
+    catalog: String,
+    schema: String,
+    name: String,
+) -> Option<ObjectRef> {
+    match kind {
+        NavNodeKind::Table { .. } => Some(ObjectRef::table(conn_id, catalog, schema, name)),
+        NavNodeKind::View => Some(ObjectRef::view(conn_id, catalog, schema, name)),
         _ => None,
     }
 }
@@ -587,34 +602,35 @@ fn nav_node_matches(
     }
 }
 
+/// 索引命中 → 统一引用（`None` = 该类别不可寻址）。
+///
+/// 这是「搜索」与「导航树 / 属性面板」的唯一对接口：命中行必须走 [`ObjectRef`]，
+/// 否则搜索侧的键与树上的键就会各拼一套。
+fn nav_search_hit_ref(hit: &nav_jobs::SearchHit) -> Option<ObjectRef> {
+    ObjectRef::from_index_hit(
+        &hit.conn_id,
+        &hit.object_type,
+        &hit.object_name,
+        hit.parent_name.as_deref(),
+        hit.catalog.as_deref(),
+        hit.schema.as_deref(),
+    )
+}
+
 /// 索引命中 → 属性面板定位（`None` = 该类别暂不支持属性定位）。
 ///
 /// 列命中要带 `parent`（所属表）：属性面板靠它区分「哪张表的列」。
+/// 类别映射在 `model::property_ref_of`（导航搜索与 Quick Open 共用一处）。
 fn nav_search_hit_property(hit: &nav_jobs::SearchHit) -> Option<PropertyRef> {
-    let kind = match hit.object_type.as_str() {
-        "table" => PropertyKind::Table,
-        "view" => PropertyKind::View,
-        "column" => PropertyKind::Column,
-        "schema" => PropertyKind::Schema,
-        _ => return None,
-    };
-    Some(PropertyRef {
-        conn_id: hit.conn_id.clone(),
-        source: NavSource::from_conn_id(&hit.conn_id),
-        catalog: hit.catalog.clone(),
-        schema: hit.schema.clone(),
-        parent: hit.parent_name.clone(),
-        name: hit.object_name.clone(),
-        kind,
-    })
+    nav_search_hit_ref(hit).map(|object| crate::model::property_ref_of(&object))
 }
 
 /// 索引命中 → 合成节点类别（只为取图标颜色，不参与树挂载）。
 fn nav_search_hit_kind(hit: &nav_jobs::SearchHit) -> NavNodeKind {
-    match hit.object_type.as_str() {
-        "table" => NavNodeKind::Table { row_estimate: None },
-        "view" => NavNodeKind::View,
-        "column" => NavNodeKind::Column {
+    match nav_search_hit_ref(hit).map(|r| r.kind) {
+        Some(ObjectKind::Table) => NavNodeKind::Table { row_estimate: None },
+        Some(ObjectKind::View) => NavNodeKind::View,
+        Some(ObjectKind::Column) => NavNodeKind::Column {
             data_type: String::new(),
             nullable: true,
             primary: false,
@@ -625,15 +641,13 @@ fn nav_search_hit_kind(hit: &nav_jobs::SearchHit) -> NavNodeKind {
 }
 
 /// 命中行的类别短标签（表 / 视图 / 模式 / 列）。
+///
+/// 词汇表在 `engine::ObjectKind::label`（与索引串一一对应）；
+/// 这里的未知兜底是必需的：索引里可能出现不可寻址的类别（见 `parse_index_str`）。
 fn nav_object_type_label(object_type: &str) -> &'static str {
-    match object_type {
-        "table" => "表",
-        "view" => "视图",
-        "schema" => "模式",
-        "column" => "列",
-        "routine" => "例程",
-        _ => "对象",
-    }
+    ObjectKind::parse_index_str(object_type)
+        .map(ObjectKind::label)
+        .unwrap_or("对象")
 }
 
 /// 搜索词是否够格打一次索引搜索（太短时命中面过大，且首字符几乎必然还要改）。
@@ -3632,11 +3646,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 .hover(move |s| s.bg(hover))
                 .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
                     if node.has_children {
-                        if expanded_eff {
-                            "\u{25be}"
-                        } else {
-                            "\u{25b8}"
-                        }
+                        if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
                     } else {
                         ""
                     },
@@ -3731,6 +3741,13 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             };
             // 结构洞察的靶要在闭包**外**算好（`node` 的借用活不过 `'static` 闭包）
             let insight_schema = insight_schema_target(&node.kind, menu_path.as_ref(), &conn_id);
+            // Mock / 洞察表入口的引用靶同理；**kind 按节点类型给**：视图不能标成表
+            // ——引用是跨屏身份，标错会传染到属性面板 / 洞察 / 将来的“在树中定位”。
+            let data_target = dml_target
+                .clone()
+                .and_then(|(catalog, schema, name)| {
+                    nav_data_target(&node.kind, &conn_id, catalog, schema, name)
+                });
             move |menu, window, cx| {
                 let mut menu = menu;
                 if let Some(prop0) = menu_prop.clone() {
@@ -3872,14 +3889,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 });
                 if data_like {
                     let e = entity.clone();
-                    // 定向请求：连接 + 源库表（catalog / schema / 表名）——Mock 面板据此
+                    // 定向请求：连接 + 源库对象（catalog / schema / 名字）——Mock 面板据此
                     // 读源库结构并预填目标表名（v1 主路径：源库结构 → 造新数据）。
-                    let request = dml_target.clone().map(|(catalog, schema, table)| TableRef {
-                        conn_id: conn_id.clone(),
-                        catalog,
-                        schema,
-                        table,
-                    });
+                    let request = data_target.clone();
                     // 洞察那份先克隆出来：Mock 的闭包会把 `request` move 进去
                     let request_for_insight = request.clone();
                     menu = menu.item(PopupMenuItem::new("生成 Mock 数据").on_click(
@@ -3894,24 +3906,21 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     // 这里只给「哪条连接 + 哪张表」（D58 的统一入口）。
                     if let Some(source) = request_for_insight {
                         let e = entity.clone();
-                        menu = menu.item(PopupMenuItem::new("查看统计").on_click(
-                            move |_, _, app| {
+                        menu =
+                            menu.item(PopupMenuItem::new("查看统计").on_click(move |_, _, app| {
                                 let source = source.clone();
                                 e.update(app, |this, cx| this.host.open_insight_table(source, cx));
-                            },
-                        ));
+                            }));
                     }
                 }
                 // 【M8】结构洞察（Schema 级）：表 / 视图用它所在的 schema，schema 节点用自己。
                 // 与「查看统计」分工：那个看**数据**（取样），这个看**结构**（源库内省）。
                 if let Some(target) = insight_schema.clone() {
                     let e = entity.clone();
-                    menu = menu.item(PopupMenuItem::new("结构洞察").on_click(
-                        move |_, _, app| {
-                            let target = target.clone();
-                            e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
-                        },
-                    ));
+                    menu = menu.item(PopupMenuItem::new("结构洞察").on_click(move |_, _, app| {
+                        let target = target.clone();
+                        e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
+                    }));
                 }
                 menu = menu.item({
                     let e = entity.clone();
@@ -3994,7 +4003,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         // 否则用户会以为“搜不到 = 库里没有”（索引/FTS 搜索尚未接，见文档 §4.5）。
         let filtering = !self.nav.borrow().filter.is_empty();
         let label = if to_fetch > 0 {
-            let scope = if filtering { "；筛选仅覆盖已加载" } else { "" };
+            let scope = if filtering {
+                "；筛选仅覆盖已加载"
+            } else {
+                ""
+            };
             format!("加载更多（余 {to_fetch} / 共 {total}{scope}）")
         } else {
             format!("显示更多（余 {hidden}）")
@@ -4157,12 +4170,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let muted = cx.theme().colors.muted_foreground;
         let max = ui::NAV_SEARCH_MAX_ROWS;
 
-        let title = if nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator) && hits.is_empty() {
+        let title = if nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator)
+            && hits.is_empty()
+        {
             format!("索引搜索：{query}（搜索中…）")
         } else if hits.is_empty() {
             format!("索引搜索：{query}（无命中；已搜 {searched} 个有缓存的连接）")
         } else {
-            format!("索引搜索：{query}（{} 条，覆盖 {searched} 个连接）", hits.len())
+            format!(
+                "索引搜索：{query}（{} 条，覆盖 {searched} 个连接）",
+                hits.len()
+            )
         };
 
         let mut block = div().v_flex().w_full().gap_0p5().pb_1().child(
@@ -4193,7 +4211,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
     /// 一条搜索命中行：色点 + 名称（高亮命中）+ 类别 / 归属（schema · 连接）。
     ///
     /// 单击 → 打开属性面板：搜索结果的价值就在「还没展开到那层时也能立刻看结构」。
-    fn render_search_hit(&self, hit: &nav_jobs::SearchHit, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_search_hit(
+        &self,
+        hit: &nav_jobs::SearchHit,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let hover = cx.theme().colors.list_hover;
@@ -4214,17 +4236,19 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let kind_label = nav_object_type_label(&hit.object_type);
 
         let entity = cx.entity();
+        let object = nav_search_hit_ref(hit);
         let property = nav_search_hit_property(hit);
         let conn_label = hit.conn_label.clone();
         let driver = hit.driver.clone();
-        let id = format!(
-            "nav-search-{}-{}-{}-{}-{}",
-            hit.conn_id,
-            hit.object_type,
-            hit.schema.clone().unwrap_or_default(),
-            hit.parent_name.clone().unwrap_or_default(),
-            hit.object_name
-        );
+        // 元素 id 用**统一引用 key**（连接 + 类别段一路到底）：同一对象在树与结果区
+        // 得到同一个 key，而前缀 `nav-search-` 保证它不会与树上那行的 id 撞车。
+        let id = match &object {
+            Some(object) => format!("nav-search-{}", object.key()),
+            None => format!(
+                "nav-search-{}-{}-{}",
+                hit.conn_id, hit.object_type, hit.object_name
+            ),
+        };
 
         div()
             .id(id)
@@ -4328,7 +4352,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     return;
                 }
                 // 搜索：同一轮询泵回填（搜索框的跨连接索引搜索）。
-                let search_results = nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
+                let search_results =
+                    nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
                 if !search_results.is_empty()
                     && weak
                         .update(cx, |this, cx| this.apply_search_results(search_results, cx))
@@ -5175,11 +5200,13 @@ mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
     use super::{
-        insight_schema_target, nav_merge_page, nav_object_type_label, nav_order_members, nav_reorder,
-        nav_search_hit_property, nav_search_query_ready, nav_step, nav_type_short_label,
-        parse_nav_search,
+        insight_schema_target, nav_data_target, nav_merge_page, nav_object_type_label,
+        nav_order_members, nav_reorder, nav_search_hit_property, nav_search_hit_ref,
+        nav_search_query_ready, nav_step, nav_type_short_label, parse_nav_search,
     };
-    use crate::model::{NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, SchemaRef};
+    use crate::model::{
+        NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
+    };
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -5194,17 +5221,16 @@ mod tests {
             schema: "public".into(),
             table: "orders".into(),
         };
-        let expect = |target: Option<SchemaRef>| {
+        let expect = |target: Option<ObjectRef>| {
             let t = target.expect("应当给靶");
             assert_eq!(t.conn_id, "G_1");
             assert_eq!(t.catalog, "shop");
             assert_eq!(t.schema, "public");
+            assert_eq!(t.kind, ObjectKind::Schema, "结构洞察的靶一律是 Schema 引用");
         };
 
         expect(insight_schema_target(
-            &NavNodeKind::Table {
-                row_estimate: None,
-            },
+            &NavNodeKind::Table { row_estimate: None },
             Some(&table_path),
             "G_1",
         ));
@@ -5223,41 +5249,46 @@ mod tests {
         ));
 
         // 列 / 例行（没有 schema 归属）/ catalog（跨方言语义未定）都不给
-        assert!(insight_schema_target(
-            &NavNodeKind::Column {
-                data_type: "int".into(),
-                nullable: false,
-                primary: false,
-                foreign: false,
-            },
-            None,
-            "G_1",
-        )
-        .is_none());
-        assert!(insight_schema_target(
-            &NavNodeKind::Catalog,
-            Some(&NavPath::Catalog {
-                catalog: "shop".into(),
-            }),
-            "G_1",
-        )
-        .is_none());
+        assert!(
+            insight_schema_target(
+                &NavNodeKind::Column {
+                    data_type: "int".into(),
+                    nullable: false,
+                    primary: false,
+                    foreign: false,
+                },
+                None,
+                "G_1",
+            )
+            .is_none()
+        );
+        assert!(
+            insight_schema_target(
+                &NavNodeKind::Catalog,
+                Some(&NavPath::Catalog {
+                    catalog: "shop".into(),
+                }),
+                "G_1",
+            )
+            .is_none()
+        );
     }
 
     /// 索引命中 → 属性定位：表带 catalog/schema，列带所属表（parent），未知类别不接。
     #[test]
     fn search_hit_maps_to_property_ref() {
-        let hit = |object_type: &str, name: &str, parent: Option<&str>| crate::nav_jobs::SearchHit {
-            conn_id: "P_conn_hit".to_string(),
-            conn_label: "本地库".to_string(),
-            driver: "duckdb".to_string(),
-            object_type: object_type.to_string(),
-            object_name: name.to_string(),
-            parent_name: parent.map(str::to_string),
-            catalog: Some("main".to_string()),
-            schema: Some("public".to_string()),
-            snippet: None,
-        };
+        let hit =
+            |object_type: &str, name: &str, parent: Option<&str>| crate::nav_jobs::SearchHit {
+                conn_id: "P_conn_hit".to_string(),
+                conn_label: "本地库".to_string(),
+                driver: "duckdb".to_string(),
+                object_type: object_type.to_string(),
+                object_name: name.to_string(),
+                parent_name: parent.map(str::to_string),
+                catalog: Some("main".to_string()),
+                schema: Some("public".to_string()),
+                snippet: None,
+            };
 
         let table = nav_search_hit_property(&hit("table", "orders", None)).expect("表命中应可定位");
         assert_eq!(table.kind, PropertyKind::Table);
@@ -5302,6 +5333,84 @@ mod tests {
             "对象",
             "未知类别不得显示成空白"
         );
+    }
+
+    /// Mock / 洞察表入口的引用靶：视图必须标成 `View`（曾经一律标成 `Table`）。
+    #[test]
+    fn data_target_kind_follows_the_node() {
+        let target = |kind: NavNodeKind| {
+            nav_data_target(&kind, "P_1", "shop".into(), "public".into(), "orders".into())
+        };
+        assert_eq!(
+            target(NavNodeKind::Table { row_estimate: None })
+                .expect("表应给靶")
+                .kind,
+            ObjectKind::Table
+        );
+        assert_eq!(
+            target(NavNodeKind::View).expect("视图应给靶").kind,
+            ObjectKind::View,
+            "视图不能标成表（跨屏身份靠 kind 区分）"
+        );
+        assert!(
+            target(NavNodeKind::Schema).is_none(),
+            "非数据类节点不给靶"
+        );
+    }
+
+    /// `ObjectRef` 的 key 与导航树节点 key **同构**——这是搜索命中与树节点
+    /// 判定“是不是同一个对象”的契约（将来「在树中定位」直接靠它，不再各拼一套）。
+    #[test]
+    fn object_ref_key_matches_nav_node_key() {
+        // 表：树上的 key = child_key(conn, [catalog, schema, name])
+        let table = ObjectRef::table("P_1", "shop", "public", "orders");
+        assert_eq!(
+            table.key(),
+            NavNode::child_key("P_1", &["shop", "public", "orders"])
+        );
+
+        // 列：树上的 key = child_key(conn, [catalog, schema, 表, 列])
+        let column = ObjectRef::column("P_1", "shop", "public", "orders", "order_id");
+        assert_eq!(
+            column.key(),
+            NavNode::child_key("P_1", &["shop", "public", "orders", "order_id"])
+        );
+
+        // schema：树上的 key = child_key(conn, [catalog, schema])
+        let schema = ObjectRef::schema("G_1", "shop", "public");
+        assert_eq!(schema.key(), NavNode::child_key("G_1", &["shop", "public"]));
+
+        // 无 Catalog 层的驱动：导航侧把 catalog 同时当 schema（`load_folders(conn, c, c)`），
+        // 因此两边都拿到重复段——关键是一致，不是好看。
+        let no_schema = ObjectRef::table("G_1", "mall", "mall", "order");
+        assert_eq!(
+            no_schema.key(),
+            NavNode::child_key("G_1", &["mall", "mall", "order"])
+        );
+    }
+
+    /// 索引命中 → 统一引用 → 属性定位：走完这条通路后，字段与树节点那条路完全一致。
+    #[test]
+    fn search_hit_ref_agrees_with_tree_side_ref() {
+        let hit = crate::nav_jobs::SearchHit {
+            conn_id: "P_1".to_string(),
+            conn_label: "本地库".to_string(),
+            driver: "postgres".to_string(),
+            object_type: "column".to_string(),
+            object_name: "order_id".to_string(),
+            parent_name: Some("orders".to_string()),
+            catalog: Some("shop".to_string()),
+            schema: Some("public".to_string()),
+            snippet: None,
+        };
+        let from_hit = nav_search_hit_ref(&hit).expect("列命中应可寻址");
+        let from_tree = ObjectRef::column("P_1", "shop", "public", "orders", "order_id");
+        assert_eq!(
+            from_hit.key(),
+            from_tree.key(),
+            "搜索与树必须给出同一个 key"
+        );
+        assert_eq!(from_hit, from_tree);
     }
 
     /// 分页追加：按 key 去重，并返回新增条数（追加方靠它判断“是否翻到底”）。

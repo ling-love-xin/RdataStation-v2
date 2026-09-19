@@ -25,8 +25,8 @@ use gpui_kit::*;
 
 use database::model::PropertyRequest;
 
-use scratchpad::{ScratchpadDiffView, ScratchpadSearchView};
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
+use scratchpad::{ScratchpadDiffView, ScratchpadSearchView};
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
 pub use workbench_shell::model::QueryRequest;
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
@@ -568,7 +568,7 @@ impl Shared {
     /// 与 [`Self::open_insight_source_table`] 的区别：那个看**数据**（取样 → 表探查），
     /// 这个看**结构**（源库内省 → 外键候选 / 类型不一致 / 孤立表 / 冗余列）——
     /// 结构报告的取数在洞察侧的 `SchemaReportRequested`，这里只递目标。
-    pub fn open_insight_schema(&self, schema: database::model::SchemaRef, cx: &mut App) {
+    pub fn open_insight_schema(&self, schema: database::model::ObjectRef, cx: &mut App) {
         self.open_right_panel(RightPanel::Insight, cx);
         let panel = self.insight_panel.borrow().clone();
         if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
@@ -577,7 +577,8 @@ impl Shared {
                     InsightTarget::Schema {
                         conn_id: schema.conn_id,
                         database: schema.catalog,
-                        schema: Some(schema.schema),
+                        // 空串 = 该驱动无独立 schema 层（导航侧口径），这里回归 `Option` 语义。
+                        schema: Some(schema.schema).filter(|s| !s.is_empty()),
                     },
                     cx,
                 );
@@ -636,7 +637,7 @@ mod tests {
     // 注意：不通配导入（`use super::*` / `use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use std::path::PathBuf;
 
-    use super::{Shared, append_sql, OpenInEditorRequest};
+    use super::{OpenInEditorRequest, Shared, append_sql};
     use crate::view::ConnectionItem;
 
     /// 「打开查询」请求取出即清空（宿主 render 每帧取用，不得重复开文档）。
@@ -651,7 +652,11 @@ mod tests {
             run: true,
         };
         shared.request_query(request.clone());
-        assert_eq!(shared.take_query_request(), Some(request), "首次取出得到请求");
+        assert_eq!(
+            shared.take_query_request(),
+            Some(request),
+            "首次取出得到请求"
+        );
         assert!(
             shared.take_query_request().is_none(),
             "取出即清空：同一请求不会重复打开"

@@ -697,7 +697,7 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
       <tr>
         <td><b>跨连接搜索</b></td>
         <td>搜索框 ≥ 2 字符</td>
-        <td>后台扫每个连接自己的索引（中缀匹配）；单连接 50 条 / 总量 300 条封顶；渲染上限 100 条</td>
+        <td>后台扫每个连接自己的索引（名称档中缀匹配；内容档走 FTS，≥ 3 字）；单连接 50 条 / 总量 300 条封顶；渲染上限 100 条</td>
         <td>交互操作不该被超大 schema 拖死；<b>没有缓存的连接不建文件</b>（不会敲个字就落一堆空缓存）</td>
       </tr>
       <tr>
@@ -710,9 +710,9 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
 
     <div class="gate warn" style="margin-top:12px">
       <b>还没做（写清触发条件，不做「假装有」）</b>：
-      ① <b>FTS 内容搜索</b>（注释 / 数据类型 / 源码）——今天搜的是<b>名称</b>；前置是修 FTS 写侧（它的视图插入引用了不存在的 <span class="mono">views</span> 表）并让注释先进缓存；
+      ① <b>搜索结果「在树中定位」</b>——能在属性面板看，不能一键展开并高亮（键已统一，底座已备）；
       ② <b>虚拟列表</b>——首屏 200 条够用，但「1 万条同屏」未验证；
-      ③ <b>搜索结果在树中定位</b>——能在属性面板看，不能一键展开并高亮；
+      ③ <b>源码（定义文本）搜索</b>——内容档（FTS）只收名称 / 注释 / 数据类型；
       ④ <b>增量同步 / 身份指纹键</b>——今天是整 schema 重写、一连接一份缓存。
     </div>
     <div class="gate">

@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义已实现（V1–V10）· 2026-09-14** · `cargo test -p rds-workbench --lib`（52）/ `-p rds-database`（6）/ `-p rds-engine --lib`（249）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义已实现（V1–V10）· 2026-09-14** · 测试基线（2026-09-19 复跑，`-j 2`）：`cargo test -p rds-engine --lib`（449）/ `-p rds-database --lib`（45）/ `-p rds-workbench --lib`（110）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -261,7 +261,7 @@
 | B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提；2026-09-16 补 `set_member_order_all` / `list_ungrouped_order` / `set_ungrouped_order`） | 一连接可属多组；排序持久化 |
 | B2 | 标签服务：多值增删改 + 按标签检索 | ✅ 同上 + `connection_tags`（权威检索表；M3 保存同步 / 删除清理） | `tag:x` 检索命中 |
 | B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | ✅ 归组拖拽 + 连接排序 + 分组排序（拖拽 / 右键）+ 分组表单（名称/描述）均走通；分组头统一配色 |
-| B4 | 搜索：本地筛选 + FTS（`search_fts`）+ 结果落编辑区 + 高亮 | `navigator_service.rs` + `database_nav_panel.rs` + `crates/workbench/panels/` | 300ms 防抖；命中高亮；Enter 打开 |
+| B4 | 搜索：本地筛选 + 索引名称搜索（结果落**树顶结果区**）+ 高亮 | `navigator_service.rs` + `nav_jobs.rs` + `nav_view.rs` | ✅ 已实现（2026-09-18）：本地过滤命中已加载节点；跨连接索引搜索（中缀、≥ 2 字、无缓存不建文件）命中树顶结果区，单击开属性面板。**内容档（注释 / 数据类型）在 Quick Open 的 `#` 档**（2026-09-19），不在本面板；「结果落编辑区」未采（当年原型设想，已由树顶结果区 + Quick Open 取代） |
 | B5 | 属性面板：类型注册表（connection/table/view/column/index/constraint/routine/…）+ 右侧停靠面板（属性/数据 Tab） | `crates/database/src/property_panel.rs` + workbench 编辑区右侧面板 | 双击/右键打开；字段随类型变化；宽度记忆 |
 | B6 | 状态持久化：`navigator_state` 读写 + 800ms 防抖；分组展开态 | `navigator_service.rs` + engine `persistence` | 重启恢复展开/选中/过滤 |
 | B7 | 上下文菜单动作：查看数据、复制名/限定名、生成 SELECT/INSERT/UPDATE/DELETE → 编辑器；表 / 视图**拖拽**插入限定名 | `database_nav_panel.rs` + `crates/workbench/src/commands.rs` | 生成 SQL 落到编辑器；拖拽落 SQL 区插光标处、落其它位置追加 |
@@ -289,7 +289,7 @@
 4. 三级缓存：首次走 L3 写入 L2；重开面板命中 L2（<100ms）
 5. 分组：新建 → 拖入连接 → 同一连接出现在两个分组 → 折叠/计数/排序（手动优先，未排按名称）
 6. 标签：连接打多个标签 → 搜索 `tag:x` 命中
-7. 搜索：本地筛选 + FTS + 高亮 + Enter 落编辑区
+7. 搜索：本地筛选 + 索引名称搜索（树顶结果区）+ 高亮 + 单击开属性面板；内容档在 Quick Open `#` 档（≥ 3 字）
 8. 属性面板：双击表/列/索引/约束 → 字段正确；属性/数据 Tab 切换；宽度记忆
 9. 状态持久化：展开/选中/过滤 → 重启恢复；`navigator_state` 分区（project/global）正确
 10. 刷新：单表 / 单 schema / 单连接 / 全部；增量只落变更

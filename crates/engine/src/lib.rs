@@ -20,31 +20,22 @@ pub mod duckdb;
 pub mod logging;
 pub mod migration;
 pub mod persistence;
+pub mod refs;
 pub mod services;
 pub mod sql;
 
 // 重新导出常用错误类型（与 v1 core/mod.rs 一致）
 pub use shared::error::{
-    common_err, conn_err, invalid_arg, not_supported, query_err, storage_err, timeout, CommonError,
-    ConnectionError, CoreError, CoreResult, DatabaseError, ErrorCategory, StorageError,
-    TransactionState,
+    CommonError, ConnectionError, CoreError, CoreResult, DatabaseError, ErrorCategory,
+    StorageError, TransactionState, common_err, conn_err, invalid_arg, not_supported, query_err,
+    storage_err, timeout,
 };
 
 // 重新导出驱动层
 pub use driver::{
-    AutoDriverRegistrar,
-    DataSourceMeta,
-    Database,
-    DbPool,
-    DriverConnectionConfig,
-    DriverDescriptor,
-    DriverFactory,
-    DriverRegistry,
-    DynDatabase,
-    PoolStatus,
-    SchemaObject,
-    SchemaObjectKind,
-    Transaction,
+    AutoDriverRegistrar, DataSourceMeta, Database, DbPool, DriverConnectionConfig,
+    DriverDescriptor, DriverFactory, DriverRegistry, DynDatabase, PoolStatus, SchemaObject,
+    SchemaObjectKind, Transaction,
 };
 
 // 重新导出驱动注册表函数
@@ -55,8 +46,8 @@ pub use driver::router::DataSourceRouter;
 
 // 重新导出连接管理层
 pub use connection_manager::{
-    get_connection_manager, ConnId, ConnectionConfig, ConnectionInfo, ConnectionManager,
-    ConnectionType,
+    ConnId, ConnectionConfig, ConnectionInfo, ConnectionManager, ConnectionType,
+    get_connection_manager,
 };
 
 // 重新导出缓存层
@@ -65,11 +56,13 @@ pub use cache::{
     LruCache, MetadataCache, MetadataCacheConfig, MetadataCacheKey, MetadataCacheValue,
 };
 
+// 重新导出结构对象引用（跨模块寻址的唯一类型）
+pub use refs::{ObjectKind, ObjectRef};
+
 // 重新导出日志模块
 pub use logging::{
     config::LogConfig,
-    flush_logs,
-    init_app_logging,
+    flush_logs, init_app_logging,
     record::{LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TargetStat},
     reload_log_level,
 };
@@ -77,8 +70,8 @@ pub use logging::{
 // 重新导出 SQL 服务（查询执行链）
 pub use services::sql_service::{SqlExecuteOptions, SqlService};
 pub use sql::{
-    highlight_spans, split_statements, AlterOperation, ColumnDefInfo, DdlInfo, HighlightSpan,
-    SqlDialect, SqlEngine, SqlStatement, SqlStatementType, TokenClass,
+    AlterOperation, ColumnDefInfo, DdlInfo, HighlightSpan, SqlDialect, SqlEngine, SqlStatement,
+    SqlStatementType, TokenClass, highlight_spans, split_statements,
 };
 
 // 重新导出连接探测（测试连接）

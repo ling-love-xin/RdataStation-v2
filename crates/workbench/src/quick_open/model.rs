@@ -21,6 +21,8 @@ pub(crate) use crate::quick_open::commands::command_rows;
 /// 映射口径与导航搜索结果一致（`nav_view::nav_search_hit_property`）。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MetaObject {
+    /// 统一引用（`engine::ObjectRef`）：行的**业务键**与跨屏定位都从它来。
+    pub object: engine::ObjectRef,
     pub request: database::model::PropertyRequest,
     /// 行主文本：`schema.name`（表 / 视图 / 模式）或 `parent.column`（列）。
     pub title: String,
@@ -99,6 +101,9 @@ pub(crate) enum RowKind {
     View,
     Column,
     Schema,
+    Routine,
+    Sequence,
+    Trigger,
     Connection,
     Command,
     File,
@@ -112,6 +117,9 @@ impl RowKind {
             RowKind::View => "视图",
             RowKind::Column => "列",
             RowKind::Schema => "模式",
+            RowKind::Routine => "例程",
+            RowKind::Sequence => "序列",
+            RowKind::Trigger => "触发器",
             RowKind::Connection => "连接",
             RowKind::Command => "命令",
             RowKind::File => "文件",
@@ -256,7 +264,11 @@ pub(crate) fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
                 filter_ranked(connection_rows(sources.connections), &q.needle),
                 "",
             ));
-            groups.extend(non_empty("命令", filter_ranked(command_rows(), &q.needle), ""));
+            groups.extend(non_empty(
+                "命令",
+                filter_ranked(command_rows(), &q.needle),
+                "",
+            ));
             groups
         }
     };
@@ -317,7 +329,7 @@ fn file_rows(files: &[FileObject]) -> Vec<Row> {
 fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
     meta.iter()
         .map(|m| Row {
-            key: meta_key(&m.request),
+            key: meta_key(&m.object),
             kind: m.kind,
             title: m.title.clone(),
             match_text: m.title.clone(),
@@ -336,10 +348,10 @@ fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
     let needle_lower = needle.to_lowercase();
     meta.iter()
         .map(|m| {
-            let matched_name = !needle_lower.is_empty()
-                && m.title.to_lowercase().contains(&needle_lower);
+            let matched_name =
+                !needle_lower.is_empty() && m.title.to_lowercase().contains(&needle_lower);
             Row {
-                key: meta_key(&m.request),
+                key: meta_key(&m.object),
                 kind: m.kind,
                 title: m.title.clone(),
                 match_text: m.title.clone(),
@@ -380,33 +392,50 @@ pub(crate) fn markup_segments(markup: &str) -> Vec<(String, bool)> {
     }
 }
 
-/// 元数据行的业务键：连接 + 种类 + 父对象 + 名称（列有父表，不能用裸名）。
-fn meta_key(request: &database::model::PropertyRequest) -> String {
-    let p = &request.property;
-    format!(
-        "meta:{}:{:?}:{}:{}",
-        p.conn_id,
-        p.kind,
-        p.parent.clone().unwrap_or_default(),
-        p.name
-    )
+/// 元数据行的业务键：`meta:` + 统一引用的 key。
+///
+/// 用 `ObjectRef::key()`（连接 / catalog / schema / 父对象 / 名字）而不是自己拼：
+/// ① 与导航树节点、搜索命中同构——跨屏说的是同一个对象；
+/// ② 历史上这里只拼「连接 + 种类 + 父对象 + 名字」，**不含 catalog / schema**，
+///    于是 `sales.orders` 与 `archive.orders` 会撞成同一个键（选中跟错行）。
+fn meta_key(object: &engine::ObjectRef) -> String {
+    format!("meta:{}", object.key())
 }
 
-/// 索引命中 → 元数据对象（`None` = 该类别暂无定位能力，如例程）。
+/// 索引命中 → 元数据对象（`None` = 该类别不立行）。
 ///
-/// 映射口径与导航搜索结果一致（`nav_view::nav_search_hit_property`）：
-/// 列命中要带 `parent`（所属表），否则属性面板分不清是哪张表的列。
+/// 引用的构造（类别串解析、NULL 段收敛）与导航搜索结果走**同一个**入口
+/// （`ObjectRef::from_index_hit`）；类别 → 属性面板类别的映射也共用
+/// `database::model::property_ref_of`。本函数只负责本屏关心的两件事：
+/// 哪些类别**上屏**、行主文本怎么写。
+///
+/// **上屏范围**：除 `Catalog` 外全部可寻址类别（表 / 视图 / 列 / 模式 / 例程 / 序列 / 触发器）。
+/// 例程这三类曾经被白名单挡掉（当时以为“暂无定位能力”），但属性面板早已支持
+/// （`property_panel::load_properties` 有 Routine / Sequence / Trigger 三支），
+/// 而 `#` 全文档档的 FTS 索引**本就会写入例程**——挡住它们等于“搜到了却什么也不显示”。
 pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObject> {
-    use database::model::{NavSource, PropertyKind, PropertyRef};
-    let (kind, property_kind) = match hit.object_type.as_str() {
-        "table" => (RowKind::Table, PropertyKind::Table),
-        "view" => (RowKind::View, PropertyKind::View),
-        "column" => (RowKind::Column, PropertyKind::Column),
-        "schema" => (RowKind::Schema, PropertyKind::Schema),
-        _ => return None,
+    let object = engine::ObjectRef::from_index_hit(
+        &hit.conn_id,
+        &hit.object_type,
+        &hit.object_name,
+        hit.parent_name.as_deref(),
+        hit.catalog.as_deref(),
+        hit.schema.as_deref(),
+    )?;
+    let kind = match object.kind {
+        engine::ObjectKind::Table => RowKind::Table,
+        engine::ObjectKind::View => RowKind::View,
+        engine::ObjectKind::Column => RowKind::Column,
+        engine::ObjectKind::Schema => RowKind::Schema,
+        engine::ObjectKind::Routine => RowKind::Routine,
+        engine::ObjectKind::Sequence => RowKind::Sequence,
+        engine::ObjectKind::Trigger => RowKind::Trigger,
+        // Catalog 不立行：它不是“对象详情”的入口（导航里点库得到的是列表），
+        // 且索引 / FTS 两侧都不写 catalog 行。
+        engine::ObjectKind::Catalog => return None,
     };
     let title = match kind {
-        RowKind::Column => match hit.parent_name.as_deref() {
+        RowKind::Column | RowKind::Trigger => match hit.parent_name.as_deref() {
             Some(parent) if !parent.is_empty() => format!("{parent}.{}", hit.object_name),
             _ => hit.object_name.clone(),
         },
@@ -417,18 +446,11 @@ pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObj
     };
     Some(MetaObject {
         request: database::model::PropertyRequest {
-            property: PropertyRef {
-                conn_id: hit.conn_id.clone(),
-                source: NavSource::from_conn_id(&hit.conn_id),
-                catalog: hit.catalog.clone(),
-                schema: hit.schema.clone(),
-                parent: hit.parent_name.clone(),
-                name: hit.object_name.clone(),
-                kind: property_kind,
-            },
+            property: database::model::property_ref_of(&object),
             conn_label: hit.conn_label.clone(),
             driver: hit.driver.clone(),
         },
+        object,
         title,
         kind,
         snippet: hit.snippet.clone(),
@@ -585,6 +607,7 @@ fn is_word_start(title: &str, pos: usize) -> bool {
 mod tests {
     use super::*;
     use crate::quick_open::commands::command_specs;
+    use database::model::PropertyKind;
 
     #[test]
     fn parse_reads_mode_from_first_char_only() {
@@ -727,24 +750,28 @@ mod tests {
         assert_eq!(hit_conn[0].rows[0].action, Action::SelectConnection(1));
 
         // `#` 内容档：没有回填命中时为空（空态由委托给说明文案）
-        assert!(build_groups(
-            &parse("#渠道与"),
-            &Sources {
-                connections: &conns,
-                ..Default::default()
-            }
-        )
-        .is_empty());
+        assert!(
+            build_groups(
+                &parse("#渠道与"),
+                &Sources {
+                    connections: &conns,
+                    ..Default::default()
+                }
+            )
+            .is_empty()
+        );
 
         // 无匹配：一个组都没有
-        assert!(build_groups(
-            &parse("zzzz"),
-            &Sources {
-                connections: &conns,
-                ..Default::default()
-            }
-        )
-        .is_empty());
+        assert!(
+            build_groups(
+                &parse("zzzz"),
+                &Sources {
+                    connections: &conns,
+                    ..Default::default()
+                }
+            )
+            .is_empty()
+        );
     }
 
     /// 文件源：相对路径是业务键与匹配面，主文本是文件名，动作带可打开的绝对路径。
@@ -768,7 +795,10 @@ mod tests {
         assert_eq!(row.kind.label(), "文件");
         match &row.action {
             Action::OpenDocument(path) => {
-                assert!(path.ends_with("queries/last.sql"), "动作要带绝对路径：{path:?}")
+                assert!(
+                    path.ends_with("queries/last.sql"),
+                    "动作要带绝对路径：{path:?}"
+                )
             }
             other => panic!("文件行动作应是打开文档，实际 {other:?}"),
         }
@@ -793,7 +823,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(note[0].note.contains("只列前"), "截断要说清：{}", note[0].note);
+        assert!(
+            note[0].note.contains("只列前"),
+            "截断要说清：{}",
+            note[0].note
+        );
 
         // 没打开项目（文件源为空）→ 连空组都不出现
         assert!(build_groups(&parse("last"), &Sources::default()).is_empty());
@@ -805,12 +839,13 @@ mod tests {
         let objects: Vec<MetaObject> = [
             hit("table", "orders", None),
             hit("column", "order_id", Some("orders")),
-            hit("routine", "fn_x", None), // 例程暂无定位能力 → 不进行集
+            hit("routine", "fn_x", None), // 例程也立行（属性面板支持；FTS 会命中它）
+            hit("index", "idx_a", None),  // 不可寻址类别（索引）→ 不立行
         ]
         .iter()
         .filter_map(meta_object)
         .collect();
-        assert_eq!(objects.len(), 2, "例程应被过滤掉");
+        assert_eq!(objects.len(), 3, "索引行应被过滤掉，例程应保留");
 
         let groups = build_groups(
             &parse("order"),
@@ -822,7 +857,7 @@ mod tests {
         );
         // 元数据排在连接 / 命令之前
         assert_eq!(groups[0].title, "元数据（表 · 视图 · 列）");
-        assert_eq!(groups[0].rows.len(), 2);
+        assert_eq!(groups[0].rows.len(), 2, "`order` 只命中表与列两行");
         // 表行标题是 `schema.name`，列行是 `父表.列`
         assert!(groups[0].rows.iter().any(|r| r.title == "public.orders"));
         assert!(groups[0].rows.iter().any(|r| r.title == "orders.order_id"));
@@ -841,6 +876,14 @@ mod tests {
             }
             other => panic!("列行动作应是属性面板，实际 {other:?}"),
         }
+
+        // 例程行：类目标签与属性类别都要对（曾经被白名单挡掉）
+        let routine = objects
+            .iter()
+            .find(|m| m.kind == RowKind::Routine)
+            .expect("例程应立行");
+        assert_eq!(routine.request.property.kind, PropertyKind::Routine);
+        assert_eq!(routine.kind.label(), "例程");
     }
 
     #[test]
@@ -891,7 +934,10 @@ mod tests {
         let row = &rows[0].rows[0];
         assert_eq!(row.title, "public.orders");
         assert!(
-            row.snippet.as_deref().unwrap_or_default().contains("<mark>"),
+            row.snippet
+                .as_deref()
+                .unwrap_or_default()
+                .contains("<mark>"),
             "snippet 要带命中标记（UI 靠它上色）"
         );
         assert_eq!(row.why, Some("内容"), "标题不含词 → 内容命中");
@@ -921,7 +967,10 @@ mod tests {
             ]
         );
         assert_eq!(markup_segments("plain"), vec![("plain".to_string(), false)]);
-        assert_eq!(markup_segments("<mark>x</mark>"), vec![("x".to_string(), true)]);
+        assert_eq!(
+            markup_segments("<mark>x</mark>"),
+            vec![("x".to_string(), true)]
+        );
         assert!(markup_segments("").is_empty());
         // 不闭会的标记退化为普通文本（不 panic）
         assert_eq!(
