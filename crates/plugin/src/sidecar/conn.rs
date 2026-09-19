@@ -37,7 +37,9 @@ use super::proto::{
     Frame, FrameIoError, PROTOCOL_VERSION, RpcErrorCode, check_protocol_version, read_frame,
     write_frame,
 };
-use super::router::{Attachment, Router, RouterEvent};
+use super::router::{Router, RouterEvent};
+// `CallOutcome.attachments` 是公开字段，它的类型得能被调用方写出来
+pub use super::router::Attachment;
 
 /// 一次调用的完整结果。
 #[derive(Debug, Clone, PartialEq, Eq)]

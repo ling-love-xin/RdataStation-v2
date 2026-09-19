@@ -337,6 +337,9 @@ progress({request_id, phase, done, total})
 | `session_id` 谁发号 | **宿主生成**，在 `session.open({session_id, driver_id, params})` 里带下去，sidecar 回声 | 会话句柄是宿主的资源名；否则一个会话要维护两张 id 表（宿主一张、对端一张），迟早对不上 |
 | 进程存活探针 | 用**进程级** `ping()`，不是 `session.ping` | 空闲实例没有会话，而它恰恰是最需要探活的那种（上面规则 5 原文写的是 `session.ping`，按本口径订正） |
 | 连接参数怎么传 | `session.open` 的 `params` 是**嵌套**的驱动参数（`{dsn, user, password…}`），与 `session_id`/`driver_id` 平级 | 驱动参数是「这个驱动自己的事」，不该与协议字段混在一层 |
+| `request_id` 谁发号 | **宿主生成**，在 `query.execute` 与 `query.fetch` 里带下去，`query.cancel` 用它取消 | 与 `session_id` 同一条理由：句柄是宿主的资源名，对端只能回声 |
+| 内联 JSON 里的时间 | 用 **RFC3339 字符串**（如 `2023-11-14T22:13:20.000001Z`）；Arrow 侧才是 `Timestamp(us, UTC)` | JSON 没有时间类型；两条承载方式的行值语义一致，但**线表示**必然不同 —— 消费方按 `PageData` 的形态取值 |
+| `rows` / `attachments` 谁优先 | 有附件就以附件为准（`attachments` 是数据面）；两者都没有 = 空结果集，**但 `columns` 必须在** | 「空结果集仍有 schema」是硬口径：少了 schema，网格与类型映射都无从下手 |
 | **已知缺口** | **没有「连接失败」错误码**：坏地址 / 密码错 / TLS 失败 / 连不上，现在只能落进 `-32003 sql_error` 或 `-32005 timeout` | 驱动最常见的失败就是连接失败，UI 需要把它与 SQL 错分开呈现。P2 定码段时补 `-32009 connect_failed` |
 
 #### 4.2.3 版本闸
@@ -762,7 +765,8 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | sidecar 运行时接线 | `crates/plugin/src/sidecar/supervisor.rs`（✅ **P1 已落地**：`Deployment`（清单 → 进程规格 + 命令）+ `SidecarSupervisor` —— 执行内核动作、兑现放行、事件如实上报、generation 防旧事件误伤、起不来不留僵尸 `Starting`） |
 | 真实进程验收 | `crates/plugin/tests/fixture/sidecar.rs`（`[[bin]] rds-sidecar-fixture`：**独立实现**一遍帧编解码的测试对端）+ `crates/plugin/tests/spawn_real_process.rs`（8 条：起收摊 / 超时不断连 / 崩溃交还 + 退出码 / 未调用也发现它死 / 强杀兜底 / stderr 落盘）+ `crates/plugin/tests/supervisor_real_process.rs`（8 条：开会话 / 串行排队放行 / 放行失败 / 崩溃要手动重启 / 心跳判死 / 空闲回收不误伤新实例 / 起不来不留僵尸 / 收摊） |
 | RPC 方法表 | `crates/plugin/src/sidecar/*`（+ `jsonrpsee-core` 的 `RpcModule`/`Methods`） |
-| 驱动桥（v2 trait） | `crates/plugin/src/sidecar/driver.rs`（**P1 新建**；旧 HTTP 版已于 P0 删除，见 §1.2） |
+| 驱动桥（RPC 方法表） | `crates/plugin/src/sidecar/driver.rs`（✅ **P1 已落地**：`SessionDriver` = 会话之上的 `driver.describe` / `query.execute` / `query.fetch` / `query.cancel` / `session.ping`，`QueryPage`/`PageData` 把内联 JSON 与 Arrow 附件统一成同一个类型，`DriverError` 按错误码分流。旧 HTTP 版已于 P0 删除，见 §1.2） |
+| 接引擎 `Database` trait | `crates/plugin/src/sidecar/driver.rs`（`SessionDriver` 之上再包一层，把 `QueryPage` 翻成 `QueryResult`；**P1 收尾**） |
 | 能力矩阵 | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY`）+ 新增 `DriverCapability` |
 | 类型归一化与 `ResultSet` | `crates/shared/src/result_set.rs`（新增）+ `crates/shared/src/arrow.rs` |
 | 二次分析直灌 | `crates/engine/src/duckdb/duckdb_service.rs:38-101`、`crates/editor/src/analysis.rs` |
@@ -797,7 +801,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` / 运行时接线七块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`sidecar/supervisor.rs`：运行时接线（`Deployment` + `SidecarSupervisor`：执行内核动作、把 `Decision::Open` 兑现成 `session.open`、事件显式 `drain_events`、generation 防旧事件误伤、起不来告诉内核不留僵尸）。`lifecycle.rs` 的 `acquire` 按规则 1 修正分流（并行共享 / 串行有额度就起新实例）。`cargo test -p rds-plugin` 99/99 + 集成 16/16（P1 新增 82 条单测 + 16 条真进程集成测试）。待办：驱动桥的 RPC 方法表（`driver.describe` / `query.execute` / `query.cancel` / `meta.*`）· 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
+| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` / 运行时接线 / 驱动桥八块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`sidecar/supervisor.rs`：运行时接线（`Deployment` + `SidecarSupervisor`：执行内核动作、把 `Decision::Open` 兑现成 `session.open`、事件显式 `drain_events`、generation 防旧事件误伤、起不来告诉内核不留僵尸）。`lifecycle.rs` 的 `acquire` 按规则 1 修正分流（并行共享 / 串行有额度就起新实例）。`sidecar/driver.rs`：驱动桥（`SessionDriver`：describe / execute / fetch / cancel / session.ping；`PageData` 把内联 JSON 与 Arrow 统一成一个类型；Arrow 在宿主侧解成 `RecordBatch`；`DriverError` 按错误码分流）。`cargo test -p rds-plugin` 103/103 + 集成 22/22（P1 新增 86 条单测 + 22 条真进程集成测试）。待办：**PostgreSQL 靶子**（真库 + 真 Arrow，属实机验收）· `meta.*`（P2）· 接 `engine` 的 `Database` trait · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
