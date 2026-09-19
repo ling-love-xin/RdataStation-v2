@@ -151,21 +151,21 @@ pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<
 // 能力清单取 `drivers.capabilities`、环境策略取 `environment_policies`；
 // 本段只负责「键/类型 → 中文标签」的展示映射（字典），以及 JSON 解析工具。
 
-/// 驱动能力键 → 中文标签（未收录的键原样展示）。
-const CAPABILITY_LABELS: [(&str, &str); 12] = [
-    ("tree", "数据库导航"),
-    ("health_check", "健康检查"),
-    ("transactions", "事务"),
-    ("index_analysis", "索引分析"),
-    ("sql_autocomplete", "SQL 补全"),
-    ("schema_browser", "模式浏览"),
-    ("table_editor", "表编辑器"),
-    ("analytics", "分析查询"),
-    ("federation", "联邦查询"),
-    ("export", "数据导出"),
-    ("mock", "Mock 生成"),
-    ("resource", "资源分析"),
-];
+/// 驱动能力键 → 中文标签的字典**已上收到引擎**（`engine::driver::CAPABILITY_DICTIONARY`）：
+/// 那里同时定义「键 → 运行时能力位」与「真机验收状态」，避免界面另存一份键表
+/// （本段只留 JSON 解析与行组装）。
+
+/// 能力矩阵行：标签 + 是否由该驱动声明 + 运行时位 + 真机验收状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityRow {
+    pub label: String,
+    /// 驱动是否声明了该能力（`drivers.capabilities`）。
+    pub declared: bool,
+    /// 对应的运行时能力位（无 → 纯界面能力）。
+    pub meta_bit: Option<engine::driver::MetaBit>,
+    /// 真机验收状态（D10：未验收不算可用，界面如实标注）。
+    pub acceptance: engine::driver::Acceptance,
+}
 
 /// 解析驱动能力 JSON 数组（`drivers.capabilities`）；非法 / 为空 → 空列表。
 pub(crate) fn driver_capabilities(json: Option<&str>) -> Vec<String> {
@@ -177,18 +177,29 @@ pub(crate) fn driver_capabilities(json: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// 能力矩阵行：(显示标签, 是否由该驱动声明)。
+/// 能力矩阵行（**字典唯一来源**：`engine::driver::CAPABILITY_DICTIONARY`）。
 ///
-/// 字典内每个键都出一行（声明与否均可视）；驱动声明了字典以外的键时追加在尾部，
-/// 保证「驱动新增能力但 UI 未收录标签」时也不丢信息。
-pub(crate) fn capability_rows(declared: &[String]) -> Vec<(String, bool)> {
-    let mut rows: Vec<(String, bool)> = CAPABILITY_LABELS
+/// 字典内每个键都出一行（声明与否均可视），并带出运行时位与真机验收状态；
+/// 驱动声明了字典以外的键时追加在尾部（键名原样，`declared = true`），
+/// 保证「驱动新增能力但字典未收录」时也不丢信息。
+pub(crate) fn capability_rows(declared: &[String]) -> Vec<CapabilityRow> {
+    let mut rows: Vec<CapabilityRow> = engine::driver::CAPABILITY_DICTIONARY
         .iter()
-        .map(|(key, label)| ((*label).to_string(), declared.iter().any(|d| d == key)))
+        .map(|spec| CapabilityRow {
+            label: spec.label.to_string(),
+            declared: declared.iter().any(|d| d == spec.key),
+            meta_bit: spec.meta_bit,
+            acceptance: spec.acceptance,
+        })
         .collect();
     for key in declared {
-        if !CAPABILITY_LABELS.iter().any(|(k, _)| k == key) {
-            rows.push((key.clone(), true));
+        if engine::driver::capability_spec(key).is_none() {
+            rows.push(CapabilityRow {
+                label: key.clone(),
+                declared: true,
+                meta_bit: None,
+                acceptance: engine::driver::Acceptance::unverified(),
+            });
         }
     }
     rows
@@ -1654,15 +1665,31 @@ mod tests {
             driver_capabilities(Some(r#"["tree","health_check"]"#)),
             vec!["tree".to_string(), "health_check".to_string()]
         );
-        // 矩阵：字典内每种能力都出一行（声明与否），驱动自带的未知键追加在尾部。
+        // 矩阵：字典（引擎侧唯一一份）内每种能力都出一行（声明与否），
+        // 驱动自带的未知键追加在尾部；行里同时带出运行时位与真机验收状态。
         let declared = vec!["tree".to_string(), "brand_new".to_string()];
         let rows = capability_rows(&declared);
-        assert!(rows.iter().any(|(l, ok)| l == "数据库导航" && *ok), "声明项应命中");
         assert!(
-            rows.iter().any(|(l, ok)| l == "Mock 生成" && !*ok),
+            rows.iter()
+                .any(|r| r.label == "数据库导航" && r.declared),
+            "声明项应命中"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.label == "Mock 生成" && !r.declared),
             "字典内未声明项应标记未声明"
         );
-        assert_eq!(rows.last().map(|(l, _)| l.as_str()), Some("brand_new"));
+        assert_eq!(rows.last().map(|r| r.label.as_str()), Some("brand_new"));
+        // 未收录的键不假装验收（也不丢信息）
+        assert!(!rows.last().expect("尾部行").acceptance.verified);
+        // 事务 / 联邦两个键带运行时位；已验收项带用例名（D10 口径）
+        let tx = rows
+            .iter()
+            .find(|r| r.label == "事务")
+            .expect("事务行");
+        assert_eq!(tx.meta_bit, Some(engine::driver::MetaBit::Transaction));
+        assert!(tx.acceptance.verified);
+        assert!(!tx.acceptance.evidence.is_empty(), "已验收必须给出可复现用例");
     }
 
     #[test]

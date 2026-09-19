@@ -53,6 +53,15 @@ pub struct DriverConnectionConfig {
     pub encoding: Option<String>,
     /// 驱动属性（来自 DriverPropsTab，key=value）
     pub driver_properties: HashMap<String, String>,
+    /// 结构化 TLS 请求（证书路径 / 校验意图）。
+    ///
+    /// 连接串只能表达「要不要加密」，证书文件写不进去（`mysql_async` / `tokio-postgres` 均无参数），
+    /// 故由连接入口随配置传入，native 驱动据此构造 TLS 连接器；
+    /// sqlx 驱动仍然读 URL 参数（那份由 `connection::url_params::append_ssl_params` 写入）。
+    /// 不进 serde / specta：这是**进程内派生的连接参数**，不是可持久化的配置项。
+    #[serde(skip)]
+    #[specta(skip)]
+    pub tls: Option<connection::config::TlsRequest>,
 }
 
 impl DriverConnectionConfig {
@@ -78,6 +87,7 @@ impl DriverConnectionConfig {
             max_reconnect: None,
             encoding: None,
             driver_properties: HashMap::new(),
+            tls: None,
         }
     }
 
@@ -178,6 +188,12 @@ impl DriverConnectionConfig {
     /// 设置连接方式（SSL/SSH/Proxy）
     pub fn with_connection_method(mut self, method: ConnectionMethod) -> Self {
         self.connection_method = method;
+        self
+    }
+
+    /// 设置结构化 TLS 请求（证书路径与校验意图；见字段文档）
+    pub fn with_tls(mut self, tls: Option<connection::config::TlsRequest>) -> Self {
+        self.tls = tls;
         self
     }
 

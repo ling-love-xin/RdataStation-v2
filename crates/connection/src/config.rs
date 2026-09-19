@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 
+use crate::url_params::SslMode;
+
 /// 协议链路中的单跳
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -49,6 +51,54 @@ pub enum ConnectionMethod {
     SocksProxy(ProxyConfig),
     /// 协议链路（外层 → 内层顺序，如 Proxy → SSH → SSL → DB）
     Chain(Vec<ChainHop>),
+}
+
+/// 结构化 TLS 请求：URL 表达不了的那部分 TLS 配置。
+///
+/// 为什么需要：连接串只能表达「要不要加密」（`ssl-mode` / `sslmode` / `require_ssl`），
+/// **证书文件路径与校验意图无法写进 URL**（`mysql_async` 与 `tokio-postgres` 均无对应参数），
+/// 所以在 URL 注入之外，还要把同一份请求结构地交给驱动：native 驱动的 TLS 连接器从
+/// 这里构造（见 `engine::driver::native::{mysql_native, postgres_native}`），sqlx 驱动仍读 URL 参数。
+///
+/// 派生规则唯一来源：`workbench::services::connection_service::tls_request_of`
+/// （网络档案 SSL 跳优先 → 「连接安全」内联覆盖）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlsRequest {
+    pub mode: SslMode,
+    pub ssl: SslConfig,
+}
+
+impl TlsRequest {
+    pub fn new(mode: SslMode, ssl: SslConfig) -> Self {
+        Self { mode, ssl }
+    }
+
+    /// 要校验证书链吗（`verify-ca` / `verify-full`）。
+    pub fn verifies_chain(&self) -> bool {
+        self.mode.requires_verification()
+    }
+
+    /// 要校验主机名吗（仅 `verify-full`）。
+    pub fn verifies_hostname(&self) -> bool {
+        self.mode == SslMode::VerifyFull
+    }
+
+    /// 非空证书路径（空白视为未填，与表单清洗同一口径）。
+    pub fn ca_path(&self) -> Option<&str> {
+        non_empty(self.ssl.ca_cert_path.as_deref())
+    }
+
+    pub fn client_cert_path(&self) -> Option<&str> {
+        non_empty(self.ssl.client_cert_path.as_deref())
+    }
+
+    pub fn client_key_path(&self) -> Option<&str> {
+        non_empty(self.ssl.client_key_path.as_deref())
+    }
+}
+
+fn non_empty(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// SSL/TLS 配置

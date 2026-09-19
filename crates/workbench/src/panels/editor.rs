@@ -364,7 +364,13 @@ impl EditorPanel {
             match catalog.get(&request.driver) {
                 Some(meta) => (
                     format!("{} · {}", meta.name, request.driver),
-                    Some(meta.type_id.clone()),
+                    // 类型行显示**目录名**（`data_source_types.name`）优先，取不到才回退类型 id
+                    Some(
+                        meta.type_name
+                            .clone()
+                            .filter(|n| !n.trim().is_empty())
+                            .unwrap_or_else(|| meta.type_id.clone()),
+                    ),
                 ),
                 None => (request.driver.clone(), None),
             }

@@ -81,19 +81,37 @@ pub fn parse_connection_url(url: &str) -> Option<UrlParts> {
     })
 }
 
-/// 数据库类型 → DuckDB Secret 类型
+/// 数据库族 → DuckDB Secret 类型
 ///
 /// 可用性（bundled DuckDB 实测）：POSTGRES / MYSQL / S3 / GCS / R2 / AZURE 内置；
 /// SQLITE / DUCKDB 需扩展（返回类型但注册可能失败，由调用方按警告处理）。
+///
+/// 只认**数据库族**（`data_source_types.id`）与同义写法（`pg` / `mariadb`）；
+/// 驱动实现 id（`mysql_native`）请走 [`secret_type_of`]。
 pub fn db_type_to_secret_type(db_type: &str) -> Option<&'static str> {
     match db_type.to_lowercase().as_str() {
         "postgres" | "postgresql" | "pg" => Some("POSTGRES"),
-        "mysql" => Some("MYSQL"),
+        "mysql" | "mariadb" => Some("MYSQL"),
         "sqlite" => Some("SQLITE"),
         "duckdb" => Some("DUCKDB"),
         "s3" => Some("S3"),
         _ => None,
     }
+}
+
+/// 驱动 id / 数据库族 → DuckDB Secret 类型（**唯一入口**）。
+///
+/// 为什么要这一步：连接记录里的 `db_type` 存的是驱动 id（`mysql_native` /
+/// `postgres_native`），而 Secret 类型按数据库**族**给。不归一就会出现
+/// 「选了 Official 驱动 → `db_type_to_secret_type` 返回 None → Secret 静默不注册」。
+/// 先按原名试一次（族 id 与旧数据占多数，免一次库读），未命中再查驱动目录
+/// （[`engine::persistence::driver_catalog::type_id_of`]）；目录不在位时按原名结论返回。
+pub fn secret_type_of(db_type: &str) -> Option<&'static str> {
+    if let Some(t) = db_type_to_secret_type(db_type) {
+        return Some(t);
+    }
+    let family = engine::persistence::driver_catalog::type_id_of(db_type)?;
+    db_type_to_secret_type(&family)
 }
 
 /// 将连接凭据注册为 DuckDB Secret（加速通道核心调用）
@@ -108,7 +126,7 @@ pub fn register_connection_secret(
             "无法解析连接 URL: {url}"
         )));
     };
-    let Some(secret_type) = db_type_to_secret_type(db_type) else {
+    let Some(secret_type) = secret_type_of(db_type) else {
         return Err(connection::secret::SecretError::Invalid(format!(
             "不支持的 Secret 类型: {db_type}"
         )));
@@ -196,7 +214,7 @@ pub fn ensure_secret_registered_at(
     db_type: &str,
     url: &str,
 ) {
-    if db_type_to_secret_type(db_type).is_none() {
+    if secret_type_of(db_type).is_none() {
         return; // 非联邦目标类型不注册
     }
     let Some((db, dir)) = resolve_target(target) else {
@@ -281,7 +299,20 @@ mod tests {
         assert_eq!(db_type_to_secret_type("postgres"), Some("POSTGRES"));
         assert_eq!(db_type_to_secret_type("PostgreSQL"), Some("POSTGRES"));
         assert_eq!(db_type_to_secret_type("mysql"), Some("MYSQL"));
+        // MariaDB 走 MySQL 协议：同一个 Secret 类型
+        assert_eq!(db_type_to_secret_type("mariadb"), Some("MYSQL"));
         assert_eq!(db_type_to_secret_type("oracle"), None);
+    }
+
+    /// 驱动 id → Secret 类型的归一：族 id 走快路径，未命中（驱动 id / 未知值）查驱动目录。
+    /// 本单测环境没有全局库（目录不在位）→ 只有快路径生效，且**不 panic**。
+    #[test]
+    fn test_secret_type_of_falls_back_to_driver_catalog() {
+        assert_eq!(secret_type_of("postgresql"), Some("POSTGRES"));
+        assert_eq!(secret_type_of("MYSQL"), Some("MYSQL"));
+        // 目录不可用：`mysql_native` 无法归一 → None（调用方不注册，且不会静默注册错类型）
+        assert_eq!(secret_type_of("mysql_native"), None);
+        assert_eq!(secret_type_of("oracle"), None);
     }
 
     #[test]

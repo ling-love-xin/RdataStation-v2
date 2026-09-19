@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use connection::config::ConnectionMethod;
+use connection::config::{ChainHop, ConnectionMethod, SslConfig};
 use connection::connector::TunnelGuard;
+use connection::url_params::SslMode;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
@@ -221,6 +222,11 @@ impl ConnectionService {
             }));
         }
 
+        // 结构化 TLS 请求（证书路径 / 校验意图）：URL 只能表达「要不要加密」，
+        // 证书与 verify 档由 native 驱动从这份请求落到 TLS 连接器。
+        // 在这里派生（而不是等 URL 处理完）：下面所有建配置的分支（含重连回退）都要用它。
+        let tls = tls_request_of(network_method.as_ref(), advanced_options.as_deref());
+
         // 生成连接 ID：统一使用 URL 哈希，确保：
         //   - 短且唯一（8位 hex）
         //   - 文件系统安全（无 Windows 非法字符 : @ / \ 等）
@@ -307,6 +313,7 @@ impl ConnectionService {
                                 )
                                 .with_url_override(url.clone())
                                 .with_name(&connection_name)
+                                .with_tls(tls.clone())
                             });
                         match self
                             .manager
@@ -384,6 +391,15 @@ impl ConnectionService {
             &db_type,
         )
         .await?;
+        // 「连接安全」表单里的 SSL 覆盖（`advanced_options.ssl`）：档案没有 SSL 跳时生效
+        // （档案优先），且必须在 `apply_lan_tls_default` 之前——后者只看 URL 里有没有 ssl 键。
+        let effective_url = Self::apply_inline_ssl_override(
+            &effective_url,
+            &db_type,
+            advanced_options.as_deref(),
+            network_method.as_ref(),
+        )?
+        .unwrap_or(effective_url);
         // 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动：显式关闭 TLS（规避默认 `prefer` 握手卡顿）。
         let effective_url =
             Self::apply_lan_tls_default(effective_url, &db_type, network_method.as_ref());
@@ -413,7 +429,7 @@ impl ConnectionService {
             attempt += 1;
             let created = tokio::time::timeout(
                 timeout,
-                self.create_database(&db_type, &effective_url, driver_properties.as_deref()),
+                self.create_database(&db_type, &effective_url, driver_properties.as_deref(), tls.clone()),
             )
             .await;
             match created {
@@ -475,7 +491,8 @@ impl ConnectionService {
         let mut driver_config =
             engine::driver::registry::DriverConnectionConfig::new(db_type.clone())
                 .with_url_override(url.clone())
-                .with_name(&connection_name);
+                .with_name(&connection_name)
+                .with_tls(tls.clone());
 
         if let Some(ref opts_json) = advanced_options {
             Self::apply_advanced_options(&mut driver_config, opts_json);
@@ -825,13 +842,14 @@ impl ConnectionService {
         // —— 2) 网络档案：隧道在本函数调用方的作用域内建立与释放
         let mut effective_url = url;
         let mut guards: Vec<TunnelGuard> = Vec::new();
+        let mut network_method: Option<ConnectionMethod> = None;
         if let Some(net_id) = input.network_config_id {
             match resolve_network_method_with_project(Some(net_id), input.project_path).await {
                 Ok(Some(method)) => {
                     let probe_id = format!("probe-{}", input.name);
                     match connection::chain::apply_network_method(
                         &effective_url,
-                        &Some(method),
+                        &Some(method.clone()),
                         &probe_id,
                         input.db_type,
                     )
@@ -844,11 +862,12 @@ impl ConnectionService {
                             effective_url = rewritten;
                             guards = g;
                         }
-                        // 隧道建不起来 = 真实连接同样起不来：直接失败，不拿未改写的地址探测
+                        // 隧道建不起来 = 真实连接同样起不来：不拿未改写的地址探测
                         Err(e) => {
                             return Err(CoreError::from(format!("网络档案应用失败：{e}")));
                         }
                     }
+                    network_method = Some(method);
                 }
                 // 引用了档案但解析不出连接方式（已删 / 类型未知 / 内容非法）：
                 // 直接失败，不拿直连结果冒充“档案已生效”（A2 严格模式）
@@ -861,10 +880,23 @@ impl ConnectionService {
             }
         }
 
+        // —— 2.5) TLS 请求（结构化，与 URL 注入同一派生点）+ 「连接安全」内联 SSL 覆盖
+        let tls = tls_request_of(network_method.as_ref(), input.advanced_options);
+        if let Some(with_ssl) = Self::apply_inline_ssl_override(
+            &effective_url,
+            input.db_type,
+            input.advanced_options,
+            network_method.as_ref(),
+        )? {
+            effective_url = with_ssl;
+            notes.push("已应用「连接安全」SSL 覆盖".to_string());
+        }
+
         // —— 3) 驱动配置：URL 为准（url_override），字段凭据从最终 URL 回填
         let mut config = DriverConnectionConfig::new(input.db_type)
             .with_url_override(&effective_url)
-            .with_name(input.name);
+            .with_name(input.name)
+            .with_tls(tls);
         let (url_user, url_pass) = connection::url::extract_credentials_from_url(&effective_url);
         if let Some(user) = input.username.map(str::to_string).or(url_user) {
             config = config.with_username(user);
@@ -880,6 +912,39 @@ impl ConnectionService {
         }
 
         Ok((config, guards, notes))
+    }
+
+    /// 把「连接安全」表单里的 SSL 覆盖（`advanced_options.ssl`）应用到 URL。
+    ///
+    /// 优先级：**网络档案 > 内联覆盖**——档案是显式选的连接方式（含 SSH / 代理 / 多跳链），
+    /// 内联覆盖只是表单兜底；两者同时存在且档案里已有 SSL 跳时，档案生效并记日志。
+    ///
+    /// 返回 `Ok(None)` = 没有可应用的内联覆盖（无字段 / 模式非法 / `disable` / 档案优先）。
+    /// 返回 `Ok(Some(url))` = 已注入。返回 `Err` = 该驱动做不到这个请求（**不静默降级**，
+    /// 典型：Official 驱动 + 要校验证书，见 `connection::url_params::append_ssl_params`）。
+    fn apply_inline_ssl_override(
+        url: &str,
+        driver: &str,
+        advanced_options: Option<&str>,
+        network_method: Option<&ConnectionMethod>,
+    ) -> Result<Option<String>, CoreError> {
+        let Some((mode, ssl)) = inline_ssl_override(advanced_options) else {
+            return Ok(None);
+        };
+        if method_has_ssl_hop(network_method) {
+            tracing::info!(
+                driver,
+                "网络档案已含 SSL 跳，跳过「连接安全」内联覆盖（档案优先）"
+            );
+            return Ok(None);
+        }
+        let out = connection::url_params::append_ssl_params(url, driver, mode, &ssl)?;
+        tracing::info!(
+            driver,
+            mode = mode.as_str(),
+            "已应用「连接安全」内联 SSL 覆盖"
+        );
+        Ok(Some(out))
     }
 
     /// 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动（`mysql` / `postgres`）时，
@@ -917,13 +982,19 @@ impl ConnectionService {
 
     /// 根据数据库类型创建对应的数据库实例
     /// 通过 DataSourceRouter 路由到 DriverRegistry 动态创建
+    ///
+    /// `tls` 是结构化 TLS 请求（证书路径 / 校验意图）：native 驱动需要它构造 TLS 连接器，
+    /// sqlx 驱动只读 URL 参数（由调用方先注入）。
     async fn create_database(
         &self,
         db_type: &str,
         url: &str,
         driver_properties: Option<&str>,
+        tls: Option<connection::config::TlsRequest>,
     ) -> Result<DynDatabase, CoreError> {
-        let mut config = DriverConnectionConfig::new(db_type).with_url_override(url);
+        let mut config = DriverConnectionConfig::new(db_type)
+            .with_url_override(url)
+            .with_tls(tls);
         if let Some(props_json) = driver_properties {
             Self::apply_driver_properties(&mut config, props_json);
         }
@@ -1336,6 +1407,90 @@ impl ConnectionService {
 /// 只查询全局 network_configs 表（测试连接场景）
 /// 根据 config 中的 network_type 字段进行 JSON 反序列化
 /// URL 主机是否为 LAN / 本机（仅按 `localhost` 与 IP 字面量判定，不做 DNS 解析）。
+/// 解析「连接安全」表单的内联 SSL 覆盖（`advanced_options.ssl`）。
+///
+/// 结构（对话框 `collect` 写入）：`{"ssl": {"mode": "require", "ca": "…", "cert": "…", "key": "…"}}`，
+/// 模式词汇见 [`SslMode`]。`disable` / 模式缺失或非法 / 无 `ssl` 字段 → `None`（不注入）。
+/// **不造默认值**：证书路径为空就不追加（由 `append_ssl_params` 跳过）。
+fn inline_ssl_override(advanced_options: Option<&str>) -> Option<(SslMode, SslConfig)> {
+    let root: serde_json::Value = serde_json::from_str(advanced_options?).ok()?;
+    let ssl = root.get("ssl")?.as_object()?;
+    let mode = SslMode::parse(ssl.get("mode")?.as_str()?)?;
+    if mode == SslMode::Disable {
+        return None;
+    }
+    let path = |key: &str| {
+        ssl.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    Some((
+        mode,
+        SslConfig {
+            verify_server_cert: mode.requires_verification(),
+            ca_cert_path: path("ca"),
+            client_cert_path: path("cert"),
+            client_key_path: path("key"),
+            ..Default::default()
+        },
+    ))
+}
+
+/// 网络方式里是否已含 SSL 跳（**任一** SSL 跳，含被代理嵌套层接管的那些）。
+///
+/// 用于「档案优先」判定：档案里表了 TLS 意图，内联覆盖就不应该再往同一 URL 里加参数。
+fn method_has_ssl_hop(method: Option<&ConnectionMethod>) -> bool {
+    match method {
+        Some(ConnectionMethod::Ssl(_)) => true,
+        Some(ConnectionMethod::Chain(hops)) => hops.iter().any(|h| matches!(h, ChainHop::Ssl(_))),
+        _ => false,
+    }
+}
+
+/// 派生结构化 TLS 请求（**唯一来源**）：网络档案的 SSL 跳优先，「连接安全」内联覆盖次之。
+///
+/// 与 URL 注入同一套规则（`append_ssl_params` 写 URL、`TlsRequest` 进驱动），
+/// 两边必须成对使用：native 驱动的证书与 verify 档只能走后者。
+fn tls_request_of(
+    network_method: Option<&ConnectionMethod>,
+    advanced_options: Option<&str>,
+) -> Option<connection::config::TlsRequest> {
+    if let Some(cfg) = profile_ssl_config(network_method) {
+        return Some(connection::config::TlsRequest::new(
+            SslMode::from_ssl_config(&cfg),
+            cfg,
+        ));
+    }
+    let (mode, ssl) = inline_ssl_override(advanced_options)?;
+    Some(connection::config::TlsRequest::new(mode, ssl))
+}
+
+/// 网络方式里**真正生效**的 SSL 配置（单跳 `Ssl`，或链里第一个未被代理接管的 SSL 跳）。
+///
+/// 「被代理接管」= 前一个 hop 是代理：那种写法下 TLS 由 Proxy→SSL 嵌套层建，
+/// 数据库驱动**不应**再在隧道里做一次 TLS（与 `url_params::inject_chain_ssl_params` 同一跳过规则）。
+fn profile_ssl_config(method: Option<&ConnectionMethod>) -> Option<SslConfig> {
+    match method {
+        Some(ConnectionMethod::Ssl(cfg)) => Some(cfg.clone()),
+        Some(ConnectionMethod::Chain(hops)) => {
+            hops.iter().enumerate().find_map(|(i, hop)| {
+                let preceded_by_proxy = i > 0
+                    && matches!(
+                        hops[i - 1],
+                        ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
+                    );
+                match hop {
+                    ChainHop::Ssl(cfg) if !preceded_by_proxy => Some(cfg.clone()),
+                    _ => None,
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
 fn is_lan_url(url: &str) -> bool {
     let Some(rest) = url.split("://").nth(1) else {
         return false;
@@ -1689,6 +1844,115 @@ fn inject_proxy_auth_from_auth_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 内联 SSL 覆盖的解析（纯函数）：只认 `advanced_options.ssl`，不造默认值。
+    #[test]
+    fn inline_ssl_override_reads_form_fields_only() {
+        // 未填 SSL / 空 JSON / 非法 JSON → 不注入
+        assert!(inline_ssl_override(None).is_none());
+        assert!(inline_ssl_override(Some("{}")).is_none());
+        assert!(inline_ssl_override(Some("not json")).is_none());
+        assert!(inline_ssl_override(Some(r#"{"ssl":{}}"#)).is_none());
+        // disable / 未知模式 → 不注入（不要 TLS 就不写 URL 参数）
+        assert!(inline_ssl_override(Some(r#"{"ssl":{"mode":"disable"}}"#)).is_none());
+        assert!(inline_ssl_override(Some(r#"{"ssl":{"mode":"maybe"}}"#)).is_none());
+
+        // require：不校验证书；未填的证书路径保持 None
+        let (mode, ssl) = inline_ssl_override(Some(r#"{"ssl":{"mode":"require"}}"#)).unwrap();
+        assert_eq!(mode, SslMode::Require);
+        assert!(!ssl.verify_server_cert);
+        assert!(ssl.ca_cert_path.is_none() && ssl.client_cert_path.is_none());
+
+        // verify-ca + 证书三件套（空白视为未填）
+        let json = r#"{"ssl":{"mode":"verify-ca","ca":" /ca.pem ","cert":"","key":"/key.pem"},
+                      "policy_overrides":["security"]}"#;
+        let (mode, ssl) = inline_ssl_override(Some(json)).unwrap();
+        assert_eq!(mode, SslMode::VerifyCa);
+        assert!(ssl.verify_server_cert);
+        assert_eq!(ssl.ca_cert_path.as_deref(), Some("/ca.pem"));
+        assert!(ssl.client_cert_path.is_none(), "空字符串不算证书路径");
+        assert_eq!(ssl.client_key_path.as_deref(), Some("/key.pem"));
+    }
+
+    /// TLS 请求派生（与 URL 注入同一套规则，两边必须成对）：
+    /// 档案 SSL 优先 → 内联覆盖次之；被代理接管的 SSL 跳**不给驱动**（那层 TLS 由嵌套层做）。
+    #[test]
+    fn tls_request_derivation_matches_url_injection_rules() {
+        // 档案 SSL 优先于内联覆盖；档案只有 verify 布尔（无 CA 路径）→ Require（既有映射）
+        let method = ConnectionMethod::Ssl(SslConfig {
+            verify_server_cert: true,
+            ..Default::default()
+        });
+        let got = tls_request_of(Some(&method), Some(r#"{"ssl":{"mode":"require"}}"#))
+            .expect("档案 SSL 应派生请求");
+        assert_eq!(
+            got.mode,
+            SslMode::Require,
+            "档案 verify=true 但没给 CA → REQUIRE（与 SslMode::from_ssl_config 同一口径）"
+        );
+
+        // 档案带 CA 路径 → VERIFY_CA（并且内联覆盖仍被档案压住）
+        let method_with_ca = ConnectionMethod::Ssl(SslConfig {
+            verify_server_cert: true,
+            ca_cert_path: Some("/profile-ca.pem".to_string()),
+            ..Default::default()
+        });
+        let got = tls_request_of(Some(&method_with_ca), Some(r#"{"ssl":{"mode":"require"}}"#))
+            .expect("档案 SSL 应派生请求");
+        assert_eq!(got.mode, SslMode::VerifyCa);
+        assert_eq!(got.ca_path(), Some("/profile-ca.pem"), "用的是档案的 CA");
+
+        // 无档案 SSL → 内联覆盖（含证书路径与 verify 意图）
+        let got = tls_request_of(
+            Some(&ConnectionMethod::Direct),
+            Some(r#"{"ssl":{"mode":"verify-full","ca":"/ca.pem"}}"#),
+        )
+        .expect("内联覆盖应派生请求");
+        assert_eq!(got.mode, SslMode::VerifyFull);
+        assert_eq!(got.ca_path(), Some("/ca.pem"));
+        assert!(got.verifies_chain() && got.verifies_hostname());
+
+        // 什么都没有 → 无请求（驱动保持历史默认）
+        assert!(tls_request_of(Some(&ConnectionMethod::Direct), None).is_none());
+
+        // 链里 SSL 紧跟代理：URL 侧跳过（`inject_chain_ssl_params`），驱动侧也不应做 TLS
+        let chain = ConnectionMethod::Chain(vec![
+            ChainHop::SocksProxy(connection::config::ProxyConfig {
+                host: "127.0.0.1".to_string(),
+                port: 1080,
+                auth: None,
+                no_proxy: Vec::new(),
+                timeout_secs: 10,
+            }),
+            ChainHop::Ssl(SslConfig {
+                verify_server_cert: true,
+                ..Default::default()
+            }),
+        ]);
+        assert!(
+            profile_ssl_config(Some(&chain)).is_none(),
+            "被代理接管的 SSL 跳不应交给驱动"
+        );
+        assert!(
+            method_has_ssl_hop(Some(&chain)),
+            "但「档案优先」判定仍然生效（内联覆盖不得往同一 URL 再叠参数）"
+        );
+    }
+
+    /// 档案优先：网络方式里已有 SSL 跳时，内联覆盖不重复注入。
+    #[test]
+    fn inline_ssl_yields_to_network_profile_ssl() {
+        let ssl_cfg = SslConfig {
+            verify_server_cert: false,
+            ..Default::default()
+        };
+        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Ssl(ssl_cfg.clone()))));
+        assert!(method_has_ssl_hop(Some(&ConnectionMethod::Chain(vec![
+            ChainHop::Ssl(ssl_cfg)
+        ]))));
+        assert!(!method_has_ssl_hop(Some(&ConnectionMethod::Direct)));
+        assert!(!method_has_ssl_hop(None));
+    }
 
     #[test]
     fn services_sharing_a_manager_share_tunnel_registry() {

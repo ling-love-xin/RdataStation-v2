@@ -642,6 +642,10 @@ flowchart LR
 - `db_type` / `driver_id`：**均为驱动 id**（如 `mysql_native`），与引擎 `DriverRegistry` key 对齐；显示名（`MySQL (sqlx)`）仅存于 `drivers.name`，UI 展示用 `driver_short_name` 取括号内实现名。
 - `tags`：JSON 数组文本；检索与导航消费统一读 `connection_tags`（`tags` 为兼容投影）。
 - `advanced_options`：内嵌 `ssl`（mode/ca/cert/key）与 `policy_overrides`。
+  **`ssl` 是生效的（2026-09-19 接线）**：「连接安全」分组的值在连接与测试连接两条路上都会落到连接上——
+  URL 部分（互不相同的参数词汇）写进连接串，证书路径与校验意图走 `DriverConnectionConfig.tls`（结构化，
+  native 驱动据此构造 TLS 连接器）；**网络档案优先**。各驱动的能力边界（如 MySQL Official 的客户端证书
+  只接受 PKCS#12）见 `../driver-capability-matrix.md` §2.1。
 - `connection_drafts.position`：列表下标即主键（全量替换写入）。
 
 ### 10.3 迁移清单（连接模块相关）
@@ -759,6 +763,18 @@ flowchart LR
 > **登记补充（2026-09-13 晚）**：新增两条 ⚪——**#35** `SettingsService` 读取 global 未安装时 panic（本模块 7 个宿主已内联兜底；根治归 `settings` crate）、**#36** 保存结果行的「详情 / 复制」入口是否算噪音（待 USIT 定夺）。同时把后续表的 **E（项目下拉浏览目录）标为已完成**（改由 #26/#41 的「打开现有目录…」+ #4 的确认后直接推进提供，无需另做宿主入口）。
 > **#15/#14/#17/#18/#29/#31/#4 轮（2026-09-13）**：本模块可做的 7 项一次性关闭——组件化迁移（Tab 条 / 分段控件 / 开关）、尺寸契约纳入扫描、ElementId 业务键、`project_path` 收敛、首次引导、标签单一权威、未保存确认后直接推进项目动作。至此本模块只剩 **🟡 #7**（分组管理在导航侧）与 **⚪ #9 / #10 / #11 / #12 / #13**（宿主分支测试 / 原型 HTML / 类型树折叠 / 全局尺寸迁移 / 图像回归），以及 **#19 / #21 / #22 / #23**（M4 与宿主侧）与 **#32 / #1**（待拍板 / 平台）。
 > **全量回归轮（2026-09-17）**：新增两个测试套件（**渲染状态矩阵** + **编辑回填端到端**），由此**拖出一个真缺陷**——编辑既有连接时类型 / 驱动未回填（驱动定位早于目录加载，见下方“已关闭（全量回归轮）”）。关闭 **#13 的一部分**（状态矩阵渲染冒烟）；16 个测试目标 / 145 用例全绿，四条真机连接（MySQL·PG·SQLite·DuckDB）测试连接 + 真实连接双链路通过。
+> **台账对账（2026-09-19）**：与 `docs/architecture/module-status.md` §3 对账，补登记两项该台账挂号的 M3 缺口——**#37 SSH 主机密钥默认放行**、**#38 DuckDB Secret 注册门控不一致**（两处都已在下方表格内给出根因与建议）；同台账 §6.1 记录的 `zz_fixture_probe.rs` 入库事件已在仓库侧处置（取消跟踪 + `**/tests/zz_*.rs` 忽略规则），**仍待用户轮换口令**。另：本模块测试数字按台账 §2 的逐包口径重算（不再使用跨 crate 组合的“N 目标 / M 用例”）。
+> **驱动类型审计轮（2026-09-19）**：与 `driver-capability-matrix.md` §2.1 联动，拖出并修掉**三个静默失效**——① **驱动 id 被当 scheme**（`build_connection_url` 拿 `db_type` 拼 `{driver}://`，而 `mysql_async` 只认 `mysql://`、`tokio-postgres` 只认 `postgres://`）→ 建连前归一；② **DuckDB Secret 类型按驱动 id 查表**（`mysql_native` → `None` → 静默不注册）→ 新增族解析 `secret_type_of`；③ **「连接安全」SSL 卡片只落库不生效** → 接入连接与测试连接两条路（按驱动分派词汇、档案优先）。另删掉两份重复的驱动声明（`driver/metadata.rs` 528 行零引用 + `driver/driver_config.rs` 未编译）。详见下段与 `driver-capability-matrix.md` §2/§2.1/§7。
+
+**已关闭（驱动类型审计轮，2026-09-19：SSL 卡片生效 · Official 驱动连接串 · Secret 族归一）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 新增（🔴） | **驱动 id 当 scheme → Official 驱动保存后点「连接」必失败**：新增 `connection::url_params::normalize_url_scheme`，两个 native 工厂在建连前归一（`factory::{mysql_native_url, postgres_native_url}` 提为可测纯函数） | `engine::driver::factory::tests::native_urls_carry_the_client_scheme_not_the_driver_id`、`connection::url_params::tests::scheme_normalization_keeps_the_rest_of_the_url`；**真机待验** |
+| 新增（🔴） | **`advanced_options.ssl` 填了不生效**（只在对话框读写）：新增 `ConnectionService::apply_inline_ssl_override` + 自由函数 `inline_ssl_override` / `method_has_ssl_hop`，`connect_with_type` 与 `build_probe_config` **同源**接入（档案优先；测试连接结果行附「已应用「连接安全」SSL 覆盖」） | `connection_service` 内嵌 2 项（解析 / 档案优先）、`url_params` 新增 4 项（各库词汇 / 做不到则报错 / 模式解析 / scheme 归一） |
+| 新增（🔴） | **DuckDB Secret 类型按族给**：`secret_type_of`（族 id 快路径 → 未命中查 `driver_catalog::type_id_of`）+ `driver_store::get_type_id`；补 `mariadb → MYSQL` | `secret_integration` 内嵌 2 项、`driver_store::tests::type_id_resolves_driver_implementation_to_family`（内存库） |
+| 新增（🟡） | **驱动侧 TLS 能力补齐**（`driver-capability-matrix.md` §7 #7/#8）：新增 `connection::config::TlsRequest` → `DriverConnectionConfig.tls`，驱动侧 `mysql_async_ssl_opts` / `pg_tls_connector` 按请求构造连接器——`postgres_native` 的 `danger_accept_invalid_certs(true)` 改为按模式决定（verify 档真校验），`mysql_native` 支持 CA 与 verify（客户端证书限 PKCS#12，PEM 报可见错误） | `mysql_native::tls_request_becomes_ssl_opts`、`postgres_native::{tls_policy_follows_the_request, broken_cert_material_is_a_visible_error}`、`url_params::native_urls_never_carry_cert_paths`、`connection_service::tls_request_derivation_matches_url_injection_rules` |
+| 新增（⚪） | **两份重复的驱动声明删除**：`engine/src/driver/metadata.rs`（零引用）与 `engine/src/driver/driver_config.rs`（未编译，含第二个同名 `BuiltinDriverDiscovery`）；`mod.rs` 重导出一并去掉 | `cargo check --workspace --all-targets` 零警告；台账记入 `driver-capability-matrix.md` §2/§5 |
 
 **已关闭（#15/#14/#17/#18/#29/#31/#4 轮，2026-09-13：组件化 · 尺寸契约 · 标识 · 标签 · 引导 · 项目动作）**
 
@@ -894,6 +910,8 @@ flowchart LR
 | 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移（全局库 + 项目库）+ 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | — |
 | 35 | ⚪ | **`SettingsService` 的读取方法在 global 未安装时直接 panic**（`cx.global::<Settings>()`）：本模块 7 个窗口测试宿主在 `EditorPanel::new` 处集体挂掉（`no state of type rds_settings::model::Settings exists`） | 任何不经 app 启动路径构造面板的入口（测试 / 将来的 headless / 脚本）都会碰；目前只能在每个宿主手写“注入默认设置” | 两选一：① `crates/settings` 的访问器自愈（与 `workbench_shell::product_tokens::apply_from_path` 同风格：缺失即装默认）；② 保持 panic 但提供 `settings::test_support::install_default(cx)` 单一入口。本模块已按方式②在 7 个宿主内联注入（归属 `settings` crate 决定） |
 | 36 | ⚪ | **保存成功的结果行**每次都出现「详情 / 复制」入口（因为 B 案把连接 ID 挂在 `detail` 上，而 `detail.is_some()` 即渲染入口） | 每次保存多两个小链接；对不需要 ID 的用户可能是噪音 | 待 USIT 定夺：① 保持现状（按需可见，最省事）；② 改为“点开时才展开”的懒加载；③ 只在 `name` 为空/冲突场景才附详情 |
+| 37 | 🟡 | **SSH 主机密钥默认放行（台账 `module-status.md` §3 挂号）**：生产连接器硬编码 `create_known_hosts_checker(true)`（`connection/src/connector.rs`）——未知主机一律放行且只写日志，也不把新主机回写 `known_hosts`（无 TOFU）；`load_default` 失败（无 `~/.ssh/known_hosts`）时回退 `allow_all` | 首次连接（或本地没有 known_hosts 时）不校验主机身份：中间人可被静默接受；已记录主机的密钥**变更**仍会拒（有比对）——即“变更报错、首次不报” | 三选一：① 保持现状 + 在 UI/日志标明“本次为首连（未校验）”；② 首次连接弹一次指纹确认（接 `window.open_alert_dialog`），确认后写入 `known_hosts`（真正的 TOFU）；③ 提供“严格校验”开关（驱动属性 / 高级 Tab）。建议 ② 作为默认 + ③ 作为内网退路（当前 LAN 夹具 `lan_disable_tls` 同风格） |
+| 38 | 🟡 | **DuckDB Secret 注册门控不一致（台账 `module-status.md` §3 挂号）**：保存 / 更新 / 删除路径**有**门控（`use_duckdb_fed` 才注册；关闭与删除时移除），但**连接路径无门控**——`connection_service` 两处 `ensure_secret_registered`（含别名注册分支）不判断 `use_duckdb_fed`，任何连接都会注册；项目侧保存分支**完全不注册**；连接路径注册的 Secret 在断开时**不回收** | ① 未开加速的连接也会在分析库里留下 Secret 残渣（凭据面扩大、“这个 Secret 哪来的”难追）；② P_/GP_ 开了加速但未连过时无 Secret（行为与全局侧不一致）；③ 反复连不同库会累积 Secret 记录 | 统一成一条规则：“**加速开 → 注册；加速关 / 删除 / 断开 → 移除**”，并补齐：① `connection_service` 两处按 `use_duckdb_fed` 门控（或统一走 `DataSourceService` 的唯一入口）；② 项目侧保存 / 快照同步时按同一规则注册；③ 断开（`disconnect`）时回收；④ 加一个“按连接 ID 枚举 / 收敛残留”的诊断（比 `remove_connection_secret_at` 更宽：支持列出与批量清理） |
 
 ---
 

@@ -256,6 +256,31 @@ impl DriverFactory for DuckDbDriverFactory {
 /// 使用 MySQL 官方维护的纯 Rust 异步驱动
 pub struct MySqlNativeDriverFactory;
 
+/// 构造 mysql_async 认的连接串（纯函数，可测）。
+///
+/// 两件事：
+/// 1. **scheme 归一**——连接记录里的 `db_type` 是驱动 id（`mysql_native`），
+///    而 `mysql_async` 只认 `mysql://`（其余 scheme 报 `UnsupportedScheme`）；
+/// 2. 补 `prefer_socket`（mysql_async 认的参数名，未给时显式关掉，避免走 localhost 的 unix socket）。
+pub(crate) fn mysql_native_url(config: &DriverConnectionConfig) -> Result<String, CoreError> {
+    let raw = config
+        .to_url()
+        .map_err(|e| invalid_config(config, "mysql_native", e.to_string()))?;
+    let mut url = connection::url_params::normalize_url_scheme(&raw, "mysql");
+
+    if !url.contains("prefer_socket") {
+        let prefer_socket = config
+            .driver_properties
+            .get("prefer_socket")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let sep = if url.contains('?') { '&' } else { '?' };
+        url.push(sep);
+        url.push_str(&format!("prefer_socket={}", prefer_socket));
+    }
+    Ok(url)
+}
+
 impl DriverFactory for MySqlNativeDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
         crate::driver::registry::mysql_native_driver()
@@ -267,28 +292,9 @@ impl DriverFactory for MySqlNativeDriverFactory {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<DynDatabase, CoreError>> + Send>>
     {
         Box::pin(async move {
-            let mut url = config.to_url().map_err(|e| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: config
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| "mysql_native".to_string()),
-                    reason: e.to_string(),
-                })
-            })?;
-
-            if !url.contains("prefer_socket") {
-                let prefer_socket = config
-                    .driver_properties
-                    .get("prefer_socket")
-                    .map(|v| v == "true")
-                    .unwrap_or(false);
-                let sep = if url.contains('?') { '&' } else { '?' };
-                url.push(sep);
-                url.push_str(&format!("prefer_socket={}", prefer_socket));
-            }
-
-            let db = MySqlNativeDatabase::new(&url).await?;
+            let url = mysql_native_url(&config)?;
+            // 结构化 TLS 请求（证书路径 / 校验意图）：URL 表达不了的部分走这里
+            let db = MySqlNativeDatabase::new_with_tls(&url, config.tls.as_ref()).await?;
             let db: DynDatabase = Arc::new(db);
             Ok(db)
         })
@@ -301,6 +307,33 @@ impl DriverFactory for MySqlNativeDriverFactory {
 /// 使用 PostgreSQL 官方维护的异步驱动
 pub struct PostgresNativeDriverFactory;
 
+/// 构造 tokio-postgres 认的连接串（纯函数，可测）。
+///
+/// tokio-postgres 只剥离 `postgres://` / `postgresql://` 两个前缀；
+/// 驱动 id `postgres_native` 直接当 scheme 时两个前缀都不命中，整串会被当成
+/// `key=value` 连接串去解析而报错（真机形态见 `data-layer-wiring-matrix.md` §7 第 10 条）。
+pub(crate) fn postgres_native_url(config: &DriverConnectionConfig) -> Result<String, CoreError> {
+    let raw = config
+        .to_url()
+        .map_err(|e| invalid_config(config, "postgres_native", e.to_string()))?;
+    Ok(connection::url_params::normalize_url_scheme(&raw, "postgres"))
+}
+
+/// 统一的「驱动配置不合法」错误（`conn_id` 取显示名，无名字时回退驱动 id）。
+fn invalid_config(
+    config: &DriverConnectionConfig,
+    fallback_id: &str,
+    reason: String,
+) -> CoreError {
+    CoreError::connection(ConnectionError::InvalidConfig {
+        conn_id: config
+            .name
+            .clone()
+            .unwrap_or_else(|| fallback_id.to_string()),
+        reason,
+    })
+}
+
 impl DriverFactory for PostgresNativeDriverFactory {
     fn descriptor(&self) -> DriverDescriptor {
         crate::driver::registry::postgres_native_driver()
@@ -312,19 +345,47 @@ impl DriverFactory for PostgresNativeDriverFactory {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<DynDatabase, CoreError>> + Send>>
     {
         Box::pin(async move {
-            let url = config.to_url().map_err(|e| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: config
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| "postgres_native".to_string()),
-                    reason: e.to_string(),
-                })
-            })?;
-
-            let db = PostgresNativeDatabase::new(&url).await?;
+            let url = postgres_native_url(&config)?;
+            // 结构化 TLS 请求：tokio-postgres 的连接串里没有证书参数与 verify 档，
+            // 校验与证书都在驱动侧连接器上落实（见 `pg_tls_connector`）
+            let db = PostgresNativeDatabase::new_with_tls(&url, config.tls.as_ref()).await?;
             let db: DynDatabase = Arc::new(db);
             Ok(db)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真机踩到的形态：连接记录里存的是驱动 id，`build_connection_url` 把它当 scheme，
+    /// 而 mysql_async / tokio-postgres 都不认——两个工厂必须在建连前归一。
+    #[test]
+    fn native_urls_carry_the_client_scheme_not_the_driver_id() {
+        let mysql = DriverConnectionConfig::new("mysql_native")
+            .with_url_override("mysql_native://root:pw@h:3306/db");
+        assert_eq!(
+            mysql_native_url(&mysql).unwrap(),
+            "mysql://root:pw@h:3306/db?prefer_socket=false"
+        );
+
+        // 已是 mysql:// 时幂等；driver_properties 声明 prefer_socket 时按其值写
+        let mut mysql = DriverConnectionConfig::new("mysql_native")
+            .with_url_override("mysql://root:pw@h:3306/db");
+        mysql
+            .driver_properties
+            .insert("prefer_socket".to_string(), "true".to_string());
+        assert_eq!(
+            mysql_native_url(&mysql).unwrap(),
+            "mysql://root:pw@h:3306/db?prefer_socket=true"
+        );
+
+        let pg = DriverConnectionConfig::new("postgres_native")
+            .with_url_override("postgres_native://u:p@h:5432/db?sslmode=require");
+        assert_eq!(
+            postgres_native_url(&pg).unwrap(),
+            "postgres://u:p@h:5432/db?sslmode=require"
+        );
     }
 }

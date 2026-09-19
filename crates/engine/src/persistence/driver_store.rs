@@ -121,6 +121,21 @@ pub fn get_driver(conn: &Connection, id: &str) -> Result<Option<Driver>, CoreErr
     .map_err(|e| storage_err("get_driver", e.to_string()))
 }
 
+/// 只取驱动所属的数据库族 id（`drivers.type_id`）。
+///
+/// 为什么单独一个函数：**数据库族**与**驱动实现**是两个概念（`mysql_native` → `mysql`），
+/// 而需要「族」的下游（DuckDB Secret 类型、元数据缓存身份指纹、导航筛选）只知道驱动 id。
+/// 只查一列，避免为了拿族而把整行（含 config_schema 大 JSON）读出来。
+pub fn get_type_id(conn: &Connection, driver_id: &str) -> Result<Option<String>, CoreError> {
+    conn.query_row(
+        "SELECT type_id FROM drivers WHERE id = ?1",
+        params![driver_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| storage_err("get_type_id", e.to_string()))
+}
+
 /// 获取所有驱动定义
 pub fn get_all_drivers(conn: &Connection) -> Result<Vec<Driver>, CoreError> {
     let mut stmt = conn
@@ -264,4 +279,34 @@ pub fn is_driver_file_installed(
         .map_err(|e| storage_err("check_driver_file_installed", e.to_string()))?;
 
     Ok(count > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 驱动实现 → 数据库族的唯一解析（不读整行：`config_schema` 是长 JSON）。
+    #[test]
+    fn type_id_resolves_driver_implementation_to_family() {
+        let conn = Connection::open_in_memory().expect("内存库");
+        conn.execute_batch(
+            "CREATE TABLE drivers (id TEXT PRIMARY KEY, type_id TEXT NOT NULL, enabled INTEGER);
+             INSERT INTO drivers (id, type_id, enabled) VALUES
+                ('mysql', 'mysql', 1),
+                ('mysql_native', 'mysql', 1),
+                ('postgres_native', 'postgresql', 1);",
+        )
+        .expect("建表");
+
+        assert_eq!(
+            get_type_id(&conn, "mysql_native").unwrap().as_deref(),
+            Some("mysql")
+        );
+        assert_eq!(
+            get_type_id(&conn, "postgres_native").unwrap().as_deref(),
+            Some("postgresql")
+        );
+        // 目录里没有的驱动（插件驱动未落库 / 拼写错）：None，不报错也不编造族
+        assert_eq!(get_type_id(&conn, "oracle_jdbc").unwrap(), None);
+    }
 }

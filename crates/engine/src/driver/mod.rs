@@ -46,12 +46,12 @@
 //!   经 [`Database`] trait 调具体驱动
 //! - 本层不感知上游的编排策略（历史 / 事务 / 超时 / 执行通道都在 services 与 editor 侧）
 pub mod auto_register;
+pub mod capability;
 pub mod factory;
 pub mod introspection;
 pub mod jdbc;
 pub mod loader;
 pub mod manager;
-pub mod metadata;
 pub mod native;
 pub mod registry;
 pub mod router;
@@ -73,7 +73,7 @@ pub use manager::{
     get_driver_manager, init_driver_manager, DriverInfo, DriverManager, DriverStatus,
     DRIVER_MANAGER,
 };
-pub use metadata::{DriverFormField, DriverIcon, DriverMetadata, DriverType};
+pub use capability::{label as capability_label, meta_bit as capability_meta_bit, spec as capability_spec, Acceptance, CapabilitySpec, MetaBit, CAPABILITY_DICTIONARY};
 pub use registry::{
     DriverConnectionConfig, DriverDescriptor, DriverFactory, DriverKind, DriverRegistry,
 };

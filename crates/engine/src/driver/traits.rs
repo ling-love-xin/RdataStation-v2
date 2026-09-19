@@ -203,7 +203,12 @@ pub trait MetadataBrowser: Send + Sync {
 
 /// 数据源能力描述
 ///
-/// 描述数据库支持的特性，用于运行时能力检测
+/// 描述数据库支持的特性，用于运行时能力检测。
+///
+/// **按驱动实现给，不按数据库族给**：同一个库的 sqlx 版与官方版是两套客户端库，
+/// 能力/参数/限制都可能不同（已知实例：TLS 参数词汇与证书格式，见
+/// `docs/architecture/driver-capability-matrix.md` §2.1）。
+/// 因此下面每个构造器对应**一个驱动 id**，各驱动的 `meta()` 只用自己的那一份。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataSourceMeta {
     /// 数据库服务器版本
@@ -223,7 +228,7 @@ pub struct DataSourceMeta {
 }
 
 impl DataSourceMeta {
-    /// MySQL 元数据
+    /// MySQL（sqlx 实现）
     pub fn mysql() -> Self {
         Self {
             server_version: None,
@@ -234,6 +239,15 @@ impl DataSourceMeta {
             supports_concurrent_write: true,
             is_in_memory: false,
         }
+    }
+
+    /// MySQL（官方实现 mysql_async）
+    ///
+    /// 目前与 sqlx 版同值（真机上两者的事务/取消/取数都已跑通）；
+    /// **单独一份是为了让差异可表达**：将来哪一项只在一边成立，改这里 + 加用例即可，
+    /// 不需要再去拆“族”的概念（能力键与运行时位的对应见 `driver::capability`）。
+    pub fn mysql_native() -> Self {
+        Self::mysql()
     }
 
     /// PostgreSQL 元数据
@@ -247,6 +261,13 @@ impl DataSourceMeta {
             supports_concurrent_write: true,
             is_in_memory: false,
         }
+    }
+
+    /// PostgreSQL（官方实现 tokio-postgres）
+    ///
+    /// 同 MySQL 两版：目前与 sqlx 版同值，单列一份以便表达差异。
+    pub fn postgres_native() -> Self {
+        Self::postgres()
     }
 
     /// SQLite 元数据

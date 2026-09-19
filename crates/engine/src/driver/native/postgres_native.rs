@@ -41,17 +41,19 @@ pub struct PostgresNativeDatabase {
 impl PostgresNativeDatabase {
     /// 从连接 URL 创建新的 PostgreSQL 数据库实例
     pub async fn new(url: &str) -> Result<Self, CoreError> {
-        // 构建 TLS 连接器（接受自签名证书用于开发环境）
-        let tls_connector = native_tls::TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map_err(|e| {
-                CoreError::database(DatabaseError::Driver {
-                    db_type: "postgres_native".to_string(),
-                    operation: "tls_init".to_string(),
-                    source: e.to_string(),
-                })
-            })?;
+        Self::new_with_tls(url, None).await
+    }
+
+    /// 从连接 URL + 结构化 TLS 请求创建实例。
+    ///
+    /// tokio-postgres 的连接串里只有 `sslmode=disable|prefer|require`（无 verify 档、
+    /// 无证书参数），所以 **验证书链 / 主机名与证书文件都在这里的连接器上落实**：
+    /// `verify-ca` → 校链不校主机名，`verify-full` → 两者都校。
+    pub async fn new_with_tls(
+        url: &str,
+        tls_request: Option<&connection::config::TlsRequest>,
+    ) -> Result<Self, CoreError> {
+        let tls_connector = pg_tls_connector(tls_request)?;
         let tls = postgres_native_tls::MakeTlsConnector::new(tls_connector);
 
         let (client, connection) = tokio_postgres::connect(url, tls).await.map_err(|e| {
@@ -103,6 +105,85 @@ impl PostgresNativeDatabase {
             server_version,
         }
     }
+}
+
+// ============================================================================
+// TLS 连接器构造
+// ============================================================================
+
+/// 校验策略（纯函数）：`(校验证书链, 校验主机名)`。
+///
+/// 无请求时保持历史行为（不校验，接受自签）；`verify-ca` / `verify-full` 才开校验，
+/// 两者都是「用户显式要验证书」的意图，不允许静默降级。
+pub(crate) fn pg_tls_policy(
+    req: Option<&connection::config::TlsRequest>,
+) -> (bool, bool) {
+    match req {
+        None => (false, false),
+        Some(r) => (r.verifies_chain(), r.verifies_hostname()),
+    }
+}
+
+/// 按 TLS 请求构造 native-tls 连接器（证书文件在这里读，读不到就明确报错）。
+pub(crate) fn pg_tls_connector(
+    req: Option<&connection::config::TlsRequest>,
+) -> Result<native_tls::TlsConnector, CoreError> {
+    let (verify_chain, verify_hostname) = pg_tls_policy(req);
+    let mut builder = native_tls::TlsConnector::builder();
+    builder
+        .danger_accept_invalid_certs(!verify_chain)
+        .danger_accept_invalid_hostnames(!verify_hostname);
+
+    if let Some(r) = req {
+        if let Some(ca) = r.ca_path() {
+            let bytes = std::fs::read(ca)
+                .map_err(|e| tls_config_err(format!("读取 CA 证书失败（{ca}）：{e}")))?;
+            let cert = native_tls::Certificate::from_pem(&bytes)
+                .or_else(|_| native_tls::Certificate::from_der(&bytes))
+                .map_err(|e| {
+                    tls_config_err(format!("CA 证书既不是有效 PEM 也不是 DER（{ca}）：{e}"))
+                })?;
+            builder.add_root_certificate(cert);
+        }
+
+        match (r.client_cert_path(), r.client_key_path()) {
+            (None, None) => {}
+            (Some(cert), Some(key)) => {
+                let cert_pem = std::fs::read(cert)
+                    .map_err(|e| tls_config_err(format!("读取客户端证书失败（{cert}）：{e}")))?;
+                let key_pem = std::fs::read(key)
+                    .map_err(|e| tls_config_err(format!("读取客户端私钥失败（{key}）：{e}")))?;
+                let identity = native_tls::Identity::from_pkcs8(&cert_pem, &key_pem)
+                    .map_err(|e| {
+                        tls_config_err(format!(
+                            "客户端证书与私钥无法组成 PKCS#8 身份（{cert} + {key}）：{e}"
+                        ))
+                    })?;
+                builder.identity(identity);
+            }
+            (Some(cert), None) => {
+                return Err(tls_config_err(format!(
+                    "客户端证书 {cert} 缺少对应私钥：两件套需成对填写"
+                )))
+            }
+            (None, Some(key)) => {
+                return Err(tls_config_err(format!(
+                    "客户端私钥 {key} 缺少对应证书：两件套需成对填写"
+                )))
+            }
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|e| tls_config_err(format!("TLS 连接器构造失败：{e}")))
+}
+
+fn tls_config_err(reason: String) -> CoreError {
+    CoreError::connection(ConnectionError::InvalidConfig {
+        conn_id: "postgres_native".to_string(),
+        reason,
+    })
 }
 
 // ============================================================================
@@ -549,7 +630,7 @@ impl Database for PostgresNativeDatabase {
     fn meta(&self) -> DataSourceMeta {
         DataSourceMeta {
             server_version: self.server_version.clone(),
-            ..DataSourceMeta::postgres()
+            ..DataSourceMeta::postgres_native()
         }
     }
 
@@ -1004,6 +1085,77 @@ mod tests {
     use crate::driver::Database;
 
     const PG_URL: &str = "postgresql://postgres:postgresql@localhost:5432/business_db";
+
+    /// 校验策略（纯函数）：无请求 = 历史行为（不校验）；verify 档才开校验，
+    /// `verify-ca` 不校主机名、`verify-full` 两者都校。
+    #[test]
+    fn tls_policy_follows_the_request() {
+        use connection::config::{SslConfig, TlsRequest};
+        use connection::url_params::SslMode;
+
+        assert_eq!(pg_tls_policy(None), (false, false));
+
+        let require = TlsRequest::new(
+            SslMode::Require,
+            SslConfig {
+                verify_server_cert: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(pg_tls_policy(Some(&require)), (false, false), "require 只管加密");
+
+        let ca = TlsRequest::new(
+            SslMode::VerifyCa,
+            SslConfig {
+                verify_server_cert: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(pg_tls_policy(Some(&ca)), (true, false));
+
+        let full = TlsRequest::new(
+            SslMode::VerifyFull,
+            SslConfig {
+                verify_server_cert: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(pg_tls_policy(Some(&full)), (true, true));
+    }
+
+    /// 证书文件读不到 / 两件套不齐 → **可见错误**（不静默变成不校验）。
+    #[test]
+    fn broken_cert_material_is_a_visible_error() {
+        use connection::config::{SslConfig, TlsRequest};
+        use connection::url_params::SslMode;
+
+        let missing = std::env::temp_dir().join("rds_no_such_ca_file_9f3a.pem");
+        let _ = std::fs::remove_file(&missing);
+        let req = TlsRequest::new(
+            SslMode::VerifyCa,
+            SslConfig {
+                verify_server_cert: true,
+                ca_cert_path: Some(missing.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        let err = pg_tls_connector(Some(&req)).expect_err("缺文件应报错");
+        assert!(err.to_string().contains("读取 CA 证书失败"), "{err}");
+
+        let half = TlsRequest::new(
+            SslMode::Require,
+            SslConfig {
+                verify_server_cert: false,
+                client_cert_path: Some("D:/certs/only-cert.pem".to_string()),
+                ..Default::default()
+            },
+        );
+        let err = pg_tls_connector(Some(&half)).expect_err("缺私钥应报错");
+        assert!(err.to_string().contains("缺少对应私钥"), "{err}");
+
+        // 不提供任何请求：旧行为（不校验）仍然可构造连接器
+        assert!(pg_tls_connector(None).is_ok());
+    }
 
     /// 触发器结果集 → 对象列表：第 2 列（所属表）进 `parent_name`，NULL 时不填。
     /// 与 sqlx 驱动那份是各自的实现，所以两边各钉一遍。

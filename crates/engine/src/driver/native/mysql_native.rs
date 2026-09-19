@@ -22,6 +22,76 @@ use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
 // ============================================================================
+// TLS 连接器构造
+// ============================================================================
+
+/// 按 TLS 请求构造 mysql_async 的 `SslOpts`（纯函数，可测）。
+///
+/// 依据（`mysql_async 0.37` + `native-tls` 后端，改前复读 `src/opts/mod.rs` 与
+/// `src/opts/native_tls_opts.rs`）：
+/// - 证书链 / 主机名校验是两个 `danger_*` 开关，默认**都是开校验**——
+///   「加密不校验」必须显式关掉（与 URL 上的 `verify_ca=false` 同一口径）；
+/// - CA 走 `with_root_certs`——注意其元素类型 `PathOrBuf` **未在 crate 根导出**
+///   （`mod opts` 是私有的），但类型推断可用：`vec![PathBuf::from(ca).into()]` 能解析到
+///   `From<PathBuf> for PathOrBuf<'static>`（已实测可编译）；
+/// - **客户端证书只接受 PKCS#12 存档**（`ClientIdentity::new(pkcs12)`），
+///   PEM 证书 + 私钥两件套在该后端下无法表达 → 明确报错并引导用 sqlx 驱动，不静默丢弃。
+pub(crate) fn mysql_async_ssl_opts(
+    req: &connection::config::TlsRequest,
+) -> Result<mysql_async::SslOpts, CoreError> {
+    let mut opts = mysql_async::SslOpts::default()
+        .with_danger_accept_invalid_certs(!req.verifies_chain())
+        .with_danger_skip_domain_validation(!req.verifies_hostname());
+
+    if let Some(ca) = req.ca_path() {
+        opts = opts.with_root_certs(vec![std::path::PathBuf::from(ca).into()]);
+    }
+
+    match (req.client_cert_path(), req.client_key_path()) {
+        (None, None) => {}
+        (Some(cert), None) if is_pkcs12_archive(cert) => {
+            opts = opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                std::path::PathBuf::from(cert).into(),
+            )));
+        }
+        (Some(cert), None) => {
+            return Err(tls_unsupported(format!(
+                "客户端证书 `{cert}` 不是 PKCS#12 存档（.p12 / .pfx）：\
+                 mysql_async 的 native-tls 后端只接受 PKCS#12 客户端身份。\
+                 请改用「MySQL (sqlx)」驱动（它直接接受 PEM 证书 + 私钥）"
+            )))
+        }
+        (Some(_), Some(_)) => {
+            return Err(tls_unsupported(
+                "mysql_async 的 native-tls 后端不接受 PEM 证书 + 私钥两件套\
+                 （只接受 PKCS#12 存档）：请改用「MySQL (sqlx)」驱动，\
+                 或把证书导出为 .p12/.pfx 后只填「客户端证书」一栏"
+                    .to_string(),
+            ))
+        }
+        (None, Some(_)) => {
+            return Err(tls_unsupported(
+                "填了客户端私钥但没有客户端证书：两者需成对（或只给 PKCS#12 存档）".to_string(),
+            ))
+        }
+    }
+
+    Ok(opts)
+}
+
+/// 是否像 PKCS#12 存档（按扩展名，大小写不敏感）。
+fn is_pkcs12_archive(path: &str) -> bool {
+    let lower = path.trim().to_ascii_lowercase();
+    lower.ends_with(".p12") || lower.ends_with(".pfx")
+}
+
+fn tls_unsupported(reason: String) -> CoreError {
+    CoreError::connection(ConnectionError::NotSupported(format!(
+        "mysql_native: {reason}"
+    )))
+}
+
+// ============================================================================
 // MySQL Native Database 结构体
 // ============================================================================
 
@@ -39,7 +109,29 @@ pub struct MySqlNativeDatabase {
 impl MySqlNativeDatabase {
     /// 从连接 URL 创建新的 MySQL 数据库实例
     pub async fn new(url: &str) -> Result<Self, CoreError> {
-        let pool = mysql_async::Pool::new(url);
+        Self::new_with_tls(url, None).await
+    }
+
+    /// 从连接 URL + 结构化 TLS 请求创建实例。
+    ///
+    /// URL 上的 `require_ssl` / `verify_ca` / `verify_identity` 只能表达「要不要加密」，
+    /// **CA 与客户端证书必须走这里**（`SslOpts`）。
+    pub async fn new_with_tls(
+        url: &str,
+        tls: Option<&connection::config::TlsRequest>,
+    ) -> Result<Self, CoreError> {
+        let opts = mysql_async::Opts::from_url(url).map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "mysql_native".to_string(),
+                operation: "parse_url".to_string(),
+                source: e.to_string(),
+            })
+        })?;
+        let mut builder = mysql_async::OptsBuilder::from_opts(opts);
+        if let Some(req) = tls {
+            builder = builder.ssl_opts(Some(mysql_async_ssl_opts(req)?));
+        }
+        let pool = mysql_async::Pool::new(builder);
         // 验证连接并获取版本号
         let mut conn = pool.get_conn().await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
@@ -533,7 +625,7 @@ impl Database for MySqlNativeDatabase {
     fn meta(&self) -> DataSourceMeta {
         DataSourceMeta {
             server_version: self.server_version.clone(),
-            ..DataSourceMeta::mysql()
+            ..DataSourceMeta::mysql_native()
         }
     }
 
@@ -906,6 +998,59 @@ mod tests {
     use crate::driver::Database;
 
     const MYSQL_URL: &str = "mysql://root:root@localhost:3306/";
+
+    /// TLS 请求 → `SslOpts`（纯函数，无需真机）：CA 落到 root_certs，
+    /// PKCS#12 落到 client_identity，PEM 两件套（native-tls 后端不支持）**报错不静默丢弃**。
+    #[test]
+    fn tls_request_becomes_ssl_opts() {
+        use connection::config::{SslConfig, TlsRequest};
+        use connection::url_params::SslMode;
+
+        let req = TlsRequest::new(
+            SslMode::VerifyCa,
+            SslConfig {
+                verify_server_cert: true,
+                ca_cert_path: Some("D:/certs/ca.pem".to_string()),
+                client_cert_path: Some("D:/certs/client.p12".to_string()),
+                client_key_path: None,
+                ..Default::default()
+            },
+        );
+        let opts = mysql_async_ssl_opts(&req).expect("CA + PKCS#12 应可构造");
+        // `PathOrBuf` 未在 crate 根导出（不可命名），但方法可调用
+        assert_eq!(opts.root_certs().len(), 1);
+        assert!(opts.client_identity().is_some());
+
+        // 不带任何 TLS 请求 → 只用 URL 上的三个布尔
+        let plain = TlsRequest::new(SslMode::Disable, SslConfig::default());
+        let opts = mysql_async_ssl_opts(&plain).expect("空请求也可构造");
+        assert_eq!(opts.root_certs().len(), 0);
+        assert!(opts.client_identity().is_none());
+
+        // PEM 证书 + 私钥：native-tls 后端无法表达 → 可见错误（引导用 sqlx 驱动）
+        let pem = TlsRequest::new(
+            SslMode::Require,
+            SslConfig {
+                verify_server_cert: false,
+                client_cert_path: Some("D:/certs/client.pem".to_string()),
+                client_key_path: Some("D:/certs/client.key".to_string()),
+                ..Default::default()
+            },
+        );
+        let err = mysql_async_ssl_opts(&pem).expect_err("PEM 两件套应报错");
+        assert!(err.to_string().contains("PKCS#12"), "{err}");
+
+        // 只有私钥没有证书：同样报错
+        let key_only = TlsRequest::new(
+            SslMode::Require,
+            SslConfig {
+                verify_server_cert: false,
+                client_key_path: Some("D:/certs/client.key".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(mysql_async_ssl_opts(&key_only).is_err());
+    }
 
     #[tokio::test]
     #[ignore = "需要运行中的 MySQL 服务"]

@@ -515,11 +515,22 @@ impl ConnectionDialogState {
                     content
                 }
                 2 => {
-                    // ===== 能力：只读矩阵（清单与命中均来自 `drivers.capabilities`，UI 只做标签映射）=====
+                    // ===== 能力：只读矩阵（清单与命中来自 `drivers.capabilities`；
+                    // 标签 / 运行时位 / 真机验收状态来自引擎的能力字典，UI 不再另存字典）=====
                     let caps = derived.capabilities.clone();
                     let declared_count = caps.len();
                     let mut chips = div().h_flex().gap_2().flex_wrap();
-                    for (label, ok) in capability_rows(&caps) {
+                    for row in capability_rows(&caps) {
+                        // 验收标记：已真机验收的项行尾加核对，未验收的如实标注（D10 口径）。
+                        // 仅对**该驱动已声明**的能力标注——未声明的项不值得验收。
+                        let acceptance = row
+                            .declared
+                            .then_some(row.acceptance)
+                            .filter(|a| a.verified);
+                        let label = match &acceptance {
+                            Some(_) => format!("{} ✓", row.label),
+                            None => row.label.clone(),
+                        };
                         chips = chips.child(
                             div()
                                 .text_xs()
@@ -527,8 +538,8 @@ impl ConnectionDialogState {
                                 .border_1()
                                 .px_3()
                                 .py_1()
-                                .border_color(if ok { theme.colors.success } else { theme.colors.border })
-                                .text_color(if ok { theme.colors.success } else { theme.colors.muted_foreground })
+                                .border_color(if row.declared { theme.colors.success } else { theme.colors.border })
+                                .text_color(if row.declared { theme.colors.success } else { theme.colors.muted_foreground })
                                 .child(label),
                         );
                     }
@@ -538,7 +549,7 @@ impl ConnectionDialogState {
                             format!("{}：{CAP_EMPTY_HINT}", driver_short_name(&d.name))
                         }
                         Some(d) => format!(
-                            "{}：drivers.capabilities 声明 {declared_count} 项 · 只读展示",
+                            "{}：drivers.capabilities 声明 {declared_count} 项 · 只读展示 · ✓ = 已真机验收",
                             driver_short_name(&d.name)
                         ),
                     };

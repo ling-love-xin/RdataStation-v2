@@ -570,9 +570,20 @@ impl QueryRunner for EngineQueryRunner {
         result.map(|_status| ()).map_err(|error| error.to_string())
     }
 
-    /// 引擎侧四个原生驱动都支持事务（P0.2 实测：含 MySQL 的驱动级事务）
+    /// 事务闸门：读**该连接实际的运行时能力位**（`DataSourceMeta::supports_transaction`），
+    /// 不再恒 `true`——能力 Tab 的声明与运行时位必须是同一份事实
+    /// （键 → 位的对应见 `engine::driver::capability`；两边不漂移由引擎侧单测钉住）。
+    ///
+    /// 连接未解析 / 取不到 meta 时保守返回 `true`：保持历史行为，不因读不到而误伤事务 UI。
     fn supports_transactions(&self) -> bool {
-        true
+        let Some(conn_id) = self.resolve_conn_id(None) else {
+            return true;
+        };
+        let manager = engine::connection_manager::get_connection_manager();
+        self.runtime
+            .block_on(async { manager.get_connection(&conn_id).await })
+            .map(|db| db.meta().supports_transaction)
+            .unwrap_or(true)
     }
 
     /// 【M8】未绑定连接的文档会落到哪条连接上（洞察入口要「产生这份结果的那条连接」）

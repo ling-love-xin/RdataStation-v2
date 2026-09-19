@@ -77,17 +77,20 @@ impl TunnelRegistry {
 /// - `None` / `Direct`：原样返回；
 /// - `Chain`：交由 [`process_chain`] 迭代处理；
 /// - `Ssh`：建立本地端口转发并改写 URL；
-/// - `Ssl`：仅注入 SSL 参数（由 sqlx 原生处理）；
+/// - `Ssl`：仅注入 SSL 参数（按驱动分派写法）；
 /// - `HttpProxy` / `SocksProxy`：无代理隧道 + URL 改写；命中 `no_proxy` 时跳过。
+///
+/// `driver` 是**驱动 id**（`drivers.id`，如 `mysql_native`）——SSL 参数由具体客户端库解析，
+/// 同族两个实现的词汇不同（见 [`url_params::append_ssl_params`]）。
 pub async fn apply_network_method(
     url: &str,
     method: &Option<ConnectionMethod>,
     conn_id: &str,
-    db_type: &str,
+    driver: &str,
 ) -> Result<(String, Vec<TunnelGuard>), CoreError> {
     match method {
         None | Some(ConnectionMethod::Direct) => Ok((url.to_string(), vec![])),
-        Some(ConnectionMethod::Chain(hops)) => process_chain(url, hops, conn_id, db_type).await,
+        Some(ConnectionMethod::Chain(hops)) => process_chain(url, hops, conn_id, driver).await,
         Some(ConnectionMethod::Ssh(ssh_config)) => {
             let guard = create_ssh_tunnel_port(ssh_config, None).await?;
             let local_port = guard.port();
@@ -101,9 +104,9 @@ pub async fn apply_network_method(
             Ok((rewritten, vec![guard]))
         }
         Some(ConnectionMethod::Ssl(ssl_config)) => {
-            // SSL 参数由 sqlx 原生支持，通过 URL query 参数传递
-            // 根据数据库类型自动映射 ssl_mode/sslmode 与证书路径
-            let url_with_ssl = url_params::append_ssl_params(url, db_type, ssl_config)?;
+            // SSL 参数经 URL query 传递；写法按驱动分派（sqlx / mysql_async / tokio-postgres 各不相同）
+            let mode = url_params::SslMode::from_ssl_config(ssl_config);
+            let url_with_ssl = url_params::append_ssl_params(url, driver, mode, ssl_config)?;
             Ok((url_with_ssl, vec![]))
         }
         Some(ConnectionMethod::HttpProxy(_) | ConnectionMethod::SocksProxy(_)) => {
@@ -153,12 +156,14 @@ pub async fn apply_network_method(
 /// 每跳建立本地端口转发，将目标地址作为下一跳的连接入口：
 /// - Proxy 跳的目标 = 下一跳的 host:port
 /// - SSH 跳的 connect_to = 上一跳的 localhost 端口
-/// - SSL 跳由 sqlx 原生处理
+/// - SSL 跳按驱动分派注入 URL 参数
+///
+/// `driver` 是驱动 id（供 SSL 参数写法分派）。
 pub async fn process_chain(
     url: &str,
     hops: &[ChainHop],
     conn_id: &str,
-    db_type: &str,
+    driver: &str,
 ) -> Result<(String, Vec<TunnelGuard>), CoreError> {
     let (final_db_host, final_db_port) = url_params::parse_host_port_from_url(url)?;
     let mut tunnel_port: Option<u16> = None;
@@ -249,11 +254,11 @@ pub async fn process_chain(
                 hops = hops.len(),
                 "协议链已建立"
             );
-            let url_with_ssl = url_params::inject_chain_ssl_params(&rewritten, hops, db_type)?;
+            let url_with_ssl = url_params::inject_chain_ssl_params(&rewritten, hops, driver)?;
             Ok((url_with_ssl, guards))
         }
         None => {
-            let url_with_ssl = url_params::inject_chain_ssl_params(url, hops, db_type)?;
+            let url_with_ssl = url_params::inject_chain_ssl_params(url, hops, driver)?;
             Ok((url_with_ssl, guards))
         }
     }

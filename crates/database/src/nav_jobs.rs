@@ -178,7 +178,8 @@ enum Job {
         property: PropertyRef,
         conn_label: String,
         driver: String,
-        /// 数据库类型（`drivers.type_id`）；属性面板「数据库类型」行用。
+        /// 数据库类型的**展示文字**：目录名（`data_source_types.name`）优先，取不到时回退类型 id
+        /// （`drivers.type_id`）；属性面板「数据库类型」行用。
         db_type: Option<String>,
     },
     /// 搜索框的跨连接索引搜索（名称档中缀 / 内容档 FTS5）。
