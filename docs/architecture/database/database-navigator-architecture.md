@@ -378,6 +378,7 @@ flowchart TD
 | 20 | 🟡 | 缓存首版限制（C3–C6） | 命中判据「非空即有数据」（空列表会回落实时内省）；刷新 `prune_schema` 连带失效兄弟文件夹缓存；列级删除不剪枝；每次 `NavCache::open` 新建连接 + 跑幂等迁移。详见 `dev-plan` C3 说明。 |
 | 21 | ⬜ | C8 身份指纹未接线 | `engine::persistence::metadata_identity` 纯函数已就绪但未接线；因此同库 / 同文件的多条连接（包括别名后）仍各存一份 L2。 |
 | 22 | ✅ | 组内「未排按名称」只在渲染侧 | 已做（2026-09-16）：成员序号加**未手动排序哨兵** `MEMBER_ORDER_UNSET = -1`（迁移 022 按「组内序号全同 = 从未手动排序」归一存量数据）；`list_group_members_detailed` 暴露「已排 / 未排」分区；视图纯函数 `nav_order_members` 把未排段按名称升序。分组之间本就用 `sort_order, name` 排序，无需改。 |
+| 23 | 🟡 | **搜索结果「在树中定位」** | 已接（2026-09-19）：搜索结果行的「定位」→ 展开 连接 → catalog → schema → 文件夹（列再多展开一层表）并选中目标；**大 schema 走「位次 → 那一页」**（`MetadataCacheOps::get_object_position` + `nav_jobs::enqueue_locate_page`），窗顶显示「已定位到第 N 条 · 点此回到开头」（定位窗口里不摆「加载更多」，因为那时的行集是一窗不是前缀）。不可定位 / 索引里没有 / 链路报错都**当场一句可读说明**，不悬着。**遗留**：① Quick Open 命中行的入口（跨面板：需展开左 Dock 并把焦点交给导航树）；② 窗口级自动化测试未覆盖（位次与 key 口径已由 3 项 engine/database 测试钉住）。 |
 
 ---
 

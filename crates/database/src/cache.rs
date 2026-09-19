@@ -215,6 +215,34 @@ impl NavCache {
         Some(chunk)
     }
 
+    /// 目标对象在某类别里的**零基位次**（与 [`Self::objects_chunk`] 同一排序口径）。
+    ///
+    /// 用途：搜索命中「在树中定位」时，大 schema 只加载了首屏，需要直接跳到目标所在的那一页。
+    ///
+    /// 返回 `None` 的两种情形必须区分对待（由调用方决定文案）：
+    /// 索引里**没有这个对象**（未重建 / 已删），或索引读取失败。
+    /// 两者都不能当作「位次 0」——那会把用户送到第一页并声称定位成功。
+    pub fn object_position(&self, schema_id: i64, want_view: bool, name: &str) -> Option<usize> {
+        let object_type = if want_view { "view" } else { "table" };
+        match self
+            .ops
+            .get_object_position(&self.conn_id, Some(schema_id), object_type, name)
+        {
+            Ok(pos) => pos.map(|p| p.max(0) as usize),
+            Err(e) => {
+                tracing::warn!(
+                    connection_id = %self.conn_id,
+                    schema_id,
+                    object_type,
+                    name,
+                    error = %e,
+                    "对象位次查询失败（本次不做定位）"
+                );
+                None
+            }
+        }
+    }
+
     /// 按名称搜索该连接的索引（跨 schema 中缀匹配）。
     ///
     /// 失败 / 无命中都返回空表：搜索是尽力而为的交互操作，不该因为某条连接缓存损坏

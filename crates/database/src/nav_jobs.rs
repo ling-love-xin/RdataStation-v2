@@ -41,6 +41,12 @@ pub struct LoadResult {
     pub path: NavPath,
     /// 本块结果的起始下标（0 = 首屏；>0 = 「加载更多」追加页）。
     pub offset: usize,
+    /// 这是一次「定位」的结果：值为目标在**全量**里的绝对位次。
+    ///
+    /// 与「加载更多」的区别必须靠它区分（两者 `offset` 都 > 0）：
+    /// 加载更多是**追加**语义（并到已有行后面），定位是**换窗**语义
+    /// （当前只展示这一窗，界顶那行说清「已定位到第 N 条」并可回到开头）。
+    pub jumped_to: Option<usize>,
     pub result: Result<crate::navigator_service::NavPage, String>,
 }
 
@@ -163,6 +169,9 @@ enum Job {
         offset: usize,
         /// 本页上限（[`PAGE_SIZE`]）。
         limit: usize,
+        /// 「定位到某个对象」：按名字先算位次，再把 `offset` 改为它所在的那一页。
+        /// `None` = 普通分页（首屏 / 加载更多）。
+        object: Option<String>,
     },
     LoadProperties {
         key: String,
@@ -304,12 +313,25 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 fresh,
                 offset,
                 limit,
+                object,
             } => {
                 let svc = crate::navigator_service::NavigatorService::with_context(
                     engine::get_connection_manager().clone(),
                     project_root.clone(),
                     fresh,
                 );
+                // 定位：位次 → 页起点。算不出位次就**如实**沿用原 offset 并让 `jumped_to` 为 None
+                // （界面那时会说「索引里没有它」，绝不假装定位成功）。
+                let (offset, jumped_to) = match object.as_deref() {
+                    Some(name) => match svc.object_position(&conn_id, &path, name) {
+                        Some(pos) => {
+                            let page = limit.max(1);
+                            (pos - (pos % page), Some(pos))
+                        }
+                        None => (offset, None),
+                    },
+                    None => (offset, None),
+                };
                 let result = rt
                     .block_on(svc.load_children_page(&conn_id, &path, offset, limit))
                     .map_err(|e| e.to_string());
@@ -319,6 +341,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     project_root,
                     path,
                     offset,
+                    jumped_to,
                     result,
                 });
                 shared().pending_loads.fetch_sub(1, Ordering::SeqCst);
@@ -522,6 +545,32 @@ pub fn enqueue_load_page(
         fresh,
         offset,
         limit,
+        object: None,
+    });
+}
+
+/// 提交「定位到某个对象」的页加载。
+///
+/// 与 [`enqueue_load_page`] 分开命名（而不是加个 `Option` 参数）：调用点的意图不同——
+/// 一个是在当前窗口往后翻，另一个是**换窗跳到目标**；混在一个签名里最容易接错。
+pub fn enqueue_locate_page(
+    conn_id: &str,
+    project_root: Option<&str>,
+    key: &str,
+    path: NavPath,
+    object: &str,
+    limit: usize,
+) {
+    shared().pending_loads.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::LoadChildren {
+        conn_id: conn_id.to_string(),
+        project_root: project_root.map(|s| s.to_string()),
+        key: key.to_string(),
+        path,
+        fresh: false,
+        offset: 0,
+        limit,
+        object: Some(object.to_string()),
     });
 }
 

@@ -63,7 +63,7 @@
 | `routines` | `NavCache::put_routines` | `NavCache::routines` | ✅ **本轮接线** |
 | `sequences` | `NavCache::put_sequences` | `NavCache::list_sequences` | ✅ **本轮接线** |
 | `triggers` | `NavCache::put_triggers` | `NavCache::list_triggers` | ✅ **本轮接线** |
-| `metadata_index` | `rebuild_schema_index`（冷启动那趟） | `search_index`、`objects_chunk`、`object_counts` | ✅ |
+| `metadata_index` | `rebuild_schema_index`（冷启动那趟） | `search_index`、`objects_chunk`、`object_counts`、`object_position`（搜索结果定位：位次 → 那一页） | ✅ |
 | `metadata_fts` | `rebuild_fts_schema`（与索引同批、schema 级幂等） | Quick Open `#` 档（`search_fts`） | ✅ |
 | `indexes` / `index_columns` | ——（`save_table_indexes` 有实现，无人调） | ——（`load_table_indexes` 有实现，无人调） | 🔒 **有意不做**（属性面板实时语义） |
 | `foreign_keys` / `foreign_key_columns` / `check_constraints` | ——（`save_table_constraints`） | ——（`load_table_foreign_keys`） | 🔒 **有意不做**（同上；且 `ConstraintDetail` 的四种约束散在三张表，往返语义不完整——接了会出「主键消失」这类 bug） |
@@ -245,6 +245,9 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 | 5 | ⚪ | `federation/legacy.rs` 的 `FederationManager` 同为零调用 | 已在其模块文档记为待退役 | 维持原计划：`session.rs` 覆盖四类源后一并退役（不静默删） |
 | 6 | ⚪ | `routine_parameters` 只有读侧接进 `list_routines`，写侧无人调 | 例程参数永不落盘（读时为空 vec） | 属性面板若要显示参数签名，接线时补上写侧。**注**：驱动层当前**没有**提供参数的接口（`MetadataBrowser` 只有 `get_table_detail` 带列），所以这不是「接线」而是「新增能力」——等属性面板真要展示签名时再做 |
 | 7 | ⚪ | ~~缓存写侧用 `let _ =` 吞错~~ | —— | ✅ **已处置（2026-09-19）**：`NavCache` 的六处写侧（schema / 对象 / 视图 / 列 / 例程 / 序列 / 触发器）全改为 `tracing::warn!` 留痕（与既有的 `prune_schema` / `rebuild_index` 同一风格） |
+| 8 | ⚪ | ~~切换驱动声明的三套定义并存~~（`driver/metadata.rs` 零引用 528 行 + `driver/driver_config.rs` 未编译 500 行） | 读代码的人会把 Rust 声明当成真相，实际界面读的是 `drivers` 表 | ✅ **已处置（2026-09-19）**：两份都删除；声明唯一真相源定为 `drivers` 表（台账写入 `driver-capability-matrix.md` §2/§6） |
+| 9 | 🟡 | **`db_type` 字段名承载驱动 id**：`DataSource.db_type` / `ConnectRequest.db_type` / `global_connections.driver` 存的是 `mysql_native`，而注释与下游多处按「数据库族」理解 | 两处静默失效已修（SSL 参数、DuckDB Secret 类型）；剩余语义债：字段名与文档口径不一致、按族匹配的新代码还会踩 | 已收敛：SSL 改为**按驱动分派**（`url_params::append_ssl_params`）、族解析收敛到 `driver_store::get_type_id` / `driver_catalog::type_id_of` / `secret_integration::secret_type_of`；**改名留给 beta2**（涉及迁移与全链路） |
+| 10 | 🟡 | **驱动 id 被当 scheme 用**：`connection::url::build_connection_url` 直接拿 `db_type` 拼 `{driver}://`，而 `mysql_async` / `tokio-postgres` 只认自己的 scheme | 选 Official 驱动保存后，导航点「连接」会拿 `mysql_native://…` 去建连（驱动当场报 scheme 错） | ✅ **已处置（2026-09-19）**：建连前归一（`factory::{mysql_native_url, postgres_native_url}` + `url_params::normalize_url_scheme`）；**真机待验**（需要一台 MySQL/PG + Official 驱动连接） |
 
 ---
 

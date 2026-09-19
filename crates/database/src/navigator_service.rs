@@ -293,6 +293,27 @@ impl NavigatorService {
         })
     }
 
+    /// 目标对象在其类别文件夹里的**零基位次**（仅表 / 视图这类会分页的文件夹有意义）。
+    ///
+    /// 与 [`Self::index_page`] 用同一套前提：拿不到缓存 / 没 `schema_id` / 索引里没这个对象，
+    /// 一律返回 `None`——调用方据此**如实告知**（而不是跳到第一页假装成功）。
+    pub fn object_position(&self, conn_id: &str, path: &NavPath, name: &str) -> Option<usize> {
+        let NavPath::Folder {
+            catalog,
+            schema,
+            folder,
+        } = path
+        else {
+            return None;
+        };
+        if !matches!(folder, NavFolder::Tables | NavFolder::Views) {
+            return None;
+        }
+        let cache = self.cache(conn_id)?;
+        let schema_id = cache.schema_id(catalog, schema)?;
+        cache.object_position(schema_id, *folder == NavFolder::Views, name)
+    }
+
     /// 连接根 → Catalog 列表；无 Catalog 时退化为单一 `main` 容器。
     async fn load_catalogs(&self, conn_id: &str) -> Result<Vec<NavNode>, CoreError> {
         // L1 → L3（Catalogs 不在 L2 缓存范围内）
@@ -1311,6 +1332,59 @@ mod paging_tests {
         // 索引顺序稳定（名称升序）：翻页不能有随机顺序
         assert_eq!(page.nodes[0].name, "t0000");
         assert_eq!(page.nodes[PAGE - 1].name, "t0199");
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 定位：位次 → 页起点 → 那一页里**真有目标**。
+    ///
+    /// 这是「搜索命中在树中定位」在大 schema 上的生死线：位次算错一，
+    /// 跳过去的那一页里就没有它，而界面会说「已定位」（比不定位更糟）。
+    #[tokio::test]
+    async fn object_position_lands_on_a_page_containing_the_target() {
+        let root = temp_root("locate_position");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_locate";
+        seed(conn_id, &root_s, "public", BIG, false, true);
+        let svc = service(&root_s, false);
+
+        let path = folder("public", NavFolder::Tables);
+        // 末尾那一条最考验人：位次 599，页起点应是 400（按页向下取整）
+        let position = svc
+            .object_position(conn_id, &path, "t0599")
+            .expect("t0599 应在索引里");
+        assert_eq!(position, BIG - 1);
+
+        let page_size = PAGE;
+        let offset = position - (position % page_size);
+        let page = svc
+            .load_children_page(conn_id, &path, offset, page_size)
+            .await
+            .expect("应从 L2 索引取页");
+        assert!(
+            page.nodes.iter().any(|n| n.name == "t0599"),
+            "按位次取的那一页里必须有目标（否则定位会停在别处）"
+        );
+
+        // 索引里没有的对象：绝不能退化成「位次 0」（那会把人送到第一页并声称定位成功）
+        assert_eq!(svc.object_position(conn_id, &path, "不存在"), None);
+        // 不分页的类别不做定位（它们的行总是全量加载，直接选中即可）
+        assert_eq!(
+            svc.object_position(conn_id, &folder("public", NavFolder::Routines), "t0000"),
+            None
+        );
+        // 非文件夹路径不猜位次
+        assert_eq!(
+            svc.object_position(
+                conn_id,
+                &NavPath::Schema {
+                    catalog: "main".into(),
+                    schema: "public".into(),
+                },
+                "public"
+            ),
+            None
+        );
 
         cleanup(&root, conn_id);
     }

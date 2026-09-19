@@ -97,11 +97,11 @@ commands ──► services ──► driver ──► native
 
 | 目标 | 命令 | 基线 |
 | --- | --- | --- |
-| 库单测 | `cargo test -p rds-engine --lib -j 2` | **440 通过 / 24 忽略** |
+| 库单测 | `cargo test -p rds-engine --lib -j 2` | **443 通过 / 24 忽略** |
 | 8 个真机探针 | `cargo test -p rds-engine --tests -j 2` | 32 通过（无端点时逐项跳过） |
 | sqlglot 探针 | `cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1` | 10 通过（报告式输出） |
 | 事务探针 | `cargo test -p rds-engine --test transaction_affinity -j 2` | 12 通过（无端点时逐项跳过） |
-| 全量 | `cargo test-all` | 以重测为准（2026-09-19 第二次复跑：**84 个目标 1970 通过 / 51 忽略 / 0 失败**；含本机诊断 `zz_fixture_probe` 1 项，项目自身套件为 83 目标 / 1969 项。全量台账见 `../../docs/architecture/module-status.md`） |
+| 全量 | `cargo test-all` | 以重测为准（2026-09-19 第二次复跑：**84 个目标 1983 通过 / 51 忽略 / 0 失败**；含本机诊断 `zz_fixture_probe` 1 项，项目自身套件为 83 目标 / 1982 项。全量台账见 `../../docs/architecture/module-status.md`） |
 
 ## 文档地图
 

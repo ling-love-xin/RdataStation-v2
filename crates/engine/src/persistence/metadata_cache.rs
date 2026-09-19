@@ -3257,6 +3257,83 @@ impl MetadataCacheOps {
         })
     }
 
+    /// 目标对象在其（连接 + schema + 类别）里的**零基位次**（与 [`Self::get_objects_chunk`] 同一排序口径）。
+    ///
+    /// **为什么需要它**：大 schema 分页后，树里只加载了首屏。从搜索命中「定位」到第 9000 条
+    /// 不能靠一页页追加（45 次往返），必须一次算出它落在哪一页。
+    ///
+    /// 返回 `None` = 索引里没有这个对象（索引未重建 / 对象已删）——调用方须**如实告知**，
+    /// 不要假装「它在别处」或默默不动作。
+    ///
+    /// 同名多行（同一 schema 下重名）取**最早**的那个位次；`is_loaded` 不参与过滤，
+    /// 与分页查询保持一致（否则位次与页内容会错位）。
+    pub fn get_object_position(
+        &self,
+        connection_id: &str,
+        schema_id: Option<i64>,
+        object_type: &str,
+        object_name: &str,
+    ) -> Result<Option<i64>, CoreError> {
+        // 排序键必须与 `get_objects_chunk` **逐字一致**（`sort_weight DESC, object_name ASC`），
+        // 否则算出来的页里没有目标。
+        //
+        // 不用「COUNT 比它小的行」那种写法：`sort_weight` 目前**没有写入方**（恒为 NULL），
+        // 而 SQL 里 `NULL > NULL` / `NULL = NULL` 都是 NULL（一个都不计）——位次会静默退化成 0，
+        // 「定位」永远跳到第一页。窗口函数直接复用同一个 ORDER BY，不碰 NULL 语义。
+        let sql = match schema_id {
+            Some(_sid) => {
+                "SELECT pos - 1 FROM (
+                     SELECT ROW_NUMBER() OVER (ORDER BY sort_weight DESC, object_name ASC) AS pos,
+                            object_name
+                     FROM metadata_index
+                     WHERE connection_id = ?1 AND object_type = ?2 AND schema_id = ?3
+                 ) WHERE object_name = ?4
+                 ORDER BY pos LIMIT 1"
+            }
+            None => {
+                "SELECT pos - 1 FROM (
+                     SELECT ROW_NUMBER() OVER (ORDER BY sort_weight DESC, object_name ASC) AS pos,
+                            object_name
+                     FROM metadata_index
+                     WHERE connection_id = ?1 AND object_type = ?2
+                 ) WHERE object_name = ?3
+                 ORDER BY pos LIMIT 1"
+            }
+        };
+
+        let position: Option<i64> = match schema_id {
+            Some(sid) => self
+                .conn
+                .query_row(
+                    sql,
+                    rusqlite::params![connection_id, object_type, sid, object_name],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|e| Self::index_error("get_object_position", &e))?,
+            None => self
+                .conn
+                .query_row(
+                    sql,
+                    rusqlite::params![connection_id, object_type, object_name],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|e| Self::index_error("get_object_position", &e))?,
+        };
+
+        Ok(position.map(|p| p.max(0)))
+    }
+
+    /// 索引类查询的统一错误包装（与既有写法同形，便于日志定位）。
+    fn index_error(operation: &str, e: &rusqlite::Error) -> CoreError {
+        CoreError::storage(StorageError::Persistence {
+            store: "sqlite".to_string(),
+            operation: operation.to_string(),
+            reason: e.to_string(),
+        })
+    }
+
     /// 转义 LIKE 的通配符（`%` `_`）与转义符自身，使用户输入按**字面量**匹配。
     fn like_escape(needle: &str) -> String {
         let mut out = String::with_capacity(needle.len());
@@ -4627,6 +4704,82 @@ mod tests {
         ops.delete_schema(schema_id)?;
         let empty = ops.get_schema_object_counts(conn_id, schema_id)?;
         assert_eq!(empty.total, 0, "级联删除后索引不应留孤儿");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// 定位查询：位次必须与分页读**同口径**。
+    ///
+    /// 这条查询唯一的用途是「大 schema 从搜索命中直达那一页」——位次差一，
+    /// 跳过去的那一页里就没有目标（用户看到「已定位」，行却不在）。
+    /// 回归自一个真陷阱：最初用「COUNT 比它小的行」写法，而 `sort_weight` 恒为 NULL，
+    /// SQL 里 `NULL > NULL` 不计入 → 位次永远为 0。
+    #[test]
+    fn object_position_matches_chunk_order() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("object_position");
+        let (catalog, schema) = ("main", "public");
+        let conn_id = "P_pos_conn";
+
+        let schema_id = ops.save_schema(catalog, schema, None, None)?;
+        // 名字刻意乱序插入：顺序若靠插入序，这里的断言会挂
+        for name in ["gamma", "alpha", "beta"] {
+            ops.save_table(schema_id, name, "TABLE", None, None, None)?;
+        }
+        // 同名的视图不进表的位次（类别参与限定）——注意 L2 里表与视图同属 `tables` 表、名字唯一，
+        // 所以「表与视图同名」在缓存模型里就不存在，这里验证的是**类别过滤**本身。
+        let v = ops.save_table(schema_id, "valpha", "VIEW", None, None, None)?;
+        ops.save_view(v, "SELECT 1", None, None)?;
+        // 另一个 schema 的同名表不进本位次（schema 参与限定）
+        let other = ops.save_schema(catalog, "archive", None, None)?;
+        ops.save_table(other, "alpha", "TABLE", None, None, None)?;
+        ops.rebuild_schema_index(conn_id, catalog, schema)?;
+        ops.rebuild_schema_index(conn_id, catalog, "archive")?;
+
+        // 分页读出来的次序就是位次的口径，逐条对齐
+        let chunk = ops.get_objects_chunk(conn_id, Some(schema_id), "table", 0, 10)?;
+        let names: Vec<&str> = chunk
+            .items
+            .iter()
+            .map(|e| e.object_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["alpha", "beta", "gamma"], "同权重时按名字升序");
+        for (i, name) in names.iter().enumerate() {
+            assert_eq!(
+                ops.get_object_position(conn_id, Some(schema_id), "table", name)?,
+                Some(i as i64),
+                "{name} 的位次应与分页顺序一致"
+            );
+        }
+
+        // 位次直接喂给 offset/limit，落到的页里必须真有它（这是定位的生死线）
+        let target = "gamma";
+        let position = ops
+            .get_object_position(conn_id, Some(schema_id), "table", target)?
+            .expect("gamma 应在索引里") as i64;
+        let page = ops.get_objects_chunk(conn_id, Some(schema_id), "table", position, 1)?;
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].object_name, target, "按位次取样必须正好是它");
+
+        // 索引里没有 → None（调用方据此如实告知，而不是假装定位成功）
+        assert_eq!(
+            ops.get_object_position(conn_id, Some(schema_id), "table", "nope")?,
+            None
+        );
+        // 类别参与限定：表名拿去查视图档 → None（不会串类别给个假位次）
+        assert_eq!(
+            ops.get_object_position(conn_id, Some(schema_id), "view", "alpha")?,
+            None
+        );
+        assert_eq!(
+            ops.get_object_position(conn_id, Some(schema_id), "view", "valpha")?,
+            Some(0)
+        );
+        // schema 参与限定：另一 schema 的 "alpha" 在本 schema 表档里仍只有这一条位次
+        assert_eq!(
+            ops.get_object_position(conn_id, Some(schema_id), "table", "alpha")?,
+            Some(0)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())

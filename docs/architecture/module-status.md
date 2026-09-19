@@ -14,12 +14,12 @@
 | 项 | 实测值 |
 | --- | --- |
 | 工作区测试目标 | **84**（含 16 个 Doc-tests 目标） |
-| 通过 | **1970** |
+| 通过 | **1983** |
 | 失败 | **0**（本轮全绿） |
 | 忽略 | **51**（真机探针 24 + Doc-tests 27） |
 | 编译告警 | `cargo check --workspace --all-targets` 零告警 |
-| 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`） |
-| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1969 项**，见 §2 的表下注 |
+| 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；2026-09-19 第二次复跑时实测） |
+| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 83 个目标 / 1982 项**，见 §2 的表下注 |
 
 ---
 
@@ -53,21 +53,21 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 ---
 
-## 2. 逐包基线（2026-09-19 第二次复跑）
+## 2. 逐包基线（2026-09-19 第三次复跑）
 
 「本包合计」= lib 单测 + 本包 `tests/` 下各集成目标。
 
 | 包 | lib 单测 | 集成目标（`tests/`） | 本包合计 | 忽略 |
 | --- | --- | --- | --- | --- |
-| `rds-engine` | **440** | 32（8 个目标） | **472** | 24 |
+| `rds-engine` | **443** | 32（8 个目标） | **475** | 24 |
 | `rds-editor` | **377** | — | **377** | — |
-| `rds-workbench` | **110** | 130（32 个目标） | **240** | — |
+| `rds-workbench` | **113** | 130（32 个目标） | **243** | — |
 | `rds-insight` | **227** | 14（`column_profile_e2e`） | **241** | — |
 | `rds-mock` | **190** | 48（4 个目标） | **238** | — |
 | `rds-analytics-resource` | **125** | 27（`panel_window` 18 · `dialog_window` 9） | **152** | — |
-| `rds-connection` | **44** | 4（`tunnel_roundtrip`） | **48** | — |
+| `rds-database` | **54** | — | **54** | — |
+| `rds-connection` | **48** | 4（`tunnel_roundtrip`） | **52** | — |
 | `rds-project` | **43** | 5（`project_registry` 1 · `project_store` 4） | **48** | — |
-| `rds-database` | **51** | — | **51** | — |
 | `rds-scratchpad` | **37** | — | **37** | — |
 | `rds-shared` | **22** | — | **22** | 9（doctest） |
 | `rds-settings` | **21** | — | **21** | — |
@@ -75,10 +75,10 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-paths` | **10** | 1（`test_support_is_wired`） | **11** | — |
 | `rds-workbench-shell` | **1** | — | **1** | — |
 | `rds-app` | 0 | — | 0 | — |
-| **合计** | **1709** | **261** | **1970** | **51** |
+| **合计** | **1722** | **261** | **1983** | **51** |
 
 > **口径注（重要）**：合计里的 `rds-workbench` 集成 130 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
-> 去掉它：**项目自身套件 = 83 个目标 / 1969 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
+> 去掉它：**项目自身套件 = 83 个目标 / 1982 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
 >
 > `rds-plugin` 有 11 项单测且全绿，但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
 
@@ -130,7 +130,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | M1 项目管理 | `project` | ✅ | 窗口退出草稿兜底 · 项目目录移动 · 提升 / 快照 |
 | M2 双引擎底座 | `engine` | ✅ | 缓存层与持久化层**仍有零调用项**（权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7；本轮已处置约 4.3k 行，见其 §6）· 增量同步未接 |
 | M3 数据源连接 | `connection` | ✅ | SSH 主机密钥默认放行 · Secret 无门控不清理 |
-| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · 命中后树内定位 · PG 跨库浏览（**内容档不在本模块**：导航面板搜索框只有名称档，全文走 Quick Open 的 `#`） |
+| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · PG 跨库浏览（**内容档不在本模块**：导航面板搜索框只有名称档，全文走 Quick Open 的 `#`） |
 | M5 草稿箱 | `scratchpad` | ✅ | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
 | M6 资产库 / 分析存档 | `analytics_resource` | ✅ | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
 | M7 Mock 造数 | `mock` | ✅ | 出口不可取消 · 大导出非流式 · 并发生成 |
@@ -138,7 +138,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | M9 插件宿主 | `plugin` | ⛔ | **整包无调用方**，等 beta3 立项 |
 | SQL 编辑器 | `editor` | ✅ | Phase 1c 分析单元（搁置）· 值预览 / 编辑 · 血缘持久化 |
 | 联邦查询 | `engine/duckdb/federation` | 🟡 | L3 桥接 · SQL Server 真机 · 扫描量可见 |
-| Quick Open | `workbench/quick_open` | ✅ | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位 · `@` 当前连接限定 · 最近使用 / 空态建议（Phase 2） |
+| Quick Open | `workbench/quick_open` | ✅ | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位（**导航面板已接，Quick Open 命中行未接**）· `@` 当前连接限定 · 最近使用 / 空态建议（Phase 2） |
 | 设置 | `settings` | ✅ | `effect` 字段无人消费 · 无跨进程写锁 |
 
 ---
@@ -240,12 +240,19 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `rds-workbench` 集成 | 129 | **130** | `zz_fixture_probe` 由失败转通过（§6.2） |
 | 其余包 | —— | 不变 | —— |
 
-**三个已核实的漂移点**（本轮已顺手改）：`crates/engine/README.md`（库单测写的 **301**，实际 440）·
-`docs/architecture/database/database-navigator-showcase.{md,html}`（engine 443 → **440**、database 42 → **51**，KPI「测试 485 项」→ **491**）·
-`docs/architecture/{editor,insight,quick_open}/*` 里引用 engine **443** 的位置（→ 440）。
+**三个已核实的漂移点**（本轮已顺手改）：`crates/engine/README.md`（库单测写的 **301**，实际 443）·
+`docs/architecture/database/database-navigator-showcase.{md,html}`（database 51 → **54**，KPI「测试 491 项」→ **497**）·
+`docs/architecture/{editor,insight,quick_open}/*` 里引用 engine 单测数的地方（→ 443）。
 
 **有意不动的**：`*-dev-plan.md` / `*-architecture.md` 里**带日期的进度记录**（如「engine 428 → 435」）——它们是当日快照，改掉等于篡改历史；
 `docs/architecture/connection/*` 的 5 个文件本轮带他人的未提交改动，**为避免冲突未动**（它们写的 443 / 1963 属于上一轮快照）。
+
+#### 6.3.2 第三次复跑（同日）：含他人未提交改动的工作树
+
+第三次复跑（**84 目标 / 1983 通过 / 0 失败 / 51 忽略**）是在一个**并发工作树**上测的：
+相对第二次的 **+13 项**里，本次改动只占 **4 项**（engine **+1**：对象位次查询；database **+3**：定位目标映射 2 + 位次→页 1），
+其余 **+9 项**来自并行会话的驱动 / 连接重构（connection **44→48** · engine **440→443** · workbench **110→113**）。
+**引用本表时须知**：这些数字描述的是**那一刻的工作树**，不是某一个提交。
 
 ---
 

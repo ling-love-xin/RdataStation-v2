@@ -48,6 +48,101 @@ use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightP
 use workbench_shell::product_tokens;
 use workbench_shell::ui;
 
+/// 待定位目标（搜索结果 → 树）。
+///
+/// 只描述「要找什么」，不持有视图句柄：整条定位是**跨多帧**完成的——连接 → catalog →
+/// schema → 文件夹逐层异步加载回来，每回来一层才能往下走一步。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RevealTarget {
+    conn_id: String,
+    /// 内容档命中没有 catalog（FTS 表里没这一列）→ 空串，定位时从连接已加载的 catalog 里取。
+    catalog: String,
+    schema: String,
+    /// `None` = 目标就是 schema 本身（不再往文件夹里走）。
+    folder: Option<NavFolder>,
+    /// 列命中时的所属表：需要在文件夹里再展开一层。
+    parent: Option<String>,
+    name: String,
+    /// 已发出「定位页」请求（等回执；避免每帧重发）。
+    jumping: bool,
+}
+
+impl RevealTarget {
+    /// 搜索命中 → 定位目标；`None` = 这一条**不可定位**（类型不认识 / 没有 schema 归属）。
+    ///
+    /// 判据集中在这里：调用方据此决定是否摆出「定位」入口，而不是让人点了没反应。
+    fn from_hit(hit: &nav_jobs::SearchHit) -> Option<Self> {
+        let schema = hit.schema.clone().filter(|s| !s.is_empty())?;
+        let folder = match hit.object_type.as_str() {
+            "schema" => None,
+            "table" | "column" => Some(NavFolder::Tables),
+            "view" => Some(NavFolder::Views),
+            "routine" => Some(NavFolder::Routines),
+            "sequence" => Some(NavFolder::Sequences),
+            "trigger" => Some(NavFolder::Triggers),
+            _ => return None,
+        };
+        Some(Self {
+            conn_id: hit.conn_id.clone(),
+            catalog: hit.catalog.clone().unwrap_or_default(),
+            schema,
+            folder,
+            parent: hit.parent_name.clone().filter(|p| !p.is_empty()),
+            name: hit.object_name.clone(),
+            jumping: false,
+        })
+    }
+
+    /// 目标节点的 key（与 `NavNode::child_key` 同构）。
+    fn node_key(&self, catalog: &str) -> String {
+        match (&self.parent, self.folder) {
+            (Some(parent), _) => NavNode::child_key(
+                &self.conn_id,
+                &[catalog, &self.schema, parent, &self.name],
+            ),
+            (None, Some(_)) => {
+                NavNode::child_key(&self.conn_id, &[catalog, &self.schema, &self.name])
+            }
+            // schema 目标：它本身就是 key 链的最后一节
+            (None, None) => NavNode::child_key(&self.conn_id, &[catalog, &self.schema]),
+        }
+    }
+
+    /// 逐层要**展开并等其子节点到位**的 `(key, 加载路径)`；最后一个的子节点里就有目标。
+    ///
+    /// 顺序不能少一层：连接根的子节点是 catalog 列表，少了 catalog 那一层，定位会在
+    /// 「等一个永远不来的子节点」上卡死（`children` 里永远没有那个 key）。
+    fn levels(&self, catalog: &str) -> Vec<(String, NavPath)> {
+        let mut levels = vec![
+            (self.conn_id.clone(), NavPath::Connection),
+            (
+                NavNode::child_key(&self.conn_id, &[catalog]),
+                NavPath::Catalog {
+                    catalog: catalog.to_string(),
+                },
+            ),
+        ];
+        if let Some(folder) = self.folder {
+            levels.push((
+                NavNode::child_key(&self.conn_id, &[catalog, &self.schema]),
+                NavPath::Schema {
+                    catalog: catalog.to_string(),
+                    schema: self.schema.clone(),
+                },
+            ));
+            levels.push((
+                NavNode::child_key(&self.conn_id, &[catalog, &self.schema, folder.key()]),
+                NavPath::Folder {
+                    catalog: catalog.to_string(),
+                    schema: self.schema.clone(),
+                    folder,
+                },
+            ));
+        }
+        levels
+    }
+}
+
 /// 数据库导航面板状态（M4）。
 ///
 /// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
@@ -97,6 +192,16 @@ pub struct NavViewState {
     search_hits: Vec<nav_jobs::SearchHit>,
     /// 上批结果实际搜了几个连接（有缓存的那些；用于结果区的“已搜 N 个连接”）。
     search_searched: usize,
+    /// 待定位目标（搜索结果行的「定位」→ 展开链路并选中它）。跨帧推进，见
+    /// [`NavView::pump_reveal`]。
+    reveal: Option<RevealTarget>,
+    /// 已「定位窗口」打开的文件夹 key → 目标在这一类的**全量**里的绝对位次。
+    ///
+    /// 存它有两个用处：顶上那行「已定位到第 N 条」要说准数；有它时不摆「加载更多」
+    /// （那时的行集是**一窗**不是前缀，按条数往后翻会跳错）。
+    jumped: HashMap<String, usize>,
+    /// 定位失败的一行如实说明（没找到 / 索引没重建）；成功或未开定位时为空。
+    reveal_note: Option<String>,
     /// 连接 ID → 标签列表（一次读库缓存，避免渲染期逐条查询）。
     tags: HashMap<String, Vec<String>>,
     /// 分组是否已加载。
@@ -3968,11 +4073,18 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             } else {
                 usize::MAX
             };
+            // 定位窗口：先摆说明与回头路，再摆这一窗的行。
+            let jumped_to = self.nav.borrow().jumped.get(&node.key).copied();
+            if let Some(position) = jumped_to {
+                block = block.child(self.render_jumped_row(node, position, loaded, depth, cx));
+            }
             for child in children.iter().take(limit) {
                 block = block.child(self.render_nav_node(child, depth + 1, scope_key, cx));
             }
             // 两种「还有更多」：数据侧的（要取）与渲染窗口的（已到手，只放大窗口）。
-            if is_folder && (limit < loaded || loaded < total) {
+            // **定位窗口例外**：那时的行集是一窗不是前缀，按条数往后翻会跳错地方，
+            // 回头路走顶上那行「点此回到开头」。
+            if is_folder && jumped_to.is_none() && (limit < loaded || loaded < total) {
                 block = block.child(self.render_more_row(node, loaded, total, limit, depth, cx));
             }
         }
@@ -4205,6 +4317,18 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child(format!("仅显示前 {max} 条（缩小搜索词可看到更多）")),
             );
         }
+        // 定位的结局如实写在这里（不可定位 / 索引里没找到）：成功或未开定位时没有这一行。
+        if let Some(note) = self.nav.borrow().reveal_note.clone() {
+            block = block.child(
+                div()
+                    .w_full()
+                    .px_1()
+                    .pb_0p5()
+                    .text_xs()
+                    .text_color(cx.theme().colors.danger)
+                    .child(note),
+            );
+        }
         Some(block)
     }
 
@@ -4219,6 +4343,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let hover = cx.theme().colors.list_hover;
+        let pri = cx.theme().colors.primary;
         let match_bg = product_tokens::get(cx).search_match_background(cx.theme());
         let tint = nav_kind_color(&nav_search_hit_kind(hit), cx.theme());
         let filter = self.nav.borrow().filter.to_lowercase();
@@ -4236,6 +4361,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let kind_label = nav_object_type_label(&hit.object_type);
 
         let entity = cx.entity();
+        let entity_locate = cx.entity();
         let object = nav_search_hit_ref(hit);
         let property = nav_search_hit_property(hit);
         let conn_label = hit.conn_label.clone();
@@ -4250,8 +4376,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             ),
         };
 
-        div()
-            .id(id)
+        let mut row = div()
+            .id(id.clone())
             .h_flex()
             .items_center()
             .gap_1p5()
@@ -4277,21 +4403,44 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .text_xs()
                     .text_color(muted)
                     .child(format!("{kind_label} · {scope}")),
-            )
-            .on_click(move |_, _, app| {
-                let Some(property) = property.clone() else {
-                    return;
-                };
-                let req = PropertyRequest {
-                    property,
-                    conn_label: conn_label.clone(),
-                    driver: driver.clone(),
-                };
-                entity.update(app, |this, cx| {
-                    this.host.show_properties(req, cx);
-                    cx.notify();
-                });
-            })
+            );
+
+        // 「定位」只在**真能定位**时摆出（判据与状态机同一处：`RevealTarget::from_hit`）——
+        // 摆了却点了没反应，比不摆更伤。
+        if RevealTarget::from_hit(hit).is_some() {
+            let hit_for_locate = hit.clone();
+            row = row.child(
+                div()
+                    .id(format!("nav-locate-{id}"))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(pri)
+                    .cursor_pointer()
+                    .hover(move |s| s.text_color(fg))
+                    .on_click(move |_, _, app| {
+                        // 行本身的单击是「看属性」：点「定位」不该同时把属性面板也推出来。
+                        app.stop_propagation();
+                        let hit = hit_for_locate.clone();
+                        entity_locate.update(app, |this, cx| this.reveal_hit(&hit, cx));
+                    })
+                    .child("定位"),
+            );
+        }
+
+        row.on_click(move |_, _, app| {
+            let Some(property) = property.clone() else {
+                return;
+            };
+            let req = PropertyRequest {
+                property,
+                conn_label: conn_label.clone(),
+                driver: driver.clone(),
+            };
+            entity.update(app, |this, cx| {
+                this.host.show_properties(req, cx);
+                cx.notify();
+            });
+        })
     }
 
     /// 回填索引搜索结果（过期批次直接丢弃：用户在等待期间已经把词改了）。
@@ -4308,9 +4457,244 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 }
                 view.search_hits = r.hits;
                 view.search_searched = r.searched;
+                // 新一批结果 = 新一轮搜索：上一轮的定位提示不再适用
+                view.reveal_note = None;
             }
         }
         cx.notify();
+    }
+
+    /// 从一条搜索命中**在树中定位**：展开链路并选中目标。
+    ///
+    /// 不可定位的命中会当场回一句可读理由：结果行上那个入口本就只在可定位时摆出，
+    /// 这里再兜一层是因为「摆了入口却点了没反应」是最伤的交互。
+    pub fn reveal_hit(&mut self, hit: &nav_jobs::SearchHit, cx: &mut Context<Self>) {
+        let Some(target) = RevealTarget::from_hit(hit) else {
+            self.nav.borrow_mut().reveal_note = Some(format!(
+                "「{}」没有可定位的位置（缺 schema 归属或类别未知）",
+                hit.object_name
+            ));
+            cx.notify();
+            return;
+        };
+        {
+            let mut view = self.nav.borrow_mut();
+            view.reveal_note = None;
+            view.reveal = Some(target);
+        }
+        self.pump_reveal(cx);
+    }
+
+    /// 定位状态机（跨帧推进）。
+    ///
+    /// 树是**逐层异步加载**的：连接 → catalog → schema → 文件夹 → （列再一层表）。
+    /// 因此定位不能一口气做完，只能「能推一步就推一步」，推不动就停下等回执
+    /// （加载回执、定位页回执都会再进这里）。
+    fn pump_reveal(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.nav.borrow().reveal.clone() else {
+            return;
+        };
+        let conn_key = target.conn_id.clone();
+
+        // ① catalog 未知（内容档命中没有这一列）：用连接下**已加载**的第一个 catalog。
+        //    大多数驱动只有一个 catalog（退化容器也算一个），这条规则足够且不做猜测定。
+        let catalog = if target.catalog.is_empty() {
+            let first = self
+                .nav
+                .borrow()
+                .children
+                .get(&conn_key)
+                .and_then(|children| children.first().map(|n| n.name.clone()));
+            match first {
+                Some(name) => {
+                    if let Some(t) = self.nav.borrow_mut().reveal.as_mut() {
+                        t.catalog = name.clone();
+                    }
+                    name
+                }
+                None => {
+                    // catalog 列表还没到：先把连接展开并排队，下一拍再看
+                    self.nav.borrow_mut().expanded.insert(conn_key.clone());
+                    self.ensure_nav_loaded(
+                        &target.conn_id,
+                        &conn_key,
+                        NavPath::Connection,
+                        false,
+                        cx,
+                    );
+                    return;
+                }
+            }
+        } else {
+            target.catalog.clone()
+        };
+
+        // ② 逐层展开：哪一层的子节点还没到位就停下等它
+        //
+        // 先确保连接可用：子节点加载要经驱动回源（目录列表不在 L2 里），
+        // 未建连时那条跳会以 `[CONN_NOT_FOUND]` 失败——不先建就连，定位会卡在那里不动。
+        if !self.ensure_connected_for_browse(&target.conn_id, cx) {
+            let mut view = self.nav.borrow_mut();
+            view.reveal = None;
+            view.reveal_note = Some(format!("定位中断：连接 {} 不可用", target.conn_id));
+            drop(view);
+            cx.notify();
+            return;
+        }
+        let levels = target.levels(&catalog);
+        for (key, path) in &levels {
+            self.nav.borrow_mut().expanded.insert(key.clone());
+            // 某一层已经报错：不再等（等不到），当场把原因摆出来
+            let failed = self.nav.borrow().errors.get(key).cloned();
+            if let Some(err) = failed {
+                let mut view = self.nav.borrow_mut();
+                view.reveal = None;
+                view.reveal_note = Some(format!("定位中断：{err}"));
+                drop(view);
+                cx.notify();
+                return;
+            }
+            if !self.nav.borrow().children.contains_key(key) {
+                self.ensure_nav_loaded(&target.conn_id, key, path.clone(), false, cx);
+                return;
+            }
+        }
+
+        // ③ 最后一层的子节点里找目标
+        let (parent_key, _) = levels.last().cloned().expect("至少有连接这一层");
+        let children = self
+            .nav
+            .borrow()
+            .children
+            .get(&parent_key)
+            .cloned()
+            .unwrap_or_default();
+        let target_key = target.node_key(&catalog);
+        if let Some(idx) = children.iter().position(|n| n.key == target_key) {
+            let mut view = self.nav.borrow_mut();
+            // 渲染窗口必须罩住它，否则「选中了」却在屏外，看上去仍然像没动作
+            let window = view.page_limit.entry(parent_key.clone()).or_insert(0);
+            *window = (*window).max(idx + 1);
+            view.selected_key = Some(target_key);
+            view.reveal = None;
+            view.reveal_note = None;
+            drop(view);
+            cx.notify();
+            return;
+        }
+
+        // ④ 不在已加载的那一窗里：数据侧还有就跳页；已经全加载了就如实说没有
+        let (total, already_jumped) = {
+            let view = self.nav.borrow();
+            (
+                view.child_total.get(&parent_key).copied(),
+                view.jumped.contains_key(&parent_key),
+            )
+        };
+        let paged = total.map(|t| t > children.len()).unwrap_or(false);
+        let jumpable = matches!(target.folder, Some(NavFolder::Tables | NavFolder::Views));
+        if paged && jumpable && !target.jumping && !already_jumped {
+            if let Some(t) = self.nav.borrow_mut().reveal.as_mut() {
+                t.jumping = true;
+            }
+            let Some(path) = levels.last().map(|(_, p)| p.clone()) else {
+                return;
+            };
+            let root = self
+                .host
+                .project_root()
+                .map(|p| p.to_string_lossy().to_string());
+            nav_jobs::enqueue_locate_page(
+                &target.conn_id,
+                root.as_deref(),
+                &parent_key,
+                path,
+                &target.name,
+                nav_jobs::PAGE_SIZE,
+            );
+            self.ensure_nav_pump(cx);
+            return;
+        }
+
+        // 不留悬念：不支持的类别 / 索引里确实没有，都当场说清楚
+        let note = if paged && !jumpable {
+            format!(
+                "「{}」所在类别不支持跳页定位（仅表 / 视图可分页）",
+                target.name
+            )
+        } else {
+            format!("未在索引里找到「{}」（可能索引尚未重建）", target.name)
+        };
+        {
+            let mut view = self.nav.borrow_mut();
+            view.reveal = None;
+            view.reveal_note = Some(note);
+        }
+        cx.notify();
+    }
+
+    /// 「已定位到第 N 条」行（定位窗口的说明与回头路）。
+    ///
+    /// 为什么必须有它：定位跳到的是**一窗**而不是前缀，不说清楚用户会以为上面的对象没了；
+    /// 同时它是回开头的唯一入口（定位窗口里不摆「加载更多」，那条语义对不上）。
+    fn render_jumped_row(
+        &self,
+        node: &NavNode,
+        position: usize,
+        loaded: usize,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let hover = cx.theme().colors.list_hover;
+        let indent = ui::TREE_BASE_PADDING + (depth as f32 + 1.0) * ui::TREE_INDENT;
+        let entity = cx.entity();
+        let key = node.key.clone();
+        let conn_id = node.connection_id.clone();
+        let path = node.expand_path.clone();
+        div()
+            .id(format!("nav-jumped-{key}"))
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(rems(1.375))
+            .pl(rems(indent))
+            .pr_1()
+            .rounded_md()
+            .cursor_pointer()
+            .text_xs()
+            .text_color(muted)
+            .hover(move |s| s.bg(hover))
+            .child(format!(
+                "已定位到第 {} 条（本窗 {} 条）· 点此回到开头",
+                position + 1,
+                loaded
+            ))
+            .on_click(move |_, _, app| {
+                let k = key.clone();
+                let conn_id = conn_id.clone();
+                let path = path.clone();
+                entity.update(app, |this, cx| {
+                    this.nav.borrow_mut().jumped.remove(&k);
+                    let Some(path) = path.clone() else { return };
+                    let root = this
+                        .host
+                        .project_root()
+                        .map(|p| p.to_string_lossy().to_string());
+                    this.nav.borrow_mut().loading.insert(k.clone());
+                    nav_jobs::enqueue_load_page(
+                        &conn_id,
+                        root.as_deref(),
+                        &k,
+                        path,
+                        false,
+                        0,
+                        nav_jobs::PAGE_SIZE,
+                    );
+                    this.ensure_nav_pump(cx);
+                    cx.notify();
+                });
+            })
     }
 
     /// 启动加载结果轮询（已有存活任务时不重复启动）。
@@ -4406,8 +4790,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 match r.result {
                     Ok(page) => {
                         view.errors.remove(&key);
-                        if r.offset == 0 {
+                        if let Some(pos) = r.jumped_to {
+                            // 定位：**换窗**（当前只展示含目标的那一页），不是追加——
+                            // 追加会把一窗行拼在前缀后面，既不对也不好解释。
+                            view.jumped.insert(key.clone(), pos);
+                            view.page_limit.insert(key.clone(), page.nodes.len());
+                            view.children.insert(key.clone(), page.nodes);
+                            view.child_total.insert(key.clone(), page.total);
+                        } else if r.offset == 0 {
                             // 首屏：整体替换（刷新 / 重新展开都走这里）。
+                            // 同时也是「回到开头」那条路：定位窗口到此结束。
+                            view.jumped.remove(&key);
                             view.children.insert(key.clone(), page.nodes);
                             view.child_total.insert(key.clone(), page.total);
                         } else {
@@ -4433,6 +4826,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 self.maybe_prefetch(&conn_id, &key, &catalog, &schema, project_root.as_deref());
             }
         }
+        // 定位：这一批回执可能正好把目标送到了（或送来了它所在的那一页），推进一步。
+        self.pump_reveal(cx);
         cx.notify();
     }
 
@@ -5202,7 +5597,7 @@ mod tests {
     use super::{
         insight_schema_target, nav_data_target, nav_merge_page, nav_object_type_label,
         nav_order_members, nav_reorder, nav_search_hit_property, nav_search_hit_ref,
-        nav_search_query_ready, nav_step, nav_type_short_label, parse_nav_search,
+        nav_search_query_ready, nav_step, nav_type_short_label, parse_nav_search, RevealTarget,
     };
     use crate::model::{
         NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
@@ -5210,6 +5605,113 @@ mod tests {
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 造一条搜索命中（字段就是 `nav_jobs::SearchHit` 的形状）。
+    fn hit(
+        object_type: &str,
+        name: &str,
+        parent: Option<&str>,
+        schema: Option<&str>,
+        catalog: Option<&str>,
+    ) -> crate::nav_jobs::SearchHit {
+        crate::nav_jobs::SearchHit {
+            conn_id: "G_1".into(),
+            conn_label: "shop".into(),
+            driver: "mysql".into(),
+            object_type: object_type.into(),
+            object_name: name.into(),
+            parent_name: parent.map(str::to_string),
+            catalog: catalog.map(str::to_string),
+            schema: schema.map(str::to_string),
+            snippet: None,
+        }
+    }
+
+    /// 定位目标 → 树节点 key / 层级路径必须与 `object_nodes` 造 key 的口径**逐字一致**
+    /// （`conn/catalog/schema/名字`）——差一段就会「点定位没反应」或选到别的节点。
+    #[test]
+    fn reveal_target_maps_search_hits_onto_tree_keys() {
+        // 表：key = conn/catalog/schema/表名；层级 = 连接 → catalog → schema → 表文件夹
+        let t = RevealTarget::from_hit(&hit("table", "orders", None, Some("public"), Some("shop")))
+            .expect("表可定位");
+        assert_eq!(t.node_key("shop"), "G_1/shop/public/orders");
+        assert_eq!(
+            t.levels("shop")
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect::<Vec<_>>(),
+            ids(&[
+                "G_1",
+                "G_1/shop",
+                "G_1/shop/public",
+                "G_1/shop/public/tables"
+            ])
+        );
+
+        // 列：key 多一层所属表（列节点挂在表节点下，所以还要展开那张表）
+        let c = RevealTarget::from_hit(&hit(
+            "column",
+            "amount",
+            Some("orders"),
+            Some("public"),
+            Some("shop"),
+        ))
+        .expect("列可定位");
+        assert_eq!(c.node_key("shop"), "G_1/shop/public/orders/amount");
+
+        // 视图与表同 schema 但分属不同文件夹：末层必须落在 /views
+        let v = RevealTarget::from_hit(&hit("view", "v_orders", None, Some("public"), Some("shop")))
+            .expect("视图可定位");
+        assert_eq!(
+            v.levels("shop").last().map(|(k, _)| k.clone()),
+            Some("G_1/shop/public/views".to_string())
+        );
+
+        // schema：目标就是 schema 节点，不再往文件夹里走（层级只到 catalog）
+        let s = RevealTarget::from_hit(&hit("schema", "public", None, Some("public"), Some("shop")))
+            .expect("schema 可定位");
+        assert_eq!(s.node_key("shop"), "G_1/shop/public");
+        assert_eq!(s.levels("shop").len(), 2, "schema 目标只需连接与 catalog 两层");
+
+        // 例程 / 序列 / 触发器各有自己的文件夹（它们不分页，但也得能选中）
+        for (kind, folder) in [
+            ("routine", "routines"),
+            ("sequence", "sequences"),
+            ("trigger", "triggers"),
+        ] {
+            let t = RevealTarget::from_hit(&hit(kind, "obj", None, Some("public"), Some("shop")))
+                .unwrap_or_else(|| panic!("{kind} 应可定位"));
+            assert_eq!(
+                t.levels("shop").last().map(|(k, _)| k.clone()),
+                Some(format!("G_1/shop/public/{folder}")),
+                "{kind} 应落在 {folder} 文件夹"
+            );
+        }
+    }
+
+    /// 不可定位的命中必须**当场判否**：结果行上那个入口就不摆出来，而不是点了没反应。
+    #[test]
+    fn reveal_target_refuses_unlocatable_hits() {
+        assert!(
+            RevealTarget::from_hit(&hit("weird_type", "x", None, Some("public"), Some("shop")))
+                .is_none(),
+            "类别不认识 → 拒绝"
+        );
+        assert!(
+            RevealTarget::from_hit(&hit("table", "x", None, None, Some("shop"))).is_none(),
+            "无 schema 归属 → 拒绝"
+        );
+        assert!(
+            RevealTarget::from_hit(&hit("table", "x", None, Some(""), Some("shop"))).is_none(),
+            "空 schema 等同没有（FTS 的空串不是 NULL）→ 拒绝"
+        );
+
+        // 内容档命中没有 catalog（FTS 表里没这一列）——不是拒绝理由：定位时从连接下已加载的
+        // catalog 取；这条差异必须写死在测试里，否则将来会有人把它当「不可定位」过滤掉。
+        let fts = RevealTarget::from_hit(&hit("table", "orders", None, Some("public"), None))
+            .expect("内容档命中同样可定位");
+        assert!(fts.catalog.is_empty(), "catalog 留空，由定位时解析");
     }
 
     /// 「结构洞察」的靶：表 / 视图用它所在的 schema，schema 节点用自己；列 / 例行与

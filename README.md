@@ -264,7 +264,7 @@ RdataStation-v2/
 | **M1 project** | 一实例一项目；名册与本体分离；OS 字节锁 | ✅ | 项目选择器（facet 搜索 / 固定 / 最近）· 未保存拦截与只读逃生口 · 重命名不改磁盘目录名 · 内置示例项目 | 窗口退出草稿兜底 · 项目目录移动 · 提升 / 快照 |
 | **M2 engine** | 双引擎底座 + 统一数据访问层 | ✅ | 6 驱动两层 trait · 双迁移账本 · `sqlglot` 唯一接入点 · 自写语句切分（能吃半截 SQL） | 缓存层与持久化层仍有零调用项（清单见接线矩阵 §7）· 增量同步未接 |
 | **M3 connection** | 把「一个数据源该怎么连」做完整、做诚实 | ✅ | 五 Tab 对话框 · **测试连接 = 真实连一次** · 协议链与隧道注册表 · DuckDB Secret 加速通道 · 零 UI 造数据 | SSH 主机密钥默认放行 · Secret 无门控不清理 |
-| **M4 database** | 把「有哪些数据源、里面有什么」做成一眼可读的树 | ✅ | 归属域 `P/G/GP` 列 · 分组=结构 / 标签=检索 · 双通道徽标 · 三级缓存 + 索引分页 · 跨连接搜索（名称档 + 内容档 `#`）· 预热与邻接预取 | 虚拟列表 · 命中后树内定位 · PG 跨库浏览 · 导航面板内不提供内容档 |
+| **M4 database** | 把「有哪些数据源、里面有什么」做成一眼可读的树 | ✅ | 归属域 `P/G/GP` 列 · 分组=结构 / 标签=检索 · 双通道徽标 · 三级缓存 + 索引分页 · 跨连接搜索（名称档 + 内容档 `#`）· **搜索结果「在树中定位」**（含大 schema 跳页）· 预热与邻接预取 | 虚拟列表 · PG 跨库浏览 · 导航面板内不提供内容档 |
 | **M5 scratchpad** | 单个项目私有的临时探索工作区 | ✅ | 导入 vs 引用 · 项目级回收站 + 撤销栏 · 内容搜索与全局替换 · 文件监控 · 冲突条 + 行级 diff（判据是内容不是 mtime） | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
 | **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | ✅ | 指纹决定版本（未变不增版）· 归档凭证三件套 · 三类孤儿索引修复 · 只读三重守卫 · 项目级回收站 | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
 | **M7 mock** | 把表结构变成可用的测试数据 | ✅ | 143 生成器 / 15 分类 · 分布族与时序 · 列级工作日历 · 6 套场景模板与列依赖 · 跨库直写落库 · 四条出口 | 出口不可取消 · 大导出非流式 · 并发生成 |
@@ -272,7 +272,7 @@ RdataStation-v2/
 | **M9 plugin** | WASM / Sidecar 宿主，四类扩展点 | ⛔ | 设计文档与包结构已就绪 | **整包无调用方**；两个 0 字节模块；等 beta3 立项 |
 | **editor** | 一个内核、三档能力 | ✅ | 三条执行通道 · 分段抓取 · 真实事务与中断 · 五种导出 · 格式化 / 十种方言转译 / 执行计划 · 补全与模板 · 会话跨重启 | Phase 1c 分析单元（搁置）· 值预览 / 编辑 · 血缘持久化 |
 | **federation** | 多源挂进同一条 DuckDB 会话的只读跨源查询 | 🟡 | 源清单浮层 · 主源语义 · 层级策略 L1 / L2 · 扩展显式管理（关掉自动下载）· 凭据脱敏出口 | L3 桥接 · SQL Server 真机 · 扫描量可见 |
-| **quick_open** | 元数据搜索与命令面板 | ✅ | 三前缀（`>` 命令 / `#` 全文档 / `@`）· 名称档走 `metadata_index` · 内容档走 `metadata_fts` trigram · 十万对象延迟 **158ms → 1.5ms** | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位 · `@` 当前连接限定（Phase 2） |
+| **quick_open** | 元数据搜索与命令面板 | ✅ | 三前缀（`>` 命令 / `#` 全文档 / `@`）· 名称档走 `metadata_index` · 内容档走 `metadata_fts` trigram · 十万对象延迟 **158ms → 1.5ms** | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位（导航面板已接，**Quick Open 命中行未接**）· `@` 当前连接限定（Phase 2） |
 | **settings** | 偏好登记 + 原子持久化 + 设置页 | ✅ | 三分法作用域（应用 / 项目 / 会话）· 登记表 + 准入五条 · 原子写 | `effect` 字段无人消费 · 无跨进程写锁 |
 
 ### 未接通与已知缺口的完整口径
@@ -387,23 +387,23 @@ cargo clippy-all            # = clippy --workspace --all-targets
 
 | 套件 | 本轮实测（2026-09-19） |
 | --- | --- |
-| **全工作区** | **84 个目标 · 1970 通过 · 51 忽略 · 0 失败**（含 1 项本机诊断脚本，见下） |
-| `rds-engine --lib` | **440 通过 / 24 ignored** |
+| **全工作区** | **84 个目标 · 1983 通过 · 51 忽略 · 0 失败**（含 1 项本机诊断脚本，见下） |
+| `rds-engine --lib` | **443 通过 / 24 ignored** |
 | `rds-editor --lib` | **377** |
 | `rds-insight` | lib **227** + 端到端集成 **14** |
 | `rds-mock` | lib **190** + 引擎集成 **37** + 持久化往返 **5** + 历史模板 **4** + 清理 **2** |
-| `rds-workbench --lib` | **110** |
+| `rds-workbench --lib` | **113** |
 | `rds-analytics-resource` | lib **125** + 面板窗口 **18** + 对话框窗口 **9** |
-| `rds-connection` | lib **44** + `tunnel_roundtrip` **4** |
+| `rds-connection` | lib **48** + `tunnel_roundtrip` **4** |
 | `rds-project` | lib **43** + 集成 **5** |
-| `rds-database` | lib **51** |
+| `rds-database` | lib **54** |
 | `rds-scratchpad` | lib **37** |
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
 > 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；当前全仓编译零告警（`cargo check --workspace --all-targets`）。
 >
-> **口径**：84 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 83 个目标 / 1969 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
+> **口径**：84 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 83 个目标 / 1982 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
 
 真机探针（需环境变量，默认不跑）：`editor_exec_real`（6 驱动）· `duckdb_accel_probe` · `duckdb_export_probe` · `federation_probe` · `federation_credentials_probe` · `oracle_probe` / `oracle_federation` · `sqlglot_capabilities` · `transaction_affinity` · `insight_schema_real` / `insight_source_real`。
 
@@ -435,7 +435,8 @@ cargo clippy-all            # = clippy --workspace --all-targets
 **近期（有明确触发条件）**
 
 - **编辑器分析单元（Phase 1c，已搁置）**：把分析模式做成 notebook 式单元 + 会话 + 输出。
-- **元数据全文搜索**：**已接线**（名称档 `metadata_index` 中缀；内容档 `metadata_fts` trigram，注释 / 数据类型，Quick Open `#` 档 ≥ 3 字）。**仍缺**：视图 / 例程**定义文本**未进 FTS、结果「在树中定位」。
+- **元数据全文搜索**：**已接线**（名称档 `metadata_index` 中缀；内容档 `metadata_fts` trigram，注释 / 数据类型，Quick Open `#` 档 ≥ 3 字）。**仍缺**：视图 / 例程**定义文本**未进 FTS。
+- **搜索结果在树中定位**：**导航面板已接**（搜索结果行的「定位」→ 展开链路并选中；大 schema 按位次直达那一页）。**仍缺**：Quick Open 命中行（跨面板：需展开左 Dock 并把焦点交给导航树）。
 - **导航树虚拟列表**：当前靠分页限制条数（首屏一页 + 加载更多），十万行同屏尚未验证。
 - **联邦 L3 桥接**：把无 scanner 的源按「拉行 → 临时表」接进来。
 
