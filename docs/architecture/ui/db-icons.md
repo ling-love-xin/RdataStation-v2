@@ -61,6 +61,58 @@
 
 > 本文不是法律意见；②③ 落地前需产品 / 法务确认。
 
+## 2.2 DBeaver 为什么也能拿到那么多（与 JetBrains 同构，但多一层「开源」）
+
+DBeaver Community 是 **Apache-2.0** 开源，品牌图标就在各 driver 扩展自己的 `icons/` 目录里，
+所以你能看到、也能考据来源。但**开源不等于可自由使用**：
+
+1. **版权 ≠ 商标（关键）**：Apache-2.0 给你的是**版权**许可（可再分发，需保留归属与 NOTICE），
+   而 Apache-2.0 **§6 明确写了不授予商号 / 商标 / 服务标记 / 产品名的许可**。所以「从
+   Apache-2.0 仓库拷 logo」只解决了版权那一半，商标问题原封不动。
+2. **法律基础同 DataGrip：指明性使用**：用厂商图标标注「连到该厂商的产品」属于指代对方
+   （不是你的品牌、不暗示背书）；多数厂商的 brand / press kit 明文允许「集成 / 兼容性」场景。
+3. **厂商乐于配合**：数据库客户端是厂商最重要的生态入口之一，不少品牌指南直接欢迎你做集成
+   标识（代价通常是「不得改色变形、不得单独用于宣传你的产品」）。
+4. **真正的护城河是「可审计、可逐张替换」**：DBeaver 那套图标能长期存在，靠的是每张都能追到
+   来源与提交记录 —— 出问题能定位、能换掉。**这才是「像 DBeaver 那样」的实质。**
+5. 另有一层现实：DBeaver 的驱动图标**可由用户自己配置 / 替换**（driver manager 里能选图标），
+   它并未把所有库都硬编成品牌标。
+
+> 本仓现状：只有 MIT `LICENSE`，**仓库里没有任何第三方许可 / 商标声明**（实查），也没有「关于」页。
+
+## 2.3 我们要「像那样」用品牌标：四步
+
+| # | 步骤 | 具体做什么 | 谁做 / 风险 |
+| --- | --- | --- | --- |
+| 1 | **建来源台账** | 下表逐行填：素材来源 URL、厂商商标政策链接、收录日期、收录人 | 工程（零风险，**先做**） |
+| 2 | **逐厂商核 brand kit** | 政策允许指代使用的 → 收；不明确的 → 不收（**不要凭「别人也这么干」收**） | 产品 / 法务（中风险，逐条核） |
+| 3 | **加第三方商标声明** | 仓库 `NOTICE` 或设置页「关于」一段：「各数据库名称与图标为其各自所有者的商标；本产品使用它们仅为指代所连接的产品，不代表任何厂商赞助或背书」 | 产品 / 法务（零风险） |
+| 4 | **（可选，最优雅）品牌图标走运行时资源包** | 默认发中性标；用户 / 企业把品牌 SVG 放进资源目录（`RDS_HOME/icons/db/<type_id>.svg`），AssetSource 先查磁盘再委派内置 | 工程（一次小改动，见 §3） |
+
+**为什么第 4 步值一提**：它把「是否用品牌标」变成**配置**而不是发布内容——仓库与安装包
+不含第三方商标素材，风险下沉到使用者，体验上却与内置无异（丢文件即生效，不用重编译）。
+
+### 来源台账（模板，逐行核完再填）
+
+| type_id | 厂商 / 产品 | 素材来源 | 商标 / 品牌政策 | 结论 | 收录日期 |
+| --- | --- | --- | --- | --- | --- |
+| `mysql` | Oracle | 待填（官方 brand/resource 页） | Oracle 商标政策（历史上最严的一档，通常要求用官方素材且不得改动） | ⏳ 待核 | |
+| `mariadb` | MariaDB Foundation | 待填 | MariaDB 商标政策 | ⏳ 待核 | |
+| `postgresql` | PostgreSQL（PGEU/PGCA） | 待填 | PostgreSQL 商标政策 | ⏳ 待核 | |
+| `oracle` | Oracle | 待填 | 同 MySQL 一栏 | ⏳ 待核 | |
+| `mssql` | Microsoft | 待填 | Microsoft 商标 / 品牌指南（对「指代」场景有专门条款） | ⏳ 待核 | |
+| `sqlite` | SQLite（Hwaci） | 待填 | SQLite 官网对 logo 的声明 | ⏳ 待核 | |
+| `duckdb` | DuckDB Foundation | 待填 | DuckDB 品牌素材页 | ⏳ 待核 | |
+| `clickhouse` | ClickHouse Inc. | 待填 | ClickHouse 品牌指南 | ⏳ 待核 | |
+| `mongodb` | MongoDB Inc. | 待填 | MongoDB 品牌指南 | ⏳ 待核 | |
+| `redis` | Redis Ltd. | 待填 | Redis 商标指南 | ⏳ 待核 | |
+
+> 上表「厂商 / 政策」是**已知存在、需逐个点开核**的入口名，不是核实过的结论；本机无法出网核实
+> （GitHub / 官网均被限制），填表时请把政策原文链接与关键条款摘一句进来。
+>
+> **不建议整包拷贝参考产品的图标目录**：版权上可行（保留归属），但它并不能解决商标问题，
+> 还会引入一堆你不支持的数据库图标 —— 维护与合规双重负担。
+
 ## 3. 落地配方：一张品牌图标 = 三步
 
 工程侧管线已铺好（`crates/workbench_shell/src/db_icons.rs`），拿到授权 SVG 后：
@@ -72,6 +124,12 @@
    自备图标只有几张，用 `include_bytes!` + 一张 `match` 表即可，不必给 `app` 加 `rust_embed` 依赖。
 3. **改一行映射**：`db_icons::db_icon_of` 里把该类型的 `Catalog(IconName::…)` 换成
    `DbIcon::Brand { type_id: "mysql" }`——路径由 `DbIcon::brand_path` 推导，**调用点不动**。
+
+**若走 §2.3 第 4 步（运行时资源包）**：映射与路径约定**不变**，变的只是「资产从哪儿取」——
+AssetSource 先查磁盘目录（如 `RDS_HOME/icons/db/`），未命中再委派 `AllAssets`。
+好处是不用重编译、仓库与安装包不含第三方素材；代价是启动时要能容忍该目录不存在（当成未配置）。
+未配置 / 文件缺失时，`DbIcon::Brand` 会渲染成空——所以调用点取值时要先确认资产可用
+（或按「品牌标 → 通用标 → emoji」的顺序逐级回退）。
 
 ## 4. 现状与边界
 
@@ -88,7 +146,7 @@
 
 | 内容 | 落点 |
 | --- | --- |
-| 通用图标资产（Lucide 全量 1830 个） | 依赖 `gpui-kit-assets`；注册点 `crates/app/src/main.rs`（`.with_assets(gpui_kit::assets::AllAssets)`） |
+| 通用图标资产（Lucide 全量 1830 个） | 依赖 `gpui-kit-assets`；注册点 `crates/app/src/main.rs`（`.with_assets(gpui_kit::assets::AllAssets)`）；运行时品牌包需在此换成组合 AssetSource |
 | 类型 → 图标映射、品牌标落点、守卫测试 | `crates/workbench_shell/src/db_icons.rs` |
 | 类型目录（`id` / `name` / `category` / `icon`） | `data_source_types` 表；种子 `crates/engine/migrations/global/008_add_data_source_module.sql`；读侧 `engine::persistence::{driver_store, driver_catalog}` |
 | 徽标渲染现状（emoji） | `crates/workbench/src/components/connection_dialog/helpers.rs::type_badge`；导航侧「形状 + 2 字母」在 `crates/database/src/nav_view.rs` |
