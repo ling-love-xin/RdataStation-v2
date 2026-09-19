@@ -61,7 +61,7 @@
 | 邻居 | 关系 |
 | --- | --- |
 | `duckdb/accel.rs`（加速档） | **同族**：accel 是“一源一条专用连接”（整库 `ATTACH … (READ_ONLY)` + `USE`）；联邦是它的推广（同一条连接挂多源）。`MOUNT_LOCK`、旁路回执（`SourceNote`）、`USE` 解析表名、写保护双保险**全部照用** |
-| `duckdb/extensions.rs` | L2 用它的安装与状态；联邦只负责“什么时候装、装给谁、失败了怎么说” |
+| `duckdb/accel.rs` · `federation/session.rs` | **扩展清单与安装 SQL 的唯一处**（`AccelKind::extension()` / `extension_repository()` / `install_sql`）——L2 与加速档共用；联邦只负责“什么时候装、装给谁、失败了怎么说”。（原 `duckdb/extensions.rs` 的 `ExtensionManager` 零调用，2026-09-19 已删除。） |
 | `duckdb/analysis.rs` · `temp_table.rs` | L3 的临时表生命周期与登记（建 / 登记 / 用完即删） |
 | `editor/src/channel.rs` | 三档互斥里的 `Federated` 档**已存在**；门控端口在 `services/editor_channels.rs`（现在是“尚未注册外部源”） |
 | `engine/persistence/history_store.rs` | 历史已有 `channel` 字段；联邦执行要带**参与源清单**（见 D7） |
@@ -155,7 +155,7 @@
 | 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
 | 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |
 | D7 下推与上限 / L3 | `.../federation/bridge.rs`（🟡 第二期） |
-| D4 扩展显式管理 | `crates/engine/src/duckdb/extensions.rs` + 探针 `tests/duckdb_extensions_probe.rs` |
+| D4 扩展显式管理 | `crates/engine/src/duckdb/accel.rs`（清单与 `install_sql`）+ 探针 `tests/duckdb_extensions_probe.rs` |
 | 复用对象（会话 / 回执 / `MOUNT_LOCK`） | `crates/engine/src/duckdb/accel.rs` |
 | Secret 目录对齐（注册与 `secret_directory` 同一处） | `crates/engine/src/migration/global_init.rs`（`get_secrets_dir`）+ `DuckDBManager::configure_connection` |
 | 临时表生命周期 | `crates/engine/src/duckdb/{analysis.rs, temp_table.rs}` |

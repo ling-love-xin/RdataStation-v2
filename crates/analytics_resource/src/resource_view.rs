@@ -36,7 +36,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use engine::dbi::engine::duckdb_engine::DuckDBEngine;
+use engine::file_reader_function;
 
 /// kind 图标取**完整 Lucide 目录**（`gpui_kit::assets`）：组件子集（`default-icons.txt`）
 /// 里没有表格形；另外用别名避免与组件子集的同名枚举混淆。
@@ -223,7 +223,7 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
 /// 这条存档能否「查看统计」（M8 洞察）：判定按种类分，三类的可分析性来源不同。
 ///
 /// - **受管文件**：本体得是 DuckDB 读得动的数据文件——扩展名口径只有一处
-///   （[`DuckDBEngine::file_reader_function`]：CSV / Parquet / Excel / JSON）；
+///   （[`engine::file_reader_function`]：CSV / Parquet / Excel / JSON）；
 ///   `.sql` / `.md` 这类文本不是数据，不给入口。
 /// - **远端引用**：有来源连接与表名就能取样（取样 SQL 由宿主按驱动拼，不在面板）。
 /// - **分析表**：本体是项目内的 `analytics.duckdb`，要 ATTACH + 重建定义——随后续批次接。
@@ -237,7 +237,7 @@ pub fn can_view_stats(detail: &ArchiveDetail) -> bool {
         ArchiveKind::File => detail
             .payload_rel_path
             .as_deref()
-            .and_then(DuckDBEngine::file_reader_function)
+            .and_then(file_reader_function)
             .is_some(),
         ArchiveKind::TableRef => {
             detail.source_connection_id.is_some() && detail.source_table.is_some()

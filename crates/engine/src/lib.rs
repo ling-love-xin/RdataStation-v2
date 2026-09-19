@@ -4,8 +4,8 @@
 //!
 //! ## 迁移进度
 //! - ✅ Round 1：DuckDB 分析引擎（`duckdb`，自 v1 `core/duckdb`）
-//! - ✅ Round 2：驱动层（`driver`，自 v1 `core/driver` 全量）+ 统一数据访问（`dbi`）
-//!   + 多级缓存（`cache`）+ 连接管理（`connection_manager`）
+//! - ✅ Round 2：驱动层（`driver`，自 v1 `core/driver` 全量）+ 多级缓存（`cache`）
+//!   + 连接管理（`connection_manager`）
 //! - ✅ Round 5：元数据持久化（`persistence`，自 v1 `core/persistence`，不含 analytics_resource_store）
 //!   + 日志（`logging`）+ 迁移（`migration` + `migrations/` SQL 资源）
 //! - ⏳ 后续轮次：SQL 服务等按 Feature 迁入
@@ -14,7 +14,6 @@
 
 pub mod cache;
 pub mod connection_manager;
-pub mod dbi;
 pub mod driver;
 pub mod duckdb;
 pub mod logging;
@@ -80,7 +79,8 @@ pub use services::connection_probe::{test_connection, test_connection_result};
 // 重新导出 DuckDB 分析引擎模块
 pub use duckdb::{
     DataFormat, DataSourceConfig, DataSourceType, DuckDBExecutor, DuckDBManager, DuckDBResult,
-    ExplainAnalyzer, ExportConfig, ExtensionInfo, ExtensionManager, ExtensionStatus, FTSManager,
-    FederationManager, ImportConfig, ImportExportManager, PlanNode, PlanNodeType, PluginConnection,
-    PluginManager, PluginPermissionLevel, TempTableConfig, TempTableManager, TempTableSource,
+    ExplainAnalyzer, ExportConfig, FTSManager, FederationManager, ImportConfig,
+    ImportExportManager, PlanNode, PlanNodeType, PluginConnection, PluginManager,
+    PluginPermissionLevel, TempTableConfig, TempTableManager, TempTableSource,
+    file_reader_function,
 };

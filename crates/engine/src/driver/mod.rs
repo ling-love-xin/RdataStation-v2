@@ -1,10 +1,15 @@
 //! Driver 层 — 数据库驱动 trait 抽象 + 注册 + 连接管理
 //!
 //! ═══════════ 架构边界 ═══════════
-//! Driver 层定位：数据库连接抽象层，位于 dbi 之下、native 实现之上。
+//! Driver 层定位：数据库连接抽象层，在 services 之下、native 实现之上。
 //!
-//!    commands ──► services ──► dbi ──► driver ──► native
-//!                  (业务逻辑)   (引擎)   (本层)    (实现)
+//!    commands ──► services ──► driver ──► native
+//!                  (业务逻辑)   (本层)    (实现)
+//!
+//! 2026-09-19 修正：本节原先写的是 `services ──► dbi ──► driver`。那条链是 v1 的
+//! 设计（`dbi` 的 `DBI`/`QueryRouter`/`DriverEngine`/`StreamEngine`），实测**零调用**——
+//! 真实执行路径是 `SqlService`（services）直接经 `ConnectionManager` 取 `Database` trait。
+//! `dbi` 层已删除，台账见 `docs/architecture/data-layer-wiring-matrix.md` §5.3。
 //!
 //! ## 职责
 //! - 定义 Database / Transaction / Stream 核心 trait（[traits]）
@@ -33,14 +38,13 @@
 //!
 //! ## 非职责（禁止事项）
 //! - ❌ 不处理业务逻辑（属于 services）
-//! - ❌ 不路由执行引擎（属于 dbi）
 //! - ❌ 不直接返回给前端（属于 commands）
 //! - ❌ 不在 trait 中定义与数据访问无关的方法
 //!
-//! ## 与 dbi 层的边界
-//! - driver 提供 `Database` trait，dbi 通过 `DriverEngine` 调用 trait 方法
-//! - driver 不感知 dbi 的执行模式和路由策略
-//! - dbi 不直接调用 driver/native 的实现，始终通过 trait 接口
+//! ## 上游边界
+//! - services 提供 `SqlService` 作为唯一执行入口，它从 `ConnectionManager` 取连接、
+//!   经 [`Database`] trait 调具体驱动
+//! - 本层不感知上游的编排策略（历史 / 事务 / 超时 / 执行通道都在 services 与 editor 侧）
 pub mod auto_register;
 pub mod factory;
 pub mod introspection;

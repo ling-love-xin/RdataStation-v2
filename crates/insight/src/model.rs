@@ -126,8 +126,8 @@ impl SampleSource {
         }
     }
 
-    /// 文件来源：按扩展名选 DuckDB 的读取函数（映射与 `DuckDBEngine::load_file_source`
-    /// 同一处），路径做单引号转义。
+    /// 文件来源：按扩展名选 DuckDB 的读取函数（与 `engine::file_reader_function`
+    /// 同一处定义），路径做单引号转义。
     ///
     /// 不认识的扩展名直接报错，而不是猜一个读取器——猜错时用户看到的是
     /// 一句与「这个格式不支持」毫无关系的解析错误。
@@ -137,10 +137,7 @@ impl SampleSource {
     ) -> Result<Self, shared::error::CoreError> {
         let path = path.as_ref();
         let display = path.display().to_string();
-        let reader = engine::dbi::engine::duckdb_engine::DuckDBEngine::file_reader_function(
-            &display,
-        )
-        .ok_or_else(|| {
+        let reader = engine::file_reader_function(&display).ok_or_else(|| {
                 shared::error::CoreError::common(shared::error::CommonError::General(format!(
                     "这个格式还不能分析：{display}（支持 CSV / Parquet / Excel / JSON）"
                 )))

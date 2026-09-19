@@ -12,14 +12,18 @@
 //! - `fts.rs` - 全文搜索
 //! - `explain.rs` - 查询计划分析
 //! - `plugin.rs` - 插件系统接口
-//! - `extensions.rs` - DuckDB扩展管理
 //! - `metrics.rs` - 性能监控与指标采集
 //! - `snapshot.rs` - 快照与备份管理
 //! - `analysis.rs` - 分析用临时表的生命周期（建 / 登记 / 用完即删 / 惰性清理）
+//! - `accel.rs` - 本地加速档（源库只读挂载；扩展清单与 `install_sql` 也在这里）
+//! - `file_reader.rs` - 扩展名 → DuckDB 读取函数（唯一定义处）
+//!
+//! 2026-09-19：删除 `extensions.rs`（`ExtensionManager` / `ExtensionInfo` / `ExtensionStatus`，
+//! 约 570 行）——实测零调用，只有它自己的测试在用；扩展的安装与状态实际由 `accel.rs`
+//! （加速档 / 联邦）承担。台账见 `docs/architecture/data-layer-wiring-matrix.md` §5.3。
 
 mod executor;
 mod explain;
-mod extensions;
 mod fts;
 mod import_export;
 mod manager;
@@ -32,11 +36,12 @@ pub mod accel;
 pub mod federation;
 pub mod row_to_arrow;
 pub mod value_text;
+pub mod file_reader;
 
 // 导出所有核心类型
 pub use executor::{DuckDBExecutor, DuckDBResult};
 pub use explain::{ExplainAnalyzer, PlanNode, PlanNodeType};
-pub use extensions::{ExtensionInfo, ExtensionManager, ExtensionStatus};
+pub use file_reader::file_reader_function;
 pub use federation::{DataSourceConfig, DataSourceType, FederationManager};
 pub use fts::FTSManager;
 pub use import_export::{DataFormat, ExportConfig, ImportConfig, ImportExportManager};

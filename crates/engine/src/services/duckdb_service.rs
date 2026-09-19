@@ -1,11 +1,7 @@
 use std::sync::Arc;
 
-use crate::dbi::context::QueryContext;
-use crate::dbi::engine::duckdb_engine::DuckDBEngine;
-use crate::dbi::engine::{ExecutionEngine, ExecutionMode};
-use shared::error::{CommonError, CoreError};
-use shared::models::QueryResult;
 use crate::DuckDBManager;
+use shared::error::{CommonError, CoreError};
 
 pub struct DuckDbService;
 
@@ -14,65 +10,10 @@ impl DuckDbService {
         DuckDBManager::get_or_create_in_memory()
     }
 
-    /// 使用 DuckDB 加速引擎执行外部数据库查询
-    ///
-    /// 流程：ATTACH 外部数据库 → 执行 SQL → DETACH → 返回 QueryResult
-    /// 内部调用 dbi::engine::duckdb_engine::DuckDBEngine（DBI 层）
-    ///
-    /// 扩展目录由 `paths::extensions_dir()` 统一解析，不再由调用方传 `data_dir`
-    /// （改造前该参数为空时扩展目录压根不设，ATTACH 外部库时会去找默认位置）。
-    pub async fn accelerate_query(
-        db_type: &str,
-        url: &str,
-        conn_name: &str,
-        sql: &str,
-        engine: &DuckDBEngine,
-    ) -> Result<QueryResult, CoreError> {
-        let attach_type = match db_type.to_lowercase().as_str() {
-            "mysql" => "mysql",
-            "postgresql" | "postgres" => "postgres",
-            "sqlite" => "sqlite",
-            other => {
-                return Err(CoreError::common(CommonError::General(format!(
-                    "Unsupported database type for DuckDB acceleration: {}",
-                    other
-                ))))
-            }
-        };
-
-        let sanitized = conn_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
-        let attach_name = format!("ext_{}", sanitized);
-        let attach_sql = format!("ATTACH '{}' AS {} (TYPE {})", url, attach_name, attach_type);
-
-        {
-            let conn = engine
-                .conn()
-                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-            DuckDBEngine::init_extensions(&conn)
-                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-            conn.execute_batch(&attach_sql).map_err(|e| {
-                CoreError::common(CommonError::General(format!(
-                    "Failed to ATTACH source database: {}",
-                    e
-                )))
-            })?;
-        }
-
-        let ctx = QueryContext::new(None, ExecutionMode::DuckDB);
-        let result = engine
-            .execute(sql, &ctx)
-            .await
-            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-
-        {
-            let conn = engine
-                .conn()
-                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-            let _ = conn.execute_batch(&format!("DETACH IF EXISTS {}", attach_name));
-        }
-
-        Ok(result)
-    }
+    // 2026-09-19 删除 `accelerate_query`：它零调用，且依赖的 `dbi` 层整体已废弃
+    // （2124 行里只有 `DuckDBEngine::file_reader_function` 是活的，现挂在
+    // `crate::duckdb::file_reader`）。加速档的实际实现是 `crate::duckdb::accel`，
+    // 它自己拼 `ATTACH … (READ_ONLY)`，不经过这里。
 
     pub fn create_duckdb_temp_table(
         columns: &[String],

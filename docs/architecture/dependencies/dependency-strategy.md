@@ -110,7 +110,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 原则：**扩展的获取与内核的编译解耦**。DuckDB 是图上最重的原生依赖（`features = ["bundled"]` 会把 C++ 内核一起编，单次重建数分钟，并发链接尚会 OOM——全仓固定 `-j 2` 即是此因），因此：
 
-1. **扩展一律 `INSTALL` 到指定目录**（已实现：`dbi/engine/duckdb_engine.rs::init_extensions` 执行 `SET extension_directory = '{data_dir}/duckdb/extensions'` 后再 `LOAD`）。目录随数据目录走，可备份 / 离线分发，不随编译产物漂移。
+1. **扩展一律 `INSTALL` 到指定目录**（已实现：`duckdb/manager.rs::configure_connection` 设 `extension_directory` 后再 `LOAD`；扩展的安装与状态由 `duckdb/accel.rs` 承担——2026-09-19 之前这里写的是 `dbi/engine/duckdb_engine.rs::init_extensions`，那个模块已随废弃的 `dbi` 层删除）。目录随数据目录走，可备份 / 离线分发，不随编译产物漂移。
 2. **需要新扩展时先试 `INSTALL` / `LOAD`**；只有当扩展与内核 **ABI 不匹配**时才谈内核升级，且升级走**外部预编译库**（关掉 `bundled`，指向外部构建产物 / 系统库，如 `DUCKDB_LIB_DIR` 指向外部 `libduckdb`），**不要让扩展变更触发内核重编**。
 3. **扩展仓库与版本固定**（可复现 + 可离线）：`INSTALL` 只在升级扩展时联网，日常构建不取包。
 4. 本地加速 / 分析模式依赖的 `mysql` / `postgres_scanner` 等扩展属第 1 条范畴：装到扩展目录、随会话 `LOAD`，**不是**通过给内核加 feature 获得。

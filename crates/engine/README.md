@@ -1,24 +1,24 @@
 # rds-engine — M2 双引擎与统一数据访问底座
 
 > 本文件是 crate 的 **README 级入口**：只提炼模块特点与代码地图，完整设计以 `docs/architecture/` 为准（架构约定：crate 内不复制设计文档）。
-> 唯一例外是 `src/dbi/README.md`——v1 迁移期留下的子模块说明，与现状已有偏差，**不作为权威**（见末节「已知与注意」）。
 
 ## 一句话定位
 
-engine 是**数据层与服务层的底座**：对上给 Feature crate 一套「连库 / 取元数据 / 跑 SQL / 存元数据」的能力，对下把**四类原生驱动 + DuckDB 分析引擎 + sqlglot 解析器**收在本 crate 内，并把「这条 SQL 用哪个引擎跑」收敛到一个入口（`DBI`）。
+engine 是**数据层与服务层的底座**：对上给 Feature crate 一套「连库 / 取元数据 / 跑 SQL / 存元数据」的能力，对下把**四类原生驱动 + DuckDB 分析引擎 + sqlglot 解析器**收在本 crate 内，并把「这条 SQL 怎么跑」收敛到 `SqlService` 一个入口。
 
 ## 模块特点
 
-### 1. 分层严格向下：`services → dbi → driver → native`
+### 1. 分层严格向下：`services → driver → native`
 
 ```
-commands ──► services ──► dbi ──► driver ──► native
+commands ──► services ──► driver ──► native
 ```
 
-（分层图原文见 `src/driver/mod.rs` 模块头，`src/dbi/mod.rs` 同构）
+（分层图原文见 `src/driver/mod.rs` 模块头。2026-09-19 之前这里写的是 `services → dbi → driver`，
+而 `dbi` 层实测**零调用**（2124 行里只有一个静态工具方法活）、已删除——台账与理由见
+`docs/architecture/data-layer-wiring-matrix.md` §5.3。）
 
 - `services/`：执行侧服务（统一执行入口 / 解析 / DuckDB 专用 / 执行编排 / 快照）
-- `dbi/`：执行引擎抽象层——多引擎路由（原生驱动 / DuckDB 加速 / 流处理）+ 会话与事务
 - `driver/`：连接抽象层——trait + 注册表 + 连接池 + 内省；`native/` 是具体实现，`jdbc/` `wasm/` 是扩展入口
 - 各层只允许依赖**更下层**；Feature crate 一律从 `engine` 顶层的再导出进入（`src/lib.rs` 是再导出清单）
 
@@ -62,9 +62,8 @@ commands ──► services ──► dbi ──► driver ──► native
 | 路径 | 职责 |
 | --- | --- |
 | `src/services/` | `sql_service`（统一执行入口：连接管理 + 缓存 + 历史）、`sql_parser_service`（解析 / 语句类型）、`duckdb_service`（临时表 / 行转 Arrow / 列洞察数据）、`execution_service`（串行并发编排）、`snapshot_service`、`result_types`、`connection_probe`（测试连接） |
-| `src/dbi/` | `dbi.rs`（对外唯一接口）、`session.rs`（会话级 / 持久化结果集）、`context.rs`、`performance.rs`、`engine/`（driver / duckdb / stream 三个执行引擎） |
 | `src/driver/` | `traits.rs` + `registry` / `router.rs` / `factory.rs`（注册与构造）、`smart_pool` / `standard_pool`（连接池）、`introspection.rs` / `metadata.rs`（元数据）、`native/`（duckdb · mysql · postgres · sqlite，各带连接池）、`jdbc/` `wasm/` `missing_driver.rs` |
-| `src/duckdb/` | 分析引擎封装：连接池、临时表、联邦查询、导入导出、FTS、计划分析（`explain.rs`）、扩展与插件接口、`snapshot.rs`、`metrics.rs` |
+| `src/duckdb/` | 分析引擎封装：连接池、临时表、联邦查询（`federation/`）、本地加速（`accel.rs`）、导入导出、FTS、计划分析（`explain.rs`）、文件读取映射（`file_reader.rs`）、`snapshot.rs`、`metrics.rs` |
 | `src/sql/` | SQL 原语（**sqlglot 唯一接入点**）：`engine.rs`（`SqlEngine` 门面）、`parser.rs`、`split.rs`（自研切分）、`highlight.rs`、`builder.rs`、`formatter.rs`、`transpiler.rs` |
 | `src/persistence/` | 元数据持久化（SQLite）：连接 / 历史 / 日志 / 驱动 / 插件 / 网络档案（凭据加密）/ 环境变量 / SQL 模板 / 项目库与全局库（模块头记有本模块的 SQL 安全约定）+ **项目级回收站**（`trash.rs`：`ProjectTrash`，与具体模块无关，来源是 `origin` 字符串；M5 草稿箱与 M6 资产库共用，各模块界面按来源取用） |
 | `src/cache/` | 多级缓存：LRU、查询缓存、元数据缓存、内存护栏、minicatalogs |
@@ -117,6 +116,5 @@ commands ──► services ──► dbi ──► driver ──► native
 
 ## 已知与注意
 
-- `src/dbi/README.md` 是 v1 迁移期的子模块说明（描述 `QueryRouter`、`stream` 模块等 v1 结构），与今天 `src/dbi/`（`dbi.rs` / `session.rs` / `context.rs` / `engine/` / `performance.rs`）已有偏差；读现状以代码与 `overview.md` 为准
 - `src/persistence/mod.rs` 模块头列出本模块的 SQL 安全约定（系统查询用 PRAGMA / 运行时查询一律 `?N` 参数绑定 / 标识符用 `quote_identifier`），**改任何 store 前先读它**
 - 新增依赖必须写进根 `Cargo.toml` 的 `[workspace.dependencies]`，crate 内只写 `dep.workspace = true`

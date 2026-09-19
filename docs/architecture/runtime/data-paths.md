@@ -228,7 +228,7 @@ wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引
 | 8 | `project/src/ui.rs:879-887` | `sample_project_dir()`：`get_system_dir()` + **两处** `%TEMP%` 回退 | 回退改 `paths::data_dir().join("samples")` | 顺带修“回退到临时目录”隐患 |
 | 9 | `workbench/src/services/workspace_loader.rs:23-28` | `default_global_dir()`：`get_system_dir()` + `%TEMP%` 回退 | 回退改 `paths::data_dir().join("system")` | 同 #8；`global_analysis_db_path()` 靠它跟随 |
 | 10 | `engine/src/duckdb/manager.rs:297-304` | `extensions_dir()`：`dirs::home_dir()/<DUCKDB_EXTENSIONS_DIR>` | `paths::extensions_dir()` | 旧位置兼容读取或迁移（W3） |
-| 11 | `engine/src/dbi/engine/duckdb_engine.rs:505-509` | `init_extensions(conn, data_dir)`：`{data_dir}/duckdb/extensions` | 传参改走 `paths::extensions_dir()` | ✅ 已执行，但**改了签名**（参数删掉，理由见 §10.2） |
+| 11 | `engine/src/dbi/engine/duckdb_engine.rs:505-509` | `init_extensions(conn, data_dir)`：`{data_dir}/duckdb/extensions` | 传参改走 `paths::extensions_dir()` | ✅ 已执行，但**改了签名**（参数删掉，理由见 §10.2）。**后续（2026-09-19）**：`dbi` 层整体删除，此处现为 `duckdb/manager.rs::configure_connection` 设 `extension_directory` |
 | 12 | 日志目录：`LogConfig::with_log_dir(...)` 的**调用方**（在 `crates/app`） | `Default` 里 `log_dir: PathBuf::from("")`，目录由调用方传入 | 调用方改传 `paths::log_dir()` | ✅ 已执行（改为 `Default` 直接取 `paths::log_dir()`；**无调用方**这一事实见 §10.2） |
 
 ### 9.2 由“启动重定向 TEMP/TMPDIR”自动覆盖（不改代码）

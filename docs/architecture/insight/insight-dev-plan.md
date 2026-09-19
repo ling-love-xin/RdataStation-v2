@@ -163,7 +163,7 @@
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
-| **D59** 文件类数据源 | `SampleSource.conn_id` 改 `Option`：`None` = 跑在 **DuckDB 内存库**（文件与已 `ATTACH` 的表）；新增 `on_duckdb` / `duckdb_file`（扩展名 → 读取函数，**映射与 `load_file_source` 共用一处**；路径做单引号转义；认不出的格式直接报「这个格式还不能分析」而不是猜一个读取器） | `insight/src/model.rs` + `engine/src/dbi/engine/duckdb_engine.rs` |
+| **D59** 文件类数据源 | `SampleSource.conn_id` 改 `Option`：`None` = 跑在 **DuckDB 内存库**（文件与已 `ATTACH` 的表）；新增 `on_duckdb` / `duckdb_file`（扩展名 → 读取函数，**映射与 `load_file_source` 共用一处**；路径做单引号转义；认不出的格式直接报「这个格式还不能分析」而不是猜一个读取器） | `insight/src/model.rs` + `engine/src/duckdb/file_reader.rs`（原记 `engine/src/dbi/engine/duckdb_engine.rs`；`dbi` 层 2026-09-19 已删，那个函数摘到了 `file_reader.rs`） |
 | 取样分两条 | 源库连接 → 引擎 JSON 打型建表（原路，抽为 `sample_from_connection`）；DuckDB 侧 → `create_analysis_temp_table_as`（`CREATE TABLE … AS`，**数据不过 Rust**，类型由 DuckDB 定，失败收半成品） | `insight/src/service/persistence.rs` + `engine/src/duckdb/analysis.rs` |
 | 入口①导航树 | 表右键「查看统计」→ 按驱动加引号的限定名 → `open_insight_source_table`；引号与拼装收进 `Shared::insight_sample_sql`（**口径只一处**） | `workbench/src/components/nav_host.rs` + `panels/shared.rs` |
 | 入口②分析存档 | 行右键「查看统计」：受管文件走本体文件（`duckdb_file`）；远端引用按 `source_connection_id` + `schema.table` 重新取样；分析表型（本体在 `analytics.duckdb`，要 ATTACH + 重建定义）随后续批次。菜单项是否可用由 `can_view_stats` 定（按 kind + 可读扩展名） | `analytics_resource/src/resource_view.rs` + `workbench/src/components/resource_host.rs` |
@@ -265,6 +265,8 @@
 ### 2026-09-17 — Q1 核查（规则 SQL 安全边界）：先前的「禁用外部访问」建议作废
 
 **核查结论**（只读代码，无改动）：对 DuckDB 设 `enable_external_access = false` / 「只读连接 / 禁用扩展」这类限制**在现有连接模型下不可行**——`dbi/engine/duckdb_engine.rs` 的 `register_external_database`（`ATTACH`）与 `load_file_source`（`read_csv_auto` / `read_parquet` / `read_excel_auto`）、`duckdb/extensions.rs` 的 `INSTALL` / `LOAD` 都跑在**同一个进程级内存单例**上（就是洞察与结果集临时表所在的连接），且该开关只能在建连接时设、设了回不去 → 会把产品自身的「连接 DuckDB 数据源 / 打开 CSV·Parquet·Excel / 装扩展」一起挡掉。
+
+> 注（2026-09-19）：上述两个文件已不存在（前者的 `dbi` 层整体删除，后者的 `ExtensionManager` 零调用删除；`INSTALL` / `LOAD` 现由 `duckdb/accel.rs` 承担）。**结论不受影响**——它依据的是「同一个进程级内存单例」这一连接模型事实，而模型未变。
 
 **Q1 推荐改为**（已写进架构 §11 K1 / §12 Q1 与手册 §4.7，待拍板）：① **解析期静态门**（只放行单条 `SELECT` / `WITH`，禁分号 / `ATTACH` / `COPY` / `read_*` 等——**防呆层，不是安全边界**）；② 诚实声明（规则文件 = 可信本地文件，现状）；③ **项目规则信任门**（推荐新增，真正的边界：项目规则跟着仓库走，克隆不信任的仓库 + 打开项目 = 把它的 SQL 拿到本机执行）。
 

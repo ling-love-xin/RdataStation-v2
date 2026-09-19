@@ -57,10 +57,7 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
     ///
     /// 判定与执行各写一份，迟早会出现“菜单亮着但点了报不支持”。
     fn can_view_stats(&self, path: &Path) -> bool {
-        engine::dbi::engine::duckdb_engine::DuckDBEngine::file_reader_function(
-            &path.display().to_string(),
-        )
-        .is_some()
+        engine::file_reader_function(&path.display().to_string()).is_some()
     }
 
     /// 洞察落地面板（M8）：路径 → 取样来源 → 右 Dock 的洞察面板（D58）。

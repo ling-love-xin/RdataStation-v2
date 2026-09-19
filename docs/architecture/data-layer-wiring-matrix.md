@@ -44,15 +44,13 @@
 | Functions | `get_functions` / `set_functions` | 同上（与 Procedures 成对） | ✅ **本轮接线** |
 | Sequences | `get_sequences` / `set_sequences` | `collect_objects` 的 Sequences 分支 | ✅ **本轮接线** |
 | Triggers | `get_triggers` / `set_triggers` | `collect_objects` 的 Triggers 分支 | ✅ **本轮接线** |
-| Indexes | `get_indexes` / `set_indexes` | —— | ❌ 零调用 |
-| Constraints | `get_constraints` / `set_constraints` | —— | ❌ 零调用 |
-| DataSourceMeta | `get_data_source_meta` / `set_*` | —— | ❌ 零调用 |
-| RoutineSource | `get_routine_source` / `set_*` | —— | ❌ 零调用 |
-
-> **Indexes / Constraints 为什么不接**：它们的消费方是属性面板，而属性面板按设计走
+> **已删除的四组**（2026-09-19）：`Indexes` / `Constraints` / `DataSourceMeta` / `RoutineSource`
+> ——它们的消费方都不存在，连 key 变体一并删除。
+>
+> **索引 / 约束为什么不接线**：它们的消费方本应是属性面板，而属性面板按设计走
 > **实时内省**（`property_panel.rs` 模块文档：「数据来自 `MetadataService`（实时内省）」）。
-> 给「要看到此刻事实」的界面套一层缓存是错的。这两组（连同 key）建议**删掉**而不是接线。
-> **RoutineSource 同理**：例程源码走驱动 `get_routine_source` 实时查询，缓存它会让「查看源码」看到旧定义。
+> 给「要看到此刻事实」的界面套一层缓存是错的。**例程源码同理**：它走驱动
+> `get_routine_source` 实时查询，缓存会让「查看源码」看到旧定义。
 
 ### 2.2 L2（每连接 `conn_{id}.sqlite`，`engine/src/persistence/metadata_cache.rs`）
 
@@ -133,7 +131,7 @@
 
 → **保持不动**。触发条件仍是「出现第三处转换点」。
 
-### 5.3 `dbi` 与 `services` 两条执行入口——**调查完成：不是两条活入口，是「设计的那条已经死了」**
+### 5.3 `dbi` 与 `services` 两条执行入口——**调查完成：不是两条活入口，是「设计的那条已经死了」（已处置）**
 
 这是本轮调查最重要的发现。
 
@@ -171,17 +169,17 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 | `EXTENSION_MANIFEST`（P0/P1 优先级） | `dbi/engine/duckdb_engine.rs` | ❌ 零调用（唯一入口 `init_extensions` 只被零调用的 `accelerate_query` 调） |
 | `ExtensionManager`（install / load / discover / validate） | `duckdb/extensions.rs`（约 570 行） | ❌ 零调用（**只有自己的测试在用**） |
 
-**建议**（不在本轮实施）：
+**处置（2026-09-19 已执行）**：
 
-1. **不要为了「让 dbi 活起来」而把 `SqlService` 迁过去**——那是拿一个死的设计去覆盖一个活的事实，
-   且 `SqlService` 已经承载了历史 / 事务 / 超时 / 通道（B13）等真实语义。
-2. `dbi` 层按「**已废弃的 v1 设计**」处置：保留 `DuckDBEngine::file_reader_function`（把那个静态方法
-   挪进 `duckdb/` 或 `driver/utils`），其余 2100 行**标注为待退役**或直接删除；
-   同步修正 `dbi/mod.rs` 与 `driver/mod.rs` 顶部那张**与实际不符的架构图**。
-3. 扩展清单收敛到 `accel.rs` 一处（或把它提为 `duckdb/extensions.rs` 的唯一实现）。
+1. `DuckDBEngine::file_reader_function` 摘出为 `crates/engine/src/duckdb/file_reader.rs`（那个唯一活的成员，
+   静态函数不需要那个类），三个调用方改走 `engine::file_reader_function`。
+2. **整个 `dbi/` 目录删除**（2124 行）；`lib.rs` 的 `pub mod dbi;`、`DuckDbService::accelerate_query`
+   （零调用且依赖死类）一并删除。
+3. 分层图改正：`driver/mod.rs` 模块头与 `engine/README.md` 都改为实际路径 `services → driver → native`。
+4. `duckdb/extensions.rs`（570 行、仅自己的测试在用）删除——扩展清单收敛到 `accel.rs` 一处。
 
-> ⚠️ 处置属破坏性改动（涉及删 2000+ 行、动模块文档、可能影响未来「多引擎路由」的预留），
-> 建议**单独一批**做，并先在 `core-design-current.md` 记录一次。
+**保留下来的判断**：`SqlService` 保持不动。它的位置（services）与它承载的语义（历史 / 事务 /
+超时 / 执行通道）都是真的，没有理由为了迁就一张过时的图而动它。
 
 ---
 
@@ -201,18 +199,32 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 **效果**：展开「例程 / 序列 / 触发器」三类文件夹，从「每次回源库」变为「命中 L2（<5ms）」；
 大库上这三类的首次展开仍走实时内省（内容照旧写进缓存供下次用）。
 
+### 6.1 同批的死代码清理（2026-09-19）
+
+| 项 | 规模 | 处置 |
+| --- | --- | --- |
+| `crates/engine/src/dbi/`（整个目录） | 2124 行 | **删除**；唯一活的 `DuckDBEngine::file_reader_function` 摘为 `duckdb/file_reader.rs`（+2 测试） |
+| `DuckDbService::accelerate_query` | 55 行 | **删除**（零调用且依赖 `dbi`） |
+| `crates/engine/src/duckdb/extensions.rs` | 570 行 | **删除**（仅自己的测试在用）；扩展清单收敛到 `accel.rs` 一处 |
+| L1 缓存四组零调用（`indexes` / `constraints` / `data_source_meta` / `routine_source`） | 8 个方法 + 4 个 key 变体 + 4 个 value 变体 | **删除** |
+| 文档同步 | —— | `driver/mod.rs` 与 `engine/README.md` 的分层图改为实际路径；`dependency-strategy.md` 与 `federation-architecture.md` 的 `extensions.rs` / `init_extensions` 引用改指 `accel.rs` |
+
+**净效果**：engine 测试 451 → **441**（删掉 12 个仅测试死代码的用例 + 新增 2 个 `file_reader` 用例），
+代码净减约 **2700 行**，而**功能一条没少**（所有外部调用方改一个导入路径即可）。
+
 ---
 
 ## 7. 已知缺口（权威清单）
 
 | # | 级别 | 缺口 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| 1 | 🟡 | `dbi` 层 2100 行死代码 + 模块文档里的架构图与实际不符 | 新人按图理解会走错路 | 见 §5.3 的三条建议，单独一批处置 |
-| 2 | 🟡 | 扩展清单三套（accel 活、manifest 死、`ExtensionManager` 死） | 同一件事三处定义，改一处漏两处 | 收敛到 `accel.rs` 一处 |
-| 3 | 🟡 | L1 的 `indexes` / `constraints` / `data_source_meta` / `routine_source` 四组零调用 | 表面积虚高 | 连同 key 一并删除（属性面板走实时，见 §2.2） |
-| 4 | ⚪ | `persistence` 的 v1 旧接口（`metadata` 单表那批）零调用 | 表面积虚高 | 随 §5.3 一并清理 |
-| 5 | ⚪ | `routine_parameters` 只有读侧接进 `list_routines`，写侧无人调 | 例程参数永不落盘（读时为空 vec） | 属性面板若要显示参数签名，接线时补上写侧 |
-| 6 | ⚪ | 缓存写侧用 `let _ =` 吞错（与 `put_objects` / `put_columns` 同一口径） | 写失败只表现为「下次仍回源」，无日志 | 批量加 `tracing::warn!`（本仓已有日志模块） |
+| 1 | ⚪ | ~~`dbi` 层 2100 行死代码~~ + ~~扩展清单三套~~ | —— | ✅ **已处置（2026-09-19）**：`dbi/` 与 `duckdb/extensions.rs` 删除，`file_reader` 摘出，清单收敛到 `accel.rs` |
+| 2 | ⚪ | ~~L1 的 `indexes` / `constraints` / `data_source_meta` / `routine_source` 四组零调用~~ | —— | ✅ **已处置（2026-09-19）**：四组方法连同 key 变体一并删除 |
+| 3 | 🟡 | `persistence` 的 v1 旧接口（`metadata` 单表那批）与 V7 同步那批零调用 | 表面积虚高（约 150 个公开项待分类） | 下一批：逐项判「删 / 留 / 接线」，同样先出清单再动手 |
+| 4 | 🟡 | `duckdb/plugin.rs`（`PluginManager` / `PluginConnection` / `PluginPermissionLevel`）同样只被自己的测试用 | 与刚删的两处同类 | 判断与前两处不同：它是 M9 插件（三期）的接口预演，**删了要重设计**。建议：要么标注「未接线，M9 立项时重审」，要么随 M9 一并处置——**别当成现成能力用** |
+| 5 | ⚪ | `federation/legacy.rs` 的 `FederationManager` 同为零调用 | 已在其模块文档记为待退役 | 维持原计划：`session.rs` 覆盖四类源后一并退役（不静默删） |
+| 6 | ⚪ | `routine_parameters` 只有读侧接进 `list_routines`，写侧无人调 | 例程参数永不落盘（读时为空 vec） | 属性面板若要显示参数签名，接线时补上写侧 |
+| 7 | ⚪ | 缓存写侧用 `let _ =` 吞错（与 `put_objects` / `put_columns` 同一口径） | 写失败只表现为「下次仍回源」，无日志 | 批量加 `tracing::warn!`（本仓已有日志模块） |
 
 ---
 
@@ -227,4 +239,5 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 | 元数据唯一闸门 | `crates/database/src/metadata_service.rs` |
 | 属性面板（**有意实时**） | `crates/database/src/property_panel.rs` |
 | 连接池（每缓存文件一次固定开销） | `crates/engine/src/persistence/metadata_cache_pool.rs` |
-| dbi 死层（见 §5.3） | `crates/engine/src/dbi/` |
+| 文件读取映射（从已删的 `dbi` 摘出） | `crates/engine/src/duckdb/file_reader.rs` |
+| 扩展清单（唯一一处） | `crates/engine/src/duckdb/accel.rs` |

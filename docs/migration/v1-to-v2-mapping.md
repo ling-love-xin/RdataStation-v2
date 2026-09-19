@@ -20,7 +20,7 @@
 | v2 crate | 迁入内容（自 v1） | 说明 |
 | --- | --- | --- |
 | `engine` | `core/driver/` **全量**（顶层 13 文件 + `connection/` + `jdbc/` + `native/` + `registry/` + `wasm/`） | 驱动 trait 抽象、注册/发现/路由、SmartPool/StandardPool 双层池、native 具体驱动（mysql/postgres/sqlite/duckdb）；`native/duckdb.rs` 内的 `duckdb_rows_to_arrow` 定义去重（统一引用 `duckdb/row_to_arrow.rs`） |
-| `engine` | `core/dbi/` 全量（`dbi.rs` + `context` + `session` + `performance` + `engine/`） | 统一数据访问层：多引擎路由（Driver/DuckDB/Stream）、会话事务、性能统计、SQL 特征分析 |
+| `engine` | `core/dbi/` 全量（`dbi.rs` + `context` + `session` + `performance` + `engine/`） | 统一数据访问层：多引擎路由（Driver/DuckDB/Stream）、会话事务、性能统计、SQL 特征分析。**注（2026-09-19）**：这一层实测零调用（唯一活的 `file_reader_function` 已摘为 `engine/src/duckdb/file_reader.rs`），已删除——详见 `docs/architecture/data-layer-wiring-matrix.md` §5.3 |
 | `engine` | `core/cache/` 全量（7 文件） | 多级缓存（L1 LRU / L2 SQLite / L3 源库）、内存守卫 `MemoryPressure`（smart_pool 依赖） |
 | `engine` | `core/services/connection_manager.rs`（649 行） | 连接生命周期管理（`get_connection_manager`/`ConnectionManager`），dbi/engine 的依赖；其余 services 待后续 Feature 迁入 |
 
