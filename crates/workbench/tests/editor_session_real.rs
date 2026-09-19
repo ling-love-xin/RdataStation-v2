@@ -314,3 +314,70 @@ fn the_connection_binding_survives_a_restart(cx: &mut TestAppContext) {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// E3【窗口退出兜底】：点 ✕ / `Alt+F4` 时把**每一份**打开文档的会话落库。
+///
+/// 这条用例盯的正是 E3 的病灶：会话此前只在 `Ctrl+S` 与「关掉这一份文档」时写，
+/// 平台关闭路径没有任何钩子 —— 两份都没按 Ctrl+S、也没关标签，直接走退出这条路。
+/// 断言「两份**都**在库里」而不是「最近一份在」：只存最近的会让另一份静默消失。
+#[gpui_kit::test]
+fn leaving_the_window_stashes_every_open_document(cx: &mut TestAppContext) {
+    use editor::session::SessionStore as _;
+
+    cx.update(gpui_kit::init);
+    let (dir, store) = temp_store("window_exit");
+    let store = Rc::new(WorkbenchSessionStore::over(store));
+
+    let shared = EditorShared::new();
+    shared.attach_session_store(store.clone());
+    let a_path = dir.join("a.sql");
+    let b_path = dir.join("b.sql");
+    std::fs::write(&a_path, "select 1;").expect("写盘");
+    std::fs::write(&b_path, "select 2;").expect("写盘");
+    let a = shared
+        .open(OpenRequest::file(&a_path, "select 1;", EditorMode::Sql))
+        .id()
+        .clone();
+    let b = shared
+        .open(OpenRequest::file(&b_path, "select 2;", EditorMode::Sql))
+        .id()
+        .clone();
+
+    let (harness, cx) = {
+        let shared = shared.clone();
+        let (a, b) = (a.clone(), b.clone());
+        cx.add_window_view(move |window, cx| {
+            let (area, _skin) = DockSkin::dock_area("editor-window-exit", Some(1), window, cx);
+            let mut panels = Vec::new();
+            for document in [a, b] {
+                let panel = cx.new(|cx| EditorHostPanel::new(shared.clone(), document, window, cx));
+                let handle = panel.clone();
+                area.update(cx, |area, cx| {
+                    area.add_panel(handle, DockPlacement::Center, None, window, cx);
+                });
+                panels.push(panel);
+            }
+            Harness { area, panels }
+        })
+    };
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 用户在窗口里动过光标（没按 Ctrl+S、也没关标签）
+    let panels = cx.update(|_window, cx| harness.read(cx).panels.clone());
+    cx.update(|_window, cx| {
+        panels[0].update(cx, |panel, cx| panel.set_caret_for_test(4, cx));
+    });
+
+    // 走「窗口退出」那条路（app 层把它注册在 `Window::on_window_should_close` 上）
+    cx.update(|_window, cx| editor::view::host::save_sessions_for(&panels, cx));
+
+    let a_id = editor::session::session_id_for_path(&a_path);
+    let b_id = editor::session::session_id_for_path(&b_path);
+    let saved_a = store.load(&a_id).expect("读会话 a").expect("a.sql 应当有会话");
+    let saved_b = store.load(&b_id).expect("读会话 b").expect("b.sql 应当有会话");
+    assert_eq!(saved_a.content, "select 1;");
+    assert_eq!(saved_b.content, "select 2;");
+    assert_eq!(saved_a.cursor, 4, "存的必须是**当下**的光标，不是打开时的快照");
+
+    let _ = std::fs::remove_dir_all(dir);
+}

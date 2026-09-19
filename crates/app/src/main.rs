@@ -221,6 +221,15 @@ fn run_app() {
                 }
                 cx.open_window(options, |window, cx| {
                     let workspace = cx.new(|cx| WorkbenchView::new(cx));
+                    // E3【窗口退出草稿兜底】：平台关闭路径（点 ✕ / `Alt+F4`）没有任何钩子，
+                    // 会话只在 `Ctrl+S` 与「关掉这份文档」时写——不补这一刀，敲了一半的 SQL 直接丢。
+                    // 它把**每一份**打开文档的会话落库，然后**返回 true**：兜底是「存了再走」，
+                    // 不是拦住不让走（拦人那是「关单个文档」那条路的事，那里有三态确认）。
+                    let session_saver = workspace.clone();
+                    window.on_window_should_close(cx, move |_window, cx| {
+                        session_saver.update(cx, |view, cx| view.save_all_editor_sessions(cx));
+                        true
+                    });
                     // 窗口第一层必须是 Root
                     cx.new(|cx| Root::new(workspace, window, cx))
                 })

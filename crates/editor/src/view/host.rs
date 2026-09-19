@@ -3201,6 +3201,19 @@ fn empty_text(entry: &ResultEntry) -> String {
     }
 }
 
+/// 把**一批**打开文档的会话全部落库（E3：窗口退出兜底）
+///
+/// 与单份的 [`EditorHostPanel::save_session_now`] 同一口径（未命名 / 空文档跳过；
+/// 失败只打日志不弹窗）——差别只在「一次存一整批」：窗口关闭时**没有第二次机会**。
+///
+/// 为什么放在编辑器侧：这是编辑器语义（哪些文档值得存、空文档怎么算），
+/// 宿主只负责「在窗口真的关之前叫我一声」。
+pub fn save_sessions_for(panels: &[Entity<EditorHostPanel>], cx: &mut App) {
+    for panel in panels {
+        panel.update(cx, |panel, cx| panel.save_session_now(cx));
+    }
+}
+
 /// 关闭一份文档的面板（**宿主调用**，比如 `Ctrl+W`）
 ///
 /// 为什么是宿主的活：[`Panel::on_removed`] 会回读面板（可见性 / 可关闭性），

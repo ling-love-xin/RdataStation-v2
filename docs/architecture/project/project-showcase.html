@@ -849,7 +849,7 @@ cargo check --workspace --all-targets    → 零告警</pre>
     </table>
     <table style="margin-top:12px">
       <tr><th style="width:34%">已知待办</th><th>说明</th></tr>
-      <tr><td>窗口退出路径的草稿兜底</td><td>点 ✕ / <kbd>Alt+F4</kbd> 时整个窗口退出的行为未定义，需与 editor / app 对齐 <span class="badge mid">E3</span></td></tr>
+      <tr><td>~~窗口退出路径的草稿兜底~~</td><td>✅ 已做（2026-09-19）：点 ✕ / <kbd>Alt+F4</kbd> 时每份打开文档的会话落库（存了再走，不拦人）</td></tr>
       <tr><td>执行 SQL 的只读拦截测试</td><td>项目侧只读拦截已有窗口测试；editor 侧执行路径未测 <span class="badge plan">E5</span></td></tr>
       <tr><td>菜单快捷键展示</td><td><span class="mono">PopupMenuItem</span> / <span class="mono">DropdownButton</span> 在 gpui-kit 0.6.1 没有 shortcut 槽位，等组件支持 <span class="badge plan">C2</span></td></tr>
     </table>

@@ -36,4 +36,4 @@
 - 功能补齐（2026-09-19 三）：**默认连接（U3）**——后端 `store::update_config` + `service::{load_default_connection, save_default_connection}`，UI 设置·默认项下拉（宿主注入候选，空 = 不设默认，记录值失效如实显示）。
 - 体验补齐（2026-09-19 四）：卡片**右键菜单**（与 `⋯` 下拉同源规格）、搜索 **facet 语法**（`状态:` / `固定:` / `锁:`，与自由文本 / 筛选按钮叠加 AND）、逃生口补陈旧锁提示、只读拦截补两条路径的测试。测试：lib 43 + 名册集成 1 + 存储集成 4。
 - 范围外（原型 §12）：提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留）。
-- 待办见 `project-dev-plan.md` **§8 未开发清单**：窗口退出路径的草稿兜底（E3，跨 crate）、执行 SQL 的只读拦截测试（E5）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
+- 待办见 `project-dev-plan.md` **§8 未开发清单**：执行 SQL 的只读拦截测试（E5）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。窗口退出路径的草稿兜底（E3）已于 2026-09-19 完成（`app` 注册 `on_window_should_close` → 会话批量落库，见 `editor_session_real::leaving_the_window_stashes_every_open_document`）。

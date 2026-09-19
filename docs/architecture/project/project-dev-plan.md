@@ -359,12 +359,11 @@
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| E3 | 窗口退出路径的草稿兜底 | 点 ✕ / `Alt+F4` 退出时无拦截（`app` 未注册 `should_close` 钩子）；editor 侧有「关闭标签前确认」与草稿兜底，但**整个窗口**退出未定义行为——属 editor 模块，需与项目拦截语义对齐 |
+| ~~E3~~ | ~~窗口退出路径的草稿兜底~~ | ✅ **已做（2026-09-19）**：会话此前只在 `Ctrl+S` 与「关掉这份文档」时写，平台关闭路径（点 ✕ / `Alt+F4`）没有任何钩子——敲了一半的 SQL 直接丢。现：`app` 在 `Window::on_window_should_close` 上注册钩子（**返回 true**：兵底是「存了再走」，不是拦住不让走）→ `WorkbenchView::save_all_editor_sessions` → `editor::view::host::save_sessions_for`（与单份 `save_session_now` 同口径：未命名 / 空文档跳过、失败只打日志）。回归：`editor_session_real::leaving_the_window_stashes_every_open_document`（两份文档都没按 Ctrl+S、也没关标签 → **两份都**在库里，且光标是当下的值） |
 | E5 | 只读拦截仍有未覆盖路径 | 已有 `read_only_blocks_project_info_save` / `read_only_blocks_archive_and_version_snapshot`（2026-09-19）；**执行 SQL** 的只读拦截在 editor 侧，未测 |
 
 ### 建议顺序
 
-1. ~~**C1 + C4**~~、~~**B1**~~、~~**B2 + B3**~~、~~**A1**~~、~~**C3 + C5**~~、~~**E1 / E4**~~：已完成（2026-09-19 各批次），见 §0；
-2. **E3**（窗口退出路径的草稿兜底——需与 editor / app 模块对齐，跨 crate）；
-3. **E5**（执行 SQL 的只读拦截测试）；
-4. **C2**（菜单快捷键，等 gpui-kit 支持 shortcut 槽位）。
+1. ~~**C1 + C4**~~、~~**B1**~~、~~**B2 + B3**~~、~~**A1**~~、~~**C3 + C5**~~、~~**E1 / E4**~~、~~**E3**~~：已完成（2026-09-19 各批次），见 §0；
+2. **E5**（执行 SQL 的只读拦截测试）；
+3. **C2**（菜单快捷键，等 gpui-kit 支持 shortcut 槽位）。

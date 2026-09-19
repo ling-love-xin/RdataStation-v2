@@ -486,6 +486,21 @@ impl WorkbenchView {
         }
     }
 
+    /// 窗口真正退出前：把**每一份**打开的文档的会话落库（E3）。
+    ///
+    /// 为什么必须有这一步：会话此前只在 `Ctrl+S` 与「关掉这一份文档」时写，
+    /// 而点 ✕ / `Alt+F4` 走的是平台关闭路径——没有任何钩子，敲了一半的 SQL 会直接丢。
+    /// 本方法由 app 层注册在 `Window::on_window_should_close` 上（见 `crates/app/src/main.rs`）。
+    ///
+    /// 只存会话、**不问用户**：这里是兜底而不是拦截（拦截在「关单个文档」那条路上，
+    /// 有完整的三态确认）。存失败不阻断退出——绝不能因为写库失败把人关在窗口里。
+    pub fn save_all_editor_sessions(&mut self, cx: &mut Context<Self>) {
+        // 先清掉已关掉的面板（与 `close_active_editor` 同一收尾），免得对尸体调保存
+        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        let panels = self.editor_hosts.clone();
+        editor::view::host::save_sessions_for(&panels, cx);
+    }
+
     /// 关闭当前编辑器文档（`Ctrl+W`）
     ///
     /// 键位绑在编辑器面板的 `editor` context 上（A10），但**由宿主执行**：
