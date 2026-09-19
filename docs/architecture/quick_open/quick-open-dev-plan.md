@@ -1,6 +1,6 @@
 # Quick Open · 开发方案（Phase 0–2）
 
-> 状态：**Phase 1 第四刀（名称档彻底提速：拿掉 `LENGTH` 排序键 + 分类索引序直出 + 迁移 013）已落地（2026-09-19）**；宣传件两版已出（`quick-open-showcase.md` / `.html`）；下一刀：草稿箱文件源（需扁平清单通道）
+> 状态：**Phase 1 已全部落地（2026-09-19）——最后一刀是草稿箱文件源（`scratchpad::jobs::enqueue_flatten_files` + 文件行匹配面）**；宣传件两版已出（`quick-open-showcase.md` / `.html`）；下一刀：Phase 2（`@` 当前连接限定 / 最近使用与空态建议 / 无结果转移入口）
 > 关联：`quick-open-prototype-design.md`（原型设计 = 权威规格）、`quick-open-prototype.html`（交互稿）、`../layout/layout-design.md` §2.1/§3.3（入口承诺）
 > 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs`
 > 说明：本文件记录**做什么、做到哪**；「长什么样」看原型设计，「为什么这样设计」待 `quick-open-architecture.md`

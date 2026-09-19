@@ -198,7 +198,7 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px;font-w
     <h3>这份原型在说什么（本轮新增项已标 ★）</h3>
     <div class="two">
       <div>
-        1. <b>核心是元数据搜索</b>：默认模式以「表 / 视图 / 列」为主角（名称档，中缀，沿用已接线的 <code>metadata_index</code>）；<code>#</code> 进全文档（注释 / 类型 / 将来可含定义），走已存在但<b>从未接线</b>的 <code>metadata_fts</code>（FTS5）。<br>
+        1. <b>核心是元数据搜索</b>：默认模式以「表 / 视图 / 列」为主角（名称档，中缀，沿用已接线的 <code>metadata_index</code>）；<code>#</code> 进全文档（注释 / 类型 / 将来可含定义），走 <code>metadata_fts</code>（FTS5 trigram，2026-09-19 已接线，≥ 3 字）。<br>
         2. <b>为什么命中</b> ★：行内小标签（释 / 型 / 义；名称命中是默认，不额外标）—— 尤其 <code>#</code> 全文档，一眼看出是注释还是定义命中的。<br>
         3. <b>面包屑归属</b> ★：第二行给 <code>连接 › schema › 表</code>，多连接 / 多 schema 同名对象一眼消歧（专设「同名消歧」场景）。<br>
         4. <b>单字符门槛</b> ★：<code>1</code> 个字符只过滤本地源（命令 / 连接 / 文件），元数据组显示「再输入 1 个字符开始搜索」——避免单字符全库扫。<br>

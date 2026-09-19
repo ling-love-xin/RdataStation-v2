@@ -128,9 +128,9 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | 模块 | crate | 状态 | 已知缺口（权威清单在各模块文档） |
 | --- | --- | --- | --- |
 | M1 项目管理 | `project` | ✅ | 窗口退出草稿兜底 · 项目目录移动 · 提升 / 快照 |
-| M2 双引擎底座 | `engine` | ✅ | 缓存层与持久化层**仍有零调用项**（权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7；本轮已处置约 4.3k 行，见其 §6）· FTS 写入侧待修 · 增量同步未接 |
+| M2 双引擎底座 | `engine` | ✅ | 缓存层与持久化层**仍有零调用项**（权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7；本轮已处置约 4.3k 行，见其 §6）· 增量同步未接 |
 | M3 数据源连接 | `connection` | ✅ | SSH 主机密钥默认放行 · Secret 无门控不清理 |
-| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · 全文元数据搜索 · 命中后树内定位 · PG 跨库浏览 |
+| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · 命中后树内定位 · PG 跨库浏览（**内容档不在本模块**：导航面板搜索框只有名称档，全文走 Quick Open 的 `#`） |
 | M5 草稿箱 | `scratchpad` | ✅ | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
 | M6 资产库 / 分析存档 | `analytics_resource` | ✅ | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
 | M7 Mock 造数 | `mock` | ✅ | 出口不可取消 · 大导出非流式 · 并发生成 |
@@ -138,7 +138,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | M9 插件宿主 | `plugin` | ⛔ | **整包无调用方**，等 beta3 立项 |
 | SQL 编辑器 | `editor` | ✅ | Phase 1c 分析单元（搁置）· 值预览 / 编辑 · 血缘持久化 |
 | 联邦查询 | `engine/duckdb/federation` | 🟡 | L3 桥接 · SQL Server 真机 · 扫描量可见 |
-| Quick Open | `workbench/quick_open` | ✅ | 全文档档（FTS 未接线）· 草稿箱文件源 |
+| Quick Open | `workbench/quick_open` | ✅ | 源码（视图 / 例程定义）未进 FTS · 命中后树内定位 · `@` 当前连接限定 · 最近使用 / 空态建议（Phase 2） |
 | 设置 | `settings` | ✅ | `effect` 字段无人消费 · 无跨进程写锁 |
 
 ---
@@ -159,7 +159,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 - **M9 `plugin` 整包未接通**：无任何 crate 依赖它；`plugin/src/sidecar/{health_checker,hot_reload_manager}.rs` 为 0 字节。
 - **`engine` 仍有零调用项**：`CacheLevel` 枚举、`l2_enabled` / `l3_enabled`、`CacheVersionManager`（L2 版本链）；查询缓存的 `use_cache` 默认 `false`，生产路径从不触发；L2 还有 5 张 v1 遗留表（`compressed_metadata` 等）无消费者。**旧口径「约 150 个公开项」本轮未重数，不要引用具体数字**——逐项权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7，已处置的那批见其 §6.1 / §6.2（`dbi` 死层 2124 行 · 重复的扩展管理 570 行 · 持久化 v1/V7 1636 行 · L1 四组零调用）。
-- **元数据 FTS 写入侧未接**，且其「视图」插入语句引用了一张迁移里不存在的表——接线前必须先修。
+- **元数据 FTS 读 / 写侧都已接线**（本条曾写作「写入侧未接」，2026-09-19 复核纠正）：写侧 `rebuild_fts_schema` 挂在 `rebuild_schema_index` 同批（由 `NavigatorService::collect_objects` 的 Tables 分支 → `NavCache::rebuild_index` 触发），读侧 `search_fts` 供 Quick Open 的 `#` 档（`Mode::FullText` → `SearchKind::FullText`）。**真实边界**：语料只收名称 / 注释 / 数据类型（`view_definition` / `routine_definition` **未进 FTS**）；trigram ⇒ **≥ 3 字**，不足必然无命中。详账见 `data-layer-wiring-matrix.md` §2.2 与 `database/metadata-cache-vs-dbeaver-datagrip.md` §4.6。
 - **缓存身份指纹（`meta_{fp}.sqlite`）**：`metadata_identity` 已写并有 13 项单测，但**未接线**，L2 仍按 `conn_{id}` 命名。
 - **增量同步 / 快照表**：有意不补，等真实消费者。
 

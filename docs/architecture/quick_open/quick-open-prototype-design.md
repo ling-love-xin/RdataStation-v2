@@ -309,7 +309,11 @@ VSCode 语义：**前缀只认输入的第一个字符**，切换「搜索域」
 | 14 | 前缀扩展 | 仅 `>` | `@` 当前连接限定（`: ` 行号另议） | P2 |
 | 15 | 空输入态 | 列出全部命令 | 「最近 + 常用命令」两小段 | P2 |
 
+> **落地状态（2026-09-19 复核）**：差异清单 **①–⑫ 与第 9 项已落地**（Phase 0 两刀 + Phase 1 四刀：键盘三态 / 打开即聚焦 / `List` 化 / 命中高亮 / 元数据名称档 / **`#` 全文档档** / 命中动作 / 截断不静默 / **草稿箱文件源** / 命令注册 / 连接行归属域）；
+> **⑬–⑮ 与 `@`（P2）未做**。上表「现状」列是**设计期快照，不改写**；今天的真实缺口以 §18 与 `quick-open-dev-plan.md` §0 最新一条为准。
+>
 > 实现约束（写进架构文档时应记录）：① 后台搜索通道当前是**单队列 + 单结果槽**（`nav_jobs`），导航面板与 Quick Open 同时搜会互抢结果，需要按消费方分流（或独立结果槽）；② `sync_fts_index` 是 `&mut self` 且全量重建式（按类型 DELETE + INSERT），接线时要定「何时同步」——建议跟随冷启动内省后的 `rebuild_schema_index` 同批执行，避免每次搜索都写库。
+> → **已按此落地（2026-09-19）**：分槽已做（`SearchConsumer::{Navigator, QuickOpen}`）；写侧改为 schema 级幂等的 `rebuild_fts_schema`，挂在 `rebuild_schema_index` 同批（旧 `sync_fts_index` 已删——它引用了不存在的 `views` 表）。
 
 ## 14. 分期落地（方案，不排期）
 
@@ -397,7 +401,7 @@ VSCode 语义：**前缀只认输入的第一个字符**，切换「搜索域」
 | **前缀 / 中缀两段式**（已做 2026-09-19，含 Q11 定案） | 原 `LOWER(object_name) LIKE '%x%'` 全表扫（缓存库无索引）。最终形态：迁移 013 建 `(connection_id, object_type, LOWER(object_name))` 索引；排序键拿掉 `LENGTH` 后，两段都按类别沿索引名序走、取够 `limit` 即停，Rust 侧按「档位 → 类别」稳定合并——**无窗口、无 SQL 排序**。实测 10 万对象 / debug（同轮并排跑旧写法）：`table_`（8 万前缀命中）**158 ms → 1.5 ms**；中缀命中在列档 **72 ms → 12 ms**；最坏档（该词在本档一条不中，需扫完整段）80 ms → 45 ms | — | ✅ P1 |
 | **或 FTS5 trigram 统一两档** | 名称 + 全文都走索引（中文子串天然支持），代价是索引体积（约文本 3 倍量级） | 中高 | P2（与 Q8-B 同批） |
 | **并发打开缓存文件上限** | 每连接一份 SQLite 文件：30 个连接同时搜 = 30 个句柄 + 30 次冷读；设上限（如 4）顺序扫描、先回先到 | 低 | P1 |
-| **FTS 同步增量 + 时机** | `sync_fts_index` 是按类型 DELETE+INSERT 的重建式 → 改 schema 级增量，与 `rebuild_schema_index` 同批，**绝不在搜索路径写库** | 中 | P1 |
+| **FTS 同步增量 + 时机** | `sync_fts_index` 是按类型 DELETE+INSERT 的重建式 → 改 schema 级增量，与 `rebuild_schema_index` 同批，**绝不在搜索路径写库** | 中 | ✅ 已做（2026-09-19：`rebuild_fts_schema`，schema 级幂等 + 与索引同批） |
 | **结果短时缓存** | 同 query 秒级复用（导航与 Quick Open 共享）；内省刷新 / 项目切换时失效 | 低 | P2 |
 | **冷启动预热** | 项目打开后预热**已缓存**连接的索引（守住「搜索不建缓存」的门） | 低 | P2 |
 | **缓存库治理** | 定期 `PRAGMA optimize` / `VACUUM`，监控 FTS 行数与体积（trigram 会放大） | 低 | P2 |
@@ -442,7 +446,7 @@ VSCode 语义：**前缀只认输入的第一个字符**，切换「搜索域」
 | Action（Up / Down / Confirm / Close） | `crates/workbench/src/commands.rs` + app 层绑定（`crates/app/src/main.rs`） |
 | `Ctrl+P` 开关 | `crates/app/src/main.rs`（`ToggleQuickOpen`）+ `crates/workbench/src/view.rs`（`on_action`） |
 | **元数据名称档**（跨连接索引搜索） | `crates/database/src/nav_jobs.rs`（`enqueue_search` / `drain_search_results`）+ `crates/database/src/cache.rs`（`search_index`）+ 目标消费者分流 |
-| **元数据全文档**（FTS5） | `crates/engine/src/persistence/metadata_cache.rs`（`sync_fts_index` 待接线 / `search_fts` / `FtsSearchResult`）+ 跨连接执行同名称档 |
+| **元数据全文档**（FTS5） | `crates/engine/src/persistence/metadata_cache.rs`（`rebuild_fts_schema` 写侧，**已接线** / `search_fts` / `FtsSearchResult`）+ 跨连接执行同名称档 |
 | 元数据命中动作（属性面板） | `crates/database/src/nav_view.rs`（`nav_search_hit_property` 已有对象 → `PropertyRef` 的映射，可复用） |
 | 草稿箱文件源 | `crates/scratchpad/`（现有树 / 搜索通道；扁平清单待定 Q5） |
 | 连接源 | `Shared::connections`（`crates/workbench/src/panels/shared.rs`） |
