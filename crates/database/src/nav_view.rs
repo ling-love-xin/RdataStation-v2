@@ -5247,6 +5247,16 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         }
                     }
                     Err(e) => {
+                        // 失败必须留痕：树上那行红字是**屏幕级**的，关掉窗口就没了；
+                        // 真机报「展开表就报错」时，日志里得有连接 / 路径 / 原因。
+                        tracing::warn!(
+                            conn_id = %r.conn_id,
+                            key = %key,
+                            path = ?r.path,
+                            offset = r.offset,
+                            error = %e,
+                            "导航加载失败（树内提示：展开后那一行红字）"
+                        );
                         view.errors.insert(key.clone(), e);
                     }
                 }

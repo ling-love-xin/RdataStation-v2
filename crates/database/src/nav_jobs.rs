@@ -394,6 +394,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     .into_iter()
                     .map(|t| (t.catalog, t.schema, t.table))
                     .collect();
+                // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。
                 let _ = rt.block_on(svc.prefetch_columns(&conn_id, &tuples));
             }
             Job::GenerateDml {

@@ -949,12 +949,18 @@ impl NavigatorService {
 
         let mut ok = 0usize;
         for (catalog, schema, table) in targets {
-            if self
-                .load_columns(conn_id, catalog, schema, table)
-                .await
-                .is_ok()
-            {
-                ok += 1;
+            // 预取失败不影响可见状态（用户真正展开那张表时会再试一次），所以这里不计入错误；
+            // 但「展开表后列迟迟不出来」的第一处证据正在这里，留 DEBUG 痕。
+            match self.load_columns(conn_id, catalog, schema, table).await {
+                Ok(_) => ok += 1,
+                Err(e) => tracing::debug!(
+                    conn_id = %conn_id,
+                    catalog = %catalog,
+                    schema = %schema,
+                    table = %table,
+                    error = %e,
+                    "列预取失败（不影响可见状态；日志级别调 DEBUG 可查）"
+                ),
             }
         }
         ok
