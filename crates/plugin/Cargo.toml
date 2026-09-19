@@ -25,9 +25,6 @@ specta.workspace = true
 # ===== WASM 运行时 =====
 extism.workspace = true
 
-# ===== HTTP =====
-reqwest.workspace = true
-
 # ===== 其他 =====
 tracing.workspace = true
 thiserror.workspace = true

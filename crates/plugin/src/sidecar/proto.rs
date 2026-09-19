@@ -325,15 +325,6 @@ impl From<ProtocolError> for FrameIoError {
     }
 }
 
-impl From<FrameIoError> for super::SidecarError {
-    fn from(e: FrameIoError) -> Self {
-        match e {
-            FrameIoError::Io(io) => Self::CommunicationError(format!("帧 I/O 失败：{io}")),
-            FrameIoError::Protocol(p) => Self::CommunicationError(format!("帧协议错：{p}")),
-        }
-    }
-}
-
 /// 写一帧：**先写头再写载荷**。
 ///
 /// 分两次写而不是先拼一整块 `Vec`：Arrow 分片可以很大（上限 64 MiB），

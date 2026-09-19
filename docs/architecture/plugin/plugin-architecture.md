@@ -41,7 +41,7 @@
 | 服务 | `src/plugin_service.rs`（419） | `PluginService::new(global_db)`：`InstallPluginInput` / `PluginStatus` / `PluginWithStatus` |
 | 桥接 | `src/plugin_bridge.rs` | 与宿主 / 编辑器的桥接 |
 | WASM 适配 | `src/wasm/{plugin_manager,extism,api}.rs` | Extism 运行时（wasmtime 底座）。**host function 面现在为空**：`host_functions.rs` 已于 P0 删除（零调用 + 签名本就不对），P3 按 Q4 收敛后重建 |
-| Sidecar 适配 | `src/sidecar/{manager,client,health_checker,hot_reload_manager}.rs` | 独立进程 + JSON-RPC 客户端（**现走 HTTP/端口，与 D5 的 stdio 分帧相反，P1 换**）；驱动适配待建 |
+| Sidecar 适配 | `src/sidecar/{process,conn,supervisor,driver,lifecycle}.rs`（P1 已落地） | 独立进程 + stdio 分帧 + 三层生命周期；HTTP/端口那两个文件（`manager.rs`/`client.rs`）已删 |
 | 驱动发现 | `crates/engine/src/driver/loader.rs` | `WasmDriverDiscovery::plugin_dirs`（默认目录见 §6） |
 | 注册表 | `crates/engine/src/persistence/plugin_store.rs` | 插件记录落全局库，**表名是 `plugins`**（`plugin_store` 只是 Rust 模块名；建表见 `migrations/global/001_init.sql:128`，另有 `plugin_dependencies`/`plugin_global_config`） |
 | 项目引用 | 同上 + `project_connection_store.rs` | **V2 已有**：表在 `migrations/project_meta/001_init.sql:112/121`（`project_used_plugins`/`project_plugin_config`），持久化 6 方法 + service 6 方法均在，**只是无生产调用方**（见 §8 与 `plugin-dev-plan.md` §3.1） |
@@ -51,7 +51,7 @@
 | 维度 | WASM（Extism） | Sidecar（独立进程） |
 | --- | --- | --- |
 | 隔离 | 进程内沙箱（wasmtime），只能通过宿主函数触达外部 | 进程边界隔离，可用任意语言（现为 Go） |
-| 通信 | 宿主函数 + Extism ABI | JSON-RPC（`client.rs`），**端口由子进程 stdout 自报** |
+| 通信 | 宿主函数 + Extism ABI | JSON-RPC over **stdio 二进制分帧**（`sidecar/{conn,driver}.rs`）；曾走 HTTP/端口（`client.rs`，P1 已删） |
 | 适用 | 分析类 / 轻量驱动 / 工具 | 需原生依赖、长驻连接、无法编译为 wasm 的驱动 |
 | 生命周期 | 随插件激活实例化 / 卸载 | 需健康检查（`health_checker.rs`）、热重载（`hot_reload_manager.rs`）、崩溃清理 |
 | 路径风险 | wasmtime 编译缓存默认不在应用目录（待显式配置） | 子进程 `current_dir` / 日志 / 临时文件未约束；**真实占用本地端口** |

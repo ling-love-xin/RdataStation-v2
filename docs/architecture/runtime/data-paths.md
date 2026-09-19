@@ -157,7 +157,7 @@ paths::extensions_dir()  // home/extensions
 | 日志目录 | `crates/engine/src/logging/config.rs` |
 | 系统库 / 分析库 | `crates/project/src/ui.rs`、`crates/workbench/src/services/workspace_loader.rs` |
 | 忽略规则与"不提交" | `/.gitignore`（`/.rds/`、`/rds-*.log`）+ 已跟踪日志的 `git rm --cached` 清单（§6）；`*.fossil` 是测试库，不忽略 |
-| 插件目录 / 插件数据 | `crates/engine/src/driver/loader.rs`（`WasmDriverDiscovery::plugin_dirs`）、`crates/plugin/src/{manager,manifest,permission}.rs`、`crates/plugin/src/wasm/plugin_manager.rs`、`crates/plugin/src/sidecar/manager.rs`、`crates/paths/src/lib.rs`（已落地，见 §8） |
+| 插件目录 / 插件数据 | `crates/engine/src/driver/loader.rs`（`WasmDriverDiscovery::plugin_dirs`）、`crates/plugin/src/{manager,manifest,permission}.rs`、`crates/plugin/src/wasm/plugin_manager.rs`、`crates/plugin/src/sidecar/{process,supervisor}.rs`、`crates/paths/src/lib.rs`（已落地，见 §8） |
 
 ## 8. 插件系统对路径设计的影响（全面分析）
 
@@ -177,7 +177,7 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 | 插件发现目录 | `./plugins`（**相对当前工作目录**）+ `~/.rdatastation/plugins` | `engine/src/driver/loader.rs:135`；前者随启动目录漂移，后者写 C 盘；且 `~/.rdatastation` 小写风格与现有 `RdataStation` 不一致 |
 | 插件注册表 | `global.sqlite` 的 `plugins` 表（`manifest_json` 等；`plugin_store` 只是 Rust 模块名） | ✅ 随 `RDS_HOME` 自动迁移 |
 | WASM 运行时 | extism 1.30（wasmtime）；`wasm/plugin_manager.rs` **未见** cache/data 目录配置 | wasmtime 编译缓存可能落 C 盘（如 `~/.cache`）；需显式指向插件缓存目录 |
-| Sidecar 插件 | `sidecar/manager.rs`：`Command::new` 起独立进程，**从 stdout 读端口号** | ① **真实占用本地端口**（需保留段 + 冲突重试 + 退出回收）；② 未设子进程 `current_dir`、日志与临时目录；③ 子进程崩溃/残留需清理 —— ①②已由 P1 的 `sidecar/process.rs` 解决（**stdio 分帧，不再占端口**），旧 `manager.rs` 待删 |
+| Sidecar 插件 | ✅ 已解决（P1）：`sidecar/process.rs` 起收进程（`current_dir` + stderr 日志 + EOF 回收），**stdio 分帧、不再占端口**；旧 `manager.rs`（从 stdout 读端口号）已删除 |
 | 权限模型 | `permission.rs`（P0 后四轨：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨） | 插件可申请的**路径权限**必须与“只能写自己目录”的约束一致，否则插件能绕开本设计写 C 盘 |
 | 文档 | ✅ **已有**：`../plugin/` 五件（入口 / 架构 / 开发方案 / 原型设计 / 使用手册）+ 5 张可交互原型 | —（原“docs/ 下无插件架构文档”已失效） |
 

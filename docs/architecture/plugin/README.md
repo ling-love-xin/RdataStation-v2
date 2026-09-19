@@ -60,8 +60,8 @@
 | `manifest.rs` / `model.rs` / `permission.rs` | 清单与权限骨架（P0 已扩到**四轨**：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨，见 `PermissionType::is_gating`）；**P1 已落 `[backend]` 段**（`PluginBackend` → `command()` 四道闸 + `process_spec()` 接进程池；口径见 dev-plan §4.3.1）；`plugin-prototype-design.md` §3 是它的**增量扩展**，不是第二份契约 |
 | `plugin_service.rs` | **项目级 6 方法已实现**；表 `project_used_plugins` / `project_plugin_config` 已建（`migrations/project_meta/001_init.sql:112/121`） |
 | `manager.rs` / `loader.rs` / `installer.rs` / `dependency.rs` | 安装与装载骨架 |
-| `sidecar/manager.rs` | 现状是「一 manager 一进程 + 单 `port`」，要演进成 `PluginProcess → DriverInstance → Session` 三层；**P1 起新路径走 `process.rs`（起/收进程）+ `conn.rs`（通信），它连同 `client.rs` 一并待删** |
-| `sidecar/client.rs` | P0 已修「判成功/失败取反」的 bug（抽成 `parse_rpc_response` + 4 条单测）；但**传输本身仍是 HTTP/端口 + 零鉴权**，与 D5 相反 → P1 换成走 `proto` 的 stdio 客户端 |
+| ~~`sidecar/manager.rs`~~（约 290 行） | ✅ **P1 删除**：一 manager 一进程 + 从 stdout 读端口 + `reqwest` 健康检查，与 D5（stdio 分帧）相反；功能已由 `process.rs`（起/收）+ `supervisor.rs`（三层生命周期）取代 |
+| ~~`sidecar/client.rs`~~（约 240 行） | ✅ **P1 删除**：HTTP/端口 + 零鉴权，且自带**第二份 JSON-RPC 信封**（`JsonRpcRequest`/`JsonRpcResponse`/`QueryParams`…）—— 正是 §3.5「契约重复两份」的坑；信封现在只有一份（`conn.rs` 的调用 + `driver.rs` 的方法表）。删它同时去掉了 `rds-plugin` 的 `reqwest` 依赖 |
 | `sidecar/proto.rs` | ✅ **P1 协议层已落地**：帧（4B 大端长度 + 1B kind，**`total_len` 含头 5 字节**）+ 增量解码器 + `read_frame`/`write_frame`（async，含短读与“先校验再分配”的测试）+ 版本闸 + 内联阈值 + 错误码表；15 条单测 |
 | `sidecar/router.rs` | ✅ **P1 附件语义已落地**：`Router`（消费帧 → 事件：在飞登记 / 扣住未收齐的响应 / 错位上报 / 断线交还）+ `encode_response_with_arrow`（sidecar 侧切帧）；两者互为逆运算，有往返测试；15 条单测 |
 | `sidecar/lifecycle.rs` | ✅ **P1 决策内核已落地**（sans-io，零 I/O）：三层对象模型 `PluginProcess → DriverInstance → Session` 的规则全部在此 —— 进程按 plugin_id 去重、`max_instances`、serial 排队与 `QUEUE_MAX_LEN`、ping 连续 2 次判死、空闲 30min 回收、崩溃**不静默重连**（需手动重启）；排队项**连 driver 一起记**（多 driver 插件放行时才知道该开哪个）；`RejectReason` 有可读文案；17 条单测逐条对应 §4.1 五条规则 |
@@ -120,5 +120,6 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
 **P1 进行中**：八块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收 / `manifest.rs` 的 `[backend]` 段 / `sidecar/supervisor.rs` 运行时接线 / `sidecar/driver.rs` 驱动桥，P1 共 86 条新单测 + 22 条真进程集成测试）。
-接着要做的：拿 PostgreSQL 包一层 sidecar 做靶子（真库 + 真 Arrow，属**实机验收**）· `meta.*` 四件套（属 P2）· 把 `SessionDriver` 接上 `engine` 的 `Database` trait · 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
+接着要做的：拿 PostgreSQL 包一层 sidecar 做靶子（真库 + 真 Arrow，属**实机验收**）· `meta.*` 四件套（属 P2）· 把 `SessionDriver` 接上 `engine` 的 `Database` trait。
+HTTP 旧路径（`client.rs` + 旧 `manager.rs`）已删除，`rds-plugin` 不再依赖 `reqwest`。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。
