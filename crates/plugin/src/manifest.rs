@@ -70,6 +70,21 @@ pub struct PluginPermissions {
     pub frontend: Vec<String>,
     #[serde(default)]
     pub wasm: Vec<String>,
+    /// sidecar 轨（驱动插件）的**进程级**权限：`spawn.child_process` / `net.connect` /
+    /// `fs.read_plugin_data` / `env.inherit` / `credentials.database`。
+    ///
+    /// **展示与告警轨，不门控**（dev-plan §4.6.1）；安装页要逐项明示。
+    #[serde(default)]
+    pub sidecar: Vec<String>,
+    /// 驱动轨的**数据面能力**声明：`driver.query` / `driver.metadata` /
+    /// `driver.transaction` / `driver.cancel` / `driver.cursor` / `driver.arrow`。
+    ///
+    /// 同样是展示/告警轨；真门控在 `DriverCapabilities`（engine 侧）。
+    #[serde(default)]
+    pub driver: Vec<String>,
+    /// 凭据口径：`"database"` = 该插件会收到你的数据库密码（dev-plan §4.6.3）。
+    #[serde(default)]
+    pub credentials: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

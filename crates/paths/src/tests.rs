@@ -2,13 +2,16 @@
 //!
 //! 注意：`home()` 是进程级 `OnceLock`，测不了"不同 `RDS_HOME`"——环境变量类断言
 //! 在 Rust 2024 下是 `unsafe` 且与并行测试争用，不值得。这里只测真正会坏的事：
-//! ① 派生的五个目录是否都挂在同一个根下；② 迁移的路由与"只补不盖"；
-//! ③ 测试构建是否拿到了隔离数据根（不写产品目录）。
+//! ① 派生目录是否都挂在同一个根下（含插件 M9 的五个）；② 插件 id 白名单能不能挡住路径穿越；
+//! ③ 新增顶层目录有没有漏登记（漏了迁移会搬错）；④ 迁移的路由与"只补不盖"；
+//! ⑤ 测试构建是否拿到了隔离数据根（不写产品目录）。
 
 use std::path::{Path, PathBuf};
 
 use crate::{
-    HomeOrigin, config_dir, data_dir, extensions_dir, home, home_origin, log_dir, migrate, temp_dir,
+    HomeOrigin, config_dir, data_dir, extensions_dir, home, home_origin, log_dir, migrate,
+    plugin_cache_dir, plugin_data_dir, plugin_dir, plugin_registry_dir, plugins_dir,
+    sidecar_work_dir, temp_dir, validate_plugin_id,
 };
 
 /// 一个测试自己的临时目录（沿用其它 crate 的 `rds_*` 前缀约定）。
@@ -44,11 +47,95 @@ fn temp_dir_honours_override() {
     assert!(temp_dir().is_absolute() || std::env::var_os("RDS_TEMP_DIR").is_some());
 }
 
+/// 插件（M9）的五个目录也必须挂在同一个根下：插件是产品数据，不能散到系统目录。
+///
+/// 唯一例外是 sidecar 工作目录——它故意放 `tmp/` 下（子进程崩溃留下的垃圾不该进数据目录）。
+#[test]
+fn plugin_dirs_live_under_the_data_root() {
+    assert_eq!(plugins_dir(), home().join("plugins"));
+    assert_eq!(
+        plugin_dir("example.demo"),
+        plugins_dir().join("example.demo")
+    );
+    assert_eq!(
+        plugin_data_dir("example.demo"),
+        home().join("plugin-data").join("example.demo")
+    );
+    assert_eq!(
+        plugin_cache_dir("example.demo"),
+        home().join("plugin-cache").join("example.demo")
+    );
+    assert_eq!(plugin_registry_dir(), plugins_dir().join(".registry"));
+    assert_eq!(
+        sidecar_work_dir("example.demo"),
+        temp_dir().join("sidecar").join("example.demo")
+    );
+}
+
+/// 插件 id 会被直接拼进路径，所以只接白名单：“`..` / 分隔符 / 盘符 / 非 ASCII”一律拒。
+///
+/// 没有这道门，一个 `../../..` 的 id 就能把“安装”写到数据根外面去。
+#[test]
+fn validate_plugin_id_rejects_path_escapes() {
+    let too_long = "a".repeat(129);
+    for bad in [
+        "",
+        ".",
+        "..",
+        "../etc",
+        "a/b",
+        "a\\b",
+        "C:\\evil",
+        "x/../../y",
+        "a b",
+        "插件",
+        "---",
+        too_long.as_str(),
+    ] {
+        assert!(
+            validate_plugin_id(bad).is_err(),
+            "{bad:?} 应被拒绝（它会被拼进路径）"
+        );
+    }
+
+    for good in [
+        "example.demo",
+        "oracle-jdbc-bridge",
+        "publisher.sql_notebook",
+        "a1",
+    ] {
+        assert!(validate_plugin_id(good).is_ok(), "{good:?} 应被接受");
+    }
+}
+
+/// 新增顶层目录必须登记进 [`crate::NEW_LAYOUT_DIRS`]，否则 `RDS_HOME` 恰好落在
+/// 旧布局目录上时，迁移会把插件目录当旧数据搬走（历史坑：`data/` 被搬成 `data/data/`）。
+#[test]
+fn plugin_roots_are_registered_as_new_layout_dirs() {
+    for name in ["plugins", "plugin-data", "plugin-cache"] {
+        assert!(
+            crate::NEW_LAYOUT_DIRS.contains(&name),
+            "{name} 未登记进 NEW_LAYOUT_DIRS：迁移会把它当旧数据"
+        );
+    }
+}
+
 #[test]
 fn ensure_dirs_creates_every_derived_dir() {
     // 落在真实数据根上，但只建目录（幂等），不写任何内容。
     super::ensure_dirs().expect("建数据目录");
-    for dir in [config_dir(), data_dir(), log_dir(), temp_dir(), extensions_dir()] {
+    for dir in [
+        config_dir(),
+        data_dir(),
+        log_dir(),
+        temp_dir(),
+        extensions_dir(),
+        plugins_dir(),
+        plugin_registry_dir(),
+        home().join("plugin-data"),
+        home().join("plugin-cache"),
+        temp_dir().join("sidecar"),
+    ] {
         assert!(dir.is_dir(), "{} 应已存在", dir.display());
     }
 }

@@ -9,9 +9,15 @@
 //! ├── config/settings.json        # 全局设置
 //! ├── data/                       # global.db / analytics.duckdb / 密钥库 / samples
 //! ├── logs/app.YYYY-MM-DD         # 日志（按天滚动）
-//! ├── tmp/                        # DuckDB spill / 联邦临时库 / 进程 scratch
-//! └── extensions/                 # DuckDB 扩展
+//! ├── tmp/                        # DuckDB spill / 联邦临时库 / 进程 scratch / sidecar 工作目录
+//! ├── extensions/                 # **DuckDB** 扩展（不是插件！）
+//! ├── plugins/                    # 插件本体：plugins/<id>/（.registry 是分发包缓存）
+//! ├── plugin-data/<id>/           # 插件持久数据（卸载时可选保留）
+//! └── plugin-cache/<id>/          # 插件可清缓存（wasmtime 缓存 / sidecar 日志）
 //! ```
+//!
+//! ⚠️ `extensions/` 与 `plugins/` 是**两件事**：前者是 DuckDB 的 SQL 扩展，后者是插件系统（M9）。
+//! 别把插件装进 `extensions/`（旧布局迁移也用这个目录名做判定）。
 //!
 //! **其它 crate 不要再自己拼路径**，也不要直接读 `APPDATA` / `LOCALAPPDATA` / 主目录：
 //! 路径散在多处时，换一个位置要改 N 个文件且必漏（改造前有 9 处硬编码 `"RdataStation"`）。
@@ -51,7 +57,22 @@ const FALLBACK_DIR_NAME: &str = "RdataStation";
 const PROBE_FILE: &str = ".rds-write-probe";
 
 /// 新布局的目录名（`migrate` 用它避免把新目录当旧数据搬）。
-pub(crate) const NEW_LAYOUT_DIRS: [&str; 5] = ["config", "data", "logs", "tmp", "extensions"];
+///
+/// ⚠️ **新增顶层目录必须同步加到这里**：否则 `RDS_HOME` 恰好落在旧布局目录上时，
+/// 迁移会把新目录当旧数据搬走（历史坑：`data/` 被再搬一次成 `data/data/`）。
+pub(crate) const NEW_LAYOUT_DIRS: [&str; 8] = [
+    "config",
+    "data",
+    "logs",
+    "tmp",
+    "extensions",
+    "plugins",
+    "plugin-data",
+    "plugin-cache",
+];
+
+/// 插件 id 的最大字节数（够长且不撞文件系统上限）。
+const PLUGIN_ID_MAX_LEN: usize = 128;
 
 /// 数据根是怎么定下来的（诊断用：出问题时先看这里）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,13 +147,121 @@ pub fn temp_dir() -> PathBuf {
 }
 
 /// DuckDB 扩展目录：`<RDS_HOME>/extensions`。
+///
+/// ⚠️ 这是 **DuckDB 的 SQL 扩展**，与插件系统（M9）无关；插件用 [`plugins_dir`]。
 pub fn extensions_dir() -> PathBuf {
     home().join("extensions")
 }
 
+// ==================== 插件系统（M9）====================
+//
+// 布局与理由见 `docs/architecture/plugin/plugin-dev-plan.md` §4.7。
+// 目录说明：
+//   plugins/          插件本体（安装产物）；契约是「一个插件一个子目录」，卸载 = 删目录
+//   plugin-data/      插件持久数据（globalStoragePath；卸载时可选保留）
+//   plugin-cache/     可清缓存（wasmtime 编译缓存 / sidecar 日志）；删了只影响性能
+//   tmp/sidecar/      sidecar 子进程的 current_dir（进程退出后回收）
+
+/// 插件根目录：`<RDS_HOME>/plugins`（每个插件一个子目录）。
+pub fn plugins_dir() -> PathBuf {
+    home().join("plugins")
+}
+
+/// 单个插件目录：`<RDS_HOME>/plugins/<id>`（安装产物；卸载 = 删这个目录）。
+///
+/// **调用前必须过 [`validate_plugin_id`]** —— 这个函数直接拼接 id，不做清洗。
+pub fn plugin_dir(id: &str) -> PathBuf {
+    plugins_dir().join(id)
+}
+
+/// 插件持久数据目录：`<RDS_HOME>/plugin-data/<id>`。
+///
+/// **调用前必须过 [`validate_plugin_id`]**。
+pub fn plugin_data_dir(id: &str) -> PathBuf {
+    home().join("plugin-data").join(id)
+}
+
+/// 插件可清缓存目录：`<RDS_HOME>/plugin-cache/<id>`（wasmtime 缓存 / sidecar 日志）。
+///
+/// **调用前必须过 [`validate_plugin_id`]**；这里的内容随时可删。
+pub fn plugin_cache_dir(id: &str) -> PathBuf {
+    home().join("plugin-cache").join(id)
+}
+
+/// sidecar 工作目录：`<RDS_HOME>/tmp/sidecar/<id>`（子进程的 `current_dir`）。
+///
+/// 放 tmp 下是故意的：子进程崩溃留下的临时文件不该污染数据目录。
+/// **调用前必须过 [`validate_plugin_id`]**。
+pub fn sidecar_work_dir(id: &str) -> PathBuf {
+    temp_dir().join("sidecar").join(id)
+}
+
+/// 插件注册表目录：`<RDS_HOME>/plugins/.registry`（分发包缓存 + 清单索引）。
+///
+/// 点号开头是故意的：扫描插件时会被跳过，不会把它当成一个插件。
+pub fn plugin_registry_dir() -> PathBuf {
+    plugins_dir().join(".registry")
+}
+
+/// 插件 id 非法。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidPluginId(String);
+
+impl std::fmt::Display for InvalidPluginId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "非法的插件 id：{:?}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidPluginId {}
+
+/// 校验插件 id 能不能安全地拼进路径。
+///
+/// 规则（白名单，不是黑名单）：ASCII 字母 / 数字 / `.` / `_` / `-`；
+/// 不得以 `.` 开头（避免 `.`、`..` 与隐藏目录）；长度 ≤ [`PLUGIN_ID_MAX_LEN`]。
+///
+/// **为什么必须有这一道**：插件 id 来自第三方清单，`plugin_dir(id)` 直接 `join`，
+/// 一个 `../../..` 的 id 就能把「安装」写到数据根外面去（Windows 上连 `C:\` 也拼得出来）。
+/// 这里**只做形参校验**，真正的穿越防御（symlink / TOCTOU）按 dev-plan §4.7 在打开句柄那一层做。
+pub fn validate_plugin_id(id: &str) -> Result<(), InvalidPluginId> {
+    let bad = || InvalidPluginId(id.to_string());
+
+    if id.is_empty() || id.len() > PLUGIN_ID_MAX_LEN {
+        return Err(bad());
+    }
+    if id.starts_with('.') {
+        return Err(bad());
+    }
+    let ok = id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !ok {
+        return Err(bad());
+    }
+    // 至少一个字母或数字，挡掉 `---` / `...` 这类纯符号名
+    if !id.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return Err(bad());
+    }
+    Ok(())
+}
+
 /// 建好全部派生目录（幂等）。启动时装一次，后续写入不必各自 `create_dir_all`。
+///
+/// 只建**根**（如 `plugin-data/`）；`plugin-data/<id>/` 这类按插件建的目录由安装/加载流程
+/// 自己 `create_dir_all`（它们要先过 [`validate_plugin_id`]）。
 pub fn ensure_dirs() -> std::io::Result<()> {
-    for dir in [config_dir(), data_dir(), log_dir(), temp_dir(), extensions_dir()] {
+    for dir in [
+        config_dir(),
+        data_dir(),
+        log_dir(),
+        temp_dir(),
+        extensions_dir(),
+        plugins_dir(),
+        plugin_registry_dir(),
+        home().join("plugin-data"),
+        home().join("plugin-cache"),
+        temp_dir().join("sidecar"),
+    ] {
         std::fs::create_dir_all(&dir)?;
     }
     Ok(())
@@ -175,7 +304,7 @@ pub(crate) fn previous_temp() -> Option<PathBuf> {
 /// 一段人类可读的路径摘要（启动日志 / 报错诊断用）。
 pub fn summary() -> String {
     format!(
-        "数据根 {}（来源：{}）\n  配置 {}\n  数据 {}\n  日志 {}\n  临时 {}\n  扩展 {}",
+        "数据根 {}（来源：{}）\n  配置 {}\n  数据 {}\n  日志 {}\n  临时 {}\n  扩展 {}\n  插件 {}",
         home().display(),
         home_origin().label(),
         config_dir().display(),
@@ -183,6 +312,7 @@ pub fn summary() -> String {
         log_dir().display(),
         temp_dir().display(),
         extensions_dir().display(),
+        plugins_dir().display(),
     )
 }
 

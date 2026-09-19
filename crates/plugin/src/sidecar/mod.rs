@@ -1,7 +1,10 @@
 //! Sidecar 进程管理模块
 //!
-//! 负责 Go Sidecar 进程的生命周期管理、
-//! JSON-RPC 通信和驱动适配。
+//! 负责 sidecar 进程的生命周期管理，以及同它通信。
+//!
+//! ⚠️ **传输层现状与 D5 相反**：`client` 走 `reqwest` 打 `http://localhost:<port>`（零鉴权），
+//! 而 D5 定的是 **stdio + 二进制分帧**（Arrow IPC 装不进 HTTP/JSON）。
+//! P0 只修了它判成功/失败的判据（反了）；换成 stdio 是 P1 的事。
 
 pub mod client;
 pub mod health_checker;

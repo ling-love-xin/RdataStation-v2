@@ -32,8 +32,11 @@ use serde::Serialize;
 // 导出子模块
 pub mod api;
 pub mod extism;
-pub mod host_functions;
 pub mod plugin_manager;
+// 注：`host_functions` 已于 P0 删除。原有 4 个 host function 全是“无条件返回错误”的占位
+// （签名也不对：Extism 读宿主内存要走 `host_fn!` + `Memory`，不是 Val 数组），且全仓零调用。
+// 回收口径：**现在不提供任何 host function**（wasm 插件拿不到宿主能力，与“默认拒绝”一致）；
+// 真正的 host function 面在 P3 按 Q4 收敛后重建。
 
 // 重新导出核心类型
 pub use self::extism::ExtismPluginManager;
