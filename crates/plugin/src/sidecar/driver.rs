@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 
 use super::conn::{CallError, SidecarConn};
 use super::proto::RpcErrorCode;
+use super::supervisor::SidecarSupervisor;
 use shared::arrow::ArrowBatch;
 
 /// 查询类调用的传输超时。
@@ -100,8 +101,8 @@ impl DriverError {
         )
     }
 
-    /// 转成 [`CallError`] 的对应形态（供既有的调用方复用）。
-    fn from_call(method: &str, error: CallError) -> Self {
+    /// 转成 [`CallError`] 的对应形态（同 crate 的其它层也要用：supervisor 报的是 `CallError`）。
+    pub(crate) fn from_call(method: &str, error: CallError) -> Self {
         match error {
             CallError::Rpc {
                 code,
@@ -649,6 +650,7 @@ mod tests {
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use engine::driver::{DataSourceMeta, Database, DynDatabase, Transaction};
@@ -706,6 +708,13 @@ pub struct SidecarDatabase {
     descriptor: DriverDescriptor,
     /// 请求 id 发号器（`query.cancel` 用它；见模块文档的口径）。
     next_request: AtomicU64,
+    /// 谁负责关会话。
+    ///
+    /// 弱引用只是**借**连接，不负责收摊：句柄被丢掉时得有人把会话交还给内核，
+    /// 否则那条会话会一直占着实例（串行规格下会把后续连接全排住）。
+    /// 工厂路径会带上 supervisor（见 [`SidecarDatabase::owned_by`]）；
+    /// 手工构造（测试 / 借用式用法）可以不带，由调用方自己安排收摊。
+    owner: Option<Arc<Mutex<SidecarSupervisor>>>,
 }
 
 impl SidecarDatabase {
@@ -721,7 +730,14 @@ impl SidecarDatabase {
             db_type: db_type.into(),
             descriptor,
             next_request: AtomicU64::new(1),
+            owner: None,
         }
+    }
+
+    /// 指定「谁负责关会话」：句柄被丢掉时把会话交还给内核（工厂路径都这么用）。
+    pub fn owned_by(mut self, supervisor: Arc<Mutex<SidecarSupervisor>>) -> Self {
+        self.owner = Some(supervisor);
+        self
     }
 
     pub fn session_id(&self) -> &str {
@@ -925,6 +941,35 @@ impl Database for SidecarDatabase {
             .session_ping()
             .await
             .map_err(|e| self.map_error("session.ping", e))
+    }
+}
+
+impl Drop for SidecarDatabase {
+    fn drop(&mut self) {
+        let Some(supervisor) = self.owner.take() else {
+            return;
+        };
+        let session_id = self.session_id.clone();
+
+        // `Drop` 不能 await：把交还交给运行时。没有运行时就说清楚它会怎样 ——
+        // 不装作收过了（那种"看起来成功"最坏事）。
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let mut supervisor = supervisor.lock().await;
+                    if let Err(e) = supervisor
+                        .close_session(&session_id, std::time::Instant::now())
+                        .await
+                    {
+                        tracing::warn!(session_id, error = %e, "连接句柄释放时没能交还会话");
+                    }
+                });
+            }
+            Err(_) => tracing::warn!(
+                session_id,
+                "没有异步运行时，会话没能立刻交还（进程收摊时会一并收掉）"
+            ),
+        }
     }
 }
 

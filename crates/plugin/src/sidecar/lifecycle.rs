@@ -537,6 +537,10 @@ impl Registry {
     /// 返回该实例上被放行的排队会话（0 或 1 个）。
     pub fn release(&mut self, session_id: &str, now: Instant) -> Vec<Decision> {
         let Some(record) = self.sessions.remove(session_id) else {
+            // 也可能是**还在排队**的那条：从队列里摘掉就行 —— 它没占实例，
+            // 也就没有"下一个该放行"可言。少了这一步，等不及取消排队的请求会在
+            // 别人关闭时被放行，变成一个谁也不要的幽灵会话（工厂路径的排队超时踩到过）。
+            self.remove_queued(session_id, now);
             return Vec::new();
         };
         let key = (record.plugin_id.clone(), record.index);
@@ -567,6 +571,18 @@ impl Registry {
         inst.ping_failures = 0;
         inst.last_active = now;
         self.drain_one(plugin_id, index, now)
+    }
+
+    /// 把一条还在排队的会话从队列里摘掉（找到就顺手更新实例的活跃时间）。
+    fn remove_queued(&mut self, session_id: &str, now: Instant) {
+        for inst in self.instances.values_mut() {
+            let before = inst.queue.len();
+            inst.queue.retain(|queued| queued.session_id != session_id);
+            if inst.queue.len() != before {
+                inst.last_active = now;
+                return;
+            }
+        }
     }
 
     /// 放行队首一个会话（若有），并登记它。
@@ -864,6 +880,37 @@ mod tests {
             matches!(d3, Decision::Queued { .. }),
             "上限到了才排队：{d3:?}"
         );
+    }
+
+    /// 排队中取消：从队列里真的摘掉，而不是留着等别人关闭时被放行。
+    ///
+    /// 工厂路径上「第二条连接等不及、排队超时」就是这条路：不摘掉的话，
+    /// 第一条连接关闭时会冒出一个谁也不要的会话，还占着那个串行实例。
+    #[test]
+    fn releasing_a_queued_session_removes_it_from_the_queue() {
+        let now = t0();
+        let mut r = registry(ProcessSpec::serial_single(["oracle-jdbc"]));
+        arrange_ready(&mut r, 0, 1, now);
+
+        assert!(matches!(
+            r.acquire("oracle-jdbc", "oracle-jdbc", "s1", now),
+            Decision::Open { .. }
+        ));
+        assert!(matches!(
+            r.acquire("oracle-jdbc", "oracle-jdbc", "s2", now),
+            Decision::Queued { .. }
+        ));
+
+        // 用户等不及：取消排队
+        assert!(r.release("s2", now).is_empty());
+        assert_eq!(r.session("s2"), None);
+        let inst = &r.instances_of("oracle-jdbc")[0];
+        assert_eq!(inst.queue_len(), 0, "队列里不该还留着它");
+
+        // 关掉 s1：**不该**把 s2 放行（它已经被取消了）
+        assert!(r.release("s1", now).is_empty(), "没有下一个可放行");
+        assert_eq!(r.session_count(), 0);
+        assert_eq!(r.instances_of("oracle-jdbc")[0].session_count(), 0);
     }
 
     /// 规则 3：`serial` 时第二个会话排队，释放后放行。

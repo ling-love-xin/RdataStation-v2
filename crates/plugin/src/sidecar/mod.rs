@@ -24,6 +24,7 @@
 
 pub mod conn;
 pub mod driver;
+pub mod factory;
 pub mod health_checker;
 pub mod hot_reload_manager;
 pub mod lifecycle;

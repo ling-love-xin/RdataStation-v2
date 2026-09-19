@@ -123,6 +123,9 @@ pub enum DriverKind {
     Http,
     Python,
     Js,
+    /// 插件带的驱动：宿主起一个独立进程（stdio 二进制分帧），由它去连真库。
+    /// 见 docs/architecture/plugin/plugin-dev-plan.md §4.1 / §4.2。
+    Sidecar,
 }
 
 impl DriverKind {
@@ -136,6 +139,7 @@ impl DriverKind {
             DriverKind::Http => "http",
             DriverKind::Python => "python",
             DriverKind::Js => "js",
+            DriverKind::Sidecar => "sidecar",
         }
     }
 }
