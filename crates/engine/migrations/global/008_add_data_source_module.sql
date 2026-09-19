@@ -2,6 +2,12 @@
 -- 数据库类型：SQLite
 -- 作用：数据源模块 - 数据源类型、驱动注册、驱动文件、环境管理、认证配置、网络配置
 -- 更新时间：2026-05-18
+--
+-- ⚠️ `drivers` 的种子行（本文件尾部 + 013/014/016/017）是**首装兜底**，不是权威：
+--    驱动声明的权威在代码（`crates/engine/src/driver/registry/descriptors.rs`），
+--    启动时由 `driver/declaration.rs::sync_driver_declarations` 幂等 upsert 覆盖「声明拥有的列」。
+--    改驱动的 config_schema / capabilities / supported_auth_types / 属性默认值 → **改 descriptors**，
+--    不要新增种子迁移；迁移只在建表 + 补列时修改。
 
 CREATE TABLE IF NOT EXISTS data_source_types (
     id          TEXT PRIMARY KEY,

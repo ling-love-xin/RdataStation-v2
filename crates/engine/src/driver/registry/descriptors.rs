@@ -3,6 +3,8 @@
 //! 提供类似 DBeaver 的驱动描述模型，包括驱动字段、选项类型、
 //! 以及四种内置数据库（MySQL/PostgreSQL/SQLite/DuckDB）的驱动描述符。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -178,6 +180,13 @@ pub struct DriverDescriptor {
     pub enabled: bool,
     pub capabilities: Vec<String>,
     pub supported_auth_types: Vec<String>,
+    /// 驱动属性默认值（`drivers.driver_properties` 的权威内容）。
+    ///
+    /// **键必须是该驱动真实使用的客户端库认的参数名**（见 `docs/architecture/driver-capability-matrix.md`
+    /// §2.1 的「未知参数」列）：sqlx 会**静默忽略**不认识的键、`mysql_async` 与 `tokio-postgres` 会**直接报错**。
+    /// 所以这里只写「查过源码确认认、且默认值确实想要」的键——写了不生效的键是坑（旧种子里的
+    /// camelCase MySQL C-API 名就是实例，能力矩阵 §7 #9）。
+    pub driver_properties: BTreeMap<String, String>,
 }
 
 impl DriverDescriptor {
@@ -204,6 +213,7 @@ impl DriverDescriptor {
             enabled: true,
             capabilities: Vec::new(),
             supported_auth_types: Vec::new(),
+            driver_properties: BTreeMap::new(),
         }
     }
 
@@ -240,6 +250,7 @@ impl DriverDescriptor {
             enabled: true,
             capabilities: Vec::new(),
             supported_auth_types: Vec::new(),
+            driver_properties: BTreeMap::new(),
         }
     }
 
@@ -330,6 +341,36 @@ impl DriverDescriptor {
         self
     }
 
+    /// 声明一条驱动属性默认值（键的真伪判据见 [`Self::driver_properties`] 字段说明）。
+    pub fn with_driver_property(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.driver_properties.insert(key.into(), value.into());
+        self
+    }
+
+    /// 该驱动声明的能力键（`drivers.capabilities` 的权威内容）。
+    ///
+    /// = [`Self::capabilities`] 里显式声明的功能级键 + **由网络布尔位派生**的三个网络键
+    /// （`ssh_tunnel` / `ssl_tls` / `proxy`，迁移 017 引入）。
+    ///
+    /// 网络键走派生而不是再手写一份：布尔位与能力键本来就是同一件事的两种形态，
+    /// 两份手写必然漂（017 与 008 就漂过）。排列顺序与 017 写的字面量一致，升级时行内容不变。
+    pub fn capability_keys(&self) -> Vec<String> {
+        let mut keys = self.capabilities.clone();
+        let mut push = |declared: bool, key: &str| {
+            if declared && !keys.iter().any(|k| k == key) {
+                keys.push(key.to_string());
+            }
+        };
+        push(self.supports_ssh_tunnel, "ssh_tunnel");
+        push(self.supports_ssl, "ssl_tls");
+        push(self.supports_http_proxy || self.supports_socks_proxy, "proxy");
+        keys
+    }
+
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
@@ -341,8 +382,12 @@ impl DriverDescriptor {
 // =============================================================================
 
 /// MySQL 驱动描述符
+///
+/// 显示名带实现后缀（`(sqlx)`）是**有意的**：驱动下拉按类型过滤后，显示的是
+/// `driver_short_name()` 抠出的括号内容（`sqlx` / `Official`），不带后缀就没法区分
+/// 同族的两个实现（见 `connection-dev-plan.md` C10）。
 pub fn mysql_driver() -> DriverDescriptor {
-    DriverDescriptor::new("mysql", "MySQL")
+    DriverDescriptor::new("mysql", "MySQL (sqlx)")
         .with_description("MySQL 关系型数据库")
         .with_category("relational")
         .with_target_database("mysql")
@@ -363,6 +408,11 @@ pub fn mysql_driver() -> DriverDescriptor {
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
+        // 不声明属性默认值：sqlx 认的键里没有一条我们要改默认
+        // （`charset` 已是 utf8mb4、statement cache 已是 100，见 `sqlx-mysql-0.9.0/src/options/mod.rs:101`），
+        // 而旧种子那套 MySQL C-API 名（connectTimeout / useCompression / characterEncoding…）
+        // sqlx 会**静默忽略**。TLS 走「连接安全」通道（`url_params::append_ssl_params`），
+        // 不在这里写第二份。
         .with_field(DriverField {
             key: "host".to_string(),
             label: "主机".to_string(),
@@ -419,12 +469,14 @@ pub fn mysql_driver() -> DriverDescriptor {
         )
 }
 
-/// PostgreSQL 驱动描述符
+/// PostgreSQL 驱动描述符（显示名带实现后缀的理由同 MySQL）
 pub fn postgres_driver() -> DriverDescriptor {
-    DriverDescriptor::new("postgres", "PostgreSQL")
+    DriverDescriptor::new("postgres", "PostgreSQL (sqlx)")
         .with_description("PostgreSQL 关系型数据库")
         .with_category("relational")
-        .with_target_database("postgres")
+        // 族 id 取 `data_source_types.id`（`postgresql`）：驱动目录的 `type_id` 是外键，
+        // 用 `postgres` 会挂不上（同族的两个实现共享这一列，见 `driver/declaration.rs`）
+        .with_target_database("postgresql")
         .with_default_port(5432)
         .requires_database()
         .with_ssl_support()
@@ -447,6 +499,11 @@ pub fn postgres_driver() -> DriverDescriptor {
             "ssl".to_string(),
             "kerberos".to_string(),
         ])
+        // sqlx 的键名是**下划线**（`application_name`），旧种子的 camelCase `applicationName`
+        // 会被 sqlx 以 `ignoring unrecognized connect parameter` 警告后丢弃；
+        // 其余旧键（connectTimeout / socketTimeout / keepalivesIdle / statementTimeout）
+        // sqlx 的 URL 解析器同样不认。TLS 走「连接安全」通道，不在这里写第二份。
+        .with_driver_property("application_name", "RdataStation")
         .with_field(DriverField {
             key: "host".to_string(),
             label: "主机".to_string(),
@@ -504,9 +561,9 @@ pub fn postgres_driver() -> DriverDescriptor {
         )
 }
 
-/// SQLite 驱动描述符
+/// SQLite 驱动描述符（显示名带实现后缀的理由同 MySQL）
 pub fn sqlite_driver() -> DriverDescriptor {
-    DriverDescriptor::new("sqlite", "SQLite")
+    DriverDescriptor::new("sqlite", "SQLite (rusqlite)")
         .with_description("SQLite 嵌入式数据库")
         .with_category("file-based")
         .with_target_database("sqlite")
@@ -517,10 +574,15 @@ pub fn sqlite_driver() -> DriverDescriptor {
             "tree".to_string(),
             "health_check".to_string(),
             "transactions".to_string(),
+            // rusqlite 支持 `EXPLAIN QUERY PLAN`（种子迁移 016 已声明，声明侧先前漏了）
+            "index_analysis".to_string(),
             "sql_autocomplete".to_string(),
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
+        // 不声明属性默认值：文件型驱动的路径由工厂 `sqlite_path_from_config` 取，
+        // 查询串会被剥掉——旧种子那套 pragma 名（journalMode / busyTimeout…）当前
+        // 没有任何一条会下发（能力矩阵 §7 #9）。
         .with_field(DriverField {
             key: "file_path".to_string(),
             label: "数据库文件".to_string(),
@@ -539,9 +601,9 @@ pub fn sqlite_driver() -> DriverDescriptor {
         )
 }
 
-/// DuckDB 驱动描述符
+/// DuckDB 驱动描述符（显示名带实现后缀的理由同 MySQL）
 pub fn duckdb_driver() -> DriverDescriptor {
-    DriverDescriptor::new("duckdb", "DuckDB")
+    DriverDescriptor::new("duckdb", "DuckDB (duckdb-rs)")
         .with_description("DuckDB 分析型数据库")
         .with_category("file-based")
         .with_target_database("duckdb")
@@ -551,12 +613,18 @@ pub fn duckdb_driver() -> DriverDescriptor {
         .with_capabilities(vec![
             "tree".to_string(),
             "health_check".to_string(),
+            // DuckDB 支持事务（`DataSourceMeta::duckdb().supports_transaction == true`），
+            // 且导航有 schema 层（main）——两键先前只写在种子迁移里，声明侧漏了
+            "transactions".to_string(),
             "sql_autocomplete".to_string(),
+            "schema_browser".to_string(),
             "analytics".to_string(),
             "federation".to_string(),
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string()])
+        // 同 SQLite：属性不会下发（工厂剥查询串），不写不生效的键。
+        // `memory_limit` 由会话侧统一钉（`duckdb::manager`），也不在这里写第二份。
         .with_field(DriverField {
             key: "file_path".to_string(),
             label: "数据库文件".to_string(),
@@ -589,7 +657,7 @@ pub fn get_driver(id: &str) -> Option<DriverDescriptor> {
 
 /// MySQL 官方原生驱动描述符（mysql_async）
 pub fn mysql_native_driver() -> DriverDescriptor {
-    DriverDescriptor::new("mysql_native", "MySQL (Native)")
+    DriverDescriptor::new("mysql_native", "MySQL (Official)")
         .with_description("MySQL 官方纯 Rust 异步驱动 (mysql_async)，支持协议压缩、原生认证插件")
         .with_category("relational")
         .with_target_database("mysql")
@@ -610,6 +678,12 @@ pub fn mysql_native_driver() -> DriverDescriptor {
             "table_editor".to_string(),
         ])
         .with_supported_auth_types(vec!["password".to_string(), "ssl".to_string()])
+        // mysql_async **不忽略未知参数**（`UrlError::UnknownParameter`），只声明它认的：
+        // 客户端侧最大包（与 MySQL 服务端默认同量级：64 MiB）对应种子的 `maxAllowedPacket`。
+        // `prefer_socket=false` 由工厂 `mysql_native_url` 自动补（那里能同时看到 URL 与属性），
+        // 不在这里重复；其余旧种子键（connectTimeout / socketTimeout / useCompression /
+        // characterEncoding / allowMultiQueries）mysql_async 没有对应项——真下发会让连接直接报错。
+        .with_driver_property("max_allowed_packet", "67108864")
         .with_field(DriverField {
             key: "host".to_string(),
             label: "主机".to_string(),
@@ -654,12 +728,13 @@ pub fn mysql_native_driver() -> DriverDescriptor {
 
 /// PostgreSQL 官方原生驱动描述符（tokio-postgres）
 pub fn postgres_native_driver() -> DriverDescriptor {
-    DriverDescriptor::new("postgres_native", "PostgreSQL (Native)")
+    DriverDescriptor::new("postgres_native", "PostgreSQL (Official)")
         .with_description(
             "PostgreSQL 官方异步驱动 (tokio-postgres)，支持 Pipeline、COPY 协议、LISTEN/NOTIFY",
         )
         .with_category("relational")
-        .with_target_database("postgres")
+        // 族 id 取 `data_source_types.id`（`postgresql`），与 sqlx 版同一个族
+        .with_target_database("postgresql")
         .with_default_port(5432)
         .requires_database()
         .with_ssl_support()
@@ -682,6 +757,10 @@ pub fn postgres_native_driver() -> DriverDescriptor {
             "ssl".to_string(),
             "kerberos".to_string(),
         ])
+        // tokio-postgres 的键名同样是下划线，且**未知键直接报错**（`UnknownOption`）：
+        // 只声明它认的。其余旧种子键（socketTimeout / statementTimeout / keepalivesIdle /
+        // tcpUserTimeout…）要么没有对应项、要么真下发会中断连接；TLS 同理走「连接安全」通道。
+        .with_driver_property("application_name", "RdataStation")
         .with_field(DriverField {
             key: "host".to_string(),
             label: "主机".to_string(),

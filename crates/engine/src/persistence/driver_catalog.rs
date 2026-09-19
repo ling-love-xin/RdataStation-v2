@@ -6,10 +6,12 @@
 //! 且 `database`（导航视图下沉后）与 `workbench`（编辑器属性面板）都要读，故上收到本层：
 //! 消费方各取所需，不再出现「视图层持有引擎查询」这种反向依赖。
 //!
-//! **驱动声明的唯一真相源就是这张表**（`config_schema` / `capabilities` /
-//! `supported_auth_types` / `is_file` / `default_port` 由界面与连接链路读）：
-//! Rust 侧 `DriverDescriptor` 只提供注册表 key（驱动 id）与工厂，不再另存一套声明
-//! （旧的 `driver/metadata.rs` 静态描述与未编译的 `driver/driver_config.rs` 已删除）。
+//! **驱动声明的权威在代码，本表是读模型**：`DriverDescriptor`（`driver/registry/descriptors.rs`）
+//! 声明 `config_schema` / `capabilities` / `supported_auth_types` / `is_file` / `default_port` /
+//! `url_template` / `driver_properties`，启动时由 `driver/declaration.rs::sync_driver_declarations`
+//! 幂等 upsert 进 `drivers` 表；界面与连接链路照旧读表（读模型比每次现算便宜，也给
+//! 外部驱动留了落库位置）。迁移 008/013/014/016/017 里的种子降为**首装兜底**（表结构仍由迁移建）；
+//! 列归属（哪些列是声明拥有的、哪些归库 / 用户）见 `driver/declaration.rs` 头注。
 
 use std::collections::HashMap;
 use std::time::Duration;

@@ -1,3 +1,9 @@
+//! `drivers` / `data_source_types` / `driver_files` 表读写（驱动目录的读模型）。
+//!
+//! **声明的权威在代码**：驱动行里「声明拥有」的列由 `driver/registry/descriptors.rs` 定义、
+//! 启动时由 `driver/declaration.rs::sync_driver_declarations` 幂等 upsert；本模块只负责读写表，
+//! 不在这里定义能力 / 属性（改声明请改 descriptors，改列归属请看 declaration 头注）。
+
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use specta::Type;

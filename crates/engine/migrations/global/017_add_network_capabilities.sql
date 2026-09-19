@@ -4,6 +4,10 @@
 --       新增 ssh_tunnel、ssl_tls、proxy 三个网络能力关键词
 -- 更新时间：2026-05-31
 --
+-- ⚠️ 这三个键现已在**代码里派生**（`DriverDescriptor::capability_keys`：由 `supports_ssh_tunnel` /
+--    `supports_ssl` / `supports_http_proxy|supports_socks_proxy` 布尔位生成），本迁移的 SQL 保留为
+--    首装兜底；新增 / 修改驱动能力请改 descriptors（能力字典里已有这三个键的中文标签）。
+--
 -- 背景：
 --   NetworkTab 组件通过 drivers.capabilities 判断驱动支持哪些网络协议。
 --   原有 capabilities 仅包含数据库功能级能力（tree/health_check/transactions

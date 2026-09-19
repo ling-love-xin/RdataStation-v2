@@ -150,8 +150,45 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
     )
     .await?;
 
-    // 启动时的一次性存量数据迁移（幂等；失败仅告警，不阻断启动）。
-    let (migrated, tags_migrated) = migrate_legacy_data(&manager).await;
+    // 启动时的数据同步（幂等；失败仅告警，不阻断启动）：
+    // ① 存量数据迁移（凭据加密 / 标签回填）；② **驱动声明 upsert**（代码是权威，见 `driver/declaration.rs`）。
+    sync_startup_state(&manager).await;
+
+    install_global_db_manager(manager)?;
+
+    tracing::info!("Global system initialized successfully");
+    Ok(())
+}
+
+/// 启动时数据同步的统计（供启动日志与测试断言）。
+///
+/// 抽成返回值而不是只写日志：日志看不到的回归（“同步了但一行没写”）靠测试盯住。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StartupSyncReport {
+    /// 明文凭据转密文的条数。
+    pub creds_encrypted: usize,
+    /// 连接标签回填条数。
+    pub tags_backfilled: usize,
+    /// 驱动声明落库结果（`None` = 这一步失败，已告警）。
+    pub drivers: Option<crate::driver::declaration::DeclarationSync>,
+}
+
+/// 启动时的数据同步（幂等；失败仅告警，不阻断启动）。
+///
+/// 两步：
+/// ① [`migrate_legacy_data`]——存量凭据加密 + 标签回填；
+/// ② [`crate::driver::declaration::sync_driver_declarations`]——把**代码里的驱动声明**
+///   写回 `drivers` 表（迁移里的种子降为首装兜底，见 `driver/declaration.rs` 头注）。
+///
+/// 抽成独立函数是为了可测：启动入口 `initialize_global_system` 解析的是真实数据目录
+/// （测试不能碰），而这一步只需要一个已建好的管理器——否则「声明同步是否真的被启动
+/// 路径调了」只能靠人读代码。
+pub async fn sync_startup_state(manager: &GlobalDatabaseManager) -> StartupSyncReport {
+    let mut report = StartupSyncReport::default();
+
+    let (migrated, tags_migrated) = migrate_legacy_data(manager).await;
+    report.creds_encrypted = migrated;
+    report.tags_backfilled = tags_migrated;
     if migrated > 0 {
         tracing::info!(count = migrated, "网络档案明文凭据已加密（一次性迁移）");
     }
@@ -159,10 +196,24 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
         tracing::info!(count = tags_migrated, "连接标签已回填到权威表（一次性迁移）");
     }
 
-    install_global_db_manager(manager)?;
+    match crate::driver::declaration::sync_driver_declarations(manager).await {
+        Ok(sync) => {
+            if !sync.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?sync.skipped,
+                    "部分驱动声明未落库（缺数据库族？）——这些驱动在界面/连接链路上会缺行"
+                );
+            }
+            tracing::info!(count = sync.written, "驱动声明已同步到 drivers 表（代码是权威）");
+            report.drivers = Some(sync);
+        }
+        Err(e) => {
+            // 不阻断启动：表里已有的声明行仍然可用（只是可能与代码不一致）。
+            tracing::warn!(error = %e, "驱动声明同步失败（沿用库中已有声明）");
+        }
+    }
 
-    tracing::info!("Global system initialized successfully");
-    Ok(())
+    report
 }
 
 /// 启动时的一次性**存量数据迁移**（幂等；失败仅告警，不阻断启动）。
@@ -271,7 +322,7 @@ pub async fn shutdown_global_system() -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     // 注意：不通配导入（避免引入与 `#[tokio::test]` 同名的属性宏）。
-    use super::migrate_legacy_data;
+    use super::{migrate_legacy_data, sync_startup_state};
     use crate::persistence::GlobalDatabaseManager;
     use rusqlite::Connection;
 
@@ -348,6 +399,61 @@ mod tests {
         // 幂等：再跑一次不再写入。
         let (_, again) = migrate_legacy_data(&manager).await;
         assert_eq!(again, 0, "回填必须是幂等的");
+
+        manager.close().await.expect("close manager");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 启动同步的**接线回归**：`sync_startup_state`（启动入口调的同一个函数）
+    /// 必须把代码里的驱动声明写回 `drivers` 表，且幂等——
+    /// 「启动漏调同步」在真机上的表现是界面 / 连接链路读不到新增驱动。
+    #[tokio::test]
+    async fn startup_sync_writes_driver_declarations_and_is_idempotent() {
+        crate::driver::AutoDriverRegistrar::auto_register();
+        let base = temp_dir("drivers");
+        let manager = GlobalDatabaseManager::new(
+            base.join("global.db"),
+            base.join("analytics.duckdb"),
+            2,
+        )
+        .await
+        .expect("init manager");
+
+        let first = sync_startup_state(&manager).await;
+        let sync = first.drivers.expect("驱动声明同步应成功");
+        assert!(sync.skipped.is_empty(), "不应有跳过：{sync:?}");
+        assert!(sync.written >= 6, "内置驱动至少 6 条：{sync:?}");
+
+        // 与代码里的声明逐列比对（族 id 尤其重要：`postgres*` 的族是 `postgresql`）
+        let expected = crate::driver::DriverDeclaration::all();
+        {
+            let sqlite = manager.sqlite_pool().acquire().await.expect("acquire");
+            let conn = sqlite.inner().expect("rusqlite conn");
+            for d in &expected {
+                let (type_id, capabilities, props): (String, String, String) = conn
+                    .query_row(
+                        "SELECT type_id, capabilities, driver_properties FROM drivers WHERE id = ?1",
+                        rusqlite::params![d.id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .unwrap_or_else(|e| panic!("驱动 {} 未落库：{e}", d.id));
+                assert_eq!(type_id, d.type_id, "{} 的族 id", d.id);
+                assert_eq!(capabilities, d.capabilities, "{} 的能力键", d.id);
+                assert_eq!(props, d.driver_properties, "{} 的属性默认值", d.id);
+            }
+            let rows: i64 = conn
+                .query_row("SELECT COUNT(*) FROM drivers", [], |r| r.get(0))
+                .expect("count");
+            assert_eq!(rows, expected.len() as i64, "不该多出迁移种子以外的行");
+        }
+
+        // 第二次：仍写满，但行数不变（幂等）
+        let second = sync_startup_state(&manager).await;
+        assert_eq!(
+            second.drivers.expect("第二次同步").written,
+            sync.written,
+            "幂等：第二次应同样写满声明条数"
+        );
 
         manager.close().await.expect("close manager");
         let _ = std::fs::remove_dir_all(&base);

@@ -46,14 +46,17 @@
 
 | 位置 | 性质 | 处置 |
 | --- | --- | --- |
-| `driver/registry/descriptors.rs`（`DriverKind` + `DriverDescriptor`） | 活：提供注册表 key 与工厂；`DriverKind` 枚举保留（前瞻） | 保留 |
+| `driver/registry/descriptors.rs`（`DriverKind` + `DriverDescriptor`） | 活：**声明本身**（注册表 key / 工厂 / 界面读的各列）+ `DriverKind` 枚举保留（前瞻） | 保留（升为权威） |
 | `driver/metadata.rs`（`DriverType` + `DriverMetadata`，528 行） | **零引用**（v1 复制品，与 `descriptors.rs` 重复） | **已删除** |
 | `driver/driver_config.rs`（`DriverConfig`/`DriverRegistryConfig` + 第二个同名 `BuiltinDriverDiscovery`） | **未在 `driver/mod.rs` 声明，根本不参与编译** | **已删除** |
 
-驱动声明的**唯一真相源是 `drivers` 表**（`config_schema` / `capabilities` / `supported_auth_types` /
-`is_file` / `default_port` / `url_template`）；Rust 侧 `DriverDescriptor` 实际只被读 `id`
-（注册表 key），其余字段（`fields` / `url_template` / `require_file` / `supports_ssl` / `capabilities`）
-在 crates 内**无消费者**——改它们不影响界面，改迁移 SQL 才影响（见 §7 缺口 6）。
+驱动声明的**权威在代码**（2026-09-19 决策 ② 落地）：`registry/descriptors.rs` 声明
+`config_schema` / `capabilities` / `supported_auth_types` / `is_file` / `default_port` / `url_template` /
+`driver_properties`，启动时由 `driver/declaration.rs::sync_driver_declarations` **幂等 upsert** 进
+`drivers` 表；界面与连接链路照旧读表（**读模型**，也让外部驱动有自己的落库位置）。
+列归属：声明拥有上述列 + `name` / `driver_kind` / `version`；**库拥有** `enabled`（用户可关）、
+`download_url` / `download_checksum`（外部驱动）、`driver_files`（本机安装状态）——upsert 不覆盖库侧列。
+迁移 008/013/014/016/017 的种子降为**首装兜底**（表结构仍由迁移建），改声明不需要再写迁移。
 
 ---
 
@@ -70,6 +73,12 @@
 | `mysql_native` | mysql_async 0.37 | **仅 `mysql://`** | `require_ssl` / `verify_ca` / `verify_identity`（布尔） | **报错**（`UnknownParameter`） | CA → `SslOpts::with_root_certs`；客户端证书 → **只接受 PKCS#12**（`.p12`/`.pfx`，native-tls 后端限制）；PEM 两件套显式报错；verify 两档 → 两个 `danger_*` 开关 |
 | `postgres_native` | tokio-postgres 0.7 | **仅 `postgres://`** / `postgresql://` | `sslmode=disable\|prefer\|require`（**无 verify 档**） | **报错**（`UnknownOption`） | CA → `Certificate::from_pem/from_der`；客户端证书 → `Identity::from_pkcs8`（PEM 即可）；`verify-ca` → 校链、`verify-full` → 链 + 主机名（均在驱动侧连接器） |
 | `sqlite` / `duckdb` | rusqlite / duckdb-rs | 无（裸路径） | 无 TLS 语义 | — | — |
+
+**驱动属性（`driver_properties`）同属“词汇”问题**：这张表同时是「哪些键写了会生效」的判据——
+所以驱动声明里只写各库真认的键（文件型一个不写：路径由工厂取，查询串会被剥掉）。
+旧种子那套 MySQL C-API 名（`connectTimeout` / `useCompression` / `characterEncoding`…）就是反例：
+sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
+`engine/src/driver/declaration.rs::tests::declared_property_keys_are_accepted_by_the_client_library`。
 
 **源码证据**：`mysql_async-0.37.1/src/opts/mod.rs:1749`（scheme 校验）、`:2048`（未知参数报错）、
 `:1999-2033`（TLS 三个布尔）；`tokio-postgres-0.7.18/src/config.rs:584`（sslmode 仅三档）、`:716`（未知键报错）；
@@ -208,19 +217,25 @@
 
 ---
 
-## 6. 新驱动怎么接（三步）
+## 6. 新驱动怎么接（两步）
 
-1. **定类型**：`DriverDescriptor`（`registry/descriptors.rs`）描述 id / 显示名 / 默认端口 /
-   是否需要库名 / 是否需要文件 / 是否支持 SSL / SSH；**同时**在 `drivers` 表插入一行
-   （`config_schema` / `capabilities` / `supported_auth_types` / `is_file` / `default_port` / `url_template`）——
-   **界面与连接链路读的是表，不是 descriptor**（§2 的 2026-09-19 清理），所以这一步目前是**两处**，
-   不是「只改一行」（见 §7 缺口 6）。
+1. **定类型 + 声明**：在 `registry/descriptors.rs` 写一个工厂函数（id / 显示名 / 默认端口 /
+   是否需要库名 / 是否需要文件 / 是否支持 SSL / SSH / 代理 / 字段 / 能力键 / 属性默认值），
+   并在 `loader.rs::BuiltinDriverDiscovery::builtin_factories()` 加一行。
+   **就这两处**：启动时 `driver/declaration.rs` 会把声明 upsert 进 `drivers` 表
+   （`config_schema` / `capabilities` / `supported_auth_types` / `is_file` / `default_port` / `url_template` / 属性）——
+   **不要再手写种子迁移**（那是旧流程，见 §7 缺口 6）。
+   注意三件事：
+   - `target_database` 写**族 id**（`data_source_types.id`，如 `postgresql`），不是驱动 id；写错会让整行挂不上外键（批量里被跳过并告警）；
+   - 能力键要么在 `capability.rs::CAPABILITY_DICTIONARY` 里，要么声明时就想清楚只给内部用——不在字典里的话界面只能原样显示键名（测试会红）；
+   - `driver_properties` 只写**该客户端库真认的键**（§2.1 的「未知参数」列）；网络能力键不用手写，由 `supports_*` 布尔位派生。
 2. **实现 trait**：按 §3.4 的面实现 `Database` + `MetadataBrowser`（**必做**）+ 需要的 `DbPool` / `Transaction`。
    内省 SQL 各库不同，但返回类型是同一套；表 / 视图 / 列 / 索引 / 约束照抄同族驱动（MySQL 抄 `mysql.rs`、PG 抄 `postgres.rs`）。
    **若新驱动的连接串语法与现有库不同**：在 §2.1 的连接串矩阵里补一行（scheme + TLS 参数词汇），
    并在 `connection::url_params::append_ssl_params` 里加一条分支——不要拿数据库族去猜。
-3. **注册**：`registry/factory.rs` 的工厂 + `auto_register.rs`（内置驱动发现器），随后 `MetadataService` 自动接上——
-   **不需要改 `database` / `workbench` 一行**（唯一闸门在 `MetadataService`，导航树只认 `NavPath`）。
+
+**注册后的接线自动完成**：`AutoDriverRegistrar`（内置发现器）把工厂放进 `DriverRegistry`，
+`MetadataService` 自动接上——**不需要改 `database` / `workbench` 一行**（唯一闸门在 `MetadataService`，导航树只认 `NavPath`）。
 
 **认证与网络**（SSH 隧道 / SSL / 代理 / 凭据加密）不在驱动里，在 `connection` crate（M3）的协议链上；驱动只拿最终 URL。
 
@@ -235,13 +250,13 @@
 | 3 | ⚪ | **`JdbcDriverDiscovery` 路径依赖 CWD**（`./jdbc-drivers`）+ `~` 不展开 | 空实现，暂无影响 | 随 P3-a（插件路径统一）一起定 |
 | 4 | ⚪ | **`DriverKind` 里 7 个无实现的取值** | 读代码的人容易高估覆盖面 | 保留（前瞻），但**新文档不要再写「支持 JDBC」** |
 | 5 | ⚪ | **DuckDB / SQLite 无 `get_routine_source`** | 无影响（这两库没有存储过程） | 不做 |
-| 6 | 🟡 | **驱动声明两处写**：Rust `DriverDescriptor`（只有 `id` 被读）+ `drivers` 表（界面/链路真读的那份，由迁移 008/013/014/016 手工对齐） | `loader.rs` / `auto_register.rs` 里「加驱动只改一行」的承诺不成立（实际要改 loader + descriptors + 写一条种子迁移）；且两份声明会漂 | 二选一：① 承认表是唯一真相，descriptor 瘦身成 `id()`；② 启动时用 descriptor **幂等 upsert** `drivers` 行，迁移只补列（推荐；需定「种子以代码为准」规则） |
+| 6 | ✅ | ~~**驱动声明两处写**~~（**已处置 2026-09-19**）：权威在代码（`registry/descriptors.rs`）+ 启动幂等 upsert（`driver/declaration.rs`）；迁移种子降为首装兜底 | `loader.rs` 里「加驱动只改一行」的承诺现在成立（descriptors 一处 + loader 一行）；声明不会再与表漂 | 已落地：列归属写进 `declaration.rs` 头注（声明拥有 name/type_id/kind/is_file/port/url_template/version/config_schema/auth/capabilities/属性默认值；库拥有 `enabled` / `download_*` / `driver_files`），新增驱动不再写种子迁移（§6） |
 | 7 | ✅ | ~~**Official 驱动的 TLS 能力边界**~~（**已补齐 2026-09-19**）：新增结构化 `TlsRequest`（`DriverConnectionConfig.tls`）+ 驱动侧构造器——`postgres_native` 支持 CA / PEM 客户端证书 / `verify-ca` / `verify-full`；`mysql_native` 支持 CA / verify 两档，**客户端证书只接受 PKCS#12**（native-tls 后端限制，PEM 两件套报可见错误并引导用 sqlx） | 用户选 Official 驱动也能真要证书；只剩 MySQL 客户端的存档格式限制 | **MySQL 侧已真机验收**：`require` 加密成功 + `verify-full` 如预期失败；**PG 侧卡在端点**（服务端未启 TLS，已诊断）；若 MySQL 官方驱动后续支持 PEM（或换 rustls 后端），把 `mysql_async_ssl_opts` 的分支扩开即可（唯一改动点，有单测钉住） |
 | 8 | ✅ | ~~**`postgres_native` 的 TLS 连接器无条件 `danger_accept_invalid_certs(true)`**~~（**已修 2026-09-19**）：校验策略改为由请求决定（`pg_tls_policy`）——无请求 = 历史行为（不校验），`verify-ca`/`verify-full` = 真校验（链 / 链+主机名） | 「填了 verify 却明文信任」的静默降级被消除 | 历史默认（无请求时不校验）有意保留：改成默认校验会让内网自签用户集体连不上，属产品决策 |
-| 9 | ⚪ | **sqlx 静默忽略未知 URL 参数**（§2.1），而 `driver_properties` 的种子值是**MySQL C-API 名**（`connectTimeout` / `useCompression` / `characterEncoding`…） | 驱动属性页里的这些键**写了也不生效**（不报错、无提示） | 短期：在驱动属性页标注「当前实现仅识别 xxx」；中期：把驱动属性映射到各自库真正认的选项（sqlx 认 `charset` / `socket` / `timezone` 等） |
+| 9 | 🟡→⚪ | **sqlx 静默忽略未知 URL 参数**（§2.1），而 `driver_properties` 的旧种子值是**MySQL C-API 名**（`connectTimeout` / `useCompression` / `characterEncoding`…） | 驱动属性页里的这些键**写了也不生效**（不报错、无提示） | **阶段 1 已做**（2026-09-19）：声明里换成各库真认的键——`mysql` 空（sqlx 默认已是 utf8mb4 / statement cache 100）、`postgres` 与 `postgres_native` 与 `mysql_native` 各只留一条真生效的（`application_name` / `max_allowed_packet`），并有每驱动接受键清单测试（`declaration::tests::declared_property_keys_are_accepted_by_the_client_library`）。**阶段 2 待做**：属性规格化（`key → Url(参数名) \| Builder(工厂翻译) \| Unsupported`），让用户在属性页填的键要么真下发、要么界面就标成不支持 |
 | 10 | ✅ | ~~**导航类型显示硬编码**~~（**已处置 2026-09-19**）：`driver_catalog::DriverMeta` 增 `type_name` / `type_category`（同一次只读扫描带出 `data_source_types`，**不按 `enabled` 过滤**——已保存的连接可能引用已禁用类型）；`nav_view::{nav_type_label, nav_type_short_label}` 改目录优先、内置表降为兜底（新增库族不用改 UI）；属性面板「数据库类型」行也改显目录名（`panels/editor.rs`） | 同一库在对话框 / 导航 / 属性面板三处不再出现两套名字 | **保留**：徽标**形状 + 2 字母**仍为硬编码映射——那是原型 §2.3 的有意设计（「字母是权威识别，形状是冗余强化」），不是遗漏；后续若要接类型目录的 emoji 图标，属产品决策 |
 | 11 | 🟡→⚪ | **`driver` 与 `driver_id` 双列**（global `global_connections` / project `connections`）：两条写入路径写同一个值（驱动 id），而**读路径走的是旧的 `driver`** | 一列一个概念存两份，改一处不知另一处是否也该改 | **已登记待办（需拍板）**：建议分三步收敛——① 读改 `COALESCE(NULLIF(driver_id,''), driver)`（老库兼容，无迁移）；② 新写入只写 `driver_id`；③ 列永不删，文档标 legacy。**字段改名**（`db_type` → `driver_id`）与列收口同批做（v2 无 TS 绑定消费者，属编译器兜底的机械改）；待并发会话落地后再动，避免合并冲突 |
-| 12 | 🟡 | **能力/属性声明的单源未定**（决策 ②/③ 待拍板）：驱动声明现在仍是“Rust `DriverDescriptor` + 迁移种子”两处写，而 UI 只读后者；`driver_properties` 的种子键（MySQL C-API 名 / camelCase）对 sqlx 与 mysql_async **都不生效**（一个静默忽略、一个报未知参数） | 改能力/属性要写迁移；属性 Tab 里改的键实际没下发 | 建议：① 代码声明为准 + 启动幂等 upsert（代码拥有 type_id/name/kind/is_file/port/url_template/version/config_schema/auth/capabilities/属性默认值；库拥有 enabled / download_* / driver_files / 运行期发现的驱动行）；② 属性规格化（`key → Url(参数名) \| Builder(工厂翻译) \| Unsupported`），阶段 1 先对未接线键如实标注 + 每驱动接受键清单测试 |
+| 12 | ✅ | ~~**能力/属性声明的单源未定**~~（**决策 ②/③ 已落地 2026-09-19**）：① 代码声明为准 + 启动幂等 upsert（`driver/declaration.rs`，启动失败仅告警）；② 属性键按各库真认的名字重写（§7 #9）；③ 网络能力键（`ssh_tunnel` / `ssl_tls` / `proxy`）进入能力字典，并由 `supports_*` 布尔位**派生**（不再手写第三份）；④ 能力键 ↔ 运行时位的双向一致由 `capability::tests::declared_capabilities_and_runtime_bits_agree` 直接读代码声明盯住 | 改能力 / 属性只需改 `descriptors.rs`；「声明了但没证据」仍如实展示（`✓` 只给有真机用例的键） | 已落地；剩余待办是 §7 #9 的阶段 2（属性规格化）与「用能力键门控 UI」（当前只展示，不做门控——有意，需产品拍板） |
 
 ---
 
@@ -252,8 +267,9 @@
 | 两层 trait 与结构对象 | `crates/engine/src/driver/traits.rs`（`Database` / `MetadataBrowser` / `NodeInfo` / `ColumnDetail` / `IndexDetail` / `ConstraintDetail` / `NodeDetail`） |
 | 原生驱动 | `crates/engine/src/driver/native/{duckdb,sqlite,mysql,mysql_native,postgres,postgres_native}.rs` |
 | 驱动注册与发现 | `crates/engine/src/driver/{registry/,loader.rs,auto_register.rs,missing_driver.rs}` |
-| 驱动声明（唯一真相源） | `drivers` 表：迁移 `engine/migrations/global/{008,013,014,016}_*.sql`；读侧 `engine::persistence::driver_store` / `driver_catalog` |
-| 能力字典（键 ⇄ 运行时位 ⇄ 验收） | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY` / `MetaBit` / `Acceptance` / `META_BITS_WITHOUT_UI_KEY`）；消费：`connection_dialog::{helpers::capability_rows, render.rs}`、`services::editor_exec::supports_transactions` |
+| 驱动声明（**权威在代码**） | `crates/engine/src/driver/registry/descriptors.rs`（声明）+ `crates/engine/src/driver/declaration.rs`（启动幂等 upsert） |
+| 驱动目录（读模型） | `drivers` 表：读侧 `engine::persistence::{driver_store, driver_catalog}`；表结构与首装兜底种子 `engine/migrations/global/{008,013,014,016,017}_*.sql`（改声明**不要**改这里） |
+| 能力字典（键 ⇄ 运行时位 ⇄ 验收） | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY` 15 键 / `MetaBit` / `Acceptance` / `META_BITS_WITHOUT_UI_KEY`）；消费：`connection_dialog::{helpers::capability_rows, render.rs}`、`services::editor_exec::supports_transactions` |
 | 运行时能力位（按驱动） | `crates/engine/src/driver/traits.rs`（`DataSourceMeta::{mysql, mysql_native, postgres, postgres_native, sqlite, duckdb}`）+ 各驱动 `meta()` |
 | 驱动 id → 数据库族 | `engine::persistence::driver_store::get_type_id`（SQL） · `driver_catalog::type_id_of`（只读入口） |
 | 连接串 scheme 归一 | `connection::url_params::normalize_url_scheme`；建连侧 `engine::driver::factory::{mysql_native_url, postgres_native_url}` |

@@ -3,6 +3,12 @@
 -- 作用：为 drivers 表添加 driver_properties 列，补全 capabilities 和默认驱动属性
 -- 更新时间：2026-05-27
 --
+-- ⚠️ 本迁移的 `capabilities` / `driver_properties` 值已被**代码声明取代**
+--    （`driver/registry/descriptors.rs` + 启动同步 `driver/declaration.rs`）：
+--    `driver_properties` 里那套 camelCase 键（connectTimeout / useCompression / characterEncoding…）
+--    对本仓的客户端库**都不生效**（sqlx 静默忽略，mysql_async / tokio-postgres 会报未知参数），
+--    代码声明里已换成各库真认的键（能力矩阵 §2.1）。此迁移保留为首装兜底，不再维护其值。
+--
 -- 背景：
 --   1. drivers 表缺少 driver_properties 列，前端 DriverPropsTab 无法获取默认属性
 --   2. SQLite 驱动缺少 index_analysis 能力（rusqlite 支持 EXPLAIN QUERY PLAN）

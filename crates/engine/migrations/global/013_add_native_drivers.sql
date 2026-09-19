@@ -3,6 +3,9 @@
 -- 作用：为 drivers 表添加 MySQL 官方原生驱动 (mysql_async) 和 PostgreSQL 官方原生驱动 (tokio-postgres)
 -- 更新时间：2026-05-27
 --
+-- ⚠️ 种子行是**首装兜底**（权威在代码，见 008 文件头的说明）：本迁移的价值是让「首装即有两行」，
+--    列值由启动同步按 `driver/registry/descriptors.rs` 重写。
+--
 -- 背景：
 --   原有 drivers 表只有 4 条记录，均基于 sqlx 驱动实现（迁移 008 已修正 ID 为 Registry key）：
 --     mysql    → 基于 sqlx::MySql

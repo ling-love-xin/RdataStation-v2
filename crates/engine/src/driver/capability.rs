@@ -111,8 +111,8 @@ pub struct CapabilitySpec {
     pub acceptance: Acceptance,
 }
 
-/// 能力字典（与种子 `drivers.capabilities` 的键集合一致；新增键请同时更新各驱动声明）。
-pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 12] = [
+/// 能力字典（与代码里的驱动声明一致；新增键请同时更新各驱动声明）。
+pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 15] = [
     CapabilitySpec {
         key: "tree",
         label: "数据库导航",
@@ -186,6 +186,29 @@ pub const CAPABILITY_DICTIONARY: [CapabilitySpec; 12] = [
     CapabilitySpec {
         key: "resource",
         label: "资源分析",
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    // ↓ 三个**网络能力**键（迁移 017 引入，原来只写在 SQL 里）。
+    // 它们不在描述符里手写：键由网络布尔位**派生**（`DriverDescriptor::capability_keys`）——
+    // `supports_ssh_tunnel` / `supports_ssl` / `supports_http_proxy|supports_socks_proxy`。
+    // 验收：`connection::chain` 的隧道/代理链与 `official_driver_real` 的 TLS 两档是真机路径，
+    // 但「按声明门控 UI」尚未接，按 D10 不标已验收。
+    CapabilitySpec {
+        key: "ssh_tunnel",
+        label: "SSH 隧道",
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "ssl_tls",
+        label: "TLS 加密",
+        meta_bit: None,
+        acceptance: Acceptance::unverified(),
+    },
+    CapabilitySpec {
+        key: "proxy",
+        label: "网络代理",
         meta_bit: None,
         acceptance: Acceptance::unverified(),
     },
@@ -316,100 +339,34 @@ mod tests {
         })
     }
 
-    /// 种子 `drivers.capabilities`（迁移 008 / 013）声明了哪些键——**fixture 镜像**，
-    /// 先用它盯住“库里的声明 ↔ 代码里的能力位”不漂移；
-    /// 决策 ②（代码声明 + 启动 upsert）落地后，这里改成直接读声明本身。
-    const SEED_CAPABILITIES: [(&str, &[&str]); 6] = [
-        (
-            "mysql",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "index_analysis",
-                "sql_autocomplete",
-                "table_editor",
-            ],
-        ),
-        (
-            "mysql_native",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "index_analysis",
-                "sql_autocomplete",
-                "table_editor",
-            ],
-        ),
-        (
-            "postgres",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "index_analysis",
-                "sql_autocomplete",
-                "schema_browser",
-                "table_editor",
-            ],
-        ),
-        (
-            "postgres_native",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "index_analysis",
-                "sql_autocomplete",
-                "schema_browser",
-                "table_editor",
-            ],
-        ),
-        (
-            "sqlite",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "index_analysis",
-                "sql_autocomplete",
-                "table_editor",
-            ],
-        ),
-        (
-            "duckdb",
-            &[
-                "tree",
-                "health_check",
-                "transactions",
-                "sql_autocomplete",
-                "schema_browser",
-                "analytics",
-                "federation",
-                "table_editor",
-            ],
-        ),
-    ];
-
-    /// 种子声明里的键必须在字典里（否则界面只能原样显示内部名）；
-    /// 反向：字典里带键的位，驱动原型为 true 就必须在种子里声明。
+    /// 驱动声明里的能力键（代码：`DriverRegistry::all_descriptors()`）↔ 运行时能力位。
     ///
-    /// 这两个方向合起来才是“能力 Tab 的声明 ↔ 运行时的位”真正对上——
+    /// 两个方向合起来才是「能力 Tab 的声明 ↔ 运行时的位」真正对上——
     /// 真机已经证明同族两个实现会不一样（TLS 能力），
-    /// 所以不能拿“族”将就，必须逐驱动对。
+    /// 所以不能拿「族」将就，必须逐驱动对。
     #[test]
-    fn seed_declarations_and_runtime_bits_agree() {
-        for (driver_id, declared) in SEED_CAPABILITIES {
-            let meta = prototype(driver_id).unwrap_or_else(|| panic!("{driver_id} 缺原型"));
+    fn declared_capabilities_and_runtime_bits_agree() {
+        // 注册表是进程级 OnceLock：测试自己先注册，不依赖别的测试跑过。
+        crate::driver::AutoDriverRegistrar::register_builtin_drivers();
+        let declarations = crate::driver::DriverRegistry::all_descriptors();
+        assert!(
+            declarations.len() >= 6,
+            "内置驱动声明应至少 6 条，实得 {}（内置驱动发现器没注册？）",
+            declarations.len()
+        );
+
+        for d in &declarations {
+            let meta = prototype(&d.id).unwrap_or_else(|| panic!("{} 缺运行时原型", d.id));
+            let declared = d.capability_keys();
 
             // 方向一：声明了键 → 键认识，且若有运行时位则必须为 true
-            for key in declared {
-                let spec = spec(key).unwrap_or_else(|| panic!("{driver_id} 声明了字典外的键 {key}"));
+            for key in &declared {
+                let spec = spec(key).unwrap_or_else(|| panic!("{} 声明了字典外的键 {key}", d.id));
                 if let Some(bit) = spec.meta_bit {
                     assert!(
                         bit.of(&meta),
-                        "{driver_id} 声明了 {}（{bit:?}），但运行时原型为 false——两边必须一致",
+                        "{} 声明了 {}（{bit:?}），但运行时原型为 false——两边必须一致",
+                        d.id,
                         spec.key,
                         bit = bit.key()
                     );
@@ -434,11 +391,43 @@ mod tests {
                     .map(|s| s.key)
                     .expect("有界面键的位必在字典里");
                 assert!(
-                    declared.contains(&key),
-                    "{driver_id} 的运行时位 {bit_key} 为 true，但种子未声明能力键 {key}",
+                    declared.iter().any(|k| k == key),
+                    "{} 的运行时位 {bit_key} 为 true，但声明里没有能力键 {key}",
+                    d.id,
                     bit_key = bit.key()
                 );
             }
         }
+    }
+
+    /// 网络能力键由布尔位**派生**（不是手写第三份）：
+    /// 网络型驱动三个都该有，文件型一个都不该有。
+    #[test]
+    fn network_keys_are_derived_from_the_booleans() {
+        use crate::driver::registry::{duckdb_driver, mysql_driver, sqlite_driver};
+
+        let mysql = mysql_driver().capability_keys();
+        for key in ["ssh_tunnel", "ssl_tls", "proxy"] {
+            assert!(mysql.iter().any(|k| k == key), "mysql 应派生 {key}：{mysql:?}");
+        }
+        for d in [sqlite_driver(), duckdb_driver()] {
+            for key in ["ssh_tunnel", "ssl_tls", "proxy"] {
+                assert!(
+                    !d.capability_keys().iter().any(|k| k == key),
+                    "{} 是文件型，不应有网络能力键 {key}",
+                    d.id
+                );
+            }
+        }
+
+        // 不重复：派生只在显式声明里没有该键时补一次
+        let mut doubled = mysql_driver();
+        doubled.capabilities.push("ssl_tls".to_string());
+        let keys = doubled.capability_keys();
+        assert_eq!(
+            keys.iter().filter(|k| k.as_str() == "ssl_tls").count(),
+            1,
+            "能力键不得重复：{keys:?}"
+        );
     }
 }
