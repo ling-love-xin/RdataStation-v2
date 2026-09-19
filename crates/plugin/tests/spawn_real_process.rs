@@ -145,10 +145,13 @@ async fn a_crash_releases_in_flight_calls_and_leaves_an_exit_code() {
 async fn a_process_that_dies_on_its_own_reports_a_disconnect() {
     let mut process = spawn_fixture("test.fixture.selfexit", &["--exit-ms=150"]).await;
 
-    let event = tokio::time::timeout(Duration::from_secs(10), process.events().recv())
-        .await
-        .expect("应当有事件")
-        .expect("连接结束前不该是 None");
+    let event = tokio::time::timeout(
+        Duration::from_secs(10),
+        process.events().expect("事件流还在").recv(),
+    )
+    .await
+    .expect("应当有事件")
+    .expect("连接结束前不该是 None");
     assert!(
         matches!(event, ConnEvent::Disconnected { .. }),
         "没调用也要发现它死了：{event:?}"

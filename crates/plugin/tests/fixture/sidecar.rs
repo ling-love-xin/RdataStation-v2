@@ -13,6 +13,9 @@
 //!
 //! - `--ignore-eof`：读到 stdin EOF 也不退（用来验证「强杀兜底」这一路）
 //! - `--exit-ms=<n>`：启动 n 毫秒后自行退出，退出码 3（用来验证「没调用也会发现它死了」）
+//! - 请求侧开关：`session.open` 的**连接参数**给 `{"fail": true}`（即 `params.params.fail`）
+//!   会回一个错误（验证「开会话失败要把会话如实撤销」；错误码表里**还没有「连接失败」
+//!   这一码** —— 先用 -32003 顶上）
 //!
 //! # 它故意不做什么
 //!
@@ -121,6 +124,29 @@ fn handle(payload: &[u8]) -> Option<Vec<u8>> {
         )),
         "ping" => Some(reply(id, serde_json::json!({ "pong": true }))),
         "echo" => Some(reply(id, params)),
+        // 会话：**宿主发号，靶子回声**（口径见 dev-plan §4.2.2 附录：一个会话只维护一张 id 表）
+        "session.open" => {
+            // 连接参数在嵌套的那一层（`{session_id, driver_id, params}`），与真实协议同形 ——
+            // 不要图省事读顶层
+            if params
+                .get("params")
+                .and_then(|p| p.get("fail"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                Some(error(id, -32003, "fixture：连接失败（故意）"))
+            } else {
+                Some(reply(
+                    id,
+                    serde_json::json!({
+                        "session_id": params.get("session_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "driver_id": params.get("driver_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "server_version": "fixture-1",
+                    }),
+                ))
+            }
+        }
+        "session.close" => Some(reply(id, serde_json::json!({ "closed": true }))),
         other => Some(
             serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
@@ -137,6 +163,15 @@ fn reply(id: serde_json::Value, result: serde_json::Value) -> Vec<u8> {
         "jsonrpc": "2.0",
         "id": id,
         "result": result,
+    }))
+    .expect("自己拼的 JSON 一定能序列化")
+}
+
+fn error(id: serde_json::Value, code: i32, message: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message },
     }))
     .expect("自己拼的 JSON 一定能序列化")
 }

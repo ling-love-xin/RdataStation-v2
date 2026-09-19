@@ -363,74 +363,113 @@ impl Registry {
             return reject(session_id, RejectReason::NeedsManualRestart);
         }
 
-        // ① 有 Ready 实例 → 按其并发策略决定"直接开"还是"排队"
         let ready: Vec<usize> = indexes
             .iter()
             .copied()
             .filter(|i| self.instances[&(plugin_id.to_string(), *i)].state == ProcessState::Ready)
             .collect();
 
+        // 分流（§4.1 规则 1 两句话合起来读）：
+        //
+        // - **并行**：一条进程能同时服务多会话 → 有就绪实例就共享（挑会话最少的，即文档说的
+        //   “轮询分配”，同数取小序号）。这正是「不是每连接一进程」。
+        // - **串行**：一条进程一次只服务一个会话 → 空着的直接用；都忙但**还有额度**就起新实例
+        //   （「按上限起多实例」）；额度也满了才排队（JDBC 单连接属此类）。
         if !ready.is_empty() {
-            let key = match spec.concurrency {
-                // 并行：挑会话最少的实例（即文档说的"轮询分配"），同数取小序号
-                Concurrency::Parallel => *ready
-                    .iter()
-                    .min_by_key(|i| {
-                        let inst = &self.instances[&(plugin_id.to_string(), **i)];
-                        (inst.session_count(), inst.index)
-                    })
-                    .expect("ready 非空"),
-                // 串行：只有空着的实例能直接开
-                Concurrency::Serial => match ready
-                    .iter()
-                    .find(|i| self.instances[&(plugin_id.to_string(), **i)].session_count() == 0)
-                {
-                    Some(i) => *i,
-                    None => {
-                        // 都忙着 → 排到最短的队
-                        let target = *ready
-                            .iter()
-                            .min_by_key(|i| {
-                                self.instances[&(plugin_id.to_string(), **i)].queue_len()
-                            })
-                            .expect("ready 非空");
-                        return self.enqueue(plugin_id, target, session_id, driver_id, now);
+            match spec.concurrency {
+                Concurrency::Parallel => {
+                    let key = *ready
+                        .iter()
+                        .min_by_key(|i| {
+                            let inst = &self.instances[&(plugin_id.to_string(), **i)];
+                            (inst.session_count(), inst.index)
+                        })
+                        .expect("ready 非空");
+                    self.open_session(plugin_id, driver_id, session_id, key, now);
+                    return Decision::Open {
+                        plugin_id: plugin_id.to_string(),
+                        index: key,
+                        session_id: session_id.to_string(),
+                    };
+                }
+                Concurrency::Serial => {
+                    if let Some(key) = ready
+                        .iter()
+                        .copied()
+                        .find(|i| self.instances[&(plugin_id.to_string(), *i)].session_count() == 0)
+                    {
+                        self.open_session(plugin_id, driver_id, session_id, key, now);
+                        return Decision::Open {
+                            plugin_id: plugin_id.to_string(),
+                            index: key,
+                            session_id: session_id.to_string(),
+                        };
                     }
-                },
-            };
-
-            self.open_session(plugin_id, driver_id, session_id, key, now);
-            return Decision::Open {
-                plugin_id: plugin_id.to_string(),
-                index: key,
-                session_id: session_id.to_string(),
-            };
+                    // 都忙着：还有额度就起一个，额度也满了才排队
+                    if let Some(index) = self.spare_index(plugin_id, &spec, &indexes, now) {
+                        return self
+                            .queue_for_new_instance(plugin_id, index, session_id, driver_id);
+                    }
+                    let target = *ready
+                        .iter()
+                        .min_by_key(|i| self.instances[&(plugin_id.to_string(), **i)].queue_len())
+                        .expect("ready 非空");
+                    return self.enqueue(plugin_id, target, session_id, driver_id, now);
+                }
+            }
         }
 
-        // ② 没有 Ready 实例：还有额度就起一个
-        if indexes.len() < spec.max_instances {
-            let index = (0..spec.max_instances)
-                .find(|i| !indexes.contains(i))
-                .unwrap_or(indexes.len());
-            let mut inst = ProcessInstance::new(plugin_id, index, now);
-            inst.queue.push_back(QueuedSession {
-                session_id: session_id.to_string(),
-                driver_id: driver_id.to_string(),
-            });
-            self.instances.insert((plugin_id.to_string(), index), inst);
-            return Decision::Spawn {
-                plugin_id: plugin_id.to_string(),
-                index,
-                session_id: session_id.to_string(),
-            };
+        // 没有就绪实例（一个都没有 / 都在启动中）：有额度就起，否则排到最短的队
+        if let Some(index) = self.spare_index(plugin_id, &spec, &indexes, now) {
+            return self.queue_for_new_instance(plugin_id, index, session_id, driver_id);
         }
-
-        // ③ 额度用尽且都在启动中 → 排到最短的队（等 on_process_ready 放行）
         let target = *indexes
             .iter()
             .min_by_key(|i| self.instances[&(plugin_id.to_string(), **i)].queue_len())
             .expect("indexes 非空");
         self.enqueue(plugin_id, target, session_id, driver_id, now)
+    }
+
+    /// 还有额度就给出一个新的实例序号（并把实例建起来）；`None` = 额度用尽。
+    fn spare_index(
+        &mut self,
+        plugin_id: &str,
+        spec: &ProcessSpec,
+        indexes: &[usize],
+        now: Instant,
+    ) -> Option<usize> {
+        if indexes.len() >= spec.max_instances {
+            return None;
+        }
+        let index = (0..spec.max_instances)
+            .find(|i| !indexes.contains(i))
+            .unwrap_or(indexes.len());
+        self.instances.insert(
+            (plugin_id.to_string(), index),
+            ProcessInstance::new(plugin_id, index, now),
+        );
+        Some(index)
+    }
+
+    /// 把会话挂到**刚建好、还没就绪**的实例上排队；I/O 层起完进程后会 `on_process_ready` 放行它。
+    fn queue_for_new_instance(
+        &mut self,
+        plugin_id: &str,
+        index: usize,
+        session_id: &str,
+        driver_id: &str,
+    ) -> Decision {
+        let key = (plugin_id.to_string(), index);
+        let inst = self.instances.get_mut(&key).expect("刚建的实例应当在");
+        inst.queue.push_back(QueuedSession {
+            session_id: session_id.to_string(),
+            driver_id: driver_id.to_string(),
+        });
+        Decision::Spawn {
+            plugin_id: plugin_id.to_string(),
+            index,
+            session_id: session_id.to_string(),
+        }
     }
 
     fn indexes_of(&self, plugin_id: &str) -> Vec<usize> {
@@ -793,6 +832,38 @@ mod tests {
         }
         assert_eq!(r.instances_of("oracle-jdbc").len(), 1);
         assert_eq!(r.session_count(), 4);
+    }
+
+    /// 串行 + 还有额度：第二个会话**起新实例**，而不是排进第一个实例的队。
+    ///
+    /// 这是规则 1 的「需要并行时按上限起多实例」：`max_instances` 不是摆设，
+    /// 否则设成 2 与设成 1 毫无区别。
+    #[test]
+    fn serial_with_spare_capacity_spawns_a_second_instance() {
+        let now = t0();
+        let mut r = registry(ProcessSpec::new(["oracle-jdbc"], 2, Concurrency::Serial));
+        arrange_ready(&mut r, 0, 1, now);
+
+        let d1 = r.acquire("oracle-jdbc", "oracle-jdbc", "s1", now);
+        assert!(matches!(d1, Decision::Open { index: 0, .. }), "{d1:?}");
+
+        let d2 = r.acquire("oracle-jdbc", "oracle-jdbc", "s2", now);
+        assert!(
+            matches!(d2, Decision::Spawn { index: 1, .. }),
+            "还有额度就该起第二个实例：{d2:?}"
+        );
+
+        // 第二个实例就绪 → s2 在它上面开（不是回到实例 0）
+        let opened = r.on_process_ready("oracle-jdbc", 1, Some(2), now);
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(r.session("s2").map(|s| s.index), Some(1));
+
+        // 额度用尽：现在才排队
+        let d3 = r.acquire("oracle-jdbc", "oracle-jdbc", "s3", now);
+        assert!(
+            matches!(d3, Decision::Queued { .. }),
+            "上限到了才排队：{d3:?}"
+        );
     }
 
     /// 规则 3：`serial` 时第二个会话排队，释放后放行。

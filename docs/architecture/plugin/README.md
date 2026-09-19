@@ -67,6 +67,8 @@
 | `sidecar/lifecycle.rs` | ✅ **P1 决策内核已落地**（sans-io，零 I/O）：三层对象模型 `PluginProcess → DriverInstance → Session` 的规则全部在此 —— 进程按 plugin_id 去重、`max_instances`、serial 排队与 `QUEUE_MAX_LEN`、ping 连续 2 次判死、空闲 30min 回收、崩溃**不静默重连**（需手动重启）；排队项**连 driver 一起记**（多 driver 插件放行时才知道该开哪个）；`RejectReason` 有可读文案；17 条单测逐条对应 §4.1 五条规则 |
 | `sidecar/conn.rs` | ✅ **P1 异步客户端已落地**：`SidecarConn::spawn(reader, writer)` 起三个任务（调用方 / driver / 读侧）；**在飞状态只有一份**（Router + id→oneshot 都在 driver 任务）；`call` 带超时且超时后显式 `Abandon`（迟到响应会报成 Issue）；`initialize` 内置版本闸；`shutdown` 只发命令（真正的回收靠“丢写侧 → 对端 EOF 自退”）；11 条单测 |
 | `sidecar/process.rs` | ✅ **P1 进程层已落地**：`SpawnSpec`（程序 / 参数 / 环境 / `current_dir` / 日志，目录一律来自 `paths::*`）+ `SidecarProcess::spawn`（三管道接入 `SidecarConn`，stderr 落 `plugin-cache/<id>/sidecar.log`）+ `retire(grace)`（**先丢连接关 stdin → 对端见 EOF 自退 → 到点强杀**）；id 先过 `validate_plugin_id` 再建目录；4 条单测 |
+| `sidecar/supervisor.rs` | ✅ **P1 运行时接线已落地**：`Deployment`（清单 → 进程规格 + 命令）+ `SidecarSupervisor` —— 执行决策内核的动作（起 / 收 / 心跳 / 空闲回收）、把 `Decision::Open` 兑现成真的 `session.open`、把崩溃 / 判死 / 通知如实转成宿主事件。**事件落地是显式的**（`drain_events`，不在后台任务里碰 registry，免得给所有状态套锁）；旧代连接的遗留事件按 generation 丢弃（否则重启后新实例会被旧断开误伤）；起不来会告诉内核（不留僵尸 `Starting`）；9 条单测 |
+| `tests/supervisor_real_process.rs` | ✅ **P1 真进程端到端**（靶子同上）：开会话过进程边界 / 串行排队与自动放行 / 放行失败如实作废且不卡住实例 / 崩溃要求人工重启 / 心跳判死 / 空闲回收后旧事件不误伤新实例 / 起不来不留僵尸 `Starting` / 收摊全部作废；8 条集成测试 |
 | `tests/spawn_real_process.rs` + `tests/fixture/sidecar.rs` | ✅ **P1 真实进程验收的自动化部分**：`[[bin]] rds-sidecar-fixture` 是**独立的**帧编解码对端（两侧不共用实现，见 `dev-plan` §6.1）；8 条集成测试覆盖「起进程 → 握手 → 调用 → 收摊」、超时不断连、崩溃交还在飞调用并给出退出码、**没调用也能发现它死了**、不守 EOF 约定时强杀、stderr 落盘 |
 | `sidecar/{health_checker,hot_reload_manager}.rs` | **0 字节**空文件（P1 健康检查会落在这里） |
 | ~~`sidecar/driver.rs`~~（311 行） | ✅ **P0 删除**：未编译过，且传输假设（HTTP/单端口/JSON 行）与 D5/D4 相反 → 驱动桥 **P1 新建** |
@@ -114,6 +116,6 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-**P1 进行中**：六块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收 / `manifest.rs` 的 `[backend]` 段，P1 共 72 条新单测）+ 真实进程验收的自动化部分（`tests/fixture/` 靶子，8 条集成测试）。
-接着要做的：把决策内核接到 I/O（`Registry → Action` 执行器）· RPC 方法表（`session.open` / `query.execute` / `query.cancel` …）· 拿 PostgreSQL 包一层 sidecar 做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
+**P1 进行中**：七块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收 / `manifest.rs` 的 `[backend]` 段 / `sidecar/supervisor.rs` 运行时接线，P1 共 82 条新单测 + 16 条真进程集成测试）。
+接着要做的：驱动桥的 RPC 方法表（`driver.describe` / `session.open` / `query.execute` / `query.cancel` / `meta.*`，落 `sidecar/driver.rs`）· 拿 PostgreSQL 包一层 sidecar 做靶子（3000 行 Arrow 到宿主）· 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。

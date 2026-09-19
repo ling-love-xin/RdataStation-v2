@@ -82,6 +82,16 @@ impl SpawnSpec {
         self
     }
 
+    /// 批量追加参数（清单 `[backend]` 解析出来的那份）。
+    pub fn args<I>(mut self, args: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
     /// 追加一个环境变量（后写的覆盖先写的，也覆盖继承来的同名变量）。
     pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
@@ -306,7 +316,8 @@ impl Drop for SidecarChild {
 /// 连接 + 进程：sidecar 在宿主侧的全部样子。
 pub struct SidecarProcess {
     conn: SidecarConn,
-    events: ConnEvents,
+    /// 事件流；被 [`SidecarProcess::take_events`] 取走后就是 `None`（每连接只能有一个消费者）。
+    events: Option<ConnEvents>,
     child: SidecarChild,
 }
 
@@ -363,7 +374,7 @@ impl SidecarProcess {
 
         Ok(Self {
             conn,
-            events,
+            events: Some(events),
             child: SidecarChild {
                 plugin_id: spec.plugin_id,
                 index: spec.index,
@@ -379,8 +390,16 @@ impl SidecarProcess {
     }
 
     /// 连接上的异步事件（通知 / 错位 / 断开）。
-    pub fn events(&mut self) -> &mut ConnEvents {
-        &mut self.events
+    pub fn events(&mut self) -> Option<&mut ConnEvents> {
+        self.events.as_mut()
+    }
+
+    /// 把事件流**取走**（`Option` 化的原因：每连接只能有一个消费者）。
+    ///
+    /// 上层（如 supervisor 的事件泵）需要在一个独立任务里持续消费它，
+    /// 而不是每次调用方自己记着去轮询。
+    pub fn take_events(&mut self) -> Option<ConnEvents> {
+        self.events.take()
     }
 
     pub fn child(&mut self) -> &mut SidecarChild {

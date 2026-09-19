@@ -15,6 +15,7 @@ pub mod manager;
 pub mod process;
 pub mod proto;
 pub mod router;
+pub mod supervisor;
 
 use serde::{Deserialize, Serialize};
 
