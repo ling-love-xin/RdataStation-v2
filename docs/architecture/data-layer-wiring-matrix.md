@@ -240,11 +240,11 @@ editor_exec / insight / result_service → SqlService（services）→ Connectio
 | --- | --- | --- | --- | --- |
 | 1 | ⚪ | ~~`dbi` 层 2100 行死代码~~ + ~~扩展清单三套~~ | —— | ✅ **已处置（2026-09-19）**：`dbi/` 与 `duckdb/extensions.rs` 删除，`file_reader` 摘出，清单收敛到 `accel.rs` |
 | 2 | ⚪ | ~~L1 的 `indexes` / `constraints` / `data_source_meta` / `routine_source` 四组零调用~~ | —— | ✅ **已处置（2026-09-19）**：四组方法连同 key 变体一并删除 |
-| 3 | 🟡 | `persistence` 的 v1 旧接口（`metadata` 单表那批）与 V7 同步那批零调用 | 表面积虚高（约 150 个公开项待分类） | 下一批：逐项判「删 / 留 / 接线」，同样先出清单再动手 |
+| 3 | ⚪ | ~~`persistence` 的 v1 旧接口与 V7 同步那批零调用~~ | —— | ✅ **已处置（2026-09-19）**：见 §6.2，单文件净减 1636 行 |
 | 4 | 🟡 | `duckdb/plugin.rs`（`PluginManager` / `PluginConnection` / `PluginPermissionLevel`）同样只被自己的测试用 | 与刚删的两处同类 | 判断与前两处不同：它是 M9 插件（三期）的接口预演，**删了要重设计**。建议：要么标注「未接线，M9 立项时重审」，要么随 M9 一并处置——**别当成现成能力用** |
 | 5 | ⚪ | `federation/legacy.rs` 的 `FederationManager` 同为零调用 | 已在其模块文档记为待退役 | 维持原计划：`session.rs` 覆盖四类源后一并退役（不静默删） |
-| 6 | ⚪ | `routine_parameters` 只有读侧接进 `list_routines`，写侧无人调 | 例程参数永不落盘（读时为空 vec） | 属性面板若要显示参数签名，接线时补上写侧 |
-| 7 | ⚪ | 缓存写侧用 `let _ =` 吞错（与 `put_objects` / `put_columns` 同一口径） | 写失败只表现为「下次仍回源」，无日志 | 批量加 `tracing::warn!`（本仓已有日志模块） |
+| 6 | ⚪ | `routine_parameters` 只有读侧接进 `list_routines`，写侧无人调 | 例程参数永不落盘（读时为空 vec） | 属性面板若要显示参数签名，接线时补上写侧。**注**：驱动层当前**没有**提供参数的接口（`MetadataBrowser` 只有 `get_table_detail` 带列），所以这不是「接线」而是「新增能力」——等属性面板真要展示签名时再做 |
+| 7 | ⚪ | ~~缓存写侧用 `let _ =` 吞错~~ | —— | ✅ **已处置（2026-09-19）**：`NavCache` 的六处写侧（schema / 对象 / 视图 / 列 / 例程 / 序列 / 触发器）全改为 `tracing::warn!` 留痕（与既有的 `prune_schema` / `rebuild_index` 同一风格） |
 
 ---
 

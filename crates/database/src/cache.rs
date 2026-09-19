@@ -105,7 +105,9 @@ impl NavCache {
     /// 回写 schema 名（须先于对象写入，后续按名取 `schema_id`）。
     pub fn put_schemas(&self, catalog: &str, names: &[String]) {
         for name in names {
-            let _ = self.ops.save_schema(catalog, name, None, None);
+            if let Err(e) = self.ops.save_schema(catalog, name, None, None) {
+                tracing::warn!(schema = %name, error = %e, "schema 写入缓存失败（下次展开会回源库）");
+            }
         }
     }
 
@@ -263,7 +265,7 @@ impl NavCache {
             } else {
                 TABLE_TYPE_BASE
             };
-            if let Ok(table_id) = self.ops.save_table(
+            match self.ops.save_table(
                 schema_id,
                 &obj.name,
                 table_type,
@@ -271,9 +273,22 @@ impl NavCache {
                 None,
                 None,
             ) {
-                if is_view {
-                    let _ = self.ops.save_view(table_id, "", None, None);
+                Ok(table_id) => {
+                    if is_view {
+                        if let Err(e) = self.ops.save_view(table_id, "", None, None) {
+                            tracing::warn!(
+                                object = %obj.name,
+                                error = %e,
+                                "视图定义写入缓存失败（下次展开会回源库）"
+                            );
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    object = %obj.name,
+                    error = %e,
+                    "对象写入缓存失败（下次展开会回源库）"
+                ),
             }
         }
     }
@@ -312,7 +327,7 @@ impl NavCache {
             // 第 7 个参数是 `is_identity`（自增标识），不是 `is_unique`：
             // `columns` 表没有唯一性列（唯一性由 `indexes` 表达），而 `ColumnDetail`
             // 也不携带自增信息，所以保守写 false——主键走 `is_primary`，两者互不佑替。
-            let _ = self.ops.save_column(
+            if let Err(e) = self.ops.save_column(
                 table_id,
                 &col.name,
                 &col.data_type,
@@ -322,7 +337,14 @@ impl NavCache {
                 false,
                 col.default_value.as_deref(),
                 col.comment.as_deref(),
-            );
+            ) {
+                tracing::warn!(
+                    table,
+                    column = %col.name,
+                    error = %e,
+                    "列写入缓存失败（下次展开会回源库）"
+                );
+            }
         }
     }
 
@@ -358,7 +380,7 @@ impl NavCache {
     /// 「先查后增量更新」，否则展开一次例程文件夹就会把定义抹掉。
     pub fn put_routines(&self, schema_id: i64, routines: &[NodeInfo]) {
         for r in routines {
-            let _ = self.ops.save_routine(
+            if let Err(e) = self.ops.save_routine(
                 schema_id,
                 &r.name,
                 routine_type_str(&r.kind),
@@ -367,7 +389,13 @@ impl NavCache {
                 None,
                 None,
                 r.comment.as_deref(),
-            );
+            ) {
+                tracing::warn!(
+                    routine = %r.name,
+                    error = %e,
+                    "例程写入缓存失败（下次展开会回源库）"
+                );
+            }
         }
     }
 
@@ -388,7 +416,9 @@ impl NavCache {
     /// 回写某 schema 的序列（只登记名字）。
     pub fn put_sequences(&self, schema_id: i64, sequences: &[NodeInfo]) {
         for s in sequences {
-            let _ = self.ops.save_sequence_name(schema_id, &s.name);
+            if let Err(e) = self.ops.save_sequence_name(schema_id, &s.name) {
+                tracing::warn!(sequence = %s.name, error = %e, "序列写入缓存失败（下次展开会回源库）");
+            }
         }
     }
 
@@ -419,7 +449,14 @@ impl NavCache {
             let Some(table) = t.parent_name.as_deref().filter(|p| !p.is_empty()) else {
                 continue;
             };
-            let _ = self.ops.save_trigger_for_table(schema_id, table, &t.name);
+            if let Err(e) = self.ops.save_trigger_for_table(schema_id, table, &t.name) {
+                tracing::warn!(
+                    trigger = %t.name,
+                    table,
+                    error = %e,
+                    "触发器写入缓存失败（下次展开会回源库）"
+                );
+            }
         }
     }
 }
