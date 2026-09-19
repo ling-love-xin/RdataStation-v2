@@ -629,7 +629,7 @@ flowchart LR
 | `global_connections` | global | `id`(G_)、`name`、`db_type`、`driver_id`、`url`、`username`、`password_encrypted`、`scope` 相关、`tags`、`advanced_options`、`driver_properties`、`use_duckdb_fed`、`metadata_path` | 连接定义（全局） |
 | `connections` | project | 同上（P_/GP_） | 连接定义（项目侧） |
 | `data_source_types` | global | `id`、`name`、`category`、`icon`、`enabled` | 侧栏类型目录（icon 为 emoji，如 🐬 / 🐘）；查询只取 `enabled = 1`（禁用类型不上类型树） |
-| `drivers` | global | `id`、`type_id`、`name`、`driver_kind`、`is_file`、`default_port`、`url_template`、`config_schema`、`capabilities`、`driver_properties`、`enabled` | 驱动目录（**种子仅 4 个**：mysql / postgres / sqlite / duckdb；无可用驱动的类型在类型树上置灰不可选，见 §14 #1） |
+| `drivers` | global | `id`、`type_id`、`name`、`driver_kind`、`is_file`、`default_port`、`url_template`、`config_schema`、`capabilities`、`driver_properties`、`enabled` | 驱动目录（**种子 6 个实现 / 4 种数据库**：`mysql`(sqlx) / `mysql_native`(Official) / `postgres`(sqlx) / `postgres_native`(Official) / `sqlite` / `duckdb`；无可用驱动的类型在类型树上置灰不可选，见 §14 #1） |
 | `auth_configs` | global | `id`、`name`、`auth_type`、`auth_data`(AES) | 认证引用 |
 | `network_configs` | global | `id`、`name`、`method`、`chain`(JSON)、`capabilities` | 网络引用（协议链） |
 | `environments` | global | `id`、`name`、`policies`(JSON) | 环境 + 策略 |
@@ -821,7 +821,7 @@ flowchart LR
 
 | # | 关闭方式 | 验证 |
 | --- | --- | --- |
-| 1（🔴） | **无驱动类型不可选**：类型树对无可用驱动的类型置灰并右标「暂无驱动」，`select_type` 拒绝切换并在结果行给出原因（内置四个驱动，其余类型待驱动插件） | `connection_type_driver.rs::type_without_enabled_driver_is_refused` + `helpers.rs::type_has_driver_requires_enabled_driver` |
+| 1（🔴） | **无驱动类型不可选**：类型树对无可用驱动的类型置灰并右标「暂无驱动」，`select_type` 拒绝切换并在结果行给出原因（内置 6 个实现 / 4 种数据库，其余类型待驱动插件） | `connection_type_driver.rs::type_without_enabled_driver_is_refused` + `helpers.rs::type_has_driver_requires_enabled_driver` |
 | 2（🟡） | **类型目录按 `enabled` 过滤**：`driver_store::get_data_source_types` 加 `WHERE enabled = 1`（与其文档语义一致） | 全工作区测试（engine 228 / workbench 81）无回归 |
 | 3（🟡） | **项目下拉补「打开现有目录…」**：动作项顺序 = 「打开现有目录…」→ 末项「＋ 新增项目」（保持末项约定）；宿主置位 `project_open_request` → `project::ui::open_folder_dialog` | `connection_project_picker.rs`（5 项，含 `confirm_open_folder_requests_folder_dialog`） |
 | 5（🟡） | **GP_ 快照同步**：新增 `DataSourceService::sync_snapshot_from_global(snapshot_id, project_path)`（配置 + 凭据密文一并复制；保留 ID / 创建时间 / 分组）+ 对话框 footer「从全局定义同步」（仅编辑 GP_ 时显示） | `data_source_lifecycle.rs::snapshot_sync_pulls_latest_global_definition`（含错误路径：非快照 ID / 缺项目路径 / 全局定义已删） |
@@ -858,7 +858,7 @@ flowchart LR
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| 1 | 🔴 | ~~驱动目录只内置 4 个~~（**已关闭**：无驱动类型置灰不可选 + 结果行说明；驱动插件机制仍待平台排期） | 选中不可用类型会被拒绝；用户能在类型树直接看到「暂无驱动」 | 中期：接驱动安装（plugin）机制 |
+| 1 | 🔴 | ~~驱动目录只内置 4 种库的实现~~（**已关闭**：无驱动类型置灰不可选 + 结果行说明；驱动插件机制仍待平台排期。**注**：实际种子为 6 个实现 / 4 种数据库——MySQL·PostgreSQL 各有 sqlx 与 Official 两个实现） | 选中不可用类型会被拒绝；用户能在类型树直接看到「暂无驱动」 | 中期：接驱动安装（plugin）机制 |
 | 2 | 🟡 | ~~类型树不按 `enabled` 过滤~~（**已关闭**） | — | — |
 | 3 | 🟡 | ~~项目下拉无「打开现有目录」~~（**已关闭**） | — | — |
 | 4 | 🟡→✅ | ~~「＋ 新增项目」/「打开现有目录…」在编辑区**有脏草稿**时走「先关闭当前项目 → 回选择器」~~（**已关闭**：`PendingAction::{CreateProject,OpenFolder}`，确认后直接打开目标对话框，见决策 #90） | — | — |

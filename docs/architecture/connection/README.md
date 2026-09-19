@@ -1,5 +1,7 @@
 # 数据源连接模块（M3）· 模块入口
 
+> **宣传页（一页看懂）**：[`connection-showcase.html`](connection-showcase.html)（视觉版，明暗双主题、离线可开，首屏可点着切四种数据库类型看表单 / Tab 联动）· [`connection-showcase.md`](connection-showcase.md)（可贴版，适合贴进 PR / wiki）
+>
 > **一句话**：把「一个数据源该怎么连」这件事做完整、做诚实——从选类型/驱动、填连接信息、引用凭据与网络档案，到测试连接、落库、运行时连接，全程一个对话框 + 一个服务层。
 >
 > 本文只提炼**特点 / 边界 / 硬约束 / 地图**；细节一律指向下方五份文档（本目录内），**不复制设计**。
@@ -116,6 +118,7 @@ cargo check --workspace --all-targets -j 2
 
 | 文档 | 什么时候读它 |
 | --- | --- |
+| `connection-showcase.html` / `connection-showcase.md` | **宣传页（一页看懂）**：特点 / 流程 / 架构 / 质量证据一页扫完；改了实现请顺手核对页里的数字与「边界」段（两版章节一一对应） |
 | `connection-user-guide.md` | **怎么用**：入口 / 导览 / 典型流程 / FAQ 排查 / USIT 清单 |
 | `connection-prototype-design.md` | **长什么样**：布局 / 五 Tab / 交互 / 主题映射（视觉权威） |
 | `connection-dialog-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型 / 数据流 / 90+ 条决策 / 测试策略 / 数据字典 / 降级矩阵 / **§14 待办（权威）** / **§15 零造数据审计** |

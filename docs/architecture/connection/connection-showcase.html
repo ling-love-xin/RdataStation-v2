@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 数据源连接 · 一页看懂</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0; --card:#FFFFFF;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --track:#E7E7E7; --code-bg:#FAFAFA; --float:#FFFFFF;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  --shadow-sm:0 1px 2px rgba(20,20,30,.06);
+  --glow:0 10px 30px rgba(194,91,70,.18);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E; --card:#1E1E1E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --track:#3C3C3C; --code-bg:#191919; --float:#252526;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --glow:0 10px 30px rgba(232,132,111,.16);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+  background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;padding:24px 20px 44px;
+}
+a{color:var(--primary);text-decoration:none;}
+a:hover{text-decoration:underline;}
+code,.mono{font-family:Consolas,'SFMono-Regular','Cascadia Mono',monospace;font-size:.92em;}
+.wrap{max-width:1160px;margin:0 auto;}
+
+/* ── 页头 ── */
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px;padding:0 4px;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:13px;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:1px;}
+.head-actions{display:flex;gap:8px;align-items:center;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:var(--shadow-sm);transition:all .15s;font-family:inherit;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 吸顶导航（滚动高亮） ── */
+.nav{position:sticky;top:10px;z-index:30;display:flex;gap:6px;overflow-x:auto;padding:7px 9px;margin-bottom:16px;
+  border:1px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);box-shadow:var(--shadow-sm);scrollbar-width:none;}
+.nav::-webkit-scrollbar{display:none;}
+.nav a{white-space:nowrap;font-size:12px;border:1px solid transparent;border-radius:999px;padding:3px 11px;color:var(--muted);transition:all .15s;}
+.nav a:hover{color:var(--primary);background:var(--hover);text-decoration:none;}
+.nav a.on{color:var(--primary);border-color:var(--active-border);background:var(--sidebar);font-weight:600;}
+
+/* ── 英雄区 ── */
+.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--bg);box-shadow:var(--shadow);padding:30px 30px 26px;margin-bottom:18px;}
+.hero::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,#F5A188,#C25B46 45%,#8E4A3A);}
+.hero::after{content:"";position:absolute;right:-140px;top:-160px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(194,91,70,.15),transparent 68%);pointer-events:none;}
+.hero-grid{position:relative;display:grid;grid-template-columns:1fr;gap:22px;align-items:start;}
+@media(min-width:1000px){.hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);gap:26px;}}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:14px;}
+.eyebrow b{color:var(--primary);font-weight:600;}
+.hero h2{font-size:31px;line-height:1.32;font-weight:700;letter-spacing:.3px;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.hero .lead{margin-top:12px;font-size:14.5px;opacity:.94;}
+.hero .lead .dim{color:var(--muted);}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;}
+.chip{font-size:11.5px;border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:2px 10px;color:var(--fg);}
+.chip.hot{border-color:var(--active-border);color:var(--primary);box-shadow:var(--glow);}
+.cta{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;}
+.cta a{font-size:12.5px;border-radius:9px;padding:8px 16px;border:1px solid var(--border);background:var(--card);box-shadow:var(--shadow-sm);transition:all .15s;}
+.cta a.pri{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.cta a:hover{border-color:var(--primary);color:var(--primary);text-decoration:none;transform:translateY(-1px);}
+.cta a.pri:hover{color:var(--primary-fg);background:var(--primary-hover);}
+
+/* ── 应用窗口线框（英雄区右）：这里是「新建数据源连接」对话框 ── */
+.win{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.win .tbar{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:var(--titlebar);font-size:11.5px;color:var(--muted);}
+.win .tbar .mark{width:16px;height:16px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.win .tbar .tname{color:var(--fg);font-weight:600;}
+.win .tbar .wbtns{margin-left:auto;display:flex;gap:10px;color:var(--muted);font-size:11px;}
+.win .demo{display:flex;align-items:center;gap:6px;padding:6px 9px;background:var(--sidebar);border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:11px;flex-wrap:wrap;}
+.win .demo .lb{color:var(--muted);}
+.win .demo .mbtn{font-size:11px;border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:999px;padding:1px 12px;cursor:pointer;font-family:inherit;}
+.win .demo .mbtn.on{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.win .demo .tip{margin-left:auto;font-size:10.5px;color:var(--muted);}
+.win .dbody{display:grid;grid-template-columns:186px 1fr;min-height:352px;}
+.win .dside{background:var(--sidebar);border-right:1px solid var(--border);padding:8px 9px;font-size:11px;}
+.win .dside .srch{border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:2px 8px;color:var(--muted);margin-bottom:8px;}
+.win .dside .lb{font-size:10.5px;font-weight:700;color:var(--muted);display:flex;align-items:center;justify-content:space-between;margin:2px 0 4px;}
+.win .dside .lb span{color:var(--primary);font-weight:600;}
+.win .dside .box{border:1px solid var(--border);border-radius:7px;background:var(--card);padding:4px;margin-bottom:9px;}
+.win .dside .box.scroll{height:74px;overflow:hidden;}
+.win .dside .box.tree{height:150px;overflow:hidden;}
+.win .dside .it{display:flex;align-items:center;gap:6px;padding:2px 6px;border-radius:5px;color:var(--fg);}
+.win .dside .it .em{width:15px;height:15px;border-radius:4px;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:9px;background:var(--bg);flex:none;}
+.win .dside .it .code{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:0 4px;}
+.win .dside .it.on{background:var(--accent);box-shadow:inset 2px 0 0 var(--primary);font-weight:600;}
+.win .dside .it.off{color:var(--muted);}
+.win .dside .it.off .tail{margin-left:auto;font-size:9px;color:var(--muted);}
+.win .dside .cat{font-size:9.5px;color:var(--muted);padding:3px 6px 1px;letter-spacing:.4px;}
+.win .dmain{display:flex;flex-direction:column;}
+.win .hrow{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:11px;border-bottom:1px solid var(--sidebar-border);flex-wrap:wrap;}
+.win .hrow:last-of-type{border-bottom:1px solid var(--border);}
+.win .hrow .lab{width:26px;color:var(--muted);flex:none;}
+.win .badge{width:19px;height:19px;border-radius:5px;border:1px solid var(--input-border);background:var(--bg);display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;flex:none;}
+.win .inp{flex:1;min-width:60px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:2px 7px;color:var(--fg);font-size:11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.win .inp.ph{color:var(--muted);}
+.win .inp.dis{color:var(--muted);background:var(--sidebar);}
+.win .sel{border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:2px 7px;font-size:11px;display:inline-flex;align-items:center;gap:6px;}
+.win .sel .che{color:var(--muted);font-size:9px;}
+.win .sel .tag{margin-left:auto;font-size:10px;color:var(--muted);}
+.win .seg3{display:inline-flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;background:var(--sidebar);}
+.win .seg3 button{border:none;background:transparent;color:var(--muted);font-size:10.5px;padding:1px 9px;cursor:pointer;font-family:inherit;}
+.win .seg3 button.on{background:var(--bg);color:var(--fg);font-weight:600;box-shadow:var(--shadow-sm);}
+.win .tabs{display:flex;align-items:center;gap:12px;padding:5px 10px;background:var(--tabbar);border-bottom:1px solid var(--border);font-size:11.5px;}
+.win .tabs .on{font-weight:600;position:relative;color:var(--fg);}
+.win .tabs .on::after{content:"";position:absolute;left:0;right:0;bottom:-6px;height:2px;background:var(--primary);}
+.win .tabs .off{color:var(--muted);}
+.win .tabs .hide{display:none;}
+.win .form{padding:9px 10px;flex:1;}
+.win .form .gtitle{font-size:10.5px;font-weight:700;color:var(--muted);margin:2px 0 5px;}
+.win .form .gbox{border:1px solid var(--border);border-radius:8px;background:var(--code-bg);padding:7px 9px;margin-bottom:8px;}
+.win .form .frow{display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:5px;}
+.win .form .frow:last-child{margin-bottom:0;}
+.win .form .frow .flab{width:52px;color:var(--muted);flex:none;}
+.win .form .frow .ctl{flex:1;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:2px 7px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.win .form .frow .ctl.dis{color:var(--muted);background:var(--sidebar);}
+.win .form .frow .btn{border:1px solid var(--border);border-radius:6px;background:var(--bg);padding:1px 7px;font-size:10.5px;color:var(--fg);}
+.win .form .hint{font-size:10.5px;color:var(--muted);padding-left:60px;line-height:1.5;}
+.win .form .pane{display:none;}
+.win .form .pane.on{display:block;}
+.win .res{display:flex;align-items:center;gap:8px;padding:4px 10px;font-size:11px;border-top:1px solid var(--border);background:var(--bg);color:var(--muted);}
+.win .res .lv{color:var(--success);font-weight:600;}
+.win .foot2{display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:6px 10px;border-top:1px solid var(--border);background:var(--sidebar);font-size:11px;}
+.win .foot2 .b1{border:1px solid var(--border);border-radius:6px;background:var(--bg);padding:2px 10px;color:var(--fg);}
+.win .foot2 .b2{border:1px solid var(--primary);border-radius:6px;background:var(--primary);color:var(--primary-fg);padding:2px 10px;font-weight:600;}
+
+/* ── KPI ── */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-top:22px;}
+.kpi{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.kpi:hover{border-color:var(--active-border);transform:translateY(-2px);box-shadow:var(--glow);}
+.kpi .n{font-size:25px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.15;}
+.kpi .n small{font-size:13px;font-weight:600;color:var(--fg);opacity:.85;margin-left:2px;}
+.kpi .l{font-size:12.2px;color:var(--fg);margin-top:4px;font-weight:600;}
+.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.55;}
+
+/* ── 通用区块 ── */
+section{margin:34px 0 0;scroll-margin-top:64px;}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:5px;}
+.sec-head .no{font-size:11.5px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;flex:none;}
+.sec-head h3{font-size:19px;font-weight:700;letter-spacing:.2px;}
+.sec-head .tag{margin-left:auto;font-size:11px;color:var(--muted);}
+.sec-sub{color:var(--muted);font-size:12.5px;margin:0 0 15px 0;}
+.sec-sub b{color:var(--fg);}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:repeat(auto-fit,minmax(310px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(238px,1fr));}
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
+.card h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.card h4 .ico{width:22px;height:22px;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--primary);flex:none;}
+.card p{font-size:12.8px;margin-top:8px;opacity:.94;}
+.card ul{margin:8px 0 0 0;padding-left:0;list-style:none;font-size:12.6px;}
+.card li{position:relative;padding-left:15px;margin-top:4px;opacity:.94;}
+.card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
+.card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
+
+/* ── 三个高光（大卡） ── */
+.hl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.hl .big{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 19px;box-shadow:var(--shadow-sm);}
+.hl .big::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary);opacity:.85;}
+.hl .big .idx{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--primary);}
+.hl .big h4{font-size:15.5px;font-weight:700;margin-top:6px;line-height:1.5;}
+.hl .big p{font-size:12.6px;margin-top:8px;opacity:.94;}
+.hl .big .kv{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
+.hl .big .kv span{font-size:11px;border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:1px 8px;color:var(--muted);}
+
+/* ── 剧本 ── */
+.script{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);overflow:hidden;margin-bottom:12px;}
+.script .sh{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--sidebar);border-bottom:1px solid var(--border);}
+.script .sh .who{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 7px;background:var(--card);}
+.script .sh h4{font-size:14.5px;font-weight:700;}
+.script .sh .gain{margin-left:auto;font-size:11.5px;color:var(--success);font-weight:600;}
+.script .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));}
+.script .st{padding:14px 16px;border-right:1px solid var(--border);}
+.script .st:last-child{border-right:none;}
+.script .st .n{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:.8px;}
+.script .st .act{font-size:13px;font-weight:600;margin-top:4px;}
+.script .st .how{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.65;}
+.script .st .ui{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.script .st .ui span{font-size:10.5px;border:1px solid var(--border);background:var(--bg);border-radius:5px;padding:0 6px;font-family:Consolas,monospace;color:var(--fg);}
+
+/* ── 流程条 ── */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
+.step2{padding:14px 15px;border-right:1px solid var(--border);}
+.step2:last-child{border-right:none;}
+.step2 .idx{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:1px;}
+.step2 .t{font-size:13.2px;font-weight:700;margin-top:4px;}
+.step2 .d{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.62;}
+.step2 .who{font-size:10.5px;color:var(--muted);margin-top:7px;font-family:Consolas,monospace;}
+.gate{margin-top:10px;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:12.5px;box-shadow:var(--shadow-sm);}
+.gate b{color:var(--primary);}
+
+/* ── 分层 ── */
+.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
+.layer{display:grid;grid-template-columns:132px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);}
+.layer:last-child{border-bottom:none;}
+.layer .tag{font-size:11.5px;font-weight:700;color:var(--primary);display:flex;align-items:center;}
+.layer .body{font-size:12.5px;}
+.dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
+.dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
+
+/* ── 表格 ── */
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.7px;box-shadow:var(--shadow-sm);}
+th{background:var(--sidebar);text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+td{padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+td .mono{font-size:11.6px;color:var(--muted);}
+.badge{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;border:1px solid var(--border);background:var(--sidebar);}
+.badge.ok{color:var(--success);border-color:var(--success);}
+.badge.mid{color:var(--warning);border-color:var(--warning);}
+.badge.plan{color:var(--muted);}
+.yes{color:var(--success);font-weight:700;}
+.no{color:var(--muted);}
+.par{color:var(--warning);font-weight:700;}
+
+/* ── 结尾 ── */
+.foot{margin-top:36px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.95;}
+.foot b{color:var(--fg);}
+@media print{.theme-toggle,.nav{display:none;}body{background:#fff;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══ 页头 ══ -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div>
+        <h1>RdataStation · 数据源连接</h1>
+        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（快照 2026-09-19）</div>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    </div>
+  </div>
+
+  <!-- ══ 吸顶导航 ══ -->
+  <nav class="nav" id="nav">
+    <a href="#s1">为什么不再是一个填 URL 的弹窗</a>
+    <a href="#s2">三个高光</a>
+    <a href="#s3">四个剧本</a>
+    <a href="#s4">一次保存的全流程</a>
+    <a href="#s5">两层目录</a>
+    <a href="#s6">五 Tab</a>
+    <a href="#s7">安全与凭据</a>
+    <a href="#s8">零造数据</a>
+    <a href="#s9">架构</a>
+    <a href="#s10">质量与证据</a>
+    <a href="#s11">边界</a>
+    <a href="#s12">文档地图</a>
+  </nav>
+
+  <!-- ══ 英雄区 ══ -->
+  <div class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">新增数据源连接 · 两层目录 <b>三态作用域</b> · 五 Tab · 六个驱动实现</div>
+        <h2>选类型 → 选驱动 → 填连接，<em>按住 Ctrl+Enter</em>——<br>连接落在正确的作用域里。</h2>
+        <p class="lead">
+          它不是一个"填 URL 的弹窗"：类型目录、驱动实现、认证与网络档案、TLS、环境策略、多连接暂存、作用域路由、凭据加密，是一条完整的闭环。
+          <span class="dim">这条连接发到哪个库、连不上差哪一步、密码存在哪里——界面上都写着。</span>
+        </p>
+        <div class="chips">
+          <span class="chip hot">测通即真通（同源组装）</span>
+          <span class="chip hot">凭据加密 · 草稿无密码列</span>
+          <span class="chip">0 静默造数据</span>
+          <span class="chip">4 条真机连接验收</span>
+          <span class="chip">布局恒定 32.5rem 两列</span>
+          <span class="chip">Ctrl+T 测试 / Ctrl+Enter 保存</span>
+        </div>
+        <div class="cta">
+          <a class="pri" href="#s3">看四个剧本 ↓</a>
+          <a href="#s9">看架构</a>
+          <a href="#s10">看质量证据</a>
+        </div>
+      </div>
+
+      <!-- 右：对话框线框（可切换数据库类型 / 作用域） -->
+      <div class="win">
+        <div class="tbar"><span class="mark"></span><span class="tname">新建数据源连接</span><span class="wbtns">— □ ✕</span></div>
+        <div class="demo">
+          <span class="lb">演示：切换数据库类型</span>
+          <button class="mbtn on" data-db="mysql" onclick="setDb('mysql')">MySQL 🐬</button>
+          <button class="mbtn" data-db="postgresql" onclick="setDb('postgresql')">PostgreSQL 🐘</button>
+          <button class="mbtn" data-db="sqlite" onclick="setDb('sqlite')">SQLite 🪶</button>
+          <button class="mbtn" data-db="duckdb" onclick="setDb('duckdb')">DuckDB 🦆</button>
+          <span class="tip" id="db-tip">驱动下拉里有 2 个实现（sqlx / Official）</span>
+        </div>
+        <div class="dbody">
+          <!-- 左侧栏：暂存列表 + 类型树 -->
+          <div class="dside">
+            <div class="srch">🔍 搜索类型…</div>
+            <div class="lb">暂存列表 <span>+ 添加</span></div>
+            <div class="box scroll">
+              <div class="it on"><span class="em" id="stage-em">🐬</span><span id="stage-name">生产库</span><span class="code">●</span></div>
+              <div class="it"><span class="em">🐘</span>只读从库<span class="code">●</span></div>
+              <div class="it"><span class="em">🪶</span>本地样本库</div>
+            </div>
+            <div class="lb">数据库类型</div>
+            <div class="box tree">
+              <div class="cat">关系型</div>
+              <div class="it" data-type="mysql" onclick="setDb('mysql')"><span class="em">🐬</span>MySQL</div>
+              <div class="it" data-type="postgresql" onclick="setDb('postgresql')"><span class="em">🐘</span>PostgreSQL</div>
+              <div class="it off"><span class="em">🦭</span>MariaDB<span class="tail">暂无驱动</span></div>
+              <div class="it off"><span class="em">🔴</span>Oracle<span class="tail">暂无驱动</span></div>
+              <div class="it off"><span class="em">🟢</span>SQL Server<span class="tail">暂无驱动</span></div>
+              <div class="cat">文件型 / 分析型</div>
+              <div class="it" data-type="sqlite" onclick="setDb('sqlite')"><span class="em">🪶</span>SQLite</div>
+              <div class="it" data-type="duckdb" onclick="setDb('duckdb')"><span class="em">🦆</span>DuckDB</div>
+              <div class="it off"><span class="em">⚡</span>ClickHouse<span class="tail">暂无驱动</span></div>
+            </div>
+          </div>
+          <!-- 右侧：Header + Tab + 表单 + 结果行 + footer -->
+          <div class="dmain">
+            <div class="hrow">
+              <span class="lab">名称</span>
+              <span class="badge" id="hdr-em">🐬</span>
+              <span class="inp ph" id="hdr-name">名称（如 生产 PG）</span>
+              <span class="seg3" id="scope-seg">
+                <button class="on" data-scope="global" onclick="setScope('global')">全局</button>
+                <button data-scope="project" onclick="setScope('project')">项目</button>
+                <button data-scope="both" onclick="setScope('both')">全局+项目</button>
+              </span>
+            </div>
+            <div class="hrow">
+              <span class="lab">备注</span>
+              <span class="inp ph">备注（可选）</span>
+              <span class="lab" style="width:auto">项目</span>
+              <span class="sel" id="proj-sel"><span class="tag">选择项目…</span><span class="che">▾</span></span>
+            </div>
+            <div class="hrow">
+              <span class="lab" id="addr-lab">URI</span>
+              <span class="inp" id="hdr-url">mysql://root:****@127.0.0.1:3306/demo</span>
+              <span class="lab" style="width:auto">驱动</span>
+              <span class="sel" id="drv-sel">sqlx<span class="che">▾</span></span>
+            </div>
+            <div class="tabs" id="tabs">
+              <span class="on">常规</span>
+              <span class="off" id="tab-net">网络</span>
+              <span class="off">能力</span>
+              <span class="off">驱动属性</span>
+              <span class="off">高级</span>
+            </div>
+            <div class="form">
+              <!-- 网络型表单 -->
+              <div class="pane on" data-kind="net">
+                <div class="gbox">
+                  <div class="gtitle">连接设置</div>
+                  <div class="frow"><span class="flab">主机</span><span class="ctl" id="net-host">127.0.0.1</span><span class="flab" style="width:auto">端口</span><span class="ctl" style="max-width:64px" id="net-port">3306</span></div>
+                  <div class="frow"><span class="flab">数据库</span><span class="ctl" id="net-db">demo</span></div>
+                  <div class="hint">字段随驱动声明变形；测试连接与真实连接同源组装</div>
+                </div>
+                <div class="gbox">
+                  <div class="gtitle">数据库认证 · 连接安全（TLS）</div>
+                  <div class="frow"><span class="flab">用户名</span><span class="ctl">root</span><span class="flab" style="width:auto">密码</span><span class="ctl">••••••••</span></div>
+                  <div class="frow"><span class="flab">认证方法</span><span class="ctl" id="net-auth">password</span><span class="flab" style="width:auto">SSL</span><span class="ctl">prefer（可选）</span></div>
+                  <div class="hint">凭据加密入库 · 列表脱敏 · 引用认证档案时字段变只读说明</div>
+                </div>
+              </div>
+              <!-- 文件型表单 -->
+              <div class="pane" data-kind="file">
+                <div class="gbox">
+                  <div class="gtitle">连接设置</div>
+                  <div class="frow"><span class="flab">地址</span><span class="ctl" id="file-path">D:\data\sample.db</span><span class="btn">打开文件…</span><span class="btn">新建文件…</span></div>
+                  <div class="hint">文件型没有 URI / 认证 / TLS 语义——「网络」Tab 自动隐藏</div>
+                </div>
+                <div class="gbox">
+                  <div class="gtitle">组织（标签 / 分组）</div>
+                  <div class="frow"><span class="flab">标签</span><span class="ctl ph">prod, core（逗号分隔）</span></div>
+                  <div class="hint">分组是项目级数据；本模块只勾选，管理在数据源导航栏</div>
+                </div>
+              </div>
+            </div>
+            <div class="res"><span class="lv">✓ 已保存</span><span id="res-text">生产库 → 全局库</span><span style="margin-left:auto">详情 · 复制</span></div>
+            <div class="foot2"><span class="b1">测试连接</span><span class="b1">取消</span><span class="b2">保存</span><span class="b1">保存并关闭</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ KPI ══ -->
+    <div class="kpis">
+      <div class="kpi"><div class="n">6<small> 实现 / 4 库</small></div><div class="l">驱动目录</div><div class="d">MySQL·PostgreSQL 各有 sqlx 与 Official 两条实现</div></div>
+      <div class="kpi"><div class="n">3<small> 种</small></div><div class="l">作用域落点</div><div class="d">仅全局 / 仅项目 / 全局+项目快照，语义写死在 ID 前缀里</div></div>
+      <div class="kpi"><div class="n">150<small> 用例</small></div><div class="l">模块自动化测试</div><div class="d">18 个测试目标；引擎侧另有 338 项（含迁移接线）</div></div>
+      <div class="kpi"><div class="n">4<small> 条</small></div><div class="l">真机连接验收</div><div class="d">MySQL · PostgreSQL · SQLite · DuckDB × 测试 + 真实双链路</div></div>
+      <div class="kpi"><div class="n">0<small> 造数据</small></div><div class="l">UI 数据来源</div><div class="d">类型 / 驱动 / 能力 / 策略全部读库，逐项审计</div></div>
+      <div class="kpi"><div class="n">95<small> 条</small></div><div class="l">设计决策</div><div class="d">每条取舍都留下"为什么"，含已关闭缺陷的复盘</div></div>
+    </div>
+  </div>
+
+  <!-- ══ s1 ══ -->
+  <section id="s1">
+    <div class="sec-head"><span class="no">1</span><h3>为什么它不再是一个「填 URL 的弹窗」</h3><span class="tag">旧底座 → 真东西</span></div>
+    <p class="sec-sub">V1 留下四处"看着有、实际是假"的底座，这一版逐条换成了真东西。</p>
+    <table>
+      <tr><th style="width:40%">旧样子</th><th>现在</th></tr>
+      <tr><td>一个 URL 输入框打天下：类型靠猜、驱动不存在</td><td><b>两层目录</b>：左侧类型树（分类 + 图标 + 可用性），右侧驱动实现下拉（短名去噪）；无可用驱动的类型<b>置灰 + 「暂无驱动」</b>，点它不切换并说明原因</td></tr>
+      <tr><td>存到哪全凭当前上下文，项目与全局互相污染</td><td><b>作用域三态</b>显式选择 + ID 前缀路由；写路径先做<b>项目根预检</b>（不合法直接失败，不落半成品），读路径<b>绝不建目录 / 建表</b></td></tr>
+      <tr><td>测试连接只看表单字段——引用了认证档案也照样"成功"</td><td><b>同源组装</b>：测试与真实连接共用唯一组装点；档案缺失 / 读取失败 / 注入失败都产生<b>可见说明</b>，不静默回退"直连无凭据"</td></tr>
+      <tr><td>密码明文入库、草稿里带密码、诊断消息带 ID</td><td>凭据加密（全局 / 项目 / 网络档案三处一致）+ 列表脱敏 + <b>草稿无密码列</b> + 消息只给名称不给 ID</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ s2 ══ -->
+  <section id="s2">
+    <div class="sec-head"><span class="no">2</span><h3>三个高光</h3><span class="tag">如果只记三件事</span></div>
+    <div class="hl">
+      <div class="big">
+        <div class="idx">HIGHLIGHT 01</div>
+        <h4>驱动是"实现"，不是"类型"。</h4>
+        <p><span class="mono">mysql</span> 与 <span class="mono">mysql_native</span> 是同一类数据库的两条实现路径；<span class="mono">postgres</span> 与 <span class="mono">postgres_native</span> 同理。
+        类型与驱动分开存、分开选，落库时都写<b>驱动 id</b>（与引擎注册表对齐）——换实现不会换掉连接的语义。</p>
+        <div class="kv"><span>data_source_types</span><span>drivers</span><span>短名去噪</span><span>无驱动置灰</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 02</div>
+        <h4>一条连接，三种落点，语义写死在 ID 里。</h4>
+        <p><span class="mono">G_</span> 全局 / <span class="mono">P_</span> 项目 / <span class="mono">GP_</span> 项目快照。快照是<b>独立副本</b>，
+        要跟随全局定义时用显式入口「从全局定义同步」（只在编辑 <span class="mono">GP_</span> 时出现）——不存在"什么时候同步"的运气成分。</p>
+        <div class="kv"><span>项目根预检</span><span>读路径零副作用</span><span>快照同步入口</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 03</div>
+        <h4>每一个"做不到"都带着原因。</h4>
+        <p>无驱动 → 行尾「暂无驱动」；引用的档案被删 → 测试连接与真实连接<b>双双报错</b>并说明；被引用的档案 → 删除被拦下并列出引用数与项目名；
+        项目路径不是项目根 → 直接拒绝而不是建出一个假项目。</p>
+        <div class="kv"><span>结果行分级</span><span>详情 / 复制</span><span>引用拦截</span><span>降级矩阵</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ s3 ══ -->
+  <section id="s3">
+    <div class="sec-head"><span class="no">3</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">每一步都用现有按钮，能照着做</span></div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 A</span><h4>第一次接一台库</h4><span class="gain">30 秒走完四步</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">选类型</div><div class="how">左侧类型树点「MySQL」。没有可用驱动的类型是灰的，点不动。</div><div class="ui"><span>类型树</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">选驱动</div><div class="how">驱动下拉自动切到该类型的实现并显示短名 <span class="mono">sqlx</span>；需要官方实现就换成 <span class="mono">Official</span>。</div><div class="ui"><span>驱动 ▾</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">填连接</div><div class="how">常规 Tab：地址（网络型为 URI，文件型为地址 + 打开/新建文件）、认证方法、用户名 / 密码；SSL 卡片按驱动声明出现。</div><div class="ui"><span>常规</span><span>打开文件…</span></div></div>
+        <div class="st"><div class="n">STEP 4</div><div class="act">试通 + 存</div><div class="how"><span class="mono">Ctrl+T</span> 看版本与耗时（结果行分级着色）→ <span class="mono">Ctrl+Enter</span> 保存；「保存并关闭」可一步收尾。</div><div class="ui"><span>Ctrl+T</span><span>Ctrl+Enter</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 B</span><h4>一次配十条</h4><span class="gain">不打断、不丢草稿</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">接着加</div><div class="how">左侧「暂存列表 → ＋ 添加」：当前表单自动写回上一条，表单变空开始下一条。</div><div class="ui"><span>+ 添加</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">来回改</div><div class="how">点任意条目切换（切换前自动写回）；<span class="mono">↑</span> / <span class="mono">↓</span> 也能切换；条目左侧是<b>缩小的类型徽标</b>，一眼看出是哪类库。</div><div class="ui"><span>↑ ↓</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">中途关了</div><div class="how">直接 <span class="mono">Esc</span> / 点遮罩：草稿写回 <span class="mono">connection_drafts</span>（无密码列），下次打开自动恢复。</div><div class="ui"><span>Esc</span></div></div>
+        <div class="st"><div class="n">STEP 4</div><div class="act">存完接着来</div><div class="how">保存成功<b>不关窗</b>：草稿转正式并自动补一条空草稿——连续录入不用反复开关。</div><div class="ui"><span>保存</span><span>保存并关闭</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 C</span><h4>这条连接只属于当前项目</h4><span class="gain">快照与显式同步</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">选作用域</div><div class="how">Header 作用域分段切到「仅项目」或「全局+项目」；仅全局时项目栏置灰（保留占位，不跳布局）。</div><div class="ui"><span>全局 │ 项目 │ 全局+项目</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">选项目</div><div class="how">项目栏下拉：项目名 + 路径双列，末项固定「＋ 新增项目」；有脏草稿时先确认，确认后直接开新建项目窗口。</div><div class="ui"><span>项目 ▾</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">需要时同步</div><div class="how">编辑 GP_ 快照时点「从全局定义同步」：配置 + 凭据密文一并刷新，保留 ID / 创建时间 / 分组。</div><div class="ui"><span>从全局定义同步</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 D</span><h4>连不上，定位到具体原因</h4><span class="gain">不靠猜</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">先试通</div><div class="how">失败时结果行是<b>红色</b>并可直接「复制」原文；「测试中…」是弱灰进行中态。</div><div class="ui"><span>测试连接</span><span>复制</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">看引用</div><div class="how">表单显示"已引用认证 / 网络档案"时：档案被删或类型无法解析 → 测试与真实连接报同一句原因（不静默直连）。</div><div class="ui"><span>详情</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">看隧道</div><div class="how">SSH / 多跳场景：探测结束即释放隧道，真实连接的失败原因不会与测试结论相反。</div><div class="ui"><span>网络 Tab</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ s4 ══ -->
+  <section id="s4">
+    <div class="sec-head"><span class="no">4</span><h3>一次保存的全流程</h3><span class="tag">从表单到落库，六步</span></div>
+    <div class="flow">
+      <div class="step2"><div class="idx">01</div><div class="t">选类型与驱动</div><div class="d">类型决定可选实现；驱动决定字段集合与认证方法清单。</div><div class="who">type tree → drivers</div></div>
+      <div class="step2"><div class="idx">02</div><div class="t">填连接</div><div class="d">地址 / 主机端口 / 凭据；引用档案时字段变只读说明。</div><div class="who">form</div></div>
+      <div class="step2"><div class="idx">03</div><div class="t">测试连接</div><div class="d">注入档案凭据 → 按需建隧道 → 应用驱动属性，返回版本与耗时。</div><div class="who">build_probe_config</div></div>
+      <div class="step2"><div class="idx">04</div><div class="t">保存</div><div class="d">项目根预检 → 按作用域路由写入（含快照）→ 同步标签权威表。</div><div class="who">DataSourceService::save</div></div>
+      <div class="step2"><div class="idx">05</div><div class="t">联动副作用</div><div class="d">DuckDB 加速注册 persistent secret；失败仅告警，不吞掉保存结果。</div><div class="who">secret_integration</div></div>
+      <div class="step2"><div class="idx">06</div><div class="t">结果行</div><div class="d">绿色摘要只给名称；连接 ID 与落点进「详情」，可一键复制。</div><div class="who">ResultLine</div></div>
+    </div>
+    <div class="gate">
+      <b>运行时连接走另一条链路：</b>导航或对话框点「连接」→ 解析认证 / 网络档案并注入凭据 → 建立协议链（SSH / 代理 / 多跳）→ 拿到本地转发端口 → 改写 URL → 登记到连接管理器。
+      <b>隧道守卫挂在管理器上，断开或失败精确释放本地端口</b>（集成测试断言残留隧道数为 0）。
+    </div>
+  </section>
+
+  <!-- ══ s5 ══ -->
+  <section id="s5">
+    <div class="sec-head"><span class="no">5</span><h3>两层目录 · 类型 × 驱动</h3><span class="tag">类型来自库表，驱动可多实现</span></div>
+    <p class="sec-sub">类型目录来自 <span class="mono">data_source_types</span>（按 <span class="mono">enabled</span> 过滤），驱动来自 <span class="mono">drivers</span>；<b>同一种库可以有多个实现</b>。</p>
+    <table>
+      <tr><th>数据库类型</th><th>分类</th><th>内置驱动实现</th><th>状态</th></tr>
+      <tr><td>MySQL 🐬</td><td>关系型</td><td class="mono">mysql（SQLx）· mysql_native（Official）</td><td><span class="badge ok">可选</span></td></tr>
+      <tr><td>PostgreSQL 🐘</td><td>关系型</td><td class="mono">postgres（SQLx）· postgres_native（Official）</td><td><span class="badge ok">可选</span></td></tr>
+      <tr><td>SQLite 🪶</td><td>文件型</td><td class="mono">sqlite（rusqlite）</td><td><span class="badge ok">可选</span></td></tr>
+      <tr><td>DuckDB 🦆</td><td>分析型</td><td class="mono">duckdb（duckdb-rs）</td><td><span class="badge ok">可选</span></td></tr>
+      <tr><td>MariaDB · Oracle · SQL Server · ClickHouse</td><td>关系型 · 分析型</td><td>—</td><td><span class="badge plan">置灰「暂无驱动」</span></td></tr>
+      <tr><td>MongoDB · Redis</td><td>NoSQL</td><td>—</td><td><span class="badge plan">目录未启用，不出现在树上</span></td></tr>
+    </table>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card"><h4><span class="ico">⇄</span>表单随驱动变形</h4><p>文件型隐藏「网络」Tab，只留「连接设置（地址 + 打开/新建文件）+ 组织」；网络型给出 URI / 主机 / 端口 / 数据库、认证与 TLS 卡片。</p><div class="foot">字段集合来自驱动 <span class="mono">config_schema</span> 声明</div></div>
+      <div class="card"><h4><span class="ico">⛔</span>不摆假选项</h4><p>没有可用驱动的类型置灰 + 行尾「暂无驱动」，点击不切换并在结果行给原因——不允许"选了也存不了"。</p><div class="foot">驱动插件能力开放后这些类型自动可用</div></div>
+      <div class="card"><h4><span class="ico">🏷</span>短名去噪</h4><p>下拉只显示实现短名（<span class="mono">sqlx</span> / <span class="mono">Official</span> / <span class="mono">rusqlite</span> / <span class="mono">duckdb-rs</span>），不再重复"MySQL (…)"。</p><div class="foot">类型徽标只在左侧栏与暂存条目上</div></div>
+    </div>
+  </section>
+
+  <!-- ══ s6 ══ -->
+  <section id="s6">
+    <div class="sec-head"><span class="no">6</span><h3>五 Tab · 一个对话框</h3><span class="tag">布局恒定：两列同行高</span></div>
+    <table>
+      <tr><th>Tab</th><th>看什么</th><th>数据来源</th></tr>
+      <tr><td>常规</td><td>连接设置（随驱动变形）+ 数据库认证 + 连接安全（TLS）+ 组织（标签 / 分组）</td><td class="mono">drivers.config_schema + 库表</td></tr>
+      <tr><td>网络</td><td>引用网络档案（SSH / 代理 / SOCKS / 多跳链）；文件型自动隐藏</td><td class="mono">network_configs</td></tr>
+      <tr><td>能力</td><td>驱动声明的能力矩阵（只读）</td><td class="mono">drivers.capabilities</td></tr>
+      <tr><td>驱动属性</td><td>驱动自定义键值（可增删）</td><td class="mono">drivers.driver_properties</td></tr>
+      <tr><td>高级</td><td>环境 + 安全策略覆盖 + DuckDB 联邦加速</td><td class="mono">environments / environment_policies</td></tr>
+    </table>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card"><h4><span class="ico">▭</span>左侧栏</h4><ul><li>类型搜索框</li><li>暂存列表：固定 7.5rem + 内部滚动</li><li>类型树：占满剩余高度 + 内部滚动</li></ul><div class="foot">条目再多也不会拉长对话框</div></div>
+      <div class="card"><h4><span class="ico">▤</span>Header 三行</h4><ul><li>类型徽标（仅图标）+ 名称 + 作用域三态分段</li><li>备注 + 项目（定宽单下拉）</li><li>驱动（定宽）+ 地址 / URI（弹性）</li></ul><div class="foot">定宽元素保证切换类型时后续元素不移动</div></div>
+      <div class="card"><h4><span class="ico">⌨</span>快捷键</h4><ul><li><span class="mono">Ctrl+T</span> 测试连接</li><li><span class="mono">Ctrl+Enter</span> 保存</li><li><span class="mono">↑</span> / <span class="mono">↓</span> 切换暂存条目</li><li><span class="mono">Esc</span> 关闭（先写回草稿）</li></ul><div class="foot">两列同行高 32.5rem：切 Tab / 加草稿都不改对话框高度</div></div>
+    </div>
+  </section>
+
+  <!-- ══ s7 ══ -->
+  <section id="s7">
+    <div class="sec-head"><span class="no">7</span><h3>安全与凭据</h3><span class="tag">加密 · 脱敏 · 无副作用读</span></div>
+    <table>
+      <tr><th style="width:22%">面</th><th>做法</th></tr>
+      <tr><td>落库</td><td>连接与档案的凭据一律加密（AES）；存量明文在启动时<b>一次性迁移</b>（幂等、失败不阻断）</td></tr>
+      <tr><td>读出</td><td>列表接口返回<b>脱敏</b>值；只有"编辑回填 / 连接注入"这两个明确路径才解密</td></tr>
+      <tr><td>草稿</td><td><span class="mono">connection_drafts</span> <b>没有密码列</b>——草稿只承载非敏感字段</td></tr>
+      <tr><td>DuckDB 加速</td><td>凭据注册为 <b>persistent secret</b>，落到应用私有目录，不写用户主目录、不落明文</td></tr>
+      <tr><td>引用完整性</td><td>被连接引用的认证 / 网络档案<b>不可删除</b>；拦截消息给出引用数与项目名（含未打开项目的名册扫描）</td></tr>
+      <tr><td>消息</td><td>结果行只有名称与可操作信息，<b>不出现连接 ID</b>；诊断原文可一键复制</td></tr>
+      <tr><td>读写分离</td><td>写路径做项目根预检；读路径<b>不建目录、不建表</b>——一次列表刷新不会在磁盘上造出"假项目骨架"</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ s8 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">8</span><h3>零造数据 · 契约测试</h3><span class="tag">每个 UI 数据项都能回答"来自哪"</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">⛳</span>来源审计</h4>
+        <ul>
+          <li>类型树 / 驱动目录 / 能力矩阵 / 环境策略 → 全部读库</li>
+          <li>允许的非库数据只有三类：domain 枚举、字典（能力键 → 中文）、用户输入与派生值</li>
+          <li>逐项对照表在架构文档 §15</li>
+        </ul>
+        <div class="foot">"界面看起来有、其实没有"属于缺陷，不属于取舍</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🧱</span>契约与守卫</h4>
+        <ul>
+          <li>尺寸与颜色扫描本模块全部文件（禁裸 <span class="mono">px(</span> / <span class="mono">rgb(</span> / <span class="mono">hsla(</span>）</li>
+          <li>固定高度必须三向显式约束：只给 <span class="mono">h()</span> 会被内容撑高（实测回归 120px → 412px，已修并以测试守住）</li>
+          <li>标签单一权威：读取只认 <span class="mono">connection_tags</span>；存量回填是两处幂等迁移（启动 + 打开项目）</li>
+        </ul>
+        <div class="foot">升级后第一次打开项目即可看到旧标签</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ s9 ══ -->
+  <section id="s9">
+    <div class="sec-head"><span class="no">9</span><h3>架构 · 依赖只向下</h3><span class="tag">没有 HTTP / IPC 层</span></div>
+    <div class="layers">
+      <div class="layer"><div class="tag">视图层</div><div class="body">连接对话框六文件（<span class="mono">render / state / staging / managers / helpers / project_picker</span>）——只依赖 <span class="mono">gpui-kit</span>，颜色走 <span class="mono">theme.colors.*</span>，尺寸走 <span class="mono">ui.rs</span> 常量</div></div>
+      <div class="layer"><div class="tag">服务层</div><div class="body"><span class="mono">DataSourceService</span>（CRUD / 测试 / 作用域路由）· <span class="mono">ConnectionService</span>（组装 / 隧道）· <span class="mono">workspace_loader</span>（可见性与运行态）· <span class="mono">nav_runtime</span></div></div>
+      <div class="layer"><div class="tag">传输层</div><div class="body"><span class="mono">connection</span> crate：URL 构建与脱敏、参数注入、协议链执行、SSH / 代理 / SOCKS 连接器、known_hosts</div></div>
+      <div class="layer"><div class="tag">持久化层</div><div class="body"><span class="mono">engine</span>：全局库 / 项目库 / 认证 / 网络 / 组织元数据 / 草稿 / 缓存指纹规则 + 迁移</div></div>
+      <div class="layer"><div class="tag">数据</div><div class="body">本地 SQLite（<span class="mono">global.db</span> / <span class="mono">project.db</span>）与 DuckDB（<span class="mono">analytics.duckdb</span>）</div></div>
+    </div>
+    <div class="dep">依赖方向 <code>视图 → 服务 → 传输 → 持久化</code> 单向；"前后端联通"在本模块即"UI 只经服务层读写本地库"</div>
+  </section>
+
+  <!-- ══ s10 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>质量与证据</h3><span class="tag">可复核</span></div>
+    <table>
+      <tr><th style="width:22%">维度</th><th>数字 / 手段</th></tr>
+      <tr><td>自动化测试</td><td>工作台 <b>18 个目标 / 150 用例</b>；引擎 <b>338 项</b>（含存量迁移接线与幂等）</td></tr>
+      <tr><td>窗口级测试</td><td>打开/关闭 · 五 Tab 渲染 · 作用域三态 · 结果行分级 · 首次引导三态 · <b>暂存区与两列高度恒定</b> · 编辑回填逐项断言</td></tr>
+      <tr><td>真机验收</td><td>4 条连接（MySQL · PostgreSQL · SQLite · DuckDB）× 测试连接 + 真实连接双链路</td></tr>
+      <tr><td>集成测试</td><td>隧道数据往返（SOCKS5 / HTTP CONNECT / 两跳链）· 连续保存 · 草稿跨会话 · 项目侧空密码保留 · 跨项目引用拦截</td></tr>
+      <tr><td>契约测试</td><td>尺寸与颜色扫描本模块全部文件</td></tr>
+      <tr><td>文档体系</td><td>架构与 <b>95 条设计决策</b> · 原型设计 · 使用指南与 USIT 清单 · 开发计划 · 可交互原型与宣传页</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ s11 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>边界 · 这些事它不做</h3><span class="tag">诚实标注</span></div>
+    <table>
+      <tr><th style="width:34%">不做</th><th>为什么 / 什么时候做</th></tr>
+      <tr><td>数据源导航树、分组视图、标签视图</td><td>属另一模块（M4）；本模块只提供数据与契约</td></tr>
+      <tr><td>模板导入导出（UI 入口）</td><td>能力与测试已就绪，UI 入口按计划暂缓（避免当前阶段界面变动）</td></tr>
+      <tr><td>类型树折叠</td><td>实测只有 3 分类 8 项，侧栏已固定高度 + 内部滚动；重评触发：类型 &gt; 15 项或分类 &gt; 6</td></tr>
+      <tr><td>分组的新建 / 管理</td><td>在导航侧；本模块只勾选所属分组</td></tr>
+      <tr><td>元数据缓存的复用（身份指纹）</td><td>规则与纯函数已冻结，接线与导航接缓存同轮落地</td></tr>
+      <tr><td>驱动安装（插件）</td><td>平台能力；在此之前其余类型置灰并写「暂无驱动」</td></tr>
+      <tr><td>连接主键改用 ULID</td><td>列入 beta2（当前前缀方案已能表达作用域，改名不换 ID 的语义已成文）</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ s12 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>文档地图</h3><span class="tag">按需进入</span></div>
+    <table>
+      <tr><th style="width:34%">想了解</th><th>读什么</th></tr>
+      <tr><td>代码在哪、改前必守什么</td><td><a href="./README.md">README.md</a>（模块入口）</td></tr>
+      <tr><td>长什么样（视觉权威）</td><td><a href="./connection-prototype-design.md">connection-prototype-design.md</a> · <a href="./connection-dialog-prototype.html">connection-dialog-prototype.html</a></td></tr>
+      <tr><td>为什么这样设计、怎么运转</td><td><a href="./connection-dialog-architecture.md">connection-dialog-architecture.md</a>（概念模型 / 数据流 / 95 条决策 / 降级矩阵 / 待办清单 / 数据来源审计）</td></tr>
+      <tr><td>怎么用、怎么验</td><td><a href="./connection-user-guide.md">connection-user-guide.md</a>（含 USIT 验收清单）</td></tr>
+      <tr><td>做到哪了</td><td><a href="./connection-dev-plan.md">connection-dev-plan.md</a></td></tr>
+      <tr><td>可贴版（纯文本）</td><td><a href="./connection-showcase.md">connection-showcase.md</a></td></tr>
+    </table>
+  </section>
+
+  <div class="foot">
+    <b>快照说明</b>：本页数字取自 2026-09-19 的模块回归（工作台 18 目标 / 150 用例 · 引擎 338 项 · 4 条真机连接）。
+    作为宣传/概览资料，它与 <span class="mono">connection-showcase.md</span> 章节一一对应；权威口径与待办清单以
+    <span class="mono">connection-dialog-architecture.md</span>（§14 / §15）为准。
+    页面自包含、离线可开，支持明暗双主题与打印。
+  </div>
+</div>
+
+<script>
+/* 主题切换 */
+function toggleTheme(){
+  var h = document.documentElement;
+  h.setAttribute('data-theme', h.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+}
+if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
+
+/* ── 首屏演示：切换数据库类型 → 驱动 / Tab / 表单 / 头部一起变 ── */
+var DB = {
+  mysql:{
+    em:'🐬', title:'新建数据源连接', tip:'驱动下拉里有 2 个实现（sqlx / Official）',
+    driver:'sqlx', kind:'net', urlLab:'URI', url:'mysql://root:****@127.0.0.1:3306/demo',
+    host:'127.0.0.1', port:'3306', db:'demo', auth:'password'
+  },
+  postgresql:{
+    em:'🐘', title:'新建数据源连接', tip:'驱动下拉里有 2 个实现（sqlx / Official）',
+    driver:'sqlx', kind:'net', urlLab:'URI', url:'postgres://postgres:****@127.0.0.1:5432/postgres',
+    host:'127.0.0.1', port:'5432', db:'postgres', auth:'password'
+  },
+  sqlite:{
+    em:'🪶', title:'新建数据源连接', tip:'文件型：网络 Tab 自动隐藏，只保留地址 + 打开/新建文件',
+    driver:'rusqlite', kind:'file', urlLab:'地址', url:'D:\\data\\sample.db',
+    host:'—', port:'—', db:'—', auth:'（文件型无认证）'
+  },
+  duckdb:{
+    em:'🦆', title:'新建数据源连接', tip:'文件型：网络 Tab 自动隐藏；加速与缓存走「高级」',
+    driver:'duckdb-rs', kind:'file', urlLab:'地址', url:'D:\\data\\analytics.duckdb',
+    host:'—', port:'—', db:'—', auth:'（文件型无认证）'
+  }
+};
+function setDb(name){
+  var c = DB[name]; if (!c) return;
+  /* 演示按钮与类型树高亮 */
+  document.querySelectorAll('.win .demo .mbtn').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-db') === name);
+  });
+  document.querySelectorAll('.win .dside .it[data-type]').forEach(function(it){
+    it.classList.toggle('on', it.getAttribute('data-type') === name);
+  });
+  /* 头部 */
+  document.getElementById('hdr-em').textContent = c.em;
+  document.getElementById('drv-sel').innerHTML = c.driver + '<span class="che">▾</span>';
+  document.getElementById('addr-lab').textContent = c.urlLab;
+  document.getElementById('hdr-url').textContent = c.url;
+  document.getElementById('stage-em').textContent = c.em;
+  document.getElementById('db-tip').textContent = c.tip;
+  /* Tab：文件型隐藏「网络」 */
+  document.getElementById('tab-net').classList.toggle('hide', c.kind === 'file');
+  /* 表单：网络型 / 文件型两个 pane 互斥 */
+  document.querySelectorAll('.win .form .pane').forEach(function(p){
+    p.classList.toggle('on', p.getAttribute('data-kind') === c.kind);
+  });
+  document.getElementById('net-host').textContent = c.host;
+  document.getElementById('net-port').textContent = c.port;
+  document.getElementById('net-db').textContent = c.db;
+  document.getElementById('net-auth').textContent = c.auth;
+  document.getElementById('file-path').textContent = c.url;
+  /* 结果行跟随作用域文案 */
+  setScope(currentScope, true);
+}
+
+/* ── 首屏演示：作用域三态 → 项目栏与落点提示联动 ── */
+var currentScope = 'global';
+var SCOPE_TEXT = {
+  global:{ sel:'仅全局不需要', dis:true,  res:'→ 全局库' },
+  project:{ sel:'选择项目…',    dis:false, res:'→ 项目库' },
+  both:{ sel:'选择项目…',       dis:false, res:'→ 全局库 + 项目快照' }
+};
+function setScope(scope, keepBtn){
+  var c = SCOPE_TEXT[scope]; if (!c) return;
+  currentScope = scope;
+  if (!keepBtn) {
+    document.querySelectorAll('#scope-seg button').forEach(function(b){
+      b.classList.toggle('on', b.getAttribute('data-scope') === scope);
+    });
+  }
+  var sel = document.getElementById('proj-sel');
+  sel.style.opacity = c.dis ? '.6' : '';
+  sel.querySelector('.tag').textContent = c.sel;
+  document.getElementById('res-text').textContent = '生产库 ' + c.res;
+}
+
+/* 吸顶导航：滚动高亮当前章节 */
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function sync(){
+    var y = window.scrollY + 120, best = 0;
+    targets.forEach(function(t, i){ if (t && t.offsetTop <= y) best = i; });
+    links.forEach(function(a, i){ a.classList.toggle('on', i === best); });
+  }
+  window.addEventListener('scroll', sync, {passive:true});
+  window.addEventListener('resize', sync);
+  sync();
+})();
+
+/* 初始化 */
+setDb('mysql');
+setScope('global');
+</script>
+</body>
+</html>
