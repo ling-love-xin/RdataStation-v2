@@ -229,6 +229,19 @@ Frame = [u32 BE total_len][u8 kind][payload]
 
 对照：DBX 的 `stdio-framed` 是 5 字节头（1 字节 kind + 4 字节长度）上限 64 MiB，思路一致且已有上线验证。
 
+**两处原文留白的口径**（实现时才暴露，已写进 `crates/plugin/src/sidecar/proto.rs`）：
+
+| 项 | 取值 | 理由 |
+| --- | --- | --- |
+| `total_len` | **含头 5 字节**的整帧长度（= `5 + payload.len()`） | 取 "total" 的字面含义。两种读法都能自洽，但差 5 字节会把整条流**永久解错位**，所以必须写死 |
+| 单帧上限 | **64 MiB**，超过即拒；且**先校验声明长度、再分配载荷缓冲** | 长度前缀来自对端：不设限等于让对方用一个 `u32::MAX` 让我们预分配 4 GiB |
+
+**孤儿进程防线（协议级，P1 验收项）**：宿主与 sidecar 之间那条 **stdin 管道由宿主持有**；
+**sidecar 必须把 stdin EOF 当作「宿主已死，立即退出」**。这样宿主无论怎么死（崩溃、被 kill、
+任务管理器结束进程），管道都会关闭 → sidecar 自己退出，**不需要在宿主侧做平台相关的“杀子进程组”**
+（Windows Job Object / Linux PDEATHSIG 都不必）。
+参考实现（Rdata-Sidecar）只处理了 SIGINT/SIGTERM、没有父进程死亡检测 —— 这正是我们要补的那一项（§3.5）。
+
 #### 4.2.1.1 混合的三层，代价差一个量级
 
 JSON 与 Arrow 必然共存（控制面 vs 数据面）。区别在**混在哪一层**：
@@ -712,7 +725,7 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | 清单与 `[backend]` 段 | `crates/plugin/src/manifest.rs` |
 | 权限与信任（双轨） | `crates/plugin/src/permission.rs` |
 | 生命周期与进程池 | `crates/plugin/src/manager.rs`、`sidecar/manager.rs`、`sidecar/health_checker.rs` |
-| 传输与帧 | `crates/plugin/src/sidecar/client.rs`（改 stdio + 分帧） |
+| 传输与帧 | `crates/plugin/src/sidecar/proto.rs`（✅ **P1 已落地**：帧编解码 + 增量解码器 + async 流读写 + 版本闸 + 内联阈值 + 错误码表）；`client.rs` 仍是 HTTP/端口，P1 换成走 proto 的 stdio 客户端 |
 | RPC 方法表 | `crates/plugin/src/sidecar/*`（+ `jsonrpsee-core` 的 `RpcModule`/`Methods`） |
 | 驱动桥（v2 trait） | `crates/plugin/src/sidecar/driver.rs`（**P1 新建**；旧 HTTP 版已于 P0 删除，见 §1.2） |
 | 能力矩阵 | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY`）+ 新增 `DriverCapability` |
@@ -749,7 +762,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | ⬜ 未开始 | — |
+| P1 | 🟡 进行中（协议层已落地） | `sidecar/proto.rs`：帧（4B 大端长度 + 1B kind）/ 增量解码器 / `read_frame`+`write_frame`（async，短读与“先校验再分配”都有单测）/ 版本闸 / 内联阈值 / 错误码表；`cargo test -p rds-plugin` 34/34（新增 15 条）。待办：三层对象模型 · 拿 PostgreSQL 包一层做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · 把 `client.rs` 从 HTTP 换成走 proto 的 stdio 客户端 |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |

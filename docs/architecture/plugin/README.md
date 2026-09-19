@@ -61,7 +61,8 @@
 | `plugin_service.rs` | **项目级 6 方法已实现**；表 `project_used_plugins` / `project_plugin_config` 已建（`migrations/project_meta/001_init.sql:112/121`） |
 | `manager.rs` / `loader.rs` / `installer.rs` / `dependency.rs` | 安装与装载骨架 |
 | `sidecar/manager.rs` | 现状是「一 manager 一进程 + 单 `port`」，要演进成 `PluginProcess → DriverInstance → Session` 三层 |
-| `sidecar/client.rs` | P0 已修「判成功/失败取反」的 bug（抽成 `parse_rpc_response` + 4 条单测）；但**传输本身仍是 HTTP/端口 + 零鉴权**，与 D5 相反 → P1 换 stdio 分帧 |
+| `sidecar/client.rs` | P0 已修「判成功/失败取反」的 bug（抽成 `parse_rpc_response` + 4 条单测）；但**传输本身仍是 HTTP/端口 + 零鉴权**，与 D5 相反 → P1 换成走 `proto` 的 stdio 客户端 |
+| `sidecar/proto.rs` | ✅ **P1 协议层已落地**：帧（4B 大端长度 + 1B kind，**`total_len` 含头 5 字节**）+ 增量解码器 + `read_frame`/`write_frame`（async，含短读与“先校验再分配”的测试）+ 版本闸 + 内联阈值 + 错误码表；15 条单测 |
 | `sidecar/{health_checker,hot_reload_manager}.rs` | **0 字节**空文件（P1 健康检查会落在这里） |
 | ~~`sidecar/driver.rs`~~（311 行） | ✅ **P0 删除**：未编译过，且传输假设（HTTP/单端口/JSON 行）与 D5/D4 相反 → 驱动桥 **P1 新建** |
 | ~~`storage.rs`~~（107 行） | ✅ **P0 删除**：未编译、全仓零引用、`flush_to_disk()` 是 TODO 空壳 |
@@ -102,6 +103,8 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 ## 7. 当前进度
 
-见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + `PERMISSION` 四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
+见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-下一步 **P1（sidecar 端到端）**：三层对象模型 · stdio 二进制分帧 + Arrow IPC · `initialize`/`driver.describe`/`session.open`/`query.execute`/`query.cancel` · `SidecarManager` 补 `current_dir`/日志/进程组回收 · 拿 PostgreSQL 包一层当靶子；验收是「宿主退出无孤儿进程」。
+**P1 进行中**：协议层已落地（`sidecar/proto.rs`：帧 + 流读写 + 版本闸 + 阈值 + 错误码，15 条单测）。
+接着要做的：三层对象模型（`PluginProcess → DriverInstance → Session`）· 拿 PostgreSQL 包一层 sidecar 做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · `client.rs` 从 HTTP 换成走 `proto` 的 stdio 客户端。
+验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。

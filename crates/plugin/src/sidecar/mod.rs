@@ -10,6 +10,7 @@ pub mod client;
 pub mod health_checker;
 pub mod hot_reload_manager;
 pub mod manager;
+pub mod proto;
 
 use serde::{Deserialize, Serialize};
 
