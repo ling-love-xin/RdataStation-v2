@@ -115,6 +115,18 @@ impl Router {
         self.in_flight.len()
     }
 
+    /// 调用方**放弃**一个在飞请求（超时 / 用户取消）。
+    ///
+    /// 放弃之后该 id 的迟到响应会被报成 `Issue`，而不是当正常响应交付 —— 这正是要的：
+    /// 调用方已经不在了，静默吞掉会让“到底谁收到了”变得不可查。
+    /// 若被放弃的正是那个扣在附件上的响应，一并丢掉（它的载荷已无意义）。
+    pub fn abandon(&mut self, id: u64) {
+        if self.pending.as_ref().is_some_and(|p| p.id == id) {
+            self.pending = None;
+        }
+        self.in_flight.remove(&id);
+    }
+
     /// 还差几个 `0x02` 帧才算把当前响应收完（0 = 没有扣住的响应）。
     pub fn awaiting_arrow_frames(&self) -> usize {
         match &self.pending {
@@ -747,5 +759,39 @@ mod tests {
             }
             other => panic!("期望 Response，得到 {other:?}"),
         }
+    }
+
+    /// 超时的实现路径：先 `abandon`，之后到达的响应同样变成 `Issue`。
+    #[test]
+    fn abandoned_request_treats_a_late_response_as_an_issue() {
+        let mut r = Router::new();
+        r.register(42);
+        assert_eq!(r.in_flight(), 1);
+        r.abandon(42);
+        assert_eq!(r.in_flight(), 0, "放弃后不该继续算在飞");
+
+        let ev = r.on_frame(json_frame(&json!({
+            "jsonrpc": "2.0", "id": 42, "result": {"late": true}
+        })));
+        assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
+    }
+
+    /// 放弃的正好是“扣在附件上”的那个响应：扣住的包袱也要一并丢掉。
+    #[test]
+    fn abandoning_a_withheld_response_drops_its_pending_attachments() {
+        let mut r = Router::new();
+        r.register(7);
+        assert!(
+            r.on_frame(json_frame(&response_with_one_attachment(7, 3)))
+                .is_empty()
+        );
+        assert_eq!(r.awaiting_arrow_frames(), 3);
+
+        r.abandon(7);
+        assert_eq!(r.awaiting_arrow_frames(), 0, "扣住的响应应被丢掉");
+
+        // 之后来的附件帧就变成孤儿帧（错位）—— 不能拿它去拼已放弃的响应
+        let ev = r.on_frame(Frame::arrow(b"late".to_vec()));
+        assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
     }
 }

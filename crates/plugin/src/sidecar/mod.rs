@@ -7,6 +7,7 @@
 //! P0 只修了它判成功/失败的判据（反了）；换成 stdio 是 P1 的事。
 
 pub mod client;
+pub mod conn;
 pub mod health_checker;
 pub mod hot_reload_manager;
 pub mod lifecycle;
