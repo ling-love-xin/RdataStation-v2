@@ -425,7 +425,8 @@ const DRIVERS: [DriverSpec; 6] = [
     DriverSpec {
         driver: "postgres_native",
         unknown: UnknownEffect::ConnectionError,
-        // `tokio-postgres-0.7.17/src/config.rs:560-720`（末尾 `Err(UnknownOption)`）
+        // `tokio-postgres-0.7.18/src/config.rs:545-725`（末尾 `Err(UnknownOption)`；
+        // 0.7.17 与 0.7.18 的键处理段落逐字相同，已核）
         params: &[
             "user",
             "password",

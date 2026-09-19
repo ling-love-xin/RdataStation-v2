@@ -65,6 +65,15 @@ impl MetaBit {
 ///
 /// `evidence` 写**可复现的用例名**（测试目标 / 用例），而不是"某天跑过"——
 /// 界面据此如实标注，不假装通过。
+///
+/// **写法约定**（有测试盯着，见 `crates/engine/tests/acceptance_evidence_is_real.rs`）：
+/// - 名字用**测试目标**（`crates/*/tests/<名>.rs` 的文件名）或**用例函数名**；
+/// - 多个用 ` + ` 连接（如 `"db_navigator + editor_exec_real"`）；
+/// - 补充说明放**全角括号**里（如 `"editor_exec_real（四库事务：回滚作废/提交生效）"`），
+///   括号内容不参与校验——它的位置只放人读的定语，不放另一个名字。
+///
+/// 为什么要有这层约定：界面会把这段文字原样展示成"已验收 · <证据>"，
+/// 一旦引用的用例被改名 / 删除，界面就在指向不存在的东西（D10 的口径就空了）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Acceptance {
     pub verified: bool,

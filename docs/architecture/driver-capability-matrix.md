@@ -167,7 +167,9 @@ sqlx 静默忽略、mysql_async 报未知参数。接受键清单与测试见
 | 归属（驱动能力 / 应用级） | `CapabilitySpec::scope`：`export` / `mock` / `resource` 是**应用级**（与驱动无关，没有驱动声明它们），不进能力矩阵逐行对比，改由一句说明带出；单测盯住「应用级键不得被任何驱动声明」+「驱动声明的键必须在驱动能力字典里（否则矩阵漏行）」 |
 | 没有界面的位 | `META_BITS_WITHOUT_UI_KEY`（`streaming` / `arrow` / `concurrent_write` / `in_memory`）+ 单测穷尽性检查：新增一个位不表态就红 |
 | 门控（键真管事的处） | `federation` → `SqlService::{register_external_database, create_external_table}` 拒非联邦源；`transactions` → `EngineQueryRunner::supports_transactions()` **改读连接的实际 `supports_transaction`**（此前恒 `true`）。**其余 10 个键目前只展示、没有消费者**（2026-09-20 实查：`index_analysis` / `table_editor` / `sql_autocomplete` / `schema_browser` / `analytics` / `health_check` / `tree` / 三个网络键在 crates 内无读者）——要门控得先定「哪个键管哪个入口」，属产品拍板，不是接线活 |
-| 验收标记 | 能力 Tab 行尾 `✓` = 已真机验收（文字另带可复现用例名）；键声明了但无真机证据的键不给 `✓`（D10） ||
+| 验收标记 | 能力 Tab 行尾 `✓` = 已真机验收（文字另带可复现用例名）；键声明了但无真机证据的键不给 `✓`（D10） |
+| 验收证据不烂掉 | `crates/engine/tests/acceptance_evidence_is_real.rs`：字典里每个已验收键引用的用例名必须在工作区真实存在（测试目标文件名或 fn 名）；引用的测试被改名 / 删除而忘了同步字典 → 红。写法约定写在 `Acceptance::verified` 的文档上（多个用 ` + ` 连，补充说明放全角括号） |
+| 依赖源码引用不烂掉 | `crates/engine/tests/dependency_citations_match_lock.rs`：代码里形如 `sqlx-mysql-0.9.0/src/…` 的引用必须与 `Cargo.lock` 一致（扫 `crates/**`）；升依赖而没复读源码 → 红（带 `文件:行号` 与“复读结论”的提醒）。行号本身不校验（CI 上未必有源码） |
 
 ### 3.4 trait 实现面（补一个驱动要写什么）
 
