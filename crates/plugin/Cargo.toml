@@ -12,6 +12,7 @@ paths.workspace = true
 
 # ===== Async 运行时 =====
 tokio.workspace = true
+tokio-util.workspace = true
 async-trait.workspace = true
 
 # ===== 数据面（结果集走 Arrow，见 dev-plan §4.2.4 / §4.5） =====

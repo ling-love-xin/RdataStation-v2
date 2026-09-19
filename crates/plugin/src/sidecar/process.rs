@@ -23,6 +23,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::fs::OpenOptions;
@@ -315,7 +316,8 @@ impl Drop for SidecarChild {
 
 /// 连接 + 进程：sidecar 在宿主侧的全部样子。
 pub struct SidecarProcess {
-    conn: SidecarConn,
+    /// `Arc` 是为了给出可克隆的句柄（长期句柄如 `SidecarDatabase` 用**弱**引用借它）。
+    conn: Arc<SidecarConn>,
     /// 事件流；被 [`SidecarProcess::take_events`] 取走后就是 `None`（每连接只能有一个消费者）。
     events: Option<ConnEvents>,
     child: SidecarChild,
@@ -373,7 +375,7 @@ impl SidecarProcess {
         let (conn, events) = SidecarConn::spawn(stdout, stdin);
 
         Ok(Self {
-            conn,
+            conn: Arc::new(conn),
             events: Some(events),
             child: SidecarChild {
                 plugin_id: spec.plugin_id,
@@ -386,7 +388,12 @@ impl SidecarProcess {
     }
 
     pub fn conn(&self) -> &SidecarConn {
-        &self.conn
+        self.conn.as_ref()
+    }
+
+    /// 可克隆的连接句柄（`SidecarDatabase` 之类的长期句柄用 [`Arc::downgrade`] 借它）。
+    pub fn conn_handle(&self) -> Arc<SidecarConn> {
+        Arc::clone(&self.conn)
     }
 
     /// 连接上的异步事件（通知 / 错位 / 断开）。

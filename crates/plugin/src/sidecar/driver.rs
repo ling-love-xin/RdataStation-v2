@@ -243,12 +243,13 @@ impl QueryPage {
         self.data.row_count()
     }
 
-    /// 拿走 Arrow 批（这是喂 DuckDB 的那条路，§4.5.2）。
-    pub fn into_batches(self) -> Option<Vec<ArrowBatch>> {
-        match self.data {
-            PageData::Arrow(batches) => Some(batches),
-            PageData::Rows(_) => None,
-        }
+    /// 数据面统一成 Arrow 批（喂 DuckDB 的那条路，§4.5.2）。
+    ///
+    /// 内联 JSON 那条线格式在这里补成 \`RecordBatch\`：**承载方式对消费方不可见**
+    /// （§4.2.1.2），所以这里不该有"内联就没批"这种分支。
+    pub fn into_batches(self) -> Result<Vec<ArrowBatch>, DriverError> {
+        let QueryPage { columns, data, .. } = self;
+        normalize_batches(&columns, data)
     }
 }
 
@@ -626,5 +627,704 @@ mod tests {
         // 没声明的能力按**不支持**（不得静默退化）
         assert!(!descriptor.supports("streaming"));
         assert_eq!(descriptor.default_schema.as_deref(), Some("dbo"));
+    }
+}
+
+// ==================== 接引擎的 `Database` trait ====================
+//
+// 上面那层是「协议怎么说话」，这一层是「引擎怎么用它」：把一条会话包成
+// `engine::driver::Database`，于是连接面板 / 编辑器 / 导航树那些既有路径不必知道
+// sidecar 的存在。
+//
+// 三条口径：
+//
+// 1. **只填 `batches`**（架构 §12 #21）：`rows` / `total_rows` 两个字段是前端 JSON 契约，
+//    驱动去填它们会得到"大结果有数、小结果无数"。内联 JSON 那条线格式在这里**补成
+//    `RecordBatch`**（§4.2.1.2 的「承载方式对消费方不可见」），消费方只看一种表示。
+// 2. 连接是**弱引用**：会话的生死归 supervisor，这个句柄只是借用；进程被收掉之后
+//    这里明确报「连接已不可用」，而不是抱着一个陈旧进程不放。
+// 3. 取消是**真取消**：把 `query.cancel` 递到驱动进程（它回 `-32004`），而不是把 future
+//    丢掉 —— 丢掉只是这边不再等，对端那条查询还在跑（§3.2 列的 sidecar 优势之一）。
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+
+use tokio_util::sync::CancellationToken;
+
+use engine::driver::{DataSourceMeta, Database, DynDatabase, Transaction};
+use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError, PluginError};
+use shared::models::{QueryResult, Value as SharedValue};
+
+impl QueryPage {
+    /// 翻成引擎的结果模型（**只填 `batches`**，见本节口径 1）。
+    pub fn into_query_result(self) -> Result<QueryResult, DriverError> {
+        let QueryPage {
+            columns,
+            affected_rows,
+            data,
+            ..
+        } = self;
+
+        let names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
+        let types: Vec<String> = columns.iter().map(|c| c.type_raw.clone()).collect();
+        let batches = normalize_batches(&columns, data)?;
+
+        let total_rows = batches.iter().map(|b| b.num_rows() as u32).sum();
+        Ok(QueryResult {
+            columns: names,
+            column_types: types,
+            // 前端 JSON 契约的那两个字段由上层按 `batches` 现算（架构 §12 #21），驱动不填
+            rows: Vec::new(),
+            total_rows,
+            batches,
+            affected_rows: affected_rows.map(|n| n as u32),
+            // 影响行数只有写语句才会报：拿它当"是否只读"的提示（不复制第六份 SQL 首词启发式）
+            is_read_only: Some(affected_rows.is_none()),
+        })
+    }
+}
+
+/// 数据面归一：Arrow 附件原样拿走，内联 JSON 补成一个批。
+fn normalize_batches(
+    columns: &[ColumnInfo],
+    data: PageData,
+) -> Result<Vec<ArrowBatch>, DriverError> {
+    match data {
+        PageData::Arrow(batches) => Ok(batches),
+        PageData::Rows(rows) => Ok(vec![json_rows_to_batch(columns, &rows)?]),
+    }
+}
+
+/// 一条 sidecar 会话包成的引擎驱动。
+pub struct SidecarDatabase {
+    /// **弱引用**：会话的生死归 supervisor（口径 2）。
+    conn: Weak<SidecarConn>,
+    session_id: String,
+    /// 驱动类型（引擎侧用它选图标与文案；与 `MissingDriver` 等同一个口径）。
+    db_type: String,
+    /// `driver.describe` 的返回：能力、服务端版本都从这里取（清单可以撒谎，跑起来的进程不会）。
+    descriptor: DriverDescriptor,
+    /// 请求 id 发号器（`query.cancel` 用它；见模块文档的口径）。
+    next_request: AtomicU64,
+}
+
+impl SidecarDatabase {
+    pub fn new(
+        conn: &Arc<SidecarConn>,
+        session_id: impl Into<String>,
+        db_type: impl Into<String>,
+        descriptor: DriverDescriptor,
+    ) -> Self {
+        Self {
+            conn: Arc::downgrade(conn),
+            session_id: session_id.into(),
+            db_type: db_type.into(),
+            descriptor,
+            next_request: AtomicU64::new(1),
+        }
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn descriptor(&self) -> &DriverDescriptor {
+        &self.descriptor
+    }
+
+    /// 交给引擎的形态（注册表只收 `Arc<dyn Database + Send + Sync>`）。
+    pub fn into_dyn(self) -> DynDatabase {
+        Arc::new(self)
+    }
+
+    fn connection(&self) -> Result<Arc<SidecarConn>, CoreError> {
+        self.conn.upgrade().ok_or_else(|| {
+            CoreError::connection(ConnectionError::Network {
+                conn_id: self.session_id.clone(),
+                reason: format!("驱动 {} 的连接已经收掉了（会话失效）", self.db_type),
+            })
+        })
+    }
+
+    fn next_request_id(&self) -> String {
+        let n = self.next_request.fetch_add(1, Ordering::Relaxed);
+        format!("{}-{n}", self.session_id)
+    }
+
+    async fn run(
+        &self,
+        sql: &str,
+        params: Vec<Value>,
+        request_id: String,
+    ) -> Result<QueryResult, CoreError> {
+        let request = QueryRequest::new(request_id, sql).with_params(params);
+        let conn = self.connection()?;
+        let page = SessionDriver::new(&conn, &self.session_id)
+            .execute(&request)
+            .await
+            .map_err(|e| self.map_error(sql, e))?;
+
+        // 对端顺带说的话（警告 / NOTICE）：P1 只落日志 —— `QueryResult` 没有承载位，
+        // 等 P2.5 的 `ResultSet` 补上（那时它才有一个像样的去处）。
+        if !page.notices.is_empty() {
+            tracing::debug!(session_id = %self.session_id, notices = ?page.notices, "驱动侧提示");
+        }
+
+        page.into_query_result().map_err(|e| self.map_error(sql, e))
+    }
+
+    /// 驱动错误 → 引擎错误域的映射。
+    ///
+    /// 词表是既有的（`shared::error`）：SQL 错进 `DatabaseError::Query`（带出错位置，
+    /// 光标能跳过去），连接没了进 `ConnectionError`，能力缺失进 `CommonError::NotSupported`
+    /// （UI 据此置灰），插件自身说话不算话进 `PluginError`。
+    fn map_error(&self, sql: &str, error: DriverError) -> CoreError {
+        let db_type = self.db_type.clone();
+        match error {
+            DriverError::Rpc {
+                code,
+                message,
+                data,
+            } => match code {
+                RpcErrorCode::SqlError => {
+                    let mut mapped = DatabaseError::query(sql, message);
+                    // 协议给的是 **1 基字符位置**（各家数据库的口径），引擎要的是 0 基字节偏移
+                    if let Some(position) = data
+                        .as_ref()
+                        .and_then(|d| d.get("position"))
+                        .and_then(Value::as_u64)
+                        && let Some(offset) =
+                            engine::driver::utils::byte_offset_for_char(sql, position as usize)
+                    {
+                        mapped = mapped.with_position(offset);
+                    }
+                    CoreError::database(mapped)
+                }
+                RpcErrorCode::Cancelled => {
+                    CoreError::database(DatabaseError::query(sql, "查询已被取消"))
+                }
+                RpcErrorCode::Timeout => CoreError::database(DatabaseError::query(
+                    sql,
+                    "驱动报超时（-32005）：语句超过对端设定的时限",
+                )),
+                RpcErrorCode::CapabilityDenied => CoreError::common(CommonError::not_supported(
+                    format!("驱动 {db_type} 不支持该能力：{message}"),
+                )),
+                RpcErrorCode::DriverNotSupported => {
+                    CoreError::connection(ConnectionError::DriverNotFound { driver: db_type })
+                }
+                RpcErrorCode::SessionNotFound => {
+                    CoreError::connection(ConnectionError::NoActiveConnection)
+                }
+                RpcErrorCode::ProtocolVersionMismatch | RpcErrorCode::ResourceLimit => {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type,
+                        operation: "protocol".to_string(),
+                        source: message,
+                    })
+                }
+            },
+            DriverError::UnknownCode { raw_code, message } => {
+                CoreError::database(DatabaseError::Driver {
+                    db_type,
+                    operation: format!("rpc({raw_code})"),
+                    source: message,
+                })
+            }
+            DriverError::Timeout { method } => CoreError::database(DatabaseError::query(
+                sql,
+                format!("{method} 超时（该请求已放弃，对端若之后才回会报成 Issue）"),
+            )),
+            DriverError::Disconnected { reason } => {
+                CoreError::connection(ConnectionError::Network {
+                    conn_id: self.session_id.clone(),
+                    reason,
+                })
+            }
+            DriverError::Protocol { detail } => CoreError::plugin(PluginError::ExecutionFailed {
+                plugin_id: db_type,
+                function: "query.execute".to_string(),
+                reason: detail,
+            }),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Database for SidecarDatabase {
+    async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
+        self.run(sql, Vec::new(), self.next_request_id()).await
+    }
+
+    async fn query_with_params(
+        &self,
+        sql: &str,
+        params: Vec<SharedValue>,
+    ) -> Result<QueryResult, CoreError> {
+        let wire = params
+            .iter()
+            .map(shared_value_to_json)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.run(sql, wire, self.next_request_id()).await
+    }
+
+    async fn query_with_cancel(
+        &self,
+        sql: &str,
+        cancel_token: CancellationToken,
+    ) -> Result<QueryResult, CoreError> {
+        let request = QueryRequest::new(self.next_request_id(), sql);
+        let conn = self.connection()?;
+        let driver = SessionDriver::new(&conn, &self.session_id);
+
+        // 真取消（口径 3）：令牌响了就把取消**递到驱动进程**，然后继续等这次调用以
+        // `-32004` 收场 —— 不能把 future 丢掉，那只是这边不等了，对端还在跑。
+        let execute = driver.execute(&request);
+        tokio::pin!(execute);
+        let page = tokio::select! {
+            biased;
+            result = &mut execute => result,
+            _ = cancel_token.cancelled() => {
+                if let Err(e) = driver.cancel(&request.request_id).await {
+                    tracing::warn!(session_id = %self.session_id, error = %e, "取消没能递到驱动进程");
+                }
+                execute.await
+            }
+        };
+
+        let page = page.map_err(|e| self.map_error(sql, e))?;
+        page.into_query_result().map_err(|e| self.map_error(sql, e))
+    }
+
+    async fn begin_transaction(&self) -> Result<Box<dyn Transaction>, CoreError> {
+        // `tx.begin/commit/rollback` 是 P2 的事（P1 的 RPC 面只到 `query.*`）。
+        // **明确报不支持**，不静默退化成"没有事务"——那样用户会在库里留下一堆半截写入。
+        Err(CoreError::common(CommonError::not_supported(format!(
+            "驱动 {} 的事务桥还没接（tx.* 属 P2）",
+            self.db_type
+        ))))
+    }
+
+    fn meta(&self) -> DataSourceMeta {
+        DataSourceMeta {
+            server_version: self.descriptor.server_version.clone(),
+            supports_transaction: self.descriptor.supports("transactions"),
+            supports_streaming: self.descriptor.supports("streaming"),
+            // 数据面就是 Arrow —— 这一项与原生驱动（false）恰好相反，也是本方案的核心
+            supports_arrow: true,
+            // 联邦是宿主 DuckDB 的事，不是单个驱动的事
+            supports_federated: false,
+            supports_concurrent_write: self.descriptor.supports("concurrent_write"),
+            is_in_memory: false,
+        }
+    }
+
+    async fn ping(&self) -> Result<(), CoreError> {
+        let conn = self.connection()?;
+        SessionDriver::new(&conn, &self.session_id)
+            .session_ping()
+            .await
+            .map_err(|e| self.map_error("session.ping", e))
+    }
+}
+
+/// `shared::Value` → 线格式的 JSON。
+///
+/// `Bytes` 与 `NaN` **明确拒绝**：线格式是 JSON，二进制要先定一种编码（base64？数组？），
+/// 这个口径还没定 —— 与其塞个看起来能用的东西过去，不如当场报错（§12 的「不得静默退化」）。
+fn shared_value_to_json(value: &SharedValue) -> Result<Value, CoreError> {
+    Ok(match value {
+        SharedValue::Null => Value::Null,
+        SharedValue::Bool(b) => Value::Bool(*b),
+        SharedValue::Int(i) => json!(i),
+        SharedValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .ok_or_else(|| {
+                CoreError::common(CommonError::invalid_argument(
+                    "params",
+                    "NaN / Infinity 不是合法的 JSON 数字",
+                ))
+            })?,
+        SharedValue::Text(t) => Value::String(t.clone()),
+        SharedValue::Bytes(_) => {
+            return Err(CoreError::common(CommonError::not_supported(
+                "二进制参数：P1 的线格式是 JSON，bytes 要先定一种编码",
+            )));
+        }
+    })
+}
+
+/// 内联 JSON 行 → 一个 `RecordBatch`。
+///
+/// 类型按**值的形状**逐列推断：内联那条路只带 `type_raw` 文本，不带宽带类型信息；
+/// 保真的类型映射走 Arrow 附件（schema 里带 `rds.*` metadata，§4.5.1）。
+/// 同一列混排（既有数又有文本）一律退化成文本 —— 宁可显示成文本，也不要静默丢值。
+fn json_rows_to_batch(columns: &[ColumnInfo], rows: &[Value]) -> Result<ArrowBatch, DriverError> {
+    if columns.is_empty() {
+        return Err(DriverError::Protocol {
+            detail: "内联结果没有列定义".to_string(),
+        });
+    }
+
+    use arrow::array::{Array, BooleanArray, Float64Array, Int64Array, LargeStringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    let mut fields: Vec<Field> = Vec::with_capacity(columns.len());
+    let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(columns.len());
+
+    for (index, column) in columns.iter().enumerate() {
+        let cells: Vec<Option<&Value>> = rows
+            .iter()
+            .map(|row| cell_of(row, index, &column.name))
+            .collect::<Result<_, _>>()?;
+
+        let (data_type, array): (DataType, Arc<dyn Array>) = match column_kind(&cells) {
+            JsonColumnKind::Boolean => {
+                let values: Vec<Option<bool>> =
+                    cells.iter().map(|c| c.and_then(|v| v.as_bool())).collect();
+                (DataType::Boolean, Arc::new(BooleanArray::from(values)))
+            }
+            JsonColumnKind::Int64 => {
+                let values: Vec<Option<i64>> =
+                    cells.iter().map(|c| c.and_then(Value::as_i64)).collect();
+                (DataType::Int64, Arc::new(Int64Array::from(values)))
+            }
+            JsonColumnKind::Float64 => {
+                let values: Vec<Option<f64>> =
+                    cells.iter().map(|c| c.and_then(Value::as_f64)).collect();
+                (DataType::Float64, Arc::new(Float64Array::from(values)))
+            }
+            JsonColumnKind::Text => {
+                let values: Vec<Option<String>> =
+                    cells.iter().map(|c| c.map(cell_to_text)).collect();
+                (
+                    DataType::LargeUtf8,
+                    Arc::new(LargeStringArray::from(values)),
+                )
+            }
+        };
+
+        fields.push(Field::new(&column.name, data_type, column.nullable));
+        arrays.push(array);
+    }
+
+    ArrowBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(|e| DriverError::Protocol {
+        detail: format!("内联结果装不成 RecordBatch：{e}"),
+    })
+}
+
+/// 取第 `index` 列的值；`None` = 该行没有这一列（或值为 null）。
+///
+/// **内联行必须是对象**（列名做键）：位置数组不是本协议的线格式，遇到了要当场说，
+/// 而不是猜一个顺序继续跑。
+fn cell_of<'a>(row: &'a Value, index: usize, name: &str) -> Result<Option<&'a Value>, DriverError> {
+    match row {
+        Value::Object(map) => Ok(map.get(name).filter(|value| !value.is_null())),
+        other => Err(DriverError::Protocol {
+            detail: format!(
+                "内联行必须是对象（列名做键），第 {} 行给的是 {}",
+                index + 1,
+                match other {
+                    Value::Array(_) => "数组".to_string(),
+                    other => other.to_string(),
+                }
+            ),
+        }),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonColumnKind {
+    Int64,
+    Float64,
+    Boolean,
+    Text,
+}
+
+/// 逐列推断内联 JSON 的类型（全 null 的列没有类型信息可依 → 文本）。
+fn column_kind(cells: &[Option<&Value>]) -> JsonColumnKind {
+    let (mut ints, mut numbers, mut bools, mut any) = (true, true, true, false);
+    for cell in cells.iter().flatten() {
+        any = true;
+        match cell {
+            Value::Bool(_) => {
+                ints = false;
+                numbers = false;
+            }
+            Value::Number(n) => {
+                bools = false;
+                if n.as_i64().is_none() && n.as_u64().is_none() {
+                    ints = false;
+                }
+            }
+            _ => {
+                ints = false;
+                numbers = false;
+                bools = false;
+            }
+        }
+    }
+
+    match (any, bools, ints, numbers) {
+        (false, ..) => JsonColumnKind::Text,
+        (_, true, ..) => JsonColumnKind::Boolean,
+        (_, _, true, _) => JsonColumnKind::Int64,
+        (_, _, _, true) => JsonColumnKind::Float64,
+        _ => JsonColumnKind::Text,
+    }
+}
+
+/// 退化成文本时怎么显示：数字 / 布尔按字面量，嵌套结构按 JSON 串（§4.2.4 的口径）。
+fn cell_to_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Object(_) | Value::Array(_) => value.to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+
+    fn columns(names: &[(&str, &str)]) -> Vec<ColumnInfo> {
+        names
+            .iter()
+            .map(|(name, type_raw)| ColumnInfo {
+                name: (*name).to_string(),
+                type_raw: (*type_raw).to_string(),
+                nullable: true,
+            })
+            .collect()
+    }
+
+    /// 内联那条路的分内事：把 JSON 行补成 `RecordBatch`，且列序 / 类型对得上。
+    #[test]
+    fn inline_rows_become_a_record_batch() {
+        let columns = columns(&[
+            ("id", "bigint"),
+            ("name", "varchar(64)"),
+            ("amount", "numeric(38,10)"),
+            ("flag", "boolean"),
+        ]);
+        let rows = vec![
+            json!({ "id": 1, "name": "row-1", "amount": 1.5, "flag": false }),
+            json!({ "id": 2, "name": "row-2", "amount": 3.0, "flag": true }),
+        ];
+
+        let batch = json_rows_to_batch(&columns, &rows).expect("应当装得出批");
+        assert_eq!(batch.num_rows(), 2);
+        let schema = batch.schema();
+        let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["id", "name", "amount", "flag"]);
+        // 整数列就是 Int64（不是文本）：网格要按类型排 / 算，不能全是字符串
+        assert_eq!(
+            schema.field_with_name("id").unwrap().data_type(),
+            &arrow::datatypes::DataType::Int64
+        );
+        assert_eq!(
+            schema.field_with_name("name").unwrap().data_type(),
+            &arrow::datatypes::DataType::LargeUtf8
+        );
+        assert_eq!(
+            schema.field_with_name("amount").unwrap().data_type(),
+            &arrow::datatypes::DataType::Float64
+        );
+        assert_eq!(
+            schema.field_with_name("flag").unwrap().data_type(),
+            &arrow::datatypes::DataType::Boolean
+        );
+
+        use arrow::array::{Array, Int64Array};
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(ids.value(0), 1);
+        assert_eq!(ids.value(1), 2);
+    }
+
+    /// 同一列混排 → 退化成文本（宁可显示成文本，也不要静默丢值）；全 null 列同理。
+    #[test]
+    fn mixed_and_all_null_columns_degrade_to_text() {
+        let columns = columns(&[("mixed", "text"), ("empty", "text")]);
+        let rows = vec![
+            json!({ "mixed": 1, "empty": null }),
+            json!({ "mixed": "一", "empty": null }),
+        ];
+        let batch = json_rows_to_batch(&columns, &rows).unwrap();
+        assert_eq!(
+            batch.schema().field_with_name("mixed").unwrap().data_type(),
+            &arrow::datatypes::DataType::LargeUtf8
+        );
+        let mixed = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::LargeStringArray>()
+            .unwrap();
+        assert_eq!(mixed.value(0), "1");
+        assert_eq!(mixed.value(1), "一");
+        // 全 null：装得出来，且都是 null
+        assert!(batch.column(1).is_null(0) && batch.column(1).is_null(1));
+    }
+
+    /// 位置的数组行不是本协议的线格式：当场说，不要猜顺序。
+    #[test]
+    fn positional_rows_are_rejected() {
+        let columns = columns(&[("id", "bigint")]);
+        let rows = vec![json!([1, 2])];
+        let error = json_rows_to_batch(&columns, &rows).unwrap_err();
+        assert!(matches!(error, DriverError::Protocol { .. }), "{error:?}");
+        assert!(error.to_string().contains("列名做键"), "{error}");
+    }
+
+    /// 缺列按 null 处理（对端少给一列不该整条结果作废），但列定义不能没有。
+    #[test]
+    fn a_missing_key_is_null_and_columns_are_required() {
+        let columns = columns(&[("id", "bigint"), ("note", "text")]);
+        let rows = vec![json!({ "id": 1 })];
+        let batch = json_rows_to_batch(&columns, &rows).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        assert!(batch.column(1).is_null(0));
+
+        assert!(matches!(
+            json_rows_to_batch(&[], &rows),
+            Err(DriverError::Protocol { .. })
+        ));
+    }
+
+    /// 两条承载方式在 `QueryResult` 这一层必须看不出区别（§4.2.1.2）。
+    #[test]
+    fn both_wire_forms_land_in_batches() {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let inline = QueryPage {
+            columns: columns(&[("id", "bigint")]),
+            row_count: 1,
+            affected_rows: None,
+            has_more: false,
+            cursor_id: None,
+            truncated: false,
+            data: PageData::Rows(vec![json!({ "id": 7 })]),
+            notices: Vec::new(),
+        }
+        .into_query_result()
+        .unwrap();
+
+        let arrow_batch = ArrowBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![Some(7)]))],
+        )
+        .unwrap();
+        let arrow = QueryPage {
+            columns: columns(&[("id", "bigint")]),
+            row_count: 1,
+            affected_rows: None,
+            has_more: false,
+            cursor_id: None,
+            truncated: false,
+            data: PageData::Arrow(vec![arrow_batch]),
+            notices: Vec::new(),
+        }
+        .into_query_result()
+        .unwrap();
+
+        for result in [&inline, &arrow] {
+            assert_eq!(result.total_rows, 1);
+            assert_eq!(result.batches.len(), 1);
+            assert_eq!(result.columns, vec!["id".to_string()]);
+            assert_eq!(result.column_types, vec!["bigint".to_string()]);
+            // 驱动契约：只填 batches，`rows` 留空（架构 §12 #21）
+            assert!(result.rows.is_empty());
+            assert_eq!(result.is_read_only, Some(true));
+        }
+        assert_eq!(inline.total_rows(), arrow.total_rows());
+    }
+
+    /// 错误域映射：SQL 错带位置（光标能跳）、能力缺失说"不支持"、断线进连接域。
+    #[tokio::test]
+    async fn driver_errors_map_into_the_engine_error_domains() {
+        let db = SidecarDatabase::new(&Arc::new(dummy_conn()), "s1", "fixture", descriptor());
+        let sql = "select * from 无此表 where a = '它'";
+
+        let sql_error = db.map_error(
+            sql,
+            DriverError::Rpc {
+                code: RpcErrorCode::SqlError,
+                message: "relation does not exist".into(),
+                data: Some(json!({ "position": 15 })),
+            },
+        );
+        match sql_error {
+            CoreError::Database(DatabaseError::Query {
+                position, reason, ..
+            }) => {
+                assert!(reason.contains("does not exist"), "{reason}");
+                // 1 基**字符**位置 15 → 0 基**字节**偏移（中文占多字节，两者不同）
+                assert_eq!(position, Some(14));
+            }
+            other => panic!("SQL 错应当进 DatabaseError::Query：{other:?}"),
+        }
+
+        let denied = db.map_error(
+            sql,
+            DriverError::Rpc {
+                code: RpcErrorCode::CapabilityDenied,
+                message: "驱动不支持事务".into(),
+                data: None,
+            },
+        );
+        assert!(
+            matches!(denied, CoreError::Common(CommonError::NotSupported(_))),
+            "{denied:?}"
+        );
+
+        let gone = db.map_error(
+            sql,
+            DriverError::Disconnected {
+                reason: "对端退出".into(),
+            },
+        );
+        assert!(
+            matches!(gone, CoreError::Connection(ConnectionError::Network { .. })),
+            "{gone:?}"
+        );
+
+        let broken = db.map_error(
+            sql,
+            DriverError::Protocol {
+                detail: "载荷不是合法 Arrow".into(),
+            },
+        );
+        assert!(matches!(broken, CoreError::Plugin(_)), "{broken:?}");
+    }
+
+    /// 二进制参数与 NaN 明确拒绝（口径没定就别猜）。
+    #[test]
+    fn unsupported_param_values_are_refused() {
+        assert!(shared_value_to_json(&SharedValue::Bytes(vec![1, 2, 3])).is_err());
+        assert!(shared_value_to_json(&SharedValue::Float(f64::NAN)).is_err());
+        assert!(shared_value_to_json(&SharedValue::Int(3)).is_ok());
+    }
+
+    fn dummy_conn() -> SidecarConn {
+        let (host, peer) = tokio::io::duplex(64);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, _events) = SidecarConn::spawn(host_r, host_w);
+        drop(peer);
+        conn
+    }
+
+    fn descriptor() -> DriverDescriptor {
+        DriverDescriptor {
+            driver_id: "fixture".into(),
+            display_name: "Fixture".into(),
+            server_version: Some("fixture-1".into()),
+            capabilities: [("transactions".to_string(), true)].into_iter().collect(),
+            identifier_quote: Some("\"".into()),
+            default_schema: Some("public".into()),
+        }
     }
 }

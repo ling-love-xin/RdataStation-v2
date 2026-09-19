@@ -29,6 +29,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -915,6 +916,16 @@ impl SidecarSupervisor {
         self.instances
             .get(&(record.plugin_id.clone(), record.index))
             .map(|i| i.process.conn())
+    }
+
+    /// 会话 → 可克隆的连接句柄（给 `SidecarDatabase` 这类长期句柄用）。
+    ///
+    /// 排队中的会话没有连接，返回 `None` —— 与 [`Self::session_conn`] 同一个口径。
+    pub fn session_conn_handle(&self, session_id: &str) -> Option<Arc<SidecarConn>> {
+        let record = self.registry.session(session_id)?;
+        self.instances
+            .get(&(record.plugin_id.clone(), record.index))
+            .map(|i| i.process.conn_handle())
     }
 
     pub fn session(&self, session_id: &str) -> Option<&SessionRecord> {
