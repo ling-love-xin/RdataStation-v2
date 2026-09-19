@@ -57,7 +57,7 @@
 
 | 文件 | 现状 |
 | --- | --- |
-| `manifest.rs` / `model.rs` / `permission.rs` | 清单与权限骨架（P0 已扩到**四轨**：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨，见 `PermissionType::is_gating`）；`plugin-prototype-design.md` §3 是它的**增量扩展**，不是第二份契约 |
+| `manifest.rs` / `model.rs` / `permission.rs` | 清单与权限骨架（P0 已扩到**四轨**：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨，见 `PermissionType::is_gating`）；**P1 已落 `[backend]` 段**（`PluginBackend` → `command()` 四道闸 + `process_spec()` 接进程池；口径见 dev-plan §4.3.1）；`plugin-prototype-design.md` §3 是它的**增量扩展**，不是第二份契约 |
 | `plugin_service.rs` | **项目级 6 方法已实现**；表 `project_used_plugins` / `project_plugin_config` 已建（`migrations/project_meta/001_init.sql:112/121`） |
 | `manager.rs` / `loader.rs` / `installer.rs` / `dependency.rs` | 安装与装载骨架 |
 | `sidecar/manager.rs` | 现状是「一 manager 一进程 + 单 `port`」，要演进成 `PluginProcess → DriverInstance → Session` 三层；**P1 起新路径走 `process.rs`（起/收进程）+ `conn.rs`（通信），它连同 `client.rs` 一并待删** |
@@ -114,6 +114,6 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-**P1 进行中**：五块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收，P1 共 62 条新单测）+ 真实进程验收的自动化部分（`tests/fixture/` 靶子，8 条集成测试）。
-接着要做的：把决策内核接到 I/O（起/收进程的 `Registry → Action` 执行器 · 日志 · 子进程回收）· 清单 `[backend]` 段（`executable` / `max_instances` / `concurrency` / `protocol`）· 拿 PostgreSQL 包一层 sidecar 做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
+**P1 进行中**：六块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收 / `manifest.rs` 的 `[backend]` 段，P1 共 70 条新单测）+ 真实进程验收的自动化部分（`tests/fixture/` 靶子，8 条集成测试）。
+接着要做的：把决策内核接到 I/O（`Registry → Action` 执行器）· RPC 方法表（`session.open` / `query.execute` / `query.cancel` …）· 拿 PostgreSQL 包一层 sidecar 做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。

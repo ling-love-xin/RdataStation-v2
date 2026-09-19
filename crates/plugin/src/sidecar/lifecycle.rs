@@ -21,6 +21,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 /// 插件 id（= 一个 sidecar 可执行文件的运行实例的归属）。
 pub type PluginId = String;
 /// 驱动 id（一个插件可声明多个 driver）。
@@ -43,10 +45,15 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// 让用户看到"这个驱动忙不过来"，而不是把请求默默堆着。
 pub const QUEUE_MAX_LEN: usize = 16;
 
-/// 并发策略（清单 `concurrency`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 并发策略（清单 `[capabilities.driver].concurrency`，见 `manifest.rs`）。
+///
+/// 值就在清单那一侧：本模块只是消费方，不要在 `[backend]` 里再声明一份
+/// （参考实现就是因为契约重复两份而两边跑偏，见 `plugin-dev-plan.md` §3.5）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Concurrency {
-    /// 串行：同一实例同时只服务一个会话（JDBC 单 `Connection` 属此类）。
+    /// 串行（默认）：同一实例同时只服务一个会话（JDBC 单 `Connection` 属此类）。
+    #[default]
     Serial,
     /// 并行：同一实例可同时服务多个会话。
     Parallel,

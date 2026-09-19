@@ -388,6 +388,22 @@ id = "mssql"  display_name = "SQL Server"  default_port = 1433  connection_schem
 
 **版本闸必须真的拒绝**：`manifest.rs` 已有 `check_engine_compatibility`，但要在**加载与安装两处都强制**（对照 Tabularis 的 `min_runtime_version`）。
 
+#### 4.3.1 `[backend]` 的实现口径（已落地，2026-09-20）
+
+落在 `crates/plugin/src/manifest.rs`（`PluginBackend` / `BackendKind` / `BackendTransport`；
+`PluginManifest::process_spec()` 把它接成 `lifecycle::ProcessSpec`）：
+
+| 项 | 口径 | 理由 |
+| --- | --- | --- |
+| `concurrency` 的家 | **`[capabilities.driver].concurrency`**，`[backend]` 里**不放**第二份 | 只留一处：参考实现就是因为契约重复两份而两边跑偏（§3.5） |
+| `[backend.wasm]` | **未实现**：wasm 入口暂仍读 `capabilities.wasm`；声明 `kind = "wasm"` 时校验它必须在 | 并入是 P3 收 wasm 时的迁移；现在两处都写才是真的乱 |
+| `platforms` 为空 | 空 = **未声明**，不阻挡（视为跨平台） | 向后兼容已有清单；真正的闸在 P5 安装期（缺平台置灰） |
+| `transport = "jsonl"` | **保留取值，但运行期明确拒绘**（提示「P1 只支持 framed」） | 「不得静默退化」：老形态清单要在起进程前得到可读原因 |
+| 路径安全 | `executable` 必须是不含 `..` / 根 / 盘符的**相对路径**，**校验期**就挡 | 第三方清单给的字符串，拼路径前先过白名单（与 `validate_plugin_id` 同族） |
+| Windows 后缀 | 清单写 `bin/agent` 且**只有** `bin/agent.exe` 存在时自动补全 | 清单不必为平台分叉；真找不到时报错里显示的是原样路径 |
+| `kind = "script"` | 解析、进同一个进程池（`interpreter` + 脚本路径）；**端到端未接线** | 它本来就是子进程；但 Python / Jupyter 那条线在 P1 之后 |
+| 「至少一种形态」 | `[backend]` **也算一种**（不再强制 `capabilities.frontend/wasm`） | 驱动插件本来就没有前端与 wasm |
+
 ### 4.4 能力矩阵（能力缺失必须有处表达）
 
 清单 `[capabilities.driver]`，对应引擎侧新增 `DriverCapability`：
@@ -730,7 +746,7 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 
 | 设计决策 | 实现位置 |
 | --- | --- |
-| 清单与 `[backend]` 段 | `crates/plugin/src/manifest.rs` |
+| 清单与 `[backend]` 段 | `crates/plugin/src/manifest.rs`（✅ **已落地**：`backend` / `BackendKind` / `BackendTransport` / `CapabilitiesDriver{concurrency}`；`command()` 四道闸：形态 → 传输 → 平台 → 路径；`process_spec()` 接进程池） |
 | 权限与信任（双轨） | `crates/plugin/src/permission.rs` |
 | 生命周期与进程池 | `crates/plugin/src/sidecar/lifecycle.rs`（✅ **P1 已落地**：三层对象模型的决策内核，sans-io）、`crates/plugin/src/sidecar/process.rs`（✅ **P1 已落地**：起/收真实进程 —— `current_dir` / stderr 日志 / 先关 stdin 再等，不信 EOF 就强杀）、`crates/plugin/src/manager.rs`、`sidecar/health_checker.rs`（0 字节，待填） |
 | 传输与帧 | `crates/plugin/src/sidecar/proto.rs`（✅ 帧/增量解码/async 流读写/版本闸/阈值/错误码）+ `crates/plugin/src/sidecar/conn.rs`（✅ 异步客户端：drive 任务 + 在飞表 + 事件通道 + 超时放弃）+ `crates/plugin/src/sidecar/process.rs`（✅ 三管道接入连接）；`client.rs` 与旧 `sidecar/manager.rs`（HTTP/端口 + 读端口号）是**仅剩的旧路径**，等 `Registry → Action` 的执行器接上 I/O 后一并删 |
@@ -771,7 +787,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层五块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`cargo test -p rds-plugin` 81/81 + 集成 8/8（P1 新增 62 条单测 + 8 条真进程集成测试）。待办：把决策内核接到 I/O（`Registry → Action` 执行器）· 清单 `[backend]` 段 · 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
+| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` 六块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`cargo test -p rds-plugin` 89/89 + 集成 8/8（P1 新增 70 条单测 + 8 条真进程集成测试）。待办：把决策内核接到 I/O（`Registry → Action` 执行器）· RPC 方法表（`session.open` / `query.execute` / `query.cancel` …）· 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
