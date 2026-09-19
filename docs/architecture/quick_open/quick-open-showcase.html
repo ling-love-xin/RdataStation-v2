@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<!--
+  RdataStation · Quick Open（统一检索 / 命令面板）· 一页看懂（宣传 / 速览页）
+
+  分工：`quick-open-prototype.html` 是**交互稿**（9 场景，明暗双主题）；
+  本页是**概览页**（给不了解这个模块的人一页看懂：定位 · 三档模式 · 剧本 · 全流程 · 架构 · 证据 · 边界）。
+  界面的权威口径在 `quick-open-prototype-design.md`，进度与数字口径在 `quick-open-dev-plan.md` §0。
+
+  自包含：无任何外部依赖（零外链、无 CDN、无图片文件），明暗双主题与同仓宣传页同一套 token。
+  首屏浮层线框可在三档模式（默认 / `>` 命令 / `#` 元数据全文）间切换，只换面板内容。
+  可贴版孪生：`quick-open-showcase.md`（纯文本 + ASCII 骨架，适合贴进 PR / wiki）；两版章节一一对应。
+-->
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation · Quick Open（统一检索 / 命令面板）—— 一页看懂</title>
+<style>
+:root{
+  --pagebg:#EDEFF2; --bg:#FFFFFF; --fg:#2B2F36; --fg-strong:#151A21; --border:#DCDEE3;
+  --muted:#6C737E; --card:#FFFFFF; --card-border:#E4E6EA; --hover:#F4F5F7;
+  --code-bg:#F6F7F9; --code-fg:#3A3F47;
+  --primary:#C25B46; --primary-2:#E8846F; --primary-soft:rgba(194,91,70,.10);
+  --success:#16A34A; --success-soft:rgba(22,163,74,.12);
+  --warning:#B45309; --warning-soft:rgba(180,83,9,.12);
+  --info:#2563EB; --info-soft:rgba(37,99,235,.10);
+  --danger:#DC2626; --danger-soft:rgba(220,38,38,.10);
+  --shadow-sm:0 1px 2px rgba(20,24,32,.06);
+  --shadow:0 14px 34px rgba(20,24,32,.10);
+  --mono:Consolas,'SFMono-Regular','Menlo',monospace;
+}
+[data-theme="dark"]{
+  --pagebg:#111317; --bg:#1A1D22; --fg:#C9CED6; --fg-strong:#F2F4F7; --border:#2E333A;
+  --muted:#8B929C; --card:#1E2228; --card-border:#2C3138; --hover:#23282F;
+  --code-bg:#15181D; --code-fg:#C3C9D2;
+  --primary:#E8846F; --primary-2:#F5A188; --primary-soft:rgba(232,132,111,.14);
+  --success:#7DD18A; --success-soft:rgba(125,209,138,.14);
+  --warning:#D8A657; --warning-soft:rgba(216,166,87,.14);
+  --info:#6BA8FF; --info-soft:rgba(107,168,255,.14);
+  --danger:#F0716C; --danger-soft:rgba(240,113,108,.14);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 16px 40px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+  background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 22px 60px;}
+code,.mono{font-family:var(--mono);font-size:.92em;}
+code{background:var(--code-bg);color:var(--code-fg);border:1px solid var(--card-border);
+  border-radius:5px;padding:1px 5px;white-space:nowrap;}
+.dim{color:var(--muted);}
+b,strong{color:var(--fg-strong);}
+mark{background:var(--primary-soft);color:var(--fg-strong);border-radius:3px;padding:0 2px;}
+
+/* ============ 页头 + 吸顶导航 ============ */
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--primary-2),var(--primary));
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700;
+  box-shadow:0 3px 10px rgba(194,91,70,.35);}
+.brand h1{font-size:16px;font-weight:700;letter-spacing:.2px;color:var(--fg-strong);}
+.brand .sub{font-size:12px;color:var(--muted);}
+.head-actions{display:flex;align-items:center;gap:10px;}
+.badge-draft{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:999px;padding:4px 11px;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:9px;
+  padding:6px 14px;font-size:12px;font-family:inherit;box-shadow:var(--shadow-sm);cursor:pointer;transition:all .15s;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--primary);color:var(--fg-strong);}
+.nav{position:sticky;top:0;z-index:20;display:flex;gap:8px;overflow-x:auto;padding:10px 2px;
+  background:linear-gradient(var(--pagebg) 72%,transparent);backdrop-filter:blur(6px);}
+.nav a{flex:none;font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);
+  background:var(--bg);border-radius:999px;padding:4px 12px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.nav a:hover{color:var(--fg-strong);border-color:var(--primary);background:var(--primary-soft);}
+
+/* ============ Hero ============ */
+.hero{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--card-border);
+  border-radius:20px;padding:34px 34px 30px;box-shadow:var(--shadow);}
+.hero::after{content:"";position:absolute;right:-130px;top:-150px;width:400px;height:400px;border-radius:50%;
+  background:radial-gradient(circle at 30% 30%, var(--primary-soft), transparent 68%);}
+.hero-grid{display:grid;grid-template-columns:minmax(300px,1fr) minmax(300px,.92fr);gap:26px;align-items:center;position:relative;}
+.eyebrow{font-size:11px;letter-spacing:.14em;color:var(--primary);font-weight:700;}
+.hero h2{font-size:27px;line-height:1.36;color:var(--fg-strong);margin:12px 0 10px;font-weight:750;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.lead{font-size:14.5px;color:var(--muted);}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin:18px 0 18px;}
+.chip{font-size:11.5px;border:1px solid var(--card-border);background:var(--code-bg);border-radius:999px;padding:3px 11px;color:var(--fg);}
+.chip.hot{background:var(--primary-soft);border-color:transparent;color:var(--fg-strong);font-weight:600;}
+.cta{display:flex;flex-wrap:wrap;gap:9px;}
+.cta a{font-size:12.5px;text-decoration:none;border:1px solid var(--border);background:var(--bg);color:var(--fg);
+  border-radius:9px;padding:6px 14px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.cta a:hover{border-color:var(--primary);color:var(--fg-strong);}
+.cta a.pri{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600;}
+.cta a.pri:hover{background:var(--primary-2);color:#fff;}
+
+/* ============ Quick Open 浮层线框 ============ */
+.qo{background:var(--bg);border:1px solid var(--card-border);border-radius:14px;overflow:hidden;
+  box-shadow:var(--shadow);font-size:12px;}
+.qo-bar{display:flex;align-items:center;gap:9px;background:var(--code-bg);border-bottom:1px solid var(--card-border);
+  padding:7px 12px;color:var(--muted);font-size:11.5px;}
+.qo-bar .dot{width:8px;height:8px;border-radius:50%;background:var(--border);flex:none;}
+.qo-entry{flex:1;display:flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:7px;
+  background:var(--bg);padding:2px 9px;color:var(--muted);font-size:11.5px;min-width:0;}
+.qo-entry .k{flex:none;border:1px solid var(--border);border-radius:4px;padding:0 5px;background:var(--code-bg);
+  font-family:var(--mono);font-size:10.5px;color:var(--fg-strong);}
+.qo-entry .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.qo-tabs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-bottom:1px solid var(--card-border);}
+.qo-tab{font-family:inherit;font-size:11.5px;cursor:pointer;border:1px solid var(--border);background:var(--bg);
+  color:var(--muted);border-radius:999px;padding:3px 12px;transition:all .15s;}
+.qo-tab:hover{border-color:var(--primary);color:var(--fg-strong);background:var(--primary-soft);}
+.qo-tab.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600;}
+.qo-tab.on:hover{background:var(--primary-2);color:#fff;}
+.qo-input{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--card-border);}
+.qo-pfx{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--primary);background:var(--primary-soft);
+  border-radius:6px;padding:1px 7px;flex:none;}
+.qo-pfx.off{display:none;}
+.qo-q{font-family:var(--mono);font-size:12.5px;color:var(--fg-strong);}
+.qo-caret{display:inline-block;width:1px;height:13px;background:var(--primary);animation:qoblink 1.1s steps(1,end) infinite;}
+@keyframes qoblink{50%{opacity:0}}
+.qo-mode{margin-left:auto;color:var(--muted);font-size:11px;}
+.qo-group{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--code-bg);
+  border-top:1px solid var(--card-border);border-bottom:1px solid var(--card-border);
+  color:var(--fg-strong);font-weight:600;font-size:11.5px;}
+.qo-group .st{margin-left:auto;color:var(--primary);font-weight:600;font-size:11px;}
+.qo-row{display:flex;align-items:center;gap:9px;padding:5px 12px;color:var(--fg);font-size:12px;}
+.qo-row.on{background:var(--primary-soft);box-shadow:inset 2px 0 0 var(--primary);}
+.qo-tag{flex:none;font-size:10.5px;color:var(--muted);border:1px solid var(--card-border);border-radius:5px;
+  padding:0 6px;background:var(--code-bg);}
+.qo-name{font-family:var(--mono);font-size:12px;color:var(--fg-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.qo-right{margin-left:auto;color:var(--muted);font-size:11px;flex:none;}
+.qo-cut{padding:4px 12px 6px;color:var(--muted);font-size:11px;border-bottom:1px solid var(--card-border);}
+.qo-cut b{color:var(--primary);}
+.qo-two{padding:6px 12px;border-bottom:1px solid var(--card-border);}
+.qo-two.on{background:var(--primary-soft);box-shadow:inset 2px 0 0 var(--primary);}
+.qo-two .l1{display:flex;align-items:center;gap:9px;font-size:12px;}
+.qo-two .l2{font-size:11.5px;color:var(--muted);margin-top:2px;padding-left:1px;}
+.qo-hint{display:flex;gap:10px;align-items:center;padding:6px 12px;border-top:1px solid var(--card-border);
+  background:var(--code-bg);color:var(--muted);font-size:11px;}
+.qo-hint .r{margin-left:auto;color:var(--fg-strong);flex:none;}
+.pane{display:none;}
+.pane.on{display:block;}
+
+/* ============ 小节 ============ */
+.sec{margin-top:46px;scroll-margin-top:64px;}
+.sec-head{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;margin-bottom:14px;}
+.sec-head .no{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--primary);
+  border:1px solid var(--primary);border-radius:7px;padding:1px 7px;}
+.sec-head h3{font-size:19px;color:var(--fg-strong);font-weight:700;}
+.sec-head .tag{font-size:12px;color:var(--muted);margin-left:auto;text-align:right;}
+.sec-sub{color:var(--muted);margin:-4px 0 16px;max-width:82ch;}
+.hl{background:var(--primary-soft);border-radius:4px;padding:0 4px;color:var(--fg-strong);}
+.intro{margin-top:30px;}
+
+/* ============ 通用块 ============ */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px;}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:15px;padding:17px 18px;box-shadow:var(--shadow-sm);}
+.card h4{font-size:14px;color:var(--fg-strong);margin-bottom:6px;}
+.card p{font-size:12.8px;color:var(--muted);}
+.card p + .say{margin-top:9px;border-top:1px dashed var(--card-border);padding-top:8px;font-size:12px;}
+.card .say b{color:var(--primary);}
+.card .num{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--primary);line-height:1.3;margin:2px 0 7px;letter-spacing:-.01em;}
+.card .num em{font-style:normal;font-size:12.5px;color:var(--muted);font-weight:400;}
+.hl-card{border-left:3px solid var(--primary);}
+.tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);border:1px solid var(--card-border);
+  border-radius:15px;overflow:hidden;font-size:13px;box-shadow:var(--shadow-sm);}
+.tbl th,.tbl td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--card-border);vertical-align:top;}
+.tbl th{background:var(--code-bg);color:var(--fg-strong);font-size:12px;font-weight:700;}
+.tbl tr:last-child td{border-bottom:none;}
+.tbl td:first-child{color:var(--fg-strong);font-weight:600;}
+.tbl code{white-space:normal;}
+.tbl a{color:var(--primary);text-decoration:none;}
+.tbl a:hover{text-decoration:underline;}
+.art{font-family:var(--mono);font-size:12.2px;line-height:1.6;background:var(--code-bg);color:var(--code-fg);
+  border:1px solid var(--card-border);border-radius:14px;padding:16px 18px;overflow-x:auto;white-space:pre;}
+.art .c{color:var(--muted);}
+.art .k{color:var(--primary);font-weight:600;}
+.quote{border-left:3px solid var(--primary);background:var(--primary-soft);border-radius:0 12px 12px 0;
+  padding:12px 16px;font-size:13px;color:var(--fg-strong);margin:14px 0;}
+.quote.ok{border-color:var(--success);background:var(--success-soft);}
+.quote.warn{border-color:var(--warning);background:var(--warning-soft);}
+.pills{display:flex;flex-wrap:wrap;gap:9px;margin-top:13px;}
+.pill{font-size:12px;border-radius:999px;padding:5px 13px;border:1px solid var(--card-border);background:var(--card);}
+.pill.ok{background:var(--success-soft);border-color:transparent;color:var(--fg-strong);}
+.pill.info{background:var(--info-soft);border-color:transparent;color:var(--fg-strong);}
+.pill.warn{background:var(--warning-soft);border-color:transparent;color:var(--fg-strong);}
+
+/* ============ 剧本 ============ */
+.scripts{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:14px;}
+.script{background:var(--card);border:1px solid var(--card-border);border-radius:15px;padding:16px 18px;box-shadow:var(--shadow-sm);}
+.script h4{font-size:13.5px;color:var(--fg-strong);margin-bottom:4px;}
+.script .goal{font-size:12px;color:var(--primary);margin-bottom:10px;}
+.steps{list-style:none;counter-reset:st;}
+.steps li{position:relative;padding:6px 0 6px 30px;font-size:12.8px;color:var(--muted);border-bottom:1px dashed var(--card-border);}
+.steps li:last-child{border-bottom:none;}
+.steps li::before{counter-increment:st;content:counter(st);position:absolute;left:0;top:7px;width:18px;height:18px;
+  border-radius:50%;background:var(--primary-soft);color:var(--primary);font-size:11px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;font-family:var(--mono);}
+.steps li b{color:var(--fg-strong);}
+
+/* ============ 守卫 / 分层 ============ */
+.layers{display:flex;flex-direction:column;gap:9px;}
+.layer{display:flex;gap:15px;background:var(--card);border:1px solid var(--card-border);border-radius:14px;
+  padding:14px 17px;box-shadow:var(--shadow-sm);}
+.layer .tag{flex:none;width:150px;font-size:12px;font-weight:700;color:var(--primary);}
+.layer .body{min-width:0;font-size:12.8px;color:var(--muted);}
+.layer .body b{color:var(--fg-strong);}
+.layer code{white-space:normal;}
+.defect{background:var(--card);border:1px solid var(--card-border);border-left:3px solid var(--danger);
+  border-radius:0 13px 13px 0;padding:13px 16px;font-size:12.8px;color:var(--muted);}
+.defect + .defect{margin-top:10px;}
+.defect b{color:var(--fg-strong);}
+.defect .fixline{color:var(--success);font-weight:600;}
+
+/* ============ 页脚 ============ */
+.foot{margin-top:52px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;}
+.foot .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-bottom:16px;}
+.foot h5{font-size:12px;color:var(--fg-strong);margin-bottom:6px;}
+.foot ul{list-style:none;}
+.foot li{padding:2.5px 0;}
+.foot .verify{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:12px 14px;
+  font-family:var(--mono);font-size:12px;color:var(--code-fg);overflow-x:auto;white-space:pre;}
+
+@media (max-width:860px){
+  .hero-grid{grid-template-columns:1fr;}
+  .scripts{grid-template-columns:1fr;}
+  .layer{flex-direction:column;gap:5px;}
+  .layer .tag{width:auto;}
+  .sec-head .tag{margin-left:0;text-align:left;}
+}
+@media print{
+  body{background:#fff;}
+  .nav,.theme-toggle,.badge-draft,.qo-tabs{display:none;}
+  .card,.script,.layer,.tbl,.art,.qo{break-inside:avoid;}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══ 页头 ══ -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">⌕</div>
+      <div>
+        <h1>Quick Open</h1>
+        <div class="sub">RdataStation · 统一检索 / 命令面板 · 一页看懂</div>
+      </div>
+    </div>
+    <div class="head-actions">
+      <span class="badge-draft">速览页 · 口径以模块文档为准</span>
+      <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    </div>
+  </div>
+
+  <div class="sec-sub" style="margin:-8px 0 6px">本页是<b>视觉版</b>（自包含 · 明暗双主题 · 离线可开）；
+    可贴版见 <a href="quick-open-showcase.md">quick-open-showcase.md</a>——两版章节一一对应。</div>
+
+  <!-- ══ 吸顶导航（15 个锚点 = 15 个小节） ══ -->
+  <nav class="nav">
+    <a href="#s1">为什么它不是一个「搜索框」</a>
+    <a href="#s2">三档模式 · 一个入口</a>
+    <a href="#s3">三个高光</a>
+    <a href="#s4">四个剧本</a>
+    <a href="#s5">一次搜索的全流程</a>
+    <a href="#s6">结果区怎么读</a>
+    <a href="#s7">名称档：索引直出</a>
+    <a href="#s8">全文档：FTS5 trigram</a>
+    <a href="#s9">键盘与选中</a>
+    <a href="#s10">异步与状态</a>
+    <a href="#s11">架构 · 依赖只向下</a>
+    <a href="#s12">尺寸与主题</a>
+    <a href="#s13">质量与证据</a>
+    <a href="#s14">边界</a>
+    <a href="#s15">文档地图</a>
+  </nav>
+
+  <!-- ══ Hero ══ -->
+  <div class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">标题栏搜索框 · 三档模式 · 三类来源 · 全程键盘</div>
+        <h2>按住 <code>Ctrl+P</code>，敲几个字——<em>表 · 视图 · 列 · 文件 · 连接 · 命令，都在这一条里</em>。</h2>
+        <p class="lead">
+          打开即聚焦、<code>↑</code> <code>↓</code> 漫游、<code>↵</code> 执行、<code>Shift+↵</code> 留在原地接着敲；
+          <code>&gt;</code> 切命令、<code>#</code> 搜注释与类型。搜索在后台、结果按来源分组、被截掉多少都写在界面上。
+          <span class="dim">核心是元数据搜索：按名字找对象，按内容找注释。</span>
+        </p>
+        <div class="chips">
+          <span class="chip hot">8 万命中 158 ms → 1.5 ms</span>
+          <span class="chip hot">三档模式 · 一个入口</span>
+          <span class="chip hot">索引直出 · 不做全量排序</span>
+          <span class="chip">13 条命令</span>
+          <span class="chip">2 / 3 字门槛</span>
+          <span class="chip">单组 ≤ 8 · 总计 ≤ 50</span>
+          <span class="chip">150 ms 防抖</span>
+          <span class="chip">渲染期零 I/O</span>
+          <span class="chip">443 + 110 项测试</span>
+        </div>
+        <div class="cta">
+          <a class="pri" href="#s4">看四个剧本 ↓</a>
+          <a href="#s5">看一次搜索的全流程</a>
+          <a href="#s11">看架构</a>
+          <a href="quick-open-showcase.md">可贴版</a>
+        </div>
+      </div>
+
+      <!-- 浮层线框：三档模式可切，只换面板内容 -->
+      <div>
+        <div class="qo">
+          <div class="qo-bar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="qo-entry"><span class="k">Ctrl+P</span><span class="t">搜索表 · 视图 · 列 · 文件 · 连接 · 命令</span></span>
+          </div>
+          <div class="qo-tabs">
+            <button type="button" class="qo-tab on" data-mode="default" data-pfx="" data-q="ord" data-meta="默认档 · 门槛 2 字">默认</button>
+            <button type="button" class="qo-tab" data-mode="command" data-pfx=">" data-q="设置" data-meta="命令档 · 不发搜索">&gt; 命令</button>
+            <button type="button" class="qo-tab" data-mode="fulltext" data-pfx="#" data-q="含渠道" data-meta="全文档 · 门槛 3 字"># 元数据全文</button>
+          </div>
+          <div class="qo-input">
+            <span class="qo-pfx off" id="qoPfx"></span>
+            <span class="qo-q" id="qoQ">ord</span>
+            <span class="qo-caret"></span>
+            <span class="qo-mode" id="qoMode">默认档 · 门槛 2 字</span>
+          </div>
+
+          <!-- 默认档：四组（元数据 / 文件 / 连接 / 命令） -->
+          <div class="pane on" data-pane="default">
+            <div class="qo-group">元数据（表 · 视图 · 列）<span class="st">搜索中…</span></div>
+            <div class="qo-row"><span class="qo-tag">表</span><span class="qo-name"><mark>ord</mark>ers</span><span class="qo-right">public · main</span></div>
+            <div class="qo-row on"><span class="qo-tag">列</span><span class="qo-name"><mark>ord</mark>er_id</span><span class="qo-right">orders</span></div>
+            <div class="qo-row"><span class="qo-tag">视图</span><span class="qo-name"><mark>ord</mark>er_view</span><span class="qo-right">public</span></div>
+            <div class="qo-cut">还有 <b>12</b> 条（继续输入缩小范围）</div>
+            <div class="qo-group">文件（草稿箱）</div>
+            <div class="qo-row"><span class="qo-tag">文件</span><span class="qo-name">notes.sql</span><span class="qo-right">2026-09 · drafts</span></div>
+            <div class="qo-group">连接</div>
+            <div class="qo-row"><span class="qo-tag">连接</span><span class="qo-name">本地 DuckDB</span><span class="qo-right">已内省</span></div>
+            <div class="qo-group">命令</div>
+            <div class="qo-row"><span class="qo-tag">命令</span><span class="qo-name">新建查询</span><span class="qo-right">Ctrl+N</span></div>
+            <div class="qo-row"><span class="qo-tag">命令</span><span class="qo-name">打开设置</span><span class="qo-right">Ctrl+,</span></div>
+            <div class="qo-hint">元数据来自每连接缓存库（后台异步）· 文件来自草稿箱<span class="r">共 ≤ 50 条</span></div>
+          </div>
+
+          <!-- 命令档：只有命令组 -->
+          <div class="pane" data-pane="command">
+            <div class="qo-group">命令<span class="st">13 条 · 不发异步搜索</span></div>
+            <div class="qo-row on"><span class="qo-tag">命令</span><span class="qo-name">新建查询</span><span class="qo-right">Ctrl+N</span></div>
+            <div class="qo-row"><span class="qo-tag">命令</span><span class="qo-name">打开设置</span><span class="qo-right">Ctrl+,</span></div>
+            <div class="qo-row"><span class="qo-tag">命令</span><span class="qo-name">完全隐藏侧边栏</span><span class="qo-right">关键词 隐藏 / zen</span></div>
+            <div class="qo-row"><span class="qo-tag">命令</span><span class="qo-name">打开数据库导航</span><span class="qo-right">关键词 database / 导航</span></div>
+            <div class="qo-hint">关键词参与匹配但<b>不被高亮</b><span class="r">↵ 立即执行</span></div>
+          </div>
+
+          <!-- 全文档：两行式（名称行 + snippet 行） -->
+          <div class="pane" data-pane="fulltext">
+            <div class="qo-group">元数据全文（注释 / 定义）<span class="st">FTS5 trigram</span></div>
+            <div class="qo-two on">
+              <div class="l1"><span class="qo-tag">列</span><span class="qo-name">promotion_note</span><span class="qo-tag">内容</span><span class="qo-right">promotions.orders</span></div>
+              <div class="l2">该字段记录<mark>含渠道</mark>与优惠信息，用于投放归因。</div>
+            </div>
+            <div class="qo-two">
+              <div class="l1"><span class="qo-tag">视图</span><span class="qo-name">promotion_summary</span><span class="qo-tag">内容</span><span class="qo-right">public</span></div>
+              <div class="l2">视图注释：按<mark>含渠道</mark>与优惠信息汇总的投放视图。</div>
+            </div>
+            <div class="qo-hint">门槛 3 字（trigram 下限）· 语料 = 注释与类型（视图定义 / 例程源码暂未纳入）<span class="r">整档两行高</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 开场：它替你做到的事（对应可贴版的开头两节） ══ -->
+  <div class="intro">
+    <div class="sec-head"><h3>它替你做到的事</h3>
+      <span class="tag">按住 Ctrl+P 之前，先知道它给什么</span></div>
+    <table class="tbl">
+      <tr><th style="width:26%">你关心的</th><th>它给什么</th></tr>
+      <tr><td>库很大，还快吗</td>
+        <td>10 万对象缓存库里，8 万条同前缀命中的搜索 <b>158 ms → 1.5 ms</b>（2026-09-19，debug 同轮对照）；名称档与全文档各自走索引，<b>都不做全量排序</b></td></tr>
+      <tr><td>只记得一半名字</td>
+        <td>名称档是<b>中缀</b>匹配：敲 <code>ord</code> 命中 <code>order_items</code>；<b>不受 3 字限制</b>，中文子串同样可用</td></tr>
+      <tr><td>只记得注释里写过什么</td>
+        <td><code>#</code> 档走 FTS5 <b>trigram</b> 全文档（注释 / 类型），snippet 直接标出命中片段</td></tr>
+      <tr><td>会不会偷偷建东西</td>
+        <td>搜索<b>不为</b>未内省过的连接创建缓存文件（沿用导航的 <code>cache_file_exists</code> 门）；<b>0 个新文件</b></td></tr>
+      <tr><td>结果会不会跳</td>
+        <td>选中锚在<b>业务键</b>上、同分行按 <code>id</code> 兜底：异步回填与重新搜索都不抢你当前的位置</td></tr>
+      <tr><td>结果少是不是被吞了</td>
+        <td>单组 ≤ 8、总计 ≤ 50，<b>被截的条数写在组尾</b>（「还有 N 条」）；搜不动时给门槛提示而不是空列表</td></tr>
+      <tr><td>能不能不摸鼠标</td>
+        <td>打开 / 漫游 / 执行 / 保留面板 / 关闭，全部有键；<code>Ctrl+P</code> 一个入口进出</td></tr>
+    </table>
+  </div>
+
+  <!-- ══ 01 ══ -->
+  <section class="sec" id="s1">
+    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「搜索框」</h3>
+      <span class="tag">V1 的标题栏输入框只是块装饰——这一版逐条换成真东西</span></div>
+    <table class="tbl">
+      <tr><th style="width:44%">旧样子</th><th>现在</th></tr>
+      <tr><td>输入框只是外观，没有浮层、没有键盘通道</td>
+        <td><b>独立浮层实体</b>（<code>quick_open/palette.rs</code>）：打开即聚焦、<code>↑</code> <code>↓</code> 跨组漫游、<code>↵</code> / <code>Shift+↵</code> / <code>Esc</code> 三态确认</td></tr>
+      <tr><td>只能过滤一份写死的本地清单</td>
+        <td><b>三类来源</b>：元数据（跨连接索引，异步）、文件（草稿箱）、连接 + 命令</td></tr>
+      <tr><td>没有模式概念</td>
+        <td><code>&gt;</code> 命令 / <code>#</code> 元数据全文 / 默认混排；前缀只认第一个字符，删掉即回默认</td></tr>
+      <tr><td>结果区手搓 <code>div</code> + <code>on_mouse_down</code>，无 hover / 选中态</td>
+        <td>组件库 <code>List</code> + <code>ListDelegate</code>：分组头（section header）、空态、hover / 选中 / 滚动全归组件</td></tr>
+      <tr><td>搜不到只给一个空列表</td>
+        <td>状态永远可见：组头「搜索中…」、门槛「再输入 1 个字符」、截断「还有 N 条」</td></tr>
+      <tr><td>执行动作内联在渲染闭包里</td>
+        <td>动作过端口（<code>QuickOpenHost::execute</code>），宿主只负责「做」；浮层不碰工作台内部</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 02 ══ -->
+  <section class="sec" id="s2">
+    <div class="sec-head"><span class="no">02</span><h3>三档模式 · 一个入口</h3>
+      <span class="tag">三档共用一个输入框，前缀只认第一个字符</span></div>
+    <div class="sec-sub">前缀只认<b>第一个字符</b>（半角 <code>&gt;</code> / <code>#</code>；全角 <code>＞</code> <code>＃</code> 当普通搜索词，避免输入法误触发）。</div>
+    <table class="tbl">
+      <tr><th style="width:12%">模式</th><th style="width:8%">触发</th><th style="width:34%">搜什么</th><th style="width:16%">最小词长</th><th>数据源</th></tr>
+      <tr><td>默认</td><td>无前缀</td>
+        <td>元数据（表 / 视图 / 列）+ 文件（草稿箱）+ 连接 + 命令</td>
+        <td>元数据 <b>2 字</b>（本地源不受限）</td>
+        <td>每连接的元数据缓存库（后台异步）</td></tr>
+      <tr><td>命令</td><td><code>&gt;</code></td>
+        <td>仅命令（<b>13 条</b>，带稳定 id 与英文关键词，如 <code>settings</code> / <code>database</code>）</td>
+        <td>不发异步搜索</td>
+        <td>进程内目录（<code>quick_open/commands.rs</code>）</td></tr>
+      <tr><td>元数据全文</td><td><code>#</code></td>
+        <td>全文档：schema / 表 / 列 / 视图 / 例程的<b>注释与类型</b>（视图定义 / 例程源码暂未纳入，见 §17 Q8）</td>
+        <td><b>3 字</b>（trigram 的下限）</td>
+        <td>同库的 FTS5 表（<code>metadata_fts</code>）</td></tr>
+    </table>
+    <div class="quote warn">
+      门槛不是随手定的：名称档 2 字是为了不让<b>每个连接</b>都被扫一遍；全文档 3 字是因为 trigram 分词器下
+      <b>不足一个 trigram 必然无命中</b>（实测：中文注释搜「含渠道」命中、搜「渠道」无命中）。
+    </div>
+  </section>
+
+  <!-- ══ 03 ══ -->
+  <section class="sec" id="s3">
+    <div class="sec-head"><span class="no">03</span><h3>三个高光</h3><span class="tag">如果只记三件事</span></div>
+    <div class="cards">
+      <div class="card hl-card">
+        <h4>① 元数据搜索是核心，而它是索引直出的</h4>
+        <p>名称档：先按类别（表 → 视图 → schema → 列）各扫一段 <code>(connection_id, object_type, LOWER(name))</code> 索引，
+          取够一页就停——<b>没有全量排序、没有近似窗口</b>；排序键里连 <code>LENGTH</code> 都拿掉了，就为了让它能被索引直出
+          （8 万同前缀命中：<b>158 ms → 1.5 ms</b>）。全文档：FTS5 trigram + <code>ORDER BY rank</code>，中文注释可搜。</p>
+        <div class="say"><b>结果是：</b>8 万命中 1.5 ms，而不是「等它排完」。</div>
+      </div>
+      <div class="card hl-card">
+        <h4>② 「在搜 / 没搜够 / 被截了」三件事，界面上都写着</h4>
+        <p>组头右侧「搜索中…」、门槛提示「再输入 N 个字符」、组尾「还有 N 条（继续输入缩小范围）」——
+          <b>静默截断与静默空列表在这套界面里是不允许的</b>（<code>Group.hidden</code> 承载被截条数，测试钉住）。</p>
+        <div class="say"><b>反例：</b>「按了没反应」在这套界面里是不允许的。</div>
+      </div>
+      <div class="card hl-card">
+        <h4>③ 浮层是可测的实体，不是渲染闭包里的一坨</h4>
+        <p>纯逻辑（前缀解析 / 评分 / 分组 / 截断）在 <code>model.rs</code> 是纯函数；浮层是独立 <code>Entity</code>；
+          宿主只实现一个端口 <code>QuickOpenHost</code>（执行动作 + 打开 / 关闭）。</p>
+        <div class="say"><b>于是窗口测试能真按键：</b><code>Ctrl+P</code> → 打字符 → <code>↑</code> <code>↓</code> → <code>↵</code> → 断言副作用。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 04 ══ -->
+  <section class="sec" id="s4">
+    <div class="sec-head"><span class="no">04</span><h3>四个剧本 · 它替你做什么</h3>
+      <span class="tag">每一步都用现在就能敲的键，能照着做</span></div>
+    <div class="scripts">
+      <div class="script">
+        <h4>剧本 A · 只记得表名的一半</h4>
+        <div class="goal">→ 3 秒找到并打开属性</div>
+        <ol class="steps">
+          <li><b>召唤</b>：<code>Ctrl+P</code>——浮层在标题栏下方展开，焦点已在输入框（不用再点一下）</li>
+          <li><b>敲一半</b>：敲 <code>ord</code>——命中按来源分组：<b>元数据（表 · 视图 · 列）</b>在最上，前缀命中排在子串命中之前</li>
+          <li><b>看一眼再决定</b>：每行左侧是类型短标签（表 / 视图 / 列 / 模式 / 连接 / 命令 / 文件），右侧是所属 schema / 目录</li>
+          <li><b>进去</b>：<code>↵</code> 打开属性面板并定位该对象；<b><code>Shift+↵</code> 不关面板</b>，接着敲下一个</li>
+        </ol>
+      </div>
+      <div class="script">
+        <h4>剧本 B · 只记得注释里写过「优惠」</h4>
+        <div class="goal">→ <code>#</code> 档找字段</div>
+        <ol class="steps">
+          <li><b>切档</b>：输入 <code>#优惠</code>（前缀与词之间可有空格）</li>
+          <li><b>读片段</b>：结果是两行式：第一行对象名 + <code>内容</code> 标签，第二行是 <b>snippet</b>，命中片段带底色</li>
+          <li><b>定位</b>：<code>↵</code> 到属性面板；命中来自注释而不是名字，所以<b>不做标题过滤</b>（否则只在注释里命中的行会被误杀）</li>
+        </ol>
+      </div>
+      <div class="script">
+        <h4>剧本 C · 忘了菜单在哪</h4>
+        <div class="goal">→ <code>&gt;</code> 档当命令行用</div>
+        <ol class="steps">
+          <li><b>切档</b>：输入 <code>&gt;设置</code>、<code>&gt;隐藏</code>、<code>&gt;新建查询</code>，或直接敲英文关键词 <code>settings</code> / <code>database</code></li>
+          <li><b>认准目标</b>：每条命令显示快捷键；关键词参与匹配但<b>不被高亮</b>（不把你看不到的词标黄）</li>
+          <li><b>执行</b>：<code>↵</code> 立即执行；命令档不触发任何元数据搜索（不发异步、不打库）</li>
+        </ol>
+      </div>
+      <div class="script">
+        <h4>剧本 D · 接着改上次的草稿</h4>
+        <div class="goal">→ 默认档里就是文件</div>
+        <ol class="steps">
+          <li><b>敲路径片段</b>：文件行的匹配面是<b>相对路径</b>：敲 <code>drafts/notes</code> 或只敲目录名都能命中（高亮仍按文件名算）</li>
+          <li><b>打开</b>：<code>↵</code> 在中央编辑区打开该草稿（可写 / 只读由编辑器按路径判定）</li>
+          <li><b>清单太大</b>：后台清单被截时，组头右侧写明原因；搜索仍在后台继续，不挡你敲字</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 05 ══ -->
+  <section class="sec" id="s5">
+    <div class="sec-head"><span class="no">05</span><h3>一次搜索的全流程</h3>
+      <span class="tag">本地源即时算，异步只补元数据；过期批次不上屏</span></div>
+    <pre class="art">     你敲一个字符
+          │
+          ▼
+   <span class="k">parse(raw)</span> ──► Mode{ Default | Command(>) | FullText(#) } + needle（保留大小写，供高亮）
+          │
+          ▼
+   本地源即时算（纯函数，无 I/O）：命令 / 连接 / 元数据名称档结果 / 文件
+          │                                   │
+          │                                   └─► cap_groups：单组 ≤ 8、总计 ≤ 50，
+          │                                       被截条数 → Group.hidden（组尾「还有 N 条」）
+          ▼
+   词长够吗？── 不够 ──► 只出本地结果 + 提示行「再输入 N 个字符」
+          │
+         够
+          ▼
+   <span class="k">schedule_search</span>：150 ms 防抖，且只在词变化时才发
+          │
+          ▼
+   后台（database::nav_jobs，按消费方分槽 SearchConsumer::QuickOpen）
+     ├─ 名称档：engine::search_index（缓存库，每连接一份；无缓存的连接直接跳过）
+     └─ 全文档：engine::search_fts（FTS5 trigram + snippet）
+          │
+          ▼
+   <span class="k">pump_results</span>：批次自带 query —— 与当前输入不一致直接丢（过期批次不上屏）
+          │
+          ▼
+   <span class="k">build_groups</span>（纯函数）→ List/ListDelegate 渲染
+          │
+          ▼
+   ↵ → <span class="k">QuickOpenHost::execute(action)</span> → 宿主打开属性面板 / 新建文档 / 切面板 / 选中连接</pre>
+    <table class="tbl" style="margin-top:13px">
+      <tr><th style="width:40%">环节</th><th>落点</th></tr>
+      <tr><td>前缀解析 / 门槛 / 评分 / 分组 / 截断</td><td><code>crates/workbench/src/quick_open/model.rs</code>（纯函数 + 单测）</td></tr>
+      <tr><td>浮层本体（输入 / 键盘 / 防抖 / 回填 / 关闭）</td><td><code>crates/workbench/src/quick_open/palette.rs</code>（独立 <code>Entity</code>）</td></tr>
+      <tr><td>结果区渲染</td><td><code>crates/workbench/src/quick_open/delegate.rs</code>（<code>ListDelegate</code>）</td></tr>
+      <tr><td>命令目录</td><td><code>crates/workbench/src/quick_open/commands.rs</code>（13 条，稳定 id + keywords）</td></tr>
+      <tr><td>动作端口与宿主装配</td><td><code>palette.rs::QuickOpenHost</code> + <code>view.rs::{toggle_quick_open, execute_quick_open_action}</code></td></tr>
+      <tr><td>后台搜索通道（双消费方分槽）</td><td><code>crates/database/src/nav_jobs.rs</code>（<code>SearchConsumer::{Navigator, QuickOpen}</code>）</td></tr>
+      <tr><td>名称档 / 全文档查询</td><td><code>crates/engine/src/persistence/metadata_cache.rs</code>（<code>search_index</code> / <code>search_fts</code>）</td></tr>
+    </table>
+    <div class="pills">
+      <span class="pill ok">本地源即时算，不挡打字</span>
+      <span class="pill info">异步只补元数据，过期批次直接丢</span>
+      <span class="pill info">执行走端口，浮层不碰宿主内部</span>
+    </div>
+  </section>
+
+  <!-- ══ 06 ══ -->
+  <section class="sec" id="s6">
+    <div class="sec-head"><span class="no">06</span><h3>结果区怎么读</h3>
+      <span class="tag">组头说明 + 状态，主行给名称与定位，组尾给截断</span></div>
+    <pre class="art">┌ 元数据（表 · 视图 · 列）                                     搜索中… ┐   <span class="c">← 组头：说明 + 状态</span>
+│  [表]  orders                     public · main                      │   <span class="c">← 主行：类型标签 + 名称 + 定位</span>
+│  [列]  order_id                   orders                              │   <span class="c">← 列行：父对象在右侧</span>
+│  [视图] order_view                public                               │
+│  ……                                                                   │
+│  还有 12 条（继续输入缩小范围）                                        │   <span class="c">← 组尾：被截条数，不静默</span>
+├ 文件（草稿箱）                                                        │
+│  [文件] notes.sql                 2026-09 · drafts                    │   <span class="c">← 次级信息 = 所在目录</span>
+├ 连接                                                                  │
+├ 命令                                                                  │
+└───────────────────────────────────────────────────────────────────────┘</pre>
+    <table class="tbl" style="margin-top:13px">
+      <tr><th style="width:22%">元素</th><th>口径</th></tr>
+      <tr><td>类型短标签</td><td>文本 + 位置双通道（不只靠颜色）：表 / 视图 / 列 / 模式 / 连接 / 命令 / 文件</td></tr>
+      <tr><td>主行</td><td>名称；<b>命中区间</b>加底色（<code>search.match.background</code>）</td></tr>
+      <tr><td>次级信息</td><td>元数据 = catalog · schema（列显示父表）；文件 = 所在目录；命令 = 快捷键</td></tr>
+      <tr><td><code>#</code> 档两行式</td>
+        <td>第一行名称 + <code>名称</code> / <code>内容</code> 标签（说明<b>为什么命中</b>），第二行 snippet；<b>整档统一两行高</b>（<code>QUICK_OPEN_ROW_HEIGHT_FULLTEXT</code>），满足 <code>List</code> 的同行同高约束</td></tr>
+      <tr><td>分组次序（默认档）</td><td>元数据 → 文件 → 连接 → 命令（对象是主线，命令是补充；空组连组头都不出现）</td></tr>
+      <tr><td>空态</td><td>随模式换文案（无匹配命令 / 无匹配全文 / 无匹配…），并区分「还在搜」与「真没有」</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 07 ══ -->
+  <section class="sec" id="s7">
+    <div class="sec-head"><span class="no">07</span><h3>名称档：两段式 + 分类索引序直出</h3>
+      <span class="tag">中缀可搜 · 索引序直出 · 全程无 SQL 排序</span></div>
+    <div class="sec-sub">名称档回答「按名字找对象」，所以<b>必须支持中缀</b>（敲 <code>ord</code> 要能找到 <code>order_items</code>）——
+      这一点 FTS 的 trigram 做不到（&lt; 3 字必然无命中），于是它走缓存库的 <code>metadata_index</code> 表。</div>
+    <table class="tbl">
+      <tr><th style="width:12%">段</th><th style="width:44%">做什么</th><th>怎么做到不慢</th></tr>
+      <tr><td>前缀段</td>
+        <td><code>&gt;= needle AND &lt;= needle‖U+10FFFF</code> 范围比较（等价于「以 needle 开头」）</td>
+        <td>走 <code>(connection_id, object_type, LOWER(object_name))</code> 索引；<b>每类各扫一段</b>，<code>ORDER BY LOWER(name) LIMIT n</code> 就是索引序，取够即停</td></tr>
+      <tr><td>回落段</td>
+        <td>前缀没装满一页时，用 <code>LIKE '%needle%'</code> 补名额</td>
+        <td>同一索引：<code>LIKE</code> 只当过滤谓词，<b>排序仍由索引提供</b>（旧写法是全表扫 + 全量排序）</td></tr>
+      <tr><td>合并</td>
+        <td>按「档位（完全相等 → 前缀 → 中缀）→ 类别（表 → 视图 → schema → 列）→ 名序」稳定排序</td>
+        <td>稳定排序保住类内索引序，所以不需要把 <code>id</code> / 长度拿进键；<b>全程无 SQL 排序</b></td></tr>
+    </table>
+    <div class="sec-sub" style="margin:16px 0 10px">10 万对象缓存库实测（debug，单连接，8 万表 + 2 万列；同轮并排跑旧写法）：</div>
+    <table class="tbl">
+      <tr><th style="width:52%">查询</th><th style="width:24%">现在</th><th>旧写法（单条中缀 + 全排序）</th></tr>
+      <tr><td><code>table_</code>（8 万同前缀命中）</td><td><b>1.5 ms</b></td><td>158 ms</td></tr>
+      <tr><td><code>_0042</code>（中缀，命中在列档）</td><td><b>12 ms</b></td><td>72 ms</td></tr>
+      <tr><td><code>table_000042</code>（表档一条不中，须扫完整段才能确认）</td><td><b>45 ms</b></td><td>87 ms</td></tr>
+      <tr><td>无命中</td><td><b>45 ms</b></td><td>79 ms</td></tr>
+    </table>
+    <div class="cards" style="margin-top:13px">
+      <div class="card">
+        <h4>第一步 · 前缀段走索引</h4>
+        <div class="num">178 ms</div>
+        <p>快，但排序还在——8 万同前缀命中仍要排完才给结果。</p>
+      </div>
+      <div class="card">
+        <h4>第二步 · 拿掉排序键里的 <code>LENGTH</code></h4>
+        <div class="num">1.5 ms</div>
+        <p>排序退化成「相等 → 类别 → 名序」，恰好与索引序一致，于是窗口与排序一起消失，<b>既精确又快</b>。</p>
+      </div>
+      <div class="card">
+        <h4>剩下的成本</h4>
+        <div class="num">45 ms <em>稀疏词 / 无命中</em></div>
+        <p>稀疏词要扫完该档整段才能确认「没有」——再要降只能靠 trigram。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 08 ══ -->
+  <section class="sec" id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>全文档：FTS5 trigram</h3>
+      <span class="tag">trigram 让中文注释可搜，代价是 3 字门槛</span></div>
+    <table class="tbl">
+      <tr><th style="width:14%">维度</th><th>取值</th></tr>
+      <tr><td>表</td><td><code>metadata_fts</code>（与 <code>metadata_index</code> 同在每连接的缓存库）</td></tr>
+      <tr><td>语料</td><td>schema 名；表 = schema + 表名 + 表注释；列 = schema + 表名 + 列名 + <b>数据类型</b> + 列注释；视图 = schema + 视图名 + 视图注释；例程 = schema + 例程名 + 例程类型 + 例程注释</td></tr>
+      <tr><td>暂无语料</td><td><code>view_definitions.view_definition</code> 与 <code>routines.routine_definition</code> <b>已落在缓存里但没进 FTS</b>（是否纳入见原型设计 §17 Q8）——今天能搜的是<b>注释与类型</b>，不是视图 / 例程源码；分组标题里的「注释 / 定义」是既有 UI 文案</td></tr>
+      <tr><td>分词</td><td><code>trigram</code>（迁移 011）——中文子串可搜，代价是<b>查询 ≥ 3 字</b>、索引体积约为文本 3 倍量级</td></tr>
+      <tr><td>清洗</td><td>查询词先经 <code>fts_match_query</code>：拆词 → 逐词加引号 → 末词前缀；<code>"</code> <code>*</code> <code>(</code> <code>NEAR</code> <code>-</code> 全按字面处理，<b>不报错</b></td></tr>
+      <tr><td>返回</td><td>类型 + schema + 对象名 + 父对象 + <b>snippet</b>（SQLite <code>snippet()</code> 生成的 <code>&lt;mark&gt;</code> 片段，直接转高亮）</td></tr>
+      <tr><td>写入时机</td><td>与 <code>rebuild_schema_index</code> <b>同批</b>（内省一个 schema 就刷新一次）；<b>绝不在搜索路径写库</b>，且 FTS 失败只告警、不拖垮导航赖以分页的索引</td></tr>
+    </table>
+    <div class="sec-sub" style="margin:16px 0 10px"><b>两个当场抓出来的底座缺陷</b>（都已修，写在迁移 011 的注释里）：</div>
+    <div class="defect">
+      <b>① 旧表是 contentless（<code>content=''</code>）</b>——<code>MATCH</code> 能命中，但 <code>SELECT</code> 回来的对象名<b>全是 NULL</b>
+      （<code>Invalid column type Null at index: 0</code>），snippet 也无从生成，整条读路径其实不可用。
+      <div class="fixline">→ 迁移 011 重建为可读表：命中、读回、snippet 三件事同时成立。</div>
+    </div>
+    <div class="defect">
+      <b>② 旧分词器 <code>unicode61</code> 把连续中文当一个 token</b>（「含渠道与优惠信息」是一个词），<b>中文注释等于搜不了</b>。
+      <div class="fixline">→ 换 <code>trigram</code>：中文子串可搜，实测搜「含渠道」命中。</div>
+    </div>
+  </section>
+
+  <!-- ══ 09 ══ -->
+  <section class="sec" id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>键盘与选中</h3>
+      <span class="tag">选中锚在业务键上——异步回填不抢光标</span></div>
+    <table class="tbl">
+      <tr><th style="width:16%">键</th><th>行为</th></tr>
+      <tr><td><code>Ctrl+P</code></td><td>打开 / 关闭浮层（与标题栏入口同一个）；打开即聚焦、清空上次输入、重置选中</td></tr>
+      <tr><td><code>↑</code> <code>↓</code></td><td>跨组连续漫游（结果重算后按<b>业务键</b>回到原来那一行）</td></tr>
+      <tr><td><code>↵</code></td><td>执行选中行：打开属性面板 / 建文档 / 切面板 / 选中连接 / 打开草稿</td></tr>
+      <tr><td><code>Shift+↵</code></td><td>执行但<b>保留面板</b>（连续操作不用重开）</td></tr>
+      <tr><td><code>Esc</code></td><td>一次即关（不做两段式清空）；未回的批次照常丢弃</td></tr>
+      <tr><td>鼠标</td><td>悬停高亮、点击执行；点击遮罩关闭</td></tr>
+    </table>
+    <div class="quote">
+      选中不是按行号锚的，而是按业务键（<code>qo-row-{key}</code>）：异步回填时新结果插进来也不会把光标顶走。
+      这条与「排序稳定」「<code>id</code> 兜底」是一组——<b>三者合起来才让结果不跳</b>。
+    </div>
+  </section>
+
+  <!-- ══ 10 ══ -->
+  <section class="sec" id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>异步与状态</h3>
+      <span class="tag">150 ms 防抖 · 过期丢弃 · 不建缓存 · 不抢选中</span></div>
+    <table class="tbl">
+      <tr><th style="width:20%">规则</th><th>说明</th></tr>
+      <tr><td>单输入源</td><td>浮层里只有一个输入框；标题栏入口只负责「打开」</td></tr>
+      <tr><td>防抖</td><td>元数据是读盘 + 跨连接：<b>150 ms</b> 防抖，且<b>只在查询词变化时</b>才发</td></tr>
+      <tr><td>过期批次丢弃</td><td>回填结果自带 <code>query</code>，与当前输入不一致直接丢（<code>SearchResult</code> 语义）</td></tr>
+      <tr><td>不建缓存</td><td>查询不为未内省过的连接创建元数据文件（<code>cache_file_exists</code> 门）——搜索不该顺手建文件</td></tr>
+      <tr><td>双消费方分槽</td><td><code>nav_jobs</code> 按 <code>SearchConsumer::{Navigator, QuickOpen}</code> 分槽：导航与浮层同时搜<b>不互抢</b>结果</td></tr>
+      <tr><td>不抢选中</td><td>镜像宿主选中时用 <code>begin_host_sync</code> / <code>end_host_sync</code> 守卫，避免「更新正在被更新的实体」</td></tr>
+      <tr><td>重绘</td><td>状态变化后通知宿主重渲染（<code>Shared::notify_host</code>）</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 11 ══ -->
+  <section class="sec" id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>架构 · 依赖只向下</h3>
+      <span class="tag">workbench → database → engine；浮层不碰 SQLite</span></div>
+    <pre class="art">        ┌────────────────────────── crates/workbench（宿主） ──────────────────────────┐
+        │  view.rs：入口 / 键盘 / 动作执行（execute_quick_open_action）                 │
+        │      │ 装配 Shared（含 quick_open 槽位）                                     │
+        │      ▼                                                                       │
+        │  quick_open/palette.rs  ──实现──►  QuickOpenHost（execute / open / close）    │
+        │      │  独立 Entity：输入 · 键盘 · 防抖 · 回填 · 关闭                          │
+        │      ├─ model.rs（纯函数：parse / rank / build_groups / cap_groups）          │
+        │      ├─ commands.rs（命令目录：稳定 id + keywords + 快捷键）                   │
+        │      └─ delegate.rs（List + ListDelegate：分组头 / 空态 / 行 / 高亮）          │
+        └───────────────┬──────────────────────────────────┬──────────────────────────┘
+                        │ 只读数据 + 发起搜索                │ 动作（打开面板 / 建文档…）
+                        ▼                                  ▼
+        crates/database（后台通道：nav_jobs 按消费方分槽）   宿主既有能力（面板 / 编辑器 / 项目）
+                        │
+                        ▼
+        crates/engine（存储与查询：metadata_index 名称档 / metadata_fts 全文档 / 迁移 011·013）</pre>
+    <table class="tbl" style="margin-top:13px">
+      <tr><th style="width:22%">纪律</th><th>含义</th></tr>
+      <tr><td>依赖只向下</td><td>workbench → database → engine；浮层不直接碰 SQLite，也不拿宿主内部实体</td></tr>
+      <tr><td>渲染零 I/O</td><td>渲染期只读内存快照；搜索 / 文件清单都在后台，回填走泵</td></tr>
+      <tr><td>纯函数优先</td><td>前缀解析、门槛、评分、分组、截断都是无窗口纯函数（<code>model.rs</code> 13 项单测钉住）</td></tr>
+      <tr><td>端口只有一个</td><td><code>QuickOpenHost::execute(action, keep_open, window, cx)</code>——宿主做「怎么做」，浮层只说「做什么」</td></tr>
+      <tr><td>组件不许手搓</td><td>结果区是组件库 <code>List</code> + <code>ListDelegate</code>；尺寸取自 <code>workbench_shell/src/ui.rs</code> 常量，取色走主题 token</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 12 ══ -->
+  <section class="sec" id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>尺寸与主题</h3>
+      <span class="tag">尺寸进 ui.rs、颜色走主题 token，契约测试守着</span></div>
+    <div class="sec-sub">结构尺寸统一定义在 <code>crates/workbench_shell/src/ui.rs</code>（视图里不写裸 <code>px</code>，契约测试扫描）：</div>
+    <table class="tbl">
+      <tr><th style="width:44%">常量</th><th style="width:22%">值</th><th>用途</th></tr>
+      <tr><td><code>QUICK_OPEN_ENTRY_WIDTH</code> / <code>_HEIGHT</code> / <code>_PADDING_X</code></td>
+        <td>20 / 1.625 / 0.625 rem</td><td>标题栏入口（那条「搜索框」）</td></tr>
+      <tr><td><code>QUICK_OPEN_PANEL_WIDTH</code> / <code>_TOP</code></td>
+        <td>35 / 2.625 rem</td><td>浮层宽度与距顶（挂在标题栏下方）</td></tr>
+      <tr><td><code>QUICK_OPEN_PANEL_MAX_HEIGHT</code> / <code>_LIST_MAX_HEIGHT</code></td>
+        <td>26.25 / 21.25 rem</td><td>面板与列表的最大高度</td></tr>
+      <tr><td><code>QUICK_OPEN_GROUP_HEADER_HEIGHT</code> / <code>_HINT_HEIGHT</code></td>
+        <td>1.125 / 1.5 rem</td><td>分组头 / 提示行</td></tr>
+      <tr><td><code>QUICK_OPEN_ROW_HEIGHT_FULLTEXT</code></td>
+        <td>2.75 rem</td><td><code>#</code> 档两行式整档高（<code>List</code> 同行同高约束）</td></tr>
+      <tr><td><code>QUICK_OPEN_MAX_ROWS_PER_GROUP</code> / <code>_MAX_ROWS</code></td>
+        <td>8 / 50</td><td>渲染上限（超出写进「还有 N 条」）</td></tr>
+      <tr><td><code>QUICK_OPEN_SEARCH_DEBOUNCE_MS</code></td>
+        <td>150</td><td>搜索防抖</td></tr>
+    </table>
+    <div class="quote">
+      取色一律走主题：<code>cx.theme().colors.*</code> + 产品语义 token <code>quick_open_group_header</code> / <code>search_match_background</code>
+      （明暗两套自动跟随，视图里<b>零裸色值</b>，契约测试扫描）。
+    </div>
+  </section>
+
+  <!-- ══ 13 ══ -->
+  <section class="sec" id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>质量与证据</h3>
+      <span class="tag">每个功能都指得出「哪些测试在守它」</span></div>
+    <table class="tbl">
+      <tr><th style="width:34%">套件</th><th style="width:12%">数量</th><th>覆盖</th></tr>
+      <tr><td><code>rds-workbench --lib</code></td><td><b>110 项</b></td>
+        <td>含 Quick Open 专项：<code>model.rs</code> 纯逻辑 <b>13 项</b>（前缀解析 / 门槛 / 命中区间 / 评分分档 / 分组过滤 / 命令键唯一与关键词可命中 / 截断计数 / 文件行匹配面…）</td></tr>
+      <tr><td><code>rds-workbench --test ui_contract</code></td><td><b>7 项</b></td>
+        <td>新模块必须登记进<b>尺寸 + 颜色</b>两份清单（漏登 = 契约对该文件静默失效）；视图层零裸尺寸、零裸色值</td></tr>
+      <tr><td>Quick Open 窗口测试</td><td><b>5 项</b></td>
+        <td>真按键走生产入口：打开即聚焦 / <code>↑</code> <code>↓</code> + <code>↵</code> 经端口执行并关面板 / <code>Esc</code> 关闭 / 单字符门槛 / 文件源</td></tr>
+      <tr><td><code>rds-engine --lib</code></td><td><b>443 项</b></td>
+        <td>含搜索专项：两段式 vs 单条查询<b>逐条等价</b>、窗口取消后的「精确 + 类别优先」、两段 <code>EXPLAIN QUERY PLAN</code> 断言（走索引且无 <code>TEMP B-TREE</code>）、FTS 写入幂等与读侧身份 + snippet + 中文门槛</td></tr>
+      <tr><td><code>rds-database --lib</code></td><td><b>42 项</b></td>
+        <td>含 FTS 命中映射（空串 → None、catalog 缺位）与分槽通道</td></tr>
+    </table>
+    <div class="sec-sub" style="margin:16px 0 10px">
+      <b>规模基线</b>（<code>#[ignore]</code>，手动跑 <code>--ignored --nocapture</code>）：10 万对象（8 万表 + 2 万列）缓存库，
+      同轮打印「现写法 / 旧写法」并拆出两段耗时——第 7 节的数字就来自它，改搜索实现时重跑即可复核。
+    </div>
+    <div class="sec-sub"><b>实证缺陷</b>（开发期当场抓出来，都已修）：</div>
+    <div class="defect">
+      <b>① FTS 旧表 contentless</b> → 读回全 NULL、snippet 无从生成。
+      <div class="fixline">→ 迁移 011 重建为可读表。</div>
+    </div>
+    <div class="defect">
+      <b>② 中文注释因 <code>unicode61</code> 分词整句一个 token</b> 搜不到。
+      <div class="fixline">→ 换 <code>trigram</code>，「含渠道」这类中文子串可搜。</div>
+    </div>
+    <div class="defect">
+      <b>③ 名称档排序键含 <code>LENGTH</code></b> → 索引只能加速「找」不能加速「排」，8 万命中要 178 ms。
+      <div class="fixline">→ 拿掉 <code>LENGTH</code>，排序与索引序一致：158 ms → 1.5 ms。</div>
+    </div>
+  </section>
+
+  <!-- ══ 14 ══ -->
+  <section class="sec" id="s14">
+    <div class="sec-head"><span class="no">14</span><h3>边界 · 这些事它不做</h3>
+      <span class="tag">把话说在前面，比事后解释便宜</span></div>
+    <table class="tbl">
+      <tr><th style="width:30%">不做</th><th>为什么</th></tr>
+      <tr><td>不检索<b>数据行</b></td><td>那是查询与结果区的事；这里只找对象（表 / 列 / 视图 / 文件 / 命令 / 连接）</td></tr>
+      <tr><td>不做拼音 / 模糊纠错</td><td>元数据名多是英文标识符；模糊匹配会把「搜不到」的锅变成「搜出奇怪的」</td></tr>
+      <tr><td>不为搜索建元数据缓存</td><td>未内省过的连接直接跳过——搜索是只读动作，不该产生副作用</td></tr>
+      <tr><td>不自动连接数据库</td><td><code>↵</code> 命中连接只<b>选中</b>它（切到导航），连不连由你决定</td></tr>
+      <tr><td>不在搜索路径写索引</td><td>FTS / 索引的刷新只在<b>内省</b>同批发生；搜索期间库是只读的</td></tr>
+      <tr><td>不做「静默截断 / 静默空列表」</td><td>截了多少、在不在搜、门槛差几字，都写在界面上</td></tr>
+    </table>
+    <div class="quote warn">
+      <b>还没做的</b>（原型设计 §17 待拍板 + §18 优化清单）：<code>@</code> 当前连接限定 · 行内动作（复制限定名 / 生成 SELECT）·
+      空输入态的「最近 + 常用」· 结果短时缓存 · 并发打开缓存文件上限 ·
+      结构化日志（<code>query_len</code> / <code>hits</code> / <code>dur_ms</code> / <code>conns_skipped</code>）· 中缀稀疏词的 trigram 兜底。
+    </div>
+    <div class="quote">
+      <b>关于「升格为 crate」</b>：暂不拆。触发条件是——出现第二个宿主（独立窗口 / 插件面板）、
+      插件系统需要注册命令与搜索源（palette 成为对外契约）、或「最近使用」需要独立持久化。
+      <b>今天它是 workbench 里的一个模块，边界（纯逻辑 / 浮层 / 端口 / 委托）已经是 crate 的形状。</b>
+    </div>
+  </section>
+
+  <!-- ══ 15 ══ -->
+  <section class="sec" id="s15">
+    <div class="sec-head"><span class="no">15</span><h3>文档地图</h3>
+      <span class="tag">宣传页只负责「一页看懂」，口径以模块文档为准</span></div>
+    <table class="tbl">
+      <tr><th style="width:36%">文档</th><th>什么时候读</th></tr>
+      <tr><td><a href="quick-open-prototype-design.md">quick-open-prototype-design.md</a></td>
+        <td><b>权威规格</b>：定位与边界 / 解剖 / 三档模式 / 行与分组规格 / 匹配排序 / 异步与状态机 / 尺寸与主题 / GPUI 落点 / §13 与现状差异 15 条 / §17 未决项 Q1–Q11 / §18 优化建议清单</td></tr>
+      <tr><td><a href="quick-open-prototype.html">quick-open-prototype.html</a></td>
+        <td>交互稿（9 场景，明暗双主题）</td></tr>
+      <tr><td><a href="quick-open-dev-plan.md">quick-open-dev-plan.md</a></td>
+        <td><b>做什么、做到哪</b>：§0 进度记录（逐刀带验证数字与取舍记录）/ 任务表 / 决策 D1–D5 / 风险 / 验证命令</td></tr>
+      <tr><td><a href="quick-open-showcase.md">quick-open-showcase.md</a></td>
+        <td>本页的<b>可贴版</b>（纯文本 + ASCII 流程图，适合贴进 PR / wiki）</td></tr>
+      <tr><td><a href="../database/database-navigator-showcase.md">../database/database-navigator-showcase.md</a></td>
+        <td>上游：元数据从哪来、缓存与索引怎么管（M4）</td></tr>
+      <tr><td><a href="../editor/editor-showcase.md">../editor/editor-showcase.md</a></td>
+        <td>下游：命中后打开的那个属性面板 / 编辑器（M2）</td></tr>
+      <tr><td><a href="../overview.md">../overview.md</a></td>
+        <td>全局视角：模块与 crate 对应关系</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 页脚 ══ -->
+  <div class="foot">
+    <div class="grid">
+      <div>
+        <h5>一次验证（数字口径见第 13 节）</h5>
+        <div class="verify">cargo test -p rds-workbench --lib --test ui_contract
+  → 110 + 7（model.rs 纯逻辑 13 · UI 契约 7）
+cargo test -p rds-engine --lib
+  → 443（含名称档 / FTS 搜索专项）
+cargo test -p rds-database --lib
+  → 42（含 FTS 命中映射与分槽通道）
+Quick Open 窗口测试
+  → 5 项（真按键走生产入口）</div>
+      </div>
+      <div>
+        <h5>宣传稿的铁律</h5>
+        <ul>
+          <li><b>数字只为表达服务</b>，口径以模块文档为准</li>
+          <li>改了实现请顺手核对关键数字：<b>13 条命令 / 2·3 字门槛 / 8·50 上限 / 150 ms 防抖 / 1.5 ms 与 45 ms 两档耗时</b></li>
+          <li>未落地项单独列出——不拿规划当卖点</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      本页是面向宣传与速览的单文件页（明暗两套 / 零外链 / 可打印）；界面细节以原型设计为准，进度与验证数字以开发方案 §0 为准。
+      首屏浮层线框的三档切换只换面板内容，用于一眼看清「一个入口、三档模式」。
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* 明暗切换 + 首屏三档模式演示：全部内联，不引任何外部资源 */
+function toggleTheme(){
+  var root = document.documentElement;
+  var dark = root.getAttribute('data-theme') === 'dark';
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+}
+
+(function(){
+  var tabs = document.querySelectorAll('.qo-tab');
+  var panes = document.querySelectorAll('.pane');
+  var pfx = document.getElementById('qoPfx');
+  var needle = document.getElementById('qoQ');
+  var label = document.getElementById('qoMode');
+
+  function activate(tab){
+    var want = tab.getAttribute('data-mode');
+    var i;
+    for (i = 0; i < tabs.length; i++){
+      tabs[i].className = (tabs[i] === tab) ? 'qo-tab on' : 'qo-tab';
+    }
+    for (i = 0; i < panes.length; i++){
+      panes[i].className = (panes[i].getAttribute('data-pane') === want) ? 'pane on' : 'pane';
+    }
+    var prefix = tab.getAttribute('data-pfx') || '';
+    pfx.textContent = prefix;
+    pfx.className = prefix ? 'qo-pfx' : 'qo-pfx off';
+    needle.textContent = tab.getAttribute('data-q') || '';
+    label.textContent = tab.getAttribute('data-meta') || '';
+  }
+
+  function bind(tab){
+    tab.addEventListener('click', function(ev){
+      activate(ev.currentTarget);
+    });
+  }
+  for (var i = 0; i < tabs.length; i++){ bind(tabs[i]); }
+})();
+</script>
+</body>
+</html>

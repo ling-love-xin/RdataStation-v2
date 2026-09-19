@@ -1,7 +1,7 @@
 # Quick Open（统一检索 / 命令面板）· 原型设计
 
 > 状态：**首版（2026-09-18，待拍板 §17 Q1–Q11）** · 本文只回答「长什么样、怎么用」；「为什么这样设计 / 数据流 / crate 归属」留给 `quick-open-architecture.md`（待建）；**§18 为优化建议清单**（含正确性 / 规模 / 体验 / 工程四类，未拍板项不入分期）
-> 关联：`quick-open-prototype.html`（交互稿，**示意稿非权威**；9 场景：名称 / 全文 / 同名消歧 / 默认混排 / 命令 / 单字符门槛 / 搜索中 / 无匹配 / 未打开项目）、`quick-open-dev-plan.md`（**开发方案与进度**）、`../layout/layout-design.md` §2.1 / §3.3（入口与交互承诺）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色与语义 token）、`../database/database-navigator-prototype-design.md`（搜索语法，避免两套前缀打架）、`../settings/settings-prototype-design.md`（同为宿主弹层，互斥规则）
+> 关联：`quick-open-showcase.md` / `quick-open-showcase.html`（**一页看懂**：可贴版与视觉版，先看它最快）、`quick-open-prototype.html`（交互稿，**示意稿非权威**；9 场景：名称 / 全文 / 同名消歧 / 默认混排 / 命令 / 单字符门槛 / 搜索中 / 无匹配 / 未打开项目）、`quick-open-dev-plan.md`（**开发方案与进度**）、`../layout/layout-design.md` §2.1 / §3.3（入口与交互承诺）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色与语义 token）、`../database/database-navigator-prototype-design.md`（搜索语法，避免两套前缀打架）、`../settings/settings-prototype-design.md`（同为宿主弹层，互斥规则）
 > 现状对照：实现已在 `crates/workbench/src/view.rs`（`render_title_bar` / `render_quick_open` / `quick_open_results`）；本文 §13 逐条列出与现状的差异，**本轮不改代码**
 > 落地进度（2026-09-19）：Phase 0 两刀（`List` 化 + 键盘通道 + 打开即聚焦 + 命中高亮；元数据名称档：防抖异步 + 过期批次丢弃）与 Phase 1 四刀（引擎侧 FTS 写读接线 + 迁移 011；`#` 全文档 UI + 截断提示 + 命令目录外提；名称档两段式提速；**拿掉 `LENGTH` 排序键 + 分类索引序直出 + 迁移 013**）已落地，进度与任务表见 `quick-open-dev-plan.md` §0；§3 行解剖里的「面包屑单独一行」因 `List` 同行同高约束暂缓（改用单行次级信息）。
 > 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
