@@ -9,6 +9,7 @@
 //! 任务类型：
 //! - `LoadRoot`：模块根 + 外部引用可用性 + 回收站 + （已展开过的）子目录缓存刷新；
 //! - `LoadDir`：展开文件夹时的单目录懒加载；
+//! - `FlattenFiles`：一次拿全的**扁平文件清单**（Quick Open 的文件源；与树形加载分开的理由见 `FlattenFiles` 变体）；
 //! - `Import` / `Paste`：复制字节（导入外部文件、复制粘贴）；
 //! - `EmptyTrash`：删除回收站内可能很大的 payload；
 //! - `Search` / `ReplaceAll`：遍历全树搜索，以及「匹配 → 逐文件写回 → 重新搜索」。
@@ -26,7 +27,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use crate::{
-    DiffResult, ExternalReferenceStatus, ScratchpadEntry, ScratchpadStore, SearchMatch, TrashEntry,
+    DiffResult, ExternalReferenceStatus, FlatFile, ScratchpadEntry, ScratchpadStore, SearchMatch,
+    TrashEntry,
 };
 
 /// 模块根加载结果（回传主线程）。
@@ -48,6 +50,22 @@ pub struct DirResult {
     pub parent: String,
     pub result: Result<Vec<ScratchpadEntry>, String>,
 }
+
+/// 扁平文件清单的结果载荷（Quick Open 的文件源）。
+pub struct FileListPayload {
+    /// 归属项目根：消费侧据此比对（切项目后旧清单不得闻进新会话）。
+    pub project_root: PathBuf,
+    /// `None` = 读盘失败（消费侧保持上一次清单 / 空态，原因记日志）。
+    pub files: Option<Vec<FlatFile>>,
+    /// 是否被 [`FLAT_FILE_LIMIT`] 截断（UI 要说「没全列」，不说「就这么多」）。
+    pub truncated: bool,
+}
+
+/// 扁平清单一次最多回传多少个文件。
+///
+/// 上限存在的理由与渲染上限不同：这里是**防一个目录里有几万个文件时把整张表搬进内存**；
+/// 超限只截不掉项，`truncated` 会一路传到 UI。
+pub const FLAT_FILE_LIMIT: usize = 500;
 
 /// 搜索 / 替换任务的结果载荷（回传主线程）。
 pub struct SearchPayload {
@@ -93,6 +111,12 @@ enum Job {
         project_root: PathBuf,
         parent: String,
     },
+    /// 扁平文件清单（Quick Open 的文件源）。
+    ///
+    /// 为什么不复用 `LoadRoot`：树形加载是**按层**的（`depth` + 已展开子目录缓存），
+    /// 搜索需要的是「一次拿全的平表」；两者深度、生命周期与消费方都不同，
+    /// 硬塞进同一个载荷会让两边都得处理对方的字段。
+    FlattenFiles { project_root: PathBuf },
     /// 导入外部文件（逐个复制进模块根）。
     Import { project_root: PathBuf, paths: Vec<PathBuf> },
     /// 粘贴（`cut = true` 走 `move_entry`，否则走递归 `copy_entry`）。
@@ -134,12 +158,21 @@ struct Shared {
     pending_roots: AtomicUsize,
     /// 未完成的子目录加载。
     pending_dirs: AtomicUsize,
+    /// 未完成的扁平清单加载。
+    pending_flats: AtomicUsize,
     /// 未完成的写操作 / 搜索替换任务。
     pending_ops: AtomicUsize,
     load_results: Mutex<Vec<LoadResult>>,
     dir_results: Mutex<Vec<DirResult>>,
+    flat_results: Mutex<Vec<FileListPayload>>,
     op_results: Mutex<Vec<OpResult>>,
 }
+
+/// 扁平清单的最大递归深度。
+///
+/// 不用 `u32::MAX`：草稿箱是给人手动整理的小目录树，深度失控（错误嵌套 / 符号链接）
+/// 应当被截住，而不是让工作线程无限跑下去。
+const FLAT_LIST_MAX_DEPTH: u32 = 32;
 
 /// 搜索上下文行数（与面板展示一致：命中行前后各 2 行）。
 const SEARCH_CONTEXT_LINES: usize = 2;
@@ -159,9 +192,11 @@ fn shared() -> &'static Shared {
             tx,
             pending_roots: AtomicUsize::new(0),
             pending_dirs: AtomicUsize::new(0),
+            pending_flats: AtomicUsize::new(0),
             pending_ops: AtomicUsize::new(0),
             load_results: Mutex::new(Vec::new()),
             dir_results: Mutex::new(Vec::new()),
+            flat_results: Mutex::new(Vec::new()),
             op_results: Mutex::new(Vec::new()),
         }
     })
@@ -198,6 +233,14 @@ fn worker(rx: mpsc::Receiver<Job>) {
                             result: Err(unavailable),
                         });
                         shared().pending_dirs.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    Job::FlattenFiles { project_root } => {
+                        lock(&shared().flat_results).push(FileListPayload {
+                            project_root,
+                            files: None,
+                            truncated: false,
+                        });
+                        shared().pending_flats.fetch_sub(1, Ordering::SeqCst);
                     }
                     Job::Import { .. } => {
                         lock(&shared().op_results).push(OpResult::Import {
@@ -319,6 +362,29 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     .map_err(|e| e.to_string());
                 lock(&shared().dir_results).push(DirResult { parent, result });
                 shared().pending_dirs.fetch_sub(1, Ordering::SeqCst);
+            }
+            Job::FlattenFiles { project_root } => {
+                let store = ScratchpadStore::new(project_root.clone());
+                let loaded = rt.block_on(async {
+                    let entries = store
+                        .list_local_entries(FLAT_LIST_MAX_DEPTH)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok::<_, String>(store.flatten_files(&entries, FLAT_FILE_LIMIT))
+                });
+                let (files, truncated) = match loaded {
+                    Ok((files, truncated)) => (Some(files), truncated),
+                    Err(error) => {
+                        tracing::warn!("[ScratchpadJobs] 扁平文件清单读取失败: {error}");
+                        (None, false)
+                    }
+                };
+                lock(&shared().flat_results).push(FileListPayload {
+                    project_root,
+                    files,
+                    truncated,
+                });
+                shared().pending_flats.fetch_sub(1, Ordering::SeqCst);
             }
             Job::Import {
                 project_root,
@@ -515,11 +581,25 @@ pub fn enqueue_dir_load(project_root: &Path, parent: &str) {
     });
 }
 
-/// 是否仍有未完成的草稿箱任务（加载 / 写操作 / 搜索替换）。
+/// 提交扁平文件清单（Quick Open 的文件源）。
+pub fn enqueue_flatten_files(project_root: &Path) {
+    shared().pending_flats.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::FlattenFiles {
+        project_root: project_root.to_path_buf(),
+    });
+}
+
+/// 是否仍有在途的扁平清单加载（消费侧据此避免重复入队）。
+pub fn has_pending_file_list() -> bool {
+    shared().pending_flats.load(Ordering::SeqCst) > 0
+}
+
+/// 是否仍有未完成的草稿箱任务（加载 / 写操作 / 搜索替换 / 扁平清单）。
 pub fn has_pending() -> bool {
     let s = shared();
     s.pending_roots.load(Ordering::SeqCst) > 0
         || s.pending_dirs.load(Ordering::SeqCst) > 0
+        || s.pending_flats.load(Ordering::SeqCst) > 0
         || s.pending_ops.load(Ordering::SeqCst) > 0
 }
 
@@ -531,6 +611,11 @@ pub fn drain_loads() -> Vec<LoadResult> {
 /// 取走已完成的子目录加载结果。
 pub fn drain_dirs() -> Vec<DirResult> {
     std::mem::take(&mut *lock(&shared().dir_results))
+}
+
+/// 取走已完成的扁平文件清单。
+pub fn drain_file_lists() -> Vec<FileListPayload> {
+    std::mem::take(&mut *lock(&shared().flat_results))
 }
 
 /// 取走已完成的写操作 / 搜索替换结果。
@@ -697,6 +782,50 @@ mod tests {
         let failed = wait_load(seq_err);
         assert!(failed.entries.is_err(), "非目录项目根应回传错误");
 
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    /// 扁平文件清单：一次拿全（含子目录）、只留文件、按相对路径排序，并把截断说出来。
+    #[test]
+    fn flatten_files_job_lists_every_file_in_one_pass() {
+        let _guard = lock_tests();
+        let project = temp_project("flat");
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.create_entry("z_last.sql", None, false)).unwrap();
+        rt.block_on(store.create_entry("notes", None, true)).unwrap();
+        rt.block_on(store.create_entry("a.md", Some("notes"), false))
+            .unwrap();
+        rt.block_on(store.save_file("notes/a.md", "# 笔记")).unwrap();
+
+        enqueue_flatten_files(&project);
+        assert!(has_pending_file_list(), "入队后应有在途清单");
+        let payload = wait_for("扁平清单", || {
+            drain_file_lists()
+                .into_iter()
+                .find(|p| p.project_root == project)
+        });
+        let files = payload.files.expect("清单应成功");
+        assert!(!payload.truncated, "两个文件不应触顶");
+        // 相对路径是身份（`/` 分隔），目录不占行；排序按路径。
+        let paths: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["notes/a.md", "z_last.sql"]);
+        assert_eq!(files[0].name, "a.md", "主文本是文件名");
+        assert_eq!(files[0].folder, "notes", "右侧展示所在目录");
+        assert_eq!(files[1].folder, "", "根下的文件没有目录前缀");
+        assert!(files[0].path.is_file(), "行要带可打开的绝对路径");
+
+        // 失败路径：项目根指向一个文件（`ensure_dir` 必失败）→ `files: None`
+        let broken = project.join("scratchpad").join("z_last.sql");
+        enqueue_flatten_files(&broken);
+        let failed = wait_for("失败清单", || {
+            drain_file_lists()
+                .into_iter()
+                .find(|p| p.project_root == broken)
+        });
+        assert!(failed.files.is_none(), "读盘失败应回传 None 而不是空清单");
+
+        wait_for("清单待办清零", || (!has_pending_file_list()).then_some(()));
         std::fs::remove_dir_all(&project).ok();
     }
 

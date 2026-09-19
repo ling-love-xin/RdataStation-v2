@@ -7,6 +7,7 @@
 >
 > **想快速了解这个模块**：先看宣传版 [`database-navigator-showcase.html`](database-navigator-showcase.html)（视觉版，离线可开、明暗双主题、首屏可切归属域）
 > 或 [`database-navigator-showcase.md`](database-navigator-showcase.md)（可贴版）——它们与本文是同一套事实的不同讲法。
+> **只看缓存与索引**（三级缓存 / 池化 / 索引分页 / 名称搜索，含与 DBeaver、DataGrip 的逐维度对照）：见 [`metadata-cache-vs-dbeaver-datagrip.md`](metadata-cache-vs-dbeaver-datagrip.md)。
 >
 > **边界**：本模块只管理**数据源与元数据**。连接的新建/编辑对话框属 M3 连接模块；SQL 编辑器 / Mock / 洞察只在本面板提供**入口**，本体属各自模块；DuckDB 分析表与分析资产归 M6。
 
@@ -111,7 +112,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- 快照（2026-09-19）：`rds-database --lib` 20 / `rds-workbench --lib` 70 全绿；`ui_contract` 7/7（含尺寸与颜色两份清单，已覆盖下沉后的 `crates/database/src/nav_view.rs`）。数字随迭代变化，跑一次即准。
+- 快照（2026-09-19 实测）：`rds-database --lib` **42** / `rds-workbench --lib` **110** 全绿；`ui_contract` 7/7（含尺寸与颜色两份清单，已覆盖下沉后的 `crates/database/src/nav_view.rs`）。数字随迭代变化，跑一次即准；全量台账见 `../module-status.md`。
 - 导航模型单测在 `crates/database/src/{model.rs,cache.rs}`（来源短码、`child_key`、schema 缓存往返）。
 - **真机回归**（4 类数据库 × 项目 / 全局 / 共享，均按树的实际层级核对）：
 
@@ -133,8 +134,9 @@ cargo check --workspace --all-targets -j 2
 | `database-navigator-user-guide.md` | **怎么用**：入口 / 界面导览（连接行怎么读 · 状态色 · 类型形状 · 层级）/ 典型流程 / 快捷键 / 显示开关 / FAQ / 验收清单 |
 | `database-nav-dev-plan.md` | **做到哪了**：Phase A/B/C 与 v6/v7 任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景、风险 |
 | `database-navigator-prototype.html` | 可交互示意稿（明暗双主题；密度对比） |
-| `database-navigator-showcase.html` | **宣传版（视觉）**：一页看懂特点 / 剧本 / 流程 / 架构；自包含、离线可开、首屏可在归属域 facet 间切换 |
-| `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版，章节一一对应，适合贴 PR / wiki |
+| `database-navigator-showcase.html` | **宣传版（视觉）**：一页看懂特点 / 剧本 / 流程 / 架构 / **三级缓存与大库（索引分页 · 计数 · 跨连接搜索）**；自包含、离线可开、首屏可在归属域 facet 间切换并展示索引搜索结果区 |
+| `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版（含 mermaid 流程图），章节一一对应，适合贴 PR / wiki |
+| `metadata-cache-vs-dbeaver-datagrip.md` | **缓存为什么这样设计**：与 DBeaver / DataGrip 的 10 维度对照、三条硬约束、分页与搜索的落地记录、仍缺项的触发条件 |
 | `../connection/README.md` | 上游：连接的新建 / 编辑与作用域路由（M3） |
 
 ## 7. 下一步（摘要，权威见架构 §11）

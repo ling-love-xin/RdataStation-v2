@@ -1380,6 +1380,11 @@ impl WorkbenchView {
                 self.shared.selected.set(Some(ix));
                 self.shared.invalidate_nav_cache();
             }
+            Action::OpenDocument(path) => {
+                // 与草稿箱面板双击同一条路（先存请求，宿主 render 消费时落到编辑器）：
+                // 可写 / 只读由编辑器按路径自己判定，这里不重复一份“哪些路径只读”的口径。
+                self.shared.request_open_in_editor(path);
+            }
         }
         if !keep_open {
             self.shared.quick_open.set(false);

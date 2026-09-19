@@ -62,6 +62,15 @@ impl QuickOpenDelegate {
         self.groups.iter().map(|g| g.rows.len()).sum()
     }
 
+    /// 行键快照（按渲染顺序；测试断言用——「出了哪一行」比「出几行」说得清）。
+    #[cfg(test)]
+    pub(crate) fn keys(&self) -> Vec<String> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.rows.iter().map(|row| row.key.clone()))
+            .collect()
+    }
+
     /// 选中的业务键（宿主移动选中后读取）。
     pub(crate) fn selected_key(&self) -> Option<String> {
         self.selected_key.clone()

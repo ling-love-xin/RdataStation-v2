@@ -101,6 +101,7 @@ pub(crate) enum RowKind {
     Schema,
     Connection,
     Command,
+    File,
 }
 
 impl RowKind {
@@ -113,6 +114,7 @@ impl RowKind {
             RowKind::Schema => "模式",
             RowKind::Connection => "连接",
             RowKind::Command => "命令",
+            RowKind::File => "文件",
         }
     }
 }
@@ -136,6 +138,8 @@ pub(crate) enum Action {
     RestoreSidebars,
     /// 选中数据源连接（切到导航并选中；**不自动连接**）。
     SelectConnection(usize),
+    /// 在中央编辑区打开一份草稿（绝对路径；可写 / 只读由编辑器按路径自己判定）。
+    OpenDocument(std::path::PathBuf),
 }
 
 /// 一行结果。
@@ -159,6 +163,21 @@ pub(crate) struct Row {
     pub action: Action,
 }
 
+/// 草稿箱文件命中（跨进程边界前的一层映射；源数据是 `scratchpad::FlatFile`）。
+///
+/// 只带行要用到的四个字段：**不做 IO**（打开在动作执行侧，浮层不认识盘）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileObject {
+    /// 模块内相对路径（`/` 分隔）：行的业务键与**替换匹配面**（`drafts/notes` 这样搜也能中）。
+    pub relative_path: String,
+    /// 所在目录（根下为空串）：行右侧展示用。
+    pub folder: String,
+    /// 文件名：行主文本（高亮按它算）。
+    pub name: String,
+    /// 绝对路径：打开时交给编辑器。
+    pub path: std::path::PathBuf,
+}
+
 /// 一个分组（渲染为 `List` 的一个 section）。
 #[derive(Debug, Clone)]
 pub(crate) struct Group {
@@ -170,16 +189,29 @@ pub(crate) struct Group {
     pub hidden: usize,
 }
 
+/// 行的数据源（纯数据；I/O 全在宿主一侧）。
+///
+/// 为什么用结构体而不是继续加参数：这里已有四路来源（元数据 / 文件 / 连接 / 命令），
+/// 都是 `&[..]` / `bool` / `&str`——位置参数迟早会被写反（换个位置编译器一声不吭）。
+#[derive(Default)]
+pub(crate) struct Sources<'a> {
+    /// 连接（名称, 驱动）。
+    pub connections: &'a [(String, String)],
+    /// 元数据命中（名称档 / 内容档共用一份槽位，由 `mode` 决定怎么用）。
+    pub meta: &'a [MetaObject],
+    /// 元数据搜索进行中（组头显示「搜索中…」）。
+    pub meta_searching: bool,
+    /// 草稿箱文件（扁平清单；未打开项目时为空）。
+    pub files: &'a [FileObject],
+    /// 文件清单被后台截断时的说明（空 = 没有这回事）。
+    pub files_note: String,
+}
+
 /// 组装结果分组：**空组不出现**（组头也不渲染）。
 ///
 /// 元数据（跨连接名称档）由宿主从后台回填后以 `meta` 传入；本函数是纯函数，不做 I/O。
 /// 元数据是核心：搜索中也要出组头（否则「搜不到」与「还在搜」分不清）。
-pub(crate) fn build_groups(
-    q: &Query,
-    connections: &[(String, String)],
-    meta: &[MetaObject],
-    meta_searching: bool,
-) -> Vec<Group> {
+pub(crate) fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
     let groups = match q.mode {
         Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle), "")
             .into_iter()
@@ -187,30 +219,41 @@ pub(crate) fn build_groups(
         // Phase 1：内容档（FTS）——引擎侧已完成匹配与排序，这里**不再按标题过滤**：
         // 否则「只在注释里命中」的行会被「标题不含该词」误杀。`why` 标签区分两者。
         Mode::FullText => {
-            let note = if meta_searching && q.async_ready() {
+            let note = if sources.meta_searching && q.async_ready() {
                 "搜索中…"
             } else {
                 ""
             };
-            non_empty("元数据全文（注释 / 定义）", fulltext_rows(meta, &q.needle), note)
-                .into_iter()
-                .collect()
+            non_empty(
+                "元数据全文（注释 / 定义）",
+                fulltext_rows(sources.meta, &q.needle),
+                note,
+            )
+            .into_iter()
+            .collect()
         }
         Mode::Default => {
             let mut groups = Vec::new();
-            let note = if meta_searching && q.async_ready() {
+            let note = if sources.meta_searching && q.async_ready() {
                 "搜索中…"
             } else {
                 ""
             };
             groups.extend(non_empty(
                 "元数据（表 · 视图 · 列）",
-                filter_ranked(meta_rows(meta), &q.needle),
+                filter_ranked(meta_rows(sources.meta), &q.needle),
                 note,
+            ));
+            // 文件排在元数据之后、连接之前（原型设计 §7.2 的固定顺序）：
+            // 对象是「查数库」的主线，文件是「手边的草稿」。
+            groups.extend(non_empty(
+                "文件（草稿箱）",
+                filter_ranked(file_rows(sources.files), &q.needle),
+                &sources.files_note,
             ));
             groups.extend(non_empty(
                 "连接",
-                filter_ranked(connection_rows(connections), &q.needle),
+                filter_ranked(connection_rows(sources.connections), &q.needle),
                 "",
             ));
             groups.extend(non_empty("命令", filter_ranked(command_rows(), &q.needle), ""));
@@ -248,6 +291,26 @@ fn cap_groups(mut groups: Vec<Group>) -> Vec<Group> {
         budget = budget.saturating_sub(allowed);
     }
     groups
+}
+
+/// 文件行（次级信息 = 所在目录；没有目录的（模块根下）留空）。
+///
+/// 匹配面用**相对路径**而不是文件名：敲 `drafts/notes` 或只敲目录名也能命中
+/// （高亮仍按文件名算——见 `Row::match_text`）。
+fn file_rows(files: &[FileObject]) -> Vec<Row> {
+    files
+        .iter()
+        .map(|file| Row {
+            key: format!("file:{}", file.relative_path),
+            kind: RowKind::File,
+            title: file.name.clone(),
+            match_text: file.relative_path.clone(),
+            secondary: file.folder.clone(),
+            snippet: None,
+            why: None,
+            action: Action::OpenDocument(file.path.clone()),
+        })
+        .collect()
 }
 
 /// 元数据行（次级信息 = 连接名 · 驱动）。
@@ -370,6 +433,19 @@ pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObj
         kind,
         snippet: hit.snippet.clone(),
     })
+}
+
+/// 草稿箱扁平行 → 行数据（跨 crate 映射的唯一一处，字段同名不同源，便于对照）。
+///
+/// 为什么不让浮层直接拿着 `scratchpad::FlatFile`：`model` 是纯数据层（可单测、不认识宿主），
+/// 映射集中在这里，将来换文件源（如资产库存档）只需再写一个这样的函数。
+pub(crate) fn file_object(file: &scratchpad::FlatFile) -> FileObject {
+    FileObject {
+        relative_path: file.relative_path.clone(),
+        folder: file.folder.clone(),
+        name: file.name.clone(),
+        path: file.path.clone(),
+    }
 }
 
 /// 连接行（下标即 `Shared::selected` 的位置）。
@@ -609,26 +685,118 @@ mod tests {
         }
     }
 
+    /// 造一份草稿箱文件（真实形状：`scratchpad::FlatFile` 经 `file_object` 映射）。
+    fn draft(relative_path: &str) -> FileObject {
+        let (folder, name) = match relative_path.rsplit_once('/') {
+            Some((dir, name)) => (dir.to_string(), name.to_string()),
+            None => (String::new(), relative_path.to_string()),
+        };
+        file_object(&scratchpad::FlatFile {
+            relative_path: relative_path.to_string(),
+            folder,
+            name,
+            path: std::path::PathBuf::from("C:/proj/scratchpad").join(relative_path),
+        })
+    }
+
     #[test]
     fn build_groups_filters_and_drops_empty_groups() {
         let conns = conns();
         // 命令模式：只有命令组
-        let cmd = build_groups(&parse(">设置"), &conns, &[], false);
+        let cmd = build_groups(
+            &parse(">设置"),
+            &Sources {
+                connections: &conns,
+                ..Default::default()
+            },
+        );
         assert_eq!(cmd.len(), 1);
         assert_eq!(cmd[0].title, "命令");
         assert!(cmd[0].rows.iter().all(|r| r.title.contains("设置")));
 
         // 默认模式：命中连接则不出现命令组
-        let hit_conn = build_groups(&parse("分析库"), &conns, &[], false);
+        let hit_conn = build_groups(
+            &parse("分析库"),
+            &Sources {
+                connections: &conns,
+                ..Default::default()
+            },
+        );
         assert_eq!(hit_conn.len(), 1);
         assert_eq!(hit_conn[0].title, "连接");
         assert_eq!(hit_conn[0].rows[0].action, Action::SelectConnection(1));
 
         // `#` 内容档：没有回填命中时为空（空态由委托给说明文案）
-        assert!(build_groups(&parse("#渠道与"), &conns, &[], false).is_empty());
+        assert!(build_groups(
+            &parse("#渠道与"),
+            &Sources {
+                connections: &conns,
+                ..Default::default()
+            }
+        )
+        .is_empty());
 
         // 无匹配：一个组都没有
-        assert!(build_groups(&parse("zzzz"), &conns, &[], false).is_empty());
+        assert!(build_groups(
+            &parse("zzzz"),
+            &Sources {
+                connections: &conns,
+                ..Default::default()
+            }
+        )
+        .is_empty());
+    }
+
+    /// 文件源：相对路径是业务键与匹配面，主文本是文件名，动作带可打开的绝对路径。
+    #[test]
+    fn file_rows_match_on_name_and_path_but_highlight_the_name() {
+        let files = [draft("notes/a.md"), draft("queries/last.sql")];
+        let groups = build_groups(
+            &parse("last"),
+            &Sources {
+                files: &files,
+                ..Default::default()
+            },
+        );
+        // 文件排在元数据之后、连接之前（原型设计 §7.2）；这里没有元数据与连接，它就是第一组
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].title, "文件（草稿箱）");
+        let row = &groups[0].rows[0];
+        assert_eq!(row.title, "last.sql", "主文本是文件名");
+        assert_eq!(row.secondary, "queries", "右侧是所在目录");
+        assert_eq!(row.key, "file:queries/last.sql", "键是相对路径");
+        assert_eq!(row.kind.label(), "文件");
+        match &row.action {
+            Action::OpenDocument(path) => {
+                assert!(path.ends_with("queries/last.sql"), "动作要带绝对路径：{path:?}")
+            }
+            other => panic!("文件行动作应是打开文档，实际 {other:?}"),
+        }
+
+        // 按**目录**也能搜到（匹配面是相对路径），但高亮仍按文件名算（文件名里没有 `notes`）
+        let by_folder = build_groups(
+            &parse("notes"),
+            &Sources {
+                files: &files,
+                ..Default::default()
+            },
+        );
+        assert_eq!(by_folder[0].rows.len(), 1);
+        assert!(match_span(&by_folder[0].rows[0].title, "notes").is_none());
+
+        // 清单被后台截断：组头要说「没全列」而不是安静地少几行
+        let note = build_groups(
+            &parse("a"),
+            &Sources {
+                files: &files,
+                files_note: "文件较多，只列前 500 个（继续输入缩小范围）".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(note[0].note.contains("只列前"), "截断要说清：{}", note[0].note);
+
+        // 没打开项目（文件源为空）→ 连空组都不出现
+        assert!(build_groups(&parse("last"), &Sources::default()).is_empty());
     }
 
     #[test]
@@ -644,7 +812,14 @@ mod tests {
         .collect();
         assert_eq!(objects.len(), 2, "例程应被过滤掉");
 
-        let groups = build_groups(&parse("order"), &conns, &objects, false);
+        let groups = build_groups(
+            &parse("order"),
+            &Sources {
+                connections: &conns,
+                meta: &objects,
+                ..Default::default()
+            },
+        );
         // 元数据排在连接 / 命令之前
         assert_eq!(groups[0].title, "元数据（表 · 视图 · 列）");
         assert_eq!(groups[0].rows.len(), 2);
@@ -676,10 +851,26 @@ mod tests {
             .filter_map(meta_object)
             .collect();
         // 搜索中 + 词长够 → 组头带「搜索中…」
-        let busy = build_groups(&parse("or"), &conns, &objects, true);
+        let busy = build_groups(
+            &parse("or"),
+            &Sources {
+                connections: &conns,
+                meta: &objects,
+                meta_searching: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(busy[0].note, "搜索中…");
         // 单字符（未达门槛）→ 不发搜索，也不显示搜索中
-        let short = build_groups(&parse("o"), &conns, &objects, true);
+        let short = build_groups(
+            &parse("o"),
+            &Sources {
+                connections: &conns,
+                meta: &objects,
+                meta_searching: true,
+                ..Default::default()
+            },
+        );
         assert!(short.iter().all(|g| g.note.is_empty()));
     }
 
@@ -689,7 +880,13 @@ mod tests {
         let mut content_hit = hit("table", "orders", None);
         content_hit.snippet = Some("…含<mark>渠道</mark>与优惠…".to_string());
         let content = meta_object(&content_hit).expect("表命中");
-        let rows = build_groups(&parse("#含渠道"), &conns(), &[content], false);
+        let rows = build_groups(
+            &parse("#含渠道"),
+            &Sources {
+                meta: &[content],
+                ..Default::default()
+            },
+        );
         assert_eq!(rows[0].title, "元数据全文（注释 / 定义）");
         let row = &rows[0].rows[0];
         assert_eq!(row.title, "public.orders");
@@ -703,7 +900,13 @@ mod tests {
         let mut name_hit = hit("table", "orders", None);
         name_hit.snippet = Some("<mark>ord</mark>ers".to_string());
         let name = meta_object(&name_hit).expect("表命中");
-        let rows = build_groups(&parse("#ord"), &conns(), &[name], false);
+        let rows = build_groups(
+            &parse("#ord"),
+            &Sources {
+                meta: &[name],
+                ..Default::default()
+            },
+        );
         assert_eq!(rows[0].rows[0].why, Some("名称"));
     }
 
@@ -733,7 +936,13 @@ mod tests {
         let many: Vec<(String, String)> = (0..20)
             .map(|i| (format!("conn{i:02}"), "postgres".to_string()))
             .collect();
-        let groups = build_groups(&parse(""), &many, &[], false);
+        let groups = build_groups(
+            &parse(""),
+            &Sources {
+                connections: &many,
+                ..Default::default()
+            },
+        );
         let conns = groups.iter().find(|g| g.title == "连接").expect("连接组");
         assert_eq!(conns.rows.len(), 8, "单组上限 8 行");
         assert_eq!(conns.hidden, 12, "被截的条数要记下来（组尾显示）");
@@ -750,7 +959,7 @@ mod tests {
     /// 也能找到对应条目（且命中不靠“给每条命令记英文展示名”）。
     #[test]
     fn command_keywords_match_without_painting_highlights_on_the_label() {
-        let groups = build_groups(&parse(">settings"), &[], &[], false);
+        let groups = build_groups(&parse(">settings"), &Sources::default());
         assert_eq!(groups.len(), 1, "命令档只出命令组");
         assert_eq!(groups[0].rows.len(), 1, "`settings` 只应命中打开设置");
         let row = &groups[0].rows[0];
@@ -759,7 +968,7 @@ mod tests {
         // 展示名里没有 `settings` → 不该算出高亮区间（否则会标出莫名其妙的黄块）
         assert!(match_span(&row.title, "settings").is_none());
 
-        let groups = build_groups(&parse(">database"), &[], &[], false);
+        let groups = build_groups(&parse(">database"), &Sources::default());
         let hit = groups[0]
             .rows
             .iter()
@@ -768,11 +977,11 @@ mod tests {
         assert_eq!(hit.key, "cmd:panel.database");
 
         // 中文输入照旧按展示名命中（关键词不抢展示名的主位）
-        let groups = build_groups(&parse(">设置"), &[], &[], false);
+        let groups = build_groups(&parse(">设置"), &Sources::default());
         assert_eq!(groups[0].rows[0].title, "打开设置");
 
         // 单字符不进关键词匹配面：否则 `s` 会把一半命令都捞出来（噪声）
-        let groups = build_groups(&parse(">s"), &[], &[], false);
+        let groups = build_groups(&parse(">s"), &Sources::default());
         assert!(
             groups.is_empty(),
             "单字符不应命中英文关键词：{:?}",

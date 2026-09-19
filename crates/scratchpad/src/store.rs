@@ -8,7 +8,7 @@ use tokio::time::{Duration, timeout};
 
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
-    FileMeta, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
+    FileMeta, FlatFile, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
     ScratchpadResponse, SearchMatch, SearchResult,
 };
 use engine::persistence::trash::{ProjectTrash, TrashEntry, TrashKind};
@@ -302,6 +302,51 @@ impl ScratchpadStore {
     pub async fn list_local_entries(&self, depth: u32) -> Result<Vec<ScratchpadEntry>, CoreError> {
         self.ensure_dir().await?;
         self.scan_dir_tree(&self.scratchpad_dir, 0, depth).await
+    }
+
+    /// 树 → **扁平文件清单**（Quick Open 的文件源；目录不占行，它已体现在 `folder` 上）。
+    ///
+    /// - 内部 / 隐藏路径沿用 [`Self::relative_path_of`] 的守卫（与草稿箱自己的 API 同一口径，
+    ///   不在这里重写一份“哪些算草稿”的判定）；
+    /// - 排序用相对路径：稳定、可解释（文件系统顺序与 `read_dir` 平台行为有关，不能当展示顺序）；
+    /// - 超 `limit` 就截断并回传 `true`——**调用方要把「没全列」说出来**，不当成「就这么多」。
+    pub fn flatten_files(
+        &self,
+        entries: &[ScratchpadEntry],
+        limit: usize,
+    ) -> (Vec<FlatFile>, bool) {
+        let mut out = Vec::new();
+        self.collect_files(entries, &mut out);
+        out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        let truncated = out.len() > limit;
+        out.truncate(limit);
+        (out, truncated)
+    }
+
+    fn collect_files(&self, entries: &[ScratchpadEntry], out: &mut Vec<FlatFile>) {
+        for entry in entries {
+            match entry.kind {
+                ScratchpadEntryKind::File => {
+                    let Some(relative_path) = self.relative_path_of(&entry.path) else {
+                        continue;
+                    };
+                    out.push(FlatFile {
+                        folder: relative_path
+                            .rsplit_once('/')
+                            .map(|(dir, _)| dir.to_string())
+                            .unwrap_or_default(),
+                        relative_path,
+                        name: entry.name.clone(),
+                        path: entry.path.clone(),
+                    });
+                }
+                ScratchpadEntryKind::Folder => {
+                    if let Some(children) = entry.children.as_ref() {
+                        self.collect_files(children, out);
+                    }
+                }
+            }
+        }
     }
 
     async fn scan_dir_tree(

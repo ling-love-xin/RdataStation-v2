@@ -26,10 +26,11 @@ pub use scratchpad_view::{ScratchpadDiffView, ScratchpadSearchView, ScratchpadVi
 
 pub use models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
-    FileMeta, ReplaceResult, ScratchpadChangeEntry, ScratchpadChangeEvent, ScratchpadConfig,
-    ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch, SearchResult,
+    FileMeta, FlatFile, ReplaceResult, ScratchpadChangeEntry, ScratchpadChangeEvent,
+    ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch,
+    SearchResult,
 };
-pub use jobs::{DirResult, LoadResult, SearchPayload};
+pub use jobs::{DirResult, FileListPayload, LoadResult, SearchPayload};
 pub use state::ScratchpadState;
 pub use store::{ScratchpadStore, MODULE_DIR_NAME, ORIGIN_SCRATCHPAD};
 // 回收站已上提到 engine（中性化：不再返回 `ScratchpadEntry`，来源是字符串标记）。

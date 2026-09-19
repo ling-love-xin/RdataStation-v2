@@ -84,6 +84,31 @@ fn open_palette(
     Entity<Harness>,
     &mut VisualTestContext,
 ) {
+    open_palette_in(cx, None)
+}
+
+/// 同上，但带项目根（文件源要真项目目录：草稿箱是项目级能力）。
+fn open_palette_in_project(
+    cx: &mut TestAppContext,
+    project_root: std::path::PathBuf,
+) -> (
+    Rc<StubHost>,
+    Shared,
+    Entity<Harness>,
+    &mut VisualTestContext,
+) {
+    open_palette_in(cx, Some(project_root))
+}
+
+fn open_palette_in(
+    cx: &mut TestAppContext,
+    project_root: Option<std::path::PathBuf>,
+) -> (
+    Rc<StubHost>,
+    Shared,
+    Entity<Harness>,
+    &mut VisualTestContext,
+) {
     cx.update(gpui_kit::init);
     let host = StubHost::new();
     let palette_host = host.clone();
@@ -95,6 +120,9 @@ fn open_palette(
         ],
         None,
     );
+    if let Some(root) = project_root {
+        *shared.project.borrow_mut() = Some(project::ui::OpenProject::from_root(root));
+    }
     shared.quick_open.set(true);
     let shared_for_palette = shared.clone();
     let (harness, cx) = cx.add_window_view(|_window, cx| {
@@ -190,4 +218,52 @@ fn metadata_search_starts_only_from_two_chars(cx: &mut TestAppContext) {
     });
     assert!(searching, "两字符应进入「搜索中」");
     assert_eq!(sent.as_deref(), Some("sa"), "发的应是当前词");
+}
+
+/// 文件源端到端：打开面板 → 为当前项目排一次扁平清单 → 回填后出「文件」行。
+///
+/// 这条链路跨了三种时序：宿主端口（项目根）→ `scratchpad::jobs`（**真工作线程 + 真文件系统**）
+/// → 浮层的泵（测试时钟驱动）。真线程只能用真实等待配合测试时钟推进，
+/// 所以这是本文件里唯一需要 `advance_clock` 的用例。
+#[gpui_kit::test]
+fn opening_the_palette_loads_scratchpad_files(cx: &mut TestAppContext) {
+    use std::time::{Duration, Instant};
+
+    let project = temp_project("qo_files");
+    std::fs::create_dir_all(project.join("scratchpad/notes")).unwrap();
+    std::fs::write(project.join("scratchpad/notes/a.md"), "# 笔记").unwrap();
+
+    let (_host, _shared, harness, cx) = open_palette_in_project(cx, project.clone());
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut keys: Vec<String> = Vec::new();
+    while Instant::now() < deadline {
+        // 测试时钟：把泵的 60ms 轮询推到点；真实小睡：等后台线程把清单做出来。
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        keys = cx.update(|_window, cx| harness.read(cx).palette.read(cx).row_keys(cx));
+        if keys.iter().any(|key| key == "file:notes/a.md") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert!(
+        keys.iter().any(|key| key == "file:notes/a.md"),
+        "文件清单应在 20 s 内回填成行；实际行：{keys:?}"
+    );
+
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// 临时项目目录（每个用例一个；仿 `scratchpad::jobs` 测试的同名助手）。
+fn temp_project(tag: &str) -> std::path::PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("rds_qo_{tag}_{}_{unique}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp project");
+    dir
 }

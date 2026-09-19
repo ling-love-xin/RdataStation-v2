@@ -12,6 +12,7 @@
 //! - `Shared::quick_open` = 开关（全应用一份：标题栏、设置页互斥、命令都读它）；
 //! - 本实体 = 输入 / 结果 / 选中锚点 / 防抖与回填任务 / 元数据命中缓存。
 
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -32,6 +33,14 @@ pub(crate) trait QuickOpenHost: 'static {
     fn execute(&self, action: Action, keep_open: bool, window: &mut Window, cx: &mut App);
 }
 
+/// 文件源快照（键 = 项目根：切项目后旧快照不匹配，不会显示别的项目的文件）。
+struct FilesSnapshot {
+    root: PathBuf,
+    files: Vec<model::FileObject>,
+    /// 后台因 [上限](scratchpad::jobs::FLAT_FILE_LIMIT) 截断过（行上要说「没全列」）。
+    truncated: bool,
+}
+
 /// Quick Open 浮层。
 pub(crate) struct QuickOpenPalette {
     shared: Shared,
@@ -49,6 +58,12 @@ pub(crate) struct QuickOpenPalette {
     selected_key: Option<String>,
     /// 元数据命中（宿主缓存；后台回填后在 render 重建成行）。
     meta: Vec<model::MetaObject>,
+    /// 文件源清单（每次打开重取一次；搜索是本地过滤，不跟输入走）。
+    files: Option<FilesSnapshot>,
+    /// 已为哪个项目根发过清单请求（避免每敲一个字都重发）。
+    files_requested_for: Option<PathBuf>,
+    /// 有清单请求在途。
+    files_pending: bool,
     /// 已发给后台的搜索词（**只在词变时发**；回填时据此丢弃过期批次）。
     sent_query: Option<String>,
     /// 元数据搜索中（组头显示「搜索中…」）。
@@ -73,6 +88,9 @@ impl QuickOpenPalette {
             focus_pending: false,
             selected_key: None,
             meta: Vec::new(),
+            files: None,
+            files_requested_for: None,
+            files_pending: false,
             sent_query: None,
             searching: false,
             rows_dirty: false,
@@ -90,6 +108,11 @@ impl QuickOpenPalette {
         self.pending_open = true;
         self.focus_pending = true;
         self.selected_key = None;
+        // 文件清单每次打开重取一次（面板关着的时候草稿可能被外部改过）；
+        // 在途时不置位——否则一次打开会发两份清单，后到的那份白算。
+        if !self.files_pending {
+            self.files_requested_for = None;
+        }
         cx.notify();
     }
 
@@ -156,10 +179,16 @@ impl QuickOpenPalette {
         }
     }
 
-    /// 上一帧遗留的打开待办（清输入 → 落选中 → 刷新 → 聚焦）。
+    /// 上一帧遗留的打开待办（清输入 → 刷新 → 聚焦）。
+    ///
+    /// 「打开」是**权威的刷新边沿**，不等输入框的 `Change`：
+    /// 空输入也要出默认分组（连接 / 文件 / 命令）——否则打开后结果区是空的，
+    /// 看起来像「搜不到」；而且文件清单的请求就挂在这一跳上。
     fn consume_pending_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut opened = false;
         if self.pending_open {
             self.pending_open = false;
+            opened = true;
             self.meta.clear();
             self.sent_query = None;
             self.searching = false;
@@ -167,7 +196,7 @@ impl QuickOpenPalette {
                 input.update(cx, |state, cx| state.set_value("", window, cx));
             }
         }
-        if self.rows_dirty {
+        if opened || self.rows_dirty {
             self.rows_dirty = false;
             self.refresh(window, cx);
         }
@@ -195,7 +224,14 @@ impl QuickOpenPalette {
             .iter()
             .map(|c| (c.name.clone(), c.driver.clone()))
             .collect();
-        let groups = model::build_groups(&query, &connections, &self.meta, self.searching);
+        let sources = model::Sources {
+            connections: &connections,
+            meta: &self.meta,
+            meta_searching: self.searching,
+            files: self.visible_files(),
+            files_note: self.files_note(),
+        };
+        let groups = model::build_groups(&query, &sources);
         let selected = self
             .selected_key
             .clone()
@@ -227,7 +263,54 @@ impl QuickOpenPalette {
         });
         // 元数据：词变了才防抖发一次
         self.schedule_search(&query, cx);
+        // 文件：只在打开后拿一次（不跟词走）
+        self.schedule_file_list(cx);
         cx.notify();
+    }
+
+    /// 当前项目根对应的文件清单（切项目 / 未打开项目时为空）。
+    fn visible_files(&self) -> &[model::FileObject] {
+        let Some(root) = self.shared.project_root() else {
+            return &[];
+        };
+        self.files
+            .as_ref()
+            .filter(|snapshot| snapshot.root == root)
+            .map(|snapshot| snapshot.files.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// 文件组的组头补充（清单被后台截断时要说清「没全列」）。
+    fn files_note(&self) -> String {
+        let Some(root) = self.shared.project_root() else {
+            return String::new();
+        };
+        match self.files.as_ref().filter(|snapshot| snapshot.root == root) {
+            Some(snapshot) if snapshot.truncated => format!(
+                "文件较多，只列前 {} 个（继续输入缩小范围）",
+                scratchpad::jobs::FLAT_FILE_LIMIT
+            ),
+            _ => String::new(),
+        }
+    }
+
+    /// 给后台排一次**扁平文件清单**（每次打开一次；结果由泵回填）。
+    ///
+    /// 与元数据搜索的关键差别：文件源**不分档、不跟词走**（过滤是本地的事），
+    /// 所以不需要防抖，也不需要随输入重发——只在“打开”这个边沿拿一次。
+    fn schedule_file_list(&mut self, _cx: &mut Context<Self>) {
+        let Some(root) = self.shared.project_root() else {
+            // 未打开项目：草稿箱是项目级能力（不留上一个项目的行）。
+            self.files = None;
+            self.files_requested_for = None;
+            return;
+        };
+        if self.files_pending || self.files_requested_for.as_deref() == Some(root.as_path()) {
+            return;
+        }
+        self.files_requested_for = Some(root.clone());
+        self.files_pending = true;
+        scratchpad::jobs::enqueue_flatten_files(&root);
     }
 
     /// 给后台排一次跨连接索引搜索（防抖 150ms；**单字符不发**）。
@@ -305,12 +388,13 @@ impl QuickOpenPalette {
         self.pump = Some(task);
     }
 
-    /// 取走元数据搜索结果（过期批次丢弃；不碰 UI，只置脏标记）。
+    /// 取走元数据搜索结果 + 文件清单（过期批次丢弃；不碰 UI，只置脏标记）。
     fn pump_results(&mut self, cx: &mut Context<Self>) {
         let results = database::nav_jobs::drain_search_results(
             database::nav_jobs::SearchConsumer::QuickOpen,
         );
-        if results.is_empty() {
+        let lists = scratchpad::jobs::drain_file_lists();
+        if results.is_empty() && lists.is_empty() {
             return;
         }
         let current = self
@@ -327,6 +411,26 @@ impl QuickOpenPalette {
             self.searching = false;
             self.meta = result.hits.iter().filter_map(model::meta_object).collect();
             changed = true;
+        }
+        for payload in lists {
+            self.files_pending = false;
+            // 无论收不收（可能是上一个项目的在途结果），都要重算一次：
+            // 收下的换掉旧清单，丢掉的会触发下一次 refresh 去取当前项目的。
+            changed = true;
+            if self.files_requested_for.as_deref() != Some(payload.project_root.as_path()) {
+                continue;
+            }
+            match payload.files {
+                Some(files) => {
+                    self.files = Some(FilesSnapshot {
+                        root: payload.project_root,
+                        files: files.iter().map(model::file_object).collect(),
+                        truncated: payload.truncated,
+                    });
+                }
+                // 读盘失败（原因已记日志）：保留上一份，清掉请求标记以便下次重试。
+                None => self.files_requested_for = None,
+            }
         }
         if changed {
             self.rows_dirty = true;
@@ -378,6 +482,15 @@ impl QuickOpenPalette {
             .as_ref()
             .map(|list| list.read(cx).delegate().row_count())
             .unwrap_or(0)
+    }
+
+    /// 测试只读访问器：结果行的业务键（按渲染顺序）。
+    #[cfg(test)]
+    pub(crate) fn row_keys(&self, cx: &App) -> Vec<String> {
+        self.list
+            .as_ref()
+            .map(|list| list.read(cx).delegate().keys())
+            .unwrap_or_default()
     }
 
     /// 测试只读访问器：选中的行业务键。

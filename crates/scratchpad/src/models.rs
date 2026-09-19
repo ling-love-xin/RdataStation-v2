@@ -38,6 +38,22 @@ pub struct SearchMatch {
     pub match_spans: Vec<(usize, usize)>,
 }
 
+/// 扁平行（Quick Open 的文件源）：**模块内相对路径**是身份，绝对路径是打开用的落地值。
+///
+/// 与树形条目（[`ScratchpadEntry`]）分开：文件搜索要的是「一次拿全 + 能排序 / 能截断」的平表，
+/// 而树形加载按目录懒展开（深度、展开态都是 UI 状态，搜索用不上）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FlatFile {
+    /// 相对模块根、`/` 分隔（如 `drafts/notes.sql`）。
+    pub relative_path: String,
+    /// 所在目录（根下为空串）；行右侧展示用。
+    pub folder: String,
+    /// 文件名（展示主文本）。
+    pub name: String,
+    /// 绝对路径（编辑器按它打开）。
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
     pub matches: Vec<SearchMatch>,

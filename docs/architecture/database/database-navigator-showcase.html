@@ -122,6 +122,14 @@ h1,h2,h3,h4{margin:0;line-height:1.35;}
 .win .node.fk{border-left:2px solid var(--warning);}
 .win .sbar2{display:flex;gap:12px;padding:4px 9px;background:var(--sidebar);border-top:1px solid var(--border);font-size:10.5px;color:var(--muted);}
 .win .sbar2 .on{color:var(--fg);}
+/* 索引搜索结果区（线框内示意） */
+.sr{border-bottom:1px solid var(--border);padding:5px 9px 7px;background:var(--card);}
+.sr-h{font-size:10.5px;color:var(--primary);margin-bottom:3px;}
+.sr-r{display:flex;align-items:center;gap:6px;font-size:11px;padding:1px 5px;border-radius:5px;}
+.sr-r:hover{background:var(--hover);}
+.sr-r .dot{width:6px;height:6px;border-radius:50%;background:var(--info);flex:none;}
+.sr-r b{font-weight:600;color:var(--fg);}
+.sr-r span{margin-left:auto;color:var(--muted);font-size:10px;font-family:Consolas,monospace;}
 .hidden{display:none !important;}
 
 /* ── KPI ── */
@@ -165,7 +173,7 @@ section{margin:34px 0 0;scroll-margin-top:64px;}
 .card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
 .card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
 
-/* ── 三条高光 ── */
+/* ── 高光 ── */
 .hl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
 .hl .big{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 19px;box-shadow:var(--shadow-sm);}
 .hl .big::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary);opacity:.85;}
@@ -189,6 +197,7 @@ section{margin:34px 0 0;scroll-margin-top:64px;}
 .script .st .how{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.65;}
 .script .st .ui{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
 .script .st .ui span{font-size:10.5px;border:1px solid var(--border);background:var(--bg);border-radius:5px;padding:0 6px;font-family:Consolas,monospace;color:var(--fg);}
+.scripts{display:grid;gap:12px;}
 
 /* ── 流程条 ── */
 .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
@@ -199,13 +208,19 @@ section{margin:34px 0 0;scroll-margin-top:64px;}
 .step2 .who{font-size:10.5px;color:var(--muted);margin-top:7px;font-family:Consolas,monospace;}
 .gate{margin-top:10px;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:12.5px;box-shadow:var(--shadow-sm);}
 .gate b{color:var(--primary);}
+.gate.warn{border-left-color:var(--warning);}
+.gate.warn b{color:var(--warning);}
 
-/* ── 分层 ── */
+/* ── 分层 / 代码块 ── */
 .layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
 .layer{display:grid;grid-template-columns:148px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);}
 .layer:last-child{border-bottom:none;}
 .layer .tag{font-size:11.5px;font-weight:700;color:var(--primary);display:flex;align-items:center;}
 .layer .body{font-size:12.5px;}
+.code{border:1px solid var(--border);border-radius:12px;background:var(--code-bg);padding:13px 15px;font-family:Consolas,'SFMono-Regular',ui-monospace,monospace;
+  font-size:12px;line-height:1.8;box-shadow:var(--shadow-sm);white-space:pre;overflow-x:auto;}
+.code b{color:var(--primary);font-weight:600;}
+.code .cm{color:var(--muted);}
 .dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
 .dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
 
@@ -261,42 +276,47 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
   <nav class="nav" id="nav">
     <a href="#s1">为什么不是一个连接列表</a>
     <a href="#s2">三条轴各归一地问</a>
-    <a href="#s3">三个高光</a>
+    <a href="#s3">四个高光</a>
     <a href="#s4">四个剧本</a>
     <a href="#s5">一次展开的全流程</a>
     <a href="#s6">连接行解剖</a>
-    <a href="#s7">四级取数管线</a>
-    <a href="#s8">刷新 · 预热 · 预取</a>
-    <a href="#s9">属性面板</a>
-    <a href="#s10">键盘 · 右键 · 拖拽</a>
-    <a href="#s11">架构</a>
-    <a href="#s12">质量与证据</a>
-    <a href="#s13">边界</a>
-    <a href="#s14">文档地图</a>
+    <a href="#s7">三级缓存与取数管线</a>
+    <a href="#s8">大库是怎么扛住的</a>
+    <a href="#s9">刷新 · 预热 · 预取</a>
+    <a href="#s10">属性面板</a>
+    <a href="#s11">键盘 · 右键 · 拖拽</a>
+    <a href="#s12">架构</a>
+    <a href="#s13">质量与证据</a>
+    <a href="#s14">边界</a>
+    <a href="#s15">文档地图</a>
   </nav>
 
   <!-- ══ 英雄区 ══ -->
   <div class="hero">
     <div class="hero-grid">
       <div>
-        <div class="eyebrow">左侧 Dock · 一实例一项目 · <b>三归属域</b> · 分组 = 结构 / 标签 = 检索</div>
-        <h2>十几个库，<em>一眼找到那一个</em>——<br>展开就自动连上，双击就看细节。</h2>
+        <div class="eyebrow">左侧 Dock · 一实例一项目 · <b>三归属域</b> · 三级缓存 · 索引分页</div>
+        <h2>十几个库，<em>一眼找到那一个</em>；<br>十万张表，也只先给你<em>一页</em>。</h2>
         <p class="lead">
-          它不是一个「连接列表」：组织（分组）、检索（标签 / 筛选）、事实（属性面板）各占一个位置，互不打架；
-          对象树逐级懒加载，元数据有缓存，展开连接时若未建连会<b>先自动建连</b>。
+          组织（分组）、检索（标签 / 筛选 / 搜索）、事实（属性面板）各占一个位置，互不打架；
+          对象树逐级懒加载，元数据走<b>三级缓存</b>（内存 → 每连接 SQLite → 实时内省），
+          超过 500 个对象的 schema 改成<b>索引分页</b>取数，搜索框还能跨连接按名称搜到<b>尚未展开</b>的对象。
           <span class="dim">只管理数据源与元数据——不越界去做对话框、分析资产或别的模块本体。</span>
         </p>
         <div class="chips">
-          <span class="chip hot">四类数据库真机回归</span>
-          <span class="chip hot">行内常驻 ≤ 3 个元素</span>
+          <span class="chip hot">索引分页：首屏 200 条 + 加载更多</span>
+          <span class="chip hot">跨连接名称搜索</span>
+          <span class="chip hot">L2 连接池化</span>
+          <span class="chip">四类数据库真机回归</span>
+          <span class="chip">行内常驻 ≤ 3 个元素</span>
           <span class="chip">render 期零 I/O</span>
           <span class="chip">缓存只增不删</span>
-          <span class="chip">大 schema 分页 + 邻接预取</span>
           <span class="chip">右键通用入口：SQL / 洞察</span>
         </div>
         <div class="cta">
-          <a class="pri" href="#s4">看四个剧本 ↓</a>
-          <a href="#s11">看架构</a>
+          <a class="pri" href="#s8">看大库怎么扛 ↓</a>
+          <a href="#s7">看三级缓存</a>
+          <a href="#s12">看架构</a>
           <a href="database-navigator-prototype.html">打开交互稿</a>
         </div>
       </div>
@@ -316,7 +336,7 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
           <span class="ib acc" title="更多">⋯</span>
         </div>
         <div class="filters">
-          <div class="search"><span>⌕</span><span class="ph" id="q">名称 / 标签 / type: / scope: / tag:</span><span class="flt" id="flt">筛选 ▾ 0</span></div>
+          <div class="search"><span>⌕</span><span class="ph" id="q">ord</span><span class="flt" id="flt">筛选 ▾ 0</span></div>
           <div class="facets" id="facets">
             <button class="facet on" data-scope="all">全部</button>
             <button class="facet" data-scope="P">项目</button>
@@ -329,6 +349,13 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
           </div>
         </div>
         <div class="body2" id="tree">
+          <!-- 索引搜索结果区（新增能力：尚未展开到那层也能搜到） -->
+          <div class="sr">
+            <div class="sr-h">索引搜索：ord（3 条，覆盖 2 个连接）</div>
+            <div class="sr-r"><span class="dot"></span><b>orders</b><span>表 · public · 生产 PG</span></div>
+            <div class="sr-r"><span class="dot"></span><b>order_items</b><span>表 · public · 生产 PG</span></div>
+            <div class="sr-r"><span class="dot"></span><b>order_id</b><span>列 · orders · 生产 PG</span></div>
+          </div>
           <div class="ghead" data-group><span class="bar"></span>核心库<span class="meta">2/2 · 2</span><span class="fold">⇥</span></div>
           <div class="crow sel" data-scope="GP">
             <span class="bdg">PG</span><span class="nm">生产 PG</span>
@@ -365,17 +392,17 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
     </div>
 
     <div class="kpis">
-      <div class="kpi"><div class="n">3<small> 个元素</small></div><div class="l">行内常驻上限</div><div class="d">徽标（色 = 状态 · 形 = 类型）+ 名称 + 归属域列；行操作只在 hover / 选中时显</div></div>
-      <div class="kpi"><div class="n">3<small> 条轴</small></div><div class="l">结构 / 检索 / 事实</div><div class="d">分组 = 结构（占树一级）· 标签 = 检索（不进树）· 属性面板 = 事实（唯一权威位）</div></div>
-      <div class="kpi"><div class="n">L1+L2</div><div class="l">两级元数据缓存</div><div class="d">内存 + 每连接 SQLite，cache-aside；L3 实时内省不是缓存，命中即回写</div></div>
-      <div class="kpi"><div class="n">0<small> 次 I/O</small></div><div class="l">render 期纪律</div><div class="d">加载 / 属性 / 预热 / 预取全在后台工作线程，主线程只轮询回填</div></div>
-      <div class="kpi"><div class="n">4<small> 类库</small></div><div class="l">真机回归口径</div><div class="d">MySQL · PostgreSQL · SQLite · DuckDB × 项目 / 全局 / 共享，按树的实际层级核对</div></div>
+      <div class="kpi"><div class="n">3<small> 级</small></div><div class="l">元数据缓存</div><div class="d">L1 内存 → L2 每连接 SQLite → L3 实时内省（<b>L3 不是缓存</b>）；命中回填上一层</div></div>
+      <div class="kpi"><div class="n">200<small> 条</small></div><div class="l">大 schema 首屏</div><div class="d">超过 500 个对象就改走索引分页，「加载更多」按 <span class="mono">offset</span> 追加；大 schema 不进内存</div></div>
+      <div class="kpi"><div class="n">1<small> 份索引</small></div><div class="l">分页 / 计数 / 搜索</div><div class="d"><span class="mono">metadata_index</span> 同时供三件事，冷启动内省后按 schema 幂等重建</div></div>
+      <div class="kpi"><div class="n">1<small> 次</small></div><div class="l">每个缓存文件的固定开销</div><div class="d">连接池化后，「开文件 + 5 条 PRAGMA + 迁移校验」不再每次访问都付</div></div>
+      <div class="kpi"><div class="n">485<small> 项</small></div><div class="l">测试基线</div><div class="d">引擎 443 + 导航 42（2026-09-19 实测）；缓存与分页用「空连接管理器」反证命中</div></div>
     </div>
   </div>
 
   <!-- ══ 1. 为什么 ══ -->
   <section id="s1">
-    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「连接列表」</h3><span class="tag">四处「看着有、其实是假」的底座，逐条换成了真东西</span></div>
+    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「连接列表」</h3><span class="tag">「看着有、其实是假」的底座，逐条换成了真东西</span></div>
     <table>
       <tr><th style="width:44%">旧样子（V1）</th><th>现在</th></tr>
       <tr>
@@ -394,115 +421,125 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
         <td>刷新即清、断开即删缓存文件：「看起来更快」，代价是每次重扫</td>
         <td><b>缓存只增不删</b>：刷新只重建该范围；唯一删除入口是显式「缓存管理…」——这是从 v1 教训换来的规则</td>
       </tr>
+      <tr>
+        <td>「缓存」只有一层内存表，重启即空；大库一次性拉全</td>
+        <td><b>三级缓存 + 连接池 + 索引分页</b>：跨重启命中、每缓存文件只付一次固定开销、十万表分块取数 <span class="badge ok">本轮补齐</span></td>
+      </tr>
     </table>
   </section>
 
   <!-- ══ 2. 三条轴 ══ -->
   <section id="s2">
-    <div class="sec-head"><span class="no">02</span><h3>三条轴各归一地问</h3><span class="tag">裁决「信息放哪」的三条边界规则</span></div>
-    <p class="sec-sub">一问一主：三个问题各有且仅有一个承载位；任何信息<b>不许同时占两位</b>。</p>
+    <div class="sec-head"><span class="no">02</span><h3>三条轴各归一地问</h3><span class="tag">一问一主：任何信息不许同时占两位</span></div>
     <table>
-      <tr><th>你问</th><th>谁回答</th><th>表达位</th><th>禁止</th></tr>
-      <tr><td>我的库放在哪</td><td><b>分组</b>（结构容器，多对多）</td><td>树一级（唯一结构轴）</td><td>不做自动分类</td></tr>
-      <tr><td>和什么相关的库</td><td><b>标签</b>（横切检索键，多值）</td><td>筛选 + 搜索；行内可选显示</td><td>不进树、不排序</td></tr>
-      <tr><td>这一条记录存在哪</td><td><b>归属域</b>（<span class="mono">P</span> / <span class="mono">G</span> / <span class="mono">GP</span>）</td><td>行内右对齐固定列 + 筛选</td><td>不参与组织</td></tr>
-      <tr><td>这是什么库 / 能不能用</td><td><b>类型</b>（形状）+ <b>状态</b>（颜色）</td><td>同一个徽标的两个通道</td><td>不靠颜色表达类型、不常显全名</td></tr>
-      <tr><td>这一个的细节</td><td><b>属性面板</b>（事实唯一权威位）</td><td>编辑区右侧停靠面板</td><td>导航行不重复这些细节</td></tr>
+      <tr><th style="width:22%">你问</th><th style="width:26%">谁回答</th><th style="width:28%">表达位</th><th>禁止</th></tr>
+      <tr><td>我的库放在哪</td><td><b>分组</b>（结构容器，多对多）</td><td>树一级（唯一结构轴）</td><td class="no">不做自动分类</td></tr>
+      <tr><td>和什么相关的库</td><td><b>标签</b>（横切检索键，多值）</td><td>筛选 + 搜索；行内可选显示</td><td class="no">不进树、不排序</td></tr>
+      <tr><td>这一条记录存在哪</td><td><b>归属域</b>（<span class="mono">P</span> / <span class="mono">G</span> / <span class="mono">GP</span>）</td><td>行内右对齐固定列 + 筛选</td><td class="no">不参与组织</td></tr>
+      <tr><td>这是什么库 / 能不能用</td><td><b>类型</b>（形状）+ <b>状态</b>（颜色）</td><td>同一个徽标的两个通道</td><td class="no">不靠颜色表达类型、不常显全名</td></tr>
+      <tr><td>这一个的细节</td><td><b>属性面板</b>（事实唯一权威位）</td><td>编辑区右侧停靠面板</td><td class="no">导航行不重复这些细节</td></tr>
     </table>
-    <div class="gate" style="margin-top:12px">
-      <b>心智模型：</b>导航栏的职责 = 定位 + 连接 + 浏览；<b>配置归对话框，详情归属性面板</b>。
+    <div class="gate">
+      <b>心智模型</b>：导航栏的职责 = <b>定位 + 连接 + 浏览</b>；配置归对话框，详情归属性面板。
       结构靠分组，检索靠筛选，细节靠面板。<b>事实只读，组织可写。</b>
     </div>
   </section>
 
-  <!-- ══ 3. 三个高光 ══ -->
+  <!-- ══ 3. 四个高光 ══ -->
   <section id="s3">
-    <div class="sec-head"><span class="no">03</span><h3>三个高光</h3><span class="tag">如果只记三件事</span></div>
+    <div class="sec-head"><span class="no">03</span><h3>四个高光</h3><span class="tag">一眼能说清的四件事</span></div>
     <div class="hl">
       <div class="big">
         <div class="idx">HIGHLIGHT 1</div>
         <h4>一行只说三件事，且一个元素能说两件</h4>
-        <p>常驻只有「徽标 + 名称 + 归属域列」，且归属域<b>右对齐成列</b>，长名不会挤走它。
-          徽标本身是<b>双通道</b>：颜色 = 状态（灰 = 不可用 / 彩 = 可用），形状 + 内叠 2 字母 = 数据库类型。
-          行尾 <span class="mono">+</span>（加标签）与 <span class="mono">✎</span>（编辑）只在 hover / 选中时出现。</p>
-        <div class="kv"><span>密度预算 ≤ 3</span><span>长名截断不挤压</span><span>连接 / 断开只走右键</span><span>hover 卡 300ms 补全事实</span></div>
+        <p>常驻只有「徽标 + 名称 + 归属域列」，归属域<b>右对齐成列</b>，长名不会挤走它。
+          徽标本身是<b>双通道</b>：颜色 = 状态、形状 + 内叠 2 字母 = 类型。行尾 <span class="mono">+</span> 与 <span class="mono">✎</span> 只在 hover / 选中时出现。</p>
+        <div class="kv"><span>密度预算 ≤ 3</span><span>长名截断不挤压</span><span>连接 / 断开只走右键</span><span>hover 卡 300ms</span></div>
       </div>
       <div class="big">
         <div class="idx">HIGHLIGHT 2</div>
         <h4>事实只读，组织可写</h4>
         <p>类型、驱动、归属域、地址、状态是<b>系统事实</b>，只做展示与筛选；分组与标签是<b>用户心智</b>，才是可写组织。
           所以信息永不「同时占两位」：在哪 = 分组，符合什么条件 = 筛选，这一个的细节 = 属性面板。</p>
-        <div class="kv"><span>分组多对多 · 主组全亮</span><span>其余组以引用行出现，点击跳回</span><span>标签永不进树</span></div>
-        <div class="kv"><a href="#s2" style="font-size:11.5px">看三条边界规则 ↑</a></div>
+        <div class="kv"><span>分组多对多 · 主组全亮</span><span>其余组以引用行出现</span><span>标签永不进树</span></div>
       </div>
       <div class="big">
         <div class="idx">HIGHLIGHT 3</div>
-        <h4>展开不卡，错了有原因</h4>
-        <p>树加载、属性、预热、预取全部进<b>单一后台工作线程 + 结果队列</b>；渲染期不做 I/O。
-          大 schema 靠类别文件夹分页顶住，首次展开表文件夹后还会<b>顺手预取前 20 张表的列</b>。
-          连不上就说清差在哪，并给重试入口。</p>
-        <div class="kv"><span>首批 200 条 + 加载更多</span><span>预热可取消 · 有进度</span><span>节点级失败可读原因 + 重试</span></div>
+        <h4>展开不卡，而且记得住</h4>
+        <p>树加载、属性、预热、预取、搜索全部进<b>单一后台工作线程 + 结果队列</b>；渲染期不做 I/O。
+          取数走 cache-aside 三级：L1 内存 → L2 每连接 SQLite（<b>池化复用</b>）→ L3 实时内省；L2 命中还会<b>回填 L1</b>。</p>
+        <div class="kv"><span>render 期零 I/O</span><span>L2 池化：每文件一次固定开销</span><span>命中回填 L1</span><span>失败可读原因 + 重试</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 4</div>
+        <h4>十万表也只先给你一页</h4>
+        <p>超过阈值（<b>500</b> 个对象）的 schema，展开时只从元数据索引取一页（<b>200 条</b>），其余由「加载更多」按 <span class="mono">offset</span> 追加；
+          这类大 schema <b>不进内存缓存</b>。搜索同理：跨连接扫索引，结果封顶，过期批次直接丢弃。</p>
+        <div class="kv"><span>阈值 500</span><span>首屏 200 条</span><span>加载更多按 offset</span><span>大 schema 不驻留内存</span><span>搜索单连接 50 / 总量 300</span></div>
       </div>
     </div>
   </section>
 
   <!-- ══ 4. 四个剧本 ══ -->
   <section id="s4">
-    <div class="sec-head"><span class="no">04</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">每步都用现有按钮，能照着做</span></div>
-    <div class="grid g2">
+    <div class="sec-head"><span class="no">04</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">每个剧本都以「省下什么」收尾</span></div>
+    <div class="scripts">
       <div class="script">
-        <div class="sh"><span class="who">剧本 A</span><h4>这条连接到底还能不能用</h4><span class="gain">省下开对话框</span></div>
+        <div class="sh"><span class="who">连之前</span><h4>这条连接到底还能不能用</h4><span class="gain">→ 省下开对话框</span></div>
         <div class="steps">
           <div class="st"><div class="n">STEP 1</div><div class="act">先看颜色</div>
-            <div class="how">徽标彩色 = 运行时可连，灰色 = 当前不可用；鼠标停一下看类型 / 状态 / 驱动。</div>
+            <div class="how">徽标彩色 = 运行时可连，灰色 = 当前不可用；停一下看 hover 卡（类型 / 状态 / 驱动）。</div>
             <div class="ui"><span>徽标</span><span>hover 卡</span></div></div>
           <div class="st"><div class="n">STEP 2</div><div class="act">要确认就实测</div>
             <div class="how">右键 → <b>测试连接</b>：独立会话探测，<b>不注册连接池、不写库</b>，结果落面板提示。</div>
             <div class="ui"><span>右键</span><span>测试连接</span></div></div>
           <div class="st"><div class="n">STEP 3</div><div class="act">真要用就展开</div>
-            <div class="how">展开连接根：未建连会先自动建连，再逐级加载——不用先手动去连一次。</div>
+            <div class="how">展开连接根，未建连会先自动建连，再逐级加载。</div>
             <div class="ui"><span>▸ 展开</span><span>自动建连</span></div></div>
         </div>
       </div>
 
       <div class="script">
-        <div class="sh"><span class="who">剧本 B</span><h4>库太多，找不着东西</h4><span class="gain">少翻树</span></div>
+        <div class="sh"><span class="who">找东西</span><h4>库太多，找不着东西</h4><span class="gain">→ 少翻树</span></div>
         <div class="steps">
           <div class="st"><div class="n">STEP 1</div><div class="act">先收窄</div>
-            <div class="how">顶部归属域 chips（全部 / 项目 / 全局 / 共享）一击收窄；行尾「筛选 ▾ N」叠加类型 / 驱动 / 标签。</div>
+            <div class="how">归属域 chips（全部 / 项目 / 全局 / 共享）一击收窄；行尾「筛选 ▾ N」叠加类型 / 驱动 / 标签。</div>
             <div class="ui"><span>归属域 chips</span><span>筛选 ▾</span></div></div>
           <div class="st"><div class="n">STEP 2</div><div class="act">再精确</div>
-            <div class="how">搜索框支持 facet 语法，和 chips 互补：<span class="mono">type:postgres</span> · <span class="mono">scope:global</span> · <span class="mono">tag:prod</span>。</div>
-            <div class="ui"><span>type:</span><span>scope:</span><span>tag:</span></div></div>
-          <div class="st"><div class="n">STEP 3</div><div class="act">把常用固定下来</div>
+            <div class="how">搜索框支持 facet 语法，与 chips 互补。</div>
+            <div class="ui"><span>type:postgres</span><span>scope:global</span><span>tag:prod</span></div></div>
+          <div class="st"><div class="n">STEP 3</div><div class="act">连没展开的也搜</div>
+            <div class="how">输入 ≥ 2 个字符，后台<b>跨连接搜元数据索引</b>；命中落在树顶「索引搜索」区，单击直接开属性面板。</div>
+            <div class="ui"><span>索引搜索</span><span>中缀匹配</span><span>单击看属性</span></div></div>
+          <div class="st"><div class="n">STEP 4</div><div class="act">把常用固定下来</div>
             <div class="how">拖连接行到<b>分组头</b>即归组；拖到「未分组」头 = 移出全部；分组头之间拖 = 调分组顺序。</div>
             <div class="ui"><span>拖到分组头</span><span>Alt+↑↓</span></div></div>
         </div>
       </div>
 
       <div class="script">
-        <div class="sh"><span class="who">剧本 C</span><h4>只想看一眼这张表长什么样</h4><span class="gain">不动 SQL</span></div>
+        <div class="sh"><span class="who">看一眼</span><h4>只想看一眼这张表长什么样</h4><span class="gain">→ 不动 SQL</span></div>
         <div class="steps">
           <div class="st"><div class="n">STEP 1</div><div class="act">看事实</div>
-            <div class="how">双击任意对象或按 <kbd>Enter</kbd> / <kbd>F4</kbd>：右侧属性面板给出 DBeaver 式属性网格。</div>
+            <div class="how">双击任意对象或按 <kbd>Enter</kbd> / <kbd>F4</kbd>，右侧属性面板给出 DBeaver 式属性网格。</div>
             <div class="ui"><span>双击</span><span>Enter / F4</span></div></div>
           <div class="st"><div class="n">STEP 2</div><div class="act">看数据</div>
-            <div class="how">右键表 / 视图 → <b>查看数据</b>：注入一条 <span class="mono">SELECT * … LIMIT 200</span> 到 SQL 编辑器。</div>
+            <div class="how">右键表 / 视图 → <b>查看数据</b>，注入 <span class="mono">SELECT * … LIMIT 200</span> 到 SQL 编辑器。</div>
             <div class="ui"><span>查看数据</span><span>LIMIT 200</span></div></div>
           <div class="st"><div class="n">STEP 3</div><div class="act">要写就生成</div>
-            <div class="how">右键 → <b>生成 SQL ▸</b>（INSERT / UPDATE / DELETE 模板）。列由后台任务取、命中缓存不发查询，<b>只注入不执行</b>。</div>
+            <div class="how">右键 → <b>生成 SQL ▸</b>（INSERT / UPDATE / DELETE 模板）。列由后台任务取、命中 L2 不发查询，<b>只注入不执行</b>。</div>
             <div class="ui"><span>生成 SQL ▸</span><span>不自动执行</span></div></div>
         </div>
       </div>
 
       <div class="script">
-        <div class="sh"><span class="who">剧本 D</span><h4>把表结构拖进 SQL 里</h4><span class="gain">不手抄</span></div>
+        <div class="sh"><span class="who">写 SQL</span><h4>把表结构拖进 SQL 里</h4><span class="gain">→ 不手抄</span></div>
         <div class="steps">
           <div class="st"><div class="n">STEP 1</div><div class="act">抓住那一行</div>
             <div class="how">展开到表 / 视图，按住拖动——载荷只带限定名与短名。</div>
             <div class="ui"><span>▦ 表</span><span>拖拽</span></div></div>
           <div class="st"><div class="n">STEP 2</div><div class="act">丢到 SQL 区</div>
-            <div class="how">落到 SQL 编辑区即插入限定名；两处（导航 / 结果）都能作起点，落点都聚焦 SQL 区。</div>
+            <div class="how">落到 SQL 编辑区即插入限定名；落点都聚焦 SQL 区。</div>
             <div class="ui"><span>落到 SQL 区</span><span>插入限定名</span></div></div>
           <div class="st"><div class="n">STEP 3</div><div class="act">接着往下</div>
             <div class="how">要造数据就右键 → <b>生成 Mock 数据</b>（仅表 / 视图）；要看分布就 <b>查看洞察</b>。</div>
@@ -512,180 +549,271 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
     </div>
   </section>
 
-  <!-- ══ 5. 流程 ══ -->
+  <!-- ══ 5. 全流程 ══ -->
   <section id="s5">
-    <div class="sec-head"><span class="no">05</span><h3>一次展开的全流程</h3><span class="tag">从点到一根枝，每一步都有明确归属</span></div>
+    <div class="sec-head"><span class="no">05</span><h3>一次展开的全流程</h3><span class="tag">从点击到回填，每一步都在哪发生</span></div>
     <div class="flow">
-      <div class="step2"><div class="idx">STEP 1</div><div class="t">面板就绪</div>
-        <div class="d">归属域 chips + 筛选 + 搜索常驻；分组与标签这类本地小读走 <span class="mono">defer_in</span> 回填。</div>
-        <div class="who">NavView</div></div>
-      <div class="step2"><div class="idx">STEP 2</div><div class="t">展开连接根</div>
-        <div class="d">未建连先<b>自动建连</b>；建连失败只给可读原因与重试，不排加载。</div>
-        <div class="who">NavHost ▸ 连接服务</div></div>
-      <div class="step2"><div class="idx">STEP 3</div><div class="t">请求下一级</div>
-        <div class="d">只提交路径（连接 / 库 / schema / 表…），不阻塞 UI。</div>
-        <div class="who">nav_jobs 入队</div></div>
-      <div class="step2"><div class="idx">STEP 4</div><div class="t">L1 内存</div>
-        <div class="d">本会话取过的节点直接命中。</div>
-        <div class="who">NavigatorService</div></div>
-      <div class="step2"><div class="idx">STEP 5</div><div class="t">L2 每连接 SQLite</div>
-        <div class="d">跨重启的元数据缓存；命中即渲染，不必碰数据库。</div>
-        <div class="who">cache-aside 回写</div></div>
-      <div class="step2"><div class="idx">STEP 6</div><div class="t">L3 实时内省</div>
-        <div class="d">驱动按能力位内省（有没有独立 Schema 层由驱动声明）；结果回写 L2。</div>
-        <div class="who">MetadataService ▸ MetadataBrowser</div></div>
-      <div class="step2"><div class="idx">STEP 7</div><div class="t">回填渲染</div>
-        <div class="d">后台线程产出结果，主线程轮询取回；类别文件夹首批 200 条 + 「加载更多」。</div>
-        <div class="who">结果队列</div></div>
-      <div class="step2"><div class="idx">STEP 8</div><div class="t">顺手备好下一层</div>
-        <div class="d">表文件夹首次展开后，后台预取前 20 张表的列；连接成功后可提交预热（可取消、有进度）。</div>
-        <div class="who">预取 / 预热</div></div>
+      <div class="step2"><div class="idx">①</div><div class="t">面板就绪</div><div class="d">归属域 chips + 筛选 + 搜索常驻；分组 / 标签一次小读，渲染期不再查库。</div><div class="who">NavView</div></div>
+      <div class="step2"><div class="idx">②</div><div class="t">展开连接根</div><div class="d">未建连先自动建连；建连失败只给可读原因 + 重试，不排加载。</div><div class="who">NavHost ▸ 连接服务</div></div>
+      <div class="step2"><div class="idx">③</div><div class="t">请求下一级</div><div class="d">只提交路径（连接 / 库 / schema / 表…），不阻塞 UI。</div><div class="who">nav_jobs 入队</div></div>
+      <div class="step2"><div class="idx">④</div><div class="t">L1 内存</div><div class="d">本会话取过的节点直接命中（设计时延 &lt; 0.1ms）。</div><div class="who">MetadataCache</div></div>
+      <div class="step2"><div class="idx">⑤</div><div class="t">L2 每连接 SQLite</div><div class="d">跨重启缓存；池化取连接，命中即渲染——不必碰数据库。</div><div class="who">cache-aside 回写</div></div>
+      <div class="step2"><div class="idx">⑥</div><div class="t">L3 实时内省</div><div class="d">驱动按能力位内省（有无独立 Schema 层由驱动声明）；结果回写 L2 + 回填 L1。</div><div class="who">MetadataService ▸ MetadataBrowser</div></div>
+      <div class="step2"><div class="idx">⑦</div><div class="t">回填渲染</div><div class="d">后台线程产出结果，主线程轮询取回；类别首批 200 条 + 加载更多。</div><div class="who">结果队列</div></div>
+      <div class="step2"><div class="idx">⑧</div><div class="t">顺手备好下一层</div><div class="d">表文件夹首次展开后预取前 20 张表的列；连接成功后可提交预热。</div><div class="who">预取 / 预热</div></div>
     </div>
     <div class="gate">
-      <b>三条纪律：</b>① render 期零 I/O（加载一律入队 + 回填）；② 缓存只增不删（清理只经显式「缓存管理」）；
-      ③ 层级的数据库差异只在服务层与驱动能力位，节点模型与渲染层不为类型分叉。
+      <b>附加一步</b>：表文件夹这趟实时内省结束后重建 <span class="mono">metadata_index</span>（幂等：先删后插）。
+      于是<b>大 schema 的下一次展开</b>只取一页，「加载更多」按 <span class="mono">offset</span> 追加——<b>分页、计数、搜索三件事共用这一份索引</b>。
+    </div>
+    <div class="gate">
+      <b>三条纪律</b>：
+      ① <b>render 期零 I/O</b>——加载一律入队 + 回填，渲染与回调里不 <span class="mono">block_on</span> 远程库；
+      ② <b>缓存只增不删</b>——清理只经显式「缓存管理」；
+      ③ <b>类型差异只在服务层与驱动能力位</b>——节点模型与渲染层不为数据库类型分叉。
     </div>
   </section>
 
   <!-- ══ 6. 连接行解剖 ══ -->
   <section id="s6">
-    <div class="sec-head"><span class="no">06</span><h3>连接行解剖</h3><span class="tag">密度预算：常驻 ≤ 3 个元素</span></div>
-    <div class="anat scrollx">
-      <div class="row">
-        <span class="bdg">PG</span><span class="nm">生产 PG</span><span class="sc">GP</span><span class="ops">+ ✎</span>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <span class="bdg off">MY</span><span class="nm">本地 MySQL</span><span class="sc">P</span><span class="ops">+ ✎</span>
-      </div>
-      <div class="marks">
-        <div><b>徽标颜色</b>：彩色 = 运行时可连；灰色 = 当前不可用</div>
-        <div><b>徽标形状 + 2 字母</b>：数据库类型（PG / MY / SQ / DK…）</div>
-        <div><b>名称</b>：<span class="mono">flex_1 + text_ellipsis</span>，长名截断不挤压</div>
-        <div><b>归属域列</b>：<span class="mono">P / G / GP</span>，右对齐成列，可在 ⋯ 关闭</div>
-        <div><b>行尾操作</b>：<span class="mono">+</span> 加标签 · <span class="mono">✎</span> 编辑，仅 hover / 选中显</div>
-        <div><b>标签</b>：默认不显示；开启后落在<b>名称下一行</b>，最多 2 个小 chip + <span class="mono">+N</span></div>
+    <div class="sec-head"><span class="no">06</span><h3>连接行解剖</h3><span class="tag">行内常驻 ≤ 3 个元素</span></div>
+    <div class="scrollx">
+      <div class="anat">
+        <div class="row">
+          <span class="bdg">PG</span>
+          <span class="nm">生产 PostgreSQL · 订单主库</span>
+          <span class="sc">GP</span>
+          <span class="ops">+ ✎</span>
+        </div>
+        <div class="marks">
+          <div><b>徽标颜色</b>：彩色 = 运行时可连；灰色 = 当前不可用</div>
+          <div><b>徽标形状 + 2 字母</b>：数据库类型（<span class="mono">PG</span> / <span class="mono">MY</span> / <span class="mono">SQ</span> / <span class="mono">DK</span>…）</div>
+          <div><b>名称</b>：<span class="mono">flex_1 + min_w_0 + text_ellipsis</span>，长名截断不挤压右侧</div>
+          <div><b>归属域列</b>：<span class="mono">P</span> / <span class="mono">G</span> / <span class="mono">GP</span>，右对齐固定列，可在 <span class="mono">⋯</span> 关闭</div>
+          <div><b>行尾操作</b>：<span class="mono">+</span> 加标签、<span class="mono">✎</span> 编辑，仅 hover / 选中时显</div>
+          <div><b>标签</b>：默认隐藏；开启后落在名称下一行，最多 2 个小 chip + <span class="mono">+N</span></div>
+        </div>
       </div>
     </div>
-    <p class="sec-sub" style="margin-top:12px">
-      面板头常驻五个动作：<span class="mono">＋</span> 新建数据源 · <span class="mono">🗂＋</span> 新建分组 · <span class="mono">⟳</span> 刷新选中连接 ·
-      <span class="mono">断开</span> · <span class="mono">⋯</span> 更多（刷新全部元数据 / 缓存管理… / 显示标签 / 显示归属域）。
-      分组头另给读数：色条 + 名称 + <b>健康度（已连 / 总数）</b> + 计数 + 一键全折叠。
-    </p>
+    <div class="gate">
+      <b>面板头常驻五个动作</b>：<span class="mono">＋</span> 新建数据源 · <span class="mono">🗂＋</span> 新建分组 · <span class="mono">⟳</span> 刷新选中连接 · <span class="mono">断开</span> · <span class="mono">⋯</span>
+      （刷新全部元数据 / 缓存管理… / 显示标签 / 显示归属域）。
+      <b>分组头</b>：色条 + 名称 + 健康度（已连 / 总数）+ 计数 + 一键全折叠。
+    </div>
   </section>
 
-  <!-- ══ 7. 管线 ══ -->
+  <!-- ══ 7. 三级缓存与取数管线 ══ -->
   <section id="s7">
-    <div class="sec-head"><span class="no">07</span><h3>四级取数管线</h3><span class="tag">cache-aside：命中即渲染，未命中才内省</span></div>
-    <div class="flow">
-      <div class="step2"><div class="idx">L1</div><div class="t">内存</div>
-        <div class="d">本会话已取过的节点；命中即返回，零磁盘零网络。</div>
-        <div class="who">会话级</div></div>
-      <div class="step2"><div class="idx">L2</div><div class="t">每连接 SQLite</div>
-        <div class="d">跨重启的元数据缓存，按存储域分区：项目 / 共享连接落 <span class="mono">project.db</span>，全局连接落 <span class="mono">global.db</span>。</div>
-        <div class="who">可迁移 · 带版本</div></div>
-      <div class="step2"><div class="idx">L3</div><div class="t">实时内省</div>
-        <div class="d">驱动 <span class="mono">MetadataBrowser</span> 直连目标库；<b>它不是缓存</b>，结果按 cache-aside 回写 L2。</div>
-        <div class="who">驱动能力位</div></div>
-      <div class="step2"><div class="idx">LAYER</div><div class="t">层级随类型</div>
-        <div class="d">有没有独立 Schema 层由驱动声明：MySQL / SQLite / DuckDB 无（Catalog 直接挂类别），PostgreSQL 有。</div>
-        <div class="who">渲染层不分叉</div></div>
+    <div class="sec-head"><span class="no">07</span><h3>三级缓存与取数管线（cache-aside）</h3><span class="tag">L1 / L2 是缓存，L3 实时内省不是</span></div>
+    <p class="sec-sub">词表以 <a href="README.md">模块入口</a> 的缓存章节为准——三层不是同一件东西的三个副本，而是<b>三种介质、三种语义</b>。</p>
+    <table>
+      <tr><th style="width:16%">级</th><th style="width:22%">是什么</th><th style="width:13%">设计时延</th><th>说明</th></tr>
+      <tr>
+        <td><b>L1 内存</b></td>
+        <td>进程内</td>
+        <td class="mono">&lt; 0.1ms</td>
+        <td>命中即返回；<b>L2 命中与实时内省都回填 L1</b>；<span class="mono">fresh</span>（刷新）跳过并清空该连接</td>
+      </tr>
+      <tr>
+        <td><b>L2 每连接 SQLite</b></td>
+        <td>跨重启</td>
+        <td class="mono">&lt; 5ms</td>
+        <td>全局连接落系统目录、项目 / 共享连接落项目目录，<b>一连接一文件</b>；按连接<b>池化复用连接</b></td>
+      </tr>
+      <tr>
+        <td><b>L3 实时内省</b></td>
+        <td class="par">不是缓存</td>
+        <td class="mono">10 ~ 500ms</td>
+        <td>事实源：驱动 <span class="mono">MetadataBrowser</span> 直连目标库；结果写回 L2 并回填 L1</td>
+      </tr>
+    </table>
+
+    <div class="gate" style="margin-top:12px">
+      <b>L2 里还有什么</b>：除规范化表（schema / 表 / 视图 / 列）外，还有一份<b>元数据索引</b> <span class="mono">metadata_index</span>（粒度 schema / 表 / 视图 / 列，含行数估算）；
+      它是<b>分页、计数、搜索</b>三者共同的数据源。
     </div>
-    <table style="margin-top:12px">
-      <tr><th>数据库</th><th>树的实际层级</th><th>备注</th></tr>
-      <tr><td>MySQL</td><td class="mono">catalog → 表 / 视图 / 存储过程·函数 → 列</td><td>无独立 Schema 层</td></tr>
+    <div class="code"><b>L2 缓存文件（每连接一个 SQLite）</b>
+├── schemata / tables / view_definitions / columns …   <span class="cm">规范化表：事实落点（池化读写）</span>
+├── metadata_index                                      <span class="cm">索引：分页 / 计数 / 搜索</span>
+└── 冷启动内省一个 schema 后按该 schema 重建（幂等：先删后插）</div>
+
+    <div class="gate">
+      <b>固定开销只付一次</b>：每个缓存文件建池时完成「开文件 + 5 条 PRAGMA + 一次迁移校验」，之后取用零校验——
+      这条以前<b>每次</b>缓存访问都要付，是「L2 命中也快不起来」的隐藏成本。
+    </div>
+
+    <h3 style="font-size:15px;margin-top:20px">层级随数据库类型（渲染层不分叉）</h3>
+    <table>
+      <tr><th style="width:16%">数据库</th><th style="width:52%">树的实际层级</th><th>备注</th></tr>
+      <tr><td>MySQL</td><td class="mono">catalog → 表 / 视图 / 存储过程·函数 → 列</td><td class="no">无独立 Schema 层</td></tr>
       <tr><td>PostgreSQL</td><td class="mono">catalog（当前库） → schema → 表 / 视图 → 列</td><td>有独立 Schema 层</td></tr>
       <tr><td>SQLite</td><td class="mono">main → 表 → 列</td><td>同 URL 多逻辑连接<b>共享同一物理连接</b>（别名）</td></tr>
       <tr><td>DuckDB</td><td class="mono">main → 表 → 列</td><td>同上；分析资产归 M6，不在本模块</td></tr>
     </table>
   </section>
 
-  <!-- ══ 8. 刷新 · 预热 · 预取 ══ -->
+  <!-- ══ 8. 大库 ══ -->
   <section id="s8">
-    <div class="sec-head"><span class="no">08</span><h3>刷新 · 预热 · 预取</h3><span class="tag">让「常用路径」先备好，同时一个字节都不删</span></div>
-    <div class="grid g3">
-      <div class="card">
-        <h4><span class="ico">⟳</span>刷新粒度</h4>
-        <ul>
-          <li><span class="mono">⟳</span>：刷新当前选中连接</li>
-          <li><span class="mono">⋯ → 刷新全部元数据</span>：清掉已加载子节点后重载仍展开的连接根</li>
-          <li>节点右键 → 刷新元数据：只重建该范围</li>
-          <li><b>保留展开态</b>，重新渲染时按需再懒加载</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h4><span class="ico">≋</span>预热（连接成功后）</h4>
-        <ul>
-          <li>提交后台内省 catalogs / schemas 写入 L2</li>
-          <li>进度可见：面板头显示「预热 n/m」，可<b>取消</b></li>
-          <li>不阻塞 UI：进度是原子量，主线程轮询重绘</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h4><span class="ico">▤</span>邻接预取</h4>
-        <ul>
-          <li>表 / 视图文件夹首次展开后，后台预取<b>前 20 张表</b>的列</li>
-          <li>失败静默——预取是加成，不是前置条件</li>
-          <li>大 schema 另有 200 条分页 + 「加载更多」兜底</li>
-        </ul>
-        <div class="foot">缓存只增不删：唯一删除入口是 <span class="mono">⋯ → 缓存管理…</span></div>
-      </div>
+    <div class="sec-head"><span class="no">08</span><h3>大库是怎么扛住的（十万张表）</h3><span class="tag">设计意图：大型数据库（如 Oracle）可能有 10 万+ 张表</span></div>
+    <p class="sec-sub">下面每一行都是<b>已接线并有测试锚住</b>的能力；最后一段是<b>还没做</b>的，一并写清。</p>
+    <table>
+      <tr><th style="width:19%">机制</th><th style="width:16%">触发条件</th><th style="width:33%">行为</th><th>为什么这样做</th></tr>
+      <tr>
+        <td><b>索引分页</b></td>
+        <td>某类别对象数 &gt; <b>500</b></td>
+        <td>只从 <span class="mono">metadata_index</span> 取一页（<b>200 条</b>）；「加载更多」按 <span class="mono">offset</span> 追加下一页，页间按 key 去重</td>
+        <td>小 schema 走 L1 全量更快（命中是内存拷贝）；<b>阈值以下行为不变 ⇒ 零回归</b></td>
+      </tr>
+      <tr>
+        <td><b>大 schema 不进 L1</b></td>
+        <td>同上</td>
+        <td>L2 命中与实时内省两条路都不写进程内缓存</td>
+        <td>万级对象的列表常驻内存＝把省下的内存又请回来；这类 schema 下次展开本来就按索引分页</td>
+      </tr>
+      <tr>
+        <td><b>计数来自索引</b></td>
+        <td>展开 schema 节点</td>
+        <td>文件夹标题的数字（<span class="mono">表 (1234)</span>）取索引计数，不再为写个数字全量物化</td>
+        <td>一次展开省下「拉全表清单只为数个数」；例程 / 序列 / 触发器不在索引里，仍走实时内省</td>
+      </tr>
+      <tr>
+        <td><b>内省级别自适应</b></td>
+        <td>按本 schema 对象数</td>
+        <td><span class="mono">IntrospectionLevel</span>（1000 / 3000 两档阈值）自动降级；级别低时<b>不为大 schema 预取列</b></td>
+        <td>对标 DataGrip：大库只拉名字，把列留到展开时取</td>
+      </tr>
+      <tr>
+        <td><b>刷新不吃索引</b></td>
+        <td>右键「刷新元数据」</td>
+        <td><span class="mono">fresh</span> 跳过 L1 / L2 / 索引，以实时内省为准；先删该 schema 旧行再重写</td>
+        <td>索引是刷新前的旧值；「先删后写」保证不残留已删对象</td>
+      </tr>
+      <tr>
+        <td><b>索引陈旧能自愈</b></td>
+        <td>翻到空块</td>
+        <td>把「总数」收敛到已加载数，收起「加载更多」</td>
+        <td>否则按钮会永远挂在树上、点了没反应</td>
+      </tr>
+      <tr>
+        <td><b>跨连接搜索</b></td>
+        <td>搜索框 ≥ 2 字符</td>
+        <td>后台扫每个连接自己的索引（中缀匹配）；单连接 50 条 / 总量 300 条封顶；渲染上限 100 条</td>
+        <td>交互操作不该被超大 schema 拖死；<b>没有缓存的连接不建文件</b>（不会敲个字就落一堆空缓存）</td>
+      </tr>
+      <tr>
+        <td><b>搜索范围诚实</b></td>
+        <td>有未拉取余量时</td>
+        <td>命中行提示「筛选仅覆盖已加载」；结果区有命中时不再显示「没有匹配的数据源」</td>
+        <td>搜不到 ≠ 库里没有——差异必须说出口</td>
+      </tr>
+    </table>
+
+    <div class="gate warn" style="margin-top:12px">
+      <b>还没做（写清触发条件，不做「假装有」）</b>：
+      ① <b>FTS 内容搜索</b>（注释 / 数据类型 / 源码）——今天搜的是<b>名称</b>；前置是修 FTS 写侧（它的视图插入引用了不存在的 <span class="mono">views</span> 表）并让注释先进缓存；
+      ② <b>虚拟列表</b>——首屏 200 条够用，但「1 万条同屏」未验证；
+      ③ <b>搜索结果在树中定位</b>——能在属性面板看，不能一键展开并高亮；
+      ④ <b>增量同步 / 身份指纹键</b>——今天是整 schema 重写、一连接一份缓存。
+    </div>
+    <div class="gate">
+      与 DBeaver / DataGrip 的逐维度对照，以及「哪些不该学」：见
+      <a href="metadata-cache-vs-dbeaver-datagrip.md">元数据缓存与 DBeaver / DataGrip 深度对比</a>。
     </div>
   </section>
 
-  <!-- ══ 9. 属性面板 ══ -->
+  <!-- ══ 9. 刷新 · 预热 · 预取 ══ -->
   <section id="s9">
-    <div class="sec-head"><span class="no">09</span><h3>属性面板：事实的唯一权威位</h3><span class="tag">DBeaver 对标，停靠编辑区右侧</span></div>
-    <div class="grid g2">
+    <div class="sec-head"><span class="no">09</span><h3>刷新 · 预热 · 预取</h3><span class="tag">缓存何时变、何时不变</span></div>
+    <table>
+      <tr><th style="width:18%">动作</th><th>粒度与行为</th></tr>
+      <tr>
+        <td><b>刷新</b></td>
+        <td><span class="mono">⟳</span> 刷新当前选中连接；<span class="mono">⋯ → 刷新全部元数据</span> 清掉已加载子节点后重载仍展开的连接根；节点右键刷新只重建该范围。
+          <b>保留展开态</b>；清 L1 + 该 schema 的 L2 先删后写（索引一并重建）</td>
+      </tr>
+      <tr>
+        <td><b>预热</b></td>
+        <td>连接成功后提交后台内省 catalogs / schemas 写入 L2；面板头显示「预热 n/m」，<b>可取消</b>；进度是原子量，主线程轮询重绘</td>
+      </tr>
+      <tr>
+        <td><b>邻接预取</b></td>
+        <td>表 / 视图文件夹首次展开后，后台预取<b>前 20 张表</b>的列；失败静默（预取是加成，不是前置条件）。大 schema 因内省级别降级而不预取</td>
+      </tr>
+      <tr>
+        <td><b>大 schema 兜底</b></td>
+        <td>超过 500 个对象的类别走<b>索引分页</b>：首屏 200 条 + 「加载更多」按 <span class="mono">offset</span> 追加</td>
+      </tr>
+      <tr>
+        <td><b>缓存清理</b></td>
+        <td>唯一入口：<span class="mono">⋯ → 缓存管理…</span>。断开 / 刷新 / 删除连接都<b>不删</b>缓存（删除前会先释放连接池，Windows 句柄语义）</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ══ 10. 属性面板 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>属性面板 · 事实的唯一权威位</h3><span class="tag">行内只给形状与颜色，细节都在这里</span></div>
+    <div class="grid g3">
       <div class="card">
-        <h4><span class="ico">▤</span>怎么打开</h4>
+        <h4><span class="ico">▣</span>怎么打开</h4>
         <ul>
           <li>双击任意对象（连接 / 库 / schema / 表 / 视图 / 列 / 例程…）</li>
           <li>或按 <kbd>Enter</kbd> / <kbd>F4</kbd></li>
-          <li>面板填充编辑区<b>右侧</b>：分隔条可拖拽、<b>宽度记忆</b></li>
+          <li>索引搜索的命中行<b>单击</b>即可打开——还没展开到那层也行</li>
         </ul>
       </div>
       <div class="card">
-        <h4><span class="ico">≡</span>为什么放这里</h4>
+        <h4><span class="ico">◫</span>长什么样</h4>
+        <ul>
+          <li>DBeaver 对标，填充编辑区<b>右侧</b>一个面板位</li>
+          <li>分隔条可拖拽、<b>宽度记忆</b></li>
+          <li>驱动名、完整类型、地址这些都在这</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⇄</span>为什么放这里</h4>
         <ul>
           <li>行内已经排满三个事实位，细节不该再挤进树</li>
-          <li>配置类信息归对话框，事实类信息归面板——一问一主</li>
-          <li>驱动名、完整类型、地址这些都在这，行内只用形状与颜色示意</li>
+          <li>配置类信息归对话框，事实类信息归面板——<b>一问一主</b></li>
         </ul>
+        <div class="foot">导航行不重复这些细节</div>
       </div>
     </div>
   </section>
 
-  <!-- ══ 10. 键盘 / 右键 / 拖拽 ══ -->
-  <section id="s10">
-    <div class="sec-head"><span class="no">10</span><h3>键盘 · 右键 · 拖拽</h3><span class="tag">键盘能走完，右键都给到</span></div>
-    <div class="grid g2" style="margin-bottom:12px">
-      <div class="card">
-        <h4><span class="ico">⌨</span>快捷键（焦点在面板内）</h4>
-        <table style="box-shadow:none;border:none;background:transparent">
-          <tr><td style="padding-left:0"><kbd>Ctrl</kbd> + <kbd>F</kbd></td><td>聚焦导航搜索框（会自动切到本面板）</td></tr>
-          <tr><td style="padding-left:0"><kbd>↑</kbd> / <kbd>↓</kbd></td><td>在可见节点间移动<b>光标</b></td></tr>
-          <tr><td style="padding-left:0"><kbd>→</kbd> / <kbd>←</kbd></td><td>展开 / 折叠当前节点</td></tr>
-          <tr><td style="padding-left:0"><kbd>Enter</kbd> / <kbd>F4</kbd></td><td>打开当前节点的属性面板</td></tr>
-          <tr><td style="padding-left:0"><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd></td><td>把选中<b>连接</b>在所属容器内上移 / 下移一位</td></tr>
-          <tr><td style="padding-left:0"><kbd>Esc</kbd></td><td>清空搜索（在搜索框内时）</td></tr>
+  <!-- ══ 11. 键盘 · 右键 · 拖拽 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>键盘 · 右键 · 拖拽</h3><span class="tag">不离开键盘也能走完主流程</span></div>
+    <div class="grid g2">
+      <div>
+        <h3 style="font-size:15px;margin-bottom:8px">键盘</h3>
+        <table>
+          <tr><th style="width:38%">按键</th><th>行为</th></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>聚焦导航搜索框（会自动切到本面板）</td></tr>
+          <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>移动<b>光标</b>（在可见节点间）</td></tr>
+          <tr><td><kbd>→</kbd> / <kbd>←</kbd></td><td>展开 / 折叠当前节点</td></tr>
+          <tr><td><kbd>Enter</kbd> / <kbd>F4</kbd></td><td>打开当前节点的属性面板</td></tr>
+          <tr><td><kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd></td><td>选中<b>连接</b>在所属容器内上移 / 下移一位（只对连接行生效）</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>清空搜索（在搜索框内时）</td></tr>
         </table>
-        <div class="foot">连接行单击即自动聚焦面板；<kbd>Alt+↑↓</kbd> 只对连接行生效——对象顺序由后端内省给出，不能重排。</div>
       </div>
-      <div class="card">
-        <h4><span class="ico">⇢</span>拖拽即组织</h4>
-        <ul>
-          <li>连接行 → <b>分组头</b>：归组；拖到「未分组」头 = 移出全部分组</li>
-          <li>连接行 → <b>另一连接行</b>：插到该行之前（组内外同理）</li>
-          <li>分组头 → <b>分组头</b>：调整分组顺序</li>
-          <li>表 / 视图 → <b>SQL 编辑区</b>：插入限定名并聚焦</li>
-        </ul>
-        <div class="foot">每次落库都是「整容器一次性写 <span class="mono">0..n</span>」，保证序号完整、与屏上顺序一致。</div>
+      <div>
+        <h3 style="font-size:15px;margin-bottom:8px">拖拽</h3>
+        <table>
+          <tr><th style="width:38%">抓住</th><th style="width:30%">落到</th><th>结果</th></tr>
+          <tr><td>连接行</td><td>分组头</td><td>归组；拖到「未分组」头 = 移出全部分组</td></tr>
+          <tr><td>连接行</td><td>另一连接行</td><td>插到该行之前（组内外同理）</td></tr>
+          <tr><td>分组头</td><td>分组头</td><td>调整分组顺序</td></tr>
+          <tr><td>表 / 视图</td><td>SQL 编辑区</td><td>插入限定名并聚焦</td></tr>
+        </table>
+        <div class="gate">每次落库都是「整容器一次性写 <span class="mono">0..n</span>」，保证序号完整、与屏上顺序一致。</div>
       </div>
     </div>
 
+    <h3 style="font-size:15px;margin:18px 0 8px">右键（三类）</h3>
     <div class="ctxwrap">
       <div class="ctxmenu">
-        <div class="cap">右键 · 连接节点</div>
+        <div class="cap">连接节点</div>
         <div class="mi">连接 / 断开</div>
         <div class="mi">测试连接<span class="k">独立会话 · 不写库</span></div>
         <div class="mi">编辑连接…</div>
@@ -693,177 +821,146 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
         <div class="sep"></div>
         <div class="mi">移动到分组…</div>
         <div class="mi">设为主组 ▸</div>
-        <div class="sep"></div>
         <div class="mi">复制连接（模板）…<span class="k">不含密码</span></div>
-        <div class="mi">共享至项目<span class="k">仅 G_</span></div>
-        <div class="mi">取消共享<span class="k">仅 GP_</span></div>
-        <div class="mi">删除连接<span class="k">二次确认</span></div>
+        <div class="mi">共享至项目 / 取消共享<span class="k">G_ / GP_</span></div>
         <div class="sep"></div>
+        <div class="mi">删除连接<span class="k">二次确认</span></div>
         <div class="mi">复制名称</div>
         <div class="mi">刷新元数据</div>
       </div>
-
       <div class="ctxmenu">
-        <div class="cap">右键 · 通用模块入口（所有节点都有）</div>
+        <div class="cap">通用模块入口（所有节点都有，位于菜单底部）</div>
         <div class="mi">在 SQL 编辑器中打开<span class="k">选中该连接 + 聚焦编辑区</span></div>
         <div class="mi">查看洞察<span class="k">右 Dock 切到 Insight</span></div>
-        <div class="sep"></div>
-        <div class="cap">右键 · 表 / 视图专属</div>
+      </div>
+      <div class="ctxmenu">
+        <div class="cap">表 / 视图专属</div>
         <div class="mi">查看数据<span class="k">SELECT * … LIMIT 200</span></div>
-        <div class="mi">生成 SQL ▸<span class="k">INSERT / UPDATE / DELETE 模板</span></div>
-        <div class="mi">生成 Mock 数据<span class="k">右 Dock 切到 Mock</span></div>
+        <div class="mi">生成 SQL ▸<span class="k">INSERT / UPDATE / DELETE</span></div>
+        <div class="mi">生成 Mock 数据</div>
         <div class="mi">复制名称 / 限定名</div>
       </div>
-
       <div class="ctxmenu">
-        <div class="cap">右键 · 分组节点</div>
-        <div class="mi">新建分组<span class="k">表单：名称 + 描述</span></div>
-        <div class="mi">重命名分组<span class="k">行内</span></div>
-        <div class="mi">编辑分组…<span class="k">表单：名称 + 描述</span></div>
-        <div class="mi">上移分组 / 下移分组<span class="k">边界置灰</span></div>
+        <div class="cap">分组节点</div>
+        <div class="mi">新建分组<span class="k">名称 + 描述</span></div>
+        <div class="mi">重命名（行内）</div>
+        <div class="mi">编辑分组…</div>
+        <div class="mi">上移 / 下移分组<span class="k">边界置灰</span></div>
+        <div class="mi">删除分组<span class="k">不删成员与缓存</span></div>
         <div class="sep"></div>
-        <div class="mi">删除分组<span class="k">不删成员连接与缓存</span></div>
         <div class="mi">在此新建连接</div>
-        <div class="mi">折叠 · 折叠其他</div>
-        <div class="foot" style="padding:6px 10px 2px;font-size:11px;color:var(--muted)">「未分组」只给「新建分组」。</div>
+        <div class="mi">折叠 / 折叠其他</div>
       </div>
     </div>
-    <div class="gate" style="margin-top:12px">
-      <b>只注入不执行：</b>「查看数据」与「生成 SQL ▸」都只把 SQL 放进编辑区草稿；写语句更不该替用户跑。
-      表 / 视图的列由后台任务取，命中 L2 就不发查询。
-    </div>
+    <div class="gate"><b>只注入不执行</b>：「查看数据」与「生成 SQL ▸」都只把 SQL 放进编辑区草稿；写语句更不该替用户跑。</div>
   </section>
 
-  <!-- ══ 11. 架构 ══ -->
-  <section id="s11">
-    <div class="sec-head"><span class="no">11</span><h3>架构 · 视图自带，能力靠端口</h3><span class="tag">依赖只向下，面板不反向依赖工作台</span></div>
-    <div class="layers">
-      <div class="layer"><div class="tag">数据链路</div><div class="body">
-        浏览一个对象：<span class="mono">NavView → nav_jobs（工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标库</span>
-      </div></div>
-      <div class="layer"><div class="tag">组织数据</div><div class="body">
-        <span class="mono">NavView → nav_store → ConnectionOrgStore → project.db / global.db</span>；
-        分组（含 <span class="mono">is_primary</span>）与标签是独立表，按存储域分区
-      </div></div>
-      <div class="layer"><div class="tag">视图状态</div><div class="body">
-        展开 / 选中 / 过滤存 <span class="mono">navigator_state</span>：项目 / 共享连接落 <span class="mono">project.db</span>，全局连接落 <span class="mono">global.db</span>；
-        跨重启保留，运行时连接<b>不</b>保留
-      </div></div>
-      <div class="layer"><div class="tag">徽标来源</div><div class="body">
-        <span class="mono">engine::persistence::driver_catalog</span> 读 <span class="mono">drivers</span> 表 → 类型形状与驱动显示名（一次性加载，渲染期零 I/O）
-      </div></div>
-      <div class="layer"><div class="tag">无中间层</div><div class="body">
-        进程内直连驱动，<b>无 HTTP / 无 IPC</b>；元数据走两级缓存，组织数据走 SQLite
-      </div></div>
-    </div>
+  <!-- ══ 12. 架构 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>架构 · 视图自带，能力靠端口</h3><span class="tag">依赖单向、面板可独立演进</span></div>
+    <div class="code"><b>依赖方向（硬约束：始终指向更小、更稳定的 crate）</b>
+app ▸ Feature crates ▸ engine ▸ shared
+Feature ▸ gpui-kit            <span class="cm">UI 基础设施</span>
+Feature ▸ workbench_shell     <span class="cm">视图共用资产：尺寸常量 / 面板枚举 / 产品语义 token</span>
+任何 crate ▸ paths            <span class="cm">运行时数据路径唯一解析点</span>
 
-    <h3 style="font-size:15px;font-weight:700;margin:20px 0 8px">依赖方向（硬约束）</h3>
+<b>数据链路</b>
+浏览对象    NavView → nav_jobs（工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标库
+缓存与索引  NavigatorService → NavCache → MetadataCacheOps（池化连接）→ 每连接 SQLite
+分页/计数/搜索  metadata_index —— 同一份索引，三个消费方
+组织数据    NavView → nav_store → ConnectionOrgStore → project.db / global.db
+视图状态    navigator_state（展开 / 选中 / 过滤，按域分区；跨重启保留）
+徽标来源    engine::persistence::driver_catalog → drivers 表（一次性加载）
+中间层      无（进程内直连驱动，无 HTTP / 无 IPC）</div>
+
     <div class="dep">
-      <code>app</code> ▸ <code>Feature crates</code> ▸ <code>engine</code> ▸ <code>shared</code>
-      <span>·</span><code>Feature ▸ gpui-kit</code>
-      <span>·</span><code>Feature ▸ workbench_shell</code>
-      <span>·</span><code>任何 crate ▸ paths</code>
+      <span>分层</span>
+      <code>crates/database</code> 自带视图 · <code>crates/engine</code> 落盘与驱动 · <code>crates/workbench</code> 只持有实体并转发渲染
     </div>
 
-    <h3 style="font-size:15px;font-weight:700;margin:20px 0 8px">本模块：视图在 <span class="mono">crates/database</span> 内自带</h3>
-    <div class="layers">
-      <div class="layer"><div class="tag">nav_view.rs</div><div class="body">
-        <b>NavView</b> 实体：面板头 / 分组树 / 连接行 / 对象树 / 右键 / 拖拽 / 行内编辑
-      </div></div>
-      <div class="layer"><div class="tag">nav_host.rs</div><div class="body">
-        <b>NavHost</b> 端口（宿主实现）:连接清单与选中 · 项目根 · 提示与重绘 · 视图偏好 · 连接生命周期 · 需要窗口的对话框
-      </div></div>
-      <div class="layer"><div class="tag">nav_store.rs</div><div class="body">
-        标签 / 分组 / 排序 / 导航状态落库——只依 <span class="mono">engine</span> + 项目根，<b>不进端口</b>
-      </div></div>
-      <div class="layer"><div class="tag">nav_jobs.rs</div><div class="body">
-        后台任务：加载 / 预热 / 预取 / 生成 SQL / 测试连接（单一工作线程 + 结果队列 + 原子进度）
-      </div></div>
-      <div class="layer"><div class="tag">其余</div><div class="body">
-        <span class="mono">navigator_service</span> 层级与懒加载编排 · <span class="mono">metadata_service</span> 内省调用 ·
-        <span class="mono">model / cache</span> 节点模型与 L2 读写 · <span class="mono">property_panel</span> 属性投影 · <span class="mono">commands</span> 键盘动作
-      </div></div>
-    </div>
+    <h3 style="font-size:15px;margin:18px 0 8px">本模块代码地图</h3>
+    <table>
+      <tr><th style="width:34%">文件</th><th>职责</th></tr>
+      <tr><td class="mono">nav_view.rs</td><td><b>NavView</b> 实体：面板头 / 分组树 / 连接行 / 对象树 / 右键 / 拖拽 / 行内编辑 / 搜索结果区</td></tr>
+      <tr><td class="mono">nav_host.rs</td><td><b>NavHost</b> 端口（宿主实现）：连接清单与选中 · 项目根 · 提示与重绘 · 视图偏好 · 连接生命周期 · 需要窗口的对话框</td></tr>
+      <tr><td class="mono">nav_jobs.rs</td><td>后台任务：加载 / 分页 / 搜索 / 预热 / 预取 / 生成 SQL / 测试连接（单工作线程 + 结果队列 + 原子进度）</td></tr>
+      <tr><td class="mono">navigator_service.rs</td><td>层级与懒加载编排：cache-aside、索引分页、索引计数、内省级别登记</td></tr>
+      <tr><td class="mono">cache.rs</td><td>导航侧 L2 读写门面：schema / 表 / 视图 / 列 + 索引分块读 + 计数器 + 索引搜索</td></tr>
+      <tr><td class="mono">nav_store.rs</td><td>标签 / 分组 / 排序 / 导航状态落库——只依 <span class="mono">engine</span> + 项目根，<b>不进端口</b></td></tr>
+      <tr><td class="mono">metadata_service.rs / model.rs / property_panel.rs / commands.rs</td><td>内省调用 / 节点模型 / 属性面板投影 / 面板键盘动作</td></tr>
+    </table>
 
-    <div class="gate" style="margin-top:12px">
-      <b>为什么单独说这件事：</b>面板视图以前住在工作台里，要穿过共享状态与一堆工作台服务。
-      视图下沉后，它<b>只认一个自己定义的 trait</b>（<span class="mono">NavHost</span>）：落库、驱动目录、对象树元数据这些「只依引擎」的能力不进端口，直接调。
+    <div class="gate">
+      <b>为什么单独说这件事</b>：面板视图以前住在工作台里，要穿过共享状态与一堆工作台服务。
+      视图下沉后，它<b>只认一个自己定义的 trait</b>（<span class="mono">NavHost</span>）；落库、驱动目录、对象树元数据这些「只依引擎」的能力不进端口，直接调。
       于是依赖单向、面板可独立演进与测试，工作台侧只剩「持有实体 + 转发渲染」。
     </div>
   </section>
 
-  <!-- ══ 12. 质量与证据 ══ -->
-  <section id="s12">
-    <div class="sec-head"><span class="no">12</span><h3>质量与证据</h3><span class="tag">不靠自觉，靠契约与真机回归</span></div>
+  <!-- ══ 13. 质量与证据 ══ -->
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>质量与证据</h3><span class="tag">可核对的数字，而不是形容词</span></div>
     <div class="grid g3">
       <div class="card">
-        <h4><span class="ico">✓</span>契约测试兜底</h4>
+        <h4><span class="ico">◨</span>契约测试兜底</h4>
         <ul>
-          <li>结构尺寸必须等于设计值，常量单一来源在 <span class="mono">workbench_shell::ui</span></li>
-          <li>视图源码<b>零裸色值、零裸 px</b>；下沉后仍登记在同一份扫描清单</li>
-          <li>共享状态字段白名单：新增必须显式登记</li>
+          <li>结构尺寸必须等于设计值（常量单一来源 <span class="mono">workbench_shell::ui</span>）</li>
+          <li>视图源码<b>零裸色值、零裸 px</b></li>
+          <li>共享状态字段白名单</li>
         </ul>
       </div>
       <div class="card">
-        <h4><span class="ico">▦</span>纯函数优先</h4>
+        <h4><span class="ico">ƒ</span>纯函数优先</h4>
         <ul>
-          <li>可测判定都拍成纯函数：搜索 facet 解析、类型徽标映射、限定名拼接、节点子键、归属域推导</li>
-          <li>导航模型与缓存往返都有单测（<span class="mono">model.rs</span> / <span class="mono">cache.rs</span>）</li>
+          <li>搜索 facet 解析 / 类型徽标映射 / 限定名拼接 / 节点子键 / 归属域推导</li>
+          <li><b>分页追加去重</b> / <b>命中 → 属性定位</b>（本轮新增）</li>
         </ul>
       </div>
       <div class="card">
-        <h4><span class="ico">◈</span>真机回归</h4>
+        <h4><span class="ico">⊘</span>反证法锚住缓存与索引</h4>
         <ul>
-          <li>四类数据库 × 项目 / 全局 / 共享，按<b>树的实际层级</b>逐条核对</li>
-          <li>每轮真实端点跑出的问题 → 结论 → 文档与测试同步（见开发方案逐轮记录）</li>
+          <li>给<b>空连接管理器</b>（任何实时内省必然失败）→「返回 Ok」即证明这一页 / 这一搜来自缓存</li>
+          <li>分页与「大 schema 不进 L1」都有这类断言</li>
         </ul>
-        <div class="foot">验收清单见使用手册 §9。</div>
+        <div class="foot">修门禁时先临时撤掉它，确认测试<b>变红</b>再恢复——避免「测了但测不到」</div>
       </div>
     </div>
-    <table style="margin-top:12px">
-      <tr><th>数据库</th><th>真机树形（回归样例）</th></tr>
-      <tr><td>MySQL</td><td class="mono">mall_business → 表 (7) / 存储过程·函数 (4) → order → 16 列</td></tr>
-      <tr><td>PostgreSQL</td><td class="mono">postgres → public → 表 (12) / 视图 (1) → inventory_ledger → 7 列</td></tr>
-      <tr><td>SQLite</td><td class="mono">main → 表 (25) → attachment → 8 列</td></tr>
-      <tr><td>DuckDB</td><td class="mono">main → 表 (8) → cities → 列</td></tr>
-    </table>
+    <div class="code">引擎侧单测   cargo test -p rds-engine --lib     <span class="cm">→ 443 passed / 0 failed（24 ignored）</span>
+导航侧单测   cargo test -p rds-database --lib   <span class="cm">→  42 passed / 0 failed</span>
+契约检查     cargo check -p rds-engine -p rds-database --lib   <span class="cm">→ 零警告</span></div>
+    <div class="code"><b>真机回归口径</b>（四类库 × 项目 / 全局 / 共享，按树的实际层级逐条核对）
+MySQL       mall_business → 表 (7) / 存储过程·函数 (4) → order → 16 列
+PostgreSQL  postgres → public → 表 (12) / 视图 (1) → inventory_ledger → 7 列
+SQLite      main → 表 (25) → attachment → 8 列
+DuckDB      main → 表 (8) → cities → 列</div>
+    <div class="gate">验收清单见 <a href="database-navigator-user-guide.md">使用手册</a> §9。</div>
   </section>
 
-  <!-- ══ 13. 边界 ══ -->
-  <section id="s13">
-    <div class="sec-head"><span class="no">13</span><h3>边界 · 这些事它不做</h3><span class="tag">越界会把导航变成第二个入口中心</span></div>
-    <table>
-      <tr><th style="width:30%">做</th><th>不做</th></tr>
-      <tr>
-        <td>数据源的<b>组织视图</b>（归属域 / 分组 / 标签 / 筛选 / 搜索）</td>
-        <td>连接<b>新建 / 编辑对话框本体</b> → M3 连接模块（本面板只给入口）</td>
-      </tr>
-      <tr>
-        <td>对象树<b>懒加载与两级缓存</b>、刷新、预热、预取</td>
-        <td>SQL 编辑器 / Mock / 洞察的<b>本体</b> → 各自模块（本面板只给右键入口）</td>
-      </tr>
-      <tr>
-        <td>连接 / 断开、缓存管理、<b>属性面板</b></td>
-        <td>DuckDB <b>分析表与分析资产</b> → M6 资产库</td>
-      </tr>
-      <tr>
-        <td>常驻的模块入口（在 SQL 编辑器中打开 · 查看洞察 · 生成 Mock 数据）</td>
-        <td>分析资产 <code>use_duckdb_fed</code> 联邦开关等 <b>M6/M7 的领域开关</b>（仅作展示）</td>
-      </tr>
-    </table>
-  </section>
-
-  <!-- ══ 14. 文档地图 ══ -->
+  <!-- ══ 14. 边界 ══ -->
   <section id="s14">
-    <div class="sec-head"><span class="no">14</span><h3>文档地图</h3><span class="tag">想深入哪一块，从这里进</span></div>
+    <div class="sec-head"><span class="no">14</span><h3>边界 · 这些事它不做</h3><span class="tag">越界的代价是耦合</span></div>
     <table>
-      <tr><th>文档</th><th>什么时候读它</th></tr>
-      <tr><td><a href="README.md">模块入口 README</a></td><td>先看特点 / 边界 / 硬约束 / 代码地图（本文是它的宣传版）</td></tr>
+      <tr><th style="width:48%">做</th><th>不做（归谁）</th></tr>
+      <tr><td>数据源的<b>组织视图</b>（归属域 / 分组 / 标签 / 筛选 / 搜索）</td><td>连接<b>新建 / 编辑对话框本体</b> → M3 连接模块（本面板只给入口）</td></tr>
+      <tr><td>对象树<b>懒加载 + 三级缓存 + 索引分页</b>、刷新、预热、预取</td><td>SQL 编辑器 / Mock / 洞察的<b>本体</b> → 各自模块（本面板只给右键入口）</td></tr>
+      <tr><td>连接 / 断开、缓存管理、<b>属性面板</b></td><td>DuckDB <b>分析表与分析资产</b> → M6 资产库</td></tr>
+      <tr><td>常驻的模块入口（在 SQL 编辑器中打开 · 查看洞察 · 生成 Mock 数据）</td><td>分析资产联邦开关等 M6/M7 领域开关（仅作展示）</td></tr>
+      <tr><td>导航面板内的<b>名称搜索</b>（够用版）</td><td><b>搜索 / 命令的完整交互</b>：已拍板<b>另立一个 crate</b>（类 VS Code 的 Quick Open / 命令面板），导航视图不再加搜索特性</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 15. 文档地图 ══ -->
+  <section id="s15">
+    <div class="sec-head"><span class="no">15</span><h3>文档地图</h3><span class="tag">什么时候读哪一本</span></div>
+    <table>
+      <tr><td><a href="README.md">模块入口</a></td><td><b>先读这个</b>：特点 / 边界 / 硬约束 / 代码地图（本页是它的宣传版）</td></tr>
       <tr><td><a href="database-navigator-architecture.md">架构</a></td><td><b>为什么这样设计 / 怎么运转</b>：心智模型、分层与 render 零 I/O、五条数据流、降级容错、已知问题（权威）</td></tr>
+      <tr><td><a href="metadata-cache-vs-dbeaver-datagrip.md">缓存对比</a></td><td><b>缓存为什么这样设计</b>：与 DBeaver / DataGrip 的逐维度对照、三条硬约束、分页与搜索的落地记录、仍缺项的触发条件</td></tr>
       <tr><td><a href="database-navigator-prototype-design.md">原型设计</a></td><td><b>长什么样</b>：面板布局、连接行解剖、双通道徽标、树模型、三级管线、右键菜单、主题映射</td></tr>
       <tr><td><a href="database-navigator-prototype.html">交互示意稿</a></td><td>可点击的明暗双主题原型</td></tr>
       <tr><td><a href="database-navigator-user-guide.md">使用手册</a></td><td><b>怎么用</b>：界面导览、典型流程、快捷键、显示开关、FAQ、验收清单</td></tr>
       <tr><td><a href="database-nav-dev-plan.md">开发方案</a></td><td><b>做到哪了</b>：任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景</td></tr>
+      <tr><td><a href="../core-design-current.md">核心设计现状版</a></td><td>全局视角：三层缓存词表澄清、逐模块接通状态</td></tr>
       <tr><td><a href="../connection/README.md">M3 连接模块</a></td><td>上游：连接的新建 / 编辑与作用域路由</td></tr>
     </table>
   </section>
@@ -873,11 +970,14 @@ kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--borde
     <div class="doclinks">
       <a href="database-navigator-showcase.md">可贴版（Markdown）</a>
       <a href="database-navigator-prototype.html">交互稿</a>
+      <a href="metadata-cache-vs-dbeaver-datagrip.md">缓存对比</a>
       <a href="README.md">模块入口</a>
     </div>
     <b>RdataStation v2 · M4 数据源管理 / 数据库导航</b>——本页是<b>宣传向速览</b>（自包含、离线可开、明暗双主题），
     章节与 <a href="database-navigator-showcase.md">可贴版</a> 一一对应。
-    权威口径以架构文档与原型设计为准；配色取自产品主题（coral 主色 + 灰度分层）。
+    权威口径以架构文档与原型设计为准；缓存与索引的行为细节以
+    <a href="metadata-cache-vs-dbeaver-datagrip.md">缓存对比</a> 与代码注释为准。
+    配色取自产品主题（coral 主色 + 灰度分层）。
   </div>
 
 </div>
@@ -906,6 +1006,7 @@ function toggleTheme(){
   var tree = document.getElementById('tree');
   var rows = tree.querySelectorAll('.crow');
   var groups = tree.querySelectorAll('[data-group]');
+  var sr = tree.querySelectorAll('.sr');
 
   facets.addEventListener('click', function(e){
     var btn = e.target.closest('.facet');
@@ -918,6 +1019,8 @@ function toggleTheme(){
     });
     // 分组头在过滤时一并隐藏（示意：真实面板里空分组会保留但计数为 0）
     groups.forEach(function(g){ g.classList.toggle('hidden', want !== 'all'); });
+    // 索引搜索结果区不受归属域 chips 影响（它按 facet 选连接，但结果本身是跨连接的）
+    sr.forEach(function(s){ s.classList.remove('hidden'); });
   });
 
   document.getElementById('optTags').addEventListener('change', function(e){
