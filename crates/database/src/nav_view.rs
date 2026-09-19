@@ -39,6 +39,7 @@ use crate::model::{
     PropertyRef, PropertyRequest,
 };
 use crate::nav_host::{NavFilters, NavHost};
+use crate::nav_rows::NavRow;
 use crate::sql_gen::DmlKind;
 use engine::persistence::driver_catalog::DriverMeta;
 
@@ -757,6 +758,77 @@ fn nav_node_matches(
     match children.get(&node.key) {
         Some(kids) => kids.iter().any(|c| nav_node_matches(children, c, filter)),
         None => false,
+    }
+}
+
+/// 连接级约束快照（归属域 chips + 搜索框 `scope:`/`type:`/`driver:`/`tag:` + 「筛选 ▾」弹层）。
+///
+/// 三处来源是**叠加**关系（都得满足）：chips 与 `scope:` 同名不同源，`type:` 与弹层里选的
+/// 类型同理。若合成「后写的覆盖先写的」，「chips 选项目 + `scope:global`」会从「无匹配」
+/// 变成「命中全局」，与屏幕上同时亮着的两个选中态自相矛盾。
+///
+/// 抽成一份快照是因为树与「索引搜索该搜哪些连接」必须吃**同一份**判据：分成两处写，
+/// 以后加一个 facet 只会改到其中一处，症状是「搜索能搜到的连接在树里看不见」。
+#[derive(Default)]
+struct NavConnFilter {
+    /// 归属域（chips 与 `scope:` 各占一条）。
+    sources: Vec<NavSource>,
+    /// 数据源类型（`type_id`，不是驱动 id）。
+    types: Vec<String>,
+    /// 驱动 id。
+    drivers: Vec<String>,
+    /// 标签（每条约束都要命中）。
+    tags: Vec<String>,
+}
+
+impl NavConnFilter {
+    /// 从状态快照一份。`source_filter` 是 chips 的当前值（不在状态里，由调用方给）。
+    fn snapshot(view: &NavViewState, source_filter: Option<NavSource>) -> Self {
+        let mut out = Self::default();
+        out.sources.extend(source_filter);
+        out.sources.extend(view.search_facets.source);
+        out.types.extend(view.type_filter.clone());
+        out.types.extend(view.search_facets.db_type.clone());
+        out.drivers.extend(view.driver_filter.clone());
+        out.drivers.extend(view.search_facets.driver.clone());
+        out.tags.extend(view.tag_filter.clone());
+        out.tags.extend(view.search_facets.tag.clone());
+        out
+    }
+
+    /// 这条连接是否满足全部约束。
+    ///
+    /// `type_of` 惰性求值（没有类型约束时不必去读驱动目录），由调用方提供
+    /// —— 类型 id 只在 `driver_catalog` 里，本结构只管筛。
+    fn passes(
+        &self,
+        conn: &ConnectionItem,
+        conn_tags: Option<&Vec<String>>,
+        type_of: impl Fn(&str) -> String,
+    ) -> bool {
+        if !self.sources.is_empty() {
+            let source = NavSource::from_conn_id(&conn.id);
+            if self.sources.iter().any(|want| *want != source) {
+                return false;
+            }
+        }
+        if !self.types.is_empty() {
+            let actual = type_of(&conn.driver);
+            if self.types.iter().any(|want| *want != actual) {
+                return false;
+            }
+        }
+        if self.drivers.iter().any(|want| *want != conn.driver) {
+            return false;
+        }
+        if self.tags.iter().any(|want| {
+            !conn_tags
+                .map(|ts| ts.iter().any(|t| t == want))
+                .unwrap_or(false)
+        }) {
+            return false;
+        }
+        true
     }
 }
 
@@ -1910,17 +1982,7 @@ impl NavView {
                 .pt_1()
                 .child(div().text_xs().text_color(muted).child("加载中…"));
         }
-        let (
-            filter,
-            groups,
-            membership,
-            group_order,
-            ungrouped_order,
-            tags,
-            type_filter,
-            driver_filter,
-            tag_filter,
-        ) = {
+        let (filter, groups, membership, group_order, ungrouped_order, tags) = {
             let view = self.nav.borrow();
             (
                 view.filter.to_lowercase(),
@@ -1929,17 +1991,12 @@ impl NavView {
                 view.group_order.clone(),
                 view.ungrouped_order.clone(),
                 view.tags.clone(),
-                view.type_filter.clone(),
-                view.driver_filter.clone(),
-                view.tag_filter.clone(),
             )
         };
         let conns: Vec<ConnectionItem> = self.host.connections();
         let by_id: HashMap<&str, &ConnectionItem> =
             conns.iter().map(|c| (c.id.as_str(), c)).collect();
 
-        // 搜索框 facet 语法（`scope:` / `type:` / `driver:` / `tag:`）作为额外约束叠加。
-        let search_facets = self.nav.borrow().search_facets.clone();
         // 显式主组（连接 ID → 分组 ID）。
         let primary_explicit = self.nav.borrow().primary_group.clone();
 
@@ -1952,134 +2009,18 @@ impl NavView {
         // 连接级约束：归属域 chips + 附加 facet（类型 / 驱动 / 标签）。
         // 索引搜索也吃这一套（它回答“在哪些连接里找”），**不吃**搜索词——
         // 搜索词是**对象级**查询，若拿它去筛连接，搜表名时会因连接名不匹配而搜不到任何东西。
-        let passes_facets = |conn: &ConnectionItem| -> bool {
-            if let Some(src) = source_filter {
-                if NavSource::from_conn_id(&conn.id) != src {
-                    return false;
-                }
-            }
-            if let Some(src) = search_facets.source {
-                if NavSource::from_conn_id(&conn.id) != src {
-                    return false;
-                }
-            }
-            if let Some(want_type) = &type_filter {
-                let actual = self
-                    .driver_catalog
-                    .borrow()
-                    .get(&conn.driver)
-                    .map(|m| m.type_id.clone())
-                    .unwrap_or_else(|| conn.driver.clone());
-                if &actual != want_type {
-                    return false;
-                }
-            }
-            if let Some(want_type) = &search_facets.db_type {
-                let actual = self
-                    .driver_catalog
-                    .borrow()
-                    .get(&conn.driver)
-                    .map(|m| m.type_id.clone())
-                    .unwrap_or_else(|| conn.driver.clone());
-                if &actual != want_type {
-                    return false;
-                }
-            }
-            if let Some(want_driver) = &driver_filter {
-                if &conn.driver != want_driver {
-                    return false;
-                }
-            }
-            if let Some(want_driver) = &search_facets.driver {
-                if &conn.driver != want_driver {
-                    return false;
-                }
-            }
-            if let Some(want_tag) = &tag_filter {
-                let hit = tags
-                    .get(&conn.id)
-                    .map(|ts| ts.iter().any(|t| t == want_tag))
-                    .unwrap_or(false);
-                if !hit {
-                    return false;
-                }
-            }
-            if let Some(want_tag) = &search_facets.tag {
-                let hit = tags
-                    .get(&conn.id)
-                    .map(|ts| ts.iter().any(|t| t == want_tag))
-                    .unwrap_or(false);
-                if !hit {
-                    return false;
-                }
-            }
-            true
-        };
+        let conn_filter = NavConnFilter::snapshot(&self.nav.borrow(), source_filter);
 
         // 树里的连接行：在连接级约束之上，搜索词也顺手命中连接名 / 标签
         // （否则搜连接名时整棵树会被清空，看起来像坏了）。
         let passes = |conn: &ConnectionItem| -> bool {
-            if !passes_facets(conn) {
-                return false;
-            }
-            if filter.is_empty() {
-                return true;
-            }
-            if conn.name.to_lowercase().contains(&filter) {
-                return true;
-            }
-            tags.get(&conn.id)
-                .map(|ts| ts.iter().any(|t| t.to_lowercase().contains(&filter)))
-                .unwrap_or(false)
+            self.nav_conn_passes_tree_row(&conn_filter, conn, &tags, &filter)
         };
 
         // ——— 索引搜索（树顶结果区）———
         // 本地过滤命中的是**已加载**节点（零往返、即时）；索引搜索补的是「尚未展开到的那部分」。
         // 只在查询词变化时排一次后台任务；过期批次在回填处丢弃。
-        //
-        // 方向（已拍板）：搜索 / 命令这类“先输入再选”的交互后续要**独立成一个 crate**
-        // （类 VS Code 的 Quick Open / 命令面板），导航面板只保留这个“够用”版本；
-        // 新特性不要再往这里加。
-        let search_started = {
-            let mut view = self.nav.borrow_mut();
-            let query = filter.trim().to_string();
-            if !nav_search_query_ready(&query) {
-                view.search_query = None;
-                view.search_hits.clear();
-                view.search_searched = 0;
-                None
-            } else if view.search_query.as_deref() == Some(query.as_str()) {
-                None
-            } else {
-                view.search_query = Some(query.clone());
-                view.search_hits.clear();
-                view.search_searched = 0;
-                Some(query)
-            }
-        };
-        if let Some(query) = search_started {
-            let targets: Vec<nav_jobs::SearchTarget> = conns
-                .iter()
-                .filter(|c| passes_facets(c))
-                .map(|c| nav_jobs::SearchTarget {
-                    conn_id: c.id.clone(),
-                    label: c.name.clone(),
-                    driver: c.driver.clone(),
-                })
-                .collect();
-            let root = self
-                .host
-                .project_root()
-                .map(|p| p.to_string_lossy().to_string());
-            nav_jobs::enqueue_search(
-                nav_jobs::SearchConsumer::Navigator,
-                nav_jobs::SearchKind::Name,
-                &query,
-                root.as_deref(),
-                targets,
-            );
-            self.ensure_nav_pump(cx);
-        }
+        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
 
         let mut column = div()
             .v_flex()
@@ -2266,6 +2207,378 @@ impl NavView {
             }
         }
         column
+    }
+
+    /// 驱动 id → 数据源类型 id（目录优先；目录还没到时退化为驱动 id 本身）。
+    ///
+    /// 类型筛选要按 `type_id` 比而不是驱动 id：一个类型可以对应多个驱动。
+    fn nav_type_of(&self, driver: &str) -> String {
+        self.driver_catalog
+            .borrow()
+            .get(driver)
+            .map(|m| m.type_id.clone())
+            .unwrap_or_else(|| driver.to_string())
+    }
+
+    /// 连接是否通过**连接级约束**（不含搜索词）。索引搜索「该搜哪些连接」用它。
+    fn nav_conn_passes_facets(
+        &self,
+        conn_filter: &NavConnFilter,
+        conn: &ConnectionItem,
+        tags: &HashMap<String, Vec<String>>,
+    ) -> bool {
+        conn_filter.passes(conn, tags.get(&conn.id), |driver| self.nav_type_of(driver))
+    }
+
+    /// 树里的连接行：在连接级约束之上，搜索词也顺手命中连接名 / 标签。
+    ///
+    /// 搜索词不参与索引搜索的目标筛选（那是**对象级**查询），但树里若不认连接名，
+    /// 搜连接名时整棵树会被清空，看起来像坏了。
+    fn nav_conn_passes_tree_row(
+        &self,
+        conn_filter: &NavConnFilter,
+        conn: &ConnectionItem,
+        tags: &HashMap<String, Vec<String>>,
+        filter: &str,
+    ) -> bool {
+        if !self.nav_conn_passes_facets(conn_filter, conn, tags) {
+            return false;
+        }
+        if filter.is_empty() {
+            return true;
+        }
+        if conn.name.to_lowercase().contains(filter) {
+            return true;
+        }
+        tags.get(&conn.id)
+            .map(|ts| ts.iter().any(|t| t.to_lowercase().contains(filter)))
+            .unwrap_or(false)
+    }
+
+    /// 索引搜索排程（查询词变了才排队；结果区由 [`Self::render_search_section`] 呈现）。
+    ///
+    /// 与本地过滤的分工（两者同时生效，互不替代）：本地过滤命中**已加载**节点
+    /// （零往返、即时）；索引搜索命中**索引里的全部对象**（含尚未展开到的 schema），跨连接。
+    ///
+    /// 方向（已拍板）：搜索 / 命令这类“先输入再选”的交互后续要**独立成一个 crate**
+    /// （类 VS Code 的 Quick Open / 命令面板），导航面板只保留这个“够用”版本；
+    /// 新特性不要再往这里加。
+    fn nav_schedule_index_search(
+        &self,
+        conn_filter: &NavConnFilter,
+        conns: &[ConnectionItem],
+        filter: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let query = filter.trim().to_string();
+        let started = {
+            let mut view = self.nav.borrow_mut();
+            if !nav_search_query_ready(&query) {
+                view.search_query = None;
+                view.search_hits.clear();
+                view.search_searched = 0;
+                false
+            } else if view.search_query.as_deref() == Some(query.as_str()) {
+                // 查询词没变：不重搜（结果已经在状态里）。
+                false
+            } else {
+                view.search_query = Some(query.clone());
+                view.search_hits.clear();
+                view.search_searched = 0;
+                true
+            }
+        };
+        if !started {
+            return;
+        }
+        let targets: Vec<nav_jobs::SearchTarget> = conns
+            .iter()
+            .filter(|c| self.nav_conn_passes_facets(conn_filter, c, &self.nav.borrow().tags))
+            .map(|c| nav_jobs::SearchTarget {
+                conn_id: c.id.clone(),
+                label: c.name.clone(),
+                driver: c.driver.clone(),
+            })
+            .collect();
+        let root = self
+            .host
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
+        nav_jobs::enqueue_search(
+            nav_jobs::SearchConsumer::Navigator,
+            nav_jobs::SearchKind::Name,
+            &query,
+            root.as_deref(),
+            targets,
+        );
+        self.ensure_nav_pump(cx);
+    }
+
+    /// 收集本次**可见行**（顺序权威；虚拟列表的 item 源）。
+    ///
+    /// 这是原递归渲染里「顺序与身份」的那一半：哪些行可见、按什么顺序、属于哪个容器 / 分组。
+    /// 「这一行长什么样」仍归既有的 `render_*`（选中 / 展开 / 错误 / 悬停都由它们自己读），
+    /// 本函数不复制那些判据，否则两份口径会各自漂移。
+    ///
+    /// 两处副作用跟着顺序走（[`Self::ensure_nav_loaded`] / [`Self::nav_schedule_index_search`]）：
+    /// 把它们留在旧渲染路径上，切换后就会静默失效——展开不再加载、搜索不再排队。
+    ///
+    /// 分组 / 成员尚未就绪时返回空（调用方负责显「加载中…」）。
+    pub(crate) fn collect_nav_rows(
+        &self,
+        source_filter: Option<NavSource>,
+        cx: &mut Context<Self>,
+    ) -> Vec<NavRow> {
+        let mut rows: Vec<NavRow> = Vec::new();
+        if !self.nav.borrow().groups_loaded {
+            return rows;
+        }
+        let (filter, groups, membership, group_order, ungrouped_order, tags) = {
+            let view = self.nav.borrow();
+            (
+                view.filter.to_lowercase(),
+                view.groups.clone(),
+                view.membership.clone(),
+                view.group_order.clone(),
+                view.ungrouped_order.clone(),
+                view.tags.clone(),
+            )
+        };
+        let conns: Vec<ConnectionItem> = self.host.connections();
+        let by_id: HashMap<&str, &ConnectionItem> =
+            conns.iter().map(|c| (c.id.as_str(), c)).collect();
+        let conn_filter = NavConnFilter::snapshot(&self.nav.borrow(), source_filter);
+        let primary_explicit = self.nav.borrow().primary_group.clone();
+        // 主组：用户**显式指定**优先；未指定时回退到分组排序最靠前的一个。
+        // 多组只全亮呈现一次，其余组以引用行出现。
+        let primary_gid =
+            |conn_id: &str| nav_primary_scope(&membership, &primary_explicit, conn_id);
+
+        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
+
+        // 运行时连接状态与错误集（分组头聚合健康度用；一次算完避免逐条查询）。
+        let (connected_set, error_set) = {
+            let view = self.nav.borrow();
+            let mut set: HashSet<String> = view.connected.iter().cloned().collect();
+            for c in &conns {
+                if c.connected {
+                    set.insert(c.id.clone());
+                }
+            }
+            let errors: HashSet<String> = view.errors.keys().cloned().collect();
+            (set, errors)
+        };
+
+        let mut shown = 0usize;
+        for group in &groups {
+            // 组内顺序以存储的手动排序为准（缺省无成员）。
+            let members: Vec<&ConnectionItem> = group_order
+                .get(&group.id)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|id| by_id.get(id.as_str()).copied())
+                        .filter(|c| {
+                            self.nav_conn_passes_tree_row(&conn_filter, c, &tags, &filter)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if members.is_empty() {
+                continue;
+            }
+            shown += members.len();
+            rows.push(NavRow::GroupHeader {
+                id: group.id.clone(),
+                name: group.name.clone(),
+                count: members.len(),
+                connected: members.iter().filter(|c| connected_set.contains(&c.id)).count(),
+                failed: members.iter().filter(|c| error_set.contains(&c.id)).count(),
+            });
+            if self.group_collapsed(&group.id) {
+                continue;
+            }
+            for conn in members {
+                if primary_gid(&conn.id).as_deref() == Some(group.id.as_str()) {
+                    self.collect_connection_rows(&mut rows, conn, &group.id, cx);
+                } else {
+                    // 引用行：全亮行在主组，这里只指路（不展开、不递归子节点）。
+                    let primary_name = primary_gid(&conn.id)
+                        .and_then(|gid| groups.iter().find(|g| g.id == gid).map(|g| g.name.clone()))
+                        .unwrap_or_else(|| "未分组".to_string());
+                    rows.push(NavRow::Reference {
+                        conn: Box::new(conn.clone()),
+                        scope_key: group.id.clone(),
+                        primary_name,
+                    });
+                }
+            }
+        }
+
+        // 「未分组」固定容器：收纳不属于任何自定义分组的连接。
+        // 顺序与分组内同一条规则（`nav_order_members`）：手动排序在前，未排过的按名称升序。
+        let candidates: Vec<&ConnectionItem> = conns
+            .iter()
+            .filter(|c| {
+                membership
+                    .get(&c.id)
+                    .map(|gs| gs.is_empty())
+                    .unwrap_or(true)
+                    && self.nav_conn_passes_tree_row(&conn_filter, c, &tags, &filter)
+            })
+            .collect();
+        let ranked: HashMap<&str, i64> = ungrouped_order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i as i64))
+            .collect();
+        let stored: Vec<(String, Option<i64>)> = candidates
+            .iter()
+            .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
+            .collect();
+        let ungrouped: Vec<&ConnectionItem> = nav_order_members(&stored, |id| {
+            by_id
+                .get(id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        })
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).copied())
+        .collect();
+        // 已有自定义分组时也渲染（空）未分组头：它是「拖拽移出分组」的常驻落点。
+        if !ungrouped.is_empty() || (!groups.is_empty() && shown > 0) {
+            rows.push(NavRow::GroupHeader {
+                id: GROUP_UNGROUPED.to_string(),
+                name: "未分组".to_string(),
+                count: ungrouped.len(),
+                connected: ungrouped
+                    .iter()
+                    .filter(|c| connected_set.contains(&c.id))
+                    .count(),
+                failed: ungrouped.iter().filter(|c| error_set.contains(&c.id)).count(),
+            });
+            if !self.group_collapsed(GROUP_UNGROUPED) {
+                for conn in ungrouped {
+                    self.collect_connection_rows(&mut rows, conn, GROUP_UNGROUPED, cx);
+                }
+            }
+        }
+        rows
+    }
+
+    /// 连接行 + （展开时）它的子树。
+    ///
+    /// 与 [`Self::render_connection_row`] 同一条门：**仅在运行时已连接时**才排加载。
+    /// 为何加这道门：展开态会跨重启从 `navigator_state` 恢复，但运行时连接不跨重启；
+    /// 若此时仍排队，`NavigatorService` → `MetadataService` 取不到句柄，
+    /// 会冒泡为用户看到的 `[CONN_NOT_FOUND]`。
+    fn collect_connection_rows(
+        &self,
+        rows: &mut Vec<NavRow>,
+        conn: &ConnectionItem,
+        scope_key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let (expanded, connected, children) = {
+            let view = self.nav.borrow();
+            (
+                view.expanded.contains(&conn.id),
+                view.connected.contains(&conn.id) || conn.connected,
+                view.children.get(&conn.id).cloned().unwrap_or_default(),
+            )
+        };
+        if expanded && connected {
+            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
+        }
+        rows.push(NavRow::Connection {
+            conn: Box::new(conn.clone()),
+            scope_key: scope_key.to_string(),
+        });
+        if !expanded {
+            return;
+        }
+        for child in &children {
+            self.collect_node_rows(rows, child, 1, scope_key, cx);
+        }
+    }
+
+    /// 对象树行 + （展开时）它的子树（`depth` 决定缩进；与 [`Self::render_nav_node`] 逐条对应）。
+    fn collect_node_rows(
+        &self,
+        rows: &mut Vec<NavRow>,
+        node: &NavNode,
+        depth: usize,
+        scope_key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let filter = self.nav.borrow().filter.to_lowercase();
+        let expanded = self.nav.borrow().expanded.contains(&node.key);
+        if expanded && node.has_children {
+            if let Some(p) = node.expand_path.clone() {
+                self.ensure_nav_loaded(&node.connection_id, &node.key, p, false, cx);
+            }
+        }
+        let (skip, expanded_eff, children) = {
+            let view = self.nav.borrow();
+            let children = view.children.get(&node.key).cloned().unwrap_or_default();
+            // 分页未拉完时，本地过滤只能覆盖**已加载**部分：此时不能因“已加载的都不匹配”
+            // 就把整支隐藏——那会让用户连「加载更多」都点不到，看上去像对象不存在。
+            let pending_more = view
+                .child_total
+                .get(&node.key)
+                .map(|total| *total > children.len())
+                .unwrap_or(false);
+            let skip = !filter.is_empty()
+                && !pending_more
+                && !nav_node_matches(&view.children, node, &filter);
+            (skip, expanded || !filter.is_empty(), children)
+        };
+        if skip {
+            return;
+        }
+        rows.push(NavRow::Tree {
+            node: Box::new(node.clone()),
+            depth,
+            scope_key: scope_key.to_string(),
+        });
+        if !expanded_eff {
+            return;
+        }
+        // 类别文件夹分页：大 schema 只渲染首批，其余用「加载更多」逐页展开。
+        let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
+        let loaded = children.len();
+        let total = if is_folder {
+            self.node_total(&node.key, loaded)
+        } else {
+            loaded
+        };
+        let limit = if is_folder {
+            self.folder_limit(&node.key)
+        } else {
+            usize::MAX
+        };
+        // 定位窗口：先摆说明与回头路，再摆这一窗的行。
+        let jumped_to = self.nav.borrow().jumped.get(&node.key).copied();
+        if let Some(position) = jumped_to {
+            rows.push(NavRow::Jump {
+                node: Box::new(node.clone()),
+                depth,
+                scope_key: scope_key.to_string(),
+                position,
+            });
+        }
+        for child in children.iter().take(limit) {
+            self.collect_node_rows(rows, child, depth + 1, scope_key, cx);
+        }
+        // 两种「还有更多」：数据侧的（要取）与渲染窗口的（已到手，只放大窗口）。
+        // **定位窗口例外**：那时的行集是一窗不是前缀，按条数往后翻会跳错地方，
+        // 回头路走顶上那行「点此回到开头」。
+        if is_folder && jumped_to.is_none() && (limit < loaded || loaded < total) {
+            rows.push(NavRow::More {
+                node: Box::new(node.clone()),
+                depth,
+                scope_key: scope_key.to_string(),
+            });
+        }
     }
 
     /// 分组头：左侧统一色条 + 略深底 + **健康度**（已连/总）+ 计数 + 全折叠；右键菜单（重命名 / 新建 / 删除）。
@@ -5715,6 +6028,7 @@ mod tests {
     use crate::model::{
         NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
     };
+    use crate::nav_rows::NavRow;
     // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
     use gpui_kit::{AppContext as _, ParentElement as _, Styled as _};
 
@@ -6000,6 +6314,265 @@ mod tests {
             ]),
             "父在前、子随后，且叶子按已加载顺序"
         );
+    }
+
+    /// 收集（S1 的 flatten）得到的全部可见行（含分组头 / 「更多」/「已定位」）。
+    fn collected_rows(
+        view: &gpui_kit::Entity<super::NavView>,
+        cx: &mut gpui_kit::App,
+    ) -> Vec<NavRow> {
+        view.update(cx, |view, cx| view.collect_nav_rows(None, cx))
+    }
+
+    /// 收集序里**旧口径也会列**的行（连接行 + 对象行）。
+    ///
+    /// `nav_order` 是「键盘漫游序列」，旧代码只往里推了这两类。新口径的可见行多了三种：
+    /// 分组头（容器标题，不参与漫游），以及引用行 / 「更多」/ 「已定位」行——后三种可点可选中，
+    /// 但旧口径漏列入列（按 ↓ 会“跳过”一行看得见的行），新口径把它们纳入漫游。
+    /// 两套序列的可比部分因此是：**连接行与对象行逐步相等，且相对次序不变**。
+    fn roam_keys(rows: &[NavRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                NavRow::Connection { .. } | NavRow::Tree { .. } => Some(row.key()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 一行行的键（包括分组头与附加行）。
+    fn all_keys(rows: &[NavRow]) -> Vec<String> {
+        rows.iter().map(|row| row.key()).collect()
+    }
+
+    /// 往搜索框里打字。
+    ///
+    /// `filter` 的唯一入口就是输入框——`render_nav` 每帧从它重算，直接改状态会被下一帧冲掉。
+    fn set_search_text(
+        view: &gpui_kit::Entity<super::NavView>,
+        text: &str,
+        window: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::App,
+    ) {
+        view.update(cx, |view, cx| {
+            let input = view.nav_search.clone().expect("搜索框在首帧创建");
+            let text = text.to_string();
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+            cx.notify();
+        });
+    }
+
+    /// 重画一帧 + 收集一次，断言「收集序 = 渲染序」（去掉附加行后逐步相等）。
+    fn assert_collect_matches_render(
+        view: &gpui_kit::Entity<super::NavView>,
+        cx: &mut gpui_kit::VisualTestContext,
+        phase: &str,
+    ) -> Vec<NavRow> {
+        redraw(cx);
+        let rendered = cx.update(|_window, cx| visible_keys(&view.read(cx)));
+        let rows = cx.update(|_window, cx| collected_rows(view, cx));
+        assert_eq!(
+            roam_keys(&rows),
+            rendered,
+            "阶段「{phase}」：收集得到的可见行与渲染累积的顺序不一致"
+        );
+        rows
+    }
+
+    /// S1 验收：`NavView::collect_nav_rows` 与渲染期累积的 `nav_order` **逐步相等**。
+    ///
+    /// 两套遍历同时存在时这条用例才有意义：渲染走旧的递归（`render_*` 边画边 push），
+    /// 收集走新的 flatten。只测「展开」那一种不够——分组 / 引用行 / 分页 / 定位窗口 /
+    /// 过滤跳支 都是各自一段独立分支，漏一条就会在切到虚拟列表后才猸出来。
+    #[gpui_kit::test]
+    fn collected_rows_match_render_order(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let catalog_key = "G_1/shop";
+        let schema_key = "G_1/shop/public";
+        let folder_key = "G_1/shop/public/tables";
+        let group_header = format!("group:{}", engine::persistence::UNGROUPED_SCOPE);
+        let (view, cx) = open_nav_view(cx, conn);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![
+                    table_node(conn, "shop", "public", "customers"),
+                    table_node(conn, "shop", "public", "orders"),
+                ],
+                None,
+            );
+            view.read(cx).nav.borrow_mut().expanded.clear();
+        });
+        // 第一帧：未展开——未分组头 + 连接行
+        let rows = assert_collect_matches_render(&view, cx, "未展开");
+        assert_eq!(all_keys(&rows), ids(&[&group_header, conn]));
+
+        // 逐层展开：父在前、子随后
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                for key in [conn, catalog_key, schema_key, folder_key] {
+                    view.nav.borrow_mut().expanded.insert(key.to_string());
+                }
+                cx.notify();
+            });
+        });
+        let rows = assert_collect_matches_render(&view, cx, "逐层展开");
+        assert_eq!(
+            all_keys(&rows),
+            ids(&[
+                &group_header,
+                conn,
+                catalog_key,
+                schema_key,
+                folder_key,
+                "G_1/shop/public/customers",
+                "G_1/shop/public/orders",
+            ])
+        );
+
+        // 分页未拉完：数据侧 5 条、只加载了 2 条 → 末行是「加载更多」
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.nav.borrow_mut().child_total.insert(folder_key.to_string(), 5);
+                cx.notify();
+            });
+        });
+        let rows = assert_collect_matches_render(&view, cx, "分页未拉完");
+        assert!(
+            matches!(rows.last(), Some(NavRow::More { .. })),
+            "末行应该是「加载更多」，实际：{:?}",
+            all_keys(&rows)
+        );
+
+        // 定位窗口：「已定位」行在子节点前，且这一窗里不摆「加载更多」
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.nav.borrow_mut().jumped.insert(folder_key.to_string(), 3);
+                cx.notify();
+            });
+        });
+        let rows = assert_collect_matches_render(&view, cx, "定位窗口");
+        let jump_at = rows
+            .iter()
+            .position(|row| matches!(row, NavRow::Jump { .. }))
+            .expect("定位窗口应有「已定位」行");
+        let folder_at = rows
+            .iter()
+            .position(|row| row.key() == folder_key)
+            .expect("文件夹行应该在");
+        assert_eq!(
+            jump_at,
+            folder_at + 1,
+            "「已定位」行紧跟在文件夹行之后、子节点之前"
+        );
+        assert!(
+            !rows.iter().any(|row| matches!(row, NavRow::More { .. })),
+            "定位窗口里不摆「加载更多」（按条数往后翻会跳错地方）"
+        );
+
+        // 过滤：连接名不命中时整棵树会空，所以让标签命中连接；
+        // 文件夹名命中但两张表不命中（分页未拉完 → 本地过滤不得把整支隐藏）。
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let mut state = view.nav.borrow_mut();
+                state.jumped.clear();
+                state.tags.insert(conn.to_string(), vec!["表".to_string()]);
+                cx.notify();
+            });
+            set_search_text(&view, "表", window, cx);
+        });
+        let rows = assert_collect_matches_render(&view, cx, "过滤跳支");
+        assert_eq!(
+            all_keys(&rows),
+            ids(&[
+                &group_header,
+                conn,
+                catalog_key,
+                schema_key,
+                folder_key,
+                "G_1/shop/public/tables#more",
+            ]),
+            "两张表不命中被跳过；分页未拉完的文件夹仍可见（否则连「加载更多」都点不到）"
+        );
+
+        // 同一连接在两个分组：主组是全亮行（带子树），另一个组只指路（引用行）。
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let mut state = view.nav.borrow_mut();
+                state.tags.clear();
+                state.child_total.clear();
+                state.groups = vec![
+                    engine::persistence::ConnectionGroup {
+                        id: "g1".to_string(),
+                        name: "生产".to_string(),
+                        description: None,
+                        sort_order: 0,
+                        created_at: String::new(),
+                        updated_at: String::new(),
+                    },
+                    engine::persistence::ConnectionGroup {
+                        id: "g2".to_string(),
+                        name: "备份".to_string(),
+                        description: None,
+                        sort_order: 1,
+                        created_at: String::new(),
+                        updated_at: String::new(),
+                    },
+                ];
+                state
+                    .membership
+                    .insert(conn.to_string(), vec!["g1".to_string(), "g2".to_string()]);
+                state
+                    .group_order
+                    .insert("g1".to_string(), vec![conn.to_string()]);
+                state
+                    .group_order
+                    .insert("g2".to_string(), vec![conn.to_string()]);
+                cx.notify();
+            });
+            set_search_text(&view, "", window, cx);
+        });
+        let rows = assert_collect_matches_render(&view, cx, "双分组");
+        assert_eq!(
+            all_keys(&rows),
+            ids(&[
+                "group:g1",
+                conn,
+                catalog_key,
+                schema_key,
+                folder_key,
+                "G_1/shop/public/customers",
+                "G_1/shop/public/orders",
+                "group:g2",
+                "ref:g2:G_1",
+                &group_header,
+            ]),
+            "全亮行只在主组出现一次；另一个组是引用行（无子树）；未分组头即使为空也在"
+        );
+
+        // 折叠主组：只剩另一个组的引用行
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.nav
+                    .borrow_mut()
+                    .collapsed_groups
+                    .insert("g1".to_string());
+                cx.notify();
+            });
+        });
+        let rows = assert_collect_matches_render(&view, cx, "折叠主组");
+        assert_eq!(
+            all_keys(&rows),
+            ids(&["group:g1", "group:g2", "ref:g2:G_1", &group_header])
+        );
+
+        // 无匹配：所有行都不见了（空态由调用方另行呈现）。
+        // 注意搜索词只有 1 个字：`nav_search_query_ready` 门槛是 2，否则会排一次索引搜索（要读库）。
+        cx.update(|window, cx| set_search_text(&view, "z", window, cx));
+        let rows = assert_collect_matches_render(&view, cx, "无匹配");
+        assert!(rows.is_empty(), "无匹配时收集不到任何行");
     }
 
     /// 窗口级：`reveal_ref` 把链路**逐层展开**并选中目标，且收尾干净。

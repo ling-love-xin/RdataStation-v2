@@ -14,6 +14,7 @@ pub mod model;
 pub mod navigator_service;
 pub mod nav_host;
 pub mod nav_jobs;
+pub(crate) mod nav_rows;
 pub mod nav_store;
 pub mod nav_view;
 pub mod property_panel;
