@@ -101,7 +101,7 @@ commands ──► services ──► dbi ──► driver ──► native
 | 库单测 | `cargo test -p rds-engine --lib -j 2` | 301 通过 / 23 忽略 |
 | sqlglot 探针 | `cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1` | 10 通过（报告式输出） |
 | 事务探针 | `cargo test -p rds-engine --test transaction_affinity -j 2` | 12 通过（无端点时逐项跳过） |
-| 全量 | `cargo test-all` | 以重测为准（2026-09-16 冷构建全量：53 个目标 846 通过） |
+| 全量 | `cargo test-all` | 以重测为准（2026-09-19 实测：**84 个目标 1963 通过 / 51 忽略 / 1 失败**；失败项是本机诊断脚本 `zz_fixture_probe`，属环境原因且已取消跟踪。全量台账见 `../../docs/architecture/module-status.md`） |
 
 ## 文档地图
 

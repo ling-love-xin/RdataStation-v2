@@ -103,7 +103,7 @@ cargo test -p rds-workbench --lib \
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-17）：**18 个目标 / 155 用例全绿**——lib 71、`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`ui_contract` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`db_navigator` 2、`connection_edit_backfill` / `connection_drafts_persist` / `connection_tunnel_cleanup` 各 1。
+- 基准（2026-09-17）：**18 个目标 / 155 用例全绿**——lib **44**（2026-09-19 实测；该「18 目标 / 155 用例」是跨 crate 组合口径，逐 crate 明细见 `../module-status.md` §2）、`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`ui_contract` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`db_navigator` 2、`connection_edit_backfill` / `connection_drafts_persist` / `connection_tunnel_cleanup` 各 1。
 - **引擎侧存量迁移**（同一轮）：`cargo test -p rds-engine --lib` = **369 项全绿**——含新增的启动迁移接线测试（`migration::global_init::startup_migration_backfills_tags_for_global_and_project`）与项目打开回填（`persistence::project_db::opening_project_backfills_legacy_connection_tags`）。
 - **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、五 Tab 降级渲染、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 五 Tab 渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。
 - **布局高度的写法约定**（本轮踩到，必守）：固定高度必须 `h + min_h + max_h` **三向显式**约束——只给 `h()`（哪怕再加 `min_h_0()`）夹不住 flex 子项的自动最小尺寸，内容多时会按内容撑高（实测暂存区 120px → 412px、侧栏 522px 撑高对话框）。

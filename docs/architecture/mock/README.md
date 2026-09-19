@@ -116,12 +116,13 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 165 单元（23 纯逻辑 + 63 窗口 + 79 其他）+ 34 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | **190 单元** + **37 引擎集成** + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过（2026-09-19 实测；单元内部构成见 `mock-showcase.md` §12） |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 11 任务测试） |
 
-> 存量欠债（非本模块）：`crates/engine/tests/transaction_affinity.rs` 调用了不存在的 `Value::as_i64()`
-> （实际是 `as_int()`），使 `cargo check --workspace --all-targets` 在该 target 报错。
+> 存量欠债（非本模块）：`crates/engine/tests/transaction_affinity.rs` 曾调用不存在的 `Value::as_i64()`
+> （实际是 `as_int()`），使 `cargo check --workspace --all-targets` 在该 target 报错——
+> **2026-09-19 复查已可编译且 12 项全过**。
 
 ## 文档地图
 

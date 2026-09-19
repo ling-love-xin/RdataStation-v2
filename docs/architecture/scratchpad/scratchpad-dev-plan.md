@@ -498,7 +498,7 @@
 ## 6. 验证方式
 
 - 每阶段：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警 + 对应测试（`crypto` 之外的单测均在 `store.rs` 内联模块）
-- 后端单测基线：`cargo test -p rds-scratchpad -j 2 --lib`（**32 项**；含临时项目目录的端到端文件操作 + 面板纯函数 + 后台任务）
+- 后端单测基线：`cargo test -p rds-scratchpad -j 2 --lib`（**37 项**；含临时项目目录的端到端文件操作 + 面板纯函数 + 后台任务）
 - UI：`cargo run -p rds-app` 手动走通 §3 场景清单与 `scratchpad-user-guide.md` §9 验收清单
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
 - 阶段完成后回填本文件「进度记录」、`crates/scratchpad/README.md` 能力表与原型文档同步

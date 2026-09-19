@@ -302,6 +302,8 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | 死代码 | 无「零调用冻结」机制 | engine ~150 项、plugin 整包 |
 | 文档新鲜度 | `*-architecture.md` 头部状态行最易过期 | 见 §12 |
 | 门禁 | **无 CI**；无 fmt 门（244/401 文件待格式化） | 无 `.github/` |
+| 本机脚本入库 | 本机诊断脚本（含内网地址与明文口令）曾被提交并**已推到公开仓库**；「未跟踪」不能靠文件头自己声明 | `crates/workbench/tests/zz_fixture_probe.rs`（commit `7814b9b6`）；已 `git rm --cached` + `.gitignore` 新增 `**/tests/zz_*.rs`，详见 `module-status.md` §6.1 |
+| 测试基线分散 | 各模块文档里的数字是不同日期的快照，长期漂移（本轮实测：engine 382→443、database 38→42、workbench 106→110、mock 165→190…） | `module-status.md` §6.3；现已收拢为一份可复现台账 |
 
 ---
 
