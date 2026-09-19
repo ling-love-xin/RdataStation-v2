@@ -64,6 +64,7 @@
 | `sidecar/client.rs` | P0 已修「判成功/失败取反」的 bug（抽成 `parse_rpc_response` + 4 条单测）；但**传输本身仍是 HTTP/端口 + 零鉴权**，与 D5 相反 → P1 换成走 `proto` 的 stdio 客户端 |
 | `sidecar/proto.rs` | ✅ **P1 协议层已落地**：帧（4B 大端长度 + 1B kind，**`total_len` 含头 5 字节**）+ 增量解码器 + `read_frame`/`write_frame`（async，含短读与“先校验再分配”的测试）+ 版本闸 + 内联阈值 + 错误码表；15 条单测 |
 | `sidecar/router.rs` | ✅ **P1 附件语义已落地**：`Router`（消费帧 → 事件：在飞登记 / 扣住未收齐的响应 / 错位上报 / 断线交还）+ `encode_response_with_arrow`（sidecar 侧切帧）；两者互为逆运算，有往返测试；15 条单测 |
+| `sidecar/lifecycle.rs` | ✅ **P1 决策内核已落地**（sans-io，零 I/O）：三层对象模型 `PluginProcess → DriverInstance → Session` 的规则全部在此 —— 进程按 plugin_id 去重、`max_instances`、serial 排队与 `QUEUE_MAX_LEN`、ping 连续 2 次判死、空闲 30min 回收、崩溃**不静默重连**（需手动重启）；15 条单测逐条对应 §4.1 五条规则 |
 | `sidecar/{health_checker,hot_reload_manager}.rs` | **0 字节**空文件（P1 健康检查会落在这里） |
 | ~~`sidecar/driver.rs`~~（311 行） | ✅ **P0 删除**：未编译过，且传输假设（HTTP/单端口/JSON 行）与 D5/D4 相反 → 驱动桥 **P1 新建** |
 | ~~`storage.rs`~~（107 行） | ✅ **P0 删除**：未编译、全仓零引用、`flush_to_disk()` 是 TODO 空壳 |
@@ -106,6 +107,6 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-**P1 进行中**：协议层与附件语义已落地（`sidecar/proto.rs` 帧/流读写/版本闸/阈值/错误码 + `sidecar/router.rs` 附件语义两个方向，30 条新单测）。
-接着要做的：三层对象模型（`PluginProcess → DriverInstance → Session`）· 拿 PostgreSQL 包一层 sidecar 做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · `client.rs` 从 HTTP 换成走 `proto` 的 stdio 客户端。
+**P1 进行中**：协议 / 附件语义 / 生命周期决策内核已落地（`sidecar/proto.rs` + `sidecar/router.rs` + `sidecar/lifecycle.rs`，45 条新单测）。
+接着要做的：把决策内核接到 I/O（`SidecarManager` 补 `current_dir`/日志/进程组回收）· 拿 PostgreSQL 包一层 sidecar 做靶子 · `client.rs` 从 HTTP 换成走 `proto` 的 stdio 客户端。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。

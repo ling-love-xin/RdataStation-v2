@@ -732,7 +732,7 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | --- | --- |
 | 清单与 `[backend]` 段 | `crates/plugin/src/manifest.rs` |
 | 权限与信任（双轨） | `crates/plugin/src/permission.rs` |
-| 生命周期与进程池 | `crates/plugin/src/manager.rs`、`sidecar/manager.rs`、`sidecar/health_checker.rs` |
+| 生命周期与进程池 | `crates/plugin/src/sidecar/lifecycle.rs`（✅ **P1 已落地**：三层对象模型的决策内核，sans-io）、`crates/plugin/src/manager.rs`、`sidecar/manager.rs`（I/O 层待接）、`sidecar/health_checker.rs`（0 字节，待填） |
 | 传输与帧 | `crates/plugin/src/sidecar/proto.rs`（✅ **P1 已落地**：帧编解码 + 增量解码器 + async 流读写 + 版本闸 + 内联阈值 + 错误码表）；`client.rs` 仍是 HTTP/端口，P1 换成走 proto 的 stdio 客户端 |
 | RPC 方法表 | `crates/plugin/src/sidecar/*`（+ `jsonrpsee-core` 的 `RpcModule`/`Methods`） |
 | 驱动桥（v2 trait） | `crates/plugin/src/sidecar/driver.rs`（**P1 新建**；旧 HTTP 版已于 P0 删除，见 §1.2） |
@@ -770,7 +770,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议层 + 附件语义已落地） | `sidecar/proto.rs`：帧（4B 大端长度 + 1B kind）/ 增量解码器 / `read_frame`+`write_frame`（async，短读与“先校验再分配”都有单测）/ 版本闸 / 内联阈值 / 错误码表。`sidecar/router.rs`：附件语义两个方向（`Router` + `encode_response_with_arrow`）+ 错位上报 + 断线交还 + 往返测试。`cargo test -p rds-plugin` 49/49（新增 30 条）。待办：三层对象模型 · 拿 PostgreSQL 包一层做靶子 · `SidecarManager` 补 `current_dir`/日志/进程组回收 · 把 `client.rs` 从 HTTP 换成走 proto 的 stdio 客户端 |
+| P1 | 🟡 进行中（协议 / 附件 / 生命周期决策内核已落地） | `sidecar/proto.rs`：帧（4B 大端长度 + 1B kind）/ 增量解码器 / `read_frame`+`write_frame`（async）/ 版本闸 / 内联阈值 / 错误码表。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 往返测试。`sidecar/lifecycle.rs`：三层对象模型的**决策内核**（进程按 plugin_id 去重 / `max_instances` / serial 排队与上限 / ping 连续 2 次判死 / 空闲 30min 回收 / 崩溃**不静默重连**）。`cargo test -p rds-plugin` 64/64（新增 45 条）。待办：把决策内核接到 I/O（`SidecarManager` 补 `current_dir`/日志/进程组回收）· 拿 PostgreSQL 包一层做靶子 · 把 `client.rs` 从 HTTP 换成走 proto 的 stdio 客户端 |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
