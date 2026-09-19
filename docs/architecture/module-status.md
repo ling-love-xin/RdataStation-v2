@@ -131,7 +131,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | M1 项目管理 | `project` | ✅ | 项目目录移动 · 提升 / 快照（窗口退出草稿兜底已于 2026-09-19 补：`on_window_should_close` → 会话批量落库） |
 | M2 双引擎底座 | `engine` | ✅ | 缓存层与持久化层**仍有零调用项**（权威清单见 [`data-layer-wiring-matrix.md`](data-layer-wiring-matrix.md) §2.2 / §7；本轮已处置约 4.3k 行，见其 §6）· 增量同步未接 |
 | M3 数据源连接 | `connection` | ✅ | SSH 主机密钥默认放行 · Secret 无门控不清理 |
-| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表 · PG 跨库浏览（**内容档不在本模块**：导航面板搜索框只有名称档，全文走 Quick Open 的 `#`） |
+| M4 数据源管理 / 导航 | `database` | ✅ | 虚拟列表（**实施规格已就绪**：`database/database-nav-dev-plan.md` §2.5）· PG 跨库浏览（**内容档不在本模块**：导航面板搜索框只有名称档，全文走 Quick Open 的 `#`） |
 | M5 草稿箱 | `scratchpad` | ✅ | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
 | M6 资产库 / 分析存档 | `analytics_resource` | ✅ | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
 | M7 Mock 造数 | `mock` | ✅ | 出口不可取消 · 大导出非流式 · 并发生成 |

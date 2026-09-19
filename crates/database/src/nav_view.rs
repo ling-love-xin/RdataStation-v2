@@ -5735,6 +5735,7 @@ mod tests {
 
         pub(super) struct StubNavHost {
             connected: RefCell<HashSet<String>>,
+            connections: Vec<ConnectionItem>,
         }
 
         impl StubNavHost {
@@ -5743,13 +5744,27 @@ mod tests {
                 set.insert(conn_id.to_string());
                 Self {
                     connected: RefCell::new(set),
+                    connections: vec![ConnectionItem {
+                        id: conn_id.to_string(),
+                        name: conn_id.to_string(),
+                        driver: "sqlite".to_string(),
+                        connected: true,
+                        host: None,
+                        port: None,
+                        database: None,
+                        schema: None,
+                        description: None,
+                        use_duckdb_fed: false,
+                        created_at: String::new(),
+                        updated_at: String::new(),
+                    }],
                 }
             }
         }
 
         impl NavHost for StubNavHost {
             fn connections(&self) -> Vec<ConnectionItem> {
-                Vec::new()
+                self.connections.clone()
             }
             fn selected_index(&self) -> Option<usize> {
                 None
@@ -5918,6 +5933,74 @@ mod tests {
 
     /// 空实现：窗口级用例不靠渲染断言，只需要窗口存在（焦点与实体生命周期）。
     fn window_draw(_cx: &mut gpui_kit::App) {}
+
+    /// 重画一帧（窗口测试里推进 render）。
+    fn redraw(cx: &mut gpui_kit::VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// 当前渲染出的**可见行顺序**（渲染期累积的键盘导航序列，与视口无关）。
+    fn visible_keys(view: &super::NavView) -> Vec<String> {
+        view.nav_order
+            .borrow()
+            .iter()
+            .map(|item| item.key.clone())
+            .collect()
+    }
+
+    /// 契约（虚拟列表重构的安全网）：展开态决定**哪些行可见**，顺序 = 父在前、子随后。
+    ///
+    /// 虚拟列表只能渲染「一个扁平的可见行序列」；这条用例把今天的序列钉住——
+    /// 重构后 List 的 item 源必须是同一个顺序（否则展开语义与键盘导航一起变）。
+    #[gpui_kit::test]
+    fn visible_rows_follow_expansion_parent_before_child(cx: &mut gpui_kit::TestAppContext) {
+        let conn = "G_1";
+        let (view, cx) = open_nav_view(cx, conn);
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![
+                    table_node(conn, "shop", "public", "customers"),
+                    table_node(conn, "shop", "public", "orders"),
+                ],
+                None,
+            );
+            // 连接未展开：只有连接行本身可见（我们播种的 catalog/schema 都还没展开）
+            view.read(cx).nav.borrow_mut().expanded.clear();
+        });
+        redraw(cx);
+        assert_eq!(
+            cx.update(|_window, cx| visible_keys(&view.read(cx))),
+            vec![conn.to_string()],
+            "未展开时只有连接行"
+        );
+
+        // 展开连接 → catalog 行；再依次展开 catalog / schema / 表文件夹 → 对象行
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                for key in [conn, "G_1/shop", "G_1/shop/public", "G_1/shop/public/tables"] {
+                    view.nav.borrow_mut().expanded.insert(key.to_string());
+                }
+                cx.notify();
+            });
+        });
+        redraw(cx);
+        assert_eq!(
+            cx.update(|_window, cx| visible_keys(&view.read(cx))),
+            ids(&[
+                "G_1",
+                "G_1/shop",
+                "G_1/shop/public",
+                "G_1/shop/public/tables",
+                "G_1/shop/public/customers",
+                "G_1/shop/public/orders",
+            ]),
+            "父在前、子随后，且叶子按已加载顺序"
+        );
+    }
 
     /// 窗口级：`reveal_ref` 把链路**逐层展开**并选中目标，且收尾干净。
     #[gpui_kit::test]

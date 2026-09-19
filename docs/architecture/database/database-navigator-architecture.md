@@ -384,6 +384,7 @@ flowchart TD
 | 21 | ⬜ | C8 身份指纹未接线 | `engine::persistence::metadata_identity` 纯函数已就绪但未接线；因此同库 / 同文件的多条连接（包括别名后）仍各存一份 L2。 |
 | 22 | ✅ | 组内「未排按名称」只在渲染侧 | 已做（2026-09-16）：成员序号加**未手动排序哨兵** `MEMBER_ORDER_UNSET = -1`（迁移 022 按「组内序号全同 = 从未手动排序」归一存量数据）；`list_group_members_detailed` 暴露「已排 / 未排」分区；视图纯函数 `nav_order_members` 把未排段按名称升序。分组之间本就用 `sort_order, name` 排序，无需改。 |
 | 23 | 🟡 | **搜索结果「在树中定位」** | 已接（2026-09-19）：**两个入口**——导航搜索结果行的「定位」与 **Quick Open 命中行的 `⌥↵`**（`QuickOpenLocate` 动作 → `Shared::request_reveal` → 侧栏 render 消费 → `NavView::reveal_ref`）；两者共用 `RevealTarget::from_ref` 一处映射，展开 连接 → catalog → schema → 文件夹（列再多展开一层表）并选中目标；**大 schema 走「位次 → 那一页」**（`MetadataCacheOps::get_object_position` + `nav_jobs::enqueue_locate_page`），窗顶显示「已定位到第 N 条 · 点此回到开头」（定位窗口里不摆「加载更多」，因为那时的行集是一窗不是前缀）。不可定位 / 索引里没有 / 链路报错都**当场一句可读说明**，不悬着。**遗留**：① **视觉上的「滚到眼前」仍缺**：导航树是自绘递归（不是 `List`），没有可编程滚动入口——选中与渲染窗口已由 3 条窗口级测试钉住，但「目标出现在可视区」需要先有虚拟列表或树内滚动定位；② 导航结果行的「定位」按钮点击路径未模拟鼠标（窗口测试直接调 `reveal_ref` 与 `⌥↵` 动作）。 |
+| 24 | ⬜ | **导航树虚拟列表（十万行同屏 + 定位最后一跳）** | 今天靠「首屏 200 + 加载更多」限流，不是虚拟滚动。**实施规格已就绪**：`database-nav-dev-plan.md` **§2.5**（已就绪三块 + 五步 S1–S5 + 风险对策）；安全网窗口测试已补 `nav_view::tests::visible_rows_follow_expansion_parent_before_child`。 |
 
 ---
 

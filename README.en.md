@@ -437,7 +437,7 @@ This project **labels what it has not done yet**, ordered here by how close each
 - **Editor analysis units (Phase 1c, deferred)**: making analysis mode a notebook-style collection of units, sessions, and outputs.
 - **Full-text metadata search**: **wired** (name tier on `metadata_index` with infix matching; content tier on `metadata_fts` using trigram, covering comments and data types, via Quick Open's `#` mode with a 3-character minimum). **Still missing**: view / routine definition text is not in the FTS corpus.
 - **Locating a search hit in the tree**: **both entry points are wired** — the "locate" action on a navigation search result, and `⌥↵` on a Quick Open metadata hit (both expand the chain and select the node; large schemas jump straight to the target's page). The state machine is **pinned by 3 window-level tests** (expand + select + render window + honest failure notes). **Still missing**: actually scrolling the target into view — the tree is a hand-rolled recursive render (not a `List`), so there is no programmatic scroll entry point.
-- **Virtual list for the navigation tree**: today the row count is bounded by paging (one page plus "load more"); 100k rows on screen is not yet verified.
+- **Virtual list for the navigation tree**: today the row count is bounded by paging (one page plus "load more"); 100k rows on screen is not yet verified. **Implementation spec is ready** (`docs/architecture/database/database-nav-dev-plan.md` §2.5: the flattened row sequence already exists, `ListDelegate::scroll_to_item` capability verified, five steps S1–S5).
 - **Federation L3 bridge**: pulling rows into temp tables to bring in sources that have no scanner.
 
 **Medium term**
