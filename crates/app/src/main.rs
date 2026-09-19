@@ -34,6 +34,9 @@ use workbench::commands::{
 };
 
 fn main() {
+    // 0. panic 落盘：真机 GUI 崩溃（尤其 `0xc0000409` 这类 fastfail）在终端之外什么都不留，
+    //    事后只能靠“点了就没了”发梦。先装钩子，后面任何 panic 都有消息 + 回溯可查。
+    install_panic_logger();
     // 0. 运行时数据根（设计见 docs/architecture/runtime/data-paths.md）：
     //    把进程的 TEMP / TMP / TMPDIR 指到 <RDS_HOME>/tmp。只改这一处，
     //    所有 `std::env::temp_dir()` 调用点（DuckDB spill / 联邦临时库 / 各处 scratch）
@@ -60,15 +63,57 @@ fn main() {
     // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
     // 构建下递归较深，会在运行期以 `thread 'main' has overflowed its stack` 崩溃
     // （窗口短暂出现后消失／点入口无反应）。把应用主循环放到专用大栈线程执行。
+    //
+    // `RDS_UI_STACK_MB` 可覆盖（诊断用）：真机“点一下就崩”时，先用它验证
+    // “是不是栈不够”（调大就好 = 深度问题；调大照样崩 = 递归/其它原因），
+    // 改一行环境变量即可，不必重编。
+    let stack_mb = std::env::var("RDS_UI_STACK_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|mb| *mb >= 16)
+        .unwrap_or(64);
     let handle = std::thread::Builder::new()
         .name("rds-app-main".to_string())
-        .stack_size(64 * 1024 * 1024)
+        .stack_size(stack_mb * 1024 * 1024)
         .spawn(run_app)
         .expect("failed to spawn app main thread");
     if let Err(e) = handle.join() {
         eprintln!("[startup] 应用主线程异常退出: {e:?}");
         std::process::exit(1);
     }
+}
+
+/// 把 panic 消息 + 回溯落到 `<RDS_HOME>/logs/panic-<unix时间>.log`。
+///
+/// 为何需要：GUI 进程被点着把窗口关掉时，终端里那一屏 panic 很容易随会话一起丢；
+/// 而 `0xc0000409`（fastfail）连“进程退出原因”都不给。落一份磁盘日志，
+/// 用户只要复现一次，开发者就能直接拿到栈（本仓已有这个口径：真机报错要能附日志）。
+///
+/// 失败不阻断（best-effort）：写日志本身出错时只往 stderr 说一句，不能因为写日志
+/// 而把原本的 panic 信息也弄丢。
+fn install_panic_logger() {
+    // 保留默认输出（stderr）：终端里仍然能看到熟悉的 panic 段。
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        let dir = paths::home().join("logs");
+        let body = format!(
+            "thread: {}\n{info}\n\n{}",
+            std::thread::current().name().unwrap_or("<unnamed>"),
+            std::backtrace::Backtrace::force_capture(),
+        );
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("[panic] 建日志目录失败（只走 stderr）: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::write(dir.join(format!("panic-{secs}.log")), body) {
+            eprintln!("[panic] 写 panic 日志失败（只走 stderr）: {e}");
+        }
+    }));
 }
 
 /// 应用主循环（运行于大栈线程，见 `main`）。
