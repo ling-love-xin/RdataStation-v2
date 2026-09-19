@@ -12,6 +12,7 @@ pub mod health_checker;
 pub mod hot_reload_manager;
 pub mod lifecycle;
 pub mod manager;
+pub mod process;
 pub mod proto;
 pub mod router;
 

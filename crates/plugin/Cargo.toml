@@ -7,6 +7,8 @@ description = "M9 插件系统：Sidecar / WASM 运行时的数据库与分析�
 [dependencies]
 engine.workspace = true
 shared.workspace = true
+# 运行时数据路径唯一解析点（sidecar 的工作目录 / 日志 / 私有数据目录都从这里取）
+paths.workspace = true
 
 # ===== Async 运行时 =====
 tokio.workspace = true
@@ -33,3 +35,10 @@ toml.workspace = true
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }
+
+# 测试用 sidecar 靶子（真实进程边界上的端到端测试；见 tests/spawn_real_process.rs）。
+# 放在 tests/ 下并显式声明路径：它**不是产品组件**，不该被当成要打包的二进制。
+# 它故意不复用本 crate 的帧编解码 —— 两侧共一份实现，格式错得一致就测不出来。
+[[bin]]
+name = "rds-sidecar-fixture"
+path = "tests/fixture/sidecar.rs"

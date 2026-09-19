@@ -732,8 +732,9 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | --- | --- |
 | 清单与 `[backend]` 段 | `crates/plugin/src/manifest.rs` |
 | 权限与信任（双轨） | `crates/plugin/src/permission.rs` |
-| 生命周期与进程池 | `crates/plugin/src/sidecar/lifecycle.rs`（✅ **P1 已落地**：三层对象模型的决策内核，sans-io）、`crates/plugin/src/manager.rs`、`sidecar/manager.rs`（I/O 层待接）、`sidecar/health_checker.rs`（0 字节，待填） |
-| 传输与帧 | `crates/plugin/src/sidecar/proto.rs`（✅ 帧/增量解码/async 流读写/版本闸/阈值/错误码）+ `crates/plugin/src/sidecar/conn.rs`（✅ 异步客户端：drive 任务 + 在飞表 + 事件通道 + 超时放弃）；`client.rs`（HTTP/端口）是**唯一剩下的旧路径**，等 `manager` 换成 stdio 起进程后删 |
+| 生命周期与进程池 | `crates/plugin/src/sidecar/lifecycle.rs`（✅ **P1 已落地**：三层对象模型的决策内核，sans-io）、`crates/plugin/src/sidecar/process.rs`（✅ **P1 已落地**：起/收真实进程 —— `current_dir` / stderr 日志 / 先关 stdin 再等，不信 EOF 就强杀）、`crates/plugin/src/manager.rs`、`sidecar/health_checker.rs`（0 字节，待填） |
+| 传输与帧 | `crates/plugin/src/sidecar/proto.rs`（✅ 帧/增量解码/async 流读写/版本闸/阈值/错误码）+ `crates/plugin/src/sidecar/conn.rs`（✅ 异步客户端：drive 任务 + 在飞表 + 事件通道 + 超时放弃）+ `crates/plugin/src/sidecar/process.rs`（✅ 三管道接入连接）；`client.rs` 与旧 `sidecar/manager.rs`（HTTP/端口 + 读端口号）是**仅剩的旧路径**，等 `Registry → Action` 的执行器接上 I/O 后一并删 |
+| 真实进程验收 | `crates/plugin/tests/fixture/sidecar.rs`（`[[bin]] rds-sidecar-fixture`：**独立实现**一遍帧编解码的测试对端）+ `crates/plugin/tests/spawn_real_process.rs`（8 条集成测试：起收摊 / 超时不断连 / 崩溃交还 + 退出码 / 未调用也发现它死 / 强杀兜底 / stderr 落盘） |
 | RPC 方法表 | `crates/plugin/src/sidecar/*`（+ `jsonrpsee-core` 的 `RpcModule`/`Methods`） |
 | 驱动桥（v2 trait） | `crates/plugin/src/sidecar/driver.rs`（**P1 新建**；旧 HTTP 版已于 P0 删除，见 §1.2） |
 | 能力矩阵 | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY`）+ 新增 `DriverCapability` |
@@ -770,7 +771,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | Phase | 状态 | 数字 / 证据 |
 | --- | --- | --- |
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
-| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端四块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`cargo test -p rds-plugin` 76/76（P1 新增 57 条）。待办：把决策内核接到 I/O（`SidecarManager` 补 `current_dir`/日志/进程组回收）· 拿 PostgreSQL 包一层做靶子 · 删 `client.rs`（HTTP 旧路径） |
+| P1 | 🟡 进行中（协议 / 附件 / 生命周期 / 异步客户端 / 进程层五块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`cargo test -p rds-plugin` 81/81 + 集成 8/8（P1 新增 62 条单测 + 8 条真进程集成测试）。待办：把决策内核接到 I/O（`Registry → Action` 执行器）· 清单 `[backend]` 段 · 拿 PostgreSQL 包一层做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 旧路径） |
 | P2 | ⬜ 未开始 | — |
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |

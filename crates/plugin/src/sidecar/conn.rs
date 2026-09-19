@@ -98,7 +98,8 @@ pub enum ConnEvent {
     Notification { method: String, params: Value },
     /// 流层面的不对：错位、未知种类、超时后迟到的响应……
     Issue { detail: String },
-    /// 连接断开（在飞调用会各自收到 [`CallError::Disconnected`]）。
+    /// 连接断开（对端断开时在飞调用各自收到带理由的 [`CallError::Disconnected`]；
+    /// 本地主动收摊则是 [`CallError::Closed`] —— 两者不该混为一谈）。
     Disconnected {
         reason: String,
         abandoned_ids: Vec<u64>,
@@ -310,7 +311,8 @@ async fn driver_loop<W>(
                         if let Some(reply) = pending.remove(&id) {
                             let _ = reply.send(Err(CallError::Frame { detail: reason.clone() }));
                         }
-                        close(&mut pending, &event_tx, reason, CallError::Closed);
+                        let error = CallError::Disconnected { reason: reason.clone() };
+                        close(&mut pending, &mut cmd_rx, &event_tx, reason, error, false);
                         return;
                     }
                 }
@@ -320,7 +322,15 @@ async fn driver_loop<W>(
                     router.abandon(id);
                 }
                 Some(DriverCommand::Shutdown) | None => {
-                    close(&mut pending, &event_tx, "本地主动关闭".to_string(), CallError::Closed);
+                    // 本地主动要的收摊：调用方拿 `Closed`（不是「对端没了」）
+                    close(
+                        &mut pending,
+                        &mut cmd_rx,
+                        &event_tx,
+                        "本地主动关闭".to_string(),
+                        CallError::Closed,
+                        false,
+                    );
                     return;
                 }
             },
@@ -329,22 +339,26 @@ async fn driver_loop<W>(
             incoming = frame_rx.recv() => match incoming {
                 Some(Ok(frame)) => {
                     if !dispatch(router.on_frame(frame), &mut pending, &event_tx) {
+                        // Router 已经报过断开（且带着它在飞的那些 id），这里不重复发第二条
                         let reason = "对端断开".to_string();
-                        close(&mut pending, &event_tx, reason, CallError::Closed);
+                        let error = CallError::Disconnected { reason: reason.clone() };
+                        close(&mut pending, &mut cmd_rx, &event_tx, reason, error, true);
                         return;
                     }
                 }
                 Some(Err(e)) => {
                     let reason = e.to_string();
                     // 先让 Router 把在飞的（含扣着附件的）逐个交还
-                    dispatch(router.on_disconnected(&reason), &mut pending, &event_tx);
-                    close(&mut pending, &event_tx, reason, CallError::Closed);
+                    let announced = !dispatch(router.on_disconnected(&reason), &mut pending, &event_tx);
+                    let error = CallError::Disconnected { reason: reason.clone() };
+                    close(&mut pending, &mut cmd_rx, &event_tx, reason, error, announced);
                     return;
                 }
                 None => {
                     let reason = "读侧结束".to_string();
-                    dispatch(router.on_disconnected(&reason), &mut pending, &event_tx);
-                    close(&mut pending, &event_tx, reason, CallError::Closed);
+                    let announced = !dispatch(router.on_disconnected(&reason), &mut pending, &event_tx);
+                    let error = CallError::Disconnected { reason: reason.clone() };
+                    close(&mut pending, &mut cmd_rx, &event_tx, reason, error, announced);
                     return;
                 }
             },
@@ -419,19 +433,37 @@ fn dispatch(
 }
 
 /// 收摊：把还在等的调用逐个失败掉（**一个都不能留下**，否则调用方永远挂在那儿）。
+///
+/// 三处细节都是被测试逼出来的：
+///
+/// 1. **排队中、还没被取走的调用也要交代** —— 只清 `pending` 的话，它们看到的是 reply
+///    被丢掉（`Closed` 什么都不说），而「为什么没了」正是调用方最需要知道的。
+/// 2. `error` 由调用方给：对端断开是 [`CallError::Disconnected`]（带理由），本地主动
+///    收摊是 [`CallError::Closed`]（不是对端的问题）。
+/// 3. `announced` = 断开这件事是否已由 `Router` 报过（它报的那一条还带着自己知道的
+///    在飞 id，信息更全），报过就不重复发第二条。
 fn close(
     pending: &mut Pending,
+    cmd_rx: &mut mpsc::Receiver<DriverCommand>,
     event_tx: &mpsc::UnboundedSender<ConnEvent>,
     reason: String,
     error: CallError,
+    announced: bool,
 ) {
     for (_, reply) in pending.drain() {
         let _ = reply.send(Err(error.clone()));
     }
-    let _ = event_tx.send(ConnEvent::Disconnected {
-        reason,
-        abandoned_ids: Vec::new(),
-    });
+    while let Ok(command) = cmd_rx.try_recv() {
+        if let DriverCommand::Call { reply, .. } = command {
+            let _ = reply.send(Err(error.clone()));
+        }
+    }
+    if !announced {
+        let _ = event_tx.send(ConnEvent::Disconnected {
+            reason,
+            abandoned_ids: Vec::new(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -439,7 +471,6 @@ mod tests {
     use super::*;
     use crate::sidecar::proto::FrameKind;
     use crate::sidecar::router::encode_response_with_arrow;
-    use tokio::io::{AsyncRead, AsyncWrite};
 
     fn reply_frame(id: u64, result: Value) -> Frame {
         Frame::json(
@@ -676,8 +707,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, CallError::Disconnected { .. } | CallError::Closed),
-            "对端退出应立刻失败，而不是等到超时：{err:?}"
+            matches!(err, CallError::Disconnected { .. }),
+            "对端退出应立刻失败，**而且要带理由**：{err:?}"
         );
 
         let event = events.recv().await.expect("应有断线事件");
@@ -745,8 +776,8 @@ mod tests {
 
         let err = calling.await.expect("任务应结束").unwrap_err();
         assert!(
-            matches!(err, CallError::Closed | CallError::Disconnected { .. }),
-            "{err:?}"
+            matches!(err, CallError::Closed),
+            "本地主动收摊是对端无关的 Closed：{err:?}"
         );
 
         let mut saw_disconnect = false;
@@ -761,5 +792,57 @@ mod tests {
             }
         }
         assert!(saw_disconnect, "关闭时应有断线事件");
+    }
+
+    /// 断在「命令还排在通道里」的时候：**还没被取走**的调用也要拿到带理由的失败，
+    /// 不能只看到 reply 被丢掉（`Closed` 什么都不说）。
+    #[tokio::test]
+    async fn calls_still_queued_when_the_link_dies_are_told_why() {
+        // 管道故意给得很小：第一条调用会把 driver 任务堵在「写」上，后面的只能在通道里排队
+        let (host, peer) = tokio::io::duplex(64);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, _events) = SidecarConn::spawn(host_r, host_w);
+        let conn = std::sync::Arc::new(conn);
+
+        let blocked = {
+            let conn = conn.clone();
+            tokio::spawn(async move {
+                conn.call(
+                    "blocked",
+                    json!({ "pad": "x".repeat(512) }),
+                    Duration::from_secs(30),
+                )
+                .await
+            })
+        };
+        // 等它真的开始写（duplex 只有 64 字节缓冲，这一帧写不进去）
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
+        let queued: Vec<_> = (0..3)
+            .map(|i| {
+                let conn = conn.clone();
+                tokio::spawn(async move {
+                    conn.call(&format!("queued-{i}"), json!({}), Duration::from_secs(30))
+                        .await
+                })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
+        // 对端整个消失：被堵住的那条写失败，排队的那几条还没轮到
+        drop(peer);
+
+        let first = blocked.await.expect("任务应结束").unwrap_err();
+        assert!(
+            matches!(first, CallError::Frame { .. }),
+            "堵在写上的那条是写失败：{first:?}"
+        );
+        for task in queued {
+            let err = task.await.expect("任务应结束").unwrap_err();
+            assert!(
+                matches!(err, CallError::Disconnected { .. }),
+                "排队中的那些要知道为什么：{err:?}"
+            );
+        }
     }
 }

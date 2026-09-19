@@ -177,7 +177,7 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 | 插件发现目录 | `./plugins`（**相对当前工作目录**）+ `~/.rdatastation/plugins` | `engine/src/driver/loader.rs:135`；前者随启动目录漂移，后者写 C 盘；且 `~/.rdatastation` 小写风格与现有 `RdataStation` 不一致 |
 | 插件注册表 | `global.sqlite` 的 `plugins` 表（`manifest_json` 等；`plugin_store` 只是 Rust 模块名） | ✅ 随 `RDS_HOME` 自动迁移 |
 | WASM 运行时 | extism 1.30（wasmtime）；`wasm/plugin_manager.rs` **未见** cache/data 目录配置 | wasmtime 编译缓存可能落 C 盘（如 `~/.cache`）；需显式指向插件缓存目录 |
-| Sidecar 插件 | `sidecar/manager.rs`：`Command::new` 起独立进程，**从 stdout 读端口号** | ① **真实占用本地端口**（需保留段 + 冲突重试 + 退出回收）；② 未设子进程 `current_dir`、日志与临时目录；③ 子进程崩溃/残留需清理 |
+| Sidecar 插件 | `sidecar/manager.rs`：`Command::new` 起独立进程，**从 stdout 读端口号** | ① **真实占用本地端口**（需保留段 + 冲突重试 + 退出回收）；② 未设子进程 `current_dir`、日志与临时目录；③ 子进程崩溃/残留需清理 —— ①②已由 P1 的 `sidecar/process.rs` 解决（**stdio 分帧，不再占端口**），旧 `manager.rs` 待删 |
 | 权限模型 | `permission.rs`（P0 后四轨：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨） | 插件可申请的**路径权限**必须与“只能写自己目录”的约束一致，否则插件能绕开本设计写 C 盘 |
 | 文档 | ✅ **已有**：`../plugin/` 五件（入口 / 架构 / 开发方案 / 原型设计 / 使用手册）+ 5 张可交互原型 | —（原“docs/ 下无插件架构文档”已失效） |
 
@@ -199,8 +199,11 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 2. `plugin_dirs` 改为 `paths::plugins_dir()`：去掉 `./plugins` 的 CWD 依赖，去掉 `~/.rdatastation`；
    如需支持“随身插件目录”（绿色版），另给 `RDS_PLUGIN_DIRS` 覆盖。
 3. extism/wasmtime 显式配置 cache 目录 → `plugin-cache/<id>/`（避免写 `~/.cache`）。
-4. sidecar：`Command::current_dir(paths::sidecar_work_dir(id))`、stdout/stderr 落
-   `plugin-cache/<id>/sidecar.log`、端口从**保留段**（建议 41000–41999）分配并在超时/子进程退出时回收。
+4. sidecar：`Command::current_dir(paths::sidecar_work_dir(id))`、stderr 落
+   `plugin-cache/<id>/sidecar.log`（**stdout 是协议通道，不进日志**）。
+   **不再有端口**：传输改成 stdio 二进制分帧（`../plugin/plugin-dev-plan.md` §4.2.1），
+   子进程靠「宿主持有 stdin 管道、见 EOF 即退」自收场，无需杀进程组。
+   已落地：`crates/plugin/src/sidecar/process.rs`。
 5. 卸载插件 = 删除 `plugins/<id>`；`plugin-data/<id>` 是否保留由 manifest 声明（默认保留）。
 6. **引擎扩展（DuckDB 扩展）与应用插件分开**：`extensions/` 是 **DuckDB 自己的**扩展目录
    （`extension_directory`，内部再按内核版本分 `v<版本>/`，可离线预置），与应用插件的

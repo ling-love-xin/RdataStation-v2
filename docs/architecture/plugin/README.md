@@ -60,12 +60,14 @@
 | `manifest.rs` / `model.rs` / `permission.rs` | 清单与权限骨架（P0 已扩到**四轨**：`Frontend`/`Wasm` 门控 + `Sidecar`/`Driver` 展示轨，见 `PermissionType::is_gating`）；`plugin-prototype-design.md` §3 是它的**增量扩展**，不是第二份契约 |
 | `plugin_service.rs` | **项目级 6 方法已实现**；表 `project_used_plugins` / `project_plugin_config` 已建（`migrations/project_meta/001_init.sql:112/121`） |
 | `manager.rs` / `loader.rs` / `installer.rs` / `dependency.rs` | 安装与装载骨架 |
-| `sidecar/manager.rs` | 现状是「一 manager 一进程 + 单 `port`」，要演进成 `PluginProcess → DriverInstance → Session` 三层 |
+| `sidecar/manager.rs` | 现状是「一 manager 一进程 + 单 `port`」，要演进成 `PluginProcess → DriverInstance → Session` 三层；**P1 起新路径走 `process.rs`（起/收进程）+ `conn.rs`（通信），它连同 `client.rs` 一并待删** |
 | `sidecar/client.rs` | P0 已修「判成功/失败取反」的 bug（抽成 `parse_rpc_response` + 4 条单测）；但**传输本身仍是 HTTP/端口 + 零鉴权**，与 D5 相反 → P1 换成走 `proto` 的 stdio 客户端 |
 | `sidecar/proto.rs` | ✅ **P1 协议层已落地**：帧（4B 大端长度 + 1B kind，**`total_len` 含头 5 字节**）+ 增量解码器 + `read_frame`/`write_frame`（async，含短读与“先校验再分配”的测试）+ 版本闸 + 内联阈值 + 错误码表；15 条单测 |
 | `sidecar/router.rs` | ✅ **P1 附件语义已落地**：`Router`（消费帧 → 事件：在飞登记 / 扣住未收齐的响应 / 错位上报 / 断线交还）+ `encode_response_with_arrow`（sidecar 侧切帧）；两者互为逆运算，有往返测试；15 条单测 |
 | `sidecar/lifecycle.rs` | ✅ **P1 决策内核已落地**（sans-io，零 I/O）：三层对象模型 `PluginProcess → DriverInstance → Session` 的规则全部在此 —— 进程按 plugin_id 去重、`max_instances`、serial 排队与 `QUEUE_MAX_LEN`、ping 连续 2 次判死、空闲 30min 回收、崩溃**不静默重连**（需手动重启）；15 条单测逐条对应 §4.1 五条规则 |
-| `sidecar/conn.rs` | ✅ **P1 异步客户端已落地**：`SidecarConn::spawn(reader, writer)` 起三个任务（调用方 / driver / 读侧）；**在飞状态只有一份**（Router + id→oneshot 都在 driver 任务）；`call` 带超时且超时后显式 `Abandon`（迟到响应会报成 Issue）；`initialize` 内置版本闸；`shutdown` 只发命令（真正的回收靠“丢写侧 → 对端 EOF 自退”）；12 条单测 |
+| `sidecar/conn.rs` | ✅ **P1 异步客户端已落地**：`SidecarConn::spawn(reader, writer)` 起三个任务（调用方 / driver / 读侧）；**在飞状态只有一份**（Router + id→oneshot 都在 driver 任务）；`call` 带超时且超时后显式 `Abandon`（迟到响应会报成 Issue）；`initialize` 内置版本闸；`shutdown` 只发命令（真正的回收靠“丢写侧 → 对端 EOF 自退”）；11 条单测 |
+| `sidecar/process.rs` | ✅ **P1 进程层已落地**：`SpawnSpec`（程序 / 参数 / 环境 / `current_dir` / 日志，目录一律来自 `paths::*`）+ `SidecarProcess::spawn`（三管道接入 `SidecarConn`，stderr 落 `plugin-cache/<id>/sidecar.log`）+ `retire(grace)`（**先丢连接关 stdin → 对端见 EOF 自退 → 到点强杀**）；id 先过 `validate_plugin_id` 再建目录；4 条单测 |
+| `tests/spawn_real_process.rs` + `tests/fixture/sidecar.rs` | ✅ **P1 真实进程验收的自动化部分**：`[[bin]] rds-sidecar-fixture` 是**独立的**帧编解码对端（两侧不共用实现，见 `dev-plan` §6.1）；8 条集成测试覆盖「起进程 → 握手 → 调用 → 收摊」、超时不断连、崩溃交还在飞调用并给出退出码、**没调用也能发现它死了**、不守 EOF 约定时强杀、stderr 落盘 |
 | `sidecar/{health_checker,hot_reload_manager}.rs` | **0 字节**空文件（P1 健康检查会落在这里） |
 | ~~`sidecar/driver.rs`~~（311 行） | ✅ **P0 删除**：未编译过，且传输假设（HTTP/单端口/JSON 行）与 D5/D4 相反 → 驱动桥 **P1 新建** |
 | ~~`storage.rs`~~（107 行） | ✅ **P0 删除**：未编译、全仓零引用、`flush_to_disk()` 是 TODO 空壳 |
@@ -82,7 +84,7 @@
 3. **两条权限轨语义不通用**：扩展轨（`rds.*` 方法级）与驱动轨（`spawn.child_process` / `net.connect` / `fs.read_plugin_data` / `env.inherit`）**不互相折算**。
 4. **`engines.rds` 必填且不可 `*`**，加载与安装**两处**都要真的拒绝（现状 `check_engine_compatibility` 未被强制）。
 5. **不把 Arrow 塞进 JSON**：不做 base64（+33% 体积、内存双份、不可流式）；正确做法是帧级 `kind` 分流。
-6. **路径统一走 `paths`**：`plugins_dir` / `plugin_data_dir` / `plugin_cache_dir` / `sidecar_work_dir` **尚未存在**，要用先补；注意仓里已有的 `extensions_dir()` 是 **DuckDB 扩展**的目录，别混用。
+6. **路径统一走 `paths`**：`plugins_dir` / `plugin_dir` / `plugin_data_dir` / `plugin_cache_dir` / `sidecar_work_dir` / `plugin_registry_dir` 已于 P0 补齐（含 `validate_plugin_id` 白名单：**id 由第三方清单给，拼路径前必须先校验**）；注意仓里已有的 `extensions_dir()` 是 **DuckDB 扩展**的目录，别混用。
 7. **插件根目录 = `<RDS_HOME>/plugins/`**（不是 `~/.rds/...`；`RDS_HOME` 默认是安装目录，可被环境变量覆盖）。
 8. **`render` 保持纯读**：插件相关状态不得在渲染期做 I/O；宿主渲染插件的面板也必须走既有控件与 token（零裸尺寸/零裸色值）。
 9. **升级纪律**：manifest 里 `gpui-kit` 是 caret，**不要跑裸 `cargo update`**（会静默把整条 UI 栈换代）；要升用 `cargo update -p gpui-kit`，见 `plugin-prototype-design.md` §11.2。
@@ -93,6 +95,10 @@
 # 插件 crate 不在 default-members 里，必须显式 -p
 cargo check -p rds-plugin
 cargo test  -p rds-plugin
+
+# 上面这条会连 tests/spawn_real_process.rs 一起跑：它**真的起进程**
+# （rds-sidecar-fixture，见 §4 表末行），不是 tokio::io::duplex 那种内存对端
+cargo test -p rds-plugin --test spawn_real_process
 
 # 全仓（别名自带 -j 2 与 RUST_MIN_STACK）
 cargo check-all
@@ -108,6 +114,6 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-**P1 进行中**：四块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端，P1 共 57 条新单测）。
-接着要做的：把决策内核接到 I/O（`SidecarManager` 补 `current_dir`/日志/进程组回收）· 拿 PostgreSQL 包一层 sidecar 做靶子 · 删 `client.rs`（HTTP 旧路径）。
+**P1 进行中**：五块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收，P1 共 62 条新单测）+ 真实进程验收的自动化部分（`tests/fixture/` 靶子，8 条集成测试）。
+接着要做的：把决策内核接到 I/O（起/收进程的 `Registry → Action` 执行器 · 日志 · 子进程回收）· 清单 `[backend]` 段（`executable` / `max_instances` / `concurrency` / `protocol`）· 拿 PostgreSQL 包一层 sidecar 做靶子 · 删 `client.rs` 与旧 `manager.rs`（HTTP 路径）。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。
