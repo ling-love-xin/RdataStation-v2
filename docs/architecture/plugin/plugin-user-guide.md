@@ -219,6 +219,8 @@ function deactivate() {}   // 全部挂在 context.subscriptions，无需额外�
 
 sidecar 的代价要提前知道：它**自己拿得到凭据**（安装时明示）、要自己管进程健康、它崩了对应连接就失效。
 
+要动手写一个？见 §2.8（协议要点 + 自检命令 + 五条硬性约定）。
+
 ### 2.6 调试
 
 | 想看什么 | 怎么看 |
@@ -238,6 +240,61 @@ sidecar 的代价要提前知道：它**自己拿得到凭据**（安装时明�
 - [ ] `deactivate()` 能干净释放（订阅全挂 `context.subscriptions`）
 - [ ] 包已签名（Ed25519 + 逐资源 SHA-256），且逐资源校验通过
 - [ ] 面板在**未连接 / 未安装 / 宿主重启**三种降级下都不会让用户看到"空白"或假数据
+
+---
+
+### 2.8 写一个 sidecar 驱动（Go / Python / 任何语言）
+
+sidecar 是**独立进程**：宿主起它、用 stdio 与它说 JSON-RPC + Arrow，它自己去连真库。
+完整协议与理由在 `plugin-dev-plan.md` §4.2；这里只讲**动手要做什么**。
+
+```text
+宿主                              你的 sidecar
+ ├─ stdin  ──帧──▶  initialize / driver.describe / session.open /
+ │                  query.execute / query.fetch / query.cancel / session.close
+ └─ stdout ◀─帧──  响应（结果大时：JSON 头 + 紧跟 N 个 Arrow IPC 帧）
+    stderr ──▶   plugin-cache/<id>/sidecar.log（宿主替你落盘）
+```
+
+帧格式（5 字节头，`total_len` **含头**）：
+
+```text
+[u32 大端 total_len][u8 kind][payload]
+  kind 0x01 = JSON-RPC 2.0 消息（UTF-8）
+  kind 0x02 = Arrow IPC stream 分片
+```
+
+**必须守住的五条**（每条都有对应的自动检查）：
+
+1. `initialize` 里 `protocol` 报 `1` —— 不一致宿主**当场拒绝加载**；
+2. `driver.describe` 给得出 `display_name` 与 `capabilities`（**没说的一律按不支持**）；
+3. 超过 200 行（或 256 KiB）的结果**走 Arrow 附件**：JSON 头里写
+   `attachments:[{id:0,kind:"arrow-ipc-stream",frames:N}]`，随后紧跟 N 个 `0x02` 帧；
+4. `query.cancel` 要**真的中断**在跑的那条查询，让它以 `-32004` 收场；
+5. **stdin 见 EOF 立即退出** —— 宿主死了就自己收场。宿主不依赖平台相关的杀进程组，
+   就靠这一条；不守它，用户机器上会留后台进程。
+
+Arrow 的兼容子集（§4.2.4）：little-endian、`LargeUtf8`/`LargeBinary`（64 位 offset）、
+时间归一化到 `Timestamp(us, UTC)`、每页一条**自洽** stream（自带 schema）、类型映射写在
+field metadata 的 `rds.*` 键上（`rds.type_raw` / `rds.canonical` / `rds.nullable` / `rds.format`）。
+
+小结果**可以内联**（≤200 行且 ≤256 KiB）：JSON 头里给 `rows: [{"列名": 值}, …]` ——
+**对象，不是位置数组**。内联只是线格式，宿主对两种承载方式一视同仁。
+
+自检（同一个二进制，换 `RDS_SIDECAR_BIN` 就跑你的）：
+
+```sh
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+
+RDS_SIDECAR_BIN=./your-sidecar RDS_SIDECAR_DRIVER=postgres \
+RDS_SIDECAR_PARAMS='{"host":"127.0.0.1","port":5432,"database":"demo","username":"me","password":"…"}' \
+RDS_SIDECAR_SQL_BIG='select * from generate_series(1, 3000)' \
+RDS_SIDECAR_SQL_SLOW='select pg_sleep(5)' \
+cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
+```
+
+跑通那五条 = P1 的退出标准（能连 → 3000 行 Arrow → 能取消 → 无孤儿进程）。
+清单怎么写（`[backend]` + `[[contributes.drivers]]`）见 §2.2 与 `plugin-dev-plan.md` §4.3。
 
 ---
 
