@@ -222,6 +222,15 @@ enum Job {
     TagList(TagListJob),
     TagAction(TagActionJob),
     GroupAction(GroupActionJob),
+    Rename(RenameJob),
+}
+
+/// 改显示名（不需要对话框取数：目标与当前名字都在事件路径上拿到）。
+struct RenameJob {
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    name: String,
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -246,6 +255,8 @@ pub enum OpOutcome {
         version: i32,
         open_after: bool,
     },
+    /// 已重命名：显示名（新）——回执只说结果，旧名由事件路径从面板快照取。
+    Renamed { name: String },
     /// 已撤销归档：显示名（本体已回原位）。
     Undone { name: String },
     /// 已移入回收站：显示名列表（多条时文案只说数量）。
@@ -410,8 +421,40 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 // 分组改的是分区与行的归属：重取主列表就够了（字典也在快照里）。
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
+            Job::Rename(job) => {
+                let outcome = rt.block_on(run_rename(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 改的是行上的显示名（排序也看它）：重取主列表。
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
         }
         jobs().pending.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 改一条存档的显示名（工作线程上执行）。
+///
+/// 走 `rename_resource`（不是 `update_resource`）：**只改名字**，不涨版本、不写版本快照
+/// ——改名不是内容变更（见 `resource.rs::rename_resource` 的注释）。
+async fn run_rename(job: &RenameJob) -> OpOutcome {
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "重命名",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+    match store.rename_resource(&job.resource_id, &job.name).await {
+        Ok(resource) => OpOutcome::Renamed {
+            name: resource.name,
+        },
+        Err(error) => OpOutcome::Failed {
+            action: "重命名",
+            reason: error.to_string(),
+        },
     }
 }
 
@@ -1427,6 +1470,19 @@ pub fn enqueue_group_action(project_root: PathBuf, read_only: bool, action: Grou
         project_root,
         read_only,
         action,
+    }));
+}
+
+/// 提交一次改名（**事件路径**调用：重命名对话框提交）。
+///
+/// 不需要取数作业：目标是**已存在**的那一条，新名字就是用户在对话框里填的。
+pub fn enqueue_rename(project_root: PathBuf, read_only: bool, resource_id: String, name: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Rename(RenameJob {
+        project_root,
+        read_only,
+        resource_id,
+        name,
     }));
 }
 

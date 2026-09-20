@@ -100,7 +100,7 @@ pub fn open_group_name_dialog(
 
         dialog
             .title(title)
-            .w(cx.theme().font_size * ui::GROUP_DIALOG_WIDTH)
+            .w(cx.theme().font_size * ui::NAME_DIALOG_WIDTH)
             .child(body)
             .footer(
                 DialogFooter::new()

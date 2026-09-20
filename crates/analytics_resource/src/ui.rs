@@ -74,7 +74,9 @@ pub const TRASH_COL_SIZE: f32 = 4.0;
 pub const TRASH_COL_ACTION: f32 = 9.0;
 /// 标签对话框宽（26.0rem = 416px；表单型小对话框：列表 + 一个输入行）。
 pub const TAG_DIALOG_WIDTH: f32 = 26.0;
-/// 分组名对话框宽（24.0rem = 384px；只有一个输入框）。
-pub const GROUP_DIALOG_WIDTH: f32 = 24.0;
+/// 「只改一个名字」的小对话框宽（24.0rem = 384px）：分组名（新建 / 重命名）与存档**重命名**
+/// 同一形状（一个输入框 + 一行提示），所以共用一个常量——两处各写一份就会长出两个同值常量，
+/// 而“同一形状两个值”迟早会漂。
+pub const NAME_DIALOG_WIDTH: f32 = 24.0;
 /// 标签列表最大高度（16.0rem = 256px）：标签可能几十个，靠滚动而不是加高对话框。
 pub const TAG_LIST_MAX_HEIGHT: f32 = 16.0;

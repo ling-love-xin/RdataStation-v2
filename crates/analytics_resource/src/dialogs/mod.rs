@@ -1,4 +1,4 @@
-//! M6 对话框（归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签）。
+//! M6 对话框（归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组 / 重命名）。
 //!
 //! 分工与面板一致：**表单状态、校验与渲染在 crate 内，执行与窗口能力归宿主**——
 //! `on_submit` 由宿主注入（照 `group_form_dialog` 的形状），crate 不认识
@@ -16,6 +16,7 @@ pub mod checkout;
 pub mod group;
 pub mod index_repair;
 pub mod pick;
+pub mod rename;
 pub mod tag;
 pub mod trash;
 pub mod version;

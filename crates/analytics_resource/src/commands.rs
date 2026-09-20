@@ -9,8 +9,7 @@
 //!
 //! 不在本文件的键：行漫游（`↑↓`）由列表组件自己的选中通道处理，打开（`Enter`）走列表的
 //! 确认通道（`ArchiveListDelegate::confirm`）——行的**鼠标**点击（选中 / 多选 / 双击打开）
-//! 由行自己接管（组件默认把单击也接到确认上，与原型不符，见 `classify_row_click`）；
-//! `F2` 重命名待重命名入口（Phase 2）。
+//! 由行自己接管（组件默认把单击也接到确认上，与原型不符，见 `classify_row_click`）。
 
 use gpui_kit::*;
 
@@ -27,6 +26,8 @@ actions!(
         DeleteSelected,
         /// 全选当前可见行（`Ctrl+A`；分组未落，即全部可见行）。
         SelectAllRows,
+        /// 重命名当前选中存档的**显示名**（`F2`；不重命名文件，见原型 §1 原则 2）。
+        RenameSelected,
         /// 聚焦工具栏搜索框（`Ctrl+F`）。
         FocusSearch,
         /// 清空搜索词（`Esc`）——只清搜索，不连同种类 / 只看需处理一起清

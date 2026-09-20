@@ -521,6 +521,8 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Undone { name } => {
                 format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
+            // 改名：只说结果（旧名用户刚在对话框里看过，回执里再抄一遍是多话）。
+            resource_jobs::OpOutcome::Renamed { name } => format!("资产库：已改名为「{name}」"),
             // 回收站是项目级的：回执里把“去哪儿找回来”说清，比只说“已移入”有用。
             resource_jobs::OpOutcome::Trashed { names } => match names.as_slice() {
                 [only] => format!("资产库：已把「{only}」移入回收站（面板头「⋯ → 回收站…」）"),

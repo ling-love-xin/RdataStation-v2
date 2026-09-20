@@ -36,6 +36,7 @@ use rds_analytics_resource::dialogs::index_repair::{
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
+use rds_analytics_resource::dialogs::rename::{RenameSeed, open_rename_dialog};
 use rds_analytics_resource::dialogs::tag::{
     TagChoice, TagDialogSeed, TagDialogState, open_tag_dialog,
 };
@@ -651,6 +652,71 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
         cx.update(|window, cx| window.has_active_dialog(cx)),
         "换行不该把对话框关掉"
     );
+}
+
+/// 改名对话框：预填当前名字、开得出来；提交器不可点时（名字没变）不给事件。
+#[gpui_kit::test]
+fn rename_dialog_prefills_and_only_submits_a_real_change(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let events: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+
+    {
+        let events = events.clone();
+        cx.update(|window, cx| {
+            let input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx).placeholder("显示名")
+            });
+            // 预填与生产路径同：`set_value` 不发事件，而本对话框的校验是每帧从值推导。
+            input.update(cx, |input, cx| input.set_value("月报", window, cx));
+            open_rename_dialog(
+                window,
+                cx,
+                RenameSeed {
+                    id: "ar_1".to_string(),
+                    name: "月报".to_string(),
+                },
+                input,
+                move |event, _window, _cx| {
+                    events.borrow_mut().push((event.id, event.name));
+                },
+            );
+        });
+    }
+    draw(cx);
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(cx.debug_bounds("archive-rename-ok").is_some());
+    assert!(cx.debug_bounds("archive-rename-cancel").is_some());
+    assert!(
+        events.borrow().is_empty(),
+        "名字没变（或没提交）就不该有事件"
+    );
+
+    // 关窗后在同一个 harness 上再开一次：带上“真改了名”的输入值，回车提交要回调。
+    {
+        let events = events.clone();
+        cx.update(|window, cx| {
+            window.close_dialog(cx);
+            let input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx).placeholder("显示名")
+            });
+            input.update(cx, |input, cx| input.set_value("季度月报", window, cx));
+            open_rename_dialog(
+                window,
+                cx,
+                RenameSeed {
+                    id: "ar_1".to_string(),
+                    name: "月报".to_string(),
+                },
+                input,
+                move |event, _window, _cx| {
+                    events.borrow_mut().push((event.id, event.name));
+                },
+            );
+        });
+    }
+    draw(cx);
+    assert!(cx.debug_bounds("archive-rename-ok").is_some());
 }
 
 #[gpui_kit::test]

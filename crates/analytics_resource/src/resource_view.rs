@@ -275,6 +275,13 @@ pub fn tag_targets(
     }
 }
 
+/// 行是否可重命名（原型 §3.2 / §9：`F2` 与右键「重命名…」**同一判据**，两处各写一遍就会漂）。
+///
+/// 两条不许：多选（改名没有“批量”的意义——改哪一条都是猜）与只读项目（写不进去）。
+pub fn can_rename(multi_count: usize, read_only: bool) -> bool {
+    multi_count <= 1 && !read_only
+}
+
 /// 这条存档能否「查看统计」（M8 洞察）：判定按种类分，三类的可分析性来源不同。
 ///
 /// - **受管文件**：本体得是 DuckDB 读得动的数据文件——扩展名口径只有一处
@@ -361,6 +368,11 @@ pub trait ResourcesHost: 'static {
     fn request_create_group(&self, window: &mut Window, cx: &mut App);
     /// 重命名分组（分组头右键）。
     fn request_rename_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
+    /// 重命名一条存档的**显示名**（行右键「重命名…」/ `F2`）。
+    ///
+    /// 只收 id：当前显示名由宿主从面板快照取（与 `request_rename_group` 同一口径），
+    /// 宿主拿到后开那个单输入的小对话框（`dialogs::rename`），提交才写库。
+    fn request_rename(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 删除分组（分组头右键；**成员回未分组**，存档本身不受影响）。
     fn request_delete_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
     /// 打开「标签」对话框（详情面板「＋ 标签」/ 行右键菜单）：勾选/取消标签、顺带新建。
@@ -879,8 +891,10 @@ impl ListDelegate for ArchiveListDelegate {
         // 「查看统计」只对**数据可得**的行摆出来（口径见 `can_view_stats`）。
         let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
         let checkout_detail = open_detail.clone();
-        // 版本历史的入口只带 id（对话框的显示名由宿主查库得到）。
+        // 版本历史的入口只带 id（对话框的显示名由宿主查库得到）；重命名同样只带 id
+        // （当前名字由宿主的 `row_name` 从快照取——渲染期不把名字搬进闭包）。
         let id_versions = row.id.clone();
+        let rename_id = row.id.clone();
 
         let mut line = div()
             .h_flex()
@@ -1028,6 +1042,17 @@ impl ListDelegate for ArchiveListDelegate {
                                     move |_, window, cx| {
                                         host.request_version_history(&id, window, cx)
                                     }
+                                }),
+                        );
+                        // 「重命名…」：只改**显示名**（文件名 / 路径不动，原型 §1 原则 2）；
+                        // 多选不给改（改哪一条都是猜），只读项目不给改。
+                        menu = menu.item(
+                            PopupMenuItem::new("重命名…")
+                                .disabled(!can_rename(multi_count, read_only))
+                                .on_click({
+                                    let host = host.clone();
+                                    let id = rename_id.clone();
+                                    move |_, window, cx| host.request_rename(&id, window, cx)
                                 }),
                         );
                         // 破坏性项用分隔线隔离；其上的两项是"本体在哪儿"的日常动作（原型 §3.2）。
@@ -1442,6 +1467,15 @@ impl ResourcesPanel {
         self.host
             .request_move_to_group(&moving, dnd::drop_folder(&target), window, cx);
         cx.notify();
+    }
+
+    /// `F2` / 「重命名…」的**目标**：单选语义 + 只读项目不给改（判据在 [`can_rename`]）。
+    ///
+    /// 与菜单项同一判据：改名没有“批量”的意义（改哪一条都是猜），只管焦点行。
+    pub fn rename_target(&self) -> Option<String> {
+        can_rename(self.multi.len(), self.snapshot.read_only)
+            .then(|| self.selected.clone())
+            .flatten()
     }
 
     /// 注入折叠集合（宿主在构造期从设置里读出来；不回调宿主——否则默认值会被当成用户动作回写）。
@@ -2271,6 +2305,15 @@ impl Render for ResourcesPanel {
                 }
             }))
             .on_action(cx.listener({
+                // `F2`：重命名焦点行的**显示名**（与菜单里那项同一判据，见 `can_rename`）。
+                move |panel: &mut Self, _: &commands::RenameSelected, window, cx| {
+                    let Some(id) = panel.rename_target() else {
+                        return;
+                    };
+                    host.request_rename(&id, window, cx);
+                }
+            }))
+            .on_action(cx.listener({
                 // `Ctrl+A`：全选当前可见行（分组未落，即全部可见行）。
                 move |panel: &mut Self, _: &commands::SelectAllRows, _window, cx| {
                     panel.select_all(cx);
@@ -2309,8 +2352,8 @@ mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
     use super::{
         ArchiveCounts, ArchiveRow, BadgeTone, HeaderMenuAction, RowClick, apply_row_click,
-        badge_tone, can_view_stats, classify_click, header_fold_key, kind_icon, row_tail,
-        strength_badge, tag_entry_label, tag_targets,
+        badge_tone, can_rename, can_view_stats, classify_click, header_fold_key, kind_icon,
+        row_tail, strength_badge, tag_entry_label, tag_targets,
     };
     use crate::detail_view::ArchiveDetail;
     use crate::filter::VisibleItem;
@@ -2579,6 +2622,15 @@ mod tests {
             badge_tone(ArchiveKind::File, ArchiveStatus::Missing),
             BadgeTone::Danger
         );
+    }
+
+    /// 改名判据只有一处：`F2` 与右键「重命名…」共用它（多选不给改、只读项目不给改）。
+    #[test]
+    fn rename_needs_a_single_row_in_a_writable_project() {
+        assert!(can_rename(0, false), "焦点行单独一条时可用");
+        assert!(can_rename(1, false));
+        assert!(!can_rename(2, false), "多选不给改（改哪一条都是猜）");
+        assert!(!can_rename(1, true), "只读项目不给改");
     }
 
     #[test]

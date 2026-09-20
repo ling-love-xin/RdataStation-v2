@@ -1,12 +1,23 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**均可用，**140 单测 + 30 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**均可用，**143 单测 + 32 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第十三刀（P2.5 余项）：重命名显示名（`F2` + 行右键）
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V20 | **数据层：`store.rename_resource(id, name)`**——只改 `name`，**不涨版本、不写版本快照**（`update_resource` 会 `version + 1` + 写快照，那是**内容**版本的口径）；`updated_at` 交给表上的 `trg_ar_updated_at` 触发器 | `src/resource.rs` | 显示名可改、本体路径归档时定死（原型 §1 原则 2）；把“改名”接到 `update_resource` 上，会在版本历史里凭空多一条、并让「版本」排序跟着跳 |
+| V21 | **一个对话框两个入口**：新增 `dialogs/rename.rs`（单输入 + 闸门 `Ready / Unchanged / Blocked`，空名复用归档那边的 `name_hint`）；行右键「重命名…」（与 `F2` **同一判据** `resource_view::can_rename`：多选不给改、只读项目不给改）；`app` 层绑 `f2` → `RenameSelected`；作业 `Job::Rename` + 回执 `OpOutcome::Renamed` | `src/dialogs/rename.rs`（新）、`src/resource_view.rs`、`src/commands.rs`、`crates/workbench/src/{components/resource_host.rs,services/resource_jobs.rs,panels/resources.rs}`、`crates/app/src/main.rs` | 与分组重命名同一形状（单输入小对话框，共用 `ui::NAME_DIALOG_WIDTH`——旧 `GROUP_DIALOG_WIDTH` 改名，两个同值常量为同一形状）；当前名字从面板快照取（`host::row_name`），不为一个名字再查一次库 |
+| 测试 | +1 存储层（t019：不涨版本 / 不写快照 / 路径指纹归档凭证都不动 / 软删行改不了）、+2 单测（闸门三态、`can_rename` 判据）、+1 面板窗口（`F2` 只对焦点行发；多选与只读不发）、+1 对话框窗口（预填 + 开得出来） | `src/tests.rs`、`src/dialogs/rename.rs`、`src/resource_view.rs`、`tests/panel_window.rs`、`tests/dialog_window.rs` | 最易错的是**接错数据层**（涨版本）与**判据分裂**（`F2` 与菜单各写一遍） |
+| 验证 | `cargo test -j 2 -p rds-analytics-resource` → **143 单测 + 22 面板窗口 + 10 对话框窗口全绿**；`cargo test -j 2 -p rds-workbench --lib` 124 全绿；`cargo check -j 2 --workspace --all-targets` 无错 | — | 基线 140 / 21 / 9 |
+
+> **备注（既有表行为，不在本刀修）**：`analytics_resources.updated_at` 由 `trg_ar_updated_at` 触发器维护，用的是 `CURRENT_TIMESTAMP`（**秒级、无亚秒**），而插入走的是 `Utc::now().to_rfc3339()`（带亚秒）——同一秒内的改名会让 `updated_at` 看起来“倒退”不到一秒。它只影响排序与“N 分钟前”的末位，故未在本刀改；真要修得发一次迁移（如改成 `strftime('%Y-%m-%dT%H:%M:%fZ','now')`），单开一刀。
 
 ### 2026-09-20 — Phase 2 第十二刀（P2.2 收口）：拖拽行到分组头
 
@@ -564,7 +575,7 @@
 1. `accept_current_content` 产生的历史版本**只有元数据、没有内容副本**——旧内容在外部被覆盖时已经没了，界面按"副本缺失"呈现，而不是假装能还原；
 2. "有记录无本体"的另一个动作**从回收站还原**依赖 `ProjectTrash`（P0.8），本期只提供"删除记录"，还原动作待 P0.8 接入。
 
-**仍余**（2026-09-20 核实，去掉早已完成的旧条目）：`F2` 重命名待接（重命名入口本身在行右键菜单里）；`recycle.rs` 废弃（P0.8，跟 crate）。
+**仍余**（2026-09-20 核实，去掉早已完成的旧条目）：`recycle.rs` 废弃（P0.8，跟 crate）；**默认分组**（P2.4 最后一项，语义待拍板：设置页预设 vs 记住上次）——`F2` 重命名已由**第十三刀**补齐。
 
 ### 2026-09-15 — Phase 0 第二批：归档 / 取回闭环
 
@@ -677,7 +688,7 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P1.1 | 面板骨架：面板头（标题 + `＋▾` + `⋯`）、工具栏（搜索 / 筛选 / 排序）、行列表（虚拟化）、底部状态行 | `src/resource_view.rs`、`workbench/src/panels/` | 切换活动栏可见；`>100` 项流畅；状态行计数正确 |
-| P1.2 | 行渲染：kind 图标（`muted`）+ 显示名 + 版本徽标（v1 不显示）+ **强度徽标** + 尾部字段（按字段优先级规则） | `src/resource_view.rs` | 三类 kind 行可区分；240px 无异常折行（溢出省略 + tooltip） |
+| P1.2 | 行渲染：kind 图标（`muted`）+ 显示名 + 版本徽标（v1 不显示）+ **强度徽标** + 尾部字段（按字段优先级规则）；**重命名显示名**（行右键 `F2`，不重命名文件，见第十三刀） | `src/resource_view.rs` | 三类 kind 行可区分；240px 无异常折行（溢出省略 + tooltip） |
 | P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels/` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
 | P1.4 | **归档入口**：草稿箱右键「归档为存档…」+ 面板头「从草稿箱归档…」；确认对话框（显示名 / 目标位置只读 / 分组 / 标签 / 来源连接自动带出 / 保留历史 / 冲突处理） | `src/dialogs/archive.rs`、`crates/scratchpad/src/…`（发起） | 归档后草稿消失、资源只读、两侧面板同步刷新（事件链路通） |
 | P1.5 | **取回（检出）**：右键 → 对话框（目标名 / 目标目录 / 是否打开）→ 复制到草稿箱 + 草稿侧记 `derived_from_resource_id` | `src/dialogs/checkout.rs`、`scratchpad` | 本体不动；重复取回自动改名避让 |

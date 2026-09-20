@@ -41,6 +41,7 @@ use analytics_resource::dialogs::checkout::{
 };
 use analytics_resource::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
 use analytics_resource::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
+use analytics_resource::dialogs::rename::{RenameSeed, open_rename_dialog};
 use analytics_resource::filter::{SortField, SortOrder};
 use analytics_resource::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
@@ -241,6 +242,25 @@ impl WorkbenchResourceHost {
             .iter()
             .find(|group| group.id == folder_id)
             .map(|group| group.name.clone())
+    }
+
+    /// 一条存档的当前**显示名**（重命名对话框的预填值）。
+    ///
+    /// 从面板快照取（与 [`group_name`](Self::group_name) 同一处取法）：预览与真实值同源，
+    /// 不为了一个名字再查一次库；取不到（行刚被刷掉）就让输入框空着，由用户自己填。
+    fn row_name(&self, resource_id: &str, cx: &App) -> Option<String> {
+        let entity = self
+            .shared
+            .resources_panel
+            .borrow()
+            .as_ref()
+            .and_then(|panel| panel.upgrade())?;
+        entity
+            .read(cx)
+            .view_rows()
+            .iter()
+            .find(|row| row.id == resource_id)
+            .map(|row| row.name.clone())
     }
 
     /// 本体绝对路径（越界 / 点前缀守卫由 `PayloadStore::resolve` 把关）。
@@ -705,6 +725,49 @@ impl ResourcesHost for WorkbenchResourceHost {
                 );
                 shared.refresh_resources(cx);
                 say(&shared, format!("资产库：正在重命名分组为「{name}」…"), cx);
+            },
+        );
+    }
+
+    fn request_rename(&self, resource_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法重命名", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改显示名", cx);
+            return;
+        }
+        // 当前名字从面板快照取（与 `request_rename_group` 同一处取法）：取不到就让输入框空着。
+        let current = self.row_name(resource_id, cx).unwrap_or_default();
+        let shared = self.shared.clone();
+        let read_only = self.read_only();
+        let resource_id = resource_id.to_string();
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx).placeholder("显示名")
+        });
+        let prefilled = current.clone();
+        input.update(cx, |input, cx| input.set_value(prefilled, window, cx));
+        open_rename_dialog(
+            window,
+            cx,
+            RenameSeed {
+                id: resource_id.clone(),
+                name: current.clone(),
+            },
+            input,
+            move |event, _window, cx| {
+                resource_jobs::enqueue_rename(
+                    root.clone(),
+                    read_only,
+                    event.id.clone(),
+                    event.name.clone(),
+                );
+                shared.refresh_resources(cx);
+                say(
+                    &shared,
+                    format!("资产库：正在把「{current}」改名为「{}」…", event.name),
+                    cx,
+                );
             },
         );
     }

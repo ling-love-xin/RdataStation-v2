@@ -1,7 +1,7 @@
 use super::*;
-use shared::error::{CommonError, CoreError, StorageError};
 use chrono::Utc;
 use serde_json::Value;
+use shared::error::{CommonError, CoreError, StorageError};
 
 /// 归档资源表的固定列顺序：单行读取、列表、分页三处必须一致。
 ///
@@ -253,7 +253,9 @@ impl AnalyticsResourceStore {
         id: &str,
     ) -> Result<AnalyticsResource, CoreError> {
         let sql = format!("SELECT {RESOURCE_COLUMNS} FROM analytics_resources WHERE id = ?");
-        let mut stmt = conn.prepare(&sql).map_err(|e| persistence_err("select", e))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
         let resource = stmt
             .query_row(rusqlite::params![id], map_resource_row)
             .map_err(|e| persistence_err("select", e))?;
@@ -304,6 +306,35 @@ impl AnalyticsResourceStore {
             .map_err(|e| persistence_err("insert", e))?;
 
         self.get_resource_by_id(&id).await
+    }
+
+    /// 改**显示名**（原型 §3.2：行右键「重命名…」/ `F2`）。
+    ///
+    /// 为何不铸 [`update_resource`](Self::update_resource)：后者要 `version + 1` **并写一份
+    /// 版本快照**——那是**内容**版本的口径（指纹变了才涨，原型 §1 原则 2），
+    /// 改个名字不该在版本历史里多出一条、也不该让「版本」排序跟着跳。
+    ///
+    /// 只动 `name`：`updated_at` 由表上的 `trg_ar_updated_at` 触发器维护
+    /// （`UPDATE OF name` 就在它的触发列里），这里不手写——两处都写会打架，
+    /// 而且触发器用的是 `CURRENT_TIMESTAMP`（秒级）。路径 / 指纹 / 标签 / 分组都不在这条路上
+    /// （显示名与本体位置分离是本模块的原则，原型 §1）。
+    pub async fn rename_resource(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let affected = inner
+            .execute(
+                "UPDATE analytics_resources SET name = ? WHERE id = ? AND deleted_at IS NULL",
+                rusqlite::params![name, id],
+            )
+            .map_err(|e| persistence_err("rename", e))?;
+        if affected == 0 {
+            return Err(persistence_err("rename", "资源不存在或已删除"));
+        }
+        Self::get_resource_by_id_on(inner, id)
     }
 
     /// 再归档：把新内容指纹写入已有存档行（版本 +1），`parent_version_id` 指向写前快照行。
@@ -495,7 +526,10 @@ impl AnalyticsResourceStore {
                     .map_err(|e| persistence_err("delete", e))?;
             }
             inner
-                .execute("DELETE FROM analytics_resources WHERE deleted_at IS NOT NULL", [])
+                .execute(
+                    "DELETE FROM analytics_resources WHERE deleted_at IS NOT NULL",
+                    [],
+                )
                 .map_err(|e| persistence_err("delete", e))
         })();
 
@@ -584,9 +618,8 @@ impl AnalyticsResourceStore {
     ) -> Result<Vec<AnalyticsResource>, CoreError> {
         let conn = self.get_conn().await?;
 
-        let mut sql = format!(
-            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources WHERE deleted_at IS NULL"
-        );
+        let mut sql =
+            format!("SELECT {RESOURCE_COLUMNS} FROM analytics_resources WHERE deleted_at IS NULL");
 
         let mut params: Vec<rusqlite::types::Value> = Vec::new();
 
@@ -621,7 +654,8 @@ impl AnalyticsResourceStore {
             })
         })?;
 
-        let resources = stmt.query_map(rusqlite::params_from_iter(params), map_resource_row)
+        let resources = stmt
+            .query_map(rusqlite::params_from_iter(params), map_resource_row)
             .map_err(|e| persistence_err("select", e))?;
 
         resources
@@ -720,7 +754,8 @@ impl AnalyticsResourceStore {
         }
 
         if let Some(search_term) = search {
-            where_clauses.push(r#"(name LIKE ? ESCAPE '\' OR alias LIKE ? ESCAPE '\')"#.to_string());
+            where_clauses
+                .push(r#"(name LIKE ? ESCAPE '\' OR alias LIKE ? ESCAPE '\')"#.to_string());
             let search_pattern = format!("%{}%", escape_like(search_term));
             params.push(rusqlite::types::Value::Text(search_pattern.clone()));
             params.push(rusqlite::types::Value::Text(search_pattern));

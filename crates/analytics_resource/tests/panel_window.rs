@@ -18,7 +18,9 @@ use gpui_kit::{
     VisualTestContext, Window, div, px,
 };
 
-use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected, SelectAllRows};
+use rds_analytics_resource::commands::{
+    ClearSearch, DeleteSelected, OpenSelected, RenameSelected, SelectAllRows,
+};
 use rds_analytics_resource::detail_view::{
     ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
 };
@@ -115,6 +117,11 @@ impl ResourcesHost for RecordingHost {
     }
     fn request_create_group(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("create-group".to_string());
+    }
+    fn request_rename(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("rename:{resource_id}"));
     }
     fn request_rename_group(&self, folder_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls
@@ -679,6 +686,70 @@ fn clear_search_action_clears_query_only(cx: &mut TestAppContext) {
     });
     assert_eq!(query, "", "`Esc` 应清掉搜索词");
     assert!(kinds_only_issues, "菜单里的条件不应被 `Esc` 一并清掉");
+}
+
+/// `F2` → 宿主开改名对话框；多选与只读项目不发（与菜单里那项同一判据）。
+#[gpui_kit::test]
+fn f2_renames_the_focused_row_only(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let press_f2 = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let handle = panel.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(RenameSelected), cx);
+        });
+    };
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+            panel.set_selected(Some("ar_2".to_string()), cx);
+        });
+    });
+
+    // 单选：落到焦点行上。
+    press_f2(cx);
+    assert_eq!(host.calls(), vec!["rename:ar_2".to_string()]);
+
+    // 多选：改了哪一条都是猜（与菜单项置灰同一判据）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.select_all(cx));
+    });
+    press_f2(cx);
+    assert_eq!(host.calls().len(), 1, "多选时不给改");
+
+    // 只读项目：写不进去，也就没必要开对话框。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1)],
+                    true,
+                ),
+                cx,
+            );
+            panel.set_selected(Some("ar_1".to_string()), cx);
+        });
+    });
+    press_f2(cx);
+    assert_eq!(host.calls().len(), 1, "只读项目不给改");
 }
 
 #[gpui_kit::test]

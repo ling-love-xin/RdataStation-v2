@@ -28,7 +28,9 @@ mod tests {
         {
             let conn = pool.acquire().await.expect("acquire connection");
             let inner = conn.inner().expect("get connection");
-            inner.execute_batch(MIGRATION_SQL).expect("run migration 007");
+            inner
+                .execute_batch(MIGRATION_SQL)
+                .expect("run migration 007");
             inner
                 .execute_batch(ARCHIVE_MIGRATION_SQL)
                 .expect("run migration 020");
@@ -335,15 +337,17 @@ mod tests {
             .expect_err("同名应被拒");
         assert!(error.to_string().contains("已经有同名标签"), "{error}");
         // 空名也拒（没有无名标签）。
-        assert!(store
-            .create_tag(CreateTagRequest {
-                name: "   ".to_string(),
-                scope: "project".to_string(),
-                color: None,
-                icon: None,
-            })
-            .await
-            .is_err());
+        assert!(
+            store
+                .create_tag(CreateTagRequest {
+                    name: "   ".to_string(),
+                    scope: "project".to_string(),
+                    color: None,
+                    icon: None,
+                })
+                .await
+                .is_err()
+        );
 
         // 改名：幂等（改成自己）与同名拒绝两条都走一遍。
         let renamed = store.rename_tag(&tag.id, "重要").await.expect("幂等改名");
@@ -382,12 +386,20 @@ mod tests {
         // 删除：解除关联 + 标签从列表消失（再建同名不再撞旧行）。
         let unlinked = store.delete_tag(&tag.id).await.expect("delete tag");
         assert_eq!(unlinked, 1, "删除要报告解除了几条关联");
-        assert!(store
-            .get_tags_for_resource(&resource.id)
-            .await
-            .expect("get tags")
-            .is_empty());
-        assert!(store.tags_by_resource().await.expect("by resource").is_empty());
+        assert!(
+            store
+                .get_tags_for_resource(&resource.id)
+                .await
+                .expect("get tags")
+                .is_empty()
+        );
+        assert!(
+            store
+                .tags_by_resource()
+                .await
+                .expect("by resource")
+                .is_empty()
+        );
         assert_eq!(store.list_tags(None).await.expect("list").len(), 1);
         assert!(store.delete_tag(&tag.id).await.is_err(), "重复删除应报错");
         store
@@ -444,20 +456,26 @@ mod tests {
             .await
             .expect_err("同名应被拒");
         assert!(error.to_string().contains("已经有同名分组"), "{error}");
-        assert!(store
-            .create_folder(CreateFolderRequest {
-                name: "子分组".to_string(),
-                scope: "project".to_string(),
-                parent_folder_id: Some(folder.id.clone()),
-                color: None,
-                icon: None,
-            })
-            .await
-            .is_err());
+        assert!(
+            store
+                .create_folder(CreateFolderRequest {
+                    name: "子分组".to_string(),
+                    scope: "project".to_string(),
+                    parent_folder_id: Some(folder.id.clone()),
+                    color: None,
+                    icon: None,
+                })
+                .await
+                .is_err()
+        );
 
         // 改名：幂等 + 同名拒绝。
         assert_eq!(
-            store.rename_folder(&folder.id, "月报").await.expect("幂等").name,
+            store
+                .rename_folder(&folder.id, "月报")
+                .await
+                .expect("幂等")
+                .name,
             "月报"
         );
         let renamed = store
@@ -502,24 +520,39 @@ mod tests {
             .clear_resource_folder(&resource.id)
             .await
             .expect("clear");
-        assert!(store.folders_by_resource().await.expect("memberships").is_empty());
+        assert!(
+            store
+                .folders_by_resource()
+                .await
+                .expect("memberships")
+                .is_empty()
+        );
         store
             .add_resource_to_folder(&resource.id, &second.id)
             .await
             .expect("add back");
 
         // 删除分组：成员回到未分组（存档不能被分组连坐），关联一并清掉。
-        let freed = store.delete_folder(&second.id).await.expect("delete folder");
+        let freed = store
+            .delete_folder(&second.id)
+            .await
+            .expect("delete folder");
         assert_eq!(freed, 1, "删除要报告有多少条回到未分组");
-        assert!(store.folders_by_resource().await.expect("memberships").is_empty());
         assert!(
             store
-                .get_resource_by_id(&resource.id)
+                .folders_by_resource()
                 .await
-                .is_ok(),
+                .expect("memberships")
+                .is_empty()
+        );
+        assert!(
+            store.get_resource_by_id(&resource.id).await.is_ok(),
             "删分组不删存档"
         );
-        assert!(store.delete_folder(&second.id).await.is_err(), "重复删除应报错");
+        assert!(
+            store.delete_folder(&second.id).await.is_err(),
+            "重复删除应报错"
+        );
         assert_eq!(store.list_folders(None, None).await.expect("list").len(), 1);
         cleanup(dir);
     }
@@ -744,10 +777,7 @@ mod tests {
         assert_eq!(versions[0].version, 2, "版本表按版本号倒序");
         assert_eq!(versions[1].version, 1);
 
-        let latest = store
-            .get_resource_by_id(&created.id)
-            .await
-            .expect("reload");
+        let latest = store.get_resource_by_id(&created.id).await.expect("reload");
         assert_eq!(latest.version, 3, "版本号必须单调递增到 3（无丢失）");
 
         drop(store);
@@ -828,6 +858,81 @@ mod tests {
 
         drop(conn);
         drop(store);
+        cleanup(dir);
+    }
+
+    /// 重命名只改显示名：不涨版本、不写版本快照、其它字段都不动（原型 §1 原则 2）。
+    #[tokio::test]
+    async fn t019_rename_changes_display_name_only() {
+        let (store, dir) = create_test_store().await;
+        // 用**归档行**做样本（而不是通用 `create_resource`）：只有它身上才有指纹 / 本体路径 /
+        // 归档时间这些“改名绝对不能碰”的字段。
+        let created = store
+            .insert_archive(NewArchiveInput {
+                resource_type: "file".to_string(),
+                name: "dau.sql".to_string(),
+                alias: Some("月报草稿".to_string()),
+                kind: ArchiveKind::File,
+                content_hash: "aabbccddeeff0011".to_string(),
+                file_rel_path: "reports/dau.sql".to_string(),
+                file_size: Some(1024),
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
+            })
+            .await
+            .expect("insert archive");
+        assert_eq!(created.file_rel_path.as_deref(), Some("reports/dau.sql"));
+
+        let renamed = store
+            .rename_resource(&created.id, "月报")
+            .await
+            .expect("rename");
+
+        assert_eq!(renamed.name, "月报");
+        assert_eq!(
+            renamed.version, created.version,
+            "改名不是内容变更：版本不涨"
+        );
+        assert_eq!(renamed.alias, created.alias, "别名与显示名是两回事");
+        assert_eq!(
+            renamed.file_rel_path, created.file_rel_path,
+            "显示名与本体位置分离：路径不动"
+        );
+        assert_eq!(renamed.content_hash, created.content_hash, "指纹不动");
+        assert_eq!(renamed.archived_at, created.archived_at, "归档凭证不动");
+        assert_eq!(renamed.file_size, created.file_size);
+        // `updated_at` 由 `trg_ar_updated_at` 触发器写（`CURRENT_TIMESTAMP`，**秒级**）：这里只钉
+        // “它被更新到当前时刻附近”，不比纳秒——插入走的是 `Utc::now()`（带亚秒），触发器把亚秒
+        // 抹掉后，同一秒内 `renamed` 可能比 `created` “小”（既有表行为，见开发方案第十三刀的备注）。
+        let drift = (chrono::Utc::now() - renamed.updated_at)
+            .num_seconds()
+            .abs();
+        assert!(
+            drift <= 2,
+            "改名后 `updated_at` 应跟到当前时刻附近：{}（偏差 {drift}s）",
+            renamed.updated_at
+        );
+        assert!(
+            store
+                .get_resource_versions(&created.id)
+                .await
+                .expect("versions")
+                .is_empty(),
+            "不得写版本快照（那是内容版本的口径）"
+        );
+
+        // 已软删的行改不了名（与 `update_resource` 同一处守卫口径）。
+        store
+            .soft_delete_archive(&created.id)
+            .await
+            .expect("soft delete");
+        assert!(
+            store
+                .rename_resource(&created.id, "消失的月报")
+                .await
+                .is_err()
+        );
+
         cleanup(dir);
     }
 }
