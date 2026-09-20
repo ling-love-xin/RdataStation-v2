@@ -166,10 +166,14 @@ fi
 # ==================== 自检 + 汇报 ====================
 # 包里必须有这三样：可执行文件、DuckDB 动态库、主题资产。少任何一样都是坏包，
 # 与其让用户在机器上发现，不如在这里就报错（CI 上直接红掉这一步）。
+#
+# 载荷目录：macOS 装在 `RdataStation.app/Contents/MacOS/` 里（`paths::assets_dir()` 与动态
+# 库都跟可执行文件同级），其余平台就在可分发目录根——自检必须按各自布局找。
+if [ "$OS" = "macos" ]; then PAYLOAD="RdataStation.app/Contents/MacOS"; else PAYLOAD="."; fi
 REQUIRED_ITEMS=("$EXE" "$DYLIB" "assets/themes/product-tokens.json")
 for item in "${REQUIRED_ITEMS[@]}"; do
-  if [ ! -e "$STAGING/$item" ]; then
-    echo "可分发目录缺少 ${item}：$STAGING" >&2
+  if [ ! -e "$STAGING/$PAYLOAD/$item" ]; then
+    echo "可分发目录缺少 $PAYLOAD/${item}：$STAGING" >&2
     exit 1
   fi
 done
