@@ -43,11 +43,14 @@ div().border_b(ui::HAIRLINE)
 
 > 树 / 列表缩进统一用设计公式：`ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT`（= 0.5rem + 0.875rem × depth），不要各写各的倍率。
 >
-> **行级共用原语在 `workbench_shell::tree`**（2026-09-20 起）：`active_bar(color)`（选中行左侧 2px 条，
-> 调用方行需 `relative()`）、`disclosure_slot()`（固定 `w_2p5` 槽，**槽宽是缩进算式的一部分**）、
-> `disclosure_icon` / `disclosure_glyph`（两种载体）、`indent_spacer(step, depth)` / `indent_rem(base, step, depth)`、
+> **行级共用原语在 `workbench_shell::tree`**（2026-09-20 起，消费方：导航 M4 / 草稿箱 M5 / 资产库 M6 / Mock M7）：
+> `active_bar(color)`（选中行左侧 2px 条，调用方行需 `relative()`）、`disclosure_slot()`（固定 `w_2p5` 槽，**槽宽是缩进算式的一部分**）、
+> `disclosure_icon(expanded, color)`（12px chevron，**四面板统一用它**；旧的字符载体 `disclosure_glyph` 已删）、
+> `indent_spacer(step, depth)` / `indent_rem(base, step, depth)`、
 > 以及行高预算 `RowHeight`（基础高 + 附加块）与 `row_sizes(n, rem, f)`（虚拟列表 `item_sizes`）。
-> 新增树 / 列表行请**先看这一层有没有**，不要在面板里再写一遍（导航与草稿箱此前各写了一份）。
+> 新增树 / 列表行请**先看这一层有没有**，不要在面板里再写一遍（导航 / 草稿箱 / 资产库此前各写了一份）。
+> 行态口径（悬停不覆盖选中 / 选中底 `list_active` / 定高行截断 / 命中区下限）收在
+> `docs/architecture/theme/ui-constraints.md` §8.3——**改口径改那一处**，别在各面板各拍一次。
 
 常用常量（倍率 → @16px 实际值 / Tailwind 对照）：
 

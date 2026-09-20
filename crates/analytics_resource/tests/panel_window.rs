@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use gpui_kit::{
     App, Context, Focusable as _, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
-    Window, div, px,
+    VisualTestContext, Window, div, px,
 };
 
 use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected, SelectAllRows};
@@ -23,7 +23,7 @@ use rds_analytics_resource::detail_view::{
     ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
 };
 use rds_analytics_resource::filter::{SortField, SortOrder};
-use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
+use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
     ResourcesSnapshot, RowClick, TagOption, dispatch_header_action,
@@ -81,16 +81,12 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete:{}", resource_ids.join(",")));
     }
-    fn request_edit_tags(
-        &self,
-        resource_id: &str,
-        _resource_name: &str,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
+    fn request_edit_tags(&self, targets: &[TagTarget], _window: &mut Window, _cx: &mut App) {
+        // 记录**整批目标**（批量打标签的验收靠它：多选时是不是真的把选集送下去了）。
+        let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
         self.calls
             .borrow_mut()
-            .push(format!("edit-tags:{resource_id}"));
+            .push(format!("edit-tags:{}", ids.join(",")));
     }
     fn request_remove_tag(
         &self,
@@ -162,11 +158,13 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
     ArchiveRow {
         id: id.to_string(),
         name: format!("{id}.sql"),
+        alias: None,
         kind,
         version,
         status,
         tail: "1.2 KB · 3 天前".to_string(),
-        tag_ids: Vec::new(),
+        source_table: None,
+        tags: Vec::new(),
         folder_id: None,
         updated_epoch: 1_700_000_000,
         archived_epoch: Some(1_700_000_000),
@@ -1137,6 +1135,56 @@ fn injected_collapsed_state_folds_rows_without_echoing_back(cx: &mut TestAppCont
     );
 }
 
+/// 搜索匹配面比展示面宽（原型 §2.2）：面板上搜「别名 / 标签名 / 来源表」也能录到行，
+/// 哪怕这三个字段在行上根本不显示。
+#[gpui_kit::test]
+fn search_matches_alias_tag_name_and_source_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut aliased = row("ar_1", ArchiveKind::Analysis, ArchiveStatus::Normal, 1);
+    aliased.alias = Some("月报".to_string());
+    let mut tagged = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    tagged.tags = vec![ArchiveTagChip {
+        id: "at_1".to_string(),
+        name: "财务报表".to_string(),
+    }];
+    let mut from_table = row("ar_3", ArchiveKind::TableRef, ArchiveStatus::Normal, 1);
+    from_table.source_table = Some("dwd.dwd_orders".to_string());
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(snapshot(vec![aliased, tagged, from_table], false), cx);
+        });
+    });
+
+    let hit = |cx: &mut VisualTestContext, query: &str| {
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.clear_filter(window, cx);
+                panel.set_query(query, window, cx);
+            });
+        });
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .view_rows()
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+
+    assert_eq!(hit(cx, "月报"), vec!["ar_1".to_string()]);
+    assert_eq!(hit(cx, "财务报表"), vec!["ar_2".to_string()]);
+    assert_eq!(hit(cx, "dwd.dwd_orders"), vec!["ar_3".to_string()]);
+    // 匹配面是宽出来的，不是换掉的：名称照旧命中。
+    assert_eq!(hit(cx, "ar_3"), vec!["ar_3".to_string()]);
+}
+
 /// 标签筛选维：勾上就窄，标签被删后条件自动抹掉（否则列表“什么都没匹配”而勾还在）。
 #[gpui_kit::test]
 fn tag_filter_narrows_rows_and_drops_stale_conditions(cx: &mut TestAppContext) {
@@ -1148,7 +1196,10 @@ fn tag_filter_narrows_rows_and_drops_stale_conditions(cx: &mut TestAppContext) {
     });
 
     let mut tagged = row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1);
-    tagged.tag_ids = vec!["at_1".to_string()];
+    tagged.tags = vec![ArchiveTagChip {
+        id: "at_1".to_string(),
+        name: "报表".to_string(),
+    }];
     let other = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2);
     let mut initial = snapshot(vec![tagged, other.clone()], false);
     initial.tags = vec![TagOption {

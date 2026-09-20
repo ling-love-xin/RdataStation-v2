@@ -586,6 +586,7 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
     let state = TagDialogState::new(vec!["at_1".to_string()]);
     let seed = TagDialogSeed {
         resource_name: "月报".to_string(),
+        target_count: 1,
         options: vec![
             TagChoice {
                 id: "at_1".to_string(),
@@ -599,6 +600,7 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
             },
         ],
         selected: vec!["at_1".to_string()],
+        partial: Vec::new(),
     };
     {
         let cx: &mut VisualTestContext = cx;

@@ -231,16 +231,17 @@ impl SidebarPanel {
         );
     }
 
-    /// 消费「待开的标签对话框」（M6）：与版本历史同一形态（针对某条存档）。
+    /// 消费「待开的标签对话框」（M6）：与版本历史同一形态（针对**一批**存档：单选一元、多选 N 元）。
     ///
-    /// 输入实体在这里建（开窗要 `Window`，轮询任务里没有）；会话带 `resource_id`——
-    /// 换一条存档要重开（同一存档再要一次只是刷新行）。
+    /// 输入实体在这里建（开窗要 `Window`，轮询任务里没有）；会话带 `targets`——
+    /// 换一批存档要重开（同一批再要一次只是刷新行）。
     fn ensure_tag_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rows) = self.shared.tag_dialog.borrow_mut().pending.take() else {
             return;
         };
         let read_only = self.shared.project_ui.borrow().read_only;
-        let state = TagDialogState::new(rows.seed.selected.clone());
+        let state =
+            TagDialogState::new_batch(rows.seed.selected.clone(), rows.seed.partial.clone());
         state.set_read_only(read_only);
         state.set_options(rows.seed.options.clone());
         let name_input = cx.new(|cx| {
@@ -249,15 +250,15 @@ impl SidebarPanel {
         {
             let mut flow = self.shared.tag_dialog.borrow_mut();
             flow.session = Some(shared::TagDialogSession {
-                resource_id: rows.resource_id.clone(),
+                targets: rows.targets.clone(),
                 state: state.clone(),
             });
         }
 
         let entity = cx.entity();
         let shared_for_close = self.shared.clone();
-        let resource_id = rows.resource_id.clone();
-        let resource_name = rows.resource_name.clone();
+        let targets = rows.targets.clone();
+        let targets_for_close = targets.clone();
         let seed = rows.seed.clone();
         open_tag_dialog(
             window,
@@ -266,18 +267,16 @@ impl SidebarPanel {
             state,
             name_input,
             move |event, _window, cx| {
-                entity.update(cx, |this, cx| {
-                    this.request_tag_action(&resource_id, &resource_name, event, cx)
-                });
+                entity.update(cx, |this, cx| this.request_tag_action(&targets, event, cx))
             },
             move |_cx| {
                 let mut flow = shared_for_close.tag_dialog.borrow_mut();
-                // 只清“当前这一条”的会话：已经换成另一条存档时不动它（与版本历史同门口径）。
+                // 只清“当前这一批”的会话：已经换成另一批时不动它（与版本历史同门口径）。
                 let same = flow
                     .session
                     .as_ref()
-                    .map(|session| session.resource_id.as_str())
-                    == Some(rows.resource_id.as_str());
+                    .map(|session| session.targets.as_slice() == targets_for_close.as_slice())
+                    .unwrap_or(false);
                 if same {
                     flow.session = None;
                 }

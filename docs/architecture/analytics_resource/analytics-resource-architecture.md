@@ -314,18 +314,18 @@ scratchpad ──► analytics_resource ──► engine, shared
 
 ### 8.1 crate 内文件切分（目标）
 
-| 文件 | 职责 | 现状 |
+| 文件 | 职责 | 现状（2026-09-20 核实：全部已落地，行数为实测） |
 | --- | --- | --- |
-| `model.rs` | 领域类型（`Archive` / `ArchiveKind` / `ArchiveSource` / `ArchiveStatus` / 请求响应） | 3 行占位 |
-| `models.rs` | 持久层行模型（v1 遗留，逐步并入 `model.rs`） | ✅ 已迁移 |
+| `model.rs` | 领域类型（`Archive` / `ArchiveKind` / `ArchiveSource` / `ArchiveStatus` / 请求响应） | ✅ 已实现（370 行） |
+| `models.rs` | 持久层行模型（v1 遗留，逐步并入 `model.rs`） | ✅ 已迁移（119 行） |
 | `store/` | 索引读写（`resource` / `folder` / `tag` / `version`），只管 `project.db` | ✅ 已迁移（`recycle.rs` 已删，回收站走 `ProjectTrash` + `deleted_at` 软删） |
-| `payload.rs` | 本体层：`resources/` 文件操作、只读设置、hash、历史副本 | 未创建 |
-| `service.rs` | 门面：归档 / 取回 / 检索 / 修复 编排 + 事件 | 未创建 |
-| `indexer.rs` | 索引修复（扫描 / 孤儿检测 / 重建） | 未创建 |
-| `resource_view.rs` | 左 Dock 面板（列表 + 工具栏 + 状态行） | 3 行占位 |
-| `detail_view.rs` | 右侧详情属性面板 | 未创建 |
-| `version_view.rs` / `recycle_view.rs` / `folder_view.rs` / `tag_view.rs` | 对话框 | 版本与回收站已落（`dialogs/{version,trash}.rs`）；分组 / 标签视图待 Phase 2 |
-| `commands.rs` | Action 与快捷键 | 3 行占位 |
+| `payload.rs` | 本体层：`resources/` 文件操作、只读设置、hash、历史副本 | ✅ 已实现（993 行） |
+| `service.rs` | 门面：归档 / 取回 / 检索 / 修复 编排 + 事件 | ✅ 已实现（1909 行） |
+| `indexer.rs` | 索引修复（扫描 / 孤儿检测 / 重建） | ✅ 已实现（508 行） |
+| `resource_view.rs` | 左 Dock 面板（列表 + 工具栏 + 状态行） | ✅ 已实现（2402 行） |
+| `detail_view.rs` | 右侧详情属性面板 | ✅ 已实现（651 行） |
+| `version_view.rs` / `recycle_view.rs` / `folder_view.rs` / `tag_view.rs` | 对话框 | ✅ 四者均已落（`dialogs/{version,trash,group,tag}.rs`） |
+| `commands.rs` | Action 与快捷键 | ✅ 已实现（36 行：`FocusSearch` / `ClearSearch` / `DeleteSelected` / `SelectAllRows` / `OpenSelected`） |
 
 ### 8.2 视图归属（对齐 `../overview.md`）
 
@@ -398,9 +398,9 @@ scratchpad ──► analytics_resource ──► engine, shared
 | `version.rs` | ✅ 83 行 | 重写为内容指纹版本 |
 | `resource.rs` 分页/搜索/排序 | ✅ 462 行 | 保留骨架，修边界（除零/负数/转义），加 kind 过滤 |
 | `folder.rs` / `tag.rs` | ✅ 511 行 | 保留；文件夹去掉 `parent_folder_id` 用法 |
-| 视图四处占位 | 3 行 × 4 | 按原型落地 |
-| `LeftPanel::Resources` 标签 | "资源分析"（`workbench/src/view.rs:80`） | 改"资产库" |
-| 面板占位渲染 | `panels/mod.rs::render_resources_placeholder`（当前 5846 起，行号随他人改动会漂移） "分析资源（下一轮接入）· 数据源连接引用 · DuckDB 分析表" | 替换为真面板；占位文案随之下线 |
+| 视图四处占位 | 3 行 × 4 | ✅ 已实现（2026-09-20 核实）：`resource_view.rs` 2402 行真面板 / `model.rs` 370 / `commands.rs` 36 / `recycle_bin_dialog.rs` → `dialogs/trash.rs` 564；余项见开发方案 §0 第九刀后的「仍余」 |
+| `LeftPanel::Resources` 标签 | "资源分析"（`workbench/src/view.rs:80`） | ✅ 已改"资产库"（P1.7） |
+| 面板占位渲染 | `panels/mod.rs::render_resources_placeholder` "分析资源（下一轮接入）· 数据源连接引用 · DuckDB 分析表" | ✅ 已替换为真面板（`workbench/src/panels/resources.rs`，P1.1）；占位渲染已下线 |
 | 迁移 | 007（v1 原样） | ✅ 已新增 `project_meta/020_analytics_resource_archive.sql`（9 列 + 3 索引） |
 | crate 入口 | 无 README | ✅ 已补 `crates/analytics_resource/README.md` |
 

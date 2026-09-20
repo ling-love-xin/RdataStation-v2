@@ -39,16 +39,15 @@ use analytics_resource::dialogs::archive::{
 use analytics_resource::dialogs::checkout::{
     CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name,
 };
-use analytics_resource::dialogs::group::{
-    GroupNameEvent, GroupNameKind, open_group_name_dialog,
-};
+use analytics_resource::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
 use analytics_resource::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
+use analytics_resource::filter::{SortField, SortOrder};
 use analytics_resource::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
+    TagTarget,
 };
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
 use analytics_resource::resource_view::{GroupOption, ResourcesHost};
-use analytics_resource::filter::{SortField, SortOrder};
 
 use crate::panels::Shared;
 use crate::services::resource_jobs;
@@ -621,7 +620,10 @@ impl ResourcesHost for WorkbenchResourceHost {
         // 目录由第一次归档创建：还没有存档时它不存在，**说清这一点**而不是报一个系统错误。
         if !dir.exists() {
             self.notice(
-                format!("资产库：资源目录还不存在（{}）——归档第一个存档时会创建", dir.display()),
+                format!(
+                    "资产库：资源目录还不存在（{}）——归档第一个存档时会创建",
+                    dir.display()
+                ),
                 cx,
             );
             return;
@@ -767,7 +769,9 @@ impl ResourcesHost for WorkbenchResourceHost {
             count => format!("{count} 条存档"),
         };
         let target = match folder_id {
-            Some(id) => self.group_name(id, cx).unwrap_or_else(|| "该分组".to_string()),
+            Some(id) => self
+                .group_name(id, cx)
+                .unwrap_or_else(|| "该分组".to_string()),
             None => "未分组".to_string(),
         };
         resource_jobs::enqueue_group_action(
@@ -816,19 +820,24 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.notice("资产库：正在读取回收站…", cx);
     }
 
-    fn request_edit_tags(
-        &self,
-        resource_id: &str,
-        resource_name: &str,
-        _window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn request_edit_tags(&self, targets: &[TagTarget], _window: &mut Window, cx: &mut App) {
         let Some(root) = self.require_project("无法编辑标签", cx) else {
             return;
         };
-        // 取数在后台线程（标签词典 + 这条存档已挂的）；回来之后由侧栏轮询开窗。
-        resource_jobs::enqueue_tag_list(root, resource_id.to_string(), resource_name.to_string());
-        self.notice("资产库：正在读取标签…", cx);
+        if targets.is_empty() {
+            return;
+        }
+        // 取数在后台线程（标签词典 + 这批目标各自已挂的）；回来之后由侧栏轮询开窗。
+        let count = targets.len();
+        resource_jobs::enqueue_tag_list(root, targets.to_vec());
+        self.notice(
+            if count > 1 {
+                format!("资产库：正在读取 {count} 项的标签…")
+            } else {
+                "资产库：正在读取标签…".to_string()
+            },
+            cx,
+        );
     }
 
     fn request_remove_tag(
@@ -850,14 +859,19 @@ impl ResourcesHost for WorkbenchResourceHost {
         resource_jobs::enqueue_tag_action(
             root,
             self.read_only(),
-            detail.id.clone(),
-            detail.name.clone(),
+            vec![TagTarget {
+                id: detail.id.clone(),
+                name: detail.name.clone(),
+            }],
             resource_jobs::TagJobAction::RemoveOne {
                 tag_id: tag_id.to_string(),
             },
         );
         self.shared.refresh_resources(cx);
-        self.notice(format!("资产库：正在去掉「{}」的一个标签…", detail.name), cx);
+        self.notice(
+            format!("资产库：正在去掉「{}」的一个标签…", detail.name),
+            cx,
+        );
     }
 
     fn request_refresh(&self, _window: &mut Window, cx: &mut App) {

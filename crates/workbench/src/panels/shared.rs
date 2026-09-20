@@ -145,11 +145,11 @@ pub struct TrashDialogFlow {
     pub session: Option<TrashDialogSession>,
 }
 
-/// M6：标签对话框的一次会话（行 = 全部标签 + 这存档的已选；可被动作后重取换掉）。
+/// M6：标签对话框的一次会话（行 = 全部标签 + 这批目标的已挂情况；可被动作后重取换掉）。
 ///
-/// 带 `resource_id`：对话框是“针对某条存档”的（与版本历史同形），换一条存档要重开。
+/// 带 `targets`：对话框是“针对这**一批**存档”的（单选一元、多选 N 元），换一批要重开。
 pub struct TagDialogSession {
-    pub resource_id: String,
+    pub targets: Vec<analytics_resource::model::TagTarget>,
     pub state: TagDialogState,
 }
 

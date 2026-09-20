@@ -209,6 +209,18 @@ pub struct ArchiveUndo {
     pub source_path: std::path::PathBuf,
 }
 
+/// 一次「编辑标签」的目标（单击是一元、多选是 N 元）。
+///
+/// 为何把**显示名**一起带上：对话框标题与动作回执都要报「哪一条 / 哪几项」，
+/// 而回执在宿主侧拼（不能回头读面板的选中态——那是渲染期正在被借用的对象，已踩过）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagTarget {
+    /// 存档 id。
+    pub id: String,
+    /// 显示名（回执与对话框标题用）。
+    pub name: String,
+}
+
 /// 归档结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveOutcome {
@@ -334,7 +346,11 @@ mod tests {
 
     #[test]
     fn kind_db_roundtrip() {
-        for kind in [ArchiveKind::File, ArchiveKind::Analysis, ArchiveKind::TableRef] {
+        for kind in [
+            ArchiveKind::File,
+            ArchiveKind::Analysis,
+            ArchiveKind::TableRef,
+        ] {
             assert_eq!(ArchiveKind::from_db_str(kind.as_db_str()), kind);
         }
         assert_eq!(ArchiveKind::default(), ArchiveKind::File);
@@ -356,7 +372,10 @@ mod tests {
     #[test]
     fn strength_is_derived_from_kind() {
         assert_eq!(ArchiveKind::File.strength(), ReproductionStrength::Strong);
-        assert_eq!(ArchiveKind::Analysis.strength(), ReproductionStrength::Medium);
+        assert_eq!(
+            ArchiveKind::Analysis.strength(),
+            ReproductionStrength::Medium
+        );
         assert_eq!(ArchiveKind::TableRef.strength(), ReproductionStrength::Weak);
     }
 

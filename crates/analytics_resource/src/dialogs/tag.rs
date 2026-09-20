@@ -38,12 +38,16 @@ pub struct TagChoice {
 /// 打开对话框所需的全部信息（宿主在取数线程上备好）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagDialogSeed {
-    /// 存档显示名（标题用）。
+    /// 存档显示名（单选时的标题用）。
     pub resource_name: String,
+    /// 本次编辑**作用于几条存档**（`1` = 单选；`> 1` = 多选批量，标题改显「N 项」）。
+    pub target_count: usize,
     /// 全部存活标签（按名字升序）。
     pub options: Vec<TagChoice>,
-    /// 这条存档**已经**挂着的标签 id。
+    /// **所有**目标都挂着的标签 id（= 并集里“全有”的那部分，显示为勾上）。
     pub selected: Vec<String>,
+    /// 只有**一部分**目标挂着的标签 id（显示为「部分」；点一下 = 让所有目标都挂上）。
+    pub partial: Vec<String>,
 }
 
 /// 对话框提交的动作（执行一律回宿主）。
@@ -66,10 +70,14 @@ pub enum TagDialogEvent {
 #[derive(Clone)]
 pub struct TagDialogState {
     options: Rc<RefCell<Vec<TagChoice>>>,
-    /// 当前勾选（开窗时 = 已挂的标签）。
+    /// 当前勾选（开窗时 = 所有目标都挂着的标签）。
     selected: Rc<RefCell<Vec<String>>>,
     /// 开窗时的勾选（算差集用；动作成功后由宿主重置为新的已挂集合）。
     baseline: Rc<RefCell<Vec<String>>>,
+    /// 当前处于「部分」（只有一部分目标挂着）的标签；点一下即提升为勾选。
+    partial: Rc<RefCell<Vec<String>>>,
+    /// 开窗时的「部分」集：**算差集用**（它不在 `baseline` 里，但不等于“没有——取消时得从所有目标上摘掉”）。
+    baseline_partial: Rc<RefCell<Vec<String>>>,
     /// 提交中：按钮一律置灰（避免连点两次，那会提交两次差集）。
     busy: Rc<Cell<bool>>,
     /// 项目只读：勾选与新建全部置灰（判定与面板 / 详情同一口径，由宿主机注入）。
@@ -85,12 +93,19 @@ impl Default for TagDialogState {
 }
 
 impl TagDialogState {
-    /// 用初始勾选建状态（`selected` 同时进 baseline）。
+    /// 用初始勾选建状态（`selected` 同时进 baseline）；单选场景的便捷入口。
     pub fn new(selected: Vec<String>) -> Self {
+        Self::new_batch(selected, Vec::new())
+    }
+
+    /// 多选场景：除了「全有」的勾选，还带一份「只有一部分目标有」的标签。
+    pub fn new_batch(selected: Vec<String>, partial: Vec<String>) -> Self {
         Self {
             options: Rc::new(RefCell::new(Vec::new())),
             selected: Rc::new(RefCell::new(selected.clone())),
             baseline: Rc::new(RefCell::new(selected)),
+            partial: Rc::new(RefCell::new(partial.clone())),
+            baseline_partial: Rc::new(RefCell::new(partial)),
             busy: Rc::new(Cell::new(false)),
             read_only: Rc::new(Cell::new(false)),
             note: Rc::new(RefCell::new(None)),
@@ -102,6 +117,10 @@ impl TagDialogState {
         let alive: Vec<String> = options.iter().map(|option| option.id.clone()).collect();
         self.selected.borrow_mut().retain(|id| alive.contains(id));
         self.baseline.borrow_mut().retain(|id| alive.contains(id));
+        self.partial.borrow_mut().retain(|id| alive.contains(id));
+        self.baseline_partial
+            .borrow_mut()
+            .retain(|id| alive.contains(id));
         *self.options.borrow_mut() = options;
     }
 
@@ -111,8 +130,16 @@ impl TagDialogState {
 
     /// 换一份勾选，并把 baseline 对齐到它（动作成功后宿主调用：新状态即新的比较基准）。
     pub fn reset_selection(&self, selected: Vec<String>) {
+        self.reset_batch(selected, Vec::new())
+    }
+
+    /// 多选版的 [`Self::reset_selection`]：连「部分」一起换掉。
+    pub fn reset_batch(&self, selected: Vec<String>, partial: Vec<String>) {
         *self.selected.borrow_mut() = selected.clone();
         *self.baseline.borrow_mut() = selected;
+        self.partial.borrow_mut().clear();
+        self.partial.borrow_mut().extend(partial.iter().cloned());
+        *self.baseline_partial.borrow_mut() = partial;
     }
 
     /// 勾选 / 取消（行内勾选框走它：`Checkbox` 交出的是**新值**，所以这里按值写而不是翻转）。
@@ -138,18 +165,58 @@ impl TagDialogState {
         }
     }
 
+    /// 「部分」标签点一下：提升为**全有**（= 给缺的那些目标补上）。
+    ///
+    /// 为何单选那套 `toggle` 不够用：多选时一个标签可能是「部分有」，布尔翻转会把
+    /// 「本来部分有」的标签一下推成「无」——那是用户没要求的**批量摘除**。三态里
+    /// 第一下总是「让所有目标都有」，第二下才清。
+    pub fn promote_partial(&self, tag_id: &str) {
+        self.partial.borrow_mut().retain(|id| id != tag_id);
+        if !self.is_selected(tag_id) {
+            self.selected.borrow_mut().push(tag_id.to_string());
+        }
+    }
+
+    /// 行内勾选框（三态版）：勾上 = 全有（部分 → 全有）；取消 = 全无。
+    pub fn set_checked_three_way(&self, tag_id: &str, on: bool) {
+        if on {
+            self.promote_partial(tag_id);
+            return;
+        }
+        // 取消就把两个集合都清掉：它现在是「全无」，不再是「部分」。
+        self.partial.borrow_mut().retain(|id| id != tag_id);
+        self.selected.borrow_mut().retain(|id| id != tag_id);
+    }
+
     pub fn is_selected(&self, tag_id: &str) -> bool {
         self.selected.borrow().iter().any(|id| id == tag_id)
+    }
+
+    /// 只有一部分目标挂着这个标签（显示「部分」；它不是勾选态）。
+    pub fn is_partial(&self, tag_id: &str) -> bool {
+        self.partial.borrow().iter().any(|id| id == tag_id)
     }
 
     pub fn selected(&self) -> Vec<String> {
         self.selected.borrow().clone()
     }
 
+    pub fn partial(&self) -> Vec<String> {
+        self.partial.borrow().clone()
+    }
+
     /// 本次改动的差集（`(add, remove)`）：两个都空 = 没有可提交的东西。
+    ///
+    /// 多选的语义（“让勾选对**所有目标**生效”）：
+    /// - `add` = 现在勾着、但开窗时不是全有的 → 给缺的那些补上（幂等，已挂的重复打不报错）；
+    /// - `remove` = 开窗时**全有或部分有**、现在既没勾也不在「部分」里的 → 从所有目标上摘掉。
+    ///   两个减项都是必需的：开窗时的「部分」不算进 remove，就漏了「部分 → 取消」这一类；
+    ///   而**没动过**的「部分」又得排除在外（否则开窗那一刻就凭空多出一批待摘标签）。
     pub fn diff(&self) -> (Vec<String>, Vec<String>) {
         let baseline = self.baseline.borrow();
+        let baseline_partial = self.baseline_partial.borrow();
         let selected = self.selected.borrow();
+        let partial = self.partial.borrow();
         let add = selected
             .iter()
             .filter(|id| !baseline.contains(id))
@@ -157,7 +224,8 @@ impl TagDialogState {
             .collect();
         let remove = baseline
             .iter()
-            .filter(|id| !selected.contains(id))
+            .chain(baseline_partial.iter())
+            .filter(|id| !selected.contains(id) && !partial.contains(id))
             .cloned()
             .collect();
         (add, remove)
@@ -205,11 +273,19 @@ pub fn open_tag_dialog(
     // 种子灌进状态：之后一切渲染与提交都只读这一个来源。
     if state.options().is_empty() {
         state.set_options(seed.options.clone());
-        state.reset_selection(seed.selected.clone());
+        state.reset_batch(seed.selected.clone(), seed.partial.clone());
     }
     let on_action: Rc<dyn Fn(TagDialogEvent, &mut Window, &mut App)> = Rc::new(on_action);
     let on_close: Rc<dyn Fn(&mut App)> = Rc::new(on_close);
     let resource_name = seed.resource_name.clone();
+    let target_count = seed.target_count;
+    let batch = target_count > 1;
+    // 标题：单选报名字（与其它对话框同一形态）；多选报**项数**（那是本次编辑真正的作用域）。
+    let title = if batch {
+        format!("标签 · {target_count} 项")
+    } else {
+        format!("标签 · {resource_name}")
+    };
 
     // 新建（按钮或回车走同一条）：建完直接打上，对话框不关（宿主会把新词典推回来）。
     let dispatch_create = {
@@ -266,11 +342,17 @@ pub fn open_tag_dialog(
         }
         for (index, option) in options.iter().enumerate() {
             let checked = state.is_selected(&option.id);
+            let partial = state.is_partial(&option.id);
+            // 行点击与勾选框都走**三态**：部分 → 全有 → 无（多选下布尔翻转会误删，见 `promote_partial`）。
             let dispatch = {
                 let state = state.clone();
                 let tag_id = option.id.clone();
                 move |_: &ClickEvent, window: &mut Window, _cx: &mut App| {
-                    state.toggle(&tag_id);
+                    if state.is_partial(&tag_id) {
+                        state.promote_partial(&tag_id);
+                    } else {
+                        state.toggle(&tag_id);
+                    }
                     window.refresh();
                 }
             };
@@ -282,7 +364,7 @@ pub fn open_tag_dialog(
                 move |on: &bool, window: &mut Window, cx: &mut App| {
                     // 勾选框在行内：不让点击冒泡到行的 `on_click`（否则同一击翻转两次 = 没反应）。
                     cx.stop_propagation();
-                    state.set_checked(&tag_id, *on);
+                    state.set_checked_three_way(&tag_id, *on);
                     window.refresh();
                 }
             };
@@ -426,6 +508,17 @@ pub fn open_tag_dialog(
                             .text_color(theme.colors.foreground)
                             .child(option.name.clone()),
                     )
+                    // 「部分」：只有一部分目标挂着（多选才有这个态）。`Checkbox` 没有半选态，
+                    // 所以用一枚小字说清楚——它**不是**勾选，点一下才是「让所有目标都挂上」。
+                    .when(partial, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(theme.colors.warning)
+                                .child("部分"),
+                        )
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -529,9 +622,21 @@ pub fn open_tag_dialog(
                     "勾选标签后「应用」——改动在提交前不落库".to_string()
                 }),
         );
+        // 多选时把作用域与三态语义**写清楚**（不靠用户猜「部分」是什么意思）。
+        if batch {
+            body = body.child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(format!(
+                        "作用于选中的 {target_count} 项：勾选 = 全部打上，取消 = 全部摘掉；「部分」= 只有一部分项有它（点一下让全部都有）。"
+                    )),
+            );
+        }
 
         dialog
-            .title(format!("标签 · {resource_name}"))
+            .title(title.clone())
             .w(cx.theme().font_size * ui::TAG_DIALOG_WIDTH)
             .child(body)
             .footer(
@@ -721,6 +826,87 @@ mod tests {
         assert_eq!(state.selected(), vec!["at_2".to_string()]);
         state.set_checked("at_1", false);
         assert_eq!(state.selected(), vec!["at_2".to_string()]);
+    }
+
+    /// 多选三态：部分 → 全有（补打）→ 无（摘掉）；**部分集必须算进差集**。
+    ///
+    /// 为何单独铉：把「部分有」当布尔翻转，会让用户想“让全部都有”的那一下
+    /// 反而把已挂的那些摘掉（一次没被要求的批量删除）。
+    #[test]
+    fn batch_toggle_promotes_partial_then_clears_and_the_diff_is_batch_correct() {
+        let state = TagDialogState::new_batch(
+            vec!["at_1".to_string()], // 两项都挂着
+            vec!["at_2".to_string()], // 只有一项挂着
+        );
+        state.set_options(vec![choice("at_1"), choice("at_2"), choice("at_3")]);
+        assert!(state.is_selected("at_1"));
+        assert!(state.is_partial("at_2"));
+        assert!(!state.is_partial("at_1"), "全有的不是部分");
+        assert_eq!(state.diff(), (Vec::new(), Vec::new()), "开窗时无改动");
+
+        // 点一下「部分」：提升为全有 → 差集里出现在 add（宿主会给缺的补上）
+        state.promote_partial("at_2");
+        assert!(!state.is_partial("at_2"));
+        assert!(state.is_selected("at_2"));
+        assert_eq!(state.diff(), (vec!["at_2".to_string()], Vec::new()));
+
+        // 再点一下（现在是全有）：变成无 → 出现在 remove（宿主会从所有目标上摘掉）
+        state.toggle("at_2");
+        assert!(!state.is_selected("at_2"));
+        let (add, remove) = state.diff();
+        assert!(add.is_empty(), "取消不是新增：{add:?}");
+        assert_eq!(
+            remove,
+            vec!["at_2".to_string()],
+            "“部分 → 取消”也要摘掉（只算 baseline 会漏掉它）"
+        );
+
+        // 取消一个本来就是全有的 → 也在 remove 里（顺序：baseline 在前，baseline_partial 在后）
+        state.toggle("at_1");
+        assert_eq!(state.diff().1, vec!["at_1".to_string(), "at_2".to_string()]);
+
+        // 勾一个全新的 → 只进 add
+        state.toggle("at_3");
+        assert_eq!(
+            state.diff(),
+            (
+                vec!["at_3".to_string()],
+                vec!["at_1".to_string(), "at_2".to_string()]
+            )
+        );
+    }
+
+    /// 行内勾选框的三态版：勾上 = 全有（含从部分提升）；取消 = 全无（部分也一并清）。
+    #[test]
+    fn three_way_checkbox_writes_full_have_or_none() {
+        let state = TagDialogState::new_batch(Vec::new(), vec!["at_1".to_string()]);
+        state.set_options(vec![choice("at_1")]);
+
+        state.set_checked_three_way("at_1", true);
+        assert!(state.is_selected("at_1") && !state.is_partial("at_1"));
+        assert_eq!(state.diff().0, vec!["at_1".to_string()]);
+
+        state.set_checked_three_way("at_1", false);
+        assert!(!state.is_selected("at_1") && !state.is_partial("at_1"));
+        assert_eq!(
+            state.diff().1,
+            vec!["at_1".to_string()],
+            "取消后不能还原成“部分”（否则用户会看到它又自己回来了）"
+        );
+    }
+
+    /// 多选重置：新基准含「部分」集，不会重复提交同一份改动。
+    #[test]
+    fn reset_batch_moves_both_baselines() {
+        let state = TagDialogState::new_batch(Vec::new(), vec!["at_1".to_string()]);
+        state.set_options(vec![choice("at_1"), choice("at_2")]);
+        state.promote_partial("at_1");
+        assert_eq!(state.diff().0, vec!["at_1".to_string()]);
+
+        // 宿主动作完成后回推新状态：at_1 现在是全有，at_2 变成部分
+        state.reset_batch(vec!["at_1".to_string()], vec!["at_2".to_string()]);
+        assert!(state.is_selected("at_1") && state.is_partial("at_2"));
+        assert_eq!(state.diff(), (Vec::new(), Vec::new()));
     }
 
     /// 标签被删（词典里没了）：勾选跟着清掉，否则会提交一个指向不存在标签的 add。

@@ -263,7 +263,15 @@ fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, c
                 .label("＋ 标签")
                 .disabled(read_only)
                 .on_click(move |_, window, cx| {
-                    host.request_edit_tags(&resource_id, &resource_name, window, cx)
+                    // 详情面板永远是**一元**：批量走列表的多选 + 右键菜单。
+                    host.request_edit_tags(
+                        &[crate::model::TagTarget {
+                            id: resource_id.clone(),
+                            name: resource_name.clone(),
+                        }],
+                        window,
+                        cx,
+                    )
                 }),
         );
     }

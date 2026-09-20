@@ -307,16 +307,13 @@ impl ResourcesFilter {
     /// 单行是否命中。
     pub fn matches(&self, row: &ArchiveRow) -> bool {
         let query = self.query.trim().to_lowercase();
-        if !query.is_empty() {
-            let haystack = format!("{}{}", row.name.to_lowercase(), row.tail.to_lowercase());
-            if !haystack.contains(&query) {
-                return false;
-            }
+        if !query.is_empty() && !search_haystack(row).contains(&query) {
+            return false;
         }
         if !self.kinds.is_empty() && !self.kinds.contains(&row.kind) {
             return false;
         }
-        if !self.tags.is_empty() && !row.tag_ids.iter().any(|id| self.tags.contains(id)) {
+        if !self.tags.is_empty() && !row.tags.iter().any(|tag| self.tags.contains(&tag.id)) {
             return false;
         }
         if self.only_issues && row.status == ArchiveStatus::Normal {
@@ -324,6 +321,54 @@ impl ResourcesFilter {
         }
         true
     }
+}
+
+/// 匹配面包含的字段（**人读短名**，按用户找东西的先后排）。
+///
+/// 这份清单与 [`search_haystack`] 是同一件事的两种表达：一份给程序拼串，一份给用户看
+/// （[`no_match_hint`]）。加字段时两边一起改——单测会拦住“清单与实现不同步”。
+pub const SEARCH_FIELDS: [&str; 5] = ["显示名", "别名", "标签", "来源表", "尾部信息"];
+
+/// 无匹配空态的副文案（原型 §5）。
+///
+/// **搜不到的那一刻**才是最需要知道“哪些字段能搜”的时候：不写这句，用户会以为存档不在了，
+/// 而实际只是搜了行上看不见的字段。搜索词为空（纯筛选无匹配）时改指筛选。
+pub fn no_match_hint(query: &str) -> String {
+    if query.trim().is_empty() {
+        "去掉几个筛选条件，或清空筛选".to_string()
+    } else {
+        format!("换个关键词，或改搜这些字段：{}", SEARCH_FIELDS.join(" / "))
+    }
+}
+
+/// 一行的**匹配面**：显示名 / 别名 / 标签名 / 来源表 / 尾部字段拼成一个已小写化的串。
+///
+/// 匹配面**故意比展示面宽**（原型 §2.2）：别名、标签名、来源表都不在行上显示（面板窄，
+/// 摆不下），但它们恰恰是用户记得住的线索——“我叫它月报”“那张 `dwd_orders` 表来的”。
+/// 与 quick_open 的 `keywords` 同一口径：**可搜，不高亮**（高亮只认看得见的那几个字段）。
+///
+/// 拼一个串而不是逐字段比较：搜索是**逐行调用的**（每敲一个字重跑一遍列表），
+/// 这里只做一次装配，[`ResourcesFilter::matches`] 就只剩一次 `contains`。
+/// 字段之间留空格：不留的话跨字段的偶然连缀（名尾 + 尾巴首字母）会造出假命中。
+pub fn search_haystack(row: &ArchiveRow) -> String {
+    let mut haystack = String::with_capacity(row.name.len() + row.tail.len() + 32);
+    let mut push = |part: &str| {
+        if part.is_empty() {
+            return;
+        }
+        if !haystack.is_empty() {
+            haystack.push(' ');
+        }
+        haystack.push_str(&part.to_lowercase());
+    };
+    push(&row.name);
+    push(row.alias.as_deref().unwrap_or_default());
+    push(row.source_table.as_deref().unwrap_or_default());
+    for tag in &row.tags {
+        push(&tag.name);
+    }
+    push(&row.tail);
+    haystack
 }
 
 /// 一行是否需要用户处理（与状态行的"异常"口径一致）。
@@ -385,21 +430,29 @@ pub fn apply_view(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ResourcesFilter, SortField, SortOrder, apply_view, needs_attention,
-    };
+    use super::{ResourcesFilter, SortField, SortOrder, apply_view, needs_attention};
+    use crate::detail_view::ArchiveTagChip;
     use crate::model::{ArchiveKind, ArchiveStatus};
     use crate::resource_view::ArchiveRow;
 
-    fn row(id: &str, name: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32, tail: &str) -> ArchiveRow {
+    fn row(
+        id: &str,
+        name: &str,
+        kind: ArchiveKind,
+        status: ArchiveStatus,
+        version: i32,
+        tail: &str,
+    ) -> ArchiveRow {
         ArchiveRow {
             id: id.to_string(),
             name: name.to_string(),
+            alias: None,
             kind,
             version,
             status,
             tail: tail.to_string(),
-            tag_ids: Vec::new(),
+            source_table: None,
+            tags: Vec::new(),
             folder_id: None,
             // 原始值默认给中性值：只有排序用例关心它们（需要时用结构体更新语法盖掉）。
             updated_epoch: 0,
@@ -410,16 +463,44 @@ mod tests {
 
     fn row_with_tags(id: &str, tags: &[&str]) -> ArchiveRow {
         ArchiveRow {
-            tag_ids: tags.iter().map(|t| t.to_string()).collect(),
+            // 测试里标签名 = id（名字与 id 的对应关系不是本模块的事）。
+            tags: tags
+                .iter()
+                .map(|t| ArchiveTagChip {
+                    id: t.to_string(),
+                    name: t.to_string(),
+                })
+                .collect(),
             ..row(id, id, ArchiveKind::File, ArchiveStatus::Normal, 1, "")
         }
     }
 
     fn sample() -> Vec<ArchiveRow> {
         vec![
-            row("ar_2", "Beta.sql", ArchiveKind::File, ArchiveStatus::Normal, 2, "1.2 KB · 3 天前"),
-            row("ar_1", "alpha.sql", ArchiveKind::Analysis, ArchiveStatus::Normal, 5, "12,480 行 × 18 列"),
-            row("ar_3", "gamma.sql", ArchiveKind::File, ArchiveStatus::Missing, 1, ""),
+            row(
+                "ar_2",
+                "Beta.sql",
+                ArchiveKind::File,
+                ArchiveStatus::Normal,
+                2,
+                "1.2 KB · 3 天前",
+            ),
+            row(
+                "ar_1",
+                "alpha.sql",
+                ArchiveKind::Analysis,
+                ArchiveStatus::Normal,
+                5,
+                "12,480 行 × 18 列",
+            ),
+            row(
+                "ar_3",
+                "gamma.sql",
+                ArchiveKind::File,
+                ArchiveStatus::Missing,
+                1,
+                "",
+            ),
         ]
     }
 
@@ -440,7 +521,123 @@ mod tests {
             query: "1.2".to_string(),
             ..ResourcesFilter::default()
         };
-        assert_eq!(apply_view(&rows, &by_tail, SortField::Name, SortOrder::Asc).len(), 1);
+        assert_eq!(
+            apply_view(&rows, &by_tail, SortField::Name, SortOrder::Asc).len(),
+            1
+        );
+    }
+
+    /// 匹配面比展示面宽（原型 §2.2）：别名 / 标签名 / 来源表都可搜。
+    #[test]
+    fn query_matches_alias_tag_name_and_source_table() {
+        let mut alias_row = row(
+            "ar_1",
+            "dau_report.sql",
+            ArchiveKind::Analysis,
+            ArchiveStatus::Normal,
+            1,
+            "",
+        );
+        alias_row.alias = Some("月报".to_string());
+
+        let mut tag_row = row_with_tags("ar_2", &["at_1"]);
+        tag_row.tags[0].name = "财务报表".to_string();
+
+        let mut table_row = row(
+            "ar_3",
+            "orders_archive.sql",
+            ArchiveKind::TableRef,
+            ArchiveStatus::Normal,
+            1,
+            "无指纹",
+        );
+        table_row.source_table = Some("dwd.dwd_orders".to_string());
+
+        let rows = vec![alias_row, tag_row, table_row];
+        let hit = |query: &str| {
+            let filter = ResourcesFilter {
+                query: query.to_string(),
+                ..ResourcesFilter::default()
+            };
+            apply_view(&rows, &filter, SortField::Name, SortOrder::Asc)
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(hit("月报"), vec!["ar_1"], "别名命中（行上不显示它）");
+        assert_eq!(
+            hit("财务报表"),
+            vec!["ar_2"],
+            "标签名命中（筛标签维比的是 id）"
+        );
+        assert_eq!(hit("DWD_ORDERS"), vec!["ar_3"], "来源表命中且大小写不敏感");
+        assert_eq!(hit("dwd.dwd"), vec!["ar_3"], "来源表可整串搜");
+
+        // 跨字段的偶然连缀不算命中（字段之间留了空格），无关词一律不命中。
+        assert!(hit("sql 无").is_empty());
+        assert!(hit("zzz").is_empty());
+    }
+
+    /// 匹配面是**加**进去的而不是替换：缺别名 / 标签 / 来源表的行依旧按名称与尾巴命中。
+    #[test]
+    fn search_haystack_keeps_name_and_tail_for_every_row() {
+        let row = row(
+            "ar_1",
+            "alpha.sql",
+            ArchiveKind::File,
+            ArchiveStatus::Normal,
+            3,
+            "1.2 KB · 3 天前",
+        );
+        let haystack = super::search_haystack(&row);
+        assert!(haystack.contains("alpha.sql"));
+        assert!(haystack.contains("1.2 kb"), "尾巴已小写化：{haystack}");
+        assert_eq!(haystack, haystack.to_lowercase(), "装配即小写");
+    }
+
+    /// 给用户看的那份字段清单（[`super::SEARCH_FIELDS`]）与实现真的对得上：
+    /// 每一项都能在某行上搜到——“说明了却搜不到”比不说还糟。
+    #[test]
+    fn search_fields_list_covers_what_the_haystack_really_matches() {
+        let mut row = row(
+            "ar_1",
+            "dau_report.sql",
+            ArchiveKind::TableRef,
+            ArchiveStatus::Normal,
+            3,
+            "1.2 KB · 3 天前",
+        );
+        row.alias = Some("月报".to_string());
+        row.source_table = Some("dwd.dwd_orders".to_string());
+        row.tags = vec![ArchiveTagChip {
+            id: "at_1".to_string(),
+            name: "财务报表".to_string(),
+        }];
+        let haystack = super::search_haystack(&row);
+
+        // 与 `SEARCH_FIELDS` 一一对应（顺序即清单顺序）。
+        let probes = ["dau_report", "月报", "财务报表", "dwd.dwd_orders", "1.2 kb"];
+        assert_eq!(super::SEARCH_FIELDS.len(), probes.len());
+        for (field, probe) in super::SEARCH_FIELDS.iter().zip(probes) {
+            assert!(haystack.contains(probe), "{field} 应可被搜到（{probe}）");
+        }
+    }
+
+    /// 空态副文案：搜不到时告知能搜哪些字段，纯筛选无匹配时改指筛选。
+    #[test]
+    fn no_match_hint_speaks_about_the_query_only_when_there_is_one() {
+        let filtered = super::no_match_hint("  ");
+        assert!(
+            filtered.contains("筛选"),
+            "没搜索词就不谈搜什么：{filtered}"
+        );
+        assert!(!filtered.contains("别名"));
+
+        let searched = super::no_match_hint("月报");
+        for field in super::SEARCH_FIELDS {
+            assert!(searched.contains(field), "缺字段说明：{field} / {searched}");
+        }
     }
 
     #[test]
@@ -451,7 +648,10 @@ mod tests {
             kinds: vec![ArchiveKind::File],
             ..ResourcesFilter::default()
         };
-        assert_eq!(apply_view(&rows, &only_files, SortField::Name, SortOrder::Asc).len(), 2);
+        assert_eq!(
+            apply_view(&rows, &only_files, SortField::Name, SortOrder::Asc).len(),
+            2
+        );
         assert!(!only_files.is_empty());
 
         let issues = ResourcesFilter {
@@ -516,17 +716,25 @@ mod tests {
             row_with_raw("ar_3", "m_mid.sql", 200, Some(20), Some(4096)),
         ];
         let none = ResourcesFilter::default();
-        let ids = |sorted: Vec<ArchiveRow>| {
-            sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
-        };
+        let ids = |sorted: Vec<ArchiveRow>| sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
 
         // 时间：新的在前（降序是这一列的常态口径）。
         assert_eq!(
-            ids(apply_view(&rows, &none, SortField::UpdatedAt, SortOrder::Desc)),
+            ids(apply_view(
+                &rows,
+                &none,
+                SortField::UpdatedAt,
+                SortOrder::Desc
+            )),
             vec!["ar_1", "ar_3", "ar_2"]
         );
         assert_eq!(
-            ids(apply_view(&rows, &none, SortField::ArchivedAt, SortOrder::Asc)),
+            ids(apply_view(
+                &rows,
+                &none,
+                SortField::ArchivedAt,
+                SortOrder::Asc
+            )),
             vec!["ar_2", "ar_3", "ar_1"]
         );
 
@@ -545,9 +753,7 @@ mod tests {
             row_with_raw("ar_big", "m_big.sql", 200, Some(20), Some(4096)),
         ];
         let none = ResourcesFilter::default();
-        let ids = |sorted: Vec<ArchiveRow>| {
-            sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
-        };
+        let ids = |sorted: Vec<ArchiveRow>| sorted.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
 
         // 缺值不随方向翻转：升序降序都在末尾（“不知道”不当“最大”）。
         assert_eq!(
@@ -559,7 +765,12 @@ mod tests {
             vec!["ar_big", "ar_small", "ar_unknown"]
         );
         assert_eq!(
-            ids(apply_view(&rows, &none, SortField::ArchivedAt, SortOrder::Desc)),
+            ids(apply_view(
+                &rows,
+                &none,
+                SortField::ArchivedAt,
+                SortOrder::Desc
+            )),
             vec!["ar_big", "ar_small", "ar_unknown"]
         );
     }
@@ -657,11 +868,17 @@ mod tests {
             row_with_tags("ar_4", &[]),
         ];
         let mut filter = ResourcesFilter::default();
-        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 4);
+        assert_eq!(
+            apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(),
+            4
+        );
 
         filter.toggle_tag("at_a");
         assert!(filter.has_tag("at_a"));
-        assert!(!filter.is_empty(), "选了标签就是真筛选（空库不该显示“没有匹配”）");
+        assert!(
+            !filter.is_empty(),
+            "选了标签就是真筛选（空库不该显示“没有匹配”）"
+        );
         assert_eq!(
             apply_view(&rows, &filter, SortField::Name, SortOrder::Asc)
                 .iter()
@@ -672,13 +889,19 @@ mod tests {
 
         // 再选一个 = 并集（不是交集）。
         filter.toggle_tag("at_b");
-        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 3);
+        assert_eq!(
+            apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(),
+            3
+        );
         assert_eq!(filter.menu_dims(), 2);
 
         // 再点一次取消勾选。
         filter.toggle_tag("at_a");
         assert!(!filter.has_tag("at_a"));
-        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 2);
+        assert_eq!(
+            apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(),
+            2
+        );
     }
 
     /// 标签被删后要能抹掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）。
@@ -804,7 +1027,10 @@ mod tests {
     #[test]
     fn unknown_folders_fall_back_to_ungrouped() {
         let groups = vec![group("af_1", "月报", 0)];
-        let rows = vec![row_in("ar_1", Some("af_gone")), row_in("ar_2", Some("af_1"))];
+        let rows = vec![
+            row_in("ar_1", Some("af_gone")),
+            row_in("ar_2", Some("af_1")),
+        ];
         let items = build_visible_items(&rows, &groups, &Default::default());
         assert_eq!(
             keys(&items),

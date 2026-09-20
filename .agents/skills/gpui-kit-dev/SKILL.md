@@ -114,6 +114,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **Button**：`.icon(...).size(px(28.)).ghost().toggled(bool).label(...)`
 - **StatusBar**：`.left(...)` / `.right(...)`
 - **Input**：`Input::new(&InputState)`；InputState 用 `cx.new(|cx| InputState::new(window, cx))` 创建
+  **程序化写值不发事件**：`InputState::set_value(..)` 内部临时 `emit_events = false`（gpui-base `input/base/state.rs`），所以订阅了 `InputEvent::Change` 的地方**不会**因程序化写入而触发——「用户改了才做」的副作用（标脏 / 落库 / 搜索）要靠真敲键；反过来程序化回填也不会把副作用重跑一遍（这正是想要的）。
 
 ## 窗口测试（GPUI headless）
 

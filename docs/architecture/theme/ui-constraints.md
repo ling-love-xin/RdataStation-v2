@@ -82,10 +82,11 @@
 | --- | --- | --- |
 | gpui-kit `Button`（`primary` / `secondary`） | footer 提交 / 次要动作、管理入口 | 组件默认尺寸；不用 `.size()` 压高度 |
 | 自绘文本动作（`+ 添加` / `列表` / `✎`） | 行内轻量动作 | `text_xs` + `cursor_pointer` + hover 变色（`primary` 用于新增类，`muted_foreground` 用于切换类） |
-| 自绘分段控件（作用域） | 三态单选 | 选中：`primary` 底 + `primary_foreground` 字；未选：`muted_foreground` 字 + `list_hover` 悬停底 |
+| `tab::TabBar::segmented()` | 三态 / 多态分段（如连接对话框的「作用域」） | 组件自带选中态与键盘；不要自绘分段（旧做法，已于决策 #84 退场） |
+| `switch::Switch` | 布尔开关（如「使用 DuckDB 联邦」） | 组件自带；不要自绘轨道 + 滑块 |
 | `Checkbox` | 多选（分组） | 组件默认 |
 
-**重要**：行内小控件**不要用 `Button` 变体**——RDS 主题未覆盖全部 `button_*_foreground` token（曾导致“文字不可见仍可点击”），自绘走 `theme.colors` 才能保证对比度。
+**注意**：RDS 主题至今**未覆盖任何 `button_*` token**（`assets/themes/rds-theme.json` 里一个都没有）——所以用 `Button` 变体（含 `.ghost()`）时**先看一眼对比度**（曾出现“文字不可见仍可点击”）。行内轻量动作可以自绘（走 `theme.colors` 保证对比度）；已有位置换成 `Button::ghost()`（连接对话框侧栏行尾的行删除、资产库面板内多处动作），迁移时同样要过一遍对比度。
 
 **禁用占位规则**（真机反馈）：当控件“暂无数据可选”或“当前不适用”时，**保留控件形态并置为 disabled**（如未选类型时的驱动下拉、仅全局时的项目下拉），而不是换成一行裸文字——避免布局与行高跳变。
 
@@ -129,6 +130,27 @@
 - 只读值优先用**数据框**（与可编辑输入同形，靠面板浅底建立对比）；纯文本行只用于无字段语义的说明。
 - 调整主题时同步改 `assets/themes/rds-theme.json` 的 `input.border`（当前 Light `#B0B0B0` / Dark `#4F4F4F`），并在 `theme-design.md` 记录取值理由。
 
+### 8.3 行态口径（跨面板单一来源，2026-09-20 起）
+
+树的**行态**曾在导航（M4）、草稿箱（M5）、资产库（M6）各写一遍，于是同一件事长出不同答案（展开指示一个用字符一个用图标、悬停优先级相反、选中底色两种 token）。现在收成**一处口径**，四个消费方（含 Mock M7）共用：
+
+| 事实 | 唯一口径 | 权威落点 |
+| --- | --- | --- |
+| 展开指示 | 12px chevron **图标**；固定 10px 槽宽，槽宽是缩进算式的一部分（不得改） | `workbench_shell::tree::{disclosure_slot, disclosure_icon}` |
+| 悬停 vs 选中 | **悬停只在未选中时生效**（`when(!selected, hover(..))`）；开关态 chip 同理（激活时不换色） | 各面板行渲染 + 本文 §8 上表 |
+| 选中底 | `list_active`（不用 `sidebar_accent`：那个角色归侧栏容器） | 同上 |
+| 选中激活条 | 左侧 2px `list_active_border`，绝对定位、上下内缩 `TREE_ACTIVE_BAR_INSET` | `tree::active_bar` |
+| 缩进 | `base + depth × ui::TREE_INDENT`（导航有基础内距，草稿箱为 0） | `tree::{indent_spacer, indent_rem}` |
+| 行高（虚拟列表） | 「基础高 + 附加块」的链式预算，**估算与渲染成对维护** | `tree::{RowHeight, row_sizes}` |
+| 定高行的长文案 | 一律 `min_w_0` + `overflow_hidden` + `text_ellipsis`（换行会撺破定高槽位） | `ui-design-spec` §4 + skill `gpui-kit-dev` §布局与滚动陷阱 |
+| 行内动作命中区 | ≥ 20px（`ui::NAV_ROW_ACTION_SIZE`）；隐藏用 `invisible()` 而**不是** `opacity(0)`（后者仍能点到） | `ui-design-spec` §2.1 + 本文 §6 |
+| 类别 vs 状态 | 图标**形状**承载类别（资产路径），颜色只承载状态（`danger` / `info` / `muted`） | 导航原型 §3 / v8 修订点 |
+| 行内动效 | 只挂**暂态**（连接中 / 加载中）；循环缓动首尾同值；id 用业务键 | `ui-design-spec` §4.1 + skill `gpui-kit-dev` §动效 |
+
+- **不要再在面板里写第二份**：上表任一项要改，就改「权威落点」那一处，四个消费方一起受益；面板文档只留取舍记录与指针。
+- 口径来源：导航侧 `docs/architecture/database/database-navigator-prototype-design.md` v8 / v11 修订点（最早落定的一套）、草稿箱 `scratchpad-architecture.md` D14–D16、资产库 `docs/architecture/analytics_resource/analytics-resource-dev-plan.md`。
+- 这条规矩本身是为了防「同一件事在两个会话里各拍一次」（曾发生）：改口径就改本表 + 在相关面板文档留痕。
+
 ## 9. 提交前检查清单
 
 - [ ] 无裸色值；颜色全部来自 `theme.colors`
@@ -136,7 +158,9 @@
 - [ ] 定宽 / 固定高度处**写清理由**（如"固定宽：类型名长短不移动后续元素"）
 - [ ] 可增长区域已配固定高度 + 滚动
 - [ ] hover / disabled 态齐全，禁用态不可点击
-- [ ] 新增行内控件优先自绘（避免组件 token 缺口）
+- [ ] 树 / 列表行：**悬停只在未选中时生效**（不盖选中底），选中 = `list_active` 底 + 左侧 2px `tree::active_bar`（§8.3）
+- [ ] 展开指示走 `tree::disclosure_slot()` + `tree::disclosure_icon()`，**槽宽不得改**（它是缩进算式的一部分；§8.3）
+- [ ] 可点元素分两类：**行内轻量动作**（hover 才显的 `+` / `✎` 类）可自绘走 `theme.colors`；**有语义**的（选择器 / 排序 / 分段 / 展开折叠 / 开关）用语义控件（`Button` / `Switch` / `TabBar` / `Collapsible`）并保证键盘可达（§6、§8）
 - [ ] 不随上下文变化的标签 / 占位已排查（无写死类型的示例文案）
 - [ ] 同一输入只在**一处**渲染；不适用语义的卡片已隐藏（非留空壳）
 

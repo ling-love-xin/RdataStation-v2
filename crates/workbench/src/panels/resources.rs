@@ -17,13 +17,14 @@ use std::time::Duration;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
+use analytics_resource::KeepVersions;
 use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
 use analytics_resource::filter::SortField;
+use analytics_resource::model::TagTarget;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
-use analytics_resource::KeepVersions;
 
 use super::SidebarPanel;
 use crate::services::resource_jobs::{self, TagJobAction};
@@ -40,7 +41,9 @@ impl SidebarPanel {
         // 用户的每次点击（`choose_sort` → 宿主写回）。方向按字段惯例给，不另存一份。
         let field = SortField::from_key(&settings::SettingsService::default_resource_sort(cx))
             .unwrap_or_default();
-        panel.update(cx, |panel, cx| panel.set_sort(field, field.default_order(), cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_sort(field, field.default_order(), cx)
+        });
         // 折叠态（设置项 `resources.collapsed_groups`，按项目分桶）：同样构造期注入；
         // 点分组头时面板把当前全集交回宿主写回（设置里的死 key 会在下一次快照推送时被面板丢掉）。
         if let Some(root) = shared.project_root() {
@@ -139,13 +142,13 @@ impl SidebarPanel {
         self.ensure_resources_pump(cx);
     }
 
-    /// 执行一个标签动作（标签对话框的提交与详情 chip 的 × 经此入队）。
+    /// 执行一个标签动作（标签对话框的提交经此入队）。
     ///
     /// 忙态由对话框 / 面板自己置上，这里只负责校验与送作业。
+    /// `targets` 是本次对话框的**整批目标**（单选一元、多选 N 元）。
     pub(crate) fn request_tag_action(
         &self,
-        resource_id: &str,
-        resource_name: &str,
+        targets: &[TagTarget],
         event: TagDialogEvent,
         cx: &mut Context<Self>,
     ) {
@@ -158,19 +161,17 @@ impl SidebarPanel {
             self.finish_tag_action("项目为只读模式，不能改标签".to_string(), cx);
             return;
         }
+        if targets.is_empty() {
+            self.finish_tag_action("没有指定要改的存档".to_string(), cx);
+            return;
+        }
         let action = match event {
             TagDialogEvent::Apply { add, remove } => TagJobAction::Apply { add, remove },
             TagDialogEvent::CreateAndTag { name } => TagJobAction::CreateAndTag { name },
             TagDialogEvent::RenameTag { id, name } => TagJobAction::RenameTag { id, name },
             TagDialogEvent::DeleteTag { id } => TagJobAction::DeleteTag { id },
         };
-        resource_jobs::enqueue_tag_action(
-            root,
-            read_only,
-            resource_id.to_string(),
-            resource_name.to_string(),
-            action,
-        );
+        resource_jobs::enqueue_tag_action(root, read_only, targets.to_vec(), action);
         self.ensure_resources_pump(cx);
     }
 
@@ -427,7 +428,7 @@ impl SidebarPanel {
 
     /// 回填一份标签取数结果（开窗 / 换行都由它驱动，与 `apply_versions` 同形）。
     ///
-    /// 会话带 `resource_id`：同一条存档才复用已开的窗（换行 + 对齐比较基准），
+    /// 会话带 `targets`：同一批存档才复用已开的窗（换行 + 对齐比较基准），
     /// 不然就置 `pending` 重开一个新窗。
     fn apply_tag_rows(
         &mut self,
@@ -440,12 +441,14 @@ impl SidebarPanel {
                 {
                     let mut flow = self.shared.tag_dialog.borrow_mut();
                     if let Some(session) = flow.session.as_ref() {
-                        if session.resource_id == rows.resource_id {
+                        if session.targets.as_slice() == rows.targets.as_slice() {
                             session.state.set_busy(false);
                             session.state.set_note(None);
                             session.state.set_options(rows.seed.options.clone());
                             // 新状态即新比较基准：不然刚打完就显示“本次改动：去 1 个”。
-                            session.state.reset_selection(rows.seed.selected.clone());
+                            session
+                                .state
+                                .reset_batch(rows.seed.selected.clone(), rows.seed.partial.clone());
                             opened = true;
                         }
                     }

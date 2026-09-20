@@ -36,8 +36,8 @@ use analytics_resource::present::{
 };
 use analytics_resource::resource_view::{GroupOption, ResourcesSnapshot};
 use analytics_resource::{
-    AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
-    CheckoutRequest, IndexIssue, IndexRepair, KeepVersions,
+    AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus,
+    ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
 };
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
@@ -123,18 +123,20 @@ struct TrashActionJob {
     action: TrashAction,
 }
 
-/// 一次标签取数任务（全部标签 + 这条存档已挂的）。
+/// 一次标签取数任务（全部标签 + 这批目标各自已挂的）。
 struct TagListJob {
     project_root: PathBuf,
-    resource_id: String,
-    resource_name: String,
+    targets: Vec<TagTarget>,
 }
 
 /// 标签动作（作业侧的形态：对话框的 `TagDialogEvent` 多一种“去掉单个”）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagJobAction {
     /// 提交勾选差集。
-    Apply { add: Vec<String>, remove: Vec<String> },
+    Apply {
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
     /// 新建一个标签并直接打上。
     CreateAndTag { name: String },
     /// 重命名一个标签（只改显示名）。
@@ -146,20 +148,29 @@ pub enum TagJobAction {
 }
 
 /// 一次标签动作任务。
+///
+/// 收**目标切片**（单击一元、多选 N 元）：`Apply` 对每个目标各跑一遍差集，
+/// 字典级动作（改名 / 删标签）不需要目标，但列表型动作（新建并打上）要全打上。
 struct TagActionJob {
     project_root: PathBuf,
     read_only: bool,
-    resource_id: String,
-    resource_name: String,
+    targets: Vec<TagTarget>,
     action: TagJobAction,
 }
 
 /// 分组动作（建 / 改名 / 删 / 移动）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupJobAction {
-    Create { name: String },
-    Rename { id: String, name: String },
-    Delete { id: String },
+    Create {
+        name: String,
+    },
+    Rename {
+        id: String,
+        name: String,
+    },
+    Delete {
+        id: String,
+    },
     /// 移动（`folder_id = None` = 移回未分组）；`resource_ids` 收切片，多选也走这一条。
     Move {
         resource_ids: Vec<String>,
@@ -190,8 +201,8 @@ pub struct IndexScanRows {
 /// 标签对话框取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagRows {
-    pub resource_id: String,
-    pub resource_name: String,
+    /// 本次编辑的目标（单选一元、多选 N 元）——动作回来后会话靠它认自己。
+    pub targets: Vec<TagTarget>,
     pub seed: TagDialogSeed,
 }
 
@@ -250,7 +261,10 @@ pub enum OpOutcome {
     /// 分组动作完成（建 / 改名 / 删 / 移动，`note` 已是一句有信息量的话）。
     GroupDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
-    Failed { action: &'static str, reason: String },
+    Failed {
+        action: &'static str,
+        reason: String,
+    },
 }
 
 struct Jobs {
@@ -385,8 +399,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 // （行的 `tag_ids` 与详情的 chips 都在快照里）。
                 let result = rt.block_on(load_tag_rows(&TagListJob {
                     project_root: job.project_root.clone(),
-                    resource_id: job.resource_id.clone(),
-                    resource_name: job.resource_name.clone(),
+                    targets: job.targets.clone(),
                 }));
                 *lock(&jobs().tag_rows) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
@@ -446,11 +459,15 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
     match service.archive(job.request.clone()).await {
         Ok(outcome) => {
             // 首次归档才给撤销凭据：再归档的"撤销"是版本回退（服务层也会挡），不在这条路上。
-            let undo = job.request.existing_resource_id.is_none().then(|| ArchiveUndo {
-                resource_id: outcome.resource_id.clone(),
-                name: name.clone(),
-                source_path: job.request.source_path.clone(),
-            });
+            let undo = job
+                .request
+                .existing_resource_id
+                .is_none()
+                .then(|| ArchiveUndo {
+                    resource_id: outcome.resource_id.clone(),
+                    name: name.clone(),
+                    source_path: job.request.source_path.clone(),
+                });
             OpOutcome::Archived {
                 name,
                 version: outcome.version,
@@ -601,24 +618,23 @@ async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
     };
 
     match job.action {
-        VersionAction::Restore { version } => match service
-            .restore_version(&job.resource_id, version)
-            .await
-        {
-            Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {
-                note: format!(
-                    "已还原「{}」到 v{version}（生成 v{}；历史未改动）",
-                    job.name, outcome.version
-                ),
-            },
-            Ok(_) => OpOutcome::VersionActionDone {
-                note: format!("「{}」v{version} 的内容与当前一致，无需还原", job.name),
-            },
-            Err(error) => OpOutcome::Failed {
-                action: "还原版本",
-                reason: error.to_string(),
-            },
-        },
+        VersionAction::Restore { version } => {
+            match service.restore_version(&job.resource_id, version).await {
+                Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {
+                    note: format!(
+                        "已还原「{}」到 v{version}（生成 v{}；历史未改动）",
+                        job.name, outcome.version
+                    ),
+                },
+                Ok(_) => OpOutcome::VersionActionDone {
+                    note: format!("「{}」v{version} 的内容与当前一致，无需还原", job.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "还原版本",
+                    reason: error.to_string(),
+                },
+            }
+        }
         VersionAction::CheckoutDraft { version } => {
             // 扩展名取自本体路径（显示名可以是中文，扩展名不行）；落点定在草稿箱目录，
             // 重名避让与常规取回同一套（动文件之前定死）。
@@ -639,10 +655,8 @@ async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
                 .map(|ext| format!(".{ext}"))
                 .unwrap_or_default();
             let dir = job.project_root.join(scratchpad::MODULE_DIR_NAME);
-            let dest = free_dest(&dir.join(format!(
-                "{}（v{version} 工作副本）{extension}",
-                job.name
-            )));
+            let dest =
+                free_dest(&dir.join(format!("{}（v{version} 工作副本）{extension}", job.name)));
             match service
                 .checkout_version(&job.resource_id, version, &dest)
                 .await
@@ -760,7 +774,10 @@ async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
         RepairAction::RestoreFromTrash { rel_path } => {
             match service.restore_archive_by_rel_path(&rel_path).await {
                 Ok(resource) => OpOutcome::RepairDone {
-                    note: format!("已从回收站还原「{}」（resources/{rel_path}）", resource.name),
+                    note: format!(
+                        "已从回收站还原「{}」（resources/{rel_path}）",
+                        resource.name
+                    ),
                 },
                 Err(error) => OpOutcome::Failed {
                     action: "从回收站还原",
@@ -857,7 +874,10 @@ async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
     }
 }
 
-/// 取标签词典 + 这条存档已挂的标签 → 对话框取数结果（工作线程上执行）。
+/// 取标签词典 + 这批目标各自已挂的 → 对话框取数结果（工作线程上执行）。
+///
+/// 多选的两份集合：**全有**（交集，显示为勾上）与**部分**（并集 − 交集，显示为「部分」）。
+/// 交集为空说明这批目标没有共同标签；并集为空说明都没打过标签——两种都不算错误。
 async fn load_tag_rows(job: &TagListJob) -> Result<TagRows, String> {
     let manager = ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE)
         .await
@@ -869,19 +889,45 @@ async fn load_tag_rows(job: &TagListJob) -> Result<TagRows, String> {
         .await
         .map_err(|e| format!("读取标签失败：{e}"))?;
     let counts = store.tag_usage_counts().await.unwrap_or_default();
-    let selected = store
-        .get_tags_for_resource(&job.resource_id)
-        .await
-        .map_err(|e| format!("读取存档标签失败：{e}"))?
+
+    // 逐目标取已挂标签：并集入 seen，交集用“出现过几次 = 目标数”判定。
+    let mut first: Option<Vec<String>> = None;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut hit_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let total = job.targets.len();
+    for target in &job.targets {
+        let ids: Vec<String> = store
+            .get_tags_for_resource(&target.id)
+            .await
+            .map_err(|e| format!("读取存档标签失败：{e}"))?
+            .into_iter()
+            .map(|tag| tag.id)
+            .collect();
+        for id in &ids {
+            seen.insert(id.clone());
+            *hit_counts.entry(id.clone()).or_insert(0) += 1;
+        }
+        let set: std::collections::HashSet<String> = ids.into_iter().collect();
+        first = Some(match first {
+            Some(prev) => prev.into_iter().filter(|id| set.contains(id)).collect(),
+            None => set.into_iter().collect(),
+        });
+    }
+    let selected: Vec<String> = first.unwrap_or_default();
+    let partial: Vec<String> = seen
         .into_iter()
-        .map(|tag| tag.id)
+        .filter(|id| hit_counts.get(id).copied().unwrap_or(0) < total && !selected.contains(id))
         .collect();
+    let resource_name = match job.targets.as_slice() {
+        [one] => one.name.clone(),
+        many => format!("{} 项", many.len()),
+    };
 
     Ok(TagRows {
-        resource_id: job.resource_id.clone(),
-        resource_name: job.resource_name.clone(),
+        targets: job.targets.clone(),
         seed: TagDialogSeed {
-            resource_name: job.resource_name.clone(),
+            resource_name,
+            target_count: total,
             options: analytics_resource::present::tag_options(&tags, &counts)
                 .into_iter()
                 .map(|option| TagChoice {
@@ -891,6 +937,7 @@ async fn load_tag_rows(job: &TagListJob) -> Result<TagRows, String> {
                 })
                 .collect(),
             selected,
+            partial,
         },
     })
 }
@@ -913,27 +960,41 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
 
     match &job.action {
         TagJobAction::Apply { add, remove } => {
-            let mut done: Vec<String> = Vec::new();
-            for tag_id in remove {
-                if let Err(error) = store.remove_tag_from_resource(&job.resource_id, tag_id).await {
-                    return OpOutcome::Failed {
-                        action: "去标签",
-                        reason: format!("{error}（本次已改 {} 个）", done.len()),
-                    };
+            // 目标 × 标签两层循环：逐条改、**不做预回滚**（部分成功就部分成功，
+            // 错误里报“改了 N 处”），与删除 / 移动同一条口径。
+            let mut done = 0usize;
+            for target in &job.targets {
+                for tag_id in remove {
+                    if let Err(error) = store.remove_tag_from_resource(&target.id, tag_id).await {
+                        return OpOutcome::Failed {
+                            action: "去标签",
+                            reason: format!(
+                                "「{}」没改成：{error}（本次已改 {done} 处）",
+                                target.name
+                            ),
+                        };
+                    }
+                    done += 1;
                 }
-                done.push(tag_id.clone());
-            }
-            for tag_id in add {
-                if let Err(error) = store.add_tag_to_resource(&job.resource_id, tag_id).await {
-                    return OpOutcome::Failed {
-                        action: "打标签",
-                        reason: format!("{error}（本次已改 {} 个）", done.len()),
-                    };
+                for tag_id in add {
+                    if let Err(error) = store.add_tag_to_resource(&target.id, tag_id).await {
+                        return OpOutcome::Failed {
+                            action: "打标签",
+                            reason: format!(
+                                "「{}」没打成：{error}（本次已改 {done} 处）",
+                                target.name
+                            ),
+                        };
+                    }
+                    done += 1;
                 }
-                done.push(tag_id.clone());
             }
+            let scope = match job.targets.as_slice() {
+                [one] => format!("「{}」", one.name),
+                many => format!("{} 项", many.len()),
+            };
             OpOutcome::TagDone {
-                note: format!("已更新「{}」的标签（改了 {} 个）", job.resource_name, done.len()),
+                note: format!("已更新{scope}的标签（改了 {done} 处）"),
             }
         }
         TagJobAction::CreateAndTag { name } => {
@@ -954,14 +1015,24 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
                     };
                 }
             };
-            match store.add_tag_to_resource(&job.resource_id, &tag.id).await {
-                Ok(()) => OpOutcome::TagDone {
-                    note: format!("已新建标签「{}」并打上（{}）", tag.name, job.resource_name),
-                },
-                Err(error) => OpOutcome::Failed {
-                    action: "打标签",
-                    reason: format!("标签「{}」已建好，但没打上：{error}", tag.name),
-                },
+            // 新建并打上：**所有目标**都打上（多选时“新建并打上”就是给全选集的）。
+            for target in &job.targets {
+                if let Err(error) = store.add_tag_to_resource(&target.id, &tag.id).await {
+                    return OpOutcome::Failed {
+                        action: "打标签",
+                        reason: format!(
+                            "标签「{}」已建好，但「{}」没打上：{error}",
+                            tag.name, target.name
+                        ),
+                    };
+                }
+            }
+            let scope = match job.targets.as_slice() {
+                [one] => one.name.clone(),
+                many => format!("{} 项", many.len()),
+            };
+            OpOutcome::TagDone {
+                note: format!("已新建标签「{}」并打上（{scope}）", tag.name),
             }
         }
         TagJobAction::RenameTag { id, name } => match store.rename_tag(id, name).await {
@@ -983,9 +1054,15 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
             },
         },
         TagJobAction::RemoveOne { tag_id } => {
-            match store.remove_tag_from_resource(&job.resource_id, tag_id).await {
+            let Some(target) = job.targets.first() else {
+                return OpOutcome::Failed {
+                    action: "去标签",
+                    reason: "没有指定要改的存档".to_string(),
+                };
+            };
+            match store.remove_tag_from_resource(&target.id, tag_id).await {
                 Ok(()) => OpOutcome::TagDone {
-                    note: format!("已去掉「{}」的一个标签", job.resource_name),
+                    note: format!("已去掉「{}」的一个标签", target.name),
                 },
                 Err(error) => OpOutcome::Failed {
                     action: "去标签",
@@ -1310,15 +1387,13 @@ pub fn drain_versions() -> Option<Result<VersionRows, String>> {
 /// 提交一次索引扫描（**事件路径**调用：状态行「修复…」与面板头「重建索引…」）。
 pub fn enqueue_index_scan(project_root: PathBuf) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::IndexScan(IndexScanJob { project_root }));
+    let _ = jobs()
+        .tx
+        .send(Job::IndexScan(IndexScanJob { project_root }));
 }
 
 /// 提交一次索引修复动作（**事件路径**调用：索引修复对话框的行内动作）。
-pub fn enqueue_index_repair_action(
-    project_root: PathBuf,
-    read_only: bool,
-    action: RepairAction,
-) {
+pub fn enqueue_index_repair_action(project_root: PathBuf, read_only: bool, action: RepairAction) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::IndexRepairAction(IndexRepairActionJob {
         project_root,
@@ -1330,7 +1405,9 @@ pub fn enqueue_index_repair_action(
 /// 提交一次回收站取数（**事件路径**调用：面板头「⋯ → 回收站…」）。
 pub fn enqueue_trash_list(project_root: PathBuf) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::TrashList(TrashListJob { project_root }));
+    let _ = jobs()
+        .tx
+        .send(Job::TrashList(TrashListJob { project_root }));
 }
 
 /// 提交一次回收站动作（**事件路径**调用：回收站对话框的行内动作与「清空」）。
@@ -1358,13 +1435,12 @@ pub fn drain_tag_rows() -> Option<Result<TagRows, String>> {
     lock(&jobs().tag_rows).take()
 }
 
-/// 提交一次标签取数（**事件路径**调用：详情面板「＋ 标签」）。
-pub fn enqueue_tag_list(project_root: PathBuf, resource_id: String, resource_name: String) {
+/// 提交一次标签取数（**事件路径**调用：详情面板「＋ 标签」、行右键「编辑标签…」）。
+pub fn enqueue_tag_list(project_root: PathBuf, targets: Vec<TagTarget>) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::TagList(TagListJob {
         project_root,
-        resource_id,
-        resource_name,
+        targets,
     }));
 }
 
@@ -1372,16 +1448,14 @@ pub fn enqueue_tag_list(project_root: PathBuf, resource_id: String, resource_nam
 pub fn enqueue_tag_action(
     project_root: PathBuf,
     read_only: bool,
-    resource_id: String,
-    resource_name: String,
+    targets: Vec<TagTarget>,
     action: TagJobAction,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::TagAction(TagActionJob {
         project_root,
         read_only,
-        resource_id,
-        resource_name,
+        targets,
         action,
     }));
 }
@@ -1402,7 +1476,10 @@ mod tests {
 
     #[test]
     fn collision_name_keeps_extension_at_the_end() {
-        assert_eq!(collision_name("月报（工作副本）", Some("sql"), 2), "月报（工作副本）-2.sql");
+        assert_eq!(
+            collision_name("月报（工作副本）", Some("sql"), 2),
+            "月报（工作副本）-2.sql"
+        );
         assert_eq!(collision_name("无扩展名", None, 3), "无扩展名-3");
     }
 }

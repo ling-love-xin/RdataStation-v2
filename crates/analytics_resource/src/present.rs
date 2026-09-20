@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 
 use engine::persistence::trash::{TrashEntry, TrashKind};
 
+use crate::AnalyticsResource;
 use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 use crate::dialogs::trash::TrashRow;
@@ -18,7 +19,6 @@ use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
 use crate::payload::RESOURCES_DIR_NAME;
 use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnapshot, TagOption};
-use crate::AnalyticsResource;
 
 /// 按资源的标签映射：`resource_id → 标签行`（来自 `AnalyticsResourceStore::tags_by_resource`，
 /// 一次查完；逐行查会把一次刷新变成 N+1 次查询）。
@@ -143,7 +143,10 @@ pub fn build_trash_snapshot(entries: &[TrashEntry]) -> TrashSnapshot {
     for entry in entries {
         let manifest = &entry.manifest;
         if manifest.origin != ORIGIN_RESOURCES {
-            match foreign.iter_mut().find(|(origin, _)| origin == &manifest.origin) {
+            match foreign
+                .iter_mut()
+                .find(|(origin, _)| origin == &manifest.origin)
+            {
                 Some((_, count)) => *count += 1,
                 None => foreign.push((manifest.origin.clone(), 1)),
             }
@@ -211,14 +214,18 @@ pub fn to_row(
     ArchiveRow {
         id: resource.id.clone(),
         name: resource.name.clone(),
+        // 别名与来源表：行上不显示，但它们是**搜索匹配面**的一员（原型 §2.2，见 `filter::search_haystack`）。
+        alias: resource.alias.clone(),
         kind,
         version: resource.version,
         status,
         tail: tail_for(resource, kind, now),
-        // 筛标签维只比 id（名字会改）；详情里的 chip 名字另由 `to_detail` 给。
-        tag_ids: tags
+        source_table: resource.source_table.clone(),
+        // 标签**带名字**一起装：筛标签维比 id（名字会改），搜索比名字——一份数据两处用。
+        // 详情面板的 chips 也直接用这份（见 `build_snapshot`），不再各算一遍。
+        tags: tags
             .get(&resource.id)
-            .map(|list| list.iter().map(|tag| tag.id.clone()).collect())
+            .map(|list| tag_chips(list))
             .unwrap_or_default(),
         folder_id: folders.get(&resource.id).cloned(),
         // 原始值原样带上（视图层排序只看它们，不去解析格式化过的尾巴）。
@@ -279,7 +286,10 @@ pub fn to_detail(
         readonly: resource.readonly != 0,
         size_label,
         modified_label: format_timestamp(resource.updated_at),
-        archived_label: resource.archived_at.map(format_timestamp).unwrap_or_default(),
+        archived_label: resource
+            .archived_at
+            .map(format_timestamp)
+            .unwrap_or_default(),
         promoted_from: resource.promoted_from.clone(),
         source_connection_id: resource.source_connection_id.clone(),
         source_table: resource.source_table.clone(),
@@ -343,7 +353,9 @@ pub fn build_version_rows(
         candidates.push(Candidate {
             version: version.version,
             size: snapshot.as_ref().and_then(|record| record.file_size),
-            hash: snapshot.as_ref().and_then(|record| record.content_hash.clone()),
+            hash: snapshot
+                .as_ref()
+                .and_then(|record| record.content_hash.clone()),
             time: version.created_at,
             is_current: false,
             has_copy: copies.contains(&version.version),
@@ -385,7 +397,14 @@ fn version_delta(previous_version: i32, previous: &Candidate, current: &Candidat
         });
     }
     if let (Some(now), Some(before)) = (current.hash.as_deref(), previous.hash.as_deref()) {
-        parts.push(if now == before { "指纹相同" } else { "指纹已变" }.to_string());
+        parts.push(
+            if now == before {
+                "指纹相同"
+            } else {
+                "指纹已变"
+            }
+            .to_string(),
+        );
     }
     if parts.is_empty() {
         return String::new();
@@ -462,11 +481,7 @@ fn group_order(group: RepairGroup) -> usize {
 
 /// 相对路径 → 文件名（未登记行的标题：路径太长，行里放不下，完整路径在副文案里）。
 fn file_name_of(rel_path: &str) -> String {
-    rel_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(rel_path)
-        .to_string()
+    rel_path.rsplit('/').next().unwrap_or(rel_path).to_string()
 }
 
 /// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志 + 标签字典。
@@ -493,7 +508,13 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
     let mut details = std::collections::HashMap::with_capacity(resources.len());
 
     for resource in resources {
-        let row = to_row(resource, statuses, tags_by_resource, folders_by_resource, now);
+        let row = to_row(
+            resource,
+            statuses,
+            tags_by_resource,
+            folders_by_resource,
+            now,
+        );
         match row.status {
             ArchiveStatus::Missing => counts.missing += 1,
             ArchiveStatus::ContentChanged => counts.drifted += 1,
@@ -504,13 +525,10 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             },
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
-        let chips = tags_by_resource
-            .get(&resource.id)
-            .map(|tags| tag_chips(tags))
-            .unwrap_or_default();
+        // 标签 chips 就用行上那一份（同一装配来源，不会出现“行里有、详情里没有”）。
         details.insert(
             resource.id.clone(),
-            to_detail(resource, row.status, history_count, &chips),
+            to_detail(resource, row.status, history_count, &row.tags),
         );
         rows.push(row);
     }
@@ -609,9 +627,30 @@ mod tests {
     #[test]
     fn trash_snapshot_keeps_own_entries_and_counts_foreign() {
         let entries = vec![
-            trash_entry("t1", "dau.sql", ORIGIN_RESOURCES, "reports/dau.sql", TrashKind::File, 2048),
-            trash_entry("t2", "draft.sql", "scratchpad", "draft.sql", TrashKind::File, 10),
-            trash_entry("t3", "reports", "scratchpad", "reports", TrashKind::Folder, 0),
+            trash_entry(
+                "t1",
+                "dau.sql",
+                ORIGIN_RESOURCES,
+                "reports/dau.sql",
+                TrashKind::File,
+                2048,
+            ),
+            trash_entry(
+                "t2",
+                "draft.sql",
+                "scratchpad",
+                "draft.sql",
+                TrashKind::File,
+                10,
+            ),
+            trash_entry(
+                "t3",
+                "reports",
+                "scratchpad",
+                "reports",
+                TrashKind::Folder,
+                0,
+            ),
         ];
 
         let snapshot = build_trash_snapshot(&entries);
@@ -684,10 +723,7 @@ mod tests {
         assert!(rows[0].detail.contains("resources/a.sql"));
         assert_eq!(rows[1].title, "外来表.sql", "嵌套路径取最后一段");
         // 指纹不匹配：两个指纹都缩到 12 位（期望 / 实际各一份，不藏任何一边）。
-        assert_eq!(
-            rows[3].hash_detail,
-            "登记 111111111111 · 实际 222222222222"
-        );
+        assert_eq!(rows[3].hash_detail, "登记 111111111111 · 实际 222222222222");
         assert!(rows[3].detail.contains("reports/dau.sql"));
         assert_eq!(rows[3].resource_id.as_deref(), Some("ar_2"));
         assert!(rows[2].hash_detail.is_empty(), "缺本体没有指纹可对");
@@ -723,11 +759,23 @@ mod tests {
     fn relative_time_buckets_and_clock_skew() {
         let now = Utc::now();
         assert_eq!(format_relative_time(now, now), "刚刚");
-        assert_eq!(format_relative_time(now, now - Duration::minutes(5)), "5 分钟前");
-        assert_eq!(format_relative_time(now, now - Duration::hours(3)), "3 小时前");
+        assert_eq!(
+            format_relative_time(now, now - Duration::minutes(5)),
+            "5 分钟前"
+        );
+        assert_eq!(
+            format_relative_time(now, now - Duration::hours(3)),
+            "3 小时前"
+        );
         assert_eq!(format_relative_time(now, now - Duration::days(2)), "2 天前");
-        assert_eq!(format_relative_time(now, now - Duration::days(70)), "2 个月前");
-        assert_eq!(format_relative_time(now, now - Duration::days(800)), "2 年前");
+        assert_eq!(
+            format_relative_time(now, now - Duration::days(70)),
+            "2 个月前"
+        );
+        assert_eq!(
+            format_relative_time(now, now - Duration::days(800)),
+            "2 年前"
+        );
         // 时钟回拨不给"-5 分钟前"这种怪东西。
         assert_eq!(format_relative_time(now, now + Duration::hours(1)), "刚刚");
     }
@@ -808,7 +856,8 @@ mod tests {
         assert_eq!(table_ref.size_label, "", "引用型不给体积（不假装有值）");
     }
 
-    /// 标签进快照：行带 id（筛选维用）、详情带 chip（显示用）、顶层带词典（筛选菜单用）。
+    /// 标签进快照：行带 **id + 名字**（筛选比 id、搜索比名字，一份数据两处用）、
+    /// 详情带同一份 chip（同一装配来源）、顶层带词典（筛选菜单用）。
     #[test]
     fn snapshot_carries_tags_for_rows_details_and_dictionary() {
         let now = Utc::now();
@@ -847,11 +896,48 @@ mod tests {
             now,
         });
 
-        assert_eq!(snapshot.rows[0].tag_ids, vec!["at_1".to_string()]);
-        assert!(snapshot.rows[1].tag_ids.is_empty(), "没挂标签的行是空集，不是缺字段");
+        assert_eq!(snapshot.rows[0].tags, snapshot.details["ar_1"].tags);
+        assert_eq!(snapshot.rows[0].tags[0].id, "at_1");
+        assert_eq!(snapshot.rows[0].tags[0].name, "报表");
+        assert!(
+            snapshot.rows[1].tags.is_empty(),
+            "没挂标签的行是空集，不是缺字段"
+        );
         assert_eq!(snapshot.details["ar_1"].tags[0].name, "报表");
         assert!(snapshot.details["ar_2"].tags.is_empty());
         assert_eq!(snapshot.tags.len(), 1);
+    }
+
+    /// 搜索匹配面所需的字段（别名 / 来源表）在装配时就带上（原型 §2.2）。
+    /// 行上不显示它们，但搜索要看：缺了这个装配，面板里搜别名就只会得到空列表。
+    #[test]
+    fn rows_carry_alias_and_source_table_for_the_search_surface() {
+        let now = Utc::now();
+        let mut alias = row_model("ar_1", "analysis", None);
+        alias.alias = Some("月报".to_string());
+        let mut table_ref = row_model("ar_2", "table_ref", None);
+        table_ref.source_table = Some("dwd.dwd_orders".to_string());
+        let resources = vec![alias, table_ref];
+
+        let snapshot = build_snapshot(SnapshotInputs {
+            resources: &resources,
+            statuses: &ArchiveStatuses::new(),
+            history_counts: &VersionCounts::new(),
+            tags: empty_tags(),
+            tag_dictionary: Vec::new(),
+            folders: empty_folders(),
+            group_dictionary: Vec::new(),
+            read_only: false,
+            now,
+        });
+
+        let haystack = crate::filter::search_haystack(&snapshot.rows[0]);
+        assert!(haystack.contains("月报"), "别名进了匹配面：{haystack}");
+        let haystack = crate::filter::search_haystack(&snapshot.rows[1]);
+        assert!(
+            haystack.contains("dwd.dwd_orders"),
+            "来源表进了匹配面：{haystack}"
+        );
     }
 
     #[test]

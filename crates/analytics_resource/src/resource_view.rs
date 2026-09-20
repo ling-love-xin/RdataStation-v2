@@ -44,9 +44,9 @@ use engine::file_reader_function;
 use gpui_kit::assets::IconName as CatalogIcon;
 
 use crate::commands;
-use crate::detail_view::ArchiveDetail;
+use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
-use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
+use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
 use crate::ui;
 // 行级共用原语（展开指示槽 / 图标）：与 M4 导航、M5 草稿箱同一份，不各自手搓（见 `workbench_shell::tree` 头注）。
 use workbench_shell::tree;
@@ -58,13 +58,25 @@ use workbench_shell::tree;
 pub struct ArchiveRow {
     pub id: String,
     pub name: String,
+    /// 别名（`None` = 没起过）。
+    ///
+    /// **行上不显示**（面板只有 240px），但它是搜索匹配面的一员（原型 §2.2）：
+    /// 别名往往正是用户记得住的那个叫法。
+    pub alias: Option<String>,
     pub kind: ArchiveKind,
     pub version: i32,
     pub status: ArchiveStatus,
     /// 尾部字段（按字段优先级规则拼好，见 [`row_tail`]）。
     pub tail: String,
-    /// 这行挂的标签 id（筛选的标签维用它；名字会改，所以比的是 id）。
-    pub tag_ids: Vec<String>,
+    /// 来源表 `schema.table`（引用型必有，其余多缺）。
+    ///
+    /// 与 `alias` 同理：不在行上显示，只进搜索匹配面——表名常是找存档的线索。
+    pub source_table: Option<String>,
+    /// 这行挂的标签（**带名字**）。
+    ///
+    /// 一处数据两处用：筛选的标签维比 `id`（名字会改），搜索的匹配面比 `name`（原型 §2.2 的“标签”）。
+    /// 名字与 id 同源装配（[`crate::present::to_row`]），不存在两份列表错位的可能。
+    pub tags: Vec<ArchiveTagChip>,
     /// 这行归属的分组（`None` = 未分组）。
     ///
     /// 单层分组（架构 D8）：最多一个，所以是 `Option` 而不是集合——类型上就把
@@ -223,6 +235,45 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
     }
 }
 
+/// 行右键菜单里「编辑标签」那一项的文案（多选时带项数）。
+///
+/// 为何抽成纯函数：菜单内部的项读不到（`PopupMenu` 不暴露），而文案是**用户看到的契约**
+/// （“这一下会改几条”），所以把可断言的那一半拎出来（与 `dispatch_header_action` 同法）。
+pub fn tag_entry_label(multi_count: usize) -> String {
+    if multi_count > 1 {
+        format!("编辑标签（{multi_count} 项）…")
+    } else {
+        "编辑标签…".to_string()
+    }
+}
+
+/// 「编辑标签」要交给宿主的目标集（纯函数）。
+///
+/// 规则与删除 / 移动完全一致：**这一行在多选集里**→ 整选集（按可见行顺序，回执与测试都要确定性）；
+/// 否则只给这一行。抽出来的理由：菜单里那一句只有真点开才能验，而“到底送了几项”
+/// 是这张批量功能最容易错的地方（漏送 = 只改了用户点中的那一条）。
+pub fn tag_targets(
+    rows: &[&ArchiveRow],
+    multi_ids: &std::collections::HashSet<String>,
+    row: &ArchiveRow,
+) -> Vec<TagTarget> {
+    let multi_selected = multi_ids.len() > 1 && multi_ids.contains(&row.id);
+    if multi_selected {
+        rows.iter()
+            .filter(|candidate| multi_ids.contains(&candidate.id))
+            .map(|candidate| TagTarget {
+                id: candidate.id.clone(),
+                name: candidate.name.clone(),
+            })
+            .collect()
+    } else {
+        vec![TagTarget {
+            id: row.id.clone(),
+            name: row.name.clone(),
+        }]
+    }
+}
+
 /// 这条存档能否「查看统计」（M8 洞察）：判定按种类分，三类的可分析性来源不同。
 ///
 /// - **受管文件**：本体得是 DuckDB 读得动的数据文件——扩展名口径只有一处
@@ -311,17 +362,12 @@ pub trait ResourcesHost: 'static {
     fn request_rename_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
     /// 删除分组（分组头右键；**成员回未分组**，存档本身不受影响）。
     fn request_delete_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
-    /// 打开「标签」对话框（详情面板「＋ 标签」）：勾选/取消标签、顺带新建。
+    /// 打开「标签」对话框（详情面板「＋ 标签」/ 行右键菜单）：勾选/取消标签、顺带新建。
     ///
-    /// 只收 id 与显示名：对话框的数据由宿主在取数线程上查库得到（与 `request_version_history`
-    /// 同一口径——调用方不必为了一个 id 去克隆整条详情）。
-    fn request_edit_tags(
-        &self,
-        resource_id: &str,
-        resource_name: &str,
-        window: &mut Window,
-        cx: &mut App,
-    );
+    /// 收**目标切片**（单击一元、多选 N 元）：多选批量是原型里多选解锁的动作之一，
+    /// 与 `request_delete` / `request_move_to_group` 同一口径——面板给出选集，宿主负责
+    /// 取数（全部标签 + 每个目标的已挂标签）与批量执行。
+    fn request_edit_tags(&self, targets: &[TagTarget], window: &mut Window, cx: &mut App);
     /// 去掉一个标签（详情面板 chip 上的 ×）。
     ///
     /// 与其它动作同口径：收**面板已有的那条详情**（回执文案要显示名），不回头读面板选中态。
@@ -766,10 +812,11 @@ impl ListDelegate for ArchiveListDelegate {
         let host = self.host.clone();
         let multi_bg = cx.theme().colors.list_active;
         // 多选态（> 1 条）：单行动作一律置灰（原型 §3.2“单/多选 → 单选可用”），
-        // 删除项改为对**整个选择集**生效并带数量。
+        // 删除 / 移动 / 打标签改为对**整个选择集**生效并带数量。
         let multi_count = self.multi_ids.len();
         let multi_selected = self.multi_selected(&row.id);
-        let multi_delete_ids: Vec<String> = if multi_selected {
+        // 本次操作的**选集**（多选时是整选集，否则就是这一行）——删除 / 移动 / 打标签共用一份。
+        let selection_ids: Vec<String> = if multi_selected {
             // 按可见行顺序过滤（HashSet 迭代序不定）：回执与测试都要确定性。
             self.visible_rows()
                 .filter(|candidate| self.multi_ids.contains(&candidate.id))
@@ -778,8 +825,14 @@ impl ListDelegate for ArchiveListDelegate {
         } else {
             vec![row.id.clone()]
         };
+        // 打标签要连**显示名**一起给宿主（对话框标题与回执要报“哪几项”）：同样按选集顺序取。
+        let all_rows: Vec<&ArchiveRow> = self.visible_rows().collect();
+        let tag_targets = tag_targets(&all_rows, &self.multi_ids, &row);
+        let tag_label = tag_entry_label(multi_count);
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
         let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
+        // 只读项目连标签也不给改（菜单项的置灰判据在闭包内用，故先拷一份）。
+        let read_only = self.read_only;
         // 打开 / 取回都要整条详情（本体路径 / 扩展名在它身上）：渲染期提前拷一份——
         // 菜单回调触发时面板可能已被借用，不能再回头读。
         let open_detail = self.details.get(&row.id).cloned();
@@ -964,13 +1017,22 @@ impl ListDelegate for ArchiveListDelegate {
                                     }
                                 }),
                         );
+                        // 「编辑标签…」：与「移动到分组」同类的组织动作，一起摆在破坏性项之上。
+                        // 多选时作用于整选集（勾选 = 全部打上，取消 = 全部摘掉）。
+                        menu = menu.item(
+                            PopupMenuItem::new(tag_label.clone())
+                                .disabled(read_only)
+                                .on_click({
+                                    let host = host.clone();
+                                    let targets = tag_targets.clone();
+                                    move |_, window, cx| {
+                                        host.request_edit_tags(&targets, window, cx)
+                                    }
+                                }),
+                        );
                         // 「移动到分组 ›」：子菜单列出各分组 + 未分组 + 新建（原型 §2.4：
                         // 拖拽之外的等价入口；多选也用这一条，批量移动是原型里多选解锁的动作）。
-                        let move_ids: Vec<String> = if multi_selected {
-                            multi_delete_ids.clone()
-                        } else {
-                            vec![row.id.clone()]
-                        };
+                        let move_ids: Vec<String> = selection_ids.clone();
                         menu = menu.submenu("移动到分组", _window, _cx, {
                             let host = host.clone();
                             let move_ids = move_ids.clone();
@@ -1019,8 +1081,8 @@ impl ListDelegate for ArchiveListDelegate {
                                     }))
                             }
                         });
-                        // 删除是**唯一**多选可用的项（原型 §3.2）：多选时带上数量。
-                        let delete_ids = multi_delete_ids.clone();
+                        // 删除是**唯一**多选可用的破坏性项（原型 §3.2）：多选时带上数量。
+                        let delete_ids = selection_ids.clone();
                         let delete_label = if multi_count > 1 {
                             format!("移入回收站（{multi_count} 项）")
                         } else {
@@ -2010,7 +2072,9 @@ impl ResourcesPanel {
                     .px_4()
                     .text_xs()
                     .text_color(muted)
-                    .child("换个关键词，或去掉几个筛选条件"),
+                    // 副文案由数据层给（`filter::no_match_hint`）：搜的是“匹配面”，
+                    // 能搜哪些字段就该由管匹配面的那处说了算，而不是渲染层自己编一句。
+                    .child(filter::no_match_hint(&self.filter.query)),
             )
             .child(
                 Button::new("archive-clear-filter")
@@ -2179,13 +2243,61 @@ mod tests {
     use super::{
         ArchiveCounts, ArchiveRow, BadgeTone, HeaderMenuAction, RowClick, apply_row_click,
         badge_tone, can_view_stats, classify_click, header_fold_key, kind_icon, row_tail,
-        strength_badge,
+        strength_badge, tag_entry_label, tag_targets,
     };
     use crate::detail_view::ArchiveDetail;
     use crate::filter::VisibleItem;
     use crate::model::{ArchiveKind, ArchiveStatus};
     use gpui_kit::Modifiers;
     use gpui_kit::component::IndexPath;
+
+    #[test]
+    fn tag_targets_follow_the_selection_like_delete_and_move() {
+        let row_for_tag = |id: &str, name: &str| ArchiveRow {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: ArchiveKind::File,
+            version: 1,
+            status: ArchiveStatus::Normal,
+            tail: String::new(),
+            alias: None,
+            source_table: None,
+            tags: Vec::new(),
+            folder_id: None,
+            updated_epoch: 0,
+            archived_epoch: None,
+            size_bytes: None,
+        };
+        // 单选：只给这一行（详情面板那一元入口也走同一口径）。
+        let rows = [
+            row_for_tag("ar_1", "月报"),
+            row_for_tag("ar_2", "季报"),
+            row_for_tag("ar_3", "年报"),
+        ];
+        let refs: Vec<&ArchiveRow> = rows.iter().collect();
+        let single: std::collections::HashSet<String> = ["ar_2".to_string()].into_iter().collect();
+        let one = tag_targets(&refs, &single, &rows[1]);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].name, "季报");
+
+        // 多选：整选集（按可见行顺序，不是点中的那一条）。
+        let multi: std::collections::HashSet<String> = ["ar_1".to_string(), "ar_3".to_string()]
+            .into_iter()
+            .collect();
+        let targets = tag_targets(&refs, &multi, &rows[2]);
+        let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["ar_1", "ar_3"], "送整选集，且顺序按可见行");
+        assert_eq!(targets[1].name, "年报", "显示名要跟着走（标题 / 回执要用）");
+
+        // 多选集里但只选中了一条：那就是单选语义（与删除 / 移动同一条规矩）。
+        assert_eq!(tag_targets(&refs, &multi, &rows[1]).len(), 1);
+    }
+
+    #[test]
+    fn tag_entry_label_shows_the_scope() {
+        assert_eq!(tag_entry_label(1), "编辑标签…");
+        assert_eq!(tag_entry_label(3), "编辑标签（3 项）…");
+    }
 
     #[test]
     fn row_click_classification_follows_the_prototype() {
@@ -2303,11 +2415,13 @@ mod tests {
             VisibleItem::Row(ArchiveRow {
                 id: "ar_1".to_string(),
                 name: "a.sql".to_string(),
+                alias: None,
                 kind: ArchiveKind::File,
                 version: 1,
                 status: ArchiveStatus::Normal,
                 tail: String::new(),
-                tag_ids: Vec::new(),
+                source_table: None,
+                tags: Vec::new(),
                 folder_id: None,
                 updated_epoch: 0,
                 archived_epoch: None,
