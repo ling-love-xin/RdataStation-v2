@@ -193,35 +193,31 @@ pub fn open_trash_dialog_with(
         let can_write = !busy && !read_only;
         let shown = rows.len().min(MAX_TRASH_ROWS);
 
-        let mut body = div()
-            .v_flex()
-            .w_full()
-            .gap_2()
-            .child(
-                div()
-                    .h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
+        let mut body = div().v_flex().w_full().gap_2().child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .text_ellipsis()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("共 {} 项", rows.len())),
+                )
+                .when_some(note, |bar, note| {
+                    bar.child(
                         div()
-                            .min_w_0()
+                            .flex_none()
                             .text_xs()
-                            .text_ellipsis()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(format!("共 {} 项", rows.len())),
+                            .text_color(theme.colors.warning)
+                            .child(note),
                     )
-                    .when_some(note, |bar, note| {
-                        bar.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(theme.colors.warning)
-                                .child(note),
-                        )
-                    }),
-            );
+                }),
+        );
 
         if rows.is_empty() {
             body = body.child(
@@ -354,13 +350,18 @@ fn header_line(theme: &Theme) -> Div {
         .gap_2()
         .px_2()
         .py_1()
-        .border_b(px(1.0))
+        .border_b(ui::HAIRLINE)
         .border_color(theme.colors.border)
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(div().w(rems(ui::TRASH_COL_NAME)).flex_none().child("名称"))
         .child(div().flex_1().min_w_0().child("原位置"))
-        .child(div().w(rems(ui::TRASH_COL_TIME)).flex_none().child("删除时间"))
+        .child(
+            div()
+                .w(rems(ui::TRASH_COL_TIME))
+                .flex_none()
+                .child("删除时间"),
+        )
         .child(div().w(rems(ui::TRASH_COL_SIZE)).flex_none().child("大小"))
         .child(div().w(rems(ui::TRASH_COL_ACTION)).flex_none().child(""))
 }
@@ -386,7 +387,13 @@ fn trash_line(
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_busy(true);
             state.set_note(Some("正在还原…".to_string()));
-            on_action(TrashAction::Restore { trash_id: trash_id.clone() }, window, cx);
+            on_action(
+                TrashAction::Restore {
+                    trash_id: trash_id.clone(),
+                },
+                window,
+                cx,
+            );
         }
     };
     let purge = {
@@ -418,7 +425,13 @@ fn trash_line(
                     .on_ok(move |_, window, cx| {
                         state.set_busy(true);
                         state.set_note(Some("正在永久删除…".to_string()));
-                        on_action(TrashAction::Purge { trash_id: trash_id.clone() }, window, cx);
+                        on_action(
+                            TrashAction::Purge {
+                                trash_id: trash_id.clone(),
+                            },
+                            window,
+                            cx,
+                        );
                         true
                     })
             });
@@ -433,7 +446,10 @@ fn trash_line(
         .px_2()
         .py_1()
         .rounded_sm()
-        .hover(|s| s.bg(theme.colors.accent.opacity(0.3)))
+        // 这一行不是可点行（动作全在行内的两个按钮上），所以**不给 hover 反馈**：
+        // 悬停变色是"这里能点"的承诺，而这条行本身点不动（草稿箱的引用行 / 回收站行同口径）。
+        // 原先那层 hover 用的是 `accent.opacity(0.3)`（品牌色淡底）——既与"可点"无关，
+        // 也与 `list_hover` 这套行态 token 不是一回事。
         .child(
             div()
                 .w(rems(ui::TRASH_COL_NAME))

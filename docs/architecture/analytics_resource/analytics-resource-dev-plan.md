@@ -1,12 +1,45 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前八刀已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项均可用，**125 单测 + 27 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾（2026-09-20，第九刀）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项均可用，**127 单测 + 27 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第九刀（UI 收尾）：行态口径对齐 + 共用原语接入 + 组件换装
+
+> 本批起给改动**编 V 号**（V1–V12，与 `database-nav-dev-plan.md` §0 的 V 表同一体例），便于与导航侧（V11 行态统一 / V14 共用原语）逐条对照追溯。本批**只动视图层**，与业务 / 数据层无关。
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V1 | 分组头展开指示接共用原语：字符 `▸/▾` → `tree::disclosure_slot()` + `tree::disclosure_icon()` | `resource_view.rs::render_group_header` | `workbench_shell::tree` 头注点名的「第三处」就是这里（M4 导航 / M5 草稿箱 2026-09-20 已换，这不再是产品决策，是对齐已定口径）；10px 槽宽是缩进算式的一部分，换载体不会让标题左边缘漂 |
+| V2 | 分组头色条改 `primary` + 圆头 `0.875rem`（与 M4 分组头同形同角色） | 同上 | 两个 token 在 `rds-theme.json` 里明暗同值（`#C25B46` / `#E8846F`）→ 零视觉变化；几何对齐原型 §2.4「沿用 M4 分组头做法」 |
+| V3 | 列表行距收成 `ui::ROW_HEIGHT`（24px）：两处 `ListItem` 统一走新增的 `list_row()`（压掉组件默认的 `py_1`） | `resource_view.rs::{list_row,render_group_header,render_item}` | **修一处尺寸偏差**：`List` 只量一个样本行定全局行距，而 `ListItem` 自带的 `py_1`(4px) 让每项实际 32px（规格 24px，导航侧行高是精确值）；同时消掉多选行自绘 `list_active` 底与悬停 `list_hover` 上下露出的光晕 |
+| V4 | 分组头键盘可达：停在头上按 Enter 折叠 / 展开（纯函数 `header_fold_key` + 委托记 `focused_header`） | `resource_view.rs::{header_fold_key,set_selected_index,confirm}` | 头是自绘可点行（鼠标能折、键盘不能）；走 `List` 自己的 `confirm` 通道（Enter 由组件路由），不新增自绘焦点 / 不破坏虚拟化 |
+| V5 | 撤销栏「撤销」自绘 `div` → `Button::ghost().xsmall()`（栏高仍 24px：`py_1` → `py_0p5`） | `resource_view.rs::render_undo_bar` | 撤销是**唯一**入口（`Ctrl+Z` 未绑），自绘 div 没有 hover / 焦点 / 键盘；`Button` 自带 `track_focus` + `tab_stop`，Enter/Space 可激活 |
+| V6 | 加载骨架手搓灰条 → 组件 `Skeleton` | `resource_view.rs::render_loading` | 「过程进行中」给现成组件（自带 2s 呼吸、只改透明度、`reduce_motion` 下停在全亮）；只挂**暂态**（首帧取数期间），列表已有行时不摆它 |
+| V7 | 详情面板「复制」（指纹）与 chip 上的 `×` 自绘 div → `Button::ghost().xsmall()` | `detail_view.rs::{render_detail,render_tag_section}` | 可点元素键盘可达 + 命中区 20px 下限；`archive-tag-remove-{id}` / `archive-detail-copy-hash` 仍可用调试选择器 / id 定位；chip 高 20→24px |
+| V8 | 版本历史行 → `list::ListItem`（hover / 选中由组件承担） | `dialogs/version.rs::version_line` | 原先手搓的 `when(selected, bg) + hover(bg)` 那对**悬停会把选中底盖掉**（V11 口径违反，草稿箱侧同批修过）；换组件后由构造保证，列内距 `px_2` 对齐表头 |
+| V9 | 标签行自绘 `✓` → 真 `Checkbox`；勾选底 `accent.opacity(0.3)` → `list_active`；悬停不覆盖勾选 | `dialogs/tag.rs`（含新增 `TagDialogState::set_checked`） | 对齐 `dialogs/pick.rs` 既有写法；`✓` 字符既无键盘焦点也没把「勾上 / 未勾」交给 a11y（只剩一个文本节点）；勾选底统一到与面板 / 其它对话框同一个「选中底」角色 |
+| V10 | 回收站行去掉 hover | `dialogs/trash.rs::trash_line` | 这一行本来就不是可点行（动作全在行内两个按钮上），悬停变色是「这里能点」的承诺；与草稿箱「引用行 / 回收站行不做 hover」同口径。原先那层用的是 `accent.opacity(0.3)`（品牌淡底），与行态 token 不是一回事 |
+| V11 | 固定描边统一 `ui::HAIRLINE`（10 处 `px(1.0)`） | crate 内 4 个视图文件 + `ui.rs` 把 `HAIRLINE` 加进重导出 | rds-ui-spec 硬约束（固定描边走 `ui::HAIRLINE`，与 editor / settings 同写法）；零视觉差、无新常量 |
+| V12 | 顺手清掉分组头那段「同一句写两遍」的注释残余 | `resource_view.rs::render_group_header` | 上一批合并留下的残迹（一份还在描述已改名的 `GROUP_BAR_WIDTH`） |
+
+**验证**：`cargo test -p rds-analytics-resource -j 2` → **127 单测**（+2：`header_fold_key` 的「头上 Enter = 折叠 / 行上 = 打开 / 越界不 panic」与 `TagDialogState::set_checked` 的按值写 + 幂等）+ **18 面板窗口 + 9 对话框窗口**全绿（面板窗口新增断言：两个分组头之间**每项正好 24px**，钉住 V3 的行距；对话框窗口新增断言：标签行真的摆了 `Checkbox`）；`cargo test -p rds-workbench --test ui_contract -j 2` 7 项、`cargo test -p rds-database --lib -j 2` 70 项、`cargo check --workspace --all-targets -j 2` 均通过。
+
+**本批「不改」（有意，别为了「统一」再动它们）**：
+
+| 候选项 | 为什么不改 |
+| --- | --- |
+| `tree::active_bar`（选中行左侧 2px 条） | 分组头那根是**类别条**（原型 §2.4），不是选中条；而行的选中已由 `List` / `ListItem` 承担（`list_active` 底 + 1px 框）——接上 `active_bar` 会同时叠出两套选中语义 |
+| `tree::indent_rem` / `indent_spacer` | 分组头是**固定两级**（`depth ∈ {0,1}`，见 `filter::build_visible_items`）的局部内距，不是 `depth × 步长` 的树缩进；套公式（0.5 + 0.875×depth）会把 depth=1 的头一次右移 14px（视觉回归） |
+| 行尾「相对时间 → 悬浮显示绝对时间」（原型 §2.3；`present.rs` 两处注释都留了「悬浮由渲染层补」） | 0.6.1 的 `.tooltip()` **只挂在组件上**（`Button` / `Switch` / `Checkbox` / `Radio` …）；div 级 tooltip 要用 gpui-base 的 `TooltipOverlay` 亲手接 overlay + 触发（全仓零使用）——属「工具提示基建」一批，不在本轮 |
+| `List` 的 `px_3` 行左内距（导航自绘行是 `px_1` = 4px） | 组件自身的行内距约定；改了要连分组头色条位置一起动，收益只是「与导航像素级一致」 |
+| 行内 hover 动作（原型 §2.3 的 hover 版） | 原型把它归给详情面板批，仍是未落地功能；另：鼠标在行内时指针已在行内，不挂 hover 也够用 |
+
+**遗留（本批新增）**：行尾绝对时间 tooltip（等工具提示基建）；`version` / `tag` / `trash` 三个对话框的行仍未虚拟化（`MAX_*_ROWS` 上限 + 明说不静默截断，行数真成问题时再上 `List`）；V4 的 Enter 路径覆盖到「纯函数 + 既有折叠用例」，**键盘真机验收待过**（与导航侧 §2.6 的真机清单同性质：仓库已记载 `simulate_click` 全套跑不可靠，故不写点击 / 按键模拟断言）。
 
 ### 2026-09-19 — 文档：一页看懂按**编辑器宣传页体例**重写（两版孪生）
 
@@ -756,5 +789,6 @@ cargo run -p rds-app -j 2
 | 左 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}` |
 | 迁移 | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql` |
 | 项目级回收站（上提后） | `crates/engine/src/…`（现 `crates/scratchpad/src/trash.rs`） |
-| 尺寸常量 | `crates/workbench_shell/src/ui.rs`（新增「资产库（M6）专用尺寸」4 项，见原型 §7） |
-| 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
+| 尺寸常量 | 与外壳同语义的重导出：`crates/analytics_resource/src/ui.rs` ← `crates/workbench_shell/src/ui.rs`（`ROW_HEIGHT` / `PANEL_HEADER_HEIGHT` / `ICON_SIZE_SM` / `CONTROL_HEIGHT_SM` / `GROUP_BAR_WIDTH` / `HAIRLINE`，单一来源）；**本 crate 自有**的（对话框宽 / 表格列宽 / 列表上限 / 徽标高 / 工具栏高）就在 `crates/analytics_resource/src/ui.rs`（见原型 §7） |
+| 行态口径与共用原语 | 行外壳 `resource_view.rs::list_row`（压掉 `ListItem` 默认 `py_1`，行距 = `ui::ROW_HEIGHT`）· 分组头展开指示 `workbench_shell::tree::{disclosure_slot,disclosure_icon}` · 分组头 `Enter` 折叠 `resource_view.rs::{header_fold_key,set_selected_index,confirm}` · 对话框行 `dialogs/version.rs::version_line`（`ListItem`）· 勾选 `dialogs/tag.rs`（`Checkbox` + `set_checked`） |
+| 契约测试范围 | `crates/workbench/tests/ui_contract.rs`（**不扫本 crate**，见原型 §7 脚注）；本 crate 的尺寸 / 行态口径靠 `tests/{panel_window,dialog_window}.rs` 的断言守着 |

@@ -18,24 +18,23 @@ use gpui_kit::{
     VisualTestContext, Window, div,
 };
 
+use rds_analytics_resource::KeepVersions;
 use rds_analytics_resource::dialogs::archive::{
     ArchiveConflict, ArchiveDialogResult, ArchiveDialogSeed, build_inputs,
     open_archive_dialog_with, submit_archive,
 };
-use rds_analytics_resource::KeepVersions;
-use rds_analytics_resource::resource_view::GroupOption;
 use rds_analytics_resource::dialogs::checkout::{
     CheckoutDialogResult, CheckoutDialogSeed, build_inputs as build_checkout_inputs,
     open_checkout_dialog_with, submit_checkout, suggest_work_copy_name,
+};
+use rds_analytics_resource::dialogs::group::{
+    GroupNameEvent, GroupNameKind, open_group_name_dialog,
 };
 use rds_analytics_resource::dialogs::index_repair::{
     RepairDialogState, RepairGroup, RepairRow, open_index_repair_dialog_with,
 };
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
-};
-use rds_analytics_resource::dialogs::group::{
-    GroupNameEvent, GroupNameKind, open_group_name_dialog,
 };
 use rds_analytics_resource::dialogs::tag::{
     TagChoice, TagDialogSeed, TagDialogState, open_tag_dialog,
@@ -46,6 +45,7 @@ use rds_analytics_resource::dialogs::trash::{
 use rds_analytics_resource::dialogs::version::{
     VersionDialogSeed, VersionDialogState, VersionRow, open_version_dialog_with,
 };
+use rds_analytics_resource::resource_view::GroupOption;
 
 /// 窗口根：组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）。
 struct DialogHarness;
@@ -248,7 +248,11 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     assert_eq!(result.name, "月报 2026");
     assert_eq!(result.alias.as_deref(), Some("日报"), "别名去空白后入结果");
     assert_eq!(result.tags, vec!["报表", "月度"], "去空、去重、保序");
-    assert_eq!(result.group_id.as_deref(), Some("af_month"), "选中的分组 id");
+    assert_eq!(
+        result.group_id.as_deref(),
+        Some("af_month"),
+        "选中的分组 id"
+    );
     assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
 
     // 别名留空 = 不设（空串入库会让详情面板多一个空行）。
@@ -417,7 +421,10 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
 
     // 动作完成 → 宿主换一批行（还原把 v4 顶上来了，选中的 v2 不在新行里）：
     // 选中与动作栏一起退场（不能指向一个已经不在列表里的版本）。
-    state.set_rows(vec![version_row(4, true, true), version_row(3, false, true)]);
+    state.set_rows(vec![
+        version_row(4, true, true),
+        version_row(3, false, true),
+    ]);
     draw(cx);
     assert!(state.selected().is_none(), "新行里没有它 → 选中清掉");
     assert!(cx.debug_bounds("version-restore").is_none());
@@ -480,7 +487,10 @@ fn index_repair_dialog_groups_rows_and_shows_inline_actions(cx: &mut TestAppCont
         repair_row(RepairGroup::Changed, "月报"),
     ]);
     draw(cx);
-    assert!(cx.debug_bounds("repair-adopt-0").is_some(), "未登记行给补登");
+    assert!(
+        cx.debug_bounds("repair-adopt-0").is_some(),
+        "未登记行给补登"
+    );
     assert!(
         cx.debug_bounds("repair-delete-0").is_some(),
         "缺本体行给删记录"
@@ -621,6 +631,10 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
     );
     assert!(cx.debug_bounds("tag-choice-at_1").is_some());
     assert!(cx.debug_bounds("tag-choice-at_2").is_some());
+    // 行内勾选框是真 `Checkbox`（自绘 `✓` 已退场）：a11y / 键盘焦点靠它，
+    // 也把"哪一枚已勾上"变成可断言的东西。
+    assert!(cx.debug_bounds("tag-check-at_1").is_some());
+    assert!(cx.debug_bounds("tag-check-at_2").is_some());
 
     // 词典被宿主换掉（标签被删）：行跟着换，对话框不关。
     state.set_options(vec![TagChoice {
@@ -630,6 +644,7 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
     }]);
     draw(cx);
     assert!(cx.debug_bounds("tag-choice-at_1").is_none());
+    assert!(cx.debug_bounds("tag-check-at_1").is_none());
     assert!(
         cx.update(|window, cx| window.has_active_dialog(cx)),
         "换行不该把对话框关掉"

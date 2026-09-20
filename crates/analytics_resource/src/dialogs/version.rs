@@ -14,6 +14,7 @@ use std::rc::Rc;
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -141,7 +142,11 @@ impl VersionDialogState {
     /// 选中的那一行（动作栏据此决定按钮可用性）。
     pub fn selected_row(&self) -> Option<VersionRow> {
         let selected = self.selected()?;
-        self.rows.borrow().iter().find(|row| row.version == selected).cloned()
+        self.rows
+            .borrow()
+            .iter()
+            .find(|row| row.version == selected)
+            .cloned()
     }
 
     pub fn set_busy(&self, busy: bool) {
@@ -324,19 +329,48 @@ fn header_line(theme: &Theme) -> Div {
         .gap_3()
         .px_2()
         .py_1()
-        .border_b(px(1.0))
+        .border_b(ui::HAIRLINE)
         .border_color(theme.colors.border)
         .text_xs()
         .text_color(muted)
-        .child(div().w(rems(ui::VERSION_COL_VERSION)).flex_none().child("版本"))
-        .child(div().w(rems(ui::VERSION_COL_TIME)).flex_none().child("时间"))
-        .child(div().w(rems(ui::VERSION_COL_SIZE)).flex_none().child("大小"))
-        .child(div().w(rems(ui::VERSION_COL_HASH)).flex_none().child("指纹"))
+        .child(
+            div()
+                .w(rems(ui::VERSION_COL_VERSION))
+                .flex_none()
+                .child("版本"),
+        )
+        .child(
+            div()
+                .w(rems(ui::VERSION_COL_TIME))
+                .flex_none()
+                .child("时间"),
+        )
+        .child(
+            div()
+                .w(rems(ui::VERSION_COL_SIZE))
+                .flex_none()
+                .child("大小"),
+        )
+        .child(
+            div()
+                .w(rems(ui::VERSION_COL_HASH))
+                .flex_none()
+                .child("指纹"),
+        )
         .child(div().flex_1().min_w_0().child("变化"))
-        .child(div().w(rems(ui::VERSION_COL_COPY)).flex_none().child("副本"))
+        .child(
+            div()
+                .w(rems(ui::VERSION_COL_COPY))
+                .flex_none()
+                .child("副本"),
+        )
 }
 
 /// 一行版本（点击 = 选中；选中后动作栏才出现——768px 里塞不下每行三个按钮）。
+///
+/// 行本体走组件的 `ListItem`（与面板列表行同源）：hover / 选中 / 键盘都归它，
+/// 不再手搓 `when(selected, bg) + hover(bg)` 那对——那对写反顺序就会变成
+/// 「悬停把选中底盖掉」（V11 口径：悬停不覆盖选中，草稿箱侧同批修过）。
 fn version_line(
     theme: &Theme,
     row: &VersionRow,
@@ -360,76 +394,76 @@ fn version_line(
         }
     };
 
-    div()
-        .id(SharedString::from(format!("version-row-{version}")))
+    ListItem::new(SharedString::from(format!("version-row-{version}")))
         // 调试选择器：窗口测试按它定位并真点（选中态只有这一处落笔）。
         .debug_selector(move || format!("version-row-{version}"))
-        .h_flex()
-        .w_full()
-        .min_w_0()
-        .items_center()
-        .gap_3()
+        // 列内距对齐表头（`header_line` 也是 `px_2 py_1`）：`ListItem` 自带的是 `px_3`。
         .px_2()
-        .py_1()
-        .cursor_pointer()
-        .text_xs()
-        .when(selected, |line| line.bg(theme.colors.list_active))
-        .hover(|style| style.bg(theme.colors.list_hover))
+        .selected(selected)
         .on_click(toggle)
         .child(
             div()
                 .h_flex()
-                .w(rems(ui::VERSION_COL_VERSION))
-                .flex_none()
-                .items_center()
-                .gap_1()
-                .child(div().text_color(foreground).child(format!("v{version}")))
-                .when(row.is_current, |cell| {
-                    cell.child(div().text_color(success).child("当前"))
-                }),
-        )
-        .child(
-            div()
-                .w(rems(ui::VERSION_COL_TIME))
-                .flex_none()
-                .text_ellipsis()
-                .text_color(muted)
-                .child(row.time_label.clone()),
-        )
-        .child(
-            div()
-                .w(rems(ui::VERSION_COL_SIZE))
-                .flex_none()
-                .text_ellipsis()
-                .text_color(muted)
-                .child(row.size_label.clone()),
-        )
-        .child(
-            div()
-                .w(rems(ui::VERSION_COL_HASH))
-                .flex_none()
-                .text_ellipsis()
-                .text_color(muted)
-                .child(row.hash_short.clone()),
-        )
-        .child(
-            div()
-                .flex_1()
+                .w_full()
                 .min_w_0()
-                .text_ellipsis()
-                .text_color(muted)
-                .child(row.delta_label.clone()),
-        )
-        .child(
-            div()
-                .w(rems(ui::VERSION_COL_COPY))
-                .flex_none()
-                .text_ellipsis()
-                .child(if row.has_copy {
-                    div().text_color(muted).child("在位")
-                } else {
-                    div().text_color(danger).child("副本缺失")
-                }),
+                .items_center()
+                .gap_3()
+                .text_xs()
+                .child(
+                    div()
+                        .h_flex()
+                        .w(rems(ui::VERSION_COL_VERSION))
+                        .flex_none()
+                        .items_center()
+                        .gap_1()
+                        .child(div().text_color(foreground).child(format!("v{version}")))
+                        .when(row.is_current, |cell| {
+                            cell.child(div().text_color(success).child("当前"))
+                        }),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_TIME))
+                        .flex_none()
+                        .text_ellipsis()
+                        .text_color(muted)
+                        .child(row.time_label.clone()),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_SIZE))
+                        .flex_none()
+                        .text_ellipsis()
+                        .text_color(muted)
+                        .child(row.size_label.clone()),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_HASH))
+                        .flex_none()
+                        .text_ellipsis()
+                        .text_color(muted)
+                        .child(row.hash_short.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .text_color(muted)
+                        .child(row.delta_label.clone()),
+                )
+                .child(
+                    div()
+                        .w(rems(ui::VERSION_COL_COPY))
+                        .flex_none()
+                        .text_ellipsis()
+                        .child(if row.has_copy {
+                            div().text_color(muted).child("在位")
+                        } else {
+                            div().text_color(danger).child("副本缺失")
+                        }),
+                ),
         )
 }
 
@@ -505,7 +539,7 @@ fn action_bar(
         .v_flex()
         .w_full()
         .gap_1()
-        .border_t(px(1.0))
+        .border_t(ui::HAIRLINE)
         .border_color(theme.colors.border)
         .pt_2()
         .child(

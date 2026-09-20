@@ -92,6 +92,8 @@
 | 右键 | 见 §3.2 |
 
 > **落地现状（2026-09-17）**：行渲染用 `list::List`（虚拟化 + 组件化 hover / 选中 / 键盘漫游），**行首 kind 图标已接**（`FileText` / `Table` / `ExternalLink`，一律 `muted`），**行内不摆常驻按钮**——动作走右键菜单（§3.2）。键鼠交互已归位：**单击=选中、`Ctrl`=切换入选择集、`Shift`=区间、双击=打开**（行自己接管点击，因为组件默认把单击也接到确认上）、`Ctrl+A` 全选可见行、`Enter` 打开、`↑↓` 漫游、`Delete` 对选择集生效。**`F2` 重命名待重命名入口（Phase 2）**；行内 hover 动作仍未做（原型把它们归给详情面板批）。
+>
+> **行态口径（2026-09-20，UI 收尾 / V3·V4·V8）**：①**行距钉在 `ui::ROW_HEIGHT`（24px）**——`List` 的行距是**单一值**（只量一个样本行），而 `ListItem` 自带的 `py_1` 会让每项实际 32px，现统一走 `list_row()` 压掉（窗口测试按「两个分组头之间每项正好 24px」钉住；分组头与存档行必须同形同高）；②**悬停不覆盖选中**：面板行的 hover / 选中都由组件承担（`ListItem`），版本历史行同批换成 `ListItem`（原先手搓的 `when(selected, bg) + hover(bg)` 会把选中底盖掉）；③**分组头也是列表的一项**：鼠标点、或**停在它上面按 Enter**，都能折叠 / 展开（Enter 走 `List` 自己的确认通道，不另做自绘焦点）；④可点元素一律语义控件（`Button` / `Checkbox`），不再用「文本 div + `cursor_pointer` + `on_click`」。
 
 **字段优先级（240px 内的取舍规则）**：显示名 > 复现强度徽标 > 版本徽标 > 相对时间 > 大小。
 
@@ -104,11 +106,14 @@
 ### 2.4 分组折叠区（替代文件夹树）
 
 - 分组 = **单层**（`../analytics-resource-architecture.md` D8）：`全部分组` → `未分组` → 各分组。
-- 分组头：左侧 2px 色条（`ui::NAV_GROUP_BAR_WIDTH`，沿用 M4 分组头做法）+ 名称 + 计数；折叠状态持久化（**按项目分开记**）。
+- 分组头：左侧 2px 色条（`ui::GROUP_BAR_WIDTH`，沿用 M4 分组头做法：`primary` + 圆头 `0.875rem`）+ **展开指示**（走共用原语 `tree::disclosure_slot` + `disclosure_icon`，与 M4/M5 同一个 10px 槽）+ 名称 + 计数；折叠状态持久化（**按项目分开记**）。
+- 缩进是**固定两级**（`depth ∈ {0,1}`）的局部内距（`pl_2`），**不套** `TREE_BASE_PADDING + depth × TREE_INDENT` 那条树公式（这里没有第 N 层，套了会把 depth=1 的头右移 14px）。
 - 拖动行到分组头 = 移动（沿用 M5 的行拖拽实现，不做"拖到编辑器"）。
 - **不做**：多级嵌套、面包屑、排序号手动调整。
 
 > **落地现状（2026-09-18，第二 / 三 / 七刀）**：**三层分区、折叠、管理入口与折叠态持久化均已落**（`filter::build_visible_items` + 分组头行 + 分组头右键菜单；色条用 `list_active_border`）——分组头与存档行一样是列表的一项（虚拟化 / 漫游 / 滚动只维护一份）；**计数从当前可见行现算**（筛选后头里的数就是眼前的行数），没分组时不出头（空库不多两行噪声）；分组头右键：重命名… / 删除分组（成员回未分组）/ 新建分组…；**折叠态写进设置**（`resources.collapsed_groups`，按项目根分桶——分组 id 是每项目独立生成的，平铺一份列表会在“打开另一个项目”时被清掉）。剩下与规格的差异：**拖拽到分组头未做**（已用行右键「移动到分组 ›」子菜单提供等价入口，拖拽单独一刀）。
+>
+> **落地现状（2026-09-20，UI 收尾 / V1·V2·V4）**：①展开指示的字符载体 `▸/▾` **退场**，改 `tree::disclosure_icon`（与 M4 导航 / M5 草稿箱同一套；`tree.rs` 头注点名的「第三处」就是这里）；②色条改 `primary`（与 M4 分组头同角色，两者在 `rds-theme.json` 里明暗同值 → **零视觉变化**），几何改成 `0.875rem` + 圆头；③**停在头上按 Enter = 折叠 / 展开**（与鼠标点同一条路，走 `List` 的 `confirm` 通道）。
 
 ### 2.5 底部状态行（高 1.5rem）
 
@@ -244,7 +249,7 @@ sequenceDiagram
 | 状态 | 呈现 |
 | --- | --- |
 | 空库 | 大图标 + "还没有任何存档" + 双按钮：**从草稿箱归档…** / 了解资产库能做什么。**若草稿箱有内容**，附加"草稿箱里有 3 个文件看起来值得归档"的建议行（首屏不留白） |
-| 加载中 | 骨架行（3–5 行灰条），不用转圈 |
+| 加载中 | 骨架行（3–5 行灰条），不用转圈；灰条走组件 `Skeleton`（自带呼吸，只改透明度） |
 | 搜索无结果 | "没有匹配的存档" + 清空筛选按钮（**不是空库态**，两者文案必须区分） |
 | 本体缺失 | 行灰显 + `danger` 点 + 详情面板横幅 + 修复入口 |
 | 指纹不匹配 | 行内 `warning` 徽标"内容已变" |
@@ -254,6 +259,8 @@ sequenceDiagram
 | render 期 | 只读内存快照；I/O 一律后台任务 + 结果回填（沿用 M4 `nav_jobs` 模式） |
 
 > **落地现状（2026-09-17）**：空库（**双按钮已落**：从草稿箱归档… / 从本地文件归档…）/ 搜索无结果 / 本体缺失 / 指纹不匹配 / 索引异常（状态行段 + 修复入口，对话框待 Phase 3）/ 写入被拒 / render 期 均已落。**加载中已落**（3 行骨架 + 状态行「加载中… ·」前缀，且取数期间不摆空态）。尚未做：空库的"草稿箱有 N 个文件值得归档"建议行、索引异常首次进入的顶部一次性提示条、`TableRef` 的"立即校验"。
+>
+> **落地现状（2026-09-20，UI 收尾 / V6）**：骨架改走组件 `Skeleton`（2s 呼吸、只改透明度、`reduce_motion` 下停在全亮）——“动效只挂暂态”的又一处理：列表已有行时不摆骨架，所以不会每帧重绘。
 
 ## 6. 主题映射（token → 视觉）
 
@@ -265,7 +272,7 @@ sequenceDiagram
 | 面板头 | 标题 `foreground`；动作按钮 `secondary` + hover `secondary_hover` |
 | 工具栏输入框 | 底 `background`，边 `input_border`，聚焦 `ring` |
 | 列表行 | `list` / hover `list_hover` / 选中 `list_active` + `list_active_border` |
-| 分组头 | 色条 `list_active_border`（**不用 `sidebar_accent`**：该角色在浅色下与面板底几乎同色，M4 原型已因此改用此角色）；文字 `muted_foreground` |
+| 分组头 | 色条 `primary`（**与 M4 分组头同角色**；它与 `list_active_border` 在 `rds-theme.json` 里明暗同值，故 V2 改角色是零视觉变化。**不用 `sidebar_accent`**：该角色在浅色下与面板底几乎同色）；展开指示 `muted_foreground`；文字 `muted_foreground` |
 | **复现强度徽标** | `已归档` = `success`；`分析表` = `info`；`引用` = `warning` |
 | 缺失 / 错误 | `danger`（点 / 纹理 / 文字，不整行染色） |
 | 只读提示条 | `warning` 描边（与编辑器只读条一致） |
@@ -285,7 +292,7 @@ sequenceDiagram
 
 ## 7. 尺寸常量（**已落到 crate 内的 `crates/analytics_resource/src/ui.rs`**）
 
-原计划写进 `crates/workbench_shell/src/ui.rs`，实现时改为 **crate 内声明**：视图随能力同 crate（架构 §8.2），依赖方向不允许视图反向读 workbench 的常量（与 `project::ui` 同例）；值与 workbench 同源同值。
+原计划写进 `crates/workbench_shell/src/ui.rs`，实现时先落在 crate 内声明；**2026-09-20（导航侧 V13）起改为重导出**：外壳同语义的那几个（`PANEL_HEADER_HEIGHT` / `ROW_HEIGHT` / `ICON_SIZE_SM` / `CONTROL_HEIGHT_SM` / `GROUP_BAR_WIDTH`，以及本轮加入的 `HAIRLINE`）单一来源就是 `crates/workbench_shell/src/ui.rs`，`crate::ui::X` 路径不变（同 `insight/src/ui.rs` 例）；**本 crate 自有**的（对话框宽 / 表格列宽 / 列表上限 / 徽标高 / 工具栏高）仍在此声明。理由：这几个必须与 M4 导航 / M5 草稿箱逐位一致，镜像两份会在任一侧调整时静默错位。
 
 | 常量 | 倍率 | @16px | 用途 | 现状 |
 | --- | --- | --- | --- | --- |
@@ -323,15 +330,20 @@ sequenceDiagram
 | 需要 | 用 | 备注 |
 | --- | --- | --- |
 | 面板容器 | `gpui_kit::component::dock::{BasePanel, Panel}` | 与 M4/M5 面板同一装配方式 |
-| 列表（含虚拟化） | `v_virtual_list`（沿用 M5 草稿树 / M4 树的做法） | >100 项必须虚拟化；行渲染函数需可被闭包复用 |
+| 列表（含虚拟化） | `list::{List, ListState, ListDelegate}`（已落） | 行外壳统一走 `list_row()`（`ListItem` + 压掉默认 `py_1`，行距 = `ui::ROW_HEIGHT`）；行内 hover / 选中由组件承担，**不要**手搓 `when(selected, bg) + hover(bg)` |
+| 对话框里的行（版本 / 标签 / 回收站） | `list::ListItem`（版本行已换）或「`div` 行 + 组件」 | 版本行 = 单选表行 → `ListItem`；标签 / 回收站行是多选 / 非可点行，不必套单选语义（勾选走真 `Checkbox`，非可点行**不给 hover**） |
+| 分组头（折叠 / 展开） | `tree::{disclosure_slot, disclosure_icon}` + 整行可点（Enter 与点击同义） | 槽宽 10px 是缩进算式的一部分；色条 = `ui::GROUP_BAR_WIDTH` + `primary` |
 | 搜索框 | `component::input`（`TextInput` 或 `Editor` 单行） | 不手搓输入框 |
 | 筛选 / 排序 / 更多 | `Button` + `DropdownMenu` / `PopupMenu` | 菜单项带勾选态用 `DropdownMenu` |
+| 勾选 / 复选 | `checkbox::Checkbox`（标签对话框、草稿多选已落） | 不手搓 `✓` 字符：既无键盘焦点，也没把「勾上 / 未勾」交给 a11y |
+| 行内轻量动作（撤销 / 复制 / chip 上的 ×） | `Button::ghost().xsmall()`（已落） | 高度 20px = 命中区下限；自带 hover / 焦点 / 键盘；原「文本 div + `cursor_pointer` + `on_click`」已退场 |
 | 右键菜单 | `PopupMenu`（沿用 M4/M5） | — |
 | 对话框 | `Dialog` / `AlertDialog`（`gpui_kit::component::dialog`） | 破坏性操作（永久删除 / 清空）用 `AlertDialog` |
-| 版本历史 / 回收站 / 索引修复 | `Dialog` + 内部表格（`component::table::{DataTable, TableDelegate}`） | 版本行数可能上百，需虚拟化 |
+| 版本历史 / 回收站 / 索引修复 | `Dialog` + 内部表格（行仍未虚拟化，靠 `MAX_*_ROWS` 上限 + 明说） | 行数真成问题时再上 `List`（`component::table` 的 `DataTable` 备选） |
+| 加载骨架 | `skeleton::Skeleton`（已落） | 自带呼吸；只挂暂态 |
 | 详情面板 | `h_resizable` 容器 + 折叠区组件 | 宽度记忆（settings） |
-| 标签 chips | 自绘行内控件（按 `ui-constraints` §6：行内轻量动作允许自绘） | 颜色一律 token |
-| 悬浮提示 | gpui-kit tooltip | 相对时间显示绝对时间等 |
+| 标签 chips | 外框自绘 + `Button::ghost().xsmall()` 当 × | 颜色一律 token；动作控件仍走组件 |
+| 悬浮提示 | gpui-kit tooltip（**仅在组件上可用**：`Button` / `Switch` / `Checkbox` …） | 相对时间 → 绝对时间那条要 div 级 tooltip，需先接 gpui-base 的 `TooltipOverlay`（见开发方案 V 表下的「不改」） |
 | 图标 | `IconName` + `gpui-kit-assets` | 缺图标按资产路径从全量目录加载 |
 | 底部状态行 | 自绘（`StatusBar` 属应用级，编辑器/面板各自的状态行自绘） | 同 M5 面板底部统计做法 |
 
@@ -390,3 +402,4 @@ sequenceDiagram
 | 10 | 回收站复用项目级 `ProjectTrash`，UI 只显示 `origin = "resources"` 条目 |
 | 11 | 索引修复必须**人工确认**，不静默导入/删除 |
 | 12 | 不新增产品语义 token；四档语义色（success/info/warning/danger）表达强度与异常 |
+| 13 | **行态口径与导航侧对齐**（2026-09-20，V1–V10）：悬停不覆盖选中；行距 = `ui::ROW_HEIGHT`；展开指示一律图标（`tree::disclosure_icon`）；可点元素一律语义控件（`Button` / `Checkbox`，含 `Enter` / 空格可激活）；命中区 ≥ 20px；类别=形状 / 颜色=状态 |

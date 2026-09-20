@@ -15,11 +15,13 @@ use std::rc::Rc;
 
 use gpui_kit::{
     App, Context, Focusable as _, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
-    Window, div,
+    Window, div, px,
 };
 
 use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected, SelectAllRows};
-use rds_analytics_resource::detail_view::{ArchiveDetail, ArchiveTagChip, DetailActions, render_detail};
+use rds_analytics_resource::detail_view::{
+    ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
+};
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
@@ -55,7 +57,9 @@ impl ResourcesHost for RecordingHost {
             .push(format!("view-stats:{}", detail.id));
     }
     fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
-        self.calls.borrow_mut().push(format!("reveal:{}", detail.id));
+        self.calls
+            .borrow_mut()
+            .push(format!("reveal:{}", detail.id));
     }
     fn request_copy_path(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
@@ -370,7 +374,10 @@ fn snapshot_push_drives_rows_selection_and_dangling_cleanup(cx: &mut TestAppCont
 
     let (counts, selected) = cx.update(|_window, cx| {
         let panel = panel.read(cx);
-        (panel.snapshot().counts, panel.selected_id().map(str::to_string))
+        (
+            panel.snapshot().counts,
+            panel.selected_id().map(str::to_string),
+        )
     });
     assert_eq!(counts.total, 4);
     assert_eq!(counts.archived, 1);
@@ -384,7 +391,10 @@ fn snapshot_push_drives_rows_selection_and_dangling_cleanup(cx: &mut TestAppCont
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_snapshot(
-                snapshot(vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3)], false),
+                snapshot(
+                    vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3)],
+                    false,
+                ),
                 cx,
             );
         });
@@ -897,7 +907,10 @@ fn injected_default_sort_reorders_without_echoing_back(cx: &mut TestAppContext) 
             .collect::<Vec<_>>()
     });
     assert_eq!(order, vec!["ar_big".to_string(), "ar_small".to_string()]);
-    assert_eq!(panel.read_with(cx, |panel, _| panel.sort()), (SortField::Size, SortOrder::Desc));
+    assert_eq!(
+        panel.read_with(cx, |panel, _| panel.sort()),
+        (SortField::Size, SortOrder::Desc)
+    );
     assert!(
         host.calls().is_empty(),
         "注入默认值是宿主的动作，不是用户动作：不写回、不取数"
@@ -971,9 +984,7 @@ fn no_match_state_renders_and_clear_filter_restores_rows(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
-fn header_more_button_sits_in_the_header_and_dispatches_host_actions(
-    cx: &mut TestAppContext,
-) {
+fn header_more_button_sits_in_the_header_and_dispatches_host_actions(cx: &mut TestAppContext) {
     // 原型 §2.1：面板头右侧是 `＋ ▾` 与 `⋯` 两个按钮。菜单里的项在窗口测试里点不到
     // （弹层），所以这里钉住两件事：**按钮真在**、**四个动作各自到得了宿主**。
     cx.update(gpui_kit::init);
@@ -986,7 +997,10 @@ fn header_more_button_sits_in_the_header_and_dispatches_host_actions(
     cx.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
-    assert!(cx.debug_bounds("archive-more").is_some(), "`⋯` 按钮要在面板头里");
+    assert!(
+        cx.debug_bounds("archive-more").is_some(),
+        "`⋯` 按钮要在面板头里"
+    );
 
     // 四个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
     let expected = [
@@ -1040,6 +1054,18 @@ fn group_section_headers_render_and_collapsing_hides_rows(cx: &mut TestAppContex
     assert!(cx.debug_bounds("archive-group-__ungrouped__").is_some());
     assert!(cx.debug_bounds("archive-group-af_1").is_some());
 
+    // 行距 = `ui::ROW_HEIGHT`（24px）：`List` 的行距是**单一值**（只量一个样本行），所以
+    // 分组头与存档行必须同高；`ListItem` 自带的 `py_1` 已在 `list_row` 里压掉，
+    // 否则每个条目都会高 8px（多选行的选中底也会上下露出 hover 光晕）。
+    // 这三项之间隔了三个条目（头 / 头 / 一条行）。
+    let first = cx.debug_bounds("archive-group-__all__").expect("顶部头在");
+    let month = cx.debug_bounds("archive-group-af_1").expect("分组头在");
+    assert_eq!(
+        month.origin.y - first.origin.y,
+        px(72.),
+        "三个条目应正好 3 × 24px（行高口径：`ui::ROW_HEIGHT`）"
+    );
+
     // 折叠「月报」：它的行从列表里消失，但行集合（`view_rows`）不变——
     // 折叠是呈现层的事，不能把行从筛选结果里删掉（否则选中 / 多选会被误清）。
     cx.update(|_window, cx| {
@@ -1048,13 +1074,19 @@ fn group_section_headers_render_and_collapsing_hides_rows(cx: &mut TestAppContex
     assert_eq!(cx.update(|_window, cx| panel.read(cx).view_rows().len()), 2);
     let items = cx.update(|_window, cx| panel.read(cx).view_items().len());
     assert_eq!(items, 4, "三个头 + 未分组那一行（月报那一行被折掉）");
-    assert!(cx.debug_bounds("archive-group-af_1").is_some(), "头还在（否则展不开）");
+    assert!(
+        cx.debug_bounds("archive-group-af_1").is_some(),
+        "头还在（否则展不开）"
+    );
 
     // 再展开回去。
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| panel.toggle_group_collapse("af_1", cx));
     });
-    assert_eq!(cx.update(|_window, cx| panel.read(cx).view_items().len()), 5);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).view_items().len()),
+        5
+    );
 
     // 折叠态不是纯视图状态：每次切换都把**当前全集**交给宿主（按项目分桶写设置；
     // 空集也要交一次——“一条都不折”同样是用户的现状，不交就等于永远恢复不了）。
@@ -1141,7 +1173,10 @@ fn tag_filter_narrows_rows_and_drops_stale_conditions(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     assert_eq!(visible, vec!["ar_1"]);
-    assert_eq!(cx.update(|_window, cx| panel.read(cx).filter().menu_dims()), 1);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).filter().menu_dims()),
+        1
+    );
 
     // 标签被删（词典里没了）：新快照一到，悬空条件自己消失，列表回到两行。
     let mut without_tag = snapshot(vec![other], false);
@@ -1161,11 +1196,9 @@ struct DetailHarness {
 
 impl Render for DetailHarness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(render_detail(
-            &self.detail,
-            self.actions.clone(),
-            cx,
-        ))
+        div()
+            .size_full()
+            .child(render_detail(&self.detail, self.actions.clone(), cx))
     }
 }
 

@@ -633,7 +633,7 @@ b,strong{color:var(--fg-strong);}
       <span class="tag">每个功能都指得出「哪些测试在守它」</span></div>
     <table class="tbl">
       <tr><th style="width:40%">套件</th><th style="width:12%">数量</th><th>守什么</th></tr>
-      <tr><td>模块单测 <code>--lib</code></td><td><b>125</b></td><td>存储（16）· 领域类型（5）· 本体层（13）· 归档服务（19）· 索引修复（7）· 筛选排序与分区（16）· 面板（9）· 详情（5）· 呈现（14）· 八个对话框（22）</td></tr>
+      <tr><td>模块单测 <code>--lib</code></td><td><b>127</b></td><td>存储（16）· 领域类型（5）· 本体层（13）· 归档服务（19）· 索引修复（7）· 筛选排序与分区（16）· 面板（<b>10</b>）· 详情（5）· 呈现（14）· 八个对话框（<b>22</b>）</td></tr>
       <tr><td>面板窗口测试</td><td><b>18</b></td><td>真窗口里：空态 / 只读 / 加载骨架 / 快照驱动 / 选中镜像不重入 / 多选与 <code>Ctrl+A</code> / 折叠 / 标签筛选 / 排序写入序列 / 撤销栏</td></tr>
       <tr><td>对话框窗口测试</td><td><b>9</b></td><td>八个对话框逐个开得出、校验拦得住、没提交就不发事件</td></tr>
       <tr><td>宿主回归（lib + 界面契约）</td><td><b>102 + 7</b></td><td>端口实现与回执 · 后台作业 · 零裸尺寸 / 零裸色值 · <code>Shared</code> 字段白名单</td></tr>
@@ -690,7 +690,7 @@ b,strong{color:var(--fg-strong);}
       <div>
         <h5>一次验证（2026-09-18）</h5>
         <div class="verify">cargo test -p rds-analytics-resource -j 2
-  → 125 单测 + 18 面板窗口 + 9 对话框窗口
+  → 127 单测 + 18 面板窗口 + 9 对话框窗口
 cargo test -p rds-workbench --lib --test ui_contract
   → 102 + 7
 cargo check --all-targets
@@ -700,7 +700,7 @@ cargo check --all-targets
         <h5>宣传稿的铁律</h5>
         <ul>
           <li><b>数字只为表达服务</b>，口径以模块文档为准</li>
-          <li>改了实现请顺手核对关键数字：<b>3 / 5 / 8 / 125+27</b></li>
+          <li>改了实现请顺手核对关键数字：<b>3 / 5 / 8 / 127+27</b></li>
           <li>未落地项单独列出——不拿规划当卖点</li>
         </ul>
       </div>

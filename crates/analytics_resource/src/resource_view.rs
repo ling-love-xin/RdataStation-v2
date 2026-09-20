@@ -32,6 +32,7 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -47,6 +48,8 @@ use crate::detail_view::ArchiveDetail;
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
 use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use crate::ui;
+// 行级共用原语（展开指示槽 / 图标）：与 M4 导航、M5 草稿箱同一份，不各自手搓（见 `workbench_shell::tree` 头注）。
+use workbench_shell::tree;
 
 // ==================== 视图模型（纯数据，便于单测） ====================
 
@@ -508,6 +511,28 @@ pub fn dispatch_header_action(
 
 // ==================== 列表委托 ====================
 
+/// 列表行的统一外壳：**行距是单一值**（`List` 只量一个样本行定全局行距），所以两处行
+/// （分组头 / 存档行）必须同形同高，外壳只此一处。
+///
+/// 为什么要压掉 `ListItem` 自带的 `py_1`（4px）：不压的话实际行距是 24 + 8 = 32px
+/// （规格 `ui::ROW_HEIGHT` 是 24px），而且多选行自绘的 `list_active` 底只盖中间 24px，
+/// 悬停时上下各露出一条 `list_hover` 光晕。
+fn list_row(id: SharedString) -> ListItem {
+    ListItem::new(id).py_0()
+}
+
+/// 停在分组头上按 Enter 该折叠哪个分组（`None` = 当前位置不是分组头）。
+///
+/// `List` 把 Enter 走 `confirm` 通道，而分组头不是行（没有打开 / 取回语义），所以
+/// 它的唯一确认含义就是「折叠 / 展开自己」。抽成纯函数：索引→key 的映射是这里唯一的规则，
+/// 免得跟 `render_group_header` 里的判定各写一份。
+fn header_fold_key(items: &[VisibleItem], ix: IndexPath) -> Option<String> {
+    match items.get(ix.row) {
+        Some(VisibleItem::GroupHeader { key, .. }) => Some(key.clone()),
+        _ => None,
+    }
+}
+
 /// 存档列表的 `List` 委托（虚拟化 + 组件化 hover / 选中 / 键盘漫游）。
 ///
 /// 行数据是**面板可见行的一份副本**：`render_item` 在列表渲染期被调用，而那一刻面板实体
@@ -534,6 +559,11 @@ struct ArchiveListDelegate {
     /// 此间组件回调的 `set_selected_index` **不再回写面板**：镜像发生在面板渲染期，
     /// 回写就是"更新正在被更新的实体"（GPUI 直接 panic）。
     syncing_from_panel: bool,
+    /// 漫游 / 选中位置停在**分组头**上时它的 key（停在行上 / 空列表时为 `None`）。
+    ///
+    /// 分组头不参与选中（面板的选中永远指向一条存档），但它确实可能停在漫游位置上；
+    /// 记住它才能让 Enter 与点击同义（见 `confirm`）。
+    focused_header: Option<String>,
     /// 项目只读（标题栏锁）：只读时行内动作只剩「打开」。
     read_only: bool,
 }
@@ -580,7 +610,8 @@ impl ArchiveListDelegate {
         }
     }
 
-    /// 分组头（原型 §2.4）：色条 + 折叠三角 + 名称 + 计数；点整行折叠 / 展开，
+    /// 分组头（原型 §2.4）：色条 + 展开指示 + 名称 + 计数；点整行折叠 / 展开，
+    /// 停在它上面按 Enter 也一样（见 `confirm`），
     /// 右键是分组自身的动作（重命名 / 删除 / 新建）——「全部分组」与「未分组」是虚拟分组，
     /// 没有可改的东西，所以不给菜单。
     fn render_group_header(
@@ -594,15 +625,13 @@ impl ArchiveListDelegate {
     ) -> ListItem {
         let (bar, muted, fg) = {
             let colors = cx.theme().colors;
-            (
-                colors.list_active_border,
-                colors.muted_foreground,
-                colors.foreground,
-            )
+            // 分组色条取 `primary`：与 M4 分组头同角色（`rds-theme.json` 里与
+            // `list_active_border` 明暗同值，所以是零视觉变化的口径统一）。不用
+            // `sidebar_accent`：那个角色在浅色下与面板底几乎同色。
+            (colors.primary, colors.muted_foreground, colors.foreground)
         };
         let panel = self.panel.clone();
         let key_owned = key.to_string();
-        let chevron = if collapsed { "▸" } else { "▾" };
         let list_id = format!("archive-group-{key}");
         let debug_id = list_id.clone();
         let host = self.host.clone();
@@ -626,18 +655,19 @@ impl ArchiveListDelegate {
                 let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
             })
             .child(
-                // 2px 色条：`list_active_border`（原型 §6——不用 `sidebar_accent`：
-                // 那个角色在浅色下与面板底几乎同色）。
-                // 2px 色条：`GROUP_BAR_WIDTH`（= 外壳的 `NAV_GROUP_BAR_WIDTH`，固定描边 2px，
-                // 不随主题字号缩放）。原型 §6——不用 `sidebar_accent`：
-                // 那个角色在浅色下与面板底几乎同色）。
+                // 2px 分组色条：宽取 `ui::GROUP_BAR_WIDTH`（= 外壳的 `NAV_GROUP_BAR_WIDTH`，
+                // 固定描边，不随主题字号缩放），高度 / 圆头与 M4 分组头同形。
                 div()
                     .w(ui::GROUP_BAR_WIDTH)
-                    .h(rems(1.0))
+                    .h(rems(0.875))
                     .flex_none()
+                    .rounded_full()
                     .bg(bar),
             )
-            .child(div().flex_none().text_xs().text_color(muted).child(chevron))
+            // 展开指示走共用原语：`disclosure_slot` 的 10px 槽宽是缩进算式的一部分
+            // （行内容 = `pl` + 槽 + `gap_1`），与 M4/M5 换载体时一样——只动这一行调用，
+            // 同层行的标题左边缘不会漂。
+            .child(tree::disclosure_slot().child(tree::disclosure_icon(!collapsed, muted)))
             .child(
                 div()
                     .flex_1()
@@ -680,7 +710,7 @@ impl ArchiveListDelegate {
             head.into_any_element()
         };
 
-        ListItem::new(SharedString::from(list_id.clone())).child(head)
+        list_row(SharedString::from(list_id.clone())).child(head)
     }
 }
 
@@ -841,7 +871,7 @@ impl ListDelegate for ArchiveListDelegate {
         let groups_for_menu = self.groups.clone();
 
         Some(
-            ListItem::new(SharedString::from(format!("archive-row-{}", row.id))).child(
+            list_row(SharedString::from(format!("archive-row-{}", row.id))).child(
                 // 行的动作入口是右键菜单（原型 §3.2）：行本身只承载信息——240px 面板里
                 // 常驻按钮会把尾部字段挤没（hover 版随详情面板批）。
                 //
@@ -1013,6 +1043,10 @@ impl ListDelegate for ArchiveListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
+        // 位置落在分组头上就记下它的 key（分组头不参与选中，所以它没有别的确认语义）：
+        // 这一步要放在下面的早退**之前**——面板镜像也会移动列表索引，而「停在哪个头上」
+        // 正是由那一次位置变化决定的。
+        self.focused_header = ix.and_then(|ix| header_fold_key(&self.items, ix));
         let id = ix.and_then(|ix| self.row_at(ix).map(|row| row.id.clone()));
         if self.syncing_from_panel {
             // 面板镜像：只按它更新锚点，不回写（见字段注释）。
@@ -1031,12 +1065,21 @@ impl ListDelegate for ArchiveListDelegate {
     }
 
     /// 回车 / 双击：打开（只读），与右键菜单第一项同口径。
+    ///
+    /// 例外：停在**分组头**上时回车 = 折叠 / 展开它（与点头部同一条路）——头不是行，
+    /// 没有可打开的东西，而 Enter 是它键盘上唯一的入口（头部本身是自绘的可点行）。
     fn confirm(
         &mut self,
         _secondary: bool,
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
+        if let Some(key) = self.focused_header.clone() {
+            let _ = self
+                .panel
+                .update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
+            return;
+        }
         let Some(detail) = self
             .selected_id
             .as_deref()
@@ -1181,6 +1224,7 @@ impl ResourcesPanel {
             selected_id: self.selected.clone(),
             multi_ids: self.multi.iter().cloned().collect(),
             syncing_from_panel: false,
+            focused_header: None,
             read_only: self.snapshot.read_only,
         };
         let state = cx.new(|cx| ListState::new(delegate, window, cx).selectable(true));
@@ -1545,8 +1589,8 @@ impl ResourcesPanel {
             .justify_between()
             .gap_2()
             .px_2()
-            // 1px 固定描边：不随字号缩放（允许的 physical boundary 例外）。
-            .border_b(px(1.0))
+            // 固定描边：不随字号缩放（`ui::HAIRLINE` = 1px，与 editor / settings 同口径）。
+            .border_b(ui::HAIRLINE)
             .border_color(border)
             .child(
                 // 标题 = 前缀图标 + 文字（原型 §2.1）：图标形状与活动栏该面板的图标一致，
@@ -1737,7 +1781,7 @@ impl ResourcesPanel {
             .h_flex()
             .gap_1()
             .px_1()
-            .border_b(px(1.0))
+            .border_b(ui::HAIRLINE)
             .border_color(border)
             .child(
                 // 搜索框占满除两个按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）。
@@ -1774,7 +1818,7 @@ impl ResourcesPanel {
                 .px_2()
                 .py_1()
                 .text_xs()
-                .border_b(px(1.0))
+                .border_b(ui::HAIRLINE)
                 .border_color(border)
                 .text_color(color)
                 .child(notice)
@@ -1817,7 +1861,9 @@ impl ResourcesPanel {
             .gap_2()
             .w_full()
             .px_2()
-            .py_1()
+            // 栏高保持 `ROW_HEIGHT`（24px）：`py_1` + 20px 的按钮会多出 4px，“贴着状态行”的
+            // 这条栏一高一矮会跟着上下跳。
+            .py_0p5()
             .bg(hover_bg)
             .text_xs()
             .child(
@@ -1829,13 +1875,15 @@ impl ResourcesPanel {
                     .child(format!("已归档「{}」", undo.name)),
             )
             .child(
-                div()
-                    // 稳定 id + 调试选择器：这栏只存在一条（且 5 秒后自走），窗口测试按它定位。
-                    .id("archive-undo")
+                // 撤销是**唯一**的入口（`Ctrl+Z` 未绑），所以它得是语义按钮：自绘 div 没有
+                // hover / 焦点 / 键盘；`Button` 自带 `track_focus` + `tab_stop`，Enter/Space 可激活。
+                Button::new("archive-undo")
+                    .ghost()
+                    .xsmall()
                     .debug_selector(|| "archive-undo".to_string())
-                    .cursor_pointer()
+                    .label("撤销")
                     .text_color(primary)
-                    .child("撤销")
+                    .tooltip("把这条存档退回归档前的位置")
                     .on_click(move |_, window, cx| host.request_undo_archive(&token, window, cx)),
             )
     }
@@ -1855,7 +1903,7 @@ impl ResourcesPanel {
             .h_flex()
             .justify_between()
             .px_2()
-            .border_t(px(1.0))
+            .border_t(ui::HAIRLINE)
             .border_color(border)
             .child(
                 div()
@@ -1875,8 +1923,11 @@ impl ResourcesPanel {
 
     /// 加载中骨架（原型 §5）：3 行灰条，**不用转圈**——形状直接提示"这里将要出现行"，
     /// 宽度递减以免看着像真行。
-    fn render_loading(&self, cx: &mut Context<Self>) -> Div {
-        let bar_bg = cx.theme().colors.list_hover;
+    ///
+    /// 灰条走组件的 `Skeleton`（自带 2s 呼吸，只改透明度；`reduce_motion` 下停在全亮）：
+    /// 这是**暂态**（首帧取数期间），符合「动效只挂暂态」；列表已有行时不摆它，所以
+    /// 不会每帧重绘。
+    fn render_loading(&self) -> Div {
         let mut skeleton = div()
             .flex_1()
             .v_flex()
@@ -1888,11 +1939,10 @@ impl ResourcesPanel {
             .debug_selector(|| "archive-loading".to_string());
         for ratio in [0.75_f32, 0.55, 0.65] {
             skeleton = skeleton.child(
-                div()
+                Skeleton::new()
                     .h(rems(ui::ROW_HEIGHT))
                     .w(relative(ratio))
-                    .rounded_sm()
-                    .bg(bar_bg),
+                    .rounded_sm(),
             );
         }
         skeleton
@@ -2022,7 +2072,7 @@ impl Render for ResourcesPanel {
             if self.filter.is_empty() {
                 // 首个快照到达前不摆空态：那是"还没读到"，不是"没有存档"（原型 §5）。
                 if self.loading {
-                    self.render_loading(cx).into_any_element()
+                    self.render_loading().into_any_element()
                 } else {
                     self.render_empty(cx).into_any_element()
                 }
@@ -2127,12 +2177,15 @@ impl Render for ResourcesPanel {
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
     use super::{
-        ArchiveCounts, BadgeTone, HeaderMenuAction, RowClick, apply_row_click, badge_tone,
-        can_view_stats, classify_click, kind_icon, row_tail, strength_badge,
+        ArchiveCounts, ArchiveRow, BadgeTone, HeaderMenuAction, RowClick, apply_row_click,
+        badge_tone, can_view_stats, classify_click, header_fold_key, kind_icon, row_tail,
+        strength_badge,
     };
     use crate::detail_view::ArchiveDetail;
+    use crate::filter::VisibleItem;
     use crate::model::{ArchiveKind, ArchiveStatus};
     use gpui_kit::Modifiers;
+    use gpui_kit::component::IndexPath;
 
     #[test]
     fn row_click_classification_follows_the_prototype() {
@@ -2233,6 +2286,48 @@ mod tests {
         let mut multi = vec!["ar_1".to_string(), "ar_2".to_string()];
         apply_row_click(&mut multi, &mut anchor, &order, "ar_3", RowClick::Open);
         assert_eq!(multi, vec!["ar_3"]);
+    }
+
+    #[test]
+    fn enter_on_a_group_header_folds_that_group() {
+        // 漫游位置落在分组头上 → Enter 是「折叠 / 展开」（头不是行，没有打开语义）；
+        // 落在行上 / 越界 → 不是折叠（越界不能 panic：行集合刚变的那一帧会拿着旧索引）。
+        let items = vec![
+            VisibleItem::GroupHeader {
+                key: crate::filter::GROUP_ALL.to_string(),
+                label: "全部分组".to_string(),
+                count: 1,
+                depth: 0,
+                collapsed: false,
+            },
+            VisibleItem::Row(ArchiveRow {
+                id: "ar_1".to_string(),
+                name: "a.sql".to_string(),
+                kind: ArchiveKind::File,
+                version: 1,
+                status: ArchiveStatus::Normal,
+                tail: String::new(),
+                tag_ids: Vec::new(),
+                folder_id: None,
+                updated_epoch: 0,
+                archived_epoch: None,
+                size_bytes: None,
+            }),
+        ];
+        assert_eq!(
+            header_fold_key(&items, IndexPath::new(0)),
+            Some(crate::filter::GROUP_ALL.to_string())
+        );
+        assert_eq!(
+            header_fold_key(&items, IndexPath::new(1)),
+            None,
+            "行上是打开，不是折叠"
+        );
+        assert_eq!(
+            header_fold_key(&items, IndexPath::new(9)),
+            None,
+            "越界不 panic"
+        );
     }
 
     #[test]

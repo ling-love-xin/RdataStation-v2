@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -49,7 +50,10 @@ pub struct TagDialogSeed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagDialogEvent {
     /// 提交这次勾选：`add` / `remove` 是相对开窗时的差集（两个都空就不该提交）。
-    Apply { add: Vec<String>, remove: Vec<String> },
+    Apply {
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
     /// 新建一个标签并**直接打上**（一次动作做完，不必先建再去勾）。
     CreateAndTag { name: String },
     /// 重命名一个标签（**补 v1 缺失的能力**；只改显示名，不动它的关联）。
@@ -109,6 +113,19 @@ impl TagDialogState {
     pub fn reset_selection(&self, selected: Vec<String>) {
         *self.selected.borrow_mut() = selected.clone();
         *self.baseline.borrow_mut() = selected;
+    }
+
+    /// 勾选 / 取消（行内勾选框走它：`Checkbox` 交出的是**新值**，所以这里按值写而不是翻转）。
+    pub fn set_checked(&self, tag_id: &str, on: bool) {
+        let mut selected = self.selected.borrow_mut();
+        match (on, selected.iter().position(|id| id == tag_id)) {
+            (true, None) => selected.push(tag_id.to_string()),
+            (false, Some(index)) => {
+                selected.remove(index);
+            }
+            // 值没变（连点两下 / 与状态已同步）：不重复写，免得打乱勾选顺序。
+            _ => {}
+        }
     }
 
     pub fn toggle(&self, tag_id: &str) {
@@ -257,6 +274,18 @@ pub fn open_tag_dialog(
                     window.refresh();
                 }
             };
+            // 行内勾选框走真 `Checkbox`（与草稿选择对话框同一写法）：
+            // 自绘 `✓` 字符既没有键盘焦点，也拿不到"勾上/未勾"的语义（a11y 只剩一个文本节点）。
+            let check_dispatch = {
+                let state = state.clone();
+                let tag_id = option.id.clone();
+                move |on: &bool, window: &mut Window, cx: &mut App| {
+                    // 勾选框在行内：不让点击冒泡到行的 `on_click`（否则同一击翻转两次 = 没反应）。
+                    cx.stop_propagation();
+                    state.set_checked(&tag_id, *on);
+                    window.refresh();
+                }
+            };
             // 行尾的「⋯」：改名 / 删除（v1 缺的两项，入口就在它们的词典里）。
             let menu = {
                 let state = state.clone();
@@ -370,22 +399,23 @@ pub fn open_tag_dialog(
                     .px_2()
                     .py_1()
                     .rounded_sm()
-                    .when(checked, |row| row.bg(theme.colors.accent.opacity(0.3)))
-                    .when(can_edit, |row| {
+                    // 勾选底统一到 `list_active`（与面板 / 其它对话框的"选中底"同一个角色）：
+                    // 对话框内不用 `accent.opacity(_)` 这类品牌淡色当状态底。
+                    .when(checked, |row| row.bg(theme.colors.list_active))
+                    // 悬停不覆盖勾选（V11 口径）：勾上的行保持勾选底。
+                    .when(can_edit && !checked, |row| {
                         row.hover(|s| s.bg(theme.colors.list_hover))
                     })
                     .when(can_edit, |row| row.on_click(dispatch))
                     .child(
-                        div()
-                            .w_3()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(if checked {
-                                theme.colors.foreground
-                            } else {
-                                theme.colors.muted_foreground
+                        Checkbox::new(SharedString::from(format!("tag-check-{}", option.id)))
+                            .debug_selector({
+                                let id = option.id.clone();
+                                move || format!("tag-check-{id}")
                             })
-                            .child(if checked { "✓" } else { "" }),
+                            .checked(checked)
+                            .disabled(!can_edit)
+                            .on_click(check_dispatch),
                     )
                     .child(
                         div()
@@ -578,7 +608,11 @@ pub fn open_tag_rename_dialog(
         };
         let confirm_for_ok = confirm_for_button.clone();
 
-        let mut body = div().v_flex().w_full().gap_2().child(Input::new(&name_input));
+        let mut body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .child(Input::new(&name_input));
         body = body.child(
             div()
                 .w_full()
@@ -659,6 +693,34 @@ mod tests {
         // 再取消 at_2：回到开窗时的状态，没有改动可提交。
         state.toggle("at_2");
         assert_eq!(state.diff(), (Vec::new(), Vec::new()));
+    }
+
+    /// 行内勾选框按**值**写（不是翻转）：重复写同一值不改变勾选顺序，也不会重复入列。
+    #[test]
+    fn set_checked_writes_by_value_and_is_idempotent() {
+        let state = TagDialogState::new(Vec::new());
+        state.set_options(vec![choice("at_1"), choice("at_2")]);
+
+        state.set_checked("at_1", true);
+        state.set_checked("at_2", true);
+        assert_eq!(
+            state.selected(),
+            vec!["at_1".to_string(), "at_2".to_string()]
+        );
+        assert_eq!(state.diff().0.len(), 2, "两枚都是新增");
+
+        // 重复写：不重复入列、不重置顺序。
+        state.set_checked("at_1", true);
+        assert_eq!(
+            state.selected(),
+            vec!["at_1".to_string(), "at_2".to_string()]
+        );
+
+        // 写 false 只摘掉这一枚；已经没勾的再写 false 不报错。
+        state.set_checked("at_1", false);
+        assert_eq!(state.selected(), vec!["at_2".to_string()]);
+        state.set_checked("at_1", false);
+        assert_eq!(state.selected(), vec!["at_2".to_string()]);
     }
 
     /// 标签被删（词典里没了）：勾选跟着清掉，否则会提交一个指向不存在标签的 add。

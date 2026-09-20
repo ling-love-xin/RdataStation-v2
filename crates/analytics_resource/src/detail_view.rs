@@ -160,9 +160,9 @@ pub fn alert_line(detail: &ArchiveDetail) -> Option<String> {
         (ArchiveStatus::Missing, _) => {
             Some("本体缺失：可能被手工删除或移动，可用索引修复还原或删除记录".to_string())
         }
-        (ArchiveStatus::ContentChanged, _) => {
-            Some("内容已变：本体被绕过只读改过，可接受当前内容（生成新版本）或从历史还原".to_string())
-        }
+        (ArchiveStatus::ContentChanged, _) => Some(
+            "内容已变：本体被绕过只读改过，可接受当前内容（生成新版本）或从历史还原".to_string(),
+        ),
         // 引用型复现强度最弱：常态就提示，不等它失效。
         (ArchiveStatus::Normal, ArchiveKind::TableRef) => {
             Some("这是引用：源表可能已变更或被删除，使用前建议立即校验".to_string())
@@ -185,11 +185,7 @@ pub struct DetailActions {
 ///
 /// `actions` 为 `None`（crate 单测 / 无宿主场景）或项目只读时，只摆 chips 不给动作——
 /// 与另两个动作区的口径一致。
-fn render_tag_section(
-    detail: &ArchiveDetail,
-    actions: Option<&DetailActions>,
-    cx: &App,
-) -> Div {
+fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, cx: &App) -> Div {
     let (muted, border, foreground) = {
         let colors = cx.theme().colors;
         (colors.muted_foreground, colors.border, colors.foreground)
@@ -216,21 +212,23 @@ fn render_tag_section(
         if let Some(actions) = actions {
             if !read_only {
                 // × = 去掉这个标签（不再要一次确认：重新打上只需两步）。
+                // 语义按钮（不是自绘 div）：自带 hover / 焦点 / 键盘，且命中区有 20px 下限。
                 let host = actions.host.clone();
                 // 闭包是 `Fn` 且比 `detail` 活得久：每枚 chip 各拷一份带走。
                 let detail = detail.clone();
                 let tag_id = chip.id.clone();
                 let remove_id = format!("archive-tag-remove-{}", chip.id);
-                let debug_id = remove_id.clone();
-                let debug_id_for_selector = debug_id.clone();
                 line = line.child(
-                    div()
-                        .id(SharedString::from(remove_id))
-                        .debug_selector(move || debug_id_for_selector.clone())
-                        .cursor_pointer()
+                    Button::new(SharedString::from(remove_id))
+                        .ghost()
+                        .xsmall()
+                        .debug_selector({
+                            let id = chip.id.clone();
+                            move || format!("archive-tag-remove-{id}")
+                        })
+                        .label("×")
                         .text_color(muted)
-                        .hover(move |style| style.text_color(foreground))
-                        .child("×")
+                        .tooltip("从这个存档上摘掉这个标签")
                         .on_click(move |_, window, cx| {
                             host.request_remove_tag(&detail, &tag_id, window, cx)
                         }),
@@ -276,7 +274,12 @@ fn render_tag_section(
 pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
     let (foreground, muted, border, tone_color) = {
         let colors = cx.theme().colors;
-        (colors.foreground, colors.muted_foreground, colors.border, colors)
+        (
+            colors.foreground,
+            colors.muted_foreground,
+            colors.border,
+            colors,
+        )
     };
     let badge = strength_badge(detail.kind, detail.status);
     let badge_color = match badge_tone(detail.kind, detail.status) {
@@ -290,42 +293,38 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     let mut body = div().v_flex().w_full().gap_2().p_2();
 
     // 头部：kind 图标 + 名称 + 别名 + 版本 + 强度徽标
-    let mut header = div()
-        .v_flex()
-        .w_full()
-        .gap_0p5()
-        .child(
-            div()
-                .h_flex()
-                .w_full()
-                .min_w_0()
-                .gap_2()
-                // kind 图标（形状区分，一律 muted）：与列表行同一套，只在行内存在一个色块
-                // 的前提下才允许——这里那个色块是强度徽标。
-                .child(
-                    Icon::new(kind_icon(detail.kind))
-                        .flex_none()
-                        .size_3p5()
-                        .text_color(muted),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_ellipsis()
-                        .text_color(foreground)
-                        .child(detail.name.clone()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format!("v{}", detail.version)),
-                )
-                .child(div().text_xs().text_color(badge_color).child(badge)),
-        );
+    let mut header = div().v_flex().w_full().gap_0p5().child(
+        div()
+            .h_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            // kind 图标（形状区分，一律 muted）：与列表行同一套，只在行内存在一个色块
+            // 的前提下才允许——这里那个色块是强度徽标。
+            .child(
+                Icon::new(kind_icon(detail.kind))
+                    .flex_none()
+                    .size_3p5()
+                    .text_color(muted),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_ellipsis()
+                    .text_color(foreground)
+                    .child(detail.name.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("v{}", detail.version)),
+            )
+            .child(div().text_xs().text_color(badge_color).child(badge)),
+    );
     if let Some(alias) = detail.alias.as_deref() {
         header = header.child(div().text_xs().text_color(muted).child(alias.to_string()));
     }
@@ -396,14 +395,12 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 );
             if let Some(hash) = copy_hash {
                 row = row.child(
-                    div()
-                        .id("archive-detail-copy-hash")
-                        .cursor_pointer()
-                        .flex_none()
-                        .text_xs()
+                    Button::new("archive-detail-copy-hash")
+                        .ghost()
+                        .xsmall()
+                        .label("复制")
                         .text_color(muted)
-                        .hover(move |style| style.text_color(foreground))
-                        .child("复制")
+                        .tooltip("复制完整指纹（展示的是前 12 位）")
                         .on_click(move |_, _window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(hash.clone()))
                         }),
@@ -475,7 +472,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 .v_flex()
                 .w_full()
                 .gap_1()
-                .border_t(px(1.0))
+                .border_t(ui::HAIRLINE)
                 .border_color(border)
                 .pt_2()
                 .child(
@@ -502,9 +499,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                                 .on_click({
                                     let host = host.clone();
                                     let detail = detail_for_checkout.clone();
-                                    move |_, window, cx| {
-                                        host.request_checkout(&detail, window, cx)
-                                    }
+                                    move |_, window, cx| host.request_checkout(&detail, window, cx)
                                 }),
                         ),
                 )
@@ -516,7 +511,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                         .gap_1()
                         .mt_2()
                         .pt_2()
-                        .border_t(px(1.0))
+                        .border_t(ui::HAIRLINE)
                         .border_color(border)
                         .child(
                             div()
@@ -547,7 +542,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         .v_flex()
         .w_full()
         .min_h_0()
-        .border_l(px(1.0))
+        .border_l(ui::HAIRLINE)
         .border_color(border)
         .bg(cx.theme().colors.background)
         .child(body)
@@ -592,11 +587,22 @@ mod tests {
     #[test]
     fn rows_skip_empty_values_but_keep_fingerprint_placeholder() {
         let rows = detail_rows(&detail(ArchiveStatus::Normal, ArchiveKind::File));
-        let basic = rows.iter().find(|(title, _)| title == "基本信息").expect("基本信息");
+        let basic = rows
+            .iter()
+            .find(|(title, _)| title == "基本信息")
+            .expect("基本信息");
         // 只读说明必须出现（用户最常问"为什么不能编辑"）。
-        assert!(basic.1.iter().any(|(label, value)| *label == "只读" && value.contains("取回")));
+        assert!(
+            basic
+                .1
+                .iter()
+                .any(|(label, value)| *label == "只读" && value.contains("取回"))
+        );
 
-        let source = rows.iter().find(|(title, _)| title == "来源").expect("来源");
+        let source = rows
+            .iter()
+            .find(|(title, _)| title == "来源")
+            .expect("来源");
         assert!(source.1.iter().any(|(label, _)| *label == "来源草稿"));
         // 没有来源表 → 不产生该行；指纹则恒有（无值给破折号）。
         assert!(!source.1.iter().any(|(label, _)| *label == "来源表"));
@@ -619,8 +625,15 @@ mod tests {
         }];
         with_group.group = Some("报表".to_string());
         let rows = detail_rows(&with_group);
-        let org = rows.iter().find(|(title, _)| title == "组织").expect("组织");
-        assert!(org.1.iter().any(|(label, value)| *label == "分组" && value == "报表"));
+        let org = rows
+            .iter()
+            .find(|(title, _)| title == "组织")
+            .expect("组织");
+        assert!(
+            org.1
+                .iter()
+                .any(|(label, value)| *label == "分组" && value == "报表")
+        );
         assert!(
             !org.1.iter().any(|(label, _)| *label == "标签"),
             "标签不进文本行"
@@ -630,16 +643,22 @@ mod tests {
     #[test]
     fn alerts_only_for_actionable_states() {
         assert!(alert_line(&detail(ArchiveStatus::Normal, ArchiveKind::File)).is_none());
-        assert!(alert_line(&detail(ArchiveStatus::ContentChanged, ArchiveKind::File))
-            .expect("内容已变应提示")
-            .contains("内容已变"));
-        assert!(alert_line(&detail(ArchiveStatus::Missing, ArchiveKind::File))
-            .expect("缺失应提示")
-            .contains("本体缺失"));
+        assert!(
+            alert_line(&detail(ArchiveStatus::ContentChanged, ArchiveKind::File))
+                .expect("内容已变应提示")
+                .contains("内容已变")
+        );
+        assert!(
+            alert_line(&detail(ArchiveStatus::Missing, ArchiveKind::File))
+                .expect("缺失应提示")
+                .contains("本体缺失")
+        );
         // 引用型常态就要提示（复现强度最弱，不等失效）。
-        assert!(alert_line(&detail(ArchiveStatus::Normal, ArchiveKind::TableRef))
-            .expect("引用应提示")
-            .contains("源表可能已变更"));
+        assert!(
+            alert_line(&detail(ArchiveStatus::Normal, ArchiveKind::TableRef))
+                .expect("引用应提示")
+                .contains("源表可能已变更")
+        );
     }
 
     #[test]
