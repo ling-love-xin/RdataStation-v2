@@ -13,6 +13,10 @@
 # 平台：按当前系统选资产（Windows amd64 / Linux amd64 / macOS universal）。
 set -euo pipefail
 
+# ⚠️ 变量后面**紧接中文（多字节字符）**时必须写成 `${VAR}`：macOS 的 `/bin/bash` 还是 3.2，
+# 在 UTF-8 语言环境下会把多字节字节吞进变量名，报 `ASSET: unbound variable` 这种莫名其妙的错；
+# Windows / Linux 的 bash 5.x 不受影响（CI 的 macOS 作业钤过这个坑，见 release-pipeline.md §7）。
+
 VERSION="${1:-1.5.5}"
 # 镜像前缀：本机实测 GitHub 直连不通，镜像可达；能直连时用 GH_PROXY= 关掉
 GH_PROXY="${GH_PROXY-https://ghproxy.net/}"
@@ -31,11 +35,11 @@ URL="${GH_PROXY}https://github.com/duckdb/duckdb/releases/download/v${VERSION}/$
 mkdir -p "$DEST"
 
 if [ -f "$DEST/$LIB" ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "已在位：$DEST/$LIB（要重取加 FORCE=1）"
+  echo "已在位：$DEST/${LIB}（要重取加 FORCE=1）"
   exit 0
 fi
 
-echo "下载 $ASSET（DuckDB v$VERSION）"
+echo "下载 ${ASSET}（DuckDB v${VERSION}）"
 echo "  $URL"
 curl -fL --retry 3 --max-time 900 -o "$DEST/$ASSET" "$URL"
 
@@ -43,7 +47,7 @@ echo "解压到 $DEST"
 unzip -o -q "$DEST/$ASSET" -d "$DEST"
 
 # 头文件（duckdb.h）必须和库同目录：libduckdb-sys 从 DUCKDB_LIB_DIR 里找它
-[ -f "$DEST/$LIB" ] || { echo "解压后没看到 $LIB，资产可能变了" >&2; exit 1; }
+[ -f "$DEST/$LIB" ] || { echo "解压后没看到 ${LIB}，资产可能变了" >&2; exit 1; }
 [ -f "$DEST/duckdb.h" ] || { echo "解压后没看到 duckdb.h（bindings 需要）" >&2; exit 1; }
 
 echo "就位：$DEST"

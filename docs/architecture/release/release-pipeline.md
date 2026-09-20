@@ -102,6 +102,7 @@ git push origin main --tags
 | Linux 编译报缺头文件 / `-lxxx` | 少系统包 | 按报错的库名补进 workflow 的 apt 列表（当前清单见 `release.yml`） |
 | 构建被 OOM 杀掉 | 并发链接重型 crate | 保持 `-j 2`；不要为提高速度去掉它 |
 | 手动 Run workflow 之后 Release 页没东西 | 手动触发**不建 Release**（设计如此） | 产物在该次运行的 Artifacts 里；要发布请推标签 |
+| macOS：`fetch-duckdb.sh: line N: ASSET: unbound variable` | macOS 的 `/bin/bash` 是 **3.2**，在 UTF-8 语言环境下会把「`$变量` 紧跟中文」里的多字节字符当成变量名的一部分（bash 5.x 不受影响） | 把紧跟中文的展开写成 `${变量}`；仓库里三个脚本已修，自查：`LC_ALL=C grep -n '[$][A-Za-z_][A-Za-z0-9_]*[^ -~]' tools/*.sh`（无输出即干净） |
 | 版本号与标签不一致的 warning | `[workspace.package] version` 没跟着改 | 改版本号后重打标签 |
 
 ## 8. 明确不做 / 后续可加

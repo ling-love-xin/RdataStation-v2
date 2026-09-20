@@ -28,6 +28,10 @@
 # 不会进 Dock），包一层才像个应用；`.app` 内的可执行文件仍与 `assets/` 同级。
 set -euo pipefail
 
+# ⚠️ 变量后面**紧接中文（多字节字符）**时必须写成 `${VAR}`：macOS 的 `/bin/bash` 还是 3.2，
+# 在 UTF-8 语言环境下会把多字节字节吞进变量名并报 `unbound variable`；bash 5.x 不受影响。
+# 本脚本由 CI 的 macOS 作业执行，所以这条不是风格问题（见 release-pipeline.md §7）。
+
 VERSION="${1:-}"
 TARGET="${2:-}"
 if [ -z "$VERSION" ]; then
@@ -73,7 +77,7 @@ fi
 ASSETS_DIR="$ROOT/assets"
 for required in assets/themes/product-tokens.json assets/themes/rds-theme.json; do
   if [ ! -f "$ROOT/$required" ]; then
-    echo "缺少随包资源：$required（主题与产品 token 不在包里，发布版会回落默认配色）" >&2
+    echo "缺少随包资源：${required}（主题与产品 token 不在包里，发布版会回落默认配色）" >&2
     exit 1
   fi
 done
@@ -163,7 +167,7 @@ fi
 REQUIRED_ITEMS=("$EXE" "$DYLIB" "assets/themes/product-tokens.json")
 for item in "${REQUIRED_ITEMS[@]}"; do
   if [ ! -e "$STAGING/$item" ]; then
-    echo "可分发目录缺少 $item：$STAGING" >&2
+    echo "可分发目录缺少 ${item}：$STAGING" >&2
     exit 1
   fi
 done
@@ -173,17 +177,17 @@ if [ "$ARCHIVE" = "zip" ]; then
   if command -v unzip >/dev/null 2>&1; then
     LIST="$(unzip -Z1 "$ARCHIVE_FILE")"
     for item in "${REQUIRED_ITEMS[@]}"; do
-      printf '%s\n' "$LIST" | grep -q "$item$" || { echo "归档缺少 $item：$ARCHIVE_FILE" >&2; exit 1; }
+      printf '%s\n' "$LIST" | grep -q "$item$" || { echo "归档缺少 ${item}：$ARCHIVE_FILE" >&2; exit 1; }
     done
   fi
 else
   LIST="$(tar -tzf "$ARCHIVE_FILE")"
   for item in "${REQUIRED_ITEMS[@]}"; do
-    printf '%s\n' "$LIST" | grep -q "$item$" || { echo "归档缺少 $item：$ARCHIVE_FILE" >&2; exit 1; }
+    printf '%s\n' "$LIST" | grep -q "$item$" || { echo "归档缺少 ${item}：$ARCHIVE_FILE" >&2; exit 1; }
   done
 fi
 
-echo "已打包：$ARCHIVE_FILE（$(du -h "$ARCHIVE_FILE" | cut -f1)）"
+echo "已打包：${ARCHIVE_FILE}（$(du -h "$ARCHIVE_FILE" | cut -f1)）"
 
 # 校验和：下载方一条命令就能核对完整性（与归档一起进 Release Assets）
 CHECKSUM_FILE="$ARCHIVE_FILE.sha256"

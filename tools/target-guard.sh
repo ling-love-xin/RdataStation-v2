@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-[ -d "$TARGET" ] || { echo "没有 $TARGET（还没构建过）"; exit 0; }
+[ -d "$TARGET" ] || { echo "没有 ${TARGET}（还没构建过）"; exit 0; }
 
 # 删除清单：都能再生，且不参与增量判断（删了最多下次多编一点）
 DELETABLE_LABELS=("增量编译缓存（incremental）" "调试符号（*.pdb）" "旧的 DuckDB 下载缓存")
@@ -53,7 +53,7 @@ do_clean() {
   while IFS= read -r pdb; do
     [ -n "$pdb" ] || continue
     size=$(du -sm "$pdb" 2>/dev/null | cut -f1 || echo 0)
-    echo "  - $pdb（${size} MB）"
+    echo "  - ${pdb}（${size} MB）"
     [ "$DRY" = "1" ] || rm -f "$pdb"
   done < <(find "$TARGET" -maxdepth 3 -type f -name '*.pdb' 2>/dev/null)
 
