@@ -503,12 +503,12 @@ struct Recorder {
     pretend_idle: Cell<bool>,
     /// 项目根（`None` = 未打开项目：面板应给出可读原因而不是空列表）
     project_root: RefCell<Option<std::path::PathBuf>>,
-    /// 预览按列重排的请求：(临时表, 列, 是否降序, limit)
-    ordered: RefCell<Vec<(String, String, bool, usize)>>,
-    /// 内存库忙（模拟有任务在跑）：`preview_ordered` 回 `Ok(None)`
-    ordered_busy: Cell<bool>,
-    /// `preview_ordered` 的失败原因（非空时回 `Err`）
-    ordered_error: RefCell<Option<String>>,
+    /// 预览重查取样的请求：(临时表, 排序（列 + 是否降序）, limit)
+    samples: RefCell<Vec<(String, Option<(String, bool)>, usize)>>,
+    /// 内存库忙（模拟有任务在跑）：`preview_sample` 回 `Ok(None)`
+    samples_busy: Cell<bool>,
+    /// `preview_sample` 的失败原因（非空时回 `Err`）
+    samples_error: RefCell<Option<String>>,
 }
 
 fn test_column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
@@ -760,36 +760,37 @@ impl MockHost for TestHost {
         ])
     }
 
-    /// 预览按列重排：记下请求，再按开关回「忙 / 失败 / 一份可辨认的排序取样」。
+    /// 预览重查取样：记下请求，再按开关回「忙 / 失败 / 一份可辨认的重查结果」。
     ///
-    /// 回的列只有被排的那一列，且值里带列名与方向（`id:desc:1`）：断言时能看出
-    /// 「这份数据是哪次请求的产物」，也不会与生成时的取样碰巧一样。
-    fn preview_ordered(
+    /// 回的列只有被排的那一列（不排序时给一列探针），值里带方向与行号
+    /// （`id:desc:1`）：断言时能看出「这份数据是哪次请求的产物」，也不会与生成时的取样碰巧一样。
+    fn preview_sample(
         &self,
         temp_table: &str,
-        column: &str,
-        descending: bool,
+        order: Option<(&str, bool)>,
         limit: usize,
     ) -> Result<Option<MockPreview>, String> {
-        self.rec.ordered.borrow_mut().push((
+        self.rec.samples.borrow_mut().push((
             temp_table.to_string(),
-            column.to_string(),
-            descending,
+            order.map(|(column, descending)| (column.to_string(), descending)),
             limit,
         ));
-        if let Some(err) = self.rec.ordered_error.borrow().clone() {
+        if let Some(err) = self.rec.samples_error.borrow().clone() {
             return Err(err);
         }
-        if self.rec.ordered_busy.get() {
+        if self.rec.samples_busy.get() {
             return Ok(None);
         }
-        let dir = if descending { "desc" } else { "asc" };
+        let (column, dir) = match order {
+            Some((column, true)) => (column.to_string(), "desc"),
+            Some((column, false)) => (column.to_string(), "asc"),
+            None => ("rows".to_string(), "plain"),
+        };
         Ok(Some(MockPreview {
-            columns: vec![column.to_string()],
-            rows: vec![
-                vec![format!("{column}:{dir}:1")],
-                vec![format!("{column}:{dir}:2")],
-            ],
+            columns: vec![column.clone()],
+            rows: (1..=limit)
+                .map(|n| vec![format!("{column}:{dir}:{n}")])
+                .collect(),
         }))
     }
 
@@ -1289,14 +1290,13 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
         panel.sort_preview(&table, "id", Some(true), cx)
     });
     assert_eq!(
-        rec.ordered.borrow().as_slice(),
+        rec.samples.borrow().as_slice(),
         [(
             format!("temp_mock_{table}"),
-            "id".to_string(),
-            true,
+            Some(("id".to_string(), true)),
             super::PREVIEW_ROWS
         )],
-        "重查的参数：临时表 + 列 + 方向 + 取几行"
+        "重查的参数：临时表 + （列，方向）+ 取几行"
     );
     panel.update(cx, |panel, _cx| {
         let (preview, sort) = panel.preview_for(&table).expect("有结果");
@@ -1304,13 +1304,18 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
         assert_eq!(sort.column, "id");
         assert!(sort.descending);
         assert_eq!(sort.label(), "按 id 降序");
+        assert_eq!(
+            preview.rows.len(),
+            super::PREVIEW_ROWS,
+            "重查结果整份交过来"
+        );
         assert_eq!(preview.rows[0], vec!["id:desc:1".to_string()]);
         assert!(panel.error().is_none(), "成功时不该留错误文案");
     });
 
     // 取消排序（表头点第三下 / 菜单里的「取消排序」）：回到生成时的取样，且不再重查
     panel.update(cx, |panel, cx| panel.sort_preview(&table, "id", None, cx));
-    assert_eq!(rec.ordered.borrow().len(), 1, "取消是纯状态，不该再查一次");
+    assert_eq!(rec.samples.borrow().len(), 1, "取消是纯状态，不该再查一次");
     panel.update(cx, |panel, _cx| {
         let (preview, sort) = panel.preview_for(&table).expect("有结果");
         assert!(sort.is_none());
@@ -1318,7 +1323,7 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
     });
 
     // 内存库忙（有任务在跑）：只写一句可读原因，取样保持原样
-    rec.ordered_busy.set(true);
+    rec.samples_busy.set(true);
     panel.update(cx, |panel, cx| {
         panel.sort_preview(&table, "id", Some(false), cx)
     });
@@ -1334,10 +1339,10 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
         );
         assert_eq!(panel.preview_for(&table).expect("有结果").0.rows.len(), 2);
     });
-    rec.ordered_busy.set(false);
+    rec.samples_busy.set(false);
 
     // 重查失败（列不存在等）：同样不动取样，原因原样摆出来
-    *rec.ordered_error.borrow_mut() = Some("按「id」排序取样失败：no such column".to_string());
+    *rec.samples_error.borrow_mut() = Some("按「id」排序取样失败：no such column".to_string());
     panel.update(cx, |panel, cx| {
         panel.sort_preview(&table, "id", Some(false), cx)
     });
@@ -1345,7 +1350,7 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
         assert!(panel.preview_for(&table).expect("有结果").1.is_none());
         assert!(panel.error().is_some_and(|e| e.contains("排序取样失败")));
     });
-    rec.ordered_error.borrow_mut().take();
+    rec.samples_error.borrow_mut().take();
 
     // 取样被换掉（相当于重新生成出不同的数据）：排序自动失效，不需要谁记得来清
     panel.update(cx, |panel, cx| {
@@ -1368,12 +1373,115 @@ fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAp
     // 切项目（结果全没）：排序一并作废
     panel.update(cx, |panel, _cx| {
         panel.results[0].preview = MockPreview::default();
-        panel.preview_sort = None;
+        panel.preview_cache = None;
     });
     panel.update(cx, |panel, cx| panel.forget_generated(1, cx));
     panel.update(cx, |panel, _cx| {
-        assert!(panel.preview_sort.is_none());
+        assert!(panel.preview_cache.is_none());
         assert!(panel.preview_for(&table).is_none(), "结果没了就没有预览");
+    });
+}
+
+/// 预览行数档：生成时只读了 10 行，要更多行就得**重查**临时表；回到 10 行则丢掉缓存即可。
+///
+/// 这条用例是**判别性**的：它同时看「请求里带的 limit」与「面板交出去的取样长度」——
+/// 若只改计数不重查，取样永远是 10 行，菜单与标题就会说谎；它也看住「排序与行数共用一处缓存」。
+#[gpui_kit::test]
+fn preview_limit_requeries_more_rows_and_shares_the_cache_with_sorting(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    let table = panel.read_with(cx, |panel, _cx| panel.draft().table_name.clone());
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            panel.preview_limit(),
+            super::PREVIEW_ROWS,
+            "默认就是生成那份"
+        );
+        assert_eq!(panel.preview_for(&table).expect("有结果").0.rows.len(), 2);
+    });
+
+    // 选 25 行：一次不带排序的重查，取样换成 25 行
+    panel.update(cx, |panel, cx| panel.set_preview_limit(25, cx));
+    assert_eq!(
+        rec.samples.borrow().as_slice(),
+        [(format!("temp_mock_{table}"), None, 25)],
+        "「多要几行」也是重查（生成时只读了 10 行）"
+    );
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        assert!(sort.is_none(), "只是多要几行，不是排序");
+        assert_eq!(preview.rows.len(), 25);
+        assert_eq!(preview.rows[0], vec!["rows:plain:1".to_string()]);
+    });
+
+    // 再排序：带着**当前行数档**重查（排序与行数共用一处缓存）
+    panel.update(cx, |panel, cx| {
+        panel.sort_preview(&table, "id", Some(true), cx)
+    });
+    assert_eq!(rec.samples.borrow().len(), 2, "排序要再查一次");
+    assert_eq!(
+        rec.samples.borrow()[1],
+        (
+            format!("temp_mock_{table}"),
+            Some(("id".to_string(), true)),
+            25
+        )
+    );
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        assert!(sort.is_some());
+        assert_eq!(preview.rows.len(), 25, "排序后仍是 25 行");
+        assert_eq!(preview.rows[0], vec!["id:desc:1".to_string()]);
+    });
+
+    // 行数改到 50：排序留着，重查带上排序与新的 limit
+    panel.update(cx, |panel, cx| panel.set_preview_limit(50, cx));
+    assert_eq!(rec.samples.borrow().len(), 3, "改行数要重查");
+    assert_eq!(
+        rec.samples.borrow()[2],
+        (
+            format!("temp_mock_{table}"),
+            Some(("id".to_string(), true)),
+            50
+        )
+    );
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        assert!(sort.is_some(), "改行数不该把排序弄丢");
+        assert_eq!(preview.rows.len(), 50);
+    });
+
+    // 内存库忙：档位（用户的选择）留着，但缓存因 limit 对不上而失效 → 回落生成那份取样
+    rec.samples_busy.set(true);
+    panel.update(cx, |panel, cx| panel.set_preview_limit(100, cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.preview_limit(), 100);
+        assert!(panel.error().is_some_and(|e| e.contains("内存库")));
+        assert_eq!(
+            panel.preview_for(&table).expect("有结果").0.rows.len(),
+            2,
+            "缓存失效就回落生成那份（不留着旧的 50 行假装还在）"
+        );
+    });
+    rec.samples_busy.set(false);
+
+    // 回到 10 行：丢缓存即可，不必再查库
+    let before = rec.samples.borrow().len();
+    panel.update(cx, |panel, cx| {
+        panel.set_preview_limit(super::PREVIEW_ROWS, cx)
+    });
+    assert_eq!(rec.samples.borrow().len(), before, "回到生成那份不必重查");
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.preview_cache.is_none());
+        assert_eq!(panel.preview_for(&table).expect("有结果").0.rows.len(), 2);
     });
 }
 
@@ -1409,7 +1517,7 @@ fn preview_header_click_requeries_through_the_panel(cx: &mut TestAppContext) {
                 .perform_sort(0, ColumnSort::Descending, window, cx);
         });
     });
-    assert!(rec.ordered.borrow().is_empty(), "行号槽不排序");
+    assert!(rec.samples.borrow().is_empty(), "行号槽不排序");
 
     // 第 1 列（id）：转成一次面板重查
     cx.update(|window, cx| {
@@ -1419,8 +1527,11 @@ fn preview_header_click_requeries_through_the_panel(cx: &mut TestAppContext) {
                 .perform_sort(1, ColumnSort::Descending, window, cx);
         });
     });
-    assert_eq!(rec.ordered.borrow().len(), 1, "数据列点一次 = 一次重查");
-    assert_eq!(rec.ordered.borrow()[0].1, "id");
+    assert_eq!(rec.samples.borrow().len(), 1, "数据列点一次 = 一次重查");
+    assert_eq!(
+        rec.samples.borrow()[0].1.as_ref().map(|(c, _)| c.as_str()),
+        Some("id")
+    );
 
     // 面板算完经观察者把快照推回来：箭头画在生效中的那一列，内容是重查来的那份
     cx.update(|_, cx| {
@@ -1602,7 +1713,7 @@ fn preview_header_sort_icon_is_really_clickable(cx: &mut TestAppContext) {
             "{slot} 应登记坐标（行号槽也走同一个 render_th）"
         );
     }
-    assert!(rec.ordered.borrow().is_empty(), "还没点过就不该重查");
+    assert!(rec.samples.borrow().is_empty(), "还没点过就不该重查");
 
     // 行号槽：右侧没有箭头，点多少次都不该有反应
     let slot = cx.debug_bounds("mock-preview-th-0").expect("行号槽坐标");
@@ -1612,7 +1723,7 @@ fn preview_header_sort_icon_is_really_clickable(cx: &mut TestAppContext) {
             gpui_kit::Modifiers::default(),
         );
     }
-    assert_eq!(rec.ordered.borrow().len(), 0, "行号槽不给排序");
+    assert_eq!(rec.samples.borrow().len(), 0, "行号槽不给排序");
 
     // 数据列：右端往左探，命中箭头即重查
     let head = cx.debug_bounds("mock-preview-th-1").expect("数据列坐标");
@@ -1622,13 +1733,16 @@ fn preview_header_sort_icon_is_really_clickable(cx: &mut TestAppContext) {
             gpui_kit::Point::new(head.right() + gpui_kit::px(offset), head.center().y),
             gpui_kit::Modifiers::default(),
         );
-        if !rec.ordered.borrow().is_empty() {
+        if !rec.samples.borrow().is_empty() {
             clicked = true;
             break;
         }
     }
     assert!(clicked, "表头右端应有可点的排序箭头（探了 {PROBE:?}）");
-    assert_eq!(rec.ordered.borrow()[0].1, "id");
+    assert_eq!(
+        rec.samples.borrow()[0].1.as_ref().map(|(c, _)| c.as_str()),
+        Some("id")
+    );
 }
 
 /// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：

@@ -81,7 +81,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/tests/persistence_roundtrip.rs` | 持久化层**真库往返**（5 项：任务 + 列序 / 可空列 / 历史排序与截尾 / 级联删除 / 模板；走真迁移链） |
 | `crates/mock/tests/history_roundtrip.rs` | 生成历史 / 用户模板**端到端**（4 项：记录 → 列表 → 详情 → 重放；模板存 ↔ 取 ↔ 应用 ↔ 删除；失败原因与 `limit` 截尾；项目根不是目录时的可读错误） |
 | `crates/mock/tests/temp_table_cleanup.rs` | 临时表清理集成测试（2 项；独立进程：清理是进程级动作） |
-| `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（后台任务转发 + 路径解析 + 连接清单 + 只读 + 打开详情 + 重绘 + 写入成功后导航缓存失效 + 预览按列重排（非阻塞，拿不到内存库锁则回落）） |
+| `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（后台任务转发 + 路径解析 + 连接清单 + 只读 + 打开详情 + 重绘 + 写入成功后导航缓存失效 + 预览重查取样（非阻塞，拿不到内存库锁则回落）） |
 | `crates/workbench/src/services/mock_jobs.rs` | **后台任务**：单一工作线程 + 进度槽（含阶段）+ 结果一次性取回 + 取消；任务种类＝生成 / 场景模板 / 追加 / 三个出口 |
 | `crates/workbench/src/services/mock_generator.rs` | **装配层**：生成（不写库）/ 场景模板（逐表补预览）/ 落库新建 / 追加 / 导出 / 草稿箱 / 结构导入（cache-aside 取列）；**出口的输入是结果（`MockGenInfo`），不收草稿** |
 | `crates/workbench/src/panels/` | 右 Dock 面板构造期创建 + 句柄登记；`Shared::open_mock_panel`（入口统一） |

@@ -310,18 +310,18 @@ impl MockEngine {
             .map_err(|e| MockError::Preview(e.to_string()))
     }
 
-    /// 预览的「按列重排」：重查临时表，取**按该列排序后的前 `limit` 行**。
+    /// 预览的**重查取样**（只读）：取临时表的前 `limit` 行；`order` 给出按哪一列排序
+    /// （`None` = 不排序，只多要几行）。
     ///
-    /// 为何是重查而不是就地重排：预览只装了前 N 行的取样，就地重排只会把这 N 行换个顺序
-    /// （看着像「按值排过」，实际不是这一列的前 N 名）；重查拿到的才是全局的前 N 行，
-    /// 与标题里的「前 N 行」是同一个意思。
+    /// 为何是重查而不是就地改：预览只装了前 N 行的取样，就地重排只会把这 N 行换个顺序
+    ///（看着像「按值排过」，实际不是这一列的前 N 名）；而「多要几行」也只能由库给——
+    /// 生成时只读了 `PREVIEW_ROWS` 行。重查拿到的才是全局前 N 行，与标题里的「前 N 行」同一个意思。
     ///
     /// **非阻塞**：拿不到内存库连接锁（有任务在跑 / 别的调用持锁）时返回 `Ok(None)`，
-    /// 由调用方保持现状——预览排序是随手动作，不值得为它冻住 UI 等一个不可取消的出口任务。
-    pub fn try_preview_ordered(
+    /// 由调用方保持现状——预览取样是随手动作，不值得为它冻住 UI 等一个不可取消的出口任务。
+    pub fn try_preview_sample(
         temp_table_name: &str,
-        column: &str,
-        descending: bool,
+        order: Option<(&str, bool)>,
         limit: usize,
     ) -> MockResult<Option<QueryResult>> {
         let db = Self::get_db()?;
@@ -329,12 +329,12 @@ impl MockEngine {
             Ok(guard) => guard,
             // 与 `get_conn` 同一口径：毒化只说明上一次任务在持锁期间失败过，连接本身仍可用
             Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-                tracing::warn!("Mock: 内存库连接锁曾被毒化（按列重排），已恢复复用");
+                tracing::warn!("Mock: 内存库连接锁曾被毒化（预览重查），已恢复复用");
                 poisoned.into_inner()
             }
             Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
         };
-        Self::read_ordered_preview(&conn, temp_table_name, column, descending, limit)
+        Self::read_sample_preview(&conn, temp_table_name, order, limit)
             .map(Some)
             .map_err(|e| MockError::Preview(e.to_string()))
     }
@@ -641,15 +641,19 @@ impl MockEngine {
     ///
     /// 「排序后取前 N」而非「取前 N 再排序」：只有前者是全局视图——
     /// 「这一列最大的 10 行长什么样」答得上问题，「把手上那 10 行换个个儿」答不上。
-    fn read_ordered_preview(
+    fn read_sample_preview(
         conn: &duckdb::Connection,
         table_name: &str,
-        column: &str,
-        descending: bool,
+        order: Option<(&str, bool)>,
         limit: usize,
     ) -> MockResult<QueryResult> {
-        let sql =
-            SqlEngine::build_select_ordered(table_name, column, descending, Some(limit as i64));
+        let sql = match order {
+            Some((column, descending)) => {
+                SqlEngine::build_select_ordered(table_name, column, descending, Some(limit as i64))
+            }
+            // 不排序 = 「只想看更多行」：与生成时那份取样同一条语句，只是 LIMIT 更大
+            None => SqlEngine::build_select_all(table_name, Some(limit as i64)),
+        };
         Self::read_select(conn, &sql)
     }
 

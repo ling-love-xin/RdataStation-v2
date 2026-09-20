@@ -178,31 +178,18 @@ pub struct MockPreview {
     pub rows: Vec<Vec<String>>,
 }
 
-/// 预览的「按列重排」：把取样换成**重查得来的、按该列排序后的前 N 行**。
+/// 生效中的排序：列名 + 方向。
 ///
-/// `base` 存的是派生它的那份取样（生成时的前 N 行）：与当前取样相等才说明这份排序还成立。
-/// 靠这一条，排序的失效不需要在各处 `results` 清空点手写清理——重新生成 / 切项目后取样必然变
-/// （同名同为 seed 重建的极端情形里取样相同，而那份排序描述的也正是这份数据，仍然成立）。
+/// 它是一个**描述**（不含数据）：取样存在 [`PreviewCache`] 里（排序与多要几行共用一处缓存）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewSort {
-    /// 哪张表的结果（另一张表的 tab 不继承这份排序）
-    pub table: String,
     /// 排序列名
     pub column: String,
-    /// 降序？（表头点第二次 / 菜单里选的）
+    /// 降序？（表头箭头点第二次 / 菜单里选的）
     pub descending: bool,
-    /// 派生它的那份取样
-    base: MockPreview,
-    /// 重查得到的「排序后前 N 行」
-    preview: MockPreview,
 }
 
 impl PreviewSort {
-    /// 这份排序是否还适用于该表当前的取样（表名与取样都一致）。
-    fn applies_to(&self, table: &str, base: &MockPreview) -> bool {
-        self.table == table && self.base == *base
-    }
-
     /// 方向说明（预览标题与菜单用）：「按 id 降序」。
     pub fn label(&self) -> String {
         format!(
@@ -210,6 +197,33 @@ impl PreviewSort {
             self.column,
             if self.descending { "降序" } else { "升序" }
         )
+    }
+}
+
+/// 面板缓存的那一份**重查取样**（排序 / 多要几行共用）。
+///
+/// 两者合成一处缓存，因为它们的失效条件完全相同：**取样变了**（重新生成 / 切项目）
+/// 或**行数档变了**。`base` 存的是派生它的那份生成取样，`limit` 是当时的行数档——
+/// 任一不等就当缓存不存在，不必在十几个 `results` 清空点手写清理。
+/// （同名同为 seed 重建的极端情形里取样相同，而那份重查描述的也正是这份数据，仍然成立。）
+#[derive(Debug, Clone)]
+struct PreviewCache {
+    /// 哪张表的结果（另一张表的 tab 不继承）
+    table: String,
+    /// 派生它的那份生成取样
+    base: MockPreview,
+    /// 重查时用的行数档
+    limit: usize,
+    /// 排序（`None` = 只是多要几行）
+    sort: Option<PreviewSort>,
+    /// 重查结果
+    preview: MockPreview,
+}
+
+impl PreviewCache {
+    /// 这份缓存是否还适用于该表当前的取样与当前行数档。
+    fn applies_to(&self, table: &str, base: &MockPreview, limit: usize) -> bool {
+        self.table == table && self.base == *base && self.limit == limit
     }
 }
 
@@ -491,18 +505,17 @@ pub trait MockHost: 'static {
     fn schema_sources(&self) -> Vec<SchemaSource>;
     /// 读某表的列（源库结构）
     fn import_columns(&self, request: &SchemaRequest) -> Result<Vec<MockColumnSpec>, String>;
-    /// 预览的「按列重排」：取临时表中**按该列排序后的前 `limit` 行**。
+    /// 预览的「按列重排」：取临时表中**按该列排序后的前 `limit` 行**（`None` = 不排序，只多要几行）。
     ///
     /// 为什么是重查而不是就地重排：预览只装了前 N 行的取样，就地重排只会把这 N 行换个顺序
-    /// （看着像「按值排过」，实际不是这一列的前 N 名）。
+    /// （看着像「按值排过」，实际不是这一列的前 N 名）；「多要几行」也只能由库给。
     ///
-    /// `Ok(None)` = 内存库连接正被别的任务占用：调用方保持现状——排序是随手动作，
+    /// `Ok(None)` = 内存库连接正被别的任务占用：调用方保持现状——预览取样是随手动作，
     /// 不值得为它等一个不可取消的生成 / 出口任务。
-    fn preview_ordered(
+    fn preview_sample(
         &self,
         temp_table: &str,
-        column: &str,
-        descending: bool,
+        order: Option<(&str, bool)>,
         limit: usize,
     ) -> Result<Option<MockPreview>, String>;
     /// 文件出口的默认目录（项目根 / 工作目录；空串表示由视图回退到当前目录）
@@ -532,6 +545,12 @@ pub trait MockHost: 'static {
 const MAX_ROWS: u32 = 1_000_000;
 /// 预览显示行数上限
 const PREVIEW_ROWS: usize = 10;
+
+/// 预览行数档（面板菜单；生成时只读了 [`PREVIEW_ROWS`] 行，超出即重查临时表）。
+///
+/// 上限 200：预览是**看一眼数据长什么样**，不是浏览全表——要看全请落库 / 导出后查那张表；
+/// 而每次重查的 `LIMIT` 越大代价越大（宽表 200 行已经不止一屏）。
+const PREVIEW_LIMIT_CHOICES: [usize; 5] = [PREVIEW_ROWS, 25, 50, 100, 200];
 
 /// 13 种语言（面板下拉用）
 const LOCALES: [Locale; 13] = [
@@ -1319,8 +1338,10 @@ pub struct MockPanel {
     next_id: u64,
     /// 最近一次运行的**结果表**（单表生成 = 1 条；场景模板 = N 条）
     results: Vec<MockGenInfo>,
-    /// 预览的「按列重排」（表头点击 / 右键菜单；每张表最多一份，见 [`PreviewSort`]）
-    preview_sort: Option<PreviewSort>,
+    /// 预览的**重查取样**（排序 / 多要几行；每张表最多一份，见 [`PreviewCache`]）
+    preview_cache: Option<PreviewCache>,
+    /// 预览要显示多少行（面板上的「行数」档；生成时只取 [`PREVIEW_ROWS`] 行，要更多得重查）
+    preview_limit: usize,
     /// 字段区的列搜索框（懒创建：`InputState` 要 window；搜索词就存在它里，不另存一份）
     column_filter: Option<Entity<InputState>>,
     /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
@@ -1561,7 +1582,8 @@ impl MockPanel {
             draft: MockDraft::default(),
             next_id: 1,
             results: Vec::new(),
-            preview_sort: None,
+            preview_cache: None,
+            preview_limit: PREVIEW_ROWS,
             column_filter: None,
             column_filter_sub: None,
             current: 0,
@@ -1756,23 +1778,49 @@ impl MockPanel {
 
     /// 这一表当前该显示的取样，与生效中的排序（`None` = 按生成顺序）。
     ///
-    /// 排序只对**派生它的那份取样**有效：结果被换掉（重新生成 / 切项目）后它自动失效
-    /// （见 [`PreviewSort`]），不需要谁记得来清。
+    /// 缓存只对**派生它的那份取样**与**当时的行数档**有效：结果被换掉（重新生成 / 切项目）、
+    /// 或行数档改了就自动失效（见 [`PreviewCache`]），不需要谁记得来清。
     pub fn preview_for(&self, table: &str) -> Option<(&MockPreview, Option<&PreviewSort>)> {
         let info = self.results.iter().find(|info| info.table_name == table)?;
-        let sort = self
-            .preview_sort
+        let cache = self
+            .preview_cache
             .as_ref()
-            .filter(|sort| sort.applies_to(table, &info.preview));
-        Some((sort.map_or(&info.preview, |sort| &sort.preview), sort))
+            .filter(|cache| cache.applies_to(table, &info.preview, self.preview_limit));
+        Some((
+            cache.map_or(&info.preview, |cache| &cache.preview),
+            cache.and_then(|cache| cache.sort.as_ref()),
+        ))
     }
 
-    /// 表头点击 / 右键菜单：把预览取样换成**按该列排序后的前 N 行**；
-    /// `descending = None` = 取消排序（回到生成时的前 N 行）。
+    /// 预览要显示多少行（面板上的「行数」档）。
+    pub fn preview_limit(&self) -> usize {
+        self.preview_limit
+    }
+
+    /// 改预览行数档（面板菜单）：超出生成的取样（[`PREVIEW_ROWS`]）就要重查。
+    ///
+    /// 与 `sort_preview` 同一处缓存、同一套失效规则：有排序就带着排序重查，没有就只多要几行；
+    /// 档位回到 [`PREVIEW_ROWS`] 且没有排序时直接丢掉缓存（生成那份取样就够，不必查库）。
+    pub fn set_preview_limit(&mut self, limit: usize, cx: &mut Context<Self>) {
+        if limit == self.preview_limit || limit == 0 {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.preview_limit, limit);
+        // 带着当前排序重查（缓存里有排序就沿用；没有就是「多要几行」）
+        let order = self
+            .preview_cache
+            .as_ref()
+            .filter(|cache| cache.limit == previous)
+            .and_then(|cache| cache.sort.clone());
+        self.refresh_preview_sample(order, cx);
+    }
+
+    /// 表头箭头 / 右键菜单：把预览取样换成**按该列排序后的前 N 行**；
+    /// `descending = None` = 取消排序（回到生成顺序；行数档大于生成取样时仍然重查）。
     ///
     /// 只有面板能走这三条出口：重查是 I/O（要走宿主端口）、而重查要的临时表名在结果清单里。
     /// 失败与「内存库正忙」都只写一句可读原因，**不动**已有的取样——预览是只读观察窗，
-    /// 点一下列头不应该把已经在看的数据弄没。
+    /// 点一下箭头不应该把已经在看的数据弄没。
     pub fn sort_preview(
         &mut self,
         table: &str,
@@ -1780,42 +1828,72 @@ impl MockPanel {
         descending: Option<bool>,
         cx: &mut Context<Self>,
     ) {
-        let Some(descending) = descending else {
-            if self
-                .preview_sort
-                .as_ref()
-                .is_some_and(|sort| sort.table == table)
-            {
-                self.preview_sort = None;
-                cx.notify();
-            }
+        let order = descending.map(|descending| PreviewSort {
+            column: column.to_string(),
+            descending,
+        });
+        self.refresh_preview_sample_for(table, order, cx);
+    }
+
+    /// 重查取样（当前表 = 「当前结果表」，排序可空）。行数档回到生成取样且无排序时退化成「丢缓存」。
+    fn refresh_preview_sample(&mut self, order: Option<PreviewSort>, cx: &mut Context<Self>) {
+        let table = self.current_info().map(|info| info.table_name.clone());
+        let Some(table) = table else {
             return;
         };
+        self.refresh_preview_sample_for(&table, order, cx);
+    }
+
+    /// 重查取样（指定表；排序可空）。
+    ///
+    /// 无事可做的情形（只清缓存、不查库）：目标行数 ≤ 生成取样且有排序要取消 / 未变。
+    fn refresh_preview_sample_for(
+        &mut self,
+        table: &str,
+        order: Option<PreviewSort>,
+        cx: &mut Context<Self>,
+    ) {
+        let limit = self.preview_limit;
         let Some(info) = self.results.iter().find(|info| info.table_name == table) else {
             return;
         };
-        // 借租约不能跨到宿主调用（`preview_ordered` 是同步 I/O）：先把要用的取出来
+        // 不需要查库：不排序且只要生成那几行——直接丢缓存回落到生成取样
+        if order.is_none() && limit <= PREVIEW_ROWS {
+            let changed = self.preview_cache.is_some();
+            self.preview_cache = None;
+            if changed {
+                cx.notify();
+            }
+            return;
+        }
+        // 借租约不能跨到宿主调用（`preview_sample` 是同步 I/O）：先把要用的取出来
         let temp_table = info.temp_table_name.clone();
         let base = info.preview.clone();
-        match self
-            .host
-            .preview_ordered(&temp_table, column, descending, PREVIEW_ROWS)
-        {
+        let hint = order
+            .as_ref()
+            .map(|order| order.label())
+            .unwrap_or_else(|| "取样".to_string());
+        let queried = self.host.preview_sample(
+            &temp_table,
+            order.as_ref().map(|o| (o.column.as_str(), o.descending)),
+            limit,
+        );
+        match queried {
             Ok(Some(preview)) => {
-                self.preview_sort = Some(PreviewSort {
+                self.preview_cache = Some(PreviewCache {
                     table: table.to_string(),
-                    column: column.to_string(),
-                    descending,
                     base,
+                    limit,
+                    sort: order,
                     preview,
                 });
-                // 成功就把上一次的排序失败说明收掉（同一拍里换，不留陈旧错误）
+                // 成功就把上一次的失败说明收掉（同一拍里换，不留陈旧错误）
                 self.error = None;
             }
             // 内存库被别的任务占着：原因说清楚，取样保持原样
             Ok(None) => {
                 self.error = Some(format!(
-                    "内存库正被别的任务占用（生成 / 出口进行中）：按「{column}」重排序稍后再试"
+                    "内存库正被别的任务占用（生成 / 出口进行中）：{hint}稍后再试"
                 ));
             }
             Err(e) => self.error = Some(e),
@@ -1834,7 +1912,9 @@ impl MockPanel {
         self.results.clear();
         self.current = 0;
         // 排序是按临时表重查来的：临时表都没了，那份取样也就没意义了
-        self.preview_sort = None;
+        // 排序 / 重查取样是按临时表重查来的：临时表都没了，那份取样也就没意义了
+        // （行数档是用户的偏好，跨项目留着）
+        self.preview_cache = None;
         self.scenario_source = None;
         self.last_relations.clear();
         self.landed = None;
@@ -3884,6 +3964,35 @@ impl MockPanel {
             .into_any_element()
     }
 
+    /// 预览标题行右侧的「行数」菜单（预览要显示多少行）。
+    ///
+    /// 为何是固定档而不是输入框：行数是**重查代价**的旋钮（`LIMIT N`），档位够用就不必解析输入、
+    /// 也不必管非法值；同时把「预览多少行」放到看得见的地方（生成时只读 [`PREVIEW_ROWS`] 行，
+    /// 想要更多是**重查**临时表，不是就地多显示几行）。
+    pub(crate) fn render_preview_limit_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        let current = self.preview_limit;
+        Button::new("mock-preview-limit")
+            .ghost()
+            .xsmall()
+            .label(format!("行数 {current} ▾"))
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for choice in PREVIEW_LIMIT_CHOICES {
+                    let entity = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!("{choice} 行"))
+                            .checked(choice == current)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| panel.set_preview_limit(choice, cx));
+                            }),
+                    );
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
     /// 列来源按钮（导入源库结构 / 手工加列）：它们属于「这张表的列」→ 画在中央 tab 的「列」段。
     pub(crate) fn render_column_source_buttons(&self, cx: &mut Context<Self>) -> Div {
         let import = {
@@ -5425,7 +5534,12 @@ impl MockDetailView {
         Some(PreviewSnapshot {
             table,
             columns: preview.columns.clone(),
-            rows: preview.rows.iter().take(PREVIEW_ROWS).cloned().collect(),
+            rows: preview
+                .rows
+                .iter()
+                .take(panel.preview_limit())
+                .cloned()
+                .collect(),
             sort: sort.map(|sort| (sort.column.clone(), sort.descending)),
         })
     }
@@ -6383,15 +6497,13 @@ impl Render for MockDetailView {
         }
 
         // ── 预览 ──
+        // 标题行：口径说明（排序 / 行数）+ 右侧的「行数」菜单（重查代价随行数走，先说清）
         let preview_title = match generated.as_ref() {
             Some(info) => {
                 // 排序生效时把口径说清：这是「按该列排序后的前 N 行」，不是生成顺序的前 N 行
                 let head = match &preview_sort_label {
                     Some(label) => format!("预览（{label} · 前 {} 行）", preview_shown),
-                    None => format!(
-                        "预览（前 {} 行）",
-                        PREVIEW_ROWS.min(info.preview.rows.len())
-                    ),
+                    None => format!("预览（前 {} 行）", preview_shown),
                 };
                 format!(
                     "{head} · {} · 临时表 {} · 本次 {} 行 · {} ms",
@@ -6409,7 +6521,27 @@ impl Render for MockDetailView {
             }
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
-        body = body.child(div().text_xs().text_color(muted).child(preview_title));
+        body = body.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(preview_title),
+                )
+                .child(if generated.is_some() {
+                    self.panel
+                        .update(cx, |panel, cx| panel.render_preview_limit_menu(cx))
+                } else {
+                    div().into_any_element()
+                }),
+        );
         // 排序的入口提示：箭头与右键都能点，但两处都很轻，先说一句
         if preview_sort_label.is_some() {
             body = body.child(div().text_xs().text_color(muted).child(
