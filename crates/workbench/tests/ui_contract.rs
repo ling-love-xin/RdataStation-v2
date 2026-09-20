@@ -189,7 +189,10 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/components/connection_dialog/mod.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描；UI 尺寸/颜色契约同样适用）
-        ("editor/view/host.rs", include_str!("../../editor/src/view/host.rs")),
+        (
+            "editor/view/host.rs",
+            include_str!("../../editor/src/view/host.rs"),
+        ),
         (
             "editor/view/dialogs.rs",
             include_str!("../../editor/src/view/dialogs.rs"),
@@ -354,7 +357,10 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../settings/src/settings_page.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描）
-        ("editor/view/host.rs", include_str!("../../editor/src/view/host.rs")),
+        (
+            "editor/view/host.rs",
+            include_str!("../../editor/src/view/host.rs"),
+        ),
         (
             "editor/view/dialogs.rs",
             include_str!("../../editor/src/view/dialogs.rs"),
