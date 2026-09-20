@@ -21,11 +21,11 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -145,10 +145,7 @@ impl SettingsPage {
 
     /// 某项当前值是否偏离默认值（决定「恢复默认」按钮出不出现）。
     fn is_changed(&self, spec: &SettingSpec) -> bool {
-        match (
-            value_by_key(&self.settings, spec.key),
-            spec.default_value(),
-        ) {
+        match (value_by_key(&self.settings, spec.key), spec.default_value()) {
             (Some(current), Some(default)) => current != default,
             _ => false,
         }
@@ -256,9 +253,7 @@ impl SettingsPage {
                                 let defaults: Vec<(&'static str, SettingValue)> =
                                     registry::page_rows()
                                         .filter(|s| s.section == active)
-                                        .filter_map(|s| {
-                                            s.default_value().map(|v| (s.key, v))
-                                        })
+                                        .filter_map(|s| s.default_value().map(|v| (s.key, v)))
                                         .collect();
                                 let mut applied = 0usize;
                                 for (key, default) in defaults {
@@ -347,9 +342,7 @@ impl SettingsPage {
                 .items_center()
                 .justify_center()
                 .gap_2()
-                .child(
-                    Icon::new(IconName::Info).text_color(theme.colors.muted_foreground),
-                )
+                .child(Icon::new(IconName::Info).text_color(theme.colors.muted_foreground))
                 .child(
                     div()
                         .text_sm()
@@ -441,15 +434,14 @@ impl SettingsPage {
             .map(|default| {
                 let entity = cx.entity();
                 let key = spec.key;
-                Button::new(ElementId::Name(
-                    SharedString::from(format!("{}-reset", spec.key)),
-                ))
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "{}-reset",
+                    spec.key
+                ))))
                 .ghost()
                 .xsmall()
                 .icon(IconName::RotateCw)
-                .on_click(move |_, window, app| {
-                    commit(&entity, key, default.clone(), window, app)
-                })
+                .on_click(move |_, window, app| commit(&entity, key, default.clone(), window, app))
                 .into_any_element()
             });
 
@@ -561,7 +553,10 @@ impl SettingsPage {
         let key = spec.key;
         match spec.kind {
             SettingKind::Bool => {
-                let on = current.as_ref().and_then(SettingValue::as_bool).unwrap_or(false);
+                let on = current
+                    .as_ref()
+                    .and_then(SettingValue::as_bool)
+                    .unwrap_or(false);
                 Switch::new(key)
                     .checked(on)
                     .on_click(move |want: &bool, window, app| {
@@ -570,7 +565,10 @@ impl SettingsPage {
                     .into_any_element()
             }
             SettingKind::BoolPair { on, off } => {
-                let value = current.as_ref().and_then(SettingValue::as_bool).unwrap_or(false);
+                let value = current
+                    .as_ref()
+                    .and_then(SettingValue::as_bool)
+                    .unwrap_or(false);
                 segmented(
                     key,
                     vec![on, off],
@@ -605,7 +603,10 @@ impl SettingsPage {
                 )
             }
             SettingKind::Number => {
-                let value = current.as_ref().and_then(SettingValue::as_number).unwrap_or(0.);
+                let value = current
+                    .as_ref()
+                    .and_then(SettingValue::as_number)
+                    .unwrap_or(0.);
                 let selected = spec
                     .presets
                     .iter()
@@ -672,9 +673,21 @@ impl Render for SettingsPage {
             .border_color(theme.colors.border)
             .overflow_hidden()
             .child(self.render_header(cx))
-            .child(div().w_full().h(ui::HAIRLINE).flex_none().bg(theme.colors.border))
+            .child(
+                div()
+                    .w_full()
+                    .h(ui::HAIRLINE)
+                    .flex_none()
+                    .bg(theme.colors.border),
+            )
             .child(self.render_search_row())
-            .child(div().w_full().h(ui::HAIRLINE).flex_none().bg(theme.colors.border))
+            .child(
+                div()
+                    .w_full()
+                    .h(ui::HAIRLINE)
+                    .flex_none()
+                    .bg(theme.colors.border),
+            )
             .child(
                 div()
                     .h_flex()
@@ -683,7 +696,13 @@ impl Render for SettingsPage {
                     .min_h_0()
                     .items_stretch()
                     .child(self.render_nav(cx))
-                    .child(div().w(ui::HAIRLINE).h_full().flex_none().bg(theme.colors.border))
+                    .child(
+                        div()
+                            .w(ui::HAIRLINE)
+                            .h_full()
+                            .flex_none()
+                            .bg(theme.colors.border),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -929,7 +948,8 @@ mod tests {
             on_open_log_dir: Rc::new(|_, _| {}),
             on_open_log_view: Rc::new(|_, _| {}),
         };
-        let (page, cx) = cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));
+        let (page, cx) =
+            cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));
 
         cx.update(|window, cx| {
             // 1) 渲染一帧：结构 / 组件 / 订阅全部走一遍（重入或 ElementId 碰撞会在这里爆）

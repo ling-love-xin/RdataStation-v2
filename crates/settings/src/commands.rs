@@ -11,5 +11,10 @@ use gpui_kit::*;
 
 actions!(
     settings,
-    [OpenSettings, CloseSettings, FocusSettingsSearch, ToggleThemeMode]
+    [
+        OpenSettings,
+        CloseSettings,
+        FocusSettingsSearch,
+        ToggleThemeMode
+    ]
 );
