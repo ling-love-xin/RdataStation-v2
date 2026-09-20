@@ -22,7 +22,6 @@ impl ScratchpadView {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let folder_color = theme.colors.warning;
-        let ref_color = theme.colors.info;
         let primary = theme.colors.primary;
         let info = theme.colors.info;
         let success = theme.colors.success;
@@ -38,7 +37,6 @@ impl ScratchpadView {
             error,
             external_refs,
             trash,
-            trash_expanded,
             selected,
             expanded,
             loaded_children,
@@ -78,7 +76,6 @@ impl ScratchpadView {
                 view.error.clone(),
                 view.external_refs.clone(),
                 view.trash.clone(),
-                view.trash_expanded,
                 view.selected.clone(),
                 view.expanded.clone(),
                 view.children.clone(),
@@ -471,22 +468,6 @@ impl ScratchpadView {
                 );
         }
 
-        let group_header = |label: &str, count: usize| {
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .w_full()
-                .h(rems(ui::ROW_HEIGHT_COMPACT))
-                .px_1p5()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(muted)
-                .child(label.to_string())
-                .child(div().flex_1())
-                .child(count.to_string())
-        };
-
         let mut panel = div()
             .v_flex()
             .w_full()
@@ -582,7 +563,7 @@ impl ScratchpadView {
             }
         } else {
             if row_count > 0 {
-                drafts = drafts.child(group_header("草稿", row_count));
+                drafts = drafts.child(self.scratchpad_group_header("草稿", row_count, cx));
             }
             let sizes: Rc<Vec<Size<Pixels>>> =
                 tree::row_sizes(display_count, window.rem_size(), |i| {
@@ -606,11 +587,178 @@ impl ScratchpadView {
         panel = panel.child(drafts);
 
         // ── 底部固定区（引用 / 回收站 / 撤销栏 / 状态；不随草稿树滚动）──
-        let mut body = div().v_flex().w_full().gap_1().px_1().pb_1();
+        // 引用与回收站两块抽成方法（`render_scratchpad_refs_and_trash`）：主视图只留装配顺序。
+        let body = self.render_scratchpad_refs_and_trash(cx);
 
+        // 引用 / 回收站限高可滚，保证草稿树始终有可用高度。
+        panel = panel.child(
+            div()
+                .v_flex()
+                .w_full()
+                .max_h(rems(ui::SCRATCHPAD_GROUP_MAX_HEIGHT))
+                .overflow_y_scrollbar()
+                .child(body),
+        );
+
+        // ── 撤销栏 ──
+        if let Some(undo) = &undo {
+            let undo_click = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| this.undo_scratchpad_delete(cx));
+                }
+            };
+            panel = panel.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .px_2()
+                    .py(rems(1.25))
+                    .bg(hover_bg)
+                    .rounded_sm()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(format!("已删除 {}", undo.label)),
+                    )
+                    .child(
+                        div()
+                            .id("sp-undo")
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(primary)
+                            .child("撤销")
+                            .on_click(undo_click),
+                    ),
+            );
+        }
+
+        // ── 底部状态 ──
+        panel = panel.child(
+            div()
+                .w_full()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(muted)
+                .child(format!(
+                    "{}{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
+                    if loading { "加载中… · " } else { "" },
+                    external_refs.len(),
+                    trash.len(),
+                    scratchpad_sort_label(sort, sort_desc)
+                )),
+        );
+
+        panel
+            .key_context("scratchpad")
+            .track_focus(&self.focus_handle)
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadSelectAll, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.select_all_scratchpad(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadRename, window: &mut gpui_kit::Window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.rename_scratchpad_selection(window, cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadDelete, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.delete_scratchpad_selection(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadCancelEdit, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.cancel_scratchpad_edit(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadUp, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.scratchpad_move(-1, cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadDown, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.scratchpad_move(1, cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadOpen, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.scratchpad_open_selection(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadNewFile, window: &mut gpui_kit::Window, cx: &mut App| {
+                    entity.update(cx, |this, cx| {
+                        this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
+                    });
+                }
+            })
+    }
+}
+
+impl ScratchpadView {
+    /// 分组标题行（「草稿 (N)」「外部引用 (N)」共用）：紧凑行高 + 弱文字 + 计数。
+    fn scratchpad_group_header(&self, label: &str, count: usize, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .h(rems(ui::ROW_HEIGHT_COMPACT))
+            .px_1p5()
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(muted)
+            .child(label.to_string())
+            .child(div().flex_1())
+            .child(count.to_string())
+    }
+
+    /// 底部固定区的「外部引用 + 回收站」两块（不随草稿树滚动）。
+    ///
+    /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图，接近千行——把与「数据从哪来」
+    /// 无关的两块搬出来，主视图只剩装配顺序（行为不变：同一元素树，只换了落点）。
+    fn render_scratchpad_refs_and_trash(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let primary = theme.colors.primary;
+        let hover_bg = theme.colors.list_hover;
+        let ref_color = theme.colors.info;
+        let info = theme.colors.info;
+
+        let entity = cx.entity();
+        let view_handle = self.scratchpad.clone();
+        let (external_refs, trash, trash_expanded, edit) = {
+            let view = self.scratchpad.borrow();
+            (
+                view.external_refs.clone(),
+                view.trash.clone(),
+                view.trash_expanded,
+                view.edit.clone(),
+            )
+        };
+
+        let mut body = div().v_flex().w_full().gap_1().px_1().pb_1();
         // ── 外部引用（链接：改名 / 打开 / 移除；不复制文件）──
         if !external_refs.is_empty() {
-            body = body.child(group_header("外部引用", external_refs.len()));
+            body = body.child(self.scratchpad_group_header("外部引用", external_refs.len(), cx));
             for r in &external_refs {
                 // 本引用正在改名 → 行内输入。
                 if let Some(ScratchpadEdit::RenameReference { alias }) = &edit {
@@ -844,124 +992,6 @@ impl ScratchpadView {
                 }
             }
         }
-
-        // 引用 / 回收站限高可滚，保证草稿树始终有可用高度。
-        panel = panel.child(
-            div()
-                .v_flex()
-                .w_full()
-                .max_h(rems(ui::SCRATCHPAD_GROUP_MAX_HEIGHT))
-                .overflow_y_scrollbar()
-                .child(body),
-        );
-
-        // ── 撤销栏 ──
-        if let Some(undo) = &undo {
-            let undo_click = {
-                let entity = entity.clone();
-                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                    entity.update(app, |this, cx| this.undo_scratchpad_delete(cx));
-                }
-            };
-            panel = panel.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .px_2()
-                    .py(rems(1.25))
-                    .bg(hover_bg)
-                    .rounded_sm()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(fg)
-                            .child(format!("已删除 {}", undo.label)),
-                    )
-                    .child(
-                        div()
-                            .id("sp-undo")
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(primary)
-                            .child("撤销")
-                            .on_click(undo_click),
-                    ),
-            );
-        }
-
-        // ── 底部状态 ──
-        panel = panel.child(
-            div()
-                .w_full()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(muted)
-                .child(format!(
-                    "{}{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
-                    if loading { "加载中… · " } else { "" },
-                    external_refs.len(),
-                    trash.len(),
-                    scratchpad_sort_label(sort, sort_desc)
-                )),
-        );
-
-        panel
-            .key_context("scratchpad")
-            .track_focus(&self.focus_handle)
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadSelectAll, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.select_all_scratchpad(cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadRename, window: &mut gpui_kit::Window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.rename_scratchpad_selection(window, cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadDelete, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.delete_scratchpad_selection(cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadCancelEdit, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.cancel_scratchpad_edit(cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadUp, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.scratchpad_move(-1, cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadDown, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.scratchpad_move(1, cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadOpen, _window, cx: &mut App| {
-                    entity.update(cx, |this, cx| this.scratchpad_open_selection(cx));
-                }
-            })
-            .on_action({
-                let entity = entity.clone();
-                move |_: &ScratchpadNewFile, window: &mut gpui_kit::Window, cx: &mut App| {
-                    entity.update(cx, |this, cx| {
-                        this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
-                    });
-                }
-            })
+        body
     }
 }
