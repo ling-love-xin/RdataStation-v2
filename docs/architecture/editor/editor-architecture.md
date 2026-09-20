@@ -599,6 +599,115 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 31 | ✅ | **duckdb-rs 1.10505：`Statement::column_name(i)` / `schema()` 在 prepare 之后、执行之前调用会 panic**（**实测踩到 2026-09-18，B15**）：两者读的都是**执行结果**（`raw_statement.rs::schema_ref()` → `executed()`，断言原文 `The statement was not executed yet`），而 `Statement::column_count()` 经同一个 `schema_ref()` 也中招。`duckdb_service::query_duckdb` 原来就在这个位置上取列名（此前零调用者，B15 的分析入口是第一个） | 本地分析一跑就 panic；这类 API 陷阱不会在类型上体现 | 已修（按 duckdb-rs 文档推荐的形状）：先 `stmt.query([])` 把语句跑起来，再从 `Rows::as_ref()` 拿回**已执行**的那条语句读 `column_names()` / `column_count()`，随后逐行取值。**今后写 DuckDB 取数**：列名 / 列数一律在执行之后取，不要相信“prepare 就能拿到 schema” |
 | 32 | 🟡 | **0.6.1 的 `Tab` 挂不上 tooltip**（**核到源码，2026-09-18，B15 血缘**）：`ComponentTooltip::apply` 要求 `ManagedTooltipExt`（其 supertrait 是 `StatefulInteractiveElement + ElementExt`），而 `tab/tab.rs` 的 `Tab` 两者都不是，也没有 `tooltip` 方法；挂到 `Tab::suffix` 上只能覆盖徽标那一小块 | 原型 §2.4 的“标签 hover 显示血缘摘要”做不成 | 已定：**血缘落在结果工具栏左段**（`行数 │ 耗时 │ 来源摘要 │ 连接名`）——不用悬停就能看到，也比半覆盖的 tooltip 一致；标签上只留序号 / 标题 / 通道徽标。将来组件库给 `Tab` 加 tooltip 时可再迁移 |
 
+### 12.1 实机测试抓到了什么（纪事）
+
+本节按 dbui `ARCHITECTURE.md` §What the live tests caught 的口径整理（出处：`../references/README.md` §1.3 / §1.12 的「三节结构」）。
+**只收「单测 / 静态阅读抓不到」的那些**；本节条目**全部已核实**（依据列给到文件与章节），原始流水在 `editor-dev-plan.md` §0（进度记录，最近在前）。
+
+**（1）驱动与执行**
+
+| # | 抓到什么 | 处置 | 依据 |
+| --- | --- | --- | --- |
+| 1 | **分段包装把「错误位置」与「回显 SQL」一起漏给用户**：PG 的结构化 position 是相对**发给服务器的包装文本**的（按原句解释偏 16 字节，光标落到 `yz FROM rds_affect` 上），错误里还回显 `(SQL: … rds_segment LIMIT 1000 OFFSET 0)` —— 用户从没写过那句 | 引擎侧 `unwrap_segment_error` 还原成用户原句（位置平移；**落在包装上就不给位置**——给错位置比不给更糟）；SQLite 补上结构化位置（`SqlInputError` 的 `msg` + `offset`，0 基字节、相对本次发出的 SQL） | `editor-dev-plan.md` §0 2026-09-17（B5b 编辑器侧）④ · `crates/engine/src/services/sql_service.rs::unwrap_segment_error`（含「落在别名那一带 → 不给位置」的用例） |
+| 2 | **duckdb-rs 1.10505 的 API 陷阱**：`Statement::column_name(i)` / `schema()` / `column_count()` 读的是**执行结果**（断言 `The statement was not executed yet`），而 `duckdb_service::query_duckdb` 在 prepare 之后就取列名 —— 这段死代码的**第一个调用方**（B15 的分析入口）一跑就 panic | 先 `stmt.query([])` 跑起来，再从 `Rows::as_ref()` 拿回**已执行**的语句读列名 | 本文件 §12 #31 · `editor-dev-plan.md` §0 2026-09-18（B15 切片一）⑤ |
+| 3 | **MySQL 8+ 明文信道连不上**：sqlx 缺 `mysql-rsa`（`caching_sha2_password` 需要 RSA 加密口令），而「LAN 直连注入 `ssl-mode=DISABLED`」与「URL 无 ssl 键就补 `disabled`」两个各自合理的默认值相遇成缺陷；PG 没事（SCRAM 不需要 RSA），所以现场看是「只有 MySQL 挂」 | 补 feature + 真机回归 `mysql_rsa_auth_probe.rs`；**教训**：真机套件「未设环境变量即静默跳过」＝ 平时不跑 ＝ 这类缺陷能活过很多轮 | `../driver-capability-matrix.md` §7 #14 |
+| 4 | **MySQL 的显式 `BEGIN` 被 prepared 协议拒**（1295） | 事务控制 / 会话语句改走**文本协议**（`raw_sql`），事务改走驱动 `Transaction` 接口 | `editor-dev-plan.md` §0 2026-09-15（MySQL 事务修复）· 本文件 §7.3 #3 / §12 #2 |
+| 5 | **并发下 MySQL / PG 会另开物理连接**（临时表「消失」，另一侧报 `1146` / `relation does not exist`）；SQLite / DuckDB 单句柄不受影响 | 事务与临时表不能依赖池的顺序巧合 → **per-session 独占连接**（事务对象持有那条物理连接） | 本文件 §12 #2 · `editor-dev-plan.md` §0 2026-09-15（P0.2c 并发亲和探针） |
+| 6 | **PG 上 `COMMIT` 永远等不到响应**：sqlx 的连接驱动任务挂在一个只在 `block_on` 期间被驱动的**单线程 runtime** 上，而提交走旁路调用（另一个 runtime） | 改成常驻多线程 runtime（2 个工作线程）后三库全通 | `editor-dev-plan.md` §0 2026-09-16（B4）③ |
+| 7 | **结果保真度两处**：① `arrow_value_at` 漏了 Int32 / UInt64 / Float32 / Decimal / Date 等位宽，兜底是 `format!("{:?}", array)` —— **把整列 Debug 打印进每个单元格**（显示垃圾且 O(n²)）；② MySQL 列类型探测 `bool` 优先 → `COUNT(*)` 显示成 `true` | 补齐位宽 + 兜底改 Arrow **单值**格式化；MySQL 按**声明类型**定排行 | 本文件 §12 #22 · `editor-dev-plan.md` §0 2026-09-15（P0.2 实跑） |
+| 8 | **各驱动只填 `batches`**，`total_rows` / `rows` 字段是默认空值（仅 `truncate()` 后才回填）→ 历史行数读字段「大结果有数、小结果无数」 | 一律走 `batches` / `to_rows()`；不新增读 `rows` 字段的代码 | 本文件 §12 #21 |
+| 9 | **`EXPLAIN` 被分段抓取包进子查询**（`SELECT * FROM (EXPLAIN …) AS rds_segment …`）→ MySQL 报 1064 | 新增 `driver::utils::wrappable_in_subquery`（元信息 / 会话控制语句不包装），由「原路执行」分支接住 | `editor-dev-plan.md` §0 2026-09-18（B10 切片三） |
+| 10 | **加速档的数据新鲜度**：原作「快照」，真机实测**数据是实时的**（源库插一行同一会话立刻可见），静态的是 `ATTACH` 时定型的**表清单** | 界面改说「源库只读」；另给「重新挂载源库（刷新表清单）」入口（旁路线程 + 回执）；原型与 §12 #13 / #14 同步修正 | 本文件 §12 #14 · `editor-dev-plan.md` §0 2026-09-18（B13 切片二）⑥ |
+| 11 | **DuckDB 1.5.5 的 mysql / postgres 扫描器不认 Secret** → 挂载凭据路径走不通 | 改用含凭据的**运行时连接串**（`DriverConnectionConfig.url_override`）+ 引擎侧 `accel::scrub_credentials` 脱敏，探针钉住 | `editor-dev-plan.md` §0 2026-09-18（B13 切片三后半）⑤ · 本文件 §7.2（DuckDB Secret 行的注） |
+| 12 | **XLSX 导出两个坑**：不传 `HEADER true` 时写出的工作簿首行就是数据（`read_xlsx(header = true)` 会把 `1` 当列名）；连接建立时已关 `autoinstall_known_extensions`，所以要显式 `INSTALL excel` | 显式 `HEADER true` + 显式安装并把**扩展目录**写进失败原因；走一次性线程 + 回执（首次装扩展 3–11 s，不占执行位） | `editor-dev-plan.md` §0 2026-09-18（B7 切片二）②③ |
+
+**（2）存储与多字节**
+
+| # | 抓到什么 | 处置 | 依据 |
+| --- | --- | --- | --- |
+| 13 | **手写 JSON 把「字符数 +1」当字节下标用**：PG 的中文错误消息（`字段 "x" 不存在`）读盘时切在汉字中间**直接 panic**；`sql_preview` 同一个毛病（按字节截断中文 SQL）；读回还多一层 `\"` | 改按字符 / 字节边界走 + 补反转义（并留回归：中文 SQL 与中文失败原因往返、预览按字符数） | `editor-dev-plan.md` §0 2026-09-17（B8）⑥ · `crates/engine/src/persistence/history_store.rs`（`sql_preview` / `parse_record_json` / `unescape_json` 的注释与用例） |
+| 14 | **同步存储 API 不能在 tokio 运行时上下文里调用**：无 runtime 的线程（GPUI 主线程 / 普通 `#[test]`）直接 panic，`#[tokio::test]` 里又因嵌套 `block_on` panic —— 而 `WorkbenchContextStore` 的 API 全是同步的 | 在 tokio 上下文里**返回可读错误**，否则自建一个短命 current-thread runtime 驱动；记下「同步 API 的调用点只能是 GPUI 主线程或工作线程」 | 本文件 §12 #28 · `editor-dev-plan.md` §0 2026-09-15（A12） |
+
+**（3）界面与组件库（真机 / 窗口才看得见）**
+
+| # | 抓到什么 | 处置 | 依据 |
+| --- | --- | --- | --- |
+| 15 | **「内核没有这个能力」的判断是错的**：内核在 `Input` context 里已绑 `Ctrl+F` / `Ctrl+H` **且注册了 listener**，外层（面板）收不到 —— 据此曾自建一套查找栏 + 匹配器 | 自建部分**全部撤除**，改用内核 + 组件库 `SearchPanel`；并把结论写死：判断「内核有没有这个能力」要读 `on_action` 注册表，不能只 grep 字段 | 本文件 §12 #24 · `editor-dev-plan.md` §0 2026-09-15（A11） |
+| 16 | **面板不 `track_focus` 就收不到快捷键**（`key_context` 只决定「能不能匹配」，action 还要沿焦点树找到 listener）—— 表现为**静默无反应** | 面板根元素 `key_context("editor").track_focus(&self.focus_handle)`；这类「静默」错误只有窗口测试抓得住 | 本文件 §12 #25 · `editor-dev-plan.md` §0 2026-09-15（A10） |
+| 17 | **面板不能从自己的 `update` 里让 Dock 移除自己**（GPUI panic `cannot read … while it is already being updated`）；更阴的是真实按键路径上表现为「按键毫无反应」 | **关闭由宿主发起**（`close_document_in_dock`），面板只回答「能不能关」；今后凡会读到面板本体的容器操作都从宿主发起 | 本文件 §12 #23 · `editor-dev-plan.md` §0 2026-09-15（A10） |
+| 18 | **对话框要弹出来，窗口根视图必须是 `gpui_component::Root`**（缺则 `expect` panic），且要由宿主 render 调 `render_dialog_layer` 才进元素树（只「打开」不渲染 = 看不见）；**headless 下 `debug_bounds` 的坐标与鼠标命中对不上**（单跑能点中、全套跑必不中） | 对话框挂 `Root::render_dialog_layer`；测试夹具用 `Root::new(宿主, …)`；对话框按钮的「真点击」不做，改为断言渲染 + 直接驱动落地入口 | 本文件 §12 #29 · `editor-dev-plan.md` §0 2026-09-16（A9 收尾） |
+| 19 | **折叠：上游机制是现成的，缺的只是候选 —— 而我们自己的旧结论错了**。`limits.rs` 原写「`gpui-base` 0.6.1 没公开折叠开关」，读源码后不成立：`LayoutMode::CodeEditor { folding }` 默认 `true`、`fold_map` 12.5k 行、chevron 与点击折叠都在内核；真正缺的是**候选**（内核只问 highlighter 要，而我们走语义 token、不注册 grammar） | 候选自算（D26）+ 每次文本变更后重喂；档位不为 `Normal` 时**真关开关**（`set_folding(false)`）；`limits.rs` 的旧结论改掉 | 本文件 §6 D26 · `editor-dev-plan.md` §0 2026-09-21（B17） |
+| 20 | **结果网格行高三个数三样**：原型写 22px、实现默默用组件默认档（32px）、而这一档根本没有常量 —— 审 Mock 预览表时**对照**才发现（非真机） | 统一到 `ui::RESULT_TABLE_SIZE`（组件 `XSmall`，26px）+ 一条**行距哨兵**用例（去掉 `.with_size` 立刻报 32） | `editor-dev-plan.md` §0 2026-09-20（结果网格呈现口径收口）① |
+
+### 12.2 已知边界（权威清单）
+
+本节是**索引**：现象的完整记录在 §12 与 `editor-dev-plan.md` §0 的进度行里，这里只做**分类 + 出处**，不重复叙述。
+口径：**已核实**＝有依据文件支撑；**推断**＝本文的判断、没有上游依据。
+
+**（1）我们主动不做的**
+
+| 决策 | 边界 | 依据 |
+| --- | --- | --- |
+| D23 | **结果集只读**；行内编辑与写回源库归 M4 表格能力（不重走 V1 的 `dirtyRows` / `dirtyCells` 双轨） | 本文件 §6 D23 · §3.6；表编辑的边界与验收表见 `editor-table-editing-plan.md` |
+| D4 | **只读两维度分离**（编辑器只读 / 连接只读，互不蕴含） | §6 D4 · §8 |
+| D11 · D12 · D17 | 不引 LSP（单进程内 Rust 自建补全 / 诊断）· **不用 tree-sitter**（高亮只到词法层：写不完的 SQL 也能着色，语法树会失败而词法不会）· 不引入 Zed 编辑器代码（GPL-3.0-or-later） | §6 D11 / D12 / D17 |
+| D13 | 多文档标签**优先用 Dock 自带能力**（不自绘标签条）；未保存确认走「拦在动作层 + 状态栏说明」 | §6 D13 · §12 #1 / #18 · §13 #15 |
+| D18 · D14 | 分析模式首期只 **SQL + Markdown**（Python / Rust 需进程模型与运行时）· `Session` 预留内核类型维度、第一期只实现 SQL | §6 D18 / D14 · §12 #5 · §13 #5 |
+| D24 | **分段抓取**：已抓取窗口 + 取下一段，未知总数显示 `N+`；代价是**每段重跑一次查询**（`ORDER BY` 不稳的查询可能跨段重复 / 跳过行），导出区分「仅已抓取」与「抓全量」 | §6 D24 · `editor-dev-plan.md` §0 2026-09-17（B5b 引擎侧）① |
+| D25 | **导出分两条路**：CSV / JSON / INSERT 编辑器同步编码；Parquet / XLSX 经 DuckDB `COPY … TO …` 且在一次性线程上跑（多一条回执，不占执行位） | §6 D25 |
+| D26 | **折叠候选自己算、刷新自己管**：候选不做就不折（大文件档位**真关开关**）；`LOOP` / `WHILE` 块不折（不在 sqlglot 关键字表里） | §6 D26 · `editor-dev-plan.md` §0 2026-09-21（B17）· `crates/editor/src/fold.rs`（模块头） |
+| §13 #11 | 加速 / 联邦通道遇**写源库**语句**直接拒绝**（本地临时对象照常允许） | §13 #11 · §12 #13 |
+| §7.4 | **离线系统目录（`minicatalogs`）不依赖**：补全走实时内省，该项作为后续项保留 | §7.4 · §12 #9 |
+| — | **内联提示（inlay hints）/ display-map 分层：我们不做**。⚠️ 缺口径：我们的文档只写了「我们不做折叠 / 内联」，**没有**任何一处记录「上游（`gpui-base` 0.6.1）不提供」——按「不写没依据的话」，此处**不宣称上游缺失**；要做时先读 dbflux 那份分层 map 实现 | `../references/README.md` §1.1（「我们现在不做折叠 / 内联，不痛」）、§5（逐模块对比） |
+
+**（2）上游与平台限制**（上游行为不归我们改，只能认下并绕开）
+
+| 上游 / 平台 | 现象（我们的边界） | 依据 |
+| --- | --- | --- |
+| `gpui-base` 0.6.1 · 按键派发 | 内核先拿到按键且 listener 命中后 `propagate_event = false`，外层 binding **收不到** → 查找 / 替换只能跟随内核（应用层零自建） | §12 #24 |
+| `gpui-base` 0.6.1 · 折叠 | 候选的**唯一来源是 highlighter**（`state.rs:3604`），候选平移同样依赖它（`:3591/3611`）→ 候选与刷新都是我们的责任 | §6 D26 · `editor-dev-plan.md` §0 2026-09-21（B17） |
+| `gpui-base` 0.6.1 · `Tab` | 挂不上 tooltip（`ComponentTooltip` 只给 `StatefulInteractiveElement`）→ 血缘摘要落在**结果工具栏左段**而不是标签 hover | §12 #32 |
+| `gpui-component` 0.6.1 · Dock | 没有「关闭前否决」钩子（`Panel::closable(cx)` 是唯一闸门，静态许可）；也没有每标签 ✕（只有标签栏 `⋯` 里的 `Dock.Close`）→ 关闭语义走草稿兜底 + `Ctrl+W` 三态确认 | §12 #1 / #18 · §13 #15 |
+| `gpui-component` 0.6.1 · 面板生命周期 | 面板不能在自身 `update` 里让 Dock 移除自己 → 关闭由**宿主**发起 | §12 #23 |
+| `gpui-component` 0.6.1 · 对话框 | 需 `Root::render_dialog_layer` 才进元素树（否则 panic / 看不见） | §12 #29 |
+| GPUI 测试台 | headless 下 `debug_bounds` 坐标与鼠标命中**对不上** → 对话框按钮不做「真点击」，改断言渲染 + 驱动落地入口 | §12 #29 |
+| GPUI 平台 · `rfd` | 同步文件对话框**阻塞 UI 线程**（模态期间事件循环停摆）→ 1a 接受；改异步只动那两个函数 + 加「回来时文档是否还在」的竞态处理 | §12 #30 |
+| sqlglot | 整篇 `transpile` 对脚本**静默丢第二条及以后**（单条接口也只吃单条）→ 一律「先切分再逐条 + 原位回填」 | §12 #19 |
+| sqlglot | 含**行内 / 尾随注释**的语句解析失败即**原样返回**（不格式化）；非 MySQL 目标的 `#` 注记会被改写成 `--` | §12 #3 |
+| sqlglot | `Token::position` 是**字符**下标（非字节）→ 区间换算必须走「字符 → 字节」 | §12 #20 |
+| sqlglot | `qualify_columns` 只部分限定、`unnest_subqueries` 改用 `INNER JOIN + DISTINCT`（NULL 语义不等价）—— 两处都**不采用** | `editor-dev-plan.md` §0 2026-09-15（探针实跑：台账结论落地） |
+| duckdb-rs 1.10505 | `column_name` / `schema()` / `column_count` 必须在**执行之后**取 | §12 #31 |
+| sqlx ↔ mysql_async | 未知 URL 参数：sqlx **静默忽略**、mysql_async / tokio-postgres **直接报错**（同一份属性键在两种驱动下行为不同） | `../driver-capability-matrix.md` §7 #9 |
+| sqlx | MySQL 8+ 明文信道需 `mysql-rsa` feature（缺了就没有 RSA 口令加密） | `../driver-capability-matrix.md` §7 #14 |
+| mysql_async | 客户端证书**只接受 PKCS#12**（PEM 两件套报可见错误并引导用 sqlx） | `../driver-capability-matrix.md` §7 #7 |
+| 数据库协议 | PG 的 `position` 是 1 基**字符**（我们内部统一用字节偏移）→ 驱动层换算，越界回 `None` 而不是钳到末尾 | `editor-dev-plan.md` §0 2026-09-17（B6）① · `driver::utils::byte_offset_for_char` |
+| 运行时（我们自己的 API 契约） | 同步存储 API 不能在 tokio 上下文调用（根因在 `block_on` 语义）→ 返回可读错误或自建短命 runtime | §12 #28 |
+| 驱动层数据面 | 驱动**仍不填 `column_types`** → 网格列类型显示待办；结果集的值一律是**展示文本**（类型化输出需先有列类型） | §12 #22（剩余）· `editor-dev-plan.md` §0 2026-09-18（B7 切片二余项） |
+
+**（3）今天还没做的**
+
+| 未做项 | 说明 | 依据 |
+| --- | --- | --- |
+| **表数据编辑 / 写回源库** | 能力位 `table_editor` = `Stage::NotBuilt` 且无人声明；边界、验收表与四刀排法见 `editor-table-editing-plan.md` | `../driver-capability-matrix.md` §3.3 / §7 #13 · 本文件 §3.6 |
+| **1c 分析模式（Cell / Output / Session）** | `crates/editor/src/notebook.rs` 不存在；`analysis.rs` 只在结果集上跑一次聚合（不重跑源库） | `crates/editor/src/lib.rs` ⬜ 1c · `editor-dev-plan.md` §0（1c 已搁置） |
+| 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | 今天看全一个值只能靠悬停全文（原型 §2.6 已订正为 ❌） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
+| 补全：缓存未命中时**回落实时内省** | 今天未接端口时只给关键字与函数（如实，不假装有元数据） | `crates/editor/src/lib.rs` ⬜（B9 余项） |
+| 事务内语句**不可取消 / 无超时** | 驱动 `Transaction` trait 没有取消入口（已核实：只有 `query` / `commit` / `rollback`） | `crates/editor/src/lib.rs` ⬜ · `crates/engine/src/driver/traits.rs::Transaction` |
+| 联邦：**源清单浮层** ·「用作联邦源」标记存储 · 扫描量可见 | 三档通道本身已通（三切片已完成） | `editor-dev-plan.md` §0 2026-09-18（B13 切片三后半）⬜ 余 |
+| **只读锁 ⓘ**（连接侧写策略来源）+「提醒后放行」那一档 | 今天落地的是「项目锁 = 强只读」；另一档随连接策略做 | 本文件 §12 #26（剩余）· §13 #9 |
+| 结果**血缘落库 / 会话恢复** | 只做到 UI 摘要级（重启后回看不了「这份结果怎么来的」） | §12 #16 |
+| **重查包裹语义**（原查询带 `ORDER BY` / `LIMIT` 时外层重查语义会变） | 需要定规则：保留外层 `ORDER BY`；有 `LIMIT` 时提示「重查将去掉 LIMIT」 | §12 #15 |
+| 结果区高度**不随会话持久化** | 分栏位置只在面板内存里记 | `editor-dev-plan.md` §0 2026-09-17（B5）⬜ 余 |
+| 折叠的**视觉**结果需人工看一眼 | chevron / 点击折叠由内核渲染，用例只覆盖候选与重喂 | `editor-dev-plan.md` §0 2026-09-21（B17）⬜ 余 |
+| **多文档恢复** | 恢复侧仍只恢复最近更新的一份（未命名 / 空文档不持久化） | `editor-dev-plan.md` §0 2026-09-19（E3）⬜ 余 |
+| 参数绑定（`:name`） | V1 有原语无闭环；优先走驱动层 prepared statement | §12 #7 |
+| 变量浏览器 · `.ipynb` 互操作 · 迷你系统目录 | 三个后续项（分析模式可用性 / 生态互通 / 离线补全） | §12 #9 / #10 / #11 |
+| 使用手册 `editor-user-guide.md` | 与其它模块的六件套不齐（需以真实实现为准） | §12 #12 |
+| 结果网格**全量 `to_string()`**（1000 行 × N 列的惰性格式化 / 虚拟化） | 逐模块对比里的「落后」项 | `../references/README.md` §5 |
+| **导入管线**（我们只有导出） | 逐模块对比里的「落后」项（跨模块） | `../references/README.md` §5 |
+
+> **口径提示（已核实）**：`crates/editor/src/lib.rs` 的 ⬜ 清单写在 B15 / B7 切片二 / B1 持久化之前，其中若干项已由 `editor-dev-plan.md` §0 的进度行关闭；**两者冲突时以 §0 为准**（本表已按该口径取舍，并保留原始出处的日期）。另：§12 #17「驱动层不返回真实 `affected_rows`」已被 B5 关闭（四个原生驱动都经 `driver::utils::affected_rows_result` 回填，已核实代码），本文按现状不再列入未做项。
+
 ---
 
 ## 13. 待确认决策清单（阻塞开发的项）
