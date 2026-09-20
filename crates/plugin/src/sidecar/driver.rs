@@ -762,8 +762,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use engine::driver::{
-    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, DynDatabase, IndexDetail, NodeInfo,
-    SchemaObjectKind, Transaction,
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, DynDatabase, IndexDetail,
+    MetadataBrowser, NodeDetail, NodeInfo, SchemaObjectKind, Transaction,
 };
 use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError, PluginError};
 use shared::models::{QueryResult, Value as SharedValue};
@@ -1071,6 +1071,17 @@ impl Database for SidecarDatabase {
             biased;
             result = &mut execute => result,
             _ = cancel_token.cancelled() => {
+                // 门控（§4.4）：没声明 `cancel` 就不装作能中断 —— 否则用户点了「中断」，
+                // 界面上显示成了「已中断」，而那条语句还在库里跑。
+                // 仍然**继续等这次调用收场**（不能丢 future，丢开只是这边不等了），
+                // 然后如实报「没停下来」，而不是把跑完的结果伪装成被中断的结果。
+                if !self.descriptor.supports("cancel") {
+                    let _ = execute.await;
+                    return Err(CoreError::common(CommonError::not_supported(format!(
+                        "驱动 {} 不支持中断（没声明 cancel 能力）：这条语句没能停下来，结果按未中断丢弃",
+                        self.db_type
+                    ))));
+                }
                 if let Err(e) = driver.cancel(&request.request_id).await {
                     tracing::warn!(session_id = %self.session_id, error = %e, "取消没能递到驱动进程");
                 }
@@ -1083,12 +1094,24 @@ impl Database for SidecarDatabase {
     }
 
     async fn begin_transaction(&self) -> Result<Box<dyn Transaction>, CoreError> {
-        // `tx.begin/commit/rollback` 是 P2 的事（P1 的 RPC 面只到 `query.*`）。
-        // **明确报不支持**，不静默退化成"没有事务"——那样用户会在库里留下一堆半截写入。
+        // **明确报不支持**，不静默退化成「没有事务」——那样用户会在库里留下一堆半截写入。
+        // 两件事分开说（§4.4 的门控）：驱动自己没这个能力，与桥还没接，是两种下一步。
+        if !self.descriptor.supports("transactions") {
+            return Err(CoreError::common(CommonError::not_supported(format!(
+                "驱动 {} 不支持事务（没声明 transactions 能力）",
+                self.db_type
+            ))));
+        }
         Err(CoreError::common(CommonError::not_supported(format!(
-            "驱动 {} 的事务桥还没接（tx.* 属 P2）",
+            "驱动 {} 声明了 transactions，但宿主的事务桥还没接（tx.* 排在 P2 之后）：本次没有真的开事务",
             self.db_type
         ))))
+    }
+
+    /// 走浏览器面（[`MetadataBrowser`]）：那里多一处只有它能回答的东西 ——
+    /// `has_schema_level`（导航据此决定 catalog 下面要不要多一层 schema）。
+    fn as_metadata_browser(&self) -> Option<&dyn MetadataBrowser> {
+        Some(self)
     }
 
     fn meta(&self) -> DataSourceMeta {
@@ -1260,6 +1283,112 @@ impl Database for SidecarDatabase {
             .session_ping()
             .await
             .map_err(|e| self.map_error("session.ping", e))
+    }
+}
+
+/// 浏览器面（`MetadataBrowser`）：与 [`Database`] 那几个方法**同一份实现**（都走 `meta.*`），
+/// 只多一处 —— `has_schema_level`。
+///
+/// 两套都要实现的原因在 `MetadataService`：它优先走浏览器，而只实现 `Database` 的驱动会在
+/// `has_schema_level` 上退化成默认的 `true` —— MySQL / SQLite 那类单层库的 sidecar 就会在
+/// catalog 下面多长出一层空的 schema（导航看起来像坏了）。
+#[async_trait::async_trait]
+impl MetadataBrowser for SidecarDatabase {
+    /// 有独立 schema 层吗：由驱动的 `schemas` 能力决定。
+    ///
+    /// **没声明的按不支持**（与「没说的一律按不支持」同一条口径，用户手册 §2.8）：
+    /// 单层库的驱动不写这一项，导航就不会多给一层空 schema。
+    fn has_schema_level(&self) -> bool {
+        self.descriptor.supports("schemas")
+    }
+
+    async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
+        Ok(self
+            .list_catalogs()
+            .await?
+            .into_iter()
+            .map(|name| NodeInfo::new(name, SchemaObjectKind::Catalog))
+            .collect())
+    }
+
+    /// 没有 schema 层的驱动返回**空**，不回退成 catalog 列表（trait 的口径：那样导航会
+    /// 出现同名重复层）。
+    async fn get_schemas(&self, catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        if !self.has_schema_level() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .list_schemas(catalog)
+            .await?
+            .into_iter()
+            .map(|name| NodeInfo::new(name, SchemaObjectKind::Schema))
+            .collect())
+    }
+
+    /// 表与视图一起给（导航按 `kind == View` 分两半）—— 与原生驱动的 `get_tables` 同口径。
+    async fn get_tables(&self, catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        self.list_tables(catalog, Some(schema)).await
+    }
+
+    async fn get_table_detail(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<NodeDetail, CoreError> {
+        let conn = self.connection()?;
+        let schema = self.wire_schema(Some(schema));
+        let detail = SessionDriver::new(&conn, &self.session_id)
+            .meta_object_detail(catalog, &schema, table)
+            .await
+            .map_err(|e| self.map_error("meta.object_detail", e))?;
+
+        // 类别摆不进导航就没法当详情看（属性面板按类别选表单）：如实报，不拿「表」顶上
+        let Some(node) = detail.object.into_node_info() else {
+            return Err(CoreError::plugin(PluginError::ExecutionFailed {
+                plugin_id: self.db_type.clone(),
+                function: "meta.object_detail".to_string(),
+                reason: format!("{table} 的类别摆不进导航，属性面板没有它的位置"),
+            }));
+        };
+
+        Ok(NodeDetail {
+            node,
+            columns: detail
+                .columns
+                .into_iter()
+                .map(|c| c.into_column_detail())
+                .collect(),
+            index_count: detail.indexes,
+            // 行数估计是 `u32`：超了就当「不知道」，不截断成一个错数字
+            row_count_estimate: detail.row_count.and_then(|n| u32::try_from(n).ok()),
+        })
+    }
+
+    async fn get_indexes(
+        &self,
+        _catalog: &str,
+        _schema: &str,
+        _table: &str,
+    ) -> Result<Vec<IndexDetail>, CoreError> {
+        Err(self.no_index_detail("索引"))
+    }
+
+    async fn get_constraints(
+        &self,
+        _catalog: &str,
+        _schema: &str,
+        _table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        Err(self.no_index_detail("约束"))
+    }
+
+    async fn get_sequences(&self, catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        self.list_sequences(catalog, Some(schema)).await
+    }
+
+    async fn get_triggers(&self, catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        self.list_triggers(catalog, Some(schema)).await
     }
 }
 

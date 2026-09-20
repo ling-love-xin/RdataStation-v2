@@ -373,6 +373,8 @@ progress({request_id, phase, done, total})
 | 元数据调用**不收附件** | 元数据是控制面；带 Arrow 附件说明对端把两条路搅在一起了，报协议错而不是猜它想说什么 |
 | 能力为假 → 方法回 `-32006`、那类对象**不报** | 「驱动看不到」与「没有」在驱动侧是同一件事；宿主侧的门控口径见 §4.4 |
 | 超时用 `DESCRIBE_RPC_TIMEOUT`（20s） | 内省该是快的：慢到超时说明对端那条内省查询有问题，该如实报出来，而不是让界面按查询的超时（600s）一直转圈 |
+| **没有 schema 层时，宿主把 catalog 当 schema 传** | 导航在 `has_schema_level` 为 false 时走 `load_folders(conn_id, catalog, catalog)`：`meta.objects` 收到的 `schema` 就是 catalog 名（与 MySQL 原生驱动 `get_tables(catalog, catalog)` 同一个做法）。驱动对此**不必特判**：认它就是 schema 名即可 |
+| schema 没给时的取值顺序 | 显式给的 → `driver.describe` 的 `default_schema` → **空串**。空串是有含义的：「没有 schema 层，用你自己的默认」，宿主不替驱动猜一个 schema 名 |
 | 索引 / 约束**明细**暂无协议面 | `object_detail` 只给个数（`indexes`）；属性面板要列明细时再补 `meta.indexes` / `meta.constraints`（P4）。在那之前 `Database::list_indexes` 如实报不支持 |
 #### 4.2.3 版本闸
 
@@ -450,7 +452,7 @@ id = "mssql"  display_name = "SQL Server"  default_port = 1433  connection_schem
 
 ### 4.4 能力矩阵（能力缺失必须有处表达）
 
-清单 `[capabilities.driver]`，对应引擎侧新增 `DriverCapability`：
+清单 `[capabilities.driver]`（**P4 落，见 §4.4.1 末尾**），运行时的那一份是 `driver.describe` 回的 `capabilities`：
 
 ```toml
 [capabilities.driver]
@@ -466,6 +468,23 @@ identifier_quote = "\"" default_schema = "public"
 **门控规则**：`false` 的能力 → 相关 UI 置灰 + 给出原因 + 对应 RPC 宿主不再调用。
 **不得静默退化**：缺失能力造成的功能不可用，必须走 `capability_denied` 并可展示。
 
+#### 4.4.1 运行时那一份怎么门控（P2 落地，2026-09-20）
+
+| 能力 | 门控点 | 效果 |
+| --- | --- | --- |
+| `cancel` | `SidecarDatabase::query_with_cancel` | **令牌响了才判**（查询照跑，不能因为不能中断就不让人家查）：没声明就**不装中断**，继续等语句收场后如实报「没能停下来，结果按未中断丢弃」 |
+| `transactions` | `begin_transaction` | 两句不同的话：「没声明 transactions 能力」（驱动的事）与「声明了但宿主桥还没接」（我们的事）——下一步不一样 |
+| `schemas` | `MetadataBrowser::has_schema_level` | false → 导航不给 schema 层（catalog 直接挂五个文件夹），`get_schemas` 返回**空**而不是回退成 catalog 列表（否则出现同名重复层） |
+| `affected_rows` | —— | 暂不门控：`QueryResult.affected_rows` 本来就是 `Option`，驱动没报就是 `None`，没有「假装」的余地 |
+| `views` / `routines` / `sequences` / `triggers` | **驱动侧** | 没声明就不在 `meta.objects` 里报那类对象（「看不到」与「没有」在驱动侧是同一件事）；宿主侧不做二次过滤（那会变成两份真相） |
+| `cursor` / `streaming` / `explain` / `readonly` / `comments` | —— | 协议面还没接，暂不门控；接了再补（`cursor` 会落在 `query.fetch` 那条路上） |
+| `indexes` / `constraints` | —— | 连协议面都还没定：`object_detail` 只给个数，**明细**一律如实报不支持（`NotSupported`），不返回空 |
+
+**清单 `[capabilities.driver]` 那一份放到 P4**（连同连接对话框一起落）。理由：现在落它就会是
+**没有读者的第二份真相**，而「同一件事写两处」正是 §3.5 的教训。P2 的门控一律以 `driver.describe`
+的**运行时**那份为准（清单可以撒谎，跑起来的进程没法撒谎）；P4 补清单字段时，要在
+`describe` 与清单不一致时记一条告警（部署期已经有一套同样的「清单自相矛盾要报出来」的做法，
+见 `Deployment`）。
 ### 4.5 Arrow 与类型
 
 #### 4.5.1 schema metadata（类型映射的落点）
@@ -803,7 +822,8 @@ cargo test-all         # test --workspace -j 2（自带 RUST_MIN_STACK / RDS_HOM
 | 驱动桥（RPC 方法表） | `crates/plugin/src/sidecar/driver.rs`（✅ **P1 已落地**：`SessionDriver` = 会话之上的 `driver.describe` / `query.execute` / `query.fetch` / `query.cancel` / `session.ping`，`QueryPage`/`PageData` 把内联 JSON 与 Arrow 附件统一成同一个类型，`DriverError` 按错误码分流。旧 HTTP 版已于 P0 删除，见 §1.2） |
 | 接引擎 `Database` trait | `crates/plugin/src/sidecar/driver.rs`（✅ **P1 已落地**：`SidecarDatabase` —— `QueryPage` → `QueryResult`（只填 `batches`，内联 JSON 也补成 `RecordBatch`）、错误按域映射、弱引用连接、真取消）；工厂与注册见 `SidecarDriverFactory`（P1 收尾） |
 | 元数据面（导航 / 属性面板 / 内容档） | `crates/plugin/src/sidecar/driver.rs`（✅ **P2 已落地**：`SidecarDatabase` 实现 `Database` 的 `list_catalogs` / `list_schemas` / `list_tables` / `list_columns` / `list_procedures` / `list_functions` / `list_sequences` / `list_triggers` / `get_routine_source`；五个文件夹都从**同一次** `meta.objects` 里挑（`objects_of` + `take_kind`）；`wire_schema` 的取值顺序是「显式 → `default_schema` → 空串」；索引/约束**明细**如实报不支持）+ `crates/plugin/tests/database_meta_real_process.rs`（8 条真进程） |
-| 能力矩阵 | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY`）+ 新增 `DriverCapability` |
+| 能力门控 | `crates/plugin/src/sidecar/driver.rs`（✅ **P2 已落地**：`cancel` 在 `query_with_cancel` 里门控、`transactions` 分两句说、`schemas` 落成 `MetadataBrowser::has_schema_level`；口径见 §4.4.1）+ `crates/plugin/tests/capability_gate_real_process.rs`（5 条真进程） |
+| 能力矩阵 | `crates/engine/src/driver/capability.rs`（`CAPABILITY_DICTIONARY`）——**P4 再谈**：清单那一份要等连接对话框这个读者 |
 | 类型归一化与 `ResultSet` | `crates/shared/src/result_set.rs`（新增）+ `crates/shared/src/arrow.rs` |
 | 二次分析直灌 | `crates/engine/src/duckdb/duckdb_service.rs:38-101`、`crates/editor/src/analysis.rs` |
 | 编辑器承载 | `crates/editor/src/execution.rs`（`QueryData`）、`src/store.rs`（`ResultEntry`）、`src/view/results/grid.rs` |
@@ -842,7 +862,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 
 **导航层的验收边界（说清楚，别当成已验）**：「导航树完整」这一条在**契约层**是自动化的（上面那些测试断言的就是 `NavigatorService` 消费的那份 `Vec<NodeInfo>` / `Vec<ColumnDetail>`，含「按 `kind == View` 分两半」这条导航依赖的规则）；但**导航层本身**（`NavigatorService` → 树节点 → 属性面板）没法在本仓自动跑：① 目前**没有任何 crate 依赖 `rds-plugin`**（第一条消费边留给 P4 的注册表接线，现在加一个只测试用的反向 dev-dep 会把分层搞乱）；② 靶子二进制只对 `rds-plugin` 自己的测试可见（`CARGO_BIN_EXE_*` 是包内变量），跨 crate 拿不到路径。所以这一条进**实机验收清单**（真库 + 手动展开五个文件夹 + `#` 内容档搜到该库对象）。
 
-**P2 剩余**：`DriverCapability` 门控（`-32006` 与 `has_schema_level` 的落点）、`rds.*` 的 schema metadata 读到消费方（P2.5 的 Arrow 直灌会用到）、把 `meta.*` 补进 `sidecar_conformance.rs`（第三方 sidecar 的自检要覆盖导航面） |
+**第三刀（能力门控）**：`impl MetadataBrowser for SidecarDatabase`（与 `Database` 那几个方法**同一份实现**；多出来的关键一处是 `has_schema_level` = 驱动的 `schemas` 能力 —— 单层库的 sidecar 不再长出一层空 schema）+ `as_metadata_browser` 返回 `Some(self)`；`cancel` 门控（没声明就**不装中断**：令牌响了先等语句收场，再如实报「没能停下来」，不把跑完的结果伪装成被中断的结果）；`transactions` 门控把「驱动没这个能力」与「宿主桥还没接」分开说；`get_table_detail` 遇到导航摆不下的类别**报错而不是拿「表」顶上**。`cargo test -p rds-plugin` = 114/114 + 集成 60/60（新增 `capability_gate_real_process.rs` 5 条）。清单 `[capabilities.driver]` 那一份**明确推到 P4**（见 §4.4.1 末尾：没有读者的第二份真相）。
 | P2.5 | ⬜ 未开始 | — |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
 | P4 | ⬜ 未开始 | — |

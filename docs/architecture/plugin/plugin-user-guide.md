@@ -306,6 +306,15 @@ cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
    被点名的调用（`meta.routine_source` 等）如实回 `-32006 capability_denied` ——
    宿主据此置灰并说明，而不是把「不支持」画成「没有」。
 
+   最关键的一条能力是 **`schemas`**：它决定导航给不给你 schema 层。
+   - `schemas = true`（PostgreSQL 那类）：`meta.catalogs` 给库、`meta.schemas` 给 schema；
+   - `schemas = false`（MySQL / SQLite / DuckDB 那类单层库）：**`meta.catalogs` 要给得出容器**
+     （把 schema 名当 catalog 回），`meta.schemas` 返回空，宿主把 catalog 名当 `schema` 传给你
+     （`meta.objects` 收到 `schema == catalog`，认它就是）。
+
+   另两个会被门控的：**`cancel`**（没声明时用户点「中断」只能听到「没能停下来」）、
+   **`transactions`**（没声明时开事务会被明确拒绝）。
+
 连不上库请用 `-32009 connect_failed`（别用 `-32003`）：界面要把它与「SQL 写错了」分开呈现。
 清单怎么写（`[backend]` + `[[contributes.drivers]]`）见 §2.2 与 `plugin-dev-plan.md` §4.3。
 
