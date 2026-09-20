@@ -225,6 +225,10 @@ fn view_layer_has_no_raw_size_literals() {
             "editor/view/completion.rs",
             include_str!("../../editor/src/view/completion.rs"),
         ),
+        (
+            "editor/view/fold.rs",
+            include_str!("../../editor/src/view/fold.rs"),
+        ),
         // 设置页（应用级；P1.6 后旧 `settings_view.rs` 已退役）
         (
             "settings/settings_page.rs",
@@ -392,6 +396,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/completion.rs",
             include_str!("../../editor/src/view/completion.rs"),
+        ),
+        (
+            "editor/view/fold.rs",
+            include_str!("../../editor/src/view/fold.rs"),
         ),
         // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描）
         (

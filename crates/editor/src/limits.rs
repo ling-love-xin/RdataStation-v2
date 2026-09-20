@@ -5,7 +5,7 @@
 //! | 档位 | 门槛 | 策略 |
 //! | --- | --- | --- |
 //! | `Normal` | < 50 MB | 全功能 |
-//! | `Large` | 50 MB – 200 MB | 关补全（重能力）；高亮由内核自行降级（>约 5 万行不出 token，已有回归） |
+//! | `Large` | 50 MB – 200 MB | 关补全与折叠（重能力）；高亮由内核自行降级（>约 5 万行不出 token，已有回归） |
 //! | `Huge` | ≥ 200 MB | **只读打开 + 提示卡**（不建可编辑会话） |
 //!
 //! ## 为什么判定是纯函数
@@ -14,10 +14,11 @@
 //! 边界（49.9 MB / 50 MB / 199.9 MB / 200 MB）可以逐条断言，不必造真文件。
 //! 取文件大小那一层（[`tier_for_path`]）是 I/O，**只从事件路径调用**（打开文档时一次）。
 //!
-//! ## 1a 的边界（诚实说明）
+//! ## 判据从哪里落地（判据 → 真实开关）
 //!
-//! - "关折叠"要有内核开关才谈得上，而 `gpui-base` 0.6.1 没有对外暴露它 → 本档位只提供
-//!   判据（[`FileTier::disables_folding`]），接线留到内核给出开关时；
+//! - 补全：`EditorShared::completion_enabled`（B9）；
+//! - 折叠：`EditorShared::folding_enabled` → 宿主面板调 `set_folding(false)`（B17）——
+//!   不只是留一个判据，而是把内核开关真的关上（大文件下折叠每键要重扫全文）；
 //! - 分块加载（原型 §13 P5）已明确推到 1b 之后，这里不做。
 
 use std::path::Path;
@@ -54,9 +55,7 @@ impl FileTier {
         !matches!(self, Self::Normal)
     }
 
-    /// 是否关掉折叠
-    ///
-    /// 判据已定，但**接线缺内核开关**（`gpui-base` 0.6.1 没暴露）——见模块文档。
+    /// 是否关掉折叠（B17 已接线：`view/host` 据此对内核 `set_folding(false)`）
     pub fn disables_folding(self) -> bool {
         !matches!(self, Self::Normal)
     }
@@ -71,9 +70,9 @@ impl FileTier {
         match self {
             Self::Normal => None,
             Self::Large => Some("大文件：已关闭补全等重能力，高亮按需降级"),
-            Self::Huge => Some(
-                "超大文件（>200MB）：未加载内容，以免占用大量内存；请用外部工具查看或截取片段",
-            ),
+            Self::Huge => {
+                Some("超大文件（>200MB）：未加载内容，以免占用大量内存；请用外部工具查看或截取片段")
+            }
         }
     }
 }

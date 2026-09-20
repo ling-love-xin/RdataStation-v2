@@ -11,15 +11,15 @@ use std::cell::RefCell;
 use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::table::{TableEvent, TableState};
-use gpui_kit::component::Sizable as _;
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -32,8 +32,6 @@ use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
-use crate::translate;
-use crate::view::completion;
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::persist;
@@ -41,11 +39,16 @@ use crate::service::Document;
 use crate::shared::{EditorShared, InsightColumnRequest};
 use crate::sources;
 use crate::store::ResultEntry;
+use crate::translate;
 use crate::ui;
+use crate::view::completion;
 use crate::view::dialogs;
+use crate::view::fold;
 use crate::view::highlight;
 use crate::view::results::error_card::{self, ErrorCard};
-use crate::view::results::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
+use crate::view::results::grid::{
+    self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar,
+};
 use crate::view::results::sets::{self as result_sets, ResultSetTab};
 use crate::view::widgets::status_bar::{self, StatusInputs};
 
@@ -210,6 +213,9 @@ impl EditorHostPanel {
             if shared.completion_enabled(&document) {
                 completion::install(&mut state, shared.clone(), document.clone());
             }
+            // B17：折叠（内核只认 highlighter 给的候选，我们自己算，见 `fold` / `view::fold`）。
+            // 装不上就真关开关，不只留一个判据。
+            sync_fold(&shared, &document, &mut state, window, cx);
             state
         });
 
@@ -221,6 +227,20 @@ impl EditorHostPanel {
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
                     this.statements = count_statements(&text);
+                    // B17：折叠候选随文本重算（内核的增量维护只服务于它自己的 highlighter，
+                    // 我们没有 highlighter → 不重喂就会指到别的行）。动作与补全/格式化共用
+                    // 这一条事件路径，所以 `replace_all`（模板 / 注释 / 格式化）也覆盖到。
+                    if this.shared.folding_enabled(&this.document) {
+                        let editor = this.editor.clone();
+                        // 挪出当前更新栈：本回调正在内核的 `update` 里（同一实体再 `.update(…)` 会 panic）；
+                        // `defer` 在本次更新末尾跑，刷新的那一帧就带上新候选。文本取内核当下值。
+                        cx.defer(move |cx| {
+                            editor.update(cx, |state, cx| {
+                                let text = state.value().to_string();
+                                fold::install(state, &text, cx);
+                            });
+                        });
+                    }
                     this.shared
                         .update(|service| service.set_content(&this.document, text));
                     // 重绘以刷新标签脏点与状态栏
@@ -295,11 +315,11 @@ impl EditorHostPanel {
             // 【M8】宿主没接「洞察此列」端口就不装钩子——菜单据此不摆那一项（能力没有就不给入口）
             let insight_port = shared.insight_column_port();
             grid.update(cx, |state, _cx| {
-                state.delegate_mut().set_load_more_hook(std::rc::Rc::new(
-                    move |app: &mut App| {
+                state
+                    .delegate_mut()
+                    .set_load_more_hook(std::rc::Rc::new(move |app: &mut App| {
                         _ = load_weak.update(app, |panel, cx| panel.fetch_more(cx));
-                    },
-                ));
+                    }));
                 state.delegate_mut().set_filter_value_hook(std::rc::Rc::new(
                     move |value: &str, app: &mut App| {
                         let value = value.to_string();
@@ -311,20 +331,20 @@ impl EditorHostPanel {
                 state.delegate_mut().set_sort_down_hook(std::rc::Rc::new(
                     move |column: &str, descending: bool, app: &mut App| {
                         let column = column.to_string();
-                        _ = sort_weak.update(app, |panel, cx| {
-                            panel.sort_down(&column, descending, cx)
-                        });
+                        _ = sort_weak
+                            .update(app, |panel, cx| panel.sort_down(&column, descending, cx));
                     },
                 ));
                 if insight_port.is_some() {
-                    state.delegate_mut().set_insight_column_hook(std::rc::Rc::new(
-                        move |column: &str, app: &mut App| {
-                            let column = column.to_string();
-                            _ = insight_weak.update(app, |panel, cx| {
-                                panel.insight_column(&column, cx)
-                            });
-                        },
-                    ));
+                    state
+                        .delegate_mut()
+                        .set_insight_column_hook(std::rc::Rc::new(
+                            move |column: &str, app: &mut App| {
+                                let column = column.to_string();
+                                _ = insight_weak
+                                    .update(app, |panel, cx| panel.insight_column(&column, cx));
+                            },
+                        ));
                 }
             });
         }
@@ -488,7 +508,12 @@ impl EditorHostPanel {
     pub fn session_snapshot(&self, cx: &App) -> Option<crate::session::SavedSession> {
         let (path, mode, channel, connection) = self.with_document(|doc| {
             let path = doc.path()?.to_string_lossy().into_owned();
-            Some((path, doc.mode(), doc.channel(), doc.connection().map(str::to_string)))
+            Some((
+                path,
+                doc.mode(),
+                doc.channel(),
+                doc.connection().map(str::to_string),
+            ))
         })??;
         let id = crate::session::session_id_for_path(std::path::Path::new(&path));
 
@@ -535,8 +560,18 @@ impl EditorHostPanel {
         // 会话可能比现在的文档长（内容被截断 / 外部修改）：光标钳到当前文本末尾
         let len = self.editor_text(cx).len();
         let clamp = |offset: usize| offset.min(len);
-        let start = clamp(session.selection.map(|(start, _)| start).unwrap_or(session.cursor));
-        let end = clamp(session.selection.map(|(_, end)| end).unwrap_or(session.cursor));
+        let start = clamp(
+            session
+                .selection
+                .map(|(start, _)| start)
+                .unwrap_or(session.cursor),
+        );
+        let end = clamp(
+            session
+                .selection
+                .map(|(_, end)| end)
+                .unwrap_or(session.cursor),
+        );
 
         self.editor.update(cx, |state, cx| {
             // `set_cursor_position` 是内核里唯一“滚到指定偏移”的公开入口（会顺带聚焦）
@@ -607,7 +642,10 @@ impl EditorHostPanel {
         }
         let reason = gate.reason.unwrap_or_else(|| "不可用".to_string());
         self.set_message(
-            Some(format!("{}通道已失效：{reason}（回退源库）", channel.label())),
+            Some(format!(
+                "{}通道已失效：{reason}（回退源库）",
+                channel.label()
+            )),
             cx,
         );
     }
@@ -764,11 +802,11 @@ impl EditorHostPanel {
                 }
                 if let Some(label) = refresh_label {
                     let entity = entity.clone();
-                    menu = menu.separator().item(
-                        PopupMenuItem::new(label).on_click(move |_, _window, app| {
+                    menu = menu.separator().item(PopupMenuItem::new(label).on_click(
+                        move |_, _window, app| {
                             entity.update(app, |panel, cx| panel.refresh_source(cx));
-                        }),
-                    );
+                        },
+                    ));
                 }
                 menu
             })
@@ -782,8 +820,7 @@ impl EditorHostPanel {
 
     /// 本文档当前的执行通道（B13；文档属性，读的是服务层的真值）
     pub fn channel(&self) -> ExecChannel {
-        self.with_document(|doc| doc.channel())
-            .unwrap_or_default()
+        self.with_document(|doc| doc.channel()).unwrap_or_default()
     }
 
     /// 源库档能不能用：绑定的连接已建连（**未绑定算可用**——那是在跟随当前活动连接，
@@ -853,10 +890,7 @@ impl EditorHostPanel {
         // 内核的 Change 事件会把内容写回服务层（脏状态跟着变），这里只补一句结果
         let mut message = format!("已格式化 {} 条语句", plan.formatted);
         if plan.kept_verbatim > 0 {
-            message.push_str(&format!(
-                "；{} 条解析不了，原样保留",
-                plan.kept_verbatim
-            ));
+            message.push_str(&format!("；{} 条解析不了，原样保留", plan.kept_verbatim));
         }
         self.set_message(Some(message), cx);
     }
@@ -917,10 +951,7 @@ impl EditorHostPanel {
         );
         let mut message = format!("已转译为 {label}（{} 条语句）", plan.transpiled);
         if plan.kept_verbatim > 0 {
-            message.push_str(&format!(
-                "；{} 条解析不了，原样保留",
-                plan.kept_verbatim
-            ));
+            message.push_str(&format!("；{} 条解析不了，原样保留", plan.kept_verbatim));
         }
         self.set_message(Some(message), cx);
     }
@@ -1176,7 +1207,9 @@ impl EditorHostPanel {
     /// 合成在这里而不写回文档：项目锁是窗口级状态，写进 `Document` 会留下“解锁了但文档还
     /// 写着只读”的陈旧值。
     pub(crate) fn read_only_flags(&self) -> ReadOnly {
-        let document = self.with_document(|doc| doc.read_only()).unwrap_or_default();
+        let document = self
+            .with_document(|doc| doc.read_only())
+            .unwrap_or_default();
         ReadOnly {
             editor: document.editor,
             connection: document.connection || self.shared.project_read_only(),
@@ -1249,16 +1282,14 @@ impl EditorHostPanel {
                     let entity = entity.clone();
                     let label = format!("{} · {}", option.short, option.name);
                     let id = option.id.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(label)
-                            .checked(is_current)
-                            .on_click(move |_, _window, app| {
-                                let id = id.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.bind_connection(Some(id), cx);
-                                });
-                            }),
-                    );
+                    menu = menu.item(PopupMenuItem::new(label).checked(is_current).on_click(
+                        move |_, _window, app| {
+                            let id = id.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.bind_connection(Some(id), cx);
+                            });
+                        },
+                    ));
                 }
                 menu
             })
@@ -1267,11 +1298,7 @@ impl EditorHostPanel {
     /// 绑定连接（工具栏选择器调用）：先用端口确保已建连，失败就**不绑定**并留原因
     ///
     /// `None` = 解绑（跟随当前连接）。绑定是**文档属性**，同一窗口的多份文档互不影响。
-    pub(crate) fn bind_connection(
-        &mut self,
-        conn_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn bind_connection(&mut self, conn_id: Option<String>, cx: &mut Context<Self>) {
         let Some(conn_id) = conn_id else {
             self.shared
                 .update(|service| service.set_connection(&self.document, None));
@@ -1325,15 +1352,15 @@ impl EditorHostPanel {
                     let entity = entity.clone();
                     let available = kind.is_available(&selection, statements);
                     menu = menu.item(
-                        PopupMenuItem::new(kind.label()).disabled(!available).on_click(
-                            move |_, _window, app| {
+                        PopupMenuItem::new(kind.label())
+                            .disabled(!available)
+                            .on_click(move |_, _window, app| {
                                 entity.update(app, |panel, cx| {
                                     let (text, selection) = panel.editor_snapshot(cx);
                                     let target = execution::target_for_menu(kind, &text, selection);
                                     panel.execute(target, kind.placement(), cx);
                                 });
-                            },
-                        ),
+                            }),
                     );
                 }
                 menu
@@ -1381,11 +1408,11 @@ impl EditorHostPanel {
             .dropdown_menu(move |menu, window, cx| {
                 // 【B10】执行计划在“转译”之前（原型 §2.2 的更多菜单顺序）
                 let plan_entity = entity.clone();
-                let menu = menu.item(
-                    PopupMenuItem::new("执行计划").on_click(move |_, _window, app| {
+                let menu = menu.item(PopupMenuItem::new("执行计划").on_click(
+                    move |_, _window, app| {
                         plan_entity.update(app, |panel, cx| panel.explain_current(cx));
-                    }),
-                );
+                    },
+                ));
                 menu.submenu("转译为", window, cx, {
                     let entity = entity.clone();
                     let targets = targets.clone();
@@ -1437,7 +1464,7 @@ impl EditorHostPanel {
     ///
     /// 模式是**文档属性**：判定与确认在 `mode::plan_switch` 与对话框层，这里只负责
     /// “按当前模式刷新视图”，由切换流程在确认之后调用（**视图不自己改模式**）。
-    pub fn sync_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn sync_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mode) = self.with_document(|doc| doc.mode()) else {
             return;
         };
@@ -1453,6 +1480,8 @@ impl EditorHostPanel {
             }
             // B9：补全按能力表装 / 摘（文本模式不接，分析模式留 1c 逐单元）
             self.sync_completion_provider(state);
+            // B17：折叠按能力表与档位装 / 关（分析模式能力位为 false → 真关）
+            sync_fold(&self.shared, &self.document, state, window, cx);
         });
         cx.notify();
     }
@@ -1479,6 +1508,10 @@ impl EditorHostPanel {
             if state.value() != text {
                 state.set_value(text, window, cx);
             }
+            // **`set_value` 不发 `InputEvent::Change`**（内核里 `emit_events = false`，`state.rs:901`），
+            // 所以整篇换文本这条路不会经过事件订阅——折叠候选必须在这里显式重算，
+            // 否则重新加载后候选还指着旧文本的行号。
+            sync_fold(&self.shared, &self.document, state, window, cx);
         });
         cx.notify();
     }
@@ -1488,7 +1521,12 @@ impl EditorHostPanel {
     // 动作只改共享状态或向内核写文本，不直接操作 Dock（关闭走 TabGroup 的请求路径）。
 
     /// `Ctrl+S`：保存；未命名 / 写盘失败 → 状态栏给出原因
-    pub(crate) fn on_save(&mut self, _: &SaveDocument, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_save(
+        &mut self,
+        _: &SaveDocument,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.save(cx) {
             Ok(_) => {
                 // A12：保存时顺便把会话（光标/选区/模式）落库——用户按 Ctrl+S 是最自然的时机
@@ -1551,7 +1589,8 @@ impl EditorHostPanel {
             let state = self.editor.read(cx);
             (state.value().to_string(), state.cursor())
         };
-        let (start, query, items) = completion::items_at(&self.shared, &self.document, &text, offset);
+        let (start, query, items) =
+            completion::items_at(&self.shared, &self.document, &text, offset);
         if items.is_empty() {
             self.set_message(
                 Some("没有可补的候选（元数据可能还没载好，或光标处认不出上下文）".to_string()),
@@ -1592,8 +1631,9 @@ impl EditorHostPanel {
         self.editor
             .update(cx, |state, cx| state.insert(content.clone(), window, cx));
         if let Some((from, to)) = crate::completion::placeholder_range(&content) {
-            self.editor
-                .update(cx, |state, cx| state.set_selected_range(start + from..start + to, cx));
+            self.editor.update(cx, |state, cx| {
+                state.set_selected_range(start + from..start + to, cx)
+            });
         }
         self.set_message(Some(format!("已插入模板「{name}」")), cx);
     }
@@ -1869,7 +1909,9 @@ impl EditorHostPanel {
         }
         // 【B13】通道门控与写拒绝都在**提交之前**：注定被拒的语句不该跑一半（也不该让
         // “本地副本只读”这种事等驱动报一个谁也不懂的错）
-        if let Err(reason) = self.channel_ready().and_then(|()| self.channel_write_check(&target))
+        if let Err(reason) = self
+            .channel_ready()
+            .and_then(|()| self.channel_write_check(&target))
         {
             self.set_message(Some(reason), cx);
             return false;
@@ -2001,10 +2043,9 @@ impl EditorHostPanel {
     /// TX 区文案（纯文本；按钮另画）：“TX 未开启” / “TX 已开启 3.4s”
     fn tx_text(&self) -> String {
         match (self.tx_open, self.tx_since) {
-            (true, Some(since)) => format!(
-                "TX 已开启 {}",
-                status_bar::elapsed_text(since.elapsed())
-            ),
+            (true, Some(since)) => {
+                format!("TX 已开启 {}", status_bar::elapsed_text(since.elapsed()))
+            }
             (true, None) => "TX 已开启".to_string(),
             (false, _) => "TX 未开启".to_string(),
         }
@@ -2231,10 +2272,9 @@ impl EditorHostPanel {
                     self.apply_tx_snapshot(snapshot);
                     self.set_message(Some(format!("已{}", note.action.label())), cx);
                 }
-                Err(reason) => self.set_message(
-                    Some(format!("{}失败：{reason}", note.action.label())),
-                    cx,
-                ),
+                Err(reason) => {
+                    self.set_message(Some(format!("{}失败：{reason}", note.action.label())), cx)
+                }
             }
         }
 
@@ -2327,7 +2367,8 @@ impl EditorHostPanel {
                     ));
                 }
             }
-            self.shared.update_results(|store| store.push(entry, placement));
+            self.shared
+                .update_results(|store| store.push(entry, placement));
         }
         if mine_arrived > 0 {
             self.pending = self.pending.saturating_sub(mine_arrived);
@@ -2414,23 +2455,22 @@ impl EditorHostPanel {
                     elapsed_ms: Some(entry.elapsed_ms),
                     connection: connection.clone(),
                     // 【B15】来源摘要：有自定义标题的（执行计划 / 分析）用标题，其余用血缘
-                    lineage: entry
-                        .title
-                        .clone()
-                        .or_else(|| entry.lineage.clone()),
+                    lineage: entry.title.clone().or_else(|| entry.lineage.clone()),
                     // 【B15】筛选统计随后由 `refresh_filter_hint` 从网格真值填上
                     filtered: None,
                 }),
                 // 【B5】状态行（⑦）：只有网格才给（写语句的“共 0 行”、失败时的“共 0 行”都是噪音）
-                entry.filter(|entry| entry.has_grid()).map(|entry| ResultStatus {
-                    total_rows: entry.row_count(),
-                    // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
-                    selected_row: None,
-                    truncated_hint: entry
-                        .truncated
-                        .then(|| result_grid::truncated_hint(entry.row_count())),
-                    has_more: entry.can_fetch_more(),
-                }),
+                entry
+                    .filter(|entry| entry.has_grid())
+                    .map(|entry| ResultStatus {
+                        total_rows: entry.row_count(),
+                        // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
+                        selected_row: None,
+                        truncated_hint: entry
+                            .truncated
+                            .then(|| result_grid::truncated_hint(entry.row_count())),
+                        has_more: entry.can_fetch_more(),
+                    }),
                 // 【B6】失败才谈得上定位：把「哪条 SQL + 什么错误」一起带出去
                 entry.and_then(|entry| {
                     entry
@@ -2471,7 +2511,9 @@ impl EditorHostPanel {
                 None => state.delegate_mut().clear(empty),
             }
             // 【M8】这份结果能不能洞察（菜单项据此出现 / 消失）
-            state.delegate_mut().set_insight_available(insight_available);
+            state
+                .delegate_mut()
+                .set_insight_available(insight_available);
             // 【B5b】这份结果还能不能再取一段 / 是不是正在取
             state.delegate_mut().set_has_more(has_more);
             state.delegate_mut().set_loading_more(loading_more);
@@ -2524,8 +2566,14 @@ impl EditorHostPanel {
             diagnostics.clear();
             if let (Some(site), Some(reason)) = (site, reason) {
                 let (end_line, end_column) = site.end();
-                let range = Position::new(site.line.saturating_sub(1) as u32, site.column.saturating_sub(1) as u32)
-                    ..Position::new(end_line.saturating_sub(1) as u32, end_column.saturating_sub(1) as u32);
+                let range = Position::new(
+                    site.line.saturating_sub(1) as u32,
+                    site.column.saturating_sub(1) as u32,
+                )
+                    ..Position::new(
+                        end_line.saturating_sub(1) as u32,
+                        end_column.saturating_sub(1) as u32,
+                    );
                 diagnostics.push(
                     Diagnostic::new(range, reason)
                         .with_severity(DiagnosticSeverity::Error)
@@ -2661,7 +2709,9 @@ impl EditorHostPanel {
         } else {
             // 没提交成功：把 delegate 的乐观置位撤回去，否则滚动到底会一直不再触发
             let grid = self.grid.clone();
-            grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(false));
+            grid.update(cx, |state, _cx| {
+                state.delegate_mut().set_loading_more(false)
+            });
         }
     }
 
@@ -2690,9 +2740,7 @@ impl EditorHostPanel {
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_this, cx| {
-            executor
-                .timer(std::time::Duration::from_millis(300))
-                .await;
+            executor.timer(std::time::Duration::from_millis(300)).await;
             _ = weak.update(cx, |panel, cx| {
                 if panel.filter_version == version {
                     panel.apply_filter(cx);
@@ -2936,7 +2984,10 @@ impl EditorHostPanel {
     pub(crate) fn run_analysis(&mut self, sql: String, cx: &mut Context<Self>) {
         // 空的不提交：提交了也只会拿到一句驱动报错（“没写东西”在本地就能说清）
         if !crate::analysis::is_runnable(&sql) {
-            self.set_message(Some("分析 SQL 为空（写一条 SELECT 再运行）".to_string()), cx);
+            self.set_message(
+                Some("分析 SQL 为空（写一条 SELECT 再运行）".to_string()),
+                cx,
+            );
             return;
         }
         let Some(entry) = self.shared.results_active(&self.document) else {
@@ -2953,11 +3004,7 @@ impl EditorHostPanel {
     }
 
     /// 【B7】导出选中结果集（**仅已抓取的行**，不发新查询）
-    pub(crate) fn export_active_result(
-        &mut self,
-        format: ExportFormat,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn export_active_result(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
         self.start_export(format, ExportScope::Fetched, cx);
     }
 
@@ -3064,7 +3111,10 @@ impl EditorHostPanel {
             Ok(()) => {
                 self.export_pending += 1;
                 self.set_message(
-                    Some(format!("正在导出 {}（首次装 excel 扩展可能要几秒）…", format.label())),
+                    Some(format!(
+                        "正在导出 {}（首次装 excel 扩展可能要几秒）…",
+                        format.label()
+                    )),
                     cx,
                 );
                 self.ensure_exec_pump(cx);
@@ -3409,10 +3459,7 @@ impl From<persist::PersistError> for SaveAsFailure {
 /// 另存为的“选路径 + 写盘”核心（不含失败后的交互）
 ///
 /// 路径选择走宿主注入的端口（[`EditorShared::pick_save_path`]）：编辑器**不依赖** `rfd`。
-fn pick_and_save_as(
-    panel: &Entity<EditorHostPanel>,
-    cx: &mut App,
-) -> Result<(), SaveAsFailure> {
+fn pick_and_save_as(panel: &Entity<EditorHostPanel>, cx: &mut App) -> Result<(), SaveAsFailure> {
     let (current, mode) = {
         let read = panel.read(cx);
         (read.document_path(), read.document_mode())
@@ -3425,15 +3472,14 @@ fn pick_and_save_as(
     }
 
     let default_name = mode.default_file_name().to_string();
-    let picked = panel
-        .read(cx)
-        .shared
-        .pick_save_path(current, default_name);
+    let picked = panel.read(cx).shared.pick_save_path(current, default_name);
     let Some(path) = picked else {
         return Err(SaveAsFailure::Cancelled);
     };
 
-    panel.update(cx, |panel, cx| panel.save_as(&path, cx)).map(|_| ())?;
+    panel
+        .update(cx, |panel, cx| panel.save_as(&path, cx))
+        .map(|_| ())?;
     Ok(())
 }
 
@@ -3505,12 +3551,8 @@ fn open_save_failure(
     let as_area = area.clone();
     let as_panel = panel.clone();
     let cancel_panel = panel.clone();
-    dialogs::open_save_failure_confirm(
-        window,
-        cx,
-        title,
-        reason,
-        move |choice, window, cx| match choice {
+    dialogs::open_save_failure_confirm(window, cx, title, reason, move |choice, window, cx| {
+        match choice {
             dialogs::SaveFailureChoice::Cancel => {
                 // 取消保存：文档仍是脏的（未保存状态是真实状态，不该粉饰）
                 cancel_panel.update(cx, |panel, cx| panel.clear_message(cx));
@@ -3521,16 +3563,36 @@ fn open_save_failure(
             dialogs::SaveFailureChoice::SaveAs => {
                 pick_save_as_then_close(as_area.clone(), as_panel.clone(), window, cx);
             }
-        },
-    );
+        }
+    });
 }
-
 
 /// 语句数：走 `engine::sql::split` 的**词法级**切分（不是 `split(';')`）
 ///
 /// 只在内容变化时调一次（构造 / 输入回写 / 重新加载），渲染期只读缓存值。
 fn count_statements(text: &str) -> usize {
     engine::sql::split_statements(text).len()
+}
+
+/// 折叠按能力与档位装 / 关（**唯一开关处**：新建、切模式、整篇换文本都走它）
+///
+/// 真值在 [`EditorShared::folding_enabled`]（能力表 + 大文件档位）；这里只把那个判断落到内核上，不另写一套。
+/// 装不上就**真关开关**（`set_folding(false)`）：大文件档位下折叠每键要重扫全文，只留一个判据
+/// 而不关开关就是把那份代价白付了。文本取自**内核当下值**（不另传参数），两处调用点因此不会
+/// 把“服务层的文本”和“屏幕上的文本”搞混。
+fn sync_fold(
+    shared: &EditorShared,
+    document: &DocumentId,
+    state: &mut EditorState,
+    window: &mut Window,
+    cx: &mut Context<EditorState>,
+) {
+    if shared.folding_enabled(document) {
+        let text = state.value().to_string();
+        fold::install(state, &text, cx);
+    } else {
+        state.set_folding(false, window, cx);
+    }
 }
 
 impl Focusable for EditorHostPanel {
@@ -3584,8 +3646,7 @@ impl BasePanel for EditorHostPanel {
         self.save_session_now(cx);
         self.closed = true;
         self.group = None;
-        self.shared
-            .update(|service| service.close(&self.document));
+        self.shared.update(|service| service.close(&self.document));
         // 文档关了，结果也不留（结果不跟着已关闭的文档挂着）
         self.shared
             .update_results(|store| store.clear(&self.document));
@@ -3657,11 +3718,14 @@ impl Render for EditorHostPanel {
         let channel_text = communicating.then(|| channel::status_text(current_channel));
         // TX 区（B4）：会通信 + 执行器真支持事务 + **当前通道支持事务**
         // （加速 / 联邦没有事务语义，那时摆一个 TX 区就是摆了个假控件）
-        let tx_available =
-            communicating && self.shared.has_transactions() && current_channel.allows_transactions();
+        let tx_available = communicating
+            && self.shared.has_transactions()
+            && current_channel.allows_transactions();
         let tx_text = tx_available.then(|| self.tx_text());
         let status = StatusInputs {
-            mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
+            mode: self
+                .with_document(|doc| doc.mode())
+                .unwrap_or(EditorMode::Text),
             dirty: self.is_dirty(),
             read_only: self.read_only_flags(),
             statements: self.statements,
@@ -3747,7 +3811,9 @@ impl Render for EditorHostPanel {
             // 所以只有焦点在网格里时才会走到这里（编辑区里 `Ctrl+C` 仍归内核的文本复制）
             .on_action(cx.listener(Self::on_copy_grid_selection));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
-        let mode = self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text);
+        let mode = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::Text);
         root = root.child(self.render_toolbar(mode, cx));
         // 提示卡（A13）：档位带来的限制要在界面上说清，而不是让用户自己撞上（“能编辑却改不了”）
         if let Some(notice) = self.tier_notice() {
@@ -3906,8 +3972,8 @@ impl Render for EditorHostPanel {
                                 continue;
                             };
                             let entity = entity.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(item.label).on_click(move |_, _window, app| {
+                            menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                                move |_, _window, app| {
                                     entity.update(app, |panel, cx| match scope {
                                         ExportScope::Fetched => {
                                             panel.export_active_result(format, cx)
@@ -3916,8 +3982,8 @@ impl Render for EditorHostPanel {
                                             panel.export_active_result_all(format, cx)
                                         }
                                     });
-                                }),
-                            );
+                                },
+                            ));
                         }
                         menu
                     })
@@ -3981,9 +4047,8 @@ impl Render for EditorHostPanel {
                         .debug_selector(|| "editor-result-error-locate".to_string())
                         .label(label)
                         .on_click(move |_, window, app| {
-                            entity.update(app, |panel, cx| {
-                                panel.jump_to_error_site_with(window, cx)
-                            });
+                            entity
+                                .update(app, |panel, cx| panel.jump_to_error_site_with(window, cx));
                         })
                         .into_any_element()
                 });

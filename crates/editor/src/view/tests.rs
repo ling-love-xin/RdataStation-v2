@@ -10,32 +10,32 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::component::dock::{
-    BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _,
-};
+use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _};
 use gpui_kit::component::table::TableDelegate as _;
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    div, AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window,
+    AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
+    Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
+use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::commands::{
     CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
     TriggerCompletion,
 };
 use crate::completion::{Candidate, CandidateKind, Catalog};
-use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
-use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{self, QueryData, QueryRunner};
 use crate::export::{self, ExportFormat, ExportScope};
+use crate::fold::{FoldSpan, spans as fold_spans};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
 use crate::project::{ProjectPort, ProjectState};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
+use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
+use crate::view::fold;
 use crate::view::host::{
     EditorHostPanel, close_document_in_dock, request_close_document, request_save_as,
     resolve_close_choice,
@@ -337,6 +337,75 @@ fn ctrl_s_on_an_untitled_document_reports_the_reason(cx: &mut TestAppContext) {
     assert!(message.contains("另存为"), "{message}");
 }
 
+/// 【B17】折叠：候选真的喂进了内核（构造一次），编辑后还会重算
+///
+/// 内核没有公开的候选读口（`display_map` 不在公开面上），所以这里用探针（`fold::probe`）
+/// 确认**路径走到了**：打开文档一次、文本变更后又一次。折叠的**视觉**结果（侧边 chevron、
+/// 点击折叠）由内核渲染，属人工看一眼的那一类。
+#[gpui_kit::test]
+fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let sql = "SELECT (\n  1,\n  2\n) AS x\nFROM t";
+    assert_eq!(
+        fold_spans(sql),
+        [FoldSpan {
+            start_line: 0,
+            end_line: 3
+        }],
+        "这段 SQL 只有一个可折的行块（括号组）"
+    );
+
+    let (shared, id) = shared_with_document("folding.sql", sql);
+    let (feeds_before, _) = fold::probe::read();
+
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    let (feeds_at_open, candidates_at_open) = fold::probe::read();
+    assert!(
+        feeds_at_open > feeds_before,
+        "打开文档时应当喂过一次候选（构造路径）"
+    );
+    assert_eq!(candidates_at_open, 1, "构造时喂进去的正是那一个候选");
+
+    // 改一次文本：`Ctrl+/`（行注释开关）走 `replace_all`——与模板 / 格式化 / 转译**同一条**
+    // 内容替换路径，最终都发 `InputEvent::Change`。（逐字打字那条路要窗口先注册文本 handler，
+    // 这套 headless harness 不走它；本用例要验的是"内容变了有没有重算候选"。）
+    //
+    // 第一行被注释后，`(` 落进行注释、不再是代码里的括号 → 候选必须变成 0：
+    // 这一步才证明候选是**从当下文本重算**的，而不是"又调了一次同样的东西"。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-/");
+    cx.run_until_parked();
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert_eq!(text, format!("-- {sql}"), "注释真的落到文本上");
+    let (feeds_after_comment, candidates_after_comment) = fold::probe::read();
+    assert!(
+        feeds_after_comment > feeds_at_open,
+        "文本变了就要重喂候选（内核不会替我们平移）"
+    );
+    assert_eq!(
+        candidates_after_comment, 0,
+        "注释掉的括号不该再产候选（候选跟着内容走）"
+    );
+
+    // 再按一次 → 去注释 → 候选回到 1（重算不是单向的）
+    cx.simulate_keystrokes("ctrl-/");
+    cx.run_until_parked();
+    let (feeds_after_restore, candidates_after_restore) = fold::probe::read();
+    assert!(
+        feeds_after_restore > feeds_after_comment,
+        "还原也是一次文本变更"
+    );
+    assert_eq!(candidates_after_restore, 1, "去注释后括号回到代码里");
+
+    // 带着新候选再画一帧：候选若越界或反序，`FoldRange::new` 的断言会在这里爆
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
 #[gpui_kit::test]
 fn ctrl_slash_comments_the_selection(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -585,7 +654,13 @@ struct ScriptRunner {
 }
 
 impl QueryRunner for ScriptRunner {
-    fn run(&self, connection: Option<&str>, channel: crate::channel::ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        connection: Option<&str>,
+        channel: crate::channel::ExecChannel,
+        sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         self.seen.lock().expect("锁").push(sql.to_string());
         self.seen_connections
             .lock()
@@ -628,13 +703,7 @@ fn shared_with_runner(
 }
 
 /// 同上，但把**通道**序列也带回来（B13 的断言要看它）
-fn shared_with_channel_recorder(
-    content: &str,
-) -> (
-    EditorShared,
-    DocumentId,
-    SeenChannels,
-) {
+fn shared_with_channel_recorder(content: &str) -> (EditorShared, DocumentId, SeenChannels) {
     let shared = EditorShared::new();
     let channels = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     shared.attach_runner(std::sync::Arc::new(ScriptRunner {
@@ -655,7 +724,13 @@ fn shared_with_channel_recorder(
 struct SizedRunner;
 
 impl QueryRunner for SizedRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         // 与 `ScriptRunner` 同一口径：带 `boom` 的语句失败（批量要能验“失败不中断”）
         if sql.contains("boom") {
             return Err("驱动报错：boom".to_string());
@@ -695,7 +770,13 @@ fn shared_with_sized_runner(content: &str) -> (EditorShared, DocumentId) {
 struct ToolbarRunner;
 
 impl QueryRunner for ToolbarRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         if sql.contains("insert") {
             return Ok(QueryData {
                 columns: Vec::new(),
@@ -754,7 +835,13 @@ struct SegmentRunner {
 }
 
 impl QueryRunner for SegmentRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
@@ -811,7 +898,13 @@ fn shared_with_segment_runner(
 struct MoreUnsupportedRunner;
 
 impl QueryRunner for MoreUnsupportedRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()]],
@@ -825,7 +918,13 @@ impl QueryRunner for MoreUnsupportedRunner {
 }
 
 impl QueryRunner for LocatedFailureRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         if sql.contains("wheree") {
             return Err(format!(
                 "[DB_QUERY] Query failed: no such column: wheree (SQL: {sql})"
@@ -852,7 +951,11 @@ fn run_statement(
 ) {
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.execute(execution::ExecTarget::Statement(sql.to_string()), placement, cx)
+            panel.execute(
+                execution::ExecTarget::Statement(sql.to_string()),
+                placement,
+                cx,
+            )
         })
     });
     wait_for_all_pending(cx, panel);
@@ -871,7 +974,10 @@ fn wait_for_all_pending(cx: &mut VisualTestContext, panel: &Entity<EditorHostPan
         if done {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "批量结果迟迟没全部回来");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "批量结果迟迟没全部回来"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
@@ -891,10 +997,7 @@ fn grid_rows(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) -> usi
 }
 
 /// 结果集标签（文案 + 是否失败）
-fn result_tabs(
-    cx: &mut VisualTestContext,
-    panel: &Entity<EditorHostPanel>,
-) -> Vec<(String, bool)> {
+fn result_tabs(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) -> Vec<(String, bool)> {
     cx.update(|_window, cx| panel.read(cx).result_tabs_for_test())
 }
 
@@ -972,10 +1075,7 @@ select boom;",
             .map(|text| text.to_string())
     });
     // 【B15】工具栏左段最后跟来源摘要（血缘）：普通执行就是「原查询」
-    assert_eq!(
-        summary.as_deref(),
-        Some("行数 2 · 耗时 5 ms · 原查询")
-    );
+    assert_eq!(summary.as_deref(), Some("行数 2 · 耗时 5 ms · 原查询"));
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         2,
@@ -1094,11 +1194,7 @@ fn a_batch_lands_three_statements_in_three_result_sets(cx: &mut TestAppContext) 
         ],
         "每句一个结果集，中间那句失败要标出来"
     );
-    assert_eq!(
-        shared.results().set_count(&id),
-        3,
-        "三份结果都在权威存储里"
-    );
+    assert_eq!(shared.results().set_count(&id), 3, "三份结果都在权威存储里");
     // 失败不中断：第三句真的跑了（否则它不会有自己的结果集）
     assert_eq!(grid_rows(cx, &panel), 1, "默认选中第一份");
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1123,9 +1219,7 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     // 第一次：普通执行（替换语义）
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx)));
     wait_for_result(cx, &panel);
     assert_eq!(grid_rows(cx, &panel), 2);
     assert_eq!(result_tabs(cx, &panel).len(), 1);
@@ -1143,11 +1237,7 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     wait_for_all_pending(cx, &panel);
 
     assert_eq!(shared.results().set_count(&id), 2, "新的一份追加在后面");
-    assert_eq!(
-        result_tabs(cx, &panel).len(),
-        2,
-        "两份结果 → 标签条该出现"
-    );
+    assert_eq!(result_tabs(cx, &panel).len(), 2, "两份结果 → 标签条该出现");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
         0,
@@ -1186,8 +1276,15 @@ struct BlockingRunner {
 }
 
 impl QueryRunner for BlockingRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
-        self.started.store(true, std::sync::atomic::Ordering::SeqCst);
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        self.started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
             assert!(std::time::Instant::now() < deadline, "假执行器没等到中断");
@@ -1249,9 +1346,13 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
             )
         })
     });
-    assert_eq!(cx.update(|_window, cx| panel.read(cx).pending_for_test()), 1);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).pending_for_test()),
+        1
+    );
     assert!(
-        cx.update(|_window, cx| panel.read(cx).elapsed_for_test()).is_some(),
+        cx.update(|_window, cx| panel.read(cx).elapsed_for_test())
+            .is_some(),
         "执行中就该有耗时（状态栏的“执行中 3.4s…”靠它）"
     );
     // 执行中画一帧：状态栏那个 ■ 中断 按钮真的渲染（布局/借用问题会在这里暴露）
@@ -1286,7 +1387,8 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
         .expect("中断要有错误卡片");
     assert!(card.message.contains("cancel"), "{}", card.message);
     assert!(
-        cx.update(|_window, cx| panel.read(cx).elapsed_for_test()).is_none(),
+        cx.update(|_window, cx| panel.read(cx).elapsed_for_test())
+            .is_none(),
         "跑完就不再计时"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1334,8 +1436,7 @@ impl QueryRunner for TxRunner {
         self.options.lock().expect("锁").push(options);
         if options.use_transaction {
             // 模拟引擎：自动提交关掉时，执行会先开一个事务
-            self.open
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.open.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(QueryData {
             columns: vec!["n".to_string()],
@@ -1414,7 +1515,10 @@ fn wait_for_tx_idle(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>)
         if done {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "事务动作的回执迟迟没回来");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "事务动作的回执迟迟没回来"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
@@ -1442,9 +1546,7 @@ fn toggling_autocommit_puts_the_next_execution_in_a_transaction(cx: &mut TestApp
         "点一下就关掉"
     );
 
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx)));
     wait_for_all_pending(cx, &panel);
 
     assert_eq!(
@@ -1926,12 +2028,7 @@ fn confirmed_switch_recomputes_the_plan_with_the_chosen_granularity(cx: &mut Tes
     let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.confirm_mode_switch(
-                EditorMode::Analysis,
-                CellGranularity::Single,
-                window,
-                cx,
-            )
+            panel.confirm_mode_switch(EditorMode::Analysis, CellGranularity::Single, window, cx)
         });
     });
 
@@ -1985,7 +2082,13 @@ fn closing_a_dirty_document_asks_before_touching_anything(cx: &mut TestAppContex
     let (area, panel) = (area.clone(), panel.clone());
     cx.update(|window, cx| {
         window.close_dialog(cx);
-        resolve_close_choice(&area, panel.clone(), crate::view::dialogs::CloseChoice::Cancel, window, cx);
+        resolve_close_choice(
+            &area,
+            panel.clone(),
+            crate::view::dialogs::CloseChoice::Cancel,
+            window,
+            cx,
+        );
     });
     assert!(shared.service().find(&id).is_some(), "取消后文档还在");
     assert!(!cx.update(|_window, cx| panel.read(cx).is_closed()));
@@ -2252,7 +2355,9 @@ fn option(id: &str, short: &str, name: &str) -> ConnectionOption {
 fn binding_a_connection_shows_up_in_the_status_bar(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\bound.sql", "select 1;");
-    let port = Rc::new(FakeConnections::new(vec![option("P_orders", "P", "orders")]));
+    let port = Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )]));
     shared.attach_connections(port);
 
     let (panel, cx) = {
@@ -2314,11 +2419,18 @@ fn a_failed_connection_leaves_the_document_unbound(cx: &mut TestAppContext) {
         });
     });
 
-    assert_eq!(shared.service().connection_for(&id), None, "建连失败不得绑定");
+    assert_eq!(
+        shared.service().connection_for(&id),
+        None,
+        "建连失败不得绑定"
+    );
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     let message = message.expect("失败必须留原因");
     assert!(message.contains("连接不可用"), "{message}");
-    assert!(message.contains("端口不可达"), "原因要原样带上来：{message}");
+    assert!(
+        message.contains("端口不可达"),
+        "原因要原样带上来：{message}"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2329,7 +2441,8 @@ fn a_failed_connection_leaves_the_document_unbound(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_host_can_trigger_a_full_run(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (shared, id, seen, _seen_conn) = shared_with_runner("select 1;\nselect 2;", EditorMode::Sql);
+    let (shared, id, seen, _seen_conn) =
+        shared_with_runner("select 1;\nselect 2;", EditorMode::Sql);
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     // 不按键：宿主直接调公开入口（导航「查看数据」路径就是这一条）
@@ -2345,7 +2458,9 @@ fn the_host_can_trigger_a_full_run(cx: &mut TestAppContext) {
     // 空文档：不打扰执行器（与快捷键路径同一判据）
     let shared_empty = EditorShared::new();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    shared_empty.attach_runner(std::sync::Arc::new(CountingRunner { calls: calls.clone() }));
+    shared_empty.attach_runner(std::sync::Arc::new(CountingRunner {
+        calls: calls.clone(),
+    }));
     let id_empty = shared_empty
         .open(OpenRequest::untitled("-- 只有注释\n", EditorMode::Sql))
         .id()
@@ -2365,7 +2480,13 @@ struct CountingRunner {
 }
 
 impl QueryRunner for CountingRunner {
-    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(QueryData::default())
     }
@@ -2378,9 +2499,7 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
     bind_editor_keys(cx);
     let (shared, id, _seen, seen_connections) = shared_with_runner("select 1;", EditorMode::Sql);
     shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
-        "P_orders",
-        "P",
-        "orders",
+        "P_orders", "P", "orders",
     )])));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
@@ -2632,7 +2751,10 @@ fn formatting_a_selection_leaves_the_rest_untouched(cx: &mut TestAppContext) {
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert!(text.contains("SELECT"), "选中的那句要排版：{text:?}");
     assert!(text.contains("FROM"), "选中的那句要排版：{text:?}");
-    assert!(text.contains("-- 下面是草稿"), "选区外的注释不得被动：{text:?}");
+    assert!(
+        text.contains("-- 下面是草稿"),
+        "选区外的注释不得被动：{text:?}"
+    );
     assert!(
         text.contains("select   c   from   u"),
         "选区外的语句要原样保留：{text:?}"
@@ -2719,7 +2841,9 @@ fn the_toolbar_offers_the_more_menu_only_in_sql_mode(cx: &mut TestAppContext) {
 fn transpiling_rewrites_the_text_and_reports_the_count(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\tr.sql", "SELECT `a` FROM `t`;");
-    let port = Rc::new(FakeConnections::new(vec![option("P_orders", "P", "orders")]));
+    let port = Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )]));
     shared.attach_connections(port);
     let (panel, cx) = open_panel(cx, &shared, &id);
     cx.update(|_window, cx| {
@@ -2853,7 +2977,12 @@ fn the_execution_plan_lands_in_its_own_labelled_result_set(cx: &mut TestAppConte
     });
 
     // 先有一份普通结果（对照：计划不抢它）
-    run_statement(cx, &panel, "select a from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select a from t",
+        execution::ResultPlacement::Replace,
+    );
     wait_for_result(cx, &panel);
     assert_eq!(result_tabs(cx, &panel).len(), 1);
 
@@ -2865,12 +2994,7 @@ fn the_execution_plan_lands_in_its_own_labelled_result_set(cx: &mut TestAppConte
     assert!(message.contains("已提交执行计划"), "{message}");
     wait_for_all_pending(cx, &panel);
 
-    let sql = seen
-        .lock()
-        .expect("锁")
-        .last()
-        .cloned()
-        .unwrap_or_default();
+    let sql = seen.lock().expect("锁").last().cloned().unwrap_or_default();
     assert_eq!(sql, "EXPLAIN select a from t", "MySQL 方言的 EXPLAIN 前缀");
     let tabs = result_tabs(cx, &panel);
     assert_eq!(tabs.len(), 2, "计划该落成一份新结果集：{tabs:?}");
@@ -2900,12 +3024,7 @@ fn the_plan_prefix_follows_the_connection_dialect(cx: &mut TestAppContext) {
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.explain_current(cx)));
     wait_for_all_pending(cx, &panel);
 
-    let sql = seen
-        .lock()
-        .expect("锁")
-        .last()
-        .cloned()
-        .unwrap_or_default();
+    let sql = seen.lock().expect("锁").last().cloned().unwrap_or_default();
     assert_eq!(sql, "EXPLAIN QUERY PLAN select 1", "SQLite 的计划树");
 }
 
@@ -2960,9 +3079,7 @@ fn copying_the_active_result_puts_tsv_on_the_clipboard(cx: &mut TestAppContext) 
     );
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_active_result(cx)));
-    let text = cx.update(|_window, app| {
-        app.read_from_clipboard().and_then(|item| item.text())
-    });
+    let text = cx.update(|_window, app| app.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(
         text.as_deref(),
         Some("n\tnote\n1\ta"),
@@ -3050,9 +3167,24 @@ fn refreshing_reruns_the_selected_result_in_place(cx: &mut TestAppContext) {
     let (shared, id, seen, _) = shared_with_runner("select 1;", EditorMode::Sql);
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select first", execution::ResultPlacement::Replace);
-    run_statement(cx, &panel, "select second", execution::ResultPlacement::NewSet);
-    run_statement(cx, &panel, "select third", execution::ResultPlacement::NewSet);
+    run_statement(
+        cx,
+        &panel,
+        "select first",
+        execution::ResultPlacement::Replace,
+    );
+    run_statement(
+        cx,
+        &panel,
+        "select second",
+        execution::ResultPlacement::NewSet,
+    );
+    run_statement(
+        cx,
+        &panel,
+        "select third",
+        execution::ResultPlacement::NewSet,
+    );
     assert_eq!(shared.results().set_count(&id), 3);
 
     // 用户切到最后一份，刷新它
@@ -3063,7 +3195,12 @@ fn refreshing_reruns_the_selected_result_in_place(cx: &mut TestAppContext) {
     let sqls = seen.lock().expect("锁").clone();
     assert_eq!(
         sqls,
-        ["select first", "select second", "select third", "select third"],
+        [
+            "select first",
+            "select second",
+            "select third",
+            "select third"
+        ],
         "刷新重跑的是选中那份的 SQL"
     );
     assert_eq!(
@@ -3108,7 +3245,12 @@ fn truncation_is_reported_as_a_warning(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_toolbar_runner("select truncated;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select truncated", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select truncated",
+        execution::ResultPlacement::Replace,
+    );
 
     let toolbar = cx
         .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
@@ -3138,7 +3280,12 @@ fn the_result_grid_rows_are_compact(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_sized_runner("select rows=3;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     // 默认测试窗口小，分栏下半区可能只放得下一行：先把窗口开高一点，量两行的间距
     cx.simulate_resize(gpui_kit::Size {
         width: gpui_kit::px(900.),
@@ -3312,9 +3459,7 @@ fn a_locatable_failure_marks_the_word_and_moves_the_caret(cx: &mut TestAppContex
     // 光标跳过去这一步：真机上回填发生在**后台轮询**（没有窗口）里，走的是面板存下的窗口句柄；
     // headless 里那条路会撞上“不能在窗口更新里再更新窗口”（`update_window` 直接返回 Err），
     // 所以这里直接驱动落地入口——与“对话框按钮的真点击”同一口径（架构 §12 #29）。
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx))
-    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx)));
     // 文档：`select 1;\n`（10 字节）+ `select * from t `（16 字节）→ 出错词在第 2 行第 17 列
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
@@ -3331,10 +3476,13 @@ fn an_unlocatable_failure_leaves_the_caret_alone(cx: &mut TestAppContext) {
     let (shared, id, _seen, _connections) = shared_with_runner("select boom;", EditorMode::Sql);
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_caret_for_test(0, cx))
-    });
-    run_statement(cx, &panel, "select boom", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_caret_for_test(0, cx)));
+    run_statement(
+        cx,
+        &panel,
+        "select boom",
+        execution::ResultPlacement::Replace,
+    );
 
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
@@ -3350,7 +3498,10 @@ fn an_unlocatable_failure_leaves_the_caret_alone(cx: &mut TestAppContext) {
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("失败要有提示");
     assert!(message.contains("boom"), "{message}");
-    assert!(!message.contains("第 "), "没有位置就别编一个出来：{message}");
+    assert!(
+        !message.contains("第 "),
+        "没有位置就别编一个出来：{message}"
+    );
 }
 
 /// 下一次成功要把旧的诊断清掉（不留“已经修好了还红着”的假象）
@@ -3434,9 +3585,7 @@ fn the_status_row_reports_the_selected_row(cx: &mut TestAppContext) {
         .expect("有网格就有状态行");
     assert_eq!(status.selected_row, None, "刚跑完没选中任何行");
 
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.select_grid_row_for_test(0, cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_grid_row_for_test(0, cx)));
     let status = cx
         .update(|_window, cx| panel.read(cx).result_status_for_test())
         .expect("有网格就有状态行");
@@ -3488,9 +3637,7 @@ fn the_error_card_offers_a_working_locate_button(cx: &mut TestAppContext) {
     );
 
     // 按钮按下去（headless 里直接驱动落地入口）：光标落到出错词上
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx))
-    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx)));
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
         16..22,
@@ -3525,9 +3672,7 @@ fn the_error_card_can_copy_the_driver_message(cx: &mut TestAppContext) {
     );
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_error_message(cx)));
-    let text = cx.update(|_window, app| {
-        app.read_from_clipboard().and_then(|item| item.text())
-    });
+    let text = cx.update(|_window, app| app.read_from_clipboard().and_then(|item| item.text()));
     let text = text.expect("剪贴板里要有东西");
     assert!(text.contains("no such column: wheree"), "{text}");
     assert!(text.contains("第 1 行 第 17 列"), "位置一起复制走：{text}");
@@ -3542,7 +3687,12 @@ fn fetching_the_next_segment_appends_to_the_same_result(cx: &mut TestAppContext)
     let (shared, id, asked) = shared_with_segment_runner("select n from t;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         2,
@@ -3575,11 +3725,7 @@ fn fetching_the_next_segment_appends_to_the_same_result(cx: &mut TestAppContext)
         4,
         "两段接起来"
     );
-    assert_eq!(
-        shared.results().set_count(&id),
-        1,
-        "取下一段不新开结果集"
-    );
+    assert_eq!(shared.results().set_count(&id), 1, "取下一段不新开结果集");
     let status = cx
         .update(|_window, cx| panel.read(cx).result_status_for_test())
         .expect("还有状态行");
@@ -3606,7 +3752,10 @@ fn fetching_a_segment_without_support_says_so(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
-    assert!(dialog_button_rendered(cx, "editor-result-more"), "有下一段就摆按钮");
+    assert!(
+        dialog_button_rendered(cx, "editor-result-more"),
+        "有下一段就摆按钮"
+    );
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
     wait_for_all_pending(cx, &panel);
@@ -3629,12 +3778,15 @@ fn scrolling_to_the_bottom_fetches_the_next_segment(cx: &mut TestAppContext) {
     let (shared, id, asked) = shared_with_segment_runner("select n from t");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
     let wants = |cx: &mut VisualTestContext| {
-        cx.update(|_window, cx| {
-            grid.update(cx, |state, _cx| state.delegate_mut().wants_more())
-        })
+        cx.update(|_window, cx| grid.update(cx, |state, _cx| state.delegate_mut().wants_more()))
     };
     assert!(wants(cx), "首段拿满 + 有下一段 → delegate 允许取更多");
 
@@ -3676,7 +3828,12 @@ fn rendering_a_short_result_asks_for_more_by_itself(cx: &mut TestAppContext) {
     let (shared, id, asked) = shared_with_segment_runner("select n from t");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     for _ in 0..3 {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
@@ -3704,13 +3861,16 @@ fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
     let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
 
     let wants = |cx: &mut VisualTestContext| {
-        cx.update(|_window, cx| {
-            grid.update(cx, |state, _cx| state.delegate_mut().wants_more())
-        })
+        cx.update(|_window, cx| grid.update(cx, |state, _cx| state.delegate_mut().wants_more()))
     };
     assert!(!wants(cx), "还没执行过：没有下一段可言");
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     wait_for_all_pending(cx, &panel);
     // 取完两段（首段 2 行 + 取回 2 行）后到底
     cx.update(|window, cx| {
@@ -3732,7 +3892,12 @@ fn filtering_hides_non_matching_rows_and_reports_it(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_sized_runner("select rows=3");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     assert_eq!(grid_rows(cx, &panel), 3, "三行都看得见");
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("1", cx)));
@@ -3746,7 +3911,10 @@ fn filtering_hides_non_matching_rows_and_reports_it(cx: &mut TestAppContext) {
         "工具栏要明示“已筛选 1 / 3 行”"
     );
     assert!(
-        toolbar.segments().iter().any(|segment| segment == "已筛选 1 / 3 行"),
+        toolbar
+            .segments()
+            .iter()
+            .any(|segment| segment == "已筛选 1 / 3 行"),
         "统计跟随筛选：{:?}",
         toolbar.segments()
     );
@@ -3770,7 +3938,12 @@ fn filtering_waits_for_the_debounce(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_sized_runner("select rows=3");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| panel.on_filter_input("1".to_string(), cx))
     });
@@ -3793,10 +3966,17 @@ fn export_follows_the_filter(cx: &mut TestAppContext) {
     attach_export_picker(&shared, Some(path.clone()));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("1", cx)));
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Csv, cx)
+        });
     });
 
     let text = std::fs::read_to_string(&path).expect("要真的写出来");
@@ -3804,7 +3984,10 @@ fn export_follows_the_filter(cx: &mut TestAppContext) {
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("导出回执");
-    assert!(message.contains("已筛选"), "回执要说明是筛选后的结果：{message}");
+    assert!(
+        message.contains("已筛选"),
+        "回执要说明是筛选后的结果：{message}"
+    );
     std::fs::remove_file(&path).ok();
 }
 
@@ -3914,7 +4097,10 @@ fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
 
     let seen = seen.lock().expect("锁").clone();
     assert_eq!(seen.len(), 1, "打开开关且已有筛选词 → 立刻下发一次");
-    assert_eq!(seen[0].0, "select 1", "下发用的是原 SQL（改写是执行器的事）");
+    assert_eq!(
+        seen[0].0, "select 1",
+        "下发用的是原 SQL（改写是执行器的事）"
+    );
     assert_eq!(seen[0].1, "orders", "筛选词原样过去");
     assert_eq!(
         seen[0].2,
@@ -3992,9 +4178,7 @@ fn sorting_down_re_runs_on_the_source(cx: &mut TestAppContext) {
         "面板要把「排序下发」的钩子接上（右键菜单才有这两项）"
     );
 
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.sort_down("name", true, cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.sort_down("name", true, cx)));
     wait_for_all_pending(cx, &panel);
 
     assert_eq!(
@@ -4045,16 +4229,19 @@ fn filtering_by_value_from_the_menu_works(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_sized_runner("select rows=3");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
     assert!(
         cx.update(|_window, cx| grid.read(cx).delegate().has_filter_value_hook()),
         "面板要把「按值筛选」的钩子接上（右键菜单才有这一项）"
     );
 
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.apply_filter_value("1", cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.apply_filter_value("1", cx)));
     assert_eq!(grid_rows(cx, &panel), 1, "按值筛出那一行");
     let toolbar = cx
         .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
@@ -4099,10 +4286,7 @@ fn insight_column_hook_follows_the_host_port_and_the_result(cx: &mut TestAppCont
         cx.update(|_window, cx| grid.read(cx).delegate().has_insight_column_hook()),
         "宿主接了端口就要装钩子"
     );
-    let entry = shared
-        .results_active(&id)
-        .expect("应有当前结果")
-        .clone();
+    let entry = shared.results_active(&id).expect("应有当前结果").clone();
     assert!(
         entry.connection.is_none(),
         "这个假执行器不会绑定连接——用它验“跟随活动连接”那一档"
@@ -4124,11 +4308,14 @@ fn freezing_a_column_pins_it_left(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_sized_runner("select rows=3");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
     let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
-    let before = cx.update(|_window, cx| {
-        grid.read(cx).delegate().column(1, cx).fixed
-    });
+    let before = cx.update(|_window, cx| grid.read(cx).delegate().column(1, cx).fixed);
     assert_eq!(before, None, "数据列默认不钉");
 
     cx.update(|_window, cx| {
@@ -4141,9 +4328,7 @@ fn freezing_a_column_pins_it_left(cx: &mut TestAppContext) {
         cx.update(|_window, cx| grid.read(cx).delegate().is_frozen(0)),
         "冻结状态在 delegate 里"
     );
-    let pinned = cx.update(|_window, cx| {
-        grid.read(cx).delegate().column(1, cx).fixed
-    });
+    let pinned = cx.update(|_window, cx| grid.read(cx).delegate().column(1, cx).fixed);
     assert_eq!(
         pinned,
         Some(gpui_kit::component::table::ColumnFixed::Left),
@@ -4185,7 +4370,9 @@ fn exporting_the_fetched_rows_writes_the_chosen_file(cx: &mut TestAppContext) {
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Csv, cx)
+        });
     });
 
     let asked = picked.lock().expect("锁").clone();
@@ -4220,7 +4407,9 @@ fn cancelling_the_export_changes_nothing(cx: &mut TestAppContext) {
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Csv, cx)
+        });
     });
 
     assert_eq!(picked.lock().expect("锁").len(), 1, "取消也要先问过路径");
@@ -4238,7 +4427,9 @@ fn exporting_without_a_picker_says_so(cx: &mut TestAppContext) {
 
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Csv, cx)
+        });
     });
 
     let message = cx
@@ -4256,7 +4447,12 @@ fn exporting_everything_fetches_the_rest_first(cx: &mut TestAppContext) {
     let picked = attach_export_picker(&shared, Some(path.clone()));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     // 首段两行且“还有下一段”——这时点「抓全量后导出」
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
@@ -4283,11 +4479,7 @@ fn exporting_everything_fetches_the_rest_first(cx: &mut TestAppContext) {
         "导出的应当是四行（首段 2 + 取回 2）：{text}"
     );
     assert!(text.contains("\"4\""), "最后一段的值也在：{text}");
-    assert_eq!(
-        shared.results().set_count(&id),
-        1,
-        "抓全量不该新开结果集"
-    );
+    assert_eq!(shared.results().set_count(&id), 1, "抓全量不该新开结果集");
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         4,
@@ -4315,7 +4507,12 @@ fn a_failed_segment_cancels_the_export(cx: &mut TestAppContext) {
     attach_export_picker(&shared, Some(path.clone()));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.export_active_result_all(ExportFormat::Csv, cx)
@@ -4342,7 +4539,12 @@ fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
     let (shared, id, _asked) = shared_with_segment_runner("select n from t");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    run_statement(
+        cx,
+        &panel,
+        "select n from t",
+        execution::ResultPlacement::Replace,
+    );
     let status = cx
         .update(|_window, cx| panel.read(cx).result_status_for_test())
         .expect("有网格就有状态行");
@@ -4365,7 +4567,10 @@ fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
             .any(|item| item.action == Some((ExportFormat::Csv, ExportScope::All))),
         "第二组指向“抓全量”：{labels:?}"
     );
-    assert!(dialog_button_rendered(cx, "editor-result-export"), "有网格就摆导出");
+    assert!(
+        dialog_button_rendered(cx, "editor-result-export"),
+        "有网格就摆导出"
+    );
 
     // 抓到底之后：第二组消失（不再摆一个多余的重跑入口）
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
@@ -4450,7 +4655,11 @@ fn the_sources_picker_shows_up_in_the_federated_channel(cx: &mut TestAppContext)
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     // 绑定连接（源清单属于“这个连接上的联邦会话”）
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.bind_connection(Some("P_orders".to_string()), cx)));
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_orders".to_string()), cx)
+        })
+    });
 
     // 「源清单 ▾」只在联邦档出现（源库档没有挂载这回事，不摆按了没用的入口）
     let picker_present = |cx: &mut VisualTestContext| {
@@ -4461,7 +4670,9 @@ fn the_sources_picker_shows_up_in_the_federated_channel(cx: &mut TestAppContext)
 
     // 切到联邦：清单能读出来（两行 + 主源 + 回退说明）
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Federated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Federated, cx)
+        });
     });
     let snapshot = cx
         .update(|_window, cx| panel.read(cx).sources_snapshot())
@@ -4598,7 +4809,9 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
 
     // 切到本地加速：文档属性变了（这是“在哪儿跑”的真值）
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Accelerated, cx)
+        });
     });
     assert_eq!(shared.service().channel_for(&id), ExecChannel::Accelerated);
     let message = cx
@@ -4661,7 +4874,9 @@ fn the_document_channel_reaches_the_execution_port(cx: &mut TestAppContext) {
 
     // 切到本地加速之后再执行：同一个文档、不同通道
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Accelerated, cx)
+        });
     });
     run_statement(cx, &panel, "select 2", execution::ResultPlacement::Replace);
     assert_eq!(
@@ -4729,7 +4944,9 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
 
     // 切到加速档：同一个动作现在真的有东西可挂
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Accelerated, cx)
+        });
     });
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.refresh_source(cx)));
     assert_eq!(
@@ -4752,7 +4969,10 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
         if done {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "重新挂载的回执迟迟没回来");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "重新挂载的回执迟迟没回来"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -4773,7 +4993,9 @@ fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppCont
     shared.attach_channels(Rc::new(FakeChannels::open()));
     let (panel, cx) = open_panel(cx, &shared, &id);
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Accelerated, cx)
+        });
     });
 
     let submitted = cx.update(|_window, cx| {
@@ -4894,8 +5116,7 @@ fn completion_is_gated_by_mode_and_falls_back_to_keywords(cx: &mut TestAppContex
         "未接端口 → 没有元数据候选（如实，不假装有）"
     );
 
-    let (text_shared, text_id, _seen, _seen_conn) =
-        shared_with_runner("hello", EditorMode::Text);
+    let (text_shared, text_id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::Text);
     assert!(
         !text_shared.completion_enabled(&text_id),
         "文本模式不与数据库通信，也不该补全"
@@ -4917,7 +5138,9 @@ fn an_unavailable_channel_cannot_be_switched_to(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Federated, cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Federated, cx)
+        });
     });
     assert_eq!(
         shared.service().channel_for(&id),
@@ -5004,7 +5227,9 @@ fn the_session_snapshot_carries_the_channel(cx: &mut TestAppContext) {
     shared2.attach_channels(Rc::new(FakeChannels::open()));
     let (panel2, cx) = open_panel(cx, &shared2, &id2);
     cx.update(|_window, cx| {
-        panel2.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+        panel2.update(cx, |panel, cx| {
+            panel.set_channel(ExecChannel::Accelerated, cx)
+        });
     });
 
     let snapshot = cx
@@ -5170,7 +5395,8 @@ fn ctrl_space_presents_the_completion_menu(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("ctrl-space");
 
-    let (open, query, labels) = cx.update(|_window, cx| panel.read(cx).completion_menu_for_test(cx));
+    let (open, query, labels) =
+        cx.update(|_window, cx| panel.read(cx).completion_menu_for_test(cx));
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(open, "快捷键要真的把候选弹出来（message={message:?}）");
     assert_eq!(query, "ord", "要替换的是光标前那个词");
@@ -5216,15 +5442,14 @@ fn inserting_a_template_writes_it_and_selects_the_placeholder(cx: &mut TestAppCo
     }));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.insert_template(0, window, cx))
-    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.insert_template(0, window, cx)));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert_eq!(text, "SELECT * FROM {table};", "模板内容原样插进光标处");
     let selection = cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx));
     assert_eq!(
-        &text[selection.start..selection.end], "{table}",
+        &text[selection.start..selection.end],
+        "{table}",
         "占位符要被选中（用户接着敲表名就覆写它）"
     );
     let message = cx
@@ -5243,13 +5468,9 @@ fn inserting_a_template_into_a_readonly_document_is_refused(cx: &mut TestAppCont
         templates: vec![snippet("查询所有记录", "SELECT * FROM {table};")],
     }));
     let (panel, cx) = open_panel(cx, &shared, &id);
-    shared.update(|service| {
-        service.set_read_only(&id, crate::model::ReadOnly::editor_only())
-    });
+    shared.update(|service| service.set_read_only(&id, crate::model::ReadOnly::editor_only()));
 
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.insert_template(0, window, cx))
-    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.insert_template(0, window, cx)));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert!(text.is_empty(), "只读文档不该被写进去");
@@ -5276,7 +5497,9 @@ fn exporting_without_a_grid_is_refused(cx: &mut TestAppContext) {
         execution::ResultPlacement::Replace,
     );
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Csv, cx)
+        });
     });
 
     assert!(!path.exists(), "写语句没有可导出的网格");
@@ -5326,10 +5549,7 @@ impl QueryRunner for DuckDbExportRunner {
         })
     }
 
-    fn export_via_duckdb(
-        &self,
-        request: &execution::DuckDbExportRequest,
-    ) -> Result<usize, String> {
+    fn export_via_duckdb(&self, request: &execution::DuckDbExportRequest) -> Result<usize, String> {
         self.seen.lock().expect("锁").push(request.clone());
         Ok(request.rows.len())
     }
@@ -5359,9 +5579,14 @@ fn parquet_export_goes_through_the_runner(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let shared = EditorShared::new();
-    shared.attach_runner(std::sync::Arc::new(DuckDbExportRunner { seen: seen.clone() }));
+    shared.attach_runner(std::sync::Arc::new(DuckDbExportRunner {
+        seen: seen.clone(),
+    }));
     let id = shared
-        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .open(OpenRequest::untitled(
+            "select id, tag from t",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
     let path = export_temp_path("parquet", "parquet");
@@ -5415,9 +5640,14 @@ fn duckdb_export_follows_the_local_filter(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let shared = EditorShared::new();
-    shared.attach_runner(std::sync::Arc::new(DuckDbExportRunner { seen: seen.clone() }));
+    shared.attach_runner(std::sync::Arc::new(DuckDbExportRunner {
+        seen: seen.clone(),
+    }));
     let id = shared
-        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .open(OpenRequest::untitled(
+            "select id, tag from t",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
     let path = export_temp_path("xlsx", "xlsx");
@@ -5429,13 +5659,13 @@ fn duckdb_export_follows_the_local_filter(cx: &mut TestAppContext) {
         "select id, tag from t",
         execution::ResultPlacement::Replace,
     );
-    cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.set_filter_for_test("gamma", cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("gamma", cx)));
     assert_eq!(grid_rows(cx, &panel), 1, "筛选后只剩一行");
 
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Xlsx, cx))
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::Xlsx, cx)
+        })
     });
     wait_for_export(cx, &panel);
 
@@ -5540,7 +5770,10 @@ fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
     let shared = EditorShared::new();
     shared.attach_runner(std::sync::Arc::new(AnalysisRunner { seen: seen.clone() }));
     let id = shared
-        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .open(OpenRequest::untitled(
+            "select id, tag from t",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
     let (panel, cx) = open_panel(cx, &shared, &id);
@@ -5555,10 +5788,7 @@ fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
 
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.run_analysis(
-                "SELECT count(*) AS \"行数\" FROM {table}".to_string(),
-                cx,
-            )
+            panel.run_analysis("SELECT count(*) AS \"行数\" FROM {table}".to_string(), cx)
         })
     });
     wait_for_all_pending(cx, &panel);
@@ -5621,7 +5851,10 @@ fn an_empty_analysis_sql_is_refused_locally(cx: &mut TestAppContext) {
     let shared = EditorShared::new();
     shared.attach_runner(std::sync::Arc::new(AnalysisRunner { seen: seen.clone() }));
     let id = shared
-        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .open(OpenRequest::untitled(
+            "select id, tag from t",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
     let (panel, cx) = open_panel(cx, &shared, &id);
@@ -5657,7 +5890,10 @@ fn the_custom_analysis_dialog_opens_with_a_sql_box(cx: &mut TestAppContext) {
         seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
     let id = shared
-        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .open(OpenRequest::untitled(
+            "select id, tag from t",
+            EditorMode::Sql,
+        ))
         .id()
         .clone();
     let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-analysis");
@@ -5670,9 +5906,7 @@ fn the_custom_analysis_dialog_opens_with_a_sql_box(cx: &mut TestAppContext) {
         execution::ResultPlacement::Replace,
     );
 
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.request_custom_analysis(window, cx))
-    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.request_custom_analysis(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     assert!(

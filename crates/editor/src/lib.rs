@@ -28,6 +28,12 @@
 //!   内核在 `Input` context 里先拿到按键且已注册 listener，外层再绑收不到（架构 §12 #24）
 //! - ✅ `session`：会话端口（光标 / 选区 / 模式落库；A12，宿主注入实现）
 //! - ✅ `limits`：文件档位（>50MB 关重能力 / ≥200MB 不读进内存；A13）· ui_contract 已覆盖本 crate（A15）
+//! - ✅ 折叠（B17）：**候选我们自己算**（`fold.rs` 纯函数：括号组 / `CASE`·`BEGIN`·`IF`·`LOOP` 到
+//!   `END` / 多行注释与字面量），经公开入口 `apply_highlighter_fold_candidates` 喂给内核
+//!   ——内核的候选只从 highlighter 来，我们走语义 token 不注册 grammar，所以产物与刷新
+//!   两者都由本模块负责（`view/fold.rs`：打开时喂一次 + 每次文本变更后重喂，`cx.defer` 挪出更新栈）；
+//!   档位关掉时**真关开关**（`set_folding(false)`）。上游的 chevron / 点击折叠 / 开关都是现成的，
+//!   我们不画
 //! - ✅ `view/dialogs` + 关闭三态（A9）：三个对话框（关三态 / 保存失败 / 模式切换确认）· 落地入口
 //!   `request_close_document` / `resolve_close_choice` / `request_save_as` · 另存为的路径选择是
 //!   **注入端口**（`shared.attach_save_path_picker`，宿主用 `rfd` 实现——本 crate 不依赖 `rfd`）
@@ -68,11 +74,11 @@
 //! - ✅ 项目只读对执行的拦截（旧路径在 B12 遗失，已补回）：宿主注入 `ProjectPort`
 //!   （项目锁），写源库对象的语句在**提交前**被拒、原因可读；读语句照跑，判据与通道闸同一份
 //!   （`channel::writes_source_object`）
-//! - 🟡 B9 补全（切片一）：`completion.rs` 纯函数（上下文判定 + 候选挑排）+ 内建
+//! - 🟡 B9 补全（切片一 + 切片二）：`completion.rs` 纯函数（上下文判定 + 候选挑排）+ 内建
 //!   `CompletionProvider` 适配（**只给 `label`**，否则内核会“光标处插入”而不是替换已敲的词）；
 //!   候选来自宿主端口（`workbench` 侧读导航缓存，后台预载 + 内存读，按通道给限定名）；
-//!   触发 = 打字；⬜ 余：`Ctrl+Space` 手动触发（内核有 `present_completion_items`，未接）、
-//!   模板片段、实时内省回填
+//!   触发 = 打字 + `Ctrl+Space` 手动 + 模板片段（`view/host.rs`，候选与手动触发同一份）；
+//!   ⬜ 余：缓存未命中时回落实时内省
 //! - ⬜ 1b 待做：B15 DuckDB 分析入口 · 结果区分栏可拖拽（B5）·
 //!   标签的血缘摘要（B5 余项，通道徽标已有）· 导出 Parquet / XLSX（B7 切片二，待 DuckDB 扩展）
 //!   · 绑定随会话持久化（B1 余项）· 值预览弹层（B14 余项）
@@ -92,6 +98,7 @@ pub mod diagnostics;
 pub mod edit;
 pub mod execution;
 pub mod export;
+pub mod fold;
 pub mod format;
 pub mod history;
 pub mod limits;

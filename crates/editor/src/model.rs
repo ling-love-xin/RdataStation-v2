@@ -179,6 +179,8 @@ pub struct Capabilities {
     pub language: LanguageService,
     /// 是否启用补全（大文件档位下会被运行时降级）
     pub completion: bool,
+    /// 是否启用折叠（大文件档位下会被运行时降级；候选由我们自己算，见 `fold` 模块）
+    pub folding: bool,
     /// 是否允许执行（文本模式恒为 false）
     pub execute: bool,
     pub output: OutputTarget,
@@ -197,6 +199,8 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::None,
                 completion: false,
+                // 折叠是缓冲区的编辑能力（与语言服务无关）：记事本也该能折括号块
+                folding: true,
                 execute: false,
                 output: OutputTarget::None,
                 channel: false,
@@ -207,6 +211,7 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::Sql,
                 completion: true,
+                folding: true,
                 execute: true,
                 output: OutputTarget::DockPanel,
                 channel: true,
@@ -217,6 +222,8 @@ impl Capabilities {
                 kind: DocumentKind::NoteBook,
                 language: LanguageService::PerCell,
                 completion: true,
+                // 笔记的折叠属单元层结构（1c）：整篇笔记先不开
+                folding: false,
                 execute: true,
                 output: OutputTarget::Inline,
                 channel: true,
@@ -258,6 +265,9 @@ mod tests {
         assert!(!caps.channel);
         assert_eq!(caps.output, OutputTarget::None);
         assert_eq!(caps.toolbar, ToolbarStyle::Minimal);
+        // 折叠是编辑能力、不是语言服务：记事本也有（与 `language: None` 不矛盾）
+        assert!(caps.folding);
+        assert_eq!(caps.language, LanguageService::None);
     }
 
     #[test]
@@ -276,6 +286,8 @@ mod tests {
         assert_eq!(caps.language, LanguageService::PerCell);
         assert_eq!(caps.output, OutputTarget::Inline);
         assert_eq!(caps.toolbar, ToolbarStyle::Notebook);
+        // 折叠属单元层（1c）：整篇笔记不开
+        assert!(!caps.folding);
     }
 
     #[test]

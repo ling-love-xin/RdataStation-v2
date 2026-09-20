@@ -756,6 +756,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
       <tr><td><b>转译</b></td><td>10 个目标；<b>先切分再逐条</b>——脚本一条不丢（整篇接口会静默丢第二条，这条缺陷被对照测试钉住）</td></tr>
       <tr><td><b>执行计划</b></td><td>按<b>通道</b>取方言（加速 / 联邦用 DuckDB 的）；落新结果集贴「执行计划」标题；SQL Server / Oracle 如实回绝</td></tr>
       <tr><td><b>查找 / 替换</b></td><td>内核已绑并有 listener，界面由组件库渲染——<b>应用层零自建、不重绑</b></td></tr>
+      <tr><td><b>折叠</b></td><td>折括号组 / <span class="mono">CASE</span>·<span class="mono">BEGIN</span>·<span class="mono">IF</span> 块 / 多行注释与字面量（候选由我们算，与高亮同一份词法）；侧边 chevron 点一下就折（内核原生渲染）；大文件档位关掉开关</td></tr>
     </table>
     <div class="gate" style="margin-top:12px"><b>九条已注册的快捷键</b>（键位在 <span class="mono">crates/app</span>，context <span class="mono">editor</span>）：<span class="mono">Ctrl+S</span> 保存 · <span class="mono">Ctrl+O</span> 打开 · <span class="mono">Ctrl+Shift+S</span> 另存为 · <span class="mono">Ctrl+Enter</span> 执行（选区优先）· <span class="mono">Ctrl+Shift+Enter</span> 执行全部 · <span class="mono">Ctrl+Space</span> 补全 · <span class="mono">Ctrl+/</span> 行注释 · <span class="mono">Ctrl+Shift+F</span> 格式化 · <span class="mono">Ctrl+W</span> 关闭（脏则三态确认）。<span class="no">没有注册的一律不宣传。</span></div>
   </section>
@@ -861,7 +862,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <div class="sec-head"><span class="no">13</span><h3>质量与证据</h3><span class="tag">每个功能都指得出「哪些测试在守它」与「真机上跑通没有」</span></div>
     <table>
       <tr><th>套件</th><th style="width:88px">数量</th><th>守什么</th></tr>
-      <tr><td>编辑器单测（<span class="mono">cargo test -p rds-editor --lib</span>）</td><td><b>377</b></td><td>执行族与落位 · 分段抓取 · 事务 · 中断 · 结果区 · 导出编码 · 分析桥接 · 补全 · 诊断解析 · 会话恢复 · 模式矩阵 · 通道闸</td></tr>
+      <tr><td>编辑器单测（<span class="mono">cargo test -p rds-editor --lib</span>）</td><td><b>400</b></td><td>执行族与落位 · 分段抓取 · 事务 · 中断 · 结果区 · 导出编码 · 分析桥接 · 补全 · 诊断解析 · 折叠候选 · 会话恢复 · 模式矩阵 · 通道闸</td></tr>
       <tr><td>工作台单测（<span class="mono">-p rds-workbench --lib</span>）</td><td><b>106</b></td><td>端口实现：门控真值 · 补全目录组装 · 会话落库 · DuckDB 分析 / 导出的真机级回归</td></tr>
       <tr><td>界面契约（<span class="mono">--test ui_contract</span>）</td><td><b>7</b></td><td>零裸尺寸 / 零裸色值 · 面板模块登记 · 共享字段白名单</td></tr>
       <tr><td>会话真机（真 SQLite）</td><td><b>4</b></td><td>关文档 → 重开：内容 / 光标 / 模式 / 通道 / 连接绑定都回来</td></tr>
@@ -935,7 +936,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <div class="foot">
-    <b>本页是宣传页（数字快照 2026-09-19，五套件当日复跑）</b>——改了实现请顺手核对：377 / 106 / 7 / 4 / 440 与真机探针清单。<br>
+    <b>本页是宣传页（其他数字快照 2026-09-19，五套件当日复跑；编辑器单测 2026-09-21 复跑为 400）</b>——改了实现请顺手核对：400 / 106 / 7 / 4 / 440 与真机探针清单。<br>
     代码地图：模型与纯函数 <span class="mono">crates/editor/src/*.rs</span>（24 个文件）· 视图 <span class="mono">crates/editor/src/view/</span> · 尺寸常量 <span class="mono">crates/editor/src/ui.rs</span> · 色值只存在于主题资产，代码零裸 hex。<br>
     交互稿里那三档模式的示意：<b>文本 / SQL 已实装；分析模式（单元 + 会话 + 内联输出）属 Phase 1c，尚未实装</b>——页面上的标记与这里是同一口径。
   </div>

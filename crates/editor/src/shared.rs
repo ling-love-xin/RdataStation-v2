@@ -18,20 +18,19 @@ use std::sync::Arc;
 
 use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
 use crate::completion::{Catalog, CompletionHandle};
-use crate::sources::SourcesHandle;
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
 use crate::model::DocumentId;
 use crate::project::{ProjectHandle, ProjectState};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
+use crate::sources::SourcesHandle;
 use crate::store::ResultStore;
 
 /// 另存为路径选择端口（由宿主注入：编辑器不依赖 `rfd`）
 ///
 /// 入参 = （当前路径，默认文件名）；返回 = 用户选的路径（`None` = 用户取消，**不是错误**）。
-pub type SavePathPicker =
-    Rc<dyn Fn(Option<PathBuf>, String) -> Option<PathBuf>>;
+pub type SavePathPicker = Rc<dyn Fn(Option<PathBuf>, String) -> Option<PathBuf>>;
 
 /// 导出落盘的路径选择端口（由宿主注入：编辑器不依赖 `rfd`）
 ///
@@ -153,7 +152,10 @@ impl EditorShared {
     }
 
     /// 某文档当前选中的结果集（克隆一份：调用方拿着它做決定，不拖住 `Ref`）
-    pub fn results_active(&self, document: &crate::model::DocumentId) -> Option<crate::store::ResultEntry> {
+    pub fn results_active(
+        &self,
+        document: &crate::model::DocumentId,
+    ) -> Option<crate::store::ResultEntry> {
         self.results.borrow().active(document).cloned()
     }
 
@@ -256,7 +258,10 @@ impl EditorShared {
     pub fn drain_exec(&self) -> Vec<crate::execution::ExecOutcome> {
         let drained = {
             let guard = self.exec.borrow();
-            guard.as_ref().map(|channel| channel.drain()).unwrap_or_default()
+            guard
+                .as_ref()
+                .map(|channel| channel.drain())
+                .unwrap_or_default()
         };
         if !drained.is_empty() {
             let mut receipts = self.receipts.borrow_mut();
@@ -375,9 +380,15 @@ impl EditorShared {
     }
 
     /// 弹一次路径选择（未注入时返回 `None`，调用方必须先看 [`Self::has_save_path_picker`]）
-    pub fn pick_save_path(&self, current: Option<PathBuf>, default_name: String) -> Option<PathBuf> {
+    pub fn pick_save_path(
+        &self,
+        current: Option<PathBuf>,
+        default_name: String,
+    ) -> Option<PathBuf> {
         let guard = self.save_path.borrow();
-        guard.as_ref().and_then(|picker| picker(current, default_name))
+        guard
+            .as_ref()
+            .and_then(|picker| picker(current, default_name))
     }
 
     /// 注入导出路径选择器（**宿主调用一次**：workbench 接 `rfd`）
@@ -398,7 +409,9 @@ impl EditorShared {
     /// 【M8】文档未绑定连接时执行会落到哪条连接上（口径在执行器：绑定优先 → 回退活动连接）
     pub fn active_connection(&self) -> Option<String> {
         let guard = self.exec.borrow();
-        guard.as_ref().and_then(|queue| queue.runner().active_connection())
+        guard
+            .as_ref()
+            .and_then(|queue| queue.runner().active_connection())
     }
 
     /// 是否接了导出路径选择器（未接时导出要明确报原因）
@@ -413,7 +426,9 @@ impl EditorShared {
         default_name: String,
     ) -> Option<PathBuf> {
         let guard = self.export_path.borrow();
-        guard.as_ref().and_then(|picker| picker(format, default_name))
+        guard
+            .as_ref()
+            .and_then(|picker| picker(format, default_name))
     }
 
     /// 注入连接端口（**宿主调用一次**：workbench 接 M3/M4 的连接列表与自动建连）
@@ -429,7 +444,10 @@ impl EditorShared {
     /// 当前可选项快照（**渲染路径可调**：实现必须是内存快照，不做 I/O）
     pub fn connection_options(&self) -> Vec<ConnectionOption> {
         let guard = self.connections.borrow();
-        guard.as_ref().map(|port| port.options()).unwrap_or_default()
+        guard
+            .as_ref()
+            .map(|port| port.options())
+            .unwrap_or_default()
     }
 
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）
@@ -523,7 +541,9 @@ impl EditorShared {
     /// 与 [`Self::completion_catalog`] 同一口径：端口实现必须是**内存读**。
     pub fn completion_templates(&self) -> Vec<crate::completion::TemplateSnippet> {
         let port = self.completion.borrow();
-        port.as_ref().map(|port| port.templates()).unwrap_or_default()
+        port.as_ref()
+            .map(|port| port.templates())
+            .unwrap_or_default()
     }
 
     /// 某文档当前的**候选目录**（**编辑路径可调**：实现必须是内存快照；未绑定连接 = 空目录）
@@ -531,10 +551,7 @@ impl EditorShared {
         let (connection, channel) = {
             let service = self.service.borrow();
             match service.find(document) {
-                Some(doc) => (
-                    doc.connection().map(str::to_string),
-                    doc.channel(),
-                ),
+                Some(doc) => (doc.connection().map(str::to_string), doc.channel()),
                 None => return Catalog::default(),
             }
         };
@@ -553,6 +570,20 @@ impl EditorShared {
         let Some(doc) = service.find(document) else {
             return false;
         };
-        doc.capabilities().completion && doc.read_only().can_edit() && !doc.tier().disables_completion()
+        doc.capabilities().completion
+            && doc.read_only().can_edit()
+            && !doc.tier().disables_completion()
+    }
+
+    /// 折叠开不开：能力表 + 文件档位
+    ///
+    /// 与 [`Self::completion_enabled`] 同形，但**不看编辑器只读**——折叠是「看结构」的能力，
+    /// 只读文档（查看历史快照 / 只读预览）照样能折，把它关掉只会让长脚本更难读。
+    pub fn folding_enabled(&self, document: &DocumentId) -> bool {
+        let service = self.service.borrow();
+        let Some(doc) = service.find(document) else {
+            return false;
+        };
+        doc.capabilities().folding && !doc.tier().disables_folding()
     }
 }
