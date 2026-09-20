@@ -482,6 +482,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | D14 | 树行展开指示用**图标**（`chevron-right/down`，12px），不用 `▸/▾` 字符 | ❌ 字符（与导航侧分叉、且属 `gpui-kit` 选型表里的手搓反例）；「按扩展名给色块」是类型标识通道，不受影响 |
 | D15 | 行选中底取 `list_active`；**悬停只在未选中时生效**（开关 chip 同理） | ❌ `sidebar_accent`（与 `list_active` 主题同值，属侧栏容器角色）/ ❌ 悬停盖选中（`ui-design-spec` §4 已禁止） |
 | D16 | 次级行（分组头 / 外部引用行 / 回收站）定高走 `ROW_HEIGHT_COMPACT`（1.375rem = 22px） | ❌ 裸 `rems(1.375)`（结构尺寸不得写死在视图里）/ ❌ 复用 `NAV_ROW_TREE`（导航域命名，语义不同） |
+| D17 | **视图文件按职责拆子模块**（`scratchpad_view.rs` 4101 行 → 根 296 + 7 子模块；总入口与跨 crate 路径不变） | ❌ 继续单文件（改一处要在一屏里找半天；且本文件**有并发写损坏史**——两个写入者各写各的就交织出不可解析的文件）/ ❌ 改文件名（文档与 skills 里多处路径引用要跟着改） |
 
 ## 9. 降级矩阵
 
@@ -532,7 +533,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 外部引用 | `store.rs::{add/remove/rename/update_external_reference_path, external_reference_status}` |
 | 文件元数据 | `store.rs::{file_meta, bind_connections, update_file_meta}` + `models.rs::{FileMeta, FileMeta::preferred_connection}`（读侧 → 打开预选；写侧 → 绑定与执行回存） |
 | 回收站 | `trash.rs`（manifest 与服务） + `store.rs::{delete_entry, list_trash, restore_from_trash, empty_trash}` |
-| 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（`ScratchpadView`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**） |
+| 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（模块根：`ScratchpadView` 结构与协议 `new` / `render_scratchpad` / `ensure_scratchpad_pump`、状态类型 `ScratchpadViewState`、行输入模型 `ScratchpadRowCtx` / `ScratchpadRowColors`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**）；**2026-09-20 拆分**（见 §8 D17）：`scratchpad_view/{primitives,search,rows,chrome,actions,dnd,tests}.rs`，拆分脚本 `tools/split_scratchpad_view.py`（一次性，已执行） |
 | 行共用原语与行高预算 | `workbench_shell::tree::{active_bar, disclosure_slot, disclosure_icon, indent_spacer, indent_rem, RowHeight, row_sizes}`（2026-09-20 起导航 / 草稿箱共用）；行高预言在 `scratchpad_view.rs::scratchpad_row_height`，尺寸常量在 `workbench_shell/src/ui.rs` |
 | 宿主端口与装配 | `scratchpad/src/host.rs`（trait）+ `workbench/src/components/scratchpad_host.rs`（实现）+ `workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
 | 搜索结果与替换栏 | `scratchpad/src/scratchpad_view.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |

@@ -91,11 +91,66 @@ fn view_layer_has_no_raw_size_literals() {
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
-        ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
-        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
+        (
+            "database/nav_view.rs",
+            include_str!("../../database/src/nav_view.rs"),
+        ),
+        (
+            "panels/resources.rs",
+            include_str!("../src/panels/resources.rs"),
+        ),
         (
             "scratchpad/scratchpad_view.rs",
             include_str!("../../scratchpad/src/scratchpad_view.rs"),
+        ),
+        // 拆分后的子模块（2026-09-20）逐个登记：拆分不得让契约漏扫。
+        (
+            "scratchpad/scratchpad_view/primitives.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/primitives.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/search.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/search.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/rows.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/rows.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/chrome.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/chrome.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/actions.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/actions.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/dnd.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/dnd.rs"),
+        ),
+        (
+            "database/nav_view/primitives.rs",
+            include_str!("../../database/src/nav_view/primitives.rs"),
+        ),
+        (
+            "database/nav_view/rows.rs",
+            include_str!("../../database/src/nav_view/rows.rs"),
+        ),
+        (
+            "database/nav_view/chrome.rs",
+            include_str!("../../database/src/nav_view/chrome.rs"),
+        ),
+        (
+            "database/nav_view/editors.rs",
+            include_str!("../../database/src/nav_view/editors.rs"),
+        ),
+        (
+            "database/nav_view/actions.rs",
+            include_str!("../../database/src/nav_view/actions.rs"),
+        ),
+        (
+            "database/nav_view/dnd.rs",
+            include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
@@ -196,16 +251,68 @@ fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
         ("workbench/view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
-        (
-            "panels/shared.rs",
-            include_str!("../src/panels/shared.rs"),
-        ),
+        ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
-        ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
-        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
+        (
+            "database/nav_view.rs",
+            include_str!("../../database/src/nav_view.rs"),
+        ),
+        (
+            "panels/resources.rs",
+            include_str!("../src/panels/resources.rs"),
+        ),
         (
             "scratchpad/scratchpad_view.rs",
             include_str!("../../scratchpad/src/scratchpad_view.rs"),
+        ),
+        // 拆分后的子模块（2026-09-20）逐个登记：拆分不得让契约漏扫。
+        (
+            "scratchpad/scratchpad_view/primitives.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/primitives.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/search.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/search.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/rows.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/rows.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/chrome.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/chrome.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/actions.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/actions.rs"),
+        ),
+        (
+            "scratchpad/scratchpad_view/dnd.rs",
+            include_str!("../../scratchpad/src/scratchpad_view/dnd.rs"),
+        ),
+        (
+            "database/nav_view/primitives.rs",
+            include_str!("../../database/src/nav_view/primitives.rs"),
+        ),
+        (
+            "database/nav_view/rows.rs",
+            include_str!("../../database/src/nav_view/rows.rs"),
+        ),
+        (
+            "database/nav_view/chrome.rs",
+            include_str!("../../database/src/nav_view/chrome.rs"),
+        ),
+        (
+            "database/nav_view/editors.rs",
+            include_str!("../../database/src/nav_view/editors.rs"),
+        ),
+        (
+            "database/nav_view/actions.rs",
+            include_str!("../../database/src/nav_view/actions.rs"),
+        ),
+        (
+            "database/nav_view/dnd.rs",
+            include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),

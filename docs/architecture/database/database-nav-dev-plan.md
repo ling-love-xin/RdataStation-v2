@@ -56,8 +56,16 @@
 > `scratchpad_row_height`，而 `v_virtual_list` 按给定高度累计 origin、**不实测回写**——估小 26px 会让
 > 紧随其后的行被重叠。判定口径写进了 `ui::SCRATCHPAD_ROW_CHIPS` 的文档注释。
 
-> 未做（有意）：引用行 / 回收站行的 hover 反馈（它们**不是可点行**，行本体无 `on_click`，只有行内动作按钮）；
-> `render_scratchpad` 970 行的拆分（另起一轮，照 `nav_view` 的 V13 拆法）。
+> 未做（有意）：引用行 / 回收站行的 hover 反馈（它们**不是可点行**，行本体无 `on_click`，只有行内动作按钮）。
+
+**第二轮：视图拆分（2026-09-20，已处置）**——4101 行的 `scratchpad_view.rs` 按 `nav_view` 的 V13 同法
+拆成「根 296 + 7 子模块」（`primitives` / `search` / `rows` / `chrome` / `actions` / `dnd` / `tests`）：
+纯位移、**调用点一字未改**（子模块 `use super::*;` + 搬出的项加 `pub(super)` + 根用 glob 收回；
+`pub` 公开面不降级）；脚本在 `tools/split_scratchpad_view.py`（一次性，已执行）。
+动机不只是可读性：本文件有过**并发写损坏**，单文件越大越容易重演；拆完最大的文件是 `actions.rs`（1292 行）。
+配套：`ui_contract` 的尺寸 / 颜色扫描清单补上两侧拆分后的子模块（拆分不得让契约漏扫）。
+仍在（下一轮）：`render_scratchpad` 本身 970 行（外壳里的各段尚未抽成私有方法）；行尾动作按钮
+（18px 宽自绘 `div`，导航同位置是 20px）换 `Button`。
 
 **Phase A 实现位置**
 
