@@ -98,6 +98,7 @@ git push origin main --tags
 | macOS：双击提示「无法验证开发者」 | 未签名未公证 | `xattr -dr com.apple.quarantine RdataStation.app`，或右键 → 打开 |
 | Windows：SmartScreen「Windows 已保护你的电脑」 | 未签名 | 「更多信息 → 仍要运行」；要根治得买证书做签名 |
 | 构建报 `duckdb.h` / `-lduckdb` 找不到 | 取库步骤没跑，或 `.cargo/config.toml` 的 `DUCKDB_LIB_DIR` 指向的版本与 crate 不配对 | 跑 `tools/fetch-duckdb.sh`；版本映射见 `duckdb-linking.md` |
+| Windows 构建报 `LNK1104: cannot open file '...\.rds\tmp\lnk{GUID}.tmp'` | `.cargo/config.toml` 把 `TEMP` 钉在仓库内 `.rds/tmp`，而全新检出里没这个目录（MSVC 链接器不自己建） | `mkdir -p .rds/tmp` 后重试；两个工作流里已有「预建 TEMP 目录」一步。**这是全新克隆就会踩的坑，不只是 CI** |
 | Linux 编译报缺头文件 / `-lxxx` | 少系统包 | 按报错的库名补进 workflow 的 apt 列表（当前清单见 `release.yml`） |
 | 构建被 OOM 杀掉 | 并发链接重型 crate | 保持 `-j 2`；不要为提高速度去掉它 |
 | 手动 Run workflow 之后 Release 页没东西 | 手动触发**不建 Release**（设计如此） | 产物在该次运行的 Artifacts 里；要发布请推标签 |

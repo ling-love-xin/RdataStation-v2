@@ -403,6 +403,7 @@ pushed: see §9 of the same document.
 | **Don't drop `RUST_MIN_STACK`** | Under edition 2024 the view layer's deeply chained builders recurse further during codegen; without it, `cargo check` passes while `cargo build` / `cargo test` crash |
 | The default build excludes `plugin` | `default-members = ["crates/app"]`, and `plugin` is not on the app's dependency graph — a bare `cargo test` won't cover it either |
 | The dev data root is `.rds/` | `RDS_HOME` and `TEMP` are both pinned inside the repository so a `cargo clean` can't wipe `global.db` or the key store; an explicit `RDS_HOME=<path>` on the command line still wins |
+| **Run `mkdir -p .rds/tmp` on a fresh clone** | `TEMP`/`TMP`/`TMPDIR` are pinned to the in-repo `.rds/tmp`, which a fresh clone does not have: on Windows the MSVC linker cannot create its temporary files and the build fails with `LNK1104` (invisible on Linux/macOS). Create it once after cloning; both CI workflows do it automatically |
 | `target/` grows | `tools/target-guard.sh` reports on it (60 GB threshold by default, exit code 1 above it); `tools/target-guard.sh --clean` removes regenerable files |
 | Linux / macOS | Set `LD_LIBRARY_PATH` to `third_party/duckdb/1.5.5` for local development (on Windows, `build.rs` copies the DLL for you); **release archives already bake `$ORIGIN` / `@executable_path` into the RPATH**, so they run straight out of the box |
 

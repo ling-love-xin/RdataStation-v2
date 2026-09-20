@@ -401,6 +401,7 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 | **不要去掉 `RUST_MIN_STACK`** | edition 2024 下视图层深链式 builder 在 codegen 阶段递归更深；缺了它会表现为 `cargo check` 正常但 `cargo build` / `cargo test` 崩溃 |
 | 默认构建不含 `plugin` | `default-members = ["crates/app"]`，`plugin` 不在 app 依赖图上，裸 `cargo test` 也不会覆盖它 |
 | 开发期数据根是 `.rds/` | `RDS_HOME` 与 `TEMP` 都被钉到仓库内，避免一次 `cargo clean` 清掉 `global.db` 与密钥库；命令行显式 `RDS_HOME=<某处>` 仍可覆盖 |
+| **全新检出先 `mkdir -p .rds/tmp`** | `TEMP`/`TMP`/`TMPDIR` 被钉在仓库内 `.rds/tmp`，而新克隆里没这个目录：Windows 上 MSVC 链接器写不了临时文件，构建直接报 `LNK1104`（Linux/macOS 看不出来）。克隆后先建一次；两个 CI 工作流里已自动建 |
 | `target/` 会膨胀 | `tools/target-guard.sh` 体检（默认 60 GB 阈值，超出退出码 1），`tools/target-guard.sh --clean` 清理可再生文件 |
 | Linux / macOS | 本地开发需 `LD_LIBRARY_PATH` 指向 `third_party/duckdb/1.5.5`（Windows 由 `build.rs` 自动拷贝 dll）；**发布包已把 `$ORIGIN` / `@executable_path` 写进 RPATH，解压即用** |
 

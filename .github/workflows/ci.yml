@@ -50,6 +50,13 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      # `.cargo/config.toml` 把 `TEMP`/`TMP`/`TMPDIR` 钉到仓库内 `.rds/tmp`（开发期不往系统盘
+      # 扔垃圾），但**全新检出里这个目录不存在**：MSVC 的 link.exe 写不了 `lnk{GUID}.tmp`，
+      # 构建脚本直接报 LNK1104（Linux 侧因为不链接所以看不出来）。先建出来。
+      - name: 预建 TEMP 目录
+        shell: bash
+        run: mkdir -p .rds/tmp
+
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
         run: bash tools/install-linux-deps.sh

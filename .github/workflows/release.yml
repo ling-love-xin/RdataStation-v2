@@ -67,6 +67,13 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      # `.cargo/config.toml` 把 `TEMP`/`TMP`/`TMPDIR` 钉到仓库内 `.rds/tmp`，而全新检出里没有
+      # 这个目录：MSVC 的 link.exe 写不了 `lnk{GUID}.tmp` → LNK1104（**发版构建要链接**，
+      # 必须建；CI 工作流同样一步，理由见 docs/architecture/release/release-pipeline.md §7）。
+      - name: 预建 TEMP 目录
+        shell: bash
+        run: mkdir -p .rds/tmp
+
       # 系统依赖清单是**一份**（`tools/install-linux-deps.sh`，CI 工作流共用同一份）：
       # gpui 的 Linux 后端要 wayland / xkbcommon / xcb / fontconfig，bindgen 要 libclang，
       # native-tls 要 OpenSSL；缺了会在编译期报找不到头文件或 -lxxx。
