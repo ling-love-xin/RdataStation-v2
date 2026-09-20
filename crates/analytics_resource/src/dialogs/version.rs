@@ -370,7 +370,7 @@ fn header_line(theme: &Theme) -> Div {
 ///
 /// 行本体走组件的 `ListItem`（与面板列表行同源）：hover / 选中 / 键盘都归它，
 /// 不再手搓 `when(selected, bg) + hover(bg)` 那对——那对写反顺序就会变成
-/// 「悬停把选中底盖掉」（V11 口径：悬停不覆盖选中，草稿箱侧同批修过）。
+/// 「悬停把选中底盖掉」（导航侧 V11 口径：悬停不覆盖选中，草稿箱侧同批修过）。
 fn version_line(
     theme: &Theme,
     row: &VersionRow,

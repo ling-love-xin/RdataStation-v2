@@ -21,7 +21,7 @@
 | V5 | 撤销栏「撤销」自绘 `div` → `Button::ghost().xsmall()`（栏高仍 24px：`py_1` → `py_0p5`） | `resource_view.rs::render_undo_bar` | 撤销是**唯一**入口（`Ctrl+Z` 未绑），自绘 div 没有 hover / 焦点 / 键盘；`Button` 自带 `track_focus` + `tab_stop`，Enter/Space 可激活 |
 | V6 | 加载骨架手搓灰条 → 组件 `Skeleton` | `resource_view.rs::render_loading` | 「过程进行中」给现成组件（自带 2s 呼吸、只改透明度、`reduce_motion` 下停在全亮）；只挂**暂态**（首帧取数期间），列表已有行时不摆它 |
 | V7 | 详情面板「复制」（指纹）与 chip 上的 `×` 自绘 div → `Button::ghost().xsmall()` | `detail_view.rs::{render_detail,render_tag_section}` | 可点元素键盘可达 + 命中区 20px 下限；`archive-tag-remove-{id}` / `archive-detail-copy-hash` 仍可用调试选择器 / id 定位；chip 高 20→24px |
-| V8 | 版本历史行 → `list::ListItem`（hover / 选中由组件承担） | `dialogs/version.rs::version_line` | 原先手搓的 `when(selected, bg) + hover(bg)` 那对**悬停会把选中底盖掉**（V11 口径违反，草稿箱侧同批修过）；换组件后由构造保证，列内距 `px_2` 对齐表头 |
+| V8 | 版本历史行 → `list::ListItem`（hover / 选中由组件承担） | `dialogs/version.rs::version_line` | 原先手搓的 `when(selected, bg) + hover(bg)` 那对**悬停会把选中底盖掉**（违反导航侧 V11 的行态口径，草稿箱侧同批修过）；换组件后由构造保证，列内距 `px_2` 对齐表头 |
 | V9 | 标签行自绘 `✓` → 真 `Checkbox`；勾选底 `accent.opacity(0.3)` → `list_active`；悬停不覆盖勾选 | `dialogs/tag.rs`（含新增 `TagDialogState::set_checked`） | 对齐 `dialogs/pick.rs` 既有写法；`✓` 字符既无键盘焦点也没把「勾上 / 未勾」交给 a11y（只剩一个文本节点）；勾选底统一到与面板 / 其它对话框同一个「选中底」角色 |
 | V10 | 回收站行去掉 hover | `dialogs/trash.rs::trash_line` | 这一行本来就不是可点行（动作全在行内两个按钮上），悬停变色是「这里能点」的承诺；与草稿箱「引用行 / 回收站行不做 hover」同口径。原先那层用的是 `accent.opacity(0.3)`（品牌淡底），与行态 token 不是一回事 |
 | V11 | 固定描边统一 `ui::HAIRLINE`（10 处 `px(1.0)`） | crate 内 4 个视图文件 + `ui.rs` 把 `HAIRLINE` 加进重导出 | rds-ui-spec 硬约束（固定描边走 `ui::HAIRLINE`，与 editor / settings 同写法）；零视觉差、无新常量 |

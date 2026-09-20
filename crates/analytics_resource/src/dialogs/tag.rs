@@ -402,7 +402,7 @@ pub fn open_tag_dialog(
                     // 勾选底统一到 `list_active`（与面板 / 其它对话框的"选中底"同一个角色）：
                     // 对话框内不用 `accent.opacity(_)` 这类品牌淡色当状态底。
                     .when(checked, |row| row.bg(theme.colors.list_active))
-                    // 悬停不覆盖勾选（V11 口径）：勾上的行保持勾选底。
+                    // 悬停不覆盖勾选（导航侧 V11 口径）：勾上的行保持勾选底。
                     .when(can_edit && !checked, |row| {
                         row.hover(|s| s.bg(theme.colors.list_hover))
                     })
