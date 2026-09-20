@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义已实现（V1–V10）· 2026-09-14** · 测试基线（2026-09-19 复跑，`-j 2`）：`cargo test -p rds-engine --lib`（449）/ `-p rds-database --lib`（45）/ `-p rds-workbench --lib`（110）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义（V1–V10）、虚拟列表与拆分层 + 结果区并入列表 + 首个动效 + `Esc` 清搜索（V11–V17，2026-09-20）已实现** · 测试基线（2026-09-20 复跑，`-j 2`）：`rds-database` 70 / `rds-scratchpad` 37 / `rds-workbench-shell` 9 / `ui_contract` 7 全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -30,12 +30,61 @@
 | V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `database/src/nav_view.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
 | V9 | 行尾 **`+` = 标签快捷入口** | `database/src/nav_view.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
 | V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `database/src/nav_view.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
+| V11 | **视觉通道与行态统一**（类别=形状 / 颜色=状态；选中条与悬停不互盖；行尾操作改为不可命中；定高行全部截断；图标走资产路径） | `database/src/nav_view.rs::{nav_icon, nav_kind_icon, nav_disclosure, nav_active_bar, nav_row_selected}` + `render_{connection_row,group_header,reference_row,nav_node,more_row,jumped_row,search_hit}` | ✅ 2026-09-20（原型设计 v8 修订点；真机验收待过：见 §2.6 第 1/2/9/15/17 条） |
+| V12 | **面板框与空态**（面板头 36px 统一；面板底状态行「N 已连接 · M 离线 · 元数据更新于 X」；分组头健康度·计数合并；筛空空态给筛选清单 + 清除入口） | `database/src/nav_view.rs::{render_nav_status_bar, nav_filter_summary, nav_relative_time, render_group_header, render_nav_empty_state}` + `NavViewState::last_loaded_at` | ✅ 2026-09-20（原型设计 v9 修订点；真机验收：§2.6 第 1/17/18 条 + 新增一条「筛空 → 清除筛选」） |
+| V13 | **拆分子模块 + 常量去重**（7808 行单文件 → 根 642 + 7 子模块；面板头 / 行高 / 图标 / 分组色条常量改由 `workbench_shell::ui` 单一来源） | `database/src/nav_view.rs` + `nav_view/{primitives,rows,chrome,editors,actions,dnd,tests}.rs`；`analytics_resource/src/ui.rs` 改重导出；`analytics_resource/Cargo.toml` 加 `workbench_shell` 依赖 | ✅ 2026-09-20（纯位移：`rds-database` 65 测试全绿；模块地图见 `database-navigator-architecture.md` §10） |
+| V14 | **行的共用原语抽取**（A：行高预算 `RowHeight` + `row_sizes`；B：`active_bar` / `disclosure_slot` / `disclosure_icon` / `disclosure_glyph` / `indent_spacer` / `indent_rem`） | 新增 `workbench_shell/src/tree.rs`（带 3 个单测）；消费方：`database/src/nav_view/{primitives,rows}.rs`、`scratchpad/src/scratchpad_view.rs`（两侧均已接） | ✅ 2026-09-20（导航 66 / 草稿箱 37 测试全绿；草稿箱侧因并发写损坏先回 HEAD 再重接，见下方「并行写冲突记录」） |
+| V15 | **搜索结果并入虚拟列表**（`NavRow::SearchHit`；命中行进 ↑↓ 漫游、与树行同套悬停 / 选中反馈、同一片滚动区；`NAV_SEARCH_SECTION_MAX` 与 128px 二段滚动窗退场，只剩列表外一行标题；命中身份带位次以免同层 id / 业务键重复） | `database/src/nav_rows.rs::{search_hit_row_key, search_hit_row_id, NavRow::SearchHit}` + `nav_jobs.rs::SearchHit::key` + `nav_view/rows.rs::{collect_search_rows, render_search_hit, nav_row_height, sync_nav_order}` + `nav_view/chrome.rs::render_search_header`；`workbench_shell/src/ui.rs` 删 `NAV_SEARCH_SECTION_MAX` | ✅ 2026-09-20（原型设计 v11 修订点；新增 2 个测试：身份唯一性 / 命中行进列表与漫游序列；`rds-database` 68 测试全绿） |
+| V16 | **「连接中」徽标脉冲**（仓内首个动效：范式落定 + 实现。只用 gpui-kit 自带的 `Animation::new(d).repeat().with_easing(bounce(ease_in_out))` + `AnimationExt::with_animation`，只改透明度，只挂暂态） | `database/src/nav_view/rows.rs::render_connection_row`（徽标）+ `nav_view/primitives.rs::nav_badge_pulses`（纯函数 + 单测）+ `workbench_shell/src/ui.rs::NAV_BADGE_PULSE_MS`；范式写入 `.agents/skills/gpui-kit-dev` §动效 | ✅ 2026-09-20（原型设计 §2.3 动效口径；`rds-database` 69 测试全绿；真机验收：连接一条真实连接看是否呼吸、非连接中状态是否静止） |
+| V17 | **`Esc` 清空搜索框**（原型 §6.3 的最后一条缺口；只清自由文本、facet 不动，与资产库 `ClearSearch` 同一口径） | `database/src/commands.rs::NavClearSearch` + `nav_view/actions.rs::clear_nav_search` + `nav_view/chrome.rs`（`.on_action`）+ `workbench/src/commands.rs` 重导 + `app/src/main.rs`（`escape` → `database-nav` context） | ✅ 2026-09-20（新增窗口测试 `clear_search_action_clears_only_the_search_box`；`rds-database` 70 测试全绿） |
+
+### 评估未采纳（2026-09-20）：`VisibleRows<T>`（扁平行 + 同序键表）
+
+原计划里的第四项（抽一个「行与键同序」的共用容器，替掉导航的 `rows` + `nav_order` 与草稿箱的二次 flatten）。
+实施 A+B 后重估，**结论：不划算，不采纳**，理由写在这里以免重复提议：
+
+1. **导航的漫游序列不是「行 + 键」**：`nav_order: Vec<NavOrderItem>` 带了过滤器（分组头不可漫游）
+   与额外载荷（`conn_id` / `path` / `property` / `has_children`），通用容器盖不住，存两份反而多一处口径；
+2. **导航的定位查询已经是一行**：`rows.iter().position(|r| r.key() == key)`（`nav_scroll_to_key`），
+   容器能省的只是这行；
+3. **草稿箱的二次 flatten 是借用生命周期问题**（`keys` 要在 `rows` 不借用时用），容器解决不了；
+4. 净效果：新增一层抽象、删不到 40 行、却让两处都多一个跟面板无关的概念。
+
+> 判断依据与当初拒绝「抽通用树组件」同源：**只抽自变量少、语义确定的东西**（A/B 两层），
+> 「行集合怎么来」各面板差异是真实的。
+
+### 并行写冲突记录（2026-09-20，已处置）
+
+`crates/scratchpad/src/scratchpad_view.rs` 在同一时段被两个写入者改写，出现**字节错位交织**：
+`ScratchpadEdit` 枚举区与搜索结果 `unique_files` 区文本互相嵌套，
+`cargo check -p rds-scratchpad` 报 6 个解析错误，`rds-workbench` / `rds-app` 随之编译不过。
+与 HEAD 做 token 多重集对比：**HEAD 独有 331 个 token 缺失**——说明内容确有丢失，不是纯格式化，
+无法靠缝合恢复。
+
+**处置（经确认执行）**：
+
+1. 损坏内容先备一份取证副本：`.rds/tmp/scratchpad_view.rs.corrupted-20260920.bak`（4117 行，gitignored）；
+2. `git checkout HEAD -- crates/scratchpad/src/scratchpad_view.rs` 回到干净版本（丢掉那 266/209 行未提交改动）；
+3. 在干净文件上重做草稿箱侧的共用原语接入（4 处）：`tree::active_bar` · `tree::indent_spacer` ·
+   `tree::disclosure_slot` + `disclosure_glyph`（顺带清掉两处 `chevron` 字符变量）·
+   `scratchpad_row_height` 改返 `tree::RowHeight` + `tree::row_sizes`；
+4. 验证：`rds-scratchpad` 37 测试全绿、`cargo check --workspace --all-targets` 无错、`ui_contract` 7/7。
+
+**教训（写入本仓工作纪律）**：同一文件不要在两个会话里同时写——本仓的视图文件（nav_view / scratchpad_view
+/ resource_view）都很长，两个写入者各自整文件重写就会交织出不可解析的文件；
+若必须并行，请先 `git status` 看一眼该文件是否已被别人改过。
+
+---
 
 > 新增常量：`ui.rs::{NAV_BADGE_SIZE, NAV_SCOPE_COL_SHORT, NAV_SCOPE_COL_TEXT, NAV_ADD_TAG_SIZE}`。
 > 单测：`panels::tests::{type_badge_maps_known_types_and_falls_back, search_facets_parse_tokens_and_free_text, type_short_label_strips_category_suffix}`、`database::model::tests::source_key_roundtrip`、`engine::persistence::connection_org_store::tests::primary_group_is_exclusive_and_falls_back`、`settings::model::tests::{legacy_config_without_navigator_uses_defaults, navigator_filters_roundtrip}`。
 > **驱动目录**：`nav_runtime::driver_catalog()`（同步读全局 `drivers` 表；随组织数据在 `defer_in` 一次性加载）→ `Shared::driver_catalog` 跨面板共享，**render 期零 I/O**。
 > **属性面板**：连接项新增「数据库类型」行（`property_panel::load_properties` 接 `db_type`）、「驱动」行显示目录友好名（`PostgreSQL (Official) · postgres_native`）。
 > **仍待做**：工作线程优先级队列；大 schema 列内联阈值；标签命名规范 `key:value`。
+> V11 常量变更（2026-09-20）：新增 `ui::ICON_SIZE_XS`（0.75rem = 12px，图标阶梯第三档）；`NAV_ADD_TAG_SIZE`（16px）改名并改为 `NAV_ROW_ACTION_SIZE`（1.25rem = 20px，`+` / `✎` 共用）。三处已同步：`ui.rs` / `ui-design-spec.md` §2.1 / `ui_contract.rs`。
+> V13 备注（2026-09-20）：拆分用的一次性脚本在 `tools/split_nav_view.py`（阶段 1：纯函数 / 拖拽类型 / 测试）与 `tools/split_nav_view_impl.py`（阶段 2：`impl NavView` 按方法归属切分），**已执行，勿重复运行**。
+> V15 备注（2026-09-20）：命中行的身份口径（`search:{位次}:{引用}`）是**单一来源**（`nav_rows.rs` 两个纯函数 + `nav_jobs::SearchHit::key`），渲染与漫游都读它——别在 `render_search_hit` 里再拼一份 id。
+> V16 备注（2026-09-20）：这是仓内**第一个动效**，范式写在 skill `gpui-kit-dev` §动效（不手搓 `request_animation_frame`、循环缓动必须首尾同值、循环动画只挂暂态、`div` 不能缩放）。后续要加动效（入场 / 展开 / 值补间）按那份口径走，不要各自发明。
 
 ### 草稿箱侧行态收尾（2026-09-20，已处置）
 
@@ -397,16 +446,17 @@
 | 6 | 拖表 / 视图行 → SQL 编辑器 | 插入**限定名**，幽灵显示短名 | |
 | 7 | 拖连接行 → 另一个分组头 | 归组（该连接在两个组里出现；非主组是引用行 `∈ 主组名`） | |
 | 8 | 拖连接行 → 组内某行之前 | 组内排序；拖分组头 → 分组头：分组排序 | |
-| 9 | 行尾 `+` 打标签 | 行内标签编辑器出现（行**变高**而不是压住下一行），回车保存、重开仍在 | |
+| 9 | 行尾 `+` 打标签 | 行内标签编辑器出现（行**变高**而不是压住下一行），回车保存、重开仍在；**未 hover 时行尾不应该能点到任何东西**（v8：`+`/`✎` 用 `invisible()` 隐藏） | |
 | 10 | 右键「移动到分组…」 | 归组编辑器出现，勾选即时生效 | |
 | 11 | 右键「复制连接（模板）…」 | 复制编辑器出现，回车提交、取消可关 | |
 | 12 | 大表文件夹点「加载更多」 | 拉下一页，余量数字变小，新行接在末尾；**筛选态**下标签含「筛选仅覆盖已加载」 | |
-| 13 | 定位到一个屏外的大表（搜索结果行「定位」/ Quick Open `⌥↵`） | 链路逐层展开、选中目标、**列表自动滚到目标（居中）**；窗顶有「已定位到第 N 条 · 点此回到开头」 | |
-| 14 | 点「点此回到开头」 | 回到首页量行，余量数字恢复 | |
+| 13 | 定位到一个屏外的大表（搜索结果行「定位」/ Quick Open `⌥↵`） | 链路逐层展开、选中目标、**列表自动滚到目标（居中）**；窗顶有「已定位第 N 条（本窗 M）· 回开头」 | |
+| 14 | 点窗顶「回开头」 | 回到首页量行，余量数字恢复 | |
 | 15 | 键盘 `↓` 一直往下 | 选中一路往下，**出屏即自动滚**；能走到引用行 / 「更多」行 | |
 | 16 | 滚轮 / 滚动条拖拽 | 正常滚动；行与行不重叠（钉高估准了）、不因主题字号变化而错位 | |
-| 17 | 切明暗主题 | 行色 / 选中底 / 分组头色正常 | |
+| 17 | 切明暗主题 | 行色 / 选中底 / 分组头色正常；**树内类别靠形状辨认**（明暗两套下都不依赖颜色） | |
 | 18 | 无连接项目启动 | 空态标题 + 说明 + 「新建连接」可点 | |
+| 19 | 项目里有连接，但在搜索框里输入一个不存在的词 | 空态给「没有匹配的数据源」+ **当前筛选清单** + 「清除筛选」；点一下搜索框与 facet 一起清（§V12） | |
 
 > 真发现问题的重点怀疑对象：行高估算（与渲染成对维护，见 §2.5 硬约束）、
 > 拖拽落点（`on_drop` 仍在行上，未被列表接管）、行内编辑器块高（内部滚动而不是被截断）。

@@ -68,7 +68,7 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/database/src/nav_view.rs`（`NavView::{render_nav, render_nav_tree, render_connection_row, render_nav_node}`） |
+| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/database/src/nav_view/`（模块根 `nav_view.rs`；`chrome.rs::{render_nav}` · `rows.rs::{render_group_header, render_connection_row, render_nav_node}` · `editors.rs` 行内编辑器 · 模块地图见 `database-navigator-architecture.md` §10） |
 | 宿主编排（连接清单 / 选中 / 提示 / 偏好 / 对话框） | 端口定义 `crates/database/src/nav_host.rs` + 宿主实现 `crates/workbench/src/components/nav_host.rs` |
 | 属性面板渲染 | `crates/workbench/src/panels/editor.rs::EditorPanel::render_property_panel` + `crates/database/src/property_panel.rs` |
 | 左 / 右 Dock 装配、面板实体持有 | `crates/workbench/src/view.rs` + `crates/workbench/src/panels/mod.rs`（只转发渲染） |

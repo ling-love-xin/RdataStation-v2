@@ -103,7 +103,7 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 | --- | --- | --- |
 | 树节点（schema / 表 / 列） | **后台工作线程**（串行队列 + 结果队列），主线程轮询回填 | `workbench/services/nav_jobs.rs` |
 | 属性面板数据 | 同上（`enqueue_properties` / `drain_props_results`） | 同上 |
-| 分组 / 标签 / 展开态（本地 SQLite 小读） | `cx.defer_in`（本帧之后执行，完成后重绘） | `database/src/nav_view.rs::reload_nav_org` / `ensure_nav_state_loaded` |
+| 分组 / 标签 / 展开态（本地 SQLite 小读） | `cx.defer_in`（本帧之后执行，完成后重绘） | `database/src/nav_view/actions.rs::{reload_nav_org, ensure_nav_state_loaded}` |
 | **驱动目录**（徽标形状 / 驱动显示名） | 与分组数据一起 `defer_in` 一次性加载 → `Shared::driver_catalog` | `nav_runtime::driver_catalog()` |
 
 > 跨线程不传 `Rc` / GPUI `Entity`：后台只回结果，主线程应用。
@@ -182,7 +182,7 @@ connection_tags                -- 连接↔标签 多值（connection_id, tag）
 
 - **无需新增资产**：`AllAssets` 已注册全量 Lucide，按路径引用。
 - 目录外类型 → 回退 `icons/database.svg` + 类型名首 2 字母（空则 `DB`）。
-- 映射函数 `database/src/nav_view.rs::nav_type_badge`（纯函数，带单测）。
+- 映射函数 `database/src/nav_view/primitives.rs::nav_type_badge`（纯函数，带单测）。
   **展示名不在这里（2026-09-19 改）**：类型名 / 分类来自**类型目录**
   （`data_source_types`）——`driver_catalog::DriverMeta` 同一次只读扫描把 `type_name` / `type_category` 一并带出，
   `nav_view::{nav_type_label, nav_type_short_label}` 目录优先、内置表降为兜底；
@@ -285,7 +285,7 @@ flowchart TD
 | 4 | **归属域短码常显为右对齐固定列** | 稳定对齐列比"忽隐忽现"更好扫视；代价是单一域场景下信息冗余（用开关兜底） |
 | 5 | **徽标双通道**（色=状态 / 形=类型） | 颜色给可操作性、形状给身份；代价是类型需形状 + 字母双编码以保证可学性 |
 | 6 | **驱动不进常显行** | 驱动是实现细节，且 `driver id` 是内部 token；代价是需保证属性面板/tooltip 有它的落点 |
-| 7 | 行操作（`+`/`✎`/连接·断开）**hover / 选中才显** | 降低常驻密度；代价是依赖 `group_hover`，且须保证右键 + 键盘可达（已满足） |
+| 7 | 行操作（`+`/`✎`/连接·断开）**hover / 选中才显** | 降低常驻密度；代价是依赖 `group_hover`，且须保证右键 + 键盘可达（已满足）。**实现细化（v11）**：隐藏用 `invisible()`（`Visibility::Hidden` 不绘制也不登记 hitbox），不用 `opacity(0)`——后者看不见但**仍能点到**，鼠标滑到行尾空白就可能误触发。 |
 | 8 | **render 期零 I/O**：后台线程 + `defer_in` | 保证滚动/渲染帧稳定；代价是状态回填有轮询延迟，实现复杂度上升 |
 | 9 | 元数据 / 状态缓存**永不自动删除** | 断开、刷新、删除连接都保留缓存（离线可浏览、重连秒开）；唯一删除路径 = 显式「缓存管理 → 清理」；代价是磁盘需可见可管 |
 | 10 | 预热采用方案 C（仅 catalogs/schemas） | 全量预热成本高、命中率低；折中只预热目录层 |
@@ -332,13 +332,32 @@ flowchart TD
 
 ## 10. 实现位置映射
 
+**模块地图（2026-09-20 拆分）**：导航视图仍以 `crates/database/src/nav_view.rs` 为模块根
+（**路径不变**：`foo.rs` + `foo/` 并存，文档与 skills 里 90 余处路径引用零改动），
+函数按职责散在 7 个子模块；表里写 `nav_view/X.rs` 即指子模块，写 `nav_view.rs` 指根文件：
+
+| 子模块 | 职责 | 行数（2026-09-20 实测，约） |
+| --- | --- | --- |
+| `nav_view.rs` | `NavView` 结构与协议 + 导航锚点（键盘漫游 / 选中判据 / 展开折叠 / 开属性） | 664 |
+| `nav_view/primitives.rs` | 纯函数与视觉原语（徽标映射 / 类别图标 / 展开指示 / 激活条 / 相对时间 / 命中高亮） | 666 |
+| `nav_view/rows.rs` | 可见行扁平化 + 行高 + 七种行的渲染（含搜索结果行） | 2442 |
+| `nav_view/chrome.rs` | 面板外壳（面板头 / 搜索行 / chips / facet 弹层 / 结果区标题行 / 空态 / 底部状态行） | 1055 |
+| `nav_view/editors.rs` | 行内编辑器（归组 / 标签 / 复制为模板）与提交路径 | 427 |
+| `nav_view/actions.rs` | 状态变更（展开 / 刷新 / 定位泵 / 后台回填 / 筛选落库 / 拖拽落点） | 1239 |
+| `nav_view/dnd.rs` | 拖拽载荷、落点与拖拽幽灵 | 85 |
+| `nav_view/tests.rs` | 单测（自根文件整体搬出，逐字未改） | 1548 |
+
+> 拆分前是 7808 行单文件（含测试 1426 行）。**历史文档里的 `nav_view.rs::X` 若在根文件里找不到，
+> 按本表到同名子模块里找**（如 `render_connection_row` → `nav_view/rows.rs`、`nav_type_badge` →
+> `nav_view/primitives.rs`）。文件名不变是刻意选择：改路径等于同步改几十份文档。
+
 | 能力 | 落点 |
 | --- | --- |
-| 面板容器 / 头部 / 筛选 chips | `workbench/src/database/src/nav_view.rs::{render_database_nav, nav_source_chip}` |
-| 树（分组 + 连接 + 对象） | `database/src/nav_view.rs::{render_nav_tree, render_group_header, render_connection_row, render_nav_node}` |
-| 徽标（状态色 + 类型形状） | `database/src/nav_view.rs::{nav_type_badge, NavBadgeStatus, render_connection_row}` |
+| 面板容器 / 头部 / 筛选 chips | `database/src/nav_view/chrome.rs::{render_nav, nav_source_chip}` |
+| 树（分组 + 连接 + 对象） | `database/src/nav_view/rows.rs::{collect_nav_rows, render_group_header, render_connection_row, render_nav_node}` |
+| 徽标（状态色 + 类型形状） | `database/src/nav_view/primitives.rs::{nav_type_badge, NavBadgeStatus}` + `rows.rs::render_connection_row` |
 | 驱动目录缓存 | `workbench/src/services/nav_runtime.rs::driver_catalog` → `DatabaseNavView::driver_catalog` |
-| 行内编辑器（归组 / 标签分离） | `database/src/nav_view.rs::{render_group_editor, render_tag_editor}`（入口：右键「移动到分组…」、行尾 `+`） |
+| 行内编辑器（归组 / 标签分离） | `database/src/nav_view/editors.rs::{render_group_editor, render_tag_editor}`（入口：右键「移动到分组…」、行尾 `+`） |
 | 右键菜单 | `panels/` 的 `ContextMenuExt::context_menu` |
 | 键盘导航 | `workbench/src/commands.rs`（`FocusNavSearch` / `NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties`）+ `app/main.rs` 绑定 |
 | 后台任务（树 / 属性 / 预热 / 预取） | `workbench/src/services/nav_jobs.rs` |
@@ -350,7 +369,7 @@ flowchart TD
 | 导航状态存储 | `workbench/src/services/nav_store.rs` |
 | 缓存管理对话框 | `workbench/src/components/cache_dialog.rs` |
 | UI 偏好（短码 / 属性面板宽度 / 显示标签 / 显示归属域 / facet 筛选） | `settings/src/model.rs::{Navigator, NavigatorFilters}` + `settings/src/lib.rs` |
-| 尺寸常量 | `workbench_shell/src/ui.rs`（`NAV_BADGE_SIZE` / `NAV_SCOPE_COL_SHORT|TEXT` / `NAV_ADD_TAG_SIZE` / `NAV_FOLDER_PAGE_SIZE` …） |
+| 尺寸常量 | `workbench_shell/src/ui.rs`（`NAV_BADGE_SIZE` / `NAV_SCOPE_COL_SHORT|TEXT` / `NAV_ROW_ACTION_SIZE` / `NAV_FOLDER_PAGE_SIZE` …） |
 
 ---
 
@@ -385,6 +404,7 @@ flowchart TD
 | 22 | ✅ | 组内「未排按名称」只在渲染侧 | 已做（2026-09-16）：成员序号加**未手动排序哨兵** `MEMBER_ORDER_UNSET = -1`（迁移 022 按「组内序号全同 = 从未手动排序」归一存量数据）；`list_group_members_detailed` 暴露「已排 / 未排」分区；视图纯函数 `nav_order_members` 把未排段按名称升序。分组之间本就用 `sort_order, name` 排序，无需改。 |
 | 23 | 🟡 | **搜索结果「在树中定位」** | 已接（2026-09-19）：**两个入口**——导航搜索结果行的「定位」与 **Quick Open 命中行的 `⌥↵`**（`QuickOpenLocate` 动作 → `Shared::request_reveal` → 侧栏 render 消费 → `NavView::reveal_ref`）；两者共用 `RevealTarget::from_ref` 一处映射，展开 连接 → catalog → schema → 文件夹（列再多展开一层表）并选中目标；**大 schema 走「位次 → 那一页」**（`MetadataCacheOps::get_object_position` + `nav_jobs::enqueue_locate_page`），窗顶显示「已定位到第 N 条 · 点此回到开头」（定位窗口里不摆「加载更多」，因为那时的行集是一窗不是前缀）。不可定位 / 索引里没有 / 链路报错都**当场一句可读说明**，不悬着。**遗留**：① ~~视觉上的「滚到眼前」仍缺~~ **已解**（2026-09-20 虚拟列表切片）：得回可编程滚动入口后，定位会把它滚进视口（`VirtualListScrollHandle::scroll_to_item`，窗口级验收 `reveal_scrolls_a_row_that_is_out_of_view`）；② 导航结果行的「定位」按钮点击路径未模拟鼠标（窗口测试直接调 `reveal_ref` 与 `⌥↵` 动作）。 |
 | 24 | 🟡 | **导航树虚拟列表（十万行同屏 + 定位最后一跳）** | 已落（2026-09-20）：`NavRow` 扁平静态（`collect_nav_rows` 是顺序唯一权威）+ `gpui-base::v_virtual_list` 只画视口内的行（`843b5e1` / `2f51176`，实施记录见 `database-nav-dev-plan.md` §2.5）。**为什么不是组件库的 `List`**：它的 `render_item` 读不到面板实体（行数据得拷一份进委托）且假定全表行高统一，而 `v_virtual_list` 的 item 闭包拿得到 `&mut Context<Self>`、支持按索引给高度、不抢鼠标事件（拖拽 / 右键菜单 / 行内编辑器原样保留）。**已验**：8 阶段行序契约 · 行被真的画出来（尺寸与次序）· 键盘漫游投影覆盖未被画出的行。**遗留**：① ~~「滚到眼前」未接~~ **已接**（定位与键盘漫游都滚，见 #23）；② 拖拽 / 右键菜单 / 行内编辑器需真机走一遍（S4，**18 条清单见 `database-nav-dev-plan.md` §2.6**；`simulate_click` 全套跑不可靠，不写点击模拟）。 |
+| 25 | ✅ 部分 | **UI 优化五轮（视觉通道 + 面板框 + 结果区并入列表 + 徽标脉冲 + `Esc` 清搜索，V11–V12、V15–V17）** | 已做（2026-09-20，原型设计 v8/v9/v11 修订点）：第一轮——类别改**形状**（颜色只留状态）· 选中行统一加左侧 2px 激活条且悬停不再盖选中 · 「更多 / 已定位 / 引用」补选中反馈（`nav_row_selected` 为唯一判据）· 行尾 `+`/`✎` 改 `invisible()`（不再“看不见但能点”）且命中区擡到 20×20 · 分组头全折叠 10×10 → 24×24 · 六处定高行文案补截断 · 图标全部走资产路径（`🗂＋` emoji 退场）；第二轮——面板头 30px → `PANEL_HEADER_HEIGHT`(36px) 与全 App 对齐 · 补面板底状态行（`N 已连接 · M 离线 · 元数据更新于 X`，时间取最近一次加载成功回填）· 分组头健康度与计数合并（全连只报数）· 筛空空态给「当前筛选清单 + 清除筛选」（同时清搜索框与 facet）；第三轮——**搜索结果行并入虚拟列表**（`NavRow::SearchHit`：进 ↑↓ 漫游、与树行同一套悬停 / 选中反馈、同一片滚动区，`NAV_SEARCH_SECTION_MAX` 与那个 128px 二段滚动窗一起退场，只剩列表外一行标题）；第四轮——**「连接中」徽标脉冲**（仓内首个动效：`Animation::repeat` + `bounce(ease_in_out)`，仅透明度，仅暂态；范式已写入 skill `gpui-kit-dev` §动效）；第五轮——**`Esc` 清空搜索框**（`NavClearSearch`，只清自由文本不动 facet；与资产库 `ClearSearch` 同一口径）。**遗留（按价值排序）**：① 选中 / 搜索词 / 滚动未入 `navigator_state`（§6.4 要求）且展开态写库无防抖；② ~~归属域短码无 tooltip（§2.3）、搜索框无前导放大镜、连接中徽标无脉冲、`Esc` 清搜索~~ **均已补**（2026-09-20，见原型设计 §2 / §2.3 / §6.3）；③ 面板底状态行的「缓存新鲜度」目前是**内存时间**（最近一次加载回填），非缓存文件时间——如需精确缓存年龄，要在 `nav_store`/`cache` 侧记写入时间；④ 三个行内编辑器钉高（标签 56 / 复制 72 / 归组 88）需真机核一次；⑤ 契约测试只扫裸 `px(...)`，`rems(N)` 结构字面量仍能绕过。 |
 
 ---
 

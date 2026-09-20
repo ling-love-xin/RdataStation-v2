@@ -57,7 +57,7 @@
 | 数据源连接行（v7） | `NAV_BADGE_SIZE` | 1.125 | 18 | — |
 | | `NAV_SCOPE_COL_SHORT` | 2.4 | 38 | — |
 | | `NAV_SCOPE_COL_TEXT` | 3.4 | 54 | — |
-| | `NAV_ADD_TAG_SIZE` | 1.0 | 16 | `size_4` |
+| | `NAV_ROW_ACTION_SIZE` | 1.25 | 20 | `size_5` |
 | 导航树行高（虚拟列表） | `NAV_ROW_GROUP` | 1.5 | 24 | `h(rems(…))` |
 | | `NAV_ROW_CONNECTION` | 1.625 | 26 | `h(rems(…))` |
 | | `NAV_ROW_TREE` | 1.375 | 22 | `h(rems(…))` |
@@ -66,7 +66,6 @@
 | | `NAV_EDITOR_COPY` | 4.5 | 72 | `h(rems(…))` |
 | | `NAV_EDITOR_GROUP` | 5.5 | 88 | `h(rems(…))` |
 | 草稿箱行（虚拟列表） | `SCRATCHPAD_ROW_CHIPS` | 1.625 | 26 | `h(rems(…))` |
-| | `NAV_SEARCH_SECTION_MAX` | 8.0 | 128 | `max_h(rems(…))` |
 | 控件 / 图标 | `CONTROL_HEIGHT_SM` | 1.625 | 26 | `rems(1.625)` |
 | | `CONTROL_HEIGHT_MD` | 2.0 | 32 | `h_8` |
 | | `ICON_SIZE_XS` | 0.75 | 12 | `size_3` |
@@ -113,13 +112,23 @@
 | **活动栏** | 宽 `ACTIVITY_BAR_WIDTH`；单项 `ACTIVITY_ITEM_WIDTH`×`ACTIVITY_ITEM_HEIGHT`；图标 `ACTIVITY_ICON_SIZE`；激活条 `ACTIVITY_ACCENT_BAR` | 背景 `secondary`；激活条 / 激活图标 `sidebar_accent_foreground` |
 | **Dock 边栏** | 起步宽左 `LEFT_DOCK_WIDTH` / 右 `RIGHT_DOCK_WIDTH`（`set_dock_size`，用户拖拽可调） | 面板背景 `background`，分隔 `border` |
 | **状态栏** | 高由内容（约 1.5rem）；开关图标 `ICON_SIZE_SM` | 背景 `primary` + 文字 `primary_foreground`；左右各一个「完全隐藏 / 恢复」自绘开关 |
-| **树节点** | 行高 `ROW_HEIGHT`；缩进 = `TREE_BASE_PADDING` + `TREE_INDENT` × depth；激活条 `TREE_ACTIVE_BAR` | 标题 `text_sm`；激活态 `list_active` + `list_active_border` |
+| **树节点** | 行高 `ROW_HEIGHT`（数据源导航树专用值见 §2.1 `NAV_ROW_*`：分组 24 / 连接 26 / 对象 22，字号沿用 `text_xs` 档）；缩进 = `TREE_BASE_PADDING` + `TREE_INDENT` × depth；激活条 `TREE_ACTIVE_BAR` | 标题 `text_sm`（导航树按密度预算取 `text_xs`）；激活态 `list_active` + `list_active_border`；**悬停不得覆盖激活态**（`list_hover` 只在未激活时生效）；类别靠**形状**区分，颜色只承载状态 |
 | **列表行** | 行高 `ROW_HEIGHT` | `list` / `list_hover` / `list_active` |
+| **面板底状态行** | 高 `ROW_HEIGHT`（单行 `text_xs`），水平内距 `px_2p5` | 无底色（面板底）+ `muted_foreground`；上缘 1px `border` 分隔；内容为空时**整行不渲染**（不占高） |
 | **输入框** | 高 `CONTROL_HEIGHT_MD`（紧凑 `CONTROL_HEIGHT_SM`） | 圆角 `theme.radius`；边 `border` / `input_border`；底 `background` |
 | **下拉框** | 同输入框 | 弹层 `popover` + 圆角 `theme.radius` + 内距 `PANEL_PADDING`，最大高 ≈ `ROW_HEIGHT` × 10 |
 | **Tab 标签** | 头高 `PANEL_HEADER_HEIGHT`；内距 `GAP_LG` / `GAP_SM` | 激活 `tab_active` + `tab_active_foreground`；非激活 `tab` + `tab_foreground`；底 `tab_bar` |
 | **图标（微标）** | `ICON_SIZE_SM` / `ICON_SIZE_MD` | 取色由调用点定（文字色 / 语义色）；**通用图标用组件库自带的 Lucide 全量集**，数据库类型图标与品牌标口径见 `db-icons.md` |
 | **Quick Open 弹层** | 宽 `QUICK_OPEN_PANEL_WIDTH`；顶部 `QUICK_OPEN_PANEL_TOP`；最大高 `QUICK_OPEN_PANEL_MAX_HEIGHT` | `popover` + `border` + `shadow_lg` |
+
+### 4.1 动效（2026-09-20 起）
+
+动效只用来**解释变化**，不做常驻装饰——默认不加；只有「过程进行中」这类**暂态**才挂（上游规范：Motion 一节）。
+
+- 一律用 gpui-kit 自带的 `Animation` + `AnimationExt::with_animation`（值补间 / 关键帧走 `gpui_base::motion`；入场退场用 `EffectTransition`）；**不手搓 `request_animation_frame`**（会绕过 `reduce_motion` 兜底）。
+- 循环动效的缓动必须**首尾同值**（`pulsating_between` / `bounce`），否则每圈接缝会跳一下；动画 id 用**业务键**（不是下标），循环动画**只挂暂态**（挂稳态 = 窗口每帧重绘）。
+- 只能改变透明度 / 颜色 / 位移：gpui 的样式没有 transform，`Transformation` 仅服务 SVG（`div` 缩不了）。
+- 已知动效常量：`NAV_BADGE_PULSE_MS`（1.5s，「连接中」徽标呼吸）。细节与坑见 skill `gpui-kit-dev` §动效。
 
 ## 5. 落地方式
 
@@ -135,6 +144,7 @@
 - [ ] 视图里没有裸 `px(N.)`（除 `ui::` 常量与纯装饰的 `HAIRLINE`）
 - [ ] 没有裸 hex / rgb 颜色
 - [ ] 新增尺寸先进 `ui.rs`，再引用
+- [ ] 动效走现成 API（§4.1），循环动效只挂暂态、缓动首尾同值、id 用业务键
 - [ ] 组件高度/内距取自本文档 §4 表格
 - [ ] 明暗两套主题下都核对对比度与可见性
 

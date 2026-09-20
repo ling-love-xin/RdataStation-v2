@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | `panels/mod.rs` | 面板协议与装配（`SidebarPanel` 字段 + `new` + `BasePanel` / `ComponentPanel` / `Render` 分发 + 资源/插件占位） | 253 |
 | `panels/shared.rs` | `Shared`（面板/组件/宿主三方共用状态） + `ProjectActionRequest` | 298 |
-| ~~`panels/nav.rs`~~ → `crates/database/src/nav_view.rs` | M4 数据源导航：类型与纯函数、键盘方法、树渲染、分组/标签/拖拽、连接增删改（**已下沉**，2026-09-16） | 4900+ |
+| ~~`panels/nav.rs`~~ → `crates/database/src/nav_view.rs`（模块根）+ `nav_view/` 7 子模块 | M4 数据源导航：类型与纯函数、键盘方法、树渲染、分组/标签/拖拽、连接增删改（**已下沉** 2026-09-16；**已拆分子模块** 2026-09-20） | 642（根）/ 7918（总） |
 | `panels/scratchpad_panel.rs` | M5 草稿箱：模板/排序/压平、编辑与剪贴板/回收站、行渲染、内容搜索 | 3504 |
 | `panels/editor.rs` | 中央编辑区：SQL 草稿区 + 结果区 + 属性面板宿主 + 连接对话框宿主 | 1252 |
 | `panels/right.rs` | `RightSidebarPanel`（洞察 / Mock / 历史） | 194 |
@@ -86,8 +86,8 @@
 | --- | --- | --- | --- |
 | P1 | **事件路径同步 I/O 阻塞 UI 线程** | 18 处 `block_on`（nav.rs 4 + scratchpad_panel.rs 14，含各自 `Runtime::new`） | `commit_copy_connection` / `share_connection_to_project` / `unshare_connection_from_project` / `delete_connection`；草稿箱 `commit_scratchpad_edit` / `delete_scratchpad_selection` / `undo_scratchpad_delete` / `restore_scratchpad_trash` / `remove_scratchpad_reference` / `apply_scratchpad_relink` / `open_scratchpad_location` |
 | P1 | ~~**render 内同步读盘（真）**~~ ✅ 已修（2026-09-16） | `editor.rs` 连接详情卡：`load_navigator_tree` 改为 `ensure_analysis_tree` 后台加载 + 回填，render 只读缓存（原先选中联邦连接那一帧阻塞） | `panels/editor.rs` |
-| P2 | render 内写状态 + 入队后台任务 | `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`render_property_panel` → `enqueue_properties`；`render_scratchpad` → `request_scratchpad_load` | nav.rs、editor.rs、scratchpad_panel.rs |
-| P3 | 自绘控件（技术债） | `tool_btn` / 树展开字符 / 文本按钮 | nav.rs、scratchpad_panel.rs、editor.rs |
+| P2 | render 内写状态 + 入队后台任务 | `nav_view/rows.rs` 的 `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`render_property_panel` → `enqueue_properties`；`render_scratchpad` → `request_scratchpad_load` | nav_view/rows.rs、editor.rs、scratchpad_panel.rs |
+| P3 | 自绘控件（技术债） | ~~树展开字符~~ ✅ 已换图标（2026-09-20）· ~~文本按钮~~ 多数已换 `Button`；**仍欠**：行尾 `+`/`✎` 与面板头「新建分组」仍是自绘 `div` + `on_click`（已补齐 20/24px 命中区，但仍无焦点态） | nav_view/chrome.rs、rows.rs、editors.rs、scratchpad_panel.rs、editor.rs |
 
 > 订正：`gpui-kit-dev` skill 原「已知反例」将 `ensure_nav_*` / `render_property_panel` / `render_history_placeholder` / `load_scratchpad` 列为"render 内同步读盘"——实测：`ensure_nav_loaded` 只入队（I/O 在工作线程）、`right.rs::render_history_placeholder` 是纯占位、`load_scratchpad` 函数已不存在。**真正的 render 内同步读盘是 `panels/editor.rs` 连接详情卡的 `load_navigator_tree`（上表 P1）**，此前未被记录。
 > 另：`settings::SettingsService::*` 访问器走 `cx.global::<Settings>()`，render 内调用不构成 I/O 违规。

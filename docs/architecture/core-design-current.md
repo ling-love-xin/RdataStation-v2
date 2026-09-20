@@ -183,7 +183,7 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 | 同步状态与进度 | `update_sync_status` / `get_sync_status` | ❌ 零调用（进度今天走 `nav_jobs` 的原子量，不落表） |
 | 元数据搜索 | FTS（`rebuild_fts_schema` / `search_fts`） | ✅ **内容档已接**（2026-09-19）：迁移 011 改存内容 + trigram；写入挂在 `rebuild_schema_index` 同批（schema 级幂等）；消费方 = Quick Open 的 `#` 档（≥ 3 字）。两个旧硬伤已修：旧写侧引用不存在的 `views` 表、旧表 contentless 读不到身份。**仍缺**：源码（定义文本）搜索 |
 | 增量同步（只拉变化） | `incremental_sync` + 快照 + `sync_operations` | ❌ 零调用（有意不补，同上） |
-| **预热 / 邻接预取** | C1 `warm_schemas` / C2 `prefetch_columns` | ✅ **已接线**（`nav_jobs.rs:234,252`、`nav_view.rs:4056`） |
+| **预热 / 邻接预取** | C1 `warm_schemas` / C2 `prefetch_columns` | ✅ **已接线**（`nav_jobs.rs` 的 `enqueue_*`；消费/触发点在 `nav_view/actions.rs::{maybe_prefetch, ensure_warm_poll}`） |
 | 首屏只取当前层 | cache-aside 懒加载 | ✅ 活（schema / 表 / 视图 / 列） |
 
 **结论（2026-09-19 更新）**：意图里“让大库依然快”的几件关键事现已落地——**L1 回填、分块索引 + 导航侧分页消费、内省级别、连接池、计数、搜索两档（名称 + 内容）**；仍故意不补的是 **增量同步与身份指纹键**（尚无消费者），
