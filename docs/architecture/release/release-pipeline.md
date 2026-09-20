@@ -85,7 +85,7 @@ git push origin main --tags
 | 矩阵各 job 各自上传 Assets（`softprops/action-gh-release`） | 免去「先等 Release 建好再传」的编排与竞态（第一次上传建 Release，其余追加） |
 | 缓存只存 registry（`cache-targets: false`） | 本工作区一份 `target/` 数 GB，会挤爆仓库 10 GB 缓存预算，上传比省下的编译时间更贵 |
 | 不做 universal macOS 二进制 | 两份独立产物更简单，用户按芯片选；`lipo` 合并需要同一 runner 上编两遍再合并 |
-| 不在发布流水线里跑测试 | 4 个平台各跑一遍 2000+ 项测试成本翻倍且与产物无关；发布前本机跑 `cargo test-all`（口径见 `module-status.md`） |
+| 不在发布流水线里跑测试 | 4 个平台各跑一遍 2000+ 项测试成本翻倍且与产物无关；测试仍是本机 `cargo test-all`（口径见 `module-status.md`），PR 上的门禁只做编译（见 §9） |
 
 ## 7. 故障排查
 
@@ -108,14 +108,39 @@ git push origin main --tags
 - 代码签名与公证（Windows 证书 / Apple 开发者账号）：**要钱要账号**，与「个人开源项目」现状不符
 - AppImage / deb / rpm / MSI 安装包：当前只发「解压即用」归档
 - macOS universal 二进制、Linux arm64、Windows arm64
-- 独立 CI 工作流（PR 上跑 `cargo check-all` / `clippy-all` / 分模块测试）：与发布解耦，需要时另加
 - 自动分类的 changelog（现在用 GitHub 自动生成的 release notes）
+- **已完成**：`push` / PR 上的编译门禁（见 §9，之前列在「后续可加」里）
 
-## 9. 实现位置映射表
+## 9. 检查工作流（PR 与 main 上的编译门禁）
+
+`.github/workflows/ci.yml`：**在打标签之前**就发现「Windows 能编、Linux 编不过」这类问题，
+而不是等发布流水线红了才知道。发布流水线只负责构建与打包，不重复跑检查。
+
+| 项 | 取值 | 为什么 |
+| --- | --- | --- |
+| 触发 | `pull_request` · `push` 到 `main` · 手动 | PR 上频繁推送，`concurrency` 会把同一分支的旧一轮取消掉 |
+| 矩阵 | `ubuntu-22.04` · `windows-latest` | 两端都要过：Linux 是发布目标之一，Windows 是开发基线 |
+| 跑什么 | `cargo clippy-all -j 2` | 它已包含 `check-all` 的全量类型检查，只多一遍 lint |
+| 缓存 | rust-cache **开** target（key `ci`）+ `third_party/duckdb` 按版本 | 与发布流水线相反：PR 反复跑同一份代码，增量命中收益最大；DuckDB 库按内核版本缓存，免去每次下载 |
+
+**有意不做的三件事**：
+
+| 不做 | 原因 | 想加的话 |
+| --- | --- | --- |
+| 测试 | GPUI 窗口测试要图形栈（Linux runner 无显示服务、Windows runner 只有软件适配器） | 先在 Linux 上加 `mesa-vulkan-drivers` + `xvfb-run`，再按模块分批接；权威口径仍是本机 `cargo test-all`（`module-status.md`） |
+| `cargo fmt --check` | 存量文件有 rustfmt 漂移（本仓约定只格式化本轮 hunk），一刀切会全红 | 只对改动文件格式化：`git diff --name-only origin/$BASE...HEAD -- '*.rs'` 再逐个 `rustfmt --check` |
+| 告警硬门禁 | 存量告警未清零时 `-- -D warnings` 会直接红掉 | 清零后在 clippy 步骤加 `-- -D warnings`（一行） |
+
+Linux 系统依赖只有**一份清单**（`tools/install-linux-deps.sh`），CI 与 Release 两个工作流共用，
+补包只改那一处。
+
+## 10. 实现位置映射表
 
 | 设计决策 | 实现位置 |
 | --- | --- |
 | 标签触发 + 矩阵构建 + 传 Assets | `.github/workflows/release.yml` |
+| PR / main 编译门禁 | `.github/workflows/ci.yml` |
+| Linux 系统依赖（两份工作流共用） | `tools/install-linux-deps.sh` |
 | 打包（可分发目录 / 归档 / 自检 / 校验和） | `tools/package-release.sh` |
 | Windows 归档（无 `zip` 时用 .NET 写正斜杠条目名） | `tools/zip-dir.ps1` |
 | DuckDB 预编译库获取 | `tools/fetch-duckdb.sh`（CI 以 `GH_PROXY=` 直连 GitHub） |

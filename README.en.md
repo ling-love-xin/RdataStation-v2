@@ -391,6 +391,10 @@ git tag v0.1.0 && git push origin v0.1.0
 Each archive ships with a `.sha256` companion. Archive layout (binary + DuckDB shared library +
 `assets/`), platform limitations and troubleshooting: `docs/architecture/release/release-pipeline.md`.
 
+Pull requests and pushes to `main` also run a lightweight compile gate (Linux + Windows run
+`clippy-all`, no tests) so that "it compiles on one OS but not the other" is caught before a tag is
+pushed: see §9 of the same document.
+
 ### Things worth knowing
 
 | Item | Why |

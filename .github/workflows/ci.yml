@@ -1,0 +1,83 @@
+name: CI
+
+# PR 与 main 上的编译门禁：**在打标签之前**发现「Windows 能编、Linux 编不过」这类问题，
+# 别等发布流水线红了才知道（发布流水线只管构建与打包，不重复跑检查）。
+#
+# 跑：cargo clippy-all（= `clippy --workspace --all-targets`，语义上已包含 check-all 的
+#     全量类型检查，只是额外多跑一遍 lint 规则）。
+#
+# 有意不跑（理由见 docs/architecture/release/release-pipeline.md §9）：
+#   - 测试：GPUI 窗口测试要图形栈（Linux runner 无显示服务、Windows runner 只有软件适配
+#     器），2000+ 项的权威口径仍是本机 `cargo test-all`（基线见 module-status.md）
+#   - `cargo fmt --check`：存量文件有 rustfmt 漂移（本仓只格式化本轮 hunk），一刀切会全红
+#   - 告警不设硬门禁：存量告警未清零前 `-- -D warnings` 会直接红掉；清零后再加（一行的事）
+#
+# 手动跑：Actions → CI → Run workflow。
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR 上频繁推送：同一分支的新一轮把上一轮取消掉，不排队等旧的跑完
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  clippy:
+    name: clippy (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+          - name: Windows
+            os: windows-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: bash tools/install-linux-deps.sh
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      # 这里**开** target 缓存（与发布流水线相反）：PR 反复跑同一份代码，增量命中能把
+      # 几十分钟压成几分钟。仓库缓存预算 10 GB，吃紧就把 `cache-targets` 关掉。
+      - name: 缓存 Cargo 依赖与构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci
+
+      # DuckDB 内核是动态链接：`cargo check` 也会跑 engine 的构建脚本，
+      # 库不在位就报错（README「0. 前置」）。按版本号缓存，升级内核时自动换键。
+      - name: 缓存 DuckDB 预编译内核
+        uses: actions/cache@v4
+        with:
+          path: third_party/duckdb
+          key: duckdb-${{ runner.os }}-${{ hashFiles('.cargo/config.toml') }}
+
+      - name: 取 DuckDB 预编译内核
+        shell: bash
+        env:
+          GH_PROXY: "" # runner 能直连 GitHub，不走镜像
+        run: bash tools/fetch-duckdb.sh
+
+      # `-j 2`：与 README / .cargo/config.toml 同口径（重型 crate 并发编译吃满内存）
+      - name: clippy-all（含全量 check）
+        run: cargo clippy-all -j 2

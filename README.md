@@ -390,6 +390,9 @@ git tag v0.1.0 && git push origin v0.1.0
 每个归档另带 `.sha256`。包内结构（可执行文件 + DuckDB 动态库 + `assets/`）、
 平台限制与故障排查见 `docs/architecture/release/release-pipeline.md`。
 
+PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-all`，不跑测试），
+用来在打标签之前把「某一端编不过」挡下来：见同一文档 §9。
+
 ### 需要注意的几件事
 
 | 事项 | 说明 |

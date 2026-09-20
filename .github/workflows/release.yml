@@ -67,18 +67,12 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
+      # 系统依赖清单是**一份**（`tools/install-linux-deps.sh`，CI 工作流共用同一份）：
       # gpui 的 Linux 后端要 wayland / xkbcommon / xcb / fontconfig，bindgen 要 libclang，
       # native-tls 要 OpenSSL；缺了会在编译期报找不到头文件或 -lxxx。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config clang libclang-dev libssl-dev \
-            libfontconfig1-dev libfreetype6-dev \
-            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libxcb1-dev libxcb-randr0-dev libxcb-xkb-dev libxcb-shm0-dev \
-            libx11-dev libx11-xcb-dev libvulkan1 libvulkan-dev
+        run: bash tools/install-linux-deps.sh
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
