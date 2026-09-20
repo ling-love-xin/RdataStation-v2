@@ -127,6 +127,15 @@ impl<'a> IndexRepair<'a> {
             };
             tracked.insert(rel_path);
 
+            // 分析表的本体也在 `resources/` 里，但它的 `content_hash` 是**结构指纹**
+            // （定义 + 列结构，行数不进——见 `analysis.rs` 的裁决）：拿字节 sha256 去比
+            // 只会把**每一行分析表都报成“内容已变”**，把「修复…」入口变成噪声。
+            // 结构探测（DuckDB `DESCRIBE`）属 P4.1 的第二半，接上之前这里
+            // **宁可少报、不可误报**：分析表不参与文件级指纹比对（仍参与本体存在性检查）。
+            if ArchiveKind::from_db_str(&row.kind) != ArchiveKind::File {
+                continue;
+            }
+
             let path = self.payload.resolve(rel_path)?;
             if !path.is_file() {
                 issues.push(IndexIssue::MissingPayload {
@@ -197,6 +206,10 @@ impl<'a> IndexRepair<'a> {
                 alias: None,
                 kind,
                 content_hash,
+                // 补登是文件型修复路径：没有分析配方与规模可填（不编造）。
+                definition_sql: None,
+                row_count: None,
+                column_count: None,
                 file_rel_path: rel_path.to_string(),
                 file_size,
                 binding: ArchiveBinding::default(),
@@ -246,7 +259,7 @@ impl<'a> IndexRepair<'a> {
             .await?;
 
         self.store
-            .update_archive_content(resource_id, &actual_hash, &snapshot_id, actual_size)
+            .update_archive_content(resource_id, &actual_hash, &snapshot_id, actual_size, None)
             .await
     }
 
@@ -307,6 +320,7 @@ mod tests {
             name: "dau_report".to_string(),
             alias: None,
             kind: ArchiveKind::File,
+            analysis: None,
             binding: ArchiveBinding::default(),
             tags: Vec::new(),
             group_id: None,

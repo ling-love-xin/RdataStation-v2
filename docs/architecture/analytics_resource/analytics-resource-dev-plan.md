@@ -8,6 +8,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-20 — Phase 4 第一刀（P4.1 第一半）：`Analysis` 档的指纹口径与登记
+
+> R4 的裁决**已落地**：**指纹 = 定义 + 列结构，行数只作元信息**。本刀做的是**口径与登记**；
+> 采集（DuckDB `read_csv_auto` / `DESCRIBE` 读出列与类型、量行数）是 P4.1 的**第二半**，尚未接。
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V29 | **新增 `analysis.rs`（纯口径）**：`ColumnSpec` / `AnalysisFacts` / `structure_digest`（一行一列 `列名\t类型`，保序、保大小写）/ `fingerprint`（`sha256(定义 ␀ 结构)`）/ `FINGERPRINT_HINT` / `STRUCTURE_CHANGED_NOTE` | `src/analysis.rs`（新） | **行数不进指纹**：分析表的数据会随上游增长，“每多一行就报内容已变”会把真正该看的“结构变了”淹掉；定义与结构进（换算法 / 加列 / 改类型 / 换顺序都得被看见） |
+| V30 | **登记链路接上**：`ArchiveRequest.analysis`（宿主采集后随请求带入）、`NewArchiveInput.{definition_sql, row_count, column_count}`、`insert_archive` 与 `update_archive_content` 都写这三列（再归档时定义与规模跟着更新；版本还原**不动**它们） | `src/model.rs`、`src/service.rs`、`src/resource.rs` | 指纹在**搬运前**算（与文件型同一处，失败即不动状态）；两类共用 `content_hash` 一列，所以“内容是否变”的判定对两类都是“比这一列” |
+| V31 | **扫描侧不再误报**：`IndexRepair::scan` 对非 `file` 型跳过字节指纹比对（本体存在性仍查） | `src/indexer.rs` | 分析表的 `content_hash` 是结构指纹，拿 sha256 去比会把**每一行分析表都报成“内容已变”**——接上结构探测之前**宁可少报不可误报** |
+| 文案 | 分析表“内容已变”单独一句话（`STRUCTURE_CHANGED_NOTE`），不再沿用文件型的“本体被绕过只读改过” | `src/detail_view.rs::alert_line` | 两类“变了”的原因不同（字节 vs 定义与结构），文案合用会指错方向 |
+| 测试 | +4 `analysis` 单测（摘要保序/保大小写、**行数不进指纹**而列/类型/定义/顺序都进、无定义也给指纹、文案）、+1 服务（t133：归档为分析表 → 结构指纹 + 三列落库；同结构多一行 → 幂等；多一列 → 涨版本且元信息更新） | `src/analysis.rs`、`src/service.rs` | 最易错的就是把行数算进指纹（那就变成“每次上游长一行就一条新版本”） |
+| 验证 | `cargo test -j 2 -p rds-analytics-resource` → **156 单测 + 25 面板窗口 + 10 对话框窗口全绿** | — | 基线 152 / 25 / 10 |
+
+> **第二半（未做）**：采集侧。需要 DuckDB 会话（`DESCRIBE SELECT * FROM read_csv_auto(...)` + `count(*)`）→ 拼成 `AnalysisFacts`；落点建议在宿主侧（`crates/workbench/src/services/resource_jobs.rs`，M6 不碰 DuckDB），或先看 `engine::duckdb` 里有没有现成的文件 schema 入口。
+
 ### 2026-09-20 — Phase 2 第十六刀（P1.3 收尾）：详情头部可编辑（显示名 / 别名）
 
 | V | 做什么 | 落点 | 为什么 / 影响面 |
@@ -846,7 +862,7 @@
 | R1 | 双真相源（文件系统 + 索引）不一致 | 明确"文件系统权威"；三类孤儿都有检测与人工修复入口；归档按"先本体、后索引、失败回滚"顺序（架构 §6.3） |
 | R2 | 归档是对用户不可逆的动作（草稿从工作区消失） | 底部撤销条（复用 M5）+ 归档确认对话框明示"文件将移动到 resources/ 并变为只读" |
 | R3 | 只读属性在 Windows/网络盘不可靠 | 应用层守卫为主，属性为辅；设置失败只警告（不阻塞归档） |
-| R4 | `Analysis` 型指纹语义含混（表数据会变，结构不变） | 第一期不做；第二期先定"指纹覆盖定义+结构，行数只作元信息"并写进 UI 文案 |
+| R4 | `Analysis` 型指纹语义含混（表数据会变，结构不变） | ✅ **已裁决并落地（2026-09-20，P4.1 第一半）**：指纹 = 定义 + 列结构，行数只作元信息；文案在 `analysis.rs` 单一来源（详情面板的“变了”提示已按种类分开）。采集（DuckDB 探测）待接 |
 | R5 | 面板塞不下（240px）信息 | 字段优先级规则 + tooltip；必要时放宽 Dock 起步宽（需同步 `ui.rs` 与契约测试） |
 | R6 | 与 M5 归档发起方的耦合 | M6 只接受 `PathBuf` + 元数据入参，不依赖 `ScratchpadStore` 类型；依赖方向 `scratchpad → analytics_resource` |
 | R7 | 事件链路再次"发了没人听"（v1 教训） | 事件必须带 `reason`，且**发/收两端同批落地**；验收含"两侧面板同步刷新" |

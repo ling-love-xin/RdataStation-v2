@@ -24,6 +24,7 @@ use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 use shared::error::CoreError;
 
 pub mod commands;
+pub mod analysis;
 pub mod detail_view;
 pub mod dialogs;
 pub mod dnd;

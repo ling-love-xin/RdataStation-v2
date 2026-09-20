@@ -370,6 +370,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                             name: result.name,
                             alias: result.alias,
                             kind: ArchiveKind::File,
+                            // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                            analysis: None,
                             binding: ArchiveBinding {
                                 // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
                                 promoted_from: Some(format!(
@@ -406,6 +408,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                             name: draft.display_name.clone(),
                             alias: None,
                             kind: ArchiveKind::File,
+                            // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                            analysis: None,
                             binding: ArchiveBinding {
                                 promoted_from: Some(format!(
                                     "{}/{}",
@@ -485,6 +489,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                 name: result.name,
                 alias: result.alias,
                 kind: ArchiveKind::File,
+                // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                analysis: None,
                 binding: ArchiveBinding {
                     promoted_from: None,
                     source_connection_id: None,

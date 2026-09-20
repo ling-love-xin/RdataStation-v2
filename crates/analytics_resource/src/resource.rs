@@ -114,6 +114,14 @@ fn clamp_file_size(bytes: Option<i64>) -> Option<i64> {
     bytes.map(|value| value.clamp(0, i32::MAX as i64))
 }
 
+/// 规模（行数）从 `i64` 落库为 `i32`：同样夹紧到 `i32` 上限。
+///
+/// 行数过 `i32` 上限的表本身就不适合归档为“存档”（回执与详情都放不下），
+/// 但**不报错**：夹紧比拒绝归档更不意外（与体积同一取舍，见 `clamp_file_size`）。
+fn clamp_row_count(rows: Option<i64>) -> Option<i32> {
+    rows.map(|value| value.clamp(0, i32::MAX as i64) as i32)
+}
+
 impl AnalyticsResourceStore {
     pub async fn create_resource(
         &self,
@@ -279,11 +287,11 @@ impl AnalyticsResourceStore {
                 r#"
             INSERT INTO analytics_resources (
                 id, resource_type, name, alias, config, scope, file_size,
-                version, parent_version_id, parent_resource_id, source_query,
+                row_count, column_count, version, parent_version_id, parent_resource_id, source_query,
                 created_at, updated_at,
                 kind, content_hash, file_rel_path, readonly,
-                promoted_from, source_connection_id, source_table, archived_at
-            ) VALUES (?, ?, ?, ?, '{}', ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                promoted_from, source_connection_id, source_table, definition_sql, archived_at
+            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
             "#,
                 rusqlite::params![
                     &id,
@@ -292,6 +300,8 @@ impl AnalyticsResourceStore {
                     &input.alias,
                     &input.scope,
                     clamp_file_size(input.file_size),
+                    input.row_count,
+                    input.column_count,
                     &now,
                     &now,
                     input.kind.as_db_str(),
@@ -300,6 +310,7 @@ impl AnalyticsResourceStore {
                     &input.binding.promoted_from,
                     &input.binding.source_connection_id,
                     &input.binding.source_table,
+                    &input.definition_sql,
                     &now,
                 ],
             )
@@ -373,17 +384,31 @@ impl AnalyticsResourceStore {
         content_hash: &str,
         snapshot_id: &str,
         file_size: Option<i64>,
+        analysis: Option<&crate::analysis::AnalysisFacts>,
     ) -> Result<AnalyticsResource, CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
         let now = Utc::now().to_rfc3339();
+        // 分析表：定义与规模随新内容一起更新（结构可能真的变了——这正是它的意义）；
+        // 文件型：这三列保持原样（分别是 None / 旧值，不该被清掉）。
+        let (definition_sql, row_count, column_count) = match analysis {
+            Some(facts) => (
+                facts.definition_sql.clone(),
+                clamp_row_count(facts.row_count),
+                Some(facts.column_count()),
+            ),
+            None => (None, None, None),
+        };
 
         let affected = inner
             .execute(
                 r#"
             UPDATE analytics_resources
             SET content_hash = ?, version = version + 1, parent_version_id = ?, updated_at = ?,
-                file_size = ?
+                file_size = ?,
+                definition_sql = COALESCE(?, definition_sql),
+                row_count = COALESCE(?, row_count),
+                column_count = COALESCE(?, column_count)
             WHERE id = ? AND deleted_at IS NULL
             "#,
                 rusqlite::params![
@@ -391,6 +416,9 @@ impl AnalyticsResourceStore {
                     snapshot_id,
                     &now,
                     clamp_file_size(file_size),
+                    definition_sql,
+                    row_count,
+                    column_count,
                     id
                 ],
             )

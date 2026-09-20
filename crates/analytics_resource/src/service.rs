@@ -96,7 +96,11 @@ impl ArchiveService {
         }
 
         if let Some(folder_id) = group_id {
-            if let Err(error) = self.store.add_resource_to_folder(resource_id, folder_id).await {
+            if let Err(error) = self
+                .store
+                .add_resource_to_folder(resource_id, folder_id)
+                .await
+            {
                 notes.push(format!("分组未归入：{error}"));
             }
         }
@@ -111,12 +115,14 @@ impl ArchiveService {
     ///
     /// 名字 → id 的映射同时充当**本批缓存**：同一批里出现两次同一个名字（对话框会去重，
     /// 但服务层不能靠调用方）时第二次直接复用刚建的那条，而不是再建一次撞唯一索引。
-    async fn link_tags(&self, resource_id: &str, names: &[String]) -> Result<Vec<String>, CoreError> {
+    async fn link_tags(
+        &self,
+        resource_id: &str,
+        names: &[String],
+    ) -> Result<Vec<String>, CoreError> {
         let existing = self.store.list_tags(None).await?;
-        let mut by_name: std::collections::HashMap<String, String> = existing
-            .into_iter()
-            .map(|tag| (tag.name, tag.id))
-            .collect();
+        let mut by_name: std::collections::HashMap<String, String> =
+            existing.into_iter().map(|tag| (tag.name, tag.id)).collect();
         let mut notes = Vec::new();
 
         for name in names {
@@ -174,15 +180,29 @@ impl ArchiveService {
         if !req.source_path.is_file() {
             return Err(service_err("archive", "源文件不存在或不是普通文件"));
         }
-        let content_hash = self.payload.content_hash(&req.source_path).await?;
+        // 指纹口径按种类分（P4.1 / R4）：
+        // - 分析表：**定义 + 结构摘要**（行数不进指纹）——宿主采集好随请求带入；
+        // - 文件 / 引用型：本体字节的 sha256。
+        // 两者共用同一列（`content_hash`），所以“内容是否变”的判定对两类都是“比这一列”。
+        let analysis = req.analysis.clone();
+        let content_hash = match analysis.as_ref() {
+            Some(facts) => facts.fingerprint(),
+            None => self.payload.content_hash(&req.source_path).await?,
+        };
         // 体积也在搬运前读：本体随后会被 move 进 `resources/`，读的是同一个文件。
         let file_size = self.payload.file_size(&req.source_path).await?;
 
         match req.existing_resource_id.clone() {
             None => self.archive_new(req, content_hash, file_size).await,
             Some(resource_id) => {
-                self.archive_into_existing(&resource_id, req, content_hash, file_size)
-                    .await
+                self.archive_into_existing(
+                    &resource_id,
+                    req,
+                    content_hash,
+                    file_size,
+                    analysis.as_ref(),
+                )
+                .await
             }
         }
     }
@@ -215,6 +235,13 @@ impl ArchiveService {
             alias: req.alias.clone(),
             kind: req.kind,
             content_hash: content_hash.clone(),
+            // 分析表：定义与规模同批登记（其余型为 None，不编造）。
+            definition_sql: req.analysis.as_ref().and_then(|f| f.definition_sql.clone()),
+            row_count: req.analysis.as_ref().and_then(|f| {
+                f.row_count
+                    .map(|rows| rows.clamp(0, i32::MAX as i64) as i32)
+            }),
+            column_count: req.analysis.as_ref().map(|f| f.column_count()),
             file_rel_path: req.rel_path.clone(),
             file_size,
             binding: req.binding.clone(),
@@ -267,6 +294,7 @@ impl ArchiveService {
         req: ArchiveRequest,
         content_hash: String,
         file_size: Option<i64>,
+        analysis: Option<&crate::analysis::AnalysisFacts>,
     ) -> Result<ArchiveOutcome, CoreError> {
         let current = self.store.get_resource_by_id(resource_id).await?;
         if current.deleted_at.is_some() {
@@ -315,7 +343,13 @@ impl ArchiveService {
 
         let updated = self
             .store
-            .update_archive_content(resource_id, &content_hash, &snapshot_id, file_size)
+            .update_archive_content(
+                resource_id,
+                &content_hash,
+                &snapshot_id,
+                file_size,
+                analysis,
+            )
             .await?;
 
         self.prune_copies(resource_id, req.keep_versions).await;
@@ -436,7 +470,9 @@ impl ArchiveService {
 
         let updated = self
             .store
-            .update_archive_content(resource_id, &copy_hash, &snapshot_id, file_size)
+            // 版本还原：只换内容与体积；分析表的定义 / 规模保持原位不动
+            // （还原旧内容不等于把“这份东西是什么”改回去——那要走再归档）。
+            .update_archive_content(resource_id, &copy_hash, &snapshot_id, file_size, None)
             .await?;
 
         self.prune_copies(resource_id, None).await;
@@ -618,7 +654,9 @@ impl ArchiveService {
             ));
         };
 
-        let restored = trash.restore(trash_id, &self.payload.resources_dir()).await?;
+        let restored = trash
+            .restore(trash_id, &self.payload.resources_dir())
+            .await?;
         // 避让改过名时，登记行的本体路径要跟着改，否则索引与本体又对不上。
         let new_rel = restored
             .path
@@ -626,11 +664,19 @@ impl ArchiveService {
             .ok()
             .map(|rel| rel.to_string_lossy().replace('\\', "/"))
             .filter(|rel| rel != &entry.manifest.original_rel_path);
-        if let Err(error) = self.store.undelete_archive(&record.id, new_rel.as_deref()).await {
+        if let Err(error) = self
+            .store
+            .undelete_archive(&record.id, new_rel.as_deref())
+            .await
+        {
             // 回滚：把本体再移回收站（条目 id 变了，但宁可多一条可读的回收站条目，
             // 也不要“本体回了原位、记录却还在回收站里”的错位）。
             if let Err(rollback) = trash
-                .move_to_trash(&restored.path, ORIGIN_RESOURCES, &entry.manifest.original_rel_path)
+                .move_to_trash(
+                    &restored.path,
+                    ORIGIN_RESOURCES,
+                    &entry.manifest.original_rel_path,
+                )
                 .await
             {
                 tracing::error!(
@@ -826,10 +872,8 @@ mod tests {
     }
 
     async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveService, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_archive_{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_archive_{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).await.expect("create temp project");
         let pool = Arc::new(
             ProjectSqlitePool::new(dir.join("project.db"), 2)
@@ -858,6 +902,8 @@ mod tests {
             name: "dau_report".to_string(),
             alias: None,
             kind: ArchiveKind::File,
+            // 大多数服务用例是文件型归档；分析表那条路见 `archive_analysis_req`。
+            analysis: None,
             binding: ArchiveBinding {
                 promoted_from: Some("scratchpad/dau.sql".to_string()),
                 source_connection_id: Some("conn_1".to_string()),
@@ -891,7 +937,11 @@ mod tests {
         assert_eq!(outcome.version, 1);
         assert!(!draft.exists(), "归档是移动");
 
-        let payload = service.payload().resources_dir().join("reports").join("dau.sql");
+        let payload = service
+            .payload()
+            .resources_dir()
+            .join("reports")
+            .join("dau.sql");
         assert!(payload.is_file());
         assert!(service.payload().is_readonly(&payload), "本体应只读");
 
@@ -901,17 +951,27 @@ mod tests {
             .await
             .expect("row");
         assert_eq!(row.kind, "file");
-        assert_eq!(row.content_hash.as_deref(), Some(outcome.content_hash.as_str()));
+        assert_eq!(
+            row.content_hash.as_deref(),
+            Some(outcome.content_hash.as_str())
+        );
         assert_eq!(row.file_rel_path.as_deref(), Some("reports/dau.sql"));
         assert_eq!(row.readonly, 1);
         assert!(row.archived_at.is_some(), "归档时刻应记录");
-        assert_eq!(row.file_size, Some(9), "归档时登记本体字节数（「大小」排序与行的尾巴都读它）");
+        assert_eq!(
+            row.file_size,
+            Some(9),
+            "归档时登记本体字节数（「大小」排序与行的尾巴都读它）"
+        );
         assert_eq!(row.promoted_from.as_deref(), Some("scratchpad/dau.sql"));
         assert_eq!(row.source_connection_id.as_deref(), Some("conn_1"));
 
         let event = events.recv().await.expect("event");
         assert_eq!(event.reason, ChangeReason::Archived);
-        assert_eq!(event.resource_id.as_deref(), Some(outcome.resource_id.as_str()));
+        assert_eq!(
+            event.resource_id.as_deref(),
+            Some(outcome.resource_id.as_str())
+        );
 
         let _ = fs::remove_dir_all(&dir).await;
     }
@@ -931,7 +991,10 @@ mod tests {
             .await
             .expect_err("conflict must fail");
 
-        assert!(error.to_string().contains("已被存档"), "错误应指明占用者：{error}");
+        assert!(
+            error.to_string().contains("已被存档"),
+            "错误应指明占用者：{error}"
+        );
         assert!(second.is_file(), "失败时源文件必须保留");
 
         let _ = fs::remove_dir_all(&dir).await;
@@ -996,11 +1059,7 @@ mod tests {
         assert!(dest.is_file());
         assert!(!service.payload().is_readonly(&dest), "工作副本必须可写");
         assert!(
-            service
-                .payload()
-                .resources_dir()
-                .join("dau.sql")
-                .is_file(),
+            service.payload().resources_dir().join("dau.sql").is_file(),
             "取回不得移动本体"
         );
         let event = events.recv().await.expect("event");
@@ -1047,6 +1106,101 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).await;
     }
 
+    /// 分析表的指纹口径（P4.1 / R4）：**定义 + 结构**进指纹，**行数不进**；
+    /// 定义与规模同批登记，再归档时跟着更新。
+    #[tokio::test]
+    async fn t133_analysis_fingerprint_covers_definition_and_structure_only() {
+        use crate::analysis::{AnalysisFacts, ColumnSpec};
+
+        let (service, dir) = test_service(5).await;
+        let draft = write_draft(
+            &dir,
+            "dau.csv",
+            b"id,name
+1,a
+",
+        )
+        .await;
+        let facts = AnalysisFacts {
+            definition_sql: Some("select * from read_csv_auto('dau.csv')".to_string()),
+            columns: vec![
+                ColumnSpec::new("id", "INTEGER"),
+                ColumnSpec::new("name", "VARCHAR"),
+            ],
+            row_count: Some(1),
+        };
+        let mut req = archive_req(&draft, "dau.csv", None);
+        req.kind = ArchiveKind::Analysis;
+        req.analysis = Some(facts.clone());
+        let first = service.archive(req).await.expect("archive analysis");
+        assert_eq!(
+            first.content_hash,
+            facts.fingerprint(),
+            "分析表登记的是结构指纹，不是文件字节指纹"
+        );
+
+        let stored = service
+            .store()
+            .get_resource_by_id(&first.resource_id)
+            .await
+            .expect("reload");
+        assert_eq!(stored.kind, "analysis");
+        assert_eq!(stored.definition_sql, facts.definition_sql);
+        assert_eq!(stored.row_count, Some(1), "行数作为元信息落库");
+        assert_eq!(stored.column_count, Some(2));
+
+        // 再归档：**同定义同结构、只多了一行** → 指纹不变 → 幂等（不涨版本、不覆盖本体）。
+        let draft2 = write_draft(
+            &dir,
+            "dau2.csv",
+            b"id,name
+1,a
+2,b
+3,c
+",
+        )
+        .await;
+        let mut same_schema = archive_req(&draft2, "dau.csv", Some(&first.resource_id));
+        same_schema.kind = ArchiveKind::Analysis;
+        same_schema.analysis = Some(AnalysisFacts {
+            row_count: Some(3),
+            ..facts.clone()
+        });
+        let second = service.archive(same_schema).await.expect("re-archive same");
+        assert_eq!(second.version, first.version, "行数变化不算内容变化");
+        assert!(!second.created_new_version, "幂等：不产生新版本");
+
+        // 结构变了（多一列）→ 指纹变 → 新版本，且定义 / 规模随更新。
+        let draft3 = write_draft(
+            &dir,
+            "dau3.csv",
+            b"id,name,ts
+1,a,now
+",
+        )
+        .await;
+        let mut changed = archive_req(&draft3, "dau.csv", Some(&first.resource_id));
+        changed.kind = ArchiveKind::Analysis;
+        changed.analysis = Some(AnalysisFacts {
+            definition_sql: Some("select id, name, ts from read_csv_auto('dau.csv')".to_string()),
+            columns: vec![
+                ColumnSpec::new("id", "INTEGER"),
+                ColumnSpec::new("name", "VARCHAR"),
+                ColumnSpec::new("ts", "VARCHAR"),
+            ],
+            row_count: Some(1),
+        });
+        let third = service.archive(changed).await.expect("re-archive changed");
+        assert_eq!(third.version, first.version + 1, "结构变了要涨版本");
+        let stored = service
+            .store()
+            .get_resource_by_id(&first.resource_id)
+            .await
+            .expect("reload");
+        assert_eq!(stored.column_count, Some(3), "规模元信息跟着更新");
+        assert!(stored.definition_sql.expect("定义").contains("ts"));
+    }
+
     #[tokio::test]
     async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
         let (service, dir) = test_service(1).await;
@@ -1088,7 +1242,11 @@ mod tests {
 
         let payload = service.payload().resources_dir().join("dau.sql");
         assert_eq!(
-            service.payload().content_hash(&payload).await.expect("hash"),
+            service
+                .payload()
+                .content_hash(&payload)
+                .await
+                .expect("hash"),
             second.content_hash,
             "本体应已被新内容覆盖"
         );
@@ -1108,7 +1266,11 @@ mod tests {
             .await
             .expect("row");
         assert_eq!(row.version, 2);
-        assert_eq!(row.file_size, Some(10), "体积跟着新内容一起换（不与指纹脱节）");
+        assert_eq!(
+            row.file_size,
+            Some(10),
+            "体积跟着新内容一起换（不与指纹脱节）"
+        );
         assert_eq!(
             row.parent_version_id.as_deref(),
             Some(versions[0].id.as_str()),
@@ -1137,7 +1299,10 @@ mod tests {
                 .expect("archive");
 
             // 连着改两次内容：每次再归档都会把上一版留成一份内容副本。
-            for (name, body) in [("dau2.sql", &b"select 22;"[..]), ("dau3.sql", &b"select 333;"[..])] {
+            for (name, body) in [
+                ("dau2.sql", &b"select 22;"[..]),
+                ("dau3.sql", &b"select 333;"[..]),
+            ] {
                 let next = write_draft(&dir, name, body).await;
                 service
                     .archive(archive_req(&next, "dau.sql", Some(&first.resource_id)))
@@ -1193,7 +1358,11 @@ mod tests {
         req.group_id = Some(folder.id.clone());
 
         let outcome = service.archive(req).await.expect("archive");
-        assert!(outcome.notes.is_empty(), "全落上时不该有说明：{:?}", outcome.notes);
+        assert!(
+            outcome.notes.is_empty(),
+            "全落上时不该有说明：{:?}",
+            outcome.notes
+        );
 
         let row = service
             .store()
@@ -1209,7 +1378,11 @@ mod tests {
             .expect("tags");
         let mut names: Vec<&str> = tags.iter().map(|tag| tag.name.as_str()).collect();
         names.sort_unstable();
-        assert_eq!(names, vec!["报表", "月度"], "两个标签都建好并挂上（重复名只算一次）");
+        assert_eq!(
+            names,
+            vec!["报表", "月度"],
+            "两个标签都建好并挂上（重复名只算一次）"
+        );
 
         assert_eq!(
             service
@@ -1347,7 +1520,11 @@ mod tests {
         // ② 已经再归档过（v2）：撤销窗口已过（否则会连带丢掉新内容）。
         fs::write(&draft, b"select 2;").await.expect("rewrite");
         service
-            .archive(archive_req(&draft, "occupied.sql", Some(&outcome.resource_id)))
+            .archive(archive_req(
+                &draft,
+                "occupied.sql",
+                Some(&outcome.resource_id),
+            ))
             .await
             .expect("re-archive");
         assert!(
@@ -1402,7 +1579,10 @@ mod tests {
         assert_eq!(restored.version, 3, "还原 = 生成新版本，不是原地回滚");
         let payload = service.payload().resources_dir().join("dau.sql");
         assert_eq!(fs::read(&payload).await.expect("read"), b"select 1;");
-        assert!(service.payload().is_readonly(&payload), "还原后的本体仍只读");
+        assert!(
+            service.payload().is_readonly(&payload),
+            "还原后的本体仍只读"
+        );
 
         // 体积也回到 v1 的字节数（9 而不再是 v2 的）：「大小」一列不能停在还原前的值上。
         let row = service
@@ -1545,19 +1725,24 @@ mod tests {
             .purge_archive(&foreign.manifest.id)
             .await
             .expect_err("cross-module purge must fail");
-        assert!(error.to_string().contains("scratchpad"), "错误要指明归属：{error}");
+        assert!(
+            error.to_string().contains("scratchpad"),
+            "错误要指明归属：{error}"
+        );
 
         // 单条永久删除：本体与登记行都不在了。
         service
             .purge_archive(&first_entry[0].trash_id)
             .await
             .expect("purge a");
-        assert!(service
-            .store()
-            .find_deleted_archive_by_rel_path("a.sql")
-            .await
-            .expect("find a")
-            .is_none());
+        assert!(
+            service
+                .store()
+                .find_deleted_archive_by_rel_path("a.sql")
+                .await
+                .expect("find a")
+                .is_none()
+        );
         assert!(
             service
                 .store()
@@ -1566,12 +1751,14 @@ mod tests {
                 .is_err(),
             "登记行删了就该查不到（它已经不在回收站里等还原了）"
         );
-        assert!(service
-            .store()
-            .get_tags_for_resource(&first.resource_id)
-            .await
-            .expect("tags")
-            .is_empty());
+        assert!(
+            service
+                .store()
+                .get_tags_for_resource(&first.resource_id)
+                .await
+                .expect("tags")
+                .is_empty()
+        );
 
         // 清空：只删本模块的两条（含刚删过的），别人的原样留着。
         let purged = service.empty_trash().await.expect("empty");
@@ -1579,12 +1766,14 @@ mod tests {
         let left = service.payload().trash().list().await.expect("list");
         assert_eq!(left.len(), 1, "草稿箱的条目必须原样留着");
         assert_eq!(left[0].manifest.origin, "scratchpad");
-        assert!(service
-            .store()
-            .find_deleted_archive_by_rel_path("b.sql")
-            .await
-            .expect("find b")
-            .is_none());
+        assert!(
+            service
+                .store()
+                .find_deleted_archive_by_rel_path("b.sql")
+                .await
+                .expect("find b")
+                .is_none()
+        );
         assert!(second_entry.len() == 1);
 
         let _ = fs::remove_dir_all(&dir).await;
@@ -1610,12 +1799,14 @@ mod tests {
             .await
             .expect("restore by rel path");
         assert_eq!(revived.id, archived.resource_id);
-        assert!(service
-            .payload()
-            .resources_dir()
-            .join("reports")
-            .join("a.sql")
-            .is_file());
+        assert!(
+            service
+                .payload()
+                .resources_dir()
+                .join("reports")
+                .join("a.sql")
+                .is_file()
+        );
 
         let error = service
             .restore_archive_by_rel_path("reports/a.sql")
@@ -1654,7 +1845,10 @@ mod tests {
             .resources_dir()
             .join("reports")
             .join("dau.sql");
-        assert!(!payload.exists(), "移入回收站是移动，本体不能留在 resources/");
+        assert!(
+            !payload.exists(),
+            "移入回收站是移动，本体不能留在 resources/"
+        );
         let entry = service
             .payload()
             .trash()
@@ -1883,7 +2077,10 @@ mod tests {
 
         // 前一条真的进了回收站（本体走了、行软删），后一条一点没动。
         assert!(!service.payload().resources_dir().join("a.sql").exists());
-        assert_eq!(service.payload().trash().list().await.expect("list").len(), 1);
+        assert_eq!(
+            service.payload().trash().list().await.expect("list").len(),
+            1
+        );
         assert!(
             service
                 .store()

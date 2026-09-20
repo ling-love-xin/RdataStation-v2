@@ -179,6 +179,11 @@ pub struct ArchiveRequest {
     pub alias: Option<String>,
     /// 存档种类。
     pub kind: ArchiveKind,
+    /// **分析表事实**（`kind = Analysis` 时由宿主采集后随请求带入）。
+    ///
+    /// `Some` 时：指纹取 [`crate::analysis::AnalysisFacts::fingerprint`]（定义 + 结构）
+    /// 而**不是**文件字节指纹，并把定义 / 行数×列数一并登记；`None` = 按文件型归档。
+    pub analysis: Option<crate::analysis::AnalysisFacts>,
     /// 来源绑定。
     pub binding: ArchiveBinding,
     /// 初始标签（可空）。
@@ -326,7 +331,15 @@ pub struct NewArchiveInput {
     /// 存档种类。
     pub kind: ArchiveKind,
     /// 内容指纹。
+    ///
+    /// 文件型 = 本体字节的 sha256；分析表型 = 定义 + 结构摘要
+    /// （`crate::analysis::AnalysisFacts::fingerprint`，**行数不进**——见那里头的裁决）。
     pub content_hash: String,
+    /// 重建定义（`analysis` 型的配方；其余型为 `None`）。
+    pub definition_sql: Option<String>,
+    /// 规模（`analysis` 型的行数 / 列数：**元信息**，不参与指纹）。
+    pub row_count: Option<i32>,
+    pub column_count: Option<i32>,
     /// 本体相对路径。
     pub file_rel_path: String,
     /// 本体字节数（登记时现读；读不到给 `None`，不假装 0）。
