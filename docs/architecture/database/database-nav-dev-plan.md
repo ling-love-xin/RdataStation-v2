@@ -37,6 +37,28 @@
 > **属性面板**：连接项新增「数据库类型」行（`property_panel::load_properties` 接 `db_type`）、「驱动」行显示目录友好名（`PostgreSQL (Official) · postgres_native`）。
 > **仍待做**：工作线程优先级队列；大 schema 列内联阈值；标签命名规范 `key:value`。
 
+### 草稿箱侧行态收尾（2026-09-20，已处置）
+
+共用原语接入之后剩下的两件（与导航侧对称）已按**同一口径**收口——不再挂「产品决策未定」：
+
+- 展开指示**统一到图标**：2 处调用（树行 / 回收站头）改 `tree::disclosure_icon`，字符载体
+  `disclosure_glyph` 随之删除（届时已无调用方）。「按扩展名给色块」是**类型标识**通道
+  （名称前的 8px 色点），与缩进槽里的展开指示互不影响——槽宽仍 10px，**缩进不漂**；
+- hover **不再覆盖选中**：改 `when(!is_selected, hover(..))`，与导航树 6 处同形；同文件 4 处
+  「开关 chip」（模板 chip / 搜索模式 / `.*` / `Aa`）一并按「激活时不换色」处理（同 `nav_source_chip`）；
+- 选中底 token 由 `sidebar_accent` 改 `list_active`：两者在 `rds-theme.json` 亮/暗取值**完全相同**
+  （`#E4E4E4` / `#37373D`），属**零视觉变化**的语义统一（导航 / 资源库 / Mock 均已取 `list_active`；
+  `sidebar_accent` 归「侧栏容器」角色）——与导航侧对称。
+- 新增常量 `ui::{ROW_HEIGHT_COMPACT, SCRATCHPAD_ROW_CHIPS}`（三处同步：`ui.rs` / `ui-design-spec.md` §2.1 /
+  `ui_contract.rs`），并修掉 4 处裸 `rems(1.375)`。
+
+> 顺手修了一处**不在本次两项之内**的真 bug：内联「新建文件」行的模板 chip 块（26px）此前没算进
+> `scratchpad_row_height`，而 `v_virtual_list` 按给定高度累计 origin、**不实测回写**——估小 26px 会让
+> 紧随其后的行被重叠。判定口径写进了 `ui::SCRATCHPAD_ROW_CHIPS` 的文档注释。
+
+> 未做（有意）：引用行 / 回收站行的 hover 反馈（它们**不是可点行**，行本体无 `on_click`，只有行内动作按钮）；
+> `render_scratchpad` 970 行的拆分（另起一轮，照 `nav_view` 的 V13 拆法）。
+
 **Phase A 实现位置**
 
 | 交付 | 文件 |

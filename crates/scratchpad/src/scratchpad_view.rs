@@ -13,8 +13,8 @@
 //!
 //! 结构设计：`docs/architecture/layout/panels-coupling-plan.md` §9。
 
-use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
@@ -41,6 +41,7 @@ use crate::jobs as scratchpad_jobs;
 
 use crate::ScratchpadWatcher;
 
+use workbench_shell::tree;
 use workbench_shell::ui;
 
 use crate::host::ScratchpadHost;
@@ -52,9 +53,15 @@ enum ScratchpadEdit {
     NewFile,
     NewFolder,
     /// 已选定外部路径，待输入别名（引用不复制文件，只记路径）。
-    NewReference { path: std::path::PathBuf },
-    Rename { path: String },
-    RenameReference { alias: String },
+    NewReference {
+        path: std::path::PathBuf,
+    },
+    Rename {
+        path: String,
+    },
+    RenameReference {
+        alias: String,
+    },
 }
 
 /// 新建文件的起步模板（原型 §4.1：自动补后缀 + 填充占位内容）。
@@ -107,7 +114,9 @@ impl ScratchpadTemplate {
                 format!("-- {name}\n-- 草稿：随手 SQL，Ctrl+S 保存回草稿箱\nSELECT 1;\n")
             }
             ScratchpadTemplate::Python => {
-                format!("# {name}\n\n\ndef main() -> None:\n    pass\n\n\nif __name__ == \"__main__\":\n    main()\n")
+                format!(
+                    "# {name}\n\n\ndef main() -> None:\n    pass\n\n\nif __name__ == \"__main__\":\n    main()\n"
+                )
             }
             ScratchpadTemplate::Markdown => format!("# {name}\n\n- \n"),
             ScratchpadTemplate::Json => "{\n  \n}\n".to_string(),
@@ -479,8 +488,7 @@ fn scratchpad_basename(path: &str) -> String {
 ///
 /// 判据是**绝对路径**——条目路径即绝对路径，编辑器与草稿箱之间只交换绝对路径。
 fn scratchpad_shows_dirty_dot(dirty: &HashSet<String>, entry: &ScratchpadEntry) -> bool {
-    entry.kind == ScratchpadEntryKind::File
-        && dirty.contains(entry.path.to_string_lossy().as_ref())
+    entry.kind == ScratchpadEntryKind::File && dirty.contains(entry.path.to_string_lossy().as_ref())
 }
 
 /// 行尾元信息：相对时间（< 7 天）或日期；文件附加可读大小。
@@ -688,25 +696,24 @@ pub fn render_scratchpad_search_pane(
         files.dedup();
         files.len()
     };
-    let mut replace_row = div()
-        .h_flex()
-        .items_center()
-        .gap_2()
-        .w_full()
-        .child(div().flex_none().text_xs().text_color(muted).child("替换为"));
+    let mut replace_row = div().h_flex().items_center().gap_2().w_full().child(
+        div()
+            .flex_none()
+            .text_xs()
+            .text_color(muted)
+            .child("替换为"),
+    );
     if let Some(input) = replace_input {
         replace_row = replace_row.child(div().flex_1().min_w_0().child(Input::new(input)));
     } else {
         replace_row = replace_row.child(div().flex_1());
     }
     replace_row = replace_row
-        .child(
-            div().flex_none().text_xs().text_color(muted).child(format!(
-                "将替换 {} 处 · {} 个文件",
-                search.hits.len(),
-                unique_files
-            )),
-        )
+        .child(div().flex_none().text_xs().text_color(muted).child(format!(
+            "将替换 {} 处 · {} 个文件",
+            search.hits.len(),
+            unique_files
+        )))
         .child(
             Button::new("sp-search-replace")
                 .small()
@@ -852,12 +859,7 @@ fn scratchpad_diff_marker(kind: DiffLineKind) -> &'static str {
 /// 命中高亮行：按字节区间把 `content` 切成「普通段 + 命中段」，命中段用命中底色。
 ///
 /// 区间非法（越界 / 非 char 边界 / 重叠）时退化为整体纯文本。
-fn scratchpad_hit_line(
-    content: &str,
-    spans: &[(usize, usize)],
-    match_bg: Hsla,
-    fg: Hsla,
-) -> Div {
+fn scratchpad_hit_line(content: &str, spans: &[(usize, usize)], match_bg: Hsla, fg: Hsla) -> Div {
     let plain = || {
         div()
             .min_w_0()
@@ -868,7 +870,12 @@ fn scratchpad_hit_line(
     if spans.is_empty() {
         return plain();
     }
-    let mut row = div().h_flex().items_center().min_w_0().text_xs().text_color(fg);
+    let mut row = div()
+        .h_flex()
+        .items_center()
+        .min_w_0()
+        .text_xs()
+        .text_color(fg);
     let mut cursor = 0usize;
     for &(start, end) in spans {
         if start < cursor
@@ -1065,7 +1072,8 @@ impl ScratchpadView {
     /// 因此放在请求加载路径（不在渲染循环里反复执行）。
     fn ensure_scratchpad_watch(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
         let dir = root.join(crate::MODULE_DIR_NAME);
-        if self.scratchpad_watch
+        if self
+            .scratchpad_watch
             .as_ref()
             .map(|w| w.dir() == dir.as_path())
             .unwrap_or(false)
@@ -1232,49 +1240,56 @@ impl ScratchpadView {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            executor.timer(std::time::Duration::from_millis(1200)).await;
-            let action = weak.update(cx, |this, cx| {
-                // 脏点与目录监控同一拍：编辑器里存/改都会让这个集合变。
-                let dirty_changed = this.refresh_dirty_cache();
-                let changed = this
-                    .scratchpad_watch
-                    .as_ref()
-                    .map(|w| w.take_changed())
-                    .unwrap_or(false);
-                if !changed {
-                    return dirty_changed;
-                }
-                // 正在内联编辑（新建/重命名）或已有加载在途：本次不打断，留给下一拍。
-                {
-                    let view = this.scratchpad.borrow();
-                    if view.edit.is_some() || view.loading {
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(1200)).await;
+                let action = weak.update(cx, |this, cx| {
+                    // 脏点与目录监控同一拍：编辑器里存/改都会让这个集合变。
+                    let dirty_changed = this.refresh_dirty_cache();
+                    let changed = this
+                        .scratchpad_watch
+                        .as_ref()
+                        .map(|w| w.take_changed())
+                        .unwrap_or(false);
+                    if !changed {
                         return dirty_changed;
                     }
-                }
-                this.scratchpad.borrow_mut().loaded = false;
-                // C-4：外部改动 + 编辑器里有未保存修改 → 冲突（差异在后台算）。
-                if this.detect_scratchpad_conflicts() {
-                    this.ensure_scratchpad_pump(cx);
-                }
-                // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
-                let pending_search = this.active_search.clone();
-                if let Some((query, is_regex, case_sensitive)) = pending_search {
-                    if let Some(root) = this.host.project_root() {
-                        scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
+                    // 正在内联编辑（新建/重命名）或已有加载在途：本次不打断，留给下一拍。
+                    {
+                        let view = this.scratchpad.borrow();
+                        if view.edit.is_some() || view.loading {
+                            return dirty_changed;
+                        }
+                    }
+                    this.scratchpad.borrow_mut().loaded = false;
+                    // C-4：外部改动 + 编辑器里有未保存修改 → 冲突（差异在后台算）。
+                    if this.detect_scratchpad_conflicts() {
                         this.ensure_scratchpad_pump(cx);
                     }
-                }
-                true
-            });
-            match action {
-                Ok(true) => {
-                    if weak.update(cx, |_, cx| cx.notify()).is_err() {
-                        return;
+                    // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
+                    let pending_search = this.active_search.clone();
+                    if let Some((query, is_regex, case_sensitive)) = pending_search {
+                        if let Some(root) = this.host.project_root() {
+                            scratchpad_jobs::enqueue_search(
+                                &root,
+                                &query,
+                                case_sensitive,
+                                is_regex,
+                            );
+                            this.ensure_scratchpad_pump(cx);
+                        }
                     }
+                    true
+                });
+                match action {
+                    Ok(true) => {
+                        if weak.update(cx, |_, cx| cx.notify()).is_err() {
+                            return;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(_) => return,
                 }
-                Ok(false) => {}
-                Err(_) => return,
             }
         });
         *self.scratchpad_watch_poll.borrow_mut() = Some(task);
@@ -1390,7 +1405,11 @@ impl ScratchpadView {
     /// 回填写操作 / 搜索替换结果（主线程）。
     ///
     /// 文案、刷新与通知都在这里统一处理：任务层只回传「做了什么 + 成功/失败」。
-    fn apply_scratchpad_ops(&mut self, results: Vec<scratchpad_jobs::OpResult>, cx: &mut Context<Self>) {
+    fn apply_scratchpad_ops(
+        &mut self,
+        results: Vec<scratchpad_jobs::OpResult>,
+        cx: &mut Context<Self>,
+    ) {
         let mut reload = false;
         let mut notice: Option<String> = None;
         let mut error: Option<String> = None;
@@ -1466,14 +1485,13 @@ impl ScratchpadView {
                 } => match outcome {
                     Ok(diff) => {
                         // 内容一致 → 不是真冲突（外部改动已被写回 / 就是自己写的），直接撤掉提示。
-                        let real = diff
-                            .lines
-                            .iter()
-                            .any(|l| l.kind != DiffLineKind::Unchanged);
+                        let real = diff.lines.iter().any(|l| l.kind != DiffLineKind::Unchanged);
                         let mut view = self.scratchpad.borrow_mut();
                         if real {
-                            if let Some(slot) =
-                                view.conflicts.iter_mut().find(|c| c.relative == relative_path)
+                            if let Some(slot) = view
+                                .conflicts
+                                .iter_mut()
+                                .find(|c| c.relative == relative_path)
                             {
                                 slot.diff = Some(diff);
                             }
@@ -1651,7 +1669,8 @@ impl ScratchpadView {
             cx.notify();
             return;
         }
-        let name = self.scratchpad
+        let name = self
+            .scratchpad
             .borrow()
             .name_input
             .as_ref()
@@ -1671,7 +1690,11 @@ impl ScratchpadView {
                             let view = self.scratchpad.borrow();
                             (view.new_template, view.new_target.clone())
                         };
-                        let parent = if target.is_empty() { None } else { Some(target.as_str()) };
+                        let parent = if target.is_empty() {
+                            None
+                        } else {
+                            Some(target.as_str())
+                        };
                         let final_name = scratchpad_apply_template_ext(&name, template);
                         let body = template.content(&final_name);
                         rt.block_on(store.create_entry(&final_name, parent, false))
@@ -1688,18 +1711,23 @@ impl ScratchpadView {
                     }
                     ScratchpadEdit::NewFolder => {
                         let target = self.scratchpad.borrow().new_target.clone();
-                        let parent = if target.is_empty() { None } else { Some(target.as_str()) };
+                        let parent = if target.is_empty() {
+                            None
+                        } else {
+                            Some(target.as_str())
+                        };
                         rt.block_on(store.create_entry(&name, parent, true))
                             .map(|_| ())
                     }
-                    ScratchpadEdit::Rename { path } => rt
-                        .block_on(store.rename_entry(path, &name))
-                        .map(|_| ()),
+                    ScratchpadEdit::Rename { path } => {
+                        rt.block_on(store.rename_entry(path, &name)).map(|_| ())
+                    }
                     ScratchpadEdit::NewReference { path } => rt
                         .block_on(store.add_external_reference(name.clone(), path.clone()))
                         .map(|_| ()),
-                    ScratchpadEdit::RenameReference { alias } => rt
-                        .block_on(store.rename_external_reference(alias, &name)),
+                    ScratchpadEdit::RenameReference { alias } => {
+                        rt.block_on(store.rename_external_reference(alias, &name))
+                    }
                 };
                 result.map(|_| ()).map_err(|e| e.to_string())
             }
@@ -2115,7 +2143,8 @@ impl ScratchpadView {
         let Some(path) = path else {
             return;
         };
-        let is_folder = self.scratchpad
+        let is_folder = self
+            .scratchpad
             .borrow()
             .kind_of(&path)
             .map(|k| k == ScratchpadEntryKind::Folder)
@@ -2171,7 +2200,8 @@ impl ScratchpadView {
     ///
     /// 搜索要遍历全树，故入队后台；结果由 `apply_scratchpad_ops` 回填。
     fn run_scratchpad_content_search(&mut self, cx: &mut Context<Self>) {
-        let query = self.scratchpad
+        let query = self
+            .scratchpad
             .borrow()
             .search_input
             .as_ref()
@@ -2206,7 +2236,8 @@ impl ScratchpadView {
         cx.spawn(async move |_this, cx| {
             executor.timer(std::time::Duration::from_secs(5)).await;
             let _ = weak.update(cx, |this, cx| {
-                let matches = this.scratchpad
+                let matches = this
+                    .scratchpad
                     .borrow()
                     .undo
                     .as_ref()
@@ -2220,17 +2251,22 @@ impl ScratchpadView {
         })
         .detach();
     }
-
 }
 
 impl ScratchpadView {
     /// 渲染草稿树单行（选中态 / 行内操作 / 右键菜单 / 展开时触发懒加载）。
     ///
     /// 同时被普通渲染与虚拟列表闭包调用，行索引按 `ctx.rows` 全局序号。
-    fn scratchpad_row(&self, display: usize, ctx: &ScratchpadRowCtx, cx: &mut Context<Self>) -> AnyElement {
+    fn scratchpad_row(
+        &self,
+        display: usize,
+        ctx: &ScratchpadRowCtx,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         // 内联新建行：插在目标文件夹首行位置（未选中文件夹时在模块根）。
         if ctx.is_edit_row(display) {
-            return self.render_scratchpad_edit_row(ctx.edit_row_depth(display), cx)
+            return self
+                .render_scratchpad_edit_row(ctx.edit_row_depth(display), cx)
                 .into_any_element();
         }
         let Some(real) = ctx.real_index(display) else {
@@ -2256,7 +2292,9 @@ impl ScratchpadView {
         // 本行正在重命名 → 渲染内联输入。
         if let Some(ScratchpadEdit::Rename { path }) = &ctx.edit {
             if path == &key {
-                return self.render_scratchpad_edit_row(*depth, cx).into_any_element();
+                return self
+                    .render_scratchpad_edit_row(*depth, cx)
+                    .into_any_element();
             }
         }
 
@@ -2270,8 +2308,7 @@ impl ScratchpadView {
         let is_selected = ctx.selected.contains(&key);
         let is_expanded = ctx.expanded.contains(&key);
         // 展开且尚未懒加载过子目录 → 触发加载。
-        let needs_load =
-            is_folder && !ctx.loaded.contains_key(&key) && entry.children.is_none();
+        let needs_load = is_folder && !ctx.loaded.contains_key(&key) && entry.children.is_none();
 
         let click = {
             let view = view_handle.clone();
@@ -2336,11 +2373,6 @@ impl ScratchpadView {
             }
         };
 
-        let chevron = if is_folder {
-            if is_expanded { "▾" } else { "▸" }
-        } else {
-            ""
-        };
         let icon_color = if is_folder {
             folder_color
         } else {
@@ -2358,30 +2390,20 @@ impl ScratchpadView {
             .relative()
             .cursor_pointer()
             .when(is_selected, |this| this.bg(selected_bg))
-            .hover(move |s| s.bg(hover_bg))
+            // 悬停只在未选中时生效（不得盖掉选中底色）——与导航树、`ui-design-spec` §4 同一口径。
+            .when(!is_selected, move |s| s.hover(move |s| s.bg(hover_bg)))
             .on_click(click)
-            // 选中左侧 2px 品牌色条（原型 §3）。
+            // 选中左侧 2px 品牌色条（原型 §3）——共用原语，与导航 / 设置页同一套画法。
             .when(is_selected, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left(rems(0.))
-                        .top(ui::TREE_ACTIVE_BAR_INSET)
-                        .bottom(ui::TREE_ACTIVE_BAR_INSET)
-                        .w(ui::TREE_ACTIVE_BAR)
-                        .rounded_sm()
-                        .bg(active_border),
-                )
+                this.child(tree::active_bar(active_border))
             })
-            .child(div().w(rems(*depth as f32 * ui::TREE_INDENT)).flex_none())
-            .child(
-                div()
-                    .w_2p5()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(chevron),
-            )
+            .child(tree::indent_spacer(ui::TREE_INDENT, *depth))
+            .child(if is_folder {
+                // 展开指示：槽宽固定（10px），载体与导航统一到图标（见 `tree::disclosure_slot`）。
+                tree::disclosure_slot().child(tree::disclosure_icon(is_expanded, muted))
+            } else {
+                tree::disclosure_slot()
+            })
             .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon_color))
             .child(
                 div()
@@ -2394,14 +2416,7 @@ impl ScratchpadView {
             )
             // 脏点（原型 §2/§3：名字 · ● · 大小时间；只有文件画）
             .when(scratchpad_shows_dirty_dot(&ctx.dirty, entry), |this| {
-                this.child(
-                    div()
-                        .w_2()
-                        .h_2()
-                        .flex_none()
-                        .rounded_full()
-                        .bg(primary),
-                )
+                this.child(div().w_2().h_2().flex_none().rounded_full().bg(primary))
             })
             .child(
                 div()
@@ -2425,9 +2440,7 @@ impl ScratchpadView {
             let rename = {
                 let entity = entity.clone();
                 let key = key.clone();
-                move |_: &gpui_kit::ClickEvent,
-                      window: &mut gpui_kit::Window,
-                      app: &mut App| {
+                move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                     entity.update(app, |this, cx| {
                         this.start_scratchpad_edit(
                             ScratchpadEdit::Rename { path: key.clone() },
@@ -2539,16 +2552,15 @@ impl ScratchpadView {
                         let stats_entity = menu_entity.clone();
                         let stats_key = menu_key.clone();
                         let stats_label = stats_label.clone();
-                        menu = menu.item(PopupMenuItem::new("查看统计").on_click(
-                            move |_, _, app| {
+                        menu =
+                            menu.item(PopupMenuItem::new("查看统计").on_click(move |_, _, app| {
                                 let entity = stats_entity.clone();
                                 let key = stats_key.clone();
                                 let label = stats_label.clone();
                                 entity.update(app, |this, cx| {
                                     this.request_view_stats(key.clone(), label.clone(), cx)
                                 });
-                            },
-                        ));
+                            }));
                     }
                 }
                 menu.item(PopupMenuItem::new("打开位置").on_click(move |_, _, app| {
@@ -2586,7 +2598,9 @@ impl ScratchpadView {
                 }))
                 .separator()
                 .item(PopupMenuItem::new("删除").on_click(move |_, _, app| {
-                    del_entity.update(app, |this, cx| { this.delete_scratchpad_entry(del_key.clone(), cx) });
+                    del_entity.update(app, |this, cx| {
+                        this.delete_scratchpad_entry(del_key.clone(), cx)
+                    });
                 }))
             })
             .into_any_element()
@@ -2595,22 +2609,32 @@ impl ScratchpadView {
 
     /// 草稿树行高：内联编辑行用控件高，其余用树行高（与虚拟列表 `item_sizes` 保持一致）。
     ///
-    /// `rem` = 当前窗口的 `rem_size`（`v_virtual_list` 需要 `Pixels`，而尺寸常量是 rem 倍率）。
-    fn scratchpad_row_height(ctx: &ScratchpadRowCtx, display: usize, rem: Pixels) -> Pixels {
+    /// 行高预算走共用原语（`workbench_shell::tree::RowHeight`：基础高 + 附加块），
+    /// 与导航同一套口径；换算成像素交给 `tree::row_sizes`。
+    ///
+    /// 内联「新建文件」行底下还有一行模板 chip：那一块必须算成附加块——虚拟列表
+    /// 按给定高度累计 origin、**不实测回写**，估小会把后一行压上来。
+    fn scratchpad_row_height(ctx: &ScratchpadRowCtx, display: usize) -> tree::RowHeight {
         let controls_high = if ctx.is_edit_row(display) {
             true
         } else {
-            let renaming = match (ctx.real_index(display).and_then(|i| ctx.keys.get(i)), &ctx.edit) {
+            let renaming = match (
+                ctx.real_index(display).and_then(|i| ctx.keys.get(i)),
+                &ctx.edit,
+            ) {
                 (Some(key), Some(ScratchpadEdit::Rename { path })) => path == key,
                 _ => false,
             };
             renaming
         };
-        if controls_high {
-            rems(ui::CONTROL_HEIGHT_SM).to_pixels(rem)
+        let base = if controls_high {
+            ui::CONTROL_HEIGHT_SM
         } else {
-            rems(ui::ROW_HEIGHT).to_pixels(rem)
-        }
+            ui::ROW_HEIGHT
+        };
+        // chip 只跟着「内联新建文件」行（重命名与新建文件夹都没有那一行）。
+        let chips = ctx.is_edit_row(display) && matches!(ctx.edit, Some(ScratchpadEdit::NewFile));
+        tree::RowHeight::new(base).add_if(chips, ui::SCRATCHPAD_ROW_CHIPS)
     }
 
     /// 内联编辑行（新建 / 重命名通用）。
@@ -2621,7 +2645,8 @@ impl ScratchpadView {
         let muted = theme.colors.muted_foreground;
         let primary = theme.colors.primary;
         let hover_bg = theme.colors.list_hover;
-        let selected_bg = theme.colors.sidebar_accent;
+        // 选中底走列表角色（与导航 / 资源库 / Mock 同一口径；`sidebar_accent` 是侧栏容器角色）。
+        let selected_bg = theme.colors.list_active;
         let fg = theme.colors.foreground;
 
         let Some(input) = self.scratchpad.borrow().name_input.clone() else {
@@ -2709,7 +2734,8 @@ impl ScratchpadView {
                     .text_xs()
                     .text_color(if on { fg } else { muted })
                     .when(on, |this| this.bg(selected_bg))
-                    .hover(move |s| s.bg(hover_bg))
+                    // 开关态 chip 与行选中同一规矩：悬停不盖当前位置（未开才给悬停底）。
+                    .when(!on, move |s| s.hover(move |s| s.bg(hover_bg)))
                     .child(template.label())
                     .on_click(handler),
             );
@@ -2877,7 +2903,8 @@ impl ScratchpadView {
 
         let theme = cx.theme();
         let hover_bg = theme.colors.list_hover;
-        let selected_bg = theme.colors.sidebar_accent;
+        // 选中底与开关 chip 的 on 态都取列表激活色（与导航 / 资源库 / Mock 同一口径）。
+        let selected_bg = theme.colors.list_active;
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let folder_color = theme.colors.warning;
@@ -3267,7 +3294,8 @@ impl ScratchpadView {
                 .text_xs()
                 .text_color(if mode_on { fg } else { muted })
                 .when(mode_on, |this| this.bg(selected_bg))
-                .hover(move |s| s.bg(hover_bg))
+                // 开关 chip 同一条规矩：悬停不盖当前位置。
+                .when(!mode_on, move |s| s.hover(move |s| s.bg(hover_bg)))
                 .child(mode_label)
                 .on_click(toggle_mode),
         );
@@ -3290,7 +3318,7 @@ impl ScratchpadView {
                         .text_xs()
                         .text_color(if search_regex { fg } else { muted })
                         .when(search_regex, |this| this.bg(selected_bg))
-                        .hover(move |s| s.bg(hover_bg))
+                        .when(!search_regex, move |s| s.hover(move |s| s.bg(hover_bg)))
                         .child(".*")
                         .on_click(toggle_regex),
                 )
@@ -3307,7 +3335,7 @@ impl ScratchpadView {
                         .text_xs()
                         .text_color(if search_case { fg } else { muted })
                         .when(search_case, |this| this.bg(selected_bg))
-                        .hover(move |s| s.bg(hover_bg))
+                        .when(!search_case, move |s| s.hover(move |s| s.bg(hover_bg)))
                         .child("Aa")
                         .on_click(toggle_case),
                 )
@@ -3335,7 +3363,7 @@ impl ScratchpadView {
                 .items_center()
                 .gap_1()
                 .w_full()
-                .h(rems(1.375))
+                .h(rems(ui::ROW_HEIGHT_COMPACT))
                 .px_1p5()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
@@ -3442,16 +3470,10 @@ impl ScratchpadView {
             if row_count > 0 {
                 drafts = drafts.child(group_header("草稿", row_count));
             }
-            let sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
-                (0..display_count)
-                    .map(|i| {
-                        Size::new(
-                            Pixels::ZERO,
-                            Self::scratchpad_row_height(&row_ctx, i, window.rem_size()),
-                        )
-                    })
-                    .collect(),
-            );
+            let sizes: Rc<Vec<Size<Pixels>>> =
+                tree::row_sizes(display_count, window.rem_size(), |i| {
+                    Self::scratchpad_row_height(&row_ctx, i)
+                });
             let list_ctx = row_ctx.clone();
             let scroll = self.scratchpad.borrow().list_scroll.clone();
             let list = v_virtual_list(
@@ -3472,7 +3494,6 @@ impl ScratchpadView {
         // ── 底部固定区（引用 / 回收站 / 撤销栏 / 状态；不随草稿树滚动）──
         let mut body = div().v_flex().w_full().gap_1().px_1().pb_1();
 
-
         // ── 外部引用（链接：改名 / 打开 / 移除；不复制文件）──
         if !external_refs.is_empty() {
             body = body.child(group_header("外部引用", external_refs.len()));
@@ -3491,7 +3512,9 @@ impl ScratchpadView {
                     move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                         entity.update(app, |this, cx| {
                             this.start_scratchpad_edit(
-                                ScratchpadEdit::RenameReference { alias: alias.clone() },
+                                ScratchpadEdit::RenameReference {
+                                    alias: alias.clone(),
+                                },
                                 window,
                                 cx,
                             )
@@ -3532,7 +3555,7 @@ impl ScratchpadView {
                         .items_center()
                         .gap_2()
                         .w_full()
-                        .h(rems(1.375))
+                        .h(rems(ui::ROW_HEIGHT_COMPACT))
                         .px_1p5()
                         .child(div().w_2().h_2().flex_none().rounded_sm().bg(ref_color))
                         .child(
@@ -3628,14 +3651,13 @@ impl ScratchpadView {
                     entity.update(app, |_, cx| cx.notify());
                 }
             };
-            let chevron = if trash_expanded { "▾" } else { "▸" };
             let mut header = div()
                 .id("sp-trash-head")
                 .h_flex()
                 .items_center()
                 .gap_1()
                 .w_full()
-                .h(rems(1.375))
+                .h(rems(ui::ROW_HEIGHT_COMPACT))
                 .px_1p5()
                 .rounded_sm()
                 .cursor_pointer()
@@ -3644,7 +3666,8 @@ impl ScratchpadView {
                 .text_color(muted)
                 .hover(move |s| s.bg(hover_bg))
                 .on_click(toggle_trash)
-                .child(div().w_2p5().flex_none().child(chevron))
+                // 展开载体与树行统一（回收站头是同一类可折叠头）。
+                .child(tree::disclosure_slot().child(tree::disclosure_icon(trash_expanded, muted)))
                 .child("回收站")
                 .child(div().flex_1())
                 .child(trash.len().to_string());
@@ -3686,7 +3709,7 @@ impl ScratchpadView {
                                 .items_center()
                                 .gap_2()
                                 .w_full()
-                                .h(rems(1.375))
+                                .h(rems(ui::ROW_HEIGHT_COMPACT))
                                 .pl(rems(1.125))
                                 .pr_1p5()
                                 .child(
@@ -3827,7 +3850,6 @@ impl ScratchpadView {
                 }
             })
     }
-
 }
 
 #[cfg(test)]
@@ -3836,14 +3858,13 @@ mod tests {
     ///
     /// 窗口级交互（真点击、真轮询）不在这一层，见 `scratchpad-user-guide.md` §9 验收清单。
     use super::{
-        ScratchpadSearchView, ScratchpadSort, ScratchpadTemplate, ScratchpadEntryKind,
-        flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
+        ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchView, ScratchpadSort,
+        ScratchpadTemplate, flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
         scratchpad_entry_matches, scratchpad_shows_dirty_dot, scratchpad_size_label,
-        scratchpad_split_name, scratchpad_sort_entries,
-        search_view_from_payload, ScratchpadEntry,
+        scratchpad_sort_entries, scratchpad_split_name, search_view_from_payload,
     };
-    use crate::{DiffLineKind, scratchpad_view::scratchpad_diff_marker};
     use crate::jobs::SearchPayload;
+    use crate::{DiffLineKind, scratchpad_view::scratchpad_diff_marker};
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
@@ -3955,11 +3976,19 @@ mod tests {
         ];
         scratchpad_sort_entries(&mut rows, ScratchpadSort::Name, false);
         let names: Vec<&str> = rows.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["dir", "a.sql", "b.sql"], "文件夹恒在前，其余按名称升序");
+        assert_eq!(
+            names,
+            vec!["dir", "a.sql", "b.sql"],
+            "文件夹恒在前，其余按名称升序"
+        );
 
         scratchpad_sort_entries(&mut rows, ScratchpadSort::Size, true);
         let names: Vec<&str> = rows.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["dir", "b.sql", "a.sql"], "大小降序（文件夹仍在前）");
+        assert_eq!(
+            names,
+            vec!["dir", "b.sql", "a.sql"],
+            "大小降序（文件夹仍在前）"
+        );
     }
 
     #[test]

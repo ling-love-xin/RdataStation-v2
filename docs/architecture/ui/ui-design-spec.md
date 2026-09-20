@@ -50,6 +50,7 @@
 | | `QUICK_OPEN_PANEL_TOP` | 2.625 | 42 | — |
 | | `QUICK_OPEN_PANEL_MAX_HEIGHT` | 26.25 | 420 | — |
 | 列表 / 树 | `ROW_HEIGHT` | 1.5 | 24 | `h_6` |
+| | `ROW_HEIGHT_COMPACT` | 1.375 | 22 | `h(rems(…))` |
 | | `TREE_INDENT` | 0.875 | 14 | — |
 | | `TREE_BASE_PADDING` | 0.5 | 8 | `pl_2` |
 | | `PANEL_HEADER_HEIGHT` | 2.25 | 36 | `h_9` |
@@ -64,9 +65,11 @@
 | | `NAV_EDITOR_TAG` | 3.5 | 56 | `h(rems(…))` |
 | | `NAV_EDITOR_COPY` | 4.5 | 72 | `h(rems(…))` |
 | | `NAV_EDITOR_GROUP` | 5.5 | 88 | `h(rems(…))` |
+| 草稿箱行（虚拟列表） | `SCRATCHPAD_ROW_CHIPS` | 1.625 | 26 | `h(rems(…))` |
 | | `NAV_SEARCH_SECTION_MAX` | 8.0 | 128 | `max_h(rems(…))` |
 | 控件 / 图标 | `CONTROL_HEIGHT_SM` | 1.625 | 26 | `rems(1.625)` |
 | | `CONTROL_HEIGHT_MD` | 2.0 | 32 | `h_8` |
+| | `ICON_SIZE_XS` | 0.75 | 12 | `size_3` |
 | | `ICON_SIZE_SM` | 0.875 | 14 | `size_3p5` |
 | | `ICON_SIZE_MD` | 1.0 | 16 | `size_4` |
 | 间距 | `GAP_SM` / `GAP_MD` / `GAP_LG` | 0.25 / 0.5 / 0.75 | 4 / 8 / 12 | `gap_1` / `gap_2` / `gap_3` |

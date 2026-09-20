@@ -90,6 +90,12 @@ pub const QUICK_OPEN_SEARCH_DEBOUNCE_MS: u64 = 150;
 
 /// 列表 / 树单行高度（1.5rem = 24px）
 pub const ROW_HEIGHT: f32 = 1.5;
+/// **紧凑行高**（1.375rem = 22px）——比 `ROW_HEIGHT` 矮一档的次级行。
+///
+/// 用于「信息行 + 行内动作」这一类行：分组头、外部引用行、回收站头 / 行（草稿箱底部
+/// 固定区，不在虚拟列表内）。数值与导航对象树行（`NAV_ROW_TREE`）相同，但**语义独立**：
+/// 改一处不动另一处。
+pub const ROW_HEIGHT_COMPACT: f32 = 1.375;
 /// 树层级缩进步长（0.875rem ≈ 14px）
 pub const TREE_INDENT: f32 = 0.875;
 /// 树基础左内边距（0.5rem = 8px）
@@ -139,6 +145,10 @@ pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 pub const CONTROL_HEIGHT_SM: f32 = 1.625;
 /// 标准控件高度（输入框、按钮；2rem = 32px）
 pub const CONTROL_HEIGHT_MD: f32 = 2.0;
+/// 内联图标尺寸（0.75rem = 12px）——行内小图标（展开指示 / 行尾操作 / 勾选）。
+///
+/// 图标阶梯的第三档（`docs/architecture/theme/ui-constraints.md` §2：12 / 14 / 16px）。
+pub const ICON_SIZE_XS: f32 = 0.75;
 /// 小图标尺寸（0.875rem ≈ 14px）
 pub const ICON_SIZE_SM: f32 = 0.875;
 /// 标准图标尺寸（1rem = 16px）
@@ -180,6 +190,12 @@ pub const NAV_GROUP_BAR_WIDTH: Pixels = px(2.);
 pub const SCRATCHPAD_GROUP_MAX_HEIGHT: f32 = 7.5;
 /// 空态大图标尺寸（2.25rem = 36px）
 pub const SCRATCHPAD_EMPTY_ICON_SIZE: f32 = 2.25;
+/// 内联新建行的**模板 chip 块**高（1.625rem = 26px，含上下内距与行间隙）。
+///
+/// 与渲染成对：26px = `py_0p5`×2（4）+ `gap_0p5`（2）+ chip 行 `h_5`（20）。虚拟列表
+/// **不实测回写**行高（`v_virtual_list` 按给定高度定义布局），所以增删这一块必须同时
+/// 改 `ScratchpadView::scratchpad_row_height` 的附加块，否则后一行被压。
+pub const SCRATCHPAD_ROW_CHIPS: f32 = 1.625;
 
 // ===== 连接对话框（M3）专用尺寸（rem 基准；登记在此，视图只引用） =====
 //

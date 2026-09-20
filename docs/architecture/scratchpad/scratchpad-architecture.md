@@ -479,6 +479,9 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | D11 | 内容搜索限制：`MAX_DEPTH=4` / 单文件 30 s / 500 条截断 | 草稿箱是临时区，不为超大目录做全量索引（保持"随手搜"的响应） |
 | D12 | 命中高亮由**后端给区间** | ❌ 前端重算（要复刻正则与大小写语义，两处真相） |
 | D13 | 树整行唯一滚动区（虚拟列表），引用/回收站底部固定限高 | ❌ 全列一起滚（草稿一多，引用/回收站被推走且无滚动条 → 实际不可达） |
+| D14 | 树行展开指示用**图标**（`chevron-right/down`，12px），不用 `▸/▾` 字符 | ❌ 字符（与导航侧分叉、且属 `gpui-kit` 选型表里的手搓反例）；「按扩展名给色块」是类型标识通道，不受影响 |
+| D15 | 行选中底取 `list_active`；**悬停只在未选中时生效**（开关 chip 同理） | ❌ `sidebar_accent`（与 `list_active` 主题同值，属侧栏容器角色）/ ❌ 悬停盖选中（`ui-design-spec` §4 已禁止） |
+| D16 | 次级行（分组头 / 外部引用行 / 回收站）定高走 `ROW_HEIGHT_COMPACT`（1.375rem = 22px） | ❌ 裸 `rems(1.375)`（结构尺寸不得写死在视图里）/ ❌ 复用 `NAV_ROW_TREE`（导航域命名，语义不同） |
 
 ## 9. 降级矩阵
 
@@ -501,7 +504,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 全异步加载 | 模块根 / 子目录加载都在 `scratchpad::jobs` 工作线程；渲染期零 I/O；在途期间状态行显示「加载中…」，且不用空态占位闪现 |
 | 重操作后台化 | 导入 / 粘贴 / 清空回收站 / 搜索 / 替换都在工作线程执行，UI 线程只做入队与回填；长任务期间界面可继续交互（可切换面板、浏览其他内容） |
 | 懒加载 | 首次只取模块根 `depth=0`；展开时 `list_directory_entries` |
-| 虚拟化 | `v_virtual_list` 只渲染可视区行；行高逐行给出（重命名行更高） |
+| 虚拟化 | `v_virtual_list` 只渲染可视区行；行高逐行给出（重命名行用控件高，内联新建文件行再加一行模板 chip 块 `SCRATCHPAD_ROW_CHIPS`） |
 | 搜索预算 | `MAX_DEPTH=4`、单文件 30 s、总数 500、每行命中区间 ≤16 |
 | 配置缓存 | `config_cache` + `Mutex`，避免每帧解析 JSON |
 | 复制预算 | 名称避让 ≤1000 次尝试；递归深度 ≤`MAX_DEPTH` |
@@ -530,6 +533,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 文件元数据 | `store.rs::{file_meta, bind_connections, update_file_meta}` + `models.rs::{FileMeta, FileMeta::preferred_connection}`（读侧 → 打开预选；写侧 → 绑定与执行回存） |
 | 回收站 | `trash.rs`（manifest 与服务） + `store.rs::{delete_entry, list_trash, restore_from_trash, empty_trash}` |
 | 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（`ScratchpadView`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**） |
+| 行共用原语与行高预算 | `workbench_shell::tree::{active_bar, disclosure_slot, disclosure_icon, indent_spacer, indent_rem, RowHeight, row_sizes}`（2026-09-20 起导航 / 草稿箱共用）；行高预言在 `scratchpad_view.rs::scratchpad_row_height`，尺寸常量在 `workbench_shell/src/ui.rs` |
 | 宿主端口与装配 | `scratchpad/src/host.rs`（trait）+ `workbench/src/components/scratchpad_host.rs`（实现）+ `workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
 | 搜索结果与替换栏 | `scratchpad/src/scratchpad_view.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
 | 快捷键与尺寸 | `scratchpad/src/commands.rs`、`workbench/src/commands.rs`、`workbench_shell/src/ui.rs`、`app/src/main.rs` |
@@ -574,7 +578,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 | # | 问题 | 说明 |
 | --- | --- | --- |
-| K9 | 面板自绘控件 | 工具栏按钮（`tool_btn`）、树展开字符（`▸/▾`）、分组头仍是自绘 div；按组件选型规范应逐步换 gpui-kit `Button`/`Collapsible` |
+| K9 | 面板自绘控件 | 工具栏按钮（`tool_btn`）、分组头、行尾动作（`↗ ✎ ✕`，18px 宽）仍是自绘 div；按组件选型规范应逐步换 gpui-kit `Button`。**已清一项（2026-09-20）**：树展开字符 `▸/▾` 已换 12px chevron 图标（与导航统一，见 §8 D14） |
 | K10 | 面板层缺自动化测试 | 见 §11 |
 | K11 | `ScratchpadState` 无生产调用方 | 要么在 Phase C 接到 watcher，要么按"无使用方即删"清理 |
 | K12 | 占位视图仍在 | `workbench` 的「资源」「插件」面板仍是占位（Phase D / 后续模块） |

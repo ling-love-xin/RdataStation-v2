@@ -104,16 +104,18 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定�
 ## 3. 树与分组
 
 - **草稿**（根组）：`ScratchpadEntry` 树；初始 `depth=0` 懒加载，展开文件夹时按需 `list_directory_entries(parent)`（子目录缓存），后端 `MAX_DEPTH=4` 仅作内容搜索 / 递归复制的遍历上限。
-- **滚动与虚拟化**：草稿树是面板**唯一滚动区**（`v_virtual_list`，只渲染可视区行，`item_sizes` 按行高逐行给出，重命名行用控件高）；引用 / 回收站为底部固定区并限高（`SCRATCHPAD_GROUP_MAX_HEIGHT`），保证树始终有可用高度。
+- **滚动与虚拟化**：草稿树是面板**唯一滚动区**（`v_virtual_list`，只渲染可视区行，`item_sizes` 按行高逐行给出，重命名行用控件高、内联新建文件行再加一行模板 chip 块 `SCRATCHPAD_ROW_CHIPS`）；引用 / 回收站为底部固定区并限高（`SCRATCHPAD_GROUP_MAX_HEIGHT`），保证树始终有可用高度。
 - **外部引用**：`ExternalReference{ alias, path }` 平铺列表，标题带计数；`external_reference_status()` 探测路径存在性，失效项置灰 + 「（丢失）」；行内 `↗` 打开 / `✎` 改名 / `✕` 移除。
 - **回收站**：折叠区，标题带计数；展开后逐项「还原」，头部「清空」。
 - **行视觉**：
-  - 选中：`sidebar.accent` 底 + 左侧 2px `list.active.border`（品牌 coral）条
-  - 悬停：`list.hover`
-  - 文件夹展开箭头 `▸/▾`；文件/文件夹用**类型色点**（§6.3）
+  - 选中：`list.active` 底 + 左侧 2px `list.active.border`（品牌 coral）条
+  - 悬停：`list.hover`，**只在未选中时生效**（不得盖掉选中底色）
+  - 展开指示：12px `chevron-right/down` **图标**（与导航树统一，2026-09-20）；文件/文件夹另有**类型色点**（§6.3）——两者是两个通道，互不影响
   - 行尾：文件显示「大小 · 相对时间」，文件夹显示相对时间（< 7 天相对，否则日期）
   - 行操作：仅在选中行显示（`↗` 打开位置 / `✎` 重命名 / `✕` 删除）
   - 脏点 `●`：待编辑器宿主（Phase C）提供
+
+> 实现状态（2026-09-20）：行态与导航侧**已统一**——选中底改取 `list.active`（与 `sidebar.accent` 在主题里同值，纯语义统一）、悬停只在未选中时生效、展开指示改 12px chevron 图标（类型色点不变：它是另一条通道，见 §6.3）。
 
 ## 4. 核心交互
 
@@ -233,7 +235,7 @@ flowchart TD
 | 分隔线 / 边框 | `sidebar.border` / `border` | `#E7E7E7` / `#D4D4D4` | `#3C3C3C` |
 | 正文 / 弱文字 | `sidebar.foreground` / `muted.foreground` | `#616161` / `#8E8E8E` | `#CCCCCC` / `#8A8A8A` |
 | 行悬停 | `list.hover.background` | `#F0F0F0` | `#2A2D2E` |
-| 行选中底 | `sidebar.accent.background` | `#E4E4E4` | `#37373D` |
+| 行选中底 | `list.active.background` | `#E4E4E4` | `#37373D` |
 | 选中左边条 | `list.active.border`（品牌 coral） | `#C25B46` | `#E8846F` |
 | 工具图标（常态/悬停） | `muted.foreground` / `foreground` | `#8E8E8E` / `#333333` | `#8A8A8A` / `#CCCCCC` |
 | 搜索输入框 | `background` + `input.border`；聚焦 `caret`/`primary` | `#FFFFFF` / `#D4D4D4` | `#1E1E1E` / `#3C3C3C` |
