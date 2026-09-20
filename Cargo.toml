@@ -71,7 +71,11 @@ gpui-kit = "0.6.1"
 # 取到 `third_party/duckdb/<版本>/`，路径在 `.cargo/config.toml` 的 `[env]`。
 # **crate 版本与库版本必须成对升级**：`1.10505.0` ↔ DuckDB `v1.5.5`（映射规则：
 # 第二段十进制数 `10505` → `1.5.5`，见 `libduckdb-sys` 的 build script）。
-duckdb = { version = "1.10505.0" }
+# `appender-arrow`（→ `vtab-arrow` → `vtab` + `num`）是**纯 crate 侧**特性（不动 C 内核、不动
+# 动态库）：给的是 `Appender::append_record_batch` 与 `Statement::query_arrow` —— 二次分析
+# 那条「结果集直灌 DuckDB」的路就靠它们（P2.5，§4.5.2）。duckdb-rs 依赖的 arrow 是 58，
+# 与本仓同一个大版本，批能直接递过去，不用转格式。
+duckdb = { version = "1.10505.0", features = ["appender-arrow"] }
 arrow = "58.4.0"
 
 # 语义着色 provider 的类型（`DocumentRangeSemanticTokensProvider` 的入参 / 返回值）。

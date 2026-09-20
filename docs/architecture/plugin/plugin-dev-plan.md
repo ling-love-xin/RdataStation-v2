@@ -667,7 +667,7 @@ CREATE TABLE IF NOT EXISTS project_resources (
 
 | 需求 | API | 状态 |
 | --- | --- | --- |
-| **Arrow 入表** | `Appender::append_record_batch(RecordBatch) -> Result<()>`（`src/appender/arrow.rs:30`） | ⚠ **feature `appender-arrow` 未启用**（根 `Cargo.toml` 声明 `duckdb = { version = "1.10505.0" }` 无 features） |
+| **Arrow 入表** | `Appender::append_record_batch(RecordBatch) -> Result<()>`（`src/appender/arrow.rs:30`） | ✅ **已启用**（2026-09-20：根 `Cargo.toml` 的 `duckdb` 加 `features = ["appender-arrow"]`。落在 workspace 层而不是插件方案里写的 `crates/engine`：workbench 也依赖 duckdb，而 feature 本来就是全局相加的；实测**离线可构建**，只多编一个 `num`——`vtab-arrow` 没动 C 内核，预编译动态库照旧） |
 | **Arrow 出表** | `Statement::query_arrow<P>(params) -> Result<Arrow<'_>>`（`src/statement.rs:125`） | 可用 |
 | 批量行写入（过渡备选） | `Connection::appender` / `appender_with_columns`（`src/lib.rs:556/623`） | 可用 |
 
@@ -679,9 +679,9 @@ CREATE TABLE IF NOT EXISTS project_resources (
 
 | # | 文件 | 改动 | 风险 |
 | --- | --- | --- | --- |
-| 1 | `crates/engine/Cargo.toml` | `duckdb = { workspace = true, features = ["appender-arrow"] }`（项目规范：feature 只可加） | `appender-arrow` → `vtab-arrow` 会拉进 vtab 机制，**要量编译时间与产物体积** |
+| 1 | 根 `Cargo.toml` | `duckdb = { version = "1.10505.0", features = ["appender-arrow"] }` | ✅ **已落地**（2026-09-20）：离线构建通过，未动 C 内核与动态库 |
 | 2 | `crates/shared/src/result_set.rs`（新建） | `ColumnMeta` + `ResultSet{batches, columns, total_rows, truncated, has_more}` + `from_batches` / `from_json_rows` + `cell_text`（补 Decimal/Date/Time/Timestamp/Binary/UInt64 的正确格式化） | 新文件，零侵入 |
-| 3 | `crates/engine/src/services/duckdb_service.rs` | 新增 `create_temp_table_from_batches(conn, &[RecordBatch])`（**用 `batch.schema()` 建表** + `Appender::append_record_batch`）与 `query_duckdb_arrow(conn, sql) -> Vec<RecordBatch>`；**旧函数保留**（洞察/导出仍在用） | 新旧并存，不切流 |
+| 3 | `crates/engine/src/services/duckdb_service.rs` | `create_temp_table_from_batches(conn, &[RecordBatch])`（**用 `batch.schema()` 建表** + `Appender::append_record_batch`）｜`query_duckdb_arrow(conn, sql)` | ✅ **前半已落地**（2026-09-20）：入表那条 + 三条口径（形状一致 / 不支持的类型点名报错 / 列类型与 duckdb-rs 写入层对齐）+ 词典编码解码；6 条单测（含 `typeof` 保真与两条路的数据一致性）。`query_duckdb_arrow`（出表）**还没做** |
 | 4 | `crates/engine/src/services/result_types.rs` | `ResultSet` 增 `batches: Vec<RecordBatch>` | — |
 | 5 | `crates/engine/src/services/execution_service.rs` | `execute_duckdb_analysis` 增 Arrow 入参（`batches: Option<Vec<RecordBatch>>`）；有 batches 走 `create_temp_table_from_batches`，否则走旧路；回程优先 `query_duckdb_arrow` 并填 `batches` | 两条分支并存 |
 | 6 | `crates/editor/src/execution.rs` | `QueryData` **增** `result: Option<Arc<ResultSet>>`（`rows` 保留不动） | 加法 |
@@ -694,9 +694,21 @@ CREATE TABLE IF NOT EXISTS project_resources (
 
 | 刀 | 内容 | 验证 |
 | --- | --- | --- |
-| **第 1 刀** | 第 2、6、8 项：契约加字段（**DuckDB 一行不改**） | 全仓测试绿 + `check-all` 绿 —— 证明「携带」无副作用 |
-| **第 2 刀** | 第 1、3、4、5、7、9 项：Arrow 入出打通 | `typeof` 断言（见下）；桥接行数与桥接前一致 |
-| **第 3 刀** | 第 10 项清理 + 更新 `infer_type` 的注释 | 零调用台账更新 |
+| **第 1 刀** ✅ | 第 1、3 项：**底座**（feature + `create_temp_table_from_batches`） | ✅ 已落地（2026-09-20）：6 条单测 —— `typeof` 三类列保真（`DECIMAL(38,10)` / `TIMESTAMP WITH TIME ZONE` / `BLOB`）/ 多批与空批 / 词典编码 / 形状与类型不支持时点名报错 / 两条路的数据一致 |
+| **第 2 刀** ⬜ | 第 2、4、5、6、7、8、9 项：**接线**（`ResultSet` + 契约加 `batches` + 分析段走 Arrow） | D1~D3 断言 + `cargo test-all` 绿 |
+| **第 3 刀** ⬜ | 第 10 项清理 + 更新 `infer_type` 的注释 + 出表 `query_duckdb_arrow` | 零调用台账更新 |
+
+**第 1 刀已落地（2026-09-20）**：`create_temp_table_from_batches` 在 `crates/engine/src/services/duckdb_service.rs`，口径与逐行那条路**刻意保持一致**（同一个 `tmp_q_` 前缀与登记），差别只在类型与速度。三条口径都写进了函数文档：
+
+| 口径 | 为什么 |
+| --- | --- |
+| 所有批**同一个形状**（列名与类型逐一对上） | 中间层不做隐式类型转换 —— 那会把「一边 int 一边 text」这种上游问题掩掉；报错点名第几个批 |
+| 不支持的 Arrow 类型**报错**（点名列与类型） | 退化成 `VARCHAR` 是最坏的一种「成功」：用户会以为数据本身就是文本 |
+| 列类型与 duckdb-rs 的写入层**对齐**（`duckdb_type_of` 对应它的 `to_duckdb_type_id`） | 声明成 `DECIMAL` 而写入按 `DOUBLE` 转换，会在 append 那一步炸得莫名其妙；`Decimal256` 因此**明确不支持**（它声明侧是 DOUBLE、写入侧没有那条路） |
+
+外加一条协议要求的准备动作：**词典编码的列先解成值类型**（`decode_dictionary_columns`）——duckdb-rs 的写入层没有 `Dictionary` 那条路，而协议允许对端用词典编码（§4.2.4）。
+
+**这一层现在没有生产调用方**（接线是第 2 刀）——「已就绪未接线」不算完成，别在别处当成已完成。
 
 **为什么第 1 刀要单独提**：它是纯加法，把「契约改动」与「DuckDB 行为改动」两个风险分开。第 2 刀出问题时，第 1 刀不用回退。
 
@@ -859,10 +871,17 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | P0 | ✅ **完成**（2026-09-20） | `paths` 新增 6 函数 + `validate_plugin_id` 白名单 + `NEW_LAYOUT_DIRS` 补登（`cargo test -p rds-paths` 13/13）；`PermissionType::{Sidecar,Driver}` + `is_gating()` + 清单三字段；删除 `sidecar/driver.rs`/`storage.rs`/`wasm/host_functions.rs`（共 516 行）；修 `client.rs` 反向判据（抽 `parse_rpc_response` + 4 条单测）；`cargo check-all` 绿；`cargo test -p rds-plugin` 19/19 |
 | P1 | 🟡 进行中，**代码面已齐**（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` / 运行时接线 / 驱动桥 / 接引擎 / 注册路径十块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`sidecar/supervisor.rs`：运行时接线（`Deployment` + `SidecarSupervisor`：执行内核动作、把 `Decision::Open` 兑现成 `session.open`、事件显式 `drain_events`、generation 防旧事件误伤、起不来告诉内核不留僵尸）。`lifecycle.rs` 的 `acquire` 按规则 1 修正分流（并行共享 / 串行有额度就起新实例）。`sidecar/driver.rs`：驱动桥（`SessionDriver`：describe / execute / fetch / cancel / session.ping；`PageData` 把内联 JSON 与 Arrow 统一成一个类型；Arrow 在宿主侧解成 `RecordBatch`；`DriverError` 按错误码分流）。`cargo test -p rds-plugin` 103/103 + 集成 22/22（P1 新增 86 条单测 + 22 条真进程集成测试）。`sidecar/factory.rs`：注册路径（`SidecarDriverFactory` + `register_sidecar_drivers`；`create` = 起进程 → 握手 → 会话 → describe；排队超时明确失败并撤排队；`Drop` 交还会话）。`lifecycle.rs` 修一处内核缺口：撤掉**还在排队**的会话（原先从队列里摘不掉，别人关闭时会被放行成幽灵会话）。`sidecar/driver.rs` 再接上引擎：`SidecarDatabase` 实现 `engine::driver::Database`（`QueryPage` → `QueryResult` 只填 `batches`；错误按域映射；弱引用连接；令牌取消走**真取消**）。HTTP 旧路径两个文件（`client.rs` + 旧 `manager.rs`）已删，`reqwest` 依赖随之去掉。`cargo test -p rds-plugin` 106/106 + 集成 44/44（新增 `tests/sidecar_conformance.rs`：5 条把 P1 退出标准做成可反复执行的检查，换 `RDS_SIDECAR_BIN` 就能拿同一套检查去验任何语言的 sidecar）。**代码面到此齐了**；剩下的要在真机上做：**PostgreSQL 靶子**（真库 + 真 Arrow）、**跨语言 Arrow 互通**（Go `arrow-go` / Python `pyarrow`，本机拉不到依赖）、把这两条固化成验收脚本。之后进 P2（`meta.*` + `DriverCapability` 门控 + 导航树） |
 | P2 | 🟡 **代码面已齐**（四刀：协议 / 引擎元数据面 / 能力门控 / 一致性验收） | 见 §11.1（`cargo test -p rds-plugin` = 114/114 + 集成 61/61） |
-| P2.5 | ⬜ 未开始 | — |
+| P2.5 | 🟡 **底座已落地**（第 1 刀），接线未做 | 见 §11.2 |
 | P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
 | P4 | ⬜ 未开始 | — |
 | P5 | ⬜ 未开始 | — |
+### 11.2 P2.5 的落地清单
+
+**第 1 刀（底座）✅ 2026-09-20**：根 `Cargo.toml` 给 `duckdb` 打开 `appender-arrow`（纯 crate 侧特性，离线可构建）；`DuckDbService::create_temp_table_from_batches` 落地 —— 用 `batch.schema()` 建表 + `Appender::append_record_batch` 直灌，配 `duckdb_type_of`（Arrow → DuckDB 列类型，与 duckdb-rs 写入层对齐）、`same_shape`（批形状一致）、`decode_dictionary_columns`（词典编码先解码）、`quote_ident`（列名加引号，含引号翻倍）。6 条单测：类型保真（`DECIMAL(38,10)` / `TIMESTAMP WITH TIME ZONE` / `BLOB` / `BOOLEAN` / `VARCHAR` / `BIGINT`）、高精度值往返（`1234567890.1234567890` 不被压成 f64）、多批累加与空批、词典编码、形状/类型不支持时点名报错、两条路（Arrow / 逐行）数据一致。`cargo test -p rds-engine --lib` = 483/483 + `check-all` 绿。
+
+**第 2 刀（接线）⬜**：按 §5.1 的 10 项清单做第 2、4、5、6、7、8、9 项 —— 它的形状已经清楚：`ResultEntry` 不带 Arrow 是关键卡点（编辑器那层只有 `Vec<Vec<String>>`），所以要给 `QueryData` / `AnalysisRequest` 加「带批的那一份」并一路传到引擎；`AnalysisRequest` 有 `PartialEq, Eq` derive，`Arc<ResultSet>` 进去会让判等变味（去 `Eq` 或只按 SQL 与行数判等）。
+
+**第 3 刀 ⬜**：`query_duckdb_arrow`（出表那条路）+ 清理零调用项 + 更新 `infer_type` 的注释（它只产四档类型，接线后「两处必须同一套打型规则」的说法要改）。
 
 ### 11.1 P2 的落地清单（四刀）
 
