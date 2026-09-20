@@ -327,6 +327,11 @@ pub(crate) fn open_manager(
             }
             let mut fields_block = div().v_flex().gap_1();
             for (spec, input) in &net_rows {
+                // 凭据行（password / passphrase）：掩码显示 + 眼睛按钮（默认不肩窥也能确认自己敲了没）。
+                let mut field = Input::new(input);
+                if is_secret_field(spec.key) {
+                    field = field.mask_toggle();
+                }
                 let mut row = div()
                     .h_flex()
                     .items_center()
@@ -339,7 +344,7 @@ pub(crate) fn open_manager(
                             .text_color(theme.colors.muted_foreground)
                             .child(spec.label),
                     )
-                    .child(Input::new(input).w(rems(14.)));
+                    .child(field.w(rems(14.)));
                 if spec.required {
                     row = row.child(div().text_xs().text_color(theme.colors.danger).child("*"));
                 }

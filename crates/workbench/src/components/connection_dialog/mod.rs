@@ -21,15 +21,23 @@ use gpui_kit::base::StyledExt;
 // 按钮 / 复选框 / 下拉的 `.disabled(bool)` 来自该 trait（Input 是本体方法，不需导入）。
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::input::Enter as InputEnter;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::scroll::ScrollableElement as _;
+// 折叠加揭示动效（`motion_id` → 组件内 spring），分组标题行与内容体走它（决策 #108）。
+use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::input::{Input, InputState};
+// 侧栏列表（类型 = 小节 + 行；暂存草稿同款）：组件自带↑↓/Enter/Esc、悬停/选中态与虚拟滚动（决策 #107）。
+use gpui_kit::component::list::{List, ListState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 // Tab 条 / 分段控件 / 开关：gpui-kit 0.6.1 组件（`Sizable` 提供 `.with_size(Size::…)`）。
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme, WindowExt};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size, Theme, WindowExt};
+// kit 的窗口测试 API（`find` / `click_at` / `press`）按 `ElementId` 操作真实控件；
+// 被查的元素要 `.id(...)` + `.test_support()` 才会登记观测快照（非测试构建零成本）。
+// 注：`TestWindowExt` 在 `gpui_kit::test`（同样只在 test-support 下存在）。
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -49,7 +57,14 @@ use connection::model::DataSource;
 /// 认证类型（**规范键**：与 `url_params::inject_auth_into_url` 及
 /// `inject_{ssh,proxy}_auth_from_auth_data` 的分支一一对应；字段声明见
 /// `helpers::auth_field_specs`）。
-const AUTH_TYPES: [&str; 6] = ["password", "ldap", "pg_class", "kerberos", "ssh_key", "proxy_pwd"];
+const AUTH_TYPES: [&str; 6] = [
+    "password",
+    "ldap",
+    "pg_class",
+    "kerberos",
+    "ssh_key",
+    "proxy_pwd",
+];
 /// 网络配置类型（`network_configs.network_type` 的**规范键**，与
 /// `parse_network_config_json` 的匹配键一一对应；不能写 UI 中文标签或大写变体）。
 const NETWORK_TYPES: [&str; 4] = ["ssh", "proxy", "ssl", "chain"];
@@ -88,21 +103,30 @@ const SCOPE_SEG_LABELS: [(&str, &str); 3] = [
 ];
 /// 能力矩阵为空时的提示（驱动未声明任何能力）。
 const CAP_EMPTY_HINT: &str = "该驱动未声明任何能力（drivers.capabilities 为空）";
+/// 凭据字段键（**掩码显示**）：与 `helpers::{auth_field_specs, network_field_specs}`
+/// 中以这些键声明的行一一对应（连接表单的密码框同款处理）。
+///
+/// `chain` 类型没有结构化字段（直接填 JSON），不在其列；JSON 里的密码明文由用户自担。
+const SECRET_FIELD_KEYS: [&str; 2] = ["password", "passphrase"];
 
+mod draft_list;
 mod helpers;
 mod managers;
 mod project_picker;
 mod render;
 mod staging;
 mod state;
+mod type_tree;
 
+pub use draft_list::DraftListDelegate;
 pub(crate) use helpers::*;
 pub(crate) use managers::*;
 pub use project_picker::{
     PROJECT_NEW_LABEL, PROJECT_NONE_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind,
 };
-pub(crate) use staging::saved_scope_short;
 pub use staging::ConnectionDraft;
+pub(crate) use staging::saved_scope_short;
+pub use type_tree::TypeTreeDelegate;
 
 /// 结果行级别（决定配色与是否有详情入口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,11 +144,7 @@ pub enum ResultLevel {
 impl ResultLevel {
     /// 二元结果 → 级别（兼容旧式「成功 / 失败」调用）。
     pub fn from_ok(ok: bool) -> Self {
-        if ok {
-            Self::Success
-        } else {
-            Self::Error
-        }
+        if ok { Self::Success } else { Self::Error }
     }
 
     pub fn is_error(self) -> bool {
@@ -199,6 +219,11 @@ pub(crate) fn set_result_line(result: &Rc<RefCell<Option<ResultLine>>>, line: Re
 }
 
 /// 连接显示名（空名回退占位，避免提示里出现空引号）。
+/// 该字段键是否为凭据（掩码输入 + 眼睛按钮；见 [`SECRET_FIELD_KEYS`]）。
+pub(crate) fn is_secret_field(key: &str) -> bool {
+    SECRET_FIELD_KEYS.contains(&key)
+}
+
 pub(crate) fn conn_display_name(name: &str) -> &str {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -258,6 +283,20 @@ pub struct ManagerWorkspace {
     pub policies: Rc<RefCell<Vec<(String, String, bool)>>>,
     /// 编辑中的策略 ID（None = 新建）。
     pub policy_editing: Option<String>,
+}
+
+/// 对话框内在途的操作（按钮 loading + 重复触发保护）。
+///
+/// 服务层是同步 `block_on` 风格：测试 / 保存被放到后台执行（见 `render.rs` 的
+/// `do_test` / `do_save`），期间必须挡住第二次触发，否则会并发建连 / 并发写库。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusyOp {
+    /// 空闲。
+    None,
+    /// 测试连接在途。
+    Test,
+    /// 保存在途。
+    Save,
 }
 
 /// 对话框状态（EditorPanel 持有；open_dialog builder 每次渲染重建 UI，状态持久）。
@@ -358,6 +397,10 @@ pub struct ConnectionDialogState {
     ssl_key: Entity<InputState>,
     /// 暂存列表（多连接连续编辑；见原型设计 §2.2）：未保存草稿快照 + 已保存条目占位。
     pub drafts: Rc<RefCell<Vec<ConnectionDraft>>>,
+    /// 侧栏「暂存列表」（`List` 组件；与类型列表同一套做法）。
+    ///
+    /// 同 `type_tree`：`open()` 里懒建（需要 `Rc<Self>` 与面板 / 宿主句柄）。
+    pub draft_list: Rc<RefCell<Option<Entity<ListState<DraftListDelegate>>>>>,
     /// 当前编辑条目索引（暂存列表光标）。
     pub draft_cursor: Rc<Cell<usize>>,
     /// 是否已从 `connection_drafts` 表恢复过（进程内只恢复一次，避免覆盖会话内编辑）。
@@ -374,6 +417,22 @@ pub struct ConnectionDialogState {
     pub session_project: Rc<RefCell<Option<(String, String)>>>,
     /// 单列大纲分组的折叠态（仅 UI 偏好，不落库）：在列 = 已折叠，缺省 = 展开。
     pub collapsed_sections: Rc<RefCell<Vec<String>>>,
+    /// 在途操作（测试 / 保存）：按钮 loading + 重复触发保护（`BusyOp::None` = 空闲）。
+    pub busy: Rc<Cell<BusyOp>>,
+    /// 是否已因「必填项缺失」被拦下过一次（拦截后才把缺口字段标红；
+    /// 打开对话框就标红会显得像报错，老手看到的应该是干净表单）。
+    pub blocked_hint: Rc<Cell<bool>>,
+    /// 侧栏「数据库类型」列表（`List` 组件；小节 = 分类）。
+    ///
+    /// `open()` 里懒建（委托要拿对话框自身的 `Rc`，`new()` 里还拿不到）。
+    pub type_tree: Rc<RefCell<Option<Entity<ListState<TypeTreeDelegate>>>>>,
+}
+
+/// 创建一个**掩码显示**的单行输入（凭据：密码 / 私钥口令）。
+///
+/// 掩码只影响渲染：`InputState::value()` 仍是真实文本（否则保存下去的就是一串圆点）。
+fn secret_input(window: &mut Window, cx: &mut App) -> Entity<InputState> {
+    cx.new(|cx| InputState::new(window, cx).masked(true))
 }
 
 fn state_inputs(

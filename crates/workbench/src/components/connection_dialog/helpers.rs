@@ -42,10 +42,9 @@ pub(crate) fn set_select_value(
 // 本模块只做别名（保持既有调用点可读），不再自己声明数值。
 
 pub(crate) use crate::ui::{
-    DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W, DIALOG_BODY_HEIGHT as BODY_H,
-    DIALOG_DRIVER_WIDTH as DRIVER_W, DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W,
-    DIALOG_PROJECT_WIDTH as PROJECT_W, DIALOG_ROW_HEIGHT as ROW_H,
-    DIALOG_STAGING_HEIGHT as STAGING_H, GAP_LG, GAP_MD, GAP_SM,
+    DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W, DIALOG_DRIVER_WIDTH as DRIVER_W,
+    DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W, DIALOG_PROJECT_WIDTH as PROJECT_W,
+    DIALOG_ROW_HEIGHT as ROW_H, DIALOG_STAGING_HEIGHT as STAGING_H, GAP_LG, GAP_MD, GAP_SM,
 };
 
 /// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / 地址），
@@ -54,12 +53,113 @@ pub(crate) const LABEL_W: f32 = 1.75;
 
 /// Header 统一标签列（固定宽度，保证各行标签左对齐，减少视觉磕绊）。
 pub(crate) fn header_label(theme: &Theme, text: &'static str) -> Div {
+    header_label_state(theme, text, false)
+}
+
+/// 同上，但可标出「这个字段还差着」：只换颜色（`danger`），**不加图标 / 不加行**——
+/// Header 是三行定高结构，插东西会推挤后续元素（布局不跳动的硬约束）。
+pub(crate) fn header_label_state(theme: &Theme, text: &'static str, missing: bool) -> Div {
+    let color = if missing {
+        theme.colors.danger
+    } else {
+        theme.colors.muted_foreground
+    };
     div()
         .w(rems(LABEL_W))
         .flex_shrink_0()
         .text_xs()
-        .text_color(theme.colors.muted_foreground)
+        .text_color(color)
         .child(text)
+}
+
+// ===== 侧栏类型筛选与行高（纯函数：渲染与键盘路径共用同一份判据）=====
+
+/// 类型树过滤判据：命中类型名 / 类型 id / 该类型下的**驱动名**。
+///
+/// 抽出来是因为它有两个消费点：树的渲染，以及「搜索框回车选中第一个匹配」。
+/// 两处各写一份迟早会出现“能搜到却选不中”。
+pub(crate) fn type_matches_filter(t: &DataSourceType, drivers: &[Driver], filter: &str) -> bool {
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return true;
+    }
+    t.name.to_lowercase().contains(&needle)
+        || t.id.to_lowercase().contains(&needle)
+        || drivers
+            .iter()
+            .any(|d| d.type_id == t.id && d.name.to_lowercase().contains(&needle))
+}
+
+/// 过滤后第一个可选中类型的 id（键盘路径：搜索框回车）。
+///
+/// 优先返回**有启用驱动**的类型——键盘路径不该把用户送到一条注定被拒的路上
+/// （`select_type` 对“暂无可用驱动”是不切换的）；若命中项全都无驱动，则退回第一个命中项，
+/// 让 `select_type` 给出「暂无可用驱动」的原因行（而不是回车后什么都没发生）。
+pub(crate) fn first_selectable_type(
+    types: &[DataSourceType],
+    drivers: &[Driver],
+    filter: &str,
+) -> Option<String> {
+    let matched: Vec<&DataSourceType> = types
+        .iter()
+        .filter(|t| type_matches_filter(t, drivers, filter))
+        .collect();
+    matched
+        .iter()
+        .find(|t| type_has_driver(drivers, &t.id))
+        .or_else(|| matched.first())
+        .map(|t| t.id.clone())
+}
+
+/// 对话框行以外的垂直开销估算（标题 / 内距 / footer；实测约 5.5rem）。
+///
+/// 只用于矮窗口的**提前夹住**，不需要精确：Dialog 的纵向位置是 `viewport_h / 10`（组件行为），
+/// 所以真正要保证的是「`viewport_h/10 + 开销 + 行高 + 开销` 不超屏」。
+const DIALOG_CHROME_HEIGHT: f32 = 5.5;
+
+/// 两列行的实际行高（**rem 值**）：设计基准 [`crate::ui::DIALOG_BODY_HEIGHT`] 与窗口可用高度取小。
+///
+/// 参参是“窗口可用高度按 rem 计”（调用点传 `viewport_height / rem_size`）——只做纯数运算，
+/// 所以能直接单测（不需要窗口）。
+///
+/// 为什么需要：基准 32.5rem = 520px，加上标题 / footer 后对话框总高约 610px，
+/// 而纵向位置是窗口高 / 10——在 768 高的小屏（再叠 125% 缩放 → 逻辑高 ~614px）上
+/// 会把 footer 顶到屏幕外。夹住后由内容区（`flex_1`）与侧栏（`h_full`）自己让位，
+/// 不靠调用方记得。下限 16rem：再矮的窗口也只是内部滚动，不会压成一条缝。
+pub(crate) fn dialog_row_height(viewport_h_rem: f32) -> Rems {
+    let budget = viewport_h_rem * 0.9 - DIALOG_CHROME_HEIGHT;
+    rems(crate::ui::DIALOG_BODY_HEIGHT.min(budget).max(16.))
+}
+
+// ===== 最小可保存集（缺口提示）=====
+
+/// 还差什么才能测试 / 保存：按顺序给出**第一个**缺口，全齐则 `None`。
+///
+/// 判据与 `ClonedDialogState::collect` 逐项一致（类型/驱动 → 名称 → 地址），三处消费它：
+/// 保存 / 测试的拦截文案、Header 标签标红、以及后续若要给按钮置灰。
+/// 抽成纯函数是为了让它可单测——散在渲染里就没人能拦住判据漂移。
+pub(crate) fn save_blocker(
+    has_type: bool,
+    driver_value: &str,
+    name: &str,
+    url: &str,
+    is_file_db: bool,
+) -> Option<&'static str> {
+    if !has_type {
+        Some("请先在左侧选择数据库类型")
+    } else if driver_value.trim().is_empty() {
+        Some("请选择驱动实现")
+    } else if name.trim().is_empty() {
+        Some("请填写连接名称")
+    } else if url.trim().is_empty() {
+        Some(if is_file_db {
+            "请选择或新建数据库文件（常规 → 连接设置）"
+        } else {
+            "请填写连接 URI"
+        })
+    } else {
+        None
+    }
 }
 
 // ===== 标签文本 ↔ JSON（UI 逗号分隔 ⇄ 落库 / 回读）=====
@@ -441,15 +541,12 @@ pub(crate) fn section_header(
     title: &str,
     collapsed: bool,
 ) -> Div {
+    // 只画内容（chevron / 图标 / 标题）：外层（行高 / 分隔线 / 悬停 / 点击）由
+    // `outline_section` 里的语义 `Button` 承担。
     div()
         .h_flex()
         .items_center()
         .gap(rems(GAP_SM))
-        .h(rems(ROW_H))
-        .border_b_1()
-        .border_color(theme.colors.border)
-        .cursor_pointer()
-        .hover(|s| s.opacity(0.85))
         .child(
             lucide(if collapsed {
                 "icons/chevron-right.svg"
@@ -474,6 +571,11 @@ pub(crate) fn section_header(
 
 /// 大纲分组：**整幅面板**（浅底 + 圆角，非并排卡片）+ 标题行（点击折叠）+ 内容。
 ///
+/// 折叠走组件 `Collapsible`（决策 #108），不自己 `if !collapsed { … }`：
+/// - 揭示动效是组件内的 `spring`（`motion_id` 给它稳定 identity），手删内容就变成“啪”地一跳；
+/// - 带上 `motion_id` 后内容**保持挂载**（`MotionReveal` 按进度夹高度），所以收起时
+///   段落不会重建、输入框不丢焦点/滚动位置。
+///
 /// `on_toggle` 由调用方提供（需要对话框状态与宿主重绘桥），保持 helper 不依赖状态。
 pub(crate) fn outline_section(
     theme: &Theme,
@@ -485,22 +587,67 @@ pub(crate) fn outline_section(
     on_toggle: impl Fn(&mut Window, &mut App) + 'static,
     body: Div,
 ) -> Div {
-    let header = section_header(theme, icon, icon_color, title, collapsed)
-        .id(ElementId::Name(SharedString::from(format!("sec-{id}"))))
-        .on_click(move |_, window, cx| on_toggle(window, cx));
-    let mut panel = div()
+    // 标题行：**语义 `Button`**（ghost）——悬停 / 焦点 / 键盘 Enter·Space / a11y 都由组件给，
+    // 不再是 `cursor_pointer` + `on_click` 的 div（决策 #108；上一批 #107 是侧栏两处列表）。
+    let trigger = Button::new(ElementId::Name(SharedString::from(format!("sec-{id}"))))
+        .ghost()
+        .w_full()
+        .h(rems(ROW_H))
+        .px_0()
+        .justify_start()
+        // 直角：底部一条通栏分隔线要贴齐面板内宽（面板圆角在外层，标题行在里面）。
+        .rounded(ButtonRounded::None)
+        .border_b_1()
+        .border_color(theme.colors.border)
+        .tooltip(if collapsed {
+            "展开分组"
+        } else {
+            "收起分组"
+        })
+        .on_click(move |_, window, cx| on_toggle(window, cx))
+        .child(section_header(theme, icon, icon_color, title, collapsed));
+    let collapsible = Collapsible::new()
+        // 稳定 identity：同一 id 才能让揭示动效量到高度变化（组件内的 spring 用它）。
+        .motion_id(ElementId::Name(SharedString::from(format!(
+            "sec-motion-{id}"
+        ))))
+        .open(!collapsed)
+        // 标题行容器：`.id()` + `.test_support()` 把这一行登记成 kit 观测里的真元素
+        // （`TestWindowExt::find` 取快照 / `click_at` 按局部偏移点击，都不靠手算绝对坐标）；
+        // 非测试构建下 `test_support()` 是零成本转发（`#[cfg]` 分支返回原元素）。
+        // 注：headless 下鼠标事件到不了对话框层（deferred 子树，本仓已两次撞到），
+        // 所以对话框侧的用例用 `find` 断言“这是个可见的真元素”，真点击在
+        // `tests::header_interaction` 里用不带对话框的窗口钉。
+        .child(
+            div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "conn-sec-{id}"
+                ))))
+                .test_support()
+                .w_full()
+                .child(trigger),
+        )
+        .content(
+            div()
+                // 测试锚点：内容体（收起时仍挂载，高度由揭示进度夹住——**不能**拿它判“收起了没”）。
+                .debug_selector(move || format!("conn-sec-body-{id}"))
+                .w_full()
+                .pt(rems(GAP_SM))
+                .child(body),
+        )
+        .w_full();
+    // 分组面板底（浅底 + 圆角 + 内距）：包住标题行与内容。
+    // 测试锚点在**面板**上：收起后高度回落到只剩标题行，是“真收起”的几何判据。
+    // （面板与内容体的锚点只能靠 `debug_selector`：`debug_bounds` 不认 `.id()`。）
+    div()
+        .debug_selector(move || format!("conn-sec-panel-{id}"))
         .w_full()
         .v_flex()
-        .gap(rems(GAP_SM))
         .rounded(theme.radius)
         .bg(theme.colors.group_box)
         .py(rems(GAP_SM))
         .px_2()
-        .child(header);
-    if !collapsed {
-        panel = panel.child(div().w_full().pt(rems(GAP_SM)).child(body));
-    }
-    panel
+        .child(collapsible)
 }
 
 /// 表单行（大纲内）：标签列（贴紧控件）+ 弹性控件列（原 `form-grid`）。
@@ -1404,13 +1551,14 @@ mod tests {
     use super::{
         DriverDerived, address_field, address_label, address_placeholder, app_level_capabilities,
         auth_config_values, auth_field_specs, build_auth_config_json, build_network_config_json,
-        capability_rows, conn_display_name, create_new_db_file, dialog_tab_defs, driver_auth_types,
-        driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
-        field_spec, find_driver_by_value, network_config_values, network_field_specs,
-        new_db_file_suggested_name, policy_summary, policy_type_from_label, policy_type_label,
-        property_note, result_needs_detail, saved_result, staging_display_type_id,
+        capability_rows, conn_display_name, create_new_db_file, dialog_row_height, dialog_tab_defs,
+        driver_auth_types, driver_capabilities, driver_form_fields, driver_short_name,
+        enabled_drivers_of_type, field_spec, find_driver_by_value, first_selectable_type,
+        is_secret_field, network_config_values, network_field_specs, new_db_file_suggested_name,
+        policy_summary, policy_type_from_label, policy_type_label, property_note,
+        result_needs_detail, save_blocker, saved_result, staging_display_type_id,
         strip_file_db_noise, tags_from_json, tags_to_json, type_badge, type_has_driver,
-        url_template_example, visible_tab_index,
+        type_matches_filter, url_template_example, visible_tab_index,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1444,6 +1592,64 @@ mod tests {
             enabled: true,
             created_at: String::new(),
         }
+    }
+
+    #[test]
+    fn type_filter_matches_name_id_and_driver_name() {
+        let mysql = ds_type("mysql", "MySQL", Some("🐬"));
+        let pg = ds_type("postgresql", "PostgreSQL", Some("🐘"));
+        let drivers = vec![driver("mysql_native", "mysql", "MySQL (Official)", true)];
+
+        // 空过滤 = 全过（侧栏默认显示全部）。
+        assert!(type_matches_filter(&mysql, &drivers, "  "));
+        // 类型名 / 类型 id：大小写不敏感。
+        assert!(type_matches_filter(&mysql, &drivers, "MySqL"));
+        assert!(type_matches_filter(&pg, &drivers, "postgre"));
+        // 驱动名命中“该类型”（`Official` 只出现在 mysql 的驱动上）。
+        assert!(type_matches_filter(&mysql, &drivers, "official"));
+        assert!(!type_matches_filter(&pg, &drivers, "official"));
+    }
+
+    #[test]
+    fn keyboard_type_match_prefers_a_type_with_a_driver() {
+        // 两个类型都命中 “post”，只有后者有启用驱动 → 选后者（不把用户送到必然被拒的路上）。
+        let types = vec![
+            ds_type("postgresql", "PostgreSQL", None),
+            ds_type("postgres_legacy", "Postgres 旧实现", None),
+        ];
+        let drivers = vec![driver(
+            "pg_sqlx",
+            "postgres_legacy",
+            "PostgreSQL (sqlx)",
+            true,
+        )];
+        assert_eq!(
+            first_selectable_type(&types, &drivers, "post").as_deref(),
+            Some("postgres_legacy")
+        );
+        // 命中项全都无驱动：退回第一个命中项（让 `select_type` 给出「暂无可用驱动」原因行，
+        // 而不是回车后什么都没发生）。
+        assert_eq!(
+            first_selectable_type(&types, &[], "post").as_deref(),
+            Some("postgresql")
+        );
+        // 无命中：None（回车不改已选类型）。
+        assert_eq!(first_selectable_type(&types, &drivers, "oracle"), None);
+    }
+
+    #[test]
+    fn row_height_follows_the_viewport_and_has_a_floor() {
+        // 常用窗口（1080px 高 ≈ 67.5rem）：预算 = 67.5 × 0.9 − 5.5 = 55.25rem > 基准 → 按设计基准。
+        assert_eq!(dialog_row_height(67.5).0, crate::ui::DIALOG_BODY_HEIGHT);
+        // 768 物理高 + 125% 缩放 ≈ 614px ≈ 38.4rem：预算 = 29.06rem → 夹小（否则 footer 出屏）。
+        let capped = dialog_row_height(38.4).0;
+        assert!(
+            capped < crate::ui::DIALOG_BODY_HEIGHT,
+            "矮窗口应夹住：{capped}"
+        );
+        assert!(capped > 16.0, "夹住后仍应有可用高度：{capped}");
+        // 极矮：下限 16rem（内部滚动，不压成一条缝）。
+        assert_eq!(dialog_row_height(10.0).0, 16.0);
     }
 
     #[test]
@@ -1803,6 +2009,48 @@ mod tests {
                 .contains("未命名连接")
         );
         assert_eq!(conn_display_name(" x "), "x");
+    }
+
+    #[test]
+    fn save_blocker_reports_the_first_missing_item() {
+        // 顺序就是填写顺序：类型 → 驱动 → 名称 → 地址（与 `collect` 的判据一致）。
+        assert_eq!(
+            save_blocker(false, "", "", "", false),
+            Some("请先在左侧选择数据库类型")
+        );
+        assert_eq!(
+            save_blocker(true, "", "n", "u", false),
+            Some("请选择驱动实现")
+        );
+        assert_eq!(
+            save_blocker(true, "sqlx", "", "u", false),
+            Some("请填写连接名称")
+        );
+        // 地址缺口按连接方式给不同的可执行动作（文件型要的是“选文件”，不是“填 URI”）。
+        assert_eq!(
+            save_blocker(true, "sqlx", "n", "", false),
+            Some("请填写连接 URI")
+        );
+        assert_eq!(
+            save_blocker(true, "sqlx", "n", "", true),
+            Some("请选择或新建数据库文件（常规 → 连接设置）")
+        );
+        // 全齐 / 全空格（名称与地址都是 trim 后判空）→ 无缺口。
+        assert_eq!(save_blocker(true, "sqlx", "n", "u", false), None);
+        assert_eq!(
+            save_blocker(true, "  ", "  ", "  ", false),
+            Some("请选择驱动实现")
+        );
+    }
+
+    #[test]
+    fn secret_fields_are_the_credential_keys_only() {
+        // 掩码只该盖住凭据：路径 / 主机 / 端口这类字段掩了反而怪。
+        assert!(is_secret_field("password"));
+        assert!(is_secret_field("passphrase"));
+        assert!(!is_secret_field("key_path"));
+        assert!(!is_secret_field("host"));
+        assert!(!is_secret_field(""));
     }
 
     #[test]
@@ -2263,5 +2511,140 @@ mod tests {
             Some(("🗄".to_string(), "Oracle".to_string()))
         );
         assert_eq!(type_badge(&types, "redis"), None);
+    }
+
+    /// 标题行交互（窗口级，决策 #108）：点标题行的**任何位置**都会触发 `on_toggle`，
+    /// 而且收起 / 展开是几何上的（面板高度按揭示进度变矮、可逆）。
+    ///
+    /// 为什么单独开一个不带对话框的窗口：headless 下鼠标事件到不了对话框层
+    /// （本仓第二次撞到，同款注记见 `analytics_resource/tests/dialog_window.rs`；实测同样结构的行
+    /// 在普通窗口里一点就中）。对话框侧只钉几何与状态
+    /// （`tests/connection_render_matrix.rs::outline_section_collapses_from_its_whole_title_row`），
+    /// 而“点击 → 回调 → 收起”这段接线在这里用真点击钉住。
+    mod header_interaction {
+        // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use gpui_kit::component::ActiveTheme as _;
+        use gpui_kit::test::TestWindowExt as _;
+        use gpui_kit::{
+            Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled as _,
+            TestAppContext, VisualTestContext, WeakEntity, Window, div, point, px, rems,
+        };
+
+        use super::super::{lucide, outline_section};
+
+        /// 只放一个分组：折叠态由测试观察（回调里写 `Rc<Cell>` 并要求重绘）。
+        struct Probe {
+            collapsed: Rc<Cell<bool>>,
+            handle: WeakEntity<Probe>,
+        }
+
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme().clone();
+                let collapsed = self.collapsed.get();
+                let flag = self.collapsed.clone();
+                let handle = self.handle.clone();
+                div().size_full().p_4().child(outline_section(
+                    &theme,
+                    "probe",
+                    lucide("icons/database.svg"),
+                    theme.colors.primary,
+                    "分组",
+                    collapsed,
+                    move |_window, app| {
+                        flag.set(!flag.get());
+                        handle.update(app, |_, cx| cx.notify()).ok();
+                    },
+                    div().h(rems(8.)),
+                ))
+            }
+        }
+
+        /// 推时钟 + 出帧直到组件内 spring 收敛（headless 下时钟不会自己走）。
+        fn settle_reveal(cx: &mut VisualTestContext) {
+            for _ in 0..60 {
+                cx.update(|window, cx| {
+                    cx.background_executor()
+                        .advance_clock(std::time::Duration::from_millis(16));
+                    window.draw(cx).clear(cx);
+                });
+            }
+        }
+
+        #[gpui_kit::test]
+        fn clicking_the_title_row_collapses_and_restores(cx: &mut TestAppContext) {
+            cx.update(gpui_kit::init);
+            let flag = Rc::new(Cell::new(false));
+            let (_probe, cx) = cx.add_window_view({
+                let flag = flag.clone();
+                move |_window, cx| {
+                    let handle = cx.entity().downgrade();
+                    Probe {
+                        collapsed: flag.clone(),
+                        handle,
+                    }
+                }
+            });
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+
+            let row_id = ElementId::Name(SharedString::from("conn-sec-probe"));
+            let panel = |cx: &mut VisualTestContext| {
+                cx.debug_bounds("conn-sec-panel-probe")
+                    .expect("分组面板应渲染")
+                    .size
+                    .height
+            };
+            let row = cx.update(|window, _| window.find(row_id.clone()));
+            assert!(row.visible(), "标题行应可见");
+            let expanded = panel(cx);
+            assert!(!flag.get(), "默认应为展开");
+
+            // 点标题行**远端的空白处**（不是 chevron / 文字）：整行都是按钮才中。
+            // 落点用行宽的分数算（本文件受尺寸契约扫描，不能写裸像素字面量）。
+            cx.update(|window, cx| {
+                window.click_at(
+                    row_id.clone(),
+                    point(
+                        row.bounds().size.width * 3. / 4.,
+                        row.bounds().size.height / 2.,
+                    ),
+                    cx,
+                )
+            });
+            settle_reveal(cx);
+            assert!(flag.get(), "点标题行应触发 on_toggle");
+            let folded = panel(cx);
+            assert!(
+                folded < expanded,
+                "收起后分组面板应变矮：{expanded:?} → {folded:?}"
+            );
+
+            // 再点一次（行中）：复原。
+            cx.update(|window, cx| {
+                window.click_at(
+                    row_id,
+                    point(row.bounds().size.width / 2., row.bounds().size.height / 2.),
+                    cx,
+                )
+            });
+            settle_reveal(cx);
+            assert!(!flag.get(), "再点应展开");
+            let restored = panel(cx);
+            // 容差用相对量（1%）：不写 px 字面量，也不因主窗口字号变化而变严。
+            assert!(
+                (restored - expanded).abs() < expanded / 100.,
+                "展开后应回到原高度：{expanded:?} → {restored:?}"
+            );
+            // 面板仍然是同一个元素（收起过不等于重建过）。
+            assert!(
+                cx.update(|window, _| window
+                    .try_find(ElementId::Name(SharedString::from("conn-sec-probe"))))
+                    .is_some(),
+                "标题行应仍在元素树里"
+            );
+        }
     }
 }

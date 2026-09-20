@@ -15,16 +15,26 @@ impl ConnectionDialogState {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         // 驱动下拉初始为空：数据库类型在左侧栏选定后，选项才按类型填充（实现短名）。
         let drivers = SearchableVec::new(Vec::<SharedString>::new());
-        let (name, url, user, pass) = state_inputs(window, cx);
+        // 密码单独建（掩码显示）：`state_inputs` 的第四个槽位在别处是路径类字段（SSL 私钥等），
+        // 不能一概掩码。
+        let (name, url, user, _) = state_inputs(window, cx);
+        let pass = secret_input(window, cx);
         let (remark, cache_path, prop_key, prop_val) = state_inputs(window, cx);
         let driver_filter = cx.new(|cx| InputState::new(window, cx));
         let (host_input, port_input, db_input, _) = state_inputs(window, cx);
         let (new_name, new_data, _, _) = state_inputs(window, cx);
         let (project_path, ssl_ca, ssl_cert, ssl_key) = state_inputs(window, cx);
-        // 网络配置字段输入（按类型显示子集；键固定，见 `NET_FIELD_KEYS`）。
+        // 网络配置字段输入（按类型显示子集；键固定，见 `NET_FIELD_KEYS`）：凭据类字段从一开始就是掩码输入。
         let net_inputs: Vec<(&'static str, Entity<InputState>)> = NET_FIELD_KEYS
             .iter()
-            .map(|key| (*key, cx.new(|cx| InputState::new(window, cx))))
+            .map(|key| {
+                let entity = if is_secret_field(key) {
+                    secret_input(window, cx)
+                } else {
+                    cx.new(|cx| InputState::new(window, cx))
+                };
+                (*key, entity)
+            })
             .collect();
         let new_type = cx.new(|cx| {
             SelectState::new(
@@ -174,6 +184,10 @@ impl ConnectionDialogState {
             project_options: Rc::new(RefCell::new(Vec::new())),
             session_project: Rc::new(RefCell::new(None)),
             collapsed_sections: Rc::new(RefCell::new(Vec::new())),
+            busy: Rc::new(Cell::new(BusyOp::None)),
+            blocked_hint: Rc::new(Cell::new(false)),
+            type_tree: Rc::new(RefCell::new(None)),
+            draft_list: Rc::new(RefCell::new(None)),
             host_input,
             port_input,
             db_input,
@@ -557,9 +571,7 @@ impl ConnectionDialogState {
                         Ok(Err(e)) => (format!("打开文件对话框失败：{e}"), false, None),
                         Err(_) => ("打开文件对话框无响应".to_string(), false, None),
                     };
-                    apply_file_pick(
-                        &target, &result, value, message, ok, &entity, cx,
-                    );
+                    apply_file_pick(&target, &result, value, message, ok, &entity, cx);
                 })
                 .detach();
         }
@@ -579,14 +591,12 @@ impl ConnectionDialogState {
                 .find(|t| t.id == type_id)
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| type_id.to_string());
-            *self.result.borrow_mut() = Some(
-                ResultLine::new(
-                    ResultLevel::Error,
-                    format!(
-                        "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
-                    ),
+            *self.result.borrow_mut() = Some(ResultLine::new(
+                ResultLevel::Error,
+                format!(
+                    "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
                 ),
-            );
+            ));
             return;
         }
         *self.selected_type.borrow_mut() = type_id.to_string();
@@ -761,11 +771,8 @@ impl ConnectionDialogState {
             // 首帧之前调用时驱动目录为空（`refresh_meta` 还没跑）→ 定位必然失败；
             // 记下驱动值，等目录就绪后重放（否则左侧类型树无选中、驱动下拉为空）。
             let located = self.set_driver_by_value(&tid, &value, window, cx).is_some();
-            *self.pending_driver_value.borrow_mut() = if located {
-                None
-            } else {
-                Some(did.clone())
-            };
+            *self.pending_driver_value.borrow_mut() =
+                if located { None } else { Some(did.clone()) };
         }
         self.scope.update(cx, |s, cx| {
             s.set_selected_value(&SharedString::from(scope_label(&ds.scope)), window, cx)

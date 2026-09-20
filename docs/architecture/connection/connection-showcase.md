@@ -230,9 +230,9 @@ flowchart TD
 
 | 维度 | 数字 / 手段 |
 | --- | --- |
-| 自动化测试 | 工作台 **18 个目标 / 150 用例**；引擎 **338 项**（含存量迁移接线与幂等） |
+| 自动化测试（逐包口径） | 连接 crate **48 项**（单元 44 + 集成 `tunnel_roundtrip` 4）；工作台连接套件 **15 个目标 / 75 项**（`data_source_lifecycle` 28 · `connection_project_picker`/`connection_type_driver` 各 7 · `connection_staging` 6 · `real_connections` 5 · `connection_dialog_ui`/`dialog_host_layer` 各 4 · …）；引擎 lib **443 项**（含标签回填 / 网络档案加密 / 启动迁移接线等本模块用例）。全仓对照：84 目标 / 1963 通过——数字口径与逐目标明细见 [`../module-status.md`](../module-status.md) §2 |
 | 窗口级测试 | 打开/关闭、五 Tab 渲染、作用域三态、结果行分级、首次引导三态、**暂存区与两列高度恒定**、编辑回填逐项断言 |
-| 真机验收 | 4 条连接（MySQL · PostgreSQL · SQLite · DuckDB）× 测试连接 + 真实连接双链路 |
+| 真机验收 | 4 条连接（MySQL · PostgreSQL · SQLite · DuckDB）× 测试连接 + 真实连接双链路；最近一次实测 MySQL / PG / SQLite 全部通过，DuckDB 那条因目标库文件被 DBeaver 占用而失败（环境原因，非代码缺陷，见台账 §6.2） |
 | 集成测试 | 隧道数据往返（SOCKS5 / HTTP CONNECT / 两跳链）、连续保存、草稿跨会话、项目侧空密码保留、跨项目引用拦截 |
 | 契约测试 | 尺寸与颜色扫描本模块全部文件 |
 | 文档体系 | 架构与 **95 条设计决策** / 原型设计 / 使用指南与 USIT 清单 / 开发计划 / 可交互原型与宣传页 |

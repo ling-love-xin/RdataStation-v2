@@ -1,5 +1,19 @@
 use super::*;
 
+/// 保存的**后台结果**：跨线程只带纯数据（UI 对象、`Rc` 状态全部留在前台）。
+///
+/// 拆出来是因为保存链路（落库 → 列表刷新 → 分组同步）以前挤在点击回调里同步跑，
+/// 写库慢时整个窗口卡住；现在它跑在后台线程，结果回来后在 `do_save` 的续体里交付。
+enum SaveOutcome {
+    Saved {
+        conn_id: String,
+        items: Vec<crate::view::ConnectionItem>,
+        /// `Some(原因)` = 保存成功但分组未同步（#28：降为 warning 级并在结果行给原因）。
+        group_degrade: Option<String>,
+    },
+    Failed(String),
+}
+
 impl ConnectionDialogState {
     /// 订阅项目下拉确认事件（返回的句柄必须由 `EditorPanel` 持有，释放即取消）。
     ///
@@ -45,6 +59,10 @@ impl ConnectionDialogState {
         // 重入保护：先关闭已有的本对话框层，避免连续 open 叠加（幂等打开）。
         window.close_dialog(cx);
         *self.editing_id.borrow_mut() = editing_id.clone();
+        // 缺口标红是**本轮尝试**的反馈：重新打开对话框时清掉（否则上次点过保存、
+        // 关掉再开时，一张空表单直接就是红的）。`busy` 有意**不**重置：在途的测试 / 保存
+        // 不能被“重开一次”解禁，否则会并发建连 / 并发写库。
+        self.blocked_hint.set(false);
         // 当前项目会话接入（C2）：项目根先取会话快照，编辑回读（项目侧 P_/GP_ 只存项目库）
         // 与项目栏预填共用它。
         let session_root = shared
@@ -105,6 +123,34 @@ impl ConnectionDialogState {
         let ssl_ca = self.ssl_ca.clone();
         let ssl_cert = self.ssl_cert.clone();
         let ssl_key = self.ssl_key.clone();
+        // 在途操作 / 缺口提示：按钮 loading / 置灰与 Header 标签标红的判据（见 `BusyOp`）。
+        let busy = self.busy.clone();
+        let blocked_hint = self.blocked_hint.clone();
+        // 侧栏类型列表（`List` 组件）：UI 侧的句柄需在每次 render 重建前拷一次。
+        let type_tree = self.type_tree.clone();
+        let draft_list = self.draft_list.clone();
+        // 懒建：委托要拿对话框自身的 `Rc`（`new()` 里还拿不到自己）与面板 / 宿主句柄。
+        // 只建一次——重建会丢掉列表的选中行状态。
+        if self.type_tree.borrow().is_none() {
+            let list = cx.new(|cx| {
+                ListState::new(
+                    TypeTreeDelegate::new(Rc::clone(self), entity.clone(), shared.clone()),
+                    window,
+                    cx,
+                )
+            });
+            *self.type_tree.borrow_mut() = Some(list);
+        }
+        if self.draft_list.borrow().is_none() {
+            let list = cx.new(|cx| {
+                ListState::new(
+                    DraftListDelegate::new(Rc::clone(self), entity.clone(), shared.clone()),
+                    window,
+                    cx,
+                )
+            });
+            *self.draft_list.borrow_mut() = Some(list);
+        }
         let sec_overrides = self.policy_override_keys.clone();
         let env_policies = self.env_policies.clone();
         let env_policies_loaded_for = self.env_policies_loaded_for.clone();
@@ -183,7 +229,9 @@ impl ConnectionDialogState {
             s.set_placeholder("名称（如 生产 PG）", window, cx)
         });
         remark.update(cx, |s, cx| s.set_placeholder("备注（可选）", window, cx));
-        driver_filter.update(cx, |s, cx| s.set_placeholder("搜索类型…", window, cx));
+        driver_filter.update(cx, |s, cx| {
+            s.set_placeholder("搜索类型 / 驱动（回车选中）", window, cx)
+        });
         tags_input.update(cx, |s, cx| {
             s.set_placeholder("prod, core（逗号分隔）", window, cx)
         });
@@ -277,6 +325,40 @@ impl ConnectionDialogState {
                 }
             }
             let selected_type_id = selected_type.borrow().clone();
+
+            // ---- 侧栏类型列表同步（render 为权威同步点；决策 #107）----
+            // 目录 / 过滤词 / 选中项变了才写回委托，并让列表选中行跟上 `selected_type`。
+            // **必须在 `cx.theme()` 之前**：`list.update(cx, …)` 是可变借用（与地址占位同一约定）。
+            let type_list = type_tree.borrow().clone();
+            if let Some(list) = type_list.as_ref() {
+                let types_now = types_list.borrow().clone();
+                let drivers_now = drivers_list.borrow().clone();
+                let filter_now = driver_filter.read(cx).value().trim().to_string();
+                let selected_now = selected_type_id.clone();
+                list.update(cx, |st, cx| {
+                    if st
+                        .delegate_mut()
+                        .sync(&types_now, &drivers_now, &filter_now, &selected_now)
+                    {
+                        let ix = st.delegate().selected_path();
+                        st.set_selected_index(ix, window, cx);
+                        cx.notify();
+                    }
+                });
+            }
+            // 草稿列表同款：行数 / 光标 / 行文案变了才写回，并同步列表选中行。
+            let draft_list_now = draft_list.borrow().clone();
+            if let Some(list) = draft_list_now.as_ref() {
+                let drafts_now = drafts_list.borrow().clone();
+                let cursor_now = draft_cursor.get();
+                list.update(cx, |st, cx| {
+                    if st.delegate_mut().sync(&drafts_now, cursor_now) {
+                        let ix = st.delegate().selected_path();
+                        st.set_selected_index(ix, window, cx);
+                        cx.notify();
+                    }
+                });
+            }
 
             // ---- 驱动属性页默认值同步（render 为权威同步点，§15：UI 不造数据）----
             // 默认值 = 该驱动声明的 `drivers.driver_properties`；换驱动就重填，见 `props_synced` 字段文档。
@@ -1160,7 +1242,9 @@ impl ConnectionDialogState {
                                     field_spec(&form_fields, "password")
                                         .map(|f| f.label.as_str())
                                         .unwrap_or("密码"),
-                                    Input::new(&pass).disabled(form_disabled),
+                                    // 凭据：默认掩码（眼睛按钮可临时查看）；
+                                    // 掩码只影响显示，`value()` 仍是真实文本（保存/测试拿到的是明文）。
+                                    Input::new(&pass).mask_toggle().disabled(form_disabled),
                                 ))
                         });
 
@@ -1364,277 +1448,39 @@ impl ConnectionDialogState {
                 }
             };
 
-            // Tab 内容区与左侧栏**等高**（行高 `BODY_H`，由外层行给定）+ 垂直滚动：切换 Tab
-            // 不改变对话框高度，侧栏（暂存列表 / 类型树）与 Header 位置保持稳定（布局不跳动）。
-            // 三向显式约束（height / min / max）：只给 `h()` 时，flex 子项的自动最小尺寸
-            // 会按内容撑高（长内容 Tab 会把对话框拉长）。
+            // Tab 内容区**填满右列剩余高度**（行高由外层两列行给定）+ 垂直滚动：切 Tab 不改变
+            // 对话框高度，侧栏（暂存列表 / 类型树）与 Header 位置保持稳定（布局不跳动）。
+            //
+            // ⚠ 这里曾经写死 `rems(BODY_H)`（三向夹住）：右列在行首还有 Header + Tab 条，
+            // 于是内容区比行高多出 168px，被 Dialog 的 body（`overflow_hidden`）裁掉——
+            // 实测 1920×1080：行 88.5→608.5，内容区 256.5→776.5，底部一截怎么滚都看不到。
+            // 改为 `flex_1 + min_h_0` 后由行高分配：内容区实际高度 = 行高 − Header − Tab 条 − 结果行。
             let tab_body = div()
                 .id("conn-tab-body")
-                // 测试锚点：矩阵测试断言「五个 Tab 的高度一致」（切 Tab 不改变对话框高度）。
+                // 测试锚点：`debug_bounds("conn-tab-body")` 拿到的是 Scrollable 重排后的**滚动内容**
+                // （`h_auto + min_h_full`）——它的高度是内容高，可以大于视口（正常滚动行为），
+                // **不能**拿它断言视口高度；视口 / 行几何请看 `conn-result-row` 与 `conn-body-row`。
                 .debug_selector(|| "conn-tab-body".to_string())
                 .w_full()
-                .h(rems(BODY_H))
-                .min_h(rems(BODY_H))
-                .max_h(rems(BODY_H))
+                .flex_1()
+                .min_h_0()
                 .overflow_y_scrollbar()
                 .child(tab_content);
 
-            // ---- 左侧栏（对齐原型 §2）：类型搜索 + 数据库类型分类树 ----
-            let filter_text = driver_filter.read(cx).value().trim().to_lowercase();
-            let mut db_tree = div().v_flex().gap_1();
-            for (cat, cat_label) in [
-                ("relational", "关系型"),
-                ("file-based", "文件型"),
-                ("analytics", "分析型"),
-                ("nosql", "NoSQL"),
-            ] {
-                let matched: Vec<DataSourceType> = types_snapshot
-                    .iter()
-                    .filter(|t| t.category == cat)
-                    .filter(|t| {
-                        filter_text.is_empty()
-                            || t.name.to_lowercase().contains(&filter_text)
-                            || t.id.to_lowercase().contains(&filter_text)
-                            || drivers_snapshot.iter().any(|d| {
-                                d.type_id == t.id && d.name.to_lowercase().contains(&filter_text)
-                            })
-                    })
-                    .cloned()
-                    .collect();
-                if matched.is_empty() {
-                    continue;
-                }
-                db_tree = db_tree.child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.muted_foreground)
-                        .child(format!("{cat_label}（{}）", matched.len())),
-                );
-                for t in matched {
-                    let on = selected_type_id == t.id;
-                    // 无可用驱动的类型：置灰 + 标注「暂无驱动」+ 点击不切换（见 `select_type` 守卫）。
-                    let has_driver = type_has_driver(&drivers_snapshot, &t.id);
-                    let type_id = t.id.clone();
-                    let type_icon = t
-                        .icon
-                        .clone()
-                        .filter(|i| !i.trim().is_empty())
-                        .unwrap_or_else(|| "🗄".to_string());
-                    let type_name = t.name.clone();
-                    let name_color = if !has_driver {
-                        theme.colors.border
-                    } else if on {
-                        theme.colors.foreground
-                    } else {
-                        theme.colors.muted_foreground
-                    };
-                    let mut row = div()
-                        .id(ElementId::Name(SharedString::from(format!("type-{}", t.id))))
-                        .h_flex()
-                        .items_center()
-                        .gap(rems(0.375))
-                        .h(rems(1.75))
-                        .px_2()
-                        .rounded(rems(0.375))
-                        .cursor_pointer();
-                    if on {
-                        row = row.bg(theme.colors.sidebar_accent);
-                    }
-                    // 固定行高内右对齐提示：不加宽行高，避免侧栏布局跳动。
-                    let hint: Option<Div> = (!has_driver).then(|| {
-                        div()
-                            .flex_1()
-                            .min_w(rems(0.))
-                            .text_right()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("暂无驱动")
-                    });
-                    let mut row_el = row.child(
-                        div()
-                            .w(crate::ui::TREE_ACTIVE_BAR)
-                            .h(rems(1.))
-                            .rounded_full()
-                            .bg(if on { theme.colors.primary } else { theme.colors.border }),
-                    )
-                    .child(div().flex_shrink_0().text_color(theme.colors.muted_foreground).child(type_icon))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(name_color)
-                            .child(type_name),
-                    );
-                    if let Some(h) = hint {
-                        row_el = row_el.child(h);
-                    }
-                    db_tree = db_tree.child(row_el.on_click({
-                        let state = state.clone();
-                        let entity = entity.clone();
-                        move |_, window, app| {
-                            // 侧栏选定类型 → Header 驱动下拉仅列该类型驱动（短名）；
-                            // 无可用驱动时 `select_type` 只写提示，不改选中。
-                            state.select_type(&type_id, window, app);
-                            entity.update(app, |_, cx| cx.notify());
-                        }
-                    }));
-                }
-            }
-            // ---- 暂存列表（**只放未保存草稿**；用户决策：已保存连接从导航栏进入编辑）----
-            // 当前条目（光标位）的徽标与名称取**正在编辑的表单**，而不是已写回的快照：
-            // 否则“刚从 MySQL 切到 SQLite”时表单已变、条目还显示 mysql 图标（真机反馈）。
-            // 性能（§6 决策 #73）：不再每帧克隆整张草稿表与整份 `ConnectionDraft`——
-            // 光标位只取「表单显示视图 + 无分配脏比对」，其余行只短借用其展示字段。
-            let cursor_now = draft_cursor.get();
-            let drafts_len = drafts_list.borrow().len();
-            let live_now = state.live_entry_view(cursor_now, cx);
-            let mut staging_list = div().v_flex().gap(rems(0.25));
-            for i in 0..drafts_len {
-                let (draft_type_id, draft_name, saved_id) = {
-                    let drafts = drafts_list.borrow();
-                    let Some(d) = drafts.get(i) else { continue };
-                    (d.type_id.clone(), d.display_name(), d.saved_id.clone())
-                };
-                let on = i == cursor_now;
-                let live = if on { live_now.as_ref() } else { None };
-                // 历史数据守卫：清理入口（`staging_prune_saved`）后不应再有已保存条目，
-                // 此处仍按 `saved_id` 染色，以防迁移前写入的残余行。
-                let is_saved = saved_id.is_some();
-                // ElementId 用业务键：已保存的残余条目取 `saved_id`（持久实体不用位置 id）；
-                // 未保存草稿的列表身份本就是下标（`staging_*` 全部以 index 为键），故保持 `new-{i}`（#17）。
-                let row_key = saved_id
-                    .as_deref()
-                    .map(|id| format!("saved-{id}"))
-                    .unwrap_or_else(|| format!("new-{i}"));
-                // 显示用字段：当前条目用 live（表单），其余用快照。
-                let display_type_id =
-                    staging_display_type_id(&draft_type_id, live.map(|l| l.type_id.as_str()));
-                let label = match live {
-                    Some(l) if !l.name.trim().is_empty() => l.name.trim().to_string(),
-                    _ => draft_name,
-                };
-                let mut row = div()
-                    .id(ElementId::Name(SharedString::from(format!("draft-{row_key}"))))
-                    .h_flex()
-                    .items_center()
-                    .gap(rems(0.375))
-                    .h(rems(ROW_H))
-                    .px_2()
-                    .rounded(rems(0.375))
-                    .cursor_pointer();
-                if on {
-                    row = row.bg(theme.colors.sidebar_accent);
-                }
-                row = row
-                    .child(
-                        div()
-                            .w(crate::ui::TREE_ACTIVE_BAR)
-                            .h(rems(1.))
-                            .rounded_full()
-                            .bg(if on { theme.colors.primary } else { theme.colors.border }),
-                    )
-                    .child({
-                        // 缩小的数据库类型 UI（条目类型徽标）：与左侧类型树同一套 emoji；
-                        // 无类型信息（旧草稿 / 未选类型）时回退状态点（已保存 success / 草稿 primary）。
-                        match type_badge(&types_snapshot, &display_type_id) {
-                            Some((icon, _name)) => div()
-                                .flex_shrink_0()
-                                .h_flex()
-                                .items_center()
-                                .justify_center()
-                                .w(rems(crate::ui::ICON_SIZE_MD))
-                                .h(rems(crate::ui::ICON_SIZE_MD))
-                                .rounded(rems(0.25))
-                                .bg(theme.colors.sidebar_accent)
-                                .text_xs()
-                                .child(icon),
-                            None => div()
-                                .w(rems(crate::ui::DIALOG_STATUS_DOT_SIZE))
-                                .h(rems(crate::ui::DIALOG_STATUS_DOT_SIZE))
-                                .flex_shrink_0()
-                                .rounded_full()
-                                .bg(if is_saved {
-                                    theme.colors.success
-                                } else {
-                                    theme.colors.primary
-                                }),
-                        }
-                    })
-                    .child({
-                        // 脏标记（●）：当前条目有未写回快照的表单修改（仅未保存草稿）。
-                        let dirty = live.map(|l| l.dirty).unwrap_or(false);
-                        // 来源短码（P/G/GP）：已保存条目按 ID 前缀标示作用域来源（原型 §2.2）。
-                        let scope_code = saved_id.as_deref().and_then(saved_scope_short);
-                        let mut name_el = div()
-                            .h_flex()
-                            .items_center()
-                            .gap(rems(0.25))
-                            .flex_1()
-                            .min_w(rems(0.))
-                            .text_xs()
-                            .text_color(if on {
-                                theme.colors.foreground
-                            } else {
-                                theme.colors.muted_foreground
-                            })
-                            .child(label);
-                        if let Some(code) = scope_code {
-                            name_el = name_el.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .px_1()
-                                    .rounded(rems(crate::ui::DIALOG_CHIP_RADIUS))
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .text_color(theme.colors.muted_foreground)
-                                    .child(code),
-                            );
-                        }
-                        if dirty {
-                            name_el = name_el.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_color(theme.colors.warning)
-                                    .child("●"),
-                            );
-                        }
-                        name_el
-                    });
-                if !is_saved {
-                    row = row.child(
-                        div()
-                            .id(ElementId::Name(SharedString::from(format!("draft-del-{row_key}"))))
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("✕")
-                            .on_click({
-                                let state = state.clone();
-                                let shared = shared.clone();
-                                move |_, window, app| {
-                                    state.staging_remove(i, window, app);
-                                    shared.notify_host(app);
-                                }
-                            }),
-                    );
-                }
-                staging_list = staging_list.child(row.on_click({
-                    let state = state.clone();
-                    let shared = shared.clone();
-                    move |_, window, app| {
-                        state.staging_select(i, window, app);
-                        shared.notify_host(app);
-                    }
-                }));
-            }
+            // ---- 左侧栏（对齐原型 §2）：类型搜索 + 数据库类型列表 ----
+            // （列表的状态同步在前面的「侧栏类型列表同步」块里——那里能在 `cx.theme()` 之前拿可变借用）
+            // ---- 暂存列表：交给 `List` 组件（委托见 `draft_list.rs`；决策 #107）----
+            // 行内容（徽标 / 名称 / 脏标记 / 来源短码 / 行尾删除按钮）全在委托里，
+            // 这里只负责把它放进固定高度的容器（高度恒定的锚点仍在下面的 `conn-staging-scroll`）。
             let side_panel = div()
-                // 测试锚点：矩阵测试断言侧栏与 Tab 内容区等高（两列等高才谈得上“布局恒定”）。
+                // 测试锚点：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
                 .debug_selector(|| "conn-side-panel".to_string())
                 .w(rems(12.5))
-                // 与 Tab 内容区同高（行高由外层给定；三向夹住避免类型树内容撑高）。
-                .h(rems(BODY_H))
-                .min_h(rems(BODY_H))
-                .max_h(rems(BODY_H))
+                // 与右列同高：行高由外层两列行给定（`helpers::dialog_row_height`），两列各自填满。
+                // 侧栏不自己定高——否则类型树条目数会反过来决定对话框高度；
+                // `min_h_0` 让内容超出时走内部滚动，而不是把侧栏撞得比行高还高。
+                .h_full()
+                .min_h_0()
                 .flex_shrink_0()
                 .v_flex()
                 .gap(rems(0.75))
@@ -1665,54 +1511,67 @@ impl ConnectionDialogState {
                                         .child("暂存列表"),
                                 )
                                 .child(
-                                    div()
-                                        .id("staging-add")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(theme.colors.primary)
-                                        .child("+ 添加")
+                                    // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
+                                    // 不再是一个可点的文本 div。
+                                    Button::new("staging-add")
+                                        .ghost()
+                                        .icon(IconName::Plus)
+                                        .label("添加")
+                                        .with_size(Size::XSmall)
+                                        .tooltip("新增一条空草稿（连续配置多个连接）")
                                         .on_click({
                                             let state = state.clone();
                                             let shared = shared.clone();
+                                            let entity = entity.clone();
                                             move |_, window, app| {
                                                 state.staging_add(window, app);
                                                 shared.notify_host(app);
+                                                let _ = entity.update(app, |_, cx| cx.notify());
                                             }
+                                        })
+                                )
+                        )
+                        // 暂存区固定高度 + 内部滚动：条目再多也只在区域内滚动，不拉长对话框。
+                                // 三向显式约束（height / min / max）而不是只给 `h()`：flex 子项的
+                                // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
+                                .child(
+                                    div()
+                                        // 测试锚点：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
+                                        .debug_selector(|| "conn-staging-scroll".to_string())
+                                        .w_full()
+                                        .h(rems(STAGING_H))
+                                        .min_h(rems(STAGING_H))
+                                        .max_h(rems(STAGING_H))
+                                        .overflow_hidden()
+                                        .when_some(draft_list_now, |d, list| {
+                                            d.child(List::new(&list))
                                         }),
                                 ),
                         )
-                        // 暂存区固定高度 + 滚动：条目再多也只在区域内滚动，不拉长对话框。
-                        // 三向显式约束（height / min / max）而不是只给 `h()`：flex 子项的
-                        // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
-                        .child(
-                            div()
-                                .id("staging-scroll")
-                                // 测试锚点：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
-                                .debug_selector(|| "conn-staging-scroll".to_string())
-                                .w_full()
-                                .h(rems(STAGING_H))
-                                .min_h(rems(STAGING_H))
-                                .max_h(rems(STAGING_H))
-                                .overflow_y_scrollbar()
-                                .child(staging_list),
-                        ),
-                )
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.muted_foreground)
-                        .child("数据库类型"),
-                )
-                // 类型树占满侧栏剩余高度并内部滚动（与暂存区共同保证侧栏高度恒定）。
-                .child(
-                    div()
-                        .id("type-scroll")
-                        .w_full()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(db_tree),
+                        .v_flex()
+                        .gap(rems(0.375))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.muted_foreground)
+                                .child("数据库类型"),
+                        )
+                        // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
+                        .child(
+                            div()
+                                .debug_selector(|| "conn-type-list".to_string())
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .when_some(type_list, |d, list| {
+                                    d.child(List::new(&list).flex_1().min_h_0())
+                                }),
+                        ),
                 );
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
@@ -1814,6 +1673,25 @@ impl ConnectionDialogState {
                 }
                 badge
             };
+            // ---- 最小可保存集（B2）：缺口提示 ----
+            // 判据与 `ClonedDialogState::collect` 完全一致（类型/驱动 → 名称 → 地址）：
+            // 点击时按**当前缺口**给理由（不再是笼统的「请填写名称、驱动与连接 URL」），
+            // 被拦下一次后把缺口字段的标签染 danger 色（只换颜色，不动 Header 行高）。
+            let name_now = name.read(cx).value().to_string();
+            let url_now = url.read(cx).value().to_string();
+            let driver_is_empty = driver_now.trim().is_empty();
+            let blocker: Option<&'static str> = save_blocker(
+                type_badge_now.is_some(),
+                &driver_now,
+                &name_now,
+                &url_now,
+                is_file_db,
+            );
+            let hint_on = blocked_hint.get();
+            let missing_name = hint_on && name_now.trim().is_empty();
+            let missing_url = hint_on && url_now.trim().is_empty();
+            let missing_driver = hint_on && driver_is_empty;
+
             // Header（3 行，按建议布局）：
             // ① 类型徽标 + 名称 + 作用域分段；② 备注 + 项目；③ 驱动 + URI。
             let header_ui = div()
@@ -1829,7 +1707,7 @@ impl ConnectionDialogState {
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
                         .child(type_badge_ui)
-                        .child(header_label(theme, "名称"))
+                        .child(header_label_state(theme, "名称", missing_name))
                         .child(Input::new(&name).flex_1())
                         .child(scope_seg),
                 )
@@ -1849,7 +1727,7 @@ impl ConnectionDialogState {
                         .items_center()
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
-                        .child(header_label(theme, "驱动"))
+                        .child(header_label_state(theme, "驱动", missing_driver))
                         .child(
                             div()
                                 .w(rems(DRIVER_W))
@@ -1874,7 +1752,11 @@ impl ConnectionDialogState {
                                         .into_any_element()
                                 }),
                         )
-                        .child(header_label(theme, address_label(is_file_db)))
+                        .child(header_label_state(
+                            theme,
+                            address_label(is_file_db),
+                            missing_url,
+                        ))
                         .child(if is_file_db {
                             // 文件型：地址在「常规 → 连接设置」编辑（那里带「打开文件 / 新建文件」），
                             // Header 只显示当前路径（截断）或引导文案，避免两个地址输入框。
@@ -1901,23 +1783,45 @@ impl ConnectionDialogState {
                         }),
                 );
 
-            // 结果行（#28：分级 + 详情）：级别决定配色；摘要过长或带详情时提供「详情 / 复制」。
+            // 结果行（#28：分级 + 详情）：级别决定图标与配色；摘要过长或带详情时提供「详情 / 复制」。
+            //
+            // 位置：右列最底部（Tab 内容区之下、footer 之上）。原型 §2 把状态画在 footer 里，
+            // 这里刻意不放：① 展开详情会撑高 footer → 对话框高度跳动（现在是让内容区让位，高度恒定）；
+            // ② 长原文在 footer 里会被按钮挤成窄条（>80 字就要折行）。
             let result_ui = {
                 let line = result.borrow().clone();
                 match line {
                     Some(line) => {
-                        let color = match line.level {
-                            ResultLevel::Success => theme.colors.success,
-                            ResultLevel::Warning => theme.colors.warning,
-                            ResultLevel::Error => theme.colors.danger,
-                            ResultLevel::Info => theme.colors.muted_foreground,
+                        // 级别图标：与配色双通道（色弱 / 高对比主题下颜色不一定分得出）。
+                        let (color, icon) = match line.level {
+                            ResultLevel::Success => {
+                                (theme.colors.success, lucide("icons/circle-check.svg"))
+                            }
+                            ResultLevel::Warning => {
+                                (theme.colors.warning, lucide("icons/triangle-alert.svg"))
+                            }
+                            ResultLevel::Error => {
+                                (theme.colors.danger, lucide("icons/circle-x.svg"))
+                            }
+                            ResultLevel::Info => {
+                                (theme.colors.muted_foreground, lucide("icons/info.svg"))
+                            }
                         };
                         let mut col = div()
                             .v_flex()
                             .gap(rems(0.125))
                             .flex_1()
                             .min_w(rems(0.))
-                            .child(div().text_xs().text_color(color).child(line.summary.clone()));
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap(rems(0.375))
+                                    .text_xs()
+                                    .text_color(color)
+                                    .child(icon.size(rems(crate::ui::ICON_SIZE_SM)))
+                                    .child(line.summary.clone()),
+                            );
                         if result_needs_detail(&line.summary) || line.detail.is_some() {
                             let expanded = result_expanded.get();
                             if expanded {
@@ -1977,8 +1881,12 @@ impl ConnectionDialogState {
                 }
             };
 
-            // 测试连接动作（按钮 / Ctrl+T 共用；返回是否成功）。
-            let do_test: Rc<dyn Fn(&mut Window, &mut App) -> bool> = {
+            // 测试连接动作（按钮 / Ctrl+T 共用）。
+            //
+            // 服务层是同步 `block_on` 风格：直接在事件回调里跑会**阻塞 UI 线程**（连不上的主机
+            // 要等满超时，窗口会被系统判成「无响应」）。所以拆成：「前台取快照 → 后台探测 →
+            // 回前台写结果行」；按钮同步进 loading（UI 线程空闲，转圈动画才转得起来）。
+            let do_test: Rc<dyn Fn(&mut Window, &mut App)> = {
                 let name = name.clone();
                 let url = url.clone();
                 let user = user.clone();
@@ -1997,28 +1905,63 @@ impl ConnectionDialogState {
                 let run_test = run_test.clone();
                 let entity = entity.clone();
                 let project_path = project_path.clone();
-                Rc::new(move |_window, app| {
+                let busy = busy.clone();
+                let blocked_hint = blocked_hint.clone();
+                let shared = shared.clone();
+                Rc::new(move |window, app| {
+                    // 在途：忽略重复触发（按钮已置灰，快捷键也会走到这儿）。
+                    if busy.get() != BusyOp::None {
+                        return;
+                    }
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
-                        set_result_ok(&result, false, "请填写名称、驱动与连接 URL");
+                        // 拦截文案按**当前缺口**给，并把缺口字段的标签标红（见 `blocker`）。
+                        blocked_hint.set(true);
+                        set_result_ok(
+                            &result,
+                            false,
+                            blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                        );
                         entity.update(app, |_, cx| cx.notify());
-                        return false;
+                        return;
                     };
-                    set_result(&result, ResultLevel::Info, "测试中…");
-                    entity.update(app, |_, cx| cx.notify());
                     let project_root = {
                         let v = project_path.read(app).value().to_string();
                         let v = v.trim();
                         if v.is_empty() { None } else { Some(v.to_string()) }
                     };
-                    let (ok, msg) = run_test(input, project_root);
-                    set_result_ok(&result, ok, msg);
+                    busy.set(BusyOp::Test);
+                    set_result(&result, ResultLevel::Info, "测试中…");
                     entity.update(app, |_, cx| cx.notify());
-                    ok
+                    // 后台线程跑阻塞探测；只带纯数据过线（UI 对象一律留在前台）。
+                    let work = app
+                        .background_executor()
+                        .spawn(async move { run_test(input, project_root) });
+                    // 交付续体需要持有这些句柄（外层闭包是 `Fn`，不能把捕获的 `Rc` 移出去）——
+                    // 这里再克隆一份，成本就是一次引用计数递增。
+                    let (busy_c, result_c, shared_c) =
+                        (busy.clone(), result.clone(), shared.clone());
+                    entity.update(app, |_, cx| {
+                        cx.spawn_in(window, async move |editor, cx| {
+                            let (ok, msg) = work.await;
+                            cx.update(|_window, app| {
+                                busy_c.set(BusyOp::None);
+                                set_result_ok(&result_c, ok, msg);
+                                // 结果行 / 按钮状态变了：面板与宿主都要重绘（层挂在宿主 render 上）。
+                                shared_c.notify_host(app);
+                                let _ = editor.update(app, |_, cx| cx.notify());
+                            })
+                            .ok();
+                        })
+                        .detach();
+                    });
                 })
             };
 
-            // 保存动作（按钮 / Ctrl+Enter 共用；返回是否成功，供「保存并关闭」判断）。
-            let do_save: Rc<dyn Fn(&mut Window, &mut App) -> bool> = {
+            // 保存动作（按钮 / Ctrl+Enter 共用；`close_after` = 保存成功后关闭对话框，供「保存并关闭」）。
+            //
+            // 与测试连接同构：落库 / 列表刷新 / 分组同步全在后台线程，前台只负责取快照与写结果；
+            // 「保存并关闭」的关闭动作改到**结果回来之后**（以前靠同步返回值，异步后必然要等）。
+            let do_save: Rc<dyn Fn(&mut Window, &mut App, bool)> = {
                 let name = name.clone();
                 let url = url.clone();
                 let user = user.clone();
@@ -2040,11 +1983,22 @@ impl ConnectionDialogState {
                 let shared = shared.clone();
                 let editing_id = editing_id.clone();
                 let project_path = project_path.clone();
-                Rc::new(move |window, app| {
+                let busy = busy.clone();
+                let blocked_hint = blocked_hint.clone();
+                Rc::new(move |window, app, close_after| {
+                    // 在途：忽略重复触发（按钮已置灰，快捷键也会走到这儿）。
+                    if busy.get() != BusyOp::None {
+                        return;
+                    }
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
-                        set_result_ok(&result, false, "请填写名称、驱动与连接 URL");
+                        blocked_hint.set(true);
+                        set_result_ok(
+                            &result,
+                            false,
+                            blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                        );
                         entity.update(app, |_, cx| cx.notify());
-                        return false;
+                        return;
                     };
                     // 编辑模式走 update（按 ID 前缀路由 G_/P_/GP_）；新建走 save（按作用域落库）。
                     let editing = editing_id.borrow().clone();
@@ -2052,81 +2006,126 @@ impl ConnectionDialogState {
                         let v = project_path.read(app).value().to_string();
                         if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
                     };
-                    let save = DataSourceService::global().and_then(|service| {
-                        let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                            shared::error::CoreError::common(
-                                shared::error::CommonError::General(format!("tokio: {e}")),
-                            )
-                        })?;
-                        match &editing {
-                            Some(cid) => rt
-                                .block_on(service.update(cid, &input, project_path_val.as_deref()))
-                                .map(|_| cid.clone()),
-                            None => rt.block_on(service.save(&input, project_path_val.as_deref())),
-                        }
-                    });
-                    let ok = match save {
-                        Ok(conn_id) => {
-                            // 刷新列表：带上当前项目根，项目侧 P_/GP_ 连接一并可见。
-                            let root = shared
-                                .project
-                                .borrow()
-                                .as_ref()
-                                .map(|p| p.root.clone());
-                            let (items, _) = crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
-                            *shared.connections.borrow_mut() = items;
-                            // #32 B 案：状态栏提示同样只出现名称（ID 不进界面文本）。
-                            *shared.notice.borrow_mut() =
-                                Some(format!("连接「{}」已保存", conn_display_name(&input.name)));
-                            // 分组同步（替换语义；项目级，全局库 / 未打开项目时为 no-op）。
-                            // 标签已在服务内部随保存 / 更新同步到 connection_tags。
-                            let group_ids: Vec<String> = dialog
-                                .group_checks
-                                .borrow()
-                                .iter()
-                                .filter(|(_, _, checked)| *checked)
-                                .map(|(gid, _, _)| gid.clone())
-                                .collect();
-                            // #28：分组未落库不再静默——保存仍算成功，但结果行降为 warning 级并给出原因。
-                            let group_degrade: Option<String> = match DataSourceService::global() {
-                                Ok(service) => service
-                                    .set_connection_groups(
-                                        &conn_id,
-                                        &group_ids,
-                                        project_path_val.as_deref(),
-                                    )
+                    // 列表刷新用**当前会话项目根**（与原实现一致）：保存落点由 project_path 决定，
+                    // 两者可以不同（对话框允许把连接存到别的项目）。
+                    let session_root = shared
+                        .project
+                        .borrow()
+                        .as_ref()
+                        .map(|p| p.root.clone());
+                    // 分组同步（替换语义；项目级，全局库 / 未打开项目时为 no-op）。
+                    // 标签已在服务内部随保存 / 更新同步到 connection_tags。
+                    let group_ids: Vec<String> = dialog
+                        .group_checks
+                        .borrow()
+                        .iter()
+                        .filter(|(_, _, checked)| *checked)
+                        .map(|(gid, _, _)| gid.clone())
+                        .collect();
+                    let input_name = input.name.clone();
+                    busy.set(BusyOp::Save);
+                    set_result(&result, ResultLevel::Info, "保存中…");
+                    entity.update(app, |_, cx| cx.notify());
+                    // 后台线程：落库 → 列表刷新 → 分组同步；只带纯数据过线。
+                    let work = app.background_executor().spawn(async move {
+                        let save = DataSourceService::global().and_then(|service| {
+                            let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                                shared::error::CoreError::common(
+                                    shared::error::CommonError::General(format!("tokio: {e}")),
+                                )
+                            })?;
+                            match &editing {
+                                Some(cid) => rt
+                                    .block_on(service.update(cid, &input, project_path_val.as_deref()))
+                                    .map(|_| cid.clone()),
+                                None => rt.block_on(service.save(&input, project_path_val.as_deref())),
+                            }
+                        });
+                        match save {
+                            Err(e) => SaveOutcome::Failed(e.to_string()),
+                            Ok(conn_id) => {
+                                // 刷新列表：带上当前项目根，项目侧 P_/GP_ 连接一并可见。
+                                let (items, _) = crate::services::workspace_loader::load_connections_for_scope(
+                                    session_root.as_deref(),
+                                );
+                                // #28：分组未落库不再静默——保存仍算成功，但结果行降为 warning 级并给出原因。
+                                let group_degrade = DataSourceService::global()
+                                    .and_then(|service| {
+                                        service.set_connection_groups(
+                                            &conn_id,
+                                            &group_ids,
+                                            project_path_val.as_deref(),
+                                        )
+                                    })
                                     .err()
-                                    .map(|e| e.to_string()),
-                                Err(e) => Some(e.to_string()),
-                            };
-                            // 暂存列表（原型设计 §2.2 规则 4）：保存后将草稿移出暂存区 + 自动补空草稿；
-                            // 保存后保持对话框打开，支持连续新建多个连接。
-                            dialog.staging_after_save(window, app);
-                            match group_degrade {
-                                Some(reason) => set_result(
-                                    &result,
-                                    ResultLevel::Warning,
-                                    format!(
-                                        "已保存：{}（分组未同步：{reason}）",
-                                        conn_display_name(&input.name)
-                                    ),
-                                ),
-                                None => {
-                                    // 成功：摘要只有名称，连接 ID 进「详情」（B 案）。
-                                    set_result_line(&result, saved_result(&input.name, &conn_id))
+                                    .map(|e| e.to_string());
+                                SaveOutcome::Saved {
+                                    conn_id,
+                                    items,
+                                    group_degrade,
                                 }
                             }
-                            // 宿主重绘：刷新层内容（暂存列表 + 连接列表）
-                            shared.notify_host(app);
-                            true
                         }
-                        Err(e) => {
-                            set_result_ok(&result, false, format!("保存失败: {e}"));
-                            false
-                        }
-                    };
-                    entity.update(app, |_, cx| cx.notify());
-                    ok
+                    });
+                    // 交付续体需要持有这些句柄（外层闭包是 `Fn`，不能把捕获的 `Rc` 移出去）——
+                    // 这里再克隆一份，成本就是一次引用计数递增。
+                    let (busy_c, result_c, shared_c, dialog_c) =
+                        (busy.clone(), result.clone(), shared.clone(), dialog.clone());
+                    entity.update(app, |_, cx| {
+                        cx.spawn_in(window, async move |editor, cx| {
+                            let outcome = work.await;
+                            cx.update(|window, app| {
+                                busy_c.set(BusyOp::None);
+                                let saved = matches!(outcome, SaveOutcome::Saved { .. });
+                                match outcome {
+                                    SaveOutcome::Failed(e) => {
+                                        set_result_ok(&result_c, false, format!("保存失败: {e}"))
+                                    }
+                                    SaveOutcome::Saved {
+                                        conn_id,
+                                        items,
+                                        group_degrade,
+                                    } => {
+                                        *shared_c.connections.borrow_mut() = items;
+                                        // 连接变了 → Mock 面板的「导入结构」候选来源也变了
+                                        // （它从内存里的清册派生，刷新不要开分析库）。
+                                        shared_c.refresh_mock_connections(app);
+                                        // #32 B 案：状态栏提示同样只出现名称（ID 不进界面文本）。
+                                        *shared_c.notice.borrow_mut() = Some(format!(
+                                            "连接「{}」已保存",
+                                            conn_display_name(&input_name)
+                                        ));
+                                        // 暂存列表（原型设计 §2.2 规则 4）：保存后将草稿移出暂存区 + 自动补空草稿；
+                                        // 保存后保持对话框打开，支持连续新建多个连接。
+                                        dialog_c.staging_after_save(window, app);
+                                        match group_degrade {
+                                            Some(reason) => set_result(
+                                                &result_c,
+                                                ResultLevel::Warning,
+                                                format!(
+                                                    "已保存：{}（分组未同步：{reason}）",
+                                                    conn_display_name(&input_name)
+                                                ),
+                                            ),
+                                            // 成功：摘要只有名称，连接 ID 进「详情」（B 案）。
+                                            None => set_result_line(
+                                                &result_c,
+                                                saved_result(&input_name, &conn_id),
+                                            ),
+                                        }
+                                    }
+                                }
+                                if saved && close_after {
+                                    window.close_dialog(app);
+                                }
+                                // 宿主重绘：刷新层内容（暂存列表 + 连接列表），并让面板重算按钮态。
+                                shared_c.notify_host(app);
+                                let _ = editor.update(app, |_, cx| cx.notify());
+                            })
+                            .ok();
+                        })
+                        .detach();
+                    });
                 })
             };
 
@@ -2181,65 +2180,105 @@ impl ConnectionDialogState {
                     })
             });
             // footer：0.6 中为 `impl IntoElement`，直接传按钮容器。
+            //
+            // 分组（对齐原型 §2 的底部操作栏）：左侧是「动作」（测试连接 / 从全局定义同步），
+            // 右侧是「提交」（取消 / 保存 / 保存并关闭）——以前测试连接混在右簇里，
+            // 与「取消」只隔一个按钮，误点成本高（按下就发起真实连接）。
+            // 在途（busy）期间：测试与保存按钮置灰 + loading（防重复触发 / 并发写库），
+            // 「取消」始终可点（用户随时能离开；在途任务回来后自己收尾）。
+            let busy_now = busy.get();
             let footer_ui = div()
                 .h_flex()
-                .justify_end()
+                .justify_between()
                 .items_center()
                 .gap_2()
                 .child(
-                    Button::new("test-connection")
-                        .secondary()
-                        .label("测试连接")
-                        .on_click({
-                            let do_test = do_test.clone();
-                            move |_, window, app| {
-                                do_test(window, app);
-                            }
-                        }),
-                )
-                .when_some(sync_from_global, |d, b| d.child(b))
-                .child(
-                    Button::new("cancel-connection")
-                        .label("取消")
-                        .on_click({
-                            let shared = shared.clone();
-                            let state = state.clone();
-                            move |_, window, app| {
-                                // 关闭前写回当前草稿（暂存列表不丢失，原型设计 §2.2 规则 5）
-                                state.staging_flush(app);
-                                window.close_dialog(app);
-                                // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
-                                shared.notify_host(app);
-                            }
-                        }),
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("test-connection")
+                                .secondary()
+                                .label("测试连接")
+                                .loading(busy_now == BusyOp::Test)
+                                .disabled(busy_now != BusyOp::None)
+                                .tooltip_with_action(
+                                    "测试连接（不改动已保存的配置）",
+                                    &TestConnection,
+                                    Some("connection-dialog"),
+                                )
+                                .on_click({
+                                    let do_test = do_test.clone();
+                                    move |_, window, app| {
+                                        do_test(window, app);
+                                    }
+                                }),
+                        )
+                        .when_some(sync_from_global, |d, b| d.child(b)),
                 )
                 .child(
-                    Button::new("save-connection")
-                        .primary()
-                        .icon(IconName::Plus)
-                        .label("保存")
-                        .on_click({
-                            let do_save = do_save.clone();
-                            move |_, window, app| {
-                                do_save(window, app);
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("save-close-connection")
-                        .label("保存并关闭")
-                        .on_click({
-                            let do_save = do_save.clone();
-                            let shared = shared.clone();
-                            move |_, window, app| {
-                                if do_save(window, app) {
-                                    window.close_dialog(app);
-                                    // 宿主重绘：移除层（Root 的 notify 到不了子视图）
-                                    shared.notify_host(app);
-                                }
-                            }
-                        }),
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-connection")
+                                .label("取消")
+                                .tooltip("关闭对话框（Esc）：草稿会保留")
+                                .on_click({
+                                    let shared = shared.clone();
+                                    let state = state.clone();
+                                    move |_, window, app| {
+                                        // 关闭前写回当前草稿（暂存列表不丢失，原型设计 §2.2 规则 5）
+                                        state.staging_flush(app);
+                                        window.close_dialog(app);
+                                        // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
+                                        shared.notify_host(app);
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("save-connection")
+                                .primary()
+                                .icon(lucide("icons/save.svg"))
+                                .label("保存")
+                                .loading(busy_now == BusyOp::Save)
+                                .disabled(busy_now != BusyOp::None)
+                                .tooltip_with_action(
+                                    "保存（不关闭对话框，方便连续新建）",
+                                    &SaveConnection,
+                                    Some("connection-dialog"),
+                                )
+                                .on_click({
+                                    let do_save = do_save.clone();
+                                    move |_, window, app| {
+                                        do_save(window, app, false);
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("save-close-connection")
+                                .label("保存并关闭")
+                                .disabled(busy_now != BusyOp::None)
+                                .tooltip("保存成功后关闭对话框")
+                                .on_click({
+                                    let do_save = do_save.clone();
+                                    move |_, window, app| {
+                                        // 关闭动作在保存结果回来之后（异步，见 `do_save` 的 `close_after`）
+                                        do_save(window, app, true);
+                                    }
+                                }),
+                        ),
                 );
+
+            // 两列行的实际行高：设计基准 32.5rem，但先按**窗口可用高度**夹住——矮窗口
+            // （小屏 + 高缩放）上否则会把 footer 顶出屏幕（Dialog 的纵向位置是 viewport/10）。
+            // 夹小之后内容区（`flex_1`）与侧栏（`h_full`）自己让位，不需额外分支。
+            // （高度换算成 rem 交给纯函数：数值口径在 `helpers::dialog_row_height` 里可单测。）
+            let viewport_rem =
+                f32::from(window.viewport_size().height) / f32::from(window.rem_size());
+            let row_h = dialog_row_height(viewport_rem);
 
             dialog
                 .title(if editing_id.borrow().is_some() { "编辑数据源连接" } else { "新建数据源连接" })
@@ -2258,13 +2297,17 @@ impl ConnectionDialogState {
                 })
                 .child(
                     div()
+                        // 测试锚点：两列行的几何基准（行高恒定 = 切 Tab / 增删草稿不改变对话框高度；
+                        // 右列各子项必须装在这一行里）。
+                        .debug_selector(|| "conn-body-row".to_string())
                         .h_flex()
                         // 两列等高于**行高**，且行高确定（三向夹住）：左侧「高度恒定 + 内部滚动」
                         // 才成立——否则侧栏按类型树内容自适应，既会撑高对话框，也会让右列下方留空
-                        // （设计 §2「布局恒定」）。
-                        .h(rems(BODY_H))
-                        .min_h(rems(BODY_H))
-                        .max_h(rems(BODY_H))
+                        // （设计 §2「布局恒定」）。行高 = `dialog_row_height(...)`：
+                        // 设计基准之上再夹一层窗口可用高度（矮窗口不把 footer 顶出屏幕）。
+                        .h(row_h)
+                        .min_h(row_h)
+                        .max_h(row_h)
                         .items_stretch()
                         .gap(rems(1.))
                         // 快捷键 context：绑定在 app 层（Ctrl+Enter 保存 / Ctrl+T 测试 / ↑↓ 切换条目）。
@@ -2273,7 +2316,7 @@ impl ConnectionDialogState {
                         .on_action({
                             let do_save = do_save.clone();
                             move |_: &SaveConnection, window, app| {
-                                do_save(window, app);
+                                do_save(window, app, false);
                             }
                         })
                         .on_action({
@@ -2309,23 +2352,65 @@ impl ConnectionDialogState {
                         // 此处只接管 secondary（Ctrl+Enter）作保存，普通 Enter 不处理。
                         .on_action({
                             let do_save = do_save.clone();
+                            let driver_filter = driver_filter.clone();
+                            let types_for_key = types_list.clone();
+                            let drivers_for_key = drivers_list.clone();
+                            let state_for_key = state.clone();
+                            let entity_for_key = entity.clone();
+                            let shared_for_key = shared.clone();
                             move |action: &InputEnter, window, app| {
                                 if action.secondary {
-                                    do_save(window, app);
+                                    do_save(window, app, false);
+                                    return;
+                                }
+                                // 搜索框里回车 = 选中第一个匹配的类型：
+                                // 类型树行是自绘可点行（Tab 到不了），这是**键盘可达的选型路径**。
+                                // 只在焦点确实在搜索框时生效（Input 的 Enter 会冒泡到本容器，
+                                // 其它输入框里的回车不该改选型）。
+                                let filter_presentation = driver_filter.read(app).presentation();
+                                if !filter_presentation.focus_handle().is_focused(window) {
+                                    return;
+                                }
+                                let filter = driver_filter.read(app).value().to_string();
+                                let types = types_for_key.borrow().clone();
+                                let drivers = drivers_for_key.borrow().clone();
+                                if let Some(type_id) =
+                                    first_selectable_type(&types, &drivers, &filter)
+                                {
+                                    // `select_type` 自带「无可用驱动不切换 + 结果行给原因」的守卫。
+                                    state_for_key.select_type(&type_id, window, app);
+                                    entity_for_key.update(app, |_, cx| cx.notify());
+                                    shared_for_key.notify_host(app);
                                 }
                             }
                         })
                         .child(side_panel)
                         .child(
                             div()
+                                // 右列：Header + Tab 条定高，Tab 内容区 `flex_1` 吃剩余高度
+                                // + 结果行固定行高——三者加起来恰好等于行高，底部不会被裁。
+                                //
+                                // `min_h_0` 是关键：flex 子项的 `min-height: auto` 默认是
+                                // **内容最小高**，不给 0 的话长内容（常规 Tab 约 800px）会把列
+                                // 撞得比行高还高，`flex_1` 也就压不住内容区（实测：Tab 0 = 801px）。
                                 .v_flex()
                                 .flex_1()
+                                .h_full()
+                                .min_h_0()
                                 .min_w(rems(0.))
                                 .gap_2()
                                 .child(header_ui)
                                 .child(tab_bar)
                                 .child(tab_body)
-                                .child(result_ui),
+                                .child(
+                                    div()
+                                        // 测试锚点：结果行是右列的**最后一个固定高度块**——
+                                        // 它的底边是否超出 `conn-body-row` 底边，就是“右列溢出 / 被裁”的
+                                        // 直接判据（旧实现这里超出 168px）。
+                                        .debug_selector(|| "conn-result-row".to_string())
+                                        .flex_shrink_0()
+                                        .child(result_ui),
+                                ),
                         ),
                 )
                 .footer(footer_ui)

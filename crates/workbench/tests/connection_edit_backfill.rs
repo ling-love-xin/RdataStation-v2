@@ -215,21 +215,25 @@ fn editing_saved_connection_backfills_form(cx: &mut TestAppContext) {
         "编辑既有连接不应把已保存条目录入暂存区"
     );
 
-    // 6) 两列等高：目录就绪（类型树有内容）时，侧栏不得把对话框撑高。
+    // 6) 两列同底 + 右列不溢出：目录就绪（类型树有内容）时，侧栏不得把对话框撑高；
+    //    且右列最后一个固定块（结果行）必须装得进这一行——行高是固定的
+    //    （`rems(BODY_H)` 三向夹住），越出的部分会被 Dialog 的 body 裁掉
+    //    （旧实现：Tab 内容区写死 `rems(BODY_H)`，结果行被顶出行底 168px）。
     dialog.active_tab.set(0);
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    let side = cx
-        .debug_bounds("conn-side-panel")
-        .expect("侧栏应已渲染")
-        .size
-        .height;
-    let body = cx
-        .debug_bounds("conn-tab-body")
-        .expect("Tab 内容区应已渲染")
-        .size
-        .height;
+    let row = cx.debug_bounds("conn-body-row").expect("两列行应已渲染");
+    let side = cx.debug_bounds("conn-side-panel").expect("侧栏应已渲染");
+    let result = cx
+        .debug_bounds("conn-result-row")
+        .expect("结果行应已渲染");
     assert_eq!(
-        side, body,
-        "侧栏与 Tab 内容区应等高（目录 / 类型树不得把对话框撑高）"
+        side.size.height, row.size.height,
+        "侧栏应填满行高（目录 / 类型树不得把对话框撑高）"
+    );
+    let row_bottom = row.origin.y + row.size.height;
+    let result_bottom = result.origin.y + result.size.height;
+    assert!(
+        result_bottom <= row_bottom,
+        "右列不得越出行高（行底 {row_bottom:?} / 结果行底 {result_bottom:?}）"
     );
 }
