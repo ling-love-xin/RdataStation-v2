@@ -6,7 +6,7 @@
 //!
 //! 任务类型：
 //! - `LoadChildren`：导航树懒加载 / 分页加载（主线程 render 不再做 I/O）；
-//! - `SearchIndex`：搜索框的跨连接索引搜索（结果回填到树顶结果区）；
+//! - `SearchIndex`：搜索框的跨连接索引搜索（命中行回填到导航树列表最前，`NavRow::SearchHit`）；
 //! - `LoadProperties`：属性面板对象加载；
 //! - `GenerateDml`：右键「生成 INSERT/UPDATE/DELETE」（先取列，再拼模板）；
 //! - `TestConnection`：右键「测试连接」（独立会话探测，不注册连接池）；
@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use crate::model::{NavNodeKind, NavPath, PropertyRef};
+use crate::model::{NavNodeKind, NavPath, ObjectRef, PropertyRef};
 use crate::nav_host::ConnectionProbe;
 use crate::property_panel::ObjectProperties;
 use crate::sql_gen::DmlKind;
@@ -81,7 +81,7 @@ pub const PAGE_SIZE: usize = workbench_shell::ui::NAV_FOLDER_PAGE_SIZE;
 /// 单个连接在一次搜索里最多返回多少条命中（跨连接累加前先各自封顶）。
 pub const SEARCH_LIMIT_PER_CONN: usize = 50;
 
-/// 一次搜索的总命中上限（多连接时防止“30 个连接 × 50 条”把结果区与渲染拖垮）。
+/// 一次搜索的总命中上限（多连接时防止“30 个连接 × 50 条”把命中列表与渲染拖垮）。
 pub const SEARCH_MAX_HITS: usize = 300;
 
 /// 一次索引搜索的目标连接（宿主可见且通过 facet 筛选的连接）。
@@ -123,6 +123,31 @@ pub struct SearchHit {
     pub snippet: Option<String>,
 }
 
+impl SearchHit {
+    /// 命中对象的**身份**：`{连接}/{catalog}/{schema}/{父对象}/{名字}`（`ObjectRef::key` 口径）。
+    ///
+    /// 为什么要单独一处：导航结果行的业务键（`NavRow::key`，虚拟列表里那一行的唯一身份 /
+    /// 键盘漫游锚点）与元素 id（GPUI 要求同层唯一）都要它，两边各拼一份必有一份会漂移。
+    /// key 与树节点同构，于是「结果区那一行」与「树上那一行」说的是同一个对象。
+    ///
+    /// 索引里出现**不可寻址**的类别串时退化为「连接-类别-名字」：这类命中渲染得出来
+    /// （见 `nav_object_type_label` 的兜底），只是定位不了——身份仍要唯一，不能返回空串。
+    pub(crate) fn key(&self) -> String {
+        let object = ObjectRef::from_index_hit(
+            &self.conn_id,
+            &self.object_type,
+            &self.object_name,
+            self.parent_name.as_deref(),
+            self.catalog.as_deref(),
+            self.schema.as_deref(),
+        );
+        match object {
+            Some(object) => object.key(),
+            None => format!("{}-{}-{}", self.conn_id, self.object_type, self.object_name),
+        }
+    }
+}
+
 /// 一次搜索的完整结果（一个批次涵盖全部目标连接）。
 pub struct SearchResult {
     /// 本批次的消费方（诊断用；分发改由槽位承担，见 [`SearchConsumer`]）。
@@ -134,12 +159,12 @@ pub struct SearchResult {
     pub hits: Vec<SearchHit>,
 }
 
-/// 索引搜索的**消费方**：同一条后台通道被两个入口用（导航面板的树顶结果区、
+/// 索引搜索的**消费方**：同一条后台通道被两个入口用（导航面板的树顶结果行、
 /// Quick Open 浮层），结果必须按消费方分发——`drain` 是「取走」语义，
 /// 不分流就是谁先取谁得，另一个入口会永远拿到空结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchConsumer {
-    /// 数据源导航面板（树顶结果区）。
+    /// 数据源导航面板（结果行在导航列表最前）。
     Navigator,
     /// Quick Open 浮层。
     QuickOpen,
@@ -716,7 +741,7 @@ pub fn push_search_results_for_test(consumer: SearchConsumer, result: SearchResu
 /// 提交跨连接索引搜索（按消费方分槽）。
 ///
 /// 空目标（无可见连接）也走一趟：回传一个 `searched = 0` 的空结果，
-/// 让视图侧能把「搜索中…」收尾（否则结果区会一直转）。
+/// 让视图侧能把「搜索中…」收尾（否则结果区标题会一直停在那一句）。
 pub fn enqueue_search(
     consumer: SearchConsumer,
     kind: SearchKind,
@@ -873,7 +898,11 @@ mod tests {
         assert_eq!(mapped.schema.as_deref(), Some("public"));
         assert_eq!(mapped.catalog, None, "FTS 表里没有 catalog");
         assert!(
-            mapped.snippet.as_deref().unwrap_or_default().contains("<mark>"),
+            mapped
+                .snippet
+                .as_deref()
+                .unwrap_or_default()
+                .contains("<mark>"),
             "内容档要把 snippet 带出去（UI 靠它显示“为什么命中”）"
         );
     }

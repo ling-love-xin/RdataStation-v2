@@ -70,6 +70,34 @@ pub(crate) enum NavRow {
         scope_key: String,
         position: usize,
     },
+    /// 索引搜索命中行。
+    ///
+    /// 为何进列表而不是单独的「结果区块」：以前它是虚拟列表之上一个自带 128px 上限的
+    /// 滚动块——命中进不了键盘漫游（↑↓ 走不到）、没有选中反馈，`NAV_SEARCH_MAX_ROWS`
+    /// = 100 条塞在 128px 里还要在小组内二段滚动。并进来后它是普通一行：同一套 ↑↓ /
+    /// 选中 / 悬停，同一片滚动区。
+    SearchHit {
+        hit: Box<crate::nav_jobs::SearchHit>,
+        /// 在本次结果里的位次。
+        ///
+        /// 为何连位次一起进 key：`ObjectRef::key` **不带类别**（同一 schema 下例程与表可以
+        /// 同名），单靠引用 key 不足以保证逐行唯一——同层重复的元素 id 会串状态，
+        /// 重复的业务键会让键盘漫游在原地来回弹（`nav_move` 按 `position` 找当前位置）。
+        ix: usize,
+    },
+}
+
+/// 搜索命中行的业务键（`search:{位次}:{引用}`）。
+///
+/// 前缀与统一引用一起拼，而不是只存引用：见 [`NavRow::SearchHit`] 的位次说明。
+/// 与 Quick Open 的 `meta:{引用}`（`quick_open::model::meta_key`）同一套「屏前缀 + 引用」口径。
+pub(crate) fn search_hit_row_key(ix: usize, hit: &crate::nav_jobs::SearchHit) -> String {
+    format!("search:{ix}:{}", hit.key())
+}
+
+/// 搜索命中行的元素 id（GPUI 同层唯一；位次保证「同一对象两条命中」不撞车）。
+pub(crate) fn search_hit_row_id(ix: usize, hit: &crate::nav_jobs::SearchHit) -> String {
+    format!("nav-search-{ix}-{}", hit.key())
 }
 
 impl NavRow {
@@ -89,6 +117,7 @@ impl NavRow {
             NavRow::Tree { node, .. } => node.key.clone(),
             NavRow::More { node, .. } => format!("{}#more", node.key),
             NavRow::Jump { node, .. } => format!("{}#jump", node.key),
+            NavRow::SearchHit { hit, ix } => search_hit_row_key(*ix, hit),
         }
     }
 
@@ -109,6 +138,7 @@ impl NavRow {
             NavRow::Jump {
                 node, scope_key, ..
             } => format!("nav-jumped-{scope_key}::{}", node.key),
+            NavRow::SearchHit { hit, ix } => search_hit_row_id(*ix, hit),
         }
     }
 
@@ -122,23 +152,24 @@ impl NavRow {
             NavRow::Connection { conn, .. } | NavRow::Reference { conn, .. } => {
                 Some(conn.id.as_str())
             }
-            NavRow::Tree { node, .. }
-            | NavRow::More { node, .. }
-            | NavRow::Jump { node, .. } => Some(node.connection_id.as_str()),
+            NavRow::Tree { node, .. } | NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
+                Some(node.connection_id.as_str())
+            }
+            NavRow::SearchHit { hit, .. } => Some(hit.conn_id.as_str()),
         }
     }
 
-    /// 能不能被键盘漫游选中（分组头是容器标题，不参与漫游；「更多」「定位」可点可选中）。
+    /// 能不能被键盘漫游选中（分组头是容器标题，不参与漫游；「更多」「定位」「搜索命中」可点可选中）。
     pub(crate) fn selectable(&self) -> bool {
         !matches!(self, NavRow::GroupHeader { .. })
     }
 
-    /// 树行 / 「更多」/「定位」行携带的节点（连接与分组头为 `None`）。
+    /// 树行 / 「更多」/「定位」行携带的节点（连接 / 分组头 / 搜索命中为 `None`）。
     pub(crate) fn node(&self) -> Option<&NavNode> {
         match self {
-            NavRow::Tree { node, .. }
-            | NavRow::More { node, .. }
-            | NavRow::Jump { node, .. } => Some(node),
+            NavRow::Tree { node, .. } | NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
+                Some(node)
+            }
             _ => None,
         }
     }
@@ -146,9 +177,9 @@ impl NavRow {
     /// 树行的层级（非树行为 0；缩进按它算）。
     pub(crate) fn depth(&self) -> usize {
         match self {
-            NavRow::Tree { depth, .. } | NavRow::More { depth, .. } | NavRow::Jump { depth, .. } => {
-                *depth
-            }
+            NavRow::Tree { depth, .. }
+            | NavRow::More { depth, .. }
+            | NavRow::Jump { depth, .. } => *depth,
             _ => 0,
         }
     }
