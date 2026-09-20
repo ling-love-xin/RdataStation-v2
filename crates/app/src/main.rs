@@ -26,8 +26,8 @@ use settings::SettingsService;
 use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings};
 use workbench::WorkbenchView;
 use workbench::commands::{
-    CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavCollapse, NavDown,
-    NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate,
+    CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavClearSearch, NavCollapse,
+    NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate,
     SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile,
     ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject,
     TestConnection, ToggleQuickOpen,
@@ -231,6 +231,8 @@ fn run_app() {
                 KeyBinding::new("left", NavCollapse, Some("database-nav")),
                 KeyBinding::new("f4", NavOpenProperties, Some("database-nav")),
                 KeyBinding::new("enter", NavOpenProperties, Some("database-nav")),
+                // 清空搜索框（只清搜索词，facet 筛选不动；语义与资产库的 `Esc` 一致）。
+                KeyBinding::new("escape", NavClearSearch, Some("database-nav")),
                 // 条目重排（对齐 VS Code 的 Alt+↑/↓）：只改顺序，不改光标位置。
                 KeyBinding::new("alt-up", NavReorderUp, Some("database-nav")),
                 KeyBinding::new("alt-down", NavReorderDown, Some("database-nav")),

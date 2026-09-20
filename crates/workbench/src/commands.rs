@@ -30,7 +30,8 @@ actions!(
 
 // 数据源导航（M4）局部动作：定义在 `database::commands`（随导航视图归位），此处重导。
 pub use database::commands::{
-    NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
+    NavClearSearch, NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown,
+    NavReorderUp, NavUp,
 };
 
 // 草稿箱（M5）局部动作：定义在 `scratchpad::commands`（随草稿箱视图归位），此处重导。
