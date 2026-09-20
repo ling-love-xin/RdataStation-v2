@@ -7,6 +7,8 @@ description = "M6 资产库 / 分析存档：归档 / 取回 / 版本（内容�
 [dependencies]
 engine.workspace = true
 shared.workspace = true
+# 面板共用视图资产（尺寸常量单一来源；依赖方向：feature → shell，见 rds-architecture skill）
+workbench_shell.workspace = true
 
 # ===== 时间 =====
 chrono.workspace = true

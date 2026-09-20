@@ -25,7 +25,6 @@
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
-use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -33,6 +32,7 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -312,12 +312,24 @@ pub trait ResourcesHost: 'static {
     ///
     /// 只收 id 与显示名：对话框的数据由宿主在取数线程上查库得到（与 `request_version_history`
     /// 同一口径——调用方不必为了一个 id 去克隆整条详情）。
-    fn request_edit_tags(&self, resource_id: &str, resource_name: &str, window: &mut Window, cx: &mut App);
+    fn request_edit_tags(
+        &self,
+        resource_id: &str,
+        resource_name: &str,
+        window: &mut Window,
+        cx: &mut App,
+    );
     /// 去掉一个标签（详情面板 chip 上的 ×）。
     ///
     /// 与其它动作同口径：收**面板已有的那条详情**（回执文案要显示名），不回头读面板选中态。
     /// 不进对话框：点 × 就是“去掉它”，再要一次确认是多余的。
-    fn request_remove_tag(&self, detail: &ArchiveDetail, tag_id: &str, window: &mut Window, cx: &mut App);
+    fn request_remove_tag(
+        &self,
+        detail: &ArchiveDetail,
+        tag_id: &str,
+        window: &mut Window,
+        cx: &mut App,
+    );
     /// 索引修复入口（状态行异常段的「修复…」与面板头「⋯ → 重建索引…」共用）。
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
     /// 用系统文件管理器打开受管内容根（面板头「⋯ → 打开资源目录」）。
@@ -582,7 +594,11 @@ impl ArchiveListDelegate {
     ) -> ListItem {
         let (bar, muted, fg) = {
             let colors = cx.theme().colors;
-            (colors.list_active_border, colors.muted_foreground, colors.foreground)
+            (
+                colors.list_active_border,
+                colors.muted_foreground,
+                colors.foreground,
+            )
         };
         let panel = self.panel.clone();
         let key_owned = key.to_string();
@@ -590,7 +606,8 @@ impl ArchiveListDelegate {
         let list_id = format!("archive-group-{key}");
         let debug_id = list_id.clone();
         let host = self.host.clone();
-        let is_real_group = key != crate::filter::GROUP_ALL && key != crate::filter::GROUP_UNGROUPED;
+        let is_real_group =
+            key != crate::filter::GROUP_ALL && key != crate::filter::GROUP_UNGROUPED;
 
         let head = div()
             .id(SharedString::from(format!("{list_id}-row")))
@@ -611,7 +628,14 @@ impl ArchiveListDelegate {
             .child(
                 // 2px 色条：`list_active_border`（原型 §6——不用 `sidebar_accent`：
                 // 那个角色在浅色下与面板底几乎同色）。
-                div().w(rems(ui::GROUP_BAR_WIDTH)).h(rems(1.0)).flex_none().bg(bar),
+                // 2px 色条：`GROUP_BAR_WIDTH`（= 外壳的 `NAV_GROUP_BAR_WIDTH`，固定描边 2px，
+                // 不随主题字号缩放）。原型 §6——不用 `sidebar_accent`：
+                // 那个角色在浅色下与面板底几乎同色）。
+                div()
+                    .w(ui::GROUP_BAR_WIDTH)
+                    .h(rems(1.0))
+                    .flex_none()
+                    .bg(bar),
             )
             .child(div().flex_none().text_xs().text_color(muted).child(chevron))
             .child(
@@ -635,20 +659,16 @@ impl ArchiveListDelegate {
         let head: AnyElement = if is_real_group {
             let folder_id = key.to_string();
             head.context_menu(move |menu, _window, _cx| {
-                menu.item(
-                    PopupMenuItem::new("重命名…").on_click({
-                        let host = host.clone();
-                        let folder_id = folder_id.clone();
-                        move |_, window, cx| host.request_rename_group(&folder_id, window, cx)
-                    }),
-                )
-                .item(
-                    PopupMenuItem::new("删除分组").on_click({
-                        let host = host.clone();
-                        let folder_id = folder_id.clone();
-                        move |_, window, cx| host.request_delete_group(&folder_id, window, cx)
-                    }),
-                )
+                menu.item(PopupMenuItem::new("重命名…").on_click({
+                    let host = host.clone();
+                    let folder_id = folder_id.clone();
+                    move |_, window, cx| host.request_rename_group(&folder_id, window, cx)
+                }))
+                .item(PopupMenuItem::new("删除分组").on_click({
+                    let host = host.clone();
+                    let folder_id = folder_id.clone();
+                    move |_, window, cx| host.request_delete_group(&folder_id, window, cx)
+                }))
                 .separator()
                 .item(PopupMenuItem::new("新建分组…").on_click({
                     let host = host.clone();
@@ -962,12 +982,11 @@ impl ListDelegate for ArchiveListDelegate {
                                             }),
                                     );
                                 }
-                                menu.separator().item(
-                                    PopupMenuItem::new("新建分组…").on_click({
+                                menu.separator()
+                                    .item(PopupMenuItem::new("新建分组…").on_click({
                                         let host = host.clone();
                                         move |_, window, cx| host.request_create_group(window, cx)
-                                    }),
-                                )
+                                    }))
                             }
                         });
                         // 删除是**唯一**多选可用的项（原型 §3.2）：多选时带上数量。
@@ -977,10 +996,11 @@ impl ListDelegate for ArchiveListDelegate {
                         } else {
                             "移入回收站".to_string()
                         };
-                        menu.separator().item(PopupMenuItem::new(delete_label).on_click({
-                            let host = host.clone();
-                            move |_, window, cx| host.request_delete(&delete_ids, window, cx)
-                        }))
+                        menu.separator()
+                            .item(PopupMenuItem::new(delete_label).on_click({
+                                let host = host.clone();
+                                move |_, window, cx| host.request_delete(&delete_ids, window, cx)
+                            }))
                     }),
             ),
         )
@@ -1005,7 +1025,9 @@ impl ListDelegate for ArchiveListDelegate {
             return;
         }
         self.selected_id = id.clone();
-        let _ = self.panel.update(cx, |panel, cx| panel.set_selected(id, cx));
+        let _ = self
+            .panel
+            .update(cx, |panel, cx| panel.set_selected(id, cx));
     }
 
     /// 回车 / 双击：打开（只读），与右键菜单第一项同口径。
@@ -1178,9 +1200,9 @@ impl ResourcesPanel {
             .as_deref()
             .and_then(|id| {
                 // 列表的“行”含分组头：索引必须按 `view_items` 数（不能用 `view_rows` 的位置）。
-                self.view_items.iter().position(
-                    |item| matches!(item, VisibleItem::Row(row) if row.id == id),
-                )
+                self.view_items
+                    .iter()
+                    .position(|item| matches!(item, VisibleItem::Row(row) if row.id == id))
             })
             .map(IndexPath::new);
         list.update(cx, |state, cx| {
@@ -1210,7 +1232,8 @@ impl ResourcesPanel {
             }
         }
         // 多选集合同样清悬空项（筛选 / 排序也会让行消失）。
-        self.multi.retain(|id| self.view_rows.iter().any(|row| &row.id == id));
+        self.multi
+            .retain(|id| self.view_rows.iter().any(|row| &row.id == id));
         if self.multi.is_empty() {
             self.anchor = None;
         } else if self.multi.len() == 1 {
@@ -1220,7 +1243,9 @@ impl ResourcesPanel {
         // 分组被删后同样清掉它的折叠标记（不然那条 key 永远留着）。
         let alive: Vec<&str> = self.snapshot.groups.iter().map(|g| g.id.as_str()).collect();
         self.collapsed.retain(|key| {
-            key == filter::GROUP_ALL || key == filter::GROUP_UNGROUPED || alive.contains(&key.as_str())
+            key == filter::GROUP_ALL
+                || key == filter::GROUP_UNGROUPED
+                || alive.contains(&key.as_str())
         });
         self.refresh_view_items(cx);
     }
@@ -1255,11 +1280,8 @@ impl ResourcesPanel {
 
     /// 重建可见项（分组头 + 行）。折叠 / 展开与注入都走它，免得两处各抄一遍参数。
     fn refresh_view_items(&mut self, cx: &mut Context<Self>) {
-        self.view_items = filter::build_visible_items(
-            &self.view_rows,
-            &self.snapshot.groups,
-            &self.collapsed,
-        );
+        self.view_items =
+            filter::build_visible_items(&self.view_rows, &self.snapshot.groups, &self.collapsed);
         self.push_rows_to_list(cx);
     }
 
@@ -1288,7 +1310,12 @@ impl ResourcesPanel {
         self.snapshot = snapshot;
         // 标签被删后清掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）——
         // 与选中 / 多选的悬空清理同一个道理，但条件在筛选器里，所以在推送时先清。
-        let alive: Vec<String> = self.snapshot.tags.iter().map(|tag| tag.id.clone()).collect();
+        let alive: Vec<String> = self
+            .snapshot
+            .tags
+            .iter()
+            .map(|tag| tag.id.clone())
+            .collect();
         self.filter.tags.retain(|id| alive.contains(id));
         self.refresh_view_rows(cx);
         cx.notify();
@@ -1569,11 +1596,13 @@ impl ResourcesPanel {
                                             drafts_host.request_archive_from_drafts(window, cx)
                                         },
                                     ))
-                                    .item(PopupMenuItem::new("从本地文件归档…").on_click(
-                                        move |_, window, cx| {
-                                            file_host.request_archive_from_file(window, cx)
-                                        },
-                                    ))
+                                    .item(
+                                        PopupMenuItem::new("从本地文件归档…").on_click(
+                                            move |_, window, cx| {
+                                                file_host.request_archive_from_file(window, cx)
+                                            },
+                                        ),
+                                    )
                                 }
                             }),
                     )
@@ -1590,13 +1619,14 @@ impl ResourcesPanel {
                                     let mut menu = menu;
                                     for action in HeaderMenuAction::ALL {
                                         let target = host.clone();
-                                        menu = menu.item(
-                                            PopupMenuItem::new(action.label()).on_click(
+                                        menu =
+                                            menu.item(PopupMenuItem::new(action.label()).on_click(
                                                 move |_, window, cx| {
-                                                    dispatch_header_action(&target, action, window, cx)
+                                                    dispatch_header_action(
+                                                        &target, action, window, cx,
+                                                    )
                                                 },
-                                            ),
-                                        );
+                                            ));
                                     }
                                     menu
                                 }
@@ -1651,16 +1681,14 @@ impl ResourcesPanel {
                             let is_checked = tags.iter().any(|id| id == &option.id);
                             let label = format!("{}（{}）", option.name, option.count);
                             let tag_id = option.id.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(is_checked)
-                                    .on_click(move |_, _, app| {
+                            menu =
+                                menu.item(PopupMenuItem::new(label).checked(is_checked).on_click(
+                                    move |_, _, app| {
                                         let tag_id = tag_id.clone();
-                                        target.update(app, |panel, cx| {
-                                            panel.toggle_tag(&tag_id, cx)
-                                        });
-                                    }),
-                            );
+                                        target
+                                            .update(app, |panel, cx| panel.toggle_tag(&tag_id, cx));
+                                    },
+                                ));
                         }
                     }
                     menu.separator().item(
@@ -1693,15 +1721,11 @@ impl ResourcesPanel {
                         } else {
                             candidate.label().to_string()
                         };
-                        menu = menu.item(
-                            PopupMenuItem::new(text)
-                                .checked(is_current)
-                                .on_click(move |_, _, app| {
-                                    target.update(app, |panel, cx| {
-                                        panel.choose_sort(candidate, cx)
-                                    });
-                                }),
-                        );
+                        menu = menu.item(PopupMenuItem::new(text).checked(is_current).on_click(
+                            move |_, _, app| {
+                                target.update(app, |panel, cx| panel.choose_sort(candidate, cx));
+                            },
+                        ));
                     }
                     menu
                 }
@@ -1717,13 +1741,16 @@ impl ResourcesPanel {
             .border_color(border)
             .child(
                 // 搜索框占满除两个按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）。
-                div().flex_1().min_w_0().when_some(self.search_input.clone(), |row, input| {
-                    row.child(
-                        Input::new(&input)
-                            .h(rems(ui::CONTROL_HEIGHT_SM))
-                            .cleanable(true),
-                    )
-                }),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .when_some(self.search_input.clone(), |row, input| {
+                        row.child(
+                            Input::new(&input)
+                                .h(rems(ui::CONTROL_HEIGHT_SM))
+                                .cleanable(true),
+                        )
+                    }),
             )
             .child(filter_button)
             .child(sort_button)
@@ -1736,7 +1763,11 @@ impl ResourcesPanel {
             (colors.border, colors.warning, colors.info)
         };
         // 只读是约束提示（warning），其余是信息（info）——同一字段不一律同色。
-        let color = if self.snapshot.read_only { warning } else { info };
+        let color = if self.snapshot.read_only {
+            warning
+        } else {
+            info
+        };
         Some(
             div()
                 .flex_none()
@@ -1880,12 +1911,7 @@ impl ResourcesPanel {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("还没有任何存档"),
-            )
+            .child(div().text_sm().text_color(muted).child("还没有任何存档"))
             .child(
                 div()
                     .px_4()
@@ -1899,14 +1925,18 @@ impl ResourcesPanel {
                     .debug_selector(|| "archive-empty-action".to_string())
                     .label("从草稿箱归档…")
                     .disabled(read_only)
-                    .on_click(move |_, window, cx| host_for_drafts.request_archive_from_drafts(window, cx)),
+                    .on_click(move |_, window, cx| {
+                        host_for_drafts.request_archive_from_drafts(window, cx)
+                    }),
             )
             .child(
                 Button::new("archive-for-empty-file")
                     .secondary()
                     .label("从本地文件归档…")
                     .disabled(read_only)
-                    .on_click(move |_, window, cx| host_for_file.request_archive_from_file(window, cx)),
+                    .on_click(move |_, window, cx| {
+                        host_for_file.request_archive_from_file(window, cx)
+                    }),
             )
     }
 
@@ -1924,12 +1954,7 @@ impl ResourcesPanel {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("没有匹配的存档"),
-            )
+            .child(div().text_sm().text_color(muted).child("没有匹配的存档"))
             .child(
                 div()
                     .px_4()
@@ -2128,7 +2153,13 @@ mod tests {
         assert_eq!(classify_click(1, none), RowClick::Select);
         assert_eq!(classify_click(2, none), RowClick::Open, "双击优先");
         assert_eq!(
-            classify_click(1, Modifiers { shift: true, ..none }),
+            classify_click(
+                1,
+                Modifiers {
+                    shift: true,
+                    ..none
+                }
+            ),
             RowClick::Range
         );
         assert_eq!(classify_click(1, secondary), RowClick::Toggle);
@@ -2144,7 +2175,13 @@ mod tests {
             "两个修饰键都按：区间优先"
         );
         assert_eq!(
-            classify_click(2, Modifiers { shift: true, ..none }),
+            classify_click(
+                2,
+                Modifiers {
+                    shift: true,
+                    ..none
+                }
+            ),
             RowClick::Open,
             "双击带修饰键仍是打开"
         );
@@ -2203,10 +2240,7 @@ mod tests {
         // 原型 §2.1 的 `⋯` 四项，自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新。
         // 顺序与文案都是用户可见的约定，改动要有意识地改这条测试。
         let labels: Vec<&str> = HeaderMenuAction::ALL.iter().map(|a| a.label()).collect();
-        assert_eq!(
-            labels,
-            vec!["重建索引…", "打开资源目录", "回收站…", "刷新"]
-        );
+        assert_eq!(labels, vec!["重建索引…", "打开资源目录", "回收站…", "刷新"]);
         assert_eq!(HeaderMenuAction::ALL.len(), 4);
     }
 
@@ -2333,9 +2367,8 @@ mod tests {
 
     #[test]
     fn view_stats_only_for_data_sources_that_can_be_sampled() {
-        let file = |payload: Option<&str>| {
-            detail(ArchiveKind::File, ArchiveStatus::Normal, payload)
-        };
+        let file =
+            |payload: Option<&str>| detail(ArchiveKind::File, ArchiveStatus::Normal, payload);
 
         // 受管文件：本体扩展名得是 DuckDB 读得动的（大小写不敏感、中文名照认）。
         assert!(can_view_stats(&file(Some("orders.csv"))));

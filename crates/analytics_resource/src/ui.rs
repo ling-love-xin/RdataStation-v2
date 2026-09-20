@@ -1,21 +1,28 @@
 //! 资产库（M6）视图尺寸常量。
 //!
-//! 与 `crates/workbench_shell/src/ui.rs` 的设计值同源（同一套 rem 基准与 Tailwind 对照口径），
-//! 但**常量在本 crate 内声明**：视图随能力同 crate（与 `project::ui` 同例）。
+//! **与外壳同源的那几个改为重导出**（2026-09-20）：尺寸常量的唯一来源是
+//! `crates/workbench_shell/src/ui.rs`（只依 gpui-kit，特性 crate 可直接依赖）。此前本文件
+//! 自持 `PANEL_HEADER_HEIGHT` / `ROW_HEIGHT` / `ICON_SIZE_SM` / `CONTROL_HEIGHT_SM` /
+//! `GROUP_BAR_WIDTH` 五份**同值副本**，任一侧调整就会静默错位（文件头原文也写着
+//! 「是否合并到外壳仍未拍板」——现按 `docs/architecture/layout/panels-coupling-plan.md` §9
+//! 的 A 步口径合并，与 `insight/src/ui.rs` 同例：**重导出，视图侧 `ui::X` 路径不变**）。
 //!
-//! 订正（2026-09-16）：原文写「依赖方向不允许 feature 反向读 workbench 的常量」——
-//! 尺寸常量已下沉到外壳 crate `crates/workbench_shell`（只依 gpui-kit），**本 crate 现在可以依赖它**。
-//! 本文件自持是**现状**而非硬约束；是否合并到外壳（消除同源双份）仍未拍板，详见
-//! `docs/architecture/layout/panels-coupling-plan.md` §9。
+//! 语义与外壳相同的走重导出；**本 crate 自有**的（对话框宽 / 表格列宽 / 列表上限 / 徽标高）
+//! 仍在此声明。
 //!
 //! 值 = 设计倍率（`rems(x)` 的基准是主题字号，默认 16px，见 `rds-ui-spec`）。
 
-/// 面板头高（2.25rem = 36px）。
-pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
-/// 行高（1.5rem = 24px，与 M4 树 / M5 列表一致）。
-pub const ROW_HEIGHT: f32 = 1.5;
-/// 小图标尺寸（0.875rem = 14px）。
-pub const ICON_SIZE_SM: f32 = 0.875;
+// ===== 与外壳共用的结构尺寸（重导出；单一来源 = `workbench_shell::ui`） =====
+//
+// 为什么重导出而不是再登记一份：面板头 / 行高 / 图标档必须与 M4 导航、M5 草稿箱一致，
+// 镜像两份会在任一侧调整时静默错位（连接对话框、洞察、设置都已在用外壳那一份）。
+pub use workbench_shell::ui::{
+    CONTROL_HEIGHT_SM, ICON_SIZE_SM, NAV_GROUP_BAR_WIDTH as GROUP_BAR_WIDTH, PANEL_HEADER_HEIGHT,
+    ROW_HEIGHT,
+};
+
+// ===== 本 crate 自有尺寸 =====
+
 /// 空态大图标（3.0rem = 48px）。
 pub const ARCHIVE_EMPTY_ICON_SIZE: f32 = 3.0;
 /// 徽标高（1.125rem = 18px；小字号 + 上下留白，不撑破行高）。
@@ -24,8 +31,6 @@ pub const ARCHIVE_BADGE_HEIGHT: f32 = 1.125;
 pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
 /// 工具栏行高（2.0rem = 32px；原型 §2.2）。
 pub const TOOLBAR_HEIGHT: f32 = 2.0;
-/// 工具栏紧凑控件高（1.625rem = 26px；与 workbench `CONTROL_HEIGHT_SM` 同值，语义独立）。
-pub const CONTROL_HEIGHT_SM: f32 = 1.625;
 /// 归档确认对话框宽（34.0rem = 544px；原型 §7.1——表单型六字段）。
 pub const ARCHIVE_DIALOG_WIDTH: f32 = 34.0;
 /// 取回（检出）对话框宽（30.0rem = 480px；原型 §7.1——三字段 + 预览）。
@@ -67,9 +72,6 @@ pub const TRASH_COL_TIME: f32 = 7.5;
 pub const TRASH_COL_SIZE: f32 = 4.0;
 /// 见 [`TRASH_COL_NAME`]（两个小按钮：还原 / 永久删除）。
 pub const TRASH_COL_ACTION: f32 = 9.0;
-/// 分组头色条宽（2px；与 `workbench_shell::ui::NAV_GROUP_BAR_WIDTH` 同值，
-/// 但常量在本 crate 声明——视图随能力同 crate，与 `ui.rs` 其余常量的口径一致）。
-pub const GROUP_BAR_WIDTH: f32 = 0.125;
 /// 标签对话框宽（26.0rem = 416px；表单型小对话框：列表 + 一个输入行）。
 pub const TAG_DIALOG_WIDTH: f32 = 26.0;
 /// 分组名对话框宽（24.0rem = 384px；只有一个输入框）。
