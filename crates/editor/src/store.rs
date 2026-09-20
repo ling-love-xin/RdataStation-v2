@@ -15,6 +15,19 @@
 //!
 //! 上限 [`MAX_RESULT_SETS`]（原型 §2.4：上限 5、超出淘汰最旧）淘汰的是**最旧的未选中项**：
 //! 正在看的那一份永远不会被自己的下一个结果挤掉。
+//!
+//! ## 列类型（本切片）
+//!
+//! [`ResultEntry::column_types`] 记**每列的语义类型**（[`ColumnKind`]）：渲染据此决定数字右对齐、
+//! 布尔 / 时间用等宽字体、表头显示类型小标签。三条口径：
+//!
+//! - **值本身不动**：仍按 B5 的展示文本（`NULL` 是字面量 `"NULL"`），类型只**追加**信息，
+//!   TSV / 导出 / 筛选 / 排序 / 复制全部照旧；
+//! - **缺类型 = 与今天完全一致**：类型缺失时渲染走「无类型」这一档（左对齐、不等宽、表头不加标签），
+//!   不会因为“不知道类型”就错位；
+//! - **今天驱动还填不上**：整条执行路径（`QueryData` → 这里的 `rows`）目前只带列名与行，驱动的
+//!   `column_types` 在 `workbench::services::editor_exec::to_data` 就被丢掉了，所以真实结果集
+//!   现在一律是**空 vec**。形状先立住：上游接上之后只需 [`ResultEntry::with_column_types`] 一处填值。
 
 use ::shared::string::tsv_row;
 
@@ -24,6 +37,184 @@ use crate::model::DocumentId;
 
 /// 每份文档保留的结果集上限（原型 §2.4；超出淘汰最旧的**未选中**项）
 pub const MAX_RESULT_SETS: usize = 5;
+
+/// 一列的**语义类型**
+///
+/// 为什么不直接把驱动的类型名摆给渲染用：驱动报的是**方言名**（`bigint` / `Int64` /
+/// `NUMBER(38,0)` / `numeric(38,10)` / `timestamp with time zone`），而渲染要回答的只有
+/// 三类问题——“数字吗”（右对齐）、“要不要等宽”（布尔 / 时间 / UUID）、“按什么比大小”（将来）。
+/// 两件事分开：名字照原样显示（用户看的是库里的类型），类别只用来做渲染决策。
+///
+/// **认不出就是 [`ColumnKind::Unknown`]**：宁可少着色，也不能猜错——`Unknown` 的渲染
+/// 与“没有类型”完全一样。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ColumnKind {
+    /// 整数（`bigint` / `int4` / `Int64` / `serial` …）
+    Integer,
+    /// 浮点（`float8` / `double precision` / `Float64` / `real` …）
+    Float,
+    /// 定点小数（`numeric(38,10)` / `decimal` / `NUMBER` / `money` …）
+    Decimal,
+    Boolean,
+    Text,
+    /// 带时刻的时间戳（`timestamp` / `timestamptz` / `datetime` …）
+    Timestamp,
+    Date,
+    Time,
+    Uuid,
+    Json,
+    Binary,
+    /// 驱动没报 / 类型名认不出（渲染与没有类型完全一致）
+    #[default]
+    Unknown,
+}
+
+impl ColumnKind {
+    /// 从驱动 / 引擎报的类型名解析
+    ///
+    /// 认的是名字里的**词**而不是整串：四类库加 Arrow 的写法各不相同，而带参数
+    /// （`varchar(255)`）、带后缀（`int unsigned`）、复合名（`timestamp with time zone`）
+    /// 都得落进同一档。词级匹配而不是子串匹配也是**防误判**：`point` / `interval` 里
+    /// 没有独立的 `int` 词，不会因为“看着像”被当成整数列。
+    pub fn parse(name: &str) -> Self {
+        for word in name
+            .trim()
+            .to_ascii_lowercase()
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+        {
+            if word.is_empty() {
+                continue;
+            }
+            // 容器 / 结构型的**内层**类型不是这一列的语义：`Dictionary(Int32, Utf8)` 的
+            // `int32` 只是编码参数，整列判 `Unknown`（否则词典编码的文本列会被右对齐）。
+            if matches!(
+                word,
+                "dictionary"
+                    | "list"
+                    | "struct"
+                    | "map"
+                    | "union"
+                    | "extension"
+                    | "interval"
+                    | "duration"
+            ) {
+                return Self::Unknown;
+            }
+            if let Some(kind) = Self::from_word(word) {
+                return kind;
+            }
+        }
+        Self::Unknown
+    }
+
+    /// 单个词 → 类别（顺序即优先级：`timestamp` / `datetime` 要先于 `date` / `time`）
+    fn from_word(word: &str) -> Option<Self> {
+        // 整数族：列全（`int unsigned` 这种由前一个词命中；`uint64` 是 Arrow 的无符号族）
+        const INTEGER_WORDS: [&str; 25] = [
+            "int",
+            "int2",
+            "int4",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "int128",
+            "uint",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "integer",
+            "smallint",
+            "bigint",
+            "tinyint",
+            "mediumint",
+            "serial",
+            "bigserial",
+            "smallserial",
+            "serial2",
+            "serial4",
+            "serial8",
+            "year",
+        ];
+        const TEXT_WORDS: [&str; 12] = [
+            "text",
+            "varchar",
+            "nvarchar",
+            "char",
+            "nchar",
+            "character",
+            "string",
+            "str",
+            "utf8",
+            "largeutf8",
+            "clob",
+            "citext",
+        ];
+
+        match word {
+            "timestamp" | "timestamptz" | "datetime" | "datetime2" | "smalldatetime" => {
+                Some(Self::Timestamp)
+            }
+            // `date` / `date32` / `date64`：`datetime` 已在上面拦下，不会走到这里
+            w if w.starts_with("date") => Some(Self::Date),
+            // `time` / `time64`（Arrow 带精度后缀）
+            w if w.starts_with("time") => Some(Self::Time),
+            "bool" | "boolean" => Some(Self::Boolean),
+            "uuid" => Some(Self::Uuid),
+            w if w.starts_with("json") => Some(Self::Json),
+            w if w.contains("binary") || w.contains("blob") || w == "bytea" || w == "bytes" => {
+                Some(Self::Binary)
+            }
+            w if w.starts_with("decimal") || w.starts_with("numeric") => Some(Self::Decimal),
+            "number" | "money" | "dec" => Some(Self::Decimal),
+            w if w.starts_with("float") || w.contains("double") => Some(Self::Float),
+            "real" => Some(Self::Float),
+            w if INTEGER_WORDS.contains(&w) => Some(Self::Integer),
+            w if TEXT_WORDS.contains(&w) || w.starts_with("varchar") || w.starts_with("char") => {
+                Some(Self::Text)
+            }
+            _ => None,
+        }
+    }
+
+    /// 是数字吗（**右对齐的判据**：个位对齐才看得出一列的数量级差）
+    pub fn is_numeric(self) -> bool {
+        matches!(self, Self::Integer | Self::Float | Self::Decimal)
+    }
+
+    /// 要不要用等宽字体渲染
+    ///
+    /// 这几类的**字形**靠等宽才对得整齐：`true` / `false`（同列落在同一个位置）、时间戳的
+    /// 日期部分、UUID 的分段。不引新依赖：字体取主题的 `mono_font_family`
+    /// （主题已经按平台挑了一个装得上的等宽字体）。
+    pub fn is_monospace(self) -> bool {
+        matches!(
+            self,
+            Self::Boolean | Self::Timestamp | Self::Date | Self::Time | Self::Uuid
+        )
+    }
+}
+
+/// 一列的类型：驱动报的**原始名字** + 解析出的**语义类别**
+///
+/// 两个都留：名字进表头（用户看的是库里的类型，不是我们的枚举），类别给渲染做决策。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnType {
+    /// 驱动 / 引擎报的原始类型名（表头照原样显示：`bigint` / `numeric(38,10)`）
+    pub name: String,
+    /// 语义类别（[`ColumnKind::parse`] 的结果；认不出 = `Unknown`）
+    pub kind: ColumnKind,
+}
+
+impl ColumnType {
+    /// 从驱动的类型名造一条（解析**一次**就够：列数远小于格数）
+    pub fn parse(name: impl Into<String>) -> Self {
+        let name = name.into();
+        let kind = ColumnKind::parse(&name);
+        Self { name, kind }
+    }
+}
 
 /// 一次执行在结果区的完整记录（= 一个结果集）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +253,13 @@ pub struct ResultEntry {
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
     pub rows: Vec<Vec<String>>,
+    /// **每列的类型**（与 `columns` 同序；失败时为空）
+    ///
+    /// 两条不变式：
+    /// - **空 vec = 驱动没报类型**（今天所有真实结果都是这一档）→ 界面按“无类型”渲染，
+    ///   行为与没有这个字段时**完全一致**；
+    /// - 非空时**与 `columns` 等长**，这一列没报就是 `None`（[`ResultEntry::with_column_types`] 保证）。
+    pub column_types: Vec<Option<ColumnType>>,
     /// 失败原因；`None` = 成功
     pub error: Option<String>,
 }
@@ -113,8 +311,40 @@ impl ResultEntry {
             lineage: None,
             columns,
             rows,
+            // 类型由上游补（`with_column_types`）：默认空 = “没报”，渲染与今天一致
+            column_types: Vec::new(),
             error: None,
         }
+    }
+
+    /// 带上每列的类型（驱动的 `column_types` 原样给；与 `columns` 同序）
+    ///
+    /// - 空切片 = 驱动没报 → 保持空（不是“一列一个空类型”：界面据此区分“没报”与“报了但认不出”）；
+    /// - 名字比列数少 → 缺的填 `None`；比列数多 → 多的丢掉（形状以 `columns` 为准）。
+    pub fn with_column_types(mut self, names: &[String]) -> Self {
+        if !names.is_empty() && !self.columns.is_empty() {
+            self.column_types = (0..self.columns.len())
+                .map(|index| {
+                    names
+                        .get(index)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                        .map(ColumnType::parse)
+                })
+                .collect();
+        }
+        self
+    }
+
+    /// 第 `col` 列（**数据列**下标）的类型；没报 / 越界 = `None`
+    pub fn column_type(&self, col: usize) -> Option<&ColumnType> {
+        self.column_types.get(col).and_then(Option::as_ref)
+    }
+
+    /// 第 `col` 列的语义类别（没报 = `Unknown`：渲染口径与“没有类型”一致）
+    pub fn column_kind(&self, col: usize) -> ColumnKind {
+        self.column_type(col)
+            .map_or(ColumnKind::Unknown, |column| column.kind)
     }
 
     /// 带上写语句的影响行数（结果区显示「影响 N 行」；没有就不要填）
@@ -175,6 +405,7 @@ impl ResultEntry {
             lineage: None,
             columns: Vec::new(),
             rows: Vec::new(),
+            column_types: Vec::new(),
             error: Some(error),
         }
     }
@@ -184,26 +415,33 @@ impl ResultEntry {
         self.error.is_none() && self.has_more
     }
 
+    /// 【B5b】这一段还能不能接在这份结果后面（列形状一致 / 这一份本身是成功的）
+    ///
+    /// 判据单独拿出来是为了**先判后搬**：形状对不上就不该先把整段行拷一遍再发现接不上，
+    /// 对得上则可以直接把行**移**过来（10 万行 × N 列的深拷贝省在“取下一段”这条路上）。
+    pub fn accepts_columns(&self, columns: &[String]) -> bool {
+        self.error.is_none() && self.columns == columns
+    }
+
     /// 【B5b】把新抓到的这一段接在后面（取下一段）
     ///
-    /// **列形状不一致就不接**（返回 `false`）：那已经不是“同一份结果的下一段”了，
-    /// 调用方应当把它当一份新结果落下，而不是把两行的列错开。
-    ///
-    /// 耗时取**累加**（抓取这份结果总共花了多久）；`has_more` 以最后一段为准。
-    pub fn append_rows(
-        &mut self,
-        columns: &[String],
-        rows: Vec<Vec<String>>,
-        elapsed_ms: u64,
-        has_more: bool,
-    ) -> bool {
-        if self.error.is_some() || self.columns != columns {
-            return false;
-        }
+    /// 调用方必须先过 [`ResultEntry::accepts_columns`]（形状不一致时这句会写进错的行形状里）。
+    /// 行按**移动**接收（不拷贝）；耗时取**累加**（抓取这份结果总共花了多久）；`has_more`
+    /// 以最后一段为准。
+    pub fn append_rows(&mut self, rows: Vec<Vec<String>>, elapsed_ms: u64, has_more: bool) {
         self.rows.extend(rows);
         self.elapsed_ms = self.elapsed_ms.saturating_add(elapsed_ms);
         self.has_more = has_more;
-        true
+    }
+
+    /// 这一份原本没带类型、而新的一段带来了就补上（**只在真缺时补**，不覆盖已有的）
+    ///
+    /// 为什么是“补”而不是“换”：类型是**列**的属性，分段抓取的每一段列形状都相同
+    /// （[`ResultEntry::accepts_columns`]），后一段的类型不会比前一段更权威。
+    fn adopt_column_types(&mut self, types: Vec<Option<ColumnType>>) {
+        if self.column_types.is_empty() && !types.is_empty() {
+            self.column_types = types;
+        }
     }
 
     /// 结果行数（真实值：来自行数据，不读驱动的 `total_rows` 字段，见架构 §12 #21）
@@ -330,22 +568,21 @@ impl ResultStore {
                 if entry.failed() {
                     return;
                 }
-                let appended = match slot.sets.get_mut(slot.active) {
-                    Some(current) => current.append_rows(
-                        &entry.columns,
-                        entry.rows.clone(),
-                        entry.elapsed_ms,
-                        entry.has_more,
-                    ),
-                    None => false,
-                };
-                if !appended {
-                    if let Some(current) = slot.sets.get_mut(slot.active) {
-                        *current = entry;
-                    } else {
-                        slot.sets.push(entry);
-                        slot.active = 0;
-                    }
+                // **先判形状，再搬行**：对得上就把这一段**移**进去（换掉原先无条件
+                // `entry.rows.clone()` 的整段深拷贝），对不上则整条 entry 原封不动落下。
+                let appendable = slot
+                    .sets
+                    .get(slot.active)
+                    .is_some_and(|current| current.accepts_columns(&entry.columns));
+                if appendable {
+                    let current = slot.sets.get_mut(slot.active).expect("刚判过这一份在");
+                    current.append_rows(entry.rows, entry.elapsed_ms, entry.has_more);
+                    current.adopt_column_types(entry.column_types);
+                } else if let Some(current) = slot.sets.get_mut(slot.active) {
+                    *current = entry;
+                } else {
+                    slot.sets.push(entry);
+                    slot.active = 0;
                 }
             }
         }
@@ -429,7 +666,7 @@ fn evict_oldest(slot: &mut DocumentResults) {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{MAX_RESULT_SETS, ResultEntry, ResultStore};
+    use super::{ColumnKind, MAX_RESULT_SETS, ResultEntry, ResultStore};
     use crate::execution::ResultPlacement;
     use crate::model::DocumentId;
 
@@ -762,6 +999,203 @@ mod tests {
             active_sql(&store, "doc-1"),
             Some("replace-active".to_string()),
             "淘汰后选中项还是原来那份"
+        );
+    }
+
+    /// 列类型：驱动报的类型名 → 语义类别（表驱动）
+    ///
+    /// 名字是**方言**的：四类库加 Arrow 的写法各不相同（`bigint` / `Int64` /
+    /// `numeric(38,10)` / `timestamp with time zone`），而认不出来时必须回到 `Unknown`
+    /// ——宁可少着色，不能猜错（猜错就是错位与错字体）。
+    #[test]
+    fn column_kinds_follow_the_driver_type_names() {
+        let cases: &[(&str, ColumnKind)] = &[
+            ("bigint", ColumnKind::Integer),
+            ("int4", ColumnKind::Integer),
+            ("Int64", ColumnKind::Integer),
+            ("int unsigned", ColumnKind::Integer),
+            ("serial", ColumnKind::Integer),
+            ("UInt32", ColumnKind::Integer),
+            ("numeric(38,10)", ColumnKind::Decimal),
+            ("DECIMAL(18,2)", ColumnKind::Decimal),
+            ("NUMBER(38,0)", ColumnKind::Decimal),
+            ("money", ColumnKind::Decimal),
+            ("float8", ColumnKind::Float),
+            ("double precision", ColumnKind::Float),
+            ("Float64", ColumnKind::Float),
+            ("real", ColumnKind::Float),
+            ("bool", ColumnKind::Boolean),
+            ("BOOLEAN", ColumnKind::Boolean),
+            ("varchar(255)", ColumnKind::Text),
+            ("character varying", ColumnKind::Text),
+            ("Utf8", ColumnKind::Text),
+            ("LargeUtf8", ColumnKind::Text),
+            ("timestamp with time zone", ColumnKind::Timestamp),
+            ("timestamp without time zone", ColumnKind::Timestamp),
+            ("TIMESTAMP(6)", ColumnKind::Timestamp),
+            ("timestamptz", ColumnKind::Timestamp),
+            ("datetime", ColumnKind::Timestamp),
+            ("date", ColumnKind::Date),
+            ("Date32", ColumnKind::Date),
+            ("time", ColumnKind::Time),
+            ("Time64(Nanosecond)", ColumnKind::Time),
+            ("uuid", ColumnKind::Uuid),
+            ("jsonb", ColumnKind::Json),
+            ("bytea", ColumnKind::Binary),
+            ("LargeBinary", ColumnKind::Binary),
+            ("VARBINARY(16)", ColumnKind::Binary),
+            // 认不出就是 Unknown：`point` / `interval` 里没有独立的 int 词，不能“看着像”就当成整数
+            ("point", ColumnKind::Unknown),
+            ("interval", ColumnKind::Unknown),
+            ("oid", ColumnKind::Unknown),
+            ("", ColumnKind::Unknown),
+            ("   ", ColumnKind::Unknown),
+            // 容器型的内层类型不是这一列的语义（词典编码的文本列不该被右对齐）
+            ("Dictionary(Int32, Utf8)", ColumnKind::Unknown),
+            ("List(Int64)", ColumnKind::Unknown),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(ColumnKind::parse(name), *expected, "类型名 {name:?}");
+        }
+    }
+
+    /// 渲染决策只有两条，且**未知档两条都是“不做”**——那就是“类型缺失时与今天完全一致”
+    #[test]
+    fn only_numbers_right_align_and_only_the_time_family_is_monospace() {
+        let cases: &[(ColumnKind, bool, bool)] = &[
+            (ColumnKind::Integer, true, false),
+            (ColumnKind::Float, true, false),
+            (ColumnKind::Decimal, true, false),
+            (ColumnKind::Boolean, false, true),
+            (ColumnKind::Timestamp, false, true),
+            (ColumnKind::Date, false, true),
+            (ColumnKind::Time, false, true),
+            (ColumnKind::Uuid, false, true),
+            (ColumnKind::Text, false, false),
+            (ColumnKind::Json, false, false),
+            (ColumnKind::Binary, false, false),
+            (ColumnKind::Unknown, false, false),
+        ];
+        for (kind, numeric, monospace) in cases {
+            assert_eq!(kind.is_numeric(), *numeric, "{kind:?} 该不该右对齐");
+            assert_eq!(kind.is_monospace(), *monospace, "{kind:?} 该不该等宽");
+        }
+    }
+
+    /// 类型与列**同序对齐**：名字少了填 `None`、多了丢掉；空切片 = 驱动没报（保持空）
+    #[test]
+    fn column_types_align_with_the_columns() {
+        let mut three = ResultEntry::success(
+            DocumentId::new("doc-1"),
+            "select 1".to_string(),
+            5,
+            false,
+            vec!["id".to_string(), "amount".to_string(), "note".to_string()],
+            vec![vec!["1".to_string(); 3]],
+        );
+        three = three.with_column_types(&[" bigint ".to_string(), "numeric(38,10)".to_string()]);
+
+        assert_eq!(three.column_types.len(), 3, "与列等长（缺的填 None）");
+        assert_eq!(three.column_kind(0), ColumnKind::Integer);
+        assert_eq!(three.column_kind(1), ColumnKind::Decimal);
+        assert_eq!(
+            three.column_kind(2),
+            ColumnKind::Unknown,
+            "少报的那列 = 没类型"
+        );
+        assert!(three.column_type(2).is_none());
+        assert!(three.column_type(9).is_none(), "越界不 panic");
+        assert_eq!(
+            three.column_type(0).map(|kind| kind.name.as_str()),
+            Some("bigint"),
+            "表头显示的是驱动报的**原始名字**（首尾空白修掉）"
+        );
+
+        // 名字比列多：多的丢掉（形状以 columns 为准）
+        let mut one = entry("doc-1", "select n from t", 1);
+        one = one.with_column_types(&["bigint".to_string(), "text".to_string()]);
+        assert_eq!(one.column_types.len(), 1);
+        assert_eq!(one.column_kind(0), ColumnKind::Integer);
+
+        // 空名字当成没报（不产生一个“名字是空串的类型”）
+        let mut blank = entry("doc-1", "select n from t", 1);
+        blank = blank.with_column_types(&["  ".to_string()]);
+        assert_eq!(blank.column_types, vec![None]);
+        assert_eq!(blank.column_kind(0), ColumnKind::Unknown);
+    }
+
+    /// 没带类型的那一档就是今天：`column_types` 为空、类别一律 `Unknown`、名字取不到
+    #[test]
+    fn a_result_without_types_stays_typeless() {
+        let plain = entry("doc-1", "select n from t", 2);
+        assert!(
+            plain.column_types.is_empty(),
+            "驱动没报就是空 vec，不是一列一个空类型"
+        );
+        assert!(plain.column_type(0).is_none());
+        assert_eq!(plain.column_kind(0), ColumnKind::Unknown);
+
+        // 显式传空切片也不能“造”出类型来（真实路径今天就是这样）
+        let still_plain = entry("doc-1", "select n from t", 2).with_column_types(&[]);
+        assert!(still_plain.column_types.is_empty());
+        assert_eq!(still_plain.column_kind(0), ColumnKind::Unknown);
+
+        // 失败的结果没有列，也没有类型（分析 / 写语句同理：columns 为空时不产生类型）
+        let failed = ResultEntry::failure(
+            DocumentId::new("doc-1"),
+            "select boom".to_string(),
+            "驱动报错：boom".to_string(),
+            3,
+        );
+        assert!(failed.column_types.is_empty());
+        assert_eq!(failed.column_kind(0), ColumnKind::Unknown);
+
+        let mut write = entry("doc-1", "insert into t values (1)", 0);
+        write.columns.clear();
+        write.rows.clear();
+        let write = write.with_column_types(&["bigint".to_string()]);
+        assert!(write.column_types.is_empty(), "没有列就没有列类型");
+    }
+
+    /// 取下一段：目标本来没带类型、这一段带了就补上；已有类型不被后一段覆盖
+    ///
+    /// （类型是**列**的属性，分段抓取的列形状相同——后一段的类型不比前一段更权威。）
+    #[test]
+    fn appending_a_segment_adopts_types_only_when_the_target_has_none() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select n from t", 2),
+            ResultPlacement::Replace,
+        );
+        assert!(
+            store
+                .active(&document)
+                .expect("有结果")
+                .column_types
+                .is_empty()
+        );
+
+        store.push(
+            entry("doc-1", "select n from t", 2).with_column_types(&["bigint".to_string()]),
+            ResultPlacement::Append,
+        );
+        let active = store.active(&document).expect("有结果");
+        assert_eq!(active.row_count(), 4, "这一段真的接在后面了");
+        assert_eq!(
+            active.column_kind(0),
+            ColumnKind::Integer,
+            "第一段没类型、这一段带了 → 补上"
+        );
+
+        store.push(
+            entry("doc-1", "select n from t", 2).with_column_types(&["text".to_string()]),
+            ResultPlacement::Append,
+        );
+        assert_eq!(
+            store.active(&document).expect("有结果").column_kind(0),
+            ColumnKind::Integer,
+            "已有类型不被后一段覆盖"
         );
     }
 }

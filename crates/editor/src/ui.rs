@@ -79,6 +79,13 @@ pub const RESULT_TOOLTIP_MAX_WIDTH: f32 = 24.0;
 /// 结果网格列名行高（2rem = 32px）
 pub const RESULT_HEADER_HEIGHT: f32 = 2.0;
 
+/// 表头**类型小标签**的字号倍率（0.6875rem = 11px）
+///
+/// 比单元格正文（`text_xs` = 12px）再小一档：规格要求它“小字、次级色”，而表头行只有
+/// 一行高度（组件按密度档给 26px），两行排不下——所以做成同行内、比列名小一档的标签，
+/// 层级靠**字号 + `muted_foreground`**两条分开。
+pub const RESULT_HEADER_TYPE_FONT_SIZE: f32 = 0.6875;
+
 /// 结果区最小高度（7rem = 112px：工具栏 24 + 多结果时的标签条 24 + 至少两行网格）
 ///
 /// 拖拽不许把它压得比这更小——再小就只剩一条工具栏，看不出自己看的是哪份结果。

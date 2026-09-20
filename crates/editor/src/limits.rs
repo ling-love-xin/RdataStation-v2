@@ -23,6 +23,57 @@
 
 use std::path::Path;
 
+/// 档位 × 能力的**降级表**（B18）：逐能力一位，不是"关重能力"一句话
+///
+/// 为什么要成表：降级口径原先散在三个判据里（`disables_completion` / `disables_folding` /
+/// 高亮门槛），且 zqlz 那份 `large_file_policy` 给的教训是——**逐能力降级**才能既保住能用的部分、
+/// 又不把重活带上。表建好后，各处只问表，不再各写一套 `matches!(self, Normal)`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityPlan {
+    /// 语法/语义着色（词法扫描，O(n)）
+    pub highlight: bool,
+    /// 折叠候选（要一次全文词法扫描，见 `fold` 模块）
+    pub folding: bool,
+    /// SQL 补全（要schema 目录 + 每次输入问一次内核）
+    pub completion: bool,
+    /// 打字期词法诊断（与折叠共用一趟词法扫描）
+    pub diagnostics: bool,
+    /// 语句数（状态栏要它，成本最低，一般不开）
+    pub statements: bool,
+}
+
+/// 档位 → 降级表（**纯函数**，边界可逐条断言）
+impl FileTier {
+    pub fn plan(self) -> CapabilityPlan {
+        match self {
+            // 常规：全开
+            Self::Normal => CapabilityPlan {
+                highlight: true,
+                folding: true,
+                completion: true,
+                diagnostics: true,
+                statements: true,
+            },
+            // 大文件：留下"看"的能力（高亮由内核按行数自行降级），关掉每次输入都要重算的那些
+            Self::Large => CapabilityPlan {
+                highlight: true,
+                folding: false,
+                completion: false,
+                diagnostics: false,
+                statements: true,
+            },
+            // 超大：内容根本没读进来，一个都不开
+            Self::Huge => CapabilityPlan {
+                highlight: false,
+                folding: false,
+                completion: false,
+                diagnostics: false,
+                statements: false,
+            },
+        }
+    }
+}
+
 /// 大文件门槛（50 MiB）
 pub const LARGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
@@ -50,14 +101,16 @@ impl FileTier {
         }
     }
 
-    /// 是否关掉补全（1a 还没有补全功能，但判据先立住，B7 接线时直接用）
+    /// 是否关掉补全
+    ///
+    /// 判据的**唯一来源**是 [`FileTier::plan`]（B18 收口；这里保留方法名是因为调用点语义清楚）
     pub fn disables_completion(self) -> bool {
-        !matches!(self, Self::Normal)
+        !self.plan().completion
     }
 
     /// 是否关掉折叠（B17 已接线：`view/host` 据此对内核 `set_folding(false)`）
     pub fn disables_folding(self) -> bool {
-        !matches!(self, Self::Normal)
+        !self.plan().folding
     }
 
     /// 是否只读打开（超大文件不做可编辑会话）

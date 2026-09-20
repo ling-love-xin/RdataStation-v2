@@ -22,6 +22,7 @@ use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_te
 use crate::execution::{ExecQueue, QueryRunner};
 use crate::model::DocumentId;
 use crate::project::{ProjectHandle, ProjectState};
+use crate::scan::ScanScope;
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
 use crate::sources::SourcesHandle;
@@ -585,5 +586,21 @@ impl EditorShared {
             return false;
         };
         doc.capabilities().folding && !doc.tier().disables_folding()
+    }
+
+    /// 【B18】后台扫描的范围（折叠 / 诊断两个重活开不开）
+    ///
+    /// 判据只有一处：档位的降级表 [`crate::limits::FileTier::plan`]——不在这里另写一套
+    /// `matches!(tier, Normal)`。只读不影响扫描（看结构不需要写权限）。
+    pub fn scan_scope(&self, document: &DocumentId) -> ScanScope {
+        let service = self.service.borrow();
+        let Some(doc) = service.find(document) else {
+            return ScanScope::none();
+        };
+        let plan = doc.tier().plan();
+        ScanScope {
+            folds: plan.folding && doc.capabilities().folding,
+            diagnostics: plan.diagnostics,
+        }
     }
 }

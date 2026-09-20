@@ -17,7 +17,27 @@
 //!
 //! 数据源是 [`crate::store::ResultStore`]（结果唯一权威）。网格**不持有真值**——
 //! delegate 里的行是从权威那里拷来的投影，`set_data` 是唯一的写入点。
+//!
+//! ## 类型感知渲染（本切片）
+//!
+//! 列类型（[`crate::store::ColumnKind`]）只影响**怎么画**：数字右对齐、布尔 / 时间族用等宽字体
+//! （主题的 `mono_font_family`，不引新依赖）、表头在列名右侧挂一个类型小标签（次级色）。
+//! **类型缺失时一个像素都不变**：对齐、字体、表头都回到今天的样子——驱动填上列类型之前，
+//! 所有真实结果走的都是这一档。
+//!
+//! ## 按需取值（本切片）
+//!
+//! 网格不预计算任何展示文本：组件的虚拟滚动只问可见窗口，delegate 就只回答那一格的取值。
+//! 于是三条本来会按**整表**算的事都推到了真要的时候：
+//!
+//! - 视图行序：没有筛选也没有排序时**不物化**那份映射（`view_rows = None` 即恒等）；
+//! - 筛选匹配：两边都是 ASCII 时零分配（回落 `to_lowercase` 只是为了保住口径）；
+//! - 类型解析：入库时**每列一次**，不是每格一次。
+//!
+//! 需要**整表真值**的出口仍然是整表，但它们都是用户动作触发的（复制整列 / 整行 · 导出 ·
+//! 筛选 · 排序），不是入库时预支的。
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
@@ -33,6 +53,7 @@ use gpui_kit::*;
 // `crate::shared`，所以 `shared` 得从 crate 外路径（`::`）进来
 use ::shared::string::{tsv_cell, tsv_row};
 
+use crate::store::{ColumnKind, ColumnType};
 use crate::ui;
 use crate::view::widgets::status_bar;
 
@@ -184,6 +205,11 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
 pub struct ResultGridDelegate {
     columns: Vec<String>,
     rows: Vec<Vec<String>>,
+    /// **每列的类型**（与 `columns` 同序；空 = 这份结果没带类型）
+    ///
+    /// 只影响怎么画（右对齐 / 等宽 / 表头小标签），不影响任何取值；没带类型时与今天完全一致。
+    /// 由面板在 `set_data` **之后**同一次同步里给（见 [`ResultGridDelegate::set_column_types`]）。
+    column_types: Vec<Option<ColumnType>>,
     /// 空态文案（没有结果 / 执行失败都在这里说清楚）
     empty_text: String,
     /// 这份结果**还能不能取下一段**（面板从权威结果同步过来；`load_more` 据此决定要不要真的取）
@@ -211,9 +237,13 @@ pub struct ResultGridDelegate {
     insight_available: bool,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
     ///
+    /// `None` = **与数据行序相同**（既没筛选也没排序）：这时不物化那份映射——
+    /// 10 万行的结果切一次结果集就为它分配一个 10 万元素的表，而绝大多数时候视图
+    /// 与数据是同一个顺序，那份表一次也用不上（入库 / 切换结果集时不该做这件事）。
+    ///
     /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
     /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
-    view_rows: Vec<usize>,
+    view_rows: Option<Vec<usize>>,
 }
 
 impl ResultGridDelegate {
@@ -235,14 +265,27 @@ impl ResultGridDelegate {
         // 冻结也一样：列都换了一批，钉子留在旧列号上没有意义
         self.frozen.clear();
         self.context_cell = None;
+        // 类型是**这一份结果自己的**：先把上一份的清掉，等面板紧跟着给新的一份
+        // （漏给就是“没类型”，不会错套到新数据上）
+        self.column_types.clear();
         self.rebuild_view_rows();
+    }
+
+    /// 同步每列的类型（**与 `set_data` 同一次同步里、在它之后调**）
+    ///
+    /// 为什么是单独一次而不是 `set_data` 加参数：`set_data` 的签名上挂着面板的现有调用，
+    /// 而类型今天还只能从另一条路来（上游填上驱动类型之前它一直是空）。
+    /// 顺序反了（先给类型再 `set_data`）会被清掉——**不会**把上一份的类型套到新数据上。
+    pub fn set_column_types(&mut self, types: Vec<Option<ColumnType>>) {
+        self.column_types = types;
     }
 
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
         self.rows.clear();
-        self.view_rows.clear();
+        self.column_types.clear();
+        self.view_rows = None;
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
         self.has_more = false;
@@ -313,9 +356,9 @@ impl ResultGridDelegate {
 
     /// 【B15】筛选后的行（导出跟随筛选：原型 §5.5 的口径）
     pub fn visible_rows(&self) -> Vec<Vec<String>> {
-        self.view_rows
-            .iter()
-            .filter_map(|ix| self.rows.get(*ix).cloned())
+        (0..self.view_len())
+            .filter_map(|view_ix| self.data_row(view_ix))
+            .filter_map(|data_ix| self.rows.get(data_ix).cloned())
             .collect()
     }
 
@@ -333,6 +376,12 @@ impl ResultGridDelegate {
     /// 【B15】重算视图行序（筛选 → 排序；数据不动）
     fn rebuild_view_rows(&mut self) {
         let filter = self.filter.trim().to_lowercase();
+        // 既没筛选也没排序：视图行序就是数据行序——**不物化**那份映射（`None` 即恒等）。
+        // 入库 / 切结果集时这一步占了整一轮逐行工作，而绝大多数时候根本用不上。
+        if filter.is_empty() && self.sort.is_none() {
+            self.view_rows = None;
+            return;
+        }
         let mut view: Vec<usize> = (0..self.rows.len())
             .filter(|ix| filter.is_empty() || self.row_matches(*ix, &filter))
             .collect();
@@ -347,15 +396,14 @@ impl ResultGridDelegate {
                 ordering.then(left.cmp(right))
             });
         }
-        self.view_rows = view;
+        self.view_rows = Some(view);
     }
 
     /// 这一行有没有单元格命中筛选词（大小写不敏感的子串，与 DBeaver 的本地筛选同类）
     fn row_matches(&self, row_ix: usize, needle: &str) -> bool {
-        self.rows.get(row_ix).is_some_and(|row| {
-            row.iter()
-                .any(|cell| cell.to_lowercase().contains(needle))
-        })
+        self.rows
+            .get(row_ix)
+            .is_some_and(|row| row.iter().any(|cell| cell_matches(cell, needle)))
     }
 
     /// 【B15】该数据列在表头上的排序标记
@@ -369,9 +417,20 @@ impl ResultGridDelegate {
         }
     }
 
-    /// 视图行号 → 数据行号
+    /// 视图行号 → 数据行号（`None` = 没有这一行）
+    ///
+    /// 视图行序没物化时（既没筛选也没排序）就是**恒等**：越界要按数据行数判，
+    /// 不能直接把行号当数据行号返回。
     fn data_row(&self, row_ix: usize) -> Option<usize> {
-        self.view_rows.get(row_ix).copied()
+        match &self.view_rows {
+            Some(view) => view.get(row_ix).copied(),
+            None => (row_ix < self.rows.len()).then_some(row_ix),
+        }
+    }
+
+    /// 视图行数（没筛选/排序时就是数据行数）
+    fn view_len(&self) -> usize {
+        self.view_rows.as_ref().map_or(self.rows.len(), Vec::len)
     }
 
     /// 这份结果还能不能取下一段（面板在结果变化时同步；`true` 才启用滚动到底加载）
@@ -400,6 +459,12 @@ impl ResultGridDelegate {
         self.on_filter_value.is_some()
     }
 
+    /// 测试用：视图行序现在是**物化**的吗（`false` = 恒等，入库 / 切结果集时那份映射被省掉了）
+    #[cfg(test)]
+    pub fn view_order_materialized_for_test(&self) -> bool {
+        self.view_rows.is_some()
+    }
+
     /// 测试用：见上
     #[cfg(test)]
     pub fn has_sort_down_hook(&self) -> bool {
@@ -418,7 +483,7 @@ impl ResultGridDelegate {
 
     /// 筛选后能看见多少行（视图行数）
     pub fn visible_row_count(&self) -> usize {
-        self.view_rows.len()
+        self.view_len()
     }
 
     /// 这份结果一共抓到多少行（数据行数，与筛选无关）
@@ -431,6 +496,31 @@ impl ResultGridDelegate {
         col_ix == 0
     }
 
+    /// 第 `col_ix` 列（**含行号槽**）的语义类型：行号槽与没带类型的列都是 `Unknown`
+    ///
+    /// 渲染只读这一条（对齐 / 等宽），每格 O(1)：类型在 `set_column_types` 时就已经解析好了
+    /// （每列一次，不是每格一次）。
+    fn column_kind(&self, col_ix: usize) -> ColumnKind {
+        if Self::is_row_number(col_ix) {
+            return ColumnKind::Unknown;
+        }
+        self.column_types
+            .get(col_ix - 1)
+            .and_then(Option::as_ref)
+            .map_or(ColumnKind::Unknown, |column| column.kind)
+    }
+
+    /// 表头的类型小标签：驱动报的**原始名字**（行号槽 / 没带类型 = `None`，那就一个字也不摆）
+    fn type_label(&self, col_ix: usize) -> Option<&str> {
+        if Self::is_row_number(col_ix) {
+            return None;
+        }
+        self.column_types
+            .get(col_ix - 1)
+            .and_then(Option::as_ref)
+            .map(|column| column.name.as_str())
+    }
+
     /// 单元格文案：首列是行号，其余按 `col_ix - 1` 取数据
     ///
     /// 行号与数据都走**视图行序**（筛选/排序之后看着的那一行）；
@@ -439,14 +529,62 @@ impl ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return (row_ix + 1).to_string();
         }
-        let Some(data_ix) = self.data_row(row_ix) else {
-            return String::new();
-        };
-        self.rows
-            .get(data_ix)
-            .and_then(|row| row.get(col_ix - 1))
-            .cloned()
+        self.row_cell_text(row_ix, col_ix)
             .unwrap_or_default()
+            .to_string()
+    }
+
+    /// 这一格的文本（**只借不拷**；`#` 行号槽与不存在的格都是 `None`）
+    ///
+    /// “这一格是什么”只此一份：`cell()` 画它、结果内查找搜它、将来类型化导出也读它。
+    /// 行号槽不在这里（它不是一个数据格：显示的是视图行号，而视图行号由渲染现算）。
+    fn row_cell_text(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
+        if Self::is_row_number(col_ix) {
+            return None;
+        }
+        let data_ix = self.data_row(row_ix)?;
+        self.rows.get(data_ix)?.get(col_ix - 1).map(String::as_str)
+    }
+
+    /// 结果内查找：从 `after` **之后**找下一处命中，找完一圈回到开头（`None` = 整份结果里没有）
+    ///
+    /// 口径与本地筛选**同一个实现**（[`find_in_cell`]）：大小写不敏感的子串；只看**看得见的行**
+    /// （筛选 / 排序之后的视图行序——找到看不见的行等于没找到）；`#` 行号槽不是数据，不参与。
+    ///
+    /// `after = None` = 从第一格开始。区间只在与词**都是 ASCII** 时给出（折叠不改字节长度）；
+    /// 含非 ASCII 时是 `None`，宿主退化成**整格**高亮（`İ` → 两个字符，折叠后的字节偏移在原文里
+    /// 不是合法边界，格内高亮的区间映射要单独设计，不在本切片）。
+    ///
+    /// 为什么是纯读：查找**不改任何状态**——选中哪一格、要不要滚过去、要不要画高亮都是宿主的
+    /// 决定（宿主才知道焦点与滚动句柄）。这里只回答“下一处在哪”。
+    pub fn find_next(&self, needle: &str, after: Option<(usize, usize)>) -> Option<ResultMatch> {
+        let needle = needle.trim().to_lowercase();
+        let columns = self.columns.len();
+        let rows = self.view_len();
+        if needle.is_empty() || columns == 0 || rows == 0 {
+            return None;
+        }
+        // 把（视图行, 列）当成一条带子上的格子：搜一圈就是一条不大不小的扫描
+        let per_row = columns + 1;
+        let cells = rows * per_row;
+        let start = match after {
+            Some((row, col)) if col < per_row => {
+                row.saturating_mul(per_row).saturating_add(col + 1) % cells
+            }
+            // 没给过起点，或起点已经不在这份结果里（刷新 / 换结果之后）：从头找
+            _ => 0,
+        };
+        for step in 0..cells {
+            let flat = (start + step) % cells;
+            let (row, col) = (flat / per_row, flat % per_row);
+            let Some(text) = self.row_cell_text(row, col) else {
+                continue;
+            };
+            if let Some(range) = find_in_cell(text, &needle) {
+                return Some(ResultMatch { row, col, range });
+            }
+        }
+        None
     }
 
     /// 这一数据列在**当前视图行序**下的全部取值（一行一个，换行分隔；逐格按 TSV 转义）
@@ -455,13 +593,16 @@ impl ResultGridDelegate {
     /// 一份十万行的结果整列就是十万个值，粘到哪里都不好用——真要全列就导出。
     fn column_text(&self, column: usize) -> String {
         let mut text = String::new();
-        for (index, row_ix) in self.view_rows.iter().enumerate() {
+        for (index, data_ix) in (0..self.view_len())
+            .filter_map(|view_ix| self.data_row(view_ix))
+            .enumerate()
+        {
             if index > 0 {
                 text.push('\n');
             }
             let cell = self
                 .rows
-                .get(*row_ix)
+                .get(data_ix)
                 .and_then(|row| row.get(column))
                 .map(String::as_str)
                 .map(tsv_cell)
@@ -530,6 +671,17 @@ pub enum GridSelection {
     Row { row: usize },
 }
 
+/// 结果内查找的一个命中（[`ResultGridDelegate::find_next`] 的产物）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultMatch {
+    /// **视图行号**（筛选 / 排序之后看着的那一行）
+    pub row: usize,
+    /// 含行号槽的列下标
+    pub col: usize,
+    /// 格内区间（字节；`None` = 命中但给不出区间，见 [`ResultGridDelegate::find_next`]）
+    pub range: Option<Range<usize>>,
+}
+
 /// 菜单里的值预览（短、单行；太长的值不该把菜单撑开）
 fn preview_of(value: &str) -> String {
     let folded: String = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -562,6 +714,67 @@ fn compare_cells(left: Option<&String>, right: Option<&String>) -> std::cmp::Ord
     left.cmp(right)
 }
 
+/// 一格的渲染决策（**纯函数**产出就是这一份；渲染只负责把它落到元素上）
+///
+/// 为什么单独拿出来：`Unknown` 这一档必须是**今天的样式**，而“没带类型就一个像素不变”
+/// 这句话只有被断言过才算数——渲染函数里测不到（gpui 不暴露算出来的对齐与字体）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CellStyle {
+    /// 文本对齐（数字右对齐：个位对齐才看得出一列的数量级差）
+    align: TextAlign,
+    /// 用等宽字体吗（布尔 / 时间族；字体族从主题取，不引新依赖）
+    monospace: bool,
+}
+
+/// 列类型 → 这一列所有格子的样式
+fn cell_style(kind: ColumnKind) -> CellStyle {
+    CellStyle {
+        align: if kind.is_numeric() {
+            TextAlign::Right
+        } else {
+            TextAlign::Left
+        },
+        monospace: kind.is_monospace(),
+    }
+}
+
+/// 单元格里找 `needle`（**已小写**）的字节区间：两边都是 ASCII → 零分配
+fn ascii_match_range(cell: &str, needle: &str) -> Option<Range<usize>> {
+    let (haystack, needle) = (cell.as_bytes(), needle.as_bytes());
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+        .map(|at| at..at + needle.len())
+}
+
+/// 格内命中的唯一实现：本地筛选与结果内查找都走它（一份口径，不许两套）
+///
+/// - `Some(Some(range))`：命中，且给得出**格内区间**（格与词都是 ASCII —— 折叠不改字节长度）；
+/// - `Some(None)`：命中，但给不出区间（含非 ASCII）；
+/// - `None`：没命中。
+///
+/// 为什么要单独一条 ASCII 快路径：筛选框每敲一下都要把**整表**过一遍，原先每格
+/// `to_lowercase()` 一次分配（10 万行 × 20 列 = 200 万次），而结果里绝大多数格子是 ASCII。
+/// 含非 ASCII 时回落 `to_lowercase`：`str::to_lowercase` 有上下文相关的特例（如希腊文末位
+/// sigma），自写的逐字节比较会与它不一致——**口径不能有两种**，宁可慢一点。
+fn find_in_cell(cell: &str, needle: &str) -> Option<Option<Range<usize>>> {
+    if needle.is_empty() {
+        return None;
+    }
+    if cell.is_ascii() && needle.is_ascii() {
+        return ascii_match_range(cell, needle).map(Some);
+    }
+    cell.to_lowercase().contains(needle).then_some(None)
+}
+
+/// 单元格命中判据（筛选用：只看有没有）
+fn cell_matches(cell: &str, needle: &str) -> bool {
+    find_in_cell(cell, needle).is_some()
+}
+
 impl TableDelegate for ResultGridDelegate {
     fn columns_count(&self, _cx: &App) -> usize {
         // 首列是行号槽（原型 §2.4）：没有结果时不画它，空态就交回给 `render_empty`
@@ -573,7 +786,7 @@ impl TableDelegate for ResultGridDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.view_rows.len()
+        self.view_len()
     }
 
     /// 【B15】列头点击排序：组件库已在它那边循环 `Default → Descending → Ascending`，
@@ -657,33 +870,64 @@ impl TableDelegate for ResultGridDelegate {
             .when(self.is_frozen(index), |column| column.fixed_left())
     }
 
-    /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补两件事——
-    /// **截断**与**悬停全文**。列名常常比默认列宽（128px）长，截断之后就没有第二条
-    /// 知道它是什么的路（单元格取值有悬停，表头同样需要）。
+    /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补三件事——
+    /// **截断**、**悬停全文**、**列类型小标签**。列名常常比默认列宽（128px）长，截断之后
+    /// 就没有第二条知道它是什么的路（单元格取值有悬停，表头同样需要）。
     ///
-    /// 行号槽（`#`）不挂悬停——它不是数据。`debug_selector` 是给用例找这个表头用的
+    /// 类型小标签摆在列名**右侧**并且 `flex_none`：先截断的总是列名——反过来的话，
+    /// 窄列上被省略号吃掉的恰好是“类型”（那正是想看它的时候）。
+    ///
+    /// 行号槽（`#`）不挂悬停也不挂标签——它不是数据。`debug_selector` 是给用例找这个表头用的
     /// （`.id(...)` 不登记坐标）：表头的排序箭头就在它右端，直调 `perform_sort` 验不到那段几何。
     fn render_th(
         &mut self,
         col_ix: usize,
         _window: &mut Window,
-        _cx: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let name = if Self::is_row_number(col_ix) {
             "#".to_string()
         } else {
             self.columns.get(col_ix - 1).cloned().unwrap_or_default()
         };
+        // 类型缺失时 `label` 是 `None`：这一档与今天一模一样（表头就一个列名）
+        let label = self.type_label(col_ix).map(str::to_string);
+        let muted = cx.theme().colors.muted_foreground;
+
         let head = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
             .size_full()
+            .min_w_0()
             .truncate()
             .debug_selector(move || format!("editor-result-th-{col_ix}"))
-            .child(SharedString::from(name.clone()));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(name.clone())),
+            )
+            .when_some(label.clone(), |head, label| {
+                head.child(
+                    div()
+                        .flex_none()
+                        .text_size(rems(ui::RESULT_HEADER_TYPE_FONT_SIZE))
+                        .text_color(muted)
+                        .child(SharedString::from(label)),
+                )
+            });
         if Self::is_row_number(col_ix) || name.is_empty() {
             return head.into_any_element();
         }
+        // 悬停给全名 + 类型：类型在窄列上也可能被截掉（它带参数时很长，`numeric(38,10)`）
+        let full = match label {
+            Some(label) => format!("{name} · {label}"),
+            None => name,
+        };
         head.id(("editor-result-th", col_ix))
-            .tooltip(move |window, cx| result_cell_tooltip(name.clone(), window, cx))
+            .tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx))
             .into_any_element()
     }
 
@@ -695,9 +939,14 @@ impl TableDelegate for ResultGridDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let text = self.cell(row_ix, col_ix);
+        // 类型决定“怎么画”（数字右对齐、布尔 / 时间族等宽）；没带类型就是 `Unknown`
+        // ——那一档与今天完全一致
+        let style = cell_style(self.column_kind(col_ix));
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let foreground = theme.colors.foreground;
+        // 字体族从主题取（不引新依赖）：只在真要等宽的那几类上取一次
+        let mono_family = style.monospace.then(|| theme.mono_font_family.clone());
 
         // 行号槽永远是灰的（它不是数据）
         if Self::is_row_number(col_ix) {
@@ -730,6 +979,10 @@ impl TableDelegate for ResultGridDelegate {
             .truncate()
             .text_xs()
             .text_color(if is_null { muted } else { foreground })
+            // 【类型感知】数字右对齐；其余左对齐
+            .text_align(style.align)
+            // 【类型感知】布尔 / 时间族用主题的等宽字体（两列放一起时字形对得齐）
+            .when_some(mono_family, |cell, family| cell.font_family(family))
             .when(is_null, |cell| cell.italic())
             // 用例按它点/量真单元格（`Ctrl+C` 复制选中、行距口径都从这里进去）
             .debug_selector(move || format!("editor-result-cell-{row_ix}-{col_ix}"))
@@ -760,7 +1013,7 @@ impl TableDelegate for ResultGridDelegate {
         let Some((row, col)) = self.context_cell else {
             return menu;
         };
-        if Self::is_row_number(col) || row >= self.view_rows.len() {
+        if Self::is_row_number(col) || row >= self.view_len() {
             return menu;
         }
         let column = col - 1;
@@ -777,7 +1030,7 @@ impl TableDelegate for ResultGridDelegate {
             column_name,
             column,
             row,
-            rows: self.view_rows.len(),
+            rows: self.view_len(),
             frozen: self.is_frozen(column),
             insight: insight_available,
         };
@@ -853,8 +1106,6 @@ impl TableDelegate for ResultGridDelegate {
         }
         menu
     }
-
-
 
     fn render_empty(
         &mut self,
@@ -1209,10 +1460,11 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ContextAction, ContextTarget, ResultGridDelegate, ResultStatus, ResultToolbar,
-        compare_cells, context_menu_items, duration_text, preview_of, status_segments, thousands,
-        truncated_hint,
+        ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
+        TextAlign, cell_matches, cell_style, compare_cells, context_menu_items, duration_text,
+        find_in_cell, preview_of, status_segments, thousands, truncated_hint,
     };
+    use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
 
@@ -1486,6 +1738,208 @@ mod tests {
         assert_eq!(grid.visible_row_count(), 2);
         assert_eq!(grid.visible_rows()[0][0], "2");
         assert_eq!(grid.visible_rows()[1][0], "10");
+    }
+
+    /// 类型 → 格子样式（表驱动）：数字右对齐、布尔 / 时间族等宽、**未知档就是今天的样式**
+    ///
+    /// 这条钉的是“类型感知渲染”的最后一跳：模型说“是数字”还不够，渲染得真按右对齐画。
+    #[test]
+    fn the_cell_style_follows_the_column_type_and_unknown_stays_as_today() {
+        let cases: &[(ColumnKind, TextAlign, bool)] = &[
+            (ColumnKind::Integer, TextAlign::Right, false),
+            (ColumnKind::Float, TextAlign::Right, false),
+            (ColumnKind::Decimal, TextAlign::Right, false),
+            (ColumnKind::Boolean, TextAlign::Left, true),
+            (ColumnKind::Timestamp, TextAlign::Left, true),
+            (ColumnKind::Date, TextAlign::Left, true),
+            (ColumnKind::Time, TextAlign::Left, true),
+            (ColumnKind::Uuid, TextAlign::Left, true),
+            (ColumnKind::Text, TextAlign::Left, false),
+            (ColumnKind::Json, TextAlign::Left, false),
+            (ColumnKind::Binary, TextAlign::Left, false),
+            // 没类型 / 认不出：左对齐 + 默认字体 —— 就是今天的样子
+            (ColumnKind::Unknown, TextAlign::Left, false),
+        ];
+        for (kind, align, monospace) in cases {
+            let style = cell_style(*kind);
+            assert_eq!(style.align, *align, "{kind:?} 的对齐");
+            assert_eq!(style.monospace, *monospace, "{kind:?} 的字体");
+        }
+    }
+
+    /// 表头类型小标签：驱动报了才摆（行号槽永不摆），名字**原样**（方言名照显示）
+    ///
+    /// 同一条用例兼验“换了一份结果/清空之后类型不跟过来”：漏给就是“没类型”，
+    /// 而**没类型这一档就是今天**（表头只有一个列名）。
+    #[test]
+    fn the_header_shows_the_type_only_when_the_driver_reported_one() {
+        let mut grid = grid();
+        assert!(grid.type_label(0).is_none(), "行号槽不是数据");
+        assert!(grid.type_label(1).is_none(), "没带类型 = 不摆标签");
+        assert!(grid.type_label(2).is_none());
+        assert_eq!(grid.column_kind(1), ColumnKind::Unknown);
+
+        grid.set_column_types(vec![
+            Some(ColumnType::parse("bigint")),
+            Some(ColumnType::parse("numeric(38,10)")),
+        ]);
+        assert_eq!(grid.type_label(1), Some("bigint"));
+        assert_eq!(
+            grid.type_label(2),
+            Some("numeric(38,10)"),
+            "表头显示的是驱动报的**原样名字**（带参数也照显）"
+        );
+        assert_eq!(grid.type_label(0), None, "行号槽没有类型可谈");
+        assert_eq!(grid.type_label(9), None, "越界不 panic");
+        assert_eq!(grid.column_kind(1), ColumnKind::Integer);
+        assert_eq!(grid.column_kind(2), ColumnKind::Decimal);
+        assert_eq!(
+            grid.column_kind(0),
+            ColumnKind::Unknown,
+            "行号槽永远是无类型档"
+        );
+
+        // 换一份结果：上一份的类型不许跟过来（面板漏给 = 没类型，与今天一致）
+        grid.set_data(vec!["a".to_string()], vec![vec!["1".to_string()]]);
+        assert_eq!(grid.type_label(1), None);
+        assert_eq!(grid.column_kind(1), ColumnKind::Unknown);
+
+        // 一条列报了、另一条没报：没报的那条不摆标签
+        grid.set_column_types(vec![Some(ColumnType::parse("uuid")), None]);
+        assert_eq!(grid.type_label(1), Some("uuid"));
+        assert_eq!(grid.type_label(2), None);
+
+        grid.clear("执行失败：boom");
+        assert_eq!(grid.column_kind(1), ColumnKind::Unknown);
+        assert!(grid.type_label(1).is_none());
+    }
+
+    /// 没有筛选也没有排序时**不物化**视图行序（入库 / 切结果集时省掉的正是这份整表映射）；
+    /// 而“不物化”必须与“物化一份恒等映射”给出**一模一样**的行——否则就是省错了
+    #[test]
+    fn the_view_order_is_not_materialized_until_a_filter_or_sort_needs_it() {
+        let mut grid = grid_with(&[&["2", "orders"], &["1", "users"]]);
+        assert!(
+            !grid.view_order_materialized_for_test(),
+            "刚入库：恒等，不建映射"
+        );
+        let plain = grid.visible_rows();
+        assert_eq!(plain.len(), 2);
+
+        // 筛一下：这时才建（本来就要逐行看一遍）
+        grid.set_filter("users");
+        assert!(grid.view_order_materialized_for_test());
+        assert_eq!(grid.visible_row_count(), 1);
+        assert_eq!(grid.cell(0, 2), "users");
+
+        // 清掉筛选：又回到恒等（不是“留一份恰好是全集的映射”）
+        grid.set_filter("");
+        assert!(!grid.view_order_materialized_for_test());
+        assert_eq!(grid.visible_rows(), plain, "与物化版给出的行必须一模一样");
+
+        // 排序也是（用户真点了列头才建）
+        grid.apply_sort(Some((0, false)));
+        assert!(grid.view_order_materialized_for_test());
+        assert_eq!(grid.visible_rows()[0][0], "1");
+        grid.apply_sort(None);
+        assert!(!grid.view_order_materialized_for_test());
+        assert_eq!(
+            grid.visible_rows(),
+            plain,
+            "取消排序回原顺序（不是部分退还）"
+        );
+
+        grid.clear("执行失败：boom");
+        assert!(!grid.view_order_materialized_for_test());
+    }
+
+    /// 筛选匹配的口径（表驱动）：与 `to_lowercase().contains` 一致；ASCII 边上零分配
+    ///
+    /// `needle` 的契约是**已小写**（调用方 `to_lowercase` 一次，不给每格都分一次）；
+    /// ASCII 快路径两边大小写都不敏感，非 ASCII 回落路径按小写词比。
+    #[test]
+    fn the_filter_matcher_keeps_the_lowercase_semantics() {
+        let cases: &[(&str, &str, bool)] = &[
+            ("orders", "orders", true),
+            ("ORDERS", "orders", true),
+            ("Orders_Archive", "orders", true),
+            ("users", "orders", false),
+            ("", "orders", false),
+            ("ord", "orders", false),
+            ("1", "orders", false),
+            // 非 ASCII：回落 `to_lowercase`（大小写仍然不敏感，中文不受影响）
+            ("Ärger", "ärger", true),
+            ("ärger", "ärger", true),
+            ("订单_2026", "订单", true),
+            ("订单_2026", "2026", true),
+            ("订单", "orders", false),
+        ];
+        for (cell, needle, expected) in cases {
+            assert_eq!(
+                cell_matches(cell, needle),
+                *expected,
+                "格 {cell:?} 找 {needle:?}"
+            );
+        }
+
+        // 格内区间：两边都是 ASCII 才给得出；含非 ASCII 时是 `None`（命中但无区间）
+        assert_eq!(find_in_cell("Orders_Archive", "orders"), Some(Some(0..6)));
+        assert_eq!(find_in_cell("订单_2026", "2026"), Some(None));
+        assert_eq!(find_in_cell("plain", ""), None, "空词不命中任何格");
+        assert_eq!(find_in_cell("plain", "plainly"), None, "词比格长");
+    }
+
+    /// 结果内查找：只看**数据列**（`#` 槽不算）、按视图行序、找完一圈回到开头
+    #[test]
+    fn finding_in_the_result_walks_the_visible_rows_and_wraps() {
+        let mut grid = grid_with(&[&["1", "orders"], &["2", "users"], &["3", "orders_archive"]]);
+        assert_eq!(
+            grid.find_next("orders", None),
+            Some(ResultMatch {
+                row: 0,
+                col: 2,
+                range: Some(0..6),
+            }),
+            "第一处命中的是**数据列**（行号槽不是数据）"
+        );
+        assert_eq!(
+            grid.find_next("orders", Some((0, 2))).map(|hit| hit.row),
+            Some(2),
+            "从上一处继续：中间那行的第二列（users）不命中，继续往后找"
+        );
+        assert_eq!(
+            grid.find_next("orders", Some((2, 2))).map(|hit| hit.row),
+            Some(0),
+            "找不到就绕回开头（表是圆的）"
+        );
+
+        // 行号槽里的数字不算命中（`#` 显示的是视图行号，不是数据）
+        assert_eq!(
+            grid.find_next("3", None),
+            Some(ResultMatch {
+                row: 2,
+                col: 1,
+                range: Some(0..1),
+            })
+        );
+        assert_eq!(grid.find_next("nope", None), None);
+        assert_eq!(grid.find_next("   ", None), None, "空词不找任何东西");
+
+        // 含非 ASCII 的格：命中但不给格内区间（宿主退化成整格高亮）
+        let chinese = grid_with(&[&["1", "订单_2026"]]);
+        assert_eq!(
+            chinese.find_next("2026", None),
+            Some(ResultMatch {
+                row: 0,
+                col: 2,
+                range: None,
+            })
+        );
+
+        // 筛选之后只找**看得见的行**（找到看不见的行等于没找到）
+        grid.set_filter("users");
+        assert_eq!(grid.find_next("orders", None), None);
+        assert_eq!(grid.find_next("users", None).map(|hit| hit.row), Some(0));
     }
 
     /// 【B15】换一份结果：排序跟不过来（列都可能不是同一批），筛选词留着（用户还在找同样的东西）

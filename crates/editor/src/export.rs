@@ -7,11 +7,31 @@
 //!   （与网格的斜体判据同源）——要类型化得先有列类型，那是另一笔工作（计划 B7 余项）。
 //! - **只导出已抓到的行**：分段抓取只把窗口里的行拿回来（`ExportScope::Fetched`）；「抓全量后
 //!   导出」是另一档，取数由面板循环取段（`fetch_next`），本模块只管编码与命名。
-//! - **两条落盘路径**：CSV / JSON / INSERT 是**纯文本编码**（本模块的纯函数 + `fs::write`）；
+//! - **两条落盘路径**：文本档（CSV / JSON / INSERT，以及【B7 切片三】的 SQL Updates /
+//!   `WHERE 子句`）都是**纯函数编码**（本模块 + `fs::write`）；
 //!   Parquet / XLSX 不是“拼字符串”写得出来的（前者是带 schema 的列式格式，后者是 OOXML 包），
 //!   交给 DuckDB 的 `COPY … TO …`——那条路要把行围成临时表，属 I/O，所以走**后台线程**
 //!   （见 `execution::DuckDbExportRequest`）。
 //! - **纯函数**：编码、默认表名、默认文件名都在这里，写成能逐条断言的形状；落盘在面板里。
+//!
+//! ## 【B7 切片三】改库用的两档（`SQL Updates` / `WHERE 子句`）
+//!
+//! 这两档不是数据快照，是**拿去改数据的文本**（同类产品 sqlab 的 8 档里有它们，我们的
+//! 菜单里到此为止只有 CSV / JSON / INSERT 三档文本）：
+//!
+//! - **`SQL Updates`**：每行一条 `UPDATE <表> SET <非键列> = <值>, … WHERE <键列> = <值>;`。
+//!   它比 INSERT 多一个前提——**得知道哪几列能唯一定位一行**。我们手里没有主键元数据
+//!   （`ResultEntry` 只有列名与展示文本），所以键列**必须由调用方给**（[`RowKey`]）：
+//!   给不出就不生成——`UPDATE … WHERE 随便一列` 猜错的代价是**改错行**，而 INSERT 猜错只是
+//!   插错值，两者不是一个量级。这就是本模块的“宁可回绝也不猜”。
+//! - **`WHERE 子句`**：只出谓词（`WHERE` 一行 + 每行一个括号 + `OR` 串起来），
+//!   贴进 `DELETE` / `SELECT` / `UPDATE` 都对得上。
+//!   条件列：给了键就用键列（短、能命中索引），没给就**用全部列**（每行一个括号）。
+//!   `NULL` 写成 `IS NULL`——`= NULL` 永远不成立，那是错的不是“差不多”。
+//!
+//! 两档进不进菜单由 [`ExportExtras`] 说（[`menu_items`] 仍只给“有网格就能给”的那几档，
+//! 菜单要长出这两档就调 [`menu_items_for`]）——摆出来等于替用户表态“我要拿它去改库”，
+//! 得由调用方（面板 + 它手里的表结构信息）说，界面不逐档硬编码。
 
 use crate::store::ResultEntry;
 
@@ -24,6 +44,10 @@ pub enum ExportFormat {
     Json,
     /// `INSERT INTO … VALUES (…);`（每 200 行一条语句）
     Insert,
+    /// 【B7 切片三】`UPDATE … SET … WHERE 键 = 值;`（每行一条；**键列必须由调用方给**）
+    SqlUpdates,
+    /// 【B7 切片三】只出谓词：`WHERE (… AND …) OR (…)`（贴进任何语句都对得上）
+    WhereClause,
     /// 【B7 切片二】列式二进制（DuckDB `COPY … (FORMAT parquet)`；内核自带，离线可用）
     Parquet,
     /// 【B7 切片二】Excel 工作簿（DuckDB `COPY … (FORMAT xlsx)`；要 `excel` 扩展）
@@ -31,14 +55,28 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    /// 菜单里的顺序（也是 `ALL` 的顺序；文本三档在前，DuckDB 两档在后）
-    pub const ALL: [ExportFormat; 5] = [Self::Csv, Self::Json, Self::Insert, Self::Parquet, Self::Xlsx];
+    /// **有网格就能给**的几档（也是 `menu_items` 的顺序：文本三档在前，DuckDB 两档在后）
+    ///
+    /// 【B7 切片三】的两档**不在**这里：它们要“行定位依据”与调用方的明确表态（见
+    /// [`ExportExtras`]），摆进这份列表就等于替所有调用方改菜单。
+    pub const ALL: [ExportFormat; 5] = [
+        Self::Csv,
+        Self::Json,
+        Self::Insert,
+        Self::Parquet,
+        Self::Xlsx,
+    ];
+
+    /// 【B7 切片三】改库用的两档（菜单里插在 `Insert` 之后、DuckDB 两档之前）
+    pub const SQL_TEXT: [ExportFormat; 2] = [Self::SqlUpdates, Self::WhereClause];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Csv => "CSV",
             Self::Json => "JSON",
             Self::Insert => "INSERT",
+            Self::SqlUpdates => "SQL Updates",
+            Self::WhereClause => "WHERE 子句",
             Self::Parquet => "Parquet",
             Self::Xlsx => "XLSX",
         }
@@ -48,7 +86,8 @@ impl ExportFormat {
         match self {
             Self::Csv => "csv",
             Self::Json => "json",
-            Self::Insert => "sql",
+            // 三档 SQL 文本共用一个扩展名（与 sqlab 同口径）：`orders.sql`
+            Self::Insert | Self::SqlUpdates | Self::WhereClause => "sql",
             Self::Parquet => "parquet",
             Self::Xlsx => "xlsx",
         }
@@ -60,14 +99,67 @@ impl ExportFormat {
             Self::Csv => "逗号分隔文本",
             Self::Json => "对象数组（值按展示文本；NULL 是 null）",
             Self::Insert => "INSERT 语句（每 200 行一条）",
+            Self::SqlUpdates => "UPDATE 语句（每行一条；要表结构里的键列）",
+            Self::WhereClause => "WHERE 谓词（按键列或全部列匹配这些行）",
             Self::Parquet => "Parquet（列式，数字列保留数值类型）",
             Self::Xlsx => "Excel 工作簿（要 excel 扩展，首次装一次）",
         }
     }
 
-    /// 这一档是不是**走 DuckDB** 落盘（文本三档不是）：面板据此选“同步写文件”还是“后台 COPY”
+    /// 这一档是不是**走 DuckDB** 落盘（文本档不是）：面板据此选“同步写文件”还是“后台 COPY”
     pub fn is_duckdb_backed(self) -> bool {
         matches!(self, Self::Parquet | Self::Xlsx)
+    }
+
+    /// 这一档要不要「行定位依据」（键列）
+    ///
+    /// 要而没给就**不摆在菜单里**（见 [`menu_items_for`]），编码层也会回绝
+    /// （见 [`encode_rows`]）——`UPDATE` 定位不准的代价是改错行。
+    pub fn requires_row_key(self) -> bool {
+        matches!(self, Self::SqlUpdates)
+    }
+}
+
+/// 行定位依据：哪几列能把一行认出来（`SQL Updates` 与“按键的 `WHERE 子句`”的前提）
+///
+/// 产品里**没有主键元数据**（`ResultEntry` 只有列名与展示文本），所以这里不接受“猜一个键”。
+/// 键列由调用方给（表结构里读、或让用户选），**列名按结果集里的原样写、大小写敏感**：
+/// 结果里没有这列（比如 SQL 没 SELECT 它）就是 [`RowKey::indices`] 的 `None`，
+/// 编码层据此回绝，不静默降级成“全部列”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowKey {
+    columns: Vec<String>,
+}
+
+impl RowKey {
+    /// 复合键（顺序就是 `WHERE` 里 `AND` 的顺序）；空列表不是键，返回 `None`
+    pub fn new<I, S>(columns: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let columns: Vec<String> = columns.into_iter().map(Into::into).collect();
+        (!columns.is_empty()).then_some(Self { columns })
+    }
+
+    /// 单列键（最常见的一档）
+    pub fn single(column: impl Into<String>) -> Self {
+        Self {
+            columns: vec![column.into()],
+        }
+    }
+
+    /// 键列名（按给入顺序）
+    pub fn columns(&self) -> &[String] {
+        &self.columns
+    }
+
+    /// 键列在**结果列**里的下标；任一列名找不到就返回 `None`
+    fn indices(&self, columns: &[String]) -> Option<Vec<usize>> {
+        self.columns
+            .iter()
+            .map(|name| columns.iter().position(|column| column == name))
+            .collect()
     }
 }
 
@@ -103,8 +195,54 @@ pub struct ExportMenuItem {
 ///
 /// 「抓全量」那一组只在 `has_more` 时出现——已经抓完了再摆就是骗人（点下去只是一次多余的重跑）。
 /// `rows_text` 是已抓行数的展示文本（千分位由调用方格式化）。
+///
+/// 这里只给 [`ExportFormat::ALL`] 那几档（“有网格就能给”）；【B7 切片三】的两档要能力面，
+/// 走 [`menu_items_for`]。
 pub fn menu_items(has_more: bool, rows_text: &str) -> Vec<ExportMenuItem> {
-    let mut items = Vec::new();
+    menu_items_for(has_more, rows_text, &ExportExtras::default())
+}
+
+/// 【B7 切片三】附加能力面：菜单「自动长出」的哪几档由它决定（界面不逐档硬编码）
+///
+/// 为什么要有这层而不是直接往 [`ExportFormat::ALL`] 里塞：`SQL Updates` / `WHERE 子句`
+/// 是**改库用**的文本，而且 `SQL Updates` 还缺不了键列。摆出来 = 替用户表态“我要拿它去
+/// 改数据”，得由调用方（面板 + 它手里的表结构信息）说。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExportExtras {
+    /// 该不该摆「改库用」的 SQL 文本档（`SQL Updates` / `WHERE 子句`）
+    pub sql_text: bool,
+    /// 行定位依据（键列）：有才摆 `SQL Updates`
+    ///
+    /// 没有键列时**不摆**——没有键的 `UPDATE` 只能把某一列当键（猜），而猜错的代价是
+    /// 改错行；宁可让用户先去表结构里认一下键列（或直接用 INSERT 档）。
+    pub key: Option<RowKey>,
+}
+
+/// 菜单的项（**纯函数** + 能力面）：`extras` 说“这一层还能给什么”
+///
+/// 菜单内容完全由「`ALL` 的次序 + 能力面」推出来：加一档就改格式枚举与这里的条件，
+/// 面板不需要认识具体档位。
+pub fn menu_items_for(
+    has_more: bool,
+    rows_text: &str,
+    extras: &ExportExtras,
+) -> Vec<ExportMenuItem> {
+    let mut formats: Vec<ExportFormat> = Vec::with_capacity(ExportFormat::ALL.len() + 2);
+    for format in ExportFormat::ALL {
+        // SQL 文本两档插在 `Insert` 之后（三档 SQL 挨着）；DuckDB 两档仍压尾
+        if format == ExportFormat::Parquet && extras.sql_text {
+            for extra in ExportFormat::SQL_TEXT {
+                // 要键而没给键的档**不摆**（点了也只能给一份“回绝”文本）
+                if extra.requires_row_key() && extras.key.is_none() {
+                    continue;
+                }
+                formats.push(extra);
+            }
+        }
+        formats.push(format);
+    }
+
+    let mut items = Vec::with_capacity(formats.len() * 2 + 2);
     if has_more {
         items.push(ExportMenuItem {
             label: format!("已抓取 {rows_text} 行"),
@@ -112,26 +250,23 @@ pub fn menu_items(has_more: bool, rows_text: &str) -> Vec<ExportMenuItem> {
             separator_before: false,
         });
     }
-    for format in ExportFormat::ALL {
-        items.push(ExportMenuItem {
-            label: format.label().to_string(),
-            action: Some((format, ExportScope::Fetched)),
-            separator_before: false,
-        });
-    }
+    let group = |items: &mut Vec<ExportMenuItem>, scope: ExportScope| {
+        for format in formats.iter() {
+            items.push(ExportMenuItem {
+                label: format.label().to_string(),
+                action: Some((*format, scope)),
+                separator_before: false,
+            });
+        }
+    };
+    group(&mut items, ExportScope::Fetched);
     if has_more {
         items.push(ExportMenuItem {
             label: "抓全量后导出（会重跑查询）".to_string(),
             action: None,
             separator_before: true,
         });
-        for format in ExportFormat::ALL {
-            items.push(ExportMenuItem {
-                label: format.label().to_string(),
-                action: Some((format, ExportScope::All)),
-                separator_before: false,
-            });
-        }
+        group(&mut items, ExportScope::All);
     }
     items
 }
@@ -141,8 +276,9 @@ const INSERT_ROWS_PER_STATEMENT: usize = 200;
 
 /// 编码成导出文本
 ///
-/// `table` 只在 [`ExportFormat::Insert`] 用（表名；调用方给 [`default_table_name`] 的结果）。
-/// 没有网格（失败 / 写语句）时返回空串——调用方该先看 [`ResultEntry::has_grid`]。
+/// `table` 在 [`ExportFormat::Insert`] / [`ExportFormat::SqlUpdates`] 用（表名；调用方给
+/// [`default_table_name`] 的结果）。没有网格（失败 / 写语句）时返回空串——调用方该先看
+/// [`ResultEntry::has_grid`]。
 pub fn encode(entry: &ResultEntry, format: ExportFormat, table: &str) -> String {
     encode_rows(entry, format, table, &entry.rows)
 }
@@ -150,6 +286,9 @@ pub fn encode(entry: &ResultEntry, format: ExportFormat, table: &str) -> String 
 /// 编码指定的行集（**本地筛选后导出**走这里：原型 §5.5 的口径是“导出的是当前筛选后的行集”）
 ///
 /// 列名 / 表名 / 空判定仍按 `entry`（筛选只动“哪些行”，不动“哪些列”）。
+///
+/// 【B7 切片三】`SQL Updates` 走这里会**回绝**（返回一行 `--` 注释）：它要键列，
+/// 而这里拿不到——该调 [`encode_updates`]（没有键就把这一档从菜单里收起，见 [`menu_items_for`]）。
 pub fn encode_rows(
     entry: &ResultEntry,
     format: ExportFormat,
@@ -163,9 +302,36 @@ pub fn encode_rows(
         ExportFormat::Csv => encode_csv(&entry.columns, rows),
         ExportFormat::Json => encode_json(&entry.columns, rows),
         ExportFormat::Insert => encode_insert(entry, rows, table),
+        ExportFormat::SqlUpdates => {
+            refusal("UPDATE 需要键列（哪几列能唯一定位一行），这份导出没拿到键信息")
+        }
+        // WHERE 档不需要键：没键就按**全部列**拼谓词（它只是“把这几行挑出来”，
+        // 挑多了（全列相同的重复行）不会改错数据，只会多带几行）
+        ExportFormat::WhereClause => encode_where(entry, None, rows),
         // 走 DuckDB 的两档不在这里编码（空串 = “本地没有可写的文本”，
         // 调用方应当先看 `is_duckdb_backed`；给空串比给一份错的文本好）
         ExportFormat::Parquet | ExportFormat::Xlsx => String::new(),
+    }
+}
+
+/// 【B7 切片三】带「行定位依据」的编码分发（**接线用**）：菜单给了键，落盘这里要给同一份
+///
+/// `key = None` 时与 [`encode_rows`] 完全一致（所以 `WHERE 子句` 档用它不加参数也能用）；
+/// `key = Some` 时 `SQL Updates` 走 [`encode_updates`]，其余档不受影响。
+///
+/// 面板的落盘路径只需把「`encode(entry, …)` / `encode_rows(entry, …, rows)`」换成这个
+/// （两处用同一个 `key`），界面就不需要认识“哪一档要键”这件闲事（那是格式自己的属性，
+/// 见 [`ExportFormat::requires_row_key`]）。
+pub fn encode_rows_with_key(
+    entry: &ResultEntry,
+    format: ExportFormat,
+    table: &str,
+    key: Option<&RowKey>,
+    rows: &[Vec<String>],
+) -> String {
+    match (format, key) {
+        (ExportFormat::SqlUpdates, Some(key)) => encode_updates(entry, table, key, rows),
+        _ => encode_rows(entry, format, table, rows),
     }
 }
 
@@ -231,10 +397,19 @@ fn encode_json(columns: &[String], rows: &[Vec<String>]) -> String {
 
 /// JSON 里的一个值：`NULL` → `null`，其余（含缺失）→ 字符串
 fn json_value(value: Option<&str>) -> String {
-    match value {
-        Some("NULL") | None => "null".to_string(),
-        Some(text) => json_string(text),
+    if is_null_cell(value) {
+        "null".to_string()
+    } else {
+        json_string(value.unwrap_or_default())
     }
+}
+
+/// 网格里的「这一格是 NULL」判据：展示文本就是字面 `NULL`（缺列的格子也算）
+///
+/// **只此一处**：JSON 的 `null`、SQL 的 `NULL` 字面量、`WHERE … IS NULL` 都读它，
+/// 免得同一个结果集在不同档里对“是不是 NULL”给出不同答案。
+fn is_null_cell(value: Option<&str>) -> bool {
+    matches!(value, None | Some("NULL"))
 }
 
 fn json_string(text: &str) -> String {
@@ -282,7 +457,7 @@ fn encode_insert(entry: &ResultEntry, rows: &[Vec<String>], table: &str) -> Stri
         for (row_ix, row) in chunk.iter().enumerate() {
             let values = row
                 .iter()
-                .map(|value| insert_literal(value))
+                .map(|value| sql_literal(value))
                 .collect::<Vec<_>>()
                 .join(", ");
             if row_ix > 0 {
@@ -295,9 +470,16 @@ fn encode_insert(entry: &ResultEntry, rows: &[Vec<String>], table: &str) -> Stri
     text
 }
 
-/// SQL 值字面量（见 [`encode_insert`] 的口径）
-fn insert_literal(text: &str) -> String {
-    if text == "NULL" {
+/// SQL 值字面量（INSERT / UPDATE / WHERE 三档**共用一套口径**，见 [`encode_insert`]）
+///
+/// `NULL` → 字面 `NULL`；`true` / `TRUE` 这类布尔 → 大写；看起来是数字的 → 原样；
+/// 其余一律单引号包裹并把内部单引号双写。
+///
+/// 启发式的取舍：**字符串列里存着 `123` 会被写成数字**——按展示文本导出就必然有这条，
+/// 要精确得分得先有列类型（计划 B7 余项）。三档共用同一份判据，是为了同一个结果集
+/// 在 INSERT / UPDATE / WHERE 里对同一个值给出同一种写法。
+fn sql_literal(text: &str) -> String {
+    if is_null_cell(Some(text)) {
         return "NULL".to_string();
     }
     if text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false") {
@@ -307,6 +489,177 @@ fn insert_literal(text: &str) -> String {
         return text.to_string();
     }
     format!("'{}'", text.replace('\'', "''"))
+}
+
+/// 一个格子写成 SQL 值字面量（缺格 / 展示文本是 `NULL` → 字面 `NULL`，其余走 [`sql_literal`]）
+///
+/// 为什么要多这层：`sql_literal("")` 的空串是**合法值**（该写 `''`），而“缺格”是另一回事
+/// （行比列短——分段抓取的边界），两者不能混。`NULL` 的判据仍只此一处（[`is_null_cell`]）。
+fn cell_literal(cell: Option<&str>) -> String {
+    if is_null_cell(cell) {
+        "NULL".to_string()
+    } else {
+        sql_literal(cell.unwrap_or_default())
+    }
+}
+
+/// 【B7 切片三】`UPDATE <表> SET <非键列> = <值>, … WHERE <键列> = <值>;`（每行一条）
+///
+/// ## 口径
+///
+/// - **键列不进 `SET`**：它是定位用的，不是要改的值。
+/// - **`SET` 里给全部非键列**（不管用户是不是只改了一格）：我们手里只有**一份快照**
+///   （`ResultEntry` 不记“哪些格被改过”），于是“把这一行写成结果里的样子”是唯一说得清的语义。
+/// - 值字面量用 [`sql_literal`]（与 INSERT 档同一套启发式）。
+/// - 多列键（复合键）拼成 `k1 = v1 AND k2 = v2`，顺序就是 [`RowKey`] 给入的顺序。
+///
+/// ## 回绝（宁可回绝也不猜）
+///
+/// 返回文本以 `--` 开头（SQL 注释，贴进编辑器不会误跑）：
+///
+/// - **键列不在结果列里** / 结果只有键列（没有可 `SET` 的列）：整份回绝。
+///   （不静默降级成“拿第一列当键”——那不是降级，是改错行。）
+/// - **某一行的键值是 `NULL`**：`WHERE k = NULL` 永远不成立，而 `IS NULL` 又定位不到**一行**
+///   ——那一行**跳过并在文首说明**，其它行照常给（全拒了用户还得自己找哪行有问题）。
+pub fn encode_updates(
+    entry: &ResultEntry,
+    table: &str,
+    key: &RowKey,
+    rows: &[Vec<String>],
+) -> String {
+    if !entry.has_grid() {
+        return String::new();
+    }
+    let Some(key_ix) = key.indices(&entry.columns) else {
+        return refusal(&format!(
+            "键列 {} 不在结果列里（列名要按结果集里的原样给）",
+            key.columns().join(", ")
+        ));
+    };
+    let value_ix: Vec<usize> = (0..entry.columns.len())
+        .filter(|ix| !key_ix.contains(ix))
+        .collect();
+    if value_ix.is_empty() {
+        return refusal("结果里只有键列，没有可 SET 的列");
+    }
+
+    let target = quote_ident(table);
+    let mut lines = Vec::with_capacity(rows.len());
+    let mut skipped = 0usize;
+    for row in rows {
+        // 键值里有 NULL（或缺列）→ 这一行定位不到，跳过
+        if key_ix
+            .iter()
+            .any(|ix| is_null_cell(row.get(*ix).map(String::as_str)))
+        {
+            skipped += 1;
+            continue;
+        }
+        let assignments = value_ix
+            .iter()
+            .map(|ix| {
+                format!(
+                    "{} = {}",
+                    quote_ident(&entry.columns[*ix]),
+                    cell_literal(row.get(*ix).map(String::as_str))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let predicate = key_ix
+            .iter()
+            .map(|ix| {
+                format!(
+                    "{} = {}",
+                    quote_ident(&entry.columns[*ix]),
+                    cell_literal(row.get(*ix).map(String::as_str))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        lines.push(format!(
+            "UPDATE {target} SET {assignments} WHERE {predicate};"
+        ));
+    }
+
+    let mut text = String::new();
+    if skipped > 0 {
+        text.push_str(&refusal(&format!(
+            "{skipped} 行的键值是 NULL（定位不到一行），已跳过"
+        )));
+    }
+    if lines.is_empty() {
+        return if text.is_empty() {
+            refusal("没有行可生成 UPDATE")
+        } else {
+            text
+        };
+    }
+    text.push_str(&lines.join("\n"));
+    text.push('\n');
+    text
+}
+
+/// 【B7 切片三】只出谓词：`WHERE\n  (… AND …)\n  OR (…)`;
+///
+/// ## 语义（口径定在这里，调用方不用再猜）
+///
+/// - **每组括号 = 一行**：括号内各列用 `AND` 串（全列相等），行与行用 `OR` 串。
+///   所以它是“把这几行挑出来”的谓词，贴进 `DELETE … WHERE` / `UPDATE … SET … WHERE` /
+///   带筛选的 `SELECT` 都对得上。
+/// - **条件列**：`key` 给了就**只用键列**（短、能命中索引，且能区分全列相同的重复行）；
+///   没给就**用全部列**（不需要表结构就能用）。两档不混用：一旦给了键列却发现它不在
+///   结果列里，就回绝（一声不响地改成全列，语义变了却看不出来）。
+/// - **`NULL` 写成 `IS NULL`**：`列 = NULL` 在 SQL 里永远不成立（三值逻辑），照那样生成就是
+///   一份“看着对、跑起来一行也匹配不上”的谓词。
+/// - **没有行**时给 `WHERE FALSE;`：空谓词等于“匹配所有行”，那是最危险的一种“差不多”。
+pub fn encode_where(entry: &ResultEntry, key: Option<&RowKey>, rows: &[Vec<String>]) -> String {
+    if !entry.has_grid() {
+        return String::new();
+    }
+    let columns_ix: Vec<usize> = match key {
+        Some(key) => match key.indices(&entry.columns) {
+            Some(ix) => ix,
+            None => {
+                return refusal(&format!(
+                    "键列 {} 不在结果列里（列名要按结果集里的原样给）",
+                    key.columns().join(", ")
+                ));
+            }
+        },
+        None => (0..entry.columns.len()).collect(),
+    };
+    if rows.is_empty() {
+        return "WHERE FALSE;\n".to_string();
+    }
+
+    let clauses = rows
+        .iter()
+        .map(|row| {
+            let conditions = columns_ix
+                .iter()
+                .map(|ix| {
+                    let column = quote_ident(&entry.columns[*ix]);
+                    let cell = row.get(*ix).map(String::as_str);
+                    if is_null_cell(cell) {
+                        format!("{column} IS NULL")
+                    } else {
+                        format!("{column} = {}", cell_literal(cell))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            format!("({conditions})")
+        })
+        .collect::<Vec<_>>();
+    format!("WHERE\n  {};\n", clauses.join("\n  OR "))
+}
+
+/// 回绝：宁可给一段说清「为什么不给」的注释，也不给一份猜出来的 SQL
+///
+/// `--` 前缀是形状的一部分：SQL 里它就是注释，用户把导出的文件当脚本跑也不会跑错东西。
+fn refusal(reason: &str) -> String {
+    format!("-- 无法生成：{reason}\n")
 }
 
 /// 是不是一个能直接当数字字面量用的文本
@@ -347,10 +700,9 @@ fn is_numeric_literal(text: &str) -> bool {
 /// 让用户看到引号（比默默生成一条跑不了的 INSERT 好）。
 fn quote_ident(name: &str) -> String {
     let simple = !name.is_empty()
-        && name
-            .chars()
-            .enumerate()
-            .all(|(ix, ch)| ch == '_' || ch.is_ascii_alphanumeric() && !(ix == 0 && ch.is_ascii_digit()));
+        && name.chars().enumerate().all(|(ix, ch)| {
+            ch == '_' || ch.is_ascii_alphanumeric() && !(ix == 0 && ch.is_ascii_digit())
+        });
     if simple {
         name.to_string()
     } else {
@@ -369,11 +721,7 @@ pub fn default_table_name(sql: Option<&str>, index: usize) -> String {
 
 /// 默认文件名（带扩展名）：`orders.csv` / `result_1.csv`
 pub fn default_file_name(sql: Option<&str>, index: usize, format: ExportFormat) -> String {
-    format!(
-        "{}.{}",
-        default_table_name(sql, index),
-        format.extension()
-    )
+    format!("{}.{}", default_table_name(sql, index), format.extension())
 }
 
 /// 从 SQL 文本里取首个 `FROM` 后面的表名（词法级）
@@ -467,7 +815,8 @@ fn is_ident_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExportFormat, ExportScope, default_file_name, default_table_name, encode, table_from_sql,
+        ExportExtras, ExportFormat, ExportScope, RowKey, default_file_name, default_table_name,
+        encode, encode_rows_with_key, encode_updates, encode_where, table_from_sql,
     };
     use crate::store::ResultEntry;
 
@@ -489,25 +838,18 @@ mod tests {
     fn csv_escapes_rfc4180_fields() {
         let entry = entry(
             &["id", "name", "note"],
-            &[
-                &["1", "a,b", "say \"hi\""],
-                &["2", "line\nbreak", "NULL"],
-            ],
+            &[&["1", "a,b", "say \"hi\""], &["2", "line\nbreak", "NULL"]],
         );
         let text = encode(&entry, ExportFormat::Csv, "orders");
         assert_eq!(
-            text,
-            "id,name,note\n1,\"a,b\",\"say \"\"hi\"\"\"\n2,\"line\nbreak\",NULL",
+            text, "id,name,note\n1,\"a,b\",\"say \"\"hi\"\"\"\n2,\"line\nbreak\",NULL",
             "逗号 / 引号 / 换行都要按 RFC 4180 转义；NULL 按展示文本原样"
         );
     }
 
     #[test]
     fn json_gives_null_for_null_and_escapes_strings() {
-        let entry = entry(
-            &["id", "note"],
-            &[&["1", "NULL"], &["2", "a\"b\\c\td"]],
-        );
+        let entry = entry(&["id", "note"], &[&["1", "NULL"], &["2", "a\"b\\c\td"]]);
         let text = encode(&entry, ExportFormat::Json, "orders");
         assert_eq!(
             text,
@@ -582,6 +924,10 @@ mod tests {
         assert_eq!(encode(&failed, ExportFormat::Csv, "t"), "");
         assert_eq!(encode(&failed, ExportFormat::Json, "t"), "");
         assert_eq!(encode(&failed, ExportFormat::Insert, "t"), "");
+        assert_eq!(encode(&failed, ExportFormat::SqlUpdates, "t"), "");
+        assert_eq!(encode(&failed, ExportFormat::WhereClause, "t"), "");
+        assert_eq!(encode_updates(&failed, "t", &RowKey::single("id"), &[]), "");
+        assert_eq!(encode_where(&failed, None, &[]), "");
     }
 
     #[test]
@@ -624,7 +970,10 @@ mod tests {
 
     #[test]
     fn default_names_fall_back_to_result_index() {
-        assert_eq!(default_table_name(Some("SELECT * FROM orders"), 1), "orders");
+        assert_eq!(
+            default_table_name(Some("SELECT * FROM orders"), 1),
+            "orders"
+        );
         assert_eq!(default_table_name(Some("SELECT 1"), 2), "result_2");
         assert_eq!(default_table_name(None, 3), "result_3");
         assert_eq!(
@@ -641,18 +990,34 @@ mod tests {
     fn menu_items_grow_with_a_next_segment() {
         use super::menu_items;
 
-        let fetched: Vec<(String, Option<(ExportFormat, ExportScope)>)> = menu_items(false, "1,000")
-            .into_iter()
-            .map(|item| (item.label, item.action))
-            .collect();
+        let fetched: Vec<(String, Option<(ExportFormat, ExportScope)>)> =
+            menu_items(false, "1,000")
+                .into_iter()
+                .map(|item| (item.label, item.action))
+                .collect();
         assert_eq!(
             fetched,
             vec![
-                ("CSV".to_string(), Some((ExportFormat::Csv, ExportScope::Fetched))),
-                ("JSON".to_string(), Some((ExportFormat::Json, ExportScope::Fetched))),
-                ("INSERT".to_string(), Some((ExportFormat::Insert, ExportScope::Fetched))),
-                ("Parquet".to_string(), Some((ExportFormat::Parquet, ExportScope::Fetched))),
-                ("XLSX".to_string(), Some((ExportFormat::Xlsx, ExportScope::Fetched))),
+                (
+                    "CSV".to_string(),
+                    Some((ExportFormat::Csv, ExportScope::Fetched))
+                ),
+                (
+                    "JSON".to_string(),
+                    Some((ExportFormat::Json, ExportScope::Fetched))
+                ),
+                (
+                    "INSERT".to_string(),
+                    Some((ExportFormat::Insert, ExportScope::Fetched))
+                ),
+                (
+                    "Parquet".to_string(),
+                    Some((ExportFormat::Parquet, ExportScope::Fetched))
+                ),
+                (
+                    "XLSX".to_string(),
+                    Some((ExportFormat::Xlsx, ExportScope::Fetched))
+                ),
             ],
             "已经抓完时只给“仅已抓取”五项（不摆一个多余的重跑入口）"
         );
@@ -677,10 +1042,7 @@ mod tests {
             ],
             "还有下一段时：先说清已抓多少，再给两档范围"
         );
-        assert!(
-            items[6].separator_before,
-            "“抓全量”那一组前面要有分隔线"
-        );
+        assert!(items[6].separator_before, "“抓全量”那一组前面要有分隔线");
         assert!(
             items[0].action.is_none() && items[6].action.is_none(),
             "两个分组标题不可点"
@@ -720,8 +1082,301 @@ mod tests {
             );
             assert!(!format.detail().is_empty(), "文件对话框说明不能空着");
         }
-        for format in [ExportFormat::Csv, ExportFormat::Json, ExportFormat::Insert] {
+        for format in [
+            ExportFormat::Csv,
+            ExportFormat::Json,
+            ExportFormat::Insert,
+            ExportFormat::SqlUpdates,
+            ExportFormat::WhereClause,
+        ] {
             assert!(!format.is_duckdb_backed(), "{} 是本地编码", format.label());
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 【B7 切片三】SQL Updates / WHERE 子句（改库用的两档文本）
+    // ══════════════════════════════════════════════════════════════════
+
+    /// 三档 SQL 文本**共用一套**字面量口径：转义、数字 / 布尔不加引号、NULL 是字面量
+    #[test]
+    fn sql_text_formats_share_one_literal_rule() {
+        let entry = entry(
+            &["id", "name", "ok", "note"],
+            &[
+                &["1", "o'brien", "TRUE", "NULL"],
+                &["2.5", "中文", "false", "-1e3"],
+            ],
+        );
+        // UPDATE：键列不进 SET，其余列全给
+        assert_eq!(
+            encode_updates(&entry, "orders", &RowKey::single("id"), &entry.rows),
+            "UPDATE orders SET name = 'o''brien', ok = TRUE, note = NULL WHERE id = 1;\n\
+             UPDATE orders SET name = '中文', ok = FALSE, note = -1e3 WHERE id = 2.5;\n",
+            "与 INSERT 档同一套字面量；`o'brien` 的单引号要双写"
+        );
+        // 无键的 WHERE：条件列 = **全部列**，每行一个括号
+        assert_eq!(
+            encode_where(&entry, None, &entry.rows),
+            "WHERE\n  (id = 1 AND name = 'o''brien' AND ok = TRUE AND note IS NULL)\n  \
+             OR (id = 2.5 AND name = '中文' AND ok = FALSE AND note = -1e3);\n",
+            "`= NULL` 永远不成立，要写 `IS NULL`"
+        );
+        // 有键的 WHERE：只用键列（短、能命中索引）
+        assert_eq!(
+            encode_where(&entry, Some(&RowKey::single("id")), &entry.rows),
+            "WHERE\n  (id = 1)\n  OR (id = 2.5);\n",
+            "给了键列就只用它，不混用全列"
+        );
+    }
+
+    /// 复合键：顺序就是调用方给入的顺序；键值是 NULL 的行**跳过并在文首说明**
+    #[test]
+    fn updates_use_a_composite_key_and_skip_null_keys() {
+        let entry = entry(
+            &["id", "tenant", "name"],
+            &[
+                &["1", "a", "x"],
+                &["NULL", "a", "该行没有键"],
+                &["3", "b", "z"],
+            ],
+        );
+        let key = RowKey::new(["tenant", "id"]).expect("两列复合键");
+        assert_eq!(
+            encode_updates(&entry, "orders", &key, &entry.rows),
+            "-- 无法生成：1 行的键值是 NULL（定位不到一行），已跳过\n\
+             UPDATE orders SET name = 'x' WHERE tenant = 'a' AND id = 1;\n\
+             UPDATE orders SET name = 'z' WHERE tenant = 'b' AND id = 3;\n",
+            "`WHERE k = NULL` 永远不成立，而 `IS NULL` 可能匹配多行：只能跳过"
+        );
+    }
+
+    /// 回绝口径（宁可回绝也不猜）：每种“拿不准”都有自己的说法
+    #[test]
+    fn sql_text_format_refusals_say_why() {
+        let grid = entry(&["id", "name"], &[&["1", "x"]]);
+        assert_eq!(
+            encode_updates(&grid, "orders", &RowKey::single("oid"), &grid.rows),
+            "-- 无法生成：键列 oid 不在结果列里（列名要按结果集里的原样给）\n",
+            "键列不在结果里：不静默降级成“拿第一列当键”"
+        );
+        assert_eq!(
+            encode_where(&grid, Some(&RowKey::single("oid")), &grid.rows),
+            "-- 无法生成：键列 oid 不在结果列里（列名要按结果集里的原样给）\n"
+        );
+        let only_key = entry(&["id"], &[&["1"]]);
+        assert_eq!(
+            encode_updates(&only_key, "orders", &RowKey::single("id"), &only_key.rows),
+            "-- 无法生成：结果里只有键列，没有可 SET 的列\n",
+            "没有可改的列：不生成一句空 SET 的 UPDATE"
+        );
+        let no_rows = entry(&["id", "name"], &[]);
+        assert_eq!(
+            encode_updates(&no_rows, "orders", &RowKey::single("id"), &[]),
+            "-- 无法生成：没有行可生成 UPDATE\n"
+        );
+        let all_null_keys = entry(&["id", "name"], &[&["NULL", "x"]]);
+        assert_eq!(
+            encode_updates(
+                &all_null_keys,
+                "orders",
+                &RowKey::single("id"),
+                &all_null_keys.rows
+            ),
+            "-- 无法生成：1 行的键值是 NULL（定位不到一行），已跳过\n",
+            "全被跳过时给的就是一行说明（不静默给空文件）"
+        );
+        // 编码层直调（没有键信息）：回绝，不给一份猜的 UPDATE
+        assert_eq!(
+            encode(&grid, ExportFormat::SqlUpdates, "orders"),
+            "-- 无法生成：UPDATE 需要键列（哪几列能唯一定位一行），这份导出没拿到键信息\n"
+        );
+        // WHERE 档：没有行时给 `WHERE FALSE`（空谓词 = 匹配所有行，那是最危险的一种“差不多”）
+        assert_eq!(
+            encode(&no_rows, ExportFormat::WhereClause, "orders"),
+            "WHERE FALSE;\n"
+        );
+    }
+
+    /// 行比列短（抓取中的边界）：缺的格子按 NULL 算，与 JSON / INSERT 档同一条判据
+    #[test]
+    fn short_rows_treat_missing_cells_as_null() {
+        let entry = entry(&["id", "note"], &[&["1"]]);
+        assert_eq!(
+            encode(&entry, ExportFormat::WhereClause, "orders"),
+            "WHERE\n  (id = 1 AND note IS NULL);\n"
+        );
+        assert_eq!(
+            encode_updates(&entry, "orders", &RowKey::single("id"), &entry.rows),
+            "UPDATE orders SET note = NULL WHERE id = 1;\n"
+        );
+    }
+
+    /// `RowKey`：空列表不是键；列名大小写敏感（结果集里叫什么就给什么）
+    #[test]
+    fn row_key_is_not_guessed() {
+        assert!(RowKey::new(Vec::<String>::new()).is_none(), "空列表不是键");
+        assert_eq!(RowKey::single("id").columns(), ["id".to_string()]);
+        assert_eq!(
+            RowKey::new(["tenant", "id"]).unwrap().columns(),
+            ["tenant".to_string(), "id".to_string()]
+        );
+        let entry = entry(&["ID", "name"], &[&["1", "x"]]);
+        assert!(
+            encode_updates(&entry, "orders", &RowKey::single("id"), &entry.rows)
+                .starts_with("-- 无法生成："),
+            "`id` 与结果里的 `ID` 不是同一列（大小写敏感，不给就回绝）"
+        );
+        assert_eq!(
+            encode_updates(&entry, "orders", &RowKey::single("ID"), &entry.rows),
+            "UPDATE orders SET name = 'x' WHERE ID = 1;\n"
+        );
+    }
+
+    /// 接线用的分发：同一个 `key` 同时给菜单与落盘；没键时与 `encode_rows` 一致
+    #[test]
+    fn encode_rows_with_key_dispatches_only_for_updates() {
+        let grid = entry(&["id", "name"], &[&["1", "x"]]);
+        let key = RowKey::single("id");
+        assert_eq!(
+            encode_rows_with_key(
+                &grid,
+                ExportFormat::SqlUpdates,
+                "orders",
+                Some(&key),
+                &grid.rows
+            ),
+            "UPDATE orders SET name = 'x' WHERE id = 1;\n",
+            "有键时 SQL Updates 真的出得来"
+        );
+        assert_eq!(
+            encode_rows_with_key(&grid, ExportFormat::SqlUpdates, "orders", None, &grid.rows),
+            encode(&grid, ExportFormat::SqlUpdates, "orders"),
+            "没键时回绝的口径与 `encode_rows` 一致"
+        );
+        for format in [
+            ExportFormat::Csv,
+            ExportFormat::Json,
+            ExportFormat::Insert,
+            ExportFormat::WhereClause,
+        ] {
+            assert_eq!(
+                encode_rows_with_key(&grid, format, "orders", Some(&key), &grid.rows),
+                encode(&grid, format, "orders"),
+                "{} 不受键影响",
+                format.label()
+            );
+        }
+    }
+
+    /// 两档的元数据：与 INSERT 档共用 `.sql` 扩展名；哪一档要键由数据（不是调用点）说
+    #[test]
+    fn sql_text_format_metadata_is_complete() {
+        let labels: Vec<&str> = ExportFormat::SQL_TEXT.iter().map(|f| f.label()).collect();
+        assert_eq!(labels, ["SQL Updates", "WHERE 子句"]);
+        let extensions: Vec<&str> = ExportFormat::SQL_TEXT
+            .iter()
+            .map(|f| f.extension())
+            .collect();
+        assert_eq!(extensions, ["sql", "sql"], "三档 SQL 文本共用一个扩展名");
+        for format in ExportFormat::SQL_TEXT {
+            assert!(!format.is_duckdb_backed(), "{} 在本地编码", format.label());
+            assert!(!format.detail().is_empty(), "文件对话框说明不能空着");
+            assert_eq!(
+                default_file_name(Some("SELECT * FROM orders"), 1, format),
+                "orders.sql",
+                "默认文件名跟 INSERT 档同口径"
+            );
+        }
+        assert_eq!(
+            default_file_name(None, 2, ExportFormat::WhereClause),
+            "result_2.sql"
+        );
+        assert!(ExportFormat::SqlUpdates.requires_row_key(), "UPDATE 要键列");
+        assert!(
+            !ExportFormat::WhereClause.requires_row_key(),
+            "WHERE 子句不要键列"
+        );
+        // `ALL` 是“有网格就能给”的那几档：新两档不塞进去（塞了所有调用方的菜单都会变）
+        assert!(!ExportFormat::ALL.contains(&ExportFormat::SqlUpdates));
+        assert!(!ExportFormat::ALL.contains(&ExportFormat::WhereClause));
+    }
+
+    /// 菜单是**数据驱动**的：摆了哪些档只由「`ALL` 的次序 + 能力面」推出来
+    ///
+    /// `menu_items`（host.rs 今天读的那份）继续只给五档：接线时换成 `menu_items_for`，
+    /// 菜单自己就长出这两档（面板不用认识具体档位）。
+    #[test]
+    fn sql_text_formats_grow_the_menu_only_with_capability() {
+        use super::menu_items_for;
+
+        let labels = |extras: &ExportExtras| -> Vec<String> {
+            menu_items_for(false, "1,000", extras)
+                .into_iter()
+                .map(|item| item.label)
+                .collect()
+        };
+        assert_eq!(
+            labels(&ExportExtras::default()),
+            ["CSV", "JSON", "INSERT", "Parquet", "XLSX"],
+            "没有能力面时与 `menu_items` 一模一样（既有接线不受影响）"
+        );
+        assert_eq!(
+            labels(&ExportExtras {
+                sql_text: true,
+                key: None,
+            }),
+            ["CSV", "JSON", "INSERT", "WHERE 子句", "Parquet", "XLSX"],
+            "`WHERE 子句` 不要键：说了要 SQL 文本档就摆"
+        );
+        assert_eq!(
+            labels(&ExportExtras {
+                sql_text: true,
+                key: Some(RowKey::single("id")),
+            }),
+            [
+                "CSV",
+                "JSON",
+                "INSERT",
+                "SQL Updates",
+                "WHERE 子句",
+                "Parquet",
+                "XLSX"
+            ],
+            "有键列才摆 `SQL Updates`（没键就不摆一个只能回绝的入口）"
+        );
+        assert_eq!(
+            labels(&ExportExtras {
+                sql_text: false,
+                key: Some(RowKey::single("id")),
+            }),
+            ["CSV", "JSON", "INSERT", "Parquet", "XLSX"],
+            "`sql_text` 是这两档的总开关：只给键不算表态"
+        );
+
+        // 两档要跟着**两组范围**各长一遍，分组标题仍然不可点
+        let items = menu_items_for(
+            true,
+            "1,000",
+            &ExportExtras {
+                sql_text: true,
+                key: Some(RowKey::single("id")),
+            },
+        );
+        assert_eq!(items.len(), 2 + 7 * 2, "两个标题 + 七档 × 两组范围");
+        assert_eq!(
+            items[4].action,
+            Some((ExportFormat::SqlUpdates, ExportScope::Fetched))
+        );
+        assert_eq!(
+            items[5].action,
+            Some((ExportFormat::WhereClause, ExportScope::Fetched))
+        );
+        assert_eq!(
+            items[12].action,
+            Some((ExportFormat::SqlUpdates, ExportScope::All)),
+            "第二组同样长出这两档"
+        );
+        assert!(items[8].separator_before, "“抓全量”那组前要有分隔线");
+        assert!(items[0].action.is_none() && items[8].action.is_none());
     }
 }

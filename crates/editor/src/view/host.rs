@@ -32,6 +32,7 @@ use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
+use crate::language_service;
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::persist;
@@ -166,6 +167,20 @@ pub struct EditorHostPanel {
     /// 组件没给“当前是选格还是选行”的访问器，而它的 `selected_cell()` / `selected_row()`
     /// 可以同时有值（选过整行再点一个格子）——所以在这里记**事件**，不猜状态。
     result_selection: Option<result_grid::GridSelection>,
+    /// 【B18】后台扫描器（语句数 / 折叠候选 / 打字期诊断）
+    ///
+    /// 为什么要有它：这三件事原先全在 `InputEvent::Change` 上**同步**做——性能基线
+    /// （`tests/offline_baseline.rs`）实测 5 千行脚本每敲一下要按住主线程 90–130 ms，
+    /// 贴 1 MB 约 0.6–1.0 s。挪到工作线程后，按键只做一次提交（带修订号）。
+    scanner: crate::scan::Scanner,
+    /// 【B18】当前修订号：回执只接受与它相等的那一份（陈旧丢弃）
+    scan_revision: u64,
+    /// 【B18】有扫描在途（结果轮询泵据此多活一会儿）
+    scan_pending: bool,
+    /// 【B18】最近一次扫描给的打字期诊断（与执行错误回填**一起**画，见 `apply_error_marks`）
+    scan_diagnostics: Vec<language_service::Diagnostic>,
+    /// 【B6】执行错误的原因（`None` = 这次成功）；与词法诊断合并重建时要连它一起重画
+    error_reason: Option<String>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -226,21 +241,12 @@ impl EditorHostPanel {
                 if matches!(event, InputEvent::Change) {
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
-                    this.statements = count_statements(&text);
-                    // B17：折叠候选随文本重算（内核的增量维护只服务于它自己的 highlighter，
-                    // 我们没有 highlighter → 不重喂就会指到别的行）。动作与补全/格式化共用
-                    // 这一条事件路径，所以 `replace_all`（模板 / 注释 / 格式化）也覆盖到。
-                    if this.shared.folding_enabled(&this.document) {
-                        let editor = this.editor.clone();
-                        // 挪出当前更新栈：本回调正在内核的 `update` 里（同一实体再 `.update(…)` 会 panic）；
-                        // `defer` 在本次更新末尾跑，刷新的那一帧就带上新候选。文本取内核当下值。
-                        cx.defer(move |cx| {
-                            editor.update(cx, |state, cx| {
-                                let text = state.value().to_string();
-                                fold::install(state, &text, cx);
-                            });
-                        });
-                    }
+                    // 【B18】语句数 / 折叠候选 / 打字期诊断一律**不在事件路径上算**：
+                    // 提交一份带修订号的扫描（正文要两份——服务层一份、扫描器一份，所以克隆一次），
+                    // 回执由结果轮询泵回填（`drain_exec_results`）——陈旧的那份会被丢掉。
+                    // 动作与补全 / 格式化共用这一条事件路径，所以 `replace_all`
+                    // （模板 / 注释 / 格式化）也覆盖到。
+                    this.submit_scan(text.clone(), cx);
                     this.shared
                         .update(|service| service.set_content(&this.document, text));
                     // 重绘以刷新标签脏点与状态栏
@@ -390,6 +396,11 @@ impl EditorHostPanel {
             result_notice: None,
             result_selection: None,
             exec_pump: RefCell::new(None),
+            scanner: crate::scan::Scanner::new(),
+            scan_revision: 0,
+            scan_pending: false,
+            scan_diagnostics: Vec::new(),
+            error_reason: None,
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
             _filter_sub: Some(filter_sub),
@@ -2218,6 +2229,23 @@ impl EditorHostPanel {
     ///
     /// 与 `workbench` 的导航任务同一模式：**后台等、主线程回填**，空闲即退出。
     /// 执行期间顺带 `cx.notify()`：状态栏的耗时累加跟着这个节拍走（不另起一个定时器）。
+    /// 【B18】提交一次后台扫描（**每次文本变更**一次；打开文档与重新加载各一次）
+    ///
+    /// 修订号只升不降（回绕也不怕：比较的是与当前值相等）；范围由档位的降级表回答
+    /// （`EditorShared::scan_scope`），不在这里另写判据。
+    fn submit_scan(&mut self, text: String, cx: &mut Context<Self>) {
+        let scope = self.shared.scan_scope(&self.document);
+        let channel = self
+            .with_document(|doc| doc.channel())
+            .unwrap_or_else(Default::default);
+        self.scan_revision = self.scan_revision.wrapping_add(1);
+        self.scanner
+            .submit(self.scan_revision, text, channel, scope);
+        self.scan_pending = true;
+        // 扫描不是“执行”，但它也要人按节拍把回执取回来——共用同一条轮询泵
+        self.ensure_exec_pump(cx);
+    }
+
     fn ensure_exec_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.exec_pump.borrow().as_ref()
             && !task.is_ready()
@@ -2241,6 +2269,8 @@ impl EditorHostPanel {
                             || this.tx_pending > 0
                             || this.refresh_pending > 0
                             || this.export_pending > 0
+                            // 【B18】后台扫描在途（回执到手就结束，不为扫描留常驻定时器）
+                            || this.scan_pending
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -2256,6 +2286,20 @@ impl EditorHostPanel {
     /// **一条语句一条结论**：批量执行会连续回来多条，每条各自落一个结果集（落位由 outcome
     /// 自带）。本文档的回填计数减到 0 才算执行完。
     pub(crate) fn drain_exec_results(&mut self, cx: &mut Context<Self>) {
+        // 【B18】后台扫描的回执先收：**只接受与当前修订号相等的那一份**（陈旧丢弃），
+        // 然后三件产物各归各位：语句数进状态栏、候选喂内核、诊断与执行错误一起重画
+        if let Some(report) = self.scanner.try_recv() {
+            self.scan_pending = false;
+            if crate::scan::is_current(&report, self.scan_revision) {
+                self.statements = report.statements;
+                self.scan_diagnostics = report.diagnostics;
+                let folds = report.folds;
+                self.editor
+                    .update(cx, |state, cx| fold::refresh(state, folds, cx));
+                self.apply_error_marks(self.error_reason.clone(), cx);
+                cx.notify();
+            }
+        }
         // 中断尝试的结果先收（失败 / 没在跑 都要留痕，不能默默把按钮点一下就算完）
         if let Some(note) = self.shared.drain_cancel_notes().into_iter().last() {
             self.set_message(Some(note), cx);
@@ -2440,9 +2484,14 @@ impl EditorHostPanel {
             (
                 result_sets::tabs(store.sets(&self.document), current_channel),
                 active,
-                entry
-                    .filter(|entry| entry.has_grid())
-                    .map(|entry| (entry.columns.clone(), entry.rows.clone())),
+                entry.filter(|entry| entry.has_grid()).map(|entry| {
+                    (
+                        entry.columns.clone(),
+                        entry.rows.clone(),
+                        // 【Q6】列类型跟数据一起交给网格
+                        entry.column_types.clone(),
+                    )
+                }),
                 entry
                     .filter(|entry| !entry.has_grid())
                     .map(empty_text)
@@ -2507,7 +2556,11 @@ impl EditorHostPanel {
         self.result_is_analysis = extra_analysis;
         self.grid.update(cx, |state, cx| {
             match grid_data {
-                Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
+                Some((columns, rows, types)) => {
+                    state.delegate_mut().set_data(columns, rows);
+                    // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型（防"上一份结果的类型套到新数据上"）
+                    state.delegate_mut().set_column_types(types);
+                }
                 None => state.delegate_mut().clear(empty),
             }
             // 【M8】这份结果能不能洞察（菜单项据此出现 / 消失）
@@ -2557,13 +2610,36 @@ impl EditorHostPanel {
     }
 
     /// 【B6】把出错范围画进编辑内核（行内高亮 + 悬停弹层；没有位置就只清旧的）
+    ///
+    /// 【B18】它同时负责**两个来源的合并**：执行错误回填 + 打字期词法诊断。两源必须走同一条
+    /// 重建流程：内核的诊断集合只有 `clear` + `push`，分开各写一份就会互相擦掉
+    /// （“执行出错了，词法诊断没了”那种抳不到的怪象）。
     fn apply_error_marks(&mut self, reason: Option<String>, cx: &mut Context<Self>) {
+        self.error_reason = reason;
         let site = self.error_site.clone();
+        let reason = self.error_reason.clone();
+        let lexical = self.scan_diagnostics.clone();
         self.editor.update(cx, |state, cx| {
+            // 文本先取：`diagnostics_mut` 借的就是同一份状态，两个借用不能同时活着
+            let text = state.value().to_string();
             let Some(diagnostics) = state.diagnostics_mut() else {
                 return;
             };
             diagnostics.clear();
+            // 打字期诊断（词法层能证明的那些；来源标“语法”以与执行错误区分）
+            for one in &lexical {
+                let ((start_line, start_column), (end_line, end_column)) = one.positions(&text);
+                diagnostics.push(
+                    Diagnostic::new(
+                        Position::new(start_line as u32, start_column as u32)
+                            ..Position::new(end_line as u32, end_column as u32),
+                        one.message.clone(),
+                    )
+                    .with_severity(DiagnosticSeverity::Error)
+                    .with_source("语法")
+                    .with_code(one.code),
+                );
+            }
             if let (Some(site), Some(reason)) = (site, reason) {
                 let (end_line, end_column) = site.end();
                 let range = Position::new(
@@ -3280,6 +3356,8 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
         )
         .with_affected_rows(data.affected_rows)
         .with_has_more(data.has_more)
+        // 【Q6】列类型随结果一起进结果集（空 = 驱动报不出 → 网格走“无类型档”）
+        .with_column_types(&data.column_types)
         .with_connection(connection)
         .with_channel(channel)
         .with_analysis(outcome.analysis)
@@ -3962,7 +4040,14 @@ impl Render for EditorHostPanel {
                     )
                     .dropdown_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
-                        for item in export::menu_items(has_more, &rows_text) {
+                        // 【B7 切片三】附加上下文：今天只开「WHERE 子句」这一档
+                        // （`SQL Updates` 要有**键列**才摆，而结果集自己不知道主键——键列要等 M4 的表元数据搬过来；
+                        // 没键就不摆，不猜“拿第一列当键”）
+                        let extras = export::ExportExtras {
+                            sql_text: true,
+                            key: None,
+                        };
+                        for item in export::menu_items_for(has_more, &rows_text, &extras) {
                             if item.separator_before {
                                 menu = menu.separator();
                             }

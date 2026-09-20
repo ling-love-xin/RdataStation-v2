@@ -106,9 +106,9 @@ impl ExecTarget {
         match self {
             Self::Empty | Self::Batch(_) => None,
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => Some(sql),
-            Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
-                Some(sql)
-            }
+            Self::Segment { sql, .. }
+            | Self::Filtered { sql, .. }
+            | Self::SortedDown { sql, .. } => Some(sql),
             // 分析 SQL 不发给源库驱动（它在本地 DuckDB 上跑，见 `analysis`）
             Self::Analysis(_) => None,
         }
@@ -120,7 +120,9 @@ impl ExecTarget {
             Self::Empty => Vec::new(),
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => vec![sql.clone()],
             Self::Batch(list) => list.clone(),
-            Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
+            Self::Segment { sql, .. }
+            | Self::Filtered { sql, .. }
+            | Self::SortedDown { sql, .. } => {
                 vec![sql.clone()]
             }
             // 分析 SQL 走同一条“一句一条结论”的路（它不经过通道闸，见 `analysis`）
@@ -187,9 +189,11 @@ impl ExecTarget {
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
             // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
-            Self::Empty | Self::Selection(_) | Self::Statement(_) | Self::All(_) | Self::Batch(_) => {
-                "原查询"
-            }
+            Self::Empty
+            | Self::Selection(_)
+            | Self::Statement(_)
+            | Self::All(_)
+            | Self::Batch(_) => "原查询",
         }
     }
 }
@@ -420,6 +424,11 @@ fn trimmed(text: &str) -> Option<&str> {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QueryData {
     pub columns: Vec<String>,
+    /// 【Q6】每列的**驱动原始类型名**（`bigint` / `numeric(38,10)` / `timestamp with time zone` …）
+    ///
+    /// **空 vec = 驱动报不出类型**（不是“没有列”）：此时结果集按`无类型档`渲染——
+    /// 左对齐、默认字体、表头不挂类型标签，与列类型化之前的行为一字不差。
+    pub column_types: Vec<String>,
     /// 行数据（已字符串化；`NULL` 显示为 `NULL`）
     pub rows: Vec<Vec<String>>,
     /// 执行耗时（毫秒，驱动给出的真实值）
@@ -533,7 +542,6 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持排序下发".to_string())
     }
 
-
     /// 【B5b】取下一段：`sql` 是**原 SQL**（不是上一段套了窗口的那句），
     /// `offset` = 已经拿到的行数
     ///
@@ -571,7 +579,11 @@ pub trait QueryRunner: Send + Sync + 'static {
     ///
     /// 源清单里的「设为主源」走它；与重挂一样在旁路线程上调用。
     /// 默认实现 = 不支持（没接联邦的执行器）。
-    fn set_federated_primary(&self, _connection: Option<&str>, _alias: &str) -> Result<String, String> {
+    fn set_federated_primary(
+        &self,
+        _connection: Option<&str>,
+        _alias: &str,
+    ) -> Result<String, String> {
         Err("当前执行器未接入联邦查询".to_string())
     }
 
@@ -780,8 +792,7 @@ impl ExecQueue {
         let cancel_requested = Arc::new(AtomicBool::new(false));
         let cancel_notes: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let source_notes: Arc<Mutex<VecDeque<SourceNote>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
+        let source_notes: Arc<Mutex<VecDeque<SourceNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let export_notes: Arc<Mutex<VecDeque<ExportNote>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
@@ -835,10 +846,16 @@ impl ExecQueue {
                             worker_runner.analyze(request)
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                            worker_runner.run(job.connection.as_deref(), job.channel, &sql, job.options)
+                            worker_runner.run(
+                                job.connection.as_deref(),
+                                job.channel,
+                                &sql,
+                                job.options,
+                            )
                         };
                         // B4：事务状态跟着结论一起回去（界面不必再单独问一句）
-                        let transaction = worker_runner.transaction_snapshot(job.connection.as_deref());
+                        let transaction =
+                            worker_runner.transaction_snapshot(job.connection.as_deref());
                         if let Ok(mut queue) = worker_done.lock() {
                             queue.push_back(ExecOutcome {
                                 document: job.document.clone(),
@@ -1139,7 +1156,7 @@ impl Drop for ExecQueue {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecQueue, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
+        ExecMenuKind, ExecQueue, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
         SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot, all_target,
         batch_target, resolve_target, statement_target, target_for_menu,
     };
@@ -1363,7 +1380,10 @@ mod tests {
         // 越界 + 落在多字节字符中间的选区都要能收敛
         let target = resolve_target("select '中文'", 7..99);
         assert_eq!(target, ExecTarget::Selection("'中文'".to_string()));
-        assert_eq!(resolve_target(text, 100..200), ExecTarget::Statement(text.to_string()));
+        assert_eq!(
+            resolve_target(text, 100..200),
+            ExecTarget::Statement(text.to_string())
+        );
     }
 
     /// 【B5b】取下一段是个**显式目标**：带 (offset, limit)，标签可读，SQL 就是原 SQL
@@ -1446,7 +1466,13 @@ mod tests {
     }
 
     impl QueryRunner for FakeRunner {
-        fn run(&self, connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+        fn run(
+            &self,
+            connection: Option<&str>,
+            _channel: ExecChannel,
+            sql: &str,
+            _options: RunOptions,
+        ) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.seen_connections
                 .lock()
@@ -1458,6 +1484,7 @@ mod tests {
             Ok(QueryData {
                 columns: vec!["n".to_string()],
                 rows: vec![vec!["1".to_string()]],
+                column_types: Vec::new(),
                 elapsed_ms: 7,
                 truncated: false,
                 affected_rows: None,
@@ -1485,6 +1512,7 @@ mod tests {
                 rows: (offset..offset + limit)
                     .map(|n| vec![n.to_string()])
                     .collect(),
+                column_types: Vec::new(),
                 elapsed_ms: 3,
                 truncated: false,
                 affected_rows: None,
@@ -1565,7 +1593,12 @@ mod tests {
     }
 
     impl CancellableRunner {
-        fn new() -> (Arc<Self>, Arc<AtomicBool>, Arc<AtomicUsize>, SeenConnections) {
+        fn new() -> (
+            Arc<Self>,
+            Arc<AtomicBool>,
+            Arc<AtomicUsize>,
+            SeenConnections,
+        ) {
             let stop = Arc::new(AtomicBool::new(false));
             let calls = Arc::new(AtomicUsize::new(0));
             let seen_cancels: SeenConnections = Arc::new(Mutex::new(Vec::new()));
@@ -1579,7 +1612,13 @@ mod tests {
     }
 
     impl QueryRunner for CancellableRunner {
-        fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            _channel: ExecChannel,
+            sql: &str,
+            _options: RunOptions,
+        ) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if sql.contains("slow") {
                 let deadline = Instant::now() + Duration::from_secs(5);
@@ -1592,6 +1631,7 @@ mod tests {
             Ok(QueryData {
                 columns: vec!["n".to_string()],
                 rows: vec![vec!["1".to_string()]],
+                column_types: Vec::new(),
                 elapsed_ms: 1,
                 truncated: false,
                 affected_rows: None,
@@ -1622,8 +1662,8 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1655,8 +1695,8 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1694,8 +1734,8 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::NewSet,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交批量");
 
@@ -1729,7 +1769,13 @@ mod tests {
             stop: Arc<AtomicBool>,
         }
         impl QueryRunner for NothingToCancel {
-            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while !self.stop.load(Ordering::SeqCst) {
                     assert!(Instant::now() < deadline, "假执行器没被放行");
@@ -1750,8 +1796,8 @@ mod tests {
                 &ExecTarget::Statement("select 1".to_string()),
                 None,
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
         channel.cancel().expect("中断应当被接受");
@@ -1904,7 +1950,8 @@ mod tests {
                 alias: Option<&str>,
             ) -> Result<String, String> {
                 self.seen.lock().expect("锁").push(
-                    connection.map(str::to_string)
+                    connection
+                        .map(str::to_string)
                         .map(|conn| (conn, alias.map(str::to_string))),
                 );
                 let _ = channel;
@@ -1915,7 +1962,8 @@ mod tests {
             }
         }
 
-        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let channel = ExecQueue::new(Arc::new(RefreshRunner {
             seen: seen.clone(),
             fail_with: None,
@@ -1961,7 +2009,8 @@ mod tests {
     /// 【T1.6】换主源：动作原样送到执行器（别名带着走），回执带回那句话
     #[test]
     fn setting_a_federated_primary_reaches_the_runner() {
-        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> =
+            Arc::new(Mutex::new(Vec::new()));
 
         struct PrimaryRunner {
             seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>>,
@@ -2007,7 +2056,10 @@ mod tests {
         assert_eq!(note.result.expect("该成功"), "主源已切到 pg_warehouse");
         assert_eq!(
             seen.lock().expect("锁").as_slice(),
-            [Some(("P_fed".to_string(), Some("pg_warehouse".to_string())))],
+            [Some((
+                "P_fed".to_string(),
+                Some("pg_warehouse".to_string())
+            ))],
             "连接与别名都要原样送到执行器"
         );
     }
@@ -2030,7 +2082,11 @@ mod tests {
         let notes = wait_for_tx_notes(&channel, 1);
         assert_eq!(notes[0].action, TxAction::Begin);
         assert_eq!(
-            notes[0].result.as_ref().expect("动作应当成功").in_transaction,
+            notes[0]
+                .result
+                .as_ref()
+                .expect("动作应当成功")
+                .in_transaction,
             true
         );
         assert_eq!(
@@ -2052,7 +2108,13 @@ mod tests {
             .expect("提交应当被接受");
         let notes = wait_for_tx_notes(&channel, 1);
         assert_eq!(notes[0].action, TxAction::Commit);
-        assert!(!notes[0].result.as_ref().expect("动作应当成功").in_transaction);
+        assert!(
+            !notes[0]
+                .result
+                .as_ref()
+                .expect("动作应当成功")
+                .in_transaction
+        );
         assert_eq!(actions.lock().expect("锁").len(), 1);
     }
 
@@ -2167,8 +2229,8 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -2200,8 +2262,8 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -2224,8 +2286,8 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::NewSet,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交批量");
 
@@ -2251,7 +2313,13 @@ mod tests {
         /// 每句慢 60ms：足够在第一条回填之后、整批跑完之前观察到忙状态
         struct SlowStatementRunner;
         impl QueryRunner for SlowStatementRunner {
-            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
                 std::thread::sleep(Duration::from_millis(60));
                 Ok(QueryData::default())
             }
@@ -2265,8 +2333,8 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::NewSet,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -2288,8 +2356,8 @@ mod tests {
                 &ExecTarget::Empty,
                 None,
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect_err("空目标应被拒");
         assert_eq!(error, SubmitError::Empty);
@@ -2304,7 +2372,13 @@ mod tests {
             release: Arc<Mutex<bool>>,
         }
         impl QueryRunner for SlowRunner {
-            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 loop {
                     if *self.release.lock().unwrap() {
@@ -2329,8 +2403,8 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::Replace,
-            RunOptions::default(),
-            crate::channel::ExecChannel::default(),
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("首次提交");
         // 等它真的进到忙状态

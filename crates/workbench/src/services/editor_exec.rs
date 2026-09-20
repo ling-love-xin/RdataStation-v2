@@ -163,8 +163,8 @@ impl EngineQueryRunner {
     ) -> Result<QueryData, String> {
         let source = self.accel_source(connection)?;
         let session = accel::ensure_session(&source)?;
-        let wrapped = window_sql(sql, limit, offset)
-            .ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
+        let wrapped =
+            window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -217,9 +217,9 @@ impl EngineQueryRunner {
     /// 第一个可用源，并留下回退说明）。
     fn federated_plan(&self, connection: Option<&str>) -> Result<FederatedPlan, String> {
         let manager = engine::connection_manager::get_connection_manager();
-        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
-            "联邦查询需要一个连接：先绑定一个，或在导航里选中它".to_string()
-        })?;
+        let owner = self
+            .resolve_conn_id(connection)
+            .ok_or_else(|| "联邦查询需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
 
         let mut records: Vec<FedSourceRecord> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
@@ -236,10 +236,8 @@ impl EngineQueryRunner {
                                 db_type: item.db_type.clone(),
                                 url,
                             }),
-                            Err(reason) => notes.push(format!(
-                                "连接 {} 的连接串没能组装出来：{reason}",
-                                item.name
-                            )),
+                            Err(reason) => notes
+                                .push(format!("连接 {} 的连接串没能组装出来：{reason}", item.name)),
                         }
                     }
                 }
@@ -283,8 +281,8 @@ impl EngineQueryRunner {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
         editor::history::bump();
-        let result = outcome
-            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let result =
+            outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = segmented
             && !data.columns.is_empty()
@@ -302,15 +300,15 @@ impl EngineQueryRunner {
         limit: usize,
     ) -> Result<QueryData, String> {
         let (plan, session) = self.federated_session(connection)?;
-        let wrapped = window_sql(sql, limit, offset)
-            .ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
+        let wrapped =
+            window_sql(sql, limit, offset).ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
         let started = std::time::Instant::now();
         let outcome = session.run(&wrapped);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
         editor::history::bump();
-        let result = outcome
-            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let result =
+            outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = data.rows.len() == limit;
         Ok(data)
@@ -329,8 +327,8 @@ impl EngineQueryRunner {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, &rewritten.sql, elapsed_ms, &outcome);
         editor::history::bump();
-        let result = outcome
-            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let result =
+            outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
         let mut data = to_data(&result, elapsed_ms, false);
         data.notice = rewritten.dropped_limit.as_deref().map(notice);
         Ok(data)
@@ -342,7 +340,8 @@ impl EngineQueryRunner {
         connection: Option<&str>,
     ) -> Result<(FederatedPlan, Arc<fed_session::FederatedSession>), String> {
         let plan = self.federated_plan(connection)?;
-        let session = fed_session::ensure_session(&plan.owner, &plan.sources, plan.primary.as_deref())?;
+        let session =
+            fed_session::ensure_session(&plan.owner, &plan.sources, plan.primary.as_deref())?;
         Ok((plan, session))
     }
 }
@@ -378,14 +377,12 @@ impl QueryRunner for EngineQueryRunner {
         //
         // 【B5b】查询走 `execute_first_segment`：只取第一段（1000 行），后续段由「取下一段」来要；
         // 写语句没有分段可言，引擎内部会走原路（历史记的都是**用户执行的原 SQL**）。
-        let executed = self
-            .runtime
-            .block_on(self.service.execute_first_segment(
-                connection.map(str::to_string),
-                sql,
-                editor::execution::SEGMENT_ROWS,
-                options,
-            ));
+        let executed = self.runtime.block_on(self.service.execute_first_segment(
+            connection.map(str::to_string),
+            sql,
+            editor::execution::SEGMENT_ROWS,
+            options,
+        ));
         // 【B8】不管成败，引擎都记了一条历史（含耗时 / 行数 / 失败原因）——
         // 摇一下版本号：右 Dock 的历史面板据此重新加载（面板不读盘，也不每帧问文件）
         editor::history::bump();
@@ -446,13 +443,11 @@ impl QueryRunner for EngineQueryRunner {
             channel: Some(channel.code().to_string()),
             ..Default::default()
         };
-        let executed = self
-            .runtime
-            .block_on(self.service.execute(
-                connection.map(str::to_string),
-                &rewritten.sql,
-                options,
-            ));
+        let executed = self.runtime.block_on(self.service.execute(
+            connection.map(str::to_string),
+            &rewritten.sql,
+            options,
+        ));
         editor::history::bump();
         let executed = executed.map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
@@ -491,13 +486,11 @@ impl QueryRunner for EngineQueryRunner {
             channel: Some(channel.code().to_string()),
             ..Default::default()
         };
-        let executed = self
-            .runtime
-            .block_on(self.service.execute(
-                connection.map(str::to_string),
-                &rewritten.sql,
-                options,
-            ));
+        let executed = self.runtime.block_on(self.service.execute(
+            connection.map(str::to_string),
+            &rewritten.sql,
+            options,
+        ));
         editor::history::bump();
         let executed = executed.map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
@@ -542,9 +535,10 @@ impl QueryRunner for EngineQueryRunner {
 
     /// 事务状态：读引擎的**真值**（活动事务挂在连接管理器上，不是猜的）
     fn transaction_snapshot(&self, connection: Option<&str>) -> editor::execution::TxSnapshot {
-        let status = self
-            .runtime
-            .block_on(self.service.get_transaction_status(connection.map(str::to_string)));
+        let status = self.runtime.block_on(
+            self.service
+                .get_transaction_status(connection.map(str::to_string)),
+        );
         match status {
             Ok(status) => editor::execution::TxSnapshot {
                 in_transaction: status.is_in_transaction,
@@ -565,7 +559,9 @@ impl QueryRunner for EngineQueryRunner {
         let result = match action {
             TxAction::Begin => self.runtime.block_on(self.service.begin_transaction(conn)),
             TxAction::Commit => self.runtime.block_on(self.service.commit_transaction(conn)),
-            TxAction::Rollback => self.runtime.block_on(self.service.rollback_transaction(conn)),
+            TxAction::Rollback => self
+                .runtime
+                .block_on(self.service.rollback_transaction(conn)),
         };
         result.map(|_status| ()).map_err(|error| error.to_string())
     }
@@ -654,6 +650,8 @@ impl QueryRunner for EngineQueryRunner {
 
         Ok(QueryData {
             columns: result.columns,
+            // 【Q6】本地分析走内存 DuckDB：列类型今天不从这边报（空 = 界面按无类型档渲染）
+            column_types: Vec::new(),
             rows: result
                 .rows
                 .iter()
@@ -678,7 +676,10 @@ impl QueryRunner for EngineQueryRunner {
             ExportFormat::Parquet => DuckDbExportFormat::Parquet,
             ExportFormat::Xlsx => DuckDbExportFormat::Xlsx,
             other => {
-                return Err(format!("{} 不走 DuckDB 导出（它在编辑侧编码）", other.label()));
+                return Err(format!(
+                    "{} 不走 DuckDB 导出（它在编辑侧编码）",
+                    other.label()
+                ));
             }
         };
         let rows: Vec<Vec<serde_json::Value>> = request
@@ -719,9 +720,9 @@ impl QueryRunner for EngineQueryRunner {
         }
 
         // 联邦档：会话已经建好（源清单就是按同一套口径组装的），这里只重挂
-        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
-            "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string()
-        })?;
+        let owner = self
+            .resolve_conn_id(connection)
+            .ok_or_else(|| "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
         match alias {
             Some(alias) => {
                 fed_session::refresh_source(&owner, alias)?;
@@ -737,7 +738,9 @@ impl QueryRunner for EngineQueryRunner {
                     Some(MountState::Ready { tables }) => {
                         Ok(format!("已重新挂载 {alias}（{tables} 张表）"))
                     }
-                    Some(MountState::Failed(reason)) => Err(format!("源 {alias} 仍挂不上：{reason}")),
+                    Some(MountState::Failed(reason)) => {
+                        Err(format!("源 {alias} 仍挂不上：{reason}"))
+                    }
                     None => Ok(format!("已重新挂载 {alias}")),
                 }
             }
@@ -767,10 +770,14 @@ impl QueryRunner for EngineQueryRunner {
     }
 
     /// 【T1.6】换主源（未限定名从此在它里面解析）
-    fn set_federated_primary(&self, connection: Option<&str>, alias: &str) -> Result<String, String> {
-        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
-            "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string()
-        })?;
+    fn set_federated_primary(
+        &self,
+        connection: Option<&str>,
+        alias: &str,
+    ) -> Result<String, String> {
+        let owner = self
+            .resolve_conn_id(connection)
+            .ok_or_else(|| "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
         fed_session::set_primary(&owner, alias)?;
         Ok(format!("主源已切到 {alias}（未限定名的解析者）"))
     }
@@ -900,13 +907,14 @@ fn plan_from_records(
         //
         // 组装不出来的**不阻断整份清单**（与上面“认不出的驱动”同一口径）：一条连接的串缺件
         // （凭据 / 服务名）不该把其余源一起拖下水；结果区那行小字会点名它是怎么回事。
-        let source = match FederatedSource::new(&record.conn_id, &alias, &record.db_type, &record.url) {
-            Ok(source) => source,
-            Err(reason) => {
-                notes.push(format!("连接 {} 没参与：{reason}", record.name));
-                continue;
-            }
-        };
+        let source =
+            match FederatedSource::new(&record.conn_id, &alias, &record.db_type, &record.url) {
+                Ok(source) => source,
+                Err(reason) => {
+                    notes.push(format!("连接 {} 没参与：{reason}", record.name));
+                    continue;
+                }
+            };
         if record.conn_id == owner {
             primary = Some(alias);
         }
@@ -927,9 +935,7 @@ fn plan_from_records(
         ));
     }
     if !owner_seen {
-        notes.push(
-            "本文档的连接未开启「DuckDB 本地加速」，没有作为联邦源参与".to_string(),
-        );
+        notes.push("本文档的连接未开启「DuckDB 本地加速」，没有作为联邦源参与".to_string());
     } else if primary.is_none() {
         notes.push(format!(
             "本文档的连接（{owner}）未能作为联邦源参与（见上一条说明）"
@@ -1001,7 +1007,10 @@ fn record_federation_history(
 /// 结果区那行小字（联邦档专属）：挂了哪些源 + 写法提示 + 没挂上的原因
 ///
 /// “写法提示”是**临时的**：源清单浮层（T1.6）上线后它收进浮层底部，这里只留状态。
-fn federation_notice(plan: &FederatedPlan, session: &fed_session::FederatedSession) -> Option<String> {
+fn federation_notice(
+    plan: &FederatedPlan,
+    session: &fed_session::FederatedSession,
+) -> Option<String> {
     let snapshot = session.snapshot();
     let ready: Vec<String> = snapshot
         .sources
@@ -1048,10 +1057,7 @@ fn federation_notice(plan: &FederatedPlan, session: &fed_session::FederatedSessi
 ///
 /// 只认两种提法（引号里的 catalog 名 / `别名.` 限定引用）：纯子串匹配会在 `odbc` 里
 /// 匹到别名 `db`，把一句无关的话缀在错误后面——错误归属宁可少说也不能说错。
-fn explain_federation_error(
-    session: &fed_session::FederatedSession,
-    error: String,
-) -> String {
+fn explain_federation_error(session: &fed_session::FederatedSession, error: String) -> String {
     let snapshot = session.snapshot();
     for entry in &snapshot.sources {
         if let MountState::Failed(reason) = &entry.state {
@@ -1089,6 +1095,8 @@ pub fn runner_for_test() -> Option<Arc<dyn QueryRunner>> {
 fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData {
     QueryData {
         columns: column_names(result),
+        // 【Q6】列类型：`QueryResult` 已由驱动/Arrow schema 填好（空 = 报不出，界面按无类型档渲染）
+        column_types: result.column_types(),
         rows: result
             .to_rows()
             .iter()
@@ -1219,10 +1227,8 @@ mod export_tests {
             eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
             return;
         };
-        let path = std::env::temp_dir().join(format!(
-            "rds_editor_export_{}.parquet",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rds_editor_export_{}.parquet", std::process::id()));
         std::fs::remove_file(&path).ok();
 
         let rows = runner
@@ -1230,7 +1236,9 @@ mod export_tests {
             .expect("Parquet 导出该跑通");
         assert_eq!(rows, 2);
         assert!(
-            std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false),
+            std::fs::metadata(&path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false),
             "Parquet 文件要真写出来"
         );
 
@@ -1257,10 +1265,8 @@ mod export_tests {
         let Some(runner) = EngineQueryRunner::new() else {
             return;
         };
-        let path = std::env::temp_dir().join(format!(
-            "rds_editor_export_{}.csv",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rds_editor_export_{}.csv", std::process::id()));
         let error = runner
             .export_via_duckdb(&request(ExportFormat::Csv, path.clone()))
             .expect_err("CSV 不该走 DuckDB");
@@ -1314,7 +1320,12 @@ mod tests {
         // 故意把顺序打乱：组装结果不该跟着读表的顺序漂
         let records = vec![
             record("G_2", "仓库", "postgres", "postgres://u:real@h:5432/w"),
-            record("G_1", "订单库", "mysql_native", "mysql://root:real@h:3306/shop"),
+            record(
+                "G_1",
+                "订单库",
+                "mysql_native",
+                "mysql://root:real@h:3306/shop",
+            ),
         ];
         let plan = plan_from_records(&records, &[], "G_1").expect("组装");
 
@@ -1324,10 +1335,20 @@ mod tests {
         assert_eq!(plan.sources[0].alias, "db", "G_1 先（按 id 排序）");
         assert_eq!(plan.sources[1].alias, "db_2");
         assert_eq!(plan.primary.as_deref(), Some("db"), "主源 = 本文档的连接");
-        assert!(plan.notes.is_empty(), "没出问题就别制造说明：{:?}", plan.notes);
+        assert!(
+            plan.notes.is_empty(),
+            "没出问题就别制造说明：{:?}",
+            plan.notes
+        );
         // 凭据随连接串进 `ATTACH`（DuckDB 扫描器不认 Secret，见 accel::AccelSource::new）
-        assert_eq!(plan.sources[0].connection_string, "mysql://root:real@h:3306/shop");
-        assert_eq!(plan.sources[1].connection_string, "postgres://u:real@h:5432/w");
+        assert_eq!(
+            plan.sources[0].connection_string,
+            "mysql://root:real@h:3306/shop"
+        );
+        assert_eq!(
+            plan.sources[1].connection_string,
+            "postgres://u:real@h:5432/w"
+        );
         assert_eq!(plan.sources[0].kind, AccelKind::MySql);
         assert_eq!(plan.sources[1].kind, AccelKind::PostgreSql);
     }
@@ -1336,8 +1357,18 @@ mod tests {
     #[test]
     fn a_source_that_shows_up_twice_counts_once() {
         let records = vec![
-            record("G_1", "订单库", "mysql_native", "mysql://root:real@h:3306/shop"),
-            record("G_1", "订单库", "mysql_native", "mysql://root:real@h:3306/shop"),
+            record(
+                "G_1",
+                "订单库",
+                "mysql_native",
+                "mysql://root:real@h:3306/shop",
+            ),
+            record(
+                "G_1",
+                "订单库",
+                "mysql_native",
+                "mysql://root:real@h:3306/shop",
+            ),
             record("G_2", "仓库", "postgres", "postgres://u:real@h:5432/w"),
         ];
         let plan = plan_from_records(&records, &[], "G_1").expect("组装");
@@ -1403,7 +1434,10 @@ mod tests {
             .find(|source| source.kind.needs_secret())
             .expect("Oracle 源该在清单里");
         assert!(oracle.secret.is_some(), "L2 的凭据应该是 Secret");
-        assert!(!oracle.attach_sql().contains("READ_ONLY"), "L2 不带只读选项");
+        assert!(
+            !oracle.attach_sql().contains("READ_ONLY"),
+            "L2 不带只读选项"
+        );
 
         // 组装时已经攒下的实话（读连接库失败 / 连接串组不出来）要带到结果区
         let carried = vec!["连接 甲 的连接串没能组装出来：解密失败".to_string()];

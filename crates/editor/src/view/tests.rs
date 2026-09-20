@@ -337,6 +337,24 @@ fn ctrl_s_on_an_untitled_document_reports_the_reason(cx: &mut TestAppContext) {
     assert!(message.contains("另存为"), "{message}");
 }
 
+/// 【B18】等一次后台扫描回填（真线程；测试里手动跑轮询泵那一步，带超时）
+///
+/// 扫描已不在事件路径上同步做：按键只**提交**，产物由轮询泵（生产里是那条 60ms 节拍的任务）
+/// 回填。测试不能等那个定时器，所以直接调 `drain_exec_results`（与其它回填用例同口径）。
+fn wait_for_scan(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>, feeds_before: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| panel.drain_exec_results(cx));
+        });
+        if fold::probe::read().0 > feeds_before {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "扫描回执迟迟没回来");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// 【B17】折叠：候选真的喂进了内核（构造一次），编辑后还会重算
 ///
 /// 内核没有公开的候选读口（`display_map` 不在公开面上），所以这里用探针（`fold::probe`）
@@ -378,7 +396,8 @@ fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext)
     let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&handle, cx));
     cx.simulate_keystrokes("ctrl-/");
-    cx.run_until_parked();
+    // 【B18】扫描已挪到后台：等回执被泵回填，再读探针
+    wait_for_scan(cx, &panel, feeds_at_open);
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert_eq!(text, format!("-- {sql}"), "注释真的落到文本上");
@@ -393,8 +412,9 @@ fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext)
     );
 
     // 再按一次 → 去注释 → 候选回到 1（重算不是单向的）
+    let (feeds_after_comment, _) = fold::probe::read();
     cx.simulate_keystrokes("ctrl-/");
-    cx.run_until_parked();
+    wait_for_scan(cx, &panel, feeds_after_comment);
     let (feeds_after_restore, candidates_after_restore) = fold::probe::read();
     assert!(
         feeds_after_restore > feeds_after_comment,
@@ -673,6 +693,7 @@ impl QueryRunner for ScriptRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 5,
             truncated: false,
             affected_rows: None,
@@ -746,6 +767,7 @@ impl QueryRunner for SizedRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: (0..rows).map(|index| vec![index.to_string()]).collect(),
+            column_types: Vec::new(),
             elapsed_ms: 3,
             truncated: false,
             affected_rows: None,
@@ -781,6 +803,7 @@ impl QueryRunner for ToolbarRunner {
             return Ok(QueryData {
                 columns: Vec::new(),
                 rows: Vec::new(),
+                column_types: Vec::new(),
                 elapsed_ms: 7,
                 truncated: false,
                 affected_rows: Some(3),
@@ -792,6 +815,7 @@ impl QueryRunner for ToolbarRunner {
             return Ok(QueryData {
                 columns: vec!["n".to_string()],
                 rows: (0..3).map(|index| vec![index.to_string()]).collect(),
+                column_types: Vec::new(),
                 elapsed_ms: 4,
                 truncated: true,
                 affected_rows: None,
@@ -802,6 +826,7 @@ impl QueryRunner for ToolbarRunner {
         Ok(QueryData {
             columns: vec!["n".to_string(), "note".to_string()],
             rows: vec![vec!["1".to_string(), "a".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 2,
             truncated: false,
             affected_rows: None,
@@ -845,6 +870,7 @@ impl QueryRunner for SegmentRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 2,
             truncated: false,
             affected_rows: None,
@@ -865,6 +891,7 @@ impl QueryRunner for SegmentRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["3".to_string()], vec!["4".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
@@ -908,6 +935,7 @@ impl QueryRunner for MoreUnsupportedRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
@@ -933,6 +961,7 @@ impl QueryRunner for LocatedFailureRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
@@ -1441,6 +1470,7 @@ impl QueryRunner for TxRunner {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
@@ -4012,6 +4042,7 @@ impl QueryRunner for PushdownRunner {
         Ok(QueryData {
             columns: vec!["id".to_string(), "name".to_string()],
             rows: vec![vec!["1".to_string(), "orders".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 3,
             truncated: false,
             affected_rows: None,
@@ -4035,6 +4066,7 @@ impl QueryRunner for PushdownRunner {
         Ok(QueryData {
             columns: columns.to_vec(),
             rows: vec![vec!["2".to_string(), "orders_archive".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 9,
             truncated: false,
             affected_rows: None,
@@ -4059,6 +4091,7 @@ impl QueryRunner for PushdownRunner {
         Ok(QueryData {
             columns: vec!["id".to_string(), "name".to_string()],
             rows: vec![vec!["2".to_string(), "orders_archive".to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 11,
             truncated: false,
             affected_rows: None,
@@ -5541,6 +5574,7 @@ impl QueryRunner for DuckDbExportRunner {
                 vec!["2".to_string(), "beta".to_string()],
                 vec!["3".to_string(), "gamma".to_string()],
             ],
+            column_types: Vec::new(),
             elapsed_ms: 4,
             truncated: false,
             affected_rows: None,
@@ -5739,6 +5773,7 @@ impl QueryRunner for AnalysisRunner {
                 vec!["1".to_string(), "a".to_string()],
                 vec!["2".to_string(), "b".to_string()],
             ],
+            column_types: Vec::new(),
             elapsed_ms: 4,
             truncated: false,
             affected_rows: None,
@@ -5752,6 +5787,7 @@ impl QueryRunner for AnalysisRunner {
         Ok(QueryData {
             columns: vec!["行数".to_string()],
             rows: vec![vec![request.bridged_rows().to_string()]],
+            column_types: Vec::new(),
             elapsed_ms: 2,
             truncated: false,
             affected_rows: None,
