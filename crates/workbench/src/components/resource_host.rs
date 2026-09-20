@@ -94,6 +94,16 @@ fn archive_seed(
     (seed, resolved)
 }
 
+/// 归档时按来源选**档位**（P4.5 的核心判定）：扩展名认得出来的数据文件
+/// （CSV / Parquet / Excel / JSON，口径在 `engine::duckdb::file_reader_function`）
+/// 走 `analysis` 档——归档后能洞察、能按配方复算；其余（`.sql` / `.md` …）仍是文件型。
+fn archive_kind_for(path: &std::path::Path) -> ArchiveKind {
+    match engine::duckdb::file_reader_function(&path.to_string_lossy()) {
+        Some(_) => ArchiveKind::Analysis,
+        None => ArchiveKind::File,
+    }
+}
+
 /// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
 /// 避免"一处记得刷新、另一处忘了"。
 ///
@@ -106,7 +116,15 @@ fn submit_archive(
     cx: &mut App,
 ) {
     let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
-    resource_jobs::enqueue_archive(root.to_path_buf(), read_only, request, keep_versions);
+    // 探测标志跟着档位走：分析档才值得连一次 DuckDB（文件型的指纹是字节 sha256）。
+    let analysis_probe = request.kind == ArchiveKind::Analysis && request.analysis.is_none();
+    resource_jobs::enqueue_archive(
+        root.to_path_buf(),
+        read_only,
+        request,
+        keep_versions,
+        analysis_probe,
+    );
     shared.refresh_resources(cx);
     say(shared, "资产库：正在归档…", cx);
 }
@@ -369,8 +387,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                             rel_path: resolved_rel.clone(),
                             name: result.name,
                             alias: result.alias,
-                            kind: ArchiveKind::File,
-                            // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+                            kind: archive_kind_for(&draft.abs_path),
                             analysis: None,
                             binding: ArchiveBinding {
                                 // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
@@ -407,8 +425,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                             rel_path: resolved_rel,
                             name: draft.display_name.clone(),
                             alias: None,
-                            kind: ArchiveKind::File,
-                            // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                            // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
+                            kind: archive_kind_for(&draft.abs_path),
                             analysis: None,
                             binding: ArchiveBinding {
                                 promoted_from: Some(format!(
@@ -424,11 +442,15 @@ impl ResourcesHost for WorkbenchResourceHost {
                             keep_versions: None,
                             existing_resource_id: None,
                         };
+                        // 探测标志跟着档位走（分析档才连一次 DuckDB）。
+                        let analysis_probe =
+                            request.kind == ArchiveKind::Analysis && request.analysis.is_none();
                         resource_jobs::enqueue_archive(
                             root.clone(),
                             read_only,
                             request,
                             keep_versions,
+                            analysis_probe,
                         );
                     }
                     let mut message = format!("资产库：已提交 {} 个归档…", many.len());
@@ -488,8 +510,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                 rel_path: resolved_rel.clone(),
                 name: result.name,
                 alias: result.alias,
-                kind: ArchiveKind::File,
-                // 分析表档的采集侧未接（P4.1 第二半）：这三条入口都是文件型归档。
+                // 同上：数据文件走分析档（探测在工作线程上做）。
+                kind: archive_kind_for(&source),
                 analysis: None,
                 binding: ArchiveBinding {
                     promoted_from: None,

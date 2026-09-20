@@ -8,6 +8,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-20 — Phase 4 第二刀（P4.1 第二半 + P4.5 核心一步）：数据文件的采集侧
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V32 | **engine 侧探针**：`duckdb::file_probe::{file_select_sql, probe_file}`——按扩展名选读取器（复用 `file_reader_function`）、路径单引号转义、`DESCRIBE` 拿列名与类型、`count(*)` 拿行数 | `crates/engine/src/duckdb/file_probe.rs`（新） | 这是**数据访问**能力（要连 DuckDB、要读文件），与 `file_reader_function` 同层；engine 只回「列 + 行数」的元组，**不认识 M6 的 `ColumnSpec`**（依赖单向） |
+| V33 | **M6 的转换层**：`AnalysisFacts::from_probe(definition_sql, columns, row_count)` | `src/analysis.rs` | 两边的形状各归各：engine 回元组，M6 拼成指纹口径要的事实 |
+| V34 | **采集接线（工作线程）**：`ArchiveJob.analysis_probe`，`run_archive` 先探再归档（用全局内存 DuckDB：扩展与读取器都配好了）；**探测失败降级为文件型**（warn 日志），而不是拒归档 | `crates/workbench/src/services/resource_jobs.rs` | 探测要连库读文件，**不能在事件路径上做**（那会卡 UI）；文件先安全落进 `resources/` 比“结构没探到就不让归档”重要 |
+| V35 | **档位判定（P4.5）**：`archive_kind_for(path)`——扩展名认得出来的数据文件（CSV / Parquet / Excel / JSON）归档为 **`analysis` 档**，其余仍是文件型；两条归档入口（草稿箱 / 本地文件）都接上 | `crates/workbench/src/components/resource_host.rs` | 归档后能洞察、能按配方复算；判定口径只有 `engine::duckdb::file_reader_function` 一处 |
+| 测试 | +2 engine（表达式按扩展名与转义、**真探一个 CSV**：列名与顺序、行数、两次探测结果一致、不支持格式报错）、+1 M6（`from_probe` 映射 + 同结构不同行数同指纹） | `crates/engine/src/duckdb/file_probe.rs`、`src/analysis.rs` | 类型只断言非空：DuckDB 的推断（`BIGINT`/`VARCHAR`…）会随版本变，写死会在无关升级时变红 |
+| 验证 | `cargo test -j 2 -p rds-engine --lib duckdb::file` → 4 全绿；`cargo test -j 2 -p rds-analytics-resource` → **157 + 25 + 10 全绿**；`rds-workbench --lib` 124 全绿；`cargo check -j 2 --workspace --all-targets` 无错 | — | — |
+
+> **未机器验证的一跳**：`ArchiveJob.analysis_probe` → `probe_analysis_facts` → `service.archive` 这条**作业级**串联（需要真 DuckDB 会话 + 项目库 + 文件移动三件套，属端到端）。覆盖到的是两侧端点：engine 的真探测、M6 的映射与登记口径（t133）、档位判定（纯函数）。
+>
+> **接下来**：P4.2（M7 Mock 产物）/ P4.3（M5 编辑器结果落库后归档）/ P4.6（导航表 → `table_ref`）都走同一条入口——把 `kind` 与 `analysis` 填上即可。
+
 ### 2026-09-20 — Phase 4 第一刀（P4.1 第一半）：`Analysis` 档的指纹口径与登记
 
 > R4 的裁决**已落地**：**指纹 = 定义 + 列结构，行数只作元信息**。本刀做的是**口径与登记**；

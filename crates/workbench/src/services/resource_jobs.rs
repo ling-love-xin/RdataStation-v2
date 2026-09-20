@@ -25,6 +25,7 @@ use std::sync::{Mutex, OnceLock};
 use chrono::Utc;
 use engine::persistence::project_db::ProjectDatabaseManager;
 
+use analytics_resource::analysis::AnalysisFacts;
 use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
 use analytics_resource::dialogs::tag::{TagChoice, TagDialogSeed};
 use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed};
@@ -57,6 +58,11 @@ struct ArchiveJob {
     request: ArchiveRequest,
     /// 历史内容保留策略（设置项 `resources.keep_versions`，在入队时从主线程读好）。
     keep_versions: KeepVersions,
+    /// 归档前是否**探一次数据文件**（`analysis` 档的采集侧）。
+    ///
+    /// 为什么要过作业：探测要连 DuckDB、要读文件——不能在事件路径上做（那会卡 UI）。
+    /// 探测失败**降级为文件型**而不是拒归档：文件先安全落进 `resources/` 比"结构没探到就不让归档"重要。
+    analysis_probe: bool,
 }
 
 /// 一次取回（检出）任务。
@@ -533,8 +539,41 @@ async fn open_service(
 }
 
 /// 执行一次归档。
+/// 探一个数据文件，拼成 [`AnalysisFacts`]（工作线程上执行）。
+///
+/// 用全局内存 DuckDB 连接（`DuckDBManager::global`）：它已经配好扩展目录与文件读取器，
+/// 不必为一个探测另开库；锁住期间只读文件，不与其它分析争写。
+fn probe_analysis_facts(path: &std::path::Path) -> Result<AnalysisFacts, String> {
+    let path_text = path.to_string_lossy().to_string();
+    let definition = engine::duckdb::file_select_sql(&path_text)
+        .ok_or_else(|| format!("没有可用的读取器：{path_text}"))?;
+    let conn = engine::duckdb::DuckDBManager::get_or_create_in_memory()
+        .map_err(|e| format!("打开分析引擎失败：{e}"))?;
+    let guard = conn.lock().map_err(|e| format!("分析引擎繁忙：{e}"))?;
+    let probe = engine::duckdb::probe_file(&guard, &path_text).map_err(|e| e.to_string())?;
+    Ok(AnalysisFacts::from_probe(
+        Some(definition),
+        probe.columns,
+        probe.row_count,
+    ))
+}
+
 async fn run_archive(job: &ArchiveJob) -> OpOutcome {
     let name = job.request.name.clone();
+    // 采集侧（P4.1 第二半）：数据文件先探一次结构，指纹按“定义 + 结构”走。
+    let mut request = job.request.clone();
+    if job.analysis_probe {
+        match probe_analysis_facts(&request.source_path) {
+            Ok(facts) => request.analysis = Some(facts),
+            Err(reason) => {
+                // 降级而不是拒归档：文件先安全落进 `resources/`，按文件型登记指纹。
+                tracing::warn!(error = %reason, path = %request.source_path.display(),
+                    "数据文件探测失败，按文件型归档");
+                request.kind = ArchiveKind::File;
+                request.analysis = None;
+            }
+        }
+    }
     let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
         Ok(service) => service,
         Err(reason) => {
@@ -544,7 +583,7 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
             };
         }
     };
-    match service.archive(job.request.clone()).await {
+    match service.archive(request.clone()).await {
         Ok(outcome) => {
             // 首次归档才给撤销凭据：再归档的"撤销"是版本回退（服务层也会挡），不在这条路上。
             let undo = job
@@ -1417,6 +1456,7 @@ pub fn enqueue_archive(
     read_only: bool,
     request: ArchiveRequest,
     keep_versions: KeepVersions,
+    analysis_probe: bool,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Archive(ArchiveJob {
@@ -1424,6 +1464,7 @@ pub fn enqueue_archive(
         read_only,
         request,
         keep_versions,
+        analysis_probe,
     }));
 }
 

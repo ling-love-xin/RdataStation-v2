@@ -41,6 +41,25 @@ pub struct AnalysisFacts {
 }
 
 impl AnalysisFacts {
+    /// 用**探到的文件事实**拼一份分析表事实（engine `probe_file` 的回形 → M6 的口径）。
+    ///
+    /// 为何要这层转：engine 那边只认「列名 + 类型」的元组（它不能依赖 M6 的
+    /// `ColumnSpec`——依赖方向是单向的），转换放在这里，两边的形状各归各。
+    pub fn from_probe(
+        definition_sql: Option<String>,
+        columns: Vec<(String, String)>,
+        row_count: Option<i64>,
+    ) -> Self {
+        Self {
+            definition_sql,
+            columns: columns
+                .into_iter()
+                .map(|(name, data_type)| ColumnSpec { name, data_type })
+                .collect(),
+            row_count,
+        }
+    }
+
     /// 列数（`i32`：与库里的列宽一致；列数过 `i32` 是不可能的，直接截断）。
     pub fn column_count(&self) -> i32 {
         self.columns.len().min(i32::MAX as usize) as i32
@@ -160,6 +179,31 @@ mod tests {
     }
 
     /// 文案是单一来源：两句话各不相同，且都不提“行数变了”（那不算内容变化）。
+    #[test]
+    fn from_probe_maps_the_engine_shape_into_the_fingerprint_shape() {
+        let facts = AnalysisFacts::from_probe(
+            Some("SELECT * FROM read_csv_auto('a.csv')".to_string()),
+            vec![
+                ("id".to_string(), "BIGINT".to_string()),
+                ("name".to_string(), "VARCHAR".to_string()),
+            ],
+            Some(3),
+        );
+        assert_eq!(facts.column_count(), 2);
+        assert_eq!(facts.structure_digest(), "id\tBIGINT\nname\tVARCHAR");
+        assert_eq!(facts.row_count, Some(3));
+        // 同结构两次探测（行数不同）→ 同一指纹（这正是 R4 要的口径）。
+        let again = AnalysisFacts::from_probe(
+            facts.definition_sql.clone(),
+            vec![
+                ("id".to_string(), "BIGINT".to_string()),
+                ("name".to_string(), "VARCHAR".to_string()),
+            ],
+            Some(999),
+        );
+        assert_eq!(facts.fingerprint(), again.fingerprint());
+    }
+
     #[test]
     fn notes_say_what_the_fingerprint_really_covers() {
         assert!(FINGERPRINT_HINT.contains("行数"));

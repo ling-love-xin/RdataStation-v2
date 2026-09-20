@@ -36,11 +36,13 @@ pub mod accel;
 pub mod federation;
 pub mod row_to_arrow;
 pub mod value_text;
+pub mod file_probe;
 pub mod file_reader;
 
 // 导出所有核心类型
 pub use executor::{DuckDBExecutor, DuckDBResult};
 pub use explain::{ExplainAnalyzer, PlanNode, PlanNodeType};
+pub use file_probe::{FileProbe, file_select_sql, probe_file};
 pub use file_reader::file_reader_function;
 pub use federation::{DataSourceConfig, DataSourceType, FederationManager};
 pub use fts::FTSManager;
