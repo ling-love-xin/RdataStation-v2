@@ -380,11 +380,15 @@ pub trait ResourcesHost: 'static {
     fn request_create_group(&self, window: &mut Window, cx: &mut App);
     /// 重命名分组（分组头右键）。
     fn request_rename_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
-    /// 重命名一条存档的**显示名**（行右键「重命名…」/ `F2`）。
+    /// 重命名一条存档的**显示名**（行右键「重命名…」/ `F2` / 详情头部点名字）。
     ///
     /// 只收 id：当前显示名由宿主从面板快照取（与 `request_rename_group` 同一口径），
     /// 宿主拿到后开那个单输入的小对话框（`dialogs::rename`），提交才写库。
     fn request_rename(&self, resource_id: &str, window: &mut Window, cx: &mut App);
+    /// 编辑一条存档的**别名**（详情头部点别名 / 「＋ 别名」）。
+    ///
+    /// 与 `request_rename` 同一形状（同一个对话框、只换字段）：留空 = **清除别名**。
+    fn request_edit_alias(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 记下 / 清掉本项目的**归档默认分组**（分组头右键；设置项 `resources.default_group`）。
     ///
     /// `None` = 未分组（也即“没默认”）：归档对话框就不再预选任何分组。

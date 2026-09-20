@@ -224,6 +224,7 @@ enum Job {
     TagAction(TagActionJob),
     GroupAction(GroupActionJob),
     Rename(RenameJob),
+    SetAlias(SetAliasJob),
 }
 
 /// 改显示名（不需要对话框取数：目标与当前名字都在事件路径上拿到）。
@@ -232,6 +233,14 @@ struct RenameJob {
     read_only: bool,
     resource_id: String,
     name: String,
+}
+
+/// 改别名（同上；空串 = 清除）。
+struct SetAliasJob {
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    alias: String,
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -258,6 +267,8 @@ pub enum OpOutcome {
     },
     /// 已重命名：显示名（新）——回执只说结果，旧名由事件路径从面板快照取。
     Renamed { name: String },
+    /// 别名已更新（`note` 已是一句有信息量的话：设了 / 清了）。
+    AliasDone { note: String },
     /// 已撤销归档：显示名（本体已回原位）。
     Undone { name: String },
     /// 已移入回收站：显示名列表（多条时文案只说数量）。
@@ -428,6 +439,12 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 // 改的是行上的显示名（排序也看它）：重取主列表。
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
+            Job::SetAlias(job) => {
+                let outcome = rt.block_on(run_set_alias(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 别名进详情头部：重取主列表（详情就在快照里）。
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
         }
         jobs().pending.fetch_sub(1, Ordering::SeqCst);
     }
@@ -454,6 +471,33 @@ async fn run_rename(job: &RenameJob) -> OpOutcome {
         },
         Err(error) => OpOutcome::Failed {
             action: "重命名",
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// 改一条存档的别名（工作线程上执行）：空串 = 清除（存 NULL）。
+async fn run_set_alias(job: &SetAliasJob) -> OpOutcome {
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "编辑别名",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+    let alias = (!job.alias.trim().is_empty()).then(|| job.alias.trim().to_string());
+    match store.set_alias(&job.resource_id, alias.as_deref()).await {
+        Ok(resource) => OpOutcome::AliasDone {
+            note: match resource.alias.as_deref() {
+                Some(alias) => format!("已把「{}」的别名设为「{alias}」", resource.name),
+                None => format!("已清除「{}」的别名", resource.name),
+            },
+        },
+        Err(error) => OpOutcome::Failed {
+            action: "编辑别名",
             reason: error.to_string(),
         },
     }
@@ -1524,6 +1568,22 @@ pub fn enqueue_rename(project_root: PathBuf, read_only: bool, resource_id: Strin
         read_only,
         resource_id,
         name,
+    }));
+}
+
+/// 提交一次别名编辑（**事件路径**调用：详情头部点别名）。空串 = 清除。
+pub fn enqueue_set_alias(
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    alias: String,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::SetAlias(SetAliasJob {
+        project_root,
+        read_only,
+        resource_id,
+        alias,
     }));
 }
 

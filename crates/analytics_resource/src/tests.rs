@@ -935,4 +935,66 @@ mod tests {
 
         cleanup(dir);
     }
+
+    /// 改别名同样只动一列：不涨版本、不写快照；空串 = 清除（存 NULL，不存空串）。
+    #[tokio::test]
+    async fn t020_alias_is_display_only_and_empty_clears_it() {
+        let (store, dir) = create_test_store().await;
+        let created = store
+            .insert_archive(NewArchiveInput {
+                resource_type: "file".to_string(),
+                name: "dau.sql".to_string(),
+                alias: None,
+                kind: ArchiveKind::File,
+                content_hash: "1122334455667788".to_string(),
+                file_rel_path: "reports/dau.sql".to_string(),
+                file_size: Some(2048),
+                binding: ArchiveBinding::default(),
+                scope: "project".to_string(),
+            })
+            .await
+            .expect("insert archive");
+        assert_eq!(created.alias, None, "归档时没填就是没有");
+
+        let aliased = store
+            .set_alias(&created.id, Some("月报"))
+            .await
+            .expect("set alias");
+        assert_eq!(aliased.alias.as_deref(), Some("月报"));
+        assert_eq!(aliased.name, created.name, "别名不动显示名（两回事）");
+        assert_eq!(
+            aliased.version, created.version,
+            "别名不是内容变更：版本不涨"
+        );
+        assert_eq!(aliased.content_hash, created.content_hash);
+        assert_eq!(aliased.file_rel_path, created.file_rel_path);
+        assert!(
+            store
+                .get_resource_versions(&created.id)
+                .await
+                .expect("versions")
+                .is_empty(),
+            "不得写版本快照"
+        );
+
+        // 首尾空格被去掉；空串 / 全空格 = 清除（回到 NULL，而不是存一个空别名）。
+        let trimmed = store
+            .set_alias(&created.id, Some("  季度月报  "))
+            .await
+            .expect("trim");
+        assert_eq!(trimmed.alias.as_deref(), Some("季度月报"));
+        let cleared = store
+            .set_alias(&created.id, Some("   "))
+            .await
+            .expect("clear");
+        assert_eq!(cleared.alias, None);
+
+        store
+            .soft_delete_archive(&created.id)
+            .await
+            .expect("soft delete");
+        assert!(store.set_alias(&created.id, Some("x")).await.is_err());
+
+        cleanup(dir);
+    }
 }

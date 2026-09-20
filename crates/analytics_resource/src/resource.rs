@@ -337,6 +337,31 @@ impl AnalyticsResourceStore {
         Self::get_resource_by_id_on(inner, id)
     }
 
+    /// 改**别名**（详情面板头部点别名；原型 §3.1）。
+    ///
+    /// 与 [`rename_resource`](Self::rename_resource) 同一取舍：只动 `alias` 一列，
+    /// **不涨版本、不写快照**——别名是**给人看的第二个叫法**，不是内容。`None`（或空串）
+    /// = 清除别名（存 NULL，不存空串：空串会在界面上变成“有一行空别名”）。
+    pub async fn set_alias(
+        &self,
+        id: &str,
+        alias: Option<&str>,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let alias = alias.map(str::trim).filter(|value| !value.is_empty());
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let affected = inner
+            .execute(
+                "UPDATE analytics_resources SET alias = ? WHERE id = ? AND deleted_at IS NULL",
+                rusqlite::params![alias, id],
+            )
+            .map_err(|e| persistence_err("alias", e))?;
+        if affected == 0 {
+            return Err(persistence_err("alias", "资源不存在或已删除"));
+        }
+        Self::get_resource_by_id_on(inner, id)
+    }
+
     /// 再归档：把新内容指纹写入已有存档行（版本 +1），`parent_version_id` 指向写前快照行。
     ///
     /// 只动索引行，**不碰文件系统**：旧内容的版本副本与本体覆盖由调用方（归档服务）负责。

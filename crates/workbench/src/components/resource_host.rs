@@ -41,7 +41,9 @@ use analytics_resource::dialogs::checkout::{
 };
 use analytics_resource::dialogs::group::{GroupNameEvent, GroupNameKind, open_group_name_dialog};
 use analytics_resource::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
-use analytics_resource::dialogs::rename::{RenameSeed, open_rename_dialog};
+use analytics_resource::dialogs::rename::{
+    RenameField, RenameSeed, open_rename_dialog, rename_placeholder,
+};
 use analytics_resource::filter::{SortField, SortOrder};
 use analytics_resource::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
@@ -274,6 +276,24 @@ impl WorkbenchResourceHost {
             .iter()
             .find(|row| row.id == resource_id)
             .map(|row| row.name.clone())
+    }
+
+    /// 一条存档的当前**别名**（别名对话框的预填值；`None` = 没别名）。
+    ///
+    /// 从**详情**取（头部展示的就是它）：与 `row_name` 同一口径（不为了一个字段再查库）。
+    fn row_alias(&self, resource_id: &str, cx: &App) -> Option<Option<String>> {
+        let entity = self
+            .shared
+            .resources_panel
+            .borrow()
+            .as_ref()
+            .and_then(|panel| panel.upgrade())?;
+        entity
+            .read(cx)
+            .snapshot()
+            .details
+            .get(resource_id)
+            .map(|detail| detail.alias.clone())
     }
 
     /// 本体绝对路径（越界 / 点前缀守卫由 `PayloadStore::resolve` 把关）。
@@ -758,7 +778,8 @@ impl ResourcesHost for WorkbenchResourceHost {
         let read_only = self.read_only();
         let resource_id = resource_id.to_string();
         let input = cx.new(|cx| {
-            gpui_kit::component::input::InputState::new(window, cx).placeholder("显示名")
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder(rename_placeholder(RenameField::DisplayName))
         });
         let prefilled = current.clone();
         input.update(cx, |input, cx| input.set_value(prefilled, window, cx));
@@ -768,6 +789,7 @@ impl ResourcesHost for WorkbenchResourceHost {
             RenameSeed {
                 id: resource_id.clone(),
                 name: current.clone(),
+                field: RenameField::DisplayName,
             },
             input,
             move |event, _window, cx| {
@@ -783,6 +805,50 @@ impl ResourcesHost for WorkbenchResourceHost {
                     format!("资产库：正在把「{current}」改名为「{}」…", event.name),
                     cx,
                 );
+            },
+        );
+    }
+
+    fn request_edit_alias(&self, resource_id: &str, window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法编辑别名", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改别名", cx);
+            return;
+        }
+        // 当前别名从**详情**取（头部就展示它）；取不到（面板还没收到这条详情）就当空的。
+        let current = self
+            .row_alias(resource_id, cx)
+            .unwrap_or_default()
+            .unwrap_or_default();
+        let shared = self.shared.clone();
+        let read_only = self.read_only();
+        let resource_id = resource_id.to_string();
+        let input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .placeholder(rename_placeholder(RenameField::Alias))
+        });
+        let prefilled = current.clone();
+        input.update(cx, |input, cx| input.set_value(prefilled, window, cx));
+        open_rename_dialog(
+            window,
+            cx,
+            RenameSeed {
+                id: resource_id.clone(),
+                name: current.clone(),
+                field: RenameField::Alias,
+            },
+            input,
+            move |event, _window, cx| {
+                resource_jobs::enqueue_set_alias(
+                    root.clone(),
+                    read_only,
+                    event.id.clone(),
+                    event.name.clone(),
+                );
+                shared.refresh_resources(cx);
+                say(&shared, "资产库：正在更新别名…", cx);
             },
         );
     }

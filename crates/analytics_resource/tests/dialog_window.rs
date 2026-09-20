@@ -36,7 +36,7 @@ use rds_analytics_resource::dialogs::index_repair::{
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
-use rds_analytics_resource::dialogs::rename::{RenameSeed, open_rename_dialog};
+use rds_analytics_resource::dialogs::rename::{RenameField, RenameSeed, open_rename_dialog};
 use rds_analytics_resource::dialogs::tag::{
     TagChoice, TagDialogSeed, TagDialogState, open_tag_dialog,
 };
@@ -675,6 +675,7 @@ fn rename_dialog_prefills_and_only_submits_a_real_change(cx: &mut TestAppContext
                 RenameSeed {
                     id: "ar_1".to_string(),
                     name: "月报".to_string(),
+                    field: RenameField::DisplayName,
                 },
                 input,
                 move |event, _window, _cx| {
@@ -707,6 +708,7 @@ fn rename_dialog_prefills_and_only_submits_a_real_change(cx: &mut TestAppContext
                 RenameSeed {
                     id: "ar_1".to_string(),
                     name: "月报".to_string(),
+                    field: RenameField::DisplayName,
                 },
                 input,
                 move |event, _window, _cx| {

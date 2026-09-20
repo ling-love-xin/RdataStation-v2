@@ -1,12 +1,24 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三 / 十四 / 十五刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、四个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**、**详情面板的内容预览**、**默认分组**均可用，**150 单测 + 34 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 ~ 十六刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、四个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名与别名（`F2` / 行右键 / 详情头部）**、**详情面板的内容预览**、**默认分组**均可用，**152 单测 + 35 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第十六刀（P1.3 收尾）：详情头部可编辑（显示名 / 别名）
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V26 | **数据层：`store.set_alias(id, alias)`**——只动 `alias` 一列（**不涨版本、不写快照**）；首尾空格去掉，**空串 = 置 NULL 清除** | `src/resource.rs` | 别名是“给人看的第二个叫法”，不是内容（与 `rename_resource` 同一取舍）；存空串会在界面上变成“有一行空别名” |
+| V27 | **对话框扩为两个字段**：`RenameField::{DisplayName, Alias}` 进 `RenameSeed`（标题 / 占位符 / 提示 / 闸门都按字段分），`RenameEvent` 带回字段；闸门 `rename_gate(field, current, value)`：显示名空名挡下（复用 `name_hint`）、**别名空串是合法的（= 清除）** | `src/dialogs/rename.rs` | 两个字段共用同一个形状（一个输入框 + 一行提示），不另开对话框；“空值算错还是算清除”这个分叉只在闸门里说一次 |
+| V28 | **详情头部两个可点入口**：名字 → 「重命名显示名」（与 `F2` / 行右键**同一条链路**）；别名 → 「编辑别名」（没别名时显示「＋ 别名」）。两者都是 ghost `Button`（可键盘达）+ tooltip；只读项目不摆，**本体缺失时名字不给改**（别名仍可编——它不碰本体）。宿主侧 `request_edit_alias` → `Job::SetAlias` → 回执 `AliasDone`（“已把「月报」的别名设为「X」”/“已清除「月报」的别名”） | `src/detail_view.rs`、`src/resource_view.rs`（端口）、`crates/workbench/src/{components/resource_host.rs,services/resource_jobs.rs,panels/resources.rs}` | 原型 §3.1“头部可编辑（改显示名 / 别名）”；头部改名与行上改名共用一个端口与一个对话框——两个入口，一套实现 |
+| 测试 | +1 存储层（t020：只动别名 / 不涨版本 / 空串清除 / 软删行拒写）、+1 对话框闸门（两个字段的空值与“值没变”）、+1 详情窗口（入口随可写 / 状态出场） | `src/tests.rs`、`src/dialogs/rename.rs`、`tests/panel_window.rs` | “空名”与“空别名”是两种语义，测试分开钉；入口的可点性按状态断言（只读 / 缺失） |
+| 验证 | `cargo test -j 2 -p rds-analytics-resource` → **152 单测 + 25 面板窗口 + 10 对话框窗口全绿**；`rds-workbench --lib` 124 全绿；`cargo check -j 2 --workspace --all-targets` 无错 | — | 基线 150 / 24 / 10 |
+
+> 未验证的一跳：详情头部那个按钮的**点击 → 宿主端口**本身没有机器断言（仓库里 `simulate_click` 在弹层场景下偶发失手，已有约定就不硬上）；覆盖到的是“入口按状态出场”+ 存储层语义 + 闸门，与其它头部入口（标签 chip 的 ×）同一口径。
 
 ### 2026-09-20 — Phase 2 第十五刀（P2.4 收口）：默认分组（案 A：显式设置）
 
@@ -710,7 +722,7 @@
 | --- | --- | --- | --- |
 | P1.1 | 面板骨架：面板头（标题 + `＋▾` + `⋯`）、工具栏（搜索 / 筛选 / 排序）、行列表（虚拟化）、底部状态行 | `src/resource_view.rs`、`workbench/src/panels/` | 切换活动栏可见；`>100` 项流畅；状态行计数正确 |
 | P1.2 | 行渲染：kind 图标（`muted`）+ 显示名 + 版本徽标（v1 不显示）+ **强度徽标** + 尾部字段（按字段优先级规则）；**重命名显示名**（行右键 `F2`，不重命名文件，见第十三刀） | `src/resource_view.rs` | 三类 kind 行可区分；240px 无异常折行（溢出省略 + tooltip） |
-| P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels/` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
+| P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区，**头部可编辑（显示名 / 别名）**；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels/` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
 | P1.4 | **归档入口**：草稿箱右键「归档为存档…」+ 面板头「从草稿箱归档…」；确认对话框（显示名 / 目标位置只读 / 分组 / 标签 / 来源连接自动带出 / 保留历史 / 冲突处理） | `src/dialogs/archive.rs`、`crates/scratchpad/src/…`（发起） | 归档后草稿消失、资源只读、两侧面板同步刷新（事件链路通） |
 | P1.5 | **取回（检出）**：右键 → 对话框（目标名 / 目标目录 / 是否打开）→ 复制到草稿箱 + 草稿侧记 `derived_from_resource_id` | `src/dialogs/checkout.rs`、`scratchpad` | 本体不动；重复取回自动改名避让 |
 | P1.6 | 只读三重守卫：写入 API 拒绝（应用守卫）+ 编辑器只读打开 + 文件系统属性（辅助） | `payload.rs`、`workbench` EditorPanel | 任何写入路径返回明确错误文案；编辑器以只读态打开 |

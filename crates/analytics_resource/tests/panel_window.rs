@@ -124,6 +124,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("rename:{resource_id}"));
     }
+    fn request_edit_alias(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("edit-alias:{resource_id}"));
+    }
     fn request_rename_group(&self, folder_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -1583,6 +1588,79 @@ fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
         "仅元信息时不该摆空块"
     );
     drop(meta_only);
+}
+
+/// 详情头部可编辑（原型 §3.1）：名字与别名都是可点入口；只读项目 / 本体缺失时不摆。
+#[gpui_kit::test]
+fn detail_header_offers_rename_and_alias_only_when_writable(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+
+    // 可写 + 没别名：两个入口都在（别名那个显示为「＋ 别名」）。
+    let (writable, cx) = cx.add_window_view({
+        let host = host.clone();
+        let detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1));
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-detail-rename").is_some(),
+        "名字可点改"
+    );
+    assert!(
+        cx.debug_bounds("archive-detail-alias").is_some(),
+        "没别名时也给入口"
+    );
+    drop(writable);
+
+    // 只读项目：两个入口都不摆（点了也写不进去）。
+    let (read_only, cx) = cx.add_window_view({
+        let host = host.clone();
+        let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1));
+        detail.alias = Some("月报".to_string());
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: true,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-detail-rename").is_none());
+    assert!(cx.debug_bounds("archive-detail-alias").is_none());
+    drop(read_only);
+
+    // 本体缺失：名字不给改（那一行的问题先去索引修复；与右键菜单置灰同口径），
+    // 但别名仍可编（它不碰本体）。
+    let (missing, cx) = cx.add_window_view({
+        let host = host.clone();
+        let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Missing, 1));
+        detail.alias = Some("月报".to_string());
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-detail-rename").is_none());
+    assert!(cx.debug_bounds("archive-detail-alias").is_some());
+    drop(missing);
 }
 
 #[gpui_kit::test]

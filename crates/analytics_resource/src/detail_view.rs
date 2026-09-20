@@ -288,6 +288,65 @@ fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, c
     section
 }
 /// 渲染详情面板内容（只读信息区 + 标签分区 + 动作区 + 危险区）。
+/// 头部显示名：可点时是个 ghost 按钮（`F2` 的同一条链路），没宿主 / 只读项目时是纯文本。
+///
+/// 缺失本体（`Missing`）的行**不给改名入口**：那一行的问题先得在索引修复里解决
+/// （与右键菜单里“本体异常则置灰”同一口径）。
+fn name_link(detail: &ArchiveDetail, actions: Option<&DetailActions>, foreground: Hsla) -> Div {
+    let base = div()
+        .min_w_0()
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_ellipsis()
+        .text_color(foreground);
+    let editable = actions.is_some_and(|a| !a.read_only) && detail.status != ArchiveStatus::Missing;
+    let Some(actions) = actions.filter(|_| editable) else {
+        return base.child(detail.name.clone());
+    };
+    let host = actions.host.clone();
+    let id = detail.id.clone();
+    base.child(
+        Button::new("archive-detail-rename")
+            .ghost()
+            .xsmall()
+            .debug_selector(|| "archive-detail-rename".to_string())
+            .label(detail.name.clone())
+            .text_color(foreground)
+            .tooltip("重命名显示名（与 `F2` 同一条路；文件名与路径不变）")
+            .on_click(move |_, window, cx| host.request_rename(&id, window, cx)),
+    )
+}
+
+/// 头部别名：有值就显示它（可点改），没值就只给一个「＋ 别名」入口；只读 / 无宿主时只展示。
+fn alias_line(
+    detail: &ArchiveDetail,
+    actions: Option<&DetailActions>,
+    alias: &str,
+    muted: Hsla,
+) -> Div {
+    let label = if alias.is_empty() {
+        "＋ 别名".to_string()
+    } else {
+        alias.to_string()
+    };
+    let editable = actions.is_some_and(|a| !a.read_only);
+    let Some(actions) = actions.filter(|_| editable) else {
+        return div().text_xs().text_color(muted).child(label);
+    };
+    let host = actions.host.clone();
+    let id = detail.id.clone();
+    div().text_xs().text_color(muted).child(
+        Button::new("archive-detail-alias")
+            .ghost()
+            .xsmall()
+            .debug_selector(|| "archive-detail-alias".to_string())
+            .label(label)
+            .text_color(muted)
+            .tooltip("编辑别名（留空 = 清除）")
+            .on_click(move |_, window, cx| host.request_edit_alias(&id, window, cx)),
+    )
+}
+
 /// 「内容预览」分区（原型 §3.1）：文本给前 20 行（等宽、只读、溢出不折行），其余给一句说明。
 ///
 /// 为何不放进 `detail_rows` 的表行：这里是**多行等宽块**，与「标签 / 值」两列不是一回事；
@@ -380,14 +439,15 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                     .text_color(muted),
             )
             .child(
+                // 显示名可点改（原型 §3.1「头部可编辑」）：与 `F2` / 行右键**同一条链路**
+                // （同一个对话框 + 同一个宿主端口），只是入口在详情头部。
+                //
+                // 为何用 `Button::ghost()` 而不是给文本挂 `on_click`：可点元素一律语义控件
+                // （自带 hover / 焦点 / 键盘），这条在仓库里是硬约束（见 rds-ui-spec）。
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_ellipsis()
-                    .text_color(foreground)
-                    .child(detail.name.clone()),
+                    .child(name_link(detail, actions.as_ref(), foreground)),
             )
             .child(
                 div()
@@ -398,7 +458,10 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
             .child(div().text_xs().text_color(badge_color).child(badge)),
     );
     if let Some(alias) = detail.alias.as_deref() {
-        header = header.child(div().text_xs().text_color(muted).child(alias.to_string()));
+        header = header.child(alias_line(detail, actions.as_ref(), alias, muted));
+    } else if actions.as_ref().is_some_and(|a| !a.read_only) {
+        // 没别名时给一个轻量入口（只读项目不给：点了也写不进去）。
+        header = header.child(alias_line(detail, actions.as_ref(), "", muted));
     }
     if detail.status == ArchiveStatus::Missing {
         // 缺失行不给"看起来正常"的头部：名称同步转弱。
