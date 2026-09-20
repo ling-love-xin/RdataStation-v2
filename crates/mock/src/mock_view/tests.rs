@@ -1572,6 +1572,65 @@ fn column_filter_narrows_the_field_list(cx: &mut TestAppContext) {
     assert_eq!(visible(cx).len(), 3, "清空后回到全部");
 }
 
+/// 表头的排序入口**真点击**：箭头在表头右端，点它才会重查（不是点表头正文）。
+///
+/// 组件 0.6.1 的分工：`on_col_head_click` 只做**列选择**（我们关掉了），排序挂在
+/// `render_sort_icon` 上——所以「点列头就排序」是句错话，箭头才是按钮。
+/// 箭头几何是组件的内部事（内距 / 尺寸都可能变），用例从表头右端往左探几次，
+/// 只要有一次落在箭头上就算命中；行号槽那一侧探多少次都不该有反应。
+///
+/// 表头自己挂了 id 与悬停全文（`render_th`），本用例同时看住「点击还在」。
+#[gpui_kit::test]
+fn preview_header_sort_icon_is_really_clickable(cx: &mut TestAppContext) {
+    const PROBE: [f32; 7] = [2., 6., 10., 14., 18., 22., 26.];
+
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    draw(cx);
+
+    // `debug_selector` 只是给用例找坐标（`.id(...)` 不登记坐标）
+    for slot in ["mock-preview-th-0", "mock-preview-th-1"] {
+        assert!(
+            cx.debug_bounds(slot).is_some(),
+            "{slot} 应登记坐标（行号槽也走同一个 render_th）"
+        );
+    }
+    assert!(rec.ordered.borrow().is_empty(), "还没点过就不该重查");
+
+    // 行号槽：右侧没有箭头，点多少次都不该有反应
+    let slot = cx.debug_bounds("mock-preview-th-0").expect("行号槽坐标");
+    for offset in PROBE {
+        cx.simulate_click(
+            gpui_kit::Point::new(slot.right() + gpui_kit::px(offset), slot.center().y),
+            gpui_kit::Modifiers::default(),
+        );
+    }
+    assert_eq!(rec.ordered.borrow().len(), 0, "行号槽不给排序");
+
+    // 数据列：右端往左探，命中箭头即重查
+    let head = cx.debug_bounds("mock-preview-th-1").expect("数据列坐标");
+    let mut clicked = false;
+    for offset in PROBE {
+        cx.simulate_click(
+            gpui_kit::Point::new(head.right() + gpui_kit::px(offset), head.center().y),
+            gpui_kit::Modifiers::default(),
+        );
+        if !rec.ordered.borrow().is_empty() {
+            clicked = true;
+            break;
+        }
+    }
+    assert!(clicked, "表头右端应有可点的排序箭头（探了 {PROBE:?}）");
+    assert_eq!(rec.ordered.borrow()[0].1, "id");
+}
+
 /// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：
 /// 草稿 tab 上提交生成任务；结果表 tab 上什么都不做（D38：它是产物，要改回草稿改完再生成）。
 ///

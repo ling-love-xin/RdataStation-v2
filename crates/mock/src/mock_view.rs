@@ -5465,8 +5465,8 @@ impl MockDetailView {
                 // 只读取样：行选 / 列选 / 拖列都不需要打开；列宽保留可拖（默认开）——
                 // 这正是手搓版缺的：值被截断时能拖开看全。
                 //
-                // 排序开着：表头点击 = **按该列重查临时表**（不是就地重排取样窗口，
-                // 重查在面板里，见 `PreviewTableDelegate::perform_sort`）。
+                // 排序开着：**表头右端的箭头**点一下 = 按该列重查临时表（不是就地重排取样窗口，
+                // 重查在面板里，见 `PreviewTableDelegate::perform_sort`）——与结果集网格同一处入口。
                 .col_movable(false)
                 .row_selectable(false)
                 .col_selectable(false)
@@ -6410,10 +6410,10 @@ impl Render for MockDetailView {
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
-        // 排序的入口提示：表头箭头与右键菜单都能点，但两处都很轻，先说一句
+        // 排序的入口提示：箭头与右键都能点，但两处都很轻，先说一句
         if preview_sort_label.is_some() {
             body = body.child(div().text_xs().text_color(muted).child(
-                "排序是重查临时表得来的（全局前 N 行）；点表头再点几下可换向 / 取消，右键同一套。",
+                "排序是重查临时表得来的（全局前 N 行）；点表头右端的箭头可换向 / 取消，右键同一套。",
             ));
         }
 
@@ -6689,7 +6689,42 @@ impl TableDelegate for PreviewTableDelegate {
         cell.child(text)
     }
 
-    /// 表头点击 → 按这一列**重查临时表**（不是把手上这几行换个顺序）。
+    /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补两件事——
+    /// **截断**与**悬停全文**。
+    ///
+    /// 为什么值得自己画：列名常常比默认列宽（100px）长，截断之后一样没有任何办法知道它是什么；
+    /// 单元格取值已经有悬停全文（`preview_cell_tooltip`），表头同样需要。
+    /// 行号槽（`#`）不挂悬停——它不是数据。
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let name = if Self::is_row_number(col_ix) {
+            "#".to_string()
+        } else {
+            self.columns.get(col_ix - 1).cloned().unwrap_or_default()
+        };
+        // `debug_selector` 是给用例找这个表头用的（`.id(...)` 不登记坐标）：
+        // 「点列头还能排序」靠真点击验证，不靠直接调 `perform_sort`。
+        let head = div()
+            .size_full()
+            .truncate()
+            .debug_selector(move || format!("mock-preview-th-{col_ix}"))
+            .child(name.clone());
+        if Self::is_row_number(col_ix) || name.is_empty() {
+            return head.into_any_element();
+        }
+        head.id(("mock-preview-th", col_ix))
+            .tooltip(move |window, cx| preview_cell_tooltip(name.clone(), window, cx))
+            .into_any_element()
+    }
+
+    /// 表头的**排序箭头**点击 → 按这一列**重查临时表**（不是把手上这几行换个顺序）。
+    ///
+    /// 入口是表头右端那个箭头，不是表头正文：组件 0.6.1 的 `on_col_head_click` 只做列选择
+    /// （我们关掉了），排序只挂在 `render_sort_icon` 上——与结果集网格同一处入口。
     ///
     /// 组件库已经把方向循环算好了（默认 → 降序 → 升序 → 默认）并先改了自己的箭头，
     /// 这里做两件事：
