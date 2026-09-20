@@ -45,6 +45,7 @@ use gpui_kit::assets::IconName as CatalogIcon;
 
 use crate::commands;
 use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
+use crate::dnd::{self, ArchiveDragGhost, ArchiveDragPayload, GroupDrop};
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
 use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
 use crate::ui;
@@ -694,11 +695,14 @@ impl ArchiveListDelegate {
             .gap_2()
             .when(depth > 0, |row| row.pl_2())
             .cursor_pointer()
-            .on_click(move |_, _window, cx| {
-                // 头不是行：不参与选中（面板的选中永远指向一条存档）。
-                cx.stop_propagation();
-                let key = key_owned.clone();
-                let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
+            .on_click({
+                let panel = panel.clone();
+                move |_, _window, cx| {
+                    // 头不是行：不参与选中（面板的选中永远指向一条存档）。
+                    cx.stop_propagation();
+                    let key = key_owned.clone();
+                    let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
+                }
             })
             .child(
                 // 2px 分组色条：宽取 `ui::GROUP_BAR_WIDTH`（= 外壳的 `NAV_GROUP_BAR_WIDTH`，
@@ -730,6 +734,28 @@ impl ArchiveListDelegate {
                     .text_color(muted)
                     .child(format!("{count}")),
             );
+        // 落点：分组头接住存档行（原型 §3.2「拖动行到分组头 = 移动」）。
+        // 高亮用 `list_active`（与选中底同 token，见 `ui-constraints.md` §8.3）：
+        // 拖拽期间这行就是「东西要进到这里」的那个容器。
+        let drop = dnd::group_drop_target(key);
+        let head = if matches!(drop, GroupDrop::NotATarget) {
+            head
+        } else {
+            head.drag_over::<ArchiveDragPayload>(|style, _, _, cx| {
+                style.bg(cx.theme().colors.list_active)
+            })
+            .on_drop({
+                let panel = panel.clone();
+                let drop = drop.clone();
+                move |payload: &ArchiveDragPayload, window, app| {
+                    let ids = payload.ids.clone();
+                    let drop = drop.clone();
+                    let _ = panel.update(app, |panel, cx| {
+                        panel.drop_rows_onto_group(&ids, drop.clone(), window, cx)
+                    });
+                }
+            })
+        };
         // 右键菜单只给真分组（「全部分组」与「未分组」是虚拟分组，没有可改的东西）。
         // `context_menu` 包一层（`ContextMenu<..>` 不是 `Div`）→ 两条分支各自转 `AnyElement` 后再拼。
         let head: AnyElement = if is_real_group {
@@ -815,7 +841,7 @@ impl ListDelegate for ArchiveListDelegate {
         // 删除 / 移动 / 打标签改为对**整个选择集**生效并带数量。
         let multi_count = self.multi_ids.len();
         let multi_selected = self.multi_selected(&row.id);
-        // 本次操作的**选集**（多选时是整选集，否则就是这一行）——删除 / 移动 / 打标签共用一份。
+        // 本次操作的**选集**（多选时是整选集，否则就是这一行）——删除 / 移动 / 打标签 / 拖拽共用一份。
         let selection_ids: Vec<String> = if multi_selected {
             // 按可见行顺序过滤（HashSet 迭代序不定）：回执与测试都要确定性。
             self.visible_rows()
@@ -833,6 +859,13 @@ impl ListDelegate for ArchiveListDelegate {
         let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
         // 只读项目连标签也不给改（菜单项的置灰判据在闭包内用，故先拷一份）。
         let read_only = self.read_only;
+        // 拖到分组头 = 移动（原型 §3.2）：载荷带**一批** id（多选时是整选集）。
+        // 只读项目不给拖：拖起来也落不下去（宿主会拒），不如与菜单项一样当场置灰。
+        let drag_payload = (!read_only).then(|| ArchiveDragPayload {
+            ids: selection_ids.clone(),
+            kind: row.kind,
+            label: dnd::drag_label(&row.name, selection_ids.len()),
+        });
         // 打开 / 取回都要整条详情（本体路径 / 扩展名在它身上）：渲染期提前拷一份——
         // 菜单回调触发时面板可能已被借用，不能再回头读。
         let open_detail = self.details.get(&row.id).cloned();
@@ -937,6 +970,13 @@ impl ListDelegate for ArchiveListDelegate {
                     // 多选高亮自己画：组件的选中样式只认它的**单选**索引（= 焦点行）。
                     .when(multi_selected, |container| container.bg(multi_bg))
                     .on_click(click_handler)
+                    .when_some(drag_payload, |container, payload| {
+                        container.on_drag(payload, |payload: &ArchiveDragPayload, _, _, cx| {
+                            let label = payload.label.clone();
+                            let kind = payload.kind;
+                            cx.new(|_| ArchiveDragGhost { label, kind })
+                        })
+                    })
                     .child(line)
                     .context_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
@@ -1375,6 +1415,33 @@ impl ResourcesPanel {
         let mut keys: Vec<String> = self.collapsed.iter().cloned().collect();
         keys.sort();
         keys
+    }
+
+    /// 把一批行拖到分组头（原型 §3.2）。
+    ///
+    /// 拖拽是「移动到分组」的**第二条入口**，不是第二套实现：落点解成目标分组后，
+    /// 走的仍是宿主的 `request_move_to_group`（面板不碰库），连「拖到原分组 = 无操作」
+    /// 也与菜单里当前项置灰同一口径（`dnd::rows_to_move`）。
+    ///
+    /// 无落点（「全部分组」聚合头）或没有行真的需要改时**不发请求**：拖着鼠标扫过一行
+    /// 分组头不应该产生一次写库 + 一条回执。
+    pub fn drop_rows_onto_group(
+        &mut self,
+        ids: &[String],
+        target: GroupDrop,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.snapshot.read_only {
+            return;
+        }
+        let moving = dnd::rows_to_move(&self.view_rows, ids, &target);
+        if moving.is_empty() {
+            return;
+        }
+        self.host
+            .request_move_to_group(&moving, dnd::drop_folder(&target), window, cx);
+        cx.notify();
     }
 
     /// 注入折叠集合（宿主在构造期从设置里读出来；不回调宿主——否则默认值会被当成用户动作回写）。

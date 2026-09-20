@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use shared::error::CoreError;
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
+use shared::error::CoreError;
 
 pub mod commands;
 pub mod detail_view;
 pub mod dialogs;
+pub mod dnd;
 pub mod filter;
 pub mod helpers;
 pub mod indexer;

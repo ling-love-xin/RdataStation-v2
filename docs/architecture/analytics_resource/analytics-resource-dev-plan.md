@@ -1,12 +1,21 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十 / 第十一刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**均可用，**137 单测 + 28 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**均可用，**140 单测 + 30 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第十二刀（P2.2 收口）：拖拽行到分组头
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V18 | **行可拖**：`ArchiveDragPayload { ids, kind, label }`（多选时带**整选集**）+ 幽灵 `ArchiveDragGhost`（形状给种类、颜色中性、22px 与 M4 幽灵同高）；只读项目不给拖 | 新增 `src/dnd.rs`、`src/resource_view.rs::render_row` | 拖拽是「移动到分组」的**第二条入口，不是第二套实现**：载荷不带动作（落点决定语义），出口仍是宿主 `request_move_to_group` |
+| V19 | **落点只有分组头**：`group_drop_target(key)` → `NotATarget`（「全部分组」聚合头）/ `Ungroup`（未分组头）/ `Into(id)`；悬停高亮 `list_active`（与选中底同 token）；`rows_to_move` 只发**真的要改归属**的行（拖到原分组 = 无操作） | `src/dnd.rs`、`src/resource_view.rs::{render_group_header, drop_rows_onto_group}` | 与 M4 的两处有意差别：不做「拖到某一行之前」（资产库没有手工排序，做了就是承诺一个做不到的语义）；「全部分组」不接（落上去「移出分组」与「什么都不做」都说得通） |
+| 测试 | +3 单测（幽灵文案 / 落点映射含聚合头 / 只发要改的行与顺序）、+2 面板窗口测试（拖到分组只发变更行、聚合头与只读项目不发） | `src/dnd.rs`、`tests/panel_window.rs` | 「鼠标扫过一行分组头不该产生一次写库」是这条路径最容易做错的地方 |
+| 验证 | `cargo test -j 2 -p rds-analytics-resource` → **140 单测 + 21 面板窗口 + 9 对话框窗口全绿** | — | 基线 137 / 19 / 9 |
 
 ### 2026-09-20 — Phase 2 第十一刀（P2.3 余项）：搜索匹配面（别名 / 标签 / 来源表）
 
@@ -555,7 +564,7 @@
 1. `accept_current_content` 产生的历史版本**只有元数据、没有内容副本**——旧内容在外部被覆盖时已经没了，界面按"副本缺失"呈现，而不是假装能还原；
 2. "有记录无本体"的另一个动作**从回收站还原**依赖 `ProjectTrash`（P0.8），本期只提供"删除记录"，还原动作待 P0.8 接入。
 
-**仍余**（2026-09-20 核实，去掉早已完成的旧条目）：分组**未接拖拽**；`F2` 重命名待接（重命名入口本身在行右键菜单里）；`recycle.rs` 废弃（P0.8，跟 crate）。
+**仍余**（2026-09-20 核实，去掉早已完成的旧条目）：`F2` 重命名待接（重命名入口本身在行右键菜单里）；`recycle.rs` 废弃（P0.8，跟 crate）。
 
 ### 2026-09-15 — Phase 0 第二批：归档 / 取回闭环
 
@@ -681,7 +690,7 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
-| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染、管理入口与折叠持久化均已落**（第二 / 三 / 七刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键 + 折叠态记住（`resources.collapsed_groups`，按项目分桶）；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 空分组可见（已满足：头恒在） |
+| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **已全落**（第二 / 三 / 七 / 十二刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键 + 折叠态记住（`resources.collapsed_groups`，按项目分桶）+ **拖拽行到分组头**（`src/dnd.rs`，落点只有分组头） | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单 + 拖拽落点）、`src/dnd.rs` | 空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **已全落**（排序 = 第四刀；搜索匹配面 = 第十一刀，另含尾部字段；强度维并入 kind + “只看需处理”） | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（搜索与排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
 | P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` / `default_sort` / `collapsed_groups` 已落**（第五 / 六 / 七刀）；**余**：默认分组 | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |

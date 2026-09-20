@@ -22,6 +22,7 @@ use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected
 use rds_analytics_resource::detail_view::{
     ArchiveDetail, ArchiveTagChip, DetailActions, render_detail,
 };
+use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
 use rds_analytics_resource::resource_view::{
@@ -1183,6 +1184,121 @@ fn search_matches_alias_tag_name_and_source_table(cx: &mut TestAppContext) {
     assert_eq!(hit(cx, "dwd.dwd_orders"), vec!["ar_3".to_string()]);
     // 匹配面是宽出来的，不是换掉的：名称照旧命中。
     assert_eq!(hit(cx, "ar_3"), vec!["ar_3".to_string()]);
+}
+
+/// 拖到分组头 = 移动（原型 §3.2）：走的仍是宿主的 `request_move_to_group`，且**只发真的要改的行**。
+#[gpui_kit::test]
+fn drop_rows_onto_group_sends_only_rows_that_change(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let loose = row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    let mut in_report = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    in_report.folder_id = Some("af_1".to_string());
+    let mut in_temp = row("ar_3", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    in_temp.folder_id = Some("af_2".to_string());
+
+    let mut initial = snapshot(vec![loose.clone(), in_report, in_temp], false);
+    initial.groups = vec![
+        GroupOption {
+            id: "af_1".to_string(),
+            name: "报表".to_string(),
+        },
+        GroupOption {
+            id: "af_2".to_string(),
+            name: "临时".to_string(),
+        },
+    ];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_snapshot(initial, cx));
+    });
+
+    let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+    // 拖到「报表」：ar_2 已在里面，只有 ar_1 要发。
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.drop_rows_onto_group(
+                &ids(&["ar_1", "ar_2"]),
+                GroupDrop::Into("af_1".to_string()),
+                window,
+                cx,
+            );
+        });
+    });
+    assert_eq!(host.calls(), vec!["move-to-group:ar_1:af_1".to_string()]);
+
+    // 拖到「未分组」：已在分组里的两条要发，ar_1 本就是未分组。
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.drop_rows_onto_group(
+                &ids(&["ar_1", "ar_2", "ar_3"]),
+                GroupDrop::Ungroup,
+                window,
+                cx,
+            );
+        });
+    });
+    assert_eq!(
+        host.calls(),
+        vec![
+            "move-to-group:ar_1:af_1".to_string(),
+            "move-to-group:ar_2,ar_3:__ungrouped__".to_string(),
+        ]
+    );
+}
+
+/// 两个「不该发生」的落点：聚合头不接，只读项目不发（拖起来也是白拖）。
+#[gpui_kit::test]
+fn drop_on_aggregate_header_and_read_only_projects_do_nothing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let ids = vec!["ar_1".to_string()];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1)],
+                    false,
+                ),
+                cx,
+            )
+        });
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.drop_rows_onto_group(&ids, GroupDrop::NotATarget, window, cx);
+        });
+    });
+    assert!(host.calls().is_empty(), "「全部分组」不是落点");
+
+    // 只读项目：同一落点、同一批行，仍不发。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1)],
+                    true,
+                ),
+                cx,
+            )
+        });
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.drop_rows_onto_group(&ids, GroupDrop::Ungroup, window, cx);
+        });
+    });
+    assert!(host.calls().is_empty(), "只读项目不发写入请求");
 }
 
 /// 标签筛选维：勾上就窄，标签被删后条件自动抹掉（否则列表“什么都没匹配”而勾还在）。

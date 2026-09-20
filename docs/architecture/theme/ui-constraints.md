@@ -146,6 +146,7 @@
 | 行内动作命中区 | ≥ 20px（`ui::NAV_ROW_ACTION_SIZE`）；隐藏用 `invisible()` 而**不是** `opacity(0)`（后者仍能点到） | `ui-design-spec` §2.1 + 本文 §6 |
 | 类别 vs 状态 | 图标**形状**承载类别（资产路径），颜色只承载状态（`danger` / `info` / `muted`） | 导航原型 §3 / v8 修订点 |
 | 行内动效 | 只挂**暂态**（连接中 / 加载中）；循环缓动首尾同值；id 用业务键 | `ui-design-spec` §4.1 + skill `gpui-kit-dev` §动效 |
+| 拖拽 | 载荷带**一批 id**（多选时整选集）、不带动作（落点决定语义）；幽灵**不参与命中测试**、颜色一律中性、形状给类别；落点悬停高亮用 `list_active`（与选中底同 token）；只读场景**不给拖**；落点语义与右键菜单**同一条出口** | 导航 `database/src/nav_view/dnd.rs`、资产库 `analytics_resource/src/dnd.rs`（同一个形态，两处各自定义载荷类型） |
 
 - **不要再在面板里写第二份**：上表任一项要改，就改「权威落点」那一处，四个消费方一起受益；面板文档只留取舍记录与指针。
 - 口径来源：导航侧 `docs/architecture/database/database-navigator-prototype-design.md` v8 / v11 修订点（最早落定的一套）、草稿箱 `scratchpad-architecture.md` D14–D16、资产库 `docs/architecture/analytics_resource/analytics-resource-dev-plan.md`。
@@ -160,6 +161,7 @@
 - [ ] hover / disabled 态齐全，禁用态不可点击
 - [ ] 树 / 列表行：**悬停只在未选中时生效**（不盖选中底），选中 = `list_active` 底 + 左侧 2px `tree::active_bar`（§8.3）
 - [ ] 展开指示走 `tree::disclosure_slot()` + `tree::disclosure_icon()`，**槽宽不得改**（它是缩进算式的一部分；§8.3）
+- [ ] 拖拽：只读场景不给拖；落点高亮 `list_active`；拖到“原地”不发写入请求（§8.3 末行）
 - [ ] 可点元素分两类：**行内轻量动作**（hover 才显的 `+` / `✎` 类）可自绘走 `theme.colors`；**有语义**的（选择器 / 排序 / 分段 / 展开折叠 / 开关）用语义控件（`Button` / `Switch` / `TabBar` / `Collapsible`）并保证键盘可达（§6、§8）
 - [ ] 不随上下文变化的标签 / 占位已排查（无写死类型的示例文案）
 - [ ] 同一输入只在**一处**渲染；不适用语义的卡片已隐藏（非留空壳）
