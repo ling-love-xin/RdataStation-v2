@@ -481,6 +481,25 @@ impl ResultGridDelegate {
             .map(|row| tsv_row(row))
             .unwrap_or_default()
     }
+
+    /// 【B14】选中内容的复制文本（`Ctrl+C` 用）：一格给**原文**，一整行给 TSV
+    ///
+    /// 与右键「复制此值 / 复制整行（TSV）」同一套口径与同一份实现（本方法就是它俩的入口）：
+    /// 单格不转义（要的就是那一格的值），整行才拼 TSV。
+    /// `None` = 没东西可复制（选择指向的行已经不在视图里了——筛选 / 刷新之后可能如此）。
+    pub fn selection_text(&self, selection: GridSelection) -> Option<String> {
+        let row = match selection {
+            GridSelection::Cell { row, .. } | GridSelection::Row { row } => row,
+        };
+        // 行不在了就说清“没东西可复制”，而不是安静地拷一个空串（用户会粘出一片空白）
+        if self.data_row(row).is_none() {
+            return None;
+        }
+        Some(match selection {
+            GridSelection::Cell { row, col } => self.cell(row, col),
+            GridSelection::Row { row } => self.row_text(row),
+        })
+    }
 }
 
 /// 单元格 / 表头的悬停全文：取值与列名都可能很宽，`truncate` 之后只剩这一条看全的路。
@@ -496,6 +515,19 @@ fn result_cell_tooltip(text: String, window: &mut Window, cx: &mut App) -> AnyVi
             .child(text.clone())
     })
     .build(window, cx)
+}
+
+/// 【B14】网格里**最近一次选中**（`Ctrl+C` 复制谁）
+///
+/// 为什么由面板记事件而不是读组件状态：组件没公开“当前是选格还是选行”，而
+/// `selected_cell()` / `selected_row()` 可以**同时有值**（选过整行再点一个格子）——
+/// 猜哪个更新会猜错，所以只认最近一次选择事件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridSelection {
+    /// 选中一格（`col` 是含行号槽的列下标）
+    Cell { row: usize, col: usize },
+    /// 选中一整行（**视图行序**）
+    Row { row: usize },
 }
 
 /// 菜单里的值预览（短、单行；太长的值不该把菜单撑开）
@@ -699,6 +731,8 @@ impl TableDelegate for ResultGridDelegate {
             .text_xs()
             .text_color(if is_null { muted } else { foreground })
             .when(is_null, |cell| cell.italic())
+            // 用例按它点/量真单元格（`Ctrl+C` 复制选中、行距口径都从这里进去）
+            .debug_selector(move || format!("editor-result-cell-{row_ix}-{col_ix}"))
             .on_mouse_down(MouseButton::Right, move |_, _window, app| {
                 table.update(app, |state, _cx| {
                     state.delegate_mut().set_context_cell(Some((row_ix, col_ix)));
@@ -1005,6 +1039,10 @@ pub fn new_table_state(
             .col_resizable(true)
             .row_selectable(true)
             .cell_selectable(true)
+            // 组件自带的窄行头去掉（`cell_selectable` 下默认会画一条）：我们的 `#` 列
+            // 就是行把手，两条并列各能点一半是纯粹的干扰。关掉后仍能选整行——
+            // **再点一下已选中的格子**升级为整行（组件自己的口径，`row_selectable` 已开）
+            .row_header(false)
     })
 }
 
@@ -1108,6 +1146,11 @@ pub fn render(
                     .flex_1()
                     .min_h_0()
                     .debug_selector(|| "editor-result-grid".to_string())
+                    // 【B14】`Ctrl+C` 的上下文只挂这一层（键位在 `crates/app` 注册）：
+                    // 焦点在网格里时它才在 dispatch path 上，编辑区里按 `Ctrl+C`
+                    // 仍是内核的文本复制。焦点本身不用我们管——组件的 `DataTable`
+                    // 自己 `track_focus`，点一下就在它身上了（用例从真点击一路验到剪贴板）
+                    .key_context(crate::commands::RESULT_GRID_CONTEXT)
                     // 密度档走常量表（`RESULT_TABLE_SIZE` = 组件 XSmall = 26px）——
                     // 不写 size 就落到组件默认档 32px（原型稿写的是 22px，三个数都不一致，见常量注释）
                     .child(

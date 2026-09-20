@@ -22,7 +22,8 @@ use gpui_kit::{
 };
 
 use crate::commands::{
-    ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment, TriggerCompletion,
+    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
+    TriggerCompletion,
 };
 use crate::completion::{Candidate, CandidateKind, Catalog};
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
@@ -79,6 +80,12 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
             KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
             KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
             KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
+            // 【B14】结果网格里的 `Ctrl+C`（上下文只在那层元素上，与生产同一份注册）
+            KeyBinding::new(
+                "ctrl-c",
+                CopyGridSelection,
+                Some(crate::commands::RESULT_GRID_CONTEXT),
+            ),
         ]);
     });
 }
@@ -2965,6 +2972,75 @@ fn copying_the_active_result_puts_tsv_on_the_clipboard(cx: &mut TestAppContext) 
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("复制要有回执");
     assert!(message.contains("已复制 1 行"), "{message}");
+}
+
+/// 【B14】结果网格里的 `Ctrl+C`：选中**一格**给那一格的原文，升级成**整行**后给整行 TSV。
+///
+/// 全走真入口：`simulate_click` 点真单元格（组件自己判选格；再点同一格升级为整行——我们
+/// 关掉了组件自带的窄行头，那条升级就是选整行的路），按键走 `simulate_keystrokes`，
+/// 读的是真剪贴板。**焦点也是这条链的一环**：组件只在 Tab 导航里拿焦点（点格子不聚焦），
+/// 所以网格那层的左键按下会自己把焦点交给表格——那段断了用例同样会挂。
+#[gpui_kit::test]
+fn ctrl_c_copies_the_selected_cell_then_the_whole_row(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    // 默认测试窗口矮，结果区分栏里可能一行都放不下：先开高一点再点单元格
+    cx.simulate_resize(gpui_kit::Size {
+        width: gpui_kit::px(900.),
+        height: gpui_kit::px(700.),
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let clipboard = |cx: &mut VisualTestContext| {
+        cx.update(|_window, app| app.read_from_clipboard().and_then(|item| item.text()))
+    };
+    let message = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| panel.read(cx).message.clone())
+            .unwrap_or_default()
+    };
+
+    // 先让剪贴板里有一份已知内容（工具栏那份整结果），这样“没东西可复制时不能动剪贴板”
+    // 才是可断言的
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_active_result(cx)));
+    assert_eq!(clipboard(cx).as_deref(), Some("n\tnote\n1\ta"));
+
+    // 点一个单元格（第 0 行 · `n` 列）：`Ctrl+C` 给那一格的**原文**（不拼 TSV）
+    let cell = cx
+        .debug_bounds("editor-result-cell-0-1")
+        .expect("单元格要画出来（顺带证明网格真的渲染了）");
+    cx.simulate_click(cell.center(), gpui_kit::Modifiers::default());
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard(cx).as_deref(), Some("1"));
+    assert!(
+        message(cx).contains("已复制单元格"),
+        "复制要有回执：{}",
+        message(cx)
+    );
+
+    // 再点同一格 → 组件把选择升级为整行：`Ctrl+C` 给整行 TSV（与右键「复制整行」同一份实现）
+    cx.simulate_click(cell.center(), gpui_kit::Modifiers::default());
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard(cx).as_deref(), Some("1\ta"));
+    assert!(message(cx).contains("已复制整行"), "{}", message(cx));
+
+    // `Esc` 清掉选择（组件的 `Cancel`）后按 `Ctrl+C`：没东西可复制就要**说出来**，
+    // 而不是静默什么也不做，也不能拿旧选择去凑一份（剪贴板保持上一步的内容）
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some("1\ta"),
+        "清掉选择后不该再写剪贴板"
+    );
+    assert!(
+        message(cx).contains("选一格或一行"),
+        "没得复制要说清怎么选：{}",
+        message(cx)
+    );
 }
 
 /// 刷新重跑的是**当前选中那份**的 SQL，并且原位替换（结果集数不变）

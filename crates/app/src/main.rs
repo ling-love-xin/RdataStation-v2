@@ -18,8 +18,8 @@ use analytics_resource::commands::{
     ClearSearch, DeleteSelected, FocusSearch, RenameSelected, SelectAllRows,
 };
 use editor::commands::{
-    CloseDocument, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument, SaveDocument,
-    SaveDocumentAs, ToggleComment, TriggerCompletion,
+    CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument,
+    SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
@@ -212,6 +212,14 @@ fn run_app() {
                 // 【B9 切片二】手动补全：`Ctrl+Space`（内核没占用：grep 过 `input/` 下的 `ctrl-space` /
                 // `"space"` 均为空；打字触发那条路由内核自己管，这条只是“再请一次候选”）
                 KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
+                // 【B14】结果网格里的 `Ctrl+C` = 复制选中的一格 / 一整行。**另一个 context**：
+                // 它只挂在结果网格那层元素上，所以编辑区里按 `Ctrl+C` 仍是内核的文本复制
+                // ——两个 context 互不覆盖（配对处见 `commands::RESULT_GRID_CONTEXT` 的注释）
+                KeyBinding::new(
+                    "ctrl-c",
+                    CopyGridSelection,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
                 // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上
                 // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
                 // 不抢其它面板的同名键。

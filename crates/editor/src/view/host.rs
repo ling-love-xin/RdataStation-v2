@@ -24,7 +24,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::channel::{self, ExecChannel};
-use crate::commands::{ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment};
+use crate::commands::{
+    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
+};
 use crate::diagnostics;
 use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
@@ -156,6 +158,11 @@ pub struct EditorHostPanel {
     ///
     /// 与标签条上那份星徽标互为补充：徽标说“它来自哪档”，这一行说“为什么它现在是旧的”。
     result_notice: Option<String>,
+    /// 【B14】结果网格里**最近一次选中**（`Ctrl+C` 复制谁）
+    ///
+    /// 组件没给“当前是选格还是选行”的访问器，而它的 `selected_cell()` / `selected_row()`
+    /// 可以同时有值（选过整行再点一个格子）——所以在这里记**事件**，不猜状态。
+    result_selection: Option<result_grid::GridSelection>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -254,8 +261,19 @@ impl EditorHostPanel {
             cx,
         );
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
-        let grid_sub = cx.subscribe(&grid, |panel, grid, _event: &TableEvent, cx| {
+        let grid_sub = cx.subscribe(&grid, |panel, grid, event: &TableEvent, cx| {
             let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
+            // 【B14】`Ctrl+C` 复制谁：只认**最近一次选择事件**（组件没公开“当前是选格还是选行”，
+            // 而它两个字段可以同时有值）。键位失效之后再选也就自动作废了，不用额外清理。
+            panel.result_selection = match event {
+                TableEvent::SelectCell(row, col) => Some(result_grid::GridSelection::Cell {
+                    row: *row,
+                    col: *col,
+                }),
+                TableEvent::SelectRow(row) => Some(result_grid::GridSelection::Row { row: *row }),
+                TableEvent::ClearSelection => None,
+                _ => panel.result_selection,
+            };
             if let Some(status) = panel.result_status.take() {
                 panel.result_status = Some(ResultStatus {
                     selected_row,
@@ -350,6 +368,7 @@ impl EditorHostPanel {
             filter_debounce: RefCell::new(None),
             pushdown: false,
             result_notice: None,
+            result_selection: None,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
@@ -1780,6 +1799,16 @@ impl EditorHostPanel {
         self.execute_preferring_selection(cx);
     }
 
+    /// 【B14】结果网格里的 `Ctrl+C`（动作入口；键位在 `crates/app` 注册）
+    pub(crate) fn on_copy_grid_selection(
+        &mut self,
+        _: &CopyGridSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_grid_selection(cx);
+    }
+
     /// 执行（选区优先 → 当前语句）：快捷键与工具栏主按钮共用同一条路
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
@@ -2564,6 +2593,29 @@ impl EditorHostPanel {
             .unwrap_or(0);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.set_message(Some(format!("已复制 {rows} 行（TSV）")), cx);
+    }
+
+    /// 【B14】`Ctrl+C`（网格里）：把选中的**一格**或**一整行**拷到剪贴板
+    ///
+    /// 与右键菜单同一套口径：一格给**原文**（要的就是那一格的值），一整行拼 TSV。
+    /// 选择自身是组件的真值，面板只记“最近一次选的是格还是行”（见 `result_selection`），
+    /// 文本由 delegate 按**视图行序**拼（筛选 / 排序之后看着的那一行）。
+    ///
+    /// 设了键位就不能静默失败：没选中 / 选中的行已经不在视图里时给一句可读的提示。
+    pub(crate) fn copy_grid_selection(&mut self, cx: &mut Context<Self>) {
+        let selection = self.result_selection;
+        let text =
+            selection.and_then(|selection| self.grid.read(cx).delegate().selection_text(selection));
+        let Some(text) = text else {
+            self.set_message(Some("先在结果网格里选一格或一行再复制".to_string()), cx);
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let message = match selection {
+            Some(result_grid::GridSelection::Row { .. }) => "已复制整行（TSV）".to_string(),
+            _ => "已复制单元格".to_string(),
+        };
+        self.set_message(Some(message), cx);
     }
 
     /// 【B5】重跑当前结果集的 SQL（结果**换掉选中那份**，不是新开一份——原位刷新）
@@ -3690,7 +3742,10 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_trigger_completion))
             .on_action(cx.listener(Self::on_execute_sql))
-            .on_action(cx.listener(Self::on_execute_all));
+            .on_action(cx.listener(Self::on_execute_all))
+            // 【B14】网格里的 `Ctrl+C`：键位绑在 `view/results/grid.rs` 那一层的上下文上，
+            // 所以只有焦点在网格里时才会走到这里（编辑区里 `Ctrl+C` 仍归内核的文本复制）
+            .on_action(cx.listener(Self::on_copy_grid_selection));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
         let mode = self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text);
         root = root.child(self.render_toolbar(mode, cx));

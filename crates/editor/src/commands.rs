@@ -12,6 +12,9 @@
 //! 冒泡仍会继续到本命名空间——因此**改键位前先看 `gpui-base/src/input/base/state.rs`
 //! 的 `init`**，否则会出现"看着注册了、实际被内核吃掉"的静默失效。
 //!
+//! 结果网格是**第二个上下文**（[`RESULT_GRID_CONTEXT`]）：它只挂在结果网格那层，
+//! 所以同一个 `Ctrl+C` 在编辑区里仍是内核的文本复制、在网格里是复制选中的一格 / 一整行。
+//!
 //! 需要宿主（Dock / 对话框 / 系统文件对话框）的动作也在这里声明，由 `WorkbenchView`
 //! 处理：`CloseDocument` · `SaveDocumentAs` · `OpenDocument`（面板自己发起 Dock 移除是重入）。
 
@@ -28,6 +31,15 @@ actions!(
         CloseDocument,
         ExecuteSql,
         ExecuteAll,
-        TriggerCompletion
+        TriggerCompletion,
+        CopyGridSelection
     ]
 );
+
+/// 结果网格的 key context（`crates/app` 把 `Ctrl+C` 绑在它上面，两边成对）
+///
+/// 与面板根的 `editor` 刻意分开：这个上下文只挂在结果网格那层元素上，所以
+/// **编辑区里 `Ctrl+C` 仍是复制 SQL 文本、网格里才是复制选中的一格 / 一整行**。
+/// 组件库的表格自己用的是 `DataTable`（方向键 / 翻页 / `Esc` 清选）——两个上下文
+/// 会同时出现在焦点路径上，各管各的键。
+pub const RESULT_GRID_CONTEXT: &str = "editor-result-grid";
