@@ -11,6 +11,7 @@
 //! 值 = 设计倍率（`rems(x)` 的基准是主题字号，默认 16px，见 `rds-ui-spec`；
 //! 组件库表格的尺寸是 px 基准，那些常量直接声明 `Pixels`，不做 rem 换算）。
 
+use gpui_kit::component::Size as ComponentSize;
 use gpui_kit::{Pixels, px};
 
 // ===== 与外壳共用的结构尺寸（重导出；单一来源 = `workbench_shell::ui`） =====
@@ -48,6 +49,13 @@ pub const SEARCH_LIST_HEIGHT: f32 = 16.0;
 /// 两张表是同一类东西，行号槽宽不一致会在并列对照时显形。
 /// 真正的单一来源要等 `editor` 也依赖 `workbench_shell`（它目前不依赖，故此处镜像一份）。
 pub const PREVIEW_ROW_NUMBER_WIDTH: Pixels = px(48.);
+
+/// 预览表的**密度档**（组件尺寸，不是 rem 倍率）。
+///
+/// 与结果集网格同档（`crates/editor/src/ui.rs` 的 `RESULT_TABLE_SIZE`：组件 `XSmall` = 26px）——
+/// 两张表是同一类东西，密度不一致会在并列对照时显形；两侧各持一份的原因与行号槽宽相同
+/// （`mock` 不依赖 `editor`，依赖方向上也不该为了一个常量去引）。
+pub const PREVIEW_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
 
 /// 预览单元格悬停全文的最大宽度（24rem = 384px）。
 ///

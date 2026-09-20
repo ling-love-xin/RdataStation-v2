@@ -3051,6 +3051,108 @@ fn truncation_is_reported_as_a_warning(cx: &mut TestAppContext) {
     assert_eq!(sql.as_deref(), Some("select truncated"));
 }
 
+/// 结果网格的密度口径：行距走组件 `XSmall`（26px，`ui::RESULT_TABLE_SIZE`）——与 Mock 预览表同档。
+///
+/// 这条用例是**判别性**的：组件默认档是 32px（`Medium`），而原型稿当年写的是 22px；
+/// 三个数里只有一个是实际生效的。行高画在组件的行容器上（量不到它的坐标），所以这里量
+/// **两行行号槽的间距**（行高 + 行分隔线），不设 size 的实现会在这里报 32 上下。
+#[gpui_kit::test]
+fn the_result_grid_rows_are_compact(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    // 默认测试窗口小，分栏下半区可能只放得下一行：先把窗口开高一点，量两行的间距
+    cx.simulate_resize(gpui_kit::Size {
+        width: gpui_kit::px(900.),
+        height: gpui_kit::px(700.),
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let first = cx
+        .debug_bounds("editor-result-rowno-0")
+        .expect("行号槽的第一行应画出来（顺带证明网格真的渲染了）");
+    let second = cx
+        .debug_bounds("editor-result-rowno-1")
+        .expect("第二行也在");
+    let pitch = second.top() - first.top();
+    assert!(
+        pitch >= gpui_kit::px(26.) && pitch <= gpui_kit::px(27.),
+        "行距 = 组件 XSmall（26px）+ 行分隔线；实测 {pitch:?}"
+    );
+}
+
+/// 结果网格表头的排序入口**真点击**：箭头在表头右端，不是表头正文。
+///
+/// 与 Mock 预览表同一条口径：组件 0.6.1 的 `on_col_head_click` 只做**列选择**（本表关掉了），
+/// 排序挂在 `render_sort_icon` 上。表头现在由 `render_th` 自画（截断 + 悬停全文 + 登记坐标），
+/// 本用例同时看住「自画之后箭头还在」——箭头是组件画在自己那一层的，接管表头容易碰坏它。
+#[gpui_kit::test]
+fn the_result_header_sorts_from_its_arrow(cx: &mut TestAppContext) {
+    const PROBE: [f32; 7] = [2., 6., 10., 14., 18., 22., 26.];
+
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
+    cx.simulate_resize(gpui_kit::Size {
+        width: gpui_kit::px(900.),
+        height: gpui_kit::px(700.),
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // `debug_selector` 只是给用例找坐标（`.id(...)` 不登记坐标）
+    for slot in ["editor-result-th-0", "editor-result-th-1"] {
+        assert!(
+            cx.debug_bounds(slot).is_some(),
+            "{slot} 应登记坐标（行号槽也走同一个 render_th）"
+        );
+    }
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    let sort_state =
+        |cx: &mut VisualTestContext| cx.update(|_window, cx| grid.read(cx).delegate().sort_state());
+    assert_eq!(sort_state(cx), None, "还没点过就不该有排序");
+
+    // 行号槽：右侧没有箭头，点多少次都不该有反应
+    let slot = cx.debug_bounds("editor-result-th-0").expect("行号槽坐标");
+    for offset in PROBE {
+        cx.simulate_click(
+            gpui_kit::Point::new(slot.right() + gpui_kit::px(offset), slot.center().y),
+            gpui_kit::Modifiers::default(),
+        );
+    }
+    assert_eq!(sort_state(cx), None, "行号槽不给排序");
+
+    // 数据列：右端往左探，命中箭头即按这一列本地排序（组件给的第一下是降序）
+    let head = cx.debug_bounds("editor-result-th-1").expect("数据列坐标");
+    let mut clicked = false;
+    for offset in PROBE {
+        cx.simulate_click(
+            gpui_kit::Point::new(head.right() + gpui_kit::px(offset), head.center().y),
+            gpui_kit::Modifiers::default(),
+        );
+        if sort_state(cx).is_some() {
+            clicked = true;
+            break;
+        }
+    }
+    assert!(clicked, "表头右端应有可点的排序箭头（探了 {PROBE:?}）");
+    assert_eq!(
+        sort_state(cx),
+        Some((0, true)),
+        "箭头给的是「这一列 + 降序」，本地排序只重排视图行序"
+    );
+    let first = cx.update(|_window, cx| grid.read(cx).delegate().visible_rows()[0].clone());
+    assert_eq!(first, ["2"], "降序之后第一行是最大的那个（0,1,2 → 2,1,0）");
+}
+
 /// 结果区在可拖拽分栏里：有结果时出现在下半区，且编辑区没被挤掉
 #[gpui_kit::test]
 fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestAppContext) {

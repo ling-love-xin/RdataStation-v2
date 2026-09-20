@@ -7,6 +7,7 @@
 //! （`gap_1` / `px_2` …）；视图里不得出现裸 `px(N.)`。
 //! 注意 `rems(x)` 的基准是主题字号（默认 16px），与 `gap_1`（=4px）不是一套单位。
 
+use gpui_kit::component::Size as ComponentSize;
 use gpui_kit::{Pixels, px};
 
 /// 固定描边（1px，不随字号缩放）
@@ -51,8 +52,29 @@ pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
 /// 结果网格首列的行号槽宽（48px，原型 §2.4 的固定 `#` 列）
 pub const RESULT_ROW_NUMBER_WIDTH: Pixels = px(48.);
 
+/// 结果网格的**密度档**（组件尺寸，不是 rem 倍率）。
+///
+/// 组件给的表行高只有 26 / 30 / 32 / 40 四档（`XSmall` / `Small` / `Medium`（默认）/ `Large`）；
+/// 取 `XSmall` = 26px：这是数据网格应有的密度，也与 Mock 预览表（`crates/mock/src/ui.rs` 的
+/// `PREVIEW_TABLE_SIZE`）同档。
+///
+/// 订正（2026-09-20）：原型稿 §8 写的「行高 22px（V1 AG Grid）」被实现默默落到了组件**默认档**
+/// 32px——三方面三个数（稿子 22 / 实现 32 / 预览表 26），而这一档此前根本没有常量。
+/// 精确给 22px 虽然可行（`Size::Size(px(22.))`），但组件会按 `size * 0.875` 反推字号（19px），
+/// 不划算；所以口径统一到组件的 `XSmall`。
+/// 两个表格共用这一档：改这里就是改「表格类组件的行高」这一条口径。
+pub const RESULT_TABLE_SIZE: ComponentSize = ComponentSize::XSmall;
+
 /// 结果网格列最小宽（64px）
 pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
+
+/// 结果网格单元格 / 表头悬停全文的最大宽度（24rem = 384px）。
+///
+/// 悬停提示跟着鼠标走，比这更宽就会被窗口边缘截掉；超出的部分**折行**（长 JSON / 长文本
+/// 要能从头读到尾，截尾就失去看全的意义）。与 Mock 预览表同值同口径
+/// （`crates/mock/src/ui.rs` 的 `PREVIEW_TOOLTIP_MAX_WIDTH`）：两张表是同一类东西，
+/// 悬停提示的宽度不一致会在并列对照时显形。
+pub const RESULT_TOOLTIP_MAX_WIDTH: f32 = 24.0;
 
 /// 结果网格列名行高（2rem = 32px）
 pub const RESULT_HEADER_HEIGHT: f32 = 2.0;

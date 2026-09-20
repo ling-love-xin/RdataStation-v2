@@ -8,6 +8,10 @@
 //! 不手搓）。首列是固定的 `#` 行号槽（原型 §2.4），`NULL` 用 `muted_foreground` 斜体呈现
 //! ——它是 SQL 里的一个真实值，与字符串 `"NULL"` 区分开。
 //!
+//! 单元格与表头都**截断**（结果里的长文本 / 长 JSON / 长列名比列宽宽是常态），截掉的部分
+//! 靠**悬停全文**看（自己画 `render_th` / `render_td` 就是为了挂它）。右键菜单除了按值筛选
+//! 与冻结，还给三种复制：此值 · 此列 · 整行（TSV，走 [`::shared::string::tsv_cell`] 同一份转义）。
+//!
 //! 原型 §2.4 的工具栏还包含**筛选 · 下发开关 · 分析 · 导出**——它们各自属 B15 / B14 / B7，
 //! **没实现就不摆按钮**；分页/取下一段属 B5b，位置留在 ⑦ 那一行。
 //!
@@ -16,12 +20,18 @@
 
 use std::rc::Rc;
 
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+// TSV 转义（剪贴板 / 导出的唯一实现，与 mock 预览表共用）：本 crate 根部有同名模块
+// `crate::shared`，所以 `shared` 得从 crate 外路径（`::`）进来
+use ::shared::string::{tsv_cell, tsv_row};
 
 use crate::ui;
 use crate::view::widgets::status_bar;
@@ -52,6 +62,11 @@ pub enum ContextAction {
     FilterByValue(String),
     /// 复制此值
     CopyValue(String),
+    /// 复制整列（**数据列**下标）：当前视图行序里这一列的全部取值，一行一个
+    /// （与 mock 预览「复制此列」同一口径：只给已抓到的行，不重查源库）
+    CopyColumn(usize),
+    /// 复制整行（**视图行**下标）：整行拼成 TSV（列之间是制表符，粘进表格就能分列）
+    CopyRow(usize),
     /// 冻结 / 取消冻结这一**数据列**
     ToggleFreeze(usize),
     /// 按这一列（列名）排序并**下发重查**
@@ -69,20 +84,40 @@ pub struct ContextMenuItem {
     pub separator_before: bool,
 }
 
+/// 右键落点：菜单项要回答的「这是哪一格、这一列的处境」（[`context_menu_items`] 的输入）
+///
+/// 打包成一个结构体而不是递一串位置参数：`column` / `row` / `rows` 挨在一起时
+/// 很容易传反（三个都是数字），而传反了菜单看上去照样正常。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextTarget {
+    /// 目标单元格的取值（原样交给「按值筛选」与「复制此值」，预览只管显示）
+    pub value: String,
+    /// 目标单元格所在数据列的列名
+    pub column_name: String,
+    /// 数据列下标（含行号槽的列下标已折算掉）
+    pub column: usize,
+    /// 目标单元格所在**视图行**（复制整行用它）
+    pub row: usize,
+    /// 这一列在视图里的取值个数（复制此列的文案要写明会拷走多少）
+    pub rows: usize,
+    /// 这一列冻结了吗（文案随它反向）
+    pub frozen: bool,
+    /// 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样）
+    pub insight: bool,
+}
+
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
 ///
-/// 原型 §5.5 的右键入口：按值筛选（写进筛选框、默认本地）· 复制此值 ·
-/// 冻结 / 取消冻结（原生 `Column.fixed`）。
+/// 原型 §5.5 的右键入口：按值筛选（写进筛选框、默认本地）· 复制（此值 / 此列 / 整行）·
+/// 冻结 / 取消冻结（原生 `Column.fixed`）·【M8】洞察此列。
 ///
-/// `insight` = 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样，见
+/// `target.insight` = 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样，见
 /// `ResultEntry::can_insight_column`）——**能力没有就不摆入口**。
-pub fn context_menu_items(
-    value: &str,
-    column_name: &str,
-    column: usize,
-    frozen: bool,
-    insight: bool,
-) -> Vec<ContextMenuItem> {
+///
+/// 文案与 mock 预览表的右键菜单同一套：两张表是同一类东西，同一种动作不该两个叫法。
+pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let value = target.value.as_str();
+    let column_name = target.column_name.as_str();
     let preview = preview_of(value);
     let mut items = vec![
         ContextMenuItem {
@@ -93,6 +128,17 @@ pub fn context_menu_items(
         ContextMenuItem {
             label: "复制此值".to_string(),
             action: ContextAction::CopyValue(value.to_string()),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            // 个数写明：这一列拷走多少得让用户心里有数（与 mock 预览同一句文案）
+            label: format!("复制此列（{} 个取值）", target.rows),
+            action: ContextAction::CopyColumn(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: "复制整行（TSV）".to_string(),
+            action: ContextAction::CopyRow(target.row),
             separator_before: false,
         },
         ContextMenuItem {
@@ -112,16 +158,16 @@ pub fn context_menu_items(
             separator_before: false,
         },
         ContextMenuItem {
-            label: if frozen {
+            label: if target.frozen {
                 "取消冻结此列".to_string()
             } else {
                 format!("冻结「{column_name}」")
             },
-            action: ContextAction::ToggleFreeze(column),
+            action: ContextAction::ToggleFreeze(target.column),
             separator_before: false,
         },
     ];
-    if insight {
+    if target.insight {
         items.push(ContextMenuItem {
             label: format!("洞察「{column_name}」这一列"),
             action: ContextAction::InsightColumn {
@@ -402,6 +448,54 @@ impl ResultGridDelegate {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// 这一数据列在**当前视图行序**下的全部取值（一行一个，换行分隔；逐格按 TSV 转义）
+    ///
+    /// 只给**已抓到的行**、不重查源库（与 mock 预览「复制此列」同一口径）：
+    /// 一份十万行的结果整列就是十万个值，粘到哪里都不好用——真要全列就导出。
+    fn column_text(&self, column: usize) -> String {
+        let mut text = String::new();
+        for (index, row_ix) in self.view_rows.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            let cell = self
+                .rows
+                .get(*row_ix)
+                .and_then(|row| row.get(column))
+                .map(String::as_str)
+                .map(tsv_cell)
+                .unwrap_or_default();
+            text.push_str(&cell);
+        }
+        text
+    }
+
+    /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）
+    fn row_text(&self, row_ix: usize) -> String {
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return String::new();
+        };
+        self.rows
+            .get(data_ix)
+            .map(|row| tsv_row(row))
+            .unwrap_or_default()
+    }
+}
+
+/// 单元格 / 表头的悬停全文：取值与列名都可能很宽，`truncate` 之后只剩这一条看全的路。
+///
+/// 宽度走 `ui::RESULT_TOOLTIP_MAX_WIDTH`（结构尺寸只认常量表），并让它**折行**：
+/// 悬停提示跟着鼠标，横向越宽越容易被窗口边缘截掉。
+fn result_cell_tooltip(text: String, window: &mut Window, cx: &mut App) -> AnyView {
+    Tooltip::element(move |_, _| {
+        div()
+            .max_w(rems(ui::RESULT_TOOLTIP_MAX_WIDTH))
+            .whitespace_normal()
+            .text_xs()
+            .child(text.clone())
+    })
+    .build(window, cx)
 }
 
 /// 菜单里的值预览（短、单行；太长的值不该把菜单撑开）
@@ -531,6 +625,36 @@ impl TableDelegate for ResultGridDelegate {
             .when(self.is_frozen(index), |column| column.fixed_left())
     }
 
+    /// 表头单元格：组件默认只画列名（`div().size_full().child(name)`），这里补两件事——
+    /// **截断**与**悬停全文**。列名常常比默认列宽（128px）长，截断之后就没有第二条
+    /// 知道它是什么的路（单元格取值有悬停，表头同样需要）。
+    ///
+    /// 行号槽（`#`）不挂悬停——它不是数据。`debug_selector` 是给用例找这个表头用的
+    /// （`.id(...)` 不登记坐标）：表头的排序箭头就在它右端，直调 `perform_sort` 验不到那段几何。
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let name = if Self::is_row_number(col_ix) {
+            "#".to_string()
+        } else {
+            self.columns.get(col_ix - 1).cloned().unwrap_or_default()
+        };
+        let head = div()
+            .size_full()
+            .truncate()
+            .debug_selector(move || format!("editor-result-th-{col_ix}"))
+            .child(SharedString::from(name.clone()));
+        if Self::is_row_number(col_ix) || name.is_empty() {
+            return head.into_any_element();
+        }
+        head.id(("editor-result-th", col_ix))
+            .tooltip(move |window, cx| result_cell_tooltip(name.clone(), window, cx))
+            .into_any_element()
+    }
+
     fn render_td(
         &mut self,
         row_ix: usize,
@@ -547,10 +671,14 @@ impl TableDelegate for ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return div()
                 .px_2()
+                .h_full()
                 .truncate()
                 .text_xs()
                 .text_color(muted)
-                .child(SharedString::from(text));
+                // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
+                .debug_selector(move || format!("editor-result-rowno-{row_ix}"))
+                .child(SharedString::from(text))
+                .into_any_element();
         }
 
         // `NULL` 是 SQL 里的一个真实值：灰 + 斜体，与字符串 "NULL" 区分开（原型 §2.4）
@@ -558,7 +686,14 @@ impl TableDelegate for ResultGridDelegate {
         // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
         // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
         let table = cx.entity().clone();
-        div()
+        let mut cell = div()
+            // 悬停提示要求元素有 id：gpui 的**流式** `tooltip` 声明在
+            // `StatefulInteractiveElement` 上（没 id 的裸 `div` 只有直调 `Interactivity` 的写法），
+            // 组件库自己的表头 / 行头单元格也是这么挂的
+            .id((
+                "editor-result-cell",
+                row_ix * (self.columns.len() + 1) + col_ix,
+            ))
             .px_2()
             .truncate()
             .text_xs()
@@ -568,11 +703,16 @@ impl TableDelegate for ResultGridDelegate {
                 table.update(app, |state, _cx| {
                     state.delegate_mut().set_context_cell(Some((row_ix, col_ix)));
                 });
-            })
-            .child(SharedString::from(text))
+            });
+        // 取值可能很宽（JSON / 长文本），`truncate` 之后就只剩悬停这一条看全的路
+        if !text.is_empty() {
+            let full = text.clone();
+            cell = cell.tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx));
+        }
+        cell.child(SharedString::from(text)).into_any_element()
     }
 
-    /// 【B14】右键菜单：按值筛选 / 复制此值 / 冻结此列（原型 §5.5 的右键入口）
+    /// 【B14】右键菜单：按值筛选 / 复制（此值 / 此列 / 整行）/ 冻结此列（原型 §5.5 的右键入口）
     ///
     /// 目标单元格是**最近右键的那一个**（[`Self::context_cell`]）：没有就什么都不摆
     /// （不猜一个“大概是想筛这个”）。菜单项由 [`context_menu_items`] 给（纯函数，可断言）。
@@ -590,7 +730,6 @@ impl TableDelegate for ResultGridDelegate {
             return menu;
         }
         let column = col - 1;
-        let value = self.cell(row, col);
         let column_name = self
             .columns
             .get(column)
@@ -599,13 +738,16 @@ impl TableDelegate for ResultGridDelegate {
 
         let mut menu = menu;
         let insight_available = self.on_insight_column.is_some() && self.insight_available;
-        for item in context_menu_items(
-            &value,
-            &column_name,
+        let target = ContextTarget {
+            value: self.cell(row, col),
+            column_name,
             column,
-            self.is_frozen(column),
-            insight_available,
-        ) {
+            row,
+            rows: self.view_rows.len(),
+            frozen: self.is_frozen(column),
+            insight: insight_available,
+        };
+        for item in context_menu_items(&target) {
             if item.separator_before {
                 menu = menu.separator();
             }
@@ -630,6 +772,25 @@ impl TableDelegate for ResultGridDelegate {
                     menu = menu.item(PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                        },
+                    ));
+                }
+                ContextAction::CopyColumn(column) => {
+                    // 文案先拼好再交给点击回调：菜单项活到的比这一次 `context_menu` 调用长，
+                    // 而“当时那一列是什么”只有现在知道。取值走**视图行序**（看着的才是拷走的）
+                    let text = self.column_text(column);
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        },
+                    ));
+                }
+                ContextAction::CopyRow(row) => {
+                    // 同上：拼好的 TSV 带上（整行 = 各列制表符分隔，粘进表格直接分列）
+                    let text = self.row_text(row);
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                         },
                     ));
                 }
@@ -947,7 +1108,14 @@ pub fn render(
                     .flex_1()
                     .min_h_0()
                     .debug_selector(|| "editor-result-grid".to_string())
-                    .child(DataTable::new(state).stripe(true).bordered(false)),
+                    // 密度档走常量表（`RESULT_TABLE_SIZE` = 组件 XSmall = 26px）——
+                    // 不写 size 就落到组件默认档 32px（原型稿写的是 22px，三个数都不一致，见常量注释）
+                    .child(
+                        DataTable::new(state)
+                            .stripe(true)
+                            .bordered(false)
+                            .with_size(ui::RESULT_TABLE_SIZE),
+                    ),
             )
         })
         // ⑦ 结果状态行
@@ -998,8 +1166,9 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ContextAction, ResultGridDelegate, ResultStatus, ResultToolbar, compare_cells,
-        context_menu_items, duration_text, preview_of, status_segments, thousands, truncated_hint,
+        ContextAction, ContextTarget, ResultGridDelegate, ResultStatus, ResultToolbar,
+        compare_cells, context_menu_items, duration_text, preview_of, status_segments, thousands,
+        truncated_hint,
     };
     use gpui_kit::App;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
@@ -1028,16 +1197,32 @@ mod tests {
         grid
     }
 
-    /// 【B14】右键菜单的项：按值筛选 / 复制此值 / 冻结（文案随冻结状态变）
+    /// 右键落点（用例只改关心的那几项）
+    fn target(value: &str, name: &str, column: usize) -> ContextTarget {
+        ContextTarget {
+            value: value.to_string(),
+            column_name: name.to_string(),
+            column,
+            row: 0,
+            rows: 2,
+            frozen: false,
+            insight: false,
+        }
+    }
+
+    /// 【B14】右键菜单的项：按值筛选 / 复制（此值 · 此列 · 整行）/ 冻结（文案随冻结状态变）
     #[test]
     fn context_menu_offers_filter_copy_and_freeze() {
-        let items = context_menu_items("orders", "name", 1, false, false);
+        let target = target("orders", "name", 1);
+        let items = context_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
         assert_eq!(
             labels,
             [
                 "按值筛选「orders」",
                 "复制此值",
+                "复制此列（2 个取值）",
+                "复制整行（TSV）",
                 "按「name」升序（下发源库）",
                 "按「name」降序（下发源库）",
                 "冻结「name」",
@@ -1051,34 +1236,46 @@ mod tests {
         assert_eq!(items[1].action, ContextAction::CopyValue("orders".to_string()));
         assert_eq!(
             items[2].action,
+            ContextAction::CopyColumn(1),
+            "复制整列认的是**数据列**下标（1 列、行号槽已折算掉）"
+        );
+        assert_eq!(
+            items[3].action,
+            ContextAction::CopyRow(0),
+            "复制整行认的是**视图行**下标，不是列下标（两个都是数字，传反了菜单照样能摆出来）"
+        );
+        assert_eq!(
+            items[4].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: false
             }
         );
         assert_eq!(
-            items[3].action,
+            items[5].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: true
             }
         );
         assert!(
-            items[2].separator_before,
+            items[4].separator_before,
             "“对整份结果的操作”那组前面要有分隔线"
         );
-        assert!(!items[4].separator_before, "冻结与排序同组");
-        assert_eq!(items[4].action, ContextAction::ToggleFreeze(1));
+        assert!(!items[6].separator_before, "冻结与排序同组");
+        assert_eq!(items[6].action, ContextAction::ToggleFreeze(1));
 
-        let frozen = context_menu_items("orders", "name", 1, true, false);
-        assert_eq!(frozen[4].label, "取消冻结此列", "已冻结时给的是反向动作");
+        let mut done = target;
+        done.frozen = true;
+        let items = context_menu_items(&done);
+        assert_eq!(items[6].label, "取消冻结此列", "已冻结时给的是反向动作");
     }
 
     /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：
     /// 不能洞察时连项都不摆（能力没有就不给入口，与「按值筛选」同口径）。
     #[test]
     fn context_menu_only_offers_insight_when_available() {
-        let without = context_menu_items("orders", "name", 1, false, false);
+        let without = context_menu_items(&target("orders", "name", 1));
         assert!(
             !without
                 .iter()
@@ -1086,7 +1283,9 @@ mod tests {
             "不能洞察时不该摆这一项：{without:?}"
         );
 
-        let with = context_menu_items("orders", "name", 1, false, true);
+        let mut with = target("orders", "name", 1);
+        with.insight = true;
+        let with = context_menu_items(&with);
         let last = with.last().expect("至少有一项");
         assert_eq!(last.label, "洞察「name」这一列");
         assert_eq!(
@@ -1106,8 +1305,45 @@ mod tests {
         let preview = preview_of(&long);
         assert_eq!(preview.chars().count(), 25, "24 个字符 + 省略号");
         assert!(preview.ends_with('…'), "{preview}");
-        let items = context_menu_items(&long, "c", 0, false, false);
+        let items = context_menu_items(&target(&long, "c", 0));
         assert!(items[0].label.contains('…'), "{}", items[0].label);
+    }
+
+    /// 复制整列 / 整行：走**视图行序**，并按 TSV 规则转义（与 `ResultEntry::to_tsv`
+    /// 同一份实现）：带制表符 / 换行 / 引号的值不许把粘出去的形状搞坏。
+    #[test]
+    fn copying_a_column_and_a_row_keeps_the_tsv_shape() {
+        let mut grid = grid_with(&[&["1", "plain"], &["2", "two\tcells"], &["3", "say \"hi\""]]);
+
+        // 整行：列之间是制表符，只有会破坏形状的格子才加引号
+        assert_eq!(grid.row_text(0), "1\tplain");
+        assert_eq!(grid.row_text(1), "2\t\"two\tcells\"");
+        assert_eq!(grid.row_text(2), "3\t\"say \"\"hi\"\"\"");
+        assert_eq!(
+            grid.row_text(99),
+            "",
+            "行不存在给空串（不摆这一项的是界面）"
+        );
+
+        // 整列：一行一个取值（本身就是单列 TSV）
+        assert_eq!(grid.column_text(0), "1\n2\n3");
+        assert_eq!(
+            grid.column_text(1),
+            "plain\n\"two\tcells\"\n\"say \"\"hi\"\"\""
+        );
+
+        // 取值里的换行也被包起来：不然它会拆出一行，看上去像多了一行数据
+        let with_break = grid_with(&[&["1", "line\nbreak"]]);
+        assert_eq!(with_break.column_text(1), "\"line\nbreak\"");
+        assert_eq!(with_break.row_text(0), "1\t\"line\nbreak\"");
+
+        // 视图行序：本地排序 / 筛选之后，复制的是**看着的那些行**
+        grid.apply_sort(Some((0, true)));
+        assert_eq!(grid.column_text(0), "3\n2\n1");
+        assert_eq!(grid.row_text(0), "3\t\"say \"\"hi\"\"\"");
+
+        grid.set_filter("two");
+        assert_eq!(grid.column_text(0), "2", "筛选生效时只复制看得见的行");
     }
 
     /// 【B15】冻结列：切换、换数据时清空（列都换了一批，旧列号没意义）

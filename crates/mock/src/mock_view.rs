@@ -48,10 +48,6 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::prelude::FluentBuilder as _;
-// 显式导入组件的 `Size`：`gpui_kit::*` 里的同名类型是 `gpui::Size`（宽高对），
-// 组件档位（XSmall / Small / …）在 `gpui_kit::component`，显式导入会遮蔽通配那一个。
-use gpui_kit::component::Size as ComponentSize;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::collapsible::Collapsible;
@@ -67,6 +63,7 @@ use gpui_kit::component::table::{
     Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState,
 };
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 // 清单行的选中标识条（2px + 上下内缩）与 M4 导航 / M5 草稿箱同一份共用原语，
 // 不在本 crate 手搓绝对定位的 div。
@@ -84,6 +81,9 @@ use crate::persistence::{
 };
 use crate::schema_map::ColumnMapper;
 use crate::ui;
+
+// TSV 转义（剪贴板 / 导出的唯一实现，与结果集网格共用）
+use ::shared::string::{tsv_cell, tsv_row};
 
 // ==================== 宿主契约 ====================
 
@@ -6578,10 +6578,15 @@ impl Render for MockDetailView {
                             .min_h_0()
                             .min_w_0()
                             .debug_selector(|| "mock-preview-table".to_string())
-                            // 行高走组件档位（XSmall = 26px），单元格字号在 delegate 里取 `text_xs`
-                            // （与面板其它行的密度一致 —— 这是组件库 px 基准尺寸的既定例外，
-                            // 同结果集网格）
-                            .child(DataTable::new(&table).with_size(ComponentSize::XSmall)),
+                            // 行高走组件档位（`ui::PREVIEW_TABLE_SIZE` = XSmall = 26px，与结果集网格同档），
+                            // 单元格字号在 delegate 里取 `text_xs`（与面板其它行的密度一致 —— 这是组件库
+                            // px 基准尺寸的既定例外）
+                            .child(
+                                DataTable::new(&table)
+                                    // 斑马纹 / 密度 / 内距与结果集网格对齐（同一类东西，观感不齐会在并列对照时显形）
+                                    .stripe(true)
+                                    .with_size(ui::PREVIEW_TABLE_SIZE),
+                            ),
                     );
                 }
             }
@@ -6747,10 +6752,13 @@ impl PreviewTableDelegate {
     }
 
     /// 这一行拼成 TSV（「复制整行」用：拷进表格 / SQL 都能直接分列）。
+    ///
+    /// 逐格转义走 `shared::string::tsv_row`（**唯一实现**，结果集网格的右键复制也调它）：
+    /// 取值里的制表符不转义就会把一行错成两列——“粘进表格就能直接分列”那时就不成立了。
     fn row_text(&self, row_ix: usize) -> String {
         self.rows
             .get(row_ix)
-            .map(|row| row.join("\t"))
+            .map(|row| tsv_row(row))
             .unwrap_or_default()
     }
 
@@ -6775,14 +6783,18 @@ impl PreviewTableDelegate {
         self.columns.get(col).cloned()
     }
 
-    /// 这一数据列在**取样窗口内**的全部取值（每行一个，换行分隔）。
+    /// 这一数据列在**取样窗口内**的全部取值（每行一个，拿去用换行拼成单列 TSV）。
     ///
     /// 只给取样里的值、不重查整列：与「预览是取样」同一口径；而一张十万行的表整列
     /// 可能是十万个值，粘到哪里都不好用（真要全列，落库 / 导出后去查那张表）。
+    ///
+    /// 返回的每个取值**已经按 TSV 规则转义**（`shared::string::tsv_cell`，与结果集网格
+    /// 「复制此列」同一份实现）：取值自身带换行时不转义就会被拼成两行。
     fn column_text(&self, index: usize) -> Vec<String> {
         self.rows
             .iter()
-            .filter_map(|row| row.get(index).cloned())
+            .filter_map(|row| row.get(index))
+            .map(|cell| tsv_cell(cell))
             .collect()
     }
 }
@@ -6839,7 +6851,9 @@ impl TableDelegate for PreviewTableDelegate {
         let text = self.cell_text(row_ix, col_ix, cx);
         // 行号槽永远是灰的（它不是数据）
         let is_row_number = Self::is_row_number(col_ix);
-        let color = if is_row_number { muted } else { fg };
+        // `NULL` 是 SQL 里的一个真实值：灰 + 斜体，与字符串 "NULL" 区分开（与结果集网格同口径）
+        let is_null = !is_row_number && text == "NULL";
+        let color = if is_row_number || is_null { muted } else { fg };
         // 右键得先知道「点的是哪一格」：组件库只把 `row_ix` 交给 `context_menu`
         // （事件从最内层派发，不会丢）——与结果集网格同一做法
         let table = cx.entity().clone();
@@ -6848,9 +6862,17 @@ impl TableDelegate for PreviewTableDelegate {
                 "mock-preview-cell",
                 row_ix * (self.columns.len() + 1) + col_ix,
             ))
+            .px_2()
             .truncate()
             .text_xs()
             .text_color(color)
+            .when(is_null, |cell| cell.italic())
+            // 行号槽的单元格挂 `h_full` + 选择器：用例按它量**行距**（表格密度那条口径的哨兵，
+            // 与结果集网格同一条用例；`.id()` 不登记坐标）
+            .when(is_row_number, |cell| {
+                cell.h_full()
+                    .debug_selector(move || format!("mock-preview-rowno-{row_ix}"))
+            })
             .when(!is_row_number, |cell| {
                 cell.on_mouse_down(MouseButton::Right, move |_, _window, app| {
                     table.update(app, |state, _cx| {
@@ -6996,7 +7018,7 @@ impl TableDelegate for PreviewTableDelegate {
                 }),
             );
         }
-        // 整列：取样窗口内的全部取值（一行一个）——粘进表格就是一列
+        // 整列：取样窗口内的全部取值（一行一个，逐格已按 TSV 转义）——粘进表格就是一列
         if let Some(index) = self.context_col(row_ix) {
             let values = self.column_text(index);
             if !values.is_empty() {

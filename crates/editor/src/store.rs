@@ -16,6 +16,8 @@
 //! 上限 [`MAX_RESULT_SETS`]（原型 §2.4：上限 5、超出淘汰最旧）淘汰的是**最旧的未选中项**：
 //! 正在看的那一份永远不会被自己的下一个结果挤掉。
 
+use ::shared::string::tsv_row;
+
 use crate::channel::ExecChannel;
 use crate::execution::ResultPlacement;
 use crate::model::DocumentId;
@@ -226,8 +228,9 @@ impl ResultEntry {
 
     /// 结果集文本（TSV：表头一行 + 每行一条；复制到剪贴板用）
     ///
-    /// 单元格里出现制表符 / 换行 / 双引号时用双引号包裹、内部引号双写——不转义的话
-    /// 带制表符的值会把列错开（Excel / DBeaver 都按这个写法读）。
+    /// 逐格转义走 `shared::string::tsv_cell`（制表符 / 换行 / 双引号才包裹并双写内部引号）
+    /// ——不转义的话带制表符的值会把列错开（Excel / DBeaver 都按这个写法读）。
+    /// 这份规则**只有 shared 一份实现**：结果网格的右键复制与 mock 预览取样都调它。
     ///
     /// 导出的是**已抓到的行**（被截断的那份就只有前若干行）；没有网格时返回空串
     /// （调用方应先看 [`ResultEntry::has_grid`]）。其余导出格式属 B7（`persist.rs`）。
@@ -408,29 +411,6 @@ impl ResultStore {
     pub fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }
-}
-
-/// 一行的 TSV（单元格按需加引号）
-fn tsv_row(cells: &[String]) -> String {
-    let mut line = String::new();
-    for (index, cell) in cells.iter().enumerate() {
-        if index > 0 {
-            line.push('\t');
-        }
-        if needs_quotes(cell) {
-            line.push('"');
-            line.push_str(&cell.replace('"', "\"\""));
-            line.push('"');
-        } else {
-            line.push_str(cell);
-        }
-    }
-    line
-}
-
-/// 单元格是不是必须加引号（制表符 / 换行 / 双引号——只有它们会破坏 TSV 的形状）
-fn needs_quotes(cell: &str) -> bool {
-    cell.contains(['\t', '\n', '\r', '"'])
 }
 
 /// 超过上限就淘汰**最旧的未选中**结果集（选中项保留，选中下标跟着修正）

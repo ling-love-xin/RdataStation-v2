@@ -182,7 +182,7 @@ crates/editor/src/
 | 数据来源 | 一次执行的产物（`ResultSet`，驻 DuckDB 临时表） | 源库某表的分页抓取 | 无关（由数据源 trait 提供） |
 | 生命周期 | 结果集（会话内 / 可持久化引用） | 面板/标签（+ 事务） | 无状态 |
 | 可写性 | **只读**（D23） | 可编辑并写回源库（row identity + 事务） | 不适用 |
-| 归属 | `crates/editor` | `crates/database`（M4 后续项；驱动能力位 `table_editor`，字典标 `NotBuilt`、驱动未声明） | 先放 `editor/src/view/widgets/grid/` |
+| 归属 | `crates/editor` | `crates/database`（M4 后续项；驱动能力位 `table_editor`，字典标 `NotBuilt`、驱动未声明） | 实际落在 `editor/src/view/results/grid.rs`（原写的 `view/widgets/grid/` 未落地；trait 也暂未抽——只有一个使用方，见下） |
 
 **为什么不建独立 grid crate（现在）**：① 项目判定标准明确“**不建 crate 的对象：无独立状态的能力**”（如主题）——纯渲染+交互层无独立业务状态；② 1a/1b 期只有**一个**真实使用方，此时冻结接口基本必错；③ 重活（虚拟滚动、表格基座）已由 gpui-component 的 `table::{DataTable, TableState, TableDelegate}` 提供，自写部分只是 delegate + 交互，量级撑不起 crate 边界。
 
@@ -536,8 +536,9 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D6 结果单权威 | `crates/editor/src/store.rs`（`ResultStore`）+ `view/widgets` 两个视图 |
 | D21 执行通道（源库/加速/联邦）与门控 | `crates/editor/src/channel.rs` + `crates/workbench/src/services/{editor_exec.rs,editor_channels.rs}` + `engine/src/duckdb/{accel,federation/}` |
 | D22 结果通道徽标与血缘 | `crates/editor/src/store.rs`（结果集元数据：`channel` / `lineage`） |
-| D23 结果集只读 / 网格归属与提炼 | `crates/editor/src/view/widgets/grid/`（trait `GridDataSource` / `GridEditSink`）+ 架构 §3.6 |
-| D24 分段抓取 | `crates/editor/src/store.rs`（结果集窗口状态）+ `view/widgets/grid/`（“取下一段”入口与 `N+` 展示） |
+| D23 结果集只读 / 网格归属与提炼 | `crates/editor/src/view/results/grid.rs`（`ResultGridDelegate` 实现组件的 `TableDelegate`；设计里的 `GridDataSource` / `GridEditSink` trait **尚末抽**——结果集是唯一使用方，先不冻结接口，见 §3.6）+ 架构 §3.6 |
+| D24 分段抓取 | `crates/editor/src/store.rs`（结果集的窗口状态：`has_more` / `append_rows`）+ `view/results/grid.rs`（「取下一段」入口 + `has_more` 驱动的滚动到底自动续取）+ `crates/workbench/src/services/editor_exec.rs`（`fetch_next` 的宿侧实现） |
+| 结果网格的呈现口径（密度 / 截断与悬停全文 / 右键复制） | `crates/editor/src/ui.rs`（`RESULT_TABLE_SIZE` 行高档 · `RESULT_TOOLTIP_MAX_WIDTH`）+ `view/results/grid.rs`（`render_th` / `render_td` 自画挂悬停全文与坐标选择器 · `ContextTarget` + `context_menu_items` 定菜单 · `column_text` / `row_text` 拼复制文本）+ **`crates/shared/src/utils/string.rs`（`tsv_cell` / `tsv_row`：剪贴板与导出的唯一实现，`ResultEntry::to_tsv` 与 mock 预览共用）** |
 | Dock 标签能力（脏点 / 关闭语义） | `crates/editor/src/view/host.rs`（`Panel::{title_suffix, closable}`；关闭语义见 §13 #15）+ `crates/workbench/src/view.rs`（中央区装配） |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs`（`ExecTarget::{Filtered,Analysis}`）+ `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`）；分析侧另见 ✅ B15：`crates/editor/src/analysis.rs`（纯模型 + 预置菜单 + 桥接口径）+ `view/host.rs::{run_analysis,request_custom_analysis}` + `view/dialogs.rs::open_analysis_sql`（自定义 SQL）+ `view/results/grid.rs`（工具栏入口）+ `workbench/src/services/editor_exec.rs::analyze` |
 | 导出（D25） | ✅ B7：文本三档 `crates/editor/src/export.rs`（纯函数编码）+ `view/host.rs::write_export`（同步写）；**Parquet / XLSX** 走 `export::ExportFormat::is_duckdb_backed` → `execution::{DuckDbExportRequest,ExportNote}` + `ExecQueue::{request_duckdb_export,drain_export_notes}`（**一次性线程 + 回执**，不占执行位）→ `workbench/src/services/editor_exec.rs::export_via_duckdb` → `engine::services::execution_service::export_rows_via_duckdb`（临时表 → `COPY … TO …` → 必收）；真机台账 `engine/tests/duckdb_export_probe.rs` |

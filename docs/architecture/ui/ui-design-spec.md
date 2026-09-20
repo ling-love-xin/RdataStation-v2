@@ -114,6 +114,7 @@
 | **状态栏** | 高由内容（约 1.5rem）；开关图标 `ICON_SIZE_SM` | 背景 `primary` + 文字 `primary_foreground`；左右各一个「完全隐藏 / 恢复」自绘开关 |
 | **树节点** | 行高 `ROW_HEIGHT`（数据源导航树专用值见 §2.1 `NAV_ROW_*`：分组 24 / 连接 26 / 对象 22，字号沿用 `text_xs` 档）；缩进 = `TREE_BASE_PADDING` + `TREE_INDENT` × depth；激活条 `TREE_ACTIVE_BAR` | 标题 `text_sm`（导航树按密度预算取 `text_xs`）；激活态 `list_active` + `list_active_border`；**悬停不得覆盖激活态**（`list_hover` 只在未激活时生效）；类别靠**形状**区分，颜色只承载状态 |
 | **列表行** | 行高 `ROW_HEIGHT` | `list` / `list_hover` / `list_active` |
+| **表格（结果集 / Mock 预览）** | 密度 `RESULT_TABLE_SIZE` / `PREVIEW_TABLE_SIZE` = 组件 `XSmall`（行高 26px；单元格字号 `text_xs`，左右内距 `px_2` + 组件内距）；行号槽宽 48px钉左（`RESULT_ROW_NUMBER_WIDTH` / `PREVIEW_ROW_NUMBER_WIDTH`）；列宽可拖（默认 100px，结果集另给 `RESULT_COLUMN_MIN_WIDTH`） | 选中 / 悬停 / 斑马纹 / 表头底色走主题的 `table.*`（与 `list.*` 同值：选中底 `table.active.background` = `list.active.background`）；`NULL` 等字串渲染为灰 + 斜体（与字符串 `"NULL"` 区分）；单元格取值与**列名**都截断并挂**悬停全文**（长 JSON / 长文本 / 长列名没有别的地方能看全；宽度 `RESULT_TOOLTIP_MAX_WIDTH` / `PREVIEW_TOOLTIP_MAX_WIDTH` = 24rem，超长折行；行号槽不挂——它不是数据）；**排序入口是表头右端的箭头**（组件自带方向循环，跟视图内排序），要全局排序走右键（结果集「下发源库」/ 预览「重查」）；右键复制给 此值 / 此列 / 整行（TSV，含制表符 / 换行 / 引号时按 `shared::string::tsv_row` 转义——**两张表共用同一份实现**） |
 | **面板底状态行** | 高 `ROW_HEIGHT`（单行 `text_xs`），水平内距 `px_2p5` | 无底色（面板底）+ `muted_foreground`；上缘 1px `border` 分隔；内容为空时**整行不渲染**（不占高） |
 | **输入框** | 高 `CONTROL_HEIGHT_MD`（紧凑 `CONTROL_HEIGHT_SM`） | 圆角 `theme.radius`；边 `border` / `input_border`；底 `background` |
 | **下拉框** | 同输入框 | 弹层 `popover` + 圆角 `theme.radius` + 内距 `PANEL_PADDING`，最大高 ≈ `ROW_HEIGHT` × 10 |

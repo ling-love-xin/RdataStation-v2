@@ -1150,6 +1150,51 @@ fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_col
     assert!(delegate.context_cell.is_none());
 }
 
+/// 复制出去的 TSV 必须**转义**：取值里的制表符 / 换行 / 引号不处理就会把形状搞坏
+/// （一行错成两列、一个值拆成两行），而「粘进表格就能直接分列」正是那两项的用途。
+///
+/// 转义走 `shared::string::{tsv_cell, tsv_row}` 的**唯一实现**（结果集网格的右键复制也调它），
+/// 所以这条用例断言的是“预览这一侧真接了那份实现”，而不是又照拄了一遍规则。
+#[test]
+fn preview_copy_escapes_cells_that_would_break_the_shape() {
+    let delegate = super::PreviewTableDelegate {
+        panel: gpui_kit::WeakEntity::new_invalid(),
+        table: "mock_data".to_string(),
+        columns: vec!["id".to_string(), "note".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "plain".to_string()],
+            vec!["2".to_string(), "two\tcells".to_string()],
+            vec!["3".to_string(), "say \"hi\"".to_string()],
+            vec!["4".to_string(), "line\nbreak".to_string()],
+        ],
+        sort: None,
+        widths: std::collections::HashMap::new(),
+        context_cell: None,
+    };
+
+    // 整行：不用转义的照原样给，要转义的包起来（内部引号双写）
+    assert_eq!(delegate.row_text(0), "1\tplain");
+    assert_eq!(delegate.row_text(1), "2\t\"two\tcells\"");
+    assert_eq!(delegate.row_text(2), "3\t\"say \"\"hi\"\"\"");
+    assert_eq!(delegate.row_text(3), "4\t\"line\nbreak\"");
+
+    // 整列：一行一个取值（本身就是单列 TSV），带换行的取值也被包住
+    assert_eq!(
+        delegate.column_text(1),
+        [
+            "plain",
+            "\"two\tcells\"",
+            "\"say \"\"hi\"\"\"",
+            "\"line\nbreak\""
+        ]
+    );
+    assert_eq!(
+        delegate.column_text(1).len(),
+        4,
+        "取值个数不受转义影响（菜单上的数字要与真拷走的一致）"
+    );
+}
+
 /// 排序是快照的一部分：只有**生效中的排序**变了也要重建表头（表头箭头就画在它上）。
 ///
 /// 这条用例是**判别性**的：若 `set_preview` 只比行与列，点列头后箭头就会与实际数据脱钩
@@ -1260,6 +1305,41 @@ fn preview_table_dumps_the_sample_through_the_component_table(cx: &mut TestAppCo
         assert_eq!(rows[0], ["1", "1"], "行号 + 值");
         assert_eq!(rows[1], ["2", "2"]);
     });
+}
+
+/// 表格密度口径：预览表的行距 = 组件 `XSmall`（26px）+ 行分隔线，**与结果集网格同档**。
+///
+/// 这条用例是**判别性**的：与编辑器侧的 `the_result_grid_rows_are_compact` 是同一口径，
+/// 两边各量一次——任一侧的 size 掉回组件默认档（32px）就会在这里显形。
+#[gpui_kit::test]
+fn preview_rows_are_the_same_density_as_the_result_grid(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    // 默认测试窗口不高，先把窗口开高一点，保证两行都在（量间距要求两行）
+    cx.simulate_resize(gpui_kit::Size {
+        width: gpui_kit::px(900.),
+        height: gpui_kit::px(700.),
+    });
+    draw(cx);
+
+    let first = cx
+        .debug_bounds("mock-preview-rowno-0")
+        .expect("行号槽的第一行应画出来");
+    let second = cx
+        .debug_bounds("mock-preview-rowno-1")
+        .expect("假宿主回两行");
+    let pitch = second.top() - first.top();
+    assert!(
+        pitch >= gpui_kit::px(26.) && pitch <= gpui_kit::px(27.),
+        "行距 = 组件 XSmall（26px）+ 行分隔线；实测 {pitch:?}"
+    );
 }
 
 /// 预览的按列重排：取样换成**重查来的**排序结果；取消 / 取样被换掉后自动回到生成顺序。
