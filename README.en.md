@@ -370,6 +370,27 @@ cargo test-all              # = test --workspace -j 2 (concurrency must be limit
 cargo clippy-all            # = clippy --workspace --all-targets
 ```
 
+### 2. Releases (download and run; nothing is packaged locally)
+
+Release archives are built **in the cloud by GitHub Actions** and attached to the Release page
+(no local compilation, no local packaging, no manual upload):
+
+| Platform | Asset | How to start |
+| --- | --- | --- |
+| Windows x86_64 | `rds-app-<version>-windows-x86_64.zip` | Unzip and run `rds-app.exe` (`duckdb.dll` sits next to it) |
+| Linux x86_64 | `rds-app-<version>-linux-x86_64.tar.gz` | Unzip and run `./rds-app` (the shared library resolves via RPATH, no `LD_LIBRARY_PATH` needed) |
+| macOS arm64 / x86_64 | `rds-app-<version>-macos-*.tar.gz` | Unzip to get `RdataStation.app`; it is **unsigned**, so the first launch needs right-click → Open (or `xattr -dr com.apple.quarantine RdataStation.app`) |
+
+**Releasing means pushing a tag**; everything else happens in the cloud:
+
+```bash
+# the version lives in [workspace.package] of the root Cargo.toml (keep it in sync with the tag)
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Each archive ships with a `.sha256` companion. Archive layout (binary + DuckDB shared library +
+`assets/`), platform limitations and troubleshooting: `docs/architecture/release/release-pipeline.md`.
+
 ### Things worth knowing
 
 | Item | Why |
@@ -379,7 +400,7 @@ cargo clippy-all            # = clippy --workspace --all-targets
 | The default build excludes `plugin` | `default-members = ["crates/app"]`, and `plugin` is not on the app's dependency graph — a bare `cargo test` won't cover it either |
 | The dev data root is `.rds/` | `RDS_HOME` and `TEMP` are both pinned inside the repository so a `cargo clean` can't wipe `global.db` or the key store; an explicit `RDS_HOME=<path>` on the command line still wins |
 | `target/` grows | `tools/target-guard.sh` reports on it (60 GB threshold by default, exit code 1 above it); `tools/target-guard.sh --clean` removes regenerable files |
-| Linux / macOS | Set `LD_LIBRARY_PATH` to `third_party/duckdb/1.5.5` (on Windows, `build.rs` copies the DLL for you) |
+| Linux / macOS | Set `LD_LIBRARY_PATH` to `third_party/duckdb/1.5.5` for local development (on Windows, `build.rs` copies the DLL for you); **release archives already bake `$ORIGIN` / `@executable_path` into the RPATH**, so they run straight out of the box |
 
 ## Quality & verification
 
@@ -423,6 +444,7 @@ The fastest way in, depending on what you want:
 | Individual modules (M1–M9) | `docs/architecture/<module>/README.md` is the entry point; each module has five kinds of docs: entry / prototype design / interactive mockup / architecture / dev plan / user guide |
 | Layout / theme / UI spec | `docs/architecture/layout/` · `theme/` · `ui/ui-design-spec.md` |
 | Dependencies and DuckDB linking | `docs/architecture/dependencies/` |
+| **Releases and packaging (tag = release)** | [`docs/architecture/release/release-pipeline.md`](docs/architecture/release/release-pipeline.md) — four-platform cloud build → Release Assets; archive layout, platform limits, troubleshooting |
 | The v1 → v2 migration | `docs/migration/v1-to-v2-mapping.md` |
 | Interactive prototypes (open in a browser) | The `*-prototype.html` and `*-showcase.html` files under [`docs/architecture/`](docs/architecture/) (self-contained and offline-openable; **design prototypes, not app screenshots**) |
 

@@ -17,6 +17,10 @@ v1/frontend/node_modules/
 # 手工回归跑的输出（历史上的 `targetm3-regression.log` 曾误入库；日志不入库）
 /target*.log
 
+# 发布打包产物（tools/package-release.sh 输出：可分发目录 + 归档 + 校验和）
+# 设计见 docs/architecture/release/release-pipeline.md
+/dist/
+
 # 本机专用诊断 / 真机自检脚本：按约定以 `zz_` 前缀命名，**一律不入库**。
 # 背景：`crates/workbench/tests/zz_fixture_probe.rs` 曾被提交并推到公开仓库，
 # 内含内网地址与明文凭据（该文件自己的头部就写着「不要提交」，但当时没有规则挡住）。

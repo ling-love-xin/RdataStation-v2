@@ -28,6 +28,11 @@
 //! | --- | --- | --- |
 //! | `RDS_HOME` | 覆盖整个数据根 | 可执行文件所在目录（不可写时回退平台本地数据目录） |
 //! | `RDS_TEMP_DIR` | 只覆盖临时目录（放到机械盘 / 网络盘会拖慢 DuckDB spill） | `<RDS_HOME>/tmp` |
+//! | `RDS_ASSETS_DIR` | 覆盖**随包只读资源**目录（主题 / 图标） | 可执行文件同级 `assets/` → 开发期仓库 `assets/` |
+//!
+//! ⚠️ 上面那张表里只有 `assets/` 不是生成物：它随安装包走、只读，**不落在 `RDS_HOME` 下**。
+//! 为什么也放在本 crate：发布版由云端构建，编译期路径（`CARGO_MANIFEST_DIR`）指的是构建机的
+//! 检出目录——用户机上不存在，表现为主题与标题栏图标**静默**丢失（读目录失败即返回）。
 //!
 //! ## 启动契约
 //!
@@ -51,6 +56,8 @@ pub use migrate::{MigrationReport, migrate_legacy_layout};
 const ENV_HOME: &str = "RDS_HOME";
 /// 临时目录环境变量（单独覆盖）。
 const ENV_TEMP: &str = "RDS_TEMP_DIR";
+/// 随包只读资源目录环境变量（单独覆盖）。
+const ENV_ASSETS: &str = "RDS_ASSETS_DIR";
 /// 回退目录名：数据根不可写时落到平台本地数据目录下的这个名字（与旧布局同名，便于识别）。
 const FALLBACK_DIR_NAME: &str = "RdataStation";
 /// 可写性探测用的临时文件名（写完即删）。
@@ -151,6 +158,76 @@ pub fn temp_dir() -> PathBuf {
 /// ⚠️ 这是 **DuckDB 的 SQL 扩展**，与插件系统（M9）无关；插件用 [`plugins_dir`]。
 pub fn extensions_dir() -> PathBuf {
     home().join("extensions")
+}
+
+// ==================== 随包只读资源（`assets/`）====================
+//
+// 与上面全体成员的分别：上面那些是**软件生成的**（可写、跟着用户走），这里这一份是
+// **随包发布的**（只读、跟着安装包走）。放在本 crate 的理由同样是「路径解析只在一处发生」。
+//
+// 为什么不能只写编译期路径：发布包由 CI 在云端构建（`.github/workflows/release.yml`），
+// `env!("CARGO_MANIFEST_DIR")` 指的是**构建机**的检出目录，用户机上根本不存在。
+// 主题目录读不出来时 `read_dir` 直接返回、产品 token 加载失败只打一行 stderr，
+// 界面照常起来——这类「静默降级」正是发版后最难查的问题，故把规则显式化。
+
+/// 随包只读资源目录（`assets/`：主题 / 应用图标）。
+///
+/// 取值顺序（首个**存在**的目录胜出；进程内恒定）：
+///
+/// 1. `RDS_ASSETS_DIR`（显式覆盖，不要求存在）；
+/// 2. **可执行文件同级 `assets/`** —— 发布包布局（`rds-app.exe` + `duckdb.dll` + `assets/`），
+///    也覆盖用户自己解压到任意目录、或把 `assets/` 拷到 exe 旁边的场景；
+/// 3. **仓库根的 `assets/`**（编译期路径）—— 开发期布局：`cargo run` 的 exe 在 `target/debug/`，
+///    旁边没有 `assets/`；
+/// 4. 都不存在：返回「可执行文件同级 `assets/`」并在 stderr 提示——路径可预测，
+///    读不到就说明那份包少了文件，而不是去别处乱找。
+///
+/// 只读语义由调用方遵守：这里不建目录、不探测可写性（与 [`home`] 的差别所在）。
+pub fn assets_dir() -> PathBuf {
+    static ASSETS: OnceLock<PathBuf> = OnceLock::new();
+    ASSETS.get_or_init(resolve_assets_dir).clone()
+}
+
+fn resolve_assets_dir() -> PathBuf {
+    if let Some(raw) = std::env::var_os(ENV_ASSETS) {
+        let candidate = PathBuf::from(raw);
+        if !candidate.as_os_str().is_empty() {
+            return candidate;
+        }
+    }
+
+    let exe_side = executable_dir().map(|dir| dir.join("assets"));
+    let dev_side = dev_assets_dir();
+    let fallback = exe_side
+        .clone()
+        .or_else(|| dev_side.clone())
+        .unwrap_or_else(|| PathBuf::from("assets"));
+    let dir = pick_existing_dir(&[exe_side.as_deref(), dev_side.as_deref()], fallback);
+    if !dir.is_dir() {
+        eprintln!(
+            "[paths] 未找到随包资源目录 {}：主题与标题栏图标会缺失\
+             （发布包应把 assets/ 放在可执行文件同级）",
+            dir.display()
+        );
+    }
+    dir
+}
+
+/// 按顺序取第一个存在的候选目录；都不存在时返回 `fallback`。
+fn pick_existing_dir(candidates: &[Option<&Path>], fallback: PathBuf) -> PathBuf {
+    candidates
+        .iter()
+        .filter_map(|candidate| *candidate)
+        .find(|candidate| candidate.is_dir())
+        .map_or(fallback, Path::to_path_buf)
+}
+
+/// 开发期的仓库 `assets/`（编译期路径；发布版走 exe 同级那一份）。
+fn dev_assets_dir() -> Option<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .parent()
+        .map(|root| root.join("assets"))
 }
 
 // ==================== 插件系统（M9）====================

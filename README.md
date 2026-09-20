@@ -370,6 +370,26 @@ cargo test-all              # = test --workspace -j 2（必须限制并发）
 cargo clippy-all            # = clippy --workspace --all-targets
 ```
 
+### 2. 发布版（下载即用，本地不打包）
+
+发布包由 **GitHub Actions 在云端**构建并挂到 Release 页（本地不编、不打包、不上传）：
+
+| 平台 | 资产 | 上手 |
+| --- | --- | --- |
+| Windows x86_64 | `rds-app-<版本>-windows-x86_64.zip` | 解压后跑 `rds-app.exe`（`duckdb.dll` 就在旁边） |
+| Linux x86_64 | `rds-app-<版本>-linux-x86_64.tar.gz` | 解压后 `./rds-app`（动态库靠 RPATH 命中，不必设 `LD_LIBRARY_PATH`） |
+| macOS arm64 / x86_64 | `rds-app-<版本>-macos-*.tar.gz` | 解压得到 `RdataStation.app`；**未签名**，首次打开需右键 → 打开（或 `xattr -dr com.apple.quarantine RdataStation.app`） |
+
+**发布动作就是推一个标签**，其余全在云端：
+
+```bash
+# 版本号在根 Cargo.toml 的 [workspace.package]（建议与标签对齐）
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+每个归档另带 `.sha256`。包内结构（可执行文件 + DuckDB 动态库 + `assets/`）、
+平台限制与故障排查见 `docs/architecture/release/release-pipeline.md`。
+
 ### 需要注意的几件事
 
 | 事项 | 说明 |
@@ -379,7 +399,7 @@ cargo clippy-all            # = clippy --workspace --all-targets
 | 默认构建不含 `plugin` | `default-members = ["crates/app"]`，`plugin` 不在 app 依赖图上，裸 `cargo test` 也不会覆盖它 |
 | 开发期数据根是 `.rds/` | `RDS_HOME` 与 `TEMP` 都被钉到仓库内，避免一次 `cargo clean` 清掉 `global.db` 与密钥库；命令行显式 `RDS_HOME=<某处>` 仍可覆盖 |
 | `target/` 会膨胀 | `tools/target-guard.sh` 体检（默认 60 GB 阈值，超出退出码 1），`tools/target-guard.sh --clean` 清理可再生文件 |
-| Linux / macOS | 需 `LD_LIBRARY_PATH` 指向 `third_party/duckdb/1.5.5`（Windows 由 `build.rs` 自动拷贝 dll） |
+| Linux / macOS | 本地开发需 `LD_LIBRARY_PATH` 指向 `third_party/duckdb/1.5.5`（Windows 由 `build.rs` 自动拷贝 dll）；**发布包已把 `$ORIGIN` / `@executable_path` 写进 RPATH，解压即用** |
 
 ## 质量与验证
 
@@ -423,6 +443,7 @@ cargo clippy-all            # = clippy --workspace --all-targets
 | 各模块（M1–M9） | `docs/architecture/<模块>/README.md` 是入口，每个模块配五类文档：入口 / 原型设计 / 交互稿 / 架构 / 开发方案 / 使用手册 |
 | 布局 / 主题 / UI 规格 | `docs/architecture/layout/` · `theme/` · `ui/ui-design-spec.md` |
 | 依赖与 DuckDB 链接 | `docs/architecture/dependencies/` |
+| **发布与打包（打标签即发版）** | [`docs/architecture/release/release-pipeline.md`](docs/architecture/release/release-pipeline.md) —— 四平台云端构建 → Release Assets；包内结构、平台限制与故障排查 |
 | v1 → v2 迁移 | `docs/migration/v1-to-v2-mapping.md` |
 | 可交互原型（浏览器直接打开） | [`docs/architecture/`](docs/architecture/) 下各模块的 `*-prototype.html` 与 `*-showcase.html`（自包含、可离线；**是设计原型，不是应用截图**） |
 

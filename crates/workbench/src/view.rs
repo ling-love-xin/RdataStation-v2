@@ -9,7 +9,6 @@
 //! - Quick Open：搜索 + 命令融合（标题栏居中入口 / Ctrl+P），受控自绘弹层；
 //! - 颜色一律取自 `cx.theme().colors`（禁止 raw hex/rgb）。
 
-use std::path::Path;
 use std::rc::Rc;
 
 use gpui_kit::base::{Selectable, StyledExt};
@@ -936,7 +935,8 @@ impl WorkbenchView {
         let entity = cx.entity();
 
         // 软件图标（明亮版；暗黑版未设计，dark 主题先复用，见 theme-design.md）。
-        let icon_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/32x32.png");
+        // 路径走 `paths::assets_dir()`：发布包取可执行文件同级 `assets/`，开发期回退仓库那份。
+        let icon_path = paths::assets_dir().join("icons").join("32x32.png");
         let logo = img(icon_path.as_path()).w_5().h_5().rounded_sm();
 
         // 挖空项目槽：产品语义 token `title_bar.slot.background`。

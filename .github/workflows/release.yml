@@ -1,0 +1,164 @@
+name: Release
+
+# 打标签即发布：云端编译多平台二进制 → 打包 → 上传到 Release Assets。
+# 本地不打包、不上传（设计 / 流程 / 排错见 docs/architecture/release/release-pipeline.md）。
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# 手动跑（Actions → Release → Run workflow）只出工作流附件、**不建 Release**，用来试跑矩阵。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# softprops/action-gh-release 要写 Release（建标签对应的 Release + 传 Assets）
+permissions:
+  contents: write
+
+# 同一个 tag 重复推 / 手动试跑：不并发跑两遍（tag 事件本身很少重叠，这条是兜底）
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # 云端不复用 target/，增量编译只会拖慢并撑大磁盘
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # 首次运行要编整个工作区（含 gpui 视图层与驱动栈）；`-j 2`（见下）下留足余量
+    timeout-minutes: 240
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
+          # 钉在 22.04：glibc 2.35 是当前主流发行版的下限；24.04 编出来的包在旧系统上跑不了
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+            # DuckDB 动态库与可执行文件同级：把 `$ORIGIN` 写进 RPATH，
+            # 用户解压即用，不必再配 LD_LIBRARY_PATH（本地开发仍按 README 配）
+            rustflags: "-C link-arg=-Wl,-rpath,$ORIGIN"
+          - name: macOS arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            rustflags: "-C link-arg=-Wl,-rpath,@executable_path"
+          - name: macOS x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+            platform: macos-x86_64
+            rustflags: "-C link-arg=-Wl,-rpath,@executable_path"
+
+    env:
+      # 只有 Linux / macOS 需要（Windows 由加载器按 exe 目录搜索）
+      RUSTFLAGS: ${{ matrix.rustflags }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      # gpui 的 Linux 后端要 wayland / xkbcommon / xcb / fontconfig，bindgen 要 libclang，
+      # native-tls 要 OpenSSL；缺了会在编译期报找不到头文件或 -lxxx。
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev libssl-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-xkb-dev libxcb-shm0-dev \
+            libx11-dev libx11-xcb-dev libvulkan1 libvulkan-dev
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # 只缓存依赖下载（registry / git），**不缓存 target/**：本工作区一份 target/ 就有数 GB，
+      # 会挤爆仓库的 10 GB 缓存预算，上传时间也比省下的编译时间还长。
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-targets: false
+
+      # 仓库里的脚本都是 644（用 `bash` 显式调用，Windows 的 Git-Bash 不认 shebang 执行位）
+      - name: 取 DuckDB 预编译内核
+        shell: bash
+        env:
+          GH_PROXY: "" # runner 能直连 GitHub，不走镜像；版本与 crate 成对，见 Cargo.toml 注
+        run: bash tools/fetch-duckdb.sh
+
+      - name: 解析版本号
+        id: meta
+        shell: bash
+        run: |
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            if [ "$TAG" != "v$CARGO_VERSION" ]; then
+              echo "::warning::标签 $TAG 与 Cargo.toml 的版本 $CARGO_VERSION 不一致，产物按标签命名"
+            fi
+          else
+            # 手动试跑：没有标签，用 Cargo.toml 的版本
+            VERSION="$CARGO_VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "版本：$VERSION"
+
+      # `-j 2`：多个 rustc 同时链接重型 crate 会吃满内存（与 README / config.toml 同口径）
+      - name: 构建 rds-app（release）
+        run: cargo build --release --locked -p rds-app -j 2 --target ${{ matrix.target }}
+
+      # 把 RPATH 与 DuckDB 依赖打进日志：发布包「库没找到」这类问题一眼可查
+      - name: 打印链接信息（排错用）
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/rds-app"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            otool -L "$BIN" | grep -i duckdb || true
+            otool -l "$BIN" | grep -A2 LC_RPATH || true
+          else
+            readelf -d "$BIN" | grep -Ei 'rpath|runpath|duckdb' || true
+          fi
+
+      - name: 打包（可分发目录 + 归档 + 校验和）
+        shell: bash
+        run: bash tools/package-release.sh "${{ steps.meta.outputs.version }}" "${{ matrix.target }}"
+
+      - name: 上传工作流附件
+        uses: actions/upload-artifact@v4
+        with:
+          name: rds-app-${{ steps.meta.outputs.version }}-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      # 矩阵各跑各的、各自上传：action 第一次跑建 Release，其余追加 Assets
+      - name: 上传到 Release Assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RdataStation ${{ github.ref_name }}
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true

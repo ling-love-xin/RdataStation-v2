@@ -45,6 +45,7 @@ paths::data_dir()        // home/data
 paths::log_dir()         // home/logs
 paths::temp_dir()        // home/tmp
 paths::extensions_dir()  // home/extensions
+paths::assets_dir()      // 随包只读资源（主题 / 图标）——**不**在 home 下，见 §3.1
 ```
 
 **默认值规则**：`RDS_HOME` 未设时 = **可执行文件所在目录**（即软件的安装目录；开发运行时即 `target/debug/`）：
@@ -64,8 +65,29 @@ paths::extensions_dir()  // home/extensions
 | --- | --- | --- |
 | `RDS_HOME` | 覆盖全部派生路径的根 | 见 §2 |
 | `RDS_TEMP_DIR` | 单独覆盖临时目录（放到机械盘/网络盘会拖慢 DuckDB spill） | `<RDS_HOME>/tmp` |
+| `RDS_ASSETS_DIR` | 覆盖**随包只读资源**目录（主题 / 图标） | 可执行文件同级 `assets/` → 开发期仓库 `assets/`（见 §3.1） |
 | ~~`RDS_KNOWN_HOSTS`~~ | SSH known_hosts（**默认仍用 `~/.ssh/known_hosts`**：属用户资产，跨应用共用）。⚠ **本次未实现**（`known_hosts.rs` 未改，见 §9.3）；要用请先落地读取 | 用户主目录 |
 | `RUST_LOG` / 既有日志开关 | 不变 | — |
+
+### 3.1 随包只读资源（`assets/`，唯一一处不在 `RDS_HOME` 下）
+
+上面表里只有 `assets/` **不是生成物**：它随安装包走、只读，且必须待在可执行文件旁边：
+
+```
+<解压目录>/
+├── rds-app(.exe)          # 可执行文件
+├── duckdb.dll|.so|.dylib  # DuckDB 内核（Windows 按 exe 目录搜；Linux/macOS 靠 RPATH）
+└── assets/{themes,icons}  # 主题与产品语义 token；标题栏图标
+```
+
+取值顺序（首个**存在**的目录胜出）：`RDS_ASSETS_DIR` → 可执行文件同级 `assets/` →
+编译期仓库 `assets/`（开发期）→ 都没有则回落「exe 同级」并打一条 stderr 提示。
+
+为什么不能只认编译期路径：发布包由 CI 在云端构建（见 `../release/release-pipeline.md`），
+`env!("CARGO_MANIFEST_DIR")` 指的是**构建机**的检出目录——用户机上不存在，而主题目录
+读不出来时 `read_dir` 直接返回、token 加载失败只打一行 stderr，界面照常起来（静默降级）。
+
+**不带进包**：`assets/public/`（README 截图与品牌素材，运行时不读）。
 
 ## 4. 实施要点（低成本的关键做法）
 
@@ -151,6 +173,7 @@ paths::extensions_dir()  // home/extensions
 | 设计决策 | 实现位置 |
 | --- | --- |
 | 唯一路径解析点 | `crates/paths/src/lib.rs`（新增 crate：`home/config_dir/data_dir/log_dir/temp_dir/extensions_dir`） |
+| 随包只读资源（`assets/`） | `crates/paths/src/lib.rs`（`assets_dir`）；消费方 `crates/app/src/main.rs`（主题目录）、`crates/workbench/src/view.rs`（标题栏图标）；打包见 `tools/package-release.sh` |
 | 进程临时目录重定向 | `crates/app/src/main.rs`（启动最早处设 `TEMP`/`TMPDIR`） |
 | 设置路径 | `crates/settings/src/lib.rs` |
 | 全局数据 / 密钥库 | `crates/engine/src/migration/global_init.rs`、`crates/engine/src/persistence/*`、`crates/shared/src/crypto.rs` |

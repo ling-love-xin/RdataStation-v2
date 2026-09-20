@@ -4,7 +4,7 @@
 //! 在 Rust 2024 下是 `unsafe` 且与并行测试争用，不值得。这里只测真正会坏的事：
 //! ① 派生目录是否都挂在同一个根下（含插件 M9 的五个）；② 插件 id 白名单能不能挡住路径穿越；
 //! ③ 新增顶层目录有没有漏登记（漏了迁移会搬错）；④ 迁移的路由与"只补不盖"；
-//! ⑤ 测试构建是否拿到了隔离数据根（不写产品目录）。
+//! ⑤ 测试构建是否拿到了隔离数据根（不写产品目录）；⑥ 随包资源目录（`assets/`）取的是哪一份。
 
 use std::path::{Path, PathBuf};
 
@@ -169,6 +169,58 @@ fn pin_root_is_rejected_after_resolution() {
         !crate::pin_root(std::env::temp_dir().join("rds_late_pin")),
         "已经解析过数据根时 pin_root 应返回 false"
     );
+}
+
+/// 随包资源目录的取值顺序：**exe 同级**优先于**仓库**（发布包布局胜过开发期路径）。
+///
+/// 顺序反了不会报错——只会让用户在发布版里看到 gpui-kit 默认主题，所以这里钉死它。
+#[test]
+fn assets_dir_prefers_the_one_next_to_the_executable() {
+    let root = temp_root("assets_pick");
+    let exe_side = root.join("install/assets");
+    let dev_side = root.join("repo/assets");
+    let missing = root.join("nowhere/assets");
+    std::fs::create_dir_all(&exe_side).unwrap();
+    std::fs::create_dir_all(&dev_side).unwrap();
+
+    // 发布包：exe 旁边那份胜（哪怕仓库那份也存在）
+    assert_eq!(
+        crate::pick_existing_dir(&[Some(&exe_side), Some(&dev_side)], missing.clone()),
+        exe_side
+    );
+    // 开发期：exe 旁边（`target/debug/assets`）没有 → 用仓库那份
+    assert_eq!(
+        crate::pick_existing_dir(&[Some(&missing), Some(&dev_side)], missing.clone()),
+        dev_side
+    );
+    // 两处都没有 → 回退值（不 panic，路径可预测，调用方会打一条 stderr 提示）
+    assert_eq!(
+        crate::pick_existing_dir(&[Some(&missing), None], missing.clone()),
+        missing
+    );
+    assert_eq!(
+        crate::pick_existing_dir(&[], exe_side.clone()),
+        exe_side,
+        "候选为空时仍要给回退值"
+    );
+}
+
+/// 开发/CI 检出里必须真的解得开 `assets/`：主题与产品 token 就在里面，
+/// 发布包则是把同一份目录拷到 exe 旁边（见 `tools/package-release.sh`）。
+#[test]
+fn assets_dir_resolves_to_the_repo_assets_in_a_checkout() {
+    let dir = crate::assets_dir();
+    assert!(
+        dir.is_dir(),
+        "{} 应存在（开发期回退到仓库 assets/）",
+        dir.display()
+    );
+    assert!(
+        dir.join("themes/product-tokens.json").is_file(),
+        "产品语义 token 不在随包资源里：{}",
+        dir.display()
+    );
+    assert_eq!(dir, crate::assets_dir(), "解析结果应进程内恒定");
 }
 
 /// 旧目录里的 `settings.json` 归 `config/`，其余归 `data/`；新布局自己的目录名要跳过；

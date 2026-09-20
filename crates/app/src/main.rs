@@ -156,8 +156,9 @@ fn run_app() {
             // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。
             //    （`watch_dir` 为异步加载，若仅依赖它，窗口创建早于加载完成时会停留在
             //    gpui-kit 默认主题，表现为全局颜色与设计不符。）
-            let themes_dir =
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
+            // 目录取值见 `paths::assets_dir()`：发布包取**可执行文件同级** `assets/`，
+            // 开发期回退仓库的 `assets/`（编译期路径在用户机上不存在，不能只认它）。
+            let themes_dir = paths::assets_dir().join("themes");
             load_theme_assets(&themes_dir, cx);
             attach_rds_theme(cx);
             // 2b. 产品语义 token（gpui-kit 固定语义面之外的角色）。

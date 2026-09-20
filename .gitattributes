@@ -1,0 +1,15 @@
+# 行尾策略
+#
+# 为什么需要：发布流水线（`.github/workflows/release.yml`）在 Linux / macOS runner 上用
+# `bash` 跑 `tools/*.sh`。脚本一旦以 CRLF 入库，Linux 上的 bash 会把 `\r` 当成内容，
+# 报出 `pipefail\r: invalid option name` 这类看不出原因的错误——而 Windows 的 Git-Bash
+# 默认按文本模式读文件、把 CRLF 抹掉，本地怎么试都是好的（本机工作树就是 CRLF）。
+# 把「入库形态」钉死，就不必依赖每台机器的 `core.autocrlf`。
+#
+# 注意：这里只钉脚本与 CI 配置，不用 `* text=auto` 全局重写行尾（会给存量文件带来无谓的
+# 重新规范化改动）。
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+# PowerShell 是 Windows 侧工具（`-File` 执行）：工作树给 CRLF，入库仍是 LF
+*.ps1 text eol=crlf
