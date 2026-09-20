@@ -8,6 +8,17 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-20 — Phase 4 第三刀（P4.4 第一半 + 指纹文案）：双击分析表能看见数据
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V36 | **`analysis` 型的「打开（只读）」改走洞察取样入口**（与右键「查看统计」同一个：`SampleSource::duckdb_file` → 临时表），并给一句回执说明“本体仍只读”；文件型仍走编辑器只读 | `crates/workbench/src/components/resource_host.rs::request_open` | 双击一份 CSV 存档，用户要看的是**数据**，不是一段 CSV 文本；洞察入口已经把本体当只读源表读出来了，直接用 |
+| V37 | **指纹口径写进 UI**（R4 要求的“写进 UI 文案”收尾）：分析表的「复制」按钮 tooltip 改说“指纹 = 定义 + 列结构；行数变化不算内容变化”（`analysis::FINGERPRINT_HINT`），文件型仍是“复制完整指纹” | `src/detail_view.rs` | 同一串十六进制在两个档里意思不同，就在用户会问“这串是什么”的那个按钮上说清 |
+| 测试 | 沿用既有覆盖（M6 侧文案有单测；宿主分流是 3 行分支）——本刀**未新增自动化用例**，如实记账 | — | — |
+| 验证 | `cargo check -j 2 -p rds-workbench -p rds-analytics-resource --all-targets` 无错；`rds-analytics-resource` 157 + 25 + 10、`rds-workbench --lib` 124 全绿 | — | — |
+
+> **P4.4 余项**（原型原话是“结果表格：复用编辑器结果区组件”）：需要编辑器侧开一个“以结果区打开数据文件（只读）”的 API——现在编辑器只有“打开文本 + 执行 SQL”那条路。在那之前，`analysis` 型的打开由洞察取样入口承担（能看数据、能看形状）。
+
 ### 2026-09-20 — Phase 4 第二刀（P4.1 第二半 + P4.5 核心一步）：数据文件的采集侧
 
 | V | 做什么 | 落点 | 为什么 / 影响面 |
@@ -803,7 +814,7 @@
 | P4.1 | `analysis` 型本体层：表/视图存在性、`definition_sql` 采集（`SHOW`/`duckdb_tables`）、行数×列数、结构摘要指纹 | `src/payload.rs`（analysis 分支） | 指纹对结构变化敏感、对行数变化策略明确（见风险 R4） |
 | P4.2 | 上游接入：**M7 Mock 产物**归档（对齐 `mock_persist_as_asset` 的文档/实现落差，二选一并同步文档） | `crates/mock`、`src/service.rs` | Mock 生成后可一键归档，指纹与定义可查 |
 | P4.3 | 上游接入：**M5 编辑器结果落库后归档** | `workbench` EditorPanel、`src/service.rs` | 归档后可"重新执行定义"复算 |
-| P4.4 | 打开路径：`analysis` 型双击 → 结果表格（复用编辑器结果区组件） | `workbench` | 只读呈现 |
+| P4.4 | 打开路径：`analysis` 型双击 → 结果表格（复用编辑器结果区组件）—— **第一半已落（第十九刀）：走洞察取样入口（能看数据与形状）**；**余**：编辑器结果区的只读打开 API | `workbench` | 只读呈现 |
 | P4.5 | 上游接入：**草稿箱数据文件 → `analysis`**（CSV / Parquet / Excel / JSON：归档时文件作本体，分析走配方） | `crates/scratchpad` 的 C6/D2 路径（提升/归档）、`src/service.rs` | 归档后能洞察能复算；溯源（`promoted_from` + `content_hash`）齐全 |
 | P4.6 | 上游接入：**数据库导航表 → 分析资产**（先定档位：`table_ref` 记引用 vs `analysis` 物化快照，见下方建议） | `crates/database` 导航菜单 + `src/service.rs` | 归档后能洞察；引用型带失效警告与“立即校验”（同时回答 Phase 5 的前置问题） |
 

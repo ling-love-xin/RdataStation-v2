@@ -531,6 +531,29 @@ impl ResourcesHost for WorkbenchResourceHost {
         let Some(path) = self.payload_path(detail, cx) else {
             return;
         };
+        // 分析表（数据文件）**不走编辑器文本**：双击/打开要看的是数据本身。
+        //
+        // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
+        // （D58：取样 → 临时表），用户能直接看到这张表的形状与数据。
+        //
+        // 注：原型 P4.4 想要的是“编辑器结果表格（只读）”，那需要编辑器侧先开一个
+        // “以结果区打开数据文件”的 API（现在只有“打开文本 + 执行”），属 P4.4 余项；
+        // 在此之前“双击能看见数据”这件事由洞察入口承担，比摆一个点了没反应的按钮强。
+        if detail.kind == ArchiveKind::Analysis {
+            match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
+                Ok(source) => {
+                    let name = detail.name.clone();
+                    self.shared
+                        .open_insight_source_table(source, name.clone(), cx);
+                    self.notice(
+                        format!("资产库：已在洞察面板打开「{name}」（取样）——本体仍只读"),
+                        cx,
+                    );
+                }
+                Err(error) => self.notice(format!("资产库：{error}"), cx),
+            }
+            return;
+        }
         // **编辑器只读**：改它要先去取回（本体不可写是模块硬约束 2）。
         self.shared.request_open_in_editor_read_only(path);
         self.shared.notify_host(cx);
