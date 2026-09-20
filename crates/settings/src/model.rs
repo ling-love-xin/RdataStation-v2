@@ -180,6 +180,14 @@ pub struct Resources {
     /// 路径换名 / 移动后这一项会重新从空开始（视图状态，不值得为它做路径重写）。
     #[serde(default)]
     pub collapsed_groups: BTreeMap<String, Vec<String>>,
+    /// 默认分组：**项目根路径 → 该项目的默认分组 id**（归档对话框预选它）。
+    ///
+    /// 为何按项目分桶：与 [`collapsed_groups`](Self::collapsed_groups) 同——分组 id 是
+    /// 每项目自己生成的。为何**不跟随上次归档**（案 B）：默认分组回答的是“这个项目里我
+    /// 习惯把产物放哪”（一份稳定设置），而不是“上次做了什么”；分组归属是内容属性，
+    /// 猜错的代价与视图状态不对称（判据见 `analytics-resource-dev-plan.md` §4 的两案对比）。
+    #[serde(default)]
+    pub default_group: BTreeMap<String, String>,
 }
 
 impl Default for Resources {
@@ -188,6 +196,7 @@ impl Default for Resources {
             keep_versions: default_keep_versions(),
             default_sort: default_resource_sort(),
             collapsed_groups: BTreeMap::new(),
+            default_group: BTreeMap::new(),
         }
     }
 }

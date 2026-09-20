@@ -49,6 +49,11 @@ impl SidebarPanel {
         if let Some(root) = shared.project_root() {
             let keys = settings::SettingsService::collapsed_groups(&root.to_string_lossy(), cx);
             panel.update(cx, |panel, cx| panel.set_collapsed(&keys, cx));
+            // 默认分组（设置项 `resources.default_group`，同样按项目分桶）：构造期注入；
+            // 分组头右键改它时面板先改本地标记、再交宿主写回。
+            let default_group =
+                settings::SettingsService::default_group(&root.to_string_lossy(), cx);
+            panel.update(cx, |panel, cx| panel.set_default_group(default_group, cx));
         }
         // 登记弱句柄：右侧「存档详情」要拿它的选中项（宿主级弱句柄，与 mock / insight 同例）。
         *shared.resources_panel.borrow_mut() = Some(panel.downgrade());

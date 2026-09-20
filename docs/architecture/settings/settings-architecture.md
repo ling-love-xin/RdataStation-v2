@@ -140,6 +140,7 @@ graph TD
 | `resources.keep_versions` | 资产库 | i64（份数；`-1` = 全留、`0` = 只留元数据） | `5` | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（主线程读→`KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` | 设置页 | ✅ 已落地（2026-09-18）|
 | `resources.default_sort` | 资产库 | enum `name`/`archived_at`/`updated_at`/`size`/`version` | `name` | 下次操作 | `components/resource_host.rs::remember_sort`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_sort`） | 两者 | ✅ 已落地（2026-09-18）|
 | `resources.collapsed_groups` | 资产库 | 复合值：`{项目根: [分组 key]}` | `{}` | 下次操作 | `components/resource_host.rs::remember_collapsed`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_collapsed`） | 模块内（不上页） | ✅ 已落地（2026-09-18；作用域见 §14 Q7） |
+| `resources.default_group` | 资产库 | 复合值：`{项目根: 分组 id}` | `{}` | 下次归档 | `components/resource_host.rs::remember_default_group`（写）+ 同处 `default_group_for_archive` / `build_resources_panel`（读，注入 `ResourcesPanel::set_default_group` 并作为 `ArchiveDialogSeed::group_id`） | 模块内（不上页；入口在分组头右键） | ✅ 已落地（2026-09-20；作用域与 Q7 同） |
 | `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 

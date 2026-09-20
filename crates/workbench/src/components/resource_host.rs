@@ -228,6 +228,19 @@ impl WorkbenchResourceHost {
             .unwrap_or_default()
     }
 
+    /// 归档要预选的分组：设置里的默认分组，**且它还在字典里**。
+    ///
+    /// 两个都要：认不出的 id 不能当预选值（用户会以为“归档没进默认分组”，而实际是分组已删）。
+    /// 返回 `None` = 未分组——与对话框自己的兑底同一口径（它也会把悬空 id 显示成未分组）。
+    fn default_group_for_archive(&self, cx: &App) -> Option<String> {
+        let root = self.shared.project_root()?;
+        let id = settings::SettingsService::default_group(&root.to_string_lossy(), cx)?;
+        self.known_groups(cx)
+            .iter()
+            .any(|group| group.id == id)
+            .then_some(id)
+    }
+
     fn group_name(&self, folder_id: &str, cx: &App) -> Option<String> {
         let entity = self
             .shared
@@ -304,8 +317,10 @@ impl ResourcesHost for WorkbenchResourceHost {
 
         let shared = self.shared.clone();
         let read_only = self.read_only();
-        // 分组名单在事件路径上取一份（来自面板快照的字典，不查库）；闭包里只能拿副本。
+        // 分组名单与默认分组都在事件路径上取一份（来自面板快照的字典 + 设置；都不查库）；
+        // 闭包里只能拿副本。
         let known_groups = self.known_groups(cx);
+        let default_group = self.default_group_for_archive(cx);
         open_draft_pick_dialog(
             window,
             cx,
@@ -321,7 +336,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                         &draft.display_name,
                         draft.connection_id.clone(),
                         known_groups.clone(),
-                        None,
+                        default_group.clone(),
                     );
                     let shared = shared.clone();
                     let draft = draft.clone();
@@ -438,7 +453,7 @@ impl ResourcesHost for WorkbenchResourceHost {
             // 本地文件没有"来源草稿的连接"可带出：**不猜**当前活动连接（那不一定是它的来路）。
             None,
             self.known_groups(cx),
-            None,
+            self.default_group_for_archive(cx),
         );
 
         let shared = self.shared.clone();
@@ -871,6 +886,14 @@ impl ResourcesHost for WorkbenchResourceHost {
             collapsed_keys,
             cx,
         );
+    }
+
+    fn remember_default_group(&self, folder_id: Option<&str>, cx: &mut App) {
+        // 与 `remember_collapsed` 同一口径：没有项目就没什么可记的。
+        let Some(root) = self.shared.project_root() else {
+            return;
+        };
+        settings::SettingsService::set_default_group(&root.to_string_lossy(), folder_id, cx);
     }
 
     fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {

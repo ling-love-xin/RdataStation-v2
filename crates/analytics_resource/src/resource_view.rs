@@ -275,6 +275,18 @@ pub fn tag_targets(
     }
 }
 
+/// 「默认分组」标记文案（分组头上的小字；也是窗口测试的锚点）。
+pub const DEFAULT_GROUP_MARKER: &str = "默认";
+
+/// 分组头菜单里那一项的文案（纯函数，带单测）：已是默认分组时是“取消”，否则是“设为”。
+pub fn default_group_entry_label(is_default: bool) -> &'static str {
+    if is_default {
+        "取消归档默认分组"
+    } else {
+        "设为归档默认分组"
+    }
+}
+
 /// 行是否可重命名（原型 §3.2 / §9：`F2` 与右键「重命名…」**同一判据**，两处各写一遍就会漂）。
 ///
 /// 两条不许：多选（改名没有“批量”的意义——改哪一条都是猜）与只读项目（写不进去）。
@@ -373,6 +385,12 @@ pub trait ResourcesHost: 'static {
     /// 只收 id：当前显示名由宿主从面板快照取（与 `request_rename_group` 同一口径），
     /// 宿主拿到后开那个单输入的小对话框（`dialogs::rename`），提交才写库。
     fn request_rename(&self, resource_id: &str, window: &mut Window, cx: &mut App);
+    /// 记下 / 清掉本项目的**归档默认分组**（分组头右键；设置项 `resources.default_group`）。
+    ///
+    /// `None` = 未分组（也即“没默认”）：归档对话框就不再预选任何分组。
+    /// 不校验分组是否还在——那份名单在项目库里，面板的标记与对话框的预选都会把认不出的
+    /// id 当作未分组（与筛选的脏数据口径一致）。
+    fn remember_default_group(&self, folder_id: Option<&str>, cx: &mut App);
     /// 删除分组（分组头右键；**成员回未分组**，存档本身不受影响）。
     fn request_delete_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
     /// 打开「标签」对话框（详情面板「＋ 标签」/ 行右键菜单）：勾选/取消标签、顺带新建。
@@ -608,6 +626,8 @@ struct ArchiveListDelegate {
     details: std::collections::HashMap<String, ArchiveDetail>,
     /// 分组字典：行菜单的「移动到分组」子菜单与分组头菜单要用它（`render_item` 里读不了面板）。
     groups: Vec<GroupOption>,
+    /// 归档默认分组（本项目）：分组头上的「默认」标记按它画。
+    default_group: Option<String>,
     /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
     selected_id: Option<String>,
     /// 多选集合（**含焦点行**）：行背景与右键菜单的“多选态”靠它；
@@ -634,6 +654,7 @@ impl ArchiveListDelegate {
         items: Vec<VisibleItem>,
         details: std::collections::HashMap<String, ArchiveDetail>,
         groups: Vec<GroupOption>,
+        default_group: Option<String>,
         selected_id: Option<String>,
         multi_ids: std::collections::HashSet<String>,
         read_only: bool,
@@ -642,6 +663,7 @@ impl ArchiveListDelegate {
         self.items = items;
         self.details = details;
         self.groups = groups;
+        self.default_group = default_group;
         self.selected_id = selected_id;
         self.multi_ids = multi_ids;
         self.read_only = read_only;
@@ -691,6 +713,8 @@ impl ArchiveListDelegate {
         };
         let panel = self.panel.clone();
         let key_owned = key.to_string();
+        // 默认分组的标记要画在头上：只拷一份，供后面判断（`render_item` 里读不了面板）。
+        let default_group = self.default_group.clone();
         let list_id = format!("archive-group-{key}");
         let debug_id = list_id.clone();
         let host = self.host.clone();
@@ -740,6 +764,19 @@ impl ArchiveListDelegate {
                     .child(label.to_string()),
             )
             .child(
+                // 「默认」标记：本项目里带这个标记的分组，就是归档对话框的预选落点。
+                // 只有一条时才有——它是**事实提示**，不是控件（设 / 取消在右键菜单里）。
+                div().flex_none().text_xs().text_color(muted).when_some(
+                    (default_group.as_deref() == Some(key))
+                        .then(|| SharedString::from(format!("archive-group-default-{key}"))),
+                    |marker, id| {
+                        marker
+                            .debug_selector(move || id.to_string())
+                            .child(DEFAULT_GROUP_MARKER)
+                    },
+                ),
+            )
+            .child(
                 div()
                     .flex_none()
                     .text_xs()
@@ -772,12 +809,28 @@ impl ArchiveListDelegate {
         // `context_menu` 包一层（`ContextMenu<..>` 不是 `Div`）→ 两条分支各自转 `AnyElement` 后再拼。
         let head: AnyElement = if is_real_group {
             let folder_id = key.to_string();
+            let is_default = default_group.as_deref() == Some(key);
+            let panel_for_default = panel.clone();
             head.context_menu(move |menu, _window, _cx| {
                 menu.item(PopupMenuItem::new("重命名…").on_click({
                     let host = host.clone();
                     let folder_id = folder_id.clone();
                     move |_, window, cx| host.request_rename_group(&folder_id, window, cx)
                 }))
+                // 「设为 / 取消归档默认分组」：默认分组的**唯一入口**（原型 §4.1 的预选来源）。
+                // 放在重命名与删除之间：它是这个分组的日常属性，不是破坏性动作。
+                .item(
+                    PopupMenuItem::new(default_group_entry_label(is_default)).on_click({
+                        let folder_id = folder_id.clone();
+                        let panel = panel_for_default.clone();
+                        move |_, _window, cx| {
+                            let folder_id = folder_id.clone();
+                            let _ = panel.update(cx, |panel, cx| {
+                                panel.toggle_default_group(&folder_id, cx);
+                            });
+                        }
+                    }),
+                )
                 .item(PopupMenuItem::new("删除分组").on_click({
                     let host = host.clone();
                     let folder_id = folder_id.clone();
@@ -1243,6 +1296,9 @@ pub struct ResourcesPanel {
     /// 会话级（面板内）：原型要求“折叠状态持久化”，而设置项（`settings.json`）
     /// 属 P2.4——在那之前不假装持久化，重开项目回到展开态。
     collapsed: std::collections::HashSet<String>,
+    /// 归档默认分组（设置项 `resources.default_group`，按项目分桶）：构造期注入，
+    /// 之后由分组头右键改（面板先改本地标记，再交宿主落盘——与折叠态同一形态）。
+    default_group: Option<String>,
     /// 工具栏条件（搜索词 / 种类 / 只看需处理）。
     filter: ResourcesFilter,
     sort_field: SortField,
@@ -1289,6 +1345,7 @@ impl ResourcesPanel {
             view_rows: Vec::new(),
             view_items: Vec::new(),
             collapsed: std::collections::HashSet::new(),
+            default_group: None,
             filter: ResourcesFilter::default(),
             sort_field: SortField::default(),
             sort_order: SortOrder::default(),
@@ -1348,6 +1405,7 @@ impl ResourcesPanel {
             items: self.view_items.clone(),
             details: self.snapshot.details.clone(),
             groups: self.snapshot.groups.clone(),
+            default_group: self.default_group.clone(),
             selected_id: self.selected.clone(),
             multi_ids: self.multi.iter().cloned().collect(),
             syncing_from_panel: false,
@@ -1478,6 +1536,32 @@ impl ResourcesPanel {
             .flatten()
     }
 
+    /// 归档默认分组（当前值；`None` = 没设）。
+    pub fn default_group(&self) -> Option<&str> {
+        self.default_group.as_deref()
+    }
+
+    /// 注入默认分组（宿主构造期从设置读；**不回调宿主**——否则注入会被当成用户动作回写）。
+    pub fn set_default_group(&mut self, folder_id: Option<String>, cx: &mut Context<Self>) {
+        self.default_group = folder_id;
+        // 标记画在分组头上，而头由**列表委托**渲染：得把新值推给它（否则要等下一次快照推送才更新）。
+        self.push_rows_to_list(cx);
+        cx.notify();
+    }
+
+    /// 设为 / 取消「归档默认分组」（分组头右键，原型 §4.1 的预选来源）。
+    ///
+    /// 与 [`toggle_group_collapse`](Self::toggle_group_collapse) 同一形态：先改本地（标记立刻
+    /// 对上），再把结果交宿主落盘。它**不碰**已有存档的归属——只影响下一次归档的预选值。
+    pub fn toggle_default_group(&mut self, folder_id: &str, cx: &mut Context<Self>) {
+        let next =
+            (self.default_group.as_deref() != Some(folder_id)).then(|| folder_id.to_string());
+        self.default_group = next.clone();
+        self.push_rows_to_list(cx);
+        self.host.remember_default_group(next.as_deref(), cx);
+        cx.notify();
+    }
+
     /// 注入折叠集合（宿主在构造期从设置里读出来；不回调宿主——否则默认值会被当成用户动作回写）。
     pub fn set_collapsed(&mut self, keys: &[String], cx: &mut Context<Self>) {
         self.collapsed = keys.iter().cloned().collect();
@@ -1502,13 +1586,21 @@ impl ResourcesPanel {
         let items = self.view_items.clone();
         let details = self.snapshot.details.clone();
         let groups = self.snapshot.groups.clone();
+        let default_group = self.default_group.clone();
         let selected = self.selected.clone();
         let multi = self.multi.iter().cloned().collect();
         let read_only = self.snapshot.read_only;
         list.update(cx, |state, cx| {
-            state
-                .delegate_mut()
-                .set_rows(items, details, groups, selected, multi, read_only, cx);
+            state.delegate_mut().set_rows(
+                items,
+                details,
+                groups,
+                default_group,
+                selected,
+                multi,
+                read_only,
+                cx,
+            );
         });
     }
 
@@ -2352,8 +2444,8 @@ mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
     use super::{
         ArchiveCounts, ArchiveRow, BadgeTone, HeaderMenuAction, RowClick, apply_row_click,
-        badge_tone, can_rename, can_view_stats, classify_click, header_fold_key, kind_icon,
-        row_tail, strength_badge, tag_entry_label, tag_targets,
+        badge_tone, can_rename, can_view_stats, classify_click, default_group_entry_label,
+        header_fold_key, kind_icon, row_tail, strength_badge, tag_entry_label, tag_targets,
     };
     use crate::detail_view::ArchiveDetail;
     use crate::filter::VisibleItem;
@@ -2631,6 +2723,17 @@ mod tests {
         assert!(can_rename(1, false));
         assert!(!can_rename(2, false), "多选不给改（改哪一条都是猜）");
         assert!(!can_rename(1, true), "只读项目不给改");
+    }
+
+    /// 默认分组那一项的文案随状态翻转（同一个入口兼备“设”与“取消”）。
+    #[test]
+    fn default_group_entry_flips_between_set_and_clear() {
+        assert_eq!(default_group_entry_label(false), "设为归档默认分组");
+        assert_eq!(default_group_entry_label(true), "取消归档默认分组");
+        assert_ne!(
+            default_group_entry_label(false),
+            default_group_entry_label(true)
+        );
     }
 
     #[test]

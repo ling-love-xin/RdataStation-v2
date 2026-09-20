@@ -1,12 +1,23 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三 / 十四刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**、**详情面板的内容预览**均可用，**149 单测 + 33 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三 / 十四 / 十五刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、四个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**、**详情面板的内容预览**、**默认分组**均可用，**150 单测 + 34 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第十五刀（P2.4 收口）：默认分组（案 A：显式设置）
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V24 | **设置项 `resources.default_group`**：复合值（项目根 → 分组 id，与 `collapsed_groups` 同一形态）+ 服务层 `SettingsService::{default_group, set_default_group}`（`None` = 清掉该项目记录，不留空壳） | `crates/settings/src/{model,registry,lib}.rs` | 分组 id 是每项目自己生成的，平铺一份会被“另一项目清掉不认识的 id”抹掉；**案 A**（显式设置）而非案 B（跟随上次）——分组归属是**内容属性**，猜错的代价与视图状态不对称（两案对比见 §4 表末） |
+| V25 | **入口与标记**：分组头右键新增「设为 / 取消归档默认分组」（同一个入口兼备两态，纯函数 `default_group_entry_label`）；分组头上出「默认」小字；`ResourcesHost::remember_default_group`（写）+ 构造期注入 `ResourcesPanel::set_default_group`；归档对话框的 `group_id` 预选真正接上（两处 `archive_seed` 之前都传 `None`） | `src/resource_view.rs`、`crates/workbench/src/components/resource_host.rs`（`remember_default_group` / `default_group_for_archive`）、`crates/workbench/src/panels/resources.rs` | 设置页放不了它（那份名单在项目库里），所以入口在**分组自己身上**（右键即所得）；预选值先过一道“分组还在字典里”的过滤——悬空 id 当未分组（与筛选的脏数据口径一致） |
+| 测试 | +1 设置层（分桶 / 谓项清除 / 落盘往返）、+1 面板单测（菜单文案两态）、+1 面板窗口（标记跟随设置、注入不回写、切换把新值交给宿主） | `crates/settings/src/lib.rs`、`src/resource_view.rs`、`tests/panel_window.rs` | 最易错的两处：**注入被当成用户动作回写**（会多写一次设置）、**改了不推给列表委托**（标记要等下一次快照才动） |
+| 验证 | `cargo test -j 2 -p rds-settings` **22 全绿**；`cargo test -j 2 -p rds-analytics-resource` → **150 单测 + 24 面板窗口 + 10 对话框窗口全绿** | — | 基线 21 / 149 / 23 / 10 |
+
+> 与 M4 的差别（刻意）：导航侧的“分组归属”是连接的组织方式，可以拖拽排序；资产库的分组**没有顺序**（排序键就是那五列），所以默认分组只是一个预选值，不是“排在第一”的意思。
 
 ### 2026-09-20 — Phase 2 第十四刀（P1.3 收口）：详情面板的内容预览（+ 分组名进详情）
 
@@ -713,10 +724,10 @@
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
 | P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **已全落**（第二 / 三 / 七 / 十二刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键 + 折叠态记住（`resources.collapsed_groups`，按项目分桶）+ **拖拽行到分组头**（`src/dnd.rs`，落点只有分组头） | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单 + 拖拽落点）、`src/dnd.rs` | 空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **已全落**（排序 = 第四刀；搜索匹配面 = 第十一刀，另含尾部字段；强度维并入 kind + “只看需处理”） | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（搜索与排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
-| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` / `default_sort` / `collapsed_groups` 已落**（第五 / 六 / 七刀）；**余**：默认分组 | `crates/settings`、`src/service.rs` | 重启后保持 |
+| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **已全落**（第五 / 六 / 七 / 十五刀）：`keep_versions` / `default_sort` / `collapsed_groups` / **`default_group`**（按项目分桶；入口在分组头右键，预选归档对话框的分组） | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
 
-> **默认分组该是什么语义？（2026-09-20 两案对比 · 待拍板）**
+> **默认分组该是什么语义？（2026-09-20 两案对比 · 已拍板：案 A）**
 >
 > 两个方案都只需一个设置项（`resources.default_group`，复合值按项目分桶，与 `collapsed_groups` 同一形态），差别在**谁写它**与**用户预期**：
 >
@@ -730,7 +741,7 @@
 > - 代价：**预选值会“自己变”**，用户建错一个分组后不回头改，后面每一份归档都默默落进去；而且“我明明设了默认分组” 与 “记住上次” 两套心智会打架。
 > - 实现多一处：归档**成功**时回写（失败不回写——否则一次失败的归档会污染默认值）。
 >
-> **建议：案 A**。理由：默认分组回答的是“**这个项目里我习惯把产物放哪**”（一份稳定设置），而不是“我上一次做了什么”（那是编辑器的撤销栈管的事）；仓库已有 `default_sort` 作为“最后一个用的那个”的先例，但那是**视图状态**（无副作用），而分组归属是**内容属性**（猜错会把人分错组，代价不对称）。两条都做也可以：设置里给“跟随上次归档”的显式选项（值 = `__last__`），但那应当等有用户真提这个需求再加。
+> **建议：案 A**（已拍板并落地：第十五刀）。理由：默认分组回答的是“**这个项目里我习惯把产物放哪**”（一份稳定设置），而不是“我上一次做了什么”（那是编辑器的撤销栈管的事）；仓库已有 `default_sort` 作为“最后一个用的那个”的先例，但那是**视图状态**（无副作用），而分组归属是**内容属性**（猜错会把人分错组，代价不对称）。两条都做也可以：设置里给“跟随上次归档”的显式选项（值 = `__last__`），但那应当等有用户真提这个需求再加。
 
 ## 5. Phase 3 — 版本与恢复
 

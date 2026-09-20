@@ -161,6 +161,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("collapsed:{}", keys.join(",")));
     }
+    fn remember_default_group(&self, folder_id: Option<&str>, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("default-group:{}", folder_id.unwrap_or("__none__")));
+    }
 }
 
 fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> ArchiveRow {
@@ -1261,6 +1266,85 @@ fn search_matches_alias_tag_name_and_source_table(cx: &mut TestAppContext) {
     assert_eq!(hit(cx, "dwd.dwd_orders"), vec!["ar_3".to_string()]);
     // 匹配面是宽出来的，不是换掉的：名称照旧命中。
     assert_eq!(hit(cx, "ar_3"), vec!["ar_3".to_string()]);
+}
+
+/// 默认分组：注入后头上出「默认」标记；右键切一次就把新值交给宿主（取消时给 `None`）。
+#[gpui_kit::test]
+fn default_group_marker_follows_the_setting_and_reports_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut initial = snapshot(
+        vec![row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1)],
+        false,
+    );
+    initial.groups = vec![
+        GroupOption {
+            id: "af_1".to_string(),
+            name: "报表".to_string(),
+        },
+        GroupOption {
+            id: "af_2".to_string(),
+            name: "临时".to_string(),
+        },
+    ];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(initial, cx);
+            // 注入是宿主的动作（与默认排序 / 折叠态同一口径）：不回写设置。
+            panel.set_default_group(Some("af_1".to_string()), cx);
+        });
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-group-default-af_1").is_some(),
+        "默认分组那一行要有标记"
+    );
+    assert!(
+        cx.debug_bounds("archive-group-default-af_2").is_none(),
+        "别的分组不该有标记"
+    );
+    assert!(host.calls().is_empty(), "注入不是用户动作：不写回");
+
+    // 换一个：标记跟着走，宿主拿到新值。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.toggle_default_group("af_2", cx));
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(host.calls(), vec!["default-group:af_2".to_string()]);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).default_group().map(str::to_string)),
+        Some("af_2".to_string())
+    );
+    assert!(cx.debug_bounds("archive-group-default-af_1").is_none());
+    assert!(cx.debug_bounds("archive-group-default-af_2").is_some());
+
+    // 再点同一个：取消（设置里也不留空壳）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.toggle_default_group("af_2", cx));
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(
+        host.calls(),
+        vec![
+            "default-group:af_2".to_string(),
+            "default-group:__none__".to_string()
+        ]
+    );
+    assert!(
+        cx.debug_bounds("archive-group-default-af_2").is_none(),
+        "取消后不再有标记"
+    );
 }
 
 /// 拖到分组头 = 移动（原型 §3.2）：走的仍是宿主的 `request_move_to_group`，且**只发真的要改的行**。

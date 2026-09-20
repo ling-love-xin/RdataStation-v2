@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::App;
+use gpui_kit::component::{Theme, ThemeMode};
 
 pub mod commands;
 pub mod model;
@@ -190,11 +190,11 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
-        Slot::ResourcesDefaultSort => {
-            SettingValue::Text(settings.resources.default_sort.clone())
-        }
+        Slot::ResourcesDefaultSort => SettingValue::Text(settings.resources.default_sort.clone()),
         // 复合值（折叠状态）：读写走资产库面板自己的入口。
         Slot::ResourcesCollapsedGroups => return None,
+        // 复合值（默认分组）：同上（入口在分组头右键）。
+        Slot::ResourcesDefaultGroup => return None,
         Slot::ConnectTimeoutMs => {
             SettingValue::Number(settings.connection_defaults.connect_timeout_ms as f64)
         }
@@ -241,23 +241,32 @@ impl SettingsService {
                 Self::set_theme_mode(mode, window, cx);
             }
             Slot::NavigatorSourceShortCode => {
-                let Some(on) = value.as_bool() else { return false };
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
                 Self::set_source_short_code(on, cx);
             }
             Slot::NavigatorShowTags => {
-                let Some(on) = value.as_bool() else { return false };
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
                 Self::set_show_tags(on, cx);
             }
             Slot::NavigatorShowScope => {
-                let Some(on) = value.as_bool() else { return false };
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
                 Self::set_show_scope(on, cx);
             }
             Slot::NavigatorPropertyWidth => {
-                let Some(rem) = value.as_number() else { return false };
+                let Some(rem) = value.as_number() else {
+                    return false;
+                };
                 Self::set_property_panel_width(rem as f32, cx);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters => return false,
+            Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
             Slot::ResourcesKeepVersions => {
                 let Some(value) = value.as_number() else {
                     return false;
@@ -271,18 +280,22 @@ impl SettingsService {
                 };
                 Self::set_default_resource_sort(text, cx);
             }
-            // 复合值没有标量写入路径：拒绝而不是"猜一半"。
-            Slot::ResourcesCollapsedGroups => return false,
             Slot::ConnectTimeoutMs => {
-                let Some(ms) = value.as_number() else { return false };
+                let Some(ms) = value.as_number() else {
+                    return false;
+                };
                 Self::set_connect_timeout_ms(ms.max(0.) as u64, cx);
             }
             Slot::LanDisableTls => {
-                let Some(on) = value.as_bool() else { return false };
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
                 Self::set_lan_disable_tls(on, cx);
             }
             Slot::ProjectSortMode => {
-                let Some(text) = value.as_text() else { return false };
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
                 Self::set_project_sort_mode(text, cx);
             }
             Slot::LogMinLevel => {
@@ -492,6 +505,39 @@ impl SettingsService {
         persist(&settings);
     }
 
+    /// 某个项目的默认分组 id（`None` = 没设 / 设的分组已删，即未分组）。
+    ///
+    /// 与 [`collapsed_groups`](Self::collapsed_groups) 同一形态（按项目根分桶）。
+    /// **不在这里校验分组是否还在**：那份名单在项目库里，只有资产库自己知道——
+    /// 认不出的 id 由调用方按未分组处理（面板渲染标记 / 归档对话框都这么做）。
+    pub fn default_group(project_root: &str, cx: &App) -> Option<String> {
+        cx.global::<Settings>()
+            .resources
+            .default_group
+            .get(project_root)
+            .cloned()
+    }
+
+    /// 设 / 清某个项目的默认分组（`None` = 清掉该项目的记录，不留空壳）。
+    pub fn set_default_group(project_root: &str, folder_id: Option<&str>, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            match folder_id {
+                Some(id) => {
+                    settings
+                        .resources
+                        .default_group
+                        .insert(project_root.to_string(), id.to_string());
+                }
+                None => {
+                    settings.resources.default_group.remove(project_root);
+                }
+            }
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
     /// 建连超时（毫秒）。
     pub fn connect_timeout_ms(cx: &App) -> u64 {
         cx.global::<Settings>()
@@ -544,6 +590,53 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rds_settings_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// 默认分组与折叠态同形：按项目分桶、**清掉时不留空壳**、未设时读到 `None`。
+    ///
+    /// 用模型层直接验（不经过 GPUI 的 global）：这两个字段的语义就是“项目根 → 值”的映射，
+    /// 服务层的 `default_group` / `set_default_group` 只是它的一层转发。
+    #[test]
+    fn default_group_is_bucketed_per_project_and_clears_without_a_shell() {
+        let mut settings = Settings::default();
+        assert!(
+            settings.resources.default_group.is_empty(),
+            "默认没设任何项目"
+        );
+
+        settings
+            .resources
+            .default_group
+            .insert("/p/a".to_string(), "af_1".to_string());
+        settings
+            .resources
+            .default_group
+            .insert("/p/b".to_string(), "af_9".to_string());
+        assert_eq!(
+            settings.resources.default_group.get("/p/a"),
+            Some(&"af_1".to_string()),
+            "各项目各归各的"
+        );
+        assert_eq!(
+            settings.resources.default_group.get("/p/b"),
+            Some(&"af_9".to_string())
+        );
+
+        // 清掉一个项目：只删这一项（不弄丢别的项目，也不留空壳）。
+        settings.resources.default_group.remove("/p/a");
+        assert_eq!(settings.resources.default_group.len(), 1);
+        assert_eq!(settings.resources.default_group.get("/p/a"), None);
+
+        // 落盘往返后仍然在（与其它字段一视同仁）。
+        let dir = temp_dir("default_group");
+        let path = dir.join("settings.json");
+        save_settings_to(&path, &settings).expect("写盘");
+        let back = load_settings_from(&path);
+        assert_eq!(
+            back.resources.default_group.get("/p/b"),
+            Some(&"af_9".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 往返：写进临时文件再读回来，值一致；**临时文件不留残影**（原子写的中间态）。

@@ -25,10 +25,7 @@ pub enum SettingKind {
     /// 布尔开关（页面用 `Switch`）。
     Bool,
     /// 布尔但两端有明确名字（页面用分段控件；`on` 对应 `true`）。
-    BoolPair {
-        on: &'static str,
-        off: &'static str,
-    },
+    BoolPair { on: &'static str, off: &'static str },
     /// 枚举（页面用分段控件；元素为 `(落盘值, 显示名)`）。
     ///
     /// 当前页面**一律用分段控件**（≤ 4 项最舒展，5 项也能放下）；条目更多时
@@ -113,6 +110,7 @@ pub enum Slot {
     ResourcesKeepVersions,
     ResourcesDefaultSort,
     ResourcesCollapsedGroups,
+    ResourcesDefaultGroup,
     ConnectTimeoutMs,
     LanDisableTls,
     ProjectSortMode,
@@ -131,6 +129,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
         "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
+        "resources.default_group" => Slot::ResourcesDefaultGroup,
         "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
@@ -151,6 +150,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResourcesDefaultSort => KindTag::Enum,
         // 复合值（项目根 → 折叠的分组 key）：没有页面写入路径，与 `navigator.filters` 同类。
         Slot::ResourcesCollapsedGroups => KindTag::Composite,
+        // 复合值（项目根 → 默认分组 id）：同上（分组 id 是每项目自己生成的，不能平铺一份）。
+        Slot::ResourcesDefaultGroup => KindTag::Composite,
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
@@ -160,7 +161,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
 
 /// 槽位是否可表达为标量值（复合值不可：它没有页面写入路径）。
 pub fn slot_is_scalar(slot: Slot) -> bool {
-    !matches!(slot, Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups)
+    !matches!(
+        slot,
+        Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups
+    )
 }
 
 /// 生效方式（页面的说明行必须讲清楚，禁止"改了不知道生效没"）。
@@ -221,7 +225,9 @@ impl SettingSpec {
     /// 复合值返回 `None`（没有标量默认值）。
     pub fn default_value(&self) -> Option<SettingValue> {
         match self.kind.tag() {
-            KindTag::Bool | KindTag::BoolPair => Some(SettingValue::Bool(self.default_json == "true")),
+            KindTag::Bool | KindTag::BoolPair => {
+                Some(SettingValue::Bool(self.default_json == "true"))
+            }
             KindTag::Number => serde_json::from_str::<f64>(self.default_json)
                 .ok()
                 .map(SettingValue::Number),
@@ -331,7 +337,13 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "历史内容保留",
         hint: "每份存档保留几份历史内容副本（版本行永久保留，界面上以「副本缺失」标注）；对之后的归档 / 版本还原生效",
         kind: SettingKind::Number,
-        presets: &[(0, "只留元数据"), (5, "5 份"), (10, "10 份"), (20, "20 份"), (-1, "全部保留")],
+        presets: &[
+            (0, "只留元数据"),
+            (5, "5 份"),
+            (10, "10 份"),
+            (20, "20 份"),
+            (-1, "全部保留"),
+        ],
         default_json: "5",
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Page,
@@ -373,13 +385,32 @@ pub const REGISTRY: &[SettingSpec] = &[
         composite: true,
     },
     SettingSpec {
+        key: "resources.default_group",
+        section: "resources",
+        section_label: "资产库",
+        label: "默认分组",
+        hint: "归档时预选哪个分组（分组头右键里设；按项目分开存，未设 = 未分组）",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{}",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Module,
+        consumer: "workbench/src/components/resource_host.rs::remember_default_group（写）+ archive_seed / build_resources_panel（读）→ analytics_resource::dialogs::archive::ArchiveDialogSeed::group_id",
+        composite: true,
+    },
+    SettingSpec {
         key: "connection_defaults.connect_timeout_ms",
         section: "connection",
         section_label: "连接默认值",
         label: "建连超时",
         hint: "超时判定本次尝试失败并自动重试一次；对之后新建的连接生效",
         kind: SettingKind::Number,
-        presets: &[(5_000, "5s"), (15_000, "15s"), (30_000, "30s"), (60_000, "60s")],
+        presets: &[
+            (5_000, "5s"),
+            (15_000, "15s"),
+            (30_000, "30s"),
+            (60_000, "60s"),
+        ],
         default_json: "15000",
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Page,
@@ -556,8 +587,13 @@ mod tests {
             leaves,
             keys,
             "模型叶子与登记表不一致。多出的叶子（未登记的新字段）= {:?}；多出的登记项 = {:?}",
-            leaves.iter().filter(|p| !keys.contains(p)).collect::<Vec<_>>(),
-            keys.iter().filter(|p| !leaves.contains(p)).collect::<Vec<_>>()
+            leaves
+                .iter()
+                .filter(|p| !keys.contains(p))
+                .collect::<Vec<_>>(),
+            keys.iter()
+                .filter(|p| !leaves.contains(p))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -583,9 +619,9 @@ mod tests {
         for s in REGISTRY {
             if let SettingKind::Enum(options) = s.kind {
                 let actual = lookup(&default, s.key).expect("存在");
-                let value = actual.as_str().unwrap_or_else(|| {
-                    panic!("`{}` 登记为枚举，模型默认值却不是字符串", s.key)
-                });
+                let value = actual
+                    .as_str()
+                    .unwrap_or_else(|| panic!("`{}` 登记为枚举，模型默认值却不是字符串", s.key));
                 assert!(
                     options.iter().any(|(v, _)| *v == value),
                     "`{}` 的默认值 `{}` 不在候选 {:?} 里",
@@ -640,8 +676,16 @@ mod tests {
             assert!(!s.section.is_empty(), "`{}` 缺节 id", s.key);
             assert!(!s.section_label.is_empty(), "`{}` 缺节显示名", s.key);
             assert!(!s.label.is_empty(), "`{}` 缺行标签", s.key);
-            assert!(!s.hint.is_empty(), "`{}` 缺行说明（生效方式要能读出来）", s.key);
-            assert!(!s.consumer.is_empty(), "`{}` 缺消费方（准入第 1 条）", s.key);
+            assert!(
+                !s.hint.is_empty(),
+                "`{}` 缺行说明（生效方式要能读出来）",
+                s.key
+            );
+            assert!(
+                !s.consumer.is_empty(),
+                "`{}` 缺消费方（准入第 1 条）",
+                s.key
+            );
 
             let expected: Value = from_str(s.default_json).expect("默认值是合法 JSON");
             assert_eq!(
@@ -717,7 +761,12 @@ mod tests {
         for s in REGISTRY.iter().filter(|s| s.entry != SettingEntry::Module) {
             let slot = slot_for(s.key).expect("上页的项必须有槽位");
             assert!(slot_is_scalar(slot), "`{}` 是复合值，不能上页", s.key);
-            assert_ne!(s.kind.tag(), KindTag::Composite, "`{}` 是复合值，不能上页", s.key);
+            assert_ne!(
+                s.kind.tag(),
+                KindTag::Composite,
+                "`{}` 是复合值，不能上页",
+                s.key
+            );
             if s.kind.tag() == KindTag::Number {
                 assert!(
                     !s.presets.is_empty(),
