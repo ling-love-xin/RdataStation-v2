@@ -12,6 +12,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable as _};
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus};
+use crate::preview::Preview;
 use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge};
 use crate::ui;
 
@@ -26,6 +27,9 @@ pub const HASH_LABEL: &str = "内容指纹";
 
 /// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
 pub const VERSION_SECTION_TITLE: &str = "版本";
+
+/// 「内容预览」分区的标题（原型 §3.1；渲染层与窗口测试共用一处）。
+pub const PREVIEW_SECTION_TITLE: &str = "内容预览";
 
 /// 一条存档的详情快照（**宿主已格式化**：大小 / 时间 / 标签等都已是人读文案）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +61,11 @@ pub struct ArchiveDetail {
     pub history_label: String,
     /// 这存档挂的标签（带 id：去标要用它）；名字已就绪，不在渲染期查库。
     pub tags: Vec<ArchiveTagChip>,
+    /// 内容预览（原型 §3.1 的最后一块）：文本型给前 20 行，其余给一句说明。
+    ///
+    /// 缺省是 `Preview::default()`（「仅元信息」）：分析表 / 引用型本就没有可预览的文本，
+    /// 宿主没给预览时也不假装有内容。
+    pub preview: Preview,
     pub group: Option<String>,
 }
 
@@ -279,6 +288,61 @@ fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, c
     section
 }
 /// 渲染详情面板内容（只读信息区 + 标签分区 + 动作区 + 危险区）。
+/// 「内容预览」分区（原型 §3.1）：文本给前 20 行（等宽、只读、溢出不折行），其余给一句说明。
+///
+/// 为何不放进 `detail_rows` 的表行：这里是**多行等宽块**，与「标签 / 值」两列不是一回事；
+/// 硬塞进去会让每行都多出一列标签，而预览的行本来就不需要标签。
+pub fn render_preview_section(detail: &ArchiveDetail, cx: &App) -> Div {
+    let (muted, foreground, border) = {
+        let colors = cx.theme().colors;
+        (colors.muted_foreground, colors.foreground, colors.border)
+    };
+    let mono_family = cx.theme().mono_font_family.clone();
+    let mono_size = cx.theme().mono_font_size;
+
+    let mut section = div().v_flex().w_full().gap_1().child(
+        div()
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(muted)
+            .child(PREVIEW_SECTION_TITLE),
+    );
+
+    let lines = detail.preview.lines();
+    if !lines.is_empty() {
+        let mut block = div()
+            .id("archive-detail-preview")
+            .debug_selector(|| "archive-detail-preview".to_string())
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_0p5()
+            .p_2()
+            .rounded_sm()
+            .border_1()
+            .border_color(border)
+            .font_family(mono_family)
+            .text_size(mono_size)
+            .text_color(foreground);
+        for line in lines {
+            // 一行一条：长行省略号而不是折行（折行会让“前 20 行”变成“前 20 行的一部分”）。
+            block = block.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(line.clone()),
+            );
+        }
+        section = section.child(block);
+    }
+    if let Some(note) = detail.preview.note() {
+        section = section.child(div().text_xs().text_color(muted).child(note));
+    }
+    section
+}
+
 pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
     let (foreground, muted, border, tone_color) = {
         let colors = cx.theme().colors;
@@ -440,6 +504,10 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     // 标签分区（原型 §3.1 的“标签与分组”里的标签那一半）：chips 可逐个去掉，「＋ 标签」开打标对话框。
     body = body.child(render_tag_section(detail, actions.as_ref(), cx));
 
+    // 内容预览（原型 §3.1 的最后一块，摆在标签与危险区之间）：文本型给前 20 行，
+    // 二进制 / 大文件给一句说明。预览**只读**：这里没有任何编辑入口（原型 §1 原则 3）。
+    body = body.child(render_preview_section(detail, cx));
+
     // 动作区：只读存档的两个真动作（打开（只读）/ 取回（检出）…）——
     // 取回是**唯一的编辑入口**；其余动作各自有各自的批（标签 / 重命名 = Phase 2）。
     if let Some(actions) = actions {
@@ -582,6 +650,8 @@ mod tests {
             history_label: "1 个历史版本".to_string(),
             tags: Vec::new(),
             group: None,
+            // 预览缺省 = 仅元信息（各用例需要时用结构体更新语法盖掉）。
+            preview: crate::preview::Preview::default(),
         }
     }
 

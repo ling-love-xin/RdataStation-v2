@@ -345,6 +345,45 @@ impl PayloadStore {
         Ok(meta.is_file().then(|| meta.len() as i64))
     }
 
+    /// 读本体**开头**（内容预览用，原型 §3.1）。
+    ///
+    /// 返回值：`None` = **不是文本**（开头就有 NUL 字节），`Some((text, complete))`——
+    /// `complete = false` 表示后面还有内容（读到 `max_bytes` 还没读完）。
+    ///
+    /// 两个刻意的小处理：
+    /// 1. 截断时**在最后一个换行处切齐**：不切的话行列表最后会多出一条被砍掉一半的行
+    ///    （看起来像文件里真有那么一行），顺带也避开了“切在半个 UTF-8 字符上”；
+    /// 2. 只看**开头**判二进制（NUL 字节）：要确定“整个文件是不是文本”得读一遍，
+    ///    而预览只要一眼——开头就带 NUL 的，几乎不会是给人看的文本。
+    pub async fn read_head(
+        &self,
+        rel: &str,
+        max_bytes: usize,
+    ) -> Result<Option<(String, bool)>, CoreError> {
+        let path = self.resolve(rel)?;
+        let file = fs::File::open(&path)
+            .await
+            .map_err(|e| io_err(&path, "preview_open", e))?;
+        // 多读一个字节用来判“后面还有没有”：只读 `max_bytes` 分不清“刚好读完”与“被截了”。
+        let mut buf = Vec::with_capacity(max_bytes + 1);
+        file.take(max_bytes as u64 + 1)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| io_err(&path, "preview_read", e))?;
+        if buf.iter().take(max_bytes).any(|byte| *byte == 0) {
+            return Ok(None);
+        }
+        let complete = buf.len() <= max_bytes;
+        buf.truncate(max_bytes);
+        // 截断时切到最后一个换行（含换行本身）；一行都没换（超长单行）时只能原样给。
+        if !complete {
+            if let Some(cut) = buf.iter().rposition(|byte| *byte == b'\n') {
+                buf.truncate(cut + 1);
+            }
+        }
+        Ok(Some((String::from_utf8_lossy(&buf).into_owned(), complete)))
+    }
+
     /// 内容指纹（sha256，小写十六进制）：版本是否递增、是否"内容已变"的唯一依据（架构 §5.1）。
     pub async fn content_hash(&self, path: &Path) -> Result<String, CoreError> {
         let mut file = fs::File::open(path)
@@ -615,6 +654,56 @@ mod tests {
 
     fn cleanup(dir: &Path) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 读开头（内容预览用）：截断时**在最后一个换行处切齐**、开头有 NUL 就当不是文本。
+    #[tokio::test]
+    async fn read_head_cuts_at_a_line_boundary_and_reports_binary() {
+        let project = temp_project("read_head");
+        let store = PayloadStore::new(&project);
+        store.ensure_dir().await.expect("ensure dir");
+
+        // 小文件：一次读完 → complete = true。
+        let small = store.resources_dir().join("月报.sql");
+        std::fs::write(&small, b"select 1\nfrom dual\n").expect("write small");
+        let (head, complete) = store
+            .read_head("月报.sql", 1024)
+            .await
+            .expect("read")
+            .expect("是文本");
+        assert!(complete);
+        assert_eq!(head, "select 1\nfrom dual\n");
+
+        // 大一点的文件：只读开头，且**切在换行处**（不切会让最后一行看起来被文件截断）。
+        let long_line = "x".repeat(80);
+        let body: String = (0..50).map(|i| format!("{i:02} {long_line}\n")).collect();
+        let big = store.resources_dir().join("big.sql");
+        std::fs::write(&big, body.as_bytes()).expect("write big");
+        let (head, complete) = store
+            .read_head("big.sql", 200)
+            .await
+            .expect("read")
+            .expect("是文本");
+        assert!(!complete, "没读完：调用方据此标截断");
+        assert!(head.ends_with('\n'), "切在换行处：{head:?}");
+        assert!(head.len() <= 200);
+        assert_eq!(head.lines().count(), 2, "200 字节正好两行（每行 83 字节）");
+
+        // 二进制（开头带 NUL）：`None` = 不预览，而不是给一堆乱码。
+        let binary = store.resources_dir().join("model.parquet");
+        std::fs::write(&binary, [0x50, 0x41, 0x52, 0x00, 0x01, 0x02]).expect("write binary");
+        assert!(
+            store
+                .read_head("model.parquet", 1024)
+                .await
+                .expect("read")
+                .is_none()
+        );
+
+        // 路径越界 / 不存在：报错误（调用方只在日志里记一声，不打断刷新）。
+        assert!(store.read_head("../outside.sql", 64).await.is_err());
+
+        cleanup(&project);
     }
 
     #[test]

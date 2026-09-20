@@ -2690,6 +2690,7 @@ mod tests {
             history_label: String::new(),
             tags: Vec::new(),
             group: None,
+            preview: crate::preview::Preview::default(),
         }
     }
 

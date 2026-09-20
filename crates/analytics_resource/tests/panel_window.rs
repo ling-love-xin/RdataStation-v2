@@ -27,6 +27,7 @@ use rds_analytics_resource::detail_view::{
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
+use rds_analytics_resource::preview::Preview;
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
     ResourcesSnapshot, RowClick, TagOption, dispatch_header_action,
@@ -230,6 +231,11 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         history_label: String::new(),
         tags: Vec::new(),
         group: None,
+        // 预览：窗口用例只关心“能不能摆”，给一段两行的文本就好。
+        preview: Preview::Text {
+            lines: vec!["select 1".to_string(), "from dual".to_string()],
+            truncated: false,
+        },
     }
 }
 
@@ -1441,6 +1447,60 @@ impl Render for DetailHarness {
 }
 
 /// 详情面板的标签区：chips 与「×」在写态下都出场；只读项目下只留 chips。
+/// 内容预览（原型 §3.1）：文本型摆前几行的等宽块，仅元信息型只摆一句说明。
+#[gpui_kit::test]
+fn detail_preview_block_renders_text_or_says_why_not(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+
+    // 文本型：等宽块出场（`archive-detail-preview` 是那块本身的 id）。
+    let (with_text, cx) = cx.add_window_view({
+        let host = host.clone();
+        let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1));
+        detail.preview = Preview::Text {
+            lines: vec!["select 1".to_string(), "from dual".to_string()],
+            truncated: true,
+        };
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-detail-preview").is_some(),
+        "文本型应有预览块"
+    );
+    drop(with_text);
+
+    // 仅元信息型（二进制 / 大文件 / 无预览）：不摆块，只给一句说明。
+    let (meta_only, cx) = cx.add_window_view({
+        let host = host.clone();
+        let mut detail = detail_for(&row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1));
+        detail.preview = Preview::OnlyMeta("仅元信息（不预览内容）");
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-detail-preview").is_none(),
+        "仅元信息时不该摆空块"
+    );
+    drop(meta_only);
+}
+
 #[gpui_kit::test]
 fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

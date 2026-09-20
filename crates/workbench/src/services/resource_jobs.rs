@@ -31,13 +31,14 @@ use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogS
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
 use analytics_resource::present::{
-    ArchiveStatuses, SnapshotInputs, build_repair_rows, build_snapshot, build_trash_snapshot,
-    build_version_rows,
+    ArchiveStatuses, PreviewMap, SnapshotInputs, build_repair_rows, build_snapshot,
+    build_trash_snapshot, build_version_rows,
 };
+use analytics_resource::preview::{self, Preview};
 use analytics_resource::resource_view::{GroupOption, ResourcesSnapshot};
 use analytics_resource::{
-    AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus,
-    ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
+    AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService,
+    ArchiveStatus, ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
 };
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
@@ -1272,6 +1273,10 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         statuses.insert(id.to_string(), status);
     }
 
+    // 内容预览（原型 §3.1）：只给**可预览的那些行**读一次开头（文本扩展名 + 体积不超阀），
+    // 读量上限由 `preview` 模块的常量定——面板说“前 20 行”，就由同一处决定读多少。
+    let previews = load_previews(&payload, &rows).await;
+
     Ok(build_snapshot(SnapshotInputs {
         resources: &rows,
         statuses: &statuses,
@@ -1280,9 +1285,45 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         tag_dictionary,
         folders: &folders_by_resource,
         group_dictionary,
+        previews: &previews,
         read_only: job.read_only,
         now: Utc::now(),
     }))
+}
+
+/// 读内容预览（工作线程上执行）：只给可预览的行读开头。
+///
+/// 三条“不做”：**不读不可预览的行**（二进制扩展名 / 大文件 / 没登记路径）、
+/// **不读整文件**（只读头 `PREVIEW_READ_BYTES`）、**不因预览失败而弄砸刷新**
+/// （读不到只是这个档案没有预览——它是附加信息，不是刷新能否成功的前提）。
+async fn load_previews(payload: &PayloadStore, rows: &[AnalyticsResource]) -> PreviewMap {
+    let mut previews = PreviewMap::new();
+    for row in rows {
+        if ArchiveKind::from_db_str(&row.kind) != ArchiveKind::File {
+            continue;
+        }
+        let Some(rel) = row.file_rel_path.as_deref() else {
+            continue;
+        };
+        // 扩展名以**本体路径**为准（显示名改过可能就不再带扩展名了，而路径不会）。
+        if !preview::is_textual(rel) || !preview::size_allows_preview(row.file_size.map(i64::from))
+        {
+            continue;
+        }
+        match payload.read_head(rel, preview::PREVIEW_READ_BYTES).await {
+            Ok(Some((head, complete))) => {
+                previews.insert(row.id.clone(), preview::from_head(&head, complete));
+            }
+            // 开头就有 NUL：不是给人看的文本，明说“不预览”（与缺省同句，但这里是有依据的）。
+            Ok(None) => {
+                previews.insert(row.id.clone(), Preview::OnlyMeta(preview::ONLY_META_NOTE));
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, rel = rel, "读内容预览失败，该行按仅元信息展示");
+            }
+        }
+    }
+    previews
 }
 
 /// 重名避让后的文件名：主名加 `-2` / `-3`… 后缀（原型 §4.2：重复取回自动改名，不静默覆盖）。

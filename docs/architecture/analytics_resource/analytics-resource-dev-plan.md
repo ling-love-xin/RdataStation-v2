@@ -1,12 +1,22 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**均可用，**143 单测 + 32 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体 + Phase 2 前八刀 + UI 收尾与第十一 / 十二 / 十三 / 十四刀（2026-09-20）已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项、**搜索匹配面（显示名 / 别名 / 标签 / 来源表 / 尾部）**、**拖拽行到分组头**、**重命名显示名（`F2` + 行右键，不涨版本）**、**详情面板的内容预览**均可用，**149 单测 + 33 窗口测试全绿**（详见 §0 进度记录；行态口径对齐见第九刀的 V 表） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-20 — Phase 2 第十四刀（P1.3 收口）：详情面板的内容预览（+ 分组名进详情）
+
+| V | 做什么 | 落点 | 为什么 / 影响面 |
+| --- | --- | --- | --- |
+| V22 | **新增 `preview.rs`（纯函数 + 常量单一来源）**：`Preview::{Text, OnlyMeta}` + `is_textual`（文本扩展名清单）/ `size_allows_preview` / `from_head`（CRLF 归一、制表符展开、尾部空行去掉、截到 20 行并标截断）；行数 / 读字节 / 大文件阀值都在这里 | `src/preview.rs`（新） | 原型 §3.1“文本型前 20 行；二进制 / 大文件仅元信息”；**面板说“前 20 行”与读的人给多少字节必须同一处定**，两处各写一份就会漂 |
+| V23 | **数据流**：`PayloadStore::read_head`（只读开头；**截断切在最后一个换行处**，开头有 NUL 当非文本）→ 刷新作业按行读（只给可预览的行）→ `SnapshotInputs.previews` → `to_detail` 的 `DetailExtras` → `detail_view::render_preview_section`（等宽块 + 截断 / 仅元信息说明） | `src/payload.rs`、`crates/workbench/src/services/resource_jobs.rs`、`src/present.rs`、`src/detail_view.rs` | 保持“装配层零 I/O”：文件读在宿主工作线程上，面板 render 只摆；读不到 / 二进制**不打断刷新**（预览是附加信息） |
+| 顺带 | **分组名真的进详情**：`to_detail` 收 `DetailExtras { tags, group, preview }`，分组名由“按行归属 + 分组字典”拼；认不出的分组 id 当未分组 | 同上 | 详情面板的「组织」分区此前**永远不出现**（`group` 恒为 `None`，注释还写着“待 Phase 2”）——分组早落上了，这一行是漏的；顺手把扫描出的两个参数收成一个结构体（不再逐个加位置参数） |
+| 测试 | +4 `preview` 单测（扩展名 / 大文件阀值 / 行切分与截断 / 说明行口径）、+1 `read_head`（切在换行处、二进制给 `None`、越界报错）、+1 装配（分组名 + 预览进详情，脏分组 id 当未分组）、+1 详情窗口（文本型摆等宽块 / 仅元信息不摆空块） | `src/preview.rs`、`src/payload.rs`、`src/present.rs`、`tests/panel_window.rs` | 最易错的两处：**“读了但没读完”也得标截断**（否则用户以为文件就那两行）、**仅元信息不能摆空块**（列表里不出现无内容的分区） |
+| 验证 | `cargo test -j 2 -p rds-analytics-resource` → **149 单测 + 23 面板窗口 + 10 对话框窗口全绿** | — | 基线 143 / 22 / 10 |
 
 ### 2026-09-20 — Phase 2 第十三刀（P2.5 余项）：重命名显示名（`F2` + 行右键）
 

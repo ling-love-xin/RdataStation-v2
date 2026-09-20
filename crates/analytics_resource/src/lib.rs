@@ -34,6 +34,7 @@ pub mod model;
 pub mod models;
 pub mod payload;
 pub mod present;
+pub mod preview;
 pub mod resource_view;
 pub mod service;
 pub mod ui;

@@ -18,6 +18,7 @@ use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
 use crate::payload::RESOURCES_DIR_NAME;
+use crate::preview::Preview;
 use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnapshot, TagOption};
 
 /// 按资源的标签映射：`resource_id → 标签行`（来自 `AnalyticsResourceStore::tags_by_resource`，
@@ -26,6 +27,11 @@ pub type ResourceTags = std::collections::HashMap<String, Vec<crate::models::Ana
 
 /// 单行状态映射：`resource_id → 状态`（来自 `IndexRepair::scan` 的结果）。
 pub type ArchiveStatuses = std::collections::HashMap<String, ArchiveStatus>;
+
+/// 内容预览映射：`resource_id → 预览`（宿主在工作线程上按 `preview` 模块的常量读完）。
+///
+/// 为什么不在 `build_snapshot` 里现读：**装配层是纯函数**（零 I/O），文件读在宿主侧发生。
+pub type PreviewMap = std::collections::HashMap<String, Preview>;
 
 /// 历史版本数映射：`resource_id → 条数`（来自 `AnalyticsResourceStore::version_counts`）。
 pub type VersionCounts = std::collections::HashMap<String, i64>;
@@ -194,6 +200,8 @@ pub struct SnapshotInputs<'a> {
     pub tag_dictionary: Vec<TagOption>,
     pub folders: &'a FolderMemberships,
     pub group_dictionary: Vec<GroupOption>,
+    /// 内容预览（宿主读完推来；缺项 = 没读到 / 不预览 → 「仅元信息」）。
+    pub previews: &'a PreviewMap,
     pub read_only: bool,
     pub now: DateTime<Utc>,
 }
@@ -259,6 +267,19 @@ pub fn tag_options(
         .collect()
 }
 
+/// 详情装配的**随行信息**（宿主取数得到的按行数据；装配层只搬不查）。
+///
+/// 为什么打包成一个结构体：这三件事都来自宿主侧的映射（标签 / 分组字典 / 预览），
+/// 分别当参数逐个加会让 `to_detail` 长到七个位置参数——又多又同样意思。
+pub struct DetailExtras {
+    /// 标签 chips（带 id：去标要用它）。
+    pub tags: Vec<ArchiveTagChip>,
+    /// 分组名（`None` = 未分组；分组字典里认不出的 id 也当未分组——脏数据不能变成一行“分组：?”）。
+    pub group: Option<String>,
+    /// 内容预览。
+    pub preview: Preview,
+}
+
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
 ///
 /// 与 [`to_row`](crate::present::to_row) 同一纪律：取值全部来自行模型与宿主推来的映射，
@@ -267,7 +288,7 @@ pub fn to_detail(
     resource: &AnalyticsResource,
     status: ArchiveStatus,
     history_count: i64,
-    tags: &[ArchiveTagChip],
+    extras: DetailExtras,
 ) -> ArchiveDetail {
     let kind = ArchiveKind::from_db_str(&resource.kind);
     // 与行的尾巴同一口径：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
@@ -302,9 +323,11 @@ pub fn to_detail(
             String::new()
         },
         // 标签与分组：标签由调用方给的映射提供（`tags_by_resource`，一次查完）；
-        // 分组属 Phase 2 余下那一刀（需要 `analytics_resource_folder` 的按行查询），此处不编造。
-        tags: tags.to_vec(),
-        group: None,
+        // 分组名由 `folders_by_resource` + 分组字典拼出（两个映射都在宿主手里）。
+        tags: extras.tags,
+        group: extras.group,
+        // 内容预览（原型 §3.1）：宿主读完推来，装配层只负责搬（缺项 = 仅元信息）。
+        preview: extras.preview,
     }
 }
 
@@ -497,6 +520,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         tag_dictionary,
         folders: folders_by_resource,
         group_dictionary,
+        previews,
         read_only,
         now,
     } = inputs;
@@ -526,9 +550,25 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
         // 标签 chips 就用行上那一份（同一装配来源，不会出现“行里有、详情里没有”）。
+        // 预览同理：宿主没读到就给缺省（「仅元信息」），不在渲染期补读数。
+        let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        // 分组名从“按行的归属 + 分组字典”拼：认不出的 id 当未分组（与 `filter` 的脏数据口径一致）。
+        let group = folders_by_resource
+            .get(&resource.id)
+            .and_then(|folder_id| group_dictionary.iter().find(|group| &group.id == folder_id))
+            .map(|group| group.name.clone());
         details.insert(
             resource.id.clone(),
-            to_detail(resource, row.status, history_count, &row.tags),
+            to_detail(
+                resource,
+                row.status,
+                history_count,
+                DetailExtras {
+                    tags: row.tags.clone(),
+                    group,
+                    preview,
+                },
+            ),
         );
         rows.push(row);
     }
@@ -546,14 +586,14 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, FolderMemberships, ResourceTags, SnapshotInputs, VersionCounts,
-        build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
+        ArchiveStatuses, FolderMemberships, PreviewMap, ResourceTags, SnapshotInputs,
+        VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
         format_relative_time, format_scale, format_size, format_timestamp, tail_for,
     };
     use crate::dialogs::index_repair::RepairGroup;
     use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
     use crate::models::{AnalyticsResource, ResourceVersion};
-    use crate::resource_view::TagOption;
+    use crate::resource_view::{GroupOption, TagOption};
     use crate::{IndexIssue, IndexScanReport};
     use chrono::{DateTime, Duration, Utc};
     use engine::persistence::trash::{TrashEntry, TrashKind};
@@ -568,6 +608,12 @@ mod tests {
     fn empty_folders() -> &'static FolderMemberships {
         static EMPTY: std::sync::OnceLock<FolderMemberships> = std::sync::OnceLock::new();
         EMPTY.get_or_init(FolderMemberships::new)
+    }
+
+    /// 空预览映射：大多数用例不关心预览（要断言预览的用例自己造一份）。
+    fn empty_previews() -> &'static PreviewMap {
+        static EMPTY: std::sync::OnceLock<PreviewMap> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(PreviewMap::new)
     }
 
     fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource {
@@ -836,6 +882,7 @@ mod tests {
             tag_dictionary: Vec::new(),
             folders: empty_folders(),
             group_dictionary: Vec::new(),
+            previews: empty_previews(),
             read_only: false,
             now,
         });
@@ -892,6 +939,7 @@ mod tests {
             tag_dictionary: dictionary,
             folders: empty_folders(),
             group_dictionary: Vec::new(),
+            previews: empty_previews(),
             read_only: false,
             now,
         });
@@ -927,6 +975,7 @@ mod tests {
             tag_dictionary: Vec::new(),
             folders: empty_folders(),
             group_dictionary: Vec::new(),
+            previews: empty_previews(),
             read_only: false,
             now,
         });
@@ -937,6 +986,59 @@ mod tests {
         assert!(
             haystack.contains("dwd.dwd_orders"),
             "来源表进了匹配面：{haystack}"
+        );
+    }
+
+    /// 详情随行信息：**分组名**（从“按行归属 + 分组字典”拼）与**内容预览**都要进详情；
+    /// 认不出的分组 id 当未分组（脏数据不能变出一行“分组：?”），没给预览的当仅元信息。
+    #[test]
+    fn details_carry_group_name_and_preview() {
+        let now = Utc::now();
+        let resources = vec![
+            row_model("ar_1", "file", Some(10)),
+            row_model("ar_2", "file", Some(10)),
+        ];
+        let mut folders = FolderMemberships::new();
+        folders.insert("ar_1".to_string(), "af_1".to_string());
+        folders.insert("ar_2".to_string(), "af_gone".to_string());
+        let mut previews = PreviewMap::new();
+        previews.insert(
+            "ar_1".to_string(),
+            crate::preview::Preview::Text {
+                lines: vec!["select 1".to_string()],
+                truncated: false,
+            },
+        );
+
+        let snapshot = build_snapshot(SnapshotInputs {
+            resources: &resources,
+            statuses: &ArchiveStatuses::new(),
+            history_counts: &VersionCounts::new(),
+            tags: empty_tags(),
+            tag_dictionary: Vec::new(),
+            folders: &folders,
+            group_dictionary: vec![GroupOption {
+                id: "af_1".to_string(),
+                name: "报表".to_string(),
+            }],
+            previews: &previews,
+            read_only: false,
+            now,
+        });
+
+        assert_eq!(snapshot.details["ar_1"].group.as_deref(), Some("报表"));
+        assert!(
+            snapshot.details["ar_2"].group.is_none(),
+            "认不出的分组 id 当未分组"
+        );
+        assert_eq!(
+            snapshot.details["ar_1"].preview.lines(),
+            ["select 1".to_string()]
+        );
+        assert_eq!(
+            snapshot.details["ar_2"].preview.note(),
+            Some(crate::preview::ONLY_META_NOTE),
+            "宿主没给预览 → 仅元信息（不假装有内容）"
         );
     }
 
@@ -971,6 +1073,7 @@ mod tests {
             tag_dictionary: Vec::new(),
             folders: empty_folders(),
             group_dictionary: Vec::new(),
+            previews: empty_previews(),
             read_only: true,
             now,
         });
