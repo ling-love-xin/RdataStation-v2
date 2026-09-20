@@ -17,32 +17,12 @@ impl ScratchpadView {
 
         let theme = cx.theme();
         let hover_bg = theme.colors.list_hover;
-        // 选中底与开关 chip 的 on 态都取列表激活色（与导航 / 资源库 / Mock 同一口径）。
-        let selected_bg = theme.colors.list_active;
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
-        let folder_color = theme.colors.warning;
         let primary = theme.colors.primary;
-        let info = theme.colors.info;
-        let success = theme.colors.success;
-        let active_border = theme.colors.list_active_border;
 
         let entity = cx.entity();
-        let (
-            rows,
-            error,
-            external_refs,
-            trash,
-            selected,
-            expanded,
-            loaded_children,
-            sort,
-            sort_desc,
-            edit,
-            undo,
-            filter,
-            loading,
-        ) = {
+        let (rows, error, external_refs, trash, sort, sort_desc, edit, undo, filter, loading) = {
             let view = self.scratchpad.borrow();
             let filter = view
                 .search_input
@@ -65,9 +45,6 @@ impl ScratchpadView {
                 view.error.clone(),
                 view.external_refs.clone(),
                 view.trash.clone(),
-                view.selected.clone(),
-                view.expanded.clone(),
-                view.children.clone(),
                 view.sort,
                 view.sort_desc,
                 view.edit.clone(),
@@ -107,96 +84,14 @@ impl ScratchpadView {
             panel = panel.child(div().px_1().child(self.render_scratchpad_edit_row(0, cx)));
         }
 
-        // ── 草稿树（面板唯一滚动区）──
+        // ── 草稿树（面板唯一滚动区）── 本段在 `render_scratchpad_tree` 里。
         let row_count = rows.len();
         let file_count = rows
             .iter()
             .filter(|(_, e)| e.kind == ScratchpadEntryKind::File)
             .count();
         let folder_count = row_count - file_count;
-        // 内联新建的文件/文件夹行定位：在目标文件夹下一行（未选中文件夹则列表首行）。
-        let new_target = self.scratchpad.borrow().new_target.clone();
-        let edit_insert: Option<(usize, usize)> = match edit.as_ref() {
-            Some(ScratchpadEdit::NewFile) | Some(ScratchpadEdit::NewFolder) => {
-                if new_target.is_empty() {
-                    Some((0, 0))
-                } else {
-                    rows.iter()
-                        .position(|(_, e)| e.path.to_string_lossy() == new_target)
-                        .map(|i| (i + 1, rows[i].0 + 1))
-                        .or(Some((0, 0)))
-                }
-            }
-            _ => None,
-        };
-        let display_count = row_count + usize::from(edit_insert.is_some());
-        let row_ctx = ScratchpadRowCtx {
-            keys: Rc::new(
-                rows.iter()
-                    .map(|(_, e)| e.path.to_string_lossy().to_string())
-                    .collect(),
-            ),
-            rows: Rc::new(rows),
-            dirty: self.dirty_seen.borrow().clone(),
-            edit: edit.clone(),
-            edit_insert,
-            selected: selected.clone(),
-            expanded: expanded.clone(),
-            loaded: loaded_children.clone(),
-            colors: ScratchpadRowColors {
-                hover_bg,
-                selected_bg,
-                fg,
-                muted,
-                folder_color,
-                primary,
-                info,
-                success,
-                active_border,
-            },
-        };
-
-        let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1().px_1();
-        if display_count == 0 {
-            // 加载中不显示空态引导，避免「草稿箱是空的」闪现。
-            if loading {
-                drafts = drafts.child(
-                    div()
-                        .v_flex()
-                        .items_center()
-                        .w_full()
-                        .pt_6()
-                        .px_2()
-                        .text_xs()
-                        .text_color(muted)
-                        .child("加载中…"),
-                );
-            } else {
-                drafts = drafts.child(self.render_scratchpad_empty_state(&entity, &filter, cx));
-            }
-        } else {
-            if row_count > 0 {
-                drafts = drafts.child(self.scratchpad_group_header("草稿", row_count, cx));
-            }
-            let sizes: Rc<Vec<Size<Pixels>>> =
-                tree::row_sizes(display_count, window.rem_size(), |i| {
-                    Self::scratchpad_row_height(&row_ctx, i)
-                });
-            let list_ctx = row_ctx.clone();
-            let scroll = self.scratchpad.borrow().list_scroll.clone();
-            let list = v_virtual_list(
-                entity.clone(),
-                "sp-drafts",
-                sizes,
-                move |this, range: std::ops::Range<usize>, _window, cx| {
-                    range
-                        .map(|i| this.scratchpad_row(i, &list_ctx, cx))
-                        .collect::<Vec<AnyElement>>()
-                },
-            )
-            .track_scroll(scroll.handle());
-            drafts = drafts.child(div().flex_1().min_h_0().w_full().child(list));
-        }
+        let drafts = self.render_scratchpad_tree(rows, loading, &filter, window, cx);
         panel = panel.child(drafts);
 
         // ── 底部固定区（引用 / 回收站 / 撤销栏 / 状态；不随草稿树滚动）──
@@ -1031,5 +926,129 @@ impl ScratchpadView {
         }
 
         search_row
+    }
+}
+
+impl ScratchpadView {
+    /// 草稿树：内联新建行的落点、行高表、虚拟列表与空态（面板唯一滚动区）。
+    ///
+    /// 为什么单独成方法：这是面板的主体，`render_scratchpad` 里它最长的一段脚手架；
+    /// 搬出来之后主视图只剩「状态投影 + 装配顺序」（行为不变：同一元素树，只换了落点）。
+    fn render_scratchpad_tree(
+        &self,
+        rows: Vec<(usize, ScratchpadEntry)>,
+        loading: bool,
+        filter: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = cx.theme();
+        let hover_bg = theme.colors.list_hover;
+        let selected_bg = theme.colors.list_active;
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let folder_color = theme.colors.warning;
+        let primary = theme.colors.primary;
+        let info = theme.colors.info;
+        let success = theme.colors.success;
+        let active_border = theme.colors.list_active_border;
+
+        let entity = cx.entity();
+        let row_count = rows.len();
+        let (selected, expanded, loaded_children, edit) = {
+            let view = self.scratchpad.borrow();
+            (
+                view.selected.clone(),
+                view.expanded.clone(),
+                view.children.clone(),
+                view.edit.clone(),
+            )
+        };
+
+        // 内联新建的文件/文件夹行定位：在目标文件夹下一行（未选中文件夹则列表首行）。
+        let new_target = self.scratchpad.borrow().new_target.clone();
+        let edit_insert: Option<(usize, usize)> = match edit.as_ref() {
+            Some(ScratchpadEdit::NewFile) | Some(ScratchpadEdit::NewFolder) => {
+                if new_target.is_empty() {
+                    Some((0, 0))
+                } else {
+                    rows.iter()
+                        .position(|(_, e)| e.path.to_string_lossy() == new_target)
+                        .map(|i| (i + 1, rows[i].0 + 1))
+                        .or(Some((0, 0)))
+                }
+            }
+            _ => None,
+        };
+        let display_count = row_count + usize::from(edit_insert.is_some());
+        let row_ctx = ScratchpadRowCtx {
+            keys: Rc::new(
+                rows.iter()
+                    .map(|(_, e)| e.path.to_string_lossy().to_string())
+                    .collect(),
+            ),
+            rows: Rc::new(rows),
+            dirty: self.dirty_seen.borrow().clone(),
+            edit: edit.clone(),
+            edit_insert,
+            selected: selected.clone(),
+            expanded: expanded.clone(),
+            loaded: loaded_children.clone(),
+            colors: ScratchpadRowColors {
+                hover_bg,
+                selected_bg,
+                fg,
+                muted,
+                folder_color,
+                primary,
+                info,
+                success,
+                active_border,
+            },
+        };
+
+        let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1().px_1();
+        if display_count == 0 {
+            // 加载中不显示空态引导，避免「草稿箱是空的」闪现。
+            if loading {
+                drafts = drafts.child(
+                    div()
+                        .v_flex()
+                        .items_center()
+                        .w_full()
+                        .pt_6()
+                        .px_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("加载中…"),
+                );
+            } else {
+                drafts = drafts.child(self.render_scratchpad_empty_state(&entity, &filter, cx));
+            }
+        } else {
+            if row_count > 0 {
+                drafts = drafts.child(self.scratchpad_group_header("草稿", row_count, cx));
+            }
+            let sizes: Rc<Vec<Size<Pixels>>> =
+                tree::row_sizes(display_count, window.rem_size(), |i| {
+                    Self::scratchpad_row_height(&row_ctx, i)
+                });
+            let list_ctx = row_ctx.clone();
+            let scroll = self.scratchpad.borrow().list_scroll.clone();
+            let list = v_virtual_list(
+                entity.clone(),
+                "sp-drafts",
+                sizes,
+                move |this, range: std::ops::Range<usize>, _window, cx| {
+                    range
+                        .map(|i| this.scratchpad_row(i, &list_ctx, cx))
+                        .collect::<Vec<AnyElement>>()
+                },
+            )
+            .track_scroll(scroll.handle());
+            drafts = drafts.child(div().flex_1().min_h_0().w_full().child(list));
+        }
+
+        drafts
     }
 }

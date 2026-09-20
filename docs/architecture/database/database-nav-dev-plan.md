@@ -113,12 +113,12 @@
 `pub` 公开面不降级）；脚本在 `tools/split_scratchpad_view.py`（一次性，已执行）。
 动机不只是可读性：本文件有过**并发写损坏**，单文件越大越容易重演；拆完最大的文件是 `actions.rs`（1292 行）。
 配套：`ui_contract` 的尺寸 / 颜色扫描清单补上两侧拆分后的子模块（拆分不得让契约漏扫）。
-**第三轮：外壳收段（2026-09-20，已处置）**——`render_scratchpad` 的「工具栏 + 冲突条」「搜索行」「外部引用 + 回收站」
-三段抽成私有方法（`render_scratchpad_header` / `render_scratchpad_search` / `render_scratchpad_refs_and_trash`），
-主视图从 ~950 行降到 313 行；面板头的分组标题行同步升级为私有方法 `scratchpad_group_header`（两处共用）。
-纯位移、行为不变（37 测试全绿），三个一次性脚本在 `tools/extract_scratchpad_*.py`。
+**第三轮：外壳收段（2026-09-20，已处置）**——`render_scratchpad` 的「工具栏 + 冲突条」「搜索行」「草稿树」「外部引用 + 回收站」
+四段抽成私有方法（`render_scratchpad_header` / `_search` / `_tree` / `_refs_and_trash`），主视图从 ~950 行降到 210 行；
+面板头的分组标题行同步升级为私有方法 `scratchpad_group_header`（两处共用）。纯位移、行为不变（37 测试全绿、零警告）；
+一次性脚本随提交入库（`tools/split_scratchpad_view.py` 与 `tools/extract_scratchpad_*.py`，均为纯位移，已执行勿重跑）。
 
-仍在（下一轮）：草稿树装配段与底部状态行仍在主视图里（同法可再抽）；行尾动作按钮
+仍在（下一轮）：撤销栏与底部状态行仍在主视图里（同法可再抽，约 60 行）；行尾动作按钮
 （18px 宽自绘 `div`，导航同位置是 20px）换 `Button`。
 
 **Phase A 实现位置**
