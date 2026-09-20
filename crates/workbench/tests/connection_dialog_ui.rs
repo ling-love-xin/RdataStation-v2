@@ -13,13 +13,26 @@ use std::rc::Rc;
 
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
-    VisualTestContext, Window, div,
+    AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use rds_workbench::components::connection_dialog::ConnectionDialogState;
 use rds_workbench::panels::{EditorPanel, Shared};
+
+/// 元素是否**真可见**（在 kit 观测里 + 没被裁掉 / 隐藏 / 透明）。
+///
+/// 比 `debug_bounds(..).is_some()` 强：后者只回答“进了元素树”，
+/// 隐藏元素也会被登记；这里问的是“用户看得到吗”。
+fn visible(cx: &mut VisualTestContext, id: &str) -> bool {
+    cx.update(|window, _| {
+        window
+            .try_find(ElementId::Name(SharedString::from(id.to_string())))
+            .is_some_and(|s| s.visible())
+    })
+}
 
 /// 测试宿主：持有对话框状态与 `Entity<EditorPanel>`（`open` 的宿主参数），
 /// 并在渲染时挂上对话框层（`open_dialog` 依赖窗口根是 `Root`）。
@@ -111,7 +124,9 @@ fn dialog_renders_each_tab_and_keeps_state_across_reopen(cx: &mut TestAppContext
 
     // 编辑入口：服务未就绪 → 预填静默跳过，不应 panic；editing_id 应记录。
     cx.update(|window, cx| {
-        harness.update(cx, |h, cx| h.open(Some("G_conn_demo".to_string()), window, cx));
+        harness.update(cx, |h, cx| {
+            h.open(Some("G_conn_demo".to_string()), window, cx)
+        });
     });
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     let editing_id = cx.update(|_, cx| harness.read(cx).dialog(cx).editing_id.borrow().clone());
@@ -146,7 +161,9 @@ fn dialog_reopen_does_not_duplicate_dialog_layer(cx: &mut TestAppContext) {
         harness.update(cx, |h, cx| h.open(None, window, cx));
     });
     cx.update(|window, cx| {
-        harness.update(cx, |h, cx| h.open(Some("G_conn_again".to_string()), window, cx));
+        harness.update(cx, |h, cx| {
+            h.open(Some("G_conn_again".to_string()), window, cx)
+        });
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
@@ -180,37 +197,21 @@ fn result_line_levels_and_detail_entry(cx: &mut TestAppContext) {
         Some(ResultLevel::Warning),
         "级别应可读（UI 用它着色）"
     );
-    assert!(
-        cx.debug_bounds("conn-result-copy").is_none(),
-        "短消息不应出现详情入口"
-    );
+    assert!(!visible(cx, "conn-result-copy"), "短消息不应出现详情入口");
 
     // 2) 长错误：出现「详情 / 复制」入口（完整原文可展开 / 可复制）。
     let long = format!("保存失败: {}", "驱动拒绝连接；".repeat(12));
     cx.update(|_, _cx| {
-        *dialog.result.borrow_mut() = Some(
-            ResultLine::new(ResultLevel::Error, long.clone()).with_detail(long.clone()),
-        );
+        *dialog.result.borrow_mut() =
+            Some(ResultLine::new(ResultLevel::Error, long.clone()).with_detail(long.clone()));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("conn-result-toggle").is_some(),
-        "长错误应提供展开入口"
-    );
-    assert!(
-        cx.debug_bounds("conn-result-copy").is_some(),
-        "长错误应提供复制入口"
-    );
-    assert!(
-        cx.debug_bounds("conn-result-detail").is_none(),
-        "未展开时不渲染详情正文"
-    );
+    assert!(visible(cx, "conn-result-toggle"), "长错误应提供展开入口");
+    assert!(visible(cx, "conn-result-copy"), "长错误应提供复制入口");
+    assert!(!visible(cx, "conn-result-detail"), "未展开时不渲染详情正文");
 
     // 3) 展开态：详情正文节点出现。
     cx.update(|_, _cx| dialog.result_expanded.set(true));
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("conn-result-detail").is_some(),
-        "展开后应渲染详情正文"
-    );
+    assert!(visible(cx, "conn-result-detail"), "展开后应渲染详情正文");
 }

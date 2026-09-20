@@ -19,13 +19,19 @@ use connection::model::DataSourceSaveInput;
 use engine::persistence::global_db::GlobalDatabaseManager;
 use gpui_kit::component::Root;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _,
-    TestAppContext, VisualTestContext, Window, div,
+    App, AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use rds_workbench::panels::{EditorPanel, Shared};
 use rds_workbench::services::data_source_service::DataSourceService;
+
+/// 按 id 取元素的观测快照（kit 的窗口测试 API）：不在树里就 panic，信息里带已登记路径。
+fn snap(cx: &mut VisualTestContext, id: &str) -> gpui_kit::test::ElementSnapshot {
+    cx.update(|window, _| window.find(ElementId::Name(SharedString::from(id.to_string()))))
+}
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -122,9 +128,7 @@ fn open_harness(cx: &mut TestAppContext) -> (Entity<Harness>, &mut VisualTestCon
 fn open_edit(harness: &Entity<Harness>, conn_id: String, cx: &mut VisualTestContext) {
     let editor = cx.update(|_, cx| harness.read(cx).editor());
     cx.update(|window, cx| {
-        editor.update(cx, |e, cx| {
-            e.request_edit_connection(conn_id, window, cx)
-        })
+        editor.update(cx, |e, cx| e.request_edit_connection(conn_id, window, cx))
     });
 }
 
@@ -158,7 +162,8 @@ fn editing_saved_connection_backfills_form(cx: &mut TestAppContext) {
     // 3) 逐项回填断言（编辑 ID / 名称 / 地址 / 备注 / 标签 / 类型 / 驱动 / 作用域）。
     let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
     assert_eq!(
-        cx.update(|_, _cx| dialog.editing_id.borrow().clone()).as_deref(),
+        cx.update(|_, _cx| dialog.editing_id.borrow().clone())
+            .as_deref(),
         Some(conn_id.as_str()),
         "编辑入口应记录连接 ID"
     );
@@ -221,11 +226,10 @@ fn editing_saved_connection_backfills_form(cx: &mut TestAppContext) {
     //    （旧实现：Tab 内容区写死 `rems(BODY_H)`，结果行被顶出行底 168px）。
     dialog.active_tab.set(0);
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    let row = cx.debug_bounds("conn-body-row").expect("两列行应已渲染");
-    let side = cx.debug_bounds("conn-side-panel").expect("侧栏应已渲染");
-    let result = cx
-        .debug_bounds("conn-result-row")
-        .expect("结果行应已渲染");
+    // 快照按 `.id()` + `.test_support()` 取（kit 观测）：取不到就 panic，不再靠 `expect` 拼。
+    let row = snap(cx, "conn-body-row").bounds();
+    let side = snap(cx, "conn-side-panel").bounds();
+    let result = snap(cx, "conn-result-row").bounds();
     assert_eq!(
         side.size.height, row.size.height,
         "侧栏应填满行高（目录 / 类型树不得把对话框撑高）"

@@ -14,13 +14,25 @@ use std::rc::Rc;
 use engine::persistence::driver_store::{DataSourceType, Driver};
 use gpui_kit::component::Root;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _,
-    TestAppContext, VisualTestContext, Window, div,
+    App, AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use rds_workbench::components::connection_dialog::ConnectionDialogState;
 use rds_workbench::panels::{EditorPanel, Shared};
+
+/// 元素是否**真可见**（在 kit 观测里 + 没被裁掉 / 隐藏 / 透明）。
+///
+/// 比 `debug_bounds(..).is_some()` 强：后者只回答“进了元素树”，隐藏元素也会被登记。
+fn visible(cx: &mut VisualTestContext, id: &str) -> bool {
+    cx.update(|window, _| {
+        window
+            .try_find(ElementId::Name(SharedString::from(id.to_string())))
+            .is_some_and(|s| s.visible())
+    })
+}
 
 /// 简化宿主：与 `WorkbenchView` 同构（挂对话框层 + 注入宿主重绘桥）。
 struct Harness {
@@ -153,7 +165,10 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
             .to_string()
     });
     assert_eq!(sel, "sqlx", "驱动下拉应显示实现短名而非 MySQL (sqlx)");
-    assert_eq!(cx.update(|_, _cx| dialog.selected_type.borrow().clone()), "mysql");
+    assert_eq!(
+        cx.update(|_, _cx| dialog.selected_type.borrow().clone()),
+        "mysql"
+    );
 
     // 实体状态未变更时，下拉选中值可被 set_driver_by_value 覆盖（编辑回读路径）。
     cx.update(|window, cx| {
@@ -309,9 +324,7 @@ fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn driver_property_defaults_follow_the_declaration_and_keep_user_edits(
-    cx: &mut TestAppContext,
-) {
+fn driver_property_defaults_follow_the_declaration_and_keep_user_edits(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     // 走生产入口打开对话框：属性默认值同步写在 render builder 里，不打开就不会执行。
@@ -396,16 +409,15 @@ fn property_rows_show_whether_the_key_will_be_delivered(cx: &mut TestAppContext)
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 未知参数会报错的键：必须有可见提示（否则只能等连接失败）。
-    // 注意：断言只能锚在 `.debug_selector(...)` 上——`.id(...)` 不往 debug_bounds 表写
-    // （决策 #83）。
+    // 快照按 `.id()` + `.test_support()` 取（kit 观测）；比 `debug_bounds` 多看一层“真可见”。
     assert!(
-        cx.debug_bounds("conn-prop-note-ssl_mode").is_some(),
+        visible(cx, "conn-prop-note-ssl_mode"),
         "会报错的键应有去向提示"
     );
-    assert!(cx.debug_bounds("conn-prop-note-connect_timeout").is_some());
+    assert!(visible(cx, "conn-prop-note-connect_timeout"));
     // 直通的键不给提示（不啰嗝）
     assert!(
-        cx.debug_bounds("conn-prop-note-max_allowed_packet").is_none(),
+        !visible(cx, "conn-prop-note-max_allowed_packet"),
         "会下发的键不必提示"
     );
 
@@ -432,9 +444,9 @@ fn connection_fields_and_uri_stay_in_sync(cx: &mut TestAppContext) {
 
     // 方向 A（URI → 字段）：从 URI 解析出主机 / 端口 / 数据库。
     cx.update(|window, cx| {
-        dialog
-            .url
-            .update(cx, |s, cx| s.set_value("mysql://root:pw@h:3306/old", window, cx));
+        dialog.url.update(cx, |s, cx| {
+            s.set_value("mysql://root:pw@h:3306/old", window, cx)
+        });
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let (host, port, db) = cx.update(|_, cx| {
@@ -589,7 +601,10 @@ fn address_placeholder_is_cached_and_follows_driver(cx: &mut TestAppContext) {
     cx.update(|window, cx| dialog.select_type("mysql", window, cx));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let ph_network = cx.update(|_, _cx| dialog.url_placeholder_for.borrow().clone());
-    assert!(ph_network.contains("主机"), "网络型占位应含示例地址：{ph_network}");
+    assert!(
+        ph_network.contains("主机"),
+        "网络型占位应含示例地址：{ph_network}"
+    );
     let input_ph = cx.update(|_, cx| dialog.url.read(cx).presentation().placeholder().to_string());
     assert_eq!(input_ph, ph_network, "缓存值应与输入框占位一致");
 

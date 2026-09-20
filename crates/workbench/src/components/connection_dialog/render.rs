@@ -723,12 +723,14 @@ impl ConnectionDialogState {
                                     PropertyNoteLevel::Warn => theme.colors.warning,
                                     PropertyNoteLevel::Danger => theme.colors.danger,
                                 };
-                                let selector_key = k.clone();
+                                let note_id = ElementId::Name(SharedString::from(format!(
+                                    "conn-prop-note-{k}"
+                                )));
                                 row = row.child(
                                     div()
-                                        .debug_selector(move || {
-                                            format!("conn-prop-note-{selector_key}")
-                                        })
+                                        .id(note_id)
+                                        // kit 观测：窗口用例按 id 取快照（可见性 + 几何）。
+                                        .test_support()
                                         .text_xs()
                                         .text_color(color)
                                         .child(text),
@@ -1376,8 +1378,8 @@ impl ConnectionDialogState {
                             Some(
                                 div()
                                     .id("conn-general-guide")
-                                    // 测试锚点：`debug_bounds` 只认 debug_selector（非测试构建 no-op）。
-                                    .debug_selector(|| "conn-general-guide".to_string())
+                                    // kit 观测：窗口用例按 id 取快照（可见性 + 几何；取代 `debug_selector`）。
+                                    .test_support()
                                     .w_full()
                                     .v_flex()
                                     .gap(rems(GAP_SM))
@@ -1457,7 +1459,12 @@ impl ConnectionDialogState {
             // 改为 `flex_1 + min_h_0` 后由行高分配：内容区实际高度 = 行高 − Header − Tab 条 − 结果行。
             let tab_body = div()
                 .id("conn-tab-body")
-                // 测试锚点：`debug_bounds("conn-tab-body")` 拿到的是 Scrollable 重排后的**滚动内容**
+                // 测试锚点：只此一处继续用 `debug_selector`——组件 `Scrollable`
+                // （`overflow_y_scrollbar`）渲染时会把内层元素的 id 换成 `(caller, "content")`
+                // （`scrollable.rs` 的 `self.element.id(content_id)`），所以这个 div 的 id 到不了
+                // kit 观测里（实测 `find` 找不到）；而 `debug_bounds` 只认 `debug_selector`（两者互不干扰）。
+                //
+                // 另外：`debug_bounds("conn-tab-body")` 拿到的是 Scrollable 重排后的**滚动内容**
                 // （`h_auto + min_h_full`）——它的高度是内容高，可以大于视口（正常滚动行为），
                 // **不能**拿它断言视口高度；视口 / 行几何请看 `conn-result-row` 与 `conn-body-row`。
                 .debug_selector(|| "conn-tab-body".to_string())
@@ -1473,8 +1480,9 @@ impl ConnectionDialogState {
             // 行内容（徽标 / 名称 / 脏标记 / 来源短码 / 行尾删除按钮）全在委托里，
             // 这里只负责把它放进固定高度的容器（高度恒定的锚点仍在下面的 `conn-staging-scroll`）。
             let side_panel = div()
-                // 测试锚点：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
-                .debug_selector(|| "conn-side-panel".to_string())
+                .id("conn-side-panel")
+                // 测试快照：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
+                .test_support()
                 .w(rems(12.5))
                 // 与右列同高：行高由外层两列行给定（`helpers::dialog_row_height`），两列各自填满。
                 // 侧栏不自己定高——否则类型树条目数会反过来决定对话框高度；
@@ -1536,8 +1544,9 @@ impl ConnectionDialogState {
                                 // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
                                 .child(
                                     div()
-                                        // 测试锚点：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
-                                        .debug_selector(|| "conn-staging-scroll".to_string())
+                                        .id("conn-staging-scroll")
+                                        // 测试快照：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
+                                        .test_support()
                                         .w_full()
                                         .h(rems(STAGING_H))
                                         .min_h(rems(STAGING_H))
@@ -1564,7 +1573,9 @@ impl ConnectionDialogState {
                         // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
                         .child(
                             div()
-                                .debug_selector(|| "conn-type-list".to_string())
+                                .id("conn-type-list")
+                                // kit 观测：类型列表容器（与列表行同一批 id，供窗口用例/调试定位）。
+                                .test_support()
                                 .flex_1()
                                 .min_h_0()
                                 .w_full()
@@ -1828,8 +1839,8 @@ impl ConnectionDialogState {
                                 col = col.child(
                                     div()
                                         .id("conn-result-detail")
-                                        // 测试锚点：`debug_bounds` 只认 debug_selector（非测试构建 no-op）。
-                                        .debug_selector(|| "conn-result-detail".to_string())
+                                        // kit 观测：窗口用例断言「展开后正文才可见」。
+                                        .test_support()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
                                         .max_h(rems(6.))
@@ -1847,7 +1858,7 @@ impl ConnectionDialogState {
                                     .child(
                                         div()
                                             .id("conn-result-toggle")
-                                            .debug_selector(|| "conn-result-toggle".to_string())
+                                            .test_support()
                                             .text_xs()
                                             .text_color(theme.colors.primary)
                                             .cursor_pointer()
@@ -1860,7 +1871,7 @@ impl ConnectionDialogState {
                                     .child(
                                         div()
                                             .id("conn-result-copy")
-                                            .debug_selector(|| "conn-result-copy".to_string())
+                                            .test_support()
                                             .text_xs()
                                             .text_color(theme.colors.primary)
                                             .cursor_pointer()
@@ -2297,9 +2308,10 @@ impl ConnectionDialogState {
                 })
                 .child(
                     div()
-                        // 测试锚点：两列行的几何基准（行高恒定 = 切 Tab / 增删草稿不改变对话框高度；
+                        .id("conn-body-row")
+                        // 测试快照：两列行的几何基准（行高恒定 = 切 Tab / 增删草稿不改变对话框高度；
                         // 右列各子项必须装在这一行里）。
-                        .debug_selector(|| "conn-body-row".to_string())
+                        .test_support()
                         .h_flex()
                         // 两列等高于**行高**，且行高确定（三向夹住）：左侧「高度恒定 + 内部滚动」
                         // 才成立——否则侧栏按类型树内容自适应，既会撑高对话框，也会让右列下方留空
@@ -2404,10 +2416,11 @@ impl ConnectionDialogState {
                                 .child(tab_body)
                                 .child(
                                     div()
-                                        // 测试锚点：结果行是右列的**最后一个固定高度块**——
+                                        .id("conn-result-row")
+                                        // 测试快照：结果行是右列的**最后一个固定高度块**——
                                         // 它的底边是否超出 `conn-body-row` 底边，就是“右列溢出 / 被裁”的
                                         // 直接判据（旧实现这里超出 168px）。
-                                        .debug_selector(|| "conn-result-row".to_string())
+                                        .test_support()
                                         .flex_shrink_0()
                                         .child(result_ui),
                                 ),

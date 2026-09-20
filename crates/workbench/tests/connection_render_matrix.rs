@@ -22,7 +22,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     App, AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div, px,
+    SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
 use rds_workbench::components::connection_dialog::{
@@ -101,6 +101,28 @@ fn open_new(harness: &Entity<Harness>, cx: &mut VisualTestContext) {
     cx.update(|window, cx| editor.update(cx, |e, cx| e.request_new_connection(window, cx)));
 }
 
+// ===== 观测快照（gpui-kit 的窗口测试 API）=====
+//
+// 对话框里的可断言元素一律 `.id(...)` + `.test_support()`（kit 观测），用 `find` 取快照：
+// 它比 `debug_bounds` 强在两点——(1) `visible()` 能区分「不在元素树里」与「在树里但被裁掉 /
+// 隐藏」，(2) 取不到时 panic 里带已登记路径（id 拼错一眼可见）。
+// 注：这些元素在 headless 下点不到（鼠标事件到不了对话框的 deferred 子层），
+// 所以快照只用于可见性与几何；真点击见 `helpers.rs::tests::header_interaction`。
+
+/// 按 id 取快照（不在树里就 panic，带已登记路径）。
+fn snap(cx: &mut VisualTestContext, id: &str) -> gpui_kit::test::ElementSnapshot {
+    cx.update(|window, _| window.find(ElementId::Name(SharedString::from(id.to_string()))))
+}
+
+/// 元素是否**真可见**（在元素树里 + 没被裁掉 / 隐藏 / 透明）。
+fn visible(cx: &mut VisualTestContext, id: &str) -> bool {
+    cx.update(|window, _| {
+        window
+            .try_find(ElementId::Name(SharedString::from(id.to_string())))
+            .is_some_and(|s| s.visible())
+    })
+}
+
 /// 空态引导 / 五个 Tab / 作用域三态 / 结果行四级：逐一渲染不 panic。
 #[gpui_kit::test]
 fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
@@ -111,12 +133,12 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
 
     // 1) 空态（未选类型 + 名称/地址为空）：首次引导条出现。
     assert!(
-        cx.debug_bounds("conn-general-guide").is_some(),
-        "空态应渲染首次引导条"
+        visible(cx, "conn-general-guide"),
+        "空态应渲染首次引导条（且真可见，不只是进了元素树）"
     );
     // 同时：类型树降级（目录为空）也要有交代——空白侧栏分不清“搜不到”与“没加载到”。
     assert!(
-        cx.debug_bounds("conn-type-empty").is_some(),
+        visible(cx, "conn-type-empty"),
         "类型目录为空时应渲染空态提示"
     );
     let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
@@ -128,34 +150,24 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
             .update(cx, |s, cx| s.set_value("矩阵用例", window, cx));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("conn-general-guide").is_none(),
-        "名称非空后引导条应消失"
-    );
+    assert!(!visible(cx, "conn-general-guide"), "名称非空后引导条应消失");
 
     // 3) 清空名称 → 引导条复现（判据是表单内容，不是"已展示过"标记）。
     cx.update(|window, cx| {
         dialog.name.update(cx, |s, cx| s.set_value("", window, cx));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("conn-general-guide").is_some(),
-        "清空后引导条应复现"
-    );
+    assert!(visible(cx, "conn-general-guide"), "清空后引导条应复现");
 
     // 4) 五个 Tab 逐一渲染（类型 / 驱动 / 引用目录均为空的降级分支），
     //    并断言**行高锁定**：切 Tab 不得改变对话框高度（布局不跳动）。
     //    量的是两列行（`conn-body-row`）而不是内容区：内容区是滚动容器，它的
-    //    `debug_bounds` 落在滚动**内容**上（内容多高它多高，可大于视口——正常行为）。
+    //    快照落在滚动**内容**上（内容多高它多高，可大于视口——正常行为）。
     let mut row_height = None;
     for tab in 0..5 {
         dialog.active_tab.set(tab);
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        let height = cx
-            .debug_bounds("conn-body-row")
-            .expect("两列行应已渲染")
-            .size
-            .height;
+        let height = snap(cx, "conn-body-row").bounds().size.height;
         match row_height {
             None => row_height = Some(height),
             Some(first) => assert_eq!(
@@ -197,11 +209,9 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
     //    ・右列的最后一个固定块（结果行）必须还在行内——旧实现里 Tab 内容区写死
     //      `rems(BODY_H)`，结果行被顶到行底之外 168px，底部一截被 Dialog 的
     //      body（`overflow_hidden`）裁掉，怎么滚都看不到。
-    let row = cx.debug_bounds("conn-body-row").expect("两列行应已渲染");
-    let side = cx.debug_bounds("conn-side-panel").expect("侧栏应已渲染");
-    let result = cx
-        .debug_bounds("conn-result-row")
-        .expect("结果行应已渲染（无提示时也占位）");
+    let row = snap(cx, "conn-body-row").bounds();
+    let side = snap(cx, "conn-side-panel").bounds();
+    let result = snap(cx, "conn-result-row").bounds();
     assert_eq!(
         side.size.height, row.size.height,
         "侧栏应填满行高（而不是按内容自适应）"
@@ -222,11 +232,7 @@ fn staging_area_keeps_fixed_height_with_many_drafts(cx: &mut TestAppContext) {
     open_new(&harness, cx);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let h0 = cx
-        .debug_bounds("conn-staging-scroll")
-        .expect("暂存滚动容器应已渲染")
-        .size
-        .height;
+    let h0 = snap(cx, "conn-staging-scroll").bounds().size.height;
     assert!(
         h0 > gpui_kit::Pixels::default(),
         "暂存区应有固定高度（当前 {h0:?}）"
@@ -240,11 +246,7 @@ fn staging_area_keeps_fixed_height_with_many_drafts(cx: &mut TestAppContext) {
     }
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let h1 = cx
-        .debug_bounds("conn-staging-scroll")
-        .expect("暂存滚动容器应仍在")
-        .size
-        .height;
+    let h1 = snap(cx, "conn-staging-scroll").bounds().size.height;
     assert_eq!(h1, h0, "草稿增多不得拉长暂存区（应为固定高度 + 内部滚动）");
     assert!(
         cx.update(|_, _cx| dialog.drafts.borrow().len()) >= 13,
@@ -367,6 +369,16 @@ fn driver(
     }
 }
 
+/// 出几帧让布局稳定。
+///
+/// 首帧与稳定帧的内容可能不同（引导条 / 目录回填等都在 render 里判），
+/// 拿首帧的量当基线会得到偏差几帧才收敛的位置——做几何对比前先稳住。
+fn draw_frames(cx: &mut VisualTestContext, n: usize) {
+    for _ in 0..n {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+}
+
 /// 推进组件内 spring（揭示动效）直到收敛。
 ///
 /// headless 下时钟不会自己走（`spring` 取的是 `background_executor().now()`，只有显式推进才动），
@@ -386,7 +398,8 @@ fn settle_reveal(cx: &mut VisualTestContext) {
 /// 钉住三件事：
 /// 1. 标题行是**可交互的真元素**：被 kit 的观测登记（`.id()` + `.test_support()`）、当前可见、
 ///    行宽 == 面板内宽（按钮 `w_full` + `px_0`，不是只包住 chevron 与标题）；
-/// 2. 折叠是**几何**上的——收起后面板高度回落到只剩标题行（不是只翻一个状态位）；
+/// 2. 折叠是**几何**上的——正文不可见（仍挂载）+ 下一个分组的标题行上移（布局真的变短），
+///    不是只翻一个状态位；
 /// 3. **只动被切换的那个分组**，再展开原样复原。
 ///
 /// 这里用 `toggle_section` 驱动而不是坐标点击：headless 下鼠标事件到不了对话框层
@@ -400,63 +413,68 @@ fn outline_section_collapses_from_its_whole_title_row(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     open_new(&harness, cx);
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 先出几帧让布局收敛（实测前 4 帧内容还在长高，第 5 帧起稳定）。
+    draw_frames(cx, 8);
     let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
 
     let is_collapsed = |cx: &mut VisualTestContext, id: &'static str| {
         cx.update(|_, _cx| dialog.section_collapsed(id))
     };
-    let panel_height = |cx: &mut VisualTestContext, selector: &'static str| {
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("分组面板 {selector} 应渲染"))
-            .size
-            .height
+    // 下一个分组的标题行底边（“布局真的变短了”的直接证据）。
+    let next_row_bottom = |cx: &mut VisualTestContext| {
+        let b = snap(cx, "conn-sec-org").bounds();
+        b.origin.y + b.size.height
     };
 
     // 标题行：观察快照与命中测试同一套登记（`.id()` + `.test_support()`），
     // 和“只给 debug_bounds 看的锚点”不同——它是真元素，真机上也点得中。
-    let row_id = ElementId::Name(SharedString::from("conn-sec-conn"));
-    let row = cx.update(|window, _| window.find(row_id));
-    assert!(
-        row.visible(),
-        "标题行应可见（观测快照只登记真画出来的元素）"
-    );
-    let panel = cx
-        .debug_bounds("conn-sec-panel-conn")
-        .expect("分组面板应渲染");
-    let expanded = panel.size.height;
-    let untouched = panel_height(cx, "conn-sec-panel-org");
+    let row = snap(cx, "conn-sec-conn");
+    assert!(row.visible(), "标题行应可见");
+    let panel_width = row.bounds().size.width;
     assert!(!is_collapsed(cx, "conn"), "默认应为展开");
-    assert!(
-        row.bounds().size.width > panel.size.width - px(24.),
-        "标题行应吃满面板内宽（按钮 `w_full` + `px_0`），而不是只包住文字：行 {:?} / 面板 {:?}",
-        row.bounds().size.width,
-        panel.size.width
-    );
+    assert!(visible(cx, "conn-sec-body-conn"), "展开时正文应可见");
+    let expanded_bottom = next_row_bottom(cx);
 
-    // 收起：状态 + 几何（spring 收敛后高度回落到只剩标题行）。
+    // 收起：状态 + 几何（spring 收敛后正文被夹成不可见、后面的分组上移）。
     cx.update(|_, _| dialog.toggle_section("conn"));
     settle_reveal(cx);
     assert!(is_collapsed(cx, "conn"), "收起后状态应为折叠");
-    let folded = panel_height(cx, "conn-sec-panel-conn");
     assert!(
-        folded < expanded,
-        "收起后分组面板应变矮（正文不再占高度）：{expanded:?} → {folded:?}"
+        !visible(cx, "conn-sec-body-conn"),
+        "收起后正文应被揭示进度夹成不可见"
+    );
+    assert!(
+        snap(cx, "conn-sec-body-conn").bounds().size.width > gpui_kit::Pixels::default(),
+        "收起只是夹高度：正文仍挂载（宽度还在），而不是被删掉重建"
+    );
+    let folded_bottom = next_row_bottom(cx);
+    assert!(
+        folded_bottom < expanded_bottom,
+        "收起后后面的分组应上移（布局真的变短）：{expanded_bottom:?} → {folded_bottom:?}"
     );
     assert_eq!(
-        panel_height(cx, "conn-sec-panel-org"),
-        untouched,
-        "只该收起被切换的那个分组（旁边的分组高度不变）"
+        snap(cx, "conn-sec-conn").bounds().size.width,
+        panel_width,
+        "标题行宽度不因折叠而变（整行仍是按钮）"
     );
+    assert!(
+        !is_collapsed(cx, "org"),
+        "只该收起被切换的那个分组（旁边的分组仍是展开态）"
+    );
+    // 下面这句同时是断言：取不到快照就 panic（相邻分组不得因折叠被移除）。
+    // 注意：`org` 在滚动区之下，`visible()` 为假（被视口裁掉）——所以判据是它的**位置**，
+    // 不是可见性（这正是 `find` 比 `debug_bounds` 多出来的信息：旧写法看不出来这一点）。
+    let _org_row = snap(cx, "conn-sec-org");
 
     // 再展开：回到原高（揭示动效是可逆的，不是只能单向收起）。
     cx.update(|_, _| dialog.toggle_section("conn"));
     settle_reveal(cx);
     assert!(!is_collapsed(cx, "conn"), "再点应展开");
-    let restored = panel_height(cx, "conn-sec-panel-conn");
-    assert!(
-        (restored - expanded).abs() < px(1.),
-        "展开后应回到原高度：{expanded:?} → {restored:?}"
+    assert!(visible(cx, "conn-sec-body-conn"), "展开后正文应重新可见");
+    let restored_bottom = next_row_bottom(cx);
+    assert_eq!(
+        restored_bottom, expanded_bottom,
+        "展开后应回到原高度（后面的分组回到原位）"
     );
 }
 

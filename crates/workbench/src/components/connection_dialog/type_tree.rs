@@ -221,9 +221,10 @@ impl ListDelegate for TypeTreeDelegate {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        // 空白侧栏分不清「搜不到」与「没加载到」：两种文案分开给（锚点供窗口用例断言）。
+        // 空白侧栏分不清「搜不到」与「没加载到」：两种文案分开给（窗口用例按 id 断言可见性）。
         div()
-            .debug_selector(|| "conn-type-empty".to_string())
+            .id("conn-type-empty")
+            .test_support()
             .w_full()
             .px_2()
             .py_1()

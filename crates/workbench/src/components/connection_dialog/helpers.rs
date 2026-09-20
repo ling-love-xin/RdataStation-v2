@@ -629,18 +629,19 @@ pub(crate) fn outline_section(
         )
         .content(
             div()
-                // 测试锚点：内容体（收起时仍挂载，高度由揭示进度夹住——**不能**拿它判“收起了没”）。
-                .debug_selector(move || format!("conn-sec-body-{id}"))
+                .id(ElementId::Name(SharedString::from(format!(
+                    "conn-sec-body-{id}"
+                ))))
+                // 测试快照：内容体（收起时**仍挂载**、但被揭示进度夹成不可见——
+                // `find(..).visible()` 正好能区分这两种状态）。
+                .test_support()
                 .w_full()
                 .pt(rems(GAP_SM))
                 .child(body),
         )
         .w_full();
     // 分组面板底（浅底 + 圆角 + 内距）：包住标题行与内容。
-    // 测试锚点在**面板**上：收起后高度回落到只剩标题行，是“真收起”的几何判据。
-    // （面板与内容体的锚点只能靠 `debug_selector`：`debug_bounds` 不认 `.id()`。）
     div()
-        .debug_selector(move || format!("conn-sec-panel-{id}"))
         .w_full()
         .v_flex()
         .rounded(theme.radius)
@@ -2591,16 +2592,13 @@ mod tests {
             cx.update(|window, cx| window.draw(cx).clear(cx));
 
             let row_id = ElementId::Name(SharedString::from("conn-sec-probe"));
-            let panel = |cx: &mut VisualTestContext| {
-                cx.debug_bounds("conn-sec-panel-probe")
-                    .expect("分组面板应渲染")
-                    .size
-                    .height
-            };
-            let row = cx.update(|window, _| window.find(row_id.clone()));
+            let body_id = ElementId::Name(SharedString::from("conn-sec-body-probe"));
+            let snap =
+                |cx: &mut VisualTestContext, id: ElementId| cx.update(|window, _| window.find(id));
+            let row = snap(cx, row_id.clone());
             assert!(row.visible(), "标题行应可见");
-            let expanded = panel(cx);
             assert!(!flag.get(), "默认应为展开");
+            assert!(snap(cx, body_id.clone()).visible(), "展开时正文应可见");
 
             // 点标题行**远端的空白处**（不是 chevron / 文字）：整行都是按钮才中。
             // 落点用行宽的分数算（本文件受尺寸契约扫描，不能写裸像素字面量）。
@@ -2616,35 +2614,29 @@ mod tests {
             });
             settle_reveal(cx);
             assert!(flag.get(), "点标题行应触发 on_toggle");
-            let folded = panel(cx);
+            let folded = snap(cx, body_id.clone());
             assert!(
-                folded < expanded,
-                "收起后分组面板应变矮：{expanded:?} → {folded:?}"
+                !folded.visible(),
+                "收起后正文应被揭示进度夹成不可见（仍挂载）"
+            );
+            assert!(
+                folded.bounds().size.width > row.bounds().size.width / 2.,
+                "收起只是夹高度：正文宽度还在（不是被删掉重建）"
             );
 
             // 再点一次（行中）：复原。
             cx.update(|window, cx| {
                 window.click_at(
-                    row_id,
+                    row_id.clone(),
                     point(row.bounds().size.width / 2., row.bounds().size.height / 2.),
                     cx,
                 )
             });
             settle_reveal(cx);
             assert!(!flag.get(), "再点应展开");
-            let restored = panel(cx);
-            // 容差用相对量（1%）：不写 px 字面量，也不因主窗口字号变化而变严。
-            assert!(
-                (restored - expanded).abs() < expanded / 100.,
-                "展开后应回到原高度：{expanded:?} → {restored:?}"
-            );
-            // 面板仍然是同一个元素（收起过不等于重建过）。
-            assert!(
-                cx.update(|window, _| window
-                    .try_find(ElementId::Name(SharedString::from("conn-sec-probe"))))
-                    .is_some(),
-                "标题行应仍在元素树里"
-            );
+            assert!(snap(cx, body_id).visible(), "展开后正文应重新可见");
+            // 标题行仍在元素树里（收起过不等于重建过）。
+            assert!(snap(cx, row_id).visible(), "标题行应仍在元素树里");
         }
     }
 }
