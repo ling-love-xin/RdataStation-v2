@@ -11,6 +11,9 @@ use async_trait::async_trait;
 // russh 0.63 起 russh-keys 已并入 russh::keys，类型路径随之更新
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::keys::PublicKeyBase64;
+// SSH Agent 身份（仅 unix 用得上：Windows 侧 Agent 走 `#[cfg(not(unix))]` 那条不支持分支）
+#[cfg(unix)]
+use russh::keys::agent::AgentIdentity;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
@@ -455,14 +458,41 @@ pub async fn establish_ssh_tunnel(
             );
 
             let mut authenticated = false;
-            for pubkey in &identities {
-                match session
-                    .lock()
-                    .await
-                    .authenticate_publickey_with(&ssh_config.username, pubkey.clone(), &mut agent)
-                    .await
-                {
-                    Ok(true) => {
+            for identity in &identities {
+                // russh 0.63 的签名是 `(user, key|cert, hash_alg, signer) -> AuthResult`
+                // （旧版是 `(user, identity, signer) -> bool`，本块是 unix-only，升级时漏改了）。
+                // 公钥与 OpenSSH 证书是**两条 API**，按身份类型分派；`hash_alg = None` 表示
+                // 算法按密钥类型内部选，与上面私钥那条（`PrivateKeyWithHashAlg::new(_, None)`）同口径。
+                let attempt = match identity {
+                    AgentIdentity::PublicKey { key, .. } => {
+                        session
+                            .lock()
+                            .await
+                            .authenticate_publickey_with(
+                                &ssh_config.username,
+                                key.clone(),
+                                None,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                    AgentIdentity::Certificate { certificate, .. } => {
+                        session
+                            .lock()
+                            .await
+                            .authenticate_certificate_with(
+                                &ssh_config.username,
+                                certificate.clone(),
+                                None,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                };
+                match attempt {
+                    // 只有 `Success` 算认证通过：`Failure { partial_success: true }` 表示
+                    // 密钥被接受但服务器还要第二因子——对只建一条隧道的我们等同于没通过。
+                    Ok(result) if result.success() => {
                         authenticated = true;
                         tracing::info!(
                             target: "ssh_tunnel",
@@ -471,10 +501,11 @@ pub async fn establish_ssh_tunnel(
                         );
                         break;
                     }
-                    Ok(false) => {
+                    Ok(result) => {
                         tracing::debug!(
                             target: "ssh_tunnel",
-                            "SSH Agent 身份未通过认证，尝试下一个"
+                            "SSH Agent 身份未通过认证（{:?}），尝试下一个",
+                            result
                         );
                     }
                     Err(e) => {
