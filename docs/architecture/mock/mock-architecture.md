@@ -403,8 +403,8 @@ SchemaRequest{conn_id, catalog, schema, table}
   提交到首批完成之间显示「准备中…」（总量随首批回调返回）。
 - **可观测**：`MockGenerateResult.elapsed_ms`（生成耗时，不含写库）；`tracing::warn!` 用于生成器内的可恢复异常（非法日期回退、语料缺失）。
 - **预览重查的代价**：每次重查 = 一条 `[ORDER BY col] LIMIT N`（带 `try_lock`，不等锁）：N 是行数档（默认 10，最大 200）。
-  DuckDB 排 10 万行在毫秒级、行数上限 1_000_000 时也在百毫秒内；不以「保持列宽」为代价再挤一次重排
-  （重建表头时列宽回默认档，与重新生成同一行为）。
+  DuckDB 排 10 万行在毫秒级、行数上限 1_000_000 时也在百毫秒内。重建表头不再伤用户布局：
+  拖过的列宽由 delegate 按列名记着（订阅 `TableEvent::ColumnWidthsChanged`），重查 / 重新生成后照旧。
 - **预览成本**：固定前 10 行（`PREVIEW_ROWS`）；`preview()` 支持自定义 limit。
 
 ## 9. 已知问题与后续项

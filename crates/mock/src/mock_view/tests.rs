@@ -1115,6 +1115,7 @@ fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_col
             vec!["2".to_string(), "乙".to_string()],
         ],
         sort: None,
+        widths: std::collections::HashMap::new(),
         context_cell: None,
     };
 
@@ -1743,6 +1744,94 @@ fn preview_header_sort_icon_is_really_clickable(cx: &mut TestAppContext) {
         rec.samples.borrow()[0].1.as_ref().map(|(c, _)| c.as_str()),
         Some("id")
     );
+}
+
+/// 列宽要活过表头重建：组件拖完发一次 `ColumnWidthsChanged`，delegate 记住它，
+/// 之后重查 / 改行数 / 重新生成重建表头时按列名恢复（否则用户拖好的宽度被打回默认档）。
+///
+/// 这条用例是**判别性**的：它拿真实的 `TableState` 发那个事件（而不是直调 `set_widths`），
+/// 订阅 / 延迟投递这条链断在哪一环都会挂。
+#[gpui_kit::test]
+fn preview_column_widths_survive_a_rebuild(cx: &mut TestAppContext) {
+    use gpui_kit::component::table::{TableDelegate as _, TableEvent};
+
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    draw(cx);
+    let table = cx
+        .update(|_, cx| detail.read(cx).preview_table.clone())
+        .expect("渲染后预览表应已创建");
+
+    // 没拖过：走组件默认档（100px）
+    cx.update(|_, cx| {
+        assert_eq!(
+            table.read(cx).delegate().column(1, cx).width,
+            gpui_kit::px(100.)
+        );
+    });
+
+    // 拖了一下：组件在 mouse-up 时报全部列宽（第 0 位是行号槽）
+    let widened = gpui_kit::px(240.);
+    cx.update(|_, cx| {
+        table.update(cx, |_state, cx| {
+            cx.emit(TableEvent::ColumnWidthsChanged(vec![
+                gpui_kit::px(48.),
+                widened,
+            ]));
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, cx| {
+        let state = table.read(cx);
+        assert_eq!(
+            state.delegate().column(1, cx).width,
+            widened,
+            "宽度应已记下来"
+        );
+        assert_eq!(
+            state.delegate().column(0, cx).width,
+            super::ui::PREVIEW_ROW_NUMBER_WIDTH,
+            "行号槽的宽度是钉死的，不跟事件跑"
+        );
+    });
+
+    // 重建表头（重查 / 重新生成都走这一步）：`column()` 给的是记下的宽度
+    cx.update(|_, cx| {
+        table.update(cx, |state, cx| state.refresh(cx));
+    });
+    cx.update(|_, cx| {
+        assert_eq!(
+            table.read(cx).delegate().column(1, cx).width,
+            widened,
+            "重建之后还是用户拖的宽度（否则箭头 / 行数一变就回默认档）"
+        );
+    });
+
+    // 列集合换了（下一次生成给了别的列）：与它们对不上的记录宽度要剔掉
+    panel.update(cx, |panel, cx| {
+        panel.results[0].preview.columns = vec!["amount".to_string()];
+        cx.notify();
+    });
+    draw(cx);
+    cx.update(|_, cx| {
+        let state = table.read(cx);
+        assert!(
+            state.delegate().widths.is_empty(),
+            "列换过之后，旧列名的宽度不应该留在表里（同名回归时会意外生效）"
+        );
+        assert_eq!(
+            state.delegate().column(1, cx).width,
+            gpui_kit::px(100.),
+            "新列回到默认档"
+        );
+    });
 }
 
 /// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：

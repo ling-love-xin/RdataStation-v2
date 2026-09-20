@@ -63,7 +63,9 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
+use gpui_kit::component::table::{
+    Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState,
+};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
 // 清单行的选中标识条（2px + 上下内缩）与 M4 导航 / M5 草稿箱同一份共用原语，
@@ -5585,6 +5587,20 @@ impl MockDetailView {
                 .row_selectable(false)
                 .col_selectable(false)
         });
+        // 列宽是**组件自己**改的（`col_groups` 是它的私有状态），重建表头时只会从 `column()` 重取：
+        // 订阅它拖完报一次的那个事件，把宽度记进 delegate，否则排序 / 改行数会把拖好的宽度打回默认档。
+        // `emit` 是延迟投递的（pending effect），所以回调里再 update 那个实体是安全的。
+        cx.subscribe_in(
+            &state,
+            window,
+            |_view, state, event: &TableEvent, _window, cx| {
+                if let TableEvent::ColumnWidthsChanged(widths) = event {
+                    let widths = widths.clone();
+                    state.update(cx, |state, _cx| state.delegate_mut().set_widths(&widths));
+                }
+            },
+        )
+        .detach();
         self.preview_table = Some(state);
     }
 
@@ -6630,6 +6646,13 @@ struct PreviewTableDelegate {
     rows: Vec<Vec<String>>,
     /// 生效中的排序（列下标 + 方向；`None` = 没排序）：表头的箭头就画在它上
     sort: Option<(usize, ColumnSort)>,
+    /// 用户拖过的列宽（**按列名**记，不是下标）：重建表头时按名字恢复。
+    ///
+    /// 为什么必须自己记：列宽归组件（`col_groups` 是 `TableState` 的私有状态），
+    /// 而每次重建表头（重查取样 / 重新生成）都会从 `column()` 重新取宽——不记就等于
+    /// 把用户拖好的宽度打回默认档。事件 [`TableEvent::ColumnWidthsChanged`] 拖完就发，
+    /// 订阅在详情视图那边（`ensure_preview_table`）。
+    widths: HashMap<String, Pixels>,
     /// 右键落在哪个单元格（组件库只把 `row_ix` 交给 `context_menu`，
     /// 列得在 `render_td` 里自己记一笔——与结果集网格同一做法）
     context_cell: Option<(usize, usize)>,
@@ -6656,8 +6679,26 @@ impl PreviewTableDelegate {
             columns,
             rows,
             sort,
+            widths: HashMap::new(),
             context_cell: None,
         }
+    }
+
+    /// 记下组件报来的全部列宽（下标 → 列名；行号槽的宽是钉死的，不记）。
+    ///
+    /// 列集合变了就把不再存在的名字剔掉（同一次会话里换过表也不会无限长）。
+    fn set_widths(&mut self, all: &[Pixels]) {
+        let mut widths: HashMap<String, Pixels> = HashMap::new();
+        for (ix, width) in all.iter().enumerate() {
+            let Some(index) = ix.checked_sub(1) else {
+                continue;
+            };
+            let Some(name) = self.columns.get(index) else {
+                continue;
+            };
+            widths.insert(name.clone(), *width);
+        }
+        self.widths = widths;
     }
 
     /// 面板给的「生效中的排序」（列名 + 方向）→ 列下标 + 方向。
@@ -6691,6 +6732,10 @@ impl PreviewTableDelegate {
         if self.table == table && self.columns == columns && self.rows == rows && self.sort == sort
         {
             return false;
+        }
+        // 列集合换了：与它们对不上的记录宽度没有意义（留着只会在同名列回来时意外生效）
+        if self.columns != columns {
+            self.widths.retain(|name, _| columns.contains(name));
         }
         self.table = table;
         self.columns = columns;
@@ -6768,8 +6813,12 @@ impl TableDelegate for PreviewTableDelegate {
         }
         let index = col_ix - 1;
         let name = self.columns.get(index).cloned().unwrap_or_default();
-        // 列宽走组件默认档（100px）+ 可拖宽：宽表靠横向滚动，看不全就拖
-        let column = Column::new(format!("col-{index}"), name);
+        // 列宽：拖过的按列名恢复，没拖过的走组件默认档（100px）+ 可拖宽——
+        // 宽表靠横向滚动，看不全就拖
+        let mut column = Column::new(format!("col-{index}"), name.clone());
+        if let Some(width) = self.widths.get(&name) {
+            column = column.width(*width);
+        }
         // 可排序：表头挂排序箭头，点一下就把「这一列 + 方向」交给面板去重查。
         // 生效中的那一列把方向画出来（↑/↓），其余画「可点」的默认箭头。
         match self.sort {
