@@ -177,7 +177,38 @@
 | **R9** | 评估用 **cargo-dist** 生成安装包与自更新器（对照 sqlab `dist-workspace.toml`），替代/补充手写 `.github/workflows/release.yml` | §1.10 | 中 | 发布策略待定 |
 | **R10** | 加一份**演示数据集 + 业务剧本**（对照 dbui `docs/demo.sql`），给截图、手工验收与录屏用 | §1.13 | 低 | 无 |
 
-## 5. 维护约定
+## 5. 逐模块对比（我们 vs 他们）
+
+判定口径：**领先** = 我们有他们普遍没有的；**持平** = 都有，做法不同；**落后** = 他们普遍有而我们没有。
+我们的现状都标了依据（本轮实测的 grep / 文件），不是印象。
+
+| 模块 | 他们 | 我们现状（依据） | 判定 |
+| --- | --- | --- | --- |
+| 编辑器内核与文本层 | dbflux `fluxdb-editor-core`（SumTree + 分层 map + `perf.rs`）；zqlz `zqlz-text-editor`（59.8k 行，Zed 移植结构）；sqlab 用 tree-sitter-sql 高亮 | `crates/editor` 24.5k 行，**无 fold / inlay / display-map 分层**；高亮走语义着色 provider（`lsp-types` 的 `proposed`），补全自研 | **落后**（折叠/内联/坐标分层）；高亮路线不同（tree-sitter vs 语义 token） |
+| 结果网格（只读） | dbui `grid.rs` 766 行；dbflux 称 virtualized data table | `crates/editor/src/view/results/grid.rs` 已有；**1000 行 × N 列全量 `to_string()` 仍是待改项**（P4/Q6） | **落后**（虚拟化与惰性格式化没做） |
+| 结果网格（编辑回写） | **六仓全有**：dbui 暂存→一个事务提交、`MIXED` 批量编辑、外键跟随；fluxDB 数据编辑回写；sqlab in-place editor | 全仓搜不到编辑回写（`写回` 的命中都是 `analytics_resource` 的**文件版本**语义，不是写库）；导出的 `INSERT` 是只读产物 | **落后**（这一块我们等于没开） |
+| 执行 / 取消 / 事务 | dbflux 有能力位 `Cancellation` + `Cancelled`，但**没有连接失败码、没有结构化 SQL 错**；dbui 整批提交在一个事务里、**只读由服务端强制** | 真取消（令牌递到驱动进程，等它以 `-32004` 收场）+ 错误按域分流 + `-32009 connect_failed` + SQL 错带 `sqlstate` 与字段位置（`sidecar/driver.rs`） | **取消与错误分类领先**；**显式事务 UI 与只读强制待补** |
+| 导航与元数据 | sqlab live schema tree + go-to-definition（表/外键/函数）；dbui 物化视图也进树；zqlz `zqlz-schema-engine` + `zqlz-schema-tools`（schema 比较）；dbflux `docs/DRIVERS.md` 矩阵 | 三层缓存（L1 内存 / L2 连接级 SQLite / L3 词表）+ 内省级别自适应 + 五文件夹 + 属性面板 + `#` 全文档档（`docs/architecture/data-layer-wiring-matrix.md`） | **持平偏领先**（缓存与台账）；**缺 schema 比较、缺树上跳转** |
+| 驱动接入 | 六仓各有一套 in-process trait + 能力声明；dbflux 另有外部驱动 RPC；navop 有扩展市场 | 原生 6 驱动 + 联邦 scanner + `Database` trait；插件（sidecar/wasm）在建（M9） | 驱动**广度落后**（他们有 Redis/Mongo/MSSQL/Oracle/InfluxDB/S3…，我们 SQL 为主）；**扩展机制领先**（Arrow 数据面 + 版本闸 + 宿主门控 + 进程边界，七仓里唯一） |
+| 类型映射 | zqlz `zqlz-interchange`（canonical → type_mapping → value_encoding，21.9k 行）；sqlab 导出按类型 | `infer_type` 只产 4 档（BIGINT/DOUBLE/BOOLEAN/VARCHAR）；`rds.canonical` 口径已在 dev-plan §4.5.1 定，**读侧未接** | **落后**（P2.5/P4 已排期） |
+| 查询分析与计划 | zqlz `zqlz-analyzer`（6.1k，含 suggestions）+ `zqlz-explain-visual`（1.4k）；dbflux CHARTS/DASHBOARDS；navop 监控面板 | `crates/insight`（质量分/建议）+ `engine/src/duckdb/explain.rs` 的 `ExplainAnalyzer`（结构化计划树，含节点类型/深度） | 分析**领先**（质量与建议）；**计划可视化落后**；**图表/仪表盘我们没有**（也不是我们的方向） |
+| 导入 / 导出 | sqlab CSV/JSON/Excel/SQL Inserts/**Updates**/WHERE 子句；zqlz interchange 含 csv import；dbflux shape-based export | `editor/src/export.rs`：CSV / JSON / INSERT / **Parquet** / **Xlsx**（后两者走 DuckDB `COPY`）；`analytics_resource` 是**文件型数据源 + 版本历史** | 导出**持平偏领先**（Parquet 七仓里只有我们）；**导入落后**（没有导入管线）；数据资源带版本是差异点 |
+| 连接 / 凭据 / 隧道 | dbflux SSH/SOCKS5/HTTP CONNECT/**AWS SSM** + 凭据 provider + 隐私文档；navop 端口转发/X11/**Known Hosts 页**；dbui 密码只留内存 | `crates/connection` 4.7k + `TunnelRegistry` + 凭据 Secret 引用 + 项目/全局两层作用域 | **持平**（隧道已有）；缺代理/SSM 类与企业级 provider 抽象 |
+| 设置 / 主题 / i18n | navop `themes/` + `.theme-schema.json`（**可导入主题**）+ 三语；dbflux `dbflux_i18n/locales/*.yaml` + Weblate；sqlab 明确不做 200 项设置 | `rds-theme` token 注册表 + 明暗两套 + 设置准入五条/退役清单（`settings-architecture.md`） | 主题**持平**（我们语义角色更严格）；**i18n 完全没有 → 落后** |
+| AI / MCP | dbflux 内置 MCP server + 治理（操作分级/策略/人工审批）；navop MCP + Agent Hub + ACP 接 Codex/Claude/OpenCode + `@navop/cli`；sqlab 终端面板支持编码 agent | 全仓搜不到 `mcp` / `llm` / `openai` 任何实现 | **落后**（我们自身是 AI 开发的项目，这条缺得显眼） |
+| 打包与发布 | sqlab **cargo-dist**（shell/powershell/msi + 自更新器）；dbui 公证 DMG + 自更新；fluxDB Inno + 手工 deb（含包内容断言）；navop 全平台 + Homebrew/Scoop/Flatpak | `.github/workflows/release.yml`：四平台 `dist/*.zip` + 校验和 → Release Assets（**无安装器、无自更新、无包管理器**） | **落后**（能用但不成话） |
+| CI 与测试 | fluxDB 三平台按 crate 分层**跑测试** + Linux 依赖清单；dbflux nextest + **testcontainers** 实机 + `deny.toml`；dbui 真窗口 UI 测试 + docker-compose；sqlab pre-commit 钩子 | `ci.yml` 只跑 `clippy-all`（**有意不跑测试**，理由写在文件头）；2004 测试全在本机（`module-status.md`） | **落后**（测试没进门禁；无容器化实机测试） |
+| 文档与 agent 工作流 | zqlz `ARCHITECTURE.md` 的 **Where to Edit What** + **15 个细粒度技能**（`gpui-test`/`gpui-focus-handle`/`gpui-global`/`gpui-style-guide`…）；dbflux `skills/*/SKILL.md` 四段式（含**扩展作者**技能）；dbui 三节（决策/实机测试抓到什么/已知边界） | 台账三件（`module-status` / `data-layer-wiring-matrix` / `driver-capability-matrix`）+ 逐模块 dev-plan/映射表 + 5 个技能（架构/布局/主题/UI 规格/GPUI 开发） | 文档纪律**领先**；**技能粒度落后**（无测试技能、无扩展作者技能） |
+| 演示与手工验收资产 | dbui `docs/demo.sql`（storefront 剧本） | `mock` 造数 + `scratchpad`；**无业务演示数据集** | 持平偏落后（缺剧本） |
+
+### 5.1 结论：我们领先的四块与落后的六块
+
+**领先（守住）**：① **扩展机制**（Arrow 数据面 + 版本闸 + 宿主门控 + 进程边界，七仓唯一）；② **联邦**（DuckDB + sqlglot 方言转译，七仓都没有）；③ **分析与造数**（`insight` 质量分/建议 + `mock` + 文件型数据源带版本）；④ **文档纪律**（台账 + 映射表 + 实机/未核实分标）。
+
+**落后（按性价比排追赶序）**：① **测试进 CI**（按 crate 分层即可，零新依赖）；② **打包装包器与自更新**（cargo-dist 一条路）；③ **编辑回写**（体量最大，且要先有 P4 的网格改造）；④ **类型映射**（P2.5 已排）；⑤ **i18n**（可以晚）；⑥ **AI/MCP**（要产品决策，不是补课）。
+
+> 注：**六仓全都有编辑回写**，而我们是七仓里唯一没有的 —— 这不是「待优化」，是产品能力缺口，值不值得补要先定。
+## 6. 维护约定
 
 - 新增参考仓时：**拷到项目外**、在 §0 表里加一行（含许可与"能不能抄"）、在 §1 里给出**至少一个具体文件路径**。
 - 只写**看过的**；推断要标"疑似/未核实"。
