@@ -172,6 +172,11 @@ fn view_layer_has_no_raw_size_literals() {
             "settings/settings_page.rs",
             include_str!("../../settings/src/settings_page.rs"),
         ),
+        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描）
+        (
+            "mock/mock_view.rs",
+            include_str!("../../mock/src/mock_view.rs"),
+        ),
     ];
 
     for (name, src) in sources {
@@ -275,6 +280,11 @@ fn ui_sources_have_no_raw_color_literals() {
             "editor/view/completion.rs",
             include_str!("../../editor/src/view/completion.rs"),
         ),
+        // Mock 面板与详情 tab（M7；随能力同 crate，2026-09-20 纳入扫描）
+        (
+            "mock/mock_view.rs",
+            include_str!("../../mock/src/mock_view.rs"),
+        ),
     ];
 
     for (name, src) in sources {
@@ -335,7 +345,11 @@ fn every_panel_module_is_registered_in_the_manifests() {
 
     // 视图下沉到特性 crate 后，受契约约束的视图文件不再住在 `src/panels/` 下，
     // 目录遍历发现不了它们——故在这里显式点名（新增下沉视图时同步加一行）。
-    for rel in ["database/nav_view.rs", "scratchpad/scratchpad_view.rs"] {
+    for rel in [
+        "database/nav_view.rs",
+        "scratchpad/scratchpad_view.rs",
+        "mock/mock_view.rs",
+    ] {
         let quoted = format!("\"{rel}\"");
         assert!(
             manifest.matches(quoted.as_str()).count() >= 2,

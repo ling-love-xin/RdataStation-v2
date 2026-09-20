@@ -25,6 +25,7 @@ use super::{
     SchemaSource, TableStatus, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
     parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
+use crate::commands::GenerateMock;
 use crate::generator_catalog::{self, ParamKind};
 use crate::history;
 use crate::models::{
@@ -891,6 +892,35 @@ fn refresh_sources_loads_connections_and_tables(cx: &mut TestAppContext) {
     });
 }
 
+/// 连接清册变了只刷「导入结构」候选：既有表清单要开项目分析库（真 I/O），
+/// 不能跟着连接保存这种高频动作一起重读（它是面板打开 / 切项目那一拍的事）。
+#[gpui_kit::test]
+fn refreshing_only_connections_keeps_the_existing_table_list(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.refresh_sources(cx));
+    // 面板已摆着：连接清册与既有表各自又变了
+    rec.sources.borrow_mut().push(SchemaSource {
+        conn_id: "P_new".to_string(),
+        label: "新连接".to_string(),
+        catalog: String::new(),
+        schema: String::new(),
+    });
+    rec.tables.borrow_mut().push("events".to_string());
+
+    panel.update(cx, |panel, cx| panel.refresh_connection_sources(cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.sources().len(), 3, "连接候选按新清册重读");
+        assert_eq!(
+            panel.existing_tables(),
+            ["orders".to_string()],
+            "既有表清单保持原样：它只有面板打开 / 切项目才重读"
+        );
+    });
+}
+
 /// 切项目（`forget_generated`）要把**当前项目的派生清单**一并清掉：
 ///
 /// 「追加到既有表」的候选、连接清单都按项目作用域变——上一项目的表名摆在新项目下，
@@ -966,6 +996,234 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     assert!(rec.appended.borrow().is_empty(), "生成不应追加");
     assert!(rec.scratchpads.borrow().is_empty(), "生成不应写文件");
     assert!(rec.notifies.get() >= 1, "生成成功后应通知宿主");
+}
+
+/// 项目级出口的可用性判据（`sinks_ready`）= 有结果 + 非只读 + 已打开项目。
+///
+/// 三个条件缺一个就该禁用按钮：未打开项目时按钮永远点得动、每次都弹同一句拒绝，
+/// 不如直接不可点（视图与三个出口入口共用同一判据）。
+#[gpui_kit::test]
+fn project_sinks_need_a_result_a_project_and_a_writable_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // ① 没结果：不可用（先于项目与只读）
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.sinks_ready(), "没结果时没什么可落");
+    });
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    // ② 有结果但未打开项目：仍不可用（Mock 只写项目分析库）
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_some(), "已有结果");
+        assert!(!panel.sinks_ready(), "未打开项目：出口不可用");
+    });
+
+    // ③ 打开项目：可用
+    *rec.project_root.borrow_mut() = Some(std::path::PathBuf::from("/proj/a"));
+    panel.update(cx, |panel, _cx| assert!(panel.sinks_ready()));
+
+    // ④ 只读：不可用（只读止于出口，生成与预览仍可用）
+    rec.read_only.set(true);
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.sinks_ready(), "只读会话不允许写库 / 写文件");
+        assert!(panel.gen_info().is_some(), "结果与预览不受只读影响");
+    });
+}
+
+/// 状态栏指示的文案（`status_chip_text`）：量化任务给百分比，出口类给阶段名，没任务不给。
+#[test]
+fn status_chip_text_follows_the_job_phase() {
+    assert!(
+        super::status_chip_text(None).is_none(),
+        "没任务就不画那一块"
+    );
+
+    let mut progress = MockJobProgress {
+        phase: MockJobPhase::Generating,
+        batches_done: 2,
+        batches_total: 8,
+        rows_total: 8_000,
+    };
+    assert_eq!(
+        super::status_chip_text(Some(progress)).as_deref(),
+        Some("◐ Mock 生成中 25%")
+    );
+
+    // 出口类（写入 / 导出）拿不到中间进度：只给阶段名，不给百分比（与 `render_job_row` 同口径）
+    progress.phase = MockJobPhase::Writing;
+    let text = super::status_chip_text(Some(progress)).expect("出口类也要给一句");
+    assert!(text.starts_with("◐ Mock "), "{text}");
+    assert!(!text.contains('%'), "出口类不给百分比：{text}");
+}
+
+/// 预览右键「拿得走」的两件事靠两个纯助手：整行 TSV 与「哪一格」的回退规则。
+#[test]
+fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_column() {
+    let mut delegate = super::PreviewTableDelegate {
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "甲".to_string()],
+            vec!["2".to_string(), "乙".to_string()],
+        ],
+        context_cell: None,
+    };
+
+    // 没记过位置（右键落在行号槽或未记）：退到该行第一列
+    assert_eq!(delegate.context_text(1).as_deref(), Some("2"));
+    // 记了第 2 数据列：给那一格
+    delegate.context_cell = Some((0, 2));
+    assert_eq!(delegate.context_text(0).as_deref(), Some("甲"));
+    // 记的行与问的行不一致（位置可能已过期）：回退
+    assert_eq!(delegate.context_text(1).as_deref(), Some("2"));
+    // 行号槽不当数据（记成 0 列也走回退）
+    delegate.context_cell = Some((0, 0));
+    assert_eq!(delegate.context_text(0).as_deref(), Some("1"));
+    // 整行 TSV（拷进表格 / SQL 能直接分列）
+    assert_eq!(delegate.row_text(0), "1\t甲");
+    // 换一份取样：清掉记录的位置（旧行号不再指向同一个值）
+    assert!(delegate.set_preview(vec!["id".to_string()], vec![vec!["9".to_string()]]));
+    assert!(delegate.context_cell.is_none());
+}
+
+/// 切项目时旧表 tab 不自动关（D35），但它们得说清为什么没结果：
+/// 面板要能区分「切项目清掉的」与「这一轮没生成它」。
+#[gpui_kit::test]
+fn project_switch_marks_results_as_dropped_until_the_next_generation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_some());
+        assert!(
+            !panel.results_dropped_by_project_switch(),
+            "本轮生成的结果不作废"
+        );
+    });
+
+    panel.update(cx, |panel, cx| panel.forget_generated(2, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_none());
+        assert!(
+            panel.results_dropped_by_project_switch(),
+            "切项目清掉的结果要标记出来（旧 tab 的文案据此区分「另一个项目」与「这一轮」）"
+        );
+    });
+
+    // 重新生成后标记清掉：新结果是当前项目的
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_some());
+        assert!(!panel.results_dropped_by_project_switch());
+    });
+}
+
+/// 预览表走组件库的 `DataTable`（不手搓网格）：表头与单元格都能从表格状态里读回来
+/// （`TableState::dump`），且首列是行号槽。
+///
+/// 这条用例是**判别性**的：若 delegate 的列数 / 行数 / `cell_text` 任一接错，或预览表
+/// 没在渲染那一拍建起来，它都会挂。
+#[gpui_kit::test]
+fn preview_table_dumps_the_sample_through_the_component_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    // 渲染一帧：预览表状态是懒创建的（`TableState::new` 需要 window）
+    draw(cx);
+    assert!(
+        cx.debug_bounds("mock-preview-table").is_some(),
+        "预览表应真的画进布局（组件库 DataTable 落在那个容器里）"
+    );
+
+    let table = cx
+        .update(|_, cx| detail.read(cx).preview_table.clone())
+        .expect("渲染后预览表应已创建");
+    cx.update(|_, cx| {
+        let state = table.read(cx);
+        let (headers, rows) = state.dump(cx);
+        assert_eq!(headers, ["#", "id"], "首列是行号槽，其后是数据列");
+        assert_eq!(rows.len(), 2, "取样行数（测试宿主固定回两行）");
+        assert_eq!(rows[0], ["1", "1"], "行号 + 值");
+        assert_eq!(rows[1], ["2", "2"]);
+    });
+}
+
+/// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：
+/// 草稿 tab 上提交生成任务；结果表 tab 上什么都不做（D38：它是产物，要改回草稿改完再生成）。
+///
+/// 这条用例是**判别性**的：它自己注册生产那份键位，`track_focus` / `key_context` /
+/// `on_action` 任一断，它都会挂——「注册了才宣传」的快捷键必须有这层保障。
+#[gpui_kit::test]
+fn generate_key_submits_on_the_draft_tab_only(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    use gpui_kit::KeyBinding;
+
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+    cx.update(|_, cx| {
+        cx.bind_keys([KeyBinding::new(
+            "ctrl-enter",
+            GenerateMock,
+            Some("mock-detail"),
+        )]);
+    });
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    // 焦点必须在 tab 内：`track_focus` 后它才在 dispatch path 上（编辑器那边踩过这个坑）
+    cx.update(|window, cx| {
+        let handle = detail.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
+    });
+
+    cx.simulate_keystrokes("ctrl-enter");
+    assert_eq!(
+        rec.started.borrow().len(),
+        1,
+        "草稿 tab 上 Ctrl+Enter 应提交生成"
+    );
+    assert!(matches!(
+        rec.started.borrow().first(),
+        Some(MockJobKind::Generate)
+    ));
+    poll_job(cx, &panel);
+
+    // 结果表 tab 上同一动作：不动（它没有「生成」这个动作）
+    let table = cx.new(|cx| {
+        MockDetailView::new(panel.clone(), DetailTarget::Table("orders".to_string()), cx)
+    });
+    let before = rec.started.borrow().len();
+    cx.update(|window, cx| {
+        table.update(cx, |view, cx| {
+            view.on_generate_key(&GenerateMock, window, cx)
+        });
+    });
+    assert_eq!(
+        rec.started.borrow().len(),
+        before,
+        "结果表 tab 上没有「生成」这个动作（D38）"
+    );
 }
 
 #[gpui_kit::test]

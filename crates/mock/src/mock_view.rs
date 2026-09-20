@@ -44,9 +44,14 @@ use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
+// `.when(..)`（条件挂样式 / 事件）：组件库把 `FluentBuilder` 放在 prelude，通配导入不含它
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
+use gpui_kit::prelude::FluentBuilder as _;
+// 显式导入组件的 `Size`：`gpui_kit::*` 里的同名类型是 `gpui::Size`（宽高对），
+// 组件档位（XSmall / Small / …）在 `gpui_kit::component`，显式导入会遮蔽通配那一个。
+use gpui_kit::component::Size as ComponentSize;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::collapsible::Collapsible;
@@ -58,7 +63,11 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
 use gpui_kit::*;
+// 清单行的选中标识条（2px + 上下内缩）与 M4 导航 / M5 草稿箱同一份共用原语，
+// 不在本 crate 手搓绝对定位的 div。
+use workbench_shell::tree;
 
 use crate::MockEngine;
 use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
@@ -71,6 +80,7 @@ use crate::persistence::{
     MockGenerationDetail, MockGenerationTask, MockTemplateColumn, MockUserTemplate,
 };
 use crate::schema_map::ColumnMapper;
+use crate::ui;
 
 // ==================== 宿主契约 ====================
 
@@ -463,27 +473,15 @@ pub trait MockHost: 'static {
     fn notify(&self, cx: &mut App);
 }
 
-// ==================== 尺寸常量（视图局部，rem 基准） ====================
+// ==================== 尺寸常量（`crate::ui`：结构尺寸单一来源） ====================
 
-/// 行数 / 种子输入框宽度（5rem = 80px）
-const NUM_INPUT_WIDTH: f32 = 5.0;
-/// 对话框内输入框宽度（9rem = 144px）
-const PARAM_INPUT_WIDTH: f32 = 9.0;
-/// 预览单元格宽度（9rem = 144px；配横向滚动）
-const PREVIEW_CELL_WIDTH: f32 = 9.0;
-/// 字段清单滚动区最大高度（16rem = 256px）
-const FIELD_LIST_MAX_HEIGHT: f32 = 16.0;
-/// 详情 tab 预览区最小高度（10rem = 160px）
-const PREVIEW_MIN_HEIGHT: f32 = 10.0;
+// 行数 / 种子 / 参数输入宽、预览格宽等七个结构尺寸已登记到 `crates/mock/src/ui.rs`
+// （与外壳同源的走重导出）。视图内只引用 `ui::X`，不再就地声明。
+
 /// 单次生成行数上限（误输入护栏）
 const MAX_ROWS: u32 = 1_000_000;
 /// 预览显示行数上限
 const PREVIEW_ROWS: usize = 10;
-/// 集合类参数多行输入的高度（5rem = 80px ≈ 5 行）
-const COMPLEX_INPUT_HEIGHT: f32 = 5.0;
-
-/// 生成器搜索列表高度（16rem = 256px；143 项靠 `List` 虚拟化 + 自带滚动）
-const SEARCH_LIST_HEIGHT: f32 = 16.0;
 
 /// 13 种语言（面板下拉用）
 const LOCALES: [Locale; 13] = [
@@ -1300,6 +1298,8 @@ pub struct MockPanel {
     recent_generators: Vec<String>,
     /// 底部折叠段（生成历史 / 用户模板）是否展开（默认收起：面板天天用的是上面那份清单）
     fold_open: bool,
+    /// 上次清空结果是不是切项目造成的（旧 tab 的文案据此区分「另一个项目」与「这一轮」）
+    project_switched: bool,
 }
 
 /// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄）。
@@ -1504,6 +1504,7 @@ impl MockPanel {
             template_name: None,
             recent_generators: Vec::new(),
             fold_open: false,
+            project_switched: false,
         }
     }
 
@@ -1591,6 +1592,16 @@ impl MockPanel {
         self.job.as_ref().map(|job| job.progress)
     }
 
+    /// 进行中任务的百分比（无任务 / 进度不可量化时为 0）。
+    ///
+    /// 清单行的状态点与中央表头共用同一份口径（两处都写 `percent()` 会在精度上漂移）。
+    fn job_percent(&self) -> f32 {
+        self.job
+            .as_ref()
+            .map(|job| job.progress.percent())
+            .unwrap_or(0.0)
+    }
+
     /// 已请求取消（按钮文案转「正在取消…」）
     pub fn cancel_requested(&self) -> bool {
         self.job.as_ref().is_some_and(|job| job.cancel_requested)
@@ -1598,10 +1609,20 @@ impl MockPanel {
 
     // ==================== 事件路径入口 ====================
 
-    /// 重新加载「可导入结构的连接」与「分析库既有表」（打开面板 / 下拉刷新）。
+    /// 重新加载「可导入结构的连接」与「分析库既有表」（打开面板 / 切换项目 / 下拉刷新）。
     pub fn refresh_sources(&mut self, cx: &mut Context<Self>) {
         self.sources = self.host.schema_sources();
         self.existing_tables = self.host.existing_tables();
+        cx.notify();
+    }
+
+    /// 只重读「导入结构」的连接候选（打开导入对话框前 / 连接清册变化时）。
+    ///
+    /// 与 [`MockPanel::refresh_sources`] 分开的原因：连接候选从内存里的连接清册派生，
+    /// 一次遍历就够，可以跟着连接的新建 / 编辑随时刷；而「既有分析表」那一份要开
+    /// 项目分析库文件（真 I/O），只留给面板打开与切项目那一拍。
+    pub fn refresh_connection_sources(&mut self, cx: &mut Context<Self>) {
+        self.sources = self.host.schema_sources();
         cx.notify();
     }
 
@@ -1625,11 +1646,21 @@ impl MockPanel {
         // 真没重读也不打紧——导入对话框在清册为空时会自己拉一次
         self.sources.clear();
         self.error = None;
+        // 旧表 tab 不自动关（D35：关不关 tab 是用户的窗口布局）：它们得能说清自己为什么没结果，
+        // 而「这一轮没有它的结果」在切项目后是假话（不是这一轮的事，是另一个项目的事）。
+        self.project_switched = true;
         // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
         self.outcome = (cleared > 0).then(|| {
             format!("已切换项目：清掉 {cleared} 张 mock 临时表，生成结果已作废（请重新生成）")
         });
         cx.notify();
+    }
+
+    /// 上一次清空结果是不是切项目造成的（旧 tab 的文案据此区分「另一个项目」与「这一轮」）。
+    ///
+    /// 什么时候落下：`forget_generated`（只由切项目触发）置位；下一次生成成功后清掉。
+    pub fn results_dropped_by_project_switch(&self) -> bool {
+        self.project_switched
     }
 
     /// 打开中央「Mock 数据」详情 tab（草稿 tab：字段清单 + 预览）。
@@ -2848,6 +2879,7 @@ impl MockPanel {
         };
         match result {
             Ok(MockJobDone::Generated(info)) => {
+                self.project_switched = false;
                 self.landed = None;
                 self.error = None;
                 self.outcome = Some(format!(
@@ -2867,6 +2899,7 @@ impl MockPanel {
                 template_name,
                 tables,
             }) => {
+                self.project_switched = false;
                 self.landed = None;
                 self.error = None;
                 let total: u32 = tables.iter().map(|table| table.row_count).sum();
@@ -2973,7 +3006,8 @@ impl MockPanel {
         }
         // 项目已变：给已写好的成败文案追加一句归属说明（结果本身仍展示——它就是刚跑出来的）
         if project_changed {
-            let note = "（注意：这个任务是在上一个项目下提交的，写入的也是那个项目；当前项目没有变化）";
+            let note =
+                "（注意：这个任务是在上一个项目下提交的，写入的也是那个项目；当前项目没有变化）";
             match (&mut self.outcome, &mut self.error) {
                 (Some(text), _) => text.push_str(note),
                 (None, Some(text)) => text.push_str(note),
@@ -3129,7 +3163,7 @@ impl MockPanel {
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
                 .title("搜索生成器")
-                .child(div().w_full().h(rems(SEARCH_LIST_HEIGHT)).child(
+                .child(div().w_full().h(rems(ui::SEARCH_LIST_HEIGHT)).child(
                     List::new(&list).search_placeholder("按名称 / 中文标签 / 分类搜索（143 项）"),
                 ))
         });
@@ -3183,6 +3217,16 @@ impl MockPanel {
         self.outcome = Some(message);
         self.host.notify(cx);
         cx.notify();
+    }
+
+    /// 项目级出口（落库 / 追加 / 草稿箱）能不能用：**有结果 + 非只读 + 已打开项目**。
+    ///
+    /// 三个条件就是三个出口的可行性判据，写在一处：视图据此禁用按钮（渲染期只读它），
+    /// 禁用理由也在同一处（`render_actions` 的两行状态提示）。
+    /// 为何不靠「点了再报错」：三个出口都是项目级的，未打开项目时按钮永远点得动、
+    /// 每次都弹同一句拒绝，不如直接不可点（与「生成前禁用」同一口径）。
+    pub fn sinks_ready(&self) -> bool {
+        self.has_result() && !self.host.read_only() && self.host.project_root().is_some()
     }
 
     fn fail(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
@@ -3327,7 +3371,7 @@ impl MockPanel {
         if let Some(input) = self.rows_input.clone() {
             nums = nums.child(
                 div()
-                    .w(rems(NUM_INPUT_WIDTH))
+                    .w(rems(ui::NUM_INPUT_WIDTH))
                     .flex_none()
                     .child(Input::new(&input)),
             );
@@ -3335,7 +3379,7 @@ impl MockPanel {
         if let Some(input) = self.seed_input.clone() {
             nums = nums.child(
                 div()
-                    .w(rems(NUM_INPUT_WIDTH))
+                    .w(rems(ui::NUM_INPUT_WIDTH))
                     .flex_none()
                     .child(Input::new(&input)),
             );
@@ -3656,7 +3700,12 @@ impl MockPanel {
                     });
                 })
         };
-        div().h_flex().items_center().gap_2().child(import).child(add)
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(import)
+            .child(add)
     }
 
     /// 表清单：**唯一的管理入口**（D38）——单表 / 本次生成 / 结果表三态共用一个渲染器。
@@ -3668,7 +3717,11 @@ impl MockPanel {
         let success = cx.theme().colors.success;
         let warning = cx.theme().colors.warning;
         let primary = cx.theme().colors.primary;
-        let accent = cx.theme().colors.accent;
+        // 选中 / 悬停走列表角色（与 M4 导航、M5 草稿箱同一口径）：`accent` 是主题强调色，
+        // 拿它当选中底会让「当前表」与各種强调元素混作一谈
+        let selected_bg = cx.theme().colors.list_active;
+        let selected_border = cx.theme().colors.list_active_border;
+        let hover = cx.theme().colors.list_hover;
         let running = self.is_running();
         let radius = cx.theme().radius;
 
@@ -3688,12 +3741,16 @@ impl MockPanel {
                 let selected = index == current_index;
                 let name = info.table_name.clone();
                 let (glyph, status, color) = match self.table_status(&name) {
-                    TableStatus::Persisted => ("✓", "已落库", success),
-                    TableStatus::NotPersisted => ("○", "未落库", muted),
-                    TableStatus::DanglingParent => ("⚠", "引用的表未落库", warning),
-                    TableStatus::Generating => ("◐", "生成中", primary),
-                    TableStatus::Failed => ("⚠", "生成失败", warning),
-                    TableStatus::Idle => ("○", "未生成", muted),
+                    TableStatus::Persisted => ("✓", "已落库".to_string(), success),
+                    TableStatus::NotPersisted => ("○", "未落库".to_string(), muted),
+                    TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
+                    // 生成中的那一行把百分比说出口（D38 的 `◐ orders 40%`）：
+                    // 集合任务不敢保证看到的是哪一张，但单表任务停在哪个百分位一眼就能读
+                    TableStatus::Generating => {
+                        ("◐", format!("生成中 {:.0}%", self.job_percent()), primary)
+                    }
+                    TableStatus::Failed => ("⚠", "生成失败".to_string(), warning),
+                    TableStatus::Idle => ("○", "未生成".to_string(), muted),
                 };
                 let open = {
                     let entity = cx.entity();
@@ -3726,9 +3783,10 @@ impl MockPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
+                    .h(rems(ui::ROW_HEIGHT))
                     .px_1()
-                    .py_0p5()
                     .rounded(radius)
+                    .relative()
                     .child(open)
                     .child(
                         div()
@@ -3737,10 +3795,14 @@ impl MockPanel {
                             .text_color(muted)
                             .child(format!("{} 行", with_thousands(u64::from(info.row_count)))),
                     )
-                    .child(render_status_cell(glyph, status, color));
-                if selected {
-                    row = row.bg(accent);
-                }
+                    .child(render_status_cell(glyph, &status, color));
+                // 选中行：`list_active` 底 + 左缘 2px 标识条（浮在行左缘，不挤动名称列）；
+                // 悬停只给未选中行——不得覆盖激活态（与导航树同一口径）
+                row = if selected {
+                    row.bg(selected_bg).child(tree::active_bar(selected_border))
+                } else {
+                    row.hover(move |s| s.bg(hover))
+                };
                 list = list.child(row);
 
                 // 关系挂在**子表**行下：`↳ user_id → users.id · 1..1,000`
@@ -3831,8 +3893,8 @@ impl MockPanel {
                             .items_center()
                             .gap_2()
                             .w_full()
+                            .h(rems(ui::ROW_HEIGHT))
                             .px_1()
-                            .py_0p5()
                             .rounded(radius)
                             .child(
                                 div()
@@ -3950,14 +4012,7 @@ impl MockPanel {
         let name = self.draft.table_name.clone();
         let rows = with_thousands(self.draft.options.rows as u64);
         let (glyph, status, color) = match self.table_status(&name) {
-            TableStatus::Generating => {
-                let percent = self
-                    .job
-                    .as_ref()
-                    .map(|job| job.progress.percent())
-                    .unwrap_or(0.0);
-                ("◐", format!("生成中 {percent:.0}%"), primary)
-            }
+            TableStatus::Generating => ("◐", format!("生成中 {:.0}%", self.job_percent()), primary),
             TableStatus::Persisted => ("✓", "已落库".to_string(), success),
             TableStatus::NotPersisted => ("●", "已生成".to_string(), success),
             TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
@@ -3987,10 +4042,13 @@ impl MockPanel {
                 .items_center()
                 .gap_2()
                 .w_full()
+                .h(rems(ui::ROW_HEIGHT))
                 .px_1()
-                .py_0p5()
                 .rounded(radius)
-                .bg(accent)
+                .relative()
+                // 单表态只有这一行：它就是当前表，选中态常驻（不挂 hover）
+                .bg(selected_bg)
+                .child(tree::active_bar(selected_border))
                 .child(open)
                 .child(
                     div()
@@ -4119,13 +4177,18 @@ impl MockPanel {
         // 不再有「查看详情」按钮：清单点一行就是入口（D38），少一个按钮就少一份要同步的文案。
         // 没有结果时也禁用（出口是「把结果落地」，没结果就没什么可落）：点了报错不如直接不可点。
         let has_result = self.has_result();
+        // 项目级出口（落库 / 追加 / 草稿箱）都要项目根：没打开项目时直接不可点，
+        // 而不是点了才由任务层拒绝（「点了报错不如直接不可点」，与生成前禁用同一口径）。
+        // `project_root()` 只读内存里的会话，不是 I/O（`read_only()` 同理）。
+        let project_open = self.host.project_root().is_some();
+        let sinks_ready = self.sinks_ready();
         let persist = {
             let entity = cx.entity();
             Button::new("mock-persist")
                 .secondary()
                 .label("持久化到项目分析库")
                 .w_full()
-                .disabled(running || !has_result)
+                .disabled(running || !sinks_ready)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.persist_table(cx));
                 })
@@ -4137,7 +4200,7 @@ impl MockPanel {
                 .secondary()
                 .label("追加到既有表 ▾")
                 .w_full()
-                .disabled(running || !has_result)
+                .disabled(running || !sinks_ready)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if tables.is_empty() {
@@ -4163,7 +4226,7 @@ impl MockPanel {
                 .secondary()
                 .label("保存到草稿箱 ▾")
                 .w_full()
-                .disabled(running || !has_result)
+                .disabled(running || !sinks_ready)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -4253,7 +4316,7 @@ impl MockPanel {
                     .child(scratchpad)
                     .child(export),
             )
-            // ④ 出口反馈就地给（成功 / 失败 / 落库目标 / 只读）
+            // ④ 出口反馈就地给（成功 / 失败 / 落库目标 / 当前状态）
             .children(outcome.map(|text| div().text_xs().text_color(success).child(text)))
             .children(error.map(|err| div().text_xs().text_color(danger).child(err)))
             .children(landed.map(|table| {
@@ -4262,18 +4325,27 @@ impl MockPanel {
                     .text_color(fg)
                     .child(format!("落库目标：{table}"))
             }))
+            // 未打开项目 / 只读：这两个状态决定出口能不能用，各一句话说清（也是禁用按钮的理由）
+            .children((!project_open).then(|| {
+                div()
+                    .text_xs()
+                    .text_color(info)
+                    .child("未打开项目：落库 / 追加 / 草稿箱不可用（纯生成、预览与另存为不受影响）")
+            }))
             .children(read_only.then(|| {
                 div()
                     .text_xs()
                     .text_color(info)
                     .child("只读模式：不允许落库与写文件（仍可生成预览）")
             }))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）；要进全局分析库，用资产库存档或草稿箱升级"),
-            )
+            // 常驻的边界一句话（M7）。完整指引（要进全局分析库的两条路）不常驻：
+            // 它在**真正需要时**由被拒的出口给出（`services::mock_generator` 的未打开项目 / 只读原因），
+            // 而面板只有 280px 宽，天天摆着三行长说明就是天天占掉半屏清单
+            .child(div().text_xs().text_color(muted).child(if project_open {
+                "数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）"
+            } else {
+                "数据只写入项目分析库与文件，不回传源库（M7）"
+            }))
     }
 
     /// 打开「导入源库结构」对话框。
@@ -4316,7 +4388,9 @@ impl MockPanel {
             .p_2()
             .border_t_1()
             .border_color(border)
-            .child(self.render_templates(cx))
+            // 段序与折叠标题一致（「生成历史 · 用户模板」，见原型 §2 / 使用手册 §3）：
+            // 展开后第一眼读到的就是标题先说的那一段
+            .child(self.render_history(cx))
             // 历史口径：场景一次产 N 张表，记进去反而误导（`RunRecord::of` 对 Scenario 返回 None）
             .child(
                 div()
@@ -4324,7 +4398,7 @@ impl MockPanel {
                     .text_color(muted)
                     .child("场景生成不记入生成历史（历史是单表配置的重放来源）"),
             )
-            .child(self.render_history(cx));
+            .child(self.render_templates(cx));
 
         div()
             .v_flex()
@@ -4895,7 +4969,7 @@ fn form_line(theme: &gpui_kit::component::Theme, label: &str, input: &Entity<Inp
         )
         .child(
             div()
-                .w(rems(PARAM_INPUT_WIDTH))
+                .w(rems(ui::PARAM_INPUT_WIDTH))
                 .flex_none()
                 .child(Input::new(input)),
         )
@@ -4920,7 +4994,7 @@ fn complex_form_line(
                 .text_color(theme.colors.muted_foreground)
                 .child(label.to_string()),
         )
-        .child(Textarea::new(state).h(rems(COMPLEX_INPUT_HEIGHT)))
+        .child(Textarea::new(state).h(rems(ui::COMPLEX_INPUT_HEIGHT)))
         .child(
             div()
                 .text_xs()
@@ -5035,6 +5109,22 @@ impl DetailTarget {
     }
 }
 
+/// 状态栏指示的文案（宿主用；`None` = 不画那一块）。
+///
+/// 放在 mock crate 而不是宿主：量纲（批次 / 张表）与阶段名跟 `render_job_row` 同源，
+/// 宿主自己拼一份会在阶段改名时静默不一致。
+///
+/// 为何状态栏要有一块（与 D38「状态单点」不冲）：D38 管读数放哪（仍在它自己的中央表头 /
+/// 右 Dock 清单下），这里解决的是——面板被切走 / 中央 tab 被关掉时，任务还在跑却看不见。
+pub fn status_chip_text(progress: Option<MockJobProgress>) -> Option<String> {
+    let progress = progress?;
+    Some(if progress.phase.is_quantified() {
+        format!("◐ Mock 生成中 {:.0}%", progress.percent())
+    } else {
+        format!("◐ Mock {}", progress.phase.label())
+    })
+}
+
 /// Mock 详情（中央编辑区 tab）：字段清单（编辑走对话框）+ 预览表格。
 ///
 /// 状态单一权威：持有配置面板实体，字段与预览都从它读取；编辑动作写回面板。
@@ -5049,6 +5139,9 @@ pub struct MockDetailView {
     focus_handle: FocusHandle,
     /// 所在 Dock tab 组（`Panel::on_added_to` 注入；重复点「查看详情」时用于聚焦自身）
     group: Option<WeakEntity<TabGroup>>,
+    /// 预览表状态（组件库 `DataTable` 的 `TableState`）：懒创建（`TableState::new` 要 window），
+    /// 数据由面板通知那一拍同步（见 [`MockDetailView::sync_preview_table`]）。
+    preview_table: Option<Entity<TableState<PreviewTableDelegate>>>,
 }
 
 /// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
@@ -5087,14 +5180,114 @@ impl MockDetailView {
     /// 创建详情视图（持有配置面板实体，状态单一权威）。
     pub fn new(panel: Entity<MockPanel>, target: DetailTarget, cx: &mut Context<Self>) -> Self {
         // 状态变化即重绘：字段/预览跟随配置面板
-        cx.observe(&panel, |_, _, cx| cx.notify()).detach();
+        cx.observe(&panel, |view, panel, cx| {
+            // 取样可能在刚才那一拍变了：推给预览表（事件路径；预览创建前是空操作）
+            view.sync_preview_table(&panel, cx);
+            cx.notify();
+        })
+        .detach();
         Self {
             panel,
             target,
             draft: None,
             focus_handle: cx.focus_handle(),
             group: None,
+            preview_table: None,
         }
+    }
+
+    /// 本 tab 看的那张表这一轮的结果（草稿 tab 看草稿的目标表）。
+    fn current_info(&self, panel: &MockPanel) -> Option<MockGenInfo> {
+        let table = match &self.target {
+            DetailTarget::Draft => panel.draft().table_name.clone(),
+            DetailTarget::Table(name) => name.clone(),
+        };
+        panel
+            .results()
+            .iter()
+            .find(|info| info.table_name == table)
+            .cloned()
+    }
+
+    /// 预览表的取样（列名 + 前 [`PREVIEW_ROWS`] 行）：与渲染读的是同一处。
+    fn preview_snapshot(&self, panel: &MockPanel) -> (Vec<String>, Vec<Vec<String>>) {
+        match self.current_info(panel) {
+            Some(info) => (
+                info.preview.columns.clone(),
+                info.preview
+                    .rows
+                    .iter()
+                    .take(PREVIEW_ROWS)
+                    .cloned()
+                    .collect(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        }
+    }
+
+    /// 面板通知那一拍：把取样推给预览表（只在真的变了时 `refresh`）。
+    ///
+    /// 为什么不让 delegate 每帧去面板里读：表格自己会在渲染中多次问 `rows_count` / `render_td`，
+    /// 而渲染期不该改别的实体；这里在事件路径上把数据推进去，渲染期就只读。
+    fn sync_preview_table(&mut self, panel: &Entity<MockPanel>, cx: &mut Context<Self>) {
+        let Some(table) = self.preview_table.clone() else {
+            return;
+        };
+        let (columns, rows) = self.preview_snapshot(panel.read(cx));
+        table.update(cx, |state, cx| {
+            if state.delegate_mut().set_preview(columns, rows) {
+                // 行 / 列数变了要重建表头布局（生成进行中面板每 120ms 通知一次，
+                // 取样没变就不重建）
+                state.refresh(cx);
+            }
+        });
+    }
+
+    /// 懒创建预览表状态（`TableState::new` 需要 window；与面板输入框同一处理）。
+    fn ensure_preview_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preview_table.is_some() {
+            return;
+        }
+        let (columns, rows) = self.preview_snapshot(self.panel.read(cx));
+        let state = cx.new(|cx| {
+            TableState::new(
+                PreviewTableDelegate {
+                    columns,
+                    rows,
+                    context_cell: None,
+                },
+                window,
+                cx,
+            )
+            // 预览是只读取样：排序 / 行选 / 列选 / 拖列都不需要打开。
+            // 列宽保留可拖（默认开）——这正是手搓版缺的：值被截断时能拖开看全。
+            .col_movable(false)
+            .sortable(false)
+            .row_selectable(false)
+            .col_selectable(false)
+        });
+        self.preview_table = Some(state);
+    }
+
+    /// `Ctrl+Enter`（key_context = `mock-detail`，键位在 `crates/app` 注册）= 生成。
+    ///
+    /// 只在**草稿 tab** 上生效：结果表 tab 没有「生成」这个动作（D38——它是这次生成的产物，
+    /// 要改就回草稿改完再生成）。进行中静默忽略，与按钮的禁用态同语义
+    /// （不为一次按键弹一句「已有任务在进行中」）。
+    fn on_generate_key(
+        &mut self,
+        _: &crate::commands::GenerateMock,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.target, DetailTarget::Draft) {
+            return;
+        }
+        self.panel.update(cx, |panel, cx| {
+            if !panel.is_running() {
+                panel.run_generate(cx);
+            }
+        });
     }
 
     /// 这个 tab 管的目标（宿主建 tab / 测试用）。
@@ -5110,11 +5303,7 @@ impl MockDetailView {
         match &self.target {
             DetailTarget::Draft => format!("Mock · {}", panel.draft().table_name),
             DetailTarget::Table(name) => {
-                match panel
-                    .results()
-                    .iter()
-                    .find(|info| &info.table_name == name)
-                {
+                match panel.results().iter().find(|info| &info.table_name == name) {
                     Some(info) => format!(
                         "Mock · {name}（{} 行）",
                         with_thousands(u64::from(info.row_count))
@@ -5669,7 +5858,7 @@ impl MockDetailView {
             .v_flex()
             .gap_2()
             .w_full()
-            .max_h(rems(FIELD_LIST_MAX_HEIGHT))
+            .max_h(rems(ui::FIELD_LIST_MAX_HEIGHT))
             .overflow_y_scrollbar()
             .child(list)
             .into_any_element()
@@ -5751,9 +5940,10 @@ impl MockDetailView {
                             .text_ellipsis()
                             .child(summarize_params(&def.generator)),
                     )
-                    .children(reference.map(|text| {
-                        div().flex_none().text_xs().text_color(muted).child(text)
-                    }))
+                    .children(
+                        reference
+                            .map(|text| div().flex_none().text_xs().text_color(muted).child(text)),
+                    )
                     .children((!meta.is_empty()).then(|| {
                         div()
                             .flex_none()
@@ -5777,7 +5967,15 @@ impl Render for MockDetailView {
 
         // 一次读齐渲染要用的状态：读租约不能跨到 `cx` 的独占使用处，而下面的
         // `panel.update`（表头要懒创建输入、按钮要进面板）必须独占面板。
-        let (table, generated, scenario_source, relation_note, draft_columns, result_columns) = {
+        let (
+            table,
+            generated,
+            scenario_source,
+            relation_note,
+            draft_columns,
+            result_columns,
+            dropped_by_project_switch,
+        ) = {
             let panel = self.panel.read(cx);
             // 本 tab 看哪张表：草稿 tab 看草稿目标表，结果表 tab 看它自己
             // （与面板的「当前表」无关——切 tab 就能对照两张表的预览）
@@ -5806,6 +6004,7 @@ impl Render for MockDetailView {
                 relation_note,
                 panel.draft().columns.len(),
                 result_columns,
+                panel.results_dropped_by_project_switch(),
             )
         };
 
@@ -5824,6 +6023,11 @@ impl Render for MockDetailView {
                     with_thousands(u64::from(info.row_count)),
                     info.temp_table_name,
                     info.elapsed_ms
+                ),
+                // 没结果分两种：切项目把结果清掉了（旧 tab 留着，见 D35），或者这一轮没生成它。
+                // 两种说法的行动建议一样（重新生成），但「为什么没结果」不一样——不能都说成「这一轮」。
+                None if dropped_by_project_switch => format!(
+                    "{table} · 所属项目已切换：这张表的结果已作废（切项目会清空 mock 结果）——重新生成后再看"
                 ),
                 None => format!("{table} · 这一轮没有它的结果（重新生成后再看）"),
             };
@@ -5936,6 +6140,9 @@ impl Render for MockDetailView {
             None if is_draft => {
                 format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点表头「生成」")
             }
+            None if dropped_by_project_switch => {
+                format!("预览（前 {PREVIEW_ROWS} 行）· 所属项目已切换，结果已作废——重新生成后再看")
+            }
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
@@ -5943,13 +6150,28 @@ impl Render for MockDetailView {
         let preview = generated.as_ref().map(|info| info.preview.clone());
         match preview {
             Some(preview) if !preview.rows.is_empty() => {
-                body = body.child(render_preview_table(&preview, cx));
+                // 预览表 = 组件库 `DataTable`（与编辑器结果集同一套原语）：表头 / 列宽拖拽 /
+                // 横向滚动 / 虚拟化 / 键盘选择都是组件的，本处只给容器与一个几十行的 delegate。
+                self.ensure_preview_table(window, cx);
+                if let Some(table) = self.preview_table.clone() {
+                    body = body.child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .debug_selector(|| "mock-preview-table".to_string())
+                            // 行高走组件档位（XSmall = 26px），单元格字号在 delegate 里取 `text_xs`
+                            // （与面板其它行的密度一致 —— 这是组件库 px 基准尺寸的既定例外，
+                            // 同结果集网格）
+                            .child(DataTable::new(&table).with_size(ComponentSize::XSmall)),
+                    );
+                }
             }
             _ => {
                 body = body.child(
                     div()
                         .flex_1()
-                        .min_h(rems(PREVIEW_MIN_HEIGHT))
+                        .min_h(rems(ui::PREVIEW_MIN_HEIGHT))
                         .min_w_0()
                         .text_xs()
                         .text_color(muted)
@@ -5958,7 +6180,11 @@ impl Render for MockDetailView {
             }
         }
 
-        body
+        // 键位落点：`track_focus` 不能省（没有它这条 tab 不在 dispatch path 上，快捷键落不到动作）；
+        // `key_context("mock-detail")` 与 `crates/app` 的键位注册（Ctrl+Enter = 生成）成对。
+        body.track_focus(&self.focus_handle)
+            .key_context("mock-detail")
+            .on_action(cx.listener(Self::on_generate_key))
     }
 }
 
@@ -5971,88 +6197,161 @@ fn render_status_cell(glyph: &str, text: &str, color: Hsla) -> Div {
         .child(format!("{glyph} {text}"))
 }
 
-/// 预览表格：表头 + 前 N 行（固定列宽 + 横向滚动，纵向占满剩余高度）。
-fn render_preview_table(
-    preview: &MockPreview,
-    cx: &mut Context<MockDetailView>,
-) -> impl IntoElement {
-    let fg = cx.theme().colors.foreground;
-    let muted = cx.theme().colors.muted_foreground;
-    let border = cx.theme().colors.border;
+/// 预览表的 delegate：把「这次生成的前 N 行取样」铺进组件库的表格（`DataTable`）。
+///
+/// **为何不手搓网格**：结果集（编辑器）与这里的预览是同一类东西（一张只读的宽表），
+/// 组件库的 `DataTable` 已提供表头 / 列宽拖拽 / 横向滚动 / 虚拟化 / 键盘选择。
+/// 旧实现自己搭了一个固定 9rem 列宽的 div 表：列宽钉死、值截断后没任何办法看全，
+/// 而且与结果集两套观感（尺寸与交互各要同步一次）。
+struct PreviewTableDelegate {
+    /// 数据列名（不含行号槽）
+    columns: Vec<String>,
+    /// 取样行（引擎已渲染成文本；每行长度 == `columns.len()`）
+    rows: Vec<Vec<String>>,
+    /// 右键落在哪个单元格（组件库只把 `row_ix` 交给 `context_menu`，
+    /// 列得在 `render_td` 里自己记一笔——与结果集网格同一做法）
+    context_cell: Option<(usize, usize)>,
+}
 
-    let mut header = div()
-        .h_flex()
-        .w_full()
-        .border_b_1()
-        .border_color(border)
-        .child(
-            div()
-                .w(rems(PREVIEW_CELL_WIDTH))
-                .flex_none()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(muted)
-                .child("#"),
-        );
-    for name in preview.columns.iter() {
-        header = header.child(
-            div()
-                .w(rems(PREVIEW_CELL_WIDTH))
-                .flex_none()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(fg)
-                .text_ellipsis()
-                .child(name.clone()),
-        );
+impl PreviewTableDelegate {
+    /// 首列是行号槽（与结果集同形：`#` 钉在左侧，不可拖宽 / 移动 / 选中）
+    fn is_row_number(col_ix: usize) -> bool {
+        col_ix == 0
     }
 
-    let mut rows = div().v_flex().w_full();
-    for (index, row) in preview.rows.iter().take(PREVIEW_ROWS).enumerate() {
-        let mut line = div()
-            .h_flex()
-            .w_full()
-            .border_b_1()
-            .border_color(border)
-            .child(
-                div()
-                    .w(rems(PREVIEW_CELL_WIDTH))
-                    .flex_none()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child((index + 1).to_string()),
-            );
-        for column_index in 0..preview.columns.len() {
-            line = line.child(
-                div()
-                    .w(rems(PREVIEW_CELL_WIDTH))
-                    .flex_none()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(row.get(column_index).cloned().unwrap_or_default()),
+    /// 换一份取样；返回是否真的变了（没变就不必 `refresh`：生成中面板每 120ms 通知一次）。
+    fn set_preview(&mut self, columns: Vec<String>, rows: Vec<Vec<String>>) -> bool {
+        if self.columns == columns && self.rows == rows {
+            return false;
+        }
+        self.columns = columns;
+        self.rows = rows;
+        // 数据换了，之前记下的右键位置不再指向同一个值
+        self.context_cell = None;
+        true
+    }
+
+    /// 这一行拼成 TSV（「复制整行」用：拷进表格 / SQL 都能直接分列）。
+    fn row_text(&self, row_ix: usize) -> String {
+        self.rows
+            .get(row_ix)
+            .map(|row| row.join("\t"))
+            .unwrap_or_default()
+    }
+
+    /// 右键菜单里拿得到的那一格：优先用记下的单元格（行号槽除外），否则退到该行第一列。
+    fn context_text(&self, row_ix: usize) -> Option<String> {
+        let recorded = match self.context_cell {
+            Some((cell_row, cell_col)) if cell_row == row_ix && cell_col > 0 => Some(cell_col - 1),
+            _ => None,
+        };
+        let col = recorded.unwrap_or(0);
+        self.rows.get(row_ix)?.get(col).cloned()
+    }
+}
+
+impl TableDelegate for PreviewTableDelegate {
+    fn columns_count(&self, _cx: &App) -> usize {
+        // 没列时不画行号槽（空表就交给「（暂无预览）」那条空态）
+        if self.columns.is_empty() {
+            0
+        } else {
+            self.columns.len() + 1
+        }
+    }
+
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.rows.len()
+    }
+
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        if Self::is_row_number(col_ix) {
+            return Column::new("row-no", "#")
+                .width(ui::PREVIEW_ROW_NUMBER_WIDTH)
+                .min_width(ui::PREVIEW_ROW_NUMBER_WIDTH)
+                .fixed_left()
+                .resizable(false)
+                .movable(false)
+                .selectable(false);
+        }
+        let index = col_ix - 1;
+        let name = self.columns.get(index).cloned().unwrap_or_default();
+        // 列宽走组件默认档（100px）+ 可拖宽：宽表靠横向滚动，看不全就拖
+        Column::new(format!("col-{index}"), name)
+    }
+
+    fn render_td(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let fg = cx.theme().colors.foreground;
+        let text = self.cell_text(row_ix, col_ix, cx);
+        // 行号槽永远是灰的（它不是数据）
+        let is_row_number = Self::is_row_number(col_ix);
+        let color = if is_row_number { muted } else { fg };
+        // 右键得先知道「点的是哪一格」：组件库只把 `row_ix` 交给 `context_menu`
+        // （事件从最内层派发，不会丢）——与结果集网格同一做法
+        let table = cx.entity().clone();
+        div()
+            .truncate()
+            .text_xs()
+            .text_color(color)
+            .when(!is_row_number, |cell| {
+                cell.on_mouse_down(MouseButton::Right, move |_, _window, app| {
+                    table.update(app, |state, _cx| {
+                        state.delegate_mut().context_cell = Some((row_ix, col_ix));
+                    });
+                })
+            })
+            .child(text)
+    }
+
+    /// 预览的右键菜单：只给「拿得走」的两件事——复制这一格 / 复制整行（TSV）。
+    ///
+    /// 为什么不做筛选与排序（结果集网格有这两项）：这是**前 N 行的取样**，不是结果集——
+    /// 筛选会把取样变成长度未知的子集，排序会把它弄成「看似按值排过」的样子，
+    /// 两者都让「前 10 行长什么样」这个唯一的信息失真。
+    fn context_menu(
+        &mut self,
+        row_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let mut menu = menu;
+        if let Some(value) = self.context_text(row_ix) {
+            menu = menu.item(
+                PopupMenuItem::new("复制此值").on_click(move |_, _window, app| {
+                    app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value.clone()));
+                }),
             );
         }
-        rows = rows.child(line);
+        let row_text = self.row_text(row_ix);
+        if !row_text.is_empty() {
+            menu = menu.item(PopupMenuItem::new("复制整行（TSV）").on_click(
+                move |_, _window, app| {
+                    app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(row_text.clone()));
+                },
+            ));
+        }
+        menu
     }
 
-    div()
-        .id("mock-preview-scroll")
-        .flex_1()
-        .min_h_0()
-        .min_w_0()
-        .border_1()
-        .border_color(border)
-        .overflow_x_scrollbar()
-        .child(div().v_flex().w_full().min_h_0().child(header).child(rows))
+    /// 取样的文本表示：组件库用它做 `dump` / 导出（预览的取值本来就是文本，直接给）。
+    fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
+        if Self::is_row_number(col_ix) {
+            return (row_ix + 1).to_string();
+        }
+        self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix - 1))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 // ==================== 中央 tab 的面板协议 ====================
@@ -6102,10 +6401,7 @@ impl ComponentPanel for MockDetailView {
 
     fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let label = self.tab_label(cx);
-        div()
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
-            .child(label)
+        div().text_sm().font_weight(FontWeight::MEDIUM).child(label)
     }
 }
 

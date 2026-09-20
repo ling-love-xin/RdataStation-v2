@@ -71,6 +71,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/schema_map.rs` | `ColumnMapper`（列名规则表）+ **`parse_data_type`（类型串唯一入口）** |
 | `crates/mock/src/mock_view.rs` | **视图**：`MockPanel`（右 Dock 配置 + 场景模板菜单 + 出口 + 结果表清单与「当前表」+ 进度与取消）/ `MockDetailView`（中央字段 + 预览 + 列编辑对话框）/ `MockHost` 契约 / `MockJobKind`·`MockJobPhase` / `search_generators` + 搜索对话框 / **集合类参数的多行编辑** |
 | `crates/mock/src/mock_view/tests.rs` | 视图测试（21 纯逻辑 + 42 项 headless 窗口测试 + 测试宿主桥） |
+| `crates/mock/src/ui.rs` | 视图尺寸常量：结构尺寸单一来源 = `workbench_shell::ui`（同源的走重导出），本 crate 自有的输入宽 / 预览格宽 / 列表高上限在此声明；`mock_view.rs` 已纳入 `ui_contract` 的尺寸与颜色两份扫描清单 |
 | `crates/mock/src/templates.rs` | 内置 6 套场景模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录） |
 | `crates/mock/src/persistence.rs` | `MockGenerationStore`：任务历史与用户模板的 SQLite 读写（8 个方法；读写两侧由真库往返测试验住） |
 | `crates/mock/src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（`HistoryAction` / `HistorySnapshot` / `list` / `detail` / `template_detail` / `run` + 草稿⇄历史行的纯映射）；自备 tokio 运行时（`drive`），宿主只回答「项目根在哪」 |

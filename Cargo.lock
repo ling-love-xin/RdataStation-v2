@@ -8010,6 +8010,7 @@ dependencies = [
  "rds-engine",
  "rds-paths",
  "rds-shared",
+ "rds-workbench-shell",
  "rusqlite",
  "serde",
  "serde_json",

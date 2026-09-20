@@ -495,10 +495,54 @@ impl Shared {
     ///
     /// 与导航面板「查看洞察」同一口径（现走 `NavHost::open_right_panel`）：只改状态，布局同步由宿主 render
     /// （`apply_right_mode`）完成，因此还需要 `notify_host` 让宿主重渲染。
+    ///
+    /// 展开 Mock 时顺带让面板重读它的候选清单与生成历史（见 [`Shared::refresh_mock_panel`]）。
+    /// **放在这里而不是各入口各写一遍**：活动栏 / 命令面板 / 导航右键 / 编辑器按钮最终都走到本方法，
+    /// 漏掉一个入口就会出现「连接清册或既有表清单还是上一次的」——M7 已知缺陷正是这个形态（架构 §9-I18）。
     pub fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
         self.active_right.set(panel);
         self.right_mode.set(SidebarMode::Expanded);
+        if panel == RightPanel::Mock {
+            self.refresh_mock_panel(cx);
+        }
         self.notify_host(cx);
+    }
+
+    /// M7：让 Mock 面板重读候选清单（连接 / 项目分析库既有表）与生成历史。
+    ///
+    /// 为什么必须由宿主在**事件路径**上推一把：这三份都是「打开面板时该是最新的」状态，
+    /// 而其中两份要碰 I/O（既有表要开项目分析库文件；历史要进后台跑 tokio），渲染期拉不了。
+    /// 页面之外也会变（新建连接、别处建表、别的会话写了历史），所以「打开面板」这一拍就是重读时机。
+    pub fn refresh_mock_panel(&self, cx: &mut App) {
+        let Some(panel) = self
+            .mock_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+        else {
+            return;
+        };
+        panel.update(cx, |panel, cx| {
+            panel.refresh_sources(cx);
+            panel.refresh_history(cx);
+        });
+    }
+
+    /// M7：连接清册变了（新建 / 编辑 / 重载连接），只刷 Mock 面板的「导入结构」候选来源。
+    ///
+    /// 与 [`Shared::refresh_mock_panel`] 分开的原因：这里由连接保存与导航重载触发（频率高），
+    /// 而「既有分析表」那一份要开项目分析库文件（真 I/O）。连接候选只从内存里的 `connections`
+    /// 派生，代价是一次遍历，可以随时刷。
+    pub fn refresh_mock_connections(&self, cx: &mut App) {
+        let Some(panel) = self
+            .mock_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+        else {
+            return;
+        };
+        panel.update(cx, |panel, cx| panel.refresh_connection_sources(cx));
     }
 
     /// M8：打开洞察面板并**指向一列**（结果表列头右键「洞察此列」的宿主侧入口）。
@@ -635,19 +679,15 @@ impl Shared {
     ///
     /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
     /// **构造期创建**（`RightSidebarPanel::new`），因此这里总能拿到句柄。
-    /// 顺带让面板重读生成历史与候选清单（连接 / 既有分析表）：面板可能已摆了几个项目
-    /// （也可能刚切过项目），而这两份清单是「打开面板时该是最新的」状态，不是渲染期能拉的 I/O。
+    /// 候选清单与生成历史的重读在 [`Shared::open_right_panel`] 里（展开 Mock 自带），
+    /// 这样活动栏 / 命令面板 / 导航右键 / 编辑器按钮四条入口不会彼此不一致。
     pub fn open_mock_panel(&self, source: Option<SchemaRequest>, cx: &mut App) {
         self.open_right_panel(RightPanel::Mock, cx);
-        let panel = self.mock_panel.borrow().clone();
-        let Some(panel) = panel.and_then(|weak| weak.upgrade()) else {
+        let Some(source) = source else {
             return;
         };
-        panel.update(cx, |panel, cx| {
-            panel.refresh_sources(cx);
-            panel.refresh_history(cx);
-        });
-        if let Some(source) = source {
+        let panel = self.mock_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
             panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
     }

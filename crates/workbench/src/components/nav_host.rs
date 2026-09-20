@@ -172,6 +172,9 @@ impl NavHost for WorkbenchNavHost {
         if let Some(n) = notice {
             *self.shared.notice.borrow_mut() = Some(n);
         }
+        // 连接清册换了：Mock 面板的「导入结构」候选来源随之失效（不刷的话菜单里
+        // 会列着刚删掉的连接 / 缺刚建的连接）。只刷这一份，不碰要开分析库的既有表清单。
+        self.shared.refresh_mock_connections(cx);
         self.shared.notify_host(cx);
     }
 

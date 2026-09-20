@@ -7,6 +7,7 @@
 //! - `Nav*`（`NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties` /
 //!   `NavReorderUp` / `NavReorderDown`）：数据源导航树键盘导航——**定义在
 //!   `database::commands`**（随视图归位），此处重导保持 app 侧 `workbench::commands::Nav*` 路径不变；
+//! - `GenerateMock`：Mock 面板的「生成」——**定义在 `mock::commands`**，同样在此重导；
 //! - 各 panel 切换、打开设置等命令由 Quick Open 与活动栏直接驱动（见 `view.rs`）。
 //!
 //! 按编码规范「事件、Action 与焦点」：动作只更新共享状态并 notify，Dock 同步在
@@ -37,6 +38,9 @@ pub use scratchpad::commands::{
     ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
     ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
 };
+
+// Mock 生成（M7）局部动作：定义在 `mock::commands`（随 Mock 视图归位），此处重导。
+pub use mock::commands::GenerateMock;
 
 // 连接对话框（M3）局部动作：仅绑定在为对话框容器声明的 key context 上。
 //

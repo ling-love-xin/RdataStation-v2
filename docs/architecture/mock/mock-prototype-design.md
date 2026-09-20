@@ -13,7 +13,7 @@
 | 落位（这张表的设计） | **中央编辑区 tab**「Mock · {目标表}」（`MockDetailView` 加入编辑区 tab 组） | `crates/workbench/src/view.rs` |
 | 面板头 | Dock 的 `ComponentPanel::title/tab_name`（高度 `ui::PANEL_HEADER_HEIGHT` = 2.25rem） | 同上 |
 | 视图归属 | **随 mock crate**（`crates/mock/src/mock_view.rs`，与 `project::ui` / `settings_view` 同例） | 架构 §3 / 决策 D11 |
-| 视内尺寸 | 视图局部常量（`NUM_INPUT_WIDTH` 5rem / `PARAM_INPUT_WIDTH` 9rem / `FIELD_LIST_MAX_HEIGHT` 16rem / `PREVIEW_CELL_WIDTH` 9rem / `PREVIEW_MIN_HEIGHT` 10rem） | `crates/mock/src/mock_view.rs` |
+| 视内尺寸 | 视图局部常量（`NUM_INPUT_WIDTH` 5rem / `PARAM_INPUT_WIDTH` 9rem / `FIELD_LIST_MAX_HEIGHT` 16rem / `PREVIEW_MIN_HEIGHT` 10rem / `PREVIEW_ROW_NUMBER_WIDTH` 48px） | `crates/mock/src/ui.rs` |
 
 **为什么这么拆**：「管理表」与「设计这张表」是两件事。表清单（有哪些表 · 落了没 · 关系连到谁）是**集合视角**，
 出口（落库 / 追加 / 导出）以「当前表」为单位，历史与模板是落盘记录——这些归**右 Dock**；表名 / 行数 / 种子 / 语言、
@@ -53,7 +53,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 │ [保存到草稿箱 ▾]                                 │ ← CSV / Parquet / Xlsx / SQL INSERT → {项目}/mock/
 │ [另存为 ▾]                                       │ ← 同上四格式 → 系统保存对话框选路径
 │ 已在项目分析库新建表 mock_orders（1000 行）         │ ← 出口反馈就地给：成功（success）/ 失败（danger）/ 只读（info）
-│ 数据只写入项目分析库与文件，不回传源库（M7）；要进全局走资产库存档 / 草稿箱升级 │
+│ 数据只写入项目分析库与文件，不回传源库（M7）        │ ← 常驻只留这一句（未打开项目时去掉路径）
 │ ▸ 生成历史（20）· 用户模板（1）                     │ ← 折叠（默认收起）：天天用的是上面那份清单
 └─────────────────────────────────────────────────┘
 ```
@@ -113,7 +113,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 │ 预览（前 3 行）· 临时表 temp_mock_mock_orders · 本次 1000 行 · 12 ms    │
 │ ┌──┬──────┬──────────────────────┬──────────┬────────┬──────────┐ │
 │ │# │ id   │ customer_email       │ amount   │ status │created_at│ │
-│ │1 │ 1    │ zhangsan@example.com │ 1234.56  │ paid   │2024-01-… │ │ ← 固定列宽 + 横向滚动，纵向占满剩余高度
+│ │1 │ 1    │ zhangsan@example.com │ 1234.56  │ paid   │2024-01-… │ │ ← 组件库 `DataTable`（列宽可拖 + 横向滚动），纵向占满剩余高度
 │ └──┴──────┴──────────────────────┴──────────┴────────┴──────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -147,7 +147,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 列卡片两行制 | 第一行「名称 · 类型 · 置信度徽标」，第二行「生成器菜单 + 编辑 / 智能 / 删除 + 参数摘要（或示例值）」 |
 | 生成器切换不打断编辑 | 生成器有两条路径：`Button::dropdown_menu` 的**分类子菜单**（15 类 × 均值 9 项，知道「属于哪类」时最快）；菜单首项「搜索生成器…」开搜索对话框（只记得名字时）。菜单顶部另有**「最近使用」**（本会话点过的，最多 5 条，最近在前）与**「推荐」**标记（与导入结构同源的智能映射结果，只标记不写回，B7）；当前生成器打勾。参数编辑在「编辑」对话框里，避免对话框内生成器与参数行不一致 |
 | 置信度三态 | `high` success / `low` muted / `manual` info（与 v1 同语义） |
-| 预览为只读网格 | `#` 行号列 + 固定列宽（9rem）+ `overflow_x_scrollbar()`；没有结果时显示「尚无结果——点表头『生成』」 |
+| 预览为只读网格 | 组件库 `DataTable` + 本项目自己的 delegate（列宽可拖 / 横向滚动 / 虚拟化都是组件的；首列 `#` 行号槽钉在左）；**右键只给「复制此值 / 复制整行（TSV）」**——筛选与排序不做（那会把「前 N 行取样」弄失真，见 §8）；没有结果时显示「尚无结果——点表头『生成』」 |
 | 结果表列只读 | 结果表的列是这次生成的产物：就地改列会让「结果」与「产出它的配置」分叉——要改列回草稿 tab 改，再重新生成 |
 
 ## 4. 对话框
@@ -378,9 +378,9 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 落库同名 | 「持久化到项目分析库」而表已存在 | danger 行 `项目分析库已存在表 X：请改用「追加到既有表」`，并刷新追加候选 |
 | 追加成功 | 「追加到既有表」选表 | success 行 `已追加到 X（表内共 N 行）`；生成阶段已按表内行数接续自增起点 |
 | 追加缺列 | 目标表缺草稿里的列 | danger 行列出缺失列名（不让 DuckDB 原始错误冒到界面） |
-| 只读项目 | `Shared.project_ui.read_only` | info 行「只读模式：不允许落库与写文件（仍可生成预览）」；四个写出口**在视图层拦截**并给可读错误（不静默失败） |
-| 未打开项目 | 「保存到草稿箱」 | danger 行「未打开项目：草稿箱不可用（请先打开或新建项目）」 |
-| 生成中 | 点「生成」/「追加」（后台任务） | 中央表头：生成按钮转「生成中…」并禁用 + `Progress` 进度条 + 「k / N 批（≈已生成 / 目标 行）」+ 「取消」（批次边界响应；点后转「正在取消…」）；右 Dock 清单行只给 `◐ 生成中 40%`；首批回调前显示「准备中…」 |
+| 只读项目 | `Shared.project_ui.read_only` | info 行「只读模式：不允许落库与写文件（仍可生成预览）」；三个项目级出口（落库 / 追加 / 草稿箱）**在视图层预先禁用**（`MockPanel::sinks_ready` = 有结果 + 非只读 + 已打开项目），禁用理由就是这一行；「另存为」不受只读影响（不写项目库与项目目录） |
+| 未打开项目 | 三个项目级出口（落库 / 追加 / 草稿箱） | 按钮**预先禁用**（同上判据）；info 行「未打开项目：落库 / 追加 / 草稿箱不可用（纯生成、预览与另存为不受影响）」。早先的做法是按钮可点、点了由任务层报错（「未打开项目：Mock 只写项目分析库…」）——同一句话天天弹不如直接不可点；任务层那句仍保留作兵底线（面板已摆着、项目被关掉时） |
+| 生成中 | 点「生成」/「追加」（后台任务） | 中央表头：生成按钮转「生成中…」并禁用 + `Progress` 进度条 + 「k / N 批（≈已生成 / 目标 行）」+ 「取消」（批次边界响应；点后转「正在取消…」）；右 Dock 清单行只给 `◐ 生成中 40%`；首批回调前显示「准备中…」；**同时**状态栏右侧给一行 `◐ Mock 生成中 40% · 取消`（`status_chip_text` + `view.rs::mock_status_chip`）——面板被切走或中央 tab 被关掉时，任务还在跑也得看得见、能取消（读数仍只属于它自己那一处，见 D38） |
 | 场景生成中 | 点「生成 N 张表」（后台任务 `Scenario`） | 进度与取消在**右 Dock 场景清单下**（它属于这一批）：`Progress` + 「k / N 张表（每张表逐个生成）」+ 「取消」（含生成阶段），动作行转「生成中… / 退出场景」双禁用；结果区在回填前仍是上一次的结果（或空） |
 | 写入 / 导出中 | 点三个写出口（`Persist` / `Export` / `Scratchpad`） | 中央表头的进度行转**不定量动画**、文案转「写入分析库中… / 写出文件中…（N 行）」；**不渲染取消**（DuckDB / 文件系统内不能中断）；生成与其余出口按钮保持禁用 |
 | 生成器搜索 | 字段行菜单首项「搜索生成器…（143 项）」 | 输入即过滤（同步，无 loading 闪烁）；命中行显「中文标签 / 名称 / 分类」，当前生成器打勾；无命中显 `List` 自带空态；点行 / 回车写回该列并关对话框 |
@@ -396,19 +396,27 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 面板底 | `background` | `size_full` |
 | 面板标题 / tab 标题 | `foreground` | `text_sm` + MEDIUM |
 | 清单行状态点 | `muted_foreground`（未生成）/ `primary`（生成中）/ `success`（已生成 · 已落库）/ `warning`（失败 · 引用的表未落库） | `text_xs`（单个字符，不引图标资产） |
-| 清单行 / 关系子行 | 当前行 `accent` 底 + 左 2px `active_border`；子行 `muted_foreground` | 行内距 `px_1`；关系子行缩进 1rem |
+| 清单行 / 关系子行 | 当前行 `list_active` 底 + 左 2px `list_active_border`（共用原语 `tree::active_bar`）；未选中行 hover 走 `list_hover`（**悬停不覆盖激活态**）；子行 `muted_foreground` | 行高 `ui::ROW_HEIGHT`（1.5rem）；行内距 `px_1`；关系子行缩进 1rem |
 | 折叠标题（历史 / 模板） | `muted_foreground`（hover → `foreground`） | `text_xs`，与面板其它行同内距 |
-| 行数 / 种子 / 表名输入 | 组件默认 | 宽 `NUM_INPUT_WIDTH` = 5rem（数字）/ 自适应（表名） |
-| 对话框内输入 | 组件默认 | 宽 `PARAM_INPUT_WIDTH` = 9rem |
-| 字段区滚动 | —— | `max_h(FIELD_LIST_MAX_HEIGHT)` = 16rem |
+| 行数 / 种子 / 表名输入 | 组件默认 | 宽 `ui::NUM_INPUT_WIDTH` = 5rem（数字）/ 自适应（表名） |
+| 对话框内输入 | 组件默认 | 宽 `ui::PARAM_INPUT_WIDTH` = 9rem |
+| 字段区滚动 | —— | `max_h(ui::FIELD_LIST_MAX_HEIGHT)` = 16rem |
 | 字段卡片 | `border` + `radius` | `p_2` + `border_1` |
-| 预览单元格 | —— | 宽 `PREVIEW_CELL_WIDTH` = 9rem；容器最小高 `PREVIEW_MIN_HEIGHT` = 10rem |
+| 预览表（`DataTable`） | —— | 数据列宽 = 组件 `Column` 默认档（100px）+ 可拖宽；行号槽 `ui::PREVIEW_ROW_NUMBER_WIDTH` = 48px（与结果集同档）；容器最小高 `ui::PREVIEW_MIN_HEIGHT` = 10rem；行高走组件 `Size::XSmall`（26px，组件库尺寸是 px 基准） |
 | 成功 / 失败 / 只读 | `success` / `danger` / `info` | `text_xs` |
 | 参数摘要 / 引导语 / 类型 | `muted_foreground` | `text_xs` |
 | 置信度徽标 | `success` / `info` / `muted_foreground` | `text_xs` |
 
-**零裸色值 / 零裸结构尺寸**：全部来自主题 token 与视图局部 rem 常量（视图不在 workbench 的 `ui.rs` 契约扫描范围内，
-但沿用同一口径：结构性尺寸用 `rems()` + 具名常量，局部间距用 Tailwind 尺度方法）。
+**零裸色值 / 零裸结构尺寸**：全部来自主题 token 与尺寸常量（局部间距用 Tailwind 尺度方法）。
+
+**订正（2026-09-20）**：早先这里写的是「视图不在 workbench 的 `ui.rs` 契约扫描范围内，但沿用同一口径」——
+当时 `mock` 是唯一「自持视图却不依赖外壳」的特性 crate，七个结构尺寸就地声明、裸尺寸与裸色值没有回归哨兵。
+现在口径与 `analytics_resource` / `insight` 一致：
+
+- 结构尺寸登记到 `crates/mock/src/ui.rs`（与外壳同源的走重导出，单一来源仍是 `workbench_shell::ui`）；
+- 选中标识条用共用原语 `workbench_shell::tree::active_bar`，不在本 crate 手搓绝对定位的 div；
+- `crates/workbench/tests/ui_contract.rs` 的两份清单（尺寸 + 颜色）已把 `mock/mock_view.rs` 纳入扫描，
+  2c 的下沉视图点名表同步加了一行。
 
 ## 8. GPUI 落点与组件选型
 
@@ -420,14 +428,15 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 语言 / 生成器 / 追加目标 / 草稿箱 / 另存为 | `Button` + `dropdown_menu`（`PopupMenuItem::checked/disabled`、`PopupMenu::submenu`） | 生成器 143 项按 **15 类子菜单**承载；追加目标列既有分析表 |
 | 字段行操作 | `Button`（`ghost` / `xsmall`） | ElementId 用列 id（`mock-edit-{id}` / `mock-gen-{id}`），不用下标 |
 | 唯一值开关 | `Switch`（`gpui_kit::component::switch`） | 受控：回调收到请求值，由视图写回并 `notify()` |
-| 表清单 / 关系子行 | 普通行 `div` + `on_click`（一屏几十行，不需要虚拟化） | 用 `List` 反而要为「点一行切 tab」再包一层 delegate；行高 26px、关系子行 `text_xs` |
+| 表清单 / 关系子行 | 普通行 `div` + `on_click`（一屏几十行，不需要虚拟化） | 用 `List` 反而要为「点一行切 tab」再包一层 delegate；行高 `ui::ROW_HEIGHT`（1.5rem，与导航 / 草稿箱同值）、关系子行 `text_xs` |
 | 清单行状态点 | `text_xs` + 主题角色色（`○ ◐ ● ✓ ⚠` 单个字符） | 不引图标资产：字符随字号缩放，不额外加载字形 |
-| 折叠段（历史 / 模板） | `Collapsible`（`gpui_kit::component::collapsible`）+ 标题行 `Button`（`ghost`） | 默认收起；展开状态存实体（`history_open`），不是每帧派生的 |
+| 折叠段（历史 / 模板） | `Collapsible`（`gpui_kit::component::collapsible`）+ 标题行 `Button`（`ghost`） | 默认收起；展开状态存实体（`fold_open`），不是每帧派生的；**段序与标题一致**（先「生成历史」后「用户模板」） |
 | 生成 / 应用 / 取消 / 导入 / **任务取消** | `Button`（`primary` / `secondary`；运行中禁用） | 不手搓 `div + on_click`；运行中不给 `on_click`（禁用态） |
 | **任务进度** | `Progress`（`gpui_kit::component::progress`，`.value(0..100)`） | 不手搓进度条；文案与取消按钮同排一行 |
 | **进度轮询** | `cx.spawn` + `background_executor().timer(120ms)` + 弱句柄 | 任务进行中没有其他事件触发重绘，必须主动唤醒（与 `scratchpad_jobs` 的泵同例） |
 | 导入结构 / 列编辑 / 生成器搜索 | `window.open_dialog` + `Dialog`（+ `DialogFooter`） | 焦点陷阱 / Escape / 遮罩关闭由组件负责；窗口根须为 `Root`；搜索对话框本身无 footer（点行即确认） |
 | **生成器搜索结果列表** | `List` + `ListState` + `ListDelegate`（`gpui_kit::component::list`） | 搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，不手搓；`perform_search` 同步过滤（143 项全在内存） |
+| **预览表** | `DataTable` + `TableState` + `TableDelegate`（`gpui_kit::component::table`），**与编辑器结果集同一套原语** | 表头 / 列宽拖拽 / 横向滚动 / 虚拟化 / 键盘选择全是组件的；本 crate 只写一个几十行的 delegate（列名 / 行 / `cell_text`）。**订正（2026-09-20）**：早先这里是手搓的固定 9rem 列宽 div 表——列宽钉死、值截断后没任何办法看全，且与结果集两套观感（当初的组件选型表漏了 `table`）；只读取样仍不开的开关：排序 / 行选 / 列选 / 拖列 |
 | 另存为（选路径） | `App::prompt_for_new_path` + `Window::spawn` | 异步回传：取消则不动；落盘动作在回传里执行（事件路径） |
 | 滚动区 | `overflow_y_scrollbar()` / `overflow_x_scrollbar()` + `max_h` / `flex_1().min_h_0()` | Dock 内容区自身不产生滚动，面板与 tab 各自给滚动主体 |
 | 宿主能力 | `MockHost`（生成 / 出口 / 来源 / 只读 / 打开详情 / 重绘） | 与 `project::ui::ProjectUiHost` 同范式；workbench 侧桥接见 `components/mock_host.rs` |
@@ -441,7 +450,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 生成器下拉（143 项平铺） | **已迁（改形态）** | 分类子菜单（15 类）；搜索待办 |
 | 智能映射 + 置信度 | 照搬 | `ColumnMapper` 原样使用，换呈现（徽标三态） |
 | 行数 / 种子 / 语言三参数 | 照搬 | `MockConfig` 已是引擎输入 |
-| 生成 → 预览（前 10 行） | **已迁** | 预览表落中央 tab（`#` 行号 + 固定列宽 + 横向滚动），行数上限 `PREVIEW_ROWS` |
+| 生成 → 预览（前 10 行） | **已迁** | 预览表落中央 tab（组件库 `DataTable`：列宽可拖 + 横向滚动 + `#` 行号槽），行数上限 `PREVIEW_ROWS` |
 | 导出 CSV / XLSX / Parquet / SQL | **已迁** | 右 Dock「另存为 ▾」（系统保存对话框选路径）；「保存到草稿箱 ▾」写 `{项目}/mock/mock_*.{ext}` |
 | 持久化到项目分析库 | **已迁 + 显式化** | 新建表；同名已存在 → 报错并引导「追加」（v1 是隐式 `CREATE TABLE AS SELECT`） |
 | 追加到既有表 | **v2 新增** | v1 无此路径；v2 显式选表 + 主键自增接续表内行数 |

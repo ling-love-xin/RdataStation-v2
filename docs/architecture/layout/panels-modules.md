@@ -61,7 +61,7 @@
 
 > 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
-> "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项）。新增同类句柄只需更新
+> "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。新增同类句柄只需更新
 > `ui_contract.rs` 的白名单，不必改本表。
 >
 > 同类还有 M6 的四个对话框流转字段（`version_dialog` / `repair_dialog` / `trash_dialog` / `tag_dialog`）：它们不跨模块——轮询写、

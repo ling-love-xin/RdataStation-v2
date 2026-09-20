@@ -29,7 +29,7 @@ use crate::panels::{
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::ui;
-use mock::mock_view::{MockDetailView, focus_detail_tab};
+use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
 use settings::commands::{CloseSettings, OpenSettings};
 use settings::settings_page::{SettingsHost, SettingsPage};
 
@@ -1185,13 +1185,16 @@ impl WorkbenchView {
                             .toggled(selected)
                             .on_click(move |_, _, app| {
                                 let mode = shared.right_mode.get();
-                                if mode == SidebarMode::Expanded
-                                    && shared.active_right.get() == panel
-                                {
+                                // 激活（而非收起）时才需要重读面板状态；收起路径不动面板。
+                                let activating = !(mode == SidebarMode::Expanded
+                                    && shared.active_right.get() == panel);
+                                if !activating {
+                                    // 再次点击当前激活项 → 收起。
                                     shared.right_mode.set(SidebarMode::Collapsed);
                                 } else {
-                                    shared.active_right.set(panel);
-                                    shared.right_mode.set(SidebarMode::Expanded);
+                                    // 展开走 `Shared::open_right_panel`：Mock 面板的候选清单与生成历史
+                                    // 就在那儿重读（四个入口共用这一条，见该方法的注释）。
+                                    shared.open_right_panel(panel, app);
                                 }
                                 entity.update(app, |_, cx| cx.notify());
                             }),
@@ -1364,8 +1367,8 @@ impl WorkbenchView {
                 }
             }
             Action::OpenRightPanel(panel) => {
-                self.shared.active_right.set(panel);
-                self.shared.right_mode.set(SidebarMode::Expanded);
+                // 与右活动栏点击同一口径（Mock 的候选清单与生成历史在展开这一拍重读）。
+                self.shared.open_right_panel(panel, cx);
             }
             Action::OpenSettings => {
                 self.shared.settings_open.set(true);
@@ -1412,6 +1415,15 @@ impl WorkbenchView {
     // ===== 状态栏 =====
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // M7：Mock 任务在跑时给状态栏一个指示 + 取消入口（读面板实体自己的状态，不另存一份）——
+        // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
+        let mock_chip = self
+            .shared
+            .mock_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+            .map(|panel| mock_status_chip(panel, cx));
         let theme = cx.theme();
         let entity = cx.entity();
         let shared = self.shared.clone();
@@ -1476,12 +1488,74 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .text_xs()
+                    .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
                     .child(div().child("DuckDB 就绪"))
                     .child(div().child("UTF-8"))
                     .child(right_toggle),
             )
     }
+}
+
+/// 状态栏的 Mock 任务指示（有任务在跑时才给）：`◐ Mock 生成中 40%`（出口类任务给阶段名）
+/// 与一个可取消任务尾部的「取消」。
+///
+/// 为何放在状态栏、而不与 D38 的「状态单点」相冲：D38 管的是**读数放在哪**（进度详情仍在
+/// 它自己的中央表头 / 右 Dock 清单下），而这里解决另一个问题——面板被切走、中央 tab 被关掉时
+/// **任务还在跑却看不见也取消不了**。所以它只给「在跑 + 取消」，不重复进度条。
+///
+/// 状态取自面板实体（单一权威）而不是往 `Shared` 再存一份：读别的面板实体在宿主 render 里
+/// 已有先例（右栏「存档详情」读资产库面板的选中项）。
+fn mock_status_chip(panel: Entity<MockPanel>, cx: &mut App) -> Div {
+    // 颜色先取出来：`cx.theme()` 借了 cx，而下面读面板 / 挂回调还要用 cx
+    let (fg, hover_bg) = {
+        let theme = cx.theme();
+        (theme.colors.primary_foreground, theme.colors.primary_active)
+    };
+    let (text, cancellable, cancel_requested) = {
+        let view = panel.read(cx);
+        // 文案的口径归 mock crate（`status_chip_text`：没任务 / 拿不到进度就不画）
+        let Some(text) = status_chip_text(view.job_progress()) else {
+            return div();
+        };
+        (
+            text,
+            view.job_kind().is_some_and(|kind| kind.generates()),
+            view.cancel_requested(),
+        )
+    };
+
+    let mut chip = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .rounded_sm()
+        .text_color(fg)
+        .child(div().child(text));
+    if cancellable {
+        // 出口类任务不可取消（DuckDB / 文件系统内没有中断点），所以那一档只给文字
+        let mut cancel = div()
+            .id("status-mock-cancel")
+            .px_1()
+            .rounded_sm()
+            .text_color(fg)
+            .child(if cancel_requested {
+                "正在取消…"
+            } else {
+                "取消"
+            });
+        if !cancel_requested {
+            cancel = cancel
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover_bg))
+                .on_click(move |_, _, app| {
+                    panel.update(app, |panel, cx| panel.cancel_job(cx));
+                });
+        }
+        chip = chip.child(cancel);
+    }
+    chip
 }
 
 /// 状态栏开关按钮（自绘，对齐设计稿 .sb-btn）：图标 + 文字 + hover 高亮。

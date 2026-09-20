@@ -26,11 +26,11 @@ use settings::SettingsService;
 use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings};
 use workbench::WorkbenchView;
 use workbench::commands::{
-    CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
-    NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate, SaveConnection,
-    ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
-    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject, TestConnection,
-    ToggleQuickOpen,
+    CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavCollapse, NavDown,
+    NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate,
+    SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile,
+    ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject,
+    TestConnection, ToggleQuickOpen,
 };
 
 mod assets;
@@ -214,6 +214,10 @@ fn run_app() {
                 // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
                 // 不抢其它面板的同名键。
                 KeyBinding::new("ctrl-shift-r", InsightRefresh, Some("insight")),
+                // M7 Mock：`Ctrl+Enter` = 生成当前草稿（中央「Mock · {表}」tab 的 key_context）。
+                // 与编辑器同在 Ctrl+Enter 上不冲突：两者的 context 不同（那里是「执行 SQL」），
+                // 且结果表 tab 上该动作无意义（D38：要改就回草稿改完再生成）。
+                KeyBinding::new("ctrl-enter", GenerateMock, Some("mock-detail")),
                 // A11 查找 / 替换**不注册键位**：`Ctrl+F` / `Ctrl+H` 是编辑器内核自己的能力
                 // （`input::Search` / `input::Replace` → 组件库的查找面板），内核在 `Input`
                 // context 里先拿到按键，应用层再绑只会重复。焦点不在编辑器内时，
