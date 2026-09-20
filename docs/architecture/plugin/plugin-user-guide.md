@@ -293,7 +293,10 @@ RDS_SIDECAR_SQL_SLOW='select pg_sleep(5)' \
 cargo test -p rds-plugin --test sidecar_conformance -- --nocapture
 ```
 
-跑通那五条 = P1 的退出标准（能连 → 3000 行 Arrow → 能取消 → 无孤儿进程）。
+跑通那五条 = P1 的退出标准（能连 → 3000 行 Arrow → 能取消 → 无孤儿进程）；
+同一个文件里还有**第 6 条**（导航面：`meta.*` 五件答得出来且形状对）= P2 的退出标准。
+加上 `--nocapture` 会把你这边实际答出来的 catalog / schema / 对象数 / 首列的列名与类型打出来，
+照着看就知道卡在哪一环。库是空的也算过 —— 那时只验「方法答得出来」并打印说明。
 
 **导航要用的 `meta.*`（P2）**：五件 —— `meta.catalogs` / `meta.schemas` / `meta.objects` /
 `meta.object_detail` / `meta.routine_source`。少一件，导航树或属性面板就少一块。三条最容易踩的：

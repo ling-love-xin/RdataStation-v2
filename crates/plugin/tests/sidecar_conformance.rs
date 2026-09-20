@@ -37,6 +37,9 @@
 //! 4. **取消**：`query.cancel` 之后那条在跑的查询要以 `-32004` 收场，而且要**真的停**。
 //! 5. **无孤儿**：宿主关掉 stdin 之后对端必须自己退（§4.2.1 的协议级约定）——
 //!    这条不满足的话，宿主崩溃时会在用户机器上留下后台进程。
+//! 6. **导航面**（P2）：`meta.catalogs` / `meta.schemas` / `meta.objects` / `meta.object_detail` /
+//!    `meta.routine_source` 要答得出来，而且形状对（第一层不能空、表要说得出列与原始类型、
+//!    例程源码是字符串或 `null`）。库是空的也算过 —— 那时只验「方法答得出来」，并打印说明。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -46,6 +49,7 @@ use serde_json::json;
 use rds_plugin::manifest::BackendCommand;
 use rds_plugin::sidecar::driver::{QueryRequest, SessionDriver};
 use rds_plugin::sidecar::lifecycle::{Concurrency, ProcessSpec};
+use rds_plugin::sidecar::meta::MetaObjectKind;
 use rds_plugin::sidecar::process::{ReapOutcome, SidecarProcess, SpawnSpec};
 use rds_plugin::sidecar::supervisor::{Deployment, SessionOpened, SidecarSupervisor};
 
@@ -286,7 +290,119 @@ async fn the_sidecar_exits_when_stdin_closes() {
     }
 }
 
-/// 靶子自己的开关也顺便验一下：`--ignore-eof` 得能被强杀掉（宿主的兜底防线）。
+/// ⑥ 导航面：五个 `meta.*` 答得出来，形状对得上（P2 的退出标准）。
+///
+/// 走的就是导航那条路：catalogs → schemas → objects →（挑一个表）detail →（有例程就叫一次源码）。
+/// **空库也算过**：那时只验方法答得出来，并打印说明（空是合法状态，不是失败）。
+#[tokio::test]
+async fn answers_the_metadata_methods() {
+    let (supervisor, session_id) = connect("conformance.meta").await;
+    let driver = SessionDriver::new(
+        supervisor
+            .session_conn(&session_id)
+            .expect("会话应当有连接"),
+        &session_id,
+    );
+    let descriptor = driver.describe(&driver_id()).await.expect("描述应当成功");
+
+    // ① 第一层不能是空的：拿不出 catalog 概念的库（MySQL 类）请把 schema 名当 catalog 回
+    let catalogs = driver.meta_catalogs().await.expect("meta.catalogs");
+    assert!(
+        !catalogs.is_empty(),
+        "导航第一层不能是空的：拿不出 catalog 概念的库，请把 schema 名当 catalog 回"
+    );
+    let catalog = catalogs[0].clone();
+    println!("  catalog：{catalogs:?}");
+
+    // ② schema 层：声明了就给得出来；没声明就是单层库，宿主会把 catalog 当 schema 传
+    let schema = if descriptor.supports("schemas") {
+        let schemas = driver.meta_schemas(&catalog).await.expect("meta.schemas");
+        assert!(
+            !schemas.is_empty(),
+            "声明了 schemas 能力，却一个 schema 也给不出（导航会在这一层空掉）"
+        );
+        println!(
+            "  schema：{:?}",
+            schemas.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()
+        );
+        schemas[0].name.clone()
+    } else {
+        println!("  驱动没声明 schemas：按单层库验（schema := catalog）");
+        catalog.clone()
+    };
+
+    // ③ 对象清单：一次给全、含 kind
+    let objects = driver
+        .meta_objects(&catalog, &schema)
+        .await
+        .expect("meta.objects");
+    let nav_able = objects.iter().filter(|o| o.nav_kind().is_some()).count();
+    println!("  对象 {} 个（其中 {} 个摆得进导航）", objects.len(), nav_able);
+    let unmappable: Vec<&str> = objects
+        .iter()
+        .filter(|o| matches!(o.kind, MetaObjectKind::Other(_)))
+        .map(|o| o.name.as_str())
+        .collect();
+    if !unmappable.is_empty() {
+        println!("  ⚠️ 报了导航摆不下的类别（宿主会跳过并记日志）：{unmappable:?}");
+    }
+
+    let Some(array) = objects.iter().find(|o| o.kind.is_table_like()) else {
+        println!("  这个 schema 里没有表 / 视图：详情与源码两项跳过（空库是合法状态）");
+        let mut supervisor = supervisor;
+        supervisor
+            .shutdown_all(Instant::now(), Duration::from_secs(10))
+            .await;
+        return;
+    };
+
+    // ④ 详情：对象身份要回声，列必须带原始类型（属性面板与类型归一化都靠它）
+    let detail = driver
+        .meta_object_detail(&catalog, &schema, &array.name)
+        .await
+        .expect("meta.object_detail");
+    assert_eq!(detail.object.name, array.name, "详情要把对象身份回声回来");
+    assert!(!detail.columns.is_empty(), "表要说得出列（空表也有列）");
+    assert!(
+        detail.columns.iter().all(|c| !c.type_raw.is_empty()),
+        "每列都要有 type_raw（属性面板显示它、归一化类型由它推出）"
+    );
+    println!(
+        "  {} 有 {} 列（首列 {} {}）；索引 {:?}；行数估计 {:?}",
+        array.name,
+        detail.columns.len(),
+        detail.columns[0].name,
+        detail.columns[0].type_raw,
+        detail.indexes,
+        detail.row_count
+    );
+
+    // ⑤ 例程源码：有例程就问一句 —— `null` 是合法答案，报错不是
+    if let Some(routine) = objects.iter().find(|o| {
+        matches!(o.kind, MetaObjectKind::Procedure | MetaObjectKind::Function)
+    }) {
+        let source = driver
+            .meta_routine_source(&catalog, &schema, &routine.name)
+            .await
+            .expect("meta.routine_source");
+        println!(
+            "  例程 {} 的源码：{}",
+            routine.name,
+            if source.is_some() {
+                "拿得到"
+            } else {
+                "对端说没有（合法）"
+            }
+        );
+    }
+
+    let mut supervisor = supervisor;
+    supervisor
+        .shutdown_all(Instant::now(), Duration::from_secs(10))
+        .await;
+}
+
+/// ⑦ 靶子自己的开关也顺便验一下：`--ignore-eof` 得能被强杀掉（宿主的兜底防线）。
 ///
 /// 只在跑默认靶子时执行 —— 用户的 sidecar 不该有这种开关。
 #[tokio::test]
