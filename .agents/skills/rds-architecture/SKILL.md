@@ -45,6 +45,11 @@ shared ────────────► (gpui-kit / 第三方)
 
 M1 `project` / M2 `engine` / M3 `connection` / M4 `database` / M5 `scratchpad` / M6 `analytics_resource` / M7 `mock` / M8 `insight` / M9 `plugin`；工作台 `workbench`；设置 `settings`；运行时数据路径 `paths`。
 
+## 书写约定
+
+- 注释、文档、**提交信息**一律**简体中文**（提交信息按个人 `AGENTS.md` 的格式：祈使句、首行 ≤ 50 字、不加句号、正文 72 列换行）
+- 代码标识符 / 日志 / 错误串仍用英文；面向用户可见的文案用中文（英语仅作标识符与外部契约的键）
+
 ## 设计文档位置约定
 
 - 设计决策统一放 `docs/architecture/<主题>/`（layout / theme / settings / connection 等目录），crate 内不复制设计文档（只留 README 级入口指针）

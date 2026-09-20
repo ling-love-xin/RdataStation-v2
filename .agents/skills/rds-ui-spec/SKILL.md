@@ -41,7 +41,13 @@ div().border_b(ui::HAIRLINE)
 
 > 单位陷阱：`rems(x)` 的基准是**主题字号**（默认 16px，`rems(1.) = 16px`），与 Tailwind 方法名里的数字（`gap_1 = 4px`）是两套单位。不要把 px 值手写 `/ 4.` 后交给 `rems()`（会把尺寸放大 4 倍，项目内曾出现两处）。
 
-> 树/列表缩进统一用设计公式：`ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT`（= 0.5rem + 0.875rem × depth），不要各写各的倍率。
+> 树 / 列表缩进统一用设计公式：`ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT`（= 0.5rem + 0.875rem × depth），不要各写各的倍率。
+>
+> **行级共用原语在 `workbench_shell::tree`**（2026-09-20 起）：`active_bar(color)`（选中行左侧 2px 条，
+> 调用方行需 `relative()`）、`disclosure_slot()`（固定 `w_2p5` 槽，**槽宽是缩进算式的一部分**）、
+> `disclosure_icon` / `disclosure_glyph`（两种载体）、`indent_spacer(step, depth)` / `indent_rem(base, step, depth)`、
+> 以及行高预算 `RowHeight`（基础高 + 附加块）与 `row_sizes(n, rem, f)`（虚拟列表 `item_sizes`）。
+> 新增树 / 列表行请**先看这一层有没有**，不要在面板里再写一遍（导航与草稿箱此前各写了一份）。
 
 常用常量（倍率 → @16px 实际值 / Tailwind 对照）：
 
@@ -56,7 +62,7 @@ div().border_b(ui::HAIRLINE)
 | 树缩进 | `TREE_INDENT` / `TREE_BASE_PADDING` | 0.875 / 0.5 → 14/8 | — / `pl_2` |
 | 面板头 | `PANEL_HEADER_HEIGHT` | 2.25 → 36 | `h_9` |
 | 控件高 | `CONTROL_HEIGHT_MD` / `_SM` | 2.0 / 1.625 → 32/26 | `h_8` / `rems(1.625)` |
-| 图标 | `ICON_SIZE_SM` / `ICON_SIZE_MD` | 0.875 / 1.0 → 14/16 | `size_3p5` / `size_4` |
+| 图标 | `ICON_SIZE_XS` / `ICON_SIZE_SM` / `ICON_SIZE_MD` | 0.75 / 0.875 / 1.0 → 12/14/16 | `size_3` / `size_3p5` / `size_4` |
 | 间距 | `GAP_SM` / `GAP_MD` / `GAP_LG` | 0.25/0.5/0.75 → 4/8/12 | `gap_1` / `gap_2` / `gap_3` |
 | 固定描边 | `HAIRLINE` / `ACTIVITY_ACCENT_BAR` / `TREE_ACTIVE_BAR` | 1px / 2px / 2px | `h_px` / `w_0p5` / `w_0p5` |
 
@@ -82,7 +88,7 @@ div().border_b(ui::HAIRLINE)
 - **活动栏**：宽 3rem；单项 2.75×2.5rem；激活条 2px（左栏在左、右栏在右）
 - **Dock 边栏**：左 15rem / 右 17.5rem 起步（`set_dock_size`，用户可拖拽）
 - **状态栏**：品牌色 + 白字；左右各一个自绘「完全隐藏 / 恢复」开关
-- **树节点**：行高 1.5rem；缩进 = 0.5rem + 0.875rem × depth；激活条 2px；标题 `text_sm`
+- **树节点**：行高 1.5rem（数据源导航树按虚拟列表用 `NAV_ROW_*`：分组 24 / 连接 26 / 对象 22）；缩进 = 0.5rem + 0.875rem × depth；激活条 2px；标题 `text_sm`（导航树按密度用 `text_xs`）；**悬停不覆盖激活态**；类别靠形状（图标）而非颜色
 - **列表行**：行高 1.5rem；`list` / `list_hover` / `list_active`
 - **输入框 / 下拉框**：高 2rem（紧凑 1.625rem）；圆角 `theme.radius`；弹层 `popover` + 内距 0.5rem
 - **Tab 标签**：头高 2.25rem；内距 `GAP_LG` / `GAP_SM`
