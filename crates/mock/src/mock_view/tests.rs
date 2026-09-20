@@ -1430,6 +1430,84 @@ fn preview_header_click_requeries_through_the_panel(cx: &mut TestAppContext) {
     });
 }
 
+/// 字段区列搜索的匹配规则：列名或生成器标签任一命中就留下（子串、大小写不敏感）。
+#[test]
+fn column_filter_matches_name_or_generator_label() {
+    // 空词 = 不筛（去掉两边空白也算空）
+    assert!(super::column_matches("", "email", "邮箱"));
+    assert!(super::column_matches("  ", "email", "邮箱"));
+    // 列名子串；大小写不敏感
+    assert!(super::column_matches("mai", "email", "邮箱"));
+    assert!(super::column_matches("EMAIL", "email", "邮箱"));
+    // 生成器名也能搜（人常常记得「那列是邮箱」而不记得列名）
+    assert!(super::column_matches("邮箱", "contact", "邮箱"));
+    // 两边都不命中就筛掉
+    assert!(!super::column_matches("phone", "email", "邮箱"));
+}
+
+/// 字段区筛选：搜索词一变，要画的列就跟着变（空结果交给一句可读空态）。
+///
+/// 这条用例是**判别性**的：它读的就是渲染那份 `visible_columns`，
+/// 因此筛选逻辑与画出来的列表不可能是两份实现。
+#[gpui_kit::test]
+fn column_filter_narrows_the_field_list(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.add_column(
+            "email".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.add_column(
+            "nickname".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+    });
+    // 渲染一帧：筛选框是懒创建的（`InputState` 要 window）
+    draw(cx);
+
+    let visible = |cx: &mut VisualTestContext| -> Vec<String> {
+        cx.update(|_, cx| {
+            let panel_ref = panel.read(cx);
+            detail
+                .read(cx)
+                .visible_columns(panel_ref, cx)
+                .iter()
+                .map(|column| column.def.name.clone())
+                .collect()
+        })
+    };
+    assert_eq!(visible(cx), ["id", "email", "nickname"], "空词看不筛");
+
+    let filter = panel
+        .read_with(cx, |panel, _cx| panel.column_filter_input())
+        .expect("渲染一帧后筛选框应已创建");
+    let set = |cx: &mut VisualTestContext, text: &str| {
+        cx.update(|window, cx| filter.update(cx, |input, cx| input.set_value(text, window, cx)));
+    };
+
+    set(cx, "mail");
+    draw(cx);
+    assert_eq!(visible(cx), ["email"], "按列名子串筛");
+
+    set(cx, "EMAIL");
+    assert_eq!(visible(cx), ["email"], "大小写不敏感");
+
+    // 筛没了：不报错、不留空白（渲染一帧验证空态那条分支）
+    set(cx, "zzz-no-such-column");
+    draw(cx);
+    assert!(visible(cx).is_empty());
+
+    set(cx, "");
+    draw(cx);
+    assert_eq!(visible(cx).len(), 3, "清空后回到全部");
+}
+
 /// `Ctrl+Enter` 真按键（`key_context("mock-detail")`，键位在生产由 `crates/app` 注册）：
 /// 草稿 tab 上提交生成任务；结果表 tab 上什么都不做（D38：它是产物，要改回草稿改完再生成）。
 ///

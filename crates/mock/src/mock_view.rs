@@ -1275,6 +1275,20 @@ impl ListDelegate for GeneratorSearchDelegate {
     }
 }
 
+/// 字段区列搜索的匹配规则：列名或生成器标签任一命中就留下（大小写不敏感的子串）。
+///
+/// 为什么连生成器一起搜：改列时人常常记得的是「那列是邮箱」，而不是列名；
+/// 生成器标签又恰好是中文（「邮箱」而不是 `SafeEmail`）。
+/// 空词一律留下（不筛）。
+pub fn column_matches(query: &str, name: &str, generator_label: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    name.to_lowercase().contains(&query) || generator_label.to_lowercase().contains(&query)
+}
+
 // ==================== 配置面板（右 Dock） ====================
 
 /// Mock 配置面板（右 Dock 17.5rem）：目标 + 选项 + 列来源 + 生成 + 出口。
@@ -1287,6 +1301,10 @@ pub struct MockPanel {
     results: Vec<MockGenInfo>,
     /// 预览的「按列重排」（表头点击 / 右键菜单；每张表最多一份，见 [`PreviewSort`]）
     preview_sort: Option<PreviewSort>,
+    /// 字段区的列搜索框（懒创建：`InputState` 要 window；搜索词就存在它里，不另存一份）
+    column_filter: Option<Entity<InputState>>,
+    /// 搜索词变化时重画字段区的订阅（必须持有：丢了就自动退订）
+    column_filter_sub: Option<Subscription>,
     /// 当前选中的结果表下标（出口作用于它；越界视为 0）
     current: usize,
     /// 当前结果来自哪套场景模板（`None` = 单表生成；面板据此给一句来源说明）
@@ -1524,6 +1542,8 @@ impl MockPanel {
             next_id: 1,
             results: Vec::new(),
             preview_sort: None,
+            column_filter: None,
+            column_filter_sub: None,
             current: 0,
             scenario_source: None,
             landed: None,
@@ -1670,13 +1690,46 @@ impl MockPanel {
     }
 
     /// 只重读「导入结构」的连接候选（打开导入对话框前 / 连接清册变化时）。
-    ///
     /// 与 [`MockPanel::refresh_sources`] 分开的原因：连接候选从内存里的连接清册派生，
     /// 一次遍历就够，可以跟着连接的新建 / 编辑随时刷；而「既有分析表」那一份要开
     /// 项目分析库文件（真 I/O），只留给面板打开与切项目那一拍。
     pub fn refresh_connection_sources(&mut self, cx: &mut Context<Self>) {
         self.sources = self.host.schema_sources();
         cx.notify();
+    }
+
+    /// 字段区的列搜索框（懒创建；`None` = 这张 tab 还没渲染过）。
+    ///
+    /// `pub` 而不是 `pub(crate)`：面板的只读访问器一律公开（宿主 / 详情 tab / 测试都从这儿读，
+    /// 与 `scenario_templates()` / `job_kind()` 同口径），不为了少一个 `pub` 让测试去摸私有字段。
+    pub fn column_filter_input(&self) -> Option<Entity<InputState>> {
+        self.column_filter.clone()
+    }
+
+    /// 字段区的列搜索词（空 = 不筛）。搜索词就存在输入框实体里，不另存一份。
+    pub(crate) fn column_filter_query(&self, cx: &App) -> String {
+        self.column_filter
+            .as_ref()
+            .map(|input| input.read(cx).value().trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// 字段区表头行里的列搜索框（靠右，固定宽）。
+    ///
+    /// 搜索框空着也不隐藏：一个偶尔冒出来的控件比一个一直在那儿的小输入框更让人意外。
+    pub(crate) fn render_column_filter(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        self.ensure_inputs(window, cx);
+        match self.column_filter.clone() {
+            Some(input) => div()
+                .flex_none()
+                .w(rems(ui::COLUMN_FILTER_WIDTH))
+                .child(Input::new(&input)),
+            None => div().flex_none().w(rems(ui::COLUMN_FILTER_WIDTH)),
+        }
     }
 
     // ==================== 预览的按列重排（表头 / 右键菜单） ====================
@@ -3484,6 +3537,18 @@ impl MockPanel {
         if self.seed_input.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
             self.seed_input = Some(state);
+        }
+        if self.column_filter.is_none() {
+            let state =
+                cx.new(|cx| InputState::new(window, cx).placeholder("筛选列（列名 / 生成器）"));
+            // 搜索词一变就重画：输入框自己会重绘，但列卡片是面板画的
+            self.column_filter_sub =
+                Some(cx.subscribe(&state, |_panel, _input, ev: &InputEvent, cx| {
+                    if matches!(ev, InputEvent::Change) {
+                        cx.notify();
+                    }
+                }));
+            self.column_filter = Some(state);
         }
     }
 
@@ -5804,6 +5869,27 @@ impl MockDetailView {
     }
 
     /// 字段清单（列 + 生成器 + 参数摘要 + 编辑 / 智能 / 删除）。
+    /// 字段区：当前搜索词下要画的列（保序；空词 = 全部）。搜索词归面板（单一权威）。
+    ///
+    /// 匹配规则在 [`column_matches`]（列名或生成器标签，子串、大小写不敏感）：
+    /// 「搜索词一变就重画」的订阅在面板那边（`ensure_inputs`）。
+    fn visible_columns(&self, panel: &MockPanel, cx: &App) -> Vec<MockColumnSpec> {
+        let query = panel.column_filter_query(cx);
+        panel
+            .draft()
+            .columns
+            .iter()
+            .filter(|column| {
+                column_matches(
+                    &query,
+                    &column.def.name,
+                    generator_catalog::spec_of(&column.def.generator).label,
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
     fn render_fields(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
@@ -5811,12 +5897,27 @@ impl MockDetailView {
         let success = cx.theme().colors.success;
         let info = cx.theme().colors.info;
 
-        let columns = self.panel.read(cx).draft().columns.clone();
-        if columns.is_empty() {
+        // 先看「这张表有没有列」再套筛选：空表与「筛没了」是两句不同的话
+        let has_any = {
+            let panel = self.panel.read(cx);
+            !panel.draft().columns.is_empty()
+        };
+        if !has_any {
             return div()
                 .text_xs()
                 .text_color(muted)
                 .child("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。")
+                .into_any_element();
+        }
+        let columns = {
+            let panel = self.panel.read(cx);
+            self.visible_columns(panel, cx)
+        };
+        if columns.is_empty() {
+            return div()
+                .text_xs()
+                .text_color(muted)
+                .child("没有匹配的列——清空「筛选列」看全部（匹配列名与生成器名）。")
                 .into_any_element();
         }
 
@@ -6093,6 +6194,7 @@ impl Render for MockDetailView {
             scenario_source,
             relation_note,
             draft_columns,
+            draft_columns_shown,
             result_columns,
             dropped_by_project_switch,
             preview_sort_label,
@@ -6127,6 +6229,22 @@ impl Render for MockDetailView {
                 panel.scenario_source().map(|s| s.to_string()),
                 relation_note,
                 panel.draft().columns.len(),
+                // 字段区的筛选计数：搜索词空时两者相等（表头就不提「已筛选」）
+                {
+                    let query = panel.column_filter_query(cx);
+                    panel
+                        .draft()
+                        .columns
+                        .iter()
+                        .filter(|column| {
+                            column_matches(
+                                &query,
+                                &column.def.name,
+                                generator_catalog::spec_of(&column.def.generator).label,
+                            )
+                        })
+                        .count()
+                },
                 result_columns,
                 panel.results_dropped_by_project_switch(),
                 shown.and_then(|(_, sort)| sort).map(|sort| sort.label()),
@@ -6228,13 +6346,16 @@ impl Render for MockDetailView {
                         .items_center()
                         .gap_2()
                         .w_full()
+                        .child(div().flex_1().min_w_0().text_xs().text_color(muted).child(
+                            if draft_columns_shown == draft_columns {
+                                format!("列（{draft_columns}）")
+                            } else {
+                                format!("列（{draft_columns_shown} / {draft_columns}）· 已筛选")
+                            },
+                        ))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(format!("列（{draft_columns}）")),
+                            self.panel
+                                .update(cx, |panel, cx| panel.render_column_filter(window, cx)),
                         )
                         .child(
                             self.panel
