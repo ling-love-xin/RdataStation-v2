@@ -1275,18 +1275,38 @@ impl ListDelegate for GeneratorSearchDelegate {
     }
 }
 
-/// 字段区列搜索的匹配规则：列名或生成器标签任一命中就留下（大小写不敏感的子串）。
+/// 字段区列搜索的匹配规则：**每个词**都要在列名 / 生成器名 / 类型名 / 置信度里至少命中一个
+/// （子串、大小写不敏感）；空查询留下全部。
 ///
-/// 为什么连生成器一起搜：改列时人常常记得的是「那列是邮箱」，而不是列名；
-/// 生成器标签又恰好是中文（「邮箱」而不是 `SafeEmail`）。
-/// 空词一律留下（不筛）。
-pub fn column_matches(query: &str, name: &str, generator_label: &str) -> bool {
+/// 四个靶子的理由：
+/// - 列名：最常见的用法；
+/// - 生成器名：人常常记得的是「那列是邮箱」，而不是列名（生成器标签是中文）；
+/// - 类型名：想找「所有时间列」「所有整数列」时看的就是卡片上那个类型（`column_type_label`
+///   给的是 DuckDB 类型名：`INTEGER` / `VARCHAR` / `TIMESTAMP` …）；
+/// - 置信度：卡片上就写着 `high` / `low` / `manual`——要复核「按类型猜的」那些列时搜 `low`。
+///
+/// 多词是 **AND**（与「搜索生成器」对话框同一约定）：`id INTEGER` 只留两条都中的列。
+pub fn column_matches(
+    query: &str,
+    name: &str,
+    generator_label: &str,
+    type_label: &str,
+    confidence: &str,
+) -> bool {
     let query = query.trim();
     if query.is_empty() {
         return true;
     }
-    let query = query.to_lowercase();
-    name.to_lowercase().contains(&query) || generator_label.to_lowercase().contains(&query)
+    let haystacks = [
+        name.to_lowercase(),
+        generator_label.to_lowercase(),
+        type_label.to_lowercase(),
+        confidence.to_lowercase(),
+    ];
+    query.split_whitespace().all(|term| {
+        let term = term.to_lowercase();
+        haystacks.iter().any(|text| text.contains(&term))
+    })
 }
 
 // ==================== 配置面板（右 Dock） ====================
@@ -5884,6 +5904,8 @@ impl MockDetailView {
                     &query,
                     &column.def.name,
                     generator_catalog::spec_of(&column.def.generator).label,
+                    &column_type_label(&column.def.data_type),
+                    &column.confidence,
                 )
             })
             .cloned()
@@ -6229,22 +6251,8 @@ impl Render for MockDetailView {
                 panel.scenario_source().map(|s| s.to_string()),
                 relation_note,
                 panel.draft().columns.len(),
-                // 字段区的筛选计数：搜索词空时两者相等（表头就不提「已筛选」）
-                {
-                    let query = panel.column_filter_query(cx);
-                    panel
-                        .draft()
-                        .columns
-                        .iter()
-                        .filter(|column| {
-                            column_matches(
-                                &query,
-                                &column.def.name,
-                                generator_catalog::spec_of(&column.def.generator).label,
-                            )
-                        })
-                        .count()
-                },
+                // 字段区的筛选计数与渲染读同一处（`visible_columns`），不另写一份口径
+                self.visible_columns(panel, cx).len(),
                 result_columns,
                 panel.results_dropped_by_project_switch(),
                 shown.and_then(|(_, sort)| sort).map(|sort| sort.label()),
@@ -6589,6 +6597,17 @@ impl PreviewTableDelegate {
         let col = self.context_col(row_ix)?;
         self.columns.get(col).cloned()
     }
+
+    /// 这一数据列在**取样窗口内**的全部取值（每行一个，换行分隔）。
+    ///
+    /// 只给取样里的值、不重查整列：与「预览是取样」同一口径；而一张十万行的表整列
+    /// 可能是十万个值，粘到哪里都不好用（真要全列，落库 / 导出后去查那张表）。
+    fn column_text(&self, index: usize) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter_map(|row| row.get(index).cloned())
+            .collect()
+    }
 }
 
 impl TableDelegate for PreviewTableDelegate {
@@ -6709,7 +6728,7 @@ impl TableDelegate for PreviewTableDelegate {
         });
     }
 
-    /// 预览的右键菜单：这一格能做的事——按这一列重排取样 / 复制这一格 / 复制整行（TSV）。
+    /// 预览的右键菜单：这一格能做的事——按这一列重排取样 / 复制（这一格 · 这一列 · 整行）。
     ///
     /// 排序进菜单的理由：右键落点就是「这一列」，比表头那个小箭头好找。
     /// 它走的是与表头点击同一条路：**重查**临时表取「按该列排序后的前 N 行」
@@ -6760,6 +6779,17 @@ impl TableDelegate for PreviewTableDelegate {
                     app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(value.clone()));
                 }),
             );
+        }
+        // 整列：取样窗口内的全部取值（一行一个）——粘进表格就是一列
+        if let Some(index) = self.context_col(row_ix) {
+            let values = self.column_text(index);
+            if !values.is_empty() {
+                let label = format!("复制此列（{} 个取值）", values.len());
+                let text = values.join("\n");
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _window, app| {
+                    app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
+                }));
+            }
         }
         let row_text = self.row_text(row_ix);
         if !row_text.is_empty() {

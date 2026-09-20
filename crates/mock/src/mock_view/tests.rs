@@ -1131,6 +1131,13 @@ fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_col
     assert_eq!(delegate.context_column(0).as_deref(), Some("id"));
     // 整行 TSV（拷进表格 / SQL 能直接分列）
     assert_eq!(delegate.row_text(0), "1\t甲");
+    // 整列：取样窗口内的取值，一行一个（含行号槽与列下标的对应关系）
+    assert_eq!(delegate.column_text(0), ["1", "2"]);
+    assert_eq!(delegate.column_text(1), ["甲", "乙"]);
+    assert!(
+        delegate.column_text(9).is_empty(),
+        "列下标越界给空（不 panic）"
+    );
     // 换一份取样：清掉记录的位置（旧行号不再指向同一个值）
     assert!(delegate.set_preview(super::PreviewSnapshot {
         table: "mock_data".to_string(),
@@ -1430,19 +1437,62 @@ fn preview_header_click_requeries_through_the_panel(cx: &mut TestAppContext) {
     });
 }
 
-/// 字段区列搜索的匹配规则：列名或生成器标签任一命中就留下（子串、大小写不敏感）。
+/// 字段区列搜索的匹配规则：列名 / 生成器名 / 类型名 / 置信度任一命中（子串、大小写不敏感），
+/// 多词是 AND（与「搜索生成器」同一约定）。
 #[test]
-fn column_filter_matches_name_or_generator_label() {
+fn column_filter_matches_name_generator_type_or_confidence() {
     // 空词 = 不筛（去掉两边空白也算空）
-    assert!(super::column_matches("", "email", "邮箱"));
-    assert!(super::column_matches("  ", "email", "邮箱"));
+    assert!(super::column_matches(
+        "", "email", "邮箱", "VARCHAR", "high"
+    ));
+    assert!(super::column_matches(
+        "  ", "email", "邮箱", "VARCHAR", "high"
+    ));
     // 列名子串；大小写不敏感
-    assert!(super::column_matches("mai", "email", "邮箱"));
-    assert!(super::column_matches("EMAIL", "email", "邮箱"));
+    assert!(super::column_matches(
+        "mai", "email", "邮箱", "VARCHAR", "high"
+    ));
+    assert!(super::column_matches(
+        "EMAIL", "email", "邮箱", "VARCHAR", "high"
+    ));
     // 生成器名也能搜（人常常记得「那列是邮箱」而不记得列名）
-    assert!(super::column_matches("邮箱", "contact", "邮箱"));
-    // 两边都不命中就筛掉
-    assert!(!super::column_matches("phone", "email", "邮箱"));
+    assert!(super::column_matches(
+        "邮箱", "contact", "邮箱", "VARCHAR", "high"
+    ));
+    // 类型名：卡片上那个 DuckDB 类型（找「所有时间列」）
+    assert!(super::column_matches(
+        "timestamp",
+        "created_at",
+        "日期时间",
+        "TIMESTAMP",
+        "high"
+    ));
+    // 置信度：卡片上就写着 high / low / manual（复核「按类型猜的」搜 low）
+    assert!(super::column_matches(
+        "low", "amount", "金额", "DECIMAL", "low"
+    ));
+    assert!(super::column_matches(
+        "manual", "amount", "金额", "DECIMAL", "manual"
+    ));
+    // 多词 = AND（每个词各要命中一个靶子）
+    assert!(super::column_matches(
+        "mail varchar",
+        "email",
+        "邮箱",
+        "VARCHAR",
+        "high"
+    ));
+    assert!(!super::column_matches(
+        "mail integer",
+        "email",
+        "邮箱",
+        "VARCHAR",
+        "high"
+    ));
+    // 都不命中就筛掉
+    assert!(!super::column_matches(
+        "phone", "email", "邮箱", "VARCHAR", "high"
+    ));
 }
 
 /// 字段区筛选：搜索词一变，要画的列就跟着变（空结果交给一句可读空态）。
@@ -1497,6 +1547,20 @@ fn column_filter_narrows_the_field_list(cx: &mut TestAppContext) {
 
     set(cx, "EMAIL");
     assert_eq!(visible(cx), ["email"], "大小写不敏感");
+
+    set(cx, "INTEGER");
+    draw(cx);
+    assert_eq!(visible(cx), ["id"], "按类型名筛（卡片上那个 DuckDB 类型）");
+
+    set(cx, "mail VARCHAR");
+    assert_eq!(
+        visible(cx),
+        ["email"],
+        "多词是 AND：一个词命中列名、一个命中类型"
+    );
+
+    set(cx, "mail INTEGER");
+    assert!(visible(cx).is_empty(), "两个词要各命中一个靶子");
 
     // 筛没了：不报错、不留空白（渲染一帧验证空态那条分支）
     set(cx, "zzz-no-such-column");
