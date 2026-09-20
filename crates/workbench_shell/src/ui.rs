@@ -105,16 +105,27 @@ pub const TREE_BASE_PADDING: f32 = 0.5;
 /// 用法已收窄（2026-09-20）：它只是 `nav_jobs::PAGE_SIZE`（每次拉多少条），
 /// **不再**是「屏上允许出现多少条」的渲染窗口——那个半套（`page_limit`）已随虚拟列表退场。
 pub const NAV_FOLDER_PAGE_SIZE: usize = 200;
-/// 导航搜索结果区最多渲染多少条命中（超出只提示“缩小搜索词”）。
+/// 导航搜索结果最多**渲染**多少条命中（超出只在结果区标题下提示“缩小搜索词”）。
+///
+/// 它不再是「一个 128px 小窗里塞多少条」（`NAV_SEARCH_SECTION_MAX` 已随结果区并入
+/// 虚拟列表而退场）：命中行与其他行共用同一片滚动区，上限因此只是「DOM 元素数」的护栏。
 pub const NAV_SEARCH_MAX_ROWS: usize = 100;
 /// 连接行徽标尺寸（1.125rem ≈ 18px；颜色=状态 / 形状=类型）。
 pub const NAV_BADGE_SIZE: f32 = 1.125;
+/// 「连接中」徽标的呼吸周期（毫秒；原型设计 §2.3 的 `info` + 脉冲）。
+///
+/// 非尺寸常量，是**动画节奏**：1.5s 一次完整呼吸——慢到不抓眼睛，快到能看出「在动」。
+/// 只有暂态（建连 / 预热中）才挂这个动画；其余状态不渲染动画元素（见 `render_connection_row`）。
+pub const NAV_BADGE_PULSE_MS: u64 = 1500;
+/// 连接行尾操作按钮尺寸（`+` 加标签 / `✎` 编辑；1.25rem = 20px）。
+///
+/// 为何不是 16px：可点区下限按 20px 取——宿主行高只有 26px（`NAV_ROW_CONNECTION`），
+/// 再大就吃掉名称列；这两个按钮只在 hover / 选中时显，指针此时已在行内。
+pub const NAV_ROW_ACTION_SIZE: f32 = 1.25;
 /// 连接行归属域列宽（短码模式；2.4rem ≈ 38px）。
 pub const NAV_SCOPE_COL_SHORT: f32 = 2.4;
 /// 连接行归属域列宽（文字模式；3.4rem ≈ 54px）。
 pub const NAV_SCOPE_COL_TEXT: f32 = 3.4;
-/// 连接行尾「加标签」按钮尺寸（1rem = 16px）。
-pub const NAV_ADD_TAG_SIZE: f32 = 1.0;
 /// 分组头行高（1.5rem = 24px）。
 pub const NAV_ROW_GROUP: f32 = 1.5;
 /// 连接行高（1.625rem = 26px；与旧的 `h(rems(1.625))` 同值）。
@@ -132,10 +143,6 @@ pub const NAV_EDITOR_TAG: f32 = 3.5;
 pub const NAV_EDITOR_COPY: f32 = 4.5;
 /// 行内归组编辑器块高（5.5rem = 88px；分组多时内部滚动）。
 pub const NAV_EDITOR_GROUP: f32 = 5.5;
-/// 搜索结果区最大高度（8rem = 128px；超出内部滚动）。
-///
-/// 结果区在虚拟列表**之上**，不能随命中数无限长——否则树区被挤成一条缝。
-pub const NAV_SEARCH_SECTION_MAX: f32 = 8.0;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 
@@ -206,15 +213,19 @@ pub const SCRATCHPAD_ROW_CHIPS: f32 = 1.625;
 pub const DIALOG_FORM_LABEL_WIDTH: f32 = 4.25;
 /// 对话框行高（1.75rem ≈ 28px：暂存条目 / 分组标题 / 表单行）
 pub const DIALOG_ROW_HEIGHT: f32 = 1.75;
-/// 对话框「两列行」高度（32.5rem = 520px；左栏类型树 / 右栏 Tab 内容区共用）。
+/// 对话框「两列行」高度（32.5rem = 520px；左栏类型树 / 右列共用）。
 ///
-/// 两列**等高且行高确定**：夹住行高后，切 Tab / 加草稿 / 目录变化都不会改变对话框高度
-/// （设计 §2「布局恒定」）。取值按本工程侧栏自然高（搜索 + 暂存 7.5rem + 标签行 +
+/// 这是**设计基准**：两列同处一行、行高是唯一尺寸来源，切 Tab / 加草稿 / 目录变化都不改变
+/// 对话框高度（设计 §2「布局恒定」）。取值按本工程侧栏自然高（搜索 + 暂存 7.5rem + 标签行 +
 /// 类型树全部可见）取整；类型目录增长时类型树内部滚动，不再撑高对话框。
-pub const DIALOG_BODY_HEIGHT: f32 = 32.5;
-/// Tab 内容区高度（20.5rem ≈ 328px；**保留作为设计参考值与其它面板的尺寸来源**）。
 ///
-/// 注：连接对话框两列等高改造后，右列实际高度由 [`DIALOG_BODY_HEIGHT`]（两列行高）决定，
+/// 实际行高还要再按窗口可用高度夹住（矮窗口 / 高缩放不把 footer 顶出屏幕）——
+/// 见 `connection_dialog::helpers::dialog_row_height`（决策 #105）。
+pub const DIALOG_BODY_HEIGHT: f32 = 32.5;
+/// Tab 内容区历史高度（20.5rem ≈ 328px；**保留作为设计参考值与其它面板的尺寸来源**）。
+///
+/// 注：右列自上而下是 Header → Tab 条 → **Tab 内容区（`flex_1 + min_h_0` 吃剩余高度）** → 结果行，
+/// 内容区不再有自己的固定高（写死过 32.5rem，导致右列越出行高 168px 被裁，见决策 #101）；
 /// 本常量在该对话框内不再引用（`insight` 的对比视图仍在用）。
 pub const DIALOG_TAB_BODY_HEIGHT: f32 = 20.5;
 /// 暂存列表固定高度（7.5rem = 120px；超出内部滚动）
