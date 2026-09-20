@@ -503,6 +503,12 @@ struct Recorder {
     pretend_idle: Cell<bool>,
     /// 项目根（`None` = 未打开项目：面板应给出可读原因而不是空列表）
     project_root: RefCell<Option<std::path::PathBuf>>,
+    /// 预览按列重排的请求：(临时表, 列, 是否降序, limit)
+    ordered: RefCell<Vec<(String, String, bool, usize)>>,
+    /// 内存库忙（模拟有任务在跑）：`preview_ordered` 回 `Ok(None)`
+    ordered_busy: Cell<bool>,
+    /// `preview_ordered` 的失败原因（非空时回 `Err`）
+    ordered_error: RefCell<Option<String>>,
 }
 
 fn test_column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
@@ -752,6 +758,39 @@ impl MockHost for TestHost {
             test_column("id", GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
             test_column("email", GeneratorConfig::SafeEmail),
         ])
+    }
+
+    /// 预览按列重排：记下请求，再按开关回「忙 / 失败 / 一份可辨认的排序取样」。
+    ///
+    /// 回的列只有被排的那一列，且值里带列名与方向（`id:desc:1`）：断言时能看出
+    /// 「这份数据是哪次请求的产物」，也不会与生成时的取样碰巧一样。
+    fn preview_ordered(
+        &self,
+        temp_table: &str,
+        column: &str,
+        descending: bool,
+        limit: usize,
+    ) -> Result<Option<MockPreview>, String> {
+        self.rec.ordered.borrow_mut().push((
+            temp_table.to_string(),
+            column.to_string(),
+            descending,
+            limit,
+        ));
+        if let Some(err) = self.rec.ordered_error.borrow().clone() {
+            return Err(err);
+        }
+        if self.rec.ordered_busy.get() {
+            return Ok(None);
+        }
+        let dir = if descending { "desc" } else { "asc" };
+        Ok(Some(MockPreview {
+            columns: vec![column.to_string()],
+            rows: vec![
+                vec![format!("{column}:{dir}:1")],
+                vec![format!("{column}:{dir}:2")],
+            ],
+        }))
     }
 
     fn export_dir(&self) -> String {
@@ -1067,11 +1106,14 @@ fn status_chip_text_follows_the_job_phase() {
 #[test]
 fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_column() {
     let mut delegate = super::PreviewTableDelegate {
+        panel: gpui_kit::WeakEntity::new_invalid(),
+        table: "mock_data".to_string(),
         columns: vec!["id".to_string(), "name".to_string()],
         rows: vec![
             vec!["1".to_string(), "甲".to_string()],
             vec!["2".to_string(), "乙".to_string()],
         ],
+        sort: None,
         context_cell: None,
     };
 
@@ -1080,16 +1122,60 @@ fn preview_context_text_prefers_the_clicked_cell_and_falls_back_to_the_first_col
     // 记了第 2 数据列：给那一格
     delegate.context_cell = Some((0, 2));
     assert_eq!(delegate.context_text(0).as_deref(), Some("甲"));
+    assert_eq!(delegate.context_column(0).as_deref(), Some("name"));
     // 记的行与问的行不一致（位置可能已过期）：回退
     assert_eq!(delegate.context_text(1).as_deref(), Some("2"));
     // 行号槽不当数据（记成 0 列也走回退）
     delegate.context_cell = Some((0, 0));
     assert_eq!(delegate.context_text(0).as_deref(), Some("1"));
+    assert_eq!(delegate.context_column(0).as_deref(), Some("id"));
     // 整行 TSV（拷进表格 / SQL 能直接分列）
     assert_eq!(delegate.row_text(0), "1\t甲");
     // 换一份取样：清掉记录的位置（旧行号不再指向同一个值）
-    assert!(delegate.set_preview(vec!["id".to_string()], vec![vec!["9".to_string()]]));
+    assert!(delegate.set_preview(super::PreviewSnapshot {
+        table: "mock_data".to_string(),
+        columns: vec!["id".to_string()],
+        rows: vec![vec!["9".to_string()]],
+        sort: None,
+    }));
     assert!(delegate.context_cell.is_none());
+}
+
+/// 排序是快照的一部分：只有**生效中的排序**变了也要重建表头（表头箭头就画在它上）。
+///
+/// 这条用例是**判别性**的：若 `set_preview` 只比行与列，点列头后箭头就会与实际数据脱钩
+/// （面板拒绝重查时更明显：数据没变，只有排序要退回去）。
+#[test]
+fn preview_snapshot_change_includes_the_effective_sort() {
+    let snapshot = |sort: Option<(String, bool)>| super::PreviewSnapshot {
+        table: "mock_data".to_string(),
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![vec!["1".to_string(), "甲".to_string()]],
+        sort,
+    };
+    let mut delegate =
+        super::PreviewTableDelegate::new(gpui_kit::WeakEntity::new_invalid(), snapshot(None));
+    // 行 / 列都没变、只有排序变：仍要报「变了」（否则表头箭头不会重建）
+    assert!(delegate.set_preview(snapshot(Some(("name".to_string(), true)))));
+    assert_eq!(
+        delegate.sort,
+        Some((1, gpui_kit::component::table::ColumnSort::Descending))
+    );
+    // 同一份排序再来一次：没变
+    assert!(!delegate.set_preview(snapshot(Some(("name".to_string(), true)))));
+    // 方向翻了：变了
+    assert!(delegate.set_preview(snapshot(Some(("name".to_string(), false)))));
+    assert_eq!(
+        delegate.sort,
+        Some((1, gpui_kit::component::table::ColumnSort::Ascending))
+    );
+    // 列名对不上（列被换了）：当没有排序，而不是去查一个不存在的列
+    assert!(delegate.set_preview(snapshot(Some(("gone".to_string(), true)))));
+    assert!(delegate.sort.is_none());
+    // 取消排序：从「有」回到「没有」也是变了
+    assert!(delegate.set_preview(snapshot(Some(("name".to_string(), true)))));
+    assert!(delegate.set_preview(snapshot(None)));
+    assert!(delegate.sort.is_none());
 }
 
 /// 切项目时旧表 tab 不自动关（D35），但它们得说清为什么没结果：
@@ -1164,6 +1250,183 @@ fn preview_table_dumps_the_sample_through_the_component_table(cx: &mut TestAppCo
         assert_eq!(rows.len(), 2, "取样行数（测试宿主固定回两行）");
         assert_eq!(rows[0], ["1", "1"], "行号 + 值");
         assert_eq!(rows[1], ["2", "2"]);
+    });
+}
+
+/// 预览的按列重排：取样换成**重查来的**排序结果；取消 / 取样被换掉后自动回到生成顺序。
+///
+/// 这条用例是**判别性**的：面板若就地重排取样窗口，`ordered` 里就看不到请求；
+/// 若把排序当成与结果无关的独立状态，取样换掉后它还会继续生效。
+#[gpui_kit::test]
+fn preview_sort_requeries_and_falls_back_when_the_sample_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    // 草稿默认表名（假宿主按草稿名回临时表名 `temp_mock_{表}`）
+    let table = panel.read_with(cx, |panel, _cx| panel.draft().table_name.clone());
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("刚生成过，有结果");
+        assert!(sort.is_none(), "没点过列头就没有排序");
+        assert_eq!(preview.rows.len(), 2, "假宿主固定回两行");
+    });
+
+    // 点列头（降序）：面板把「临时表 + 列 + 方向 + 取几行」交给宿主重查，取样换成重查来的
+    panel.update(cx, |panel, cx| {
+        panel.sort_preview(&table, "id", Some(true), cx)
+    });
+    assert_eq!(
+        rec.ordered.borrow().as_slice(),
+        [(
+            format!("temp_mock_{table}"),
+            "id".to_string(),
+            true,
+            super::PREVIEW_ROWS
+        )],
+        "重查的参数：临时表 + 列 + 方向 + 取几行"
+    );
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        let sort = sort.expect("排序应已生效");
+        assert_eq!(sort.column, "id");
+        assert!(sort.descending);
+        assert_eq!(sort.label(), "按 id 降序");
+        assert_eq!(preview.rows[0], vec!["id:desc:1".to_string()]);
+        assert!(panel.error().is_none(), "成功时不该留错误文案");
+    });
+
+    // 取消排序（表头点第三下 / 菜单里的「取消排序」）：回到生成时的取样，且不再重查
+    panel.update(cx, |panel, cx| panel.sort_preview(&table, "id", None, cx));
+    assert_eq!(rec.ordered.borrow().len(), 1, "取消是纯状态，不该再查一次");
+    panel.update(cx, |panel, _cx| {
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        assert!(sort.is_none());
+        assert_eq!(preview.rows[0], vec!["1".to_string()], "回到生成顺序");
+    });
+
+    // 内存库忙（有任务在跑）：只写一句可读原因，取样保持原样
+    rec.ordered_busy.set(true);
+    panel.update(cx, |panel, cx| {
+        panel.sort_preview(&table, "id", Some(false), cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.preview_for(&table).expect("有结果").1.is_none(),
+            "忙的时候不该装作排好了"
+        );
+        assert!(
+            panel.error().is_some_and(|e| e.contains("内存库")),
+            "要给一句能看懂的原因：{:?}",
+            panel.error()
+        );
+        assert_eq!(panel.preview_for(&table).expect("有结果").0.rows.len(), 2);
+    });
+    rec.ordered_busy.set(false);
+
+    // 重查失败（列不存在等）：同样不动取样，原因原样摆出来
+    *rec.ordered_error.borrow_mut() = Some("按「id」排序取样失败：no such column".to_string());
+    panel.update(cx, |panel, cx| {
+        panel.sort_preview(&table, "id", Some(false), cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.preview_for(&table).expect("有结果").1.is_none());
+        assert!(panel.error().is_some_and(|e| e.contains("排序取样失败")));
+    });
+    rec.ordered_error.borrow_mut().take();
+
+    // 取样被换掉（相当于重新生成出不同的数据）：排序自动失效，不需要谁记得来清
+    panel.update(cx, |panel, cx| {
+        panel.sort_preview(&table, "id", Some(true), cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.preview_for(&table).expect("有结果").1.is_some());
+        panel.results[0].preview.rows = vec![vec!["9".to_string()]];
+        let (preview, sort) = panel.preview_for(&table).expect("有结果");
+        assert!(
+            sort.is_none(),
+            "取样换了，旧排序不能再生效（那是上一份数据的排序）"
+        );
+        assert_eq!(
+            preview.rows,
+            vec![vec!["9".to_string()]],
+            "回到当前取样的原样"
+        );
+    });
+    // 切项目（结果全没）：排序一并作废
+    panel.update(cx, |panel, _cx| {
+        panel.results[0].preview = MockPreview::default();
+        panel.preview_sort = None;
+    });
+    panel.update(cx, |panel, cx| panel.forget_generated(1, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.preview_sort.is_none());
+        assert!(panel.preview_for(&table).is_none(), "结果没了就没有预览");
+    });
+}
+
+/// 表头点一下 = 让面板重查（delegate 只转发），行号槽不参与排序；
+/// 面板算完会把生效中的排序回推，表头箭头与表格内容跟着一起变。
+///
+/// 这条用例是**判别性**的：它从组件库的 `TableState` 里真的调 `perform_sort`——
+/// delegate 的转发 / `column` 的排序标记 / 快照回推任一接错都会挂。
+#[gpui_kit::test]
+fn preview_header_click_requeries_through_the_panel(cx: &mut TestAppContext) {
+    use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
+
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    // 渲染一帧：预览表是懒创建的（`TableState::new` 需要 window）
+    draw(cx);
+    let table = cx
+        .update(|_, cx| detail.read(cx).preview_table.clone())
+        .expect("渲染后预览表应已创建");
+
+    // 行号槽（第 0 列）：`Column` 没开 sortable，delegate 也不该发请求
+    cx.update(|window, cx| {
+        table.update(cx, |state, cx| {
+            state
+                .delegate_mut()
+                .perform_sort(0, ColumnSort::Descending, window, cx);
+        });
+    });
+    assert!(rec.ordered.borrow().is_empty(), "行号槽不排序");
+
+    // 第 1 列（id）：转成一次面板重查
+    cx.update(|window, cx| {
+        table.update(cx, |state, cx| {
+            state
+                .delegate_mut()
+                .perform_sort(1, ColumnSort::Descending, window, cx);
+        });
+    });
+    assert_eq!(rec.ordered.borrow().len(), 1, "数据列点一次 = 一次重查");
+    assert_eq!(rec.ordered.borrow()[0].1, "id");
+
+    // 面板算完经观察者把快照推回来：箭头画在生效中的那一列，内容是重查来的那份
+    cx.update(|_, cx| {
+        let state = table.read(cx);
+        assert_eq!(
+            state.delegate().sort,
+            Some((0, ColumnSort::Descending)),
+            "生效中的排序列要让表头画出来"
+        );
+        let (headers, rows) = state.dump(cx);
+        assert_eq!(headers, ["#", "id"]);
+        assert_eq!(rows[0], ["1", "id:desc:1"], "显示的是重查来的取样");
+        assert_eq!(rows[1], ["2", "id:desc:2"]);
     });
 }
 

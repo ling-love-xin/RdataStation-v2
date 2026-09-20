@@ -3,7 +3,7 @@ use sqlglot_rust::ast::{
     InsertSource, InsertStatement, QuoteStyle, Statement, TableRef,
 };
 use sqlglot_rust::builder::{select, select_all};
-use sqlglot_rust::{generate, Dialect};
+use sqlglot_rust::{Dialect, generate};
 
 use super::engine::{AlterOperation, ColumnDefInfo, SqlDialect};
 
@@ -291,6 +291,28 @@ pub fn build_select(table: &str, columns: &[&str], limit: Option<i64>) -> String
     generate(&builder.build(), Dialect::DuckDb)
 }
 
+/// `SELECT * FROM t ORDER BY "col" ASC|DESC LIMIT n`。
+///
+/// 列名按**标识符**处理（加双引号、内嵌引号翻倍），不走表达式解析：
+/// 预览的列名来自源库 / 用户输入，含空格、中文或以数字开头时，
+/// 当表达式解析会报错或换掉语义（`select(columns)` 那条路就是这样）。
+pub fn build_select_ordered(
+    table: &str,
+    column: &str,
+    descending: bool,
+    limit: Option<i64>,
+) -> String {
+    let direction = if descending { "DESC" } else { "ASC" };
+    let quoted = format!("\"{}\"", column.replace('"', "\"\""));
+    let mut builder = select_all()
+        .from(table)
+        .add_order_by(format!("{quoted} {direction}").as_str());
+    if let Some(n) = limit {
+        builder = builder.limit(n);
+    }
+    generate(&builder.build(), Dialect::DuckDb)
+}
+
 pub fn build_alter_table(table: &str, operations: &[AlterOperation]) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -365,6 +387,23 @@ mod tests {
                 &[vec!["1".to_string(), "Alice".to_string()]]
             ),
             "INSERT INTO \"users\" (id, name) VALUES ('1', 'Alice')"
+        );
+    }
+
+    /// 按列重排列的取值语句：列名必须当标识符加引号。
+    ///
+    /// 预览列名来自源库（`sanitize_identifier` 之后仍可能是中文 / 数字开头），
+    /// 不加引号在 DuckDB 里解析不过；同时钉住 ASC / DESC 与 LIMIT 的写法。
+    #[test]
+    fn test_ordered_select_pins_quoting_and_direction() {
+        // 升序是 SQL 默认，生成器不写 `ASC`（DESC 则必定显式）
+        assert_eq!(
+            build_select_ordered("temp_mock_t", "id", false, Some(10)),
+            "SELECT * FROM temp_mock_t ORDER BY \"id\" LIMIT 10"
+        );
+        assert_eq!(
+            build_select_ordered("temp_mock_t", "订单 号", true, None),
+            "SELECT * FROM temp_mock_t ORDER BY \"订单 号\" DESC"
         );
     }
 

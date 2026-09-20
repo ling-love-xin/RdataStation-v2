@@ -46,3 +46,9 @@ pub const SEARCH_LIST_HEIGHT: f32 = 16.0;
 /// 两张表是同一类东西，行号槽宽不一致会在并列对照时显形。
 /// 真正的单一来源要等 `editor` 也依赖 `workbench_shell`（它目前不依赖，故此处镜像一份）。
 pub const PREVIEW_ROW_NUMBER_WIDTH: Pixels = px(48.);
+
+/// 预览单元格悬停全文的最大宽度（24rem = 384px）。
+///
+/// 悬停提示跟着鼠标走，比这更宽就会被窗口边缘截掉；超出的部分**折行**（长 JSON / 长文本
+/// 要能从头读到尾，截尾就失去看全的意义）。
+pub const PREVIEW_TOOLTIP_MAX_WIDTH: f32 = 24.0;

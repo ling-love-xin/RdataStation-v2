@@ -147,7 +147,9 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 列卡片两行制 | 第一行「名称 · 类型 · 置信度徽标」，第二行「生成器菜单 + 编辑 / 智能 / 删除 + 参数摘要（或示例值）」 |
 | 生成器切换不打断编辑 | 生成器有两条路径：`Button::dropdown_menu` 的**分类子菜单**（15 类 × 均值 9 项，知道「属于哪类」时最快）；菜单首项「搜索生成器…」开搜索对话框（只记得名字时）。菜单顶部另有**「最近使用」**（本会话点过的，最多 5 条，最近在前）与**「推荐」**标记（与导入结构同源的智能映射结果，只标记不写回，B7）；当前生成器打勾。参数编辑在「编辑」对话框里，避免对话框内生成器与参数行不一致 |
 | 置信度三态 | `high` success / `low` muted / `manual` info（与 v1 同语义） |
-| 预览为只读网格 | 组件库 `DataTable` + 本项目自己的 delegate（列宽可拖 / 横向滚动 / 虚拟化都是组件的；首列 `#` 行号槽钉在左）；**右键只给「复制此值 / 复制整行（TSV）」**——筛选与排序不做（那会把「前 N 行取样」弄失真，见 §8）；没有结果时显示「尚无结果——点表头『生成』」 |
+| 预览可排序、但**不筛选** | 表头点一下 = **按该列重查临时表**（`ORDER BY … LIMIT 前 N 行`，见 §8），右键菜单里有同一套（升 / 降 / 取消排序）；表头箭头画的是**生效中的排序**（以面板回推的快照为准，被拒时箭头会被纠回去）。筛选仍不做：它把「前 N 行取样」变成长度未知的子集；排序做的是**全局前 N 行**，与标题里的「前 N 行」同一个口径 |
+| 取值看不全就悬停 | 单元格 `truncate` 后挂悬停全文（`ui::PREVIEW_TOOLTIP_MAX_WIDTH` = 24rem，超长折行）；行号槽不给悬停提示（那是序号，不是数据）|
+| 预览为只读网格 | 组件库 `DataTable` + 本项目自己的 delegate（列宽可拖 / 横向滚动 / 虚拟化都是组件的；首列 `#` 行号槽钉在左）；右键=排序三项 + 「复制此值 / 复制整行（TSV）」；没有结果时显示「尚无结果——点表头『生成』」 |
 | 结果表列只读 | 结果表的列是这次生成的产物：就地改列会让「结果」与「产出它的配置」分叉——要改列回草稿 tab 改，再重新生成 |
 
 ## 4. 对话框
@@ -402,7 +404,9 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 对话框内输入 | 组件默认 | 宽 `ui::PARAM_INPUT_WIDTH` = 9rem |
 | 字段区滚动 | —— | `max_h(ui::FIELD_LIST_MAX_HEIGHT)` = 16rem |
 | 字段卡片 | `border` + `radius` | `p_2` + `border_1` |
-| 预览表（`DataTable`） | —— | 数据列宽 = 组件 `Column` 默认档（100px）+ 可拖宽；行号槽 `ui::PREVIEW_ROW_NUMBER_WIDTH` = 48px（与结果集同档）；容器最小高 `ui::PREVIEW_MIN_HEIGHT` = 10rem；行高走组件 `Size::XSmall`（26px，组件库尺寸是 px 基准） |
+| 预览表（`DataTable`） | —— | 数据列宽 = 组件 `Column` 默认档（100px）+ 可拖宽；行号槽 `ui::PREVIEW_ROW_NUMBER_WIDTH` = 48px（与结果集同档）；容器最小高 `ui::PREVIEW_MIN_HEIGHT` = 10rem；行高走组件 `Size::XSmall`（26px，组件库尺寸是 px 基准）；悬停全文最大宽 `ui::PREVIEW_TOOLTIP_MAX_WIDTH` = 24rem |
+
+> 预览排序的一处可见代价：重排会重查 + 重建表头（列宽回到默认档）。与「重新生成后表头重建」是同一行为，不另做列宽保持。
 | 成功 / 失败 / 只读 | `success` / `danger` / `info` | `text_xs` |
 | 参数摘要 / 引导语 / 类型 | `muted_foreground` | `text_xs` |
 | 置信度徽标 | `success` / `info` / `muted_foreground` | `text_xs` |
@@ -436,10 +440,12 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | **进度轮询** | `cx.spawn` + `background_executor().timer(120ms)` + 弱句柄 | 任务进行中没有其他事件触发重绘，必须主动唤醒（与 `scratchpad_jobs` 的泵同例） |
 | 导入结构 / 列编辑 / 生成器搜索 | `window.open_dialog` + `Dialog`（+ `DialogFooter`） | 焦点陷阱 / Escape / 遮罩关闭由组件负责；窗口根须为 `Root`；搜索对话框本身无 footer（点行即确认） |
 | **生成器搜索结果列表** | `List` + `ListState` + `ListDelegate`（`gpui_kit::component::list`） | 搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，不手搓；`perform_search` 同步过滤（143 项全在内存） |
-| **预览表** | `DataTable` + `TableState` + `TableDelegate`（`gpui_kit::component::table`），**与编辑器结果集同一套原语** | 表头 / 列宽拖拽 / 横向滚动 / 虚拟化 / 键盘选择全是组件的；本 crate 只写一个几十行的 delegate（列名 / 行 / `cell_text`）。**订正（2026-09-20）**：早先这里是手搓的固定 9rem 列宽 div 表——列宽钉死、值截断后没任何办法看全，且与结果集两套观感（当初的组件选型表漏了 `table`）；只读取样仍不开的开关：排序 / 行选 / 列选 / 拖列 |
+| **预览表** | `DataTable` + `TableState` + `TableDelegate`（`gpui_kit::component::table`），**与编辑器结果集同一套原语** | 表头 / 列宽拖拽 / 横向滚动 / 虚拟化 / 键盘选择全是组件的；本 crate 只写一个几十行的 delegate（列名 / 行 / `cell_text`）。**订正（2026-09-20）**：早先这里是手搓的固定 9rem 列宽 div 表——列宽钉死、值截断后没任何办法看全，且与结果集两套观感（当初的组件选型表漏了 `table`）；仍不开的开关：行选 / 列选 / 拖列 |
+| **预览排序** | `Column::sortable` / `Column::sort` + `TableDelegate::perform_sort`（组件的表头箭头与方向循环） + 自己的重查 | 方向循环（默认 → 降序 → 升序 → 默认）与箭头渲染全是组件的；delegate 只把「列 + 方向」转给面板（重查是 I/O，临时表名与宿主端口都在面板里）。**不做本地重排**：那会把「前 N 行」变成「前 N 行里的排序」（见 §3 / 架构 §9-I26） |
+| **单元格悬停全文** | gpui 自带 `tooltip` 建造器（`StatefulInteractiveElement`）+ 组件库 `Tooltip` | 组件库的 `.tooltip()` 只挂在 Button / Checkbox / Switch / Radio / Clipboard 上（它们的 `ComponentTooltip` 是 `pub(crate)`），表格单元格要用 gpui 那一层：`.id(..).tooltip(\|window, cx\| Tooltip::element(..).build(window, cx))`（流式 `tooltip` 要求元素有 id） |
 | 另存为（选路径） | `App::prompt_for_new_path` + `Window::spawn` | 异步回传：取消则不动；落盘动作在回传里执行（事件路径） |
 | 滚动区 | `overflow_y_scrollbar()` / `overflow_x_scrollbar()` + `max_h` / `flex_1().min_h_0()` | Dock 内容区自身不产生滚动，面板与 tab 各自给滚动主体 |
-| 宿主能力 | `MockHost`（生成 / 出口 / 来源 / 只读 / 打开详情 / 重绘） | 与 `project::ui::ProjectUiHost` 同范式；workbench 侧桥接见 `components/mock_host.rs` |
+| 宿主能力 | `MockHost`（生成 / 出口 / 来源 / 只读 / 打开详情 / 重绘 / **预览按列重排**） | 与 `project::ui::ProjectUiHost` 同范式；workbench 侧桥接见 `components/mock_host.rs`（`preview_ordered` 是全端口里唯一**非阻塞**的：拿不到内存库锁就回落 `None`，因为它是随手动作，不值得等一个不可取消的出口任务） |
 
 ## 9. 与 v1 的逐项对照
 
@@ -450,7 +456,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 生成器下拉（143 项平铺） | **已迁（改形态）** | 分类子菜单（15 类）；搜索待办 |
 | 智能映射 + 置信度 | 照搬 | `ColumnMapper` 原样使用，换呈现（徽标三态） |
 | 行数 / 种子 / 语言三参数 | 照搬 | `MockConfig` 已是引擎输入 |
-| 生成 → 预览（前 10 行） | **已迁** | 预览表落中央 tab（组件库 `DataTable`：列宽可拖 + 横向滚动 + `#` 行号槽），行数上限 `PREVIEW_ROWS` |
+| 生成 → 预览（前 10 行） | **已迁** | 预览表落中央 tab（组件库 `DataTable`：列宽可拖 + 横向滚动 + `#` 行号槽），行数上限 `PREVIEW_ROWS`；**按列重排（2026-09-20 补）**走重查（`MockEngine::try_preview_ordered` → `SqlEngine::build_select_ordered`），表头箭头 / 右键菜单两处入口 |
 | 导出 CSV / XLSX / Parquet / SQL | **已迁** | 右 Dock「另存为 ▾」（系统保存对话框选路径）；「保存到草稿箱 ▾」写 `{项目}/mock/mock_*.{ext}` |
 | 持久化到项目分析库 | **已迁 + 显式化** | 新建表；同名已存在 → 报错并引导「追加」（v1 是隐式 `CREATE TABLE AS SELECT`） |
 | 追加到既有表 | **v2 新增** | v1 无此路径；v2 显式选表 + 主键自增接续表内行数 |

@@ -180,6 +180,17 @@ impl SqlEngine {
         builder::build_select(table, columns, limit)
     }
 
+    /// 生成 `SELECT * FROM table ORDER BY col [DESC] LIMIT n` 查询
+    /// （列名当标识符加引号，见 [`builder::build_select_ordered`]）
+    pub fn build_select_ordered(
+        table: &str,
+        column: &str,
+        descending: bool,
+        limit: Option<i64>,
+    ) -> String {
+        builder::build_select_ordered(table, column, descending, limit)
+    }
+
     /// 生成 ALTER TABLE DDL
     pub fn build_alter_table(table: &str, operations: &[AlterOperation]) -> String {
         builder::build_alter_table(table, operations)

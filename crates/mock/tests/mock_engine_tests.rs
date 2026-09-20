@@ -476,6 +476,87 @@ async fn preview_unknown_table_errors() {
     );
 }
 
+/// 「按列重排」取的是**全局**的前 N 行，不是把取样窗口换个顺序。
+///
+/// 用自增 id 当探针：不排序的取样第一行是 1，降序第一个必须是 50（= 总行数）。
+/// 就地重排取样窗口的做法只能得到「1..10 里的最大值 10」，这条断言会直接指出来。
+#[tokio::test]
+async fn ordered_preview_returns_the_global_top_rows() {
+    let result = MockEngine::generate(basic_config("t_preview_ordered"))
+        .await
+        .expect("生成应当成功");
+
+    let plain = MockEngine::preview(&result.temp_table_name, 10).expect("预览应当成功");
+    let plain_rows = QueryResult::from_batches(plain.columns.clone(), plain.batches.clone()).rows;
+    assert_eq!(plain_rows[0][0].as_text().unwrap_or_default(), "1");
+
+    let desc = ordered_preview_when_idle(&result.temp_table_name, "id", true);
+    let desc_rows = QueryResult::from_batches(desc.columns.clone(), desc.batches.clone()).rows;
+    assert_eq!(desc_rows.len(), 10);
+    assert_eq!(
+        desc_rows[0][0].as_text().unwrap_or_default(),
+        "50",
+        "降序的首行应当是最大 id"
+    );
+    assert_eq!(desc_rows[9][0].as_text().unwrap_or_default(), "41");
+
+    let asc = ordered_preview_when_idle(&result.temp_table_name, "id", false);
+    let asc_rows = QueryResult::from_batches(asc.columns.clone(), asc.batches.clone()).rows;
+    assert_eq!(
+        asc_rows[0][0].as_text().unwrap_or_default(),
+        "1",
+        "升序与不排序的取样在自增列上一致"
+    );
+
+    assert!(
+        MockEngine::try_preview_ordered(&result.temp_table_name, "no_such_column", true, 10)
+            .is_err(),
+        "列名不存在应报错（而不是默默当成无排序列）"
+    );
+}
+
+/// 内存库被人占着时**非阻塞回落** `Ok(None)`：面板据此说「稍后再试」，而不是假装排好了。
+///
+/// 这条用例是**判别性**的：若重查改用 `lock()`（等锁），在有出口任务时就等于把 UI 线程
+/// 冻在任务上——而出口任务是不可取消的（D23）。
+#[tokio::test]
+async fn ordered_preview_falls_back_when_the_engine_is_busy() {
+    let result = MockEngine::generate(basic_config("t_preview_busy"))
+        .await
+        .expect("生成应当成功");
+
+    // 手动拿着内存库连接锁（相当于「有任务在跑」）
+    let db = engine::DuckDBManager::get_or_create_in_memory().expect("内存库");
+    let guard = db.lock().expect("拿锁");
+    assert!(
+        MockEngine::try_preview_ordered(&result.temp_table_name, "id", true, 10)
+            .expect("忙不是错误")
+            .is_none(),
+        "锁被占住时回落 None，而不是在 UI 线程上等锁"
+    );
+    drop(guard);
+
+    // 放锁后同一份请求就能查到（证明刚才是「忙」，不是别的问题）
+    let after = ordered_preview_when_idle(&result.temp_table_name, "id", true);
+    assert_eq!(after.batches[0].num_rows(), 10);
+}
+
+/// 重查到内存库空闲为止。
+///
+/// 为什么要等：内存库连接是**进程级**的一把锁，同一个测试进程里别的用例可能正持着它
+/// （正在生成）。生产里这个 `None` 由面板提示「稍后再试」，测试里重试几次即可。
+fn ordered_preview_when_idle(temp_table: &str, column: &str, descending: bool) -> QueryResult {
+    for _ in 0..200 {
+        let outcome = MockEngine::try_preview_ordered(temp_table, column, descending, 10)
+            .expect("重查应当成功");
+        match outcome {
+            Some(result) => return result,
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+    panic!("内存库被一直占着：同进程的其它用例没放锁？");
+}
+
 // ==================== 列映射 ====================
 
 #[test]

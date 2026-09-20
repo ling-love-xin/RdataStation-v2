@@ -9,6 +9,7 @@
 //! | 落库 / 导出 / 草稿箱的**实现体** | `services::mock_generator`（装配层；由任务层在工作线程上调用） |
 //! | 连接清单（导入结构来源） | `Shared::connections`（工作台当前连接列表） |
 //! | 既有分析库表 / 导入列结构 | `services::mock_generator` → `NavCache` / `MetadataService` |
+//! | 预览按列重排 | `services::mock_generator::preview_ordered` → `mock::MockEngine`（**非阻塞**：拿不到内存库锁就回落 `None`） |
 //! | 只读判定 | `Shared.project_ui.read_only`（与 SQL 执行入口同一护栏） |
 //! | 项目根（生成历史 / 用户模板的落点） | `Shared.project`（面板只拿这一个问题：
 //!   历史的读写都在 mock crate 内完成后台执行，见 `mock::history`） |
@@ -28,8 +29,8 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 use mock::mock_view::{
-    MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind, MockJobState, SchemaRequest,
-    SchemaSource,
+    MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind, MockJobState, MockPreview,
+    SchemaRequest, SchemaSource,
 };
 
 use crate::panels::Shared;
@@ -115,6 +116,18 @@ impl MockHost for WorkbenchMockHost {
         crate::services::mock_generator::import_columns(request, root_text.as_deref())
     }
 
+    fn preview_ordered(
+        &self,
+        temp_table: &str,
+        column: &str,
+        descending: bool,
+        limit: usize,
+    ) -> Result<Option<MockPreview>, String> {
+        // 同步调用（不用任务层）：重查是 LIMIT N 的只读查询，代价在毫秒级；
+        // 真正的长活（生成 / 出口）才走 `start_job`。拿不到内存库锁时它自己回落 `None`。
+        crate::services::mock_generator::preview_ordered(temp_table, column, descending, limit)
+    }
+
     fn export_dir(&self) -> String {
         match self.project_root() {
             Some(root) => root.to_string_lossy().to_string(),
@@ -133,7 +146,12 @@ impl MockHost for WorkbenchMockHost {
         WorkbenchMockHost::project_root(self)
     }
 
-    fn open_detail(&self, target: mock::mock_view::DetailTarget, window: &mut Window, cx: &mut App) {
+    fn open_detail(
+        &self,
+        target: mock::mock_view::DetailTarget,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let open = self.shared.open_mock_detail.borrow().clone();
         if let Some(open) = open {
             open(target, window, cx);

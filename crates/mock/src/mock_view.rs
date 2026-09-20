@@ -63,7 +63,8 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
+use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
 // 清单行的选中标识条（2px + 上下内缩）与 M4 导航 / M5 草稿箱同一份共用原语，
 // 不在本 crate 手搓绝对定位的 div。
@@ -175,6 +176,41 @@ pub struct MockPreview {
     pub columns: Vec<String>,
     /// 行数据（与 `columns` 对齐）
     pub rows: Vec<Vec<String>>,
+}
+
+/// 预览的「按列重排」：把取样换成**重查得来的、按该列排序后的前 N 行**。
+///
+/// `base` 存的是派生它的那份取样（生成时的前 N 行）：与当前取样相等才说明这份排序还成立。
+/// 靠这一条，排序的失效不需要在各处 `results` 清空点手写清理——重新生成 / 切项目后取样必然变
+/// （同名同为 seed 重建的极端情形里取样相同，而那份排序描述的也正是这份数据，仍然成立）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewSort {
+    /// 哪张表的结果（另一张表的 tab 不继承这份排序）
+    pub table: String,
+    /// 排序列名
+    pub column: String,
+    /// 降序？（表头点第二次 / 菜单里选的）
+    pub descending: bool,
+    /// 派生它的那份取样
+    base: MockPreview,
+    /// 重查得到的「排序后前 N 行」
+    preview: MockPreview,
+}
+
+impl PreviewSort {
+    /// 这份排序是否还适用于该表当前的取样（表名与取样都一致）。
+    fn applies_to(&self, table: &str, base: &MockPreview) -> bool {
+        self.table == table && self.base == *base
+    }
+
+    /// 方向说明（预览标题与菜单用）：「按 id 降序」。
+    pub fn label(&self) -> String {
+        format!(
+            "按 {} {}",
+            self.column,
+            if self.descending { "降序" } else { "升序" }
+        )
+    }
 }
 
 /// 后台任务种类（决定任务干什么、收尾时怎么归置结果）。
@@ -455,6 +491,20 @@ pub trait MockHost: 'static {
     fn schema_sources(&self) -> Vec<SchemaSource>;
     /// 读某表的列（源库结构）
     fn import_columns(&self, request: &SchemaRequest) -> Result<Vec<MockColumnSpec>, String>;
+    /// 预览的「按列重排」：取临时表中**按该列排序后的前 `limit` 行**。
+    ///
+    /// 为什么是重查而不是就地重排：预览只装了前 N 行的取样，就地重排只会把这 N 行换个顺序
+    /// （看着像「按值排过」，实际不是这一列的前 N 名）。
+    ///
+    /// `Ok(None)` = 内存库连接正被别的任务占用：调用方保持现状——排序是随手动作，
+    /// 不值得为它等一个不可取消的生成 / 出口任务。
+    fn preview_ordered(
+        &self,
+        temp_table: &str,
+        column: &str,
+        descending: bool,
+        limit: usize,
+    ) -> Result<Option<MockPreview>, String>;
     /// 文件出口的默认目录（项目根 / 工作目录；空串表示由视图回退到当前目录）
     fn export_dir(&self) -> String;
     /// 只读项目？（落库与写文件据此拒绍）
@@ -1235,6 +1285,8 @@ pub struct MockPanel {
     next_id: u64,
     /// 最近一次运行的**结果表**（单表生成 = 1 条；场景模板 = N 条）
     results: Vec<MockGenInfo>,
+    /// 预览的「按列重排」（表头点击 / 右键菜单；每张表最多一份，见 [`PreviewSort`]）
+    preview_sort: Option<PreviewSort>,
     /// 当前选中的结果表下标（出口作用于它；越界视为 0）
     current: usize,
     /// 当前结果来自哪套场景模板（`None` = 单表生成；面板据此给一句来源说明）
@@ -1471,6 +1523,7 @@ impl MockPanel {
             draft: MockDraft::default(),
             next_id: 1,
             results: Vec::new(),
+            preview_sort: None,
             current: 0,
             scenario_source: None,
             landed: None,
@@ -1626,6 +1679,77 @@ impl MockPanel {
         cx.notify();
     }
 
+    // ==================== 预览的按列重排（表头 / 右键菜单） ====================
+
+    /// 这一表当前该显示的取样，与生效中的排序（`None` = 按生成顺序）。
+    ///
+    /// 排序只对**派生它的那份取样**有效：结果被换掉（重新生成 / 切项目）后它自动失效
+    /// （见 [`PreviewSort`]），不需要谁记得来清。
+    pub fn preview_for(&self, table: &str) -> Option<(&MockPreview, Option<&PreviewSort>)> {
+        let info = self.results.iter().find(|info| info.table_name == table)?;
+        let sort = self
+            .preview_sort
+            .as_ref()
+            .filter(|sort| sort.applies_to(table, &info.preview));
+        Some((sort.map_or(&info.preview, |sort| &sort.preview), sort))
+    }
+
+    /// 表头点击 / 右键菜单：把预览取样换成**按该列排序后的前 N 行**；
+    /// `descending = None` = 取消排序（回到生成时的前 N 行）。
+    ///
+    /// 只有面板能走这三条出口：重查是 I/O（要走宿主端口）、而重查要的临时表名在结果清单里。
+    /// 失败与「内存库正忙」都只写一句可读原因，**不动**已有的取样——预览是只读观察窗，
+    /// 点一下列头不应该把已经在看的数据弄没。
+    pub fn sort_preview(
+        &mut self,
+        table: &str,
+        column: &str,
+        descending: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(descending) = descending else {
+            if self
+                .preview_sort
+                .as_ref()
+                .is_some_and(|sort| sort.table == table)
+            {
+                self.preview_sort = None;
+                cx.notify();
+            }
+            return;
+        };
+        let Some(info) = self.results.iter().find(|info| info.table_name == table) else {
+            return;
+        };
+        // 借租约不能跨到宿主调用（`preview_ordered` 是同步 I/O）：先把要用的取出来
+        let temp_table = info.temp_table_name.clone();
+        let base = info.preview.clone();
+        match self
+            .host
+            .preview_ordered(&temp_table, column, descending, PREVIEW_ROWS)
+        {
+            Ok(Some(preview)) => {
+                self.preview_sort = Some(PreviewSort {
+                    table: table.to_string(),
+                    column: column.to_string(),
+                    descending,
+                    base,
+                    preview,
+                });
+                // 成功就把上一次的排序失败说明收掉（同一拍里换，不留陈旧错误）
+                self.error = None;
+            }
+            // 内存库被别的任务占着：原因说清楚，取样保持原样
+            Ok(None) => {
+                self.error = Some(format!(
+                    "内存库正被别的任务占用（生成 / 出口进行中）：按「{column}」重排序稍后再试"
+                ));
+            }
+            Err(e) => self.error = Some(e),
+        }
+        cx.notify();
+    }
+
     /// 项目已切换：作废与旧项目绑定的生成结果与出口反馈（`cleared` = 宿主刚清掉的临时表数）。
     ///
     /// 为什么必须作废：宿主在切项目时删掉了本进程的 mock 临时表（内存库是进程级单例，
@@ -1636,6 +1760,8 @@ impl MockPanel {
     pub fn forget_generated(&mut self, cleared: usize, cx: &mut Context<Self>) {
         self.results.clear();
         self.current = 0;
+        // 排序是按临时表重查来的：临时表都没了，那份取样也就没意义了
+        self.preview_sort = None;
         self.scenario_source = None;
         self.last_relations.clear();
         self.landed = None;
@@ -5196,33 +5322,27 @@ impl MockDetailView {
         }
     }
 
-    /// 本 tab 看的那张表这一轮的结果（草稿 tab 看草稿的目标表）。
-    fn current_info(&self, panel: &MockPanel) -> Option<MockGenInfo> {
-        let table = match &self.target {
-            DetailTarget::Draft => panel.draft().table_name.clone(),
-            DetailTarget::Table(name) => name.clone(),
-        };
-        panel
-            .results()
-            .iter()
-            .find(|info| info.table_name == table)
-            .cloned()
+    /// 本 tab 看的那张表（草稿 tab = 草稿的目标表；表名为空时没有可看的东西）。
+    fn target_table(&self, panel: &MockPanel) -> Option<String> {
+        match &self.target {
+            DetailTarget::Draft => {
+                let name = panel.draft().table_name.clone();
+                (!name.is_empty()).then_some(name)
+            }
+            DetailTarget::Table(name) => Some(name.clone()),
+        }
     }
 
-    /// 预览表的取样（列名 + 前 [`PREVIEW_ROWS`] 行）：与渲染读的是同一处。
-    fn preview_snapshot(&self, panel: &MockPanel) -> (Vec<String>, Vec<Vec<String>>) {
-        match self.current_info(panel) {
-            Some(info) => (
-                info.preview.columns.clone(),
-                info.preview
-                    .rows
-                    .iter()
-                    .take(PREVIEW_ROWS)
-                    .cloned()
-                    .collect(),
-            ),
-            None => (Vec::new(), Vec::new()),
-        }
+    /// 预览表的取样（列名 + 行）与生效中的排序：与渲染读的是同一处。
+    fn preview_snapshot(&self, panel: &MockPanel) -> Option<PreviewSnapshot> {
+        let table = self.target_table(panel)?;
+        let (preview, sort) = panel.preview_for(&table)?;
+        Some(PreviewSnapshot {
+            table,
+            columns: preview.columns.clone(),
+            rows: preview.rows.iter().take(PREVIEW_ROWS).cloned().collect(),
+            sort: sort.map(|sort| (sort.column.clone(), sort.descending)),
+        })
     }
 
     /// 面板通知那一拍：把取样推给预览表（只在真的变了时 `refresh`）。
@@ -5233,11 +5353,14 @@ impl MockDetailView {
         let Some(table) = self.preview_table.clone() else {
             return;
         };
-        let (columns, rows) = self.preview_snapshot(panel.read(cx));
+        // 没有结果（切项目 / 还没生成）就不动它：这一帧本来就不渲染这张表
+        let Some(snapshot) = self.preview_snapshot(panel.read(cx)) else {
+            return;
+        };
         table.update(cx, |state, cx| {
-            if state.delegate_mut().set_preview(columns, rows) {
-                // 行 / 列数变了要重建表头布局（生成进行中面板每 120ms 通知一次，
-                // 取样没变就不重建）
+            // 行 / 列 / **生效中的排序**变了就重建表头（排序要靠重建 `col_groups` 才能改箭头：
+            // 被拒的情形也走这里纠回来）。生成进行中面板每 120ms 通知一次，取样没变就不重建。
+            if state.delegate_mut().set_preview(snapshot) {
                 state.refresh(cx);
             }
         });
@@ -5248,23 +5371,20 @@ impl MockDetailView {
         if self.preview_table.is_some() {
             return;
         }
-        let (columns, rows) = self.preview_snapshot(self.panel.read(cx));
+        let Some(snapshot) = self.preview_snapshot(self.panel.read(cx)) else {
+            return;
+        };
+        let panel = self.panel.downgrade();
         let state = cx.new(|cx| {
-            TableState::new(
-                PreviewTableDelegate {
-                    columns,
-                    rows,
-                    context_cell: None,
-                },
-                window,
-                cx,
-            )
-            // 预览是只读取样：排序 / 行选 / 列选 / 拖列都不需要打开。
-            // 列宽保留可拖（默认开）——这正是手搓版缺的：值被截断时能拖开看全。
-            .col_movable(false)
-            .sortable(false)
-            .row_selectable(false)
-            .col_selectable(false)
+            TableState::new(PreviewTableDelegate::new(panel, snapshot), window, cx)
+                // 只读取样：行选 / 列选 / 拖列都不需要打开；列宽保留可拖（默认开）——
+                // 这正是手搓版缺的：值被截断时能拖开看全。
+                //
+                // 排序开着：表头点击 = **按该列重查临时表**（不是就地重排取样窗口，
+                // 重查在面板里，见 `PreviewTableDelegate::perform_sort`）。
+                .col_movable(false)
+                .row_selectable(false)
+                .col_selectable(false)
         });
         self.preview_table = Some(state);
     }
@@ -5975,6 +6095,8 @@ impl Render for MockDetailView {
             draft_columns,
             result_columns,
             dropped_by_project_switch,
+            preview_sort_label,
+            preview_shown,
         ) = {
             let panel = self.panel.read(cx);
             // 本 tab 看哪张表：草稿 tab 看草稿目标表，结果表 tab 看它自己
@@ -5997,6 +6119,8 @@ impl Render for MockDetailView {
                 .as_ref()
                 .map(|info| info.columns.len())
                 .unwrap_or(0);
+            // 预览当前显示的那一份（排序生效时是重查来的），标题里的行数与排序说明都从它来
+            let shown = panel.preview_for(&table);
             (
                 table,
                 generated,
@@ -6005,6 +6129,8 @@ impl Render for MockDetailView {
                 panel.draft().columns.len(),
                 result_columns,
                 panel.results_dropped_by_project_switch(),
+                shown.and_then(|(_, sort)| sort).map(|sort| sort.label()),
+                shown.map_or(0, |(preview, _)| preview.rows.len()),
             )
         };
 
@@ -6129,14 +6255,23 @@ impl Render for MockDetailView {
 
         // ── 预览 ──
         let preview_title = match generated.as_ref() {
-            Some(info) => format!(
-                "预览（前 {} 行）· {} · 临时表 {} · 本次 {} 行 · {} ms",
-                PREVIEW_ROWS.min(info.preview.rows.len()),
-                info.table_name,
-                info.temp_table_name,
-                with_thousands(u64::from(info.row_count)),
-                info.elapsed_ms
-            ),
+            Some(info) => {
+                // 排序生效时把口径说清：这是「按该列排序后的前 N 行」，不是生成顺序的前 N 行
+                let head = match &preview_sort_label {
+                    Some(label) => format!("预览（{label} · 前 {} 行）", preview_shown),
+                    None => format!(
+                        "预览（前 {} 行）",
+                        PREVIEW_ROWS.min(info.preview.rows.len())
+                    ),
+                };
+                format!(
+                    "{head} · {} · 临时表 {} · 本次 {} 行 · {} ms",
+                    info.table_name,
+                    info.temp_table_name,
+                    with_thousands(u64::from(info.row_count)),
+                    info.elapsed_ms
+                )
+            }
             None if is_draft => {
                 format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点表头「生成」")
             }
@@ -6146,6 +6281,12 @@ impl Render for MockDetailView {
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
+        // 排序的入口提示：表头箭头与右键菜单都能点，但两处都很轻，先说一句
+        if preview_sort_label.is_some() {
+            body = body.child(div().text_xs().text_color(muted).child(
+                "排序是重查临时表得来的（全局前 N 行）；点表头再点几下可换向 / 取消，右键同一套。",
+            ));
+        }
 
         let preview = generated.as_ref().map(|info| info.preview.clone());
         match preview {
@@ -6197,17 +6338,37 @@ fn render_status_cell(glyph: &str, text: &str, color: Hsla) -> Div {
         .child(format!("{glyph} {text}"))
 }
 
-/// 预览表的 delegate：把「这次生成的前 N 行取样」铺进组件库的表格（`DataTable`）。
+/// 推给预览表的那一份快照：表名 + 列名 + 行 + 生效中的排序（`None` = 按生成顺序）。
+///
+/// 三个字段要一起换：只换行不换列会让右键记下的位置错位，只换排序不重建表头会让箭头与数据不一致。
+struct PreviewSnapshot {
+    /// 哪张表的结果（右键排序时按它去找临时表）
+    table: String,
+    /// 数据列名（不含行号槽）
+    columns: Vec<String>,
+    /// 取样行（引擎已渲染成文本；每行长度 == `columns.len()`）
+    rows: Vec<Vec<String>>,
+    /// 生效中的排序：列名 + 是否降序（面板那边算好的，delegate 只负责映射成列下标）
+    sort: Option<(String, bool)>,
+}
+
+/// 预览表的 delegate：把「这次生成的取样」铺进组件库的表格（`DataTable`）。
 ///
 /// **为何不手搓网格**：结果集（编辑器）与这里的预览是同一类东西（一张只读的宽表），
 /// 组件库的 `DataTable` 已提供表头 / 列宽拖拽 / 横向滚动 / 虚拟化 / 键盘选择。
 /// 旧实现自己搭了一个固定 9rem 列宽的 div 表：列宽钉死、值截断后没任何办法看全，
 /// 而且与结果集两套观感（尺寸与交互各要同步一次）。
 struct PreviewTableDelegate {
+    /// 面板实体（右键排序与表头排序都要把「这一列 + 方向」交给它去重查）
+    panel: WeakEntity<MockPanel>,
+    /// 本 tab 看的表名
+    table: String,
     /// 数据列名（不含行号槽）
     columns: Vec<String>,
     /// 取样行（引擎已渲染成文本；每行长度 == `columns.len()`）
     rows: Vec<Vec<String>>,
+    /// 生效中的排序（列下标 + 方向；`None` = 没排序）：表头的箭头就画在它上
+    sort: Option<(usize, ColumnSort)>,
     /// 右键落在哪个单元格（组件库只把 `row_ix` 交给 `context_menu`，
     /// 列得在 `render_td` 里自己记一笔——与结果集网格同一做法）
     context_cell: Option<(usize, usize)>,
@@ -6219,13 +6380,61 @@ impl PreviewTableDelegate {
         col_ix == 0
     }
 
-    /// 换一份取样；返回是否真的变了（没变就不必 `refresh`：生成中面板每 120ms 通知一次）。
-    fn set_preview(&mut self, columns: Vec<String>, rows: Vec<Vec<String>>) -> bool {
-        if self.columns == columns && self.rows == rows {
+    /// 建 delegate（列 / 行 / 排序一次到位：`TableState::new` 当场就会问 `column`）。
+    fn new(panel: WeakEntity<MockPanel>, snapshot: PreviewSnapshot) -> Self {
+        let PreviewSnapshot {
+            table,
+            columns,
+            rows,
+            sort,
+        } = snapshot;
+        let sort = Self::map_sort(&columns, sort);
+        Self {
+            panel,
+            table,
+            columns,
+            rows,
+            sort,
+            context_cell: None,
+        }
+    }
+
+    /// 面板给的「生效中的排序」（列名 + 方向）→ 列下标 + 方向。
+    ///
+    /// 列名对不上（列被换了）就当没有排序：箭头不画，也不去重查一个不存在的列。
+    fn map_sort(columns: &[String], sort: Option<(String, bool)>) -> Option<(usize, ColumnSort)> {
+        let (column, descending) = sort?;
+        let index = columns.iter().position(|name| name == &column)?;
+        Some((
+            index,
+            if descending {
+                ColumnSort::Descending
+            } else {
+                ColumnSort::Ascending
+            },
+        ))
+    }
+
+    /// 换一份快照；返回是否真的变了（没变就不必 `refresh`：生成中面板每 120ms 通知一次）。
+    ///
+    /// 排序也是快照的一部分：面板拒绝重查时会把**上一份**排序回推过来，这里就会看到它与
+    /// 表头刚才翻到的方向不一致（`perform_sort` 先照抄了一份）——于是 `refresh` 把箭头纠回来。
+    fn set_preview(&mut self, snapshot: PreviewSnapshot) -> bool {
+        let PreviewSnapshot {
+            table,
+            columns,
+            rows,
+            sort,
+        } = snapshot;
+        let sort = Self::map_sort(&columns, sort);
+        if self.table == table && self.columns == columns && self.rows == rows && self.sort == sort
+        {
             return false;
         }
+        self.table = table;
         self.columns = columns;
         self.rows = rows;
+        self.sort = sort;
         // 数据换了，之前记下的右键位置不再指向同一个值
         self.context_cell = None;
         true
@@ -6239,14 +6448,25 @@ impl PreviewTableDelegate {
             .unwrap_or_default()
     }
 
-    /// 右键菜单里拿得到的那一格：优先用记下的单元格（行号槽除外），否则退到该行第一列。
-    fn context_text(&self, row_ix: usize) -> Option<String> {
-        let recorded = match self.context_cell {
+    /// 右键那一格的数据列下标：优先用记下的单元格（行号槽除外），否则退到第一列。
+    fn context_col(&self, row_ix: usize) -> Option<usize> {
+        match self.context_cell {
             Some((cell_row, cell_col)) if cell_row == row_ix && cell_col > 0 => Some(cell_col - 1),
+            _ if !self.columns.is_empty() => Some(0),
             _ => None,
-        };
-        let col = recorded.unwrap_or(0);
+        }
+    }
+
+    /// 右键菜单里拿得到的那一格。
+    fn context_text(&self, row_ix: usize) -> Option<String> {
+        let col = self.context_col(row_ix)?;
         self.rows.get(row_ix)?.get(col).cloned()
+    }
+
+    /// 右键那一格的列名（排序菜单项要它）。
+    fn context_column(&self, row_ix: usize) -> Option<String> {
+        let col = self.context_col(row_ix)?;
+        self.columns.get(col).cloned()
     }
 }
 
@@ -6277,7 +6497,13 @@ impl TableDelegate for PreviewTableDelegate {
         let index = col_ix - 1;
         let name = self.columns.get(index).cloned().unwrap_or_default();
         // 列宽走组件默认档（100px）+ 可拖宽：宽表靠横向滚动，看不全就拖
-        Column::new(format!("col-{index}"), name)
+        let column = Column::new(format!("col-{index}"), name);
+        // 可排序：表头挂排序箭头，点一下就把「这一列 + 方向」交给面板去重查。
+        // 生效中的那一列把方向画出来（↑/↓），其余画「可点」的默认箭头。
+        match self.sort {
+            Some((sorted_ix, sort)) if sorted_ix == index => column.sort(sort),
+            _ => column.sortable(),
+        }
     }
 
     fn render_td(
@@ -6296,7 +6522,11 @@ impl TableDelegate for PreviewTableDelegate {
         // 右键得先知道「点的是哪一格」：组件库只把 `row_ix` 交给 `context_menu`
         // （事件从最内层派发，不会丢）——与结果集网格同一做法
         let table = cx.entity().clone();
-        div()
+        let mut cell = div()
+            .id((
+                "mock-preview-cell",
+                row_ix * (self.columns.len() + 1) + col_ix,
+            ))
             .truncate()
             .text_xs()
             .text_color(color)
@@ -6306,15 +6536,66 @@ impl TableDelegate for PreviewTableDelegate {
                         state.delegate_mut().context_cell = Some((row_ix, col_ix));
                     });
                 })
-            })
-            .child(text)
+            });
+        // 取值可能很宽（JSON / 长文本），`truncate` 之后就只剩悬停这一条看全的路。
+        //
+        // 为什么要 `id`：gpui 的**流式** `tooltip` 声明在 `StatefulInteractiveElement` 上
+        // （没 id 的裸 `div` 只有直调 `Interactivity` 的写法）；组件库自己的表头/行头单元格
+        // 也是这么挂 id 的。行号槽不给悬停提示：那是序号，不是数据。
+        if !is_row_number && !text.is_empty() {
+            let full = text.clone();
+            cell = cell.tooltip(move |window, cx| preview_cell_tooltip(full.clone(), window, cx));
+        }
+        cell.child(text)
     }
 
-    /// 预览的右键菜单：只给「拿得走」的两件事——复制这一格 / 复制整行（TSV）。
+    /// 表头点击 → 按这一列**重查临时表**（不是把手上这几行换个顺序）。
     ///
-    /// 为什么不做筛选与排序（结果集网格有这两项）：这是**前 N 行的取样**，不是结果集——
-    /// 筛选会把取样变成长度未知的子集，排序会把它弄成「看似按值排过」的样子，
-    /// 两者都让「前 10 行长什么样」这个唯一的信息失真。
+    /// 组件库已经把方向循环算好了（默认 → 降序 → 升序 → 默认）并先改了自己的箭头，
+    /// 这里做两件事：
+    /// ① 把这个方向照抄进 delegate——面板那一拍若拒绝（内存库忙 / 列不存在），
+    ///    它会把**上一份**排序回推过来，`set_preview` 就会看到差别并 `refresh` 把箭头纠回实际状态；
+    /// ② 把「这一列 + 方向」交给面板：重查是 I/O，而临时表名与宿主端口都在它手里。
+    ///
+    /// 「默认」那一档（点第三下）= 取消排序，回到生成时的前 N 行。
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        // 行号槽（`Column` 没开 sortable）不会走到这里；真到了也只当没这回事
+        let Some(index) = col_ix.checked_sub(1) else {
+            return;
+        };
+        let Some(column) = self.columns.get(index).cloned() else {
+            return;
+        };
+        self.sort = Some((index, sort));
+        let panel = self.panel.upgrade();
+        let Some(panel) = panel else {
+            return;
+        };
+        let table = self.table.clone();
+        let descending = match sort {
+            ColumnSort::Ascending => Some(false),
+            ColumnSort::Descending => Some(true),
+            ColumnSort::Default => None,
+        };
+        panel.update(cx, |panel, cx| {
+            panel.sort_preview(&table, &column, descending, cx)
+        });
+    }
+
+    /// 预览的右键菜单：这一格能做的事——按这一列重排取样 / 复制这一格 / 复制整行（TSV）。
+    ///
+    /// 排序进菜单的理由：右键落点就是「这一列」，比表头那个小箭头好找。
+    /// 它走的是与表头点击同一条路：**重查**临时表取「按该列排序后的前 N 行」
+    /// （见 [`MockPanel::sort_preview`]），不是就地重排手上这几行。
+    ///
+    /// 仍然不做筛选（结果集网格有）：筛选把取样变成长度未知的子集，
+    /// 而「前 N 行长什么样」正是这份取样唯一的信息。
     fn context_menu(
         &mut self,
         row_ix: usize,
@@ -6323,6 +6604,35 @@ impl TableDelegate for PreviewTableDelegate {
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         let mut menu = menu;
+        if let Some(column) = self.context_column(row_ix) {
+            let panel = self.panel.clone();
+            let table = self.table.clone();
+            menu = menu
+                .item(preview_sort_menu_item(
+                    format!("按「{column}」升序"),
+                    panel.clone(),
+                    table.clone(),
+                    column.clone(),
+                    Some(false),
+                ))
+                .item(preview_sort_menu_item(
+                    format!("按「{column}」降序"),
+                    panel.clone(),
+                    table.clone(),
+                    column.clone(),
+                    Some(true),
+                ));
+            // 取消排序只在真有排序时出现（没排序时它只是个噪声项）
+            if self.sort.is_some() {
+                menu = menu.item(preview_sort_menu_item(
+                    "取消排序".to_string(),
+                    panel,
+                    table,
+                    column,
+                    None,
+                ));
+            }
+        }
         if let Some(value) = self.context_text(row_ix) {
             menu = menu.item(
                 PopupMenuItem::new("复制此值").on_click(move |_, _window, app| {
@@ -6352,6 +6662,41 @@ impl TableDelegate for PreviewTableDelegate {
             .cloned()
             .unwrap_or_default()
     }
+}
+
+/// 单元格的悬停全文：取值可能很宽（JSON / 长文本），`truncate` 之后只剩这一条看全的路。
+///
+/// 宽度走 `ui::PREVIEW_TOOLTIP_MAX_WIDTH`（结构尺寸只认常量表），并让它**折行**：
+/// 悬停提示跟着鼠标，横向越宽越容易被窗口边缘截掉。
+fn preview_cell_tooltip(text: String, window: &mut Window, cx: &mut App) -> AnyView {
+    Tooltip::element(move |_, _| {
+        div()
+            .max_w(rems(ui::PREVIEW_TOOLTIP_MAX_WIDTH))
+            .whitespace_normal()
+            .text_xs()
+            .child(text.clone())
+    })
+    .build(window, cx)
+}
+
+/// 右键菜单里的排序项：与表头点击同一条路（把「这一列 + 方向」交给面板去重查临时表）。
+///
+/// `descending = None` = 取消排序（回到生成时的前 N 行）。
+fn preview_sort_menu_item(
+    label: String,
+    panel: WeakEntity<MockPanel>,
+    table: String,
+    column: String,
+    descending: Option<bool>,
+) -> PopupMenuItem {
+    PopupMenuItem::new(label).on_click(move |_, _window, app| {
+        let Some(panel) = panel.upgrade() else {
+            return;
+        };
+        panel.update(app, |panel, cx| {
+            panel.sort_preview(&table, &column, descending, cx)
+        });
+    })
 }
 
 // ==================== 中央 tab 的面板协议 ====================

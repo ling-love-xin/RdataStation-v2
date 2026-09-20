@@ -4,17 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use fake::rand::rngs::StdRng;
-use fake::rand::SeedableRng;
 use fake::Fake;
+use fake::rand::SeedableRng;
+use fake::rand::rngs::StdRng;
 
 use super::generators::generate_cell;
-use crate::generators::parse_hour_minutes;
-use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
-use engine::duckdb::{DuckDBManager, TempTableSource};
-use shared::models::QueryResult;
-use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
+use crate::generators::parse_hour_minutes;
 use crate::models::{
     ColumnDef, ColumnDependency, ColumnMappingResponse, GeneratorConfig, Locale, MockConfig,
     MockExportFormat, MockGenerateResult, MockScenarioResult, MockScenarioTableResult,
@@ -22,6 +18,10 @@ use crate::models::{
 };
 use crate::schema_map::{ColumnMapper, parse_data_type};
 use crate::templates;
+use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
+use engine::duckdb::{DuckDBManager, TempTableSource};
+use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
+use shared::models::QueryResult;
 
 /// Mock 数据引擎 —— 在 DuckDB 内存表中生成模拟数据集
 ///
@@ -310,6 +310,35 @@ impl MockEngine {
             .map_err(|e| MockError::Preview(e.to_string()))
     }
 
+    /// 预览的「按列重排」：重查临时表，取**按该列排序后的前 `limit` 行**。
+    ///
+    /// 为何是重查而不是就地重排：预览只装了前 N 行的取样，就地重排只会把这 N 行换个顺序
+    /// （看着像「按值排过」，实际不是这一列的前 N 名）；重查拿到的才是全局的前 N 行，
+    /// 与标题里的「前 N 行」是同一个意思。
+    ///
+    /// **非阻塞**：拿不到内存库连接锁（有任务在跑 / 别的调用持锁）时返回 `Ok(None)`，
+    /// 由调用方保持现状——预览排序是随手动作，不值得为它冻住 UI 等一个不可取消的出口任务。
+    pub fn try_preview_ordered(
+        temp_table_name: &str,
+        column: &str,
+        descending: bool,
+        limit: usize,
+    ) -> MockResult<Option<QueryResult>> {
+        let db = Self::get_db()?;
+        let conn = match db.try_lock() {
+            Ok(guard) => guard,
+            // 与 `get_conn` 同一口径：毒化只说明上一次任务在持锁期间失败过，连接本身仍可用
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                tracing::warn!("Mock: 内存库连接锁曾被毒化（按列重排），已恢复复用");
+                poisoned.into_inner()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+        };
+        Self::read_ordered_preview(&conn, temp_table_name, column, descending, limit)
+            .map(Some)
+            .map_err(|e| MockError::Preview(e.to_string()))
+    }
+
     // ==================== 导出 ====================
 
     /// 导出临时表数据到文件
@@ -472,9 +501,9 @@ impl MockEngine {
                 // 那时表可能是别人的（同名表已在），删掉就是数据丢失
                 conn.execute_batch(&SqlEngine::build_create_table_in(&target, defs, false))?;
             }
-            if let Err(e) =
-                conn.execute_batch(&SqlEngine::build_insert_select(&target, temp_table, &columns))
-            {
+            if let Err(e) = conn.execute_batch(&SqlEngine::build_insert_select(
+                &target, temp_table, &columns,
+            )) {
                 if matches!(mode, TempTableWriteMode::Create(_)) {
                     // 建表成功但写入失败 → 回滚刚建的**空表**（不留半成品）
                     let _ = conn.execute_batch(&SqlEngine::build_drop_table_in(&target, true));
@@ -598,13 +627,38 @@ impl MockEngine {
         Ok(SqlEngine::build_create_table(table_name, &col_infos, false))
     }
 
+    /// 预览：临时表的前 `limit` 行（`SELECT *`，不排序）。
     fn read_preview(
         conn: &duckdb::Connection,
         table_name: &str,
         limit: usize,
     ) -> MockResult<QueryResult> {
         let sql = SqlEngine::build_select_all(table_name, Some(limit as i64));
-        let mut stmt = conn.prepare(&sql)?;
+        Self::read_select(conn, &sql)
+    }
+
+    /// 预览的「按列重排」：临时表**按该列排序后的前 `limit` 行**。
+    ///
+    /// 「排序后取前 N」而非「取前 N 再排序」：只有前者是全局视图——
+    /// 「这一列最大的 10 行长什么样」答得上问题，「把手上那 10 行换个个儿」答不上。
+    fn read_ordered_preview(
+        conn: &duckdb::Connection,
+        table_name: &str,
+        column: &str,
+        descending: bool,
+        limit: usize,
+    ) -> MockResult<QueryResult> {
+        let sql =
+            SqlEngine::build_select_ordered(table_name, column, descending, Some(limit as i64));
+        Self::read_select(conn, &sql)
+    }
+
+    /// 跑一条 `SELECT`，把结果整成 `QueryResult`（列名取语句的列标签）。
+    ///
+    /// 列名走 `stmt.column_name`（取实际结果的标签，不是我们拼的列清单）：
+    /// `SELECT *` 与 `SELECT * ORDER BY …` 两条路得到同一口径的列名。
+    fn read_select(conn: &duckdb::Connection, sql: &str) -> MockResult<QueryResult> {
+        let mut stmt = conn.prepare(sql)?;
 
         let row_data: Vec<Vec<duckdb::types::Value>>;
         {
@@ -1171,10 +1225,7 @@ impl MockEngine {
                         table.name, col.name
                     )));
                 }
-                let Some(parent_idx) = template
-                    .tables
-                    .iter()
-                    .position(|t| t.name == parent_name)
+                let Some(parent_idx) = template.tables.iter().position(|t| t.name == parent_name)
                 else {
                     return Err(MockError::InvalidColumn(format!(
                         "表 '{}' 的列 '{}' 引用了模板里没有的表 '{parent_name}'",
@@ -1296,10 +1347,10 @@ impl MockEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::CoreError;
     use crate::generators::generate_cell;
-    use crate::models::{ColumnDataType, GeneratorConfig};
     use crate::models::Locale;
+    use crate::models::{ColumnDataType, GeneratorConfig};
+    use engine::CoreError;
 
     /// 日历字段全默认的 `DateTime`（测试里多数用例只关心区间）。
     fn plain_date_time(min: &str, max: &str) -> GeneratorConfig {
@@ -1515,9 +1566,7 @@ mod tests {
     #[test]
     fn generator_params_that_cannot_be_sampled_are_rejected() {
         // 反向区间：实测 `RandomInt { min: 10, max: 5 }` 直接 panic
-        assert!(
-            generator_param_problem(&GeneratorConfig::RandomInt { min: 10, max: 5 }).is_some()
-        );
+        assert!(generator_param_problem(&GeneratorConfig::RandomInt { min: 10, max: 5 }).is_some());
         // 半开区间：`min == max` 就是空区间（`Sentence { min: 1, max: 1 }` 实测过）
         assert!(generator_param_problem(&GeneratorConfig::Sentence { min: 1, max: 1 }).is_some());
         assert!(
@@ -1763,7 +1812,10 @@ mod tests {
                 work_dates: Vec::new(),
             },
         ] {
-            assert!(generator_param_problem(&generator).is_none(), "{generator:?}");
+            assert!(
+                generator_param_problem(&generator).is_none(),
+                "{generator:?}"
+            );
         }
     }
 

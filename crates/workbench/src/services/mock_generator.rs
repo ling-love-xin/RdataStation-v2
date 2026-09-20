@@ -19,6 +19,7 @@
 //! | `append_table_at` | 项目分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
 //! | `export_file` | 调用方指定路径 | CSV / Parquet / Xlsx / SQL INSERT |
 //! | `save_scratchpad` | `{项目}/mock/` | 时间戳命名；无项目报错 |
+//! | `preview_ordered` | 内存临时表（`temp_mock_*`） | **只读重查**：按列排序后的前 N 行（不是就地重排取样窗口）；拿不到内存库锁则 `None` |
 //!
 //! 本层全是**同步**实现（阻塞当前线程）：生产入口是 `services::mock_jobs` 的任务种类，
 //! 由它在工作线程上调用；`*_at` 变体接受显式路径——集成测试用，也是「任意项目根」的接入面
@@ -75,9 +76,7 @@ fn analysis_tables(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
         .map_err(|e| format!("读取表清单失败: {e}"))?;
     let mut names = Vec::new();
     {
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| format!("读取表清单失败: {e}"))?;
+        let mut rows = stmt.query([]).map_err(|e| format!("读取表清单失败: {e}"))?;
         while let Some(row) = rows.next().map_err(|e| format!("读取表清单失败: {e}"))? {
             let schema: String = row.get(1).unwrap_or_default();
             if schema == "main" {
@@ -395,15 +394,28 @@ pub fn try_clear_temp_tables() -> Option<Vec<String>> {
     mock::MockEngine::try_clear_temp_tables().ok().flatten()
 }
 
+/// 预览的「按列重排」：重查内存临时表，取**按该列排序后的前 `limit` 行**。
+///
+/// `Ok(None)` = 内存库连接正被别的任务占用（有任务在跑）：排序是随手动作，
+/// 不值得为它等一个不可取消的出口任务，交由面板给出一句可读解释并保持现状。
+pub fn preview_ordered(
+    temp_table: &str,
+    column: &str,
+    descending: bool,
+    limit: usize,
+) -> Result<Option<MockPreview>, String> {
+    let preview = mock::MockEngine::try_preview_ordered(temp_table, column, descending, limit)
+        .map_err(|e| format!("按「{column}」排序取样失败：{e}"))?;
+    Ok(preview.as_ref().map(flatten_preview))
+}
+
 /// 预览：Arrow 批次 → 字符串网格（视图层不依赖 Arrow）。
 ///
 /// `read_preview` 只填 `batches`（`rows` 为空），取值必须经 `QueryResult::from_batches`。
 fn flatten_preview(preview: &shared::models::QueryResult) -> MockPreview {
-    let rows = shared::models::QueryResult::from_batches(
-        preview.columns.clone(),
-        preview.batches.clone(),
-    )
-    .rows;
+    let rows =
+        shared::models::QueryResult::from_batches(preview.columns.clone(), preview.batches.clone())
+            .rows;
     MockPreview {
         columns: preview.columns.clone(),
         rows: rows
