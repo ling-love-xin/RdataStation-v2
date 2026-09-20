@@ -2530,7 +2530,7 @@ mod tests {
         use gpui_kit::test::TestWindowExt as _;
         use gpui_kit::{
             Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled as _,
-            TestAppContext, VisualTestContext, WeakEntity, Window, div, point, px, rems,
+            TestAppContext, VisualTestContext, WeakEntity, Window, div, point, rems,
         };
 
         use super::super::{lucide, outline_section};
