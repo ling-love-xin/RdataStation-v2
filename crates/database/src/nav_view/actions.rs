@@ -48,7 +48,7 @@ impl NavView {
     /// 词都清了它还挂着「3 条命中」就是自相矛盾；等下一帧排程去清会让它多闪一帧。
     pub(super) fn clear_nav_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(input) = self.nav_search.clone() {
-            // `set_value` 会发 `InputEvent::Change`（订阅里已 `cx.notify()`），
+            // `set_value` 会发 `InputEvent::Change`（订阅里会标脏 + `cx.notify()`），
             // 于是下一帧的 `render_nav` 会把本地过滤词也重算为空。
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
@@ -58,6 +58,8 @@ impl NavView {
             view.search_hits.clear();
             view.search_searched = 0;
         }
+        // 清空是用户的**收尾动作**（而不是过程），不等防抖窗口，当场落库。
+        self.flush_nav_state(cx);
         cx.notify();
     }
 
@@ -240,12 +242,12 @@ impl NavView {
             // 取不到运行时句柄，冒泡为 `[CONN_NOT_FOUND]`（用户看到的“连不上”）。
             if matches!(path, NavPath::Connection) && !self.ensure_connected_for_browse(conn_id, cx)
             {
-                self.save_nav_state_for(conn_id);
+                self.mark_nav_state_dirty(conn_id, cx);
                 return;
             }
             self.ensure_nav_loaded(conn_id, key, path, false, cx);
         }
-        self.save_nav_state_for(conn_id);
+        self.mark_nav_state_dirty(conn_id, cx);
     }
 
     /// 展开前的隐式建连：未连接时先建连；返回是否可用（已连接 或 建连成功）。
@@ -406,6 +408,8 @@ impl NavView {
                 None => {
                     // catalog 列表还没到：先把连接展开并排队，下一拍再看
                     self.nav.borrow_mut().expanded.insert(conn_key.clone());
+                    // 定位途中展开的链路也要落库（否则重启后收回去，跟“定位完停在那里”不一致）。
+                    self.mark_nav_state_dirty(&target.conn_id, cx);
                     self.ensure_nav_loaded(
                         &target.conn_id,
                         &conn_key,
@@ -435,6 +439,8 @@ impl NavView {
         let levels = target.levels(&catalog);
         for (key, path) in &levels {
             self.nav.borrow_mut().expanded.insert(key.clone());
+            // 定位推进的每一拍都标脏：函数中间会提前 return，标注跟着插入走才不会漏。
+            self.mark_nav_state_dirty(&target.conn_id, cx);
             // 某一层已经报错：不再等（等不到），当场把原因摆出来
             let failed = self.nav.borrow().errors.get(key).cloned();
             if let Some(err) = failed {
@@ -462,11 +468,13 @@ impl NavView {
             .unwrap_or_default();
         let target_key = target.node_key(&catalog);
         if children.iter().any(|n| n.key == target_key) {
-            let mut view = self.nav.borrow_mut();
-            view.selected_key = Some(target_key.clone());
-            view.reveal = None;
-            view.reveal_note = None;
-            drop(view);
+            {
+                let mut view = self.nav.borrow_mut();
+                view.reveal = None;
+                view.reveal_note = None;
+            }
+            // 选中走唯一入口：定位结果也进面板级状态的落库（重启后回到这条）。
+            self.set_nav_selected(Some(target_key.clone()), cx);
             // 滚到眼前：行集合下一帧才包含目标（上面刚改了展开 / 窗口），
             // 所以这里只登记意图，由 `render_nav` 在收集之后兑现。
             self.nav_pending_scroll = Some(target_key);
@@ -774,23 +782,143 @@ impl NavView {
         view.state_loaded.insert(conn_id.to_string());
     }
 
-    /// 持久化某连接的展开态。
-    pub(super) fn save_nav_state_for(&self, conn_id: &str) {
+    /// 持久化某连接的展开态（**防抖**：攒到 `ui::NAV_STATE_SAVE_DEBOUNCE_MS` 无新变更再写）。
+    ///
+    /// 为何不在这里直接写库：展开 / 折叠是高频动作，而落库是 UI 线程上的 SQLite 写；
+    /// 一次性批量落库（含面板级状态）在 [`Self::flush_nav_state`]。
+    pub(super) fn mark_nav_state_dirty(&self, conn_id: &str, cx: &mut Context<Self>) {
+        self.state_dirty
+            .borrow_mut()
+            .conns
+            .insert(conn_id.to_string());
+        self.schedule_nav_state_save(cx);
+    }
+
+    /// 记一次「面板级状态脏了」（选中 / 搜索词）；同样防抖。
+    pub(super) fn mark_panel_state_dirty(&self, cx: &mut Context<Self>) {
+        self.state_dirty.borrow_mut().panel = true;
+        self.schedule_nav_state_save(cx);
+    }
+
+    /// 写选中（**全树唯一入口**：点击 / 键盘漫游 / 定位都走它）。
+    ///
+    /// 抽出来的两个理由：① 落库（搜索行那种瞬时键不写，见 [`nav_selection_is_persistable`]）；
+    /// ② 只有一个地方记「选中变了」——旧写法是五处各自 `borrow_mut().selected_key = ...`。
+    pub(super) fn set_nav_selected(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        let changed = {
+            let mut view = self.nav.borrow_mut();
+            if view.selected_key == key {
+                false
+            } else {
+                view.selected_key = key;
+                true
+            }
+        };
+        if changed {
+            self.mark_panel_state_dirty(cx);
+        }
+    }
+
+    /// 面板级状态（选中 / 搜索词）的一次性恢复（首帧的 `defer_in` 调，需窗口才能填搜索框）。
+    ///
+    /// 恢复选中后**请它滚进视口**——这就是「滚动位置」的恢复方式（行集合要等懒加载回来
+    /// 才齐，存像素偏移对不上；「我选中的那条」既稳又是用户记忆里的位置）。
+    /// 行还没到时由已有的跨帧重试（`nav_pending_scroll`）兑现。
+    pub(super) fn ensure_panel_state_loaded(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.nav.borrow().panel_state_loaded {
+            return;
+        }
+        self.nav.borrow_mut().panel_state_loaded = true;
+        let Some(state) = crate::nav_store::load_panel_state(self.host.project_root().as_deref())
+        else {
+            return;
+        };
+        if let Some(key) = state.selected_key.clone().filter(|k| !k.is_empty()) {
+            self.nav.borrow_mut().selected_key = Some(key.clone());
+            self.nav_pending_scroll = Some(key);
+        }
+        if !state.filter_text.is_empty() {
+            if let Some(input) = self.nav_search.clone() {
+                // `set_value` 会发 `InputEvent::Change`（订阅里 notify），下一帧的
+                // `render_nav` 就把本地过滤词重算成它了。
+                input.update(cx, |s, cx| {
+                    s.set_value(state.filter_text.clone(), window, cx)
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// 防抖排程：窗口内还有新变更就把上一枚任务丢掉（`Task` drop = 取消）重新计时。
+    fn schedule_nav_state_save(&self, cx: &mut Context<Self>) {
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        let task = cx.spawn(async move |_this, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(
+                    ui::NAV_STATE_SAVE_DEBOUNCE_MS,
+                ))
+                .await;
+            let _ = weak.update(cx, |this, cx| this.flush_nav_state(cx));
+        });
+        *self.state_save.borrow_mut() = Some(task);
+    }
+
+    /// 把攒下的脏状态**一次写库**（防抖到期；需要立刻落时也可以直接调）。
+    ///
+    /// 两类写入：① 展开态按连接一行；② 面板级（选中 / 搜索词）一行。
+    /// 两者共用 `navigator_state` 表，但**不写对方的字段**（否则写展开态会把选中抹掉——
+    /// 旧实现 `save_nav_state_for` 用 `..Default::default()` 正是这个问题）。
+    pub(super) fn flush_nav_state(&self, cx: &mut Context<Self>) {
+        let (conns, panel) = {
+            let mut dirty = self.state_dirty.borrow_mut();
+            (
+                std::mem::take(&mut dirty.conns),
+                std::mem::replace(&mut dirty.panel, false),
+            )
+        };
+        if conns.is_empty() && !panel {
+            return;
+        }
+        let root = self.host.project_root();
+        let root = root.as_deref();
+        for conn_id in &conns {
+            let state = crate::model::NavState {
+                expanded_keys: self.nav_expanded_keys_for(conn_id),
+                ..Default::default()
+            };
+            let _ = crate::nav_store::save_nav_state(conn_id, root, &state);
+        }
+        if panel {
+            let selected = self.nav.borrow().selected_key.clone();
+            let selected = selected.filter(|k| nav_selection_is_persistable(k));
+            let filter_text = self
+                .nav_search
+                .as_ref()
+                .map(|s| s.read(cx).value().to_string())
+                .unwrap_or_default();
+            let state = crate::model::NavState {
+                selected_key: selected,
+                filter_text,
+                ..Default::default()
+            };
+            let _ = crate::nav_store::save_panel_state(root, &state);
+        }
+    }
+
+    /// 某连接当前的展开键（持久化用；只收它自己子树的键）。
+    fn nav_expanded_keys_for(&self, conn_id: &str) -> Vec<String> {
         let prefix = format!("{conn_id}/");
-        let keys: Vec<String> = {
-            let view = self.nav.borrow();
-            view.expanded
-                .iter()
-                .filter(|k| *k == conn_id || k.starts_with(&prefix))
-                .cloned()
-                .collect()
-        };
-        let state = crate::model::NavState {
-            expanded_keys: keys,
-            ..Default::default()
-        };
-        let _ =
-            crate::nav_store::save_nav_state(conn_id, self.host.project_root().as_deref(), &state);
+        let view = self.nav.borrow();
+        view.expanded
+            .iter()
+            .filter(|k| *k == conn_id || k.starts_with(&prefix))
+            .cloned()
+            .collect()
     }
 
     /// 容器展示名（分组名；`GROUP_UNGROUPED` → 「未分组」）：拖拽通知文案用。

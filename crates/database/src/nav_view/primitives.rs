@@ -514,6 +514,21 @@ pub(super) fn nav_search_query_ready(query: &str) -> bool {
     query.trim().chars().count() >= 2
 }
 
+/// 选中的这一行**值不值得跨重启记住**。
+///
+/// 只记**树上真有的行**：
+/// - 连接行 / 树行的 key 是 `{连接 id}` 或 `{连接 id}/…`（与 `NavNode::child_key` 同构）；
+/// - 搜索命中行（`search:{位次}:…`）、分组头（`group:`）、引用行（`ref:`）、
+///   「更多」/「已定位」（`#more` / `#jump`）都是**视图临时行**：重启后要么不存在、
+///   要么位置会变（搜索行还带位次），恢复它们只会让选中跑到一个看上去无关的行上。
+pub(super) fn nav_selection_is_persistable(key: &str) -> bool {
+    const TEMPORARY_PREFIXES: [&str; 3] = ["search:", "group:", "ref:"];
+    if TEMPORARY_PREFIXES.iter().any(|p| key.starts_with(p)) {
+        return false;
+    }
+    !key.contains("#more") && !key.contains("#jump")
+}
+
 /// 相对时间文案（面板底状态行）：`刚刚` / `N 分钟前` / `N 小时前` / `N 天前`。
 ///
 /// 与 `analytics_resource::present::format_relative_time` 同一口径（那边显示文件时间，

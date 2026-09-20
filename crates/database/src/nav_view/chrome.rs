@@ -14,9 +14,11 @@ impl NavView {
             state.update(cx, |s, cx| {
                 s.set_placeholder("筛选数据源 / 表 / 列 / 标签…", window, cx)
             });
-            // 输入变化时通知面板重渲染，否则过滤词不会即时生效。
-            let sub = cx.subscribe_in(&state, window, |_this, _e, ev: &InputEvent, _w, cx| {
+            // 输入变化时通知面板重渲染，否则过滤词不会即时生效；
+            // 同时把搜索词标脏（防抖落库，重启后搜索框回到原样）。
+            let sub = cx.subscribe_in(&state, window, |this, _e, ev: &InputEvent, _w, cx| {
                 if matches!(ev, InputEvent::Change) {
+                    this.mark_panel_state_dirty(cx);
                     cx.notify();
                 }
             });
@@ -32,9 +34,10 @@ impl NavView {
             }
         }
 
-        // 本地 SQLite 一次性读取（分组/标签、各连接展开态）不在 render 做，
+        // 本地 SQLite 一次性读取（分组/标签、各连接展开态、面板级选中 / 搜索词）不在 render 做，
         // 推到本帧效果周期之后执行，完成后重绘。
         let need_org = !self.nav.borrow().groups_loaded;
+        let need_panel_state = !self.nav.borrow().panel_state_loaded;
         let need_state: Vec<String> = {
             let view = self.nav.borrow();
             self.host
@@ -44,15 +47,19 @@ impl NavView {
                 .map(|c| c.id.clone())
                 .collect()
         };
-        if need_org || !need_state.is_empty() {
+        if need_org || need_panel_state || !need_state.is_empty() {
             let conn_ids = need_state.clone();
-            cx.defer_in(window, move |this, _window, cx| {
+            cx.defer_in(window, move |this, window, cx| {
                 let org_pending = need_org && !this.nav.borrow().groups_loaded;
                 if org_pending {
                     this.reload_nav_org();
                 }
                 for cid in &conn_ids {
                     this.ensure_nav_state_loaded(cid);
+                }
+                // 面板级状态需窗口（把搜索词写回输入框），所以放在这个 `defer_in` 里。
+                if need_panel_state {
+                    this.ensure_panel_state_loaded(window, cx);
                 }
                 cx.notify();
             });

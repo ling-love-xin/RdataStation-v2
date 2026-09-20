@@ -10,8 +10,8 @@ use super::{
     NavBadgeStatus, RevealTarget, insight_schema_target, nav_badge_pulses, nav_data_target,
     nav_kind_icon, nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time,
     nav_reorder, nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref,
-    nav_search_query_ready, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
-    search_hit_row_id, search_hit_row_key,
+    nav_search_query_ready, nav_selection_is_persistable, nav_step, nav_type_label,
+    nav_type_short_label, parse_nav_search, search_hit_row_id, search_hit_row_key,
 };
 use crate::commands::NavClearSearch;
 use crate::model::{
@@ -41,6 +41,8 @@ mod stub_host {
     pub(super) struct StubNavHost {
         connected: RefCell<HashSet<String>>,
         connections: Vec<ConnectionItem>,
+        /// 项目根：默认 `None`（面板级状态就没有落点）；恢复类用例用它注入临时目录。
+        root: Option<PathBuf>,
     }
 
     impl StubNavHost {
@@ -63,7 +65,14 @@ mod stub_host {
                     created_at: String::new(),
                     updated_at: String::new(),
                 }],
+                root: None,
             }
+        }
+
+        /// 带项目根的宿主：面板级状态（选中 / 搜索词）从这里指定的目录读写。
+        pub(super) fn with_project_root(mut self, root: PathBuf) -> Self {
+            self.root = Some(root);
+            self
         }
     }
 
@@ -75,7 +84,7 @@ mod stub_host {
             None
         }
         fn project_root(&self) -> Option<PathBuf> {
-            None
+            self.root.clone()
         }
         fn select_connection(&self, _index: Option<usize>, _cx: &mut App) {}
         fn notice(&self, _message: String, _cx: &mut App) {}
@@ -153,6 +162,13 @@ fn seed_reveal_state(
     let schema_key = NavNode::child_key(conn, &[catalog, schema]);
     let folder_key = NavNode::child_key(conn, &[catalog, schema, NavFolder::Tables.key()]);
     let mut s = view.nav.borrow_mut();
+    // 测试自己播行集合与展开态，**不从库恢复**：
+    // 同进程的用例共用一个测试数据根（`paths::test_root` 按进程隔离），
+    // 任何一个用例写了展开键，后来的用例就会把别人的展开态读进来（断言全乱）。
+    // 想验证「恢复」的用例请另起（见 `panel_state_is_restored_on_the_next_open`：
+    // 它们用独立的连接 id 与项目根）。
+    s.state_loaded.insert(conn.to_string());
+    s.panel_state_loaded = true;
     s.children.insert(
         conn.to_string(),
         vec![NavNode::new(
@@ -222,9 +238,19 @@ fn open_nav_view<'a>(
     gpui_kit::Entity<super::NavView>,
     &'a mut gpui_kit::VisualTestContext,
 ) {
+    open_nav_view_with(cx, stub_host::StubNavHost::new(conn))
+}
+
+/// 同 [`open_nav_view`]，但宿主由调用方给（恢复类用例要带项目根）。
+fn open_nav_view_with<'a>(
+    cx: &'a mut gpui_kit::TestAppContext,
+    host: stub_host::StubNavHost,
+) -> (
+    gpui_kit::Entity<super::NavView>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
     cx.update(gpui_kit::init);
-    let host: std::rc::Rc<dyn crate::nav_host::NavHost> =
-        std::rc::Rc::new(stub_host::StubNavHost::new(conn));
+    let host: std::rc::Rc<dyn crate::nav_host::NavHost> = std::rc::Rc::new(host);
     let (harness, cx) = cx.add_window_view(|_window, cx| {
         let view = cx.new(|cx| super::NavView::new(host, cx));
         RevealHarness { view }
@@ -232,6 +258,21 @@ fn open_nav_view<'a>(
     cx.update(|_window, cx| window_draw(cx));
     let view = cx.update(|_window, cx| harness.read(cx).view.clone());
     (view, cx)
+}
+
+/// 一个**临时项目根**（同一用例内唯一；`.cargo/config.toml` 把 TEMP 钉在 `.rds/tmp`）。
+fn temp_project_root(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rds_nav_panel_{tag}_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir temp project root");
+    dir
 }
 
 /// 空实现：窗口级用例不靠渲染断言，只需要窗口存在（焦点与实体生命周期）。
@@ -1045,6 +1086,111 @@ fn clear_search_action_clears_only_the_search_box(cx: &mut gpui_kit::TestAppCont
         Some("postgresql"),
         "facet 筛选不动（它在「筛选 ▾」里看得见，误清会让人以为筛选坏了）"
     );
+}
+
+/// 窗口级：面板级状态（选中 / 搜索词）**落库并能恢复**；滚动由选中锚点恢复。
+///
+/// 为何要铉：这三件（选中 / 搜索词 / 滚动）是 §6.4 / #25 ① 点名的遗留，
+/// 而且它们**不是按连接**存的（面板级唯一）——落错行或按连接各存一份，症状是
+/// 「重启后选中跑到别的连接上」或「搜索框被另一个连接的词覆盖」。
+#[gpui_kit::test]
+fn panel_state_is_restored_on_the_next_open(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_panel_restore";
+    let root = temp_project_root("restore");
+    let selected = NavNode::child_key(conn, &["shop", "public", "orders"]);
+
+    // 上一次会话：定位到 orders，并把搜索框留在了 "ord"
+    {
+        let (view, cx) = open_nav_view_with(
+            cx,
+            stub_host::StubNavHost::new(conn).with_project_root(root.clone()),
+        );
+        cx.update(|_window, cx| {
+            seed_reveal_state(
+                &view.read(cx),
+                conn,
+                "shop",
+                "public",
+                vec![table_node(conn, "shop", "public", "orders")],
+                None,
+            );
+            // 本次会话真的从库里恢复（去掉 `seed_reveal_state` 的“已加载”标记）
+            view.update(cx, |view, cx| {
+                {
+                    let mut nav = view.nav.borrow_mut();
+                    nav.state_loaded.clear();
+                    nav.panel_state_loaded = false;
+                }
+                view.set_nav_selected(Some(selected.clone()), cx);
+                view.flush_nav_state(cx);
+            });
+        });
+        // 搜索词：走输入框真实路径（订阅里会标脏）
+        // 搜索词走**真实输入路径**（只有真敲键才发 `InputEvent::Change`：
+        // `InputState::set_value` 内部会临时 `emit_events = false`）。
+        cx.update(|window, cx| {
+            let input = view.read(cx).nav_search.clone().expect("搜索框已建");
+            let handle = input.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        cx.simulate_keystrokes("o r d");
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.flush_nav_state(cx)));
+        // 落库的内容先铉一下：不对称时能直接看出是哪一半坏了（写还是读）。
+        let stored = crate::nav_store::load_panel_state(Some(&root)).expect("面板级状态应已落库");
+        assert_eq!(stored.selected_key.as_deref(), Some(selected.as_str()));
+        assert_eq!(stored.filter_text, "ord", "搜索词要真的写进去");
+    }
+
+    // 下一次开面板：选中与搜索词回来了，且**请了**滚动（行还没到，由 pending_scroll 兑现）
+    let (view, cx) = open_nav_view_with(
+        cx,
+        stub_host::StubNavHost::new(conn).with_project_root(root.clone()),
+    );
+    redraw(cx);
+    let (selected_key, pending, text) = cx.update(|_window, cx| {
+        let view = view.read(cx);
+        (
+            view.nav.borrow().selected_key.clone(),
+            view.nav_pending_scroll.clone(),
+            view.nav_search
+                .as_ref()
+                .map(|s| s.read(cx).value().to_string()),
+        )
+    });
+    assert_eq!(
+        selected_key.as_deref(),
+        Some(selected.as_str()),
+        "选中要跨重启回来（面板级一行）"
+    );
+    assert_eq!(
+        pending.as_deref(),
+        Some(selected.as_str()),
+        "滚动用选中锚点恢复：登记待兑现的行 key"
+    );
+    assert_eq!(text.as_deref(), Some("ord"), "搜索词要回到搜索框");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 视图临时行（搜索命中 / 分组头 / 引用 / 「更多」/「已定位」）**不进落库**。
+///
+/// 为何要铉：这些 key 带位次或本身就是容器，「记住」它们只会让下次启动的选中
+/// 跑到一行看上去无关的行上（甚至指向不存在的行）。
+#[test]
+fn only_tree_rows_are_worth_remembering_as_selection() {
+    assert!(nav_selection_is_persistable("G_1"));
+    assert!(nav_selection_is_persistable("G_1/shop/public/orders"));
+    for transient in [
+        "search:0:G_1/shop/public/orders",
+        "group:g1",
+        "ref:g2:G_1",
+        "G_1/shop/public/tables#more",
+        "G_1/shop/public/tables#jump",
+    ] {
+        assert!(
+            !nav_selection_is_persistable(transient),
+            "{transient} 是视图临时行，不该跨重启记"
+        );
+    }
 }
 
 /// 只有「连接中」徽标挂循环动画。

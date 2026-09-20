@@ -8,24 +8,39 @@
 //! `global/018`、`project_meta/017` 一致），不依赖迁移执行顺序。
 //! 状态与缓存一样**不自动删除**。
 //!
-//! 为什么住在 engine 而不是导航视图侧：它是**纯持久化**（读写一张表），
+//! ## 一张表里的两类行
+//!
+//! - **按连接**（`conn_id` = 真实连接 id）：`expanded_keys`——展开态属于连接（展开的是
+//!   它自己的子树），一行一连接；
+//! - **面板级**（`conn_id` = [`PANEL_STATE_CONN_ID`]）：`selected_key` / `filter_text`——
+//!   选中与搜索框都是**面板级唯一**的（v5 把「来源标签页」合并成一棵分组树后，一个搜索框
+//!   管所有连接、同一时刻只有一个选中行），按连接存会互相覆盖、也不知道该听谁的；
+//!   滚动位置不存偏移，由**选中锚点**在视图侧恢复（行集合是按需懒加载的，偏移对不上）。
+//!
+//! 为何住在 engine 而不是导航视图侧：它是**纯持久化**（读写一张表），
 //! 而 [`NavState`] 是行映射类型；视图下沉到 `database` 后，视图侧不应为了存状态
 //! 再引一份 `rusqlite`（engine 已有）。原先在 `workbench::services::nav_store`。
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use shared::error::{CoreError, StorageError};
+
+/// 导航状态里**面板级**那一行保留的 `conn_id`（选中 / 搜索词）。
+///
+/// 它不是连接 id（真实 id 有 `G_` / `P_` / `GP_` / 遗留 `conn-` 前缀），不会撞车；
+/// 与 `UNGROUPED_SCOPE` 同一类「保留键」做法：表结构不变，语义由常量指名。
+pub const PANEL_STATE_CONN_ID: &str = "__panel__";
 
 /// 导航视图状态（展开节点 / 选中节点 / 搜索词 + 格式版本）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavState {
     /// 已展开节点 key
     pub expanded_keys: Vec<String>,
-    /// 选中节点 key
+    /// 选中节点 key（面板级行用它；按连接的行留空）
     pub selected_key: Option<String>,
-    /// 搜索过滤词
+    /// 搜索过滤词（面板级行用它；按连接的行留空——搜索框是面板级的）
     pub filter_text: String,
     /// 格式版本（便于后续迁移）
     pub version: u32,
@@ -127,7 +142,12 @@ impl NavigatorStateStore {
     }
 
     /// 保存导航状态。
-    pub fn save_state(&self, conn_id: &str, scope: &str, state: &NavState) -> Result<(), CoreError> {
+    pub fn save_state(
+        &self,
+        conn_id: &str,
+        scope: &str,
+        state: &NavState,
+    ) -> Result<(), CoreError> {
         let expanded = serde_json::to_string(&state.expanded_keys).unwrap_or_else(|_| "[]".into());
         self.conn
             .execute(
@@ -184,6 +204,45 @@ mod tests {
         assert_eq!(loaded.filter_text, "order");
         // 缺失连接返回默认
         assert!(store.load_state("P_missing").expanded_keys.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 面板级保留行与按连接的行**互不干扰**（各自一行，字段各取所需）。
+    #[test]
+    fn panel_row_is_a_separate_row_from_connection_rows() {
+        let dir = temp_dir("panel");
+        let store = NavigatorStateStore::open_at(dir.join("p.db")).expect("open");
+        store
+            .save_state(
+                "P_a",
+                "project",
+                &NavState {
+                    expanded_keys: vec!["P_a/db".into()],
+                    ..NavState::default()
+                },
+            )
+            .expect("save conn");
+        store
+            .save_state(
+                PANEL_STATE_CONN_ID,
+                "project",
+                &NavState {
+                    selected_key: Some("P_a/db/public/orders".into()),
+                    filter_text: "ord".into(),
+                    ..NavState::default()
+                },
+            )
+            .expect("save panel");
+
+        let panel = store.load_state(PANEL_STATE_CONN_ID);
+        assert_eq!(panel.selected_key.as_deref(), Some("P_a/db/public/orders"));
+        assert_eq!(panel.filter_text, "ord");
+        assert!(panel.expanded_keys.is_empty(), "面板级行不填展开态");
+
+        let conn = store.load_state("P_a");
+        assert_eq!(conn.expanded_keys, vec!["P_a/db".to_string()]);
+        assert!(conn.selected_key.is_none(), "按连接的行不填选中");
+        assert!(conn.filter_text.is_empty(), "按连接的行不填搜索词");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

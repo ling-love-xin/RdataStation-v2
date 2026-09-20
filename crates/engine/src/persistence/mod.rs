@@ -39,11 +39,11 @@ pub mod sql_template_store;
 pub mod trash;
 pub mod workbench_context_store;
 
-pub use cache_version_migration::{CacheVersionManager, CURRENT_CACHE_VERSION};
+pub use cache_version_migration::{CURRENT_CACHE_VERSION, CacheVersionManager};
+pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use connection_org_store::{
     ConnectionGroup, ConnectionOrgStore, MEMBER_ORDER_UNSET, UNGROUPED_SCOPE,
 };
-pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,
 };
@@ -52,7 +52,7 @@ pub use metadata_cache::{
     MetadataCacheOps, SchemaObjectCounts, TriggerInfo,
 };
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
-pub use navigator_state::{NavState, NavigatorStateStore};
+pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};
 pub use sql_template_store::{SqlTemplate, SqlTemplateStore};
 pub use workbench_context_store::{EditorContext, WorkbenchContextStore, WorkbenchLayout};

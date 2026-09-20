@@ -280,6 +280,11 @@ pub struct NavViewState {
     prefetched: HashSet<String>,
     /// 当前选中的节点 key（键盘导航与选中高亮）。
     selected_key: Option<String>,
+    /// 面板级状态（选中 / 搜索词）是否已从库恢复（一次性）。
+    ///
+    /// 为何单独一个标记：展开态按连接恢复（`state_loaded` 逐连接），而面板级状态只有一份
+    /// （见 `nav_store::load_panel_state`）。
+    panel_state_loaded: bool,
     /// 附加 facet 筛选：类型（`drivers.type_id`）。
     pub type_filter: Option<String>,
     /// 附加 facet 筛选：驱动 id。
@@ -374,6 +379,18 @@ impl NavBadgeStatus {
             Self::Idle => "未连接",
         }
     }
+}
+
+/// 待落库的导航状态脏标记（`flush_nav_state` 消费）。
+///
+/// 为何攒批而不是逐个写：展开 / 箭头漫游 / 打字都是高频动作，而落库是 UI 线程上的
+/// SQLite 写——逐个写会把一次连按放大成一串磁盘操作（`ui::NAV_STATE_SAVE_DEBOUNCE_MS`）。
+#[derive(Default)]
+struct NavStateDirty {
+    /// 展开态脏了的连接 ID（每连接一行 `navigator_state`）。
+    conns: HashSet<String>,
+    /// 面板级状态（选中 / 搜索词）脏了。
+    panel: bool,
 }
 
 /// 连接级约束快照（归属域 chips + 搜索框 `scope:`/`type:`/`driver:`/`tag:` + 「筛选 ▾」弹层）。
@@ -486,6 +503,10 @@ pub struct NavView {
     rows: Vec<NavRow>,
     /// 待兑现的滚动意图（行 key）：定位跨帧推进，行集合下一帧才包含目标。
     nav_pending_scroll: Option<String>,
+    /// 状态落库的防抖句柄（`Task` drop = 取消；被下一枚替换即重新计时）。
+    state_save: RefCell<Option<Task<()>>>,
+    /// 攒批的脏标记：展开态按连接记，面板级（选中 / 搜索词）一个布尔。
+    state_dirty: RefCell<NavStateDirty>,
     /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
     list_scroll: Rc<VirtualListScrollHandle>,
     /// 正在轮询预热进度的后台任务（避免重复启动）。
@@ -524,6 +545,8 @@ impl NavView {
             nav_order: Rc::new(RefCell::new(Vec::new())),
             rows: Vec::new(),
             nav_pending_scroll: None,
+            state_save: RefCell::new(None),
+            state_dirty: RefCell::new(NavStateDirty::default()),
             list_scroll: Rc::new(VirtualListScrollHandle::new()),
             warm_poll: None,
             nav_pump: RefCell::new(None),
@@ -561,7 +584,7 @@ impl NavView {
     }
 
     /// 键盘导航：按渲染顺序移动选中项（`delta` 为 ±1）。
-    fn nav_move(&self, delta: isize, cx: &mut Context<Self>) {
+    fn nav_move(&mut self, delta: isize, cx: &mut Context<Self>) {
         let order = self.nav_order.borrow();
         if order.is_empty() {
             return;
@@ -574,7 +597,8 @@ impl NavView {
         };
         let key = order[next].key.clone();
         drop(order);
-        self.nav.borrow_mut().selected_key = Some(key.clone());
+        // 选中走唯一入口（写状态 + 排一次防抖落库）。
+        self.set_nav_selected(Some(key.clone()), cx);
         // 键盘漫游跟着滚：列表只画视口内的行，不滚的话选中会跑到屏外。
         self.nav_scroll_to_key(&key);
         cx.notify();

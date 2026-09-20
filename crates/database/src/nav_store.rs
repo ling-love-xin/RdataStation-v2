@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use engine::persistence::{
-    id_prefix, ConnectionGroup, ConnectionOrgStore, NavState, NavigatorStateStore, UNGROUPED_SCOPE,
+    ConnectionGroup, ConnectionOrgStore, NavState, NavigatorStateStore, PANEL_STATE_CONN_ID,
+    UNGROUPED_SCOPE, id_prefix,
 };
 
 // ==================== 连接 → 库的路由 ====================
@@ -78,6 +79,35 @@ pub fn save_nav_state(
     };
     store
         .save_state(conn_id, scope, state)
+        .map_err(|e| e.to_string())
+}
+
+// ==================== 导航面板级状态（选中 / 搜索词） ====================
+//
+// 与上面「按连接」的那对函数分开：展开态属于连接（一行一连接），而**选中与搜索框是面板级的**
+// ——v5 把「来源标签页」合并成一棵分组树后，一个搜索框管所有连接、同一时刻只有一个选中行，
+// 按连接存会互相覆盖。两者共用 `navigator_state` 表的**保留行**（`PANEL_STATE_CONN_ID`）。
+//
+// 路由：面板级状态是**项目隔离**的结构化状态（§6.4），所以有项目根落项目库；
+// **没项目根就没有落点**（读回 `None` / 写为 no-op）——生产上应用启动即绑定当前项目（§2.1），
+// 这条只在测试与异常态生效。
+
+/// 读取面板级状态（无项目根 → `None`）。
+pub fn load_panel_state(project_root: Option<&Path>) -> Option<NavState> {
+    let root = project_root?;
+    NavigatorStateStore::open_project(root)
+        .ok()
+        .map(|store| store.load_state(PANEL_STATE_CONN_ID))
+}
+
+/// 保存面板级状态（无项目根 → 静默不落，与读回 `None` 对称）。
+pub fn save_panel_state(project_root: Option<&Path>, state: &NavState) -> Result<(), String> {
+    let Some(root) = project_root else {
+        return Ok(());
+    };
+    NavigatorStateStore::open_project(root)
+        .map_err(|e| e.to_string())?
+        .save_state(PANEL_STATE_CONN_ID, "project", state)
         .map_err(|e| e.to_string())
 }
 
@@ -162,16 +192,9 @@ pub fn update_group(
 /// 重命名分组（保留描述与排序）。
 ///
 /// 不再传 `None` 描述：那会把已有描述洗掉（曾经的缺陷），改名时描述必须保留。
-pub fn rename_group(
-    project_root: Option<&Path>,
-    group_id: &str,
-    name: &str,
-) -> Result<(), String> {
+pub fn rename_group(project_root: Option<&Path>, group_id: &str, name: &str) -> Result<(), String> {
     let store = open_org_project(project_root)?;
-    let current = store
-        .list_groups()
-        .into_iter()
-        .find(|g| g.id == group_id);
+    let current = store.list_groups().into_iter().find(|g| g.id == group_id);
     let (description, sort_order) = current
         .map(|g| (g.description, g.sort_order))
         .unwrap_or((None, 0));
@@ -215,7 +238,9 @@ pub fn add_to_group(
     conn_id: &str,
 ) -> Result<(), String> {
     let store = open_org_project(project_root)?;
-    store.add_member(group_id, conn_id).map_err(|e| e.to_string())
+    store
+        .add_member(group_id, conn_id)
+        .map_err(|e| e.to_string())
 }
 
 /// 移出分组。
@@ -225,7 +250,9 @@ pub fn remove_from_group(
     conn_id: &str,
 ) -> Result<(), String> {
     let store = open_org_project(project_root)?;
-    store.remove_member(group_id, conn_id).map_err(|e| e.to_string())
+    store
+        .remove_member(group_id, conn_id)
+        .map_err(|e| e.to_string())
 }
 
 /// 移出全部分组（连接回到「未分组」）。
@@ -299,4 +326,40 @@ pub fn clear_primary_group(project_root: Option<&Path>, conn_id: &str) -> Result
     store
         .clear_primary_group(conn_id)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 面板级状态落**项目库**（`{root}/.RSmeta/project.db`），与按连接的导航状态同表不同行。
+    ///
+    /// 为何单独铉：它是「有项目根才有落点」的那条口径——路由写错就会把全局连接的选中
+    /// 写进全局库（跨项目串味），或者干脆静默不落。
+    #[test]
+    fn panel_state_roundtrips_in_the_project_db() {
+        let root = std::env::temp_dir().join(format!("rds_navstore_panel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        // 无项目根：读回 None、写为 no-op（不是报错）
+        assert!(load_panel_state(None).is_none(), "没项目根就没有落点");
+        save_panel_state(None, &NavState::default()).expect("无项目根不报错");
+
+        let state = NavState {
+            selected_key: Some("P_1/shop/public/orders".into()),
+            filter_text: "ord".into(),
+            ..NavState::default()
+        };
+        save_panel_state(Some(&root), &state).expect("save");
+        let loaded = load_panel_state(Some(&root)).expect("load");
+        assert_eq!(loaded.selected_key, state.selected_key);
+        assert_eq!(loaded.filter_text, state.filter_text);
+        assert!(
+            root.join(".RSmeta").join("project.db").exists(),
+            "面板级状态应落在项目库"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

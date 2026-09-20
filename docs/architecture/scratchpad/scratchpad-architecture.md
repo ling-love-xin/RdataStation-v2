@@ -534,7 +534,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 文件元数据 | `store.rs::{file_meta, bind_connections, update_file_meta}` + `models.rs::{FileMeta, FileMeta::preferred_connection}`（读侧 → 打开预选；写侧 → 绑定与执行回存） |
 | 回收站 | `trash.rs`（manifest 与服务） + `store.rs::{delete_entry, list_trash, restore_from_trash, empty_trash}` |
 | 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（模块根：`ScratchpadView` 结构与协议 `new` / `render_scratchpad` / `ensure_scratchpad_pump`、状态类型 `ScratchpadViewState`、行输入模型 `ScratchpadRowCtx` / `ScratchpadRowColors`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**）；**2026-09-20 拆分**（见 §8 D17）：`scratchpad_view/{primitives,search,rows,chrome,actions,dnd,tests}.rs`，拆分脚本 `tools/split_scratchpad_view.py`（一次性，已执行） |
-| 行共用原语与行高预算 | `workbench_shell::tree::{active_bar, disclosure_slot, disclosure_icon, indent_spacer, indent_rem, RowHeight, row_sizes}`（2026-09-20 起导航 / 草稿箱共用）；行高预言在 `scratchpad_view.rs::scratchpad_row_height`，尺寸常量在 `workbench_shell/src/ui.rs` |
+| 行共用原语与行高预算 | `workbench_shell::tree::{active_bar, disclosure_slot, disclosure_icon, indent_spacer, indent_rem, RowHeight, row_sizes}`（2026-09-20 起导航 / 草稿箱 / 资产库 / Mock 共用）；行高预算在 `scratchpad_view/rows.rs::scratchpad_row_height`，尺寸常量在 `workbench_shell/src/ui.rs`；**行态口径的权威表**：`docs/architecture/theme/ui-constraints.md` §8.3（本表的 D14–D16 就是它的一部分，改口径改那一处） |
 | 宿主端口与装配 | `scratchpad/src/host.rs`（trait）+ `workbench/src/components/scratchpad_host.rs`（实现）+ `workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
 | 搜索结果与替换栏 | `scratchpad/src/scratchpad_view.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
 | 快捷键与尺寸 | `scratchpad/src/commands.rs`、`workbench/src/commands.rs`、`workbench_shell/src/ui.rs`、`app/src/main.rs` |

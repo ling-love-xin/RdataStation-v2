@@ -961,14 +961,11 @@ impl NavView {
             .on_click(move |_, _, app| {
                 let cid = conn_id.clone();
                 entity.update(app, |this, cx| {
-                    {
-                        let mut view = this.nav.borrow_mut();
-                        // 展开主组（若已折叠）并选中该连接，使全亮行可见。
-                        if let Some(gid) = &primary_gid {
-                            view.collapsed_groups.remove(gid);
-                        }
-                        view.selected_key = Some(cid.clone());
+                    // 展开主组（若已折叠）并选中该连接，使全亮行可见。
+                    if let Some(gid) = &primary_gid {
+                        this.nav.borrow_mut().collapsed_groups.remove(gid);
                     }
+                    this.set_nav_selected(Some(cid.clone()), cx);
                     cx.notify();
                 });
             })
@@ -1313,7 +1310,7 @@ impl NavView {
                         // 单击选中（键盘导航基准）；双击打开属性；再次点击展开 / 折叠。
                         let sel_key = conn_id.clone();
                         entity.update(app, |this, cx| {
-                            this.nav.borrow_mut().selected_key = Some(sel_key.clone());
+                            this.set_nav_selected(Some(sel_key.clone()), cx);
                             cx.notify();
                         });
                         if ev.click_count() >= 2 {
@@ -1900,7 +1897,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 focus.focus(window, app);
                 let sel_key = n_key.clone();
                 entity.update(app, |this, cx| {
-                    this.nav.borrow_mut().selected_key = Some(sel_key.clone());
+                    this.set_nav_selected(Some(sel_key.clone()), cx);
                     cx.notify();
                 });
                 if ev.click_count() >= 2 {
@@ -2456,7 +2453,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         row.on_click(move |_, _, app| {
             entity.update(app, |this, cx| {
                 // 先选中再开面板：漫游序列里走到这一行时，行态得看得出选的是哪一行。
-                this.nav.borrow_mut().selected_key = Some(key.clone());
+                // （命中行是**临时行**，不进落库——`nav_selection_is_persistable`。）
+                this.set_nav_selected(Some(key.clone()), cx);
                 if let Some(property) = property.clone() {
                     let req = PropertyRequest {
                         property,

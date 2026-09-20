@@ -15,10 +15,13 @@
 //!
 //! ## 展开指示
 //!
-//! 统一走**图标**（`disclosure_icon`）：导航与草稿箱都已换（草稿箱 2026-09-20 补齐，
-//! 字符载体 `▸/▾` 随之退场）。两者共用同一个 10px 槽（`disclosure_slot`），
-//! 所以**换载体只动一行调用**，不会让缩进漂移（槽宽是缩进算式的一部分：
-//! 行内容 = `pl` + 槽 + `gap_1`）。
+//! 四个消费方（导航 M4 / 草稿箱 M5 / 资产库 M6 / Mock M7）**已统一到图标**（`disclosure_icon`，
+//! 12px chevron）：导航见原型 v8 修订点，草稿箱见 `scratchpad-architecture.md` D14，
+//! 资产库见 `resource_view.rs::render_group_header`。旧的字符载体 `disclosure_glyph`（`▸/▾`）
+//! 在三处都换掉后**已删除（2026-09-20）**——留着它就是「还有一个载体可选」的暗示。
+//!
+//! 槽宽（`disclosure_slot`，10px）是缩进算式的一部分：行内容 = `pl` + 槽 + `gap_1`
+//! = 一个 `TREE_INDENT` 步长，换载体只动那一行调用，不得改槽宽，否则同层行标题左边缘会错位。
 
 use std::rc::Rc;
 
@@ -58,7 +61,7 @@ pub fn disclosure_slot() -> Div {
         .justify_center()
 }
 
-/// 展开指示**图标**载体（12px chevron；导航与草稿箱同用）。
+/// 展开指示**图标**载体（12px chevron；四个消费方统一用它）。
 pub fn disclosure_icon(expanded: bool, color: Hsla) -> Icon {
     Icon::empty()
         .path(if expanded {
