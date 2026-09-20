@@ -154,6 +154,8 @@ if [ "$ARCHIVE" = "zip" ]; then
   else
     # Git-Bash 常只有 unzip 没有 zip（本机实测如此）：交给 tools/zip-dir.ps1。
     # 不用 `Compress-Archive`：它写出的条目名用反斜杠分隔，在 Linux / macOS 上解出来是怪文件名。
+    # ⚠️ `zip-dir.ps1` **必须带 UTF-8 BOM**：Windows PowerShell 5.1 对无 BOM 的文件按 ANSI 解码，
+    # 脚本里的中文注释会把字符串字面量解坏（runner 上实测 ParserError，本机因代码页恰好能过）。
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/tools/zip-dir.ps1" \
       -Src "$(cygpath -w "$STAGING")" -Dst "$(cygpath -w "$ARCHIVE_FILE")"
   fi

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$Src, [Parameter(Mandatory = $true)][string]$Dst)
+﻿param([Parameter(Mandatory = $true)][string]$Src, [Parameter(Mandatory = $true)][string]$Dst)
 
 # 打包一个目录为 zip：Windows 上 Git-Bash 常没有 `zip`，而 `Compress-Archive`
 # 写出的条目名用**反斜杠**分隔（在 Linux / macOS 上解出来是带反斜杠的怪文件名），
