@@ -26,12 +26,8 @@ impl ScratchpadView {
         let info = theme.colors.info;
         let success = theme.colors.success;
         let active_border = theme.colors.list_active_border;
-        let warning = theme.colors.warning;
-        let danger = theme.colors.danger;
 
         let entity = cx.entity();
-        let view_handle = self.scratchpad.clone();
-
         let (
             rows,
             error,
@@ -45,9 +41,7 @@ impl ScratchpadView {
             edit,
             undo,
             filter,
-            has_clipboard,
             loading,
-            conflicts,
         ) = {
             let view = self.scratchpad.borrow();
             let filter = view
@@ -66,11 +60,6 @@ impl ScratchpadView {
                 &filter,
                 &mut flat,
             );
-            let conflicts: Vec<(String, std::path::PathBuf, bool)> = view
-                .conflicts
-                .iter()
-                .map(|c| (c.relative.clone(), c.absolute.clone(), c.diff.is_some()))
-                .collect();
             (
                 flat,
                 view.error.clone(),
@@ -84,389 +73,13 @@ impl ScratchpadView {
                 view.edit.clone(),
                 view.undo.clone(),
                 filter,
-                view.clipboard.is_some(),
                 view.loading,
-                conflicts,
             )
         };
 
-        // ── 工具栏（新建文件 / 新建文件夹 / 刷新）──
-        let start_new_file = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
-                });
-            }
-        };
-        let start_new_folder = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    this.start_scratchpad_edit(ScratchpadEdit::NewFolder, window, cx)
-                });
-            }
-        };
-        let refresh = {
-            let view = view_handle.clone();
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                view.borrow_mut().loaded = false;
-                entity.update(app, |_, cx| cx.notify());
-            }
-        };
-        let cycle_sort = {
-            let view = view_handle.clone();
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                {
-                    let mut v = view.borrow_mut();
-                    let (mut next_sort, mut next_desc) = (v.sort, v.sort_desc);
-                    scratchpad_cycle_sort(&mut next_sort, &mut next_desc);
-                    v.sort = next_sort;
-                    v.sort_desc = next_desc;
-                }
-                entity.update(app, |_, cx| cx.notify());
-            }
-        };
-        let cut_selection = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Cut, cx)
-                });
-            }
-        };
-        let copy_selection = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| {
-                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Copy, cx)
-                });
-            }
-        };
-        let paste_clipboard = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| this.paste_scratchpad_clipboard(cx));
-            }
-        };
-        let delete_selection = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| this.delete_scratchpad_selection(cx));
-            }
-        };
-        let import_files = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| this.pick_scratchpad_imports(window, cx));
-            }
-        };
-        let add_reference = {
-            let entity_template = entity.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                let entity = entity_template.clone();
-                // 引用 = 只记路径、不复制，因此**文件或目录**均可（区别于导入）。
-                let receiver = app.prompt_for_paths(PathPromptOptions {
-                    files: true,
-                    directories: true,
-                    multiple: false,
-                    prompt: Some("选择要引用的文件或目录".into()),
-                });
-                window
-                    .spawn(app, async move |cx| {
-                        if let Ok(Ok(Some(paths))) = receiver.await {
-                            if let Some(path) = paths.into_iter().next() {
-                                let _ = cx.update(|window, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.start_scratchpad_edit(
-                                            ScratchpadEdit::NewReference { path },
-                                            window,
-                                            cx,
-                                        )
-                                    });
-                                });
-                            }
-                        }
-                    })
-                    .detach();
-            }
-        };
+        let toolbar = self.render_scratchpad_header(cx);
 
-        let tool_btn = |id: &'static str,
-                        glyph: &'static str,
-                        handler: Box<
-            dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
-        >| {
-            div()
-                .id(id)
-                .h_flex()
-                .items_center()
-                .justify_center()
-                .w_6()
-                .h_6()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_xs()
-                .text_color(muted)
-                .hover(move |s| s.bg(hover_bg))
-                .on_click(move |ev, window, app| handler(ev, window, app))
-                .child(glyph)
-        };
-
-        let has_selection = !selected.is_empty();
-        let mut toolbar = div().v_flex().w_full().gap_1().px_1p5().py_1();
-        toolbar = toolbar.child(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .w_full()
-                .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
-                .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
-                .child(tool_btn("sp-import", "⬇", Box::new(import_files)))
-                .child(tool_btn("sp-add-ref", "🔗", Box::new(add_reference)))
-                .child(div().flex_1())
-                .child(tool_btn("sp-sort", "⇅", Box::new(cycle_sort)))
-                .child(tool_btn("sp-refresh", "↻", Box::new(refresh))),
-        );
-        if has_selection || has_clipboard {
-            toolbar = toolbar.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .w_full()
-                    .child(tool_btn("sp-cut", "✂", Box::new(cut_selection)))
-                    .child(tool_btn("sp-copy", "⧉", Box::new(copy_selection)))
-                    .child(tool_btn("sp-paste", "📋", Box::new(paste_clipboard)))
-                    .child(tool_btn("sp-delete", "🗑", Box::new(delete_selection)))
-                    .child(div().flex_1())
-                    .child(div().id("sp-sel-count").text_xs().text_color(muted).child(
-                        if has_selection {
-                            format!("{} 项", selected.len())
-                        } else {
-                            "剪贴板".to_string()
-                        },
-                    )),
-            );
-        }
-
-        // ── 冲突条（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了 ──
-        for (relative, absolute, diff_ready) in conflicts {
-            let show_diff = {
-                let entity = entity.clone();
-                let relative = relative.clone();
-                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                    entity.update(app, |this, cx| {
-                        this.show_scratchpad_conflict_diff(relative.clone(), cx)
-                    });
-                }
-            };
-            let reload = {
-                let entity = entity.clone();
-                let absolute = absolute.clone();
-                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                    entity.update(app, |this, cx| {
-                        this.reload_scratchpad_conflict(absolute.clone(), cx)
-                    });
-                }
-            };
-            let ignore = {
-                let entity = entity.clone();
-                let relative = relative.clone();
-                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                    entity.update(app, |this, cx| {
-                        this.ignore_scratchpad_conflict(relative.clone(), cx)
-                    });
-                }
-            };
-            toolbar = toolbar.child(
-                div()
-                    .v_flex()
-                    .w_full()
-                    .gap_1()
-                    .p_1()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(warning)
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_1()
-                            .w_full()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .text_color(danger)
-                                    .child(format!("冲突：{relative}")),
-                            )
-                            .child(
-                                Button::new(format!("sp-conflict-diff-{relative}"))
-                                    .small()
-                                    .label(if diff_ready { "差异" } else { "计算中…" })
-                                    .disabled(!diff_ready)
-                                    .on_click(show_diff),
-                            )
-                            .child(
-                                Button::new(format!("sp-conflict-reload-{relative}"))
-                                    .small()
-                                    .label("重载")
-                                    .on_click(reload),
-                            )
-                            .child(
-                                Button::new(format!("sp-conflict-ignore-{relative}"))
-                                    .small()
-                                    .ghost()
-                                    .label("忽略")
-                                    .on_click(ignore),
-                            ),
-                    ),
-            );
-        }
-
-        // ── 搜索（文件名过滤 / 内容搜索）──
-        let (search_mode, search_regex, search_case) = {
-            let v = self.scratchpad.borrow();
-            (v.search_mode, v.search_regex, v.search_case)
-        };
-        let toggle_mode = {
-            let view = view_handle.clone();
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                {
-                    let mut v = view.borrow_mut();
-                    v.search_mode = if v.search_mode == ScratchpadSearchMode::Content {
-                        ScratchpadSearchMode::Name
-                    } else {
-                        ScratchpadSearchMode::Content
-                    };
-                }
-                entity.update(app, |_, cx| cx.notify());
-            }
-        };
-        let toggle_regex = {
-            let view = view_handle.clone();
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                {
-                    let mut v = view.borrow_mut();
-                    v.search_regex = !v.search_regex;
-                }
-                entity.update(app, |_, cx| cx.notify());
-            }
-        };
-        let toggle_case = {
-            let view = view_handle.clone();
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                {
-                    let mut v = view.borrow_mut();
-                    v.search_case = !v.search_case;
-                }
-                entity.update(app, |_, cx| cx.notify());
-            }
-        };
-        let run_search = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| this.run_scratchpad_content_search(cx));
-            }
-        };
-
-        let mode_label = if search_mode == ScratchpadSearchMode::Content {
-            "内容"
-        } else {
-            "文件名"
-        };
-        let mode_on = search_mode == ScratchpadSearchMode::Content;
-
-        let mut search_row = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .w_full()
-            .px_1p5()
-            .pb_1();
-        search_row = search_row.child(
-            div()
-                .id("sp-mode")
-                .h_flex()
-                .items_center()
-                .justify_center()
-                .px_1()
-                .h_5()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_xs()
-                .text_color(if mode_on { fg } else { muted })
-                .when(mode_on, |this| this.bg(selected_bg))
-                // 开关 chip 同一条规矩：悬停不盖当前位置。
-                .when(!mode_on, move |s| s.hover(move |s| s.bg(hover_bg)))
-                .child(mode_label)
-                .on_click(toggle_mode),
-        );
-        if let Some(input) = self.scratchpad.borrow().search_input.clone() {
-            search_row =
-                search_row.child(div().flex_1().min_w_0().child(Input::new(&input).w_full()));
-        }
-        if search_mode == ScratchpadSearchMode::Content {
-            search_row = search_row
-                .child(
-                    div()
-                        .id("sp-regex")
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .px_1()
-                        .h_5()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if search_regex { fg } else { muted })
-                        .when(search_regex, |this| this.bg(selected_bg))
-                        .when(!search_regex, move |s| s.hover(move |s| s.bg(hover_bg)))
-                        .child(".*")
-                        .on_click(toggle_regex),
-                )
-                .child(
-                    div()
-                        .id("sp-case")
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .px_1()
-                        .h_5()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if search_case { fg } else { muted })
-                        .when(search_case, |this| this.bg(selected_bg))
-                        .when(!search_case, move |s| s.hover(move |s| s.bg(hover_bg)))
-                        .child("Aa")
-                        .on_click(toggle_case),
-                )
-                .child(
-                    div()
-                        .id("sp-run")
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .px_1()
-                        .h_5()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(muted)
-                        .hover(move |s| s.bg(hover_bg))
-                        .child("⏎")
-                        .on_click(run_search),
-                );
-        }
+        let search_row = self.render_scratchpad_search(cx);
 
         let mut panel = div()
             .v_flex()
@@ -993,5 +606,430 @@ impl ScratchpadView {
             }
         }
         body
+    }
+}
+
+impl ScratchpadView {
+    /// 面板头与工具栏：新建 / 新建文件夹 / 导入 / 引用 / 排序 / 刷新 + 选中时的剪贴板行，
+    /// 以及 C-4 的冲突条（同一份草稿在编辑器里有未保存修改、磁盘上又被外部改了）。
+    ///
+    /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图——把「一行按钮怎么摆」这类
+    /// 局部细节搬出来，主视图只剩装配顺序（行为不变：同一元素树，只换了落点）。
+    fn render_scratchpad_header(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let hover_bg = theme.colors.list_hover;
+        let muted = theme.colors.muted_foreground;
+        let warning = theme.colors.warning;
+        let danger = theme.colors.danger;
+
+        let entity = cx.entity();
+        let view_handle = self.scratchpad.clone();
+        let (selected, has_clipboard, conflicts) = {
+            let view = self.scratchpad.borrow();
+            let conflicts: Vec<(String, std::path::PathBuf, bool)> = view
+                .conflicts
+                .iter()
+                .map(|c| (c.relative.clone(), c.absolute.clone(), c.diff.is_some()))
+                .collect();
+            (view.selected.clone(), view.clipboard.is_some(), conflicts)
+        };
+
+        // ── 工具栏（新建文件 / 新建文件夹 / 刷新）──
+        let start_new_file = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
+                });
+            }
+        };
+        let start_new_folder = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.start_scratchpad_edit(ScratchpadEdit::NewFolder, window, cx)
+                });
+            }
+        };
+        let refresh = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                view.borrow_mut().loaded = false;
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let cycle_sort = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    let (mut next_sort, mut next_desc) = (v.sort, v.sort_desc);
+                    scratchpad_cycle_sort(&mut next_sort, &mut next_desc);
+                    v.sort = next_sort;
+                    v.sort_desc = next_desc;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let cut_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Cut, cx)
+                });
+            }
+        };
+        let copy_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Copy, cx)
+                });
+            }
+        };
+        let paste_clipboard = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.paste_scratchpad_clipboard(cx));
+            }
+        };
+        let delete_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.delete_scratchpad_selection(cx));
+            }
+        };
+        let import_files = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.pick_scratchpad_imports(window, cx));
+            }
+        };
+        let add_reference = {
+            let entity_template = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                let entity = entity_template.clone();
+                // 引用 = 只记路径、不复制，因此**文件或目录**均可（区别于导入）。
+                let receiver = app.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("选择要引用的文件或目录".into()),
+                });
+                window
+                    .spawn(app, async move |cx| {
+                        if let Ok(Ok(Some(paths))) = receiver.await {
+                            if let Some(path) = paths.into_iter().next() {
+                                let _ = cx.update(|window, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.start_scratchpad_edit(
+                                            ScratchpadEdit::NewReference { path },
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                });
+                            }
+                        }
+                    })
+                    .detach();
+            }
+        };
+
+        let tool_btn = |id: &'static str,
+                        glyph: &'static str,
+                        handler: Box<
+            dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+        >| {
+            div()
+                .id(id)
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .w_6()
+                .h_6()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(muted)
+                .hover(move |s| s.bg(hover_bg))
+                .on_click(move |ev, window, app| handler(ev, window, app))
+                .child(glyph)
+        };
+
+        let has_selection = !selected.is_empty();
+        let mut toolbar = div().v_flex().w_full().gap_1().px_1p5().py_1();
+        toolbar = toolbar.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
+                .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
+                .child(tool_btn("sp-import", "⬇", Box::new(import_files)))
+                .child(tool_btn("sp-add-ref", "🔗", Box::new(add_reference)))
+                .child(div().flex_1())
+                .child(tool_btn("sp-sort", "⇅", Box::new(cycle_sort)))
+                .child(tool_btn("sp-refresh", "↻", Box::new(refresh))),
+        );
+        if has_selection || has_clipboard {
+            toolbar = toolbar.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .child(tool_btn("sp-cut", "✂", Box::new(cut_selection)))
+                    .child(tool_btn("sp-copy", "⧉", Box::new(copy_selection)))
+                    .child(tool_btn("sp-paste", "📋", Box::new(paste_clipboard)))
+                    .child(tool_btn("sp-delete", "🗑", Box::new(delete_selection)))
+                    .child(div().flex_1())
+                    .child(div().id("sp-sel-count").text_xs().text_color(muted).child(
+                        if has_selection {
+                            format!("{} 项", selected.len())
+                        } else {
+                            "剪贴板".to_string()
+                        },
+                    )),
+            );
+        }
+
+        // ── 冲突条（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了 ──
+        for (relative, absolute, diff_ready) in conflicts {
+            let show_diff = {
+                let entity = entity.clone();
+                let relative = relative.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.show_scratchpad_conflict_diff(relative.clone(), cx)
+                    });
+                }
+            };
+            let reload = {
+                let entity = entity.clone();
+                let absolute = absolute.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.reload_scratchpad_conflict(absolute.clone(), cx)
+                    });
+                }
+            };
+            let ignore = {
+                let entity = entity.clone();
+                let relative = relative.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.ignore_scratchpad_conflict(relative.clone(), cx)
+                    });
+                }
+            };
+            toolbar = toolbar.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .p_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(warning)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(danger)
+                                    .child(format!("冲突：{relative}")),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-diff-{relative}"))
+                                    .small()
+                                    .label(if diff_ready { "差异" } else { "计算中…" })
+                                    .disabled(!diff_ready)
+                                    .on_click(show_diff),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-reload-{relative}"))
+                                    .small()
+                                    .label("重载")
+                                    .on_click(reload),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-ignore-{relative}"))
+                                    .small()
+                                    .ghost()
+                                    .label("忽略")
+                                    .on_click(ignore),
+                            ),
+                    ),
+            );
+        }
+
+        toolbar
+    }
+}
+
+impl ScratchpadView {
+    /// 搜索行：文件名过滤 / 内容搜索的模式 chip + 输入框 + 内容模式下的 `.*` 与 `Aa`。
+    ///
+    /// 搜索状态在点击回调里改（`view.search_mode` 等），这里只做投影与渲染。
+    fn render_scratchpad_search(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let hover_bg = theme.colors.list_hover;
+        let selected_bg = theme.colors.list_active;
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+
+        let entity = cx.entity();
+        let view_handle = self.scratchpad.clone();
+
+        // ── 搜索（文件名过滤 / 内容搜索）──
+        let (search_mode, search_regex, search_case) = {
+            let v = self.scratchpad.borrow();
+            (v.search_mode, v.search_regex, v.search_case)
+        };
+        let toggle_mode = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_mode = if v.search_mode == ScratchpadSearchMode::Content {
+                        ScratchpadSearchMode::Name
+                    } else {
+                        ScratchpadSearchMode::Content
+                    };
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let toggle_regex = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_regex = !v.search_regex;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let toggle_case = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_case = !v.search_case;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let run_search = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.run_scratchpad_content_search(cx));
+            }
+        };
+
+        let mode_label = if search_mode == ScratchpadSearchMode::Content {
+            "内容"
+        } else {
+            "文件名"
+        };
+        let mode_on = search_mode == ScratchpadSearchMode::Content;
+
+        let mut search_row = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .px_1p5()
+            .pb_1();
+        search_row = search_row.child(
+            div()
+                .id("sp-mode")
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .px_1()
+                .h_5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if mode_on { fg } else { muted })
+                .when(mode_on, |this| this.bg(selected_bg))
+                // 开关 chip 同一条规矩：悬停不盖当前位置。
+                .when(!mode_on, move |s| s.hover(move |s| s.bg(hover_bg)))
+                .child(mode_label)
+                .on_click(toggle_mode),
+        );
+        if let Some(input) = self.scratchpad.borrow().search_input.clone() {
+            search_row =
+                search_row.child(div().flex_1().min_w_0().child(Input::new(&input).w_full()));
+        }
+        if search_mode == ScratchpadSearchMode::Content {
+            search_row = search_row
+                .child(
+                    div()
+                        .id("sp-regex")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if search_regex { fg } else { muted })
+                        .when(search_regex, |this| this.bg(selected_bg))
+                        .when(!search_regex, move |s| s.hover(move |s| s.bg(hover_bg)))
+                        .child(".*")
+                        .on_click(toggle_regex),
+                )
+                .child(
+                    div()
+                        .id("sp-case")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if search_case { fg } else { muted })
+                        .when(search_case, |this| this.bg(selected_bg))
+                        .when(!search_case, move |s| s.hover(move |s| s.bg(hover_bg)))
+                        .child("Aa")
+                        .on_click(toggle_case),
+                )
+                .child(
+                    div()
+                        .id("sp-run")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(muted)
+                        .hover(move |s| s.bg(hover_bg))
+                        .child("⏎")
+                        .on_click(run_search),
+                );
+        }
+
+        search_row
     }
 }
