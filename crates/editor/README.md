@@ -10,6 +10,7 @@
 | 长什么样、怎么交互（三模式解剖 / 交互 / 主题映射） | `docs/architecture/editor/editor-prototype-design.md` |
 | 为什么这样设计（概念模型 / 数据流 / D1–D23 决策 / 现状与已知问题） | `docs/architecture/editor/editor-architecture.md` |
 | 做到哪了、下一步（Phase 0 / 1a / 1b / 1c） | `docs/architecture/editor/editor-dev-plan.md` |
+| 怎么用（入口 / 导览 / 典型流程 / 快捷键 / FAQ / **USIT 验收清单**） | `docs/architecture/editor/editor-user-guide.md` |
 | 可交互示意稿 | `docs/architecture/editor/editor-prototype.html` |
 
 ## 依赖方向（硬约束）
