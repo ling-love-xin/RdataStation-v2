@@ -79,10 +79,16 @@ pub fn window_sql(sql: &str, limit: usize, offset: usize) -> Option<String> {
     window_segment(sql, limit, offset).map(|window| window.sql)
 }
 
-/// 窗口包装的产物：套好的 SQL + **原句在它里面占哪一段**
+/// 窗口包装的前缀（套子查询的开头）
+const WRAP_PREFIX: &str = "SELECT * FROM (\n";
+
+/// 窗口包装的子查询别名（MySQL 这类要求子查询必须有别名的方言用得上）
+const WRAP_ALIAS: &str = "rds_segment";
+
+/// 窗口包装的产物：套好的 SQL + **原句在它里面占哪一段** + 我们加的前后缀原文
 ///
 /// 包装是内部实现（用户从没写过 `rds_segment`）：驱动报的位置、错误消息里回显的 SQL 都是
-/// 相对**发出去的这段文本**的，要还原回用户的原句就得知道原句落在哪（见
+/// 相对**发出去的这段文本**的，要还原回用户的原句就得知道原句落在哪、我们加了哪两段（见
 /// [`unwrap_segment_error`]）。
 struct WindowedSegment {
     /// 真正发给驱动的文本
@@ -91,11 +97,14 @@ struct WindowedSegment {
     body: std::ops::Range<usize>,
     /// 原句里被裁掉的头部长（`body` 内的偏移加上它就得到原句内的偏移）
     indent: usize,
+    /// 我们加在**前面**的那段（清理驱动回显的文本时按原样摘掉）
+    prefix: &'static str,
+    /// 我们加在**后面**的那段（含前导换行；同上）
+    tail: String,
 }
 
 /// 构造函数——[`window_sql`] 与错误还原共用同一套算法（前缀长度必须对上）
 fn window_segment(sql: &str, limit: usize, offset: usize) -> Option<WindowedSegment> {
-    const PREFIX: &str = "SELECT * FROM (\n";
     let trimmed = sql.trim().trim_end_matches(';').trim_end();
     if trimmed.is_empty()
         || limit == 0
@@ -106,11 +115,14 @@ fn window_segment(sql: &str, limit: usize, offset: usize) -> Option<WindowedSegm
     {
         return None;
     }
-    let start = PREFIX.len();
+    let start = WRAP_PREFIX.len();
+    let tail = format!("\n) AS {WRAP_ALIAS} LIMIT {limit} OFFSET {offset}");
     Some(WindowedSegment {
-        sql: format!("{PREFIX}{trimmed}\n) AS rds_segment LIMIT {limit} OFFSET {offset}"),
+        sql: format!("{WRAP_PREFIX}{trimmed}{tail}"),
         body: start..start + trimmed.len(),
         indent: sql.len() - sql.trim_start().len(),
+        prefix: WRAP_PREFIX,
+        tail,
     })
 }
 
@@ -137,13 +149,117 @@ fn unwrap_segment_error(
             });
             Err(CoreError::Database(DatabaseError::Query {
                 sql: original.to_string(),
-                reason,
+                reason: scrub_wrapper_text(&reason, window),
                 position,
                 // 对象位置（表 / 列 / 约束）与「套没套窗口」无关，原样带过去
                 location,
             }))
         }
         other => other,
+    }
+}
+
+/// 把包装痕迹从**驱动给的原因文本**里摘掉
+///
+/// 结构化字段（`sql` / `position`）上面已经还原了，这里管的是自由文本：不是所有驱动都把
+/// 「出错点」放在结构化字段里——MySQL 走 sqlx 时会把出错点附近的**原文**贴进消息
+/// （`near 'order\n) AS rds_segment LIMIT 1000 OFFSET 0' at line 2`），而那段原文正是我们发出去的
+/// 包装文本。用户没写过 `rds_segment`，让他照着自己看不见的东西找错，只会以为是我们发错了
+/// （真机反馈：`select * from order` 的报错里冒出 `rds_segment`）。
+///
+/// 两条清理：
+/// 1. **摘掉我们加的前后缀**（收尾段的两种形态见 [`strip_wrapper_tail`]；没有就不动）；
+/// 2. **行号回退一行**：`at line N`（MySQL）/ `LINE N:`（DuckDB）里的 N 是按**发出去的文本**数的，
+///    而前缀正好多占了一行——不回退的话用户会去自己 SQL 的下一行找（那是包装的收尾行）。
+///    这条不看文本里有没有包装痕迹：能走到本函数的报错都是包装后的语句报的。
+fn scrub_wrapper_text(reason: &str, window: &WindowedSegment) -> String {
+    let mut text = strip_wrapper_tail(reason, window);
+    if let Some(at) = text.find(window.prefix) {
+        text.replace_range(at..at + window.prefix.len(), "");
+    }
+    back_one_line(&text)
+}
+
+/// 摘掉我们加在**后面**的那段（含前导换行）
+///
+/// 优先按原样匹配（驱动回显的通常就是它）；消息被驱动**截断**时只会出现前半截
+/// （MySQL 只贴出错点附近约 80 字符）——这时从 `) AS rds_segment` 起摘到**片段结束**
+/// （下一个引号 / 换行 / 串尾）：那一段里剩下的 `LIMIT` / `OFFSET` 全是我们拼的，原句到此为止。
+fn strip_wrapper_tail(reason: &str, window: &WindowedSegment) -> String {
+    if let Some(at) = reason.find(window.tail.as_str()) {
+        let mut text = reason.to_string();
+        text.replace_range(at..at + window.tail.len(), "");
+        return text;
+    }
+    let mark = format!(") AS {WRAP_ALIAS}");
+    let Some(at) = reason.find(mark.as_str()) else {
+        return reason.to_string();
+    };
+    // 收尾段是 `\n) AS …`（前导换行也是我们加的：原句发出去前已裁掉首尾空白），
+    // 截断时那个换行会留在标记前面，一并摘掉。
+    let start = match at.checked_sub(1) {
+        Some(index) if reason.as_bytes().get(index) == Some(&b'\n') => index,
+        _ => at,
+    };
+    let end = reason[at..]
+        .find(['\'', '"', '\n'])
+        .map(|offset| at + offset)
+        .unwrap_or(reason.len());
+    let mut text = reason.to_string();
+    text.replace_range(start..end, "");
+    text
+}
+
+/// 把 `at line N` / `LINE N:` 里大于 1 的行号减一（N = 1 时前缀没占行，原样保留）
+///
+/// 两种写法各是一个驱动家族的原文：MySQL 用 `at line 2`，DuckDB 用 `LINE 2:`（后面还跟着原文与
+/// 光标行，我们只改数字，引文与光标仍对齐用户自己写的那一行）。
+fn back_one_line(text: &str) -> String {
+    const MARKERS: [&str; 2] = ["at line ", "LINE "];
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    while cursor < text.len() {
+        let Some((start, marker)) = MARKERS
+            .iter()
+            .filter_map(|marker| {
+                text[cursor..]
+                    .find(marker)
+                    .map(|offset| (cursor + offset, *marker))
+            })
+            // 只在**词首**认标记：`BASELINE 3` 里的 `LINE ` 不是行号标记
+            .filter(|(start, _)| !is_word_byte(text, *start))
+            .min_by_key(|(start, _)| *start)
+        else {
+            break;
+        };
+        let digits_start = start + marker.len();
+        let digits_end = text[digits_start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|offset| digits_start + offset)
+            .unwrap_or(text.len());
+        out.push_str(&text[cursor..start]);
+        out.push_str(marker);
+        let digits = &text[digits_start..digits_end];
+        match digits.parse::<u64>() {
+            Ok(line) if line > 1 => out.push_str(&(line - 1).to_string()),
+            _ => out.push_str(digits),
+        }
+        cursor = digits_end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+/// `index` 前一个字节是不是词字符（ASCII 字母 / 数字 / 下划线 / 非 ASCII）
+///
+/// 用来判定标记是否落在**词首**：不认 `BASELINE` 尾巴上那个 `LINE `。
+fn is_word_byte(text: &str, index: usize) -> bool {
+    if index == 0 {
+        return false;
+    }
+    match text.as_bytes().get(index - 1) {
+        Some(byte) => byte.is_ascii_alphanumeric() || *byte == b'_' || *byte >= 0x80,
+        None => false,
     }
 }
 
@@ -952,11 +1068,8 @@ mod tests {
         // 先确认场景成立：包装确实把原句推后了（不然这条测试什么都没盯住）
         assert!(typo_at > 0, "原句不在包装的开头");
 
-        let mapped = unwrap_segment_error(
-            Err(query_error_at(&window.sql, typo_at)),
-            original,
-            &window,
-        );
+        let mapped =
+            unwrap_segment_error(Err(query_error_at(&window.sql, typo_at)), original, &window);
         let Err(CoreError::Database(DatabaseError::Query { sql, position, .. })) = mapped else {
             panic!("应当仍是查询错误");
         };
@@ -970,11 +1083,8 @@ mod tests {
 
         // 位置落在包装上（`AS rds_segment` 那一带）→ 不给位置（给错位置比不给更糟）
         let tail = window.sql.find("AS rds_segment").expect("有别名");
-        let tailed = unwrap_segment_error(
-            Err(query_error_at(&window.sql, tail)),
-            original,
-            &window,
-        );
+        let tailed =
+            unwrap_segment_error(Err(query_error_at(&window.sql, tail)), original, &window);
         assert!(
             matches!(
                 tailed,
@@ -990,11 +1100,8 @@ mod tests {
         let indented = "   SELECT no_such_column_xyz FROM t";
         let window = window_segment(indented, 10, 0).expect("能分段");
         let typo_at = window.sql.find("no_such_column_xyz").expect("有");
-        let mapped = unwrap_segment_error(
-            Err(query_error_at(&window.sql, typo_at)),
-            indented,
-            &window,
-        );
+        let mapped =
+            unwrap_segment_error(Err(query_error_at(&window.sql, typo_at)), indented, &window);
         let Err(CoreError::Database(DatabaseError::Query { position, .. })) = mapped else {
             panic!("应当仍是查询错误");
         };
@@ -1020,6 +1127,70 @@ mod tests {
             ),
             "其它错误域不该被改写"
         );
+    }
+
+    /// **包装不许漏给用户看**（真机反馈 2026-09-21）：MySQL 会把出错点附近的原文贴进消息，
+    /// 而那段原文正是我们发出去的包装文本；DuckDB 只贴用户那一行，但行号按包装后的文本数。
+    #[test]
+    fn segment_errors_do_not_leak_the_wrapper_text() {
+        use super::{back_one_line, scrub_wrapper_text, window_segment};
+
+        let original = "select * from order";
+        let window = window_segment(original, 1000, 0).expect("查询能分段");
+
+        // ① 真机样本（MySQL 1064）：出错点附近被整段回显——里面就带着我们的收尾段
+        let mysql = format!(
+            "error returned from database: 1064 (42000): You have an error in your SQL syntax; \
+             check the manual that corresponds to your MySQL server version for the right syntax \
+             to use near 'order{}' at line 2",
+            window.tail
+        );
+        let scrubbed = scrub_wrapper_text(&mysql, &window);
+        assert!(
+            !scrubbed.contains("rds_segment"),
+            "包装别名一个字符都不该漏：{scrubbed}"
+        );
+        assert!(
+            scrubbed.contains("near 'order' at line 1"),
+            "剩下的应当是用户那句的原文与行号：{scrubbed}"
+        );
+
+        // ② DuckDB 形态：只贴用户那一行 + 行号（我们的文本不在消息里，但行号是按包装后数的）
+        let duckdb = format!(
+            "Parser Error: syntax error at or near \"order\"\n\nLINE 2: {original}\n        ^"
+        );
+        let scrubbed = scrub_wrapper_text(&duckdb, &window);
+        assert!(
+            scrubbed.contains("LINE 1: select * from order"),
+            "行号要回退成用户那句的：{scrubbed}"
+        );
+
+        // ③ 发出去的整段被原样回显 → 前缀与收尾都摘掉，只剩用户那句
+        let echoed = format!("(SQL: {})", window.sql);
+        let scrubbed = scrub_wrapper_text(&echoed, &window);
+        assert!(!scrubbed.contains("rds_segment"), "{scrubbed}");
+        assert!(!scrubbed.contains("SELECT * FROM ("), "{scrubbed}");
+        assert!(scrubbed.contains(original), "用户那句仍在：{scrubbed}");
+
+        // ④ 消息被**截断**（片段只到收尾段的前半截）→ 剩下那一截也要摘掉，引号要留住
+        let cut = format!(
+            "error returned from database: 1064 (42000): ... near 'order{}' at line 2",
+            &window.tail[..22]
+        );
+        let scrubbed = scrub_wrapper_text(&cut, &window);
+        assert!(!scrubbed.contains("rds_segment"), "{scrubbed}");
+        assert!(
+            scrubbed.contains("near 'order' at line 1"),
+            "截断的片段也要还原成用户那句：{scrubbed}"
+        );
+
+        // ④ 与包装无关的报错一个字符都不改（超时这类文本里根本没有 SQL）
+        let timeout = "Query timed out after 5000ms";
+        assert_eq!(scrub_wrapper_text(timeout, &window), timeout);
+
+        // ⑤ 行号边界：`LINE 1:` 不该被减成 0；词中间的 `LINE ` 不是标记
+        assert_eq!(back_one_line("LINE 1: boom"), "LINE 1: boom");
+        assert_eq!(back_one_line("BASELINE 3 done"), "BASELINE 3 done");
     }
 
     #[tokio::test]
