@@ -215,6 +215,17 @@ fn is_read_only_sql(sql: &str) -> bool {
 ///
 /// `exec_iter` 路径对 DML 只能给出「无结果集」这个事实，拿不到计数；
 /// `exec_drop` 会丢弃结果集，随后 `Conn::affected_rows()` 给出服务器报的行数。
+/// mysql_async 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
+///
+/// MySQL 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
+/// 形态与样本见 `crate::driver::error_location::mysql`。拿不到就是 `None`，
+/// 界面不写一句空话。
+fn mysql_native_query_error(sql: &str, error: &mysql_async::Error) -> CoreError {
+    let message = error.to_string();
+    let location = crate::driver::error_location::mysql(&message);
+    CoreError::database(DatabaseError::query(sql, message).with_location(location))
+}
+
 async fn execute_writing(
     conn: &mut mysql_async::Conn,
     sql: &str,
@@ -223,7 +234,7 @@ async fn execute_writing(
     use mysql_async::prelude::Queryable;
     conn.exec_drop(sql, params)
         .await
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| mysql_native_query_error(sql, &e))?;
     Ok(affected_rows_result(conn.affected_rows()))
 }
 
@@ -470,7 +481,7 @@ impl Database for MySqlNativeDatabase {
         let mut result = conn
             .query_iter(sql)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_native_query_error(sql, &e))?;
 
         let columns: Vec<String> = result
             .columns_ref()
@@ -481,7 +492,7 @@ impl Database for MySqlNativeDatabase {
         let rows: Vec<mysql_async::Row> = result
             .collect()
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_native_query_error(sql, &e))?;
 
         build_query_result(&columns, &rows, is_read_only)
     }
@@ -528,7 +539,7 @@ impl Database for MySqlNativeDatabase {
         let mut result = conn
             .exec_iter(sql, params_ref)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_native_query_error(sql, &e))?;
 
         let columns: Vec<String> = result
             .columns_ref()
@@ -539,7 +550,7 @@ impl Database for MySqlNativeDatabase {
         let rows: Vec<mysql_async::Row> = result
             .collect()
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_native_query_error(sql, &e))?;
 
         build_query_result(&columns, &rows, is_read_only)
     }
@@ -576,7 +587,7 @@ impl Database for MySqlNativeDatabase {
                 }
 
                 let mut query_result = conn.query_iter(&sql_owned).await.map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    mysql_native_query_error(&sql_owned, &e)
                 })?;
 
                 let columns: Vec<String> = query_result
@@ -586,7 +597,7 @@ impl Database for MySqlNativeDatabase {
                     .collect();
 
                 let rows: Vec<mysql_async::Row> = query_result.collect().await.map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    mysql_native_query_error(&sql_owned, &e)
                 })?;
 
                 build_query_result(&columns, &rows, is_read_only)
@@ -596,6 +607,7 @@ impl Database for MySqlNativeDatabase {
                     sql: sql_for_cancel,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }
@@ -848,7 +860,7 @@ impl Transaction for MySqlNativeTransaction {
             let mut result = conn
                 .query_iter(sql)
                 .await
-                .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
 
             let columns: Vec<String> = result
                 .columns_ref()
@@ -859,7 +871,7 @@ impl Transaction for MySqlNativeTransaction {
             let rows: Vec<mysql_async::Row> = result
                 .collect()
                 .await
-                .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                .map_err(|e| mysql_native_query_error(sql, &e))?;
 
             build_query_result(&columns, &rows, is_read_only)
         } else {

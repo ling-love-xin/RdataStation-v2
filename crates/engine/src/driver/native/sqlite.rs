@@ -421,15 +421,24 @@ fn is_read_only_sql(sql: &str) -> bool {
 /// 「消息 + 出错 token 的字节偏移」（`sqlite3_error_offset`，0 基、相对本次发出的 SQL），
 /// 与 PG 两条路径同一口径；`offset` 为负表示拿不到位置。
 fn sqlite_error(sql: &str, error: rusqlite::Error) -> CoreError {
+    // 对象位置（表 / 列 / 约束）从消息文本里认：SQLite 的协议层没有字段，
+    // 但文案很固定（`UNIQUE constraint failed: t.c` / `no such table: t` …），
+    // 形态与样本见 `crate::driver::error_location::sqlite`。
+    //
+    // **SqlInputError 要拿 `msg` 去解析**，不能用 `Display`：那边会把
+    // ` in {sql} at offset {n}` 拼在消息后面（真机踩到：列名被解析成
+    // `nope in SELECT nope FROM t at offset 7`）。
     if let rusqlite::Error::SqlInputError { msg, offset, .. } = &error {
-        let mapped = DatabaseError::query(sql, msg.clone());
+        let location = crate::driver::error_location::sqlite(msg);
+        let mapped = DatabaseError::query(sql, msg.clone()).with_location(location);
         return CoreError::database(if *offset >= 0 {
             mapped.with_position(*offset as usize)
         } else {
             mapped
         });
     }
-    CoreError::database(DatabaseError::query(sql, error.to_string()))
+    let location = crate::driver::error_location::sqlite(&error.to_string());
+    CoreError::database(DatabaseError::query(sql, error.to_string()).with_location(location))
 }
 
 /// 写语句（不返回行）走 `Connection::execute`，拿**真实影响行数**（B5 / P0.6）
@@ -640,6 +649,7 @@ impl Database for SqliteDatabase {
                     sql: sql_for_error,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }

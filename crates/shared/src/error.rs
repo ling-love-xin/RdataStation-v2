@@ -192,6 +192,79 @@ impl ConnectionError {
 /// 数据库错误域
 ///
 /// SQL 执行、事务、查询相关的错误
+/// 出错对象的**位置**：数据库自己指认的「哪张表 / 哪一列 / 哪条约束」。
+///
+/// 取法照 dbflux 的 `ErrorLocation`（MIT）：把对象名**结构化**带出来，而不是让人从错误
+/// 文本里再认一遍。四个字段都可缺 —— 谁给得出谁填（`is_empty()` 为真时按「不知道」处理，
+/// 界面不要写一句空话）。
+///
+/// 为什么值钱：用户看到的「UNIQUE constraint failed」本身没有可操作信息，而
+/// 「表 orders 的列 tag / 约束 uq_tag」可以直接照着改。也让 `DatabaseError` 里那几个
+/// 建了却没人构造的结构化变体（`ConstraintViolation` / `ColumnNotFound`）有了替代。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Type)]
+pub struct ErrorLocation {
+    /// 模式（PostgreSQL 的 schema；MySQL 的库名会落在这里）。
+    pub schema: Option<String>,
+    /// 表 / 视图名。
+    pub table: Option<String>,
+    /// 列名。
+    pub column: Option<String>,
+    /// 约束名（主键约束、唯一约束、外键名、CHECK 名 —— 各家口径见驱动侧解析器）。
+    pub constraint: Option<String>,
+}
+
+impl ErrorLocation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self
+    }
+
+    pub fn with_table(mut self, table: impl Into<String>) -> Self {
+        self.table = Some(table.into());
+        self
+    }
+
+    pub fn with_column(mut self, column: impl Into<String>) -> Self {
+        self.column = Some(column.into());
+        self
+    }
+
+    pub fn with_constraint(mut self, constraint: impl Into<String>) -> Self {
+        self.constraint = Some(constraint.into());
+        self
+    }
+
+    /// 四样都没有 = 这次拿不到位置。
+    pub fn is_empty(&self) -> bool {
+        self.schema.is_none() && self.table.is_none() && self.column.is_none() && self.constraint.is_none()
+    }
+
+    /// 照人话写出来：`public.orders.amount` / `orders.tag，约束 uq_tag`；拿不到就是 `None`。
+    ///
+    /// 顺序有意如此：**对象在前、约束在后** —— 用户先找表，再看是哪条约束。
+    pub fn display_text(&self) -> Option<String> {
+        let object = [self.schema.as_deref(), self.table.as_deref(), self.column.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(".");
+        let mut parts: Vec<String> = Vec::new();
+        if !object.is_empty() {
+            parts.push(object);
+        }
+        if let Some(name) = self.constraint.as_deref().filter(|s| !s.is_empty()) {
+            parts.push(format!("约束 {name}"));
+        }
+        (!parts.is_empty()).then(|| parts.join("，"))
+    }
+}
+
+/// 数据库错误域
 #[derive(Debug, Clone, Serialize, Type)]
 pub enum DatabaseError {
     /// 查询执行错误
@@ -203,6 +276,14 @@ pub enum DatabaseError {
         /// 各家数据库报的是 1 基的**字符**位置，驱动负责换算
         /// （`driver::utils::byte_offset_for_char`）；拿不到就是 `None`。
         position: Option<usize>,
+        /// 数据库**指认的对象**（表 / 列 / 约束）；拿不到就是 `None`。
+        ///
+        /// 与 `position` 是两档东西：`position` 把光标送到 SQL 里的出错处，这里说的是
+        /// 「撞到了哪个对象」。PG 的两个驱动给的是协议字段（**与语言无关**：服务端是中文
+        /// locale 时消息文本是中文，字段仍是原文），MySQL / SQLite / DuckDB 靠消息解析
+        /// （它们的错误文本里有这些名字，协议层没有字段）。
+        #[serde(default)]
+        location: Option<ErrorLocation>,
     },
 
     /// 语法错误
@@ -257,6 +338,7 @@ impl DatabaseError {
             sql: sql.into(),
             reason: reason.into(),
             position: None,
+            location: None,
         }
     }
 
@@ -264,6 +346,18 @@ impl DatabaseError {
     pub fn with_position(mut self, pos: usize) -> Self {
         if let DatabaseError::Query { position, .. } = &mut self {
             *position = Some(pos);
+        }
+        self
+    }
+
+    /// 附上「数据库指认的对象」（只对 `Query` 生效 —— 其它变体没有这个字段）。
+    ///
+    /// 传 `None` 或**四个字段全空**的位置都不写进去：空位置只会让界面多出一句废话。
+    pub fn with_location(mut self, location: Option<ErrorLocation>) -> Self {
+        if let DatabaseError::Query { location: slot, .. } = &mut self {
+            if let Some(loc) = location.filter(|l| !l.is_empty()) {
+                *slot = Some(loc);
+            }
         }
         self
     }
@@ -986,15 +1080,22 @@ impl fmt::Display for DatabaseError {
                 sql,
                 reason,
                 position,
+                location,
             } => {
+                // 对象位置跟在原因后面（`position` 是把光标送到出错处的另一档信息）
+                let where_ = location
+                    .as_ref()
+                    .and_then(ErrorLocation::display_text)
+                    .map(|t| format!("（{t}）"))
+                    .unwrap_or_default();
                 if let Some(pos) = position {
                     write!(
                         f,
-                        "Query failed at position {}: {} (SQL: {})",
-                        pos, reason, sql
+                        "Query failed at position {}: {}{} (SQL: {})",
+                        pos, reason, where_, sql
                     )
                 } else {
-                    write!(f, "Query failed: {} (SQL: {})", reason, sql)
+                    write!(f, "Query failed: {}{} (SQL: {})", reason, where_, sql)
                 }
             }
             DatabaseError::Syntax {

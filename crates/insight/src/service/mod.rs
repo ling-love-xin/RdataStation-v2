@@ -882,6 +882,7 @@ mod tests {
             sql: "SELECT * FROM t_result_7".into(),
             reason: "Catalog Error: Table with name t_result_7 does not exist".into(),
             position: None,
+            location: None,
         });
         let info = InsightService::describe_error(&err);
         assert_eq!(info.message, "结果集已失效或已过期，请重新执行查询");

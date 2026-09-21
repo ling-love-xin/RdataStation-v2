@@ -126,7 +126,10 @@ fn unwrap_segment_error(
 ) -> Result<SqlExecuteResult, CoreError> {
     match result {
         Err(CoreError::Database(DatabaseError::Query {
-            reason, position, ..
+            reason,
+            position,
+            location,
+            ..
         })) => {
             let position = position.and_then(|pos| {
                 let offset_in_body = pos.checked_sub(window.body.start)?;
@@ -136,6 +139,8 @@ fn unwrap_segment_error(
                 sql: original.to_string(),
                 reason,
                 position,
+                // 对象位置（表 / 列 / 约束）与「套没套窗口」无关，原样带过去
+                location,
             }))
         }
         other => other,
@@ -271,6 +276,7 @@ impl SqlService {
                 sql: sql.to_string(),
                 reason: "这条语句没有结果集，不能分段抓取".to_string(),
                 position: None,
+                location: None,
             }));
         };
         let result = self
@@ -519,6 +525,7 @@ impl SqlService {
                     sql: "unknown".to_string(),
                     reason: "Transaction failed with unknown error".to_string(),
                     position: None,
+                    location: None,
                 }),
             });
         }
@@ -784,6 +791,7 @@ fn query_timeout_error(sql: &str, timeout_ms: u64) -> CoreError {
         sql: sql.to_string(),
         reason: format!("Query timed out after {}ms", timeout_ms),
         position: None,
+        location: None,
     })
 }
 
@@ -933,6 +941,7 @@ mod tests {
                 sql: sql.to_string(),
                 reason: "boom".to_string(),
                 position: Some(position),
+                location: None,
             })
         }
 

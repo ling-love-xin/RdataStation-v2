@@ -148,7 +148,7 @@ impl Database for MySqlDatabase {
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_query_error(sql, &e))?;
 
         let columns: Vec<String> = if let Some(first) = rows.first() {
             first
@@ -186,7 +186,7 @@ impl Database for MySqlDatabase {
         let rows = query_builder
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| mysql_query_error(sql, &e))?;
 
         let columns: Vec<String> = if let Some(first) = rows.first() {
             first
@@ -226,7 +226,7 @@ impl Database for MySqlDatabase {
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
                     .fetch_all(&pool)
                     .await
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| mysql_query_error(&sql_owned, &e))?;
 
                 let columns: Vec<String> = if let Some(first) = rows.first() {
                     first.columns().iter().map(|c| c.name().to_string()).collect()
@@ -241,6 +241,7 @@ impl Database for MySqlDatabase {
                     sql: sql_for_cancel,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }
@@ -539,14 +540,14 @@ impl Transaction for MySqlTransaction {
                 let result = sqlx::query(sqlx::AssertSqlSafe(sql))
                     .execute(&mut **tx)
                     .await
-                    .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                    .map_err(|e| mysql_query_error(sql, &e))?;
                 return Ok(affected_rows_result(result.rows_affected()));
             }
 
             let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .fetch_all(&mut **tx)
                 .await
-                .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                .map_err(|e| mysql_query_error(sql, &e))?;
 
             if rows.is_empty() {
                 return Ok(QueryResult {
@@ -650,12 +651,23 @@ fn first_keywords(sql: &str, count: usize) -> String {
         .join(" ")
 }
 
+/// mysql 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
+///
+/// MySQL 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
+/// 形态与样本见 `crate::driver::error_location::mysql`。拿不到就是 `None`，
+/// 界面不写一句空话。
+fn mysql_query_error(sql: &str, error: &sqlx::Error) -> CoreError {
+    let message = error.to_string();
+    let location = crate::driver::error_location::mysql(&message);
+    CoreError::database(DatabaseError::query(sql, message).with_location(location))
+}
+
 /// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）
 async fn execute_writing(pool: &Pool<MySql>, sql: &str) -> Result<QueryResult, CoreError> {
     let result = sqlx::query(sqlx::AssertSqlSafe(sql))
         .execute(pool)
         .await
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| mysql_query_error(sql, &e))?;
     Ok(affected_rows_result(result.rows_affected()))
 }
 
@@ -669,7 +681,7 @@ async fn execute_via_text_protocol(
     let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(pool)
         .await
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| mysql_query_error(sql, &e))?;
 
     Ok(QueryResult {
         columns: vec![],

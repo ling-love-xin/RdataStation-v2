@@ -681,6 +681,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | sqlx | MySQL 8+ 明文信道需 `mysql-rsa` feature（缺了就没有 RSA 口令加密） | `../driver-capability-matrix.md` §7 #14 |
 | mysql_async | 客户端证书**只接受 PKCS#12**（PEM 两件套报可见错误并引导用 sqlx） | `../driver-capability-matrix.md` §7 #7 |
 | 数据库协议 | PG 的 `position` 是 1 基**字符**（我们内部统一用字节偏移）→ 驱动层换算，越界回 `None` 而不是钳到末尾 | `editor-dev-plan.md` §0 2026-09-17（B6）① · `driver::utils::byte_offset_for_char` |
+| 数据库协议 | PG 的**对象字段**（`PgDatabaseError` / `DbError` 的 schema / table / column / constraint）只在**约束类**错误上带 —— 未定义列 / 未定义表拿不到（那类错误的位置由 `position` 送到光标）；**因此 PG 不解析错误文本**：端点 locale 是中文时文本是中文（`字段 "nope" 不存在`），解析必失效 | `../driver-capability-matrix.md` §7 #19 · `crates/engine/tests/error_location_from_real_errors.rs` |
+| 数据库协议 | SQLite（`FOREIGN KEY constraint failed`）与 DuckDB（`… does not exist in the referenced table`）的**外键报错不点名** —— 拿不到就是拿不到，不给一个猜的名字 | `../driver-capability-matrix.md` §7 #19 · `crates/engine/src/driver/error_location.rs` |
 | 运行时（我们自己的 API 契约） | 同步存储 API 不能在 tokio 上下文调用（根因在 `block_on` 语义）→ 返回可读错误或自建短命 runtime | §12 #28 |
 | 驱动层数据面 | 驱动**仍不填 `column_types`** → 网格列类型显示待办；结果集的值一律是**展示文本**（类型化输出需先有列类型） | §12 #22（剩余）· `editor-dev-plan.md` §0 2026-09-18（B7 切片二余项） |
 

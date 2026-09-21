@@ -383,13 +383,24 @@ fn is_read_only_sql(sql: &str) -> bool {
 ///
 /// `execute` 对会返回行的语句会直接报错（要调 `query`），所以调用方必须先确认
 /// 语句既不返回行、也不带 `RETURNING`。
+/// duckdb 错误 → 引擎错误；**带上数据库指认的对象**（表 / 列 / 约束）。
+///
+/// DuckDB 的协议层没有这些字段（那是 PG 才有的），所以从消息文本里认 ——
+/// 形态与样本见 `crate::driver::error_location::duckdb`。拿不到就是 `None`，
+/// 界面不写一句空话。
+fn duckdb_query_error(sql: &str, error: &duckdb::Error) -> CoreError {
+    let message = error.to_string();
+    let location = crate::driver::error_location::duckdb(&message);
+    CoreError::database(DatabaseError::query(sql, message).with_location(location))
+}
+
 fn execute_writing(conn: &Connection, sql: &str) -> Result<QueryResult, CoreError> {
     let mut stmt = conn
         .prepare(sql)
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| duckdb_query_error(sql, &e))?;
     let affected = stmt
         .execute([])
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| duckdb_query_error(sql, &e))?;
     Ok(affected_rows_result(affected as u64))
 }
 
@@ -418,19 +429,19 @@ impl Database for DuckDbDatabase {
             }
 
             let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                duckdb_query_error(&sql_owned, &e)
             })?;
 
             let row_data: Vec<Vec<duckdb::types::Value>>;
 
             {
                 let mut rows = stmt.query([]).map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    duckdb_query_error(&sql_owned, &e)
                 })?;
 
                 let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
                 while let Some(row) = rows.next().map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    duckdb_query_error(&sql_owned, &e)
                 })? {
                     let mut values: Vec<duckdb::types::Value> = Vec::new();
                     for i in 0.. {
@@ -510,7 +521,7 @@ impl Database for DuckDbDatabase {
             })?;
 
             let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                duckdb_query_error(&sql_owned, &e)
             })?;
 
             let duckdb_params: Vec<duckdb::types::Value> = params
@@ -534,19 +545,19 @@ impl Database for DuckDbDatabase {
             if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
                 let affected = stmt
                     .execute(params_slice.as_slice())
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
                 return Ok(affected_rows_result(affected as u64));
             }
 
             let row_data: Vec<Vec<duckdb::types::Value>>;
             {
                 let mut rows = stmt.query(params_slice.as_slice()).map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    duckdb_query_error(&sql_owned, &e)
                 })?;
 
                 let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
                 while let Some(row) = rows.next().map_err(|e| {
-                    CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                    duckdb_query_error(&sql_owned, &e)
                 })? {
                     let mut values: Vec<duckdb::types::Value> = Vec::new();
                     // 行自己知道有几列（与执行前无关）
@@ -632,13 +643,13 @@ impl Database for DuckDbDatabase {
                 }
 
                 let mut stmt = conn.prepare(&sql_owned)
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| duckdb_query_error(&sql_owned, &e))?;
 
                 let row_data: Vec<Vec<duckdb::types::Value>>;
 
                 {
                     let mut rows = stmt.query([]).map_err(|e| {
-                        CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+                        duckdb_query_error(&sql_owned, &e)
                     })?;
 
                     let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
@@ -700,6 +711,7 @@ impl Database for DuckDbDatabase {
                     sql: sql_for_error,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }
@@ -1072,14 +1084,14 @@ impl Transaction for DuckDbTransaction {
 
         let mut stmt = conn
             .prepare(sql)
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| duckdb_query_error(sql, &e))?;
 
         let row_data: Vec<Vec<duckdb::types::Value>>;
 
         {
             let mut rows = stmt
                 .query([])
-                .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                .map_err(|e| duckdb_query_error(sql, &e))?;
 
             let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
             while let Ok(Some(row)) = rows.next() {

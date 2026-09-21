@@ -226,6 +226,7 @@ impl Database for PostgresDatabase {
                     sql: sql_for_cancel,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }
@@ -582,7 +583,10 @@ async fn execute_writing(pool: &Pool<Postgres>, sql: &str) -> Result<QueryResult
 ///
 /// 拿不到位置就退回原来的消息（不假装知道位置）。
 fn query_error(sql: &str, error: sqlx::Error) -> CoreError {
-    let mut mapped = DatabaseError::query(sql, error.to_string());
+    // 对象位置（表 / 列 / 约束）走**协议字段**：PG 服务端的 locale 是中文时，消息文本
+    // 也是中文（真机实测 `字段 "nope" 不存在`），解析文本会当场失效 —— 字段与语言无关。
+    let location = crate::driver::error_location::postgres_from_sqlx(&error);
+    let mut mapped = DatabaseError::query(sql, error.to_string()).with_location(location);
     if let Some(db) = error.as_database_error()
         && let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
         && let Some(sqlx::postgres::PgErrorPosition::Original(position)) = pg.position()

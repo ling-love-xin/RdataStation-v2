@@ -240,7 +240,9 @@ fn query_error(sql: &str, error: tokio_postgres::Error) -> CoreError {
         reason.push_str(&format!("；建议：{hint}"));
     }
 
-    let mut mapped = DatabaseError::query(sql, reason);
+    // 同 sqlx 那条：位置走协议字段，不解析文本（locale 无关）
+    let location = crate::driver::error_location::postgres_from_tokio(&error);
+    let mut mapped = DatabaseError::query(sql, reason).with_location(location);
     if let Some(tokio_postgres::error::ErrorPosition::Original(position)) = db.position()
         && let Some(offset) = byte_offset_for_char(sql, *position as usize)
     {
@@ -575,9 +577,10 @@ impl Database for PostgresNativeDatabase {
 
         // B5 / P0.6：带参数的写语句同样给真实影响行数
         if !is_read_only && !returns_rows(sql) {
-            let affected = client.execute(sql, &param_refs).await.map_err(|e| {
-                CoreError::database(DatabaseError::query(sql, e.to_string()))
-            })?;
+            let affected = client
+                .execute(sql, &param_refs)
+                .await
+                .map_err(|e| query_error(sql, e))?;
             return Ok(affected_rows_result(affected));
         }
 
@@ -648,6 +651,7 @@ impl Database for PostgresNativeDatabase {
                     sql: sql_for_cancel,
                     reason: "Query cancelled".to_string(),
                     position: None,
+                    location: None,
                 }))
             }
         }

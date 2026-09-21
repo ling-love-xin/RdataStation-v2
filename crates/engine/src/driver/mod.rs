@@ -48,6 +48,7 @@
 pub mod auto_register;
 pub mod capability;
 pub mod declaration;
+pub mod error_location;
 pub mod factory;
 pub mod introspection;
 pub mod jdbc;
