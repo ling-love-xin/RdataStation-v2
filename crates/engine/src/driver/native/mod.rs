@@ -20,6 +20,7 @@ pub mod duckdb_pool;
 pub mod mysql;
 pub mod mysql_native;
 pub mod mysql_pool;
+pub mod pg_wire;
 pub mod postgres;
 pub mod postgres_native;
 pub mod postgres_pool;

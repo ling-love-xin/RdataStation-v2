@@ -286,6 +286,41 @@ fn pg_native_cell_as_text(row: &tokio_postgres::Row, idx: usize) -> Option<Strin
     if let Ok(Some(v)) = row.try_get::<_, Option<serde_json::Value>>(idx) {
         return Some(v.to_string());
     }
+    // PG 专有的那五类：`postgres-types` 对 `NUMERIC` / `INTERVAL` 压根没有 `FromSql`，
+    // `inet` / `point` 有解码器但没接上，数组则从来没试过 —— 它们此前一律交 NULL
+    // （真机实测：金额、时间间隔、网络地址、几何点、数组全是空白格）。
+    use crate::driver::native::pg_wire;
+    if let Ok(Some(v)) = row.try_get::<_, Option<pg_wire::PgNumeric>>(idx) {
+        return Some(v.0);
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<pg_wire::PgInterval>>(idx) {
+        return Some(v.0);
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<pg_wire::PgInet>>(idx) {
+        return Some(v.0);
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<pg_wire::PgPoint>>(idx) {
+        return Some(v.0);
+    }
+    // 数组：`postgres-types` 对 `Vec<T>`（`T: FromSql`）本来就有实现，只是从没试过
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<i32>>>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<i64>>>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<f64>>>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<bool>>>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<String>>>(idx) {
+        return Some(pg_wire::array_literal(v));
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<pg_wire::PgNumeric>>>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.0)));
+    }
     if let Ok(Some(v)) = row.try_get::<_, Option<Vec<u8>>>(idx) {
         return Some(String::from_utf8_lossy(&v).into_owned());
     }

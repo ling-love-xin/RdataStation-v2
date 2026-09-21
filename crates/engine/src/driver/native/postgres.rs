@@ -597,6 +597,44 @@ fn query_error(sql: &str, error: sqlx::Error) -> CoreError {
     CoreError::database(mapped)
 }
 
+/// PG 专有的文本类：数组 / `interval` / `inet` / `point`（`numeric` 由 `BigDecimal` 那条解）。
+///
+/// 为什么单独一个函数：`sqlx_cell_as_text!` 是**四个转换器共用**的（MySQL 侧也在用），
+/// PG 专有的几类不能塞进去。`interval` 与数组在 sqlx 侧有现成解码器（`PgInterval` /
+/// `Vec<T>`），`inet` / `point` 走我们自己的 wire 解码（与 Official 驱动**共用一份**，
+/// 见 `native::pg_wire`）—— 那边 `postgres-types` 连解码器都没接。
+fn pg_cell_as_text_extra(row: &sqlx::postgres::PgRow, idx: usize) -> Option<String> {
+    use crate::driver::native::pg_wire;
+    use sqlx::Row as _;
+
+    if let Ok(Some(v)) = row.try_get::<Option<Vec<i32>>, _>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<Vec<i64>>, _>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<Vec<f64>>, _>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<Vec<bool>>, _>(idx) {
+        return Some(pg_wire::array_literal(v.into_iter().map(|x| x.to_string())));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<Vec<String>>, _>(idx) {
+        return Some(pg_wire::array_literal(v));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<sqlx::postgres::types::PgInterval>, _>(idx) {
+        // `PgInterval` 的三个字段与 wire 那三个一模一样，格式化写一份
+        return Some(pg_wire::interval_parts_to_text(v.months, v.days, v.microseconds));
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<pg_wire::PgInet>, _>(idx) {
+        return Some(v.0);
+    }
+    if let Ok(Some(v)) = row.try_get::<Option<pg_wire::PgPoint>, _>(idx) {
+        return Some(v.0);
+    }
+    None
+}
+
 fn postgres_rows_to_arrow(
     columns: &[String],
     rows: &[sqlx::postgres::PgRow],
@@ -699,7 +737,10 @@ fn postgres_rows_to_arrow(
                     // 文本兜底：真文本列先命中；`numeric` / 时间 / UUID / JSON 由这条链解成
                     // **文本**（精度保住，见 `utils.rs::sqlx_cell_as_text`）。
                     // 2026-09-21 之前这里只试 `String`，于是这些列全部静默变 NULL。
-                    let decoded = crate::sqlx_cell_as_text!(row, col_idx);
+                    let decoded = crate::sqlx_cell_as_text!(row, col_idx)
+                        // PG 专有那几类（数组 / interval / inet / point）跟在共用链后面：
+                        // 它们都出文本，落在同一个 Utf8 档里
+                        .or_else(|| pg_cell_as_text_extra(row, col_idx));
                     if decoded.is_none() && !sqlx_value_is_null(row, col_idx) {
                         undecodable += 1;
                     }

@@ -19,18 +19,24 @@
 //! 「**库里非空 → 出口不得为 NULL**」，逐类型断言，含一个刻意保留的**精度断言**
 //! （`numeric(10,2)` 的 `1234.56` 必须以文本 `"1234.5600"` 出来 —— 不进浮点）。
 //!
-//! ## 仍不可解码的（有意留白，`KNOWN_UNDECODABLE`）
+//! ## 第二批（2026-09-21）：PG 那五类不再交 NULL
 //!
-//! 这些类型当前**没有**可用的解码器，出口层会交 NULL。它们不是本文件的断言对象，
-//! 但列在这里是为了：① 下一个人知道这是已知而不是新缺陷；② 驱动侧对应位置有
-//! `tracing::warn!` 留痕（不再静默）。
+//! | 库 | 类型 | 之前 | 现在 |
+//! | --- | --- | --- | --- |
+//! | PG（两个驱动） | `interval` | 空白格 | sqlx 走 `PgInterval`、Official 解 wire（`driver::native::pg_wire`）→ `1 day 02:03:04` |
+//! | PG（两个驱动） | 数组（`int4[]` / `text[]` …） | 空白格 | 解出 `Vec<T>` 后按 PG 数组字面量拼（元素含逗号时按规矩加引号） |
+//! | PG（两个驱动） | `inet` / `point` | 空白格 | 两个驱动**共用一份 wire 解码** → `192.168.3.138` / `(1.5,-2.25)` |
+//! | PG(Official) | `numeric` | 空白格（`postgres-types` 0.2.x 没有任何 decimal feature） | 自己解 base-10000 的 wire 格式 → `1234.56` |
 //!
-//! | 库 | 类型 | 原因 |
-//! | --- | --- | --- |
-//! | PG | `interval` | sqlx 的 interval 需要 `PgInterval`，未纳入解码链 |
-//! | PG | 数组（`int4[]` 等） | 需要按元素类型逐族解，未纳入解码链 |
-//! | PG | `inet` / `point` | 需要 `ipnetwork` / `geo-types`（不在依赖树里） |
-//! | PG(Official) | `numeric` | `postgres-types` 0.2.13 **没有任何 decimal feature**，无 `FromSql` 实现 |
+//! **口径提醒**：`numeric` 两条路**值相等、写法可能差尾零** —— sqlx 那条走
+//! `BigDecimal::to_string()`（按 4 位组拼，`numeric(10,2)` 出 `1234.5600`），Official 那条
+//! 按 `dscale` 出 `1234.56`。两个值都对，下面各按各的口径断言（有意不掩盖这个差异）。
+//!
+//! ## 仍不保证的（没有解码器，也没打算自己写）
+//!
+//! `range` / 复合类型 / 几何族除 `point` 外（`line` / `lseg` / `box` / `path` / `polygon` /
+//! `circle`）/ `hstore` / 位串 / `tsvector` —— 这些仍落文本兜底后为空白格，驱动侧有
+//! `tracing::warn!` 留痕（不再静默）。列在这里是为了让下一个人知道这是**已知**而不是新缺陷。
 //!
 //! 未设环境变量时跳过（与仓内其余真机套件同规矩）：
 //!
@@ -88,12 +94,38 @@ const PG_SQL: &str = r#"SELECT
     now() AS ts, current_date AS d, '12:00:00'::time AS t,
     '{"a":1}'::jsonb AS j, '\x0102'::bytea AS b,
     'abcd'::varchar(5) AS vc, 'b'::text AS txt,
-    gen_random_uuid() AS u"#;
+    gen_random_uuid() AS u,
+    '1 day 02:03:04'::interval AS iv,
+    '{1,2,3}'::int4[] AS arr,
+    '{a,b}'::text[] AS tarr,
+    '192.168.3.138'::inet AS ip,
+    '(1.5,-2.25)'::point AS pt"#;
 
-/// 两个 PG 驱动都该解的列（`num` 不在此列：Official 读不出 numeric，见文件头）。
+/// 两个 PG 驱动都该解的列。
+///
+/// 2026-09-21 第二批之前，`num`（Official 读不出）与 `iv` / `arr` / `tarr` / `ip` / `pt`
+/// （两个驱动都读不出）都不在这张表里 —— 现在两类缺口都补上了，所以它们进来了。
 const PG_COMMON: &[&str] = &[
-    "i2", "i4", "i8", "flag", "f4", "f8", "ts", "d", "t", "j", "b", "vc", "txt", "u",
+    "i2", "i4", "i8", "flag", "f4", "f8", "ts", "d", "t", "j", "b", "vc", "txt", "u", "num", "iv",
+    "arr", "tarr", "ip", "pt",
 ];
+
+/// 五类的**具体文本**（两个驱动共用口径，`num` 单独断言：两条路写法差尾零）。
+fn assert_pg_extras(batch: &RecordBatch) {
+    assert_eq!(
+        cell(batch, "iv").as_deref(),
+        Some("1 day 02:03:04"),
+        "interval 应按 PG 的写法出文本"
+    );
+    assert_eq!(cell(batch, "arr").as_deref(), Some("{1,2,3}"), "int4[] 数组字面量");
+    assert_eq!(cell(batch, "tarr").as_deref(), Some("{a,b}"), "text[] 数组字面量");
+    assert_eq!(
+        cell(batch, "ip").as_deref(),
+        Some("192.168.3.138"),
+        "inet 满位网段不打 /32（与 inet_out 一致）"
+    );
+    assert_eq!(cell(batch, "pt").as_deref(), Some("(1.5,-2.25)"), "point 写法");
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sqlx_postgres_decodes_numeric_temporal_json_and_uuid() {
@@ -117,6 +149,8 @@ async fn sqlx_postgres_decodes_numeric_temporal_json_and_uuid() {
     assert_eq!(cell(batch, "i2").as_deref(), Some("1"));
     // bytea 仍是 Binary，不被当成文本
     assert!(format!("{:?}", batch.column(11).data_type()).starts_with("Binary"));
+    // PG 那五类的具体文本（sqlx 那条路）
+    assert_pg_extras(batch);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -129,7 +163,15 @@ async fn official_postgres_decodes_temporal_json_and_uuid() {
         .await
         .expect("连上 PG(Official)");
     let r = db.query(PG_SQL).await.expect("查询成功");
-    assert_not_null(r.batches.first().expect("应有 batches"), PG_COMMON);
+    let batch = r.batches.first().expect("应有 batches");
+    assert_not_null(batch, PG_COMMON);
+    // Official 这条按 `dscale` 出（sqlx 那条出 `1234.5600`：BigDecimal 按 4 位组拼）
+    assert_eq!(
+        cell(batch, "num").as_deref(),
+        Some("1234.56"),
+        "numeric 走 wire 解码（base-10000），按 dscale 出小数位"
+    );
+    assert_pg_extras(batch);
 }
 
 const MYSQL_SQL: &str = r#"SELECT
