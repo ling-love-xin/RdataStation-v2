@@ -88,14 +88,62 @@ rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
 # `any` 会带入 sqlx-sqlite → libsqlite3-sys（声明 links = "sqlite3"），
 # 与 rusqlite 的同名 native 库冲突，导致 rusqlite 无法升级。
 # 改回默认 feature 前请确认 sqlx 与 rusqlite 的 libsqlite3-sys 版本一致。
+#
+# ⚠️ **类型解码 features 不能写在这行**（2026-09-21 实测）：sqlx 0.9 的
+# `chrono` / `time` / `uuid` / `json` 四个 feature 里各带一条 `sqlx-sqlite?/…`
+# 弱引用，实测它会把 `sqlx-sqlite` 拉进**版本解析**，于是撞上同一个
+# `links = "sqlite3"` 冲突（sqlx-sqlite 要 libsqlite3-sys `<0.38`，rusqlite 0.40 要 `^0.38.1`，
+# 交集为空，无解）。它们在 `sqlx-postgres` / `sqlx-mysql` 上**不带**这条弱引用，
+# 因此那四个 feature 走下面的后端 crate 直开（feature 全局合并，效果相同）。
+# 不带 sqlite 弱引用的类型 features（`bigdecimal`）仍可写在这里。
 sqlx = { version = "0.9.0", default-features = false, features = [
     "mysql",
+    # MySQL 8+ 默认认证插件 `caching_sha2_password` 在**非 TLS** 连接上要求客户端
+    # 用服务端公钥加密口令（RSA）；缺这个 feature，sqlx 直接报
+    # `RSA auth backend disabled`——而本仓对 LAN 直连**默认注入 `ssl-mode=DISABLED`**
+    # （`connection_service::apply_lan_tls_default`），两者相遇就是「MySQL 连不上」。
+    # 只加 `mysql-rsa` 不引入新依赖树（sqlx-mysql 的 `rsa` 分支）。
+    "mysql-rsa",
     "postgres",
     "runtime-tokio",
     "tls-native-tls",
+    # ===== 类型解码（**缺了就是静默 NULL**）=====
+    # sqlx 默认**不解码**这些族的类型：列探测失败 → 整列声明 Utf8 → 解码再失败 →
+    # `.ok().flatten()` 给 None → 出口层看到的是「值就是 NULL」，与「读不出来」不可区分。
+    # 真机实测（PG 19 列 / MySQL 14 列）：numeric(10,2) · timestamptz · date · time ·
+    # interval · jsonb · 数组 · inet · point · uuid 全部静默变 NULL。
+    #
+    # 这几个 crate 都**已在依赖树里**（chrono / bigdecimal / uuid 由工作区其他依赖带入），
+    # 加 features 不新增包；日期侧选 `chrono` 而非 `time`，与仓内既有用法一致。
+    # 未开 `rust_decimal`：`bigdecimal` 无 28 位上限，贴合 PG `numeric` 与 MySQL `DECIMAL` 语义。
+    "bigdecimal",
+] }
+# 见上：`chrono` / `uuid` / `json` 只能在**后端 crate** 上开（sqlx crate 的同名 feature
+# 带 `sqlx-sqlite?/…` 弱引用，会把 sqlx-sqlite 拉进解析并与 rusqlite 冲突）。
+# 这两个依赖只为“开 feature”而存在，代码里不 import；feature 全局合并，`sqlx::postgres::…`
+# 的类型支持由后端 crate 自己提供，所以效果与写在 sqlx 那一行完全相同。
+sqlx-postgres = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "bigdecimal",
+    "uuid",
+    "json",
+] }
+sqlx-mysql = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "bigdecimal",
+    "uuid",
+    "json",
 ] }
 mysql_async = { version = "0.37.1", default-features = false, features = ["native-tls-tls"] }
-tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7.18", features = [
+    "with-chrono-0_4",
+    # 下面两个：tokio-postgres 默认**不**解 JSON / UUID，缺了它们
+    # `jsonb` / `uuid` 列在出口层就是静默 NULL（`postgres-types` 里两个 crate 都已在依赖树）。
+    # 注：`NUMERIC` **没有**对应 feature（`postgres-types` 0.2.13 无 decimal 支持），
+    # 所以官方 PG 驱动目前读不出 numeric —— 见 `native/postgres_native.rs` 的 warn。
+    "with-serde_json-1",
+    "with-uuid-1",
+] }
 postgres-native-tls = "0.5.3"
 
 # ===== Async 运行时 =====

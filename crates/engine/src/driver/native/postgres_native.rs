@@ -251,6 +251,42 @@ fn query_error(sql: &str, error: tokio_postgres::Error) -> CoreError {
 // ============================================================================
 
 /// 将 tokio_postgres Row 转换为 Arrow 批处理
+/// 把一个单元格解成展示文本（tokio-postgres 版，对应 sqlx 侧的 `sqlx_cell_as_text!`）。
+///
+/// 顺序与 sqlx 侧同口径：`String` → 时间族 → UUID → JSON → 字节 lossy。
+/// `timestamptz` 只能按带时区解、`timestamp` 只能按无时区解，所以两个都要试。
+///
+/// **NUMERIC 不在这条链里**：`postgres-types` 0.2.13 没有任何 decimal feature，
+/// `NUMERIC` 当前**没有** `FromSql` 实现 —— 要么等上游加，要么自己按 wire 格式写一个。
+/// 在那之前它只能交出 NULL，并由调用方的 warn 留痕。
+fn pg_native_cell_as_text(row: &tokio_postgres::Row, idx: usize) -> Option<String> {
+    if let Ok(Some(v)) = row.try_get::<_, Option<String>>(idx) {
+        return Some(v);
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx) {
+        return Some(v.format("%Y-%m-%d %H:%M:%S%.f+00").to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveDateTime>>(idx) {
+        return Some(v.format("%Y-%m-%d %H:%M:%S%.f").to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveDate>>(idx) {
+        return Some(v.format("%Y-%m-%d").to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveTime>>(idx) {
+        return Some(v.format("%H:%M:%S%.f").to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<uuid::Uuid>>(idx) {
+        return Some(v.to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<serde_json::Value>>(idx) {
+        return Some(v.to_string());
+    }
+    if let Ok(Some(v)) = row.try_get::<_, Option<Vec<u8>>>(idx) {
+        return Some(String::from_utf8_lossy(&v).into_owned());
+    }
+    None
+}
+
 fn postgres_native_rows_to_arrow(
     columns: &[String],
     rows: &[tokio_postgres::Row],
@@ -284,9 +320,7 @@ fn postgres_native_rows_to_arrow(
                 3
             } else if *col_type == tokio_postgres::types::Type::FLOAT4 {
                 4
-            } else if *col_type == tokio_postgres::types::Type::FLOAT8
-                || *col_type == tokio_postgres::types::Type::NUMERIC
-            {
+            } else if *col_type == tokio_postgres::types::Type::FLOAT8 {
                 5
             } else if *col_type == tokio_postgres::types::Type::BYTEA {
                 6
@@ -319,7 +353,18 @@ fn postgres_native_rows_to_arrow(
                     bool_values.push(row.try_get::<_, Option<bool>>(col_idx).ok().flatten());
                 }
                 DataType::Int32 => {
-                    int32_values.push(row.try_get::<_, Option<i32>>(col_idx).ok().flatten());
+                    // `int2` 只能按 `i16` 解（tokio-postgres 不放宽），加宽进 Int32 列
+                    let value = row
+                        .try_get::<_, Option<i32>>(col_idx)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            row.try_get::<_, Option<i16>>(col_idx)
+                                .ok()
+                                .flatten()
+                                .map(i32::from)
+                        });
+                    int32_values.push(value);
                 }
                 DataType::Int64 => {
                     int64_values.push(row.try_get::<_, Option<i64>>(col_idx).ok().flatten());
@@ -334,33 +379,29 @@ fn postgres_native_rows_to_arrow(
                     binary_values.push(row.try_get::<_, Option<Vec<u8>>>(col_idx).ok().flatten());
                 }
                 _ => {
-                    // 通用字符串格式
-                    let val: Result<Option<String>, _> = row.try_get(col_idx);
-                    match val {
-                        Ok(s) => string_values.push(s),
-                        Err(_) => {
-                            let v = row
-                                .try_get::<_, Option<bool>>(col_idx)
-                                .ok()
-                                .flatten()
-                                .map(|b| b.to_string())
-                                .or_else(|| {
-                                    row.try_get::<_, Option<i64>>(col_idx)
-                                        .ok()
-                                        .flatten()
-                                        .map(|i| i.to_string())
-                                })
-                                .or_else(|| {
-                                    row.try_get::<_, Option<f64>>(col_idx)
-                                        .ok()
-                                        .flatten()
-                                        .map(|f| f.to_string())
-                                });
-                            string_values.push(v);
-                        }
-                    }
+                    // 通用文本链：真文本列先命中；时间 / UUID / JSON 由 `pg_native_cell_as_text`
+                    // 解成文本。2026-09-21 之前这里只试 `String` 加几个标量，于是
+                    // timestamptz / date / time / jsonb / uuid 全部静默变 NULL。
+                    string_values.push(pg_native_cell_as_text(row, col_idx));
                 }
             }
+        }
+
+        // 解不出来 ≠ 值为 NULL：整列取不到任何值、而库里确实有行时留痕。
+        // （tokio-postgres 的 `Row` 没有公开的 is_null，所以这里按「整列全空」判定；
+        //  数值列全都是真 NULL 时会多报一条 —— 宁可多报，不可静默。）
+        if effective_type == DataType::Utf8
+            && !rows.is_empty()
+            && string_values.iter().all(Option::is_none)
+        {
+            tracing::warn!(
+                driver = "postgres_native",
+                column = %columns[col_idx],
+                declared_type = %rows[0].columns()[col_idx].type_().name(),
+                total_rows = num_rows,
+                "整列没能取出任何值（该类型当前没有解码器，或整列都是 SQL NULL）——\
+                 出口层目前不区分这两者，界面会显示为空"
+            );
         }
 
         let array: ArrayRef = match effective_type {

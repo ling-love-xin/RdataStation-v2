@@ -4,11 +4,13 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use sqlx::{Column, Pool, Postgres, Row};
+use sqlx::{Column, Pool, Postgres, Row, TypeInfo as _};
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
+use crate::driver::utils::{
+    affected_rows_result, byte_offset_for_char, returns_rows, sqlx_value_is_null,
+};
 use crate::driver::{
     ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObjectKind, Transaction,
 };
@@ -529,6 +531,8 @@ fn postgres_rows_to_arrow(
 
         // 遍历所有行确定最宽类型（0=Null, 1=Bool, 2=Int32, 3=Int64, 4=Float32, 5=Float64, 6=Binary, 7=Utf8）
         let mut detected_rank: u8 = 0;
+        // 非空却解不出来的单元格数（列级聚合，填值循环后面留痕）
+        let mut undecodable = 0usize;
 
         for row in rows {
             use sqlx::Row;
@@ -537,6 +541,10 @@ fn postgres_rows_to_arrow(
                 1 // Boolean
             } else if let Ok(Some(_)) = row.try_get::<Option<i32>, _>(col_idx) {
                 2 // Int32
+            } else if let Ok(Some(_)) = row.try_get::<Option<i16>, _>(col_idx) {
+                // PG `int2`：sqlx 的类型检查不放宽（i32 解不了 int2），探测表漏了它就会
+                // 整列落进文本探测再失败 —— 静默 NULL。归 Int32 档，填值时加宽。
+                2 // Int16 → 加宽进 Int32
             } else if let Ok(Some(_)) = row.try_get::<Option<i64>, _>(col_idx) {
                 3 // Int64
             } else if let Ok(Some(_)) = row.try_get::<Option<f32>, _>(col_idx) {
@@ -576,7 +584,18 @@ fn postgres_rows_to_arrow(
                     bool_values.push(row.try_get::<Option<bool>, _>(col_idx).ok().flatten());
                 }
                 DataType::Int32 => {
-                    int32_values.push(row.try_get::<Option<i32>, _>(col_idx).ok().flatten());
+                    // `int2` 只能按 `i16` 解（sqlx 不放宽），加宽进 Int32 列
+                    let value = row
+                        .try_get::<Option<i32>, _>(col_idx)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            row.try_get::<Option<i16>, _>(col_idx)
+                                .ok()
+                                .flatten()
+                                .map(i32::from)
+                        });
+                    int32_values.push(value);
                 }
                 DataType::Int64 => {
                     int64_values.push(row.try_get::<Option<i64>, _>(col_idx).ok().flatten());
@@ -591,9 +610,33 @@ fn postgres_rows_to_arrow(
                     binary_values.push(row.try_get::<Option<Vec<u8>>, _>(col_idx).ok().flatten());
                 }
                 _ => {
-                    string_values.push(row.try_get::<Option<String>, _>(col_idx).ok().flatten());
+                    // 文本兜底：真文本列先命中；`numeric` / 时间 / UUID / JSON 由这条链解成
+                    // **文本**（精度保住，见 `utils.rs::sqlx_cell_as_text`）。
+                    // 2026-09-21 之前这里只试 `String`，于是这些列全部静默变 NULL。
+                    let decoded = crate::sqlx_cell_as_text!(row, col_idx);
+                    if decoded.is_none() && !sqlx_value_is_null(row, col_idx) {
+                        undecodable += 1;
+                    }
+                    string_values.push(decoded);
                 }
             }
+        }
+
+        // 解不出来 ≠ 值为 NULL：非空单元格必须留痕，否则用户看到的是一个没有来源的空白格。
+        // 聚合到列级：一条 SQL 每个受影响列只报一行，不按行刷屏。
+        if undecodable > 0 {
+            let declared = rows
+                .first()
+                .map(|r| r.column(col_idx).type_info().name().to_string())
+                .unwrap_or_default();
+            tracing::warn!(
+                driver = "postgres",
+                column = %columns[col_idx],
+                declared_type = %declared,
+                undecodable_rows = undecodable,
+                total_rows = num_rows,
+                "列里有非空单元格无法解码，已按 NULL 交出（出口层目前不区分「解不出来」与「本来就是 NULL」）"
+            );
         }
 
         let array: ArrayRef = match effective_type {

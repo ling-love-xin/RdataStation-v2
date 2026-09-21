@@ -27,7 +27,7 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows};
+use crate::driver::utils::{affected_rows_result, returns_rows, sqlx_value_is_null};
 use crate::driver::{ColumnDetail, DataSourceMeta, Database, PoolStatus, Transaction};
 use crate::driver::{IndexDetail, SchemaObjectKind};
 use shared::error::{ConnectionError, CoreError, DatabaseError};
@@ -657,7 +657,7 @@ fn declared_numeric_rank(name: &str) -> Option<u8> {
     let base = name.replace("UNSIGNED", "");
     Some(match base.trim() {
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "YEAR" => 2,
-        "FLOAT" | "DOUBLE" | "REAL" | "DECIMAL" | "NUMERIC" => 3,
+        "FLOAT" | "DOUBLE" | "REAL" => 3,
         _ => return None,
     })
 }
@@ -693,6 +693,8 @@ fn mysql_rows_to_arrow(
         // 数值族则**直接按声明名定排行**：不能再靠 `try_get::<bool>` 盲探——MySQL 的
         // `COUNT(*)` 报 BIGINT UNSIGNED，而 sqlx 会把 1/0 成功解成 `bool`，于是 bool 优先的
         // 旧逻辑把计数列判成布尔（网格里 `COUNT(*)` 显示 true）。文本/二进制仍走原有路径。
+        // 非空却解不出来的单元格数（列级聚合，填值循环后面留痕）
+        let mut undecodable = 0usize;
         let mut detected_rank: u8 = if declared_text {
             5
         } else {
@@ -768,21 +770,34 @@ fn mysql_rows_to_arrow(
                     binary_values.push(row.try_get::<Option<Vec<u8>>, _>(col_idx).ok().flatten());
                 }
                 _ => {
-                    // Utf8：优先 `String` 解码；失败则回退字节 lossy——MySQL 会把部分**文本**
-                    // 列报成 BINARY 字符集，sqlx 对它们拒绝 `String` 类型解码。
-                    let v = row
-                        .try_get::<Option<String>, _>(col_idx)
-                        .ok()
-                        .flatten()
-                        .or_else(|| {
-                            row.try_get::<Option<Vec<u8>>, _>(col_idx)
-                                .ok()
-                                .flatten()
-                                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                        });
+                    // Utf8。解码链见 `utils.rs::sqlx_cell_as_text`：
+                    // `String` → `BigDecimal`（DECIMAL 保精度）→ 时间族 → UUID → JSON → 字节 lossy。
+                    // 最后那条 lossy 是给「MySQL 把部分**文本**列报成 BINARY 字符集」用的
+                    // （sqlx 对它们拒绝 `String` 类型解码）。
+                    // 2026-09-21 之前只试 `String` + 字节，于是 DECIMAL / DATETIME / JSON 静默变 NULL。
+                    let v = crate::sqlx_cell_as_text!(row, col_idx);
+                    if v.is_none() && !sqlx_value_is_null(row, col_idx) {
+                        undecodable += 1;
+                    }
                     string_values.push(v);
                 }
             }
+        }
+
+        // 解不出来 ≠ 值为 NULL：非空单元格必须留痕（同 postgres.rs 的口径）
+        if undecodable > 0 {
+            let declared = rows
+                .first()
+                .map(|r| r.column(col_idx).type_info().name().to_string())
+                .unwrap_or_default();
+            tracing::warn!(
+                driver = "mysql",
+                column = %columns[col_idx],
+                declared_type = %declared,
+                undecodable_rows = undecodable,
+                total_rows = num_rows,
+                "列里有非空单元格无法解码，已按 NULL 交出（出口层目前不区分「解不出来」与「本来就是 NULL」）"
+            );
         }
 
         let array: ArrayRef = match effective_type {
@@ -1033,7 +1048,6 @@ mod tests {
             ("BIGINT UNSIGNED", 2),
             ("INT UNSIGNED", 2),
             ("UNSIGNED BIGINT", 2),
-            ("DECIMAL UNSIGNED", 3),
             ("BIGINT", 2),
             ("DOUBLE", 3),
         ] {
@@ -1042,6 +1056,24 @@ mod tests {
         // 非数值族仍交给原探测
         assert_eq!(declared_numeric_rank("VARCHAR"), None);
         assert_eq!(declared_numeric_rank("BLOB"), None);
+    }
+
+    /// `DECIMAL` / `NUMERIC` **不归数值档**（2026-09-21 改）。
+    ///
+    /// 老口径把它们算作 f64 档，于是整列被声明成 `Float64`，而 sqlx 对 `DECIMAL`
+    /// 只认 `BigDecimal` —— 解码必然失败 → `.ok().flatten()` → **「Float64 列 + NULL 值」**，
+    /// 比纯 NULL 更误导（网格按数值列排版，值却是空的）。
+    /// 现在交给文本档，由 `sqlx_cell_as_text!` 按 `BigDecimal::to_string()` 原样取出，
+    /// **标度保住**（`numeric(10,2)` 出 `"1234.5600"` 而不是 `1234.56` 的浮点近似）。
+    #[test]
+    fn decimal_is_not_a_float_rank() {
+        assert_eq!(declared_numeric_rank("DECIMAL"), None);
+        assert_eq!(declared_numeric_rank("NUMERIC"), None);
+        assert_eq!(declared_numeric_rank("DECIMAL UNSIGNED"), None);
+        assert_eq!(declared_numeric_rank("NUMERIC UNSIGNED"), None);
+        // 浮点族照旧
+        assert_eq!(declared_numeric_rank("DOUBLE"), Some(3));
+        assert_eq!(declared_numeric_rank("FLOAT"), Some(3));
     }
     use crate::driver::Database;
 

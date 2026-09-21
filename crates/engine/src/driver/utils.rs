@@ -1,6 +1,80 @@
 use super::registry::DriverConnectionConfig;
 use shared::error::{ConnectionError, CoreError};
 
+/// 把一个**非文本族**的单元格解成展示文本：`numeric` / 时间 / UUID / JSON。
+///
+/// ## 为什么需要它
+///
+/// sqlx / tokio-postgres 的四个转换器都靠「按值试探」定列型，试探表只有
+/// `bool / i32 / i64 / f32 / f64 / Vec<u8> / String`。`numeric` · `timestamptz` · `date` ·
+/// `time` · `uuid` · `jsonb` **一个都不在表里**：试探全失败 → 整列声明 `Utf8` →
+/// 解码时又只试 `String` → 再失败 → `.ok().flatten()` 给 `None` → **出口层看到的是
+/// 「值就是 NULL」**，与「这格本来就是 NULL」不可区分。
+///
+/// 真机实测（PG 19 列 / MySQL 14 列）：金额 · 时间 · JSON · 数组 · inet · point · uuid
+/// 全部静默变 NULL。
+///
+/// ## 口径
+///
+/// * **一律产出文本，不进浮点**：`numeric(10,2)` 走 `BigDecimal::to_string()` 原样保留精度。
+///   金额过一遍 `f64` 会变成「看起来像数据错误的显示错误」。
+/// * **顺序有意义**：先 `String`（真文本列最快命中）→ 精确数值 → 时间族
+///   （`NaiveDateTime` → `DateTime<Utc>` → `NaiveDate` → `NaiveTime`：`timestamptz`
+///   只能按带时区解、`timestamp` 只能按无时区解）→ UUID → JSON → 最后才把字节 lossy 成文本。
+/// * **写成宏而不是函数**：`sqlx::Row::try_get` 可用的解码类型挂在 `R::Database` 上，
+///   泛型函数里无法对「任意 R」成立。宏仍然只有一份定义。
+///
+/// 返回 `None` 表示这个驱动确实解不出来（自定义类型 / 几何 / 网络地址…）。调用方
+/// **不能把它悄悄当 NULL**，要留痕（各转换器里的 `undecodable` 计数 + `warn`）。
+#[macro_export]
+macro_rules! sqlx_cell_as_text {
+    ($row:expr, $idx:expr) => {{
+        use sqlx::Row as _;
+        let row = $row;
+        let idx = $idx;
+        if let Ok(Some(v)) = row.try_get::<Option<String>, _>(idx) {
+            Some(v)
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::BigDecimal>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDateTime>, _>(idx) {
+            Some(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
+        } else if let Ok(Some(v)) =
+            row.try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(idx)
+        {
+            Some(v.format("%Y-%m-%d %H:%M:%S%.f+00").to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveDate>, _>(idx) {
+            Some(v.format("%Y-%m-%d").to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::chrono::NaiveTime>, _>(idx) {
+            Some(v.format("%H:%M:%S%.f").to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Uuid>, _>(idx) {
+            Some(v.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(idx) {
+            Some(v.0.to_string())
+        } else if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+            Some(String::from_utf8_lossy(&v).into_owned())
+        } else {
+            None
+        }
+    }};
+}
+
+/// 该单元格在**协议层**是不是 NULL —— 与「类型解不出来」区分开。
+///
+/// 为什么需要区分：转换器解不出来时只能往数组里塞 `None`，而 `None` 与真实 SQL NULL
+/// 在 Arrow 里长得一模一样。调用方据此决定要不要留痕（`tracing::warn!`），否则
+/// 「库里明明有值、界面却是空白格」就成了一个没有来源的现象。
+///
+/// 泛型只要求 `Row + ColumnIndex`，不涉及 `Decode` / `Type` 约束，因此两种后端都成立。
+pub fn sqlx_value_is_null<R: sqlx::Row>(row: &R, index: usize) -> bool
+where
+    usize: sqlx::ColumnIndex<R>,
+{
+    use sqlx::ValueRef as _;
+    row.try_get_raw(index)
+        .map(|value| value.is_null())
+        .unwrap_or(true)
+}
+
 /// 构建数据库连接URL
 pub fn build_connection_url(config: &DriverConnectionConfig) -> Result<String, CoreError> {
     match config.driver.as_str() {
