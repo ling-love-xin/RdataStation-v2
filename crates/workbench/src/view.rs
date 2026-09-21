@@ -94,32 +94,31 @@ impl WorkbenchView {
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
         *shared.project.borrow_mut() = project;
-        // 启动恢复的项目也要**取写锁**：`project_ui.lock/read_only` 原本只在交互式打开时写，
-        // 而启动路径直接装会话——结果是「另一实例占着同一个项目」时两边都以为自己可写，
-        // 各模块的只读护栅（mock 的四个出口 / 资源库 / 草稿箱 / 编辑器替换）全部不生效。
-        // 处置与交互式打开一致：被占用 → 只读打开 + 提示。
-        if let Some(root) = project_root.clone() {
-            let opened = match project::service::open(&root) {
-                Ok(project::service::OpenOutcome::Opened(opened)) => Ok(opened),
-                Ok(project::service::OpenOutcome::Busy(_)) => {
-                    project::service::open_read_only(&root)
-                }
-                Err(e) => Err(e),
-            };
-            match opened {
-                Ok(opened) => {
-                    let (store, lock, read_only, _summary) = opened.into_parts();
-                    // store 仅用于确认加载成功（与 `project::ui::apply_opened` 同口径）
-                    drop(store);
-                    let mut ui = shared.project_ui.borrow_mut();
-                    ui.lock = lock;
-                    ui.read_only = read_only;
-                    ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
-                }
-                // 取锁 / 载入失败：不动会话（项目仍是当前项目），只提示一声
-                Err(e) => shared.project_ui.borrow_mut().notice = Some(e),
-            }
-        }
+        // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
+        //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
+        Self::lock_startup_project(&shared, project_root);
+        let mut view = Self::assemble(shared, cx);
+        view.install_startup_side_effects();
+        view
+    }
+
+    /// 测试装配：项目会话由调用方给（临时目录），**跳过有真机副作用的四步**——
+    /// 会话解析、项目**写锁**（会锁住开发机上的示例项目）、项目名册读盘、规则目录监听（后台线程）；
+    /// 连接列表为空（用例不需要真连接）。
+    ///
+    /// 其余（端口注入 / 面板装配 / `render` 消费请求）与 [`Self::new`] **同一条路**：
+    /// 「草稿双击 → 编辑器」那条宿主分支过去盖不住的原因就是拿不到工作台本身
+    /// （同源账：`docs/architecture/connection/connection-dialog-architecture.md` §14 #9）。
+    pub fn new_for_test(project: Option<project::ui::OpenProject>, cx: &mut Context<Self>) -> Self {
+        let shared = Shared::with_connections(Vec::new(), None);
+        *shared.project.borrow_mut() = project;
+        Self::assemble(shared, cx)
+    }
+
+    /// 装配核心（真机与测试**共用这一份**）：端口注入 → 项目宿主 → 重绘桥。
+    ///
+    /// 调用方负责先建好 `Shared`（带项目会话与连接快照），以及自己那档的启动副作用。
+    fn assemble(shared: Shared, cx: &mut Context<Self>) -> Self {
         // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
         // 因为下面构造 `editor_service` 时不能再借 `self`。
         let editor_shared_for_conn = shared.clone();
@@ -173,14 +172,6 @@ impl WorkbenchView {
                 }
             }));
         }
-        if shared.project.borrow().is_none() {
-            project::ui::load_picker(&host);
-        }
-        // M8：启动规则目录监听。放在构造期（而非 render）——沿用 GPUI-kit 编码指南
-        // 「副作用不得放在 render」，也保证窗口首帧前监听已就位。
-        // 目录由「当前项目根」现算，故先告知监听器当前项目（切换时在 refresh_after_open 再告知）。
-        insight::set_watched_project_root(project_root.clone());
-        let insight_rules_watcher = Some(insight::RulesWatcher::spawn());
         Self {
             shared,
             area: None,
@@ -194,11 +185,64 @@ impl WorkbenchView {
             project_host: Some(host),
             _editor_subscription: None,
             _archive_subscription: None,
-            _insight_rules_watcher: insight_rules_watcher,
+            _insight_rules_watcher: None,
             editor_service,
             editor_hosts: Vec::new(),
             scratchpad_meta_pump: None,
         }
+    }
+
+    /// 启动恢复的项目也要**取写锁**：`project_ui.lock/read_only` 原本只在交互式打开时写，
+    /// 而启动路径直接装会话——结果是「另一实例占着同一个项目」时两边都以为自己可写，
+    /// 各模块的只读护栅（mock 的四个出口 / 资源库 / 草稿箱 / 编辑器替换）全部不生效。
+    /// 处置与交互式打开一致：被占用 → 只读打开 + 提示。
+    fn lock_startup_project(shared: &Shared, project_root: Option<std::path::PathBuf>) {
+        let Some(root) = project_root else {
+            return;
+        };
+        let opened = match project::service::open(&root) {
+            Ok(project::service::OpenOutcome::Opened(opened)) => Ok(opened),
+            Ok(project::service::OpenOutcome::Busy(_)) => project::service::open_read_only(&root),
+            Err(e) => Err(e),
+        };
+        match opened {
+            Ok(opened) => {
+                let (store, lock, read_only, _summary) = opened.into_parts();
+                // store 仅用于确认加载成功（与 `project::ui::apply_opened` 同口径）
+                drop(store);
+                let mut ui = shared.project_ui.borrow_mut();
+                ui.lock = lock;
+                ui.read_only = read_only;
+                ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
+            }
+            // 取锁 / 载入失败：不动会话（项目仍是当前项目），只提示一声
+            Err(e) => shared.project_ui.borrow_mut().notice = Some(e),
+        }
+    }
+
+    /// 启动期的两处副作用：项目下拉列表（无名册项目时）与洞察规则目录监听。
+    ///
+    /// 规则监听放在构造期（而非 render）——沿用 GPUI-kit 编码指南「副作用不得放在 render」，
+    /// 也保证窗口首帧前监听已就位；目录由「当前项目根」现算，故先告知监听器当前项目
+    /// （切换时在 `refresh_after_open` 再告知）。
+    fn install_startup_side_effects(&mut self) {
+        // 条件先算好再借用 host：`load_picker` 会回到 `Shared`，借着 `project` 不放会撞 RefCell。
+        let no_project = self.shared.project.borrow().is_none();
+        if no_project && let Some(host) = self.project_host.as_ref() {
+            project::ui::load_picker(host);
+        }
+        insight::set_watched_project_root(self.shared.project_root());
+        self._insight_rules_watcher = Some(insight::RulesWatcher::spawn());
+    }
+
+    /// 【草稿箱 → 编辑器】已开的编辑面板（供窗口级用例断言「请求消费后真的有一份文档进了中央 Dock」）。
+    pub fn editor_panels_for_test(&self) -> Vec<Entity<editor::view::host::EditorHostPanel>> {
+        self.editor_hosts.clone()
+    }
+
+    /// 共享状态句柄（供窗口级用例从**生产请求槽**发起打开：`Shared::request_open_in_editor`）。
+    pub fn shared_for_test(&self) -> Shared {
+        self.shared.clone()
     }
 
     /// 在编辑器中打开一个文件（打开菜单 / 数据库导航“在 SQL 编辑器中打开”调用）

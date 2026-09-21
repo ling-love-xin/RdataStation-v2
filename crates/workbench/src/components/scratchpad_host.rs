@@ -78,7 +78,11 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
         service
             .dirty_ids()
             .into_iter()
-            .filter_map(|id| service.find(&id).and_then(|doc| doc.path().map(Path::to_path_buf)))
+            .filter_map(|id| {
+                service
+                    .find(&id)
+                    .and_then(|doc| doc.path().map(Path::to_path_buf))
+            })
             .collect()
     }
 
@@ -117,4 +121,38 @@ pub fn build_host(shared: &Shared, editor: &EditorShared) -> Rc<dyn ScratchpadHo
         shared: shared.clone(),
         editor: editor.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use editor::shared::EditorShared;
+
+    use super::build_host;
+    use crate::panels::Shared;
+
+    /// 草稿箱 → 编辑器这颗接口：双击 / `Enter` / 右键「打开」最后都落到
+    /// `ScratchpadHost::open_in_editor`，这里断言它真的把**绝对路径**递进了宿主的请求槽
+    /// （消费在 `WorkbenchView::render` 的 `take_open_in_editor`）。
+    ///
+    /// 为何单独立这一条：链路两端分属两个 crate（草稿箱不认识编辑器，靠端口反接），
+    /// 任一端改名 / 换槽都不会让另一端的单测变红——钉住这颗接口才拦得住。
+    #[test]
+    fn opening_a_draft_hands_the_absolute_path_to_the_host() {
+        let shared = Shared::new();
+        let editor = EditorShared::new();
+        let host = build_host(&shared, &editor);
+
+        let path = PathBuf::from(r"D:\proj\scratchpad\a.sql");
+        host.open_in_editor(path.clone());
+
+        let request = shared.take_open_in_editor().expect("应当入队一份打开请求");
+        assert_eq!(request.path, path, "递过去的必须是草稿的绝对路径");
+        assert!(
+            request.read_only.can_edit(),
+            "草稿是可写的（只读那一档是资产库存档本体）"
+        );
+        assert!(shared.take_open_in_editor().is_none(), "取出即清空");
+    }
 }
