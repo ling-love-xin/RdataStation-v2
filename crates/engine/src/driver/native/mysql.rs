@@ -27,9 +27,13 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows, sqlx_value_is_null};
-use crate::driver::{ColumnDetail, DataSourceMeta, Database, PoolStatus, Transaction};
-use crate::driver::{IndexDetail, SchemaObjectKind};
+use crate::driver::utils::{
+    affected_rows_result, returns_rows, sqlx_value_is_null, MY_LIST_CONSTRAINTS_SQL,
+};
+use crate::driver::{
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
+    SchemaObjectKind, Transaction,
+};
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -360,6 +364,80 @@ impl Database for MySqlDatabase {
             }
         }
         Ok(indexes)
+    }
+
+    /// 列举约束（三张 information_schema 表拼出来）。
+    ///
+    /// 为什么必须补：本方法此前**没实现**，而 `MetadataBrowser::get_constraints` 是
+    /// `self.list_constraints(...)` 的纯转发 → 落到 trait 默认空实现 →
+    /// **属性面板的「约束」分区恒为空**（与已修的「序列 / 触发器被空实现遮蔽」同一形态）。
+    ///
+    /// 三张表各管一段：`TABLE_CONSTRAINTS`（有哪些约束）→ `KEY_COLUMN_USAGE`（涉及哪些列、
+    /// 引用谁）→ `REFERENTIAL_CONSTRAINTS`（更新 / 删除规则）。
+    /// `GROUP_CONCAT(... ORDER BY ORDINAL_POSITION)` 把组合约束的列按**声明顺序**拼回一个
+    /// 字符串 —— 组合主键的顺序有意义，不能靠聚合的默认顺序。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let sql = MY_LIST_CONSTRAINTS_SQL;
+        let result = self
+            .query_with_params(
+                sql,
+                vec![
+                    Value::Text(schema.unwrap_or_default().to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        let mut out: Vec<ConstraintDetail> = Vec::new();
+        let Some(batch) = result.batches.first() else {
+            return Ok(out);
+        };
+        let col = |name: &str| {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<arrow::array::StringArray>())
+        };
+        let (Some(cname), Some(ctype), Some(cols), Some(ref_table), Some(ref_cols), Some(upd), Some(del)) = (
+            col("cname"),
+            col("ctype"),
+            col("cols"),
+            col("ref_table"),
+            col("ref_cols"),
+            col("upd"),
+            col("del"),
+        ) else {
+            return Ok(out);
+        };
+
+        let split = |text: &str| -> Vec<String> {
+            text.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+
+        for row in 0..batch.num_rows() {
+            let ref_table = ref_table.value(row);
+            out.push(ConstraintDetail {
+                name: cname.value(row).to_string(),
+                table_name: table.to_string(),
+                // MySQL 的 CONSTRAINT_TYPE 本来就是展示名（PRIMARY KEY / FOREIGN KEY /
+                // UNIQUE / CHECK），不用再映射
+                constraint_type: ctype.value(row).to_string(),
+                column_names: split(cols.value(row)),
+                referenced_table: (!ref_table.is_empty()).then(|| ref_table.to_string()),
+                referenced_columns: split(ref_cols.value(row)),
+                update_rule: (!upd.value(row).is_empty()).then(|| upd.value(row).to_string()),
+                delete_rule: (!del.value(row).is_empty()).then(|| del.value(row).to_string()),
+            });
+        }
+        Ok(out)
     }
 
     async fn list_procedures(

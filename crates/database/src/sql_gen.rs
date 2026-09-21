@@ -160,21 +160,26 @@ pub fn create_table_ddl(
         format!("CREATE TABLE {qualified} ("),
     ];
 
-    let mut body: Vec<String> = columns
+    // body 的每一项是 `(语句, 可选注释)` —— **不把注释拼进语句里**。
+    // 为什么：行内注释是 `-- …`，它会把后面的逗号一起注释掉。上一版就是拼在一起，
+    // 于是 `ON DELETE CASCADE  -- fk_name,` 里的逗号落进了注释 → 生成的是语法错的 DDL
+    // （列上有注释时同样踩，只是要两列以上才看得出来）。所以逗号拼在注释**之前**。
+    let mut body: Vec<(String, Option<String>)> = columns
         .iter()
         .map(|c| {
-            let mut piece = format!("  {} {}", c.name, c.data_type);
+            let mut piece = format!("{} {}", c.name, c.data_type);
             if !c.nullable {
                 piece.push_str(" NOT NULL");
             }
             if let Some(d) = c.default_value.as_deref().filter(|s| !s.trim().is_empty()) {
                 piece.push_str(&format!(" DEFAULT {d}"));
             }
-            if let Some(comment) = c.comment.as_deref().filter(|s| !s.trim().is_empty()) {
-                // 行内注释只用 `--`（三种方言都认；MySQL 的行内 `COMMENT '…'` 不是标准语法）
-                piece.push_str(&format!("  -- {comment}"));
-            }
-            piece
+            let comment = c
+                .comment
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            (piece, comment)
         })
         .collect();
 
@@ -208,7 +213,7 @@ pub fn create_table_ddl(
         });
 
     if let Some(cols) = pk_cols {
-        body.push(format!("  PRIMARY KEY ({})", cols.join(", ")));
+        body.push((format!("PRIMARY KEY ({})", cols.join(", ")), None));
     }
 
     for c in constraints {
@@ -222,36 +227,47 @@ pub fn create_table_ddl(
                 continue; // 引用表未知：写半个外键还不如不写
             };
             let ref_cols = c.referenced_columns.join(", ");
-            let mut piece = format!("  FOREIGN KEY ({cols}) REFERENCES {target}");
+            let mut piece = format!("FOREIGN KEY ({cols}) REFERENCES {target}");
             if !ref_cols.is_empty() {
                 piece.push_str(&format!(" ({ref_cols})"));
             }
-            if let Some(r) = c.update_rule.as_deref().filter(|s| !s.trim().is_empty()) {
+            // `NO ACTION` 是 SQL 的默认动作，PG 会把它报成 `'a'`；打出来只是噪音
+            // （DBeaver 也不打）。其余四档都带上。
+            if let Some(r) = fk_action(c.update_rule.as_deref()) {
                 piece.push_str(&format!(" ON UPDATE {r}"));
             }
-            if let Some(r) = c.delete_rule.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(r) = fk_action(c.delete_rule.as_deref()) {
                 piece.push_str(&format!(" ON DELETE {r}"));
             }
-            if !c.name.is_empty() {
-                piece.push_str(&format!("  -- {}", c.name));
-            }
-            body.push(piece);
+            let comment = (!c.name.is_empty()).then(|| c.name.clone());
+            body.push((piece, comment));
         } else if kind.contains("UNIQUE") {
-            body.push(format!("  UNIQUE ({cols})"));
+            body.push((format!("UNIQUE ({cols})"), None));
         }
         // `CHECK` 有意跳过：`ConstraintDetail` 不带表达式，合成不了。
     }
 
-    for (i, item) in body.iter().enumerate() {
+    for (i, (sql, comment)) in body.iter().enumerate() {
         let is_last = i + 1 == body.len();
-        lines.push(if is_last {
-            format!("{item}")
-        } else {
-            format!("{item},")
-        });
+        let mut line = format!("  {sql}{}", if is_last { "" } else { "," });
+        if let Some(c) = comment {
+            // 逗号已经在上面拼好了，注释在**最后**（行内注释只用 `--`：三种方言都认，
+            // MySQL 的行内 `COMMENT '…'` 不是标准语法）
+            line.push_str(&format!("  -- {c}"));
+        }
+        lines.push(line);
     }
     lines.push(");".to_string());
     lines.join("\n")
+}
+
+/// 外键动作：`NO ACTION` 是默认值，返回 `None`（不打进 DDL）。
+fn fk_action(rule: Option<&str>) -> Option<&str> {
+    match rule.map(str::trim) {
+        None | Some("") => None,
+        Some(r) if r.eq_ignore_ascii_case("NO ACTION") => None,
+        Some(r) => Some(r),
+    }
 }
 
 fn cols_are_empty(cols: &[String]) -> bool {
@@ -529,5 +545,54 @@ mod tests {
     fn ddl_single_column_has_no_trailing_comma() {
         let sql = create_table_ddl("t", &[col("id", "int4", false, None)], &[], &[]);
         assert!(sql.contains("  id int4 NOT NULL\n);"), "{sql}");
+    }
+
+    /// 回归（真机输出抳出来的）：行内注释是 `-- …`，拼在语句尾巴上会把**逗号一起注释掉**，
+    /// 生成的是语法错的 DDL（`ON DELETE CASCADE  -- fk_name,`）。逗号必须在注释**之前**。
+    #[test]
+    fn ddl_puts_the_comma_before_an_inline_comment() {
+        let mut a = col("a", "int4", false, None);
+        a.comment = Some("主键".to_string());
+        let sql = create_table_ddl("t", &[a, col("b", "text", true, None)], &[], &[]);
+        let line = sql
+            .lines()
+            .find(|l| l.contains("a int4"))
+            .expect("列 a 那一行");
+        let comma = line.find(',').expect("非末列要有逗号");
+        let mark = line.find("--").expect("要有行内注释");
+        assert!(comma < mark, "逗号落在注释里了：{line}");
+        assert!(line.trim_end().ends_with("主键"), "{line}");
+    }
+
+    /// 外键的约束名也走同一条规矩（它是 `-- 名称` 形式的注释）
+    #[test]
+    fn ddl_fk_name_is_a_comment_after_the_comma() {
+        let sql = create_table_ddl(
+            "t",
+            &[col("uid", "int4", true, None), col("v", "text", true, None)],
+            &[
+                cons("fk_u", "FOREIGN KEY", &["uid"], Some("users"), &["id"]),
+                cons("uq_v", "UNIQUE", &["v"], None, &[]),
+            ],
+            &[],
+        );
+        let line = sql.lines().find(|l| l.contains("FOREIGN KEY")).unwrap();
+        let comma = line.find(',').expect("后面还有 UNIQUE，要有逗号");
+        let mark = line.find("-- fk_u").expect("要有约束名");
+        assert!(comma < mark, "逗号落在注释里了：{line}");
+    }
+
+    /// `NO ACTION` 是 SQL 的默认动作（PG 把它报成 `'a'`），不打进 DDL —— 只去噪音。
+    #[test]
+    fn ddl_omits_default_no_action_but_keeps_others() {
+        let mut fk = cons("fk_u", "FOREIGN KEY", &["uid"], Some("users"), &["id"]);
+        fk.update_rule = Some("NO ACTION".to_string());
+        fk.delete_rule = Some("CASCADE".to_string());
+        let sql = create_table_ddl("t", &[col("uid", "int4", true, None)], &[fk], &[]);
+        assert!(
+            !sql.contains("ON UPDATE"),
+            "默认的 NO ACTION 不应打出来：{sql}"
+        );
+        assert!(sql.contains("ON DELETE CASCADE"), "{sql}");
     }
 }

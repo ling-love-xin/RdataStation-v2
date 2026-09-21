@@ -18,6 +18,7 @@ use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
 };
+use crate::driver::utils::MY_LIST_CONSTRAINTS_SQL;
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -655,6 +656,72 @@ impl Database for MySqlNativeDatabase {
             max_connections: self.max_connections,
             min_connections: self.min_connections,
         })
+    }
+
+    /// 列举约束 —— **与 `mysql`（sqlx）共用同一份 SQL**（`utils::MY_LIST_CONSTRAINTS_SQL`）。
+    ///
+    /// 本方法此前没实现 → 落到 trait 默认空实现 → 属性面板的「约束」分区对官方 MySQL
+    /// 驱动同样恒为空。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let sql = MY_LIST_CONSTRAINTS_SQL;
+        let result = self
+            .query_with_params(
+                sql,
+                vec![
+                    Value::Text(schema.unwrap_or_default().to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        let mut out: Vec<ConstraintDetail> = Vec::new();
+        let Some(batch) = result.batches.first() else {
+            return Ok(out);
+        };
+        let col = |name: &str| {
+            batch
+                .column_by_name(name)
+                .and_then(|c| c.as_any().downcast_ref::<arrow::array::StringArray>())
+        };
+        let (Some(cname), Some(ctype), Some(cols), Some(ref_table), Some(ref_cols), Some(upd), Some(del)) = (
+            col("cname"),
+            col("ctype"),
+            col("cols"),
+            col("ref_table"),
+            col("ref_cols"),
+            col("upd"),
+            col("del"),
+        ) else {
+            return Ok(out);
+        };
+
+        let split = |text: &str| -> Vec<String> {
+            text.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+
+        for row in 0..batch.num_rows() {
+            let ref_table = ref_table.value(row);
+            out.push(ConstraintDetail {
+                name: cname.value(row).to_string(),
+                table_name: table.to_string(),
+                constraint_type: ctype.value(row).to_string(),
+                column_names: split(cols.value(row)),
+                referenced_table: (!ref_table.is_empty()).then(|| ref_table.to_string()),
+                referenced_columns: split(ref_cols.value(row)),
+                update_rule: (!upd.value(row).is_empty()).then(|| upd.value(row).to_string()),
+                delete_rule: (!del.value(row).is_empty()).then(|| del.value(row).to_string()),
+            });
+        }
+        Ok(out)
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn MetadataBrowser> {

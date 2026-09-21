@@ -17,7 +17,9 @@ use arrow::record_batch::RecordBatch;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::driver::utils::{affected_rows_result, quote_identifier, returns_rows};
-use crate::driver::{ColumnDetail, DataSourceMeta, Database, IndexDetail, Transaction};
+use crate::driver::{
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
+};
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
@@ -867,6 +869,180 @@ impl Database for SqliteDatabase {
         }
 
         Ok(indexes)
+    }
+
+    /// 列举约束（主键 / 外键 / 唯一）。
+    ///
+    /// 为什么必须补：本方法此前**没实现**，而 `MetadataBrowser::get_constraints` 是
+    /// `self.list_constraints(...)` 的纯转发 → 落到 trait 默认空实现 →
+    /// **属性面板的「约束」分区恒为空**（与已修的「序列 / 触发器被空实现遮蔽」同一形态）。
+    ///
+    /// SQLite 的三个来源各不相同（没有 `information_schema` 可用）：
+    /// * 主键 —— `PRAGMA table_info` 的 `pk` 列（`> 0` 即属于主键，**值就是列序**，按它排）；
+    /// * 外键 —— `PRAGMA foreign_key_list`（同一外键的多列共用一个 `id`，`seq` 是列序）；
+    /// * 唯一 —— `PRAGMA index_list` 里 `origin = 'u'` 的自动索引（`c` 是用户建的普通索引、
+    ///   `pk` 是主键，都不算约束）。
+    ///
+    /// **SQLite 不为约束存名字**：主键与外键的名称是本驱动**合成**的（`{表}_pkey` /
+    /// `{表}_{列}_fkey`），只为在属性面板里有个可读标识；唯一约束用 SQLite 自己的自动索引名
+    /// （`sqlite_autoindex_*`，那是真实存在的）。`CHECK` 要解析建表 SQL 才能拿到表达式，
+    /// **有意不做**（宁可不显示，也不显示一个错的）。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let conn = self.conn.lock().map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "sqlite".to_string(),
+                operation: "lock".to_string(),
+                source: e.to_string(),
+            })
+        })?;
+
+        let quoted = quote_identifier(table, '"');
+        let mut out: Vec<ConstraintDetail> = Vec::new();
+
+        // ---- 主键 ----
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({quoted})"))
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_pk", e.to_string())))?;
+            // 列: cid, name, type, notnull, dflt_value, pk
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?)))
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_pk_q", e.to_string())))?;
+            let mut pk: Vec<(i64, String)> = Vec::new();
+            for r in rows {
+                let (order, name) = r.map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_pk_row", e.to_string()))
+                })?;
+                if order > 0 {
+                    pk.push((order, name));
+                }
+            }
+            pk.sort_by_key(|(order, _)| *order);
+            if !pk.is_empty() {
+                out.push(ConstraintDetail {
+                    name: format!("{table}_pkey"),
+                    table_name: table.to_string(),
+                    constraint_type: "PRIMARY KEY".to_string(),
+                    column_names: pk.into_iter().map(|(_, n)| n).collect(),
+                    referenced_table: None,
+                    referenced_columns: Vec::new(),
+                    update_rule: None,
+                    delete_rule: None,
+                });
+            }
+        }
+
+        // ---- 外键：同一 id 的多列拼成一个约束 ----
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA foreign_key_list({quoted})"))
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_fk", e.to_string())))?;
+            // 列: id, seq, table, from, to, on_update, on_delete, match
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                })
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_fk_q", e.to_string())))?;
+
+            // id → (引用表, 更新规则, 删除规则, [(seq, 本表列, 引用列)])
+            let mut by_id: std::collections::BTreeMap<
+                i64,
+                (String, String, String, Vec<(i64, String, Option<String>)>),
+            > = std::collections::BTreeMap::new();
+            for r in rows {
+                let (id, seq, ref_table, from_col, to_col, on_update, on_delete) = r.map_err(|e| {
+                    CoreError::database(DatabaseError::query("constraints_fk_row", e.to_string()))
+                })?;
+                by_id
+                    .entry(id)
+                    .or_insert((ref_table, on_update, on_delete, Vec::new()))
+                    .3
+                    .push((seq, from_col, to_col));
+            }
+            for (_id, (ref_table, on_update, on_delete, mut cols)) in by_id {
+                cols.sort_by_key(|(seq, _, _)| *seq);
+                let from: Vec<String> = cols.iter().map(|(_, f, _)| f.clone()).collect();
+                let to: Vec<String> = cols.iter().filter_map(|(_, _, t)| t.clone()).collect();
+                out.push(ConstraintDetail {
+                    name: format!("{table}_{}_fkey", from.join("_")),
+                    table_name: table.to_string(),
+                    constraint_type: "FOREIGN KEY".to_string(),
+                    column_names: from,
+                    referenced_table: Some(ref_table),
+                    referenced_columns: to,
+                    update_rule: Some(on_update),
+                    delete_rule: Some(on_delete),
+                });
+            }
+        }
+
+        // ---- 唯一约束：origin = 'u' 的自动索引 ----
+        {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA index_list({quoted})"))
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_uq", e.to_string())))?;
+            // 列: seq, name, unique, origin, partial
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(|e| CoreError::database(DatabaseError::query("constraints_uq_q", e.to_string())))?;
+            let uniques: Vec<String> = rows
+                .filter_map(|r| r.ok())
+                .filter(|(_, unique, origin)| *unique != 0 && origin == "u")
+                .map(|(name, _, _)| name)
+                .collect();
+
+            for index_name in uniques {
+                let mut info = conn
+                    .prepare(&format!(
+                        "PRAGMA index_info({})",
+                        quote_identifier(&index_name, '"')
+                    ))
+                    .map_err(|e| {
+                        CoreError::database(DatabaseError::query("constraints_uq_info", e.to_string()))
+                    })?;
+                // 列: seqno, cid, name
+                let cols: Vec<String> = info
+                    .query_map([], |row| row.get::<_, String>(2))
+                    .map_err(|e| {
+                        CoreError::database(DatabaseError::query("constraints_uq_info_q", e.to_string()))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                if !cols.is_empty() {
+                    out.push(ConstraintDetail {
+                        name: index_name,
+                        table_name: table.to_string(),
+                        constraint_type: "UNIQUE".to_string(),
+                        column_names: cols,
+                        referenced_table: None,
+                        referenced_columns: Vec::new(),
+                        update_rule: None,
+                        delete_rule: None,
+                    });
+                }
+            }
+        }
+
+        Ok(out)
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {

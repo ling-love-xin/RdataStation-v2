@@ -16,7 +16,9 @@ use duckdb::{AccessMode, Config, Connection};
 
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{affected_rows_result, escape_sql_string, returns_rows};
-use crate::driver::{ColumnDetail, DataSourceMeta, Database, IndexDetail, Transaction};
+use crate::driver::{
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
+};
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{QueryResult, Value};
 use crate::duckdb::row_to_arrow::duckdb_rows_to_arrow;
@@ -351,6 +353,21 @@ fn setting_err(key: &str, sql: &str, reason: String) -> CoreError {
         operation: "driver_properties".to_string(),
         source: format!("属性 `{key}`（{sql}）应用失败：{reason}"),
     })
+}
+
+/// DuckDB 的列表列以**文本**返回（`[a, b]` / `[]`）：拆方括号、去空白与可选引号。
+///
+/// 用于 `duckdb_constraints()` 的 `constraint_column_names` / `referenced_column_names`
+/// —— 它们不是分隔字符串，而是列表的文本表示。
+fn parse_duckdb_list(text: &str) -> Vec<String> {
+    text.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim_matches('"').to_string())
+        .collect()
 }
 
 fn is_read_only_sql(sql: &str) -> bool {
@@ -759,8 +776,20 @@ impl Database for DuckDbDatabase {
 
     /// 列举表的所有索引
     ///
-    /// DuckDB 通过 duckdb_indexes() 表函数获取索引信息。
-    /// 索引列名从 expression 字段解析（如 "CREATE INDEX idx ON t (col1, col2)"）。
+    /// DuckDB 通过 `duckdb_indexes()` 表函数获取索引。
+    ///
+    /// **2026-09-21 真机修正**：原实现查 `index_type` 与 `expression` 两列，而当前
+    /// DuckDB（1.5.5）的 `duckdb_indexes()` **两列都不存在**（真实列是 `expressions`，
+    /// 复数，且没有索引方法列）—— 于是查询每次都以
+    /// `Binder Error: Referenced column "index_type" not found in FROM clause` 失败，
+    /// 而属性面板把 `get_indexes` 的错误吞成空 → **DuckDB 的「索引」分区恒为空白，
+    /// 且不留任何痕迹**。这类"错在 SQL 里、被上层静默吞掉"的缺陷只有真机套件能抓。
+    ///
+    /// `expressions` 是**列表**，必须在 SQL 里 `array_to_string`（duckdb-rs 的
+    /// `row.get::<String>` 对 `List` 列直接报 `Invalid column type List`）。
+    ///
+    /// 注：DuckDB 的**主键 / 唯一**走 `duckdb_constraints()`，不在 `duckdb_indexes()` 里
+    /// —— 所以这里列出的就是用户显式建的索引。
     async fn list_indexes(
         &self,
         _catalog: &str,
@@ -775,12 +804,15 @@ impl Database for DuckDbDatabase {
             })
         })?;
 
-        // duckdb_indexes() 返回: index_name, is_unique, is_primary, index_type, expression
+        // duckdb_indexes() 的真实列（1.5.5 实测）：index_name, is_unique, is_primary,
+        // expressions（列表）…；**没有** index_type / expression
         let mut stmt = conn
             .prepare(
-                "SELECT index_name, is_unique, is_primary, index_type, expression
-                 FROM duckdb_indexes()
-                 WHERE table_name = ?",
+                "SELECT index_name, is_unique, is_primary,
+                        COALESCE(array_to_string(expressions, ','), '')
+                   FROM duckdb_indexes()
+                  WHERE table_name = ?
+                  ORDER BY index_name",
             )
             .map_err(|e| {
                 CoreError::database(DatabaseError::query("list_indexes", e.to_string()))
@@ -792,8 +824,7 @@ impl Database for DuckDbDatabase {
                     row.get::<_, String>(0)?,         // index_name
                     row.get::<_, bool>(1)?,           // is_unique
                     row.get::<_, bool>(2)?,           // is_primary
-                    row.get::<_, Option<String>>(3)?, // index_type
-                    row.get::<_, Option<String>>(4)?, // expression
+                    row.get::<_, Option<String>>(3)?, // expressions（已 array_to_string）
                 ))
             })
             .map_err(|e| {
@@ -803,23 +834,17 @@ impl Database for DuckDbDatabase {
         let mut indexes = Vec::new();
         for row in rows {
             match row {
-                Ok((name, is_unique, is_primary, index_type, expression)) => {
-                    // 从 expression 解析列名：格式 "(col1, col2)" 或 "(col1)"
-                    let column_names: Vec<String> = expression
+                Ok((name, is_unique, is_primary, expressions)) => {
+                    // `expressions` 已经是 `col1,col2` 形态（`array_to_string` 的产物）。
+                    // 索引表达式（如 `lower(name)`）原样保留 —— 那是用户写的东西，
+                    // 不要在这里"洗"成列名。
+                    let column_names: Vec<String> = expressions
                         .as_deref()
-                        .and_then(|expr| {
-                            let start = expr.find('(')?;
-                            let end = expr.rfind(')')?;
-                            if end > start {
-                                Some(
-                                    expr[start + 1..end]
-                                        .split(',')
-                                        .map(|s| s.trim().trim_matches('"').to_string())
-                                        .collect(),
-                                )
-                            } else {
-                                None
-                            }
+                        .map(|e| {
+                            e.split(',')
+                                .map(|s| s.trim().trim_matches('"').to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect()
                         })
                         .unwrap_or_default();
 
@@ -829,7 +854,8 @@ impl Database for DuckDbDatabase {
                         column_names,
                         is_unique,
                         is_primary,
-                        index_type,
+                        // 索引方法（btree / art…）当前 DuckDB 不暴露，如实留空
+                        index_type: None,
                         comment: None,
                     });
                 }
@@ -899,6 +925,87 @@ impl Database for DuckDbDatabase {
         })?;
 
         Ok(())
+    }
+
+    /// 列举约束（`duckdb_constraints()`）。
+    ///
+    /// 为什么必须补：本方法此前**没实现**，而 `MetadataBrowser::get_constraints` 是
+    /// `self.list_constraints(...)` 的纯转发 → 落到 trait 默认空实现 →
+    /// **属性面板的「约束」分区恒为空**（与已修的「序列 / 触发器被空实现遮蔽」同一形态）。
+    ///
+    /// DuckDB 有现成的 `duckdb_constraints()`，而且比 `information_schema` 更全：
+    /// `constraint_name`（真名字，如 `t_id_pkey`）、`referenced_table` /
+    /// `referenced_column_names`（外键目标）都是它独有的。
+    ///
+    /// 两点要注意：
+    /// * 列表列（`constraint_column_names` / `referenced_column_names`）**以文本返回**
+    ///   （`[a, b]` / `[]`），不是分隔字符串，所以要拆方括号；
+    /// * `duckdb_constraints()` 把 `NOT NULL` 也算一类约束 —— **有意过滤掉**：
+    ///   属性面板「列」分区里已有「非空」一列，再来一行约束是重复噪音。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let conn = self.conn.lock().map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "duckdb".to_string(),
+                operation: "lock".to_string(),
+                source: e.to_string(),
+            })
+        })?;
+
+        let mut stmt = conn
+            .prepare(
+                // 列表列**必须在 SQL 里转成文本**：duckdb-rs 的 `row.get::<String>` 对
+                // `List` 类型的列会直接报 `Invalid column type List`（探针实测）。
+                // `array_to_string` 比 `CAST(... AS VARCHAR)` 更干净（不用再拆方括号）。
+                "SELECT constraint_name, constraint_type,
+                        COALESCE(array_to_string(constraint_column_names, ','), ''),
+                        COALESCE(referenced_table, ''),
+                        COALESCE(array_to_string(referenced_column_names, ','), '')
+                   FROM duckdb_constraints()
+                  WHERE table_name = ? AND constraint_type <> 'NOT NULL'
+                  ORDER BY constraint_index",
+            )
+            .map_err(|e| {
+                CoreError::database(DatabaseError::query("list_constraints", e.to_string()))
+            })?;
+
+        let rows = stmt
+            .query_map([table], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?, // constraint_name
+                    row.get::<_, String>(1)?,         // constraint_type
+                    row.get::<_, Option<String>>(2)?, // constraint_column_names（已 array_to_string）
+                    row.get::<_, String>(3)?,         // referenced_table
+                    row.get::<_, Option<String>>(4)?, // referenced_column_names（已 array_to_string）
+                ))
+            })
+            .map_err(|e| {
+                CoreError::database(DatabaseError::query("list_constraints", e.to_string()))
+            })?;
+
+        let mut out: Vec<ConstraintDetail> = Vec::new();
+        for row in rows {
+            let (name, kind, cols, ref_table, ref_cols) = row.map_err(|e| {
+                CoreError::database(DatabaseError::query("list_constraints_row", e.to_string()))
+            })?;
+            out.push(ConstraintDetail {
+                name: name.unwrap_or_default(),
+                table_name: table.to_string(),
+                constraint_type: kind,
+                column_names: parse_duckdb_list(&cols.unwrap_or_default()),
+                referenced_table: (!ref_table.is_empty()).then_some(ref_table),
+                referenced_columns: parse_duckdb_list(&ref_cols.unwrap_or_default()),
+                // DuckDB 的外键规则目前不在 duckdb_constraints() 里 —— 如实留空，
+                // 不猜一个 "NO ACTION" 出来
+                update_rule: None,
+                delete_rule: None,
+            });
+        }
+        Ok(out)
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {

@@ -1,3 +1,5 @@
+use arrow::array::StringArray;
+use shared::models::QueryResult;
 use super::registry::DriverConnectionConfig;
 use shared::error::{ConnectionError, CoreError};
 
@@ -73,6 +75,135 @@ where
     row.try_get_raw(index)
         .map(|value| value.is_null())
         .unwrap_or(true)
+}
+
+/// MySQL：列出某表的约束（两个 MySQL 驱动共用，勿抄第二份）。
+///
+/// 三张 `information_schema` 表各管一段：`TABLE_CONSTRAINTS`（有哪些约束）→
+/// `KEY_COLUMN_USAGE`（涉及哪些列、引用谁）→ `REFERENTIAL_CONSTRAINTS`（更新 / 删除
+/// 规则）。`GROUP_CONCAT(... ORDER BY ORDINAL_POSITION)` 把组合约束的列按**声明顺序**
+/// 拼回一个字符串 —— 组合主键的顺序有意义，不能靠聚合的默认顺序。
+pub const MY_LIST_CONSTRAINTS_SQL: &str = "\
+            SELECT tc.CONSTRAINT_NAME AS cname, tc.CONSTRAINT_TYPE AS ctype, \
+                   COALESCE(GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION), '') AS cols, \
+                   COALESCE(kcu.REFERENCED_TABLE_NAME, '') AS ref_table, \
+                   COALESCE(GROUP_CONCAT(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION), '') AS ref_cols, \
+                   COALESCE(rc.UPDATE_RULE, '') AS upd, COALESCE(rc.DELETE_RULE, '') AS del \
+              FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+              LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu \
+                ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA \
+               AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
+               AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA AND kcu.TABLE_NAME = tc.TABLE_NAME \
+              LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc \
+                ON rc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA \
+               AND rc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
+             WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? \
+             GROUP BY tc.CONSTRAINT_NAME, tc.CONSTRAINT_TYPE, kcu.REFERENCED_TABLE_NAME, \
+                      rc.UPDATE_RULE, rc.DELETE_RULE \
+             ORDER BY tc.CONSTRAINT_NAME";
+
+/// PostgreSQL：列出某表的索引（两个 PG 驱动共用，勿抄第二份）。
+///
+/// 用 `pg_catalog` 而不是 `information_schema`：后者没有 `indisprimary` 与索引方法
+/// （btree / hash / gin / gist / brin）。布尔列在 SQL 里 `::text` —— 批读路径按
+/// `StringArray` 取，混一个 BooleanArray 会让整列 downcast 落空。
+pub const PG_LIST_INDEXES_SQL: &str = "\
+            SELECT i.relname AS index_name, \
+                   ix.indisunique::text, ix.indisprimary::text, \
+                   COALESCE(am.amname, '') AS method, \
+                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
+                             FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) \
+                             JOIN pg_catalog.pg_attribute a \
+                               ON a.attrelid = ix.indrelid AND a.attnum = k.attnum), '') AS cols \
+              FROM pg_catalog.pg_index ix \
+              JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid \
+              JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid \
+              JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
+              LEFT JOIN pg_catalog.pg_am am ON am.oid = i.relam \
+             WHERE n.nspname = $1 AND t.relname = $2 \
+             ORDER BY i.relname";
+
+/// PostgreSQL：列出某表的约束（两个 PG 驱动共用）。
+///
+/// `conkey` / `confkey` 是 `int2[]`，用 `unnest ... WITH ORDINALITY` 按**列序**拼回名字
+/// （组合主键的顺序有意义，不能靠 `string_agg` 的默认顺序）。`confupdtype` /
+/// `confdeltype` 的 `' '`（空格）表示没写 ON UPDATE/DELETE，由 `pg_fk_action` 归 None。
+pub const PG_LIST_CONSTRAINTS_SQL: &str = "\
+            SELECT c.conname, c.contype::text, \
+                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
+                             FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) \
+                             JOIN pg_catalog.pg_attribute a \
+                               ON a.attrelid = c.conrelid AND a.attnum = k.attnum), '') AS cols, \
+                   COALESCE(rc.relname, '') AS ref_table, \
+                   COALESCE((SELECT string_agg(a.attname, ',' ORDER BY k.ord) \
+                             FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord) \
+                             JOIN pg_catalog.pg_attribute a \
+                               ON a.attrelid = c.confrelid AND a.attnum = k.attnum), '') AS ref_cols, \
+                   c.confupdtype::text, c.confdeltype::text \
+              FROM pg_catalog.pg_constraint c \
+              JOIN pg_catalog.pg_class t ON t.oid = c.conrelid \
+              JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
+              LEFT JOIN pg_catalog.pg_class rc ON rc.oid = c.confrelid \
+             WHERE n.nspname = $1 AND t.relname = $2 \
+             ORDER BY c.conname";
+
+/// 结果批次读成 `Vec<Vec<String>>`（**每一列都按字符串取**）。
+///
+/// 新补的 `list_indexes` / `list_constraints` 一张表要取六七列，逐列
+/// `downcast_ref::<StringArray>()` 会让方法体比 SQL 还长。集中一次，取不到的行
+/// （缺列 / 非字符串列）当空串——**不 panic、也不吞掉整行**。
+pub fn batch_to_string_rows(result: &QueryResult) -> Vec<Vec<String>> {
+    let Some(batch) = result.batches.first() else {
+        return Vec::new();
+    };
+    let cols = batch.num_columns();
+    let arrays: Vec<Option<&StringArray>> = (0..cols)
+        .map(|c| batch.column(c).as_any().downcast_ref::<StringArray>())
+        .collect();
+    (0..batch.num_rows())
+        .map(|row| {
+            (0..cols)
+                .map(|col| arrays[col].map_or(String::new(), |a| a.value(row).to_string()))
+                .collect()
+        })
+        .collect()
+}
+
+/// 逗号分隔的列名 → `Vec<String>`（SQL 侧 `string_agg` 的产物）。
+pub fn split_csv(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// `pg_constraint.contype` → 展示用名称。
+pub fn pg_constraint_kind(code: &str) -> String {
+    match code {
+        "p" => "PRIMARY KEY",
+        "f" => "FOREIGN KEY",
+        "u" => "UNIQUE",
+        "c" => "CHECK",
+        "x" => "EXCLUDE",
+        other => other,
+    }
+    .to_string()
+}
+
+/// `confupdtype` / `confdeltype` → 规则名。
+///
+/// `' '`（空格）是 PG 的「没写 ON UPDATE/DELETE」——**不是空串**，漏了它每个外键
+/// 都会多出一对空的规则行。
+pub fn pg_fk_action(code: &str) -> Option<String> {
+    match code {
+        "a" => Some("NO ACTION".to_string()),
+        "r" => Some("RESTRICT".to_string()),
+        "c" => Some("CASCADE".to_string()),
+        "n" => Some("SET NULL".to_string()),
+        "d" => Some("SET DEFAULT".to_string()),
+        _ => None,
+    }
 }
 
 /// 构建数据库连接URL

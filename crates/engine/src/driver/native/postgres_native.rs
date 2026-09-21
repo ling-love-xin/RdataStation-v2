@@ -16,7 +16,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
+use crate::driver::utils::{
+    affected_rows_result, batch_to_string_rows, byte_offset_for_char, pg_constraint_kind,
+    pg_fk_action, returns_rows, split_csv, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL,
+};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
@@ -695,6 +698,73 @@ impl Database for PostgresNativeDatabase {
             max_connections: 1,
             min_connections: 1,
         })
+    }
+
+    /// 列举索引 —— **与 `postgres`（sqlx）共用同一份 SQL**（`utils::PG_LIST_INDEXES_SQL`）。
+    ///
+    /// 本方法此前没实现 → 落到 trait 默认空实现 → 属性面板的「索引」分区为空。
+    async fn list_indexes(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<IndexDetail>, CoreError> {
+        let result = self
+            .query_with_params(
+                PG_LIST_INDEXES_SQL,
+                vec![
+                    Value::Text(schema.unwrap_or("public").to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(batch_to_string_rows(&result)
+            .into_iter()
+            .map(|r| IndexDetail {
+                name: r[0].clone(),
+                table_name: table.to_string(),
+                column_names: split_csv(&r[4]),
+                is_unique: r[1] == "true",
+                is_primary: r[2] == "true",
+                index_type: (!r[3].is_empty()).then(|| r[3].clone()),
+                comment: None,
+            })
+            .collect())
+    }
+
+    /// 列举约束 —— **与 `postgres`（sqlx）共用同一份 SQL**。
+    ///
+    /// 本方法此前没实现 → 属性面板的「约束」分区对官方 PG 驱动同样恒为空。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let result = self
+            .query_with_params(
+                PG_LIST_CONSTRAINTS_SQL,
+                vec![
+                    Value::Text(schema.unwrap_or("public").to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(batch_to_string_rows(&result)
+            .into_iter()
+            .map(|r| ConstraintDetail {
+                name: r[0].clone(),
+                table_name: table.to_string(),
+                constraint_type: pg_constraint_kind(&r[1]),
+                column_names: split_csv(&r[2]),
+                referenced_table: (!r[3].is_empty()).then(|| r[3].clone()),
+                referenced_columns: split_csv(&r[4]),
+                update_rule: pg_fk_action(&r[5]),
+                delete_rule: pg_fk_action(&r[6]),
+            })
+            .collect())
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn MetadataBrowser> {

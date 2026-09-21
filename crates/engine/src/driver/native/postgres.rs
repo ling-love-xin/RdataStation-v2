@@ -9,10 +9,13 @@ use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{
-    affected_rows_result, byte_offset_for_char, returns_rows, sqlx_value_is_null,
+    affected_rows_result, batch_to_string_rows, byte_offset_for_char, pg_constraint_kind,
+    pg_fk_action, returns_rows, split_csv, sqlx_value_is_null, PG_LIST_CONSTRAINTS_SQL,
+    PG_LIST_INDEXES_SQL,
 };
 use crate::driver::{
-    ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObjectKind, Transaction,
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
+    SchemaObjectKind, Transaction,
 };
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -353,6 +356,85 @@ impl Database for PostgresDatabase {
         schema: Option<&str>,
     ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         self.get_triggers(catalog, schema.unwrap_or("public")).await
+    }
+
+    /// 列举索引（`pg_index`）。
+    ///
+    /// 为什么用 `pg_catalog` 而不是 `information_schema`：后者没有 `indisprimary` /
+    /// 索引方法（btree / gin / gist…）这两样，而属性面板的「索引」分区要它们。
+    /// 布尔列**在 SQL 里 ::text** —— 批读路径是按 `StringArray` 取的，混一个 BooleanArray
+    /// 会让整列的 downcast 落空（正是这次补类型解码时踩过的形状）。
+    async fn list_indexes(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<IndexDetail>, CoreError> {
+        let sql = PG_LIST_INDEXES_SQL;
+        let result = self
+            .query_with_params(
+                sql,
+                vec![
+                    Value::Text(schema.unwrap_or("public").to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(batch_to_string_rows(&result)
+            .into_iter()
+            .map(|r| IndexDetail {
+                name: r[0].clone(),
+                table_name: table.to_string(),
+                column_names: split_csv(&r[4]),
+                is_unique: r[1] == "true",
+                is_primary: r[2] == "true",
+                // PG 的索引方法（btree / hash / gin / gist / brin）比「类型」这个词更准
+                index_type: (!r[3].is_empty()).then(|| r[3].clone()),
+                comment: None,
+            })
+            .collect())
+    }
+
+    /// 列举约束（`pg_constraint`）。
+    ///
+    /// 为什么必须补：本方法此前**没实现**，而 `MetadataBrowser::get_constraints` 是
+    /// `self.list_constraints(...)` 的纯转发 → 落到 trait 默认空实现 →
+    /// **属性面板的「约束」分区对所有库恒为空白**（主键 / 外键 / 唯一 / CHECK 全不显示）。
+    /// 这与已修的「序列 / 触发器被空实现遮蔽」是同一形态。
+    ///
+    /// `conkey` / `confkey` 是 `int2[]`，用 `unnest ... WITH ORDINALITY` 按**列序**拼回名字
+    /// （组合主键的顺序有意义，不能靠 `string_agg` 的默认顺序）。
+    async fn list_constraints(
+        &self,
+        _catalog: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Vec<ConstraintDetail>, CoreError> {
+        let sql = PG_LIST_CONSTRAINTS_SQL;
+        let result = self
+            .query_with_params(
+                sql,
+                vec![
+                    Value::Text(schema.unwrap_or("public").to_string()),
+                    Value::Text(table.to_string()),
+                ],
+            )
+            .await?;
+
+        Ok(batch_to_string_rows(&result)
+            .into_iter()
+            .map(|r| ConstraintDetail {
+                name: r[0].clone(),
+                table_name: table.to_string(),
+                constraint_type: pg_constraint_kind(&r[1]),
+                column_names: split_csv(&r[2]),
+                referenced_table: (!r[3].is_empty()).then(|| r[3].clone()),
+                referenced_columns: split_csv(&r[4]),
+                update_rule: pg_fk_action(&r[5]),
+                delete_rule: pg_fk_action(&r[6]),
+            })
+            .collect())
     }
 
     async fn get_routine_source(
