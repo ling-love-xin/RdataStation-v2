@@ -331,7 +331,7 @@ render_scratchpad（首次 or loaded=false）
   草稿箱不做后缀分支。
 - 连接预选（C-2 前半）只对**新建**文档生效：同路径已打开走“只激活”，不覆盖用户手动改过的连接；
   已被删除的连接（不在下拉里）不预选——绑上去只会让执行报错。读元数据属「元数据级操作保持同步」的既定口径（K1c）。
-- **待接**（Phase C 余项）：冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
+- **待接**（Phase C 余项）：从**系统文件管理器**把文件拖进树（= 导入，仓库里无 `FileDropEvent` / `ExternalPaths` 入口）、命中跳转到具体行。冲突 Diff（C-4）与拖入编辑区插入（C-5 前半）**已接**（见 §6.15 / §6.17）。
 
 ### 6.13 执行后回写连接（Phase C-2 后半，已接）
 
@@ -358,7 +358,7 @@ render_scratchpad（首次 or loaded=false）
 | 输入 | 路径 |
 | --- | --- |
 | `↑` / `↓` | `scratchpad_visible_keys()`（按当前过滤/排序/展开态重新压平）→ 移动单选 → `scroll_to_item(i, Center)` |
-| `Enter` | 文件夹：展开/折叠（展开时懒加载）；文件：Phase C 前回落「打开所在位置」并提示 |
+| `Enter` | 文件夹：展开/折叠（展开时懒加载）；文件：**在中央编辑器中打开**（Phase C-1 已接，与双击同一入口 `request_open_scratchpad_file`） |
 | `Ctrl+N` | 新建文件（落点规则同 §6.3） |
 
 动作定义在 `workbench/commands.rs`（`scratchpad` key context），绑定在 `app/main.rs`；行点击会 `focus` 面板，保证快捷键生效。

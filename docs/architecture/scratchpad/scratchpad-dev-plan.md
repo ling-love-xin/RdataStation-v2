@@ -10,6 +10,21 @@
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
 
+### 2026-09-21（USIT 第 1 轮）— 「草稿 → 编辑器」这颗接口钉住 + 三处过期状态纠正
+
+起因：真机 USIT 反馈“编辑器与草稿箱文件好像没接线”。核对下来**链路是通的**（双击 / `Enter` / 右键「打开」→ `ScratchpadHost::open_in_editor` → `Shared::request_open_in_editor` → 宿主 `render` 消费 → `editor::persist::open_file`；脏点 / 冲突 Diff / 拖入插入同样已接），真正欠的是两件事：**这颗接口没有用例钉住**（两端分属两个 crate，任一端换名都不会让另一端的单测变红），以及**三份文档还写着 `Phase C` 未接**——验收人照文档判定，只能得出“没接线”。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 新增接口用例：`open_in_editor(草稿绝对路径)` 必须入队一份**绝对路径 + 可写**的打开请求，且取出即清空 | `crates/workbench/src/components/scratchpad_host.rs::tests::opening_a_draft_hands_the_absolute_path_to_the_host`（新） |
+| 2 | 状态纠正：头注“Phase C 尚未接线” → 已接（只剩系统文件拖入导入与命中跳行） | `README.md`（状态行 / §1 特点表 / §2 边界） |
+| 3 | 状态纠正：§1“编辑文件内容（`Phase C` 接中央编辑器）”从「不能做」移到「能做 + 去编辑器改」；§9 清单指路 | `scratchpad-user-guide.md`（头注 + §1 表） |
+| 4 | 状态纠正：§6.12「待接」里已完成的冲突 Diff / 拖入插入划掉；§6.14 的 `Enter` 行改成“在中央编辑器打开”（不再是“回落打开所在位置”） | `scratchpad-architecture.md` |
+
+**未盖住的**：宿主 `WorkbenchView::render` 里那段消费分支（`take_open_in_editor` → `open_in_editor_with`）仍无自动化——与 §13.4 的 K10 同一条账（窗口级交互要真 `WorkbenchView`，见 `connection-dialog-architecture.md` §14 #9）。本次只在**接口**这一层钉住，“双击没反应”这类症状仍要人工看一眼（面板行 `on_click` 的 `click_count >= 2` 分支属窗口级）。
+
+**验证**：`cargo test -p rds-workbench --lib -j 2` → **125 passed**（+1）；`cargo check -p rds-engine -p rds-editor -p rds-workbench --all-targets -j 2` 零告警。
+
 ### 2026-09-17（十九次）— Phase C-5 前半：拖草稿文件到编辑器插入
 
 **已完成**

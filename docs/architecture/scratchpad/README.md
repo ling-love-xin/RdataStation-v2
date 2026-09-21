@@ -5,7 +5,7 @@
 > **宣传页（一页看懂）**：[`scratchpad-showcase.html`](scratchpad-showcase.html)（视觉版，明暗双主题、离线可开、吸顶导航）· [`scratchpad-showcase.md`](scratchpad-showcase.md)（可贴版，适合贴进 PR / wiki）
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节指向本目录内文档，**不复制设计**。
-> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成，Phase C（编辑器联动）与 Phase D（提升为分析资源）待续。
+> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成；**Phase C（编辑器联动）已接**（打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入，2026-09-16 ~ 09-17），只剩 Phase C 余项（系统文件拖入导入 · 命中跳行，见 §7）；Phase D（提升为分析资源）待续。
 
 ## 1. 模块特点
 
@@ -47,7 +47,7 @@
 | **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`；`ScratchpadState`（长生命周期 watcher 场景）接入时**必须按窗口持有** | 架构 §7.2 |
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
 | **不做 multi-root** | 多根会把会话 / 监控 / 文件元数据的复杂度抬高一个量级，与本模块「应用实例即项目」的定位不符 | 架构 §7.4 |
-| **树不承担编辑态** | 脏点、冲突 Diff、多文件 Tab 属编辑器宿主（Phase C）；树只发「打开这个绝对路径」的意图 | 原型 §9.4 |
+| **树不承担编辑态** | 脏点、冲突 Diff、多文件 Tab 属编辑器宿主（**Phase C 已接**：三者都经 `ScratchpadHost` 端口反接编辑器）；树只发「打开这个绝对路径」的意图 | 原型 §9.4 |
 | **零裸值 / 组件不手搓** | 颜色一律 `cx.theme()`（含产品 token `search.match.background`）；尺寸进 `crates/workbench_shell/src/ui.rs`；列表/按钮/菜单用 gpui-kit 组件 | 原型 §6–§7 |
 
 ### 工程与文档
@@ -62,7 +62,7 @@
 
 - 本模块拥有：**草稿文件读写 / 导入 / 外部引用 / 项目级回收站入口 / 内容搜索与替换 / 文件元数据（连接绑定）**。
 - 不属于本模块：
-  - **中央编辑区**（打开、编辑、`Ctrl+S` 回存、脏点、冲突 Diff、多文件 Tab）→ `editor`（Phase C 接线）；
+  - **中央编辑区**（打开、编辑、`Ctrl+S` 回存、脏点、冲突 Diff、多文件 Tab）→ `editor`（**Phase C 已接**，经 `ScratchpadHost` 端口；多文件 Tab 体系仍属编辑器侧）；
   - **归档与取回**（提升为分析资源、只读存档、版本）→ `analytics_resource`（Phase D，经 command/event 协作）；
   - **数据源连接与内省** → `database` / `connection`（草稿只保存连接 **ID**）；
   - **项目 CRUD / 锁 / 回收站基础设施** → `project`（回收站由 `project` 定义位置与清单格式，草稿箱只是使用方）。
