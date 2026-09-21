@@ -862,6 +862,8 @@ mod tests {
             default_value: None,
             comment: None,
             extra: std::collections::HashMap::new(),
+            references: None,
+            ordinal: 0,
         };
 
         let pk = TableColumnInfo::from_detail("orders", 0, &detail("id", "int", false, true, false));

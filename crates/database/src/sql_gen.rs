@@ -384,6 +384,8 @@ mod tests {
             default_value: default.map(str::to_string),
             comment: None,
             extra: Default::default(),
+            references: None,
+            ordinal: 0,
         }
     }
 

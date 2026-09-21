@@ -68,6 +68,39 @@ async fn manager_with(url: &str, driver: &str) -> Arc<ConnectionManager> {
     manager
 }
 
+/// 列详情要带出「第几列」与「引到哪」：属性面板的 `#` 与「引用」两列靠它。
+///
+/// 2026-09-21 补的：在此之前六个驱动的 `references` / `ordinal` **没有生产者**，
+/// 面板只能拿数组下标顶序号、拿 MySQL 的 `MUL` 猜外键（`MUL` 是非唯一索引，不是外键）。
+fn assert_column_detail_refs(cols: &[engine::driver::traits::ColumnDetail], ref_table: &str) {
+    let got: Vec<u32> = cols.iter().map(|c| c.ordinal).collect();
+    let want: Vec<u32> = (1..=cols.len() as u32).collect();
+    assert_eq!(got, want, "列序号应是连续的 1 基：{got:?}");
+
+    let parent = cols
+        .iter()
+        .find(|c| c.name == "parent_id")
+        .unwrap_or_else(|| panic!("探针表应有一个 parent_id 列：{cols:?}"));
+    assert!(parent.is_foreign_key, "parent_id 应标为外键：{parent:?}");
+    let r = parent
+        .references
+        .as_ref()
+        .unwrap_or_else(|| panic!("parent_id 应带引用目标：{parent:?}"));
+    assert_eq!(r.table, ref_table, "引用表");
+    assert_eq!(r.column, "id", "引用列");
+
+    // 非外键列不得凭空带引用（六张探针表都有 amount）
+    let amount = cols
+        .iter()
+        .find(|c| c.name == "amount")
+        .expect("探针表应有 amount 列");
+    assert!(
+        !amount.is_foreign_key && amount.references.is_none(),
+        "amount 不该是外键：{amount:?}"
+    );
+    println!("✓ 列详情：序号 {got:?}，parent_id → {ref_table}.id");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn composed_ddl_from_a_real_postgres_schema() {
     let Ok(url) = std::env::var("RDS_TEST_PG_URL") else {
@@ -107,6 +140,7 @@ async fn composed_ddl_from_a_real_postgres_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &table);
     let ddl =
         rds_database::sql_gen::create_table_ddl(&format!("public.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL -----\n{ddl}\n--------------------\n");
@@ -187,6 +221,7 @@ async fn composed_ddl_from_a_real_sqlite_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &format!("{table}_parent"));
     let ddl = rds_database::sql_gen::create_table_ddl(&format!("main.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（SQLite）-----\n{ddl}\n--------------------\n");
 
@@ -255,6 +290,7 @@ async fn composed_ddl_from_a_real_mysql_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &format!("{table}_parent"));
     let ddl = rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（MySQL）-----\n{ddl}\n--------------------\n");
 
@@ -313,6 +349,7 @@ async fn composed_ddl_from_a_real_duckdb_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &format!("{table}_parent"));
     let ddl = rds_database::sql_gen::create_table_ddl(&format!("main.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（DuckDB）-----\n{ddl}\n--------------------\n");
 
@@ -340,6 +377,7 @@ async fn composed_ddl_from_a_real_official_postgres_schema() {
     db.query(&format!(
         "CREATE TABLE {table} (\
              id int4 PRIMARY KEY, \
+             parent_id int4 REFERENCES {table}(id), \
              amount numeric(10,2) NOT NULL DEFAULT 0, \
              tag varchar(8) UNIQUE)"
     ))
@@ -360,6 +398,7 @@ async fn composed_ddl_from_a_real_official_postgres_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &table);
     let ddl = rds_database::sql_gen::create_table_ddl(&format!("public.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（PG Official）-----\n{ddl}\n--------------------\n");
 
@@ -387,9 +426,11 @@ async fn composed_ddl_from_a_real_official_mysql_schema() {
     db.query(&format!(
         "CREATE TABLE {table} (\
              id INT PRIMARY KEY, \
+             parent_id INT, \
              amount DECIMAL(10,2) NOT NULL DEFAULT 0, \
              tag VARCHAR(8), \
-             UNIQUE KEY uq_tag (tag)\
+             UNIQUE KEY uq_tag (tag), \
+             CONSTRAINT fk_self FOREIGN KEY (parent_id) REFERENCES {table}(id)\
          ) ENGINE=InnoDB"
     ))
     .await
@@ -409,6 +450,7 @@ async fn composed_ddl_from_a_real_official_mysql_schema() {
         .await
         .expect("索引内省");
 
+    assert_column_detail_refs(&cols, &table);
     let ddl = rds_database::sql_gen::create_table_ddl(&format!("mysql.{table}"), &cols, &cons, &idx);
     println!("\n----- 合成 DDL（MySQL Official）-----\n{ddl}\n--------------------\n");
 

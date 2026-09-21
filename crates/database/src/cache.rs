@@ -341,6 +341,10 @@ impl NavCache {
                     default_value: c.column_default,
                     comment: c.column_comment,
                     extra: c.extra,
+                    // 同 metadata_cache::load_node_detail 的说明：外键列对在缓存里，
+                    // 但那张 join 可能重复行，收敛前不给「引到哪」
+                    references: None,
+                    ordinal: u32::try_from(c.ordinal_position).unwrap_or(0),
                 })
                 .collect(),
         )
@@ -529,6 +533,8 @@ mod tests {
             default_value: None,
             comment: None,
             extra: Default::default(),
+            references: None,
+            ordinal: 0,
         }
     }
 

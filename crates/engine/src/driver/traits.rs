@@ -23,6 +23,20 @@ pub enum SchemaObjectKind {
     Trigger,
 }
 
+/// 列所引用的外键目标。
+///
+/// 为什么单独一个类型而不是拼成 `"表.列"` 字符串：表名与列名都可能含点（带引号的标识符），
+/// 拼串之后就再也分不回来了；而且引用的两个端点各自都是独立的展示位。
+/// 取法照 dbui 的 `Column.references`（MIT）——它也是把「引到哪」放在**列上**，
+/// 而不是只能从约束里反推。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ForeignKeyRef {
+    /// 被引用的表名（同 schema 内不带 schema 前缀，与驱动内省口径一致）。
+    pub table: String,
+    /// 被引用的列名。
+    pub column: String,
+}
+
 /// 列详情（完整元数据）
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ColumnDetail {
@@ -30,7 +44,25 @@ pub struct ColumnDetail {
     pub data_type: String,
     pub nullable: bool,
     pub is_primary_key: bool,
+    /// 这一列是否参与外键。
+    ///
+    /// 与 [`ColumnDetail::references`] 的分工：本字段是「**有没有**」，`references` 是
+    /// 「**引到哪**」。保留本字段是因为桥接驱动（JDBC 那类）可能只知道有没有、拿不到目标；
+    /// 能拿到目标时，两者应当一致（见 `references` 的文档）。
     pub is_foreign_key: bool,
+    /// 引用的目标；`None` = 不引用任何表。
+    ///
+    /// **与 `is_foreign_key` 的关系**：能拿到目标时 `references.is_some()` 必须等于
+    /// `is_foreign_key`；拿不到目标（驱动不支持）时 `references` 为 `None` 而
+    /// `is_foreign_key` 可以仍为 `true`。不要在 UI 里把 `references.is_none()` 读成
+    /// 「不是外键」——请读 `is_foreign_key`。
+    #[serde(default)]
+    pub references: Option<ForeignKeyRef>,
+    /// 列在表中的序号（**1 基**，与 `information_schema.columns.ordinal_position` 同口径）。
+    ///
+    /// 0 = 驱动没给。有了它，UI 不必再拿数组下标当序号（筛选 / 分页 / 重排后下标会错位）。
+    #[serde(default)]
+    pub ordinal: u32,
     pub default_value: Option<String>,
     pub comment: Option<String>,
     #[serde(default)]

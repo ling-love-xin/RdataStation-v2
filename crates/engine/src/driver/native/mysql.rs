@@ -999,11 +999,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         _schema: &str,
         table: &str,
     ) -> Result<crate::driver::NodeDetail, CoreError> {
-        let sql = "\
-            SELECT column_name, data_type, is_nullable, column_key, column_default, column_comment \
-             FROM information_schema.columns \
-             WHERE table_schema = ? AND table_name = ? \
-             ORDER BY ordinal_position";
+        let sql = crate::driver::utils::MY_TABLE_DETAIL_SQL;
         let result = self
             .query_with_params(
                 sql,
@@ -1013,65 +1009,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                 ],
             )
             .await?;
-        let columns: Vec<crate::driver::ColumnDetail> = (0..result.total_rows())
-            .filter_map(|row_idx| {
-                result.batches.iter().find_map(|batch| {
-                    if row_idx < batch.num_rows() {
-                        let col_name = batch
-                            .column(0)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let data_type = batch
-                            .column(1)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let nullable = batch
-                            .column(2)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx)
-                            == "YES";
-                        let pk = batch
-                            .column(3)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let default = batch
-                            .column(4)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let comment = batch
-                            .column(5)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        Some(crate::driver::ColumnDetail {
-                            name: col_name.to_string(),
-                            data_type: data_type.to_string(),
-                            nullable,
-                            is_primary_key: pk == "PRI",
-                            is_foreign_key: pk == "MUL",
-                            default_value: if default.is_empty() {
-                                None
-                            } else {
-                                Some(default.to_string())
-                            },
-                            comment: if comment.is_empty() {
-                                None
-                            } else {
-                                Some(comment.to_string())
-                            },
-                            extra: std::collections::HashMap::new(),
-                        })
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
+        let columns = crate::driver::utils::columns_from_detail_rows(&result);
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

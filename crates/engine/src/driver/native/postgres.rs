@@ -835,17 +835,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         schema: &str,
         table: &str,
     ) -> Result<crate::driver::NodeDetail, CoreError> {
-        let sql = "\
-            SELECT column_name, data_type, is_nullable, \
-             CASE WHEN column_name IN (SELECT kcu.column_name FROM information_schema.table_constraints tc \
-             JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name \
-             WHERE tc.table_schema = $2 AND tc.table_name = $3 AND tc.constraint_type = 'PRIMARY KEY') \
-             THEN 'PRI' ELSE '' END AS column_key, \
-             column_default, \
-             COALESCE(col_description((SELECT oid FROM pg_class WHERE relname = $3), ordinal_position), '') AS column_comment \
-             FROM information_schema.columns \
-             WHERE table_catalog = $1 AND table_schema = $2 AND table_name = $3 \
-             ORDER BY ordinal_position";
+        let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
         let result = self
             .query_with_params(
                 sql,
@@ -856,61 +846,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
                 ],
             )
             .await?;
-        let mut columns: Vec<crate::driver::ColumnDetail> = Vec::new();
-        for row_idx in 0..result.total_rows() {
-            if let Some(batch) = result.batches.first() {
-                if row_idx < batch.num_rows() {
-                    let col_name = batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .map_or("", |a| a.value(row_idx));
-                    let data_type = batch
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .map_or("", |a| a.value(row_idx));
-                    let nullable = batch
-                        .column(2)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .is_some_and(|a| a.value(row_idx) == "YES");
-                    let pk = batch
-                        .column(3)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .map_or("", |a| a.value(row_idx));
-                    let default = batch
-                        .column(4)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .map_or("", |a| a.value(row_idx));
-                    let comment = batch
-                        .column(5)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .map_or("", |a| a.value(row_idx));
-                    columns.push(crate::driver::ColumnDetail {
-                        name: col_name.to_string(),
-                        data_type: data_type.to_string(),
-                        nullable,
-                        is_primary_key: pk == "PRI",
-                        is_foreign_key: false,
-                        default_value: if default.is_empty() {
-                            None
-                        } else {
-                            Some(default.to_string())
-                        },
-                        comment: if comment.is_empty() {
-                            None
-                        } else {
-                            Some(comment.to_string())
-                        },
-                        extra: std::collections::HashMap::new(),
-                    });
-                }
-            }
-        }
+        let columns = crate::driver::utils::columns_from_detail_rows(&result);
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

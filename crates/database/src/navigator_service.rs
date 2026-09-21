@@ -1068,6 +1068,8 @@ mod l1_tests {
             default_value: None,
             comment: None,
             extra: Default::default(),
+            references: None,
+            ordinal: 0,
         }
     }
 

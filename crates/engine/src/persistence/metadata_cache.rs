@@ -2051,7 +2051,8 @@ impl MetadataCacheOps {
 
         let mut stmt = self.conn.prepare(
             "SELECT column_name, data_type, is_nullable, COALESCE(is_primary, 0) AS is_primary_key,
-             0 AS is_foreign_key, column_default, column_comment, extra
+             0 AS is_foreign_key, column_default, column_comment, extra,
+             COALESCE(ordinal_position, 0) AS ordinal_position
              FROM columns WHERE table_id = ?1 ORDER BY ordinal_position"
         ).map_err(|e| CoreError::storage(StorageError::Persistence {
             store: "sqlite".to_string(),
@@ -2077,6 +2078,10 @@ impl MetadataCacheOps {
                     default_value: row.get(5)?,
                     comment: row.get(6)?,
                     extra,
+                    // 缓存里存了外键的列对，但那份 join 一张表可以配对到多条外键约束
+                    // （同一列属于两个外键时出重复行）—— 在那边收敛之前不从这里给目标
+                    references: None,
+                    ordinal: u32::try_from(row.get::<_, i32>(8)?).unwrap_or(0),
                 })
             })
             .map_err(|e| {

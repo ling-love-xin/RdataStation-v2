@@ -174,6 +174,10 @@ impl MetaColumn {
             default_value: self.default_value,
             comment: self.comment,
             extra,
+            // sidecar 线格式（`meta.object_detail`）不带这两样：列序靠数组位置表达，
+            // 外键只知道「有没有」（`is_fk`）—— 要真值得先扩协议，不在这里猜
+            references: None,
+            ordinal: 0,
         }
     }
 }

@@ -210,6 +210,12 @@ pub async fn load_properties(
                 properties.push(row("可空", if col.nullable { "是" } else { "否" }));
                 properties.push(row("主键", if col.is_primary_key { "是" } else { "否" }));
                 properties.push(row("外键", if col.is_foreign_key { "是" } else { "否" }));
+                if col.ordinal > 0 {
+                    properties.push(row("序号", col.ordinal.to_string()));
+                }
+                if let Some(r) = &col.references {
+                    properties.push(row("引用", format!("{}.{}", r.table, r.column)));
+                }
                 properties.push(row("默认值", opt(&col.default_value)));
                 properties.push(row("注释", opt(&col.comment)));
             } else {
@@ -303,7 +309,10 @@ fn text_table(header: &str, text: &str) -> PropertyTable {
 }
 
 fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTable {
-    let headers = ["#", "名称", "类型", "非空", "主键", "外键", "默认", "注释"]
+    // 「引用」一列同时承载两件事：拿得到目标就写 `表.列`，只拿得到「是外键」（复合外键 ——
+    // 配对要按列序做，见 `utils::PG_TABLE_DETAIL_SQL` 的说明）就写 FK。
+    // 不另开一列：面板是等宽 flex 列，9 列会把每格挤到两三个字。
+    let headers = ["#", "名称", "类型", "非空", "主键", "引用", "默认", "注释"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -312,12 +321,21 @@ fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTa
         .enumerate()
         .map(|(i, c)| {
             vec![
-                (i + 1).to_string(),
+                // 驱动给了真序号就用它（内省结果被筛选 / 重排后数组下标会错位），没给才退回下标
+                if c.ordinal > 0 {
+                    c.ordinal.to_string()
+                } else {
+                    (i + 1).to_string()
+                },
                 c.name.clone(),
                 c.data_type.clone(),
                 if c.nullable { "" } else { "✓" }.to_string(),
                 if c.is_primary_key { "PK" } else { "" }.to_string(),
-                if c.is_foreign_key { "FK" } else { "" }.to_string(),
+                match (&c.references, c.is_foreign_key) {
+                    (Some(r), _) => format!("{}.{}", r.table, r.column),
+                    (None, true) => "FK".to_string(),
+                    (None, false) => String::new(),
+                },
                 c.default_value.clone().unwrap_or_default(),
                 c.comment.clone().unwrap_or_default(),
             ]
@@ -380,4 +398,61 @@ pub struct PropertyState {
     pub error: Option<String>,
     /// 是否正在后台加载（渲染「加载中…」）。
     pub loading: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use engine::driver::traits::{ColumnDetail, ForeignKeyRef};
+
+    fn col(name: &str, ordinal: u32) -> ColumnDetail {
+        ColumnDetail {
+            name: name.to_string(),
+            data_type: "INTEGER".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            is_foreign_key: false,
+            references: None,
+            ordinal,
+            default_value: None,
+            comment: None,
+            extra: Default::default(),
+        }
+    }
+
+    /// 「引用」一列三档 + 序号两档（驱动给了用真序号，没给才退回数组下标）。
+    ///
+    /// 为什么要有这个单测：这三档的取值全在 `ColumnDetail` 的两个新字段上，
+    /// 驱动侧的真机用例（`ddl_from_real_schema.rs`）只覆盖「单列外键」一档，
+    /// 「复合外键只有标记」「驱动没给序号」这两档在这里钉住。
+    #[test]
+    fn columns_table_renders_references_and_ordinal() {
+        let cols = vec![
+            col("id", 1),
+            ColumnDetail {
+                references: Some(ForeignKeyRef {
+                    table: "parent".to_string(),
+                    column: "id".to_string(),
+                }),
+                is_foreign_key: true,
+                ..col("p_id", 2)
+            },
+            // 复合外键里的列：标 FK，但（有意）不给目标
+            ColumnDetail {
+                is_foreign_key: true,
+                ..col("c_id", 3)
+            },
+            // 驱动没给序号（0）→ 退回下标 + 1
+            col("note", 0),
+        ];
+        let t = super::columns_table(&cols);
+
+        assert_eq!(t.headers[5], "引用", "第 6 列是「引用」");
+        assert_eq!(t.rows[0][5], "", "不是外键 ⇒ 空");
+        assert_eq!(t.rows[1][5], "parent.id", "单列外键 ⇒ 表.列");
+        assert_eq!(t.rows[2][5], "FK", "只有标记 ⇒ FK");
+        assert_eq!(t.rows[3][5], "");
+
+        let ordinals: Vec<&str> = t.rows.iter().map(|r| r[0].as_str()).collect();
+        assert_eq!(ordinals, vec!["1", "2", "3", "4"], "第 4 行退回下标");
+    }
 }

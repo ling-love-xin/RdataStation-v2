@@ -1,4 +1,3 @@
-use arrow::array::StringArray;
 use shared::models::QueryResult;
 use super::registry::DriverConnectionConfig;
 use shared::error::{ConnectionError, CoreError};
@@ -77,6 +76,169 @@ where
         .unwrap_or(true)
 }
 
+/// PostgreSQL：列出某表的列（两个 PG 驱动共用）。
+///
+/// **列序是本模块的契约**（三个 `*_TABLE_DETAIL_SQL` 必须一致，`columns_from_detail_rows` 按它取值）：
+/// `0 列名 / 1 类型 / 2 可空(YES|NO) / 3 序号(1 基) / 4 主键标记(PRI|空) / 5 默认值 / 6 注释 / 7 引用表 / 8 引用列 / 9 外键标记(1|空，**含复合外键**)`。
+///
+/// 一次取齐属性面板要的东西：列名 / 类型 / 可空 / 主键标记 / 默认值 / 注释，
+/// 外加 2026-09-21 补的 **`ordinal_position`** 与**单列外键的引用目标**
+/// （`referential_constraints` 只含外键，所以不会把主键误认成引用；
+/// 复合外键用 `COUNT(*) = 1` 挡掉 —— 那时的配对要按列序做，留给约束分区）。
+pub const PG_TABLE_DETAIL_SQL: &str = "\
+            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, \
+                   CASE WHEN c.column_name IN (SELECT kcu.column_name \
+                             FROM information_schema.table_constraints tc \
+                             JOIN information_schema.key_column_usage kcu \
+                               ON tc.constraint_name = kcu.constraint_name \
+                            WHERE tc.table_schema = $2 AND tc.table_name = $3 \
+                              AND tc.constraint_type = 'PRIMARY KEY') \
+                        THEN 'PRI' ELSE '' END AS column_key, \
+                   c.column_default, \
+                   COALESCE(col_description((SELECT oid FROM pg_class WHERE relname = $3), c.ordinal_position), '') AS column_comment, \
+                   COALESCE((SELECT ccu.table_name \
+                               FROM information_schema.referential_constraints rc \
+                               JOIN information_schema.key_column_usage kcu \
+                                 ON kcu.constraint_schema = rc.constraint_schema AND kcu.constraint_name = rc.constraint_name \
+                               JOIN information_schema.constraint_column_usage ccu \
+                                 ON ccu.constraint_schema = rc.unique_constraint_schema AND ccu.constraint_name = rc.unique_constraint_name \
+                              WHERE kcu.table_schema = $2 AND kcu.table_name = $3 AND kcu.column_name = c.column_name \
+                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
+                                      WHERE k2.constraint_schema = kcu.constraint_schema \
+                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                              LIMIT 1), '') AS ref_table, \
+                   COALESCE((SELECT ccu.column_name \
+                               FROM information_schema.referential_constraints rc \
+                               JOIN information_schema.key_column_usage kcu \
+                                 ON kcu.constraint_schema = rc.constraint_schema AND kcu.constraint_name = rc.constraint_name \
+                               JOIN information_schema.constraint_column_usage ccu \
+                                 ON ccu.constraint_schema = rc.unique_constraint_schema AND ccu.constraint_name = rc.unique_constraint_name \
+                              WHERE kcu.table_schema = $2 AND kcu.table_name = $3 AND kcu.column_name = c.column_name \
+                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
+                                      WHERE k2.constraint_schema = kcu.constraint_schema \
+                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                              LIMIT 1), '') AS ref_column, \
+                   CASE WHEN EXISTS (SELECT 1 \
+                                       FROM information_schema.table_constraints tc \
+                                       JOIN information_schema.key_column_usage kcu \
+                                         ON kcu.constraint_name = tc.constraint_name \
+                                      WHERE tc.table_schema = $2 AND tc.table_name = $3 \
+                                        AND tc.constraint_type = 'FOREIGN KEY' \
+                                        AND kcu.column_name = c.column_name) \
+                        THEN '1' ELSE '' END AS is_fk \
+              FROM information_schema.columns c \
+             WHERE c.table_catalog = $1 AND c.table_schema = $2 AND c.table_name = $3 \
+             ORDER BY c.ordinal_position";
+
+/// MySQL：列出某表的列（两个 MySQL 驱动共用）。
+///
+/// 列序契约见 [`PG_TABLE_DETAIL_SQL`]。
+///
+/// 与 PG 的差别：`key_column_usage` 自己就有 `referenced_table_name` /
+/// `referenced_column_name`，不必绕 `referential_constraints` 那圈 JOIN；
+/// 复合外键同样用「本约束只涉及一列」挡掉 —— **与 PG 同口径**，所以四个网络驱动
+/// 交出来的 `references` 语义一致。
+pub const MY_TABLE_DETAIL_SQL: &str = "\
+            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, c.column_key, \
+                   c.column_default, c.column_comment, \
+                   COALESCE((SELECT kcu.referenced_table_name \
+                               FROM information_schema.key_column_usage kcu \
+                              WHERE kcu.table_schema = c.table_schema AND kcu.table_name = c.table_name \
+                                AND kcu.column_name = c.column_name AND kcu.referenced_table_name IS NOT NULL \
+                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
+                                      WHERE k2.constraint_schema = kcu.constraint_schema \
+                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                              LIMIT 1), '') AS ref_table, \
+                   COALESCE((SELECT kcu.referenced_column_name \
+                               FROM information_schema.key_column_usage kcu \
+                              WHERE kcu.table_schema = c.table_schema AND kcu.table_name = c.table_name \
+                                AND kcu.column_name = c.column_name AND kcu.referenced_column_name IS NOT NULL \
+                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
+                                      WHERE k2.constraint_schema = kcu.constraint_schema \
+                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                              LIMIT 1), '') AS ref_column, \
+                   CASE WHEN EXISTS (SELECT 1 FROM information_schema.key_column_usage kcu \
+                                      WHERE kcu.table_schema = c.table_schema \
+                                        AND kcu.table_name = c.table_name \
+                                        AND kcu.column_name = c.column_name \
+                                        AND kcu.referenced_table_name IS NOT NULL) \
+                        THEN '1' ELSE '' END AS is_fk \
+              FROM information_schema.columns c \
+             WHERE c.table_schema = ? AND c.table_name = ? \
+             ORDER BY c.ordinal_position";
+
+/// DuckDB：列出某表的列。
+///
+/// 列序契约见 [`PG_TABLE_DETAIL_SQL`]。三处 DuckDB 专有（都是真机探针问出来的）：
+///
+/// * 注释列在 `information_schema.columns` 里叫 **`COLUMN_COMMENT`**（不叫 `comment`，
+///   写 `c.comment` 直接是 `Binder Error`）；
+/// * 主键只存在于 `duckdb_constraints()`，且列名列是**列表**，所以用 `list_contains` 判在不在；
+/// * 外键目标列也是列表，必须 `array_to_string` 化开（`row.get::<String>` 对列表列报
+///   `Invalid column type List`）。
+///
+/// 复合外键用 `len(...) = 1` 挡掉（同 PG / MySQL 口径）。
+pub const DUCK_TABLE_DETAIL_SQL: &str = "\
+            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, \
+                   CASE WHEN EXISTS (SELECT 1 FROM duckdb_constraints() k \
+                                      WHERE k.table_name = c.table_name \
+                                        AND k.constraint_type = 'PRIMARY KEY' \
+                                        AND list_contains(k.constraint_column_names, c.column_name)) \
+                        THEN 'PRI' ELSE '' END AS column_key, \
+                   c.column_default, COALESCE(c.column_comment, '') AS column_comment, \
+                   COALESCE((SELECT k.referenced_table FROM duckdb_constraints() k \
+                              WHERE k.table_name = c.table_name AND k.constraint_type = 'FOREIGN KEY' \
+                                AND list_contains(k.constraint_column_names, c.column_name) \
+                                AND len(k.constraint_column_names) = 1 LIMIT 1), '') AS ref_table, \
+                   COALESCE((SELECT array_to_string(k.referenced_column_names, ',') \
+                               FROM duckdb_constraints() k \
+                              WHERE k.table_name = c.table_name AND k.constraint_type = 'FOREIGN KEY' \
+                                AND list_contains(k.constraint_column_names, c.column_name) \
+                                AND len(k.constraint_column_names) = 1 LIMIT 1), '') AS ref_column, \
+                   CASE WHEN EXISTS (SELECT 1 FROM duckdb_constraints() k \
+                                      WHERE k.table_name = c.table_name \
+                                        AND k.constraint_type = 'FOREIGN KEY' \
+                                        AND list_contains(k.constraint_column_names, c.column_name)) \
+                        THEN '1' ELSE '' END AS is_fk \
+              FROM information_schema.columns c \
+             WHERE c.table_schema = 'main' AND c.table_name = ? \
+             ORDER BY c.ordinal_position";
+
+/// 按**约定列序**（见 [`PG_TABLE_DETAIL_SQL`]）把表详情的结果读成列详情。
+///
+/// 四个网络驱动 + DuckDB 的表详情都走这里：映射只写一份，`references` / `ordinal` 的
+/// 语义就不会因为「抄到第三个驱动时改了半行」而分叉（本仓已经有过七份
+/// `is_read_only_sql` 四种口径的先例）。
+///
+/// 行短于契约时缺的单元格按空串处理：不 panic、也不吞行。
+pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::driver::ColumnDetail> {
+    batch_to_string_rows(result)
+        .into_iter()
+        .map(|r| {
+            let cell = |i: usize| r.get(i).map_or("", |s| s.as_str());
+            let ref_table = cell(7);
+            // 「有没有外键」与「引到哪」分开读：复合外键的目标本查询不猜（见各 SQL
+            // 的说明），但那一列**属于外键**这件事要如实标出来。
+            let fk_flag = cell(9);
+            crate::driver::ColumnDetail {
+                name: cell(0).to_string(),
+                data_type: cell(1).to_string(),
+                nullable: cell(2) == "YES",
+                ordinal: cell(3).parse().unwrap_or(0),
+                is_primary_key: cell(4) == "PRI",
+                default_value: (!cell(5).is_empty()).then(|| cell(5).to_string()),
+                comment: (!cell(6).is_empty()).then(|| cell(6).to_string()),
+                is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
+                references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                    table: ref_table.to_string(),
+                    column: cell(8).to_string(),
+                }),
+                extra: std::collections::HashMap::new(),
+            }
+        })
+        .collect()
+}
+
 /// MySQL：列出某表的约束（两个 MySQL 驱动共用，勿抄第二份）。
 ///
 /// 三张 `information_schema` 表各管一段：`TABLE_CONSTRAINTS`（有哪些约束）→
@@ -147,23 +309,29 @@ pub const PG_LIST_CONSTRAINTS_SQL: &str = "\
              WHERE n.nspname = $1 AND t.relname = $2 \
              ORDER BY c.conname";
 
-/// 结果批次读成 `Vec<Vec<String>>`（**每一列都按字符串取**）。
+/// 结果批次读成 `Vec<Vec<String>>`（**每列都渲染成字符串**）。
 ///
-/// 新补的 `list_indexes` / `list_constraints` 一张表要取六七列，逐列
-/// `downcast_ref::<StringArray>()` 会让方法体比 SQL 还长。集中一次，取不到的行
-/// （缺列 / 非字符串列）当空串——**不 panic、也不吞掉整行**。
+/// 新补的内省方法一张表要取六七列，逐列 `downcast_ref::<StringArray>()` 会让方法体比 SQL
+/// 还长。集中一次：字符串列直取，其余走 Arrow 的单值格式化（`ordinal_position` 这类整数列
+/// 就不必在 SQL 里 `::text`），NULL 给空串。
+///
+/// **不 panic、也不吞行**：取不到值的单元格就是空串（调用方按 `is_empty` 判空）。
 pub fn batch_to_string_rows(result: &QueryResult) -> Vec<Vec<String>> {
     let Some(batch) = result.batches.first() else {
         return Vec::new();
     };
     let cols = batch.num_columns();
-    let arrays: Vec<Option<&StringArray>> = (0..cols)
-        .map(|c| batch.column(c).as_any().downcast_ref::<StringArray>())
-        .collect();
     (0..batch.num_rows())
         .map(|row| {
             (0..cols)
-                .map(|col| arrays[col].map_or(String::new(), |a| a.value(row).to_string()))
+                .map(|col| {
+                    let array = batch.column(col);
+                    if array.is_null(row) {
+                        String::new()
+                    } else {
+                        arrow::util::display::array_value_to_string(array, row).unwrap_or_default()
+                    }
+                })
                 .collect()
         })
         .collect()

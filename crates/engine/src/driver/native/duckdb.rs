@@ -15,7 +15,7 @@ use arrow::array::StringArray;
 use duckdb::{AccessMode, Config, Connection};
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, escape_sql_string, returns_rows};
+use crate::driver::utils::{affected_rows_result, returns_rows};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
 };
@@ -513,19 +513,6 @@ impl Database for DuckDbDatabase {
                 CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
             })?;
 
-            let column_count = stmt.column_count();
-            let columns: Vec<String> = if column_count > 0 {
-                (0..column_count)
-                    .map(|i| {
-                        stmt.column_name(i)
-                            .map(|n| n.to_string())
-                            .unwrap_or_else(|_| format!("column_{}", i))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
             let duckdb_params: Vec<duckdb::types::Value> = params
                 .iter()
                 .map(|v| match v {
@@ -562,12 +549,8 @@ impl Database for DuckDbDatabase {
                     CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
                 })? {
                     let mut values: Vec<duckdb::types::Value> = Vec::new();
-                    let col_count = if column_count > 0 {
-                        column_count
-                    } else {
-                        row.as_ref().column_count()
-                    };
-                    for i in 0..col_count {
+                    // 行自己知道有几列（与执行前无关）
+                    for i in 0..row.as_ref().column_count() {
                         match row.get::<usize, duckdb::types::Value>(i) {
                             Ok(v) => values.push(v),
                             Err(_) => values.push(duckdb::types::Value::Null),
@@ -578,14 +561,25 @@ impl Database for DuckDbDatabase {
                 row_data = data;
             }
 
+            // **列名要等执行完再取**：duckdb-rs 的 `column_count` / `column_name` 读的是
+            // 「执行结果」上的 schema，执行前调用直接 panic（`The statement was not executed
+            // yet`）—— 这一步以前排在 `stmt.query()` 之前，等于这条参数化查询路径一跑就炸
+            // （`query()` 里是执行后才取的，所以从没暴露）。
+            let column_count = if let Some(first) = row_data.first() {
+                first.len()
+            } else {
+                stmt.column_count()
+            };
+            let columns: Vec<String> = (0..column_count)
+                .map(|i| {
+                    stmt.column_name(i)
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|_| format!("column_{}", i))
+                })
+                .collect();
+
             let is_read_only = is_read_only_sql(&sql_owned);
             let row_count = row_data.len();
-
-            let columns = if columns.is_empty() && column_count > 0 {
-                (0..column_count).map(|i| format!("column_{}", i)).collect()
-            } else {
-                columns
-            };
 
             let batch = if row_count > 0 {
                 duckdb_rows_to_arrow(&columns, &row_data)?
@@ -1220,54 +1214,14 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         _schema: &str,
         table: &str,
     ) -> Result<crate::driver::NodeDetail, CoreError> {
-        let safe_table = escape_sql_string(table);
-        let sql = format!("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'main' AND table_name = '{}' ORDER BY ordinal_position", safe_table);
-        let result = self.query(&sql).await?;
-        let columns: Vec<crate::driver::ColumnDetail> = (0..result.total_rows())
-            .filter_map(|row_idx| {
-                result.batches.iter().find_map(|batch| {
-                    if row_idx < batch.num_rows() {
-                        let col_name = batch
-                            .column(0)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let data_type = batch
-                            .column(1)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        let nullable = batch
-                            .column(2)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx)
-                            == "YES";
-                        let default = batch
-                            .column(3)
-                            .as_any()
-                            .downcast_ref::<StringArray>()?
-                            .value(row_idx);
-                        Some(crate::driver::ColumnDetail {
-                            name: col_name.to_string(),
-                            data_type: data_type.to_string(),
-                            nullable,
-                            is_primary_key: false,
-                            is_foreign_key: false,
-                            default_value: if default.is_empty() {
-                                None
-                            } else {
-                                Some(default.to_string())
-                            },
-                            comment: None,
-                            extra: std::collections::HashMap::new(),
-                        })
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
+        // 列序契约见 `utils::PG_TABLE_DETAIL_SQL` 的文档；表名走参数绑定（不拼串）。
+        let result = self
+            .query_with_params(
+                crate::driver::utils::DUCK_TABLE_DETAIL_SQL,
+                vec![Value::Text(table.to_string())],
+            )
+            .await?;
+        let columns = crate::driver::utils::columns_from_detail_rows(&result);
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

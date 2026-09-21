@@ -18,7 +18,7 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::driver::utils::{affected_rows_result, quote_identifier, returns_rows};
 use crate::driver::{
-    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
+    ColumnDetail, ConstraintDetail, DataSourceMeta, Database, ForeignKeyRef, IndexDetail, Transaction,
 };
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -313,6 +313,26 @@ impl SqliteDatabase {
             server_version: None,
         }
     }
+}
+
+/// 某张表的主键列（SQLite 的 `foreign_key_list.to` 允许为空 —— 那时引用的是对方的整条主键）。
+///
+/// 复合主键取**序号最小的那一列**：多列主键的配对要按列序做，本函数不猜。
+fn primary_key_column(conn: &Connection, table: &str) -> Option<String> {
+    let quoted = quote_identifier(table, '"');
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", quoted))
+        .ok()?;
+    let mut rows = stmt.query([]).ok()?;
+    let mut best: Option<(i32, String)> = None;
+    while let Ok(Some(row)) = rows.next() {
+        let name = row.get::<_, String>(1).ok()?;
+        let pk = row.get::<_, i32>(5).ok()?;
+        if pk > 0 && best.as_ref().map_or(true, |(rank, _)| pk < *rank) {
+            best = Some((pk, name));
+        }
+    }
+    best.map(|(_, name)| name)
 }
 
 /// 逐条应用 PRAGMA 并**读回校验**（做不到就报错，不静默降级）。
@@ -751,16 +771,67 @@ impl Database for SqliteDatabase {
                 CoreError::database(DatabaseError::query("list_columns", e.to_string()))
             })?;
 
+        // 外键：`PRAGMA foreign_key_list` 一次给全表（id, seq, 目标表, 本表列, 目标列, …）。
+        // 同一个 id 的多行 = 复合外键 —— 那种**只标记、不给目标**：目标要按列序配对，
+        // 与四个网络驱动同口径（见 `utils::PG_TABLE_DETAIL_SQL` 的说明）。
+        let mut fk_rows: Vec<(i64, String, String, Option<String>)> = Vec::new();
+        if let Ok(mut fk_stmt) = conn.prepare(&format!("PRAGMA foreign_key_list({})", quoted)) {
+            if let Ok(fk_mapped) = fk_stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,            // id
+                    row.get::<_, String>(2)?,         // 被引用表
+                    row.get::<_, String>(3)?,         // 本表列
+                    row.get::<_, Option<String>>(4)?, // 被引用列（可空 = 隐式指对方主键）
+                ))
+            }) {
+                fk_rows.extend(fk_mapped.flatten());
+            }
+        }
+        let mut fk_count: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+        for (id, _, _, _) in &fk_rows {
+            *fk_count.entry(*id).or_default() += 1;
+        }
+        // 单列外键 → 目标；复合外键 → 只进 `fk_members`（列上标「是外键」，不标引到哪）
+        let mut fk_map: std::collections::HashMap<String, ForeignKeyRef> =
+            std::collections::HashMap::new();
+        let mut fk_members: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (id, ref_table, from_col, ref_col) in &fk_rows {
+            fk_members.insert(from_col.clone());
+            if fk_count.get(id).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            let target = match ref_col.clone() {
+                Some(col) => col,
+                // `to` 为空 = 引用对方的整条主键：去问它（多列主键取序号最小的那列）
+                None => match primary_key_column(&conn, ref_table) {
+                    Some(col) => col,
+                    None => continue,
+                },
+            };
+            fk_map.insert(
+                from_col.clone(),
+                ForeignKeyRef {
+                    table: ref_table.clone(),
+                    column: target,
+                },
+            );
+        }
+
         let mut columns = Vec::new();
         for row in rows {
             match row {
-                Ok((_cid, name, col_type, notnull, default_val, pk)) => {
+                Ok((cid, name, col_type, notnull, default_val, pk)) => {
+                    let references = fk_map.remove(&name);
+                    let is_foreign_key = references.is_some() || fk_members.contains(&name);
                     columns.push(ColumnDetail {
                         name,
                         data_type: col_type,
                         nullable: notnull == 0,
                         is_primary_key: pk > 0,
-                        is_foreign_key: false,
+                        is_foreign_key,
+                        references,
+                        // cid 从 0 起，对外统一 **1 基**（与 information_schema 同口径）
+                        ordinal: u32::try_from(cid + 1).unwrap_or(0),
                         default_value: default_val,
                         comment: None,
                         extra: std::collections::HashMap::new(),
@@ -1570,6 +1641,63 @@ mod tests {
         if let Some(batch) = result.batches.first() {
             assert_eq!(batch.num_rows(), 1);
         }
+        Ok(())
+    }
+
+    /// 列详情要带出「第几列」与「引到哪」——属性面板的 `#` 与「引用」两列吃这两样。
+    ///
+    /// 三档一起验（驱动侧口径，见 `list_columns`）：
+    /// * 单列外键 → 给目标；
+    /// * `REFERENCES 父表` 不写列 → 隐式引用对方主键，**去问**（不能猜空）；
+    /// * 复合外键 → 只标「是外键」，目标留给约束分区（配对要按列序做）。
+    #[tokio::test]
+    async fn test_sqlite_columns_references_and_ordinal() -> Result<(), CoreError> {
+        let path = temp_db_path("column_refs")?;
+        let db = SqliteDatabase::new(&path)?;
+        db.query("CREATE TABLE parent (id INTEGER PRIMARY KEY, code TEXT, UNIQUE (id, code))")
+            .await?;
+        db.query(
+            "CREATE TABLE child (\
+                 id INTEGER PRIMARY KEY, \
+                 p_id INTEGER REFERENCES parent(id), \
+                 implicit_id INTEGER REFERENCES parent, \
+                 c_id INTEGER, \
+                 c_code TEXT, \
+                 FOREIGN KEY (c_id, c_code) REFERENCES parent(id, code))",
+        )
+        .await?;
+
+        let cols = db.list_columns("main", None, "child").await?;
+        let by_name = |n: &str| {
+            cols.iter()
+                .find(|c| c.name == n)
+                .unwrap_or_else(|| panic!("缺列 {n}：{cols:?}"))
+        };
+
+        let ordinals: Vec<u32> = cols.iter().map(|c| c.ordinal).collect();
+        assert_eq!(ordinals, vec![1, 2, 3, 4, 5], "序号应是连续的 1 基");
+
+        let p_id = by_name("p_id");
+        assert!(p_id.is_foreign_key, "{p_id:?}");
+        let r = p_id.references.as_ref().expect("单列外键应带目标");
+        assert_eq!((r.table.as_str(), r.column.as_str()), ("parent", "id"));
+
+        let implicit = by_name("implicit_id");
+        let r = implicit
+            .references
+            .as_ref()
+            .expect("隐式目标应去问对方主键，不能留空");
+        assert_eq!((r.table.as_str(), r.column.as_str()), ("parent", "id"));
+
+        // 复合外键的两列：标外键，但不给目标（不猜配对）
+        for name in ["c_id", "c_code"] {
+            let c = by_name(name);
+            assert!(c.is_foreign_key, "{name} 应标为外键：{c:?}");
+            assert!(c.references.is_none(), "{name} 不该猜出单列目标：{c:?}");
+        }
+
+        let id = by_name("id");
+        assert!(!id.is_foreign_key && id.references.is_none(), "{id:?}");
         Ok(())
     }
 }
