@@ -122,6 +122,142 @@ pub fn dml_template(qualified: &str, columns: &[DmlColumn], kind: DmlKind) -> St
     out.join("\n")
 }
 
+// --- 针对 DDL 的追加（2026-09-21）---
+
+/// 生成 `CREATE TABLE` 的**合成**文本（无 I/O、无方言依赖）。
+///
+/// ## 为什么是「合成」而不是「取源」
+///
+/// 四个库取原始 DDL 的能力不一样（MySQL / SQLite 有 `SHOW CREATE TABLE` / `sqlite_master.sql`，
+/// PostgreSQL / DuckDB 没有等价语句），而**属性面板要的是同一形状的东西**。
+/// 参考实现里 zqlz 的做法是三分：能取源就取源，取不到就由 `CatalogDialect` 从目录数据
+/// **合成**。我们走后面那条 —— 合成所需的三样（列 / 约束 / 索引）属性面板本来就已经拉过了，
+/// 所以这是**纯函数加法**：不动驱动 trait、不新增 I/O、可单测。
+///
+/// ## 诚实边界（写进首行注释，不假装完整）
+///
+/// 合成不出来的东西：分区 / 存储引擎 / 字符集与排序规则 / 表级选项 / `CHECK` 表达式
+/// （`ConstraintDetail` 不带表达式）/ 视图定义 / 非唯一索引。它们在首行注释里如实列出。
+///
+/// ## 输入
+///
+/// 直接吃驱动已有的结构体（`properties_panel` 同一份数据），不做中间映射层。
+pub fn create_table_ddl(
+    qualified: &str,
+    columns: &[engine::driver::traits::ColumnDetail],
+    constraints: &[engine::driver::traits::ConstraintDetail],
+    indexes: &[engine::driver::traits::IndexDetail],
+) -> String {
+    if columns.is_empty() {
+        return format!("-- {qualified}：未加载到列信息，无法合成 DDL");
+    }
+
+    let mut lines = vec![
+        format!(
+            "-- {qualified}：由目录信息**合成**的 DDL（不含分区 / 存储引擎 / 字符集 / \
+             表级选项 / CHECK 表达式 / 非唯一索引）"
+        ),
+        format!("CREATE TABLE {qualified} ("),
+    ];
+
+    let mut body: Vec<String> = columns
+        .iter()
+        .map(|c| {
+            let mut piece = format!("  {} {}", c.name, c.data_type);
+            if !c.nullable {
+                piece.push_str(" NOT NULL");
+            }
+            if let Some(d) = c.default_value.as_deref().filter(|s| !s.trim().is_empty()) {
+                piece.push_str(&format!(" DEFAULT {d}"));
+            }
+            if let Some(comment) = c.comment.as_deref().filter(|s| !s.trim().is_empty()) {
+                // 行内注释只用 `--`（三种方言都认；MySQL 的行内 `COMMENT '…'` 不是标准语法）
+                piece.push_str(&format!("  -- {comment}"));
+            }
+            piece
+        })
+        .collect();
+
+    // 主键来源三档（**顺序有意义**）：
+    //
+    // 1. 约束里的 `PRIMARY KEY` —— 最准，且带约束名；
+    // 2. 索引里的 `is_primary` —— 有的驱动只在内省索引时露主键；
+    // 3. **列上的 `is_primary_key`** —— 最后一档，但它是当下**唯一六个驱动都填了的**：
+    //    `list_constraints` 六个驱动**一个都没实现**（`get_constraints` 全部委派给它，
+    //    落到 trait 默认空实现），所以前三档里前两档当下恒为空。
+    //    列上的标记走 `get_table_detail`，那条路径是活的（PG 用
+    //    `information_schema.table_constraints` 现算，MySQL 用 `PRI` 标记）。
+    let pk_cols: Option<Vec<String>> = constraints
+        .iter()
+        .find(|c| c.constraint_type.eq_ignore_ascii_case("PRIMARY KEY"))
+        .map(|c| c.column_names.clone())
+        .filter(|v| !cols_are_empty(v))
+        .or_else(|| {
+            indexes
+                .iter()
+                .find(|i| i.is_primary && !cols_are_empty(&i.column_names))
+                .map(|i| i.column_names.clone())
+        })
+        .or_else(|| {
+            let from_columns: Vec<String> = columns
+                .iter()
+                .filter(|c| c.is_primary_key)
+                .map(|c| c.name.clone())
+                .collect();
+            (!from_columns.is_empty()).then_some(from_columns)
+        });
+
+    if let Some(cols) = pk_cols {
+        body.push(format!("  PRIMARY KEY ({})", cols.join(", ")));
+    }
+
+    for c in constraints {
+        let kind = c.constraint_type.to_ascii_uppercase();
+        if kind.contains("PRIMARY") || cols_are_empty(&c.column_names) {
+            continue;
+        }
+        let cols = c.column_names.join(", ");
+        if kind.contains("FOREIGN") {
+            let Some(target) = c.referenced_table.as_deref().filter(|s| !s.is_empty()) else {
+                continue; // 引用表未知：写半个外键还不如不写
+            };
+            let ref_cols = c.referenced_columns.join(", ");
+            let mut piece = format!("  FOREIGN KEY ({cols}) REFERENCES {target}");
+            if !ref_cols.is_empty() {
+                piece.push_str(&format!(" ({ref_cols})"));
+            }
+            if let Some(r) = c.update_rule.as_deref().filter(|s| !s.trim().is_empty()) {
+                piece.push_str(&format!(" ON UPDATE {r}"));
+            }
+            if let Some(r) = c.delete_rule.as_deref().filter(|s| !s.trim().is_empty()) {
+                piece.push_str(&format!(" ON DELETE {r}"));
+            }
+            if !c.name.is_empty() {
+                piece.push_str(&format!("  -- {}", c.name));
+            }
+            body.push(piece);
+        } else if kind.contains("UNIQUE") {
+            body.push(format!("  UNIQUE ({cols})"));
+        }
+        // `CHECK` 有意跳过：`ConstraintDetail` 不带表达式，合成不了。
+    }
+
+    for (i, item) in body.iter().enumerate() {
+        let is_last = i + 1 == body.len();
+        lines.push(if is_last {
+            format!("{item}")
+        } else {
+            format!("{item},")
+        });
+    }
+    lines.push(");".to_string());
+    lines.join("\n")
+}
+
+fn cols_are_empty(cols: &[String]) -> bool {
+    cols.is_empty() || cols.iter().all(|c| c.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +349,185 @@ mod tests {
         let sql = dml_template("db.t", &[], DmlKind::Insert);
         assert!(sql.starts_with("-- "), "{sql}");
         assert!(!sql.contains("INSERT INTO"), "{sql}");
+    }
+
+    // ==================== DDL 合成 ====================
+
+    fn col(
+        name: &str,
+        ty: &str,
+        nullable: bool,
+        default: Option<&str>,
+    ) -> engine::driver::traits::ColumnDetail {
+        engine::driver::traits::ColumnDetail {
+            name: name.to_string(),
+            data_type: ty.to_string(),
+            nullable,
+            is_primary_key: false,
+            is_foreign_key: false,
+            default_value: default.map(str::to_string),
+            comment: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn cons(
+        name: &str,
+        kind: &str,
+        cols: &[&str],
+        ref_table: Option<&str>,
+        ref_cols: &[&str],
+    ) -> engine::driver::traits::ConstraintDetail {
+        engine::driver::traits::ConstraintDetail {
+            name: name.to_string(),
+            table_name: "t".to_string(),
+            constraint_type: kind.to_string(),
+            column_names: cols.iter().map(|s| s.to_string()).collect(),
+            referenced_table: ref_table.map(str::to_string),
+            referenced_columns: ref_cols.iter().map(|s| s.to_string()).collect(),
+            update_rule: None,
+            delete_rule: None,
+        }
+    }
+
+    fn idx(name: &str, cols: &[&str], primary: bool) -> engine::driver::traits::IndexDetail {
+        engine::driver::traits::IndexDetail {
+            name: name.to_string(),
+            table_name: "t".to_string(),
+            column_names: cols.iter().map(|s| s.to_string()).collect(),
+            is_unique: primary,
+            is_primary: primary,
+            index_type: None,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn ddl_lists_columns_with_type_not_null_and_default() {
+        let sql = create_table_ddl(
+            "public.t",
+            &[
+                col("id", "int4", false, None),
+                col("name", "varchar(20)", true, Some("'x'")),
+            ],
+            &[],
+            &[],
+        );
+        assert!(sql.contains("CREATE TABLE public.t ("), "{sql}");
+        assert!(sql.contains("  id int4 NOT NULL"), "{sql}");
+        assert!(sql.contains("  name varchar(20) DEFAULT 'x'"), "{sql}");
+        assert!(sql.trim_end().ends_with(");"), "{sql}");
+        // 首行如实说明合成边界，不假装完整
+        assert!(sql.contains("合成"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_takes_primary_key_from_constraints_first() {
+        let sql = create_table_ddl(
+            "t",
+            &[col("a", "int4", false, None), col("b", "int4", false, None)],
+            &[cons("t_pkey", "PRIMARY KEY", &["a", "b"], None, &[])],
+            &[],
+        );
+        assert!(sql.contains("PRIMARY KEY (a, b)"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_falls_back_to_primary_index_when_no_constraint() {
+        // 有的驱动只在内省索引时露主键：回退看 is_primary
+        let sql = create_table_ddl(
+            "t",
+            &[col("a", "int4", false, None)],
+            &[],
+            &[idx("t_pkey", &["a"], true)],
+        );
+        assert!(sql.contains("PRIMARY KEY (a)"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_falls_back_to_column_primary_flag_last() {
+        // 最后一道回退：列上的 `is_primary_key`。它是当下**唯一六个驱动都填了的**
+        // —— `list_constraints` 六个驱动一个都没实现，所以前两档恒空。
+        let mut pk = col("id", "int4", false, None);
+        pk.is_primary_key = true;
+        let sql = create_table_ddl("t", &[pk, col("v", "text", true, None)], &[], &[]);
+        assert!(sql.contains("PRIMARY KEY (id)"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_prefers_explicit_constraint_over_column_flag() {
+        // 两档都给时以约束为准（带约束名的那份更可信，且能表达组合主键顺序）
+        let mut pk = col("id", "int4", false, None);
+        pk.is_primary_key = true;
+        let sql = create_table_ddl(
+            "t",
+            &[pk],
+            &[cons("t_pkey", "PRIMARY KEY", &["id", "other"], None, &[])],
+            &[],
+        );
+        assert!(sql.contains("PRIMARY KEY (id, other)"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_emits_foreign_key_with_rules() {
+        let mut fk = cons("fk_u", "FOREIGN KEY", &["uid"], Some("users"), &["id"]);
+        fk.delete_rule = Some("CASCADE".to_string());
+        fk.update_rule = Some("RESTRICT".to_string());
+        let sql = create_table_ddl("t", &[col("uid", "int4", true, None)], &[fk], &[]);
+        assert!(
+            sql.contains("FOREIGN KEY (uid) REFERENCES users (id)"),
+            "{sql}"
+        );
+        assert!(sql.contains("ON UPDATE RESTRICT"), "{sql}");
+        assert!(sql.contains("ON DELETE CASCADE"), "{sql}");
+        assert!(sql.contains("-- fk_u"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_skips_foreign_key_without_target_table() {
+        // 引用表未知：宁可不写，也不写出一个指向空名字的外键
+        let sql = create_table_ddl(
+            "t",
+            &[col("uid", "int4", true, None)],
+            &[cons("fk_u", "FOREIGN KEY", &["uid"], None, &[])],
+            &[],
+        );
+        assert!(!sql.contains("FOREIGN KEY"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_emits_unique_and_skips_check() {
+        let sql = create_table_ddl(
+            "t",
+            &[
+                col("email", "text", true, None),
+                col("age", "int4", true, None),
+            ],
+            &[
+                cons("uq_email", "UNIQUE", &["email"], None, &[]),
+                cons("ck_age", "CHECK", &["age"], None, &[]),
+            ],
+            &[],
+        );
+        assert!(sql.contains("UNIQUE (email)"), "{sql}");
+        // CHECK 表达式不在 ConstraintDetail 里，合成不了就**不写**（也不写错）。
+        // 注：首行注释里就有「CHECK」字样，所以要按行判。
+        assert!(
+            !sql.lines().any(|l| l.trim_start().starts_with("CHECK")),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn ddl_empty_columns_yields_comment_only() {
+        let sql = create_table_ddl("t", &[], &[], &[]);
+        assert!(sql.starts_with("-- "), "{sql}");
+        assert!(!sql.contains("CREATE TABLE"), "{sql}");
+    }
+
+    #[test]
+    fn ddl_single_column_has_no_trailing_comma() {
+        let sql = create_table_ddl("t", &[col("id", "int4", false, None)], &[], &[]);
+        assert!(sql.contains("  id int4 NOT NULL\n);"), "{sql}");
     }
 }

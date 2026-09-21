@@ -138,6 +138,24 @@ pub async fn load_properties(
                 .list_columns(&ref_.conn_id, &catalog, &schema, &ref_.name)
                 .await?;
 
+            // 索引 / 约束：以前只在「非空才加分区」时顺带取，现在 DDL 合成也要吃这两样，
+            // 所以提前取出来（视图没有这两层，不查）。失败仍当空——不因为附属信息
+            // 拿不到而让整个属性面板报错。
+            let (indexes, constraints) = if ref_.kind == PropertyKind::Table {
+                (
+                    metadata
+                        .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                        .await
+                        .unwrap_or_default(),
+                    metadata
+                        .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                        .await
+                        .unwrap_or_default(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
             properties.push(row("限定名", qualify(ref_)));
             properties.push(row("类型", object_type.clone()));
             properties.push(row("列数", columns.len().to_string()));
@@ -148,29 +166,34 @@ pub async fn load_properties(
                 table: columns_table(&columns),
             });
 
+            if !indexes.is_empty() {
+                sections.push(PropertySection {
+                    label: format!("索引 ({})", indexes.len()),
+                    table: indexes_table(&indexes),
+                });
+            }
+            if !constraints.is_empty() {
+                sections.push(PropertySection {
+                    label: format!("约束 ({})", constraints.len()),
+                    table: constraints_table(&constraints),
+                });
+            }
+
+            // DDL：由目录信息**合成**（取源做不到 —— PostgreSQL / DuckDB 没有
+            // `SHOW CREATE TABLE` 的等价物）。合成边界写在 DDL 首行，见 `sql_gen`。
+            // 视图的 DDL 要视图定义，内省接口当下没有这个能力（不是合成不出来，是缺数据）——
+            // 不摆一个空分区假装有。
             if ref_.kind == PropertyKind::Table {
-                if let Ok(indexes) = metadata
-                    .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                    .await
-                {
-                    if !indexes.is_empty() {
-                        sections.push(PropertySection {
-                            label: format!("索引 ({})", indexes.len()),
-                            table: indexes_table(&indexes),
-                        });
-                    }
-                }
-                if let Ok(constraints) = metadata
-                    .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                    .await
-                {
-                    if !constraints.is_empty() {
-                        sections.push(PropertySection {
-                            label: format!("约束 ({})", constraints.len()),
-                            table: constraints_table(&constraints),
-                        });
-                    }
-                }
+                let ddl = crate::sql_gen::create_table_ddl(
+                    &qualify(ref_),
+                    &columns,
+                    &constraints,
+                    &indexes,
+                );
+                sections.push(PropertySection {
+                    label: "DDL（合成）".to_string(),
+                    table: text_table("DDL", &ddl),
+                });
             }
         }
         PropertyKind::Column => {
@@ -244,7 +267,7 @@ pub async fn load_properties(
             match source_text {
                 Some(text) => sections.push(PropertySection {
                     label: "源码".to_string(),
-                    table: source_table(&text),
+                    table: text_table("源码", &text),
                 }),
                 None => properties.push(row("源码", "（未能获取）")),
             }
@@ -260,9 +283,9 @@ pub async fn load_properties(
     })
 }
 
-/// 源码 / DDL 段落：每行一条记录（单列），保留换行。
-fn source_table(text: &str) -> PropertyTable {
-    let headers = vec!["源码".to_string()];
+/// 多行文本段落（源码 / DDL）：每行一条记录（单列），保留换行。
+fn text_table(header: &str, text: &str) -> PropertyTable {
+    let headers = vec![header.to_string()];
     let rows = text
         .lines()
         .map(|line| vec![line.to_string()])
