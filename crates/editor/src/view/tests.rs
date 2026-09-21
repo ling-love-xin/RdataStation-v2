@@ -218,6 +218,20 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
         cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
     };
 
+    // SQL 模式：内核里真的装着 SQL 语义着色器（不是“只算了一份 token 没装上去”），
+    // 图例就是染色的对外契约——名字对不上主题词汇时内核会静默跳过该 token。
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
+        "SQL 文档的编辑内核上应当装有着色器"
+    );
+    let legend = cx.update(|_window, cx| panel.read(cx).highlight_legend_for_test(cx));
+    for name in ["keyword", "string", "number", "comment", "function"] {
+        assert!(
+            legend.iter().any(|candidate| candidate == name),
+            "图例里少了 `{name}`：{legend:?}"
+        );
+    }
+
     // 切到文本模式：不再上色（判定的“计划”在 `mode::plan_switch`，视图只跟随）
     shared.update(|service| {
         service.set_mode(&id, EditorMode::Text);
@@ -227,6 +241,10 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
         cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
         Some(EditorMode::Text)
     );
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
+        "文本模式是纯记事本：着色器要真摘掉（留着旧 token 就会画成 SQL）"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 切回 SQL：恢复着色
@@ -234,6 +252,10 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
         service.set_mode(&id, EditorMode::Sql);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
+        "切回 SQL 要重新装上着色器"
+    );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 

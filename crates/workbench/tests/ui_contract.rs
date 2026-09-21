@@ -3,10 +3,12 @@
 //! 目的：把关键布局不变式固化成测试，防止后续改动**静默破坏**尺寸约束
 //! （参考 navop 的布局契约测试实践）。
 //!
-//! 覆盖三类契约：
+//! 覆盖四类契约：
 //! 1. **尺寸常量契约**：`ui.rs` 倍率与设计文档数值一致；
 //! 2. **源码契约**：视图层不出现裸 `px(N.)` 与裸色值构造；
-//! 3. **状态机契约**：边栏「完全隐藏 / 恢复」不丢失隐藏前模式。
+//! 3. **状态机契约**：边栏「完全隐藏 / 恢复」不丢失隐藏前模式；
+//! 4. **主题词汇契约**：编辑器高亮图例里的每个 token 名都在主题资产里有对应项
+//!    （内核按**名字**解析颜色，查不到就静默跳过该 token）。
 //!
 //! 数值来源：`docs/architecture/ui/ui-design-spec.md` §2.1。
 
@@ -537,6 +539,24 @@ fn shared_fields_are_whitelisted() {
         "Shared 字段集变化：新增字段请先判定归属（宿主级 / 命名端口），\n\
          并把白名单与 panels-modules.md §3 耦合表一起更新"
     );
+}
+
+/// 契约 5：编辑器的高亮图例 ↔ 主题资产。
+///
+/// 内核按**名字**在活跃 `HighlightTheme` 里解析颜色，查不到就**静默跳过**该 token
+/// （不报错、不警告）：现象是“这几个词就是没颜色”，而原因在资产里而不是代码里。
+/// 明暗两套主题都要各声明一次（切主题不该掉色）。
+#[test]
+fn highlight_token_names_resolve_in_the_theme_asset() {
+    const THEME: &str = include_str!("../../../assets/themes/rds-theme.json");
+    for name in editor::view::highlight::TOKEN_NAMES {
+        let needle = format!("\"{name}\":");
+        assert_eq!(
+            THEME.matches(&needle).count(),
+            2,
+            "`{name}` 应在明暗两套主题的 `highlight.syntax` 里各声明一次"
+        );
+    }
 }
 
 /// 递归收集 `src/<rel>` 下的全部 `.rs` 文件（返回相对 `src/` 的路径，`/` 分隔）。

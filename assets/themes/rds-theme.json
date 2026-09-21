@@ -115,7 +115,9 @@
           "tag": { "color": "#800000" },
           "property": { "color": "#0451A5" },
           "variable": { "color": "#0451A5" },
-          "string.special": { "color": "#C5060B" }
+          "string.special": { "color": "#C5060B" },
+          "operator": { "color": "#000000" },
+          "punctuation": { "color": "#000000" }
         }
       }
     },
@@ -230,7 +232,9 @@
           "tag": { "color": "#569CD6" },
           "property": { "color": "#9CDCFE" },
           "variable": { "color": "#9CDCFE" },
-          "string.special": { "color": "#D4D4D4" }
+          "string.special": { "color": "#D4D4D4" },
+          "operator": { "color": "#D4D4D4" },
+          "punctuation": { "color": "#D4D4D4" }
         }
       }
     }

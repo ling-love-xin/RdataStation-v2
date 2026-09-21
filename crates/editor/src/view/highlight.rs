@@ -23,8 +23,14 @@
 //! | Comment | `comment` | |
 //! | Operator | `operator` | |
 //! | Punctuation | `punctuation` | |
-//! | Parameter | `variable` | 主题词汇里没有 `parameter`，退到最接近的 `variable` |
-//! | Identifier | **不上色** | 与主流 SQL 客户端一致：用正文色，避免整篇花绿 |
+//! | `Parameter` | `variable` | 主题词汇里没有 `parameter`，退到最接近的 `variable` |
+//! | `Identifier` | **不上色** | 与主流 SQL 客户端一致：用正文色，避免整篇花绿 |
+//!
+//! **图例里的名字必须在主题资产里有对应项**（`assets/themes/rds-theme.json` 的 `highlight.syntax`，
+//! 明暗两套都要有）：查不到时内核**静默跳过**该 token（不报错、不警告），看到的现象是
+//! “这几个词就是没颜色”，而原因在资产里而不是代码里。`operator` / `punctuation` 在
+//! 2026-09-21 前就是这样漏着的（取与正文同色——主流主题也是这么给的），现已显式声明；
+//! 两边不漂由契约用例盯着（`workbench/tests/ui_contract.rs` 的图例↔资产那条）。
 //!
 //! ## 边界
 //!
@@ -51,8 +57,9 @@ const HIGHLIGHT_MAX_BYTES: usize = 1_000_000;
 
 /// 图例里的 token 类型名（顺序即 `token_type` 的取值下标）
 ///
-/// 名字必须落在活跃 `HighlightTheme` 的词汇里，否则编辑器会跳过该 token（不报错）。
-const TOKEN_NAMES: [&str; 9] = [
+/// 名字必须落在活跃 `HighlightTheme` 的词汇里，否则编辑器会跳过该 token（不报错）——
+/// 资产侧的对应用项与回归见模块头的「图例里的名字必须在主题资产里有对应项」一段。
+pub const TOKEN_NAMES: [&str; 9] = [
     "keyword",
     "type",
     "function",

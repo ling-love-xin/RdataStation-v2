@@ -686,6 +686,39 @@ impl EditorHostPanel {
         self.editor.read(cx).selected_range()
     }
 
+    /// 【A4】本文档的编辑内核上是否装了 SQL 语义着色。
+    ///
+    /// 断言的是**内核里那个 provider**（不是我们自己的副本）：着色只有「装上了」才会被内核
+    /// 在可视区拉取并用活跃主题解析——拆掉 `highlight::install` 就会假起来。
+    pub fn highlight_installed_for_test(&self, cx: &App) -> bool {
+        self.editor
+            .read(cx)
+            .lsp()
+            .semantic_tokens_provider
+            .is_some()
+    }
+
+    /// 【A4】装上内核的那个着色器声明的 token 名（供测试断言「装的是 SQL 着色器」）
+    ///
+    /// 名字必须落在活跃主题的词汇里，否则内核会静默跳过该 token——所以这份图例就是「染不染色」
+    /// 的对外契约（见 `crate::view::highlight::TOKEN_NAMES`）。
+    pub fn highlight_legend_for_test(&self, cx: &App) -> Vec<String> {
+        self.editor
+            .read(cx)
+            .lsp()
+            .semantic_tokens_provider
+            .as_ref()
+            .map(|provider| {
+                provider
+                    .legend()
+                    .token_types
+                    .iter()
+                    .map(|name| name.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// 只读访问当前文档（渲染路径用；不克隆整份文档）
     fn with_document<R>(&self, read: impl FnOnce(&Document) -> R) -> Option<R> {
         let service = self.shared.service();
