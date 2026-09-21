@@ -724,6 +724,23 @@ impl Database for MySqlNativeDatabase {
         Ok(out)
     }
 
+    /// 源版 DDL：`SHOW CREATE TABLE`（对视图也有效 —— 返回的列名是 `Create View`）。
+    async fn get_table_ddl(
+        &self,
+        catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        use crate::driver::utils::quote_identifier;
+        let sql = format!(
+            "SHOW CREATE TABLE {}.{}",
+            quote_identifier(catalog, '`'),
+            quote_identifier(table, '`')
+        );
+        let result = self.query(&sql).await?;
+        Ok(crate::driver::utils::create_statement(&result))
+    }
+
     fn as_metadata_browser(&self) -> Option<&dyn MetadataBrowser> {
         Some(self)
     }
@@ -799,25 +816,7 @@ impl Database for MySqlNativeDatabase {
         let esc_name = name.replace('`', "``");
         let sql = format!("SHOW CREATE {} `{}`.`{}`", stmt_type, esc_catalog, esc_name);
         let result = self.query(&sql).await?;
-        // 同 sqlx 驱动：`SHOW CREATE` 的 DDL 在名为 `Create …` 的列（位置 2），
-        // 列 1 是 sql_mode。
-        let col_idx = result
-            .columns
-            .iter()
-            .position(|c| c.starts_with("Create "))
-            .unwrap_or(2);
-        if let Some(batch) = result.batches.first() {
-            if batch.num_rows() > 0 && col_idx < batch.num_columns() {
-                if let Some(col) = batch
-                    .column(col_idx)
-                    .as_any()
-                    .downcast_ref::<arrow::array::StringArray>()
-                {
-                    return Ok(Some(col.value(0).to_string()));
-                }
-            }
-        }
-        Ok(None)
+        Ok(crate::driver::utils::create_statement(&result))
     }
 }
 

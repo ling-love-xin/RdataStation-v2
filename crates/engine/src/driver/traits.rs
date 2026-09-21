@@ -508,6 +508,31 @@ pub trait Database: Send + Sync {
         Ok(None) // 默认：不支持
     }
 
+    /// 取**源版** DDL：该库自己保存的那一份 `CREATE` 原文。
+    ///
+    /// `None` = **该库给不出来**（没有等价语句），**不是**「对象不存在」——
+    /// 后者是 `Err`。上层据此决定要不要退化成合成（`rds_database::sql_gen`）。
+    ///
+    /// 谁能给（2026-09-21 真机确认）：
+    /// * MySQL / MySQL(Official)：`SHOW CREATE TABLE`（对**视图**同样有效，返回
+    ///   `Create View` 列 —— 不必再分一套 `SHOW CREATE VIEW`）；
+    /// * SQLite：`sqlite_master.sql`（表与视图都是用户写下的原文）；
+    /// * DuckDB：`duckdb_tables()` / `duckdb_views()` 的 `sql` 列。
+    ///
+    /// 谁给不出来：**PostgreSQL**（没有 `SHOW CREATE TABLE` 的等价物，要拿原文得走
+    /// `pg_get_*def` 拼装 —— 那已经算「合成」，不如交给上层那份统一的合成器）。
+    ///
+    /// 为什么源版更值钱：合成器吃不下的东西（存储引擎 / 字符集与排序规则 / 分区 /
+    /// 表级选项 / `CHECK` 表达式 / 视图定义）在原文里**本来就有**。
+    async fn get_table_ddl(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        Ok(None) // 默认：该库没有源版
+    }
+
     /* ===== 联邦查询能力 ===== */
 
     /// 注册外部数据库连接

@@ -183,4 +183,19 @@ impl MetadataService {
         db.get_routine_source(catalog, Some(schema), name, kind)
             .await
     }
+
+    /// 取**源版** DDL（该库保存的原文）。
+    ///
+    /// `None` = 该库给不出来（PostgreSQL 没有 `SHOW CREATE TABLE` 的等价物）——
+    /// 由调用方退化成合成（`sql_gen::create_table_ddl`），见 `Database::get_table_ddl`。
+    pub async fn get_table_ddl(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        let db = self.get_database(conn_id).await?;
+        db.get_table_ddl(catalog, Some(schema), table).await
+    }
 }

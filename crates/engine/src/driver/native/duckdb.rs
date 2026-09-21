@@ -1005,6 +1005,35 @@ impl Database for DuckDbDatabase {
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
         Some(self)
     }
+
+    /// 源版 DDL：`duckdb_tables()` / `duckdb_views()` 的 `sql` 列存着建对象的原文
+    /// （真机确认：表与视图都有，临时表也在 `duckdb_tables()` 里）。
+    async fn get_table_ddl(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        let result = self
+            .query_with_params(
+                "SELECT sql FROM duckdb_tables() WHERE table_name = ?1 \
+                 UNION ALL \
+                 SELECT sql FROM duckdb_views() WHERE view_name = ?1",
+                vec![Value::Text(table.to_string())],
+            )
+            .await?;
+        Ok(result
+            .columns
+            .iter()
+            .position(|c| c == "sql")
+            .and_then(|idx| {
+                crate::driver::utils::batch_to_string_rows(&result)
+                    .into_iter()
+                    .next()
+                    .and_then(|row| row.get(idx).cloned())
+            })
+            .filter(|s| !s.trim().is_empty()))
+    }
 }
 
 /// DuckDB 事务句柄

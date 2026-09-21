@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::driver::utils::{affected_rows_result, quote_identifier, returns_rows};
 use crate::driver::{
@@ -1118,6 +1118,32 @@ impl Database for SqliteDatabase {
 
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
         Some(self)
+    }
+
+    /// 源版 DDL：`sqlite_master.sql` **就是用户写下的原文**（表与视图都在这里，
+    /// 含 `REFERENCES` / `DEFAULT` / 约束名）。`CREATE TABLE … AS SELECT` 存的也是原文。
+    async fn get_table_ddl(
+        &self,
+        _catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        let conn = self.conn.lock().map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "sqlite".to_string(),
+                operation: "lock".to_string(),
+                source: e.to_string(),
+            })
+        })?;
+        let found: Option<Option<String>> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = ?1 AND type IN ('table', 'view')",
+                rusqlite::params![table],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| CoreError::database(DatabaseError::query("get_table_ddl", e.to_string())))?;
+        Ok(found.flatten().filter(|s| !s.trim().is_empty()))
     }
 }
 

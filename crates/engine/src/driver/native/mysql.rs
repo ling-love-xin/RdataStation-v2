@@ -486,26 +486,24 @@ impl Database for MySqlDatabase {
         let esc_name = name.replace('`', "``");
         let sql = format!("SHOW CREATE {} `{}`.`{}`", stmt_type, esc_catalog, esc_name,);
         let result = self.query(&sql).await?;
-        // `SHOW CREATE PROCEDURE|FUNCTION` 的列序是（名称, sql_mode, Create …, …）：
-        // 必须取名为 `Create …` 的那一列。旧实现恒取列 1，拿到的是 **sql_mode**
-        // 而非 DDL（本路径此前无调用方，故一直未暴露）。
-        let col_idx = result
-            .columns
-            .iter()
-            .position(|c| c.starts_with("Create "))
-            .unwrap_or(2);
-        if let Some(batch) = result.batches.first() {
-            if batch.num_rows() > 0 && col_idx < batch.num_columns() {
-                if let Some(col) = batch
-                    .column(col_idx)
-                    .as_any()
-                    .downcast_ref::<arrow::array::StringArray>()
-                {
-                    return Ok(Some(col.value(0).to_string()));
-                }
-            }
-        }
-        Ok(None)
+        Ok(crate::driver::utils::create_statement(&result))
+    }
+
+    /// 源版 DDL：`SHOW CREATE TABLE`（对视图也有效 —— 返回的列名是 `Create View`）。
+    async fn get_table_ddl(
+        &self,
+        catalog: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<String>, CoreError> {
+        use crate::driver::utils::quote_identifier;
+        let sql = format!(
+            "SHOW CREATE TABLE {}.{}",
+            quote_identifier(catalog, '`'),
+            quote_identifier(table, '`')
+        );
+        let result = self.query(&sql).await?;
+        Ok(crate::driver::utils::create_statement(&result))
     }
 
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {

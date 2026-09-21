@@ -337,6 +337,27 @@ pub fn batch_to_string_rows(result: &QueryResult) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// 从 `SHOW CREATE …` 的结果里取 DDL 原文（表 / 视图 / 过程 / 函数四类同一形状）。
+///
+/// **不能取固定列**：`SHOW CREATE PROCEDURE|FUNCTION` 的列序是（名称, sql_mode,
+/// `Create …`, …）—— 列 1 是 `sql_mode` 而不是 DDL（旧实现恒取列 1，拿到的是 sql_mode）。
+/// 所以按**列名** `Create …` 定位（`SHOW CREATE TABLE` 是 `Create Table`，
+/// 视图是 `Create View`）。
+///
+/// 位置全名匹配不上时退回列 2（`SHOW CREATE TABLE` 的 DDL 列位置），拿不到就给 `None`。
+pub fn create_statement(result: &QueryResult) -> Option<String> {
+    let col_idx = result
+        .columns
+        .iter()
+        .position(|c| c.starts_with("Create "))
+        .unwrap_or(2);
+    batch_to_string_rows(result)
+        .into_iter()
+        .next()
+        .and_then(|row| row.get(col_idx).cloned())
+        .filter(|s| !s.is_empty())
+}
+
 /// 逗号分隔的列名 → `Vec<String>`（SQL 侧 `string_agg` 的产物）。
 pub fn split_csv(text: &str) -> Vec<String> {
     text.split(',')

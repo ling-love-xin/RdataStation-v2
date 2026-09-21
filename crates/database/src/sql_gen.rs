@@ -126,18 +126,21 @@ pub fn dml_template(qualified: &str, columns: &[DmlColumn], kind: DmlKind) -> St
 
 /// 生成 `CREATE TABLE` 的**合成**文本（无 I/O、无方言依赖）。
 ///
-/// ## 为什么是「合成」而不是「取源」
+/// ## 为什么还要「合成」（源版优先）
 ///
-/// 四个库取原始 DDL 的能力不一样（MySQL / SQLite 有 `SHOW CREATE TABLE` / `sqlite_master.sql`，
-/// PostgreSQL / DuckDB 没有等价语句），而**属性面板要的是同一形状的东西**。
-/// 参考实现里 zqlz 的做法是三分：能取源就取源，取不到就由 `CatalogDialect` 从目录数据
-/// **合成**。我们走后面那条 —— 合成所需的三样（列 / 约束 / 索引）属性面板本来就已经拉过了，
-/// 所以这是**纯函数加法**：不动驱动 trait、不新增 I/O、可单测。
+/// 属性面板的 DDL 是三分：**能取源就取源**（`Database::get_table_ddl` —— MySQL
+/// `SHOW CREATE TABLE`、SQLite `sqlite_master.sql`、DuckDB `duckdb_tables().sql`，
+/// 表与视图都给），取不到才走这里的合成。**PostgreSQL 恒定走这一条**：它没有
+/// `SHOW CREATE TABLE` 的等价物，要拿原文得自己用 `pg_get_*def` 拼装 —— 那已经是合成。
+/// 参考实现里 zqlz 的做法也是这个三分。合成所需的三样（列 / 约束 / 索引）属性面板本来就
+/// 已经拉过了，所以合成是**纯函数**：不动驱动 trait（取源另走 `Database`）、不新增 I/O、
+/// 可单测。
 ///
 /// ## 诚实边界（写进首行注释，不假装完整）
 ///
 /// 合成不出来的东西：分区 / 存储引擎 / 字符集与排序规则 / 表级选项 / `CHECK` 表达式
 /// （`ConstraintDetail` 不带表达式）/ 视图定义 / 非唯一索引。它们在首行注释里如实列出。
+/// **这些恰好是源版里本来就有的** —— 所以面板能取源时会明确标成「DDL（源版）」。
 ///
 /// ## 输入
 ///

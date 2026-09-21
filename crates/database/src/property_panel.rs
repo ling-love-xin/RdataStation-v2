@@ -179,21 +179,34 @@ pub async fn load_properties(
                 });
             }
 
-            // DDL：由目录信息**合成**（取源做不到 —— PostgreSQL / DuckDB 没有
-            // `SHOW CREATE TABLE` 的等价物）。合成边界写在 DDL 首行，见 `sql_gen`。
-            // 视图的 DDL 要视图定义，内省接口当下没有这个能力（不是合成不出来，是缺数据）——
-            // 不摆一个空分区假装有。
-            if ref_.kind == PropertyKind::Table {
-                let ddl = crate::sql_gen::create_table_ddl(
-                    &qualify(ref_),
-                    &columns,
-                    &constraints,
-                    &indexes,
-                );
-                sections.push(PropertySection {
-                    label: "DDL（合成）".to_string(),
-                    table: text_table("DDL", &ddl),
-                });
+            // DDL 三分：**能取源就取源**（MySQL / SQLite / DuckDB 存了原文 —— 存储引擎 /
+            // 字符集 / 分区 / CHECK 表达式 / 视图定义都在里面），取不到才由目录信息合成
+            // （PostgreSQL 没有 `SHOW CREATE TABLE` 的等价物）。取源失败（权限不足 / 对象
+            // 刚好被删）也退回合成，不因为附属信息让整个面板报错 —— 合成会把边界写在首行。
+            match metadata
+                .get_table_ddl(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                .await
+                .ok()
+                .flatten()
+            {
+                Some(text) => sections.push(PropertySection {
+                    label: "DDL（源版）".to_string(),
+                    table: text_table("DDL", &text),
+                }),
+                // 视图没有源版时**不摆空分区**：合成要视图定义，而目录数据里没有
+                None if ref_.kind == PropertyKind::Table => {
+                    let composed = crate::sql_gen::create_table_ddl(
+                        &qualify(ref_),
+                        &columns,
+                        &constraints,
+                        &indexes,
+                    );
+                    sections.push(PropertySection {
+                        label: "DDL（合成）".to_string(),
+                        table: text_table("DDL", &composed),
+                    });
+                }
+                None => {}
             }
         }
         PropertyKind::Column => {
