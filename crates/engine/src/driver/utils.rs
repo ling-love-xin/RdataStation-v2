@@ -81,54 +81,83 @@ where
 /// **列序是本模块的契约**（三个 `*_TABLE_DETAIL_SQL` 必须一致，`columns_from_detail_rows` 按它取值）：
 /// `0 列名 / 1 类型 / 2 可空(YES|NO) / 3 序号(1 基) / 4 主键标记(PRI|空) / 5 默认值 / 6 注释 / 7 引用表 / 8 引用列 / 9 外键标记(1|空，**含复合外键**)`。
 ///
+/// **PG 的这三条不吃 `catalog` 参数**：一条连接只绑一个库，内省只能在当前库里做
+/// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
+///
 /// 一次取齐属性面板要的东西：列名 / 类型 / 可空 / 主键标记 / 默认值 / 注释，
 /// 外加 2026-09-21 补的 **`ordinal_position`** 与**单列外键的引用目标**
 /// （`referential_constraints` 只含外键，所以不会把主键误认成引用；
 /// 复合外键用 `COUNT(*) = 1` 挡掉 —— 那时的配对要按列序做，留给约束分区）。
 pub const PG_TABLE_DETAIL_SQL: &str = "\
-            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, \
-                   CASE WHEN c.column_name IN (SELECT kcu.column_name \
-                             FROM information_schema.table_constraints tc \
-                             JOIN information_schema.key_column_usage kcu \
-                               ON tc.constraint_name = kcu.constraint_name \
-                            WHERE tc.table_schema = $2 AND tc.table_name = $3 \
-                              AND tc.constraint_type = 'PRIMARY KEY') \
+            SELECT a.attname, \
+                   format_type(a.atttypid, a.atttypmod), \
+                   CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, \
+                   a.attnum, \
+                   CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_index i \
+                                      WHERE i.indrelid = c.oid AND i.indisprimary \
+                                        AND a.attnum = ANY (i.indkey)) \
                         THEN 'PRI' ELSE '' END AS column_key, \
-                   c.column_default, \
-                   COALESCE(col_description((SELECT oid FROM pg_class WHERE relname = $3), c.ordinal_position), '') AS column_comment, \
-                   COALESCE((SELECT ccu.table_name \
-                               FROM information_schema.referential_constraints rc \
-                               JOIN information_schema.key_column_usage kcu \
-                                 ON kcu.constraint_schema = rc.constraint_schema AND kcu.constraint_name = rc.constraint_name \
-                               JOIN information_schema.constraint_column_usage ccu \
-                                 ON ccu.constraint_schema = rc.unique_constraint_schema AND ccu.constraint_name = rc.unique_constraint_name \
-                              WHERE kcu.table_schema = $2 AND kcu.table_name = $3 AND kcu.column_name = c.column_name \
-                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
-                                      WHERE k2.constraint_schema = kcu.constraint_schema \
-                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                   pg_catalog.pg_get_expr(ad.adbin, ad.adrelid), \
+                   COALESCE(pg_catalog.col_description(c.oid, a.attnum), ''), \
+                   COALESCE((SELECT rc.relname \
+                               FROM pg_catalog.pg_constraint con \
+                               JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid \
+                              WHERE con.conrelid = c.oid AND con.contype = 'f' \
+                                AND array_length(con.conkey, 1) = 1 \
+                                AND con.conkey[1] = a.attnum \
                               LIMIT 1), '') AS ref_table, \
-                   COALESCE((SELECT ccu.column_name \
-                               FROM information_schema.referential_constraints rc \
-                               JOIN information_schema.key_column_usage kcu \
-                                 ON kcu.constraint_schema = rc.constraint_schema AND kcu.constraint_name = rc.constraint_name \
-                               JOIN information_schema.constraint_column_usage ccu \
-                                 ON ccu.constraint_schema = rc.unique_constraint_schema AND ccu.constraint_name = rc.unique_constraint_name \
-                              WHERE kcu.table_schema = $2 AND kcu.table_name = $3 AND kcu.column_name = c.column_name \
-                                AND (SELECT COUNT(*) FROM information_schema.key_column_usage k2 \
-                                      WHERE k2.constraint_schema = kcu.constraint_schema \
-                                        AND k2.constraint_name = kcu.constraint_name) = 1 \
+                   COALESCE((SELECT ra.attname \
+                               FROM pg_catalog.pg_constraint con \
+                               JOIN pg_catalog.pg_attribute ra \
+                                 ON ra.attrelid = con.confrelid AND ra.attnum = con.confkey[1] \
+                              WHERE con.conrelid = c.oid AND con.contype = 'f' \
+                                AND array_length(con.conkey, 1) = 1 \
+                                AND con.conkey[1] = a.attnum \
                               LIMIT 1), '') AS ref_column, \
-                   CASE WHEN EXISTS (SELECT 1 \
-                                       FROM information_schema.table_constraints tc \
-                                       JOIN information_schema.key_column_usage kcu \
-                                         ON kcu.constraint_name = tc.constraint_name \
-                                      WHERE tc.table_schema = $2 AND tc.table_name = $3 \
-                                        AND tc.constraint_type = 'FOREIGN KEY' \
-                                        AND kcu.column_name = c.column_name) \
+                   CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con \
+                                      WHERE con.conrelid = c.oid AND con.contype = 'f' \
+                                        AND a.attnum = ANY (con.conkey)) \
                         THEN '1' ELSE '' END AS is_fk \
-              FROM information_schema.columns c \
-             WHERE c.table_catalog = $1 AND c.table_schema = $2 AND c.table_name = $3 \
-             ORDER BY c.ordinal_position";
+              FROM pg_catalog.pg_class c \
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
+              LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum \
+             WHERE n.nspname = $1 AND c.relname = $2 \
+               AND a.attnum > 0 AND NOT a.attisdropped \
+             ORDER BY a.attnum";
+
+/// PostgreSQL：列出用户 schema（两个 PG 驱动共用）。
+///
+/// 为什么不用 `information_schema.schemata`：它把 `pg_toast*` / `pg_temp_*` 一起列出来
+/// （真机实测：28 个 schema 里 26 个是这类噪音，用户只关心剩下的 1-2 个），而且它是
+/// 几十路 JOIN 的视图。`pg_` 前缀是 PG 保留给系统的（`pg_catalog` / `pg_toast` / `pg_temp_N`），
+/// 按业界惯例（DBeaver 同口径）一律不显示。
+pub const PG_LIST_SCHEMAS_SQL: &str = "\
+            SELECT n.nspname FROM pg_catalog.pg_namespace n \
+             WHERE n.nspname <> 'information_schema' \
+               AND n.nspname NOT LIKE 'pg\\_%' \
+               AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') \
+             ORDER BY n.nspname";
+
+/// PostgreSQL：列出某 schema 下的对象（两个 PG 驱动共用）。
+///
+/// 为什么不用 `information_schema.tables`：**物化视图（`relkind = 'm'`）与外部表（`'f'`）
+/// 根本不在它里面**（真机实测：物化视图在导航里完全看不到），它也不含分区表（`'p'`）。
+/// 走 `pg_class` 一次拿全，顺带快得多（没有那几十路 JOIN）。
+///
+/// `relkind` → 展示类型的映射：`r` 普通表 / `p` 分区表 / `f` 外部表 → `BASE TABLE`；
+/// `v` 视图与 `m` **物化视图**都 → `VIEW`（我们的导航把物化视图并入「视图」，见
+/// `docs/architecture/references/README.md` 的对照口径）。
+pub const PG_LIST_TABLES_SQL: &str = "\
+            SELECT c.relname, \
+                   CASE c.relkind \
+                        WHEN 'v' THEN 'VIEW' \
+                        WHEN 'm' THEN 'VIEW' \
+                        ELSE 'BASE TABLE' END AS table_type \
+              FROM pg_catalog.pg_class c \
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') \
+             ORDER BY c.relname";
 
 /// MySQL：列出某表的列（两个 MySQL 驱动共用）。
 ///

@@ -1047,28 +1047,19 @@ impl MetadataBrowser for PostgresNativeDatabase {
         Ok(rows_to_node_info(&result, SchemaObjectKind::Catalog))
     }
 
-    async fn get_schemas(&self, catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
-        let sql = "SELECT schema_name FROM information_schema.schemata \
-                   WHERE catalog_name = $1 AND schema_name NOT IN ('pg_catalog', 'information_schema') \
-                   ORDER BY schema_name";
-        let result = self
-            .query_with_params(sql, vec![Value::Text(catalog.to_string())])
-            .await?;
+    /// 一条连接只绑一个库，schema 内省只在当前库里做 —— 所以 `catalog` 参数**不用**
+    /// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
+        let sql = crate::driver::utils::PG_LIST_SCHEMAS_SQL;
+        let result = self.query(sql).await?;
         Ok(rows_to_node_info(&result, SchemaObjectKind::Schema))
     }
 
-    async fn get_tables(&self, catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
+    async fn get_tables(&self, _catalog: &str, schema: &str) -> Result<Vec<NodeInfo>, CoreError> {
         use arrow::array::StringArray;
-        let sql = "SELECT table_name, table_type FROM information_schema.tables \
-                   WHERE table_catalog = $1 AND table_schema = $2 ORDER BY table_name";
+        let sql = crate::driver::utils::PG_LIST_TABLES_SQL;
         let result = self
-            .query_with_params(
-                sql,
-                vec![
-                    Value::Text(catalog.to_string()),
-                    Value::Text(schema.to_string()),
-                ],
-            )
+            .query_with_params(sql, vec![Value::Text(schema.to_string())])
             .await?;
         let mut nodes: Vec<NodeInfo> = Vec::new();
         for row_idx in 0..result.total_rows() {
@@ -1097,16 +1088,16 @@ impl MetadataBrowser for PostgresNativeDatabase {
 
     async fn get_table_detail(
         &self,
-        catalog: &str,
+        _catalog: &str,
         schema: &str,
         table: &str,
     ) -> Result<NodeDetail, CoreError> {
         let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
+        // SQL 走 pg_catalog：`$1` = schema、`$2` = 表名（catalog 不用，见 `get_schemas`）
         let result = self
             .query_with_params(
                 sql,
                 vec![
-                    Value::Text(catalog.to_string()),
                     Value::Text(schema.to_string()),
                     Value::Text(table.to_string()),
                 ],
