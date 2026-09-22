@@ -126,6 +126,23 @@ pub const PG_TABLE_DETAIL_SQL: &str = "\
                AND a.attnum > 0 AND NOT a.attisdropped \
              ORDER BY a.attnum";
 
+/// PostgreSQL：列出**服务器上可连接的库**（两个 PG 驱动共用）。
+///
+/// 为什么不是 `current_database()`：那样导航里只看得到一个库，用户以为别的库不见了
+/// （实测端点上就有两个库）。别的库里有什么要**另开一条连到那个库的连接**才看得到 ——
+/// 见 `MetadataBrowser::catalog_is_connection_scoped` 与
+/// `ConnectionManager::get_scoped_connection`。
+///
+/// `datallowconn` 挡掉不允许连接的库，`datistemplate` 挡掉模板库（`template0` / `template1`）——
+/// 它们连上去也没有用户对象。
+pub const PG_LIST_CATALOGS_SQL: &str = "\
+            SELECT datname FROM pg_catalog.pg_database \
+             WHERE datallowconn AND NOT datistemplate \
+             ORDER BY datname";
+
+/// PostgreSQL：这条连接绑的库（跨库判断用；结果由 `ConnectionManager` 按连接缓存，只查一次）。
+pub const PG_CURRENT_DATABASE_SQL: &str = "SELECT current_database()::text AS datname";
+
 /// PostgreSQL：列出用户 schema（两个 PG 驱动共用）。
 ///
 /// 为什么不用 `information_schema.schemata`：它把 `pg_toast*` / `pg_temp_*` 一起列出来
@@ -385,6 +402,82 @@ pub fn create_statement(result: &QueryResult) -> Option<String> {
         .next()
         .and_then(|row| row.get(col_idx).cloned())
         .filter(|s| !s.is_empty())
+}
+
+/// 换掉连接串里的**库名**（只动 path 段），其余原样保留。
+///
+/// ## 为什么不是「改 config 重建 URL」
+///
+/// PG 的跨库浏览要另开一条连到别的库的连接，而 `DriverConnectionConfig` 的 URL 走
+/// `url_override`（`effective_url()` 的优先级最高）—— 里面可能带着连接参数：
+/// LAN 直连注入的 `sslmode=disable`、`application_name`、字符集、`connect_timeout`…
+/// 重建 URL 会把这些**静默丢掉**，于是「跨库那条连接」与主连接行为不一致
+/// （连不上、TLS 行为不同），排查起来极隐蔽。只换 path 段就没有这个问题。
+///
+/// 支持形态：`scheme://[user[:pass]@]host[:port][/db]?query#fragment`。
+/// **不支持** key=value 形式的 DSN（`host=… dbname=…`）：那不是本仓拼 URL 的口径
+/// （`connection::url::build_connection_url` 只产出 URL 形式），遇到就返回 `None`，
+/// 由调用方如实报错，不猜。
+pub fn with_database_in_url(url: &str, database: &str) -> Option<String> {
+    let scheme_end = url.find("://")? + 3;
+    let rest = &url[scheme_end..];
+    // 查询串 / 片段原样保留
+    let suffix_at = rest.find(['?', '#']).unwrap_or(rest.len());
+    let (head, suffix) = rest.split_at(suffix_at);
+    // 没有 path 段（`postgres://host:5432`）时补一个
+    let authority = match head.find('/') {
+        Some(slash) => &head[..slash],
+        None => head,
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let encoded = encode_path_segment(database);
+    Some(format!(
+        "{}{}/{}{}",
+        &url[..scheme_end],
+        authority,
+        encoded,
+        suffix
+    ))
+}
+
+/// 取出连接串里的库名（`with_database_in_url` 的反向读法，只用于展示 / 判断）。
+pub fn database_from_url(url: &str) -> Option<String> {
+    let scheme_end = url.find("://")? + 3;
+    let rest = &url[scheme_end..];
+    let head = match rest.find(['?', '#']) {
+        Some(at) => &rest[..at],
+        None => rest,
+    };
+    let slash = head.find('/')?;
+    let db = head[slash + 1..].trim_end_matches('/');
+    (!db.is_empty()).then(|| percent_decode(db))
+}
+
+/// path 段的百分号编码（RFC 3986 的 unreserved 之外一律编码；`/` 也编掉 —— 库名里不该有它）。
+fn encode_path_segment(s: &str) -> String {
+    connection::url::encode_userinfo(s)
+}
+
+/// 最小百分号解码（只处理 `%XX`；解不出来就原样保留那一截）。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// 逗号分隔的列名 → `Vec<String>`（SQL 侧 `string_agg` 的产物）。
@@ -910,5 +1003,53 @@ mod tests {
 
         let huge = affected_rows_result(u64::from(u32::MAX) + 10);
         assert_eq!(huge.affected_rows, Some(u32::MAX));
+    }
+}
+
+#[cfg(test)]
+mod url_database_tests {
+    use super::{database_from_url, with_database_in_url};
+
+    /// 换库名只动 path 段：认证、端口、查询串**一个都不能丢**（丢了就是跨库连接连不上）。
+    #[test]
+    fn swapping_database_keeps_everything_else() {
+        assert_eq!(
+            with_database_in_url("postgres://u:p@h:5432/old?sslmode=disable&a=1", "new").unwrap(),
+            "postgres://u:p@h:5432/new?sslmode=disable&a=1"
+        );
+        // 没有 path 段时补一个
+        assert_eq!(
+            with_database_in_url("postgres://u:p@h:5432", "new").unwrap(),
+            "postgres://u:p@h:5432/new"
+        );
+        // 末尾多一个斜杠也认
+        assert_eq!(
+            with_database_in_url("postgres://h/old/", "new").unwrap(),
+            "postgres://h/new"
+        );
+        // 库名里的特殊字符要编码（不然会把 URL 结构弄坏）
+        assert_eq!(
+            with_database_in_url("postgres://h/old", "a/b").unwrap(),
+            "postgres://h/a%2Fb"
+        );
+        // 不是 URL 形式（DSN）→ 如实说不支持，不猜
+        assert!(with_database_in_url("host=h dbname=old", "new").is_none());
+        assert!(with_database_in_url("postgres://", "new").is_none());
+    }
+
+    /// 反向读库名（判断「是不是当前库」用）。
+    #[test]
+    fn reading_database_back() {
+        assert_eq!(
+            database_from_url("postgres://u:p@h:5432/warehouse?sslmode=disable").as_deref(),
+            Some("warehouse")
+        );
+        assert_eq!(database_from_url("postgres://h").as_deref(), None);
+        assert_eq!(database_from_url("postgres://h/").as_deref(), None);
+        assert_eq!(
+            database_from_url("postgres://h/a%2Fb").as_deref(),
+            Some("a/b"),
+            "写进去时的编码要能读回来"
+        );
     }
 }

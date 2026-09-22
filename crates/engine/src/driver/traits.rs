@@ -231,6 +231,28 @@ pub trait MetadataBrowser: Send + Sync {
     ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
     }
+
+    /// 这条连接是否**只覆盖一个 catalog**。
+    ///
+    /// `true` 的驱动（PostgreSQL：一条连接绑定一个数据库，`information_schema` 只看得到当前库）：
+    /// 展开服务器上**别的库**时，上层要另开一条连到那个库的连接 —— 见
+    /// `ConnectionManager::get_scoped_connection`。
+    ///
+    /// `false`（默认）的驱动一条连接就能看全所有 catalog：MySQL（catalog = database，
+    /// `information_schema` 跨库可见）、SQLite / DuckDB（单库）。它们不会走跨库那条路。
+    fn catalog_is_connection_scoped(&self) -> bool {
+        false
+    }
+
+    /// 这条连接**当前绑的库**（只有 [`catalog_is_connection_scoped`] 为真时有意义）。
+    ///
+    /// 用途：区分「展开的是不是自己这个库」—— 是就用主连接，不是才另开（少一条连接）。
+    /// 默认 `None` = 不适用。
+    ///
+    /// [`catalog_is_connection_scoped`]: MetadataBrowser::catalog_is_connection_scoped
+    async fn current_catalog(&self) -> Option<String> {
+        None
+    }
 }
 
 /// 数据源能力描述

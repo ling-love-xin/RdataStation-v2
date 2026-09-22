@@ -22,6 +22,50 @@ impl MetadataService {
             .ok_or_else(|| CoreError::connection(ConnectionError::not_found(conn_id)))
     }
 
+    /// 取「能访问该 catalog 的连接」。
+    ///
+    /// 两种情况：
+    /// * **一条连接覆盖全部 catalog 的驱动**（MySQL：catalog = database；SQLite / DuckDB：单库）
+    ///   → 直接用主连接（`catalog_is_connection_scoped()` 为假，这里什么都不做）；
+    /// * **PostgreSQL**：一条连接只绑一个库 → 展开别的库时向管理器要一条**连到那个库**的连接
+    ///   （按需建、按 `(conn_id, 库名)` 缓存复用、主连接断开时一起关掉）。
+    ///
+    /// 「是不是自己那个库」由驱动给的 `current_catalog()` 判断（每个连接只查一次，结果缓存在
+    /// 管理器里）—— 是自己的库就用主连接，省掉一条连接。
+    ///
+    /// 为什么不让数据库自行切换（`SET search_path` / `CONNECT` 之类）：PG 的跨库是**连接级**
+    /// 的（一条连接只能在一个库里查），换库只能另开连接；而 `dblink` / `postgres_fdw` 那类
+    /// 要服务端装扩展，不是默认能力 —— 不引。
+    async fn database_for(&self, conn_id: &str, catalog: &str) -> Result<DynDatabase, CoreError> {
+        let db = self.get_database(conn_id).await?;
+        if catalog.is_empty() {
+            return Ok(db);
+        }
+        let Some(browser) = db.as_metadata_browser() else {
+            // 没有浏览器（桥接驱动）的对象内省本来就走 list_* 回退，不涉及跨库
+            return Ok(db);
+        };
+        if !browser.catalog_is_connection_scoped() {
+            return Ok(db);
+        }
+
+        let key = conn_id.to_string();
+        let current = match self.manager.cached_current_catalog(&key).await {
+            Some(known) => Some(known),
+            None => {
+                let probed = browser.current_catalog().await;
+                if let Some(name) = probed.as_deref() {
+                    self.manager.remember_current_catalog(&key, name).await;
+                }
+                probed
+            }
+        };
+        if current.as_deref() == Some(catalog) {
+            return Ok(db);
+        }
+        self.manager.get_scoped_connection(&key, catalog).await
+    }
+
     pub async fn list_catalogs(&self, conn_id: &str) -> Result<Vec<String>, CoreError> {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
@@ -47,7 +91,7 @@ impl MetadataService {
         conn_id: &str,
         catalog: &str,
     ) -> Result<Vec<String>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_schemas(catalog).await?;
             return Ok(nodes.into_iter().map(|n| n.name).collect());
@@ -65,7 +109,7 @@ impl MetadataService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             return browser.get_tables(catalog, schema).await;
         }
@@ -79,7 +123,7 @@ impl MetadataService {
         schema: &str,
         table: &str,
     ) -> Result<Vec<ColumnDetail>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let detail = browser.get_table_detail(catalog, schema, table).await?;
             return Ok(detail.columns);
@@ -94,7 +138,7 @@ impl MetadataService {
         schema: &str,
         table: &str,
     ) -> Result<Vec<IndexDetail>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             return browser.get_indexes(catalog, schema, table).await;
         }
@@ -108,7 +152,7 @@ impl MetadataService {
         schema: &str,
         table: &str,
     ) -> Result<Vec<ConstraintDetail>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             return browser.get_constraints(catalog, schema, table).await;
         }
@@ -121,7 +165,7 @@ impl MetadataService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         db.list_procedures(catalog, Some(schema)).await
     }
 
@@ -131,7 +175,7 @@ impl MetadataService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         db.list_functions(catalog, Some(schema)).await
     }
 
@@ -141,7 +185,7 @@ impl MetadataService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_sequences(catalog, schema).await?;
             if !nodes.is_empty() {
@@ -160,7 +204,7 @@ impl MetadataService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NodeInfo>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_triggers(catalog, schema).await?;
             if !nodes.is_empty() {
@@ -179,7 +223,7 @@ impl MetadataService {
         name: &str,
         kind: SchemaObjectKind,
     ) -> Result<Option<String>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         db.get_routine_source(catalog, Some(schema), name, kind)
             .await
     }
@@ -195,7 +239,7 @@ impl MetadataService {
         schema: &str,
         table: &str,
     ) -> Result<Option<String>, CoreError> {
-        let db = self.get_database(conn_id).await?;
+        let db = self.database_for(conn_id, catalog).await?;
         db.get_table_ddl(catalog, Some(schema), table).await
     }
 }

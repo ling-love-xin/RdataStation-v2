@@ -136,6 +136,19 @@ pub struct ConnectionManager {
     transactions: tokio::sync::Mutex<HashMap<ConnId, ActiveTransaction>>,
     /// 空闲超时时间（默认 30 分钟）
     idle_timeout: tokio::sync::RwLock<Duration>,
+    /// **按库另开**的连接（PG 的跨库浏览）：键 = (主连接 id, 库名)。
+    ///
+    /// 为什么不进 `connections`：那是**用户可见的连接表**（`get_all_connection_info` 喂连接面板
+    /// 与状态栏），跨库连接是派生物 —— 混进去用户会看到一堆自己没建过的连接。
+    /// 它的生命周期绑在主连接上：主连接断开 / 移除时一起关掉（见 `drop_scoped_connections`）。
+    scoped: tokio::sync::RwLock<HashMap<(ConnId, String), DynDatabase>>,
+    /// 「主连接当前绑哪个库」的缓存（[`MetadataBrowser::current_catalog`] 的结果）。
+    ///
+    /// 只为一件事：判断「要展开的是不是自己这个库」——是就用主连接，不是才另开一条。
+    /// 每个连接至多查一次（PG 上那是一次 `SELECT current_database()`）。
+    ///
+    /// [`MetadataBrowser::current_catalog`]: crate::driver::traits::MetadataBrowser::current_catalog
+    current_catalog: tokio::sync::RwLock<HashMap<ConnId, String>>,
 }
 
 /// 一个活动事务（事务对象 + 开始时刻）
@@ -168,6 +181,8 @@ impl ConnectionManager {
             cancel_tokens: tokio::sync::RwLock::new(HashMap::new()),
             transactions: tokio::sync::Mutex::new(HashMap::new()),
             idle_timeout: tokio::sync::RwLock::new(Duration::from_secs(30 * 60)),
+            scoped: tokio::sync::RwLock::new(HashMap::new()),
+            current_catalog: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -380,6 +395,104 @@ impl ConnectionManager {
     /// # Arguments
     ///
     /// * `conn_id` - 要移除的连接 ID
+    /// 取（或按需建）一条**连到指定库**的连接。
+    ///
+    /// ## 谁需要它
+    ///
+    /// `MetadataBrowser::catalog_is_connection_scoped()` 为真的驱动 —— 目前只有 PostgreSQL：
+    /// 一条连接绑定一个数据库，`information_schema` 只看得到当前库。展开服务器上**别的库**
+    /// 时要有一条连到那个库的连接（DBeaver 也是这个做法）。
+    ///
+    /// ## 建连接的方式
+    ///
+    /// 用**主连接那份完整 URL 只换库名**（`utils::with_database_in_url`），不重建 URL ——
+    /// 重建会丢掉 `url_override` 里的连接参数（LAN 直连注入的 `sslmode=disable`、
+    /// `application_name`、字符集…），于是跨库连接与主连接行为不一致（连不上 / TLS 行为不同），
+    /// 那种不一致排查起来极隐蔽。
+    ///
+    /// 失败（URL 不是可换库名的形态 / 目标库不允许连接 / 认证不足）**如实报错**，
+    /// 由上层显示在那个节点上 —— 不静默回退成「用主连接查」（那会给出别的库的数据）。
+    pub async fn get_scoped_connection(
+        &self,
+        conn_id: &ConnId,
+        database: &str,
+    ) -> Result<DynDatabase, CoreError> {
+        let key = (conn_id.clone(), database.to_string());
+        if let Some(db) = self.scoped.read().await.get(&key) {
+            return Ok(db.clone());
+        }
+
+        let config = self.get_connection_config(conn_id).await.ok_or_else(|| {
+            CoreError::connection(ConnectionError::InvalidConfig {
+                conn_id: conn_id.clone(),
+                reason: format!("跨库内省需要基础连接的配置，但 {conn_id} 没有"),
+            })
+        })?;
+
+        // URL 形态：只换 path 段；没有 url_override 时才退回「改 database 字段重建」
+        let url = match config.url_override.as_deref() {
+            Some(url) => crate::driver::utils::with_database_in_url(url, database).ok_or_else(
+                || {
+                    CoreError::connection(ConnectionError::InvalidConfig {
+                        conn_id: conn_id.clone(),
+                        reason: format!("这条连接串不支持换库名（不是 URL 形式）：{url}"),
+                    })
+                },
+            )?,
+            None => {
+                let mut rebuilt = config.clone();
+                rebuilt.database = Some(database.to_string());
+                crate::driver::utils::build_connection_url(&rebuilt)?
+            }
+        };
+
+        let mut scoped_config = config.clone();
+        scoped_config.database = Some(database.to_string());
+        scoped_config.url_override = Some(url);
+        scoped_config.name = Some(format!(
+            "{} · {}",
+            config.name.clone().unwrap_or_else(|| conn_id.clone()),
+            database
+        ));
+
+        let factory = crate::driver::DriverRegistry::get(&scoped_config.driver).ok_or_else(|| {
+            CoreError::database(DatabaseError::DriverNotFound {
+                db_type: scoped_config.driver.clone(),
+            })
+        })?;
+        let db: DynDatabase = factory.create(scoped_config).await?;
+        self.scoped.write().await.insert(key, db.clone());
+        tracing::info!(conn_id = %conn_id, database = %database, "跨库浏览：已另开一条连到该库的连接");
+        Ok(db)
+    }
+
+    /// 读「主连接当前绑的库」的缓存（没缓存过 = `None`，由调用方查一次再写回）。
+    pub async fn cached_current_catalog(&self, conn_id: &ConnId) -> Option<String> {
+        self.current_catalog.read().await.get(conn_id).cloned()
+    }
+
+    /// 记下「主连接当前绑的库」。
+    pub async fn remember_current_catalog(&self, conn_id: &ConnId, database: &str) {
+        self.current_catalog
+            .write()
+            .await
+            .insert(conn_id.clone(), database.to_string());
+    }
+
+    /// 关掉某条主连接的**全部**跨库连接（主连接断开 / 移除时调用）。
+    async fn drop_scoped_connections(&self, conn_id: &ConnId) {
+        let dropped = {
+            let mut scoped = self.scoped.write().await;
+            let before = scoped.len();
+            scoped.retain(|(base, _), _| base != conn_id);
+            before - scoped.len()
+        };
+        self.current_catalog.write().await.remove(conn_id);
+        if dropped > 0 {
+            tracing::info!(conn_id = %conn_id, dropped, "主连接已断开：跨库连接一并关掉");
+        }
+    }
+
     pub async fn remove_connection(&self, conn_id: &ConnId) {
         let mut connections = self.connections.write().await;
         let mut conn_info = self.connection_info.write().await;
@@ -390,6 +503,8 @@ impl ConnectionManager {
         conn_info.remove(conn_id);
         conn_configs.remove(conn_id);
         access.remove(conn_id);
+        // 跨库连接是这条连接的派生物：主连接没了，它们也不该留着
+        self.drop_scoped_connections(conn_id).await;
 
         // 如果移除的是活动连接，清空活动连接
         let mut active_conn = self.active_conn_id.write().await;
@@ -474,6 +589,8 @@ impl ConnectionManager {
         conn_info.clear();
         conn_configs.clear();
         access.clear();
+        self.scoped.write().await.clear();
+        self.current_catalog.write().await.clear();
 
         let mut active_conn = self.active_conn_id.write().await;
         *active_conn = None;

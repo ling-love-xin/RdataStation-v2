@@ -1039,12 +1039,28 @@ impl Drop for PostgresNativeTransaction {
 
 #[async_trait::async_trait]
 impl MetadataBrowser for PostgresNativeDatabase {
+    /// 列出**服务器上所有可连接的库**（同 sqlx 驱动）。
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
-        // 同 sqlx 驱动：一条连接只绑定一个库，只返回当前库（避免假节点）。
-        let result = self
-            .query("SELECT current_database()::text AS datname")
-            .await?;
+        let result = self.query(crate::driver::utils::PG_LIST_CATALOGS_SQL).await?;
         Ok(rows_to_node_info(&result, SchemaObjectKind::Catalog))
+    }
+
+    /// PG 一条连接只绑一个库：展开别的库要另开连接。
+    fn catalog_is_connection_scoped(&self) -> bool {
+        true
+    }
+
+    /// 这条连接绑的库（上层只查一次，之后走缓存）。
+    async fn current_catalog(&self) -> Option<String> {
+        let result = self
+            .query(crate::driver::utils::PG_CURRENT_DATABASE_SQL)
+            .await
+            .ok()?;
+        crate::driver::utils::batch_to_string_rows(&result)
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .filter(|name| !name.is_empty())
     }
 
     /// 一条连接只绑一个库，schema 内省只在当前库里做 —— 所以 `catalog` 参数**不用**

@@ -807,17 +807,35 @@ fn postgres_rows_to_arrow(
 
 #[async_trait::async_trait]
 impl crate::driver::MetadataBrowser for PostgresDatabase {
+    /// 列出**服务器上所有可连接的库**。
+    ///
+    /// 别的库里的对象要另开一条连到那个库的连接才看得到 —— 跨库这件事由
+    /// `ConnectionManager::get_scoped_connection` 承担（`catalog_is_connection_scoped`
+    /// 为真时上层才会去要）。
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        // PostgreSQL 一条连接只绑定一个数据库：`information_schema` 仅暴露**当前库**的
-        // schema / 表，列出其它库只会得到无法展开的假节点。因此只返回当前库；
-        // 跨库浏览（DBeaver 式：展开时另开一条连接）留待后续。
-        let result = self
-            .query("SELECT current_database()::text AS datname")
-            .await?;
+        let result = self.query(crate::driver::utils::PG_LIST_CATALOGS_SQL).await?;
         Ok(rows_to_node_info(
             &result,
             crate::driver::SchemaObjectKind::Catalog,
         ))
+    }
+
+    /// PG 一条连接只绑一个库：展开别的库要另开连接。
+    fn catalog_is_connection_scoped(&self) -> bool {
+        true
+    }
+
+    /// 这条连接绑的库（上层只查一次，之后走缓存）。
+    async fn current_catalog(&self) -> Option<String> {
+        let result = self
+            .query(crate::driver::utils::PG_CURRENT_DATABASE_SQL)
+            .await
+            .ok()?;
+        crate::driver::utils::batch_to_string_rows(&result)
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .filter(|name| !name.is_empty())
     }
 
     /// 一条连接只绑一个库，schema 内省只在当前库里做 —— 所以 `catalog` 参数**不用**
