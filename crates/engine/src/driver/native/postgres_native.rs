@@ -17,8 +17,9 @@ use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{
-    affected_rows_result, batch_to_string_rows, byte_offset_for_char, pg_constraint_kind,
-    pg_fk_action, returns_rows, split_csv, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL,
+    affected_rows_result, batch_to_string_rows, byte_offset_for_char,
+    is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
+    split_csv, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
 };
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
@@ -193,13 +194,9 @@ fn tls_config_err(reason: String) -> CoreError {
 // SQL 工具函数
 // ============================================================================
 
+/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
-    let sql_upper = sql.trim_start().to_uppercase();
-    sql_upper.starts_with("SELECT")
-        || sql_upper.starts_with("SHOW")
-        || sql_upper.starts_with("DESCRIBE")
-        || sql_upper.starts_with("EXPLAIN")
-        || sql_upper.starts_with("SET")
+    shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
 
 /// 写语句（不返回行）走 `Client::execute`，拿**真实影响行数**（B5 / P0.6）
@@ -486,15 +483,17 @@ fn postgres_native_rows_to_arrow(
 // 辅助函数
 // ============================================================================
 
+/// 把查询结果装进 `QueryResult`（`is_read_only` 如实填，理由见 sqlx 那份）。
 fn build_query_result(
     columns: &[String],
     rows: &[tokio_postgres::Row],
-    _is_read_only: bool,
+    is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     let batch = postgres_native_rows_to_arrow(columns, rows)?;
     Ok(QueryResult {
         columns: columns.to_vec(),
         batches: vec![batch],
+        is_read_only: Some(is_read_only),
         ..Default::default()
     })
 }

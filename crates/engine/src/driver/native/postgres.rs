@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
 use crate::driver::utils::{
-    affected_rows_result, batch_to_string_rows, byte_offset_for_char, pg_constraint_kind,
-    pg_fk_action, returns_rows, split_csv, sqlx_value_is_null, PG_LIST_CONSTRAINTS_SQL,
-    PG_LIST_INDEXES_SQL,
+    affected_rows_result, batch_to_string_rows, byte_offset_for_char,
+    is_read_only_sql as shared_is_read_only_sql, pg_constraint_kind, pg_fk_action, returns_rows,
+    split_csv, sqlx_value_is_null, PG_LIST_CONSTRAINTS_SQL, PG_LIST_INDEXES_SQL, SqlFlavor,
 };
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, PoolStatus,
@@ -90,24 +90,26 @@ impl PostgresDatabase {
     }
 }
 
+/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
-    let sql_upper = sql.trim_start().to_uppercase();
-    sql_upper.starts_with("SELECT")
-        || sql_upper.starts_with("SHOW")
-        || sql_upper.starts_with("DESCRIBE")
-        || sql_upper.starts_with("EXPLAIN")
-        || sql_upper.starts_with("SET")
+    shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
 
+/// 把查询结果装进 `QueryResult`。
+///
+/// `is_read_only` 要**真的填进去**：出口层（`SqlService` 的历史记录）据它决定这行结论
+/// 该记 `rows_returned` 还是 `rows_affected`。此前这个参数带下划线、值被丢掉，
+/// 查询结果的 `is_read_only` 一律是 `None`——结论算出来了，没人用。
 fn build_query_result(
     columns: &[String],
     rows: &[sqlx::postgres::PgRow],
-    _is_read_only: bool,
+    is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     let batch = postgres_rows_to_arrow(columns, rows)?;
     Ok(QueryResult {
         columns: columns.to_vec(),
         batches: vec![batch],
+        is_read_only: Some(is_read_only),
         ..Default::default()
     })
 }

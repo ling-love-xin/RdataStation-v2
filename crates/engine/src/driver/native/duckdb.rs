@@ -15,7 +15,9 @@ use arrow::array::StringArray;
 use duckdb::{AccessMode, Config, Connection};
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows};
+use crate::driver::utils::{
+    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
+};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, Transaction,
 };
@@ -370,13 +372,9 @@ fn parse_duckdb_list(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
-    let sql_upper = sql.trim_start().to_uppercase();
-    sql_upper.starts_with("SELECT")
-        || sql_upper.starts_with("SHOW")
-        || sql_upper.starts_with("DESCRIBE")
-        || sql_upper.starts_with("EXPLAIN")
-        || sql_upper.starts_with("PRAGMA")
+    shared_is_read_only_sql(sql, SqlFlavor::DuckDb)
 }
 
 /// 写语句（不返回行）走 `Statement::execute`，拿**真实影响行数**（B5 / P0.6）
@@ -1121,10 +1119,9 @@ impl Transaction for DuckDbTransaction {
             Vec::new()
         };
 
-        let sql_upper = sql.trim_start().to_uppercase();
-        let is_read_only = sql_upper.starts_with("SELECT")
-            || sql_upper.starts_with("SHOW")
-            || sql_upper.starts_with("DESCRIBE");
+        // 与其它路径同一口径：这里的旧写法还漏了 EXPLAIN / PRAGMA（同一条查询在
+        // `query` 与事务两条路上会被判成不同的东西）。
+        let is_read_only = is_read_only_sql(sql);
         let row_count = row_data.len();
 
         let batch = if row_count > 0 {

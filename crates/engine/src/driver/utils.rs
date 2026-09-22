@@ -825,6 +825,60 @@ pub fn returns_rows(sql: &str) -> bool {
     ROW_KEYWORDS.contains(&first_keyword(sql).as_str()) || has_returning_clause(sql)
 }
 
+/// SQL 方言族（只用于 [`is_read_only_sql`] 的口径表）。
+///
+/// 与 `SqlDialect`（语句解析的方言）不是一回事：那个决定「怎么切分 / 怎么归类语句」，
+/// 这个只回答「这个驱动认哪些只读前缀」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlFlavor {
+    /// SQLite（rusqlite）。
+    Sqlite,
+    /// DuckDB（duckdb-rs）。
+    DuckDb,
+    /// MySQL（sqlx 与 mysql_async 两条路径同族）。
+    MySql,
+    /// PostgreSQL（sqlx 与 pg_wire 两条路径同族）。
+    PostgreSql,
+}
+
+/// 语句是否只读（不改数据）。
+///
+/// ## 为什么要有这一份
+///
+/// `!is_read_only && !returns_rows(sql)` 决定一条语句走哪条路：`execute`（写路径，
+/// 拿真实影响行数）还是 `query`（取结果集）。判定错一格的后果不是报错，而是**行为悄悄变**：
+/// `SET` 被当写语句执行会「影响 0 行」、`PRAGMA` 被当写语句执行会丢掉结果集。
+///
+/// 此前六个驱动各写一份、四种口径（见 `columns_from_detail_rows` 的注释）；
+/// 抄到后来还漏过前缀——DuckDB 的直连路径少算了 `EXPLAIN` / `PRAGMA`。
+/// 差异本身是**方言事实**而不是笔误，所以这里保留差异、只合并实现：
+/// 四种口径并排，谁多了什么一眼看清。
+///
+/// ## 口径
+///
+/// * `select`：四家都算（`with` / `values` / `table` 由 [`returns_rows`] 认，不必列此）；
+/// * `show` / `describe` / `desc`：MySQL / PG 的元信息语句，SQLite 没有；
+/// * `explain`：四家都有；
+/// * `pragma`：SQLite / DuckDB 的查询式语句（MySQL / PG 的对应物是 `SET`，见下）；
+/// * `set`：MySQL / PG 的会话设置——**不改数据但不返回行**，少了它就会被当写语句执行。
+///
+/// 认**首个关键字**（跳过前置注释与空白，与 [`returns_rows`] 同一口径）：老实现走
+/// `sql.trim_start().starts_with(..)`，`-- 注释\nSET ...` 会被判成写语句。
+pub fn is_read_only_sql(sql: &str, flavor: SqlFlavor) -> bool {
+    let head = first_keyword(sql);
+    match flavor {
+        SqlFlavor::Sqlite => matches!(head.as_str(), "select" | "pragma" | "explain"),
+        SqlFlavor::DuckDb => matches!(
+            head.as_str(),
+            "select" | "show" | "describe" | "desc" | "explain" | "pragma"
+        ),
+        SqlFlavor::MySql | SqlFlavor::PostgreSql => matches!(
+            head.as_str(),
+            "select" | "show" | "describe" | "desc" | "explain" | "set"
+        ),
+    }
+}
+
 /// 能不能被包进 `SELECT * FROM ( … ) AS 别名` 里去（分段抓取的窗口包装）
 ///
 /// 分段抓取靠“把原句套成子查询 + LIMIT/OFFSET”取数（见 `SqlService::window_sql`）。
@@ -1051,5 +1105,51 @@ mod url_database_tests {
             Some("a/b"),
             "写进去时的编码要能读回来"
         );
+    }
+
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{is_read_only_sql, SqlFlavor};
+
+    /// 只读口径：四种方言并排钉住。
+    ///
+    /// 这些差异是**方言事实**（SQLite 没有 `SHOW` / `DESCRIBE`；`SET` 只有 MySQL / PG 有；
+    /// `PRAGMA` 是 SQLite / DuckDB 的查询式语句），所以合表是错的、必须逐族断言。
+    /// 判错的后果不是报错而是行为悄悄变：`SET` 走写路径会「影响 0 行」、
+    /// `PRAGMA` 走写路径会丢掉结果集。
+    #[test]
+    fn read_only_prefixes_are_per_flavor() {
+        const ALL: [SqlFlavor; 4] = [
+            SqlFlavor::Sqlite,
+            SqlFlavor::DuckDb,
+            SqlFlavor::MySql,
+            SqlFlavor::PostgreSql,
+        ];
+        // 四家都算只读：查询本身与 `EXPLAIN`。
+        for flavor in ALL {
+            assert!(is_read_only_sql("SELECT 1", flavor), "{flavor:?} 认 SELECT");
+            assert!(is_read_only_sql("  explain select 1", flavor), "{flavor:?} 认 EXPLAIN");
+            assert!(
+                !is_read_only_sql("INSERT INTO t VALUES (1)", flavor),
+                "{flavor:?} 不该把 INSERT 当只读"
+            );
+        }
+        // 方言差异。
+        assert!(is_read_only_sql("SHOW TABLES", SqlFlavor::MySql));
+        assert!(is_read_only_sql("DESCRIBE t", SqlFlavor::PostgreSql));
+        assert!(!is_read_only_sql("SHOW TABLES", SqlFlavor::Sqlite));
+        assert!(!is_read_only_sql("SET search_path TO public", SqlFlavor::Sqlite));
+        assert!(is_read_only_sql("SET search_path TO public", SqlFlavor::PostgreSql));
+        assert!(is_read_only_sql("SET @x = 1", SqlFlavor::MySql));
+        assert!(is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::Sqlite));
+        assert!(is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::DuckDb));
+        assert!(!is_read_only_sql("PRAGMA table_info(t)", SqlFlavor::PostgreSql));
+        // 前置注释要跳过（与 `returns_rows` 同一口径；老写法在这里会判成写语句）。
+        assert!(is_read_only_sql("-- 找个人\nSELECT 1", SqlFlavor::PostgreSql));
+        assert!(is_read_only_sql("/* 注释 */ set search_path to public", SqlFlavor::MySql));
+        // 只有注释：认不出语句，按「不是只读」算（交给 `returns_rows` 与驱动自己报错）。
+        assert!(!is_read_only_sql("-- 半句话", SqlFlavor::PostgreSql));
     }
 }

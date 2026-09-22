@@ -13,7 +13,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows};
+use crate::driver::utils::{
+    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, returns_rows, SqlFlavor,
+};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObjectKind, Transaction,
@@ -202,13 +204,9 @@ impl MySqlNativeDatabase {
 // SQL 工具函数
 // ============================================================================
 
+/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
-    let sql_upper = sql.trim_start().to_uppercase();
-    sql_upper.starts_with("SELECT")
-        || sql_upper.starts_with("SHOW")
-        || sql_upper.starts_with("DESCRIBE")
-        || sql_upper.starts_with("EXPLAIN")
-        || sql_upper.starts_with("SET")
+    shared_is_read_only_sql(sql, SqlFlavor::MySql)
 }
 
 /// 写语句（不返回行）跑 `exec_drop`，再从连接上读**真实影响行数**（B5 / P0.6）
@@ -436,15 +434,17 @@ fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind) -> Vec<NodeIn
 // build_query_result 辅助函数
 // ============================================================================
 
+/// 把查询结果装进 `QueryResult`（`is_read_only` 如实填，理由见 sqlx 那份）。
 fn build_query_result(
     columns: &[String],
     rows: &[mysql_async::Row],
-    _is_read_only: bool,
+    is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     if rows.is_empty() {
         return Ok(QueryResult {
             columns: columns.to_vec(),
             batches: vec![],
+            is_read_only: Some(is_read_only),
             ..Default::default()
         });
     }
@@ -452,6 +452,7 @@ fn build_query_result(
     Ok(QueryResult {
         columns: columns.to_vec(),
         batches: vec![batch],
+        is_read_only: Some(is_read_only),
         ..Default::default()
     })
 }

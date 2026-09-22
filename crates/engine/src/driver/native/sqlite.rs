@@ -16,7 +16,10 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
-use crate::driver::utils::{affected_rows_result, quote_identifier, returns_rows};
+use crate::driver::utils::{
+    affected_rows_result, is_read_only_sql as shared_is_read_only_sql, quote_identifier,
+    returns_rows, SqlFlavor,
+};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, ForeignKeyRef, IndexDetail, Transaction,
 };
@@ -406,11 +409,9 @@ fn pragma_err(key: &str, sql: &str, reason: String) -> CoreError {
     })
 }
 
+/// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
-    let sql_upper = sql.trim_start().to_uppercase();
-    sql_upper.starts_with("SELECT")
-        || sql_upper.starts_with("PRAGMA")
-        || sql_upper.starts_with("EXPLAIN")
+    shared_is_read_only_sql(sql, SqlFlavor::Sqlite)
 }
 
 /// rusqlite 错误 → 引擎错误
@@ -548,7 +549,8 @@ impl Database for SqliteDatabase {
                 row_data.push(values);
             }
 
-            let _is_read_only = is_read_only_sql(&sql_owned);
+            // `is_read_only` 如实填（出口层的历史记录据它分「返回行」与「影响行」）。
+            let is_read_only = is_read_only_sql(&sql_owned);
             let row_count = row_data.len();
 
             let batch = if row_count > 0 {
@@ -557,6 +559,7 @@ impl Database for SqliteDatabase {
                 return Ok(QueryResult {
                     columns,
                     batches: vec![],
+                    is_read_only: Some(is_read_only),
                     ..Default::default()
                 });
             };
@@ -564,6 +567,7 @@ impl Database for SqliteDatabase {
             Ok(QueryResult {
                 columns,
                 batches: vec![batch],
+                is_read_only: Some(is_read_only),
                 ..Default::default()
             })
         })
@@ -620,7 +624,8 @@ impl Database for SqliteDatabase {
                     row_data.push(values);
                 }
 
-                let _is_read_only = is_read_only_sql(&sql_owned);
+                // `is_read_only` 如实填（出口层的历史记录据它分「返回行」与「影响行」）。
+                let is_read_only = is_read_only_sql(&sql_owned);
                 let row_count = row_data.len();
 
                 let batch = if row_count > 0 {
@@ -629,6 +634,7 @@ impl Database for SqliteDatabase {
                     return Ok(QueryResult {
                         columns,
                         batches: vec![],
+                        is_read_only: Some(is_read_only),
                         ..Default::default()
                     });
                 };
@@ -636,6 +642,7 @@ impl Database for SqliteDatabase {
                 Ok(QueryResult {
                     columns,
                     batches: vec![batch],
+                    is_read_only: Some(is_read_only),
                     ..Default::default()
                 })
             }) => {
