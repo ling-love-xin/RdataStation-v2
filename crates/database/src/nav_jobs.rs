@@ -78,6 +78,25 @@ pub const PREFETCH_BATCH: usize = 20;
 /// 就长一页；若各用各的常量，要么取回 200 条只能显示一半，要么“加载更多”永远按不完。
 pub const PAGE_SIZE: usize = workbench_shell::ui::NAV_FOLDER_PAGE_SIZE;
 
+/// 单个导航任务的**内省超时**。
+///
+/// 为什么必须有：worker 是**单线程串行**，一条永不返回的内省（服务端锁等待 / 半开的 TCP /
+/// 被长事务挡住的 `pg_attribute`）会让后面所有展开排队等它 —— 界面看着就是「卡住」，
+/// 而 worker 其实活着（与 panic 那一路不同）。超时只结束**等待**：sqlx 的查询无法取消，
+/// 那条连接要等服务端返回才回到池里，但队列能继续走、界面能拿到一条可读的错误。
+///
+/// 取值：与 sqlx 池默认的 `acquire_timeout`（30 s）同量级。正常内省都在毫秒级
+/// （真机：PG 61 列 13-48 ms、MySQL 51 列 43 ms），只有真出事才会撞上。
+pub const JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 超时错误的文案（界面直接显示这一句）。
+fn timeout_error(what: &str) -> String {
+    format!(
+        "{what}超时（{} 秒未返回）：可以重试；若反复超时，检查服务端是否有长事务 / 锁等待",
+        JOB_TIMEOUT.as_secs()
+    )
+}
+
 /// 单个连接在一次搜索里最多返回多少条命中（跨连接累加前先各自封顶）。
 pub const SEARCH_LIMIT_PER_CONN: usize = 50;
 
@@ -613,9 +632,17 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 },
                 None => (offset, None),
             };
-            let result = rt
-                .block_on(svc.load_children_page(&conn_id, &path, offset, limit))
-                .map_err(|e| e.to_string());
+            let outcome = rt.block_on(async {
+                tokio::time::timeout(
+                    JOB_TIMEOUT,
+                    svc.load_children_page(&conn_id, &path, offset, limit),
+                )
+                .await
+            });
+            let result = match outcome {
+                Ok(page) => page.map_err(|e| e.to_string()),
+                Err(_) => Err(timeout_error("加载子节点")),
+            };
             lock(&shared().load_results).push(LoadResult {
                 key,
                 conn_id,
@@ -634,14 +661,17 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             db_type,
         } => {
             let svc = service(None);
-            let result = rt
-                .block_on(svc.load_properties(
-                    &property,
-                    &conn_label,
-                    &driver,
-                    db_type.as_deref(),
-                ))
-                .map_err(|e| e.to_string());
+            let outcome = rt.block_on(async {
+                tokio::time::timeout(
+                    JOB_TIMEOUT,
+                    svc.load_properties(&property, &conn_label, &driver, db_type.as_deref()),
+                )
+                .await
+            });
+            let result = match outcome {
+                Ok(props) => props.map_err(|e| e.to_string()),
+                Err(_) => Err(timeout_error("加载对象属性")),
+            };
             lock(&shared().props_results).push(PropsResult { key, result });
         }
         Job::Warm {
@@ -673,7 +703,17 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 .map(|t| (t.catalog, t.schema, t.table))
                 .collect();
             // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。
-            let _ = rt.block_on(svc.prefetch_columns(&conn_id, &tuples));
+            // 预取是**尽力而为**：超时只记一条 warn（它不该占住队列）。
+            let prefetched = rt.block_on(async {
+                tokio::time::timeout(JOB_TIMEOUT, svc.prefetch_columns(&conn_id, &tuples)).await
+            });
+            if prefetched.is_err() {
+                tracing::warn!(
+                    conn_id = %conn_id,
+                    tables = tuples.len(),
+                    "列预取超时（已放弃这一批；不影响导航本身的加载）"
+                );
+            }
         }
         Job::GenerateDml {
             key,
@@ -687,18 +727,21 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
         } => {
             let svc = service(project_root);
             let result = rt.block_on(async {
-                // 列走导航同一套 cache-aside（命中 L2 不发查询）。
-                let nodes = svc
-                    .load_children(
+                // 列走导航同一套 cache-aside（命中 L2 不发查询）；取列那次 I/O 包超时。
+                let nodes = tokio::time::timeout(
+                    JOB_TIMEOUT,
+                    svc.load_children(
                         &conn_id,
                         &NavPath::Table {
                             catalog,
                             schema,
                             table,
                         },
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    ),
+                )
+                .await
+                .map_err(|_| timeout_error("生成 SQL 时取列"))?
+                .map_err(|e| e.to_string())?;
                 let columns: Vec<crate::sql_gen::DmlColumn> = nodes
                     .iter()
                     .filter_map(|n| match &n.kind {

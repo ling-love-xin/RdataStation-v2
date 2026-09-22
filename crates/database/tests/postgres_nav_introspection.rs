@@ -77,12 +77,14 @@ async fn nav_introspection_cases(driver: &str) {
     let db = manager.get_connection(&key).await.expect("取连接");
     let svc = MetadataService::new(Arc::clone(&manager));
 
-    let schema_a = format!("{STEM}_a");
-    let schema_b = format!("{STEM}_b");
+    // 每个驱动一套自己的对象名：两条用例并行跑，同名对象会被对方 DROP / CREATE 掉
+    let stem = format!("{STEM}_{driver}");
+    let schema_a = format!("{stem}_a");
+    let schema_b = format!("{stem}_b");
     let dup = "dup"; // 两个 schema 下同名
-    let matview = format!("{STEM}_mv");
-    let part = format!("{STEM}_part");
-    let part_child = format!("{STEM}_part_2026");
+    let matview = format!("{stem}_mv");
+    let part = format!("{stem}_part");
+    let part_child = format!("{stem}_part_2026");
 
     // 清场（上一次跑崩了也要能重跑）
     for sql in [
