@@ -236,6 +236,15 @@ enum Job {
         qualified: String,
         kind: DmlKind,
     },
+    /// 只给测试用：投一个**必定 panic** 的任务，验证 worker 会把它隔离掉
+    /// （以前一次 panic 会让整个导航加载永久卡死）。
+    #[cfg(test)]
+    PanicForTest {
+        key: String,
+        conn_id: String,
+        project_root: Option<String>,
+        path: NavPath,
+    },
     /// 右键「测试连接」：独立会话探测，结果回传主线程。
     ///
     /// `probe` 由视图从宿主取（[`ConnectionProbe`]）：它是**函数指针**，故可随任务跨线程；
@@ -250,7 +259,11 @@ enum Job {
 
 /// 共享状态：任务队列 + 进度 + 结果队列。
 struct Shared {
-    tx: Sender<Job>,
+    /// 发件端。**包一层 `Mutex`**：worker 线程一旦退出（panic / 异常返回），
+    /// 通道就废了 —— 那时要换一条新通道并把发件端替换掉（见 [`restart_worker`]）。
+    tx: Mutex<Sender<Job>>,
+    /// worker 是否活着。投递前先看它：不活就先重启。
+    worker_alive: AtomicBool,
     // 预热进度 / 取消
     warm_active: AtomicBool,
     warm_done: AtomicUsize,
@@ -286,14 +299,10 @@ static JOBS: OnceLock<Shared> = OnceLock::new();
 fn shared() -> &'static Shared {
     JOBS.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
-        std::thread::Builder::new()
-            .name("rds-nav-jobs".to_string())
-            // 驱动内省在 debug 下递归较深，给足栈避免溢出。
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || worker(rx))
-            .expect("failed to spawn nav jobs worker");
+        spawn_worker(rx);
         Shared {
-            tx,
+            tx: Mutex::new(tx),
+            worker_alive: AtomicBool::new(true),
             warm_active: AtomicBool::new(false),
             warm_done: AtomicUsize::new(0),
             warm_total: AtomicUsize::new(0),
@@ -324,220 +333,460 @@ fn service(project_root: Option<String>) -> crate::navigator_service::NavigatorS
     )
 }
 
+/// 起一个 worker 线程（`Shared` 初始化与「重启」共用）。
+///
+/// 线程退出时（正常返回 / panic）由 `Drop` 把存活标志落下 —— 下一次投递会把它重启。
+fn spawn_worker(rx: mpsc::Receiver<Job>) {
+    let spawned = std::thread::Builder::new()
+        .name("rds-nav-jobs".to_string())
+        // 驱动内省在 debug 下递归较深，给足栈避免溢出。
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            struct AliveGuard;
+            impl Drop for AliveGuard {
+                fn drop(&mut self) {
+                    shared().worker_alive.store(false, Ordering::SeqCst);
+                }
+            }
+            let _guard = AliveGuard;
+            worker(rx);
+        });
+    if let Err(e) = spawned {
+        tracing::error!(error = %e, "导航后台线程起不来：导航将只能读到缓存");
+        shared().worker_alive.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 换一条通道并把 worker 重新起起来（投递失败时走这里）。
+fn restart_worker() {
+    let s = shared();
+    let (tx, rx) = mpsc::channel::<Job>();
+    *lock(&s.tx) = tx;
+    s.worker_alive.store(true, Ordering::SeqCst);
+    spawn_worker(rx);
+    tracing::warn!("导航后台线程已重启（上一个线程已退出）");
+}
+
+/// 提交一个任务（所有 `enqueue_*` 的统一出口）。
+///
+/// 三件事保证「投出去的任务一定有回音」：
+/// 1. worker 不活 → 先重启；
+/// 2. 投递失败（通道已断）→ 重启后**重投一次**；
+/// 3. 还失败 → 按任务的凭据回填一条**可见的错误**并配平计数 ——
+///    绝不留下一个永远「加载中」的节点。
+fn submit(job: Job) {
+    let s = shared();
+    let mut job = job;
+    for attempt in 0..2 {
+        let tx = lock(&s.tx).clone();
+        match tx.send(job) {
+            Ok(()) => return,
+            Err(back) => {
+                job = back.0;
+                if attempt == 0 {
+                    restart_worker();
+                }
+            }
+        }
+    }
+    let reason = "导航后台线程不可用（已重启仍投递失败）".to_string();
+    tracing::error!(reason = %reason, "导航任务投递失败");
+    if let Some(ticket) = job.ticket() {
+        report_failure(ticket, &reason);
+    }
+    if let Some(counter) = job.counter() {
+        counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 一个任务的**失败凭据**。
+///
+/// 为什么要在执行前取出来：`run_job` 会把 `Job` 的所有权吃进去，panic 之后就再也拿不回来 ——
+/// 没有它，一次 panic 会让那个节点永远停在「加载中」（本仓真机踩到过：一个坏表把整棵树的
+/// 加载卡死）。
+enum Ticket {
+    Load {
+        key: String,
+        conn_id: String,
+        project_root: Option<String>,
+        path: NavPath,
+    },
+    Props {
+        key: String,
+    },
+    Sql {
+        key: String,
+    },
+    Test {
+        conn_id: String,
+        name: String,
+    },
+    Search {
+        consumer: SearchConsumer,
+        query: String,
+    },
+    Warm,
+}
+
+impl Job {
+    /// 这个任务回填结果需要的信息（`None` = 无结果可回填，如预取）。
+    fn ticket(&self) -> Option<Ticket> {
+        match self {
+            Job::LoadChildren {
+                conn_id,
+                project_root,
+                key,
+                path,
+                ..
+            } => Some(Ticket::Load {
+                key: key.clone(),
+                conn_id: conn_id.clone(),
+                project_root: project_root.clone(),
+                path: path.clone(),
+            }),
+            Job::LoadProperties { key, .. } => Some(Ticket::Props { key: key.clone() }),
+            Job::GenerateDml { key, .. } => Some(Ticket::Sql { key: key.clone() }),
+            Job::TestConnection { conn_id, name, .. } => Some(Ticket::Test {
+                conn_id: conn_id.clone(),
+                name: name.clone(),
+            }),
+            Job::SearchIndex { consumer, query, .. } => Some(Ticket::Search {
+                consumer: *consumer,
+                query: query.clone(),
+            }),
+            Job::Warm { .. } => Some(Ticket::Warm),
+            Job::PrefetchColumns { .. } => None,
+            #[cfg(test)]
+            Job::PanicForTest {
+                key,
+                conn_id,
+                project_root,
+                path,
+            } => Some(Ticket::Load {
+                key: key.clone(),
+                conn_id: conn_id.clone(),
+                project_root: project_root.clone(),
+                path: path.clone(),
+            }),
+        }
+    }
+
+    /// 这个任务占着哪个「未完成」计数（`None` = 不计数的任务）。
+    ///
+    /// **减一只在 worker 层做**（见 [`worker`]）：无论任务成功、失败还是 panic 都配平 ——
+    /// 之前各分支自己减，panic 那条路一断，`has_pending_*` 就永远是 true（界面永远「加载中」）。
+    fn counter(&self) -> Option<&'static AtomicUsize> {
+        match self {
+            Job::LoadChildren { .. } => Some(&shared().pending_loads),
+            Job::LoadProperties { .. } => Some(&shared().pending_props),
+            Job::GenerateDml { .. } => Some(&shared().pending_sql),
+            Job::TestConnection { .. } => Some(&shared().pending_test),
+            Job::SearchIndex { consumer, .. } => Some(&shared().pending_search[consumer.ix()]),
+            Job::Warm { .. } | Job::PrefetchColumns { .. } => None,
+            #[cfg(test)]
+            Job::PanicForTest { .. } => Some(&shared().pending_loads),
+        }
+    }
+}
+
+/// 按凭据回填一条**可见的错误**（界面据此结束「加载中」并显示原因）。
+fn report_failure(ticket: Ticket, reason: &str) {
+    let s = shared();
+    match ticket {
+        Ticket::Load {
+            key,
+            conn_id,
+            project_root,
+            path,
+        } => {
+            lock(&s.load_results).push(LoadResult {
+                key,
+                conn_id,
+                project_root,
+                path,
+                offset: 0,
+                jumped_to: None,
+                result: Err(reason.to_string()),
+            });
+        }
+        Ticket::Props { key } => {
+            lock(&s.props_results).push(PropsResult {
+                key,
+                result: Err(reason.to_string()),
+            });
+        }
+        Ticket::Sql { key } => {
+            lock(&s.sql_results).push(SqlGenResult {
+                key,
+                result: Err(reason.to_string()),
+            });
+        }
+        Ticket::Test { conn_id, name } => {
+            lock(&s.test_results).push(TestConnResult {
+                conn_id,
+                name,
+                result: Err(reason.to_string()),
+            });
+        }
+        Ticket::Search { consumer, query } => {
+            // 空命中 + `searched = 0`：视图侧据此把「搜索中…」收尾（与空目标同口径）
+            s.push_search_result(
+                consumer,
+                SearchResult {
+                    consumer,
+                    query,
+                    searched: 0,
+                    hits: Vec::new(),
+                },
+            );
+        }
+        Ticket::Warm => {
+            s.warm_active.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// panic 载荷 → 一行可读文字。
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "（未知 panic 载荷）".to_string()
+}
+
 fn worker(rx: mpsc::Receiver<Job>) {
     // tokio 运行时随工作线程存活；数据库驱动依赖它。
     let Ok(rt) = tokio::runtime::Runtime::new() else {
         return;
     };
     while let Ok(job) = rx.recv() {
-        match job {
-            Job::LoadChildren {
-                conn_id,
-                project_root,
-                key,
-                path,
+        // 执行前先取凭据与计数：`run_job` 之后 `job` 就没了
+        let ticket = job.ticket();
+        let counter = job.counter();
+        // **隔离**：一个坏表 / 一段坏驱动代码只毁它自己这一次任务。
+        // 之前没有这层，一次 panic 会让 worker 线程直接死掉：之后所有展开都不再有回音
+        // （界面永远「加载中」），且挂起的计数也让进度条停在半路。
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(&rt, job)));
+        if let Err(payload) = outcome {
+            let reason = format!("导航任务内部错误（已隔离）：{}", panic_text(&*payload));
+            tracing::error!(reason = %reason, "导航后台任务 panic");
+            if let Some(ticket) = ticket {
+                report_failure(ticket, &reason);
+            }
+        }
+        if let Some(counter) = counter {
+            counter.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// 执行一个任务（结果回填在这里；**计数不在这里减**，见 [`Job::counter`]）。
+fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
+    match job {
+        Job::LoadChildren {
+            conn_id,
+            project_root,
+            key,
+            path,
+            fresh,
+            offset,
+            limit,
+            object,
+        } => {
+            let svc = crate::navigator_service::NavigatorService::with_context(
+                engine::get_connection_manager().clone(),
+                project_root.clone(),
                 fresh,
-                offset,
-                limit,
-                object,
-            } => {
-                let svc = crate::navigator_service::NavigatorService::with_context(
-                    engine::get_connection_manager().clone(),
-                    project_root.clone(),
-                    fresh,
-                );
-                // 定位：位次 → 页起点。算不出位次就**如实**沿用原 offset 并让 `jumped_to` 为 None
-                // （界面那时会说「索引里没有它」，绝不假装定位成功）。
-                let (offset, jumped_to) = match object.as_deref() {
-                    Some(name) => match svc.object_position(&conn_id, &path, name) {
-                        Some(pos) => {
-                            let page = limit.max(1);
-                            (pos - (pos % page), Some(pos))
-                        }
-                        None => (offset, None),
-                    },
+            );
+            // 定位：位次 → 页起点。算不出位次就**如实**沿用原 offset 并让 `jumped_to` 为 None
+            // （界面那时会说「索引里没有它」，绝不假装定位成功）。
+            let (offset, jumped_to) = match object.as_deref() {
+                Some(name) => match svc.object_position(&conn_id, &path, name) {
+                    Some(pos) => {
+                        let page = limit.max(1);
+                        (pos - (pos % page), Some(pos))
+                    }
                     None => (offset, None),
-                };
-                let result = rt
-                    .block_on(svc.load_children_page(&conn_id, &path, offset, limit))
-                    .map_err(|e| e.to_string());
-                lock(&shared().load_results).push(LoadResult {
-                    key,
-                    conn_id,
-                    project_root,
-                    path,
-                    offset,
-                    jumped_to,
-                    result,
-                });
-                shared().pending_loads.fetch_sub(1, Ordering::SeqCst);
-            }
-            Job::LoadProperties {
+                },
+                None => (offset, None),
+            };
+            let result = rt
+                .block_on(svc.load_children_page(&conn_id, &path, offset, limit))
+                .map_err(|e| e.to_string());
+            lock(&shared().load_results).push(LoadResult {
                 key,
-                property,
-                conn_label,
-                driver,
-                db_type,
-            } => {
-                let svc = service(None);
-                let result = rt
-                    .block_on(svc.load_properties(
-                        &property,
-                        &conn_label,
-                        &driver,
-                        db_type.as_deref(),
-                    ))
-                    .map_err(|e| e.to_string());
-                lock(&shared().props_results).push(PropsResult { key, result });
-                shared().pending_props.fetch_sub(1, Ordering::SeqCst);
-            }
-            Job::Warm {
                 conn_id,
                 project_root,
-            } => {
-                let state = shared();
-                state.warm_active.store(true, Ordering::SeqCst);
-                state.warm_cancel.store(false, Ordering::SeqCst);
-                state.warm_done.store(0, Ordering::SeqCst);
-                state.warm_total.store(0, Ordering::SeqCst);
-                let svc = service(project_root);
-                let _ = rt.block_on(svc.warm_schemas(
-                    &conn_id,
-                    |total| state.warm_total.store(total, Ordering::SeqCst),
-                    || state.warm_cancel.load(Ordering::SeqCst),
-                    |done| state.warm_done.store(done, Ordering::SeqCst),
-                ));
-                state.warm_active.store(false, Ordering::SeqCst);
-            }
-            Job::PrefetchColumns {
-                conn_id,
-                project_root,
-                targets,
-            } => {
-                let svc = service(project_root);
-                let tuples: Vec<(String, String, String)> = targets
-                    .into_iter()
-                    .map(|t| (t.catalog, t.schema, t.table))
+                path,
+                offset,
+                jumped_to,
+                result,
+            });
+        }
+        Job::LoadProperties {
+            key,
+            property,
+            conn_label,
+            driver,
+            db_type,
+        } => {
+            let svc = service(None);
+            let result = rt
+                .block_on(svc.load_properties(
+                    &property,
+                    &conn_label,
+                    &driver,
+                    db_type.as_deref(),
+                ))
+                .map_err(|e| e.to_string());
+            lock(&shared().props_results).push(PropsResult { key, result });
+        }
+        Job::Warm {
+            conn_id,
+            project_root,
+        } => {
+            let state = shared();
+            state.warm_active.store(true, Ordering::SeqCst);
+            state.warm_cancel.store(false, Ordering::SeqCst);
+            state.warm_done.store(0, Ordering::SeqCst);
+            state.warm_total.store(0, Ordering::SeqCst);
+            let svc = service(project_root);
+            let _ = rt.block_on(svc.warm_schemas(
+                &conn_id,
+                |total| state.warm_total.store(total, Ordering::SeqCst),
+                || state.warm_cancel.load(Ordering::SeqCst),
+                |done| state.warm_done.store(done, Ordering::SeqCst),
+            ));
+            state.warm_active.store(false, Ordering::SeqCst);
+        }
+        Job::PrefetchColumns {
+            conn_id,
+            project_root,
+            targets,
+        } => {
+            let svc = service(project_root);
+            let tuples: Vec<(String, String, String)> = targets
+                .into_iter()
+                .map(|t| (t.catalog, t.schema, t.table))
+                .collect();
+            // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。
+            let _ = rt.block_on(svc.prefetch_columns(&conn_id, &tuples));
+        }
+        Job::GenerateDml {
+            key,
+            conn_id,
+            project_root,
+            catalog,
+            schema,
+            table,
+            qualified,
+            kind,
+        } => {
+            let svc = service(project_root);
+            let result = rt.block_on(async {
+                // 列走导航同一套 cache-aside（命中 L2 不发查询）。
+                let nodes = svc
+                    .load_children(
+                        &conn_id,
+                        &NavPath::Table {
+                            catalog,
+                            schema,
+                            table,
+                        },
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let columns: Vec<crate::sql_gen::DmlColumn> = nodes
+                    .iter()
+                    .filter_map(|n| match &n.kind {
+                        NavNodeKind::Column { primary, .. } => Some(crate::sql_gen::DmlColumn {
+                            name: n.name.clone(),
+                            primary: *primary,
+                        }),
+                        _ => None,
+                    })
                     .collect();
-                // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。
-                let _ = rt.block_on(svc.prefetch_columns(&conn_id, &tuples));
-            }
-            Job::GenerateDml {
-                key,
-                conn_id,
-                project_root,
-                catalog,
-                schema,
-                table,
-                qualified,
-                kind,
-            } => {
-                let svc = service(project_root);
-                let result = rt.block_on(async {
-                    // 列走导航同一套 cache-aside（命中 L2 不发查询）。
-                    let nodes = svc
-                        .load_children(
-                            &conn_id,
-                            &NavPath::Table {
-                                catalog,
-                                schema,
-                                table,
-                            },
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let columns: Vec<crate::sql_gen::DmlColumn> = nodes
-                        .iter()
-                        .filter_map(|n| match &n.kind {
-                            NavNodeKind::Column { primary, .. } => {
-                                Some(crate::sql_gen::DmlColumn {
-                                    name: n.name.clone(),
-                                    primary: *primary,
-                                })
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    Ok(crate::sql_gen::dml_template(&qualified, &columns, kind))
-                });
-                lock(&shared().sql_results).push(SqlGenResult { key, result });
-                shared().pending_sql.fetch_sub(1, Ordering::SeqCst);
-            }
-            Job::SearchIndex {
-                consumer,
-                kind,
-                query,
-                project_root,
-                targets,
-            } => {
-                let mut hits = Vec::new();
-                let mut searched = 0usize;
-                for target in &targets {
-                    if hits.len() >= SEARCH_MAX_HITS {
-                        break;
-                    }
-                    // 没落盘缓存的连接直接跳过：搜索不建文件（见 `cache::cache_file_exists`）。
-                    if !crate::cache::cache_file_exists(&target.conn_id, project_root.as_deref()) {
-                        continue;
-                    }
-                    let Some(cache) =
-                        crate::cache::NavCache::open(&target.conn_id, project_root.as_deref())
-                    else {
-                        continue;
-                    };
-                    searched += 1;
-                    let room = SEARCH_MAX_HITS - hits.len();
-                    let limit = SEARCH_LIMIT_PER_CONN.min(room);
-                    match kind {
-                        SearchKind::Name => {
-                            for hit in cache.search_index(&query, limit) {
-                                hits.push(SearchHit {
-                                    conn_id: target.conn_id.clone(),
-                                    conn_label: target.label.clone(),
-                                    driver: target.driver.clone(),
-                                    object_type: hit.object_type,
-                                    object_name: hit.object_name,
-                                    parent_name: hit.parent_name,
-                                    catalog: hit.catalog_name,
-                                    schema: hit.schema_name,
-                                    snippet: None,
-                                });
-                            }
+                Ok(crate::sql_gen::dml_template(&qualified, &columns, kind))
+            });
+            lock(&shared().sql_results).push(SqlGenResult { key, result });
+        }
+        Job::SearchIndex {
+            consumer,
+            kind,
+            query,
+            project_root,
+            targets,
+        } => {
+            let mut hits = Vec::new();
+            let mut searched = 0usize;
+            for target in &targets {
+                if hits.len() >= SEARCH_MAX_HITS {
+                    break;
+                }
+                // 没落盘缓存的连接直接跳过：搜索不建文件（见 `cache::cache_file_exists`）。
+                if !crate::cache::cache_file_exists(&target.conn_id, project_root.as_deref()) {
+                    continue;
+                }
+                let Some(cache) =
+                    crate::cache::NavCache::open(&target.conn_id, project_root.as_deref())
+                else {
+                    continue;
+                };
+                searched += 1;
+                let room = SEARCH_MAX_HITS - hits.len();
+                let limit = SEARCH_LIMIT_PER_CONN.min(room);
+                match kind {
+                    SearchKind::Name => {
+                        for hit in cache.search_index(&query, limit) {
+                            hits.push(SearchHit {
+                                conn_id: target.conn_id.clone(),
+                                conn_label: target.label.clone(),
+                                driver: target.driver.clone(),
+                                object_type: hit.object_type,
+                                object_name: hit.object_name,
+                                parent_name: hit.parent_name,
+                                catalog: hit.catalog_name,
+                                schema: hit.schema_name,
+                                snippet: None,
+                            });
                         }
-                        SearchKind::FullText => {
-                            for hit in cache.search_fts(&query, limit) {
-                                hits.push(fts_hit_to_search_hit(target, hit));
-                            }
+                    }
+                    SearchKind::FullText => {
+                        for hit in cache.search_fts(&query, limit) {
+                            hits.push(fts_hit_to_search_hit(target, hit));
                         }
                     }
                 }
-                shared().push_search_result(
+            }
+            shared().push_search_result(
+                consumer,
+                SearchResult {
                     consumer,
-                    SearchResult {
-                        consumer,
-                        query,
-                        searched,
-                        hits,
-                    },
-                );
-                shared().pending_search[consumer.ix()].fetch_sub(1, Ordering::SeqCst);
-            }
-            Job::TestConnection {
-                conn_id,
-                project_root,
-                name,
-                probe,
-            } => {
-                // 走宿主给的探测入口，与右键「连接」同一套 URL / 网络档案规则。
-                let result = probe(&conn_id, project_root.as_deref());
-                lock(&shared().test_results).push(TestConnResult {
-                    conn_id,
-                    name,
-                    result,
-                });
-                shared().pending_test.fetch_sub(1, Ordering::SeqCst);
-            }
+                    query,
+                    searched,
+                    hits,
+                },
+            );
         }
+        Job::TestConnection {
+            conn_id,
+            project_root,
+            name,
+            probe,
+        } => {
+            // 走宿主给的探测入口，与右键「连接」同一套 URL / 网络档案规则。
+            let result = probe(&conn_id, project_root.as_deref());
+            lock(&shared().test_results).push(TestConnResult {
+                conn_id,
+                name,
+                result,
+            });
+        }
+        #[cfg(test)]
+        Job::PanicForTest { .. } => panic!("测试用：故意 panic，验证 worker 会把这次任务隔离掉"),
     }
 }
 
@@ -564,7 +813,7 @@ pub fn enqueue_load_page(
     limit: usize,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::LoadChildren {
+    submit(Job::LoadChildren {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         key: key.to_string(),
@@ -589,7 +838,7 @@ pub fn enqueue_locate_page(
     limit: usize,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::LoadChildren {
+    submit(Job::LoadChildren {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         key: key.to_string(),
@@ -610,7 +859,7 @@ pub fn enqueue_properties(
     db_type: Option<&str>,
 ) {
     shared().pending_props.fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::LoadProperties {
+    submit(Job::LoadProperties {
         key: key.to_string(),
         property,
         conn_label: conn_label.to_string(),
@@ -621,7 +870,7 @@ pub fn enqueue_properties(
 
 /// 连接成功后提交预热（C1）。重复连接会重新排队。
 pub fn warm_after_connect(conn_id: &str, project_root: Option<&str>) {
-    let _ = shared().tx.send(Job::Warm {
+    submit(Job::Warm {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
     });
@@ -632,7 +881,7 @@ pub fn prefetch_columns(conn_id: &str, project_root: Option<&str>, targets: Vec<
     if targets.is_empty() {
         return;
     }
-    let _ = shared().tx.send(Job::PrefetchColumns {
+    submit(Job::PrefetchColumns {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         targets,
@@ -652,7 +901,7 @@ pub fn enqueue_generate_dml(
     kind: DmlKind,
 ) {
     shared().pending_sql.fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::GenerateDml {
+    submit(Job::GenerateDml {
         key: key.to_string(),
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
@@ -675,7 +924,7 @@ pub fn enqueue_test_connection(
     probe: ConnectionProbe,
 ) {
     shared().pending_test.fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::TestConnection {
+    submit(Job::TestConnection {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         name: name.to_string(),
@@ -750,7 +999,7 @@ pub fn enqueue_search(
     targets: Vec<SearchTarget>,
 ) {
     shared().pending_search[consumer.ix()].fetch_add(1, Ordering::SeqCst);
-    let _ = shared().tx.send(Job::SearchIndex {
+    submit(Job::SearchIndex {
         consumer,
         kind,
         query: query.to_string(),
@@ -811,7 +1060,8 @@ mod tests {
     fn test_shared() -> Shared {
         let (tx, _rx) = mpsc::channel::<Job>();
         Shared {
-            tx,
+            tx: Mutex::new(tx),
+            worker_alive: AtomicBool::new(true),
             warm_active: AtomicBool::new(false),
             warm_done: AtomicUsize::new(0),
             warm_total: AtomicUsize::new(0),
@@ -905,6 +1155,78 @@ mod tests {
                 .contains("<mark>"),
             "内容档要把 snippet 带出去（UI 靠它显示“为什么命中”）"
         );
+    }
+
+    /// **一次 panic 不再拖垮整条导航加载队列**（真机踩到的形态：一个坏表 → worker 线程死掉
+    /// → 之后所有展开都没有回音，界面永远「加载中」，且挂起计数让进度条停在半路）。
+    ///
+    /// 这条用例走**真实全局 worker**（`enqueue_*` 的生产路径）：先投一个必定 panic 的任务，
+    /// 再投一个正常任务（连接不存在 → 回填 Err）。两个都要有回音，且计数要归零。
+    #[test]
+    fn worker_isolates_panics_and_recovers_from_a_dead_channel() {
+        let path = NavPath::Connection;
+        submit(Job::PanicForTest {
+            key: "panic-test".to_string(),
+            conn_id: "P_no_such_conn".to_string(),
+            project_root: None,
+            path: path.clone(),
+        });
+        shared().pending_loads.fetch_add(1, Ordering::SeqCst);
+        // 贴着生产入口再投一个正常任务
+        enqueue_load("P_no_such_conn", None, "after-panic", path, false);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut results = Vec::new();
+        while std::time::Instant::now() < deadline {
+            results.extend(drain_load_results());
+            if results.len() >= 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
+        assert!(
+            keys.contains(&"panic-test") && keys.contains(&"after-panic"),
+            "两个任务都要有回音（panic 的那个回错误、后面的正常跑完）：{keys:?}"
+        );
+        for r in &results {
+            assert!(r.result.is_err(), "两者都该是错误结果：{}", r.key);
+        }
+        assert!(
+            !has_pending_loads(),
+            "计数必须配平：panic 那条路曾经漏减，界面会永远「加载中」"
+        );
+
+        // ---- 自愈：把发件端换到一条**接收端已丢弃**的通道（模拟 worker 线程已退出），
+        // 下一次投递应当自动换通道 + 重启 worker，任务照样有回音。
+        let (dead_tx, dead_rx) = mpsc::channel::<Job>();
+        drop(dead_rx);
+        *lock(&shared().tx) = dead_tx;
+        shared().worker_alive.store(false, Ordering::SeqCst);
+
+        enqueue_load(
+            "P_no_such_conn",
+            None,
+            "after-restart",
+            NavPath::Connection,
+            false,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut recovered = Vec::new();
+        while std::time::Instant::now() < deadline {
+            recovered.extend(drain_load_results());
+            if !recovered.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let recovered_keys: Vec<String> = recovered.iter().map(|r| r.key.clone()).collect();
+        assert!(
+            recovered.iter().any(|r| r.key == "after-restart"),
+            "worker 死掉后任务要能自愈（换通道 + 重启）：{recovered_keys:?}"
+        );
+        assert!(!has_pending_loads(), "自愈那条路同样要配平计数");
     }
 
     /// 槽位下标两两不同且落在 `COUNT` 内（`ix()` 与 `COUNT` 的契约）。
