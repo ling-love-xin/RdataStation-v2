@@ -440,20 +440,53 @@ impl NavigatorService {
     ) -> Result<Vec<NavNode>, CoreError> {
         let indexed = self.indexed_counts(conn_id, catalog, schema);
         let mut nodes = Vec::new();
+        // 「某一类没查到」与「整个 schema 展开失败」是两回事：前者只该少一行文件夹，
+        // 后者才是树上那行红字。这两个标记就是那条分界（见下方两处判定）。
+        let mut any_ok = false;
+        let mut first_error: Option<CoreError> = None;
         for folder in NavFolder::ALL {
             let count = match Self::indexed_folder_count(folder, indexed.as_ref()) {
-                Some(count) => count,
+                Some(count) => {
+                    any_ok = true;
+                    count
+                }
                 None => {
-                    // 实时内省（或 L1 / L2 命中）；失败向上冒泡，不倒空文件夹。
-                    self.collect_objects(conn_id, catalog, schema, folder)
-                        .await?
-                        .len()
+                    // 实时内省（或 L1 / L2 命中）。
+                    match self.collect_objects(conn_id, catalog, schema, folder).await {
+                        Ok(objects) => {
+                            any_ok = true;
+                            objects.len()
+                        }
+                        // 「表」之外的类别失败**不拖垮整层**：例程 / 触发器要的权限常比表清单高
+                        // （PG 上尤其），一类失败就让整个 schema 变成一行红字，代价太大。
+                        // 于是降级为「这一类本次不出现」并留日志；「表」失败仍然冒泡——
+                        // 连表都看不见的导航不叫可用。
+                        Err(e) if folder != NavFolder::Tables => {
+                            tracing::warn!(
+                                conn_id = %conn_id,
+                                catalog = %catalog,
+                                schema = %schema,
+                                folder = folder.key(),
+                                error = %e,
+                                "导航：该类别内省失败，本次跳过（其它类别照常显示）"
+                            );
+                            first_error.get_or_insert(e);
+                            0
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             };
             if count == 0 {
                 continue;
             }
             nodes.push(Self::folder_node(conn_id, catalog, schema, folder, count));
+        }
+        // 一类都没查成（如连接在这一刻掉了）：如实报错，别装作「这个 schema 是空的」。
+        if !any_ok {
+            if let Some(e) = first_error {
+                return Err(e);
+            }
         }
         Ok(nodes)
     }
@@ -1177,6 +1210,55 @@ mod l1_tests {
         assert!(
             guard.get_catalogs(conn_id).is_none(),
             "刷新后该连接的 L1 条目应被清掉"
+        );
+    }
+
+    /// 一个类别读不出来，不该把整个 schema 层拖成一行红字。
+    ///
+    /// 手法：只喂「表」这一类进 L1，其余类别必然走实时内省（空管理器下必失败）。
+    /// 展开 schema 这一层若仍报错，用户就连看得见的表也拿不到了。
+    #[tokio::test]
+    async fn one_failing_category_does_not_hide_the_rest() {
+        let conn_id = "P_folders_partial_fail";
+        {
+            let cache = l1();
+            let mut guard = cache.lock().expect("锁 L1");
+            guard.invalidate_connection(conn_id);
+            guard.set_tables(conn_id, "main", Some("public"), vec![table("t1")]);
+        }
+
+        let nodes = offline_service(false)
+            .load_children(
+                conn_id,
+                &NavPath::Schema {
+                    catalog: "main".to_string(),
+                    schema: "public".to_string(),
+                },
+            )
+            .await
+            .expect("表这一类读到了，就不该整层报错");
+        assert_eq!(nodes.len(), 1, "失败的那些类别本次不出现");
+        assert!(
+            matches!(nodes[0].kind, NavNodeKind::Folder(NavFolder::Tables)),
+            "留下的应当正是「表」"
+        );
+    }
+
+    /// 反证：一类都没读成时必须如实报错，不能给一棵空树假装「这个 schema 是空的」。
+    #[tokio::test]
+    async fn all_categories_failing_is_still_an_error() {
+        assert!(
+            offline_service(false)
+                .load_children(
+                    "P_folders_all_fail",
+                    &NavPath::Schema {
+                        catalog: "main".to_string(),
+                        schema: "public".to_string(),
+                    },
+                )
+                .await
+                .is_err(),
+            "全失败仍是失败（否则用户会以为这个 schema 下什么都没有）"
         );
     }
 }

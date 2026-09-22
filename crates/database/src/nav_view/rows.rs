@@ -984,6 +984,7 @@ impl NavView {
         let muted = cx.theme().colors.muted_foreground;
         let hover = cx.theme().colors.list_hover;
         let danger = cx.theme().colors.danger;
+        let pri = cx.theme().colors.primary;
 
         let expanded = {
             let view = self.nav.borrow();
@@ -1737,7 +1738,25 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             block = block.child(nav_subline("未连接 · 右键「连接」或再次展开", muted));
         }
         if let Some(err) = error {
-            block = block.child(nav_subline(&err, danger));
+            // 失败行可点：点它重试（见 `retry_nav_node`）。只给红字不给动作的话，
+            // 用户除了右键「刷新元数据」没有别的出路——而那条路是**跳过缓存**的重查。
+            let e = cx.entity();
+            let retry_conn = conn.id.clone();
+            block = block.child(
+                nav_error_row_at(&err, danger, pri, 1.5)
+                    .id(SharedString::from(format!(
+                        "nav-conn-retry-{}::{}",
+                        scope_key, conn.id
+                    )))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .on_click(move |_, _, app| {
+                        let conn_id = retry_conn.clone();
+                        e.update(app, |this, cx| {
+                            this.retry_nav_node(&conn_id, &conn_id, NavPath::Connection, cx)
+                        });
+                    }),
+            );
         }
 
         block
@@ -2151,7 +2170,29 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             block = block.child(nav_subline_at("加载中…", muted, indent_px));
         }
         if let Some(err) = error {
-            block = block.child(nav_subline_at(&err, danger, indent_px));
+            // 同上（连接行）：错误行自带重试。没有展开路径的叶子（列）没有可重查的东西，
+            // 点了也不动——它本来就不该失败（失败的是父表那一次加载）。
+            let e = cx.entity();
+            let retry_conn = node.connection_id.clone();
+            let retry_key = node.key.clone();
+            let retry_path = node.expand_path.clone();
+            block = block.child(
+                nav_error_row_at(&err, danger, pri, indent_px)
+                    .id(SharedString::from(format!(
+                        "nav-node-retry-{}::{}",
+                        scope_key, node.key
+                    )))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .on_click(move |_, _, app| {
+                        let Some(path) = retry_path.clone() else {
+                            return;
+                        };
+                        let conn_id = retry_conn.clone();
+                        let key = retry_key.clone();
+                        e.update(app, |this, cx| this.retry_nav_node(&conn_id, &key, path, cx));
+                    }),
+            );
         }
         // 子树与「加载更多」/「已定位」行不在这一行里：它们是**同桌的其它行**
         //（`collect_nav_rows` 把它们摆在同一层），所以这里不递归、不再往下画。

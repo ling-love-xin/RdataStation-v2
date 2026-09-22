@@ -7,11 +7,12 @@
 // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::nav_type_badge;
 use super::{
-    NavBadgeStatus, RevealTarget, insight_schema_target, nav_badge_pulses, nav_data_target,
-    nav_kind_icon, nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time,
-    nav_reorder, nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref,
-    nav_search_query_ready, nav_selection_is_persistable, nav_step, nav_type_label,
-    nav_type_short_label, parse_nav_search, search_hit_row_id, search_hit_row_key,
+    NavBadgeStatus, NavViewState, RevealTarget, insight_schema_target, nav_badge_pulses,
+    nav_data_target, nav_forget_attempt, nav_kind_icon, nav_load_is_retry, nav_merge_page,
+    nav_object_type_label, nav_order_members, nav_relative_time, nav_reorder, nav_scope_tooltip,
+    nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
+    nav_selection_is_persistable, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
+    search_hit_row_id, search_hit_row_key,
 };
 use crate::commands::NavClearSearch;
 use crate::model::{
@@ -1779,4 +1780,49 @@ fn type_short_label_strips_category_suffix() {
     assert_eq!(nav_type_short_label("postgresql", None), "PostgreSQL");
     // 未知类型回退原 id。
     assert_eq!(nav_type_short_label("snowflake", None), "snowflake");
+}
+
+/// 失败的节点必须能**重试**：收起再展开 / 点那行红字都算重试。
+///
+/// 为何这条判据要单独钉住：`attempted`（已请求过就跳过）是懒加载的拦截标记，
+/// 缺了「失败且手里没东西」这一支，红字会像焊在树上——用户只剩右键「刷新元数据」。
+/// 反过来，已经有子节点的失败是**翻页**失败，不该被这条判据顺手把前缀换掉。
+#[test]
+fn a_failed_node_without_children_is_a_retry() {
+    let key = "G_1/shop";
+    let mut s = NavViewState::default();
+
+    // 还没请求过：没什么可重试的（正常首屏加载）。
+    assert!(!nav_load_is_retry(&s, key));
+
+    // 请求过、成功了：`attempted` 拦着，不再重查。
+    s.attempted.insert(key.to_string());
+    assert!(!nav_load_is_retry(&s, key));
+
+    // 请求过、失败了、手里没有子节点：这次展开就是重试。
+    s.errors.insert(key.to_string(), "连接不可用".to_string());
+    assert!(nav_load_is_retry(&s, key));
+
+    // 手里已经有子节点（翻页失败）：交给「加载更多」那一行自己重试。
+    s.children.insert(key.to_string(), Vec::new());
+    assert!(!nav_load_is_retry(&s, key));
+}
+
+/// 重试前的清理：失败 / 已请求 / 加载中三样痕迹都要抹掉。
+///
+/// 漏掉 `attempted` 的话，紧接着的 `ensure_nav_loaded` 会当场把它拦回去——
+/// 用户点了「重试」，界面纹丝不动。
+#[test]
+fn retry_clears_the_failure_bookkeeping() {
+    let key = "G_1/shop";
+    let mut s = NavViewState::default();
+    s.attempted.insert(key.to_string());
+    s.errors.insert(key.to_string(), "连接不可用".to_string());
+    s.loading.insert(key.to_string());
+
+    nav_forget_attempt(&mut s, key);
+
+    assert!(!s.errors.contains_key(key), "红字要先撤掉");
+    assert!(!s.attempted.contains(key), "不然下一次请求会被拦回去");
+    assert!(!s.loading.contains(key));
 }

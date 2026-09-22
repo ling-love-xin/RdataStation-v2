@@ -629,6 +629,54 @@ pub(super) fn nav_subline(text: &str, color: Hsla) -> Div {
     nav_subline_at(text, color, 1.5)
 }
 
+/// 失败行（错误文案 + 尾部「重试」）。
+///
+/// 为什么左段截断、右段固定：错误文案长度不可控（PG 报错带列名与建议），
+/// 而「重试」必须**钉在固定位置**才点得到。整行都可点是这条行的本意，
+/// 末尾那两个字只是把它说出来——所以高度仍与普通附加行一致（`ui::NAV_SUBLINE`）。
+pub(super) fn nav_error_row_at(text: &str, color: Hsla, action: Hsla, indent: f32) -> Div {
+    div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .w_full()
+        .h(rems(ui::NAV_SUBLINE))
+        .pl(rems(indent))
+        .pr_1()
+        .rounded_md()
+        .text_xs()
+        .overflow_hidden()
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_ellipsis()
+                .text_color(color)
+                .child(text.to_string()),
+        )
+        .child(div().flex_none().text_color(action).child("重试"))
+}
+
+/// 这次展开是不是「重试」：该节点上次失败，且手里还没有它的子节点。
+///
+/// 为何要这条判据：`attempted` 是「已请求过」的拦截标记，只看它的话，
+/// 一个失败的节点**收起再展开也不会重试**（红字像焊死在树上），用户只剩右键「刷新元数据」。
+/// 为何只认「手里没有子节点」：已经有子节点的那种失败是**翻页**失败（「加载更多」），
+/// 它的重试在那一行自己身上，不该顺手把已加载的前缀换掉。
+///
+/// 只由**用户动作**（展开 / 点红字）消费：渲染路径（`collect_node_rows`）不查它，
+/// 否则一个失败节点会被每帧重排一次加载。
+pub(super) fn nav_load_is_retry(view: &NavViewState, key: &str) -> bool {
+    view.errors.contains_key(key) && !view.children.contains_key(key)
+}
+
+/// 「重试」前的清理：抹掉该节点的失败与请求痕迹，让它回到「没请求过」的状态。
+pub(super) fn nav_forget_attempt(view: &mut NavViewState, key: &str) {
+    view.errors.remove(key);
+    view.attempted.remove(key);
+    view.loading.remove(key);
+}
+
 /// 一行的估算高度（rem → px）。
 ///
 /// 必须与渲染里那几处的显式高度**成对维护**（`ui::NAV_ROW_*` / `ui::NAV_SUBLINE` /

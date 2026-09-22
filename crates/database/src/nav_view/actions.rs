@@ -238,6 +238,18 @@ impl NavView {
             }
         };
         if now_expanded {
+            // 上次失败（红字挂在树上、手里没有子节点）：这次展开就是**重试**。
+            // 判据与「点红字」共用（`nav_load_is_retry`），只是入口不同——
+            // 少了这一支，`attempted` 会把重试一并拦掉，红字只能靠右键刷新才动。
+            let retry = {
+                let view = self.nav.borrow();
+                nav_load_is_retry(&view, key)
+            };
+            if retry {
+                self.retry_nav_node(conn_id, key, path, cx);
+                self.mark_nav_state_dirty(conn_id, cx);
+                return;
+            }
             // 连接根展开：未建连则先建连。否则 `NavigatorService` → `MetadataService`
             // 取不到运行时句柄，冒泡为 `[CONN_NOT_FOUND]`（用户看到的“连不上”）。
             if matches!(path, NavPath::Connection) && !self.ensure_connected_for_browse(conn_id, cx)
@@ -315,6 +327,30 @@ impl NavView {
             .map(|p| p.to_string_lossy().to_string());
         nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh);
         self.ensure_nav_pump(cx);
+    }
+
+    /// 重试某个节点的加载（点那行红字，或把一个失败的节点收起再展开）。
+    ///
+    /// 与「右键 → 刷新元数据」不同：那个是**新鲜取数**（跳过 L2 并重写），
+    /// 这个是**照常取数**（cache-aside）——上次多半什么都没查到，缓存里本就没有它的行；
+    /// 而查询本身成功过的那部分（如表清单拿到了、视图那类失败）应当照旧命中缓存，不白跑。
+    pub(super) fn retry_nav_node(
+        &mut self,
+        conn_id: &str,
+        key: &str,
+        path: NavPath,
+        cx: &mut Context<Self>,
+    ) {
+        // 连接根：失败原因可能就是「还没连上」，先补建连——否则重试只是把同一个错再报一遍。
+        if matches!(path, NavPath::Connection) && !self.ensure_connected_for_browse(conn_id, cx) {
+            return;
+        }
+        {
+            let mut view = self.nav.borrow_mut();
+            nav_forget_attempt(&mut view, key);
+        }
+        self.ensure_nav_loaded(conn_id, key, path, false, cx);
+        cx.notify();
     }
 
     /// 回填索引搜索结果（过期批次直接丢弃：用户在等待期间已经把词改了）。
