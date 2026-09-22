@@ -225,49 +225,19 @@ impl DuckDbService {
     }
 }
 
-pub fn extract_rows_from_serialized(
-    result_json: &serde_json::Value,
-) -> Vec<Vec<serde_json::Value>> {
-    let columns = match result_json["columns"].as_array() {
-        Some(c) => c
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect::<Vec<_>>(),
-        None => return vec![],
-    };
-
-    let batches = match result_json["batches"].as_array() {
-        Some(b) => b,
-        None => return vec![],
-    };
-
-    let mut rows = Vec::new();
-    for batch in batches {
-        if let Some(data) = batch["data"].as_object() {
-            let num_rows = columns
-                .first()
-                .and_then(|c| data.get(c))
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-
-            for ri in 0..num_rows {
-                let mut row = Vec::with_capacity(columns.len());
-                for col in &columns {
-                    let val = data
-                        .get(col)
-                        .and_then(|v| v.as_array())
-                        .and_then(|a| a.get(ri))
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    row.push(val);
-                }
-                rows.push(row);
-            }
-        }
-    }
-
-    rows
+/// `QueryResult` → 建 DuckDB 临时表用的行（**进程内直读 Arrow `batches`**）。
+///
+/// 为什么不走 `serde_json::to_value(&QueryResult)` 再读 `["batches"]`：契约序列化只输出
+/// `columns` / `rows` / …，Arrow `batches` 不参与，而 native 驱动（MySQL / PostgreSQL /
+/// SQLite / DuckDB）**只填 `batches`**、`rows` 字段恒为空 —— 那条路读到的永远是
+/// 「有列名、零行」，临时表于是建出一张空表。洞察侧踩过同一个坑并留了回归
+/// （`insight::service::result_columns_and_rows`），这里补上引擎侧的那一处。
+pub fn rows_as_json(result: &shared::models::QueryResult) -> Vec<Vec<serde_json::Value>> {
+    result
+        .to_rows()
+        .into_iter()
+        .map(|row| row.into_iter().map(shared::models::Value::to_json).collect())
+        .collect()
 }
 
 /// JSON 行 → DuckDB 列类型。
@@ -787,5 +757,30 @@ mod tests {
         let conn = DuckDbService::get_or_create_duckdb().expect("内存连接");
         let guard = conn.lock().expect("锁");
         drop_temp_table(&guard, TempTableSource::Query, &table).expect("删表");
+    }
+
+    /// `rows_as_json` 直读 Arrow `batches`。
+    ///
+    /// 回归：旧实现走 `serde_json::to_value(&QueryResult)` 再读 `["batches"]`，
+    /// 而契约序列化不含 Arrow —— 这里是「只有 batches」的最普通形态，旧路给出零行，
+    /// 结果筛选建出来的临时表就是空的。
+    #[test]
+    fn rows_as_json_reads_arrow_batches() {
+        use arrow::array::Int64Array;
+        use shared::models::QueryResult;
+
+        let batch = RecordBatch::try_new(
+            std::sync::Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![std::sync::Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .expect("构造 RecordBatch");
+        let mut result = QueryResult::empty();
+        result.columns = vec!["id".to_string()];
+        result.batches = vec![batch];
+
+        let rows = super::rows_as_json(&result);
+        assert_eq!(rows.len(), 3, "行在 batches 里，直读要拿得到");
+        assert_eq!(rows[0][0], serde_json::json!(1));
+        assert_eq!(rows[2][0], serde_json::json!(3));
     }
 }

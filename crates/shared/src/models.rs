@@ -104,14 +104,22 @@ impl QueryResult {
         }
     }
 
-    /// 获取总行数
+    /// 获取总行数。
+    ///
+    /// **两条来源合一**：有 Arrow `batches` 时以它为准（驱动产出的形态），否则回退到已物化的
+    /// `rows` 字段（跨进程反序列化出来的形态——那里没有 Arrow，见 [`Self::to_rows`] 与
+    /// `Serialize` 的说明）。此前只认 `batches`，于是 JSON 往返过的结果「明明有行、报 0 行」。
     pub fn total_rows(&self) -> usize {
-        self.batches.iter().map(|b| b.num_rows()).sum()
+        if self.batches.is_empty() {
+            self.rows.len()
+        } else {
+            self.batches.iter().map(|b| b.num_rows()).sum()
+        }
     }
 
-    /// 检查是否为空
+    /// 检查是否为空。
     pub fn is_empty(&self) -> bool {
-        self.batches.is_empty() || self.total_rows() == 0
+        self.total_rows() == 0
     }
 
     /// 截断结果到指定行数（原地操作）
@@ -120,6 +128,12 @@ impl QueryResult {
         let total = self.total_rows();
         if total <= max_rows {
             return 0;
+        }
+        if self.batches.is_empty() {
+            // 只有 `rows` 字段的形态（JSON 往返）：就地截字段，别报一个没做成的截断数。
+            self.rows.truncate(max_rows);
+            self.total_rows = self.rows.len() as u32;
+            return total - max_rows;
         }
         let mut remaining = max_rows;
         self.batches.retain_mut(|batch| {
@@ -145,6 +159,13 @@ impl QueryResult {
     /// 保留指定范围的行，丢弃其余
     pub fn slice(&mut self, offset: usize, limit: usize) {
         if self.batches.is_empty() {
+            // 只有 `rows` 字段的形态：就地切字段（同 `truncate`）。
+            if !self.rows.is_empty() {
+                let start = offset.min(self.rows.len());
+                let end = (offset + limit).min(self.rows.len());
+                self.rows = self.rows[start..end].to_vec();
+                self.total_rows = self.rows.len() as u32;
+            }
             return;
         }
         let mut new_batches = Vec::new();
@@ -191,8 +212,14 @@ impl QueryResult {
         self.total_rows = self.rows.len() as u32;
     }
 
-    /// 将 Arrow batches 转换为行数据（Vec<Vec<Value>>）
+    /// 结果的行数据（`Vec<Vec<Value>>`）。
+    ///
+    /// 有 `batches` 就从它现算（驱动路径）；没有就回退已物化的 `rows` 字段
+    /// （JSON 往返路径）。**这一层是行数据的权威口径**——读结果请走它，别直接读字段。
     pub fn to_rows(&self) -> Vec<Vec<Value>> {
+        if self.batches.is_empty() {
+            return self.rows.clone();
+        }
         let mut rows = Vec::with_capacity(self.total_rows());
         for batch in &self.batches {
             let num_rows = batch.num_rows();
@@ -352,19 +379,33 @@ fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
 }
 
 /// 序列化支持
+///
+/// `rows` / `total_rows` 是**跨进程契约字段**（前端 / 插件的 JSON），而驱动只填 Arrow
+/// `batches`，这两个字段在驱动产出的实例里是默认空值（架构 §12 #21）。所以它们在这里
+/// **按 `batches` 现算**：直接发字段的话，JSON 里 `rows` 恒为 `[]`、`total_rows` 恒为 0，
+/// 读它的消费者拿到的是「有列名、零行」——洞察侧为此踩过一次空表
+/// （见 `insight::service::result_columns_and_rows` 的注释与回归）。
+///
+/// 进程内消费者**不必**经过这里：直接 [`QueryResult::to_rows`] 更省一次物化。
 impl Serialize for QueryResult {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
+        // 已经物化过（`from_batches` / `truncate` / JSON 往返）的直接发，别白算一遍。
+        let (rows, total_rows) = if self.rows.is_empty() && !self.batches.is_empty() {
+            (self.to_rows(), self.total_rows() as u32)
+        } else {
+            (self.rows.clone(), self.total_rows)
+        };
         let mut state = serializer.serialize_struct("QueryResult", 6)?;
         state.serialize_field("columns", &self.columns)?;
         state.serialize_field("column_types", &self.column_types)?;
-        state.serialize_field("rows", &self.rows)?;
+        state.serialize_field("rows", &rows)?;
         state.serialize_field("affected_rows", &self.affected_rows)?;
         state.serialize_field("is_read_only", &self.is_read_only)?;
-        state.serialize_field("total_rows", &self.total_rows)?;
+        state.serialize_field("total_rows", &total_rows)?;
         state.end()
     }
 }
@@ -425,6 +466,23 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// `Value` → JSON 值（建 DuckDB 临时表 / 跨进程契约用）。
+    ///
+    /// `Bytes` 走有损 UTF-8：临时表要的是「能算的样本」，二进制列在洞察里只能当文本看
+    /// （真二进制统计本就没有意义），比整列变 `NULL` 有用。
+    pub fn to_json(self) -> serde_json::Value {
+        match self {
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(v) => serde_json::Value::Bool(v),
+            Value::Int(v) => serde_json::Value::Number(v.into()),
+            Value::Float(v) => serde_json::Number::from_f64(v)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Value::Text(v) => serde_json::Value::String(v),
+            Value::Bytes(v) => serde_json::Value::String(String::from_utf8_lossy(&v).to_string()),
+        }
+    }
+
     /// 获取值的类型名称
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -608,5 +666,45 @@ mod value_mapping_tests {
             Value::Text(u64::MAX.to_string()),
             "超出 i64 的无符号值必须保留精度，不得静默截断"
         );
+    }
+
+    /// **只填 `batches`** 的实例（native 驱动的形态）序列化时，`rows` / `total_rows`
+    /// 必须按 Arrow 现算出来。
+    ///
+    /// 回归：此前直接发字段 → JSON 里 `rows: []` / `total_rows: 0`，读 JSON 的消费者
+    /// 拿到的是「有列名、零行」——结果筛选建临时表、洞察取样本都因此拿过空表。
+    #[test]
+    fn serializing_batches_only_result_fills_the_json_contract() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "id",
+                arrow::datatypes::DataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![7, 9]))],
+        )
+        .expect("构造 RecordBatch");
+        let mut result = QueryResult::empty();
+        result.columns = vec!["id".to_string()];
+        result.batches = vec![batch];
+        assert!(
+            result.rows.is_empty() && result.total_rows == 0,
+            "前提：驱动只填 batches，字段保持默认空值"
+        );
+
+        let json = serde_json::to_value(&result).expect("序列化");
+        assert_eq!(json["columns"][0], "id");
+        assert_eq!(json["total_rows"], 2, "契约里的 total_rows 要现算");
+        assert_eq!(json["rows"].as_array().map(Vec::len), Some(2), "行也要现算");
+        assert_eq!(json["rows"][1][0], 9, "`Value` 是 untagged：整数就是 JSON 数字");
+
+        // 往返一趟：这份实例的 `batches` 是空的、行在字段里 —— 三个口径（字段 / batches / 方法）
+        // 必须给出同一个答案（此前方法只认 `batches`，于是「明明有行、报 0 行」）。
+        let back: QueryResult = serde_json::from_value(json).expect("反序列化");
+        assert_eq!(back.rows.len(), 2);
+        assert_eq!(back.total_rows, 2);
+        assert_eq!(back.total_rows(), 2, "方法要认字段这一条来源");
+        assert_eq!(back.to_rows().len(), 2, "`to_rows()` 同理");
+        assert!(!back.is_empty());
     }
 }

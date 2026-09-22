@@ -1,6 +1,6 @@
 use shared::error::{CommonError, CoreError};
 use crate::get_connection_manager;
-use crate::services::duckdb_service::{self, extract_rows_from_serialized};
+use crate::services::duckdb_service;
 use crate::services::result_types::ResultSet;
 use crate::services::sql_service::SqlExecuteOptions;
 use crate::SqlService;
@@ -38,19 +38,11 @@ pub async fn re_execute_with_filter(
         .await?;
     let elapsed = start.elapsed().as_millis() as u64;
 
-    let json_value = serde_json::to_value(&result.result)
-        .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {}", e))))?;
-
-    let columns = json_value["columns"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default();
-
-    let rows = extract_rows_from_serialized(&json_value);
+    // 直读 `batches`（**不经 JSON 契约往返**）：契约序列化不含 Arrow，而驱动只填 `batches`
+    // —— 旧写法 `to_value(...) + ["batches"]` 拿到的永远是零行，临时表建出来是空的
+    // （明细见 `duckdb_service::rows_as_json`）。
+    let columns = result.result.columns.clone();
+    let rows = duckdb_service::rows_as_json(&result.result);
     let temp_table = duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
 
     Ok(ResultSet {

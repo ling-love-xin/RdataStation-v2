@@ -777,27 +777,9 @@ pub fn result_columns_and_rows(
     let rows = result
         .to_rows()
         .into_iter()
-        .map(|row| row.into_iter().map(value_to_json).collect())
+        .map(|row| row.into_iter().map(shared::models::Value::to_json).collect())
         .collect();
     (columns, rows)
-}
-
-/// 引擎的 [`shared::models::Value`] → 建 DuckDB 临时表用的 JSON 值。
-///
-/// `Bytes` 走有损 UTF-8：临时表要的是「能算的样本」，二进制列在洞察里只能当文本看
-/// （真二进制统计本就没有意义），比整列变 `NULL` 有用。
-fn value_to_json(value: shared::models::Value) -> serde_json::Value {
-    use shared::models::Value;
-    match value {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(v) => serde_json::Value::Bool(v),
-        Value::Int(v) => serde_json::Value::Number(v.into()),
-        Value::Float(v) => serde_json::Number::from_f64(v)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        Value::Text(v) => serde_json::Value::String(v),
-        Value::Bytes(v) => serde_json::Value::String(String::from_utf8_lossy(&v).to_string()),
-    }
 }
 
 // ==================== 测试 ====================
