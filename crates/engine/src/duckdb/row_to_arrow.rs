@@ -1,6 +1,6 @@
 //! 将 DuckDB 行转换为 Arrow 批处理
 //! TODO(migration): 自 v1 `core/driver/native/duckdb.rs` 抽取，保持原实现；
-//! 后续统一由 `shared::arrow` 承载转换能力。
+//! 后续统一由 `shared::models`（`Value` / `to_rows`）承载转换能力。
 //!
 //! **取值覆盖**：数字 / 布尔 / 文本 / 二进制走原生 Arrow 数组，其余（时间戳 / 日期 / 时间 /
 //! 十进制 / 区间 / 容器）统一走 [`crate::duckdb::value_text::display_text`] 渲成文本。

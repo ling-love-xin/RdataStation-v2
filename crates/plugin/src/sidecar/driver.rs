@@ -40,7 +40,7 @@ use super::meta::{
 };
 use super::proto::RpcErrorCode;
 use super::supervisor::SidecarSupervisor;
-use shared::arrow::ArrowBatch;
+use shared::models::ArrowBatch;
 
 /// 查询类调用的传输超时。
 ///

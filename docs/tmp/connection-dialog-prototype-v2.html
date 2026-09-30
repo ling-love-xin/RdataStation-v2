@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 连接对话框 · 原型 v2.2（DBeaver 式管理窗 + 拓扑链）</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#B0B0B0; --group-box:#F5F5F5;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --success:#16A34A; --success-bg:#F0FDF4; --warning:#B45309; --warning-bg:#FFFBEB;
+  --info:#2563EB; --info-bg:#EFF6FF; --danger:#DC2626; --danger-bg:#FEF2F2;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4F4F4F; --group-box:#171717;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --success:#89D185; --success-bg:#14532D; --warning:#CCA700; --warning-bg:#3A3105;
+  --info:#3794FF; --info-bg:#0F2A4A; --danger:#F14C4C; --danger-bg:#4A1A1A;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:34px 20px 28px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;}
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:980px;margin:0 auto 16px;padding:0 4px;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.theme-toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+.dialog{max-width:980px;margin:0 auto;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.dlg-titlebar{display:flex;align-items:center;gap:10px;background:var(--titlebar);padding:9px 16px;border-bottom:1px solid var(--border);}
+.dlg-title{font-size:12.5px;font-weight:600;letter-spacing:.3px;}
+.dlg-title .sep{color:var(--muted);font-weight:400;margin:0 6px;}
+.dlg-title .sub{color:var(--muted);font-weight:400;}
+.win-dots{display:flex;gap:7px;margin-left:auto;}
+.win-dots i{width:12px;height:12px;border-radius:50%;display:inline-block;background:var(--border);}
+.win-dots i.close{background:var(--active-border);}
+.dlg-body{display:flex;min-height:436px;}
+
+/* sidebar */
+.sidebar{width:200px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+.side-search{padding:12px 12px 8px;position:relative;}
+.side-search input{width:100%;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:6px 10px;font-size:12px;outline:none;}
+.side-search input:focus{border-color:var(--active-border);}
+.side-section{padding:4px 12px 10px;}
+.side-section.grow{flex:1;min-height:0;display:flex;flex-direction:column;}
+.side-title{font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;}
+.side-head{display:flex;align-items:center;justify-content:space-between;}
+.stage-box{height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
+.type-box{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
+.stage-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:5px 9px;border-radius:6px;cursor:pointer;transition:background .12s;}
+.stage-item:hover{background:var(--hover);}
+.stage-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
+.stage-item .st-db{width:17px;height:17px;border-radius:5px;background:var(--accent);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;}
+.stage-item .st-code{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 5px;line-height:14px;}
+.stage-item .st-dot{margin-left:auto;font-size:10px;color:var(--warning);}
+.stage-add{font-size:11.5px;color:var(--active-border);cursor:pointer;}
+.side-divider{height:1px;background:var(--sidebar-border);margin:2px 0 6px;}
+.cat-label{font-size:10.5px;font-weight:700;color:var(--muted);padding:6px 8px 0;}
+.db-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:4px 8px;cursor:pointer;color:var(--fg);border-radius:6px;transition:background .12s;}
+.db-item:hover{background:var(--hover);}
+.db-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
+.db-item.dim{color:var(--muted);opacity:.55;}
+.db-item .db-hint{margin-left:auto;font-size:10px;color:var(--muted);}
+.db-ic{width:15px;text-align:center;flex-shrink:0;}
+
+/* main panel */
+.main-panel{flex:1;display:flex;flex-direction:column;min-width:0;}
+.panel-header{padding:12px 16px 10px;border-bottom:1px solid var(--sidebar-border);}
+.h-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.h-row + .h-row{margin-top:8px;}
+.f-label{color:var(--muted);font-size:12px;flex-shrink:0;}
+.inp{border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px;font-size:12.5px;outline:none;font-family:inherit;}
+.inp:focus{border-color:var(--active-border);}
+.inp.name{width:158px;}
+.scope{display:inline-flex;align-items:center;gap:2px;padding:3px;border-radius:8px;background:var(--tabbar);}
+.scope button{border:none;background:transparent;color:var(--muted);padding:2px 10px;line-height:16px;border-radius:6px;font-size:12px;cursor:pointer;}
+.scope button.on{background:var(--bg);color:var(--tabactive-fg);font-weight:600;box-shadow:0 1px 2px rgba(20,20,30,.12);}
+.type-badge{width:22px;height:22px;border-radius:6px;border:1px solid var(--input-border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
+.link-btn{display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;color:var(--active-border);font-size:11.5px;cursor:pointer;padding:2px 0;}
+.link-btn:hover{color:var(--primary-hover);text-decoration:underline;}
+.driver-sel{display:inline-flex;align-items:center;gap:6px;width:118px;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);padding:5px 9px;font-size:12px;color:var(--fg);cursor:pointer;flex-shrink:0;}
+.proj-sel{display:inline-flex;align-items:center;gap:8px;width:250px;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);padding:5px 9px;font-size:12px;cursor:pointer;flex-shrink:0;}
+.proj-sel.disabled{opacity:.55;cursor:not-allowed;}
+.proj-sel .pj-name{flex-shrink:0;}
+.proj-sel .pj-path{flex:1;min-width:0;color:var(--muted);opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;}
+
+/* tabs */
+.tabs-bar{display:flex;gap:12px;border-bottom:1px solid var(--border);padding:0 10px;font-size:12.5px;}
+.tab{position:relative;padding:6px 0;cursor:pointer;color:var(--muted);}
+.tab:hover{color:var(--fg);}
+.tab.on{color:var(--tabactive-fg);font-weight:600;}
+.tab.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--primary);border-radius:1px;}
+.tab-pane{display:none;padding:14px 16px;flex:1;gap:12px;min-height:272px;overflow-y:auto;}
+.tab-pane.on{display:flex;flex-direction:column;}
+
+/* outline sections */
+.info-banner{width:100%;display:flex;align-items:center;gap:8px;background:var(--info-bg);color:var(--info);border-radius:8px;padding:7px 12px;font-size:12px;border:1px solid color-mix(in srgb,var(--info) 28%,transparent);}
+.outline{display:flex;flex-direction:column;gap:10px;width:100%;}
+.sec{width:100%;background:var(--group-box);border-radius:8px;padding:8px 12px 10px;}
+.sec-head{display:flex;align-items:center;gap:6px;height:28px;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;}
+.sec-head>span{font-size:11.5px;font-weight:700;color:var(--fg);}
+.sec-head .chev{width:14px;height:14px;color:var(--muted);flex-shrink:0;transition:transform .12s;}
+.sec.collapsed .sec-head .chev{transform:rotate(-90deg);}
+.sec.collapsed .sec-head{border-bottom-color:transparent;}
+.sec-body{display:flex;flex-direction:column;gap:6px;padding-top:8px;}
+.sec.collapsed .sec-body{display:none;}
+.form-grid{display:grid;grid-template-columns:68px 1fr;gap:6px;align-items:center;}
+.form-grid label{font-size:12px;color:var(--muted);}
+.form-grid .v-box{display:flex;align-items:center;height:26px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:0 6px;font-size:11.5px;color:var(--fg);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.hint-line{padding-left:74px;font-size:11px;color:var(--muted);line-height:1.5;}
+.st-ic{width:14px;height:14px;flex-shrink:0;color:var(--active-border);}
+.st-ic.blue{color:var(--info);}
+.st-ic.green{color:var(--success);}
+.st-ic.warn{color:var(--warning);}
+.env-row{width:100%;display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.env-sel{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--input-border);background:var(--bg);color:var(--fg);border-radius:7px;padding:5px 12px;font-size:12.5px;cursor:pointer;}
+.sel{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--input-border);border-radius:6px;padding:2px 8px;color:var(--fg);cursor:pointer;background:var(--bg);}
+.sel:hover{border-color:var(--active-border);}
+.reuse-note{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:10.5px;color:var(--muted);}
+.reuse-note svg{width:11px;height:11px;color:var(--success);flex-shrink:0;}
+.auth-saved{margin-top:9px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);line-height:1.7;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.policy-line{font-size:11px;color:var(--muted);}
+.policy-line b{color:var(--info);font-weight:600;}
+.accel-card{width:100%;border:1px solid color-mix(in srgb,var(--warning) 45%,transparent);border-radius:10px;background:var(--warning-bg);padding:12px 14px;}
+.accel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.accel-title{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--warning);}
+.accel-sub{font-size:11px;color:var(--muted);margin-top:3px;}
+.switch{width:36px;height:20px;border-radius:10px;background:var(--border);position:relative;cursor:pointer;flex-shrink:0;border:none;transition:background .18s;}
+.switch::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:2px;left:2px;transition:left .18s;box-shadow:0 1px 3px rgba(0,0,0,.25);}
+.switch.on{background:var(--primary);}
+.switch.on::after{left:18px;}
+.cap-grid{display:flex;gap:8px;flex-wrap:wrap;width:100%;}
+.cap-chip{border:1px solid var(--border);background:var(--bg);border-radius:14px;padding:4px 12px;font-size:11.5px;color:var(--muted);}
+.cap-chip.ok{border-color:color-mix(in srgb,var(--success) 55%,transparent);color:var(--success);background:var(--success-bg);}
+.prop-row{display:flex;gap:8px;align-items:center;width:100%;max-width:430px;font-size:12px;}
+.prop-row .inp{flex:1;}
+
+/* 拓扑链（恢复 v1 形态） */
+.topo{border:1px dashed color-mix(in srgb,var(--border) 60%,transparent);border-radius:9px;padding:10px 12px;width:100%;font-size:12px;color:var(--fg);background:var(--sidebar);}
+.topo-title{display:flex;align-items:center;gap:7px;font-weight:700;color:var(--info);margin-bottom:8px;}
+.topo-title svg{width:14px;height:14px;}
+.topo-path{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.topo-node{border:1px solid var(--input-border);background:var(--bg);border-radius:6px;padding:4px 10px;font-size:11.5px;box-shadow:0 1px 2px rgba(0,0,0,.05);}
+.topo-node .tls{color:var(--info);font-weight:700;margin-left:4px;}
+.topo-node.hop{background:var(--success-bg);border-color:color-mix(in srgb,var(--success) 55%,transparent);}
+.topo-arrow{color:var(--muted);}
+.topo-legend{margin-top:8px;font-size:10.5px;color:var(--muted);line-height:1.6;}
+
+/* ===== 生命周期与留痕 ===== */
+.life-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+@media (max-width:860px){.life-grid{grid-template-columns:1fr;}}
+.life-card{border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:10px 12px;}
+.life-card h4{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--fg);margin-bottom:8px;}
+.life-card h4 .st-ic{width:13px;height:13px;}
+.tl{display:flex;flex-direction:column;gap:0;}
+.tl-row{display:flex;gap:9px;padding:5px 0;position:relative;}
+.tl-row .tl-rail{width:10px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:2px;}
+.tl-row .tl-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0;margin-top:4px;}
+.tl-row.current .tl-dot{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 22%,transparent);}
+.tl-row .tl-line{width:1px;flex:1;background:var(--border);}
+.tl-row:last-child .tl-line{background:transparent;}
+.tl-row .tl-body{flex:1;min-width:0;font-size:11.5px;}
+.tl-row .tl-act{font-weight:600;color:var(--fg);}
+.tl-row.current .tl-act{color:var(--success);}
+.tl-row .tl-meta{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:10.5px;margin-top:1px;}
+.tl-row .tl-sum{color:var(--muted);font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tl-row .tl-new{background:var(--success);color:#fff;font-size:9px;border-radius:4px;padding:0 5px;line-height:13px;font-weight:700;}
+.tl-more{margin-top:6px;font-size:11px;color:var(--active-border);cursor:pointer;}
+.footprint{display:flex;flex-direction:column;gap:5px;}
+.fp-row{display:flex;align-items:center;gap:8px;font-size:11.5px;padding:4px 8px;border-radius:6px;background:var(--group-box);}
+.fp-row .fp-t{flex:1;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fp-row .fp-c{color:var(--muted);font-size:10.5px;flex-shrink:0;}
+.fp-row .fp-go{color:var(--active-border);font-size:11px;flex-shrink:0;cursor:pointer;font-weight:600;}
+.sync-badge{display:inline-flex;align-items:center;gap:6px;border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;}
+.sync-badge.stale{background:var(--warning-bg);color:var(--warning);border:1px solid color-mix(in srgb,var(--warning) 45%,transparent);}
+.sync-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px;}
+
+/* footer */
+.dlg-footer{display:flex;align-items:center;gap:10px;background:var(--tabbar);border-top:1px solid var(--border);padding:11px 16px;}
+.btn{display:inline-flex;align-items:center;gap:7px;border-radius:8px;padding:6px 16px;font-size:12.5px;cursor:pointer;border:1px solid transparent;transition:all .15s;}
+.btn-test{border-color:var(--active-border);color:var(--active-border);background:var(--bg);font-weight:600;}
+.btn-test:hover{background:color-mix(in srgb,var(--active-border) 10%,transparent);}
+.btn-cancel{border-color:var(--border);color:var(--fg);background:var(--bg);}
+.btn-cancel:hover{background:var(--hover);}
+.btn-save{background:var(--primary);color:var(--primary-fg);font-weight:600;box-shadow:0 2px 6px color-mix(in srgb,var(--primary) 35%,transparent);}
+.btn-save:hover{background:var(--primary-hover);}
+.btn-close{border:1px solid var(--input-border);background:var(--bg);color:var(--fg);}
+.btn-close:hover{background:var(--hover);}
+.btn-danger{border-color:var(--danger);color:var(--danger);background:var(--bg);font-weight:600;}
+.btn-danger:hover{background:color-mix(in srgb,var(--danger) 10%,transparent);}
+.result{display:flex;flex-direction:column;gap:4px;font-size:11.5px;min-width:0;}
+.result .line{display:flex;align-items:center;gap:8px;}
+.result .msg{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;}
+.result.ok .msg{color:var(--success);}
+.result.info .msg{color:var(--muted);}
+.result .link{color:var(--primary);cursor:pointer;font-weight:600;}
+.spacer{flex:1;}
+
+/* ===== DBeaver 式管理窗：左列表 + 右表单（master-detail） ===== */
+.overlay{position:fixed;inset:0;background:rgba(15,15,25,.42);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:50;}
+.overlay.on{display:flex;}
+.modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(820px,94vw);max-height:82vh;overflow:hidden;box-shadow:var(--shadow);display:flex;flex-direction:column;}
+.modal-head{display:flex;align-items:center;gap:9px;background:var(--titlebar);padding:10px 16px;font-size:12.5px;font-weight:700;border-bottom:1px solid var(--border);flex-shrink:0;}
+.modal-head .m-ic{width:15px;height:15px;color:var(--active-border);}
+.modal-head .close{margin-left:auto;}
+.mgmt-wrap{display:flex;flex:1;min-height:430px;overflow:hidden;}
+.mgmt-left{width:230px;flex-shrink:0;border-right:1px solid var(--sidebar-border);background:var(--sidebar);display:flex;flex-direction:column;}
+.mgmt-left .ml-search{padding:10px 10px 6px;}
+.mgmt-left .ml-search input{width:100%;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px;font-size:12px;outline:none;}
+.mgmt-left .ml-search input:focus{border-color:var(--active-border);}
+.mgmt-left .ml-list{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 8px;display:flex;flex-direction:column;gap:3px;}
+.mgmt-left .ml-new{margin:8px;}
+.mgmt-left .ml-new button{display:flex;align-items:center;justify-content:center;gap:6px;border:1px dashed var(--input-border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 10px;font-size:11.5px;cursor:pointer;width:100%;}
+.mgmt-left .ml-new button:hover{border-color:var(--active-border);color:var(--active-border);}
+.ml-item{display:flex;align-items:center;gap:7px;padding:6px 9px;border-radius:7px;cursor:pointer;font-size:12px;transition:background .12s;}
+.ml-item:hover{background:var(--hover);}
+.ml-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
+.ml-item .tag{font-size:9.5px;border-radius:4px;padding:1px 6px;color:#fff;flex-shrink:0;font-weight:700;letter-spacing:.2px;}
+.ml-item .ml-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ml-item .ml-code{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:0 5px;line-height:14px;flex-shrink:0;}
+.ml-cat{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 9px 3px;}
+/* 网络档案测试结果 */
+.nt-result{display:none;align-items:flex-start;gap:7px;font-size:11.5px;border-radius:8px;padding:7px 11px;line-height:1.6;}
+.nt-result.on{display:flex;}
+.nt-result.ok{background:var(--success-bg);color:var(--success);border:1px solid color-mix(in srgb,var(--success) 45%,transparent);}
+.nt-result.err{background:var(--danger-bg);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 45%,transparent);}
+.nt-result .nt-go{font-weight:700;margin-left:2px;}
+.nt-test-row{display:flex;align-items:center;gap:10px;margin-top:2px;}
+.mgmt-right{flex:1;min-width:0;padding:14px 18px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+.mgmt-right .mr-head{display:flex;align-items:center;gap:8px;}
+.mgmt-right .mr-head h3{font-size:13px;font-weight:700;color:var(--fg);}
+.mgmt-right .mr-head .reuse{font-size:10px;color:var(--info);border:1px solid color-mix(in srgb,var(--info) 45%,transparent);border-radius:10px;padding:1px 8px;background:var(--info-bg);}
+.fld-grp{border:1px solid var(--border);border-radius:8px;background:var(--group-box);padding:10px 12px;}
+.fld-grp h5{display:flex;align-items:center;gap:7px;font-size:11.5px;font-weight:700;color:var(--fg);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.fld-grp h5 .st-ic{width:12px;height:12px;}
+.frm{display:flex;flex-direction:column;gap:9px;}
+.frm-row{display:flex;align-items:center;gap:8px;}
+.frm-row label{width:84px;font-size:12px;color:var(--muted);flex-shrink:0;}
+.frm-row .inp{flex:1;}
+.frm-row .seg{display:inline-flex;gap:2px;padding:3px;border-radius:8px;background:var(--tabbar);}
+.frm-row .seg button{border:none;background:transparent;color:var(--muted);padding:2px 10px;line-height:16px;border-radius:6px;font-size:12px;cursor:pointer;}
+.frm-row .seg button.on{background:var(--bg);color:var(--tabactive-fg);font-weight:600;box-shadow:0 1px 2px rgba(20,20,30,.12);}
+.frm-hint{font-size:10.5px;color:var(--muted);padding-left:92px;line-height:1.6;}
+.frm-foot{display:flex;align-items:center;gap:8px;margin-top:2px;padding-top:10px;border-top:1px dashed var(--border);}
+.frm-foot .spacer{flex:1;}
+.pwd-wrap{flex:1;display:flex;align-items:center;gap:6px;min-width:0;}
+.pwd-wrap .inp{flex:1;font-family:Consolas,monospace;}
+.eye{flex-shrink:0;color:var(--muted);font-size:11px;cursor:pointer;border:1px solid var(--border);border-radius:6px;padding:2px 8px;background:var(--bg);}
+.eye:hover{border-color:var(--active-border);color:var(--active-border);}
+.pol-row{display:flex;align-items:center;gap:8px;}
+.pol-row label{width:128px;font-size:12px;color:var(--muted);flex-shrink:0;}
+.pol-row .inp{flex:1;max-width:120px;}
+.pol-row .seg{display:inline-flex;gap:2px;padding:3px;border-radius:8px;background:var(--tabbar);}
+.pol-row .seg button{border:none;background:transparent;color:var(--muted);padding:2px 10px;line-height:16px;border-radius:6px;font-size:12px;cursor:pointer;}
+.pol-row .seg button.on{background:var(--bg);color:var(--tabactive-fg);font-weight:600;box-shadow:0 1px 2px rgba(20,20,30,.12);}
+.pol-row .pol-note{font-size:10.5px;color:var(--muted);flex-shrink:0;}
+/* chain 拓扑 + 跳板编辑 */
+.hop-editor{display:flex;flex-direction:column;gap:7px;}
+.hop-row{display:flex;align-items:center;gap:6px;font-size:11.5px;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 8px;}
+.hop-row .hop-tag{font-size:9.5px;background:var(--success);color:#fff;border-radius:4px;padding:0 5px;line-height:14px;flex-shrink:0;}
+.hop-row .hop-body{flex:1;min-width:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.hop-row .hop-x{flex-shrink:0;color:var(--muted);cursor:pointer;font-size:12px;}
+.hop-row .hop-x:hover{color:var(--danger);}
+.hop-add button{display:inline-flex;align-items:center;gap:6px;border:1px dashed var(--input-border);background:var(--bg);color:var(--fg);border-radius:7px;padding:4px 12px;font-size:11.5px;cursor:pointer;}
+.hop-add button:hover{border-color:var(--active-border);color:var(--active-border);}
+/* 守卫 */
+.guard-icon{width:34px;height:34px;border-radius:9px;background:var(--danger-bg);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.guard-title{font-size:13px;font-weight:700;color:var(--danger);}
+.guard-body{font-size:12px;color:var(--fg);line-height:1.75;margin-top:8px;}
+.guard-refs{display:flex;flex-direction:column;gap:5px;margin-top:10px;background:var(--group-box);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:11.5px;}
+.guard-refs .g-ref{display:flex;align-items:center;gap:7px;}
+.guard-note{margin-top:10px;font-size:10.5px;color:var(--muted);line-height:1.6;}
+.guard-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+/* 守卫小弹窗（从管理窗之上再叠一层） */
+.mini-modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(500px,90vw);max-height:80vh;overflow:auto;box-shadow:var(--shadow);}
+.mini-head{display:flex;align-items:center;gap:9px;background:var(--titlebar);padding:10px 16px;font-size:12.5px;font-weight:700;border-bottom:1px solid var(--border);position:sticky;top:0;}
+.mini-head .close{margin-left:auto;}
+.mini-body{padding:14px 16px;}
+
+.note{max-width:980px;margin:16px auto 0;display:flex;gap:9px;color:var(--muted);font-size:12px;line-height:1.8;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;}
+.note svg{width:14px;height:14px;color:var(--info);flex-shrink:0;margin-top:3px;}
+.note b{color:var(--fg);}
+.note code{font-family:Consolas,monospace;font-size:11px;background:var(--sidebar);border-radius:4px;padding:0 5px;}
+@media (max-width:760px){
+  body{padding:18px 10px;}
+  .sidebar{width:150px;}
+  .dlg-body{min-height:0;}
+  .tab-pane.on{min-height:0;}
+  .mgmt-left{width:150px;}
+}
+</style>
+</head>
+<body data-theme="light">
+
+<div class="page-head">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M4 7h10M4 12h16M4 17h7"/></svg></div>
+    <div>
+      <h1>新增数据源连接</h1>
+      <div class="sub">原型 v2.3 · 网络档案测试 · 认证二选一 · 认证分类 · 仅示意，未改动任何代码</div>
+    </div>
+  </div>
+  <button class="theme-toggle" onclick="toggleTheme()">🌓 切换主题</button>
+</div>
+
+<div class="dialog">
+  <div class="dlg-titlebar">
+    <span class="dlg-title">新建数据源连接<span class="sep">·</span><span class="sub">MySQL-演示 · 全局（G_）</span></span>
+    <div class="win-dots"><i></i><i></i><i class="close"></i></div>
+  </div>
+
+  <div class="dlg-body">
+    <!-- sidebar -->
+    <div class="sidebar">
+      <div class="side-search"><input placeholder="搜索类型…"></div>
+      <div class="side-section">
+        <div class="side-head"><span class="side-title">暂存列表</span><span class="stage-add">＋ 添加</span></div>
+        <div class="stage-box">
+          <div class="stage-item active"><span class="st-db">🐬</span><span>MySQL 演示</span><span class="st-dot">●</span></div>
+          <div class="stage-item"><span class="st-db">🐘</span><span>生产 PG</span><span class="st-code">G</span></div>
+          <div class="stage-item"><span class="st-db">🦆</span><span>DuckDB 本地</span><span class="st-code">P</span></div>
+        </div>
+      </div>
+      <div class="side-divider"></div>
+      <div class="side-section grow">
+        <div class="side-title">数据库类型</div>
+        <div class="type-box">
+          <div class="cat-label">关系型（5）</div>
+          <div class="db-item active"><span class="db-ic">🐬</span>MySQL</div>
+          <div class="db-item"><span class="db-ic">🐘</span>PostgreSQL</div>
+          <div class="db-item dim"><span class="db-ic">🦭</span>MariaDB<span class="db-hint">暂无驱动</span></div>
+          <div class="cat-label">文件型（1）</div>
+          <div class="db-item"><span class="db-ic">🪶</span>SQLite</div>
+          <div class="cat-label">分析型（2）</div>
+          <div class="db-item"><span class="db-ic">🦆</span>DuckDB</div>
+          <div class="db-item dim"><span class="db-ic">⚡</span>ClickHouse<span class="db-hint">暂无驱动</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- main -->
+    <div class="main-panel">
+      <div class="panel-header">
+        <div class="h-row">
+          <span class="type-badge">🐬</span>
+          <input class="inp" value="MySQL-演示" style="flex:1;min-width:120px;">
+          <div class="scope">
+            <button class="on">全局</button><button>项目</button><button>全局+项目</button>
+          </div>
+        </div>
+        <div class="h-row">
+          <span class="f-label">备注</span>
+          <input class="inp" value="团队共用分析库" style="flex:1;min-width:160px;">
+          <div class="proj-sel disabled"><span class="pj-name">仅全局不需要</span></div>
+        </div>
+        <div class="h-row">
+          <span class="f-label">驱动</span>
+          <div class="driver-sel">sqlx ▾</div>
+          <span class="f-label">URI</span>
+          <input class="inp" value="mysql://root:****@127.0.0.1:3306/demo" style="flex:1;min-width:200px;font-family:Consolas,'Courier New',monospace;font-size:11.5px;">
+        </div>
+      </div>
+
+      <div class="tabs-bar">
+        <div class="tab on" data-tab="general">常规</div>
+        <div class="tab" data-tab="network">网络</div>
+        <div class="tab" data-tab="capabilities">能力</div>
+        <div class="tab" data-tab="properties">驱动属性</div>
+        <div class="tab" data-tab="advanced">高级</div>
+      </div>
+
+      <!-- 常规 -->
+      <div class="tab-pane on" id="tab-general">
+        <div class="info-banner">MySQL · sqlx · 原生连接 · 支持 password / ssl 认证</div>
+        <div class="outline">
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M4 12h16M4 17h7"/></svg><span>连接设置</span></div>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>主机</label><span class="v-box">127.0.0.1</span>
+                <label>端口</label><span class="v-box">3306</span>
+                <label>数据库</label><span class="v-box">demo</span>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>数据库认证</span></div>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>认证方法</label><span class="v-box">password ▾</span>
+                <label>用户名</label><input class="inp" value="root">
+                <label>密码</label><input class="inp" type="password" value="secret">
+              </div>
+              <div class="auth-saved">
+                <span style="flex-shrink:0;">引用已保存配置</span>
+                <span class="sel">MySQL-root-prod ▾</span>
+                <span class="sel" id="openAuthMgr">管理认证配置</span>
+                <span class="reuse-note">与来源共用凭据 · AES-256 加密 · 修改一处全量生效</span>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>连接安全（SSL/TLS）</span></div>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>模式</label><span class="v-box">require ▾</span>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg><span>组织（标签 / 分组）</span></div>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>标签</label><input class="inp" value="prod, core">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 网络（含拓扑显示，恢复 v1 形态） -->
+      <div class="tab-pane" id="tab-network">
+        <div class="outline">
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M8.6 7.3L6.3 16M15.4 7.3l2.3 8.7M9 19h6"/></svg><span>引用网络档案</span></div>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>网络档案</label><span class="v-box" id="netSelVal">prod-gw 跳板（SSH）</span>
+              </div>
+              <div class="auth-saved">
+                <span class="sel" id="pickNetwork">prod-gw 跳板 ▾</span>
+                <span class="sel" id="openNetworkMgr">管理网络配置</span>
+              </div>
+              <!-- 拓扑链：连接路径可视化 -->
+              <div class="topo" style="margin-top:6px;">
+                <div class="topo-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M8.6 7.3L6.3 16M15.4 7.3l2.3 8.7M9 19h6"/></svg>连接路径</div>
+                <div class="topo-path" id="topoPath">
+                  <span class="topo-node">本机客户端</span><span class="topo-arrow">→</span>
+                  <span class="topo-node hop" id="topoHop1">SSH · gw.prod.internal:22</span><span class="topo-arrow">→</span>
+                  <span class="topo-node">MySQL · 127.0.0.1:3306<span class="tls">TLS</span></span>
+                </div>
+                <div class="topo-legend">SSH 跳板建立本地转发端口，探测结束即释放；多跳（chain）同样在此展示每一跳。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 能力 -->
+      <div class="tab-pane" id="tab-capabilities">
+        <div class="outline">
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 4.8L20 8l-4 4 1 6-5-2.6L7 18l1-6-4-4 5.6-1.2z"/></svg><span>驱动能力矩阵（只读）</span></div>
+            <div class="sec-body">
+              <div class="cap-grid">
+                <span class="cap-chip ok">SELECT 查询</span><span class="cap-chip ok">DDL 执行</span><span class="cap-chip ok">事务</span><span class="cap-chip ok">SSL/TLS</span><span class="cap-chip">联邦查询</span><span class="cap-chip">窗口函数</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 驱动属性 -->
+      <div class="tab-pane" id="tab-properties">
+        <div class="outline">
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13"/></svg><span>驱动属性（键值）</span></div>
+            <div class="sec-body">
+              <div class="prop-row"><input class="inp" value="connection_timeout"><input class="inp" value="30000"></div>
+              <div class="prop-row"><input class="inp" value="tcp_keepalive"><input class="inp" value="true"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 高级 -->
+      <div class="tab-pane" id="tab-advanced">
+        <div class="outline">
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V8l8-4 8 4v13M4 21h16M10 21v-6h4v6"/></svg><span>环境</span></div>
+            <div class="sec-body">
+              <div class="env-row">
+                <div class="env-sel">生产（production）▾</div>
+                <span class="sel" id="openEnvMgr">管理环境</span>
+                <span class="policy-line">策略摘要：<b>只读 · 行数 1000 · 禁 DDL/导出 · 强制留痕</b></span>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18h.01"/></svg><span>安全策略（覆盖环境默认）</span></div>
+            <div class="sec-body">
+              <div class="hint-line">勾选即覆盖该策略并标记「已覆盖」，落库 advanced_options.policy_overrides</div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg><svg class="st-ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg><span>DuckDB 本地加速</span></div>
+            <div class="sec-body">
+              <div class="accel-card">
+                <div class="accel-head">
+                  <div><div class="accel-title">启用本地加速（联邦查询直连源库）</div><div class="accel-sub">凭据注册为 persistent secret · 应用私有目录</div></div>
+                  <button class="switch on"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              <svg class="st-ic green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span>生命周期与留痕</span>
+              <span style="font-weight:400;color:var(--muted);font-size:10.5px;margin-left:4px;">v2 新增</span>
+            </div>
+            <div class="sec-body">
+              <div class="life-grid">
+                <div class="life-card">
+                  <h4><svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>变更历史</h4>
+                  <div class="tl">
+                    <div class="tl-row current">
+                      <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+                      <div class="tl-body">
+                        <div class="tl-act">保存 · 开启 DuckDB 联邦加速</div>
+                        <div class="tl-meta">2026-09-30 10:24 <span class="tl-new">当前</span></div>
+                        <div class="tl-sum">作用域 全局+项目 · 快照同步至「营销分析」</div>
+                      </div>
+                    </div>
+                    <div class="tl-row">
+                      <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+                      <div class="tl-body">
+                        <div class="tl-act">编辑 · 主机迁移</div>
+                        <div class="tl-meta">2026-09-12 15:02</div>
+                        <div class="tl-sum">192.168.1.40 → 127.0.0.1；测试通过（8.4.0 · 12ms）</div>
+                      </div>
+                    </div>
+                    <div class="tl-row">
+                      <div class="tl-rail"><span class="tl-dot"></span><span class="tl-line"></span></div>
+                      <div class="tl-body">
+                        <div class="tl-act">创建 · 初始配置</div>
+                        <div class="tl-meta">2026-08-30 09:00</div>
+                        <div class="tl-sum">MySQL · 仅全局 · 凭据引用 G_auth_analyst</div>
+                      </div>
+                    </div>
+                  </div>
+                  <span class="tl-more">查看全部 4 条变更 →</span>
+                </div>
+                <div class="life-card">
+                  <h4><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-6l-4 8-4-16-4 8H2"/></svg>分析足迹</h4>
+                  <div class="footprint">
+                    <div class="fp-row"><span class="fp-t">查询 · SELECT * FROM orders LIMIT 100</span><span class="fp-c">今天 09:41</span><span class="fp-go">打开 →</span></div>
+                    <div class="fp-row"><span class="fp-t">结果快照 · orders 前 100 行</span><span class="fp-c">sha256 3f2a…</span><span class="fp-go">打开 →</span></div>
+                    <div class="fp-row"><span class="fp-t">洞察 · 订单趋势周报 v2</span><span class="fp-c">昨天</span><span class="fp-go">打开 →</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="sync-row">
+                <span style="font-size:11.5px;color:var(--muted);">项目快照（GP_）同步状态：</span>
+                <span class="sync-badge stale">落后全局 1 次变更</span>
+                <button class="btn btn-test" style="padding:4px 12px;font-size:11.5px;">从全局定义同步</button>
+                <span style="font-size:10.5px;color:var(--muted);">同步保留快照 ID / 创建时间 / 分组关系</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 结果行 -->
+      <div style="padding:8px 16px;">
+        <div class="result ok">
+          <div class="line"><span>✓</span><span class="msg">已保存：MySQL-演示（全局 · 凭据引用 MySQL-root-prod）</span><span class="link">详情</span><span class="link">复制</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dlg-footer">
+    <button class="btn btn-test">🔌 测试连接</button>
+    <span style="font-size:11px;color:var(--muted);">Ctrl+T 测试 · Ctrl+Enter 保存</span>
+    <div class="spacer"></div>
+    <button class="btn btn-cancel">取消</button>
+    <button class="btn btn-save">保存</button>
+    <button class="btn btn-close">保存并关闭</button>
+  </div>
+</div>
+
+<!-- ========== 管理窗 1：认证配置（DBeaver 式：左列表 + 右表单） ========== -->
+<div class="overlay" id="ovlAuth"><div class="modal">
+  <div class="modal-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    认证配置管理（AuthConfigManager）
+    <button class="link-btn close" data-close="ovlAuth">关闭 ✕</button>
+  </div>
+  <div class="mgmt-wrap">
+    <!-- 左：列表 -->
+    <div class="mgmt-left">
+      <div class="ml-search"><input placeholder="搜索认证配置…" id="authSearch"></div>
+      <div class="ml-list" id="authList">
+        <div class="ml-cat">密码 · password</div>
+        <div class="ml-item active" data-auth="0"><span class="tag" style="background:#C25B46;">password</span><span class="ml-name">MySQL-root-prod</span><span class="ml-code">G</span></div>
+        <div class="ml-cat">密钥 · ssh_key</div>
+        <div class="ml-item" data-auth="1"><span class="tag" style="background:#2F9E6E;">ssh_key</span><span class="ml-name">prod-gw 密钥</span><span class="ml-code">G</span></div>
+        <div class="ml-cat">代理密码 · proxy_pwd</div>
+        <div class="ml-item" data-auth="2"><span class="tag" style="background:#C0843C;">proxy_pwd</span><span class="ml-name">公司代理账号</span><span class="ml-code">G</span></div>
+        <div class="ml-cat">令牌 · token</div>
+        <div class="ml-item" data-auth="3"><span class="tag" style="background:#2563EB;">token</span><span class="ml-name">API Token</span><span class="ml-code">P</span></div>
+      </div>
+      <div class="ml-new"><button id="newAuthBtn">＋ 新建认证配置</button></div>
+    </div>
+    <!-- 右：表单（选中即编辑） -->
+    <div class="mgmt-right">
+      <div class="mr-head">
+        <h3 id="authFormTitle">编辑：MySQL-root-prod</h3>
+        <span class="reuse">被 3 个数据源引用</span>
+      </div>
+      <div class="fld-grp">
+        <h5><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13"/></svg>基本信息</h5>
+        <div class="frm">
+          <div class="frm-row"><label>名称</label><input class="inp" id="authName" value="MySQL-root-prod"></div>
+          <div class="frm-row"><label>认证类型</label>
+            <span class="sel">password ▾</span>
+            <span style="font-size:10.5px;color:var(--muted);">password / ssh_key / proxy_pwd / token</span>
+          </div>
+          <div class="frm-row"><label>作用域</label>
+            <span class="seg"><button class="on">全局</button><button>项目</button></span>
+            <span style="font-size:10.5px;color:var(--muted);">项目配置存于项目库，AES 加密</span>
+          </div>
+        </div>
+      </div>
+      <div class="fld-grp">
+        <h5><svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>凭据</h5>
+        <div class="frm">
+          <div class="frm-row"><label>用户名</label><input class="inp" value="root"></div>
+          <div class="frm-row"><label>密码</label>
+            <span class="pwd-wrap"><input class="inp" type="password" value="s3cret!2026"><span class="eye">显示</span></span>
+          </div>
+          <div class="frm-row" id="authKeyRow"><label>密钥路径</label>
+            <span class="pwd-wrap"><input class="inp" value="~/.ssh/id_ed25519" style="opacity:.5;"><span class="ghost-btn">浏览…</span></span>
+          </div>
+          <div class="frm-hint">AES-256-GCM 字段级加密入库；列表接口返回脱敏值；草稿表无密码列。</div>
+        </div>
+      </div>
+      <div class="frm-foot">
+        <button class="btn btn-danger" id="authDelBtn">删除</button>
+        <div class="spacer"></div>
+        <button class="btn btn-cancel" data-close="ovlAuth">取消</button>
+        <button class="btn btn-save" data-close="ovlAuth">保存</button>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<!-- 认证删除守卫 -->
+<div class="overlay" id="authDel"><div class="mini-modal">
+  <div class="mini-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--danger);"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18h.01"/></svg>
+    <span>删除被拦截 · 配置仍被引用</span>
+    <button class="link-btn close" data-close="authDel">关闭 ✕</button>
+  </div>
+  <div class="mini-body">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="guard-icon">⚠</span>
+      <div>
+        <div class="guard-title">无法删除「MySQL-root-prod」</div>
+        <div class="guard-body" style="margin-top:2px;">该认证配置被 <b>3 个数据源</b>引用。删除后这些连接将失去凭据：<br>测试连接与真实连接均会报错（<b>严格模式：不静默直连无凭据</b>）。</div>
+      </div>
+    </div>
+    <div class="guard-refs">
+      <div class="g-ref">🐬 MySQL-演示（全局）</div>
+      <div class="g-ref">🐘 生产 PG（全局）</div>
+      <div class="g-ref">🦆 DuckDB 本地（项目：营销分析）</div>
+    </div>
+    <div class="guard-note">建议先解除引用（把连接改为内联凭据或换用其它认证配置），再删除此配置。</div>
+    <div class="guard-foot">
+      <button class="btn btn-cancel" data-close="authDel">取消</button>
+      <button class="btn btn-danger" data-close="authDel">强制删除（连接将报错）</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ========== 管理窗 2：网络配置（DBeaver 式 + chain 拓扑） ========== -->
+<div class="overlay" id="ovlNetwork"><div class="modal">
+  <div class="modal-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M8.6 7.3L6.3 16M15.4 7.3l2.3 8.7M9 19h6"/></svg>
+    网络配置管理（NetworkConfigManager）
+    <button class="link-btn close" data-close="ovlNetwork">关闭 ✕</button>
+  </div>
+  <div class="mgmt-wrap">
+    <div class="mgmt-left">
+      <div class="ml-search"><input placeholder="搜索网络档案…"></div>
+      <div class="ml-list" id="netList">
+        <div class="ml-item active" data-net="0"><span class="tag" style="background:#2F9E6E;">SSH</span><span class="ml-name">prod-gw 跳板</span><span class="ml-code">G</span></div>
+        <div class="ml-item" data-net="1"><span class="tag" style="background:#C0843C;">Proxy</span><span class="ml-name">公司代理</span><span class="ml-code">G</span></div>
+        <div class="ml-item" data-net="2"><span class="tag" style="background:#7C3AED;">Chain</span><span class="ml-name">办公网 → 生产</span><span class="ml-code">P</span></div>
+        <div class="ml-item" data-net="3"><span class="tag" style="background:#0EA5E9;">SOCKS5</span><span class="ml-name">外网出口</span><span class="ml-code">G</span></div>
+      </div>
+      <div class="ml-new"><button id="newNetBtn">＋ 新建网络配置</button></div>
+    </div>
+    <div class="mgmt-right">
+      <div class="mr-head">
+        <h3 id="netFormTitle">编辑：prod-gw 跳板</h3>
+        <span class="reuse">被 4 个连接复用</span>
+      </div>
+      <div class="fld-grp">
+        <h5><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13"/></svg>基本信息</h5>
+        <div class="frm">
+          <div class="frm-row"><label>名称</label><input class="inp" value="prod-gw 跳板"></div>
+          <div class="frm-row"><label>类型</label>
+            <span class="sel" id="netTypeSel">SSH 隧道 ▾</span>
+            <span class="sel">HTTP 代理</span>
+            <span class="sel">SOCKS5</span>
+            <span class="sel" id="netTypeChain">链式多跳</span>
+          </div>
+          <div class="frm-row"><label>作用域</label>
+            <span class="seg"><button class="on">全局</button><button>项目</button></span>
+          </div>
+        </div>
+      </div>
+      <!-- SSH / 代理 字段区（单跳） -->
+      <div class="fld-grp" id="singleHopGrp">
+        <h5><svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M8.6 7.3L6.3 16M15.4 7.3l2.3 8.7M9 19h6"/></svg>目标</h5>
+        <div class="frm">
+          <div class="frm-row"><label>主机</label><input class="inp" value="gw.prod.internal"></div>
+          <div class="frm-row"><label>端口</label><input class="inp" value="22"></div>
+          <div class="frm-row"><label>认证方式</label>
+            <span class="seg" id="netAuthSeg">
+              <button class="on" data-mode="ref">引用配置</button>
+              <button data-mode="inline">手动输入</button>
+            </span>
+          </div>
+          <div class="frm-row" id="netAuthRef"><label>认证</label>
+            <span class="sel" style="flex:1;">引用认证配置：prod-gw 密钥 ▾</span>
+          </div>
+          <div class="frm-row" id="netAuthInline1" style="display:none;"><label>用户名</label><input class="inp" value="deploy"></div>
+          <div class="frm-row" id="netAuthInline2" style="display:none;"><label>密码</label>
+            <span class="pwd-wrap"><input class="inp" type="password" value=""><span class="eye">显示</span></span>
+          </div>
+          <div class="frm-hint">认证方式二选一：引用认证配置（复用，修改一处全量生效），或在本档案内直接输入（独立保存，同样 AES 加密）。</div>
+          <div class="nt-test-row">
+            <button class="btn btn-test" id="netTestBtn" style="padding:4px 14px;font-size:11.5px;">🔌 测试隧道</button>
+            <span style="font-size:10.5px;color:var(--muted);">建立隧道 → 连通目标 → 释放，不留残留进程</span>
+          </div>
+          <div class="nt-result ok" id="netTestOk">
+            <span>✓</span><span>SSH 隧道连通 · <span class="nt-go">gw.prod.internal:22</span> → 本地转发 <span class="nt-go">127.0.0.1:33306</span> · 握手 9ms · 已释放</span>
+          </div>
+          <div class="nt-result err" id="netTestErr">
+            <span>✕</span><span>隧道建立失败：SSH 握手超时（10s）——检查主机可达性与认证配置「prod-gw 密钥」；密钥文件不存在（~/.ssh/id_ed25519）</span>
+          </div>
+        </div>
+      </div>
+      <!-- Chain 区：拓扑显示 + 跳板编辑 -->
+      <div class="fld-grp" id="chainGrp" style="display:none;">
+        <h5><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>跳板序列（chain）</h5>
+        <div class="topo" style="margin-bottom:10px;">
+          <div class="topo-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><path d="M8.6 7.3L6.3 16M15.4 7.3l2.3 8.7M9 19h6"/></svg>连接路径</div>
+          <div class="topo-path" id="chainTopo">
+            <span class="topo-node">本机客户端</span><span class="topo-arrow">→</span>
+            <span class="topo-node hop">SSH · gw1.corp:22</span><span class="topo-arrow">→</span>
+            <span class="topo-node hop">SSH · gw2.prod:22</span><span class="topo-arrow">→</span>
+            <span class="topo-node">目标库</span>
+          </div>
+        </div>
+        <div class="hop-editor">
+          <div class="hop-row"><span class="hop-tag">1</span><span class="hop-body"><span>SSH</span><span>gw1.corp:22</span><span style="color:var(--muted);">引用「prod-gw 密钥」</span></span><span class="hop-x">✕</span></div>
+          <div class="hop-row"><span class="hop-tag">2</span><span class="hop-body"><span>SSH</span><span>gw2.prod:22</span><span style="color:var(--muted);">引用「prod-gw 密钥」</span></span><span class="hop-x">✕</span></div>
+        </div>
+        <div class="hop-add"><button>＋ 添加跳板</button></div>
+        <div class="nt-test-row">
+          <button class="btn btn-test" id="chainTestBtn" style="padding:4px 14px;font-size:11.5px;">🔌 测试整条链</button>
+          <span style="font-size:10.5px;color:var(--muted);">逐跳探测 · 定位到具体失败跳</span>
+        </div>
+        <div class="nt-result ok" id="chainTestOk">
+          <span style="flex-shrink:0;">✓</span>
+          <span style="flex:1;">
+            全部连通（总耗时 38ms · 已释放）：
+            <div style="margin-top:4px;display:flex;flex-direction:column;gap:3px;font-size:11px;">
+              <span>第 1 跳 · SSH gw1.corp:22 <span style="color:var(--success);font-weight:700;">✓ 22ms</span></span>
+              <span>第 2 跳 · SSH gw2.prod:22 <span style="color:var(--success);font-weight:700;">✓ 16ms</span></span>
+              <span>目标库 <span style="color:var(--success);font-weight:700;">✓</span></span>
+            </div>
+          </span>
+        </div>
+        <div class="nt-result err" id="chainTestErr">
+          <span style="flex-shrink:0;">✕</span>
+          <span style="flex:1;">
+            失败定位：<b>第 2 跳 · SSH gw2.prod:22</b> 握手超时（10s）
+            <div style="margin-top:4px;display:flex;flex-direction:column;gap:3px;font-size:11px;">
+              <span>第 1 跳 · SSH gw1.corp:22 <span style="color:var(--success);font-weight:700;">✓ 22ms</span></span>
+              <span>第 2 跳 · SSH gw2.prod:22 <span style="color:var(--danger);font-weight:700;">✕ 超时</span></span>
+              <span style="color:var(--muted);">目标库 —（未到达，链在此中断）</span>
+            </div>
+          </span>
+        </div>
+      </div>
+      <div class="frm-foot">
+        <button class="btn btn-danger" id="netDelBtn">删除</button>
+        <div class="spacer"></div>
+        <button class="btn btn-cancel" data-close="ovlNetwork">取消</button>
+        <button class="btn btn-save" data-close="ovlNetwork">保存</button>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<!-- 网络删除守卫 -->
+<div class="overlay" id="netDel"><div class="mini-modal">
+  <div class="mini-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--danger);"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18h.01"/></svg>
+    <span>删除被拦截 · 档案仍被引用</span>
+    <button class="link-btn close" data-close="netDel">关闭 ✕</button>
+  </div>
+  <div class="mini-body">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="guard-icon">⚠</span>
+      <div>
+        <div class="guard-title">无法删除「prod-gw 跳板」</div>
+        <div class="guard-body" style="margin-top:2px;">该网络配置被 <b>4 个连接</b>引用。删除后这些连接将失去隧道，<br>指向内网库的地址将无法连通（不会静默改成直连）。</div>
+      </div>
+    </div>
+    <div class="guard-refs">
+      <div class="g-ref">🐬 MySQL-演示（全局）</div>
+      <div class="g-ref">🐘 生产 PG（全局）</div>
+      <div class="g-ref">🦆 DuckDB 本地（项目）</div>
+      <div class="g-ref">🐬 报表库（项目：数据仓库）</div>
+    </div>
+    <div class="guard-foot">
+      <button class="btn btn-cancel" data-close="netDel">取消</button>
+      <button class="btn btn-danger" data-close="netDel">强制删除（连接将无法连通）</button>
+    </div>
+  </div>
+</div></div>
+
+<!-- ========== 管理窗 3：环境（DBeaver 式 + 7 项策略） ========== -->
+<div class="overlay" id="ovlEnv"><div class="modal">
+  <div class="modal-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19a4.5 4.5 0 1 0-1.5-8.7A7 7 0 1 0 5 14v5"/><path d="M9 19l1.5-3L12 19l1.5-3L15 19"/></svg>
+    环境管理（EnvironmentManager）
+    <button class="link-btn close" data-close="ovlEnv">关闭 ✕</button>
+  </div>
+  <div class="mgmt-wrap">
+    <div class="mgmt-left">
+      <div class="ml-search"><input placeholder="搜索环境…"></div>
+      <div class="ml-list" id="envList">
+        <div class="ml-item active" data-env="0"><span class="tag" style="background:#C25B46;">生产</span><span class="ml-name">production</span><span class="ml-code">G</span></div>
+        <div class="ml-item" data-env="1"><span class="tag" style="background:#B45309;">预发</span><span class="ml-name">staging</span><span class="ml-code">G</span></div>
+        <div class="ml-item" data-env="2"><span class="tag" style="background:#2563EB;">开发</span><span class="ml-name">development</span><span class="ml-code">G</span></div>
+      </div>
+      <div class="ml-new"><button id="newEnvBtn">＋ 新建环境</button></div>
+    </div>
+    <div class="mgmt-right">
+      <div class="mr-head">
+        <h3 id="envFormTitle">编辑：生产（production）</h3>
+        <span class="reuse">被 6 个连接使用</span>
+      </div>
+      <div class="fld-grp">
+        <h5><svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13"/></svg>基本信息</h5>
+        <div class="frm">
+          <div class="frm-row"><label>环境名称</label><input class="inp" value="生产" style="flex:1;max-width:200px;"><span style="font-size:10.5px;color:var(--muted);">键名 production</span></div>
+          <div class="frm-row"><label>作用域</label>
+            <span class="seg"><button class="on">全局</button><button>项目</button></span>
+          </div>
+        </div>
+      </div>
+      <div class="fld-grp">
+        <h5><svg class="st-ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18h.01"/></svg>安全策略（5 类主策略 + 1 类增强）</h5>
+        <div class="frm">
+          <div class="pol-row"><label>① 访问级别</label>
+            <span class="seg"><button class="on">只读</button><button>读写</button></span>
+            <span class="pol-note">只读含 SELECT</span>
+          </div>
+          <div class="pol-row"><label>② 查询行数上限</label><input class="inp" value="1000"><span class="pol-note">行（0 = 无限制）</span></div>
+          <div class="pol-row"><label>③ 查询超时</label><input class="inp" value="30"><span class="pol-note">秒</span></div>
+          <div class="pol-row"><label>④ DDL 操作</label>
+            <span class="seg"><button class="on">阻断</button><button>允许</button></span>
+            <span class="pol-note">CREATE / ALTER / DROP</span>
+          </div>
+          <div class="pol-row"><label>⑤ 数据导出</label>
+            <span class="seg"><button class="on">阻断</button><button>允许</button></span>
+            <span class="pol-note">导出文件 / 剪贴板</span>
+          </div>
+          <div class="pol-row"><label>⑥ 查询留痕</label>
+            <span class="seg"><button class="on">强制记录</button><button>仅本地</button></span>
+            <span class="pol-note">写入历史层 · 可追溯</span>
+          </div>
+        </div>
+        <div class="frm-hint" style="padding-left:0;margin-top:8px;">策略落库 environment_policies（环境默认值）；连接级覆盖走 advanced_options.policy_overrides 并标记「已覆盖」。</div>
+      </div>
+      <div class="frm-foot">
+        <button class="btn btn-danger" id="envDelBtn">删除</button>
+        <div class="spacer"></div>
+        <button class="btn btn-cancel" data-close="ovlEnv">取消</button>
+        <button class="btn btn-save" data-close="ovlEnv">保存</button>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<!-- 环境删除守卫 -->
+<div class="overlay" id="envDel"><div class="mini-modal">
+  <div class="mini-head">
+    <svg class="m-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--danger);"><path d="M12 3l10 18H2L12 3zM12 10v5M12 18h.01"/></svg>
+    <span>删除被拦截 · 环境仍被使用</span>
+    <button class="link-btn close" data-close="envDel">关闭 ✕</button>
+  </div>
+  <div class="mini-body">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="guard-icon">⚠</span>
+      <div>
+        <div class="guard-title">无法删除「生产」环境</div>
+        <div class="guard-body" style="margin-top:2px;">该环境被 <b>6 个连接</b>使用。删除后这些连接将失去策略保护（回退到无策略）。</div>
+      </div>
+    </div>
+    <div class="guard-refs">
+      <div class="g-ref">🐬 MySQL-演示（全局）</div>
+      <div class="g-ref">🐘 生产 PG（全局）</div>
+      <div class="g-ref">🦆 DuckDB 本地（项目）</div>
+      <div class="g-ref"><span style="color:var(--muted);">… 另有 3 个连接（未展开）</span></div>
+    </div>
+    <div class="guard-note">建议先给使用中的连接更换环境，再删除此环境。</div>
+    <div class="guard-foot">
+      <button class="btn btn-cancel" data-close="envDel">取消</button>
+      <button class="btn btn-danger" data-close="envDel">强制删除（连接回退无策略）</button>
+    </div>
+  </div>
+</div></div>
+
+<div class="note">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22a10 10 0 100-20 10 10 0 000 20zM12 8v4M12 16h.01"/></svg>
+  <div>
+    <b>v2.3 相对 v2.2 的调整：</b>
+    <code>① 网络档案加「测试隧道」</code>：单跳与 chain 均有测试——单跳显示连通/本地转发/耗时；chain「测试整条链」逐跳探测，失败时定位到具体跳（后续跳标记「未到达 · 链在此中断」）；
+    <code>② 认证方式二选一</code>：引用认证配置（复用、一处改全量生效）<b>或</b>本档案内直接输入用户名/密码（独立保存，同样 AES 加密），segmented 切换；
+    <code>③ 认证管理左栏分类</code>：按认证类型分组（password / ssh_key / proxy_pwd / token）显示分类标签。
+    可交互：打开三个管理窗 → 左栏切换条目；网络窗切「引用/手动」、点「测试隧道 / 测试整条链」看分级结果、点「链式多跳」看拓扑。权威设计仍以 <code>connection-prototype-design.md</code> 为准。
+  </div>
+</div>
+
+<script>
+(function(){
+  try{
+    window.toggleTheme = function(){
+      var b = document.body;
+      b.setAttribute('data-theme', b.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+    };
+    function open(id){ var el = document.getElementById(id); if(el) el.classList.add('on'); }
+    function close(id){ var el = document.getElementById(id); if(el) el.classList.remove('on'); }
+    document.querySelectorAll('[data-close]').forEach(function(b){
+      b.addEventListener('click', function(){ close(b.getAttribute('data-close')); });
+    });
+    function bind(id, target){ var el = document.getElementById(id); if(el) el.addEventListener('click', function(){ open(target); }); }
+    bind('openAuthMgr', 'ovlAuth');
+    bind('openNetworkMgr', 'ovlNetwork');
+    bind('openEnvMgr', 'ovlEnv');
+    bind('newAuthBtn', 'ovlAuth');
+    bind('newNetBtn', 'ovlNetwork');
+    bind('newEnvBtn', 'ovlEnv');
+    bind('authDelBtn', 'authDel');
+    bind('netDelBtn', 'netDel');
+    bind('envDelBtn', 'envDel');
+
+    // master-detail：认证列表切换
+    var authTitles = ['编辑：MySQL-root-prod', '编辑：prod-gw 密钥', '编辑：公司代理账号', '新建认证配置'];
+    var authNames = ['MySQL-root-prod', 'prod-gw 密钥', '公司代理账号', ''];
+    document.querySelectorAll('#authList .ml-item').forEach(function(it){
+      it.addEventListener('click', function(){
+        document.querySelectorAll('#authList .ml-item').forEach(function(x){ x.classList.remove('active'); });
+        it.classList.add('active');
+        var i = parseInt(it.getAttribute('data-auth'), 10);
+        document.getElementById('authFormTitle').textContent = authTitles[i];
+        document.getElementById('authName').value = authNames[i];
+      });
+    });
+    // master-detail：网络列表切换（chain 条目显示拓扑）
+    var netTitles = ['编辑：prod-gw 跳板', '编辑：公司代理', '编辑：办公网 → 生产（chain）', '编辑：外网出口'];
+    document.querySelectorAll('#netList .ml-item').forEach(function(it){
+      it.addEventListener('click', function(){
+        document.querySelectorAll('#netList .ml-item').forEach(function(x){ x.classList.remove('active'); });
+        it.classList.add('active');
+        var i = parseInt(it.getAttribute('data-net'), 10);
+        document.getElementById('netFormTitle').textContent = netTitles[i];
+        var isChain = (i === 2);
+        document.getElementById('singleHopGrp').style.display = isChain ? 'none' : '';
+        document.getElementById('chainGrp').style.display = isChain ? '' : 'none';
+      });
+    });
+    // 网络窗：认证方式 引用/手动 切换
+    var netAuthSeg = document.getElementById('netAuthSeg');
+    if(netAuthSeg) netAuthSeg.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        netAuthSeg.querySelectorAll('button').forEach(function(x){ x.classList.remove('on'); });
+        b.classList.add('on');
+        var inline = (b.getAttribute('data-mode') === 'inline');
+        document.getElementById('netAuthRef').style.display = inline ? 'none' : '';
+        document.getElementById('netAuthInline1').style.display = inline ? '' : 'none';
+        document.getElementById('netAuthInline2').style.display = inline ? '' : 'none';
+      });
+    });
+    // 网络窗：测试隧道（demo：交替成功/失败）
+    var netTestBtn = document.getElementById('netTestBtn');
+    var netOk = document.getElementById('netTestOk');
+    var netErr = document.getElementById('netTestErr');
+    var netTestFlip = 0;
+    if(netTestBtn) netTestBtn.addEventListener('click', function(){
+      netTestFlip = (netTestFlip + 1) % 2;
+      netOk.classList.remove('on'); netErr.classList.remove('on');
+      if(netTestFlip === 0) netOk.classList.add('on'); else netErr.classList.add('on');
+    });
+    // 网络窗：测试整条链（demo：交替全通/失败在第2跳）
+    var chainTestBtn = document.getElementById('chainTestBtn');
+    var chainOk = document.getElementById('chainTestOk');
+    var chainErr = document.getElementById('chainTestErr');
+    var chainTestFlip = 0;
+    if(chainTestBtn) chainTestBtn.addEventListener('click', function(){
+      chainTestFlip = (chainTestFlip + 1) % 2;
+      chainOk.classList.remove('on'); chainErr.classList.remove('on');
+      if(chainTestFlip === 0) chainOk.classList.add('on'); else chainErr.classList.add('on');
+    });
+    // 网络窗：点「链式多跳」类型 → 切换拓扑
+    var chainBtn = document.getElementById('netTypeChain');
+    if(chainBtn) chainBtn.addEventListener('click', function(){
+      document.getElementById('singleHopGrp').style.display = 'none';
+      document.getElementById('chainGrp').style.display = '';
+      document.getElementById('netFormTitle').textContent = '编辑：办公网 → 生产（chain）';
+    });
+    // master-detail：环境列表切换
+    var envTitles = ['编辑：生产（production）', '编辑：预发（staging）', '编辑：开发（development）'];
+    document.querySelectorAll('#envList .ml-item').forEach(function(it){
+      it.addEventListener('click', function(){
+        document.querySelectorAll('#envList .ml-item').forEach(function(x){ x.classList.remove('active'); });
+        it.classList.add('active');
+        document.getElementById('envFormTitle').textContent = envTitles[parseInt(it.getAttribute('data-env'), 10)];
+      });
+    });
+    // Tab 切换
+    document.querySelectorAll('.tab').forEach(function(t){
+      t.addEventListener('click', function(){
+        document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('on'); });
+        t.classList.add('on');
+        document.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.remove('on'); });
+        var pane = document.getElementById('tab-' + t.getAttribute('data-tab'));
+        if(pane) pane.classList.add('on');
+      });
+    });
+    // 折叠
+    document.querySelectorAll('.sec-head').forEach(function(h){
+      h.addEventListener('click', function(){ h.parentElement.classList.toggle('collapsed'); });
+    });
+  }catch(e){}
+})();
+</script>
+</body>
+</html>
