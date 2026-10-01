@@ -17,7 +17,6 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
 use gpui_kit::component::{ActiveTheme as _, Root, Sizable as _, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, Context, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
     ParentElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
@@ -95,7 +94,7 @@ struct Harness {
 }
 
 impl Render for Harness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut body = div().v_flex().gap_2();
         if self.host.current().is_none() {
             body = body.child(render_picker(&self.host, &self.inputs, cx));
