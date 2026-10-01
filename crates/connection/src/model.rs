@@ -39,7 +39,8 @@ impl ConnectionScope {
         matches!(self, Self::Project | Self::GlobalAndProject)
     }
 
-    /// UI 提示文案（与原型 Header 作用域提示行一致）
+    /// UI 提示文案：说明保存作用域与落库位置（G_/P_/GP_ 前缀）。
+    /// 原型 v2（§2.1/§7 #6）已移除「行内落点提示行」，此处仅为保存时的作用域说明文本。
     pub fn hint(&self) -> &'static str {
         match self {
             Self::Global => "仅全局 → 保存至 global_connections（G_xxx）",
