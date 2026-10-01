@@ -7,13 +7,15 @@
 
 | 项 | 值 |
 | --- | --- |
-| 当前版本 | `0.1.0`（Cargo.toml `[workspace.package]`） |
+| 当前版本 | `0.2.0`（Cargo.toml `[workspace.package]`） |
 | 发布通道 | GitHub Actions 云端构建（打标签即发布，`docs/architecture/release/release-pipeline.md`） |
 | beta 标签 | `RDS-beta-<版本号>` → **仅编译 Windows x86_64** 包 |
 | 定版标签 | `v<版本号>` → 恢复全平台矩阵（Linux/macOS×2） |
 | 验证标签 | 验证通过后去掉 `beta` 定版 |
 
-**已发布**：`RDS-beta-0.1.0`（2026-10-01，Windows x64 分发包 + sha256，挂于 Release Assets）。
+**已发布**：
+- `RDS-beta-0.1.0`（2026-10-01，gpui-kit 0.6.1，Windows x64 分发包 + sha256）
+- `RDS-beta-0.2.0`（2026-10-01，**gpui-kit 0.7.0**：dialog 层由 Root 自动挂载，移除 14 处手动 `render_dialog_layer`；全仓 0 error / 0 warning，受影响 crate ~1328 测试通过；本地 release 产物 FileVersion 0.2.0）
 
 ## 2. 模块状态（主干）
 
@@ -24,7 +26,7 @@
 | 工作台 / 编辑器 / 导航 | ✅ 可用 | 见 `docs/architecture/{editor,layout,ui}*` |
 | 分析 / 洞察 / 结果集入 DuckDB | 🟡 推进中 | `docs/architecture/{analytics_resource,insight}*` |
 | 插件（Extism） | 🟡 编译受限 | wasmtime 在 Windows+rustc 1.98 崩溃，未纳入 `cargo test-all` |
-| gpui-kit 0.7 升级验证 | ⏳ 待验证 | 分支 `verify/gpui-kit-0.7` |
+| gpui-kit 0.7 升级验证 | ✅ 已验证并合入 | 分支 `verify/gpui-kit-0.7` → main（2026-10-01，RDS-beta-0.2.0 基于此） |
 
 ## 3. 连接模块增量计划（原型 v2.3 → 待评审）
 
