@@ -11,8 +11,9 @@
 
 use std::time::Duration;
 
+use base64::Engine;
 use rds_connection::chain::apply_network_method;
-use rds_connection::config::{ChainHop, ConnectionMethod, ProxyConfig};
+use rds_connection::config::{ChainHop, ConnectionMethod, ProxyAuth, ProxyConfig};
 use rds_connection::url_params::parse_host_port_from_url;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -310,4 +311,134 @@ async fn no_proxy_rule_skips_proxy_tunnel() {
 
     assert!(guards.is_empty(), "no_proxy 命中不应建立隧道");
     assert_eq!(effective_url, url, "URL 应保持原样");
+}
+
+/// 带认证的最小 HTTP CONNECT 代理：缺少或错误的 `Proxy-Authorization` 一律回 407。
+async fn spawn_http_connect_proxy_auth(expected_basic: String) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定认证 HTTP 代理");
+    let port = listener.local_addr().expect("读取认证 HTTP 代理端口").port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((client, _)) = listener.accept().await else {
+                break;
+            };
+            let expected = expected_basic.clone();
+            tokio::spawn(async move {
+                let _ = http_connect_handle_auth(client, &expected).await;
+            });
+        }
+    });
+    port
+}
+
+async fn http_connect_handle_auth(mut client: TcpStream, expected_basic: &str) -> std::io::Result<()> {
+    let mut head = Vec::new();
+    let mut chunk = [0u8; 512];
+    loop {
+        let n = client.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        head.extend_from_slice(&chunk[..n]);
+        if head.windows(4).any(|w| w == b"\r\n\r\n") || head.len() > 16 * 1024 {
+            break;
+        }
+    }
+    let head_text = String::from_utf8_lossy(&head).into_owned();
+    let auth_ok = head_text.lines().any(|line| {
+        line.to_ascii_lowercase()
+            .starts_with("proxy-authorization: basic ")
+            && line.contains(expected_basic)
+    });
+    if !auth_ok {
+        client
+            .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+            .await?;
+        return Ok(());
+    }
+
+    let target = head_text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default()
+        .to_string();
+    let upstream = TcpStream::connect(target.as_str()).await?;
+    client
+        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        .await?;
+    bridge(client, upstream).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_proxy_auth_roundtrip_relays_payload() {
+    // 正向：带 Proxy-Authorization 的 HTTP CONNECT 隧道可完整往返
+    let echo_port = spawn_echo_server().await;
+    let expected = base64::engine::general_purpose::STANDARD.encode("rds:secret");
+    let proxy_port = spawn_http_connect_proxy_auth(expected).await;
+
+    let url = format!("mysql://root@127.0.0.1:{}/app", echo_port);
+    let mut proxy = loopback_proxy(proxy_port);
+    proxy.auth = Some(ProxyAuth {
+        username: "rds".to_string(),
+        password: "secret".to_string(),
+    });
+
+    let (effective_url, guards) = apply_network_method(
+        &url,
+        &Some(ConnectionMethod::HttpProxy(proxy)),
+        "G_it_http_auth",
+        "mysql",
+    )
+    .await
+    .expect("建立带认证 HTTP 隧道");
+
+    assert_eq!(guards.len(), 1, "代理跳应产生 1 个隧道守卫");
+    let (_, local_port) = parse_host_port_from_url(&effective_url).expect("解析改写后 URL");
+
+    let payload = b"rds-http-auth-roundtrip";
+    assert_eq!(roundtrip(local_port, payload).await, payload, "带认证时应完整往返");
+}
+
+#[tokio::test]
+async fn http_proxy_missing_auth_is_rejected() {
+    // 负向：代理要求认证但未提供 → 数据面必须失败（不允许静默降级为无认证直连）
+    let echo_port = spawn_echo_server().await;
+    let expected = base64::engine::general_purpose::STANDARD.encode("rds:secret");
+    let proxy_port = spawn_http_connect_proxy_auth(expected).await;
+
+    let url = format!("mysql://root@127.0.0.1:{}/app", echo_port);
+    let (effective_url, guards) = apply_network_method(
+        &url,
+        &Some(ConnectionMethod::HttpProxy(loopback_proxy(proxy_port))),
+        "G_it_http_noauth",
+        "mysql",
+    )
+    .await
+    .expect("建立 HTTP 隧道（未配认证）");
+
+    let (_, local_port) = parse_host_port_from_url(&effective_url).expect("解析改写后 URL");
+
+    let exchange = async {
+        let mut stream = TcpStream::connect(("127.0.0.1", local_port))
+            .await
+            .expect("连接隧道本地端口");
+        stream
+            .write_all(b"rds-http-noauth")
+            .await
+            .expect("写入隧道");
+        let mut echoed = vec![0u8; 14];
+        stream.read_exact(&mut echoed).await.map(|_| echoed)
+    };
+    let result = tokio::time::timeout(IO_TIMEOUT, exchange)
+        .await
+        .expect("缺认证的往返不应挂死");
+    assert!(
+        result.is_err(),
+        "代理 407 拒绝后数据面应失败（不允许静默直连）"
+    );
+    drop(guards);
 }

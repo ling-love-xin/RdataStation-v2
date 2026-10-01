@@ -993,4 +993,104 @@ mod tests {
         assert!(!matches_no_proxy("external.com", &rules));
         assert!(!matches_no_proxy("external.com", &[]));
     }
+
+    #[test]
+    fn rewrite_host_port_keeps_query() {
+        assert_eq!(
+            rewrite_url_host_port("mysql://u:p@h:3306/db?ssl-mode=REQUIRED", "127.0.0.1", 45678)
+                .unwrap(),
+            "mysql://u:p@127.0.0.1:45678/db?ssl-mode=REQUIRED"
+        );
+    }
+
+    #[test]
+    fn inject_username_password_keeps_query_and_path() {
+        // 无既有凭据 + 带查询串
+        assert_eq!(
+            inject_username_password("mysql://h:3306/db?x=1", "u", "p").unwrap(),
+            "mysql://u:p@h:3306/db?x=1"
+        );
+        // 有既有凭据 → 替换
+        assert_eq!(
+            inject_username_password("mysql://old:old@h:3306/db?x=1", "u", "p").unwrap(),
+            "mysql://u:p@h:3306/db?x=1"
+        );
+    }
+
+    #[test]
+    fn ssl_cert_and_kerberos_append_to_existing_query() {
+        let url = inject_ssl_cert("postgres://h/db?x=1", "/ca.pem", "").unwrap();
+        assert!(
+            url.starts_with("postgres://h/db?x=1&sslmode=verify-ca&sslcert="),
+            "已有查询串应使用 & 追加: {url}"
+        );
+
+        let url = inject_kerberos("postgres://h/db?x=1", "u@REALM", "").unwrap();
+        assert!(
+            url.starts_with("postgres://h/db?x=1&krbrprincipal="),
+            "已有查询串应使用 & 追加: {url}"
+        );
+    }
+
+    #[test]
+    fn parse_host_port_with_query_string() {
+        assert_eq!(
+            parse_host_port_from_url("postgres://u:p@h:5432/db?sslmode=require").unwrap(),
+            ("h".to_string(), 5432)
+        );
+    }
+
+    #[test]
+    fn ssl_mode_as_str_roundtrip_and_from_config_edges() {
+        for mode in [
+            SslMode::Disable,
+            SslMode::Prefer,
+            SslMode::Require,
+            SslMode::VerifyCa,
+            SslMode::VerifyFull,
+        ] {
+            assert_eq!(
+                SslMode::parse(mode.as_str()),
+                Some(mode),
+                "{} 的 as_str 应可被 parse 还原",
+                mode.as_str()
+            );
+        }
+
+        // from_ssl_config：verify+CA → VerifyCa；其余（含「要校验但没给 CA」）→ Require
+        let with_ca = ssl(true, Some("/ca"), None, None);
+        assert_eq!(SslMode::from_ssl_config(&with_ca), SslMode::VerifyCa);
+
+        let verify_no_ca = ssl(true, None, None, None);
+        assert_eq!(SslMode::from_ssl_config(&verify_no_ca), SslMode::Require);
+
+        let no_verify_with_ca = ssl(false, Some("/ca"), None, None);
+        assert_eq!(SslMode::from_ssl_config(&no_verify_with_ca), SslMode::Require);
+
+        let none = ssl(false, None, None, None);
+        assert_eq!(SslMode::from_ssl_config(&none), SslMode::Require);
+    }
+
+    #[test]
+    fn mysql_native_prefer_maps_to_require_without_verify() {
+        // mysql_async 无 prefer 档：Prefer 与 Require 等价（require_ssl=true, verify_ca=false）
+        let no_cert = ssl(false, None, None, None);
+        assert_eq!(
+            append_ssl_params("mysql://h/db", "mysql_native", SslMode::Prefer, &no_cert).unwrap(),
+            "mysql://h/db?require_ssl=true&verify_ca=false"
+        );
+        // VerifyCa（无证书路径）→ require + 校验证书链但不算主机名
+        assert_eq!(
+            append_ssl_params("mysql://h/db", "mysql_native", SslMode::VerifyCa, &no_cert).unwrap(),
+            "mysql://h/db?require_ssl=true&verify_ca=true&verify_identity=false"
+        );
+    }
+
+    #[test]
+    fn merge_credentials_keeps_query() {
+        assert_eq!(
+            merge_credentials("mysql://h:3306/db?x=1", "u", "p"),
+            "mysql://u:p@h:3306/db?x=1"
+        );
+    }
 }

@@ -236,4 +236,94 @@ mod tests {
         assert_eq!(back.scope, ConnectionScope::GlobalAndProject);
         assert_eq!(back.name, "demo");
     }
+
+    #[test]
+    fn test_scope_hint_texts() {
+        // 与原型「作用域三态」落库语义一致（prototype-design §2.1）
+        assert_eq!(
+            ConnectionScope::Global.hint(),
+            "仅全局 → 保存至 global_connections（G_xxx）"
+        );
+        assert_eq!(
+            ConnectionScope::Project.hint(),
+            "仅项目 → 保存至当前项目 project.db（P_xxx）"
+        );
+        assert_eq!(
+            ConnectionScope::GlobalAndProject.hint(),
+            "全局＋项目 → 保存全局（G_xxx）并共享至当前项目（GP_xxx）"
+        );
+    }
+
+    #[test]
+    fn test_scope_serde_roundtrip() {
+        for scope in [
+            ConnectionScope::Global,
+            ConnectionScope::Project,
+            ConnectionScope::GlobalAndProject,
+        ] {
+            let json = serde_json::to_string(&scope).unwrap();
+            let back: ConnectionScope = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, scope);
+        }
+    }
+
+    #[test]
+    fn test_data_source_serde_roundtrip() {
+        let ds = DataSource {
+            id: "G_conn_1".to_string(),
+            name: "prod".to_string(),
+            db_type: "postgres".to_string(),
+            host: Some("10.0.0.9".to_string()),
+            port: Some(5432),
+            database: Some("warehouse".to_string()),
+            schema_name: Some("public".to_string()),
+            username: Some("alice".to_string()),
+            password_encrypted: Some("AES:xxxx".to_string()),
+            description: Some("生产库".to_string()),
+            driver_id: Some("postgres_native".to_string()),
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: Some("password".to_string()),
+            network_config_id: None,
+            driver_properties: Some("{}".to_string()),
+            advanced_options: None,
+            options: None,
+            tags: Some("[\"prod\",\"core\"]".to_string()),
+            use_duckdb_fed: true,
+            metadata_path: Some("/cache/meta".to_string()),
+            server_version: Some("16.4".to_string()),
+            scope: ConnectionScope::GlobalAndProject,
+            is_active: true,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&ds).unwrap();
+        let back: DataSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, ds.id);
+        assert_eq!(back.name, ds.name);
+        assert_eq!(back.db_type, ds.db_type);
+        assert_eq!(back.password_encrypted, ds.password_encrypted);
+        assert_eq!(back.scope, ds.scope);
+        assert_eq!(back.use_duckdb_fed, ds.use_duckdb_fed);
+        assert_eq!(back.server_version.as_deref(), Some("16.4"));
+        assert_eq!(back.tags.as_deref(), Some("[\"prod\",\"core\"]"));
+    }
+
+    #[test]
+    fn test_delete_and_test_result_serde() {
+        let del = DeleteResult {
+            conn_id: "G_1".to_string(),
+            removed_secret: true,
+            message: "已删除".to_string(),
+        };
+        let back: DeleteResult = serde_json::from_str(&serde_json::to_string(&del).unwrap()).unwrap();
+        assert_eq!(back.conn_id, "G_1");
+        assert!(back.removed_secret);
+
+        let tr = TestResult::ok("已连接", 12, Some("8.4.0".to_string()));
+        let back: TestResult = serde_json::from_str(&serde_json::to_string(&tr).unwrap()).unwrap();
+        assert!(back.success);
+        assert_eq!(back.latency_ms, Some(12));
+        assert_eq!(back.version.as_deref(), Some("8.4.0"));
+    }
 }

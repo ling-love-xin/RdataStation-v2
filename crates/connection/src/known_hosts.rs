@@ -196,21 +196,15 @@ impl KnownHosts {
     fn find_candidates(&self, host: &str, port: u16) -> Vec<&KnownHostEntry> {
         let mut results = Vec::new();
 
-        let candidates = [host.to_string(), format!("[{}]:{}", host, port)];
+        // 查询侧与写入侧（normalize_host）保持一致：主机名归一化为小写。
+        // 否则 known_hosts 行 "GitHub.com" 落库为 "github.com" 后，同名主机
+        // 查询会因大小写不一致而命中失败（回归断言见 test_comma_separated_hosts）。
+        let normalized = normalize_host(host);
 
-        for key in &candidates {
+        for key in [normalized.clone(), format!("[{}]:{}", normalized, port)] {
             if let Some(entries) = self.entries.get(key.as_str()) {
                 results.extend(entries);
             }
-        }
-
-        if let Some(entries) = self.entries.get(host) {
-            results.extend(entries);
-        }
-
-        let hashed_pattern = format!("[{}]:{}", host, port);
-        if let Some(entries) = self.entries.get(&hashed_pattern) {
-            results.extend(entries);
         }
 
         results
@@ -269,6 +263,7 @@ pub fn create_known_hosts_checker(allow_unknown: bool) -> KnownHosts {
 mod tests {
     use super::*;
     use shared::error::{CommonError, CoreError};
+    use std::path::PathBuf;
 
     #[test]
     fn test_empty_known_hosts_allow_unknown() -> Result<(), CoreError> {
@@ -385,5 +380,64 @@ mod tests {
 
     fn second_test_key() -> Result<PublicKey, CoreError> {
         parse_test_key(TEST_KEY_B)
+    }
+
+    #[test]
+    fn test_prefixed_key_entry_uses_openssh_format() -> Result<(), CoreError> {
+        // 完整 OpenSSH 格式条目（含 "ssh-ed25519 " 类型前缀）走「原样使用」分支；
+        // 裸 base64（无前缀）分支由 test_parse_non_hashed_entry 覆盖（public_key_base64 即裸值）。
+        let test_key = create_test_key()?;
+        let content = format!("example.com {}\n", TEST_KEY_A);
+        let mut hosts = KnownHosts::new(false);
+        hosts.parse(&content);
+
+        assert!(
+            hosts.verify("example.com", 22, &test_key),
+            "带类型前缀的条目应匹配"
+        );
+        assert!(!hosts.verify("other.com", 22, &test_key));
+        Ok(())
+    }
+
+    #[test]
+    fn test_comma_separated_hosts_and_case_insensitive_lookup() -> Result<(), CoreError> {
+        let test_key = create_test_key()?;
+        let key_b64 = test_key.public_key_base64();
+
+        let content = format!("host-a,host-b,host-c ssh-ed25519 {}\n", key_b64);
+        let mut hosts = KnownHosts::new(false);
+        hosts.parse(&content);
+
+        assert!(hosts.verify("host-a", 22, &test_key));
+        assert!(hosts.verify("host-c", 22, &test_key));
+        // 修复回归：查询侧与写入侧一样做小写归一化（此前混合大小写主机名查不到）
+        assert!(hosts.verify("HOST-A", 22, &test_key), "主机名查询应大小写不敏感");
+        assert!(hosts.verify("HOST-B", 22, &test_key), "主机名查询应大小写不敏感");
+        assert!(!hosts.verify("host-d", 22, &test_key));
+        Ok(())
+    }
+
+    #[test]
+    fn test_mixed_case_entry_matches_lower_and_upper_queries() -> Result<(), CoreError> {
+        let test_key = create_test_key()?;
+        let content = format!(
+            "Db.Example.Com ssh-ed25519 {}\n",
+            test_key.public_key_base64()
+        );
+        let mut hosts = KnownHosts::new(false);
+        hosts.parse(&content);
+
+        assert!(hosts.verify("db.example.com", 22, &test_key), "小写查询应命中");
+        assert!(hosts.verify("DB.EXAMPLE.COM", 22, &test_key), "大写查询应命中（修复回归）");
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_missing_file_is_empty_table() {
+        let path = PathBuf::from("C:/definitely/not/exist/known_hosts");
+        let hosts = KnownHosts::load(&path, false).expect("缺失文件应返回空表而非错误");
+        assert!(hosts.loaded());
+        let key = create_test_key().expect("key");
+        assert!(!hosts.verify("example.com", 22, &key), "空表 + deny → false");
     }
 }

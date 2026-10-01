@@ -736,7 +736,19 @@ pub async fn establish_http_proxy(
         })?;
 
     let response = String::from_utf8_lossy(&buffer[..n]);
-    if !response.contains("200") {
+    // 成功判据：解析首行状态行（`HTTP/1.1 200 ...`）。不能对整段响应做子串匹配——
+    // `contains("200")` 会把头部/正文里恰好含 "200" 的拒绝响应（如
+    // `Content-Length: 200`）误判为成功（回归见 test_http_proxy_403_with_200_in_headers_still_errors）。
+    let status_ok = response
+        .lines()
+        .next()
+        .map(|line| {
+            let mut parts = line.split_whitespace();
+            matches!(parts.next(), Some("HTTP/1.1") | Some("HTTP/1.0"))
+                && parts.next() == Some("200")
+        })
+        .unwrap_or(false);
+    if !status_ok {
         return Err(CoreError::connection(ConnectionError::Network {
             conn_id: proxy_addr,
             reason: format!("Proxy connection failed: {}", response),
@@ -980,4 +992,277 @@ pub async fn wrap_tls_stream(
     );
 
     Ok(tls_stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TlsVersion;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn ssh_config() -> SshConfig {
+        SshConfig {
+            host: "ssh.example.com".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            auth: SshAuth::Password {
+                password: "pass".to_string(),
+            },
+            remote_host: "db.internal".to_string(),
+            remote_port: 3306,
+            local_port: 0,
+            timeout_secs: 30,
+        }
+    }
+
+    fn proxy_config() -> ProxyConfig {
+        ProxyConfig {
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            auth: None,
+            no_proxy: Vec::new(),
+            timeout_secs: 30,
+        }
+    }
+
+    #[test]
+    fn test_map_tls_version() {
+        assert!(matches!(
+            map_tls_version(TlsVersion::Tls1_0),
+            native_tls::Protocol::Tlsv10
+        ));
+        assert!(matches!(
+            map_tls_version(TlsVersion::Tls1_1),
+            native_tls::Protocol::Tlsv11
+        ));
+        assert!(matches!(
+            map_tls_version(TlsVersion::Tls1_2),
+            native_tls::Protocol::Tlsv12
+        ));
+        assert!(matches!(
+            map_tls_version(TlsVersion::Tls1_3),
+            native_tls::Protocol::Tlsv13
+        ));
+    }
+
+    #[test]
+    fn test_connector_supports_matrix_and_names() {
+        let direct = DirectConnector;
+        let ssl = SslConnector;
+        let ssh = SshTunnelConnector;
+        let http = HttpProxyConnector;
+        let socks = SocksProxyConnector;
+
+        let direct_m = ConnectionMethod::Direct;
+        let ssl_m = ConnectionMethod::Ssl(SslConfig::default());
+        let ssh_m = ConnectionMethod::Ssh(ssh_config());
+        let http_m = ConnectionMethod::HttpProxy(proxy_config());
+        let socks_m = ConnectionMethod::SocksProxy(proxy_config());
+
+        assert!(direct.supports(&direct_m) && !direct.supports(&ssl_m));
+        assert!(ssl.supports(&ssl_m) && !ssl.supports(&direct_m));
+        // 占位器语义：supports(Ssh) 为 true（工厂能命中），真正报错在 connect
+        assert!(ssh.supports(&ssh_m), "SshTunnelConnector::supports(Ssh) 应为 true（占位）");
+        assert!(http.supports(&http_m) && !http.supports(&socks_m));
+        assert!(socks.supports(&socks_m) && !socks.supports(&http_m));
+
+        assert_eq!(direct.name(), "direct");
+        assert_eq!(ssl.name(), "ssl");
+        assert_eq!(ssh.name(), "ssh_tunnel");
+        assert_eq!(http.name(), "http_proxy");
+        assert_eq!(socks.name(), "socks_proxy");
+    }
+
+    #[tokio::test]
+    async fn test_ssh_connector_connect_returns_not_supported() {
+        // 回归：SSH 隧道必须走 chain，绝不静默直连
+        let connector = SshTunnelConnector;
+        let cfg = ConnectionConfig::ssh("db.internal", 3306, ssh_config());
+        let err = match connector.connect(&cfg).await {
+            Err(e) => e,
+            Ok(_) => panic!("connect(Ssh) 应报错，不应返回流"),
+        };
+        assert!(
+            matches!(err, CoreError::Connection(ConnectionError::NotSupported(_))),
+            "connect(Ssh) 应返回 NotSupported，实际 {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connectors_wrong_method_errors() {
+        let direct_cfg = ConnectionConfig::direct("h", 5432);
+
+        let err = match SslConnector.connect(&direct_cfg).await {
+            Err(e) => e,
+            Ok(_) => panic!("SslConnector 不应接受直连配置"),
+        };
+        assert!(err.to_string().contains("Expected SSL connection method"), "{err}");
+
+        let err = match HttpProxyConnector.connect(&direct_cfg).await {
+            Err(e) => e,
+            Ok(_) => panic!("HttpProxyConnector 不应接受直连配置"),
+        };
+        assert!(err.to_string().contains("Expected HTTP proxy"), "{err}");
+
+        let err = match SocksProxyConnector.connect(&direct_cfg).await {
+            Err(e) => e,
+            Ok(_) => panic!("SocksProxyConnector 不应接受直连配置"),
+        };
+        assert!(err.to_string().contains("Expected SOCKS proxy"), "{err}");
+    }
+
+    /// 起一个最小 HTTP 代理端：读取 CONNECT 请求头，返回指定响应，并回传请求头文本。
+    async fn spawn_proxy_responder(
+        response: &'static [u8],
+    ) -> (
+        u16,
+        tokio::sync::oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind proxy");
+        let port = listener.local_addr().expect("port").port();
+        let (head_tx, head_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                match stream.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        head.extend_from_slice(&chunk[..n]);
+                        if head.windows(4).any(|w| w == b"\r\n\r\n") || head.len() > 16 * 1024 {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = head_tx.send(String::from_utf8_lossy(&head).into_owned());
+            let _ = stream.write_all(response).await;
+        });
+        (port, head_rx, handle)
+    }
+
+    #[tokio::test]
+    async fn test_http_proxy_connect_success_and_auth_header() {
+        let (port, head_rx, handle) =
+            spawn_proxy_responder(b"HTTP/1.1 200 Connection Established\r\n\r\n").await;
+
+        let cfg = ConnectionConfig::direct("db.example", 3306);
+        let proxy = ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            auth: Some(crate::config::ProxyAuth {
+                username: "u".to_string(),
+                password: "p".to_string(),
+            }),
+            no_proxy: Vec::new(),
+            timeout_secs: 5,
+        };
+
+        let stream = establish_http_proxy(&cfg, &proxy)
+            .await
+            .expect("CONNECT 应成功");
+        let head = head_rx.await.expect("代理应收到请求头");
+        assert!(
+            head.starts_with("CONNECT db.example:3306 HTTP/1.1"),
+            "CONNECT 行不正确: {head}"
+        );
+        // base64("u:p") = "dTpw"
+        assert!(
+            head.contains("Proxy-Authorization: Basic dTpw"),
+            "应携带 Basic 认证头: {head}"
+        );
+        drop(stream);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_http_proxy_non_200_response_errors() {
+        let (port, _head_rx, handle) =
+            spawn_proxy_responder(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
+
+        let cfg = ConnectionConfig::direct("db.example", 3306);
+        let proxy = ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            auth: None,
+            no_proxy: Vec::new(),
+            timeout_secs: 5,
+        };
+
+        let err = establish_http_proxy(&cfg, &proxy).await.unwrap_err();
+        assert!(
+            err.to_string().contains("403"),
+            "错误应透出代理拒绝原因: {err}"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_http_proxy_403_with_200_in_headers_still_errors() {
+        // 回归：成功判据改为解析状态行（此前 `contains("200")` 会把
+        // 拒绝响应里恰好含 "200" 的头部/正文误判为成功）
+        let (port, _head_rx, handle) = spawn_proxy_responder(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 200\r\n\r\n",
+        )
+        .await;
+
+        let cfg = ConnectionConfig::direct("db.example", 3306);
+        let proxy = ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            auth: None,
+            no_proxy: Vec::new(),
+            timeout_secs: 5,
+        };
+
+        let err = establish_http_proxy(&cfg, &proxy).await.unwrap_err();
+        assert!(
+            err.to_string().contains("403"),
+            "403 状态行必须报错，即便响应头含 200: {err}"
+        );
+        handle.abort();
+    }
+
+    #[test]
+    fn test_check_cert_expiry_missing_file_errors() {
+        let err = check_cert_expiry("C:/definitely/not/a/real/cert.pem").unwrap_err();
+        assert!(err.to_string().contains("无法读取证书文件"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_tunnel_guard_drop_sends_shutdown() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async {});
+        let guard = TunnelGuard::new(8080, tx, task, "ssh-test");
+        assert_eq!(guard.port(), 8080);
+        assert_eq!(guard.label(), "ssh-test");
+
+        drop(guard);
+        // Drop 内 tx.send 先行、abort 在后：rx 必然 resolve
+        tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("drop 应发送关闭信号（2s 内）")
+            .expect("关闭信号已送达");
+    }
+
+    #[tokio::test]
+    async fn test_connection_handle_fields() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+
+        let conn = Connection::new(
+            ConnectionStream::tcp(client),
+            ConnectionConfig::direct("h", 1),
+        );
+        assert!(!conn.is_encrypted());
+        assert!(conn.duration() >= Duration::ZERO);
+    }
 }

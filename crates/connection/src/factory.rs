@@ -133,4 +133,23 @@ mod tests {
         let result = factory.create_stream(&config).await;
         assert!(result.is_err() || result.is_ok());
     }
+
+    #[test]
+    fn test_register_overrides_existing() {
+        let mut factory = ConnectionFactory::new();
+        let count_before = factory.get_connector_names().len();
+        factory.register(Arc::new(DirectConnector));
+        assert_eq!(
+            factory.get_connector_names().len(),
+            count_before,
+            "同名连接器注册应覆盖而非新增"
+        );
+    }
+
+    #[test]
+    fn test_global_factory_singleton() {
+        let a = get_connection_factory();
+        let b = get_connection_factory();
+        assert!(std::ptr::eq(a, b), "全局工厂应为单例");
+    }
 }

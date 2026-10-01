@@ -105,7 +105,7 @@ cargo test -p rds-workbench --lib \
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-19，**逐包口径**——数字来源与复现命令见 `../module-status.md` §1/§2）：连接 crate **48**（单元 44 + 集成 `tunnel_roundtrip` 4）；工作台连接套件 **15 个目标 / 75 项**——`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`connection_drafts_persist` 1、`connection_edit_backfill` 1、`connection_tunnel_cleanup` 1。跨模块参照：`ui_contract` 7（全局 UI 契约）· `db_navigator` 2（M4）。
+- 基准（2026-09-19，**逐包口径**——数字来源与复现命令见 `../module-status.md` §1/§2；connection 数字已按 2026-10-01 复跑核对为 **102 = 单元 96 + 集成 `tunnel_roundtrip` 6**）：连接 crate **102**（单元 96 + 集成 `tunnel_roundtrip` 6）；工作台连接套件 **15 个目标 / 75 项**——`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`connection_drafts_persist` 1、`connection_edit_backfill` 1、`connection_tunnel_cleanup` 1。跨模块参照：`ui_contract` 7（全局 UI 契约）· `db_navigator` 2（M4）。
 - **引擎侧**：`cargo test -p rds-engine --lib` = **443 项**（含本模块的标签回填、网络档案加密、启动迁移接线、项目打开回填等用例）。
 - 全仓对照：**84 目标 / 1963 通过**（含 16 个 Doc-tests 目标；唯一失败是已取消跟踪的本机诊断 `zz_fixture_probe`，环境原因）。
 - **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、五 Tab 降级渲染、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 五 Tab 渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。

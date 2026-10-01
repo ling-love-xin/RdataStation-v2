@@ -337,4 +337,39 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_escape_and_path_helpers() {
+        // SQL 转义：单引号加倍（防注入）
+        assert_eq!(escape_sql("o'connor"), "o''connor");
+        assert_eq!(escape_sql("plain"), "plain");
+        assert_eq!(escape_sql("a;b"), "a;b", "分号无需转义（DuckDB Secret 值非拼接 SQL）");
+
+        // 路径转义：反斜杠 → 正斜杠；单引号加倍（Windows 路径进 SQL 字面量）
+        assert_eq!(
+            escape_path(std::path::Path::new("C:\\data\\x.duckdb")),
+            "C:/data/x.duckdb"
+        );
+        assert_eq!(
+            escape_path(std::path::Path::new("/data/a'b.duckdb")),
+            "/data/a''b.duckdb"
+        );
+    }
+
+    #[test]
+    fn test_user_keyword_all_types() {
+        assert_eq!(user_keyword("MYSQL"), "USER", "MySQL 只认 USER（真机实测）");
+        assert_eq!(user_keyword("mysql"), "USER", "大小写不敏感");
+        for t in ["POSTGRES", "SQLITE", "DUCKDB", "S3"] {
+            assert_eq!(user_keyword(t), "USERNAME", "{t} 应认 USERNAME");
+        }
+    }
+
+    #[test]
+    fn test_in_memory_manager_isolated_empty() {
+        // 内存管理器：不写默认存储（~/.duckdb），只验证列表语义；
+        // 不注册任何 Secret，避免污染 DuckDB 默认 Secret 目录。
+        let mgr = SecretManager::in_memory().unwrap();
+        assert!(mgr.list().unwrap().is_empty(), "新建内存管理器应为空");
+    }
 }

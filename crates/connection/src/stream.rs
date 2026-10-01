@@ -187,4 +187,25 @@ mod tests {
         assert_eq!(info.method, "tcp");
         assert!(!info.is_encrypted);
     }
+
+    #[tokio::test]
+    async fn test_stream_method_name_and_addressing() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // TCP 变体：地址可取、非加密
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let stream = ConnectionStream::tcp(client);
+        assert_eq!(stream.method_name(), "tcp");
+        assert!(!stream.is_encrypted());
+        assert!(stream.local_addr().is_ok(), "TCP 本地地址可取");
+        assert!(stream.peer_addr().is_ok(), "TCP 对端地址可取");
+
+        // SSH 隧道变体（本地转发流）：同样可取地址
+        let client2 = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let stream2 = ConnectionStream::ssh_tunnel(client2);
+        assert_eq!(stream2.method_name(), "ssh_tunnel");
+        assert!(stream2.local_addr().is_ok());
+        assert!(!stream2.is_encrypted());
+    }
 }

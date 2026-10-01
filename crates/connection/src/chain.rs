@@ -523,4 +523,75 @@ mod tests {
         assert_eq!(url, "mysql://h:3306/db?ssl-mode=REQUIRED");
         assert!(guards.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_registry_shares_with_and_take_missing() {
+        let a = TunnelRegistry::new();
+        let b = a.clone();
+        assert!(a.shares_with(&b), "clone 应共享同一张隧道表");
+
+        let c = TunnelRegistry::new();
+        assert!(!a.shares_with(&c), "新建实例应是隔离表");
+
+        let taken = a.take("no_such_conn").await;
+        assert!(taken.is_empty(), "不存在的连接应返回空");
+    }
+
+    #[tokio::test]
+    async fn apply_ssl_with_mysql_dialect() {
+        // 驱动分派：mysql（sqlx）用大写 + ssl-ca
+        let method = ConnectionMethod::Ssl(SslConfig {
+            verify_server_cert: true,
+            ca_cert_path: Some("/ca.pem".to_string()),
+            ..Default::default()
+        });
+        let (url, guards) = apply_network_method(
+            "mysql://h:3306/db",
+            &Some(method),
+            "G_conn_a",
+            "mysql",
+        )
+        .await
+        .expect("ssl");
+        assert_eq!(url, "mysql://h:3306/db?ssl-mode=VERIFY_CA&ssl-ca=/ca.pem");
+        assert!(guards.is_empty(), "SSL 跳不产生隧道守卫");
+    }
+
+    #[tokio::test]
+    async fn apply_http_proxy_no_proxy_skips() {
+        let url = "postgres://h:5432/db";
+        let proxy = ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            auth: None,
+            no_proxy: vec!["h".to_string()],
+            timeout_secs: 5,
+        };
+        let (out, guards) = apply_network_method(
+            url,
+            &Some(ConnectionMethod::HttpProxy(proxy)),
+            "G_conn_a",
+            "postgres",
+        )
+        .await
+        .expect("no_proxy");
+        assert_eq!(out, url, "命中 no_proxy 应保持 URL 原样");
+        assert!(guards.is_empty(), "命中 no_proxy 不应建立隧道");
+    }
+
+    #[tokio::test]
+    async fn process_chain_proxy_matched_no_proxy_creates_no_tunnel() {
+        let hops = vec![ChainHop::SocksProxy(ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 1080,
+            auth: None,
+            no_proxy: vec!["h".to_string()],
+            timeout_secs: 5,
+        })];
+        let (url, guards) = process_chain("postgres://h:5432/db", &hops, "G_conn_a", "postgres")
+            .await
+            .expect("chain");
+        assert_eq!(url, "postgres://h:5432/db");
+        assert!(guards.is_empty(), "no_proxy 命中应跳过代理跳，不产生隧道");
+    }
 }

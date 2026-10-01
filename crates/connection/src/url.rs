@@ -232,4 +232,48 @@ mod tests {
         assert!(!url_has_plaintext_password("mysql://root@h:3306/db"));
         assert!(!url_has_plaintext_password("duckdb:///data/x.duckdb"));
     }
+
+    #[test]
+    fn test_build_url_default_host_and_password_without_username() {
+        // host 缺省 → 127.0.0.1；无用户名 → 凭据整段省略（密码不单独出现在 URL）
+        let mut d = ds("postgres", None, Some(5432), Some("db"));
+        d.password_encrypted = Some(shared::crypto::encrypt_password("pw").expect("encrypt"));
+        assert_eq!(build_connection_url(&d).expect("build"), "postgres://127.0.0.1:5432/db");
+
+        // 有用户名无密码 → 仅用户名
+        let mut d2 = ds("mysql", None, None, None);
+        d2.username = Some("root".to_string());
+        assert_eq!(build_connection_url(&d2).expect("build"), "mysql://root@127.0.0.1/");
+    }
+
+    #[test]
+    fn test_encode_userinfo_direct() {
+        assert_eq!(encode_userinfo("alice@corp"), "alice%40corp");
+        assert_eq!(encode_userinfo("p@ss:w/rd%"), "p%40ss%3Aw%2Frd%25");
+        assert_eq!(encode_userinfo("plain"), "plain");
+        assert_eq!(encode_userinfo(""), "");
+    }
+
+    #[test]
+    fn test_extract_credentials_encoded_userinfo() {
+        // userinfo 已百分号编码时按原样取出（解码由下游驱动负责）
+        assert_eq!(
+            extract_credentials_from_url("mysql://alice%40corp:p%40ss%3Aw%2Frd@h:3306/db"),
+            (Some("alice%40corp".to_string()), Some("p%40ss%3Aw%2Frd".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_mask_encoded_password_hidden() {
+        assert_eq!(
+            mask_password_in_url("postgres://u:p%40ss@h:5432/db"),
+            "postgres://u:******@h:5432/db"
+        );
+    }
+
+    #[test]
+    fn test_plaintext_detection_encoded_still_flagged() {
+        // 百分号编码的密码本质仍是明文（只是转义），应继续被识别为明文
+        assert!(url_has_plaintext_password("mysql://root:sec%40ret@h/db"));
+    }
 }

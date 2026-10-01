@@ -369,4 +369,184 @@ mod tests {
         assert_eq!(ssh_config.port, 22);
         assert!(matches!(ssh_config.auth, SshAuth::Password { .. }));
     }
+
+    fn ssh_config() -> SshConfig {
+        SshConfig {
+            host: "ssh.example.com".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            auth: SshAuth::Password {
+                password: "pass".to_string(),
+            },
+            remote_host: "db.internal".to_string(),
+            remote_port: 3306,
+            local_port: 0,
+            timeout_secs: 30,
+        }
+    }
+
+    fn proxy_config() -> ProxyConfig {
+        ProxyConfig {
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            auth: None,
+            no_proxy: Vec::new(),
+            timeout_secs: 30,
+        }
+    }
+
+    #[test]
+    fn test_connection_method_default_is_direct() {
+        assert_eq!(ConnectionMethod::default(), ConnectionMethod::Direct);
+    }
+
+    #[test]
+    fn test_method_name_matrix() {
+        assert_eq!(ConnectionConfig::direct("h", 1).method_name(), "direct");
+        assert_eq!(
+            ConnectionConfig::ssl("h", 1, SslConfig::default()).method_name(),
+            "ssl"
+        );
+        assert_eq!(
+            ConnectionConfig::ssh("h", 1, ssh_config()).method_name(),
+            "ssh"
+        );
+        assert_eq!(
+            ConnectionConfig::http_proxy("h", 1, proxy_config()).method_name(),
+            "http_proxy"
+        );
+        assert_eq!(
+            ConnectionConfig::socks_proxy("h", 1, proxy_config()).method_name(),
+            "socks_proxy"
+        );
+        assert_eq!(ConnectionConfig::chain("h", 1, vec![]).method_name(), "chain");
+    }
+
+    #[test]
+    fn test_encrypted_and_proxied_matrix() {
+        let direct = ConnectionConfig::direct("h", 1);
+        assert!(!direct.is_encrypted() && !direct.is_proxied());
+
+        let ssl = ConnectionConfig::ssl("h", 1, SslConfig::default());
+        assert!(ssl.is_encrypted() && !ssl.is_proxied());
+
+        let ssh = ConnectionConfig::ssh("h", 1, ssh_config());
+        assert!(ssh.is_encrypted() && !ssh.is_proxied());
+
+        let http = ConnectionConfig::http_proxy("h", 1, proxy_config());
+        assert!(!http.is_encrypted() && http.is_proxied());
+
+        let socks = ConnectionConfig::socks_proxy("h", 1, proxy_config());
+        assert!(!socks.is_encrypted() && socks.is_proxied());
+
+        // 链式：任一跳含加密/代理即整体成立
+        let chain_ssl = ConnectionConfig::chain("h", 1, vec![ChainHop::Ssl(SslConfig::default())]);
+        assert!(chain_ssl.is_encrypted() && !chain_ssl.is_proxied());
+
+        let chain_mixed = ConnectionConfig::chain(
+            "h",
+            1,
+            vec![
+                ChainHop::SocksProxy(proxy_config()),
+                ChainHop::Ssl(SslConfig::default()),
+            ],
+        );
+        assert!(chain_mixed.is_encrypted() && chain_mixed.is_proxied());
+    }
+
+    #[test]
+    fn test_chain_hop_name() {
+        assert_eq!(ChainHop::Ssh(ssh_config()).hop_name(), "ssh");
+        assert_eq!(ChainHop::Ssl(SslConfig::default()).hop_name(), "ssl");
+        assert_eq!(ChainHop::HttpProxy(proxy_config()).hop_name(), "http_proxy");
+        assert_eq!(ChainHop::SocksProxy(proxy_config()).hop_name(), "socks_proxy");
+    }
+
+    #[test]
+    fn test_tls_request_helpers() {
+        use crate::url_params::SslMode;
+
+        // verify-ca：校验证书链、不校验主机名
+        let req = TlsRequest::new(
+            SslMode::VerifyCa,
+            SslConfig {
+                verify_server_cert: true,
+                ca_cert_path: Some("  /ca.pem  ".to_string()),
+                client_cert_path: Some("   ".to_string()),
+                client_key_path: None,
+                min_tls_version: TlsVersion::Tls1_2,
+            },
+        );
+        assert!(req.verifies_chain());
+        assert!(!req.verifies_hostname());
+        assert_eq!(req.ca_path(), Some("/ca.pem"), "空白应被 trim");
+        assert_eq!(req.client_cert_path(), None, "纯空白视为未填");
+        assert_eq!(req.client_key_path(), None);
+
+        // verify-full：额外校验主机名
+        let full = TlsRequest::new(
+            SslMode::VerifyFull,
+            SslConfig {
+                client_key_path: Some("/k.pem".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(full.verifies_hostname());
+        assert_eq!(full.client_key_path(), Some("/k.pem"));
+
+        // disable：不校验证书链
+        let off = TlsRequest::new(SslMode::Disable, SslConfig::default());
+        assert!(!off.verifies_chain());
+    }
+
+    #[test]
+    fn test_serde_defaults_for_ssl_and_proxy() {
+        // verify_server_cert 与 min_tls_version 走 serde 默认（true / tls1_2）
+        let ssl: SslConfig = serde_json::from_str("{}").unwrap();
+        assert!(ssl.verify_server_cert, "verify_server_cert 默认 true");
+        assert_eq!(ssl.min_tls_version, TlsVersion::Tls1_2);
+
+        // 代理超时默认 30；auth / no_proxy 缺省为空
+        let proxy: ProxyConfig = serde_json::from_str(r#"{"host":"proxy","port":8080}"#).unwrap();
+        assert_eq!(proxy.timeout_secs, 30, "代理超时默认 30");
+        assert!(proxy.no_proxy.is_empty());
+        assert!(proxy.auth.is_none());
+    }
+
+    #[test]
+    fn test_ssh_config_serde_roundtrip() {
+        let ssh = ssh_config();
+        let json = serde_json::to_string(&ssh).unwrap();
+        let back: SshConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ssh, "SSH 配置序列化往返应一致（含 flatten 的 auth）");
+    }
+
+    #[test]
+    fn test_connection_method_serde_roundtrip() {
+        // 协议链（多跳）往返
+        let cfg = ConnectionConfig::chain(
+            "h",
+            5432,
+            vec![ChainHop::Ssh(ssh_config()), ChainHop::HttpProxy(proxy_config())],
+        );
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: ConnectionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.host, "h");
+        assert_eq!(back.port, 5432);
+        match &back.method {
+            ConnectionMethod::Chain(hops) => {
+                assert_eq!(hops.len(), 2);
+                assert_eq!(hops[0].hop_name(), "ssh");
+                assert_eq!(hops[1].hop_name(), "http_proxy");
+                assert!(matches!(hops[0], ChainHop::Ssh(_)), "第一跳应为 SSH");
+            }
+            other => panic!("期望 Chain，实际 {:?}", other),
+        }
+
+        // 直连（unit 变体）往返
+        let direct = ConnectionConfig::direct("h", 3306);
+        let json = serde_json::to_string(&direct).unwrap();
+        let back: ConnectionConfig = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back.method, ConnectionMethod::Direct));
+    }
 }
