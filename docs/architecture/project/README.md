@@ -15,6 +15,8 @@
 | `project-user-guide.md` | 使用手册：入口 / 界面导览 / 典型流程 / 状态速览 / 快捷键与键盘操作 / 数据与安全 / FAQ / 验收清单 | 自己用或写验收用例 |
 | `project-showcase.md` | **一页看懂（可贴版）**：一句话 + 四个剧本 + 流程 / 三道门 / 只读两道防线 / 架构 / 质量与证据 / 边界；纯文本 + 表格 + mermaid | 宣传、贴 PR / wiki / 聊天 |
 | `project-showcase.html` | **一页看懂（视觉版）**：首屏可切「选择器 / 项目设置 / 逃生口」线框，可点着试 facet 收窄与只读置灰；明暗双主题、离线可开 | 演示、截图、给外部人看 |
+| `project-wiring-matrix.md` | **接线矩阵**：逐方法标 已接线 / 预留 / 待删；死代码清理与归属决策台账 | 改 `store.rs` / 排查死代码 |
+| `project-data-dictionary.md` | **数据字典**：`.RSmeta` 目录树、`project.db` / `global.db` 表结构、`project.json` schema、权威约定 | 改表结构 / 排查数据 |
 
 ## 特点速览
 

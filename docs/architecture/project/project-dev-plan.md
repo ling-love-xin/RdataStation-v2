@@ -25,6 +25,28 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-10-01 — 完善：兑现 P0.3 / 双真相源权威 / 版本化定位 / 文档同步 / 接线矩阵
+
+按外部评审建议补的一组完善（见 §8「建议顺序」对应项）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **P0.3 兑现** | `service.rs` 去重复 `Runtime::new`（multi-thread，每次建销工作线程池，比 engine `acquire_sync` 的 current-thread 短命 runtime 重一个数量级）→ **进程级 current-thread `OnceLock<Runtime>`，一次建、终身用**；`runtime()` 返回 `&'static Handle`，并仿 engine `acquire_sync` 加「已在 runtime 上下文则返回错误」护栏防嵌套 panic；`cargo check -p rds-project` 零告警 | `crates/project/src/service.rs` |
+| 双真相源权威 | 钉死「**`project.json` 是权威、`project.db` 的 project 表是镜像**」：写入口收敛到 `save_info`，读优先 JSON（镜像只在 JSON 缺失时兜底） | `store.rs` `save_info` / `load` 文档注释 |
+| 版本化定位 | `Versioned<T>` / `Version` / checksum 标注为「**未接入业务数据，DuckLake 预留**」；实际在用 `project_versions` 表的手动快照台账；`DefaultHasher` 标注非加密风险，若真做内容级版本化须换 `sha2` | `models.rs` |
+| 文档同步 | 原型 §11 落点映射对齐 dev-plan §6（A3 迁移后不再指向 workbench 的 project_ui / project_service） | `project-prototype-design.md` |
+| 接线矩阵 | 新增本模块接线矩阵，逐方法标 已接线 / 预留 / 待删（`ProjectManager`、`to_project`、三个 `connection_metadata` 方法确认无生产调用方） | 新建 `project-wiring-matrix.md` |
+
+### 2026-10-01（续）— 死代码删除 / C2 解阻核查 / 数据字典
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **C2 解阻** | 核查 **gpui-component 0.7.0**（已锁定 0.7.0）：`PopupMenuItem::Item` 带 `action` 字段，`PopupMenu::render_key_binding` 经 `Kbd::binding_for_action_in` / `global_binding_for_action` **自动渲染快捷键**（0.5.1 已存在该能力）。C2「菜单快捷键展示」阻塞解除，可从暂缓转待办（给 `project_menu_entries` 挂 action + 注册 key binding 即显式显示快捷键） | 组件源码 `gpui-component/src/menu/popup_menu.rs`；实施待排期 |
+| 死代码删除 | 删 `ProjectManager`（整 struct + Default）、`to_project`、`load_connections` / `load_queries`（stub）、`ProjectStore::connections` / `queries` 缓存字段；同步 `lib.rs` re-export、`store.rs::mod tests::test_project_manager`、集成测试 `manager_tracks_current_and_recent`；`Project.connections` / `queries` 与 `ConnectionRef` / `QueryRef` **保留为 DuckLake 三期预留** | `crates/project/src/{store.rs,lib.rs}`、`tests/project_store.rs` |
+| 数据字典 | 新增 `project-data-dictionary.md`：`.RSmeta` 目录树、`project.db`（project / connections / query_history / project_settings / workbench_state / 插件表 / project_versions）、`project.json` schema（ProjectInfo）、`global.db.project_info`（001+019） | 新建 `project-data-dictionary.md` |
+| 验证 | `cargo check -p rds-project` 零告警；测试 42 + 名册 1 + 存储 3 全过（较上轮 43/1/4 减 2 = 删除的两个死代码测试） | — |
+| 遗留 | `create_connection_metadata` / `connection_metadata_path` / `delete_connection_metadata`（`project_metadata/` 归属空洞）**未删**，与 DuckLake 三期一并决策 | wiring-matrix 已标 🟡 |
+
 ### 2026-09-19（四）— C3 卡片右键菜单 + C5 搜索 facet + E1/E4
 
 §8 剩下的“体验与覆盖”项（C2 等组件支持，见下）：
