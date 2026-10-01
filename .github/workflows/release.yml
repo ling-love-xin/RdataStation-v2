@@ -1,14 +1,15 @@
 name: Release
 
-# 打标签即发布：云端编译多平台二进制 → 打包 → 上传到 Release Assets。
+# 打标签即发布：云端编译（beta 阶段仅 Windows）→ 打包 → 上传到 Release Assets。
 # 本地不打包、不上传（设计 / 流程 / 排错见 docs/architecture/release/release-pipeline.md）。
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag RDS-beta-0.1.0 && git push origin RDS-beta-0.1.0   # beta：仅 Windows 包
+#   git tag v0.1.0        && git push origin v0.1.0            # 定版：恢复全平台矩阵
 #
 # 手动跑（Actions → Release → Run workflow）只出工作流附件、**不建 Release**，用来试跑矩阵。
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "RDS-beta-*"]
   workflow_dispatch:
 
 # softprops/action-gh-release 要写 Release（建标签对应的 Release + 传 Assets）
@@ -35,29 +36,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # beta 阶段（RDS-beta-* 标签）只出 Windows 包；定版（v* 标签）时恢复全平台：
+        #   Linux x86_64（ubuntu-22.04 + RPATH=$ORIGIN）
+        #   macOS arm64 / x86_64（RPATH=@executable_path，包成 RdataStation.app）
         include:
           - name: Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
-          # 钉在 22.04：glibc 2.35 是当前主流发行版的下限；24.04 编出来的包在旧系统上跑不了
-          - name: Linux x86_64
-            os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            platform: linux-x86_64
-            # DuckDB 动态库与可执行文件同级：把 `$ORIGIN` 写进 RPATH，
-            # 用户解压即用，不必再配 LD_LIBRARY_PATH（本地开发仍按 README 配）
-            rustflags: "-C link-arg=-Wl,-rpath,$ORIGIN"
-          - name: macOS arm64
-            os: macos-14
-            target: aarch64-apple-darwin
-            platform: macos-arm64
-            rustflags: "-C link-arg=-Wl,-rpath,@executable_path"
-          - name: macOS x86_64
-            os: macos-14
-            target: x86_64-apple-darwin
-            platform: macos-x86_64
-            rustflags: "-C link-arg=-Wl,-rpath,@executable_path"
 
     env:
       # 只有 Linux / macOS 需要（Windows 由加载器按 exe 目录搜索）
@@ -108,8 +94,12 @@ jobs:
           CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"
-            if [ "$TAG" != "v$CARGO_VERSION" ]; then
+            case "$TAG" in
+              RDS-beta-*) VERSION="${TAG#RDS-beta-}" ;;   # beta 标签：RDS-beta-<版本号>
+              v*)         VERSION="${TAG#v}" ;;           # 定版标签：v<版本号>
+              *)          VERSION="$TAG" ;;
+            esac
+            if [ "$TAG" != "RDS-beta-$CARGO_VERSION" ] && [ "$TAG" != "v$CARGO_VERSION" ]; then
               echo "::warning::标签 $TAG 与 Cargo.toml 的版本 $CARGO_VERSION 不一致，产物按标签命名"
             fi
           else
