@@ -1574,7 +1574,7 @@ mod tests {
         }
     }
 
-    /// 窗口根必须是组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）
+    /// 窗口根必须是组件库的 `Root`（`open_dialog` 依赖它；gpui-kit 0.7.0 起 dialog 层由 Root 自动挂载）
     struct Harness {
         rules: Entity<RulesView>,
         _sink: Entity<Sink>,
@@ -1587,9 +1587,7 @@ mod tests {
             cx: &mut gpui_kit::Context<Self>,
         ) -> impl IntoElement {
             let mut root = div().size_full().child(self.rules.clone());
-            if let Some(layer) = Root::render_dialog_layer(window, cx) {
-                root = root.child(layer);
-            }
+            // gpui-kit 0.7.0：Root 自动挂载 dialog 层，测试 Harness 无需手动渲染。
             root
         }
     }

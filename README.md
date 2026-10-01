@@ -14,11 +14,11 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.6.1-4B8BBE)](https://gpui-kit.com)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.0-4B8BBE)](https://gpui-kit.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Crates](https://img.shields.io/badge/workspace-16%20crates-6E4AFF)](#架构)
-[![Status](https://img.shields.io/badge/status-alpha-orange)](#路线图与已知边界)
+[![Status](https://img.shields.io/badge/status-beta-blue)](#发布与验证进度)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 **简体中文** · [English](README.en.md)
@@ -255,6 +255,17 @@ RdataStation-v2/
 └── v1/                      # v1 源码暂存区（Vue3 + Tauri，不参与编译）
 ```
 
+## 发布与验证进度
+
+> 汇总文档：[`docs/project-progress.md`](docs/project-progress.md)（模块状态 / 发布规则 / 增量计划 / 分支约定）；执行看板：[GitHub Project V2](https://github.com/users/ling-love-xin/projects/5)。
+
+| 里程碑 | 状态 | 说明 |
+| --- | --- | --- |
+| **beta 0.1.0**（`RDS-beta-0.1.0`） | ✅ 已发布 | Windows x86_64 分发包 + sha256 挂载 Release；云端构建流水线已修复（beta 阶段矩阵收敛为 Windows） |
+| **gpui-kit 0.7.0 升级** | ✅ 验证完成 | 分支 `verify/gpui-kit-0.7`：`render_dialog_layer` 手动挂载移除（0.7 由 Root 自动挂载），全仓 0 error / 0 warning，受影响 crate ~1328 测试通过；待合并 main |
+| **连接模块增量**（#A 留痕 / #B 环境策略 / #C 管理窗） | 🟡 原型定稿待评审 | 权威设计见 [`docs/architecture/connection/`](docs/architecture/connection/)；交互原型 v2.3（网络测试 / 认证引用与手动二选一 / 四分类 / chain 拓扑）与增量计划见 `docs/tmp/`，评审表 Y/N/改 待填 |
+| **数据源 ID / 认证 / 网络 / 环境 / 标签分组** | 🟡 设计中 | 双轨三态 ID、AES-256-GCM 字段级加密、网络递归加密、环境策略 5+1（脱敏明确不做） |
+
 ## 模块与进度
 
 状态口径：**✅ 主线可用** · **🟡 部分可用**（有具名缺口） · **⛔ 未接通**。缺口一列全部取自各模块文档的权威待办清单，不做美化。
@@ -329,7 +340,7 @@ RdataStation-v2/
 | 领域 | 选型 | 用途 |
 | --- | --- | --- |
 | 语言 | Rust · edition 2024 | 全栈（前端也是 Rust，无 JS 运行时） |
-| UI | **GPUI-kit 0.6.1** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
+| UI | **GPUI-kit 0.7.0** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
 | 分析引擎 | **DuckDB 1.5.5**（动态链接，crate `1.10505.0`） | 二次分析 / 联邦 / 画像 / 造数 / 快照 |
 | 元数据库 | **rusqlite 0.40**（bundled） | 事务元数据 + 三层缓存的 L2 |
 | 驱动 | sqlx 0.9（MySQL / PostgreSQL）· `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 个驱动，2 个引擎各两条实现（sqlx 版与官方客户端版） |
@@ -372,7 +383,12 @@ cargo clippy-all            # = clippy --workspace --all-targets
 
 ### 2. 发布版（下载即用，本地不打包）
 
-发布包由 **GitHub Actions 在云端**构建并挂到 Release 页（本地不编、不打包、不上传）：
+发布包由 **GitHub Actions 在云端**构建并挂到 Release 页（本地不编、不打包、不上传）。**beta 阶段与定版使用两套标签规则**：
+
+| 阶段 | 标签 | 平台 | 说明 |
+| --- | --- | --- | --- |
+| **beta**（当前） | `RDS-beta-<版本号>`（如 `RDS-beta-0.1.0`） | 仅 Windows x86_64 | 验证期，只出 Windows 包 |
+| **定版** | `v<版本号>`（如 `v0.1.0`） | 全平台矩阵 | 验证通过后去 beta，恢复 Linux / macOS |
 
 | 平台 | 资产 | 上手 |
 | --- | --- | --- |
@@ -383,6 +399,10 @@ cargo clippy-all            # = clippy --workspace --all-targets
 **发布动作就是推一个标签**，其余全在云端：
 
 ```bash
+# beta 阶段（只编 Windows）：
+git tag RDS-beta-0.1.0 && git push origin RDS-beta-0.1.0
+
+# 定版（恢复全平台矩阵）：
 # 版本号在根 Cargo.toml 的 [workspace.package]（建议与标签对齐）
 git tag v0.1.0 && git push origin v0.1.0
 ```
@@ -426,6 +446,8 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
 > 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；当前全仓编译零告警（`cargo check --workspace --all-targets`）。
+>
+> **2026-10-01 增量更新（gpui-kit 0.7.0 迁移）**：`cargo check --workspace` 0 error / 0 warning；受影响 crate（workbench / editor / project / mock / insight / analytics / connection / settings / scratchpad / app / engine 等）实测 **~1328 通过 / 0 失败**；dialog 打开 / 渲染 / 关闭 / 不重复挂载测试全部通过。2 项非回归：`quick_open` 并行负载下 20s 超时（单跑 0.08s 通过，flaky）；`zz_fixture_probe` 依赖内网真机（环境性）。
 >
 > **口径**：85 个目标里有 1 个是 `rds-workbench --test zz_fixture_probe`——一个**本机专用诊断脚本**（四条真机连接自检），已从版本控制中移除并加入忽略规则（本机文件保留）。去掉它，**项目自身套件 = 84 个目标 / 2004 项通过**。它本轮通过；上一轮曾因目标 DuckDB 文件被别的程序占用而失败（`File is already open in … dbeaver.exe`），**与代码无关**。同一轮里该脚本的 MySQL / PostgreSQL / SQLite 六条链路（测试连接 + 真实连接）**全部通过**。
 
@@ -487,7 +509,7 @@ RdataStation 不是为了取代它们而存在，而是想回答一个因历史�
 
 ### 友情提示
 
-本项目处于 **alpha** 阶段，**主线可用但接通度不平均**：M1 / M3 / M4 / M5 / M6 / M7 / M8 与编辑器执行链是活的，M9 插件整包未接通。用于生产环境前请自行评估，并注意项目文档中标注的「已知缺口」。
+本项目处于 **beta** 阶段（`RDS-beta-*` 标签发布 Windows 包），**主线可用但接通度不平均**：M1 / M3 / M4 / M5 / M6 / M7 / M8 与编辑器执行链是活的，M9 插件整包未接通；验证通过后定版（`v*` 标签）将恢复全平台矩阵。用于生产环境前请自行评估，并注意项目文档中标注的「已知缺口」。
 
 ---
 

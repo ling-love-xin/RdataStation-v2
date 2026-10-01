@@ -14,11 +14,11 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.6.1-4B8BBE)](https://gpui-kit.com)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.0-4B8BBE)](https://gpui-kit.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Crates](https://img.shields.io/badge/workspace-16%20crates-6E4AFF)](#architecture)
-[![Status](https://img.shields.io/badge/status-alpha-orange)](#roadmap--known-boundaries)
+[![Status](https://img.shields.io/badge/status-beta-blue)](#release--verification-progress)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [简体中文](README.md) · **English**
@@ -255,6 +255,17 @@ RdataStation-v2/
 └── v1/                      # v1 source archive (Vue 3 + Tauri; not compiled)
 ```
 
+## Release & verification progress
+
+> Single source: [`docs/project-progress.md`](docs/project-progress.md) (module status / release rules / increment plan / branch conventions); execution board: [GitHub Project V2](https://github.com/users/ling-love-xin/projects/5).
+
+| Milestone | Status | Notes |
+| --- | --- | --- |
+| **beta 0.1.0** (`RDS-beta-0.1.0`) | ✅ shipped | Windows x86_64 bundle + sha256 attached to the Release; cloud pipeline fixed (beta matrix narrowed to Windows) |
+| **gpui-kit 0.7.0 upgrade** | ✅ verified | Branch `verify/gpui-kit-0.7`: manual `render_dialog_layer` removed (0.7 auto-mounts the dialog layer via `WindowState`), workspace 0 error / 0 warning, ~1328 tests passing on affected crates; awaiting merge to main |
+| **Connection increments** (#A traceability / #B environment policy / #C manager dialogs) | 🟡 prototype finalized, review pending | Authoritative design in `docs/architecture/connection/`; interactive prototype v2.3 and increment plan in `docs/tmp/`, review table Y/N/edit to be filled |
+| **Data-source ID / credentials / network / environment / tags & groups** | 🟡 in design | dual-track three-state ID, AES-256-GCM field-level encryption, recursive network encryption, environment policy 5+1 (masking explicitly not planned) |
+
 ## Modules & progress
 
 Status vocabulary: **✅ main line live** · **🟡 partial** (with named gaps) · **⛔ not wired**. Every gap listed below comes from the module's own authoritative to-do list — nothing is glossed over.
@@ -329,7 +340,7 @@ Two things are **deliberately not copied**: keeping the cache in memory only (th
 | Area | Choice | Purpose |
 | --- | --- | --- |
 | Language | Rust · edition 2024 | The whole stack — including the UI; there is no JS runtime |
-| UI | **GPUI-kit 0.6.1** | View layer; version-locked to `gpui-base` / `gpui-component` and upgraded as one set |
+| UI | **GPUI-kit 0.7.0** | View layer; version-locked to `gpui-base` / `gpui-component` and upgraded as one set |
 | Analysis engine | **DuckDB 1.5.5** (dynamically linked; crate `1.10505.0`) | Secondary analysis / federation / profiling / mock data / snapshots |
 | Metadata store | **rusqlite 0.40** (bundled) | Transactional metadata + the L2 tier of the metadata cache |
 | Drivers | sqlx 0.9 (MySQL / PostgreSQL) · `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 drivers; MySQL and PostgreSQL each have two implementations (sqlx and official client) |
@@ -489,7 +500,7 @@ RdataStation does not exist to replace them. It exists to answer a question that
 
 ### A friendly warning
 
-This project is in **alpha**, and **how much is wired up varies a lot between modules**: M1 / M3 / M4 / M5 / M6 / M7 / M8 and the editor's execution chain are live, while the M9 plugin crate is entirely unwired. Please evaluate it yourself before production use, and note the "known gaps" recorded in each module's documentation.
+This project is in **beta** (`RDS-beta-*` tags ship Windows builds), and **how much is wired up varies a lot between modules**: M1 / M3 / M4 / M5 / M6 / M7 / M8 and the editor's execution chain are live, while the M9 plugin crate is entirely unwired; once verified, a `v*` tag restores the full platform matrix. Please evaluate it yourself before production use, and note the "known gaps" recorded in each module's documentation.
 
 ---
 

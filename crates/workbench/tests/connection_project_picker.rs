@@ -69,9 +69,6 @@ impl Render for PickerHarness {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .when_some(Root::render_dialog_layer(window, cx), |d, layer| {
-                d.child(layer)
-            })
     }
 }
 

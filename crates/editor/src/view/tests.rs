@@ -1892,9 +1892,6 @@ impl Render for DialogHarness {
         div()
             .size_full()
             .child(self.area.clone())
-            .when_some(Root::render_dialog_layer(window, cx), |this, layer| {
-                this.child(layer)
-            })
     }
 }
 

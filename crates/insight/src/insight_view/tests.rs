@@ -1362,9 +1362,6 @@ fn cleanup_asks_first_and_reports_in_payload(cx: &mut TestAppContext) {
             cx: &mut gpui_kit::Context<Self>,
         ) -> impl IntoElement {
             let mut root = div().size_full().child(self.panel.clone());
-            if let Some(layer) = Root::render_dialog_layer(window, cx) {
-                root = root.child(layer);
-            }
             root
         }
     }
