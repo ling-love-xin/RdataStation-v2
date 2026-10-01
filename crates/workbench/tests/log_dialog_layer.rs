@@ -14,16 +14,13 @@ use gpui_kit::{
     div,
 };
 
-/// 简化宿主：只负责把对话框层挂进自己的元素树（生产是 `WorkbenchView`）。
+/// 简化宿主：0.7.0 起对话框层由 Root 自动挂载，宿主只渲染占位视图（生产是 `WorkbenchView`）。
 struct HostView;
 
 impl Render for HostView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .when_some(Root::render_dialog_layer(window, cx), |d, layer| {
-                d.child(layer)
-            })
     }
 }
 

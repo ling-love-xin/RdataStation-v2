@@ -48,15 +48,12 @@ use rds_analytics_resource::dialogs::version::{
 };
 use rds_analytics_resource::resource_view::GroupOption;
 
-/// 窗口根：组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）。
+/// 窗口根：组件库的 `Root`（`open_dialog` 依赖它；0.7.0 起 dialog 层由 Root 自动挂载）。
 struct DialogHarness;
 
 impl Render for DialogHarness {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut root = div().size_full();
-        if let Some(layer) = Root::render_dialog_layer(window, cx) {
-            root = root.child(layer);
-        }
         root
     }
 }

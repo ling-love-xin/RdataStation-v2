@@ -858,9 +858,6 @@ impl Render for Harness {
             .size_full()
             .child(div().w_96().child(self.panel.clone()))
             .child(self.detail.clone());
-        if let Some(layer) = Root::render_dialog_layer(window, cx) {
-            root = root.child(layer);
-        }
         root
     }
 }

@@ -59,8 +59,8 @@ workbench = { path = "crates/workbench", package = "rds-workbench" }
 # ===== 表现层 =====
 # gpui-kit 与 gpui 版本强绑定：gpui-kit / gpui-base / gpui-component /
 # gpui-kit-assets 必须同版本（否则门面与内部错配），升级由 GPUI-kit 发布节奏统一决定。
-# 写法是 caret 约束（>=0.6.1, <0.7.0），实际使用的版本由 Cargo.lock 锁定。
-gpui-kit = "0.6.1"
+# 0.7.0：在 verify/gpui-kit-0.7 分支验证（2026-10-01），通过后合回 main。
+gpui-kit = "0.7.0"
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），

@@ -119,9 +119,6 @@ impl Render for Harness {
         div()
             .size_full()
             .child(body)
-            .when_some(Root::render_dialog_layer(window, cx), |d, layer| {
-                d.child(layer)
-            })
     }
 }
 

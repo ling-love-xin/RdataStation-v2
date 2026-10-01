@@ -16,7 +16,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
 use gpui_kit::*;
 
 use crate::commands::{
@@ -1912,10 +1912,8 @@ impl Render for WorkbenchView {
                 root = root.child(settings);
             }
         }
-        // 对话框层（Root::render_dialog_layer）——连接对话框与项目对话框均在此渲染。
-        if let Some(dialog_layer) = Root::render_dialog_layer(window, cx) {
-            root = root.child(dialog_layer);
-        }
+        // 对话框层：gpui-kit 0.7.0 的 Root 已自动挂载 dialog 层（WindowState::dialog_layer），
+        // 连接对话框与项目对话框不再需要手动渲染。
         root
     }
 }
