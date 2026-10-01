@@ -13,9 +13,8 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
-use crate::models::{ConnectionRef, Project, ProjectConfig, ProjectInfo, ProjectPath, QueryRef};
+use crate::models::{Project, ProjectConfig, ProjectInfo, ProjectPath};
 use engine::migration::{MigrationManager, MigrationType};
 use engine::persistence;
 use shared::error::CoreError;
@@ -44,10 +43,6 @@ pub struct ProjectStore {
     info: ProjectInfo,
     /// 配置缓存
     config: Option<ProjectConfig>,
-    /// 连接列表缓存
-    connections: Option<Vec<ConnectionRef>>,
-    /// 查询列表缓存
-    queries: Option<Vec<QueryRef>>,
 }
 
 impl ProjectStore {
@@ -83,8 +78,6 @@ impl ProjectStore {
         let store = Self {
             info: project.info,
             config: Some(project.config),
-            connections: Some(project.connections),
-            queries: Some(project.queries),
         };
 
         // 保存初始配置（settings.json）
@@ -139,7 +132,8 @@ impl ProjectStore {
             }
         }
 
-        // 加载项目信息（优先从 project.json 加载）
+        // 加载项目信息（权威源 = project.json，镜像 project.db 只在 JSON 缺失时兜底；
+        // 与 `save_info` 的「JSON 权威、SQLite 镜像」约定一致，见该函数文档注释）
         let info_path = meta_dir.join(PROJECT_JSON_NAME);
         let info: ProjectInfo = if info_path.exists() {
             let content = fs::read_to_string(&info_path)
@@ -167,8 +161,6 @@ impl ProjectStore {
         Ok(Self {
             info,
             config: None,
-            connections: None,
-            queries: None,
         })
     }
 
@@ -416,7 +408,16 @@ impl ProjectStore {
         Ok(())
     }
 
-    /// 保存项目信息到 project.json
+    /// 保存项目信息到 project.json（**权威源**）。
+    ///
+    /// 双真相源约定：**`project.json` 是权威，`project.db` 的 `project` 表只是镜像**。
+    /// - 读：`load` 优先从 `project.json` 反序列化，镜像只在 JSON 缺失时兜底；
+    /// - 写：所有项目信息变更必须经 `save_info`（或其上层 `update_info`）这一个入口，
+    ///   这里把 JSON 与镜像一并写，避免某处只写一边造成静默分裂。
+    ///
+    /// `project.json` 承担「可迁移 / 可 diff / 便于排障」，`project.db` 的 `project` 表
+    /// 只为「项目级查询 / 与 SQLite 侧其他表同库」提供镜像；两者不同步时以 JSON 为准，
+    /// 下次任意一次 `save_info` 会用 JSON 覆盖镜像。
     pub fn save_info(&self) -> Result<(), CoreError> {
         let info_path = self
             .info
@@ -433,7 +434,7 @@ impl ProjectStore {
         fs::write(&info_path, content)
             .map_err(|e| persistence::io_to_core_error(e, &info_path, "write"))?;
 
-        // 同步到 project.db 的 project_info 表
+        // 同步到 project.db 的 project_info 表（镜像，见本函数文档注释）
         self.sync_project_info_to_db()?;
 
         Ok(())
@@ -653,129 +654,13 @@ impl ProjectStore {
         Ok(())
     }
 
-    /// 转换为完整的 Project
-    pub fn to_project(mut self) -> Result<Project, CoreError> {
-        let config = self.load_config()?;
-        let connections = self.load_connections()?;
-        let queries = self.load_queries()?;
-
-        Ok(Project {
-            info: self.info,
-            config,
-            connections,
-            queries,
-        })
-    }
-
-    /// 加载连接列表（从 SQLite）
-    fn load_connections(&mut self) -> Result<Vec<ConnectionRef>, CoreError> {
-        if let Some(ref connections) = self.connections {
-            return Ok(connections.clone());
-        }
-
-        // 从项目 SQLite 加载持久化连接列表（数据模型已定义，待实现 SQL 读取）
-        tracing::debug!(
-            project_id = %self.info.id,
-            "connections table schema ready, SQL read not yet implemented"
-        );
-        let connections = Vec::new();
-        self.connections = Some(connections.clone());
-        Ok(connections)
-    }
-
-    /// 加载查询列表（从 SQLite）
-    fn load_queries(&mut self) -> Result<Vec<QueryRef>, CoreError> {
-        if let Some(ref queries) = self.queries {
-            return Ok(queries.clone());
-        }
-
-        // 从项目 SQLite 加载持久化查询列表（数据模型已定义，待实现 SQL 读取）
-        tracing::debug!(
-            project_id = %self.info.id,
-            "queries table schema ready, SQL read not yet implemented"
-        );
-        let queries = Vec::new();
-        self.queries = Some(queries.clone());
-        Ok(queries)
-    }
+    // to_project / load_connections / load_queries 已于 2026-10-01 移除（v1 遗留 stub，
+    // `SQL read not yet implemented` 恒返回空 Vec，无生产调用方）。`Project.connections` /
+    // `Project.queries` 与 `ConnectionRef` / `QueryRef` 类型保留在 `models.rs` 作为 DuckLake
+    // 三期预留；届时由三期实现真正的连接/查询持久化读取。见
+    // `docs/architecture/project/project-wiring-matrix.md`。
 }
 
-/// 项目管理器
-///
-/// 管理所有项目的生命周期
-pub struct ProjectManager {
-    /// 当前打开的项目
-    current_project: Option<Arc<Mutex<ProjectStore>>>,
-    /// 最近项目列表（从系统配置加载）
-    recent_projects: Vec<ProjectInfo>,
-}
-
-impl ProjectManager {
-    /// 创建新的项目管理器
-    pub fn new() -> Self {
-        Self {
-            current_project: None,
-            recent_projects: Vec::new(),
-        }
-    }
-
-    /// 创建新项目
-    pub fn create_project(
-        &mut self,
-        name: impl Into<String>,
-        path: &Path,
-    ) -> Result<Arc<Mutex<ProjectStore>>, CoreError> {
-        let store = ProjectStore::create(name, path)?;
-        let project = Arc::new(Mutex::new(store));
-        self.current_project = Some(project.clone());
-        Ok(project)
-    }
-
-    /// 打开项目
-    pub fn open_project(&mut self, path: &Path) -> Result<Arc<Mutex<ProjectStore>>, CoreError> {
-        let mut store = ProjectStore::load(path)?;
-
-        // 更新最后打开时间
-        store.update_info(|info| {
-            info.last_opened_at = Some(chrono::Utc::now());
-        })?;
-
-        let project = Arc::new(Mutex::new(store));
-        self.current_project = Some(project.clone());
-        Ok(project)
-    }
-
-    /// 获取当前项目
-    pub fn current_project(&self) -> Option<Arc<Mutex<ProjectStore>>> {
-        self.current_project.clone()
-    }
-
-    /// 关闭当前项目
-    pub fn close_project(&mut self) {
-        self.current_project = None;
-    }
-
-    /// 获取最近项目列表
-    pub fn recent_projects(&self) -> &[ProjectInfo] {
-        &self.recent_projects
-    }
-
-    /// 添加到最近项目
-    pub fn add_recent_project(&mut self, info: ProjectInfo) {
-        // 去重
-        self.recent_projects.retain(|p| p.id != info.id);
-        // 添加到开头
-        self.recent_projects.insert(0, info);
-        // 限制数量
-        self.recent_projects.truncate(10);
-    }
-}
-
-impl Default for ProjectManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 // ========== 项目打开自检 ==========
 
@@ -902,30 +787,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_project_manager() -> Result<(), CoreError> {
-        let mut manager = ProjectManager::new();
-
-        // 创建项目
-        let project_path = test_temp_dir("manager").join("managed-project");
-        let _project = manager.create_project("Managed Project", &project_path)?;
-
-        // 验证当前项目
-        assert!(manager.current_project().is_some());
-
-        // 关闭项目
-        manager.close_project();
-        assert!(manager.current_project().is_none());
-
-        // 重新打开
-        let _ = manager.open_project(&project_path)?;
-        assert!(manager.current_project().is_some());
-        Ok(())
-    }
-
-    // ==================== M1 双层数据架构装配验证 ====================
-
-    /// 双层装配：SQLite 元数据库（project.db）可查 + DuckDB 分析引擎（analytics.duckdb）可执行 SQL
     #[test]
     fn test_dual_layer_assembled() -> Result<(), CoreError> {
         let project_path = test_temp_dir("dual_layer").join("proj");

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use rds_project::service::{load_default_connection, save_default_connection};
-use rds_project::{AcquireOutcome, ProjectLock, ProjectManager, ProjectStore};
+use rds_project::{AcquireOutcome, ProjectLock, ProjectStore};
 
 /// 独立临时目录（按用例名 + pid 隔离，运行前清理）。
 fn temp_dir(name: &str) -> PathBuf {
@@ -32,30 +32,6 @@ fn create_then_load_roundtrip() {
     assert_eq!(loaded.info().id, id);
     assert_eq!(loaded.info().name, "集成测试项目");
     assert!(loaded.info().path.is_local());
-
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn manager_tracks_current_and_recent() {
-    let root = temp_dir("manager");
-
-    let mut manager = ProjectManager::new();
-    manager.create_project("M", &root).expect("create");
-    assert!(manager.current_project().is_some());
-
-    let info = manager
-        .current_project()
-        .expect("current")
-        .lock()
-        .expect("lock")
-        .info()
-        .clone();
-    manager.add_recent_project(info);
-    assert_eq!(manager.recent_projects().len(), 1);
-
-    manager.close_project();
-    assert!(manager.current_project().is_none());
 
     let _ = std::fs::remove_dir_all(&root);
 }

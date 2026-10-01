@@ -33,5 +33,5 @@ pub use models::{
     Version, VersionInfo, Versioned,
 };
 pub use service::{OpenOutcome, ProjectSummary};
-pub use store::{ProjectManager, ProjectStore};
+pub use store::ProjectStore;
 pub use ui::{OpenProject, ProjectUiHost};
