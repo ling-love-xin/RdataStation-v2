@@ -1,8 +1,9 @@
 //! 暂存列表（多连接连续编辑）行为测试 —— 对应原型设计 §2.2 与开发计划 C5。
 //!
-//! 覆盖：切换条目保留各自字段、删除至最后一条自动补位、保存后草稿移出暂存区并补空草稿、
-//! 暂存区只保留未保存草稿（历史遗留的已保存条目会被清理）。不接真实服务
-//! （`DataSourceService::global()` 不可用时安全降级）。
+//! 覆盖：切换条目保留各自字段、删除至最后一条自动补位、**保存语义（2026-10-02 用户决策）**：
+//! 「保存」仅暂存草稿箱（不落库），「保存并退出」批量提交后 `staging_clear` 清空草稿箱、
+//! 部分失败时 `remove_drafts_at` 只移除已成功条目（失败保留供修正）；暂存区只保留未保存草稿
+//! （历史遗留的已保存条目会被清理）。不接真实服务（`DataSourceService::global()` 不可用时安全降级）。
 //!
 //! 注意：不使用 `use gpui_kit::*` / `use super::*` 通配导入（会把 gpui 的 `test`
 //! 宏带入作用域，与 `#[gpui_kit::test]` 冲突）。
@@ -51,7 +52,7 @@ impl Harness {
 }
 
 impl Render for Harness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .child(self.editor.clone())
@@ -124,36 +125,84 @@ fn staging_remove_last_keeps_one_empty_draft(cx: &mut TestAppContext) {
     assert!(cx.update(|_, _cx| dialog.draft_cursor.get()) < 2);
 }
 
+/// 「保存并退出」批量提交**全部成功**后：`staging_clear` 清空草稿箱（用户决策：提交后不留草稿）。
 #[gpui_kit::test]
-fn staging_after_save_removes_draft_and_appends(cx: &mut TestAppContext) {
+fn staging_clear_empties_draft_box(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
 
+    // 暂存栏有两条约定已提交的非空草稿（模拟「保存并退出」批量提交前的状态）。
     cx.update(|window, cx| {
         dialog
             .name
             .update(cx, |s, cx| s.set_value("生产PG", window, cx));
     });
-    cx.update(|window, cx| dialog.staging_after_save(window, cx));
+    cx.update(|window, cx| dialog.staging_add(window, cx));
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("测试MySQL", window, cx));
+    });
+    assert_eq!(cx.update(|_, _cx| dialog.drafts.borrow().len()), 2);
+
+    // 批量提交全部成功 → 清空草稿箱。
+    cx.update(|_, cx| dialog.staging_clear(cx));
 
     let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
     assert_eq!(
         drafts.len(),
-        1,
-        "保存成功后草稿移出暂存区（已落库，从导航栏编辑），只留一条新空草稿"
+        0,
+        "全成功提交后草稿箱必须清空（不留草稿）"
     );
-    assert!(
-        drafts[0].saved_id.is_none(),
-        "暂存区不再保留已保存条目：{:?}",
-        drafts[0].saved_id
-    );
-    assert!(drafts[0].name.is_empty(), "新草稿应为空");
     assert_eq!(
         cx.update(|_, _cx| dialog.draft_cursor.get()),
         0,
-        "保存后应选中新草稿"
+        "清空后光标回到 0"
     );
+}
+
+/// 「保存并退出」批量提交**部分失败**后：`remove_drafts_at` 只移除已成功落库的条目，
+/// 失败条目保留供修正重试；删空时补一条空草稿（列表恒非空）。
+#[gpui_kit::test]
+fn remove_drafts_at_keeps_failed_entries(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
+
+    // 三条草稿：0、1、2；模拟 0、2 已成功落库、1 失败 → 只移除 0、2，保留 1。
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("草稿A", window, cx));
+    });
+    cx.update(|window, cx| dialog.staging_add(window, cx));
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("草稿B", window, cx));
+    });
+    cx.update(|window, cx| dialog.staging_add(window, cx));
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("草稿C", window, cx));
+    });
+    assert_eq!(cx.update(|_, _cx| dialog.drafts.borrow().len()), 3);
+
+    cx.update(|window, cx| dialog.remove_drafts_at(vec![0, 2], window, cx));
+
+    let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
+    assert_eq!(drafts.len(), 1, "失败条目（草稿B）应保留");
+    assert_eq!(drafts[0].name, "草稿B", "保留的应是失败条目本身");
+    assert!(drafts[0].saved_id.is_none());
+
+    // 再移除最后一条 → 自动补空草稿（列表恒非空，状态机不越界）。
+    cx.update(|window, cx| dialog.remove_drafts_at(vec![0], window, cx));
+    let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
+    assert_eq!(drafts.len(), 1, "删空后应补一条空草稿");
+    assert!(drafts[0].name.is_empty() && drafts[0].saved_id.is_none());
+    assert!(cx.update(|_, _cx| dialog.draft_cursor.get()) < drafts.len());
 }
 
 #[gpui_kit::test]

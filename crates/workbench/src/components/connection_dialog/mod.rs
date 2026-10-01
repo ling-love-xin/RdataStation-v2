@@ -213,17 +213,18 @@ pub(crate) fn set_result(
     *result.borrow_mut() = Some(ResultLine::new(level, summary));
 }
 
-/// 写整行（已构造好的结果行；如保存结果需要「摘要 + 详情」两段）。
-pub(crate) fn set_result_line(result: &Rc<RefCell<Option<ResultLine>>>, line: ResultLine) {
-    *result.borrow_mut() = Some(line);
-}
-
 /// 连接显示名（空名回退占位，避免提示里出现空引号）。
 /// 该字段键是否为凭据（掩码输入 + 眼睛按钮；见 [`SECRET_FIELD_KEYS`]）。
 pub(crate) fn is_secret_field(key: &str) -> bool {
     SECRET_FIELD_KEYS.contains(&key)
 }
 
+/// 连接显示名（空名回退占位）。
+///
+/// `#[allow(dead_code)]`：批量提交（保存并退出）改为统一提示后，生产路径不再单独构造
+/// 单条成功结果行；本函数与 [`saved_result`] 保留——`helpers.rs` 有单测覆盖「ID 不进摘要」
+/// 的语义约束（#32 B 案），后续若恢复单条保存的明细展示直接复用。
+#[allow(dead_code)]
 pub(crate) fn conn_display_name(name: &str) -> &str {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -237,14 +238,18 @@ pub(crate) fn conn_display_name(name: &str) -> &str {
 ///
 /// 摘要只有名称（供一行展示）；连接 ID 与落点放进「详情」——排障 / 报障时点开或
 /// 「复制」即可拿到，不需要把 ID 塞进每一行的可见文本。
+///
+/// `#[allow(dead_code)]`：批量提交（保存并退出）统一提示后生产路径不再调用，保留供
+/// `helpers.rs` 单测（ID 不进摘要）与后续单条保存明细复用。
+#[allow(dead_code)]
 pub(crate) fn saved_result(name: &str, conn_id: &str) -> ResultLine {
     let shown = conn_display_name(name);
     ResultLine::new(
         ResultLevel::Success,
-        format!("已保存：{shown}（编辑请从导航栏进入；暂存区只保留未保存草稿）"),
+        format!("已保存：{shown}（保存并退出时统一提交，草稿箱已清空）"),
     )
     .with_detail(format!(
-        "已保存：{shown}\n连接 ID（内部标识，界面不展示）：{conn_id}\n编辑请从导航栏进入；暂存区只保留未保存草稿。"
+        "已保存：{shown}\n连接 ID（内部标识，界面不展示）：{conn_id}\n保存并退出时批量提交，暂存草稿箱已清空。"
     ))
 }
 

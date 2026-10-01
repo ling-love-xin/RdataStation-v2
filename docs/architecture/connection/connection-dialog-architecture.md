@@ -246,21 +246,29 @@ sequenceDiagram
     participant O as ConnectionOrgStore
     participant K as DuckDB Secret
     participant L as 连接列表（Shared）
-    U->>D: 点击「保存」
-    D->>D: collect：校验（名称 / 驱动 / URL）
-    D->>D: 驱动名反查 drivers 表 → 驱动 id（db_type / driver_id）
-    alt 编辑模式（editing_id = Some）
+    U->>D: 点击「保存」（仅暂存草稿箱，不落库）
+    D->>D: capture_draft：当前表单写回草稿
+    D->>D: staging_persist：持久化草稿箱
+    D-->>U: 结果区「已暂存：<名称>（未写入数据库；保存并退出时统一提交）」
+    U->>D: 点击「保存并退出」（批量提交）
+    D->>D: staging_flush + 遍历草稿箱（跳过空草稿）
+    alt 编辑中的连接（editing_id = Some）
         D->>S: update(id, input, project_path)
-    else 新建（按作用域）
+    else 新建草稿（按作用域）
         D->>S: save(input, project_path)
     end
     S->>S: 同名检查（大小写不敏感）+ 项目路径预检
     S->>O: tags 同步 / 分组一致性清理
-    S-->>D: conn_id
+    S-->>D: conn_id（逐条；失败即停）
     D->>K: ensure_secret_registered（use_duckdb_fed 时）
     D->>L: load_connections_for_scope → 刷新列表
-    D->>D: staging_after_save：草稿转正式 + 补空草稿
-    D-->>U: 结果区「已保存：<名称>（编辑请从导航栏进入；草稿移出暂存区）」；ID 只在「详情」
+    alt 全部成功
+        D->>D: staging_clear：清空草稿箱
+        D-->>U: 结果区「已保存 N 条连接，暂存草稿箱已清空」+ 关闭
+    else 中途失败
+        D->>D: remove_drafts_at：已成功条目移出，失败及后续保留
+        D-->>U: 结果区「保存失败：…（其余保留，请修正后重试）」不关闭
+    end
 ```
 
 ### 5.3 暂存列表状态机（多连接连续编辑）
@@ -271,11 +279,12 @@ stateDiagram-v2
     空草稿 --> 编辑中: 输入 / 选择
     编辑中 --> 编辑中: 切 Tab / 引用档案（面板 notify → 宿主级联）
     编辑中 --> 编辑中: 切换条目（capture 写回 → apply 载入）
-    编辑中 --> 已保存: 保存成功（staging_after_save）
-    已保存 --> 空草稿: 自动追加新草稿并选中
+    编辑中 --> 编辑中: 保存 = 仅暂存草稿箱（不落库；2026-10-02 用户决策）
+    编辑中 --> 已提交: 保存并退出（批量提交全部草稿 + 编辑条目 update）
+    已提交 --> 空草稿: staging_clear 清空草稿箱后关闭
     编辑中 --> 空草稿: 删除（✕）
-    空草稿 --> 已保存: 点击已保存条目（load_for_edit 回读）
-    编辑中 --> 已保存: 关闭对话框（staging_flush 写回草稿）
+    空草稿 --> 已保存条目: 点击已保存连接（load_for_edit 回读）
+    编辑中 --> 编辑中: 关闭对话框（staging_flush 写回草稿，草稿跨会话保留）
 ```
 
 capture / apply 的数据边界（切换条目的正确性依赖它）：
@@ -290,8 +299,10 @@ capture / apply 的数据边界（切换条目的正确性依赖它）：
 | 时机 | 行为 |
 | --- | --- |
 | 首次打开对话框 | `staging_restore`：仅当仍为初始「单个空草稿」时用库中条目替换（避免覆盖本会话已编辑内容），并 `apply_draft(0)` 载入表单 |
-| 变更操作（添加 / 切换 / 删除 / 保存后） | `staging_persist`：全量替换写入（条目通常个位数） |
-| 关闭对话框（保存并关闭 / 取消 / Esc / 遮罩） | `staging_flush`：先写回当前表单再落库 |
+| 变更操作（添加 / 切换 / 删除 / **保存 = 仅暂存**） | `staging_persist`：全量替换写入（条目通常个位数） |
+| 关闭对话框（取消 / Esc / 遮罩） | `staging_flush`：先写回当前表单再落库（草稿跨会话保留） |
+| 「保存并退出」全部成功 | `staging_clear`：清空草稿箱（用户决策：提交后不留草稿） |
+| 「保存并退出」中途失败 | `remove_drafts_at`：已成功条目移出草稿箱，失败及后续保留供修正重试 |
 
 ### 5.4 运行时连接与隧道
 
@@ -540,7 +551,7 @@ flowchart LR
 
 | # | 项 | 实现位置 |
 | --- | --- | --- |
-| 1 | 「保存并关闭」按钮 | `render.rs` footer（与保存共用 `do_save` 闭包） |
+| 1 | 「保存」= 仅暂存草稿箱 +「保存并退出」= 批量提交并清空（2026-10-02 用户决策） | `render.rs` footer（`do_stage` / `do_batch_commit` 两闭包）|
 | 2 | 草稿跨会话持久化（无密码） | `global/020_add_connection_drafts.sql` + `engine::persistence::connection_draft_store` + `staging_{restore,persist}` |
 | 3 | 侧栏条目来源短码 / 脏标记 | `staging.rs::saved_scope_short` + `staging.rs::draft_dirty`（render 处徽标与 `●`） |
 | 4 | 键盘导航 | `crates/workbench/src/commands.rs`（actions）+ `app/main.rs`（bind_keys）+ `render.rs`（容器 handler） |

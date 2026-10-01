@@ -1,8 +1,9 @@
-//! 连续保存多个连接的端到端集成测试（C7）。
+//! 连续保存多个连接的端到端集成测试（C7，2026-10-02 保存语义重构后）。
 //!
-//! 覆盖：注入临时全局库单例后，经 `DataSourceService::global()`（生产路径）连续保存
-//! 两条连接；暂存列表按原型设计 §2.2 规则 4 呈现「条目转已保存 + 自动补空草稿」，
-//! 且库中两条记录可读回。对话框保存按钮内部走同一服务调用，故以此覆盖该链路。
+//! 覆盖：注入临时全局库单例后，经 `DataSourceService::global()`（生产路径）模拟
+//! 「保存并退出」批量提交——暂存栏多条草稿**一次性**写入数据库，成功后 `staging_clear`
+//! 清空草稿箱（用户决策：保存 = 仅暂存草稿箱，只有保存并退出才批量落库并清空）；
+//! 编辑中的连接走 update 路由。库中全部记录可读回。
 //!
 //! 单例按进程只可注入一次：本文件启动时注入临时全局库（与其余测试二进制隔离）。
 //!
@@ -61,7 +62,7 @@ fn sqlite_input(name: &str, path: &str) -> DataSourceSaveInput {
 }
 
 #[gpui_kit::test]
-fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
+fn two_connections_staged_then_batch_committed(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let _ = base_dir();
 
@@ -72,44 +73,128 @@ fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
 
-    // 第 1 条：保存 → 草稿移出暂存区 + 补空草稿（规则 4）。
-    let id1 = rt
-        .block_on(service.save(&sqlite_input("conn_one", "/tmp/one.db"), None))
-        .expect("save first");
-    assert!(id1.starts_with("G_conn_"), "{id1}");
-    cx.update(|window, cx| dialog.staging_after_save(window, cx));
+    // 模拟「保存」= 仅暂存后的暂存栏：两条约定已暂存的非空草稿。
+    // （对话框保存按钮内部走同一服务调用；`draft_to_save_input` 与 `collect` 同口径，
+    // 由 lib 单测覆盖，此处按同口径构造输入验证批量提交 + 清空契约。）
+    cx.update(|_, _cx| {
+        let mut drafts = dialog.drafts.borrow_mut();
+        drafts[0] = ConnectionDraft {
+            name: "conn_one".to_string(),
+            driver_id: "sqlite".to_string(),
+            url: "sqlite:///tmp/one.db".to_string(),
+            ..ConnectionDraft::empty()
+        };
+        drafts.push(ConnectionDraft {
+            name: "conn_two".to_string(),
+            driver_id: "sqlite".to_string(),
+            url: "sqlite:///tmp/two.db".to_string(),
+            ..ConnectionDraft::empty()
+        });
+    });
 
+    // 「保存并退出」：遍历暂存栏全部条目（跳过空草稿），逐条落库。
+    let mut ok_indices: Vec<usize> = Vec::new();
+    let mut fail: Option<String> = None;
     {
         let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-        assert_eq!(
-            drafts.len(),
-            1,
-            "首条保存后草稿移出暂存区（已落库），只留空草稿"
-        );
-        assert!(drafts[0].saved_id.is_none(), "暂存区不含已保存条目");
-        assert!(drafts[0].name.is_empty());
-        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 0);
+        for (idx, d) in drafts.iter().enumerate() {
+            // 空草稿跳过（与 `is_empty_draft` 同口径；该方法为 pub(crate)，集成测试内联判断）。
+            if d.saved_id.is_none()
+                && d.name.trim().is_empty()
+                && d.url.trim().is_empty()
+                && d.driver_id.trim().is_empty()
+            {
+                continue;
+            }
+            // 与 `draft_to_save_input` 同口径（name / driver_id / url 均取自草稿快照）。
+            let input = DataSourceSaveInput::new(&d.name, "sqlite", &d.url);
+            match rt.block_on(service.save(&input, None)) {
+                Ok(id) => {
+                    assert!(id.starts_with("G_conn_"), "{id}");
+                    ok_indices.push(idx);
+                }
+                Err(e) => {
+                    fail = Some(e.to_string());
+                    break;
+                }
+            }
+        }
     }
+    assert!(fail.is_none(), "批量提交不应失败：{fail:?}");
 
-    // 第 2 条：在自动补位的空草稿上继续保存。
-    let id2 = rt
-        .block_on(service.save(&sqlite_input("conn_two", "/tmp/two.db"), None))
-        .expect("save second");
-    assert_ne!(id1, id2);
-    cx.update(|window, cx| dialog.staging_after_save(window, cx));
-
-    {
-        let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-        assert_eq!(drafts.len(), 1, "连续保存两条后仍只剩空草稿");
-        assert!(drafts[0].saved_id.is_none());
-        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 0);
-    }
+    // 全部成功 → 清空草稿箱（用户决策：提交后不留草稿）。
+    cx.update(|_, cx| dialog.staging_clear(cx));
+    let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
+    assert_eq!(drafts.len(), 0, "全成功提交后草稿箱必须清空");
+    assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 0);
 
     // 库中两条记录可读回（生产路径经服务单例）。
     let list = rt.block_on(service.list()).expect("list connections");
     let names: Vec<&str> = list.iter().map(|d| d.name.as_str()).collect();
     assert!(names.contains(&"conn_one"), "{names:?}");
     assert!(names.contains(&"conn_two"), "{names:?}");
+}
+
+/// 「保存并退出」批量提交中的**编辑条目**走 update 路由（saved_id 前缀 G_/P_/GP_），
+/// 成功后同样清空草稿箱。
+#[gpui_kit::test]
+fn batch_commit_updates_editing_entry(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let _ = base_dir();
+    let (_, cx) = cx.add_window_view(|_, _cx| Host);
+    let cx: &mut VisualTestContext = cx;
+
+    let service = DataSourceService::global().expect("单例可用");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+
+    // 先落库一条，再模拟编辑打开（草稿箱光标位 = saved_id 条目，批量时走 update）。
+    let cid = rt
+        .block_on(service.save(&sqlite_input("edit_me", "/tmp/edit.db"), None))
+        .expect("save");
+    cx.update(|_, _cx| {
+        let mut drafts = dialog.drafts.borrow_mut();
+        drafts[0] = ConnectionDraft {
+            name: "edit_me_v2".to_string(),
+            driver_id: "sqlite".to_string(),
+            url: "sqlite:///tmp/edit.db".to_string(),
+            saved_id: Some(cid.clone()),
+            ..ConnectionDraft::empty()
+        };
+    });
+
+    // 模拟批量提交：saved_id 存在 → update。
+    let mut ok = false;
+    {
+        let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
+        for d in drafts.iter() {
+            // 空草稿跳过（与 `is_empty_draft` 同口径；该方法为 pub(crate)，集成测试内联判断）。
+            if d.saved_id.is_none()
+                && d.name.trim().is_empty()
+                && d.url.trim().is_empty()
+                && d.driver_id.trim().is_empty()
+            {
+                continue;
+            }
+            let input = sqlite_input("edit_me_v2", "/tmp/edit.db");
+            if let Some(saved_id) = &d.saved_id {
+                rt.block_on(service.update(saved_id, &input, None))
+                    .expect("update editing entry");
+                ok = true;
+            }
+        }
+    }
+    assert!(ok, "编辑条目应走 update 路由");
+    cx.update(|_, cx| dialog.staging_clear(cx));
+    assert_eq!(cx.update(|_, _cx| dialog.drafts.borrow().len()), 0);
+
+    // 库中名称已更新为 v2（update 生效）。
+    let list = rt.block_on(service.list()).expect("list connections");
+    assert!(
+        list.iter().any(|d| d.name == "edit_me_v2"),
+        "update 后库中应为新名称：{:?}",
+        list.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+    );
 }
 
 /// 暂存区只放未保存草稿：打开时不再并入库中已保存连接（用户决策，替代旧“合并已保存”）。

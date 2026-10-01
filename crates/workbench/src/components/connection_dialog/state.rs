@@ -502,7 +502,7 @@ impl ConnectionDialogState {
     ///
     /// - `create_new = false` → **打开**对话框（只能选已存在的文件）；
     /// - `create_new = true` → **保存**对话框（`prompt_for_new_path`：可输入新文件名）；
-    ///   文件不存在则创建空库文件，已存在则直接引用（**不清空**，避免误损数据）。
+    ///   文件不存在则按驱动族创建（DuckDB 立即初始化；SQLite 空文件），已存在则直接引用（**不清空**，避免误损数据）。
     ///
     /// 上一版的教训：用打开对话框（Windows 带 `FOS_FILEMUSTEXIST`）当“新建”用，输入新文件名会被系统拒掉，
     /// 表现为“新建没实现”；且取消 / 失败都被静默吞掉，看起来像按钮没反应。现在三种结局都写结果行。
@@ -542,7 +542,7 @@ impl ConnectionDialogState {
             window
                 .spawn(cx, async move |cx| {
                     let (message, ok, value) = match receiver.await {
-                        Ok(Ok(Some(path))) => create_new_db_file(&path),
+                        Ok(Ok(Some(path))) => create_new_db_file(&path, &driver_id),
                         Ok(Ok(None)) => ("已取消新建（地址保持原值）".to_string(), true, None),
                         Ok(Err(e)) => (format!("新建文件对话框失败：{e}"), false, None),
                         Err(_) => ("新建文件对话框无响应".to_string(), false, None),
@@ -1178,6 +1178,401 @@ impl ClonedDialogState {
             strip_file_db_noise(&mut out);
         }
         Some(out)
+    }
+
+    /// 草稿快照 → 保存输入（「保存并退出」批量提交用；与 [`Self::collect`] 同一口径，
+    /// 但字段全部来自暂存条目而非表单——批量提交时条目不在光标位，不能读表单控件）。
+    ///
+    /// 返回 `None` 表示条目不完整（缺驱动 / 名称 / 地址），调用方据 `ConnectionDraft` 字段
+    /// 具体提示缺什么。引用类字段（认证 / 网络档案 / 环境）存的是**名字**，在此解析为 ID。
+    pub(crate) fn draft_to_save_input(&self, d: &ConnectionDraft) -> Option<DataSourceSaveInput> {
+        // 与 collect 同一校验：驱动 id / 名称 / 地址任一为空即不可提交。
+        if d.driver_id.is_empty() || d.name.trim().is_empty() || d.url.trim().is_empty() {
+            return None;
+        }
+        let is_file = crate::services::data_source_service::is_file_db_driver(&d.driver_id);
+        let username = if d.user.trim().is_empty() {
+            None
+        } else {
+            Some(d.user.trim().to_string())
+        };
+        let password = if d.pass.is_empty() { None } else { Some(d.pass.clone()) };
+        // 引用档案：名字 → ID（列表在对话框内已加载；批量提交在后台只带解析后的 ID 过线）。
+        let auth_config_id = d.auth_ref.as_deref().and_then(|n| {
+            self.auth_list
+                .borrow()
+                .iter()
+                .find(|a| a.name.as_deref() == Some(n))
+                .map(|a| a.id.clone())
+        });
+        let network_config_id = d.network_ref.as_deref().and_then(|n| {
+            self.network_list
+                .borrow()
+                .iter()
+                .find(|c| c.name.as_deref() == Some(n))
+                .map(|c| c.id.clone())
+        });
+        let environment_id = d.env.as_deref().and_then(|n| {
+            self.env_list
+                .borrow()
+                .iter()
+                .find(|e| e.name == n)
+                .map(|e| e.id.clone())
+        });
+        let driver_properties = if d.props.is_empty() {
+            None
+        } else {
+            let map: std::collections::BTreeMap<String, String> =
+                d.props.iter().cloned().collect();
+            serde_json::to_string(&map).ok()
+        };
+        // 高级选项组装（与 collect 同规则）：SSL 覆盖仅当驱动声明 ssl 时落库；策略覆盖落已勾选的类型。
+        let mut adv = serde_json::Map::new();
+        let driver_declares_ssl = self
+            .drivers
+            .borrow()
+            .iter()
+            .find(|dr| dr.id == d.driver_id)
+            .map(|dr| {
+                driver_auth_types(dr.supported_auth_types.as_deref())
+                    .iter()
+                    .any(|m| m == "ssl")
+            })
+            .unwrap_or(false);
+        if driver_declares_ssl && !d.ssl_mode.is_empty() && d.ssl_mode != "disable" {
+            let mut ssl = serde_json::Map::new();
+            ssl.insert("mode".into(), serde_json::json!(d.ssl_mode));
+            if !d.ssl_ca.trim().is_empty() {
+                ssl.insert("ca".into(), serde_json::json!(d.ssl_ca.trim()));
+            }
+            if !d.ssl_cert.trim().is_empty() {
+                ssl.insert("cert".into(), serde_json::json!(d.ssl_cert.trim()));
+            }
+            if !d.ssl_key.trim().is_empty() {
+                ssl.insert("key".into(), serde_json::json!(d.ssl_key.trim()));
+            }
+            adv.insert("ssl".into(), serde_json::Value::Object(ssl));
+        }
+        let overrides: Vec<serde_json::Value> = d
+            .sec_overrides
+            .iter()
+            .map(|k| serde_json::json!(k))
+            .collect();
+        if !overrides.is_empty() {
+            adv.insert(
+                "policy_overrides".into(),
+                serde_json::Value::Array(overrides),
+            );
+        }
+        let advanced_options = if adv.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(adv).to_string())
+        };
+        let mut out = DataSourceSaveInput {
+            name: d.name.trim().to_string(),
+            db_type: d.driver_id.clone(),
+            url: d.url.trim().to_string(),
+            username,
+            password,
+            scope: scope_from_label(&d.scope),
+            description: if d.remark.trim().is_empty() {
+                None
+            } else {
+                Some(d.remark.trim().to_string())
+            },
+            tags: tags_to_json(&d.tags),
+            driver_id: Some(d.driver_id.clone()),
+            environment_id,
+            auth_config_id,
+            auth_method: if d.auth_method.trim().is_empty() {
+                None
+            } else {
+                Some(d.auth_method.clone())
+            },
+            network_config_id,
+            driver_properties,
+            advanced_options,
+            options: None,
+            use_duckdb_fed: Some(d.duckdb_fed),
+            schema_name: None,
+            metadata_path: if d.cache_path.trim().is_empty() {
+                None
+            } else {
+                Some(d.cache_path.trim().to_string())
+            },
+        };
+        if is_file {
+            strip_file_db_noise(&mut out);
+        }
+        Some(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
+    use super::{
+        AuthConfig, ClonedDialogState, ConnectionDialogState, ConnectionDraft, ConnectionScope,
+        Driver, Environment, NetworkConfig,
+    };
+    use gpui_kit::{
+        IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    };
+
+    struct Host;
+    impl Render for Host {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui_kit::Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full()
+        }
+    }
+
+    fn auth_cfg(id: &str, name: &str) -> AuthConfig {
+        AuthConfig {
+            id: id.into(),
+            name: Some(name.into()),
+            auth_type: "password".into(),
+            auth_data: "{}".into(),
+            origin: None,
+            source_id: None,
+            snapshot_at: None,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+        }
+    }
+
+    fn net_cfg(id: &str, name: &str) -> NetworkConfig {
+        NetworkConfig {
+            id: id.into(),
+            name: Some(name.into()),
+            network_type: "ssh".into(),
+            config: "{}".into(),
+            auth_config_id: None,
+            origin: None,
+            source_id: None,
+            snapshot_at: None,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+        }
+    }
+
+    fn env_cfg(id: &str, name: &str) -> Environment {
+        Environment {
+            id: id.into(),
+            name: name.into(),
+            description: None,
+            color: None,
+            sort_order: 0,
+            origin: None,
+            source_id: None,
+            snapshot_at: None,
+            created_at: "t".into(),
+        }
+    }
+
+    /// 构造对话框 + 注入引用列表 / 驱动目录，返回 `ClonedDialogState` 的等价句柄。
+    fn dialog(cx: &mut VisualTestContext) -> super::ClonedDialogState {
+        let dialog = cx.update(|window, cx| ConnectionDialogState::new(window, cx));
+        cx.update(|_, _cx| {
+            *dialog.auth_list.borrow_mut() = vec![auth_cfg("auth-1", "跳板机凭据")];
+            *dialog.network_list.borrow_mut() = vec![net_cfg("net-1", "跳板")];
+            *dialog.env_list.borrow_mut() = vec![env_cfg("env-1", "prod")];
+            *dialog.drivers.borrow_mut() = vec![
+                // 网络型（声明 ssl）：postgres
+                Driver {
+                    id: "postgres".into(),
+                    type_id: "postgres".into(),
+                    name: "PostgreSQL".into(),
+                    driver_kind: "network".into(),
+                    is_file: false,
+                    default_port: Some(5432),
+                    url_template: None,
+                    download_url: None,
+                    download_checksum: None,
+                    version: None,
+                    config_schema: "{}".into(),
+                    supported_auth_types: Some(r#"["password","ssl"]"#.into()),
+                    capabilities: None,
+                    driver_properties: None,
+                    enabled: true,
+                },
+                // 文件型：sqlite
+                Driver {
+                    id: "sqlite".into(),
+                    type_id: "sqlite".into(),
+                    name: "SQLite".into(),
+                    driver_kind: "file".into(),
+                    is_file: true,
+                    default_port: None,
+                    url_template: None,
+                    download_url: None,
+                    download_checksum: None,
+                    version: None,
+                    config_schema: "{}".into(),
+                    supported_auth_types: None,
+                    capabilities: None,
+                    driver_properties: None,
+                    enabled: true,
+                },
+            ];
+        });
+        super::ConnectionDialogState::cloned_state(
+            dialog.name.clone(),
+            dialog.url.clone(),
+            dialog.user.clone(),
+            dialog.pass.clone(),
+            dialog.driver.clone(),
+            dialog.remark.clone(),
+            dialog.auth_method.clone(),
+            dialog.auth_ref.clone(),
+            dialog.network_ref.clone(),
+            dialog.env.clone(),
+            dialog.auth_list.clone(),
+            dialog.network_list.clone(),
+            dialog.env_list.clone(),
+            dialog.duckdb_fed.clone(),
+            dialog.cache_path.clone(),
+            dialog.props.clone(),
+            dialog.scope.clone(),
+            dialog.ssl_mode.clone(),
+            dialog.ssl_ca.clone(),
+            dialog.ssl_cert.clone(),
+            dialog.ssl_key.clone(),
+            dialog.policy_override_keys.clone(),
+            dialog.drivers.clone(),
+            dialog.selected_type.clone(),
+            dialog.tags_input.clone(),
+        )
+    }
+
+    /// 草稿快照 → 保存输入：网络型（postgres）全字段映射 + 作用域标签转换 + 引用名→ID。
+    #[gpui_kit::test]
+    fn draft_to_save_input_maps_snapshot_fields(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let cl = dialog(cx);
+
+        let draft = ConnectionDraft {
+            name: "生产 PG".into(),
+            driver_id: "postgres".into(),
+            driver_name: "postgres".into(),
+            url: "postgres://10.0.0.5:5432/prod".into(),
+            user: "app".into(),
+            pass: "s3cret".into(),
+            remark: " 主库 ".into(),
+            tags: "prod, core".into(),
+            scope: "仅项目".into(),
+            project_path: "/data/a1".into(),
+            ssl_mode: "verify-full".into(),
+            ssl_ca: "/ca.pem".into(),
+            cache_path: "/cache".into(),
+            props: vec![("sslmode".into(), "require".into())],
+            auth_method: "password".into(),
+            auth_ref: Some("跳板机凭据".into()),
+            network_ref: Some("跳板".into()),
+            env: Some("prod".into()),
+            groups: vec!["g1".into()],
+            ..ConnectionDraft::empty()
+        };
+
+        let input = cl.draft_to_save_input(&draft).expect("应可提交");
+        assert_eq!(input.name, "生产 PG");
+        assert_eq!(input.db_type, "postgres");
+        assert_eq!(input.url, "postgres://10.0.0.5:5432/prod");
+        assert_eq!(input.username.as_deref(), Some("app"));
+        assert_eq!(input.password.as_deref(), Some("s3cret"));
+        assert_eq!(input.scope, ConnectionScope::Project, "「仅项目」→ Project");
+        assert_eq!(input.auth_config_id.as_deref(), Some("auth-1"), "认证档案名→ID");
+        assert_eq!(input.network_config_id.as_deref(), Some("net-1"), "网络档案名→ID");
+        assert_eq!(input.environment_id.as_deref(), Some("env-1"), "环境名→ID");
+        assert_eq!(input.description.as_deref(), Some("主库"), "remark 应 trim");
+        assert_eq!(input.driver_id.as_deref(), Some("postgres"));
+        assert_eq!(input.auth_method.as_deref(), Some("password"));
+        assert_eq!(input.metadata_path.as_deref(), Some("/cache"));
+        assert_eq!(input.use_duckdb_fed, Some(true), "草稿 duckdb_fed 默认 true");
+        // ssl_mode=verify-full（驱动声明 ssl）→ advanced_options 含 ssl.mode。
+        let adv = input.advanced_options.as_deref().unwrap_or_default();
+        assert!(adv.contains("\"ssl\"") && adv.contains("verify-full"), "{adv}");
+        assert!(!adv.contains("policy_overrides"), "无策略覆盖时不写");
+    }
+
+    /// 文件型（sqlite）：残留凭据 / 引用一律清噪，不落库。
+    #[gpui_kit::test]
+    fn draft_to_save_input_strips_file_db_noise(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let cl = dialog(cx);
+
+        // 模拟「上个类型残留」：sqlite 草稿带着 mysql 凭据与网络/SSL 引用。
+        let draft = ConnectionDraft {
+            name: "本地库".into(),
+            driver_id: "sqlite".into(),
+            url: "sqlite:///tmp/a.db".into(),
+            user: "root".into(),
+            pass: "pw".into(),
+            scope: "全局".into(),
+            ssl_mode: "verify-full".into(),
+            ssl_ca: "/ca.pem".into(),
+            auth_ref: Some("跳板机凭据".into()),
+            network_ref: Some("跳板".into()),
+            auth_method: "password".into(),
+            ..ConnectionDraft::empty()
+        };
+
+        let input = cl.draft_to_save_input(&draft).expect("应可提交");
+        assert_eq!(input.db_type, "sqlite");
+        assert!(input.username.is_none(), "文件型不应落凭据用户名");
+        assert!(input.password.is_none(), "文件型不应落密码");
+        assert!(input.auth_config_id.is_none(), "文件型不应落认证引用");
+        assert!(input.network_config_id.is_none(), "文件型不应落网络引用");
+        assert!(input.auth_method.is_none(), "文件型不应落认证方法");
+        assert!(
+            input.advanced_options.as_deref().unwrap_or_default().is_empty()
+                || !input.advanced_options.as_deref().unwrap_or_default().contains("\"ssl\""),
+            "文件型不应组装 SSL 高级选项"
+        );
+    }
+
+    /// 不完整草稿（缺驱动 / 名称 / 地址任一）→ `None`，批量提交据此中止并提示。
+    #[gpui_kit::test]
+    fn draft_to_save_input_rejects_incomplete(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let cl = dialog(cx);
+
+        assert!(
+            cl.draft_to_save_input(&ConnectionDraft {
+                name: "有名字".into(),
+                ..ConnectionDraft::empty()
+            })
+            .is_none(),
+            "缺驱动应拒绝"
+        );
+        assert!(
+            cl.draft_to_save_input(&ConnectionDraft {
+                driver_id: "postgres".into(),
+                url: "postgres://x".into(),
+                ..ConnectionDraft::empty()
+            })
+            .is_none(),
+            "缺名称应拒绝"
+        );
+        assert!(
+            cl.draft_to_save_input(&ConnectionDraft {
+                name: "x".into(),
+                driver_id: "postgres".into(),
+                ..ConnectionDraft::empty()
+            })
+            .is_none(),
+            "缺地址应拒绝"
+        );
     }
 }
 

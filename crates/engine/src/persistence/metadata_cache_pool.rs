@@ -144,7 +144,9 @@ fn open_connection(path: &Path) -> Result<Connection, CoreError> {
         .map_err(|e| persistence_err("set_wal_mode", e))?;
 
     // mmap 失败只告警（部分文件系统不支持），与既有实现口径一致。
-    if let Err(e) = conn.execute("PRAGMA mmap_size=268435456", []) {
+    // 用 query_row 而非 execute：该 PRAGMA 会返回一行结果，execute 报
+    // "Execute returned results"（每次打开缓存池都打 WARN，2026-10-02 修正）。
+    if let Err(e) = conn.query_row("PRAGMA mmap_size=268435456", [], |_| Ok(())) {
         tracing::warn!("Failed to set mmap_size on metadata cache pool: {}", e);
     }
 

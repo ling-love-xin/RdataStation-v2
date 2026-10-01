@@ -547,30 +547,47 @@ impl ConnectionDialogState {
         self.staging_persist();
     }
 
-    /// 保存成功后：该草稿**移出暂存区**（已落库，后续从导航栏进入编辑），
-    /// 并追加空草稿保持连续新建（规则 4）。
-    ///
-    /// 为何不再标记为“已保存条目”：用户决策——暂存区只放**未保存草稿**，
-    /// 已保存连接统一从导航栏编辑（避免“暂存里怎么读到了库里的连接”的困惑）。
-    pub fn staging_after_save(&self, window: &mut Window, cx: &mut App) {
-        let cur = self.draft_cursor_idx();
-        {
-            let mut drafts = self.drafts.borrow_mut();
-            if cur < drafts.len() {
-                drafts.remove(cur);
-            }
-            drafts.push(ConnectionDraft::empty());
-        }
-        let idx = self.drafts.borrow().len() - 1;
-        self.draft_cursor.set(idx);
-        self.apply_draft(idx, window, cx);
-        self.staging_persist();
-    }
-
     /// 关闭对话框前把当前表单写回草稿（规则 5：关闭不丢失）。
     pub fn staging_flush(&self, cx: &mut App) {
         let cur = self.draft_cursor_idx();
         self.capture_draft(cur, cx);
+        self.staging_persist();
+    }
+
+    /// 「保存并退出」批量提交**全部成功**后清空草稿箱（用户决策：暂存只经批量提交落库，
+    /// 提交后草稿箱不留任何条目；下次打开对话框从空草稿开始）。
+    ///
+    /// `staging_persist` 只写未保存草稿：清空内存列表后以空表全量替换，表内旧行一并清除。
+    pub fn staging_clear(&self, _cx: &mut App) {
+        self.drafts.borrow_mut().clear();
+        self.draft_cursor.set(0);
+        self.staging_persist();
+    }
+
+    /// 「保存并退出」批量提交**部分失败**时：移除已成功落库的草稿下标（升序去重后倒序删除），
+    /// 失败条目保留在草稿箱供修正重试；列表为空则补一条空草稿（保持“列表恒非空”）。
+    pub fn remove_drafts_at(&self, mut indices: Vec<usize>, window: &mut Window, cx: &mut App) {
+        if indices.is_empty() {
+            return;
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        {
+            let mut drafts = self.drafts.borrow_mut();
+            for (offset, idx) in indices.iter().enumerate() {
+                let i = idx.saturating_sub(offset);
+                if i < drafts.len() {
+                    drafts.remove(i);
+                }
+            }
+            if drafts.is_empty() {
+                drafts.push(ConnectionDraft::empty());
+            }
+        }
+        let len = self.drafts.borrow().len();
+        let cur = self.draft_cursor_idx().min(len.saturating_sub(1));
+        self.draft_cursor.set(cur);
+        self.apply_draft(cur, window, cx);
         self.staging_persist();
     }
 

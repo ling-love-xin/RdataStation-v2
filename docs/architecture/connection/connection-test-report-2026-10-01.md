@@ -2,7 +2,7 @@
 
 
 
-* 日期：2026-10-01（UTC+8）
+* 日期：2026-10-01（UTC+8）；**2026-10-02 更新**（保存语义重构回归见 §10）
 
 * 被测对象：`crates/connection`（`rds-connection`），11 个模块 + `tests/tunnel_roundtrip.rs`
 
@@ -23,6 +23,7 @@
 | 文档 - 代码一致性 | 修正 **6 处**不一致（见 §4）                                                  |
 | 原型对齐       | 核心语义全部对齐，发现 1 处代码注释过期（见 §5/§6）                                       |
 | 发现的缺陷      | 2 个低 / 中危（见 §6），**已于当日修复并回归通过**（见 §9）                                    |
+| 2026-10-02 增量 | **保存语义重构**（保存=仅暂存草稿箱；保存并退出=批量提交+清空草稿箱+关闭）：workbench lib 38 项 + connection 集成测试全绿（见 §10） |
 
 ## 1. 复现命令
 
@@ -129,6 +130,17 @@ cargo check -p rds-connection --all-targets
 
 本次发现的两项代码缺陷**已于当日修复并通过全量回归**（见 §9）；P3 注释过期项（`hint()`）无消费方，维持现状不冒险改代码。
 
+### 6.1 既有缺陷来源追溯（git 定位，2026-10-02 补充）
+
+用于回答「这些功能是不是被测试/修复过程改坏的」：以下缺陷**均非本轮引入**，来自更早的历史提交或组件升级；本轮只做修复，未删除任何原有逻辑（改动均可 `git diff` / `git revert` 逐处核验）。
+
+| 缺陷 | 引入点（git） | 性质 | 处理与提交 |
+| --- | --- | --- | --- |
+| 暂存列表 fingerprint 不含光标位实时表单值（填写名称 / 切类型时列表条目不刷新，看起来「没保存、没有草稿状态」） | `62754cdd`（连接对话框：类型树与暂存列表改 List、在途操作离 UI 线程）——`draft_list.rs::sync` 指纹只含快照名 | 交互细节；不影响保存 / 恢复链路（关闭后重启草稿照常恢复） | 2026-10-02 修复：指纹加入实时名称 + 类型（workbench，待提交） |
+| 分组卡片标题渲染居中，与原型 `.sec-head`（flex 默认左对齐）不符 | 换 gpui-kit 0.7（Round 19）引入：`button.rs` 外层 `justify_center`（:636）+ 内层 content `size_full + justify_center`（:729-736）双重居中，`outline_section` 的 `.justify_start()` 只作用外层、对内容层无效 | 组件迁移视觉回归（代码意图左对齐，真机效果居中） | 2026-10-02 修复：`section_header` 加 `w_full()` 使内层居中失效（workbench，待提交） |
+| known\_hosts 查询侧不做大小写归一化（混合大小写主机名查不到） | `45e0ac98`（升级 rusqlite 并修复 known\_hosts 注释误判）——引入 `normalize_host` 只作用于写入侧 | 边缘场景；正常小写场景不受影响 | `d128f955` 已修复（查询侧归一化 + 回归测试） |
+| HTTP 代理成功判据用 `contains("200")` 子串匹配（403 + 头部含 200 误判成功） | 原有代码（`connector.rs::establish_http_proxy`，早于本轮） | 边缘场景；正常 200 响应不受影响 | `d128f955` 已修复（状态行解析 + 回归测试） |
+
 ## 7. 变更文件清单
 
 
@@ -165,3 +177,19 @@ cargo check -p rds-connection --all-targets
 | 9-2 | **HTTP 代理成功判据改为状态行解析**（P3）：`establish_http_proxy` 解析首行 `HTTP/1.x 200`，不再对整段响应做 `contains("200")` 子串匹配 | `connector.rs` `establish_http_proxy` | 新增 `test_http_proxy_403_with_200_in_headers_still_errors`（403 + `Content-Length: 200` 必须报错） |
 
 修复后全量复跑：**单元 96 + 集成 6 = 102 项全部通过，`cargo check --all-targets` 无警告**；`rds-workbench` 编译检查通过（生产 API 未变）。
+
+## 10. 保存语义重构回归（2026-10-02，用户决策）
+
+**用户决策**：「保存」= **仅暂存草稿箱（不落库）**；「保存并退出」= **批量提交暂存栏全部条目到数据库 + 清空草稿箱 + 关闭**（此前「保存」与「保存并关闭」都只落库当前表单——语义缺口，用户误以为已实现，经核对确认未实现）。
+
+| 改动 | 位置 | 说明 |
+| - | --- | --- |
+| `do_stage`（保存=暂存） | `render.rs` | 捕获当前表单 → `capture_draft` + `staging_persist`，提示「已暂存…（未写入数据库；保存并退出时统一提交）」；编辑模式提示「修改将在保存并退出时提交」 |
+| `do_batch_commit`（保存并退出） | `render.rs` | 编辑条目（editing_id）走 `collect` + `update`；草稿箱条目逐个 `draft_to_save_input` + `save`/`update`（按 saved_id 路由）；空草稿跳过；校验失败整体中止；中途失败已成功条目 `remove_drafts_at` 移出、其余保留；全成功 `staging_clear` 清空 + 刷新列表 + 关闭 |
+| `draft_to_save_input` | `state.rs` | 草稿快照 → `DataSourceSaveInput`（与 `collect` 同口径：作用域标签转换、认证/网络/环境引用名→ID、SSL/策略覆盖组装、文件型清噪）；+3 项 lib 单测 |
+| `staging_clear` / `remove_drafts_at` | `staging.rs` | 批量全成功清空草稿箱；部分失败只移除已成功条目（删空补空草稿）；删除废弃 `staging_after_save` |
+| 按钮 / 快捷键 | `render.rs` | 「保存并关闭」→「保存并退出」；Ctrl+Enter = 暂存 |
+| 测试改写 | `connection_multi_save.rs` / `connection_staging.rs` | 批量提交 + 清空契约、编辑条目 update 路由、`staging_clear` / `remove_drafts_at` 行为；旧「保存后转正式+补空草稿」断言全部替换 |
+| 文档同步 | 原型 §2.2 / §3 表格、用户指南 §4 / FAQ、架构 §5.3 状态机 / 持久化时机、dev-plan C5/C7/C9 | 「保存并关闭」语义全部替换为「保存并退出」批量语义 |
+
+回归：`rds-workbench` lib **38 项**（+3 draft_to_save_input）全绿；connection 相关集成测试 **10 个测试二进制**（multi_save 7 / staging 7 / dialog_ui 7 / edit_backfill 2 / drafts_persist 2 / project_picker 2 / template 2 / type_driver 2 / dialog_host 5 / data_source_lifecycle 9 / render_matrix 6 / scope_and_state 1 / tunnel_cleanup 1 = 53 项）全绿；`cargo check -p rds-workbench` 零警告。

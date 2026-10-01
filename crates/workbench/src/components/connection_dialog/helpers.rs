@@ -543,7 +543,14 @@ pub(crate) fn section_header(
 ) -> Div {
     // 只画内容（chevron / 图标 / 标题）：外层（行高 / 分隔线 / 悬停 / 点击）由
     // `outline_section` 里的语义 `Button` 承担。
+    //
+    // **必须 `w_full()`**：Button 内层 content（gpui-component `button.rs`）是
+    // `size_full + justify_center`（内容默认居中），`outline_section` 上的
+    // `.justify_start()` 只作用于 Button 外层，对内容层无效——不占满宽度时
+    // 卡片标题会居中显示（真机反馈「连接设置」标题不对齐；原型 `.sec-head`
+    // 是 flex 默认左对齐）。占满后内容层居中失效，内部元素自然靠左。
     div()
+        .w_full()
         .h_flex()
         .items_center()
         .gap(rems(GAP_SM))
@@ -1387,22 +1394,53 @@ pub(crate) fn result_needs_detail(summary: &str) -> bool {
 ///
 /// **语义（与「打开文件…」严格分离）**：
 /// - 路径已存在 → 不创建、不引用、也不碰原文件（避免误损已有库），提示换名或用「打开文件…」；
-/// - 路径不存在 → 创建空库文件并写回地址（首次连接由驱动初始化结构）。
+/// - 路径不存在 → 按驱动族创建：DuckDB 建出有效库文件（写文件头，立即可连）；
+///   SQLite 等保持空文件（首次连接由驱动初始化结构）。
 ///
 /// 为何不做“已存在则直接引用”：那会让「新建」看起来就是打开（真机反馈“duckdb 的新建
 /// 为什么还是打开功能”）；两个按钮职责必须互斥。
-pub(crate) fn create_new_db_file(path: &std::path::Path) -> (String, bool, Option<String>) {
+pub(crate) fn create_new_db_file(
+    path: &std::path::Path,
+    driver_id: &str,
+) -> (String, bool, Option<String>) {
     let value = path.to_string_lossy().to_string();
+    let is_duckdb = driver_id.eq_ignore_ascii_case("duckdb");
     if path.exists() {
-        return (
-            format!("该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"),
-            false,
-            None,
-        );
+        let nonempty = std::fs::metadata(path)
+            .map(|m| m.len() > 0)
+            .unwrap_or(true);
+        if nonempty {
+            return (
+                format!("该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"),
+                false,
+                None,
+            );
+        }
+        // 0 字节：SQLite 对空文件合法（首次连接初始化）；DuckDB 不认空文件（见
+        // `engine::duckdb::initialize_duckdb_file` 注释），删除后由下面重建。
+        if !is_duckdb {
+            return (
+                format!("已存在空文件，将直接引用它（首次连接由驱动初始化结构）：{value}"),
+                true,
+                Some(value),
+            );
+        }
     }
-    match std::fs::File::create(path) {
-        Ok(_) => (format!("已新建数据库文件：{value}"), true, Some(value)),
+    match create_file_for_driver(is_duckdb, path) {
+        Ok(()) => (format!("已新建数据库文件：{value}"), true, Some(value)),
         Err(e) => (format!("新建数据库文件失败：{e}"), false, None),
+    }
+}
+
+/// 按驱动族创建数据库文件：DuckDB 必须建出**有效库文件**（写入文件头，立即可连），
+/// 其余文件型驱动（SQLite 等）保持「空文件 + 首次连接由驱动初始化」的既有契约。
+fn create_file_for_driver(is_duckdb: bool, path: &std::path::Path) -> Result<(), String> {
+    if is_duckdb {
+        engine::duckdb::initialize_duckdb_file(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::File::create(path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -2163,29 +2201,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
 
-        // 不存在：创建**空**文件并写回地址（首次连接由驱动初始化结构）
+        // 不存在：DuckDB 必须建出**有效库文件**（非空、写文件头，立即可连——
+        // DuckDB 对 0 字节空文件只校验文件头、不初始化，真机反馈 "not a valid DuckDB database file"）
         let path = dir.join("new.duckdb");
-        let (msg, ok, value) = create_new_db_file(&path);
+        let (msg, ok, value) = create_new_db_file(&path, "duckdb");
         assert!(ok, "{msg}");
         assert_eq!(
             value.as_deref(),
             Some(path.to_string_lossy().to_string().as_str())
         );
-        assert_eq!(
-            std::fs::metadata(&path).expect("meta").len(),
-            0,
-            "必须是空文件"
+        assert!(
+            std::fs::metadata(&path).expect("meta").len() > 0,
+            "DuckDB 新建必须是有效库文件（非空）"
         );
 
-        // 已存在：不采用、不覆盖（「新建」与「打开」职责互斥：真机反馈“新建为什么还是打开”）
+        // 不存在：SQLite 保持空文件契约（首次连接由驱动初始化结构）
+        let sqlite_path = dir.join("new.db");
+        let (msg, ok, _value) = create_new_db_file(&sqlite_path, "sqlite");
+        assert!(ok, "{msg}");
+        assert_eq!(
+            std::fs::metadata(&sqlite_path).expect("meta").len(),
+            0,
+            "SQLite 新建必须仍是空文件"
+        );
+
+        // 已存在且非空：不采用、不覆盖（「新建」与「打开」职责互斥：真机反馈“新建为什么还是打开”）
         std::fs::write(&path, b"keep-me").expect("write");
-        let (msg, ok, value) = create_new_db_file(&path);
+        let (msg, ok, value) = create_new_db_file(&path, "duckdb");
         assert!(!ok && value.is_none(), "{msg}");
         assert!(msg.contains("已存在"), "{msg}");
         assert_eq!(
             std::fs::read(&path).expect("read"),
             b"keep-me",
-            "不得清空原文件"
+            "已存在的文件内容不得被覆盖"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

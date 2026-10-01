@@ -43,13 +43,30 @@ impl DraftListDelegate {
     }
 
     /// 渲染期同步（**权威同步点**）：行数 / 光标 / 行文案变了才重建。返回 true = 有变化。
-    pub(crate) fn sync(&mut self, drafts: &[ConnectionDraft], cursor: usize) -> bool {
+    ///
+    /// 指纹额外带上光标位条目的**实时表单值**（`live_name` / `live_type`）：列表渲染虽然
+    /// 已用 `live_entry_view` 显示编辑中的名称 / 类型，但指纹不含它时，用户填写名称 /
+    /// 切换类型不会触发列表重建，条目名会停留在旧快照（真机反馈「暂存列表失效、名称没保存」）。
+    pub(crate) fn sync(
+        &mut self,
+        drafts: &[ConnectionDraft],
+        cursor: usize,
+        live_name: &str,
+        live_type: &str,
+    ) -> bool {
         let mut fp = format!("{cursor}/{}", drafts.len());
-        for d in drafts {
+        for (i, d) in drafts.iter().enumerate() {
             fp.push('\u{1}');
             fp.push_str(d.saved_id.as_deref().unwrap_or("-"));
             fp.push('\u{1}');
-            fp.push_str(&d.display_name());
+            if i == cursor {
+                // 光标位条目：用正在编辑的表单值（否则填写名称时列表不重建）
+                fp.push_str(live_name);
+                fp.push('\u{1}');
+                fp.push_str(live_type);
+            } else {
+                fp.push_str(&d.display_name());
+            }
         }
         if fp == self.fingerprint {
             return false;

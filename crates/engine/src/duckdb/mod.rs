@@ -57,3 +57,53 @@ pub use temp_table::{
 };
 // 标识符加引号的**唯一规则**在临时表模块（B7 切片二的导出 COPY 也要用）
 pub(crate) use temp_table::quote_ident;
+
+/// 初始化一个新的 DuckDB 库文件（连接对话框「新建文件…」用）。
+///
+/// - 路径不存在 → 直接 `Connection::open` 建库（DuckDB 对不存在的路径自动写文件头）；
+/// - 路径存在且为 0 字节残留文件（旧 `File::create` 遗留的空文件）→ 删除后重建；
+/// - 路径存在且非空 → 拒绝（应改用「打开文件…」引用它，不覆盖用户数据）。
+///
+/// 为什么不能只建 0 字节文件：SQLite 对空文件合法初始化，而 DuckDB 对**已存在的空文件**
+/// 只校验文件头、不做初始化，打开即报 `not a valid DuckDB database file`（真机反馈，
+/// 2026-10-02）。「新建文件…」要保证新建出来的文件**立刻可连**，而不是留给首次连接。
+pub fn initialize_duckdb_file(path: &std::path::Path) -> Result<(), shared::error::CoreError> {
+    use shared::error::{CoreError, DatabaseError};
+    let describe = || format!("初始化 DuckDB 库文件: {}", path.display());
+    if path.exists() {
+        let meta = std::fs::metadata(path).map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "duckdb".to_string(),
+                operation: "initialize_file_stat".to_string(),
+                source: format!("{}: {}", describe(), e),
+            })
+        })?;
+        if meta.len() > 0 {
+            return Err(CoreError::database(DatabaseError::Driver {
+                db_type: "duckdb".to_string(),
+                operation: "initialize_file".to_string(),
+                source: format!(
+                    "文件已存在且非空（{} 字节），请改用「打开文件…」引用它: {}",
+                    meta.len(),
+                    path.display()
+                ),
+            }));
+        }
+        std::fs::remove_file(path).map_err(|e| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "duckdb".to_string(),
+                operation: "initialize_file_remove".to_string(),
+                source: format!("{}: {}", describe(), e),
+            })
+        })?;
+    }
+    // 打开即建库（写入文件头）；用完即关，后续由真正的连接接管。
+    let _conn = duckdb::Connection::open(path).map_err(|e| {
+        CoreError::database(DatabaseError::Driver {
+            db_type: "duckdb".to_string(),
+            operation: "initialize_file".to_string(),
+            source: format!("{}: {}", describe(), e),
+        })
+    })?;
+    Ok(())
+}

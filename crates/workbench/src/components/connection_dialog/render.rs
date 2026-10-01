@@ -1,17 +1,20 @@
 use super::*;
 
-/// 保存的**后台结果**：跨线程只带纯数据（UI 对象、`Rc` 状态全部留在前台）。
+/// 「保存并退出」批量提交的**后台结果**（用户决策 2026-10-02：批量落库暂存栏全部条目）。
 ///
-/// 拆出来是因为保存链路（落库 → 列表刷新 → 分组同步）以前挤在点击回调里同步跑，
-/// 写库慢时整个窗口卡住；现在它跑在后台线程，结果回来后在 `do_save` 的续体里交付。
-enum SaveOutcome {
-    Saved {
-        conn_id: String,
-        items: Vec<crate::view::ConnectionItem>,
-        /// `Some(原因)` = 保存成功但分组未同步（#28：降为 warning 级并在结果行给原因）。
-        group_degrade: Option<String>,
-    },
-    Failed(String),
+/// 跨线程只带纯数据；前台据 `fail` 分支：失败 → 已成功条目移出草稿箱、其余保留；
+/// 全部成功 → 清空草稿箱并关闭对话框。
+struct BatchOutcome {
+    /// 已成功落库的**草稿箱条目下标**（编辑中的连接不在草稿箱，失败时无需移除）。
+    ok_indices: Vec<usize>,
+    /// 第一条失败的（草稿箱下标, 原因）；`None` = 全部成功。
+    fail: Option<(Option<usize>, String)>,
+    /// 提交条目总数（编辑条目 + 草稿箱非空条目；成功提示用）。
+    total: usize,
+    /// 分组未同步条数（#28：成功提示降级 warning 级）。
+    group_degrade: usize,
+    /// 刷新后的连接列表（全部成功时写回共享列表）。
+    items: Vec<crate::view::ConnectionItem>,
 }
 
 impl ConnectionDialogState {
@@ -267,10 +270,14 @@ impl ConnectionDialogState {
                     Err(e) => return (false, format!("运行时错误: {e}")),
                 };
                 let t = rt.block_on(service.test(&input, project_root.as_deref()));
-                // 反馈拼上探测到的服务器版本（原型："成功（版本＋延迟）"）。
+                // 反馈拼上探测到的服务器版本与往返延迟（原型："成功（版本＋延迟）"）。
+                let latency = t
+                    .latency_ms
+                    .map(|ms| format!("{ms} ms"))
+                    .unwrap_or_else(|| "延迟 —".to_string());
                 let detail = match t.version.as_deref() {
-                    Some(v) => format!("{} · 版本 {}", t.message, v),
-                    None => t.message,
+                    Some(v) => format!("{} · 版本 {v} · {latency}", t.message),
+                    None => format!("{} · {latency}", t.message),
                 };
                 (t.success, detail)
             };
@@ -351,8 +358,25 @@ impl ConnectionDialogState {
             if let Some(list) = draft_list_now.as_ref() {
                 let drafts_now = drafts_list.borrow().clone();
                 let cursor_now = draft_cursor.get();
+                // 指纹还要带上光标位条目的实时表单值（名称 / 类型）：否则填写名称时列表
+                // 不重建、条目名停在旧快照（真机反馈「暂存列表失效，名称没保存」）。
+                let live_fp: (String, String) = drafts_now
+                    .get(cursor_now)
+                    .filter(|d| d.saved_id.is_none())
+                    .map(|_| {
+                        (
+                            name.read(cx).value().trim().to_string(),
+                            selected_type_id.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
                 list.update(cx, |st, cx| {
-                    if st.delegate_mut().sync(&drafts_now, cursor_now) {
+                    if st.delegate_mut().sync(
+                        &drafts_now,
+                        cursor_now,
+                        &live_fp.0,
+                        &live_fp.1,
+                    ) {
                         let ix = st.delegate().selected_path();
                         st.set_selected_index(ix, window, cx);
                         cx.notify();
@@ -1099,7 +1123,7 @@ impl ConnectionDialogState {
                             ))
                             .child(hint_line(
                                 theme,
-                                "本地文件路径；「新建文件…」在所选位置创建空库文件（首次连接自动初始化结构）",
+                                "本地文件路径；「新建文件…」创建库文件（DuckDB 立即初始化可用；SQLite 首次连接自动初始化结构）",
                             ))
                     } else {
                         // 网络型：主机 / 端口 / 数据库 = **可编辑字段**（与 Header URI 双向同步；
@@ -1968,18 +1992,63 @@ impl ConnectionDialogState {
                 })
             };
 
-            // 保存动作（按钮 / Ctrl+Enter 共用；`close_after` = 保存成功后关闭对话框，供「保存并关闭」）。
+            // ===== 保存语义（用户决策 2026-10-02）=====
             //
-            // 与测试连接同构：落库 / 列表刷新 / 分组同步全在后台线程，前台只负责取快照与写结果；
-            // 「保存并关闭」的关闭动作改到**结果回来之后**（以前靠同步返回值，异步后必然要等）。
-            let do_save: Rc<dyn Fn(&mut Window, &mut App, bool)> = {
-                let name = name.clone();
-                let url = url.clone();
-                let user = user.clone();
-                let pass = pass.clone();
-                let driver = driver.clone();
+            // 此前：「保存」与「保存并关闭」都只落库**当前表单**（转正式 + 移出草稿箱），
+            // 没有“暂存栏批量提交”的行为——与设计意图不符（用户原话：只有保存并退出后才会
+            // 将暂存栏的所有信息写入数据库并清空暂存草稿箱）。
+            //
+            // 现在：
+            //  - 「保存」（Ctrl+Enter）＝**仅暂存草稿箱**：当前表单写回草稿并持久化，不落库；
+            //  - 「保存并退出」＝**批量提交**：编辑中的连接（若有）走 update，暂存栏全部
+            //    未保存草稿逐个 save；空草稿跳过；任一条校验失败则整体中止不落库；落库中途
+            //    失败则已成功条目移出草稿箱、失败及后续保留供修正；全部成功 → 清空草稿箱 → 关闭。
+            //
+            // 与测试连接同构：落库 / 列表刷新 / 分组同步全在后台线程，前台只取快照与写结果。
+
+            // 「保存」＝仅暂存草稿箱（不落库）。
+            let do_stage: Rc<dyn Fn(&mut Window, &mut App)> = {
+                let dialog = Rc::clone(&state);
                 let result = result.clone();
-                // 暂存列表需要对话框状态句柄（Rc）——在 `state`（ClonedDialogState）遮蔽前取出。
+                let entity = entity.clone();
+                let shared = shared.clone();
+                let editing_id = editing_id.clone();
+                let busy = busy.clone();
+                Rc::new(move |_window, app| {
+                    if busy.get() != BusyOp::None {
+                        return;
+                    }
+                    // 编辑模式：修改不落草稿箱（已保存连接从导航栏编辑），「保存并退出」时统一 update。
+                    if editing_id.borrow().is_some() {
+                        set_result(
+                            &result,
+                            ResultLevel::Info,
+                            "编辑中的修改将在「保存并退出」时提交",
+                        );
+                        entity.update(app, |_, cx| cx.notify());
+                        return;
+                    }
+                    let cur = dialog.draft_cursor_idx();
+                    let label = dialog
+                        .drafts
+                        .borrow()
+                        .get(cur)
+                        .map(|d| d.display_name())
+                        .unwrap_or_default();
+                    dialog.capture_draft(cur, app);
+                    dialog.staging_persist();
+                    set_result(
+                        &result,
+                        ResultLevel::Info,
+                        format!("已暂存「{label}」（未写入数据库；保存并退出时统一提交）"),
+                    );
+                    shared.notify_host(app);
+                    entity.update(app, |_, cx| cx.notify());
+                })
+            };
+
+            // 「保存并退出」＝批量提交暂存栏全部 + 清空草稿箱 + 关闭。
+            let do_batch_commit: Rc<dyn Fn(&mut Window, &mut App)> = {
                 let dialog = Rc::clone(&state);
                 let state = ConnectionDialogState::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
@@ -1990,96 +2059,179 @@ impl ConnectionDialogState {
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),
                 );
+                let name = name.clone();
+                let url = url.clone();
+                let user = user.clone();
+                let pass = pass.clone();
+                let driver = driver.clone();
+                let result = result.clone();
                 let entity = entity.clone();
                 let shared = shared.clone();
                 let editing_id = editing_id.clone();
                 let project_path = project_path.clone();
                 let busy = busy.clone();
                 let blocked_hint = blocked_hint.clone();
-                Rc::new(move |window, app, close_after| {
-                    // 在途：忽略重复触发（按钮已置灰，快捷键也会走到这儿）。
+                Rc::new(move |window, app| {
                     if busy.get() != BusyOp::None {
                         return;
                     }
-                    let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
-                        blocked_hint.set(true);
+                    // 1) 收集待提交条目：编辑中的连接（表单实时 collect）＋ 草稿箱全部条目。
+                    let mut pending: Vec<(
+                        Option<usize>,   // 草稿箱下标（编辑条目为 None，不在草稿箱）
+                        Option<String>,  // saved_id（Some = update；None = save）
+                        DataSourceSaveInput,
+                        Option<String>,  // 落库目标项目路径（编辑条目用表单，草稿用各自快照）
+                        Vec<String>,     // 分组 id
+                    )> = Vec::new();
+                    let editing = editing_id.borrow().clone();
+                    if let Some(cid) = &editing {
+                        let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app)
+                        else {
+                            blocked_hint.set(true);
+                            set_result_ok(
+                                &result,
+                                false,
+                                blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                            );
+                            entity.update(app, |_, cx| cx.notify());
+                            return;
+                        };
+                        let pp = {
+                            let v = project_path.read(app).value().to_string();
+                            if v.trim().is_empty() {
+                                None
+                            } else {
+                                Some(v.trim().to_string())
+                            }
+                        };
+                        let groups: Vec<String> = dialog
+                            .group_checks
+                            .borrow()
+                            .iter()
+                            .filter(|(_, _, checked)| *checked)
+                            .map(|(gid, _, _)| gid.clone())
+                            .collect();
+                        pending.push((None, Some(cid.clone()), input, pp, groups));
+                    }
+                    // 当前表单写回草稿（新建模式：光标位草稿持有最新值，参与批量提交）。
+                    dialog.staging_flush(app);
+                    let mut incomplete: Option<(String, String)> = None;
+                    {
+                        let drafts: Vec<ConnectionDraft> = dialog.drafts.borrow().clone();
+                        for (idx, d) in drafts.iter().enumerate() {
+                            if d.is_empty_draft() {
+                                continue;
+                            }
+                            let Some(input) = state.draft_to_save_input(d) else {
+                                let missing = if d.driver_id.trim().is_empty() {
+                                    "未选驱动"
+                                } else if d.name.trim().is_empty() {
+                                    "缺名称"
+                                } else {
+                                    "缺地址"
+                                };
+                                incomplete = Some((d.display_name(), missing.to_string()));
+                                break;
+                            };
+                            let pp = if d.project_path.trim().is_empty() {
+                                None
+                            } else {
+                                Some(d.project_path.trim().to_string())
+                            };
+                            pending.push((
+                                Some(idx),
+                                d.saved_id.clone(),
+                                input,
+                                pp,
+                                d.groups.clone(),
+                            ));
+                        }
+                    }
+                    if let Some((label, missing)) = incomplete {
                         set_result_ok(
                             &result,
                             false,
-                            blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                            format!("条目「{label}」{missing}：未提交任何条目，请修正后重试"),
                         );
                         entity.update(app, |_, cx| cx.notify());
                         return;
-                    };
-                    // 编辑模式走 update（按 ID 前缀路由 G_/P_/GP_）；新建走 save（按作用域落库）。
-                    let editing = editing_id.borrow().clone();
-                    let project_path_val = {
-                        let v = project_path.read(app).value().to_string();
-                        if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
-                    };
-                    // 列表刷新用**当前会话项目根**（与原实现一致）：保存落点由 project_path 决定，
-                    // 两者可以不同（对话框允许把连接存到别的项目）。
+                    }
+                    if pending.is_empty() {
+                        set_result_ok(
+                            &result,
+                            false,
+                            "暂存列表为空：先填写连接信息并点「保存」暂存",
+                        );
+                        entity.update(app, |_, cx| cx.notify());
+                        return;
+                    }
+                    let total = pending.len();
+                    // 列表刷新用**当前会话项目根**（保存落点由各条目 project_path 决定，可不同）。
                     let session_root = shared
                         .project
                         .borrow()
                         .as_ref()
                         .map(|p| p.root.clone());
-                    // 分组同步（替换语义；项目级，全局库 / 未打开项目时为 no-op）。
-                    // 标签已在服务内部随保存 / 更新同步到 connection_tags。
-                    let group_ids: Vec<String> = dialog
-                        .group_checks
-                        .borrow()
-                        .iter()
-                        .filter(|(_, _, checked)| *checked)
-                        .map(|(gid, _, _)| gid.clone())
-                        .collect();
-                    let input_name = input.name.clone();
                     busy.set(BusyOp::Save);
-                    set_result(&result, ResultLevel::Info, "保存中…");
+                    set_result(&result, ResultLevel::Info, format!("保存并退出：提交 {total} 条…"));
                     entity.update(app, |_, cx| cx.notify());
-                    // 后台线程：落库 → 列表刷新 → 分组同步；只带纯数据过线。
+                    // 2) 后台线程：逐条落库（update / save 按 saved_id 路由；失败即停）。
                     let work = app.background_executor().spawn(async move {
-                        let save = DataSourceService::global().and_then(|service| {
-                            let rt = tokio::runtime::Runtime::new().map_err(|e| {
-                                shared::error::CoreError::common(
-                                    shared::error::CommonError::General(format!("tokio: {e}")),
-                                )
-                            })?;
-                            match &editing {
-                                Some(cid) => rt
-                                    .block_on(service.update(cid, &input, project_path_val.as_deref()))
-                                    .map(|_| cid.clone()),
-                                None => rt.block_on(service.save(&input, project_path_val.as_deref())),
-                            }
-                        });
-                        match save {
-                            Err(e) => SaveOutcome::Failed(e.to_string()),
-                            Ok(conn_id) => {
-                                // 刷新列表：带上当前项目根，项目侧 P_/GP_ 连接一并可见。
-                                let (items, _) = crate::services::workspace_loader::load_connections_for_scope(
-                                    session_root.as_deref(),
-                                );
-                                // #28：分组未落库不再静默——保存仍算成功，但结果行降为 warning 级并给出原因。
-                                let group_degrade = DataSourceService::global()
-                                    .and_then(|service| {
-                                        service.set_connection_groups(
-                                            &conn_id,
-                                            &group_ids,
-                                            project_path_val.as_deref(),
-                                        )
-                                    })
-                                    .err()
-                                    .map(|e| e.to_string());
-                                SaveOutcome::Saved {
-                                    conn_id,
-                                    items,
-                                    group_degrade,
+                        let mut ok_indices: Vec<usize> = Vec::new();
+                        let mut fail: Option<(Option<usize>, String)> = None;
+                        let mut group_degrade = 0usize;
+                        for (draft_idx, saved_id, input, pp, groups) in pending {
+                            let r = DataSourceService::global().and_then(|service| {
+                                let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                                    shared::error::CoreError::common(
+                                        shared::error::CommonError::General(format!("tokio: {e}")),
+                                    )
+                                })?;
+                                match &saved_id {
+                                    Some(cid) => rt
+                                        .block_on(service.update(cid, &input, pp.as_deref()))
+                                        .map(|_| cid.clone()),
+                                    None => rt.block_on(service.save(&input, pp.as_deref())),
+                                }
+                            });
+                            match r {
+                                Err(e) => {
+                                    fail = Some((draft_idx, e.to_string()));
+                                    break;
+                                }
+                                Ok(conn_id) => {
+                                    // #28：分组未落库不静默——批量场景累计条数，成功提示降级 warning。
+                                    if DataSourceService::global()
+                                        .and_then(|service| {
+                                            service.set_connection_groups(
+                                                &conn_id,
+                                                &groups,
+                                                pp.as_deref(),
+                                            )
+                                        })
+                                        .is_err()
+                                    {
+                                        group_degrade += 1;
+                                    }
+                                    if let Some(i) = draft_idx {
+                                        ok_indices.push(i);
+                                    }
                                 }
                             }
                         }
+                        let (items, _) =
+                            crate::services::workspace_loader::load_connections_for_scope(
+                                session_root.as_deref(),
+                            );
+                        BatchOutcome {
+                            ok_indices,
+                            fail,
+                            total,
+                            group_degrade,
+                            items,
+                        }
                     });
-                    // 交付续体需要持有这些句柄（外层闭包是 `Fn`，不能把捕获的 `Rc` 移出去）——
-                    // 这里再克隆一份，成本就是一次引用计数递增。
+                    // 3) 续体：失败 → 已成功条目移出草稿箱，其余保留；全成功 → 清空草稿箱并关闭。
                     let (busy_c, result_c, shared_c, dialog_c) =
                         (busy.clone(), result.clone(), shared.clone(), dialog.clone());
                     entity.update(app, |_, cx| {
@@ -2087,46 +2239,32 @@ impl ConnectionDialogState {
                             let outcome = work.await;
                             cx.update(|window, app| {
                                 busy_c.set(BusyOp::None);
-                                let saved = matches!(outcome, SaveOutcome::Saved { .. });
-                                match outcome {
-                                    SaveOutcome::Failed(e) => {
-                                        set_result_ok(&result_c, false, format!("保存失败: {e}"))
-                                    }
-                                    SaveOutcome::Saved {
-                                        conn_id,
-                                        items,
-                                        group_degrade,
-                                    } => {
-                                        *shared_c.connections.borrow_mut() = items;
-                                        // 连接变了 → Mock 面板的「导入结构」候选来源也变了
-                                        // （它从内存里的清册派生，刷新不要开分析库）。
-                                        shared_c.refresh_mock_connections(app);
-                                        // #32 B 案：状态栏提示同样只出现名称（ID 不进界面文本）。
-                                        *shared_c.notice.borrow_mut() = Some(format!(
-                                            "连接「{}」已保存",
-                                            conn_display_name(&input_name)
-                                        ));
-                                        // 暂存列表（原型设计 §2.2 规则 4）：保存后将草稿移出暂存区 + 自动补空草稿；
-                                        // 保存后保持对话框打开，支持连续新建多个连接。
-                                        dialog_c.staging_after_save(window, app);
-                                        match group_degrade {
-                                            Some(reason) => set_result(
-                                                &result_c,
-                                                ResultLevel::Warning,
-                                                format!(
-                                                    "已保存：{}（分组未同步：{reason}）",
-                                                    conn_display_name(&input_name)
-                                                ),
-                                            ),
-                                            // 成功：摘要只有名称，连接 ID 进「详情」（B 案）。
-                                            None => set_result_line(
-                                                &result_c,
-                                                saved_result(&input_name, &conn_id),
-                                            ),
-                                        }
-                                    }
-                                }
-                                if saved && close_after {
+                                if let Some((_idx, err)) = &outcome.fail {
+                                    // 已成功的条目从草稿箱移除；失败及后续条目保留供修正重试。
+                                    dialog_c.remove_drafts_at(outcome.ok_indices, window, app);
+                                    set_result_ok(
+                                        &result_c,
+                                        false,
+                                        format!(
+                                            "保存失败：{err}（已成功的条目已移出暂存，其余保留，请修正后重试）"
+                                        ),
+                                    );
+                                } else {
+                                    *shared_c.connections.borrow_mut() = outcome.items;
+                                    shared_c.refresh_mock_connections(app);
+                                    *shared_c.notice.borrow_mut() =
+                                        Some(format!("已保存 {} 条连接", outcome.total));
+                                    // 全成功：清空草稿箱（用户决策：提交后不留草稿）。
+                                    dialog_c.staging_clear(app);
+                                    let msg = if outcome.group_degrade > 0 {
+                                        format!(
+                                            "已保存 {} 条连接（{} 条分组未同步）",
+                                            outcome.total, outcome.group_degrade
+                                        )
+                                    } else {
+                                        format!("已保存 {} 条连接，暂存草稿箱已清空", outcome.total)
+                                    };
+                                    set_result(&result_c, ResultLevel::Success, msg);
                                     window.close_dialog(app);
                                 }
                                 // 宿主重绘：刷新层内容（暂存列表 + 连接列表），并让面板重算按钮态。
@@ -2257,27 +2395,26 @@ impl ConnectionDialogState {
                                 .loading(busy_now == BusyOp::Save)
                                 .disabled(busy_now != BusyOp::None)
                                 .tooltip_with_action(
-                                    "保存（不关闭对话框，方便连续新建）",
+                                    "保存（仅暂存草稿箱，不写入数据库；保存并退出时统一提交）",
                                     &SaveConnection,
                                     Some("connection-dialog"),
                                 )
                                 .on_click({
-                                    let do_save = do_save.clone();
+                                    let do_stage = do_stage.clone();
                                     move |_, window, app| {
-                                        do_save(window, app, false);
+                                        do_stage(window, app);
                                     }
                                 }),
                         )
                         .child(
                             Button::new("save-close-connection")
-                                .label("保存并关闭")
+                                .label("保存并退出")
                                 .disabled(busy_now != BusyOp::None)
-                                .tooltip("保存成功后关闭对话框")
+                                .tooltip("批量提交暂存栏全部条目到数据库并清空草稿箱，然后关闭")
                                 .on_click({
-                                    let do_save = do_save.clone();
+                                    let do_batch_commit = do_batch_commit.clone();
                                     move |_, window, app| {
-                                        // 关闭动作在保存结果回来之后（异步，见 `do_save` 的 `close_after`）
-                                        do_save(window, app, true);
+                                        do_batch_commit(window, app);
                                     }
                                 }),
                         ),
@@ -2326,9 +2463,9 @@ impl ConnectionDialogState {
                         // 焦点在输入框内时，Input 处理键后 `Enter` 会 propagate 到此兜底。
                         .key_context("connection-dialog")
                         .on_action({
-                            let do_save = do_save.clone();
+                            let do_stage = do_stage.clone();
                             move |_: &SaveConnection, window, app| {
-                                do_save(window, app, false);
+                                do_stage(window, app);
                             }
                         })
                         .on_action({
@@ -2363,7 +2500,7 @@ impl ConnectionDialogState {
                         // 单行 Input 在 Enter 时不拦截而是 emit + propagate（gpui-base 行为）：
                         // 此处只接管 secondary（Ctrl+Enter）作保存，普通 Enter 不处理。
                         .on_action({
-                            let do_save = do_save.clone();
+                            let do_stage = do_stage.clone();
                             let driver_filter = driver_filter.clone();
                             let types_for_key = types_list.clone();
                             let drivers_for_key = drivers_list.clone();
@@ -2372,7 +2509,7 @@ impl ConnectionDialogState {
                             let shared_for_key = shared.clone();
                             move |action: &InputEnter, window, app| {
                                 if action.secondary {
-                                    do_save(window, app, false);
+                                    do_stage(window, app);
                                     return;
                                 }
                                 // 搜索框里回车 = 选中第一个匹配的类型：
