@@ -5,7 +5,8 @@
 //! `docs/architecture/project/project-prototype-design.md` §2。
 //!
 //! 按 GPUI-kit 编码指南「feature crate 组织同一业务能力的 model/service/view/command/dialog」，
-//! 本模块与 `models` / `store` / `lock` 同属 `rds-project`；同步入口 + 内部自建 tokio 运行时。
+//! 本模块与 `models` / `store` / `lock` 同属 `rds-project`；同步入口 + 进程级复用 tokio 运行时
+//! （`runtime()` 一次建、终身用，见 P0.3「去重复 Runtime::new」）。
 
 use std::path::{Path, PathBuf};
 
@@ -119,8 +120,41 @@ fn manager() -> Result<&'static GlobalDatabaseManager, String> {
         .ok_or_else(|| "项目服务未就绪：全局系统库未初始化".to_string())
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime, String> {
-    tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))
+/// 进程级 tokio 运行时（一次建、终身用）。
+///
+/// P0.3「去重复 Runtime::new」：同步项目服务原本每次调用都 `Runtime::new()`（multi-thread，
+/// 每次都 spawn 工作线程池再销毁，比 engine 侧 `acquire_sync` 的短命 current-thread runtime
+/// 重一个数量级）。这里改为**进程级 multi-thread 运行时复用**：
+/// - 第一次调用时初始化，此后所有 `block_on` 走同一 handle；
+/// - 用 multi-thread 而非 current-thread，是因为 `current-thread` 的 `Handle::block_on`
+///   不支持多线程并发调用——`cargo test` 并行跑、或 UI 与后台线程同时调用时会冲突；
+///   multi-thread 的 `Handle::block_on` 可安全并发。
+/// - `worker_threads(2)` 限制常驻 worker 数量（全局库已另有 `rds-global-db` runtime，
+///   这里只为同步入口提供驱动器，不铺线程池）。
+///
+/// 若调用方本身已处于 tokio 运行时上下文（异步路径误用同步 API），返回错误而非 panic，
+/// 与 `engine::persistence::GlobalDatabaseManager::acquire_sync` 同一口径。
+fn runtime() -> Result<&'static tokio::runtime::Handle, String> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(
+            "已在 tokio 运行时上下文内调用同步项目服务：请改用异步 API".to_string()
+        );
+    }
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    // 手动「取-设-取」：`OnceLock::get_or_try_init` 仍是 unstable（once_cell_try）。
+    // 并发下最多重建一次后丢弃多余的（`set` 失败方），service 调用集中在 UI 线程，竞态可忽略。
+    if RUNTIME.get().is_none() {
+        let built = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| format!("初始化项目服务运行时失败: {e}"))?;
+        let _ = RUNTIME.set(built);
+    }
+    let rt = RUNTIME
+        .get()
+        .expect("runtime 初始化后必然可读");
+    Ok(rt.handle())
 }
 
 /// 校验项目名称（对话框与重命名共用）。
