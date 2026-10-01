@@ -261,19 +261,25 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 ## 11. GPUI 落点映射
 
+> ⚠️ **2026-10-01 更新（A3 迁移后）**：本表已与 `project-dev-plan.md` §6 对齐。项目视图与
+> 服务自 A3 批次起迁入 `crates/project/src/`（视图与 model/service 同 crate），不再位于
+> workbench。唯一权威落点以 **dev-plan §6 为准**，此表仅为速查。
+
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/workbench/src/components/project_ui.rs`（自绘 overlay；状态存 `Shared::project_ui`） |
-| 项目服务编排（CRUD / 打开 / 关闭 / 锁） | `crates/workbench/src/services/project_service.rs` |
+| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/project/src/ui.rs`（视图与 model/service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs` |
+| 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs`（`ProjectUiHost` 注入） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
-| 标题栏项目槽（点击开关菜单） | `crates/workbench/src/view.rs`（`render_title_bar`） |
-| 会话与刷新信号 | `crates/workbench/src/panels/`（`Shared::project_ui` / `editor_dirty`） |
+| 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
+| 会话与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册持久化（固定 / 软删） | `crates/engine/src/persistence/global_db.rs` + 迁移 `crates/engine/migrations/global/019_add_project_ui_state.sql` |
-| 动作 / 快捷键 | `crates/project/src/commands.rs` 占位未用；实际为 `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`） |
+| 动作 / 快捷键 | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
 | 依赖接线 | 根 `Cargo.toml`（`project` 别名）+ `crates/workbench/Cargo.toml` |
 
-> `project → engine, shared`（已符合硬约束）；视图为 `Entity`，由 `workbench`/`app` 组合，`project` 不反向依赖 `workbench`。
+> `project → engine, shared, gpui-kit`（符合硬约束，不依赖 `workbench` / `settings`）；视图为
+> `Entity`，由 `workbench`/`app` 组合，`project` 不反向依赖 `workbench`。
 > `promote_dialog.rs` / `snapshot_dialog.rs` 不再属于本模块（见 §12）。
 
 ## 12. 范围外与遗留确认

@@ -157,6 +157,14 @@ pub struct Version {
 /// 版本包装器
 ///
 /// 为所有核心模型提供版本化支持
+///
+/// **接线现状（2026-10-01 核实）**：本类型及配套（`Version` / `VersionInfo` /
+/// `create_child` 版本链 / checksum 校验）目前**没有接入任何业务数据**——实际在用的是
+/// `project_versions` 表的**手动快照台账**（`service::list_versions` / `create_version`，
+/// 只记一行 message，不承载数据内容）。`Versioned<T>` 整体是 DuckLake 多人协同预留。
+///
+/// 若仍未立项，建议按「冻结零调用」口径处理：要么移除本类与 checksum 逻辑，要么
+/// 真做内容级版本化（届时 `calculate_checksum` 必须换成 `sha2`，见下）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Versioned<T> {
     /// 实际数据
@@ -216,6 +224,11 @@ impl<T> Versioned<T> {
 }
 
 /// 计算数据校验和
+///
+/// ⚠️ **风险口径**：当前用 `DefaultHasher`（SipHash 固定种子）——**非加密、且输出可能随
+/// Rust 内部实现变化**，不保证跨版本 / 跨进程稳定。本函数只被未接线的 `Versioned<T>`
+/// 使用（见上），故暂可接受；若项目真要落地内容级版本化 / 完整性校验，**必须换成
+/// `sha2`**（与 M6 资产库的 sha256 指纹口径一致）。
 fn calculate_checksum<T: Serialize>(data: &T) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
