@@ -30,6 +30,10 @@ paths.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# 启动最早处把控制台代码页切到 UTF-8：tracing stderr / eprintln! 的中文不再按 cp936 乱码
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }

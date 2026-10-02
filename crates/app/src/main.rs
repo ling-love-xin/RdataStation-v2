@@ -38,6 +38,10 @@ use workbench::commands::{
 mod assets;
 
 fn main() {
+    // 0. Windows 控制台输出代码页切到 UTF-8（cp65001）：tracing stderr / eprintln! 的
+    //    中文日志不再按系统 ANSI（cp936）渲染成乱码（文件与库层本就是 UTF-8，不受影响）。
+    //    仅影响交互式控制台显示；重定向到文件 / 管道时 Rust 直接写 UTF-8 字节，无副作用。
+    set_console_utf8();
     // 0. panic 落盘：真机 GUI 崩溃（尤其 `0xc0000409` 这类 fastfail）在终端之外什么都不留，
     //    事后只能靠“点了就没了”发梦。先装钩子，后面任何 panic 都有消息 + 回溯可查。
     install_panic_logger();
@@ -308,6 +312,24 @@ fn run_app() {
             .detach();
         });
 }
+
+/// Windows 控制台输出代码页切到 UTF-8（cp65001）。
+///
+/// 背景（2026-10-03）：tracing 的 stderr layer 与 `eprintln!` 直接写 UTF-8 字节，
+/// 交互式控制台默认按系统 ANSI 代码页（中文系统 = cp936）渲染 → 中文日志显示乱码；
+/// 文件与 `app_logs` 库层均为 UTF-8，不受影响。此调用只改本进程控制台的显示/输入代码页，
+/// 对重定向到文件 / 管道的字节流无副作用（那本就是 UTF-8）。
+#[cfg(windows)]
+fn set_console_utf8() {
+    use windows_sys::Win32::System::Console::{SetConsoleCP, SetConsoleOutputCP};
+    unsafe {
+        let _ = SetConsoleCP(65001);
+        let _ = SetConsoleOutputCP(65001);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_console_utf8() {}
 
 /// 初始化全局系统库（执行全局迁移 + 建立连接池单例）并接上日志。
 ///
