@@ -56,7 +56,7 @@
 | --- | --- | --- |
 | **纯函数优先** | 可测判定拍成纯函数：`parse_nav_search` / `nav_type_badge` / `nav_type_short_label` / `nav_qualified_name` / `NavNode::child_key` / `NavSource::{from_conn_id,from_key}` | 架构 §9 |
 | **一段一职责** | 面板实体（`nav_view`）/ 宿主端口（`nav_host`）/ 后台任务（`nav_jobs`）/ 存储门面（`nav_store`）/ 键盘动作（`commands`）各归其位 | 架构 §10 |
-| **文档齐全** | README（本文）+ 架构 + 原型 + 交互稿 + 开发方案 + 使用手册 + **宣传页两版**（`*-showcase.html` / `.md`） | `../README.md` |
+| **文档齐全** | README（本文）+ 架构 + **规格书** + 原型 + 交互稿 + 开发方案 + 使用手册 + 宣传页两版（`*-showcase.html` / `.md`）+ **测试报告** | `../README.md` |
 | **真机反馈成文** | 每轮用真实端点（4 类数据库 × P/G/GP）回归，问题 → 结论 → 文档与测试同步 | dev-plan §0 |
 
 ## 2. 边界
@@ -130,12 +130,14 @@ cargo check --workspace --all-targets -j 2
 | 文档 | 什么时候读它 |
 | --- | --- |
 | `database-navigator-architecture.md` | **为什么这样设计 / 怎么运转**：心智模型与边界规则 / 概念定位表 / 分层与 render 零 I/O / 五条数据流 / 决策取舍 / 降级容错 / **§11 已知问题与后续项（权威）** |
+| `database-navigator-module-spec.md` | **工程口径（对齐 M3 规格书体例）**：模块边界 / 代码地图 / 核心概念与数据模型 / 关键流程 / 三级缓存体系 / 测试体系 / 文档体系 / 复现命令 / 模块关系 |
 | `database-navigator-prototype-design.md` | **长什么样**：面板布局 / 连接行解剖（v6/v7 降密）/ 双通道徽标 / 树模型 / 三级元数据管线 / **§6.2 右键菜单** / 主题映射 / GPUI 落点 |
 | `database-navigator-user-guide.md` | **怎么用**：入口 / 界面导览（连接行怎么读 · 状态色 · 类型形状 · 层级）/ 典型流程 / 快捷键 / 显示开关 / FAQ / 验收清单 |
 | `database-nav-dev-plan.md` | **做到哪了**：Phase A/B/C 与 v6/v7 任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景、风险 |
 | `database-navigator-prototype.html` | 可交互示意稿（明暗双主题；密度对比） |
 | `database-navigator-showcase.html` | **宣传版（视觉）**：一页看懂特点 / 剧本 / 流程 / 架构 / **三级缓存与大库（索引分页 · 计数 · 跨连接搜索）**；自包含、离线可开、首屏可在归属域 facet 间切换并展示索引搜索结果区 |
 | `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版（含 mermaid 流程图），章节一一对应，适合贴 PR / wiki |
+| `database-navigator-test-report-2026-10-03.md` | **验证（对齐 M3 测试报告体例）**：SQLite / DuckDB 真机全链路断言 + 单元回归基线 + 文档 - 代码一致性核对 + 缺陷修复记录 |
 | `metadata-cache-vs-dbeaver-datagrip.md` | **缓存为什么这样设计**：与 DBeaver / DataGrip 的 10 维度对照、三条硬约束、分页与搜索的落地记录、仍缺项的触发条件 |
 | `../connection/README.md` | 上游：连接的新建 / 编辑与作用域路由（M3） |
 
