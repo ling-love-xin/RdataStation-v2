@@ -370,6 +370,8 @@ pub struct ProjectUiHost {
     pub save_sort: Rc<dyn Fn(ProjectSort, &mut App)>,
     /// 打开项目后的宿主刷新（连接列表 / 导航缓存 / 结果归属）。
     pub on_opened: Rc<dyn Fn(&mut App)>,
+    /// 关闭项目后的宿主清理（#21：连接列表按无项目作用域刷新，清掉残留 P_/GP_）。
+    pub on_closed: Rc<dyn Fn(&mut App)>,
     /// 默认连接的候选来源（U3）：宿主接连接列表，project crate 只读结果。
     pub connections: Rc<dyn Fn(&App) -> Vec<ConnectionOption>>,
 }
@@ -388,6 +390,7 @@ impl ProjectUiHost {
             editor: Rc::new(()),
             save_sort: Rc::new(|_, _| {}),
             on_opened: Rc::new(|_| {}),
+            on_closed: Rc::new(|_| {}),
             connections: Rc::new(|_| Vec::new()),
         }
     }
@@ -404,6 +407,12 @@ impl ProjectUiHost {
 
     pub fn with_on_opened(mut self, on_opened: Rc<dyn Fn(&mut App)>) -> Self {
         self.on_opened = on_opened;
+        self
+    }
+
+    /// 注入关闭项目后的宿主清理回调（#21：`do_close` 末尾触发）。
+    pub fn with_on_closed(mut self, on_closed: Rc<dyn Fn(&mut App)>) -> Self {
+        self.on_closed = on_closed;
         self
     }
 
@@ -1238,6 +1247,9 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
         ui.notice = None;
     }
     refresh_picker(host, cx);
+    // #21：关闭项目后清掉该项目的 P_/GP_ 连接（残留行点“连接/编辑”会因
+    // `project_root=None` 必失败）；宿主在此按无项目作用域刷新连接列表。
+    (host.on_closed)(cx);
 }
 
 /// 保存编辑区 SQL 草稿到项目根（唯一命名）。

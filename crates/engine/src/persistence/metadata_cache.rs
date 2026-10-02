@@ -132,6 +132,13 @@ impl MetadataCacheManager {
     ///
     /// 如果数据库不存在，将自动创建并执行迁移
     pub fn open(&self) -> Result<Connection, CoreError> {
+        // 观察项 3（legacy 迁移）：指纹接线前创建的旧 `conn_{safe}.sqlite` 缓存
+        // **按需 copy** 到当前（指纹）路径——旧文件保留不删，避免重新扫描；
+        // 回退路径（未登记指纹）两者同名，此调用天然为空操作。
+        if let Err(e) = self.copy_legacy_cache_if_absent() {
+            tracing::warn!("[metadata-cache] 旧缓存迁移跳过（不影响打开）: {e}");
+        }
+
         let conn = Connection::open(&self.db_path).map_err(|e| {
             CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -146,6 +153,18 @@ impl MetadataCacheManager {
                 CoreError::storage(StorageError::Persistence {
                     store: "sqlite".to_string(),
                     operation: "set_wal_mode".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        // 并发兜底（观察项 2）：同一指纹缓存文件可能被多连接 / 多线程并发写
+        // （域内共享），WAL 下写锁竞争仍可能 busy——busy_timeout 5s 让竞争方
+        // 等待而非立即 SQLITE_BUSY。
+        conn.query_row("PRAGMA busy_timeout=5000", [], |_| Ok(()))
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "set_busy_timeout".to_string(),
                     reason: e.to_string(),
                 })
             })?;
@@ -225,6 +244,43 @@ impl MetadataCacheManager {
             })?;
         }
         Ok(())
+    }
+
+    /// 旧式连接独立缓存路径（指纹接线前：`conn_{safe_id}.sqlite`，同目录）。
+    pub fn legacy_cache_path(&self) -> PathBuf {
+        let safe_id = Self::sanitize_conn_id_for_filename(&self.conn_id);
+        let dir = self.db_path.parent().unwrap_or_else(|| Path::new("."));
+        dir.join(format!("conn_{safe_id}.sqlite"))
+    }
+
+    /// 存量旧缓存迁移（§14 #19 观察项 3，**按需 copy**）：
+    ///
+    /// 当前（指纹）路径**不存在**且旧 `conn_{safe}.sqlite` **存在** → copy 到指纹路径
+    /// （旧文件保留不删；schema 与现行一致，复用后免于重新扫描）。
+    /// 返回是否执行了迁移；`open()` 已自动调用（失败仅告警）。
+    pub fn copy_legacy_cache_if_absent(&self) -> Result<bool, CoreError> {
+        if self.db_path.exists() {
+            return Ok(false);
+        }
+        let legacy = self.legacy_cache_path();
+        if !legacy.exists() {
+            return Ok(false);
+        }
+        if let Some(parent) = self.db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "Failed to create cache dir {:?}: {}",
+                    parent, e
+                )))
+            })?;
+        }
+        std::fs::copy(&legacy, &self.db_path).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "Failed to copy legacy cache {:?} → {:?}: {}",
+                legacy, self.db_path, e
+            )))
+        })?;
+        Ok(true)
     }
 
     /// 检查元数据缓存是否存在
@@ -4249,6 +4305,67 @@ mod tests {
         unregister_identity("G_conn_fp_wire_002");
         let after = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
         assert!(after.db_path().file_name().unwrap().to_string_lossy().starts_with("conn_"));
+    }
+
+    /// 观察项 2：并发兜底——`open()` 必须设置 busy_timeout（WAL 下写锁竞争等待）。
+    #[test]
+    fn open_sets_busy_timeout() -> Result<(), CoreError> {
+        let manager = MetadataCacheManager::new("G_conn_bt_001", ConnectionType::Global, None)?;
+        let conn = manager.open()?;
+        let bt: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+        assert!(bt >= 5000, "busy_timeout 应 ≥5s，实际 {bt}ms");
+        std::fs::remove_file(manager.db_path()).ok();
+        Ok(())
+    }
+
+    /// 观察项 3：legacy 迁移——旧 `conn_{safe}.sqlite` 在指纹路径首次打开时
+    /// **按需 copy**（旧文件保留不删），复用免重新扫描。
+    #[test]
+    fn legacy_cache_is_copied_to_fingerprint_path_on_first_open() -> Result<(), CoreError> {
+        use crate::persistence::metadata_identity::identity_from_url;
+        use crate::persistence::{register_identity, unregister_identity};
+
+        let conn_id = "G_conn_leg_001";
+        let identity =
+            identity_from_url("mysql", "mysql://root:pw@db.internal:3306/orders", Some("root"), None, Some(3306)).expect("可共享");
+        register_identity(conn_id, &identity);
+
+        let manager = MetadataCacheManager::new(conn_id, ConnectionType::Global, None)?;
+        let fp_path = manager.db_path().clone();
+        assert!(fp_path.file_name().unwrap().to_string_lossy().starts_with("meta_"));
+        // 确保指纹路径尚不存在
+        std::fs::remove_file(&fp_path).ok();
+        let _ = std::fs::remove_file(format!("{}-wal", fp_path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", fp_path.display()));
+
+        // 造一份旧式缓存（含标记表），模拟指纹接线前的存量
+        let legacy = manager.legacy_cache_path();
+        {
+            let conn = rusqlite::Connection::open(&legacy).unwrap();
+            conn.execute_batch("CREATE TABLE marker (v TEXT); INSERT INTO marker VALUES ('legacy-data');").unwrap();
+        }
+        assert!(legacy.exists(), "前置：旧缓存文件应存在");
+
+        // 首次 open → copy 到指纹路径；旧文件保留
+        let migrated = manager.copy_legacy_cache_if_absent()?;
+        assert!(migrated, "存在旧缓存且指纹路径缺失时应迁移");
+        assert!(fp_path.exists(), "指纹路径应已被 copy 创建");
+
+        // copy 出的数据可用（同一 schema）
+        let conn = rusqlite::Connection::open(&fp_path).unwrap();
+        let v: String = conn
+            .query_row("SELECT v FROM marker", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, "legacy-data", "迁移后的缓存应含旧数据");
+        assert!(legacy.exists(), "旧缓存文件应保留不删");
+
+        // 幂等：再次调用不再迁移
+        assert!(!manager.copy_legacy_cache_if_absent()?);
+
+        std::fs::remove_file(fp_path).ok();
+        std::fs::remove_file(&legacy).ok();
+        unregister_identity(conn_id);
+        Ok(())
     }
 
     /// 域隔离：同一物理库在全局域与项目域是**两个不同文件**（互不互通）。

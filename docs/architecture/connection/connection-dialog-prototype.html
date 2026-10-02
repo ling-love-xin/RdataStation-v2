@@ -93,6 +93,8 @@ button{font-family:inherit;}
 .scope button{border:none;background:transparent;color:var(--muted);padding:2px 10px;line-height:16px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s;}
 .scope button.on{background:var(--bg);color:var(--tabactive-fg);font-weight:600;box-shadow:0 1px 2px rgba(20,20,30,.12);}
 .scope button:not(.on):hover{color:var(--fg);}
+.scope-q{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:9px;font-weight:700;line-height:1;margin-left:3px;cursor:help;}
+.scope button.on .scope-q{border-color:var(--active-border);color:var(--active-border);}
 .type-badge{width:22px;height:22px;border-radius:6px;border:1px solid var(--input-border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
 .type-badge.warn{border-color:var(--warning);color:var(--warning);}
 .link-btn{display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;color:var(--active-border);font-size:11.5px;cursor:pointer;padding:2px 0;transition:color .12s;}
@@ -343,9 +345,11 @@ button{font-family:inherit;}
           <span class="f-label">名称</span>
           <input class="inp" value="MySQL-演示" style="flex:1;min-width:120px;">
           <span class="scope" id="scopeToggle">
-            <button class="on" data-scope="global">全局</button>
-            <button data-scope="project">项目</button>
-            <button data-scope="both">全局+项目</button>
+            <!-- 规则1（2026-10-02）：新增数据源默认「项目」，地址默认本项目；
+                 项目 / 全局 / 全局+项目 各自带问号微标（hover 提示作用域语义） -->
+            <button data-scope="project" class="on" title="项目：连接存入当前项目库 project.db（P_xxx），仅本项目可见；默认作用域">项目<span class="scope-q">?</span></button>
+            <button data-scope="global" title="全局：连接存入全局库 global_connections（G_xxx），所有项目可见">全局<span class="scope-q">?</span></button>
+            <button data-scope="both" title="全局+项目：全局定义一份 + 项目侧引用快照（GP_xxx），改全局全项目同步">全局+项目<span class="scope-q">?</span></button>
           </span>
         </div>
         <div class="h-row">
@@ -414,7 +418,7 @@ button{font-family:inherit;}
             <div class="hint-line" id="filePickRow" style="display:none;">
               <button class="ghost-btn" id="pickFileBtn" type="button">打开文件…</button>
               <button class="ghost-btn" id="newFileBtn" type="button">新建文件…</button>
-              本地文件路径；「新建文件…」在所选位置创建空库文件（首次连接自动初始化结构）
+              本地文件路径；「新建文件…」在所选位置创建**真库文件**（DuckDB 文件即 DuckDB 真格式、SQLite 文件即 SQLite 真格式；首次连接自动初始化结构，空文件会被识别为"待初始化"而非误判格式）
             </div>
             <div class="hint-line" id="networkHint">地址（URI）在顶部编辑，此处为解析结果</div>
             </div>
@@ -489,7 +493,7 @@ button{font-family:inherit;}
           </span>
           <span class="sel" id="manageNetworkBtn">管理网络配置</span>
         </div>
-        <div class="hint-line" id="networkHint">未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用</div>
+        <div class="hint-line" id="networkHint">未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。SSH 主机密钥：首连 TOFU——指纹写入 known_hosts（非 22 端口记 [host]:port），后续指纹不符拒绝连接；可在档案里设 host_key_check=Strict / AllowUnknown（决策 #115）</div>
         <div class="topo">
           <div class="topo-title">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 20h20M4 20V8l6 4V6l10 8v6"/></svg>
@@ -571,15 +575,15 @@ button{font-family:inherit;}
               <span style="color:var(--warning)">DuckDB 本地加速（联邦查询直连源库）</span>
             </div>
             <div class="sec-body">
-              <div class="hint-line">仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文</div>
+              <div class="hint-line">联邦查询需 DuckDB scanner 扩展（mysql/postgres/sqlite/oracle）；**duckdb 文件源内核自带、无扩展 → 不注册**；项目 / 全局**默认都不注册**（需显式开启本地加速）</div>
               <div class="form-grid">
                 <label>启用</label>
-                <span style="display:flex;align-items:center;gap:8px;"><button class="switch on" id="accelSwitch" title="开启/关闭"></button><span style="font-size:11px;color:var(--muted)">已开启</span></span>
+                <span style="display:flex;align-items:center;gap:8px;"><button class="switch" id="accelSwitch" title="开启/关闭"></button><span style="font-size:11px;color:var(--muted)">默认关闭</span></span>
               </div>
-              <div class="form-grid" id="accelBody">
-                <label>缓存路径</label><input class="inp" value="global_metadata/mysql-demo">
+              <div class="form-grid" id="accelBody" style="display:none;">
+                <label>分析库</label><input class="inp" value="全局：{system}/analytics.duckdb · 项目：{项目}/.RSmeta/analytics.duckdb" style="font-size:11px;">
               </div>
-              <div class="hint-line">已开启：凭据注册为 DuckDB Secret（不落明文），分析引擎可直接联邦查询</div>
+              <div class="hint-line">注册目标按作用域：全局连接 → 全局分析库；项目 / 全局+项目 → 项目分析库；凭据存 DuckDB Secret（不落明文）；断开 / 删除 / 关加速自动移除</div>
             </div>
           </div>
         </div>
@@ -671,7 +675,8 @@ button{font-family:inherit;}
 
 <div class="note">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：Tab 切换、类型选择（无可用驱动的类型置灰不可选，与实现一致）、作用域三态分段（联动项目栏启用与占位）、项目下拉（项目名 + 路径，尾两项「打开现有目录…」/「＋ 新增项目」）、测试连接→成功反馈、从全局定义同步（仅 GP_ 快照）、保存 / 保存并关闭、暗色切换、暂存选择、三个管理覆盖层。真实实现走 GPUI + theme token。</span>
+  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：Tab 切换、类型选择（无可用驱动的类型置灰不可选，与实现一致）、作用域三态分段（<b>默认「项目」</b>、地址默认本项目；项目 / 全局 / 全局+项目 各带问号微标提示定义）、项目下拉（项目名 + 路径，尾两项「打开现有目录…」/「＋ 新增项目」）、测试连接→成功/失败（分级文本 + 详情 / 复制）、从全局定义同步（仅 GP_ 快照）、<b>保存（写入暂存新增草稿） / 保存并关闭（批量写入 + 清空草稿箱）</b>、暗色切换、暂存选择、三个管理覆盖层。真实实现走 GPUI + theme token。<br>
+  <b>决策同步（2026-10-03）：</b>#108 大纲折叠 · #109 保存语义（保存=暂存 / 保存并关闭=批量写入+清空）· 规则1 默认作用域=项目 + 问号微标 · 规则2 保存即新增暂存配置 · #110/#111/#113 ID 生成（G_/P_/GP_ 前缀 + 随机段）与身份指纹（规范化串哈希 = URI+用户+数据库；同物理库多条连接在**作用域域内**共享一份元数据缓存，全局与项目域互不互通）· #114 DuckDB Secret 门控（按扩展注册；项目/全局默认不注册；注册到作用域分析库）· #115 SSH known_hosts TOFU（首连指纹确认 + 写入；Strict/AllowUnknown 开关）· #21 启动即加载 P_/GP_ + 关闭清理 · #19 指纹观察项（缓存索引表落盘 + busy_timeout + 旧缓存按需迁移）。</span>
 </div>
 
 <script>
@@ -770,7 +775,7 @@ button{font-family:inherit;}
       s.classList.add('active');
     });
   });
-  document.getElementById('stagingAdd').addEventListener('click',function(){demo('演示：添加空草稿并选中（保存后自动补一条）');});
+  document.getElementById('stagingAdd').addEventListener('click',function(){demo('演示：手动加空草稿（规则2：保存本身就会在暂存区自动新增一条，无需手动点 ＋）');});
   if(document.getElementById('pickFileBtn')){
     document.getElementById('pickFileBtn').addEventListener('click',function(){demo('演示：打开系统文件选择器（选已有 .db/.sqlite/.duckdb 文件）');});
     document.getElementById('newFileBtn').addEventListener('click',function(){demo('演示：选择位置 + 文件名新建空库文件（已存在则直接引用，不覆盖）');});
@@ -887,12 +892,13 @@ button{font-family:inherit;}
     });
   });
 
-  /* 保存 */
+  /* 保存（决策 #109，2026-10-02 语义重构）：保存 = 写入暂存区新增一条草稿（不落库）；
+     保存并关闭 = 将暂存内全部草稿批量写入库（全局库/项目库）+ 清空草稿箱 */
   document.getElementById('saveBtn').addEventListener('click',function(){
-    setResult('ok','已保存：G_xxx（编辑请从导航栏进入；暂存区只保留未保存草稿）',false);
+    setResult('ok','已保存到暂存：MySQL-演示（新草稿已加入左侧暂存列表；「保存并关闭」才批量写入库并清空草稿箱）',false);
   });
   document.getElementById('saveCloseBtn').addEventListener('click',function(){
-    setResult('ok','已保存并关闭（示意）',false);
+    setResult('ok','已保存并关闭：暂存内 3 条配置已批量写入（G_/P_ 按作用域入库），草稿箱已清空',false);
   });
   /* 分组同步失败的降级展示（#28 的 warning 级真实生产者） */
   document.getElementById('syncGlobalBtn').addEventListener('click',function(){

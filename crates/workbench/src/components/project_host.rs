@@ -105,6 +105,13 @@ pub fn build_host(
         })
     };
 
+    // #21：关闭项目 → 连接列表按无项目作用域刷新（只剩全局 G_），清掉残留
+    // P_/GP_；选中与导航缓存一并归零（同一 refresh_after_open 逻辑，root=None）。
+    let on_closed = {
+        let shared = shared.clone();
+        Rc::new(move |cx: &mut App| refresh_after_open(&shared, cx))
+    };
+
     project::ui::ProjectUiHost::new(
         shared.project_ui.clone(),
         shared.project.clone(),
@@ -116,6 +123,7 @@ pub fn build_host(
     }))
     .with_sort_saver(save_sort)
     .with_on_opened(on_opened)
+    .with_on_closed(on_closed)
     .with_connections(default_connection_options(shared))
 }
 

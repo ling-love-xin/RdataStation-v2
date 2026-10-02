@@ -32,7 +32,7 @@ use super::{
     project_card, project_menu_entries, render_picker, render_settings, request_close,
     request_create_project, request_open, request_open_folder, save_project_info,
     set_default_connection, snapshot_description, submit_create, submit_open_folder,
-    toggle_archive, visible_items,
+    toggle_archive, visible_items, do_close,
 };
 use crate::service::ProjectSummary;
 
@@ -44,6 +44,7 @@ struct Recorder {
     dirty: Cell<bool>,
     cleared: Cell<usize>,
     marked_clean: Cell<usize>,
+    closed: Cell<usize>,
 }
 
 struct TestNotifier(Rc<Recorder>);
@@ -80,10 +81,14 @@ fn test_host(rec: &Rc<Recorder>) -> ProjectUiHost {
     let state = Rc::new(RefCell::new(ProjectUiState::default()));
     let session = Rc::new(RefCell::new(None));
     let sort_rec = rec.clone();
+    let closed_rec = rec.clone();
     ProjectUiHost::new(state, session, Rc::new(TestNotifier(rec.clone())))
         .with_editor(Rc::new(TestEditor(rec.clone())))
         .with_sort_saver(Rc::new(move |sort, _cx| {
             *sort_rec.saved_sort.borrow_mut() = Some(sort);
+        }))
+        .with_on_closed(Rc::new(move |_cx| {
+            closed_rec.closed.set(closed_rec.closed.get() + 1);
         }))
 }
 
@@ -266,6 +271,23 @@ fn request_close_intercepts_dirty_editor(cx: &mut TestAppContext) {
 
     assert!(host.current().is_some(), "有未保存草稿时不应直接关闭项目");
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+}
+
+#[gpui_kit::test]
+fn do_close_clears_session_and_triggers_on_closed(cx: &mut TestAppContext) {
+    // 回归点（#21）：关闭项目后连接列表必须按无项目作用域刷新（宿主 `on_closed`），
+    // 否则残留上一项目的 P_/GP_ 连接（`project_root=None` 下点连接/编辑必失败）。
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(temp_root("closed"), "待关闭的项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    assert!(host.current().is_some(), "关闭前应有会话");
+    cx.update(|_, cx| do_close(&host, cx));
+
+    assert!(host.current().is_none(), "关闭后会话应清空");
+    assert_eq!(rec.closed.get(), 1, "关闭应触发宿主 on_closed 回调（连接列表刷新）");
 }
 
 #[gpui_kit::test]

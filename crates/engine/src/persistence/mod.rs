@@ -29,6 +29,7 @@ pub mod log_store;
 pub mod metadata_cache;
 pub mod metadata_cache_pool;
 pub mod metadata_identity;
+pub mod metadata_cache_index;
 pub mod metadata_identity_registry;
 pub mod navigator_state;
 pub mod network_store;
@@ -59,6 +60,11 @@ pub use metadata_identity::{
 pub use metadata_identity_registry::{
     identity_canonical, identity_fingerprint, register_identity, registered_identity_count,
     unregister_identity,
+};
+pub use metadata_cache_index::{
+    CacheIndexEntry, CacheScope, index_path, list as list_cache_index,
+    orphans as orphans_cache_index, prune_orphans as prune_cache_index_orphans,
+    record as record_cache_index, release as release_cache_index,
 };
 pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};

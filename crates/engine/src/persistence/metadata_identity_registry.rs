@@ -79,13 +79,33 @@ impl Registry {
 }
 
 /// 登记 `conn_id → 指纹`（连接保存 / 连接建立成功后调用；幂等，覆盖旧值）。
+///
+/// **索引表联动（§14 #19 观察项 1）**：指纹可共享时同步落盘 `metadata_cache_index`
+/// （跨会话可读：引用计数 / 孤儿 / 可读描述）；写盘失败只降级告警——索引是
+/// 诊断 / 管理用途，不影响注册与缓存路径。
 pub fn register_identity(conn_id: &str, identity: &ConnectionIdentity) {
     Registry::instance().register(conn_id, identity);
+    if let Some(fp) = identity.fingerprint() {
+        if let Err(e) = super::metadata_cache_index::record(
+            &fp,
+            conn_id,
+            identity.canonical_string().unwrap_or_default().as_str(),
+        ) {
+            tracing::warn!(
+                "[cache-index] 指纹索引登记失败（不影响缓存路径）: {e}"
+            );
+        }
+    }
 }
 
 /// 注销某连接的指纹登记（连接删除时调用；不影响已落盘的缓存文件）。
+///
+/// 索引表同步释放引用（引用清空 → 孤儿，`prune` 可清理）。
 pub fn unregister_identity(conn_id: &str) {
     Registry::instance().unregister(conn_id);
+    if let Err(e) = super::metadata_cache_index::release(conn_id) {
+        tracing::warn!("[cache-index] 指纹索引释放失败（不影响注销）: {e}");
+    }
 }
 
 /// 查询某连接的指纹（缓存路径用；未登记 / 不可共享 → `None`）。

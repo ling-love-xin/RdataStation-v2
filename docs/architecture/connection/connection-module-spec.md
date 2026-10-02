@@ -462,6 +462,7 @@ pub struct ConnectionDraft {
 | #113 | 指纹接线 + **域隔离**（2026-10-02）：`conn_id → 指纹` 注册表 + `MetadataCacheManager` 切 `meta_{fp}.sqlite`；全局 / 项目目录分离互不互通，`GP_` 项目侧归项目域 |
 | #114 | **Secret 注册门控 + 内存连接载体**（2026-10-03）：门控 = 加速开 + 有对应 DuckDB 扩展（duckdb 文件源无扩展 → 默认不注册），项目 / 全局同规则；目标 = 全局或项目分析库；断开回收；`SecretManager` 改内存连接 + secret 目录（避开分析库文件锁） |
 | #115 | **SSH Host Key TOFU + 严格校验开关**（2026-10-03）：三态校验（Matched / Unknown / Mismatched）+ 策略（Tofu 默认首连自动落盘 / Strict 未知拒绝 / AllowUnknown 放行不落盘）；Mismatched 恒拒绝；弹窗确认（UI 桥）留后续轮 |
+| #116 | **启动即加载 + 关闭清理**（2026-10-03，#21 关闭）：`ProjectUiHost::on_closed`（`do_close` 末尾触发）+ workbench `build_host` 注入 `refresh_after_open`（root=None → 只剩全局 G_）；启动加载已在 `view.rs:91` P0 修复 |
 
 ## 12. 已知问题与待办（权威：架构 §14）
 
@@ -484,8 +485,10 @@ cargo check -p rds-workbench -j 2           # Finished 即成功（stderr exit 1
 cargo build -p rds-app -j 2                 # 产物 target\debug\rds-app.exe
 
 # 测试
-cargo test -p rds-connection --lib -j 2                       # 96
+cargo test -p rds-connection --lib -j 2                       # 102
 cargo test -p rds-connection --test tunnel_roundtrip -j 2      # 6
+cargo test -p rds-engine --lib -j 2                            # 526（含索引表 / busy_timeout / legacy）
+cargo test -p rds-project --lib -j 2                           # 43（含 on_closed 关闭清理）
 cargo test -p rds-workbench --lib connection_dialog -j 2       # 38
 cargo test -p rds-workbench --test connection_multi_save -j 2  # 批量提交语义
 cargo test -p rds-workbench --test connection_staging -j 2     # 暂存原语
