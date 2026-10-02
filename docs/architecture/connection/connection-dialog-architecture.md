@@ -135,7 +135,7 @@ flowchart TB
 - **内存 + 跨会话持久化**：关闭对话框不丢失（状态挂在 `EditorPanel` 的对话框句柄上）；变更与关闭时写入 global.db 的 `connection_drafts` 表（迁移 `020`），重启后首次打开自动恢复。
 - **凭据安全边界**：持久化表**不含密码列**（`ConnectionDraftRow` 无 password 字段，恢复后密码框为空），只随正式保存写入连接库（AES-256-GCM）。
 
-### 3.6 元数据缓存身份指纹（规则已冻结，未接线）
+### 3.6 元数据缓存身份指纹（已接线 2026-10-02）
 
 **问题**：L2 元数据缓存按**连接 ID** 分文件（`conn_{id}.sqlite`），指向同一物理库的多条连接（改名 / 改密码 / 换驱动实现 / 加 SSL 参数）各自重建缓存、反复预热。
 
@@ -162,14 +162,19 @@ flowchart TB
 - 若缓存将来包含与权限强相关或敏感的结构（行级采样、DBA 专属对象），键需增加“可见性级别”维度，否则不能跨主体共享。
 - 两级共享（`target 级`（不含 principal）共享 catalog / schema 清单，`principal 级`单独存表 / 列等权限相关层）理论上能再省一半预热，但需要 L2 分层，**暂不做**：待出现“同库多账号”的真实用例再评估（观察项，不在 §14 计数内）。
 
-**落地状态**：规则与纯函数已就绪（13 项单测），**路径仍按连接 ID**——切换与导航接入 L2 同轮进行（避免两套键并存的过渡期）。切换时需一并落地：
+**落地状态（2026-10-02 已接线）**：路径已从按连接 ID 切换为按身份指纹——`MetadataCacheManager::build_metadata_path` 先查进程内注册表（`metadata_identity_registry`，保存 / 连接建立 / 更新时由 workbench 登记 `conn_id → 指纹`，删除时注销），已登记 → `meta_{fp}.sqlite`（**作用域域内共享**）；未登记 / 不可共享（内存库、地址空）→ 回退 `conn_{safe_id}.sqlite`（每连接独立）。接线桥 `identity_from_url(type_id, url, principal, schema, default_port)` 从连接记录构造身份（文件型去 scheme 归一、网络型解析 host/port/database、查询串剔除、驱动默认端口参与归一）。测试：engine `identity_from_url` 4 + registry 4 + `MetadataCacheManager` 接线/域隔离 2（共 10 项，全绿）；workbench/database 全量回归绿。
 
-| 配套 | 内容 |
-| --- | --- |
-| 索引表 `metadata_cache_index` | `fingerprint`(PK) / `canonical_desc`(可读串) / `type_id` / `format_version` / `ref_conn_ids`(引用计数) / `last_used_at` / `size_bytes`：给「缓存管理」提供占用与孤儿视图，并让指纹**可读** |
-| 引用计数与孤儿 | 连接删除只减引用，引用为 0 标记孤儿、**不自动删**（与“缓存只增不删”一致，唯一删除入口仍是「缓存管理」） |
-| 并发预热 | 同一指纹被两条连接同时预热 → 进程内 per-fingerprint 互斥 + SQLite WAL / `busy_timeout`，避免写出半份缓存 |
-| 存量迁移 | 旧 `conn_*.sqlite` 全部按 legacy 保留；需要时按需复制（copy，不 move）到指纹路径 |
+**域隔离（决策 #113，用户约束 2026-10-02）**：指纹**只在作用域域内共享**——存储目录按域分离：全局连接（`G_` / `GP_` 全局侧）→ `{system}/global_metadata/meta_{fp}.sqlite`，项目连接（`P_` / `GP_` 项目侧）→ `{project}/meta/connection_metadata/meta_{fp}.sqlite`。全局与项目**互不互通**：同一物理库在全局域与项目域各有一份缓存文件；`GP_` 连接的项目快照侧走项目域（`NavSource::from_conn_id` 判定）。目的：项目侧缓存随项目清理 / 迁移，不污染全局域。
+
+切换时需一并落地的配套（**部分完成**）：
+
+| 配套 | 内容 | 状态 |
+| --- | --- | --- |
+| 注册表 `metadata_identity_registry` | 进程内 `conn_id → (指纹, 规范化串)` 单例；保存 / 连接建立 / 更新登记、删除注销；不可共享不登记 | ✅ 已实现（2026-10-02） |
+| 索引表 `metadata_cache_index` | `fingerprint`(PK) / `canonical_desc` / `type_id` / `format_version` / `ref_conn_ids` / `last_used_at` / `size_bytes`：给「缓存管理」提供占用与孤儿视图 | ⏳ 未建（随「缓存管理」轮，见 §14 #39 之后新增观察项） |
+| 引用计数与孤儿 | 连接删除只减引用，引用为 0 标记孤儿、不自动删 | ⏳ 未做（随索引表） |
+| 并发预热 | 同一指纹被两条连接同时预热 → per-fingerprint 互斥 | ⏳ 观察项（SQLite WAL / busy_timeout 已兜底） |
+| 存量迁移 | 旧 `conn_*.sqlite` 全部按 legacy 保留；需要时按需复制（copy，不 move）到指纹路径 | ✅ legacy 保留（不自动迁移，观察项） |
 
 ---
 
@@ -593,7 +598,7 @@ flowchart LR
 | 34 | **大纲视觉收敛 + 文件选择修复（USIT 第 3 轮）**：分组改「整幅面板（`group_box`）+ 标题栏分隔线」；只读值改回**数据框**（白底 + `input` 边框，放在浅底面板上）；标签列 92px→**68px**、间距 12px→**6px**；未选类型/驱动时表单**显示但禁用**（含 SSL 组以禁用形态出现）；`新建文件…` 改用系统**保存**对话框（`prompt_for_new_path`）+ 取消/失败写结果行 | `connection_dialog/{helpers,state,render,mod}.rs`（决策 #55–#57）；`check` 零警告 + 工作台 98 项测试全绿 |
 | 35 | **连接设置可编辑 + 字段⇄URI 双向同步（USIT 第 4 轮）**：主机/端口/数据库 改 `Input`；`connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据/查询串）+ `data_source_service::rebuild_url_from_fields`（幂等、主机空不重建、端口空用默认端口）；渲染层每帧单方向同步（`fields_synced_for` 防循环）；结构尺寸登记到 `ui.rs`（`DIALOG_*`）并对齐全局间距/圆角方案 | `connection/src/url_params.rs`、`services/data_source_service.rs`、`connection_dialog/{helpers,state,render,mod}.rs`、`ui.rs`（决策 #58、#59）；测试：URL 改写 1 项 + 重建 1 项 + 窗口双向同步 1 项（104 项全绿） |
 | 36 | **驱动注册与文件型取址修复 + 暂存条目显示同步（USIT 第 5 轮）**：① `initialize_global_system` 首行注册内置驱动（修 `CONN_DRIVER_NOT_FOUND`，同时修好了导航连接 / 重连）；② sqlite / duckdb 工厂改从 `to_url()`（url_override）取地址（修「Database path is required」）、去前缀与查询串；③ 暂存条目当前项显示 live 表单类型/名称（修“表单已 SQLite、条目还显示 mysql 图标”），删掉重复算快照的 `draft_dirty` | `engine/{migration/global_init.rs, driver/factory.rs, driver/auto_register.rs}`、`connection_dialog/{helpers,render,staging}.rs`（决策 #60–#62）；测试：engine `auto_register` 内置 id 断言、`data_source_lifecycle::catalog_drivers_resolve_and_sqlite_probe_succeeds`（真实文件探测）、`helpers::staging_type_badge_prefers_live_form_for_current_entry` |
-| 37 | **元数据缓存身份指纹（规则冻结，未接线）**：新增 `engine::persistence::metadata_identity`（纯函数 + 13 项单测）——身份 = 数据库族 + 规范化地址 + principal + 格式版本；驱动实现 / 密码 / 连接参数不进身份；`fingerprint()` = sha256 前 16 hex、`cache_file_name()` = `meta_{fp}.sqlite` | `crates/engine/src/persistence/metadata_identity.rs`（决策 #63–#66）、文档 §3.6；**路径未切换**（仍 `conn_{id}.sqlite`），索引表与并发互斥待导航接入 L2 时落地 |
+| 37 | **元数据缓存身份指纹（规则冻结 → 已接线 2026-10-02）**：新增 `engine::persistence::metadata_identity`（纯函数 + 13 项单测）——身份 = 数据库族 + 规范化地址 + principal + 格式版本；驱动实现 / 密码 / 连接参数不进身份；`fingerprint()` = sha256 前 16 hex、`cache_file_name()` = `meta_{fp}.sqlite` | `crates/engine/src/persistence/metadata_identity.rs`（决策 #63–#66）、文档 §3.6；**已接线**：`identity_from_url` 桥 + `metadata_identity_registry`（conn_id→指纹）+ `MetadataCacheManager` 路径切 `meta_{fp}.sqlite`（域隔离见决策 #113）；索引表 / 引用计数 / 并发互斥为观察项 |
 | 38 | **渲染热路径收敛（第一批，§14 #16）**：① 驱动派生数据（表单字段 / 能力 / 认证方法）改 `DriverDerived` 缓存（键 = 驱动 id + 三份声明原文），不再每帧解析声明 JSON；② 地址占位改「变化才写」（复用已有 `url_placeholder_for` 字段做守卫）—— `set_placeholder` 是无条件赋值 + notify | `connection_dialog/{helpers.rs（DriverDerived）,state.rs（driver_derived）,mod.rs,render.rs}`（决策 #67）；测试：`helpers::driver_derived_parses_declarations_and_keys_on_them`、`connection_type_driver::address_placeholder_is_cached_and_follows_driver`；**遗留**：类型 / 驱动目录每帧深拷贝与 `snapshot_form` 脏比对仍待收敛（#16 后半） |
 | 39 | **M3↔M4 契约审计修复（本轮）**：① 快照同步补标签权威表（`connection_tags`）；② 删除全局连接时清理项目侧分组成员（项目根合法时）；③ 作用域判定收归 `id_prefix::{is_global_connection, uses_project_storage}`（服务层 3 处 + `nav_runtime` 4 处，遗留 `conn-` 归全局库）；④ `nav_runtime::rename_group` 适配 engine `update_group` 新增的 `sort_order` 参数（保留库中现值） | `engine/persistence/id_prefix.rs`、`services/{data_source_service.rs,nav_runtime.rs}`（决策 #68）；测试见 §7；审计结论与 M4 侧待办见 **§16** |
 | 40 | **网络配置真正生效（审计 #20 收口）**：① `nav_runtime::connect_entry` 解析引用的网络档案 → `ConnectionMethod` 并随 `ConnectRequest` 传出（新增可测纯函数 `build_connect_request`）；② 隧道注册表改挂 `ConnectionManager`（决策 #69），修「守卫随临时服务实例释放」；③ 类型键归一化 + 对话框 `NETWORK_TYPES` 规范键 + 管理器类型下拉按类填充（决策 #70） | `engine/connection_manager.rs`、`connection/chain.rs`（`shares_with`）、`services/{nav_runtime.rs,connection_service.rs}`、`connection_dialog/{mod.rs,managers.rs}`；测试：`referenced_network_profile_reaches_connect_request` + `connection_service` 内嵌 2 项 |
@@ -953,7 +958,7 @@ flowchart LR
 | 16 | ⚪→✅ | ~~**渲染热路径上的写状态与重计算**~~（**已关闭**）：第一批（决策 #67）驱动派生数据缓存 + 地址占位守卫；后半（决策 #73）暂存列表 `LiveEntryView` + `form_matches_draft` + 逐行短借用。**唯一保留项**：`render.rs` 里类型 / 驱动目录的每帧克隆（类型 ≤10、驱动 ≤6，各仅若干小字符串，量级远小于已收敛的两项）| 每帧 JSON 反序列化、额外 notify 循环与整表草稿克隆均已消除 | 若将来目录规模增长（驱动插件生态）再优化：把 `types` / `drivers` 改为 `Rc<Vec<…>>` 快照（会改动 `pub` 字段类型，需同步测试赋值写法），当前收益不抵改动面 |
 | 17 | ⚪→✅ | ~~**下标参与 ElementId**~~（**已关闭**：`prop-del-{key}` / `draft-{saved_id \| new-i}` / `policy-` 独立命名空间；未保存草稿保留位 id 的理由已写明，见决策 #86） | — | — |
 | 18 | ⚪→✅ | ~~`project_path` 只有写入没有渲染点~~（**已关闭**：明确为数据载体 + 删除无用占位写入与残留注释，见决策 #87） | — | — |
-| 19 | 🟡 | **元数据缓存身份指纹未接线**：规则与纯函数（`engine::persistence::metadata_identity`，§3.6）已就绪，但 L2 路径仍按连接 ID（`conn_{id}.sqlite`）；`metadata_cache_index`（引用计数 / 孤儿 / 可读描述）与同指纹并发预热互斥未建 | 同一物理库的多条连接仍各自重建缓存（重复预热）；改名 / 改密 / 换驱动后命中旧缓存的收益尚未兑现 | 与 database-nav 接入 L2 的 Phase C 同轮：路径切 `meta_{fp}.sqlite` + 索引表 + per-fingerprint 互斥 + 旧 `conn_*.sqlite` 按 legacy 保留（不删） |
+| 19 | 🟢 | **元数据缓存身份指纹（已接线 2026-10-02，决策 #113）**：`engine::persistence::metadata_identity`（规则 + 13 单测）→ 新增 `identity_from_url` 桥 + `metadata_identity_registry`（进程内 `conn_id → 指纹`：保存 / 连接建立 / 更新登记、删除注销）+ `MetadataCacheManager::build_metadata_path` 切 `meta_{fp}.sqlite`；未登记 / 不可共享回退 `conn_{id}.sqlite`；域隔离：全局 / 项目目录分离互不互通，`GP_` 项目侧归项目域 | 接线前同一物理库的多条连接各自重建缓存（重复预热）——已消除：指纹命中的连接共享 `meta_{fp}.sqlite`（域内） | **已实现**：engine `identity_from_url` 4 + registry 4 + 接线 / 域隔离 2（共 10 项新单测）；workbench 129 lib + 集成全绿、database 92 lib 全绿。**剩余观察项**：索引表 `metadata_cache_index`（引用计数 / 孤儿 / 可读描述）、per-fingerprint 并发互斥（WAL / busy_timeout 兜底）、旧 `conn_*.sqlite` legacy 保留（需要时按需 copy） |
 | 20 | 🔴→✅ | ~~协议链 / SSH 隧道保存后不生效~~（**已关闭**：三层根因一次性收口，见上方已关闭段） | — | 残留见 #24 |
 | 21 | ⚪ | **启动即有项目会话时不加载 P_/GP_**（`view.rs:165` 用 `load_persisted_connections`，L168 才解析会话）；**关闭项目不清理残留**（`project/ui.rs::do_close` 不触发 `on_opened`） | 项目标签页看不到项目连接；关闭项目后残留行点“连接/编辑”必失败（`project_root=None`） | workbench 宿主侧：构造后按会话刷新一次；关闭后等价刷新（或给 `ProjectUiHost` 加 `on_closed`）；触碰 `view.rs` / `project` UI，需与布局会话协调 |
 | 22 | ⚪ | **M4 导航行无删除入口**：唯一入口在编辑区详情卡（`panels/editor.rs`）；导航行点击也不写 `shared.selected` | M4 用户路径上没有删除能力；删除目标不直观（默认只指第一条） | M4 侧（另一会话）：行内 / 右键删除调同一 `workspace_loader::delete_connection`，删除成功后清导航缓存与状态 |

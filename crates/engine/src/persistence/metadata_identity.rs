@@ -159,6 +159,69 @@ pub fn cache_file_name(fingerprint: &str) -> String {
     format!("meta_{fingerprint}.sqlite")
 }
 
+/// 从连接记录构造缓存身份（**接线桥**，供保存 / 连接建立 / 删除路径统一注册）。
+///
+/// 输入对齐现有连接记录的最小集：驱动族 id + 连接 URL + principal + schema + 驱动默认端口。
+///
+/// - 文件型（sqlite / duckdb）：`File { path: url }`——归一在指纹计算时进行
+///   （去 `sqlite:` / `duckdb:` / `file:` scheme、去查询串与片段、`\`→`/`、Windows 折叠大小写）；
+/// - 网络型（mysql / postgres）：解析 `host[:port]/database`（`default_port` 参与归一，
+///   让 `h/db` 与 `h:3306/db` 视为同一身份）；schema 与 principal 只参与指纹，不进地址；
+/// - 不可共享（内存库 / 地址空 / 解析失败）→ `None`（调用方保持 conn_id 回退路径）。
+pub fn identity_from_url(
+    type_id: &str,
+    url: &str,
+    principal: Option<&str>,
+    schema: Option<&str>,
+    default_port: Option<u16>,
+) -> Option<ConnectionIdentity> {
+    let authority = match type_id.trim().to_ascii_lowercase().as_str() {
+        "sqlite" | "duckdb" => CacheAuthority::File { path: url.to_string() },
+        _ => {
+            let (host, port, database) = parse_net_url(url);
+            let host = host?;
+            if host.is_empty() {
+                return None;
+            }
+            CacheAuthority::Network(NetworkAuthority {
+                host,
+                port,
+                default_port,
+                database,
+                schema: schema.map(|s| s.to_string()),
+            })
+        }
+    };
+    Some(ConnectionIdentity::new(type_id, authority, principal))
+}
+
+/// 解析网络型连接 URL → `(host, port, database)`（`host` 为空返回 `None`）。
+///
+/// 规则：去 `scheme://` → 数据库为首个 `/` 之后（去尾 `/`）→ authority 其余部分
+/// 去凭据（`@` 之后）→ `host[:port]`（末位 `:` 分隔；IPv6 `[::1]:5432` 天然正确）。
+/// 不识别查询串 / 片段（那些只影响“怎么连”，不改变“是哪个库”）。
+fn parse_net_url(url: &str) -> (Option<String>, Option<u16>, Option<String>) {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let (authority, database) = match rest.find('/') {
+        Some(i) => (
+            &rest[..i],
+            // 查询串 / 片段只影响“怎么连”（`?sslmode=require` 等），不改变“是哪个库”
+            Some(rest[i + 1..].split(['?', '#']).next().unwrap_or("").trim_end_matches('/').to_string()),
+        ),
+        None => (rest, None),
+    };
+    let hostport = authority.rsplit('@').next().unwrap_or(authority);
+    let (host, port) = match hostport.rfind(':') {
+        Some(i) => (
+            Some(hostport[..i].to_string()),
+            hostport[i + 1..].parse::<u16>().ok(),
+        ),
+        None => (Some(hostport.to_string()), None),
+    };
+    let host = host.filter(|h| !h.trim().is_empty());
+    (host, port, database)
+}
+
 /// 文件型地址规范化（生产入口：Windows 折叠大小写）。
 pub fn normalize_file_path(path: &str) -> String {
     normalize_file_path_with(path, cfg!(windows))
@@ -470,5 +533,78 @@ mod tests {
             Some(cache_file_name(&fingerprint))
         );
         assert_eq!(cache_file_name("0123456789abcdef"), "meta_0123456789abcdef.sqlite");
+    }
+
+    // ==================== 接线桥：identity_from_url ====================
+
+    #[test]
+    fn url_bridge_network_parses_host_port_database() {
+        let identity = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal:3306/orders",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .expect("可共享身份");
+        assert_eq!(
+            identity.canonical_string().unwrap(),
+            "v1|mysql|net:db.internal:3306/orders/-|user:root"
+        );
+
+        // 无端口（回落 default_port）与显式默认端口必须同身份
+        let implicit = identity_from_url("mysql", "mysql://root:pw@db.internal/orders", Some("root"), None, Some(3306)).unwrap();
+        assert_eq!(implicit.fingerprint(), identity.fingerprint());
+
+        // 查询串 / 凭据不影响身份
+        let with_query = identity_from_url(
+            "mysql",
+            "mysql://root:pw@db.internal:3306/orders?ssl-mode=DISABLED",
+            Some("root"),
+            None,
+            Some(3306),
+        )
+        .unwrap();
+        assert_eq!(with_query.fingerprint(), identity.fingerprint());
+    }
+
+    #[test]
+    fn url_bridge_file_uses_raw_path_and_normalizes() {
+        let via_uri = identity_from_url("sqlite", "file:///C:/Data/Orders.DB", None, None, None).unwrap();
+        let via_plain = identity_from_url("sqlite", r"C:\Data\orders.db", None, None, None).unwrap();
+        if cfg!(windows) {
+            assert_eq!(via_uri.fingerprint(), via_plain.fingerprint());
+        }
+        assert!(via_plain.canonical_string().unwrap().starts_with("v1|sqlite|file:"));
+    }
+
+    #[test]
+    fn url_bridge_ephemeral_and_empty_are_never_shared() {
+        // 文件型：身份可构造（Some），但指纹为 None → 缓存不共享
+        assert_eq!(
+            identity_from_url("sqlite", ":memory:", None, None, None)
+                .expect("身份可构造")
+                .fingerprint(),
+            None
+        );
+        assert_eq!(
+            identity_from_url("duckdb", "file::memory:", None, None, None)
+                .expect("身份可构造")
+                .fingerprint(),
+            None
+        );
+        // 网络型地址空 → 无法构造身份
+        assert!(identity_from_url("mysql", "   ", None, None, None).is_none());
+    }
+
+    #[test]
+    fn url_bridge_principal_and_schema_join_identity() {
+        let base = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_ro"), None, Some(5432)).unwrap();
+        let other_user = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_rw"), None, Some(5432)).unwrap();
+        assert_ne!(base.fingerprint(), other_user.fingerprint());
+
+        let with_schema = identity_from_url("postgres", "postgres://u:p@db:5432/app", Some("app_ro"), Some("sales"), Some(5432)).unwrap();
+        assert_ne!(base.fingerprint(), with_schema.fingerprint());
+        assert!(with_schema.canonical_string().unwrap().ends_with("/sales|user:app_ro"));
     }
 }

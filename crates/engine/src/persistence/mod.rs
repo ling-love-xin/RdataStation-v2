@@ -29,6 +29,7 @@ pub mod log_store;
 pub mod metadata_cache;
 pub mod metadata_cache_pool;
 pub mod metadata_identity;
+pub mod metadata_identity_registry;
 pub mod navigator_state;
 pub mod network_store;
 pub mod plugin_store;
@@ -52,6 +53,13 @@ pub use metadata_cache::{
     MetadataCacheOps, SchemaObjectCounts, TriggerInfo,
 };
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
+pub use metadata_identity::{
+    ConnectionIdentity, NetworkAuthority, cache_file_name, identity_from_url,
+};
+pub use metadata_identity_registry::{
+    identity_canonical, identity_fingerprint, register_identity, registered_identity_count,
+    unregister_identity,
+};
 pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};
 pub use sql_template_store::{SqlTemplate, SqlTemplateStore};

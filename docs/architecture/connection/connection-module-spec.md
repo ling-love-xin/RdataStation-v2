@@ -145,7 +145,7 @@
 
 * **编辑改名不换 ID，新建重名被拦**（ID 内部化：界面只显示名称 + `P/G/GP` 来源短码，完整 ID 在结果行「详情」）。
 
-### 4.3 缓存身份指纹（规则已冻结）
+### 4.3 缓存身份指纹（已接线 2026-10-02）
 
 
 
@@ -156,6 +156,10 @@
 * 指纹只作缓存键、**不作主键**；DuckDB 文件结构指纹 = 定义 + 列结构（行数只作元信息）。
 
 * **ID 与指纹职责正交（决策 #112）**：连接 ID 保持 `G_/P_/GP_` 内部标识（回答"哪条配置记录"）；指纹回答"是哪个物理库"（驱动族 + 归一地址 + 用户 = URI+用户+数据库 的规范化超集）。**不采纳**「URI+用户+数据库 作连接唯一 ID」——会破坏编辑改名不换 ID / 凭据轮换 / 作用域双轨 / 存量库兼容。
+
+* **接线（决策 #113，2026-10-02）**：`identity_from_url(type_id, url, principal, schema, default_port)` 从连接记录构造身份（文件型去 scheme 归一、网络型解析 host/port/database、查询串剔除、驱动默认端口参与归一）；`metadata_identity_registry`（进程内 `conn_id → 指纹`）在保存 / 连接建立 / 更新时登记、删除时注销；`MetadataCacheManager::build_metadata_path` 已登记 → `meta_{fp}.sqlite`，未登记 / 不可共享（内存库、地址空）→ 回退 `conn_{safe_id}.sqlite`。
+
+* **域隔离（用户约束）**：指纹**只在作用域域内共享**——全局连接（`G_` / `GP_` 全局侧）→ `{system}/global_metadata/meta_{fp}.sqlite`，项目连接（`P_` / `GP_` 项目侧）→ `{project}/meta/connection_metadata/meta_{fp}.sqlite`；全局与项目**互不互通**，同一物理库在全局域与项目域各有一份缓存文件；`GP_` 项目快照侧的元数据信息归属项目域。
 
 * 缓存键：`MetadataCacheKey` 以 `conn_id` 为第一维（L1），L2 按身份指纹共享；LRU + 分级内存估算（Catalogs 100 / Tables 500 / Columns 1000 等，见 `metadata_cache.rs`）。
 
@@ -452,6 +456,10 @@ pub struct ConnectionDraft {
 | #102 | 在途操作离开 UI 线程（`BusyOp` + `background_executor` + `spawn_in`；关闭动作在结果回来之后） |
 | #105 | 行高先定 + 按窗口可用高度夹住                                                        |
 | #107 | 暂存行由 `list::List` + `ListItem` 渲染；行尾 ✕ 是 Button 不冒泡                     |
+| #110 | 新建默认作用域「仅项目」+ 地址预填项目根 + 作用域三态 `?` 徽标（规则 1，2026-10-02）     |
+| #111 | 保存 = 追加暂存条目 + 自动新建空草稿（规则 2，2026-10-02）；「保存并退出」才批量落库   |
+| #112 | ID 与指纹职责正交：**不采纳**「URI+用户+数据库 作连接唯一 ID」；指纹承载其共享意图（规则 3） |
+| #113 | 指纹接线 + **域隔离**（2026-10-02）：`conn_id → 指纹` 注册表 + `MetadataCacheManager` 切 `meta_{fp}.sqlite`；全局 / 项目目录分离互不互通，`GP_` 项目侧归项目域 |
 
 ## 12. 已知问题与待办（权威：架构 §14）
 

@@ -11,6 +11,7 @@ use engine::driver::traits::{DataSourceMeta, DynDatabase};
 use engine::persistence::MetadataCacheManager;
 use engine::persistence::connection_store::{self, RecentConnectionInput};
 use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
+use engine::driver::registry::DriverRegistry;
 use shared::error::{ConnectionError, CoreError};
 
 /// 保存全局连接输入参数
@@ -515,6 +516,12 @@ impl ConnectionService {
         // M3 本地加速：连接建立成功后注册 DuckDB Secret（联邦查询直连源库）。
         // 失败仅告警，不影响连接本身（加速是增强而非依赖）。
         crate::services::secret_integration::ensure_secret_registered(&conn_id, &db_type, &url);
+
+        // 指纹接线（2026-10-02）：登记 conn_id → 身份指纹，使指向同一物理库的多条连接
+        // （改名 / 改密码 / 加参数）在**作用域域内**共享同一份 L2 元数据缓存（meta_{fp}.sqlite）。
+        // 域隔离：全局连接在全局域、项目连接在项目域，互不互通；GP_ 项目侧走项目域。
+        // 不可共享（内存库 / 地址空）→ 不登记，缓存路径回退 conn_id 分文件。
+        self.register_identity_fingerprint(&conn_id, &db_type, &url, schema_name.as_deref());
 
         // NOTE: 元数据缓存不在连接时立即创建，改为懒加载。
         // 首次查询 schema / table / column 时通过 L2 cache write 路径自动创建。
@@ -1029,6 +1036,39 @@ impl ConnectionService {
             cache_manager.db_path()
         );
         Ok(())
+    }
+
+    /// 指纹接线：把 `conn_id → 身份指纹` 登记进进程内注册表。
+    ///
+    /// 供连接建立 / 保存路径调用；`MetadataCacheManager` 与 `NavCache` 建缓存路径时
+    /// 查注册表取指纹（`meta_{fp}.sqlite`），同一物理库的多条连接在作用域域内共享。
+    /// 不可共享（内存库 / 地址空 / 驱动族未知）时静默跳过 → 缓存回退 conn_id 分文件。
+    ///
+    /// `db_type` 用**驱动族 id**（`mysql` / `postgres` / `sqlite` / `duckdb`），
+    /// principal 优先取显式用户名（调用方在 `url` 已注入凭据时从 URL 提取）。
+    pub fn register_identity_fingerprint(
+        &self,
+        conn_id: &str,
+        db_type: &str,
+        url: &str,
+        schema_name: Option<&str>,
+    ) {
+        // principal：优先 URL 内凭据；无法提取时回落「匿名」（`-`，见 metadata_identity 归一）。
+        let principal = connection::url::extract_credentials_from_url(url).0;
+        // 驱动默认端口参与地址归一（`h/db` ≡ `h:3306/db`）；查不到默认端口时置 None。
+        let default_port = DriverRegistry::get(db_type)
+            .and_then(|f| f.descriptor().default_port);
+        let identity = engine::persistence::identity_from_url(
+            db_type,
+            url,
+            principal.as_deref(),
+            schema_name,
+            default_port,
+        );
+        if let Some(identity) = identity {
+            engine::persistence::register_identity(conn_id, &identity);
+            tracing::debug!(conn_id = %conn_id, "已登记元数据缓存身份指纹");
+        }
     }
 
     /// 获取现有连接

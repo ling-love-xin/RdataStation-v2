@@ -2,14 +2,16 @@
  * 连接元数据缓存管理模块
  *
  * 每个数据库连接都有独立的 SQLite 文件用于缓存元数据。
- * 元数据缓存的存储位置跟随连接信息：
- * - 全局连接：存储到 system/global_metadata/ 目录
- * - 项目连接：存储到 project/meta/connection_metadata/ 目录
+ * 元数据缓存的存储位置跟随连接信息（**指纹接线 2026-10-02**）：
+ * - 全局连接：存储到 system/global_metadata/meta_{fp}.sqlite（域内按身份指纹共享）
+ * - 项目连接：存储到 project/meta/connection_metadata/meta_{fp}.sqlite（同上）
+ * - 不可共享 / 未登记指纹：回退 conn_{safe_id}.sqlite（每连接独立）
  *
  * 设计理由：
  * - 大型数据库（如 Oracle）可能有 10 万+ 张表，元数据记录可达数百万条
  * - 独立文件避免单文件过大，提高查询性能
- * - 跟随连接信息，简化项目迁移
+ * - 指纹键让指向同一物理库的多条连接（改名 / 改密码 / 加参数）共享一份缓存
+ * - 域隔离：全局与项目目录分离，指纹只在作用域域内共享（用户约束 2026-10-02）
  */
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,9 +77,16 @@ impl MetadataCacheManager {
 
     /// 构建元数据缓存数据库路径
     ///
-    /// 元数据文件跟随连接信息：
-    /// - 全局连接：<RDS_HOME>/data/system/global_metadata/conn_{id}.sqlite
-    /// - 项目连接：{project_path}/meta/connection_metadata/conn_{id}.sqlite
+    /// **指纹接线（2026-10-02）**：先查进程内注册表（`metadata_identity_registry`），
+    /// 已登记指纹 → `meta_{fp}.sqlite`（同一物理库的多条连接**在作用域域内**共享一份）；
+    /// 未登记 / 不可共享（内存库、地址空）→ 回退 `conn_{safe_id}.sqlite`（每连接独立）。
+    ///
+    /// **域隔离（用户约束）**：存储目录按作用域域分离——
+    /// - 全局连接（`G_` / `GP_` 全局侧）：`<RDS_HOME>/data/system/global_metadata/`
+    /// - 项目连接（`P_` / `GP_` 项目侧）：`{project_path}/meta/connection_metadata/`
+    ///
+    /// 指纹只在**域内**共享：同一物理库的全局连接共享全局目录的 `meta_{fp}.sqlite`，
+    /// 项目连接共享项目目录的 `meta_{fp}.sqlite`——全局与项目**互不互通**。
     fn build_metadata_path(
         conn_id: &str,
         connection_type: ConnectionType,
@@ -108,9 +117,15 @@ impl MetadataCacheManager {
             )))
         })?;
 
-        // conn_id 可能包含 Windows 文件系统非法字符（如 : @ / 等）
-        let safe_id = Self::sanitize_conn_id_for_filename(conn_id);
-        Ok(dir.join(format!("conn_{}.sqlite", safe_id)))
+        // 指纹路径（域内共享）；不可共享 / 未登记时回退 conn_id 分文件。
+        let file = match crate::persistence::identity_fingerprint(conn_id) {
+            Some(fp) => format!("meta_{}.sqlite", fp),
+            None => {
+                let safe_id = Self::sanitize_conn_id_for_filename(conn_id);
+                format!("conn_{}.sqlite", safe_id)
+            }
+        };
+        Ok(dir.join(file))
     }
 
     /// 打开元数据缓存数据库
@@ -4197,6 +4212,77 @@ mod tests {
             .to_string_lossy()
             .contains("meta/connection_metadata"));
         assert!(manager.db_path().to_string_lossy().contains(conn_id));
+        Ok(())
+    }
+
+    /// 指纹接线：登记身份后路径切到 `meta_{fp}.sqlite`（域内共享）。
+    #[test]
+    fn fingerprint_registration_switches_to_meta_path() {
+        use crate::persistence::metadata_identity::identity_from_url;
+        use crate::persistence::{register_identity, unregister_identity};
+
+        let conn_id = "G_conn_fp_wire_001";
+        // 先保证未登记（回退路径含 conn_id）
+        let fallback =
+            MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
+        assert!(fallback.db_path().file_name().unwrap().to_string_lossy().starts_with("conn_"));
+
+        // 登记身份后 → meta_{fp}.sqlite
+        let identity = identity_from_url("mysql", "mysql://root:pw@db.internal:3306/orders", Some("root"), None, Some(3306)).expect("可共享");
+        let fp = identity.fingerprint().unwrap();
+        register_identity(conn_id, &identity);
+
+        let manager = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
+        assert_eq!(
+            manager.db_path().file_name().unwrap().to_string_lossy(),
+            format!("meta_{}.sqlite", fp)
+        );
+
+        // 指向同一物理库的另一条连接（不同名称）共享同一文件
+        let alias = identity_from_url("mysql", "mysql://root:pw@db.internal/orders?sslmode=require", Some("root"), None, Some(3306)).expect("可共享");
+        register_identity("G_conn_fp_wire_002", &alias);
+        let alias_mgr = MetadataCacheManager::new("G_conn_fp_wire_002", ConnectionType::Global, None).unwrap();
+        assert_eq!(alias_mgr.db_path(), manager.db_path());
+
+        // 注销后回退 conn_id 分文件
+        unregister_identity(conn_id);
+        unregister_identity("G_conn_fp_wire_002");
+        let after = MetadataCacheManager::new(conn_id, ConnectionType::Global, None).unwrap();
+        assert!(after.db_path().file_name().unwrap().to_string_lossy().starts_with("conn_"));
+    }
+
+    /// 域隔离：同一物理库在全局域与项目域是**两个不同文件**（互不互通）。
+    #[test]
+    fn same_physical_db_is_isolated_between_global_and_project_domains() -> Result<(), CoreError> {
+        use crate::persistence::metadata_identity::identity_from_url;
+        use crate::persistence::{register_identity, unregister_identity};
+
+        let identity = identity_from_url("sqlite", r"D:\data\orders.db", None, None, None).expect("可共享");
+        let global_conn = "G_conn_fp_dom_001";
+        let project_conn = "P_conn_fp_dom_001";
+        register_identity(global_conn, &identity);
+        register_identity(project_conn, &identity);
+
+        let project_path = test_temp_dir("fp_domain")
+            .to_str()
+            .ok_or_else(|| CoreError::common(CommonError::General("Invalid path".to_string())))?
+            .to_string();
+
+        let global_mgr = MetadataCacheManager::new(global_conn, ConnectionType::Global, None)?;
+        let project_mgr =
+            MetadataCacheManager::new(project_conn, ConnectionType::Project, Some(&project_path))?;
+
+        // 文件名相同（同一指纹），但目录不同 → 不同文件，互不共享
+        assert_eq!(
+            global_mgr.db_path().file_name(),
+            project_mgr.db_path().file_name()
+        );
+        assert_ne!(global_mgr.db_path(), project_mgr.db_path());
+        assert!(global_mgr.db_path().to_string_lossy().contains("global_metadata"));
+        assert!(project_mgr.db_path().to_string_lossy().contains("meta/connection_metadata"));
+
+        unregister_identity(global_conn);
+        unregister_identity(project_conn);
         Ok(())
     }
 

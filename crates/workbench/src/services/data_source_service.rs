@@ -575,6 +575,14 @@ impl DataSourceService {
             }
             // 标签同步到连接组织存储（connection_tags 为权威检索源；JSON 字段保留兼容）。
             sync_connection_tags(self.global_db, &conn_id, input.tags.as_deref(), None);
+            // 指纹接线：登记身份指纹（同一物理库多连接域内共享缓存）。
+            register_identity_fp(
+                &conn_id,
+                &input.db_type,
+                &url,
+                input.username.as_deref(),
+                input.schema_name.as_deref(),
+            );
             Some(conn_id)
         } else {
             None
@@ -590,6 +598,14 @@ impl DataSourceService {
             let proj = project_connection_from_input(&pid, input, &url)?;
             store.create_connection(&proj).await?;
             sync_connection_tags(self.global_db, &pid, input.tags.as_deref(), Some(&path));
+            // 指纹接线：项目域登记（GP_ 项目快照侧同样走项目域）。
+            register_identity_fp(
+                &pid,
+                &input.db_type,
+                &url,
+                input.username.as_deref(),
+                input.schema_name.as_deref(),
+            );
             tracing::info!(target: "data_source_service", conn_id = %pid, name = %input.name, "数据源已保存（项目侧）");
             return Ok(pid);
         }
@@ -701,6 +717,14 @@ impl DataSourceService {
             let proj = project_connection_from_input(conn_id, input, &url)?;
             store.update_connection(&proj).await?;
             sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), Some(path));
+            // 指纹接线：更新后重新登记（地址 / 主体变化 → 指纹变化 → 新缓存文件）。
+            register_identity_fp(
+                conn_id,
+                &input.db_type,
+                &url,
+                input.username.as_deref(),
+                input.schema_name.as_deref(),
+            );
             return Ok(());
         }
 
@@ -751,6 +775,14 @@ impl DataSourceService {
         }
         // 标签同步（更新路径同样以连接组织存储为权威检索源）。
         sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), None);
+        // 指纹接线：更新后重新登记（地址 / 主体变化 → 指纹变化 → 新缓存文件）。
+        register_identity_fp(
+            conn_id,
+            &input.db_type,
+            &url,
+            input.username.as_deref(),
+            input.schema_name.as_deref(),
+        );
         Ok(())
     }
 
@@ -771,6 +803,8 @@ impl DataSourceService {
             store.delete_connection(conn_id).await?;
             // 一致性清理：标签 + 分组成员（避免孤儿数据）。
             cleanup_connection_org(self.global_db, conn_id, Some(path));
+            // 指纹接线：注销身份登记（已落盘缓存文件不受影响，由「缓存管理」清理）。
+            engine::persistence::unregister_identity(conn_id);
             return Ok(DeleteResult {
                 conn_id: conn_id.to_string(),
                 removed_secret: false,
@@ -792,6 +826,8 @@ impl DataSourceService {
         if let Some(path) = project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
             cleanup_connection_org(self.global_db, conn_id, Some(path));
         }
+        // 指纹接线：注销身份登记（已落盘缓存文件不受影响，由「缓存管理」清理）。
+        engine::persistence::unregister_identity(conn_id);
 
         tracing::info!(target: "data_source_service", conn_id, "数据源已删除");
         Ok(DeleteResult {
@@ -1316,6 +1352,35 @@ pub fn parse_url_host_port_db(
         None => (Some(hostport.to_string()), None),
     };
     (host, port, Some(database))
+}
+
+/// 指纹接线（2026-10-02）：登记 `conn_id → 身份指纹`，使指向同一物理库的多条连接
+/// 在**作用域域内**共享同一份 L2 元数据缓存（`meta_{fp}.sqlite`）。
+///
+/// principal 优先显式用户名，回退 URL 内凭据；schema 参与指纹（可见对象集合）。
+/// 不可共享（内存库 / 地址空 / 驱动族未知）→ 静默跳过（缓存路径回退 conn_id 分文件）。
+/// 域隔离由缓存目录保证（全局域 / 项目域分离，互不互通；GP_ 项目侧走项目域）。
+fn register_identity_fp(
+    conn_id: &str,
+    db_type: &str,
+    url: &str,
+    username: Option<&str>,
+    schema_name: Option<&str>,
+) {
+    let principal = username
+        .map(|s| s.to_string())
+        .or_else(|| connection::url::extract_credentials_from_url(url).0);
+    let default_port = engine::driver::registry::DriverRegistry::get(db_type)
+        .and_then(|f| f.descriptor().default_port);
+    if let Some(identity) = engine::persistence::identity_from_url(
+        db_type,
+        url,
+        principal.as_deref(),
+        schema_name,
+        default_port,
+    ) {
+        engine::persistence::register_identity(conn_id, &identity);
+    }
 }
 
 /// 由 SaveInput 构造项目连接（密码经 AES-256-GCM 加密；G_ 定义共享引用）。
