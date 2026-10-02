@@ -17,9 +17,10 @@ description: RdataStation v2 架构硬约束：crate 依赖方向、模块归属
 
 ```
 app ───────────────► 所有 Feature crates
-Feature crates ────► engine, shared, gpui-kit（UI 基础设施）
+Feature crates ────► engine, shared, gpui-kit, workbench_shell（UI 基础设施）
 engine ────────────► shared
 shared ────────────► (gpui-kit / 第三方)
+workbench_shell ───► gpui-kit / paths（外壳 crate：不得依赖任何特性 crate）
 任何 crate ────────► paths（运行时数据路径唯一解析点，无内部依赖）
 ```
 
@@ -31,6 +32,25 @@ shared ────────────► (gpui-kit / 第三方)
 - **运行时数据路径只能走 `paths::*`**：不得在 crate 里自己拼 `APPDATA` / `LOCALAPPDATA` / `env::temp_dir()` / `"RdataStation"` 目录名（口径与目录布局见 `docs/architecture/runtime/data-paths.md`）
 - 开发期数据与临时目录由 `.cargo/config.toml` 的 `[env]` 钉在仓库内（`RDS_HOME=.rds`、`TEMP/TMP/TMPDIR=.rds/tmp`）；系统盘上的历史测试临时目录用 `tools/clean-temp.sh` 清
 - **测试不得写产品数据根**：`cargo test` 已由 `paths` 的 `test-support` feature 自动隔离数据根（各成员在 `[dev-dependencies]` 打开，有静态契约兜住）；新增成员若依赖 `paths`/`engine`/`shared`，必须同步打开它
+
+## 多轨 UI 依赖规范（统一底座，多轨并行开发必读）
+
+多个开发轨（AI 会话 / 轨道）各自产出 UI 视图时，**一律走同一底座，不得各写各的**：
+
+| 层 | 内容 | 来源 | 消费方式 |
+| --- | --- | --- | --- |
+| 组件 / 主题 | `gpui-kit` 0.7.0（TabBar / Switch / Input / List / Button / Dock / …，65 个组件模块） | crates.io 锁定 0.7.0 | `gpui_kit::*` / `gpui_kit::component::*` / `gpui_kit::base::*`（API 与差异见 `gpui-kit-dev` skill、`docs/architecture/ui/gpui-kit-0.7-migration.md`） |
+| 产品语义层 | `workbench_shell`：`ui.rs` 尺寸常量（`workbench_shell::ui::*`）、`product_tokens` 语义色、`tree` 行级原语（`active_bar` / `disclosure_icon` / `indent_spacer` / `RowHeight`） | 外壳 crate（**不得依赖任何特性 crate**） | Feature 直接 `workbench_shell::ui::*` 等；workbench 内沿用 `crate::ui::*` 重导 |
+| 业务视图 | 各 Feature 自己的 view / model / service / command | 所在 Feature crate | 由 workbench 装配，**Feature 不反向依赖 workbench 的 `panels/` / `components/` / `view.rs`** |
+
+硬约束（新代码一律遵守）：
+
+1. **组件选型**：能用的组件一律用 gpui-kit（禁止手搓 div + on_click / 自绘 tab / 自绘开关）；清单与选型表见 `gpui-kit-dev` skill。
+2. **尺寸 / 颜色 / 行原语**：结构尺寸先进 `workbench_shell::ui.rs` 登记倍率；颜色走 `cx.theme().colors.*` / `product_tokens`；行级原语（激活条 / 展开箭头 / 缩进 / 行高）先看 `workbench_shell::tree` 有没有——**新增树 / 列表行不要在各面板各写一份**（导航 M4 / 草稿箱 M5 / 资产库 M6 / Mock M7 已统一消费）。
+3. **零裸值**：视图代码不得出现裸 `px(N.)`、裸 `font_size * N.`、裸 hex/rgb（`ui_contract` 契约测试扫描 `view.rs` / `panels/`；新增 panels 子模块需登记）。
+4. **存量欠债不照抄**：`components/connection_dialog/` 与 `project/ui.rs` 是存量欠债（裸 px / 裸色值，见 `connection-dialog-architecture.md` §14 #14）——**新增代码以本规范 + 各 skill 为样例，不要以这两个目录的既有写法为样例**；旧欠债按需清理，不全量重写。
+5. **协作不依赖 view**：Feature 间的 UI 协作走 command / event / shared service（不直接引用对方 view 类型）。
+6. **测试骨架**：视图测试用 `#[gpui_kit::test]` + `TestAppContext`（骨架见 `crates/project/src/ui/tests.rs`；headless 对话框用例断言「层真渲染 + 直接调提交函数」）；依赖在 `[dev-dependencies]` 打开 `gpui-kit = { features = ["test-support"] }`。
 
 ## crate 归属判定标准
 
