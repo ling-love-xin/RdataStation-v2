@@ -1,0 +1,13 @@
+[package]
+name = "rds-property"
+version.workspace = true
+edition.workspace = true
+description = "属性面板模块：对象类型 → 属性页描述模型、数据容器与注册表契约（自 M4 抽取）"
+
+[dependencies]
+# 序列化：PropertyKind 参与 PropertyRef（database）序列化
+serde.workspace = true
+
+[dev-dependencies]
+# kind 序列化往返测试
+serde_json.workspace = true

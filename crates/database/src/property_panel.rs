@@ -1,49 +1,19 @@
-//! rds-database — 对象属性面板（M4）。
+//! rds-database — 对象属性面板取数（M4 数据生产者）。
 //!
-//! DBeaver 式：上部属性网格 + 下部子实体（列 / 索引 / 约束）。
-//! 数据来自 `MetadataService`（实时内省）+ `PropertyRef`（导航节点上下文）。
-//! 视图形态为编辑区右侧停靠面板，见 `docs/architecture/database/database-navigator-prototype-design.md` §7。
+//! 领域模型 / 数据容器 / 描述模型 / 注册表契约在 `rds-property`
+//! （见 `docs/architecture/property/property-module-spec.md`）。
+//! 本模块是 **M4 场景的数据生产者**：实时内省取数（`load_properties`）+ 对象类型 → 属性页注册表
+//! 实现（`PropertyRegistryImpl`，含权限 / 依赖等暂不支持页的置灰声明）。
+//! 视图形态为编辑区右侧停靠面板（`workbench/panels/editor.rs`）。
 
 use crate::metadata_service::MetadataService;
-use crate::model::{NavSource, PropertyKind, PropertyRef};
+use crate::model::{NavSource, PropertyRef};
 use engine::driver::traits::SchemaObjectKind;
+use property::{
+    ObjectProperties, PageId, PropertyKind, PropertyPage, PropertyRegistry, PropertyRow,
+    PropertySection, PropertyTable, SupportState,
+};
 use shared::error::CoreError;
-
-/// 属性网格中的一行（label / value）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyRow {
-    pub label: String,
-    pub value: String,
-}
-
-/// 子实体表格（列 / 索引 / 约束）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyTable {
-    pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-}
-
-/// 子实体分区。
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertySection {
-    pub label: String,
-    pub table: PropertyTable,
-}
-
-/// 一个对象的完整属性（供属性面板渲染）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObjectProperties {
-    /// 标题（对象名）
-    pub title: String,
-    /// 对象类型文案（BASE TABLE / VIEW / COLUMN …）
-    pub object_type: String,
-    /// 来源标签（项目 (P) / 全局 (G) / 共享 (GP)）
-    pub source_label: String,
-    /// 上部属性网格
-    pub properties: Vec<PropertyRow>,
-    /// 下部子实体
-    pub sections: Vec<PropertySection>,
-}
 
 fn row(label: &str, value: impl Into<String>) -> PropertyRow {
     PropertyRow {
@@ -162,18 +132,21 @@ pub async fn load_properties(
             properties.push(row("归属域", source.clone()));
 
             sections.push(PropertySection {
+                id: PageId::Columns,
                 label: format!("列 ({})", columns.len()),
                 table: columns_table(&columns),
             });
 
             if !indexes.is_empty() {
                 sections.push(PropertySection {
+                    id: PageId::Indexes,
                     label: format!("索引 ({})", indexes.len()),
                     table: indexes_table(&indexes),
                 });
             }
             if !constraints.is_empty() {
                 sections.push(PropertySection {
+                    id: PageId::Constraints,
                     label: format!("约束 ({})", constraints.len()),
                     table: constraints_table(&constraints),
                 });
@@ -190,6 +163,7 @@ pub async fn load_properties(
                 .flatten()
             {
                 Some(text) => sections.push(PropertySection {
+                    id: PageId::Ddl,
                     label: "DDL（源版）".to_string(),
                     table: text_table("DDL", &text),
                 }),
@@ -202,6 +176,7 @@ pub async fn load_properties(
                         &indexes,
                     );
                     sections.push(PropertySection {
+                        id: PageId::Ddl,
                         label: "DDL（合成）".to_string(),
                         table: text_table("DDL", &composed),
                     });
@@ -285,6 +260,7 @@ pub async fn load_properties(
             }
             match source_text {
                 Some(text) => sections.push(PropertySection {
+                    id: PageId::Source,
                     label: "源码".to_string(),
                     table: text_table("源码", &text),
                 }),
@@ -400,22 +376,91 @@ fn constraints_table(constraints: &[engine::driver::traits::ConstraintDetail]) -
     PropertyTable { headers, rows }
 }
 
-/// 属性面板状态（懒加载一次，按请求 key 失效重载）。
+/// 对象类型 → 属性页集合的注册表实现（M4 数据生产者侧）。
 ///
-/// 由消费方（编辑区右侧面板）持有，本 crate 只管类型——原先住在导航视图里，
-/// 但它是**属性面板**的状态，与导航树无关。
+/// 页集合是**描述**：渲染方只遍历它；权限 / 依赖当前无内省实现 → `Unsupported`，
+/// 先绘制、置灰标注（`docs/architecture/property/property-module-spec.md` §8）。
 #[derive(Default)]
-pub struct PropertyState {
-    pub loaded_for: Option<String>,
-    pub props: Option<ObjectProperties>,
-    pub error: Option<String>,
-    /// 是否正在后台加载（渲染「加载中…」）。
-    pub loading: bool,
+pub struct PropertyRegistryImpl;
+
+impl PropertyRegistry for PropertyRegistryImpl {
+    fn pages_for(&self, kind: PropertyKind) -> Vec<PropertyPage> {
+        let supported = |id: PageId, title: &str| PropertyPage {
+            id,
+            title: title.to_string(),
+            state: SupportState::Supported,
+        };
+        let unsupported = |id: PageId, title: &str| PropertyPage {
+            id,
+            title: title.to_string(),
+            state: SupportState::Unsupported,
+        };
+        let general = supported(PageId::General, "通用");
+        match kind {
+            PropertyKind::Connection => vec![general, unsupported(PageId::Privileges, "权限")],
+            PropertyKind::Table => vec![
+                general,
+                supported(PageId::Columns, "列"),
+                supported(PageId::Indexes, "索引"),
+                supported(PageId::Constraints, "约束"),
+                supported(PageId::Ddl, "DDL"),
+                unsupported(PageId::Privileges, "权限"),
+                unsupported(PageId::Dependencies, "依赖"),
+            ],
+            PropertyKind::View => vec![
+                general,
+                supported(PageId::Columns, "列"),
+                supported(PageId::Ddl, "DDL"),
+                unsupported(PageId::Privileges, "权限"),
+            ],
+            PropertyKind::Routine => vec![general, supported(PageId::Source, "源码")],
+            _ => vec![general],
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use engine::driver::traits::{ColumnDetail, ForeignKeyRef};
+    use super::*;
+
+    /// 注册表：表对象带「列 / 索引 / 约束 / DDL」支持页，且「权限 / 依赖」先绘制、置灰。
+    #[test]
+    fn table_registry_lists_supported_and_unsupported_pages() {
+        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::Table);
+        let ids: Vec<PageId> = pages.iter().map(|p| p.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                PageId::General,
+                PageId::Columns,
+                PageId::Indexes,
+                PageId::Constraints,
+                PageId::Ddl,
+                PageId::Privileges,
+                PageId::Dependencies,
+            ]
+        );
+        assert!(pages
+            .iter()
+            .all(|p| p.state == SupportState::Supported
+                || matches!(p.id, PageId::Privileges | PageId::Dependencies)));
+        let privileges = pages
+            .iter()
+            .find(|p| p.id == PageId::Privileges)
+            .expect("权限页已注册");
+        assert_eq!(privileges.state, SupportState::Unsupported, "权限暂不可用置灰");
+    }
+
+    /// 连接对象至少带「通用」+ 灰置「权限」。
+    #[test]
+    fn connection_registry_has_privileges_placeholder() {
+        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::Connection);
+        assert!(pages.iter().any(|p| p.id == PageId::General));
+        assert!(pages
+            .iter()
+            .any(|p| p.id == PageId::Privileges && p.state == SupportState::Unsupported));
+    }
 
     fn col(name: &str, ordinal: u32) -> ColumnDetail {
         ColumnDetail {

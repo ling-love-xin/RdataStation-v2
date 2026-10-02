@@ -58,9 +58,10 @@ use crate::commands::{
     NavReorderUp, NavUp,
 };
 use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
-    PropertyRef, PropertyRequest,
+    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
+    PropertyRequest,
 };
+use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost};
 use crate::nav_rows::{NavRow, search_hit_row_id, search_hit_row_key};
 use crate::sql_gen::DmlKind;

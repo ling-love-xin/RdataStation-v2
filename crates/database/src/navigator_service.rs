@@ -24,8 +24,9 @@ use shared::error::CoreError;
 use crate::cache::NavCache;
 use crate::metadata_service::MetadataService;
 use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
+    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyRef,
 };
+use property::PropertyKind;
 
 /// 无 Catalog 层级时的退化容器名（SQLite / DuckDB 等）。
 const FALLBACK_CONTAINER: &str = "main";
@@ -1006,7 +1007,7 @@ impl NavigatorService {
         conn_label: &str,
         driver: &str,
         db_type: Option<&str>,
-    ) -> Result<crate::property_panel::ObjectProperties, CoreError> {
+    ) -> Result<property::ObjectProperties, CoreError> {
         crate::property_panel::load_properties(&self.metadata, ref_, conn_label, driver, db_type)
             .await
     }

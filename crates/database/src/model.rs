@@ -9,6 +9,7 @@
 //! - 分组多对多 + 标签多值（§2.2）
 //! - 导航状态持久化（§6.4）
 
+use property::PropertyKind;
 use serde::{Deserialize, Serialize};
 
 /// 连接来源标识（决定可见性与生命周期）。
@@ -264,22 +265,10 @@ pub enum NavPath {
     },
 }
 
-/// 属性面板可展示的对象类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PropertyKind {
-    Connection,
-    Catalog,
-    Schema,
-    Table,
-    View,
-    Column,
-    /// 存储过程 / 函数
-    Routine,
-    /// 序列
-    Sequence,
-    /// 触发器
-    Trigger,
-}
+/// 属性面板可展示的对象类型（自 `property` crate 引用，定义见 `crates/property/src/model.rs`）。
+///
+/// 抽取（2026-10-03）：原定义在本文件，随属性面板独立为 `rds-property` 迁出；
+/// `PropertyRef` / `PropertyRequest` 仍留本 crate（导航域输入契约）。
 
 /// 属性面板定位信息（由导航服务在构建节点时填充）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,7 +297,7 @@ pub struct PropertyRequest {
 /// 统一引用 → 属性面板定位：`ObjectKind` 与 `PropertyKind` 的**唯一映射处**。
 ///
 /// 两个枚举属于不同域，不该合并：`ObjectKind`（engine）是数据层的**可寻址闭集**，
-/// `PropertyKind`（本 crate）是属性面板的**展示类别**（多一个 `Connection`，并被面板的分支判断用）。
+/// `PropertyKind`（`rds-property`）是属性面板的**展示类别**（多一个 `Connection`，并被面板的分支判断用）。
 /// 所以映射只留这一份，导航搜索结果（`nav_view`）与 Quick Open（`workbench`）都调它。
 pub fn property_ref_of(object: &ObjectRef) -> PropertyRef {
     let kind = match object.kind {

@@ -9,6 +9,8 @@ description = "M5 查询工作台：连接管理、结果集、SQL 执行编排"
 engine.workspace = true
 connection.workspace = true
 database.workspace = true
+# 属性面板模型与契约（抽取 2026-10-03）：EditorPanel 渲染 / Quick Open 消费
+property.workspace = true
 project.workspace = true
 insight.workspace = true
 shared.workspace = true

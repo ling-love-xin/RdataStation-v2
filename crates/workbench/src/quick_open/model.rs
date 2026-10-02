@@ -621,7 +621,7 @@ fn is_word_start(title: &str, pos: usize) -> bool {
 mod tests {
     use super::*;
     use crate::quick_open::commands::command_specs;
-    use database::model::PropertyKind;
+    use property::PropertyKind;
 
     #[test]
     fn parse_reads_mode_from_first_char_only() {

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 属性面板 · 可交互原型</title>
+<style>
+  :root {
+    --bg: #1e1e1e; --panel: #252526; --tab-bar: #2d2d30; --border: #3c3c3c;
+    --fg: #d4d4d4; --muted: #8a8a8a; --accent: #d66a5a; --danger: #f14c4c;
+    --row-hover: #2a2d2e; --disabled: #5a5a5a;
+  }
+  html[data-theme="light"] {
+    --bg: #f5f5f5; --panel: #ffffff; --tab-bar: #ececec; --border: #e0e0e0;
+    --fg: #333333; --muted: #8a8a8a; --accent: #c0503f; --danger: #d93025;
+    --row-hover: #f0f0f0; --disabled: #bdbdbd;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--fg); height: 100vh; display: flex; gap: 16px; padding: 16px;
+  }
+  /* 左侧：对象选择器（模拟导航树选中对象） */
+  .sidebar {
+    width: 240px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .sidebar h3 { font-size: 12px; font-weight: 600; padding: 12px 14px 8px; color: var(--muted); }
+  .tree { flex: 1; overflow: auto; padding: 0 6px 10px; }
+  .tree-node { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .tree-node:hover { background: var(--row-hover); }
+  .tree-node.active { background: var(--row-hover); color: var(--accent); }
+  .tree-node .t { color: var(--muted); }
+  .tree-children { margin-left: 16px; }
+  .btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  /* 右侧：属性面板模拟 */
+  .panel {
+    flex: 1; max-width: 560px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    background: var(--tab-bar); border-bottom: 1px solid var(--border);
+  }
+  .panel-head .obj { font-weight: 600; font-size: 13px; }
+  .panel-head .kind { color: var(--muted); font-size: 12px; }
+  .panel-head .spacer { flex: 1; }
+  .close { cursor: pointer; color: var(--muted); font-size: 14px; padding: 0 4px; }
+  .close:hover { color: var(--danger); }
+  .tabs { display: flex; background: var(--tab-bar); border-bottom: 1px solid var(--border); padding: 0 8px; }
+  .tab {
+    padding: 8px 14px; font-size: 12px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; user-select: none; white-space: nowrap;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab.unsupported { color: var(--disabled); text-decoration: line-through; }
+  .tab.unsupported.active { color: var(--disabled); border-bottom-color: var(--disabled); text-decoration: none; }
+  .content { flex: 1; overflow: auto; padding: 14px; font-size: 12.5px; line-height: 1.6; }
+  /* 属性网格 */
+  table.grid { width: 100%; border-collapse: collapse; }
+  table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.grid td.k { width: 96px; color: var(--muted); white-space: nowrap; }
+  /* 分区表格 */
+  table.rows { width: 100%; border-collapse: collapse; }
+  table.rows th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11.5px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  table.rows td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  pre.ddl {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .placeholder {
+    border: 1px dashed var(--border); border-radius: 6px; padding: 24px 16px;
+    text-align: center; color: var(--muted);
+  }
+  .placeholder .ico { font-size: 22px; margin-bottom: 8px; }
+  .hint { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+  .badge { display: inline-block; font-size: 10.5px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); margin-left: 8px; }
+  .loading { color: var(--muted); padding: 20px; text-align: center; }
+</style>
+</head>
+<body data-theme="dark">
+
+<div class="sidebar">
+  <h3>导航（模拟选中对象）</h3>
+  <div class="tree">
+    <div class="tree-node" data-obj="conn"><span class="t">◆</span> SQLite 演示库</div>
+    <div class="tree-children">
+      <div class="tree-node" data-obj="table-orders"><span class="t">▾</span> 表</div>
+      <div class="tree-children">
+        <div class="tree-node" data-obj="table-orders"><span class="t">▤</span> orders</div>
+        <div class="tree-node" data-obj="table-parent"><span class="t">▤</span> parent</div>
+      </div>
+      <div class="tree-node" data-obj="view-vorders"><span class="t">▾</span> 视图</div>
+      <div class="tree-children">
+        <div class="tree-node" data-obj="view-vorders"><span class="t">▧</span> v_orders</div>
+      </div>
+      <div class="tree-node" data-obj="col-tag"><span class="t">▸</span> orders <span class="t">·</span> tag</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <span class="obj" id="obj-name">orders</span>
+    <span class="kind" id="obj-kind">表</span>
+    <span class="badge" id="obj-state">已连接</span>
+    <span class="spacer"></span>
+    <span class="close" title="关闭面板">✕</span>
+  </div>
+  <div class="tabs" id="tabs"></div>
+  <div class="content" id="content"></div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px;">
+  <button class="btn" id="theme-btn">切换主题（亮/暗）</button>
+  <div class="hint" style="width:150px;">
+    原型说明：页签集合由对象类型驱动（注册表数据），
+    「权限 / 依赖」为灰置占位（驱动能力未实现，先绘制不可用）。
+    选择左侧对象可切换对象与页签。
+  </div>
+</div>
+
+<script>
+// ---- 原型数据：与 SQLite 全链路验证 fixture 同构 ----
+const OBJECTS = {
+  conn: {
+    name: "SQLite 演示库", kind: "连接", tabs: ["通用", "权限"],
+    general: [["名称", "SQLite 演示库"], ["数据库类型", "SQLite"], ["归属域", "全局"], ["驱动", "sqlite"], ["地址", "…/rds_nav_prop_sqlite.db"]],
+    unsupported: ["权限"],
+  },
+  "table-orders": {
+    name: "orders", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "权限", "依赖"],
+    general: [["名称", "orders"], ["类型", "表"], ["列数", "4"], ["行数", "2"], ["归属域", "全局"], ["限定名", "main.orders"]],
+    columns: { head: ["#", "名称", "类型", "可空", "主键", "外键", "默认值", "注释"],
+      rows: [
+        ["1", "id", "INTEGER", "否", "✔", "", "", ""],
+        ["2", "parent_id", "INTEGER", "是", "", "→ parent(id)", "", ""],
+        ["3", "tag", "TEXT", "是", "", "", "", ""],
+        ["4", "note", "TEXT", "是", "", "", "'x'", ""],
+      ]},
+    indexes: { head: ["名称", "唯一", "列"],
+      rows: [["idx_orders_tag", "✔", "tag"]]},
+    constraints: { head: ["名称", "类型", "定义"],
+      rows: [["", "外键", "parent_id REFERENCES parent(id)"], ["", "主键", "PRIMARY KEY (id)"]]},
+    ddl: "CREATE TABLE orders (id INTEGER PRIMARY KEY, parent_id INTEGER, tag TEXT, note TEXT DEFAULT 'x', FOREIGN KEY (parent_id) REFERENCES parent(id))",
+    unsupported: ["权限", "依赖"],
+  },
+  "table-parent": {
+    name: "parent", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "权限", "依赖"],
+    general: [["名称", "parent"], ["类型", "表"], ["列数", "2"], ["行数", "2"], ["归属域", "全局"], ["限定名", "main.parent"]],
+    columns: { head: ["#", "名称", "类型", "可空", "主键", "外键", "默认值", "注释"],
+      rows: [["1", "id", "INTEGER", "否", "✔", "", "", ""], ["2", "name", "TEXT", "否", "", "", "", ""]]},
+    indexes: { head: ["名称", "唯一", "列"], rows: []},
+    constraints: { head: ["名称", "类型", "定义"], rows: [["", "主键", "PRIMARY KEY (id)"]]},
+    ddl: "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    unsupported: ["权限", "依赖"],
+  },
+  "view-vorders": {
+    name: "v_orders", kind: "视图", tabs: ["通用", "列", "DDL", "权限"],
+    general: [["名称", "v_orders"], ["类型", "视图"], ["列数", "2"], ["归属域", "全局"], ["限定名", "main.v_orders"]],
+    columns: { head: ["#", "名称", "类型", "可空", "注释"],
+      rows: [["1", "id", "INTEGER", "是", ""], ["2", "tag", "TEXT", "是", ""]]},
+    ddl: "CREATE VIEW v_orders AS SELECT id, tag FROM orders",
+    unsupported: ["权限"],
+  },
+  "col-tag": {
+    name: "tag", kind: "列", tabs: ["通用"],
+    general: [["名称", "tag"], ["所属表", "orders"], ["类型", "TEXT"], ["可空", "是"], ["主键", "否"], ["外键", "否"], ["引用", ""], ["默认值", ""], ["注释", ""]],
+    unsupported: [],
+  },
+};
+
+const TAB_LABEL = { "通用": "通用", "列": "列", "索引": "索引", "约束": "约束", "DDL": "DDL", "权限": "权限", "依赖": "依赖" };
+
+let current = "table-orders";
+let activeTab = "通用";
+
+function render() {
+  const obj = OBJECTS[current];
+  const el = document.querySelector('.tree-node[data-obj="' + current + '"]');
+  document.querySelectorAll('.tree-node').forEach(n => n.classList.toggle('active', n === el));
+  document.getElementById('obj-name').textContent = obj.name;
+  document.getElementById('obj-kind').textContent = obj.kind;
+  document.getElementById('obj-state').textContent = "已连接";
+
+  // tabs
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  obj.tabs.forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'tab' + (t === activeTab ? ' active' : '') + (obj.unsupported.includes(t) ? ' unsupported' : '');
+    d.textContent = TAB_LABEL[t] || t;
+    d.onclick = () => { if (t !== activeTab) { activeTab = t; render(); } };
+    tabs.appendChild(d);
+  });
+  if (!obj.tabs.includes(activeTab)) { activeTab = obj.tabs[0]; render(); return; }
+  renderContent(obj);
+}
+
+function renderContent(obj) {
+  const c = document.getElementById('content');
+  if (obj.unsupported.includes(activeTab)) {
+    c.innerHTML =
+      '<div class="placeholder"><div class="ico">🔒</div>' +
+      '「' + activeTab + '」查看与操作暂不支持（驱动能力未实现）' +
+      '<div class="hint">页签先绘制、置灰不可用；驱动补内省能力位后由注册表翻转为可用，渲染零改动。</div></div>';
+    return;
+  }
+  if (activeTab === '通用') {
+    let html = '<table class="grid">';
+    obj.general.forEach(([k, v]) => html += '<tr><td class="k">' + k + '</td><td>' + v + '</td></tr>');
+    html += '</table>';
+    c.innerHTML = html;
+  } else if (activeTab === '列' || activeTab === '索引' || activeTab === '约束') {
+    const t = obj[activeTab === '列' ? 'columns' : activeTab];
+    if (!t) { c.innerHTML = '<div class="placeholder">该对象无「' + activeTab + '」数据</div>'; return; }
+    let html = '<table class="rows"><tr>' + t.head.map(h => '<th>' + h + '</th>').join('') + '</tr>';
+    t.rows.forEach(r => html += '<tr>' + r.map(cell => '<td>' + cell + '</td>').join('') + '</tr>');
+    html += '</table>';
+    if (!t.rows.length) html = '<div class="placeholder">（无）</div>';
+    c.innerHTML = html;
+  } else if (activeTab === 'DDL') {
+    c.innerHTML = '<pre class="ddl">' + obj.ddl + '</pre>';
+  }
+}
+
+document.querySelectorAll('.tree-node').forEach(n => {
+  n.onclick = () => { current = n.dataset.obj; activeTab = OBJECTS[current].tabs[0]; render(); };
+});
+
+document.getElementById('theme-btn').onclick = () => {
+  const t = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.body.dataset.theme = t;
+};
+
+render();
+</script>
+</body>
+</html>

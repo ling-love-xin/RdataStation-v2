@@ -16,8 +16,9 @@ use super::{
 };
 use crate::commands::NavClearSearch;
 use crate::model::{
-    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyKind,
+    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef,
 };
+use property::PropertyKind;
 use crate::nav_rows::NavRow;
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};

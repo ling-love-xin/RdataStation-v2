@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::model::{NavNodeKind, NavPath, ObjectRef, PropertyRef};
 use crate::nav_host::ConnectionProbe;
-use crate::property_panel::ObjectProperties;
+use property::ObjectProperties;
 use crate::sql_gen::DmlKind;
 use engine::persistence::FtsSearchResult;
 

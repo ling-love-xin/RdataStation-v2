@@ -16,7 +16,8 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, IconName};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, IconName, Size, Sizable as _, Theme};
 use gpui_kit::*;
 
 use crate::components::connection_dialog;
@@ -32,7 +33,9 @@ use super::Shared;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
 use database::model::PropertyRequest;
 use database::nav_view::NavDragPayload;
-use database::property_panel::PropertyState;
+use database::property_panel::PropertyRegistryImpl;
+use property::{ObjectProperties, PageId, PropertyPage, PropertyRegistry as _, SupportState};
+use property::PropertyState;
 use scratchpad::{
     ScratchpadDiffView, ScratchpadSearchView,
     scratchpad_view::{render_scratchpad_diff_pane, render_scratchpad_search_pane},
@@ -409,7 +412,11 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
+    /// 右侧停靠属性面板（DBeaver 式：tab 页签 + 描述驱动渲染）。
+    ///
+    /// 页集合来自 [`PropertyRegistry`]（`PropertyRegistryImpl`），渲染只遍历页描述，
+    /// 不按 `PropertyKind` 写分支；暂不支持页（权限 / 依赖）先绘制、置灰标注
+    /// （`docs/architecture/property/property-module-spec.md` §8）。
     fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
         let Some(target) = self.property_target.borrow().clone() else {
             return div();
@@ -421,7 +428,6 @@ impl EditorPanel {
         let border = cx.theme().colors.border;
         let bg = cx.theme().colors.background;
         let tabbar = cx.theme().colors.tab_bar;
-        let danger = cx.theme().colors.danger;
 
         let st = self.property.borrow();
         let title = st
@@ -435,80 +441,26 @@ impl EditorPanel {
             .map(|p| p.object_type.clone())
             .unwrap_or_default();
 
+        // 页集合（描述驱动）：只依赖对象类型，顺序即 tab 顺序。
+        let pages = PropertyRegistryImpl.pages_for(target.property.kind);
+        let active = st.active_page;
+        let active_index = pages.iter().position(|p| p.id == active).unwrap_or(0);
+
+        let theme = cx.theme();
         let mut body = div().v_flex().w_full().gap_1();
         if st.loading {
             body = body.child(div().text_xs().text_color(muted).child("加载中…"));
         }
         if let Some(err) = &st.error {
-            body = body.child(div().text_xs().text_color(danger).child(err.clone()));
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.danger)
+                    .child(err.clone()),
+            );
         }
         if let Some(props) = &st.props {
-            for row in &props.properties {
-                body = body.child(
-                    div()
-                        .h_flex()
-                        .items_start()
-                        .w_full()
-                        .gap_2()
-                        .text_xs()
-                        .child(
-                            div()
-                                .w(rems(4.5))
-                                .flex_none()
-                                .text_color(muted)
-                                .child(row.label.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(fg)
-                                .child(row.value.clone()),
-                        ),
-                );
-            }
-            for section in &props.sections {
-                body = body.child(
-                    div()
-                        .pt_2()
-                        .pb_1()
-                        .w_full()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(fg)
-                        .child(section.label.clone()),
-                );
-                body = body.child(
-                    div()
-                        .h_flex()
-                        .w_full()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(muted)
-                        .children(
-                            section
-                                .table
-                                .headers
-                                .iter()
-                                .map(|h| div().flex_1().min_w_0().child(h.clone())),
-                        ),
-                );
-                for data_row in &section.table.rows {
-                    body = body.child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(fg)
-                            .children(
-                                data_row
-                                    .iter()
-                                    .map(|c| div().flex_1().min_w_0().child(c.clone())),
-                            ),
-                    );
-                }
-            }
+            body = body.child(self.render_property_page_body(active, &pages, props, theme));
         }
 
         div()
@@ -565,6 +517,35 @@ impl EditorPanel {
             )
             .child(
                 div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        TabBar::new("property-tabs")
+                            .underline()
+                            .with_size(Size::Small)
+                            .selected_index(active_index)
+                            .children(
+                                pages.iter().map(|p| Tab::new().label(p.title.clone())),
+                            )
+                            .on_click({
+                                let entity = cx.entity();
+                                let property = self.property.clone();
+                                let pages = pages.clone();
+                                move |ix, _window, app| {
+                                    if let Some(page) = pages.get(*ix) {
+                                        property.borrow_mut().active_page = page.id;
+                                        entity.update(app, |_, cx| cx.notify());
+                                    }
+                                }
+                            }),
+                    ),
+            )
+            .child(
+                div()
                     .id("property-body")
                     .flex_1()
                     .min_h_0()
@@ -574,6 +555,118 @@ impl EditorPanel {
                     .overflow_y_scroll()
                     .child(body),
             )
+    }
+
+    /// 当前页内容（描述驱动；Unsupported 页给灰置占位，不发起任何内省查询）。
+    fn render_property_page_body(
+        &self,
+        page_id: PageId,
+        pages: &[PropertyPage],
+        props: &ObjectProperties,
+        theme: &Theme,
+    ) -> Div {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+
+        let Some(page) = pages.iter().find(|p| p.id == page_id) else {
+            return div();
+        };
+        let mut body = div().v_flex().w_full().gap_1();
+        if page.state == SupportState::Unsupported {
+            // 能力未实现：先绘制、置灰标注（不发起任何内省查询）。
+            body = body.child(
+                div()
+                    .w_full()
+                    .py_2()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("「{}」查看与操作暂不支持（驱动能力未实现）", page.title)),
+            );
+            return body;
+        }
+        match page_id {
+            PageId::General => {
+                for row in &props.properties {
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .items_start()
+                            .w_full()
+                            .gap_2()
+                            .text_xs()
+                            .child(
+                                div()
+                                    .w(rems(4.5))
+                                    .flex_none()
+                                    .text_color(muted)
+                                    .child(row.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(fg)
+                                    .child(row.value.clone()),
+                            ),
+                    );
+                }
+            }
+            PageId::Columns
+            | PageId::Indexes
+            | PageId::Constraints
+            | PageId::Ddl
+            | PageId::Source => {
+                if let Some(section) = props.sections.iter().find(|s| s.id == page_id) {
+                    body = body.child(
+                        div()
+                            .pt_2()
+                            .pb_1()
+                            .w_full()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(fg)
+                            .child(section.label.clone()),
+                    );
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(muted)
+                            .children(
+                                section
+                                    .table
+                                    .headers
+                                    .iter()
+                                    .map(|h| div().flex_1().min_w_0().child(h.clone())),
+                            ),
+                    );
+                    for data_row in &section.table.rows {
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .w_full()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(fg)
+                                .children(
+                                    data_row
+                                        .iter()
+                                        .map(|c| div().flex_1().min_w_0().child(c.clone())),
+                                ),
+                        );
+                    }
+                } else {
+                    body = body.child(div().text_xs().text_color(muted).child("（无）"));
+                }
+            }
+            PageId::Privileges | PageId::Dependencies => {
+                // 正常被 Unsupported 分支拦住；兜底灰置。
+                body = body.child(div().text_xs().text_color(muted).child("（暂不可用）"));
+            }
+        }
+        body
     }
 }
 

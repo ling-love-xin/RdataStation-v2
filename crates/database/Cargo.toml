@@ -8,6 +8,8 @@ description = "M4 数据库导航：元数据浏览器、对象属性面板"
 # 依赖键别名，使 v1 迁移代码中的 `engine::` / `shared::` 引用直接生效
 engine.workspace = true
 shared.workspace = true
+# 属性面板模型与契约（抽取 2026-10-03）：kind / 数据容器 / 描述模型 / 注册表 trait
+property.workspace = true
 
 # ===== GPUI-kit 视图层 =====
 # 导航视图自带（下沉后本 crate 就是它的家）：宿主端口 trait 要命名 `Window` / `App`，

@@ -7924,6 +7924,7 @@ dependencies = [
  "rds-workbench",
  "tokio",
  "tracing",
+ "windows-sys 0.59.0",
  "winresource",
 ]
 
@@ -7960,6 +7961,7 @@ dependencies = [
  "gpui-kit",
  "rds-engine",
  "rds-paths",
+ "rds-property",
  "rds-shared",
  "rds-workbench-shell",
  "serde",
@@ -8124,6 +8126,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-property"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rds-scratchpad"
 version = "0.2.0"
 dependencies = [
@@ -8203,6 +8213,7 @@ dependencies = [
  "rds-mock",
  "rds-paths",
  "rds-project",
+ "rds-property",
  "rds-scratchpad",
  "rds-settings",
  "rds-shared",
