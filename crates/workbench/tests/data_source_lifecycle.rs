@@ -245,6 +245,106 @@ fn delete_removes_connection_and_cleans_secret() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 门控规则（2026-10-03）：duckdb 文件源**无对应扩展** → 即使开启本地加速也不注册 Secret。
+#[test]
+fn duckdb_file_source_never_registers_secret_even_with_federation() {
+    let dir = temp_dir("duckdb-nosecret");
+    let service = make_service(&dir);
+    let rt = runtime();
+
+    let mut i = input("fed_duck", "duckdb", "D:/data/store.duckdb");
+    i.use_duckdb_fed = Some(true);
+    let id = rt.block_on(service.save(&i, None)).expect("save");
+
+    let secret_db = dir.join("secret-target.duckdb");
+    let secret_dir = dir.join("secrets");
+    let mgr = connection::secret::SecretManager::open_with_dir(&secret_db, Some(&secret_dir))
+        .expect("open secret db");
+    assert!(
+        mgr.list().expect("list").is_empty(),
+        "duckdb 文件源无 scanner 扩展，不应注册 Secret"
+    );
+    drop(mgr);
+
+    // 更新（fed 保持开）同样不注册
+    let mut u = input("fed_duck", "duckdb", "D:/data/renamed.duckdb");
+    u.use_duckdb_fed = Some(true);
+    rt.block_on(service.update(&id, &u, None)).expect("update");
+    let mgr = connection::secret::SecretManager::open_with_dir(&secret_db, Some(&secret_dir))
+        .expect("reopen secret db");
+    assert!(mgr.list().expect("list").is_empty(), "更新也不应注册");
+    drop(mgr);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 门控规则（2026-10-03）：项目侧保存（P_）开启加速且类型有扩展 →
+/// Secret 注册到**项目分析库**（{项目}/.RSmeta/analytics.duckdb），全局分析库不受影响；
+/// 项目侧删除 → 从项目分析库移除。
+#[test]
+fn project_side_save_registers_secret_to_project_analysis_db_and_delete_removes() {
+    let dir = temp_dir("proj-secret");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+
+    let mut i = input("proj_pg", "postgres", "postgres://u:p@127.0.0.1:5432/pgdb");
+    i.scope = ConnectionScope::Project;
+    i.use_duckdb_fed = Some(true);
+    let id = rt
+        .block_on(service.save(&i, Some(&project_root.to_string_lossy())))
+        .expect("save");
+    assert!(id.starts_with("P_conn_"), "项目侧应生成 P_ 前缀：{id}");
+
+    // 项目分析库 + 其 secrets/ 子目录（resolve_target(Some(项目分析库)) 的布局）
+    let project_analysis_db = ProjectDatabaseManager::analysis_db_path(&project_root);
+    let project_secret_dir = project_root.join(".RSmeta").join("secrets");
+    assert!(
+        project_analysis_db.exists(),
+        "项目侧注册应真实打开项目分析库：{}",
+        project_analysis_db.display()
+    );
+    let mgr = connection::secret::SecretManager::open_with_dir(
+        &project_analysis_db,
+        Some(&project_secret_dir),
+    )
+    .expect("open project secret db");
+    let secrets = mgr.list().expect("list project secrets");
+    assert_eq!(secrets.len(), 1, "项目侧保存应注册到项目分析库：{secrets:?}");
+    assert_eq!(secrets[0].name, id.to_lowercase());
+    drop(mgr);
+
+    // 全局分析库不应有这条 Secret（作用域隔离）
+    let global_secret_db = dir.join("secret-target.duckdb");
+    let global_secret_dir = dir.join("secrets");
+    let gmgr = connection::secret::SecretManager::open_with_dir(
+        &global_secret_db,
+        Some(&global_secret_dir),
+    )
+    .expect("open global secret db");
+    assert!(
+        gmgr.list().expect("list global").is_empty(),
+        "项目侧 Secret 不应进全局分析库"
+    );
+    drop(gmgr);
+
+    // 项目侧删除 → 从项目分析库移除
+    let result = rt
+        .block_on(service.delete(&id, Some(&project_root.to_string_lossy())))
+        .expect("delete");
+    assert!(result.removed_secret, "项目侧删除应清理项目分析库 Secret：{result:?}");
+    let mgr = connection::secret::SecretManager::open_with_dir(
+        &project_analysis_db,
+        Some(&project_secret_dir),
+    )
+    .expect("reopen project secret db");
+    assert!(mgr.list().expect("list").is_empty(), "项目分析库 Secret 应被移除");
+    drop(mgr);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn save_without_federation_does_not_register_secret() {
     let dir = temp_dir("no-register");

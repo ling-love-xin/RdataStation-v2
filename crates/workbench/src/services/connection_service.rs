@@ -327,8 +327,18 @@ impl ConnectionService {
                             .await
                         {
                             Ok(()) => {
-                                crate::services::secret_integration::ensure_secret_registered(
-                                    &conn_id, &db_type, &url,
+                                // 门控注册（2026-10-03 规则）：加速开 + 有对应扩展才注册；
+                                // 目标分析库按作用域（G_→全局 / P_、GP_→项目）。
+                                crate::services::secret_integration::ensure_secret_registered_gated(
+                                    crate::services::secret_integration::analysis_db_for_scope(
+                                        &conn_id,
+                                        conn_info.project_id.as_deref(),
+                                    )
+                                    .as_deref(),
+                                    &conn_id,
+                                    &db_type,
+                                    &url,
+                                    conn_info.use_duckdb_fed,
                                 );
                                 return Ok((conn_id, db));
                             }
@@ -514,8 +524,19 @@ impl ConnectionService {
         }
 
         // M3 本地加速：连接建立成功后注册 DuckDB Secret（联邦查询直连源库）。
-        // 失败仅告警，不影响连接本身（加速是增强而非依赖）。
-        crate::services::secret_integration::ensure_secret_registered(&conn_id, &db_type, &url);
+        // 门控规则（2026-10-03）：加速开 + 有对应 DuckDB 扩展才注册；目标分析库按作用域
+        // （全局侧 → 全局分析库，项目侧 P_/GP_ → 项目分析库）；失败仅告警，不影响连接本身。
+        crate::services::secret_integration::ensure_secret_registered_gated(
+            crate::services::secret_integration::analysis_db_for_scope(
+                &conn_id,
+                project_path.as_deref(),
+            )
+            .as_deref(),
+            &conn_id,
+            &db_type,
+            &url,
+            use_duckdb_fed.unwrap_or(false),
+        );
 
         // 指纹接线（2026-10-02）：登记 conn_id → 身份指纹，使指向同一物理库的多条连接
         // （改名 / 改密码 / 加参数）在**作用域域内**共享同一份 L2 元数据缓存（meta_{fp}.sqlite）。
@@ -1112,6 +1133,24 @@ impl ConnectionService {
     pub async fn close_connection(&self, conn_id: &str) -> Result<(), CoreError> {
         // 清理隧道守卫（释放本地端口 + 取消后台任务）
         self.release_tunnels(conn_id, "关闭连接").await;
+
+        // 断开回收 DuckDB Secret（2026-10-03 规则："加速关 / 断开 → 移除"）。
+        // 目标分析库按作用域（P_/GP_ 项目侧需要项目路径，从连接信息取）；
+        // 未注册过不算失败；重连时连接路径会按门控重新注册。
+        let project_id = self
+            .list_connections()
+            .await
+            .into_iter()
+            .find(|info| info.id == conn_id)
+            .and_then(|info| info.project_id);
+        let _ = crate::services::secret_integration::remove_connection_secret_at(
+            crate::services::secret_integration::analysis_db_for_scope(
+                conn_id,
+                project_id.as_deref(),
+            )
+            .as_deref(),
+            conn_id,
+        );
 
         // 从连接管理器中移除连接（缓存文件保留）
         self.manager.remove_connection(&conn_id.to_string()).await;

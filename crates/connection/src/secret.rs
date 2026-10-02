@@ -85,11 +85,21 @@ impl SecretManager {
     ///
     /// `secret_dir` 为 `None` 时用 DuckDB 默认目录；指定后每次打开都需传同一目录
     /// 才能看到已注册的 Secret（目录是会话级设置）。
+    ///
+    /// **载体用内存连接**（2026-10-03 修复）：DuckDB 的 `PERSISTENT` Secret 实际落盘在
+    /// `secret_directory`（独立文件），与主库文件无关；若用 `Connection::open(db_path)`
+    /// 打开目标分析库文件，会与运行中持有该文件的连接（`GlobalDatabaseManager` /
+    /// `ProjectDatabaseManager` / `DuckDBManager`）撞 Windows 文件锁
+    /// （`File is already open`，实测：项目侧注册全挂、全局侧生产同样会挂）。
+    /// 内存连接 + 显式 `secret_directory` 即可读写同一份 Secret 存储，不碰文件句柄。
     pub fn open_with_dir(
         db_path: impl AsRef<std::path::Path>,
         secret_dir: Option<&std::path::Path>,
     ) -> SecretResult<Self> {
-        let conn = duckdb::Connection::open(db_path)?;
+        // db_path 保留为签名一部分：语义上仍是"目标分析库"（Secret 归属），
+        // 但实际连接载体为内存库（见上方说明）；目录归属由 secret_dir 表达。
+        let _ = db_path;
+        let conn = duckdb::Connection::open_in_memory()?;
         if let Some(dir) = secret_dir {
             std::fs::create_dir_all(dir)
                 .map_err(|e| SecretError::Invalid(format!("创建 Secret 目录失败: {e}")))?;

@@ -204,6 +204,60 @@ pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
     ensure_secret_registered_at(None, conn_id, db_type, url);
 }
 
+/// 该驱动类型是否有对应的 DuckDB 扩展（本地加速 / 联邦扫描可用）。
+///
+/// 门控依据（用户规则 2026-10-03）：Secret 注册**只按是否有对应扩展**放行——
+/// 实现与唯一来源在 `engine::duckdb::accel::AccelKind::has_federable_extension`
+/// （mysql / postgres / sqlite 有官方 scanner 扩展，oracle 走社区扩展；
+/// **duckdb 文件源无扩展 → 默认不注册**；未知类型同样不注册）。
+pub fn has_federable_extension(db_type: &str) -> bool {
+    engine::duckdb::accel::AccelKind::has_federable_extension(db_type)
+}
+
+/// 连接作用域 → 本地加速实例（目标分析库）。
+///
+/// 用户规则（2026-10-03）：本地加速使用的实例是**全局或项目的分析库**——
+/// 全局侧连接（`G_`）→ 全局分析库（`{system}/shared.duckdb` 系）；
+/// 项目侧连接（`P_` / `GP_` 项目快照）→ 项目分析库（`{项目}/.RSmeta/analytics.duckdb`）。
+/// 与身份指纹的域隔离同源（`GP_` 项目侧归项目域）。
+pub fn analysis_db_for_scope(conn_id: &str, project_path: Option<&str>) -> Option<std::path::PathBuf> {
+    if engine::persistence::id_prefix::uses_project_storage(conn_id) {
+        project_path.map(|p| {
+            engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path(
+                std::path::Path::new(p),
+            )
+        })
+    } else {
+        analysis_db_path()
+    }
+}
+
+/// 门控注册（**统一入口**）：加速开 + 有对应扩展才注册，项目 / 全局同规则。
+///
+/// 规则（2026-10-03 用户拍板，替代 §14 #38 旧"按 use_duckdb_fed 单条件"）：
+/// 1. **默认不注册**——`use_duckdb_fed` 未开 → 直接返回（无论项目还是全局）；
+/// 2. **无对应 DuckDB 扩展 → 不注册**（duckdb 文件源 / 未知类型，即使加速开）；
+/// 3. `target` 由调用方按作用域传入（[`analysis_db_for_scope`]），失败仅告警不影响连接。
+pub fn ensure_secret_registered_gated(
+    target: Option<&std::path::Path>,
+    conn_id: &str,
+    db_type: &str,
+    url: &str,
+    use_duckdb_fed: bool,
+) {
+    if !use_duckdb_fed {
+        return; // 默认不注册（加速关）
+    }
+    if !has_federable_extension(db_type) {
+        tracing::info!(
+            "[secret] 连接 {}（{db_type}）无对应 DuckDB 扩展，跳过 Secret 注册",
+            conn_id
+        );
+        return;
+    }
+    ensure_secret_registered_at(target, conn_id, db_type, url);
+}
+
 /// 会话级 Secret 注册（可指定目标库；`None` = 全局分析库）。
 ///
 /// Secret 以 `PERSISTENT` 方式落盘到 Secret 目录，跨会话可用；
@@ -349,5 +403,37 @@ mod tests {
         assert_eq!(sanitize_secret_name(""), "conn");
         // DuckDB 未加引号的标识符折叠为小写，净化统一小写避免回读不一致。
         assert_eq!(sanitize_secret_name("G_conn_Demo"), "g_conn_demo");
+    }
+
+    // ===== 2026-10-03 门控规则（用户拍板：按扩展门控 + 作用域分析库 + 默认不注册）=====
+
+    #[test]
+    fn test_has_federable_extension_by_scanner_extensions() {
+        // 有对应 DuckDB 扩展 → 可注册（本地加速 / 联邦扫描可用）
+        assert!(has_federable_extension("mysql"));
+        assert!(has_federable_extension("postgres"));
+        assert!(has_federable_extension("sqlite"));
+        assert!(has_federable_extension("postgres_native"), "驱动 id 也应归一");
+        // duckdb 文件源：内核自带能力、无扩展 → 默认不注册
+        assert!(!has_federable_extension("duckdb"));
+        // 未知 / 无法联邦的类型 → 不注册
+        assert!(!has_federable_extension("mongo"));
+        assert!(!has_federable_extension(""));
+    }
+
+    #[test]
+    fn test_analysis_db_for_scope_routes_by_domain() {
+        // 全局侧（G_）→ 全局分析库（真实路径由环境决定，只验证 Some）
+        assert!(analysis_db_for_scope("G_conn_prod", None).is_some());
+        // 项目侧（P_ / GP_ 项目快照）→ 项目分析库 {项目}/.RSmeta/analytics.duckdb
+        let p = analysis_db_for_scope("P_conn_a1b2c3d4", Some("C:/proj/rds-demo"))
+            .expect("项目路径存在");
+        assert!(p.ends_with(".RSmeta\\analytics.duckdb") || p.ends_with(".RSmeta/analytics.duckdb"));
+        let gp = analysis_db_for_scope("GP_conn_prod_20261003", Some("C:/proj/rds-demo"))
+            .expect("GP_ 项目侧应归项目域");
+        assert_eq!(gp, p, "GP_ 项目快照侧与 P_ 同为项目分析库（域隔离同源）");
+        // 项目侧但项目路径缺失 → None（调用方跳过，不静默写错位置）
+        assert!(analysis_db_for_scope("P_conn_x", None).is_none());
+        assert!(analysis_db_for_scope("GP_conn_x_20261003", None).is_none());
     }
 }

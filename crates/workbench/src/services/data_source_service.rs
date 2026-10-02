@@ -564,15 +564,15 @@ impl DataSourceService {
                     schema_name: input.schema_name.as_deref(),
                 })
                 .await?;
-            // Secret 联动：仅开启本地加速时注册（失败仅告警）。
-            if input.use_duckdb_fed.unwrap_or(false) {
-                super::secret_integration::ensure_secret_registered_at(
-                    self.analysis_db.as_deref(),
-                    &conn_id,
-                    &input.db_type,
-                    &url,
-                );
-            }
+            // Secret 联动：门控注册（2026-10-03 规则 = 加速开 + 有对应 DuckDB 扩展才注册；
+            // 目标为全局分析库；失败仅告警，不影响连接）。
+            super::secret_integration::ensure_secret_registered_gated(
+                self.analysis_db.as_deref(),
+                &conn_id,
+                &input.db_type,
+                &url,
+                input.use_duckdb_fed.unwrap_or(false),
+            );
             // 标签同步到连接组织存储（connection_tags 为权威检索源；JSON 字段保留兼容）。
             sync_connection_tags(self.global_db, &conn_id, input.tags.as_deref(), None);
             // 指纹接线：登记身份指纹（同一物理库多连接域内共享缓存）。
@@ -598,6 +598,17 @@ impl DataSourceService {
             let proj = project_connection_from_input(&pid, input, &url)?;
             store.create_connection(&proj).await?;
             sync_connection_tags(self.global_db, &pid, input.tags.as_deref(), Some(&path));
+            // Secret 联动（项目侧补齐，2026-10-03）：与全局侧同规则门控——
+            // 加速开 + 有对应扩展才注册，目标为**项目分析库**（{项目}/.RSmeta/analytics.duckdb）。
+            let project_analysis_db =
+                super::secret_integration::analysis_db_for_scope(&pid, Some(&path));
+            super::secret_integration::ensure_secret_registered_gated(
+                project_analysis_db.as_deref(),
+                &pid,
+                &input.db_type,
+                &url,
+                input.use_duckdb_fed.unwrap_or(false),
+            );
             // 指纹接线：项目域登记（GP_ 项目快照侧同样走项目域）。
             register_identity_fp(
                 &pid,
@@ -717,6 +728,25 @@ impl DataSourceService {
             let proj = project_connection_from_input(conn_id, input, &url)?;
             store.update_connection(&proj).await?;
             sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), Some(path));
+            // Secret 联动（项目侧补齐，2026-10-03）：同规则门控——加速开 + 有扩展 → 注册；
+            // 加速关 → 移除（避免残留旧凭据）；目标为项目分析库。
+            let project_analysis_db =
+                super::secret_integration::analysis_db_for_scope(conn_id, Some(path));
+            let fed_on = input.use_duckdb_fed.unwrap_or(false);
+            if fed_on {
+                super::secret_integration::ensure_secret_registered_gated(
+                    project_analysis_db.as_deref(),
+                    conn_id,
+                    &input.db_type,
+                    &url,
+                    true,
+                );
+            } else {
+                let _ = super::secret_integration::remove_connection_secret_at(
+                    project_analysis_db.as_deref(),
+                    conn_id,
+                );
+            }
             // 指纹接线：更新后重新登记（地址 / 主体变化 → 指纹变化 → 新缓存文件）。
             register_identity_fp(
                 conn_id,
@@ -759,13 +789,14 @@ impl DataSourceService {
             })
             .await?;
 
-        // 联邦加速开关联动：开 → 注册；关 → 清理（避免残留旧凭据）。
+        // 联邦加速开关联动（门控规则 2026-10-03）：开 + 有对应扩展 → 注册；关 → 清理（避免残留旧凭据）。
         if input.use_duckdb_fed.unwrap_or(false) {
-            super::secret_integration::ensure_secret_registered_at(
+            super::secret_integration::ensure_secret_registered_gated(
                 self.analysis_db.as_deref(),
                 conn_id,
                 &input.db_type,
                 &url,
+                true,
             );
         } else {
             let _ = super::secret_integration::remove_connection_secret_at(
@@ -803,12 +834,22 @@ impl DataSourceService {
             store.delete_connection(conn_id).await?;
             // 一致性清理：标签 + 分组成员（避免孤儿数据）。
             cleanup_connection_org(self.global_db, conn_id, Some(path));
+            // Secret 清理（项目侧补齐，2026-10-03）：目标为项目分析库；未注册过不算失败。
+            let removed_secret = super::secret_integration::remove_connection_secret_at(
+                super::secret_integration::analysis_db_for_scope(conn_id, Some(path))
+                    .as_deref(),
+                conn_id,
+            );
             // 指纹接线：注销身份登记（已落盘缓存文件不受影响，由「缓存管理」清理）。
             engine::persistence::unregister_identity(conn_id);
             return Ok(DeleteResult {
                 conn_id: conn_id.to_string(),
-                removed_secret: false,
-                message: "项目连接已删除".to_string(),
+                removed_secret,
+                message: if removed_secret {
+                    "项目连接已删除，DuckDB Secret 已清理".to_string()
+                } else {
+                    "项目连接已删除".to_string()
+                },
             });
         }
 

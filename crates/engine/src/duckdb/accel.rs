@@ -128,6 +128,18 @@ impl AccelKind {
         }
     }
 
+    /// 该驱动类型是否有对应的 DuckDB 扩展（联邦扫描可用）——**公开门控**（Secret 注册等跨 crate 消费）。
+    ///
+    /// 2026-10-03 用户规则：DuckDB Secret 注册门控依据 = **是否有对应扩展**；
+    /// `mysql` / `postgres` / `sqlite` 有官方 scanner 扩展；`oracle` 走社区扩展（oracle_scanner）；
+    /// **duckdb 文件源是内核自带能力、无扩展 → 不算**（文件源不需要 Secret）。
+    /// 未知 / 无法联邦的类型 → false（不猜：猜错会把凭据注册到不支持的 Secret 类型上）。
+    pub fn has_federable_extension(db_type: &str) -> bool {
+        Self::from_db_type(db_type)
+            .map(|kind| kind.extension().is_some())
+            .unwrap_or(false)
+    }
+
     /// **扫描器认的** URL scheme——**不是**应用的驱动 id
     ///
     /// 应用里 `db_type` 可能是原生驱动的 id（`mysql_native` / `postgres_native`），而 DuckDB
@@ -857,6 +869,21 @@ mod tests {
         assert!(ensure_session(&source).is_err(), "挂不上的源要报错");
         // 失败不写进“扩展失败”表（那是另一个维度：挂载失败由执行路径每次如实报）
         assert!(extension_state(AccelKind::DuckDb).is_ok());
+    }
+
+    /// 扩展门控（2026-10-03 用户规则：Secret 注册按"是否有对应扩展"放行）
+    #[test]
+    fn has_federable_extension_gates_by_scanner_extension() {
+        // 官方 scanner 扩展：mysql / postgres / sqlite → 可注册
+        assert!(AccelKind::has_federable_extension("mysql"));
+        assert!(AccelKind::has_federable_extension("postgres"));
+        assert!(AccelKind::has_federable_extension("sqlite"));
+        assert!(AccelKind::has_federable_extension("postgres_native"), "驱动 id 也应归一");
+        // duckdb 文件源：内核自带能力、无扩展 → 不注册（默认不注册）
+        assert!(!AccelKind::has_federable_extension("duckdb"));
+        // 未知 / 无法联邦 → 不注册（不猜）
+        assert!(!AccelKind::has_federable_extension(""));
+        assert!(!AccelKind::has_federable_extension("nosql"));
     }
 
     /// 凭据脱敏：DuckDB 的报错会把 `ATTACH` 参数原样回显，口令不能跟着出去
