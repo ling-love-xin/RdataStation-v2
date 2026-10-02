@@ -313,11 +313,13 @@ impl Connector for SshTunnelConnector {
 
 /// SSH 客户端处理器
 ///
-/// 处理 SSH 连接期间的服务端事件，集成 known_hosts 校验
+/// 处理 SSH 连接期间的服务端事件，集成 known_hosts 校验（决策 #37 TOFU）
 struct SshClientHandler {
     host: String,
     port: u16,
     known_hosts: super::known_hosts::KnownHosts,
+    /// Host Key 校验策略（TOFU 默认 / Strict 严格 / AllowUnknown 内网退路）
+    host_key_check: super::known_hosts::HostKeyCheck,
 }
 
 // russh 0.63 起 Handler 改用原生 async trait（不再需要 #[async_trait]），
@@ -335,27 +337,78 @@ impl russh::client::Handler for SshClientHandler {
         let key_b64 = public_key.public_key_base64();
         let key_type = key_b64.split_whitespace().next().unwrap_or("unknown");
 
-        let verified = self.known_hosts.verify(&self.host, self.port, &public_key);
+        match self
+            .known_hosts
+            .verify_outcome(&self.host, self.port, &public_key)
+        {
+            super::known_hosts::HostKeyOutcome::Matched => {
+                tracing::info!(
+                    target: "ssh_tunnel",
+                    fingerprint = %fingerprint,
+                    key_type = %key_type,
+                    host = %self.host,
+                    "Host Key 校验通过（known_hosts 匹配）"
+                );
+                Ok(true)
+            }
+            super::known_hosts::HostKeyOutcome::Mismatched => {
+                tracing::error!(
+                    target: "ssh_tunnel",
+                    fingerprint = %fingerprint,
+                    key_type = %key_type,
+                    host = %self.host,
+                    "Host Key 不匹配 known_hosts 记录，可能存在中间人攻击（MITM），连接拒绝"
+                );
+                Ok(false)
+            }
+            super::known_hosts::HostKeyOutcome::Unknown => {
+                if !self.host_key_check.allows_unknown() {
+                    tracing::warn!(
+                        target: "ssh_tunnel",
+                        fingerprint = %fingerprint,
+                        key_type = %key_type,
+                        host = %self.host,
+                        policy = "strict",
+                        "Host 不在 known_hosts 中，严格模式拒绝连接（可用 AllowUnknown 作为内网退路）"
+                    );
+                    return Ok(false);
+                }
 
-        if verified {
-            tracing::info!(
-                target: "ssh_tunnel",
-                fingerprint = %fingerprint,
-                key_type = %key_type,
-                host = %self.host,
-                "Host Key 校验通过"
-            );
-        } else {
-            tracing::error!(
-                target: "ssh_tunnel",
-                fingerprint = %fingerprint,
-                key_type = %key_type,
-                host = %self.host,
-                "Host Key 校验失败，连接拒绝"
-            );
+                // TOFU：首连自动信任并写入 known_hosts（落盘后二次连接同指纹匹配、异指纹拒绝）
+                if self.host_key_check.should_append_unknown() {
+                    if let Err(e) = self
+                        .known_hosts
+                        .append(&self.host, self.port, &public_key)
+                    {
+                        // 落盘失败不阻断连接（下次仍会提示/校验），仅记录
+                        tracing::warn!(
+                            target: "ssh_tunnel",
+                            host = %self.host,
+                            error = %e,
+                            "Host Key 写入 known_hosts 失败（TOFU 落盘跳过）"
+                        );
+                    }
+                    tracing::info!(
+                        target: "ssh_tunnel",
+                        fingerprint = %fingerprint,
+                        key_type = %key_type,
+                        host = %self.host,
+                        policy = "tofu",
+                        "首连信任：Host Key 已写入 known_hosts"
+                    );
+                } else {
+                    tracing::info!(
+                        target: "ssh_tunnel",
+                        fingerprint = %fingerprint,
+                        key_type = %key_type,
+                        host = %self.host,
+                        policy = "allow_unknown",
+                        "Host 不在 known_hosts 中，AllowUnknown 策略放行（不落盘）"
+                    );
+                }
+                Ok(true)
+            }
         }
-
-        Ok(verified)
     }
 }
 
@@ -379,6 +432,8 @@ pub async fn establish_ssh_tunnel(
         host: ssh_config.host.clone(),
         port: ssh_config.port,
         known_hosts,
+        // 决策 #37：Host Key 策略由连接配置注入（TOFU 默认 / Strict / AllowUnknown）
+        host_key_check: ssh_config.host_key_check,
     };
 
     let session = russh::client::connect(config, ssh_addr.as_str(), handler)
@@ -1013,6 +1068,7 @@ mod tests {
             remote_port: 3306,
             local_port: 0,
             timeout_secs: 30,
+            host_key_check: crate::known_hosts::HostKeyCheck::Tofu,
         }
     }
 

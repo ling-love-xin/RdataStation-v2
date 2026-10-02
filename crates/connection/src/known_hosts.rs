@@ -16,6 +16,41 @@ use std::path::PathBuf;
 
 const DEFAULT_KNOWN_HOSTS: &str = ".ssh/known_hosts";
 
+/// Host Key 校验结果（三态，供上层按策略决策——#37 TOFU）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyOutcome {
+    /// 密钥与 known_hosts 中记录匹配（可信主机）
+    Matched,
+    /// 主机不在 known_hosts 中（首次连接，需 TOFU 确认 / 按策略放行或拒绝）
+    Unknown,
+    /// 主机存在但密钥不匹配（疑似 MITM，必须拒绝）
+    Mismatched,
+}
+
+/// Host Key 校验策略（#37 决策：TOFU 默认，Strict 高安全，AllowUnknown 内网退路）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum HostKeyCheck {
+    /// TOFU（默认）：首连自动信任并写入 known_hosts，后续同指纹匹配、异指纹拒绝
+    Tofu,
+    /// 严格校验：未知主机直接拒绝（公网 / 高安全场景）
+    Strict,
+    /// 放行未知主机且不落盘（内网退路，历史行为）
+    AllowUnknown,
+}
+
+impl HostKeyCheck {
+    /// 未知主机是否放行（决策入口；`Mismatched` 不经过此函数，恒拒绝）。
+    pub fn allows_unknown(self) -> bool {
+        matches!(self, Self::Tofu | Self::AllowUnknown)
+    }
+
+    /// TOFU 未知主机是否应写入 known_hosts。
+    pub fn should_append_unknown(self) -> bool {
+        matches!(self, Self::Tofu)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct KnownHostEntry {
     public_key: PublicKey,
@@ -126,6 +161,30 @@ impl KnownHosts {
         }
     }
 
+    /// 校验服务端 Host Key（三态结果，供上层按 [`HostKeyCheck`] 策略决策）
+    ///
+    /// 返回：
+    /// - [`HostKeyOutcome::Matched`] — 密钥与 known_hosts 记录匹配
+    /// - [`HostKeyOutcome::Unknown`] — 主机不在 known_hosts 中（首连 / TOFU 场景）
+    /// - [`HostKeyOutcome::Mismatched`] — 主机存在但密钥不匹配（MITM 风险，恒拒绝）
+    pub fn verify_outcome(&self, host: &str, port: u16, server_key: &PublicKey) -> HostKeyOutcome {
+        let candidates = self.find_candidates(host, port);
+
+        if candidates.is_empty() {
+            return HostKeyOutcome::Unknown;
+        }
+
+        for candidate in candidates {
+            // 只比较密钥本体：`PublicKey` 的 PartialEq 会连带比较 comment 字段，
+            // 而 known_hosts 行可能带行尾注释，导致密钥一致却判定不匹配（误报 MITM）
+            if candidate.public_key.public_key_bytes() == server_key.public_key_bytes() {
+                return HostKeyOutcome::Matched;
+            }
+        }
+
+        HostKeyOutcome::Mismatched
+    }
+
     /// 校验服务端 Host Key
     ///
     /// 返回：
@@ -138,38 +197,8 @@ impl KnownHosts {
         let key_b64 = server_key.public_key_base64();
         let key_type = key_b64.split_whitespace().next().unwrap_or("unknown");
 
-        let candidates = self.find_candidates(host, port);
-
-        if candidates.is_empty() {
-            if self.allow_unknown {
-                tracing::info!(
-                    target: "known_hosts",
-                    host = %host,
-                    port = port,
-                    fingerprint = %server_fingerprint,
-                    key_type = %key_type,
-                    policy = "allow_unknown",
-                    "Host 不在 known_hosts 中，策略允许通过"
-                );
-                return true;
-            }
-
-            tracing::warn!(
-                target: "known_hosts",
-                host = %host,
-                port = port,
-                fingerprint = %server_fingerprint,
-                key_type = %key_type,
-                policy = "deny",
-                "Host 不在 known_hosts 中，策略拒绝"
-            );
-            return false;
-        }
-
-        for candidate in candidates {
-            // 只比较密钥本体：`PublicKey` 的 PartialEq 会连带比较 comment 字段，
-            // 而 known_hosts 行可能带行尾注释，导致密钥一致却判定不匹配（误报 MITM）
-            if candidate.public_key.public_key_bytes() == server_key.public_key_bytes() {
+        match self.verify_outcome(host, port, server_key) {
+            HostKeyOutcome::Matched => {
                 tracing::info!(
                     target: "known_hosts",
                     host = %host,
@@ -178,19 +207,116 @@ impl KnownHosts {
                     key_type = %key_type,
                     "Host Key 校验通过"
                 );
-                return true;
+                true
+            }
+            HostKeyOutcome::Unknown => {
+                if self.allow_unknown {
+                    tracing::info!(
+                        target: "known_hosts",
+                        host = %host,
+                        port = port,
+                        fingerprint = %server_fingerprint,
+                        key_type = %key_type,
+                        policy = "allow_unknown",
+                        "Host 不在 known_hosts 中，策略允许通过"
+                    );
+                    true
+                } else {
+                    tracing::warn!(
+                        target: "known_hosts",
+                        host = %host,
+                        port = port,
+                        fingerprint = %server_fingerprint,
+                        key_type = %key_type,
+                        policy = "deny",
+                        "Host 不在 known_hosts 中，策略拒绝"
+                    );
+                    false
+                }
+            }
+            HostKeyOutcome::Mismatched => {
+                tracing::error!(
+                    target: "known_hosts",
+                    host = %host,
+                    port = port,
+                    fingerprint = %server_fingerprint,
+                    key_type = %key_type,
+                    "Host Key 不匹配！可能存在中间人攻击 (MITM)"
+                );
+                false
             }
         }
+    }
 
-        tracing::error!(
+    /// 追加写入一条 Host Key 记录（TOFU 首连信任落盘，决策 #37）。
+    ///
+    /// - 若本实例从文件加载（`file_path` 有值）→ 追加到该文件（同时更新内存表）；
+    /// - 否则仅更新内存表并告警（测试 / 未加载场景不写盘）；
+    /// - 端口 22 写 `host keytype base64`，非 22 写 `[host]:port keytype base64`。
+    ///
+    /// 幂等：同主机 + 同密钥已存在时跳过（不产生重复行）；同主机不同密钥（密钥轮换 /
+    /// MITM）**不覆盖**——旧行保留，新行追加，`verify` 对旧密钥仍 Matched、新密钥 Mismatched，
+    /// 由上层策略决定是否接受轮换。
+    pub fn append(&mut self, host: &str, port: u16, server_key: &PublicKey) -> std::io::Result<()> {
+        let normalized = normalize_host(host);
+        // `public_key_base64()` 返回裸 base64（无类型前缀）——用 key_openssh_with_type
+        // 还原 OpenSSH 前缀后再拆出 `类型 + base64`，落盘行与 known_hosts 标准格式一致。
+        let key_openssh = key_openssh_with_type(&server_key.public_key_base64());
+        let mut parts = key_openssh.split_whitespace();
+        let key_type = parts.next().unwrap_or("ssh-ed25519").to_string();
+        let key_b64 = parts.next().unwrap_or(key_openssh.as_str()).to_string();
+
+        // 幂等：同 host + 同 key 已有 → 跳过
+        let already = self.find_candidates(&normalized, port).iter().any(|e| {
+            e.public_key.public_key_bytes() == server_key.public_key_bytes()
+        });
+        if already {
+            return Ok(());
+        }
+
+        let line = if port == 22 {
+            format!("{} {} {}", normalized, key_type, key_b64)
+        } else {
+            format!("[{}]:{} {} {}", normalized, port, key_type, key_b64)
+        };
+
+        // 内存表同步（后续同会话校验直接命中）
+        if let Ok(public_key) = PublicKey::from_openssh(&key_openssh) {
+            self.entries
+                .entry(normalized.clone())
+                .or_default()
+                .push(KnownHostEntry { public_key });
+        }
+
+        let Some(path) = self.file_path.clone() else {
+            tracing::warn!(
+                target: "known_hosts",
+                host = %host,
+                port = port,
+                "known_hosts 未加载文件路径，仅更新内存表（不落盘）"
+            );
+            return Ok(());
+        };
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+        if !content.ends_with('\n') && !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str(&line);
+        content.push('\n');
+        std::fs::write(&path, content)?;
+
+        tracing::info!(
             target: "known_hosts",
             host = %host,
             port = port,
-            fingerprint = %server_fingerprint,
-            key_type = %key_type,
-            "Host Key 不匹配！可能存在中间人攻击 (MITM)"
+            path = %path.display(),
+            "Host Key 已写入 known_hosts（TOFU）"
         );
-        false
+        Ok(())
     }
 
     fn find_candidates(&self, host: &str, port: u16) -> Vec<&KnownHostEntry> {
@@ -439,5 +565,131 @@ mod tests {
         assert!(hosts.loaded());
         let key = create_test_key().expect("key");
         assert!(!hosts.verify("example.com", 22, &key), "空表 + deny → false");
+    }
+
+    // ===== #37 TOFU：三态校验 / 落盘 / 策略矩阵 =====
+
+    #[test]
+    fn test_verify_outcome_three_states() -> Result<(), CoreError> {
+        let key = create_test_key()?;
+        let other = second_test_key()?;
+        let content = format!("example.com {}\n", TEST_KEY_A);
+        let mut hosts = KnownHosts::new(false);
+        hosts.parse(&content);
+
+        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Matched);
+        assert_eq!(
+            hosts.verify_outcome("example.com", 22, &other),
+            HostKeyOutcome::Mismatched
+        );
+        assert_eq!(
+            hosts.verify_outcome("unknown.com", 22, &key),
+            HostKeyOutcome::Unknown
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_host_key_check_policy_matrix() {
+        // Tofu：未知放行 + 落盘
+        assert!(HostKeyCheck::Tofu.allows_unknown());
+        assert!(HostKeyCheck::Tofu.should_append_unknown());
+        // Strict：未知拒绝、不落盘
+        assert!(!HostKeyCheck::Strict.allows_unknown());
+        assert!(!HostKeyCheck::Strict.should_append_unknown());
+        // AllowUnknown：放行但不落盘（内网退路）
+        assert!(HostKeyCheck::AllowUnknown.allows_unknown());
+        assert!(!HostKeyCheck::AllowUnknown.should_append_unknown());
+    }
+
+    #[test]
+    fn test_append_writes_file_and_reload_matches() -> Result<(), CoreError> {
+        let key = create_test_key()?;
+        let dir = std::env::temp_dir().join(format!("rds-kh-append-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("known_hosts");
+
+        // 首连：空表 → Unknown → append 落盘
+        let mut hosts = KnownHosts::load(&path, true).expect("load");
+        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Unknown);
+        hosts.append("example.com", 22, &key).expect("append");
+        assert_eq!(hosts.verify_outcome("example.com", 22, &key), HostKeyOutcome::Matched);
+
+        // 重新加载同一文件（新实例）→ 仍 Matched（落盘生效）
+        let reloaded = KnownHosts::load(&path, true).expect("reload");
+        assert_eq!(
+            reloaded.verify_outcome("example.com", 22, &key),
+            HostKeyOutcome::Matched,
+            "TOFU 落盘后重载应匹配"
+        );
+
+        // 异密钥 → Mismatched（轮换 / MITM 可被识别）
+        let other = second_test_key()?;
+        assert_eq!(
+            reloaded.verify_outcome("example.com", 22, &other),
+            HostKeyOutcome::Mismatched
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_non_default_port_uses_bracketed_host() -> Result<(), CoreError> {
+        let key = create_test_key()?;
+        let dir = std::env::temp_dir().join(format!("rds-kh-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("known_hosts");
+
+        let mut hosts = KnownHosts::load(&path, true).expect("load");
+        hosts.append("db.example.com", 2222, &key).expect("append");
+
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            content.contains("[db.example.com]:2222 ssh-ed25519"),
+            "非 22 端口应写 [host]:port 形式，实际: {content}"
+        );
+        assert_eq!(
+            hosts.verify_outcome("db.example.com", 2222, &key),
+            HostKeyOutcome::Matched
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_is_idempotent() -> Result<(), CoreError> {
+        let key = create_test_key()?;
+        let dir = std::env::temp_dir().join(format!("rds-kh-idem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("known_hosts");
+
+        let mut hosts = KnownHosts::load(&path, true).expect("load");
+        hosts.append("example.com", 22, &key).expect("append");
+        hosts.append("example.com", 22, &key).expect("append (2nd)");
+
+        let content = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(
+            content.matches("ssh-ed25519").count(),
+            1,
+            "同主机同密钥不应重复落盘，实际: {content}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_without_file_path_updates_memory_only() -> Result<(), CoreError> {
+        let key = create_test_key()?;
+        let mut hosts = KnownHosts::new(true);
+        hosts.append("example.com", 22, &key).expect("append");
+        assert_eq!(
+            hosts.verify_outcome("example.com", 22, &key),
+            HostKeyOutcome::Matched,
+            "未加载文件路径时仍应更新内存表"
+        );
+        Ok(())
     }
 }

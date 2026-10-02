@@ -157,6 +157,13 @@ pub struct SshConfig {
     /// SSH 连接超时（秒）
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u32,
+    /// SSH Host Key 校验策略（TOFU 默认；Strict 高安全；AllowUnknown 内网退路）
+    #[serde(default = "default_host_key_check")]
+    pub host_key_check: super::known_hosts::HostKeyCheck,
+}
+
+fn default_host_key_check() -> super::known_hosts::HostKeyCheck {
+    super::known_hosts::HostKeyCheck::Tofu
 }
 
 fn default_ssh_port() -> u16 {
@@ -365,9 +372,15 @@ mod tests {
             remote_port: 3306,
             local_port: 0,
             timeout_secs: 30,
+            host_key_check: crate::known_hosts::HostKeyCheck::Tofu,
         };
         assert_eq!(ssh_config.port, 22);
         assert!(matches!(ssh_config.auth, SshAuth::Password { .. }));
+        // 决策 #37：默认 TOFU
+        assert_eq!(
+            ssh_config.host_key_check,
+            crate::known_hosts::HostKeyCheck::Tofu
+        );
     }
 
     fn ssh_config() -> SshConfig {
@@ -382,6 +395,7 @@ mod tests {
             remote_port: 3306,
             local_port: 0,
             timeout_secs: 30,
+            host_key_check: crate::known_hosts::HostKeyCheck::Tofu,
         }
     }
 
