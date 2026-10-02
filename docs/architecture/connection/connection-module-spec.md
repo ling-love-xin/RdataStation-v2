@@ -64,7 +64,7 @@
 | `mod.rs`            | 对话框入口：`ConnectionDialog` 组件、`open_connection_dialog` 宿主 API、`saved_result`/`conn_display_name`（`#[allow(dead_code)]` 保留给 helpers 单测）                                                                                            |
 | `state.rs`          | `ConnectionDialogState`：全部表单字段（gpui `Rc<Entity>` 模型）、五 Tab 状态、`collect()`（表单→`DataSourceSaveInput`）、`draft_to_save_input()`（草稿→`DataSourceSaveInput`）、`cloned_state`/`ClonedDialogState`（批量提交快照）、`#[cfg(test)]` 3 项单测           |
 | `staging.rs`        | `ConnectionDraft` 草稿模型、`capture_draft`/`apply_draft`（表单↔草稿）、`staging_persist`/`staging_restore`/`staging_flush`（持久化）、`staging_clear`/`remove_drafts_at`（保存并退出的清空 / 部分失败）、`draft_dirty`（脏标记）、`templates_export/import`（模板，UI 暂缓） |
-| `render.rs`         | 全部渲染 + 交互：Header / 五 Tab / 暂存列表 / 类型树 /footer 按钮；`do_stage`（保存 = 暂存）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`（\~2000-2272 行）                                          |
+| `render.rs`         | 全部渲染 + 交互：Header / 五 Tab / 暂存列表 / 类型树 /footer 按钮；`do_stage`（保存 = 追加暂存条目，规则 2 待实现）、`do_batch_commit`（保存并退出 = 批量提交）、`do_test`（测试连接）、`set_result`/`set_result_ok`（结果行分级）、`BatchOutcome`（\~2000-2272 行）                                          |
 | `helpers.rs`        | `dialog_row_height`、`save_blocker`（缺项拦截）、`section_header`（w\_full 左对齐）、`strip_file_db_noise`、`create_new_db_file`（文件型按驱动分派初始化）                                                                                                  |
 | `draft_list.rs`     | 暂存列表 UI：行渲染、脏标记 `●`、**同步指纹**（行数 + 光标 + 每条 saved\_id / 名称 + 光标位实时表单值，解决 "填名称列表不更新"）                                                                                                                                              |
 | `type_tree.rs`      | 左侧类型目录 UI + 同步指纹（目录 / 过滤词 / 选中项）                                                                                                                                                                                                |
@@ -121,6 +121,10 @@
 
 * 遗留 v1 全局连接前缀 `conn-`（迁移数据）；`is_global_connection` 统一判定（服务层与导航侧同一来源，修复过错位写库）。
 
+* **新建默认 =「仅项目」（2026-10-02 用户规则 1，决策 #110）**：新增数据源时作用域显式置「仅项目」，地址 / URI 初值取当前会话项目根（`project_path` 权威路径；未打开项目时保持空，由缺项拦截提示）；全局 / 全局+项目是显式选择。
+
+* **三态旁加 `?` 徽标（`Tooltip` 说明落库语义，决策 #110）**：仅全局→`global.db`；仅项目→当前项目库；全局+项目→全局并共享快照（独立副本，显式同步）。
+
 ### 4.2 连接 ID 生成规则（`id_prefix.rs`，实证）
 
 
@@ -145,11 +149,13 @@
 
 
 
-* 同一物理库的多条连接**共享 L2 元数据缓存**。
+* 同一物理库的多条连接**共享 L2 元数据缓存**——**目的（2026-10-02 用户规则 3 确认）：避免对同一数据库重复扫描元数据**：多个连接（不同名称 / 作用域）指向同一个物理库时，只保留一份元数据缓存。
 
 * **身份 = 数据库族 + 规范化地址 + principal + 格式版本**；驱动实现 / 密码 / 连接参数**不进身份**。
 
 * 指纹只作缓存键、**不作主键**；DuckDB 文件结构指纹 = 定义 + 列结构（行数只作元信息）。
+
+* **ID 与指纹职责正交（决策 #112）**：连接 ID 保持 `G_/P_/GP_` 内部标识（回答"哪条配置记录"）；指纹回答"是哪个物理库"（驱动族 + 归一地址 + 用户 = URI+用户+数据库 的规范化超集）。**不采纳**「URI+用户+数据库 作连接唯一 ID」——会破坏编辑改名不换 ID / 凭据轮换 / 作用域双轨 / 存量库兼容。
 
 * 缓存键：`MetadataCacheKey` 以 `conn_id` 为第一维（L1），L2 按身份指纹共享；LRU + 分级内存估算（Catalogs 100 / Tables 500 / Columns 1000 等，见 `metadata_cache.rs`）。
 
@@ -158,6 +164,11 @@
 
 
 * **暂存区只放未保存草稿**（用户决策 #50）：已保存连接不进暂存列表，统一从导航栏编辑（✎）；打开对话框时清理历史残留的已保存条目。
+
+* **保存语义（2026-10-02 用户决策 + 规则 2，决策 #110/#111）**：
+  * 「保存」（Ctrl+Enter）＝**把当前表单追加为暂存列表新条目**并自动新建空草稿（连续录入节奏 = 填一条 → 保存 → 下一条，无需手动点 `+ 添加`）；**不落库**。
+  * 「保存并退出」＝**批量提交**暂存栏全部条目（已保存条目走 update、未保存草稿逐个 save，空草稿跳过；任一条校验失败整体中止；落库中途失败则已成功条目移出草稿箱、失败及后续保留）→ 全成功 → **清空草稿箱** → 关闭。
+  * **编辑模式（已保存连接）下保存不追加**：提示"编辑中的修改将在「保存并退出」时提交"。
 
 * 草稿**跨会话持久化**：`connection_drafts` 表（**无密码列**，`pass` 字段只存内存快照），应用重启后首次打开自动恢复。
 
