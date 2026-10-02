@@ -1,9 +1,9 @@
 ---
 name: gpui-kit-dev
-description: GPUI-kit 0.6.1 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（0.6.1 自带 Animation / with_animation，禁止手搓 request_animation_frame）、0.6.1 API 查证路径与常用组件 API、简体中文注释约定。编写或修改任何 GPUI 视图、元素、组件代码时使用。
+description: GPUI-kit 0.7.0 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（0.7.0 自带 Animation / with_animation，禁止手搓 request_animation_frame）、0.7.0 API 查证路径与常用组件 API、简体中文注释约定。编写或修改任何 GPUI 视图、元素、组件代码时使用。
 ---
 
-# GPUI-kit 0.6 视图开发规范
+# GPUI-kit 0.7 视图开发规范
 
 ## 依赖与导入
 
@@ -44,9 +44,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 - 全局命令用 `actions!(crate_name, [ActionA, ActionB])` 注册 GPUI Action；在 app 层 `cx.bind_keys` 绑定快捷键；视图用 `.on_action(...)` + `.key_context("...")` 处理
 - 点击回调模式：更新 Shared → `entity.update(app, |_, cx| cx.notify())`
 
-## 组件选型（0.6.1 已有，禁止手搓）
+## 组件选型（0.7.0 已有，禁止手搓）
 
-写控件前先查下表；表中每一项都在 0.6.1 存在（`gpui_kit::component::…`）。手搓 `div().on_click()` 会丢 hover / 键盘 / 焦点 / disabled / a11y，属于回归。
+写控件前先查下表；表中每一项都在 0.7.0 存在（`gpui_kit::component::…`）。手搓 `div().on_click()` 会丢 hover / 键盘 / 焦点 / disabled / a11y，属于回归。
 
 | 需求 | 用 | 不要 |
 | --- | --- | --- |
@@ -62,23 +62,25 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 > 已知反例（技术债，不要照抄）：`panels/` 的 `tool_btn` / 树展开字符 / 文本按钮。反向结论（“库没有 Tabs/Switch/List”）已作废——`connection_dialog` 已在 2026-09-20 完成 TabBar / Switch / **List** 迁移（侧栏两处列表 = `list::{List, ListItem}` + 委托，行尾与添加动作 = `Button::ghost()`）。
 >
-> 补充事实（2026-09-19 查证 0.6.1 源码）：`PopupMenuItem` / `DropdownButton` **没有 shortcut 槽位**（菜单项显示不了 `Ctrl+Shift+P`，快捷键只能写在 `Kbd` 元素或文案里）；`PopupMenuItem::ready_for_use()` 之类探针不存在，`PopupMenu` 也不暴露菜单项（只有 `is_empty()`）。
+> 补充事实（2026-09-19 查证 0.6.1、**2026-10-02 复核 0.7.0**，两版一致）：`PopupMenuItem` / `DropdownButton` **没有 shortcut 槽位**（菜单项显示不了 `Ctrl+Shift+P`，快捷键只能写在 `Kbd` 元素或文案里）；`PopupMenuItem::ready_for_use()` 之类探针不存在，`PopupMenu` 也不暴露菜单项（只有 `is_empty()`）。
 
-### 0.6.1 组件总清单（实测，写控件前先在这里找）
+### 0.7.0 组件总清单（实测，写控件前先在这里找）
 
-`gpui_kit::component::` 下 **60+ 个模块**（下表按用途分组，源自 0.6.1 的 `lib.rs` 实测，不是估计）：
+`gpui_kit::component::` 下 **65 个模块**（下表按用途分组，源自 0.7.0 的 `lib.rs` 实测，不是估计；0.6.1 → 0.7.0 新增 `carousel` / `empty` / `questionnaire` / `toolbar`，无删除）：
 
 | 用途 | 模块 |
 | --- | --- |
 | 布局与容器 | `dock`、`resizable`、`scroll`、`virtual_list`（`VirtualList` / `v_virtual_list` / `h_virtual_list`）、`sidebar`、`title_bar`、`status_bar`、`group_box`、`separator`、`root`、`styled` |
-| 按钮与动作 | `button`（`Button` / `ButtonVariants` / 图标按钮）、`link`、`kbd`、`clipboard`、`tooltip`、`hover_card`、`menu`（`PopupMenu` / `DropdownMenu` / `DropdownButton`）、`native_menu`、`command`、`history` |
-| 输入与表单 | `input`（编辑器内核 + `Input` / `InputState`）、`select`、`combobox`、`searchable_list`、`checkbox`、`radio`、`switch`、`slider`、`rating`、`color_picker`、`stepper`、`form`、`time`（`calendar` / `date_picker`） |
-| 数据展示 | `list`（`List` / `ListState` / `ListDelegate`）、`table`、`tree`、`tag`、`badge`、`avatar`、`breadcrumb`、`pagination`、`description_list`、`label`、`marker`、`plot`、`chart` |
-| 反馈与浮层 | `dialog`、`sheet`、`notification`、`message` + `message_scroller`、`alert`、`bubble`、`popover`、`progress`、`skeleton`、`shimmer`、`spinner`、`attachment`、`inspector` |
+| 按钮与动作 | `button`（`Button` / `ButtonVariants` / 图标按钮）、`link`、`kbd`、`clipboard`、`tooltip`、`hover_card`、`menu`（`PopupMenu` / `DropdownMenu` / `DropdownButton`）、`native_menu`、`command`、`history`、`toolbar`（0.7 新增） |
+| 输入与表单 | `input`（编辑器内核 + `Input` / `InputState`）、`select`、`combobox`、`searchable_list`、`checkbox`、`radio`、`switch`、`slider`、`rating`、`color_picker`、`stepper`、`form`、`questionnaire`（0.7 新增） |
+| 数据展示 | `list`（`List` / `ListState` / `ListDelegate`）、`table`、`tree`、`tag`、`badge`、`avatar`、`breadcrumb`、`pagination`、`description_list`、`label`、`marker`、`plot`、`chart`、`carousel`（0.7 新增） |
+| 反馈与浮层 | `dialog`、`sheet`、`notification`、`message` + `message_scroller`、`alert`、`bubble`、`popover`、`progress`、`skeleton`、`shimmer`、`spinner`、`attachment`、`inspector`、`empty`（0.7 新增空态组件） |
 | 折叠与设置 | `accordion`、`collapsible`、`tab`（`Tab` / `TabBar`）、`setting`（设置页骨架）、`highlighter`、`icon`、`theme`、`index_path` |
 | 动效 | `gpui_base::animation`（`EffectTransition` / `Lerp` / `cubic_bezier` / `ease_*`）、`gpui_base::motion`（`transition` / `spring` / `animate_keyframes` / `MotionReveal` / `Presence` / `Stagger`）、`Animation` + `AnimationExt`（来自 `gpui-pre`，重导出在 `gpui_kit::*` 顶层）|
 
-- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <registry>/gpui-component-0.6.1/src/lib.rs`，再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
+> 勘误（2026-10-02）：旧清单中的 `time`（calendar / date_picker）**不存在**——0.6.1 与 0.7.0 的 `lib.rs` 均无 `time` 模块；日期选择器若需要，先 `grep "^pub mod"` 查证再定方案。
+
+- **先查再写**：不确定某个控件库里有不有时，`grep -n "^pub mod" <registry>/gpui-component-0.7.0/src/lib.rs`，再读那个模块的 `pub fn`。本仓曾多次出现「库没有 X」的错误结论（Tabs / Switch / TabBar 已作废）。
 - **弹层 / 提示 / 进度 / 加载骨架 / 旋转指示器也都是现成的**：`popover` / `tooltip` / `hover_card` / `dialog` / `sheet` / `notification` / `progress` / `skeleton` / `shimmer` / `spinner`——它们自带**入场动效**（fade / slide / spring），不要自己再包一层。
 
 **可点元素都要键盘可达**：优先换成语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 在 **KeyUp** 上激活，见下）——选择器 Tab / 状态筛选 / 排序这种自绘可点 `div` 改 `Button` 后同时拿到 hover / 焦点 / 键盘。若确实要自绘，必须 `.track_focus(&handle).tab_stop(true)` 并自己处理键盘激活；且 **`ElementId` 不能随状态变化**（例：id 拼上筛选键 → 一换筛选就丢焦点）。
@@ -127,7 +129,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 - 图标资产未注册时静默渲染为空（不 panic），测试无需 `set_assets`
 - 测试里的其他依赖（存储 / 设置服务 / 后端口）用测试桥替身，只记录调用，不接真实宿主
 - **验证「键盘能操作」**：先 `window.draw(cx).clear(cx)`（Tab 顺序来自上一帧布局），再循环 `window.focus_next(cx)` 逐个停靠，最后发键。**激活发生在 `KeyUpEvent`**：gpui 的可点元素在 key up 上派发 `ClickEvent::Keyboard`，所以 `cx.simulate_keystrokes("enter")`（只发 KeyDown）不会触发点击，要 `cx.simulate_event(KeyDownEvent { .. })` + `cx.simulate_event(KeyUpEvent { .. })` 各发一次；断言**业务状态真的变了**而不是「焦点非空」。参考 `crates/project/src/ui/tests.rs` 的 `picker_controls_activate_from_the_keyboard`
-- **菜单断言不要指望读 `PopupMenu` 内部**（0.6.1 只暴露 `is_empty()`）：把「菜单长什么样」抽成纯函数（顺序 / 文案 / 图标 / 可用性），渲染只按 id 挂事件，测试断言纯函数。参考 `crates/project/src/ui.rs` 的 `project_menu_entries` + `tests.rs` 的 `menu_spec_*`
+- **菜单断言不要指望读 `PopupMenu` 内部**（0.6.1 / 0.7.0 都只暴露 `is_empty()`，2026-10-02 复核）：把「菜单长什么样」抽成纯函数（顺序 / 文案 / 图标 / 可用性），渲染只按 id 挂事件，测试断言纯函数。参考 `crates/project/src/ui.rs` 的 `project_menu_entries` + `tests.rs` 的 `menu_spec_*`
 - **宿主交互测试走生产入口**：不要直接调 `state.open(...)` 或自建一份状态，而是通过宿主面板的方法（如 `EditorPanel::request_new_connection`）驱动——否则订阅、宿主通知等副作用不会被覆盖（曾因此漏掉一个必现的重入 panic，仅 `dialog_host_layer` 这类走入口的测试能拦住）；断言需要内部状态时由宿主提供只读访问器（如 `dialog_state()`）
 - **点击用 kit 的测试 API，不要手算坐标**：`gpui_kit::test::TestWindowExt` 提供 `find` / `try_find` / `click` / `click_at` / `hover` / `scroll` / `drag_to` / `press` / `input`（与 `ElementSnapshot` 快照）。它自己先 `render_frame` → 取观测快照的 bounds → 发鼠标移动 → 命中测试，比 `debug_bounds` + `point(x, y)` 可靠；代价是目标元素必须带 `.id(...)` **加 `.test_support()`**（`Element::id()` 为 `None` 的组件——如 `Button` 这类 `RenderOnce`——观察不了，给它套一层带 id 的 `div`）。`snapshot.focused()` 会 panic，除非该元素是以 `.test_support().track_focus(&handle)` 观察的。
 - **`find` 比 `debug_bounds` 强在哪**：`visible()` 能区分「不在元素树里」（`try_find` → `None`）与「在树里但被裁 / 隐藏 / 透明」——`debug_bounds` 只回答后者之外的一半（隐藏元素也登记），所以“展开后才出现”这类断言以前其实是弱断言；`find` 取不到时 panic 信息里带**已登记路径**（id 拼错一眼可见）；`ElementSnapshot` 还带 a11y 事实（`role` / `label` / `selected` / `checked` / `disabled` / `value`，取决于组件有没有写 a11y info）。两个实测例外：① 组件 `Scrollable`（`overflow_y_scrollbar`）渲染时会把**内层元素的 id 换成 `(caller, "content")`**（`scrollable.rs` 的 `self.element.id(content_id)`），那个元素的 id 进不了观测（继续用 `debug_selector`）；② `dialog-layer` 是上游 gpui-component 的 debug_selector。
@@ -135,7 +137,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **headless 下鼠标点击到不了对话框层**：`Root::render_dialog_layer` 的内容走 deferred 子树，实测同样结构的行在**普通窗口**里一点就中、放进对话框就中不了（本仓已有两处同款注记：`analytics_resource/tests/dialog_window.rs`、`editor/src/view/tests.rs`）。所以对话框用例的口径是：**断言层真渲染 + 直接调提交函数**（与按钮回调同一函数）；想要“真点击”就把控件抽到**不带对话框**的窗口用例里钉（例：`connection_dialog/helpers.rs::tests::header_interaction`）。
 - **组件内 spring 在 headless 下不会自己走**：`spring` 取 `background_executor().now()`，要“推时钟 + 出帧”成对做（`cx.background_executor().advance_clock(Duration::from_millis(16))` + `window.draw(cx).clear(cx)`，循环到收敛）；只 `draw` 不推时钟，让步永远停在原处（断言高度永远等不到变化）。
 
-## 动效（0.6.1 已有，禁止手搓）
+## 动效（0.7.0 已有，禁止手搓）
 
 动画能力**就在 gpui-kit 里**（`Animation` / `AnimationExt` / 缓动函数都在 `gpui_kit::*` 顶层，来自 `gpui-pre` = crate `gpui`）：
 
@@ -162,11 +164,28 @@ element.with_animation(
 - 项目实例：`crates/database/src/nav_view/rows.rs::render_connection_row`（仅「连接中」徽标呼吸）+ `crates/database/src/nav_view/primitives.rs::nav_badge_pulses`（纯函数，带单测）；常量 `ui::NAV_BADGE_PULSE_MS`。展开 / 收起见 `crates/workbench/src/components/connection_dialog/helpers.rs::outline_section`（决策 #108）。
 - 上游规范：本地包 `D:/ABDM/Compressed/gpui-kit-main/gpui-kit-main/skills/gpui-kit-design-guides/references/design-guides.md` §Motion。
 
+## 0.6.1 → 0.7.0 差异清单（2026-10-02 对锁定源码实测）
+
+升级 0.7.0 已合入 main（`Cargo.toml` / `Cargo.lock` = 0.7.0，2026-10-01 verify 分支验证后合回）。API 表面变化**很小**，但行为有回归实例，对照如下：
+
+| 类别 | 0.6.1 → 0.7.0 |
+| --- | --- |
+| 组件模块 | **+4 无删除**：`carousel`（数据展示）、`empty`（空态）、`questionnaire`（表单问卷）、`toolbar`（按钮组） |
+| `switch::Switch` | +`tab_index` / +`tab_stop`（键盘可达补齐） |
+| `dock` | +`set_close_button_visible`；**-`set_tiles_scrollbar_mode` / -`tiles_scrollbar_mode`**（tiles 滚动条模式 API 已移除，改用标准 scroll 装配） |
+| `theme` | +`update` |
+| `popover` | +`arrow` / +`offset`（箭头与偏移定制） |
+| `button` / `input` / `tab` / `list` / `select` / `combobox` / `checkbox` / `radio` / `text` / `menu` | **pub fn 无变化**（2026-10-02 逐个 diff 实测） |
+| `h_flex` | 定义两版相同：`flex().flex_row().items_center()`（styled.rs 逐字一致） |
+| 行为回归实例 | 「连接对话框卡片标题双重居中」为 0.7 行为回归（**非** `h_flex` 定义变化）：0.7 下标题在容器内双向居中，已用 `section_header` + `w_full`（`connection_dialog/helpers.rs`）修复为左对齐；在 0.7 新增代码遇到"莫名居中 / 莫名被裁"先查 flex 祖先的 `justify_center` / `items_center` 组合 |
+
+> 经验结论：0.6.1 → 0.7.0 是**源码兼容的增量升级**（表面 API 几乎不变），本项目已实测完成迁移（`connection_dialog` 五 Tab / 列表 / 左对齐均按 0.7 验证）。新增代码直接按 0.7.0 写，无需兼容 0.6.1 写法；若遇编译错先 `grep -rn "pub fn" <0.7.0 源码>` 查证，不凭 0.6.1 记忆猜。
+
 ## 查 API（版本对齐，必读）
 
-- **权威源是锁定的 crates.io 0.6.1 解包源码**（与 `Cargo.lock` 一致）：
-  `D:/Dev/Rust/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda/gpui-kit-0.6.1/`、同目录下 `gpui-base-0.6.1/`、`gpui-component-0.6.1/`、`gpui-kit-assets-0.6.1/`。
+- **权威源是锁定的 crates.io 0.7.0 解包源码**（与 `Cargo.lock` 一致）：
+  `D:/Dev/Rust/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda/gpui-kit-0.7.0/`、同目录下 `gpui-base-0.7.0/`、`gpui-component-0.7.0/`、`gpui-kit-assets-0.7.0/`（另存 `gpui-component-macros-0.7.0/`）。
   不确定 API 时 `grep -rn "pub fn xxx" <该目录>/src/`，或直接读 `src/` 对应文件。
-- **本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是 0.6.1**：与锁定版本有 30+ 文件差异（含新增 `carousel/`、`empty.rs`，删除 `dock/tiles.rs` 等）。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/`（ARCHITECTURE / STYLING-AND-MOTION）等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当 0.6.1 的 API 依据。
+- **本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是 0.7.0**：与锁定版本仍有文件差异（main 已含 0.7.0 的 `carousel/`、`empty.rs` 等，但后续演进可能继续领先）。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/`（ARCHITECTURE / STYLING-AND-MOTION）等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当 0.7.0 的 API 依据。
 - 上游设计规范（选组件、版式、文案、动效）看本地包的 `skills/gpui-kit-design-guides/references/design-guides.md` 与 `skills/gpui-kit/references/coding-guides.md`（规范性文件，优先于任何示例代码）。
 - 找不到 API 时：宁可在该组件源码里找等价能力，也不要凭 React / CSS / 旧版 GPUI 经验“推断”一个方法名。
