@@ -6,9 +6,9 @@
 > 可独立复现的说明。目标读者：新开发者 / 另一 AI，期望据此生成相同结构、相同语义的代码与文档。
 > 生成基准：仓库当前 HEAD 
 >
-> `b2e07859`
+> `0d0cbce`
 >
-> （2026-10-02，保存语义重构已合入）。
+> （2026-10-03，#19/#21/#10 收敛轮已合入；MVP 设计审查结论见 §8.1 / §11 #117 / §12）。
 > 一切以「代码为准」：本文件若与源码冲突，以源码为准；若与 
 >
 > `connection-dialog-architecture.md`
@@ -379,6 +379,22 @@ pub struct ConnectionDraft {
 
 * 文件型驱动：地址输入在「常规 → 连接设置」卡片（`打开文件… / 新建文件…`），Header 只显示路径；网络型地址在 Header 输入框（占位取 `url_template`）。
 
+### 8.1 新增类型动态渲染机制（MVP 设计审查，2026-10-03，不排期）
+
+* **结论**：五 Tab 内容**全部由 `DriverDescriptor` 声明派生**（`registry/descriptors.rs` builder），UI 层零类型写死——新增类型注册驱动后 UI 无需改动。
+* **Tab 派生映射**（`render.rs` 实证）：常规 = `fields[]` 表单 + SSL 卡（`supported_auth_types` 含 `ssl` 才显示）、文件型整卡变形（只剩「连接设置 + 组织」）；网络 = `is_file` 门控（文件型隐藏，网络型显示档案引用 + 拓扑预览）；能力 = `capabilities` 只读（12 键标签表）；驱动属性 = `driver_properties` key-value 透传；高级 = 环境（策略套）+ 单连接覆盖 + DuckDB 加速（网络库 = 本地加速 + 跨源、文件库 = 仅联邦源，render.rs:960 注释）。
+* **新类型四道闸**（真正成本所在，非 UI）：
+
+| 闸 | 内容 | 状态 |
+| --- | --- | --- |
+| 1 驱动声明 | `DriverDescriptor`（category / target_database / default_port / url_template / require_file / fields / capabilities / supported_auth_types / driver_properties） | ✅ 机制就绪（builder 完备，`mysql_driver()` 为模板，descriptors.rs:400） |
+| 2 驱动注册 | `BuiltinDriverDiscovery::builtin_factories()`（loader.rs:102）= 6 工厂（mysql×2 / postgres×2 / sqlite / duckdb）；`WasmDriverDiscovery::load_drivers` 空实现 | ⚠️ 插件通道空 → mssql / mongo / redis 等「暂无驱动」置灰（架构 §14 #1 中期，M9） |
+| 3 连接器实现 | `DriverFactory::create` + connection crate URL / probe / SSL / SSH 适配 | ⚠️ 每类型一套（tiberius / mongo / redis / http 客户端） |
+| 4 认证字典 | `AUTH_TYPES`（connection_dialog/mod.rs:60）6 类：password / ldap / pg_class / kerberos / ssh_key / proxy_pwd | ⚠️ 无 bearer / api_key → http 类需扩字典 |
+
+* **张力点**：① 认证方法双源字典未完全对齐——驱动侧 `supported_auth_types`（password / ssl / kerberos…）vs 档案侧 `AUTH_TYPES` 6 类，`ssl` 只在驱动侧，原型 tag 仅用 password / ssh_key / proxy_pwd；② 能力 tab 只读 + 12 键标签表是第二份字典（capability.rs 注释自认），与 M4 导航能力未联动；③ 加速卡「所有类型都摆」（render.rs:960）与 #38 注册门控并存——sqlite 有 scanner 扩展可注册、duckdb 文件源无扩展不注册，UI 文案已区分「本地加速 / 联邦源」；④ 环境 = 全局库 + 项目库双域同构（project_db 有 `list_project_environments`）。
+* **MVP 边界**：4 类型（mysql / postgres / sqlite / duckdb）全链路 = MVP；新增类型是「声明 + 驱动实现 + 认证字典」的扩展问题，非 UI 改造问题。**不排期**（观察项，见架构 §14 #41；决策 #117）。
+
 ## 9. 测试体系
 
 ### 9.1 基线（2026-10-02 实证）
@@ -463,6 +479,7 @@ pub struct ConnectionDraft {
 | #114 | **Secret 注册门控 + 内存连接载体**（2026-10-03）：门控 = 加速开 + 有对应 DuckDB 扩展（duckdb 文件源无扩展 → 默认不注册），项目 / 全局同规则；目标 = 全局或项目分析库；断开回收；`SecretManager` 改内存连接 + secret 目录（避开分析库文件锁） |
 | #115 | **SSH Host Key TOFU + 严格校验开关**（2026-10-03）：三态校验（Matched / Unknown / Mismatched）+ 策略（Tofu 默认首连自动落盘 / Strict 未知拒绝 / AllowUnknown 放行不落盘）；Mismatched 恒拒绝；弹窗确认（UI 桥）留后续轮 |
 | #116 | **启动即加载 + 关闭清理**（2026-10-03，#21 关闭）：`ProjectUiHost::on_closed`（`do_close` 末尾触发）+ workbench `build_host` 注入 `refresh_after_open`（root=None → 只剩全局 G_）；启动加载已在 `view.rs:91` P0 修复 |
+| #117 | **MVP 设计审查（2026-10-03，不排期）**：五 Tab 动态渲染机制成立（UI 零类型写死，全部由 `DriverDescriptor` 声明派生）；新增类型真实成本在四道闸——驱动注册（WASM 插件空实现）/ 连接器实现 / 认证字典（`AUTH_TYPES` 无 bearer / api_key）；详见 §8.1 / 架构 §14 #41 |
 
 ## 12. 已知问题与待办（权威：架构 §14）
 
@@ -473,6 +490,8 @@ pub struct ConnectionDraft {
 * 模板导入导出能力就绪、UI 入口暂缓（C4/C12）。
 
 * dev-plan / README 文档瘦身整理方案已出（2026-10-02），待用户确认后执行。
+
+* MVP 设计审查观察项（2026-10-03，**不排期**，详见 §8.1 / 架构 §14 #41）：「引用方列表」UI（#33 残留）；认证字典未覆盖 http / nosql；加速 + 认证档案引用同开的集成验证未做；网络档案类型对 http 语义需重新定义；sqlite / duckdb 文件源加速注册行为差异（前者有 scanner 可注册、后者无扩展不注册）。
 
 ## 13. 复现命令速查（Windows + PowerShell）
 
