@@ -8,10 +8,11 @@
 
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
+use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
     ObjectProperties, PageId, PropertyKind, PropertyPage, PropertyRegistry, PropertyRow,
-    PropertySection, PropertyTable, SupportState,
+    PropertySection, PropertyTable, SupportState, TableDataPage,
 };
 use shared::error::CoreError;
 
@@ -53,16 +54,21 @@ fn source_label(source: NavSource) -> String {
 }
 
 /// 加载对象属性（实时内省；连接 / Catalog / Schema 无需查询）。
+///
+/// `data_req` 为 `Some` 时对表 / 视图附带「数据」页签的分页抓取
+/// （`property_panel` 只编排：取数在 [`crate::table_data`]，与结果集只共享网格渲染层）。
 pub async fn load_properties(
     metadata: &MetadataService,
     ref_: &PropertyRef,
     conn_label: &str,
     driver: &str,
     db_type: Option<&str>,
+    data_req: Option<&TableDataRequest>,
 ) -> Result<ObjectProperties, CoreError> {
     let source = source_label(ref_.source);
     let mut properties = Vec::new();
     let mut sections = Vec::new();
+    let mut data: Option<TableDataPage> = None;
 
     let object_type = match ref_.kind {
         PropertyKind::Connection => "连接",
@@ -183,6 +189,23 @@ pub async fn load_properties(
                 }
                 None => {}
             }
+
+            // 「数据」页签：请求带分页参数时抓取（视图同样适用——只读 SELECT，
+            // 无主键时 `is_ordered` 如实为假）。失败**如实报错**：数据是面板的一等页签，
+            // 不因附属信息失败就静默降级成「没有数据」。
+            if let Some(req) = data_req {
+                data = Some(
+                    table_data::load_table_data(
+                        metadata,
+                        &ref_.conn_id,
+                        &catalog,
+                        &schema,
+                        &ref_.name,
+                        req,
+                    )
+                    .await?,
+                );
+            }
         }
         PropertyKind::Column => {
             let catalog = ref_.catalog.clone().unwrap_or_default();
@@ -275,6 +298,7 @@ pub async fn load_properties(
         source_label: source,
         properties,
         sections,
+        data,
     })
 }
 
@@ -404,6 +428,7 @@ impl PropertyRegistry for PropertyRegistryImpl {
                 supported(PageId::Indexes, "索引"),
                 supported(PageId::Constraints, "约束"),
                 supported(PageId::Ddl, "DDL"),
+                supported(PageId::Data, "数据"),
                 unsupported(PageId::Privileges, "权限"),
                 unsupported(PageId::Dependencies, "依赖"),
             ],
@@ -411,6 +436,7 @@ impl PropertyRegistry for PropertyRegistryImpl {
                 general,
                 supported(PageId::Columns, "列"),
                 supported(PageId::Ddl, "DDL"),
+                supported(PageId::Data, "数据"),
                 unsupported(PageId::Privileges, "权限"),
             ],
             PropertyKind::Routine => vec![general, supported(PageId::Source, "源码")],
@@ -424,7 +450,7 @@ mod tests {
     use engine::driver::traits::{ColumnDetail, ForeignKeyRef};
     use super::*;
 
-    /// 注册表：表对象带「列 / 索引 / 约束 / DDL」支持页，且「权限 / 依赖」先绘制、置灰。
+    /// 注册表：表对象带「列 / 索引 / 约束 / DDL / 数据」支持页，且「权限 / 依赖」先绘制、置灰。
     #[test]
     fn table_registry_lists_supported_and_unsupported_pages() {
         let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::Table);
@@ -437,6 +463,7 @@ mod tests {
                 PageId::Indexes,
                 PageId::Constraints,
                 PageId::Ddl,
+                PageId::Data,
                 PageId::Privileges,
                 PageId::Dependencies,
             ]
@@ -450,6 +477,15 @@ mod tests {
             .find(|p| p.id == PageId::Privileges)
             .expect("权限页已注册");
         assert_eq!(privileges.state, SupportState::Unsupported, "权限暂不可用置灰");
+        let data = pages.iter().find(|p| p.id == PageId::Data).expect("数据页已注册");
+        assert_eq!(data.state, SupportState::Supported, "数据页可用");
+    }
+
+    /// 视图注册「数据」页（只读 SELECT 同样适用）。
+    #[test]
+    fn view_registry_has_data_page() {
+        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::View);
+        assert!(pages.iter().any(|p| p.id == PageId::Data && p.state == SupportState::Supported));
     }
 
     /// 连接对象至少带「通用」+ 灰置「权限」。

@@ -12,4 +12,5 @@ pub mod model;
 pub use descriptor::{PageId, PropertyEntry, PropertyPage, PropertyRegistry, SupportState};
 pub use model::{
     ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable,
+    TableDataColumn, TableDataPage,
 };

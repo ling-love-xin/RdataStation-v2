@@ -81,10 +81,10 @@
 <header class="hero">
   <div class="kicker">RdataStation · M4 属性面板</div>
   <h1>一张页签一张纸</h1>
-  <p class="sub">选中导航里的表 / 视图 / 列 / 连接，右侧面板把元信息摊开成页签：列、索引、约束、DDL 各归其位；权限 / 依赖这类驱动尚未实现的能力，先绘制、置灰标注——不静默消失。</p>
+  <p class="sub">选中导航里的表 / 视图 / 列 / 连接，右侧面板把元信息摊开成页签：列、索引、约束、DDL、<span class="hl">数据预览</span> 各归其位；权限 / 依赖这类驱动尚未实现的能力，先绘制、置灰标注——不静默消失。</p>
   <div class="tags">
     <span class="tag">DBeaver 式 tab</span><span class="tag">描述驱动</span>
-    <span class="tag">权限灰置</span><span class="tag">数据来自实时内省</span><span class="tag">零 UI 造数据</span>
+    <span class="tag">权限灰置</span><span class="tag">表数据预览</span><span class="tag">数据来自实时内省</span><span class="tag">零 UI 造数据</span>
   </div>
 </header>
 
@@ -93,7 +93,7 @@
   <section>
     <h2><span class="no">①</span>描述驱动：页签是数据，不是 match 分支</h2>
     <div class="cards">
-      <div class="card"><h3>注册表定页签</h3><p><code>PropertyRegistry::pages_for(kind)</code> 决定页集合——表 7 页、视图 4 页、列 1 页；渲染方只遍历描述，<span class="hl">不写对象分支</span>。</p></div>
+      <div class="card"><h3>注册表定页签</h3><p><code>PropertyRegistry::pages_for(kind)</code> 决定页集合——表 8 页、视图 5 页、列 1 页；渲染方只遍历描述，<span class="hl">不写对象分支</span>。</p></div>
       <div class="card"><h3>加能力不加代码</h3><p>驱动补内省能力位 → 注册表翻 <code>Supported</code> → 页签自动亮起，<span class="hl">渲染零改动</span>。</p></div>
       <div class="card"><h3>灰置是状态不是特例</h3><p>权限 / 依赖以 <code>Unsupported</code> 入册，页面照常绘制、置灰标注——用户看得到产品路线图。</p></div>
     </div>
@@ -114,14 +114,14 @@
     <h2><span class="no">③</span>对象 × 页签矩阵</h2>
     <div class="matrix">
       <table class="m">
-        <tr><th>对象</th><th>通用</th><th>列</th><th>索引</th><th>约束</th><th>DDL</th><th>权限</th><th>依赖</th><th>源码</th></tr>
-        <tr><td>连接</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td class="gray">灰</td><td></td><td></td></tr>
-        <tr><td>Catalog / Schema</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-        <tr><td>表</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="gray">灰</td><td class="gray">灰</td><td></td></tr>
-        <tr><td>视图</td><td class="ok">✔</td><td class="ok">✔</td><td></td><td></td><td class="ok">✔</td><td class="gray">灰</td><td></td><td></td></tr>
-        <tr><td>列</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
-        <tr><td>例程</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td class="ok">✔</td></tr>
-        <tr><td>序列 / 触发器</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr><th>对象</th><th>通用</th><th>列</th><th>索引</th><th>约束</th><th>DDL</th><th>数据</th><th>权限</th><th>依赖</th><th>源码</th></tr>
+        <tr><td>连接</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td class="gray">灰</td><td></td><td></td></tr>
+        <tr><td>Catalog / Schema</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>表</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="ok">✔</td><td class="gray">灰</td><td class="gray">灰</td><td></td></tr>
+        <tr><td>视图</td><td class="ok">✔</td><td class="ok">✔</td><td></td><td></td><td class="ok">✔</td><td class="ok">✔</td><td class="gray">灰</td><td></td><td></td></tr>
+        <tr><td>列</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+        <tr><td>例程</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="ok">✔</td></tr>
+        <tr><td>序列 / 触发器</td><td class="ok">✔</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       </table>
     </div>
   </section>
@@ -130,7 +130,7 @@
     <h2><span class="no">④</span>它不做的事</h2>
     <div class="cards">
       <div class="card"><h3>不编辑元数据</h3><p>属性面板只读；改名 / 建索引 / 授权走编辑区与命令。</p></div>
-      <div class="card"><h3>不替代编辑器</h3><p>表数据浏览 / SQL 编辑在编辑区；面板只回答「这是什么」。</p></div>
+      <div class="card"><h3>不替代编辑器</h3><p>表数据浏览 / SQL 编辑在编辑区；面板只回答「这是什么」——数据页是只读预览，编辑回写待能力位。</p></div>
       <div class="card"><h3>不预言驱动能力</h3><p>驱动没实现的能力一律灰置，绝不拿目录信息硬凑权限清单。</p></div>
     </div>
   </section>
@@ -145,25 +145,28 @@
 const OBJS = {
   "table-orders": {
     name: "orders", kind: "表",
-    tabs: ["通用", "列", "索引", "约束", "DDL", "权限", "依赖"],
+    tabs: ["通用", "列", "索引", "约束", "DDL", "数据", "权限", "依赖"],
     gray: ["权限", "依赖"],
     body: (t) => t === "通用"
-      ? g([["名称","orders"],["类型","表"],["列数","4"],["行数","2"],["归属域","全局"],["限定名","main.orders"]])
+      ? g([["名称","orders"],["类型","表"],["列数","4"],["行数","7"],["归属域","全局"],["限定名","main.orders"]])
       : t === "列"
         ? rows(["#","名称","类型","可空","主键","外键","默认值"], [["1","id","INTEGER","否","✔","",""],["2","parent_id","INTEGER","是","","→ parent(id)",""],["3","tag","TEXT","是","","",""],["4","note","TEXT","是","","","'x'"]])
         : t === "索引" ? rows(["名称","唯一","列"], [["idx_orders_tag","✔","tag"]])
         : t === "约束" ? rows(["名称","类型","定义"], [["","外键","parent_id REFERENCES parent(id)"],["","主键","PRIMARY KEY (id)"]])
         : t === "DDL" ? ddl("CREATE TABLE orders (id INTEGER PRIMARY KEY, parent_id INTEGER, tag TEXT, note TEXT DEFAULT 'x', FOREIGN KEY (parent_id) REFERENCES parent(id))")
+        : t === "数据" ? ddata(["id","parent_id","tag","note"], 7, true,
+            [["1","1","t1","x"],["2","2","t2","x"],["3",null,"t3","x"],["4","3","t4","x"],["5","4","t5","x"]])
         : ph(t),
   },
   "view-vorders": {
     name: "v_orders", kind: "视图",
-    tabs: ["通用", "列", "DDL", "权限"],
+    tabs: ["通用", "列", "DDL", "数据", "权限"],
     gray: ["权限"],
     body: (t) => t === "通用"
       ? g([["名称","v_orders"],["类型","视图"],["列数","2"],["归属域","全局"],["限定名","main.v_orders"]])
       : t === "列" ? rows(["#","名称","类型","可空"], [["1","id","INTEGER","是"],["2","tag","TEXT","是"]])
       : t === "DDL" ? ddl("CREATE VIEW v_orders AS SELECT id, tag FROM orders")
+      : t === "数据" ? ddata(["id","tag"], 7, false, [["1","t1"],["2","t2"],["3","t3"],["4","t4"],["5","t5"]])
       : ph(t),
   },
   "col-tag": {
@@ -187,6 +190,17 @@ const rows = (head, data) => {
 };
 const ddl = (s) => '<pre style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:Consolas,monospace;font-size:12.3px;white-space:pre-wrap;">'+s+'</pre>';
 const ph = (t) => '<div style="border:1px dashed var(--border);border-radius:8px;padding:26px 16px;text-align:center;color:var(--muted);">「'+t+'」查看与操作暂不支持（驱动能力未实现）<div style="font-size:11.5px;margin-top:8px;">驱动补内省能力位后由注册表翻转为可用，渲染零改动。</div></div>';
+// 数据页演示：行号 + 列 + 单元格；NULL 置灰；页脚显示总数与顺序声明
+const ddata = (cols, total, ordered, sample) => {
+  const th = '<th style="color:var(--muted);text-align:left;font-size:11.5px;padding:3px 10px;border-bottom:1px solid var(--border);">#</th>'
+    + cols.map(h => '<th style="color:var(--muted);text-align:left;font-size:11.5px;padding:3px 10px;border-bottom:1px solid var(--border);">'+h+'</th>').join('');
+  const tr = sample.map((r, i) => '<tr style="border-bottom:1px solid var(--border);"><td style="padding:4px 10px;color:var(--muted);text-align:right;">'+(i+1)+'</td>'
+    + r.map(v => v === null
+        ? '<td style="padding:4px 10px;color:var(--muted);font-style:italic;">NULL</td>'
+        : '<td style="padding:4px 10px;">'+v+'</td>').join('') + '</tr>').join('');
+  return '<table class="g"><tr>'+th+'</tr>'+tr+'</table>'
+    + '<div style="color:var(--muted);font-size:11.5px;padding:10px 10px 0;">共 '+total+' 行'+(ordered ? '' : ' · 本页无定义顺序（视图无主键）')+' · 列头可排序 · 分页翻页 · NULL 置灰</div>';
+};
 
 let cur = "table-orders", curTab = "通用";
 function render() {

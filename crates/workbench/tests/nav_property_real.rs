@@ -46,7 +46,7 @@ async fn create_fixture(conn_id: &str, manager: &Arc<ConnectionManager>, driver:
         "CREATE UNIQUE INDEX idx_orders_tag ON orders (tag)",
         "CREATE VIEW v_orders AS SELECT id, tag FROM orders",
         "INSERT INTO parent (id, name) VALUES (1, 'a'), (2, 'b')",
-        "INSERT INTO orders (id, parent_id, tag) VALUES (1, 1, 't1'), (2, 2, 't2')",
+        "INSERT INTO orders (id, parent_id, tag) VALUES (1, 1, 't1'), (2, 2, 't2'), (3, NULL, 't3')",
     ] {
         db.query(sql).await.unwrap_or_else(|e| panic!("{driver} 执行 {sql} 失败：{e}"));
     }
@@ -223,13 +223,14 @@ async fn run_nav_property_chain(driver: &str) {
         kind,
     };
 
-    // 表：网格（列数）+ 列 / 索引 / 约束 / DDL 分区
+    // 表：网格（列数）+ 列 / 索引 / 约束 / DDL / 数据分区
     let table_props = property_panel::load_properties(
         &metadata,
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
         None,
+        Some(&database::table_data::TableDataRequest::default()),
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 表属性失败：{e}"));
@@ -254,13 +255,94 @@ async fn run_nav_property_chain(driver: &str) {
         section_ids
     );
 
-    // 视图：列 + DDL
+    // 表「数据」页：分页抓取（fixture 3 行：id=1..3，第 3 行 parent_id 为 NULL）
+    let data = table_props.data.as_ref().unwrap_or_else(|| panic!("{driver} 表属性应带数据页"));
+    assert_eq!(data.columns.len(), 4, "{driver} 数据页 4 列");
+    assert_eq!(data.rows.len(), 3, "{driver} 数据页 3 行：{:?}", data.rows);
+    assert_eq!(data.total, Some(3), "{driver} 行数 COUNT=3");
+    assert!(!data.has_more, "{driver} 3 行 ≤ 默认 200，无后续页");
+    assert!(data.is_ordered, "{driver} orders 有主键，应声明有序");
+    assert_eq!(
+        data.rows[0][2].as_deref(),
+        Some("t1"),
+        "{driver} 默认顺序首行 tag=t1"
+    );
+    println!("[{driver}] 表数据页 OK（{}/{} 行，total={:?}）", data.rows.len(), data.columns.len(), data.total);
+
+    // 分页：limit=1 → 每页 1 行、has_more 探测（limit+1 不多跑 COUNT）
+    let page1 = property_panel::load_properties(
+        &metadata,
+        &make_ref(PropertyKind::Table, "orders"),
+        driver,
+        driver,
+        None,
+        Some(&database::table_data::TableDataRequest { offset: 0, limit: 1, order_by: vec![] }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{driver} 分页第 1 页失败：{e}"));
+    let p1 = page1.data.as_ref().unwrap();
+    assert_eq!(p1.rows.len(), 1, "{driver} limit=1 第 1 页 1 行");
+    assert!(p1.has_more, "{driver} limit+1 探测：有后续页");
+    assert_eq!(p1.offset, 0);
+    // 第 3 行：parent_id 为 NULL（单元格 None → 渲染置灰）
+    let page3 = property_panel::load_properties(
+        &metadata,
+        &make_ref(PropertyKind::Table, "orders"),
+        driver,
+        driver,
+        None,
+        Some(&database::table_data::TableDataRequest { offset: 2, limit: 1, order_by: vec![] }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{driver} 分页第 3 页失败：{e}"));
+    let p3 = page3.data.as_ref().unwrap();
+    assert_eq!(p3.rows.len(), 1);
+    assert!(!p3.has_more, "{driver} 第 3 页是末页");
+    assert_eq!(p3.rows[0][0].as_deref(), Some("3"), "{driver} 第 3 行 id=3");
+    assert_eq!(p3.rows[0][1], None, "{driver} 第 3 行 parent_id 为 NULL（None）");
+    println!("[{driver}] 数据分页 OK（has_more 探测 / NULL 单元格）");
+
+    // 排序：tag 升序首行 t1 / 降序首行 t3（列头点击走同一条 `order_by` 链路）
+    let asc = property_panel::load_properties(
+        &metadata,
+        &make_ref(PropertyKind::Table, "orders"),
+        driver,
+        driver,
+        None,
+        Some(&database::table_data::TableDataRequest {
+            offset: 0,
+            limit: 0,
+            order_by: vec![("tag".to_string(), true)],
+        }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{driver} 升序失败：{e}"));
+    let desc = property_panel::load_properties(
+        &metadata,
+        &make_ref(PropertyKind::Table, "orders"),
+        driver,
+        driver,
+        None,
+        Some(&database::table_data::TableDataRequest {
+            offset: 0,
+            limit: 0,
+            order_by: vec![("tag".to_string(), false)],
+        }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{driver} 降序失败：{e}"));
+    assert_eq!(asc.data.as_ref().unwrap().rows[0][2].as_deref(), Some("t1"), "{driver} tag 升序首行 t1");
+    assert_eq!(desc.data.as_ref().unwrap().rows[0][2].as_deref(), Some("t3"), "{driver} tag 降序首行 t3");
+    println!("[{driver}] 数据排序 OK（ASC t1 / DESC t3）");
+
+    // 视图：列 + DDL + 数据（视图同样可预览，is_ordered 由用户排序决定）
     let view_props = property_panel::load_properties(
         &metadata,
         &make_ref(PropertyKind::View, "v_orders"),
         driver,
         driver,
         None,
+        Some(&database::table_data::TableDataRequest::default()),
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 视图属性失败：{e}"));
@@ -268,7 +350,10 @@ async fn run_nav_property_chain(driver: &str) {
         view_props.sections.iter().any(|s| s.id == PageId::Columns),
         "{driver} 视图分区含列"
     );
-    println!("[{driver}] 视图属性面板 OK");
+    let vdata = view_props.data.as_ref().unwrap_or_else(|| panic!("{driver} 视图应带数据页"));
+    assert_eq!(vdata.rows.len(), 3, "{driver} 视图数据 3 行");
+    assert!(!vdata.is_ordered, "{driver} 视图无主键且无排序，应如实声明无顺序");
+    println!("[{driver}] 视图属性面板 + 数据页 OK");
 
     // 列：类型 / 可空 / 主键 / 外键 / 默认值
     let col_props = property_panel::load_properties(
@@ -276,6 +361,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Column, "tag"),
         driver,
         driver,
+        None,
         None,
     )
     .await
@@ -297,6 +383,7 @@ async fn run_nav_property_chain(driver: &str) {
         driver,
         driver,
         None,
+        None,
     )
     .await
     .unwrap_or_else(|e| panic!("{driver} 连接属性失败：{e}"));
@@ -306,11 +393,18 @@ async fn run_nav_property_chain(driver: &str) {
     );
     println!("[{driver}] 连接属性面板 OK");
 
-    // 5) 属性页注册表（权限 / 依赖灰置）
+    // 5) 属性页注册表（数据页可用；权限 / 依赖灰置）
     let registry = PropertyRegistryImpl;
     let table_pages = registry.pages_for(PropertyKind::Table);
     let ids: Vec<PageId> = table_pages.iter().map(|p| p.id).collect();
-    assert!(ids.contains(&PageId::Privileges) && ids.contains(&PageId::Dependencies), "{driver} 表注册表含权限/依赖页");
+    assert!(
+        ids.contains(&PageId::Data) && ids.contains(&PageId::Privileges) && ids.contains(&PageId::Dependencies),
+        "{driver} 表注册表含数据页与权限/依赖页：{ids:?}"
+    );
+    assert!(
+        ids.iter().position(|p| *p == PageId::Data).unwrap() < ids.iter().position(|p| *p == PageId::Privileges).unwrap(),
+        "{driver} 数据页在权限页之前"
+    );
     assert!(table_pages.iter().all(|p| {
         p.state == SupportState::Supported
             || matches!(p.id, PageId::Privileges | PageId::Dependencies)

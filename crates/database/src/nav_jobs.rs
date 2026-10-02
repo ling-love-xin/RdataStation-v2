@@ -236,6 +236,8 @@ enum Job {
         /// 数据库类型的**展示文字**：目录名（`data_source_types.name`）优先，取不到时回退类型 id
         /// （`drivers.type_id`）；属性面板「数据库类型」行用。
         db_type: Option<String>,
+        /// 「数据」页签分页抓取参数（`None` = 不取数据）。
+        data: Option<crate::table_data::TableDataRequest>,
     },
     /// 搜索框的跨连接索引搜索（名称档中缀 / 内容档 FTS5）。
     SearchIndex {
@@ -674,12 +676,19 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             conn_label,
             driver,
             db_type,
+            data,
         } => {
             let svc = service(None);
             let outcome = rt.block_on(async {
                 tokio::time::timeout(
                     JOB_TIMEOUT,
-                    svc.load_properties(&property, &conn_label, &driver, db_type.as_deref()),
+                    svc.load_properties(
+                        &property,
+                        &conn_label,
+                        &driver,
+                        db_type.as_deref(),
+                        data.as_ref(),
+                    ),
                 )
                 .await
             });
@@ -915,6 +924,7 @@ pub fn enqueue_properties(
     conn_label: &str,
     driver: &str,
     db_type: Option<&str>,
+    data: Option<crate::table_data::TableDataRequest>,
 ) {
     shared().pending_props.fetch_add(1, Ordering::SeqCst);
     submit(Job::LoadProperties {
@@ -923,6 +933,7 @@ pub fn enqueue_properties(
         conn_label: conn_label.to_string(),
         driver: driver.to_string(),
         db_type: db_type.map(str::to_string),
+        data,
     });
 }
 

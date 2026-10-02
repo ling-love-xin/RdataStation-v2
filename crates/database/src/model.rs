@@ -287,11 +287,13 @@ pub struct PropertyRef {
 ///
 /// 原先定义在 `database/src/nav_view.rs`；导航视图下沉后归本 crate，host 经 [`crate::nav_host::NavHost`]
 /// 转交宿主。`conn_label` / `driver` 是**展示用**已解析文本（宿主不可能从 id 反推）。
+/// `data` 为 `Some` 时「数据」页签附带分页抓取（表 / 视图；None = 不取数据）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyRequest {
     pub property: PropertyRef,
     pub conn_label: String,
     pub driver: String,
+    pub data: Option<crate::table_data::TableDataRequest>,
 }
 
 /// 统一引用 → 属性面板定位：`ObjectKind` 与 `PropertyKind` 的**唯一映射处**。

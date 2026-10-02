@@ -104,10 +104,10 @@ mock（未来）────────► property（消费 ObjectProperties /
 
 ```text
 pub mod descriptor;   // 描述模型 + PropertyRegistry trait
-pub mod model;        // PropertyKind / ObjectProperties / PropertyRow / PropertyTable / PropertySection / PropertyState
+pub mod model;        // PropertyKind / ObjectProperties / PropertyRow / PropertyTable / PropertySection / PropertyState / TableDataColumn / TableDataPage
 
 pub use descriptor::{PageId, PropertyEntry, PropertyPage, PropertyRegistry, SupportState};
-pub use model::{ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable};
+pub use model::{ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable, TableDataColumn, TableDataPage};
 ```
 
 ## 6. 领域模型
@@ -125,10 +125,40 @@ pub struct ObjectProperties {
     pub source_label: String, // 归属域文案（项目 (P) / 全局 (G) / 共享 (GP)）
     pub properties: Vec<PropertyRow>,     // 上部属性网格
     pub sections: Vec<PropertySection>,   // 子实体分区（列 / 索引 / 约束 / DDL / 源码）
+    pub data: Option<TableDataPage>,      // 「数据」页内容（分页抓取；仅表/视图请求数据时填充）
 }
 ```
 
 `PropertySection` 增加 `id: PageId` 字段（供描述模型映射「页 → 内容」）。
+
+### 6.4 数据页模型（M4 表数据预览首期，2026-10-03 新增）
+
+```text
+/// 数据页列描述。
+pub struct TableDataColumn {
+    pub name: String,
+}
+
+/// 一页数据：列 + 行（单元格 `None` = SQL NULL，渲染置灰）。
+pub struct TableDataPage {
+    pub columns: Vec<TableDataColumn>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub total: Option<u64>,   // 真 COUNT(*)；拿不到如实留空
+    pub offset: usize,        // 本页起始行号（真实行号 = offset + 行下标 + 1）
+    pub has_more: bool,       // limit+1 探测：还有没有下一页
+    pub is_ordered: bool,     // 有主键或用户排序 → 分页稳定
+}
+```
+
+取数请求在 `rds-database` 侧（`crates/database/src/table_data.rs`）：
+
+```text
+pub struct TableDataRequest {
+    pub offset: usize,                 // 页起点
+    pub limit: usize,                  // 0 = 默认 200
+    pub order_by: Vec<(String, bool)>, // (列名, 升序)；用户排序 + 主键补齐
+}
+```
 
 ### 6.3 `PropertyState`（面板状态，自 database::property_panel 迁入）
 
@@ -152,6 +182,7 @@ pub enum PageId {
     Indexes,       // 索引
     Constraints,   // 约束
     Ddl,           // DDL（源版 / 合成）
+    Data,          // 表数据预览（分页抓取；见 §9 数据流）
     Source,        // 例程序源码
     Privileges,    // 权限（当前不支持 → 置灰）
     Dependencies,  // 依赖（当前不支持 → 置灰）
@@ -201,13 +232,22 @@ pub trait PropertyRegistry {
 
 ```text
 导航双击 / Quick Open ShowProperties
-  → PropertyRequest（database::model，含 PropertyRef + conn_label + driver）
+  → PropertyRequest（database::model，含 PropertyRef + conn_label + driver + data）
   → EditorBridge::show_properties → EditorPanel::request_properties
   → nav_jobs::enqueue_properties（后台单工作线程）
   → database::load_properties（MetadataService 实时内省）
-  → property::ObjectProperties（回填 PropertyState，key 不匹配的过期结果丢弃）
+      └ 若 data = Some(TableDataRequest)：调 table_data::load_table_data
+         （标识符转义 → ORDER BY 用户排序+主键补齐 → LIMIT limit+1 OFFSET 探测 has_more
+          → 真 COUNT(*) 单独一问 → 单元格 JSON 化，null → None）
+  → property::ObjectProperties（含 data: Option<TableDataPage>，回填 PropertyState，
+    key 不匹配的过期结果丢弃）
   → EditorPanel::render_property_panel：registry.pages_for(kind) 逐页渲染
+  → 「数据」页：render_data_page（列头排序 / 上一页 / 下一页 → 事件路径
+    reload_properties_data 重发请求，渲染零 I/O）
 ```
+
+「数据」页懒加载：首次切到该页签且 `data` 未请求时才自动带 `TableDataRequest::default()`
+重发（首屏 200 行）；排序回到第一页，主键自动跟在用户排序后补全（分页稳定）。
 
 ## 10. 渲染协议（tab 化）
 
@@ -216,6 +256,7 @@ pub trait PropertyRegistry {
    - `General` → `properties` 网格；
    - `Columns` / `Indexes` / `Constraints` → `sections` 中 `id` 匹配的分区表格；
    - `Ddl` / `Source` → `sections` 中对应分区（多行文本单列表）；
+   - `Data` → `data` 网格（行号 + 列名 + 单元格；NULL 灰置；列头排序；分页按钮）；
    - `Privileges` / `Dependencies` 且 `state = Unsupported` → 灰置占位内容；
    - 找不到对应 section 且 `state = Supported` → 空态文案（不报错）。
 3. 宽高沿用右 Dock（280px 基准，宽度可拖拽记忆），行内无裸 px / 裸色值（走 `workbench_shell::ui` 与主题 token）。
@@ -231,9 +272,11 @@ pub trait PropertyRegistry {
 ## 12. 测试
 
 - `rds-property`：kind 覆盖 / 描述模型构造 / `PropertyState` 默认值 / 注册表契约（mock registry）。
-- `rds-database`：`property_ref_of` 映射（kind 全量）、`load_properties` 各类型分区、列表 / 索引 / 约束表渲染。
-- `rds-workbench`：Quick Open `ShowProperties` 构造、`apply_props_results` 过期 key 丢弃。
-- 窗口级（`#[gpui_kit::test]`）：tab 切换渲染、灰置页占位。
+- `rds-database`：`property_ref_of` 映射（kind 全量）、`load_properties` 各类型分区、列表 / 索引 / 约束表渲染、
+  `table_data` 分页抓取（quote_ident 转义 / has_more 探测 / COUNT / 排序补齐）。
+- `rds-workbench`：Quick Open `ShowProperties` 构造、`apply_props_results` 过期 key 丢弃、
+  `nav_property_real` 真机全链路（SQLite / DuckDB：导航 → 属性 → 数据页分页 / 排序 / NULL / 视图数据）。
+- 窗口级（`#[gpui_kit::test]`）：tab 切换渲染、灰置页占位、数据页懒加载。
 
 ## 13. 已知问题与限制
 
@@ -243,13 +286,18 @@ pub trait PropertyRegistry {
 3. `ObjectProperties.sections` 的 id 与描述模型 `PageId` 是一一映射；新增分区类型需同时
    扩展 `PageId` 与注册表（渲染不动）。
 4. 列表格「引用」列语义（`表.列` / `FK` / 空）与列序号回退逻辑是既有行为，抽取不改语义。
+5. 「数据」页当前为**只读预览**（分页 + 排序）；编辑回写（行身份 / 事务 / 暂存 / 应用）待驱动
+   `table_editor` 能力位声明后另立模块（`docs/architecture/editor/editor-table-editing-plan.md`）。
+6. 数据行数用真 `COUNT(*)` 单独一问：大表上会多花一次查询；取不到时如实显示「行数未知」，
+   不编 0。分页 `has_more` 用 `limit + 1` 探测，不为此多跑 COUNT。
+7. 视图 / 无主键表无排序时如实显示「本页无定义顺序」（分页不稳定），用户按列排序后恢复稳定。
 
 ## 14. 实现位置映射（设计决策 → 代码文件）
 
 | 设计决策 | 代码文件 |
 | --- | --- |
-| `PropertyKind` / 数据容器 / `PropertyState` | `crates/property/src/model.rs` |
-| 描述模型 + `PropertyRegistry` trait | `crates/property/src/descriptor.rs` |
+| `PropertyKind` / 数据容器 / `PropertyState` / 数据页模型 | `crates/property/src/model.rs` |
+| 描述模型 + `PropertyRegistry` trait（含 `PageId::Data`） | `crates/property/src/descriptor.rs` |
 | crate 公共 API | `crates/property/src/lib.rs` |
 | `load_properties` 取数（保留） | `crates/database/src/property_panel.rs` |
 | 注册表实现（各类型页集合 + 支持状态） | `crates/database/src/property_panel.rs`（`PropertyRegistryImpl`） |

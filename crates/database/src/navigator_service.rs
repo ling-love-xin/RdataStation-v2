@@ -1007,9 +1007,17 @@ impl NavigatorService {
         conn_label: &str,
         driver: &str,
         db_type: Option<&str>,
+        data_req: Option<&crate::table_data::TableDataRequest>,
     ) -> Result<property::ObjectProperties, CoreError> {
-        crate::property_panel::load_properties(&self.metadata, ref_, conn_label, driver, db_type)
-            .await
+        crate::property_panel::load_properties(
+            &self.metadata,
+            ref_,
+            conn_label,
+            driver,
+            db_type,
+            data_req,
+        )
+        .await
     }
 }
 

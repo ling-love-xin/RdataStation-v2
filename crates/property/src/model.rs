@@ -42,6 +42,47 @@ pub struct PropertySection {
     pub table: PropertyTable,
 }
 
+/// 表数据预览的一列（名称 + 类型）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableDataColumn {
+    pub name: String,
+    pub data_type: String,
+}
+
+/// 表数据预览的一页（**只读**；不含任何编辑写回）。
+///
+/// 取数在 `rds-database::table_data`（M4 表数据能力，与结果集只共享网格渲染层——
+/// 见 `docs/architecture/editor/editor-table-editing-plan.md` §1）；本结构只是数据容器。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableDataPage {
+    /// 列（顺序 = 展示顺序）。
+    pub columns: Vec<TableDataColumn>,
+    /// 行数据（`None` = SQL NULL，渲染置灰）。
+    pub rows: Vec<Vec<Option<String>>>,
+    /// 行数（真 `COUNT(*)`；拿不到如实留空，不编 0）。
+    pub total: Option<u64>,
+    /// 本页起始行号（供「加载更多 / 上一页 / 下一页」）。
+    pub offset: usize,
+    /// 是否还有后续页（`limit + 1` 探测，不多跑一次 COUNT）。
+    pub has_more: bool,
+    /// 是否有定义顺序（用户排序或主键）——无键表 / 视图如实说明，不假装分页稳定。
+    pub is_ordered: bool,
+}
+
+impl TableDataPage {
+    /// 空页（对象无列 / 查询未命中时返回，渲染「（无）」）。
+    pub fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            total: Some(0),
+            offset: 0,
+            has_more: false,
+            is_ordered: true,
+        }
+    }
+}
+
 /// 一个对象的完整属性（供属性面板渲染）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectProperties {
@@ -55,6 +96,8 @@ pub struct ObjectProperties {
     pub properties: Vec<PropertyRow>,
     /// 子实体分区
     pub sections: Vec<PropertySection>,
+    /// 表数据预览（「数据」页签；非表对象 / 未请求时为 None）
+    pub data: Option<TableDataPage>,
 }
 
 /// 属性面板状态（懒加载一次，按请求 key 失效重载）。

@@ -99,6 +99,21 @@ impl MetadataService {
         db.list_schemas(catalog).await
     }
 
+    /// 在能访问该 catalog 的连接上执行一条只读查询（表数据预览用）。
+    ///
+    /// 与 `database_for` 同一套 catalog 展开逻辑：PostgreSQL 跨库会换到目标库的连接，
+    /// SQLite / DuckDB 直接用主连接。调用方负责 SQL 生成（标识符引号转义见
+    /// [`crate::table_data::quote_ident`]）。
+    pub async fn execute_query(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        sql: &str,
+    ) -> Result<shared::models::QueryResult, CoreError> {
+        let db = self.database_for(conn_id, catalog).await?;
+        db.query(sql).await
+    }
+
     /// 列举表 / 视图。
     ///
     /// 浏览器与回退返回**同一套结构对象**（`NodeInfo`），所以这里是纯转发——

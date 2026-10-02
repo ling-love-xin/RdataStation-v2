@@ -1327,6 +1327,7 @@ impl NavView {
                                 },
                                 conn_label: conn_name.clone(),
                                 driver: conn_driver.clone(),
+                                data: None,
                             };
                             entity.update(app, |this, cx| {
                                 this.host.show_properties(req, cx);
@@ -1491,6 +1492,7 @@ impl NavView {
                                             property: prop.clone(),
                                             conn_label: label.clone(),
                                             driver: drv.clone(),
+                                            data: None,
                                         },
                                         cx,
                                     );
@@ -1925,6 +1927,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             property: p,
                             conn_label: n_conn_label.clone(),
                             driver: n_driver.clone(),
+                            data: None,
                         };
                         entity.update(app, |this, cx| {
                             this.host.show_properties(req, cx);
@@ -1995,6 +1998,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                     property: prop.clone(),
                                     conn_label: label.clone(),
                                     driver: drv.clone(),
+                                    data: None,
                                 },
                                 cx,
                             );
@@ -2501,6 +2505,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         property,
                         conn_label: conn_label.clone(),
                         driver: driver.clone(),
+                        data: None,
                     };
                     this.host.show_properties(req, cx);
                 }

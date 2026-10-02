@@ -9,11 +9,11 @@
 
 | 项 | 结果 |
 | --- | --- |
-| SQLite 全链路（连接 → 导航 → 属性面板 → 灰置 → 缓存） | ✅ 通过 |
+| SQLite 全链路（连接 → 导航 → 属性面板 → 数据页 → 灰置 → 缓存） | ✅ 通过 |
 | DuckDB 全链路（同上） | ✅ 通过 |
 | 回归基线（rds-property 单测 / database + workbench 测试 / app 编译） | ✅ 通过（见 §4） |
 
-> 属性面板抽取与 tab 化改造**未破坏**导航加载、内省取数与缓存链路；权限 / 依赖灰置页在两种文件型数据库下均按注册表正确呈现。
+> 属性面板抽取与 tab 化改造、**数据预览（数据页签）**未破坏导航加载、内省取数与缓存链路；权限 / 依赖灰置页在两种文件型数据库下均按注册表正确呈现。
 
 ## 2. 验证链路（与 UI 同源）
 
@@ -25,8 +25,9 @@
 | 4 类别文件夹 | `load_children(Catalog)` | 树第二层（无 Schema 层退化） |
 | 5 表 / 视图 / 列 | `load_children(Folder/Table)` | 树逐层展开 |
 | 6 属性面板 | `property_panel::load_properties` | 面板取数（表 / 视图 / 列 / 连接） |
-| 7 灰置注册表 | `PropertyRegistryImpl::pages_for` | 页签集合 + 权限 / 依赖灰置 |
-| 8 缓存 | `load_children` 二次调用 | cache-aside 写穿 L2 后命中 |
+| 7 数据页 | `table_data::load_table_data`（经 `execute_query`） | 「数据」页签（分页 / 排序 / NULL） |
+| 8 灰置注册表 | `PropertyRegistryImpl::pages_for` | 页签集合 + 权限 / 依赖灰置 |
+| 9 缓存 | `load_children` 二次调用 | cache-aside 写穿 L2 后命中 |
 
 ## 3. 用例与断言口径
 
@@ -42,10 +43,14 @@
 | 视图层 = v_orders | ✅ |
 | 列层 = id / parent_id / tag / note（4 列） | ✅ |
 | 表属性：网格 4 行 + 分区 [Columns, Indexes, Constraints, Ddl]（含列分区 4 行） | ✅ |
+| **数据页：4 列 × 3 行、total=3、has_more=false、is_ordered=true（主键）** | ✅ |
+| **分页：limit=1 首页 1 行且 has_more=true（limit+1 探测）；offset=2 末页且 parent_id=NULL（单元格 None → 置灰）** | ✅ |
+| **排序：tag ASC 首行 t1 / DESC 首行 t3（列头排序链路）** | ✅ |
+| **视图数据页：3 行且 is_ordered=false（无主键如实声明）** | ✅ |
 | 视图属性：含列分区 | ✅ |
 | 列属性：名称 / 所属表 / 类型 / 可空 / 主键 / 外键 / 序号 / 默认值 / 注释 | ✅ |
 | 连接属性：含驱动等基础信息 | ✅ |
-| 注册表：表 = [General, Columns, Indexes, Constraints, Ddl, **Privileges, Dependencies**]（后两者灰置） | ✅ |
+| 注册表：表 = [General, Columns, Indexes, Constraints, Ddl, **Data**, Privileges, Dependencies]（后两者灰置、Data 在权限前） | ✅ |
 | 二次加载结果与首次一致（cache-aside） | ✅ |
 
 ### 3.2 DuckDB（v1.5.5）
@@ -58,11 +63,13 @@
 | 类别文件夹 = 表 (2) / 视图 (1) | ✅ |
 | 表层 / 视图层 / 列层 与 SQLite 完全同构 | ✅ |
 | 表 / 视图 / 列 / 连接属性面板 | ✅ |
-| 注册表灰置（权限 / 依赖） | ✅ |
+| **数据页 / 分页（has_more 探测、NULL 单元格）/ 排序（ASC/DESC）/ 视图数据（is_ordered=false）** | ✅ 与 SQLite 口径一致 |
+| 注册表灰置（权限 / 依赖）+ Data 页位置 | ✅ |
 | 二次加载（cache-aside） | ✅ |
 
-> 两驱动断言口径完全一致（同一 `run_nav_property_chain` 参数化），验证「**导航与属性面板不因驱动差异而分叉**」。
+> 两驱动断言口径完全一致（同一 `run_nav_property_chain` 参数化），验证「**导航、属性面板与数据预览不因驱动差异而分叉**」。
 > DuckDB 主键不自增（`INTEGER PRIMARY KEY` 非 rowid 别名）——fixture 显式插入 `id`，属测试数据写法，非产品缺陷。
+> 数据页实现要点：驱动 `query` 只填 Arrow `batches`、`rows` 字段恒空（引擎已知坑）——`table_data` 走 `rows_as_json` 从 batches 提取，并在本报告链路内断言数据真实落库；文本单元格经 `serde_json::Value::String` 取内部值（避免 JSON 序列化自带的引号）。
 
 ## 4. 回归基线（本次改动后）
 

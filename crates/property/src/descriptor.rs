@@ -20,6 +20,8 @@ pub enum PageId {
     Constraints,
     /// DDL（源版 / 合成）
     Ddl,
+    /// 表数据预览（分页抓取，见 `crate::model::TableDataPage`）
+    Data,
     /// 例程序源码
     Source,
     /// 权限（当前不支持 → 置灰）

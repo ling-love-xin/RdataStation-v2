@@ -69,6 +69,15 @@
   table.rows { width: 100%; border-collapse: collapse; }
   table.rows th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11.5px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
   table.rows td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  /* 数据页网格：行号槽 / 可排序列头 / NULL 置灰 / 页脚 */
+  table.rows.data th.sortable { cursor: pointer; user-select: none; }
+  table.rows.data th.sortable:hover { color: var(--accent); }
+  table.rows.data th.rowno, table.rows.data td.rowno { color: var(--muted); width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+  table.rows.data td.null { color: var(--disabled); font-style: italic; }
+  .data-footer { color: var(--muted); font-size: 11.5px; padding: 8px 8px 4px; }
+  .pager { display: flex; gap: 8px; padding: 4px 8px 8px; }
+  .btn { background: var(--tab-bar); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
   pre.ddl {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 12px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
@@ -135,8 +144,8 @@ const OBJECTS = {
     unsupported: ["权限"],
   },
   "table-orders": {
-    name: "orders", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "权限", "依赖"],
-    general: [["名称", "orders"], ["类型", "表"], ["列数", "4"], ["行数", "2"], ["归属域", "全局"], ["限定名", "main.orders"]],
+    name: "orders", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "数据", "权限", "依赖"],
+    general: [["名称", "orders"], ["类型", "表"], ["列数", "4"], ["行数", "7"], ["归属域", "全局"], ["限定名", "main.orders"]],
     columns: { head: ["#", "名称", "类型", "可空", "主键", "外键", "默认值", "注释"],
       rows: [
         ["1", "id", "INTEGER", "否", "✔", "", "", ""],
@@ -149,24 +158,32 @@ const OBJECTS = {
     constraints: { head: ["名称", "类型", "定义"],
       rows: [["", "外键", "parent_id REFERENCES parent(id)"], ["", "主键", "PRIMARY KEY (id)"]]},
     ddl: "CREATE TABLE orders (id INTEGER PRIMARY KEY, parent_id INTEGER, tag TEXT, note TEXT DEFAULT 'x', FOREIGN KEY (parent_id) REFERENCES parent(id))",
+    data: { columns: ["id", "parent_id", "tag", "note"], total: 7, ordered: true,
+      rows: [
+        ["1", "1", "t1", "x"], ["2", "2", "t2", "x"], ["3", null, "t3", "x"],
+        ["4", "3", "t4", "x"], ["5", "4", "t5", "x"], ["6", "5", "t6", "y"], ["7", "6", "t7", "y"],
+      ]},
     unsupported: ["权限", "依赖"],
   },
   "table-parent": {
-    name: "parent", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "权限", "依赖"],
+    name: "parent", kind: "表", tabs: ["通用", "列", "索引", "约束", "DDL", "数据", "权限", "依赖"],
     general: [["名称", "parent"], ["类型", "表"], ["列数", "2"], ["行数", "2"], ["归属域", "全局"], ["限定名", "main.parent"]],
     columns: { head: ["#", "名称", "类型", "可空", "主键", "外键", "默认值", "注释"],
       rows: [["1", "id", "INTEGER", "否", "✔", "", "", ""], ["2", "name", "TEXT", "否", "", "", "", ""]]},
     indexes: { head: ["名称", "唯一", "列"], rows: []},
     constraints: { head: ["名称", "类型", "定义"], rows: [["", "主键", "PRIMARY KEY (id)"]]},
     ddl: "CREATE TABLE parent (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    data: { columns: ["id", "name"], total: 2, ordered: true, rows: [["1", "a"], ["2", "b"]]},
     unsupported: ["权限", "依赖"],
   },
   "view-vorders": {
-    name: "v_orders", kind: "视图", tabs: ["通用", "列", "DDL", "权限"],
+    name: "v_orders", kind: "视图", tabs: ["通用", "列", "DDL", "数据", "权限"],
     general: [["名称", "v_orders"], ["类型", "视图"], ["列数", "2"], ["归属域", "全局"], ["限定名", "main.v_orders"]],
     columns: { head: ["#", "名称", "类型", "可空", "注释"],
       rows: [["1", "id", "INTEGER", "是", ""], ["2", "tag", "TEXT", "是", ""]]},
     ddl: "CREATE VIEW v_orders AS SELECT id, tag FROM orders",
+    data: { columns: ["id", "tag"], total: 7, ordered: false,
+      rows: [["1", "t1"], ["2", "t2"], ["3", "t3"], ["4", "t4"], ["5", "t5"], ["6", "t6"], ["7", "t7"]]},
     unsupported: ["权限"],
   },
   "col-tag": {
@@ -176,10 +193,12 @@ const OBJECTS = {
   },
 };
 
-const TAB_LABEL = { "通用": "通用", "列": "列", "索引": "索引", "约束": "约束", "DDL": "DDL", "权限": "权限", "依赖": "依赖" };
+const TAB_LABEL = { "通用": "通用", "列": "列", "索引": "索引", "约束": "约束", "DDL": "DDL", "数据": "数据", "权限": "权限", "依赖": "依赖" };
 
 let current = "table-orders";
 let activeTab = "通用";
+// 数据页交互状态（分页 + 排序，与 workbench `render_data_page` 同规则）
+let dataState = { offset: 0, limit: 5, sortCol: null, asc: true };
 
 function render() {
   const obj = OBJECTS[current];
@@ -201,6 +220,12 @@ function render() {
   });
   if (!obj.tabs.includes(activeTab)) { activeTab = obj.tabs[0]; render(); return; }
   renderContent(obj);
+}
+
+function cellHtml(v) {
+  return v === null || v === undefined
+    ? '<td class="null">NULL</td>'
+    : '<td>' + v + '</td>';
 }
 
 function renderContent(obj) {
@@ -227,11 +252,62 @@ function renderContent(obj) {
     c.innerHTML = html;
   } else if (activeTab === 'DDL') {
     c.innerHTML = '<pre class="ddl">' + obj.ddl + '</pre>';
+  } else if (activeTab === '数据') {
+    const d = obj.data;
+    if (!d) { c.innerHTML = '<div class="placeholder">该对象无「数据」页</div>'; return; }
+    // 排序（列头点击：未排序 → 升序 → 降序 → 循环），排序后回到第一页
+    let rows = d.rows.slice();
+    if (dataState.sortCol !== null) {
+      const ix = d.columns.indexOf(dataState.sortCol);
+      rows.sort((a, b) => {
+        const av = a[ix], bv = b[ix];
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        const r = String(av).localeCompare(String(bv), undefined, { numeric: true });
+        return dataState.asc ? r : -r;
+      });
+    }
+    const hasMore = dataState.offset + dataState.limit < rows.length;
+    const page = rows.slice(dataState.offset, dataState.offset + dataState.limit);
+    let html = '<table class="rows data">';
+    html += '<tr><th class="rowno">#</th>' + d.columns.map((col, i) => {
+      const mark = dataState.sortCol === col ? (dataState.asc ? ' ↑' : ' ↓') : '';
+      return '<th class="sortable" data-col="' + i + '">' + col + mark + '</th>';
+    }).join('') + '</tr>';
+    page.forEach((r, i) => {
+      const rowNo = dataState.offset + i + 1;
+      html += '<tr><td class="rowno">' + rowNo + '</td>' + r.map(cellHtml).join('') + '</tr>';
+    });
+    html += '</table>';
+    let footer = '<div class="data-footer">共 ' + d.total + ' 行';
+    if (!d.ordered && dataState.sortCol === null) footer += ' · 本页无定义顺序';
+    footer += '</div><div class="pager">';
+    if (dataState.offset > 0) footer += '<button class="btn" id="data-prev">‹ 上一页</button>';
+    if (hasMore) footer += '<button class="btn" id="data-next">下一页 ›</button>';
+    footer += '</div>';
+    c.innerHTML = html + footer;
+    document.querySelectorAll('.data .sortable').forEach(th => {
+      th.onclick = () => {
+        const col = d.columns[Number(th.dataset.col)];
+        if (dataState.sortCol === col) { dataState.asc = !dataState.asc; } else { dataState.sortCol = col; dataState.asc = true; }
+        dataState.offset = 0;
+        render();
+      };
+    });
+    const prev = document.getElementById('data-prev');
+    if (prev) prev.onclick = () => { dataState.offset = Math.max(0, dataState.offset - dataState.limit); render(); };
+    const next = document.getElementById('data-next');
+    if (next) next.onclick = () => { dataState.offset += dataState.limit; render(); };
   }
 }
 
 document.querySelectorAll('.tree-node').forEach(n => {
-  n.onclick = () => { current = n.dataset.obj; activeTab = OBJECTS[current].tabs[0]; render(); };
+  n.onclick = () => {
+    current = n.dataset.obj; activeTab = OBJECTS[current].tabs[0];
+    dataState = { offset: 0, limit: 5, sortCol: null, asc: true };
+    render();
+  };
 });
 
 document.getElementById('theme-btn').onclick = () => {
