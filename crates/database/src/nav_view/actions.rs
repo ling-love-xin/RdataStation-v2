@@ -262,7 +262,13 @@ impl NavView {
         self.mark_nav_state_dirty(conn_id, cx);
     }
 
-    /// 展开前的隐式建连：未连接时先建连；返回是否可用（已连接 或 建连成功）。
+    /// 展开前的隐式建连：未连接时先**调度**建连（后台线程执行，见
+    /// `workbench::services::nav_runtime::connect_entry`）；返回是否可用。
+    ///
+    /// 2026-10-03 起为**乐观语义**：`Ok` 表示「建连请求已派发」——立即标记已连接并返回
+    /// `true`，真正的连接结果（成功 → 预热重载；失败 → 提示 + 回滚标记）由
+    /// [`Self::apply_connect_results`] 在轮询泵里回填。此前在 UI 主线程同步建连，
+    /// 不可达主机（mysql / PG）会冻结窗口 30s+（“无响应”）。
     ///
     /// 失败时写面板提示（与 `toggle_connection` 同文案），不阻后续可重试。
     pub(super) fn ensure_connected_for_browse(
@@ -275,10 +281,6 @@ impl NavView {
         if already {
             return true;
         }
-        let root = self
-            .host
-            .project_root()
-            .map(|p| p.to_string_lossy().to_string());
         match self.host.connect(conn_id) {
             Ok(()) => {
                 {
@@ -288,14 +290,43 @@ impl NavView {
                     // 清掉上一次的负载错误（如 CONN_NOT_FOUND），以便重试加载。
                     view.errors.remove(conn_id);
                 }
-                nav_jobs::warm_after_connect(conn_id, root.as_deref());
-                self.ensure_warm_poll(cx);
                 true
             }
             Err(e) => {
                 self.host.notice(format!("连接失败: {e}"), cx);
                 false
             }
+        }
+    }
+
+    /// 回填后台建连结果（主线程，轮询泵调用）。
+    ///
+    /// 成功 → 标记已连接（幂等）+ 清负载错误 + 提交预热并启动进度轮询；
+    /// 失败 → 回滚乐观标记 + 面板提示。
+    pub(super) fn apply_connect_results(
+        &mut self,
+        results: Vec<nav_jobs::ConnectResult>,
+        cx: &mut Context<Self>,
+    ) {
+        for r in results {
+            if r.ok {
+                {
+                    let mut view = self.nav.borrow_mut();
+                    view.connected.insert(r.conn_id.clone());
+                    view.prefetched.clear();
+                    view.errors.remove(&r.conn_id);
+                }
+                let root = self
+                    .host
+                    .project_root()
+                    .map(|p| p.to_string_lossy().to_string());
+                nav_jobs::warm_after_connect(&r.conn_id, root.as_deref());
+                self.ensure_warm_poll(cx);
+            } else {
+                self.nav.borrow_mut().connected.remove(&r.conn_id);
+                self.host.notice(format!("连接失败: {}", r.message), cx);
+            }
+            cx.notify();
         }
     }
 
@@ -606,6 +637,15 @@ impl NavView {
                 {
                     return;
                 }
+                // 导航建连（后台线程执行，2026-10-03）：结果回填——成功 → 预热，失败 → 回滚 + 提示。
+                let connect_results = nav_jobs::drain_connect_results();
+                if !connect_results.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_connect_results(connect_results, cx))
+                        .is_err()
+                {
+                    return;
+                }
                 // 搜索：同一轮询泵回填（搜索框的跨连接索引搜索）。
                 let search_results =
                     nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
@@ -619,6 +659,7 @@ impl NavView {
                 let idle = !nav_jobs::has_pending_loads()
                     && !nav_jobs::has_pending_sql()
                     && !nav_jobs::has_pending_test()
+                    && !nav_jobs::has_pending_connect()
                     && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator);
                 if idle {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
@@ -626,6 +667,7 @@ impl NavView {
                     if !nav_jobs::has_pending_loads()
                         && !nav_jobs::has_pending_sql()
                         && !nav_jobs::has_pending_test()
+                        && !nav_jobs::has_pending_connect()
                         && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator)
                     {
                         break;
@@ -1296,12 +1338,19 @@ impl NavView {
     }
 
     /// 连接 / 断开运行时连接（保留缓存）。连接状态取运行时真值。
+    ///
+    /// 2026-10-03 起连接分支为**乐观语义**：`host.connect` 只派发后台建连（立即返回
+    /// `Ok`），这里先标记已连接；真正的成败由 [`Self::apply_connect_results`] 回填
+    /// （成功 → 预热；失败 → 回滚标记 + 提示）。断开仍是本地操作，同步处理。
     pub(super) fn toggle_connection(
         &mut self,
         conn_id: &str,
         project_root: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        // 建连已改后台调度：项目根只用于 apply_connect_results 里的预热（从 host 现取），
+        // 本入口不再直接使用；保留参数仅为调用方签名稳定。
+        let _ = project_root;
         let already =
             self.host.is_connected(conn_id) || self.nav.borrow().connected.contains(conn_id);
         let outcome = if already {
@@ -1311,20 +1360,13 @@ impl NavView {
         };
         match outcome {
             Ok(is_connected) => {
-                {
-                    let mut view = self.nav.borrow_mut();
-                    if is_connected {
-                        view.connected.insert(conn_id.to_string());
-                        // 刷新模式下预取过的标记清空（重新连接后重新预取）。
-                        view.prefetched.clear();
-                    } else {
-                        view.connected.remove(conn_id);
-                    }
-                }
+                let mut view = self.nav.borrow_mut();
                 if is_connected {
-                    // C1：连接成功后提交后台预热（仅 catalogs/schemas），不阻塞 UI。
-                    nav_jobs::warm_after_connect(conn_id, project_root);
-                    self.ensure_warm_poll(cx);
+                    view.connected.insert(conn_id.to_string());
+                    // 刷新模式下预取过的标记清空（重新连接后重新预取）。
+                    view.prefetched.clear();
+                } else {
+                    view.connected.remove(conn_id);
                 }
             }
             Err(e) => self.host.notice(format!("连接操作失败: {e}"), cx),

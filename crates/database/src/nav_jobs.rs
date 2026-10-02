@@ -69,6 +69,17 @@ pub struct TestConnResult {
     pub result: Result<String, String>,
 }
 
+/// 导航建连结果（回传主线程）。
+///
+/// 由宿主（`workbench::services::nav_runtime`）在**后台线程**完成建连后提交：
+/// 不可达主机（mysql / PG 等）的建连含超时重试，绝不能在 UI 主线程同步等待；
+/// 视图侧经 [`drain_connect_results`] 轮询取走并回填状态（成功 → 预热；失败 → 提示 + 回滚）。
+pub struct ConnectResult {
+    pub conn_id: String,
+    pub ok: bool,
+    pub message: String,
+}
+
 /// 单个类别文件夹一次最多预取的表数量（避免大 schema 触发长时间后台 IO）。
 pub const PREFETCH_BATCH: usize = 20;
 
@@ -293,11 +304,13 @@ struct Shared {
     pending_props: AtomicUsize,
     pending_sql: AtomicUsize,
     pending_test: AtomicUsize,
+    pending_connect: AtomicUsize,
     pending_search: [AtomicUsize; SearchConsumer::COUNT],
     load_results: Mutex<Vec<LoadResult>>,
     props_results: Mutex<Vec<PropsResult>>,
     sql_results: Mutex<Vec<SqlGenResult>>,
     test_results: Mutex<Vec<TestConnResult>>,
+    connect_results: Mutex<Vec<ConnectResult>>,
     search_results: [Mutex<Vec<SearchResult>>; SearchConsumer::COUNT],
 }
 
@@ -330,11 +343,13 @@ fn shared() -> &'static Shared {
             pending_props: AtomicUsize::new(0),
             pending_sql: AtomicUsize::new(0),
             pending_test: AtomicUsize::new(0),
+            pending_connect: AtomicUsize::new(0),
             pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
+            connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
         }
     })
@@ -1071,6 +1086,39 @@ pub fn drain_test_results() -> Vec<TestConnResult> {
     std::mem::take(&mut *lock(&shared().test_results))
 }
 
+/// 取走已完成的「导航建连」结果。
+pub fn drain_connect_results() -> Vec<ConnectResult> {
+    std::mem::take(&mut *lock(&shared().connect_results))
+}
+
+/// 标记一次后台建连已开始（workbench 调度入口调用）：让导航轮询泵在有连接在途时
+/// 保持存活，连接结果（可能 30s 后才到）才能被回填，而不是 idle 提前退出。
+pub fn connect_pending_inc() {
+    shared().pending_connect.fetch_add(1, Ordering::SeqCst);
+}
+
+/// 后台建连线程结束（无论成败）时调用，与 [`connect_pending_inc`] 成对。
+pub fn connect_pending_dec() {
+    shared().pending_connect.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// 是否有后台建连在途。
+pub fn has_pending_connect() -> bool {
+    shared().pending_connect.load(Ordering::SeqCst) > 0
+}
+
+/// 宿主（workbench）在后台线程完成建连后提交结果（成功 / 失败都回传）。
+///
+/// 视图侧经 [`ensure_nav_pump`](crate::nav_view::actions::NavigatorActions::ensure_nav_pump)
+/// 轮询取走：成功 → 标记已连接并触发预热；失败 → 回滚乐观标记并提示。
+pub fn submit_connect_outcome(conn_id: &str, ok: bool, message: &str) {
+    lock(&shared().connect_results).push(ConnectResult {
+        conn_id: conn_id.to_string(),
+        ok,
+        message: message.to_string(),
+    });
+}
+
 /// 取走某消费方已完成的索引搜索结果（另一个消费方的批次不受影响）。
 pub fn drain_search_results(consumer: SearchConsumer) -> Vec<SearchResult> {
     shared().take_search_results(consumer)
@@ -1113,11 +1161,13 @@ mod tests {
             pending_props: AtomicUsize::new(0),
             pending_sql: AtomicUsize::new(0),
             pending_test: AtomicUsize::new(0),
+            pending_connect: AtomicUsize::new(0),
             pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
+            connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
         }
     }

@@ -64,6 +64,15 @@ pub fn load_entry_with(
 }
 
 /// 连接一条已保存数据源（按记录字段组装 URL；`project_path` 项目连接需提供）。
+///
+/// **调度式（2026-10-03，修复 UI 卡死）**：真正的建连（含不可达主机的超时重试）改在
+/// **后台线程**执行，本入口只做组装 + 派发后立即返回 `Ok(())`；结果经
+/// [`database::nav_jobs::submit_connect_outcome`] 回传导航视图（成功 → 标记已连接并触发预热，
+/// 失败 → 提示 + 回滚乐观标记）。此前在 UI 主线程 `block_on` 建连：mysql / PG 不可达时
+/// 15s 超时 × 重试一次 = 30s+ 主线程冻结 → 窗口“无响应”。
+///
+/// 后台线程复用进程级 [`bridge_runtime`]：连接池 / 隧道后台任务仍落在稳定运行时上，
+/// 不受线程切换影响。
 pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
     let service = DataSourceService::global().map_err(|e| e.to_string())?;
 
@@ -72,6 +81,7 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
     let rt = bridge_runtime()?;
     // 引用的网络配置档案（协议链 / SSH / 代理 / SSL）→ `ConnectionMethod`。
     // 此前恒为 None：对话框里配好的跳板机 / 代理在连接时被静默忽略（审计 #20）。
+    // 这里是纯本地 sqlite 解析（快），可留在主线程。
     let network_method = rt
         .block_on(resolve_network_method_with_project(
             ds.network_config_id.as_deref(),
@@ -80,10 +90,41 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
         .map_err(|e| e.to_string())?;
 
     let req = build_connect_request(&ds, project_path, network_method)?;
-    let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
-    rt.block_on(conn_service.connect_with_type(req))
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let conn_id = conn_id.to_string();
+    // 在途计数：导航轮询泵据此保持存活，等本线程的结果回填（见 nav_jobs 文档）。
+    database::nav_jobs::connect_pending_inc();
+    let spawned = std::thread::Builder::new()
+        .name(format!("nav-connect-{conn_id}"))
+        .spawn(move || {
+            let rt = match bridge_runtime() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    database::nav_jobs::connect_pending_dec();
+                    database::nav_jobs::submit_connect_outcome(&conn_id, false, &e);
+                    return;
+                }
+            };
+            let outcome =
+                rt.block_on(
+                    ConnectionService::new(engine::get_connection_manager().clone())
+                        .connect_with_type(req),
+                );
+            database::nav_jobs::connect_pending_dec();
+            match outcome {
+                Ok(_) => database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接"),
+                Err(e) => {
+                    database::nav_jobs::submit_connect_outcome(&conn_id, false, &e.to_string())
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // 线程没起来：撤掉在途计数，避免导航轮询泵永远等不到结果。
+            database::nav_jobs::connect_pending_dec();
+            Err(format!("连接线程启动失败: {e}"))
+        }
+    }
 }
 
 /// 组装连接请求（**纯函数，可测**）：作用域路由 + 字段透传；网络方式由 [`connect_entry`] 解析后传入。
