@@ -528,3 +528,23 @@ SSL 与协议链（SSH / 代理）、认证与环境引用、DuckDB 本地加速
 | `connection-dialog-architecture.md` | 架构、数据流、数据字典、错误处理与降级、性能与限制 |
 | `connection-dev-plan.md` | 任务分解与逐轮实现记录（含已知坑） |
 | `docs/architecture/database/database-nav-dev-plan.md` | 导航侧：分组 / 标签视图与检索（消费方） |
+
+---
+
+## 11. 真机测试环境（存档，2026-10-02）
+
+> 用户提供的真机测试环境（四条实际连接）。**2026-10-02 已按用户要求清理应用数据根中的旧连接记录**，此章节用于保留环境信息以便重现；凭据为加密存储（`password_encrypted`，AES-256-GCM），清理后**需重新输入密码**。
+
+| 连接 | 类型 | 地址 / 路径 | 用户名 | 密码状态 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| `real_mysql` | MySQL | `192.168.3.138:3306/mysql`（网络型） | `root` | 已加密（清理后重输） | 内网主机；验证时内网默认关 TLS |
+| `real_pg` | PostgreSQL | `192.168.3.138:5432/postgres`（网络型） | `postgres` | 已加密（清理后重输） | 与 MySQL 同主机；内网默认关 TLS |
+| `real_sqlite` | SQLite | `D:\FossilT\T.fossil`（文件型） | — | 无凭据 | Fossil 仓库文件；文件型路径要点：首次连接自动初始化结构 |
+| `real_duckdb` | DuckDB | `D:\data\123`（文件型） | — | 无凭据 | 无扩展名的 DuckDB 文件；文件型路径要点同上 |
+
+**使用要点（真机验收时对照）**：
+
+- **内网默认关 TLS**：`192.168.3.138` 为局域网主机，验证 MySQL / PostgreSQL 时「连接安全（SSL/TLS）」保持 `disable`（若开 `verify-*` 而主机无证书会连不上——不是连接配置错，是 TLS 策略）。
+- **文件型路径**：SQLite / DuckDB 的地址行填**绝对路径**（`D:\FossilT\T.fossil`、`D:\data\123`），可点 `打开文件…` 选择；DuckDB 文件**无扩展名也可**（`initialize_duckdb_file` 按驱动分派真库初始化，不要求 `.duckdb` 后缀）。
+- **凭据不入文档**：密码仅存于数据库密文；重现环境时在对话框里重新输入。
+- **复现命令**：四条连接对应「测试连接 / 真实连接」双链路验收点（见测试报告 `connection-test-report-2026-10-01.md` §10）。

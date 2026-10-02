@@ -600,6 +600,16 @@ impl ConnectionDialogState {
             return;
         }
         *self.selected_type.borrow_mut() = type_id.to_string();
+        // 规则 1（决策 #110）：新建文件型连接时地址默认 = 当前项目根（地址=本项目）。
+        // 仅文件型（SQLite / DuckDB）适用——网络型的 URI 没有「本项目」语义；已填值不覆盖。
+        if crate::services::data_source_service::is_file_db_driver(type_id)
+            && self.url.read(cx).value().trim().is_empty()
+        {
+            let root = self.project_path.read(cx).value().to_string();
+            if !root.trim().is_empty() {
+                self.url.update(cx, |s, cx| s.set_value(root, window, cx));
+            }
+        }
         self.refresh_driver_items(window, cx);
         let first = enabled_drivers_of_type(&self.drivers.borrow(), type_id)
             .first()

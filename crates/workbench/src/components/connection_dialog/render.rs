@@ -1653,8 +1653,9 @@ impl ConnectionDialogState {
             // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
             // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
             let scope_seg = {
+                // 规则 1（决策 #110）：新建默认作用域 =「仅项目」（未显式选择时的回退值）。
                 let scope_now = if scope_sel.is_empty() {
-                    SCOPE_LABELS[0]
+                    helpers::default_new_scope()
                 } else {
                     scope_sel.as_str()
                 };
@@ -1744,7 +1745,18 @@ impl ConnectionDialogState {
                         .child(type_badge_ui)
                         .child(header_label_state(theme, "名称", missing_name))
                         .child(Input::new(&name).flex_1())
-                        .child(scope_seg),
+                        .child(scope_seg)
+                        // 规则 1（决策 #110）：作用域三态旁 `?` 徽标，悬停提示三态落库语义。
+                        .child(
+                            Button::new("scope-help")
+                                .ghost()
+                                .icon(gpui_kit::assets::IconName::BadgeQuestionMark)
+                                .tooltip(
+                                    "仅全局：写入 global.db，所有项目可见（ID G_…）；\
+                                     仅项目：写入当前项目 .RSmeta/project.db（ID P_…）；\
+                                     全局+项目：全局定义 + 项目快照引用（ID GP_…）",
+                                ),
+                        ),
                 )
                 .child(
                     div()
@@ -2036,11 +2048,29 @@ impl ConnectionDialogState {
                         .map(|d| d.display_name())
                         .unwrap_or_default();
                     dialog.capture_draft(cur, app);
-                    dialog.staging_persist();
+                    // 规则 2（决策 #111）：保存 = 追加暂存条目 + 自动新建空草稿。
+                    // 空草稿（无名称 / 地址 / 驱动）不产生条目，提示后返回。
+                    let is_empty = dialog
+                        .drafts
+                        .borrow()
+                        .get(cur)
+                        .map(|d| d.is_empty_draft())
+                        .unwrap_or(true);
+                    if is_empty {
+                        set_result(
+                            &result,
+                            ResultLevel::Info,
+                            "内容为空，未暂存（先填写名称与地址）",
+                        );
+                        entity.update(app, |_, cx| cx.notify());
+                        return;
+                    }
+                    // 追加空草稿并选中（`staging_add`：capture → push empty → 载入空表单 → persist）。
+                    dialog.staging_add(_window, app);
                     set_result(
                         &result,
                         ResultLevel::Info,
-                        format!("已暂存「{label}」（未写入数据库；保存并退出时统一提交）"),
+                        format!("已暂存「{label}」，并新建空草稿（可继续填写下一条；保存并退出时统一提交）"),
                     );
                     shared.notify_host(app);
                     entity.update(app, |_, cx| cx.notify());
