@@ -162,7 +162,11 @@ fn load_project_connections(root: &Path) -> Result<Vec<ConnectionItem>, String> 
     }
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     runtime.block_on(async {
-        let db = ProjectDatabaseManager::open(root, 4)
+        // 只读打开：连接列表刷新只需读 SQLite 的 connections 表，不需要 DuckDB 写连接。
+        // 用 `open_read_only`（DuckDB 以 READ_ONLY 打开、不拿写锁）避免与项目主写连接
+        // 抢锁——否则每次列表刷新都对同一项目 analytics.duckdb 再开一个可写连接，
+        // 撞上 DuckDB 单写者模型即触发 IO 锁（切换/多开项目时高频出现）。
+        let db = ProjectDatabaseManager::open_read_only(root, 4)
             .await
             .map_err(|e| format!("打开项目库失败: {e}"))?;
         let store = ProjectConnectionStore::new(Arc::new(db));
