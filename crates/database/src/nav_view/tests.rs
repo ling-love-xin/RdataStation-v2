@@ -294,6 +294,77 @@ fn visible_keys(view: &super::NavView) -> Vec<String> {
         .collect()
 }
 
+/// 建连成功自动重载**已展开**的连接根（修复「连接成功后树永不显示」）。
+///
+/// 建连是后台调度式（`nav_runtime::connect_entry`，修 UI 卡死时引入）：展开动作
+/// 发生在连接注册进 `ConnectionManager` 之前，会先吃一次 `CONN_NOT_FOUND` 失败；
+/// `apply_connect_results` 成功回填后，该连接**已展开的根**必须重新入队加载——
+/// 否则树一直空着，用户得收起再展开一次（真机 app_run16 复现链路的回归测试）。
+#[gpui_kit::test]
+fn connect_success_reloads_expanded_root(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    // 前置：连接根已展开（用户点过），但尚未尝试加载（attempted 空）
+    cx.update(|_window, cx| {
+        view.read(cx)
+            .nav
+            .borrow_mut()
+            .expanded
+            .insert(conn.to_string());
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_connect_results(
+                vec![crate::nav_jobs::ConnectResult {
+                    conn_id: conn.to_string(),
+                    ok: true,
+                    message: String::new(),
+                }],
+                cx,
+            );
+        });
+    });
+    let (connected, attempted) = cx.update(|_window, cx| {
+        let st = view.read(cx);
+        let s = st.nav.borrow();
+        (s.connected.contains(conn), s.attempted.contains(conn))
+    });
+    assert!(connected, "连接应标记为已连接");
+    assert!(
+        attempted,
+        "已展开的连接根应自动重载入队（ensure_nav_loaded 的 attempted 痕迹）"
+    );
+}
+
+/// 未展开的连接根：建连成功**不**自动重载（没有可重载的展开态，避免无谓扫描）。
+#[gpui_kit::test]
+fn connect_success_skips_collapsed_root(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_2";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_connect_results(
+                vec![crate::nav_jobs::ConnectResult {
+                    conn_id: conn.to_string(),
+                    ok: true,
+                    message: String::new(),
+                }],
+                cx,
+            );
+        });
+    });
+    let (connected, attempted) = cx.update(|_window, cx| {
+        let st = view.read(cx);
+        let s = st.nav.borrow();
+        (s.connected.contains(conn), s.attempted.contains(conn))
+    });
+    assert!(connected, "连接应标记为已连接");
+    assert!(
+        !attempted,
+        "未展开的连接根不自动重载"
+    );
+}
+
 /// 契约（虚拟列表重构的安全网）：展开态决定**哪些行可见**，顺序 = 父在前、子随后。
 ///
 /// 虚拟列表只能渲染「一个扁平的可见行序列」；这条用例把今天的序列钉住——

@@ -139,6 +139,7 @@ cargo check --workspace --all-targets -j 2
 | `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版（含 mermaid 流程图），章节一一对应，适合贴 PR / wiki |
 | `database-navigator-test-report-2026-10-03.md` | **验证（对齐 M3 测试报告体例）**：SQLite / DuckDB 真机全链路断言 + 单元回归基线 + 文档 - 代码一致性核对 + 缺陷修复记录 |
 | `metadata-cache-vs-dbeaver-datagrip.md` | **缓存为什么这样设计**：与 DBeaver / DataGrip 的 10 维度对照、三条硬约束、分页与搜索的落地记录、仍缺项的触发条件 |
+| `database-navigator-cache-invalidation.md` | **缓存缺陷与修复（2026-10-03）**：半成品缓存实证、`is_loaded` 完成标记语义修正、读侧过滤与重扫清残留、失效策略现状（删除 / 刷新 / 变更各自的设计决策） |
 | `../connection/README.md` | 上游：连接的新建 / 编辑与作用域路由（M3） |
 
 ## 7. 下一步（摘要，权威见架构 §11）

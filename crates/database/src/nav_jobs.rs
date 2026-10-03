@@ -594,28 +594,34 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 fn worker(rx: mpsc::Receiver<Job>) {
-    // tokio 运行时随工作线程存活；数据库驱动依赖它。
-    let Ok(rt) = tokio::runtime::Runtime::new() else {
-        return;
-    };
     while let Ok(job) = rx.recv() {
-        // 执行前先取凭据与计数：`run_job` 之后 `job` 就没了
-        let ticket = job.ticket();
-        let counter = job.counter();
-        // **隔离**：一个坏表 / 一段坏驱动代码只毁它自己这一次任务。
-        // 之前没有这层，一次 panic 会让 worker 线程直接死掉：之后所有展开都不再有回音
-        // （界面永远「加载中」），且挂起的计数也让进度条停在半路。
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(&rt, job)));
-        if let Err(payload) = outcome {
-            let reason = format!("导航任务内部错误（已隔离）：{}", panic_text(&*payload));
-            tracing::error!(reason = %reason, "导航后台任务 panic");
-            if let Some(ticket) = ticket {
-                report_failure(ticket, &reason);
+        // 每任务独立线程：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
+        // worker 立即接下一任务——tokio `timeout` 对同步阻塞不生效（实测：一个
+        // 卡住的查询会让整个 worker 排队、树全卡，JOB_TIMEOUT 兜不住）。
+        // 线程内自建 tokio Runtime（驱动依赖 tokio 上下文）。
+        std::thread::spawn(move || {
+            let Ok(rt) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            // 执行前先取凭据与计数：`run_job` 之后 `job` 就没了
+            let ticket = job.ticket();
+            let counter = job.counter();
+            // **隔离**：一个坏表 / 一段坏驱动代码只毁它自己这一次任务。
+            // 之前没有这层，一次 panic 会让 worker 线程直接死掉：之后所有展开都不再有回音
+            // （界面永远「加载中」），且挂起的计数也让进度条停在半路。
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(&rt, job)));
+            if let Err(payload) = outcome {
+                let reason = format!("导航任务内部错误（已隔离）：{}", panic_text(&*payload));
+                tracing::error!(reason = %reason, "导航后台任务 panic");
+                if let Some(ticket) = ticket {
+                    report_failure(ticket, &reason);
+                }
             }
-        }
-        if let Some(counter) = counter {
-            counter.fetch_sub(1, Ordering::SeqCst);
-        }
+            if let Some(counter) = counter {
+                counter.fetch_sub(1, Ordering::SeqCst);
+            }
+        });
     }
 }
 

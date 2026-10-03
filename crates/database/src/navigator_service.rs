@@ -822,8 +822,11 @@ impl NavigatorService {
                     });
                 }
                 if let Some(c) = cache.as_mut() {
-                    if self.fresh {
-                        // 刷新：先清该 schema 旧行再整块重写，避免已删对象残留在缓存。
+                    // 清旧行时机：刷新（fresh）**或**该 schema 是半成品（未完成扫描）。
+                    // 半成品（进程中途退出留下「有 schema 行、对象不完整」）重扫时必须
+                    // 先清残留对象再整块重写，否则已删的表会留在缓存里被读到。
+                    // 已完整的 schema 不 prune：表趟写完视图趟只补视图，清旧行会误删表数据。
+                    if self.fresh || !c.is_schema_complete(catalog, schema) {
                         c.prune_schema(catalog, schema);
                         let name = schema.to_string();
                         c.put_schemas(catalog, std::slice::from_ref(&name));
@@ -838,6 +841,9 @@ impl NavigatorService {
                     if folder == NavFolder::Tables {
                         c.rebuild_index(catalog, schema);
                     }
+                    // 扫描完成标记（幂等）：表/视图写入 + 索引重建完成后置 is_loaded=1。
+                    // 半成品防御的写侧一半（读侧 `schemas()` 过滤未完成的 schema）。
+                    c.mark_schema_complete(catalog, schema);
                 }
                 Ok(filtered)
             }

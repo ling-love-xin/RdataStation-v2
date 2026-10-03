@@ -317,6 +317,12 @@ impl NavView {
     ) {
         for r in results {
             if r.ok {
+                // 先判展开态再改状态：`ensure_nav_loaded` 需要 `&self`，不能与
+                // `borrow_mut` 同时存活。
+                let conn_expanded = {
+                    let view = self.nav.borrow();
+                    view.expanded.contains(&r.conn_id)
+                };
                 {
                     let mut view = self.nav.borrow_mut();
                     view.connected.insert(r.conn_id.clone());
@@ -324,6 +330,14 @@ impl NavView {
                     // 连接成功 = 新的事实：清掉上次失败的 attempted/errors/loading 痕迹。
                     // 否则此前失败过的连接根会被 attempted 挡住、树永不加载（真机复现的卡死）。
                     nav_forget_attempt(&mut view, &r.conn_id);
+                }
+                // 建连是后台调度式（修 UI 卡死）：展开动作发生在连接注册进
+                // `ConnectionManager` 之前，会先吃一次 `CONN_NOT_FOUND` 失败。
+                // 连接就绪后若不自动重载，树就一直空着——用户得收起再展开一次。
+                // 这里把该连接**已展开的连接根**重新入队（cache-aside，非 fresh），
+                // 子层节点由渲染时的 `ensure_nav_loaded` 渐进补齐。
+                if conn_expanded {
+                    self.ensure_nav_loaded(&r.conn_id, &r.conn_id, NavPath::Connection, false, cx);
                 }
                 let root = self
                     .host

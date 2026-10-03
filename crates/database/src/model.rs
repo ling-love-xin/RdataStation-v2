@@ -231,13 +231,24 @@ impl NavNode {
     }
 
     /// 生成子节点 key：`{conn}/{seg1}/{seg2}/...`。
+    ///
+    /// 段做转义（`/` → `%2F`、`%` → `%25`）：对象名可含 `/`（SQLite / PG 表名
+    /// 均为合法标识符），不转义会让 key 与层分隔符混淆、错位成另一层。
+    /// key 只做**模糊匹配**（attempted/children/loading 由同一函数构造，一致即可），
+    /// 从不反解回路径，所以只需转义、无需解码。
     pub fn child_key(connection_id: &str, segments: &[&str]) -> String {
         if segments.is_empty() {
             connection_id.to_string()
         } else {
-            format!("{}/{}", connection_id, segments.join("/"))
+            let escaped = segments.iter().map(|s| escape_segment(s)).collect::<Vec<_>>();
+            format!("{}/{}", connection_id, escaped.join("/"))
         }
     }
+}
+
+/// key 段转义：`/` → `%2F`、`%` → `%25`（先 `%` 后 `/`，避免二次转义）。
+fn escape_segment(s: &str) -> String {
+    s.replace('%', "%25").replace('/', "%2F")
 }
 
 /// 加载路径（描述「要加载谁的子节点」）。
@@ -410,6 +421,24 @@ mod tests {
         assert_eq!(
             NavNode::child_key("G_a", &["db", "public", "t"]),
             "G_a/db/public/t"
+        );
+    }
+
+    #[test]
+    fn child_key_escapes_slash_and_percent() {
+        // 对象名含 `/`（SQLite / PG 合法标识符）：转义后不与层分隔符混淆
+        assert_eq!(
+            NavNode::child_key("G_a", &["db", "a/b"]),
+            "G_a/db/a%2Fb"
+        );
+        // `%` 先转义，避免与已转义的分隔符二次冲突
+        assert_eq!(
+            NavNode::child_key("G_a", &["db", "50%"]),
+            "G_a/db/50%25"
+        );
+        assert_eq!(
+            NavNode::child_key("G_a", &["db", "a/b%c"]),
+            "G_a/db/a%2Fb%25c"
         );
     }
 }

@@ -75,12 +75,49 @@ impl NavCache {
     // ==================== schema ====================
 
     /// 读取某 catalog 下的 schema 名（空结果视为未命中）。
+    ///
+    /// **只返回完整扫描过的 schema**（`is_loaded = 1`）：半成品缓存（进程中途退出
+    /// 留下的「有 schema 行、对象不完整」）在这里视为未命中，由调用方回源库重扫。
+    /// 详见 `engine::persistence::metadata_cache::mark_schema_complete` 的语义约定。
     pub fn schemas(&self, catalog: &str) -> Option<Vec<String>> {
         let rows = self.ops.list_schemas(Some(catalog)).ok()?;
-        if rows.is_empty() {
+        let out: Vec<String> = rows
+            .into_iter()
+            .filter(|s| s.is_loaded == Some(1))
+            .map(|s| s.schema_name)
+            .collect();
+        if out.is_empty() {
             return None;
         }
-        Some(rows.into_iter().map(|s| s.schema_name).collect())
+        Some(out)
+    }
+
+    /// 标记某 schema 的元数据扫描完整完成（`is_loaded = 1`）。
+    ///
+    /// 调用约定：**表 / 视图 / 列写入 + 索引重建全部完成之后**再调；中途任何一步
+    /// 失败或进程退出，schema 保持 `is_loaded = 0`，下次展开会被 [`Self::schemas`]
+    /// 视为未命中并重扫（写侧 `collect_objects` 表文件夹这一趟的尾部调用）。
+    pub fn mark_schema_complete(&self, catalog: &str, schema: &str) {
+        if let Err(e) = self.ops.mark_schema_complete(catalog, schema) {
+            tracing::warn!(
+                catalog,
+                schema,
+                error = %e,
+                "标记 schema 扫描完成失败（下次展开仍会回源库，不影响正确性）"
+            );
+        }
+    }
+
+    /// 该 schema 是否已**完整扫描**（`is_loaded = 1`）。
+    ///
+    /// 写侧用它判断「重写前要不要清旧行」：半成品（未完成）时先 `prune_schema`
+    /// 清掉残留对象再整块重写；已完整的 schema 增量补充即可（如表趟已写完、
+    /// 视图趟只补视图——此时清旧行会把表数据一起删掉）。
+    pub fn is_schema_complete(&self, catalog: &str, schema: &str) -> bool {
+        match self.ops.get_schema_loaded(catalog, schema) {
+            Ok(Some(v)) => v == 1,
+            _ => false,
+        }
     }
 
     /// 读**全部** schema（含 catalog 与 `schema_id`）——给“一次把候选目录装进内存”的调用方用
@@ -555,6 +592,7 @@ mod tests {
 
         let mut cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
         cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
         let sid = cache.schema_id("main", "public").expect("schema_id");
         cache.put_objects(
             sid,
@@ -600,6 +638,7 @@ mod tests {
 
         let cache = NavCache::open("P_conn_test", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
         assert_eq!(cache.schemas("main"), Some(vec!["public".to_string()]));
         let sid = cache.schema_id("main", "public").expect("schema_id");
 
@@ -645,6 +684,7 @@ mod tests {
 
         let mut cache = NavCache::open("P_conn_prune", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
         let sid = cache.schema_id("main", "public").expect("schema_id");
         cache.put_objects(sid, &[NodeInfo::new("t_old", SchemaObjectKind::Table)]);
         cache.put_columns(sid, "t_old", &[col("id", true)]);
@@ -659,6 +699,35 @@ mod tests {
         );
         assert!(cache.objects(sid, false).is_none(), "刷新后不应命中旧表");
         assert!(cache.columns(sid, "t_old").is_none(), "刷新后不应命中旧列");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 半成品防御：schema 行存在但未标记完整（`is_loaded = 0`）→ `schemas()` 视为未命中。
+    ///
+    /// 模拟「进程写了一半退出」的残留：只有 schema 行、对象未写完时，读侧必须
+    /// 回源库重扫，而不是把不完整的 schema 当成已缓存的完整结果。
+    #[test]
+    fn incomplete_schema_is_missed_until_marked() {
+        let root = temp_root("incomplete");
+        let root_s = root.to_string_lossy().to_string();
+
+        let cache = NavCache::open("P_conn_inc", Some(&root_s)).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        // 未 mark：视为未命中（半成品防御）
+        assert!(
+            cache.schemas("main").is_none(),
+            "未完成的 schema 应视为未命中（读侧回源库重扫）"
+        );
+        assert!(!cache.is_schema_complete("main", "public"));
+
+        cache.mark_schema_complete("main", "public");
+        assert_eq!(
+            cache.schemas("main"),
+            Some(vec!["public".to_string()]),
+            "标记完整后应命中"
+        );
+        assert!(cache.is_schema_complete("main", "public"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

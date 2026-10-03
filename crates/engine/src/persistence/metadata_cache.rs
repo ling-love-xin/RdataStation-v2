@@ -399,7 +399,7 @@ impl MetadataCacheOps {
         self.conn.execute(
             "INSERT OR REPLACE INTO schemata
              (catalog_name, schema_name, owner, comment, introspect_level, is_loaded, last_sync, last_accessed)
-             VALUES (?1, ?2, ?3, ?4, 3, 1, ?5, ?5)",
+             VALUES (?1, ?2, ?3, ?4, 3, 0, ?5, ?5)",
             rusqlite::params![catalog_name, schema_name, owner, comment, now],
         ).map_err(|e| CoreError::storage(
             StorageError::Persistence {
@@ -411,6 +411,68 @@ impl MetadataCacheOps {
 
         Ok(self.conn.last_insert_rowid())
     }
+
+    /// 标记某 schema 的元数据扫描**完整完成**（`is_loaded = 1`）。
+    ///
+    /// 语义约定（2026-10-03 修复半成品缓存）：`save_schema` 建行时 `is_loaded = 0`
+    /// （「扫描进行中 / 未完成」）；只有**表 / 视图 / 列 / 索引全部写完后**才置 1。
+    /// 读侧（导航缓存 `schemas()`）据此把半成品 schema 视为未命中，回源库重扫——
+    /// 此前写入即置 1，进程中途退出会留下「有 schema 行、但对象不完整」的缓存，
+    /// 树显示缺失的表，且 FTS 索引同步（`sync_fts_schema` 按 `is_loaded = 1` 过滤）
+    /// 会把半成品收进搜索命中。
+    /// 标记某 schema 的元数据扫描**完整完成**（`is_loaded = 1`）。
+    ///
+    /// 语义约定（2026-10-03 修复半成品缓存）：`save_schema` 建行时 `is_loaded = 0`
+    /// （「扫描进行中 / 未完成」）；只有**表 / 视图 / 列 / 索引全部写完后**才置 1。
+    /// 读侧（导航缓存 `schemas()`）据此把半成品 schema 视为未命中，回源库重扫——
+    /// 此前写入即置 1，进程中途退出会留下「有 schema 行、但对象不完整」的缓存，
+    /// 树显示缺失的表，且 FTS 索引同步（`sync_fts_schema` 按 `is_loaded = 1` 过滤）
+    /// 会把半成品收进搜索命中。
+    pub fn mark_schema_complete(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<(), CoreError> {
+        self.conn
+            .execute(
+                "UPDATE schemata SET is_loaded = 1 WHERE catalog_name = ?1 AND schema_name = ?2",
+                rusqlite::params![catalog_name, schema_name],
+            )
+            .map(|_| ())
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "mark_schema_complete".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+    }
+
+    /// 读某 schema 的 `is_loaded`（`1` = 完整扫描；`None` = 不存在 / 读失败）。
+    ///
+    /// 供导航缓存写侧判断「半成品 schema 需要清旧行重写」：
+    /// 未完成（0）时清旧行再整块重写，避免半成品里的残留对象留在缓存里。
+    pub fn get_schema_loaded(
+        &self,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> Result<Option<i32>, CoreError> {
+        self.conn
+            .query_row(
+                "SELECT is_loaded FROM schemata WHERE catalog_name = ?1 AND schema_name = ?2",
+                rusqlite::params![catalog_name, schema_name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "get_schema_loaded".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+    }
+
 
     /// 获取 Schema 列表
     pub fn list_schemas(&self, catalog_name: Option<&str>) -> Result<Vec<SchemaInfo>, CoreError> {
@@ -5003,6 +5065,10 @@ mod tests {
         let (mut ops, _db_path, dir) = fresh_ops("fts_sync");
         let public = ops.save_schema("main", "public", None, None)?;
         let other = ops.save_schema("main", "other", None, None)?;
+        // 2026-10-03 语义变更：save_schema 建行 is_loaded=0（「扫描进行中」），
+        // FTS 同步按 is_loaded=1 过滤，测试必须先标记完整再重建索引。
+        ops.mark_schema_complete("main", "public")?;
+        ops.mark_schema_complete("main", "other")?;
         ops.save_table(
             public,
             "orders",
