@@ -287,8 +287,9 @@ impl NavView {
                     let mut view = self.nav.borrow_mut();
                     view.connected.insert(conn_id.to_string());
                     view.prefetched.clear();
-                    // 清掉上一次的负载错误（如 CONN_NOT_FOUND），以便重试加载。
-                    view.errors.remove(conn_id);
+                    // 清掉上一次的失败痕迹（errors/attempted/loading），以便重试加载；
+                    // 真机复现：失败过的连接根被 attempted 挡住后树永不加载。
+                    nav_forget_attempt(&mut view, conn_id);
                 }
                 true
             }
@@ -314,7 +315,9 @@ impl NavView {
                     let mut view = self.nav.borrow_mut();
                     view.connected.insert(r.conn_id.clone());
                     view.prefetched.clear();
-                    view.errors.remove(&r.conn_id);
+                    // 连接成功 = 新的事实：清掉上次失败的 attempted/errors/loading 痕迹。
+                    // 否则此前失败过的连接根会被 attempted 挡住、树永不加载（真机复现的卡死）。
+                    nav_forget_attempt(&mut view, &r.conn_id);
                 }
                 let root = self
                     .host
@@ -1365,6 +1368,8 @@ impl NavView {
                     view.connected.insert(conn_id.to_string());
                     // 刷新模式下预取过的标记清空（重新连接后重新预取）。
                     view.prefetched.clear();
+                    // 连接成功 → 允许连接根重新加载（与 apply_connect_results 同一卡死修复）。
+                    nav_forget_attempt(&mut view, conn_id);
                 } else {
                     view.connected.remove(conn_id);
                 }
