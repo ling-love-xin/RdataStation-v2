@@ -1175,7 +1175,23 @@ impl NavView {
             NavSource::Shared => cx.theme().colors.primary,
         };
 
-        // 行尾操作：`+` 加标签 · `✎` 编辑；仅 hover / 选中显（连接 / 断开走右键菜单）。
+        // 失败连接的行内错误摘要（报错分级：读路径**行内可见 + 可重试，不弹窗**）。
+        // 常驻一行 danger 小字 + 省略号；全量原因在徽标 hover 卡（`状态：连接失败`）与
+        // 行尾重试按钮的 hover 上，不让错误占掉整行宽度。
+        let err_summary = error.as_ref().map(|err| {
+            div()
+                .id(format!("nav-conn-err-{}::{}", scope_key, conn.id))
+                .flex_none()
+                .max_w(rems(ui::NAV_ERR_SUMMARY_W))
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_xs()
+                .text_color(danger)
+                .child(err.clone())
+        });
+
+        // 行尾操作：`+` 加标签 · `✎` 编辑 · 失败连接另带 `⟳ 重试`（仅 hover / 选中显；
+        // 连接 / 断开走右键菜单）。
         //
         // 隐藏用 `invisible()` 而不是 `opacity(0)`：两者的区别在命中测试——
         // `Visibility::Hidden` 的元素既不绘制也不登记 hitbox，`opacity(0)` 的元素
@@ -1193,6 +1209,35 @@ impl NavView {
                 .flex_none()
                 .when(!selected, |s| s.invisible())
                 .group_hover("nav-conn-row", |s| s.visible());
+            // 失败连接：行尾「重试」按钮（与右键「连接」同一动作：重新建连并加载）。
+            if error.is_some() {
+                let entity_retry = entity.clone();
+                let cid_retry = conn_id.clone();
+                let root_retry = project_root.clone();
+                ops = ops.child(
+                    div()
+                        .id(format!("nav-conn-retry-{}::{}", scope_key, conn.id))
+                        .w(rems(ui::NAV_ROW_ACTION_SIZE))
+                        .h(rems(ui::NAV_ROW_ACTION_SIZE))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_color(danger)
+                        .hover(move |s| s.bg(hover_bg))
+                        .child(nav_icon("icons/refresh-cw.svg", ui::ICON_SIZE_XS, danger))
+                        .on_click(move |_, _, app: &mut App| {
+                            let cid = cid_retry.clone();
+                            let root = root_retry.clone();
+                            entity_retry.update(app, |this, cx| {
+                                this.toggle_connection(&cid, root.as_deref(), cx);
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
             // `+`：仅**标签**行内编辑（`+` 只处理标签；归组走右键「移动到分组…」）。
             ops = ops.child(
                 div()
@@ -1355,6 +1400,8 @@ impl NavView {
                         .text_ellipsis()
                         .child(nav_name_highlight(&conn.name, &filter, match_bg, fg)),
                 )
+                // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
+                .when_some(err_summary, |s, e| s.child(e))
                 .when(scope_visible, |s| {
                     // 列本身包在 hover 卡里（§2.3）：短码不是自解释的，hover 给一句人话。
                     let column = div()

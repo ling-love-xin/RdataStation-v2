@@ -221,6 +221,9 @@ impl NavView {
                     .text_color(fg)
                     .child("数据源"),
             )
+            // 面板头连接状态徽标（原型建议①）：`N 连接 · M 在线` 常驻一眼可见，
+            // hover 出逐连接明细（状态点 + 名称 + 状态/失败原因）。与底部状态行同口径。
+            .when_some(self.render_nav_conn_badge(cx), |h, badge| h.child(badge))
             .child(div().flex_1())
             // C1 预热进度（后台任务进行中时显示，可取消）。
             .when(nav_jobs::warm_active(), |h| {
@@ -651,6 +654,15 @@ impl NavView {
             .on_action(cx.listener(|this, _: &NavClearSearch, window, cx| {
                 this.clear_nav_search(window, cx);
             }))
+            // `F2`：重命名。树对象的重命名属引擎能力（无 DDL 编辑入口），暂只对连接行
+            // 提供——与行尾 `✎` 同一入口（编辑对话框）。
+            .on_action(cx.listener(|this, _: &NavRename, window, cx| {
+                if let Some(item) = this.nav_selected() {
+                    if matches!(item.path, Some(NavPath::Connection)) {
+                        this.host.edit_connection(&item.conn_id, window, cx);
+                    }
+                }
+            }))
     }
 
     /// 来源筛选 chip（全部 / 项目 / 全局 / 共享）；点击切换筛选，不占一级结构。
@@ -708,6 +720,107 @@ impl NavView {
                     cx.notify();
                 });
             })
+    }
+
+    /// 面板头连接状态徽标（原型建议①）：`N 连接 · M 在线`，hover 出逐连接明细。
+    ///
+    /// 口径与 [`Self::render_nav_status_bar`] 完全一致（本会话建过连或记录标可用）；
+    /// 状态判定与连接行徽标同一函数族（`loading` → 连接中 / `errors` → 失败 / `connected` → 已连）。
+    /// 无连接时不显示（底部状态行同规则，空态已在说明同一件事）。
+    pub(super) fn render_nav_conn_badge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        use gpui_kit::component::hover_card::HoverCard;
+        let conns = self.host.connections();
+        if conns.is_empty() {
+            return None;
+        }
+        // 逐连接快照一次取好：HoverCard 的 content 闭包是 'static，不能在闭包里 borrow `nav`。
+        let rows: Vec<(String, NavBadgeStatus, Option<String>)> = {
+            let view = self.nav.borrow();
+            conns
+                .iter()
+                .map(|c| {
+                    let err = view.errors.get(&c.id).cloned();
+                    let status = if view.loading.contains(&c.id) {
+                        NavBadgeStatus::Connecting
+                    } else if err.is_some() {
+                        NavBadgeStatus::Failed
+                    } else if view.connected.contains(&c.id) || c.connected {
+                        NavBadgeStatus::Connected
+                    } else {
+                        NavBadgeStatus::Idle
+                    };
+                    (c.name.clone(), status, err)
+                })
+                .collect()
+        };
+        let online = rows
+            .iter()
+            .filter(|(_, s, _)| matches!(s, NavBadgeStatus::Connected))
+            .count();
+        let total = rows.len();
+        let muted = cx.theme().colors.muted_foreground;
+        let hover_bg = cx.theme().colors.list_hover;
+        let trigger = div()
+            .px_1p5()
+            .py_0p5()
+            .rounded_full()
+            .bg(hover_bg)
+            .text_xs()
+            .text_color(muted)
+            .child(format!("{total} 连接 · {online} 在线"));
+        Some(
+            HoverCard::new(SharedString::from("nav-conn-summary"))
+                .open_delay(std::time::Duration::from_millis(300))
+                .trigger(trigger)
+                .content(move |_, _window, cx| {
+                    let fg = cx.theme().colors.foreground;
+                    let muted = cx.theme().colors.muted_foreground;
+                    let danger = cx.theme().colors.danger;
+                    let mut list = div()
+                        .v_flex()
+                        .gap(rems(0.125))
+                        .min_w(rems(12.))
+                        .text_xs();
+                    for (name, status, err) in &rows {
+                        let color = status.color(cx.theme());
+                        let status_label = status.label();
+                        let mut line = div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .w(rems(0.5))
+                                    .h(rems(0.5))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(color),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_color(fg)
+                                    .child(name.clone()),
+                            );
+                        line = line.child(if let Some(err) = err {
+                            div()
+                                .flex_none()
+                                .max_w(rems(16.))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(danger)
+                                .child(format!("{status_label}：{err}"))
+                        } else {
+                            div().flex_none().text_color(muted).child(status_label)
+                        });
+                        list = list.child(line);
+                    }
+                    list
+                }),
+        )
     }
 
     /// 面板底状态行（原型设计 §2）：`N 已连接 · M 离线 · 元数据更新于 X 分钟前`。

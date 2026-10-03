@@ -54,8 +54,8 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 use crate::commands::{
-    NavClearSearch, NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown,
-    NavReorderUp, NavUp,
+    NavClearSearch, NavCollapse, NavDown, NavExpand, NavOpenProperties, NavRename,
+    NavReorderDown, NavReorderUp, NavUp,
 };
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,

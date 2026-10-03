@@ -50,7 +50,9 @@ M4 数据源管理 / 数据库导航：把已建立的连接（M3 产出）变�
 | `src/nav_jobs.rs` | 后台任务队列（单工作线程）：`LoadChildren` / `LoadProperties` / `SearchIndex` / `Warm` / `PrefetchColumns` / `GenerateDml` / `TestConnection`；render 期零 I/O |
 | `src/metadata_service.rs` | 内省取数封装：`list_catalogs` / `has_schema_level` / `list_schemas` / `list_tables` / `list_columns` / `list_indexes` / `list_constraints` / `list_procedures` / `list_functions` / `list_sequences` / `list_triggers` / `get_routine_source` / `get_table_ddl` / `execute_query`（数据预览复用） |
 | `src/model.rs` | `NavPath` / `NavNode` / `NavSource` / `PropertyRef` / `PropertyRequest`（数据页参数透传） |
-| `src/nav_view.rs` + `nav_view/rows.rs` | 视图状态（展开 / 选中 / 过滤 / 分页游标）；行交互（右键菜单、拖拽载荷、属性请求构造） |
+| `src/nav_view.rs` + `nav_view/rows.rs` | 视图状态（展开 / 选中 / 过滤 / 分页游标）；行交互（右键菜单、拖拽载荷、属性请求构造）；失败连接行内错误摘要 + 行尾重试（`NAV_ERR_SUMMARY_W` 截断） |
+| `src/nav_view/chrome.rs` | 面板头 / 底部状态行 / 键盘 on_action；**面板头连接状态徽标**（`N 连接 · M 在线` + hover 逐连接明细，与底状态行同口径）；`F2` 重命名（选中连接 → 编辑对话框） |
+| `src/commands.rs` | `NavRename` 动作（F2）声明；`NavUp/Down/…` 键盘动作族 |
 | `src/property_panel.rs` | 属性取数 `load_properties`（第 6 参 `data_req`）+ `PropertyRegistryImpl`（页签集合 + 灰置） |
 | `src/table_data.rs` | 数据预览分页核心：`TableDataRequest` / `quote_ident` / `load_table_data`（排序 + 主键补齐 / `limit+1` 探测 / 真 COUNT） |
 
@@ -61,7 +63,7 @@ M4 数据源管理 / 数据库导航：把已建立的连接（M3 产出）变�
 | `src/panels/nav.rs` | 左侧导航面板（树渲染 / 搜索框 / 显示开关 `⋯`） |
 | `src/panels/editor.rs` | 属性面板（`render_property_panel` / `render_data_page`）+ 拖拽落点（`request_query`） |
 | `src/view.rs` | Dock 装配（左 Dock 240px）与三模式（展开 / 收起 / 完全隐藏） |
-| `src/commands.rs` | 导航相关命令（Quick Open `ShowProperties` 等） |
+| `src/commands.rs` | 导航相关命令（Quick Open `ShowProperties` 等；`NavRename` 重导供 app 绑定 F2） |
 
 ### 3.3 `crates/property/`（rds-property，独立 crate）
 

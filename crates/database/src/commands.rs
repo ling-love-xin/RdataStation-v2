@@ -22,6 +22,8 @@ actions!(
         /// 清空搜索框（`Esc`）——只清自由文本，**不动**归属域 / 类型 / 驱动 / 标签这些 facet：
         /// 它们在 chips 与「筛选 ▾」里看得见，误清会让人以为筛选坏了。
         /// 语义与资产库的 `ClearSearch` 一致（原型设计 §6.3 的「`Esc` 清空」）。
-        NavClearSearch
+        NavClearSearch,
+        /// 重命名（`F2`）：选中连接 → 打开编辑对话框（与行尾 `✎` 同一入口）。
+        NavRename
     ]
 );
