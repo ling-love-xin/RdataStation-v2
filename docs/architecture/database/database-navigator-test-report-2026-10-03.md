@@ -130,3 +130,40 @@ cargo check -p rds-app -j 2
 | property | `cargo test -p rds-property` | ✅ 4 |
 | app 编译 | `cargo check -p rds-app` | ✅ |
 | 原型 JS 语法 | `node --check`（prototype / showcase html 内嵌脚本） | ✅ |
+
+## 11. 真机补测轮（GUI 实机，2026-10-03 下午——示例项目 + SQLite/DuckDB）
+
+> 载体：真实 `rds-app` 窗口 + 真实项目库 `D:\data\A1\A1\.RSmeta\project.db` + `.rds\data\samples` 示例库（SQLite `demo-sqlite.db` / DuckDB `demo-analysis.duckdb`，含中文路径目录「示例项目」）；旧连接不删不脱敏（MySQL / PG 指向 192.168.3.138 不可达，用于失败行验证）。
+
+### 11.1 本轮缺陷修复（已提交 `e01fb78`）
+
+| 缺陷 | 根因 | 修复 |
+| --- | --- | --- |
+| 连接成功后导航树永不重新加载 / 永久「加载中」 | 连接失败时 `errors`/`attempted` 留痕；三处连接成功路径只清 `errors` 不清 `attempted`，`ensure_nav_loaded` 被 attempted 幂等挡死（树永不重载），且 `loading` 残留 | `nav_view/actions.rs` 三处统一改调 `nav_forget_attempt`（同时抹掉 errors/attempted/loading）：`apply_connect_results` 成功分支 / `toggle_connection` 已连接分支 / `ensure_connected_for_browse` 成功分支（`e01fb78`，8+/3-，全仓 113 测试通过） |
+
+### 11.2 真机验证结果（全链路）
+
+| 链路 | 结果 | 证据 |
+| --- | --- | --- |
+| 新建连接对话框 → 测试连接 → 保存 | ✅ | 界面新建「SQLite Example」全局连接；`connection_probe` 输出 sqlite 3.53.2 latency_ms=1；保存后 `global.db` 落库 |
+| 双击建连（示例项目库） | ✅ | 双击「[项目] SQLite 示例」→ 日志 `Creating P_conn_demo_sqlite` + 元数据缓存 `meta_5245bb07154b9192.sqlite`（454KB，13 条 migration） |
+| 失败行错误 + 重试 | ✅ | 点击不可达 MySQL 行 → 行内红字 `[CONN_NOT_FOUND]` + 行尾「重试」按钮 + 分组头「已连 1/4·1 失败」；点「重试」→ 日志「建连超时，重试一次 attempt=1」 |
+| 右键菜单（连接行） | ✅ | 菜单含 断开/测试连接/编辑连接…；点「测试连接」→ `connection_probe` sqlite latency_ms=0 |
+| 导航树展开（英文路径） | ✅ | 修复后：`P_real_sqlite`（`D:\FossilT\T.fossil`）展开显示 `main` schema；新建英文路径示例连接 `[项目] SQLite EN`（`demo-en-sqlite.db`）完整展开 `main → 表 (3) → customers → 视图 (1)` |
+| 搜索过滤 | ✅ | 「示例」过滤命中连接行；子节点（表名）不匹配时被过滤隐藏（预期行为，非缺陷） |
+| F2 快捷键 | ✅ | 选中连接行按 F2 唤起「编辑数据源连接」对话框（快捷键链路通；行内内联重命名入口待复核） |
+| 分组收起 / 徽标 / 标签 | ✅ | 组头箭头收起生效；面板头徽标「13 连接·3 在线」实时；行内标签（P / GP / ∈ 分组）渲染正常 |
+
+### 11.3 遗留问题（本轮真机暴露，未修）
+
+| 问题 | 表现 | 疑似根因 | 影响 |
+| --- | --- | --- | --- |
+| 中文路径库树加载永久「加载中」 | `示例项目\demo-sqlite.db` / `demo-analysis.duckdb`（中文路径目录）连接成功（缓存已建）但树展开后 loading 不消失；英文路径同库正常 | `JOB_TIMEOUT`(30s) 对 `rt.block_on` 内**同步阻塞**查询不生效（tokio timeout 需 async 协作）；疑为驱动打开/查询中文路径时同步挂起 | 中文路径目录的库无法浏览树（需定位挂起点：驱动路径转换 / 连接池句柄） |
+| DuckDB 连接后应用偶发退出 | demo DuckDB 连接成功 + 树加载中时，进程 1 分钟内无声退出（日志无 panic） | 疑似 DuckDB native 库崩溃（C++ 段错误不进 Rust 日志）或资源问题 | DuckDB 示例库真机浏览不稳（需 native 层隔离 / 复现定位） |
+| 属性面板「数据」页（结果集）真机入口 | 表行双击 / 右键均未打开属性面板（代码已实现 + 测试通过） | 真机驱动限制：物理 SendInput 双击未触发 GPUI `click_count>=2` 判定（非应用功能缺陷） | 数据预览需人工 GUI 复核（或补键盘入口） |
+
+### 11.4 真机环境备注
+
+- 驱动通道：UIA（ValuePattern 写文本 + find element）+ 物理 SendInput（DPIAware + SetCursorPos + mouse_event）；`cu` 鼠标 / 键盘在本机 GPUI 窗口失效。
+- 截图通道：PrintWindow 帧需最小化 + 恢复窗口刷新；窗口 rect 每次操作前重新 GetWindowRect 换算。
+- 应用随机退出 3 次（均无 panic 日志），均为 DuckDB 活动或长时加载后；重启后可继续验证，进程状态需每次操作前确认。
