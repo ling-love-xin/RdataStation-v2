@@ -56,6 +56,80 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .navpanel{width:250px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;min-width:0;}
 .panel-head{height:36px;flex:none;display:flex;align-items:center;gap:6px;padding:0 6px 0 12px;border-bottom:1px solid var(--sidebar-border);}
 .panel-head .ttl{font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--fg);text-transform:uppercase;}
+/* 建议 1：面板头状态徽标（3 连接 · 2 在线），hover 出明细 */
+.conn-stat{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:9px;padding:1px 8px;line-height:16px;position:relative;cursor:default;white-space:nowrap;}
+.conn-stat b{color:var(--success);font-weight:700;}
+.conn-stat .pop{position:absolute;top:24px;left:0;z-index:40;min-width:190px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:7px 10px;font-size:11px;display:none;line-height:1.8;}
+.conn-stat:hover .pop{display:block;}
+.conn-stat .pop .li{display:flex;align-items:center;gap:6px;}
+.conn-stat .pop .li b{color:var(--fg);font-weight:600;}
+/* 建议 3：连接行 hover 显示标签（≤2 + N），不进树 */
+.tags{display:none;align-items:center;gap:3px;margin-left:6px;flex:none;}
+.row:hover .tags,.row.sel .tags{display:flex;}
+.tag2{font-size:9.5px;border:1px solid var(--border);border-radius:9px;padding:0 6px;line-height:14px;color:var(--muted);white-space:nowrap;}
+.tag2 .x{margin-left:3px;color:var(--muted);cursor:pointer;}
+.tag2.prod{border-color:color-mix(in srgb,var(--info) 45%,var(--border));color:var(--info);}
+.tag2.core{border-color:color-mix(in srgb,var(--primary) 45%,var(--border));color:var(--primary);}
+.tag2.more{border-style:dashed;border-color:var(--border);}
+/* 建议 2：键盘导航焦点行（↑↓ 移动 / ←→ 展开收起 / Enter 打开） */
+.row.focused{outline:1.5px solid var(--active-border);outline-offset:-1px;background:var(--hover);}
+.keybar{flex:none;border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+/* 建议 4：拖拽排序插入位高亮（分组头 / 连接行） */
+.dropbar{height:3px;border-radius:2px;background:var(--active-border);margin:1px 6px;box-shadow:0 0 0 1px color-mix(in srgb,var(--active-border) 35%,transparent);}
+.grp.dragging{opacity:.55;outline:1.5px dashed var(--active-border);outline-offset:-1px;}
+.row.dragging{opacity:.55;outline:1.5px dashed var(--active-border);outline-offset:-1px;}
+.drop-hint{flex:none;border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:8px;}
+/* 建议 5：属性面板上下文条（面包屑 + 连接信息 hover_card） */
+.crumb{display:flex;align-items:center;gap:4px;min-width:0;font-size:11px;}
+.crumb .c1{color:var(--info);cursor:pointer;white-space:nowrap;}
+.crumb .c1:hover{text-decoration:underline;}
+.crumb .c1.mut{color:var(--muted);}
+.crumb .sep{color:var(--muted);}
+.ctx-hover{position:relative;flex:none;font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:1px 7px;line-height:15px;cursor:default;}
+.ctx-hover .pop{position:absolute;top:26px;left:0;z-index:40;min-width:210px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:8px 11px;font-size:11px;display:none;line-height:1.9;}
+.ctx-hover:hover .pop{display:block;}
+.ctx-hover .pop .k{color:var(--muted);margin-right:7px;display:inline-block;min-width:52px;}
+.ctx-hover .pop .b{font-weight:600;}
+/* 面板头 ⋯ 菜单（更多操作收进二级） */
+.head-more{position:relative;display:inline-flex;}
+.head-more .head-pop{position:absolute;top:26px;right:0;z-index:45;min-width:170px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px;display:none;}
+.head-more:hover .head-pop{display:block;}
+.head-pop .mi{display:flex;align-items:center;gap:8px;height:26px;padding:0 9px;border-radius:6px;font-size:11.5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
+.head-pop .mi:hover{background:var(--accent);}
+.head-pop .mi .k{margin-left:auto;font-size:10px;color:var(--muted);}
+.head-pop .sep{height:1px;background:var(--sidebar-border);margin:4px 6px;}
+/* 建议 6：报错分级 —— 行内 / 内联 / toast / 对话框 */
+.errrow{display:flex;align-items:center;gap:6px;height:24px;border-radius:6px;color:var(--danger);font-size:11.5px;padding:0 8px;background:color-mix(in srgb,var(--danger) 8%,transparent);margin:4px 0;}
+.errrow .retry{margin-left:auto;display:inline-flex;align-items:center;gap:4px;border:1px solid color-mix(in srgb,var(--danger) 55%,var(--border));background:transparent;color:var(--danger);border-radius:6px;padding:2px 8px;font-size:10.5px;cursor:pointer;}
+.errrow .retry:hover{background:var(--danger);color:#fff;}
+.inline-err{margin:10px 12px;border:1px solid color-mix(in srgb,var(--danger) 45%,var(--border));background:color-mix(in srgb,var(--danger) 7%,transparent);border-radius:8px;padding:9px 11px;font-size:11.5px;color:var(--fg);line-height:1.7;}
+.inline-err .tl{display:flex;align-items:center;gap:7px;color:var(--danger);font-weight:600;font-size:12px;}
+.inline-err .detail{margin-top:4px;font-size:10.5px;color:var(--muted);word-break:break-all;}
+.inline-err .acts{display:flex;gap:8px;margin-top:8px;}
+.inline-err .btn-sm{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;}
+.inline-err .btn-sm:hover{background:var(--hover);}
+.inline-err .btn-sm.danger{border-color:var(--danger);color:var(--danger);}
+.toast{position:absolute;top:44px;right:12px;z-index:60;width:290px;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:9px;box-shadow:var(--shadow);padding:10px 12px;font-size:11.5px;animation:toastin .25s ease-out;}
+@keyframes toastin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.toast .tl{display:flex;align-items:center;gap:7px;font-weight:600;color:var(--danger);}
+.toast p{margin-top:4px;color:var(--fg);line-height:1.6;}
+.toast .x{position:absolute;top:8px;right:8px;color:var(--muted);cursor:pointer;border:none;background:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:5px;}
+.toast .x:hover{background:var(--hover);color:var(--fg);}
+.dlg-mask{position:absolute;inset:0;z-index:70;background:color-mix(in srgb,var(--pagebg) 55%,transparent);display:flex;align-items:center;justify-content:center;}
+.dlg{width:320px;background:var(--bg);border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow);overflow:hidden;}
+.dlg .dh{display:flex;align-items:center;gap:8px;padding:12px 14px;font-size:12.5px;font-weight:600;color:var(--danger);border-bottom:1px solid var(--border);}
+.dlg .db{padding:12px 14px;font-size:11.5px;color:var(--fg);line-height:1.8;}
+.dlg .db .mut{color:var(--muted);font-size:10.5px;}
+.dlg .df{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid var(--border);}
+.dlg .df button{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:6px;padding:4px 13px;font-size:11.5px;cursor:pointer;}
+.dlg .df button:hover{background:var(--hover);}
+.dlg .df button.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600;}
+.dlg .df button.danger:hover{opacity:.9;}
+/* 报错分级四格 */
+.err-grid{flex:1;min-height:0;overflow:auto;padding:8px 12px;display:flex;flex-direction:column;gap:10px;}
+.err-block{border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--bg);}
+.err-block .bt{font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;display:flex;align-items:center;gap:6px;}
+.err-block .bt .tag{color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,transparent);border-radius:8px;padding:0 7px;line-height:15px;text-transform:none;font-weight:600;}
 .panel-head .acts{margin-left:auto;display:flex;gap:2px;}
 .iconbtn{width:24px;height:24px;border:none;background:transparent;color:var(--muted);border-radius:5px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .12s;}
 .iconbtn:hover{background:var(--hover);color:var(--fg);}
@@ -64,6 +138,9 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .workbench[data-state="default"] .st-default,
 .workbench[data-state="menu"] .st-default,
 .workbench[data-state="property"] .st-default,
+.workbench[data-state="keyboard"] .st-keyboard,
+.workbench[data-state="dragdrop"] .st-dragdrop,
+.workbench[data-state="errors"] .st-errors,
 .workbench[data-state="empty"]   .st-empty,
 .workbench[data-state="loading"] .st-loading,
 .workbench[data-state="search"]  .st-search{display:flex;}
@@ -187,10 +264,13 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 .edstate{display:none;flex:1;min-height:0;flex-direction:column;}
 .workbench[data-state="default"] .ed-default,
 .workbench[data-state="menu"] .ed-default,
+.workbench[data-state="keyboard"] .ed-default,
+.workbench[data-state="dragdrop"] .ed-default,
+.workbench[data-state="errors"] .ed-default,
 .workbench[data-state="loading"] .ed-loading,
 .workbench[data-state="empty"] .ed-empty,
 .workbench[data-state="search"] .ed-search{display:flex;}
-.prop-panel{width:392px;flex:none;border-left:1px solid var(--border);display:none;flex-direction:column;min-width:0;background:var(--bg);}
+.prop-panel{width:330px;flex:none;border-left:1px solid var(--sidebar-border);border-right:1px solid var(--border);display:none;flex-direction:column;min-width:0;background:var(--bg);}
 .workbench[data-state="property"] .prop-panel{display:flex;}
 .prop-head{height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;border-bottom:1px solid var(--border);}
 .prop-head .t{font-size:12.5px;font-weight:600;}
@@ -201,6 +281,16 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 .pt2{padding:7px 10px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;}
 .pt2.on{color:var(--fg);border-bottom-color:var(--active-border);font-weight:600;}
 .prop-body{flex:1;min-height:0;overflow:auto;padding:8px 12px;}
+/* DBeaver 式分组：常规 / 权限 / 子实体；数据页切换 */
+.psec{font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--muted);margin:10px 0 3px;text-transform:uppercase;}
+.psec:first-child{margin-top:2px;}
+.pv.gray{color:var(--muted);background:color-mix(in srgb,var(--muted) 10%,transparent);border-radius:4px;padding:0 6px;line-height:16px;font-size:10px;}
+.prop-body .prop-main{display:block;}
+.prop-body .prop-data{display:none;}
+.prop-body.data-mode .prop-main{display:none;}
+.prop-body.data-mode .prop-data{display:block;}
+.prop-data{padding:10px 12px;}
+.prop-data table.grid td{max-width:150px;overflow:hidden;text-overflow:ellipsis;}
 .prow{display:grid;grid-template-columns:78px 1fr;gap:8px;font-size:11.5px;padding:4px 0;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 60%,transparent);}
 .prow .pl{color:var(--muted);}
 .prow .pv{color:var(--fg);word-break:break-all;}
@@ -258,7 +348,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-db"/></svg></span>
     <div>
       <h1>数据源管理 / 数据库导航 · 原型</h1>
-      <div class="sub">方案 A + v6/v7 降密与徽标语义 · 徽标(色=状态·形=类型) + 归属域 facet + 自定义分组一级结构 + 右侧停靠属性面板</div>
+      <div class="sub">方案 A + v6/v7 降密与徽标语义 · 徽标(色=状态·形=类型) + 归属域 facet + 自定义分组一级结构 + 树旁属性面板</div>
     </div>
   </div>
   <button class="theme-toggle" id="themeBtn">
@@ -272,7 +362,10 @@ table.grid td.null{color:var(--muted);font-style:italic;}
   <button data-go="loading">连接 / 预热中</button>
   <button data-go="menu">节点右键菜单</button>
   <button data-go="search">搜索（连接 / 表 / 列）</button>
-  <button data-go="property">属性面板（右侧停靠）</button>
+  <button data-go="keyboard">键盘导航</button>
+  <button data-go="dragdrop">拖拽排序 / 归组</button>
+  <button data-go="property">属性面板（树旁）</button>
+  <button data-go="errors">报错分级</button>
   <button data-go="empty">空态</button>
 </div>
 
@@ -289,12 +382,28 @@ table.grid td.null{color:var(--muted);font-style:italic;}
   <aside class="navpanel">
     <div class="panel-head">
       <span class="ttl">数据源</span>
+      <span class="conn-stat"><b>3</b> 连接 · <b>2</b> 在线
+        <span class="pop">
+          <div class="li"><span class="dot ok"></span><b>生产 PG</b> · PostgreSQL · 已连接</div>
+          <div class="li"><span class="dot ok"></span><b>测试 SQLite</b> · SQLite · 已连接</div>
+          <div class="li"><span class="dot err"></span><b>报表 PG</b> · PostgreSQL · 失败</div>
+          <div class="li"><span class="dot off"></span><b>本地 MySQL</b> · MySQL · 未连接</div>
+        </span>
+      </span>
       <div class="acts">
         <button class="iconbtn" title="新建连接"><svg class="ico-sm"><use href="#i-plus"/></svg></button>
-        <button class="iconbtn" title="新建分组"><svg class="ico-sm"><use href="#i-folderplus"/></svg></button>
         <button class="iconbtn" title="刷新元数据"><svg class="ico-sm"><use href="#i-refresh"/></svg></button>
-        <button class="iconbtn danger" title="断开当前连接"><svg class="ico-sm"><use href="#i-plug"/></svg></button>
-        <button class="iconbtn" title="更多"><svg class="ico-sm"><use href="#i-more"/></svg></button>
+        <div class="head-more">
+          <button class="iconbtn" title="更多操作"><svg class="ico-sm"><use href="#i-more"/></svg></button>
+          <div class="head-pop">
+            <div class="mi"><svg class="ico-sm"><use href="#i-folderplus"/></svg>新建分组<span class="k">Ctrl+Shift+G</span></div>
+            <div class="mi"><svg class="ico-sm"><use href="#i-plug"/></svg>断开当前连接</div>
+            <div class="sep"></div>
+            <div class="mi"><svg class="ico-sm"><use href="#i-more"/></svg>显示标签</div>
+            <div class="mi"><svg class="ico-sm"><use href="#i-refresh"/></svg>缓存管理…</div>
+            <div class="mi" style="color:var(--danger)"><svg class="ico-sm"><use href="#i-trash"/></svg>删除连接</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -348,11 +457,16 @@ table.grid td.null{color:var(--muted);font-style:italic;}
             <span class="cnt">2</span>
             <span class="fold" title="折叠全部">&#8679;</span>
           </div>
-          <div class="row" style="padding-left:12px">
+          <div class="row" style="padding-left:12px" id="rowPg">
             <span class="tw">&#9662;</span>
             <span class="badge st-on" title="PostgreSQL（关系型）&#183; 已连接 &#183; 驱动 PostgreSQL (Official) &#183; postgres_native"><span class="sh"><svg><use href="#sh-db"/></svg></span><span class="lt">PG</span></span>
             <span class="nm">生产 PG</span>
             <span class="scope src-gp" title="归属域：项目共享（全局快照）">GP</span>
+            <span class="tags" title="标签只作筛选，不进树；hover 显示 ≤2 + N">
+              <span class="tag2 prod">prod <span class="x">×</span></span>
+              <span class="tag2 core">core <span class="x">×</span></span>
+              <span class="tag2 more">+2</span>
+            </span>
             <span class="plus" title="添加标签">+</span>
           </div>
           <div class="row" style="padding-left:34px">
@@ -525,6 +639,147 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       <div class="nav-status">12 条结果 &#183; 本地筛选 + 缓存检索 &#183; <b>Enter</b> 在编辑区打开全部</div>
     </div>
 
+    <div class="st st-keyboard">
+      <div class="searchbar">
+        <div class="box">
+          <svg class="ico-sm s-ic"><use href="#i-search"/></svg>
+          <input placeholder="筛选数据源 / 表 / 列 / 标签…">
+        </div>
+      </div>
+      <div class="tree-wrap">
+        <div class="tree">
+          <div class="grp">
+            <span class="tw">&#9662;</span>核心库
+            <span class="health"><span class="dot ok"></span>1/2</span>
+            <span class="cnt">2</span>
+          </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9662;</span>
+            <span class="badge st-on"><span class="sh"><svg><use href="#sh-db"/></svg></span><span class="lt">PG</span></span>
+            <span class="nm">生产 PG</span>
+            <span class="scope src-gp">GP</span>
+          </div>
+          <div class="row focused" style="padding-left:34px">
+            <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
+            <span class="nm">analytics</span><span class="colmeta">schema</span>
+          </div>
+          <div class="row" style="padding-left:52px">
+            <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
+            <span class="nm">表</span><span class="colmeta">23</span>
+          </div>
+          <div class="row" style="padding-left:70px">
+            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
+            <span class="nm">orders</span><span class="colmeta">1.2M 行</span>
+          </div>
+        </div>
+        <div class="keybar">
+          <span><span class="kbd">↑</span><span class="kbd">↓</span> 移动焦点</span>
+          <span><span class="kbd">←</span><span class="kbd">→</span> 收起 / 展开</span>
+          <span><span class="kbd">Enter</span> 打开属性</span>
+          <span><span class="kbd">F2</span> 重命名</span>
+          <span><span class="kbd">Ctrl+F</span> 聚焦搜索</span>
+          <span style="margin-left:auto;color:var(--active-border)">焦点行描边（outline）</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="st st-dragdrop">
+      <div class="tree-wrap">
+        <div class="tree">
+          <div class="grp dragging">
+            <span class="tw">&#9662;</span>核心库
+            <span class="health"><span class="dot ok"></span>1/2</span>
+            <span class="cnt">2</span>
+          </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9662;</span>
+            <span class="badge st-on"><span class="sh"><svg><use href="#sh-db"/></svg></span><span class="lt">PG</span></span>
+            <span class="nm">生产 PG</span>
+            <span class="scope src-gp">GP</span>
+          </div>
+          <div class="dropbar" title="插入位：拖到分组头 = 归组；拖到行间 = 插到该行之前"></div>
+          <div class="row dragging" style="padding-left:12px">
+            <span class="tw">&#9656;</span>
+            <span class="badge st-off"><span class="sh"><svg><use href="#sh-cyl"/></svg></span><span class="lt">MY</span></span>
+            <span class="nm">本地 MySQL</span>
+            <span class="scope src-p">P</span>
+          </div>
+          <div class="grp">
+            <span class="tw">&#9662;</span>报表
+            <span class="health err"><span class="dot err"></span>0/1</span>
+            <span class="cnt">1</span>
+          </div>
+        </div>
+        <div class="drop-hint">
+          <span style="color:var(--active-border);font-weight:600">拖拽中</span>
+          <span>分组头拖到分组头 = 分组排序</span>
+          <span>连接行拖到分组头 = 归组（「未分组」头 = 移出全部）</span>
+          <span>连接行拖到行间 = 插到该行之前（插入位虚线高亮）</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="st st-errors">
+      <div class="err-grid">
+        <div class="err-block">
+          <div class="bt">行内错误 <span class="tag">读路径 · 不弹窗</span></div>
+          <div class="errrow">
+            <span class="tw">&#9656;</span>
+            <span class="badge st-err"><span class="sh"><svg><use href="#sh-db"/></svg></span><span class="lt">PG</span></span>
+            <span class="nm">报表 PG</span>
+            <span style="font-size:10.5px;color:var(--muted)">连接失败：Connection refused</span>
+            <button class="retry"><svg class="ico-sm"><use href="#i-refresh"/></svg>重试</button>
+          </div>
+          <div class="errrow">
+            <span class="tw"></span>
+            <span style="font-size:10.5px;color:var(--muted)">节点加载失败（展开时）</span>
+            <button class="retry"><svg class="ico-sm"><use href="#i-refresh"/></svg>重试</button>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">规则：行内错误态（danger 色）+ 行尾重试按钮，不打断浏览</div>
+        </div>
+        <div class="err-block">
+          <div class="bt">面板内联错误 <span class="tag">读路径 · 不弹窗</span></div>
+          <div class="inline-err">
+            <div class="tl"><svg class="ico-sm"><use href="#i-info"/></svg>属性面板加载失败</div>
+            <div>无法读取 <b>analytics.orders</b> 的元数据</div>
+            <div class="detail">Detail: sqlite error … no such table: orders (Error 1)</div>
+            <div class="acts">
+              <button class="btn-sm danger">重试</button>
+              <button class="btn-sm">在 SQL 编辑器中打开</button>
+              <button class="btn-sm">复制错误</button>
+            </div>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:6px">规则：内容区内联错误 + 重试 / 详情复制；不弹窗</div>
+        </div>
+        <div class="err-block">
+          <div class="bt">Toast 通知 <span class="tag">写路径 · 可恢复 · 自动消失</span></div>
+          <div class="toast" style="position:static;margin:0 0 6px;width:auto">
+            <button class="x"><svg class="ico-sm"><use href="#i-x"/></svg></button>
+            <div class="tl"><svg class="ico-sm"><use href="#i-x"/></svg>保存分组失败</div>
+            <p>「核心库」成员顺序未写入本地（3-5 秒后自动消失，可关闭）</p>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">规则：右上角 notification，可关闭；可恢复的错误不打断操作</div>
+        </div>
+        <div class="err-block" style="position:relative">
+          <div class="bt">确认对话框 <span class="tag">写路径 · 需用户知情</span></div>
+          <div class="dlg-mask" style="position:static;display:flex;padding:10px 0">
+            <div class="dlg" style="width:100%">
+              <div class="dh"><svg class="ico-sm"><use href="#i-trash"/></svg>删除连接将同时移除分组 / 标签</div>
+              <div class="db">
+                确定删除连接 <b>报表 PG</b>？<br>
+                <span class="mut">已连接状态的元数据缓存会保留（只增不删），可在「缓存管理」中清理。</span>
+              </div>
+              <div class="df">
+                <button>取消</button>
+                <button class="danger">删除</button>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">规则：关键写操作（删除 / 批量清理）失败或需确认 → alert 对话框，明确后果</div>
+        </div>
+      </div>
+    </div>
+
     <div class="st st-empty">
       <div class="empty">
         <div class="big"><svg class="ico" style="width:22px;height:22px"><use href="#i-db"/></svg></div>
@@ -535,6 +790,90 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       </div>
     </div>
   </aside>
+
+  <aside class="prop-panel">
+        <div class="prop-head">
+          <svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
+          <div class="crumb" style="flex:1;min-width:0">
+            <span class="c1" title="点击跳回导航并选中该连接">生产 PG</span><span class="sep">/</span>
+            <span class="c1 mut" title="点击跳到该库">analytics</span><span class="sep">/</span>
+            <span class="t">orders</span>
+          </div>
+          <span class="ctx-hover" title="所在连接的信息">G · 2 标签 · 组：核心库
+            <span class="pop">
+              <div><span class="k">归属域</span><span class="b">GP（项目共享）</span></div>
+              <div><span class="k">驱动</span><span class="b">PostgreSQL (Official)</span></div>
+              <div><span class="k">标签</span><span class="b">prod · core · archive · big</span></div>
+              <div><span class="k">分组</span><span class="b">核心库（主组）· 报表（引用）</span></div>
+              <div><span class="k">状态</span><span class="b">已连接 · 12 分钟</span></div>
+              <div><span class="k">缓存</span><span class="b">L2 12 分钟前（只增不删）</span></div>
+            </span>
+          </span>
+          <button class="x"><svg class="ico-sm"><use href="#i-x"/></svg></button>
+        </div>
+        <div class="prop-tabs2">
+          <div class="pt2 on">属性</div>
+          <div class="pt2">数据</div>
+        </div>
+        <div class="prop-body">
+          <div class="prop-main">
+            <div class="psec">常规</div>
+            <div class="prow"><span class="pl">限定名</span><span class="pv">analytics.orders</span></div>
+            <div class="prow"><span class="pl">归属域</span><span class="pv">GP（项目共享）</span></div>
+            <div class="prow"><span class="pl">数据库类型</span><span class="pv">PostgreSQL（关系型）</span></div>
+            <div class="prow"><span class="pl">驱动</span><span class="pv">PostgreSQL (Official) &#183; postgres_native</span></div>
+            <div class="prow"><span class="pl">对象类型</span><span class="pv">BASE TABLE</span></div>
+            <div class="prow"><span class="pl">行数估算</span><span class="pv">1,204,388</span></div>
+            <div class="prow"><span class="pl">引擎</span><span class="pv">InnoDB</span></div>
+            <div class="prow"><span class="pl">列数</span><span class="pv">18</span></div>
+            <div class="prow"><span class="pl">注释</span><span class="pv mut">—（无描述）</span></div>
+
+            <div class="psec">权限</div>
+            <div class="prow"><span class="pl">可读写</span><span class="pv gray">当前驱动不支持 · 仅只读（置灰）</span></div>
+            <div class="prow"><span class="pl">行级安全</span><span class="pv gray">当前驱动不支持 · 置灰</span></div>
+
+            <div class="psec">子实体</div>
+            <div class="sec-tabs">
+              <span class="sec-tab on">列 18</span>
+              <span class="sec-tab">约束 4</span>
+              <span class="sec-tab">索引 5</span>
+              <span class="sec-tab">外键 2</span>
+              <span class="sec-tab">DDL</span>
+            </div>
+            <table class="sub-table">
+              <thead>
+                <tr><th>#</th><th>名称</th><th>类型</th><th>非空</th><th>默认</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td><span class="cpk">PK</span> order_id</td><td>bigint</td><td>是</td><td></td></tr>
+                <tr><td>2</td><td><span class="cfk">FK</span> customer_id</td><td>bigint</td><td>是</td><td></td></tr>
+                <tr><td>3</td><td>amount</td><td>numeric(12,2)</td><td>是</td><td>0.00</td></tr>
+                <tr><td>4</td><td>status</td><td>varchar(20)</td><td>是</td><td>paid</td></tr>
+                <tr><td>5</td><td>created_at</td><td>timestamptz</td><td>是</td><td>now()</td></tr>
+                <tr><td>6</td><td>remark</td><td>text</td><td>否</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="prop-data">
+            <h3 style="font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;margin-bottom:3px"><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>数据预览 <span style="font-weight:400;font-size:10.5px;color:var(--muted)">analytics.orders</span></h3>
+            <div class="sub" style="font-size:10.5px;color:var(--muted);margin-bottom:8px">只读预览 · 自动 <span class="kbd">LIMIT 200</span> · 双击单元格复制</div>
+            <table class="grid">
+              <thead>
+                <tr><th>order_id</th><th>customer_id</th><th>amount</th><th>status</th><th>created_at</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1024101</td><td>20455</td><td>1299.00</td><td>paid</td><td>2024-08-01 09:12:44</td></tr>
+                <tr><td>1024102</td><td>20456</td><td>88.50</td><td>paid</td><td>2024-08-01 09:15:02</td></tr>
+                <tr><td>1024103</td><td>20455</td><td>349.90</td><td class="null">pending</td><td>2024-08-01 09:20:31</td></tr>
+                <tr><td>1024104</td><td>20461</td><td>2150.00</td><td>refunded</td><td>2024-08-01 09:41:18</td></tr>
+                <tr><td>1024105</td><td>20448</td><td class="null">NULL</td><td>cancelled</td><td>2024-08-01 10:02:55</td></tr>
+              </tbody>
+            </table>
+            <div class="nav-status" style="border-top:1px solid var(--border)">200 / 1,204,388 行 &#183; 排序 / 过滤 &#183; <b style="color:var(--active-border)">加载更多</b></div>
+          </div>
+        </div>
+      </aside>
 
   <section class="editor">
     <div class="tabs">
@@ -548,7 +887,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         <div class="edstate ed-default">
           <div class="edbody">
             <h3><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>analytics.orders</h3>
-            <div class="sub">双击对象或右键「查看属性」&#8594; 右侧停靠属性面板；右键「查看数据」预览（自动 <span class="kbd">LIMIT 200</span>）</div>
+            <div class="sub">双击对象或右键「查看属性」&#8594; 树旁属性面板；右键「查看数据」预览（自动 <span class="kbd">LIMIT 200</span>）</div>
             <table class="grid">
               <thead>
                 <tr><th>order_id</th><th>customer_id</th><th>amount</th><th>status</th><th>created_at</th></tr>
@@ -591,49 +930,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         </div>
       </div>
 
-      <aside class="prop-panel">
-        <div class="prop-head">
-          <svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
-          <span class="t">orders <span class="path">analytics</span></span>
-          <button class="x"><svg class="ico-sm"><use href="#i-x"/></svg></button>
-        </div>
-        <div class="prop-tabs2">
-          <div class="pt2 on">属性</div>
-          <div class="pt2">数据</div>
-        </div>
-        <div class="prop-body">
-          <div class="prow"><span class="pl">限定名</span><span class="pv">analytics.orders</span></div>
-          <div class="prow"><span class="pl">归属域</span><span class="pv">GP（项目共享）</span></div>
-          <div class="prow"><span class="pl">数据库类型</span><span class="pv">PostgreSQL（关系型）</span></div>
-          <div class="prow"><span class="pl">驱动</span><span class="pv">PostgreSQL (Official) &#183; postgres_native</span></div>
-          <div class="prow"><span class="pl">对象类型</span><span class="pv">BASE TABLE</span></div>
-          <div class="prow"><span class="pl">行数估算</span><span class="pv">1,204,388</span></div>
-          <div class="prow"><span class="pl">引擎</span><span class="pv">InnoDB</span></div>
-          <div class="prow"><span class="pl">列数</span><span class="pv">18</span></div>
-          <div class="prow"><span class="pl">标签</span><span class="pv">prod, core</span></div>
-
-          <div class="sec-tabs">
-            <span class="sec-tab on">列 18</span>
-            <span class="sec-tab">约束 4</span>
-            <span class="sec-tab">索引 5</span>
-            <span class="sec-tab">外键 2</span>
-            <span class="sec-tab">DDL</span>
-          </div>
-          <table class="sub-table">
-            <thead>
-              <tr><th>#</th><th>名称</th><th>类型</th><th>非空</th><th>默认</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>1</td><td><span class="cpk">PK</span> order_id</td><td>bigint</td><td>是</td><td></td></tr>
-              <tr><td>2</td><td><span class="cfk">FK</span> customer_id</td><td>bigint</td><td>是</td><td></td></tr>
-              <tr><td>3</td><td>amount</td><td>numeric(12,2)</td><td>是</td><td>0.00</td></tr>
-              <tr><td>4</td><td>status</td><td>varchar(20)</td><td>是</td><td>paid</td></tr>
-              <tr><td>5</td><td>created_at</td><td>timestamptz</td><td>是</td><td>now()</td></tr>
-              <tr><td>6</td><td>remark</td><td>text</td><td>否</td><td></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </aside>
+      
     </div>
   </section>
 </div>
@@ -669,9 +966,9 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     </ul>
   </div>
   <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-info"/></svg>属性面板（靠右停靠）</h4>
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-info"/></svg>属性面板（树旁停靠，参考 DBeaver）</h4>
     <ul>
-      <li>占用编辑区右侧的编辑面板位（默认约 392px，可拖拽调宽，宽度会被记住）</li>
+      <li>默认位：紧邻导航树左侧双栏（导航 250px + 属性 330px，可拖拽调宽），对象 → 属性视线直达；备选：右 Dock / 编辑器页签</li>
       <li>顶部 Tab：属性 / 数据；属性网格 + 子实体 Tab（列/约束/索引/外键/DDL）</li>
       <li>入口：双击对象 / 右键「查看属性」/ <span class="kbd">F4</span></li>
       <li><b>事实的唯一权威位</b>：数据库类型 / 驱动（显示名 + id）/ 归属域 / 地址 / 运行状态</li>
@@ -729,6 +1026,17 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       <li>归属域短码改为<b>右对齐固定列</b>；标签默认不显，`⋯ → 显示标签` 开启后「≤2 chip + <code>+N</code>」</li>
       <li>密度预算：<b>行内常驻上限 3</b>（每元素一个“事实”）；`+` 与行操作仅 hover / 选中显</li>
       <li>多组重复：主组全亮，其它组 <code>&#8712; 主组</code> 引用样式</li>
+    </ul>
+  </div>
+  <div class="card" style="grid-column:1/-1">
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-info"/></svg>设计建议（本轮可视化）· 对照演示</h4>
+    <ul>
+      <li><b>① 标题栏三件套</b>：搜索框常驻 + 刷新按钮 + ⋯ 菜单；面板头新增<b>状态徽标</b>「3 连接 · 2 在线」（hover 出明细）——连接状态汇总常驻，明细按需展开</li>
+      <li><b>② 树键盘可达</b>：焦点行描边（outline）+ <span class="kbd">↑↓</span>/<span class="kbd">←→</span>/<span class="kbd">Enter</span>/<span class="kbd">F2</span>；见「键盘导航」状态</li>
+      <li><b>③ 标签筛选器</b>：tag 组件可关闭（×），多值叠加；<b>连接行 hover 显示 ≤2 标签 + N</b>（不进树，只作检索）——hover 任一连接行可见</li>
+      <li><b>④ 分组头折叠 + 成员数 + 拖拽插入位</b>：分组头折叠语义、计数「组名 (n)」、拖拽虚线插入位（分组头 = 归组 / 行间 = 插到该行之前）；见「拖拽排序 / 归组」状态</li>
+      <li><b>⑤ 属性面板上下文条</b>：面包屑「连接名 · 库 · 表」（可点跳回导航）+ 第二行小字「G · 2 标签 · 组：核心库」hover_card 展开；对象页签保持纯净（标签行从属性网格移出）；见「属性面板」状态</li>
+      <li><b>⑥ 报错分级</b>：读路径 → 行内 / 内联 + 重试（不弹窗）；写路径可恢复 → toast 自动消失；关键写操作 → 确认对话框；见「报错分级」状态</li>
     </ul>
   </div>
 </section>
@@ -796,7 +1104,22 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     t.addEventListener('click', function () {
       t.parentNode.querySelectorAll('.pt2').forEach(function (x) { x.classList.remove('on'); });
       t.classList.add('on');
+      var body = document.querySelector('.prop-body');
+      body.classList.toggle('data-mode', t.textContent === '数据');
     });
+  });
+
+  // 面板头 ⋯ 菜单：hover 与点击都可展开
+  document.querySelectorAll('.head-more').forEach(function (m) {
+    m.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var pop = m.querySelector('.head-pop');
+      var open = pop.style.display === 'block';
+      pop.style.display = open ? '' : 'block';
+    });
+  });
+  document.addEventListener('click', function () {
+    document.querySelectorAll('.head-pop').forEach(function (p) { p.style.display = ''; });
   });
 
   document.querySelectorAll('.sec-tab').forEach(function (t) {
