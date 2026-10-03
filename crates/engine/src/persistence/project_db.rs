@@ -271,6 +271,11 @@ impl ProjectDuckdbConnection {
     ///
     /// # 参数
     /// * `db_path` - 数据库文件路径
+    ///
+    /// # 备注
+    /// Windows 上 duckdb 对同一文件仅允许一个连接句柄（不分读写），因此项目 DuckDB
+    /// 连接**只在写路径（`ProjectDatabaseManager::open`）打开一次**；读路径通过
+    /// `open_read_only` 完全不打开 DuckDB（见 `ProjectDatabaseManager::duckdb_conn`）。
     pub async fn new(db_path: PathBuf) -> Result<Self, CoreError> {
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {
@@ -281,25 +286,28 @@ impl ProjectDuckdbConnection {
             }
         }
 
-        let conn = tokio::task::spawn_blocking({
-            let path = db_path.clone();
-            move || {
-                DuckConnection::open(&path).map_err(|e| {
-                    CoreError::storage(StorageError::Persistence {
-                        store: "duckdb".to_string(),
-                        operation: "open".to_string(),
-                        reason: e.to_string(),
-                    })
-                })
-            }
-        })
-        .await
-        .map_err(|e| CoreError::common(CommonError::General(format!("Task panicked: {}", e))))??;
+        let conn = Self::open_conn(&db_path).await?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(Some(conn))),
             db_path,
         })
+    }
+
+    /// 在 blocking 线程池打开 DuckDB 连接。
+    async fn open_conn(db_path: &Path) -> Result<DuckConnection, CoreError> {
+        let path = db_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            DuckConnection::open(&path).map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "duckdb".to_string(),
+                    operation: "open".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+        })
+        .await
+        .map_err(|e| CoreError::common(CommonError::General(format!("Task panicked: {}", e))))?
     }
 
     /// 获取 DuckDB 连接
@@ -368,8 +376,12 @@ pub struct ProjectDatabaseManager {
     project_path: PathBuf,
     /// SQLite 连接池
     sqlite_pool: Arc<ProjectSqlitePool>,
-    /// DuckDB 长连接
-    duckdb_conn: Arc<ProjectDuckdbConnection>,
+    /// DuckDB 长连接。
+    ///
+    /// `open`（读写路径）持有 `Some`；`open_read_only`（读路径）为 `None`——读路径
+    /// **不打开 DuckDB**：Windows 上 duckdb 对同一文件仅允许一个连接句柄（不分读写），
+    /// 连接列表刷新等读场景若再 open 一个连接，会与项目主写连接撞「文件被占用」（IO 锁）。
+    duckdb_conn: Option<Arc<ProjectDuckdbConnection>>,
 }
 
 impl ProjectDatabaseManager {
@@ -387,6 +399,32 @@ impl ProjectDatabaseManager {
     /// * `project_path` - 项目根目录路径
     /// * `sqlite_pool_size` - SQLite 连接池大小
     pub async fn open(project_path: &Path, sqlite_pool_size: usize) -> Result<Self, CoreError> {
+        Self::open_inner(project_path, sqlite_pool_size, false).await
+    }
+
+    /// 以**只读语义**打开项目库：SQLite 池 + **只读 DuckDB 连接**，跳过 DuckDB 迁移。
+    ///
+    /// 用于连接列表刷新、导航等**只读**场景：只读 DuckDB 连接不获取写锁（DuckDB 单写者
+    /// 模型），可在项目主写连接存活期间安全并发，避免同一项目 `analytics.duckdb` 被多个
+    /// 可写连接同时打开而触发的 IO 锁。
+    ///
+    /// 调用方必须预先确认项目根已存在且含 `.RSmeta`（否则本方法会 `create_dir_all`
+    /// 造出假项目骨架，见 `workspace_loader::load_project_connections` 的预检）。
+    pub async fn open_read_only(
+        project_path: &Path,
+        sqlite_pool_size: usize,
+    ) -> Result<Self, CoreError> {
+        Self::open_inner(project_path, sqlite_pool_size, true).await
+    }
+
+    /// `open` / `open_read_only` 的共同实现。`read_only = true` 时：
+    /// - DuckDB 以 `READ_ONLY` 打开（不拿写锁，可并发读）
+    /// - 跳过 `init_duckdb_tables`（迁移是写操作，只读连接无法执行，表由写路径建好）
+    async fn open_inner(
+        project_path: &Path,
+        sqlite_pool_size: usize,
+        read_only: bool,
+    ) -> Result<Self, CoreError> {
         let rsmeta_path = project_path.join(".RSmeta");
         let config_path = rsmeta_path.join("config");
         let project_metadata_path = rsmeta_path.join("project_metadata");
@@ -411,17 +449,25 @@ impl ProjectDatabaseManager {
         let sqlite_pool = ProjectSqlitePool::new(sqlite_db_path, sqlite_pool_size).await?;
 
         let duckdb_path = Self::analysis_db_path(project_path);
-        let duckdb_conn = ProjectDuckdbConnection::new(duckdb_path).await?;
+        let duckdb_conn = if read_only {
+            // 读路径不打开 DuckDB：Windows 单连接句柄限制下，再 open 一个连接
+            // 会与主写连接撞「文件被占用」。读路径只走 SQLite。
+            None
+        } else {
+            Some(Arc::new(ProjectDuckdbConnection::new(duckdb_path).await?))
+        };
 
         let manager = Self {
             project_path: project_path.to_path_buf(),
             sqlite_pool: Arc::new(sqlite_pool),
-            duckdb_conn: Arc::new(duckdb_conn),
+            duckdb_conn,
         };
 
         // 使用迁移系统初始化数据库表结构
         manager.init_sqlite_tables().await?;
-        manager.init_duckdb_tables().await?;
+        if !read_only {
+            manager.init_duckdb_tables().await?;
+        }
 
         Ok(manager)
     }
@@ -471,7 +517,16 @@ impl ProjectDatabaseManager {
     /// 不使用 `MigrationManager`（rusqlite）：它无法打开 DuckDB 文件，且对同一文件
     /// 二次 open 会因文件锁冲突失败（Windows 报 "unable to open database file"）。
     async fn init_duckdb_tables(&self) -> Result<(), CoreError> {
-        let conn_arc = self.duckdb_conn.acquire().await?;
+        // 仅读写路径（open）持有 duckdb_conn；open_inner 只在 Some 时调用本方法。
+        let duckdb = self
+            .duckdb_conn
+            .as_ref()
+            .ok_or_else(|| {
+                CoreError::common(CommonError::General(
+                    "DuckDB connection is not opened (read-only path)".to_string(),
+                ))
+            })?;
+        let conn_arc = duckdb.acquire().await?;
         let guard = conn_arc.lock().await;
         let conn = guard.as_ref().ok_or_else(|| {
             CoreError::common(CommonError::General(
@@ -483,7 +538,7 @@ impl ProjectDatabaseManager {
             crate::migration::duckdb::apply_migrations(conn, MigrationType::ProjectAnalysis)?;
 
         tracing::info!(
-            db_path = %self.duckdb_conn.path().display(),
+            db_path = %duckdb.path().display(),
             applied,
             "Project DuckDB tables initialized via migrations"
         );
@@ -496,8 +551,11 @@ impl ProjectDatabaseManager {
         self.sqlite_pool.clone()
     }
 
-    /// 获取 DuckDB 连接
-    pub fn duckdb_conn(&self) -> Arc<ProjectDuckdbConnection> {
+    /// 获取 DuckDB 连接。
+    ///
+    /// `open`（读写路径）返回 `Some`；`open_read_only`（读路径不打开 DuckDB）返回 `None`。
+    /// 写场景（如 insight 存储）必须用 `open` 打开的项目库并在此 `expect`。
+    pub fn duckdb_conn(&self) -> Option<Arc<ProjectDuckdbConnection>> {
         self.duckdb_conn.clone()
     }
 
@@ -896,8 +954,10 @@ impl ProjectDatabaseManager {
         // 关闭 SQLite 连接池，释放所有文件句柄
         self.sqlite_pool.close().await;
 
-        // 关闭 DuckDB 连接
-        self.duckdb_conn.close().await?;
+        // 关闭 DuckDB 连接（读路径未打开时跳过）
+        if let Some(duckdb) = &self.duckdb_conn {
+            duckdb.close().await?;
+        }
 
         Ok(())
     }
@@ -966,6 +1026,42 @@ mod tests {
             .expect("legacy tag should be backfilled on project open");
         assert_eq!(tag, "prod");
 
+        let _ = std::fs::remove_dir_all(&project_path);
+    }
+
+    /// 关键行为裁决：项目主写连接存活期间，读路径（`open_read_only`）必须成功，
+    /// 且**不打开 DuckDB**（Windows 上 duckdb 对同一文件仅允许一个连接句柄，不分读写；
+    /// 读路径只走 SQLite，才能与主写连接共存，规避 IO 锁）。
+    #[tokio::test]
+    async fn read_only_open_coexists_with_writer() {
+        let project_path = test_temp_dir("read_only_coexist");
+        let _ = std::fs::remove_dir_all(&project_path);
+
+        let writer = ProjectDatabaseManager::open(&project_path, 2)
+            .await
+            .expect("writer open");
+
+        // 读路径（连接列表刷新）：项目主写连接存活时读打开。
+        let reader = ProjectDatabaseManager::open_read_only(&project_path, 2)
+            .await
+            .expect("读路径（open_read_only）应在主写连接存活时成功");
+        assert!(
+            reader.duckdb_conn().is_none(),
+            "读路径不应打开 DuckDB（Windows 单连接句柄限制下，再 open 会与主写连接撞「文件被占用」）"
+        );
+
+        // 读路径应能读到 SQLite 连接列表（与主写连接共存）。
+        let store =
+            crate::persistence::project_connection_store::ProjectConnectionStore::new(Arc::new(
+                reader,
+            ));
+        let conns = store
+            .get_all_connections()
+            .await
+            .expect("读路径应能读 SQLite connections 表");
+        assert!(conns.is_empty(), "新项目连接表应为空");
+
+        drop(writer);
         let _ = std::fs::remove_dir_all(&project_path);
     }
 }

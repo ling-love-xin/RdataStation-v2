@@ -70,7 +70,10 @@ impl ProjectInsightStores {
     /// 复用调用方**已打开**的项目库装配（推荐）。
     pub fn from_project_db(db: &ProjectDatabaseManager) -> Self {
         Self {
-            storage: InsightStorage::new(db.duckdb_conn()),
+            storage: InsightStorage::new(
+                db.duckdb_conn()
+                    .expect("insight 需 DuckDB 连接：调用方必须用 open（写路径）打开项目库"),
+            ),
             meta: InsightMetaStore::new(db.sqlite_pool()),
         }
     }
@@ -337,7 +340,9 @@ mod tests {
     /// 两侧都改：只改一边就测不出「成对删」了（而那正是这条用例要钉的东西）。
     async fn backdate(db: &ProjectDatabaseManager, days: i64) {
         {
-            let handle = db.duckdb_conn();
+            let handle = db
+                .duckdb_conn()
+                .expect("insight 需 DuckDB 连接：调用方必须用 open（写路径）打开项目库");
             let handle = handle.acquire().await.expect("DuckDB 句柄");
             let mut guard = handle.lock().await;
             let conn = guard.as_mut().expect("DuckDB 连接");
