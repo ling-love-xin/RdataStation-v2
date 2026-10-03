@@ -210,3 +210,17 @@ cargo check -p rds-app -j 2
 
 **与遗留①的关系**：卡死不在 NavPath 设计（路径/分发正确），在 UI 状态层的 loading/attempted 生命周期（已修）。
 
+## 13. 缓存缺陷修复与建连自动重载（补记，提交 `8dea72f`）
+
+本轮（用户「完善树显示问题 + 记录并修复缓存设计缺陷」）修复两项并补齐测试基线：
+
+| 项 | 结论 |
+| --- | --- |
+| 建连成功后树空（`CONN_NOT_FOUND` 竞态） | ✅ 修复：`apply_connect_results` 成功分支自动重载**已展开的连接根**（cache-aside 非 fresh，子层渲染渐进补齐）；新增 2 个窗口级回归测试 |
+| L2 半成品缓存（schema 行在、对象不完整） | ✅ 修复：`save_schema` 建行 `is_loaded=0`（扫描进行中），表/视图/列 + 索引全部写完后 `mark_schema_complete` 置 1；读侧 `schemas()` 过滤未完成 → 回源重扫；写侧重扫未完成 schema 先清残留再整块重写；FTS 同步本就按 `is_loaded=1` 过滤，语义修正后自动不再收半成品 |
+| 失效策略 | 记录：删除连接不自动清缓存（指纹共享，手动「缓存管理」）；变更检测不做自动（刷新是显式入口）；半成品自动自愈（读侧过滤） |
+| 单测基线（本轮） | `rds-database --lib` **102**（+3：缓存半成品防御 1、自动重载 2）；`rds-engine --lib` **527**（FTS 测试补 mark）；`rds-workbench --lib` 130（`quick_open` 文件源 1 例并行 flaky，单跑通过，与本轮改动无关） |
+
+> 缺陷细节、证据与实现位置映射表见 [`database-navigator-cache-invalidation.md`](database-navigator-cache-invalidation.md)。
+
+
