@@ -167,3 +167,46 @@ cargo check -p rds-app -j 2
 - 驱动通道：UIA（ValuePattern 写文本 + find element）+ 物理 SendInput（DPIAware + SetCursorPos + mouse_event）；`cu` 鼠标 / 键盘在本机 GPUI 窗口失效。
 - 截图通道：PrintWindow 帧需最小化 + 恢复窗口刷新；窗口 rect 每次操作前重新 GetWindowRect 换算。
 - 应用随机退出 3 次（均无 panic 日志），均为 DuckDB 活动或长时加载后；重启后可继续验证，进程状态需每次操作前确认。
+
+## 12. 遗留①根因闭环 + 退出新证据（2026-10-03 晚——GUI 复现轮）
+
+> 本轮在 §11.3 三个遗留问题基础上做定位轮：加诊断日志真机复现（app_run10~15），得到**根因证据链**并修复遗留①；遗留②拿到可复现触发路径。
+
+### 12.1 遗留①「中文路径库树永久加载中」——根因闭环（提交 `7376210`）
+
+| 层 | 排查结论 | 证据 |
+| --- | --- | --- |
+| 驱动层 | **正常**（中文路径非根因） | 新增 `cn_path_open_and_list` 测试（`sqlite.rs`）直开中文路径库 + `list_tables` ✅；Python 直开 `示例项目\demo-sqlite.db` 0.0s |
+| 加载链路 | **正常**（非卡死） | 诊断日志（app_run11/13/14/15）：`load_children_page 入口 → L1 未命中 → get_database 命中 → get_catalogs 返回 → L1 回填完成` 全程 **~0.5ms 无阻塞**；`Connection → Catalog → Folder` 多层推进、`apply ok=true` |
+| 缓存 | 半成品异常（次要） | `meta_5245bb07154b9192.sqlite`：`tables=0 行` 但 FTS 2 行、`tables_fts` 视图缺列 `T.table_comment`（扫描中断残留；**不阻塞读取**，加载走实时/索引重建） |
+| **UI 状态层** | **根因** | ① `toggle_nav_node` 收起分支只清 `expanded`，**loading/attempted 残留** → 加载中收起后重展开被 `ensure_nav_loaded` 幂等挡死（树永久「加载中」）；② 轮询泵 `idle-break` 竞态：job 在「多等一拍」期间入队并完成，**结果滞留 load_results**、pump 已 break → loading 永不清除 |
+
+**修复（`7376210`，2 files +44）**：
+1. `toggle_nav_node` 收起分支清 `loading`/`attempted`（保留已加载 children 与 errors——重展开直接显示、失败节点走重试）；
+2. 轮询泵 `idle-break` 前**最后消费一次** load_results（滞留结果立即 apply）+ 确无滞留时清残留 loading。
+
+**验证**：98 测试通过（database lib）；真机 app_run15 中文路径库连接 → 加载链完整推进 → `apply ok=true` → 无「加载中」残留（搜索过滤状态下子树按设计隐藏）。**「加载中」永久残留主路径已闭环**。
+
+### 12.2 遗留②「连接后应用偶发退出」——可复现触发路径（UIA 层，上游 GPUI）
+
+| 触发 | 表现 | 结论 |
+| --- | --- | --- |
+| UIA `ValuePattern.SetValue("")` 清空搜索框（uia_clear） | 应用静默退出（无 panic、无 Windows 崩溃事件、日志止于 `apply ok=true`） | **GPUI 0.3.7 a11y/输入层 bug**：SetValue 触发 a11y 更新 → 窗口销毁 → 主循环正常退出（app_run14/15 两次复现；`uia_search` 写入非空串不触发） |
+| DuckDB 连接 + 树加载（历史 app_run10） | 日志止于 gpui `window not found 0x80040102` / `无效的窗口句柄 0x80070578` | 另一路径：GPUI 窗口层句柄失效（上游），非 DuckDB native 崩溃 |
+
+**影响**：真实用户鼠标键盘操作不经过 UIA，**不触发**；仅自动化通道（UIA SetValue 清空）会触发。缓解：真机验证避免 UIA 清空搜索框（用物理键 Ctrl+A+Delete 或重启）。
+
+### 12.3 NavPath 树路径设计与实现审查（结论）
+
+| 项 | 结论 |
+| --- | --- |
+| 五层枚举（Connection/Catalog/Schema/Folder/Table） | ✅ 结构清晰；`NavFolder` 五类（Tables/Views/Routines/Sequences/Triggers）label 中文 + key 持久化分离 |
+| Catalog 层动态挂 Schema / 类别文件夹（`has_schema_level`） | ✅ 有 schema 层（MySQL/PG）挂 Schema、无（SQLite/DuckDB）直接挂类别文件夹——避免同名重复层，正确 |
+| 分页 | ✅ 仅 `Folder` 走分页（`load_children_page`），其余隐含整页；大对象层（表数千）有 `index_page` 分块 |
+| `child_key` 拼接 `{conn}/{seg}` | ⚠️ 未转义：对象名含 `/` 时 key 错位（SQLite/PG 表名可含 `/`）——低风险，建议后续转义或结构化 key |
+| 非 Folder 层隐含整页 | ⚠️ 大库 schema 层无分页——低风险（schema 数通常少） |
+| L1 进程级 `Mutex` | ⚠️ 多连接并行加载被串行化（nav 三处使用、无他方竞争）——当前规模可接受，大并发时需细粒度锁 |
+| 同步阻塞 vs `JOB_TIMEOUT` | ⚠️ tokio timeout 对同步阻塞不生效（本轮实测加载链无阻塞）——防御性线程隔离列为后续项 |
+
+**与遗留①的关系**：卡死不在 NavPath 设计（路径/分发正确），在 UI 状态层的 loading/attempted 生命周期（已修）。
+
