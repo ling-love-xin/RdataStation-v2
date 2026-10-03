@@ -231,6 +231,12 @@ impl NavView {
             let mut view = self.nav.borrow_mut();
             if view.expanded.contains(key) {
                 view.expanded.remove(key);
+                // 收起 = 取消本次加载意图：清 loading/attempted 防残留与幂等挡死。
+                // 残留场景（真机复现）：加载中收起该节点，loading 不消失；再展开时
+                // attempted 还在 → ensure_nav_loaded 被幂等挡掉 → 树永久「加载中」。
+                // 保留已加载的 children 与 errors（重展开直接显示，失败节点走重试）。
+                view.loading.remove(key);
+                view.attempted.remove(key);
                 false
             } else {
                 view.expanded.insert(key.to_string());
@@ -673,6 +679,26 @@ impl NavView {
                         && !nav_jobs::has_pending_connect()
                         && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator)
                     {
+                        // 退出前最后消费一次：job 可能在「多等一拍」期间入队并完成，
+                        // 结果滞留会让 loading 永久残留（真机复现：连接预热重载的 Connection
+                        // 层在 idle 判定后完成，pump 已 break，树永远「加载中」）。
+                        let last = nav_jobs::drain_load_results();
+                        if !last.is_empty() {
+                            if weak
+                                .update(cx, |this, cx| this.apply_load_results(last, cx))
+                                .is_err()
+                            {
+                                return;
+                            }
+                            continue;
+                        }
+                        // 确无滞留：清掉残留 loading（idle 时 loading 不应存在）。
+                        // 失败路径已由 apply 清；这里兜底结果滞留 / 竞态导致的残留，
+                        // 避免「加载中」字样挂在树上等不到清除。
+                        weak.update(cx, |this, _| {
+                            this.nav.borrow_mut().loading.clear();
+                        })
+                        .ok();
                         break;
                     }
                 }

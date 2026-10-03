@@ -1643,6 +1643,24 @@ mod tests {
         Ok(())
     }
 
+    /// 复现诊断（真机遗留问题）：中文路径库的打开 + 列表查询。
+    ///
+    /// 真机现象：`.rds\data\samples\示例项目\demo-sqlite.db`（中文目录）连接成功但
+    /// 树展开卡「加载中」，点击后应用偶发退出（日志止于窗口句柄失效）；英文路径同库
+    /// 正常。Python 打开同一库正常。本测试直连驱动层，确认挂点是否在 rusqlite
+    /// 中文路径打开 / 同步查询。
+    #[tokio::test]
+    async fn cn_path_open_and_list() -> Result<(), CoreError> {
+        let url = r"D:\RdataStation\RDS\RdataStation-v2\.rds\data\samples\示例项目\demo-sqlite.db";
+        let db = SqliteDatabase::new(url)?;
+        let tables = db.list_tables("main", None).await?;
+        assert!(
+            !tables.is_empty(),
+            "中文路径库应能列出表（Python 已验证 customers/products/orders/v_order_overview）"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_sqlite_query() -> Result<(), CoreError> {
         let path = temp_db_path("query")?;
