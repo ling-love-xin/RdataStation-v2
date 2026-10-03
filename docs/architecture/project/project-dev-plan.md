@@ -25,6 +25,15 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-10-03 — DuckDB v2.0 升级评估 / 三期 DuckLake 对齐 / duckdb IO 锁根因
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **v2.0 评估** | DuckDB v2.0（Cyanoptera）**未正式发布**：2026-09-02 从 main 切出 `v2.0-cyanoptera`（功能冻结），正式版预计 2026-10 下半月；当前仅 alpha/dev 预览，**Rust 绑定未就绪**（官方宣布 upcoming）。项目现锁 `duckdb 1.10505.0`（1.5.x 线）。**暂不升级**，触发条件 = 正式版 + Rust 绑定就绪 | 官方预览 2026-08-17 / alpha 说明 2026-09-02 |
+| v2.0 对架构 | ①**稳定 C API/ABI**：引擎与 DuckDB 版本解耦，"运行时加载 libduckdb"（ADBC/C ABI）从不可行变可行——未来可选项；②**三期 DuckLake 地基**：`ducklake` 扩展 + partition-aware + 异步 I/O，三期从"造湖"变"接线"；③**CONNECT 远程下推**：connections 新增"SQL 推给 PG/MySQL"路线（vs 拉数据）；④存储格式 v2.0 强校验 → 强化双真相源/魔数断言纪律；⑤VARIANT / 触发器 / 自定义扩展仓库 | 评估记录；升级动作待正式版 |
+| 三期对齐 | 确认**三期「DuckLake」即官方 lakehouse 方向**（对象存储数据湖 + Iceberg/Hive 分区 Parquet + 分区跳过）；v2.0 的 `ducklake` 扩展 / partition-aware / 异步 I/O 是直接地基；三期规划应对齐接线而非自造 | dev-plan §6 后续对齐 |
+| **duckdb IO 锁根因** | 项目切换 / 打开多项目出现 duckdb IO 锁。根因（高置信）：`workbench/src/services/workspace_loader.rs` 多处（`load_persisted_connections` / `query_manager` / `load_project_connections` / `connected_ids` / `delete_connection`）**每次调用 `Runtime::new()` + 每次 `GlobalDatabaseManager::new` / `ProjectDatabaseManager::open` 打开 duckdb 连接且不显式 `close()`**；`GlobalDatabaseManager::new` 构造即持全局 `analytics.duckdb` 写连接（`GlobalDuckdbConnection`）且内部迁移再二次 open。DuckDB 单写者模型 → 同一共享文件多写连接累积 → IO 锁 | 修复：全局/项目连接**单例池化 + 显式 close**（待实施） |
+
 ### 2026-10-01 — 完善：兑现 P0.3 / 双真相源权威 / 版本化定位 / 文档同步 / 接线矩阵
 
 按外部评审建议补的一组完善（见 §8「建议顺序」对应项）：
