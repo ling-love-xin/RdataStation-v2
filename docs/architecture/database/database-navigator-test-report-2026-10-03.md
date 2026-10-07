@@ -223,4 +223,61 @@ cargo check -p rds-app -j 2
 
 > 缺陷细节、证据与实现位置映射表见 [`database-navigator-cache-invalidation.md`](database-navigator-cache-invalidation.md)。
 
+## 14. MySQL / PG 真机验证轮（2026-10-07，提交 `84dddb9`）
+
+> 用户要求「处理数据导航栏遗留问题，MySQL 和 PG 的真机环境也可以」。TCP 3306/5432 本轮恢复可达，用真实连接（`P_real_mysql` / `P_real_pg`，192.168.3.138）做连接层 + 导航层验证。
+
+### 14.1 第一层根因：懒池吞错（已修复）
+
+| 项 | 证据 |
+| --- | --- |
+| 表象 | `[DB_QUERY] Query failed: pool timed out while waiting for an open connection`（app_run17，SQL 全文取到 `information_schema.tables WHERE table_schema = ?`） |
+| 根因 | URL 里 `ssl-mode=DISABLED` 大写，sqlx 只识别小写 → TLS 握手失败建连全失败；但 `AllowPooling=true` 懒池把 `Pool::connect` 当成功返回（池空），后续查询 acquire 30s 超时；`mysql.rs:96` / `postgres.rs:51` 的 `SELECT VERSION().ok()` 吞掉连接验证错误 |
+| 修复 | 显式 `MySqlPoolOptions/PgPoolOptions`（min_connections=1 / max=10 / acquire_timeout 60s / idle 1800s / max_lifetime 3600s）+ `SELECT VERSION()` 不再 `.ok()` 吞错；`postgres.rs` 新增 `normalize_ssl_mode()`（`ssl-mode=DISABLED` → `disable`） |
+| 应用内确证 | app_run20（修复后二进制）双击 MySQL 行：`connect OK 17ms` + `verify OK 42ms`，建连成功无 pool timed out |
+
+### 14.2 导航加载链路毫秒级（探针）
+
+| 路径 | 结果 |
+| --- | --- |
+| 服务器端（直接 sqlx 连 192.168.3.138:3306） | MySQL 9.7.2；`schemata` 5 库 14ms、`tables WHERE schema='mysql'` 46 行 17ms；SHOW FULL PROCESSLIST 无锁无长事务 |
+| 应用路径（`MySqlDatabase::new` + `get_tables` + `get_catalogs`） | new 43ms、get_tables 31ms、get_catalogs 8ms —— 毫秒级全通过 |
+| NavigatorService 集成（registry 建连 + worker 上下文 + 项目侧缓存，fresh=true 实时内省） | Connection 32ms / Catalog 301ms / Folder 325µs / worker 92ms —— 完整应用链路复现不了 30s |
+
+**30s 超时结论**：曾于 app_run18 出现「加载子节点超时（30 秒未返回）」，但引擎层 / 导航层 / worker 上下文三条路径全部毫秒级，app_run20/21 双击建连后未再复现——**疑似为懒池吞错（§14.1）的次生表象，随池修复消失；需最新二进制 UI 复核做最终定论**。
+
+### 14.3 PG 真机链路贯通（#15 实证）
+
+| 项 | 证据 |
+| --- | --- |
+| PG 连接 | app_run21（含 ssl 归一）双击 `[项目] PostgreSQL` 行 → 日志 `Creating new connection with ID: P_real_pg`，无 ssl_mode 报错（修复前直接报 `unknown value "DISABLED" for ssl_mode`） |
+| 跨库浏览 | 日志 `跨库浏览：已另开一条连到该库的连接 conn_id=P_real_pg database=warehouse_supply_chain`（connection_manager.rs:465） |
+| L2 缓存 | `meta_a4ba0a563d0233d4.sqlite` migrations 1-13 全部应用——PG 元数据缓存链建立 |
+
+> 注：PG 密码受 AES-256-GCM 加密（密钥=sha256(安装 salt + machine-id)，salt/机器 ID 在应用数据根），测试隔离的 `paths::data_dir` 读不到应用密钥，独立探针解密失败；验证改走应用内真机路径（已成功）。
+
+### 14.4 MySQL 系统库过滤（#14，已修复）
+
+- 真机实证：改前 `get_catalogs => Ok(5)`（information_schema / mall_business / mysql / performance_schema / sys 全列出）；改后 `Ok(1)`（只剩业务库 mall_business）。
+- 实现：`mysql.rs get_catalogs` 过滤 `SYSTEM_SCHEMAS = [information_schema, mysql, performance_schema, sys]`，与 PG 侧 `PG_LIST_SCHEMAS_SQL` 系统对象过滤口径一致。
+
+### 14.5 本轮验证基线
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| engine + database 测试 | `cargo test -p rds-engine -p rds-database` | ✅（engine lib 528 + database lib 102 全通过） |
+| app 编译 | `cargo build -p rds-app -j 2` | ✅ |
+| 真机连接（MySQL） | app_run20 双击 P_real_mysql | ✅ new 42ms、1 在线、右键菜单含「断开」（已连） |
+| 真机连接（PG） | app_run21 双击 P_real_pg | ✅ 连接 + 跨库浏览 + L2 建库 |
+| 系统库过滤（#14） | MySQL 探针 `get_catalogs` | ✅ 5 → 1（只留 mall_business） |
+
+### 14.6 遗留（待人工 GUI 复核）
+
+| 项 | 状态 |
+| --- | --- |
+| MySQL catalog 展开 30s 是否彻底消失 | 最新二进制（含 §14.1 修复 + 计时日志）需 UI 复核；探针证明链路毫秒级 |
+| PG 树展开到 schema / 表层 | app_run21 链路贯通但 UI 树未展开到子层复核（双击=建连、展开依赖 toggle 稳定性） |
+| UIA 遗留②③ | 未变：避免 UIA 清空搜索（GPUI 静默退出）；「数据」页真机入口需人工 GUI 复核 |
+| GUI 点击稳定性 | 物理单点常注册为 hover、双击才触发建连；`SetForegroundWindow` 前置后仍不稳定（GPUI 命中测试/自动化通道限制，非应用缺陷） |
+
 
