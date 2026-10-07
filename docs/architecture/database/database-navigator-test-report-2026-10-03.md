@@ -280,4 +280,42 @@ cargo check -p rds-app -j 2
 | UIA 遗留②③ | 未变：避免 UIA 清空搜索（GPUI 静默退出）；「数据」页真机入口需人工 GUI 复核 |
 | GUI 点击稳定性 | 物理单点常注册为 hover、双击才触发建连；`SetForegroundWindow` 前置后仍不稳定（GPUI 命中测试/自动化通道限制，非应用缺陷） |
 
+## 15. 树展开与缓存验证轮（2026-10-08，真机复核）
+
+> 用户要求「验证树的展开情况，以及缓存是否正常」。用最新二进制（`84dddb9` 含 MySQL 过滤 + 计时日志）真机复核（app_run22 / app_run23b）。
+
+### 15.1 树的展开情况
+
+| 连接 | 结果 | 证据 |
+| --- | --- | --- |
+| MySQL（app_run22 双击建连后） | ✅ catalog 只显示 `mall_business`（#14 系统库过滤真机生效），展开 → 表 (7) / 存储过程/函数 (4) | 截图 + 日志 `collect_objects 成功 catalog=mall_business schema=mall_business folder="triggers" count=0` |
+| SQLite（同轮） | ✅ `main → 表 (25)` 正常展开 | 截图树行 `main / 表(25)` |
+| PG warehouse_supply_chain（同轮） | ✅ schema 列表加载（asset / base / biz_000~biz_003） | 截图树行 |
+| PG postgres 库（同轮） | ❌ schema 查询 `pool timed out while waiting for an open connection`（红字 + 重试） | 日志 SQL 全文：`SELECT n.nspname FROM pg_catalog.pg_namespace ...` |
+| **重启后首次展开（app_run23b）** | ❌ MySQL catalog 加载 **「加载子节点超时（30 秒未返回）」**——**30s 超时实机复现**（§14.6 遗留①定论：**真实缺陷，非懒池次生**） | 日志 `导航加载失败 ... error=加载子节点超时（30 秒未返回）` |
+
+### 15.2 缓存验证结果
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| L1 进程内缓存命中 | ✅ | `load_folders indexed_counts 完成 elapsed_ms=1`、`collect_objects 缓存句柄就绪 folder="views" elapsed_ms=0` |
+| L2 写入 | ✅ | 缓存文件 `meta_*.sqlite`：schemata / tables / columns / routines / FTS 落库（MySQL 53 表 + 4 例程；PG 516 schema） |
+| 半成品防御（读侧过滤） | ✅ | 未完成 schema（`is_loaded=0`）被过滤 → UI 回源显示；系统库行虽在缓存但 UI 不显示（#14 读侧过滤） |
+| **半成品残留（缺陷）** | ❌ | MySQL `mall_business` / PG 516 个 schema 全部 `is_loaded=0`（列预取超时中断，`mark_schema_complete` 未执行）→ **每次展开都回源实时查询**（慢 / 不稳） |
+
+### 15.3 新暴露问题（根因方向，待修）
+
+| 问题 | 表现 | 根因方向 |
+| --- | --- | --- |
+| 列预取超时 30s | `nav_jobs.rs:741` 列预取超时（已放弃，不影响导航） | `PrefetchColumns` 在 worker 自建 Runtime 里查池（池宿主 = workbench `bridge_runtime`）——跨 runtime 不稳定；且池 `min=1` 时并发任务排队 |
+| catalog 回源查池 30s | 重启后首次展开 MySQL catalog 超时 | L2 半成品（is_loaded=0）→ 读侧回源 → 实时查询走池（同上跨 runtime / 排队） |
+| PG 主池 pool timed out | postgres 库 schema 查询失败（红字）；重启后 warehouse_supply_chain 也失败 | PG 池 acquire 超时（池连接占用 / 跨 runtime）；与 MySQL 同源 |
+| 探针 vs 应用不一致 | 探针（独立池）28~92ms；应用（共享池 + worker 自建 Runtime）30s | 差异在池宿主 Runtime 与 worker Runtime 不一致（`nav_runtime.rs` 注释警告的场景），需实验定位 |
+
+### 15.4 结论
+
+- **树的展开**：加载成功时层级与 #14 过滤均正确；**但重启后首次展开不稳（30s 超时真实复现）**。
+- **缓存**：L1 / L2 / 半成品防御机制正常；**但半成品残留（列预取超时）导致回源频繁，是展开不稳定的直接诱因**。
+- **下一步**：定位 worker Runtime 与池宿主 Runtime 不一致（跨 runtime 查询）与池连接数（min=1 排队）两个方向的实证；修复后重跑本验证。
+
 
