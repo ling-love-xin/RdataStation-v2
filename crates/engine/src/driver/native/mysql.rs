@@ -71,6 +71,7 @@ impl MySqlDatabase {
             url.len(),
             masked_url
         );
+        let t_new = std::time::Instant::now();
 
         // MySQL 8.0 默认使用 caching_sha2_password 认证插件，可能需要在 URL 中禁用 SSL
         // 或配置 TLS。添加 ssl-mode=disabled 以兼容本地开发环境。
@@ -81,22 +82,42 @@ impl MySqlDatabase {
             format!("{}{}ssl-mode=disabled", url, sep)
         };
 
-        let pool = Pool::connect(&effective_url).await.map_err(|e| {
+        // 显式配置连接池：min_connections=1 让池在连接建立时预建常驻连接，
+        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时。
+        let options = sqlx::mysql::MySqlPoolOptions::new()
+            .min_connections(1)
+            .max_connections(10)
+            .acquire_timeout(std::time::Duration::from_secs(60))
+            .idle_timeout(Some(std::time::Duration::from_secs(1800)))
+            .max_lifetime(Some(std::time::Duration::from_secs(3600)));
+        let pool = options.connect(&effective_url).await.map_err(|e| {
+            tracing::warn!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new connect FAIL");
             CoreError::database(DatabaseError::Driver {
                 db_type: "mysql".to_string(),
                 operation: "connect".to_string(),
                 source: e.to_string(),
             })
         })?;
+        tracing::info!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new connect OK");
+        // 连接验证不吞错：SELECT VERSION() 失败视为连接失败（此前 .ok() 吞错，
+        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部 acquire 超时）。
         let server_version = sqlx::query_scalar::<_, String>("SELECT VERSION()")
             .fetch_one(&pool)
             .await
-            .ok();
+            .map_err(|e| {
+                tracing::warn!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new verify FAIL");
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "mysql".to_string(),
+                    operation: "verify".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
+        tracing::info!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new verify OK");
         Ok(Self {
             pool,
-            server_version,
+            server_version: Some(server_version),
             max_connections: 10,
-            min_connections: 0,
+            min_connections: 1,
         })
     }
 
@@ -939,6 +960,15 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
             .await?;
+        // 系统库过滤（#14）：MySQL 侧此前未过滤，information_schema / mysql /
+        // performance_schema / sys 全列出（真机实证 5 库全显）。与 PG 侧
+        // `PG_LIST_SCHEMAS_SQL` 的系统对象过滤保持一致，只留业务库。
+        const SYSTEM_SCHEMAS: [&str; 4] = [
+            "information_schema",
+            "mysql",
+            "performance_schema",
+            "sys",
+        ];
         let nodes: Vec<crate::driver::NodeInfo> = (0..result.total_rows())
             .filter_map(|row_idx| {
                 result.batches.iter().find_map(|batch| {
@@ -958,6 +988,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
                     }
                 })
             })
+            .filter(|node| !SYSTEM_SCHEMAS.contains(&node.name.as_str()))
             .collect();
         Ok(nodes)
     }

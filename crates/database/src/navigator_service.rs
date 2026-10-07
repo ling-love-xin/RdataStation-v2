@@ -439,7 +439,10 @@ impl NavigatorService {
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NavNode>, CoreError> {
+        let t0 = std::time::Instant::now();
+        tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "导航 load_folders 开始");
         let indexed = self.indexed_counts(conn_id, catalog, schema);
+        tracing::info!(conn_id = %conn_id, elapsed_ms = t0.elapsed().as_millis(), "load_folders indexed_counts 完成");
         let mut nodes = Vec::new();
         // 「某一类没查到」与「整个 schema 展开失败」是两回事：前者只该少一行文件夹，
         // 后者才是树上那行红字。这两个标记就是那条分界（见下方两处判定）。
@@ -453,8 +456,18 @@ impl NavigatorService {
                 }
                 None => {
                     // 实时内省（或 L1 / L2 命中）。
+                    let tf = std::time::Instant::now();
                     match self.collect_objects(conn_id, catalog, schema, folder).await {
                         Ok(objects) => {
+                            tracing::info!(
+                                conn_id = %conn_id,
+                                catalog = %catalog,
+                                schema = %schema,
+                                folder = folder.key(),
+                                count = objects.len(),
+                                elapsed_ms = tf.elapsed().as_millis(),
+                                "导航 collect_objects 成功"
+                            );
                             any_ok = true;
                             objects.len()
                         }
@@ -746,6 +759,7 @@ impl NavigatorService {
         match folder {
             NavFolder::Tables | NavFolder::Views => {
                 let want_view = folder == NavFolder::Views;
+                let tc = std::time::Instant::now();
 
                 // L1：表与视图分键（下面一次实时内省会两半都写进去）
                 if let Some(objs) = self.l1_read(|c| {
@@ -755,10 +769,12 @@ impl NavigatorService {
                         c.get_tables(conn_id, catalog, Some(schema))
                     }
                 }) {
+                    tracing::info!(conn_id = %conn_id, folder = folder.key(), elapsed_ms = tc.elapsed().as_millis(), "collect_objects L1 命中");
                     return Ok(objs);
                 }
 
                 let mut cache = self.cache(conn_id);
+                tracing::info!(conn_id = %conn_id, folder = folder.key(), elapsed_ms = tc.elapsed().as_millis(), "collect_objects 缓存句柄就绪");
                 let mut schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
                 if !self.fresh {
                     if let (Some(c), Some(sid)) = (&cache, schema_id) {
@@ -794,6 +810,7 @@ impl NavigatorService {
                     }
                 }
                 let objects = self.metadata.list_tables(conn_id, catalog, schema).await?;
+                tracing::info!(conn_id = %conn_id, folder = folder.key(), elapsed_ms = tc.elapsed().as_millis(), count = objects.len(), "collect_objects 实时内省完成");
                 let object_count = objects.len();
                 // 内省级别自适应（对标 DataGrip）：按**本 schema 的对象数**定级并登记到连接。
                 // 目前唯一的消费者是 C2 邻接预取（级别 <3 时不为大 schema 预取列）。

@@ -20,6 +20,19 @@ use crate::driver::{
 use shared::error::{ConnectionError, CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
 
+/// 归一 `ssl-mode=DISABLED`（连接配置注入的大写形式）为 sqlx PG 驱动认识的小写 `disable`。
+/// 大写形式是 `connection::url` 面向 MySQL 宽松解析的统一注入；PG 驱动对枚举严格校验，
+/// 不归一直接报 `unknown value "DISABLED" for ssl_mode`。
+fn normalize_ssl_mode(url: &str) -> String {
+    if let Some(pos) = url.find("ssl-mode=DISABLED") {
+        let mut out = url.to_string();
+        out.replace_range(pos..pos + "ssl-mode=DISABLED".len(), "ssl-mode=disable");
+        out
+    } else {
+        url.to_string()
+    }
+}
+
 /// PostgreSQL 数据库连接
 ///
 /// 封装 `sqlx::Pool<Postgres>` 连接池，通过 `Database` trait 提供统一的查询/执行接口。
@@ -38,22 +51,42 @@ pub struct PostgresDatabase {
 
 impl PostgresDatabase {
     pub async fn new(url: &str) -> Result<Self, CoreError> {
-        let pool = Pool::connect(url).await.map_err(|e| {
+        // ssl-mode 归一：`build_connection_url` 注入的是大写 `DISABLED`（面向 MySQL 宽松解析），
+        // PG 驱动严格校验枚举（大写直接报 `unknown value "DISABLED" for ssl_mode`）——
+        // 这里把 `ssl-mode=DISABLED` 归一为 sqlx 认识的小写 `disable`。
+        let effective_url = normalize_ssl_mode(url);
+        // 显式配置连接池：min_connections=1 让池在连接建立时预建常驻连接，
+        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时。
+        let options = sqlx::postgres::PgPoolOptions::new()
+            .min_connections(1)
+            .max_connections(10)
+            .acquire_timeout(std::time::Duration::from_secs(60))
+            .idle_timeout(Some(std::time::Duration::from_secs(1800)))
+            .max_lifetime(Some(std::time::Duration::from_secs(3600)));
+        let pool = options.connect(&effective_url).await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "postgres".to_string(),
                 operation: "connect".to_string(),
                 source: e.to_string(),
             })
         })?;
+        // 连接验证不吞错：SELECT version() 失败视为连接失败（此前 .ok() 吞错，
+        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部 acquire 超时）。
         let server_version = sqlx::query_scalar::<_, String>("SELECT version()")
             .fetch_one(&pool)
             .await
-            .ok();
+            .map_err(|e| {
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "postgres".to_string(),
+                    operation: "verify".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
         Ok(Self {
             pool,
-            server_version,
+            server_version: Some(server_version),
             max_connections: 10,
-            min_connections: 0,
+            min_connections: 1,
         })
     }
 
