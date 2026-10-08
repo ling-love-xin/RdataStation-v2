@@ -303,6 +303,41 @@ cargo check -p rds-app -j 2
 | 半成品防御（读侧过滤） | ✅ | 未完成 schema（`is_loaded=0`）被过滤 → UI 回源显示；系统库行虽在缓存但 UI 不显示（#14 读侧过滤） |
 | **半成品残留（缺陷）** | ❌ | MySQL `mall_business` / PG 516 个 schema 全部 `is_loaded=0`（列预取超时中断，`mark_schema_complete` 未执行）→ **每次展开都回源实时查询**（慢 / 不稳） |
 
+## 16. 缓存根治轮（2026-10-08，提交 `5da8332`）
+
+> 用户要求「继续修复这些，根治缓存」。针对 §15 三个问题做根因实证 + 修复 + 真机/探针复核。
+
+### 16.1 根因实证
+
+| 假设 | 实证 | 结论 |
+| --- | --- | --- |
+| 跨 Runtime 查池挂起（worker 自建 Runtime ≠ 池宿主 bridge_runtime） | 探针：同 Runtime 14ms / 跨 Runtime 30ms / 并发 3 路 7~32ms 全部正常 | **证伪**——跨 Runtime 不是 30s 直接原因 |
+| 列预取慢（MySQL 列查询） | 探针：7 表每表 6~25ms，总 81ms，超时 0 | **证伪**——列查询本身毫秒级 |
+| **30s = 池 acquire 排队** | min=1 时 catalog 回源与列预取并发抢唯一连接 → acquire 等待（acquire_timeout 60s > JOB_TIMEOUT 30s，外层先超） | **确认**——修复方向：min=2 + 每表超时细化 |
+
+### 16.2 修复（三处）
+
+| 位置 | 修复 |
+| --- | --- |
+| `navigator_service.rs collect_objects` | L2 命中补 `mark_schema_complete`（读侧自愈写侧：半成品 is_loaded=0 → 命中即完整 → 置 1，下次不回源）；**完整 schema 空类别返回空不回源**（如 MySQL 无视图——空是合法结果不是未命中，杜绝每次展开回源 get_tables） |
+| `navigator_service.rs prefetch_columns` | **每表 5s 超时**（单表卡跳过，其余继续）——不再整批 30s 外层超时全部放弃留列缓存半成品 |
+| `mysql.rs` / `postgres.rs` | 池 `min_connections` 1→2（catalog 回源与列预取并发不抢唯一连接） |
+
+### 16.3 验证（app_run24/25 真机 + 探针）
+
+| 项 | 结果 |
+| --- | --- |
+| MySQL 树展开 | ✅ 完整展开（`mall_business → 表(7) → order/order_item/payment_record/product/product_category/user/user_address` + 例程 4）；**30s 超时不再复现**（vs §15 app_run23b 重启后首次 30s） |
+| 缓存自愈 | ✅ `meta_439cdbba942f1c99.sqlite` schemata `loaded 0→2`（命中补 mark 生效）；日志 `collect_objects 完整 schema 空类别（不回源） conn_id=P_real_mysql folder="views" elapsed_ms=0` |
+| 列预取 | ✅ app_run25 无「列预取超时」日志；探针 7 表总 81ms（每表 ≤25ms） |
+| PG 池 | ⚠️ min=2 已部署；探针密码不可用（应用加密密码），真机未充分复核（app_run25 无 pool timed out 日志但 PG 未连接） |
+| 回归 | ✅ `cargo test -p rds-engine -p rds-database`：engine lib 528 / database lib 102 全过 |
+
+### 16.4 结论
+
+- **30s 根因链全通**：半成品 is_loaded=0 → views 空反复回源 → 池 acquire 排队（min=1 单连接）→ JOB_TIMEOUT 30s 先超。修复（自愈 mark + 空类别不回源 + min=2 + 每表 5s）后**重启后展开不再回源、不再排队、单表卡不再拖死整批**。
+- **遗留**：PG 真机复核（应用内密码不可探针直连）、列缓存写入的 UI 侧确认（列预取静默成功无日志，L2 列写入待展开表后复核）。
+
 ### 15.3 新暴露问题（根因方向，待修）
 
 | 问题 | 表现 | 根因方向 |
