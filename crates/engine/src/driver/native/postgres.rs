@@ -165,6 +165,10 @@ const PG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 /// 会话级复用。
 const PG_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// 复用前快速探活超时：`SELECT 1` 100ms 内无响应即弃旧建新（见 [`lock_pg_conn`]）。
+/// 健康内网连接 <10ms 返回；被冻结的连接 100ms 即弃 + 300ms 重建（最坏 ~400ms）。
+const PG_PING_FAST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// 按 URL 建一条 PG 物理连接（单连接化后的统一入口）。
 ///
 /// 注入 `plan_cache_mode=force_custom_plan`（2026-10-08 铁证）：单连接模型下所有
@@ -207,6 +211,41 @@ async fn lock_pg_conn<'a>(
                 source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
             }));
         }
+        *guard = Some(
+            connect_pg_single(connect_url)
+                .await
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type: "postgres".to_string(),
+                        operation: "reconnect".to_string(),
+                        source: e.to_string(),
+                    })
+                })?,
+        );
+    }
+    // **复用前快速探活**（2026-10-08 顺滑度四阶段，对齐 DBeaver 常驻连接语义）：
+    // 本环境（192.168.3.138 链路）对旧连接有**概率性冻结**（app_run62/64/70 铁证：
+    // 复用必挂；探针复用全安全——健康窗口内全快、故障窗口内旧连接被网络层丢弃）。
+    // DBeaver 的解法是常驻连接 + JDBC 同步（复用什么都不挂）；我们在异步 sqlx 下
+    // 用**快速探活**逼近：`SELECT 1` 用 100ms 超时——健康连接 <10ms 返回（展开 =
+    // ping 5ms + SQL 50ms ≈ 55ms，对齐 DBeaver 顺滑度）；被冻结的连接 100ms 即弃、
+    // 300ms 重建（最坏 ~400ms，远好于 2s ping 或 15s 挂起，也好于每次新建的 300ms
+    // 常驻成本）。误杀健康连接的概率极低（内网 SELECT 1 稳定 <10ms）；误杀也只付
+    // 一次重建，可接受。
+    let ping_ok = match guard.as_mut() {
+        Some(conn_ref) => {
+            tokio::time::timeout(PG_PING_FAST_TIMEOUT, async {
+                sqlx::query("SELECT 1").fetch_all(conn_ref).await
+            })
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false)
+        }
+        None => false,
+    };
+    if !ping_ok {
+        tracing::info!("会话连接快速探活失败，弃旧建新（网络层冻结窗口）");
+        *guard = None;
         *guard = Some(
             connect_pg_single(connect_url)
                 .await
@@ -602,16 +641,15 @@ impl Database for PostgresDatabase {
     ) -> Result<crate::driver::SchemaObjects, CoreError> {
         use sqlx::Row as _;
         let t_conn = std::time::Instant::now();
-        // **每次新建连接**（2026-10-08 最终形态，app_run69 铁证）：复用 + ping 在
-        // 撞上网络故障窗口时引入 2s ping 超时 + 重建 = 2.1s 惩罚（public/tables
-        // connect_ms=2115），比直接新建（300-400ms）慢 6 倍；而每次新建连接自带
-        // 健康（app_run66/67 40+ 展开零超时）。批量 5 条 SQL 在同一条新连接上串行，
-        // 连接随函数结束 drop（不跨任务复用，避开环境网络层对旧连接的冻结）。
-        let mut conn = connect_pg_single(&self.connect_url)
-            .await
-            .map_err(|e| query_error(schema, e))?;
-        // 诊断日志（2026-10-08 app_run66）：URL 脱敏（只留 host:port/db），建连耗时 + 各条
-        // SQL 耗时——定位 biz_384 类「单条新连接 + 单次 SQL 仍 15s 超时」（探针同 SQL 8ms）。
+        // **复用常驻连接 + 快速探活**（2026-10-08 顺滑度四阶段，DBeaver 常驻连接语义）：
+        // lock_pg_conn 内置 100ms 快速探活——健康连接直接复用（展开 = ping 5ms + 5 SQL
+        // ≈ 55ms，对齐 DBeaver）；被冻结连接 100ms 即弃 + 300ms 重建（最坏 ~400ms）。
+        // 对比前两版：每次新建（300ms 常驻建连成本，用户嫌等待感）；2s ping + 复用
+        // （故障窗口 2.1s 惩罚，app_run68 铁证）。100ms 探活是两者的最优折中。
+        let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let conn = guard.as_mut().expect("lock_pg_conn 保证连接非空");
+        // 诊断日志（2026-10-08 app_run66）：URL 脱敏（只留 host:port/db），连接就绪耗时 +
+        // 各条 SQL 耗时——定位 biz_384 类「单条新连接 + 单次 SQL 仍 15s 超时」（探针同 SQL 8ms）。
         let url_desc = {
             let u = &self.connect_url;
             let core = u
@@ -621,14 +659,14 @@ impl Database for PostgresDatabase {
                 .unwrap_or(u);
             format!("host@{core}")
         };
-        tracing::info!(schema = %schema, url = %url_desc, connect_ms = t_conn.elapsed().as_millis(), "批量内省建连完成");
+        tracing::info!(schema = %schema, url = %url_desc, connect_ms = t_conn.elapsed().as_millis(), "批量内省连接就绪（复用或新建）");
 
         // 1) 表 / 视图（PG_LIST_TABLES_SQL：relkind 'v'/'m' → VIEW，其余 → BASE TABLE）
         let t_sql = std::time::Instant::now();
         let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
             sqlx::query(crate::driver::utils::PG_LIST_TABLES_SQL)
                 .bind(schema)
-                .fetch_all(&mut conn)
+                .fetch_all(&mut *conn)
                 .await
         })
         .await
@@ -664,7 +702,7 @@ impl Database for PostgresDatabase {
                  WHERE n.nspname = $1 AND p.prokind = 'p' ORDER BY p.proname",
             )
             .bind(schema)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -683,7 +721,7 @@ impl Database for PostgresDatabase {
                  WHERE n.nspname = $1 AND p.prokind = 'f' ORDER BY p.proname",
             )
             .bind(schema)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -701,7 +739,7 @@ impl Database for PostgresDatabase {
                  WHERE sequence_schema = $1 ORDER BY sequence_name",
             )
             .bind(schema)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -720,7 +758,7 @@ impl Database for PostgresDatabase {
                  WHERE trigger_schema = $1 ORDER BY trigger_name",
             )
             .bind(schema)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -1308,16 +1346,54 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
     ) -> Result<crate::driver::NodeDetail, CoreError> {
         let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
         // SQL 走 pg_catalog：`$1` = schema、`$2` = 表名（catalog 不用，见 `get_schemas`）
-        let result = self
-            .query_with_params(
-                sql,
-                vec![
-                    Value::Text(schema.to_string()),
-                    Value::Text(table.to_string()),
-                ],
-            )
-            .await?;
-        let columns = crate::driver::utils::columns_from_detail_rows(&result);
+        // **每次新建连接**（2026-10-08 列查询冻结根治，app_run70 铁证）：列查询走
+        // scoped 会话连接（query_with_params → lock_pg_conn）在本环境跨任务复用必挂
+        // （列预取 5s 超时×2 占住信号量 → 用户点其他 schema 排队 6-7s）。单条列查询
+        // 新建连接（~300ms）可接受且自带健康；连接随函数结束 drop。
+        let mut conn = connect_pg_single(&self.connect_url)
+            .await
+            .map_err(|e| query_error(schema, e))?;
+        let result = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(sql).bind(schema).bind(table).fetch_all(&mut conn).await
+        })
+        .await
+        .map_err(|_| {
+            CoreError::database(DatabaseError::Query {
+                sql: sql.to_string(),
+                reason: format!("列查询超时（{} 秒无响应）", PG_QUERY_TIMEOUT.as_secs()),
+                position: None,
+                location: None,
+            })
+        })?
+        .map_err(|e| query_error(schema, e))?;
+        // 行 → ColumnDetail：与 `utils::columns_from_detail_rows` 同语义（列序契约
+        // 0..=9：name/type/nullable/ordinal/key/default/comment/ref_table/ref_column/
+        // fk_flag），但输入是 `Vec<PgRow>`（新建连接直接 fetch_all，不经过 QueryResult
+        // 中间层）；行短于契约时缺的单元格按空串处理（不 panic、不吞行）。
+        use sqlx::Row as _;
+        let columns = result
+            .iter()
+            .map(|r| {
+                let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
+                let ref_table = cell(7);
+                let fk_flag = cell(9);
+                crate::driver::ColumnDetail {
+                    name: cell(0),
+                    data_type: cell(1),
+                    nullable: cell(2) == "YES",
+                    ordinal: cell(3).parse().unwrap_or(0),
+                    is_primary_key: cell(4) == "PRI",
+                    default_value: (!cell(5).is_empty()).then(|| cell(5)),
+                    comment: (!cell(6).is_empty()).then(|| cell(6)),
+                    is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
+                    references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                        table: ref_table,
+                        column: cell(8),
+                    }),
+                    extra: std::collections::HashMap::new(),
+                }
+            })
+            .collect();
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

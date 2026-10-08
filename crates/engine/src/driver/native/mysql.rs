@@ -176,9 +176,13 @@ impl MySqlDatabase {
 const MYSQL_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// 连接空闲回收阈值：超过即主动关闭（DBeaver「按需建连 + 空闲回收」轻量会话模型）。
-/// **60s 是 DBeaver 会话语义**（2026-10-08，同 postgres.rs）：批量内省路径已改回
-/// 每次新建连接，本阈值只作用于 query/query_with_params 的会话级复用。
+/// **60s 是 DBeaver 会话语义**（2026-10-08，同 postgres.rs）：会话内展开/查询复用
+/// 同一条连接；闲置超过 60s 即回收新建。
 const MYSQL_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 复用前快速探活超时：`SELECT 1` 100ms 内无响应即弃旧建新（见 [`lock_mysql_conn`]）。
+/// 健康内网连接 <10ms 返回；被冻结连接 100ms 即弃 + 300ms 重建（最坏 ~400ms）。
+const MYSQL_PING_FAST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// 按 URL 建一条 MySQL 物理连接（单连接化后的统一入口）。
 async fn connect_mysql_single(url: &str) -> Result<sqlx::mysql::MySqlConnection, sqlx::Error> {
@@ -213,6 +217,35 @@ async fn lock_mysql_conn<'a>(
                 source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
             }));
         }
+        *guard = Some(
+            connect_mysql_single(connect_url)
+                .await
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type: "mysql".to_string(),
+                        operation: "reconnect".to_string(),
+                        source: e.to_string(),
+                    })
+                })?,
+        );
+    }
+    // **复用前快速探活**（2026-10-08 顺滑度四阶段，同 postgres.rs）：`SELECT 1` 用
+    // 100ms 超时——健康连接 <10ms 返回（复用，0ms 建连）；被冻结连接 100ms 即弃 +
+    // 300ms 重建（最坏 ~400ms）。误杀健康连接概率极低（内网 SELECT 1 稳定 <10ms）。
+    let ping_ok = match guard.as_mut() {
+        Some(conn_ref) => {
+            tokio::time::timeout(MYSQL_PING_FAST_TIMEOUT, async {
+                sqlx::query("SELECT 1").fetch_all(conn_ref).await
+            })
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false)
+        }
+        None => false,
+    };
+    if !ping_ok {
+        tracing::info!("会话连接快速探活失败，弃旧建新（网络层冻结窗口）");
+        *guard = None;
         *guard = Some(
             connect_mysql_single(connect_url)
                 .await
@@ -709,12 +742,11 @@ impl Database for MySqlDatabase {
         use sqlx::Row as _;
         // MySQL 的 schema 参数即 catalog（information_schema 按 ROUTINE_SCHEMA/TABLE_SCHEMA 过滤）。
         let _ = schema;
-        // **每次新建连接**（2026-10-08 最终形态，同 postgres.rs，app_run69 铁证）：
-        // 复用 + ping 在撞上网络故障窗口时引入 2s ping 超时 + 重建 = 2.1s 惩罚（比直接
-        // 新建慢 6 倍）；每次新建连接自带健康（app_run66/67 40+ 展开零超时）。
-        let mut conn = connect_mysql_single(&self.connect_url)
-            .await
-            .map_err(|e| mysql_query_error(catalog, &e))?;
+        // **复用常驻连接 + 快速探活**（2026-10-08 顺滑度四阶段，同 postgres.rs）：
+        // lock_mysql_conn 内置 100ms 快速探活——健康连接直接复用（展开 = ping 5ms +
+        // 5 SQL ≈ 55ms）；被冻结连接 100ms 即弃 + 300ms 重建（最坏 ~400ms）。
+        let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let conn = guard.as_mut().expect("lock_mysql_conn 保证连接非空");
 
         // 1) 表 / 视图
         let rows = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
@@ -723,7 +755,7 @@ impl Database for MySqlDatabase {
                  WHERE table_schema = ? ORDER BY table_name",
             )
             .bind(catalog)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -750,7 +782,7 @@ impl Database for MySqlDatabase {
                  WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME",
             )
             .bind(catalog)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -768,7 +800,7 @@ impl Database for MySqlDatabase {
                  WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME",
             )
             .bind(catalog)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -789,7 +821,7 @@ impl Database for MySqlDatabase {
                  WHERE trigger_schema = ? ORDER BY trigger_name",
             )
             .bind(catalog)
-            .fetch_all(&mut conn)
+            .fetch_all(&mut *conn)
             .await
         })
         .await
@@ -1381,16 +1413,53 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         table: &str,
     ) -> Result<crate::driver::NodeDetail, CoreError> {
         let sql = crate::driver::utils::MY_TABLE_DETAIL_SQL;
-        let result = self
-            .query_with_params(
-                sql,
-                vec![
-                    Value::Text(catalog.to_string()),
-                    Value::Text(table.to_string()),
-                ],
-            )
-            .await?;
-        let columns = crate::driver::utils::columns_from_detail_rows(&result);
+        // **每次新建连接**（2026-10-08 列查询冻结根治，同 postgres.rs）：列查询走
+        // scoped 会话连接在本环境跨任务复用必挂（列预取 5s 超时占住信号量）；单条
+        // 列查询新建连接可接受且自带健康，连接随函数结束 drop。
+        let mut conn = connect_mysql_single(&self.connect_url)
+            .await
+            .map_err(|e| mysql_query_error(catalog, &e))?;
+        let result = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+            sqlx::query(sql).bind(catalog).bind(table).fetch_all(&mut conn).await
+        })
+        .await
+        .map_err(|_| {
+            CoreError::database(DatabaseError::Query {
+                sql: sql.to_string(),
+                reason: format!("列查询超时（{} 秒无响应）", MYSQL_QUERY_TIMEOUT.as_secs()),
+                position: None,
+                location: None,
+            })
+        })?
+        .map_err(|e| mysql_query_error(catalog, &e))?;
+        // 行 → ColumnDetail：与 `utils::columns_from_detail_rows` 同语义（列序契约
+        // 0..=9：name/type/nullable/ordinal/key/default/comment/ref_table/ref_column/
+        // fk_flag），输入是 `Vec<MySqlRow>`（新建连接直接 fetch_all）；缺单元格按空串
+        // 处理（不 panic、不吞行）。
+        use sqlx::Row as _;
+        let columns = result
+            .iter()
+            .map(|r| {
+                let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
+                let ref_table = cell(7);
+                let fk_flag = cell(9);
+                crate::driver::ColumnDetail {
+                    name: cell(0),
+                    data_type: cell(1),
+                    nullable: cell(2) == "YES",
+                    ordinal: cell(3).parse().unwrap_or(0),
+                    is_primary_key: cell(4) == "PRI",
+                    default_value: (!cell(5).is_empty()).then(|| cell(5)),
+                    comment: (!cell(6).is_empty()).then(|| cell(6)),
+                    is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
+                    references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                        table: ref_table,
+                        column: cell(8),
+                    }),
+                    extra: std::collections::HashMap::new(),
+                }
+            })
+            .collect();
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

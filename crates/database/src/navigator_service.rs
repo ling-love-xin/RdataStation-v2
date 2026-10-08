@@ -951,6 +951,108 @@ impl NavigatorService {
         }
     }
 
+    /// DBeaver `loadChildren` 对齐（2026-10-09）：**schema 展开即后台全量内省**。
+    ///
+    /// 用户点开 schema 的瞬间拿到静态类别文件夹（0ms，`load_folders`）；此后点
+    /// Tables / Views / Routines / … 时本方法已完成内省并写缓存 → 命中 0ms，
+    /// 不再为每次点击付「建连 + SQL」的等待（此前冷展开 384ms~1.4s 的等待感来源）。
+    ///
+    /// - 幂等：`is_schema_complete` 的 schema 直接跳过（数据已完整在 L2）；
+    /// - 失败不阻塞：仅记日志，用户点击时仍走 `collect_objects` 实时回源兜底；
+    /// - 与 `collect_objects` 同一批写入口径（L1 小 schema 全类别；L2 全类别 +
+    ///   索引重建 + 完成标记），预热与点击并发时写入幂等。
+    pub async fn warm_schema(&self, conn_id: &str, catalog: &str, schema: &str) {
+        if let Some(c) = self.cache(conn_id) {
+            if c.is_schema_complete(catalog, schema) {
+                return;
+            }
+        }
+        let t = std::time::Instant::now();
+        let objects = match self
+            .metadata
+            .introspect_schema_objects(conn_id, catalog, schema)
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(conn_id, catalog, schema, err = %e, "后台预热内省失败（点击时仍会实时回源）");
+                return;
+            }
+        };
+        let table_count = objects.tables.len();
+        let (tables_half, views_half): (Vec<NodeInfo>, Vec<NodeInfo>) = objects
+            .tables
+            .clone()
+            .into_iter()
+            .partition(|o| o.kind != SchemaObjectKind::View);
+        // 例程合并（过程 + 函数），与 collect_objects 的 routines 分支同口径
+        let mut routines_all = objects.procedures.clone();
+        routines_all.extend(objects.functions.clone());
+        // L1：小 schema 全类别进内存（大 schema 走索引分块，不写 L1）
+        if table_count <= CHUNK_THRESHOLD {
+            let (t, v) = (tables_half.clone(), views_half.clone());
+            let (s, g) = (objects.sequences.clone(), objects.triggers.clone());
+            let (cid, cat, sch) = (conn_id.to_string(), catalog.to_string(), schema.to_string());
+            let (cid_c, cat_c, sch_c) = (cid.clone(), cat.clone(), sch.clone());
+            let routines_l1 = routines_all.clone();
+            self.l1_write(move |l1| {
+                l1.set_tables(&cid_c, &cat_c, Some(&sch_c), t);
+                l1.set_views(&cid_c, &cat_c, Some(&sch_c), v);
+                l1.set_sequences(&cid_c, &cat_c, Some(&sch_c), s);
+                l1.set_triggers(&cid_c, &cat_c, Some(&sch_c), g);
+            });
+            self.l1_write_routines(&cid, &cat, &sch, routines_l1);
+        }
+        // L2：全类别 + 索引重建 + 完成标记（半成品防御：先清残留再整块重写）
+        if let Some(mut c) = self.cache(conn_id) {
+            c.prune_schema(catalog, schema);
+            let name = schema.to_string();
+            c.put_schemas(catalog, std::slice::from_ref(&name));
+            if let Some(sid) = c.schema_id(catalog, schema) {
+                c.put_objects(sid, &tables_half);
+                c.put_objects(sid, &views_half);
+                c.put_routines(sid, &routines_all);
+                c.put_sequences(sid, &objects.sequences);
+                c.put_triggers(sid, &objects.triggers);
+            }
+            c.rebuild_index(catalog, schema);
+            c.mark_schema_complete(catalog, schema);
+        }
+        // 列预热（体验优于 DBeaver：DBeaver 展开表节点时才同步加载列；我们把
+        // 「列」也纳入展开 schema 的后台预热 → 用户点表即 0ms 缓存命中）。
+        // 表/视图合计 ≤ 阈值才预热：每张表一次 `list_columns`（现实现每次新建
+        // 连接），大 schema（如 public 24 表）后台预热 10s+ 太久；biz_* 这类
+        // 2 表 schema 秒级完成。大 schema 点表时实时内省、L2 缓存后续命中。
+        const COLUMN_WARM_MAX_TABLES: usize = 8;
+        let column_targets: Vec<String> = tables_half
+            .iter()
+            .chain(views_half.iter())
+            .map(|n| n.name.clone())
+            .collect();
+        if column_targets.len() <= COLUMN_WARM_MAX_TABLES && !column_targets.is_empty() {
+            let mut warmed = 0usize;
+            for tname in &column_targets {
+                if let Err(e) = self
+                    .load_columns(conn_id, catalog, schema, tname)
+                    .await
+                {
+                    tracing::warn!(conn_id, catalog, schema, table = %tname, err = %e, "列预热失败（点表时实时回源）");
+                    continue;
+                }
+                warmed += 1;
+            }
+            tracing::info!(conn_id, catalog, schema, warmed, targets = column_targets.len(), "后台预热表列完成（点表 0ms）");
+        }
+        tracing::info!(
+            conn_id,
+            catalog,
+            schema,
+            elapsed_ms = t.elapsed().as_millis(),
+            tables = table_count,
+            "后台预热 schema 完成（DBeaver loadChildren 对齐）"
+        );
+    }
+
     /// C1 预热（方案 C）：内省 catalogs / schemas 并写入 L2。
     ///
     /// `on_total` 在拿到 catalog 总数后回调一次；`on_step` 每处理完一个 catalog 回调；

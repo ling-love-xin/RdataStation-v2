@@ -44,6 +44,21 @@ fn load_semaphore() -> &'static tokio::sync::Semaphore {
     LOAD_SEM.get_or_init(|| tokio::sync::Semaphore::new(LOAD_CONCURRENCY))
 }
 
+/// 列预取独立并发上限（2026-10-08 卡顿根治，app_run70 铁证）。
+///
+/// 背景：`PrefetchColumns` 原先**与导航共用 LOAD_CONCURRENCY(=1) 信号量**——表展开
+/// 后提交的列预取（每表 5s 超时 × N 表）把唯一信号量占住 10s+，用户紧接着点其他
+/// schema 的 `LoadChildren` 只能 `acquire` 阻塞排队——真机：crm schema 入队 6.26s、
+/// logistics 入队 7.27s 才开始执行（任务本身 0ms，卡顿感全来自信号量排队）。
+/// 修复：列预取走**独立信号量**，绝不与导航内省互抢；顺带让列预取并发 2（两个
+/// schema 的表同时预取，互不阻塞）。
+const PREFETCH_CONCURRENCY: usize = 2;
+static PREFETCH_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+fn prefetch_semaphore() -> &'static tokio::sync::Semaphore {
+    PREFETCH_SEM.get_or_init(|| tokio::sync::Semaphore::new(PREFETCH_CONCURRENCY))
+}
+
 /// 预取目标（catalog / schema / 表或视图名）。
 #[derive(Clone, Debug)]
 pub struct ColumnTarget {
@@ -713,6 +728,30 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 Err(_) => Err(timeout_error("加载子节点")),
             };
             tracing::info!(key = %key, elapsed_ms = t_exec.elapsed().as_millis(), ok = result.is_ok(), "导航任务完成");
+            // DBeaver `loadChildren` 对齐（2026-10-09）：schema 展开即后台全量内省。
+            // 用户在 schema 展开瞬间看到静态类别文件夹（0ms）；预热完成后点
+            // Tables / Views / … 缓存命中 0ms——不再为每次点击付建连 + SQL 等待。
+            // 独立线程 + 独立 Runtime：预热任务不随本 worker 线程退出被 abort；
+            // 与导航查询并发时按连接锁串行，安全。
+            if let NavPath::Schema { catalog, schema } = &path {
+                let mgr = engine::get_connection_manager().clone();
+                let pr = project_root.clone();
+                let cid = conn_id.to_string();
+                let cat = catalog.clone();
+                let sch = schema.clone();
+                let fresh_flag = fresh;
+                std::thread::spawn(move || {
+                    let Ok(rt) = tokio::runtime::Runtime::new() else {
+                        return;
+                    };
+                    rt.block_on(async move {
+                        let svc = crate::navigator_service::NavigatorService::with_context(
+                            mgr, pr, fresh_flag,
+                        );
+                        svc.warm_schema(&cid, &cat, &sch).await;
+                    });
+                });
+            }
             lock(&shared().load_results).push(LoadResult {
                 key,
                 conn_id,
@@ -789,10 +828,12 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 .into_iter()
                 .map(|t| (t.catalog, t.schema, t.table))
                 .collect();
-            // 预取与内省共用串行信号量，但**不阻塞排队**（尽力而为）：内省忙时
-            // 拿不到许可就放弃这一批（下次展开再预取），不让后台线程堆积。
-            let Ok(_permit) = load_semaphore().try_acquire() else {
-                tracing::debug!(conn_id = %conn_id, "列预取让位内省（跳过本批）");
+            // 预取与内省**互不抢信号量**（2026-10-08 卡顿根治）：导航用 LOAD_SEM
+            // 严格串行（DBeaver 语义），列预取用独立 PREFETCH_SEM（并发 2）——表展开
+            // 后的列预取不再把唯一信号量占住 10s+ 而阻塞用户点别的 schema。
+            // 仍 `try_acquire`（尽力而为）：预取信号量也忙时放弃本批（下次展开再预取）。
+            let Ok(_permit) = prefetch_semaphore().try_acquire() else {
+                tracing::debug!(conn_id = %conn_id, "列预取让位（跳过本批）");
                 return;
             };
             // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。

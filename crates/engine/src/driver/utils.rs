@@ -92,7 +92,7 @@ pub const PG_TABLE_DETAIL_SQL: &str = "\
             SELECT a.attname, \
                    format_type(a.atttypid, a.atttypmod), \
                    CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, \
-                   a.attnum, \
+                   a.attnum::text AS attnum, \
                    CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_index i \
                                       WHERE i.indrelid = c.oid AND i.indisprimary \
                                         AND a.attnum = ANY (i.indkey)) \
@@ -185,7 +185,7 @@ pub const PG_LIST_TABLES_SQL: &str = "\
 /// 复合外键同样用「本约束只涉及一列」挡掉 —— **与 PG 同口径**，所以四个网络驱动
 /// 交出来的 `references` 语义一致。
 pub const MY_TABLE_DETAIL_SQL: &str = "\
-            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, c.column_key, \
+            SELECT c.column_name, c.data_type, c.is_nullable, CAST(c.ordinal_position AS CHAR) AS ordinal_position, c.column_key, \
                    c.column_default, c.column_comment, \
                    COALESCE((SELECT kcu.referenced_table_name \
                                FROM information_schema.key_column_usage kcu \
@@ -225,7 +225,7 @@ pub const MY_TABLE_DETAIL_SQL: &str = "\
 ///
 /// 复合外键用 `len(...) = 1` 挡掉（同 PG / MySQL 口径）。
 pub const DUCK_TABLE_DETAIL_SQL: &str = "\
-            SELECT c.column_name, c.data_type, c.is_nullable, c.ordinal_position, \
+            SELECT c.column_name, c.data_type, c.is_nullable, CAST(c.ordinal_position AS VARCHAR) AS ordinal_position, \
                    CASE WHEN EXISTS (SELECT 1 FROM duckdb_constraints() k \
                                       WHERE k.table_name = c.table_name \
                                         AND k.constraint_type = 'PRIMARY KEY' \
