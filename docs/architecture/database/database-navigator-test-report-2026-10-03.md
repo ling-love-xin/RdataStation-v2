@@ -483,6 +483,37 @@ cargo check -p rds-app -j 2
 - **与 DBeaver 的差异（本轮收敛后）**：① 展开 schema 后 ~0.6-0.8s 预热窗口内点 Tables 会实时回源（极短窗口，用户浏览时预热已完成）；② 大 schema（>8 表）不预热列，点表首载实时回源、L2 后续命中（后续可做「一次连接批量查全部表列」驱动接口）；③ 网络链路冻结重建成本（300-600ms 环境固有，100ms 探活已是最优识别手段）。
 - **遗留**：数据预览（execute_query）仍走 scoped 连接复用，遇故障窗口有概率 15s 超时（有兜底，证据待收集）。
 
+## 20. 批量列内省 + 旧缓存 schema 补列（提交 `6934b3d`）
+
+### 20.1 问题：§19 收官的列预热受 8 表阈值限制，大 schema 点表仍实时回源
+
+§19 的列预热按「表+视图 ≤ 8」阈值跳过（每表一次 `list_columns` = 每次新建连接，public 24 表 = 24 次建连 7s+ 不可接受）；且**旧缓存 schema**（对象完整标记已打、列从未预热，如 8 表阈值时代展开过的大 schema）被 `is_schema_complete` 跳过，永不补列。
+
+### 20.2 落地改造（提交 `6934b3d`，四类驱动统一生效）
+
+| 文件 | 改动 |
+| --- | --- |
+| `driver/traits.rs` | 新增 `Database::list_columns_batch`（默认实现循环 `list_columns`——本地驱动无建连成本直接可用） |
+| `driver/native/postgres.rs` / `mysql.rs` | 覆盖批量列：**复用常驻连接 + 循环列 SQL**（`lock_pg_conn`/`lock_mysql_conn` 内置 100ms 快速探活）——大 schema 一次建连全部列；`get_table_detail` 与批量列共用 `pg_rows_to_columns`/`mysql_rows_to_columns`（去重） |
+| `database/cache.rs` | `NavCache` 新增 `schema_columns_count`（列完整性独立判定）+ `schema_object_names`（L2 读表/视图名） |
+| `database/navigator_service.rs` | `warm_schema` 重构：对象完整与列完整**分开记**——对象完整但列未预热时从 L2 读对象名补列（不重跑内省）；列预热全量化（去掉 8 表阈值） |
+
+### 20.3 真机验证（app_run76 · clean-test 项目 · P_real_pg postgres/public 24 表）
+
+| 项 | 结果 |
+| --- | --- |
+| 批量列预热（postgres/public） | ✅ `后台预热表列完成 warmed=24 targets=24`，预热总耗时 **270ms**（含建连，后台用户无感） |
+| 点 Tables | ✅ **2ms（L1 命中）** |
+| 点 purchase_order_item 表展开列 | ✅ **0ms（列已预热）** |
+| 单元回归 | ✅ engine 528 / database 102 全绿 |
+
+### 20.4 结论
+
+- **大 schema 点表 0ms 全量化**：任何规模 schema 展开后点表展开列都是缓存命中，无实时回源等待——**体验目标达成**（DBeaver 大 schema 展开表节点仍要同步加载列，我们后台预热）。
+- **多驱动口径保持**：批量列走 `Database` trait 统一接口；本地驱动默认循环（无建连成本），网络驱动覆盖复用连接——四类驱动统一享受预热。
+- **遗留收敛**：仅剩 ① 预热窗口内（<300ms）点表实时回源；② 网络链路冻结重建（100ms 探活已最优）；③ 数据预览 execute_query 同故障窗口 15s 超时（有兜底，证据待收集）。
+
+
 
 
 
