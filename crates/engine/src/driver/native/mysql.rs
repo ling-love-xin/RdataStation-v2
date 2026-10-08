@@ -82,10 +82,11 @@ impl MySqlDatabase {
             format!("{}{}ssl-mode=disabled", url, sep)
         };
 
-        // 显式配置连接池：min_connections=1 让池在连接建立时预建常驻连接，
-        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时。
+        // 显式配置连接池：min_connections=2 让池在连接建立时预建 2 条常驻连接，
+        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时；
+        // 且 catalog 回源与列预取并发时不互相抢唯一连接（真机：min=1 时两任务排队 30s 超时）。
         let options = sqlx::mysql::MySqlPoolOptions::new()
-            .min_connections(1)
+            .min_connections(2)
             .max_connections(10)
             .acquire_timeout(std::time::Duration::from_secs(60))
             .idle_timeout(Some(std::time::Duration::from_secs(1800)))
@@ -117,7 +118,7 @@ impl MySqlDatabase {
             pool,
             server_version: Some(server_version),
             max_connections: 10,
-            min_connections: 1,
+            min_connections: 2,
         })
     }
 

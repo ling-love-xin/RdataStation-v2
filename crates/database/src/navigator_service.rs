@@ -805,7 +805,16 @@ impl NavigatorService {
                                     }
                                 });
                             }
+                            // 读侧自愈写侧（幂等）：命中即证明对象写入完整，补扫描完成标记，
+                            // 让 `schemas()` 不再因历史半成品（is_loaded=0）把本 schema 当未命中回源。
+                            c.mark_schema_complete(catalog, schema);
                             return Ok(objs);
+                        } else if c.is_schema_complete(catalog, schema) {
+                            // schema 已完整扫描、但该类别确实为空（如 MySQL 无视图）：
+                            // 空是合法结果，不是「未命中」——直接返回空，避免每次展开都回源
+                            // 实时查询（真机：views 空 + 半成品时反复回源 get_tables，池不稳时 30s 超时）。
+                            tracing::info!(conn_id = %conn_id, folder = folder.key(), elapsed_ms = tc.elapsed().as_millis(), "collect_objects 完整 schema 空类别（不回源）");
+                            return Ok(Vec::new());
                         }
                     }
                 }
@@ -1008,15 +1017,30 @@ impl NavigatorService {
         for (catalog, schema, table) in targets {
             // 预取失败不影响可见状态（用户真正展开那张表时会再试一次），所以这里不计入错误；
             // 但「展开表后列迟迟不出来」的第一处证据正在这里，留 DEBUG 痕。
-            match self.load_columns(conn_id, catalog, schema, table).await {
-                Ok(_) => ok += 1,
-                Err(e) => tracing::debug!(
+            // 每表单独设 5s 超时：单张表慢/卡（如池连接被其他任务占用）只跳过该表，
+            // 不再让整批预取被一次 30s 外层超时全部放弃（真机：min=1 池并发时整批 30s 超时，
+            // 列缓存留半成品，下次展开表仍要回源）。
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.load_columns(conn_id, catalog, schema, table),
+            )
+            .await
+            {
+                Ok(Ok(_)) => ok += 1,
+                Ok(Err(e)) => tracing::debug!(
                     conn_id = %conn_id,
                     catalog = %catalog,
                     schema = %schema,
                     table = %table,
                     error = %e,
                     "列预取失败（不影响可见状态；日志级别调 DEBUG 可查）"
+                ),
+                Err(_) => tracing::warn!(
+                    conn_id = %conn_id,
+                    catalog = %catalog,
+                    schema = %schema,
+                    table = %table,
+                    "列预取单表超时（跳过该表，其余继续；用户展开该表时按需回源）"
                 ),
             }
         }
