@@ -448,5 +448,41 @@ cargo check -p rds-app -j 2
 - **与 DBeaver 的差异（可接受）**：DBeaver 是「展开时一次性加载全部 + 内存缓存」，我们是「展开骨架 + 点击类别才查」——用户已确认该交互（点击驱动加载）；冷加载成本从展开移到点类别。
 - **遗留**：① 冷点类别 200-700ms 中有建连环境成本（150-400ms 固有）；② 若未来要让「展开即全量」也可行（childNodes 模型），需先根治网络层对旧连接的冻结（超出软件能力，建议换网/换主机验证）；③ 数据预览（execute_query）仍走 scoped 连接复用，遇故障窗口有概率 15s 超时（有兜底，证据待收集）。
 
+## 19. 顺滑度收官：展开即后台预热对象与列（提交 `725f1ef`）
+
+### 19.1 问题：§18 把内省从「展开」移到「点类别」，用户判定「仍不如 DBeaver」
+
+§18 形态（静态文件夹 + 点击类别实时内省）下，点 Tables 冷加载 384~1444ms（含建连环境成本）——用户反馈「还是没有 dbeaver 丝滑」，但「比之前好太多」。用户同时指出：设计是多驱动的，优化不能只落在 sqlx 驱动层。
+
+### 19.2 落地改造（提交 `725f1ef`，四类驱动统一生效）
+
+| 文件 | 改动 |
+| --- | --- |
+| `navigator_service.rs` | 新增 `warm_schema`（DBeaver `loadChildren` 对齐）：**schema 展开即后台全量内省 5 类对象**（表/视图/例程/序列/触发器）写 L1/L2 + 索引重建 + 完成标记；**列预热**：表+视图 ≤ 8 的 schema 后台顺带内省全部表列（`load_columns`），点表展开列 0ms |
+| `nav_jobs.rs` | Schema 路径任务完成后 spawn 独立线程 + 独立 Runtime 执行 `warm_schema`（不随 worker 线程退出被 abort；与导航查询按连接锁串行安全） |
+| `postgres.rs` / `mysql.rs` | 批量内省改回**复用常驻连接 + 100ms 快速探活**（`lock_pg_conn`/`lock_mysql_conn` 内置 `SELECT 1` 100ms 超时）：健康连接复用（展开 ≈ 55ms）；冻结连接 100ms 即弃 + 300-600ms 重建（最坏 ~1.4s，替代 2s ping 惩罚 / 每次新建 300ms 常驻成本） |
+| `utils.rs` | 列解码红字根治：PG `attnum::text`、MySQL `CAST(ordinal_position AS CHAR)`、DuckDB `CAST(ordinal_position AS VARCHAR)`——`get::<Option<String>>` 不再对 INT2/INT 报类型错（app_run71 `ColumnDecode index "3"` 铁证） |
+
+**多驱动口径**：预热机制在服务层（`navigator_service`），驱动无关——SQLite / DuckDB / PG / MySQL 统一走 `introspect_schema_objects` 接口享受预热；100ms 探活只在网络驱动（PG/MySQL）需要（本地文件驱动无冻结问题）。
+
+### 19.3 真机验证（app_run73/74 · clean-test 项目 · P_real_pg warehouse_supply_chain）
+
+| 项 | 结果 |
+| --- | --- |
+| 点开全新 schema biz_485（app_run73） | ✅ 文件夹 0ms 秒出；后台预热 758ms（含建连 515ms，用户无感） |
+| 点 biz_485/tables | ✅ **2ms（L1 命中）** |
+| 点 logistics/outbound tables | ✅ 2-3ms（缓存命中） |
+| 点 biz_381（app_run74）→ 点 Tables → 点 detail 表展开列 | ✅ **1ms / 1ms / 0ms（列已预热）** |
+| 列预热日志 | ✅ `后台预热表列完成 warmed=2 targets=2`（biz_001/biz_381 均命中） |
+| 列解码红字 / 超时 | ✅ 无 |
+| 单元回归 | ✅ engine 528 / database 102 全绿 |
+
+### 19.4 结论
+
+- **全链路 0-2ms**：点 schema（文件夹秒出）→ 点 Tables（L1 命中）→ 点表展开列（已预热）——**对齐甚至优于 DBeaver 首启体验**（DBeaver 重启后需重新加载；我们有 L2 跨会话持久，重启仍命中）。
+- **与 DBeaver 的差异（本轮收敛后）**：① 展开 schema 后 ~0.6-0.8s 预热窗口内点 Tables 会实时回源（极短窗口，用户浏览时预热已完成）；② 大 schema（>8 表）不预热列，点表首载实时回源、L2 后续命中（后续可做「一次连接批量查全部表列」驱动接口）；③ 网络链路冻结重建成本（300-600ms 环境固有，100ms 探活已是最优识别手段）。
+- **遗留**：数据预览（execute_query）仍走 scoped 连接复用，遇故障窗口有概率 15s 超时（有兜底，证据待收集）。
+
+
 
 
