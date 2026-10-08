@@ -15,7 +15,8 @@ use gpui_kit::base::{StyledExt, h_resizable, resizable_panel};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, IconName, Size, Sizable as _, Theme};
 use gpui_kit::*;
@@ -35,12 +36,19 @@ use database::model::PropertyRequest;
 use database::nav_view::NavDragPayload;
 use database::property_panel::PropertyRegistryImpl;
 use database::table_data::{DEFAULT_PAGE_LIMIT, TableDataRequest};
-use property::{ObjectProperties, PageId, PropertyPage, PropertyRegistry as _, SupportState};
+use property::{ObjectProperties, PageId, PropertyPage, PropertyRegistry as _, PropertyRow, PropertyValueKind, SupportState};
 use property::PropertyState;
 use scratchpad::{
     ScratchpadDiffView, ScratchpadSearchView,
     scratchpad_view::{render_scratchpad_diff_pane, render_scratchpad_search_pane},
 };
+
+/// 属性行内编辑态（DBeaver 属性编辑：点击可编辑值 → 行内编辑控件）。
+#[derive(Clone)]
+struct PropertyEdit {
+    row_id: String,
+    input: Entity<InputState>,
+}
 
 /// 中央内容区面板。
 pub struct EditorPanel {
@@ -70,6 +78,8 @@ pub struct EditorPanel {
     nav_cache_epoch: u64,
     /// Phase B：属性面板请求（导航双击对象 / F4 走 `EditorBridge::show_properties`）。
     property_target: Rc<RefCell<Option<PropertyRequest>>>,
+    /// 属性行内编辑态（DBeaver 属性编辑；None = 未在编辑）。
+    property_edit: Rc<RefCell<Option<PropertyEdit>>>,
     /// M5：草稿箱内容搜索结果（草稿箱经端口投递，见 `set_scratchpad_search`）。
     ///
     /// 展示归编辑区（结果渲染在中央区）；草稿箱自己只记搜索参数，不回读这份数据。
@@ -117,6 +127,7 @@ impl EditorPanel {
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             nav_cache_epoch: 0,
             property_target: Rc::new(RefCell::new(None)),
+            property_edit: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
             scratchpad_diff: Rc::new(RefCell::new(None)),
             nav_tree_loading: Cell::new(false),
@@ -425,6 +436,98 @@ impl EditorPanel {
         cx.notify();
     }
 
+    /// 进入属性行内编辑（DBeaver 属性编辑：点击可编辑值 → 行内输入控件）。
+    fn begin_property_edit(
+        &self,
+        row_id: String,
+        initial: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| {
+            let mut st = InputState::new(window, cx);
+            st.set_value(initial, window, cx);
+            st
+        });
+        *self.property_edit.borrow_mut() = Some(PropertyEdit { row_id, input });
+        cx.notify();
+    }
+
+    /// 取消编辑（丢弃草稿）。
+    fn cancel_property_edit(&self, cx: &mut Context<Self>) {
+        *self.property_edit.borrow_mut() = None;
+        cx.notify();
+    }
+
+    /// 提交编辑：读输入 → 后台执行 ALTER（`apply_property_edit`）→ 成功重载面板、
+    /// 失败在面板内红字提示。
+    fn submit_property_edit(&self, cx: &mut Context<Self>) {
+        let Some(edit) = self.property_edit.borrow().clone() else {
+            return;
+        };
+        let Some(target) = self.property_target.borrow().clone() else {
+            return;
+        };
+        let value = edit.input.read(cx).value().to_string();
+        *self.property_edit.borrow_mut() = None;
+        self.run_property_edit(target, edit.row_id, value, cx);
+    }
+
+    /// 布尔属性直接切换提交（可空等；DBeaver「编辑即生效」）。
+    fn toggle_property_bool(&self, row_id: String, new_value: bool, cx: &mut Context<Self>) {
+        let Some(target) = self.property_target.borrow().clone() else {
+            return;
+        };
+        let value = if new_value { "true" } else { "false" }.to_string();
+        self.run_property_edit(target, row_id, value, cx);
+    }
+
+    /// 后台执行一次属性编辑（公共路径：文本提交与布尔切换共用）。
+    fn run_property_edit(
+        &self,
+        target: PropertyRequest,
+        row_id: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let metadata =
+            database::metadata_service::MetadataService::new(engine::get_connection_manager().clone());
+        // async move 按值捕获：把传给后台的字段先拆出来，`target` 保持完整供回填闭包用。
+        let prop = target.property.clone();
+        let driver = target.driver.clone();
+        cx.spawn(async move |_this, cx| {
+            let result = executor
+                .spawn(async move {
+                    database::property_panel::apply_property_edit(
+                        &metadata,
+                        &prop,
+                        &driver,
+                        &row_id,
+                        &value,
+                    )
+                    .await
+                })
+                .await;
+            let _ = weak.update(cx, |panel, cx| {
+                match result {
+                    Ok(_sql) => {
+                        // 成功：重载面板（列结构可能变化——重命名 / 可空等）。
+                        panel.request_properties(target, cx);
+                        // 树节点刷新依赖导航刷新事件（列名变更场景），下一轮接。
+                    }
+                    Err(e) => {
+                        let mut st = panel.property.borrow_mut();
+                        st.error = Some(format!("编辑失败：{e}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// 右侧停靠属性面板（DBeaver 式：tab 页签 + 描述驱动渲染）。
     ///
     /// 页集合来自 [`PropertyRegistry`]（`PropertyRegistryImpl`），渲染只遍历页描述，
@@ -631,29 +734,10 @@ impl EditorPanel {
         }
         match page_id {
             PageId::General => {
+                // DBeaver 分组渲染：按 `category` 分组（`None` 归默认组，不显组标题）。
+                // 本轮提供者 category 全 None；结构已支持多组（后续「高级」等分组接入）。
                 for row in &props.properties {
-                    body = body.child(
-                        div()
-                            .h_flex()
-                            .items_start()
-                            .w_full()
-                            .gap_2()
-                            .text_xs()
-                            .child(
-                                div()
-                                    .w(rems(4.5))
-                                    .flex_none()
-                                    .text_color(muted)
-                                    .child(row.label.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_color(fg)
-                                    .child(row.value.clone()),
-                            ),
-                    );
+                    body = body.child(self.render_property_row(entity.clone(), row, theme));
                 }
             }
             PageId::Columns
@@ -880,6 +964,150 @@ impl EditorPanel {
         body = body.child(footer);
         let _ = page;
         body
+    }
+
+    /// 属性网格行渲染（DBeaver 显示逻辑：只读 → 文本；可编辑 → 编辑控件）。
+    ///
+    /// - `Boolean` 形态 → Switch（点击即切换提交）；
+    /// - `Text / LongText` 形态 → 未编辑时「值 + 编辑按钮」，编辑中 → 输入框 + 保存 / 取消。
+    fn render_property_row(
+        &self,
+        entity: gpui::Entity<EditorPanel>,
+        row: &PropertyRow,
+        theme: &Theme,
+    ) -> Div {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+
+        let label = div()
+            .w(rems(4.5))
+            .flex_none()
+            .text_xs()
+            .text_color(muted)
+            .child(row.label.clone());
+
+        if !row.editable {
+            // 只读：文本行（DBeaver 只读属性）。
+            return div()
+                .h_flex()
+                .items_start()
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .child(label)
+                .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()));
+        }
+
+        match row.value_kind {
+            PropertyValueKind::Boolean => {
+                // 布尔：Switch（DBeaver 布尔属性编辑即生效；回调收到切换后的新值）。
+                let checked = row.value == "true";
+                let entity = entity.clone();
+                let rid = row.id.clone();
+                div()
+                    .h_flex()
+                    .items_center()
+                    .w_full()
+                    .gap_2()
+                    .text_xs()
+                    .child(label)
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Switch::new(format!("prop-bool-{}", rid))
+                                .checked(checked)
+                                .on_click(move |new_val, _, cx| {
+                                    entity.update(cx, |panel, cx| {
+                                        panel.toggle_property_bool(rid.clone(), *new_val, cx);
+                                    });
+                                }),
+                        ),
+                    )
+            }
+            _ => {
+                let editing = self
+                    .property_edit
+                    .borrow()
+                    .as_ref()
+                    .map(|e| e.row_id == row.id)
+                    .unwrap_or(false);
+                if editing {
+                    // 编辑中：输入框 + 保存 / 取消。
+                    let edit = self.property_edit.borrow().clone().expect("编辑态已检查");
+                    let save_entity = entity.clone();
+                    let cancel_entity = entity.clone();
+                    let input = Input::new(&edit.input).id(format!("prop-edit-{}", row.id)).w_full();
+                    div()
+                        .h_flex()
+                        .items_start()
+                        .w_full()
+                        .gap_2()
+                        .text_xs()
+                        .child(label)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .v_flex()
+                                .gap_1()
+                                .child(input)
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Button::new(format!("prop-save-{}", row.id))
+                                                .label("保存")
+                                                .with_size(Size::XSmall)
+                                                .on_click(move |_, _, app| {
+                                                    save_entity.update(app, |panel, cx| {
+                                                        panel.submit_property_edit(cx);
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(format!("prop-cancel-{}", row.id))
+                                                .label("取消")
+                                                .with_size(Size::XSmall)
+                                                .on_click(move |_, _, app| {
+                                                    cancel_entity.update(app, |panel, cx| {
+                                                        panel.cancel_property_edit(cx);
+                                                    });
+                                                }),
+                                        ),
+                                ),
+                        )
+                } else {
+                    // 未编辑：值 + 编辑按钮（DBeaver 点击可编辑值进入编辑）。
+                    let entity = entity.clone();
+                    let rid = row.id.clone();
+                    let initial = row.value.clone();
+                    div()
+                        .h_flex()
+                        .items_start()
+                        .w_full()
+                        .gap_2()
+                        .text_xs()
+                        .child(label)
+                        .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()))
+                        .child(
+                            Button::new(format!("prop-edit-btn-{}", row.id))
+                                .label("编辑")
+                                .with_size(Size::XSmall)
+                                .on_click(move |_, window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.begin_property_edit(
+                                            rid.clone(),
+                                            initial.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
+                }
+            }
+        }
     }
 }
 

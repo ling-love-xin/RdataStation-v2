@@ -12,14 +12,32 @@ use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
     ObjectProperties, PageId, PropertyKind, PropertyPage, PropertyRegistry, PropertyRow,
-    PropertySection, PropertyTable, SupportState, TableDataPage,
+    PropertySection, PropertyTable, PropertyValueKind, SupportState, TableDataPage,
 };
 use shared::error::CoreError;
 
+/// 只读文本行（DBeaver 只读属性；id 取显示名）。
 fn row(label: &str, value: impl Into<String>) -> PropertyRow {
+    PropertyRow::read_only(label, value)
+}
+
+/// 可编辑属性行（DBeaver `editable=true`——渲染编辑控件，提交走
+/// [`apply_property_edit`]，`id` 是提交映射 SQL 的键）。
+fn editable_row(
+    id: &str,
+    label: &str,
+    value: impl Into<String>,
+    kind: PropertyValueKind,
+    options: Vec<String>,
+) -> PropertyRow {
     PropertyRow {
+        id: id.to_string(),
         label: label.to_string(),
+        category: None,
         value: value.into(),
+        editable: true,
+        value_kind: kind,
+        select_options: options,
     }
 }
 
@@ -215,10 +233,18 @@ pub async fn load_properties(
                 .list_columns(&ref_.conn_id, &catalog, &schema, &parent)
                 .await?;
             if let Some(col) = columns.iter().find(|c| c.name == ref_.name) {
+                // DBeaver 列属性对齐（General 组）：只读 + 可编辑
+                // （可空 / 默认值 / 注释 / 重命名——提交走 `apply_property_edit`）。
                 properties.push(row("名称", col.name.clone()));
                 properties.push(row("所属表", qualify(ref_)));
                 properties.push(row("类型", col.data_type.clone()));
-                properties.push(row("可空", if col.nullable { "是" } else { "否" }));
+                properties.push(editable_row(
+                    "Column.nullable",
+                    "可空",
+                    if col.nullable { "true" } else { "false" },
+                    PropertyValueKind::Boolean,
+                    vec!["true".to_string(), "false".to_string()],
+                ));
                 properties.push(row("主键", if col.is_primary_key { "是" } else { "否" }));
                 properties.push(row("外键", if col.is_foreign_key { "是" } else { "否" }));
                 if col.ordinal > 0 {
@@ -227,8 +253,20 @@ pub async fn load_properties(
                 if let Some(r) = &col.references {
                     properties.push(row("引用", format!("{}.{}", r.table, r.column)));
                 }
-                properties.push(row("默认值", opt(&col.default_value)));
-                properties.push(row("注释", opt(&col.comment)));
+                properties.push(editable_row(
+                    "Column.default_value",
+                    "默认值",
+                    opt(&col.default_value),
+                    PropertyValueKind::Text,
+                    Vec::new(),
+                ));
+                properties.push(editable_row(
+                    "Column.comment",
+                    "注释",
+                    opt(&col.comment),
+                    PropertyValueKind::LongText,
+                    Vec::new(),
+                ));
             } else {
                 properties.push(row("名称", ref_.name.clone()));
                 properties.push(row("所属表", qualify(ref_)));
@@ -300,6 +338,44 @@ pub async fn load_properties(
         sections,
         data,
     })
+}
+
+/// 应用属性编辑（DBeaver `setPropertyValue` 对齐，2026-10-09）。
+///
+/// 列级编辑生成 ALTER 语句并执行（`driver` 分派见 [`crate::sql_gen::alter_column_sql`]，
+/// 仅 PostgreSQL 支持；其余驱动明确报「暂不支持」）。返回实际执行的 SQL（渲染方展示）。
+///
+/// `property_id` 与 [`load_properties`] 行 id 一致（`Column.name` / `Column.comment` /
+/// `Column.default_value` / `Column.nullable`）。
+pub async fn apply_property_edit(
+    metadata: &MetadataService,
+    ref_: &PropertyRef,
+    driver: &str,
+    property_id: &str,
+    value: &str,
+) -> Result<String, CoreError> {
+    if ref_.kind != PropertyKind::Column {
+        return Err(CoreError::database(
+            shared::error::DatabaseError::Driver {
+                db_type: driver.to_string(),
+                operation: "apply_property_edit".to_string(),
+                source: "暂仅支持列属性编辑（其他对象类型待扩展）".to_string(),
+            },
+        ));
+    }
+    let catalog = ref_.catalog.clone().unwrap_or_default();
+    let schema = ref_.schema.clone().unwrap_or_default();
+    let table = ref_.parent.clone().unwrap_or_default();
+    let sql = crate::sql_gen::alter_column_sql(
+        driver,
+        (!schema.is_empty()).then_some(schema.as_str()),
+        &table,
+        &ref_.name,
+        property_id,
+        value,
+    )?;
+    metadata.execute_query(&ref_.conn_id, &catalog, &sql).await?;
+    Ok(sql)
 }
 
 /// 多行文本段落（源码 / DDL）：每行一条记录（单列），保留换行。

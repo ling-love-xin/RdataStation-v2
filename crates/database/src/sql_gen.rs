@@ -6,6 +6,8 @@
 //! 设计对应 `docs/architecture/database/database-navigator-prototype-design.md` §6.2
 //! （表 / 视图右键「生成 INSERT/UPDATE/DELETE」）。
 
+use shared::error::CoreError;
+
 /// 生成模板所需的列信息（只用名称与主键标记）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DmlColumn {
@@ -275,6 +277,86 @@ fn fk_action(rule: Option<&str>) -> Option<&str> {
 
 fn cols_are_empty(cols: &[String]) -> bool {
     cols.is_empty() || cols.iter().all(|c| c.trim().is_empty())
+}
+
+/// 列属性编辑 SQL（DBeaver `setPropertyValue` 对齐，2026-10-09）。
+///
+/// `property_id` 取值（与 [`crate::property_panel`] 行 id 一致）：
+/// - `Column.name`          → 重命名列（`ALTER TABLE … RENAME COLUMN`）
+/// - `Column.comment`       → 列注释（`COMMENT ON COLUMN`；空串 = 清注释）
+/// - `Column.default_value` → 默认值（空串 = `DROP DEFAULT`）
+/// - `Column.nullable`      → 可空（`true` = 允许 NULL，其余 = NOT NULL）
+///
+/// **仅 PostgreSQL 支持**（标识符双引号、`ALTER COLUMN` / `COMMENT ON` 语法）；
+/// 其余驱动明确报「暂不支持」（不静默吞、不生成方言错误的语句）。MySQL 注释
+/// 需 `MODIFY COLUMN` 完整列定义（后续按驱动扩展）。
+///
+/// 限定名只拼 `schema.table`（PG 的 `ALTER` / `COMMENT` 不接受跨库前缀；目标
+/// 库由连接承载——跨库连接已由 `database_for` 切到目标库）。
+pub fn alter_column_sql(
+    driver: &str,
+    schema: Option<&str>,
+    table: &str,
+    column: &str,
+    property_id: &str,
+    value: &str,
+) -> Result<String, CoreError> {
+    if !driver.eq_ignore_ascii_case("postgresql")
+        && !driver.eq_ignore_ascii_case("postgres")
+        && !driver.eq_ignore_ascii_case("pg")
+    {
+        return Err(CoreError::database(
+            shared::error::DatabaseError::Driver {
+                db_type: driver.to_string(),
+                operation: "alter_column_sql".to_string(),
+                source: "该驱动暂不支持属性编辑（仅 PostgreSQL 支持列级编辑）".to_string(),
+            },
+        ));
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(s) = schema {
+        if !s.is_empty() {
+            parts.push(s);
+        }
+    }
+    parts.push(table);
+    let qual = parts.join(".");
+    let ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let col_ident = ident(column);
+    let sql = match property_id {
+        "Column.name" => {
+            let new_ident = ident(value);
+            format!("ALTER TABLE {qual} RENAME COLUMN {col_ident} TO {new_ident}")
+        }
+        "Column.comment" => {
+            let esc = value.replace('\'', "''");
+            format!("COMMENT ON COLUMN {qual}.{col_ident} IS '{esc}'")
+        }
+        "Column.default_value" => {
+            if value.trim().is_empty() {
+                format!("ALTER TABLE {qual} ALTER COLUMN {col_ident} DROP DEFAULT")
+            } else {
+                format!("ALTER TABLE {qual} ALTER COLUMN {col_ident} SET DEFAULT {value}")
+            }
+        }
+        "Column.nullable" => {
+            if value == "true" {
+                format!("ALTER TABLE {qual} ALTER COLUMN {col_ident} DROP NOT NULL")
+            } else {
+                format!("ALTER TABLE {qual} ALTER COLUMN {col_ident} SET NOT NULL")
+            }
+        }
+        _ => {
+            return Err(CoreError::database(
+                shared::error::DatabaseError::Driver {
+                    db_type: driver.to_string(),
+                    operation: "alter_column_sql".to_string(),
+                    source: format!("暂不支持编辑该属性：{property_id}"),
+                },
+            ))
+        }
+    };
+    Ok(sql)
 }
 
 #[cfg(test)]
@@ -599,5 +681,79 @@ mod tests {
             "默认的 NO ACTION 不应打出来：{sql}"
         );
         assert!(sql.contains("ON DELETE CASCADE"), "{sql}");
+    }
+
+    // ==================== 列属性编辑 SQL（DBeaver setPropertyValue 对齐） ====================
+
+    /// PG 列重命名：标识符双引号 + 转义。
+    #[test]
+    fn alter_rename_quotes_identifiers() {
+        let sql = super::alter_column_sql(
+            "postgresql",
+            Some("public"),
+            "t_user",
+            "name",
+            "Column.name",
+            "nick",
+        )
+        .unwrap();
+        assert_eq!(sql, "ALTER TABLE public.t_user RENAME COLUMN \"name\" TO \"nick\"");
+    }
+
+    /// PG 列注释：单引号转义；schema 可空（无独立 schema 层的驱动传 None 也在 PG 侧成立）。
+    #[test]
+    fn alter_comment_escapes_quotes() {
+        let sql = super::alter_column_sql(
+            "postgres",
+            None,
+            "t",
+            "c",
+            "Column.comment",
+            "it's ok",
+        )
+        .unwrap();
+        assert_eq!(sql, "COMMENT ON COLUMN t.\"c\" IS 'it''s ok'");
+    }
+
+    /// PG 默认值：空串 = DROP DEFAULT。
+    #[test]
+    fn alter_default_empty_means_drop() {
+        let sql =
+            super::alter_column_sql("postgresql", Some("s"), "t", "c", "Column.default_value", "")
+                .unwrap();
+        assert_eq!(sql, "ALTER TABLE s.t ALTER COLUMN \"c\" DROP DEFAULT");
+    }
+
+    /// PG 可空：`true` = DROP NOT NULL，其余 = SET NOT NULL。
+    #[test]
+    fn alter_nullable_toggles() {
+        let drop_sql = super::alter_column_sql(
+            "postgresql",
+            Some("s"),
+            "t",
+            "c",
+            "Column.nullable",
+            "true",
+        )
+        .unwrap();
+        assert!(drop_sql.contains("DROP NOT NULL"), "{drop_sql}");
+        let set_sql = super::alter_column_sql(
+            "postgresql",
+            Some("s"),
+            "t",
+            "c",
+            "Column.nullable",
+            "false",
+        )
+        .unwrap();
+        assert!(set_sql.contains("SET NOT NULL"), "{set_sql}");
+    }
+
+    /// 非 PG 驱动明确报「暂不支持」，不生成方言错误的语句。
+    #[test]
+    fn alter_rejects_non_pg_driver() {
+        let err = super::alter_column_sql("mysql", None, "t", "c", "Column.comment", "x")
+            .expect_err("mysql 应明确拒绝");
+        assert!(err.to_string().contains("暂不支持"), "{err}");
     }
 }

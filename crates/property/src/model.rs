@@ -20,11 +20,52 @@ pub enum PropertyKind {
     Trigger,
 }
 
-/// 属性网格中的一行（label / value）。
+/// 属性值形态（决定渲染控件；DBeaver `dataType` 对齐的精简版）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PropertyValueKind {
+    /// 单行文本（默认）
+    #[default]
+    Text,
+    /// 多行长文本（注释 / 描述）
+    LongText,
+    /// 布尔开关（可空 / 主键等）
+    Boolean,
+    /// 单选下拉（`select_options` 提供候选）
+    Select,
+}
+
+/// 属性网格中的一行（DBeaver `@Property` 描述符对齐：id / 分组 / 可编辑 / 值形态）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyRow {
+    /// 属性 id（DBeaver `getPropertyValue(monitor, id)` 的 id；编辑提交按 id 映射 SQL）
+    pub id: String,
+    /// 显示名（DBeaver `displayName`）
     pub label: String,
+    /// 分组（DBeaver `category`；`None` = General 组）
+    pub category: Option<String>,
+    /// 值（DBeaver `getPropertyValue`；懒加载值）
     pub value: String,
+    /// 可编辑（DBeaver `isEditable(object)`——编辑控件 vs 只读文本）
+    pub editable: bool,
+    /// 值形态（决定编辑控件类型）
+    pub value_kind: PropertyValueKind,
+    /// Select 形态的候选（布尔态等固定候选也可用）
+    pub select_options: Vec<String>,
+}
+
+impl PropertyRow {
+    /// 只读文本行（最常见形态；id 取 label，editable=false，Text 形态）。
+    pub fn read_only(label: &str, value: impl Into<String>) -> Self {
+        Self {
+            id: label.to_string(),
+            label: label.to_string(),
+            category: None,
+            value: value.into(),
+            editable: false,
+            value_kind: PropertyValueKind::Text,
+            select_options: Vec::new(),
+        }
+    }
 }
 
 /// 子实体表格（列 / 索引 / 约束 / DDL / 源码）。

@@ -305,3 +305,91 @@ pub trait PropertyRegistry {
 | 属性加载入队 / 结果类型 | `crates/database/src/nav_jobs.rs` |
 | tab 化描述驱动渲染 | `crates/workbench/src/panels/editor.rs::render_property_panel` |
 | Quick Open 打开属性 | `crates/workbench/src/quick_open/model.rs`（`ShowProperties`，类型不变） |
+| 属性行描述符化 + 编辑控件渲染 | `crates/workbench/src/panels/editor.rs::render_property_row` |
+| 属性编辑提交（`setPropertyValue` 对齐） | `crates/database/src/property_panel.rs::apply_property_edit` |
+| 列编辑 SQL 生成（PG） | `crates/database/src/sql_gen.rs::alter_column_sql` |
+| DBeaver 源码参考（本地检出） | `D:\RdataStation\RDS\dbeaver-src\plugins\org.jkiss.dbeaver.model\src\org\jkiss\dbeaver\model\preferences\{DBPPropertySource,DBPPropertyDescriptor,DBPPropertyManager}.java` |
+
+## 15. DBeaver 属性功能复现（2026-10-09）
+
+> 目标：属性面板的**显示逻辑与操作逻辑向 DBeaver 对齐**（用户拍板「复现实现」）。
+> 以 DBeaver 源码（`DBPPropertySource` / `DBPPropertyDescriptor` / `@Property` 注解驱动）为基准，
+> 对照落地见下表；**只读展示先行、编辑最小集落地**，MySQL 等驱动扩展留待下一步。
+
+### 15.1 对照（DBeaver → RDS）
+
+| DBeaver | RDS 复现 | 状态 |
+| --- | --- | --- |
+| `@Property(viewable, editable, order)` 注解 getter → 描述符 | `PropertyRow` 描述符化（`id` / `category` / `editable` / `value_kind`） | 已落地 |
+| `getPropertyValue(monitor, id)` 懒加载值 | 提供者一次取数填充 `value`（懒加载按需后续引入） | 部分 |
+| `category` 分组显示 | `PropertyRow.category`（渲染层按组渲染；本轮提供者全 None → 默认组） | 结构就绪 |
+| `isEditable(object)` → 编辑控件 | `PropertyRow.editable` → Switch / 行内输入 + 保存 | 已落地 |
+| `setPropertyValue(monitor, id, value)` → SQL | `apply_property_edit` → `alter_column_sql`（PG 列级） | 已落地 |
+| `resetPropertyValue` 重置 | 未实现（后续） | 待办 |
+| 值类型 `dataType` | `PropertyValueKind`（Text / LongText / Boolean / Select） | 已落地 |
+
+### 15.2 数据模型升级
+
+`PropertyRow` 由「label / value」升级为描述符形态（`crates/property/src/model.rs`）：
+
+```rust
+pub struct PropertyRow {
+    pub id: String,            // DBeaver getPropertyValue(monitor, id) 的 id；编辑提交按 id 映射 SQL
+    pub label: String,         // displayName
+    pub category: Option<String>, // 分组；None = 默认组
+    pub value: String,
+    pub editable: bool,        // isEditable(object)
+    pub value_kind: PropertyValueKind, // 决定编辑控件形态
+    pub select_options: Vec<String>,   // Select 候选
+}
+```
+
+提供者新增 `editable_row(id, label, value, kind, options)` 辅助（`property_panel.rs`）：
+只读行用 `PropertyRow::read_only`（editable=false、Text 形态）——旧 `row()` 语义不变。
+
+### 15.3 渲染协议（General 页）
+
+`render_property_row`（`workbench/panels/editor.rs`）按形态分派：
+
+- **只读**（editable=false）→ 名称 + 文本（原渲染不变）；
+- **Boolean** → `Switch`（点击即切换提交，DBeaver「编辑即生效」）；
+- **Text / LongText** → 未编辑时「值 + 编辑按钮」；编辑中 → 行内 `Input` + 保存 / 取消。
+
+编辑态由 `EditorPanel.property_edit`（`Option<PropertyEdit{row_id, input}>`）承载，
+创建在事件路径（`begin_property_edit`，`cx.new(InputState)`）——渲染零 I/O、零实体创建。
+
+### 15.4 编辑链路（setPropertyValue 对齐）
+
+```
+点击编辑 → begin_property_edit（行内输入）
+  → submit_property_edit：读 InputState.value()
+  → run_property_edit：background_executor 执行 apply_property_edit（async）
+  → 成功：request_properties 重载面板；失败：PropertyState.error 面板内红字
+```
+
+`apply_property_edit`（`database/property_panel.rs`）仅接受 `PropertyKind::Column`，
+其余对象类型明确报「暂不支持」（不静默吞）。
+
+### 15.5 列编辑 SQL 生成（驱动分派）
+
+`sql_gen::alter_column_sql(driver, schema, table, column, property_id, value)`：
+
+| 属性 id | PG SQL | 状态 |
+| --- | --- | --- |
+| `Column.name` | `ALTER TABLE … RENAME COLUMN "a" TO "b"` | 支持 |
+| `Column.comment` | `COMMENT ON COLUMN … IS '…'`（单引号转义） | 支持 |
+| `Column.default_value` | `SET DEFAULT …` / 空串 = `DROP DEFAULT` | 支持 |
+| `Column.nullable` | `SET / DROP NOT NULL`（value `true` = 允许 NULL） | 支持 |
+| 其余属性 | 明确报「暂不支持」 | — |
+
+**驱动支持矩阵**：PostgreSQL 完整；MySQL 注释需 `MODIFY COLUMN` 完整列定义（待扩展）；
+SQLite / DuckDB 无 ALTER 语义等价物，明确报错。
+
+### 15.6 已知限制 / 下一步
+
+1. 编辑成功后**导航树列节点未自动刷新**（重命名 / 可空变更需手动刷新或等树刷新事件接入）；
+2. `resetPropertyValue`（重置为默认）未实现；
+3. MySQL 列注释 / 默认值编辑未实现（需驱动侧 MODIFY 支持）；
+4. 表级属性（注释 / 描述）编辑未实现（列级先行）；
+5. Select 形态控件（`select_options`）渲染未接（当前提供者未产生 Select 行）。
+

@@ -244,11 +244,27 @@ fn view_layer_has_no_raw_size_literals() {
     ];
 
     for (name, src) in sources {
+        // 只拦截 `px(<数字>)` 裸尺寸字面量；`py_px()` / `px_3()` 等命名方法是
+        // 合法的 Tailwind 尺度 API，不误伤（原 `px(` 子串会把 `py_px()` 也扫出来）。
         assert!(
-            !src.contains("px("),
+            !has_literal_px(src),
             "{name} 出现裸 `px(...)` 尺寸字面量；结构尺寸请用 ui.rs 常量，局部间距用 Tailwind 尺度方法"
         );
     }
+}
+
+/// 是否存在 `px(<数字>` 形式的裸尺寸字面量（`px(` 后直接跟数字；
+/// `py_px()` 后跟 `)`、`px_3()` 是下划线，都不算）。
+fn has_literal_px(src: &str) -> bool {
+    src.lines().any(|line| {
+        line.find("px(")
+            .map(|i| {
+                line.as_bytes()
+                    .get(i + 3)
+                    .is_some_and(u8::is_ascii_digit)
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// 契约 2b：UI 源码不得直接构造颜色，一律走主题 token（`cx.theme().colors.*`）。
