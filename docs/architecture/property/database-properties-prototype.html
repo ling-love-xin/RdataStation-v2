@@ -76,21 +76,28 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .ov-kv span b{color:var(--fg);font-weight:600;margin-left:3px;}
 .ov-note{font-size:10px;color:var(--muted);margin-top:6px;border-top:1px dashed var(--card-border);padding-top:6px;}
 .ov-note .tag{display:inline-block;border:1px solid var(--card-border);border-radius:4px;padding:0 5px;margin-right:6px;font-size:10px;color:var(--info);background:var(--info-bg);}
-/* ===== ② General 属性区（DBeaver 上部对齐） ===== */
-.general{padding:8px 12px;border-bottom:1px solid var(--sidebar-border);max-height:230px;overflow-y:auto;}
-.sec-title{font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin:6px 0 4px;}
+/* ===== ② General 属性区（DBeaver 上部对齐 · 双栏网格 + 项目信息） ===== */
+.general{padding:6px 12px;border-bottom:1px solid var(--sidebar-border);max-height:250px;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;gap:2px 24px;align-content:start;}
+.proj-meta{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 8px;padding:4px 0 8px;border-bottom:1px dashed var(--card-border);margin-bottom:4px;}
+.pchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--card-border);border-radius:6px;padding:1px 8px;font-size:11px;color:var(--muted);background:var(--bg);}
+.pchip b{color:var(--fg);font-weight:600;}
+.pchip .ico-sm{color:var(--primary);}
+.pchip.tag{background:var(--match);border-color:var(--card-border);color:var(--fg);}
+.sec-title{grid-column:1/-1;font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin:6px 0 2px;}
 .sec-title:first-child{margin-top:0;}
-.prop-row{display:flex;align-items:flex-start;gap:10px;padding:2px 0;}
-.prop-row .k{width:104px;flex:none;font-size:12px;color:var(--muted);padding-top:4px;}
-.prop-row .v{flex:1;min-width:0;font-size:12px;padding-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.prop-row{display:flex;align-items:center;gap:8px;padding:3px 0;min-width:0;}
+.prop-row .k{width:78px;flex:none;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.prop-row .v{flex:1;min-width:0;font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 .prop-row.readonly .v{color:var(--fg);}
 .prop-row .edit-btn{width:22px;height:22px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--muted);display:none;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:all .12s;}
 .prop-row .edit-btn:hover{background:var(--hover);color:var(--primary);border-color:var(--active-border);}
 .prop-row.editable:hover .edit-btn{display:flex;}
-.prop-row .v input[type=text]{width:100%;max-width:260px;border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);outline:none;}
+.prop-row .v input[type=text]{width:100%;max-width:150px;border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);outline:none;}
 .prop-row .v input[type=text]:focus{border-color:var(--active-border);}
-.prop-row .v select{border:1px solid var(--input-border);border-radius:5px;padding:2px 6px;font-size:12px;background:var(--bg);color:var(--fg);}
-.prop-row .v textarea{border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);width:100%;max-width:260px;resize:vertical;min-height:30px;}
+.prop-row .v select{border:1px solid var(--input-border);border-radius:5px;padding:2px 6px;font-size:12px;background:var(--bg);color:var(--fg);max-width:150px;}
+.prop-row .v textarea{border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);width:100%;max-width:150px;resize:vertical;min-height:28px;}
+.prop-row.span2{grid-column:1/-1;}
+.prop-row.span2 .v span{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .prop-row .save-btn,.prop-row .cancel-btn{border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;background:var(--bg);color:var(--fg);}
 .prop-row .save-btn{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
 .prop-row .save-btn:hover{background:var(--primary-hover);}
@@ -101,8 +108,25 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .switch.on::after{left:16px;}
 .flag{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--card-border);border-radius:4px;padding:0 5px;font-size:10px;color:var(--muted);}
 .flag.ok{color:var(--success);border-color:var(--success);}
+/* ===== 面板主体（Tab 控制整体） ===== */
+.panel-body{flex:1;display:flex;flex-direction:column;min-height:0;}
 /* ===== ③ 子项列表区（DBeaver 下部对齐） ===== */
 .sub{flex:1;display:flex;min-height:0;}
+/* 对象级 Tab（属性/数据/图，对齐 DBeaver 表属性页） */
+.obj-tabs{height:30px;flex:none;display:flex;align-items:flex-end;gap:2px;padding:0 10px;border-bottom:1px solid var(--sidebar-border);background:var(--tabbar);}
+.obj-tab{border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;padding:4px 14px;font-size:12px;color:var(--muted);cursor:pointer;background:transparent;transition:all .12s;}
+.obj-tab:hover{color:var(--fg);background:var(--hover);}
+.obj-tab.on{color:var(--fg);background:var(--bg);border-color:var(--border);font-weight:600;}
+.obj-tab .sp-badge{font-size:10px;color:var(--muted);margin-left:4px;}
+/* 数据页（对齐 DBeaver 数据 Tab：SQL 过滤 + 视图切换 + 表格） */
+.data-pane{flex:1;display:flex;flex-direction:column;min-height:0;}
+.data-filter{height:34px;flex:none;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--sidebar-border);}
+.data-filter .sqlbox{flex:1;display:flex;align-items:center;gap:6px;border:1px solid var(--input-border);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--fg);background:var(--bg);min-width:0;}
+.data-filter .sqlbox .hint{font-size:10px;color:var(--muted);margin-left:auto;flex:none;}
+.data-view-tabs{display:flex;gap:2px;flex:none;}
+.data-view-tabs button{border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer;}
+.data-view-tabs button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.data-grid-wrap{flex:1;overflow:auto;padding:4px 8px 8px;}
 .sub-side{width:150px;flex:none;border-right:1px solid var(--sidebar-border);background:var(--sidebar);overflow-y:auto;padding:6px 0;}
 .sub-item{display:flex;align-items:center;gap:7px;padding:5px 12px;font-size:12px;color:var(--fg);cursor:pointer;border-left:2px solid transparent;transition:all .1s;}
 .sub-item:hover{background:var(--hover);}
@@ -164,14 +188,8 @@ table.grid tr:hover td{background:var(--hover);}
       <button class="iconbtn" title="刷新属性（重新内省）"><svg class="ico" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
     </div>
 
-    <!-- ===== ① 洞察总览 ===== -->
-    <div class="overview" id="overview"></div>
-
-    <!-- ===== ② General 属性（DBeaver 上部） ===== -->
-    <div class="general" id="general"></div>
-
-    <!-- ===== ③ 子项列表（DBeaver 下部） ===== -->
-    <div class="sub" id="sub"></div>
+    <!-- 面板主体：表对象 = 属性/数据 Tab；连接/Schema = 直接三部分 -->
+    <div class="panel-body" id="panelBody"></div>
 
     <div class="foot">
       <span id="footSrc">数据源：实时内省（L2 缓存命中）</span>
@@ -221,12 +239,10 @@ const DATA={
     kv:[['版本','16.4 (Debian)'],['主机','192.168.3.138:5432'],['默认编码','UTF8'],['排序规则','C'],['管理员','postgres'],['默认表空间','pg_default']],
     note:'<span class="tag">洞察</span>表/视图数 = 各 Schema 内省对象累加（L1/L2 缓存）；缓存命中率 = 本次会话内省缓存命中 / 请求总数',
     general:[
-      {sec:'常规',rows:[
+      {rows:[
         {k:'名称',v:'postgres',kind:'text'},
         {k:'数据库管理员',v:'postgres',kind:'select',opts:['postgres','admin','rds_ro'],edit:true},
         {k:'描述',v:'default administrative connection database',kind:'longtext',edit:true},
-      ]},
-      {sec:'高级',rows:[
         {k:'模板',v:'template1',kind:'select',opts:['template0','template1'],edit:true},
         {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
         {k:'默认编码',v:'UTF8',kind:'text'},
@@ -235,6 +251,7 @@ const DATA={
         {k:'允许连接',v:true,kind:'bool',edit:true},
       ]},
     ],
+    meta:['PostgreSQL','项目','PG 真机',['生产','只读']],
     sub:[
       {t:'模式',icon:IC.schema,on:true,grid:['名称','描述'],rows:[['public','standard public schema'],['rds_nav_probe_a','（空）'],['rds_nav_probe_b','（空）']]},
       {t:'事件触发器',icon:IC.trig,grid:['名称','事件'],rows:[['evt_rds_nav_probe','ddl_command_start']]},
@@ -256,16 +273,15 @@ const DATA={
     kv:[['所有者','postgres'],['命名空间 ID','2200'],['表空间','pg_default'],['行级安全','未启用'],['对象总数','≈42']],
     note:'<span class="tag">洞察</span>对象计数 = Schema 内省结果（introspect_schema_objects，一次连接内省全类别）',
     general:[
-      {sec:'常规',rows:[
+      {rows:[
         {k:'名称',v:'public',kind:'text'},
         {k:'所有者',v:'postgres',kind:'select',opts:['postgres','admin'],edit:true},
         {k:'描述',v:'standard public schema',kind:'longtext',edit:true},
-      ]},
-      {sec:'高级',rows:[
         {k:'命名空间 ID',v:'2200',kind:'text'},
         {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default'],edit:true},
       ]},
     ],
+    meta:['PostgreSQL','项目','PG 真机',['生产']],
     sub:[
       {t:'表',icon:IC.table,on:true,grid:['名称','列数','行数','大小'],rows:[
         ['purchase_order_item','8','1,204','472 kB'],
@@ -297,12 +313,10 @@ const DATA={
     kv:[['所有者','postgres'],['表空间','pg_default'],['对象 ID','30232'],['分区','否'],['行级安全','未启用'],['大小','472 kB']],
     note:'<span class="tag">洞察</span>行数 = pg_class.reltuples（懒加载）；大小 = pg_total_relation_size（懒加载）；列/索引/约束 = L2 缓存',
     general:[
-      {sec:'常规',rows:[
+      {rows:[
         {k:'名称',v:'purchase_order_item',kind:'text'},
         {k:'描述',v:'采购订单明细',kind:'longtext',edit:true},
         {k:'所有者',v:'postgres',kind:'select',opts:['postgres','admin'],edit:true},
-      ]},
-      {sec:'高级',rows:[
         {k:'表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
         {k:'有行级安全',v:false,kind:'bool',edit:true},
         {k:'分区',v:false,kind:'bool',edit:true},
@@ -311,6 +325,18 @@ const DATA={
         {k:'对象 ID',v:'30232',kind:'text'},
       ]},
     ],
+    meta:['PostgreSQL','项目','PG 真机',['生产','核心']],
+    dataTab:{
+      sql:'', cols:['id','transfer_no','from_area_id','to_area_id','transfer_date','status','remark','created_at','updated_at'],
+      rows:[
+        ['1204','TR20261009-001','1','2','2026-10-09 09:12','已入库','整批到货','2026-10-09 09:10:00','2026-10-09 09:12:31'],
+        ['1203','TR20261009-002','2','3','2026-10-09 08:47','已入库','','2026-10-09 08:45:12','2026-10-09 08:47:03'],
+        ['1202','TR20261008-021','1','4','2026-10-08 17:32','运输中','加急','2026-10-08 17:20:55',''],
+        ['1201','TR20261008-020','3','1','2026-10-08 16:05','已入库','','2026-10-08 16:01:40','2026-10-08 16:05:22'],
+        ['1200','TR20261008-019','4','2','2026-10-08 15:48','待审核','','2026-10-08 15:44:09',''],
+      ],
+      total:42, page:1, pages:2, view:'grid',
+    },
     sub:[
       {t:'列',icon:IC.col,on:true,grid:['列名','#','数据类型','标识','排序规则','非空','默认值','注释'],rows:[
         ['id','1','int4','','','✓','nextval(seq_order_id)','主键'],
@@ -350,38 +376,49 @@ const DATA={
 const DB_ANNOT={
   conn:{src:'PostgreDatabase.java',props:'getName(viewable,order2) / getDescription(editable,MULTILINE,order100) / getDBA(editable,listProvider,order3) / getTemplateName / getDefaultTablespace(editable,listProvider,order4) / getEncoding(order11) / getCollation(order12) / getConnectionLimit(order13) / isAllowConnections(order14)',sub:'DBeaver 下部 = 模式/事件触发器/扩展/存储/系统信息/角色 列表页'},
   schema:{src:'PostgreSchema.java',props:'getName(viewable,order1) / getObjectId(viewable=false,order2) / getOwner(order4) / getDescription(editable,MULTILINE,order100)',sub:'DBeaver 下部 = 表/外部表/视图/物化视图/索引/函数/序列/数据类型/聚合函数/权限/源 类别页'},
-  table:{src:'PostgreTableBase.java + PostgreTable.java',props:'getName / getObjectId(viewable,order9) / getDescription(editable,MULTILINE,order100) / getOwner(viewable,order10) / getTablespace(editable,listProvider,order20) / isRowLevelSecurity(viewable,order41) / isPartitioned(viewable,order42) / getPartitionBy(editable,order43)',sub:'DBeaver 下部 = 列/约束/外键/索引/依赖/触发器/规则/策略/权限/DDL/虚拟 类别页'},
+  table:{src:'PostgreTableBase.java + PostgreTable.java',props:'getName / getObjectId(viewable,order9) / getDescription(editable,MULTILINE,order100) / getOwner(viewable,order10) / getTablespace(editable,listProvider,order20) / isRowLevelSecurity(viewable,order41) / isPartitioned(viewable,order42) / getPartitionBy(editable,order43)',sub:'DBeaver 表级 Tab = 属性/数据/图；RDS 收敛为 属性/数据 两 Tab —— 属性 = 洞察+General+子项列表，数据 = SQL 过滤 + 网格/文本 + 分页表格'},
 };
 const NOTE={
-  conn:'<h3>① 洞察总览（本原型新增部分）</h3><p>DBeaver 的属性面板是<b>上下两部分</b>：上部 General 属性网格、下部（左对象类别树 + 右子项表格）。我们在此基础上增加<b>洞察总览</b>——打开对象即见关键统计（对象计数 / 缓存命中 / 版本 / 连接状态），无需逐项展开。<b>三部分自上而下：洞察总览 → General 属性 → 子项列表</b>。</p><table><tr><th>部分</th><th>对齐 DBeaver</th><th>数据来源（RDS）</th></tr><tr><td>① 洞察总览</td><td>新增</td><td>内省缓存计数（L1/L2）+ 连接状态（nav_view）+ 懒加载统计（reltuples / pg_total_relation_size）</td></tr><tr><td>② General 属性</td><td>上部（@Property viewable / editable / listProvider / MULTILINE）</td><td><code>load_properties</code> 描述符（id / category / editable / value_kind）</td></tr><tr><td>③ 子项列表</td><td>下部（类别树 + 表格）</td><td><code>list_columns / list_indexes / list_constraints / 内省</code>（现有）</td></tr></table><h3 style="margin-top:10px">属性编辑对齐（@Property editable=true → setter）</h3><p>DBeaver：<code>getDescription(monitor)</code> 懒加载（查 <code>pg_shdescription</code>），<code>setDescription</code> 提交 <code>COMMENT</code>；<code>getDBA</code> 下拉（RoleListProvider）→ <code>setDBA</code>；<code>getTablespace</code> 下拉 → <code>setTablespace</code>。<b>RDS 已落地</b>：PropertyRow 描述符化 + apply_property_edit（PG 列级 RENAME/COMMENT/DEFAULT/NULLABLE）；连接/表级描述编辑（COMMENT ON DATABASE/SCHEMA/TABLE）为下一步。</p>',
-  schema:'<h3>Schema 洞察与属性</h3><p>洞察总览 = Schema 内省结果（表 / 视图 / 函数 / 序列 计数，一次连接内省全类别）；General 属性对齐 <code>PostgreSchema</code>（名称 / 所有者 / 描述）；子项列表对齐 DBeaver 左侧类别树（表 → 权限 / 源 等 11 类）。</p>',
-  table:'<h3>表洞察与属性</h3><p>洞察总览 = 列 / 索引 / 约束 / 行数（reltuples 懒加载）；General 属性对齐 <code>PostgreTable</code>（表空间 / 行级安全 / 分区 / 额外选项 / 描述）；子项列表 = 列 / 约束 / 外键 / 索引 / 触发器 / 权限 / DDL 等 14 类。列网格对齐 DBeaver 列页（列名 / # / 数据类型 / 标识 / 排序规则 / 非空 / 默认值 / 注释）。</p>',
+  conn:'<h3>① 洞察总览（本原型新增部分）· ② General 扁平 + 项目信息 · ③ 动态渲染</h3><p><b>动态渲染</b>：DBeaver 属性面板是<b>动态装配</b>的——每个对象类型有独立的 <code>DBPPropertySource</code>，属性集 / 编辑控件 / 子项类别页均由对象类型注册表动态决定（<code>PropertyRegistry</code> 页注册表同理）。本原型三个对象（连接 / Schema / 表）切换时，洞察指标、General 属性、子项类别树、数据页<b>全部随类型动态渲染</b>——同一面板结构、不同内容。</p><p><b>项目特有信息</b>：General 顶部加 <b>驱动类型 / 作用域（全局·项目）/ 所属分组 / 标签</b> 芯片行——来自连接模型元数据（RDS 独有，DBeaver 无）。属性行<b>扁平紧凑</b>（去分组标题，减少行高）。</p><table><tr><th>部分</th><th>对齐 DBeaver</th><th>数据来源（RDS）</th></tr><tr><td>① 洞察总览</td><td>新增</td><td>内省缓存计数（L1/L2）+ 连接状态（nav_view）+ 懒加载统计（reltuples / pg_total_relation_size）</td></tr><tr><td>② General 属性</td><td>上部（@Property viewable / editable / listProvider / MULTILINE）</td><td><code>load_properties</code> 描述符 + 连接模型 meta（driver / scope / group / tags）</td></tr><tr><td>③ 子项列表</td><td>下部（类别树 + 表格）</td><td><code>list_columns / list_indexes / list_constraints / 内省</code>（现有）</td></tr><tr><td>④ 数据页（表级 Tab）</td><td>DBeaver 表属性「数据」Tab</td><td><code>table_data</code>（已实现）+ SQL 过滤 + 分页</td></tr></table><h3 style="margin-top:10px">属性编辑对齐（@Property editable=true → setter）</h3><p>DBeaver：<code>getDescription(monitor)</code> 懒加载（查 <code>pg_shdescription</code>），<code>setDescription</code> 提交 <code>COMMENT</code>；<code>getDBA</code> 下拉（RoleListProvider）→ <code>setDBA</code>；<code>getTablespace</code> 下拉 → <code>setTablespace</code>。<b>RDS 已落地</b>：PropertyRow 描述符化 + apply_property_edit（PG 列级 RENAME/COMMENT/DEFAULT/NULLABLE）；连接/表级描述编辑（COMMENT ON DATABASE/SCHEMA/TABLE）为下一步。</p>',
+  schema:'<h3>Schema 洞察与属性（动态渲染 + 扁平 General）</h3><p>洞察总览 = Schema 内省结果（表 / 视图 / 函数 / 序列 计数，一次连接内省全类别）；General 属性对齐 <code>PostgreSchema</code>（名称 / 所有者 / 描述 / 命名空间 ID）并加项目 meta（驱动 / 作用域 / 分组 / 标签）；子项列表对齐 DBeaver 左侧类别树（表 → 权限 / 源 等 11 类）。</p>',
+  table:'<h3>表对象 = 两 Tab（属性 / 数据）</h3><p><b>属性 Tab</b>（DBeaver 表属性页对齐）= 三部分：① 洞察总览（列 / 索引 / 约束 / 行数 reltuples）→ ② General 属性（表空间 / 行级安全 / 分区 / 额外选项 / 描述 + 项目 meta）→ ③ 子项列表（列 / 约束 / 外键 / 索引 / 触发器 / 权限 / DDL 等）。<b>数据 Tab</b>（DBeaver「数据」页）= SQL 过滤（Ctrl+Space）+ 网格/文本视图切换 + 分页表格（<code>table_data</code> 已实现）。DBeaver 还有「图」Tab，RDS 暂收敛为两 Tab，图表能力后续以洞察/可视化模块补足。</p>',
 };
-let cur='conn';
-function renderNote(){
-  $('#noteBar').innerHTML=NOTE[cur];
-}
-function renderOverview(){
+let cur='conn',curTab='attr';
+function renderCrumbHtml(){
   const d=DATA[cur];
+  return `属性 · <b>${d.crumbs.map(c=>c).join('</b> / <b>')}</b>`;
+}
+function renderOverviewHtml(d){
   const statusCls=d.status[0]==='on'?'on':(d.status[0]==='err'?'err':'off');
-  $('#overview').innerHTML=`
-    <div class="ov-head">
-      <div class="ov-badge ${d.badge[0]}">${d.badge[1]}</div>
-      <div><div class="ov-title">${d.title}</div><div class="ov-sub">${d.ovsub}</div></div>
-      <div class="ov-status"><span class="dot ${statusCls}"></span>${d.status[1]}</div>
-    </div>
-    <div class="stat-cards">${d.cards.map(c=>`
-      <div class="stat-card"><div class="k">${c.icon}${c.k}</div><div class="v">${c.v}<span class="u">${c.u}</span></div>${c.delta?`<div class="delta">${c.delta}</div>`:''}</div>`).join('')}
-    </div>
-    <div class="ov-kv">${d.kv.map(p=>`<span>${p[0]}<b>${p[1]}</b></span>`).join('')}</div>
-    <div class="ov-note">${d.note}</div>`;
+  return `
+    <div class="overview">
+      <div class="ov-head">
+        <div class="ov-badge ${d.badge[0]}">${d.badge[1]}</div>
+        <div><div class="ov-title">${d.title}</div><div class="ov-sub">${d.ovsub}</div></div>
+        <div class="ov-status"><span class="dot ${statusCls}"></span>${d.status[1]}</div>
+      </div>
+      <div class="stat-cards">${d.cards.map(c=>`
+        <div class="stat-card"><div class="k">${c.icon}${c.k}</div><div class="v">${c.v}<span class="u">${c.u}</span></div>${c.delta?`<div class="delta">${c.delta}</div>`:''}</div>`).join('')}
+      </div>
+      <div class="ov-kv">${d.kv.map(p=>`<span>${p[0]}<b>${p[1]}</b></span>`).join('')}</div>
+      <div class="ov-note">${d.note}</div>
+    </div>`;
 }
-function renderGeneral(){
-  const d=DATA[cur];
-  $('#general').innerHTML=d.general.map(sec=>`
-    <div class="sec-title">${sec.sec}</div>
+function renderGeneralHtml(d){
+  const meta=d.meta?renderMeta(d.meta):'';
+  return `<div class="general">${meta+d.general.map(sec=>`
+    ${sec.sec?`<div class="sec-title">${sec.sec}</div>`:''}
     ${sec.rows.map(r=>renderPropRow(r)).join('')}
-  `).join('');
+  `).join('')}</div>`;
+}
+function renderMeta(m){
+  const [driver,scope,group,tags]=m;
+  return `<div class="proj-meta">
+    <span class="pchip">${IC.plug}驱动<b>${driver}</b></span>
+    <span class="pchip">${IC.chip}作用域<b>${scope}</b></span>
+    <span class="pchip">${IC.schema}分组<b>${group}</b></span>
+    ${tags.map(t=>`<span class="pchip tag"># ${t}</span>`).join('')}
+  </div>`;
 }
 function renderPropRow(r){
   let valCell='';
@@ -394,42 +431,78 @@ function renderPropRow(r){
   }else{
     valCell=`<div class="v"><span>${r.v}</span>${r.edit?`<button class="edit-btn" title="编辑"><svg class="ico-sm" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button><span class="flag ok">可编辑</span>`:''}</div>`;
   }
-  return `<div class="prop-row ${r.edit?'editable':'readonly'}"><div class="k">${r.k}</div>${valCell}</div>`;
+  return `<div class="prop-row ${r.edit?'editable':'readonly'} ${r.kind==='longtext'?'span2':''}"><div class="k">${r.k}</div>${valCell}</div>`;
 }
-function renderSub(){
-  const d=DATA[cur];
+function renderAttrSubHtml(d){
   const active=d.sub.find(s=>s.on)||d.sub[0];
-  $('#sub').innerHTML=`
-    <div class="sub-side">${d.sub.map(s=>`
-      <div class="sub-item ${s.on?'on':''} ${s.gray?'gray':''}">
-        ${s.icon}${s.t}${s.rows.length?`<span class="cnt">${s.rows.length}</span>`:''}
-      </div>`).join('')}
-    </div>
-    <div class="sub-main">
-      <div class="sub-head"><b>${active.t}</b><span>（${active.rows.length} 项）</span><div class="sp"></div><span class="hint">${active.gray?'能力未实现：先绘制、置灰标注':'实时内省'}</span></div>
-      <div class="grid-wrap">${active.rows.length?`
-        <table class="grid"><thead><tr>${active.grid.map(g=>`<th>${g}</th>`).join('')}</tr></thead>
-        <tbody>${active.rows.map(row=>`<tr>${row.map((cell,i)=>`<td>${cell==='✓'?'<span class="vtag">✓</span>':cell}</td>`).join('')}</tr>`).join('')}</tbody></table>`:
-        `<div class="empty-hint">暂无 ${active.t}（类别已注册，内容为空）</div>`}
+  return `
+    <div class="sub">
+      <div class="sub-side">${d.sub.map(s=>`
+        <div class="sub-item ${s.on?'on':''} ${s.gray?'gray':''}">
+          ${s.icon}${s.t}${s.rows.length?`<span class="cnt">${s.rows.length}</span>`:''}
+        </div>`).join('')}
+      </div>
+      <div class="sub-main">
+        <div class="sub-head"><b>${active.t}</b><span>（${active.rows.length} 项）</span><div class="sp"></div><span class="hint">${active.gray?'能力未实现：先绘制、置灰标注':'实时内省'}</span></div>
+        <div class="grid-wrap">${active.rows.length?`
+          <table class="grid"><thead><tr>${active.grid.map(g=>`<th>${g}</th>`).join('')}</tr></thead>
+          <tbody>${active.rows.map(row=>`<tr>${row.map((cell,i)=>`<td>${cell==='✓'?'<span class="vtag">✓</span>':cell}</td>`).join('')}</tr>`).join('')}</tbody></table>`:
+          `<div class="empty-hint">暂无 ${active.t}（类别已注册，内容为空）</div>`}
+        </div>
       </div>
     </div>`;
 }
-function renderCrumb(){
+function renderDataPaneHtml(){
+  const dt=DATA.table.dataTab;
+  return `<div class="data-pane">
+    <div class="data-filter">
+      <div class="sqlbox"><svg class="ico-sm" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>${dt.sql?dt.sql:'输入一个 SQL 表达式来过滤结果（Ctrl+Space）'}</span><span class="hint">显示 SQL</span></div>
+      <div class="data-view-tabs">
+        <button class="${dt.view==='grid'?'on':''}">网格</button>
+        <button class="${dt.view==='text'?'on':''}">文本</button>
+      </div>
+      <button class="iconbtn" title="刷新数据"><svg class="ico" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+    </div>
+    <div class="data-grid-wrap">
+      <table class="grid"><thead><tr>${dt.cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${dt.rows.map(row=>`<tr>${row.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    </div>
+    <div class="foot" style="border-top:none"><span>共 ${dt.total} 行 · 当前 ${dt.rows.length} 行</span><span class="sp"></span><span>第 ${dt.page} / ${dt.pages} 页</span></div>
+  </div>`;
+}
+function renderPanelBody(){
   const d=DATA[cur];
-  $('#crumb').innerHTML=`属性 · <b>${d.crumbs.map(c=>c).join('</b> / <b>')}</b>`;
+  if(cur==='table'){
+    return `
+      <div class="obj-tabs">
+        <button class="obj-tab ${curTab==='attr'?'on':''}" data-tab="attr">属性</button>
+        <button class="obj-tab ${curTab==='data'?'on':''}" data-tab="data">数据</button>
+      </div>
+      ${curTab==='attr'?renderOverviewHtml(d)+renderGeneralHtml(d)+renderAttrSubHtml(d):renderDataPaneHtml()}
+    `;
+  }
+  return renderOverviewHtml(d)+renderGeneralHtml(d)+renderAttrSubHtml(d);
+}
+function bindObjTabs(){
+  $$('.obj-tab').forEach(b=>b.addEventListener('click',()=>{curTab=b.dataset.tab;renderAll();}));
+}
+function renderNote(){
+  $('#noteBar').innerHTML=NOTE[cur];
 }
 function renderAll(){
-  renderOverview();renderGeneral();renderSub();renderCrumb();renderNote();
+  $('#crumb').innerHTML=renderCrumbHtml();
+  $('#panelBody').innerHTML=renderPanelBody();
+  renderNote();
+  if(cur==='table') bindObjTabs();
   $$('.statebar button').forEach(b=>b.classList.remove('on'));
   $('#sw'+cur.charAt(0).toUpperCase()+cur.slice(1)).classList.add('on');
-}
-$('#themeToggle').addEventListener('click',()=>{
+}$('#themeToggle').addEventListener('click',()=>{
   const b=document.body.dataset.theme==='light'?'dark':'light';
   document.body.dataset.theme=b;localStorage.setItem(THEME_KEY,b);
 });
-$('#swConn').addEventListener('click',()=>{cur='conn';renderAll();});
-$('#swSchema').addEventListener('click',()=>{cur='schema';renderAll();});
-$('#swTable').addEventListener('click',()=>{cur='table';renderAll();});
+$('#swConn').addEventListener('click',()=>{cur='conn';curTab='attr';renderAll();});
+$('#swSchema').addEventListener('click',()=>{cur='schema';curTab='attr';renderAll();});
+$('#swTable').addEventListener('click',()=>{cur='table';curTab='attr';renderAll();});
 let dbOn=false;
 $('#swDbeaver').addEventListener('click',()=>{
   dbOn=!dbOn;const b=$('#swDbeaver');b.classList.toggle('on',dbOn);
