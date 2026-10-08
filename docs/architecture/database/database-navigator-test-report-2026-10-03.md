@@ -360,4 +360,47 @@ cargo check -p rds-app -j 2
 - **缓存**：L1 / L2 / 半成品防御机制正常；**但半成品残留（列预取超时）导致回源频繁，是展开不稳定的直接诱因**。
 - **下一步**：定位 worker Runtime 与池宿主 Runtime 不一致（跨 runtime 查询）与池连接数（min=1 排队）两个方向的实证；修复后重跑本验证。
 
+---
+
+## 17. 根治验证（2026-10-08 · 批量内省 / 一次展开一条新连接）
+
+> 背景：§16 修复后 30s 池排队消失，但 **PG 真机仍连环 15s/30s 超时红字**。多轮铁证（app_run61/62/64 日志）收敛到唯一根因：**同连接上「同 SQL prepared statement 二次执行」挂起**——无论闲置多久（9.8s）、无论多短（58ms 活跃复用），复用必挂；每次新建全快（探针 10-82ms）。据此把连接模型对齐 DBeaver 会话语义：**一次展开 = 1 条新连接 + 每类对象各一条不同 SQL（无重复 prepared），用完即弃**。
+
+### 17.1 根因铁证时间线（app_run61/62/64）
+
+| run | 铁证 | 结论 |
+| --- | --- | --- |
+| app_run61 | biz_358 216ms 成功 → 2.4s 后同连接 biz_383 挂 30s；PG 端无 active 无锁 | 连接复用挂起（generic plan 推断被实证推翻） |
+| app_run62 | biz_454 245ms 成功 → 9.8s 后同连接 biz_459 挂 15s | 60s 空闲回收阈值远不够，闲置即挂 |
+| app_run64 | biz_483 2568ms 成功 → **58ms 后**同 scoped 连接 biz_477 挂 15s | 活跃复用也挂 → 彻底推翻「闲置复用」论 |
+| pg_probe 探针 | 同 SQL 每次新建连接：10-82ms 全成功 | SQL / 服务端无问题，问题在**连接复用** |
+
+### 17.2 落地改造（提交 `9e9fd68`）
+
+| 位置 | 改造 |
+| --- | --- |
+| `postgres.rs` / `mysql.rs` | 单连接化（`Arc<Mutex<Option<Conn>>>`，无池无 acquire）；查询级 `PG_QUERY_TIMEOUT=15s` 超时并**销毁连接**重建；`force_custom_plan` 注入（等价 DBeaver 字面量 SQL 每次重新优化）；空闲回收 |
+| 两驱动 `introspect_schema_objects` | **批量内省**：一条**新**连接 + 每类对象（表/视图、过程、函数、序列、触发器）各一条**不同** SQL，连接随函数结束 drop —— 一次展开只付一次建连、无重复 prepared |
+| `traits.rs` | 新增 `SchemaObjects`（tables/procedures/functions/sequences/triggers）+ `Database::introspect_schema_objects` 默认实现 |
+| `metadata_service.rs` | `introspect_schema_objects` 转发（跨库 scoped 连接取 connect_url，批量方法内部新建） |
+| `navigator_service.rs` | `load_folders` 四类别共享**同一次**批量结果；tables/routines/sequences/triggers 实时分支均改从 batch 取，不再逐类别建连 |
+| `nav_jobs.rs` | 竞态守卫：点击连接后导航任务等待在途建连（最多 500ms），消除 `CONN_NOT_FOUND` 红字闪现 |
+
+### 17.3 真机验证（app_run65/66/67 · clean-test 项目 · P_real_pg 192.168.3.138）
+
+| 项 | 结果 |
+| --- | --- |
+| MySQL `mall_business` 展开 | ✅ 355ms（routines 291ms 一次批量，sequences/triggers 0ms 从 batch 取，tables 子文件夹 1ms L2 命中） |
+| PG 连续展开 18+ schema（app_run66：biz_002→biz_153） | ✅ **166-321ms 全绿，零超时零红字**；SQL 9-24ms；建连 93-1213ms（Windows 网络栈逐连接检查，环境固有，探针实证 sslmode 无差别） |
+| PG 历史卡死 schema（app_run67：biz_264/biz_282/biz_308/biz_315/biz_348 等 + crm/production/logistics/inventory/purchase） | ✅ 全部秒开（97-718ms），**此前 30s/15s 卡死的 schema 全部恢复** |
+| 单元回归 | ✅ engine 528 / database 102 全绿 |
+| 提交 | ✅ `9e9fd68 根治导航树展开慢与超时：一次展开一条新连接批量内省` |
+
+### 17.4 结论
+
+- **根因闭环**：30s/15s 连环超时 = 连接复用 + 同 SQL prepared 二次执行挂起（PG 服务端/网络层怪异行为，探针同 SQL 新建连接全快、复用必挂互证）。批量内省从结构上消灭「复用」，一次展开一条新连接 + 5 条不同 SQL，建连成本只付一次。
+- **性能边界**：展开耗时 ≈ 建连（150-400ms 环境固有）+ 5×SQL（各 ~10ms）+ 框架开销 —— DBeaver 同环境同成本；L2 缓存命中时第二次展开同一 schema 不建连、毫秒级。
+- **遗留**：biz_384 在 app_run65 出现过一次 15s 偶发（app_run66/67 未复现，探针无法复现）——有 15s 超时 + 自动重建兜底，不再 30s 连环卡死；数据预览（表数据 execute_query）仍走 scoped 连接复用，若同 SQL 二次执行挂起需同样改造（证据待收集）。
+
+
 
