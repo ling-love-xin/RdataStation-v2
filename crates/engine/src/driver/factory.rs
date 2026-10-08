@@ -135,8 +135,19 @@ impl DriverFactory for PostgresDriverFactory {
                 }
             };
 
-            // 创建 PostgreSQL 连接池
-            let pool = sqlx::postgres::PgPool::connect(&url).await.map_err(|e| {
+            // 创建 PostgreSQL 连接池（池参数与 `PostgresDatabase::new` 同源：
+            // acquire_timeout=8s + test_before_acquire——此前这里用 `PgPool::connect`
+            // 默认选项（acquire_timeout=30s），app_run51/52 实测的 30s pool timed out
+            // 就是主连接池按默认 30s 等待；`PostgresDatabase::new` 里的 8s 只作用于
+            // scoped 连接，主连接从未拿到 8s）。
+            let options = sqlx::postgres::PgPoolOptions::new()
+                .min_connections(3)
+                .max_connections(6)
+                .acquire_timeout(std::time::Duration::from_secs(8))
+                .idle_timeout(Some(std::time::Duration::from_secs(300)))
+                .max_lifetime(Some(std::time::Duration::from_secs(1800)))
+                .test_before_acquire(true);
+            let pool = options.connect(&url).await.map_err(|e| {
                 CoreError::connection(ConnectionError::Refused {
                     conn_id: config
                         .name
@@ -145,6 +156,17 @@ impl DriverFactory for PostgresDriverFactory {
                     reason: e.to_string(),
                 })
             })?;
+            // 预热：并行 acquire 到 min（3 条）再释放，把 PG 握手成本归入「连接中」阶段
+            // （与 `PostgresDatabase::new` 同款——主连接此前不走 new 路径，缺这道预热，
+            //  app_run54 真机 rds_nav_probe_a 回源 routines 时 acquire 仍 84ms 偏慢）。
+            let (w1, w2, w3) = tokio::join!(
+                pool.acquire(),
+                pool.acquire(),
+                pool.acquire(),
+            );
+            drop(w1);
+            drop(w2);
+            drop(w3);
             let db: DynDatabase = Arc::new(PostgresDatabase::from_pool(pool));
             Ok(db)
         })

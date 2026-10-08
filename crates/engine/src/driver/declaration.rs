@@ -200,6 +200,121 @@ pub async fn sync_driver_declarations(
     upsert_all(conn, &decls)
 }
 
+/// 一个数据库族（`data_source_types` 行）的代码声明。
+///
+/// 与 `DriverDeclaration` 同源思路：**族目录的权威也在代码**（本表），
+/// 启动时由 [`ensure_data_source_types`] 幂等 upsert 进 `data_source_types`，
+/// 迁移 008 的种子退居「首装兜底」。
+///
+/// ## 为什么驱动之外还要一份族目录
+///
+/// `drivers.type_id` 是 `data_source_types.id` 的外键——**族必须先存在，驱动声明才落得了库**。
+/// 历史做法是「族只靠迁移种子」，新增库族（hive / gaussdb / excel…）必须手写一条迁移，
+/// 而驱动只需在 `descriptors.rs` 加一行——不对称，且写错族 id 会静默丢驱动行
+/// （见 [`sync_driver_declarations`] 的 `skipped` 留痕）。这份声明让「新增族 + 新增驱动」
+/// 都能纯代码声明，不必为加一个库族去动迁移（迁移只在建表 / 补列时修改）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSourceTypeDeclaration {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    /// 目录里的图标（em 字符，界面类型树用）；`None` 则不改动已存在行的图标。
+    pub icon: Option<&'static str>,
+}
+
+/// 内置数据库族目录（权威）。
+///
+/// 分类取值与迁移 008 一致（`relational` / `file-based` / `analytics` / `nosql`）。
+/// **新增一个库族在这里加一行即可**，再在 `descriptors.rs` 声明指向它的驱动。
+/// 注意：`enabled` 列归库（用户可禁用某个族），本声明不拥有——upsert 不写它。
+pub const BUILTIN_DATA_SOURCE_TYPES: &[DataSourceTypeDeclaration] = &[
+    DataSourceTypeDeclaration {
+        id: "mysql",
+        name: "MySQL",
+        category: "relational",
+        icon: Some("🐬"),
+    },
+    DataSourceTypeDeclaration {
+        id: "postgresql",
+        name: "PostgreSQL",
+        category: "relational",
+        icon: Some("🐘"),
+    },
+    DataSourceTypeDeclaration {
+        id: "sqlite",
+        name: "SQLite",
+        category: "file-based",
+        icon: Some("🪶"),
+    },
+    DataSourceTypeDeclaration {
+        id: "duckdb",
+        name: "DuckDB",
+        category: "analytics",
+        icon: Some("🦆"),
+    },
+    DataSourceTypeDeclaration {
+        id: "mariadb",
+        name: "MariaDB",
+        category: "relational",
+        icon: Some("🦭"),
+    },
+    DataSourceTypeDeclaration {
+        id: "oracle",
+        name: "Oracle",
+        category: "relational",
+        icon: Some("🔴"),
+    },
+    DataSourceTypeDeclaration {
+        id: "mssql",
+        name: "SQL Server",
+        category: "relational",
+        icon: Some("🟢"),
+    },
+    DataSourceTypeDeclaration {
+        id: "clickhouse",
+        name: "ClickHouse",
+        category: "analytics",
+        icon: Some("⚡"),
+    },
+    DataSourceTypeDeclaration {
+        id: "mongodb",
+        name: "MongoDB",
+        category: "nosql",
+        icon: Some("🍃"),
+    },
+    DataSourceTypeDeclaration {
+        id: "redis",
+        name: "Redis",
+        category: "nosql",
+        icon: Some("🔶"),
+    },
+];
+
+/// 幂等 upsert 数据库族目录（`sync_startup_state` 在驱动声明**之前**调用）。
+///
+/// 返回写入 / 更新的条数。覆盖的列 = 声明拥有：`name` / `category` / `icon`；
+/// `enabled`（库 / 用户所有）与 `created_at`（库）不写——用户禁用的族不会被启动同步重新打开。
+pub fn ensure_data_source_types(conn: &Connection) -> Result<usize, CoreError> {
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO data_source_types (id, name, category, icon, enabled)
+             VALUES (?1, ?2, ?3, ?4, 1)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 category = excluded.category,
+                 icon = excluded.icon",
+        )
+        .map_err(|e| storage_err("prepare_upsert_data_source_types", e.to_string()))?;
+
+    let mut written = 0usize;
+    for t in BUILTIN_DATA_SOURCE_TYPES {
+        stmt.execute(params![t.id, t.name, t.category, t.icon])
+            .map_err(|e| storage_err("upsert_data_source_type", format!("{}: {}", t.id, e)))?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 /// 该族是否已在 `data_source_types` 里。
 fn family_exists(conn: &Connection, type_id: &str) -> Result<bool, CoreError> {
     conn.query_row(
@@ -461,6 +576,68 @@ mod tests {
         );
     }
 
+    /// 族目录的 upsert 必须幂等，且**不越权**：`enabled` 归库（用户可禁用某个族）。
+    #[test]
+    fn data_source_types_upsert_is_idempotent_and_keeps_enabled() {
+        let conn = test_db();
+
+        // 首跑：写满代码声明的族目录（test_db 只预置了 4 个族，其余由 ensure 补上）。
+        let first = ensure_data_source_types(&conn).expect("ensure first");
+        assert_eq!(first, BUILTIN_DATA_SOURCE_TYPES.len(), "应写满内置族目录");
+
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).expect("count") };
+        let rows_after_first = count("SELECT COUNT(*) FROM data_source_types");
+        assert_eq!(rows_after_first, BUILTIN_DATA_SOURCE_TYPES.len() as i64, "行数 = 声明条数");
+
+        // 预置：用户禁用了 mariadb（不该被后续同步重新打开）。
+        conn.execute(
+            "UPDATE data_source_types SET enabled = 0 WHERE id = 'mariadb'",
+            [],
+        )
+        .expect("disable mariadb");
+
+        // 再跑：幂等，行数不变，且用户禁用的族不被打开。
+        let second = ensure_data_source_types(&conn).expect("ensure second");
+        assert_eq!(second, first, "第二次应与第一次一致（幂等）");
+        assert_eq!(
+            count("SELECT COUNT(*) FROM data_source_types"),
+            rows_after_first,
+            "upsert 不得新增行"
+        );
+
+        let enabled: i64 = conn
+            .query_row("SELECT enabled FROM data_source_types WHERE id = 'mariadb'", [], |r| r.get(0))
+            .expect("read back");
+        assert_eq!(enabled, 0, "用户禁用的族不得被启动同步打开");
+
+        // 声明侧列被写入（新增库族的 name / category / icon 从这里来）。
+        let (name, category, icon): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT name, category, icon FROM data_source_types WHERE id = 'clickhouse'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("read back");
+        assert_eq!(name, "ClickHouse");
+        assert_eq!(category, "analytics");
+        assert_eq!(icon.as_deref(), Some("⚡"));
+    }
+
+    /// 族目录声明必须覆盖每个内置驱动引用的族：`drivers.type_id` 是外键，
+    /// 驱动声明的族若不在目录里，upsert 会静默丢行。
+    #[test]
+    fn every_driver_family_is_in_builtin_data_source_types() {
+        let known: std::collections::HashSet<&str> =
+            BUILTIN_DATA_SOURCE_TYPES.iter().map(|t| t.id).collect();
+        for d in declarations() {
+            assert!(
+                known.contains(d.type_id.as_str()),
+                "驱动 {} 引用的族 {} 不在内置族目录里（去 BUILTIN_DATA_SOURCE_TYPES 补一行）",
+                d.id,
+                d.type_id
+            );
+        }
+    }
     /// 声明了族、但族不在类型目录里 → 跳过并留痕（不中断整批）。
     #[test]
     fn unknown_family_is_skipped_with_a_reason() {

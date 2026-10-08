@@ -1556,6 +1556,41 @@ impl MetadataCacheOps {
         Ok(triggers)
     }
 
+    // ==================== 类别级扫描完成标记 ====================
+    // 2026-10-08：routines / sequences / triggers 空类别的「空结果」在读取侧被当作
+    // 未命中（cache.rs 空行集返回 None），put 空 vec 又不落记录 → 空类别每次展开都
+    // 回源。category_done 表（迁移 014）记「某 schema 的某类别已完成一次完整回源」，
+    // 空也算：读取侧先查标记，已扫描且表内无行 = 合法空，直接返回空不回源。
+
+    /// 标记某 schema 的某类别已完成一次完整回源（幂等，空结果同样标记）。
+    pub fn mark_category_done(&self, schema_id: i64, category: &str) -> Result<(), CoreError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO category_done (schema_id, category, done_at) \
+                 VALUES (?1, ?2, unixepoch())",
+                rusqlite::params![schema_id, category],
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "mark_category_done".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        Ok(())
+    }
+
+    /// 查询某 schema 的某类别是否已完成完整回源。
+    pub fn is_category_done(&self, schema_id: i64, category: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM category_done WHERE schema_id = ?1 AND category = ?2",
+                rusqlite::params![schema_id, category],
+                |row| row.get::<_, i64>(0),
+            )
+            .is_ok()
+    }
+
     /// 清除指定连接的元数据
     pub fn clear_metadata(
         &self,

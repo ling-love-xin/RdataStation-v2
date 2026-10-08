@@ -1,8 +1,14 @@
 //! 数据源导航后台任务（加载 / 预热 / 预取）。
 //!
 //! 为什么需要：元数据内省会走数据库驱动（依赖 tokio），在 UI 线程上 `block_on`
-//! 会冻结界面。本模块用**单一工作线程 + tokio 运行时**串行执行任务，视图只提交
+//! 会冻结界面。本模块用**一个分发线程 + 每任务独立工作线程**处理任务，视图只提交
 //! 任务、轮询进度（原子量）并取回结果（结果队列），不参与阻塞。
+//!
+//! 每任务独立线程的原因：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
+//! 不拖累其他任务。**代价是并发无上限**——多节点同时展开会并发 acquire 撞满连接池
+//! （真机：3 个 schema 展开 → 15 个 folder 任务抢 2 条池连接 → 排队 30s 超时）。
+//! 因此 `LoadChildren` 执行前过全局信号量（[`LOAD_CONCURRENCY`]），执行并发受限，
+//! 超出的任务在许可处排队（loading 状态保持，UI 显示「加载中」，不丢任务）。
 //!
 //! 任务类型：
 //! - `LoadChildren`：导航树懒加载 / 分页加载（主线程 render 不再做 I/O）；
@@ -24,6 +30,19 @@ use crate::nav_host::ConnectionProbe;
 use property::ObjectProperties;
 use crate::sql_gen::DmlKind;
 use engine::persistence::FtsSearchResult;
+
+/// 导航加载任务的全局并发上限。
+///
+/// 对齐 DBeaver/DataGrip 的**串行内省**（用户决策 2026-10-08：除缓存设计外全参考
+/// DBeaver）：内省查询逐个执行，天然不撞连接资源、不超建服务端连接。
+/// 值为 1 = 严格串行（展开多个节点时逐个加载，每次 100~300ms，用户感知可接受；
+/// 此前的并行 + 池的组合在真机上反复出现 30s 超时 / pool timed out）。
+const LOAD_CONCURRENCY: usize = 1;
+static LOAD_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+fn load_semaphore() -> &'static tokio::sync::Semaphore {
+    LOAD_SEM.get_or_init(|| tokio::sync::Semaphore::new(LOAD_CONCURRENCY))
+}
 
 /// 预取目标（catalog / schema / 表或视图名）。
 #[derive(Clone, Debug)]
@@ -596,9 +615,9 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 fn worker(rx: mpsc::Receiver<Job>) {
     while let Ok(job) = rx.recv() {
         // 每任务独立线程：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
-        // worker 立即接下一任务——tokio `timeout` 对同步阻塞不生效（实测：一个
+        // 分发线程立即接下一任务——tokio `timeout` 对同步阻塞不生效（实测：一个
         // 卡住的查询会让整个 worker 排队、树全卡，JOB_TIMEOUT 兜不住）。
-        // 线程内自建 tokio Runtime（驱动依赖 tokio 上下文）。
+        // 并发由 [`LOAD_CONCURRENCY`] 信号量在 `run_job` 内限制（LoadChildren）。
         std::thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
                 return;
@@ -638,6 +657,12 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             limit,
             object,
         } => {
+            // 限流：同一时刻最多 LOAD_CONCURRENCY 个加载任务执行（其余在信号量处排队，
+            // loading 状态保持，UI 显示「加载中」）。不排队的话，多节点同时展开会
+            // 并发 acquire 撞满连接池（真机：15 个 folder 任务抢 2 条池连接，30s 超时）。
+            let _permit = rt.block_on(async { load_semaphore().acquire().await });
+            tracing::info!(conn_id = %conn_id, key = %key, path = ?path, "导航任务开始执行");
+            let t_exec = std::time::Instant::now();
             let svc = crate::navigator_service::NavigatorService::with_context(
                 engine::get_connection_manager().clone(),
                 project_root.clone(),
@@ -666,6 +691,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 Ok(page) => page.map_err(|e| e.to_string()),
                 Err(_) => Err(timeout_error("加载子节点")),
             };
+            tracing::info!(key = %key, elapsed_ms = t_exec.elapsed().as_millis(), ok = result.is_ok(), "导航任务完成");
             lock(&shared().load_results).push(LoadResult {
                 key,
                 conn_id,
@@ -684,6 +710,10 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             db_type,
             data,
         } => {
+            // 属性面板详情也是元数据查询：与导航内省共用同一串行信号量
+            // （DBeaver 的 Metadata 连接语义——所有元数据查询走唯一通道，不并发占池。
+            // 真机：详情卡并行 acquire 会把池占满，内省任务 5s acquire 超时）。
+            let _permit = rt.block_on(async { load_semaphore().acquire().await });
             let svc = service(None);
             let outcome = rt.block_on(async {
                 tokio::time::timeout(
@@ -708,6 +738,12 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             conn_id,
             project_root,
         } => {
+            // 预热也是元数据内省：与导航共用串行信号量但**让位**（不阻塞排队）。
+            // 内省忙时放弃本批（下次展开时 cache-aside 会补写 L2），不让后台线程堆积。
+            let Ok(_permit) = load_semaphore().try_acquire() else {
+                tracing::debug!(conn_id = %conn_id, "预热让位导航内省（跳过本批）");
+                return;
+            };
             let state = shared();
             state.warm_active.store(true, Ordering::SeqCst);
             state.warm_cancel.store(false, Ordering::SeqCst);
@@ -732,6 +768,12 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 .into_iter()
                 .map(|t| (t.catalog, t.schema, t.table))
                 .collect();
+            // 预取与内省共用串行信号量，但**不阻塞排队**（尽力而为）：内省忙时
+            // 拿不到许可就放弃这一批（下次展开再预取），不让后台线程堆积。
+            let Ok(_permit) = load_semaphore().try_acquire() else {
+                tracing::debug!(conn_id = %conn_id, "列预取让位内省（跳过本批）");
+                return;
+            };
             // 返回成功条数；失败条目在服务内按表记 DEBUG 痕（见 `prefetch_columns`）。
             // 预取是**尽力而为**：超时只记一条 warn（它不该占住队列）。
             let prefetched = rt.block_on(async {
@@ -755,6 +797,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             qualified,
             kind,
         } => {
+            // 取列也是元数据查询：与导航内省共用同一串行信号量（对齐 DBeaver
+            // Metadata 连接语义——元数据查询走唯一通道，不并发占池）。
+            let _permit = rt.block_on(async { load_semaphore().acquire().await });
             let svc = service(project_root);
             let result = rt.block_on(async {
                 // 列走导航同一套 cache-aside（命中 L2 不发查询）；取列那次 I/O 包超时。
@@ -886,6 +931,7 @@ pub fn enqueue_load_page(
     limit: usize,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
+    tracing::info!(conn_id = %conn_id, key = %key, fresh, "导航任务入队");
     submit(Job::LoadChildren {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),

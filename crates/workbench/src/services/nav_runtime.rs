@@ -74,9 +74,17 @@ pub fn load_entry_with(
 /// 后台线程复用进程级 [`bridge_runtime`]：连接池 / 隧道后台任务仍落在稳定运行时上，
 /// 不受线程切换影响。
 pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
+    tracing::info!(conn_id = %conn_id, project = ?project_path, "【探针】connect_entry 进入");
     let service = DataSourceService::global().map_err(|e| e.to_string())?;
 
-    let ds = load_entry_with(&service, conn_id, project_path)?;
+    let ds = match load_entry_with(&service, conn_id, project_path) {
+        Ok(ds) => ds,
+        Err(e) => {
+            tracing::error!(conn_id = %conn_id, error = %e, "【探针】load_entry_with 失败");
+            return Err(e);
+        }
+    };
+    tracing::info!(conn_id = %conn_id, ds_id = %ds.id, "【探针】load_entry_with 成功");
 
     let rt = bridge_runtime()?;
     // 引用的网络配置档案（协议链 / SSH / 代理 / SSL）→ `ConnectionMethod`。
@@ -96,11 +104,13 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
     let spawned = std::thread::Builder::new()
         .name(format!("nav-connect-{conn_id}"))
         .spawn(move || {
+            tracing::info!(conn_id = %conn_id, "【探针】建连线程启动");
             let rt = match bridge_runtime() {
                 Ok(rt) => rt,
                 Err(e) => {
                     database::nav_jobs::connect_pending_dec();
                     database::nav_jobs::submit_connect_outcome(&conn_id, false, &e);
+                    tracing::error!(conn_id = %conn_id, error = %e, "【探针】桥接运行时失败");
                     return;
                 }
             };
@@ -111,10 +121,8 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
                 );
             database::nav_jobs::connect_pending_dec();
             match outcome {
-                Ok(_) => database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接"),
-                Err(e) => {
-                    database::nav_jobs::submit_connect_outcome(&conn_id, false, &e.to_string())
-                }
+                Ok(_) => { tracing::info!(conn_id = %conn_id, "【探针】建连成功"); database::nav_jobs::submit_connect_outcome(&conn_id, true, "已连接") }
+                Err(e) => { tracing::error!(conn_id = %conn_id, error = %e, "【探针】建连失败"); database::nav_jobs::submit_connect_outcome(&conn_id, false, &e.to_string()) }
             }
         });
     match spawned {

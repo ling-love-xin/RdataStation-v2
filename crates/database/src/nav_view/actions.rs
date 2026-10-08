@@ -316,37 +316,62 @@ impl NavView {
         cx: &mut Context<Self>,
     ) {
         for r in results {
+            tracing::info!(conn_id = %r.conn_id, ok = r.ok, msg = %r.message, "【探针】apply_connect_results 收到结果");
             if r.ok {
-                // 先判展开态再改状态：`ensure_nav_loaded` 需要 `&self`，不能与
+                // 先判展开态与预连标记再改状态：`ensure_nav_loaded` 需要 `&self`，不能与
                 // `borrow_mut` 同时存活。
-                let conn_expanded = {
+                let (conn_expanded, was_prewarm) = {
                     let view = self.nav.borrow();
-                    view.expanded.contains(&r.conn_id)
+                    (
+                        view.expanded.contains(&r.conn_id),
+                        view.prewarming.contains(&r.conn_id),
+                    )
                 };
                 {
                     let mut view = self.nav.borrow_mut();
                     view.connected.insert(r.conn_id.clone());
+                    view.prewarming.remove(&r.conn_id);
                     view.prefetched.clear();
-                    // 连接成功 = 新的事实：清掉上次失败的 attempted/errors/loading 痕迹。
-                    // 否则此前失败过的连接根会被 attempted 挡住、树永不加载（真机复现的卡死）。
-                    nav_forget_attempt(&mut view, &r.conn_id);
+                    // 连接成功 = 新的事实：清掉该连接**全部**节点的 attempted/errors/loading
+                    // 痕迹（不止连接根）。此前连接未注册时，子层（schema 等）在渲染驱动的
+                    // 渐进加载里吃到 CONN_NOT_FOUND / 排队超时，错误留在 attempted 里，
+                    // 连接就绪后渲染驱动不会再重试 → 树永远「加载中 / 红字」（真机：public
+                    // schema 30s 超时后不恢复）。清掉后渲染驱动对已展开节点重新排队，
+                    // 此时连接已就绪、L1/L2 缓存命中，秒出。
+                    let prefix = format!("{}/", r.conn_id);
+                    let stale: Vec<String> = view
+                        .attempted
+                        .iter()
+                        .filter(|k| k.as_str() == r.conn_id || k.starts_with(&prefix))
+                        .cloned()
+                        .collect();
+                    for k in stale {
+                        nav_forget_attempt(&mut view, &k);
+                    }
                 }
                 // 建连是后台调度式（修 UI 卡死）：展开动作发生在连接注册进
                 // `ConnectionManager` 之前，会先吃一次 `CONN_NOT_FOUND` 失败。
                 // 连接就绪后若不自动重载，树就一直空着——用户得收起再展开一次。
                 // 这里把该连接**已展开的连接根**重新入队（cache-aside，非 fresh），
                 // 子层节点由渲染时的 `ensure_nav_loaded` 渐进补齐。
-                if conn_expanded {
+                //
+                // **预连例外**：启动预连成功后**不**自动展开加载——连接已就绪，
+                // 用户展开时走 L1/L2 秒开；自动加载会让恢复的展开态全树并发回源，
+                // 压垮连接池（真机见过 `pool timed out` / 30s 加载超时）。
+                if conn_expanded && !was_prewarm {
                     self.ensure_nav_loaded(&r.conn_id, &r.conn_id, NavPath::Connection, false, cx);
                 }
-                let root = self
-                    .host
-                    .project_root()
-                    .map(|p| p.to_string_lossy().to_string());
-                nav_jobs::warm_after_connect(&r.conn_id, root.as_deref());
+                // **连接成功不自动预热**（对齐 DBeaver「点哪个展开哪个」：下一层由点击驱动）：
+                // 展开连接根时 cache-aside 会实时内省并写 L2（等于把预热推迟到用户真正查看时，
+                // 且每次连接只预热被展开的 schema，不再整连接逐 schema 回源）。此前「手动连接
+                // 成功即 warm_schemas 整连接」是「没点击就加载下一层」的来源——它长时间占住
+                // 连接池（真机见过 `pool timed out` / 30s 加载超时），收益却被 L2 覆盖。
                 self.ensure_warm_poll(cx);
             } else {
-                self.nav.borrow_mut().connected.remove(&r.conn_id);
+                let mut view = self.nav.borrow_mut();
+                view.connected.remove(&r.conn_id);
+                view.prewarming.remove(&r.conn_id);
+                drop(view);
                 self.host.notice(format!("连接失败: {}", r.message), cx);
             }
             cx.notify();
@@ -903,6 +928,62 @@ impl NavView {
         view.state_loaded.insert(conn_id.to_string());
     }
 
+    /// 启动预连（对齐 DBeaver/DataGrip 的「连接常驻」）：对**上次展开过**的连接根，
+    /// 若运行时未连接则后台发起建连，成功后由 `apply_connect_results` 标记已连接。
+    ///
+    /// 为什么值得做：展开态跨重启恢复，但运行时连接不跨重启——首次展开要现场建连
+    /// （MySQL/PG 实测 6~7s），用户感知「树出来慢」。预连把建连挪到启动后台消化，
+    /// 用户展开时连接已就绪，对象树直接走 L1/L2 缓存（毫秒级）。
+    ///
+    /// **只预连一个（上限 1）**：启动把「上次展开过的」全部连上是过度行为——用户
+    /// 明确「我只点了 PG，其他的也启动了」。DBeaver/DataGrip 语义是**点哪个连哪个**：
+    /// 预连只挑一个（按连接列表顺序的第一个未连接展开根，即用户可见顺序里的最近操作位），
+    /// 其余连接在用户展开时现场建连（池内复用，不额外抢服务端连接数）。
+    ///
+    /// 触发点：`chrome.rs` 首次渲染的 `defer_in`（每个连接只跑一次，天然是「启动预连」）。
+    /// 静默语义：失败只留日志（不弹提示、不阻塞 UI），用户手动展开仍会走原有建连路径。
+    pub(super) fn prewarm_expanded_connections(&self) {
+        // 展开根的集合（连接 id 去重），按连接列表顺序——取前几个做预连。
+        let root_set: std::collections::HashSet<String> = {
+            let view = self.nav.borrow();
+            view.expanded
+                .iter()
+                .map(|key| key.split('/').next().unwrap_or(key).to_string())
+                .collect()
+        };
+        let ordered = self.host.connections();
+        // 最多试 3 个展开过的连接（失败换下一个，直到有一个成功或全失败）。
+        // 为何失败续试：预连选的第一个可能是配置失效的共享连接（真机：G_conn 认证配置
+        // 缺失，建连失败），不续试就等于没预连。续试保证至少一个常用连接在启动后台就绪。
+        let candidates: Vec<String> = ordered
+            .iter()
+            .map(|c| c.id.clone())
+            .filter(|id| root_set.contains(id))
+            .take(3)
+            .collect();
+        let mut attempted_any = false;
+        for conn_id in candidates {
+            let already =
+                self.host.is_connected(&conn_id) || self.nav.borrow().connected.contains(&conn_id);
+            if already {
+                continue;
+            }
+            tracing::info!(conn_id = %conn_id, "启动预连（最多 3 个）：后台建连上次展开的连接");
+            // 登记为「预连中」：成功后只标记已连接，不自动展开加载
+            // （见 `NavViewState::prewarming` 的注释：全树并发回源会压垮连接池）。
+            self.nav.borrow_mut().prewarming.insert(conn_id.clone());
+            if let Err(e) = self.host.connect(&conn_id) {
+                // 静默：预连失败不打扰用户（展开时仍会自动建连）；换下一个候选。
+                self.nav.borrow_mut().prewarming.remove(&conn_id);
+                tracing::warn!(conn_id = %conn_id, error = %e, "启动预连失败（换下一个候选）");
+                continue;
+            }
+            attempted_any = true;
+            break;
+        }
+        let _ = attempted_any;
+    }
+
     /// 持久化某连接的展开态（**防抖**：攒到 `ui::NAV_STATE_SAVE_DEBOUNCE_MS` 无新变更再写）。
     ///
     /// 为何不在这里直接写库：展开 / 折叠是高频动作，而落库是 UI 线程上的 SQLite 写；
@@ -1391,16 +1472,19 @@ impl NavView {
         project_root: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(conn_id = %conn_id, "【探针】toggle_connection 被调用");
         // 建连已改后台调度：项目根只用于 apply_connect_results 里的预热（从 host 现取），
         // 本入口不再直接使用；保留参数仅为调用方签名稳定。
         let _ = project_root;
         let already =
             self.host.is_connected(conn_id) || self.nav.borrow().connected.contains(conn_id);
+        tracing::info!(conn_id = %conn_id, already, "【探针】already 判定");
         let outcome = if already {
             self.host.disconnect(conn_id).map(|_| false)
         } else {
             self.host.connect(conn_id).map(|_| true)
         };
+        tracing::info!(conn_id = %conn_id, is_ok = outcome.is_ok(), "【探针】connect/disconnect 返回");
         match outcome {
             Ok(is_connected) => {
                 let mut view = self.nav.borrow_mut();
@@ -1412,6 +1496,17 @@ impl NavView {
                     nav_forget_attempt(&mut view, conn_id);
                 } else {
                     view.connected.remove(conn_id);
+                    // 断开 = 树收起来（缓存保留，重连后按需重载）。清掉该连接的
+                    // 展开态 / 子节点 / 错误痕 / 预取标记——树收起，不留下半截子树。
+                    let prefix = format!("{conn_id}/");
+                    view.expanded.retain(|k| k != conn_id && !k.starts_with(&prefix));
+                    // HashMap 的 retain 闭包是 (key, value) 两参。
+                    view.children.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    view.errors.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    view.child_total.retain(|k, _| k != conn_id && !k.starts_with(&prefix));
+                    // loading / prefetched 是 HashSet，retain 闭包只收一个参数。
+                    view.loading.retain(|k| k != conn_id && !k.starts_with(&prefix));
+                    view.prefetched.retain(|k| k != conn_id && !k.starts_with(&prefix));
                 }
             }
             Err(e) => self.host.notice(format!("连接操作失败: {e}"), cx),

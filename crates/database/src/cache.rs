@@ -425,12 +425,17 @@ impl NavCache {
     // 索引 / 约束**有意不在这里**：它们的消费方是属性面板，而属性面板按设计走
     // 实时内省（见 `property_panel.rs` 模块文档）——给实时语义套一层缓存是错的。
 
-    /// 读取某 schema 的例程（存储过程 + 函数，空结果视为未命中）。
+    /// 读取某 schema 的例程（存储过程 + 函数）。
+    ///
+    /// 2026-10-08（空类别守卫）：此前「空行集 → None」把空结果当未命中，且 put 空 vec
+    /// 不落记录 → 空类别每次展开都回源。现在先查 `category_done` 标记（put_* 成功后置，
+    /// 空也算）：已扫描则返回真实行集（可能为空 vec）——空是合法结果，不是未命中；
+    /// 未扫描才返回 None（由上层走实时内省）。
     pub fn routines(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
-        let rows = self.ops.list_routines(schema_id, None).ok()?;
-        if rows.is_empty() {
+        if !self.ops.is_category_done(schema_id, "routines") {
             return None;
         }
+        let rows = self.ops.list_routines(schema_id, None).ok()?;
         Some(
             rows.into_iter()
                 .map(|r| {
@@ -466,14 +471,21 @@ impl NavCache {
                 );
             }
         }
+        // 空 vec 也标记「已完整回源」：下次展开不再回源（空类别守卫，2026-10-08）
+        if let Err(e) = self.ops.mark_category_done(schema_id, "routines") {
+            tracing::warn!(error = %e, "例程类别完成标记写入失败（下次展开会回源库）");
+        }
     }
 
-    /// 读取某 schema 的序列名（空结果视为未命中）。
+    /// 读取某 schema 的序列名。
+    ///
+    /// 空类别守卫（2026-10-08）：与 `routines` 同——先查 `category_done`，已扫描则
+    /// 空是合法结果（返回空 vec），未扫描才返回 None 由上层回源。
     pub fn sequences(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
-        let names = self.ops.list_sequences(schema_id).ok()?;
-        if names.is_empty() {
+        if !self.ops.is_category_done(schema_id, "sequences") {
             return None;
         }
+        let names = self.ops.list_sequences(schema_id).ok()?;
         Some(
             names
                 .into_iter()
@@ -489,14 +501,20 @@ impl NavCache {
                 tracing::warn!(sequence = %s.name, error = %e, "序列写入缓存失败（下次展开会回源库）");
             }
         }
+        // 空 vec 也标记「已完整回源」（空类别守卫，2026-10-08）
+        if let Err(e) = self.ops.mark_category_done(schema_id, "sequences") {
+            tracing::warn!(error = %e, "序列类别完成标记写入失败（下次展开会回源库）");
+        }
     }
 
     /// 读取某 schema 的触发器（含所属表——回到 `NodeInfo::parent_name`）。
+    ///
+    /// 空类别守卫（2026-10-08）：与 `routines` 同——先查 `category_done`。
     pub fn triggers(&self, schema_id: i64) -> Option<Vec<NodeInfo>> {
-        let rows = self.ops.list_triggers(schema_id).ok()?;
-        if rows.is_empty() {
+        if !self.ops.is_category_done(schema_id, "triggers") {
             return None;
         }
+        let rows = self.ops.list_triggers(schema_id).ok()?;
         Some(
             rows.into_iter()
                 .map(|t| {
@@ -526,6 +544,10 @@ impl NavCache {
                     "触发器写入缓存失败（下次展开会回源库）"
                 );
             }
+        }
+        // 空 vec 也标记「已完整回源」（空类别守卫，2026-10-08）
+        if let Err(e) = self.ops.mark_category_done(schema_id, "triggers") {
+            tracing::warn!(error = %e, "触发器类别完成标记写入失败（下次展开会回源库）");
         }
     }
 }

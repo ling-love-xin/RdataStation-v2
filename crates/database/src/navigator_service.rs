@@ -444,20 +444,32 @@ impl NavigatorService {
         let indexed = self.indexed_counts(conn_id, catalog, schema);
         tracing::info!(conn_id = %conn_id, elapsed_ms = t0.elapsed().as_millis(), "load_folders indexed_counts 完成");
         let mut nodes = Vec::new();
-        // 「某一类没查到」与「整个 schema 展开失败」是两回事：前者只该少一行文件夹，
-        // 后者才是树上那行红字。这两个标记就是那条分界（见下方两处判定）。
-        let mut any_ok = false;
-        let mut first_error: Option<CoreError> = None;
+        // 类别文件夹**固定显示**（与 DBeaver 一致）：空类别（count=0）也显示，
+        // 用户能一眼看到"这个 schema 有哪些类别、各自有没有对象"。
+        // 失败语义：表清单失败 → 直接冒泡成 schema 红字（可点重试）；其余类别失败
+        // → 本次少一行文件夹（降级，不阻塞其余类别）。Tables 是 `NavFolder::ALL`
+        // 第一项，失败必提前 return，故「全部失败但没报错」的路径不存在。
         for folder in NavFolder::ALL {
+            // 进度探针（2026-10-08）：曾出现「views 成功后 13s 无日志」盲区，
+            // 用类别级进度日志钉住卡点（索引命中 vs collect_objects 入口 vs 返回）。
+            tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, folder = folder.key(), "load_folders 类别开始");
             let count = match Self::indexed_folder_count(folder, indexed.as_ref()) {
                 Some(count) => {
-                    any_ok = true;
                     count
                 }
                 None => {
                     // 实时内省（或 L1 / L2 命中）。
                     let tf = std::time::Instant::now();
-                    match self.collect_objects(conn_id, catalog, schema, folder).await {
+                    // 单类别**不设独立超时**（对齐 DBeaver：慢 = 加载中，不是错误）。
+                    // 历史 5s 单类别超时被证伪：跨库 scoped 连接冷建连 6~7s（warehouse_supply_chain
+                    // 首展）是正常场景，5s 必超时 → 类别被降级隐藏 → schema 树「不完整 / 不一致」
+                    // （app_run47 日志：主库 11ms 成功、scoped 库每次 5s 红字、慢查询 0 条）。
+                    // 真卡死由 worker 层 JOB_TIMEOUT（30s）兜底成 schema 红字（可点重试），
+                    // 用户感知与 DBeaver 一致：内省慢就等（加载中），真失败才报错。
+                    let folder_result = self
+                        .collect_objects(conn_id, catalog, schema, folder)
+                        .await;
+                    match folder_result {
                         Ok(objects) => {
                             tracing::info!(
                                 conn_id = %conn_id,
@@ -468,13 +480,8 @@ impl NavigatorService {
                                 elapsed_ms = tf.elapsed().as_millis(),
                                 "导航 collect_objects 成功"
                             );
-                            any_ok = true;
                             objects.len()
                         }
-                        // 「表」之外的类别失败**不拖垮整层**：例程 / 触发器要的权限常比表清单高
-                        // （PG 上尤其），一类失败就让整个 schema 变成一行红字，代价太大。
-                        // 于是降级为「这一类本次不出现」并留日志；「表」失败仍然冒泡——
-                        // 连表都看不见的导航不叫可用。
                         Err(e) if folder != NavFolder::Tables => {
                             tracing::warn!(
                                 conn_id = %conn_id,
@@ -482,25 +489,28 @@ impl NavigatorService {
                                 schema = %schema,
                                 folder = folder.key(),
                                 error = %e,
-                                "导航：该类别内省失败，本次跳过（其它类别照常显示）"
+                                "类别加载失败（降级：本次不显示这一类）"
                             );
-                            first_error.get_or_insert(e);
                             0
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            tracing::warn!(
+                                conn_id = %conn_id,
+                                catalog = %catalog,
+                                schema = %schema,
+                                folder = folder.key(),
+                                error = %e,
+                                "表清单加载失败（冒泡成 schema 红字）"
+                            );
+                            return Err(e);
+                        }
                     }
                 }
             };
-            if count == 0 {
-                continue;
-            }
+            // 与 DBeaver 一致：类别文件夹**固定显示**（表/视图/函数/序列/触发器），
+            // 空类别（count=0）也显示——用户能一眼看到"这个 schema 有哪些类别、各自
+            // 有没有对象"，而不是靠"没出现 = 没有"去猜（用户决策 2026-10-08）。
             nodes.push(Self::folder_node(conn_id, catalog, schema, folder, count));
-        }
-        // 一类都没查成（如连接在这一刻掉了）：如实报错，别装作「这个 schema 是空的」。
-        if !any_ok {
-            if let Some(e) = first_error {
-                return Err(e);
-            }
         }
         Ok(nodes)
     }
@@ -874,6 +884,7 @@ impl NavigatorService {
                 Ok(filtered)
             }
             NavFolder::Routines => {
+                tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "collect_objects 类别进入 routines");
                 // 与表 / 视图同一套 cache-aside：L1 → L2 → L3（回填两处）
                 if let Some(objs) = self.l1_read_routines(conn_id, catalog, schema) {
                     return Ok(objs);
@@ -904,6 +915,7 @@ impl NavigatorService {
                 Ok(procedures)
             }
             NavFolder::Sequences => {
+                tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "collect_objects 类别进入 sequences");
                 if let Some(objs) = self.l1_read(|c| c.get_sequences(conn_id, catalog, Some(schema))) {
                     return Ok(objs);
                 }
@@ -929,6 +941,7 @@ impl NavigatorService {
                 Ok(objs)
             }
             NavFolder::Triggers => {
+                tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "collect_objects 类别进入 triggers");
                 if let Some(objs) = self.l1_read(|c| c.get_triggers(conn_id, catalog, Some(schema))) {
                     return Ok(objs);
                 }
@@ -1273,6 +1286,8 @@ mod l1_tests {
     ///
     /// 手法：只喂「表」这一类进 L1，其余类别必然走实时内省（空管理器下必失败）。
     /// 展开 schema 这一层若仍报错，用户就连看得见的表也拿不到了。
+    /// 类别文件夹**固定显示**（用户决策 2026-10-08，对齐 DBeaver）：失败的类别
+    /// 也显示（count=0），用户一眼看到"这个 schema 有哪些类别"。
     #[tokio::test]
     async fn one_failing_category_does_not_hide_the_rest() {
         let conn_id = "P_folders_partial_fail";
@@ -1293,10 +1308,23 @@ mod l1_tests {
             )
             .await
             .expect("表这一类读到了，就不该整层报错");
-        assert_eq!(nodes.len(), 1, "失败的那些类别本次不出现");
+        assert_eq!(nodes.len(), NavFolder::ALL.len(), "五类文件夹固定显示");
+        let tables = nodes
+            .iter()
+            .find(|n| matches!(n.kind, NavNodeKind::Folder(NavFolder::Tables)))
+            .expect("表文件夹在");
         assert!(
-            matches!(nodes[0].kind, NavNodeKind::Folder(NavFolder::Tables)),
-            "留下的应当正是「表」"
+            matches!(tables.kind, NavNodeKind::Folder(NavFolder::Tables))
+                && tables.name.contains("(1)"),
+            "表文件夹带真实计数（1）"
+        );
+        let failed = nodes
+            .iter()
+            .find(|n| matches!(n.kind, NavNodeKind::Folder(NavFolder::Sequences)))
+            .expect("失败的类别也固定显示");
+        assert!(
+            failed.name.contains("(0)"),
+            "失败类别显示 count=0（不隐藏，也不假装有对象）"
         );
     }
 

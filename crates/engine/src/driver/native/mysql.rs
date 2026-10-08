@@ -82,15 +82,15 @@ impl MySqlDatabase {
             format!("{}{}ssl-mode=disabled", url, sep)
         };
 
-        // 显式配置连接池：min_connections=2 让池在连接建立时预建 2 条常驻连接，
-        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时；
-        // 且 catalog 回源与列预取并发时不互相抢唯一连接（真机：min=1 时两任务排队 30s 超时）。
+        // 对齐 DBeaver：内省严格串行（信号量=1），池 min=3 常驻（DBeaver 每库
+        // Main+Metadata+SQLEditor=3 条），max=6 给详情卡/列预取等非内省源留缓冲。
         let options = sqlx::mysql::MySqlPoolOptions::new()
-            .min_connections(2)
-            .max_connections(10)
-            .acquire_timeout(std::time::Duration::from_secs(60))
-            .idle_timeout(Some(std::time::Duration::from_secs(1800)))
-            .max_lifetime(Some(std::time::Duration::from_secs(3600)));
+            .min_connections(3)
+            .max_connections(6)
+            .acquire_timeout(std::time::Duration::from_secs(8))
+            .idle_timeout(Some(std::time::Duration::from_secs(300)))
+            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
+            .test_before_acquire(true);
         let pool = options.connect(&effective_url).await.map_err(|e| {
             tracing::warn!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new connect FAIL");
             CoreError::database(DatabaseError::Driver {
@@ -114,6 +114,16 @@ impl MySqlDatabase {
                 })
             })?;
         tracing::info!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new verify OK");
+        // 预热：并行 acquire 到 min（3 条）再释放，把建连握手归入「连接中」阶段，
+        // 避免内省任务撞上池补建（见 postgres.rs 同款注释）。
+        let (w1, w2, w3) = tokio::join!(
+            pool.acquire(),
+            pool.acquire(),
+            pool.acquire(),
+        );
+        drop(w1);
+        drop(w2);
+        drop(w3);
         Ok(Self {
             pool,
             server_version: Some(server_version),

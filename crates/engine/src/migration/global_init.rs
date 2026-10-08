@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 全局系统初始化模块
  *
  * 负责应用启动时的全局初始化：
@@ -169,15 +169,19 @@ pub struct StartupSyncReport {
     pub creds_encrypted: usize,
     /// 连接标签回填条数。
     pub tags_backfilled: usize,
+    /// 数据库族目录同步结果（`None` = 这一步失败，已告警）。
+    pub families: Option<usize>,
     /// 驱动声明落库结果（`None` = 这一步失败，已告警）。
     pub drivers: Option<crate::driver::declaration::DeclarationSync>,
 }
 
 /// 启动时的数据同步（幂等；失败仅告警，不阻断启动）。
 ///
-/// 两步：
+/// 三步：
 /// ① [`migrate_legacy_data`]——存量凭据加密 + 标签回填；
-/// ② [`crate::driver::declaration::sync_driver_declarations`]——把**代码里的驱动声明**
+/// ② [`crate::driver::declaration::ensure_data_source_types`]——把**代码里的数据库族目录**
+///   写回 `data_source_types`（驱动外键的前提）；
+/// ③ [`crate::driver::declaration::sync_driver_declarations`]——把**代码里的驱动声明**
 ///   写回 `drivers` 表（迁移里的种子降为首装兜底，见 `driver/declaration.rs` 头注）。
 ///
 /// 抽成独立函数是为了可测：启动入口 `initialize_global_system` 解析的是真实数据目录
@@ -194,6 +198,29 @@ pub async fn sync_startup_state(manager: &GlobalDatabaseManager) -> StartupSyncR
     }
     if tags_migrated > 0 {
         tracing::info!(count = tags_migrated, "连接标签已回填到权威表（一次性迁移）");
+    }
+
+    // ③ 数据库族目录 upsert（代码是权威，见 `driver/declaration.rs`）。
+    //    必须先于驱动声明：`drivers.type_id` 是 `data_source_types.id` 的外键，
+    //    族不在则驱动声明会因外键挂不上而 skipped（静默丢行）。
+    match manager.sqlite_pool().acquire().await {
+        Ok(sqlite) => match sqlite.inner() {
+            Ok(conn) => match crate::driver::declaration::ensure_data_source_types(conn) {
+                Ok(n) => {
+                    report.families = Some(n);
+                    tracing::info!(
+                        count = n,
+                        "数据库族目录已同步到 data_source_types（代码是权威）"
+                    );
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "数据库族目录同步失败（沿用库中已有族目录，驱动声明可能缺行）"
+                ),
+            },
+            Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过族目录同步"),
+        },
+        Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过族目录同步"),
     }
 
     match crate::driver::declaration::sync_driver_declarations(manager).await {

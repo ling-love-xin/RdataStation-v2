@@ -55,15 +55,42 @@ impl PostgresDatabase {
         // PG 驱动严格校验枚举（大写直接报 `unknown value "DISABLED" for ssl_mode`）——
         // 这里把 `ssl-mode=DISABLED` 归一为 sqlx 认识的小写 `disable`。
         let effective_url = normalize_ssl_mode(url);
-        // 显式配置连接池：min_connections=2 让池在连接建立时预建 2 条常驻连接，
-        // 避免懒池（min=0）下首次内省查询需要现场建连、慢网环境下 acquire 超时；
-        // 且 catalog 回源与列预取并发时不互相抢唯一连接（真机：min=1 时两任务排队 30s 超时）。
+        // 对齐 DBeaver/DataGrip 的连接角色模型（用户决策 2026-10-08：除缓存设计外
+        // 全参考 DBeaver）：DBeaver 每库实际开 Main + Metadata + SQLEditor = 3 条常驻。
+        // RDS 对应：
+        //   - min=3：常驻 3 条（主 SQL + 元数据 + 缓冲），建连时预建 + 预热，
+        //     内省串行任务不会撞上池补建（真机：min=2 时「每批第三个 schema」的表
+        //     清单 acquire 等池补建握手，5s 外层超时先到——public→probe_b→probe_a、
+        //     base→asset→biz_000 都是第三个 5s 超时，慢查询日志 0 条 = 卡在 acquire）；
+        //   - max=6：上限给非内省并发源（详情卡、列预取等）留缓冲——它们不走内省
+        //     信号量，池不足时会把内省任务堵在 acquire 上。
+        //   - 服务端连接数：常驻 3 条/库，峰值 ≤6 条/库——PG max_connections=100
+        //     完全够，不再是「大池抗并发」的错误方向。
+        // 2026-10-08 补（app_run49 打点铁证）：30s 卡死 = sqlx 池 acquire 静默等待
+        // （rds_nav_probe_a 实时内省 acquire 无返回 30s，被 JOB_TIMEOUT 杀；期间
+        // 零慢 SQL、零查询日志 = 卡在拿连接而非执行）。对策：
+        //   - acquire_timeout 60s → 8s：拿不到连接**快速失败**报错（红字可点重试），
+        //     不再 30s 静默——acquire 长期等 = 池被占光/补建卡住，属异常，应立即暴露；
+        //   - test_before_acquire：acquire 前 SELECT 1 验证，服务端/网络断开的
+        //     "僵尸连接"直接淘汰重建，不把死连接交给查询再超时；
+        //   - idle_timeout / max_lifetime 收紧：缩短"半死连接"在池里的残留窗口，
+        //     定期轮换防中间层/服务端累积断连。
         let options = sqlx::postgres::PgPoolOptions::new()
-            .min_connections(2)
-            .max_connections(10)
-            .acquire_timeout(std::time::Duration::from_secs(60))
-            .idle_timeout(Some(std::time::Duration::from_secs(1800)))
-            .max_lifetime(Some(std::time::Duration::from_secs(3600)));
+            .min_connections(3)
+            .max_connections(6)
+            .acquire_timeout(std::time::Duration::from_secs(8))
+            .idle_timeout(Some(std::time::Duration::from_secs(300)))
+            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
+            .test_before_acquire(true);
+        // 运行时池参数探针（2026-10-08）：代码层 acquire_timeout=8s，但 app_run51
+        // 实测报错是 30s 的 pool timed out——必须确认运行时二进制里真实生效的值。
+        tracing::info!(
+            acquire_timeout_ms = options.get_acquire_timeout().as_millis(),
+            min = options.get_min_connections(),
+            max = options.get_max_connections(),
+            test_before_acquire = options.get_test_before_acquire(),
+            "PG 池参数（运行时验证）"
+        );
         let pool = options.connect(&effective_url).await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "postgres".to_string(),
@@ -83,6 +110,17 @@ impl PostgresDatabase {
                     source: e.to_string(),
                 })
             })?;
+        // 预热：并行 acquire 到 min（3 条）再释放，把 PG 握手成本归入「连接中」阶段。
+        // 否则连接刚就绪时导航内省任务会撞上池补建——每建一条要一次握手，
+        // 外层 5s 单类别超时先到（真机：min=2 时「每批第三个 schema」5s acquire 超时）。
+        let (w1, w2, w3) = tokio::join!(
+            pool.acquire(),
+            pool.acquire(),
+            pool.acquire(),
+        );
+        drop(w1);
+        drop(w2);
+        drop(w3);
         Ok(Self {
             pool,
             server_version: Some(server_version),
@@ -156,11 +194,27 @@ impl Database for PostgresDatabase {
         if !read_only && !returns_rows(sql) {
             return execute_writing(&self.pool, sql).await;
         }
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+        let t0 = std::time::Instant::now();
+        // 分段探针：acquire（拿池连接）与查询执行分开计时——导航 30s 卡死时
+        // 必须能分辨「卡在 acquire（池被占/补建握手）」还是「卡在 SQL 执行（服务端锁）」
+        // （真机：30s 超时日志只有「加载子节点超时」，没有慢 SQL 警告，卡点不明）。
+        let mut conn = self
+            .pool
+            .acquire()
             .await
             .map_err(|e| query_error(sql, e))?;
-
+        let t_acq = t0.elapsed().as_millis();
+        if t_acq > 5 {
+            tracing::warn!(elapsed_ms = t_acq, sql = %sql.chars().take(80).collect::<String>(), "PG acquire 偏慢（>5ms，连接池被占或补建握手）");
+        }
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| query_error(sql, e))?;
+        let t_qry = t0.elapsed().as_millis();
+        if t_qry > 500 {
+            tracing::warn!(elapsed_ms = t_qry, sql = %sql.chars().take(120).collect::<String>(), "PG 查询执行偏慢（>500ms，含 acquire）");
+        }
         if rows.is_empty() {
             return Ok(QueryResult {
                 columns: vec![],
@@ -184,6 +238,7 @@ impl Database for PostgresDatabase {
         params: Vec<shared::models::Value>,
     ) -> Result<QueryResult, CoreError> {
         let read_only = is_read_only_sql(sql);
+        let t0 = std::time::Instant::now();
 
         let mut query_builder = sqlx::query(sqlx::AssertSqlSafe(sql));
 
@@ -198,10 +253,45 @@ impl Database for PostgresDatabase {
             };
         }
 
-        let rows = query_builder
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| query_error(sql, e))?;
+        let rows = {
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| {
+                    // 池状态探针（2026-10-08）：acquire 失败必须留下池的 idle/active 数，
+                    // 才能区分「连接泄漏（active=6）」vs「池空补建失败（idle=0,active=0）」
+                    // vs「并发占满（active>0,idle=0）」——30s 卡死已确认是 pool timed out，
+                    // 但池为什么空一直没有直接证据。0.9.0 无 num_active，active = size - idle。
+                    let active = (self.pool.size() as usize).saturating_sub(self.pool.num_idle());
+                    tracing::warn!(
+                        elapsed_ms = t0.elapsed().as_millis(),
+                        idle = self.pool.num_idle(),
+                        active = active,
+                        size = self.pool.size(),
+                        error = %e,
+                        sql = %sql.chars().take(80).collect::<String>(),
+                        "PG acquire 失败（池状态：idle/active/size）"
+                    );
+                    query_error(sql, e)
+                })?;
+            let t_acq = t0.elapsed().as_millis();
+            if t_acq > 5 {
+                tracing::warn!(elapsed_ms = t_acq, sql = %sql.chars().take(80).collect::<String>(), "PG acquire 偏慢（>5ms，连接池被占或补建握手）");
+            }
+            query_builder
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| query_error(sql, e))?
+        };
+
+        // 慢查询探针：>500ms 的 SQL 执行打 warn（真机导航首次展开见过 30s 卡死，
+        // 没有 SQL + 耗时就没法判断是查询慢、建连慢还是服务端锁等待）。
+        let elapsed_ms = t0.elapsed().as_millis();
+        if elapsed_ms > 500 {
+            let sql_head = sql.chars().take(120).collect::<String>().replace('\n', " ");
+            tracing::warn!(elapsed_ms, sql = %sql_head, "SQL 执行偏慢（>500ms）");
+        }
 
         if rows.is_empty() {
             return Ok(QueryResult {

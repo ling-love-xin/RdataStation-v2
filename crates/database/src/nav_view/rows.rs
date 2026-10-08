@@ -622,6 +622,59 @@ impl NavView {
                     .text_color(if failed_count > 0 { danger } else { muted })
                     .child(health_label),
             )
+            // 「连接组内所有数据库」：批量把该组里未连接的连接逐条后台建连。
+            // 单个连接的语义是「只连那一个库」；这里给**组**一个批量入口
+            // （组 = 同一批业务库的集合，DBeaver 的组连接同款）。
+            // 已连接 / 正在连接的跳过；失败的逐个落 notice（仍不阻塞其余）。
+            .child(
+                div()
+                    .id(format!("nav-group-connectall-{group_id}"))
+                    .w_6()
+                    .h_6()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover))
+                    .child(nav_icon("icons/plug.svg", ui::ICON_SIZE_XS, muted))
+                    .on_click({
+                        let entity = entity.clone();
+                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
+                        let gid_for_connect = gid.clone();
+                        let ungrouped_for_connect = is_ungrouped;
+                        move |_, _, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
+                                let member_ids: Vec<String> = {
+                                    let view = this.nav.borrow();
+                                    if ungrouped_for_connect {
+                                        view.ungrouped_order.clone()
+                                    } else {
+                                        view.group_order.get(&gid_for_connect).cloned().unwrap_or_default()
+                                    }
+                                };
+                                let conns = this.host.connections();
+                                let connected: std::collections::HashSet<String> = {
+                                    let view = this.nav.borrow();
+                                    view.connected.iter().cloned().collect()
+                                };
+                                let mut pending = 0usize;
+                                for c in &conns {
+                                    if member_ids.contains(&c.id) && !connected.contains(&c.id) {
+                                        pending += 1;
+                                        this.toggle_connection(&c.id, None, cx);
+                                    }
+                                }
+                                if pending == 0 {
+                                    this.host
+                                        .notice("该分组连接均已就绪，无需重复连接".to_string(), cx);
+                                }
+                            });
+                        }
+                    }),
+            )
             // 全折叠：一键折叠 / 展开全部同层分组（v5）。
             // 命中区按行高上限取 24×24（`w_6 h_6`）：旧写法 10×10 不仅难点中，
             // 而且 `⇅` 字形漏写 `text_xs`，以 16px 字号渲染进 10px 盒必然溢出。
@@ -1494,6 +1547,7 @@ impl NavView {
                             .item(
                                 PopupMenuItem::new(if is_connected { "断开" } else { "连接" })
                                     .on_click(move |_, _, app| {
+                                        tracing::info!(conn_id = %cid_connect, "【探针】右键菜单「连接」on_click 触发");
                                         let cid = cid_connect.clone();
                                         let root = root_connect.clone();
                                         e_connect.update(app, |this, cx| {

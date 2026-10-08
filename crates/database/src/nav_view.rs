@@ -226,6 +226,11 @@ pub struct NavViewState {
     errors: HashMap<String, String>,
     /// 本会话运行时已连接的连接 ID。
     connected: HashSet<String>,
+    /// **启动预连**中的连接 ID：预连成功后只标记已连接 + 预热，**不自动展开加载**
+    /// （子层留给用户展开时按需加载——连接已就绪，L1/L2 命中即秒开；
+    /// 若预连也自动加载，恢复的展开态全树并发回源会压垮连接池，真机见过
+    /// `pool timed out` / 30s 加载超时）。结果回填后移除。
+    prewarming: HashSet<String>,
     /// 已从库中恢复过导航状态的连接 ID。
     state_loaded: HashSet<String>,
     /// 自定义分组（项目级）。
