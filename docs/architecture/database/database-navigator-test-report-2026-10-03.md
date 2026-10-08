@@ -330,13 +330,13 @@ cargo check -p rds-app -j 2
 | MySQL 树展开 | ✅ 完整展开（`mall_business → 表(7) → order/order_item/payment_record/product/product_category/user/user_address` + 例程 4）；**30s 超时不再复现**（vs §15 app_run23b 重启后首次 30s） |
 | 缓存自愈 | ✅ `meta_439cdbba942f1c99.sqlite` schemata `loaded 0→2`（命中补 mark 生效）；日志 `collect_objects 完整 schema 空类别（不回源） conn_id=P_real_mysql folder="views" elapsed_ms=0` |
 | 列预取 | ✅ app_run25 无「列预取超时」日志；探针 7 表总 81ms（每表 ≤25ms） |
-| PG 池 | ⚠️ min=2 已部署；探针密码不可用（应用加密密码），真机未充分复核（app_run25 无 pool timed out 日志但 PG 未连接） |
+| PG 池 | ✅ **真机复核（app_run26）**：双击 `GP_real_pg_20260912` → 建连 + 跨库浏览 `warehouse_supply_chain` 成功（0.5s 内），**无 pool timed out**（§15 中 PG postgres 库与重启后 warehouse_supply_chain 均 pool timed out——min=2 修复生效）；树显示已连 1/2 |
 | 回归 | ✅ `cargo test -p rds-engine -p rds-database`：engine lib 528 / database lib 102 全过 |
 
 ### 16.4 结论
 
 - **30s 根因链全通**：半成品 is_loaded=0 → views 空反复回源 → 池 acquire 排队（min=1 单连接）→ JOB_TIMEOUT 30s 先超。修复（自愈 mark + 空类别不回源 + min=2 + 每表 5s）后**重启后展开不再回源、不再排队、单表卡不再拖死整批**。
-- **遗留**：PG 真机复核（应用内密码不可探针直连）、列缓存写入的 UI 侧确认（列预取静默成功无日志，L2 列写入待展开表后复核）。
+- **遗留**：列展开的 UI 侧确认（列预取在「表」文件夹首次展开时触发；GUI 自动化展开树多次未成，需人工展开表确认列显示与 L2 列缓存写入——列查询探针已证每表 ≤25ms、put_columns 写侧逻辑闭环）。
 
 ### 15.3 新暴露问题（根因方向，待修）
 
