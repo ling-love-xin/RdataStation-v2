@@ -677,6 +677,30 @@ pub(super) fn nav_forget_attempt(view: &mut NavViewState, key: &str) {
     view.loading.remove(key);
 }
 
+/// 加载失败是否为「连接类」错误（可自动重试一次）。
+///
+/// 背景（app_run57/58 铁证）：池连接被网络层静默丢弃后，`test_before_acquire`
+/// 验证/查询挂在 TCP 半开上超时——这类失败重入队后 sqlx 已把死连接回收并新建，
+/// 第二次秒过；权限/对象不存在等业务失败重试无意义，交给红字 + 用户重试。
+pub(super) fn nav_error_is_connection(result: &Result<crate::navigator_service::NavPage, String>) -> bool {
+    let Err(err) = result else {
+        return false;
+    };
+    [
+        "pool timed out",
+        "connection closed",
+        "connection refused",
+        "server closed",
+        "PoolClosed",
+        "acquire",
+        "not connected",
+        "连接已断开",
+        "连接被关闭",
+    ]
+    .iter()
+    .any(|k| err.contains(k))
+}
+
 /// 一行的估算高度（rem → px）。
 ///
 /// 必须与渲染里那几处的显式高度**成对维护**（`ui::NAV_ROW_*` / `ui::NAV_SUBLINE` /

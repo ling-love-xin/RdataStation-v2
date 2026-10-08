@@ -661,6 +661,27 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             // loading 状态保持，UI 显示「加载中」）。不排队的话，多节点同时展开会
             // 并发 acquire 撞满连接池（真机：15 个 folder 任务抢 2 条池连接，30s 超时）。
             let _permit = rt.block_on(async { load_semaphore().acquire().await });
+            // 竞态守卫（2026-10-08 真机）：点击连接 → `ensure_connected_for_browse`
+            // 乐观标记 connected → 渲染驱动立即入队 Connection/Schema 层任务 → 建连线程
+            // （50-100ms）尚未注册连接 → 任务在连接未注册时执行 → CONN_NOT_FOUND 红字
+            // 闪现（随后 apply_connect_results 自动重试，但体验是「刚点就红」）。
+            // 在途建连期间短等归零再执行；超过上限则照常执行（建连失败时红字是正确提示）。
+            const CONNECT_WAIT_STEP_MS: u64 = 10;
+            const CONNECT_WAIT_TICKS: u32 = 50; // 最多等 500ms
+            let mut waited_ticks = 0u32;
+            while has_pending_connect() && waited_ticks < CONNECT_WAIT_TICKS {
+                rt.block_on(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(CONNECT_WAIT_STEP_MS)).await
+                });
+                waited_ticks += 1;
+            }
+            if waited_ticks > 0 {
+                tracing::info!(
+                    key = %key,
+                    waited_ms = u64::from(waited_ticks) * CONNECT_WAIT_STEP_MS,
+                    "导航任务等待在途建连完成"
+                );
+            }
             tracing::info!(conn_id = %conn_id, key = %key, path = ?path, "导航任务开始执行");
             let t_exec = std::time::Instant::now();
             let svc = crate::navigator_service::NavigatorService::with_context(

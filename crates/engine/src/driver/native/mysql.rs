@@ -1,4 +1,4 @@
-use sqlx::{Column, MySql, Pool, Row, TypeInfo as _};
+use sqlx::{Column, ConnectOptions as _, MySql, Pool, Row, TypeInfo as _};
 
 /// 单列名字结果集 → 对象列表（例程 / 序列等只在内省里露名字的类别）。
 fn names_to_nodes(
@@ -40,17 +40,41 @@ use shared::models::{ArrowBatch, QueryResult, Value};
 
 /// MySQL 数据库连接
 ///
-/// 封装 `sqlx::Pool<MySql>` 连接池，通过 `Database` trait 提供统一的查询/执行接口。
+/// 封装一条**常驻物理连接**（DBeaver Main 连接模型：无连接池、无 acquire 等待、
+/// 无 `test_before_acquire` 验证——池化设计在 PG 真机上反复撞「空闲连接被网络层
+/// 静默丢弃，验证挂 TCP 半开 8s 超时」，用户已拍板摒弃池、全参考 DBeaver），
+/// 通过 `Database` trait 提供统一的查询/执行接口。
 /// 元数据浏览通过 `MetadataBrowser` trait 实现，查询 `information_schema`。
 ///
 /// # 字段
-/// * `pool` - sqlx MySQL 连接池，管理连接复用和生命周期
+/// * `conn` - **会话级单连接**（`None` = 已断/已回收，下次使用时按 `connect_url` 懒重建）
+/// * `last_used` - 连接最后使用时间：空闲超过 [`MYSQL_IDLE_RECYCLE`] 即回收
+///   （DBeaver「按需建连 + 空闲回收」轻量会话模型，见 postgres.rs 同款注释）
+/// * `connect_url` - 重建连接的 URL
 /// * `server_version` - MySQL 服务器版本号，首次连接时获取并缓存
 pub struct MySqlDatabase {
-    pool: Pool<MySql>,
+    conn: Arc<tokio::sync::Mutex<Option<sqlx::mysql::MySqlConnection>>>,
+    last_used: std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: String,
     server_version: Option<String>,
     max_connections: usize,
     min_connections: usize,
+}
+
+/// 连接类错误判定：查询失败后把常驻连接置 `None`，下次使用时懒重建。
+fn is_mysql_conn_error(e: &sqlx::Error) -> bool {
+    if matches!(
+        e,
+        sqlx::Error::Io(_)
+            | sqlx::Error::PoolClosed
+            | sqlx::Error::Protocol(_)
+            | sqlx::Error::Tls(_)
+    ) {
+        return true;
+    }
+    // 服务端主动断开的 Database 错误（sqlx 不总是归一成 Io）——认常见关键字。
+    let msg = e.to_string().to_ascii_lowercase();
+    msg.contains("server closed") || msg.contains("connection closed")
 }
 
 impl MySqlDatabase {
@@ -82,16 +106,12 @@ impl MySqlDatabase {
             format!("{}{}ssl-mode=disabled", url, sep)
         };
 
-        // 对齐 DBeaver：内省严格串行（信号量=1），池 min=3 常驻（DBeaver 每库
-        // Main+Metadata+SQLEditor=3 条），max=6 给详情卡/列预取等非内省源留缓冲。
-        let options = sqlx::mysql::MySqlPoolOptions::new()
-            .min_connections(3)
-            .max_connections(6)
-            .acquire_timeout(std::time::Duration::from_secs(8))
-            .idle_timeout(Some(std::time::Duration::from_secs(300)))
-            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
-            .test_before_acquire(true);
-        let pool = options.connect(&effective_url).await.map_err(|e| {
+        // 单连接直连（2026-10-08 摒弃池，同 postgres.rs）：`MySqlConnectOptions::connect`
+        // 建**一条**物理连接并持有。此前建池（min=3/max=6/acquire_timeout/test_before_acquire）
+        // 的真机结论（app_run49~58，PG 侧）：池 acquire 静默等待 + 死连接验证挂 TCP 半开
+        // 超时——DBeaver 无池、每库 Main+Metadata 常驻单连接、串行内省；单连接查询串行
+        // （`conn` Mutex），连接失效 → 查询报错 → 置 None → 下次懒重建（握手 ~10-30ms）。
+        let mut conn = connect_mysql_single(&effective_url).await.map_err(|e| {
             tracing::warn!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new connect FAIL");
             CoreError::database(DatabaseError::Driver {
                 db_type: "mysql".to_string(),
@@ -101,9 +121,9 @@ impl MySqlDatabase {
         })?;
         tracing::info!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new connect OK");
         // 连接验证不吞错：SELECT VERSION() 失败视为连接失败（此前 .ok() 吞错，
-        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部 acquire 超时）。
+        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部失败）。
         let server_version = sqlx::query_scalar::<_, String>("SELECT VERSION()")
-            .fetch_one(&pool)
+            .fetch_one(&mut conn)
             .await
             .map_err(|e| {
                 tracing::warn!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new verify FAIL");
@@ -114,18 +134,10 @@ impl MySqlDatabase {
                 })
             })?;
         tracing::info!(elapsed_ms = %t_new.elapsed().as_millis(), "MySqlDatabase::new verify OK");
-        // 预热：并行 acquire 到 min（3 条）再释放，把建连握手归入「连接中」阶段，
-        // 避免内省任务撞上池补建（见 postgres.rs 同款注释）。
-        let (w1, w2, w3) = tokio::join!(
-            pool.acquire(),
-            pool.acquire(),
-            pool.acquire(),
-        );
-        drop(w1);
-        drop(w2);
-        drop(w3);
         Ok(Self {
-            pool,
+            conn: Arc::new(tokio::sync::Mutex::new(Some(conn))),
+            last_used: std::sync::Mutex::new(Some(std::time::Instant::now())),
+            connect_url: effective_url,
             server_version: Some(server_version),
             max_connections: 10,
             min_connections: 2,
@@ -133,8 +145,15 @@ impl MySqlDatabase {
     }
 
     pub fn from_pool(pool: Pool<MySql>) -> Self {
+        // 兼容入口：无法从池反推 URL，且 sqlx 的 `PoolConnection` 没有公开的底层
+        // 连接取出接口——这里不取连接（`None`，等 `new` 路径重建）。
+        // `from_pool` 仅服务遗留的 `mysql_pool.rs` 封装（无实际调用方），
+        // 主路径一律走 `new`（单连接直连）。
+        let _ = pool;
         Self {
-            pool,
+            conn: Arc::new(tokio::sync::Mutex::new(None)),
+            last_used: std::sync::Mutex::new(None),
+            connect_url: String::new(),
             server_version: None,
             max_connections: 10,
             min_connections: 0,
@@ -146,11 +165,85 @@ impl MySqlDatabase {
         max_connections: usize,
         min_connections: usize,
     ) -> Self {
-        Self {
-            pool,
-            server_version: None,
-            max_connections,
-            min_connections,
+        let mut this = Self::from_pool(pool);
+        this.max_connections = max_connections;
+        this.min_connections = min_connections;
+        this
+    }
+}
+
+/// 常驻连接查询级超时：超过即销毁连接（半开连接挂起的根治手段，见 `query` 注释）。
+const MYSQL_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 连接空闲回收阈值：超过即主动关闭（DBeaver「按需建连 + 空闲回收」轻量会话模型）。
+/// **1s 实证调参**（2026-10-08，同 postgres.rs）：建连实测 150-380ms 环境固有；
+/// 一次展开 4 类别查询间隔 <10ms 复用同一连接；闲置 >1s 即回收新建，
+/// 避开"闲置复用挂起"铁证窗口（2.4s/9.8s 即挂）。
+const MYSQL_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 按 URL 建一条 MySQL 物理连接（单连接化后的统一入口）。
+async fn connect_mysql_single(url: &str) -> Result<sqlx::mysql::MySqlConnection, sqlx::Error> {
+    let options: sqlx::mysql::MySqlConnectOptions = url.parse()?;
+    options.connect().await
+}
+
+/// 拿会话级连接的锁（`None` 时按 `connect_url` 懒重建）；调用方持有 guard 期间
+/// 连接被独占，查询串行（等价 DBeaver SingleThreadLock）。
+///
+/// **空闲回收**（2026-10-08 对齐 DBeaver「按需建连 + 空闲回收」，同 postgres.rs）：
+/// 连接闲置超过 [`MYSQL_IDLE_RECYCLE`] 时置 `None` 重建——连接短命、用完回收，
+/// 避免常驻连接被网络层静默丢弃后下一次查询挂起。
+async fn lock_mysql_conn<'a>(
+    conn: &'a Arc<tokio::sync::Mutex<Option<sqlx::mysql::MySqlConnection>>>,
+    last_used: &std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: &str,
+) -> Result<tokio::sync::MutexGuard<'a, Option<sqlx::mysql::MySqlConnection>>, CoreError> {
+    let mut guard = conn.lock().await;
+    // 空闲回收：超过阈值即弃旧建新（"按需建连"）。
+    if let Some(last) = *last_used.lock().unwrap_or_else(|p| p.into_inner()) {
+        if last.elapsed() > MYSQL_IDLE_RECYCLE {
+            *guard = None;
+        }
+    }
+    if guard.is_none() {
+        if connect_url.is_empty() {
+            return Err(CoreError::database(DatabaseError::Driver {
+                db_type: "mysql".to_string(),
+                operation: "reconnect".to_string(),
+                source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
+            }));
+        }
+        *guard = Some(
+            connect_mysql_single(connect_url)
+                .await
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type: "mysql".to_string(),
+                        operation: "reconnect".to_string(),
+                        source: e.to_string(),
+                    })
+                })?,
+        );
+    }
+    // 刷新"最后使用时间"（拿锁即视为使用）。
+    *last_used.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+    Ok(guard)
+}
+
+/// 查询结果错误映射：连接类错误 → 常驻连接置 `None`（下次懒重建）。
+fn mysql_conn_result<T>(
+    guard: &mut Option<sqlx::mysql::MySqlConnection>,
+    sql: &str,
+    result: Result<T, sqlx::Error>,
+) -> Result<T, CoreError> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if is_mysql_conn_error(&e) {
+                // 连接已死：置 None，下次懒重建
+                *guard = None;
+            }
+            Err(mysql_query_error(sql, &e))
         }
     }
 }
@@ -165,19 +258,37 @@ impl Database for MySqlDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         // 事务控制 / 会话类语句必须走文本协议（prepared 协议下 MySQL 报 1295）
         if needs_text_protocol(sql) {
-            return execute_via_text_protocol(&self.pool, sql).await;
+            return execute_via_text_protocol(&self.conn, &self.last_used, &self.connect_url, sql).await;
         }
 
         let is_read_only = is_read_only_sql(sql);
         // B5 / P0.6：不返回结果集的写语句走 `execute`，拿驱动的真实影响行数
         if !is_read_only && !returns_rows(sql) {
-            return execute_writing(&self.pool, sql).await;
+            return execute_writing(&self.conn, &self.last_used, &self.connect_url, sql).await;
         }
 
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_all(&self.pool)
+        // **会话级复用 + 1s 空闲回收**（2026-10-08 实证调参，同 postgres.rs：
+        // 建连 150-380ms 环境固有；一次展开 4 类别间隔 <10ms 复用同一连接；
+        // 闲置 >1s 由 `lock_mysql_conn` 回收重建，避开"闲置复用挂起"铁证窗口）。
+        let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let query_result = {
+            let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+            // 查询级超时（15s 无响应 → 销毁连接 → 报明确错误；下次懒重建）。
+            tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+                sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&mut *conn).await
+            })
             .await
-            .map_err(|e| mysql_query_error(sql, &e))?;
+            .map_err(|_| {
+                *guard = None;
+                CoreError::database(DatabaseError::Query {
+                    sql: sql.to_string(),
+                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", MYSQL_QUERY_TIMEOUT.as_secs()),
+                    position: None,
+                    location: None,
+                })
+            })?
+        };
+        let rows = mysql_conn_result(&mut guard, sql, query_result)?;
 
         let columns: Vec<String> = if let Some(first) = rows.first() {
             first
@@ -212,10 +323,26 @@ impl Database for MySqlDatabase {
             };
         }
 
-        let rows = query_builder
-            .fetch_all(&self.pool)
+        // **会话级复用 + 1s 空闲回收**（同 `query`，见其上注释）。
+        let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let query_result = {
+            let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+            // 同 `query`：15s 查询级超时，超时销毁连接。
+            tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+                query_builder.fetch_all(&mut *conn).await
+            })
             .await
-            .map_err(|e| mysql_query_error(sql, &e))?;
+            .map_err(|_| {
+                *guard = None;
+                CoreError::database(DatabaseError::Query {
+                    sql: sql.to_string(),
+                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", MYSQL_QUERY_TIMEOUT.as_secs()),
+                    position: None,
+                    location: None,
+                })
+            })?
+        };
+        let rows = mysql_conn_result(&mut guard, sql, query_result)?;
 
         let columns: Vec<String> = if let Some(first) = rows.first() {
             first
@@ -237,23 +364,26 @@ impl Database for MySqlDatabase {
     ) -> Result<QueryResult, CoreError> {
         let sql_owned = sql.to_string();
         let sql_for_cancel = sql.to_string();
-        let pool = self.pool.clone();
+        // 单连接模型下，取消查询用**临时独立连接**（同 postgres.rs）：select 丢弃
+        // 临时连接即可中止等待，不影响常驻连接。
+        let url = self.connect_url.clone();
 
         tokio::select! {
             result = async move {
                 // 取消路径也不能绕过文本协议：`BEGIN` 走 prepared 会被 MySQL 直接拒绝
                 if needs_text_protocol(&sql_owned) {
-                    return execute_via_text_protocol(&pool, &sql_owned).await;
+                    return execute_via_text_protocol_single(&url, &sql_owned).await;
                 }
 
                 let is_read_only = is_read_only_sql(&sql_owned);
                 // B5 / P0.6：写语句走 `execute` 拿影响行数（取消路径同样）
                 if !is_read_only && !returns_rows(&sql_owned) {
-                    return execute_writing(&pool, &sql_owned).await;
+                    return execute_writing_single(&url, &sql_owned).await;
                 }
 
+                let mut conn = connect_mysql_single(&url).await.map_err(|e| mysql_query_error(&sql_owned, &e))?;
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
-                    .fetch_all(&pool)
+                    .fetch_all(&mut conn)
                     .await
                     .map_err(|e| mysql_query_error(&sql_owned, &e))?;
 
@@ -277,7 +407,32 @@ impl Database for MySqlDatabase {
     }
 
     async fn begin_transaction(&self) -> Result<Box<dyn Transaction>, CoreError> {
-        let tx = self.pool.begin().await.map_err(|e| {
+        // 事务用**一次性连接通道**（DBeaver SQLEditor 同款：事务独立连接，不占常驻
+        // 查询通道）。sqlx 0.9 的 `Connection::begin`（&mut self）返回借用生命周期的
+        // `Transaction<'_, _>`，无法装进 `Box<dyn Transaction>`（隐含 'static）；
+        // 只有 `Pool::begin` 能产出 `Transaction<'static>`（连接 owned 进事务）。
+        // 这里建 max=1 的一次性池仅作「owned 连接载体」，用后即弃（事务结束连接
+        // 关闭），**不是常驻池**——与主连接的单连接模型不冲突。
+        let url = self.connect_url.clone();
+        if url.is_empty() {
+            return Err(CoreError::database(DatabaseError::Driver {
+                db_type: "mysql".to_string(),
+                operation: "begin_transaction".to_string(),
+                source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
+            }));
+        }
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .map_err(|e| {
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "mysql".to_string(),
+                    operation: "begin_transaction".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
+        let tx = pool.begin().await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "mysql".to_string(),
                 operation: "begin_transaction".to_string(),
@@ -295,25 +450,28 @@ impl Database for MySqlDatabase {
     }
 
     async fn ping(&self) -> Result<(), CoreError> {
-        sqlx::query("SELECT 1")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                CoreError::connection(ConnectionError::Other {
-                    conn_id: "mysql".to_string(),
-                    reason: format!("Ping failed: {}", e),
-                })
-            })?;
+        let mut guard = lock_mysql_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let ping_result = {
+            let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+            sqlx::query("SELECT 1").fetch_one(&mut *conn).await
+        };
+        mysql_conn_result(&mut guard, "SELECT 1", ping_result).map_err(|e| {
+            CoreError::connection(ConnectionError::Other {
+                conn_id: "mysql".to_string(),
+                reason: format!("Ping failed: {}", e),
+            })
+        })?;
         Ok(())
     }
 
     async fn pool_status(&self) -> Option<PoolStatus> {
-        let size = self.pool.size() as usize;
-        let idle = self.pool.num_idle();
+        // 单连接口径：常驻 1 条（活跃 0 空闲 1；连接已断 = None 时按 0/0）
+        let guard = self.conn.try_lock();
+        let connected = guard.as_deref().map(|c| c.is_some()).unwrap_or(false);
         Some(PoolStatus {
-            size,
-            idle,
-            active: size.saturating_sub(idle),
+            size: usize::from(connected),
+            idle: usize::from(connected),
+            active: 0,
             waiting: 0,
             max_connections: self.max_connections,
             min_connections: self.min_connections,
@@ -539,6 +697,117 @@ impl Database for MySqlDatabase {
     fn as_metadata_browser(&self) -> Option<&dyn crate::driver::MetadataBrowser> {
         Some(self)
     }
+
+    /// **一次建连批量内省**（DBeaver 会话语义，2026-10-08 根治 prepared 复用挂起，
+    /// 同 postgres.rs）：一条**新**连接 + 每类对象各执行一次不同 SQL，连接用完即弃。
+    /// MySQL 无独立序列对象（AUTO_INCREMENT 内嵌在表上）→ `sequences` 恒为空。
+    async fn introspect_schema_objects(
+        &self,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<crate::driver::SchemaObjects, CoreError> {
+        use sqlx::Row as _;
+        // MySQL 的 schema 参数即 catalog（information_schema 按 ROUTINE_SCHEMA/TABLE_SCHEMA 过滤）。
+        let _ = schema;
+        let mut conn = connect_mysql_single(&self.connect_url)
+            .await
+            .map_err(|e| mysql_query_error(catalog, &e))?;
+
+        // 1) 表 / 视图
+        let rows = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT table_name, table_type FROM information_schema.tables \
+                 WHERE table_schema = ? ORDER BY table_name",
+            )
+            .bind(catalog)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| mysql_batch_timeout())?
+        .map_err(|e| mysql_query_error(catalog, &e))?;
+        let mut tables = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let name: String = r.get(0);
+            let ty: String = r.get(1);
+            tables.push(crate::driver::NodeInfo::new(
+                name,
+                if ty == "VIEW" {
+                    crate::driver::SchemaObjectKind::View
+                } else {
+                    crate::driver::SchemaObjectKind::Table
+                },
+            ));
+        }
+
+        // 2) 过程（ROUTINES WHERE TYPE='PROCEDURE'）
+        let rows = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+                 WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE' ORDER BY ROUTINE_NAME",
+            )
+            .bind(catalog)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| mysql_batch_timeout())?
+        .map_err(|e| mysql_query_error(catalog, &e))?;
+        let procedures = rows
+            .iter()
+            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Procedure))
+            .collect();
+
+        // 3) 函数（ROUTINES WHERE TYPE='FUNCTION'）
+        let rows = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+                 WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_NAME",
+            )
+            .bind(catalog)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| mysql_batch_timeout())?
+        .map_err(|e| mysql_query_error(catalog, &e))?;
+        let functions = rows
+            .iter()
+            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Function))
+            .collect();
+
+        // 4) 序列：MySQL 无独立序列对象 → 空
+        let sequences = Vec::new();
+
+        // 5) 触发器（名字 + 所属表）
+        let rows = tokio::time::timeout(MYSQL_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT trigger_name, event_object_table FROM information_schema.triggers \
+                 WHERE trigger_schema = ? ORDER BY trigger_name",
+            )
+            .bind(catalog)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| mysql_batch_timeout())?
+        .map_err(|e| mysql_query_error(catalog, &e))?;
+        let triggers = rows
+            .iter()
+            .map(|r| {
+                crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Trigger)
+                    .with_parent(r.get::<String, _>(1))
+            })
+            .collect();
+
+        Ok(crate::driver::SchemaObjects {
+            tables,
+            procedures,
+            functions,
+            sequences,
+            triggers,
+        })
+    }
 }
 
 /// MySQL 事务句柄
@@ -691,10 +960,40 @@ fn mysql_query_error(sql: &str, error: &sqlx::Error) -> CoreError {
     CoreError::database(DatabaseError::query(sql, message).with_location(location))
 }
 
-/// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）
-async fn execute_writing(pool: &Pool<MySql>, sql: &str) -> Result<QueryResult, CoreError> {
+/// 批量内省单条 SQL 超时的统一错误（连接随函数结束 drop）。
+fn mysql_batch_timeout() -> CoreError {
+    CoreError::database(DatabaseError::Query {
+        sql: String::new(),
+        reason: format!("查询超时（{} 秒无响应）", MYSQL_QUERY_TIMEOUT.as_secs()),
+        position: None,
+        location: None,
+    })
+}
+
+/// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）。
+/// 走**会话级单连接**（与 `query` 同通道，含空闲回收）。
+async fn execute_writing(
+    conn: &Arc<tokio::sync::Mutex<Option<sqlx::mysql::MySqlConnection>>>,
+    last_used: &std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: &str,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    let mut guard = lock_mysql_conn(conn, last_used, connect_url).await?;
+    let exec_result = {
+        let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+    };
+    let result = mysql_conn_result(&mut guard, sql, exec_result)?;
+    Ok(affected_rows_result(result.rows_affected()))
+}
+
+/// 写语句走**临时独立连接**（`query_with_cancel` 的取消分支用；连接随调用结束关闭）。
+async fn execute_writing_single(url: &str, sql: &str) -> Result<QueryResult, CoreError> {
+    let mut conn = connect_mysql_single(url)
+        .await
+        .map_err(|e| mysql_query_error(sql, &e))?;
     let result = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .execute(pool)
+        .execute(&mut conn)
         .await
         .map_err(|e| mysql_query_error(sql, &e))?;
     Ok(affected_rows_result(result.rows_affected()))
@@ -703,15 +1002,38 @@ async fn execute_writing(pool: &Pool<MySql>, sql: &str) -> Result<QueryResult, C
 /// 用文本协议执行并返回「无结果集」的结果
 ///
 /// 事务控制 / 会话语句都没有结果集；`affected_rows` 取驱动的真实值（写语句才有意义）。
+/// 走**会话级单连接**（与 `query` 同通道，含空闲回收）。
 async fn execute_via_text_protocol(
-    pool: &Pool<MySql>,
+    conn: &Arc<tokio::sync::Mutex<Option<sqlx::mysql::MySqlConnection>>>,
+    last_used: &std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: &str,
     sql: &str,
 ) -> Result<QueryResult, CoreError> {
-    let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-        .execute(pool)
+    let mut guard = lock_mysql_conn(conn, last_used, connect_url).await?;
+    let exec_result = {
+        let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+    };
+    let result = mysql_conn_result(&mut guard, sql, exec_result)?;
+
+    Ok(QueryResult {
+        columns: vec![],
+        batches: vec![],
+        affected_rows: Some(result.rows_affected().min(u64::from(u32::MAX)) as u32),
+        is_read_only: Some(false),
+        ..Default::default()
+    })
+}
+
+/// 文本协议走**临时独立连接**（`query_with_cancel` 的取消分支用）。
+async fn execute_via_text_protocol_single(url: &str, sql: &str) -> Result<QueryResult, CoreError> {
+    let mut conn = connect_mysql_single(url)
         .await
         .map_err(|e| mysql_query_error(sql, &e))?;
-
+    let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| mysql_query_error(sql, &e))?;
     Ok(QueryResult {
         columns: vec![],
         batches: vec![],

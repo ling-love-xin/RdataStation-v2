@@ -224,6 +224,8 @@ pub struct NavViewState {
     loading: HashSet<String>,
     /// 节点 key → 加载失败原因。
     errors: HashMap<String, String>,
+    /// 已自动重试过的节点 key（连接类错误失败后自动重入队一次；二次失败落红字）。
+    retried: HashSet<String>,
     /// 本会话运行时已连接的连接 ID。
     connected: HashSet<String>,
     /// **启动预连**中的连接 ID：预连成功后只标记已连接 + 预热，**不自动展开加载**

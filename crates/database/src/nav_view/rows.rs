@@ -455,12 +455,11 @@ impl NavView {
         cx: &mut Context<Self>,
     ) {
         let filter = self.nav.borrow().filter.to_lowercase();
+        // 展开态**只表达树形展示意图**，不再驱动加载（对齐 DBeaver「点开才加载」）：
+        // 跨重启恢复的展开态（连接/catalog/schema 都在 `expanded` 里）不会让渲染在
+        // 同一帧把全部展开节点入队（真机：展开连接根 → 6 个 schema 任务瞬间入队 →
+        // 池被打爆 / acquire 8s 超时）。内容加载只由点击（`toggle_nav_node`）触发。
         let expanded = self.nav.borrow().expanded.contains(&node.key);
-        if expanded && node.has_children {
-            if let Some(p) = node.expand_path.clone() {
-                self.ensure_nav_loaded(&node.connection_id, &node.key, p, false, cx);
-            }
-        }
         let (skip, expanded_eff, children) = {
             let view = self.nav.borrow();
             let children = view.children.get(&node.key).cloned().unwrap_or_default();

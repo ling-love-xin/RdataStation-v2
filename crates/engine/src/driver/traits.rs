@@ -117,6 +117,19 @@ pub struct NodeInfo {
     pub parent_name: Option<String>,
 }
 
+/// 一次建连批量内省的 schema 全部对象类别（`Database::introspect_schema_objects`）。
+///
+/// 表/视图在同一批（`tables` 内按 `kind` 区分 Table / View，等价 `list_tables` 语义）；
+/// 过程 / 函数分开（PG `prokind`、MySQL 类型各自区分）。
+#[derive(Debug, Clone, Default)]
+pub struct SchemaObjects {
+    pub tables: Vec<NodeInfo>,
+    pub procedures: Vec<NodeInfo>,
+    pub functions: Vec<NodeInfo>,
+    pub sequences: Vec<NodeInfo>,
+    pub triggers: Vec<NodeInfo>,
+}
+
 impl NodeInfo {
     /// 只带身份的对象项（绝大多数内省点只需要名字与类别）。
     pub fn new(name: impl Into<String>, kind: SchemaObjectKind) -> Self {
@@ -127,7 +140,6 @@ impl NodeInfo {
             parent_name: None,
         }
     }
-
     /// 带注释。
     pub fn with_comment(mut self, comment: Option<String>) -> Self {
         self.comment = comment;
@@ -514,6 +526,34 @@ pub trait Database: Send + Sync {
         _schema: Option<&str>,
     ) -> Result<Vec<NodeInfo>, CoreError> {
         Ok(vec![])
+    }
+
+    /// **一次建连批量内省 schema 全部对象类别**（DBeaver 会话语义：连接生命周期 =
+    /// 一次展开，用完即弃）。
+    ///
+    /// 2026-10-08 真机铁证：同连接上「同 SQL 的 prepared statement 二次执行」会挂起
+    /// （biz_483 展开成功 3ms 后 biz_477 同连接 tables 查询挂 15s；app_run63 每次
+    /// 新建连接=每次新 prepared 无红字，探针每次新建 10-82ms 全快）。批量方法 = 一条
+    /// 新连接 + 每类对象各执行一次不同 SQL（无重复 prepared），展开结束连接即弃。
+    ///
+    /// 默认实现逐类别调用（无连接数优化，安全但慢）；PG/MySQL 覆盖为单连接批量。
+    async fn introspect_schema_objects(
+        &self,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<SchemaObjects, CoreError> {
+        let tables = self.list_tables(catalog, Some(schema)).await?;
+        let procedures = self.list_procedures(catalog, Some(schema)).await?;
+        let functions = self.list_functions(catalog, Some(schema)).await?;
+        let sequences = self.list_sequences(catalog, Some(schema)).await?;
+        let triggers = self.list_triggers(catalog, Some(schema)).await?;
+        Ok(SchemaObjects {
+            tables,
+            procedures,
+            functions,
+            sequences,
+            triggers,
+        })
     }
 
     /// 获取过程/函数的 DDL 源码

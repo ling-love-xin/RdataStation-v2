@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use engine::driver::traits::{
     ColumnDetail, ConstraintDetail, DynDatabase, IndexDetail, NodeInfo, SchemaObjectKind,
+    SchemaObjects,
 };
 use shared::error::{ConnectionError, CoreError};
 use engine::connection_manager::ConnectionManager;
@@ -226,8 +227,21 @@ impl MetadataService {
                 return Ok(nodes);
             }
             // 同上：回退 `Database::list_triggers`（PostgreSQL 有真实实现，曾被遮蔽）。
-        }
-        db.list_triggers(catalog, Some(schema)).await
+        }        db.list_triggers(catalog, Some(schema)).await
+    }
+
+    /// **一次建连批量内省**（DBeaver 会话语义，2026-10-08 根治 prepared 复用挂起）：
+    /// 驱动实现用一条**新**连接 + 每类对象各执行一次不同 SQL，用完即弃——对比逐类别
+    /// `list_*`（每次 `database_for` + 每次查询建连 + 缓存 scoped 连接上的同 SQL 二次
+    /// 执行挂起），一次展开只建一条连接、无任何重复 prepared。
+    pub async fn introspect_schema_objects(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<SchemaObjects, CoreError> {
+        let db = self.database_for(conn_id, catalog).await?;
+        db.introspect_schema_objects(catalog, schema).await
     }
 
     pub async fn get_routine_source(

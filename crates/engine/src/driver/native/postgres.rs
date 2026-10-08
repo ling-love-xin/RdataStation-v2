@@ -4,7 +4,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use sqlx::{Column, Pool, Postgres, Row, TypeInfo as _};
+use sqlx::{Column, ConnectOptions as _, Pool, Postgres, Row, TypeInfo as _};
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
@@ -35,18 +35,43 @@ fn normalize_ssl_mode(url: &str) -> String {
 
 /// PostgreSQL 数据库连接
 ///
-/// 封装 `sqlx::Pool<Postgres>` 连接池，通过 `Database` trait 提供统一的查询/执行接口。
-/// 支持 schema 层级浏览，通过 `MetadataBrowser` trait 查询 `information_schema` 和 `pg_catalog`。
+/// 封装一条**常驻物理连接**（DBeaver Main 连接模型：无连接池、无 acquire 等待、
+/// 无 `test_before_acquire` 验证——池化设计在真机上反复撞「空闲连接被网络层静默丢弃，
+/// 验证挂 TCP 半开 8s 超时」，用户已拍板摒弃池、全参考 DBeaver），通过 `Database`
+/// trait 提供统一的查询/执行接口。支持 schema 层级浏览，通过 `MetadataBrowser`
+/// trait 查询 `information_schema` 和 `pg_catalog`。
 ///
 /// # 字段
-/// * `pool` - sqlx PostgreSQL 连接池
+/// * `conn` - **会话级单连接**（`None` = 已断/已回收，下次使用时按 `connect_url` 懒重建）
+/// * `last_used` - 连接最后使用时间：空闲超过 [`PG_IDLE_RECYCLE`] 即回收（DBeaver
+///   「按需建连 + 空闲回收」的轻量会话模型——连接短命，用完回收，避免常驻连接被
+///   网络层静默丢弃后下一次查询挂起）
+/// * `connect_url` - 重建连接的 URL（`normalize_ssl_mode` 后）
 /// * `server_version` - PostgreSQL 服务器版本号，首次连接时获取并缓存
-/// * `max_connections` / `min_connections` - 连接池上下限配置
+/// * `max_connections` / `min_connections` - 保留字段（历史口径 / 统计兼容）
 pub struct PostgresDatabase {
-    pool: Pool<Postgres>,
+    conn: Arc<tokio::sync::Mutex<Option<sqlx::postgres::PgConnection>>>,
+    last_used: std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: String,
     server_version: Option<String>,
     max_connections: usize,
     min_connections: usize,
+}
+
+/// 连接类错误判定：查询失败后把常驻连接置 `None`，下次使用时懒重建。
+fn is_pg_conn_error(e: &sqlx::Error) -> bool {
+    if matches!(
+        e,
+        sqlx::Error::Io(_)
+            | sqlx::Error::PoolClosed
+            | sqlx::Error::Protocol(_)
+            | sqlx::Error::Tls(_)
+    ) {
+        return true;
+    }
+    // 服务端主动断开的 Database 错误（sqlx 不总是归一成 Io）——认常见关键字。
+    let msg = e.to_string().to_ascii_lowercase();
+    msg.contains("server closed") || msg.contains("connection closed")
 }
 
 impl PostgresDatabase {
@@ -55,43 +80,16 @@ impl PostgresDatabase {
         // PG 驱动严格校验枚举（大写直接报 `unknown value "DISABLED" for ssl_mode`）——
         // 这里把 `ssl-mode=DISABLED` 归一为 sqlx 认识的小写 `disable`。
         let effective_url = normalize_ssl_mode(url);
-        // 对齐 DBeaver/DataGrip 的连接角色模型（用户决策 2026-10-08：除缓存设计外
-        // 全参考 DBeaver）：DBeaver 每库实际开 Main + Metadata + SQLEditor = 3 条常驻。
-        // RDS 对应：
-        //   - min=3：常驻 3 条（主 SQL + 元数据 + 缓冲），建连时预建 + 预热，
-        //     内省串行任务不会撞上池补建（真机：min=2 时「每批第三个 schema」的表
-        //     清单 acquire 等池补建握手，5s 外层超时先到——public→probe_b→probe_a、
-        //     base→asset→biz_000 都是第三个 5s 超时，慢查询日志 0 条 = 卡在 acquire）；
-        //   - max=6：上限给非内省并发源（详情卡、列预取等）留缓冲——它们不走内省
-        //     信号量，池不足时会把内省任务堵在 acquire 上。
-        //   - 服务端连接数：常驻 3 条/库，峰值 ≤6 条/库——PG max_connections=100
-        //     完全够，不再是「大池抗并发」的错误方向。
-        // 2026-10-08 补（app_run49 打点铁证）：30s 卡死 = sqlx 池 acquire 静默等待
-        // （rds_nav_probe_a 实时内省 acquire 无返回 30s，被 JOB_TIMEOUT 杀；期间
-        // 零慢 SQL、零查询日志 = 卡在拿连接而非执行）。对策：
-        //   - acquire_timeout 60s → 8s：拿不到连接**快速失败**报错（红字可点重试），
-        //     不再 30s 静默——acquire 长期等 = 池被占光/补建卡住，属异常，应立即暴露；
-        //   - test_before_acquire：acquire 前 SELECT 1 验证，服务端/网络断开的
-        //     "僵尸连接"直接淘汰重建，不把死连接交给查询再超时；
-        //   - idle_timeout / max_lifetime 收紧：缩短"半死连接"在池里的残留窗口，
-        //     定期轮换防中间层/服务端累积断连。
-        let options = sqlx::postgres::PgPoolOptions::new()
-            .min_connections(3)
-            .max_connections(6)
-            .acquire_timeout(std::time::Duration::from_secs(8))
-            .idle_timeout(Some(std::time::Duration::from_secs(300)))
-            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
-            .test_before_acquire(true);
-        // 运行时池参数探针（2026-10-08）：代码层 acquire_timeout=8s，但 app_run51
-        // 实测报错是 30s 的 pool timed out——必须确认运行时二进制里真实生效的值。
-        tracing::info!(
-            acquire_timeout_ms = options.get_acquire_timeout().as_millis(),
-            min = options.get_min_connections(),
-            max = options.get_max_connections(),
-            test_before_acquire = options.get_test_before_acquire(),
-            "PG 池参数（运行时验证）"
-        );
-        let pool = options.connect(&effective_url).await.map_err(|e| {
+        // 单连接直连（2026-10-08 摒弃池）：`PgConnectOptions::connect` 建**一条**
+        // 物理连接并持有。此前建池（min=3/max=6/acquire_timeout/test_before_acquire）
+        // 的真机结论（app_run49~58）：
+        //   - 30s 卡死 = 池 acquire 静默等待（默认 30s）→ 已改 8s → 仍被「死连接验证
+        //     挂 TCP 半开」打回 8s 超时（app_run57/58：冷 schema 展开 idle=2 全验证失败）；
+        //   - DBeaver 源码对照：无池、每库 Main+Metadata 常驻单连接、SingleThreadLock
+        //     串行内省——连接用了才知死活，死了下次懒重建，没有「池里半死连接」概念。
+        // 单连接：查询串行（`conn` Mutex），连接失效 → 查询报错 → 置 None → 下次懒重建
+        // （握手 ~10-30ms，用户无感）。
+        let mut conn = connect_pg_single(&effective_url).await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "postgres".to_string(),
                 operation: "connect".to_string(),
@@ -99,9 +97,9 @@ impl PostgresDatabase {
             })
         })?;
         // 连接验证不吞错：SELECT version() 失败视为连接失败（此前 .ok() 吞错，
-        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部 acquire 超时）。
+        // 导致认证/网络失败被当作成功，UI 显示「在线」但内省查询全部失败）。
         let server_version = sqlx::query_scalar::<_, String>("SELECT version()")
-            .fetch_one(&pool)
+            .fetch_one(&mut conn)
             .await
             .map_err(|e| {
                 CoreError::database(DatabaseError::Driver {
@@ -110,19 +108,10 @@ impl PostgresDatabase {
                     source: e.to_string(),
                 })
             })?;
-        // 预热：并行 acquire 到 min（3 条）再释放，把 PG 握手成本归入「连接中」阶段。
-        // 否则连接刚就绪时导航内省任务会撞上池补建——每建一条要一次握手，
-        // 外层 5s 单类别超时先到（真机：min=2 时「每批第三个 schema」5s acquire 超时）。
-        let (w1, w2, w3) = tokio::join!(
-            pool.acquire(),
-            pool.acquire(),
-            pool.acquire(),
-        );
-        drop(w1);
-        drop(w2);
-        drop(w3);
         Ok(Self {
-            pool,
+            conn: Arc::new(tokio::sync::Mutex::new(Some(conn))),
+            last_used: std::sync::Mutex::new(Some(std::time::Instant::now())),
+            connect_url: effective_url,
             server_version: Some(server_version),
             max_connections: 10,
             min_connections: 2,
@@ -130,8 +119,15 @@ impl PostgresDatabase {
     }
 
     pub fn from_pool(pool: Pool<Postgres>) -> Self {
+        // 兼容入口：无法从池反推 URL，且 sqlx 的 `PoolConnection` 没有公开的底层
+        // 连接取出接口——这里不取连接（`None`，等 `new` 路径重建）。
+        // `from_pool` 仅服务遗留的 `postgres_pool.rs` 封装（无实际调用方），
+        // 主路径一律走 `new`（单连接直连）。
+        let _ = pool;
         Self {
-            pool,
+            conn: Arc::new(tokio::sync::Mutex::new(None)),
+            last_used: std::sync::Mutex::new(None),
+            connect_url: String::new(),
             server_version: None,
             max_connections: 10,
             min_connections: 0,
@@ -139,12 +135,9 @@ impl PostgresDatabase {
     }
 
     pub fn from_pool_with_version(pool: Pool<Postgres>, server_version: Option<String>) -> Self {
-        Self {
-            pool,
-            server_version,
-            max_connections: 10,
-            min_connections: 0,
-        }
+        let mut this = Self::from_pool(pool);
+        this.server_version = server_version;
+        this
     }
 
     pub fn from_pool_with_config(
@@ -153,11 +146,100 @@ impl PostgresDatabase {
         max_connections: usize,
         min_connections: usize,
     ) -> Self {
-        Self {
-            pool,
-            server_version,
-            max_connections,
-            min_connections,
+        let mut this = Self::from_pool(pool);
+        this.server_version = server_version;
+        this.max_connections = max_connections;
+        this.min_connections = min_connections;
+        this
+    }
+}
+
+/// 常驻连接查询级超时：超过即销毁连接（半开连接挂起的根治手段，见 `query` 注释）。
+const PG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 连接空闲回收阈值：超过即主动关闭（DBeaver「按需建连 + 空闲回收」轻量会话模型）。
+///
+/// **1s 是实证调参**（2026-10-08）：真机铁证「连接闲置 2.4s/9.8s 即被网络层静默
+/// 丢弃，复用必挂」（app_run61 biz_358→383；app_run62 biz_454→459）；而建连成本
+/// 实测 150-380ms（Windows 网络栈/安全软件逐连接检查，sslmode 无关）——因此复用
+/// 窗口收窄到 **1s**：一次展开内 4 类别查询间隔 <10ms（活跃复用，1 条连接）；
+/// 闲置 >1s 即回收新建（避开任何"闲置复用"挂起窗口）。连续展开逐一点开通常
+/// >1s 间隔 → 每次都是新鲜连接（等价 DBeaver 会话级短命连接）。
+const PG_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 按 URL 建一条 PG 物理连接（单连接化后的统一入口）。
+///
+/// 注入 `plan_cache_mode=force_custom_plan`（2026-10-08 铁证）：单连接模型下所有
+/// 内省查询走同一条连接 + 同一个 prepared statement；PG 默认 `plan_cache_mode=auto`
+/// 前 5 次调用用 custom plan（按参数走索引），之后退化为 generic plan——导航展开
+/// 冷 schema（biz_264/280/355 空 schema）时表清单查询退化成 pg_class 全表扫，30s
+/// 超时（app_run60 日志：slow statement elapsed=29.999s rows_returned=0）。强制
+/// custom plan 让每次调用按参数重新计划、走 nspname/relnamespace 索引（等价
+/// DBeaver 字面量 SQL 每次重新优化；小查询重新计划开销毫秒级，导航场景无感）。
+async fn connect_pg_single(url: &str) -> Result<sqlx::postgres::PgConnection, sqlx::Error> {
+    let mut options: sqlx::postgres::PgConnectOptions = url.parse()?;
+    options = options.options([("plan_cache_mode", "force_custom_plan")]);
+    options.connect().await
+}
+
+/// 拿会话级连接的锁（`None` 时按 `connect_url` 懒重建）；调用方持有 guard 期间
+/// 连接被独占，查询串行（等价 DBeaver SingleThreadLock）。
+///
+/// **空闲回收**（2026-10-08 对齐 DBeaver「按需建连 + 空闲回收」）：连接闲置超过
+/// [`PG_IDLE_RECYCLE`] 时直接置 `None` 重建——连接短命、用完回收，避免常驻连接
+/// 被网络层静默丢弃（TCP 半开）后下一次查询挂起 30s（真机 app_run60/61：
+/// biz_358 216ms 成功 → 2.4s 后 biz_383 同连接挂 30s，PG 端无 active 无锁）。
+async fn lock_pg_conn<'a>(
+    conn: &'a Arc<tokio::sync::Mutex<Option<sqlx::postgres::PgConnection>>>,
+    last_used: &std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: &str,
+) -> Result<tokio::sync::MutexGuard<'a, Option<sqlx::postgres::PgConnection>>, CoreError> {
+    let mut guard = conn.lock().await;
+    // 空闲回收：超过阈值即弃旧建新（"按需建连"——闲置后的下一次使用是新鲜连接）。
+    if let Some(last) = *last_used.lock().unwrap_or_else(|p| p.into_inner()) {
+        if last.elapsed() > PG_IDLE_RECYCLE {
+            *guard = None;
+        }
+    }
+    if guard.is_none() {
+        if connect_url.is_empty() {
+            return Err(CoreError::database(DatabaseError::Driver {
+                db_type: "postgres".to_string(),
+                operation: "reconnect".to_string(),
+                source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
+            }));
+        }
+        *guard = Some(
+            connect_pg_single(connect_url)
+                .await
+                .map_err(|e| {
+                    CoreError::database(DatabaseError::Driver {
+                        db_type: "postgres".to_string(),
+                        operation: "reconnect".to_string(),
+                        source: e.to_string(),
+                    })
+                })?,
+        );
+    }
+    // 刷新"最后使用时间"（拿锁即视为使用）。
+    *last_used.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+    Ok(guard)
+}
+
+/// 查询结果错误映射：连接类错误 → 常驻连接置 `None`（下次懒重建）。
+fn pg_conn_result<T>(
+    guard: &mut Option<sqlx::postgres::PgConnection>,
+    sql: &str,
+    result: Result<T, sqlx::Error>,
+) -> Result<T, CoreError> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if is_pg_conn_error(&e) {
+                // 连接已死：置 None，下次懒重建
+                *guard = None;
+            }
+            Err(query_error(sql, e))
         }
     }
 }
@@ -192,28 +274,35 @@ impl Database for PostgresDatabase {
         let read_only = is_read_only_sql(sql);
         // B5 / P0.6：不返回结果集的写语句走 `execute`，拿驱动的**真实影响行数**
         if !read_only && !returns_rows(sql) {
-            return execute_writing(&self.pool, sql).await;
+            return execute_writing(&self.conn, &self.last_used, &self.connect_url, sql).await;
         }
         let t0 = std::time::Instant::now();
-        // 分段探针：acquire（拿池连接）与查询执行分开计时——导航 30s 卡死时
-        // 必须能分辨「卡在 acquire（池被占/补建握手）」还是「卡在 SQL 执行（服务端锁）」
-        // （真机：30s 超时日志只有「加载子节点超时」，没有慢 SQL 警告，卡点不明）。
-        let mut conn = self
-            .pool
-            .acquire()
+        // **会话级复用 + 1s 空闲回收**（2026-10-08 实证调参）：
+        // 建连实测 150-380ms（环境固有），一次展开 4 类别查询间隔 <10ms——
+        // 复用同一连接（1 条连接完成整次展开）；闲置 >1s 由 `lock_pg_conn`
+        // 回收重建（避开"闲置复用挂起"铁证窗口：2.4s/9.8s 即挂）。
+        let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let query_result = {
+            let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+            // 查询级超时（15s 无响应 → 销毁连接 → 报明确错误；下次懒重建）。
+            tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+                sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&mut *conn).await
+            })
             .await
-            .map_err(|e| query_error(sql, e))?;
-        let t_acq = t0.elapsed().as_millis();
-        if t_acq > 5 {
-            tracing::warn!(elapsed_ms = t_acq, sql = %sql.chars().take(80).collect::<String>(), "PG acquire 偏慢（>5ms，连接池被占或补建握手）");
-        }
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(|e| query_error(sql, e))?;
+            .map_err(|_| {
+                *guard = None;
+                CoreError::database(DatabaseError::Query {
+                    sql: sql.to_string(),
+                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", PG_QUERY_TIMEOUT.as_secs()),
+                    position: None,
+                    location: None,
+                })
+            })?
+        };
+        let rows = pg_conn_result(&mut guard, sql, query_result)?;
         let t_qry = t0.elapsed().as_millis();
         if t_qry > 500 {
-            tracing::warn!(elapsed_ms = t_qry, sql = %sql.chars().take(120).collect::<String>(), "PG 查询执行偏慢（>500ms，含 acquire）");
+            tracing::warn!(elapsed_ms = t_qry, sql = %sql.chars().take(120).collect::<String>(), "PG 查询执行偏慢（>500ms）");
         }
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -253,37 +342,26 @@ impl Database for PostgresDatabase {
             };
         }
 
-        let rows = {
-            let mut conn = self
-                .pool
-                .acquire()
-                .await
-                .map_err(|e| {
-                    // 池状态探针（2026-10-08）：acquire 失败必须留下池的 idle/active 数，
-                    // 才能区分「连接泄漏（active=6）」vs「池空补建失败（idle=0,active=0）」
-                    // vs「并发占满（active>0,idle=0）」——30s 卡死已确认是 pool timed out，
-                    // 但池为什么空一直没有直接证据。0.9.0 无 num_active，active = size - idle。
-                    let active = (self.pool.size() as usize).saturating_sub(self.pool.num_idle());
-                    tracing::warn!(
-                        elapsed_ms = t0.elapsed().as_millis(),
-                        idle = self.pool.num_idle(),
-                        active = active,
-                        size = self.pool.size(),
-                        error = %e,
-                        sql = %sql.chars().take(80).collect::<String>(),
-                        "PG acquire 失败（池状态：idle/active/size）"
-                    );
-                    query_error(sql, e)
-                })?;
-            let t_acq = t0.elapsed().as_millis();
-            if t_acq > 5 {
-                tracing::warn!(elapsed_ms = t_acq, sql = %sql.chars().take(80).collect::<String>(), "PG acquire 偏慢（>5ms，连接池被占或补建握手）");
-            }
-            query_builder
-                .fetch_all(&mut *conn)
-                .await
-                .map_err(|e| query_error(sql, e))?
+        // **会话级复用 + 1s 空闲回收**（同 `query`，见其上注释）。
+        let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let query_result = {
+            let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+            // 同 `query`：15s 查询级超时，超时销毁连接。
+            tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+                query_builder.fetch_all(&mut *conn).await
+            })
+            .await
+            .map_err(|_| {
+                *guard = None;
+                CoreError::database(DatabaseError::Query {
+                    sql: sql.to_string(),
+                    reason: format!("查询超时（{} 秒无响应），连接已重建，请重试", PG_QUERY_TIMEOUT.as_secs()),
+                    position: None,
+                    location: None,
+                })
+            })?
         };
+        let rows = pg_conn_result(&mut guard, sql, query_result)?;
 
         // 慢查询探针：>500ms 的 SQL 执行打 warn（真机导航首次展开见过 30s 卡死，
         // 没有 SQL + 耗时就没法判断是查询慢、建连慢还是服务端锁等待）。
@@ -317,18 +395,21 @@ impl Database for PostgresDatabase {
     ) -> Result<QueryResult, CoreError> {
         let sql_owned = sql.to_string();
         let sql_for_cancel = sql.to_string();
-        let pool = self.pool.clone();
+        // 单连接模型下，取消查询用**临时独立连接**：常驻连接被持锁查询时不能再
+        // 拿来执行（也无需 cancel）；select 丢弃临时连接即可中止等待，不影响常驻连接。
+        let url = self.connect_url.clone();
 
         tokio::select! {
             result = async move {
                 let read_only = is_read_only_sql(&sql_owned);
                 // B5 / P0.6：写语句（无结果集）走 `execute` 拿影响行数
                 if !read_only && !returns_rows(&sql_owned) {
-                    return execute_writing(&pool, &sql_owned).await;
+                    return execute_writing_single(&url, &sql_owned).await;
                 }
 
+                let mut conn = connect_pg_single(&url).await.map_err(|e| query_error(&sql_owned, e))?;
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
-                    .fetch_all(&pool)
+                    .fetch_all(&mut conn)
                     .await
                     .map_err(|e| query_error(&sql_owned, e))?;
 
@@ -359,7 +440,32 @@ impl Database for PostgresDatabase {
     }
 
     async fn begin_transaction(&self) -> Result<Box<dyn Transaction>, CoreError> {
-        let tx = self.pool.begin().await.map_err(|e| {
+        // 事务用**一次性连接通道**（DBeaver SQLEditor 同款：事务独立连接，不占常驻
+        // 查询通道）。sqlx 0.9 的 `Connection::begin`（&mut self）返回借用生命周期的
+        // `Transaction<'_, _>`，无法装进 `Box<dyn Transaction>`（隐含 'static）；
+        // 只有 `Pool::begin` 能产出 `Transaction<'static>`（连接 owned 进事务）。
+        // 这里建 max=1 的一次性池仅作「owned 连接载体」，用后即弃（事务结束连接
+        // 关闭），**不是常驻池**——与主连接的单连接模型不冲突。
+        let url = self.connect_url.clone();
+        if url.is_empty() {
+            return Err(CoreError::database(DatabaseError::Driver {
+                db_type: "postgres".to_string(),
+                operation: "begin_transaction".to_string(),
+                source: "连接已断开，且没有可重建的 URL（from_pool 路径）".to_string(),
+            }));
+        }
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .map_err(|e| {
+                CoreError::database(DatabaseError::Driver {
+                    db_type: "postgres".to_string(),
+                    operation: "begin_transaction".to_string(),
+                    source: e.to_string(),
+                })
+            })?;
+        let tx = pool.begin().await.map_err(|e| {
             CoreError::database(DatabaseError::Driver {
                 db_type: "postgres".to_string(),
                 operation: "begin_transaction".to_string(),
@@ -377,25 +483,28 @@ impl Database for PostgresDatabase {
     }
 
     async fn ping(&self) -> Result<(), CoreError> {
-        sqlx::query("SELECT 1")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                CoreError::connection(ConnectionError::Other {
-                    conn_id: "postgres".to_string(),
-                    reason: format!("Ping failed: {}", e),
-                })
-            })?;
+        let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let ping_result = {
+            let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+            sqlx::query("SELECT 1").fetch_one(&mut *conn).await
+        };
+        pg_conn_result(&mut guard, "SELECT 1", ping_result).map_err(|e| {
+            CoreError::connection(ConnectionError::Other {
+                conn_id: "postgres".to_string(),
+                reason: format!("Ping failed: {}", e),
+            })
+        })?;
         Ok(())
     }
 
     async fn pool_status(&self) -> Option<PoolStatus> {
-        let size = self.pool.size() as usize;
-        let idle = self.pool.num_idle();
+        // 单连接口径：常驻 1 条（活跃 0 空闲 1；连接已断 = None 时按 0/0）
+        let guard = self.conn.try_lock();
+        let connected = guard.as_deref().map(|c| c.is_some()).unwrap_or(false);
         Some(PoolStatus {
-            size,
-            idle,
-            active: size.saturating_sub(idle),
+            size: usize::from(connected),
+            idle: usize::from(connected),
+            active: 0,
             waiting: 0,
             max_connections: self.max_connections,
             min_connections: self.min_connections,
@@ -483,6 +592,152 @@ impl Database for PostgresDatabase {
         schema: Option<&str>,
     ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         self.get_triggers(catalog, schema.unwrap_or("public")).await
+    }
+
+    /// **一次建连批量内省**（DBeaver 会话语义，2026-10-08 根治 prepared 复用挂起）：
+    /// 一条**新**连接 + 每类对象各执行一次不同 SQL（无「同 SQL 二次执行」= 无挂起），
+    /// 连接随函数结束即弃。对比逐类别调用：5 次建连（150-380ms×5）→ 1 次（~300ms）。
+    async fn introspect_schema_objects(
+        &self,
+        _catalog: &str,
+        schema: &str,
+    ) -> Result<crate::driver::SchemaObjects, CoreError> {
+        use sqlx::Row as _;
+        let t_conn = std::time::Instant::now();
+        let mut conn = connect_pg_single(&self.connect_url)
+            .await
+            .map_err(|e| query_error(schema, e))?;
+        // 诊断日志（2026-10-08 app_run66）：URL 脱敏（只留 host:port/db），建连耗时 + 各条
+        // SQL 耗时——定位 biz_384 类「单条新连接 + 单次 SQL 仍 15s 超时」（探针同 SQL 8ms）。
+        let url_desc = {
+            let u = &self.connect_url;
+            let core = u
+                .split('@')
+                .nth(1)
+                .map(|s| s.split('?').next().unwrap_or(s))
+                .unwrap_or(u);
+            format!("host@{core}")
+        };
+        tracing::info!(schema = %schema, url = %url_desc, connect_ms = t_conn.elapsed().as_millis(), "批量内省建连完成");
+
+        // 1) 表 / 视图（PG_LIST_TABLES_SQL：relkind 'v'/'m' → VIEW，其余 → BASE TABLE）
+        let t_sql = std::time::Instant::now();
+        let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(crate::driver::utils::PG_LIST_TABLES_SQL)
+                .bind(schema)
+                .fetch_all(&mut conn)
+                .await
+        })
+        .await
+        .map_err(|_| {
+            CoreError::database(DatabaseError::Query {
+                sql: crate::driver::utils::PG_LIST_TABLES_SQL.to_string(),
+                reason: format!("查询超时（{} 秒无响应）", PG_QUERY_TIMEOUT.as_secs()),
+                position: None,
+                location: None,
+            })
+        })?
+        .map_err(|e| query_error(schema, e))?;
+        tracing::info!(schema = %schema, sql_ms = t_sql.elapsed().as_millis(), rows = rows.len(), "批量内省 tables 完成");
+        let mut tables = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let name: String = r.get(0);
+            let ty: String = r.get(1);
+            tables.push(crate::driver::NodeInfo::new(
+                name,
+                if ty == "VIEW" {
+                    crate::driver::SchemaObjectKind::View
+                } else {
+                    crate::driver::SchemaObjectKind::Table
+                },
+            ));
+        }
+
+        // 2) 过程（prokind='p'）
+        let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT p.proname FROM pg_catalog.pg_proc p \
+                 JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
+                 WHERE n.nspname = $1 AND p.prokind = 'p' ORDER BY p.proname",
+            )
+            .bind(schema)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| pg_batch_timeout())?
+        .map_err(|e| query_error(schema, e))?;
+        let procedures = rows
+            .iter()
+            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Procedure))
+            .collect();
+
+        // 3) 函数（prokind='f'）
+        let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT p.proname FROM pg_catalog.pg_proc p \
+                 JOIN pg_catalog.pg_namespace n ON p.pronamespace = n.oid \
+                 WHERE n.nspname = $1 AND p.prokind = 'f' ORDER BY p.proname",
+            )
+            .bind(schema)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| pg_batch_timeout())?
+        .map_err(|e| query_error(schema, e))?;
+        let functions = rows
+            .iter()
+            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Function))
+            .collect();
+
+        // 4) 序列
+        let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT sequence_name FROM information_schema.sequences \
+                 WHERE sequence_schema = $1 ORDER BY sequence_name",
+            )
+            .bind(schema)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| pg_batch_timeout())?
+        .map_err(|e| query_error(schema, e))?;
+        let sequences = rows
+            .iter()
+            .map(|r| crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Sequence))
+            .collect();
+
+        // 5) 触发器（名字 + 所属表）
+        let rows = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+            sqlx::query(
+                "SELECT trigger_name, event_object_table \
+                 FROM information_schema.triggers \
+                 WHERE trigger_schema = $1 ORDER BY trigger_name",
+            )
+            .bind(schema)
+            .fetch_all(&mut conn)
+            .await
+        })
+        .await
+        .map_err(|_| pg_batch_timeout())?
+        .map_err(|e| query_error(schema, e))?;
+        let triggers = rows
+            .iter()
+            .map(|r| {
+                crate::driver::NodeInfo::new(r.get::<String, _>(0), crate::driver::SchemaObjectKind::Trigger)
+                    .with_parent(r.get::<String, _>(1))
+            })
+            .collect();
+
+        Ok(crate::driver::SchemaObjects {
+            tables,
+            procedures,
+            functions,
+            sequences,
+            triggers,
+        })
     }
 
     /// 列举索引（`pg_index`）。
@@ -691,10 +946,30 @@ impl Transaction for PostgresTransaction {
     }
 }
 
-/// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）
-async fn execute_writing(pool: &Pool<Postgres>, sql: &str) -> Result<QueryResult, CoreError> {
+/// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）。
+/// 走**常驻单连接**（与 `query` 同通道）。
+async fn execute_writing(
+    conn: &Arc<tokio::sync::Mutex<Option<sqlx::postgres::PgConnection>>>,
+    last_used: &std::sync::Mutex<Option<std::time::Instant>>,
+    connect_url: &str,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    let mut guard = lock_pg_conn(conn, last_used, connect_url).await?;
+    let exec_result = {
+        let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+        sqlx::query(sqlx::AssertSqlSafe(sql)).execute(&mut *conn).await
+    };
+    let result = pg_conn_result(&mut guard, sql, exec_result)?;
+    Ok(affected_rows_result(result.rows_affected()))
+}
+
+/// 写语句走**临时独立连接**（`query_with_cancel` 的取消分支用；连接随调用结束关闭）。
+async fn execute_writing_single(url: &str, sql: &str) -> Result<QueryResult, CoreError> {
+    let mut conn = connect_pg_single(url)
+        .await
+        .map_err(|e| query_error(sql, e))?;
     let result = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .execute(pool)
+        .execute(&mut conn)
         .await
         .map_err(|e| query_error(sql, e))?;
     Ok(affected_rows_result(result.rows_affected()))
@@ -721,6 +996,16 @@ fn query_error(sql: &str, error: sqlx::Error) -> CoreError {
         mapped = mapped.with_position(offset);
     }
     CoreError::database(mapped)
+}
+
+/// 批量内省单条 SQL 超时的统一错误（连接随函数结束 drop，无需「销毁常驻连接」动作）。
+fn pg_batch_timeout() -> CoreError {
+    CoreError::database(DatabaseError::Query {
+        sql: String::new(),
+        reason: format!("查询超时（{} 秒无响应）", PG_QUERY_TIMEOUT.as_secs()),
+        position: None,
+        location: None,
+    })
 }
 
 /// PG 专有的文本类：数组 / `interval` / `inet` / `point`（`numeric` 由 `BigDecimal` 那条解）。

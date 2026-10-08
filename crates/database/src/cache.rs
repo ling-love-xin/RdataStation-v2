@@ -76,27 +76,26 @@ impl NavCache {
 
     /// 读取某 catalog 下的 schema 名（空结果视为未命中）。
     ///
-    /// **只返回完整扫描过的 schema**（`is_loaded = 1`）：半成品缓存（进程中途退出
-    /// 留下的「有 schema 行、对象不完整」）在这里视为未命中，由调用方回源库重扫。
-    /// 详见 `engine::persistence::metadata_cache::mark_schema_complete` 的语义约定。
+    /// 2026-10-08（Schema 显示不全修复）：**返回全部 schema 行**（含 `is_loaded = 0`
+    /// 未扫描完成的）——对齐 DBeaver「所有 schema 都显示」。此前只返回完整扫描过的
+    /// schema（`is_loaded = 1`），导致从未展开过的 schema 从树里被过滤掉（真机：
+    /// warehouse_supply_chain 512 个 schema 只剩 base 可见）。半成品防御不在这里
+    /// 做：未完整扫描的 schema 照常显示，**展开时**由 `is_schema_complete` 守卫
+    /// （`collect_objects` 表文件夹分支）决定回源库重扫。
     pub fn schemas(&self, catalog: &str) -> Option<Vec<String>> {
         let rows = self.ops.list_schemas(Some(catalog)).ok()?;
-        let out: Vec<String> = rows
-            .into_iter()
-            .filter(|s| s.is_loaded == Some(1))
-            .map(|s| s.schema_name)
-            .collect();
-        if out.is_empty() {
+        if rows.is_empty() {
             return None;
         }
-        Some(out)
+        Some(rows.into_iter().map(|s| s.schema_name).collect())
     }
 
     /// 标记某 schema 的元数据扫描完整完成（`is_loaded = 1`）。
     ///
     /// 调用约定：**表 / 视图 / 列写入 + 索引重建全部完成之后**再调；中途任何一步
-    /// 失败或进程退出，schema 保持 `is_loaded = 0`，下次展开会被 [`Self::schemas`]
-    /// 视为未命中并重扫（写侧 `collect_objects` 表文件夹这一趟的尾部调用）。
+    /// 失败或进程退出，schema 保持 `is_loaded = 0`——schema 列表仍会显示它（全量显示
+    /// 语义，见 [`Self::schemas`]），**展开时**由 `is_schema_complete` 守卫决定回源
+    /// 重扫（`collect_objects` 表文件夹分支）。
     pub fn mark_schema_complete(&self, catalog: &str, schema: &str) {
         if let Err(e) = self.ops.mark_schema_complete(catalog, schema) {
             tracing::warn!(
@@ -725,21 +724,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 半成品防御：schema 行存在但未标记完整（`is_loaded = 0`）→ `schemas()` 视为未命中。
+    /// 全量显示语义：schema 行存在即显示（含 `is_loaded = 0` 未完整扫描的）。
     ///
-    /// 模拟「进程写了一半退出」的残留：只有 schema 行、对象未写完时，读侧必须
-    /// 回源库重扫，而不是把不完整的 schema 当成已缓存的完整结果。
+    /// 半成品防御（2026-10-08 起）落在**展开**这一层而不是列表层：未完整扫描的
+    /// schema 照常显示，由 `is_schema_complete` 守卫在 `collect_objects` 表文件夹
+    /// 分支决定回源库重扫，而不是把不完整的 schema 从树里隐藏。
     #[test]
-    fn incomplete_schema_is_missed_until_marked() {
+    fn incomplete_schema_stays_visible_but_unloaded() {
         let root = temp_root("incomplete");
         let root_s = root.to_string_lossy().to_string();
 
         let cache = NavCache::open("P_conn_inc", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("main", &["public".to_string()]);
-        // 未 mark：视为未命中（半成品防御）
-        assert!(
-            cache.schemas("main").is_none(),
-            "未完成的 schema 应视为未命中（读侧回源库重扫）"
+        // 未 mark：列表仍显示（全量显示语义，对齐 DBeaver）
+        assert_eq!(
+            cache.schemas("main"),
+            Some(vec!["public".to_string()]),
+            "未完成的 schema 也应显示（展开时才回源重扫）"
         );
         assert!(!cache.is_schema_complete("main", "public"));
 
@@ -747,7 +748,7 @@ mod tests {
         assert_eq!(
             cache.schemas("main"),
             Some(vec!["public".to_string()]),
-            "标记完整后应命中"
+            "标记完整后仍全量显示"
         );
         assert!(cache.is_schema_complete("main", "public"));
 

@@ -219,7 +219,13 @@ impl NavView {
         self.ensure_nav_pump(cx);
     }
 
-    /// 展开 / 折叠节点；首次展开时排队后台懒加载，并持久化展开态。
+    /// 展开 / 折叠节点；首次展开（或已展开未加载）时排队后台懒加载，并持久化展开态。
+    ///
+    /// 三态语义（对齐 DBeaver「点开才加载」）：
+    /// - 未展开 → 展开 + 加载本层；
+    /// - 已展开且已加载 / 加载中 → 收起（清 loading/attempted 防残留与幂等挡死）；
+    /// - **已展开但未加载**（跨重启恢复的展开态：树显示展开、内容未拉取）→ 本次点击
+    ///   = 加载本层，**不收起**——否则恢复展开态后点箭头只会收起，永远拉不出内容。
     pub(super) fn toggle_nav_node(
         &mut self,
         conn_id: &str,
@@ -227,23 +233,29 @@ impl NavView {
         path: NavPath,
         cx: &mut Context<Self>,
     ) {
-        let now_expanded = {
+        let do_load = {
             let mut view = self.nav.borrow_mut();
             if view.expanded.contains(key) {
-                view.expanded.remove(key);
-                // 收起 = 取消本次加载意图：清 loading/attempted 防残留与幂等挡死。
-                // 残留场景（真机复现）：加载中收起该节点，loading 不消失；再展开时
-                // attempted 还在 → ensure_nav_loaded 被幂等挡掉 → 树永久「加载中」。
-                // 保留已加载的 children 与 errors（重展开直接显示，失败节点走重试）。
-                view.loading.remove(key);
-                view.attempted.remove(key);
-                false
+                let loaded_or_loading = view.children.contains_key(key) || view.loading.contains(key);
+                if loaded_or_loading {
+                    // 收起 = 取消本次加载意图：清 loading/attempted 防残留与幂等挡死。
+                    // 残留场景（真机复现）：加载中收起该节点，loading 不消失；再展开时
+                    // attempted 还在 → ensure_nav_loaded 被幂等挡掉 → 树永久「加载中」。
+                    // 保留已加载的 children 与 errors（重展开直接显示，失败节点走重试）。
+                    view.expanded.remove(key);
+                    view.loading.remove(key);
+                    view.attempted.remove(key);
+                    false
+                } else {
+                    // 已展开未加载 → 本次点击 = 加载（保持展开态）
+                    true
+                }
             } else {
                 view.expanded.insert(key.to_string());
                 true
             }
         };
-        if now_expanded {
+        if do_load {
             // 上次失败（红字挂在树上、手里没有子节点）：这次展开就是**重试**。
             // 判据与「点红字」共用（`nav_load_is_retry`），只是入口不同——
             // 少了这一支，`attempted` 会把重试一并拦掉，红字只能靠右键刷新才动。
@@ -262,6 +274,13 @@ impl NavView {
             {
                 self.mark_nav_state_dirty(conn_id, cx);
                 return;
+            }
+            // 「已展开未加载」的恢复态点击：attempted 可能残留上次会话/中断痕迹，
+            // 不清会被 `ensure_nav_loaded` 幂等挡掉 → 点了没反应（真机：恢复展开态
+            // 后点 schema 箭头毫无变化）。
+            {
+                let mut view = self.nav.borrow_mut();
+                view.attempted.remove(key);
             }
             self.ensure_nav_loaded(conn_id, key, path, false, cx);
         }
@@ -523,6 +542,7 @@ impl NavView {
                 None => {
                     // catalog 列表还没到：先把连接展开并排队，下一拍再看
                     self.nav.borrow_mut().expanded.insert(conn_key.clone());
+                    tracing::info!(key = %conn_key, "【探针】expanded.insert(pump_reveal ① 连接)");
                     // 定位途中展开的链路也要落库（否则重启后收回去，跟“定位完停在那里”不一致）。
                     self.mark_nav_state_dirty(&target.conn_id, cx);
                     self.ensure_nav_loaded(
@@ -554,6 +574,7 @@ impl NavView {
         let levels = target.levels(&catalog);
         for (key, path) in &levels {
             self.nav.borrow_mut().expanded.insert(key.clone());
+            tracing::info!(key = %key, "【探针】expanded.insert(pump_reveal ② 逐层)");
             // 定位推进的每一拍都标脏：函数中间会提前 return，标注跟着插入走才不会漏。
             self.mark_nav_state_dirty(&target.conn_id, cx);
             // 某一层已经报错：不再等（等不到），当场把原因摆出来
@@ -769,12 +790,40 @@ impl NavView {
             };
             let conn_id = r.conn_id.clone();
             let project_root = r.project_root.clone();
+            // 连接类错误 → 自动重试一次（重建连接握手 ~10-30ms，用户无感）。
+            // 背景（app_run57/58 铁证）：池连接被网络层静默丢弃后，acquire 验证
+            // 挂在 TCP 半开上超时——失败后清 attempted 重入队，重试时 sqlx 已把
+            // 死连接回收并新建，第二次秒过。非连接类错误（权限/对象不存在）不重试。
+            let conn_error = nav_error_is_connection(&r.result);
+            let auto_retry = conn_error && {
+                let view = self.nav.borrow();
+                !view.retried.contains(&key)
+            };
+            if auto_retry {
+                {
+                    let mut view = self.nav.borrow_mut();
+                    view.retried.insert(key.clone());
+                    // 不落红字（这次失败归因于连接，用户无感）；清 attempted 允许重入队。
+                    nav_forget_attempt(&mut view, &key);
+                }
+                tracing::warn!(
+                    conn_id = %conn_id,
+                    key = %key,
+                    path = ?r.path,
+                    error = %r.result.as_ref().err().map(|s| s.as_str()).unwrap_or(""),
+                    "导航加载连接类失败（自动重试一次）"
+                );
+                self.ensure_nav_loaded(&conn_id, &key, r.path.clone(), false, cx);
+                continue;
+            }
             {
                 let mut view = self.nav.borrow_mut();
                 view.loading.remove(&key);
                 match r.result {
                     Ok(page) => {
                         view.errors.remove(&key);
+                        // 重试成功后清除重试标记：下次同类失败仍可再自动重试一次。
+                        view.retried.remove(&key);
                         // 面板底「元数据更新于 X 分钟前」的事实源（取数成功就算一次）。
                         view.last_loaded_at = Some(SystemTime::now());
                         if let Some(pos) = r.jumped_to {
@@ -922,6 +971,7 @@ impl NavView {
         let mut view = self.nav.borrow_mut();
         for key in state.expanded_keys {
             if key == conn_id || key.starts_with(&prefix) {
+                tracing::info!(key = %key, "【探针】expanded.insert(ensure_nav_state_loaded 恢复)");
                 view.expanded.insert(key);
             }
         }

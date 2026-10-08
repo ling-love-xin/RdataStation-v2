@@ -95,6 +95,6 @@ pub use smart_pool::{PoolStats, SmartPool, SmartPoolBuilder, SmartPoolConfig};
 pub use standard_pool::{StandardPool, StandardPoolBuilder, StandardPoolConfig, StandardPoolStats};
 pub use traits::{
     ColumnDetail, ConstraintDetail, ForeignKeyRef, DataSourceMeta, Database, DbPool, DynDatabase, IndexDetail,
-    MetadataBrowser, NodeDetail, NodeInfo, PoolStatus, SchemaObjectKind, Transaction,
+    MetadataBrowser, NodeDetail, NodeInfo, PoolStatus, SchemaObjectKind, SchemaObjects, Transaction,
 };
 pub use utils::{build_connection_url, parse_driver_id, validate_driver_config};

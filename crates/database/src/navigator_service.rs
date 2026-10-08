@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use engine::cache::{CacheManager, MetadataCache};
 use engine::connection_manager::ConnectionManager;
-use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
+use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind, SchemaObjects};
 use engine::persistence::SchemaObjectCounts;
 use shared::error::CoreError;
 
@@ -223,8 +223,10 @@ impl NavigatorService {
 
         // 全量回退：索引不可用（冷启动 / 该类别为空）或对象数未超阈值。
         // 这一趟会把实时结果写 L2 并在表文件夹这趟重建索引，下次展开即可分块。
+        // 独立路径无共享 batch：临时 None → 单次批量内省（一条连接拿全部类别）。
+        let mut batch = None;
         let objects = self
-            .collect_objects(conn_id, catalog, schema, folder)
+            .collect_objects(conn_id, catalog, schema, folder, &mut batch)
             .await?;
         let total = objects.len();
         let nodes = Self::object_nodes(conn_id, catalog, schema, folder, objects);
@@ -443,6 +445,10 @@ impl NavigatorService {
         tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "导航 load_folders 开始");
         let indexed = self.indexed_counts(conn_id, catalog, schema);
         tracing::info!(conn_id = %conn_id, elapsed_ms = t0.elapsed().as_millis(), "load_folders indexed_counts 完成");
+        // 批量内省缓存（2026-10-08 DBeaver 会话语义）：一次展开最多**一次**
+        // `introspect_schema_objects`（一条新连接 + 每类 SQL 各一次）；后续类别从
+        // 这里取，不再逐类别建连 / 不再在缓存 scoped 连接上重复执行同 SQL。
+        let mut batch: Option<SchemaObjects> = None;
         let mut nodes = Vec::new();
         // 类别文件夹**固定显示**（与 DBeaver 一致）：空类别（count=0）也显示，
         // 用户能一眼看到"这个 schema 有哪些类别、各自有没有对象"。
@@ -467,7 +473,7 @@ impl NavigatorService {
                     // 真卡死由 worker 层 JOB_TIMEOUT（30s）兜底成 schema 红字（可点重试），
                     // 用户感知与 DBeaver 一致：内省慢就等（加载中），真失败才报错。
                     let folder_result = self
-                        .collect_objects(conn_id, catalog, schema, folder)
+                        .collect_objects(conn_id, catalog, schema, folder, &mut batch)
                         .await;
                     match folder_result {
                         Ok(objects) => {
@@ -577,8 +583,10 @@ impl NavigatorService {
         schema: &str,
         folder: NavFolder,
     ) -> Result<Vec<NavNode>, CoreError> {
+        // 独立路径无共享 batch：临时 None → 单次批量内省（一条连接拿全部类别）。
+        let mut batch = None;
         let objects = self
-            .collect_objects(conn_id, catalog, schema, folder)
+            .collect_objects(conn_id, catalog, schema, folder, &mut batch)
             .await?;
         Ok(Self::object_nodes(conn_id, catalog, schema, folder, objects))
     }
@@ -759,12 +767,17 @@ impl NavigatorService {
     }
 
     /// 按类别收集对象（复用 `MetadataService` 的内省调用）。
+    ///
+    /// `batch` 是本次 `load_folders` 的批量内省缓存：某类别未命中 L1/L2 时，
+    /// 若 batch 为空则先调 `introspect_schema_objects`（一次建连拿全部类别），
+    /// 再从中取当前类别——一次展开至多一次建连，且无「同 SQL 二次执行」。
     async fn collect_objects(
         &self,
         conn_id: &str,
         catalog: &str,
         schema: &str,
         folder: NavFolder,
+        batch: &mut Option<SchemaObjects>,
     ) -> Result<Vec<NodeInfo>, CoreError> {
         match folder {
             NavFolder::Tables | NavFolder::Views => {
@@ -816,7 +829,8 @@ impl NavigatorService {
                                 });
                             }
                             // 读侧自愈写侧（幂等）：命中即证明对象写入完整，补扫描完成标记，
-                            // 让 `schemas()` 不再因历史半成品（is_loaded=0）把本 schema 当未命中回源。
+                            // 让 `is_schema_complete` 守卫在此后「空类别」判断中生效
+                            // （schema 列表已全量显示，未完整扫描的 schema 靠这个标记展开时回源）。
                             c.mark_schema_complete(catalog, schema);
                             return Ok(objs);
                         } else if c.is_schema_complete(catalog, schema) {
@@ -828,7 +842,17 @@ impl NavigatorService {
                         }
                     }
                 }
-                let objects = self.metadata.list_tables(conn_id, catalog, schema).await?;
+                let objects = {
+                    // 批量内省：一次展开至多一次建连（DBeaver 会话语义）；之后各类别共享。
+                    if batch.is_none() {
+                        *batch = Some(
+                            self.metadata
+                                .introspect_schema_objects(conn_id, catalog, schema)
+                                .await?,
+                        );
+                    }
+                    batch.as_ref().expect("刚初始化").tables.clone()
+                };
                 tracing::info!(conn_id = %conn_id, folder = folder.key(), elapsed_ms = tc.elapsed().as_millis(), count = objects.len(), "collect_objects 实时内省完成");
                 let object_count = objects.len();
                 // 内省级别自适应（对标 DataGrip）：按**本 schema 的对象数**定级并登记到连接。
@@ -899,14 +923,17 @@ impl NavigatorService {
                         }
                     }
                 }
-                let mut procedures = self
-                    .metadata
-                    .list_procedures(conn_id, catalog, schema)
-                    .await?;
-                let functions = self
-                    .metadata
-                    .list_functions(conn_id, catalog, schema)
-                    .await?;
+                let mut procedures = {
+                    if batch.is_none() {
+                        *batch = Some(
+                            self.metadata
+                                .introspect_schema_objects(conn_id, catalog, schema)
+                                .await?,
+                        );
+                    }
+                    batch.as_ref().expect("刚初始化").procedures.clone()
+                };
+                let functions = batch.as_ref().expect("刚初始化").functions.clone();
                 procedures.extend(functions);
                 if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
                     c.put_routines(sid, &procedures);
@@ -932,7 +959,16 @@ impl NavigatorService {
                         }
                     }
                 }
-                let objs = self.metadata.list_sequences(conn_id, catalog, schema).await?;
+                let objs = {
+                    if batch.is_none() {
+                        *batch = Some(
+                            self.metadata
+                                .introspect_schema_objects(conn_id, catalog, schema)
+                                .await?,
+                        );
+                    }
+                    batch.as_ref().expect("刚初始化").sequences.clone()
+                };
                 if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
                     c.put_sequences(sid, &objs);
                 }
@@ -958,7 +994,16 @@ impl NavigatorService {
                         }
                     }
                 }
-                let objs = self.metadata.list_triggers(conn_id, catalog, schema).await?;
+                let objs = {
+                    if batch.is_none() {
+                        *batch = Some(
+                            self.metadata
+                                .introspect_schema_objects(conn_id, catalog, schema)
+                                .await?,
+                        );
+                    }
+                    batch.as_ref().expect("刚初始化").triggers.clone()
+                };
                 if let (Some(c), Some(sid)) = (cache.as_ref(), schema_id) {
                     c.put_triggers(sid, &objs);
                 }
