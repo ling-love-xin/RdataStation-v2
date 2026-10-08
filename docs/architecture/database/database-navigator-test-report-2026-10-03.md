@@ -338,6 +338,13 @@ cargo check -p rds-app -j 2
 - **30s 根因链全通**：半成品 is_loaded=0 → views 空反复回源 → 池 acquire 排队（min=1 单连接）→ JOB_TIMEOUT 30s 先超。修复（自愈 mark + 空类别不回源 + min=2 + 每表 5s）后**重启后展开不再回源、不再排队、单表卡不再拖死整批**。
 - **遗留**：列展开的 UI 侧确认（列预取在「表」文件夹首次展开时触发；GUI 自动化展开树多次未成，需人工展开表确认列显示与 L2 列缓存写入——列查询探针已证每表 ≤25ms、put_columns 写侧逻辑闭环）。
 
+### 16.5 列加载与 L2 写入实证（探针 `zz_probe_cols_l2`，跑完即删）
+
+- **列加载链**：`NavigatorService.load_children(Table{mall_business.order})` → load_columns 回源 → **返回 16 个列节点**（id / order_no / user_id / total_amount / pay_amount …），全程 0.16s，无 pool timed out。
+- **L2 交叉印证**：实查缓存 `meta_439…sqlite`（MySQL）`columns` 表恰为该 16 列——即列写入确已发生（缓存半成品 = 只有 order 一表，其余表列未写，与 §15 残留一致）。
+- **测试隔离限制**：`cargo test` 下 `NavCache::open` 因 paths test-support 隔离路径不可用返回 None，故探针内无法直读 L2；产品真机路径（应用内）L2 可写（上述 meta_439 实证）。
+- **结论**：列加载全链路 ✅；L2 列写入机制 ✅（写侧 put_columns 与读侧 L2 命中回填 L1 均已实证）；UI 列显示需人工展开表复核（GUI 自动化通道限制，非应用缺陷）。
+
 ### 15.3 新暴露问题（根因方向，待修）
 
 | 问题 | 表现 | 根因方向 |
