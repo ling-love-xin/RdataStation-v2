@@ -402,5 +402,51 @@ cargo check -p rds-app -j 2
 - **性能边界**：展开耗时 ≈ 建连（150-400ms 环境固有）+ 5×SQL（各 ~10ms）+ 框架开销 —— DBeaver 同环境同成本；L2 缓存命中时第二次展开同一 schema 不建连、毫秒级。
 - **遗留**：biz_384 在 app_run65 出现过一次 15s 偶发（app_run66/67 未复现，探针无法复现）——有 15s 超时 + 自动重建兜底，不再 30s 连环卡死；数据预览（表数据 execute_query）仍走 scoped 连接复用，若同 SQL 二次执行挂起需同样改造（证据待收集）。
 
+## 18. 顺滑度三阶段：静态类别文件夹 + 批量内省每次新建连接（提交 `6809d5f`）
+
+### 18.1 问题：展开仍付一次建连，用户要求「像 DBeaver 一样顺滑」
+
+批量内省（§17）一次展开 = 一次新连接 + 5 条 SQL（150-400ms），用户判定不达标；同时探索「复用连接抹平建连」路线，app_run68（复用 + ping 验证）暴露 2.1-2.6s 惩罚。
+
+### 18.2 实证链（探针 v7/v8 + app_run69）
+
+| 假设 | 结果 |
+| --- | --- |
+| 网络层故障（单 Runtime 跨任务复用） | ❌ 探针 v7：5 轮全成功（复用 74-125ms，ping 5-76ms 全过） |
+| 跨 tokio Runtime 复用挂起 | ❌ 探针 v8：5 个独立 Runtime 复用同一连接全成功 |
+| 复用 + ping 撞故障窗口 | ✅ app_run69：public/tables connect_ms=2115（ping 2s 超时 + 重建）——**ping 引入 2.1s 惩罚，比直接新建慢 6 倍** |
+
+结论：sqlx 复用/跨任务/跨 Runtime 技术上全安全；但**复用前 ping 在撞上网络层间歇故障窗口时反而引入 2s 惩罚**，且旧连接被冻结的概率性无法根除——**最终形态：每次新建连接（自带健康）+ 展开层静态化**。
+
+### 18.3 DBeaver 源码实证（本地检出 `D:\RdataStation\RDS\dbeaver-src`）
+
+- `DBNDatabaseNode.getChildren()`：`childNodes` 内存缓存 + 展开同步递归加载全部（文件夹+对象一次性），之后展开 O(1) 纯内存。
+- 加载走已有执行上下文：`getExecutionContext() → DBUtils.getDefaultContext(object, true)`——不新建连接。
+- `JDBCExecutionContext`：`volatile Connection connection` 常驻复用 + 懒建 + `SingleThreadLock` 串行；JDBC 同步阻塞、无异步 Runtime 边界——**这是 DBeaver 复用什么都不挂的本质（同步驱动），sqlx 异步层在故障窗口有概率冻结旧连接**。
+
+### 18.4 落地改造（提交 `6809d5f`）
+
+| 文件 | 改动 |
+| --- | --- |
+| `navigator_service.rs` | `load_folders` 改**静态渲染**：展开 schema 只返回 5 个类别文件夹（Tables/Views/Routines/Sequences/Triggers，无计数），**零内省不碰库**；对象在点击类别文件夹时 `load_objects → collect_objects` 加载（冷 ~300ms / L2 命中毫秒级）——DBeaver 分块树交互 |
+| `postgres.rs` / `mysql.rs` | 批量 `introspect_schema_objects` 改回**每次新建连接**（`connect_pg_single`/`connect_mysql_single`，连接随函数结束 drop）；`lock_pg_conn`/`lock_mysql_conn` **去掉复用前 ping**（保留 60s 空闲回收，只作用于 query/query_with_params 会话级复用） |
+
+### 18.5 真机验证（app_run70 · clean-test 项目 · P_real_pg）
+
+| 项 | 结果 |
+| --- | --- |
+| 展开连接（含等在建连守卫） | ✅ 154ms（建连 536ms 异步并行，任务不阻塞） |
+| 展开 catalog `warehouse_supply_chain` | ✅ 69ms |
+| 展开 schema（biz_031/crm/finance/logistics 等） | ✅ **全部 0ms（瞬时）** |
+| 点类别 Tables（冷：biz_031） | ✅ 711ms（批量建连 184ms + SQL 15ms，其余为 L2 检查/调度开销） |
+| 点类别 Tables（热：crm） | ✅ **1ms（L2 命中）** |
+| 红字 / 超时 | ✅ 无 |
+
+### 18.6 结论与遗留
+
+- **感知对齐 DBeaver**：展开 schema 瞬时出骨架（静态文件夹），点类别冷加载一次（~200ms）后 L2 命中毫秒级；无 2s ping 惩罚、无红字、无 30s 卡死。
+- **与 DBeaver 的差异（可接受）**：DBeaver 是「展开时一次性加载全部 + 内存缓存」，我们是「展开骨架 + 点击类别才查」——用户已确认该交互（点击驱动加载）；冷加载成本从展开移到点类别。
+- **遗留**：① 冷点类别 200-700ms 中有建连环境成本（150-400ms 固有）；② 若未来要让「展开即全量」也可行（childNodes 模型），需先根治网络层对旧连接的冻结（超出软件能力，建议换网/换主机验证）；③ 数据预览（execute_query）仍走 scoped 连接复用，遇故障窗口有概率 15s 超时（有兜底，证据待收集）。
+
 
 
