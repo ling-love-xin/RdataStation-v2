@@ -472,6 +472,27 @@ pub trait Database: Send + Sync {
         Ok(vec![])
     }
 
+    /// 批量列举列（2026-10-09，列预热全量化）。
+    ///
+    /// 默认实现循环 `list_columns`（本地驱动无建连成本，直接可用）；
+    /// 网络驱动（sqlx PG/MySQL）覆盖为**复用常驻连接 + 循环列 SQL**
+    /// （`lock_pg_conn`/`lock_mysql_conn` 内置 100ms 快速探活，健康复用、
+    /// 冻结即弃重建）——大 schema（如 public 24 表）一次建连全部列，
+    /// 不再每表新建连接（24 次建连 = 7s+ 不可接受）。
+    async fn list_columns_batch(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<(String, Vec<ColumnDetail>)>, CoreError> {
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            let cols = self.list_columns(catalog, schema, t).await?;
+            out.push((t.clone(), cols));
+        }
+        Ok(out)
+    }
+
     /// 列举索引
     async fn list_indexes(
         &self,

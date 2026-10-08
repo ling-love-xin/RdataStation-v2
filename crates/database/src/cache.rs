@@ -119,6 +119,38 @@ impl NavCache {
         }
     }
 
+    /// 该 schema 已缓存**列数**（0 = 列未预热，展开时需补批量列；空表 schema
+    /// 也返回 0——调用方用对象列表判空兜底）。2026-10-09 批量列引入：旧缓存
+    /// schema（对象完整但列未预热，如 8 表阈值时代的大 schema）靠它识别补列。
+    pub fn schema_columns_count(&self, catalog: &str, schema: &str) -> i64 {
+        let sid = match self.schema_id(catalog, schema) {
+            Some(s) => s,
+            None => return 0,
+        };
+        match self.ops.get_schema_object_counts(&self.conn_id, sid) {
+            Ok(c) => c.column_count as i64,
+            Err(_) => 0,
+        }
+    }
+
+    /// 该 schema 已缓存**表 + 视图名**（L2 对象表）。对象完整但列未预热时，
+    /// 列预热从这里取对象列表——避免重复实时内省。
+    pub fn schema_object_names(&self, catalog: &str, schema: &str) -> Vec<String> {
+        let sid = match self.schema_id(catalog, schema) {
+            Some(s) => s,
+            None => return vec![],
+        };
+        let mut names = vec![];
+        for t in ["table", "view"] {
+            if let Ok(chunk) = self.ops.get_objects_chunk(&self.conn_id, Some(sid), t, 0, 100_000) {
+                for e in chunk.items {
+                    names.push(e.object_name);
+                }
+            }
+        }
+        names
+    }
+
     /// 读**全部** schema（含 catalog 与 `schema_id`）——给“一次把候选目录装进内存”的调用方用
     ///
     /// 与 [`Self::schemas`] 的区别：不按 catalog 过滤、带 `id`（后续 `objects` / `columns` 都要它），

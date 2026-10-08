@@ -305,6 +305,36 @@ fn build_query_result(
     })
 }
 
+/// PgRow → ColumnDetail（列序契约 0..=9：name/type/nullable/ordinal/key/default/
+/// comment/ref_table/ref_column/fk_flag）；行短于契约时缺的单元格按空串处理
+/// （不 panic、不吞行）。`get_table_detail` 与 `list_columns_batch` 共用。
+fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::ColumnDetail> {
+    use sqlx::Row as _;
+    result
+        .iter()
+        .map(|r| {
+            let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
+            let ref_table = cell(7);
+            let fk_flag = cell(9);
+            crate::driver::ColumnDetail {
+                name: cell(0),
+                data_type: cell(1),
+                nullable: cell(2) == "YES",
+                ordinal: cell(3).parse().unwrap_or(0),
+                is_primary_key: cell(4) == "PRI",
+                default_value: (!cell(5).is_empty()).then(|| cell(5)),
+                comment: (!cell(6).is_empty()).then(|| cell(6)),
+                is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
+                references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
+                    table: ref_table,
+                    column: cell(8),
+                }),
+                extra: std::collections::HashMap::new(),
+            }
+        })
+        .collect()
+}
+
 #[async_trait::async_trait]
 impl Database for PostgresDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
@@ -578,6 +608,58 @@ impl Database for PostgresDatabase {
         let schema_name = schema.unwrap_or("public");
         let detail = self.get_table_detail(_catalog, schema_name, table).await?;
         Ok(detail.columns)
+    }
+
+    /// 批量列（列预热全量化，2026-10-09）：**复用常驻连接 + 循环列 SQL**。
+    ///
+    /// 单表 `get_table_detail` 每次新建连接（~300ms，列查询冻结根治决策）；
+    /// 批量版本改复用 `lock_pg_conn`（内置 100ms 快速探活——健康连接直接复用、
+    /// 冻结连接 100ms 即弃 + 300ms 重建，`introspect_schema_objects` 已验证安全）。
+    /// 大 schema（如 public 24 表）：1 次建连 + 24×15ms SQL ≈ 500ms 后台预热，
+    /// 替代 24 次新建连接（7s+）——点表展开列 0ms 全量化。
+    async fn list_columns_batch(
+        &self,
+        catalog: &str,
+        schema: Option<&str>,
+        tables: &[String],
+    ) -> Result<Vec<(String, Vec<ColumnDetail>)>, CoreError> {
+        if tables.is_empty() {
+            return Ok(vec![]);
+        }
+        let schema_name = schema.unwrap_or("public");
+        let sql = crate::driver::utils::PG_TABLE_DETAIL_SQL;
+        let mut guard = lock_pg_conn(&self.conn, &self.last_used, &self.connect_url).await?;
+        let conn_ref = guard
+            .as_mut()
+            .ok_or_else(|| CoreError::database(DatabaseError::Driver {
+                db_type: "postgres".to_string(),
+                operation: "list_columns_batch".to_string(),
+                source: "连接为 None 且无法重建".to_string(),
+            }))?;
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            let result = tokio::time::timeout(PG_QUERY_TIMEOUT, async {
+                sqlx::query(sql)
+                    .bind(schema_name)
+                    .bind(t)
+                    .fetch_all(&mut *conn_ref)
+                    .await
+            })
+            .await
+            .map_err(|_| {
+                CoreError::database(DatabaseError::Query {
+                    sql: sql.to_string(),
+                    reason: format!("批量列查询超时（{} 秒无响应）", PG_QUERY_TIMEOUT.as_secs()),
+                    position: None,
+                    location: None,
+                })
+            })?
+            .map_err(|e| query_error(schema_name, e))?;
+            out.push((t.clone(), pg_rows_to_columns(&result)));
+        }
+        // 忽略 `catalog`（PG 无需跨库前缀，见 `get_schemas`）；返回按传入表序分组。
+        let _ = catalog;
+        Ok(out)
     }
 
     async fn list_procedures(
@@ -1370,30 +1452,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         // 0..=9：name/type/nullable/ordinal/key/default/comment/ref_table/ref_column/
         // fk_flag），但输入是 `Vec<PgRow>`（新建连接直接 fetch_all，不经过 QueryResult
         // 中间层）；行短于契约时缺的单元格按空串处理（不 panic、不吞行）。
-        use sqlx::Row as _;
-        let columns = result
-            .iter()
-            .map(|r| {
-                let cell = |i: usize| r.get::<Option<String>, _>(i).unwrap_or_default();
-                let ref_table = cell(7);
-                let fk_flag = cell(9);
-                crate::driver::ColumnDetail {
-                    name: cell(0),
-                    data_type: cell(1),
-                    nullable: cell(2) == "YES",
-                    ordinal: cell(3).parse().unwrap_or(0),
-                    is_primary_key: cell(4) == "PRI",
-                    default_value: (!cell(5).is_empty()).then(|| cell(5)),
-                    comment: (!cell(6).is_empty()).then(|| cell(6)),
-                    is_foreign_key: fk_flag == "1" || !ref_table.is_empty(),
-                    references: (!ref_table.is_empty()).then(|| crate::driver::ForeignKeyRef {
-                        table: ref_table,
-                        column: cell(8),
-                    }),
-                    extra: std::collections::HashMap::new(),
-                }
-            })
-            .collect();
+        let columns = pg_rows_to_columns(&result);
 
         Ok(crate::driver::NodeDetail {
             node: crate::driver::NodeInfo::new(table, crate::driver::SchemaObjectKind::Table),

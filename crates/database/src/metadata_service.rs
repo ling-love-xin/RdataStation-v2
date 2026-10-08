@@ -147,6 +147,22 @@ impl MetadataService {
         db.list_columns(catalog, Some(schema), table).await
     }
 
+    /// 批量列（列预热全量化）：网络驱动（sqlx PG/MySQL）复用常驻连接循环列 SQL，
+    /// 本地驱动默认实现循环 `list_columns`（无建连成本）。返回按传入表序分组。
+    pub async fn list_columns_batch(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        tables: &[String],
+    ) -> Result<Vec<(String, Vec<ColumnDetail>)>, CoreError> {
+        if tables.is_empty() {
+            return Ok(vec![]);
+        }
+        let db = self.database_for(conn_id, catalog).await?;
+        db.list_columns_batch(catalog, Some(schema), tables).await
+    }
+
     pub async fn list_indexes(
         &self,
         conn_id: &str,

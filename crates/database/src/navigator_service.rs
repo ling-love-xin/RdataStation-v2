@@ -962,86 +962,131 @@ impl NavigatorService {
     /// - 与 `collect_objects` 同一批写入口径（L1 小 schema 全类别；L2 全类别 +
     ///   索引重建 + 完成标记），预热与点击并发时写入幂等。
     pub async fn warm_schema(&self, conn_id: &str, catalog: &str, schema: &str) {
-        if let Some(c) = self.cache(conn_id) {
-            if c.is_schema_complete(catalog, schema) {
-                return;
-            }
+        // 完整性判定（2026-10-09 批量列）：对象完整与列完整分开记——旧缓存 schema
+        // （对象完整但列未预热，如 8 表阈值时代的大 schema）展开时仍补列。
+        let (objects_complete, columns_done) = match self.cache(conn_id) {
+            Some(c) => (
+                c.is_schema_complete(catalog, schema),
+                c.schema_columns_count(catalog, schema) > 0,
+            ),
+            None => (false, false),
+        };
+        if objects_complete && columns_done {
+            return;
         }
         let t = std::time::Instant::now();
-        let objects = match self
-            .metadata
-            .introspect_schema_objects(conn_id, catalog, schema)
-            .await
-        {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::warn!(conn_id, catalog, schema, err = %e, "后台预热内省失败（点击时仍会实时回源）");
-                return;
+        // 对象来源：不完整 → 实时内省一次（对象段 + 列段共用）；完整 → L2 读
+        // 表/视图名（列段用，不重跑内省）。
+        let mut objects = None;
+        let mut l2_names: Vec<String> = Vec::new();
+        if !objects_complete {
+            match self
+                .metadata
+                .introspect_schema_objects(conn_id, catalog, schema)
+                .await
+            {
+                Ok(o) => objects = Some(o),
+                Err(e) => {
+                    tracing::warn!(conn_id, catalog, schema, err = %e, "后台预热内省失败（点击时仍会实时回源）");
+                    return;
+                }
             }
+        } else {
+            l2_names = self
+                .cache(conn_id)
+                .map(|c| c.schema_object_names(catalog, schema))
+                .unwrap_or_default();
+        }
+        // 对象段：仅不完整时内省 + 写 L1/L2（完整时跳过——数据已在 L2）
+        let (tables_half, views_half, table_count) = if !objects_complete {
+            let objects = objects.as_ref().expect("内省对象必然存在");
+            let table_count = objects.tables.len();
+            let (tables_half, views_half): (Vec<NodeInfo>, Vec<NodeInfo>) = objects
+                .tables
+                .clone()
+                .into_iter()
+                .partition(|o| o.kind != SchemaObjectKind::View);
+            // 例程合并（过程 + 函数），与 collect_objects 的 routines 分支同口径
+            let mut routines_all = objects.procedures.clone();
+            routines_all.extend(objects.functions.clone());
+            // L1：小 schema 全类别进内存（大 schema 走索引分块，不写 L1）
+            if table_count <= CHUNK_THRESHOLD {
+                let (t, v) = (tables_half.clone(), views_half.clone());
+                let (s, g) = (objects.sequences.clone(), objects.triggers.clone());
+                let (cid, cat, sch) = (conn_id.to_string(), catalog.to_string(), schema.to_string());
+                let (cid_c, cat_c, sch_c) = (cid.clone(), cat.clone(), sch.clone());
+                let routines_l1 = routines_all.clone();
+                self.l1_write(move |l1| {
+                    l1.set_tables(&cid_c, &cat_c, Some(&sch_c), t);
+                    l1.set_views(&cid_c, &cat_c, Some(&sch_c), v);
+                    l1.set_sequences(&cid_c, &cat_c, Some(&sch_c), s);
+                    l1.set_triggers(&cid_c, &cat_c, Some(&sch_c), g);
+                });
+                self.l1_write_routines(&cid, &cat, &sch, routines_l1);
+            }
+            // L2：全类别 + 索引重建 + 完成标记（半成品防御：先清残留再整块重写）
+            if let Some(mut c) = self.cache(conn_id) {
+                c.prune_schema(catalog, schema);
+                let name = schema.to_string();
+                c.put_schemas(catalog, std::slice::from_ref(&name));
+                if let Some(sid) = c.schema_id(catalog, schema) {
+                    c.put_objects(sid, &tables_half);
+                    c.put_objects(sid, &views_half);
+                    c.put_routines(sid, &routines_all);
+                    c.put_sequences(sid, &objects.sequences);
+                    c.put_triggers(sid, &objects.triggers);
+                }
+                c.rebuild_index(catalog, schema);
+                c.mark_schema_complete(catalog, schema);
+            }
+            (tables_half, views_half, table_count)
+        } else {
+            // 对象完整：列段目标从 L2 读（表/视图名；列查询对两者一致）
+            let nodes: Vec<NodeInfo> = l2_names
+                .iter()
+                .map(|n| NodeInfo::new(n.clone(), SchemaObjectKind::Table))
+                .collect();
+            (nodes, vec![], l2_names.len())
         };
-        let table_count = objects.tables.len();
-        let (tables_half, views_half): (Vec<NodeInfo>, Vec<NodeInfo>) = objects
-            .tables
-            .clone()
-            .into_iter()
-            .partition(|o| o.kind != SchemaObjectKind::View);
-        // 例程合并（过程 + 函数），与 collect_objects 的 routines 分支同口径
-        let mut routines_all = objects.procedures.clone();
-        routines_all.extend(objects.functions.clone());
-        // L1：小 schema 全类别进内存（大 schema 走索引分块，不写 L1）
-        if table_count <= CHUNK_THRESHOLD {
-            let (t, v) = (tables_half.clone(), views_half.clone());
-            let (s, g) = (objects.sequences.clone(), objects.triggers.clone());
-            let (cid, cat, sch) = (conn_id.to_string(), catalog.to_string(), schema.to_string());
-            let (cid_c, cat_c, sch_c) = (cid.clone(), cat.clone(), sch.clone());
-            let routines_l1 = routines_all.clone();
-            self.l1_write(move |l1| {
-                l1.set_tables(&cid_c, &cat_c, Some(&sch_c), t);
-                l1.set_views(&cid_c, &cat_c, Some(&sch_c), v);
-                l1.set_sequences(&cid_c, &cat_c, Some(&sch_c), s);
-                l1.set_triggers(&cid_c, &cat_c, Some(&sch_c), g);
-            });
-            self.l1_write_routines(&cid, &cat, &sch, routines_l1);
-        }
-        // L2：全类别 + 索引重建 + 完成标记（半成品防御：先清残留再整块重写）
-        if let Some(mut c) = self.cache(conn_id) {
-            c.prune_schema(catalog, schema);
-            let name = schema.to_string();
-            c.put_schemas(catalog, std::slice::from_ref(&name));
-            if let Some(sid) = c.schema_id(catalog, schema) {
-                c.put_objects(sid, &tables_half);
-                c.put_objects(sid, &views_half);
-                c.put_routines(sid, &routines_all);
-                c.put_sequences(sid, &objects.sequences);
-                c.put_triggers(sid, &objects.triggers);
-            }
-            c.rebuild_index(catalog, schema);
-            c.mark_schema_complete(catalog, schema);
-        }
-        // 列预热（体验优于 DBeaver：DBeaver 展开表节点时才同步加载列；我们把
-        // 「列」也纳入展开 schema 的后台预热 → 用户点表即 0ms 缓存命中）。
-        // 表/视图合计 ≤ 阈值才预热：每张表一次 `list_columns`（现实现每次新建
-        // 连接），大 schema（如 public 24 表）后台预热 10s+ 太久；biz_* 这类
-        // 2 表 schema 秒级完成。大 schema 点表时实时内省、L2 缓存后续命中。
-        const COLUMN_WARM_MAX_TABLES: usize = 8;
-        let column_targets: Vec<String> = tables_half
-            .iter()
-            .chain(views_half.iter())
-            .map(|n| n.name.clone())
-            .collect();
-        if column_targets.len() <= COLUMN_WARM_MAX_TABLES && !column_targets.is_empty() {
-            let mut warmed = 0usize;
-            for tname in &column_targets {
-                if let Err(e) = self
-                    .load_columns(conn_id, catalog, schema, tname)
+        // 列段（独立判断，体验优于 DBeaver：DBeaver 展开表节点时才同步加载列；
+        // 我们把「列」也纳入展开 schema 的后台预热 → 用户点表即 0ms 缓存命中）。
+        // **全量**（2026-10-09 批量列接口）：小 schema 走默认实现循环（本地驱动
+        // 无建连成本）；大 schema（如 public 24 表）走 PG/MySQL 批量覆盖——复用
+        // 常驻连接 + 循环列 SQL，一次建连全部列（24 表 ≈ 500ms 后台，替代 24 次
+        // 新建连接 7s+）。失败单表不阻断整批（点表时实时回源兜底）。
+        if !columns_done {
+            let column_targets: Vec<String> = tables_half
+                .iter()
+                .chain(views_half.iter())
+                .map(|n| n.name.clone())
+                .collect();
+            if !column_targets.is_empty() {
+                let pairs = match self
+                    .metadata
+                    .list_columns_batch(conn_id, catalog, schema, &column_targets)
                     .await
                 {
-                    tracing::warn!(conn_id, catalog, schema, table = %tname, err = %e, "列预热失败（点表时实时回源）");
-                    continue;
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(conn_id, catalog, schema, err = %e, "批量列预热失败（点表时实时回源）");
+                        vec![]
+                    }
+                };
+                let mut warmed = 0usize;
+                let cache = self.cache(conn_id);
+                let schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
+                for (tname, cols) in &pairs {
+                    if let (Some(c), Some(sid)) = (&cache, schema_id) {
+                        c.put_columns(sid, tname, cols);
+                    }
+                    let store = cols.clone();
+                    self.l1_write(move |l1| {
+                        l1.set_columns_detail(conn_id, catalog, Some(schema), tname, store)
+                    });
+                    warmed += 1;
                 }
-                warmed += 1;
+                tracing::info!(conn_id, catalog, schema, warmed, targets = column_targets.len(), "后台预热表列完成（点表 0ms）");
             }
-            tracing::info!(conn_id, catalog, schema, warmed, targets = column_targets.len(), "后台预热表列完成（点表 0ms）");
         }
         tracing::info!(
             conn_id,
