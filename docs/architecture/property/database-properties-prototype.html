@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 数据库对象属性面板 · 三部分布局原型（对齐 DBeaver）</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --match:#FFF3C4;
+  --success:#16A34A; --success-bg:#F0FDF4; --warning:#B45309; --warning-bg:#FFFBEB;
+  --info:#2563EB; --info-bg:#EFF6FF; --danger:#DC2626; --danger-bg:#FEF2F2;
+  --overview-bg:#FAFAF8; --card-border:#E2E2DC; --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --match:#4A3F00;
+  --success:#89D185; --success-bg:#14532D; --warning:#CCA700; --warning-bg:#3A3105;
+  --info:#3794FF; --info-bg:#0F2A4A; --danger:#F14C4C; --danger-bg:#4A1A1A;
+  --overview-bg:#1B1B1B; --card-border:#303030; --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:32px 20px 40px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;}
+svg.ico{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;}
+svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;}
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:1000px;margin:0 auto 14px;padding:0 4px;gap:16px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);color:#fff;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.theme-toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:all .15s;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+.statebar{max-width:1000px;margin:0 auto 14px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 4px;}
+.statebar .lbl{font-size:11px;color:var(--muted);margin-right:2px;}
+.statebar button{border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:12px;cursor:pointer;transition:all .15s;}
+.statebar button:hover{background:var(--hover);color:var(--fg);}
+.statebar button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
+.frame{max-width:1000px;margin:0 auto;display:flex;height:700px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+/* ===== 右侧属性面板（三部分布局主体） ===== */
+.panel{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);}
+/* 面板头：对象路径 + 刷新 */
+.panel-head{height:36px;flex:none;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--sidebar-border);background:var(--tabbar);}
+.panel-head .crumb{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.panel-head .crumb b{color:var(--fg);font-weight:600;}
+.panel-head .sp{flex:1;}
+.iconbtn{width:24px;height:24px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .12s;}
+.iconbtn:hover{background:var(--hover);color:var(--fg);border-color:var(--border);}
+/* ===== ① 洞察总览（新增部分） ===== */
+.overview{border-bottom:1px solid var(--sidebar-border);background:var(--overview-bg);padding:10px 12px 12px;}
+.ov-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.ov-badge{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;flex:none;}
+.ov-badge.conn{background:linear-gradient(135deg,#60A5FA,#2563EB);}
+.ov-badge.schema{background:linear-gradient(135deg,#34D399,#059669);}
+.ov-badge.table{background:linear-gradient(135deg,#FBBF24,#D97706);}
+.ov-title{font-size:13px;font-weight:700;line-height:1.2;}
+.ov-sub{font-size:11px;color:var(--muted);}
+.ov-status{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;}
+.dot.on{background:var(--success);box-shadow:0 0 0 3px var(--success-bg);}
+.dot.err{background:var(--danger);box-shadow:0 0 0 3px var(--danger-bg);}
+.dot.off{background:var(--muted);}
+.stat-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;}
+.stat-card{border:1px solid var(--card-border);border-radius:8px;padding:6px 8px;background:var(--bg);}
+.stat-card .k{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px;}
+.stat-card .v{font-size:16px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums;}
+.stat-card .u{font-size:10px;color:var(--muted);font-weight:400;margin-left:2px;}
+.stat-card .delta{font-size:10px;color:var(--success);}
+.ov-kv{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:11px;color:var(--muted);}
+.ov-kv span b{color:var(--fg);font-weight:600;margin-left:3px;}
+.ov-note{font-size:10px;color:var(--muted);margin-top:6px;border-top:1px dashed var(--card-border);padding-top:6px;}
+.ov-note .tag{display:inline-block;border:1px solid var(--card-border);border-radius:4px;padding:0 5px;margin-right:6px;font-size:10px;color:var(--info);background:var(--info-bg);}
+/* ===== ② General 属性区（DBeaver 上部对齐） ===== */
+.general{padding:8px 12px;border-bottom:1px solid var(--sidebar-border);max-height:230px;overflow-y:auto;}
+.sec-title{font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin:6px 0 4px;}
+.sec-title:first-child{margin-top:0;}
+.prop-row{display:flex;align-items:flex-start;gap:10px;padding:2px 0;}
+.prop-row .k{width:104px;flex:none;font-size:12px;color:var(--muted);padding-top:4px;}
+.prop-row .v{flex:1;min-width:0;font-size:12px;padding-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.prop-row.readonly .v{color:var(--fg);}
+.prop-row .edit-btn{width:22px;height:22px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--muted);display:none;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:all .12s;}
+.prop-row .edit-btn:hover{background:var(--hover);color:var(--primary);border-color:var(--active-border);}
+.prop-row.editable:hover .edit-btn{display:flex;}
+.prop-row .v input[type=text]{width:100%;max-width:260px;border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);outline:none;}
+.prop-row .v input[type=text]:focus{border-color:var(--active-border);}
+.prop-row .v select{border:1px solid var(--input-border);border-radius:5px;padding:2px 6px;font-size:12px;background:var(--bg);color:var(--fg);}
+.prop-row .v textarea{border:1px solid var(--input-border);border-radius:5px;padding:3px 7px;font-size:12px;background:var(--bg);color:var(--fg);width:100%;max-width:260px;resize:vertical;min-height:30px;}
+.prop-row .save-btn,.prop-row .cancel-btn{border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;background:var(--bg);color:var(--fg);}
+.prop-row .save-btn{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.prop-row .save-btn:hover{background:var(--primary-hover);}
+.prop-row .cancel-btn:hover{background:var(--hover);}
+.switch{width:30px;height:16px;border-radius:9px;background:var(--border);position:relative;cursor:pointer;transition:background .15s;flex:none;}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);}
+.switch.on{background:var(--primary);}
+.switch.on::after{left:16px;}
+.flag{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--card-border);border-radius:4px;padding:0 5px;font-size:10px;color:var(--muted);}
+.flag.ok{color:var(--success);border-color:var(--success);}
+/* ===== ③ 子项列表区（DBeaver 下部对齐） ===== */
+.sub{flex:1;display:flex;min-height:0;}
+.sub-side{width:150px;flex:none;border-right:1px solid var(--sidebar-border);background:var(--sidebar);overflow-y:auto;padding:6px 0;}
+.sub-item{display:flex;align-items:center;gap:7px;padding:5px 12px;font-size:12px;color:var(--fg);cursor:pointer;border-left:2px solid transparent;transition:all .1s;}
+.sub-item:hover{background:var(--hover);}
+.sub-item.on{background:var(--accent);border-left-color:var(--active-border);font-weight:600;}
+.sub-item .cnt{margin-left:auto;font-size:10px;color:var(--muted);background:var(--accent);border-radius:8px;padding:0 6px;line-height:15px;}
+.sub-item.on .cnt{background:var(--bg);}
+.sub-item.gray{color:var(--muted);cursor:default;}
+.sub-item.gray:hover{background:transparent;}
+.sub-item.gray .cnt{background:var(--hover);}
+.sub-main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.sub-head{height:32px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--sidebar-border);font-size:11px;color:var(--muted);}
+.sub-head b{color:var(--fg);font-size:12px;}
+.sub-head .sp{flex:1;}
+.sub-head .hint{font-size:10px;color:var(--muted);}
+.grid-wrap{flex:1;overflow:auto;padding:4px 8px 8px;}
+table.grid{width:100%;border-collapse:collapse;font-size:12px;}
+table.grid th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;padding:4px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);white-space:nowrap;}
+table.grid td{padding:4px 8px;border-bottom:1px solid var(--sidebar-border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;}
+table.grid tr:hover td{background:var(--hover);}
+.vtag{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border:1px solid var(--primary);border-radius:3px;color:var(--primary);font-size:10px;line-height:1;}
+.null-mark{color:var(--muted);}
+.empty-hint{padding:18px;text-align:center;color:var(--muted);font-size:12px;border:1px dashed var(--border);border-radius:8px;margin-top:8px;}
+.foot{height:26px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-top:1px solid var(--sidebar-border);font-size:11px;color:var(--muted);background:var(--tabbar);}
+.foot .sp{flex:1;}
+.legend{display:inline-flex;align-items:center;gap:4px;margin-left:auto;}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block;margin-right:3px;}
+/* 说明条 */
+.note-bar{max-width:1000px;margin:14px auto 0;padding:12px 16px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-size:12px;color:var(--muted);line-height:1.7;}
+.note-bar h3{font-size:13px;color:var(--fg);margin-bottom:6px;}
+.note-bar code{background:var(--accent);border-radius:4px;padding:1px 5px;font-size:11px;}
+.note-bar table{border-collapse:collapse;width:100%;margin-top:8px;}
+.note-bar th,.note-bar td{border:1px solid var(--border);padding:4px 8px;text-align:left;font-size:12px;}
+.note-bar th{background:var(--accent);color:var(--fg);}
+</style>
+</head>
+<body data-theme="light">
+<div class="page-head">
+  <div class="brand">
+    <div class="logo"><svg class="ico" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg></div>
+    <div><h1>数据库对象属性面板 · 三部分布局</h1><div class="sub">洞察总览 + General 属性（DBeaver 上部）+ 子项列表（DBeaver 下部）</div></div>
+  </div>
+  <button class="theme-toggle" id="themeToggle">🌓 切换明暗</button>
+</div>
+
+<div class="statebar">
+  <span class="lbl">对象示例（PG 真机数据）：</span>
+  <button id="swConn" class="on">连接 postgres</button>
+  <button id="swSchema">Schema public</button>
+  <button id="swTable">表 purchase_order_item</button>
+  <span class="lbl" style="margin-left:12px">原型说明：</span>
+  <button id="swDbeaver">对照 DBeaver</button>
+</div>
+
+<div class="frame">
+  <div class="panel">
+    <div class="panel-head">
+      <div class="crumb" id="crumb">属性 · <b>P_real_pg</b> / postgres</div>
+      <div class="sp"></div>
+      <button class="iconbtn" title="刷新属性（重新内省）"><svg class="ico" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+    </div>
+
+    <!-- ===== ① 洞察总览 ===== -->
+    <div class="overview" id="overview"></div>
+
+    <!-- ===== ② General 属性（DBeaver 上部） ===== -->
+    <div class="general" id="general"></div>
+
+    <!-- ===== ③ 子项列表（DBeaver 下部） ===== -->
+    <div class="sub" id="sub"></div>
+
+    <div class="foot">
+      <span id="footSrc">数据源：实时内省（L2 缓存命中）</span>
+      <span class="sp"></span>
+      <span class="legend"><i style="background:var(--success)"></i>可编辑</span>
+      <span class="legend"><i style="background:var(--muted)"></i>只读</span>
+      <span class="legend"><i style="background:var(--warning)"></i>懒加载</span>
+    </div>
+  </div>
+</div>
+
+<div class="note-bar" id="noteBar"></div>
+
+<script>
+const THEME_KEY='rds-prop-proto-theme';
+const $=s=>document.querySelector(s);
+const $$=s=>[...document.querySelectorAll(s)];
+const IC={
+  conn:'<svg class="ico" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>',
+  schema:'<svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
+  table:'<svg class="ico" viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
+  layers:'<svg class="ico" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
+  col:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16M4 15h16"/></svg>',
+  index:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M5 21V5l14 6-9 3 9 3-14 4z"/></svg>',
+  key:'<svg class="ico-sm" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M14 9l3 3"/></svg>',
+  func:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 14h6v6h-6z"/><path d="M7 10v4a3 3 0 0 0 3 3h4"/></svg>',
+  seq:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.34 5.66"/><path d="M4 4v6h6"/></svg>',
+  trig:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
+  shield:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"/></svg>',
+  link:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  doc:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+  chip:'<svg class="ico-sm" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>',
+  rule:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
+  plug:'<svg class="ico-sm" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M7 8h10v4a5 5 0 0 1-5 5 5 5 0 0 1-5-5V8z"/></svg>',
+};
+/* ================= 数据模型（PG 真机口径） ================= */
+const DATA={
+  conn:{
+    badge:['conn',IC.conn], title:'postgres', ovsub:'PostgreSQL 数据库 · P_real_pg',
+    status:['on','已连接'], crumbs:['P_real_pg','postgres'],
+    cards:[
+      {k:'Schema',v:'513',u:'个',icon:IC.schema},
+      {k:'数据表',v:'≈1,218',u:'张',icon:IC.table},
+      {k:'视图',v:'102',u:'个',icon:IC.layers},
+      {k:'缓存命中',v:'98.7',u:'%',icon:IC.chip},
+    ],
+    kv:[['版本','16.4 (Debian)'],['主机','192.168.3.138:5432'],['默认编码','UTF8'],['排序规则','C'],['管理员','postgres'],['默认表空间','pg_default']],
+    note:'<span class="tag">洞察</span>表/视图数 = 各 Schema 内省对象累加（L1/L2 缓存）；缓存命中率 = 本次会话内省缓存命中 / 请求总数',
+    general:[
+      {sec:'常规',rows:[
+        {k:'名称',v:'postgres',kind:'text'},
+        {k:'数据库管理员',v:'postgres',kind:'select',opts:['postgres','admin','rds_ro'],edit:true},
+        {k:'描述',v:'default administrative connection database',kind:'longtext',edit:true},
+      ]},
+      {sec:'高级',rows:[
+        {k:'模板',v:'template1',kind:'select',opts:['template0','template1'],edit:true},
+        {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
+        {k:'默认编码',v:'UTF8',kind:'text'},
+        {k:'排序规则',v:'C',kind:'text'},
+        {k:'连接限制',v:'-1（不限制）',kind:'text',edit:true},
+        {k:'允许连接',v:true,kind:'bool',edit:true},
+      ]},
+    ],
+    sub:[
+      {t:'模式',icon:IC.schema,on:true,grid:['名称','描述'],rows:[['public','standard public schema'],['rds_nav_probe_a','（空）'],['rds_nav_probe_b','（空）']]},
+      {t:'事件触发器',icon:IC.trig,grid:['名称','事件'],rows:[['evt_rds_nav_probe','ddl_command_start']]},
+      {t:'扩展',icon:IC.plug,grid:['名称','版本'],rows:[['plpgsql','1.0'],['uuid-ossp','1.1']]},
+      {t:'存储',icon:IC.doc,grid:['名称','类型'],rows:[]},
+      {t:'系统信息',icon:IC.chip,grid:['名称','值'],rows:[['server_version','16.4']]},
+      {t:'角色',icon:IC.shield,grid:['名称','权限'],rows:[['postgres','SUPERUSER'],['rds_ro','LOGIN']]},
+    ],
+  },
+  schema:{
+    badge:['schema',IC.schema], title:'public', ovsub:'Schema · 所属库 postgres',
+    status:['on','已加载'], crumbs:['P_real_pg','postgres','public'],
+    cards:[
+      {k:'数据表',v:'24',u:'张',icon:IC.table},
+      {k:'视图',v:'2',u:'个',icon:IC.layers},
+      {k:'函数',v:'4',u:'个',icon:IC.func},
+      {k:'序列',v:'12',u:'个',icon:IC.seq},
+    ],
+    kv:[['所有者','postgres'],['命名空间 ID','2200'],['表空间','pg_default'],['行级安全','未启用'],['对象总数','≈42']],
+    note:'<span class="tag">洞察</span>对象计数 = Schema 内省结果（introspect_schema_objects，一次连接内省全类别）',
+    general:[
+      {sec:'常规',rows:[
+        {k:'名称',v:'public',kind:'text'},
+        {k:'所有者',v:'postgres',kind:'select',opts:['postgres','admin'],edit:true},
+        {k:'描述',v:'standard public schema',kind:'longtext',edit:true},
+      ]},
+      {sec:'高级',rows:[
+        {k:'命名空间 ID',v:'2200',kind:'text'},
+        {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default'],edit:true},
+      ]},
+    ],
+    sub:[
+      {t:'表',icon:IC.table,on:true,grid:['名称','列数','行数','大小'],rows:[
+        ['purchase_order_item','8','1,204','472 kB'],
+        ['material','6','96','64 kB'],
+        ['supplier','5','32','40 kB'],
+        ['biz_000','2','0','8 kB'],
+      ]},
+      {t:'外部表',icon:IC.table,grid:['名称','服务器'],rows:[['ext_fdw_a','fdw_server_01']]},
+      {t:'视图',icon:IC.layers,grid:['名称','定义'],rows:[['v_order_summary','SELECT …'],['v_material_stock','SELECT …']]},
+      {t:'物化视图',icon:IC.layers,grid:['名称','定义'],rows:[['mv_daily_sales','SELECT …']]},
+      {t:'索引',icon:IC.index,grid:['名称','表','唯一'],rows:[['idx_order_item_sk','purchase_order_item','否']]},
+      {t:'函数',icon:IC.func,grid:['名称','返回类型'],rows:[['fn_get_orders','SETOF record'],['fn_stock_level','int4']]},
+      {t:'序列',icon:IC.seq,grid:['名称','当前值'],rows:[['seq_order_id','1204'],['seq_material_id','96']]},
+      {t:'数据类型',icon:IC.chip,grid:['名称','类型'],rows:[]},
+      {t:'聚合函数',icon:IC.func,grid:['名称','输入','数据类型'],rows:[]},
+      {t:'权限',icon:IC.shield,gray:true,grid:['名称','权限'],rows:[['public','USAGE'],['postgres','ALL']]},
+      {t:'源',icon:IC.doc,gray:true,grid:['名称','定义'],rows:[['public','CREATE SCHEMA public …']]},
+    ],
+  },
+  table:{
+    badge:['table',IC.table], title:'purchase_order_item', ovsub:'表 · Schema public',
+    status:['on','已加载'], crumbs:['P_real_pg','postgres','public','purchase_order_item'],
+    cards:[
+      {k:'列',v:'8',u:'列',icon:IC.col},
+      {k:'索引',v:'3',u:'个',icon:IC.index},
+      {k:'约束',v:'4',u:'个',icon:IC.key},
+      {k:'估计行数',v:'1,204',u:'行',icon:IC.table,delta:'reltuples'},
+    ],
+    kv:[['所有者','postgres'],['表空间','pg_default'],['对象 ID','30232'],['分区','否'],['行级安全','未启用'],['大小','472 kB']],
+    note:'<span class="tag">洞察</span>行数 = pg_class.reltuples（懒加载）；大小 = pg_total_relation_size（懒加载）；列/索引/约束 = L2 缓存',
+    general:[
+      {sec:'常规',rows:[
+        {k:'名称',v:'purchase_order_item',kind:'text'},
+        {k:'描述',v:'采购订单明细',kind:'longtext',edit:true},
+        {k:'所有者',v:'postgres',kind:'select',opts:['postgres','admin'],edit:true},
+      ]},
+      {sec:'高级',rows:[
+        {k:'表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
+        {k:'有行级安全',v:false,kind:'bool',edit:true},
+        {k:'分区',v:false,kind:'bool',edit:true},
+        {k:'分区依据',v:'（无）',kind:'text',edit:true},
+        {k:'额外选项',v:'fillfactor=90',kind:'text',edit:true},
+        {k:'对象 ID',v:'30232',kind:'text'},
+      ]},
+    ],
+    sub:[
+      {t:'列',icon:IC.col,on:true,grid:['列名','#','数据类型','标识','排序规则','非空','默认值','注释'],rows:[
+        ['id','1','int4','','','✓','nextval(seq_order_id)','主键'],
+        ['order_no','2','varchar(32)','','','✓','',''],
+        ['material_id','3','int4','','','✓','',''],
+        ['qty','4','int4','','','✓','1',''],
+        ['unit_price','5','numeric(12,2)','','','✓','0',''],
+        ['created_at','6','timestamptz','','','✓','now()',''],
+        ['updated_at','7','timestamptz','','','','',''],
+        ['remark','8','text','','','','',''],
+      ]},
+      {t:'约束',icon:IC.key,grid:['名称','类型','列'],rows:[
+        ['pk_order_item','PRIMARY KEY','id'],
+        ['uq_order_no','UNIQUE','order_no'],
+        ['fk_material','FOREIGN KEY','material_id'],
+        ['chk_qty','CHECK','qty > 0'],
+      ]},
+      {t:'外键',icon:IC.link,grid:['名称','列','引用'],rows:[['fk_material','material_id','material.id']]},
+      {t:'索引',icon:IC.index,grid:['名称','列','唯一'],rows:[
+        ['pk_order_item','id','是'],
+        ['uq_order_no','order_no','是'],
+        ['idx_order_created','created_at','否'],
+      ]},
+      {t:'依赖关系',icon:IC.link,grid:['对象','类型'],rows:[]},
+      {t:'参考',icon:IC.link,grid:['表','列'],rows:[]},
+      {t:'分区',icon:IC.layers,gray:true,grid:['分区名','边界'],rows:[]},
+      {t:'触发器',icon:IC.trig,grid:['名称','事件'],rows:[['trg_order_updated','BEFORE UPDATE']]},
+      {t:'规则',icon:IC.rule,grid:['名称','事件'],rows:[]},
+      {t:'策略',icon:IC.shield,grid:['名称','命令'],rows:[]},
+      {t:'Statistics',icon:IC.chip,grid:['列','目标'],rows:[]},
+      {t:'权限',icon:IC.shield,gray:true,grid:['角色','权限'],rows:[['postgres','ALL'],['rds_ro','SELECT']]},
+      {t:'DDL',icon:IC.doc,gray:true,grid:['DDL'],rows:[['CREATE TABLE public.purchase_order_item …']]},
+      {t:'虚拟',icon:IC.chip,gray:true,grid:['名称','值'],rows:[]},
+    ],
+  },
+};
+const DB_ANNOT={
+  conn:{src:'PostgreDatabase.java',props:'getName(viewable,order2) / getDescription(editable,MULTILINE,order100) / getDBA(editable,listProvider,order3) / getTemplateName / getDefaultTablespace(editable,listProvider,order4) / getEncoding(order11) / getCollation(order12) / getConnectionLimit(order13) / isAllowConnections(order14)',sub:'DBeaver 下部 = 模式/事件触发器/扩展/存储/系统信息/角色 列表页'},
+  schema:{src:'PostgreSchema.java',props:'getName(viewable,order1) / getObjectId(viewable=false,order2) / getOwner(order4) / getDescription(editable,MULTILINE,order100)',sub:'DBeaver 下部 = 表/外部表/视图/物化视图/索引/函数/序列/数据类型/聚合函数/权限/源 类别页'},
+  table:{src:'PostgreTableBase.java + PostgreTable.java',props:'getName / getObjectId(viewable,order9) / getDescription(editable,MULTILINE,order100) / getOwner(viewable,order10) / getTablespace(editable,listProvider,order20) / isRowLevelSecurity(viewable,order41) / isPartitioned(viewable,order42) / getPartitionBy(editable,order43)',sub:'DBeaver 下部 = 列/约束/外键/索引/依赖/触发器/规则/策略/权限/DDL/虚拟 类别页'},
+};
+const NOTE={
+  conn:'<h3>① 洞察总览（本原型新增部分）</h3><p>DBeaver 的属性面板是<b>上下两部分</b>：上部 General 属性网格、下部（左对象类别树 + 右子项表格）。我们在此基础上增加<b>洞察总览</b>——打开对象即见关键统计（对象计数 / 缓存命中 / 版本 / 连接状态），无需逐项展开。<b>三部分自上而下：洞察总览 → General 属性 → 子项列表</b>。</p><table><tr><th>部分</th><th>对齐 DBeaver</th><th>数据来源（RDS）</th></tr><tr><td>① 洞察总览</td><td>新增</td><td>内省缓存计数（L1/L2）+ 连接状态（nav_view）+ 懒加载统计（reltuples / pg_total_relation_size）</td></tr><tr><td>② General 属性</td><td>上部（@Property viewable / editable / listProvider / MULTILINE）</td><td><code>load_properties</code> 描述符（id / category / editable / value_kind）</td></tr><tr><td>③ 子项列表</td><td>下部（类别树 + 表格）</td><td><code>list_columns / list_indexes / list_constraints / 内省</code>（现有）</td></tr></table><h3 style="margin-top:10px">属性编辑对齐（@Property editable=true → setter）</h3><p>DBeaver：<code>getDescription(monitor)</code> 懒加载（查 <code>pg_shdescription</code>），<code>setDescription</code> 提交 <code>COMMENT</code>；<code>getDBA</code> 下拉（RoleListProvider）→ <code>setDBA</code>；<code>getTablespace</code> 下拉 → <code>setTablespace</code>。<b>RDS 已落地</b>：PropertyRow 描述符化 + apply_property_edit（PG 列级 RENAME/COMMENT/DEFAULT/NULLABLE）；连接/表级描述编辑（COMMENT ON DATABASE/SCHEMA/TABLE）为下一步。</p>',
+  schema:'<h3>Schema 洞察与属性</h3><p>洞察总览 = Schema 内省结果（表 / 视图 / 函数 / 序列 计数，一次连接内省全类别）；General 属性对齐 <code>PostgreSchema</code>（名称 / 所有者 / 描述）；子项列表对齐 DBeaver 左侧类别树（表 → 权限 / 源 等 11 类）。</p>',
+  table:'<h3>表洞察与属性</h3><p>洞察总览 = 列 / 索引 / 约束 / 行数（reltuples 懒加载）；General 属性对齐 <code>PostgreTable</code>（表空间 / 行级安全 / 分区 / 额外选项 / 描述）；子项列表 = 列 / 约束 / 外键 / 索引 / 触发器 / 权限 / DDL 等 14 类。列网格对齐 DBeaver 列页（列名 / # / 数据类型 / 标识 / 排序规则 / 非空 / 默认值 / 注释）。</p>',
+};
+let cur='conn';
+function renderNote(){
+  $('#noteBar').innerHTML=NOTE[cur];
+}
+function renderOverview(){
+  const d=DATA[cur];
+  const statusCls=d.status[0]==='on'?'on':(d.status[0]==='err'?'err':'off');
+  $('#overview').innerHTML=`
+    <div class="ov-head">
+      <div class="ov-badge ${d.badge[0]}">${d.badge[1]}</div>
+      <div><div class="ov-title">${d.title}</div><div class="ov-sub">${d.ovsub}</div></div>
+      <div class="ov-status"><span class="dot ${statusCls}"></span>${d.status[1]}</div>
+    </div>
+    <div class="stat-cards">${d.cards.map(c=>`
+      <div class="stat-card"><div class="k">${c.icon}${c.k}</div><div class="v">${c.v}<span class="u">${c.u}</span></div>${c.delta?`<div class="delta">${c.delta}</div>`:''}</div>`).join('')}
+    </div>
+    <div class="ov-kv">${d.kv.map(p=>`<span>${p[0]}<b>${p[1]}</b></span>`).join('')}</div>
+    <div class="ov-note">${d.note}</div>`;
+}
+function renderGeneral(){
+  const d=DATA[cur];
+  $('#general').innerHTML=d.general.map(sec=>`
+    <div class="sec-title">${sec.sec}</div>
+    ${sec.rows.map(r=>renderPropRow(r)).join('')}
+  `).join('');
+}
+function renderPropRow(r){
+  let valCell='';
+  if(r.kind==='bool'){
+    valCell=`<div class="v"><span class="switch ${r.v?'on':''}"></span>${r.edit?'<span class="flag ok">可编辑</span>':''}</div>`;
+  }else if(r.kind==='select'){
+    valCell=`<div class="v"><select><option>${r.v}</option>${r.opts.filter(o=>o!==r.v).map(o=>`<option>${o}</option>`).join('')}</select><span class="flag ok">可编辑</span></div>`;
+  }else if(r.kind==='longtext'){
+    valCell=`<div class="v"><span>${r.v}</span><button class="edit-btn" title="编辑（长文本）"><svg class="ico-sm" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button><span class="flag ok">可编辑</span></div>`;
+  }else{
+    valCell=`<div class="v"><span>${r.v}</span>${r.edit?`<button class="edit-btn" title="编辑"><svg class="ico-sm" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button><span class="flag ok">可编辑</span>`:''}</div>`;
+  }
+  return `<div class="prop-row ${r.edit?'editable':'readonly'}"><div class="k">${r.k}</div>${valCell}</div>`;
+}
+function renderSub(){
+  const d=DATA[cur];
+  const active=d.sub.find(s=>s.on)||d.sub[0];
+  $('#sub').innerHTML=`
+    <div class="sub-side">${d.sub.map(s=>`
+      <div class="sub-item ${s.on?'on':''} ${s.gray?'gray':''}">
+        ${s.icon}${s.t}${s.rows.length?`<span class="cnt">${s.rows.length}</span>`:''}
+      </div>`).join('')}
+    </div>
+    <div class="sub-main">
+      <div class="sub-head"><b>${active.t}</b><span>（${active.rows.length} 项）</span><div class="sp"></div><span class="hint">${active.gray?'能力未实现：先绘制、置灰标注':'实时内省'}</span></div>
+      <div class="grid-wrap">${active.rows.length?`
+        <table class="grid"><thead><tr>${active.grid.map(g=>`<th>${g}</th>`).join('')}</tr></thead>
+        <tbody>${active.rows.map(row=>`<tr>${row.map((cell,i)=>`<td>${cell==='✓'?'<span class="vtag">✓</span>':cell}</td>`).join('')}</tr>`).join('')}</tbody></table>`:
+        `<div class="empty-hint">暂无 ${active.t}（类别已注册，内容为空）</div>`}
+      </div>
+    </div>`;
+}
+function renderCrumb(){
+  const d=DATA[cur];
+  $('#crumb').innerHTML=`属性 · <b>${d.crumbs.map(c=>c).join('</b> / <b>')}</b>`;
+}
+function renderAll(){
+  renderOverview();renderGeneral();renderSub();renderCrumb();renderNote();
+  $$('.statebar button').forEach(b=>b.classList.remove('on'));
+  $('#sw'+cur.charAt(0).toUpperCase()+cur.slice(1)).classList.add('on');
+}
+$('#themeToggle').addEventListener('click',()=>{
+  const b=document.body.dataset.theme==='light'?'dark':'light';
+  document.body.dataset.theme=b;localStorage.setItem(THEME_KEY,b);
+});
+$('#swConn').addEventListener('click',()=>{cur='conn';renderAll();});
+$('#swSchema').addEventListener('click',()=>{cur='schema';renderAll();});
+$('#swTable').addEventListener('click',()=>{cur='table';renderAll();});
+let dbOn=false;
+$('#swDbeaver').addEventListener('click',()=>{
+  dbOn=!dbOn;const b=$('#swDbeaver');b.classList.toggle('on',dbOn);
+  const d=DATA[cur];const an=DB_ANNOT[cur];
+  if(dbOn){
+    b.textContent='收起对照';
+    $('#noteBar').innerHTML=`<h3>对照 DBeaver 源码（${an.src}）</h3><p>属性描述符：<code>${an.props}</code></p><p>${an.sub}</p>`;
+  }else{b.textContent='对照 DBeaver';renderNote();}
+});
+renderAll();
+</script>
+</body>
+</html>
