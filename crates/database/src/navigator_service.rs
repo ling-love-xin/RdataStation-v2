@@ -430,95 +430,27 @@ impl NavigatorService {
         Ok(names)
     }
 
-    /// Schema → 类别文件夹（有对象的才显示，标题带计数）。
+    /// Schema → 类别文件夹（DBeaver 分块模型：**静态文件夹，不内省对象**）。
     ///
-    /// 「表」的计数优先取 `metadata_index`（索引可用时）：这样展开 schema 这一层
-    /// **不必把整个表清单物化一遍**，只为了在标题里写个数字。
-    /// 其余类别仍走全量收集（见 [`Self::indexed_folder_count`] 的说明）。
+    /// 2026-10-08 顺滑度三阶段（真机铁证）：本环境（192.168.3.138 链路）**跨任务连接
+    /// 复用必挂**（app_run68：biz_484 connect_ms=2176 / biz_495 connect_ms=2647 = 每次
+    /// 展开 ping 2s 超时 + 重建——复用反而更慢）。因此展开 schema **完全不查库**：
+    /// 只渲染 5 个静态类别文件夹（Tables/Views/Routines/Sequences/Triggers），毫秒级
+    /// 瞬时；对象列表在**点击类别文件夹**时才加载（collect_objects：冷展开一次
+    /// 300ms 可接受、L2 命中毫秒级）——这正是 DBeaver 的树交互（展开 schema 出骨架、
+    /// 点类别才查对象）。
     async fn load_folders(
         &self,
         conn_id: &str,
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NavNode>, CoreError> {
-        let t0 = std::time::Instant::now();
-        tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "导航 load_folders 开始");
-        let indexed = self.indexed_counts(conn_id, catalog, schema);
-        tracing::info!(conn_id = %conn_id, elapsed_ms = t0.elapsed().as_millis(), "load_folders indexed_counts 完成");
-        // 批量内省缓存（2026-10-08 DBeaver 会话语义）：一次展开最多**一次**
-        // `introspect_schema_objects`（一条新连接 + 每类 SQL 各一次）；后续类别从
-        // 这里取，不再逐类别建连 / 不再在缓存 scoped 连接上重复执行同 SQL。
-        let mut batch: Option<SchemaObjects> = None;
-        let mut nodes = Vec::new();
-        // 类别文件夹**固定显示**（与 DBeaver 一致）：空类别（count=0）也显示，
-        // 用户能一眼看到"这个 schema 有哪些类别、各自有没有对象"。
-        // 失败语义：表清单失败 → 直接冒泡成 schema 红字（可点重试）；其余类别失败
-        // → 本次少一行文件夹（降级，不阻塞其余类别）。Tables 是 `NavFolder::ALL`
-        // 第一项，失败必提前 return，故「全部失败但没报错」的路径不存在。
-        for folder in NavFolder::ALL {
-            // 进度探针（2026-10-08）：曾出现「views 成功后 13s 无日志」盲区，
-            // 用类别级进度日志钉住卡点（索引命中 vs collect_objects 入口 vs 返回）。
-            tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, folder = folder.key(), "load_folders 类别开始");
-            let count = match Self::indexed_folder_count(folder, indexed.as_ref()) {
-                Some(count) => {
-                    count
-                }
-                None => {
-                    // 实时内省（或 L1 / L2 命中）。
-                    let tf = std::time::Instant::now();
-                    // 单类别**不设独立超时**（对齐 DBeaver：慢 = 加载中，不是错误）。
-                    // 历史 5s 单类别超时被证伪：跨库 scoped 连接冷建连 6~7s（warehouse_supply_chain
-                    // 首展）是正常场景，5s 必超时 → 类别被降级隐藏 → schema 树「不完整 / 不一致」
-                    // （app_run47 日志：主库 11ms 成功、scoped 库每次 5s 红字、慢查询 0 条）。
-                    // 真卡死由 worker 层 JOB_TIMEOUT（30s）兜底成 schema 红字（可点重试），
-                    // 用户感知与 DBeaver 一致：内省慢就等（加载中），真失败才报错。
-                    let folder_result = self
-                        .collect_objects(conn_id, catalog, schema, folder, &mut batch)
-                        .await;
-                    match folder_result {
-                        Ok(objects) => {
-                            tracing::info!(
-                                conn_id = %conn_id,
-                                catalog = %catalog,
-                                schema = %schema,
-                                folder = folder.key(),
-                                count = objects.len(),
-                                elapsed_ms = tf.elapsed().as_millis(),
-                                "导航 collect_objects 成功"
-                            );
-                            objects.len()
-                        }
-                        Err(e) if folder != NavFolder::Tables => {
-                            tracing::warn!(
-                                conn_id = %conn_id,
-                                catalog = %catalog,
-                                schema = %schema,
-                                folder = folder.key(),
-                                error = %e,
-                                "类别加载失败（降级：本次不显示这一类）"
-                            );
-                            0
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                conn_id = %conn_id,
-                                catalog = %catalog,
-                                schema = %schema,
-                                folder = folder.key(),
-                                error = %e,
-                                "表清单加载失败（冒泡成 schema 红字）"
-                            );
-                            return Err(e);
-                        }
-                    }
-                }
-            };
-            // 与 DBeaver 一致：类别文件夹**固定显示**（表/视图/函数/序列/触发器），
-            // 空类别（count=0）也显示——用户能一眼看到"这个 schema 有哪些类别、各自
-            // 有没有对象"，而不是靠"没出现 = 没有"去猜（用户决策 2026-10-08）。
-            nodes.push(Self::folder_node(conn_id, catalog, schema, folder, count));
-        }
-        Ok(nodes)
+        tracing::info!(conn_id = %conn_id, catalog = %catalog, schema = %schema, "导航 load_folders 开始（静态类别文件夹）");
+        // 空类别也显示（用户决策 2026-10-08：所有类别固定显示，点击空类别显示空）。
+        Ok(NavFolder::ALL
+            .iter()
+            .map(|folder| Self::folder_node(conn_id, catalog, schema, *folder, None))
+            .collect())
     }
 
     /// 某类别的计数能否直接信索引；`None` = 必须全量收集。
@@ -553,17 +485,22 @@ impl NavigatorService {
         cache.object_counts(schema_id)
     }
 
-    /// 类别文件夹节点（标题带计数）。
+    /// 类别文件夹节点（DBeaver 分块模型：静态渲染，无计数——对象数在点击文件夹
+    /// 加载后才知；`count=None` 只显示类别名）。
     fn folder_node(
         conn_id: &str,
         catalog: &str,
         schema: &str,
         folder: NavFolder,
-        count: usize,
+        count: Option<usize>,
     ) -> NavNode {
+        let title = match count {
+            Some(c) => format!("{} ({})", folder.label(), c),
+            None => folder.label().to_string(),
+        };
         NavNode::new(
             NavNode::child_key(conn_id, &[catalog, schema, folder.key()]),
-            format!("{} ({})", folder.label(), count),
+            title,
             conn_id,
             NavNodeKind::Folder(folder),
             true,
@@ -1343,6 +1280,8 @@ mod l1_tests {
             guard.set_tables(conn_id, "main", Some("public"), vec![table("t1")]);
         }
 
+        // DBeaver 分块模型（2026-10-08）：展开 schema **不内省对象**，静态返回 5 个
+        // 类别文件夹（无计数）——即使 L1 已有表数据也不预查（点击文件夹才加载对象）。
         let nodes = offline_service(false)
             .load_children(
                 conn_id,
@@ -1352,43 +1291,41 @@ mod l1_tests {
                 },
             )
             .await
-            .expect("表这一类读到了，就不该整层报错");
+            .expect("静态文件夹永不失败");
         assert_eq!(nodes.len(), NavFolder::ALL.len(), "五类文件夹固定显示");
         let tables = nodes
             .iter()
             .find(|n| matches!(n.kind, NavNodeKind::Folder(NavFolder::Tables)))
             .expect("表文件夹在");
+        assert_eq!(tables.name, "表", "静态文件夹不带计数（点击后才知对象数）");
         assert!(
-            matches!(tables.kind, NavNodeKind::Folder(NavFolder::Tables))
-                && tables.name.contains("(1)"),
-            "表文件夹带真实计数（1）"
-        );
-        let failed = nodes
-            .iter()
-            .find(|n| matches!(n.kind, NavNodeKind::Folder(NavFolder::Sequences)))
-            .expect("失败的类别也固定显示");
-        assert!(
-            failed.name.contains("(0)"),
-            "失败类别显示 count=0（不隐藏，也不假装有对象）"
+            nodes
+                .iter()
+                .any(|n| matches!(n.kind, NavNodeKind::Folder(NavFolder::Sequences))),
+            "序列文件夹也固定显示（无论有无对象）"
         );
     }
 
-    /// 反证：一类都没读成时必须如实报错，不能给一棵空树假装「这个 schema 是空的」。
+    /// 反证：对象加载（点击文件夹）时回源失败必须如实报错，不能给空树假装「没有对象」。
     #[tokio::test]
     async fn all_categories_failing_is_still_an_error() {
-        assert!(
-            offline_service(false)
-                .load_children(
-                    "P_folders_all_fail",
-                    &NavPath::Schema {
-                        catalog: "main".to_string(),
-                        schema: "public".to_string(),
-                    },
-                )
-                .await
-                .is_err(),
-            "全失败仍是失败（否则用户会以为这个 schema 下什么都没有）"
-        );
+        let conn_id = "P_folders_all_fail";
+        // 静态文件夹层：永不失败（不查库）。
+        offline_service(false)
+            .load_children(
+                conn_id,
+                &NavPath::Schema {
+                    catalog: "main".to_string(),
+                    schema: "public".to_string(),
+                },
+            )
+            .await
+            .expect("静态文件夹不依赖库，恒成功");
+        // 对象层（点击 Tables 文件夹）：管理器为空 → 回源失败 → 如实报错。
+        let err = offline_service(false)
+            .load_objects(conn_id, "main", "public", NavFolder::Tables)
+            .await;
+        assert!(err.is_err(), "对象加载失败仍是失败（否则用户会以为这个 schema 下什么都没有）");
     }
 }
 

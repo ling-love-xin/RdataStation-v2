@@ -159,13 +159,11 @@ const PG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 
 /// 连接空闲回收阈值：超过即主动关闭（DBeaver「按需建连 + 空闲回收」轻量会话模型）。
 ///
-/// **1s 是实证调参**（2026-10-08）：真机铁证「连接闲置 2.4s/9.8s 即被网络层静默
-/// 丢弃，复用必挂」（app_run61 biz_358→383；app_run62 biz_454→459）；而建连成本
-/// 实测 150-380ms（Windows 网络栈/安全软件逐连接检查，sslmode 无关）——因此复用
-/// 窗口收窄到 **1s**：一次展开内 4 类别查询间隔 <10ms（活跃复用，1 条连接）；
-/// 闲置 >1s 即回收新建（避开任何"闲置复用"挂起窗口）。连续展开逐一点开通常
-/// >1s 间隔 → 每次都是新鲜连接（等价 DBeaver 会话级短命连接）。
-const PG_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(1);
+/// **60s 是 DBeaver 会话语义**（2026-10-08）：会话内展开/查询复用同一条连接；
+/// 闲置超过 60s 即回收新建。**注意**：批量内省路径已改回每次新建连接（见
+/// [`introspect_schema_objects`]），本阈值只作用于 query/query_with_params 的
+/// 会话级复用。
+const PG_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// 按 URL 建一条 PG 物理连接（单连接化后的统一入口）。
 ///
@@ -604,6 +602,11 @@ impl Database for PostgresDatabase {
     ) -> Result<crate::driver::SchemaObjects, CoreError> {
         use sqlx::Row as _;
         let t_conn = std::time::Instant::now();
+        // **每次新建连接**（2026-10-08 最终形态，app_run69 铁证）：复用 + ping 在
+        // 撞上网络故障窗口时引入 2s ping 超时 + 重建 = 2.1s 惩罚（public/tables
+        // connect_ms=2115），比直接新建（300-400ms）慢 6 倍；而每次新建连接自带
+        // 健康（app_run66/67 40+ 展开零超时）。批量 5 条 SQL 在同一条新连接上串行，
+        // 连接随函数结束 drop（不跨任务复用，避开环境网络层对旧连接的冻结）。
         let mut conn = connect_pg_single(&self.connect_url)
             .await
             .map_err(|e| query_error(schema, e))?;

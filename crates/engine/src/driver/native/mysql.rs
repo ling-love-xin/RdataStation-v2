@@ -176,10 +176,9 @@ impl MySqlDatabase {
 const MYSQL_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// 连接空闲回收阈值：超过即主动关闭（DBeaver「按需建连 + 空闲回收」轻量会话模型）。
-/// **1s 实证调参**（2026-10-08，同 postgres.rs）：建连实测 150-380ms 环境固有；
-/// 一次展开 4 类别查询间隔 <10ms 复用同一连接；闲置 >1s 即回收新建，
-/// 避开"闲置复用挂起"铁证窗口（2.4s/9.8s 即挂）。
-const MYSQL_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(1);
+/// **60s 是 DBeaver 会话语义**（2026-10-08，同 postgres.rs）：批量内省路径已改回
+/// 每次新建连接，本阈值只作用于 query/query_with_params 的会话级复用。
+const MYSQL_IDLE_RECYCLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// 按 URL 建一条 MySQL 物理连接（单连接化后的统一入口）。
 async fn connect_mysql_single(url: &str) -> Result<sqlx::mysql::MySqlConnection, sqlx::Error> {
@@ -190,9 +189,10 @@ async fn connect_mysql_single(url: &str) -> Result<sqlx::mysql::MySqlConnection,
 /// 拿会话级连接的锁（`None` 时按 `connect_url` 懒重建）；调用方持有 guard 期间
 /// 连接被独占，查询串行（等价 DBeaver SingleThreadLock）。
 ///
-/// **空闲回收**（2026-10-08 对齐 DBeaver「按需建连 + 空闲回收」，同 postgres.rs）：
-/// 连接闲置超过 [`MYSQL_IDLE_RECYCLE`] 时置 `None` 重建——连接短命、用完回收，
-/// 避免常驻连接被网络层静默丢弃后下一次查询挂起。
+/// **空闲回收**（2026-10-08 对齐 DBeaver「按需建连 + 空闲回收」轻量会话，同
+/// postgres.rs）：闲置超过 [`MYSQL_IDLE_RECYCLE`] 置 `None` 重建。**不做复用前
+/// ping**（app_run69 铁证：ping 在撞上网络故障窗口时引入 2s 超时 + 重建 = 2.1s
+/// 惩罚，比直接新建慢 6 倍）；批量内省路径已改回每次新建连接。
 async fn lock_mysql_conn<'a>(
     conn: &'a Arc<tokio::sync::Mutex<Option<sqlx::mysql::MySqlConnection>>>,
     last_used: &std::sync::Mutex<Option<std::time::Instant>>,
@@ -709,6 +709,9 @@ impl Database for MySqlDatabase {
         use sqlx::Row as _;
         // MySQL 的 schema 参数即 catalog（information_schema 按 ROUTINE_SCHEMA/TABLE_SCHEMA 过滤）。
         let _ = schema;
+        // **每次新建连接**（2026-10-08 最终形态，同 postgres.rs，app_run69 铁证）：
+        // 复用 + ping 在撞上网络故障窗口时引入 2s ping 超时 + 重建 = 2.1s 惩罚（比直接
+        // 新建慢 6 倍）；每次新建连接自带健康（app_run66/67 40+ 展开零超时）。
         let mut conn = connect_mysql_single(&self.connect_url)
             .await
             .map_err(|e| mysql_query_error(catalog, &e))?;
