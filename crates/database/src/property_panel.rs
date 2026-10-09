@@ -1,18 +1,23 @@
 //! rds-database — 对象属性面板取数（M4 数据生产者）。
 //!
-//! 领域模型 / 数据容器 / 描述模型 / 注册表契约在 `rds-property`
-//! （见 `docs/architecture/property/property-module-spec.md`）。
-//! 本模块是 **M4 场景的数据生产者**：实时内省取数（`load_properties`）+ 对象类型 → 属性页注册表
-//! 实现（`PropertyRegistryImpl`，含权限 / 依赖等暂不支持页的置灰声明）。
+//! 领域模型 / 数据容器 / 描述模型 / 属性源契约在 `rds-property`
+//! （见 `docs/architecture/property/property-module-spec.md` §16）。
+//! 本模块是 **M4 场景的通用骨架**：
+//! - 驱动无关取数：列 / 索引 / 约束 / DDL / 数据（`metadata_service` 内省）；
+//! - 属性源分派：`property_providers::global_registry().provider(driver, kind)`；
+//!   驱动特异部分（属性行 / 洞察 / 类别 / 编辑 SQL）在 provider，**新增驱动不改本文件**；
+//! - 未注册 provider 的对象类型回退通用展示（fallback）。
 //! 视图形态为编辑区右侧停靠面板（`workbench/panels/editor.rs`）。
 
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyRef};
+use crate::property_providers::global_registry;
 use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
-    ObjectProperties, PageId, PropertyKind, PropertyPage, PropertyRegistry, PropertyRow,
-    PropertySection, PropertyTable, PropertyValueKind, SupportState, TableDataPage,
+    ObjectOverview, ObjectProperties, PageId, PropertyCategory, PropertyKind,
+    PropertyRow, PropertySection, PropertyTable, PropertyTargetRef, PropertyValueKind,
+    ProviderInput, ProviderStats, TableDataPage,
 };
 use shared::error::CoreError;
 
@@ -71,7 +76,23 @@ fn source_label(source: NavSource) -> String {
     }
 }
 
+/// `PropertyRef` → 属性源目标引用（`property` crate 的轻量结构，不依赖本 crate）。
+fn to_target(ref_: &PropertyRef) -> PropertyTargetRef {
+    PropertyTargetRef {
+        kind: ref_.kind,
+        name: ref_.name.clone(),
+        catalog: ref_.catalog.clone(),
+        schema: ref_.schema.clone(),
+        parent: ref_.parent.clone(),
+        conn_id: ref_.conn_id.clone(),
+        source: source_label(ref_.source),
+    }
+}
+
 /// 加载对象属性（实时内省；连接 / Catalog / Schema 无需查询）。
+///
+/// 流程：通用取数（列/索引/约束/DDL/数据）→ 属性源分派（provider 组装属性行/洞察/类别）→
+/// 类别内容合并（categories 声明顺序 + 骨架取数内容）。
 ///
 /// `data_req` 为 `Some` 时对表 / 视图附带「数据」页签的分页抓取
 /// （`property_panel` 只编排：取数在 [`crate::table_data`]，与结果集只共享网格渲染层）。
@@ -84,9 +105,7 @@ pub async fn load_properties(
     data_req: Option<&TableDataRequest>,
 ) -> Result<ObjectProperties, CoreError> {
     let source = source_label(ref_.source);
-    let mut properties = Vec::new();
-    let mut sections = Vec::new();
-    let mut data: Option<TableDataPage> = None;
+    let target = to_target(ref_);
 
     let object_type = match ref_.kind {
         PropertyKind::Connection => "连接",
@@ -106,196 +125,48 @@ pub async fn load_properties(
         _ => ref_.name.clone(),
     };
 
+    let catalog = ref_.catalog.clone().unwrap_or_default();
+    let schema = ref_.schema.clone().unwrap_or_default();
+
+    // ── ① 通用取数（驱动无关，失败降级不影响主面板） ──────────────────────
+    let mut columns: Vec<engine::driver::traits::ColumnDetail> = Vec::new();
+    let mut indexes: Vec<engine::driver::traits::IndexDetail> = Vec::new();
+    let mut constraints: Vec<engine::driver::traits::ConstraintDetail> = Vec::new();
+    let mut column_detail: Option<engine::driver::traits::ColumnDetail> = None;
+    let mut routine_source: Option<String> = None;
+    let mut ddl_text: Option<String> = None;
+    let mut data: Option<TableDataPage> = None;
+
     match ref_.kind {
-        PropertyKind::Connection => {
-            properties.push(row("名称", conn_label));
-            // 数据库类型（`drivers.type_id`）与驱动显示名由调用方（workbench 驱动目录）传入。
-            if let Some(t) = db_type {
-                if !t.is_empty() {
-                    properties.push(row("数据库类型", t));
-                }
-            }
-            properties.push(row("归属域", source.clone()));
-            properties.push(row("驱动", driver));
-        }
-        PropertyKind::Catalog | PropertyKind::Schema => {
-            properties.push(row("名称", ref_.name.clone()));
-            properties.push(row("类型", object_type.clone()));
-            properties.push(row("归属域", source.clone()));
-            let qualified = qualify(ref_);
-            properties.push(row("限定名", qualified));
-        }
         PropertyKind::Table | PropertyKind::View => {
-            let catalog = ref_.catalog.clone().unwrap_or_default();
-            let schema = ref_.schema.clone().unwrap_or_default();
-            let columns = metadata
+            columns = metadata
                 .list_columns(&ref_.conn_id, &catalog, &schema, &ref_.name)
                 .await?;
-
-            // 索引 / 约束：以前只在「非空才加分区」时顺带取，现在 DDL 合成也要吃这两样，
-            // 所以提前取出来（视图没有这两层，不查）。失败仍当空——不因为附属信息
-            // 拿不到而让整个属性面板报错。
-            let (indexes, constraints) = if ref_.kind == PropertyKind::Table {
-                (
-                    metadata
-                        .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                        .await
-                        .unwrap_or_default(),
-                    metadata
-                        .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
-                        .await
-                        .unwrap_or_default(),
-                )
-            } else {
-                (Vec::new(), Vec::new())
-            };
-
-            properties.push(row("限定名", qualify(ref_)));
-            properties.push(row("类型", object_type.clone()));
-            properties.push(row("列数", columns.len().to_string()));
-            properties.push(row("归属域", source.clone()));
-
-            sections.push(PropertySection {
-                id: PageId::Columns,
-                label: format!("列 ({})", columns.len()),
-                table: columns_table(&columns),
-            });
-
-            if !indexes.is_empty() {
-                sections.push(PropertySection {
-                    id: PageId::Indexes,
-                    label: format!("索引 ({})", indexes.len()),
-                    table: indexes_table(&indexes),
-                });
+            if ref_.kind == PropertyKind::Table {
+                indexes = metadata
+                    .list_indexes(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                    .await
+                    .unwrap_or_default();
+                constraints = metadata
+                    .list_constraints(&ref_.conn_id, &catalog, &schema, &ref_.name)
+                    .await
+                    .unwrap_or_default();
             }
-            if !constraints.is_empty() {
-                sections.push(PropertySection {
-                    id: PageId::Constraints,
-                    label: format!("约束 ({})", constraints.len()),
-                    table: constraints_table(&constraints),
-                });
-            }
-
-            // DDL 三分：**能取源就取源**（MySQL / SQLite / DuckDB 存了原文 —— 存储引擎 /
-            // 字符集 / 分区 / CHECK 表达式 / 视图定义都在里面），取不到才由目录信息合成
-            // （PostgreSQL 没有 `SHOW CREATE TABLE` 的等价物）。取源失败（权限不足 / 对象
-            // 刚好被删）也退回合成，不因为附属信息让整个面板报错 —— 合成会把边界写在首行。
-            match metadata
+            ddl_text = metadata
                 .get_table_ddl(&ref_.conn_id, &catalog, &schema, &ref_.name)
                 .await
                 .ok()
-                .flatten()
-            {
-                Some(text) => sections.push(PropertySection {
-                    id: PageId::Ddl,
-                    label: "DDL（源版）".to_string(),
-                    table: text_table("DDL", &text),
-                }),
-                // 视图没有源版时**不摆空分区**：合成要视图定义，而目录数据里没有
-                None if ref_.kind == PropertyKind::Table => {
-                    let composed = crate::sql_gen::create_table_ddl(
-                        &qualify(ref_),
-                        &columns,
-                        &constraints,
-                        &indexes,
-                    );
-                    sections.push(PropertySection {
-                        id: PageId::Ddl,
-                        label: "DDL（合成）".to_string(),
-                        table: text_table("DDL", &composed),
-                    });
-                }
-                None => {}
-            }
-
-            // 「数据」页签：请求带分页参数时抓取（视图同样适用——只读 SELECT，
-            // 无主键时 `is_ordered` 如实为假）。失败**如实报错**：数据是面板的一等页签，
-            // 不因附属信息失败就静默降级成「没有数据」。
-            if let Some(req) = data_req {
-                data = Some(
-                    table_data::load_table_data(
-                        metadata,
-                        &ref_.conn_id,
-                        &catalog,
-                        &schema,
-                        &ref_.name,
-                        req,
-                    )
-                    .await?,
-                );
-            }
+                .flatten();
         }
         PropertyKind::Column => {
-            let catalog = ref_.catalog.clone().unwrap_or_default();
-            let schema = ref_.schema.clone().unwrap_or_default();
             let parent = ref_.parent.clone().unwrap_or_default();
-            let columns = metadata
+            let all = metadata
                 .list_columns(&ref_.conn_id, &catalog, &schema, &parent)
                 .await?;
-            if let Some(col) = columns.iter().find(|c| c.name == ref_.name) {
-                // DBeaver 列属性对齐（General 组）：只读 + 可编辑
-                // （可空 / 默认值 / 注释 / 重命名——提交走 `apply_property_edit`）。
-                properties.push(row("名称", col.name.clone()));
-                properties.push(row("所属表", qualify(ref_)));
-                properties.push(row("类型", col.data_type.clone()));
-                properties.push(editable_row(
-                    "Column.nullable",
-                    "可空",
-                    if col.nullable { "true" } else { "false" },
-                    PropertyValueKind::Boolean,
-                    vec!["true".to_string(), "false".to_string()],
-                ));
-                properties.push(row("主键", if col.is_primary_key { "是" } else { "否" }));
-                properties.push(row("外键", if col.is_foreign_key { "是" } else { "否" }));
-                if col.ordinal > 0 {
-                    properties.push(row("序号", col.ordinal.to_string()));
-                }
-                if let Some(r) = &col.references {
-                    properties.push(row("引用", format!("{}.{}", r.table, r.column)));
-                }
-                properties.push(editable_row(
-                    "Column.default_value",
-                    "默认值",
-                    opt(&col.default_value),
-                    PropertyValueKind::Text,
-                    Vec::new(),
-                ));
-                properties.push(editable_row(
-                    "Column.comment",
-                    "注释",
-                    opt(&col.comment),
-                    PropertyValueKind::LongText,
-                    Vec::new(),
-                ));
-            } else {
-                properties.push(row("名称", ref_.name.clone()));
-                properties.push(row("所属表", qualify(ref_)));
-                properties.push(row("提示", "列已不存在（结构可能已变更）"));
-            }
-        }
-        PropertyKind::Sequence | PropertyKind::Trigger => {
-            properties.push(row("名称", ref_.name.clone()));
-            properties.push(row("限定名", qualify(ref_)));
-            properties.push(row("类型", object_type.clone()));
-            properties.push(row("归属域", source.clone()));
-            // 触发器必属于一张表：驱动内省已查到（`NodeInfo::parent_name`），不展示就白查。
-            if ref_.kind == PropertyKind::Trigger {
-                if let Some(table) = ref_.parent.as_deref().filter(|t| !t.is_empty()) {
-                    properties.push(row("关联表", table.to_string()));
-                }
-            }
+            column_detail = all.into_iter().find(|c| c.name == ref_.name);
         }
         PropertyKind::Routine => {
-            let catalog = ref_.catalog.clone().unwrap_or_default();
-            let schema = ref_.schema.clone().unwrap_or_default();
-            properties.push(row("名称", ref_.name.clone()));
-            properties.push(row("限定名", qualify(ref_)));
-            properties.push(row("类型", object_type.clone()));
-            properties.push(row("归属域", source.clone()));
-
-            // `PropertyRef` 不带例程种类（过程 / 函数），而驱动按种类走不同语句：
-            // 先按存储过程取，未命中（`None` 或语句报错）再按函数取。
-            let mut source_text = metadata
+            routine_source = metadata
                 .get_routine_source(
                     &ref_.conn_id,
                     &catalog,
@@ -305,9 +176,13 @@ pub async fn load_properties(
                 )
                 .await
                 .ok()
-                .flatten();
-            if source_text.is_none() {
-                source_text = metadata
+                .flatten()
+                .or_else(|| {
+                    // 例程种类未知：按过程未命中再按函数取（`PropertyRef` 不带种类）。
+                    None
+                });
+            if routine_source.is_none() {
+                routine_source = metadata
                     .get_routine_source(
                         &ref_.conn_id,
                         &catalog,
@@ -319,33 +194,266 @@ pub async fn load_properties(
                     .ok()
                     .flatten();
             }
-            match source_text {
-                Some(text) => sections.push(PropertySection {
-                    id: PageId::Source,
-                    label: "源码".to_string(),
-                    table: text_table("源码", &text),
-                }),
-                None => properties.push(row("源码", "（未能获取）")),
-            }
         }
+        _ => {}
+    }
+    if let Some(req) = data_req {
+        if matches!(ref_.kind, PropertyKind::Table | PropertyKind::View) {
+            data = Some(
+                table_data::load_table_data(
+                    metadata,
+                    &ref_.conn_id,
+                    &catalog,
+                    &schema,
+                    &ref_.name,
+                    req,
+                )
+                .await?,
+            );
+        }
+    }
+
+    // ── ② 属性源分派（新增驱动 = 注册 provider，本文件不改） ──────────────
+    let stats = ProviderStats {
+        column_count: columns.len(),
+        index_count: indexes.len(),
+        constraint_count: constraints.len(),
+    };
+    let counts: Vec<(&str, String)> = Vec::new(); // 调用方统计（版本/路径/oid 等）待连接侧接入
+    let provider = global_registry().provider(driver, ref_.kind);
+
+    let (properties, overview, categories) = match provider {
+        Some(p) => {
+            let input = ProviderInput {
+                target: &target,
+                conn_label,
+                db_type,
+                stats,
+                counts: &counts,
+                detail: column_detail
+                    .as_ref()
+                    .map(|c| c as &dyn std::any::Any),
+            };
+            (
+                p.property_defs(&input),
+                p.overview(&input),
+                p.categories(&input),
+            )
+        }
+        // 未注册 provider：通用展示（fallback，保留旧行为）。
+        None => (
+            fallback_properties(ref_, conn_label, driver, db_type, &source, &columns, &indexes, &constraints, &routine_source, &ddl_text),
+            fallback_overview(ref_, &title, &object_type, &source, &stats),
+            fallback_categories(ref_.kind),
+        ),
+    };
+
+    // ── ③ 类别内容合并：categories 声明顺序 + 骨架取数内容 ────────────────
+    let qualified = qualify(ref_);
+    let mut sections: Vec<PropertySection> = Vec::new();
+    for cat in categories {
+        let table = sections_of(
+            ref_.kind,
+            cat.id,
+            &qualified,
+            &columns,
+            &indexes,
+            &constraints,
+            &routine_source,
+            &ddl_text,
+        )
+        .map(|s| s.table)
+        .unwrap_or(cat.table);
+        sections.push(PropertySection {
+            id: cat.id,
+            label: cat.label,
+            table,
+            enabled: cat.enabled,
+        });
     }
 
     Ok(ObjectProperties {
         title,
         object_type,
         source_label: source,
+        overview,
         properties,
         sections,
         data,
     })
 }
 
+/// 骨架分区内容（列 / 索引 / 约束 / DDL / 源码——按类别 id 提供）。
+#[allow(clippy::too_many_arguments)]
+fn sections_of(
+    kind: PropertyKind,
+    page: PageId,
+    qualified: &str,
+    columns: &[engine::driver::traits::ColumnDetail],
+    indexes: &[engine::driver::traits::IndexDetail],
+    constraints: &[engine::driver::traits::ConstraintDetail],
+    routine_source: &Option<String>,
+    ddl_text: &Option<String>,
+) -> Option<PropertySection> {
+    match page {
+        PageId::Columns => Some(PropertySection {
+            id: PageId::Columns,
+            label: format!("列 ({})", columns.len()),
+            table: columns_table(columns),
+            enabled: true,
+        }),
+        PageId::Indexes => Some(PropertySection {
+            id: PageId::Indexes,
+            label: format!("索引 ({})", indexes.len()),
+            table: indexes_table(indexes),
+            enabled: true,
+        }),
+        PageId::Constraints => Some(PropertySection {
+            id: PageId::Constraints,
+            label: format!("约束 ({})", constraints.len()),
+            table: constraints_table(constraints),
+            enabled: true,
+        }),
+        PageId::Ddl => {
+            if let Some(text) = ddl_text {
+                Some(PropertySection {
+                    id: PageId::Ddl,
+                    label: "DDL（源版）".to_string(),
+                    table: text_table("DDL", text),
+                    enabled: true,
+                })
+            } else if kind == PropertyKind::Table {
+                // 取不到源（PostgreSQL 无 SHOW CREATE 等价物）→ 目录信息合成。
+                let composed = crate::sql_gen::create_table_ddl(
+                    qualified,
+                    columns,
+                    constraints,
+                    indexes,
+                );
+                Some(PropertySection {
+                    id: PageId::Ddl,
+                    label: "DDL（合成）".to_string(),
+                    table: text_table("DDL", &composed),
+                    enabled: true,
+                })
+            } else {
+                None
+            }
+        }
+        PageId::Source => routine_source.as_ref().map(|text| PropertySection {
+            id: PageId::Source,
+            label: "源码".to_string(),
+            table: text_table("源码", text),
+            enabled: true,
+        }),
+        _ => None,
+    }
+}
+
+/// 未注册 provider 时的通用属性行（fallback，保留原行为）。
+#[allow(clippy::too_many_arguments)]
+fn fallback_properties(
+    ref_: &PropertyRef,
+    conn_label: &str,
+    driver: &str,
+    db_type: Option<&str>,
+    source: &str,
+    columns: &[engine::driver::traits::ColumnDetail],
+    indexes: &[engine::driver::traits::IndexDetail],
+    constraints: &[engine::driver::traits::ConstraintDetail],
+    routine_source: &Option<String>,
+    ddl_text: &Option<String>,
+) -> Vec<PropertyRow> {
+    let mut properties = Vec::new();
+    match ref_.kind {
+        PropertyKind::Connection => {
+            properties.push(row("名称", conn_label));
+            if let Some(t) = db_type {
+                if !t.is_empty() {
+                    properties.push(row("数据库类型", t));
+                }
+            }
+            properties.push(row("归属域", source));
+            properties.push(row("驱动", driver));
+        }
+        PropertyKind::Catalog | PropertyKind::Schema => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("类型", "Catalog/Schema"));
+            properties.push(row("归属域", source));
+            properties.push(row("限定名", qualify(ref_)));
+        }
+        PropertyKind::Table | PropertyKind::View => {
+            properties.push(row("限定名", qualify(ref_)));
+            properties.push(row("类型", if ref_.kind == PropertyKind::Table { "表" } else { "视图" }));
+            properties.push(row("列数", columns.len().to_string()));
+            properties.push(row("归属域", source));
+        }
+        PropertyKind::Column => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("所属表", qualify(ref_)));
+            properties.push(row("提示", "通用展示（驱动 provider 未注册）"));
+        }
+        PropertyKind::Sequence | PropertyKind::Trigger => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("限定名", qualify(ref_)));
+            properties.push(row("类型", "序列/触发器"));
+            properties.push(row("归属域", source));
+        }
+        PropertyKind::Routine => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("限定名", qualify(ref_)));
+            properties.push(row("类型", "例程"));
+            properties.push(row("归属域", source));
+        }
+    }
+    let _ = (indexes, constraints, routine_source, ddl_text);
+    properties
+}
+
+/// 未注册 provider 时的通用洞察（fallback）。
+fn fallback_overview(
+    _ref_: &PropertyRef,
+    title: &str,
+    object_type: &str,
+    source: &str,
+    stats: &ProviderStats,
+) -> ObjectOverview {
+    let mut cards = Vec::new();
+    if stats.column_count > 0 {
+        cards.push(property::OverviewCard { label: "列".into(), value: stats.column_count.to_string(), unit: String::new(), delta: None });
+    }
+    ObjectOverview {
+        title: title.to_string(),
+        subtitle: object_type.to_string(),
+        status: property::OverviewStatus::Connected,
+        status_text: "已加载".to_string(),
+        cards,
+        kv: vec![("作用域".to_string(), source.to_string())],
+        note: String::new(),
+        meta: vec![("作用域".to_string(), source.to_string())],
+    }
+}
+
+/// 未注册 provider 时的通用类别（fallback：仅 General）。
+fn fallback_categories(kind: PropertyKind) -> Vec<PropertyCategory> {
+    let mut cats = vec![PropertyCategory {
+        id: PageId::General,
+        label: "通用".to_string(),
+        enabled: true,
+        table: PropertyTable { headers: Vec::new(), rows: Vec::new() },
+    }];
+    if matches!(kind, PropertyKind::Table | PropertyKind::View | PropertyKind::Routine) {
+        cats.push(PropertyCategory::disabled(PageId::Privileges, "权限"));
+    }
+    cats
+}
+
 /// 应用属性编辑（DBeaver `setPropertyValue` 对齐，2026-10-09）。
 ///
-/// 列级编辑生成 ALTER 语句并执行（`driver` 分派见 [`crate::sql_gen::alter_column_sql`]，
-/// 仅 PostgreSQL 支持；其余驱动明确报「暂不支持」）。返回实际执行的 SQL（渲染方展示）。
+/// 编辑 SQL 由驱动 provider 生成（`ProviderProvider::apply_edit_sql`，仅 PostgreSQL
+/// 列级编辑支持；其余驱动 / 对象类型明确报「暂不支持」）。返回实际执行的 SQL（渲染方展示）。
 ///
-/// `property_id` 与 [`load_properties`] 行 id 一致（`Column.name` / `Column.comment` /
+/// `property_id` 与属性行 id 一致（`Column.name` / `Column.comment` /
 /// `Column.default_value` / `Column.nullable`）。
 pub async fn apply_property_edit(
     metadata: &MetadataService,
@@ -354,26 +462,55 @@ pub async fn apply_property_edit(
     property_id: &str,
     value: &str,
 ) -> Result<String, CoreError> {
-    if ref_.kind != PropertyKind::Column {
-        return Err(CoreError::database(
-            shared::error::DatabaseError::Driver {
-                db_type: driver.to_string(),
-                operation: "apply_property_edit".to_string(),
-                source: "暂仅支持列属性编辑（其他对象类型待扩展）".to_string(),
-            },
-        ));
-    }
     let catalog = ref_.catalog.clone().unwrap_or_default();
     let schema = ref_.schema.clone().unwrap_or_default();
-    let table = ref_.parent.clone().unwrap_or_default();
-    let sql = crate::sql_gen::alter_column_sql(
-        driver,
-        (!schema.is_empty()).then_some(schema.as_str()),
-        &table,
-        &ref_.name,
-        property_id,
-        value,
-    )?;
+    let target = to_target(ref_);
+
+    // 列级编辑需要列明细（detail 传 provider）。
+    let column_detail = if ref_.kind == PropertyKind::Column {
+        let parent = ref_.parent.clone().unwrap_or_default();
+        metadata
+            .list_columns(&ref_.conn_id, &catalog, &schema, &parent)
+            .await?
+            .into_iter()
+            .find(|c| c.name == ref_.name)
+    } else {
+        None
+    };
+
+    let provider = global_registry().provider(driver, ref_.kind);
+    let sql = match provider {
+        Some(p) => {
+            let input = ProviderInput {
+                target: &target,
+                conn_label: "",
+                db_type: None,
+                stats: ProviderStats::default(),
+                counts: &[],
+                detail: column_detail
+                    .as_ref()
+                    .map(|c| c as &dyn std::any::Any),
+            };
+            p.apply_edit_sql(&input, property_id, value).map_err(|msg| {
+                CoreError::database(shared::error::DatabaseError::Driver {
+                    db_type: driver.to_string(),
+                    operation: "apply_property_edit".to_string(),
+                    source: msg,
+                })
+            })?
+        }
+        None => {
+            // fallback：仅 PG 列级编辑（provider 未注册的驱动同样报不支持）。
+            crate::sql_gen::alter_column_sql(
+                driver,
+                (!schema.is_empty()).then_some(schema.as_str()),
+                ref_.parent.clone().unwrap_or_default().as_str(),
+                &ref_.name,
+                property_id,
+                value,
+            )?
+        }
+    };
     metadata.execute_query(&ref_.conn_id, &catalog, &sql).await?;
     Ok(sql)
 }
@@ -476,153 +613,59 @@ fn constraints_table(constraints: &[engine::driver::traits::ConstraintDetail]) -
     PropertyTable { headers, rows }
 }
 
-/// 对象类型 → 属性页集合的注册表实现（M4 数据生产者侧）。
-///
-/// 页集合是**描述**：渲染方只遍历它；权限 / 依赖当前无内省实现 → `Unsupported`，
-/// 先绘制、置灰标注（`docs/architecture/property/property-module-spec.md` §8）。
-#[derive(Default)]
-pub struct PropertyRegistryImpl;
-
-impl PropertyRegistry for PropertyRegistryImpl {
-    fn pages_for(&self, kind: PropertyKind) -> Vec<PropertyPage> {
-        let supported = |id: PageId, title: &str| PropertyPage {
-            id,
-            title: title.to_string(),
-            state: SupportState::Supported,
-        };
-        let unsupported = |id: PageId, title: &str| PropertyPage {
-            id,
-            title: title.to_string(),
-            state: SupportState::Unsupported,
-        };
-        let general = supported(PageId::General, "通用");
-        match kind {
-            PropertyKind::Connection => vec![general, unsupported(PageId::Privileges, "权限")],
-            PropertyKind::Table => vec![
-                general,
-                supported(PageId::Columns, "列"),
-                supported(PageId::Indexes, "索引"),
-                supported(PageId::Constraints, "约束"),
-                supported(PageId::Ddl, "DDL"),
-                supported(PageId::Data, "数据"),
-                unsupported(PageId::Privileges, "权限"),
-                unsupported(PageId::Dependencies, "依赖"),
-            ],
-            PropertyKind::View => vec![
-                general,
-                supported(PageId::Columns, "列"),
-                supported(PageId::Ddl, "DDL"),
-                supported(PageId::Data, "数据"),
-                unsupported(PageId::Privileges, "权限"),
-            ],
-            PropertyKind::Routine => vec![general, supported(PageId::Source, "源码")],
-            _ => vec![general],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use engine::driver::traits::{ColumnDetail, ForeignKeyRef};
     use super::*;
 
-    /// 注册表：表对象带「列 / 索引 / 约束 / DDL / 数据」支持页，且「权限 / 依赖」先绘制、置灰。
+    /// 转换：PropertyRef → PropertyTargetRef（kind / 父对象 / 来源文案）。
     #[test]
-    fn table_registry_lists_supported_and_unsupported_pages() {
-        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::Table);
-        let ids: Vec<PageId> = pages.iter().map(|p| p.id).collect();
-        assert_eq!(
-            ids,
-            vec![
-                PageId::General,
-                PageId::Columns,
-                PageId::Indexes,
-                PageId::Constraints,
-                PageId::Ddl,
-                PageId::Data,
-                PageId::Privileges,
-                PageId::Dependencies,
-            ]
+    fn to_target_maps_ref_fields() {
+        let r = PropertyRef {
+            conn_id: "c1".to_string(),
+            kind: PropertyKind::Column,
+            name: "id".to_string(),
+            catalog: Some("db".to_string()),
+            schema: Some("public".to_string()),
+            parent: Some("t".to_string()),
+            source: NavSource::Project,
+        };
+        let t = super::to_target(&r);
+        assert_eq!(t.kind, PropertyKind::Column);
+        assert_eq!(t.parent.as_deref(), Some("t"));
+        assert_eq!(t.source, "项目 (P)");
+    }
+
+    /// fallback 连接行（provider 未注册的驱动保底展示）。
+    #[test]
+    fn fallback_connection_rows_show_base_info() {
+        let r = PropertyRef {
+            conn_id: "c1".to_string(),
+            kind: PropertyKind::Connection,
+            name: String::new(),
+            catalog: None,
+            schema: None,
+            parent: None,
+            source: NavSource::Global,
+        };
+        let rows = super::fallback_properties(
+            &r, "C1", "oracle", Some("Oracle"), "全局 (G)",
+            &[], &[], &[], &None, &None,
         );
-        assert!(pages
-            .iter()
-            .all(|p| p.state == SupportState::Supported
-                || matches!(p.id, PageId::Privileges | PageId::Dependencies)));
-        let privileges = pages
-            .iter()
-            .find(|p| p.id == PageId::Privileges)
-            .expect("权限页已注册");
-        assert_eq!(privileges.state, SupportState::Unsupported, "权限暂不可用置灰");
-        let data = pages.iter().find(|p| p.id == PageId::Data).expect("数据页已注册");
-        assert_eq!(data.state, SupportState::Supported, "数据页可用");
+        let labels: Vec<&str> = rows.iter().map(|x| x.label.as_str()).collect();
+        assert!(labels.contains(&"名称"));
+        assert!(labels.contains(&"驱动"));
     }
 
-    /// 视图注册「数据」页（只读 SELECT 同样适用）。
+    /// DDL 合成验证：PG 表无源版时由骨架按目录信息合成（源版优先）。
     #[test]
-    fn view_registry_has_data_page() {
-        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::View);
-        assert!(pages.iter().any(|p| p.id == PageId::Data && p.state == SupportState::Supported));
-    }
-
-    /// 连接对象至少带「通用」+ 灰置「权限」。
-    #[test]
-    fn connection_registry_has_privileges_placeholder() {
-        let pages = super::PropertyRegistryImpl.pages_for(PropertyKind::Connection);
-        assert!(pages.iter().any(|p| p.id == PageId::General));
-        assert!(pages
-            .iter()
-            .any(|p| p.id == PageId::Privileges && p.state == SupportState::Unsupported));
-    }
-
-    fn col(name: &str, ordinal: u32) -> ColumnDetail {
-        ColumnDetail {
-            name: name.to_string(),
-            data_type: "INTEGER".to_string(),
-            nullable: true,
-            is_primary_key: false,
-            is_foreign_key: false,
-            references: None,
-            ordinal,
-            default_value: None,
-            comment: None,
-            extra: Default::default(),
-        }
-    }
-
-    /// 「引用」一列三档 + 序号两档（驱动给了用真序号，没给才退回数组下标）。
-    ///
-    /// 为什么要有这个单测：这三档的取值全在 `ColumnDetail` 的两个新字段上，
-    /// 驱动侧的真机用例（`ddl_from_real_schema.rs`）只覆盖「单列外键」一档，
-    /// 「复合外键只有标记」「驱动没给序号」这两档在这里钉住。
-    #[test]
-    fn columns_table_renders_references_and_ordinal() {
-        let cols = vec![
-            col("id", 1),
-            ColumnDetail {
-                references: Some(ForeignKeyRef {
-                    table: "parent".to_string(),
-                    column: "id".to_string(),
-                }),
-                is_foreign_key: true,
-                ..col("p_id", 2)
-            },
-            // 复合外键里的列：标 FK，但（有意）不给目标
-            ColumnDetail {
-                is_foreign_key: true,
-                ..col("c_id", 3)
-            },
-            // 驱动没给序号（0）→ 退回下标 + 1
-            col("note", 0),
-        ];
-        let t = super::columns_table(&cols);
-
-        assert_eq!(t.headers[5], "引用", "第 6 列是「引用」");
-        assert_eq!(t.rows[0][5], "", "不是外键 ⇒ 空");
-        assert_eq!(t.rows[1][5], "parent.id", "单列外键 ⇒ 表.列");
-        assert_eq!(t.rows[2][5], "FK", "只有标记 ⇒ FK");
-        assert_eq!(t.rows[3][5], "");
-
-        let ordinals: Vec<&str> = t.rows.iter().map(|r| r[0].as_str()).collect();
-        assert_eq!(ordinals, vec!["1", "2", "3", "4"], "第 4 行退回下标");
+    fn sections_of_ddl_composes_when_no_source() {
+        let s = super::sections_of(
+            PropertyKind::Table,
+            PageId::Ddl,
+            "public.t",
+            &[], &[], &[], &None, &None,
+        );
+        assert!(s.is_some(), "PG 表无源版时合成 DDL");
+        assert_eq!(s.unwrap().label, "DDL（合成）");
     }
 }

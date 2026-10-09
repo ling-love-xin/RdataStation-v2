@@ -81,6 +81,20 @@ pub struct PropertySection {
     pub id: PageId,
     pub label: String,
     pub table: PropertyTable,
+    /// `false` = 先绘制、置灰标注（权限 / 依赖等能力未实现）
+    pub enabled: bool,
+}
+
+impl PropertySection {
+    /// 可用分区（默认形态）。
+    pub fn supported(id: PageId, label: String, table: PropertyTable) -> Self {
+        Self {
+            id,
+            label,
+            table,
+            enabled: true,
+        }
+    }
 }
 
 /// 表数据预览的一列（名称 + 类型）。
@@ -133,9 +147,11 @@ pub struct ObjectProperties {
     pub object_type: String,
     /// 来源标签（项目 (P) / 全局 (G) / 共享 (GP)）
     pub source_label: String,
-    /// 上部属性网格
+    /// 洞察总览（三部分布局 ①；provider 组装，运行时 / 统计事实）
+    pub overview: crate::provider::ObjectOverview,
+    /// 上部属性网格（三部分布局 ② General；provider 组装）
     pub properties: Vec<PropertyRow>,
-    /// 子实体分区
+    /// 子实体分区（三部分布局 ③ 子项列表的内容；通用骨架取数）
     pub sections: Vec<PropertySection>,
     /// 表数据预览（「数据」页签；非表对象 / 未请求时为 None）
     pub data: Option<TableDataPage>,

@@ -298,15 +298,16 @@ pub trait PropertyRegistry {
 | --- | --- |
 | `PropertyKind` / 数据容器 / `PropertyState` / 数据页模型 | `crates/property/src/model.rs` |
 | 描述模型 + `PropertyRegistry` trait（含 `PageId::Data`） | `crates/property/src/descriptor.rs` |
+| 属性源接口 + 注册表（对齐 `DBPPropertySource`，§16） | `crates/property/src/provider.rs` |
 | crate 公共 API | `crates/property/src/lib.rs` |
-| `load_properties` 取数（保留） | `crates/database/src/property_panel.rs` |
-| 注册表实现（各类型页集合 + 支持状态） | `crates/database/src/property_panel.rs`（`PropertyRegistryImpl`） |
+| `load_properties` 取数（通用骨架，§16 重构） | `crates/database/src/property_panel.rs` |
+| 属性源注册表实现（各驱动 provider） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql,oracle}.rs` |
 | `PropertyRef` / `PropertyRequest` / `property_ref_of`（保留） | `crates/database/src/model.rs` |
 | 属性加载入队 / 结果类型 | `crates/database/src/nav_jobs.rs` |
-| tab 化描述驱动渲染 | `crates/workbench/src/panels/editor.rs::render_property_panel` |
+| tab 化描述驱动渲染（三部分布局，§16） | `crates/workbench/src/panels/editor.rs::render_property_panel` |
 | Quick Open 打开属性 | `crates/workbench/src/quick_open/model.rs`（`ShowProperties`，类型不变） |
-| 属性行描述符化 + 编辑控件渲染 | `crates/workbench/src/panels/editor.rs::render_property_row` |
-| 属性编辑提交（`setPropertyValue` 对齐） | `crates/database/src/property_panel.rs::apply_property_edit` |
+| 属性行描述符化 + 编辑控件渲染（网格单元，§16） | `crates/workbench/src/panels/editor.rs::render_property_cell` |
+| 属性编辑提交（`setPropertyValue` 对齐；SQL 由 provider 生成） | `crates/database/src/property_panel.rs::apply_property_edit` |
 | 列编辑 SQL 生成（PG） | `crates/database/src/sql_gen.rs::alter_column_sql` |
 | DBeaver 源码参考（本地检出） | `D:\RdataStation\RDS\dbeaver-src\plugins\org.jkiss.dbeaver.model\src\org\jkiss\dbeaver\model\preferences\{DBPPropertySource,DBPPropertyDescriptor,DBPPropertyManager}.java` |
 
@@ -392,4 +393,94 @@ SQLite / DuckDB 无 ALTER 语义等价物，明确报错。
 3. MySQL 列注释 / 默认值编辑未实现（需驱动侧 MODIFY 支持）；
 4. 表级属性（注释 / 描述）编辑未实现（列级先行）；
 5. Select 形态控件（`select_options`）渲染未接（当前提供者未产生 Select 行）。
+
+## 16. 属性源接口化 + 三部分布局（2026-10-09 实现）
+
+> 目标（用户拍板）：**属性面板可重建，不受旧布局约束；导航栏最右侧显示属性可同步修改**；
+> 核心原则是**动态渲染、驱动无关**——新增数据库（Oracle 等）**不需要动面板代码**。
+> 实现基准 = DBeaver 插件机制（`DBPPropertySource` 接口 + 各 `ext.*` 插件实现），
+> 原型 = `docs/architecture/property/database-properties-prototype.html`（三视图 + 四驱动动态演示）。
+
+### 16.1 属性源接口（对齐 DBPPropertySource）
+
+DBeaver 动态渲染核心（源码实证）：属性面板 UI 只依赖 `DBPPropertySource` 接口，
+各数据库插件用 `@Property` 注解 getter 实现它——**新增数据库 = 新插件实现接口，UI 零分支**。
+
+RDS 对齐 = `crates/property/src/provider.rs`：
+
+```rust
+pub trait PropertyProvider: Send + Sync {
+    fn driver(&self) -> &'static str;                       // drivers.type_id（postgres/sqlite/…）
+    fn kind(&self) -> PropertyKind;                         // 每驱动 × 对象类型一个 provider
+    fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow>;   // getProperties()
+    fn overview(&self, input: &ProviderInput) -> ObjectOverview;          // RDS 新增：洞察总览
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertyCategory>; // 子项类别树（能力掩码）
+    fn apply_edit_sql(&self, input, row_id, value) -> Result<String, String>; // setPropertyValue → SQL
+}
+```
+
+- `ProviderInput` 携带：目标引用（`PropertyTargetRef`）、连接显示名、数据库类型、
+  通用骨架统计（`ProviderStats`：列/索引/约束计数）、调用方统计（`counts`：版本/路径/oid/行估计…）、
+  附加对象（`detail`：列明细等，provider 自行 downcast）。
+- `ProviderRegistry`（全局单例 `database::property_providers::global_registry()`）按
+  驱动 × 对象类型解析；驱动比较大小写不敏感（`postgres` / `postgresql` / `pg` 等价）。
+
+### 16.2 实现分层（新增驱动不改面板/骨架）
+
+| 层 | 内容 | 位置 | 新增驱动要改？ |
+| --- | --- | --- | --- |
+| 模型/契约 | `PropertyRow` / `ObjectOverview` / `PropertyCategory` / `ProviderRegistry` | `crates/property/src/{model,descriptor,provider}.rs` | 否 |
+| 通用骨架 | 列/索引/约束/DDL/数据取数 + 类别内容合并 + 编辑执行 | `crates/database/src/property_panel.rs` | 否 |
+| 驱动 provider | 属性行 / 洞察 / 类别 / 编辑 SQL | `crates/database/src/property_providers/`（pg/sqlite/duckdb/mysql/oracle.rs） | **是（只加一个文件 + register 一行）** |
+| 渲染层 | 三部分布局 / 编辑控件 / 数据页 | `crates/workbench/src/panels/editor.rs` | 否 |
+
+**已注册 provider**（`property_providers/mod.rs::register_all`）：
+PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQLite / DuckDB / MySQL 各 2 类
+（连接/表）；Oracle 1 类（连接壳，**证明新增驱动不动面板**）。
+未注册对象类型回退通用展示（`property_panel::fallback_*`）。
+
+### 16.3 三部分布局（原型验收基线）
+
+| 部分 | 内容 | 数据来源 |
+| --- | --- | --- |
+| ① 洞察总览 | 状态点 + 标题 + meta 芯片（驱动/作用域/分组/标签）+ 指标卡 + 关键信息 + 口径注脚 | `ObjectOverview`（provider 组装；cards 用 stats/counts） |
+| ② General 双栏网格 | 定义属性；行数 > 8 自动三栏（面积使用率） | `properties`（provider） |
+| ③ 子项类别列表 | 类别纵向堆叠：可用 → 标题+表头+行；灰置 → 标题置灰 + 「暂不可用」 | `sections`（categories 顺序 + 骨架内容合并） |
+
+- **表 / 视图两页签【属性 | 数据】**（去掉旧「图」页签；数据页懒加载，首屏 200 行）；
+- 其余对象为单属性视图（无页签条）；
+- 灰置类别（权限/依赖/触发器/规则/策略/分区/Statistics）先绘制、置灰标注，不发内省查询；
+- 编辑控件：Boolean → Switch（即改即提交）；Text/LongText → 值 + 编辑按钮 → 行内输入 + 保存/取消；
+  Select 候选已入模型（`select_options`），渲染待 provider 产出 Select 行后接入。
+
+### 16.4 数据流（事件路径，渲染零 I/O）
+
+```
+双击导航对象 → request_properties（事件路径置 loading + 入队）
+   → nav_jobs 后台 load_properties（通用骨架取数 + provider 分派）
+   → apply_props_results 回填 PropertyState → render 三部分
+切「数据」页签 → 懒加载 TableDataRequest::default()（200 行）
+编辑行 → begin_property_edit → submit → run_property_edit（provider.apply_edit_sql + execute_query）
+   → 成功重载面板 / 失败 PropertyState.error 面板内红字
+```
+
+### 16.5 已知限制 / 下一步（相对 15.6 的新增项）
+
+1. 连接/Schema/表级 `counts`（版本/路径/oid/行估计/表大小）尚未由调用方填充——洞察指标卡
+   只显示通用骨架可得项；`reltuples` 等统计待懒加载接入；
+2. 连接级属性编辑（描述/管理员/连接限制）待 settings 接入（当前占位 "-"，提交报「待接入」）；
+3. `PropertyCategory` 的「左侧类别树 + 右侧表格」DBeaver 形态暂以纵向堆叠呈现（原型 v2 一致）；
+4. Oracle 真机内省待驱动接入（连接壳已注册，证明机制）；
+5. 旧版属性面板（右侧停靠 + 页集合 tab）代码已重建，未删旧物（原型与文档保留供对照）。
+
+### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
+
+| 设计决策 | 代码文件 |
+| --- | --- |
+| `PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertyCategory` | `crates/property/src/provider.rs` |
+| `ObjectProperties.overview` / `PropertySection.enabled` / `PageId::{Routines,Partitions}` | `crates/property/src/{model,descriptor}.rs` |
+| 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql/oracle） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql,oracle}.rs` |
+| 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |
+| 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/editor.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}` |
+| 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 

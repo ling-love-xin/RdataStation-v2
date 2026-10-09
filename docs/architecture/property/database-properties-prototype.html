@@ -76,8 +76,8 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .ov-kv span b{color:var(--fg);font-weight:600;margin-left:3px;}
 .ov-note{font-size:10px;color:var(--muted);margin-top:6px;border-top:1px dashed var(--card-border);padding-top:6px;}
 .ov-note .tag{display:inline-block;border:1px solid var(--card-border);border-radius:4px;padding:0 5px;margin-right:6px;font-size:10px;color:var(--info);background:var(--info-bg);}
-/* ===== ② General 属性区（DBeaver 上部对齐 · 双栏网格 + 项目信息） ===== */
-.general{padding:6px 12px;border-bottom:1px solid var(--sidebar-border);max-height:250px;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;gap:2px 24px;align-content:start;}
+/* ===== ② General 属性区（DBeaver 上部对齐 · 自适应栏数 + 项目信息） ===== */
+.general{padding:6px 12px;border-bottom:1px solid var(--sidebar-border);max-height:250px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:2px 24px;align-content:start;}
 .proj-meta{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 8px;padding:4px 0 8px;border-bottom:1px dashed var(--card-border);margin-bottom:4px;}
 .pchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--card-border);border-radius:6px;padding:1px 8px;font-size:11px;color:var(--muted);background:var(--bg);}
 .pchip b{color:var(--fg);font-weight:600;}
@@ -172,10 +172,15 @@ table.grid tr:hover td{background:var(--hover);}
 </div>
 
 <div class="statebar">
-  <span class="lbl">对象示例（PG 真机数据）：</span>
-  <button id="swConn" class="on">连接 postgres</button>
-  <button id="swSchema">Schema public</button>
-  <button id="swTable">表 purchase_order_item</button>
+  <span class="lbl">对象示例：</span>
+  <button id="swConn" class="on">连接</button>
+  <button id="swSchema">Schema</button>
+  <button id="swTable">表</button>
+  <span class="lbl" style="margin-left:12px">驱动（动态渲染验证）：</span>
+  <button id="drvPg" class="on">PostgreSQL</button>
+  <button id="drvSqlite">SQLite</button>
+  <button id="drvDuck">DuckDB</button>
+  <button id="drvMysql">MySQL</button>
   <span class="lbl" style="margin-left:12px">原型说明：</span>
   <button id="swDbeaver">对照 DBeaver</button>
 </div>
@@ -227,39 +232,136 @@ const IC={
 };
 /* ================= 数据模型（PG 真机口径） ================= */
 const DATA={
-  conn:{
-    badge:['conn',IC.conn], title:'postgres', ovsub:'PostgreSQL 数据库 · P_real_pg',
-    status:['on','已连接'], crumbs:['P_real_pg','postgres'],
-    cards:[
-      {k:'Schema',v:'513',u:'个',icon:IC.schema},
-      {k:'数据表',v:'≈1,218',u:'张',icon:IC.table},
-      {k:'视图',v:'102',u:'个',icon:IC.layers},
-      {k:'缓存命中',v:'98.7',u:'%',icon:IC.chip},
-    ],
-    kv:[['版本','16.4 (Debian)'],['主机','192.168.3.138:5432'],['默认编码','UTF8'],['排序规则','C'],['管理员','postgres'],['默认表空间','pg_default']],
-    note:'<span class="tag">洞察</span>表/视图数 = 各 Schema 内省对象累加（L1/L2 缓存）；缓存命中率 = 本次会话内省缓存命中 / 请求总数',
-    general:[
-      {rows:[
-        {k:'名称',v:'postgres',kind:'text'},
-        {k:'数据库管理员',v:'postgres',kind:'select',opts:['postgres','admin','rds_ro'],edit:true},
-        {k:'描述',v:'default administrative connection database',kind:'longtext',edit:true},
-        {k:'模板',v:'template1',kind:'select',opts:['template0','template1'],edit:true},
-        {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
-        {k:'默认编码',v:'UTF8',kind:'text'},
-        {k:'排序规则',v:'C',kind:'text'},
-        {k:'连接限制',v:'-1（不限制）',kind:'text',edit:true},
-        {k:'允许连接',v:true,kind:'bool',edit:true},
-      ]},
-    ],
-    meta:['PostgreSQL','项目','PG 真机',['生产','只读']],
-    sub:[
-      {t:'模式',icon:IC.schema,on:true,grid:['名称','描述'],rows:[['public','standard public schema'],['rds_nav_probe_a','（空）'],['rds_nav_probe_b','（空）']]},
-      {t:'事件触发器',icon:IC.trig,grid:['名称','事件'],rows:[['evt_rds_nav_probe','ddl_command_start']]},
-      {t:'扩展',icon:IC.plug,grid:['名称','版本'],rows:[['plpgsql','1.0'],['uuid-ossp','1.1']]},
-      {t:'存储',icon:IC.doc,grid:['名称','类型'],rows:[]},
-      {t:'系统信息',icon:IC.chip,grid:['名称','值'],rows:[['server_version','16.4']]},
-      {t:'角色',icon:IC.shield,grid:['名称','权限'],rows:[['postgres','SUPERUSER'],['rds_ro','LOGIN']]},
-    ],
+  /* 连接视图按驱动动态渲染（洞察 = 运行时/统计事实，与 General 去重） */
+  connByDriver:{
+    pg:{
+      badge:['conn',IC.conn], title:'postgres', ovsub:'PostgreSQL 数据库 · P_real_pg',
+      status:['on','已连接'], crumbs:['P_real_pg','postgres'],
+      cards:[
+        {k:'Schema',v:'513',u:'个',icon:IC.schema},
+        {k:'数据表',v:'≈1,218',u:'张',icon:IC.table},
+        {k:'视图',v:'102',u:'个',icon:IC.layers},
+        {k:'缓存命中',v:'98.7',u:'%',icon:IC.chip},
+      ],
+      kv:[['版本','16.4 (Debian)'],['主机','192.168.3.138:5432'],['活动连接','3'],['延迟','12 ms']],
+      note:'<span class="tag">洞察</span>表/视图数 = 各 Schema 内省对象累加（L1/L2 缓存）；缓存命中率 = 本次会话内省缓存命中 / 请求总数；延迟 = 探活 Ping',
+      general:[
+        {rows:[
+          {k:'名称',v:'postgres',kind:'text'},
+          {k:'数据库管理员',v:'postgres',kind:'select',opts:['postgres','admin','rds_ro'],edit:true},
+          {k:'描述',v:'default administrative connection database',kind:'longtext',edit:true},
+          {k:'模板',v:'template1',kind:'select',opts:['template0','template1'],edit:true},
+          {k:'默认表空间',v:'pg_default',kind:'select',opts:['pg_default','pg_global'],edit:true},
+          {k:'默认编码',v:'UTF8',kind:'text'},
+          {k:'排序规则',v:'C',kind:'text'},
+          {k:'连接限制',v:'-1（不限制）',kind:'text',edit:true},
+          {k:'允许连接',v:true,kind:'bool',edit:true},
+        ]},
+      ],
+      meta:['PostgreSQL','项目','PG 真机',['生产','只读']],
+      sub:[
+        {t:'模式',icon:IC.schema,on:true,grid:['名称','描述'],rows:[['public','standard public schema'],['rds_nav_probe_a','（空）'],['rds_nav_probe_b','（空）']]},
+        {t:'事件触发器',icon:IC.trig,grid:['名称','事件'],rows:[['evt_rds_nav_probe','ddl_command_start']]},
+        {t:'扩展',icon:IC.plug,grid:['名称','版本'],rows:[['plpgsql','1.0'],['uuid-ossp','1.1']]},
+        {t:'存储',icon:IC.doc,grid:['名称','类型'],rows:[]},
+        {t:'系统信息',icon:IC.chip,grid:['名称','值'],rows:[['server_version','16.4']]},
+        {t:'角色',icon:IC.shield,grid:['名称','权限'],rows:[['postgres','SUPERUSER'],['rds_ro','LOGIN']]},
+      ],
+    },
+    sqlite:{
+      badge:['conn',IC.conn], title:'app.db', ovsub:'SQLite 数据库文件 · P_real_sqlite',
+      status:['on','已连接'], crumbs:['P_real_sqlite','app.db'],
+      cards:[
+        {k:'数据库',v:'1',u:'个',icon:IC.schema},
+        {k:'数据表',v:'8',u:'张',icon:IC.table},
+        {k:'视图',v:'2',u:'个',icon:IC.layers},
+        {k:'缓存命中',v:'100',u:'%',icon:IC.chip},
+      ],
+      kv:[['版本','3.45.1'],['文件','D:\\data\\app.db'],['大小','18.4 MB'],['延迟','0 ms']],
+      note:'<span class="tag">洞察</span>本地文件库：内省即读文件（无网络）；WAL 模式开启时并发读无锁',
+      general:[
+        {rows:[
+          {k:'名称',v:'app.db',kind:'text'},
+          {k:'路径',v:'D:\\data\\app.db',kind:'longtext'},
+          {k:'编码',v:'UTF-8',kind:'text'},
+          {k:'读写模式',v:'读写',kind:'select',opts:['读写','只读'],edit:true},
+          {k:'外键约束',v:true,kind:'bool',edit:true},
+          {k:'WAL 模式',v:true,kind:'bool',edit:true},
+          {k:'页面大小',v:'4096',kind:'text'},
+          {k:'journal_mode',v:'WAL',kind:'text'},
+        ]},
+      ],
+      meta:['SQLite','项目','本地示例',['演示']],
+      sub:[
+        {t:'数据库',icon:IC.schema,on:true,grid:['名称','页数'],rows:[['main','4,608'],['temp','0']]},
+        {t:'表',icon:IC.table,grid:['名称','列数','行数'],rows:[['t_inventory','6','1,204'],['t_order','5','96'],['t_item','4','32']]},
+        {t:'视图',icon:IC.layers,grid:['名称','定义'],rows:[['v_stock','SELECT …']]},
+        {t:'索引',icon:IC.index,grid:['名称','表','唯一'],rows:[['idx_t_inv_sku','t_inventory','是']]},
+        {t:'触发器',icon:IC.trig,grid:['名称','事件'],rows:[['trg_order_updated','AFTER UPDATE']]},
+      ],
+    },
+    duckdb:{
+      badge:['conn',IC.conn], title:'warehouse', ovsub:'DuckDB 分析库 · P_real_duckdb',
+      status:['on','已连接'], crumbs:['P_real_duckdb','warehouse'],
+      cards:[
+        {k:'数据库',v:'1',u:'个',icon:IC.schema},
+        {k:'数据表',v:'12',u:'张',icon:IC.table},
+        {k:'视图',v:'3',u:'个',icon:IC.layers},
+        {k:'扩展',v:'2',u:'个',icon:IC.plug},
+      ],
+      kv:[['版本','1.5.2'],['文件','D:\\data\\warehouse.duckdb'],['线程','8'],['延迟','2 ms']],
+      note:'<span class="tag">洞察</span>分析引擎：列存 + 向量化；扩展 parquet / httpfs 已加载',
+      general:[
+        {rows:[
+          {k:'名称',v:'warehouse',kind:'text'},
+          {k:'路径',v:'D:\\data\\warehouse.duckdb',kind:'longtext'},
+          {k:'版本',v:'1.5.2',kind:'text'},
+          {k:'线程数',v:'8',kind:'text',edit:true},
+          {k:'内存限制',v:'8 GB',kind:'text',edit:true},
+          {k:'外部扫描',v:true,kind:'bool',edit:true},
+          {k:'EXPLAIN 输出',v:'TEXT',kind:'select',opts:['TEXT','JSON'],edit:true},
+        ]},
+      ],
+      meta:['DuckDB','项目','分析示例',['只读']],
+      sub:[
+        {t:'数据库',icon:IC.schema,on:true,grid:['名称','存储'],rows:[['main','列存'],['memory','临时']]},
+        {t:'表',icon:IC.table,grid:['名称','列数','行数'],rows:[['fact_sales','9','1,204,330'],['dim_product','6','2,048'],['dim_region','4','96']]},
+        {t:'视图',icon:IC.layers,grid:['名称','定义'],rows:[['v_sales_montly','SELECT …']]},
+        {t:'序列',icon:IC.seq,grid:['名称','当前值'],rows:[['seq_sales_id','1204330']]},
+        {t:'宏',icon:IC.func,grid:['名称','参数'],rows:[['m_ytd_sales','region']]},
+      ],
+    },
+    mysql:{
+      badge:['conn',IC.conn], title:'mysql', ovsub:'MySQL 服务器 · P_real_mysql',
+      status:['on','已连接'], crumbs:['P_real_mysql','mysql'],
+      cards:[
+        {k:'数据库',v:'4',u:'个',icon:IC.schema},
+        {k:'数据表',v:'46',u:'张',icon:IC.table},
+        {k:'视图',v:'5',u:'个',icon:IC.layers},
+        {k:'缓存命中',v:'95.2',u:'%',icon:IC.chip},
+      ],
+      kv:[['版本','8.4.0'],['主机','192.168.3.139:3306'],['活动连接','2'],['延迟','8 ms']],
+      note:'<span class="tag">洞察</span>库/表数 = information_schema 统计；缓存命中 = 会话内省命中率',
+      general:[
+        {rows:[
+          {k:'名称',v:'mysql',kind:'text'},
+          {k:'主机',v:'192.168.3.139:3306',kind:'text'},
+          {k:'默认字符集',v:'utf8mb4',kind:'select',opts:['utf8mb4','latin1','gbk'],edit:true},
+          {k:'排序规则',v:'utf8mb4_0900_ai_ci',kind:'select',opts:['utf8mb4_0900_ai_ci','utf8mb4_general_ci'],edit:true},
+          {k:'SQL 模式',v:'STRICT_TRANS_TABLES',kind:'longtext',edit:true},
+          {k:'大小写敏感',v:false,kind:'bool',edit:true},
+          {k:'连接超时',v:'28800 s',kind:'text',edit:true},
+        ]},
+      ],
+      meta:['MySQL','项目','MySQL 真机',['生产']],
+      sub:[
+        {t:'数据库',icon:IC.schema,on:true,grid:['名称','表数','字符集'],rows:[['warehouse_supply_chain','38','utf8mb4'],['app','6','utf8mb4'],['test','2','utf8mb4']]},
+        {t:'事件',icon:IC.trig,grid:['名称','调度'],rows:[['evt_cleanup','每天 03:00']]},
+        {t:'用户',icon:IC.shield,grid:['名称','主机','权限'],rows:[['root','localhost','ALL'],['rds_ro','%','SELECT']]},
+        {t:'插件',icon:IC.plug,grid:['名称','状态'],rows:[['mysql_native_password','ACTIVE']]},
+        {t:'状态变量',icon:IC.chip,grid:['名称','值'],rows:[['Threads_connected','2'],['Queries','1,204']]},
+      ],
+    },
   },
   schema:{
     badge:['schema',IC.schema], title:'public', ovsub:'Schema · 所属库 postgres',
@@ -379,13 +481,14 @@ const DB_ANNOT={
   table:{src:'PostgreTableBase.java + PostgreTable.java',props:'getName / getObjectId(viewable,order9) / getDescription(editable,MULTILINE,order100) / getOwner(viewable,order10) / getTablespace(editable,listProvider,order20) / isRowLevelSecurity(viewable,order41) / isPartitioned(viewable,order42) / getPartitionBy(editable,order43)',sub:'DBeaver 表级 Tab = 属性/数据/图；RDS 收敛为 属性/数据 两 Tab —— 属性 = 洞察+General+子项列表，数据 = SQL 过滤 + 网格/文本 + 分页表格'},
 };
 const NOTE={
-  conn:'<h3>① 洞察总览（本原型新增部分）· ② General 扁平 + 项目信息 · ③ 动态渲染</h3><p><b>动态渲染</b>：DBeaver 属性面板是<b>动态装配</b>的——每个对象类型有独立的 <code>DBPPropertySource</code>，属性集 / 编辑控件 / 子项类别页均由对象类型注册表动态决定（<code>PropertyRegistry</code> 页注册表同理）。本原型三个对象（连接 / Schema / 表）切换时，洞察指标、General 属性、子项类别树、数据页<b>全部随类型动态渲染</b>——同一面板结构、不同内容。</p><p><b>项目特有信息</b>：General 顶部加 <b>驱动类型 / 作用域（全局·项目）/ 所属分组 / 标签</b> 芯片行——来自连接模型元数据（RDS 独有，DBeaver 无）。属性行<b>扁平紧凑</b>（去分组标题，减少行高）。</p><table><tr><th>部分</th><th>对齐 DBeaver</th><th>数据来源（RDS）</th></tr><tr><td>① 洞察总览</td><td>新增</td><td>内省缓存计数（L1/L2）+ 连接状态（nav_view）+ 懒加载统计（reltuples / pg_total_relation_size）</td></tr><tr><td>② General 属性</td><td>上部（@Property viewable / editable / listProvider / MULTILINE）</td><td><code>load_properties</code> 描述符 + 连接模型 meta（driver / scope / group / tags）</td></tr><tr><td>③ 子项列表</td><td>下部（类别树 + 表格）</td><td><code>list_columns / list_indexes / list_constraints / 内省</code>（现有）</td></tr><tr><td>④ 数据页（表级 Tab）</td><td>DBeaver 表属性「数据」Tab</td><td><code>table_data</code>（已实现）+ SQL 过滤 + 分页</td></tr></table><h3 style="margin-top:10px">属性编辑对齐（@Property editable=true → setter）</h3><p>DBeaver：<code>getDescription(monitor)</code> 懒加载（查 <code>pg_shdescription</code>），<code>setDescription</code> 提交 <code>COMMENT</code>；<code>getDBA</code> 下拉（RoleListProvider）→ <code>setDBA</code>；<code>getTablespace</code> 下拉 → <code>setTablespace</code>。<b>RDS 已落地</b>：PropertyRow 描述符化 + apply_property_edit（PG 列级 RENAME/COMMENT/DEFAULT/NULLABLE）；连接/表级描述编辑（COMMENT ON DATABASE/SCHEMA/TABLE）为下一步。</p>',
+  conn:'<h3>① 洞察总览 · ② General 扁平 · ③ 动态渲染（驱动无关）</h3><p><b>洞察与 General 去重原则</b>：洞察总览只放<b>运行时 / 统计事实</b>（版本 / 主机 / 活动连接 / 延迟 / 对象计数 / 缓存命中 / 行数与大小）——General 只放<b>对象定义属性</b>（可编辑配置：管理员 / 编码 / 表空间 / 连接限制…）——两者不重叠。</p><p><b>动态渲染</b>：DBeaver 属性面板按对象类型动态装配（<code>DBPPropertySource</code> + <code>@Property</code> 注解）。RDS 同样<b>驱动无关</b>——<b>属性集 / 子项类别树 / 洞察指标均按「对象类型 × 驱动」注册</b>：上方驱动按钮切换 PostgreSQL / SQLite / DuckDB / MySQL 四个连接视图，属性集（PG 表空间 vs MySQL 字符集 vs SQLite WAL）、洞察（PG 版本/延迟 vs DuckDB 扩展/线程）、类别树（PG 模式/事件触发器 vs SQLite 数据库/触发器 vs MySQL 用户/插件）<b>全部动态变化</b>——同一面板结构、不同驱动内容。</p><p><b>General 自适应栏数</b>：<code>auto-fit minmax(195px,1fr)</code>——属性少 2 栏、属性多自动 3 栏。</p><table><tr><th>部分</th><th>对齐 DBeaver</th><th>数据来源（RDS）</th></tr><tr><td>① 洞察总览</td><td>新增</td><td>内省缓存计数 + 连接状态 + 懒加载统计（reltuples / pg_total_relation_size / information_schema）</td></tr><tr><td>② General 属性</td><td>上部（@Property viewable / editable / listProvider / MULTILINE）</td><td><code>load_properties</code> 描述符（驱动分派）+ 连接模型 meta（driver / scope / group / tags）</td></tr><tr><td>③ 子项列表</td><td>下部（类别树 + 表格）</td><td><code>list_columns / list_indexes / list_constraints / 内省</code>（驱动能力掩码）</td></tr><tr><td>④ 数据页（表级 Tab）</td><td>DBeaver 表属性「数据」Tab</td><td><code>table_data</code>（已实现）+ SQL 过滤 + 分页</td></tr></table><h3 style="margin-top:10px">属性编辑对齐（@Property editable=true → setter）</h3><p>DBeaver：<code>getDescription(monitor)</code> 懒加载，<code>setDescription</code> 提交 <code>COMMENT</code>；下拉属性 <code>listProvider</code> 提供候选。<b>RDS 已落地</b>：PropertyRow 描述符化 + apply_property_edit（PG 列级 RENAME/COMMENT/DEFAULT/NULLABLE）；各驱动连接 / 对象级描述编辑（COMMENT / ALTER DATABASE / PRAGMA）为下一步。</p>',
   schema:'<h3>Schema 洞察与属性（动态渲染 + 扁平 General）</h3><p>洞察总览 = Schema 内省结果（表 / 视图 / 函数 / 序列 计数，一次连接内省全类别）；General 属性对齐 <code>PostgreSchema</code>（名称 / 所有者 / 描述 / 命名空间 ID）并加项目 meta（驱动 / 作用域 / 分组 / 标签）；子项列表对齐 DBeaver 左侧类别树（表 → 权限 / 源 等 11 类）。</p>',
   table:'<h3>表对象 = 两 Tab（属性 / 数据）</h3><p><b>属性 Tab</b>（DBeaver 表属性页对齐）= 三部分：① 洞察总览（列 / 索引 / 约束 / 行数 reltuples）→ ② General 属性（表空间 / 行级安全 / 分区 / 额外选项 / 描述 + 项目 meta）→ ③ 子项列表（列 / 约束 / 外键 / 索引 / 触发器 / 权限 / DDL 等）。<b>数据 Tab</b>（DBeaver「数据」页）= SQL 过滤（Ctrl+Space）+ 网格/文本视图切换 + 分页表格（<code>table_data</code> 已实现）。DBeaver 还有「图」Tab，RDS 暂收敛为两 Tab，图表能力后续以洞察/可视化模块补足。</p>',
 };
-let cur='conn',curTab='attr';
+let cur='conn',curTab='attr',curDriver='pg';
+const objData=()=>cur==='conn'?DATA.connByDriver[curDriver]:DATA[cur];
 function renderCrumbHtml(){
-  const d=DATA[cur];
+  const d=objData();
   return `属性 · <b>${d.crumbs.map(c=>c).join('</b> / <b>')}</b>`;
 }
 function renderOverviewHtml(d){
@@ -471,7 +574,7 @@ function renderDataPaneHtml(){
   </div>`;
 }
 function renderPanelBody(){
-  const d=DATA[cur];
+  const d=objData();
   if(cur==='table'){
     return `
       <div class="obj-tabs">
@@ -494,8 +597,8 @@ function renderAll(){
   $('#panelBody').innerHTML=renderPanelBody();
   renderNote();
   if(cur==='table') bindObjTabs();
-  $$('.statebar button').forEach(b=>b.classList.remove('on'));
-  $('#sw'+cur.charAt(0).toUpperCase()+cur.slice(1)).classList.add('on');
+  ['swConn','swSchema','swTable'].forEach(id=>document.getElementById(id).classList.toggle('on',id==='sw'+cur.charAt(0).toUpperCase()+cur.slice(1)));
+  ['drvPg','drvSqlite','drvDuck','drvMysql'].forEach(id=>document.getElementById(id).classList.toggle('on',id==='drv'+curDriver.charAt(0).toUpperCase()+curDriver.slice(1)));
 }$('#themeToggle').addEventListener('click',()=>{
   const b=document.body.dataset.theme==='light'?'dark':'light';
   document.body.dataset.theme=b;localStorage.setItem(THEME_KEY,b);
@@ -503,6 +606,8 @@ function renderAll(){
 $('#swConn').addEventListener('click',()=>{cur='conn';curTab='attr';renderAll();});
 $('#swSchema').addEventListener('click',()=>{cur='schema';curTab='attr';renderAll();});
 $('#swTable').addEventListener('click',()=>{cur='table';curTab='attr';renderAll();});
+const DRV_MAP={Pg:'pg',Sqlite:'sqlite',Duck:'duckdb',Mysql:'mysql'};
+$$('#drvPg,#drvSqlite,#drvDuck,#drvMysql').forEach(b=>b.addEventListener('click',()=>{curDriver=DRV_MAP[b.id.slice(3)];cur='conn';curTab='attr';renderAll();}));
 let dbOn=false;
 $('#swDbeaver').addEventListener('click',()=>{
   dbOn=!dbOn;const b=$('#swDbeaver');b.classList.toggle('on',dbOn);

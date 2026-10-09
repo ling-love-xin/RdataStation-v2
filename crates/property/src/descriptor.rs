@@ -28,6 +28,10 @@ pub enum PageId {
     Privileges,
     /// 依赖（当前不支持 → 置灰）
     Dependencies,
+    /// 规则 / 策略（PG 表类别，当前不支持 → 置灰）
+    Routines,
+    /// 分区（PG 表类别，当前不支持 → 置灰）
+    Partitions,
 }
 
 /// 支持状态：驱动 / 类型能力位决定。

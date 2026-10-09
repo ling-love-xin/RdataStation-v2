@@ -19,6 +19,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, IconName, Size, Sizable as _, Theme};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::components::connection_dialog;
@@ -34,9 +35,8 @@ use super::Shared;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
 use database::model::PropertyRequest;
 use database::nav_view::NavDragPayload;
-use database::property_panel::PropertyRegistryImpl;
 use database::table_data::{DEFAULT_PAGE_LIMIT, TableDataRequest};
-use property::{ObjectProperties, PageId, PropertyPage, PropertyRegistry as _, PropertyRow, PropertyValueKind, SupportState};
+use property::{ObjectProperties, PageId, PropertyRow, PropertySection, PropertyValueKind};
 use property::PropertyState;
 use scratchpad::{
     ScratchpadDiffView, ScratchpadSearchView,
@@ -557,12 +557,21 @@ impl EditorPanel {
             .map(|p| p.object_type.clone())
             .unwrap_or_default();
 
-        // 页集合（描述驱动）：只依赖对象类型，顺序即 tab 顺序。
-        let pages = PropertyRegistryImpl.pages_for(target.property.kind);
-        let active = st.active_page;
-        let active_index = pages.iter().position(|p| p.id == active).unwrap_or(0);
-
         let theme = cx.theme();
+        let entity = cx.entity();
+        // 表 / 视图两页签【属性 | 数据】；其余对象为单属性视图（无页签条）。
+        let is_tabbed = matches!(
+            target.property.kind,
+            property::PropertyKind::Table | property::PropertyKind::View
+        );
+        let active = st.active_page;
+        let tabs: Vec<(PageId, &str)> = if is_tabbed {
+            vec![(PageId::General, "属性"), (PageId::Data, "数据")]
+        } else {
+            vec![(PageId::General, "属性")]
+        };
+        let active_index = tabs.iter().position(|(id, _)| *id == active).unwrap_or(0);
+
         let mut body = div().v_flex().w_full().gap_1();
         if st.loading {
             body = body.child(div().text_xs().text_color(muted).child("加载中…"));
@@ -576,13 +585,55 @@ impl EditorPanel {
             );
         }
         if let Some(props) = &st.props {
-            body = body.child(self.render_property_page_body(
-                cx.entity(),
-                active,
-                &pages,
-                props,
-                theme,
-            ));
+            if active == PageId::Data {
+                body = body.child(self.render_data_page(entity.clone(), props, theme));
+            } else {
+                body = body.child(self.render_property_view(entity.clone(), props, theme));
+            }
+        }
+
+        let mut tab_bar = div().h_flex().items_center().gap_1().w_full().border_b_1().border_color(border);
+        if is_tabbed {
+            tab_bar = tab_bar.child(
+                TabBar::new("property-tabs")
+                    .underline()
+                    .with_size(Size::Small)
+                    .selected_index(active_index)
+                    .children(tabs.iter().map(|(_, label)| Tab::new().label(label.to_string())))
+                    .on_click({
+                        let entity = cx.entity();
+                        let property = self.property.clone();
+                        let target = self.property_target.clone();
+                        let tabs = tabs.clone();
+                        move |ix, _window, app| {
+                            if let Some((page_id, _)) = tabs.get(*ix) {
+                                property.borrow_mut().active_page = *page_id;
+                                entity.update(app, |this, cx| {
+                                    // 「数据」页签懒加载：切到数据页且未请求过数据时，
+                                    // 自动带默认分页参数重载（首屏 200 行）。
+                                    if *page_id == PageId::Data {
+                                        let has_data = this
+                                            .property
+                                            .borrow()
+                                            .props
+                                            .as_ref()
+                                            .map(|p| p.data.is_some())
+                                            .unwrap_or(false);
+                                        if !has_data {
+                                            if let Some(req) = target.borrow().clone() {
+                                                let mut req = req;
+                                                req.data = Some(TableDataRequest::default());
+                                                this.request_properties(req, cx);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        }
+                    }),
+            );
         }
 
         div()
@@ -637,58 +688,7 @@ impl EditorPanel {
                             }),
                     ),
             )
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .w_full()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        TabBar::new("property-tabs")
-                            .underline()
-                            .with_size(Size::Small)
-                            .selected_index(active_index)
-                            .children(
-                                pages.iter().map(|p| Tab::new().label(p.title.clone())),
-                            )
-                            .on_click({
-                                let entity = cx.entity();
-                                let property = self.property.clone();
-                                let target = self.property_target.clone();
-                                let pages = pages.clone();
-                                move |ix, _window, app| {
-                                    if let Some(page) = pages.get(*ix) {
-                                        property.borrow_mut().active_page = page.id;
-                                        entity.update(app, |this, cx| {
-                                            // 「数据」页签懒加载：切到数据页且未请求过数据时，
-                                            // 自动带默认分页参数重载（首屏 200 行）。
-                                            if page.id == PageId::Data {
-                                                let has_data = this
-                                                    .property
-                                                    .borrow()
-                                                    .props
-                                                    .as_ref()
-                                                    .map(|p| p.data.is_some())
-                                                    .unwrap_or(false);
-                                                if !has_data {
-                                                    if let Some(req) = target.borrow().clone() {
-                                                        let mut req = req;
-                                                        req.data =
-                                                            Some(TableDataRequest::default());
-                                                        this.request_properties(req, cx);
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                            cx.notify();
-                                        });
-                                    }
-                                }
-                            }),
-                    ),
-            )
+            .child(tab_bar)
             .child(
                 div()
                     .id("property-body")
@@ -702,103 +702,290 @@ impl EditorPanel {
             )
     }
 
-    /// 当前页内容（描述驱动；Unsupported 页给灰置占位，不发起任何内省查询）。
-    ///
-    /// `entity` 供「数据」页的翻页 / 排序 on_click 闭包在事件路径重发请求（渲染零 I/O）。
-    fn render_property_page_body(
+    /// 属性视图（三部分布局，DBeaver 之上加「洞察总览」——见 §16 设计）：
+    /// ① 洞察总览（运行时 / 统计事实，provider 组装）
+    /// ② General 双栏网格（定义属性；行数多时自动三栏，增加面积使用率）
+    /// ③ 子项类别列表（驱动能力掩码；灰置类别先绘制、标注「暂不可用」）
+    fn render_property_view(
         &self,
         entity: gpui::Entity<EditorPanel>,
-        page_id: PageId,
-        pages: &[PropertyPage],
+        props: &ObjectProperties,
+        theme: &Theme,
+    ) -> Div {
+        let mut body = div().v_flex().w_full().gap_3();
+        body = body.child(self.render_overview_section(props, theme));
+        body = body.child(self.render_general_grid(entity.clone(), props, theme));
+        body = body.child(self.render_category_list(props, theme));
+        body
+    }
+
+    /// ① 洞察总览：标题 + 状态点 + meta 芯片 + 指标卡 + 关键信息 + 口径注脚。
+    fn render_overview_section(&self, props: &ObjectProperties, theme: &Theme) -> Div {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
+        let ov = &props.overview;
+        let status_color = match ov.status {
+            property::OverviewStatus::Connected => theme.colors.success,
+            property::OverviewStatus::Disconnected => theme.colors.danger,
+            property::OverviewStatus::Idle => muted,
+        };
+
+        let mut section = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .p_2()
+            .border_1()
+            .border_color(border)
+            .rounded_md()
+            .bg(theme.colors.sidebar);
+
+        // 头部：标题 + 状态点 + 状态文案 + 子标题。
+        let mut head = div().h_flex().items_center().gap_2().w_full();
+        head = head
+            .child(
+                div()
+                    .w(rems(0.625))
+                    .h(rems(0.625))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(status_color),
+            )
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(fg).child(ov.title.clone()))
+            .child(div().text_xs().text_color(muted).child(ov.status_text.clone()))
+            .child(div().flex_1())
+            .child(div().text_xs().text_color(muted).child(ov.subtitle.clone()));
+
+        // meta 芯片（驱动 / 作用域 / 分组 / 标签——RDS 连接模型独有信息）。
+        let mut chips = div().h_flex().items_center().gap_1().w_full().flex_wrap();
+        for (label, value) in &ov.meta {
+            chips = chips.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_px()
+                    .border_1()
+                    .border_color(border)
+                    .rounded_md()
+                    .text_xs()
+                    .child(div().text_color(muted).child(label.clone()))
+                    .child(div().text_color(fg).child(value.clone())),
+            );
+        }
+
+        // 指标卡（横排）。
+        let mut cards = div().h_flex().items_stretch().gap_2().w_full().flex_wrap();
+        for c in &ov.cards {
+            cards = cards.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .min_w(rems(4.5))
+                    .flex_1()
+                    .p_2()
+                    .border_1()
+                    .border_color(border)
+                    .rounded_md()
+                    .bg(theme.colors.background)
+                    .child(div().text_xs().text_color(muted).child(c.label.clone()))
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_baseline()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(fg)
+                                    .child(c.value.clone()),
+                            )
+                            .child(div().text_xs().text_color(muted).child(c.unit.clone())),
+                    )
+                    .when_some(c.delta.clone(), |el, delta| {
+                        el.child(div().text_xs().text_color(muted).child(delta))
+                    }),
+            );
+        }
+
+        // 关键信息（键值行）。
+        let mut kv = div().v_flex().w_full().gap_px().text_xs();
+        for (label, value) in &ov.kv {
+            kv = kv.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(div().w(rems(5.5)).flex_none().text_color(muted).child(label.clone()))
+                    .child(div().flex_1().min_w_0().text_color(fg).child(value.clone())),
+            );
+        }
+
+        section = section.child(head).child(chips);
+        if !ov.cards.is_empty() {
+            section = section.child(cards);
+        }
+        if !ov.kv.is_empty() {
+            section = section.child(kv);
+        }
+        if !ov.note.is_empty() {
+            section = section.child(div().text_xs().text_color(muted).child(ov.note.clone()));
+        }
+        section
+    }
+
+    /// ② General 双栏网格（DBeaver General 扁平紧凑 + 面积使用率；行数 > 8 自动三栏）。
+    fn render_general_grid(
+        &self,
+        entity: gpui::Entity<EditorPanel>,
         props: &ObjectProperties,
         theme: &Theme,
     ) -> Div {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
+        let rows = &props.properties;
+        let mut section = div().v_flex().w_full().gap_2();
+        section = section.child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child("通用"),
+        );
+        if rows.is_empty() {
+            section = section.child(div().text_xs().text_color(muted).child("（无属性）"));
+            return section;
+        }
+        let cols = if rows.len() > 8 { 3 } else { 2 };
+        for chunk in rows.chunks(cols) {
+            let mut line = div().h_flex().items_start().w_full().gap_2();
+            for row in chunk {
+                line = line.child(self.render_property_cell(entity.clone(), row, theme));
+            }
+            line = line.child(div().flex_1().min_w_0());
+            section = section.child(line);
+        }
+        let _ = border;
+        section
+    }
 
-        let Some(page) = pages.iter().find(|p| p.id == page_id) else {
-            return div();
-        };
-        let mut body = div().v_flex().w_full().gap_1();
-        if page.state == SupportState::Unsupported {
+    /// ③ 子项类别列表（DBeaver 类别树的内容纵向堆叠；灰置类别先绘制、标注）。
+    fn render_category_list(
+        &self,
+        props: &ObjectProperties,
+        theme: &Theme,
+    ) -> Div {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let mut section = div().v_flex().w_full().gap_2();
+        section = section.child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child("子项"),
+        );
+        if props.sections.is_empty() {
+            section = section.child(div().text_xs().text_color(muted).child("（无）"));
+            return section;
+        }
+        for s in &props.sections {
+            section = section.child(self.render_category_section(s, theme));
+        }
+        section
+    }
+
+    /// 单个子项类别：可用 → 标题 + 表头 + 行；灰置 → 标题置灰 + 「暂不可用」占位。
+    fn render_category_section(
+        &self,
+        s: &PropertySection,
+        theme: &Theme,
+    ) -> Div {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let border = theme.colors.border;
+
+        if !s.enabled {
             // 能力未实现：先绘制、置灰标注（不发起任何内省查询）。
-            body = body.child(
-                div()
-                    .w_full()
-                    .py_2()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("「{}」查看与操作暂不支持（驱动能力未实现）", page.title)),
-            );
-            return body;
-        }
-        match page_id {
-            PageId::General => {
-                // DBeaver 分组渲染：按 `category` 分组（`None` 归默认组，不显组标题）。
-                // 本轮提供者 category 全 None；结构已支持多组（后续「高级」等分组接入）。
-                for row in &props.properties {
-                    body = body.child(self.render_property_row(entity.clone(), row, theme));
-                }
-            }
-            PageId::Columns
-            | PageId::Indexes
-            | PageId::Constraints
-            | PageId::Ddl
-            | PageId::Source => {
-                if let Some(section) = props.sections.iter().find(|s| s.id == page_id) {
-                    body = body.child(
-                        div()
-                            .pt_2()
-                            .pb_1()
-                            .w_full()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(fg)
-                            .child(section.label.clone()),
-                    );
-                    body = body.child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(muted)
-                            .children(
-                                section
-                                    .table
-                                    .headers
-                                    .iter()
-                                    .map(|h| div().flex_1().min_w_0().child(h.clone())),
-                            ),
-                    );
-                    for data_row in &section.table.rows {
-                        body = body.child(
+            return div()
+                .v_flex()
+                .w_full()
+                .gap_1()
+                .border_1()
+                .border_color(border)
+                .rounded_md()
+                .p_2()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .child(
                             div()
-                                .h_flex()
-                                .w_full()
-                                .gap_2()
                                 .text_xs()
-                                .text_color(fg)
-                                .children(
-                                    data_row
-                                        .iter()
-                                        .map(|c| div().flex_1().min_w_0().child(c.clone())),
-                                ),
-                        );
-                    }
-                } else {
-                    body = body.child(div().text_xs().text_color(muted).child("（无）"));
-                }
-            }
-            PageId::Privileges | PageId::Dependencies => {
-                // 正常被 Unsupported 分支拦住；兜底灰置。
-                body = body.child(div().text_xs().text_color(muted).child("（暂不可用）"));
-            }
-            PageId::Data => {
-                body = self.render_data_page(entity, page, props, theme);
-            }
+                                .text_color(muted)
+                                .child(s.label.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("（暂不可用）"),
+                        ),
+                );
         }
-        body
+
+        let mut section = div().v_flex().w_full().gap_1();
+        section = section.child(
+            div()
+                .pt_1()
+                .pb_1()
+                .w_full()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child(s.label.clone()),
+        );
+        if s.table.headers.is_empty() {
+            section = section.child(div().text_xs().text_color(muted).child("（无）"));
+            return section;
+        }
+        section = section.child(
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .text_color(muted)
+                .children(
+                    s.table
+                        .headers
+                        .iter()
+                        .map(|h| div().flex_1().min_w_0().child(h.clone())),
+                ),
+        );
+        for data_row in &s.table.rows {
+            section = section.child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(fg)
+                    .children(
+                        data_row
+                            .iter()
+                            .map(|c| div().flex_1().min_w_0().child(c.clone())),
+                    ),
+            );
+        }
+        section
     }
 
     /// 「数据」页签：只读结果网格（行号 + 列名 + 单元格，NULL 置灰）+ 分页 / 排序。
@@ -808,7 +995,6 @@ impl EditorPanel {
     fn render_data_page(
         &self,
         entity: gpui::Entity<EditorPanel>,
-        page: &PropertyPage,
         props: &ObjectProperties,
         theme: &Theme,
     ) -> Div {
@@ -962,15 +1148,14 @@ impl EditorPanel {
             );
         }
         body = body.child(footer);
-        let _ = page;
         body
     }
 
-    /// 属性网格行渲染（DBeaver 显示逻辑：只读 → 文本；可编辑 → 编辑控件）。
+    /// 属性网格单元（General 双栏 / 三栏网格的一格：label 上 / 值下，紧凑竖排）。
     ///
-    /// - `Boolean` 形态 → Switch（点击即切换提交）；
-    /// - `Text / LongText` 形态 → 未编辑时「值 + 编辑按钮」，编辑中 → 输入框 + 保存 / 取消。
-    fn render_property_row(
+    /// 编辑逻辑与旧整行版本一致：Boolean → Switch（点击即切换提交）；
+    /// Text / LongText → 未编辑时「值 + 编辑按钮」，编辑中 → 输入框 + 保存 / 取消。
+    fn render_property_cell(
         &self,
         entity: gpui::Entity<EditorPanel>,
         row: &PropertyRow,
@@ -979,23 +1164,18 @@ impl EditorPanel {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
 
-        let label = div()
-            .w(rems(4.5))
-            .flex_none()
-            .text_xs()
-            .text_color(muted)
-            .child(row.label.clone());
+        let label = div().text_xs().text_color(muted).child(row.label.clone());
 
         if !row.editable {
-            // 只读：文本行（DBeaver 只读属性）。
+            // 只读：文本（DBeaver 只读属性）。
             return div()
-                .h_flex()
-                .items_start()
-                .w_full()
-                .gap_2()
+                .v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
                 .text_xs()
                 .child(label)
-                .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()));
+                .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()));
         }
 
         match row.value_kind {
@@ -1005,22 +1185,24 @@ impl EditorPanel {
                 let entity = entity.clone();
                 let rid = row.id.clone();
                 div()
-                    .h_flex()
-                    .items_center()
-                    .w_full()
-                    .gap_2()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
                     .text_xs()
                     .child(label)
                     .child(
-                        div().flex_1().min_w_0().child(
-                            Switch::new(format!("prop-bool-{}", rid))
-                                .checked(checked)
-                                .on_click(move |new_val, _, cx| {
-                                    entity.update(cx, |panel, cx| {
-                                        panel.toggle_property_bool(rid.clone(), *new_val, cx);
-                                    });
-                                }),
-                        ),
+                        div()
+                            .w_full()
+                            .child(
+                                Switch::new(format!("prop-bool-{}", rid))
+                                    .checked(checked)
+                                    .on_click(move |new_val, _, cx| {
+                                        entity.update(cx, |panel, cx| {
+                                            panel.toggle_property_bool(rid.clone(), *new_val, cx);
+                                        });
+                                    }),
+                            ),
                     )
             }
             _ => {
@@ -1037,16 +1219,15 @@ impl EditorPanel {
                     let cancel_entity = entity.clone();
                     let input = Input::new(&edit.input).id(format!("prop-edit-{}", row.id)).w_full();
                     div()
-                        .h_flex()
-                        .items_start()
-                        .w_full()
-                        .gap_2()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
                         .text_xs()
                         .child(label)
                         .child(
                             div()
-                                .flex_1()
-                                .min_w_0()
+                                .w_full()
                                 .v_flex()
                                 .gap_1()
                                 .child(input)
@@ -1083,27 +1264,34 @@ impl EditorPanel {
                     let rid = row.id.clone();
                     let initial = row.value.clone();
                     div()
-                        .h_flex()
-                        .items_start()
-                        .w_full()
-                        .gap_2()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
                         .text_xs()
                         .child(label)
-                        .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()))
                         .child(
-                            Button::new(format!("prop-edit-btn-{}", row.id))
-                                .label("编辑")
-                                .with_size(Size::XSmall)
-                                .on_click(move |_, window, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.begin_property_edit(
-                                            rid.clone(),
-                                            initial.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }),
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone()))
+                                .child(
+                                    Button::new(format!("prop-edit-btn-{}", row.id))
+                                        .label("编辑")
+                                        .with_size(Size::XSmall)
+                                        .on_click(move |_, window, app| {
+                                            entity.update(app, |panel, cx| {
+                                                panel.begin_property_edit(
+                                                    rid.clone(),
+                                                    initial.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                ),
                         )
                 }
             }

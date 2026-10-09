@@ -3,7 +3,8 @@
 //! 外部端点（MySQL / PG）在当前环境不可达时的替代验证：本地文件库全量链路，
 //! 与 UI 同源（`DataSourceService::test` = 对话框「测试连接」；`ConnectionService::connect_with_type`
 //! = 导航「连接」；`NavigatorService::load_children` = 树展开；`property_panel::load_properties` =
-//! 属性面板取数；`PropertyRegistryImpl` = 属性页注册表（权限 / 依赖灰置））。
+//! 属性面板取数；`property_providers::global_registry` = 驱动属性源（列/索引/DDL/数据可用，
+//! 权限 / 依赖灰置））。
 //!
 //! fixture 库由本测试**自建**（临时目录，含表 / 视图 / 索引 / 外键 / 默认值 / 数据），
 //! 不依赖用户机器上的任何路径；数据根由 `paths` test-support 隔离，不写产品目录。
@@ -16,13 +17,14 @@ use connection::model::DataSourceSaveInput;
 use database::metadata_service::MetadataService;
 use database::model::{NavFolder, NavNodeKind, NavPath};
 use database::navigator_service::NavigatorService;
-use database::property_panel::{self, PropertyRegistryImpl};
+use database::property_panel;
+use database::property_providers::global_registry;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::{AutoDriverRegistrar, DriverRegistry};
 use engine::driver::registry::DriverConnectionConfig;
 use rds_workbench::services::connection_service::{ConnectRequest, ConnectionService};
 use rds_workbench::services::data_source_service::DataSourceService;
-use property::{PageId, PropertyKind, PropertyRegistry as _, SupportState};
+use property::{PageId, PropertyKind};
 
 /// 唯一临时库路径（并行跑不撞名）。
 fn fixture_path(driver: &str) -> String {
@@ -393,23 +395,39 @@ async fn run_nav_property_chain(driver: &str) {
     );
     println!("[{driver}] 连接属性面板 OK");
 
-    // 5) 属性页注册表（数据页可用；权限 / 依赖灰置）
-    let registry = PropertyRegistryImpl;
-    let table_pages = registry.pages_for(PropertyKind::Table);
-    let ids: Vec<PageId> = table_pages.iter().map(|p| p.id).collect();
+    // 5) 驱动属性源（provider 类别：数据可用；权限 / 依赖灰置）
+    let provider = global_registry()
+        .provider(driver, PropertyKind::Table)
+        .unwrap_or_else(|| panic!("{driver} 表属性源已注册"));
+    let cats = provider.categories(&property::ProviderInput {
+        target: &property::PropertyTargetRef {
+            kind: PropertyKind::Table,
+            name: "t".to_string(),
+            catalog: None,
+            schema: None,
+            parent: None,
+            conn_id: cid.clone(),
+            source: "项目 (P)".to_string(),
+        },
+        conn_label: driver,
+        db_type: Some(driver),
+        stats: property::ProviderStats::default(),
+        counts: &[],
+        detail: None,
+    });
+    let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
     assert!(
         ids.contains(&PageId::Data) && ids.contains(&PageId::Privileges) && ids.contains(&PageId::Dependencies),
-        "{driver} 表注册表含数据页与权限/依赖页：{ids:?}"
+        "{driver} 表类别含数据与权限/依赖：{ids:?}"
     );
     assert!(
         ids.iter().position(|p| *p == PageId::Data).unwrap() < ids.iter().position(|p| *p == PageId::Privileges).unwrap(),
-        "{driver} 数据页在权限页之前"
+        "{driver} 数据类别在权限之前"
     );
-    assert!(table_pages.iter().all(|p| {
-        p.state == SupportState::Supported
-            || matches!(p.id, PageId::Privileges | PageId::Dependencies)
+    assert!(cats.iter().all(|c| {
+        c.enabled || matches!(c.id, PageId::Privileges | PageId::Dependencies)
     }));
-    println!("[{driver}] 注册表 OK：{ids:?}");
+    println!("[{driver}] 属性源类别 OK：{ids:?}");
 
     // 6) 二次加载命中 L2（cache-aside：结果一致）
     let tables_again = nav

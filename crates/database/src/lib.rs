@@ -18,5 +18,6 @@ pub(crate) mod nav_rows;
 pub mod nav_store;
 pub mod nav_view;
 pub mod property_panel;
+pub mod property_providers;
 pub mod sql_gen;
 pub mod table_data;
