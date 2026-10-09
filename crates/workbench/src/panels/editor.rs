@@ -366,6 +366,35 @@ impl EditorPanel {
             "{}|{:?}|{}|{:?}",
             request.property.conn_id, request.property.kind, request.property.name, request.property.parent
         );
+        // 驱动目录已缓存（随组织数据一次加载）：补 type_id（属性源分派键）+
+        // 组装「驱动友好名 + 类型展示名」（视图层只给驱动 id）。
+        let mut request = request;
+        let (driver_display, type_id, db_type) = {
+            let catalog = self.shared.driver_catalog.borrow();
+            match catalog.get(&request.driver) {
+                Some(meta) => {
+                    if request.type_id.is_none() {
+                        request.type_id = Some(meta.type_id.clone());
+                    }
+                    (
+                        format!("{} · {}", meta.name, request.driver),
+                        request.type_id.clone(),
+                        // 类型行显示**目录名**（`data_source_types.name`）优先，取不到才回退类型 id
+                        Some(
+                            meta.type_name
+                                .clone()
+                                .filter(|n| !n.trim().is_empty())
+                                .unwrap_or_else(|| meta.type_id.clone()),
+                        ),
+                    )
+                }
+                None => (
+                    request.driver.clone(),
+                    request.type_id.clone(),
+                    None,
+                ),
+            }
+        };
         {
             let mut st = self.property.borrow_mut();
             st.loaded_for = Some(key.clone());
@@ -373,28 +402,12 @@ impl EditorPanel {
             st.error = None;
             st.loading = true;
         }
-        // 驱动目录已缓存（随组织数据一次加载）：把「数据库类型 + 驱动友好名」一并传给属性面板。
-        let (driver_display, db_type) = {
-            let catalog = self.shared.driver_catalog.borrow();
-            match catalog.get(&request.driver) {
-                Some(meta) => (
-                    format!("{} · {}", meta.name, request.driver),
-                    // 类型行显示**目录名**（`data_source_types.name`）优先，取不到才回退类型 id
-                    Some(
-                        meta.type_name
-                            .clone()
-                            .filter(|n| !n.trim().is_empty())
-                            .unwrap_or_else(|| meta.type_id.clone()),
-                    ),
-                ),
-                None => (request.driver.clone(), None),
-            }
-        };
         nav_jobs::enqueue_properties(
             &key,
             request.property.clone(),
             &request.conn_label,
             &driver_display,
+            type_id.as_deref(),
             db_type.as_deref(),
             request.data.clone(),
         );
@@ -497,6 +510,7 @@ impl EditorPanel {
         // async move 按值捕获：把传给后台的字段先拆出来，`target` 保持完整供回填闭包用。
         let prop = target.property.clone();
         let driver = target.driver.clone();
+        let type_id = target.type_id.clone();
         cx.spawn(async move |_this, cx| {
             let result = executor
                 .spawn(async move {
@@ -504,6 +518,7 @@ impl EditorPanel {
                         &metadata,
                         &prop,
                         &driver,
+                        type_id.as_deref(),
                         &row_id,
                         &value,
                     )

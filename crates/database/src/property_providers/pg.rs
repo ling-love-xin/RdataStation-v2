@@ -7,8 +7,8 @@
 use super::{connection_base_overview, connection_base_rows, connection_categories, editable_row, empty_table, qualified_name, row, stats_cards};
 use engine::driver::traits::ColumnDetail;
 use property::{
-    ObjectOverview, OverviewStatus, PageId, PropertyCategory, PropertyKind, PropertyProvider,
-    PropertyRow, ProviderInput, ProviderRegistry,
+    ExtraQuery, ObjectOverview, OverviewStatus, PageId, PropertyCategory, PropertyKind,
+    PropertyProvider, PropertyRow, ProviderInput, ProviderRegistry,
 };
 
 /// 注册 PostgreSQL 全部对象类型的 provider。
@@ -29,32 +29,21 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct PgConnectionProvider;
 
 impl PropertyProvider for PgConnectionProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
         let mut rows = connection_base_rows(input, "PostgreSQL");
-        // 以下为 DBeaver PostgreDatabase 可编辑配置行；真值来自连接配置（settings 接入前占位 "-"）。
-        rows.push(editable_row(
-            "Database.description", "描述", "-",
-            property::PropertyValueKind::LongText, Vec::new(),
-        ));
-        rows.push(editable_row(
-            "Database.dba", "数据库管理员", "-",
-            property::PropertyValueKind::Select, vec!["postgres".to_string()],
-        ));
+        // 以下为 DBeaver PostgreDatabase 可编辑配置行；真值来自连接配置。
+        // settings 接入前渲染为只读占位（值带「待接入」标注，避免"可点但提交报错"）。
+        rows.push(row("描述", "待接入"));
+        rows.push(row("数据库管理员", "待接入"));
         rows.push(row("模板", "template1"));
         rows.push(row("默认表空间", "pg_default"));
         rows.push(row("默认编码", "UTF8"));
         rows.push(row("排序规则", "C"));
-        rows.push(editable_row(
-            "Database.connection_limit", "连接限制", "-1",
-            property::PropertyValueKind::Text, Vec::new(),
-        ));
-        rows.push(editable_row(
-            "Database.allow_connections", "允许连接", "true",
-            property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()],
-        ));
+        rows.push(row("连接限制", "待接入"));
+        rows.push(row("允许连接", "待接入"));
         rows
     }
 
@@ -72,7 +61,7 @@ impl PropertyProvider for PgConnectionProvider {
             cards.push(property::OverviewCard { label: "视图".into(), value: v.into(), unit: String::new(), delta: None });
         }
         ov.cards = cards;
-        if let Some(v) = input.count("version") {
+        if let Some(v) = input.count("server_version") {
             ov.kv.insert(0, ("版本".to_string(), v.to_string()));
         }
         ov
@@ -95,7 +84,7 @@ impl PropertyProvider for PgConnectionProvider {
 pub struct PgSchemaProvider;
 
 impl PropertyProvider for PgSchemaProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Schema }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -161,7 +150,7 @@ impl PropertyProvider for PgSchemaProvider {
 pub struct PgTableProvider;
 
 impl PropertyProvider for PgTableProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Table }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -205,7 +194,26 @@ impl PropertyProvider for PgTableProvider {
         if let Some(v) = input.count("row_estimate") {
             ov.cards.push(property::OverviewCard { label: "行估计".into(), value: v.into(), unit: String::new(), delta: Some("reltuples".into()) });
         }
+        if let Some(v) = input.count("size") {
+            ov.cards.push(property::OverviewCard { label: "表大小".into(), value: v.into(), unit: String::new(), delta: Some("pg_total_relation_size".into()) });
+        }
         ov
+    }
+
+    /// 表级统计懒加载：行估计（reltuples）+ 表大小——SQL 由 provider 按方言生成，
+    /// 骨架只执行、取首行首列写入 counts（**新增数据库只需声明自己的 SQL**）。
+    fn extra_queries(&self, input: &ProviderInput) -> Vec<ExtraQuery> {
+        let q = qualified_name(input.target).replace('\'', "''");
+        vec![
+            property::ExtraQuery {
+                key: "row_estimate",
+                sql: format!("SELECT reltuples::text FROM pg_class WHERE oid = '{q}'::regclass"),
+            },
+            property::ExtraQuery {
+                key: "size",
+                sql: format!("SELECT pg_size_pretty(pg_total_relation_size('{q}'))"),
+            },
+        ]
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertyCategory> {
@@ -234,7 +242,7 @@ impl PropertyProvider for PgTableProvider {
 pub struct PgViewProvider;
 
 impl PropertyProvider for PgViewProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::View }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -288,7 +296,7 @@ impl PropertyProvider for PgViewProvider {
 pub struct PgColumnProvider;
 
 impl PropertyProvider for PgColumnProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Column }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -373,7 +381,7 @@ impl PropertyProvider for PgColumnProvider {
 pub struct PgRoutineProvider;
 
 impl PropertyProvider for PgRoutineProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Routine }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -411,7 +419,7 @@ impl PropertyProvider for PgRoutineProvider {
 pub struct PgSequenceProvider;
 
 impl PropertyProvider for PgSequenceProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Sequence }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -449,7 +457,7 @@ impl PropertyProvider for PgSequenceProvider {
 pub struct PgTriggerProvider;
 
 impl PropertyProvider for PgTriggerProvider {
-    fn driver(&self) -> &'static str { "postgres" }
+    fn db_type(&self) -> &'static str { "postgresql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Trigger }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -512,6 +520,7 @@ mod tests {
         ProviderInput {
             target,
             conn_label: "PG 连接",
+            type_id: Some("postgresql"),
             db_type: Some("postgres"),
             stats: ProviderStats { column_count: 3, index_count: 1, constraint_count: 1 },
             counts,
@@ -519,7 +528,7 @@ mod tests {
         }
     }
 
-    /// 连接 provider：属性行含 DBeaver 可编辑项（描述 / 管理员 / 连接限制 / 允许连接）。
+    /// 连接 provider：DBeaver 可编辑项在 settings 接入前渲染为只读占位（值带「待接入」）。
     #[test]
     fn connection_provider_rows_match_dbeaver_shape() {
         let t = target(PropertyKind::Connection, None);
@@ -528,9 +537,18 @@ mod tests {
         for want in ["名称", "驱动", "描述", "数据库管理员", "连接限制", "允许连接"] {
             assert!(labels.contains(&want), "缺 {want}: {labels:?}");
         }
+        // settings 接入前：配置行只读占位（不可点编辑），值标注「待接入」
+        let pending: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.value == "待接入")
+            .map(|r| r.label.as_str())
+            .collect();
+        for want in ["描述", "数据库管理员", "连接限制", "允许连接"] {
+            assert!(pending.contains(&want), "缺待接入行 {want}: {pending:?}");
+        }
         let editable: Vec<&str> = rows.iter().filter(|r| r.editable).map(|r| r.id.as_str()).collect();
-        assert!(editable.contains(&"Database.description"));
-        assert!(editable.contains(&"Database.allow_connections"));
+        assert!(!editable.contains(&"Database.description"), "连接描述应只读：{editable:?}");
+        assert!(!editable.contains(&"Database.allow_connections"), "允许连接应只读：{editable:?}");
     }
 
     /// 列 provider：detail 命中时渲染完整 DBeaver 行；未命中给提示。

@@ -12,13 +12,14 @@ use property::{
 pub fn register_all(registry: &mut ProviderRegistry) {
     registry.register(Box::new(SqliteConnectionProvider));
     registry.register(Box::new(SqliteTableProvider));
+    registry.register(Box::new(SqliteViewProvider));
 }
 
 /// SQLite 连接属性源。
 pub struct SqliteConnectionProvider;
 
 impl PropertyProvider for SqliteConnectionProvider {
-    fn driver(&self) -> &'static str { "sqlite" }
+    fn db_type(&self) -> &'static str { "sqlite" }
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -53,7 +54,7 @@ impl PropertyProvider for SqliteConnectionProvider {
 pub struct SqliteTableProvider;
 
 impl PropertyProvider for SqliteTableProvider {
-    fn driver(&self) -> &'static str { "sqlite" }
+    fn db_type(&self) -> &'static str { "sqlite" }
     fn kind(&self) -> PropertyKind { PropertyKind::Table }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -62,6 +63,7 @@ impl PropertyProvider for SqliteTableProvider {
             row("类型", "表"),
             row("限定名", super::qualified_name(input.target)),
             row("归属域", &input.target.source),
+            row("列数", &input.stats.column_count.to_string()),
         ]
     }
 
@@ -88,6 +90,7 @@ impl PropertyProvider for SqliteTableProvider {
         vec![
             PropertyCategory { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
             PropertyCategory { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
+            PropertyCategory { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
             PropertyCategory { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
             PropertyCategory { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
             PropertyCategory::disabled(PageId::Privileges, "权限"),
@@ -97,5 +100,55 @@ impl PropertyProvider for SqliteTableProvider {
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
         Err("SQLite 表属性编辑待扩展".to_string())
+    }
+}
+
+/// SQLite 视图属性源（视图无索引/约束，分区为 列 / DDL / 数据）。
+pub struct SqliteViewProvider;
+
+impl PropertyProvider for SqliteViewProvider {
+    fn db_type(&self) -> &'static str { "sqlite" }
+    fn kind(&self) -> PropertyKind { PropertyKind::View }
+
+    fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
+        vec![
+            row("名称", &input.target.name),
+            row("类型", "视图"),
+            row("限定名", super::qualified_name(input.target)),
+            row("归属域", &input.target.source),
+            row("列数", &input.stats.column_count.to_string()),
+        ]
+    }
+
+    fn overview(&self, input: &ProviderInput) -> ObjectOverview {
+        ObjectOverview {
+            title: input.target.name.clone(),
+            subtitle: "视图".to_string(),
+            status: OverviewStatus::Connected,
+            status_text: "已加载".to_string(),
+            cards: stats_cards(input),
+            kv: vec![
+                ("作用域".to_string(), input.target.source.clone()),
+                ("限定名".to_string(), super::qualified_name(input.target)),
+            ],
+            note: "SQLite 为文件库：对象统计随内省懒加载。".to_string(),
+            meta: vec![
+                ("驱动".to_string(), "SQLite".to_string()),
+                ("作用域".to_string(), input.target.source.clone()),
+            ],
+        }
+    }
+
+    fn categories(&self, _input: &ProviderInput) -> Vec<PropertyCategory> {
+        vec![
+            PropertyCategory { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
+            PropertyCategory { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
+            PropertyCategory { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
+            PropertyCategory::disabled(PageId::Privileges, "权限"),
+        ]
+    }
+
+    fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
+        Err("SQLite 视图属性编辑待扩展".to_string())
     }
 }

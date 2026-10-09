@@ -686,6 +686,7 @@ impl NavView {
                 property,
                 conn_label,
                 driver,
+                type_id: None,
                 data: None,
             },
             cx,

@@ -462,6 +462,7 @@ pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObj
             property: database::model::property_ref_of(&object),
             conn_label: hit.conn_label.clone(),
             driver: hit.driver.clone(),
+            type_id: None,
             data: None,
         },
         object,

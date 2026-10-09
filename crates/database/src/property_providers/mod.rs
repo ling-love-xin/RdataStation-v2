@@ -1,15 +1,17 @@
-//! 属性源注册（M4 数据生产者侧）——各驱动 × 对象类型的 [`PropertyProvider`] 实现。
+//! 属性源注册（M4 数据生产者侧）——各数据库类型 × 对象类型的 [`PropertyProvider`] 实现。
 //!
 //! 对齐 DBeaver 插件机制：`ext.postgresql` / `ext.mysql` 各实现 `DBPPropertySource`，
-//! 属性面板 UI 零分支。RDS 对应物 = 本目录每驱动一个子模块，实现 `PropertyProvider`，
-//! 经 [`global_registry`] 注册——**新增数据库（如 Oracle）只加一个 provider 子模块**，
+//! 属性面板 UI 零分支。RDS 对应物 = 本目录每数据库类型一个子模块，实现 `PropertyProvider`，
+//! 经 [`global_registry`] 注册——**新增数据库只加一个 provider 子模块**，
 //! `property` crate 模型 / `property_panel` 通用骨架 / workbench 渲染层零改动。
+//!
+//! 分派键是**数据库类型 id**（`drivers.type_id`，如 `postgresql`），不是驱动 id——
+//! 同一个数据库族可有多个驱动实现（`postgres_native` / JDBC…），一族共享一个 provider。
 //!
 //! 布局：`docs/architecture/property/property-module-spec.md` §16（本目录为 §16.2）。
 
 pub mod duckdb;
 pub mod mysql;
-pub mod oracle;
 pub mod pg;
 pub mod sqlite;
 
@@ -19,9 +21,9 @@ use property::{
 };
 use std::sync::OnceLock;
 
-/// 全局属性源注册表（首次访问时注册全部内置驱动 provider）。
+/// 全局属性源注册表（首次访问时注册全部内置数据库类型 provider）。
 ///
-/// 新增驱动 provider = 在 `register_all` 里加一行；**不需要改任何消费方**。
+/// 新增数据库类型 provider = 在 `register_all` 里加一行；**不需要改任何消费方**。
 pub fn global_registry() -> &'static ProviderRegistry {
     static REG: OnceLock<ProviderRegistry> = OnceLock::new();
     REG.get_or_init(|| {
@@ -30,7 +32,6 @@ pub fn global_registry() -> &'static ProviderRegistry {
         sqlite::register_all(&mut registry);
         duckdb::register_all(&mut registry);
         mysql::register_all(&mut registry);
-        oracle::register_all(&mut registry);
         registry
     })
 }

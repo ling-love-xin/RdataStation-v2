@@ -17,6 +17,6 @@ pub use model::{
     PropertyValueKind, TableDataColumn, TableDataPage,
 };
 pub use provider::{
-    ObjectOverview, OverviewCard, OverviewStatus, PropertyCategory, PropertyProvider,
-    PropertyTargetRef, ProviderInput, ProviderRegistry, ProviderStats,
+    ExtraQuery, ObjectOverview, OverviewCard, OverviewStatus, PropertyCategory,
+    PropertyProvider, PropertyTargetRef, ProviderInput, ProviderRegistry, ProviderStats,
 };

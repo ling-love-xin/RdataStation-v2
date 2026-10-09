@@ -231,6 +231,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest::default()),
     )
@@ -277,6 +278,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest { offset: 0, limit: 1, order_by: vec![] }),
     )
@@ -292,6 +294,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest { offset: 2, limit: 1, order_by: vec![] }),
     )
@@ -310,6 +313,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest {
             offset: 0,
@@ -324,6 +328,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Table, "orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest {
             offset: 0,
@@ -343,6 +348,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::View, "v_orders"),
         driver,
         driver,
+        Some(driver),
         None,
         Some(&database::table_data::TableDataRequest::default()),
     )
@@ -363,6 +369,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Column, "tag"),
         driver,
         driver,
+        Some(driver),
         None,
         None,
     )
@@ -384,6 +391,7 @@ async fn run_nav_property_chain(driver: &str) {
         &make_ref(PropertyKind::Connection, driver),
         driver,
         driver,
+        Some(driver),
         None,
         None,
     )
@@ -410,6 +418,7 @@ async fn run_nav_property_chain(driver: &str) {
             source: "项目 (P)".to_string(),
         },
         conn_label: driver,
+        type_id: Some(driver),
         db_type: Some(driver),
         stats: property::ProviderStats::default(),
         counts: &[],

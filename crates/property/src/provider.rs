@@ -1,16 +1,19 @@
-//! 属性源接口（对齐 DBeaver `DBPPropertySource`）——驱动无关的动态渲染核心。
+//! 属性源接口（对齐 DBeaver `DBPPropertySource`）——数据库类型无关的动态渲染核心。
 //!
 //! DBeaver 的动态渲染机制（源码实证）：`DBPPropertySource` 是接口，
 //! 各数据库插件（`ext.postgresql` 等）用 `@Property` 注解 getter 实现它；
-//! 属性面板 UI **只依赖接口**，不按数据库类型写分支——新增数据库 = 新插件实现接口，UI 零改动。
+//! 属性面板 UI **只依赖接口**，不按数据库写分支——新增数据库 = 新插件实现接口，UI 零改动。
 //!
 //! RDS 对齐：本模块定义 [`PropertyProvider`] trait + [`ProviderRegistry`]。
-//! - **驱动特异部分**（属性行集合 / 洞察总览 / 子项类别树 / 编辑 SQL）由各驱动 provider 实现；
+//! - **分派键 = 数据库类型 id**（`drivers.type_id`，如 `postgresql`）——**不是驱动 id**：
+//!   同一个数据库族（PostgreSQL）可有多个驱动实现（`postgres_native` / JDBC 等），
+//!   属性面板与具体驱动无关，一族共享一套 provider（新增驱动实现 = 零改动）；
+//! - **数据库特异部分**（属性行集合 / 洞察总览 / 子项类别树 / 编辑 SQL）由各 provider 实现；
 //! - **通用骨架**（`database::property_panel::load_properties` 的列/索引/约束/DDL/数据取数）
 //!   驱动无关，provider 只补充"定义信息"；
-//! - **渲染层**（workbench）只依赖 `ProviderRegistry::provider(driver, kind)`。
+//! - **渲染层**（workbench）只依赖 `ProviderRegistry::provider(type_id, kind)`。
 //!
-//! 新增数据库（如 Oracle）= `database` crate 注册一个 `OraclePropertyProvider`，
+//! 新增数据库（如 Oracle）= `database` crate 注册一个 provider，
 //! **property crate 模型 / 通用骨架 / 渲染层零改动**。
 
 use crate::descriptor::PageId;
@@ -43,7 +46,9 @@ pub struct ProviderInput<'a> {
     pub target: &'a PropertyTargetRef,
     /// 连接显示名（连接对象标题）
     pub conn_label: &'a str,
-    /// 数据库类型（`drivers.type_id`，可为空）
+    /// 数据库类型 id（`drivers.type_id`，如 `postgresql`——分派键，可为空）
+    pub type_id: Option<&'a str>,
+    /// 数据库类型**展示名**（`data_source_types.name` 优先；General 行 / meta 芯片用）
     pub db_type: Option<&'a str>,
     pub stats: ProviderStats,
     /// 调用方统计（洞察指标：schemas / tables / views / cache_hits / row_estimate / size …；
@@ -131,11 +136,24 @@ impl PropertyCategory {
     }
 }
 
-/// 属性源（对齐 DBeaver `DBPPropertySource`）——**驱动实现，面板零改动**。
+/// 驱动无关的统计查询（洞察 counts 的补充来源）。
+///
+/// provider 声明（key → SQL）；通用骨架用连接执行、取首行首列，写入
+/// [`ProviderInput`] 的 `counts`。SQL 模板里 `{qualified}` = 目标对象的限定名
+/// （由骨架替换；provider 自行负责引号 / 方言）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtraQuery {
+    pub key: &'static str,
+    pub sql: String,
+}
+
+/// 属性源（对齐 DBeaver `DBPPropertySource`）——**按数据库类型实现，面板零改动**。
 pub trait PropertyProvider: Send + Sync {
-    /// 驱动标识（`drivers.type_id`：`postgres` / `sqlite` / `duckdb` / `mysql` / `oracle` …）。
-    fn driver(&self) -> &'static str;
-    /// 服务的对象类型（每驱动 × 类型一个 provider）。
+    /// 数据库类型 id（`drivers.type_id`：`postgresql` / `sqlite` / `duckdb` / `mysql` …）。
+    ///
+    /// 注意与**驱动 id**（`drivers.id`，如 `postgres_native`）区分：一族共享一个 provider。
+    fn db_type(&self) -> &'static str;
+    /// 服务的对象类型（每数据库类型 × 类型一个 provider）。
     fn kind(&self) -> PropertyKind;
 
     /// 属性行集合（对齐 `getProperties()`；值由 provider 组装，可引用 [`ProviderInput`] 统计）。
@@ -147,6 +165,11 @@ pub trait PropertyProvider: Send + Sync {
     /// 子项类别树（驱动能力掩码；灰置类别 = `enabled: false`）。
     fn categories(&self, input: &ProviderInput) -> Vec<PropertyCategory>;
 
+    /// 洞察统计查询（默认无；PG 表级行估计 / 大小等懒加载指标在此声明）。
+    fn extra_queries(&self, _input: &ProviderInput) -> Vec<ExtraQuery> {
+        Vec::new()
+    }
+
     /// 编辑 SQL 生成（对齐 `setPropertyValue`——生成语句，执行由调用方）。
     /// 返回实际 SQL（渲染方展示）；不支持返回 `Err`（明确报错，不静默）。
     fn apply_edit_sql(
@@ -157,9 +180,9 @@ pub trait PropertyProvider: Send + Sync {
     ) -> Result<String, String>;
 }
 
-/// 属性源注册表（驱动 × 对象类型）——渲染 / 骨架只依赖它。
+/// 属性源注册表（数据库类型 × 对象类型）——渲染 / 骨架只依赖它。
 ///
-/// 全局单例由 `database::property_providers::global_registry()` 提供（首次访问时注册全部驱动）。
+/// 全局单例由 `database::property_providers::global_registry()` 提供（首次访问时注册全部类型）。
 #[derive(Default)]
 pub struct ProviderRegistry {
     providers: Vec<Box<dyn PropertyProvider>>,
@@ -171,12 +194,22 @@ impl ProviderRegistry {
         self.providers.push(provider);
     }
 
-    /// 按 驱动 × 对象类型 查找 provider；未注册返回 `None`（渲染回退通用展示）。
-    /// 驱动比较大小写不敏感（`postgres` / `postgresql` / `pg` 等价）。
-    pub fn provider(&self, driver: &str, kind: PropertyKind) -> Option<&dyn PropertyProvider> {
+    /// 数据库类型 id 归一（同一族不同写法等价；`postgres` / `pg` → `postgresql`）。
+    fn normalize(type_id: &str) -> String {
+        let lower = type_id.to_ascii_lowercase();
+        match lower.as_str() {
+            "postgres" | "pg" => "postgresql".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    /// 按 数据库类型 × 对象类型 查找 provider；未注册返回 `None`（渲染回退通用展示）。
+    /// 类型 id 比较大小写不敏感 + 族别名归一（`postgres` / `postgresql` / `pg` 等价）。
+    pub fn provider(&self, type_id: &str, kind: PropertyKind) -> Option<&dyn PropertyProvider> {
+        let key = Self::normalize(type_id);
         self.providers
             .iter()
-            .find(|p| p.driver().eq_ignore_ascii_case(driver) && p.kind() == kind)
+            .find(|p| p.db_type().eq_ignore_ascii_case(&key) && p.kind() == kind)
             .map(|p| p.as_ref())
     }
 
@@ -199,12 +232,12 @@ mod tests {
         assert!(c.table.rows.is_empty());
     }
 
-    /// 注册表按 驱动 × 类型 命中；未注册返回 None。
+    /// 注册表按 数据库类型 × 对象类型 命中；未注册返回 None；族别名归一。
     #[test]
-    fn registry_resolves_provider_by_driver_and_kind() {
+    fn registry_resolves_provider_by_db_type_and_kind() {
         struct PgConn;
         impl PropertyProvider for PgConn {
-            fn driver(&self) -> &'static str { "postgres" }
+            fn db_type(&self) -> &'static str { "postgresql" }
             fn kind(&self) -> PropertyKind { PropertyKind::Connection }
             fn property_defs(&self, _i: &ProviderInput) -> Vec<PropertyRow> { vec![] }
             fn overview(&self, _i: &ProviderInput) -> ObjectOverview {
@@ -222,8 +255,10 @@ mod tests {
 
         let mut reg = ProviderRegistry::default();
         reg.register(Box::new(PgConn));
-        assert!(reg.provider("postgres", PropertyKind::Connection).is_some());
-        assert!(reg.provider("postgres", PropertyKind::Table).is_none(), "类型不匹配");
-        assert!(reg.provider("sqlite", PropertyKind::Connection).is_none(), "驱动不匹配");
+        assert!(reg.provider("postgresql", PropertyKind::Connection).is_some());
+        assert!(reg.provider("postgres", PropertyKind::Connection).is_some(), "族别名 postgres 应命中");
+        assert!(reg.provider("PG", PropertyKind::Connection).is_some(), "大小写不敏感");
+        assert!(reg.provider("postgresql", PropertyKind::Table).is_none(), "类型不匹配");
+        assert!(reg.provider("sqlite", PropertyKind::Connection).is_none(), "数据库类型不匹配");
     }
 }

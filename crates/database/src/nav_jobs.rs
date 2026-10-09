@@ -266,7 +266,10 @@ enum Job {
         key: String,
         property: PropertyRef,
         conn_label: String,
+        /// 驱动 id / 显示名（属性面板「驱动」行、fallback 用）
         driver: String,
+        /// 数据库类型 id（`drivers.type_id`，如 `postgresql`）——**属性源分派键**
+        type_id: Option<String>,
         /// 数据库类型的**展示文字**：目录名（`data_source_types.name`）优先，取不到时回退类型 id
         /// （`drivers.type_id`）；属性面板「数据库类型」行用。
         db_type: Option<String>,
@@ -767,6 +770,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             property,
             conn_label,
             driver,
+            type_id,
             db_type,
             data,
         } => {
@@ -782,6 +786,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                         &property,
                         &conn_label,
                         &driver,
+                        type_id.as_deref(),
                         db_type.as_deref(),
                         data.as_ref(),
                     ),
@@ -1032,11 +1037,15 @@ pub fn enqueue_locate_page(
 }
 
 /// 提交属性加载。
+///
+/// `driver` = 驱动 id / 显示名（fallback「驱动」行）；`type_id` = 数据库类型 id
+/// （`drivers.type_id`）——**属性源分派键**。
 pub fn enqueue_properties(
     key: &str,
     property: PropertyRef,
     conn_label: &str,
     driver: &str,
+    type_id: Option<&str>,
     db_type: Option<&str>,
     data: Option<crate::table_data::TableDataRequest>,
 ) {
@@ -1046,6 +1055,7 @@ pub fn enqueue_properties(
         property,
         conn_label: conn_label.to_string(),
         driver: driver.to_string(),
+        type_id: type_id.map(str::to_string),
         db_type: db_type.map(str::to_string),
         data,
     });

@@ -1190,11 +1190,15 @@ impl NavigatorService {
     }
 
     /// 加载对象属性（属性面板用；连接 / Catalog / Schema 无需查询）。
+    ///
+    /// `type_id` = 数据库类型 id（`drivers.type_id`，属性源分派键）；
+    /// `driver` = 驱动 id / 显示名（fallback「驱动」行）。
     pub async fn load_properties(
         &self,
         ref_: &PropertyRef,
         conn_label: &str,
         driver: &str,
+        type_id: Option<&str>,
         db_type: Option<&str>,
         data_req: Option<&crate::table_data::TableDataRequest>,
     ) -> Result<property::ObjectProperties, CoreError> {
@@ -1203,6 +1207,7 @@ impl NavigatorService {
             ref_,
             conn_label,
             driver,
+            type_id,
             db_type,
             data_req,
         )

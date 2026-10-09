@@ -16,6 +16,11 @@ impl MetadataService {
         Self { manager }
     }
 
+    /// 连接管理器（属性面板 counts 取连接元信息用：版本 / URL 等）。
+    pub fn manager(&self) -> &Arc<ConnectionManager> {
+        &self.manager
+    }
+
     async fn get_database(&self, conn_id: &str) -> Result<DynDatabase, CoreError> {
         self.manager
             .get_connection(&conn_id.to_string())

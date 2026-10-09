@@ -101,6 +101,7 @@ pub async fn load_properties(
     ref_: &PropertyRef,
     conn_label: &str,
     driver: &str,
+    type_id: Option<&str>,
     db_type: Option<&str>,
     data_req: Option<&TableDataRequest>,
 ) -> Result<ObjectProperties, CoreError> {
@@ -213,20 +214,62 @@ pub async fn load_properties(
         }
     }
 
-    // ── ② 属性源分派（新增驱动 = 注册 provider，本文件不改） ──────────────
+    // ── ② 属性源分派（新增数据库 = 注册 provider，本文件不改） ──────────────
+    // 分派键 = **数据库类型 id**（`drivers.type_id`，如 `postgresql`）；`driver`
+    // 只是驱动 id / 显示名（fallback 的「驱动」行用）。type_id 缺失时回退 driver
+    // （旧调用方 / 测试直接传类型名）。
     let stats = ProviderStats {
         column_count: columns.len(),
         index_count: indexes.len(),
         constraint_count: constraints.len(),
     };
-    let counts: Vec<(&str, String)> = Vec::new(); // 调用方统计（版本/路径/oid 等）待连接侧接入
-    let provider = global_registry().provider(driver, ref_.kind);
+    let provider =
+        global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
+
+    // 调用方统计（洞察指标）：连接元信息（在线状态 / 服务端版本 / URL）
+    // + provider 声明的懒加载查询（行估计 / 表大小等，SQL 由 provider 按方言生成）。
+    let mut counts: Vec<(&str, String)> = Vec::new();
+    if let Some(info) = metadata
+        .manager()
+        .get_connection_info(&ref_.conn_id)
+        .await
+    {
+        counts.push(("connected", "true".to_string()));
+        if let Some(v) = info.server_version {
+            counts.push(("server_version", v));
+        }
+        counts.push(("url", info.url));
+    }
+    if let Some(p) = provider {
+        let pre_input = ProviderInput {
+            target: &target,
+            conn_label,
+            type_id,
+            db_type,
+            stats,
+            counts: &counts,
+            detail: None,
+        };
+        for q in p.extra_queries(&pre_input) {
+            if let Ok(res) = metadata
+                .execute_query(&ref_.conn_id, ref_.catalog.as_deref().unwrap_or("main"), &q.sql)
+                .await
+            {
+                if let Some(first) = res.rows.first() {
+                    if let Some(v) = first.first() {
+                        counts.push((q.key, v.to_string()));
+                    }
+                }
+            }
+        }
+    }
 
     let (properties, overview, categories) = match provider {
         Some(p) => {
             let input = ProviderInput {
                 target: &target,
                 conn_label,
+                type_id,
                 db_type,
                 stats,
                 counts: &counts,
@@ -459,6 +502,7 @@ pub async fn apply_property_edit(
     metadata: &MetadataService,
     ref_: &PropertyRef,
     driver: &str,
+    type_id: Option<&str>,
     property_id: &str,
     value: &str,
 ) -> Result<String, CoreError> {
@@ -478,12 +522,13 @@ pub async fn apply_property_edit(
         None
     };
 
-    let provider = global_registry().provider(driver, ref_.kind);
+    let provider = global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
     let sql = match provider {
         Some(p) => {
             let input = ProviderInput {
                 target: &target,
                 conn_label: "",
+                type_id,
                 db_type: None,
                 stats: ProviderStats::default(),
                 counts: &[],

@@ -18,7 +18,7 @@ pub fn register_all(registry: &mut ProviderRegistry) {
 pub struct MysqlConnectionProvider;
 
 impl PropertyProvider for MysqlConnectionProvider {
-    fn driver(&self) -> &'static str { "mysql" }
+    fn db_type(&self) -> &'static str { "mysql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
@@ -56,7 +56,7 @@ impl PropertyProvider for MysqlConnectionProvider {
 pub struct MysqlTableProvider;
 
 impl PropertyProvider for MysqlTableProvider {
-    fn driver(&self) -> &'static str { "mysql" }
+    fn db_type(&self) -> &'static str { "mysql" }
     fn kind(&self) -> PropertyKind { PropertyKind::Table }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {

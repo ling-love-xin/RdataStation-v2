@@ -301,7 +301,7 @@ pub trait PropertyRegistry {
 | 属性源接口 + 注册表（对齐 `DBPPropertySource`，§16） | `crates/property/src/provider.rs` |
 | crate 公共 API | `crates/property/src/lib.rs` |
 | `load_properties` 取数（通用骨架，§16 重构） | `crates/database/src/property_panel.rs` |
-| 属性源注册表实现（各驱动 provider） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql,oracle}.rs` |
+| 属性源注册表实现（各驱动 provider） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | `PropertyRef` / `PropertyRequest` / `property_ref_of`（保留） | `crates/database/src/model.rs` |
 | 属性加载入队 / 结果类型 | `crates/database/src/nav_jobs.rs` |
 | tab 化描述驱动渲染（三部分布局，§16） | `crates/workbench/src/panels/editor.rs::render_property_panel` |
@@ -410,20 +410,25 @@ RDS 对齐 = `crates/property/src/provider.rs`：
 
 ```rust
 pub trait PropertyProvider: Send + Sync {
-    fn driver(&self) -> &'static str;                       // drivers.type_id（postgres/sqlite/…）
-    fn kind(&self) -> PropertyKind;                         // 每驱动 × 对象类型一个 provider
+    fn db_type(&self) -> &'static str;                       // 数据库类型 id（drivers.type_id：postgresql/sqlite/…）
+    fn kind(&self) -> PropertyKind;                         // 每驱动族 × 对象类型一个 provider
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow>;   // getProperties()
     fn overview(&self, input: &ProviderInput) -> ObjectOverview;          // RDS 新增：洞察总览
     fn categories(&self, input: &ProviderInput) -> Vec<PropertyCategory>; // 子项类别树（能力掩码）
+    fn extra_queries(&self, input: &ProviderInput) -> Vec<ExtraQuery>;    // 懒加载统计（key + SQL 模板）
     fn apply_edit_sql(&self, input, row_id, value) -> Result<String, String>; // setPropertyValue → SQL
 }
 ```
 
-- `ProviderInput` 携带：目标引用（`PropertyTargetRef`）、连接显示名、数据库类型、
-  通用骨架统计（`ProviderStats`：列/索引/约束计数）、调用方统计（`counts`：版本/路径/oid/行估计…）、
+- **分派键 = 数据库类型 id（`drivers.type_id`）**，不是驱动 id / 展示名：同一数据库族下的
+  多驱动实现（如 `postgres_native` / JDBC）共享一套 provider。`PropertyRequest.type_id`
+  由视图层透传、宿主（`EditorPanel::request_properties`）从驱动目录补齐（`driver_catalog`
+  驱动 id → `DriverMeta.type_id`）；缺失时回退驱动 id（旧调用方 / 测试直接传类型名）。
+- `ProviderInput` 携带：目标引用（`PropertyTargetRef`）、连接显示名、数据库类型 id（分派键）与
+  展示名、通用骨架统计（`ProviderStats`：列/索引/约束计数）、调用方统计（`counts`：版本/路径/oid/行估计…）、
   附加对象（`detail`：列明细等，provider 自行 downcast）。
 - `ProviderRegistry`（全局单例 `database::property_providers::global_registry()`）按
-  驱动 × 对象类型解析；驱动比较大小写不敏感（`postgres` / `postgresql` / `pg` 等价）。
+  类型 id × 对象类型解析；比较大小写不敏感 + 族别名归一（`postgres|pg → postgresql`）。
 
 ### 16.2 实现分层（新增驱动不改面板/骨架）
 
@@ -431,12 +436,13 @@ pub trait PropertyProvider: Send + Sync {
 | --- | --- | --- | --- |
 | 模型/契约 | `PropertyRow` / `ObjectOverview` / `PropertyCategory` / `ProviderRegistry` | `crates/property/src/{model,descriptor,provider}.rs` | 否 |
 | 通用骨架 | 列/索引/约束/DDL/数据取数 + 类别内容合并 + 编辑执行 | `crates/database/src/property_panel.rs` | 否 |
-| 驱动 provider | 属性行 / 洞察 / 类别 / 编辑 SQL | `crates/database/src/property_providers/`（pg/sqlite/duckdb/mysql/oracle.rs） | **是（只加一个文件 + register 一行）** |
+| 驱动 provider | 属性行 / 洞察 / 类别 / 懒加载统计 / 编辑 SQL | `crates/database/src/property_providers/`（pg/sqlite/duckdb/mysql.rs） | **是（只加一个文件 + register 一行）** |
 | 渲染层 | 三部分布局 / 编辑控件 / 数据页 | `crates/workbench/src/panels/editor.rs` | 否 |
 
 **已注册 provider**（`property_providers/mod.rs::register_all`）：
-PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQLite / DuckDB / MySQL 各 2 类
-（连接/表）；Oracle 1 类（连接壳，**证明新增驱动不动面板**）。
+PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQLite / DuckDB 各 3 类
+（连接/表/视图）；MySQL 2 类（连接/表）。**Oracle 暂不接入**（壳 provider 已移除——
+后续接入 = 驱动内省 + 注册文件，面板/骨架零改动）。
 未注册对象类型回退通用展示（`property_panel::fallback_*`）。
 
 ### 16.3 三部分布局（原型验收基线）
@@ -466,11 +472,13 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 
 ### 16.5 已知限制 / 下一步（相对 15.6 的新增项）
 
-1. 连接/Schema/表级 `counts`（版本/路径/oid/行估计/表大小）尚未由调用方填充——洞察指标卡
-   只显示通用骨架可得项；`reltuples` 等统计待懒加载接入；
-2. 连接级属性编辑（描述/管理员/连接限制）待 settings 接入（当前占位 "-"，提交报「待接入」）；
+1. `counts` 已由调用方填充（2026-10-09）：连接级（`connected`/`server_version`/`url` 来自
+   连接元信息）+ provider 声明的懒加载查询（`extra_queries`：PG 表级 `row_estimate`/`size`，
+   取首行首列入洞察指标卡）；其余驱动 / 对象的统计随内省逐步接入；
+2. 连接级属性编辑（描述/管理员/连接限制/允许连接）待 settings 接入——**当前渲染为只读占位**，
+   值标注「待接入」（避免"可点但提交报错"），编辑链路 `apply_property_edit` 已按类型 id 分派；
 3. `PropertyCategory` 的「左侧类别树 + 右侧表格」DBeaver 形态暂以纵向堆叠呈现（原型 v2 一致）；
-4. Oracle 真机内省待驱动接入（连接壳已注册，证明机制）；
+4. **Oracle 暂不接入**（驱动内省未就绪；壳 provider 已移除，后续按「注册 provider」机制接入）；
 5. 旧版属性面板（右侧停靠 + 页集合 tab）代码已重建，未删旧物（原型与文档保留供对照）。
 
 ### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
@@ -479,7 +487,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | --- | --- |
 | `PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertyCategory` | `crates/property/src/provider.rs` |
 | `ObjectProperties.overview` / `PropertySection.enabled` / `PageId::{Routines,Partitions}` | `crates/property/src/{model,descriptor}.rs` |
-| 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql/oracle） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql,oracle}.rs` |
+| 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |
 | 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/editor.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}` |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
