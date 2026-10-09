@@ -8,11 +8,13 @@
 //! （创建/聚焦面板）→ `PropertyHostPanel::show_properties` 入队加载
 //! （`nav_jobs::enqueue_properties`）→ 轮询回填 `PropertyState` → 渲染只读。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
+use gpui_kit::StatefulInteractiveElement as _;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputState};
@@ -28,6 +30,7 @@ use database::nav_jobs;
 use database::table_data::{DEFAULT_PAGE_LIMIT, TableDataRequest};
 use property::{ObjectProperties, PageId, PropertyRow, PropertySection, PropertyValueKind};
 use property::PropertyState;
+use workbench_shell::tree;
 
 /// 属性行内编辑态（DBeaver 属性编辑：点击可编辑值 → 行内编辑控件）。
 #[derive(Clone)]
@@ -50,6 +53,8 @@ pub struct PropertyHostPanel {
     property_target: Rc<RefCell<Option<PropertyRequest>>>,
     /// 属性行内编辑态（`None` = 未在编辑）。
     property_edit: Rc<RefCell<Option<PropertyEdit>>>,
+    /// 子项区当前选中的类别索引（「子 tab + 内容」左右结构；切对象时重置 0）。
+    active_category: Cell<usize>,
 }
 
 impl PropertyHostPanel {
@@ -62,6 +67,7 @@ impl PropertyHostPanel {
             props_pump: RefCell::new(None),
             property_target: Rc::new(RefCell::new(None)),
             property_edit: Rc::new(RefCell::new(None)),
+            active_category: Cell::new(0),
         }
     }
 
@@ -108,6 +114,8 @@ impl PropertyHostPanel {
             st.error = None;
             st.loading = true;
         }
+        // 切对象回到第一子项（子项区「子 tab + 内容」左栏选中态归零）。
+        self.active_category.set(0);
         nav_jobs::enqueue_properties(
             &key,
             request.property.clone(),
@@ -406,6 +414,9 @@ impl PropertyHostPanel {
     /// ① 洞察总览（运行时 / 统计事实，provider 组装）
     /// ② General 双栏网格（定义属性；行数多时自动三栏，增加面积使用率）
     /// ③ 子项类别列表（驱动能力掩码；灰置类别先绘制、标注「暂不可用」）
+    ///
+    /// 大区块统一「卡片语言」：`border + rounded + sidebar 底 + 标题头`（与洞察卡一致，
+    /// 连接编辑器 / 洞察 / Mock 模块同规范，见 `property-module-spec.md` §17）。
     fn render_property_view(
         &self,
         entity: gpui::Entity<PropertyHostPanel>,
@@ -415,8 +426,36 @@ impl PropertyHostPanel {
         let mut body = div().v_flex().w_full().gap_3();
         body = body.child(self.render_overview_section(props, theme));
         body = body.child(self.render_general_grid(entity.clone(), props, theme));
-        body = body.child(self.render_category_list(props, theme));
+        body = body.child(self.render_category_list(entity.clone(), props, theme));
         body
+    }
+
+    /// 卡片头：标题 + 可选尾注（规范：`text_xs` 中字重标题 + `muted` 尾注）。
+    fn card_header(&self, title: &str, note: Option<&str>, theme: &Theme) -> Div {
+        let mut head = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.colors.foreground)
+                    .child(title.to_string()),
+            );
+        if let Some(note) = note {
+            head = head.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_right()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(note.to_string()),
+            );
+        }
+        head
     }
 
     /// ① 洞察总览：标题 + 状态点 + meta 芯片 + 指标卡 + 关键信息 + 口径注脚。
@@ -539,23 +578,25 @@ impl PropertyHostPanel {
     }
 
     /// ② General 双栏网格（DBeaver General 扁平紧凑 + 面积使用率；行数 > 8 自动三栏）。
+    /// 大区块卡片化：与洞察卡同一「边框 + 圆角 + 侧栏底」语言。
     fn render_general_grid(
         &self,
         entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
     ) -> Div {
-        let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let rows = &props.properties;
-        let mut section = div().v_flex().w_full().gap_2();
-        section = section.child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(fg)
-                .child("通用"),
-        );
+        let mut section = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .p_2()
+            .border_1()
+            .border_color(theme.colors.border)
+            .rounded_md()
+            .bg(theme.colors.sidebar);
+        section = section.child(self.card_header("通用", Some("定义属性"), theme));
         if rows.is_empty() {
             section = section.child(div().text_xs().text_color(muted).child("（无属性）"));
             return section;
@@ -572,30 +613,116 @@ impl PropertyHostPanel {
         section
     }
 
-    /// ③ 子项类别列表（DBeaver 类别树的内容纵向堆叠；灰置类别先绘制、标注）。
+    /// ③ 子项类别区（DBeaver 表属性页形态：**子 tab + 内容**）。
+    ///
+    /// 多类别 → 左侧竖排子标签栏（名称 + 行数徽标 + 灰置态）+ 右侧内容区，
+    /// 点击左栏切换右侧表格；单类别 / 无类别 → 退化为直接堆叠（不显示左栏）。
+    /// 整体卡片化（与洞察 / General 同语言）。
     fn render_category_list(
         &self,
+        entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
     ) -> Div {
-        let fg = theme.colors.foreground;
-        let muted = theme.colors.muted_foreground;
-        let mut section = div().v_flex().w_full().gap_2();
-        section = section.child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(fg)
-                .child("子项"),
-        );
+        let mut section = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .p_2()
+            .border_1()
+            .border_color(theme.colors.border)
+            .rounded_md()
+            .bg(theme.colors.sidebar);
         if props.sections.is_empty() {
-            section = section.child(div().text_xs().text_color(muted).child("（无）"));
+            section = section.child(self.card_header("子项", Some("（无）"), theme));
             return section;
         }
-        for s in &props.sections {
-            section = section.child(self.render_category_section(s, theme));
+        section = section.child(self.card_header("子项", None, theme));
+        if props.sections.len() == 1 {
+            section = section.child(self.render_category_section(&props.sections[0], theme));
+            return section;
         }
+
+        // 多类别：左栏子标签 + 右栏内容（当前选中越界保护）。
+        let active = self.active_category.get().min(props.sections.len() - 1);
+        let mut body = div().h_flex().items_stretch().w_full().gap_2();
+        // 左栏：竖排子标签（固定宽，类别切换）。
+        let mut rail = div()
+            .v_flex()
+            .w(rems(10.5))
+            .flex_none()
+            .border_1()
+            .border_color(theme.colors.border)
+            .rounded_md()
+            .overflow_y_scrollbar();
+        for (ix, s) in props.sections.iter().enumerate() {
+            rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme));
+        }
+        // 右栏：选中类别内容。
+        let content = div().flex_1().min_w_0().child(self.render_category_section(&props.sections[active], theme));
+        body = body.child(rail).child(content);
+        section = section.child(body);
         section
+    }
+
+    /// 左栏单个子标签（「子 tab + 内容」的 tab 本体）：
+    /// 选中态 = 底色 `list_active` + 左侧 2px 激活条（与导航树行同原语）；
+    /// 灰置态 = 置灰 + 「暂不可用」尾注，仍可点（切过去看占位说明）。
+    fn render_category_tab(
+        &self,
+        entity: gpui::Entity<PropertyHostPanel>,
+        s: &PropertySection,
+        ix: usize,
+        selected: bool,
+        theme: &Theme,
+    ) -> gpui_kit::Stateful<Div> {
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let selected_bg = theme.colors.list_active;
+        let active_border = theme.colors.sidebar_accent;
+        let count = s.table.rows.len();
+
+        let mut tab = div()
+            // `.id()` 使元素进入 stateful 态（`StatefulInteractiveElement::on_click` 才可用）；
+            // 键用类别名而非索引，避免 provider 增删类别时 hover/焦点态串位。
+            .id(format!("property-cat-{}", s.label))
+            .relative()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .h(rems(1.75))
+            .px_2()
+            .text_xs()
+            .cursor_pointer()
+            .rounded_md()
+            .when(selected, |el| el.bg(selected_bg).child(tree::active_bar(active_border)))
+            .when(!s.enabled, |el| el.text_color(muted))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .text_color(if selected { fg } else { muted })
+                    .child(s.label.clone()),
+            );
+        if !s.enabled {
+            tab = tab.child(div().flex_none().text_xs().text_color(muted).child("暂不可用"));
+        } else {
+            tab = tab.child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(count.to_string()),
+            );
+        }
+        tab.on_click(move |_, _, app| {
+            entity.update(app, |this, cx| {
+                this.active_category.set(ix);
+                cx.notify();
+            });
+        })
     }
 
     /// 单个子项类别：可用 → 标题 + 表头 + 行；灰置 → 标题置灰 + 「暂不可用」占位。
@@ -614,10 +741,9 @@ impl PropertyHostPanel {
                 .v_flex()
                 .w_full()
                 .gap_1()
-                .border_1()
-                .border_color(border)
-                .rounded_md()
                 .p_2()
+                .rounded_md()
+                .bg(theme.colors.background)
                 .child(
                     div()
                         .h_flex()
@@ -639,7 +765,13 @@ impl PropertyHostPanel {
                 );
         }
 
-        let mut section = div().v_flex().w_full().gap_1();
+        let mut section = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .p_2()
+            .rounded_md()
+            .bg(theme.colors.background);
         section = section.child(
             div()
                 .pt_1()
@@ -659,6 +791,9 @@ impl PropertyHostPanel {
                 .h_flex()
                 .w_full()
                 .gap_2()
+                .pb_1()
+                .border_b_1()
+                .border_color(border)
                 .text_xs()
                 .text_color(muted)
                 .children(
@@ -700,7 +835,17 @@ impl PropertyHostPanel {
         let muted = theme.colors.muted_foreground;
         let border = theme.colors.border;
 
-        let mut body = div().v_flex().w_full().gap_1();
+        // 与洞察 / General / 子项同卡片语言：侧栏底 + 边框 + 标题头。
+        let mut body = div()
+            .v_flex()
+            .w_full()
+            .gap_2()
+            .p_2()
+            .border_1()
+            .border_color(border)
+            .rounded_md()
+            .bg(theme.colors.sidebar)
+            .child(self.card_header("数据", None, theme));
         let Some(data) = props.data.as_ref() else {
             body = body.child(div().text_xs().text_color(muted).child("（未加载）"));
             return body;

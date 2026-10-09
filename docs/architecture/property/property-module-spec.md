@@ -495,3 +495,35 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 
+## 17. 属性面板卡片规范（2026-10-09，连接编辑器 / 洞察 / Mock 同规范）
+
+> 目标：属性面板不再「一列长卡堆叠」，大区块统一为**卡片语言**，小区块（芯片 / 标签 / 表头）
+> 也按同一套 token 走。**该规范是产品语义，不限于属性面板**——连接编辑器（`connection_dialog`）、
+> 洞察（M8 `insight`）、Mock（M7）新增区块时按本规范做，勿另起一套视觉。
+
+### 17.1 大区块（卡片）
+
+| 区块 | 容器 | 头部 | 内容 |
+| --- | --- | --- | --- |
+| 洞察卡 | `border_1 + rounded_md + bg(sidebar)`，内距 `p_2` | 标题 `text_xs` 中字重 `fg` + 状态点 / 副标题 | meta 芯片（`border + rounded_md + px_2 py_px`）、指标卡（`bg(background)` 提亮）、kv 键值行 |
+| General 卡 | 同上 | `card_header("通用", 尾注)` | 双栏 / 三栏网格（行数 > 8 三栏），单元格 = muted 标签 + fg 值 / 编辑控件 |
+| 子项卡 | 同上 | `card_header("子项")` | 左栏子标签（选中 `list_active` + 2px 激活条，灰置 muted +「暂不可用」）+ 右栏内容（`bg(background)` 内层表） |
+| 数据卡 | 同上 | `card_header("数据")` | 行号 + 列名表头（排序可点）+ 数据行 + 分页脚 |
+
+统一实现点：`PropertyHostPanel::card_header(title, note, theme)`（标题 + 右对齐尾注）；
+容器五件套 = `v_flex gap_2 p_2 border_1 border_color(border) rounded_md bg(sidebar)`。
+
+### 17.2 小区块（内部元素）
+
+- **meta 芯片**：`border_1 + rounded_md + px_2 + py_px + text_xs`，标签 `muted`、值 `fg`。
+- **指标卡**：`flex_1 + min_w + p_2 + border_1 + rounded_md + bg(background)`，数字 `text_lg` 粗体。
+- **表头行**：`text_xs muted` + `border_b_1`（子项表与数据页一致）。
+- **数据行**：`text_xs fg`，`NULL` 一律 `muted`；分页脚 `muted + 语义按钮`（gpui-kit Button::Small）。
+- **左栏子标签**：行高 1.75rem（`h(rems(1.75))`），`px_2 + rounded_md`；选中态用 `tree::active_bar`（与导航树同原语）。
+
+### 17.3 分层与用色
+
+- 卡片底 = `sidebar`；卡片内层区块（指标卡 / 子项右栏表 / 灰置占位）= `background`（在侧栏底上提亮一级）；
+- 不另起边框色：全部 `border` token；状态色（成功 / 危险 / 警告）只用于洞察状态点与语义文案；
+- 零裸色值 / 零裸 px（`ui_contract` 已扫描本文件）。
+
