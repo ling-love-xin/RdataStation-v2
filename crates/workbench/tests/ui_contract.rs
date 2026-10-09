@@ -155,6 +155,7 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
+        ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         (
@@ -340,6 +341,7 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../database/src/nav_view/dnd.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
+        ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         (
             "quick_open/delegate.rs",
@@ -532,11 +534,13 @@ fn shared_fields_are_whitelisted() {
         "nav_cache_epoch",
         "notice",
         "open_mock_detail",
+        "open_property",
         "pending_temp_cleanup",
         "project",
         "project_new_request",
         "project_open_request",
         "project_ui",
+        "property_panel",
         "quick_open",
         "repair_dialog",
         "resources_bridge",

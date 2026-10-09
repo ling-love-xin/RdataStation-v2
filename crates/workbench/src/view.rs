@@ -23,7 +23,8 @@ use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{
-    EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarPanel,
+    EditorPanel, ProjectActionRequest, PropertyRequest, QueryRequest, RightSidebarPanel, Shared,
+    SidebarPanel,
 };
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
@@ -773,6 +774,41 @@ impl WorkbenchView {
             );
         });
 
+        // 属性面板（中央 Dock 独立 tab，单实例）：双击对象 / F4 → 打开或聚焦。
+        // 与 Mock 详情同例：面板实体只建一次，重复请求聚焦 + 替换内容。
+        {
+            let shared_for_prop = shared.clone();
+            let area_for_prop = area.clone();
+            *shared.open_property.borrow_mut() = Some(Rc::new(
+                move |request: PropertyRequest, window: &mut Window, cx: &mut App| {
+                    let Some(panel) = shared_for_prop
+                        .property_panel
+                        .borrow()
+                        .clone()
+                        .and_then(|weak| weak.upgrade())
+                    else {
+                        // 面板未建 / 已关闭：重建并加入中央 tab 组。
+                        let panel = cx.new(|cx| {
+                            crate::panels::PropertyHostPanel::new(shared_for_prop.clone(), cx)
+                        });
+                        shared_for_prop
+                            .property_panel
+                            .borrow_mut()
+                            .replace(panel.downgrade());
+                        area_for_prop.update(cx, |area, cx| {
+                            area.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
+                        });
+                        panel.update(cx, |panel, cx| panel.show_properties(request, cx));
+                        crate::panels::focus_property_tab(&panel, window, cx);
+                        return;
+                    };
+                    // 已存在：聚焦即可，内容替换（同一 tab 复用）。
+                    crate::panels::focus_property_tab(&panel, window, cx);
+                    panel.update(cx, |panel, cx| panel.show_properties(request, cx));
+                },
+            ));
+        }
+
         // M7：宿主命令——打开某张表 / 草稿的详情 tab（面板「查看详情」与结果表清单调用）。
         // 详情与配置面板同属 mock crate：**一个目标一个 tab**（按 `DetailTarget::key` 去重），
         // 已存在就聚焦。面板实体在 `RightSidebarPanel` 构造期已登记弱句柄，这里只负责接入中央 tab 组。
@@ -1392,8 +1428,8 @@ impl WorkbenchView {
         match action {
             Action::NewDocument(mode) => self.new_editor_document(mode, window, cx),
             Action::ShowProperties(request) => {
-                // 与导航搜索结果同一去向：编辑区右侧属性面板（请求已带全定位信息）。
-                self.shared.show_properties(*request, cx);
+                // 与导航搜索结果同一去向：中央 Dock 属性 tab（请求已带全定位信息）。
+                self.shared.show_properties(*request, window, cx);
             }
             Action::RevealMetadata(object) => {
                 // 与「打开左面板」同一口径（切到数据源 + 展开），再把请求交给导航面板：

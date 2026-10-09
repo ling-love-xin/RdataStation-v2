@@ -13,7 +13,8 @@
 | `panels/shared.rs` | `Shared`（面板/组件/宿主三方共用状态） + `ProjectActionRequest` | 298 |
 | ~~`panels/nav.rs`~~ → `crates/database/src/nav_view.rs`（模块根）+ `nav_view/` 7 子模块 | M4 数据源导航：类型与纯函数、键盘方法、树渲染、分组/标签/拖拽、连接增删改（**已下沉** 2026-09-16；**已拆分子模块** 2026-09-20） | 642（根）/ 7918（总） |
 | `panels/scratchpad_panel.rs` | M5 草稿箱：模板/排序/压平、编辑与剪贴板/回收站、行渲染、内容搜索 | 3504 |
-| `panels/editor.rs` | 中央编辑区：SQL 草稿区 + 结果区 + 属性面板宿主 + 连接对话框宿主 | 1252 |
+| `panels/editor.rs` | 中央编辑区：SQL 草稿区 + 结果区 + 连接对话框宿主（~~属性面板宿主~~ ✅ 已抽为 `property_panel.rs`，2026-10-09） | 722 |
+| `panels/property_panel.rs` | 属性面板 `PropertyHostPanel`（中央 Dock 独立 tab，与编辑器同级别）：属性/数据两页签 + 洞察 + General 双/三栏 + 子项类别列表；状态在 `property` crate | 1060 |
 | `panels/right.rs` | `RightSidebarPanel`（洞察 / Mock / 历史） | 194 |
 
 拆分**之后新增**的面板模块：`panels/resources.rs`（M6 资产库装配：构造期建实体 + 宿主端口 + 轮询回填；**视图与状态在 `analytics_resource` crate 内**，本模块只转发渲染）。
@@ -59,10 +60,11 @@
 共 12 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
-> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel`）：
+> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel` / `property_panel`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
-> "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。新增同类句柄只需更新
-> `ui_contract.rs` 的白名单，不必改本表。
+> "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项；状态栏读 Mock 面板的运行中任务——“面板被切走时任务还在跑”）。
+> `open_property` 回调与 `open_mock_detail` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道。
+> 新增同类句柄只需更新 `ui_contract.rs` 的白名单，不必改本表。
 >
 > 同类还有 M6 的四个对话框流转字段（`version_dialog` / `repair_dialog` / `trash_dialog` / `tag_dialog`）：它们不跨模块——轮询写、
 > 侧栏 render 消费与清会话，crate 拿到的只是对话框状态的克隆——但它们是
@@ -86,7 +88,7 @@
 | --- | --- | --- | --- |
 | P1 | **事件路径同步 I/O 阻塞 UI 线程** | 18 处 `block_on`（nav.rs 4 + scratchpad_panel.rs 14，含各自 `Runtime::new`） | `commit_copy_connection` / `share_connection_to_project` / `unshare_connection_from_project` / `delete_connection`；草稿箱 `commit_scratchpad_edit` / `delete_scratchpad_selection` / `undo_scratchpad_delete` / `restore_scratchpad_trash` / `remove_scratchpad_reference` / `apply_scratchpad_relink` / `open_scratchpad_location` |
 | P1 | ~~**render 内同步读盘（真）**~~ ✅ 已修（2026-09-16） | `editor.rs` 连接详情卡：`load_navigator_tree` 改为 `ensure_analysis_tree` 后台加载 + 回填，render 只读缓存（原先选中联邦连接那一帧阻塞） | `panels/editor.rs` |
-| P2 | render 内写状态 + 入队后台任务 | `nav_view/rows.rs` 的 `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`render_property_panel` → `enqueue_properties`；`render_scratchpad` → `request_scratchpad_load` | nav_view/rows.rs、editor.rs、scratchpad_panel.rs |
+| P2 | render 内写状态 + 入队后台任务 | `nav_view/rows.rs` 的 `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`property_panel.rs` 的 `render_property_panel` → `ensure_props_pump`（I/O 在工作线程）；`render_scratchpad` → `request_scratchpad_load` | nav_view/rows.rs、property_panel.rs、scratchpad_panel.rs |
 | P3 | 自绘控件（技术债） | ~~树展开字符~~ ✅ 已换图标（2026-09-20）· ~~文本按钮~~ 多数已换 `Button`；**仍欠**：行尾 `+`/`✎` 与面板头「新建分组」仍是自绘 `div` + `on_click`（已补齐 20/24px 命中区，但仍无焦点态） | nav_view/chrome.rs、rows.rs、editors.rs、scratchpad_panel.rs、editor.rs |
 
 > 订正：`gpui-kit-dev` skill 原「已知反例」将 `ensure_nav_*` / `render_property_panel` / `render_history_placeholder` / `load_scratchpad` 列为"render 内同步读盘"——实测：`ensure_nav_loaded` 只入队（I/O 在工作线程）、`right.rs::render_history_placeholder` 是纯占位、`load_scratchpad` 函数已不存在。**真正的 render 内同步读盘是 `panels/editor.rs` 连接详情卡的 `load_navigator_tree`（上表 P1）**，此前未被记录。

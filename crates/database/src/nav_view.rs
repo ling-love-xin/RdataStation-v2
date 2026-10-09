@@ -667,7 +667,9 @@ impl NavView {
     }
 
     /// Enter / F4：打开选中节点的属性面板（无属性定位时为无操作）。
-    fn nav_open_properties(&self, cx: &mut Context<Self>) {
+    ///
+    /// 需要窗口：属性面板是中央 Dock tab（`NavHost::show_properties` 签名已带窗口）。
+    fn nav_open_properties(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.nav_selected() else {
             return;
         };
@@ -689,6 +691,7 @@ impl NavView {
                 type_id: None,
                 data: None,
             },
+            window,
             cx,
         );
         cx.notify();

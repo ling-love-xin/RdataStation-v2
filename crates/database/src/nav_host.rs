@@ -139,8 +139,8 @@ pub trait NavHost: 'static {
 
     // ==================== 宿主命令（需窗口 / 需别的面板） ====================
 
-    /// 打开属性面板并加载数据（双击对象 / `F4`）。
-    fn show_properties(&self, request: PropertyRequest, cx: &mut App);
+    /// 打开属性面板并加载数据（双击对象 / `F4`）。需要窗口：属性面板是中央 Dock tab，首次打开要加进中央。
+    fn show_properties(&self, request: PropertyRequest, window: &mut Window, cx: &mut App);
 
     /// 把一份查询送到中央编辑区（「在 SQL 编辑器中打开」/「查看数据」/「生成 SQL」）。
     fn open_query(&self, request: QueryRequest, cx: &mut App);

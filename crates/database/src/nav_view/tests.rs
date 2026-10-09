@@ -128,7 +128,7 @@ mod stub_host {
         fn delete_connection(&self, _conn_id: &str) -> Result<String, String> {
             Ok(String::new())
         }
-        fn show_properties(&self, _request: PropertyRequest, _cx: &mut App) {}
+        fn show_properties(&self, _request: PropertyRequest, _window: &mut Window, _cx: &mut App) {}
         fn open_query(&self, _request: QueryRequest, _cx: &mut App) {}
         fn edit_connection(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
         fn new_connection(&self, _window: &mut Window, _cx: &mut App) {}

@@ -31,6 +31,7 @@ use scratchpad::ScratchpadView;
 use ::editor::shared::EditorShared;
 
 mod editor;
+mod property_panel;
 mod resources;
 mod right;
 mod shared;
@@ -38,6 +39,7 @@ mod shared;
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
 pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
+pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;
@@ -440,9 +442,8 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         new_connection: Rc::new(move |window: &mut Window, cx: &mut App| {
             editor_for_new.update(cx, |panel, cx| panel.request_new_connection(window, cx));
         }),
-        show_properties: Rc::new(move |request: PropertyRequest, cx: &mut App| {
-            editor.update(cx, |panel, cx| panel.request_properties(request, cx));
-        }),
+        // 属性面板已升为中央 Dock 独立 tab（`Shared::show_properties` → `open_property`），
+        // 不再经编辑区桥；`EditorBridge` 不再带 show_properties 字段。
         show_search_results: Rc::new(move |view: Option<ScratchpadSearchView>, cx: &mut App| {
             editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
         }),

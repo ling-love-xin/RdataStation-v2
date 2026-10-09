@@ -25,10 +25,10 @@
 **做**：属性面板领域模型（`PropertyKind`）、数据容器（`ObjectProperties` / `PropertyRow` /
 `PropertyTable` / `PropertySection`）、面板状态（`PropertyState`）、描述模型（`PropertyPage` /
 `PropertyEntry` / `PageId` / 支持状态）、注册表契约（`PropertyRegistry` trait）。
-**不做**：数据库对象树导航（M4 `nav_view`，仍属 `database`）；属性面板的停靠容器与宽度记忆
-（`workbench` `EditorPanel` 右 Dock，属布局）；元数据实时内省与驱动（`engine`）；对象定位参数
-（`PropertyRef` / `PropertyRequest`，留在 `database::model` —— 它们是**导航域 → 属性面板**的输入契约，
-依赖 `NavSource`）。
+**不做**：数据库对象树导航（M4 `nav_view`，仍属 `database`）；属性面板的停靠容器（中央 Dock
+`PropertyHostPanel` 独立 tab，与编辑器同级别，2026-10-09 起；宽度由 Dock 拖拽记忆）；元数据实时内省
+与驱动（`engine`）；对象定位参数（`PropertyRef` / `PropertyRequest`，留在 `database::model` —— 它们是
+**导航域 → 属性面板**的输入契约，依赖 `NavSource`）。
 
 ## 2. 技术栈与依赖
 
@@ -37,7 +37,7 @@
 | 序列化 | serde（`PropertyKind` 参与 `PropertyRef` 序列化） |
 | 数据容器 | 纯 Rust 结构体（`String` / `Vec`），无运行时依赖 |
 | 注册表契约 | `trait PropertyRegistry`（无默认实现，由数据生产方实现） |
-| 异步 | 不涉及（取数在 `database`，入队 / 轮询在 `nav_jobs` / `EditorPanel`） |
+| 异步 | 不涉及（取数在 `database`，入队 / 轮询在 `nav_jobs` / `PropertyHostPanel`） |
 | 构建约束 | `cargo build/test` 必须 `-j 2`（Windows 已知）；`.cargo/config.toml` 已设 `RDS_HOME=.rds` |
 | 目标平台 | Windows（本机验证环境）；PowerShell 交互（Bash 不可用） |
 
@@ -231,9 +231,11 @@ pub trait PropertyRegistry {
 ## 9. 数据流
 
 ```text
-导航双击 / Quick Open ShowProperties
+导航双击 / 右键「查看属性」 / Quick Open ShowProperties
   → PropertyRequest（database::model，含 PropertyRef + conn_label + driver + data）
-  → EditorBridge::show_properties → EditorPanel::request_properties
+  → NavHost::show_properties(request, window, cx) → workbench open_property 回调
+     （中央 Dock tab：面板未建 → cx.new + area.add_panel(Center) + 聚焦；已建 → 替换内容 + 聚焦）
+  → PropertyHostPanel::request_properties
   → nav_jobs::enqueue_properties（后台单工作线程）
   → database::load_properties（MetadataService 实时内省）
       └ 若 data = Some(TableDataRequest)：调 table_data::load_table_data
@@ -241,7 +243,7 @@ pub trait PropertyRegistry {
           → 真 COUNT(*) 单独一问 → 单元格 JSON 化，null → None）
   → property::ObjectProperties（含 data: Option<TableDataPage>，回填 PropertyState，
     key 不匹配的过期结果丢弃）
-  → EditorPanel::render_property_panel：registry.pages_for(kind) 逐页渲染
+  → PropertyHostPanel::render_property_panel：registry.pages_for(kind) 逐页渲染
   → 「数据」页：render_data_page（列头排序 / 上一页 / 下一页 → 事件路径
     reload_properties_data 重发请求，渲染零 I/O）
 ```
@@ -304,9 +306,10 @@ pub trait PropertyRegistry {
 | 属性源注册表实现（各驱动 provider） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | `PropertyRef` / `PropertyRequest` / `property_ref_of`（保留） | `crates/database/src/model.rs` |
 | 属性加载入队 / 结果类型 | `crates/database/src/nav_jobs.rs` |
-| tab 化描述驱动渲染（三部分布局，§16） | `crates/workbench/src/panels/editor.rs::render_property_panel` |
+| tab 化描述驱动渲染（三部分布局，§16） | `crates/workbench/src/panels/property_panel.rs::render_property_panel`（`PropertyHostPanel`，中央 Dock 独立 tab） |
+| 属性面板中央 tab 装配 / 聚焦（`open_property` 回调，2026-10-09） | `crates/workbench/src/view.rs::init_workspace` + `crates/workbench/src/panels/shared.rs` |
 | Quick Open 打开属性 | `crates/workbench/src/quick_open/model.rs`（`ShowProperties`，类型不变） |
-| 属性行描述符化 + 编辑控件渲染（网格单元，§16） | `crates/workbench/src/panels/editor.rs::render_property_cell` |
+| 属性行描述符化 + 编辑控件渲染（网格单元，§16） | `crates/workbench/src/panels/property_panel.rs::render_property_cell` |
 | 属性编辑提交（`setPropertyValue` 对齐；SQL 由 provider 生成） | `crates/database/src/property_panel.rs::apply_property_edit` |
 | 列编辑 SQL 生成（PG） | `crates/database/src/sql_gen.rs::alter_column_sql` |
 | DBeaver 源码参考（本地检出） | `D:\RdataStation\RDS\dbeaver-src\plugins\org.jkiss.dbeaver.model\src\org\jkiss\dbeaver\model\preferences\{DBPPropertySource,DBPPropertyDescriptor,DBPPropertyManager}.java` |
@@ -350,13 +353,13 @@ pub struct PropertyRow {
 
 ### 15.3 渲染协议（General 页）
 
-`render_property_row`（`workbench/panels/editor.rs`）按形态分派：
+`render_property_row`（`workbench/panels/property_panel.rs`）按形态分派：
 
 - **只读**（editable=false）→ 名称 + 文本（原渲染不变）；
 - **Boolean** → `Switch`（点击即切换提交，DBeaver「编辑即生效」）；
 - **Text / LongText** → 未编辑时「值 + 编辑按钮」；编辑中 → 行内 `Input` + 保存 / 取消。
 
-编辑态由 `EditorPanel.property_edit`（`Option<PropertyEdit{row_id, input}>`）承载，
+编辑态由 `PropertyHostPanel.property_edit`（`Option<PropertyEdit{row_id, input}>`）承载，
 创建在事件路径（`begin_property_edit`，`cx.new(InputState)`）——渲染零 I/O、零实体创建。
 
 ### 15.4 编辑链路（setPropertyValue 对齐）
@@ -489,6 +492,6 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | `ObjectProperties.overview` / `PropertySection.enabled` / `PageId::{Routines,Partitions}` | `crates/property/src/{model,descriptor}.rs` |
 | 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |
-| 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/editor.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}` |
+| 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 

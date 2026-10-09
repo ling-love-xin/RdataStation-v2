@@ -1428,7 +1428,7 @@ impl NavView {
                                 data: None,
                             };
                             entity.update(app, |this, cx| {
-                                this.host.show_properties(req, cx);
+                                this.host.show_properties(req, window, cx);
                                 cx.notify();
                             });
                             return;
@@ -1583,7 +1583,7 @@ impl NavView {
                                 });
                             }))
                             .separator()
-                            .item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
+                            .item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
                                 let prop = prop_own.clone();
                                 let label = label_prop.clone();
                                 let drv = drv_prop.clone();
@@ -1596,6 +1596,7 @@ impl NavView {
                                             type_id: None,
                                             data: None,
                                         },
+                                        window,
                                         cx,
                                     );
                                     cx.notify();
@@ -2033,7 +2034,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             data: None,
                         };
                         entity.update(app, |this, cx| {
-                            this.host.show_properties(req, cx);
+                            this.host.show_properties(req, window, cx);
                             cx.notify();
                         });
                         return;
@@ -2091,7 +2092,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     let e = entity.clone();
                     let label0 = conn_label.clone();
                     let drv0 = driver.clone();
-                    menu = menu.item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
+                    menu = menu.item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
                         let prop = prop0.clone();
                         let label = label0.clone();
                         let drv = drv0.clone();
@@ -2104,6 +2105,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                     type_id: None,
                                     data: None,
                                 },
+                                window,
                                 cx,
                             );
                             cx.notify();
@@ -2599,7 +2601,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             );
         }
 
-        row.on_click(move |_, _, app| {
+        row.on_click(move |_, window, app| {
             entity.update(app, |this, cx| {
                 // 先选中再开面板：漫游序列里走到这一行时，行态得看得出选的是哪一行。
                 // （命中行是**临时行**，不进落库——`nav_selection_is_persistable`。）
@@ -2612,7 +2614,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         type_id: None,
                         data: None,
                     };
-                    this.host.show_properties(req, cx);
+                    this.host.show_properties(req, window, cx);
                 }
                 cx.notify();
             });

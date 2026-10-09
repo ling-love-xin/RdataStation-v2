@@ -27,6 +27,8 @@ use database::model::PropertyRequest;
 
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 use scratchpad::{ScratchpadDiffView, ScratchpadSearchView};
+// 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
+use super::property_panel::PropertyHostPanel;
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
 pub use workbench_shell::model::QueryRequest;
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
@@ -53,8 +55,6 @@ pub struct EditorBridge {
     pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
     /// 打开「新建数据源连接」对话框。
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
-    /// 打开属性面板并加载数据（导航双击对象 / 键盘 F4）。
-    pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
     /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展展。
     pub show_search_results: Rc<dyn Fn(Option<ScratchpadSearchView>, &mut App)>,
     /// 投递草稿箱冲突 Diff（`None` = 关闭）：差异同在中央编辑区展。
@@ -255,6 +255,10 @@ pub struct Shared {
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
     pub driver_catalog: Rc<RefCell<HashMap<String, engine::persistence::DriverMeta>>>,
+    /// 属性面板（中央 Dock 独立 tab，单实例）：实体弱句柄（已关闭则为死弱引用，下次打开重建）。
+    pub property_panel: Rc<RefCell<Option<WeakEntity<PropertyHostPanel>>>>,
+    /// 打开 / 聚焦属性 tab 的宿主命令（`show_properties` 调用；需要窗口——面板创建要加进中央 Dock）。
+    pub open_property: Rc<RefCell<Option<Rc<dyn Fn(PropertyRequest, &mut Window, &mut App)>>>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
@@ -301,6 +305,8 @@ impl Shared {
             mock_details: Rc::new(RefCell::new(HashMap::new())),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
+            property_panel: Rc::new(RefCell::new(None)),
+            open_property: Rc::new(RefCell::new(None)),
             host_redraw: Rc::new(RefCell::new(None)),
         }
     }
@@ -461,9 +467,9 @@ impl Shared {
     }
 
     /// 打开属性面板并加载数据（同上）。
-    pub fn show_properties(&self, request: PropertyRequest, cx: &mut App) {
-        if let Some(bridge) = self.editor_bridge.borrow().clone() {
-            (*bridge.show_properties)(request, cx);
+    pub fn show_properties(&self, request: PropertyRequest, window: &mut Window, cx: &mut App) {
+        if let Some(open) = self.open_property.borrow().clone() {
+            open(request, window, cx);
         }
     }
 

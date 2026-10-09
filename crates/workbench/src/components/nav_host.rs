@@ -201,8 +201,8 @@ impl NavHost for WorkbenchNavHost {
 
     // ==================== 宿主命令 ====================
 
-    fn show_properties(&self, request: PropertyRequest, cx: &mut App) {
-        self.shared.show_properties(request, cx);
+    fn show_properties(&self, request: PropertyRequest, window: &mut Window, cx: &mut App) {
+        self.shared.show_properties(request, window, cx);
     }
 
     fn open_query(&self, request: QueryRequest, cx: &mut App) {

@@ -637,8 +637,8 @@ impl NavView {
             })
             .on_action({
                 let entity = cx.entity();
-                move |_: &NavOpenProperties, _window, app| {
-                    entity.update(app, |this, cx| this.nav_open_properties(cx));
+                move |_: &NavOpenProperties, window, app| {
+                    entity.update(app, |this, cx| this.nav_open_properties(window, cx));
                 }
             })
             .on_action({
