@@ -230,6 +230,10 @@ pub const DIALOG_ROW_HEIGHT: f32 = 1.75;
 /// 实际行高还要再按窗口可用高度夹住（矮窗口 / 高缩放不把 footer 顶出屏幕）——
 /// 见 `connection_dialog::helpers::dialog_row_height`（决策 #105）。
 pub const DIALOG_BODY_HEIGHT: f32 = 32.5;
+/// 新建 / 编辑数据源连接对话框宽度（61.25rem = 980px；与设置页弹层同档 `SETTINGS_PAGE_WIDTH`）
+pub const DIALOG_EDIT_WIDTH: f32 = 61.25;
+/// 配置管理对话框宽度（认证 / 网络 / 环境管理；35rem = 560px）
+pub const DIALOG_MANAGER_WIDTH: f32 = 35.0;
 /// Tab 内容区历史高度（20.5rem ≈ 328px；**保留作为设计参考值与其它面板的尺寸来源**）。
 ///
 /// 注：右列自上而下是 Header → Tab 条 → **Tab 内容区（`flex_1 + min_h_0` 吃剩余高度）** → 结果行，

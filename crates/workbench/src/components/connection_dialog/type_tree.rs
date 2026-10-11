@@ -180,7 +180,7 @@ impl ListDelegate for TypeTreeDelegate {
         // 行高与旧实现一致（1.75rem）：委托里所有行必须同高（组件只量一行）。
         .h(rems(1.75))
         .px_2()
-        .rounded(rems(0.375))
+        .rounded(cx.theme().radius)
         .text_xs()
         .child(
             div()

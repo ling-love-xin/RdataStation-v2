@@ -1056,7 +1056,7 @@ impl ConnectionDialogState {
                         .h_flex()
                         .items_center()
                         .gap(rems(0.5))
-                        .rounded(rems(0.5))
+                        .rounded(theme.radius_lg)
                         .border_1()
                         .border_color(theme.colors.info.opacity(0.28))
                         .bg(theme.colors.info.opacity(0.08))
@@ -1407,7 +1407,7 @@ impl ConnectionDialogState {
                                     .w_full()
                                     .v_flex()
                                     .gap(rems(GAP_SM))
-                                    .rounded(rems(0.5))
+                                    .rounded(theme.radius_lg)
                                     .border_1()
                                     .border_color(theme.colors.primary.opacity(0.28))
                                     .bg(theme.colors.primary.opacity(0.06))
@@ -2460,7 +2460,7 @@ impl ConnectionDialogState {
 
             dialog
                 .title(if editing_id.borrow().is_some() { "编辑数据源连接" } else { "新建数据源连接" })
-                .w(cx.theme().font_size * 61.25)
+                .w(cx.theme().font_size * crate::ui::DIALOG_EDIT_WIDTH)
                 .overlay(true)
                 .overlay_closable(true)
                 .keyboard(true)

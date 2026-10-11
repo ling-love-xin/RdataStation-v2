@@ -154,7 +154,7 @@ impl ListDelegate for DraftListDelegate {
         ))))
         .h(rems(ROW_H))
         .px_2()
-        .rounded(rems(0.375))
+        .rounded(cx.theme().radius)
         .text_xs()
         .child(
             div()
@@ -173,7 +173,7 @@ impl ListDelegate for DraftListDelegate {
                             .justify_center()
                             .w(rems(crate::ui::ICON_SIZE_MD))
                             .h(rems(crate::ui::ICON_SIZE_MD))
-                            .rounded(rems(0.25))
+                            .rounded(cx.theme().radius)
                             .bg(cx.theme().colors.sidebar_accent)
                             .child(icon),
                         None => div()

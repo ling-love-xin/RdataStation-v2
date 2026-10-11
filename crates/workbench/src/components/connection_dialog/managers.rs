@@ -627,7 +627,7 @@ pub(crate) fn open_manager(
 
         dialog
             .title(title)
-            .w(cx.theme().font_size * 35.)
+            .w(cx.theme().font_size * crate::ui::DIALOG_MANAGER_WIDTH)
             .overlay(true)
             .overlay_closable(true)
             .keyboard(true)
