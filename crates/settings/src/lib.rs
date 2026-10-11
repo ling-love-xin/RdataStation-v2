@@ -4,7 +4,8 @@
 //! 配置文件位置由 `paths::config_dir()` 解析（`<RDS_HOME>/config/settings.json`，
 //! 默认 RDS_HOME = 可执行文件所在目录）。
 //!
-//! 主题切换即时生效：`Theme::change(mode, window, cx)` + 写回磁盘。
+//! 主题切换即时生效：显式模式 `Theme::change(mode, window, cx)`；`system` 模式由
+//! 装配层在启动与系统外观变化时调 `Theme::sync_system_appearance` 解析为实际明暗。
 
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -21,7 +22,7 @@ pub mod settings_page;
 // 此处重导保持 `settings::product_tokens::*` 路径不变。
 pub use workbench_shell::product_tokens;
 
-use crate::model::{ConnectionDefaults, LogMinLevel, NavigatorFilters, Settings};
+use crate::model::{AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, Settings};
 use crate::registry::{SettingValue, Slot};
 
 /// 日志级别变更的副作用出口（**由装配层注册一次**，见 `crates/app/src/main.rs`）。
@@ -158,7 +159,7 @@ fn persist(settings: &Settings) {
 pub struct SettingsService;
 
 /// 主题模式的文本形态（落盘值，与 `registry` 的枚举选项同源）。
-fn theme_mode_text(mode: ThemeMode) -> String {
+fn theme_mode_text(mode: AppearanceMode) -> String {
     serde_json::to_value(mode)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
@@ -166,8 +167,17 @@ fn theme_mode_text(mode: ThemeMode) -> String {
 }
 
 /// 文本 → 主题模式；未知文本返回 `None`（**不猜**，由调用方拒绝并提示）。
-fn theme_mode_from_text(text: &str) -> Option<ThemeMode> {
+fn theme_mode_from_text(text: &str) -> Option<AppearanceMode> {
     serde_json::from_value(serde_json::Value::String(text.to_string())).ok()
+}
+
+/// 显式模式 → `ThemeMode`；`System` 返回 `None`（由调用方走系统外观解析，不静默落到一侧）。
+fn explicit_theme_mode(mode: AppearanceMode) -> Option<ThemeMode> {
+    match mode {
+        AppearanceMode::Light => Some(ThemeMode::Light),
+        AppearanceMode::Dark => Some(ThemeMode::Dark),
+        AppearanceMode::System => None,
+    }
 }
 
 /// 按 key 读当前值（页面渲染、「非默认值」判定与契约测试共用）。
@@ -201,7 +211,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
         Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
         Slot::LogMinLevel => SettingValue::Text(settings.logging.min_level.as_str().to_string()),
-    })
+            })
 }
 
 impl SettingsService {
@@ -304,7 +314,7 @@ impl SettingsService {
                 };
                 Self::set_log_min_level(level, cx);
             }
-        }
+                    }
         true
     }
 
@@ -328,29 +338,47 @@ impl SettingsService {
     }
 
     /// 读取当前主题模式。
-    pub fn theme_mode(cx: &App) -> ThemeMode {
+    pub fn theme_mode(cx: &App) -> AppearanceMode {
         cx.global::<Settings>().appearance.theme_mode
     }
 
-    /// 设置主题模式：更新 global → 持久化 → `Theme::change` 即时生效。
-    pub fn set_theme_mode(mode: ThemeMode, window: Option<&mut gpui_kit::Window>, cx: &mut App) {
+    /// 设置主题模式：更新 global → 持久化 → 即时生效。
+    ///
+    /// `System` 走 `Theme::sync_system_appearance`（按系统外观解析）；显式模式走
+    /// `Theme::change`。
+    pub fn set_theme_mode(mode: AppearanceMode, window: Option<&mut gpui_kit::Window>, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
             settings.appearance.theme_mode = mode;
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
-        Theme::change(mode, window, cx);
+        match mode {
+            AppearanceMode::System => Theme::sync_system_appearance(window, cx),
+            AppearanceMode::Light | AppearanceMode::Dark => {
+                Theme::change(explicit_theme_mode(mode).expect("显式模式必有映射"), window, cx);
+            }
+        }
     }
 
     /// 明暗切换（`ToggleThemeMode` 命令与设置页「主题模式」两条路径共用）。
     ///
-    /// 注：`ToggleThemeMode` 目前**未绑键位**（架构 §14 Q2 未拍板：接线还是删除）；
-    /// 设置页走的是 `set_theme_mode`（显式指定目标模式），不依赖本函数。
+    /// 显式模式下在两态间切换；`System` 下按当前系统外观反切到显式对侧
+    /// （系统当前为明 → 落到深，反之亦然），一次按键即脱离跟随。
     pub fn toggle_theme_mode(window: Option<&mut gpui_kit::Window>, cx: &mut App) {
         let next = match Self::theme_mode(cx) {
-            ThemeMode::Light => ThemeMode::Dark,
-            ThemeMode::Dark => ThemeMode::Light,
+            AppearanceMode::Light => AppearanceMode::Dark,
+            AppearanceMode::Dark => AppearanceMode::Light,
+            AppearanceMode::System => {
+                let current = window
+                    .as_ref()
+                    .map(|window| window.appearance())
+                    .unwrap_or_else(|| cx.window_appearance());
+                match current {
+                    gpui_kit::WindowAppearance::Dark => AppearanceMode::Light,
+                    _ => AppearanceMode::Dark,
+                }
+            }
         };
         Self::set_theme_mode(next, window, cx);
     }
@@ -360,6 +388,7 @@ impl SettingsService {
         cx.global::<Settings>().projects.sort_mode.clone()
     }
 
+    
     /// 设置并持久化项目列表排序方式（更新 global → 写 settings.json）。
     pub fn set_project_sort_mode(mode: &str, cx: &mut App) {
         {

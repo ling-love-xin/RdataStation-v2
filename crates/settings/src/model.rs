@@ -8,9 +8,9 @@
 //! - `resources`：资产库（历史内容保留、默认排序、分组折叠状态）
 //! - `logging`：日志最低级别
 //!
-//! 主题模式直接复用 `gpui_kit::component::ThemeMode`（已派生
-//! `Serialize/Deserialize/Default`，serde snake_case），与 gpui-kit 0.6
-//! 主题系统天然对齐，避免重复枚举。
+//! 主题模式用 `AppearanceMode`（显式 `light` / `dark` / 跟随系统 `system`，serde
+//! snake_case，与 gpui-kit 0.7.1 主题系统对齐）：显式模式直接转 `ThemeMode`
+//! 应用；`system` 由装配层在启动与系统外观变化时解析为实际明暗。
 //!
 //! ## 准入（2026-09-16 起）
 //!
@@ -22,7 +22,6 @@
 
 use std::collections::BTreeMap;
 
-use gpui_kit::component::ThemeMode;
 use serde::{Deserialize, Serialize};
 
 /// 顶层设置。新增字段必须带 `#[serde(default)]`，保证旧配置向前兼容。
@@ -48,15 +47,29 @@ pub struct Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
-    pub theme_mode: ThemeMode,
+    pub theme_mode: AppearanceMode,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            theme_mode: ThemeMode::Light,
+            theme_mode: AppearanceMode::Light,
         }
     }
+}
+
+/// 主题模式：显式明暗，或跟随系统外观。
+///
+/// 落盘为 `"light"` / `"dark"` / `"system"`（serde snake_case）；`"system"` 在
+/// 启动与系统外观变化时由装配层解析为实际明暗（`Theme::sync_system_appearance`），
+/// 这里只记"选哪套策略"，不落实际模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceMode {
+    #[default]
+    Light,
+    Dark,
+    System,
 }
 
 /// 连接默认值：新建连接时的超时与直连 TLS 策略。
@@ -303,7 +316,7 @@ mod tests {
         let s: Settings = serde_json::from_str(legacy).expect("旧配置应可解析");
 
         // 仍在用的字段按文件里的值生效
-        assert_eq!(s.appearance.theme_mode, ThemeMode::Dark);
+        assert_eq!(s.appearance.theme_mode, AppearanceMode::Dark);
         // 裁撤的节 / 字段回退默认，不留残影
         assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
         assert!(s.connection_defaults.lan_disable_tls);

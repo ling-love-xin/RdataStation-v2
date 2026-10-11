@@ -25,7 +25,8 @@ use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use insight::commands::InsightRefresh;
 use settings::SettingsService;
-use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings};
+use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings, ToggleThemeMode};
+use settings::model::AppearanceMode;
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavClearSearch, NavCollapse,
@@ -175,13 +176,14 @@ fn run_app() {
                 attach_rds_theme(cx);
                 attach_product_tokens(&themes_dir_watch, cx);
                 let mode = SettingsService::theme_mode(cx);
-                Theme::change(mode, None, cx);
+                SettingsService::set_theme_mode(mode, None, cx);
                 cx.refresh_windows();
             });
 
-            // 4. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
+            // 4. 应用已保存的主题模式（明 / 暗 / 跟随系统），与 settings 外观节一致。
+            //    `system` 走 `Theme::sync_system_appearance`：首帧即按系统外观取主题。
             let mode = SettingsService::theme_mode(cx);
-            Theme::change(mode, None, cx);
+            SettingsService::set_theme_mode(mode, None, cx);
 
             // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
             //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
@@ -194,6 +196,9 @@ fn run_app() {
                 // 它渲染在工作台根下，焦点链会穿过工作台根到这个 on_action。
                 KeyBinding::new("alt-enter", QuickOpenLocate, Some("workbench")),
                 KeyBinding::new("ctrl-, ", OpenSettings, Some("workbench")),
+                // 主题切换（明 / 暗 / 跟随系统）：显式模式两态切换；
+                // 跟随系统时反切到显式对侧（一次按键即脱离跟随）。
+                KeyBinding::new("ctrl-shift-l", ToggleThemeMode, Some("workbench")),
                 // 设置页内（更深的 key_context 先拿到键）：`Esc` 关闭、`Ctrl+F` 聚焦搜索。
                 // 与 workbench 的 `Ctrl+F`（聚焦数据源导航搜索）不冲突——那只在设置页外生效。
                 KeyBinding::new("escape", CloseSettings, Some("settings")),
@@ -297,6 +302,14 @@ fn run_app() {
                     titlebar.title = Some("RdataStation".into());
                 }
                 cx.open_window(options, |window, cx| {
+                    // 跟随系统外观：`system` 模式下系统明暗变化即时跟随。
+                    // 订阅由下方 spawn 任务保活（Subscription drop 即取消）；回调只
+                    // 在 `system` 时生效，显式模式不受系统外观影响。
+                    let appearance_subscription = window.observe_window_appearance(|window, cx| {
+                        if SettingsService::theme_mode(cx) == AppearanceMode::System {
+                            Theme::sync_system_appearance(Some(window), cx);
+                        }
+                    });
                     let workspace = cx.new(|cx| WorkbenchView::new(cx));
                     // E3【窗口退出草稿兜底】：平台关闭路径（点 ✕ / `Alt+F4`）没有任何钩子，
                     // 会话只在 `Ctrl+S` 与「关掉这份文档」时写——不补这一刀，敲了一半的 SQL 直接丢。
@@ -307,6 +320,13 @@ fn run_app() {
                         session_saver.update(cx, |view, cx| view.save_all_editor_sessions(cx));
                         true
                     });
+                    // 保活外观订阅：spawn 一个永不完成的空任务持有它（Subscription
+                    // drop 即取消；窗口销毁后 SubscriberSet 随 window drop，回调不再触发）。
+                    cx.spawn(async move |_| {
+                        let _keep_alive = appearance_subscription;
+                        std::future::pending::<()>().await;
+                    })
+                    .detach();
                     // 窗口第一层必须是 Root
                     cx.new(|cx| Root::new(workspace, window, cx))
                 })

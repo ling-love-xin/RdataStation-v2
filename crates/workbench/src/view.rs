@@ -30,7 +30,8 @@ use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
-use settings::commands::{CloseSettings, OpenSettings};
+use settings::commands::{CloseSettings, OpenSettings, ToggleThemeMode};
+use settings::SettingsService;
 use settings::settings_page::{SettingsHost, SettingsPage};
 
 /// 左侧活动栏面板。
@@ -1887,6 +1888,13 @@ impl Render for WorkbenchView {
                         this.shared.settings_open.set(false);
                         cx.notify();
                     });
+                }
+            })
+            // 主题切换（`Ctrl+Shift+L`，绑在 workbench context）：显式模式两态切换；
+            // 跟随系统时按系统当前外观反切到显式对侧。处理在 SettingsService（设置层）。
+            .on_action({
+                move |_: &ToggleThemeMode, window, cx| {
+                    SettingsService::toggle_theme_mode(Some(window), cx);
                 }
             })
             // M1：切换项目（= 关闭当前 + 回选择器）。
