@@ -54,6 +54,10 @@ pub struct Appearance {
     pub theme_mode: AppearanceMode,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// 界面语言（`"zh"` / `"en"`，默认中文）。变更时同步到 `shared::i18n`
+    /// （全 UI 文案即时切换），见 `SettingsService::set_locale`。
+    #[serde(default = "default_locale")]
+    pub locale: String,
 }
 
 impl Default for Appearance {
@@ -61,12 +65,17 @@ impl Default for Appearance {
         Self {
             theme_mode: AppearanceMode::Light,
             font_size: default_font_size(),
+            locale: default_locale(),
         }
     }
 }
 
 fn default_font_size() -> f32 {
     16.0
+}
+
+fn default_locale() -> String {
+    "zh".to_string()
 }
 
 /// 主题模式：显式明暗，或跟随系统外观。

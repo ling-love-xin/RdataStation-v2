@@ -10,6 +10,8 @@ gpui-kit.workspace = true
 workbench_shell.workspace = true
 # 运行时数据路径唯一解析点（settings.json 落在 <RDS_HOME>/config）
 paths.workspace = true
+# 界面语言全局（i18n 资源层；locale 变更同步 `shared::i18n`）
+shared.workspace = true
 
 # ===== 序列化 =====
 serde.workspace = true

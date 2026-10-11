@@ -11,6 +11,7 @@
 //! 描边。原型 §5 把「选中项底色 / 左边条」映射到的正是这两个 token（`#E4E4E4` / `#C25B46`，
 //! 与旧的两处自绘取值完全相同），所以这是**同一套配色**、只是改由组件画。
 
+use shared::i18n::tr;
 use super::*;
 
 use gpui_kit::component::IndexPath;
@@ -97,7 +98,7 @@ impl TypeTreeDelegate {
                     .filter(|t| type_matches_filter(t, drivers, filter))
                     .cloned()
                     .collect();
-                (*label, items)
+                (tr(label), items)
             })
             .collect();
         true
@@ -210,7 +211,7 @@ impl ListDelegate for TypeTreeDelegate {
                 div()
                     .text_xs()
                     .text_color(cx.theme().colors.muted_foreground)
-                    .child("暂无驱动")
+                    .child(tr("暂无驱动"))
             });
         }
         Some(row)
@@ -231,9 +232,9 @@ impl ListDelegate for TypeTreeDelegate {
             .text_xs()
             .text_color(cx.theme().colors.muted_foreground)
             .child(if self.filter.is_empty() {
-                "类型目录为空（未读到 data_source_types）"
+                tr("类型目录为空（未读到 data_source_types）")
             } else {
-                "没有匹配的类型 / 驱动"
+                tr("没有匹配的类型 / 驱动")
             })
     }
 

@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 /// 打开管理器覆盖层（嵌套 Dialog；kind: 0 认证 / 1 网络 / 2 环境）。
@@ -146,16 +147,16 @@ pub(crate) fn save_blocker(
     is_file_db: bool,
 ) -> Option<&'static str> {
     if !has_type {
-        Some("请先在左侧选择数据库类型")
+        Some(tr("请先在左侧选择数据库类型"))
     } else if driver_value.trim().is_empty() {
-        Some("请选择驱动实现")
+        Some(tr("请选择驱动实现"))
     } else if name.trim().is_empty() {
-        Some("请填写连接名称")
+        Some(tr("请填写连接名称"))
     } else if url.trim().is_empty() {
         Some(if is_file_db {
-            "请选择或新建数据库文件（常规 → 连接设置）"
+            tr("请选择或新建数据库文件（常规 → 连接设置）")
         } else {
-            "请填写连接 URI"
+            tr("请填写连接 URI")
         })
     } else {
         None
@@ -607,9 +608,9 @@ pub(crate) fn outline_section(
         .border_b_1()
         .border_color(theme.colors.border)
         .tooltip(if collapsed {
-            "展开分组"
+            tr("展开分组")
         } else {
-            "收起分组"
+            tr("收起分组")
         })
         .on_click(move |_, window, cx| on_toggle(window, cx))
         .child(section_header(theme, icon, icon_color, title, collapsed));
@@ -708,7 +709,7 @@ pub(crate) fn reuse_note(theme: &Theme, text: &str) -> Div {
 /// 地址列标签：文件型 = 「地址」（本地文件路径），网络型 = 「URI」
 /// （真机反馈：SQLite 下仍显示 URI 与 mysql 示例，语义与噪声都不对）。
 pub(crate) fn address_label(is_file: bool) -> &'static str {
-    if is_file { "地址" } else { "URI" }
+    if is_file { tr("地址") } else { tr("URI") }
 }
 
 /// 地址输入占位：**随当前驱动推导**（占位是 UI 文案字典，不是业务数据；见架构 §15）。
@@ -734,15 +735,15 @@ pub(crate) fn address_placeholder(driver: Option<&Driver>, type_id: &str) -> Str
     if matches!(type_id, "sqlite" | "duckdb") {
         return file_path_placeholder(type_id);
     }
-    "选择数据库类型与驱动后填写连接地址".to_string()
+    tr("选择数据库类型与驱动后填写连接地址").to_string()
 }
 
 /// 文件型地址占位（按类型 id 的文案字典；未知文件型驱动用通用提示）。
 fn file_path_placeholder(type_id: &str) -> String {
     match type_id {
-        "sqlite" => "选择或新建 .db / .sqlite 文件路径".to_string(),
-        "duckdb" => "选择或新建 .duckdb 文件路径（或输入 :memory:）".to_string(),
-        _ => "选择或新建数据库文件路径".to_string(),
+        "sqlite" => tr("选择或新建 .db / .sqlite 文件路径").to_string(),
+        "duckdb" => tr("选择或新建 .duckdb 文件路径（或输入 :memory:）").to_string(),
+        _ => tr("选择或新建数据库文件路径").to_string(),
     }
 }
 
@@ -750,7 +751,7 @@ fn file_path_placeholder(type_id: &str) -> String {
 pub(crate) fn url_template_example(template: &str, default_port: Option<i32>) -> String {
     let port = default_port
         .map(|p| p.to_string())
-        .unwrap_or_else(|| "端口".to_string());
+        .unwrap_or_else(|| tr("端口").to_string());
     template
         .replace("{username}", "user")
         .replace("{password}", "password")
@@ -758,7 +759,7 @@ pub(crate) fn url_template_example(template: &str, default_port: Option<i32>) ->
         .replace("{port}", &port)
         .replace("{database}", "db")
         .replace("{schema}", "public")
-        .replace("{file_path}", "路径")
+        .replace("{file_path}", tr("路径"))
 }
 
 // ===== 驱动声明的连接字段（`drivers.config_schema`）=====
@@ -930,16 +931,16 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
         "ssh" | "ssh_tunnel" => vec![
             net_spec(
                 "host",
-                "SSH 主机",
+                tr("SSH 主机"),
                 &["host"],
                 NetFieldKind::Text,
                 true,
                 "jump.example.com",
             ),
-            net_spec("port", "SSH 端口", &["port"], port, false, "22"),
+            net_spec("port", tr("SSH 端口"), &["port"], port, false, "22"),
             net_spec(
                 "username",
-                "SSH 用户名",
+                tr("SSH 用户名"),
                 &["username"],
                 NetFieldKind::Text,
                 true,
@@ -947,15 +948,15 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "password",
-                "SSH 密码",
+                tr("SSH 密码"),
                 &["password"],
                 NetFieldKind::Password,
                 false,
-                "与私钥二选一",
+                tr("与私钥二选一"),
             ),
             net_spec(
                 "key_path",
-                "私钥路径",
+                tr("私钥路径"),
                 &["key_path"],
                 NetFieldKind::Text,
                 false,
@@ -963,15 +964,15 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "remote_host",
-                "目标主机",
+                tr("目标主机"),
                 &["remote_host"],
                 NetFieldKind::Text,
                 true,
-                "数据库主机（隧道出口）",
+                tr("数据库主机（隧道出口）"),
             ),
             net_spec(
                 "remote_port",
-                "目标端口",
+                tr("目标端口"),
                 &["remote_port"],
                 port,
                 true,
@@ -991,7 +992,7 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
         "ssl" | "tls" => vec![
             net_spec(
                 "verify",
-                "校验服务器证书",
+                tr("校验服务器证书"),
                 &["verify_server_cert"],
                 NetFieldKind::Bool,
                 false,
@@ -999,7 +1000,7 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "ca",
-                "CA 证书路径",
+                tr("CA 证书路径"),
                 &["ca_cert_path"],
                 NetFieldKind::Text,
                 false,
@@ -1007,19 +1008,19 @@ pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "cert",
-                "客户端证书",
+                tr("客户端证书"),
                 &["client_cert_path"],
                 NetFieldKind::Text,
                 false,
-                "（可选）",
+                tr("（可选）"),
             ),
             net_spec(
                 "key",
-                "客户端私钥",
+                tr("客户端私钥"),
                 &["client_key_path"],
                 NetFieldKind::Text,
                 false,
-                "（可选）",
+                tr("（可选）"),
             ),
         ],
         _ => Vec::new(),
@@ -1030,7 +1031,7 @@ fn proxy_field_specs(default_port: &'static str) -> Vec<NetFieldSpec> {
     vec![
         net_spec(
             "host",
-            "代理主机",
+            tr("代理主机"),
             &["host"],
             NetFieldKind::Text,
             true,
@@ -1038,7 +1039,7 @@ fn proxy_field_specs(default_port: &'static str) -> Vec<NetFieldSpec> {
         ),
         net_spec(
             "port",
-            "代理端口",
+            tr("代理端口"),
             &["port"],
             NetFieldKind::Port,
             true,
@@ -1046,23 +1047,23 @@ fn proxy_field_specs(default_port: &'static str) -> Vec<NetFieldSpec> {
         ),
         net_spec(
             "username",
-            "代理用户名",
+            tr("代理用户名"),
             &["auth", "username"],
             NetFieldKind::Text,
             false,
-            "（可选）",
+            tr("（可选）"),
         ),
         net_spec(
             "password",
-            "代理密码",
+            tr("代理密码"),
             &["auth", "password"],
             NetFieldKind::Password,
             false,
-            "（可选）",
+            tr("（可选）"),
         ),
         NetFieldSpec {
             key: "no_proxy",
-            label: "直连主机",
+            label: tr("直连主机"),
             path: &["no_proxy"],
             kind: NetFieldKind::Text,
             required: false,
@@ -1210,77 +1211,77 @@ pub(crate) fn auth_field_specs(auth_type: &str) -> Vec<NetFieldSpec> {
         "password" | "ldap" => vec![
             net_spec(
                 "username",
-                "用户名",
+                tr("用户名"),
                 &["username"],
                 NetFieldKind::Text,
                 true,
-                "数据库账号",
+                tr("数据库账号"),
             ),
             net_spec(
                 "password",
-                "密码",
+                tr("密码"),
                 &["password"],
                 NetFieldKind::Password,
                 true,
-                "登录密码",
+                tr("登录密码"),
             ),
         ],
         "ssh_key" | "ssh" => vec![
             net_spec(
                 "username",
-                "SSH 用户名",
+                tr("SSH 用户名"),
                 &["username"],
                 NetFieldKind::Text,
                 false,
-                "（可选）覆盖档案里的用户名",
+                tr("（可选）覆盖档案里的用户名"),
             ),
             net_spec(
                 "key_path",
-                "私钥路径",
+                tr("私钥路径"),
                 &["keyPath"],
                 NetFieldKind::Text,
                 false,
-                "与密码二选一",
+                tr("与密码二选一"),
             ),
             net_spec(
                 "passphrase",
-                "私钥口令",
+                tr("私钥口令"),
                 &["passphrase"],
                 NetFieldKind::Password,
                 false,
-                "（可选）随私钥使用",
+                tr("（可选）随私钥使用"),
             ),
             net_spec(
                 "password",
-                "SSH 密码",
+                tr("SSH 密码"),
                 &["password"],
                 NetFieldKind::Password,
                 false,
-                "与私钥二选一",
+                tr("与私钥二选一"),
             ),
         ],
         "proxy_pwd" | "proxy" => vec![
             net_spec(
                 "username",
-                "代理用户名",
+                tr("代理用户名"),
                 &["username"],
                 NetFieldKind::Text,
                 true,
-                "代理账号",
+                tr("代理账号"),
             ),
             net_spec(
                 "password",
-                "代理密码",
+                tr("代理密码"),
                 &["password"],
                 NetFieldKind::Password,
                 true,
-                "代理密码",
+                tr("代理密码"),
             ),
         ],
         "pg_class" => vec![
             net_spec(
                 "cert_path",
-                "客户端证书",
+                tr("客户端证书"),
                 &["certPath"],
                 NetFieldKind::Text,
                 true,
@@ -1288,11 +1289,11 @@ pub(crate) fn auth_field_specs(auth_type: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "cert_key_path",
-                "客户端私钥",
+                tr("客户端私钥"),
                 &["certKeyPath"],
                 NetFieldKind::Text,
                 false,
-                "（可选）",
+                tr("（可选）"),
             ),
         ],
         "kerberos" => vec![
@@ -1306,11 +1307,11 @@ pub(crate) fn auth_field_specs(auth_type: &str) -> Vec<NetFieldSpec> {
             ),
             net_spec(
                 "keytab_path",
-                "Keytab 路径",
+                tr("Keytab 路径"),
                 &["keytabPath"],
                 NetFieldKind::Text,
                 false,
-                "（可选）",
+                tr("（可选）"),
             ),
         ],
         _ => Vec::new(),
@@ -1606,7 +1607,7 @@ mod tests {
         policy_summary, policy_type_from_label, policy_type_label, property_note,
         result_needs_detail, save_blocker, saved_result, scope_from_label,
         staging_display_type_id,
-        strip_file_db_noise, tags_from_json, tags_to_json, type_badge, type_has_driver,
+        strip_file_db_noise, tags_from_json, tags_to_json, tr, type_badge, type_has_driver,
         type_matches_filter, url_template_example, visible_tab_index,
     };
     use connection::model::ConnectionScope;
@@ -1838,7 +1839,7 @@ mod tests {
             &[("host".into(), "h".into()), ("port".into(), "abc".into())],
         )
         .expect_err("端口非法应报错");
-        assert!(err.contains("端口"), "{err}");
+        assert!(err.contains(tr("端口")), "{err}");
 
         let err = build_network_config_json(
             "ssh",
@@ -1850,7 +1851,7 @@ mod tests {
             ],
         )
         .expect_err("无凭据应报错");
-        assert!(err.contains("密码") && err.contains("私钥"), "{err}");
+        assert!(err.contains(tr("密码")) && err.contains("私钥"), "{err}");
 
         let err = build_network_config_json("chain", &[]).expect_err("协议链不走字段编辑");
         assert!(err.contains("chain"), "{err}");
@@ -1982,15 +1983,15 @@ mod tests {
         // 必填（password 类型需要用户名）
         let err = build_auth_config_json("password", &v(&[("password", "p")]))
             .expect_err("缺用户名应报错");
-        assert!(err.contains("用户名"), "{err}");
+        assert!(err.contains(tr("用户名")), "{err}");
         // 代理凭据成对
         let err = build_auth_config_json("proxy_pwd", &v(&[("username", "u")]))
             .expect_err("缺密码应报错");
-        assert!(err.contains("密码"), "{err}");
+        assert!(err.contains(tr("密码")), "{err}");
         // SSH 凭据二选一
         let err =
             build_auth_config_json("ssh_key", &v(&[("username", "u")])).expect_err("无凭据应报错");
-        assert!(err.contains("私钥") || err.contains("密码"), "{err}");
+        assert!(err.contains("私钥") || err.contains(tr("密码")), "{err}");
         // 未声明字段的类型：明确提示走原始 JSON
         let err = build_auth_config_json("oauth2", &[]).expect_err("未知类型应拒绝字段编辑");
         assert!(err.contains("不支持字段编辑"), "{err}");
@@ -2066,30 +2067,30 @@ mod tests {
         // 顺序就是填写顺序：类型 → 驱动 → 名称 → 地址（与 `collect` 的判据一致）。
         assert_eq!(
             save_blocker(false, "", "", "", false),
-            Some("请先在左侧选择数据库类型")
+            Some(tr("请先在左侧选择数据库类型"))
         );
         assert_eq!(
             save_blocker(true, "", "n", "u", false),
-            Some("请选择驱动实现")
+            Some(tr("请选择驱动实现"))
         );
         assert_eq!(
             save_blocker(true, "sqlx", "", "u", false),
-            Some("请填写连接名称")
+            Some(tr("请填写连接名称"))
         );
         // 地址缺口按连接方式给不同的可执行动作（文件型要的是“选文件”，不是“填 URI”）。
         assert_eq!(
             save_blocker(true, "sqlx", "n", "", false),
-            Some("请填写连接 URI")
+            Some(tr("请填写连接 URI"))
         );
         assert_eq!(
             save_blocker(true, "sqlx", "n", "", true),
-            Some("请选择或新建数据库文件（常规 → 连接设置）")
+            Some(tr("请选择或新建数据库文件（常规 → 连接设置）"))
         );
         // 全齐 / 全空格（名称与地址都是 trim 后判空）→ 无缺口。
         assert_eq!(save_blocker(true, "sqlx", "n", "u", false), None);
         assert_eq!(
             save_blocker(true, "  ", "  ", "  ", false),
-            Some("请选择驱动实现")
+            Some(tr("请选择驱动实现"))
         );
     }
 
@@ -2480,8 +2481,8 @@ mod tests {
     #[test]
     fn address_placeholder_and_label_follow_driver() {
         // 标签：文件型 = 地址，网络型 = URI。
-        assert_eq!(address_label(true), "地址");
-        assert_eq!(address_label(false), "URI");
+        assert_eq!(address_label(true), tr("地址"));
+        assert_eq!(address_label(false), tr("URI"));
 
         // 网络型：占位来自驱动声明的 url_template + 默认端口（不再固定 mysql 示例）。
         let mut mysql = driver("mysql", "mysql", "MySQL (sqlx)", true);
@@ -2500,7 +2501,7 @@ mod tests {
         );
         assert_eq!(
             address_placeholder(None, "mysql"),
-            "选择数据库类型与驱动后填写连接地址"
+            tr("选择数据库类型与驱动后填写连接地址")
         );
 
         // 文件型：提示是文件路径（选了 SQLite 不会再出现 mysql:// 示例）。

@@ -8,6 +8,7 @@
 //! 更深——焦点在列表里时由列表接管（不会两个都动）；焦点在输入框或其它地方时，
 //! 容器级绑定照旧生效（原型 §2.2 规则 6 的行为不变）。
 
+use shared::i18n::tr;
 use super::*;
 
 use gpui_kit::component::IndexPath;
@@ -139,7 +140,7 @@ impl ListDelegate for DraftListDelegate {
                 .ghost()
                 .icon(IconName::Delete)
                 .with_size(Size::XSmall)
-                .tooltip("删除这条草稿")
+                .tooltip(tr("删除这条草稿"))
                 .on_click(move |_, window, app| {
                     dialog.staging_remove(del_row, window, app);
                     shared.notify_host(app);
@@ -241,7 +242,7 @@ impl ListDelegate for DraftListDelegate {
             .py_1()
             .text_xs()
             .text_color(cx.theme().colors.muted_foreground)
-            .child("暂无草稿（点右上「添加」新建一条）")
+            .child(tr("暂无草稿（点右上「添加」新建一条）"))
     }
 
     fn set_selected_index(

@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 use crate::services::data_source_service::ReferenceField;
 
@@ -152,16 +153,16 @@ pub(crate) fn open_manager(
         let shared_layer = shared_for_layer.clone();
         let m = mgr.borrow();
         let title = match kind {
-            0 => "认证配置管理（AuthConfigManager）",
-            1 => "网络配置管理（NetworkConfigManager）",
-            _ => "环境管理（EnvironmentManager）",
+            0 => tr("认证配置管理（AuthConfigManager）"),
+            1 => tr("网络配置管理（NetworkConfigManager）"),
+            _ => tr("环境管理（EnvironmentManager）"),
         };
 
         // 列表行。
         let mut rows = div().v_flex().gap_1();
         if m.items.is_empty() {
             rows = rows.child(
-                div().text_xs().text_color(theme.colors.muted_foreground).child("暂无配置，点击下方「新建」"),
+                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("暂无配置，点击下方「新建」")),
             );
         }
         for (i, item) in m.items.iter().enumerate() {
@@ -190,7 +191,7 @@ pub(crate) fn open_manager(
                 row = row.child(
                     Button::new(format!("mgr-policy-{idx}"))
                         .secondary()
-                        .label("策略")
+                        .label(tr("策略"))
                         .on_click({
                             let item = item.clone();
                             let mgr = mgr.clone();
@@ -213,7 +214,7 @@ pub(crate) fn open_manager(
             rows = rows.child(row.child(
                 Button::new(format!("mgr-edit-{idx}"))
                             .secondary()
-                            .label("编辑")
+                            .label(tr("编辑"))
                             .on_click({
                                 let item = item.clone();
                                 let mgr = mgr.clone();
@@ -262,7 +263,7 @@ pub(crate) fn open_manager(
                     .child(
                         Button::new(format!("mgr-del-{idx}"))
                             .secondary()
-                            .label("删除")
+                            .label(tr("删除"))
                             .on_click({
                                 let item = item.clone();
                                 let mgr = mgr.clone();
@@ -318,11 +319,11 @@ pub(crate) fn open_manager(
                 .h_flex()
                 .items_center()
                 .gap_2()
-                .child(div().text_xs().child("类型"))
-                .child(Select::new(&new_type).placeholder("选择类型…"));
+                .child(div().text_xs().child(tr("类型")))
+                .child(Select::new(&new_type).placeholder(tr("选择类型…")));
             if net_rows.is_empty() {
                 type_row = type_row
-                    .child(div().text_xs().child("数据(JSON)"))
+                    .child(div().text_xs().child(tr("数据(JSON)")))
                     .child(Input::new(&new_data).w(cx.theme().font_size * crate::ui::DIALOG_JSON_INPUT_WIDTH));
             }
             let mut fields_block = div().v_flex().gap_1();
@@ -353,7 +354,7 @@ pub(crate) fn open_manager(
             if !net_rows.is_empty() {
                 fields_block = fields_block.child(hint_line(
                     theme,
-                    "字段按类型展开；协议链请选 chain 并直接填 JSON。",
+                    tr("字段按类型展开；协议链请选 chain 并直接填 JSON。"),
                 ));
             }
             div()
@@ -366,11 +367,11 @@ pub(crate) fn open_manager(
                 .py_2()
                 .child(
                     div().text_sm().font_weight(FontWeight::BOLD)
-                        .child(if editing.is_some() { "编辑配置" } else { "新建配置" }),
+                        .child(if editing.is_some() { tr("编辑配置") } else { tr("新建配置") }),
                 )
                 .child(
                     div().h_flex().items_center().gap_2()
-                        .child(div().text_xs().child("名称"))
+                        .child(div().text_xs().child(tr("名称")))
                         .child(Input::new(&new_name).w(cx.theme().font_size * crate::ui::DIALOG_NAME_INPUT_WIDTH)),
                 )
                 .child(type_row)
@@ -380,7 +381,7 @@ pub(crate) fn open_manager(
                         .child(
                             Button::new("mgr-save")
                                 .primary()
-                                .label("保存")
+                                .label(tr("保存"))
                                 .on_click({
                                     let mgr = mgr.clone();
                                     let entity = entity.clone();
@@ -395,7 +396,7 @@ pub(crate) fn open_manager(
                                             )
                                         };
                                         if name.trim().is_empty() {
-                                            mgr.borrow_mut().msg = Some("名称不能为空".into());
+                                            mgr.borrow_mut().msg = Some(tr("名称不能为空").into());
                                             entity.update(app, |_, cx| cx.notify());
                                             return;
                                         }
@@ -441,7 +442,7 @@ pub(crate) fn open_manager(
                         )
                         .child(
                             Button::new("mgr-cancel-edit")
-                                .label("取消编辑")
+                                .label(tr("取消编辑"))
                                 .on_click({
                                     let mgr = mgr.clone();
                                     let entity = entity.clone();
@@ -483,7 +484,7 @@ pub(crate) fn open_manager(
                         let list = policies.borrow();
                         if list.is_empty() {
                             plist = plist.child(
-                                div().text_xs().text_color(theme.colors.muted_foreground).child("该环境暂无策略"),
+                                div().text_xs().text_color(theme.colors.muted_foreground).child(tr("该环境暂无策略")),
                             );
                         }
                         for (i, (ptype, pid, enabled)) in list.iter().enumerate() {
@@ -502,12 +503,12 @@ pub(crate) fn open_manager(
                                     .child(
                                         div().text_xs()
                                             .text_color(if enabled { theme.colors.success } else { theme.colors.muted_foreground })
-                                            .child(if enabled { "启用" } else { "停用" }),
+                                            .child(if enabled { tr("启用") } else { tr("停用") }),
                                     )
                                     .child(
                                         Button::new(format!("pol-del-{i}"))
                                             .secondary()
-                                            .label("删除")
+                                            .label(tr("删除"))
                                             .on_click({
                                                 let pid = pid.clone();
                                                 let mgr = mgr.clone();
@@ -547,9 +548,9 @@ pub(crate) fn open_manager(
                             .child(plist)
                             .child(
                                 div().h_flex().items_center().gap_2()
-                                    .child(div().text_xs().child("类型"))
-                                    .child(Select::new(&policy_type).placeholder("选择策略类型…"))
-                                    .child(div().text_xs().child("启用"))
+                                    .child(div().text_xs().child(tr("类型")))
+                                    .child(Select::new(&policy_type).placeholder(tr("选择策略类型…")))
+                                    .child(div().text_xs().child(tr("启用")))
                                     .child(
                                         // 策略启用开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，
                                         // 替代早期自绘 30×16 轨道，对齐原型 HTML）。
@@ -567,7 +568,7 @@ pub(crate) fn open_manager(
                                     .child(
                                         Button::new("pol-save")
                                             .primary()
-                                            .label(if policy_editing.is_some() { "更新策略" } else { "添加策略" })
+                                            .label(if policy_editing.is_some() { tr("更新策略") } else { tr("添加策略") })
                                             .on_click({
                                                 let env_name = env_name2.clone();
                                                 let mgr = mgr2.clone();
@@ -582,7 +583,7 @@ pub(crate) fn open_manager(
                                                         )
                                                     };
                                                     if label.is_empty() {
-                                                        mgr.borrow_mut().msg = Some("请选择策略类型".into());
+                                                        mgr.borrow_mut().msg = Some(tr("请选择策略类型").into());
                                                         entity.update(app, |_, cx| cx.notify());
                                                         return;
                                                     }
@@ -625,11 +626,11 @@ pub(crate) fn open_manager(
                     .child(
                         div().text_xs().text_color(theme.colors.muted_foreground)
                             .child(if kind == 0 {
-                                "复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。"
+                                tr("复用：数据库 A 可直接引用数据库 B 的认证配置；凭据 AES-256 加密存储，列表不回显明文。")
                             } else if kind == 1 {
-                                "复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。"
+                                tr("复用：网络配置（SSH/代理档案）可被多个连接引用，建一次全项目/全局复用。")
                             } else {
-                                "复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。"
+                                tr("复用：环境（含策略）可被多个数据源共享；点击「策略」直接管理该环境的策略。")
                             }),
                     ),
             )
@@ -637,7 +638,7 @@ pub(crate) fn open_manager(
                 div().h_flex().justify_end().gap_2()
                     .child(
                         Button::new("mgr-close")
-                            .label("关闭")
+                            .label(tr("关闭"))
                             .on_click({
                                 let shared = shared_layer.clone();
                                 move |_, window, app| {
@@ -809,7 +810,7 @@ pub(crate) fn upsert_manager_item(
                     id,
                     name: name.to_string(),
                     description: Some(if data.is_empty() {
-                        "新建环境".into()
+                        tr("新建环境").into()
                     } else {
                         data.into()
                     }),
@@ -984,7 +985,7 @@ pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, edi
         Ok(()) => match editing {
             Some(_) => format!(
                 "保存成功：{label}（{}）",
-                if enabled { "启用" } else { "停用" }
+                if enabled { tr("启用") } else { tr("停用") }
             ),
             None => format!("已创建「{label}」空策略模板（策略类型 {ptype}）：具体配置项待策略编辑器实现"),
         },

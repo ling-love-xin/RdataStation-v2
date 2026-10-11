@@ -193,6 +193,9 @@ fn run_app() {
             //     不设会与主题字号脱节，rem 系布局就不缩放）。
             SettingsService::set_font_size(SettingsService::font_size(cx), None, cx);
 
+            // 4c. 应用已保存的界面语言：同步 `shared::i18n` 全局（`tr()` 查表基准）。
+            SettingsService::set_locale(SettingsService::locale(cx).code(), None, cx);
+
             // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
             //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
             //    A10：编辑器键位绑在 key_context("editor")（面板根元素）上——

@@ -193,6 +193,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::AppearanceFontSize => {
             SettingValue::Number(settings.appearance.font_size as f64)
         }
+        Slot::AppearanceLocale => SettingValue::Text(settings.appearance.locale.clone()),
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -270,6 +271,16 @@ impl SettingsService {
                     return false;
                 }
                 Self::set_font_size(size as f32, window, cx);
+            }
+            Slot::AppearanceLocale => {
+                let Some(code) = value.as_text() else {
+                    return false;
+                };
+                // 只认 zh / en（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+                if !(code == "zh" || code == "en") {
+                    return false;
+                }
+                Self::set_locale(&code, window, cx);
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
@@ -436,6 +447,25 @@ impl SettingsService {
                 }
             }
         }
+        cx.refresh_windows();
+    }
+
+    /// 读取当前界面语言（默认中文）。
+    pub fn locale(cx: &App) -> shared::i18n::Locale {
+        shared::i18n::Locale::from_code(&cx.global::<Settings>().appearance.locale)
+    }
+
+    /// 设置并持久化界面语言，即时生效：更新 global → 写 settings.json →
+    /// 同步 `shared::i18n` 全局语言（`tr()` 查表基准）→ 刷新所有窗口（全 UI 文案即时切换）。
+    pub fn set_locale(code: &str, _window: Option<&mut gpui_kit::Window>, cx: &mut App) {
+        let locale = shared::i18n::Locale::from_code(code);
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.appearance.locale = locale.code().to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        shared::i18n::set_locale(locale);
         cx.refresh_windows();
     }
 
@@ -896,6 +926,55 @@ mod tests {
             );
             assert!(!ok, "超范围字号必须拒绝");
             assert_eq!(SettingsService::font_size(cx), 16.0, "拒绝后值不变");
+        });
+    }
+
+    /// 界面语言：默认中文 → `set_locale` 更新 global + 持久化 + 同步 `shared::i18n`
+    /// （`tr()` 切换英文查表基准）。
+    ///
+    /// **用独立临时目录**（同上：不碰共享 `config_dir()`，避免并行写盘测试互相覆盖）。
+    #[gpui_kit::test]
+    fn locale_applies_global_and_persists(cx: &mut gpui_kit::TestAppContext) {
+        let path = temp_dir("locale_roundtrip").join("settings.json");
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            // 默认中文。
+            assert_eq!(SettingsService::locale(cx), shared::i18n::Locale::Zh);
+            assert_eq!(shared::i18n::tr("数据源"), "数据源");
+            // 切英文：global 更新 + i18n 查表基准切换。
+            SettingsService::set_locale("en", None, cx);
+            assert_eq!(SettingsService::locale(cx), shared::i18n::Locale::En);
+            assert_eq!(shared::i18n::tr("数据源"), "Data Sources");
+            // 落盘往返：写什么读什么。
+            save_settings_to(&path, &SettingsService::snapshot(cx)).expect("写盘");
+            assert_eq!(load_settings_from(&path).appearance.locale, "en");
+            // 改回默认：恢复默认有唯一目标（登记表默认 "zh" 与模型默认一致）。
+            SettingsService::set_locale("zh", None, cx);
+            assert_eq!(SettingsService::locale(cx), shared::i18n::Locale::Zh);
+            assert_eq!(shared::i18n::tr("数据源"), "数据源");
+        });
+        let _ = std::fs::remove_dir_all(path.parent().expect("父目录"));
+    }
+
+    /// 非法语言码被拒绝（页面只给 zh/en 档；手改坏的设置文件不让写入）。
+    #[gpui_kit::test]
+    fn invalid_locale_is_rejected(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            let ok = SettingsService::apply_by_key(
+                "appearance.locale",
+                SettingValue::Text("fr".to_string()),
+                None,
+                cx,
+            );
+            assert!(!ok, "非法语言码必须拒绝");
+            assert_eq!(
+                SettingsService::locale(cx),
+                shared::i18n::Locale::Zh,
+                "拒绝后值不变"
+            );
         });
     }
 }

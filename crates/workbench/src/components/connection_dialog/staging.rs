@@ -1,3 +1,4 @@
+use shared::i18n::tr;
 use super::*;
 
 use engine::persistence::connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
@@ -129,9 +130,9 @@ impl ConnectionDraft {
     pub(crate) fn display_name(&self) -> String {
         if self.name.trim().is_empty() {
             if self.saved_id.is_some() {
-                "（未命名连接）".to_string()
+                tr("（未命名连接）").to_string()
             } else {
-                "新建数据源".to_string()
+                tr("新建数据源").to_string()
             }
         } else {
             self.name.clone()
@@ -499,7 +500,7 @@ impl ConnectionDialogState {
         self.apply_draft(idx, window, cx);
         self.staging_persist();
         // 中性提示（非“成功”）：新建草稿是过程状态，着色用 Info（#28 分级）。
-        set_result(&self.result, ResultLevel::Info, "已新建草稿（填好后保存）");
+        set_result(&self.result, ResultLevel::Info, tr("已新建草稿（填好后保存）"));
     }
 
     /// 暂存列表：切换条目（规则 1：先写回当前，再载入目标）。

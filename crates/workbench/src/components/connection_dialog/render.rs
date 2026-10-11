@@ -1,4 +1,5 @@
 use super::*;
+use shared::i18n::tr;
 
 /// 「保存并退出」批量提交的**后台结果**（用户决策 2026-10-02：批量落库暂存栏全部条目）。
 ///
@@ -229,32 +230,32 @@ impl ConnectionDialogState {
         // 地址占位**不在这里固定**：它随当前驱动推导（见 builder 内的 `address_placeholder`），
         // 否则选了 SQLite 还会提示 mysql:// 示例（真机反馈）。
         name.update(cx, |s, cx| {
-            s.set_placeholder("名称（如 生产 PG）", window, cx)
+            s.set_placeholder(tr("名称（如 生产 PG）"), window, cx)
         });
-        remark.update(cx, |s, cx| s.set_placeholder("备注（可选）", window, cx));
+        remark.update(cx, |s, cx| s.set_placeholder(tr("备注（可选）"), window, cx));
         driver_filter.update(cx, |s, cx| {
-            s.set_placeholder("搜索类型 / 驱动（回车选中）", window, cx)
+            s.set_placeholder(tr("搜索类型 / 驱动（回车选中）"), window, cx)
         });
         tags_input.update(cx, |s, cx| {
-            s.set_placeholder("prod, core（逗号分隔）", window, cx)
+            s.set_placeholder(tr("prod, core（逗号分隔）"), window, cx)
         });
         prop_key.update(cx, |s, cx| s.set_placeholder("key", window, cx));
         prop_val.update(cx, |s, cx| s.set_placeholder("value", window, cx));
         // `project_path` 不在这里写占位：它**不渲染输入框**（项目根由项目下拉写入，见
         // `ConnectionDialogState::project_path` 的字段文档），写占位只会白 notify 一次。
         ssl_ca.update(cx, |s, cx| {
-            s.set_placeholder("CA 证书路径（可选）", window, cx)
+            s.set_placeholder(tr("CA 证书路径（可选）"), window, cx)
         });
         ssl_cert.update(cx, |s, cx| {
-            s.set_placeholder("客户端证书路径（可选）", window, cx)
+            s.set_placeholder(tr("客户端证书路径（可选）"), window, cx)
         });
         ssl_key.update(cx, |s, cx| {
-            s.set_placeholder("私钥路径（可选）", window, cx)
+            s.set_placeholder(tr("私钥路径（可选）"), window, cx)
         });
         host_input.update(cx, |s, cx| s.set_placeholder("127.0.0.1", window, cx));
         port_input.update(cx, |s, cx| s.set_placeholder("3306", window, cx));
         db_input.update(cx, |s, cx| {
-            s.set_placeholder("可选，留空表示全部", window, cx)
+            s.set_placeholder(tr("可选，留空表示全部"), window, cx)
         });
 
         // 测试连接（block_on，与 workbench 现有服务调用模式一致）。
@@ -568,16 +569,16 @@ impl ConnectionDialogState {
                             .h_flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child("网络配置"))
+                            .child(div().text_sm().font_weight(FontWeight::BOLD).child(tr("网络配置")))
                             .child(
                                 div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child("引用网络档案："),
+                                    .child(tr("引用网络档案：")),
                             )
-                            .child(Select::new(&network_ref).placeholder("（不引用：直连）"))
+                            .child(Select::new(&network_ref).placeholder(tr("（不引用：直连）")))
                             .child(
                                 Button::new("mgr-network")
                                     .ghost()
-                                    .label("管理")
+                                    .label(tr("管理"))
                                     .on_click({
                                         let mgr = mgr.clone();
                                         let entity = entity.clone();
@@ -614,7 +615,7 @@ impl ConnectionDialogState {
                                     .border_color(theme.colors.border)
                                     .px_2()
                                     .py_1()
-                                    .child("本机客户端"),
+                                    .child(tr("本机客户端")),
                             )
                             .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
                             .child(
@@ -636,7 +637,7 @@ impl ConnectionDialogState {
                                     .border_color(theme.colors.border)
                                     .px_2()
                                     .py_1()
-                                    .child("目标数据库")
+                                    .child(tr("目标数据库"))
                                     .child(
                                         div().text_xs().text_color(theme.colors.info).child(" TLS"),
                                     ),
@@ -734,7 +735,7 @@ impl ConnectionDialogState {
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(theme.colors.danger)
-                                            .child("删除")
+                                            .child(tr("删除"))
                                             .on_click(move |_, _, app| {
                                                 props.borrow_mut().remove(idx);
                                                 entity.update(app, |_, cx| cx.notify());
@@ -770,7 +771,7 @@ impl ConnectionDialogState {
                         .child(
                             Button::new("add-prop")
                                 .secondary()
-                                .label("添加")
+                                .label(tr("添加"))
                                 .on_click({
                                     let props = props.clone();
                                     let entity = entity.clone();
@@ -782,7 +783,7 @@ impl ConnectionDialogState {
                                         let k = prop_key.read(app).value().to_string();
                                         let v = prop_val.read(app).value().to_string();
                                         if k.trim().is_empty() {
-                                            set_result_ok(&result, false, "属性 key 不能为空");
+                                            set_result_ok(&result, false, tr("属性 key 不能为空"));
                                             entity.update(app, |_, cx| cx.notify());
                                             return;
                                         }
@@ -804,7 +805,7 @@ impl ConnectionDialogState {
                                             Some((text, PropertyNoteLevel::Warn)) => {
                                                 set_result(&result, ResultLevel::Warning, text)
                                             }
-                                            _ => set_result_ok(&result, true, "驱动属性已更新"),
+                                            _ => set_result_ok(&result, true, tr("驱动属性已更新")),
                                         }
                                         entity.update(app, |_, cx| cx.notify());
                                     }
@@ -861,14 +862,14 @@ impl ConnectionDialogState {
                         "env",
                         lucide("icons/sliders-horizontal.svg"),
                         theme.colors.primary,
-                        "环境",
+                        tr("环境"),
                         div()
                             .w_full()
                             .v_flex()
                             .gap(rems(GAP_SM))
                             .child(form_row(
                                 theme,
-                                "环境",
+                                tr("环境"),
                                 div()
                                     .h_flex()
                                     .items_center()
@@ -877,12 +878,12 @@ impl ConnectionDialogState {
                                         div()
                                             .flex_1()
                                             .min_w(rems(0.))
-                                            .child(Select::new(&env).placeholder("选择环境…")),
+                                            .child(Select::new(&env).placeholder(tr("选择环境…"))),
                                     )
                                     .child(
                                         Button::new("mgr-env")
                                             .secondary()
-                                            .label("管理环境")
+                                            .label(tr("管理环境"))
                                             .on_click({
                                                 let mgr = mgr.clone();
                                                 let entity = entity.clone();
@@ -935,9 +936,9 @@ impl ConnectionDialogState {
                                     )
                                     .child(
                                         if on {
-                                            div().text_xs().text_color(theme.colors.info).child("已覆盖")
+                                            div().text_xs().text_color(theme.colors.info).child(tr("已覆盖"))
                                         } else {
-                                            div().text_xs().text_color(theme.colors.muted_foreground).child("默认")
+                                            div().text_xs().text_color(theme.colors.muted_foreground).child(tr("默认"))
                                         },
                                     ),
                             );
@@ -945,7 +946,7 @@ impl ConnectionDialogState {
                         if policies.is_empty() {
                             rows = rows.child(
                                 div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child("无可覆盖策略：请先在上方选择环境（策略清单来自 environment_policies）"),
+                                    .child(tr("无可覆盖策略：请先在上方选择环境（策略清单来自 environment_policies）")),
                             );
                         }
                         rows
@@ -954,7 +955,7 @@ impl ConnectionDialogState {
                         "policy",
                         lucide("icons/shield.svg"),
                         theme.colors.info,
-                        "安全策略（覆盖环境默认）",
+                        tr("安全策略（覆盖环境默认）"),
                         div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
                     ));
                     // 分组③ DuckDB 直连（**所有类型都摆**）：网络库用于本地加速 + 跨源，
@@ -986,7 +987,7 @@ impl ConnectionDialogState {
                             ))
                             .child(form_row(
                                 theme,
-                                "启用",
+                                tr("启用"),
                                 div()
                                     .h_flex()
                                     .items_center()
@@ -1045,7 +1046,7 @@ impl ConnectionDialogState {
                         // 支持的方法取自驱动声明（不写死 password / ssh_key）。
                         let methods = derived.auth_types.clone();
                         let methods_text = if methods.is_empty() {
-                            "驱动未声明认证方法".to_string()
+                            tr("驱动未声明认证方法").to_string()
                         } else {
                             format!("支持 {} 认证", methods.join(" / "))
                         };
@@ -1097,7 +1098,7 @@ impl ConnectionDialogState {
                                     .child(
                                         Button::new("pick-db-file")
                                             .secondary()
-                                            .label("打开文件…")
+                                            .label(tr("打开文件…"))
                                             .disabled(form_disabled)
                                             .on_click({
                                                 let state = state.clone();
@@ -1110,7 +1111,7 @@ impl ConnectionDialogState {
                                     .child(
                                         Button::new("new-db-file")
                                             .secondary()
-                                            .label("新建文件…")
+                                            .label(tr("新建文件…"))
                                             .disabled(form_disabled)
                                             .on_click({
                                                 let state = state.clone();
@@ -1177,22 +1178,22 @@ impl ConnectionDialogState {
                                     .flex_shrink_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("认证方法"),
+                                    .child(tr("认证方法")),
                             );
                         let cell = if is_auth_ref {
                             // 引用档案：方法由档案声明，不可在此改。
                             Select::new(&auth_method)
-                                .placeholder("由认证档案声明")
+                                .placeholder(tr("由认证档案声明"))
                                 .disabled(true)
                                 .into_any_element()
                         } else if current_driver.is_none() || !driver_has_auth_types {
                             Select::new(&auth_method)
-                                .placeholder("驱动未声明认证方法")
+                                .placeholder(tr("驱动未声明认证方法"))
                                 .disabled(true)
                                 .into_any_element()
                         } else {
                             Select::new(&auth_method)
-                                .placeholder("选择认证方法…")
+                                .placeholder(tr("选择认证方法…"))
                                 .into_any_element()
                         };
                         row = row.child(div().flex_1().min_w(rems(0.)).child(cell));
@@ -1213,7 +1214,7 @@ impl ConnectionDialogState {
                                         .flex_shrink_0()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("引用配置"),
+                                        .child(tr("引用配置")),
                                 )
                                 .child(
                                     div()
@@ -1221,14 +1222,14 @@ impl ConnectionDialogState {
                                         .min_w(rems(0.))
                                         .child(
                                             Select::new(&auth_ref)
-                                                .placeholder("引用已保存配置…")
+                                                .placeholder(tr("引用已保存配置…"))
                                                 .disabled(form_disabled),
                                         ),
                                 )
                                 .child(
                                     Button::new("mgr-auth")
                                         .ghost()
-                                        .label("管理")
+                                        .label(tr("管理"))
                                         .on_click({
                                             let mgr = mgr.clone();
                                             let entity = entity.clone();
@@ -1245,7 +1246,7 @@ impl ConnectionDialogState {
                                 &format!(
                                     "已引用认证档案 · 认证方法 {} · 用户名/密码只读（修改档案一处全量生效）",
                                     if auth_method_now.is_empty() {
-                                        "（未声明）".to_string()
+                                        tr("（未声明）").to_string()
                                     } else {
                                         auth_method_now.clone()
                                     }
@@ -1288,16 +1289,16 @@ impl ConnectionDialogState {
                         .gap(rems(GAP_SM))
                         .child(form_row(
                             theme,
-                            "模式",
+                            tr("模式"),
                             Select::new(&ssl_mode)
-                                .placeholder("选择 SSL 模式…")
+                                .placeholder(tr("选择 SSL 模式…"))
                                 .disabled(form_disabled),
                         ))
                         .child(if ssl_selected == "disable" {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("未启用 TLS（disable / prefer / require / verify-ca / verify-full）")
+                                .child(tr("未启用 TLS（disable / prefer / require / verify-ca / verify-full）"))
                         } else {
                             div()
                                 .w_full()
@@ -1305,17 +1306,17 @@ impl ConnectionDialogState {
                                 .gap(rems(GAP_SM))
                                 .child(form_row(
                                     theme,
-                                    "CA 证书",
+                                    tr("CA 证书"),
                                     Input::new(&ssl_ca).disabled(form_disabled),
                                 ))
                                 .child(form_row(
                                     theme,
-                                    "客户端证书",
+                                    tr("客户端证书"),
                                     Input::new(&ssl_cert).disabled(form_disabled),
                                 ))
                                 .child(form_row(
                                     theme,
-                                    "私钥",
+                                    tr("私钥"),
                                     Input::new(&ssl_key).disabled(form_disabled),
                                 ))
                         });
@@ -1327,14 +1328,14 @@ impl ConnectionDialogState {
                         .gap(rems(GAP_SM))
                         .child(form_row(
                             theme,
-                            "标签",
+                            tr("标签"),
                             Input::new(&tags_input).disabled(form_disabled),
                         ))
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child("多个标签用逗号分隔（导航检索用）"),
+                                .child(tr("多个标签用逗号分隔（导航检索用）")),
                         );
                     {
                         let checks = group_checks.borrow().clone();
@@ -1343,14 +1344,14 @@ impl ConnectionDialogState {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("分组：打开项目后可用（分组为项目级）"),
+                                    .child(tr("分组：打开项目后可用（分组为项目级）")),
                             );
                         } else if checks.is_empty() {
                             org_body = org_body.child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
-                                    .child("分组：本项目暂无分组"),
+                                    .child(tr("分组：本项目暂无分组")),
                             );
                         } else {
                             let mut list = div().v_flex().gap_0p5();
@@ -1386,7 +1387,7 @@ impl ConnectionDialogState {
                                         div()
                                             .text_xs()
                                             .text_color(theme.colors.muted_foreground)
-                                            .child("分组"),
+                                            .child(tr("分组")),
                                     )
                                     .child(list),
                             );
@@ -1441,7 +1442,7 @@ impl ConnectionDialogState {
                         "conn",
                         lucide("icons/database.svg"),
                         theme.colors.primary,
-                        "连接设置",
+                        tr("连接设置"),
                         settings_body,
                     ));
                     // 认证 / SSL 仅网络型有意义：文件型只有「连接设置 + 组织」；
@@ -1451,7 +1452,7 @@ impl ConnectionDialogState {
                             "auth",
                             lucide("icons/lock.svg"),
                             theme.colors.primary,
-                            "数据库认证",
+                            tr("数据库认证"),
                             auth_body,
                         ));
                         if driver_declares_ssl || form_disabled {
@@ -1459,7 +1460,7 @@ impl ConnectionDialogState {
                                 "ssl",
                                 lucide("icons/shield-check.svg"),
                                 theme.colors.info,
-                                "连接安全（SSL/TLS）",
+                                tr("连接安全（SSL/TLS）"),
                                 ssl_body,
                             ));
                         }
@@ -1468,7 +1469,7 @@ impl ConnectionDialogState {
                         "org",
                         lucide("icons/tag.svg"),
                         theme.colors.success,
-                        "组织（标签 / 分组）",
+                        tr("组织（标签 / 分组）"),
                         org_body,
                     ))
                 }
@@ -1540,7 +1541,7 @@ impl ConnectionDialogState {
                                         .text_xs()
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(theme.colors.muted_foreground)
-                                        .child("暂存列表"),
+                                        .child(tr("暂存列表")),
                                 )
                                 .child(
                                     // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
@@ -1548,7 +1549,7 @@ impl ConnectionDialogState {
                                     Button::new("staging-add")
                                         .ghost()
                                         .icon(IconName::Plus)
-                                        .label("添加")
+                                        .label(tr("添加"))
                                         .with_size(Size::XSmall)
                                         .tooltip("新增一条空草稿（连续配置多个连接）")
                                         .on_click({
@@ -1592,7 +1593,7 @@ impl ConnectionDialogState {
                                 .text_xs()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.muted_foreground)
-                                .child("数据库类型"),
+                                .child(tr("数据库类型")),
                         )
                         // 类型列表占满侧栏剩余高度：`List` 自带虚拟滚动与空态（不再外套滚动容器）。
                         .child(
@@ -1626,7 +1627,7 @@ impl ConnectionDialogState {
                             .flex_shrink_0()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
-                            .child("项目"),
+                            .child(tr("项目")),
                     );
                 if !includes_project {
                     // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
@@ -1636,7 +1637,7 @@ impl ConnectionDialogState {
                             .min_w(rems(0.))
                             .child(
                                 Select::new(&project_sel)
-                                    .placeholder("仅全局不需要")
+                                    .placeholder(tr("仅全局不需要"))
                                     .disabled(true),
                             ),
                     );
@@ -1645,7 +1646,7 @@ impl ConnectionDialogState {
                         div()
                             .flex_1()
                             .min_w(rems(0.))
-                            .child(Select::new(&project_sel).placeholder("选择项目…")),
+                            .child(Select::new(&project_sel).placeholder(tr("选择项目…"))),
                     );
                 }
                 wrap
@@ -1743,7 +1744,7 @@ impl ConnectionDialogState {
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
                         .child(type_badge_ui)
-                        .child(header_label_state(theme, "名称", missing_name))
+                        .child(header_label_state(theme, tr("名称"), missing_name))
                         .child(Input::new(&name).flex_1())
                         .child(scope_seg)
                         // 规则 1（决策 #110）：作用域三态旁 `?` 徽标，悬停提示三态落库语义。
@@ -1764,7 +1765,7 @@ impl ConnectionDialogState {
                         .items_center()
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
-                        .child(header_label(theme, "备注"))
+                        .child(header_label(theme, tr("备注")))
                         .child(Input::new(&remark).flex_1())
                         .child(project_ui),
                 )
@@ -1774,7 +1775,7 @@ impl ConnectionDialogState {
                         .items_center()
                         .gap(rems(GAP_LG))
                         .min_w(rems(0.))
-                        .child(header_label_state(theme, "驱动", missing_driver))
+                        .child(header_label_state(theme, tr("驱动"), missing_driver))
                         .child(
                             div()
                                 .w(rems(DRIVER_W))
@@ -1782,19 +1783,19 @@ impl ConnectionDialogState {
                                 .child(if type_badge_now.is_some() {
                                     if type_has_driver(&drivers_snapshot, &selected_type_id) {
                                         Select::new(&driver)
-                                            .placeholder("选择驱动实现…")
+                                            .placeholder(tr("选择驱动实现…"))
                                             .into_any_element()
                                     } else {
                                         // 类型已选但无可用驱动（旧草稿 / 目录缺驱动）：只读占位。
                                         Select::new(&driver)
-                                            .placeholder("该类型暂无可用驱动")
+                                            .placeholder(tr("该类型暂无可用驱动"))
                                             .disabled(true)
                                             .into_any_element()
                                     }
                                 } else {
                                     // 未选类型：仍以禁用下拉占位（保持控件形态与行高一致）。
                                     Select::new(&driver)
-                                        .placeholder("先选类型")
+                                        .placeholder(tr("先选类型"))
                                         .disabled(true)
                                         .into_any_element()
                                 }),
@@ -1809,7 +1810,7 @@ impl ConnectionDialogState {
                             // Header 只显示当前路径（截断）或引导文案，避免两个地址输入框。
                             let path_now = url.read(cx).value().to_string();
                             let text = if path_now.trim().is_empty() {
-                                "在「常规 → 连接设置」选择或新建数据库文件".to_string()
+                                tr("在「常规 → 连接设置」选择或新建数据库文件").to_string()
                             } else {
                                 path_now
                             };
@@ -1898,7 +1899,7 @@ impl ConnectionDialogState {
                                             .text_xs()
                                             .text_color(theme.colors.primary)
                                             .cursor_pointer()
-                                            .child(if expanded { "收起" } else { "详情" })
+                                            .child(if expanded { tr("收起") } else { tr("详情") })
                                             .on_click(move |_, _, app| {
                                                 toggle_expanded.set(!toggle_expanded.get());
                                                 toggle_entity.update(app, |_, cx| cx.notify());
@@ -1911,7 +1912,7 @@ impl ConnectionDialogState {
                                             .text_xs()
                                             .text_color(theme.colors.primary)
                                             .cursor_pointer()
-                                            .child("复制")
+                                            .child(tr("复制"))
                                             .on_click(move |_, _, app| {
                                                 app.write_to_clipboard(
                                                     gpui_kit::ClipboardItem::new_string(
@@ -1966,7 +1967,7 @@ impl ConnectionDialogState {
                         set_result_ok(
                             &result,
                             false,
-                            blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                            blocker.unwrap_or(tr("请填写名称、驱动与连接 URL")),
                         );
                         entity.update(app, |_, cx| cx.notify());
                         return;
@@ -1977,7 +1978,7 @@ impl ConnectionDialogState {
                         if v.is_empty() { None } else { Some(v.to_string()) }
                     };
                     busy.set(BusyOp::Test);
-                    set_result(&result, ResultLevel::Info, "测试中…");
+                    set_result(&result, ResultLevel::Info, tr("测试中…"));
                     entity.update(app, |_, cx| cx.notify());
                     // 后台线程跑阻塞探测；只带纯数据过线（UI 对象一律留在前台）。
                     let work = app
@@ -2035,7 +2036,7 @@ impl ConnectionDialogState {
                         set_result(
                             &result,
                             ResultLevel::Info,
-                            "编辑中的修改将在「保存并退出」时提交",
+                            tr("编辑中的修改将在「保存并退出」时提交"),
                         );
                         entity.update(app, |_, cx| cx.notify());
                         return;
@@ -2060,7 +2061,7 @@ impl ConnectionDialogState {
                         set_result(
                             &result,
                             ResultLevel::Info,
-                            "内容为空，未暂存（先填写名称与地址）",
+                            tr("内容为空，未暂存（先填写名称与地址）"),
                         );
                         entity.update(app, |_, cx| cx.notify());
                         return;
@@ -2121,7 +2122,7 @@ impl ConnectionDialogState {
                             set_result_ok(
                                 &result,
                                 false,
-                                blocker.unwrap_or("请填写名称、驱动与连接 URL"),
+                                blocker.unwrap_or(tr("请填写名称、驱动与连接 URL")),
                             );
                             entity.update(app, |_, cx| cx.notify());
                             return;
@@ -2154,11 +2155,11 @@ impl ConnectionDialogState {
                             }
                             let Some(input) = state.draft_to_save_input(d) else {
                                 let missing = if d.driver_id.trim().is_empty() {
-                                    "未选驱动"
+                                    tr("未选驱动")
                                 } else if d.name.trim().is_empty() {
-                                    "缺名称"
+                                    tr("缺名称")
                                 } else {
-                                    "缺地址"
+                                    tr("缺地址")
                                 };
                                 incomplete = Some((d.display_name(), missing.to_string()));
                                 break;
@@ -2190,7 +2191,7 @@ impl ConnectionDialogState {
                         set_result_ok(
                             &result,
                             false,
-                            "暂存列表为空：先填写连接信息并点「保存」暂存",
+                            tr("暂存列表为空：先填写连接信息并点「保存」暂存"),
                         );
                         entity.update(app, |_, cx| cx.notify());
                         return;
@@ -2316,7 +2317,7 @@ impl ConnectionDialogState {
             let sync_from_global: Option<Button> = snapshot_id.map(|gpid| {
                 Button::new("sync-from-global")
                     .secondary()
-                    .label("从全局定义同步")
+                    .label(tr("从全局定义同步"))
                     .on_click({
                         let state = state.clone();
                         let shared = shared.clone();
@@ -2340,7 +2341,7 @@ impl ConnectionDialogState {
                                     let shown =
                                         state.name.read(app).value().trim().to_string();
                                     let shown = if shown.is_empty() {
-                                        "该连接".to_string()
+                                        tr("该连接").to_string()
                                     } else {
                                         shown
                                     };
@@ -2379,11 +2380,11 @@ impl ConnectionDialogState {
                         .child(
                             Button::new("test-connection")
                                 .secondary()
-                                .label("测试连接")
+                                .label(tr("测试连接"))
                                 .loading(busy_now == BusyOp::Test)
                                 .disabled(busy_now != BusyOp::None)
                                 .tooltip_with_action(
-                                    "测试连接（不改动已保存的配置）",
+                                    tr("测试连接（不改动已保存的配置）"),
                                     &TestConnection,
                                     Some("connection-dialog"),
                                 )
@@ -2403,8 +2404,8 @@ impl ConnectionDialogState {
                         .gap_2()
                         .child(
                             Button::new("cancel-connection")
-                                .label("取消")
-                                .tooltip("关闭对话框（Esc）：草稿会保留")
+                                .label(tr("取消"))
+                                .tooltip(tr("关闭对话框（Esc）：草稿会保留"))
                                 .on_click({
                                     let shared = shared.clone();
                                     let state = state.clone();
@@ -2421,11 +2422,11 @@ impl ConnectionDialogState {
                             Button::new("save-connection")
                                 .primary()
                                 .icon(lucide("icons/save.svg"))
-                                .label("保存")
+                                .label(tr("保存"))
                                 .loading(busy_now == BusyOp::Save)
                                 .disabled(busy_now != BusyOp::None)
                                 .tooltip_with_action(
-                                    "保存（仅暂存草稿箱，不写入数据库；保存并退出时统一提交）",
+                                    tr("保存（仅暂存草稿箱，不写入数据库；保存并退出时统一提交）"),
                                     &SaveConnection,
                                     Some("connection-dialog"),
                                 )
@@ -2438,9 +2439,9 @@ impl ConnectionDialogState {
                         )
                         .child(
                             Button::new("save-close-connection")
-                                .label("保存并退出")
+                                .label(tr("保存并退出"))
                                 .disabled(busy_now != BusyOp::None)
-                                .tooltip("批量提交暂存栏全部条目到数据库并清空草稿箱，然后关闭")
+                                .tooltip(tr("批量提交暂存栏全部条目到数据库并清空草稿箱，然后关闭"))
                                 .on_click({
                                     let do_batch_commit = do_batch_commit.clone();
                                     move |_, window, app| {
@@ -2459,7 +2460,7 @@ impl ConnectionDialogState {
             let row_h = dialog_row_height(viewport_rem);
 
             dialog
-                .title(if editing_id.borrow().is_some() { "编辑数据源连接" } else { "新建数据源连接" })
+                .title(if editing_id.borrow().is_some() { tr("编辑数据源连接") } else { tr("新建数据源连接") })
                 .w(cx.theme().font_size * crate::ui::DIALOG_EDIT_WIDTH)
                 .overlay(true)
                 .overlay_closable(true)

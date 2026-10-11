@@ -103,6 +103,7 @@ impl SettingValue {
 pub enum Slot {
     AppearanceThemeMode,
     AppearanceFontSize,
+    AppearanceLocale,
     NavigatorSourceShortCode,
     NavigatorShowTags,
     NavigatorShowScope,
@@ -123,6 +124,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
     Some(match key {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
         "appearance.font_size" => Slot::AppearanceFontSize,
+        "appearance.locale" => Slot::AppearanceLocale,
         "navigator.source_short_code" => Slot::NavigatorSourceShortCode,
         "navigator.show_tags" => Slot::NavigatorShowTags,
         "navigator.show_scope" => Slot::NavigatorShowScope,
@@ -145,6 +147,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
     match slot {
         Slot::AppearanceThemeMode => KindTag::Enum,
         Slot::AppearanceFontSize => KindTag::Number,
+        Slot::AppearanceLocale => KindTag::Enum,
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
         Slot::NavigatorShowTags | Slot::NavigatorShowScope => KindTag::Bool,
         Slot::NavigatorPropertyWidth | Slot::ConnectTimeoutMs => KindTag::Number,
@@ -278,6 +281,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
         consumer: "crates/app/src/main.rs（启动应用 + open_window 同步 rem）+ SettingsService::set_font_size（运行时：Theme::update + Window::set_rem_size）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "appearance.locale",
+        section: "appearance",
+        section_label: "外观",
+        label: "界面语言",
+        hint: "中英双语界面文案即时切换并持久化（未登记词回退中文）",
+        kind: SettingKind::Enum(&[("zh", "中文"), ("en", "English")]),
+        presets: &[],
+        default_json: "\"zh\"",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "SettingsService::set_locale（同步 shared::i18n + refresh_windows）",
         composite: false,
     },
     SettingSpec {
