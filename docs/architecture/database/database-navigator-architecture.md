@@ -382,7 +382,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 1 | ✅ | **V6 多组引用样式 + 显式主组** | 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`database/src/nav_view.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
 | 2 | 🟡 | **V7 `筛选 ▾` facet 弹层** | 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
-| 3 | ✅ | **徽标 hover 卡** | 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
+| 3 | ✅ | **徽标 hover 卡** | 已实现（2026-09-13）：0.7.1 无通用 `.tooltip()` 扩展（0.6.1 核实、0.7.1 复测，`.tooltip()` 只是各组件方法），改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
 | 4 | ✅ | **属性面板的驱动显示名** | 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |
 | 5 | ⬜ | 工作线程串行 | 大预取会延迟用户展开响应；可做优先级 / 双队列。 |
 | 6 | ⬜ | 大 schema 列内联阈值 | >50 列建议改为「在属性面板查看列」而不内联渲染。 |

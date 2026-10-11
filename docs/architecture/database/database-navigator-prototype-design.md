@@ -2,7 +2,7 @@
 
 > 状态：**方案 A 已实现（v5）；v6/v7 降密与徽标语义已实现（V2–V10，2026-09-13）；v8/v9/v11 视觉通道、面板框与结果区并入列表已实现（V11–V12、V15，2026-09-20）** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（开发方案）
 > 参考基准：v1 导航器（`v1/docs/navigator/*`、`v1/frontend/extensions/builtin/database/**`、`v1/prototype/properties-panel-dbeaver.html`）、连接模块、布局、主题
-> 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
+> 技术栈：GPUI（gpui-kit 0.7.1），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
 
 ### v8 修订点（视觉通道与行态统一，2026-09-20）
 
@@ -595,7 +595,7 @@ v5 把「来源标签页」合并成一棵分组树后，**选中与搜索框变
 - **数据来源**：缓存明细优先（`load_node_detail` / `load_table_indexes` / `load_table_foreign_keys`），缺字段按需实时补齐；DDL 由内省拼装。
 - **事实的唯一权威展示位（v6）**：连接的 `数据库类型` / `驱动（显示名 + driver id + driver_kind）` / `归属域` / `地址（host:port/db）` / `运行时状态` 全部在此展示；行内与 tooltip 只是它的快捷摘要，避免同一事实在多处定义（§1.1 规则 2）。
 
-> **当前实现**：属性面板连接项显示 `名称` / `归属域` / `数据库类型` / `驱动`（✅ 已实现 2026-09-13：类型来自目录 `type_id`，驱动显示友好名 + id，如 `PostgreSQL (Official) · postgres_native`）。徽标 hover 卡已接 `gpui-kit` `HoverCard`（300ms 延迟显类型 / 状态 / 驱动；0.6.1 无通用 `.tooltip()` 扩展）。
+> **当前实现**：属性面板连接项显示 `名称` / `归属域` / `数据库类型` / `驱动`（✅ 已实现 2026-09-13：类型来自目录 `type_id`，驱动显示友好名 + id，如 `PostgreSQL (Official) · postgres_native`）。徽标 hover 卡已接 `gpui-kit` `HoverCard`（300ms 延迟显类型 / 状态 / 驱动；0.7.1 无通用 `.tooltip()` 扩展，0.6.1 核实 / 0.7.1 复测）。
 
 落点：`crates/database/src/property_panel.rs`（注册表 + 字段组装）+ 编辑区右侧面板视图（`crates/workbench`）。
 

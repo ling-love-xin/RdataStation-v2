@@ -1,7 +1,7 @@
 # 数据源连接模块 · 设计架构与数据流（M3）
 
 > 状态：Phase A/B + Phase C（C1–C3、C5–C18）已实现；C4（模板导入导出）**能力就绪、UI 入口暂缓** ；已知缺口见 §14 · 2026-09-12
-> 版本声明（2026-10-02）：本文历史决策中的「gpui-kit 0.6 / 0.6.1」均为**当时锁定版本**的陈述；组件库现已升级 **0.7.0**（差异见 `docs/architecture/ui/gpui-kit-0.7-migration.md`）。历史能力判断（如 #11 的 pinned header 需核实滚动容器、#B 的拖拽支持）如需引用，请先对照 0.7.0 源码复核。
+> 版本声明（2026-10-02，2026-10-11 更新）：本文历史决策中的「gpui-kit 0.6 / 0.6.1」均为**当时锁定版本**的陈述；组件库现已升级 **0.7.1**（差异见 `docs/architecture/ui/gpui-kit-0.7-migration.md`）。历史能力判断（如 #11 的 pinned header 需核实滚动容器、#B 的拖拽支持）如需引用，请先对照 0.7.1 源码复核。
 > 关联：`connection-prototype-design.md`（原型设计，含 §2.2 暂存列表规格）、`connection-dialog-prototype.html`（交互稿）、`connection-dev-plan.md`（开发方案与逐轮记录）、`../../theme/ui-constraints.md`（尺寸与控件约束）
 > 读者：参与本模块维护 / 扩展的开发者；也用于排查「入口没反应」「保存后列表没刷新」这类跨层问题
 

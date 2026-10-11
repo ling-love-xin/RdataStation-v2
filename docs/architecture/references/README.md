@@ -159,7 +159,7 @@
 | **宿主崩溃时远程进程谁收摊**：dbflux 只管"优雅退出时 kill 自己拉起的"，崩溃这条没写 | `docs/DRIVER_RPC_PROTOCOL.md` §Process lifecycle and cleanup |
 | **socket 传输没有 stdin EOF 这类天然心跳**：服务端不容易知道宿主已死 | 同上（我们的 stdin EOF 约定正好补这一格） |
 | **GPL 血统会传染**：zqlz 的编辑器疑似 Zed 移植（GPL），抄结构可以、抄代码会把我们拖成 GPL | zqlz `LICENSE` = GPL-3.0-or-later + `zqlz-text-editor` 目录结构 |
-| **本地 fork 组件库是双刃剑**：sqlab 直接 fork `gpui-component` 以便随手改（`AGENTS.md` 明说）；我们锁 0.6.1 不动 —— 升级干净但改不动 | sqlab `AGENTS.md` |
+| **本地 fork 组件库是双刃剑**：sqlab 直接 fork `gpui-component` 以便随手改（`AGENTS.md` 明说）；我们锁 0.7.1 + vendor（`vendor/gpui-component/`，仅保留 tab_panel title_suffix 补丁）——升级干净，需要动库时走 vendor 补丁而非整仓 fork | sqlab `AGENTS.md` |
 | **"极简设置"也是产品选择**：sqlab 明确不做 200 项设置菜单；我们设置页有"准入五条 + 退役清单"，方向一致 | sqlab README |
 
 ## 4. 从这些参考里挑出的可落地项

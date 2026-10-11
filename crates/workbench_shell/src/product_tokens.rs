@@ -1,7 +1,7 @@
 //! 产品语义 token（对齐 `rds-theme` skill §「产品语义 token 注册与消费」）。
 //!
-//! 为什么需要独立设施：gpui-kit 0.6 的语义 token 面（`SemanticThemeTokens` / `ColorTokens`）
-//! 是**固定角色集**（background / surface / primary / …… 共 18 个），无法承载本产品的特有
+//! 为什么需要独立设施：gpui-kit 0.7.1 的语义 token 面（`SemanticThemeTokens` / `ColorTokens`）
+//! 是**固定角色集**（background / surface / primary / …… 共 18 个；0.6.1 → 0.7.1 角色数不变，2026-10-11 复测），无法承载本产品的特有
 //! 角色（活动栏背景、标题栏挖空槽、Quick Open 分组头、搜索命中底…）。按 rds-theme 约定，
 //! 这类角色落在独立资产 `assets/themes/product-tokens.json`，由本模块加载、按明暗模式解析，
 //! 并以 GPUI global 提供给视图消费，保证**视图代码零裸色值**。

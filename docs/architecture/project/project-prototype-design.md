@@ -1,7 +1,7 @@
 # 项目管理模块 · 原型设计（项目生命周期 · CRUD）
 
 > 状态：**已实现**（原型 v2；代码见 `project-dev-plan.md` §0） · 关联文件：`project-prototype.html`（可交互原型）、`project-dev-plan.md`（开发方案）
-> 技术栈：gpui-kit 0.6（五段布局见 `layout/layout-design.md`，Tauri 差异：标题栏挖空项目槽）
+> 技术栈：gpui-kit 0.7.1（五段布局见 `layout/layout-design.md`，Tauri 差异：标题栏挖空项目槽）
 > 前置：v1 蓝本 `v1/backend/src/commands/project_commands.rs`（创建/打开/校验/重命名/删除/最近项目）；v2 后端 `crates/project`（`ProjectStore` / `ProjectManager` / `models.rs`）与 P0 会话 `workbench/src/services/project_session.rs` 已就绪
 > 关联文档：`overview.md`（M1 双层数据架构）、`connection/connection-dev-plan.md`（作用域 `G_/P_/GP_`）、`scratchpad/scratchpad-prototype-design.md`（草稿箱根 = 项目目录）
 >

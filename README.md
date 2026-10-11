@@ -14,7 +14,7 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.0-4B8BBE)](https://gpui-kit.com)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.1-4B8BBE)](https://gpui-kit.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Crates](https://img.shields.io/badge/workspace-16%20crates-6E4AFF)](#架构)
@@ -340,7 +340,7 @@ RdataStation-v2/
 | 领域 | 选型 | 用途 |
 | --- | --- | --- |
 | 语言 | Rust · edition 2024 | 全栈（前端也是 Rust，无 JS 运行时） |
-| UI | **GPUI-kit 0.7.0** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
+| UI | **GPUI-kit 0.7.1** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
 | 分析引擎 | **DuckDB 1.5.5**（动态链接，crate `1.10505.0`） | 二次分析 / 联邦 / 画像 / 造数 / 快照 |
 | 元数据库 | **rusqlite 0.40**（bundled） | 事务元数据 + 三层缓存的 L2 |
 | 驱动 | sqlx 0.9（MySQL / PostgreSQL）· `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 个驱动，2 个引擎各两条实现（sqlx 版与官方客户端版） |

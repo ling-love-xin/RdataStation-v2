@@ -1164,7 +1164,7 @@ impl NavView {
             badge.into_any_element()
         };
 
-        // 徽标 hover 卡：类型 / 状态 / 驱动的完整事实（gpui-kit 0.6.1 无通用 `.tooltip` 扩展，
+        // 徽标 hover 卡：类型 / 状态 / 驱动的完整事实（gpui-kit 0.7.1 无通用 `.tooltip` 扩展，
         // 故用 `HoverCard` 承载；行内仍只显颜色 + 形状）。
         let badge = {
             let type_label = nav_type_label(

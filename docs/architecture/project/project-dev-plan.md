@@ -50,7 +50,7 @@
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
-| **C2 解阻** | 核查 **gpui-component 0.7.0**（已锁定 0.7.0）：`PopupMenuItem::Item` 带 `action` 字段，`PopupMenu::render_key_binding` 经 `Kbd::binding_for_action_in` / `global_binding_for_action` **自动渲染快捷键**（0.5.1 已存在该能力）。C2「菜单快捷键展示」阻塞解除，可从暂缓转待办（给 `project_menu_entries` 挂 action + 注册 key binding 即显式显示快捷键） | 组件源码 `gpui-component/src/menu/popup_menu.rs`；实施待排期 |
+| **C2 解阻** | 核查 **gpui-component 0.7.1**（2026-10-11 复核 0.7.1 同样支持）：`PopupMenuItem::Item` 带 `action` 字段，`PopupMenu::render_key_binding` 经 `Kbd::binding_for_action_in` / `global_binding_for_action` **自动渲染快捷键**（0.5.1 已存在该能力）。C2「菜单快捷键展示」阻塞解除，可从暂缓转待办（给 `project_menu_entries` 挂 action + 注册 key binding 即显式显示快捷键） | 组件源码 `gpui-component/src/menu/popup_menu.rs`；实施待排期 |
 | 死代码删除 | 删 `ProjectManager`（整 struct + Default）、`to_project`、`load_connections` / `load_queries`（stub）、`ProjectStore::connections` / `queries` 缓存字段；同步 `lib.rs` re-export、`store.rs::mod tests::test_project_manager`、集成测试 `manager_tracks_current_and_recent`；`Project.connections` / `queries` 与 `ConnectionRef` / `QueryRef` **保留为 DuckLake 三期预留** | `crates/project/src/{store.rs,lib.rs}`、`tests/project_store.rs` |
 | 数据字典 | 新增 `project-data-dictionary.md`：`.RSmeta` 目录树、`project.db`（project / connections / query_history / project_settings / workbench_state / 插件表 / project_versions）、`project.json` schema（ProjectInfo）、`global.db.project_info`（001+019） | 新建 `project-data-dictionary.md` |
 | 验证 | `cargo check -p rds-project` 零告警；测试 42 + 名册 1 + 存储 3 全过（较上轮 43/1/4 减 2 = 删除的两个死代码测试） | — |
@@ -107,7 +107,7 @@
 
 > 键盘激活的坑：gpui 元素在 **KeyUp** 上派发 `ClickEvent::Keyboard`；窗口测试用 `simulate_keystrokes("enter")`（只发 KeyDown）不会触发点击，必须 `simulate_event(KeyDownEvent)` + `simulate_event(KeyUpEvent)` 各发一次。
 
-> C2（菜单快捷键展示）**暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 没有 shortcut 槽位（`gpui-component-0.6.1/src/menu/popup_menu.rs` 无该字段 / 方法），自绘快捷键又违反「用语义组件」的指南，等组件支持再上。
+> C2（菜单快捷键展示）**暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 没有 shortcut 槽位（`gpui-component-0.6.1/src/menu/popup_menu.rs` 无该字段 / 方法），自绘快捷键又违反「用语义组件」的指南，等组件支持再上。**（2026-10-02 更新：0.7.0 起已解除阻塞，见 C2 解阻行；此条为 0.6.1 时代的历史记录）**
 
 ### 2026-09-14 — 补齐模块缺口：描述编辑 / 状态筛选 / 空目录询问 / 清理 / 使用手册
 
@@ -380,7 +380,7 @@
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| C2 | 菜单快捷键展示 | **暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 无 shortcut 槽位（0.6.1 源码已查证）；仅能在文档里说明快捷键 |
+| C2 | 菜单快捷键展示 | **暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 无 shortcut 槽位（0.6.1 源码已查证）；仅能在文档里说明快捷键。**（2026-10-02 更新：0.7.0 起已支持，见上文 C2 解阻行；此条为 0.6.1 时代历史记录）** |
 
 ### D. 范围外（原型 §12，已确认不做）
 

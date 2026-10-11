@@ -4,7 +4,7 @@
 > 关联：`quick-open-showcase.md` / `quick-open-showcase.html`（**一页看懂**：可贴版与视觉版，先看它最快）、`quick-open-prototype.html`（交互稿，**示意稿非权威**；9 场景：名称 / 全文 / 同名消歧 / 默认混排 / 命令 / 单字符门槛 / 搜索中 / 无匹配 / 未打开项目）、`quick-open-dev-plan.md`（**开发方案与进度**）、`../layout/layout-design.md` §2.1 / §3.3（入口与交互承诺）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色与语义 token）、`../database/database-navigator-prototype-design.md`（搜索语法，避免两套前缀打架）、`../settings/settings-prototype-design.md`（同为宿主弹层，互斥规则）
 > 现状对照：实现已在 `crates/workbench/src/view.rs`（`render_title_bar` / `render_quick_open` / `quick_open_results`）；本文 §13 逐条列出与现状的差异，**本轮不改代码**
 > 落地进度（2026-09-19）：Phase 0 两刀（`List` 化 + 键盘通道 + 打开即聚焦 + 命中高亮；元数据名称档：防抖异步 + 过期批次丢弃）与 Phase 1 四刀（引擎侧 FTS 写读接线 + 迁移 011；`#` 全文档 UI + 截断提示 + 命令目录外提；名称档两段式提速；**拿掉 `LENGTH` 排序键 + 分类索引序直出 + 迁移 013**）已落地，进度与任务表见 `quick-open-dev-plan.md` §0；§3 行解剖里的「面包屑单独一行」因 `List` 同行同高约束暂缓（改用单行次级信息）。
-> 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
+> 技术栈：gpui-kit 0.7.1（2026-10-11 由 0.6.1 升入）；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
 
 ## 1. 定位与边界
 
@@ -41,7 +41,7 @@
 | 入口 | 标题栏居中 20 × 1.625 rem（320 × 26 px）；点击或 `Ctrl+P` 唤起 / 关闭 | `ui.rs`：`QUICK_OPEN_ENTRY_*` |
 | 面板 | 35 rem 宽（560 px）、距窗口顶 2.625 rem（42 px）、最大高 26.25 rem（420 px） | `ui.rs`：`QUICK_OPEN_PANEL_*` |
 | 配色 | 面板 `popover` + `border` 描边；组头 `quick_open.group.header` 语义 token；选中 `list_active`；命中底色 `search.match.background` | `product_tokens.rs` |
-| 组件 | `Input`（输入）、`list::{List, ListState, ListDelegate}`（结果区）、`Icon`（行图标） | gpui-kit 0.6.1 组件表 |
+| 组件 | `Input`（输入）、`list::{List, ListState, ListDelegate}`（结果区）、`Icon`（行图标） | gpui-kit 0.7.1 组件表 |
 | 契约 | 零裸色值 / 零裸 `px`；新增结构尺寸先登 `ui.rs`；本视图纳入 `ui_contract` 扫描 | `ui-design-spec.md` §1 |
 
 ## 3. 入口（标题栏）

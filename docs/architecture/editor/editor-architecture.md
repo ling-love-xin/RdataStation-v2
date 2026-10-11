@@ -664,12 +664,12 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | 上游 / 平台 | 现象（我们的边界） | 依据 |
 | --- | --- | --- |
-| `gpui-base` 0.6.1 · 按键派发 | 内核先拿到按键且 listener 命中后 `propagate_event = false`，外层 binding **收不到** → 查找 / 替换只能跟随内核（应用层零自建） | §12 #24 |
-| `gpui-base` 0.6.1 · 折叠 | 候选的**唯一来源是 highlighter**（`state.rs:3604`），候选平移同样依赖它（`:3591/3611`）→ 候选与刷新都是我们的责任 | §6 D26 · `editor-dev-plan.md` §0 2026-09-21（B17） |
-| `gpui-base` 0.6.1 · `Tab` | 挂不上 tooltip（`ComponentTooltip` 只给 `StatefulInteractiveElement`）→ 血缘摘要落在**结果工具栏左段**而不是标签 hover | §12 #32 |
-| `gpui-component` 0.6.1 · Dock | 没有「关闭前否决」钩子（`Panel::closable(cx)` 是唯一闸门，静态许可）；也没有每标签 ✕（只有标签栏 `⋯` 里的 `Dock.Close`）→ 关闭语义走草稿兜底 + `Ctrl+W` 三态确认 | §12 #1 / #18 · §13 #15 |
-| `gpui-component` 0.6.1 · 面板生命周期 | 面板不能在自身 `update` 里让 Dock 移除自己 → 关闭由**宿主**发起 | §12 #23 |
-| `gpui-component` 0.6.1 · 对话框 | 需 `Root::render_dialog_layer` 才进元素树（否则 panic / 看不见） | §12 #29 |
+| `gpui-base` 0.7.1 · 按键派发 | 内核先拿到按键且 listener 命中后 `propagate_event = false`，外层 binding **收不到** → 查找 / 替换只能跟随内核（应用层零自建） | §12 #24（0.6.1 核实，0.7.1 未变） |
+| `gpui-base` 0.7.1 · 折叠 | 候选的**唯一来源是 highlighter**（`state.rs:3604`），候选平移同样依赖它（`:3591/3611`）→ 候选与刷新都是我们的责任 | §6 D26 · `editor-dev-plan.md` §0 2026-09-21（B17） |
+| `gpui-base` 0.7.1 · `Tab` | 挂不上 tooltip（`ComponentTooltip` 只给 `StatefulInteractiveElement`）→ 血缘摘要落在**结果工具栏左段**而不是标签 hover | §12 #32 |
+| `gpui-component` 0.7.1 · Dock | 没有「关闭前否决」钩子（`Panel::closable(cx)` 是唯一闸门，静态许可）；也没有每标签 ✕（只有标签栏 `⋯` 里的 `Dock.Close`）→ 关闭语义走草稿兜底 + `Ctrl+W` 三态确认 | §12 #1 / #18 · §13 #15 |
+| `gpui-component` 0.7.1 · 面板生命周期 | 面板不能在自身 `update` 里让 Dock 移除自己 → 关闭由**宿主**发起 | §12 #23 |
+| `gpui-component` 0.7.1 · 对话框 | **0.6.1 需** `Root::render_dialog_layer` 才进元素树；**0.7.0 起 Root 自动挂载 dialog 层**（`WindowState::dialog_layer`，本项目已移除 14 处手动挂载，见 `gpui-kit-0.7-migration.md` §5） | §12 #29（0.7.0 起订正） |
 | GPUI 测试台 | headless 下 `debug_bounds` 坐标与鼠标命中**对不上** → 对话框按钮不做「真点击」，改断言渲染 + 驱动落地入口 | §12 #29 |
 | GPUI 平台 · `rfd` | 同步文件对话框**阻塞 UI 线程**（模态期间事件循环停摆）→ 1a 接受；改异步只动那两个函数 + 加「回来时文档是否还在」的竞态处理 | §12 #30 |
 | sqlglot | 整篇 `transpile` 对脚本**静默丢第二条及以后**（单条接口也只吃单条）→ 一律「先切分再逐条 + 原位回填」 | §12 #19 |

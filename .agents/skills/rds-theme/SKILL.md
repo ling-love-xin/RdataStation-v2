@@ -20,7 +20,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 ## 取色规则（硬约束）
 
-- 标准字段：`theme.colors.<字段>`（`title_bar` / `title_bar_border` / `sidebar` / `sidebar_accent` / `border` / `background` / `popover` / `overlay` / `primary` 等，字段名对齐 gpui-kit 0.7.0 `ThemeColor`——0.6.1 → 0.7.0 字段集无变化，2026-10-02 实测）
+- 标准字段：`theme.colors.<字段>`（`title_bar` / `title_bar_border` / `sidebar` / `sidebar_accent` / `border` / `background` / `popover` / `overlay` / `primary` 等，字段名对齐 gpui-kit 0.7.1 `ThemeColor`——0.6.1 → 0.7.0 字段集无变化（2026-10-02 实测）、0.7.0 → 0.7.1 亦无变化（141 字段逐项对比，2026-10-11 实测））
 - 无专用字段的产品角色 → 产品语义 token（代码零裸色值）：
 
 | 产品角色 | Dark | Light | 消费方 |
@@ -41,7 +41,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 ## 产品语义 token 消费（已落地）
 
-0.6.1 / 0.7.0 的语义面（`SemanticThemeTokens` / `ColorTokens`）是**固定 18 角色**（`ColorTokens` 两版均 18 项；`SemanticThemeTokens` 23 项，2026-10-02 实测），装不下上表产品角色；因此落到独立资产 + 独立加载设施：
+0.6.1 / 0.7.0 / 0.7.1 的语义面（`SemanticThemeTokens` / `ColorTokens`）是**固定 18 角色**（`ColorTokens` 0.7.0/0.7.1 均 18 项；`SemanticThemeTokens` 23 项，2026-10-02 实测 0.7.0、2026-10-11 复核 0.7.1），装不下上表产品角色；因此落到独立资产 + 独立加载设施：
 
 - **资产**：`assets/themes/product-tokens.json`（`light` / `dark` 各一映射，键名 = 上表角色名，值为 hex；缺失角色回退语义最接近的标准字段）
 - **注册**：`crates/workbench_shell/src/product_tokens.rs`——`ProductTokenSet: Global`（`apply_from_str` / `apply_from_path` / `get(cx)`）；app 启动与主题目录热更新时调用（`crates/app/src/main.rs::attach_product_tokens`）。`settings` 侧 `pub use workbench_shell::product_tokens;` 重导，`settings::product_tokens::*` 路径不变

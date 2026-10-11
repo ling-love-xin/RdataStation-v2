@@ -29,7 +29,7 @@ description: RdataStation 工作台五段布局实现规格：标题栏/左右�
 - 激活图标 2px 侧条 + 亮色（activity_bar 语义 token，见 rds-theme skill）
 - 点击行为：该侧收起 → 展开并切换；展开且非当前 → 切换 panel；展开且当前 → 收起（toggle）
 
-## 边栏三模式（Dock API，gpui-kit 0.7.0）
+## 边栏三模式（Dock API，gpui-kit 0.7.1）
 
 | 模式 | API |
 | --- | --- |

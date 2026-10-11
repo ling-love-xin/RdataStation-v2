@@ -53,7 +53,7 @@ pub(super) fn parse_nav_search(raw: &str) -> NavSearchFacets {
     out
 }
 
-/// 徽标 hover 卡：类型 / 状态 / 驱动（gpui-kit 0.6.1 无通用 `.tooltip` 扩展，故用 `HoverCard`）。
+/// 徽标 hover 卡：类型 / 状态 / 驱动（gpui-kit 0.7.1 无通用 `.tooltip` 扩展，故用 `HoverCard`）。
 /// 归属域列 tooltip（原型设计 §2.3 要求）：把 `P` / `G` / `GP` 展开成一句人话。
 ///
 /// 为何必须有：短码是**系统事实**（记录存在哪个域、谁能看到），但两个字母对用户不是自解释的；

@@ -3,7 +3,7 @@
 > 状态：**模块根 + 项目级回收站 + 面板自身闭环 + 导入/引用/右键菜单/键盘导航 + 内容搜索（高亮/替换）+ 新建模板 + 文件夹递归复制 + 虚拟列表/空态 已落地**（2026-09-15） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 参考基准：v1 实现（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）与设计（`v1/docs/backend/SCRATCHPAD_DESIGN.md`、`SCRATCHPAD_SCHEMA.md`、`v1/docs/frontend/SCRATCHPAD.md`）
 > 布局服从 `docs/architecture/layout/layout-design.md`（五段布局，左侧 Dock 240px，`LeftPanel::Draft`）；配色服从 `docs/architecture/theme/theme-design.md`（RDS Light/Dark，`assets/themes/rds-theme.json`）
-> 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
+> 技术栈：GPUI（gpui-kit 0.7.1），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
 
 ## 1. 设计基准与 v2 语义变更
 

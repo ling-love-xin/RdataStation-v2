@@ -45,7 +45,7 @@
 
 | 项     | 内容                                                                                                                                                                          |
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 桌面框架  | gpui 2.x（自定义 Window/Dialog 宿主）；组件库 gpui-kit 0.7（TabBar/Switch/Input/Button/List）                                                                                            |
+| 桌面框架  | gpui 2.x（自定义 Window/Dialog 宿主）；组件库 gpui-kit 0.7.1（TabBar/Switch/Input/Button/List）                                                                                            |
 | 服务层   | `DataSourceService`（workbench）+ `connection` crate（传输 / 协议链 / URL）+ `engine` crate（持久化 / 驱动 / 缓存）                                                                           |
 | 数据库引擎 | SQLite（`rusqlite`，全局 / 项目元数据）、DuckDB 1.5.5（分析引擎 + 联邦 Secret，`DUCKDB_LIB_DIR=third_party/duckdb/1.5.5`）、mysql/postgres 客户端库                                                  |
 | 凭据加密  | AES-256-GCM，`AES:` 前缀幂等（读路径解密 / 列表脱敏 / 存量迁移）                                                                                                                                |

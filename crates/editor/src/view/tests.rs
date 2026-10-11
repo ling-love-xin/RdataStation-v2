@@ -3357,7 +3357,7 @@ fn the_result_grid_rows_are_compact(cx: &mut TestAppContext) {
 
 /// 结果网格表头的排序入口**真点击**：箭头在表头右端，不是表头正文。
 ///
-/// 与 Mock 预览表同一条口径：组件 0.6.1 的 `on_col_head_click` 只做**列选择**（本表关掉了），
+/// 与 Mock 预览表同一条口径：组件 0.7.1 的 `on_col_head_click` 只做**列选择**（本表关掉了），
 /// 排序挂在 `render_sort_icon` 上。表头现在由 `render_th` 自画（截断 + 悬停全文 + 登记坐标），
 /// 本用例同时看住「自画之后箭头还在」——箭头是组件画在自己那一层的，接管表头容易碰坏它。
 #[gpui_kit::test]

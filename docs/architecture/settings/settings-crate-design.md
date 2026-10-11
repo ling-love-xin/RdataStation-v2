@@ -43,7 +43,7 @@ pub struct Settings {
 ```
 
 - 每节独立结构体，`serde::Serialize/Deserialize`，缺失字段用默认值（向前兼容）
-- 主题模式枚举：`ThemeMode { Light, Dark }`（与 gpui-kit 0.6 对齐）
+- 主题模式枚举：`ThemeMode { Light, Dark }`（与 gpui-kit 0.7.1 对齐）
 
 ## 4. 持久化
 

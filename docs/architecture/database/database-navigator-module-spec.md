@@ -35,7 +35,7 @@ M4 数据源管理 / 数据库导航：把已建立的连接（M3 产出）变�
 
 ## 2. 技术栈与依赖
 
-- **表现层**：GPUI + `gpui-kit` 0.7.0（树行原语 `workbench_shell::tree`：`active_bar` / `disclosure_icon` / `indent_spacer` / `RowHeight`）；零裸 px / 裸色值（`ui_contract` 扫描 `panels/`）。
+- **表现层**：GPUI + `gpui-kit` 0.7.1（树行原语 `workbench_shell::tree`：`active_bar` / `disclosure_icon` / `indent_spacer` / `RowHeight`）；零裸 px / 裸色值（`ui_contract` 扫描 `panels/`）。
 - **服务层**：`crates/database`（rds-database，Feature crate）——`navigator_service`（内省 + 缓存编排）、`nav_jobs`（后台单工作线程）、`metadata_service`（内省取数）、`property_panel`（属性生产者）、`table_data`（数据预览分页）。
 - **数据层**：`engine`（驱动 + L2 持久化 + `ConnectionOrgStore` 分组 / 标签）、`shared`（`NavSource` 归属域等模型）、`paths`（运行时数据路径，`RDS_HOME`）。
 - **依赖方向（硬约束）**：`database → engine / shared / gpui-kit / workbench_shell / property`；不反向依赖 workbench `panels/`（协作走 command / event / `Shared` 桥）。

@@ -1,7 +1,7 @@
 # 洞察模块（M8）· 原型设计
 
 > 状态：**设计定稿（原型 v1，2026-09-15）**，界面已落地（Phase 1–5；三入口接线与**文件类数据源**见开发方案 §0 的 2026-09-18 批次）· 关联文件：`insight-prototype.html`（可交互原型）、`insight-dev-plan.md`（开发方案）
-> 技术栈：gpui-kit 0.6（五段布局见 `layout/layout-design.md`；右 Dock 起步宽 17.5rem = 280px）
+> 技术栈：gpui-kit 0.7.1（五段布局见 `layout/layout-design.md`；右 Dock 起步宽 17.5rem = 280px）
 > 前置：v1 前端蓝本 `v1/frontend/extensions/builtin/workbench/ui/components/panels/`（`InsightStatsSection` / `QualityScoreCard` / `TableProfileView` / `SchemaInsightPanel` / `InsightHistoryTab` / `ColumnInsightsPanel` / `MultiColumnView`）+ `insight-store.ts`
 > 关联文档：`overview.md`（M8 定位）、`ui/ui-design-spec.md`（尺寸与色值规范）、`../connection/connection-prototype-design.md`（作用域三态参照）
 >

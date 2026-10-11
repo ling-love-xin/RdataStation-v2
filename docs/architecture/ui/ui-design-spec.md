@@ -2,7 +2,7 @@
 
 > 状态：已落地 · 关联代码：`crates/workbench_shell/src/ui.rs`（尺寸常量，经 `crate::ui` 重导）、`assets/themes/rds-theme.json`（颜色 token）
 > 关联设计：`docs/architecture/layout/layout-design.md`（布局）、`docs/architecture/theme/theme-design.md`（配色）
-> 关联迁移：`docs/architecture/ui/gpui-kit-0.7-migration.md`（GPUI-kit 0.6.1 → 0.7.0 差异实测，多轨开发必读）
+> 关联迁移：`docs/architecture/ui/gpui-kit-0.7-migration.md`（GPUI-kit 0.6.1 → 0.7.0 差异实测 + 0.7.0 → 0.7.1 追加段，多轨开发必读）
 > 参考：navop（GPUI 同栈项目）的「集中常量 + 就近常量 + 布局契约」实践
 
 ## 1. 目的

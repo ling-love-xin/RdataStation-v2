@@ -1,6 +1,6 @@
 //! 数据源连接对话框（Phase B：完整 Tab + 管理引用覆盖层）。
 //!
-//! 基于 gpui-kit 0.6.1 组件（能力按 crates.io 0.6.1 源码核对，路径见
+//! 基于 gpui-kit 0.7.1 组件（能力按 crates.io 0.7.1 源码核对，路径见
 //! `.agents/skills/gpui-kit-dev/SKILL.md`「查 API」；**不要**用本地 main 分支源码当签名参考）：
 //! - 模态层：`window.open_dialog`（WorkbenchView 挂载 `Root::render_dialog_layer`）；管理器用嵌套 Dialog；
 //! - 驱动/认证引用/网络引用/环境：`Select`（SearchableVec）；表单：`Form + Field + Input`；
@@ -30,7 +30,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
-// Tab 条 / 分段控件 / 开关：gpui-kit 0.6.1 组件（`Sizable` 提供 `.with_size(Size::…)`）。
+// Tab 条 / 分段控件 / 开关：gpui-kit 0.7.1 组件（`Sizable` 提供 `.with_size(Size::…)`）。
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size, Theme, WindowExt};

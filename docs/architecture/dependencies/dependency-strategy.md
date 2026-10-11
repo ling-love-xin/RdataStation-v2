@@ -29,7 +29,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 | 依赖 | 约束 | 原因 |
 | --- | --- | --- |
-| `gpui-kit` | `0.6.1` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.6.1）。写法是 caret 约束，实际生效版本看 `Cargo.lock` |
+| `gpui-kit` | `0.7.1` | 与 gpui 版本强绑定：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` **必须同版本**（门面与内部错配会出问题），随 GPUI-kit 发布节奏整套升（当前 0.7.1，2026-10-11 由 0.7.0 升入，见 `docs/architecture/ui/gpui-kit-0.7-migration.md`）。写法是 caret 约束，实际生效版本看 `Cargo.lock` |
 | `specta` | `=2.0.0-rc.25` | rc 阶段，11 个 crate 共用；升级需同步核对类型生成链路 |
 | `sqlglot-rust` | `=0.10.29` | SQL 转译/生成行为对版本敏感（业务关键，见 §5），升级需跑 SQL 回归 |
 | `arrow` | `58.4.0` | 主版本跟随 `duckdb`：两端之间传 `RecordBatch`，必须是同一 arrow，不能单独升 |
@@ -161,7 +161,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | R1 内部 crate 路径唯一入口 | 同上（`paths` / `shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
 | R2 crate 内写法 | `crates/*/Cargo.toml`（16 个成员） |
 | R3 版本取值来自解析结果 | `Cargo.lock` ↔ 根表版本号 |
-| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.6.1"` |
+| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.7.1"` |
 | R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/engine/src/sql/`） |
 | R4 例外：arrow 跟随 duckdb | 同上（`arrow` / `duckdb` 条目） |
 | v1 目录不参与构建 | `Cargo.toml` → `workspace.exclude` |

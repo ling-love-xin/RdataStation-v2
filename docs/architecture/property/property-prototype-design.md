@@ -1,7 +1,7 @@
 # 属性面板模块 · 原型设计（右侧停靠面板，DBeaver 式 tab 页签）
 
 > 状态：**已实现（2026-10-03，抽取 rds-property 后首版；同日补「数据」页签）** · 关联文件：`property-module-spec.md`（模块规格）、`property-prototype.html`（可交互原型）、`property-test-report-2026-10-03.md`（真机验证报告）
-> 参考基准：DBeaver 对象属性（Entity Editor）多页签形态；配色服从 `docs/architecture/theme/theme-design.md`（rds-theme.json 语义 token）；技术栈 GPUI（gpui-kit 0.7.0 `TabBar::underline`），代码零裸 hex / 裸 px
+> 参考基准：DBeaver 对象属性（Entity Editor）多页签形态；配色服从 `docs/architecture/theme/theme-design.md`（rds-theme.json 语义 token）；技术栈 GPUI（gpui-kit 0.7.1 `TabBar::underline`），代码零裸 hex / 裸 px
 > 设计要点：**描述驱动** —— 页签集合是注册表数据（`PropertyRegistry`），不是渲染分支；暂不支持的能力（权限 / 依赖）**先绘制、置灰标注**，不静默消失；**表数据预览**（「数据」页签）为 M4 表数据能力首期（分页抓取，只读，与结果集只共享网格渲染层）
 
 ## 1. 设计基准

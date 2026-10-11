@@ -48,7 +48,7 @@ use rds_analytics_resource::dialogs::version::{
 };
 use rds_analytics_resource::resource_view::GroupOption;
 
-/// 窗口根：组件库的 `Root`（`open_dialog` 依赖它；0.7.0 起 dialog 层由 Root 自动挂载）。
+/// 窗口根：组件库的 `Root`（`open_dialog` 依赖它；0.7.1 起 dialog 层由 Root 自动挂载）。
 struct DialogHarness;
 
 impl Render for DialogHarness {

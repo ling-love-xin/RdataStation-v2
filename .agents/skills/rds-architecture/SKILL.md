@@ -39,7 +39,7 @@ workbench_shell ───► gpui-kit / paths（外壳 crate：不得依赖任�
 
 | 层 | 内容 | 来源 | 消费方式 |
 | --- | --- | --- | --- |
-| 组件 / 主题 | `gpui-kit` 0.7.0（TabBar / Switch / Input / List / Button / Dock / …，65 个组件模块） | crates.io 锁定 0.7.0 | `gpui_kit::*` / `gpui_kit::component::*` / `gpui_kit::base::*`（API 与差异见 `gpui-kit-dev` skill、`docs/architecture/ui/gpui-kit-0.7-migration.md`） |
+| 组件 / 主题 | `gpui-kit` 0.7.1（TabBar / Switch / Input / List / Button / Dock / …，68 个组件模块，2026-10-11 实测 0.7.1 `lib.rs`） | 本地 vendor（`vendor/gpui-component/`，0.7.1 + tab_panel patch） | `gpui_kit::*` / `gpui_kit::component::*` / `gpui_kit::base::*`（API 与差异见 `gpui-kit-dev` skill、`docs/architecture/ui/gpui-kit-0.7-migration.md`） |
 | 产品语义层 | `workbench_shell`：`ui.rs` 尺寸常量（`workbench_shell::ui::*`）、`product_tokens` 语义色、`tree` 行级原语（`active_bar` / `disclosure_icon` / `indent_spacer` / `RowHeight`） | 外壳 crate（**不得依赖任何特性 crate**） | Feature 直接 `workbench_shell::ui::*` 等；workbench 内沿用 `crate::ui::*` 重导 |
 | 业务视图 | 各 Feature 自己的 view / model / service / command | 所在 Feature crate | 由 workbench 装配，**Feature 不反向依赖 workbench 的 `panels/` / `components/` / `view.rs`** |
 

@@ -421,18 +421,18 @@ CARGO_TARGET_DIR=target-v8 cargo build --release -p rds-app
 | 问题 | 答案 |
 | --- | --- |
 | 是同一个项目吗 | **是**。`gpui-wry` 的 `repository` 字段 = `github.com/longbridge/gpui-kit/tree/main/crates/webview` —— 与 `gpui-kit` **同仓**（0.5.0 时代该路径挂在 `longbridge/gpui-component` 下，改名后并入 gpui-kit；最早一版发布于 2025-12-08） |
-| 是同一个 crate 吗 | **不是**。`gpui-kit 0.6.1` 的依赖只有 `gpui-base` / `gpui-component`(可选) / `gpui-kit-assets`(可选) / `gpui-pre` / `gpui-pre-platform` —— **没有 `gpui-wry`**。故「用 gpui-kit 就自带 webview」**不成立**，要另加一行依赖 |
-| 会是两套 GUI 世界吗 | **不会**。两者都依赖 `gpui-pre`（本仓 lock 是 `0.3.4`）→ `WebViewElement` 直接进现有视图的布局，类型系统同源 |
+| 是同一个 crate 吗 | **不是**。`gpui-kit 0.7.1` 的依赖只有 `gpui-pre`（=0.3.8）/ `gpui-base` / `gpui-component`(可选) / `gpui-kit-assets`(可选) / `gpui-pre-platform`(平台层) —— **没有 `gpui-wry`**（0.7.1 实测，2026-10-11）。故「用 gpui-kit 就自带 webview」**不成立**，要另加一行依赖 |
+| 会是两套 GUI 世界吗 | **不会**。两者都依赖 `gpui-pre`（本仓 lock 是 `0.3.8`）→ `WebViewElement` 直接进现有视图的布局，类型系统同源 |
 | `egui-kit` 呢 | crates.io 上**不存在这个名字**（404）。若指 egui（Emil 的 immediate-mode GUI），它**没有官方 webview**，社区做法同自接 `wry`、踩同一个 z-order 问题 —— 与本项目无关，本项目用的是 GPUI |
 
 **版本耦合：这条决定依赖怎么写**（2026-09-20 核实）
 
-| `gpui-wry` | 对 `gpui-pre` 的要求 | 与本仓 lock（`gpui-pre 0.3.4` + `gpui-kit 0.6.1`）|
+| `gpui-wry` | 对 `gpui-pre` 的要求 | 与本仓 lock（`gpui-pre 0.3.8` + `gpui-kit 0.7.1`）|
 | --- | --- | --- |
 | **0.6.1**（2026-09-09）| `^0.3.1` | ✅ **兼容**（0.3.4 满足）；只增 `lb-wry` 及其平台树，**不动现有 GUI 栈** |
 | 0.6.4（2026-09-18，最新）| `^0.3.5` | ⚠️ 会把 `gpui-pre` 从 0.3.4 顶到 0.3.5。`gpui-base`/`gpui-kit` 对 `gpui-pre` 都是 `^0.3.1`（caret），所以**技术上可解析**，但这是**上游没发布过的组合** |
 
-→ **写法**：要用就写 **`gpui-wry = "=0.6.1"`**（精确锁，与本仓 `gpui-kit 0.6.1` 同代），**不要写 caret `0.6.1`** —— 否则解析到 0.6.4 并连带顶起整条 gpui 栈。将来升 gpui-kit 时 `gpui-kit` / `gpui-wry` / `gpui-pre` **三个一起升**（沿用根 `Cargo.toml` 里「表现层同版本」那条纪律）。
+→ **写法**：要用就精确锁一个与当前 `gpui-pre` 兼容的 `gpui-wry`（0.7.1 时代需另行查 `gpui-wry` 最新版本及其对 `gpui-pre` 的要求，勿照抄 0.6.x 结论），**不要写 caret** —— 否则解析漂移并连带顶起整条 gpui 栈。升 gpui-kit 时 `gpui-kit` / `gpui-wry` / `gpui-pre` **三个一起升**（沿用根 `Cargo.toml` 里「表现层同版本」那条纪律）。
 
 **附带实测：升 gpui-kit 到底会动多少东西**（2026-09-20，`cargo update -n`，只预演、不写锁）：
 

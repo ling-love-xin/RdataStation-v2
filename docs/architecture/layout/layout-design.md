@@ -1,7 +1,7 @@
 # RdataStation v2 布局实现方案
 
 > 状态：已与用户确认（v5 示意）· 关联文件：`docs/architecture/layout/layout-proposal.html`
-> 技术栈：gpui-kit 0.6（聚合包：`gpui_kit::*` = gpui-pre / `gpui_kit::base` = gpui-base / `gpui_kit::component` = gpui-component / `gpui_kit::assets`）
+> 技术栈：gpui-kit 0.7.1（聚合包：`gpui_kit::*` = gpui-pre / `gpui_kit::base` = gpui-base / `gpui_kit::component` = gpui-component / `gpui_kit::assets`）
 > 范围：`crates/workbench` 布局重构 + `crates/settings` 拆分（设置入口归属），不含各 Feature panel 的业务内容（占位先行）
 
 ## 1. 布局总览
@@ -23,7 +23,7 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-| 区域 | 承载组件（gpui-kit 0.6） | 说明 |
+| 区域 | 承载组件（gpui-kit 0.7.1） | 说明 |
 | --- | --- | --- |
 | 标题栏 | `gpui_kit::component::title_bar::TitleBar` + 自绘挖空槽 | 无窗口标题；左：软件图标+挖空项目名；中：Quick Open 入口；右：窗口控制 |
 | 左侧活动栏 | 自绘 48px 竖条（`gpui_kit::base::flex` + `Button` + `Icon`） | 4 图标切换左侧 panel；底部 ⚙ 设置 |
@@ -84,7 +84,7 @@
   若该侧边栏展开且是当前 panel  → 收起该侧边栏（toggle）
 ```
 
-### 3.2 边栏三模式（左右独立，gpui-kit 0.6 Dock API）
+### 3.2 边栏三模式（左右独立，gpui-kit 0.7.1 Dock API）
 
 | 模式 | 状态 | 触发 | 实现（0.6） | 恢复 |
 | --- | --- | --- | --- | --- |

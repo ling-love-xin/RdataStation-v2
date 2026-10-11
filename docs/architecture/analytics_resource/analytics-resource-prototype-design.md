@@ -1,7 +1,7 @@
 # 资产库 / 分析存档模块（M6）· 原型设计
 
 > 状态：**设计定稿（原型 v1，2026-09-15）；后端 Phase 0 骨架已落地，面板未开始** · 关联文件：`analytics-resource-prototype.html`（可交互原型）、`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-dev-plan.md`（开发方案）
-> 技术栈：gpui-kit 0.6（五段布局见 `../layout/layout-design.md`；左 Dock 起步宽 15rem = 240px，右侧详情面板默认 20rem）
+> 技术栈：gpui-kit 0.7.1（五段布局见 `../layout/layout-design.md`；左 Dock 起步宽 15rem = 240px，右侧详情面板默认 20rem）
 > 前置：v1 蓝本 `v1/frontend/extensions/builtin/analytics-resource/`（**前端仅占位卡片列表**，15 个组件未接线，见 §10）
 > 关联文档：`../overview.md`（M6 定位）、`../ui/ui-design-spec.md`（三层约束）、`../database/database-navigator-prototype-design.md`（连接行降密与属性面板先例）、`../scratchpad/scratchpad-prototype-design.md`（归档上游）
 

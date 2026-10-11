@@ -14,7 +14,7 @@ use gpui_kit::{
     div,
 };
 
-/// 简化宿主：0.7.0 起对话框层由 Root 自动挂载，宿主只渲染占位视图（生产是 `WorkbenchView`）。
+/// 简化宿主：0.7.1 起对话框层由 Root 自动挂载，宿主只渲染占位视图（生产是 `WorkbenchView`）。
 struct HostView;
 
 impl Render for HostView {

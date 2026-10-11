@@ -2,7 +2,7 @@
 
 > 状态：**待二次确认** · 关联文件：`connection-dialog-prototype.html`（可交互原型）、`connection-dev-plan.md`（开发方案）
 > 参考基准：布局对齐 v1 原型 `v1/prototype/add-datasource-v5.html`（+ `v5-analysis.md`）；配色服从 `docs/architecture/theme/theme-design.md`（RDS Light/Dark，rds-theme.json）；机制参考 DataGrip「数据源和驱动程序」方案
-> 技术栈：GPUI（gpui-kit 0.7.0），组件消费 `cx.theme()` 语义 token，代码零裸 hex
+> 技术栈：GPUI（gpui-kit 0.7.1），组件消费 `cx.theme()` 语义 token，代码零裸 hex
 
 ## 1. 设计基准
 
@@ -194,7 +194,7 @@ info-banner（类型 · 驱动短名 · 特性）        ← 常驻，不参与�
 | 暂存列表 | **只放未保存草稿**（详见 §2.2）：条目切换 / 新增 / 删除（删至最后一条自动补位）；**行由 `list::List` + `ListItem` 渲染**（悬停 / 选中同类型列表；行尾「✕」是 `Button`，点击不再冒泡到行的确认；标题行的「添加」也是 `Button`；决策 #107）；**「保存」仅暂存草稿箱**，「保存并退出」批量提交后 `staging_clear` 清空草稿箱（2026-10-02 用户决策）；关闭不丢失且**跨会话持久化**（`connection_drafts`，无密码列）；当前条目有改动时显示脏标记 `●`；已保存连接从导航栏编辑 |
 | 模板导入导出 | 暂存列表标题行 `导出 / 导入`：剪贴板 JSON（`kind`/`version` 校验），**不含密码**；导出仅未保存且非空草稿；导入追加并选中（提示补填密码）——**能力已就绪，UI 入口按决策暂缓**（原型图中不展示）|
 | 项目快照同步 | 编辑「全局+项目」快照（GP_）时 footer 出现 `从全局定义同步`：拉取全局侧最新配置与凭据密文到本项目快照（保留快照 ID / 创建时间 / 分组关系）；其他作用域不显示该按钮 |
-| Tab 条 / 分段控件 / 开关（组件化） | 均用 gpui-kit 0.7.0 组件（决策 #84/#110）：Tab 条 = `TabBar::underline()`（下划线指示条 2px `primary`；文字 `tab.foreground` / 选中 `tab.active.foreground`；Small 尺寸档）；作用域三态 = `TabBar::segmented()`（浅底组 + 白色胶囊活动项，**Small 档 = 24px 高**，与本原型等高；短标签只用于显示，写库仍用全称；**旁加 `?` 徽标，`Tooltip` 说明三态落库语义**）；开关 = `Switch`（**默认 36×20**，与本原型的 `.switch` 一致；开启色 `primary`，未选驱动时置灰不可点）；尺寸与颜色由组件尺寸档 + 主题 token 决定（`switch.background` / `tab_bar.segmented.background` 未在 RDS 主题声明时回退组件默认值，取值与 RDS 灰阶一致） |
+| Tab 条 / 分段控件 / 开关（组件化） | 均用 gpui-kit 0.7.1 组件（决策 #84/#110）：Tab 条 = `TabBar::underline()`（下划线指示条 2px `primary`；文字 `tab.foreground` / 选中 `tab.active.foreground`；Small 尺寸档）；作用域三态 = `TabBar::segmented()`（浅底组 + 白色胶囊活动项，**Small 档 = 24px 高**，与本原型等高；短标签只用于显示，写库仍用全称；**旁加 `?` 徽标，`Tooltip` 说明三态落库语义**）；开关 = `Switch`（**默认 36×20**，与本原型的 `.switch` 一致；开启色 `primary`，未选驱动时置灰不可点）；尺寸与颜色由组件尺寸档 + 主题 token 决定（`switch.background` / `tab_bar.segmented.background` 未在 RDS 主题声明时回退组件默认值，取值与 RDS 灰阶一致） |
 | 首次引导（空态） | 常规 Tab 顶部引导条：仅在“**未选类型 + 名称/地址都空**”时出现——五步流程（选类型 → 选驱动 → 填连接信息 → `Ctrl+T` 测试 → `Ctrl+Enter` 保存）+ 「草稿不丢」说明；选完类型自动消失（不占老手版面）；不引外链 |
 | 类型不可用 | 无可用驱动的类型：置灰 + 「暂无驱动」+ 点击不切换（结果行给原因）；未选类型时驱动位为禁用占位 |
 | 认证配置选择 | 按 auth_type 过滤已保存配置；选中后动态字段只读；**管理**按钮打开 AuthConfigManager |

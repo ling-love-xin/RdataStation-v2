@@ -3,7 +3,7 @@
 > 状态：**首版（2026-09-16，待迭代）** · 本文回答"设置页长什么样"，"什么能进设置页"归 `settings-architecture.md`
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype.html`（交互稿，**示意稿非权威**）、`settings-dev-plan.md`（开发方案）、`settings-crate-design.md`（crate 沿革）、`../layout/layout-design.md`（入口与五段布局）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色）
 > 落地进度（2026-09-16）：僵尸项裁撤 + 代码侧登记表 + **两栏页面实体**（`crates/settings/src/settings_page.rs`）已落地；**宿主替换未做**（工作台仍渲染旧的单列 `settings_view`），见 `settings-dev-plan.md` §0/§2。
-> 技术栈：gpui-kit 0.6.1，组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
+> 技术栈：gpui-kit 0.7.1（2026-10-11 由 0.6.1 升入），组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
 
 ## 1. 设计基准
 
@@ -12,7 +12,7 @@
 | 形态 | 居中模态「两栏 Dialog」，与 Quick Open 同级弹层 | `layout-design.md` §4（"`settings_view.rs` 以 Dialog 呈现（与 Quick Open 同级弹层）"） |
 | 尺寸 | 61.25 × 35 rem（980 × 560 px），居中；内容区内部滚动 | 宽度复用「新建数据源连接」同档；新增 5 个常量（§7） |
 | 配色 | 弹层 `popover` / 导航与行 `list*` / 文字 `foreground`·`muted_foreground` / 危险 `danger` | `theme-design.md`、rds-theme skill |
-| 组件 | `Input`（搜索）、`List`（分节导航）、`Switch`·`Select`·`TabBar::segmented`·`Button`（行控件）、`StatusBar`（底栏）、`Collapsible`（备用） | gpui-kit 0.6.1 组件表（rds-ui-spec skill「组件规格速查」） |
+| 组件 | `Input`（搜索）、`List`（分节导航）、`Switch`·`Select`·`TabBar::segmented`·`Button`（行控件）、`StatusBar`（底栏）、`Collapsible`（备用） | gpui-kit 0.7.1 组件表（rds-ui-spec skill「组件规格速查」） |
 | 契约 | 零裸色值 / 零裸 `px`；结构尺寸引用 `ui::*`；本页视图纳入 `ui_contract` 的**尺寸**扫描 | `ui-design-spec.md` §1 |
 
 ## 2. 形态选型（为什么是两栏弹层）

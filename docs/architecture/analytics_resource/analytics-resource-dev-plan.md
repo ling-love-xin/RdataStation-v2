@@ -158,7 +158,7 @@
 | --- | --- |
 | `tree::active_bar`（选中行左侧 2px 条） | 分组头那根是**类别条**（原型 §2.4），不是选中条；而行的选中已由 `List` / `ListItem` 承担（`list_active` 底 + 1px 框）——接上 `active_bar` 会同时叠出两套选中语义 |
 | `tree::indent_rem` / `indent_spacer` | 分组头是**固定两级**（`depth ∈ {0,1}`，见 `filter::build_visible_items`）的局部内距，不是 `depth × 步长` 的树缩进；套公式（0.5 + 0.875×depth）会把 depth=1 的头一次右移 14px（视觉回归） |
-| 行尾「相对时间 → 悬浮显示绝对时间」（原型 §2.3；`present.rs` 两处注释都留了「悬浮由渲染层补」） | 0.6.1 的 `.tooltip()` **只挂在组件上**（`Button` / `Switch` / `Checkbox` / `Radio` …）；div 级 tooltip 要用 gpui-base 的 `TooltipOverlay` 亲手接 overlay + 触发（全仓零使用）——属「工具提示基建」一批，不在本轮 |
+| 行尾「相对时间 → 悬浮显示绝对时间」（原型 §2.3；`present.rs` 两处注释都留了「悬浮由渲染层补」） | 0.7.1 的 `.tooltip()` **只挂在组件上**（`Button` / `Switch` / `Checkbox` / `Radio` …，0.6.1 核实 / 0.7.1 复测）；div 级 tooltip 要用 gpui-base 的 `TooltipOverlay` 亲手接 overlay + 触发（全仓零使用）——属「工具提示基建」一批，不在本轮 |
 | `List` 的 `px_3` 行左内距（导航自绘行是 `px_1` = 4px） | 组件自身的行内距约定；改了要连分组头色条位置一起动，收益只是「与导航像素级一致」 |
 | 行内 hover 动作（原型 §2.3 的 hover 版） | 原型把它归给详情面板批，仍是未落地功能；另：鼠标在行内时指针已在行内，不挂 hover 也够用 |
 

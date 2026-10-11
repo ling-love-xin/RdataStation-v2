@@ -2,7 +2,7 @@
 //!
 //! ## 为什么候选要我们自己算
 //!
-//! 内核（`gpui-base` 0.6.1）的折叠**机制是齐全的**：`fold_map`、显示投影、侧边 chevron、
+//! 内核（`gpui-base` 0.7.1）的折叠**机制是齐全的**：`fold_map`、显示投影、侧边 chevron、
 //! 点击折叠、`folding` 开关（默认 true）都在，我们的编辑器本来就落在 code-editor 模式里
 //! （`EditorMode::CODE_EDITOR = true`）。但**候选只有一个来源**——highlighter
 //! （`highlighter.fold_ranges(text)`，`state.rs:3604`；编辑后走 `fold_ranges_for_edit`，`:3627`），

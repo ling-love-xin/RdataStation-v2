@@ -359,7 +359,7 @@ cargo check --workspace --all-targets    → 零告警
 | --- | --- |
 | ~~窗口退出路径的草稿兜底~~ | ✅ 已做（2026-09-19）：`app` 注册 `Window::on_window_should_close` → 每份打开文档的会话落库（存了再走，不拦人） |
 | 执行 SQL 的只读拦截测试 | 项目侧的只读拦截已有窗口测试；editor 侧执行路径未测 |
-| 菜单快捷键展示 | `PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 没有 shortcut 槽位，等组件支持 |
+| 菜单快捷键展示 | `PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 没有 shortcut 槽位；**0.7.0 起已支持**（`PopupMenuItem::Item` 挂 `action` + 注册 key binding，`PopupMenu::render_key_binding` 自动渲染，2026-10-02/10-11 实测），待实施 |
 
 ---
 

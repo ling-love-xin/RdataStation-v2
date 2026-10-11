@@ -2,7 +2,7 @@
 
 > 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义（V1–V10）、虚拟列表与拆分层 + 结果区并入列表 + 首个动效 + `Esc` 清搜索 + 状态持久化（V11–V18，2026-09-20）已实现** · 测试基线（2026-09-20 复跑，`-j 2`）：`rds-database` 73 / `rds-scratchpad` 37 / `rds-workbench-shell` 9 / `ui_contract` 7 全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
-> 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
+> 技术栈：GPUI（gpui-kit 0.7.1）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
 
 ## 0. 进度

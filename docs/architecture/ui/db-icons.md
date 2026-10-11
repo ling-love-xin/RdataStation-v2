@@ -6,7 +6,7 @@
 
 ## 1. 现成资产：gpui-kit 自带 Lucide 全量集
 
-- `gpui-kit-assets 0.6.1` 内嵌 **1830 个 SVG**（`assets/icons/`），由 `gpui_kit::assets::AllAssets`
+- `gpui-kit-assets 0.7.1` 内嵌 **1830 个 SVG**（`assets/icons/`，0.7.0 → 0.7.1 图标数不变，2026-10-11 实测），由 `gpui_kit::assets::AllAssets`
   提供；应用侧注册一次即可（`crates/app/src/main.rs` 的 `.with_assets(gpui_kit::assets::AllAssets)`）。
 - 命名空间是**平铺**的 `icons/<kebab-name>.svg`（`IconName::path()` 的返回值）——自备图标必须
   另开命名空间，否则将来 Lucide 收录同名图标就串了。
