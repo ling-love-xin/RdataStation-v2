@@ -223,6 +223,10 @@ impl ScratchpadView {
                     .text_xs()
                     .text_color(fg)
                     .overflow_hidden()
+                    .debug_selector({
+                        let n = entry.name.clone();
+                        move || format!("sp-row-text-{n}")
+                    })
                     .child(entry.name.clone()),
             )
             // 脏点（原型 §2/§3：名字 · ● · 大小时间；只有文件画）

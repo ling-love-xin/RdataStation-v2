@@ -278,6 +278,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{App, Pixels, TestAppContext};
+use gpui_kit::{AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Window, div, px};
 
 use crate::host::ScratchpadHost;
 use crate::jobs::LoadResult;
@@ -676,4 +677,108 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
         .size
         .width;
     assert!(right_w > Pixels::ZERO, "右侧按钮应保持渲染，实测 {right_w:?}");
+}
+
+/// 「草稿箱有文件但没显示」排查回归（2026-10-11 用户现场反馈）：
+/// 注入根加载 + 一个文件条目 → 渲染普通视图 → 断言文件行文本 debug_bounds 高度 > 0。
+/// 若 Accordion 内虚拟列表高度坍塌（高度链无约束），此处失败，直接定位显示问题。
+#[gpui_kit::test]
+fn drafts_accordion_tree_row_has_visible_height(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = panel_root("k11_height");
+    let host = host_with(Some(root.clone()), false);
+    let (panel, cx) = {
+        let host = host.clone();
+        cx.add_window_view(move |_window, cx| ScratchpadView::new(host, cx))
+    };
+
+    // 注入模块根加载成功 + 一个文件条目（与 panel_renders_and_opens_selected_file 同路径）。
+    let seq = scratchpad_jobs::enqueue_root_load(&root, vec![]);
+    let mut entries = Vec::new();
+    for i in 0..10 {
+        let mut e = file(&format!("f{i}.md"), 12, "2026-10-09");
+        e.path = root.join(format!("f{i}.md"));
+        entries.push(e);
+    }
+    let mut d = folder("notes", "2026-10-09", None);
+    d.path = root.join("notes");
+    entries.push(d);
+    cx.update(|_window, cx| {
+        panel.update(cx, |view, cx| {
+            view.apply_scratchpad_loads(vec![panel_load(seq, entries.clone())], cx);
+        });
+    });
+    // 渲染多帧（Accordion 默认展开，spring 动画推进到稳态；虚拟列表应挂载并分配高度）。
+    for _ in 0..5 {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    let b = cx
+        .debug_bounds("sp-row-text-f0.md")
+        .expect("普通视图文件行文本必须渲染（草稿树）");
+    assert!(
+        b.size.height > Pixels::ZERO,
+        "文件行文本必须分配可见高度（Accordion 内虚拟列表不得高度坍塌），实测 {:#?}",
+        b.size
+    );
+}
+
+/// 固定尺寸 Harness：模拟真实 LeftPanel（约 320×860）承载草稿箱面板。
+struct SizedDraftsHarness {
+    panel: Entity<ScratchpadView>,
+}
+
+impl Render for SizedDraftsHarness {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(320.))
+            .h(px(860.))
+            .child(self.panel.clone())
+    }
+}
+
+/// 真实侧栏尺寸复现（2026-10-11 用户截图：badge 11 但树空白）：
+/// 把面板包进 320×860 固定容器（模拟真实 LeftPanel 高度链），注入 11 条目，
+/// 断言文件行文本必须渲染出可见高度。若真实空白是「Accordion 内容区在窄面板
+/// 下高度链断裂」所致，此测试失败。
+#[gpui_kit::test]
+fn drafts_tree_renders_in_real_panel_size(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = panel_root("k11_panel_size");
+    let host = host_with(Some(root.clone()), false);
+    let (holder, cx) = {
+        let host = host.clone();
+        cx.add_window_view(move |_window, cx| {
+            let panel = cx.new(|cx| ScratchpadView::new(host.clone(), cx));
+            SizedDraftsHarness { panel }
+        })
+    };
+    let seq = scratchpad_jobs::enqueue_root_load(&root, vec![]);
+    let mut entries = Vec::new();
+    for i in 0..10 {
+        let mut e = file(&format!("f{i}.md"), 12, "2026-10-09");
+        e.path = root.join(format!("f{i}.md"));
+        entries.push(e);
+    }
+    let mut d = folder("notes", "2026-10-09", None);
+    d.path = root.join("notes");
+    entries.push(d);
+    cx.update(|_window, cx| {
+        holder.update(cx, |h, cx| {
+            h.panel.update(cx, |view, cx| {
+                view.apply_scratchpad_loads(vec![panel_load(seq, entries.clone())], cx);
+            });
+        });
+    });
+    for _ in 0..5 {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    let b = cx
+        .debug_bounds("sp-row-text-f0.md")
+        .expect("真实面板尺寸（320×860）下文件行必须渲染");
+    assert!(
+        b.size.height > Pixels::ZERO,
+        "文件行在真实面板尺寸下必须可见（Accordion 内容区高度链不得断裂），实测 {:#?}",
+        b.size
+    );
 }

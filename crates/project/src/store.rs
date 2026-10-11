@@ -135,7 +135,7 @@ impl ProjectStore {
         // 加载项目信息（权威源 = project.json，镜像 project.db 只在 JSON 缺失时兜底；
         // 与 `save_info` 的「JSON 权威、SQLite 镜像」约定一致，见该函数文档注释）
         let info_path = meta_dir.join(PROJECT_JSON_NAME);
-        let info: ProjectInfo = if info_path.exists() {
+        let mut info: ProjectInfo = if info_path.exists() {
             let content = fs::read_to_string(&info_path)
                 .map_err(|e| persistence::io_to_core_error(e, &info_path, "read"))?;
             serde_json::from_str(&content).map_err(|e| {
@@ -157,6 +157,13 @@ impl ProjectStore {
                 Project::new("Unnamed Project", ProjectPath::local(path)).info
             }
         };
+
+        // 打开路径是权威：迁移/移动后 project.json 里的 path 可能过期
+        // （2026-10-11 示例项目残留 Roaming 旧路径，导致 save_info 写回旧位置失败）。
+        // 只对 Local 类型修正；Remote（DuckLake 预留）不在这里处理。
+        if info.path.local_path().map(|p| p != path).unwrap_or(false) {
+            info.path = ProjectPath::local(path.to_path_buf());
+        }
 
         Ok(Self {
             info,

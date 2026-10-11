@@ -360,3 +360,17 @@
 | `scratchpad-prototype.html` | 可交互原型（可切明暗主题） |
 | `scratchpad-dev-plan.md` | 阶段任务与逐轮进度 |
 | [`../../../crates/scratchpad/README.md`](../../../crates/scratchpad/README.md) | crate 级说明与能力状态表 |
+
+## 11. 2026-10-11「树空白」排查结论（环境性，非代码缺陷）
+
+现象：草稿箱 badge 显示条目数（11）、底部状态栏统计正常，但树主体空白。
+
+证据链：
+1. **数据层正常**：badge / 统计来自 `rows.len()`（11 条），与截图一致，排除加载失败。
+2. **结构层正常**：新增回归测试 `drafts_tree_renders_in_real_panel_size`（320×860 固定容器 + 11 条目）与 `drafts_accordion_tree_row_has_visible_height` 均通过——Accordion → MotionReveal → 虚拟列表高度链在测试环境完整。
+3. **运行时铁证**：在 `render_scratchpad_tree` 与虚拟列表行闭包临时加诊断日志后重启，日志输出 `tree render: display=7 loading=false rows=7` 与 `list render range=0..1 / 0..2`——行渲染被调用，树链路完全正常（诊断日志已移除）。
+4. **环境性根因**：同一时段应用日志存在 `Device lost: DirectXRenderer failed to recover` panic（21:31）与 `window not found` / 无效窗口句柄错误（22:32）；后续会话窗口出现黑屏/透明（布局正常但画面不可见）。判定「树空白」与「黑屏」同为 **GPU 渲染管线异常（DirectX 设备丢失后恢复不完整）** 的表现，与用户报告的长时间卡顿同源。
+
+处理与建议：
+- 代码无修复点（链路已由测试 + 日志双向验证）；新增两条面板层回归测试作为长期防护。
+- 用户侧：重启电脑 / 更新显卡驱动后重新验证；测试文件/目录已就位于项目 `scratchpad/` 下（`notes/`、`sql/`、`data/` 与若干文件，加载后 `display=7` 证明可见）。

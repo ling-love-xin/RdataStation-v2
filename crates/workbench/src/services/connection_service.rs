@@ -724,6 +724,11 @@ impl ConnectionService {
         let Some(auth_id) = auth_config_id else {
             return Ok(url.to_string());
         };
+        // 空/空白 id 视为未引用认证：SQLite 等无认证连接常存空串而非 NULL，
+        // 否则 Some("") 会被当成「引用了 id 为空的配置」去查库，误报「认证配置不存在」。
+        if auth_id.trim().is_empty() {
+            return Ok(url.to_string());
+        }
         let (config_auth_type, auth_data) =
             Self::load_auth_data_from_db(global_db, auth_id, connection_type, project_path)
                 .await?
@@ -1617,6 +1622,10 @@ pub async fn resolve_network_method_with_project(
     let Some(net_id) = network_config_id else {
         return Ok(None);
     };
+    // 空串同 None：旧数据可能存空串而非 NULL（与 auth_config_id 同源问题）。
+    if net_id.trim().is_empty() {
+        return Ok(None);
+    }
 
     // ===== GP_ 前缀：项目级全局快照配置 =====
     if net_id.starts_with("GP_") {

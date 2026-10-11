@@ -11,9 +11,24 @@ v1/frontend/node_modules/
 # 口径：软件生成的一切都在自己的安装目录下（默认 = 可执行文件所在目录），且一律不入库
 /.rds/
 /rds-*.log
+# 根目录的验证 / 构建 / 回归日志（命名不带 rds- 前缀的历史逃逸：app-build.log、check_all.log、
+# test_*.log、workbench-test.log 等；统一以 *.log 通配收口，避免再逐条加前缀规则）
+/*.log
 # 工具脚本与真机调试跑出来的日志（生成物；`docs/tmp/screenshot.png` 是截图，不属生成物）
 /docs/tmp/*.log
 /tools/*.log
+# tools/ 下误入库的编译产物（lock_probe.exe/.pdb 曾入库；可执行文件与调试符号一律不入库）
+/tools/*.exe
+/tools/*.pdb
+# 一次性过程脚本归档区（fix_round*/migrate_*/inspect_* 等已归档，不入库）
+/tools/_archive/
+# 内嵌实例项目构建产物（tools/build-instance-project.py 生成、可随时重建，不入库；
+# 运行时的演示项目副本在 .rds/data/samples/，已被 /.rds/ 覆盖）
+/examples/instance-project/data/
+/examples/instance-project/.RSmeta/
+# 调试 / 一次性产物通配（反汇编、备份文件——与 *.log 同性质的"随手生成物"）
+*.asm
+*.bak
 # 手工回归跑的输出（历史上的 `targetm3-regression.log` 曾误入库；日志不入库）
 /target*.log
 
@@ -28,3 +43,6 @@ v1/frontend/node_modules/
 **/tests/zz_*.rs
 
 test-run*.log
+
+# docs/tmp 为临时分析产物（含嵌套 git 仓库 dbx-src 与一次性分析 html），一律不入库
+docs/tmp/

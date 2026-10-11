@@ -168,6 +168,26 @@ paths::assets_dir()      // 随包只读资源（主题 / 图标）——**不**
 2. **`*.fossil` 是测试资产，不是生成物**：`crates/workbench/FossilTT.fossil` 是测试用 SQLite 库，
    **不要删也不要加入忽略规则**。
 
+### 6.3 开发过程产物去向（2026-10-11 治理后固化）
+
+**问题**：gitignore 只挡"不入库"，挡不住"落在哪"。实测积压：根目录 10 个验证 `.log`（命名不带
+`rds-` 前缀逃过旧规则）、`.rds` 顶层 110+ 个过程文件（含 1.4 GB 反汇编 `rds-app.asm`、21 个提交信息草稿、
+一批 `theme-*/staged-*/diff-*` 检查输出）、`tools/` 328 条里 223 个一次性脚本（217 个曾入库，含 `.exe/.pdb`）。
+
+**去向约定（任何会话 / 任何人 / 任何 AI 助手生成的过程产物都按此落）**：
+
+| 产物 | 去向 | 说明 |
+| --- | --- | --- |
+| 验证 / 构建 / 回归日志 | `docs/tmp/` 或 `.rds/tmp/` | 两个位置均已忽略；**不要在仓库根、crates/、工具目录里生成 `*.log`** |
+| 一次性过程脚本 | `tools/_archive/`（不入库） | `fix_*` / `migrate_*` / `inspect_*` 等一次性脚本；可复用工具才留 `tools/` 白名单 |
+| 手动命令输出（diff / 检查 / 反汇编 / 列表） | 统一重定向 `.rds/tmp/<名字>` | **不要在"当前目录"生成 `*.txt` / `*.asm` / `*.log`** |
+| 调试截图 | `docs/tmp/` | `shot.py` 产物的 `screenshot.png` 可入库；`grab*.png` 等调试截图属临时物 |
+| 内嵌实例项目构建产物 | `examples/instance-project/` **不入库**（已忽略） | `tools/build-instance-project.py` 可再生；运行时的演示项目副本在 `.rds/data/samples/` |
+
+**闸门**：`tools/hygiene-check.sh`（默认 dry-run）按白名单扫根目录 / `.rds` 顶层 / `tools/` 三处，
+偏离即报告；`--yes` 把偏离项移入 `.rds/tmp/`（两阶段删除）。提交或发布前跑一次，发现偏离先归位再提交。
+白名单与本节一致，改约定先改本节再改脚本。
+
 ## 7. 实现位置映射表
 
 | 设计决策 | 实现位置 |
