@@ -12,6 +12,7 @@ use std::sync::RwLock;
 
 use gpui_kit::App;
 use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::px;
 
 pub mod commands;
 pub mod model;
@@ -189,6 +190,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::AppearanceThemeMode => {
             SettingValue::Text(theme_mode_text(settings.appearance.theme_mode))
         }
+        Slot::AppearanceFontSize => {
+            SettingValue::Number(settings.appearance.font_size as f64)
+        }
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -256,6 +260,16 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_theme_mode(mode, window, cx);
+            }
+            Slot::AppearanceFontSize => {
+                let Some(size) = value.as_number() else {
+                    return false;
+                };
+                // 只认 12–20px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+                if !(12.0..=20.0).contains(&size) {
+                    return false;
+                }
+                Self::set_font_size(size as f32, window, cx);
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
@@ -390,6 +404,39 @@ impl SettingsService {
             }
         };
         Self::set_theme_mode(next, window, cx);
+    }
+
+    /// 读取当前界面字号（px，默认 16）。
+    pub fn font_size(cx: &App) -> f32 {
+        cx.global::<Settings>().appearance.font_size
+    }
+
+    /// 设置并持久化界面字号，即时生效：**两个基准同步应用**——
+    /// 主题字号（`Theme::update`，影响 `font_size * N` 类宽度）与窗口 rem 基准
+    /// （`Window::set_rem_size`，rems / Tailwind 档位 / 布局全缩放）。
+    /// 缺其一则出现「文字缩放、宽度不缩放」的错位（rem 系与 font_size 系是
+    /// 两套独立的基准，窗口默认 16px，见 gpui `Window::rem_size`）。
+    ///
+    /// `window` 为 `None`（启动 / 测试）时遍历现有窗口逐个设；新窗口在
+    /// `open_window` 回调里由装配层同步（见 `crates/app/src/main.rs`）。
+    pub fn set_font_size(font_size: f32, window: Option<&mut gpui_kit::Window>, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.appearance.font_size = font_size;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        // 主题字号：`font_size * N` 类宽度（对话框宽度等）跟随缩放。
+        Theme::update(cx, |theme| theme.font_size = px(font_size));
+        match window {
+            Some(window) => window.set_rem_size(px(font_size)),
+            None => {
+                for handle in cx.windows() {
+                    handle.update(cx, |_view, window, _| window.set_rem_size(px(font_size)));
+                }
+            }
+        }
+        cx.refresh_windows();
     }
 
     /// 读取项目列表排序方式（`last_opened` / `name` / `created`）。
@@ -622,6 +669,8 @@ impl SettingsService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 安全模式：逐项列举依赖（见 gpui-kit-dev skill「窗口测试」）。
+    use gpui_kit::component::ActiveTheme as _;
 
     /// 临时目录（每个用例独立，避免并行测试互相干扰）。
     fn temp_dir(tag: &str) -> PathBuf {
@@ -804,5 +853,49 @@ mod tests {
             );
         });
         let _ = std::fs::remove_dir_all(path.parent().expect("父目录"));
+    }
+
+    /// 界面字号：默认 16 → `set_font_size` 更新 global + 持久化 + 应用
+    /// （主题字号同步到 `theme.font_size`；无窗口上下文时遍历现有窗口设 rem 基准）。
+    ///
+    /// **用独立临时目录**（与 `theme_mode_persists_and_reloads` 同一理由：
+    /// 不碰共享 `config_dir()`，避免并行写盘测试互相覆盖）。
+    #[gpui_kit::test]
+    fn font_size_applies_global_and_persists(cx: &mut gpui_kit::TestAppContext) {
+        let path = temp_dir("font_roundtrip").join("settings.json");
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            // 默认 16px。
+            assert_eq!(SettingsService::font_size(cx), 16.0);
+            // 应用 14px：global 更新 + 主题字号同步。
+            SettingsService::set_font_size(14.0, None, cx);
+            assert_eq!(SettingsService::font_size(cx), 14.0);
+            assert_eq!(cx.theme().font_size, px(14.0), "主题字号必须同步");
+            // 落盘往返：写什么读什么。
+            save_settings_to(&path, &SettingsService::snapshot(cx)).expect("写盘");
+            assert_eq!(load_settings_from(&path).appearance.font_size, 14.0);
+            // 改回默认：恢复默认有唯一目标（登记表默认 16.0 与模型默认一致）。
+            SettingsService::set_font_size(16.0, None, cx);
+            assert_eq!(SettingsService::font_size(cx), 16.0);
+        });
+        let _ = std::fs::remove_dir_all(path.parent().expect("父目录"));
+    }
+
+    /// 超范围字号被拒绝（页面只给预设档；手改坏的设置文件不让写入）。
+    #[gpui_kit::test]
+    fn out_of_range_font_size_is_rejected(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            let ok = SettingsService::apply_by_key(
+                "appearance.font_size",
+                SettingValue::Number(99.0),
+                None,
+                cx,
+            );
+            assert!(!ok, "超范围字号必须拒绝");
+            assert_eq!(SettingsService::font_size(cx), 16.0, "拒绝后值不变");
+        });
     }
 }

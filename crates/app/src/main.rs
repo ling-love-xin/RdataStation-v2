@@ -171,12 +171,15 @@ fn run_app() {
             attach_product_tokens(&themes_dir, cx);
 
             // 3. 主题目录监听（热更新）：文件变更后重新接入并刷新窗口。
+            //    注意：`set_theme_mode` 会从主题配置重载 `font_size`（资产声明 16px），
+            //    因此这里必须**重应用设置里的字号**，否则热更新会把用户的字号档位打回默认。
             let themes_dir_watch = themes_dir.clone();
             let _ = ThemeRegistry::watch_dir(themes_dir, cx, move |cx| {
                 attach_rds_theme(cx);
                 attach_product_tokens(&themes_dir_watch, cx);
                 let mode = SettingsService::theme_mode(cx);
                 SettingsService::set_theme_mode(mode, None, cx);
+                SettingsService::set_font_size(SettingsService::font_size(cx), None, cx);
                 cx.refresh_windows();
             });
 
@@ -184,6 +187,11 @@ fn run_app() {
             //    `system` 走 `Theme::sync_system_appearance`：首帧即按系统外观取主题。
             let mode = SettingsService::theme_mode(cx);
             SettingsService::set_theme_mode(mode, None, cx);
+
+            // 4b. 应用已保存的界面字号：主题字号（global）+ 现有窗口 rem 基准同步。
+            //     新窗口在 `open_window` 回调里再同步一次 rem（窗口创建默认 16px，
+            //     不设会与主题字号脱节，rem 系布局就不缩放）。
+            SettingsService::set_font_size(SettingsService::font_size(cx), None, cx);
 
             // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
             //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
@@ -302,6 +310,9 @@ fn run_app() {
                     titlebar.title = Some("RdataStation".into());
                 }
                 cx.open_window(options, |window, cx| {
+                    // 同步界面字号：窗口创建默认 rem_size = 16px，按设置覆盖
+                    // （rems / Tailwind 档位 / 布局全缩放；主题字号已在启动 4b 应用）。
+                    window.set_rem_size(px(SettingsService::font_size(cx)));
                     // 跟随系统外观：`system` 模式下系统明暗变化即时跟随。
                     // 订阅由下方 spawn 任务保活（Subscription drop 即取消）；回调只
                     // 在 `system` 时生效，显式模式不受系统外观影响。

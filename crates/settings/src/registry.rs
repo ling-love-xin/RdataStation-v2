@@ -102,6 +102,7 @@ impl SettingValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     AppearanceThemeMode,
+    AppearanceFontSize,
     NavigatorSourceShortCode,
     NavigatorShowTags,
     NavigatorShowScope,
@@ -121,6 +122,7 @@ pub enum Slot {
 pub fn slot_for(key: &str) -> Option<Slot> {
     Some(match key {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
+        "appearance.font_size" => Slot::AppearanceFontSize,
         "navigator.source_short_code" => Slot::NavigatorSourceShortCode,
         "navigator.show_tags" => Slot::NavigatorShowTags,
         "navigator.show_scope" => Slot::NavigatorShowScope,
@@ -142,6 +144,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
 pub fn slot_kind(slot: Slot) -> KindTag {
     match slot {
         Slot::AppearanceThemeMode => KindTag::Enum,
+        Slot::AppearanceFontSize => KindTag::Number,
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
         Slot::NavigatorShowTags | Slot::NavigatorShowScope => KindTag::Bool,
         Slot::NavigatorPropertyWidth | Slot::ConnectTimeoutMs => KindTag::Number,
@@ -255,6 +258,26 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
         consumer: "app/src/main.rs（启动应用 + 系统外观监听）+ SettingsService::set_theme_mode",
+        composite: false,
+    },
+    SettingSpec {
+        key: "appearance.font_size",
+        section: "appearance",
+        section_label: "外观",
+        label: "界面字号",
+        hint: "整界面缩放（主题字号与窗口 rem 基准同步）；档位越小控件越紧凑，改完立即生效",
+        kind: SettingKind::Number,
+        presets: &[
+            (13, "13px"),
+            (14, "14px"),
+            (15, "15px"),
+            (16, "16px（默认）"),
+            (17, "17px"),
+        ],
+        default_json: "16.0",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/app/src/main.rs（启动应用 + open_window 同步 rem）+ SettingsService::set_font_size（运行时：Theme::update + Window::set_rem_size）",
         composite: false,
     },
     SettingSpec {

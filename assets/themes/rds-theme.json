@@ -8,6 +8,9 @@
       "name": "RDS Light",
       "mode": "light",
       "is_default": true,
+      "font.size": 16,
+      "font.family": ".SystemUIFont",
+      "mono_font.size": 13,
       "colors": {
         "background": "#FFFFFF",
         "foreground": "#333333",
@@ -144,6 +147,9 @@
       "name": "RDS Dark",
       "mode": "dark",
       "is_default": true,
+      "font.size": 16,
+      "font.family": ".SystemUIFont",
+      "mono_font.size": 13,
       "colors": {
         "background": "#1E1E1E",
         "foreground": "#CCCCCC",

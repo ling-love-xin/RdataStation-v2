@@ -41,21 +41,32 @@ pub struct Settings {
     pub logging: Logging,
 }
 
-/// 外观：主题模式。
+/// 外观：主题模式 + 界面字号。
 ///
-/// 界面字号不在这里：字号的权威是主题资产（`theme.font_size`），设置只记"选哪套模式"。
+/// `font_size` 是**界面字号缩放**（px，默认 16）：启动与变更时同步应用到
+/// 主题字号（`theme.font_size`，影响 `font_size * N` 类宽度）与窗口 rem 基准
+/// （`Window::set_rem_size`，rems / Tailwind 档位 / 布局全缩放）——二者同步，
+/// 全 UI 一致缩放。v7 曾裁撤该字段（当时口径"字号权威在主题资产"）；2026-10-11
+/// 按「可配置项进设置」决策复活为字号档位，旧配置里的 `font_size: 13.0` 直接兼容生效。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
     pub theme_mode: AppearanceMode,
+    #[serde(default = "default_font_size")]
+    pub font_size: f32,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme_mode: AppearanceMode::Light,
+            font_size: default_font_size(),
         }
     }
+}
+
+fn default_font_size() -> f32 {
+    16.0
 }
 
 /// 主题模式：显式明暗，或跟随系统外观。
@@ -302,8 +313,10 @@ mod tests {
     use super::*;
 
     /// 旧配置必须能解析：既缺新节（`navigator`），又带着已裁撤的节与字段
-    /// （`general` / `engine` / `appearance.font_size` / `connection_defaults.default_driver`）。
+    /// （`general` / `engine` / `connection_defaults.default_driver`）。
     ///
+    /// `appearance.font_size` 是**复活字段**（v7 曾裁撤，2026-10-11 按「字号缩放
+    /// 进设置」决策复活）：旧配置里的 `13.0` 现在会直接生效（不再被忽略）。
     /// 裁撤是向后兼容安全的：`Settings` 未开 `deny_unknown_fields`，未知内容被忽略。
     #[test]
     fn legacy_config_with_removed_sections_still_loads() {
@@ -317,6 +330,8 @@ mod tests {
 
         // 仍在用的字段按文件里的值生效
         assert_eq!(s.appearance.theme_mode, AppearanceMode::Dark);
+        // 复活字段：旧配置的数字字号直接生效（不再是"被忽略"）。
+        assert_eq!(s.appearance.font_size, 13.0);
         // 裁撤的节 / 字段回退默认，不留残影
         assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
         assert!(s.connection_defaults.lan_disable_tls);
