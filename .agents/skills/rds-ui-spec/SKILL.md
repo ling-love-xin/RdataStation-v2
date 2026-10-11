@@ -98,6 +98,52 @@ div().border_b(ui::HAIRLINE)
 
 完整规格表见 `docs/architecture/ui/ui-design-spec.md`。
 
+## 组件规格总表（上游标准组件 · 0.7.1 源码实测）
+
+下表是 gpui-kit 0.7.1 标准组件的尺寸档位，全部实测自 vendor 源码（非估计）。
+写视图时**优先用组件的 `Size` API / 档位方法**（`h_8()`、`px_2()`、`text_sm()`、`size_8()`），
+像素值仅作 @16px rem 核对；同一组件内字号、图标、内距、命中区随 Size 一起变。
+
+| 组件 | 维度 | XSmall | Small | Medium | Large | 源码位置 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Button 常规 | 高度 | `h_5` 20 | `h_6` 24 | `h_8` 32 | `h_8` 32 | button.rs:671-683 |
+| Button 常规 | 横内距 | `px_1` 4 | `px_2` 8 | `px_2p5` 10 | `px_3` 12 | 同上 |
+| Button 图标 | 尺寸 | `size_5` 20 | `size_6` 24 | `size_8` 32 | `size_8` 32 | button.rs:661-666 |
+| Button | 圆角 | `radius*0.5` | `radius*0.5` | `radius` | `radius*2` | button.rs:636-638 |
+| Button / 输入 | 字号 | `text_xs` 12 | `text_sm` 14 | `text_sm` 14 | `text_base` 16 | sizing.rs:245-253 |
+| Input | 高度 | `h_5` 20 | `h_6` 24 | `h_8` 32 | `h_11` 44 | sizing.rs:281-289 |
+| Input | 横内距 | 4 | 8 | 10 | 12 | sizing.rs:147-152 |
+| Input | 竖内距 | 0 | 2 | 4 | 8 | sizing.rs:160-163 |
+| List / Menu 行 | 竖内距 | 0 | 2 | 4 | 8 | sizing.rs:302-308 |
+| Menu 项 | 内距 | `py_1().px_2()` = 4/8 | | | | menu_item.rs:101-102 |
+| Table 行 | 行高 | 26 | 30 | 32 | 40 | sizing.rs:57-65 |
+| Table 单元格 | padding(上/左右) | 2/4 | 3/6 | 4/8 | 8/12 | sizing.rs:69-96 |
+| 通用元素 | `size()` | `size_4` 16 | `size_5` 20 | `size_8` 32 | `size_11` 44 | sizing.rs:312-320 |
+| Dialog 头/脚 | 内部间距 | `gap_2` 8 | | | | dialog/header.rs:46 footer.rs:52 |
+| Tab 标签 | 内距 | 横 `px(12)`（tab.rs:71 默认） | | | | tab/tab.rs:71 |
+
+> 密度档位（design-guides）：**标准（Medium）为默认**；舒适/Large 用于引导与稀疏表单；
+> 紧凑/Small 用于工具栏与数据密集面；XSmall 仅限工具类密度，勿整应用用。
+> 按钮帧 20/24/32、输入至 44、表格行 26/30/32/40 —— 即上表的档位跨度。
+
+## 空间语法（关系 → 间距 token）
+
+间距表达关系，选 token 先问"两个东西彼此是什么关系"（design-guides §Spatial grammar）：
+
+| 关系 | token | @16px | 例 |
+| --- | --- | --- | --- |
+| 光学修正 | `xxs` | 2 | 图标基线、紧凑分隔 |
+| 控件内部 | `xs` | 4 | 菜单图标/文案、标题/描述 |
+| 紧密控件 | `sm` | 8 | 按钮图标/文案、对话框操作 |
+| 一个内容组 | `md` | 12 | 通知列、紧凑表单行 |
+| 同节内不同组 | `lg` | 16 | 面板内距、表单组 |
+| 不同节 | `xl` | 24 | 页面/检查器大块 |
+| 区域边界 | `xxl` | 32 | 空态呼吸、页面带 |
+
+规则：**内距先于外距**（组件内距属组件、组件间间距属父级）；标题与描述的间距小于描述到下一节；
+重复行保持图标/文案/值/徽标/尾操作稳定列；垂直间距体现分组（等距=等关系）；
+**不重复内距**（放进已有内距的面板里的卡片不再加整档内距）。
+
 ## 相关 skill
 
 - 五段布局 / 三模式 / Quick Open 交互规格：`rds-layout`
