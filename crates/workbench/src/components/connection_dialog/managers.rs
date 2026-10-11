@@ -551,34 +551,18 @@ pub(crate) fn open_manager(
                                     .child(Select::new(&policy_type).placeholder("选择策略类型…"))
                                     .child(div().text_xs().child("启用"))
                                     .child(
-                                        div()
-                                            .id("pol-toggle")
-                                            .cursor_pointer()
-                                            .relative()
-                                            .w(rems(crate::ui::DIALOG_TOGGLE_WIDTH))
-                                            .h_4()
-                                            .rounded_full()
-                                            .bg(if policy_enabled.get() { theme.colors.primary } else { theme.colors.border })
+                                        // 策略启用开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，
+                                        // 替代早期自绘 30×16 轨道，对齐原型 HTML）。
+                                        Switch::new("pol-toggle")
+                                            .checked(policy_enabled.get())
                                             .on_click({
                                                 let policy_enabled = policy_enabled.clone();
                                                 let entity = entity.clone();
-                                                move |_, _, app| {
-                                                    policy_enabled.set(!policy_enabled.get());
+                                                move |want, _window, app| {
+                                                    policy_enabled.set(*want);
                                                     entity.update(app, |_, cx| cx.notify());
                                                 }
-                                            })
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .top_0()
-                                                    .left_0()
-                                                    .m_0p5()
-                                                    .w_3()
-                                                    .h_3()
-                                                    .rounded_full()
-                                                    .bg(theme.colors.background)
-                                                    .child(""),
-                                            ),
+                                            }),
                                     )
                                     .child(
                                         Button::new("pol-save")

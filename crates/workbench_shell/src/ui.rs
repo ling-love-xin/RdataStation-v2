@@ -269,8 +269,6 @@ pub const DIALOG_LABEL_COLUMN_WIDTH: f32 = 5.75;
 pub const DIALOG_HINT_PLACEHOLDER_HEIGHT: f32 = 1.125;
 /// 类型树小节头高（1.25rem = 20px；恒定高让 List 按同一高度测量，不随文字撑）
 pub const DIALOG_SECTION_HEADER_HEIGHT: f32 = 1.25;
-/// 策略开关自绘轨道宽（1.875rem = 30px；`pol-toggle`，保持既有自绘形态，Switch 组件化待办）
-pub const DIALOG_TOGGLE_WIDTH: f32 = 1.875;
 
 // ===== 日志对话框（日志系统的读路径）专用尺寸 =====
 //
