@@ -211,7 +211,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
         Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
         Slot::LogMinLevel => SettingValue::Text(settings.logging.min_level.as_str().to_string()),
-            })
+                // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
+        Slot::ScratchpadToolbar => return None,
+    })
 }
 
 impl SettingsService {
@@ -226,6 +228,11 @@ impl SettingsService {
 
     /// 读取当前设置。
     pub fn get(cx: &App) -> Settings {
+        cx.global::<Settings>().clone()
+    }
+
+    /// 当前设置快照（与 [`Self::get`] 等价；供测试 / 异步路径取一份当前值落盘）。
+    pub fn snapshot(cx: &App) -> Settings {
         cx.global::<Settings>().clone()
     }
 
@@ -314,7 +321,9 @@ impl SettingsService {
                 };
                 Self::set_log_min_level(level, cx);
             }
-                    }
+                        // 复合值（工具栏按钮布局）：无标量写入路径，由 ⋯ 菜单直接改 global + save。
+            Slot::ScratchpadToolbar => return false,
+        }
         true
     }
 
@@ -704,22 +713,96 @@ mod tests {
 
     /// 错误槽：失败后留下原因（页面据此提示），下一次成功后清空（提示收起）。
     ///
-    /// 走公开入口 `save_settings` + 真实路径拼装；数据根本身由 `paths` 的 `test-support`
-    /// 隔离（`docs/architecture/runtime/data-paths.md` §5），这里只需把 `config` **目录**
-    /// 暂时挡住——在它的位置放一个同名文件即可。
+    /// **不触碰共享 `config_dir()`**（2026-10-11 修复并行闪失败：该测试原先在 pid 级
+    /// 共享数据根里破坏 config 目录，与 `theme_mode_persists_and_reloads` 等写盘测试
+    /// 并行时互相干扰）——改在独立临时目录里用 `save_settings_to` + 错误槽的直接
+    /// 驱动（`set_last_save_error`）验证「失败留槽 / 成功清槽」语义。
     #[test]
     fn last_save_error_tracks_failure_then_success() {
-        let config = config_dir();
-        let _ = std::fs::remove_dir_all(&config);
-        std::fs::write(&config, "blocked").expect("在 config 目录位置放一个文件");
-        assert!(
-            save_settings(&Settings::default()).is_err(),
-            "目录位置被文件占住时必须失败"
-        );
+        let dir = temp_dir("err_slot");
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let blocker = dir.join("blocked");
+        std::fs::write(&blocker, "not a directory").expect("放个文件挡住目录");
+
+        // 失败：父路径是文件 → 留下原因。
+        let err = save_settings_to(&blocker.join("settings.json"), &Settings::default())
+            .expect_err("父路径是文件时必须失败");
+        set_last_save_error(Some(err));
         assert!(last_save_error().is_some(), "失败必须留下原因");
 
-        std::fs::remove_file(&config).expect("挪开挡住的文件");
-        assert!(save_settings(&Settings::default()).is_ok());
+        // 成功：写入独立目录正常路径 → 清空错误槽。
+        assert!(
+            save_settings_to(&dir.join("settings.json"), &Settings::default()).is_ok(),
+            "正常路径写盘必须成功"
+        );
+        set_last_save_error(None);
         assert!(last_save_error().is_none(), "成功后必须清空错误槽");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 主题三态：显式模式下 `toggle_theme_mode` 两态循环（Light → Dark → Light）。
+    ///
+    /// 走公开入口 `set_theme_mode` / `toggle_theme_mode`（含 global 更新 + 落盘），
+    /// 数据根由 `paths` 的 `test-support` 隔离，不碰用户配置。
+    #[gpui_kit::test]
+    fn toggle_theme_mode_cycles_between_explicit_modes(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            SettingsService::set_theme_mode(AppearanceMode::Light, None, cx);
+            SettingsService::toggle_theme_mode(None, cx);
+            assert_eq!(SettingsService::theme_mode(cx), AppearanceMode::Dark);
+            SettingsService::toggle_theme_mode(None, cx);
+            assert_eq!(SettingsService::theme_mode(cx), AppearanceMode::Light);
+        });
+    }
+
+    /// `system` 下一次按键即脱离跟随：按系统当前外观反切到显式对侧
+    /// （系统为深 → 落明；系统为明 → 落深）。不静默落任一侧。
+    #[gpui_kit::test]
+    fn toggle_from_system_flips_to_explicit_opposite(cx: &mut gpui_kit::TestAppContext) {
+        // 系统当前外观（headless 测试平台为固定值，读取自洽，不猜默认）。
+        let system_appearance = cx.update(|cx| cx.window_appearance());
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            SettingsService::set_theme_mode(AppearanceMode::System, None, cx);
+            SettingsService::toggle_theme_mode(None, cx);
+            let after = SettingsService::theme_mode(cx);
+            assert_ne!(after, AppearanceMode::System, "一次按键必须脱离跟随");
+            let expected = match system_appearance {
+                gpui_kit::WindowAppearance::Dark => AppearanceMode::Light,
+                _ => AppearanceMode::Dark,
+            };
+            assert_eq!(after, expected, "反切方向 = 系统当前外观的对侧");
+        });
+    }
+
+    /// 主题模式落盘往返：`system` / 显式模式写进 settings.json 后重读仍一致。
+    ///
+    /// **用独立临时目录**（2026-10-11 修复并行闪失败：原先走共享 `config_dir()`，
+    /// 与 `toggle_*` 等写盘测试同进程并行时互相覆盖，`Dark` 常被读回 `Light`）——
+    /// 落盘往返语义不变（写什么读什么），不再碰共享数据根。
+    #[gpui_kit::test]
+    fn theme_mode_persists_and_reloads(cx: &mut gpui_kit::TestAppContext) {
+        let path = temp_dir("theme_roundtrip").join("settings.json");
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            SettingsService::set_theme_mode(AppearanceMode::System, None, cx);
+            save_settings_to(&path, &SettingsService::snapshot(cx)).expect("写盘");
+            assert_eq!(
+                load_settings_from(&path).appearance.theme_mode,
+                AppearanceMode::System
+            );
+            SettingsService::set_theme_mode(AppearanceMode::Dark, None, cx);
+            save_settings_to(&path, &SettingsService::snapshot(cx)).expect("写盘");
+            assert_eq!(
+                load_settings_from(&path).appearance.theme_mode,
+                AppearanceMode::Dark
+            );
+        });
+        let _ = std::fs::remove_dir_all(path.parent().expect("父目录"));
     }
 }
