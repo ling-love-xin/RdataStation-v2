@@ -10,6 +10,7 @@ members = [
     "crates/property",
     "crates/editor",
     "crates/scratchpad",
+    "crates/rds-search",
     "crates/analytics_resource",
     "crates/mock",
     "crates/insight",
@@ -54,6 +55,7 @@ insight = { path = "crates/insight", package = "rds-insight" }
 mock = { path = "crates/mock", package = "rds-mock" }
 settings = { path = "crates/settings", package = "rds-settings" }
 scratchpad = { path = "crates/scratchpad", package = "rds-scratchpad" }
+rds_search = { path = "crates/rds-search", package = "rds-search" }
 analytics_resource = { path = "crates/analytics_resource", package = "rds-analytics-resource" }
 workbench_shell = { path = "crates/workbench_shell", package = "rds-workbench-shell" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
@@ -62,7 +64,8 @@ workbench = { path = "crates/workbench", package = "rds-workbench" }
 # gpui-kit 与 gpui 版本强绑定：gpui-kit / gpui-base / gpui-component /
 # gpui-kit-assets 必须同版本（否则门面与内部错配），升级由 GPUI-kit 发布节奏统一决定。
 # 0.7.0：在 verify/gpui-kit-0.7 分支验证（2026-10-01），通过后合回 main。
-gpui-kit = "0.7.0"
+# 0.7.1：在 refactor/ui-standalone 分支随 UI 治理一起升级（2026-10-11），patch 级增量、符号零删除。
+gpui-kit = "0.7.1"
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），
@@ -241,3 +244,12 @@ debug = "line-tables-only"
 # （本仓 crate 仍是 line-tables-only；改动此项会触发一次依赖全量重建）
 [profile.dev.package."*"]
 debug = false
+
+# ============================================================================
+# 本地补丁：多 tab 模式下 Dock 的 tab 不渲染 title_suffix（脏点 / 自绘关闭钮
+# 丢失）。vendor 一份 gpui-component 0.7.1（vendor/gpui-component），在
+# tab_panel.rs 的 render_tab 把 title_suffix 并入 tab 的 suffix。版本必须与
+# 工作区声明的 gpui-component（经 gpui-kit 0.7.1 带入）一致。
+# ============================================================================
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }
