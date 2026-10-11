@@ -150,7 +150,7 @@ impl ListDelegate for TypeTreeDelegate {
         Some(
             div()
                 .w_full()
-                .h(rems(1.25))
+                .h(rems(crate::ui::DIALOG_SECTION_HEADER_HEIGHT))
                 .px_2()
                 .text_xs()
                 .font_weight(FontWeight::BOLD)
@@ -178,7 +178,7 @@ impl ListDelegate for TypeTreeDelegate {
             t.id
         ))))
         // 行高与旧实现一致（1.75rem）：委托里所有行必须同高（组件只量一行）。
-        .h(rems(1.75))
+        .h(rems(crate::ui::DIALOG_ROW_HEIGHT))
         .px_2()
         .rounded(cx.theme().radius)
         .text_xs()
@@ -186,7 +186,7 @@ impl ListDelegate for TypeTreeDelegate {
             div()
                 .h_flex()
                 .items_center()
-                .gap(rems(0.375))
+                .gap_1()
                 .child(
                     div()
                         .flex_shrink_0()

@@ -257,6 +257,20 @@ pub const DIALOG_SEGMENT_ITEM_HEIGHT: f32 = 1.25;
 pub const DIALOG_STATUS_DOT_SIZE: f32 = 0.4375;
 /// 短码徽标圆角（0.125rem = 2px）；横向内距用 Tailwind 尺度 `px_1()`（契约禁止 `.px(...)` 字面量）
 pub const DIALOG_CHIP_RADIUS: f32 = 0.125;
+/// 「数据(JSON)」输入框宽（12.5rem = 200px；网络页 JSON 数据行）
+pub const DIALOG_JSON_INPUT_WIDTH: f32 = 12.5;
+/// 名称输入框宽（11.25rem = 180px；新建文件/网络页名称行）
+pub const DIALOG_NAME_INPUT_WIDTH: f32 = 11.25;
+/// 对话框侧栏宽（12.5rem = 200px；`conn-side-panel`，与「两列行」同底等高）
+pub const DIALOG_SIDEBAR_WIDTH: f32 = 12.5;
+/// 认证方法 / 引用配置标签列宽（5.75rem = 92px；`flex_shrink_0` 定宽让值列对齐）
+pub const DIALOG_LABEL_COLUMN_WIDTH: f32 = 5.75;
+/// 测试消息 / 结果占位高（1.125rem = 18px = `text_xs` 行高；无消息时空 div 占位防跳动）
+pub const DIALOG_HINT_PLACEHOLDER_HEIGHT: f32 = 1.125;
+/// 类型树小节头高（1.25rem = 20px；恒定高让 List 按同一高度测量，不随文字撑）
+pub const DIALOG_SECTION_HEADER_HEIGHT: f32 = 1.25;
+/// 策略开关自绘轨道宽（1.875rem = 30px；`pol-toggle`，保持既有自绘形态，Switch 组件化待办）
+pub const DIALOG_TOGGLE_WIDTH: f32 = 1.875;
 
 // ===== 日志对话框（日志系统的读路径）专用尺寸 =====
 //

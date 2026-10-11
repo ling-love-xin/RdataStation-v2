@@ -323,7 +323,7 @@ pub(crate) fn open_manager(
             if net_rows.is_empty() {
                 type_row = type_row
                     .child(div().text_xs().child("数据(JSON)"))
-                    .child(Input::new(&new_data).w(rems(12.5)));
+                    .child(Input::new(&new_data).w(cx.theme().font_size * crate::ui::DIALOG_JSON_INPUT_WIDTH));
             }
             let mut fields_block = div().v_flex().gap_1();
             for (spec, input) in &net_rows {
@@ -371,7 +371,7 @@ pub(crate) fn open_manager(
                 .child(
                     div().h_flex().items_center().gap_2()
                         .child(div().text_xs().child("名称"))
-                        .child(Input::new(&new_name).w(rems(11.25))),
+                        .child(Input::new(&new_name).w(cx.theme().font_size * crate::ui::DIALOG_NAME_INPUT_WIDTH)),
                 )
                 .child(type_row)
                 .child(fields_block)
@@ -462,7 +462,7 @@ pub(crate) fn open_manager(
                     if let Some(msg) = msg {
                         div().text_xs().text_color(theme.colors.info).child(msg)
                     } else {
-                        div().h(rems(1.125))
+                        div().h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT))
                     },
                 )
         };
@@ -555,7 +555,7 @@ pub(crate) fn open_manager(
                                             .id("pol-toggle")
                                             .cursor_pointer()
                                             .relative()
-                                            .w(rems(1.875))
+                                            .w(rems(crate::ui::DIALOG_TOGGLE_WIDTH))
                                             .h_4()
                                             .rounded_full()
                                             .bg(if policy_enabled.get() { theme.colors.primary } else { theme.colors.border })

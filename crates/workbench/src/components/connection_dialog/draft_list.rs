@@ -160,7 +160,7 @@ impl ListDelegate for DraftListDelegate {
             div()
                 .h_flex()
                 .items_center()
-                .gap(rems(0.375))
+                .gap_1()
                 .flex_1()
                 .min_w(rems(0.))
                 .child({
@@ -192,7 +192,7 @@ impl ListDelegate for DraftListDelegate {
                     div()
                         .h_flex()
                         .items_center()
-                        .gap(rems(0.25))
+                        .gap_1()
                         .flex_1()
                         .min_w(rems(0.))
                         .text_color(if on {

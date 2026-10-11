@@ -1055,13 +1055,13 @@ impl ConnectionDialogState {
                         .w_full()
                         .h_flex()
                         .items_center()
-                        .gap(rems(0.5))
+                        .gap_2()
                         .rounded(theme.radius_lg)
                         .border_1()
                         .border_color(theme.colors.info.opacity(0.28))
                         .bg(theme.colors.info.opacity(0.08))
                         .px_3()
-                        .py(rems(0.4375))
+                        .py_2()
                         .text_xs()
                         .text_color(theme.colors.info)
                         .child(
@@ -1090,7 +1090,7 @@ impl ConnectionDialogState {
                                 div()
                                     .h_flex()
                                     .items_center()
-                                    .gap(rems(0.5))
+                                    .gap_2()
                                     .child(div().flex_1().min_w(rems(0.)).child(
                                         Input::new(&url).disabled(form_disabled),
                                     ))
@@ -1170,10 +1170,10 @@ impl ConnectionDialogState {
                         let mut row = div()
                             .h_flex()
                             .items_center()
-                            .gap(rems(0.5))
+                            .gap_2()
                             .child(
                                 div()
-                                    .w(rems(5.75))
+                                    .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
                                     .flex_shrink_0()
                                     .text_xs()
                                     .text_color(theme.colors.muted_foreground)
@@ -1200,16 +1200,16 @@ impl ConnectionDialogState {
                     };
                     let auth_body = div()
                         .v_flex()
-                        .gap(rems(0.375))
+                        .gap_1()
                         .child(auth_method_row)
                         .child(
                             div()
                                 .h_flex()
                                 .items_center()
-                                .gap(rems(0.5))
+                                .gap_2()
                                 .child(
                                     div()
-                                        .w(rems(5.75))
+                                        .w(rems(crate::ui::DIALOG_LABEL_COLUMN_WIDTH))
                                         .flex_shrink_0()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
@@ -1353,7 +1353,7 @@ impl ConnectionDialogState {
                                     .child("分组：本项目暂无分组"),
                             );
                         } else {
-                            let mut list = div().v_flex().gap(rems(0.125));
+                            let mut list = div().v_flex().gap_0p5();
                             for (gid, gname, checked) in checks.iter() {
                                 list = list.child(
                                     Checkbox::new(SharedString::from(format!("grp-{gid}")))
@@ -1381,7 +1381,7 @@ impl ConnectionDialogState {
                             org_body = org_body.child(
                                 div()
                                     .v_flex()
-                                    .gap(rems(0.125))
+                                    .gap_0p5()
                                     .child(
                                         div()
                                             .text_xs()
@@ -1412,7 +1412,7 @@ impl ConnectionDialogState {
                                     .border_color(theme.colors.primary.opacity(0.28))
                                     .bg(theme.colors.primary.opacity(0.06))
                                     .px_3()
-                                    .py(rems(0.4375))
+                                    .py_2()
                                     .text_xs()
                                     .text_color(theme.colors.foreground)
                                     .child(
@@ -1507,7 +1507,7 @@ impl ConnectionDialogState {
                 .id("conn-side-panel")
                 // 测试快照：矩阵测试断言侧栏与内容区「同底」（两列等高才谈得上“布局恒定”）。
                 .test_support()
-                .w(rems(12.5))
+                .w(rems(crate::ui::DIALOG_SIDEBAR_WIDTH))
                 // 与右列同高：行高由外层两列行给定（`helpers::dialog_row_height`），两列各自填满。
                 // 侧栏不自己定高——否则类型树条目数会反过来决定对话框高度；
                 // `min_h_0` 让内容超出时走内部滚动，而不是把侧栏撞得比行高还高。
@@ -1515,8 +1515,8 @@ impl ConnectionDialogState {
                 .min_h_0()
                 .flex_shrink_0()
                 .v_flex()
-                .gap(rems(0.75))
-                .pr(rems(0.75))
+                .gap_3()
+                .pr_3()
                 .border_r_1()
                 .border_color(theme.colors.border)
                 .child(
@@ -1529,7 +1529,7 @@ impl ConnectionDialogState {
                 .child(
                     div()
                         .v_flex()
-                        .gap(rems(0.375))
+                        .gap_1()
                         .child(
                             div()
                                 .h_flex()
@@ -1586,7 +1586,7 @@ impl ConnectionDialogState {
                         .flex_1()
                         .min_h_0()
                         .v_flex()
-                        .gap(rems(0.375))
+                        .gap_1()
                         .child(
                             div()
                                 .text_xs()
@@ -1856,14 +1856,14 @@ impl ConnectionDialogState {
                         };
                         let mut col = div()
                             .v_flex()
-                            .gap(rems(0.125))
+                            .gap_0p5()
                             .flex_1()
                             .min_w(rems(0.))
                             .child(
                                 div()
                                     .h_flex()
                                     .items_center()
-                                    .gap(rems(0.375))
+                                    .gap_1()
                                     .text_xs()
                                     .text_color(color)
                                     .child(icon.size(rems(crate::ui::ICON_SIZE_SM)))
@@ -1890,7 +1890,7 @@ impl ConnectionDialogState {
                             col = col.child(
                                 div()
                                     .h_flex()
-                                    .gap(rems(0.5))
+                                    .gap_2()
                                     .child(
                                         div()
                                             .id("conn-result-toggle")
@@ -1924,7 +1924,7 @@ impl ConnectionDialogState {
                         }
                         col
                     }
-                    None => div().h(rems(1.125)),
+                    None => div().h(rems(crate::ui::DIALOG_HINT_PLACEHOLDER_HEIGHT)),
                 }
             };
 
@@ -2488,7 +2488,7 @@ impl ConnectionDialogState {
                         .min_h(row_h)
                         .max_h(row_h)
                         .items_stretch()
-                        .gap(rems(1.))
+                        .gap_4()
                         // 快捷键 context：绑定在 app 层（Ctrl+Enter 保存 / Ctrl+T 测试 / ↑↓ 切换条目）。
                         // 焦点在输入框内时，Input 处理键后 `Enter` 会 propagate 到此兜底。
                         .key_context("connection-dialog")

@@ -694,7 +694,7 @@ pub(crate) fn reuse_note(theme: &Theme, text: &str) -> Div {
     div()
         .h_flex()
         .items_center()
-        .gap(rems(0.375))
+        .gap_1()
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(
