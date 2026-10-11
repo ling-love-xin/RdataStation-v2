@@ -15,22 +15,22 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::*;
 
 use crate::components::connection_dialog;
 
 use crate::services::db_navigator::NavTable;
-use scratchpad::jobs as scratchpad_jobs;
+// M5 草稿箱替换入口已收敛到侧栏搜索面板（chrome.rs），本面板不再直接入队草稿箱任务。
+
 
 use super::shared::QueryRequest;
 use super::Shared;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
 use database::nav_view::NavDragPayload;
 use scratchpad::{
-    ScratchpadDiffView, ScratchpadSearchView,
-    scratchpad_view::{render_scratchpad_diff_pane, render_scratchpad_search_pane},
+    ScratchpadDiffView,
+    scratchpad_view::render_scratchpad_diff_pane,
 };
 
 /// 中央内容区面板。
@@ -42,9 +42,6 @@ pub struct EditorPanel {
     dialog: Option<Rc<connection_dialog::ConnectionDialogState>>,
     /// 连接对话框项目下拉确认订阅（由 `ensure_dialog_subscription` 持有；句柄释放即取消）。
     _dialog_sub: Option<Subscription>,
-    /// M5 草稿箱内容搜索的「替换为」输入框（懒创建，有搜索结果时才建）。
-    scratchpad_replace: Option<Entity<InputState>>,
-    _scratchpad_replace_sub: Option<Subscription>,
     /// Round 25：连接详情卡「分析库元数据树」缓存（哪个连接加载的 + 表列表）。
     ///
     /// 宿主 / 项目宿主 / Mock 宿主**不直接读写这里**：它们只递增
@@ -53,10 +50,6 @@ pub struct EditorPanel {
     nav_tables: Rc<RefCell<Vec<NavTable>>>,
     /// 已消费的失效戳（与 `Shared` 逐帧对比，不等则丢弃自持缓存）。
     nav_cache_epoch: u64,
-    /// M5：草稿箱内容搜索结果（草稿箱经端口投递，见 `set_scratchpad_search`）。
-    ///
-    /// 展示归编辑区（结果渲染在中央区）；草稿箱自己只记搜索参数，不回读这份数据。
-    scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
     /// M5：草稿箱冲突 Diff（原型 §4.5「查看差异」→ 落中央编辑区；消解动作在左侧冲突条上）。
     scratchpad_diff: Rc<RefCell<Option<ScratchpadDiffView>>>,
     /// 分析库元数据树是否正在后台加载（避免 render 每帧重复入队）。
@@ -88,12 +81,9 @@ impl EditorPanel {
             focus_handle: cx.focus_handle(),
             dialog: None,
             _dialog_sub: None,
-            scratchpad_replace: None,
-            _scratchpad_replace_sub: None,
             nav_for: Rc::new(RefCell::new(None)),
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             nav_cache_epoch: 0,
-            scratchpad_search: Rc::new(RefCell::new(None)),
             scratchpad_diff: Rc::new(RefCell::new(None)),
             nav_tree_loading: Cell::new(false),
         }
@@ -116,71 +106,6 @@ impl EditorPanel {
             .iter()
             .map(|t| t.name.clone())
             .collect()
-    }
-
-    /// 懒创建草稿箱搜索结果的「替换为」输入框（有结果时才建）并订阅回车执行。
-    fn ensure_scratchpad_replace_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scratchpad_replace.is_some() || self.scratchpad_search.borrow().is_none() {
-            return;
-        }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("替换为…"));
-        let sub = cx.subscribe_in(
-            &input,
-            window,
-            |this, _e, ev: &InputEvent, _w, cx| match ev {
-                InputEvent::Change => cx.notify(),
-                InputEvent::PressEnter { .. } => this.replace_scratchpad_all(cx),
-                _ => {}
-            },
-        );
-        self.scratchpad_replace = Some(input);
-        self._scratchpad_replace_sub = Some(sub);
-    }
-
-    /// 在草稿箱内容搜索结果上「全部替换」：入队后台（替写 + 重搜一次任务完成）。
-    ///
-    /// 命中文件列表由任务内部从「先搜一遍」得出，与侧栏搜索开关语义完全一致；
-    /// 结果（替换汇总 + 刷新后的结果视图）由侧栏轮询印回填到 `Shared`。
-    fn replace_scratchpad_all(&mut self, cx: &mut Context<Self>) {
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许替换草稿内容".to_string());
-            cx.notify();
-            return;
-        }
-        let replacement = self
-            .scratchpad_replace
-            .as_ref()
-            .map(|i| i.read(cx).value().to_string())
-            .unwrap_or_default();
-        if replacement.trim().is_empty() {
-            *self.shared.notice.borrow_mut() = Some("请先输入替换内容".to_string());
-            cx.notify();
-            return;
-        }
-        let (query, is_regex, case_sensitive) = {
-            let search = self.scratchpad_search.borrow();
-            match search.as_ref() {
-                Some(s) => (s.query.clone(), s.is_regex, s.case_sensitive),
-                None => return,
-            }
-        };
-        let Some(root) = self.shared.project_root() else {
-            *self.shared.notice.borrow_mut() = Some("未打开项目".to_string());
-            cx.notify();
-            return;
-        };
-        scratchpad_jobs::enqueue_replace_all(
-            &root,
-            &query,
-            &replacement,
-            case_sensitive,
-            is_regex,
-        );
-        *self.shared.notice.borrow_mut() = Some("替换中…".to_string());
-        // 结果由侧栏的轮询印回填：请求它确保还在跑。
-        self.shared.ensure_scratchpad_pump(cx);
-        self.shared.notify_host(cx);
-        cx.notify();
     }
 
     /// 连接对话框状态（懒创建：首次 `request_*` 时建立；宿主 / 测试只读访问）。
@@ -272,16 +197,6 @@ impl EditorPanel {
         .detach();
     }
 
-    /// 投递草稿箱内容搜索结果（`EditorBridge::show_search_results`；`None` = 清空）。
-    pub(super) fn set_scratchpad_search(
-        &mut self,
-        view: Option<ScratchpadSearchView>,
-        cx: &mut Context<Self>,
-    ) {
-        *self.scratchpad_search.borrow_mut() = view;
-        cx.notify();
-    }
-
     /// 投递草稿箱冲突 Diff（`EditorBridge::show_diff`；`None` = 关闭）。
     pub(super) fn set_scratchpad_diff(
         &mut self,
@@ -309,11 +224,12 @@ impl Render for EditorPanel {
             )));
         }
 
+        // M5 草稿箱搜索结果：替换输入在**侧栏搜索面板**（2026-10-10 起，VSCode 形态），
+        // 结果展示在**中央「搜索: query」标签页**（`SearchResultsHostPanel`）——本面板不承载。
+
         // 「编辑连接」/「新建连接」改由 `EditorBridge` 在事件路径直接调用（见 `shared.rs`）。
         // 导航的 SQL（查看数据 / 生成 SQL / 拖拽）在 B12 后不再落到本面板：它们走
         // `Shared::request_query`，由宿主开一份编辑器文档（真正的 SQL 编辑器在那里）。
-        // M5 草稿箱搜索结果：替换输入框懒创建（须在 `let theme = cx.theme()` 之前）。
-        self.ensure_scratchpad_replace_input(window, cx);
 
         // Round 25：分析库元数据树按需后台加载（同样必须在 `let theme = cx.theme()` 之前：
         // theme 借了 `cx`，之后再要 `&mut Context` 会 E0502）。
@@ -568,57 +484,9 @@ impl Render for EditorPanel {
             ),
         );
 
-        // M5 草稿箱内容搜索结果（原型 §4.3/§4.5：结果与替换栏落中央编辑区）。
-        {
-            let search = self.scratchpad_search.borrow();
-            if let Some(search) = search.as_ref() {
-                let shared = self.shared.clone();
-                let search_state = self.scratchpad_search.clone();
-                let replace_input = self.scratchpad_replace.clone();
-                let replace_filled = replace_input
-                    .as_ref()
-                    .map(|i| !i.read(cx).value().trim().is_empty())
-                    .unwrap_or(false);
-                let clear = {
-                    let entity = entity.clone();
-                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                        *search_state.borrow_mut() = None;
-                        shared.notify_host(app);
-                        entity.update(app, |_, cx| cx.notify());
-                    }
-                };
-                let replace_all = {
-                    let entity = entity.clone();
-                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                        entity.update(app, |this, cx| this.replace_scratchpad_all(cx));
-                    }
-                };
-                // 借用顺序：`theme` 已从 cx 借出，这里不再调用 `entity.update(cx, …)`。
-                let match_bg = settings::product_tokens::get(cx).search_match_background(theme);
-                // 点命中 → 在编辑器里打开该草稿（相对路径 → 模块内绝对路径；跳行仍待编辑器端口）。
-                let open_hit: Rc<dyn Fn(String, &mut gpui_kit::Window, &mut App)> = {
-                    let shared = self.shared.clone();
-                    Rc::new(move |file: String, _window: &mut gpui_kit::Window, _app: &mut App| {
-                        if let Some(root) = shared.project_root() {
-                            let abs = root
-                                .join(scratchpad::MODULE_DIR_NAME)
-                                .join(file.as_str());
-                            shared.request_open_in_editor(abs);
-                        }
-                    })
-                };
-                content = content.child(render_scratchpad_search_pane(
-                    search,
-                    theme,
-                    match_bg,
-                    replace_input.as_ref(),
-                    replace_filled,
-                    open_hit,
-                    clear,
-                    replace_all,
-                ));
-            }
-        }
+        // M5 草稿箱内容搜索结果：2026-10-10 起已升为中央 Dock 独立 tab
+        // （「搜索: query」标签页，见 `SearchResultsHostPanel` / `Shared::scratchpad_search`），
+        // 与打开的文档 tab 并列（VSCode 全局搜索形态）；本面板不再承载搜索结果。
 
         // M5 草稿箱冲突 Diff（原型 §4.5：冲突时「查看差异」→ 落中央编辑区）。
         {

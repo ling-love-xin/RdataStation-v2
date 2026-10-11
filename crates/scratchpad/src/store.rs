@@ -9,7 +9,7 @@ use tokio::time::{Duration, timeout};
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
     FileMeta, FlatFile, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
-    ScratchpadResponse, SearchMatch, SearchResult,
+    ScratchpadResponse,
 };
 use engine::persistence::trash::{ProjectTrash, TrashEntry, TrashKind};
 use shared::error::{CoreError, StorageError};
@@ -19,10 +19,6 @@ const MAX_DEPTH: u32 = 4;
 const CONFIG_FILE: &str = "config.json";
 /// 旧回收站目录名（v1 `.scratchpad/.trash`、上一版 `.RSmeta/scratchpad/.trash`）。
 const TRASH_DIR: &str = ".trash";
-const MAX_SEARCH_RESULTS: usize = 500;
-const SEARCH_PER_FILE_TIMEOUT_SECS: u64 = 30;
-/// 单行命中高亮区间上限（超长行/重复命中时限制前端渲染开销）。
-const MAX_SPANS_PER_LINE: usize = 16;
 /// 复制重名避让的最大尝试次数（`name_copy`、`name_copy_1` …）。
 const MAX_COPY_ATTEMPTS: usize = 1000;
 /// 项目元数据目录（与 `project` crate 的 `RS_META_DIR_NAME` 保持一致）。
@@ -779,6 +775,10 @@ impl ScratchpadStore {
         }))
     }
 
+    /// 用系统默认应用打开条目（`opener::open`：SQL → 本机编辑器、MD → 默认阅读器）。
+    ///
+    /// 名字里的 explorer 是历史遗留（行为是 open，不是文件管理器定位）；定位请用
+    /// [`Self::reveal_in_file_manager`]。
     pub async fn open_in_system_explorer(&self, path_to_open: &Path) -> Result<(), CoreError> {
         opener::open(path_to_open).map_err(|e| {
             CoreError::storage(StorageError::io(
@@ -787,6 +787,40 @@ impl ScratchpadStore {
                 e.to_string(),
             ))
         })
+    }
+
+    /// 在系统文件管理器中**定位**条目（与 `open` 语义分离：不改文件、只把资源管理器
+    /// 打开到该文件所在目录并选中它）。
+    ///
+    /// Windows 用 `explorer /select,<path>`；其他平台退化到“打开父目录”。
+    pub async fn reveal_in_file_manager(&self, path_to_open: &Path) -> Result<(), CoreError> {
+        #[cfg(target_os = "windows")]
+        {
+            use std::process::Command;
+            let arg = format!("/select,{}", path_to_open.display());
+            Command::new("explorer.exe")
+                .arg(&arg)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| {
+                    CoreError::storage(StorageError::io(
+                        path_to_open.display().to_string(),
+                        "reveal_explorer",
+                        e.to_string(),
+                    ))
+                })
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let parent = path_to_open.parent().unwrap_or(path_to_open);
+            opener::open(parent).map_err(|e| {
+                CoreError::storage(StorageError::io(
+                    path_to_open.display().to_string(),
+                    "reveal_explorer",
+                    e.to_string(),
+                ))
+            })
+        }
     }
 
     pub async fn save_file(&self, relative_path: &str, content: &str) -> Result<(), CoreError> {
@@ -1067,100 +1101,6 @@ impl ScratchpadStore {
             .get(relative_path)
             .cloned()
             .unwrap_or_default())
-    }
-
-    /// 全文内容搜索。
-    ///
-    /// `is_regex` 为 `true` 时按正则匹配（`case_sensitive=false` 走不区分大小写的编译）。
-    /// 每文件 30s 超时、结果总数 500 条截断。
-    pub async fn search_file_content(
-        &self,
-        query: &str,
-        case_sensitive: bool,
-        context_lines: usize,
-        is_regex: bool,
-    ) -> Result<SearchResult, CoreError> {
-        let entries = self.list_local_entries(MAX_DEPTH).await?;
-        let flat = Self::flatten_entries_from_ref(&entries);
-        let mut matches = Vec::new();
-        let mut total_scanned = 0usize;
-        let mut truncated = false;
-        let query_lower = query.to_lowercase();
-        let query_owned = query.to_string();
-
-        // 正则模式在循环外编译一次。
-        let regex = if is_regex {
-            Some(
-                regex::RegexBuilder::new(query)
-                    .case_insensitive(!case_sensitive)
-                    .build()
-                    .map_err(|e| {
-                        CoreError::storage(StorageError::io(
-                            query.to_string(),
-                            "regex_compile",
-                            e.to_string(),
-                        ))
-                    })?,
-            )
-        } else {
-            None
-        };
-
-        for entry in &flat {
-            if entry.kind == ScratchpadEntryKind::Folder {
-                continue;
-            }
-            if truncated {
-                break;
-            }
-
-            let rel_path = match entry.path.strip_prefix(&self.scratchpad_dir) {
-                Ok(p) => p.to_string_lossy().to_string(),
-                Err(_) => entry.path.to_string_lossy().to_string(),
-            };
-
-            let remaining = MAX_SEARCH_RESULTS.saturating_sub(matches.len());
-            if remaining == 0 {
-                truncated = true;
-                break;
-            }
-
-            let future = search_single_file(
-                entry.path.clone(),
-                query_owned.clone(),
-                case_sensitive,
-                query_lower.clone(),
-                regex.as_ref(),
-                rel_path.clone(),
-                remaining,
-                context_lines,
-            );
-
-            match timeout(Duration::from_secs(SEARCH_PER_FILE_TIMEOUT_SECS), future).await {
-                Ok(Ok(mut file_matches)) => {
-                    total_scanned += 1;
-                    matches.append(&mut file_matches);
-                }
-                Ok(Err(_)) => {
-                    total_scanned += 1;
-                }
-                Err(_) => {
-                    total_scanned += 1;
-                }
-            }
-
-            if matches.len() >= MAX_SEARCH_RESULTS {
-                truncated = true;
-            }
-        }
-
-        Ok(SearchResult {
-            matches,
-            total_files_scanned: total_scanned,
-            total_files_skipped: 0,
-            skipped_files: vec![],
-            truncated,
-        })
     }
 
     fn resolve_path(&self, relative_path: &str) -> Result<PathBuf, CoreError> {
@@ -1549,6 +1489,8 @@ impl ScratchpadStore {
         replacement: &str,
         is_regex: bool,
         case_sensitive: bool,
+        whole_word: bool,
+        preserve_case: bool,
     ) -> Result<ReplaceResult, CoreError> {
         let file_path = self.resolve_path(relative_path)?;
         let original = fs::read_to_string(&file_path).await.map_err(|e| {
@@ -1559,10 +1501,13 @@ impl ScratchpadStore {
             ))
         })?;
 
-        let expression = if is_regex {
-            pattern.to_string()
-        } else {
-            regex::escape(pattern)
+        // 全字匹配（VSCode `ab` 开关）：非正则模式转义后包 `\b(?:…)\b`，正则模式
+        // 直接在用户表达式外包 `\b(?:…)\b` —— 与 `rds_search::search_directory` 同口径。
+        let expression = match (is_regex, whole_word) {
+            (true, true) => format!("\\b(?:{pattern})\\b"),
+            (false, true) => format!("\\b(?:{})\\b", regex::escape(pattern)),
+            (true, false) => pattern.to_string(),
+            (false, false) => regex::escape(pattern),
         };
         let re = regex::RegexBuilder::new(&expression)
             .case_insensitive(!case_sensitive)
@@ -1577,6 +1522,23 @@ impl ScratchpadStore {
         let replaced = re.find_iter(&original).count();
         let new_content = if replaced == 0 {
             original
+        } else if preserve_case {
+            // AB 保留大小写（2026-10-11 接线）：逐匹配替换，替换文本先按捕获组展开
+            // （正则 `$1` 等），再按**命中文本**的大小写形态转换（VSCode 语义：
+            // 全大写 → 全大写；首字母大写 → 首字母大写；混合/全小写 → 原样）。
+            let mut out = String::with_capacity(original.len() + replaced * replacement.len());
+            let mut last = 0;
+            for caps in re.captures_iter(&original) {
+                let m = caps.get(0).expect("捕获组 0 恒存在");
+                out.push_str(&original[last..m.start()]);
+                let hit = &original[m.start()..m.end()];
+                let mut expanded = String::new();
+                caps.expand(replacement, &mut expanded);
+                out.push_str(&preserve_case_transform(hit, &expanded));
+                last = m.end();
+            }
+            out.push_str(&original[last..]);
+            out
         } else if is_regex {
             re.replace_all(&original, replacement).to_string()
         } else {
@@ -1646,83 +1608,44 @@ impl ScratchpadStore {
     }
 }
 
-async fn search_single_file(
-    path: PathBuf,
-    query: String,
-    case_sensitive: bool,
-    query_lower: String,
-    regex: Option<&regex::Regex>,
-    rel_path: String,
-    max_results: usize,
-    context_lines: usize,
-) -> Result<Vec<SearchMatch>, CoreError> {
-    // Read the entire file into memory so that we can extract context lines
-    // around matches. This trades off memory usage for complete context support.
-    // For typical scratchpad file sizes, this is acceptable.
-    let file = fs::File::open(&path).await.map_err(|e| {
-        CoreError::storage(StorageError::io(
-            path.display().to_string(),
-            "search_open",
-            e.to_string(),
-        ))
-    })?;
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut all_lines: Vec<String> = Vec::new();
-    while let Ok(Some(line)) = lines.next_line().await {
-        all_lines.push(line);
-    }
-
-    let mut matches = Vec::new();
-    for (i, line) in all_lines.iter().enumerate() {
-        if matches.len() >= max_results {
-            break;
-        }
-        let line_number = i + 1;
-        let found = match regex {
-            Some(re) => re.is_match(line),
-            None if case_sensitive => line.contains(&query),
-            None => line.to_lowercase().contains(&query_lower),
-        };
-        if found {
-            let before: Vec<String> = if context_lines > 0 {
-                let start = i.saturating_sub(context_lines);
-                all_lines[start..i].to_vec()
-            } else {
-                Vec::new()
-            };
-            let after: Vec<String> = if context_lines > 0 {
-                let end = (i + 1 + context_lines).min(all_lines.len());
-                all_lines[i + 1..end].to_vec()
-            } else {
-                Vec::new()
-            };
-            let match_spans = match regex {
-                Some(re) => re
-                    .find_iter(line)
-                    .take(MAX_SPANS_PER_LINE)
-                    .map(|m| (m.start(), m.end()))
-                    .collect(),
-                None => literal_match_spans(line, &query, case_sensitive),
-            };
-            matches.push(SearchMatch {
-                file: rel_path.clone(),
-                line_number,
-                line_content: line.clone(),
-                before_context: before,
-                after_context: after,
-                match_spans,
-            });
-        }
-    }
-    Ok(matches)
-}
-
 /// 拆分文件名与后缀（`foo.sql` → (`foo`, `.sql`)；无后缀时后缀为空串）。
 fn split_name_ext(name: &str) -> (String, String) {
     match name.rfind('.') {
         Some(i) if i > 0 => (name[..i].to_string(), name[i..].to_string()),
         _ => (name.to_string(), String::new()),
+    }
+}
+
+/// VSCode 式保留大小写（AB 开关，2026-10-11 接线）：替换文本按**命中文本**的大小写
+/// 形态自适应——命中全大写（`FOO`）→ 替换全大写；命中首字母大写、其余小写（`Foo`）
+/// → 替换首字母大写、其余小写；混合（`fOO`）/ 全小写 → 原样。
+///
+/// 空命中（正则 `*` 之类可匹配空串）或空替换文本按原样返回，不做形态转换。
+fn preserve_case_transform(hit: &str, replacement: &str) -> String {
+    if replacement.is_empty() || hit.is_empty() {
+        return replacement.to_string();
+    }
+    let hit_has_upper = hit.chars().any(char::is_uppercase);
+    let hit_has_lower = hit.chars().any(char::is_lowercase);
+    if hit_has_upper && !hit_has_lower {
+        // 全大写（如 `FOO` / `FOO_BAR`）
+        replacement.to_uppercase()
+    } else if hit_has_upper
+        && hit.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+        && hit.chars().skip(1).all(|c| !c.is_uppercase())
+    {
+        // 首字母大写、其余小写（如 `Foo`）——只对「其余全小写」的命中做首字母转换，
+        // `FooBar` 这类驼峰命中保持原样（VSCode 同口径：不猜驼峰）。
+        let mut chars = replacement.chars();
+        let first = chars.next().expect("非空已判");
+        let mut out = String::new();
+        out.extend(first.to_uppercase());
+        for c in chars {
+            out.extend(c.to_lowercase());
+        }
+        out
+    } else {
+        replacement.to_string()
     }
 }
 
@@ -1733,53 +1656,6 @@ fn join_relative(parent: &str, name: &str) -> String {
     } else {
         format!("{}/{}", parent.trim_end_matches(['/', '\\']), name)
     }
-}
-
-/// 字面量命中的行内区间（非正则模式）。
-///
-/// 大小写不敏感时先小写化再查找；若小写化改变了字节长度（少数 Unicode 字符），
-/// 则直接放弃高亮（不影响命中判定）。
-fn literal_match_spans(line: &str, query: &str, case_sensitive: bool) -> Vec<(usize, usize)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let mut spans = Vec::new();
-    if case_sensitive {
-        let mut from = 0usize;
-        while spans.len() < MAX_SPANS_PER_LINE {
-            let Some(pos) = line[from..].find(query) else {
-                break;
-            };
-            let start = from + pos;
-            let end = start + query.len();
-            spans.push((start, end));
-            from = end;
-        }
-        return spans;
-    }
-
-    let lower_line = line.to_lowercase();
-    let lower_query = query.to_lowercase();
-    if lower_query.is_empty()
-        || lower_line.len() != line.len()
-        || lower_query.len() != query.len()
-    {
-        return Vec::new();
-    }
-    let mut from = 0usize;
-    while spans.len() < MAX_SPANS_PER_LINE {
-        let Some(pos) = lower_line[from..].find(&lower_query) else {
-            break;
-        };
-        let start = from + pos;
-        let end = start + lower_query.len();
-        if !line.is_char_boundary(start) || !line.is_char_boundary(end) {
-            break;
-        }
-        spans.push((start, end));
-        from = end;
-    }
-    spans
 }
 
 fn duckdb_query_hint(ext: &str, name: &str) -> String {
@@ -2218,84 +2094,6 @@ mod tests {
         std::fs::remove_dir_all(&project).ok();
     }
 
-    #[tokio::test]
-    async fn search_content_regex_and_case() {
-        let project = temp_project("search");
-        let store = ScratchpadStore::new(project.clone());
-        store.ensure_dir().await.unwrap();
-        store.create_entry("a.sql", None, false).await.unwrap();
-        store
-            .save_file("a.sql", "select ID from t\nselect id from t\n")
-            .await
-            .unwrap();
-
-        // 子串 + 区分大小写：仅第 1 行命中。
-        let r = store
-            .search_file_content("ID", true, 1, false)
-            .await
-            .unwrap();
-        assert_eq!(r.matches.len(), 1);
-        assert_eq!(r.matches[0].line_number, 1);
-
-        // 子串 + 不区分大小写：两行都命中。
-        let r = store
-            .search_file_content("ID", false, 1, false)
-            .await
-            .unwrap();
-        assert_eq!(r.matches.len(), 2);
-
-        // 正则：`from.+t` 在每行命中一次。
-        let r = store
-            .search_file_content("from.+t", false, 1, true)
-            .await
-            .unwrap();
-        assert_eq!(r.matches.len(), 2);
-
-        std::fs::remove_dir_all(&project).ok();
-    }
-
-    #[tokio::test]
-    async fn search_reports_match_spans() {
-        let project = temp_project("search_spans");
-        let store = ScratchpadStore::new(project.clone());
-        store.ensure_dir().await.unwrap();
-        store.create_entry("a.sql", None, false).await.unwrap();
-        store
-            .save_file("a.sql", "select id, id2 from t\n")
-            .await
-            .unwrap();
-
-        // 字面量（不区分大小写）：两次命中 id / id2 的前两字节。
-        let r = store
-            .search_file_content("id", false, 0, false)
-            .await
-            .unwrap();
-        assert_eq!(r.matches.len(), 1);
-        assert_eq!(
-            r.matches[0].match_spans,
-            vec![(7, 9), (11, 13)],
-            "命中区间应按字节偏移给出"
-        );
-
-        // 正则：区间对应整个匹配。
-        let r = store
-            .search_file_content("id2?", false, 0, true)
-            .await
-            .unwrap();
-        assert_eq!(r.matches[0].match_spans, vec![(7, 9), (11, 14)]);
-
-        // 中文行：区间落在 char 边界上，可直接切片。
-        store.save_file("a.sql", "-- 中文注释 id\n").await.unwrap();
-        let r = store
-            .search_file_content("id", false, 0, false)
-            .await
-            .unwrap();
-        let line = &r.matches[0].line_content;
-        let (s, e) = r.matches[0].match_spans[0];
-        assert_eq!(&line[s..e], "id");
-
-        std::fs::remove_dir_all(&project).ok();
-    }
 
     #[tokio::test]
     async fn copy_entry_recurses_and_avoids_name_collisions() {
@@ -2360,7 +2158,7 @@ mod tests {
 
         // 字面量 + 不区分大小写：两行都替掉，且替换串里的 `$` 不当作分组引用。
         let r = store
-            .replace_in_file("a.sql", "id", "$key", false, false)
+            .replace_in_file("a.sql", "id", "$key", false, false, false, false)
             .await
             .unwrap();
         assert_eq!(r.replaced, 2);
@@ -2369,7 +2167,7 @@ mod tests {
 
         // 区分大小写：仅匹配大写。
         let r = store
-            .replace_in_file("a.sql", "KEY", "id", false, true)
+            .replace_in_file("a.sql", "KEY", "id", false, true, false, false)
             .await
             .unwrap();
         assert_eq!(r.replaced, 0, "区分大小写时不应命中 `$key`");
@@ -2377,7 +2175,7 @@ mod tests {
         // 正则分组引用。
         store.save_file("a.sql", "select a1, a2 from t\n").await.unwrap();
         let r = store
-            .replace_in_file("a.sql", "a([0-9])", "col_$1", true, true)
+            .replace_in_file("a.sql", "a([0-9])", "col_$1", true, true, false, false)
             .await
             .unwrap();
         assert_eq!(r.replaced, 2);
@@ -2392,13 +2190,72 @@ mod tests {
         std::fs::remove_dir_all(&project).ok();
     }
 
-    #[test]
-    fn literal_match_spans_handles_unicode_width_change() {
-        // `İ` 小写后为两个字节 → 放弃高亮（但不影响命中判定）。
-        assert!(literal_match_spans("İd", "id", false).is_empty());
-        assert_eq!(literal_match_spans("id id", "id", true), vec![(0, 2), (3, 5)]);
-        assert_eq!(literal_match_spans("ID id", "id", false), vec![(0, 2), (3, 5)]);
+    #[tokio::test]
+    async fn replace_in_file_preserves_case_like_vscode() {
+        let project = temp_project("replace_pc");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("a.sql", None, false).await.unwrap();
+
+        // 命中全大写（SELECT）→ 替换文本全大写；首字母大写（From）→ 首字母大写；
+        // 小写（where）→ 原样。
+        store
+            .save_file("a.sql", "SELECT id FROM t\nselect id from t\nSelect x\n")
+            .await
+            .unwrap();
+        let r = store
+            .replace_in_file("a.sql", "(select|from)", "into", true, false, false, true)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 5, "SELECT/FROM/select/from/Select 共 5 处命中");
+        let content = store.read_file("a.sql").await.unwrap();
+        assert!(content.contains("INTO id INTO t"), "全大写命中应全大写：{content}");
+        assert!(content.contains("into id into t"), "小写命中应原样：{content}");
+        assert!(content.contains("Into x"), "首字母大写命中应首字母大写：{content}");
+
+        // 混合形态（SeLeCt）保持原样。
+        store.save_file("a.sql", "SeLeCt 1\n").await.unwrap();
+        let r = store
+            .replace_in_file("a.sql", "select", "into", false, false, false, true)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 1);
+        assert!(
+            store.read_file("a.sql").await.unwrap().contains("into 1"),
+            "混合大小写命中应原样替换：{}",
+            store.read_file("a.sql").await.unwrap()
+        );
+
+        // 正则分组 + 保留大小写：展开捕获组后再按命中形态转换。
+        // 注：regex crate 的 `$1` 后紧跟字母/下划线会当作命名组（`$1_y` → 组名 `1_y`，
+        // 不存在则展开为空），故分组引用后接普通字符需用 `${1}` 花括号形式。
+        store.save_file("a.sql", "col_A1\n").await.unwrap();
+        let r = store
+            .replace_in_file("a.sql", "col_([A-Z])[0-9]", "x_${1}_y", true, true, false, true)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 1);
+        let content = store.read_file("a.sql").await.unwrap();
+        assert!(
+            content.contains("x_A_y"),
+            "正则捕获组展开后再转换，实际内容：{content:?}"
+        );
+
+        // 未开保留大小写：原语义不变（全大写命中也按字面替换）。
+        store.save_file("a.sql", "ABC\n").await.unwrap();
+        let r = store
+            .replace_in_file("a.sql", "abc", "def", false, false, false, false)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 1);
+        assert!(
+            store.read_file("a.sql").await.unwrap().contains("def"),
+            "未开保留大小写按字面替换"
+        );
+
+        std::fs::remove_dir_all(&project).ok();
     }
+
 
     #[tokio::test]
     async fn external_reference_relink_updates_path_only() {

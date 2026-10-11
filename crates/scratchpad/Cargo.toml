@@ -9,6 +9,11 @@ shared.workspace = true
 # 项目级回收站（`engine::persistence::trash`）：原来的 `src/trash.rs` 只有本模块一个使用方，
 # M6 资产库也要用它，于是按 rds-architecture 的「≥ 2 使用方上提」规则搬到 engine 并中性化。
 engine.workspace = true
+# 内容搜索独立 crate（用户点名 2026-10-10 抽取：后端模型 + 目录扫描 + 逐行匹配；
+# 渲染面板第二阶段迁入，type_icon 由调用方注入）。
+rds_search.workspace = true
+# ⋯ 更多设置持久化（2026-10-11 接线：工具栏显示/隐藏与左/右位置写入用户配置）。
+settings.workspace = true
 
 # ===== GPUI-kit 视图层 =====
 # 草稿箱视图自带（下沉后本 crate 就是它的家）：要取 `cx.theme()`、要命名 `App`。
@@ -38,3 +43,5 @@ opener.workspace = true
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }
+# K10：面板层窗口级测试（`#[gpui_kit::test]` / `TestAppContext`，与 editor 同款先例）
+gpui-kit = { workspace = true, features = ["test-support"] }

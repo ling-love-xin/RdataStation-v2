@@ -117,6 +117,9 @@ pub enum Slot {
     LanDisableTls,
     ProjectSortMode,
     LogMinLevel,
+    StartupDefaultLeftPanel,
+    /// 草稿箱工具栏布局（复合值：按钮稳定标识 → { visible, side }；读写走 ⋯ 菜单）。
+    ScratchpadToolbar,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -138,6 +141,8 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
         "logging.min_level" => Slot::LogMinLevel,
+        "startup.default_left_panel" => Slot::StartupDefaultLeftPanel,
+        "scratchpad.toolbar" => Slot::ScratchpadToolbar,
         _ => return None,
     })
 }
@@ -162,6 +167,9 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
+        Slot::StartupDefaultLeftPanel => KindTag::Enum,
+        // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。
+        Slot::ScratchpadToolbar => KindTag::Composite,
     }
 }
 
@@ -169,7 +177,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
 pub fn slot_is_scalar(slot: Slot) -> bool {
     !matches!(
         slot,
-        Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups
+        Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups | Slot::ScratchpadToolbar
     )
 }
 
@@ -511,6 +519,39 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Page,
         consumer: "crates/app/src/main.rs（启动取值）+ engine::logging::reload_log_level（运行时，经装配层注册的 sink）",
         composite: false,
+    },
+    SettingSpec {
+        key: "startup.default_left_panel",
+        section: "startup",
+        section_label: "启动",
+        label: "启动时默认显示的模块",
+        hint: "应用启动时左侧栏默认停在哪一个模块（活动栏也可以随时切换）",
+        kind: SettingKind::Enum(&[
+            ("database", "数据库导航"),
+            ("draft", "草稿箱"),
+            ("resources", "资产库"),
+            ("plugin", "插件"),
+        ]),
+        presets: &[],
+        default_json: "\"database\"",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "workbench/src/view.rs::WorkbenchView::init_workspace（读设置 → Shared.active_left）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "scratchpad.toolbar",
+        section: "scratchpad",
+        section_label: "草稿箱",
+        label: "工具栏按钮（显示/隐藏与位置）",
+        hint: "⋯ 更多设置：每个按钮可切换显示/隐藏与左/右位置；空配置 = 全部显示 + 默认位置（左 5 右 2）；改完立即生效并持久化",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{}",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "crates/scratchpad/src/scratchpad_view/chrome.rs::（⋯ 菜单读写）+ scratchpad_view.rs::ScratchpadView::new（启动读入）",
+        composite: true,
     },
 ];
 

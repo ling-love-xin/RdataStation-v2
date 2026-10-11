@@ -31,6 +31,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::channel::ExecChannel;
+use crate::export::RowKey;
 use crate::model::DocumentId;
 
 // ===== 执行什么 =====
@@ -85,6 +86,24 @@ pub enum ExecTarget {
     /// 与另两个下发都不同：它**不碰源库**（数据是桥接过来的行），所以通道闸 / 项目只读闸
     /// 对它一律放行（那两道管的是“写源库对象”）。
     Analysis(crate::analysis::AnalysisRequest),
+    /// 【T2a】批量提交：把结果集变更集写回源库（每行一条 UPDATE，**单事务**）
+    ///
+    /// `updates` 是编辑器侧生成好的 UPDATE 文本（`changes::commit_updates_rows`），
+    /// `sql` 是产生这份结果的**原查询**（血缘 / 历史用；提交本身不重跑它）；
+    /// `table` / `key` 留给执行器做诊断与事务文案。
+    ///
+    /// 与 `Filtered` / `SortedDown` 一样只发意图与原料：**执行与事务是执行器的事**
+    /// （`QueryRunner::commit_changes`），编辑器不猜方言与连接池。
+    Commit {
+        /// 原查询 SQL（血缘 / 历史）
+        sql: String,
+        /// 写入的目标表（`export::default_table_name` 的同一份猜测，展示用）
+        table: String,
+        /// 行定位依据（键列；`updates` 里的 `WHERE` 就是按它拼的）
+        key: RowKey,
+        /// 生成的 UPDATE 语句文本（逐条执行，同一事务）
+        updates: String,
+    },
 }
 
 impl ExecTarget {
@@ -111,6 +130,8 @@ impl ExecTarget {
             | Self::SortedDown { sql, .. } => Some(sql),
             // 分析 SQL 不发给源库驱动（它在本地 DuckDB 上跑，见 `analysis`）
             Self::Analysis(_) => None,
+            // 提交不走 `run`（UPDATE 文本走 `commit_changes`），原查询只作血缘记录
+            Self::Commit { .. } => None,
         }
     }
 
@@ -127,6 +148,8 @@ impl ExecTarget {
             }
             // 分析 SQL 走同一条“一句一条结论”的路（它不经过通道闸，见 `analysis`）
             Self::Analysis(request) => vec![request.sql.clone()],
+            // 提交的语句由执行器按 `updates` 逐条跑，不归 `statements`（它会进 `run` 通道）
+            Self::Commit { .. } => Vec::new(),
         }
     }
 
@@ -174,6 +197,7 @@ impl ExecTarget {
             Self::Filtered { .. } => "下发筛选",
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
+            Self::Commit { .. } => "批量提交",
         }
     }
 
@@ -188,6 +212,8 @@ impl ExecTarget {
             Self::Filtered { .. } => "下发筛选",
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
+            // 提交是写回动作，血缘说清“这份是改回源库的结果”——与下发类同源口径
+            Self::Commit { .. } => "本地写回",
             // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
             Self::Empty
             | Self::Selection(_)
@@ -558,6 +584,27 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持分段抓取".to_string())
     }
 
+    /// 【T2a】批量提交：把编辑器生成的 UPDATE 文本**逐条执行在同一个事务里**
+    ///
+    /// 与 [`Self::run`] 同口径：在**工作线程**上调用（可阻塞）。单事务由实现负责
+    /// （事务接口在 [`Self::transaction`]：逐条跑、全部成功 `COMMIT`、失败 `ROLLBACK`）。
+    /// 每条 UPDATE 的影响行数 0 = **冲突**（源库里的旧值已被别人改过）——收集进
+    /// [`CommitReport::conflicts`] 而不是当成错误：界面要区分"改到了"与"没改到"。
+    ///
+    /// `updates` 是编辑器侧生成好的语句文本（`changes::commit_updates_rows`）；
+    /// 实现**不得改写**它（键列 / 值字面量口径在编辑器，执行器只负责跑与收影响行数）。
+    /// 默认实现 = 不支持批量提交（宿主没接能力的真实状态，如实说出来）。
+    fn commit_changes(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _table: &str,
+        _key: &RowKey,
+        _updates: &str,
+    ) -> Result<CommitReport, String> {
+        Err("当前执行器不支持批量提交".to_string())
+    }
+
     /// 【B13】重新挂载源（**表清单刷新**）：源库新建的表要重挂才看得见
     ///
     /// - 加速档：`alias` 忽略（就那一条源），重挂它；
@@ -730,6 +777,47 @@ pub struct TxNote {
     pub result: Result<TxSnapshot, String>,
 }
 
+/// 【T2a】一次批量提交的结论（回到主线程）
+///
+/// 与 [`TxNote`] 同套：请求在一次性线程上做（端口允许阻塞），回执经
+/// [`ExecQueue::drain_commit_notes`] 取回。`sql` / `table` / `key` 是面板回执时
+/// 用来定位「这份提交属于哪个结果集」的原料。
+#[derive(Debug, Clone)]
+pub struct CommitNote {
+    pub document: DocumentId,
+    pub connection: Option<String>,
+    pub channel: crate::channel::ExecChannel,
+    /// 原查询 SQL（结果集定位 + 历史）
+    pub sql: String,
+    /// 写入的目标表（展示用）
+    pub table: String,
+    /// 行定位依据（键列；回执要按它标冲突格）
+    pub key: RowKey,
+    /// 提交结果（`Err` = 整体失败原因；`Ok` = 明细回执）
+    pub result: Result<CommitReport, String>,
+}
+
+/// 【T2a】批量提交的回执（回到主线程）
+///
+/// 与 [`ExecOutcome`] 分开：提交不改结果集内容（成功的那几行由面板**本地面应用**，
+/// 重查会丢排序/筛选/选中），所以它带的是"改了几行 / 哪些冲突"这种**提交专用**结论。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommitReport {
+    /// 成功落库的 UPDATE 条数（影响行数 ≥ 1 的）
+    pub committed: usize,
+    /// 键值 NULL 而跳过的行数（生成时已报告过，回执再合一次，界面不用自己数）
+    pub skipped: usize,
+    /// 影响行数 0 的冲突：`(数据行号, 变更列, 说明)`——界面要标出这一格"没改到"
+    pub conflicts: Vec<(usize, usize, String)>,
+}
+
+impl CommitReport {
+    /// 有没有任何一条 UPDATE 真正生效（提交失败的判断依据）
+    pub fn nothing_committed(&self) -> bool {
+        self.committed == 0
+    }
+}
+
 /// 提交被拒的原因
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitError {
@@ -773,6 +861,8 @@ pub struct ExecQueue {
     source_notes: Arc<Mutex<VecDeque<SourceNote>>>,
     /// 【B7 切片二】DuckDB 导出（Parquet / XLSX）的回执（主线程轮询取走）
     export_notes: Arc<Mutex<VecDeque<ExportNote>>>,
+    /// 【T2a】批量提交的回执（主线程轮询取走）
+    commit_notes: Arc<Mutex<VecDeque<CommitNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -794,6 +884,7 @@ impl ExecQueue {
         let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let source_notes: Arc<Mutex<VecDeque<SourceNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let export_notes: Arc<Mutex<VecDeque<ExportNote>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let commit_notes: Arc<Mutex<VecDeque<CommitNote>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
@@ -886,6 +977,7 @@ impl ExecQueue {
             tx_notes,
             source_notes,
             export_notes,
+            commit_notes,
             runner,
         }
     }
@@ -1067,6 +1159,62 @@ impl ExecQueue {
     /// 【B7 切片二】DuckDB 导出的回执（主线程轮询；取走即清空）
     pub fn drain_export_notes(&self) -> Vec<ExportNote> {
         let mut queue = match self.export_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
+    }
+
+    /// 【T2a】请一次批量提交（把变更集写回源库）
+    ///
+    /// 与 [`Self::request_transaction`] 同一套：同步只做「能不能做」的判断
+    /// （有执行在跑就回绝——提交插在执行中间会让"提交了什么"说不清），
+    /// 提交本身在**一次性线程**上做（端口允许阻塞，UI 不等），回执经
+    /// [`Self::drain_commit_notes`] 取回。**不占执行位**：它不产结果集。
+    pub fn request_commit_changes(
+        &self,
+        document: DocumentId,
+        connection: Option<String>,
+        channel: crate::channel::ExecChannel,
+        table: String,
+        key: RowKey,
+        sql: String,
+        updates: String,
+    ) -> Result<(), String> {
+        if self.is_busy() {
+            return Err("有执行在跑，先等它结束再提交".to_string());
+        }
+        let runner = self.runner.clone();
+        let notes = self.commit_notes.clone();
+        std::thread::Builder::new()
+            .name("rds-editor-commit".to_string())
+            .spawn(move || {
+                let result = runner.commit_changes(
+                    connection.as_deref(),
+                    channel,
+                    &table,
+                    &key,
+                    &updates,
+                );
+                if let Ok(mut queue) = notes.lock() {
+                    queue.push_back(CommitNote {
+                        document,
+                        connection,
+                        channel,
+                        sql,
+                        table,
+                        key,
+                        result,
+                    });
+                }
+            })
+            .map_err(|e| format!("起提交线程失败：{e}"))?;
+        Ok(())
+    }
+
+    /// 【T2a】批量提交的回执（主线程轮询；取走即清空）
+    pub fn drain_commit_notes(&self) -> Vec<CommitNote> {
+        let mut queue = match self.commit_notes.lock() {
             Ok(queue) => queue,
             Err(poisoned) => poisoned.into_inner(),
         };

@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::App;
 
-use crate::scratchpad_view::{ScratchpadDiffView, ScratchpadSearchView};
+use crate::scratchpad_view::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 
 /// 宿主注入的能力。
 pub trait ScratchpadHost: 'static {
@@ -50,6 +50,15 @@ pub trait ScratchpadHost: 'static {
 
     /// 在中央编辑器里打开一个文件（**绝对路径**；编辑器按路径自己判定模式与只读等级）。
     fn open_in_editor(&self, path: PathBuf);
+
+    /// 打开搜索命中并定位到行（侧栏搜索结果树点击命中明细 / 文件节点）。
+    ///
+    /// 默认实现只打开文件（退化为 `open_in_editor`）；`workbench` 覆盖为
+    /// 打开 + 落光标/选区（`request_open_in_editor_at` + `RevealTarget`）。
+    fn open_search_hit(&self, target: crate::scratchpad_view::ScratchpadSearchHitTarget) {
+        let path = PathBuf::from(target.file);
+        self.open_in_editor(path);
+    }
 
     /// 这份草稿能不能「查看统计」（M8 洞察）：宿主按文件类型判定。
     ///
@@ -96,6 +105,13 @@ pub trait ScratchpadHost: 'static {
     ///
     /// 与搜索结果同一理由：宽内容不往 240 px 的侧栅里塞。
     fn show_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
+        let _ = (view, cx);
+    }
+
+    /// 把文件属性投给中央编辑区（右键 → 属性；`None` = 关闭）。
+    ///
+    /// 树行 meta 只留大小（用户点名 2026-10-10），时间与连接信息挪进属性面板。
+    fn show_file_info(&self, view: Option<ScratchpadFileInfoView>, cx: &mut App) {
         let _ = (view, cx);
     }
 }

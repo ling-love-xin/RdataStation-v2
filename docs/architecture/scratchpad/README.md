@@ -5,7 +5,7 @@
 > **宣传页（一页看懂）**：[`scratchpad-showcase.html`](scratchpad-showcase.html)（视觉版，明暗双主题、离线可开、吸顶导航）· [`scratchpad-showcase.md`](scratchpad-showcase.md)（可贴版，适合贴进 PR / wiki）
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节指向本目录内文档，**不复制设计**。
-> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成；**Phase C（编辑器联动）已接**（打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入，2026-09-16 ~ 09-17），只剩 Phase C 余项（系统文件拖入导入 · 命中跳行，见 §7）；Phase D（提升为分析资源）待续。
+> 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成；**Phase C（编辑器联动）已接**（打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入，2026-09-16 ~ 09-17；**系统文件拖入树导入 · 命中跳行，2026-10-09**）；Phase D（提升为分析资源）待续。
 
 ## 1. 模块特点
 
@@ -44,7 +44,7 @@
 | **冲突 Diff** | 同一份草稿在编辑器里有未保存修改、磁盘上又被外部改了 → 侧栅出冲突条（差异 / 重载 / 忽略）；「差异」把行级对比投到中央编辑区（左=磁盘 / 右=编辑器，行号 + 红/绿） | 架构 §6.15 |
 | **拖入编辑器插入** | 拖草稿文件行落到编辑器文本区 → 内容插到光标处（载荷只带路径，落点现读；只读 / 空文件 / 读失败都给消息） | 架构 §6.17 |
 | **外部改动自动刷新** | 监听模块目录（`notify`），1.2 s 去抖后重拉列表，并给已打开的结果面板重跑一次搜索；监控不可用则降级为手动 `↻` | 架构 §6.11 |
-| **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`；`ScratchpadState`（长生命周期 watcher 场景）接入时**必须按窗口持有** | 架构 §7.2 |
+| **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`，watcher 由面板实体自持生命周期（原 `ScratchpadState` 进程级状态壳已删，K11，2026-10-09） | 架构 §7.2 |
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
 | **不做 multi-root** | 多根会把会话 / 监控 / 文件元数据的复杂度抬高一个量级，与本模块「应用实例即项目」的定位不符 | 架构 §7.4 |
 | **树不承担编辑态** | 脏点、冲突 Diff、多文件 Tab 属编辑器宿主（**Phase C 已接**：三者都经 `ScratchpadHost` 端口反接编辑器）；树只发「打开这个绝对路径」的意图 | 原型 §9.4 |
@@ -76,7 +76,6 @@
 | `crates/scratchpad/src/store.rs` | `ScratchpadStore`：根/元数据路径、`ensure_dir`、旧布局迁移、列表（懒加载按目录）、CRUD、`move_entry`/`copy_entry`（递归）、内容搜索（子串/正则 + 大小写，带命中区间）、`replace_in_file`、`diff_with_content`、导入、外部引用 CRUD + 可用性探测 + 重定位、`file_meta` 绑定、路径防护 |
 | `crates/scratchpad/src/trash.rs` | `ProjectTrash` / `TrashManifest` / `TrashEntry`：项目级回收站（来源 + 原相对路径 + 还原/清除） |
 | `crates/scratchpad/src/models.rs` | 域模型：`ScratchpadEntry` / `SearchMatch`（含 `match_spans`）/ `ExternalReference(Status)` / `FileMeta` / `AnalyzableFile` / `ReplaceResult` / `DiffResult` 等 |
-| `crates/scratchpad/src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**，接入时必须按窗口持有） |
 | `crates/scratchpad/src/jobs.rs` | 草稿箱后台任务（crate 内）：单工作线程 + tokio 运行时执行加载与重操作（导入/粘贴/清空回收站/搜索/替换/**冲突 Diff**），结果队列 + 请求序号防过期 |
 | `crates/shared/src/drag.rs` | 跨 crate 拖放载荷（`InsertFileDrag`：只带路径 + 展示文案；拖起方与落点方分属不同特性 crate，所以住在最底层） |
 | `crates/scratchpad/src/scratchpad_view.rs` | **面板视图（A'4 下沉进 crate）**：`ScratchpadView`（工具栏 / 搜索行 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`（含**拖起**与拖拽幽灵 `ScratchpadDragGhost`）、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航、**脏点回显**（`dirty_seen` 缓存 + `scratchpad_shows_dirty_dot`）、**冲突条**；纯函数辅助（排序 / 压平 / 模板后缀 / 搜索结果映射 / 脏点判据）带单测 |
@@ -142,8 +141,8 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 
 | 项 | 归属 | 说明 |
 | --- | --- | --- |
-| 系统文件拖入树导入 | Phase C 余项 | 仓库里目前无 OS 拖放入口（无 `FileDropEvent` / `ExternalPaths`）；先确认 gpui-kit 是否转发平台事件，之前用工具栏 `⬇` |
-| 命中跳转到具体行 | Phase C 余项 | 已能点命中打开文件；跳行要编辑器跳行端口（见 `scratchpad-dev-plan.md` “十九次”） |
+| ~~系统文件拖入树导入~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | OS 文件拖放（`FileDropEvent` → 面板根 3 事件 + 拖入提示条；过滤文件夹；复用导入任务） |
+| ~~命中跳转到具体行~~ ✅ **已实现（2026-10-09）** | Phase C 余项 | `ScratchpadSearchHitTarget{file,line,span}` → 打开文件并选中命中文本（行号 1 基 + 行内字节区间） |
 | 工具栏按钮 hover 提示 | 对齐原型 | 原型 HTML 用 `title=`；gpui-kit 有 `.tooltip()` 可接 |
 | 提升 / 存档只读 / 取回 / 版本；资源侧回收站统一展示 | Phase D（依赖 `analytics_resource`） | 架构 §9.3 |
 | 冲突改真模态对话框（可选） | 待拍板 | 现为“冲突条 + 中央 Diff 面板”（内容等价、形式不同）；改模态需挂宿主 `open_dialog` 层 |

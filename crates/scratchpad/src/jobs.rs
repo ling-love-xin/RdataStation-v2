@@ -134,6 +134,9 @@ enum Job {
         query: String,
         case_sensitive: bool,
         is_regex: bool,
+        whole_word: bool,
+        include: Option<String>,
+        exclude: Option<String>,
     },
     /// 批量替换：匹配 → 逐文件写回 → 重新搜索（一次任务里完成，避免中间态）。
     ReplaceAll {
@@ -142,6 +145,25 @@ enum Job {
         replacement: String,
         case_sensitive: bool,
         is_regex: bool,
+        whole_word: bool,
+        /// AB 保留大小写（2026-10-11 接线）：替换文本按命中文本大小写形态自适应。
+        preserve_case: bool,
+        include: Option<String>,
+        exclude: Option<String>,
+    },
+    /// 单文件替换（侧栏搜索结果树 hover 文件节点的 ⇄）：只对指定文件写回，
+    /// 完成后全量重搜（`include`/`exclude` 保留原范围，重搜结果口径与 ReplaceAll 一致）。
+    ReplaceOne {
+        project_root: PathBuf,
+        query: String,
+        replacement: String,
+        case_sensitive: bool,
+        is_regex: bool,
+        whole_word: bool,
+        preserve_case: bool,
+        include: Option<String>,
+        exclude: Option<String>,
+        file: String,
     },
     /// 冲突 Diff：磁盘上当前内容（左）vs 编辑器缓冲（右），行级差异回传主线程。
     Diff {
@@ -277,6 +299,21 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
                     }
                     Job::ReplaceAll {
+                        query,
+                        case_sensitive,
+                        is_regex,
+                        ..
+                    } => {
+                        lock(&shared().op_results).push(OpResult::Search {
+                            query,
+                            is_regex,
+                            case_sensitive,
+                            replaced: None,
+                            outcome: Err(unavailable),
+                        });
+                        shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    Job::ReplaceOne {
                         query,
                         case_sensitive,
                         is_regex,
@@ -465,17 +502,34 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 query,
                 case_sensitive,
                 is_regex,
+                whole_word,
+                include,
+                exclude,
             } => {
-                let store = ScratchpadStore::new(project_root);
+                // 搜索后端已抽到独立 crate（用户点名 2026-10-10：rds-search 供命令面板复用）。
+                // root 传草稿箱目录：命中 file 是相对模块根的路径（与 replace_in_file 等一致）。
+                let root = project_root.join(crate::MODULE_DIR_NAME);
                 let outcome = rt.block_on(async {
-                    let res = store
-                        .search_file_content(&query, case_sensitive, SEARCH_CONTEXT_LINES, is_regex)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    let res = rds_search::search_directory(
+                        &root,
+                        &query,
+                        case_sensitive,
+                        is_regex,
+                        whole_word,
+                        SEARCH_CONTEXT_LINES,
+                        include.as_deref(),
+                        exclude.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
                     Ok(SearchPayload {
                         scanned: res.total_files_scanned,
                         truncated: res.truncated,
-                        matches: res.matches,
+                        matches: res
+                            .matches
+                            .into_iter()
+                            .map(search_match_to_payload)
+                            .collect(),
                         replaced: None,
                     })
                 });
@@ -494,15 +548,30 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 replacement,
                 case_sensitive,
                 is_regex,
+                whole_word,
+                preserve_case,
+                include,
+                exclude,
             } => {
-                let store = ScratchpadStore::new(project_root);
+                // store 持有 root 所有权（move）；搜索借用 clone，避免 E0382。
+                let store = ScratchpadStore::new(project_root.clone());
+                let root = project_root.join(crate::MODULE_DIR_NAME);
                 let outcome = rt.block_on(async {
                     // 先搜（拿到去重文件列表），再逐文件写回，最后重搜返回新结果：
                     // 一次任务里完成，避免“已替换但仍显示旧命中”的中间态。
-                    let before = store
-                        .search_file_content(&query, case_sensitive, SEARCH_CONTEXT_LINES, is_regex)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    // 搜索走 rds_search（独立 crate，与草稿箱搜索同一口径）。
+                    let before = rds_search::search_directory(
+                        &root,
+                        &query,
+                        case_sensitive,
+                        is_regex,
+                        whole_word,
+                        SEARCH_CONTEXT_LINES,
+                        include.as_deref(),
+                        exclude.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
                     let mut files: Vec<String> =
                         before.matches.iter().map(|m| m.file.clone()).collect();
                     files.sort();
@@ -517,6 +586,8 @@ fn worker(rx: mpsc::Receiver<Job>) {
                                 &replacement,
                                 is_regex,
                                 case_sensitive,
+                                whole_word,
+                                preserve_case,
                             )
                             .await
                             .map_err(|e| format!("{file}: {e}"))?;
@@ -525,14 +596,26 @@ fn worker(rx: mpsc::Receiver<Job>) {
                             total += r.replaced;
                         }
                     }
-                    let after = store
-                        .search_file_content(&query, case_sensitive, SEARCH_CONTEXT_LINES, is_regex)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                    let after = rds_search::search_directory(
+                        &root,
+                        &query,
+                        case_sensitive,
+                        is_regex,
+                        whole_word,
+                        SEARCH_CONTEXT_LINES,
+                        include.as_deref(),
+                        exclude.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
                     Ok(SearchPayload {
                         scanned: after.total_files_scanned,
                         truncated: after.truncated,
-                        matches: after.matches,
+                        matches: after
+                            .matches
+                            .into_iter()
+                            .map(search_match_to_payload)
+                            .collect(),
                         replaced: Some((total, changed)),
                     })
                 });
@@ -549,7 +632,87 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 });
                 shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
             }
+            Job::ReplaceOne {
+                project_root,
+                query,
+                replacement,
+                case_sensitive,
+                is_regex,
+                whole_word,
+                preserve_case,
+                include,
+                exclude,
+                file,
+            } => {
+                // 单文件替换：只对指定文件写回，随后全量重搜（与 ReplaceAll 同口径返回）。
+                let store = ScratchpadStore::new(project_root.clone());
+                let root = project_root.join(crate::MODULE_DIR_NAME);
+                let outcome = rt.block_on(async {
+                    let r = store
+                        .replace_in_file(
+                            &file,
+                            &query,
+                            &replacement,
+                            is_regex,
+                            case_sensitive,
+                            whole_word,
+                            preserve_case,
+                        )
+                        .await
+                        .map_err(|e| format!("{file}: {e}"))?;
+                    let after = rds_search::search_directory(
+                        &root,
+                        &query,
+                        case_sensitive,
+                        is_regex,
+                        whole_word,
+                        SEARCH_CONTEXT_LINES,
+                        include.as_deref(),
+                        exclude.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    Ok(SearchPayload {
+                        scanned: after.total_files_scanned,
+                        truncated: after.truncated,
+                        matches: after
+                            .matches
+                            .into_iter()
+                            .map(search_match_to_payload)
+                            .collect(),
+                        replaced: Some((
+                            r.replaced,
+                            usize::from(r.replaced > 0),
+                        )),
+                    })
+                });
+                let replaced = match &outcome {
+                    Ok(p) => p.replaced,
+                    Err(_) => None,
+                };
+                lock(&shared().op_results).push(OpResult::Search {
+                    query,
+                    is_regex,
+                    case_sensitive,
+                    replaced,
+                    outcome,
+                });
+                shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+            }
         }
+    }
+}
+
+/// `rds_search::SearchMatch` → 草稿箱载荷模型（字段名不同：`line_number` vs 后端 `line`，
+/// 其余同名；serde 版本留在 models.rs 供跨边界导出）。
+fn search_match_to_payload(m: rds_search::SearchMatch) -> crate::SearchMatch {
+    crate::SearchMatch {
+        file: m.file,
+        line_number: m.line_number,
+        line_content: m.line_content,
+        before_context: m.before_context,
+        after_context: m.after_context,
+        match_spans: m.match_spans,
     }
 }
 
@@ -652,23 +815,40 @@ pub fn enqueue_empty_trash(project_root: &Path) {
 }
 
 /// 提交内容搜索。
-pub fn enqueue_search(project_root: &Path, query: &str, case_sensitive: bool, is_regex: bool) {
+#[allow(clippy::too_many_arguments)]
+pub fn enqueue_search(
+    project_root: &Path,
+    query: &str,
+    case_sensitive: bool,
+    is_regex: bool,
+    whole_word: bool,
+    include: Option<String>,
+    exclude: Option<String>,
+) {
     shared().pending_ops.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::Search {
         project_root: project_root.to_path_buf(),
         query: query.to_string(),
         case_sensitive,
         is_regex,
+        whole_word,
+        include,
+        exclude,
     });
 }
 
 /// 提交批量替换（内含替换后的重新搜索）。
+#[allow(clippy::too_many_arguments)]
 pub fn enqueue_replace_all(
     project_root: &Path,
     query: &str,
     replacement: &str,
     case_sensitive: bool,
     is_regex: bool,
+    whole_word: bool,
+    preserve_case: bool,
+    include: Option<String>,
+    exclude: Option<String>,
 ) {
     shared().pending_ops.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::ReplaceAll {
@@ -677,6 +857,39 @@ pub fn enqueue_replace_all(
         replacement: replacement.to_string(),
         case_sensitive,
         is_regex,
+        whole_word,
+        preserve_case,
+        include,
+        exclude,
+    });
+}
+
+/// 提交单文件替换（侧栏搜索结果树 hover 文件节点 ⇄；内含替换后的全量重新搜索）。
+#[allow(clippy::too_many_arguments)]
+pub fn enqueue_replace_one(
+    project_root: &Path,
+    query: &str,
+    replacement: &str,
+    case_sensitive: bool,
+    is_regex: bool,
+    whole_word: bool,
+    preserve_case: bool,
+    include: Option<String>,
+    exclude: Option<String>,
+    file: &str,
+) {
+    shared().pending_ops.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::ReplaceOne {
+        project_root: project_root.to_path_buf(),
+        query: query.to_string(),
+        replacement: replacement.to_string(),
+        case_sensitive,
+        is_regex,
+        whole_word,
+        preserve_case,
+        include,
+        exclude,
+        file: file.to_string(),
     });
 }
 
@@ -898,8 +1111,8 @@ mod tests {
         rt.block_on(store.save_file("a.sql", "select ID from t\nselect id from t\n"))
             .unwrap();
 
-        // 搜索：不区分大小写 → 两行命中。
-        enqueue_search(&project, "id", false, false);
+        // 搜索：不区分大小写 → 两行命中（无包含/排除过滤）。
+        enqueue_search(&project, "id", false, false, false, None, None);
         let payload = wait_for("搜索结果", || {
             drain_ops().into_iter().find_map(|r| match r {
                 OpResult::Search {
@@ -914,7 +1127,7 @@ mod tests {
         assert!(payload.replaced.is_none(), "搜索任务不带替换汇总");
 
         // 替换：一次任务内完成写回 + 重搜（替换后不应再有命中）。
-        enqueue_replace_all(&project, "id", "key", false, false);
+        enqueue_replace_all(&project, "id", "key", false, false, false, false, None, None);
         let payload = wait_for("替换结果", || {
             drain_ops().into_iter().find_map(|r| match r {
                 OpResult::Search {

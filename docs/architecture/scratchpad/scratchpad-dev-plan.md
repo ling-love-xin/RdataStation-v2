@@ -6,11 +6,112 @@
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
-## 0. 进度记录（最近在前）
+### 2026-10-11（二十五次）— 完全接线统一收口：AB 保留大小写 + ⋯ 持久化/位置切换 + settings 测试稳定
+
+用户拍板「**请你完全实现接线完整后在进行统一测试**」——本轮把二十四次遗留的三条语义全部接线闭合，随后跑统一测试交付实测验收：
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **AB 保留大小写替换语义接线**：`replace_in_file` 签名扩为 8 参（`…preserve_case`）；新增纯函数 `preserve_case_transform`（全大写→全大写 / 首字母大写其余小写→同形 / 全小写与混合→原样），命中正则捕获组先 `caps.expand` 展开再转换；`${1}` 花括号规避 `$1+字母` 命名组歧义（已留注释）；`Job::ReplaceAll/ReplaceOne` + `enqueue_*` 加 `preserve_case` 字段/参数；`actions.rs` 两调用点接 `search_replace_case` | `store.rs` / `jobs.rs` / `scratchpad_view/actions.rs` |
+| 2 | **⋯ 更多设置持久化**：settings 顶层增 `Scratchpad` 节 `{ toolbar: BTreeMap<String, ToolbarButtonCfg> }`（空表=全默认缺省语义），`ToolbarButtonCfg { visible(默认 true), side(默认 "left") }` 全链 `#[serde(default)]`；registry 登记 `Slot::ScratchpadToolbar`（section="scratchpad"、Composite、entry=Module 不上设置页）；面板状态改 `toolbar_cfg: BTreeMap<Key, ToolbarButtonCfg>`，`ScratchpadView::new` 读 settings global 装配 | `crates/settings/src/{model,registry,lib}.rs` + `scratchpad_view.rs` |
+| 3 | **左/右位置切换 UI**：⋯ 菜单每行改 `PopupMenuItem::element` 自绘（Label 名称 + 左/右两个小按钮 `.toggled(active)`，id `sp-side-{left|right}-{key}`）；子按钮 `app.stop_propagation()` 只切位置，行点击切显示/隐藏；「重置为默认布局」清空配置；每次变更 `persist_toolbar_cfg` 写盘（与默认一致的键不落盘，原子写；失败不改进程内值） | `chrome.rs` |
+| 4 | **settings 测试并行不稳定根除**：`last_save_error_tracks_failure_then_success` 与 `theme_mode_persists_and_reloads` 原在 pid 级共享 `config_dir()` 并行互踩（Dark 被读回 Light）→ 两测试改独立临时目录 + `save_settings_to`/`load_settings_from`（语义不变） | `crates/settings/src/lib.rs` |
+| 5 | 测试更新：`toolbar_more_toggles_visibility_and_reset` 改 `toolbar_cfg` 语义 + 新增位置切换断言（Sort 挪左 → 左组变宽、右组变窄） | `scratchpad_view/tests.rs` |
+
+**验证（统一测试全绿）**：`cargo check -p rds-scratchpad` 零 error；`cargo test -p rds-scratchpad --lib` → **40 passed**（含 `replace_in_file_preserves_case_like_vscode` + 位置切换）；`cargo test -p rds-search --lib` → **5 passed**；`cargo test -p rds-settings --lib` → **25 passed**（连跑 5 次稳定，闪失败根因已修）；`cargo build -p rds-app` 成功；已重启（PID 26660，窗口 RdataStation），交用户实测验收。
+
+### 2026-10-11（二十四次）— 工具栏 ⋯ 更多设置（原型 644-658 对齐，用户点名缺口落地）
+
+用户在「继续按照原型对齐」轮次点名：普通视图工具栏右侧应有 **⋯ 更多设置**（左侧 5 入口 / 右侧排序/刷新之外的第三个按钮；原型 373 + 状态示意 644-658 + foot 735：菜单勾选显示/隐藏各入口 + 左/右位置标注 + 重置为默认布局）。实现侧此前只有左 5 右 2，**⋯ 缺失**——本轮补齐：
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | `ToolbarButtonKey` 枚举（7 个按钮：搜索/新建文件/新建目录/引用/导入/排序/刷新，含菜单文案与默认左/右位置标注）；`ScratchpadViewState.toolbar_visible: BTreeMap<ToolbarButtonKey, bool>`（**空表 = 全显示**缺省语义） | `scratchpad_view.rs` |
+| 2 | 普通视图工具栏改 `DropdownButton::new("sp-more")`（ghost/small/⋯ + tooltip「更多设置」）→ `PopupMenu`：组头「工具栏按钮」+ 7 项 `checked` 勾选（**菜单项点击即切换显示/隐藏**）+ 分隔 + 「重置为默认布局」（清空配置）；**位置固定原型默认（左 5 右 2，⋯ 恒显）**。状态快照在渲染时捕获进闭包：菜单每次打开重新构造闭包、点击后 notify 重渲染刷新快照，checked 初值始终与最近一次渲染一致（菜单闭包签名无 `&mut App`，无法直接读 entity，此为组件限制下的可行方案） | `chrome.rs`（`render_scratchpad_header`） |
+| 3 | 左右分组挂 `debug_selector("sp-toolbar-left"/"sp-toolbar-right")`（元素级对齐测试锚点，与 `sp-res-file-text-*` 同款先例） | `chrome.rs` |
+| 4 | 新测试 `toolbar_more_toggles_visibility_and_reset`：默认左组宽 > 0（5 按钮全渲染）→ 模拟菜单切换逻辑隐藏左 5 个 → 左组宽归 0（按钮不再渲染）→ 重置 → 宽回到默认；右组恒显 | `tests.rs` |
+
+**验证**：`cargo check -p rds-scratchpad` 零 error；`cargo test -p rds-scratchpad` → **39 passed**（38 旧 + 1 新增）；`cargo build -p rds-app` 成功；已重启（PID 12328，窗口 RdataStation）。
+
+**说明（未决/待接）**：①**设置持久化待接**——原型 hint「设置持久化到用户配置」，settings crate 有 `registry.rs::every_model_leaf_is_registered` 准入测试（新字段必须登记），本轮先内存态（`toolbar_visible`），持久化需加 settings 节 + registry 登记 + 面板读入装配，等用户拍板；②**位置（左/右）切换 UI 未做**——原型菜单 shortcut 文本为静态信息（左/右），交互仅勾选显示/隐藏，本轮对齐原型交互；③AB 替换保留大小写语义待接入（tooltip 标注中，同前）。
+
+### 2026-10-11（二十三·补）— 用户实测对比原型再发现两处差异：ab 全字匹配缺失 + 中央 es-bar 开关位置
+
+用户实测（"在对比原型，仍有差异"）→ 逐项对比 `scratchpad-prototype.html` 435-549 与实现，定位两处差异并修复：
+
+| # | 差异 | 修复 |
+| --- | --- | --- |
+| 1 | **ab（全字匹配）开关缺失**：原型侧栏 449-453 与中央 530-537 都是 Aa/ab/.* **三个**开关；实现只有 Aa + .* | ① `rds-search`：`search_directory` 加 `whole_word` 参数——非正则模式 query 转义后包 `\b(?:…)\b`、正则模式直接包 `\b(?:…)\b`，两种都落到 regex 编译（span 由 `find_iter` 给出，不走 `literal_match_spans`）；② `jobs.rs`：`Job::Search/ReplaceAll/ReplaceOne` + `enqueue_search/enqueue_replace_all/enqueue_replace_one` 加 `whole_word`；③ `store.rs::replace_in_file` 加 `whole_word`（expression 同口径包装）；④ `ScratchpadState.search_word` + `actions.rs` 四处调用点；⑤ 侧栏搜索行 `sp-word`（`ab` 按钮，suffix 内，Aa/ab/.* 顺序）；⑥ 中央 `panel_word` + `sp-es-word` |
+| 2 | **中央 es-bar 开关位置**：原型/VSCode 是**输入框外**同行 chips（`<span class=box><input></span>` + Aa/ab/.* + badge + ☰）；实现错误放进 `Input::suffix`（框内） | `search_results.rs` es_bar 去掉 suffix，改为 `[Input(flex_1)] [ab] [.*] [Aa] [badge] [☰]` 框外同行（与侧栏框内刻意区分） |
+
+**验证**：`cargo check -j 1` 三 crate 零 error；`cargo test -p rds-search` → **5 passed**（新增 `search_directory_whole_word`：整词命中/非整词 3 行全中/正则+整词）；`cargo test -p rds-scratchpad` → **38 passed**；`cargo build --bin rds-app` 成功并重启（PID 29948）。
+
+### 2026-10-11（二十三次）— 以原型为准 13 项差异实施（新增/删除/修改）
+
+范围（用户裁决 + 清单核对）：①删模式 chip + 运行按钮 **确认**；②中央语法高亮**等编辑器调整后复用（本轮不做）**；③中央顶部搜索栏**独立查询、不联动侧栏**。以 `scratchpad-prototype.html` 为唯一权威基准，产出并核对 **13 项差异清单**（新增 6 / 删除 2 / 修改 5）。
+
+| # | 类 | 项 | 落点 |
+| --- | --- | --- | --- |
+| A1 | 新增 | **搜索态整体切换**：普通工具栏/目录树/底部区整体消失，侧栏只显示搜索面板；普通工具栏新增 ⌕ 内容搜索入口进入，面板 ← 返回退出 | `chrome.rs::render_scratchpad`（`search_panel_open` 分支）+ `render_scratchpad_header` |
+| A2 | 新增 | 搜索面板顶部工具栏：← 返回 /「搜索」标题 / ↻ 刷新 / ✕ 清除 / ⤢ 新建编辑器查询 / ▸ 展开折叠匹配明细 | `chrome.rs::render_scratchpad_search_pane`（`toggle_details` 收集 dir/file key 全收起/全展开） |
+| A3 | 新增 | 侧栏 stats 右侧「在编辑器中打开」链接 | `chrome.rs` stats 行（Button ghost small） |
+| B1/B2 | 删除 | sp-mode 模式 chip、sp-run 运行按钮（Enter 触发保留） | `chrome.rs` 搜索行重写 + `actions.rs` search_sub 改 `search_panel_open` 判断 |
+| B3 | 修改 | Aa/ab/.*、AB 开关移入**输入框内右侧**（`Input::suffix`，VSCode 式） | `chrome.rs` 搜索/替换行 |
+| B4 | 修改 | placeholder「搜索」「替换」（去省略号） | `actions.rs` ensure 输入 |
+| B5/B6 | 新增/修改 | 包含/排除行去行前 label（placeholder 即提示）+ ✎ 编辑 / 👁 查看 / ⚙ 设置按钮 | `chrome.rs` 高级选项 |
+| B7 | 新增 | glob 样例 hint（点 ✎👁⚙ 或输入框聚焦时显示："*.sql, src/**/include" / "*.log, .git/"） | `chrome.rs`（`show_include_hint`/`show_exclude_hint` + `focus_handle().is_focused`） |
+| C1 | 新增 | **中央顶部搜索栏**：可改词输入框 + Aa/.* 开关 + 序号 badge + ☰；Enter 发起**独立查询**（`scratchpad::jobs::enqueue_search` → 侧栏 pump → `Shared::scratchpad_search` 回填）；输入框仅首次取 query 为初值，不跟随侧栏 | `crates/workbench/src/panels/search_results.rs`（`panel_input`/`panel_sub`/`panel_case`/`panel_regex` + `run_panel_search`） |
+| C2 | 修改 | 中央统计措辞「N 个结果 - M 文件」（原型 es-stats；去 flags/扫描数） | `rds-search/src/view.rs` |
+| C4 | 修改 | 中央文件头链接式 + 类型 tag（SQL/YAML）；去命中数徽标（原型无）；类型微标保留（用户点名"搜索态要有微标"） | `rds-search/src/view.rs`（`ext_tag` 从扩展名取大写） |
+| D1 | 修改 | 普通视图文件搜索行：输入框 + 框外右侧 ⌕（去 chip；⌕ 聚焦输入框） | `chrome.rs` 普通分支 search_row |
+
+**验证**：`cargo check -j 1 -p rds-scratchpad -p rds-search -p rds-workbench` 零 error（新增 warning 已清零：chrome.rs unused entity/filter/primary、`mut toolbar`）；`cargo test -p rds-scratchpad` 全量（含对齐断言，测试已补 `search_panel_open = true` 注入）；`cargo test -p rds-search` 4 passed；`cargo build --bin rds-app` 后启动供用户检测。
+
+**中央独立查询链路（C1）**：`SearchResultsHostPanel::run_panel_search`（Enter）→ `scratchpad::jobs::enqueue_search` → 后台 → 侧栏 `ScratchpadView` pump `apply_scratchpad_ops` → `search_view_from_payload` → `host.show_search_results` → `Shared::scratchpad_search` → 中央面板重绘 + tab 标题随新 query。**不联动**：侧栏输入框不回填、侧栏搜索面板状态不变。
+
+**AB 开关语义（B3）**：UI + 状态（`search_replace_case`）已落地；替换保留大小写语义待后续接入（tooltip 标注"语义待接入"）。
+
+### 2026-10-11（二十二次）— 搜索状态 VSCode 对齐 + 结果树对齐草稿箱树 + 元素级验证
+
+范围（用户多轮确认）：搜索状态完全对齐 VSCode 形态；搜索结果树结构与草稿箱常规树一致（微标/缩进/命中明细对齐文件节点名）；验证**用 gpui-kit 测试模块元素断言（debug_bounds），不用 OCR/截图**。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **搜索状态默认隐藏高级选项 + ⋮ 展开收起**：搜索/替换/包含/排除改为输入框 placeholder（行前不再放 label）；Aa/ab/.* 与 AB 开关在搜索框内右侧；全部替换 = ⇄ 图标 + tooltip；⋮ 控制包含/排除 glob 两行展开收起（默认收起） | `crates/scratchpad/src/scratchpad_view/chrome.rs`（`render_scratchpad_search`） |
+| 2 | **搜索工具栏对齐 VSCode**：← 返回 + 刷新/清除/新建编辑器查询/展开折叠明细；复制 ⧉ 与「展开选项」▾ 按用户点名移除 | 同上 |
+| 3 | **结果树 hover 操作图标化**：目录 hover = ⇄ 全部替换 / ✕ 收起，文件 hover = ⇄ 单文件替换 / ✕ 收起；命中片段无行号 | `rows.rs::render_search_results_tree` + `actions.rs::{toggle_search_file_expanded, replace_scratchpad_file}` + `jobs.rs::ReplaceOne` |
+| 4 | **搜索结果树对齐草稿箱树（16 px 根因修复）**：命中明细原用 `indent_spacer + disclosure_slot + 空 div 占位`，**空 div 实测不占宽度**导致命中文本比文件名靠左 16 px（1 ICON_SIZE_MD）；改挂**与文件行同款类型微标 Icon**（`scratchpad_type_icon` + `scratchpad_icon_color` 同取色），命中文本起点与文件节点名像素级对齐 | `rows.rs`（命中明细行） |
+| 5 | **元素级对齐断言测试**：`search_result_hit_text_aligns_with_file_name` —— 注入 `search_view`（1 命中）→ `window.draw` 一帧 → `debug_bounds` 断言文件行/命中行文本容器 `origin.x` 相等。**关键机制**：gpui `.id()` 不注册 debug_bounds，须 `.debug_selector()`（test-support 下编译，archive 面板同款）；文件行/命中行文本容器两者都挂 | `tests.rs`（新）+ `rows.rs`（`sp-res-file-text-{file}` / `sp-res-hit-text-{file}-{line}`） |
+| 6 | 文档同步：架构 §11 测试策略补元素断言机制、§12 实现映射补搜索/替换/结果树对齐落点、状态行 Phase C 进度更新 | `scratchpad-architecture.md`、`scratchpad-dev-plan.md` |
+
+**验证**：`cargo test -p rds-scratchpad` → **38 passed**（37 旧 + 1 对齐断言）；`cargo test -p rds-search` → **4 passed**；`cargo check -p rds-scratchpad -p rds-search` 零 error（warning 均为 pre-existing：engine `CommonError` unused import / rows.rs `open_entity`、`open_key` unused 等，非本轮引入）；`cargo build --bin rds-app` 成功并启动（PID 25456，窗口 RdataStation）。
+
+**工程事项**：D 盘满（`target/debug/incremental` 44 GB 缓存占满，`cargo clean` 中途被中断）→ 删除 incremental 后腾出 19.6 GB；incremental 丢失后 `cargo check` 全量 24m32s。
+
+**验证对象澄清（重要）**：`GetForegroundWindow` 证实前台进程长期是 Doubao 内嵌浏览器（打开的是**原型页** `scratchpad-prototype.html`），非真实 rds-app——此前基于截图的"对齐验证"全部不可信，已按用户决定改为**元素断言**为唯一验收手段。
+
+
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
 
-### 2026-09-21（USIT 第 1 轮）— 「草稿 → 编辑器」这颗接口钉住 + 三处过期状态纠正
+### 2026-10-09（二十一次）— Phase C 余项 + 工程债收口（K5/K9/K10/K11/K12）
+
+范围（用户确认）：Phase C 余项 + 工程债 + 一致性；Phase D 不做；K6/K7/K8/冲突条模态按合理默认落地（交付时标注理由复核）。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **系统文件拖入树导入**：OS 文件拖放（`FileDropEvent` → 面板根 3 事件 + 拖入提示条「松开以导入 N 个文件」）；drop 过滤文件夹（含文件夹+文件→忽略文件夹；仅文件夹→报错）；复用 `import_scratchpad_files` | `crates/scratchpad/src/scratchpad_view.rs` + `chrome.rs` |
+| 2 | **命中跳转到具体行**：搜索行号 1 基（`search_single_file`）；新增 `ScratchpadSearchHitTarget{file,line,span}`（跨 crate 公开面）；`render_scratchpad_search_pane` 的 `on_open_hit` 携带首个命中 span；`Shared` 增 `RevealTarget` + `request_open_in_editor_at`；`view.rs::open_in_editor_with` 增 reveal；`editor::view::host::reveal_search_target`（`offset_for_line_col` 改 `pub(crate)` + `set_selected_range` 落光标） | `crates/scratchpad/src/{scratchpad_view,scratchpad_view/search}.rs`、`crates/workbench/src/panels/{shared,editor,mod}.rs`、`crates/workbench/src/view.rs`、`crates/editor/src/{diagnostics.rs,view/host.rs}` |
+| 3 | **K5 高亮回退修复**：`literal_match_spans` 弃「字节长度变化即放弃整行」，改**逐字符小写 + 字符级偏移映射**（`charwise_lowercase`）回射命中区间；锚定测试升级为「含 `İ` 的行必须高亮」 | `crates/scratchpad/src/store.rs` |
+| 4 | **K9**：工具栏 8 图标按钮 / 撤销栏「撤销」/ 搜索「关闭」换 `Button::ghost()`（24px）；**行尾动作保留自绘**（18px 紧凑宽度无组件变体，行高预算合同） | `crates/scratchpad/src/scratchpad_view/chrome.rs` |
+| 5 | **K10 面板层窗口级测试**：gpui 测试窗口 + 最小宿主（渲染不 panic、↓选中→打开经端口收绝对路径、只读拒绝经提示、命中面板构建 + 回调不误触发）；`dev-dependencies` 补 `gpui-kit/test-support` | `crates/scratchpad/src/scratchpad_view/tests.rs`、`Cargo.toml` |
+| 6 | **K11 死代码清理**：`ScratchpadState` 无生产调用方即删（`src/state.rs`；store 按窗口构造、watcher 面板自持） | `crates/scratchpad/src/state.rs`（删）、`lib.rs` |
+| 7 | **K12 占位视图核实**：「资源」面板已随 M6 接通（`ResourcesPanel` 实体），非占位；「插件」面板占位保留（M9 未立项） | `crates/workbench/src/panels/resources.rs`（核实，无改动） |
+| 8 | 文档同步 + 能力表不一致修正（README 第 2 行「拖入编辑器待补」→ 已实现；外部改动自动重搜归位） | `scratchpad-architecture.md`、`scratchpad-dev-plan.md`、`docs/architecture/scratchpad/README.md`、`crates/scratchpad/README.md` |
+
+**验证**：`cargo test --workspace -j 2` → **2587 passed / 0 failed / 24 ignored**（rds-workbench 131、rds-scratchpad 40、rds-editor 111 等；quick_open 文件源端到端真线程回填通过）。`cargo check` 曾漏检 test 目标——`shared.rs` 测试模块 `RevealTarget` 未导入，全量测试抓出后已修。仓库 pre-existing warning（engine `metadata_cache_index` unused import / doc comment、workbench `connection_template.rs` unused import）非本次引入。
+
+**决策标注（合理默认，待用户复核）**：K6 引用目录展开 → 保持「只作入口」（展开需跨根路径树读写策略，属产品决定）；K7 多文件 Tab 与草稿箱关系 → 保持现状（Tab 体系属编辑器侧，脏点/冲突 Diff 已接）；K8 提升时引用与 `file_meta` 处置 → Phase D 不做、无需落地；冲突条 → 保持侧栅内联条（改真模态对话框超出本轮范围，如需另行立项）。
 
 起因：真机 USIT 反馈“编辑器与草稿箱文件好像没接线”。核对下来**链路是通的**（双击 / `Enter` / 右键「打开」→ `ScratchpadHost::open_in_editor` → `Shared::request_open_in_editor` → 宿主 `render` 消费 → `editor::persist::open_file`；脏点 / 冲突 Diff / 拖入插入同样已接），真正欠的是两件事：**这颗接口没有用例钉住**（两端分属两个 crate，任一端换名都不会让另一端的单测变红），以及**三份文档还写着 `Phase C` 未接**——验收人照文档判定，只能得出“没接线”。
 
@@ -382,7 +483,7 @@
 | --- | --- |
 | 域模型（`crates/scratchpad/src/models.rs`：`ScratchpadEntry`/`SearchMatch`/`ExternalReference`/`AnalyzableFile`/`FileMeta`/`DiffResult`/`ReplaceResult`） | ✅ 已迁移 |
 | 存储（`crates/scratchpad/src/store.rs`：列表/CRUD/回收站/搜索/替换/Diff/引用/可分析文件/路径防护） | ✅ 已迁移（根目录仍为 `{project}/.scratchpad/`，需改造） |
-| 状态（`crates/scratchpad/src/state.rs`：`ScratchpadState` + `watcher_active` 标志） | ⚠️ 有骨架，**未接入任何调用方**；文件监控未真正启动 |
+| 状态（`crates/scratchpad/src/state.rs`：`ScratchpadState` + `watcher_active` 标志） | ✅ **已删除（2026-10-09，K11）**：无使用方即删；store 按窗口构造、watcher 面板自持 |
 | 占位文件（`model.rs` / `commands.rs` / `scratchpad_view.rs`） | ✅ 已删除（2026-09-15；视图落在 `workbench/src/panels/`） |
 | 视图（GPUI） | ✅ 已实现（`SidebarPanel::render_scratchpad` + `EditorPanel` 搜索结果/替换栏） |
 | workbench 依赖 | ✅ 已依赖 `rds-scratchpad`（workspace 依赖） |
@@ -437,7 +538,7 @@
 | C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活） | `crates/scratchpad/src/scratchpad_view.rs`（发请求）+ `workbench/src/view.rs::open_in_editor` | 双击打开、编辑回存正确 |
 | C2 | `file_meta` 联动：**打开时自动选连接** ✅（2026-09-17）+ **执行后写 `last_connection_id`/`last_executed_at`** ✅（2026-09-17，编辑器回执 + 宿主 1 s 泵） | `scratchpad` store（`file_meta` / `preferred_connection` / `update_file_meta`）+ `editor::shared::ExecReceipt` + `workbench/src/services/scratchpad_meta.rs` | 连接自动恢复 ✅ |
 | C3 | 脏点回显：编辑器未保存修改 → 草稿树文件名前实心圆点（**只有文件**）✅ **已接（2026-09-17）**：经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存 | `crates/scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` | 改一处出现、`Ctrl+S` 后消失 |
-| C5 | 拖草稿文件到编辑区 → 插入内容到光标处 ✅ **已接（2026-09-17）**；系统文件拖入树导入 ⬜（无 OS 拖放入口，暂用工具栏 `⬇`） | `shared/src/drag.rs` + `scratchpad_view.rs` + `editor/src/view/host.rs` | 拖放生效 ✅ |
+| C5 | 拖草稿文件到编辑区 → 插入内容到光标处 ✅ **已接（2026-09-17）**；系统文件拖入树导入 ✅ **已接（2026-10-09）**（OS 文件拖放：拖入提示条 + 过滤文件夹 + 复用导入任务；仅文件夹拖入报错） | `shared/src/drag.rs` + `scratchpad_view.rs` + `editor/src/view/host.rs` | 拖放生效 ✅ |
 | C4 | 冲突处理：外部修改 → 冲突条 → `diff_with_content` Diff 面板 → 重载（照磁盘）/ 忽略 ✅ **已接（2026-09-17）**：内容判据（非 mtime）；差异落中央编辑区，消解动作在侧栅 | `crates/scratchpad/src/{jobs,host,scratchpad_view}.rs` + `workbench/src/panels/{shared,mod,editor}.rs` | 冲突可消解 ✅ |
 | C5 | 搜索替换：预览计数 → `replace_in_file`（正则/大小写）→ 原子写回 → 刷新 ✅ 已落地（结果栏内嵌替换栏；Diff 预览仍未接） | 同上 | 替换后结果自动刷新 |
 | C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，**移动 + 归档锁定**（详见 Phase D） | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |

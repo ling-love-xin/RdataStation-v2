@@ -173,6 +173,76 @@ impl ScratchpadView {
         );
     }
 
+    /// 文件属性面板（右键 → 属性）：收集元数据投给中央编辑区。
+    ///
+    /// 用户点名（2026-10-10）：树行 meta 只留大小；时间与连接信息进属性面板。
+    /// `db_connection` 为后期「SQL 文件连接哪个数据库」预留（分析文件类型实现后填充）。
+    pub(super) fn show_scratchpad_file_info(
+        &mut self,
+        relative: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.host.project_root() else {
+            self.host.notice("未打开项目".to_string(), cx);
+            return;
+        };
+        let abs = root.join(crate::MODULE_DIR_NAME).join(&relative);
+        let meta = std::fs::metadata(&abs);
+        let (name, kind_label, size_label, modified_at, created_at) = match meta {
+            Ok(m) => {
+                let is_dir = m.is_dir();
+                let size_label = if is_dir {
+                    String::new()
+                } else {
+                    scratchpad_size_label(m.len())
+                };
+                let modified_at = m.modified().ok().map(Self::to_rfc3339);
+                let created_at = m.created().ok().map(Self::to_rfc3339);
+                (
+                    scratchpad_basename(&relative),
+                    if is_dir { "文件夹" } else { "文件" }.to_string(),
+                    size_label,
+                    modified_at,
+                    created_at,
+                )
+            }
+            Err(_) => (
+                scratchpad_basename(&relative),
+                "文件".to_string(),
+                String::new(),
+                None,
+                None,
+            ),
+        };
+        let extension = if kind_label == "文件" {
+            std::path::Path::new(&relative)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            String::new()
+        };
+        self.host.show_file_info(
+            Some(ScratchpadFileInfoView {
+                relative_path: relative,
+                name,
+                kind_label,
+                extension,
+                size_label,
+                modified_at,
+                created_at,
+                db_connection: None,
+            }),
+            cx,
+        );
+    }
+
+    /// 系统时间 → RFC3339（属性面板展示；与草稿箱 `modified_at` 同格式）。
+    fn to_rfc3339(t: std::time::SystemTime) -> String {
+        chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+    }
+
     /// C-4「照磁盘重载」：让编辑器用磁盘内容替掉缓冲区，冲突随之消解。
     pub(super) fn reload_scratchpad_conflict(
         &mut self,
@@ -237,6 +307,23 @@ impl ScratchpadView {
             loop {
                 executor.timer(std::time::Duration::from_millis(1200)).await;
                 let action = weak.update(cx, |this, cx| {
+                    // 拖放提示条残留兜底：`on_file_drop_exit` / `on_mouse_exit`
+                    // 都可能在拖放会话异常结束时收不到（例如拖到其它窗口松开，
+                    // 或平台只发 `Ended` 不发 `Exited`）。置位超过 5 s 仍无新
+                    // 动作 → 强制复位，避免「松开以导入」提示条永远挂在那里。
+                    {
+                        let mut state = this.scratchpad.borrow_mut();
+                        if state.external_drag_over
+                            && state
+                                .external_drag_since
+                                .is_some_and(|since| since.elapsed() > std::time::Duration::from_secs(5))
+                        {
+                            state.external_drag_over = false;
+                            state.external_drag_count = 0;
+                            state.external_drag_since = None;
+                            cx.notify();
+                        }
+                    }
                     // 脏点与目录监控同一拍：编辑器里存/改都会让这个集合变。
                     let dirty_changed = this.refresh_dirty_cache();
                     let changed = this
@@ -263,11 +350,30 @@ impl ScratchpadView {
                     let pending_search = this.active_search.clone();
                     if let Some((query, is_regex, case_sensitive)) = pending_search {
                         if let Some(root) = this.host.project_root() {
+                            let read = |i: &Option<Entity<InputState>>, cx: &mut Context<Self>| {
+                                i.as_ref()
+                                    .map(|e| e.read(cx).value().trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            };
+                            let (include, exclude) = {
+                                let v = this.scratchpad.borrow();
+                                (
+                                    read(&v.search_include_input, cx),
+                                    read(&v.search_exclude_input, cx),
+                                )
+                            };
+                            let whole_word = {
+                                let v = this.scratchpad.borrow();
+                                v.search_word
+                            };
                             scratchpad_jobs::enqueue_search(
                                 &root,
                                 &query,
                                 case_sensitive,
                                 is_regex,
+                                whole_word,
+                                include,
+                                exclude,
                             );
                             this.ensure_scratchpad_pump(cx);
                         }
@@ -527,6 +633,28 @@ impl ScratchpadView {
             self.active_search = view
                 .as_ref()
                 .map(|v| (v.query.clone(), v.is_regex, v.case_sensitive));
+            // 侧栏搜索结果树数据源：完整结果视图落地到状态（中央面板仍走宿主投递）。
+            {
+                let mut v = self.scratchpad.borrow_mut();
+                v.search_view = view.clone();
+                // 命中明细展开集合：清掉已不在结果里的文件（替换/重搜后旧展开失效）。
+                if let Some(vw) = &view {
+                    let alive: std::collections::HashSet<String> =
+                        vw.hits.iter().map(|h| h.file.clone()).collect();
+                    v.search_expanded.retain(|f| alive.contains(f));
+                } else {
+                    v.search_expanded.clear();
+                }
+            }
+            // 侧栏搜索面板统计行（VSCode「N 文件中有 M 个结果」）：从结果载荷取数。
+            // 文件数 = 去重（hits 的 file 是相对路径）；命中数 = hits 总条数；扫描数 = scanned。
+            self.scratchpad.borrow_mut().search_stats = view.as_ref().map(|v| {
+                let mut seen = std::collections::HashSet::new();
+                for h in &v.hits {
+                    seen.insert(h.file.as_str());
+                }
+                (seen.len(), v.hits.len(), v.scanned)
+            });
             self.host.show_search_results(view, cx);
             self.host.notify_host(cx);
         }
@@ -563,16 +691,17 @@ impl ScratchpadView {
                 }
             },
         );
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索…"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
         let search_sub = cx.subscribe_in(
             &search_input,
             window,
             |this, _e, ev: &InputEvent, _w, cx| match ev {
                 InputEvent::Change => cx.notify(),
                 InputEvent::PressEnter { .. } => {
-                    let content_mode =
-                        this.scratchpad.borrow().search_mode == ScratchpadSearchMode::Content;
-                    if content_mode {
+                    // 内容搜索只在搜索态（面板打开）触发；普通视图 Enter 仅作为
+                    // 文件过滤的确认（过滤本身实时，Enter 无需额外动作）。
+                    let panel_open = this.scratchpad.borrow().search_panel_open;
+                    if panel_open {
                         this.run_scratchpad_content_search(cx);
                     } else {
                         cx.notify();
@@ -581,11 +710,33 @@ impl ScratchpadView {
                 _ => {}
             },
         );
+        // VSCode 搜索面板形态（2026-10-10 对齐）：替换输入在搜索框正下方，
+        // 包含/排除文件 glob 输入在高级选项里（展开后显示）。
+        let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder("替换"));
+        let replace_sub = cx.subscribe_in(
+            &replace_input,
+            window,
+            |this, _e, ev: &InputEvent, _w, cx| match ev {
+                InputEvent::Change => cx.notify(),
+                InputEvent::PressEnter { .. } => this.replace_scratchpad_all(cx),
+                _ => {}
+            },
+        );
+        let include_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("包含的文件")
+        });
+        let exclude_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("排除的文件")
+        });
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
         view.search_input = Some(search_input);
         view._search_sub = Some(search_sub);
+        view.search_replace_input = Some(replace_input);
+        view.search_include_input = Some(include_input);
+        view.search_exclude_input = Some(exclude_input);
+        view._search_replace_sub = Some(replace_sub);
     }
 
     /// 开始内联编辑（新建 / 重命名）。
@@ -1088,14 +1239,30 @@ impl ScratchpadView {
         }
     }
 
+    /// 在系统文件管理器中定位条目（需绝对路径）。
+    pub(super) fn reveal_scratchpad_location(&mut self, path: String, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.reveal_in_file_manager(std::path::Path::new(&path)))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            self.scratchpad.borrow_mut().error = Some(format!("在文件管理器中显示失败: {e}"));
+            cx.notify();
+        }
+    }
+
     /// 当前可见行（渲染顺序）的条目路径，供键盘导航与滚动定位。
     pub(super) fn scratchpad_visible_keys(&self, cx: &App) -> Vec<String> {
         let view = self.scratchpad.borrow();
         let filter = view
             .search_input
             .as_ref()
-            .map(|i| i.read(cx).value().to_lowercase().trim().to_string())
+            .map(|i| i.read(cx).value().trim().to_string())
             .unwrap_or_default();
+        let (search_mode, search_regex, search_case) =
+            (view.search_mode, view.search_regex, view.search_case);
         let mut flat = Vec::new();
         flatten_scratchpad(
             &view.entries,
@@ -1105,6 +1272,9 @@ impl ScratchpadView {
             view.sort,
             view.sort_desc,
             &filter,
+            search_mode,
+            search_regex,
+            search_case,
             &mut flat,
         );
         flat.into_iter()
@@ -1225,6 +1395,10 @@ impl ScratchpadView {
             .unwrap_or_default();
         if query.is_empty() {
             self.active_search = None;
+            let mut v = self.scratchpad.borrow_mut();
+            v.search_stats = None;
+            v.search_view = None;
+            v.search_expanded.clear();
             self.host.show_search_results(None, cx);
             self.host.notify_host(cx);
             cx.notify();
@@ -1234,12 +1408,190 @@ impl ScratchpadView {
             let v = self.scratchpad.borrow();
             (v.search_regex, v.search_case)
         };
+        let whole_word = self.scratchpad.borrow().search_word;
+        // VSCode「包含/排除文件」glob（空输入视为不限定）。
+        let (include, exclude) = {
+            let v = self.scratchpad.borrow();
+            let read = |i: &Option<Entity<InputState>>, cx: &mut Context<Self>| {
+                i.as_ref()
+                    .map(|e| e.read(cx).value().trim().to_string())
+                    .filter(|s| !s.is_empty())
+            };
+            (
+                read(&v.search_include_input, cx),
+                read(&v.search_exclude_input, cx),
+            )
+        };
         let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
             cx.notify();
             return;
         };
-        scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
+        scratchpad_jobs::enqueue_search(
+            &root,
+            &query,
+            case_sensitive,
+            is_regex,
+            whole_word,
+            include,
+            exclude,
+        );
+        self.ensure_scratchpad_pump(cx);
+        cx.notify();
+    }
+
+    /// 侧栏「全部替换」（VSCode 搜索面板替换框右侧按钮 / 替换输入框 Enter）。
+    ///
+    /// 与编辑器侧 `editor.rs::replace_scratchpad_all` 同语义：读替换输入 + 查询参数
+    /// + 包含/排除 glob → 入队 `ReplaceAll`（任务内：先搜 → 逐文件写回 → 重搜）。
+    /// 只读项目拒绝；替换内容为空拒绝。
+    pub(super) fn replace_scratchpad_all(&mut self, cx: &mut Context<Self>) {
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许替换草稿内容".to_string(), cx);
+            cx.notify();
+            return;
+        }
+        let Some(replacement) = self
+            .scratchpad
+            .borrow()
+            .search_replace_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+        else {
+            return;
+        };
+        if replacement.is_empty() {
+            self.host.notice("请先输入替换内容".to_string(), cx);
+            cx.notify();
+            return;
+        }
+        let query = self
+            .scratchpad
+            .borrow()
+            .search_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if query.is_empty() {
+            return;
+        }
+        let (is_regex, case_sensitive) = {
+            let v = self.scratchpad.borrow();
+            (v.search_regex, v.search_case)
+        };
+        let whole_word = self.scratchpad.borrow().search_word;
+        // AB 保留大小写（2026-10-11 接线）：替换文本按命中文本大小写形态自适应。
+        let preserve_case = self.scratchpad.borrow().search_replace_case;
+        let (include, exclude) = {
+            let v = self.scratchpad.borrow();
+            let read = |i: &Option<Entity<InputState>>, cx: &mut Context<Self>| {
+                i.as_ref()
+                    .map(|e| e.read(cx).value().trim().to_string())
+                    .filter(|s| !s.is_empty())
+            };
+            (
+                read(&v.search_include_input, cx),
+                read(&v.search_exclude_input, cx),
+            )
+        };
+        let Some(root) = self.host.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
+        };
+        scratchpad_jobs::enqueue_replace_all(
+            &root,
+            &query,
+            &replacement,
+            case_sensitive,
+            is_regex,
+            whole_word,
+            preserve_case,
+            include,
+            exclude,
+        );
+        self.ensure_scratchpad_pump(cx);
+        cx.notify();
+    }
+
+    /// 侧栏搜索结果树：展开 / 收起某文件的命中明细（点击文件节点切换）。
+    pub(super) fn toggle_search_file_expanded(&mut self, file: &str, cx: &mut Context<Self>) {
+        let mut v = self.scratchpad.borrow_mut();
+        if !v.search_expanded.remove(file) {
+            v.search_expanded.insert(file.to_string());
+        }
+        cx.notify();
+    }
+
+    /// 侧栏搜索结果树：仅替换单个文件内的命中（hover 文件节点的 ⇄）。
+    ///
+    /// 校验与 `replace_scratchpad_all` 同口径（只读 / 空替换 / 空查询拒绝）；
+    /// 入队 `ReplaceOne`——任务内对指定文件写回后**全量重搜**，保持结果视图口径一致。
+    pub(super) fn replace_scratchpad_file(&mut self, file: &str, cx: &mut Context<Self>) {
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许替换草稿内容".to_string(), cx);
+            cx.notify();
+            return;
+        }
+        let Some(replacement) = self
+            .scratchpad
+            .borrow()
+            .search_replace_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string())
+        else {
+            return;
+        };
+        if replacement.is_empty() {
+            self.host.notice("请先输入替换内容".to_string(), cx);
+            cx.notify();
+            return;
+        }
+        let query = self
+            .scratchpad
+            .borrow()
+            .search_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if query.is_empty() {
+            return;
+        }
+        let (is_regex, case_sensitive) = {
+            let v = self.scratchpad.borrow();
+            (v.search_regex, v.search_case)
+        };
+        let whole_word = self.scratchpad.borrow().search_word;
+        let preserve_case = self.scratchpad.borrow().search_replace_case;
+        let (include, exclude) = {
+            let v = self.scratchpad.borrow();
+            let read = |i: &Option<Entity<InputState>>, cx: &mut Context<Self>| {
+                i.as_ref()
+                    .map(|e| e.read(cx).value().trim().to_string())
+                    .filter(|s| !s.is_empty())
+            };
+            (
+                read(&v.search_include_input, cx),
+                read(&v.search_exclude_input, cx),
+            )
+        };
+        let Some(root) = self.host.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
+        };
+        scratchpad_jobs::enqueue_replace_one(
+            &root,
+            &query,
+            &replacement,
+            case_sensitive,
+            is_regex,
+            whole_word,
+            preserve_case,
+            include,
+            exclude,
+            file,
+        );
         self.ensure_scratchpad_pump(cx);
         cx.notify();
     }

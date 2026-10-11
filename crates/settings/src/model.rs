@@ -23,7 +23,6 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-
 /// 顶层设置。新增字段必须带 `#[serde(default)]`，保证旧配置向前兼容。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -39,6 +38,83 @@ pub struct Settings {
     pub resources: Resources,
     #[serde(default)]
     pub logging: Logging,
+    #[serde(default)]
+    pub startup: Startup,
+    #[serde(default)]
+    pub scratchpad: Scratchpad,
+}
+
+/// 草稿箱侧栏专属设置（2026-10-11 接线：⋯ 更多设置持久化到用户配置）。
+///
+/// 目前只有一个复合项 `toolbar`；消费方是草稿箱面板的 ⋯ 菜单（操作现场修改，
+/// 见登记表 `scratchpad.toolbar`）。**空表 = 全部按钮显示 + 默认位置**（左 5 右 2），
+/// 与面板 `ToolbarButtonKey::side()` 的默认口径一致——只记录用户显式改过的键。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Scratchpad {
+    /// 工具栏按钮配置：键 = 按钮稳定标识（`search`/`new_file`/`new_folder`/
+    /// `reference`/`import`/`sort`/`refresh`）；值 = 显示/隐藏 + 左/右位置。
+    #[serde(default)]
+    pub toolbar: BTreeMap<String, ToolbarButtonCfg>,
+}
+
+impl Default for Scratchpad {
+    fn default() -> Self {
+        Self {
+            toolbar: BTreeMap::new(),
+        }
+    }
+}
+
+/// 单个工具栏按钮的配置（⋯ 菜单写入；落盘 `{ "visible": bool, "side": "left"|"right" }`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolbarButtonCfg {
+    /// 是否在工具栏显示（默认显示）。
+    #[serde(default = "default_toolbar_visible")]
+    pub visible: bool,
+    /// 所在侧（默认 `left`；`right` 显式写才用——面板按按钮默认侧兜底，
+    /// 因此空配置与「未写 side」都回到原型默认左 5 右 2）。
+    #[serde(default = "default_toolbar_side")]
+    pub side: String,
+}
+
+impl Default for ToolbarButtonCfg {
+    fn default() -> Self {
+        Self {
+            visible: default_toolbar_visible(),
+            side: default_toolbar_side(),
+        }
+    }
+}
+
+fn default_toolbar_visible() -> bool {
+    true
+}
+
+fn default_toolbar_side() -> String {
+    "left".to_string()
+}
+
+/// 启动行为（用户点名：启动时默认显示哪个模块——左侧栏的 `LeftPanel`）。
+///
+/// 落盘值见登记表 `startup.default_left_panel`；默认 `database`（数据库导航），
+/// 与 `Shared::new` 的构造默认保持一致（设置未写入时行为不变）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Startup {
+    /// 启动时左侧栏默认显示的模块（`database` / `draft` / `resources` / `plugin`）。
+    #[serde(default = "default_startup_left_panel")]
+    pub default_left_panel: String,
+}
+
+impl Default for Startup {
+    fn default() -> Self {
+        Self {
+            default_left_panel: default_startup_left_panel(),
+        }
+    }
+}
+
+fn default_startup_left_panel() -> String {
+    "database".to_string()
 }
 
 /// 外观：主题模式 + 界面字号。

@@ -91,11 +91,13 @@
 
 pub mod analysis;
 pub mod channel;
+pub mod changes;
 pub mod commands;
 pub mod completion;
 pub mod connection;
 pub mod diagnostics;
 pub mod edit;
+pub mod editability;
 pub mod execution;
 pub mod export;
 pub mod fold;

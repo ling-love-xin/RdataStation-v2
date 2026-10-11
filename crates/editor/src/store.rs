@@ -449,6 +449,21 @@ impl ResultEntry {
         self.rows.len()
     }
 
+    /// 【T2a】提交成功后把这一格的新值写进行数据（**本地面应用**）
+    ///
+    /// 与"重查刷新"的区别：本地应用不丢排序 / 筛选 / 选中，且回执已确认落库成功。
+    /// 行 / 列越界返回 `false`（调用方应已校验过；宁可不改也不改错行）。
+    pub fn apply_cell(&mut self, row: usize, column: usize, value: impl Into<String>) -> bool {
+        let Some(row_data) = self.rows.get_mut(row) else {
+            return false;
+        };
+        let Some(cell) = row_data.get_mut(column) else {
+            return false;
+        };
+        *cell = value.into();
+        true
+    }
+
     /// 是否可渲染成网格（成功且有列）
     pub fn has_grid(&self) -> bool {
         self.error.is_none() && !self.columns.is_empty()
@@ -633,6 +648,31 @@ impl ResultStore {
         }
         slot.active = index;
         true
+    }
+
+    /// 【T2a】把某一格的新值写进**指定**结果集的行数据（本地应用；返回是否真的改到）
+    ///
+    /// 提交回执后调用：`index` = 结果集标签条的下标（不是选中项），列按数据列下标。
+    /// 行 / 列越界或结果集不存在返回 `false`——调用方（面板）据此决定要不要报错。
+    pub fn apply_cell_edit(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        row: usize,
+        column: usize,
+        value: impl Into<String>,
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(entry) = slot.sets.get_mut(index) else {
+            return false;
+        };
+        entry.apply_cell(row, column, value)
     }
 
     /// 丢弃某文档的全部结果（文档关闭时调用——结果不跟着已关闭的文档留着）

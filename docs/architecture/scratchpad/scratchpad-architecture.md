@@ -2,7 +2,7 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中：打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / **拖入编辑器插入（C-5 前半）** 已接；剩系统文件拖入导入与命中跳行 · Phase D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中：打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / 拖入编辑器插入（C-5 前半） / **搜索状态（VSCode 式：替换行 + ⋮ 高级选项默认收起 + 结果树对齐草稿箱树）** 已接；剩系统文件拖入导入与命中跳行 · Phase D 未开始。
 
 ## 0. 裁决摘要（一页读完）
 
@@ -447,7 +447,7 @@ app ──► workbench ──► scratchpad ──► workbench_shell / gpui-ki
 | `jobs` 工作线程 / 结果队列 | 进程级单例（OnceLock，在 **crate 内**） | **无项目态**：只装「任务 + 结果」，不装当前项目；项目根作为参数传入 |
 | `ScratchpadWatcher`（目录监控） | `ScratchpadView` 的 `Option<…>` | 随视图存活；项目根变化时换监控点；drop 即停止监听 |
 | 监控轮询任务 | `ScratchpadView` 的 `RefCell<Option<Task<()>>>` | 常驻（1.2 s 一拍）；视图销毁后自动结束 |
-| `ScratchpadState` | crate 提供，**当前无生产调用方** | 将来 watcher 用，接入时按窗口持有 |
+| `ScratchpadState` | ~~crate 提供，无生产调用方~~ ✅ **已删（2026-10-09，K11）** | 进程级状态壳无存在必要：store 按窗口构造、watcher 面板自持 |
 
 > 为何工作线程可以是单例而项目态不行：线程与队列是无状态基础设施（等同连接池），每个任务自带 `project_root`，不会串项目。项目态（当前面板看到的条目/选中/展开）始终在窗口的 `Shared` 与视图实体里。
 
@@ -515,10 +515,11 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 ## 11. 测试策略
 
-- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录 + 面板纯函数，覆盖 37 项：
+- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录 + 面板纯函数，覆盖 38 项：
   模块根与元数据隔离、内部路径拒绝、回收站来源与原路径、跨模块还原拒绝、旧布局迁移、引用状态与重命名校验、引用重定位、绑定往返、绑定与最近执行回读（含预选优先级）、绝对路径→模块内相对路径、回执→草稿映射（模块过滤 + 后到者胜）、搜索正则与大小写、命中区间（含 Unicode 变宽回退）、递归复制与重名避让、字面量/正则替换与 `$` 语义、Diff 行分类与两侧行号、面板纯函数（排序/压平/模板后缀/搜索结果映射/脏点判据/Diff 行前级）、后台任务（根加载/目录加载/导入与清空回收站/粘贴/搜索替换共用载荷）。
-- **面板层（窗口级仍人工）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动与键盘导航、替换栏、只读拒绝、**打开草稿预选连接**、**脏点生灭**、**冲突条与 Diff 面板**——见 `scratchpad-user-guide.md` §9 验收清单。
-- **未自动化原因**：窗口级交互需要窗口与主题环境；按架构约定（窗口测试走宿主入口）应在 `workbench` 侧补，属后续工作项（§13.4）。
+- **面板层（窗口级，K10 已自动化，2026-10-09）**：gpui 测试窗口 + 最小宿主 `TestHost`，覆盖 3 项：面板渲染不 panic +「↓ 选中 → 打开」经宿主端口收到绝对路径、只读拒绝经宿主提示、命中面板构建 + 跳转回调不误触发。真点击与真轮询仍见 `scratchpad-user-guide.md` §9 验收清单。
+- **搜索态结果树对齐（2026-10-11，元素级像素断言）**：`search_result_hit_text_aligns_with_file_name` —— 注入 `search_view`（1 条命中）→ `window.draw` 一帧 → `VisualTestContext::debug_bounds` 断言**命中明细文本起点与文件节点名文本起点 `origin.x` 相等**。**关键机制**：gpui 的 `.id()` 不注册 debug_bounds，必须用 `.debug_selector()`（`div::debug_selector`，test-support 下编译）——文件行/命中行文本容器两者都挂（`rows.rs`）。此前基于截图/OCR 的对齐验证全部作废（豆包内嵌浏览器前台覆盖 rds-app 窗口，读数矛盾）。
+- **未自动化原因（剩余部分）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动、替换栏、脏点生灭、冲突条与 Diff 面板仍需真点击/真轮询环境；架构约定窗口测试走宿主入口，已在 `workbench` 侧接续（§13.4 已清 K10，属后续工作项）。
 
 ## 12. 实现映射
 
@@ -536,7 +537,8 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（模块根：`ScratchpadView` 结构与协议 `new` / `render_scratchpad` / `ensure_scratchpad_pump`、状态类型 `ScratchpadViewState`、行输入模型 `ScratchpadRowCtx` / `ScratchpadRowColors`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**）；**2026-09-20 拆分**（见 §8 D17）：`scratchpad_view/{primitives,search,rows,chrome,actions,dnd,tests}.rs`，拆分脚本 `tools/split_scratchpad_view.py`（一次性，已执行） |
 | 行共用原语与行高预算 | `workbench_shell::tree::{active_bar, disclosure_slot, disclosure_icon, indent_spacer, indent_rem, RowHeight, row_sizes}`（2026-09-20 起导航 / 草稿箱 / 资产库 / Mock 共用）；行高预算在 `scratchpad_view/rows.rs::scratchpad_row_height`，尺寸常量在 `workbench_shell/src/ui.rs`；**行态口径的权威表**：`docs/architecture/theme/ui-constraints.md` §8.3（本表的 D14–D16 就是它的一部分，改口径改那一处） |
 | 宿主端口与装配 | `scratchpad/src/host.rs`（trait）+ `workbench/src/components/scratchpad_host.rs`（实现）+ `workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
-| 搜索结果与替换栏 | `scratchpad/src/scratchpad_view.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
+| 搜索结果与替换栏 | `rds-search` crate（2026-10-10 抽离，命令面板可复用）+ `scratchpad_view/{chrome.rs::render_scratchpad_search, actions.rs::{run_scratchpad_content_search, replace_scratchpad_all, replace_scratchpad_file}, jobs.rs::{enqueue_search, enqueue_replace_all, enqueue_replace_one}}` + `workbench/src/panels/editor.rs`（`replace_scratchpad_all`、`show_search_results`） |
+| 搜索结果树对齐（2026-10-11） | `scratchpad_view/rows.rs::render_search_results_tree`：目录行/文件行与草稿箱树同构（`tree::indent_spacer(TREE_INDENT, n)` + `tree::disclosure_slot` + 类型微标 `Icon::empty().path(scratchpad_type_icon)` 同取色）；命中明细行用**同款微标 Icon**（空 `div` 占位不占宽度导致命中文本左移 16 px，已修）；文件行/命中行文本容器挂 `.debug_selector()` 供像素断言 |
 | 快捷键与尺寸 | `scratchpad/src/commands.rs`、`workbench/src/commands.rs`、`workbench_shell/src/ui.rs`、`app/src/main.rs` |
 | 文件类型色点 | `scratchpad/src/scratchpad_view.rs::scratchpad_icon_color` |
 | 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `scratchpad_view.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
@@ -565,7 +567,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | --- | --- | --- |
 | K3 | ~~文件监控缺失~~ ✅ **已修（2026-09-16）** | `scratchpad::ScratchpadWatcher`（`notify` 递归监听模块根）+ 面板侧 1.2 s 去抖轮询重拉；监控失败降级为手动 `↻`；`.RSmeta` 不在监听范围内，不会自激 |
 | K4 | ~~搜索结果可能过期~~ ✅ **已修（2026-09-16）** | 结果面板是快照；替换在**同一次任务内**重搜；外部改动由监控拍发现后，若面板仍开着则用**同一套查询/开关**重跑一次搜索（与重拉列表同步发生） |
-| K5 | 大小写不敏感高亮的回退 | 小写化改变字节长度（如 `İ`）时**不高亮**但**仍命中**——行为正确但不完美（有单测锚定） |
+| K5 | ~~大小写不敏感高亮的回退~~ ✅ **已修（2026-10-09）** | 旧实现：小写化改变字节长度（如 `İ` → `i̇`）时**放弃整行高亮**（命中判定仍生效）。修复：`literal_match_spans` 改为**逐字符小写 + 字符级偏移映射**（`charwise_lowercase`），把小写文本命中区间正确回射原行；锚定测试升级为「含宽度变化字符的行**必须**高亮」 |
 
 ### 13.3 待拍板（产品决定）
 
@@ -580,6 +582,6 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | # | 问题 | 说明 |
 | --- | --- | --- |
 | K9 | 面板自绘控件 | 工具栏按钮（`tool_btn`）、分组头、行尾动作（`↗ ✎ ✕`，18px 宽）仍是自绘 div；按组件选型规范应逐步换 gpui-kit `Button`。**已清一项（2026-09-20）**：树展开字符 `▸/▾` 已换 12px chevron 图标（与导航统一，见 §8 D14）。**2026-10-09 再清一批**：工具栏 8 个图标按钮、撤销栏「撤销」、搜索面板「关闭」均换 `Button::ghost()`（24px `small`，与原尺寸对齐）；**行尾动作保留自绘**（18px 紧凑宽度 + 行高预算成对维护，gpui-kit 0.7.1 无对应紧凑变体——`Button::compact()` 最小档 XSmall 仍 ≥20px，2026-10-11 复测 0.7.1，强换会挤压文件名列） |
-| K10 | 面板层缺自动化测试 | 见 §11 |
-| K11 | `ScratchpadState` 无生产调用方 | 要么在 Phase C 接到 watcher，要么按"无使用方即删"清理 |
-| K12 | 占位视图仍在 | `workbench` 的「资源」「插件」面板仍是占位（Phase D / 后续模块） |
+| K10 | ~~面板层缺自动化测试~~ ✅ **已补（2026-10-09）** | 见 §11 |
+| K11 | ~~`ScratchpadState` 无生产调用方~~ ✅ **已清理（2026-10-09）** | 按"无使用方即删"：`crates/scratchpad/src/state.rs` 删除；store 由 workbench 按窗口的 `Shared::project` 按需构造，watcher 由面板实体自持生命周期，进程级状态壳无存在必要 |
+| K12 | ~~占位视图仍在~~ ✅ **已核实（2026-10-09）** | 「资源」面板**已随 M6 接通**（`workbench/src/panels/resources.rs` + `analytics_resource::resource_view::ResourcesPanel` 实体），非占位；「插件」面板占位保留（M9 未立项，`render_plugin_placeholder` 是明确的「下一轮接入」占位） |

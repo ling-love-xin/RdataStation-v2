@@ -14,7 +14,7 @@ use std::rc::Rc;
 use gpui_kit::App;
 
 use editor::shared::EditorShared;
-use scratchpad::{ScratchpadDiffView, ScratchpadHost, ScratchpadSearchView};
+use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadHost, ScratchpadSearchView};
 
 use crate::panels::Shared;
 
@@ -51,6 +51,22 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
 
     fn open_in_editor(&self, path: PathBuf) {
         self.shared.request_open_in_editor(path);
+    }
+
+    fn open_search_hit(&self, target: scratchpad::ScratchpadSearchHitTarget) {
+        // 与中央搜索结果面板同一跳行口径：相对路径 → 模块内绝对路径 → 打开 + 落光标/选区。
+        if let Some(root) = self.shared.project_root() {
+            let abs = root
+                .join(scratchpad::MODULE_DIR_NAME)
+                .join(target.file.as_str());
+            self.shared.request_open_in_editor_at(
+                abs,
+                crate::panels::RevealTarget {
+                    line: target.line,
+                    span: target.span,
+                },
+            );
+        }
     }
 
     /// 「查看统计」的可行性判定：与取样共**同一处口径**（DuckDB 的读取器映射）。
@@ -112,6 +128,10 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
 
     fn show_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
         self.shared.show_scratchpad_diff(view, cx);
+    }
+
+    fn show_file_info(&self, view: Option<ScratchpadFileInfoView>, cx: &mut App) {
+        self.shared.show_scratchpad_file_info(view, cx);
     }
 }
 

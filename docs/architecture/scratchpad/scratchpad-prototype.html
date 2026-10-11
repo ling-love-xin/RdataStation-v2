@@ -76,8 +76,16 @@ button{font-family:inherit;cursor:pointer;}
 .panel-head .actions span{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;}
 .panel-head .actions span:hover{background:var(--hover);color:var(--fg);}
 
-.toolbar{display:flex;flex-direction:column;gap:3px;padding:5px 8px;border-bottom:1px solid var(--sidebar-border);}
-.tb-row{display:flex;align-items:center;gap:2px;}
+.toolbar{display:flex;align-items:center;gap:2px;padding:4px 6px;border-bottom:1px solid var(--sidebar-border);}
+.toolbar .left{display:flex;align-items:center;gap:2px;flex:1;min-width:0;}
+.toolbar .right{display:flex;align-items:center;gap:2px;flex:none;}
+
+/* 文件名过滤输入行（搜文件，图标在框外左侧，Enter/点击执行）——与工具栏 ⌕（搜内容）统一图标，靠位置/tooltip 区分 */
+.file-search{display:flex;align-items:center;gap:5px;padding:5px 8px 6px;border-bottom:1px solid var(--sidebar-border);}
+.file-search .box{flex:1;display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:4px 8px;}
+.file-search .box .mag{color:var(--muted);font-size:12px;}
+.file-search .box input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:12px;min-width:0;}
+.file-search .box input::placeholder{color:var(--muted);}
 .tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:5px;font-size:13px;}
 .tb-btn:hover{background:var(--hover);color:var(--fg);}
 .tb-sep{width:1px;height:16px;background:var(--border);margin:0 3px;}
@@ -90,7 +98,7 @@ button{font-family:inherit;cursor:pointer;}
 .chip-btn{border:1px solid var(--input-border);background:var(--bg);color:var(--muted);border-radius:5px;font-size:10px;padding:3px 5px;font-family:Consolas,monospace;}
 .chip-btn.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:700;}
 
-.panel-body{flex:1;overflow:hidden;padding:4px 6px;font-size:12px;}
+.panel-body{flex:1;overflow:auto;padding:4px 6px;font-size:12px;}
 .group{margin-bottom:4px;}
 .group-head{display:flex;align-items:center;gap:5px;height:24px;padding:0 6px;color:var(--muted);font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;}
 .group-head .badge{margin-left:auto;background:var(--muted);color:var(--sidebar);border-radius:9px;font-size:9.5px;font-weight:600;padding:0 6px;line-height:15px;text-transform:none;letter-spacing:0;}
@@ -110,13 +118,11 @@ button{font-family:inherit;cursor:pointer;}
 .row .tag{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 5px;flex:none;}
 .newrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;}
 .newrow input{flex:1;border:1px solid var(--active-border);border-radius:5px;background:var(--bg);color:var(--fg);font-size:12px;padding:3px 7px;outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
-.tplrow{display:flex;align-items:center;gap:4px;padding:2px 6px 4px 26px;color:var(--muted);font-size:10px;}
-.tplrow .tpl{border:1px solid var(--input-border);background:var(--bg);border-radius:5px;padding:2px 6px;font-size:10px;color:var(--muted);}
-.tplrow .tpl.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
-.replrow{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);}
+.replrow{display:flex;align-items:center;gap:8px;padding:2px 12px 4px;font-size:11px;color:var(--muted);}
 .replrow .box{flex:1;display:flex;align-items:center;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:3px 8px;}
 .replrow .box input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:11.5px;min-width:0;}
 .replrow .go{background:var(--primary);color:var(--primary-fg);border:none;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;}
+.replrow .lbl{color:var(--muted);font-size:11.5px;flex:none;}
 
 .ic{width:15px;height:15px;flex:none;stroke-width:1.5;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;}
 .ic.folder{color:var(--ic-folder);}
@@ -127,7 +133,109 @@ button{font-family:inherit;cursor:pointer;}
 .ic.ref{color:var(--info);}
 .ic.trash{color:var(--muted);}
 
-.panel-foot{border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);}
+/* 侧栏双视图：文件树视图 / 搜索面板视图（点击工具栏 ⌕ 切换，← 返回） */
+.sidebar-view{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
+
+/* 搜索面板（VSCode 全文搜索形态：垂直表单 + Tree 结果） */
+.sp-toolbar{display:flex;align-items:center;gap:2px;height:34px;padding:0 6px;border-bottom:1px solid var(--sidebar-border);}
+.sp-toolbar .ttl{font-size:12px;font-weight:600;color:var(--fg);margin:0 4px;letter-spacing:.3px;}
+.sp-toolbar .grow{flex:1;}
+.sp-form{display:flex;flex-direction:column;gap:6px;padding:8px 8px 7px;border-bottom:1px solid var(--sidebar-border);}
+.sp-field .lbl{display:block;font-size:11px;color:var(--muted);margin-bottom:3px;}
+.sp-line{display:flex;align-items:center;gap:4px;}
+.sp-box-in{flex:1;min-width:0;display:flex;align-items:center;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:4px 4px 4px 8px;}
+.sp-box-in input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:11.5px;min-width:0;}
+.sp-box-in input::placeholder{color:var(--muted);}
+/* 输入框内嵌图标按钮（VSCode 式：Aa/ab/.* 等在输入框内部右侧） */
+.ibtn{flex:none;width:17px;height:17px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:4px;cursor:pointer;font-size:10.5px;font-family:Consolas,monospace;}
+.ibtn:hover{color:var(--fg);background:var(--hover);}
+.ibtn.on{color:var(--fg);background:var(--primary);}
+/* 全部替换（图标按钮）+ ⋮ 展开/隐藏搜索选项 */
+.icon-go{flex:none;width:24px;height:24px;display:flex;align-items:center;justify-content:center;background:var(--primary);color:var(--primary-fg);border:none;border-radius:6px;cursor:pointer;font-size:13px;}
+.icon-go:hover{filter:brightness(1.1);}
+.sp-line .go{background:var(--primary);color:var(--primary-fg);border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;flex:none;cursor:pointer;}
+.sp-stats{display:flex;align-items:center;gap:8px;padding:5px 10px;font-size:11.5px;color:var(--fg);border-bottom:1px solid var(--border);}
+.sp-stats .link{color:var(--info);cursor:pointer;margin-left:auto;font-size:11px;}
+.sp-stats .link:hover{text-decoration:underline;}
+.sp-results{flex:1;overflow:auto;padding:4px 0;}
+.rt-dir{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;font-size:11.5px;color:var(--fg);cursor:pointer;border-radius:4px;font-weight:600;}
+.rt-dir:hover{background:var(--hover);}
+.rt-file{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px 0 22px;font-size:11.5px;color:var(--fg);cursor:pointer;border-radius:4px;}
+.rt-file:hover{background:var(--hover);}
+.rt-file .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rt-file .badge{flex:none;min-width:18px;height:18px;border-radius:9px;background:var(--accent);color:var(--fg);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;padding:0 5px;}
+/* 节点 hover 操作（图标 + tooltip）：文件=替换/取消，文件夹=全部替换/取消（不显示行号） */
+.rt-file .ops,.rt-dir .ops{display:none;gap:2px;flex:none;margin-left:auto;}
+.rt-file:hover .ops,.rt-dir:hover .ops{display:flex;}
+.op-ic{flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:4px;cursor:pointer;font-size:12px;}
+.op-ic:hover{color:var(--info);background:var(--hover);}
+/* glob 输入框点击时显示的样例提示行 */
+.glob-hint{display:none;font-size:10px;color:var(--muted);padding:2px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.glob-hint.show{display:block;}
+/* 命中片段：缩进对齐文件节点名（文件节点 padding 22px + 图标 13px + gap 6px ≈ 44px），与草稿箱树层级一致 */
+.rt-hit{padding:2px 8px 2px 44px;font-family:Consolas,monospace;font-size:11px;color:var(--muted);white-space:pre;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
+.rt-hit:hover{color:var(--fg);}
+.rt-hit mark{background:var(--search-match);color:var(--search-match-fg);border-radius:2px;padding:0 1px;}
+
+/* 编辑器内全局搜索结果视图（独立 EditorTab，全屏浏览：顶部搜索栏 + 文件链接 + 代码块语法高亮） */
+.es-bar{display:flex;align-items:center;gap:6px;height:38px;padding:0 12px;border-bottom:1px solid var(--border);background:var(--tabbar);}
+.es-bar .box{flex:1;max-width:320px;min-width:0;display:flex;align-items:center;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:4px 9px;}
+.es-bar .box input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:12px;min-width:0;}
+.es-bar .badge{flex:none;min-width:20px;height:20px;border-radius:10px;background:var(--accent);color:var(--fg);display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;padding:0 6px;}
+.es-stats{padding:6px 14px 2px;font-size:12px;color:var(--fg);}
+.es-body{flex:1;overflow:auto;padding:4px 0 10px;}
+.es-file{padding:7px 14px 3px;font-size:12px;}
+.es-file a{color:var(--info);cursor:pointer;text-decoration:none;}
+.es-file a:hover{text-decoration:underline;}
+.es-code{display:flex;gap:10px;padding:1px 14px;font-family:Consolas,monospace;font-size:12px;line-height:1.8;color:var(--fg);white-space:pre;}
+.es-code .ln{flex:none;width:26px;text-align:right;color:var(--muted);user-select:none;}
+.es-code .ct{min-width:0;}
+.es-code .kw{color:#569cd6;} .es-code .fn{color:#dcdcaa;} .es-code .str{color:#ce9178;} .es-code .cmt{color:var(--muted);}
+[data-theme="light"] .es-code .kw{color:#0000ff;} [data-theme="light"] .es-code .fn{color:#795e26;} [data-theme="light"] .es-code .str{color:#a31515;}
+.es-code mark{background:var(--search-match);color:var(--search-match-fg);border-radius:2px;padding:0 1px;}
+.es-file .tag{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 5px;margin-left:6px;font-family:Consolas,monospace;}
+
+/* ── 主体 Tree 树形组件（gpui-kit Tree/TreeItem） ── */
+.tree{padding:4px 4px;}
+.tnode{display:flex;align-items:center;gap:5px;height:26px;padding:0 6px;border-radius:5px;color:var(--fg);white-space:nowrap;position:relative;cursor:pointer;}
+.tnode:hover{background:var(--hover);}
+.tnode.sel{background:var(--accent);}
+.tnode.sel::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:2px;border-radius:2px;background:var(--active-border);}
+.tnode .chev{width:10px;color:var(--muted);font-size:9px;flex:none;text-align:center;transition:transform .12s;}
+.tnode.open .chev{transform:rotate(90deg);}
+.tnode .indent{width:14px;flex:none;}
+.tnode .nm{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+.tnode .meta{color:var(--muted);font-size:10px;flex:none;}
+.tnode .dirty{color:var(--primary);font-size:14px;line-height:1;flex:none;}
+.tnode .tag{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 5px;flex:none;font-family:Consolas,monospace;}
+.tree .ch{display:none;}
+.tree .ch.open{display:block;}
+
+/* 主体「营销分析 · 草稿」区块：Tree 也是 Accordion，占满剩余高度、自身滚动 */
+.acc-grow{flex:1;display:flex;flex-direction:column;min-height:0;}
+.acc-grow .acc-body{display:block;flex:1;overflow:auto;padding:2px 4px;}
+.acc-grow:not(.open) .acc-body{display:none;}
+
+/* ── 底部 Accordion 折叠面板（gpui-kit Accordion：引用 / 垃圾箱；草稿 = 主体 Tree，导入 = 复制动作） ── */
+.acc{display:flex;flex-direction:column;border-top:1px solid var(--sidebar-border);}
+.acc-item{border-top:1px solid var(--sidebar-border);}
+.acc-item:first-child{border-top:none;}
+.acc-head{display:flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 8px;font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--fg);cursor:pointer;user-select:none;}
+.acc-head:hover{background:var(--hover);}
+.acc-head .chev{width:10px;font-size:9px;color:var(--muted);flex:none;text-align:center;transition:transform .12s;}
+.acc-item.open .acc-head .chev{transform:rotate(90deg);}
+.acc-head .badge{margin-left:auto;background:var(--muted);color:var(--sidebar);border-radius:9px;font-size:9.5px;font-weight:600;padding:0 6px;line-height:15px;}
+.acc-body{display:none;padding:2px 6px 6px;font-size:11.5px;}
+.acc-item.open .acc-body{display:block;}
+.acc-row{display:flex;align-items:center;gap:6px;height:24px;padding:0 6px;border-radius:4px;color:var(--fg);white-space:nowrap;cursor:pointer;}
+.acc-row:hover{background:var(--hover);}
+.acc-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.acc-row .meta{color:var(--muted);font-size:10px;flex:none;}
+.acc-row .dirty{color:var(--primary);font-size:13px;line-height:1;flex:none;}
+.acc-row .act{color:var(--info);font-size:10.5px;flex:none;}
+.acc-row .act:hover{text-decoration:underline;}
+.acc-foot{padding:5px 8px 2px;font-size:10.5px;color:var(--muted);cursor:pointer;}
+.acc-foot:hover{color:var(--primary);}
 
 /* ── 中央编辑区 ── */
 .editor{flex:1;min-width:320px;background:var(--bg);display:flex;flex-direction:column;}
@@ -141,7 +249,16 @@ button{font-family:inherit;cursor:pointer;}
 .search-pane{border-top:1px solid var(--border);flex:1;display:flex;flex-direction:column;min-height:0;}
 .search-pane .sp-head{height:30px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);}
 .search-pane .sp-head b{color:var(--fg);font-weight:600;}
+.search-pane .sp-stats{padding:4px 12px 0;font-size:11.5px;color:var(--fg);border-bottom:1px solid var(--border);}
 .search-pane .sp-body{flex:1;overflow:auto;padding:4px 0;}
+.go-mini{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:3px;padding:1px 7px;font-size:11px;cursor:pointer;}
+.go-mini:hover{border-color:var(--primary);color:var(--primary);}
+/* 侧栏 VSCode 搜索面板：高级选项（2026-10-10 对齐） */
+.adv{display:flex;flex-direction:column;padding:0 12px 4px;gap:4px;}
+.adv .adv-toggle{cursor:pointer;user-select:none;}
+.adv .adv-body{display:flex;flex-direction:column;gap:4px;}
+.adv .adv-item{display:flex;align-items:center;gap:6px;}
+.adv .adv-item .lbl{width:64px;flex:none;color:var(--muted);font-size:11.5px;}
 .hit{padding:3px 12px;font-family:Consolas,monospace;font-size:11.5px;color:var(--muted);white-space:pre;}
 .hit .file{color:var(--fg);}
 .hit .ln{color:var(--info);}
@@ -181,6 +298,11 @@ button{font-family:inherit;cursor:pointer;}
 .undo{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:7px;background:var(--sidebar);padding:8px 12px;font-size:12px;color:var(--fg);}
 .undo .grow{flex:1;}
 .undo .link{color:var(--primary);font-weight:600;}
+.dlg{width:340px;border:1px solid var(--border);border-radius:9px;background:var(--bg);box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden;}
+.dlg-title{padding:10px 14px;font-size:13px;font-weight:600;color:var(--fg);border-bottom:1px solid var(--border);background:var(--sidebar);}
+.dlg-row{display:flex;padding:5px 14px;font-size:12px;line-height:1.5;}
+.dlg-row .k{width:96px;color:var(--muted);flex-shrink:0;}
+.dlg-row .v{color:var(--fg);word-break:break-all;}
 
 /* ── token 对照 ── */
 .tokens{max-width:1180px;margin:18px auto 0;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:14px 16px;}
@@ -232,97 +354,154 @@ button{font-family:inherit;cursor:pointer;}
     <div class="sidebar-l">
       <div class="panel-head">
         <span class="ttl">草稿箱</span>
-        <div class="actions"><span>⋯</span></div>
+        <div class="actions"><span title="折叠侧栏">◂</span></div>
       </div>
 
+      <div id="v-files" class="sidebar-view">
+      <!-- 顶部 Toolbar（gpui-kit Toolbar）：左侧 = ⌕搜内容/新建文件/新建目录/引用/导入入口，右侧 = 排序/刷新/⋯更多设置 -->
       <div class="toolbar">
-        <div class="tb-row">
+        <div class="left">
+          <button class="tb-btn" title="搜索内容：进入搜索状态（侧栏切换为全文搜索面板 + 结果树；← 返回文件树）。VSCode 全文搜索，结果也进中央「搜索: query」独立 tab" onclick="toggleSidebarSearch(true)">⌕</button>
           <button class="tb-btn" title="新建文件">＋</button>
-          <button class="tb-btn" title="新建文件夹">🗀</button>
-          <button class="tb-btn" title="导入（复制进草稿箱）">⬇</button>
-          <button class="tb-btn" title="引用（只记路径，不复制）">🔗</button>
-          <div style="flex:1"></div>
+          <button class="tb-btn" title="新建目录">🗀</button>
+          <button class="tb-btn" title="引用入口：逻辑引用（软连接），弹窗输入路径+别名，只记地址不复制">🔗</button>
+          <button class="tb-btn" title="导入入口：弹窗选择外部文件，复制进草稿箱（导入 = 复制）">⬇</button>
+        </div>
+        <div class="right">
           <button class="tb-btn" title="排序：名称/大小/修改时间">⇅</button>
           <button class="tb-btn" title="刷新">↻</button>
-        </div>
-        <div class="tb-row">
-          <button class="tb-btn" title="剪切">✂</button>
-          <button class="tb-btn" title="复制">⧉</button>
-          <button class="tb-btn" title="粘贴">📋</button>
-          <button class="tb-btn" title="删除">🗑</button>
-          <div style="flex:1"></div>
-          <span class="meta" style="color:var(--muted);font-size:10px">3 项</span>
+          <button class="tb-btn" title="更多设置：自定义工具栏按钮显示与位置">⋯</button>
         </div>
       </div>
+      <!-- 剪贴板工具栏（✂⧉📋🗑）已于 2026-10-10 按用户要求移除；导入/引用改为弹窗输入（2026-10-11），见下方状态示意 -->
 
-      <div class="search">
-        <button class="chip-btn" title="搜索模式：文件名过滤">文件名</button>
-        <div class="box"><span class="mag">⌕</span><input placeholder="搜索…"></div>
-        <button class="chip-btn" title="正则（内容模式）">.*</button>
-        <button class="chip-btn" title="区分大小写（内容模式）">Aa</button>
-        <button class="chip-btn" title="运行内容搜索（结果落中央编辑区）">⏎</button>
+      <!-- 文件名过滤输入行：搜文件（⌕ 图标在框外右侧；Enter 或点击图标执行过滤）——与工具栏 ⌕（搜内容）统一图标，靠位置/tooltip 区分 -->
+      <div class="file-search">
+        <div class="box"><input placeholder="搜索文件…" title="输入文件名后按 Enter 或点击右侧 ⌕ 过滤树"></div>
+        <button class="tb-btn" title="执行文件搜索（也可按 Enter）">⌕</button>
       </div>
+      <!-- 内容搜索面板（工具栏 ⌕ 进入，VSCode 全文搜索）：点击后侧栏整体切换为搜索面板（工具栏+目录树消失），下方为主窗口内交互演示 -->
 
-      <div class="panel-body">
-        <!-- 项目文件 -->
-        <div class="group">
-          <div class="group-head"><span class="chev">▼</span> 草稿 · 营销分析</div>
-
-          <div class="row"><span class="chev">▸</span>
+      <!-- 主体：Accordion「项目名 · 草稿」区块内嵌 Tree 树形组件（草稿 = scratchpad 根层级目录树；标题即根语义）
+           文件夹节点：展开/折叠箭头；文件节点：类型图标；选中左边条、hover 高亮、长名截断、YAML 标签 -->
+      <div class="acc acc-grow open">
+        <div class="acc-head"><span class="chev">▸</span> 营销分析 · 草稿 <span class="badge">6</span></div>
+        <div class="acc-body">
+          <div class="tnode open"><span class="chev">▸</span>
             <svg class="ic folder" viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.3 1.8h7.7v7.2h-13z"/></svg>
             <span class="nm">data</span><span class="meta">3 项</span></div>
-
-          <div class="row sel"><span class="chev">▸</span>
-            <svg class="ic sql" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">临时订单分析.sql</span><span class="dirty">●</span><span class="meta">1.2 MB · 2 分钟前</span></div>
-
-          <div class="row"><span class="chev"></span>
-            <svg class="ic py" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">transform.py</span><span class="meta">1 小时前</span></div>
-
-          <div class="row"><span class="chev"></span>
-            <svg class="ic data" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">sample.csv</span><span class="meta">1.2 MB · 1 小时前</span></div>
-
-          <div class="row"><span class="chev"></span>
-            <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">README.md</span><span class="meta">昨天</span></div>
-
-          <!-- 内联新建（选中 data 文件夹后）+ 模板 chip（自动补后缀） -->
-          <div class="newrow"><span class="indent"></span>
-            <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <input value="新建查询.sql" autofocus></div>
-          <div class="tplrow">模板
-            <span class="tpl on">SQL</span><span class="tpl">Python</span><span class="tpl">Markdown</span><span class="tpl">JSON</span><span class="tpl">空白</span>
+          <div class="ch open">
+            <div class="tnode"><span class="indent"></span><span class="chev"></span>
+              <svg class="ic folder" viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.3 1.8h7.7v7.2h-13z"/></svg>
+              <span class="nm">raw</span><span class="meta">1 项</span></div>
+            <div class="tnode"><span class="indent"></span><span class="chev"></span>
+              <svg class="ic data" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+              <span class="nm">sample.csv</span><span class="meta">1.2 MB</span></div>
           </div>
-        </div>
-
-        <!-- 外部引用 -->
-        <div class="group">
-          <div class="group-head"><span class="chev">▼</span> 外部引用 <span class="badge">2</span></div>
-          <div class="row"><span class="chev"></span>
-            <svg class="ic ref" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>
-            <span class="nm">下载数据</span><span class="meta">D:\data\</span>
-            <span class="meta" title="在文件管理器中打开">↗</span>
-            <span class="meta" title="重命名别名">✎</span>
-            <span class="meta" title="移除引用">✕</span></div>
-          <!-- 失效引用：置灰 + 「（丢失）」+ 重新引用（选新路径，只改路径） -->
-          <div class="row dim"><span class="chev"></span>
-            <svg class="ic ref" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>
-            <span class="nm">月度报表（丢失）</span><span class="meta">E:\moved\report.csv</span>
-            <span class="meta" title="在文件管理器中打开">↗</span>
-            <span class="meta" title="重命名别名">✎</span>
-            <span class="meta" style="color:var(--info)" title="重新引用（选择新路径）">⟲</span>
-            <span class="meta" title="移除引用">✕</span></div>
-        </div>
-
-        <!-- 回收站 -->
-        <div class="group">
-          <div class="group-head"><span class="chev">▶</span> 回收站 <span class="badge">3</span></div>
+          <div class="tnode sel"><span class="chev"></span>
+            <svg class="ic sql" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">临时订单分析.sql</span><span class="dirty">●</span><span class="meta">1.2 MB</span></div>
+          <div class="tnode"><span class="chev"></span>
+            <svg class="ic py" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">transform.py</span><span class="meta">4 KB</span></div>
+          <div class="tnode"><span class="chev"></span>
+            <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">README.md</span><span class="tag">guide</span><span class="meta">2 KB</span></div>
         </div>
       </div>
 
-      <div class="panel-foot">12 个文件 · 3 个文件夹 · 1 项引用 · 3 项回收站 · 排序 名称 ↑</div>
+      <!-- 底部：Accordion 折叠面板（gpui-kit Accordion）——引用 / 垃圾箱 附属视图（草稿 = 上方主体 Tree；导入 = 复制动作，无独立区块）
+           自带折叠箭头、标题可自定义、点击展开/收起 -->
+      <div class="acc">
+        <div class="acc-item open">
+          <div class="acc-head"><span class="chev">▸</span> 引用 <span class="badge">2</span></div>
+          <div class="acc-body">
+            <div class="acc-row"><svg class="ic ref" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg><span class="nm">下载数据</span><span class="meta">D:\data\</span><span class="act">✎</span><span class="act">✕</span></div>
+            <div class="acc-row"><svg class="ic ref" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg><span class="nm" style="opacity:.6">月度报表（丢失）</span><span class="act">⟲ 重新引用</span><span class="act">✕</span></div>
+          </div>
+        </div>
+        <div class="acc-item open">
+          <div class="acc-head"><span class="chev">▸</span> 垃圾箱 <span class="badge">3</span></div>
+          <div class="acc-body">
+            <div class="acc-row"><svg class="ic file" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg><span class="nm">sample.csv</span><span class="meta">10-10 13:40</span><span class="act">恢复</span></div>
+            <div class="acc-row"><svg class="ic file" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg><span class="nm">report.sql</span><span class="meta">10-09 09:12</span><span class="act">恢复</span></div>
+            <div class="acc-row"><svg class="ic file" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg><span class="nm">old.py</span><span class="meta">10-08 17:02</span><span class="act">恢复</span></div>
+            <div class="acc-foot">🗑 清空垃圾箱</div>
+          </div>
+        </div>
+      </div>
+      </div><!-- /v-files 文件树视图 -->
+
+      <!-- 搜索面板视图（点击工具栏 ⌕ 进入；← 返回文件树。工具栏 + 目录树整体消失，侧栏切换为垂直表单搜索面板） -->
+      <div id="v-search" class="sidebar-view" style="display:none">
+        <div class="sp-toolbar">
+          <button class="tb-btn" title="返回文件树（退出搜索状态）" onclick="toggleSidebarSearch(false)">←</button>
+          <span class="ttl">搜索</span>
+          <div class="grow"></div>
+          <button class="tb-btn" title="刷新">↻</button>
+          <button class="tb-btn" title="清除结果">✕</button>
+          <button class="tb-btn" title="新建编辑器查询（打开中央「搜索: query」独立 Tab）">⤢</button>
+          <button class="tb-btn" title="展开/折叠下方匹配明细" onclick="toggleHits()">▸</button>
+        </div>
+        <div class="sp-form">
+          <div class="sp-field">
+            <div class="sp-line">
+              <span class="sp-box-in"><input placeholder="搜索" value="created_at">
+                <button class="ibtn on" title="区分大小写">Aa</button>
+                <button class="ibtn" title="全字匹配">ab</button>
+                <button class="ibtn" title="正则">.*</button>
+              </span>
+            </div>
+          </div>
+          <div class="sp-field">
+            <div class="sp-line">
+              <span class="sp-box-in"><input placeholder="替换">
+                <button class="ibtn" title="保留大小写">AB</button>
+              </span>
+              <button class="icon-go" title="全部替换（只读项目拒绝；空替换内容拒绝）">⇄</button>
+              <button class="tb-btn" title="展开/隐藏搜索选项（包含/排除字段开关）" onclick="toggleOptions()">⋮</button>
+            </div>
+          </div>
+          <!-- 包含/排除字段（默认隐藏，⋮ 展开；2026-10-11 用户补充） -->
+          <div id="sp-options" style="display:none">
+            <div class="sp-field">
+              <div class="sp-line">
+                <span class="sp-box-in"><input placeholder="包含的文件" title="点击显示 glob 样例" onfocus="showHint(this,'gh-include')" onblur="hideHint('gh-include')"></span>
+                <button class="tb-btn" title="编辑 glob 规则">✎</button>
+                <button class="tb-btn" title="查看 glob 规则">👁</button>
+              </div>
+              <div class="glob-hint" id="gh-include">样例：*.sql, src/**/include（空 = 全部）</div>
+            </div>
+            <div class="sp-field">
+              <div class="sp-line">
+                <span class="sp-box-in"><input placeholder="排除的文件" title="点击显示 glob 样例" onfocus="showHint(this,'gh-exclude')" onblur="hideHint('gh-exclude')"></span>
+                <button class="tb-btn" title="设置排除规则">⚙</button>
+              </div>
+              <div class="glob-hint" id="gh-exclude">样例：*.log, .git/（空 = 不排除）</div>
+            </div>
+          </div>
+        </div>
+        <div class="sp-stats">3 个文件中有 5 个结果 · 扫描 16 个文件 <span class="link">在编辑器中打开</span></div>
+        <div class="sp-results">
+          <div class="rt-dir"><span>▾</span><svg class="ic folder" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M1.5 3.5h4l1.3 1.8h7.7v7.2h-13z"/></svg> scratchpad\
+            <span class="ops"><button class="op-ic" title="替换该目录下全部匹配">⇄</button><button class="op-ic" title="取消">✕</button></span>
+          </div>
+          <div class="rt-file"><svg class="ic sql" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg><span class="nm">临时订单分析.sql</span><span class="badge">3</span>
+            <span class="ops"><button class="op-ic" title="替换该文件内全部匹配">⇄</button><button class="op-ic" title="取消">✕</button></span>
+          </div>
+          <div class="rt-hit">SELECT date_trunc('day', <mark>created_at</mark>) AS d,</div>
+          <div class="rt-hit">WHERE <mark>created_at</mark> &gt;= '2026-01-01'</div>
+          <div class="rt-hit">ORDER BY <mark>created_at</mark> DESC</div>
+          <div class="rt-dir"><span>▾</span><svg class="ic folder" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M1.5 3.5h4l1.3 1.8h7.7v7.2h-13z"/></svg> scratchpad\data\
+            <span class="ops"><button class="op-ic" title="替换该目录下全部匹配">⇄</button><button class="op-ic" title="取消">✕</button></span>
+          </div>
+          <div class="rt-file"><svg class="ic sql" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg><span class="nm">report.sql</span><span class="badge">2</span>
+            <span class="ops"><button class="op-ic" title="替换该文件内全部匹配">⇄</button><button class="op-ic" title="取消">✕</button></span>
+          </div>
+          <div class="rt-hit">WHERE <mark>created_at</mark> &gt; now() - interval '7 day'</div>
+          <div class="rt-hit">GROUP BY date_trunc('day', <mark>created_at</mark>)</div>
+        </div>
+      </div>
     </div>
 
     <!-- 中央编辑区 -->
@@ -331,6 +510,10 @@ button{font-family:inherit;cursor:pointer;}
         <div class="etab">
           <svg class="ic sql" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
           临时订单分析.sql <span class="x">✕</span>
+        </div>
+        <!-- 搜索结果独立标签页（2026-10-10 VSCode 全局搜索形态）：与文档 tab 并列，可独立关闭 -->
+        <div class="etab active" title="搜索结果（独立标签页，VSCode「搜索: query」形态）">
+          <span style="opacity:.7">⌕</span> 搜索: created_at <span class="x">✕</span>
         </div>
       </div>
       <div class="editor-body">
@@ -342,21 +525,26 @@ button{font-family:inherit;cursor:pointer;}
           <span class="kw">WHERE</span> created_at <span class="kw">>=</span> <span class="str">'2026-01-01'</span><br>
           <span class="kw">GROUP BY</span> 1 <span class="kw">ORDER BY</span> 1;
         </div>
-        <div class="search-pane">
-          <div class="sp-head">搜索：<b>created_at</b> · 4 个文件 · 12 处匹配 <span style="margin-left:auto">正则 ✕ · 大小写 ✕</span></div>
-          <div class="replrow">替换为
-            <span class="box"><input placeholder="替换为…"></span>
-            <span>将替换 12 处 · 4 个文件</span>
-            <button class="go">全部替换</button>
+        <!-- 编辑器内全局搜索结果视图（2026-10-11 用户描述：独立 EditorTab 全屏预览；顶部搜索栏可改词实时重搜 + 文件链接 + 代码块语法高亮 + 行号） -->
+        <div class="search-pane" style="border-top:none">
+          <div class="es-bar">
+            <span class="box"><input value="created_at" title="顶部输入框可直接修改搜索词，实时重新执行检索"></span>
+            <button class="chip-btn on" title="区分大小写">Aa</button>
+            <button class="chip-btn" title="全字匹配">ab</button>
+            <button class="chip-btn" title="正则">.*</button>
+            <span class="badge" title="当前所处匹配项序号">1</span>
+            <button class="tb-btn" title="列表菜单：切换视图布局 / 导出结果">☰</button>
           </div>
-          <div class="sp-body">
-            <div class="hit"><span class="file">临时订单分析.sql</span></div>
-            <div class="hit ctx">  4: <span class="kw">SELECT</span> date_trunc('day', created_at) AS d,</div>
-            <div class="hit ctx">  5:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;count(*) AS cnt</div>
-            <div class="hit">  6: <span class="kw">WHERE</span> <mark>created_at</mark> &gt;= '2026-01-01'</div>
-            <div class="hit ctx">  7: <span class="kw">GROUP BY</span> 1 ORDER BY 1;</div>
-            <div class="hit" style="margin-top:6px"><span class="file">data\report.sql</span> <span class="ln">12</span></div>
-            <div class="hit"> 12: <span class="kw">WHERE</span> <mark>created_at</mark> &gt; now() - interval '7 day'</div>
+          <div class="es-stats">5 个结果 - 3 文件</div>
+          <div class="es-body">
+            <div class="es-file"><a title="点击直接打开目标文件并定位首个匹配">scratchpad\临时订单分析.sql</a><span class="tag">SQL</span></div>
+            <div class="es-code"><span class="ln">4</span><span class="ct"><span class="kw">SELECT</span> date_trunc('day', <mark>created_at</mark>) <span class="kw">AS</span> d,</span></div>
+            <div class="es-code"><span class="ln">5</span><span class="ct">&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">count</span>(*) <span class="kw">AS</span> cnt</span></div>
+            <div class="es-code"><span class="ln">6</span><span class="ct"><span class="kw">WHERE</span> <mark>created_at</mark> &gt;= <span class="str">'2026-01-01'</span></span></div>
+            <div class="es-code"><span class="ln">8</span><span class="ct"><span class="kw">ORDER BY</span> <mark>created_at</mark> <span class="kw">DESC</span></span></div>
+            <div class="es-file"><a title="点击直接打开目标文件并定位首个匹配">scratchpad\data\report.sql</a><span class="tag">SQL</span></div>
+            <div class="es-code"><span class="ln">12</span><span class="ct"><span class="kw">WHERE</span> <mark>created_at</mark> &gt; now() - <span class="fn">interval</span> <span class="str">'7 day'</span></span></div>
+            <div class="es-code"><span class="ln">15</span><span class="ct"><span class="kw">GROUP BY</span> date_trunc('day', <mark>created_at</mark>)</span></div>
           </div>
         </div>
       </div>
@@ -393,6 +581,83 @@ button{font-family:inherit;cursor:pointer;}
 <!-- 状态示意 -->
 <div class="states">
   <div class="state">
+    <h4>导入弹窗（工具栏「⬇ 导入入口」点击弹出；导入 = 复制）</h4>
+    <div class="dlg" style="width:320px">
+      <div class="dlg-title">导入文件到草稿箱</div>
+      <div style="padding:10px 14px;font-size:12px;line-height:1.7;color:var(--muted)">选择外部文件后 <b style="color:var(--fg)">复制</b> 进 <code>scratchpad/</code>（选中文件夹则复制到该文件夹）。<br>导入 = 复制，源文件保持不动；目录递归导入后续补齐。</div>
+      <div style="padding:10px 14px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border);background:var(--sidebar)">
+        <button class="btn-s">取消</button>
+        <button class="btn-p">选择文件…</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="state">
+    <h4>引用弹窗（工具栏「🔗 引用入口」点击弹出；引用 = 软连接）</h4>
+    <div class="dlg" style="width:320px">
+      <div class="dlg-title">添加外部引用（软连接）</div>
+      <div style="padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+        <div>
+          <div style="font-size:11.5px;color:var(--muted);margin-bottom:4px">路径（文件或目录）</div>
+          <input style="width:100%;border:1px solid var(--input-border);border-radius:6px;padding:5px 9px;font-size:12px;color:var(--fg);background:var(--bg);outline:none" placeholder="D:\data\orders.csv">
+        </div>
+        <div>
+          <div style="font-size:11.5px;color:var(--muted);margin-bottom:4px">别名（可后续改名）</div>
+          <input style="width:100%;border:1px solid var(--active-border);border-radius:6px;padding:5px 9px;font-size:12px;color:var(--fg);background:var(--bg);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent)" placeholder="订单数据">
+        </div>
+      </div>
+      <div style="padding:10px 14px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border);background:var(--sidebar)">
+        <button class="btn-s">取消</button>
+        <button class="btn-p">添加引用</button>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:12px">引用只记路径 + 别名（类似软连接），不复制；路径失效自动探测置灰 + 「（丢失）」+「⟲ 重新引用」。引用列表在底部 Accordion「引用」区块。</div>
+  </div>
+
+  <div class="state">
+    <h4>内容搜索面板（工具栏「⌕」进入，VSCode 全文搜索；图标与下方文件搜索统一为 ⌕，靠位置/tooltip 区分）</h4>
+    <div style="width:238px;border:1px solid var(--border);border-radius:6px;background:var(--sidebar);overflow:hidden;">
+      <div class="search">
+        <button class="chip-btn" title="搜索模式：文件名过滤">文件名</button>
+        <div class="box"><span class="mag">⌕</span><input placeholder="搜索…"></div>
+        <button class="chip-btn" title="正则（内容模式）">.*</button>
+        <button class="chip-btn" title="区分大小写（内容模式）">Aa</button>
+        <button class="chip-btn" title="运行内容搜索（图标化 + tooltip）">⌕</button>
+      </div>
+      <div class="search replrow">
+        <span class="lbl">替换为</span>
+        <span class="box"><input placeholder="替换为…"></span>
+        <button class="go" title="全部替换（只读项目拒绝；空替换内容拒绝）">全部替换</button>
+      </div>
+      <div class="search adv">
+        <span class="lbl adv-toggle" title="展开/收起 包含的文件、排除的文件（glob，空 = 不限定）">▾ 高级选项</span>
+        <div class="adv-body">
+          <div class="adv-item"><span class="lbl">包含的文件</span><span class="box"><input placeholder="如 *.sql, test-*"></span></div>
+          <div class="adv-item"><span class="lbl">排除的文件</span><span class="box"><input placeholder="如 *.log"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="hint">点击主窗口工具栏「⌕」即可<b>交互演示搜索状态</b>（侧栏整体切换：工具栏+目录树消失 → 搜索面板；← 返回）。两通道区分（图标统一 ⌕，靠位置与 tooltip）：工具栏下方输入行 = <b>搜文件</b>（图标在<b>框外右侧</b>，Enter 或点击图标执行过滤）；工具栏 ⌕ = <b>搜内容</b>（全文搜索）。搜索面板：输入框 placeholder 即「搜索/替换」提示，<b>Aa/ab/.*、AB 在输入框内右侧</b>（VSCode 式）；全部替换为 ⇄ 图标；替换行 ⋮ 展开/隐藏<b>包含/排除字段（默认隐藏，点击 ⋮ 展开）</b>，<b>点击 glob 输入框显示样例</b>（✎👁⚙ 编辑/查看/设置）；工具栏 = ← 返回 / 刷新 / 清除 / ⤢ 新建编辑器查询 / <b>▸ 展开折叠下方匹配明细</b>；结果树<b>与草稿箱树一致</b>（类型微标、节点缩进偏移、命中片段缩进对齐文件节点，hover <b>⇄ 替换 / ✕ 取消</b> 图标 + tooltip，不带行号）。中央「搜索: created_at」tab 为编辑器内独立结果视图。</div>
+  </div>
+
+  <div class="state">
+    <h4>更多设置（工具栏「⋯」——自定义按钮显示与位置）</h4>
+    <div class="menu" style="width:220px">
+      <div class="mi" style="font-weight:700;color:var(--muted);font-size:11px;letter-spacing:.5px">工具栏按钮</div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 搜索入口 <span class="shortcut">左</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 新建文件 <span class="shortcut">左</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 新建目录 <span class="shortcut">左</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 引用入口 <span class="shortcut">左</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 导入入口 <span class="shortcut">左</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 排序 <span class="shortcut">右</span></div>
+      <div class="mi"><span style="width:14px;color:var(--success)">☑</span> 刷新 <span class="shortcut">右</span></div>
+      <div class="sep"></div>
+      <div class="mi">重置为默认布局</div>
+    </div>
+    <div class="hint">每个入口可取消勾选（隐藏）或调整左/右位置；设置持久化到用户配置。左/右位置也可按间距分组微调。</div>
+  </div>
+
+  <div class="state">
     <h4>空态（项目根无用户文件）</h4>
     <div class="empty">
       <div class="big">🗒</div>
@@ -407,6 +672,10 @@ button{font-family:inherit;cursor:pointer;}
     <h4>右键菜单（文件）</h4>
     <div class="menu">
       <div class="mi">打开 <span class="shortcut">Enter</span></div>
+      <div class="mi">在文件管理器中显示</div>
+      <div class="mi">用系统应用打开</div>
+      <div class="mi">属性…</div>
+      <div class="sep"></div>
       <div class="mi">重命名 <span class="shortcut">F2</span></div>
       <div class="sep"></div>
       <div class="mi">剪切 <span class="shortcut">Ctrl+X</span></div>
@@ -414,16 +683,30 @@ button{font-family:inherit;cursor:pointer;}
       <div class="mi">粘贴到此文件夹</div>
       <div class="sep"></div>
       <div class="mi">提升为分析资源</div>
-      <div class="mi">在文件管理器中显示</div>
       <div class="sep"></div>
       <div class="mi danger">删除 <span class="shortcut">Del</span></div>
     </div>
+    <div class="hint" style="margin-top:12px">「在文件管理器中显示」= explorer /select 定位；「用系统应用打开」= 系统默认程序；「属性…」弹出 gpui-kit Dialog（类型/路径/大小/修改时间/创建时间/数据库连接，见下）。</div>
   </div>
 
   <div class="state">
     <h4>删除撤销栏（5 秒）</h4>
     <div class="undo"><span>已删除 <b>sample.csv</b> 到回收站</span><span class="grow"></span><span class="link">撤销</span></div>
     <div class="hint" style="margin-top:12px">移动/剪切同样弹出撤销栏；回收站折叠区可恢复或清空。</div>
+  </div>
+
+  <div class="state">
+    <h4>文件属性（gpui-kit Dialog，右键「属性…」）</h4>
+    <div class="dlg">
+      <div class="dlg-title">属性 · 临时订单分析.sql</div>
+      <div class="dlg-row"><span class="k">类型</span><span class="v">SQL 文件</span></div>
+      <div class="dlg-row"><span class="k">路径</span><span class="v">scratchpad\临时订单分析.sql</span></div>
+      <div class="dlg-row"><span class="k">大小</span><span class="v">1.2 MB</span></div>
+      <div class="dlg-row"><span class="k">修改时间</span><span class="v">2026-10-10 13:40</span></div>
+      <div class="dlg-row"><span class="k">创建时间</span><span class="v">2026-10-08 09:12</span></div>
+      <div class="dlg-row"><span class="k">数据库连接</span><span class="v">—（预留，分析文件类型落地后回填）</span></div>
+    </div>
+    <div class="hint" style="margin-top:12px">遮罩点击 / Esc 关闭；信息量小，不用右侧 panel。SQL 文件后续要能看出绑定了哪个连接。</div>
   </div>
 </div>
 
@@ -440,15 +723,34 @@ button{font-family:inherit;cursor:pointer;}
     <div class="chip"><div class="sw" style="background:var(--ic-folder)"></div><span class="name">文件夹图标 warning</span></div>
     <div class="chip"><div class="sw" style="background:var(--ic-sql)"></div><span class="name">SQL 图标 info</span></div>
     <div class="chip"><div class="sw" style="background:var(--ic-py)"></div><span class="name">Python 图标 success</span></div>
-    <div class="chip"><div class="sw" style="background:var(--ic-data)"></div><span class="name">数据文件 base.cyan</span></div>
+    <div class="chip"><div class="sw" style="background:var(--ic-data)"></div><span class="name">数据文件 primary</span></div>
     <div class="chip"><div class="sw" style="background:var(--search-match)"></div><span class="name">搜索高亮 search.match.background</span></div>
     <div class="chip"><div class="sw" style="background:var(--danger)"></div><span class="name">危险操作 danger</span></div>
   </div>
 </div>
 
 <div class="foot">
-  落地：面板视图 <code>crates/scratchpad/src/scratchpad_view.rs</code>（草稿箱树 / 引用 / 回收站；宿主能力经 <code>crates/scratchpad/src/host.rs::ScratchpadHost</code>，实现与装配在 <code>crates/workbench/src/components/scratchpad_host.rs</code>），内容搜索结果 + 替换栏在 <code>crates/workbench/src/panels/editor.rs</code>，域模型/存储/后台任务同属 <code>crates/scratchpad</code>（<code>models</code>/<code>store</code>/<code>trash</code>/<code>jobs</code>/<code>watch</code>），根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
-  树行统一走 <code>v_virtual_list</code>（只渲染可视区行）；色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。
+  落地：面板视图 <code>crates/scratchpad/src/scratchpad_view.rs</code>（草稿箱树 / 引用 / 回收站；宿主能力经 <code>crates/scratchpad/src/host.rs::ScratchpadHost</code>，实现与装配在 <code>crates/workbench/src/components/scratchpad_host.rs</code>）；内容搜索结果 + 替换栏（VSCode 式：文件分组 + 命中数 + 行号命中行）自 2026-10-10 迁入独立 crate <code>crates/rds-search/src/view.rs::render_search_pane</code>（type_icon 注入，命令面板可复用），workbench 侧 <code>crates/workbench/src/panels/editor.rs</code> 负责替换入口与后台任务；文件属性弹窗 = gpui-kit <code>Dialog</code>（<code>crates/workbench/src/view.rs::render_scratchpad_file_info_popover</code>）；域模型/存储/后台任务同属 <code>crates/scratchpad</code>（<code>models</code>/<code>store</code>/<code>trash</code>/<code>jobs</code>/<code>watch</code>），根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
+  树行统一走 <code>v_virtual_list</code>（只渲染可视区行）；色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。<br>
+  侧栏结构（2026-10-11 用户描述重构 + 修正）：顶部 <code>Toolbar</code>（左 = ⌕搜内容/新建文件/新建目录/引用/导入入口，右 = 排序/刷新/⋯更多设置，⋯ 可自定义按钮显示与位置）→ 文件名过滤输入行（⌕ 图标在<u>框外右侧</u>，Enter 或点击图标执行过滤；与工具栏 ⌕ 统一图标，靠位置区分）→ 主体 <code>Accordion「营销分析 · 草稿」</code> 区块内嵌 <code>Tree/TreeItem</code> 树形组件 = <b>草稿</b>（scratchpad 根层级目录树：文件夹展开/折叠箭头、文件类型图标、选中左边条、hover 高亮、长名截断、节点 YAML 标签；「项目名 · 草稿」或仅「草稿」）→ 底部 <code>Accordion</code> 折叠面板（<b>引用 / 垃圾箱</b>；导入 = 复制动作、无独立区块）。<b>搜索状态</b>（2026-10-11 用户详细描述 + 当日修正）：点击工具栏「⌕」→ 侧栏<b>整体切换为搜索面板</b>（工具栏 + 目录树消失；顶部 Toolbar = ← 返回 + 刷新/清除/⤢ 新建编辑器查询/<b>▸ 展开折叠下方匹配明细</b>（复制、展开选项已移除）；垂直表单 = 搜索（<b>Aa/ab/.* 在输入框内右侧</b>）、替换（<b>AB 在输入框内 + ⇄ 全部替换图标 + ⋮</b>，⋮ 展开/隐藏<b>包含/排除字段（默认隐藏，点击 ⋮ 展开）</b>——placeholder 即提示，<b>点击 glob 输入框显示样例</b>，✎👁⚙ 编辑/查看/设置）；统计行 + 结果树：<b>与草稿箱树一致</b>（类型微标、节点缩进偏移、命中片段缩进对齐文件节点、目录节点 hover「⇄ 全部替换 / ✕ 取消」、文件节点 hover「⇄ 替换 / ✕ 取消」（图标 + tooltip）、命中片段不带行号），Highlight 高亮）；中央「搜索: created_at」为<b>编辑器内独立搜索结果 Tab</b>（顶部搜索栏可改词实时重搜 + 匹配序号 Badge + 列表菜单；统计「5 个结果 - 3 文件」；文件 Hyperlink + 代码块行号 + 语法着色 + 高亮）。导入/引用入口点击弹窗输入。
 </div>
+<script>
+function toggleSidebarSearch(on){
+  var f=document.getElementById('v-files'), s=document.getElementById('v-search');
+  f.style.display = on ? 'none' : '';
+  s.style.display = on ? '' : 'none';
+}
+function toggleOptions(){
+  var o=document.getElementById('sp-options');
+  o.style.display = (o.style.display==='none') ? '' : 'none';
+}
+function toggleHits(){
+  var hs=document.querySelectorAll('.rt-hit');
+  var show = hs.length && hs[0].style.display==='none';
+  for(var i=0;i<hs.length;i++){ hs[i].style.display = show ? '' : 'none'; }
+}
+function showHint(el,id){ document.getElementById(id).classList.add('show'); }
+function hideHint(id){ document.getElementById(id).classList.remove('show'); }
+</script>
 </body>
 </html>

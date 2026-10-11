@@ -155,7 +155,7 @@ impl RowKey {
     }
 
     /// 键列在**结果列**里的下标；任一列名找不到就返回 `None`
-    fn indices(&self, columns: &[String]) -> Option<Vec<usize>> {
+    pub(crate) fn indices(&self, columns: &[String]) -> Option<Vec<usize>> {
         self.columns
             .iter()
             .map(|name| columns.iter().position(|column| column == name))
@@ -408,7 +408,7 @@ fn json_value(value: Option<&str>) -> String {
 ///
 /// **只此一处**：JSON 的 `null`、SQL 的 `NULL` 字面量、`WHERE … IS NULL` 都读它，
 /// 免得同一个结果集在不同档里对“是不是 NULL”给出不同答案。
-fn is_null_cell(value: Option<&str>) -> bool {
+pub(crate) fn is_null_cell(value: Option<&str>) -> bool {
     matches!(value, None | Some("NULL"))
 }
 
@@ -495,7 +495,7 @@ fn sql_literal(text: &str) -> String {
 ///
 /// 为什么要多这层：`sql_literal("")` 的空串是**合法值**（该写 `''`），而“缺格”是另一回事
 /// （行比列短——分段抓取的边界），两者不能混。`NULL` 的判据仍只此一处（[`is_null_cell`]）。
-fn cell_literal(cell: Option<&str>) -> String {
+pub(crate) fn cell_literal(cell: Option<&str>) -> String {
     if is_null_cell(cell) {
         "NULL".to_string()
     } else {
@@ -698,7 +698,7 @@ fn is_numeric_literal(text: &str) -> bool {
 ///
 /// MySQL 默认不把双引号当标识符引号——那是方言的事，这里不猜；含特殊字符的列名本来就该
 /// 让用户看到引号（比默默生成一条跑不了的 INSERT 好）。
-fn quote_ident(name: &str) -> String {
+pub(crate) fn quote_ident(name: &str) -> String {
     let simple = !name.is_empty()
         && name.chars().enumerate().all(|(ix, ch)| {
             ch == '_' || ch.is_ascii_alphanumeric() && !(ix == 0 && ch.is_ascii_digit())

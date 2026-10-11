@@ -156,6 +156,7 @@ fn view_layer_has_no_raw_size_literals() {
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
+        ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         (
@@ -342,6 +343,7 @@ fn ui_sources_have_no_raw_color_literals() {
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
+        ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
         (
             "quick_open/delegate.rs",
@@ -548,6 +550,10 @@ fn shared_fields_are_whitelisted() {
         "right_mode",
         "right_mode_before_hidden",
         "scratchpad_bridge",
+        "scratchpad_file_info",
+        "scratchpad_search",
+        "search_results_dismissed",
+        "search_results_panel",
         "selected",
         "settings_open",
         "tag_dialog",

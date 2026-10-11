@@ -2,7 +2,6 @@
 //!
 //! 类似 VS Code 文件管理的草稿工作区：
 //! - `models`：草稿条目/搜索/差异/替换/外部引用模型
-//! - `state`：草稿箱状态机
 //! - `store`：草稿箱存储（文件系统 + 超时锁）
 //! - `trash`：项目级回收站（草稿 / 资源共用）
 //! - `jobs`：后台任务（读盘 / 导入 / 搜索 / 替换；单工作线程 + 结果队列）
@@ -11,18 +10,27 @@
 //! - `commands`：面板键盘动作
 //!
 //! 依赖方向：scratchpad → workbench_shell / gpui-kit / shared。
+//!
+//! K11（2026-10-09）：`ScratchpadState` 死代码已按「无使用方即删」清理——store 由
+//! workbench 按窗口的 `Shared::project` 按需构造，watcher 由面板实体自持生命周期，
+//! 进程级状态壳无存在必要（见 `docs/architecture/scratchpad/scratchpad-architecture.md` §13.2）。
 
 pub mod commands;
 pub mod host;
 pub mod jobs;
 pub mod models;
 pub mod scratchpad_view;
-pub mod state;
 pub mod store;
 pub mod watch;
 
 pub use host::ScratchpadHost;
-pub use scratchpad_view::{ScratchpadDiffView, ScratchpadSearchView, ScratchpadView};
+pub use scratchpad_view::{
+    ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchHitTarget, ScratchpadSearchView,
+    ScratchpadView,
+};
+pub use scratchpad_view::{
+    render_scratchpad_diff_pane, render_scratchpad_file_info_pane, render_scratchpad_search_pane,
+};
 
 pub use models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
@@ -31,7 +39,6 @@ pub use models::{
     SearchResult,
 };
 pub use jobs::{DirResult, FileListPayload, LoadResult, SearchPayload};
-pub use state::ScratchpadState;
 pub use store::{ScratchpadStore, MODULE_DIR_NAME, ORIGIN_SCRATCHPAD};
 // 回收站已上提到 engine（中性化：不再返回 `ScratchpadEntry`，来源是字符串标记）。
 // 这里重导出保持 `scratchpad::ProjectTrash` 等旧路径可用。

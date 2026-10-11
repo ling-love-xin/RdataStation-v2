@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分析模式 · 笔记与内联输出原型</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E8846F'/%3E%3Cpath d='M8 9h16v3H8zM8 15h16v3H8zM8 21h16v3H8z' fill='%231E1E1E'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#1E1E1E; --sidebar:#252526; --titlebar:#323233; --tabbar:#252526;
+  --border:#3C3C3C; --input-border:#4F4F4F; --fg:#CCCCCC; --muted:#8A8A8A;
+  --brand:#E8846F; --brand-hover:#F5A188; --statusbar:#A84A38;
+  --tab-bg:#2D2D30; --tab-active:#1E1E1E; --hover:#2A2D2E; --active:#37373D;
+  --selection:#264F78; --danger:#F1706B; --warn:#E5A54B; --ok:#6CCB5F;
+  --mono:"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  --sans:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  --icon-xs:12px; --icon-sm:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#141414;color:var(--fg);font-family:var(--sans);font-size:14px;
+  padding:28px 20px 48px;min-height:100vh;display:flex;flex-direction:column;align-items:center}
+.hero{max-width:1080px;width:100%;margin-bottom:18px}
+.hero h1{font-size:19px;color:#F2F2F2;font-weight:600}
+.hero p{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.7}
+.hero .hints{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.hint{background:var(--active);border:1px solid var(--border);border-radius:6px;
+  padding:5px 10px;font-size:12px;color:#B9B9B9}
+.hint b{color:var(--brand-hover);font-weight:600}
+/* ===== 通用图标（Lucide，gpui-kit IconName 同源） ===== */
+.ico{width:var(--icon-sm);height:var(--icon-sm);flex-shrink:0;display:block}
+.ico.stroke{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ico.fill{fill:currentColor}
+.ico.xs{width:var(--icon-xs);height:var(--icon-xs)}
+/* ===== 模拟窗口 ===== */
+.app{max-width:1080px;width:100%;background:var(--bg);border:1px solid #4A4A4A;
+  border-radius:8px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.55)}
+.titlebar{background:var(--titlebar);height:36px;display:flex;align-items:center;
+  padding:0 10px;gap:14px;border-bottom:1px solid var(--border)}
+.win-dots{display:flex;gap:7px;flex-shrink:0}
+.win-dots i{width:12px;height:12px;border-radius:50%;display:block}
+.win-dots i:nth-child(1){background:#E66A5C}
+.win-dots i:nth-child(2){background:#E5C07B}
+.win-dots i:nth-child(3){background:#98C379}
+.tabs{display:flex;align-items:center;gap:2px;height:100%;flex:1;overflow:hidden}
+.tab{height:100%;display:flex;align-items:center;gap:7px;padding:0 12px;
+  font-size:12.5px;color:#9C9C9C;border-right:1px solid var(--border);background:var(--tab-bg);
+  white-space:nowrap;cursor:pointer;user-select:none}
+.tab.active{background:var(--tab-active);color:#FFFFFF}
+.tab .x{margin-left:6px;color:var(--muted);padding:2px;border-radius:3px;display:flex;cursor:pointer}
+.tab .x:hover{background:var(--hover);color:#E0E0E0}
+.tab .lang-badge{font-size:10px;padding:1px 6px;border-radius:9px;background:#3A3D41;color:#A8A8A8}
+.tab.active .lang-badge{background:var(--brand);color:#1E1E1E;font-weight:600}
+.tab .dirty-dot{color:#E5C07B;font-size:8px;margin-left:2px}
+.plus{width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);border-radius:4px;cursor:pointer}
+.plus:hover{background:var(--hover);color:#E0E0E0}
+/* ===== 模式挖空槽（标题栏，凹陷视觉，区别于工具栏） ===== */
+.title-slot{background:var(--sidebar);height:26px;padding:0 10px;border-radius:5px;
+  display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:#E8E8E8;
+  border:1px solid rgba(0,0,0,.25);box-shadow:inset 0 1px 3px rgba(0,0,0,.3);flex-shrink:0;
+  user-select:none}
+.title-slot:hover{color:#FFF}
+.title-slot .ico{width:12px;height:12px;color:var(--brand-hover)}
+/* ===== 笔记工具栏（会话组 │ 运行组 │ 单元组，分组通用） ===== */
+.toolbar{height:36px;background:var(--sidebar);display:flex;align-items:center;
+  gap:4px;padding:0 8px;border-bottom:1px solid var(--border)}
+.tool-btn{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;
+  border-radius:4px;font-size:12.5px;color:#C8C8C8;cursor:pointer;border:1px solid transparent;
+  user-select:none;white-space:nowrap;position:relative}
+.tool-btn:hover{background:var(--hover)}
+.tool-btn.icon-only{padding:0 6px}
+.tool-sep{width:1px;height:18px;background:var(--border);margin:0 5px}
+.primary-btn{background:var(--brand);color:#1E1E1E;font-weight:600}
+.primary-btn:hover{background:var(--brand-hover)}
+/* 会话选择（内核/环境，可切换） */
+.session-pill{display:flex;align-items:center;gap:7px;height:26px;padding:0 9px;
+  border-radius:4px;font-size:12px;cursor:pointer;border:1px solid var(--input-border);
+  background:#2A2D2E;color:#D8D8D8;user-select:none;position:relative}
+.session-pill:hover{border-color:#5A5A5A}
+.session-pill .k-dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.session-pill .k-dot.busy{background:var(--warn);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.4}}
+.session-pill .s-icon{width:12px;height:12px;color:var(--brand-hover)}
+.session-pill .caret{width:12px;height:12px;color:var(--muted)}
+.kernel-state{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.kernel-state .k-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.kernel-state.busy .k-dot{background:var(--warn);animation:pulse 1.2s infinite}
+.tool-spacer{flex:1}
+/* ===== 下拉菜单 ===== */
+.menu{position:fixed;width:230px;background:var(--sidebar);border:1px solid #4A4A4A;
+  border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,.6);z-index:70;display:none;padding:5px}
+.menu.open{display:block}
+.m-title{padding:4px 10px 6px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--border);
+  margin-bottom:4px}
+.m-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:5px;
+  font-size:12.5px;color:#D0D0D0;cursor:pointer}
+.m-item:hover{background:var(--hover);color:#FFF}
+.m-item .px-ico{width:14px;height:14px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.m-item .px-ico svg{width:14px;height:14px}
+.m-item.disabled{opacity:.5;cursor:default}
+.m-item.disabled:hover{background:transparent;color:#D0D0D0}
+.m-sep{height:1px;background:var(--border);margin:4px 8px}
+.m-item .m-badge{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:8px;background:#3A3D41;color:#A8A8A8}
+.m-item.active{background:var(--active);color:#FFF}
+/* ===== 笔记本主体 ===== */
+.nb-body{height:520px;background:var(--bg);display:flex;flex-direction:column;position:relative}
+.nb-scroll{flex:1;min-height:0;overflow-y:auto;padding-bottom:30px}
+/* 单元卡片 */
+.cell{background:var(--sidebar);border:1px solid var(--border);border-radius:6px;
+  margin:12px 16px 0;border-left:2px solid transparent;position:relative}
+.cell.active{border-left-color:var(--brand)}
+.cell.collapsed .cell-source,.cell.collapsed .cell-out{display:none}
+.cell-head{height:30px;display:flex;align-items:center;gap:6px;padding:0 8px;
+  border-bottom:1px solid rgba(60,60,60,.45);user-select:none}
+.cell-no{font-size:11px;color:var(--muted);width:16px;text-align:right;font-family:var(--mono)}
+.cell-type{display:flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;
+  padding:2px 8px;border-radius:4px;cursor:pointer;color:#C6C6C6;border:1px solid transparent}
+.cell-type:hover{border-color:var(--input-border)}
+.cell-type .t-dot{width:7px;height:7px;border-radius:50%}
+.cell-type .t-caret{width:10px;height:10px;color:var(--muted)}
+.cell-run{width:22px;height:22px;display:flex;align-items:center;justify-content:center;
+  border-radius:4px;cursor:pointer;color:#C6C6C6;border:1px solid transparent}
+.cell-run:hover{background:var(--hover);color:#FFF}
+.cell-run .ico{width:12px;height:12px}
+.cell-run.running .ico{color:var(--warn)}
+.cell-actions{width:22px;height:22px;display:flex;align-items:center;justify-content:center;
+  border-radius:4px;cursor:pointer;color:var(--muted);font-size:15px;line-height:1;border:1px solid transparent}
+.cell-actions:hover{background:var(--hover);color:#FFF}
+.cell-meta{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--muted)}
+.cell-meta .time{font-family:var(--mono)}
+.cell-meta .stale{color:var(--warn)}
+.cell.collapsed .cell-summary{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#9C9C9C;
+  padding:6px 10px;border-bottom:1px solid rgba(60,60,60,.45)}
+.cell-summary{display:none}
+.cell.collapsed .cell-summary{display:flex}
+.cell-source{padding:10px 14px 12px;font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#C8C8C8;white-space:pre-wrap}
+.cell-source.md-render{font-family:var(--sans);font-size:13px;line-height:1.7;color:#D6D6D6}
+.cell-source.md-render h2{font-size:15px;color:#F2F2F2;margin:2px 0 6px;font-weight:600}
+.cell-source.md-render ul{padding-left:18px;margin:4px 0}
+.cell-source.md-render .md-bold{color:#F2F2F2;font-weight:600}
+/* 语法高亮角色（对齐 theme-design §4.4） */
+.k{color:#C678DD}.f{color:#61AFEF}.s{color:#98C379}.n{color:#E5C07B}.c{color:#5C6370;font-style:italic}.o{color:#56B6C2}
+/* 内联输出（分析模式独有） */
+.cell-out{background:#1E1E1E;border-top:1px dashed #3C3C3C}
+.out-head{display:flex;align-items:center;gap:6px;padding:5px 12px 4px;font-size:10.5px;color:var(--muted)}
+.out-head .caret-toggle{display:flex;align-items:center;gap:2px;cursor:pointer;color:var(--muted);border-radius:3px;padding:1px 4px}
+.out-head .caret-toggle:hover{background:var(--hover);color:#E0E0E0}
+.out-head .open-in-panel{margin-left:auto;cursor:pointer;color:#7FA7D9;font-size:10.5px;padding:1px 4px;border-radius:3px}
+.out-head .open-in-panel:hover{background:var(--hover)}
+.out-body{padding:2px 12px 10px}
+.out-empty{padding:4px 12px 10px;font-size:11.5px;color:var(--muted)}
+/* 迷你网格（Table 输出：复用结果集表格，列宽固定） */
+.mini-grid{width:100%;border-collapse:collapse;table-layout:fixed;font-family:var(--mono);font-size:11.5px}
+.mini-grid th{background:#2A2D2E;color:#A8A8A8;font-weight:600;text-align:left;padding:4px 8px;
+  border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+.mini-grid td{padding:4px 8px;border-right:1px solid rgba(60,60,60,.35);border-bottom:1px solid rgba(60,60,60,.25);color:#C8C8C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-grid th:last-child,.mini-grid td:last-child{border-right:none}
+.out-text{padding:6px 2px;font-family:var(--mono);font-size:12px;color:#C8C8C8}
+.out-text.ok{color:var(--ok)}
+.out-error{background:#2B1717;border:1px solid #5A2A2A;border-radius:5px;padding:8px 12px;
+  font-family:var(--mono);font-size:12px;color:#E8A0A0}
+.out-error .err-line{color:#C98A8A;cursor:pointer}
+.out-error .err-copy{color:#7FA7D9;cursor:pointer;margin-left:10px}
+/* 插入点（hover 显示 + 代码 / + 文本） */
+.insert-point{height:30px;margin:4px 16px 0;border-radius:5px;border:1px dashed transparent;
+  display:flex;align-items:center;justify-content:center;gap:10px}
+.insert-point:hover{border-color:#4A4A4A;background:rgba(60,60,60,.25)}
+.insert-point .ip-btn{display:none;align-items:center;gap:5px;font-size:11px;color:var(--muted);
+  padding:3px 10px;border-radius:4px;cursor:pointer;border:1px solid var(--border)}
+.insert-point:hover .ip-btn{display:flex}
+.insert-point .ip-btn:hover{background:var(--hover);color:#E0E0E0}
+/* 空态引导（§4.4） */
+.empty-notebook{display:none;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;text-align:center;padding:40px}
+.empty-notebook.show{display:flex}
+.empty-notebook .e-icon{width:44px;height:44px;color:#5A5A5A;margin-bottom:14px}
+.empty-notebook h3{font-size:15px;color:#E8E8E8;font-weight:600}
+.empty-notebook p{font-size:12.5px;color:var(--muted);margin-top:6px;line-height:1.8}
+.empty-notebook .e-steps{display:flex;gap:8px;margin:16px 0 0;color:#B9B9B9;font-size:12px}
+.empty-notebook .e-step{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);
+  border-radius:6px;background:var(--sidebar)}
+.empty-notebook .e-step b{color:var(--brand-hover)}
+.empty-notebook .e-actions{display:flex;gap:10px;margin-top:22px}
+.e-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:6px;font-size:12.5px;cursor:pointer;
+  border:1px solid var(--input-border);background:#2A2D2E;color:#D8D8D8;user-select:none}
+.e-btn:hover{border-color:#5A5A5A}
+.e-btn.primary{background:var(--brand);color:#1E1E1E;font-weight:600;border-color:transparent}
+.e-btn.primary:hover{background:var(--brand-hover)}
+/* ===== 状态栏（面板专属：左=会话/内核/单元/变量；右=微标+数据+行列切换） ===== */
+.statusbar{height:24px;background:var(--statusbar);color:#FFF;display:flex;align-items:center;
+  gap:0;padding:0 10px;font-size:11.5px;user-select:none}
+.sb-left{display:flex;align-items:center;gap:8px}
+.sb-item{display:flex;align-items:center;gap:5px;padding:0 6px;height:100%;cursor:pointer;
+  border-radius:3px;white-space:nowrap}
+.sb-item:hover{background:rgba(0,0,0,.18)}
+.sb-item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.sb-sep{width:1px;height:13px;background:rgba(255,255,255,.35)}
+.sb-right{margin-left:auto;display:flex;align-items:center;gap:0}
+.sb-badge{display:flex;align-items:center;gap:3px;padding:0 7px;height:100%;cursor:pointer;font-size:11px}
+.sb-badge b{font-weight:600;color:#FFF}
+.sb-badge:hover{background:rgba(0,0,0,.18)}
+.sb-badge.dim{color:rgba(255,255,255,.55)}
+.sb-mode{display:flex;align-items:center;gap:1px;padding:1px;border:1px solid rgba(255,255,255,.4);
+  border-radius:4px;margin-left:4px;cursor:pointer;font-size:10.5px}
+.sb-mode span{padding:1px 6px;border-radius:3px;color:rgba(255,255,255,.75)}
+.sb-mode span.on{background:rgba(255,255,255,.92);color:#A84A38;font-weight:600}
+/* ===== Toast ===== */
+.toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%);background:#2D2D30;
+  border:1px solid #4A4A4A;color:#E8E8E8;font-size:12.5px;padding:9px 16px;border-radius:7px;
+  box-shadow:0 8px 30px rgba(0,0,0,.5);z-index:99;display:none;max-width:70%}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>分析模式 · 笔记与内联输出 — 高保真原型</h1>
+  <p>模拟 RdataStation 编辑器工作台。<b>模式切换 = 工具栏左侧</b>（通用 / SQL / 分析，点击切换）；分析模式 = <b>NoteBook</b>（单元序列 + 输出 + 会话，叠于通用 / SQL 之上）；<b>内联输出为分析模式独有</b>（Table 复用共用结果集表格、Text、Error）；<b>会话</b>驱动单元执行（会话切换 → 全部输出标 stale）；<b>环境切换</b>入口在会话 ▾（SQL 连接 / Python 内核 / DuckDB）；状态栏=面板专属（左=连接 ▸ 会话 · 内核 · 单元数 · 变量数 · stale 计数；右=英文微标 + 行｜列切换）。数据为演示示例。</p>
+  <div class="hints">
+    <span class="hint">① 点单元 ▶ 执行 → 内联输出出现（busy ■ → 空闲）</span>
+    <span class="hint">② <b>会话 ▾</b> 切换环境 → 全部输出标 stale（warning）</span>
+    <span class="hint">③ <b>⟳ 重启会话 / ⇤ 清空输出 / ▶▶ 全部运行</b></span>
+    <span class="hint">④ ⋮ 单元菜单：上移/下移/复制/转为文本/转为代码/删除/折叠</span>
+    <span class="hint">⑤ <b>＋ 插入单元 ▾</b>（代码 / 文本）；hover 单元间虚线插入点</span>
+    <span class="hint">⑥ 切到 <b>分析2</b> tab → 空态引导（§4.4）</span>
+    <span class="hint">⑦ Table 输出「12 行 ▾」展开 + 在结果面板中打开</span>
+  </div>
+</div>
+
+<div class="app">
+  <div class="titlebar">
+    <div class="win-dots"><i></i><i></i><i></i></div>
+    <div class="tabs">
+      <div class="tab active" data-tab="nb1"><span class="lang-badge">nb</span>月度分析.rdsnote<span class="dirty-dot" title="文档已修改未保存">●</span><span class="x" title="关闭"><svg class="ico xs stroke" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+      <div class="tab" data-tab="nb2"><span class="lang-badge">nb</span>分析2.rdsnote<span class="dirty-dot" style="display:none">●</span><span class="x" title="关闭"><svg class="ico xs stroke" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+    </div>
+    <div class="plus" id="tabPlus" title="新建笔记"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg></div>
+  </div>
+
+  <!-- 笔记工具栏：模式切换 │ 会话组 │ 运行组 │ 单元组（分组通用，分隔符界定组） -->
+  <div class="toolbar">
+    <div class="tool-btn" id="modeSlot" title="模式切换：通用 / SQL / 分析（点击切换）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 8h8"/><path d="M8 12h5"/></svg>
+      <span>分析</span>
+      <svg class="ico stroke" style="width:12px;height:12px;color:var(--muted)" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn" id="sessionBtn" title="会话 / 内核选择（切换环境）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span id="sessionName">orders-主库（SQL）</span>
+      <svg class="ico stroke caret" style="width:12px;height:12px;color:var(--muted)" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn primary-btn" id="runAllBtn" title="全部运行（顺序执行所有单元）">
+      <svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span>全部运行</span>
+    </div>
+    <div class="tool-btn" id="restartBtn" title="重启会话（清空内核变量）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg><span>重启会话</span>
+    </div>
+    <div class="tool-btn" id="clearOutBtn" title="清空全部输出">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg><span>清空输出</span>
+    </div>
+    <div class="tool-sep"></div>
+    <div class="tool-btn" id="addCellBtn" title="插入单元（代码 / 文本）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span>插入单元</span>
+      <svg class="ico stroke caret" style="width:12px;height:12px;color:var(--muted)" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="tool-spacer"></div>
+    <div class="kernel-state" id="kernelState"><span class="k-dot"></span><span id="kernelText">SQL 就绪</span></div>
+  </div>
+
+  <!-- 笔记本主体：单元序列（#cells）｜ 空态引导（#emptyNb） -->
+  <div class="nb-body">
+    <div class="nb-scroll" id="nbScroll"></div>
+    <div class="empty-notebook" id="emptyNb">
+      <svg class="ico stroke e-icon" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 8h8"/><path d="M8 12h5"/></svg>
+      <h3>开始新的分析笔记</h3>
+      <p>连接数据 → 写第一个查询 → <b>Shift+Enter</b> 执行，结果内联在单元下方</p>
+      <div class="e-steps">
+        <span class="e-step">① 选择<b>会话 / 环境</b></span>
+        <span class="e-step">② 编写<b>SQL / Python / R / Rust</b> 单元</span>
+        <span class="e-step">③ 逐单元执行，<b>变量跨单元共享</b></span>
+      </div>
+      <div class="e-actions">
+        <div class="e-btn primary" id="emptyPickConn">选择连接</div>
+        <div class="e-btn" id="emptySample">插入示例单元</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏：面板专属（非软件全局状态栏） -->
+  <div class="statusbar">
+    <div class="sb-left">
+      <div class="sb-item" id="sbConn" title="切换连接（同 DBeaver）"><span class="dot"></span>orders-主库</div>
+      <div class="sb-sep"></div>
+      <div class="sb-item" id="sbSession" title="会话：点击切换环境">会话 <b>SQL</b></div>
+      <div class="sb-item" id="sbKernel" title="内核状态">内核 <b>就绪</b></div>
+      <div class="sb-item" id="sbCells" title="单元数（含 stale 计数）">3 单元 · <b style="color:#E5C07B">1 stale</b></div>
+      <div class="sb-item" id="sbVars" title="跨单元命名空间变量">变量 <b>2</b></div>
+      <div class="sb-item" id="sbDirty" title="已修改未保存">脏 ●</div>
+    </div>
+    <div class="sb-right">
+      <span class="sb-badge" id="lnBadge"><b>Ln</b> 3</span>
+      <span class="sb-badge" id="colBadge"><b>Col</b> 0</span>
+      <span class="sb-badge dim" id="chBadge"><b>Ch</b> 0</span>
+      <span class="sb-badge" id="rowBadge"><b>Row</b> 1</span>
+      <span class="sb-badge" id="encItem" title="编码：重设需外层转换层"><b>UTF-8</b></span>
+      <span class="sb-badge" id="lfItem" title="换行符：LF"><b>LF</b></span>
+      <span class="sb-badge" id="indentItem" title="缩进：点击重设（TabSize 内核原生）"><b>Spaces: 2</b></span>
+      <span class="sb-badge" id="sizeBadge"><b>2.4 KB</b></span>
+      <span class="sb-mode" id="rowColToggle" title="编辑内容模式：行 / 列（列编辑 = 块选择 / 多光标，内核原生）">
+        <span class="on" data-m="row">行</span><span data-m="col">列</span>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 菜单：会话 / 单元类型 / 单元动作 / 插入单元 ===== -->
+<div class="menu" id="sessionMenu">
+  <div class="m-title">会话 · 内核 / 环境（切换 = 变量空间变化，全部输出标 stale）</div>
+  <div class="m-item active" data-s="sql"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>orders-主库（SQL）<span class="m-badge">连接</span></div>
+  <div class="m-item" data-s="py"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v4h6"/><path d="M12 22a5 5 0 0 0 5-5v-4h-6"/></svg></span>Python 3.11 · venv<span class="m-badge">解释器</span></div>
+  <div class="m-item" data-s="duck"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 12h8"/></svg></span>DuckDB 加速<span class="m-badge">通道</span></div>
+</div>
+<div class="menu" id="cellTypeMenu" style="width:200px">
+  <div class="m-title">单元类型（颜色=可执行性，形状=语言）</div>
+  <div class="m-item active" data-t="SQL"><span class="px-ico" style="color:#7EC97F"><svg class="ico stroke" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg></span>SQL 单元</div>
+  <div class="m-item" data-t="PY"><span class="px-ico" style="color:#61AFEF"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v4h6"/><path d="M12 22a5 5 0 0 0 5-5v-4h-6"/></svg></span>Python 单元</div>
+  <div class="m-item" data-t="RS"><span class="px-ico" style="color:#E5C07B"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/></svg></span>Rust 单元</div>
+  <div class="m-item" data-t="MD"><span class="px-ico" style="color:#A8A8A8"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>Markdown 单元</div>
+</div>
+<div class="menu" id="cellMenu" style="width:210px">
+  <div class="m-item" data-a="up"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></span>上移单元</div>
+  <div class="m-item" data-a="dn"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>下移单元</div>
+  <div class="m-item" data-a="dup"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></span>复制单元</div>
+  <div class="m-sep"></div>
+  <div class="m-item" data-a="tomd"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>转为文本（Markdown）</div>
+  <div class="m-item" data-a="tocode"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/></svg></span>转为代码（SQL）</div>
+  <div class="m-sep"></div>
+  <div class="m-item" data-a="fold"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M8 9l4-4 4 4"/><path d="M8 15l4 4 4-4"/></svg></span>折叠 / 展开单元</div>
+  <div class="m-sep"></div>
+  <div class="m-item" data-a="del" style="color:#E8A0A0"><span class="px-ico"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>删除单元</div>
+</div>
+<div class="menu" id="addCellMenu" style="width:200px">
+  <div class="m-title">插入单元（追加到笔记末尾）</div>
+  <div class="m-item" data-a="addcode"><span class="px-ico" style="color:#7EC97F"><svg class="ico stroke" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/></svg></span>代码单元（SQL）</div>
+  <div class="m-item" data-a="addmd"><span class="px-ico" style="color:#A8A8A8"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>文本单元（Markdown）</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===== 通用 ===== */
+function byId(id){ return document.getElementById(id); }
+function toast(msg){
+  var t = byId("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h);
+  t._h = setTimeout(function(){ t.style.display = "none"; }, 2200);
+}
+var openMenu = null;
+function closeMenus(){ if(openMenu){ byId(openMenu).classList.remove("open"); openMenu=null; } }
+function showMenu(menuId, anchor){
+  closeMenus();
+  var m = byId(menuId);
+  m.classList.add("open"); openMenu = menuId;
+  var anchorEl = (typeof anchor === "string") ? byId(anchor) : anchor;
+  if(!anchorEl){ m.classList.remove("open"); openMenu=null; return; }
+  var a = anchorEl.getBoundingClientRect();
+  var left = a.left;
+  var w = (menuId==="sessionMenu") ? 250 : 210;
+  if(left + w > window.innerWidth - 8) left = Math.max(8, window.innerWidth - w - 8);
+  m.style.left = left + "px";
+  m.style.top = (a.bottom + 4) + "px";
+}
+document.addEventListener("click", function(e){
+  if(!e.target.closest(".menu, .tool-btn, .cell-type, .cell-actions, .cell-run, .out-head .open-in-panel, .out-head .caret-toggle, .tab")) closeMenus();
+});
+/* ===== 模式槽 / 标题栏 ===== */
+byId("modeSlot").addEventListener("click", function(){ toast("模式切换：通用 / SQL / 分析（挖空槽入口，演示中）"); });
+byId("tabPlus").addEventListener("click", function(){ toast("新建分析笔记（演示中）"); });
+/* tab 切换：nb1 = 笔记本；nb2 = 空态引导 */
+document.querySelectorAll(".tab").forEach(function(tab){
+  tab.addEventListener("click", function(e){
+    if(e.target.closest(".x")){ toast("关闭标签（演示中）"); return; }
+    document.querySelectorAll(".tab").forEach(function(t){ t.classList.remove("active"); });
+    tab.classList.add("active");
+    var which = tab.getAttribute("data-tab");
+    if(which==="nb1"){ byId("nbScroll").style.display="block"; byId("emptyNb").classList.remove("show"); }
+    else { byId("nbScroll").style.display="none"; byId("emptyNb").classList.add("show"); }
+    toast("已打开 " + (which==="nb1" ? "月度分析.rdsnote" : "分析2.rdsnote"));
+  });
+});
+/* 空态引导（§4.4） */
+byId("emptyPickConn").addEventListener("click", function(){ toast("选择连接：将打开会话选择（演示中）"); });
+byId("emptySample").addEventListener("click", function(){
+  cells.push({type:"SQL", src:"SELECT date_trunc('month', created) AS m, sum(total) AS amt\nFROM orders GROUP BY 1 ORDER BY 1;", out:{kind:"table", rows:4}});
+  renderCells();
+  byId("nbScroll").style.display="block"; byId("emptyNb").classList.remove("show");
+  document.querySelectorAll(".tab").forEach(function(t){ t.classList.remove("active"); });
+  document.querySelector('.tab[data-tab="nb1"]').classList.add("active");
+  toast("已插入示例单元（SQL）");
+});
+
+/* ===== 笔记数据模型（单元序列 + 输出 + 会话） ===== */
+var cellSeq = 3;
+var cells = [
+  {id:1, type:"SQL", src:"-- 月度订单汇总（单元内联输出演示）\nSELECT date_trunc('month', created) AS m,\n       sum(total) AS amt,\n       count(*) AS cnt\nFROM orders\nGROUP BY 1 ORDER BY 1\nLIMIT 5;",
+   out:{kind:"table", cols:["m","amt","cnt"], rows:[["2026-01","128,400.00","1,024"],["2026-02","143,812.55","1,190"],["2026-03","119,076.20","988"],["2026-04","156,310.90","1,321"]], total:12, stale:true},
+   time:"1.2s", stale:true, runSeq:7},
+  {id:2, type:"MD", src:"## 结论：1 月环比 +12%\n- 主力来自 <b class='md-bold'>华东区大客户</b>（同比 +34%）\n- 退货率 2.1%，环比 -0.4pct",
+   out:null, time:"", stale:false, runSeq:0},
+  {id:3, type:"SQL", src:"CREATE TEMP TABLE m1 AS\n  SELECT * FROM orders WHERE total > 1000;",
+   out:{kind:"text", text:"已创建临时表 m1（1,204 行）", ok:true}, time:"0.4s", stale:false, runSeq:6}
+];
+function cellTypeColor(t){
+  if(t==="SQL") return "#7EC97F";
+  if(t==="PY") return "#61AFEF";
+  if(t==="RS") return "#E5C07B";
+  return "#A8A8A8";
+}
+function renderSrc(c, esc){
+  if(c.type==="MD") return '<div class="cell-source md-render">'+c.src.replace(/\n/g,"<br>")+'</div>';
+  return '<div class="cell-source">'+esc+'</div>';
+}
+function renderOut(o){
+  if(!o) return "";
+  if(o.kind==="cleared") return '<div class="cell-out"><div class="out-empty">输出已清空（会话仍在，可重新执行单元）</div></div>';
+  if(o.kind==="table"){
+    var head = '<tr>'+o.cols.map(function(c){ return '<th>'+c+'</th>'; }).join('')+'</tr>';
+    var body = o.rows.map(function(r){ return '<tr>'+r.map(function(c){ return '<td>'+c+'</td>'; }).join('')+'</tr>'; }).join('');
+    var shown = o.rows.length < o.total;
+    return '<div class="cell-out"><div class="out-head">'+
+      '<span>输出 · 表格</span>'+
+      '<span class="caret-toggle" data-a="tablefold">'+(shown?'12 行 ▾':'12 行 ▴')+'</span>'+
+      '<span class="open-in-panel" data-a="openpanel">在结果面板中打开</span></div>'+
+      '<div class="out-body"><table class="mini-grid" style="width:60%"><colgroup><col style="width:34%"><col style="width:33%"><col style="width:33%"></colgroup><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div></div>';
+  }
+  if(o.kind==="error"){
+    return '<div class="cell-out"><div class="out-body"><div class="out-error">'+o.text+'<span class="err-line">定位到第 '+o.line+' 行</span><span class="err-copy">复制</span></div></div></div>';
+  }
+  return '<div class="cell-out"><div class="out-body"><div class="out-text'+(o.ok?' ok':'')+'">'+o.text+'</div></div></div>';
+}
+function renderCells(){
+  var html = "";
+  cells.forEach(function(c, i){
+    var active = (i===0) ? " active" : "";
+    var collapsed = c.collapsed ? " collapsed" : "";
+    var staleBadge = c.stale ? '' : ' style="display:none"';
+    var runSeq = c.runSeq ? '<span class="run-seq" title="run #'+c.runSeq+'">#'+c.runSeq+'</span>' : '';
+    var summary = c.type==="MD" ? "文本：" + c.src.split("\n")[0] : (c.type==="SQL" ? "SQL：" : c.type+"：") + (c.src.split("\n")[0] || "");
+    html += '<div class="cell'+active+collapsed+'" data-id="'+c.id+'">'+
+      '<div class="cell-head">'+
+        '<span class="cell-no">'+(i+1)+'</span>'+
+        '<span class="cell-type" title="单元类型（点击切换）"><span class="t-dot" style="background:'+cellTypeColor(c.type)+'"></span>'+c.type+'<svg class="ico stroke t-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>'+
+        '<span class="cell-run" title="执行本单元（Shift+Enter）"><svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg></span>'+
+        '<span class="cell-actions" title="单元操作">⋮</span>'+
+        '<span class="cell-meta"><span class="time">'+c.time+'</span><span class="stale"'+staleBadge+'>stale</span>'+runSeq+'</span>'+
+      '</div>'+
+      '<div class="cell-summary"><span class="t-dot" style="background:'+cellTypeColor(c.type)+';width:6px;height:6px;border-radius:50%;display:inline-block"></span>'+summary+'</div>'+
+      renderSrc(c, c.src.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"))+
+      renderOut(c.out)+
+    '</div>';
+    html += '<div class="insert-point" data-after="'+c.id+'">'+
+      '<span class="ip-btn" data-a="ipcode">＋ 代码</span><span class="ip-btn" data-a="iptext">＋ 文本</span>'+
+    '</div>';
+  });
+  html += '<div class="insert-point" data-after="end">'+
+    '<span class="ip-btn" data-a="ipcode">＋ 代码</span><span class="ip-btn" data-a="iptext">＋ 文本</span>'+
+  '</div>';
+  byId("nbScroll").innerHTML = html;
+}
+function cellById(id){ for(var i=0;i<cells.length;i++){ if(cells[i].id===id) return cells[i]; } return null; }
+function renumber(){
+  byId("sbCells").innerHTML = '3 单元 · <b style="color:#E5C07B">1 stale</b>';
+  var n = cells.length, stale = cells.filter(function(c){return c.stale;}).length;
+  byId("sbCells").innerHTML = n+' 单元 · <b style="color:#E5C07B">'+stale+' stale</b>';
+}
+function setKernel(txt, busy){
+  byId("kernelText").textContent = txt;
+  byId("kernelState").classList.toggle("busy", busy);
+  byId("sbKernel").innerHTML = "内核 <b>"+(busy ? "运行中" : "就绪")+"</b>";
+}
+function runCell(id, fromAll){
+  var c = cellById(id); if(!c) return;
+  var el = document.querySelector('.cell[data-id="'+id+'"]');
+  if(!el) return;
+  var runBtn = el.querySelector(".cell-run");
+  if(runBtn.classList.contains("running")){
+    runBtn.classList.remove("running");
+    runBtn.innerHTML = '<svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+    setKernel("SQL 就绪", false);
+    toast("已中断单元 " + (cells.indexOf(c)+1));
+    return;
+  }
+  runBtn.classList.add("running");
+  runBtn.innerHTML = '<svg class="ico stroke" viewBox="0 0 24 24"><rect width="4" height="16" x="6" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/></svg>';
+  setKernel("运行单元 " + (cells.indexOf(c)+1) + " …", true);
+  toast("正在执行单元 " + (cells.indexOf(c)+1) + "（演示）");
+  setTimeout(function(){
+    runBtn.classList.remove("running");
+    runBtn.innerHTML = '<svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+    if(!c.out || c.out.kind==="cleared"){ c.out = {kind:"text", text:"执行完成：影响 0 行 / 返回 1 个结果（演示）", ok:true}; }
+    c.time = "0." + Math.floor(Math.random()*8+2) + "s";
+    c.runSeq = (c.runSeq||0) + 1;
+    c.stale = false;
+    c.collapsed = false;
+    setKernel("SQL 就绪", false);
+    renderCells();
+    toast("单元 " + (cells.indexOf(c)+1) + " 执行完成 ✓");
+  }, 900);
+}
+/* ===== 笔记本交互（事件委托） ===== */
+byId("nbScroll").addEventListener("click", function(e){
+  var cellEl = e.target.closest(".cell");
+  var cell = cellEl ? cellById(parseInt(cellEl.getAttribute("data-id"),10)) : null;
+  var runBtn = e.target.closest(".cell-run");
+  if(runBtn){ if(cell) runCell(cell.id); return; }
+  var typeBtn = e.target.closest(".cell-type");
+  if(typeBtn){ if(cell){ curTypeCell = cell.id; showMenu("cellTypeMenu", typeBtn); } return; }
+  var actBtn = e.target.closest(".cell-actions");
+  if(actBtn){ if(cell){ curActCell = cell.id; showMenu("cellMenu", actBtn); } return; }
+  var ip = e.target.closest(".ip-btn");
+  if(ip){
+    var afterId = e.target.closest(".insert-point").getAttribute("data-after");
+    var a = ip.getAttribute("data-a");
+    var afterCell = afterId==="end" ? null : cellById(parseInt(afterId,10));
+    var idx = afterCell ? cells.indexOf(afterCell)+1 : cells.length;
+    var newCell = {id:++cellSeq, type:(a==="ipcode"?"SQL":"MD"),
+      src:(a==="ipcode" ? "SELECT 1;" : "## 新段落\n在此输入说明…"),
+      out:null, time:"", stale:false, runSeq:0};
+    cells.splice(idx, 0, newCell);
+    renderCells();
+    toast("已插入"+(a==="ipcode"?"代码（SQL）":"文本（Markdown）")+"单元");
+    return;
+  }
+  var tf = e.target.closest(".caret-toggle");
+  if(tf){ if(cell && cell.out && cell.out.kind==="table"){
+    if(cell.out.rows.length < cell.out.total){
+      cell.out.rows = [["2026-05","170,220.10","1,418"],["2026-06","163,050.40","1,356"],["2026-07","178,905.60","1,490"],["2026-08","181,240.80","1,515"]].slice(0, Math.min(8, cell.out.total));
+    } else { cell.out.rows = cell.out.rows.slice(0,4); }
+    renderCells();
+    toast(cell.out.rows.length < cell.out.total ? "展开到 12 行（预览）" : "收起为预览 4 行");
+  } return; }
+  var op = e.target.closest(".open-in-panel");
+  if(op){ if(cell) toast("在结果面板中打开「"+cell.out.cols.join(" / ")+"」完整结果（共用结果集，演示中）"); return; }
+  var ec = e.target.closest(".out-error .err-line");
+  if(ec){ toast("定位到第 3 行：当前语句（演示）"); return; }
+  var cc = e.target.closest(".out-error .err-copy");
+  if(cc){ toast("已复制错误摘要（演示）"); return; }
+});
+/* ===== 单元类型切换 ===== */
+var curTypeCell = null, curActCell = null;
+byId("cellTypeMenu").addEventListener("click", function(e){
+  var item = e.target.closest(".m-item"); if(!item || !curTypeCell) return;
+  var t = item.getAttribute("data-t");
+  var c = cellById(curTypeCell);
+  if(c){
+    if(t==="MD"){ c.type="MD"; }
+    else { c.type=t; if(c.out && c.out.kind==="cleared") c.out=null; }
+  }
+  renderCells(); toast("单元已转为 " + t + " 类型（形状=语言）");
+});
+/* ===== 单元动作（⋮ 菜单） ===== */
+byId("cellMenu").addEventListener("click", function(e){
+  var item = e.target.closest(".m-item"); if(!item || !curActCell) return;
+  var a = item.getAttribute("data-a");
+  var c = cellById(curActCell); if(!c) return;
+  var idx = cells.indexOf(c);
+  if(a==="up"){ if(idx>0){ cells.splice(idx,1); cells.splice(idx-1,0,c); renderCells(); toast("已上移单元"); } else toast("已到顶部"); }
+  else if(a==="dn"){ if(idx<cells.length-1){ cells.splice(idx,1); cells.splice(idx+1,0,c); renderCells(); toast("已下移单元"); } else toast("已到底部"); }
+  else if(a==="dup"){ var nc={id:++cellSeq, type:c.type, src:c.src, out:c.out?JSON.parse(JSON.stringify(c.out)):null, time:"", stale:false, runSeq:0}; cells.splice(idx+1,0,nc); renderCells(); toast("已复制单元"); }
+  else if(a==="tomd"){ c.type="MD"; renderCells(); toast("已转为文本（Markdown）单元"); }
+  else if(a==="tocode"){ if(c.type==="MD"){ c.src="SELECT 1;"; } c.type="SQL"; renderCells(); toast("已转为代码（SQL）单元"); }
+  else if(a==="fold"){ c.collapsed=!c.collapsed; renderCells(); toast(c.collapsed?"已折叠（仅序号+类型+摘要+输出摘要）":"已展开"); }
+  else if(a==="del"){ cells.splice(idx,1); renderCells(); renumber(); toast("已删除单元"); }
+});
+/* ===== 工具栏 ===== */
+byId("sessionBtn").addEventListener("click", function(){ showMenu("sessionMenu", this); });
+byId("sessionMenu").addEventListener("click", function(e){
+  var item = e.target.closest(".m-item"); if(!item) return;
+  var s = item.getAttribute("data-s");
+  var names = {sql:"orders-主库（SQL）", py:"Python 3.11 · venv", duck:"DuckDB 加速"};
+  byId("sessionName").textContent = names[s];
+  byId("sbSession").innerHTML = "会话 <b>" + (s==="sql"?"SQL":s==="py"?"Python":"DuckDB") + "</b>";
+  document.querySelectorAll("#sessionMenu .m-item").forEach(function(x){ x.classList.remove("active"); });
+  item.classList.add("active");
+  cells.forEach(function(c){ if(c.stale===false && c.out && c.out.kind!=="cleared") c.stale = true; });
+  renderCells(); renumber();
+  toast("会话已切换为「"+names[s]+"」：变量空间变化，已有输出全部标 stale");
+});
+byId("runAllBtn").addEventListener("click", function(){
+  setKernel("顺序执行全部单元 …", true);
+  toast("全部运行：将按序执行 " + cells.length + " 个代码单元（演示）");
+  var k = 0;
+  cells.forEach(function(c){
+    if(c.type!=="MD" && c.out && c.out.kind!=="cleared"){
+      k++; var id = c.id;
+      setTimeout(function(){ setKernel("执行单元 " + id + " …", true); }, k*700);
+      setTimeout(function(){ var cc = cellById(id); if(cc){ cc.time = "0."+Math.floor(Math.random()*7+1)+"s"; cc.runSeq=(cc.runSeq||0)+1; cc.stale=false; } renderCells(); }, k*700+600);
+    }
+  });
+  setTimeout(function(){ setKernel("SQL 就绪", false); toast("全部运行完成：汇总报告见状态栏（演示）"); }, (k+1)*700+300);
+});
+byId("restartBtn").addEventListener("click", function(){
+  setKernel("重启会话 …", true);
+  toast("正在重启会话（清空内核变量）…");
+  setTimeout(function(){
+    setKernel("SQL 就绪", false);
+    byId("sbVars").innerHTML = "变量 <b>0</b>";
+    cells.forEach(function(c){ c.stale = true; });
+    renderCells(); renumber();
+    toast("会话已重启：内核变量已清空，输出全部标 stale");
+  }, 900);
+});
+byId("clearOutBtn").addEventListener("click", function(){
+  cells.forEach(function(c){ if(c.out && c.out.kind!=="cleared"){ c.out = {kind:"cleared"}; } });
+  renderCells();
+  toast("已清空全部输出（单元源码与会话保留）");
+});
+byId("addCellBtn").addEventListener("click", function(){ showMenu("addCellMenu", this); });
+byId("addCellMenu").addEventListener("click", function(e){
+  var item = e.target.closest(".m-item"); if(!item) return;
+  var a = item.getAttribute("data-a");
+  var newCell = {id:++cellSeq, type:(a==="addcode"?"SQL":"MD"),
+    src:(a==="addcode" ? "SELECT 1;" : "## 新段落\n在此输入说明…"),
+    out:null, time:"", stale:false, runSeq:0};
+  cells.push(newCell);
+  renderCells();
+  toast("已追加"+(a==="addcode"?"代码（SQL）":"文本（Markdown）")+"单元");
+});
+/* ===== 状态栏（面板专属） ===== */
+byId("sbConn").addEventListener("click", function(){ toast("切换连接（同 DBeaver，演示中）"); });
+byId("sbSession").addEventListener("click", function(){ showMenu("sessionMenu", byId("sessionBtn")); });
+byId("sbKernel").addEventListener("click", function(){ toast("内核状态：空闲（演示）"); });
+byId("sbCells").addEventListener("click", function(){ toast("单元 3 · stale 1：stale = 会话/源码变更后未重跑（演示）"); });
+byId("sbVars").addEventListener("click", function(){ toast("跨单元命名空间：m1 / amt（演示变量）"); });
+byId("sbDirty").addEventListener("click", function(){ toast("文档已修改未保存（Ctrl+S 保存，演示）"); });
+["lnBadge","colBadge","chBadge","rowBadge"].forEach(function(id){ byId(id).addEventListener("click", function(){ toast("编辑面板状态栏微标（演示）"); }); });
+byId("encItem").addEventListener("click", function(){ toast("编码 UTF-8：重设需外层转换层（GBK/GB18030 不可用）"); });
+byId("lfItem").addEventListener("click", function(){ toast("换行符 LF：CRLF 重设需外层转换层"); });
+byId("indentItem").addEventListener("click", function(){ toast("缩进 Spaces: 2 → 可重设为 Tab / 4（TabSize 内核原生，演示中）"); });
+byId("sizeBadge").addEventListener("click", function(){ toast("文件大小 2.4 KB（笔记本 + 输出引用）"); });
+byId("rowColToggle").addEventListener("click", function(){
+  var on = this.querySelector(".on");
+  var next = on.getAttribute("data-m")==="row" ? "col" : "row";
+  this.querySelectorAll("span").forEach(function(s){ s.classList.remove("on"); });
+  this.querySelector('[data-m="'+next+'"]').classList.add("on");
+  toast("编辑内容模式已切换为「"+(next==="row"?"行":"列")+"」（列编辑 = 块选择 / 多光标，内核原生）");
+});
+
+/* 初始渲染 */
+renderCells();
+
+
+</script>
+
+
+</body>
+</html>

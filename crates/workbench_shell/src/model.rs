@@ -71,6 +71,19 @@ impl LeftPanel {
         }
     }
 
+    /// 落盘值 → 面板（设置项 `startup.default_left_panel` 的取值）。
+    ///
+    /// 未知值返回 `None`，由调用方回退默认——设置文件被手改坏时不会崩。
+    pub fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "draft" => LeftPanel::Draft,
+            "database" => LeftPanel::Database,
+            "resources" => LeftPanel::Resources,
+            "plugin" => LeftPanel::Plugin,
+            _ => return None,
+        })
+    }
+
     /// 活动栏图标（Lucide）：默认图标集（`IconName`）不含这些语义图标，
     /// 应用已注册 `AllAssets`（全量目录），故按资产路径直接引用。
     pub fn icon(self) -> Icon {

@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
@@ -77,6 +78,12 @@ pub struct EditorHostPanel {
     /// 面板不持有 `DockArea`：那是容器，容器知道面板就够了。反向只握一个弱句柄，
     /// 容器消失时自动失效（不会把整棵 Dock 拖住不放）。
     pub(crate) group: Option<WeakEntity<TabGroup>>,
+    /// 所在 `DockArea` 的弱句柄（宿主在加入 Dock 前用 [`Self::set_area`] 注入）。
+    ///
+    /// 用途：脏 tab 的**自绘 ✕**（`title_suffix`）要弹「保存/不保存/取消」确认——
+    /// Dock 内置 ✕ 是 `group.close` 直接移除、没有任何“关闭前询问”钩子（见
+    /// `closable` 注释），所以脏文档的内置 ✕ 保持隐藏，改为这里给确认入口。
+    pub(crate) area: Option<WeakEntity<DockArea>>,
     /// 状态栏提示：动作失败的真实原因（未命名需另存为 / 有未保存改动 / 只读拒绝）
     ///
     /// 有它才不会有“按了没反应”的动作：失败必须留下可见痕迹。成功即清空。
@@ -362,6 +369,7 @@ impl EditorHostPanel {
             editor,
             statements,
             group: None,
+            area: None,
             message: None,
             closed: false,
             grid,
@@ -414,6 +422,15 @@ impl EditorHostPanel {
     /// 当前文档是否脏（与基线不同）
     pub fn is_dirty(&self) -> bool {
         self.with_document(Document::is_dirty).unwrap_or(false)
+    }
+
+    /// 注入所在 `DockArea` 的弱句柄（宿主在 `add_panel_view` 前调用）。
+    ///
+    /// 脏 tab 的自绘 ✕（`title_suffix`）弹「保存/不保存/取消」要用它走
+    /// [`request_close_document`]；不注入则 ✕ 退化为“点了没反应”（弱句柄为空时
+    /// 回调安全忽略，不 panic）。
+    pub fn set_area(&mut self, area: WeakEntity<DockArea>) {
+        self.area = Some(area);
     }
 
     /// 面板是否已被 Dock 移除（文档随之关闭）
@@ -2727,6 +2744,32 @@ impl EditorHostPanel {
         });
     }
 
+    /// M5 命中跳行：把光标/选区移到 `line`（1 基行号）行，并聚焦面板。
+    ///
+    /// `span`（行内命中字节区间，来自草稿箱内容搜索）有值时**选中命中文本**；
+    /// 无值时光标落在行首。行号越界 / 区间非法时静默退化为「光标放行首」，再不行就只聚焦。
+    /// 与 `jump_to_error_site_with` 同口径（`set_selected_range` 会滚到可见处）。
+    pub fn reveal_search_target(
+        &mut self,
+        line: u32,
+        span: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let full = self.editor.read(cx).text().to_string();
+        let Some(line_start) = diagnostics::offset_for_line_col(&full, line as usize, 1) else {
+            return;
+        };
+        let range = match span {
+            Some((s, e)) if s < e => line_start + s..line_start + e,
+            _ => line_start..line_start,
+        };
+        self.editor.update(cx, |state, cx| {
+            state.set_selected_range(range, cx);
+            state.focus(window, cx);
+        });
+    }
+
     /// 【B5】复制当前结果集（TSV）
     ///
     /// 复制的是**已抓到的行**（被截断的那份就只有那些行）——不假装能拿到没抓的部分。
@@ -3781,10 +3824,35 @@ impl ComponentPanel for EditorHostPanel {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         self.is_dirty().then(|| {
+            // 脏态可见（脏点 + 自绘 ✕）：
+            // Dock 内置 ✕ 在脏时被 `closable` 藏掉（防 `group.close` 直接丢修改），
+            // 这里补一个走「保存/不保存/取消」确认的 ✕——与 Ctrl+W 同一入口
+            // （`request_close_document`），保证“编辑区也有关闭入口”且不会误丢。
+            let panel = cx.entity();
+            let area = self.area.clone();
             div()
-                .size(rems(ui::STATUS_DOT_SIZE))
-                .rounded_full()
-                .bg(cx.theme().colors.primary)
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .size(rems(ui::STATUS_DOT_SIZE))
+                        .rounded_full()
+                        .bg(cx.theme().colors.primary),
+                )
+                .child(
+                    Button::new(format!("sp-dirty-close-{}", panel.entity_id()))
+                        .icon(IconName::Close)
+                        .xsmall()
+                        .ghost()
+                        .tab_stop(false)
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            if let Some(area) = area.as_ref().and_then(|weak| weak.upgrade()) {
+                                request_close_document(&area, panel.clone(), window, cx);
+                            }
+                        }),
+                )
         })
     }
 }

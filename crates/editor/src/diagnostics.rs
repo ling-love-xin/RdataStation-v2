@@ -245,7 +245,8 @@ fn without_sql_suffix(error: &str) -> &str {
 /// `text` 里第 `line` 行（1 基）第 `column` 列（1 基**字符**）的字节偏移
 ///
 /// 列号超出该行长度时贴到行尾（驱动给的插入符可能指在行尾之后）。
-fn offset_for_line_col(text: &str, line: usize, column: usize) -> Option<usize> {
+/// `pub(crate)`：M5 命中跳行（`EditorHostPanel::reveal_search_target`）复用它做「行号 → 行首偏移」。
+pub(crate) fn offset_for_line_col(text: &str, line: usize, column: usize) -> Option<usize> {
     if line == 0 || column == 0 {
         return None;
     }

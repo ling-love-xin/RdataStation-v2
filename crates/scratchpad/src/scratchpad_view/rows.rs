@@ -8,6 +8,9 @@
 
 use super::*;
 
+use gpui_kit::component::Icon;
+use rds_search::view::hit_line;
+
 impl ScratchpadRowCtx {
     /// 该显示行是否为内联新建行。
     pub(super) fn is_edit_row(&self, display: usize) -> bool {
@@ -91,6 +94,11 @@ impl ScratchpadView {
         // 展开且尚未懒加载过子目录 → 触发加载。
         let needs_load = is_folder && !ctx.loaded.contains_key(&key) && entry.children.is_none();
 
+        // 过滤态三要素（与 ctx 同源）：Content 模式 + 过滤非空时，单击文件行
+        // 额外触发内容搜索——中央编辑区显示该次搜索的命中明细（用户点名 2026-10-10：
+        // 对齐 VSCode 搜索面板，点击文件显示「行号+命中行」明细，而不是只打开整个文件）。
+        let filter_active = !ctx.filter.is_empty();
+        let filter_mode = ctx.mode;
         let click = {
             let view = view_handle.clone();
             let entity = entity.clone();
@@ -150,6 +158,10 @@ impl ScratchpadView {
                     } else {
                         cx.notify();
                     }
+                    // 过滤态（Content + 非空）单击文件：触发内容搜索 → 中央区命中明细。
+                    if !is_folder && filter_active && filter_mode == ScratchpadSearchMode::Content {
+                        this.run_scratchpad_content_search(cx);
+                    }
                 });
             }
         };
@@ -185,7 +197,25 @@ impl ScratchpadView {
             } else {
                 tree::disclosure_slot()
             })
-            .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon_color))
+            // 微标（用户点名：zed / VS Code 风格的类型**图标**，不是文本标签）：
+            // 文件夹画文件夹图标；文件画扩展名对应的类型图标（sql→database、log→file-terminal…）。
+            .child(
+                if is_folder {
+                    Icon::empty()
+                        .path("icons/folder.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none()
+                        .text_color(folder_color)
+                        .into_any_element()
+                } else {
+                    Icon::empty()
+                        .path(scratchpad_type_icon(&entry.name))
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none()
+                        .text_color(icon_color)
+                        .into_any_element()
+                },
+            )
             .child(
                 div()
                     .flex_1()
@@ -199,6 +229,38 @@ impl ScratchpadView {
             .when(scratchpad_shows_dirty_dot(&ctx.dirty, entry), |this| {
                 this.child(div().w_2().h_2().flex_none().rounded_full().bg(primary))
             })
+            // 命中数角标（用户点名 2026-10-10：过滤态树行显示命中数，对齐 VSCode 搜索面板
+            // 左侧每文件命中数）：Content 模式 + 过滤非空 + 文件内容有命中行时才画
+            // （文件名命中但内容零命中的文件不显示，避免误导性的「0」）。
+            // 口径与搜索任务一致（逐行 is_match，头部 256KB）；当前规模同步读，目录极大时
+            // 可在 ScratchpadView 层加内容命中缓存（按 query+mode+case+regex 键控）。
+            .when(
+                !ctx.filter.is_empty()
+                    && ctx.mode == ScratchpadSearchMode::Content
+                    && entry.kind == ScratchpadEntryKind::File,
+                move |this| {
+                    let count = scratchpad_content_hit_count(
+                        &entry.path,
+                        &ctx.filter,
+                        ctx.regex,
+                        ctx.case_sensitive,
+                    );
+                    if count == 0 {
+                        this
+                    } else {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .px_1()
+                                .rounded_sm()
+                                .text_xs()
+                                .text_color(primary)
+                                .bg(hover_bg)
+                                .child(count.to_string()),
+                        )
+                    }
+                },
+            )
             .child(
                 div()
                     .flex_none()
@@ -344,12 +406,41 @@ impl ScratchpadView {
                             }));
                     }
                 }
-                menu.item(PopupMenuItem::new("打开位置").on_click(move |_, _, app| {
-                    open_entity.update(app, |this, cx| {
-                        this.open_scratchpad_location(open_key.clone(), cx)
+                // 「在文件管理器中显示」：文件与文件夹都可用（定位而不打开）。
+                // 语义与「用系统应用打开」分离——前者是 `explorer /select`，
+                // 后者是 `opener::open`（用户点名澄清过：两种都要保留）。
+                let reveal_entity = menu_entity.clone();
+                let reveal_key = menu_key.clone();
+                let open_sys_entity = menu_entity.clone();
+                let open_sys_key = menu_key.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("在文件管理器中显示").on_click(move |_, _, app| {
+                        reveal_entity.update(app, |this, cx| {
+                            this.reveal_scratchpad_location(reveal_key.clone(), cx)
+                        });
+                    }),
+                );
+                if !is_folder {
+                    // 「用系统应用打开」：只给文件（文件夹“打开”在资源管理器里就是定位）。
+                    menu = menu.item(
+                        PopupMenuItem::new("用系统应用打开").on_click(move |_, _, app| {
+                            open_sys_entity.update(app, |this, cx| {
+                                this.open_scratchpad_location(open_sys_key.clone(), cx)
+                            });
+                        }),
+                    );
+                }
+                // 「属性」：文件与文件夹都可用（用户点名 2026-10-10：简单属性面板，
+                // 树行 meta 只留大小；时间与「SQL 文件连接哪个数据库」都放这里）。
+                let info_entity = menu_entity.clone();
+                let info_key = menu_key.clone();
+                menu = menu.item(PopupMenuItem::new("属性").on_click(move |_, _, app| {
+                    info_entity.update(app, |this, cx| {
+                        this.show_scratchpad_file_info(info_key.clone(), cx)
                     });
-                }))
-                .item(
+                }));
+                let mut menu = menu;
+                menu.item(
                     PopupMenuItem::new("重命名").on_click(move |_, window, app| {
                         rename_entity.update(app, |this, cx| {
                             this.start_scratchpad_edit(
@@ -413,29 +504,21 @@ impl ScratchpadView {
         } else {
             ui::ROW_HEIGHT
         };
-        // chip 只跟着「内联新建文件」行（重命名与新建文件夹都没有那一行）。
-        let chips = ctx.is_edit_row(display) && matches!(ctx.edit, Some(ScratchpadEdit::NewFile));
-        tree::RowHeight::new(base).add_if(chips, ui::SCRATCHPAD_ROW_CHIPS)
+        // 模板 chip 行已随「去模板」移除（用户点名）：新建文件统一空白起步，
+        // 不再有附加块，虚拟列表行高回到基础高。
+        tree::RowHeight::new(base)
     }
 
-    /// 内联编辑行（新建 / 重命名通用）。
-    ///
-    /// 新建文件时额外渲染一行模板 chip（原型 §4.1：自动补后缀 + 填充占位内容）。
+    /// 内联编辑行（新建 / 重命名通用；新建文件统一空白起步，无模板 chip 行）。
     pub(super) fn render_scratchpad_edit_row(&self, depth: usize, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let primary = theme.colors.primary;
-        let hover_bg = theme.colors.list_hover;
-        // 选中底走列表角色（与导航 / 资源库 / Mock 同一口径；`sidebar_accent` 是侧栏容器角色）。
-        let selected_bg = theme.colors.list_active;
-        let fg = theme.colors.foreground;
 
         let Some(input) = self.scratchpad.borrow().name_input.clone() else {
             return div();
         };
         let entity = cx.entity();
-        let edit = self.scratchpad.borrow().edit.clone();
-        let new_template = self.scratchpad.borrow().new_template;
 
         let commit = {
             let entity = entity.clone();
@@ -487,47 +570,10 @@ impl ScratchpadView {
                     .on_click(cancel),
             );
 
-        // 仅新建文件时展示模板 chip 行。
-        if !matches!(edit, Some(ScratchpadEdit::NewFile)) {
-            return row;
-        }
-        let mut chips = div().h_flex().items_center().gap_1().w_full().pl_1();
-        for template in ScratchpadTemplate::ALL {
-            let on = template == new_template;
-            let handler = {
-                let entity = entity.clone();
-                move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                    entity.update(app, |this, cx| {
-                        this.set_scratchpad_template(template, window, cx)
-                    });
-                }
-            };
-            chips = chips.child(
-                div()
-                    .id(format!("sp-tpl-{}", template.label()))
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .px_1()
-                    .h_5()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(if on { fg } else { muted })
-                    .when(on, |this| this.bg(selected_bg))
-                    // 开关态 chip 与行选中同一规矩：悬停不盖当前位置（未开才给悬停底）。
-                    .when(!on, move |s| s.hover(move |s| s.bg(hover_bg)))
-                    .child(template.label())
-                    .on_click(handler),
-            );
-        }
-        div()
-            .v_flex()
-            .w_full()
-            .gap_0p5()
-            .py_0p5()
-            .child(row)
-            .child(chips)
+        // 模板 chip 行已随「去模板」移除（用户点名）：新建文件统一空白起步。
+        // `ScratchpadTemplate::Blank` 保留在枚举里，供未来「分析文件」类型引导复用；
+        // `set_scratchpad_template` / `commit_scratchpad_edit` 的模板应用逻辑不受影响。
+        row
     }
 
     /// 切换新建文件模板（并把已输入名字的后缀跟着换）。
@@ -626,6 +672,14 @@ impl ScratchpadView {
                     .text_color(muted)
                     .child("随手写点东西，或从外部导入文件"),
             )
+            // 原型 664-668：空态第二行说明（2026-10-11 对齐；措辞同步语义定义：
+            // 根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接）。
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("草稿箱根 = 项目下的 scratchpad/；导入 = 复制，引用 = 链接"),
+            )
             .child(
                 div()
                     .h_flex()
@@ -651,5 +705,304 @@ impl ScratchpadView {
                             .on_click(import),
                     ),
             )
+    }
+
+    /// 侧栏搜索结果树（2026-10-11 用户点名：结构与草稿箱树一致）。
+    ///
+    /// 分组：按命中文件的目录（`scratchpad\` 根 + 子目录），目录节点画 folder 图标；
+    /// 文件节点画类型微标 + 命中数角标；命中明细缩进对齐文件节点名（无行号、带高亮）。
+    /// 展开语义：`search_expanded` 存「收起」集合——不在集合 = 展开（初始全展开，与原型一致）；
+    /// 点击目录 / 文件节点切换展开收起；hover 行尾图标操作：目录 ⇄ 全部替换 / 文件 ⇄ 单文件替换、✕ 收起。
+    pub(super) fn render_search_results_tree(
+        &self,
+        search: &ScratchpadSearchView,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = cx.theme();
+        let hover_bg = theme.colors.list_hover;
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let folder_color = theme.colors.warning;
+        let primary = theme.colors.primary;
+        let info = theme.colors.info;
+        let success = theme.colors.success;
+        let match_bg = workbench_shell::product_tokens::get(cx).search_match_background(&theme);
+
+        let collapsed = self.scratchpad.borrow().search_expanded.clone();
+        let entity = cx.entity();
+
+        // 文件 → 命中行；目录 → 文件（BTreeMap 保证顺序稳定；根目录 = 空串）。
+        let mut by_file: std::collections::BTreeMap<String, Vec<&rds_search::view::SearchHit>> =
+            std::collections::BTreeMap::new();
+        for hit in &search.hits {
+            by_file.entry(hit.file.clone()).or_default().push(hit);
+        }
+        let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for file in by_file.keys() {
+            let dir = std::path::Path::new(file)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            groups.entry(dir).or_default().push(file.clone());
+        }
+
+        let mut tree = div().v_flex().w_full().gap_px().mt_1().mb_1();
+        for (dir, files) in &groups {
+            let dir_key = format!("d:{dir}");
+            let dir_collapsed = collapsed.contains(&dir_key);
+            let dir_name = if dir.is_empty() {
+                "scratchpad\\".to_string()
+            } else {
+                format!("scratchpad\\{dir}\\")
+            };
+            // ── 目录行：disclosure + folder 图标 + 目录名 + hover 操作 ──
+            let toggle_dir = {
+                let entity = entity.clone();
+                let k = dir_key.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        let mut v = this.scratchpad.borrow_mut();
+                        if !v.search_expanded.remove(&k) {
+                            v.search_expanded.insert(k.clone());
+                        }
+                        cx.notify();
+                    });
+                }
+            };
+            let replace_all = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| this.replace_scratchpad_all(cx));
+                }
+            };
+            let mut dir_ops = div()
+                .h_flex()
+                .items_center()
+                .gap_0p5()
+                .flex_none()
+                .invisible()
+                .group_hover("sp-res-dir", |s| s.visible());
+            dir_ops = dir_ops
+                .child(
+                    Button::new("sp-res-dir-replace")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Replace)
+                        .tooltip("替换该目录下全部匹配")
+                        .on_click(replace_all),
+                )
+                .child(
+                    Button::new("sp-res-dir-collapse")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Close)
+                        .tooltip("收起该目录")
+                        .on_click(toggle_dir.clone()),
+                );
+            tree = tree.child(
+                div()
+                    .id(format!("sp-res-dir-{dir_key}"))
+                    .group("sp-res-dir")
+                    .h_flex()
+                    .items_center()
+                    .w_full()
+                    .h(rems(ui::ROW_HEIGHT))
+                    .gap_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(hover_bg))
+                    .on_click(toggle_dir)
+                    .child(tree::disclosure_slot().child(tree::disclosure_icon(
+                        !dir_collapsed,
+                        muted,
+                    )))
+                    .child(
+                        Icon::empty()
+                            .path("icons/folder.svg")
+                            .size(rems(ui::ICON_SIZE_MD))
+                            .flex_none()
+                            .text_color(folder_color),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(fg)
+                            .overflow_hidden()
+                            .child(dir_name),
+                    )
+                    .child(dir_ops),
+            );
+
+            if dir_collapsed {
+                continue;
+            }
+            // ── 文件行 + 命中明细 ──
+            for file in files {
+                let file_hits = &by_file[file];
+                let fname = std::path::Path::new(file)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file.clone());
+                // 命中明细行复用文件名（文件行文本节点会按值消费 `fname`，此处提前克隆）。
+                let fname_ref = fname.clone();
+                let count = file_hits.len();
+                let file_collapsed = collapsed.contains(file);
+                let toggle_file = {
+                    let entity = entity.clone();
+                    let f = file.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        entity.update(app, |this, cx| this.toggle_search_file_expanded(&f, cx));
+                    }
+                };
+                let replace_file = {
+                    let entity = entity.clone();
+                    let f = file.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        entity.update(app, |this, cx| this.replace_scratchpad_file(&f, cx));
+                    }
+                };
+                let mut file_ops = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .flex_none()
+                    .invisible()
+                    .group_hover("sp-res-file", |s| s.visible());
+                file_ops = file_ops
+                    .child(
+                        Button::new("sp-res-file-replace")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Replace)
+                            .tooltip("替换该文件内全部匹配")
+                            .on_click(replace_file),
+                    )
+                    .child(
+                        Button::new("sp-res-file-collapse")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Close)
+                            .tooltip("收起命中明细")
+                            .on_click(toggle_file.clone()),
+                    );
+                tree = tree.child(
+                    div()
+                        .id(format!("sp-res-file-{file}"))
+                        .group("sp-res-file")
+                        .h_flex()
+                        .items_center()
+                        .w_full()
+                        .h(rems(ui::ROW_HEIGHT))
+                        .gap_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover_bg))
+                        .on_click(toggle_file)
+                        // 缩进层级与草稿箱树文件节点一致（TREE_INDENT × 1）。
+                        .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                        .child(tree::disclosure_slot().child(tree::disclosure_icon(
+                            !file_collapsed,
+                            muted,
+                        )))
+                        // 文件类型微标（与草稿箱树同一图标与取色）。
+                        .child(
+                            Icon::empty()
+                                .path(scratchpad_type_icon(&fname))
+                                .size(rems(ui::ICON_SIZE_MD))
+                                .flex_none()
+                                .text_color(scratchpad_icon_color(
+                                    &fname, info, success, primary, muted,
+                                )),
+                        )
+                        .child(
+                            div()
+                                // 元素断言锚点：命中明细文本起点必须与此节点名对齐（见 tests.rs 对齐用例）。
+                                // debug_selector 供 VisualTestContext::debug_bounds 像素级断言（.id() 不注册）。
+                                .debug_selector(|| format!("sp-res-file-text-{file}"))
+                                .id(format!("sp-res-file-text-{file}"))
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(fg)
+                                .overflow_hidden()
+                                .child(fname),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .px_1()
+                                .rounded_sm()
+                                .text_xs()
+                                .text_color(primary)
+                                .bg(hover_bg)
+                                .child(count.to_string()),
+                        )
+                        .child(file_ops),
+                );
+
+                if file_collapsed {
+                    continue;
+                }
+                // ── 命中明细：缩进对齐文件节点名（TREE_INDENT×1 + 槽+图标+间距补偿 2.125rem）、
+                //    无行号、命中关键词高亮、点击跳转到编辑器对应行 ──
+                for hit in file_hits {
+                    let open_hit = {
+                        let entity = entity.clone();
+                        let target = ScratchpadSearchHitTarget {
+                            file: file.clone(),
+                            line: hit.line as u32,
+                            span: hit.spans.first().copied(),
+                        };
+                        move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                            // `target` 非 Copy，闭包每次调用 clone 一份（闭包本身保持 Fn）。
+                            let target = target.clone();
+                            entity.update(app, |this, _cx| this.host.open_search_hit(target));
+                        }
+                    };
+                    tree = tree.child(
+                        div()
+                            .id(format!("sp-res-hit-{file}-{}", hit.line))
+                            .h_flex()
+                            .items_center()
+                            .w_full()
+                            .h(rems(ui::ROW_HEIGHT_COMPACT))
+                            .gap_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover_bg))
+                            .on_click(open_hit)
+                            // 命中明细：与文件节点行逐元素同构（indent + 槽 + 微标 Icon + gap），
+                            // 使命中文本起点与文件节点名完全对齐（2026-10-11 用户点名对齐文件）。
+                            .child(tree::indent_spacer(ui::TREE_INDENT, 1))
+                            .child(tree::disclosure_slot())
+                            // 与文件行同一 Icon 组件渲染路径（空 div 占位实测不占宽度，
+                            // 导致命中行靠左 16px；改用同款微标保证像素级对齐）。
+                            .child(
+                                Icon::empty()
+                                    .path(scratchpad_type_icon(&fname_ref))
+                                    .size(rems(ui::ICON_SIZE_MD))
+                                    .flex_none()
+                                    .text_color(scratchpad_icon_color(
+                                        &fname_ref, info, success, primary, muted,
+                                    )),
+                            )
+                            // 命中文本：包裹 div 的 left 即文本起点（无 padding），元素断言锚点。
+                            .child(
+                                div()
+                                    .debug_selector(|| {
+                                        format!("sp-res-hit-text-{file}-{}", hit.line)
+                                    })
+                                    .id(format!("sp-res-hit-text-{file}-{}", hit.line))
+                                    .min_w_0()
+                                    .child(hit_line(&hit.content, &hit.spans, match_bg, fg)),
+                            ),
+                    );
+                }
+            }
+        }
+        tree
     }
 }

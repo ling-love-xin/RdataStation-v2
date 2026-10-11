@@ -26,9 +26,11 @@ use gpui_kit::*;
 use database::model::PropertyRequest;
 
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
-use scratchpad::{ScratchpadDiffView, ScratchpadSearchView};
+use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 // 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
 use super::property_panel::PropertyHostPanel;
+// 搜索结果标签页（中央 Dock 独立 tab，VSCode「搜索: query」形态）：同上持弱句柄。
+use super::search_results::SearchResultsHostPanel;
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
 pub use workbench_shell::model::QueryRequest;
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
@@ -55,19 +57,26 @@ pub struct EditorBridge {
     pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
     /// 打开「新建数据源连接」对话框。
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
-    /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展展。
-    pub show_search_results: Rc<dyn Fn(Option<ScratchpadSearchView>, &mut App)>,
     /// 投递草稿箱冲突 Diff（`None` = 关闭）：差异同在中央编辑区展。
     pub show_diff: Rc<dyn Fn(Option<ScratchpadDiffView>, &mut App)>,
 }
 
-/// 「在编辑器中打开」请求：路径 + 只读维度。
+/// 「在编辑器中打开」请求：路径 + 只读维度 + 可选跳转目标。
 ///
 /// 只读**由发起方判定**：草稿箱的草稿可写，M6 的存档本体只能看——编辑器两者都不认识。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenInEditorRequest {
     pub path: std::path::PathBuf,
     pub read_only: editor::model::ReadOnly,
+    /// 打开后跳转（M5 搜索命中跳行）；`None` = 只打开。
+    pub reveal: Option<RevealTarget>,
+}
+
+/// 中央编辑器的跳转目标：1 基行号 + 行内命中字节区间（`span` 有值时选中命中文本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevealTarget {
+    pub line: u32,
+    pub span: Option<(usize, usize)>,
 }
 
 /// 草稿箱对外命令端口（装配期由 `WorkbenchView::init_workspace` 注入）。
@@ -206,6 +215,10 @@ pub struct Shared {
     /// M5：草稿箱内容搜索结果（侧栏发起，结果落中央编辑区）。
     /// 草稿箱命令端口（`None` = 装配未完成，调用方需容忍空端口）。
     pub scratchpad_bridge: Rc<RefCell<Option<ScratchpadBridge>>>,
+    /// M5：草稿箱文件属性弹窗载荷（右键 → 属性；`None` = 关闭）。
+    ///
+    /// 信息就几行，不走中央编辑区面板，挂宿主 overlay 弹窗（用户点名 2026-10-10）。
+    pub scratchpad_file_info: Rc<RefCell<Option<ScratchpadFileInfoView>>>,
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
     ///
     /// 只传**绝对路径 + 只读维度**：编辑器无根、也不认识 `resources/` 的归属，
@@ -259,6 +272,15 @@ pub struct Shared {
     pub property_panel: Rc<RefCell<Option<WeakEntity<PropertyHostPanel>>>>,
     /// 打开 / 聚焦属性 tab 的宿主命令（`show_properties` 调用；需要窗口——面板创建要加进中央 Dock）。
     pub open_property: Rc<RefCell<Option<Rc<dyn Fn(PropertyRequest, &mut Window, &mut App)>>>>,
+    /// 搜索结果标签页（「搜索: query」，中央 Dock 独立 tab，2026-10-10 VSCode 对齐）：
+    /// 全局数据源——`ScratchpadHost::show_search_results` 写这里，标签页每帧从这里读。
+    pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
+    /// 搜索结果标签页实体弱句柄（已关闭则为死弱引用，下次有结果时重建）。
+    pub search_results_panel: Rc<RefCell<Option<WeakEntity<SearchResultsHostPanel>>>>,
+    /// 「搜索」标签页被 tab ✕ 关闭（2026-10-10 用户拍板语义：关标签**保留结果**）。
+    /// `true` = 用户已关闭标签页 → `WorkbenchView::render` 不再自动重建；
+    /// 新的搜索结果到达（`show_scratchpad_search(Some)`）自动置 `false`（重新搜索 → 重建并聚焦）。
+    pub search_results_dismissed: Rc<RefCell<bool>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
@@ -288,6 +310,7 @@ impl Shared {
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
+            scratchpad_file_info: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
             reveal_request: Rc::new(RefCell::new(None)),
             query_request: Rc::new(RefCell::new(None)),
@@ -307,6 +330,9 @@ impl Shared {
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             property_panel: Rc::new(RefCell::new(None)),
             open_property: Rc::new(RefCell::new(None)),
+            scratchpad_search: Rc::new(RefCell::new(None)),
+            search_results_panel: Rc::new(RefCell::new(None)),
+            search_results_dismissed: Rc::new(RefCell::new(false)),
             host_redraw: Rc::new(RefCell::new(None)),
         }
     }
@@ -368,6 +394,18 @@ impl Shared {
         *self.open_file_request.borrow_mut() = Some(OpenInEditorRequest {
             path,
             read_only: editor::model::ReadOnly::none(),
+            reveal: None,
+        });
+    }
+
+    /// 请求在中央编辑器中打开文件，并在打开后跳到指定行（M5 搜索命中跳行）。
+    ///
+    /// 与可写版同槽：`reveal` 携带 1 基行号与行内命中区间，宿主打开文档后落光标/选区。
+    pub fn request_open_in_editor_at(&self, path: std::path::PathBuf, reveal: RevealTarget) {
+        *self.open_file_request.borrow_mut() = Some(OpenInEditorRequest {
+            path,
+            read_only: editor::model::ReadOnly::none(),
+            reveal: Some(reveal),
         });
     }
 
@@ -379,6 +417,7 @@ impl Shared {
         *self.open_file_request.borrow_mut() = Some(OpenInEditorRequest {
             path,
             read_only: editor::model::ReadOnly::editor_only(),
+            reveal: None,
         });
     }
 
@@ -450,13 +489,20 @@ impl Shared {
         }
     }
 
-    /// 投递草稿箱内容搜索结果（走 `EditorBridge`；装配未完成时静默丢弃）。
+    /// 投递草稿箱内容搜索结果（走 `Shared::scratchpad_search` 全局状态；`None` = 清空）。
     ///
-    /// 结果展示归编辑区（`EditorPanel::scratchpad_search`）；草稿箱不再回读这份展示数据。
+    /// 结果展示归**中央「搜索: query」标签页**（`SearchResultsHostPanel`，2026-10-10 起
+    /// 不再经 `EditorBridge`——搜索 tab 与打开的文档 tab 并列，VSCode 全局搜索形态）；
+    /// `WorkbenchView::render` 检测到有结果且面板未建时 `cx.defer_in` 建面板并聚焦。
     pub fn show_scratchpad_search(&self, view: Option<ScratchpadSearchView>, cx: &mut App) {
-        if let Some(bridge) = self.editor_bridge.borrow().clone() {
-            (*bridge.show_search_results)(view, cx);
+        // 新搜索结果到达（`Some`）＝ 用户重新搜索 → 允许重建「搜索」标签页
+        //（tab ✕ 关闭只置 `search_results_dismissed`；关标签保留结果，再搜索重建——2026-10-10 用户拍板）。
+        let is_new_result = view.is_some();
+        *self.scratchpad_search.borrow_mut() = view;
+        if is_new_result {
+            *self.search_results_dismissed.borrow_mut() = false;
         }
+        self.notify_host(cx);
     }
 
     /// 投递草稿箱冲突 Diff（`None` = 关闭）；展示归中央编辑区。
@@ -464,6 +510,14 @@ impl Shared {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {
             (*bridge.show_diff)(view, cx);
         }
+    }
+
+    /// 投递草稿箱文件属性弹窗（右键 → 属性；`None` = 关闭）。
+    ///
+    /// 弹窗挂在宿主 overlay（`WorkbenchView::render` 消费字段渲染），不走中央编辑区。
+    pub fn show_scratchpad_file_info(&self, view: Option<ScratchpadFileInfoView>, cx: &mut App) {
+        *self.scratchpad_file_info.borrow_mut() = view;
+        self.notify_host(cx);
     }
 
     /// 打开属性面板并加载数据（同上）。
@@ -705,6 +759,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{OpenInEditorRequest, Shared, append_sql};
+    use crate::panels::RevealTarget;
     use crate::view::ConnectionItem;
 
     /// 「打开查询」请求取出即清空（宿主 render 每帧取用，不得重复开文档）。
@@ -752,12 +807,32 @@ mod tests {
             Some(OpenInEditorRequest {
                 path: PathBuf::from("/p/a.sql"),
                 read_only: editor::model::ReadOnly::none(),
+                reveal: None,
             }),
-            "首次取出得到路径（可写）"
+            "首次取出得到路径（可写，无跳转）"
         );
         assert!(
             shared.take_open_in_editor().is_none(),
             "取出即清空：同一请求不会重复打开"
+        );
+
+        // 跳转版：同一槽，但带上 1 基行号与命中区间（M5 命中跳行走这条）。
+        shared.request_open_in_editor_at(
+            PathBuf::from("/p/b.sql"),
+            RevealTarget {
+                line: 7,
+                span: Some((2, 5)),
+            },
+        );
+        let request = shared.take_open_in_editor().expect("跳转请求");
+        assert_eq!(request.path, PathBuf::from("/p/b.sql"));
+        assert!(request.read_only.can_edit(), "跳转版仍应可写");
+        assert_eq!(
+            request.reveal,
+            Some(RevealTarget {
+                line: 7,
+                span: Some((2, 5)),
+            })
         );
 
         // 只读版：同一个槽，但带上"编辑器只读"（M6 的存档本体走这条）。
@@ -765,6 +840,7 @@ mod tests {
         let request = shared.take_open_in_editor().expect("只读请求");
         assert!(!request.read_only.can_edit(), "取回的应是编辑器只读");
         assert_eq!(request.path, PathBuf::from("/p/resources/a.sql"));
+        assert!(request.reveal.is_none(), "只读请求不带跳转");
     }
 
     /// 连接条目（只填取样 SQL 判定要用的两个字段）。

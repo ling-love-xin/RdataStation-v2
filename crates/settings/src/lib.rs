@@ -216,7 +216,10 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
         Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
         Slot::LogMinLevel => SettingValue::Text(settings.logging.min_level.as_str().to_string()),
-                // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
+        Slot::StartupDefaultLeftPanel => {
+            SettingValue::Text(settings.startup.default_left_panel.clone())
+        }
+        // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
         Slot::ScratchpadToolbar => return None,
     })
 }
@@ -346,7 +349,17 @@ impl SettingsService {
                 };
                 Self::set_log_min_level(level, cx);
             }
-                        // 复合值（工具栏按钮布局）：无标量写入路径，由 ⋯ 菜单直接改 global + save。
+            Slot::StartupDefaultLeftPanel => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                // 落盘值只认登记表枚举里的四档；未知值拒绝（设置文件被手改坏时不让写入）。
+                if !matches!(text, "database" | "draft" | "resources" | "plugin") {
+                    return false;
+                }
+                Self::set_startup_default_left_panel(text, cx);
+            }
+            // 复合值（工具栏按钮布局）：无标量写入路径，由 ⋯ 菜单直接改 global + save。
             Slot::ScratchpadToolbar => return false,
         }
         true
@@ -474,7 +487,23 @@ impl SettingsService {
         cx.global::<Settings>().projects.sort_mode.clone()
     }
 
-    
+    /// 读取启动时左侧栏默认显示的模块（`database` / `draft` / `resources` / `plugin`）。
+    ///
+    /// 未配置时返回 `database`（与 `Shared::new` 的构造默认一致，见 `model::Startup`）。
+    pub fn startup_default_left_panel(cx: &App) -> String {
+        cx.global::<Settings>().startup.default_left_panel.clone()
+    }
+
+    /// 设置并持久化启动时左侧栏默认显示的模块（更新 global → 写 settings.json）。
+    pub fn set_startup_default_left_panel(key: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.startup.default_left_panel = key.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
     /// 设置并持久化项目列表排序方式（更新 global → 写 settings.json）。
     pub fn set_project_sort_mode(mode: &str, cx: &mut App) {
         {

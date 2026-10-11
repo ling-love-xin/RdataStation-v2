@@ -1,0 +1,20 @@
+[package]
+name = "rds-search"
+version.workspace = true
+edition.workspace = true
+
+# 搜索独立 crate（用户点名 2026-10-10：搜索抽 crate，供未来命令面板 / 全局搜索复用）。
+# 职责：目录递归扫描 + 内容逐行匹配 + 结果模型 + 后台任务；不含任何 scratchpad 视图依赖
+# （type_icon 由调用方注入，见第二阶段的面板渲染）。
+[dependencies]
+anyhow.workspace = true
+regex.workspace = true
+# workspace 的 tokio 已开 `full`（fs/time 均含），这里不重复写 feature。
+tokio.workspace = true
+
+# ===== 面板渲染（第二阶段迁入）=====
+# 搜索面板是 GPUI 视图：按文件分组命中列表 + 替换栏（VS Code 形态）。
+# 类型图标 `type_icon` 由调用方注入，本 crate 不依赖 scratchpad 视图。
+gpui-kit.workspace = true
+# 面板尺寸常量（`ui::*`）与工作台外壳共用纯数据。
+workbench_shell.workspace = true

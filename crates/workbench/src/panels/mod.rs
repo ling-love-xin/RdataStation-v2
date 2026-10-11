@@ -34,6 +34,7 @@ mod editor;
 mod property_panel;
 mod resources;
 mod right;
+mod search_results;
 mod shared;
 
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
@@ -43,9 +44,11 @@ pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;
+pub use search_results::{SearchResultsHostPanel, focus_search_tab};
 pub use shared::append_sql;
 pub use shared::{
-    EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, ScratchpadBridge, Shared,
+    EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, RevealTarget,
+    ScratchpadBridge, Shared,
 };
 
 /// 侧边栏面板：按活动工具渲染内容。
@@ -431,7 +434,6 @@ pub fn install_host_redraw_bridge<T: Render + 'static>(
 pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
     let editor_for_new = editor.clone();
-    let editor_for_search = editor.clone();
     let editor_for_diff = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
@@ -444,9 +446,9 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         }),
         // 属性面板已升为中央 Dock 独立 tab（`Shared::show_properties` → `open_property`），
         // 不再经编辑区桥；`EditorBridge` 不再带 show_properties 字段。
-        show_search_results: Rc::new(move |view: Option<ScratchpadSearchView>, cx: &mut App| {
-            editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
-        }),
+        // 搜索结果同样已升为中央 Dock 独立 tab（「搜索: query」，2026-10-10 VSCode 对齐）：
+        // `Shared::show_scratchpad_search` 直接存 `Shared::scratchpad_search` 并 notify_host，
+        // 由 `WorkbenchView::render` 惰性建面板（`ensure_search_results_panel`），不再走编辑区桥。
         show_diff: Rc::new(move |view: Option<ScratchpadDiffView>, cx: &mut App| {
             editor_for_diff.update(cx, |panel, cx| panel.set_scratchpad_diff(view, cx));
         }),

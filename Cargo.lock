@@ -8176,6 +8176,7 @@ dependencies = [
  "rds-engine",
  "rds-paths",
  "rds-search",
+ "rds-settings",
  "rds-shared",
  "rds-workbench-shell",
  "regex",
@@ -8204,6 +8205,7 @@ version = "0.2.1"
 dependencies = [
  "gpui-kit",
  "rds-paths",
+ "rds-shared",
  "rds-workbench-shell",
  "serde",
  "serde_json",

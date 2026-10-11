@@ -4,7 +4,7 @@
 //! - 依赖只向下：视图只使用 gpui-kit（gpui / base / component），不承载业务逻辑；
 //! - 窗口第一层由 App Shell 的 `Root` 装配；本视图负责标题栏 + 左右活动栏 + DockArea + 状态栏；
 //! - 左 Dock：草稿箱 / 数据库导航 / 资源分析 / 插件；右 Dock：洞察 / Mock 生成 / 历史；
-//! - 边栏三模式：展开 / 收起（`toggle_dock`）/ 完全隐藏（`remove_dock`，gpui-kit 0.6）；
+//! - 边栏三模式：展开 / 收起（`toggle_dock`）/ 完全隐藏（`remove_dock`，gpui-kit 0.7.1）；
 //!   模式状态存于 `Shared`，`render` 统一同步到 Dock（权威同步点）；
 //! - Quick Open：搜索 + 命令融合（标题栏居中入口 / Ctrl+P），受控自绘弹层；
 //! - 颜色一律取自 `cx.theme().colors`（禁止 raw hex/rgb）。
@@ -13,11 +13,16 @@ use std::rc::Rc;
 
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
+use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
+use gpui_kit::component::dock::{
+    DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
+};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
 use gpui_kit::*;
+
+use scratchpad::scratchpad_view::render_scratchpad_file_info_pane;
 
 use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
@@ -31,8 +36,8 @@ use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
 use settings::commands::{CloseSettings, OpenSettings, ToggleThemeMode};
-use settings::SettingsService;
 use settings::settings_page::{SettingsHost, SettingsPage};
+use settings::SettingsService;
 
 /// 左侧活动栏面板。
 ///
@@ -258,7 +263,13 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        self.open_in_editor_with(path, editor::model::ReadOnly::none(), window, cx)
+        self.open_in_editor_with(
+            path,
+            editor::model::ReadOnly::none(),
+            None,
+            window,
+            cx,
+        )
     }
 
     /// 同上，但带上**只读维度**（M6 的存档本体：编辑器只读，改它要先去取回）。
@@ -269,6 +280,7 @@ impl WorkbenchView {
         &mut self,
         path: std::path::PathBuf,
         read_only: editor::model::ReadOnly,
+        reveal: Option<crate::panels::RevealTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -288,6 +300,20 @@ impl WorkbenchView {
             }
         }
         self.show_document(outcome.id().clone(), window, cx);
+        // M5 Phase C：命中跳行——打开（或激活）后把光标/选区落到目标行。
+        // `show_document` 已把面板接到界面上；新建 / 复用的面板都在这份列表里。
+        if let Some(target) = reveal {
+            if let Some(panel) = self
+                .editor_hosts
+                .iter()
+                .find(|panel| panel.read(cx).document() == outcome.id())
+                .cloned()
+            {
+                panel.update(cx, |panel, cx| {
+                    panel.reveal_search_target(target.line, target.span, window, cx)
+                });
+            }
+        }
         Ok(())
     }
 
@@ -469,8 +495,14 @@ impl WorkbenchView {
         self.editor_hosts.push(panel.clone());
 
         if let Some(area) = self.area.clone() {
+            // 工程债（用户点名「tab 显示 editor 而非文件名」）：面板必须带 presentation
+            // handle 注册——`add_panel_view(panel_handle(..))` 而非裸 `add_panel(Entity)`。
+            // 裸注册时 Dock 取不到 `tab_name`（标题回退成 `panel_name()` "editor"）与
+            // `title_suffix`（脏点 / 自绘 ✕），见 gpui-kit `panel_title` 的回退分支。
+            panel.update(cx, |panel, _cx| panel.set_area(area.downgrade()));
+            let handle = panel_handle(panel);
             area.update(cx, |area, cx| {
-                area.add_panel(panel, DockPlacement::Center, None, window, cx);
+                area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
             });
         }
     }
@@ -706,9 +738,51 @@ impl WorkbenchView {
         self.scratchpad_meta_pump = Some(task);
     }
 
+    /// 搜索结果标签页（VSCode「搜索: query」）：面板未建 → 建并加入中央 tab 组 + 聚焦；
+    /// 已建（弱句柄有效）→ 只聚焦不重建。
+    ///
+    /// **只在 `cx.defer_in` 里调用**（render 检测到结果后 defer，事件路径可改 dock）；
+    /// 与属性面板同例：面板实体只建一次（`Shared::search_results_panel` 弱句柄）。
+    fn ensure_search_results_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self
+            .shared
+            .search_results_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        {
+            crate::panels::focus_search_tab(&panel, window, cx);
+            return;
+        }
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        let shared = self.shared.clone();
+        let panel =
+            cx.new(|cx| crate::panels::SearchResultsHostPanel::new(shared.clone(), cx));
+        self.shared
+            .search_results_panel
+            .borrow_mut()
+            .replace(panel.downgrade());
+        let handle = panel_handle(panel.clone());
+        area.update(cx, |area, cx| {
+            area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
+        });
+        crate::panels::focus_search_tab(&panel, window, cx);
+    }
+
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
     fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 启动默认模块（用户点名）：设置 `startup.default_left_panel` 覆盖构造期默认。
+        // 必须在这里（首次 render 装配期）读——早于 `apply_left_mode`，晚于设置加载
+        //（app 开窗前 `SettingsService::init` 已跑）。未知值回退默认（`from_key` 的约定）。
+        {
+            let saved = settings::SettingsService::startup_default_left_panel(cx);
+            if let Some(panel) = workbench_shell::model::LeftPanel::from_key(&saved) {
+                self.shared.active_left.set(panel);
+            }
+        }
         let shared = self.shared.clone();
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), &self.editor_service, cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
@@ -740,7 +814,17 @@ impl WorkbenchView {
         // 都改走宿主端口（`database::nav_host::NavHost`，实现在 `components/nav_host.rs`），
         // 动作在事件路径上直接完成，不再绕宿主 render 转发一轮。
 
-        let (area, _skin) = DockSkin::dock_area("workspace", Some(1), window, cx);
+        let (area, skin) = DockSkin::dock_area("workspace", Some(1), window, cx);
+        // 工程债修复（用户点名）：gpui-kit Dock 的每 tab 关闭按钮默认隐藏
+        // （`close_button_visible=false`），此前拿到 skin 后直接丢弃，导致
+        // 编辑器 tab 只有标签、没有 ✕ 管理按钮。这里显式启用；面板自身的
+        // `closable` 约束（gpui-base `Panel::closable` 默认 true）仍然生效。
+        skin.set_close_button_visible(true, cx);
+        // 搜索结果标签页对齐 VSCode（2026-10-10 用户截图：搜索 tab 单独存在时
+        // 只有标题栏、没有 tab 栏 →「没有展开页面」）：默认 `PanelStyle::Auto`
+        // 单面板只画简单标题，改 `TabBar` **总是显示 tab 栏**（VSCode 编辑区/搜索
+        // 结果恒有标签页形态；单 tab 也显示「搜索: query」标签 + ✕）。
+        skin.set_panel_style(PanelStyle::TabBar, cx);
 
         // 编辑器宿主面板（A9 接线）：把 `editor_service` 的当前文档接进中央 tab 组。
         // 先 clone 到局部再 `cx.new`：闭包里不能再借 `self`。
@@ -760,6 +844,8 @@ impl WorkbenchView {
         let editor_host = cx
             .new(|cx| editor::view::host::EditorHostPanel::new(host_service, document, window, cx));
         self.editor_hosts.push(editor_host.clone());
+        // 脏 tab 自绘 ✕ 走「保存/不保存/取消」需要 area 弱句柄（见 host.rs `set_area`）。
+        editor_host.update(cx, |panel, _cx| panel.set_area(area.downgrade()));
 
         let editor_handle = panel_handle(editor.clone());
         let host_handle = panel_handle(editor_host);
@@ -796,8 +882,17 @@ impl WorkbenchView {
                             .property_panel
                             .borrow_mut()
                             .replace(panel.downgrade());
+                        // 同 editor host：带 presentation handle 注册，tab 标题用 `tab_name`
+                        // 而非 panel_name（属性面板实现了 `tab_name`，见 panels/property_panel.rs）。
+                        let prop_handle = panel_handle(panel.clone());
                         area_for_prop.update(cx, |area, cx| {
-                            area.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
+                            area.add_panel_view(
+                                prop_handle,
+                                DockPlacement::Center,
+                                None,
+                                window,
+                                cx,
+                            );
                         });
                         panel.update(cx, |panel, cx| panel.show_properties(request, cx));
                         crate::panels::focus_property_tab(&panel, window, cx);
@@ -844,8 +939,15 @@ impl WorkbenchView {
                         .mock_details
                         .borrow_mut()
                         .insert(key, detail.downgrade());
+                    let detail_handle = panel_handle(detail.clone());
                     area_for_detail.update(cx, |area, cx| {
-                        area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
+                        area.add_panel_view(
+                            detail_handle,
+                            DockPlacement::Center,
+                            None,
+                            window,
+                            cx,
+                        );
                     });
                     focus_detail_tab(&detail, window, cx);
                 },
@@ -1418,6 +1520,38 @@ impl WorkbenchView {
         Some(palette.into_any_element())
     }
 
+    /// 草稿箱文件属性弹窗（右键 → 属性；用户点名 2026-10-10：信息少，走弹窗不走 panel）。
+    ///
+    /// 读 `Shared::scratchpad_file_info`（草稿箱经端口写入）；宿主用 gpui-kit `Dialog`
+    /// 包一层（内置 overlay / Esc / 遮罩点击关闭），内容只有 6 行键值（`render_scratchpad_file_info_pane`）。
+    fn render_scratchpad_file_info_popover(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let view = (*self.shared.scratchpad_file_info.borrow()).clone()?;
+        let theme = cx.theme().clone();
+        let shared = self.shared.clone();
+        let close = move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+            *shared.scratchpad_file_info.borrow_mut() = None;
+            shared.notify_host(app);
+        };
+        Some(
+            Dialog::new(cx)
+                .title(div().child(format!("属性 · {}", view.name)))
+                .content({
+                    let theme = theme.clone();
+                    move |content: DialogContent, window: &mut Window, cx: &mut App| {
+                        let _ = (window, cx);
+                        content.child(render_scratchpad_file_info_pane(&view, &theme))
+                    }
+                })
+                .button_props(DialogButtonProps::default().show_cancel(false))
+                .on_close(close)
+                .into_any_element(),
+        )
+    }
+
     /// 执行一条结果（浮层经宿主端口回传；动作语义只在这里实现）。
     pub(crate) fn execute_quick_open_action(
         &mut self,
@@ -1730,6 +1864,26 @@ impl Render for WorkbenchView {
         if self.area.is_none() {
             self.init_workspace(window, cx);
         }
+        // 搜索结果标签页（「搜索: query」，VSCode 全局搜索形态）：草稿箱搜索完成
+        // （`Shared::scratchpad_search` 有值）且面板未建 → `cx.defer_in` 建面板
+        // （事件路径可改 dock；render 路径本身只读）。面板已建（含死弱引用升级成功）
+        // 则不重复入队——新搜索结果只更新全局状态，面板每帧读到最新内容。
+        // 用户 tab ✕ 关闭过标签页（`search_results_dismissed`）则不自动重建——
+        // 关标签保留结果，直到再次搜索（`show_scratchpad_search(Some)` 清标志）。
+        if self.shared.scratchpad_search.borrow().is_some()
+            && !*self.shared.search_results_dismissed.borrow()
+            && self
+                .shared
+                .search_results_panel
+                .borrow()
+                .as_ref()
+                .and_then(|weak| weak.upgrade())
+                .is_none()
+        {
+            cx.defer_in(window, |this, window, cx| {
+                this.ensure_search_results_panel(window, cx);
+            });
+        }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
             self.project_inputs = Some(project::ui::ProjectInputs::new(window, cx));
@@ -1758,7 +1912,13 @@ impl Render for WorkbenchView {
         //（同路径已打开只激活，不重读；M6 的本体带编辑器只读）。
         // 消费点在宿主 render（文档与 Dock 面板属宿主状态）；失败走通知栏。
         if let Some(request) = self.shared.take_open_in_editor() {
-            if let Err(e) = self.open_in_editor_with(request.path, request.read_only, window, cx) {
+            if let Err(e) = self.open_in_editor_with(
+                request.path,
+                request.read_only,
+                request.reveal,
+                window,
+                cx,
+            ) {
                 *self.shared.notice.borrow_mut() = Some(format!("打开文件失败: {e}"));
             }
         }
@@ -1783,6 +1943,7 @@ impl Render for WorkbenchView {
         };
         let quick_open = self.render_quick_open(cx);
         let settings_panel = self.render_settings_panel(window, cx);
+        let scratchpad_info = self.render_scratchpad_file_info_popover(window, cx);
 
         // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
         let inputs = self
@@ -1949,6 +2110,9 @@ impl Render for WorkbenchView {
         if let Some(sp) = settings_panel {
             root = root.child(sp);
         }
+        if let Some(info) = scratchpad_info {
+            root = root.child(info);
+        }
         // M1：项目设置（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
         if !no_project {
             let host = self.project_host().clone();
@@ -1956,7 +2120,7 @@ impl Render for WorkbenchView {
                 root = root.child(settings);
             }
         }
-        // 对话框层：gpui-kit 0.7.0 的 Root 已自动挂载 dialog 层（WindowState::dialog_layer），
+        // 对话框层：gpui-kit 0.7.1 的 Root 已自动挂载 dialog 层（WindowState::dialog_layer），
         // 连接对话框与项目对话框不再需要手动渲染。
         root
     }

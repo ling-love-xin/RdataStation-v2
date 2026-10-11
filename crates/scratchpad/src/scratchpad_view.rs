@@ -36,7 +36,7 @@
 //! 结构设计：`docs/architecture/layout/panels-coupling-plan.md` §9。
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
@@ -45,7 +45,8 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme, Sizable as _};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -86,10 +87,19 @@ use primitives::*;
 use search::*;
 
 // 跨 crate 公开面：路径保持 `scratchpad_view::{...}` 不变（`lib.rs` 与编辑器都在用）。
+// 内容搜索面板已迁 `rds_search::view`（第二阶段）：旧名重导保持调用点不换路径；
+// 渲染函数签名比原版多一个 `type_icon` 参数（调用方注入文件类型图标）。
 pub use search::{
-    ScratchpadDiffView, ScratchpadSearchView, render_scratchpad_diff_pane,
-    render_scratchpad_search_pane,
+    ScratchpadDiffView, ScratchpadFileInfoView,
+    render_scratchpad_diff_pane, render_scratchpad_file_info_pane,
 };
+pub use rds_search::view::{
+    SearchHitTarget as ScratchpadSearchHitTarget,
+    SearchView as ScratchpadSearchView,
+    render_search_pane as render_scratchpad_search_pane,
+};
+// 类型图标：`rds_search::view` 的 `type_icon` 由调用方注入，workbench 从这里取。
+pub use primitives::scratchpad_type_icon;
 
 /// 冲突：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了。
 struct ScratchpadConflict {
@@ -101,11 +111,94 @@ struct ScratchpadConflict {
     diff: Option<DiffResult>,
 }
 
+/// 普通视图工具栏按钮（⋯ 更多设置可单独显示/隐藏与左/右换位；⋯ 本身恒显）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolbarButtonKey {
+    Search,
+    NewFile,
+    NewFolder,
+    Reference,
+    Import,
+    Sort,
+    Refresh,
+}
+
+/// 工具栏按钮的持久化配置（settings 模型类型别名：落盘 `{ visible, side }`）。
+pub type ToolbarButtonCfg = settings::model::ToolbarButtonCfg;
+
+impl ToolbarButtonKey {
+    /// 全部按钮（⋯ 菜单顺序 = 原型 647-653）。
+    pub const ALL: [ToolbarButtonKey; 7] = [
+        Self::Search,
+        Self::NewFile,
+        Self::NewFolder,
+        Self::Reference,
+        Self::Import,
+        Self::Sort,
+        Self::Refresh,
+    ];
+
+    /// 落盘稳定标识（settings 键；与 `from_str` 互逆）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::NewFile => "new_file",
+            Self::NewFolder => "new_folder",
+            Self::Reference => "reference",
+            Self::Import => "import",
+            Self::Sort => "sort",
+            Self::Refresh => "refresh",
+        }
+    }
+
+    /// 稳定标识 → 按钮；未知标识返回 `None`（旧配置里出现陌生键时忽略）。
+    pub fn from_str(s: &str) -> Option<Self> {
+        Some(match s {
+            "search" => Self::Search,
+            "new_file" => Self::NewFile,
+            "new_folder" => Self::NewFolder,
+            "reference" => Self::Reference,
+            "import" => Self::Import,
+            "sort" => Self::Sort,
+            "refresh" => Self::Refresh,
+            _ => return None,
+        })
+    }
+
+    /// 菜单文案（原型 647-653）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Search => "搜索入口",
+            Self::NewFile => "新建文件",
+            Self::NewFolder => "新建目录",
+            Self::Reference => "引用入口",
+            Self::Import => "导入入口",
+            Self::Sort => "排序",
+            Self::Refresh => "刷新",
+        }
+    }
+
+    /// 默认所在侧（原型 shortcut 文本：左 / 右）。
+    pub fn side(self) -> &'static str {
+        match self {
+            Self::Search | Self::NewFile | Self::NewFolder | Self::Reference | Self::Import => "左",
+            Self::Sort | Self::Refresh => "右",
+        }
+    }
+
+    /// 默认侧的落盘值（`left` / `right`）。
+    pub fn default_side_text(self) -> &'static str {
+        match self.side() {
+            "左" => "left",
+            _ => "right",
+        }
+    }
+}
+
 /// 草稿箱面板视图状态。
 ///
 /// 数据来自 `rds-scratchpad` 存储；根 = 当前项目会话下的模块目录 `{project}/scratchpad/`。
 /// 闭环：新建/重命名/删除→回收站+撤销/回收站恢复与清空/文件名过滤/引用移除/懒加载/排序。
-#[derive(Default)]
 pub struct ScratchpadViewState {
     /// 是否已尝试加载（首次渲染触发一次）。
     loaded: bool,
@@ -147,10 +240,34 @@ pub struct ScratchpadViewState {
     /// 内联名称输入（懒创建）。
     name_input: Option<Entity<InputState>>,
     _name_sub: Option<Subscription>,
-    /// 搜索模式与开关（内容模式才有正则 / 大小写）。
+    /// 搜索模式与开关（内容模式才有正则 / 大小写 / 全字）。
     search_mode: ScratchpadSearchMode,
     search_regex: bool,
     search_case: bool,
+    /// 全字匹配开关（`ab`，2026-10-11 原型差异补齐：侧栏 + 中央都有三个开关 Aa/ab/.*）。
+    search_word: bool,
+    /// 替换框内 AB 开关（保留大小写，2026-10-11 原型对齐；替换语义后续接入，
+    /// 先 UI+状态落地）。
+    search_replace_case: bool,
+    /// 搜索态整体切换（2026-10-11 用户点名，VSCode 对齐）：`true` = 侧栏只显示搜索面板
+    /// （普通工具栏 / 目录树 / 底部引用回收站整体隐藏）；由普通视图工具栏 ⌕ 进入、
+    /// 搜索面板 ← 返回退出。
+    search_panel_open: bool,
+    /// 高级选项（VSCode 搜索面板形态）：包含 / 排除文件 glob；`search_advanced`
+    /// 折叠开关（默认**收起**——2026-10-11 用户点名「搜索状态默认隐藏包含/排除字段」，
+    /// 由替换行右侧 ⋮ 展开）。`show_include_hint` / `show_exclude_hint`：
+    /// glob 样例 hint 是否显示（点 ✎/👁/⚙ 切换；输入框聚焦也会显示）。
+    search_advanced: bool,
+    show_include_hint: bool,
+    show_exclude_hint: bool,
+    /// 最近一次内容搜索的完整结果视图（侧栏搜索结果树的直接数据源；中央面板由宿主投递）。
+    /// 由 `apply_scratchpad_ops` 在结果回填时落地；`None` = 尚未搜索或已清空。
+    search_view: Option<ScratchpadSearchView>,
+    /// 侧栏搜索结果树中已展开命中明细的文件（相对路径）。
+    search_expanded: HashSet<String>,
+    /// 最近一次内容搜索的统计（文件数, 命中数, 扫描文件数）：侧栏搜索面板统计行用。
+    /// 由 `apply_scratchpad_ops` 在结果回填时更新；`None` = 尚未搜索。
+    search_stats: Option<(usize, usize, usize)>,
     /// 冲突（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了。
     conflicts: Vec<ScratchpadConflict>,
     /// 当前在中央编辑区展示差异的那份草稿（关闭 / 忽略时知道该关谁）。
@@ -158,8 +275,27 @@ pub struct ScratchpadViewState {
     /// 搜索输入（懒创建）。
     search_input: Option<Entity<InputState>>,
     _search_sub: Option<Subscription>,
+    /// 替换输入（侧栏搜索框正下方，VSCode 形态；内容搜索时才显示）。
+    search_replace_input: Option<Entity<InputState>>,
+    /// 包含 / 排除文件 glob 输入（高级选项展开后显示）。
+    search_include_input: Option<Entity<InputState>>,
+    search_exclude_input: Option<Entity<InputState>>,
+    _search_replace_sub: Option<Subscription>,
     /// 草稿树的滚动句柄（虚拟列表内部滚动；键盘导航可滚到选中项）。
     list_scroll: ScratchpadListScroll,
+    /// 是否正有 OS 文件拖入面板上方（`on_drag_move::<ExternalPaths>` 置位，drop / exit 复位）。
+    external_drag_over: bool,
+    /// 拖入的文件数量（提示条展示「松开以导入 N 个文件」）。
+    external_drag_count: usize,
+    /// 最近一次置位时刻：`on_drag_move` 是 Capture 阶段全局捕获，而
+    /// `on_file_drop_exit` 只在元素仍 hover 时派发（gpui-pre `div.rs` 的
+    /// `is_hovered_ignoring_last_input` 门控）——鼠标拖出窗口时 hover 先丢，
+    /// Exited 不再送达，提示条会残留。此字段配合轮询兜底复位。
+    external_drag_since: Option<std::time::Instant>,
+    /// 工具栏按钮配置（⋯ 更多设置，2026-10-11 原型 644-658 对齐 + 持久化接线）：
+    /// `key → { visible, side }`；缺省 = 显示 + 默认位置（左 5 右 2），⋯ 恒显。
+    /// 空表 = 全默认（与 `settings.scratchpad.toolbar` 空表语义一致）。
+    toolbar_cfg: BTreeMap<ToolbarButtonKey, ToolbarButtonCfg>,
 }
 
 /// 草稿树滚动句柄包装（`VirtualListScrollHandle` 无 `Default`，此处补一个）。
@@ -209,12 +345,74 @@ struct ScratchpadRowCtx {
     expanded: HashSet<String>,
     loaded: HashMap<String, Vec<ScratchpadEntry>>,
     colors: ScratchpadRowColors,
+    /// 过滤态（用户点名 2026-10-10：过滤态树行显示命中数角标，对齐 VSCode 搜索面板左侧的
+    /// 每文件命中数）。`filter` 空 = 未过滤；`mode/regex/case_sensitive` 与 flatten 同一套口径。
+    filter: Rc<String>,
+    mode: ScratchpadSearchMode,
+    regex: bool,
+    case_sensitive: bool,
+}
+
+impl Default for ScratchpadViewState {
+    fn default() -> Self {
+        // 手写全字段：`..Default::default()` 会解析到本 impl（自递归，编译告警 + 运行时栈溢出）。
+        Self {
+            loaded: false,
+            loading: false,
+            load_seq: 0,
+            error: None,
+            entries: Vec::new(),
+            children: HashMap::new(),
+            sort: ScratchpadSort::default(),
+            sort_desc: false,
+            external_refs: Vec::new(),
+            trash: Vec::new(),
+            trash_expanded: false,
+            expanded: HashSet::new(),
+            selected: HashSet::new(),
+            anchor: None,
+            clipboard: None,
+            edit: None,
+            new_target: String::new(),
+            new_template: ScratchpadTemplate::default(),
+            undo: None,
+            name_input: None,
+            _name_sub: None,
+            search_mode: ScratchpadSearchMode::default(),
+            search_regex: false,
+            search_case: false,
+            search_word: false,
+            search_replace_case: false,
+            // 搜索态默认关闭（VSCode 对齐：工具栏 ⌕ 进入搜索面板，← 返回普通视图）。
+            search_panel_open: false,
+            // 用户点名（2026-10-11）：搜索状态默认隐藏包含/排除字段，⋮ 展开。
+            search_advanced: false,
+            show_include_hint: false,
+            show_exclude_hint: false,
+            search_view: None,
+            search_expanded: HashSet::new(),
+            search_stats: None,
+            conflicts: Vec::new(),
+            shown_diff: None,
+            search_input: None,
+            _search_sub: None,
+            search_replace_input: None,
+            search_include_input: None,
+            search_exclude_input: None,
+            _search_replace_sub: None,
+            list_scroll: ScratchpadListScroll::default(),
+            external_drag_over: false,
+            external_drag_count: 0,
+            external_drag_since: None,
+            // 工具栏按钮配置（⋯ 更多设置）：空表 = 全部显示 + 默认位置（缺省语义）。
+            toolbar_cfg: BTreeMap::new(),
+        }
+    }
 }
 
 impl ScratchpadViewState {
     /// 在已加载数据（根 + 懒加载子目录）中查找条目类型。
-    fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {
-        fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
+    fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {        fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
             for e in entries {
                 if e.path.to_string_lossy() == key {
                     return Some(e.kind.clone());
@@ -263,14 +461,29 @@ pub struct ScratchpadView {
     /// 由轮询一拍一次地取回（不在 `render` 里去问宿主），有变化才重绘。
     dirty_seen: RefCell<Rc<HashSet<String>>>,
 }
-
 impl ScratchpadView {
     /// 构造：注入宿主端口。
     pub fn new(host: Rc<dyn ScratchpadHost>, cx: &mut Context<Self>) -> Self {
+        // ⋯ 更多设置持久化（2026-10-11 接线）：启动时读入用户配置的工具栏布局；
+        // `try_global` 兼容测试环境（未 init Settings global 时用全默认）。
+        let toolbar_cfg = cx
+            .try_global::<settings::model::Settings>()
+            .map(|s| {
+                s.scratchpad
+                    .toolbar
+                    .iter()
+                    .filter_map(|(key, cfg)| {
+                        ToolbarButtonKey::from_str(key).map(|k| (k, cfg.clone()))
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let mut state = ScratchpadViewState::default();
+        state.toolbar_cfg = toolbar_cfg;
         Self {
             host,
             focus_handle: cx.focus_handle(),
-            scratchpad: Rc::new(RefCell::new(ScratchpadViewState::default())),
+            scratchpad: Rc::new(RefCell::new(state)),
             scratchpad_pump: RefCell::new(None),
             scratchpad_watch: None,
             scratchpad_watch_poll: RefCell::new(None),

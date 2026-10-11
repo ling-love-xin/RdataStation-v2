@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>通用模式 · 脚本执行与环境切换入口原型</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E8846F'/%3E%3Cpath d='M8 10h16v3H8zM8 15h16v3H8zM8 20h10v3H8z' fill='%231E1E1E'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#1E1E1E; --sidebar:#252526; --titlebar:#323233; --tabbar:#252526;
+  --border:#3C3C3C; --input-border:#4F4F4F; --fg:#CCCCCC; --muted:#8A8A8A;
+  --brand:#E8846F; --brand-strong:#E8735A; --brand-hover:#F5A188; --statusbar:#A84A38;
+  --tab-bg:#2D2D30; --tab-active:#1E1E1E; --hover:#2A2D2E; --active:#37373D;
+  --selection:#264F78; --danger:#F1706B; --warn:#E5A54B; --ok:#6CCB5F;
+  --mono:"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  --sans:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  --icon-xs:12px; --icon-sm:14px; --icon-md:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#141414;color:var(--fg);font-family:var(--sans);font-size:14px;
+  padding:28px 20px 48px;min-height:100vh;display:flex;flex-direction:column;align-items:center}
+.hero{max-width:1080px;width:100%;margin-bottom:18px}
+.hero h1{font-size:19px;color:#F2F2F2;font-weight:600;letter-spacing:.2px}
+.hero p{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.7}
+.hero .hints{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.hint{background:var(--active);border:1px solid var(--border);border-radius:6px;
+  padding:5px 10px;font-size:12px;color:#B9B9B9}
+.hint b{color:var(--brand-hover);font-weight:600}
+/* ===== 通用图标（Lucide 路径，仿 gpui-kit Icon 体系） ===== */
+.ico{width:var(--icon-sm);height:var(--icon-sm);flex-shrink:0;display:block}
+.ico.stroke{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ico.fill{fill:currentColor}
+.ico.xs{width:var(--icon-xs);height:var(--icon-xs)}
+.ico.md{width:var(--icon-md);height:var(--icon-md)}
+.ico.spin{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ===== 模拟窗口 ===== */
+.app{max-width:1080px;width:100%;background:var(--bg);border:1px solid #4A4A4A;
+  border-radius:8px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.55)}
+/* 标题栏 */
+.titlebar{background:var(--titlebar);height:36px;display:flex;align-items:center;
+  padding:0 10px;gap:14px;border-bottom:1px solid var(--border)}
+.win-dots{display:flex;gap:7px;flex-shrink:0}
+.win-dots i{width:12px;height:12px;border-radius:50%;display:block}
+.win-dots i:nth-child(1){background:#E66A5C}
+.win-dots i:nth-child(2){background:#E5C07B}
+.win-dots i:nth-child(3){background:#98C379}
+.tabs{display:flex;align-items:center;gap:2px;height:100%;flex:1;overflow:hidden}
+.tab{height:100%;display:flex;align-items:center;gap:7px;padding:0 12px;
+  font-size:12.5px;color:#9C9C9C;border-right:1px solid var(--border);background:var(--tab-bg);
+  white-space:nowrap}
+.tab.active{background:var(--tab-active);color:#FFFFFF}
+.tab .x{margin-left:6px;color:var(--muted);padding:2px;border-radius:3px;display:flex;
+  align-items:center;justify-content:center;cursor:pointer}
+.tab .x:hover{background:var(--hover);color:#E0E0E0}
+.tab .dot{width:7px;height:7px;border-radius:50%;background:var(--brand);display:none}
+.tab.active .dot{display:block}
+.tab .lang-badge{font-size:10px;padding:1px 6px;border-radius:9px;background:#3A3D41;color:#A8A8A8}
+.tab.active .lang-badge{background:var(--brand);color:#1E1E1E;font-weight:600}
+.plus{width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+  color:var(--muted);border-radius:4px;cursor:pointer}
+.plus:hover{background:var(--hover);color:#E0E0E0}
+/* ===== 模式挖空槽（标题栏，凹陷视觉，区别于工具栏） ===== */
+.title-slot{background:var(--sidebar);height:26px;padding:0 10px;border-radius:5px;
+  display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:#E8E8E8;
+  border:1px solid rgba(0,0,0,.25);box-shadow:inset 0 1px 3px rgba(0,0,0,.3);flex-shrink:0;
+  user-select:none}
+.title-slot:hover{color:#FFF}
+.title-slot .ico{width:12px;height:12px;color:var(--brand-hover)}
+/* 工具栏 */
+.toolbar{height:36px;background:var(--sidebar);display:flex;align-items:center;
+  gap:4px;padding:0 8px;border-bottom:1px solid var(--border)}
+.tool-btn{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;
+  border-radius:4px;font-size:12.5px;color:#C8C8C8;cursor:pointer;border:1px solid transparent;
+  user-select:none;white-space:nowrap}
+.tool-btn:hover{background:var(--hover)}
+.tool-btn.icon-only{padding:0 6px}
+.mode-pill{font-weight:600;color:#E8E8E8;cursor:pointer}
+.mode-pill .ico{width:12px;height:12px;color:var(--muted)}
+.tool-sep{width:1px;height:18px;background:var(--border);margin:0 5px}
+.primary-btn{background:var(--brand);color:#1E1E1E;font-weight:600;border:1px solid transparent}
+.primary-btn:hover{background:var(--brand-hover)}
+.primary-btn:disabled{background:#3A3D41;color:#6E6E6E;cursor:not-allowed;font-weight:400}
+/* 环境选择器（核心入口） */
+.env-select{display:flex;align-items:center;gap:7px;height:26px;padding:0 8px;
+  border-radius:4px;font-size:12.5px;cursor:pointer;border:1px solid var(--input-border);
+  background:#2A2D2E;color:#E2E2E2;position:relative;user-select:none}
+.env-select:hover{border-color:#5A5A5A}
+.env-select .e-icon{width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}
+.env-select .e-icon.py{background:#3776AB;color:#fff}
+.env-select .e-icon.r{background:#2266B1;color:#fff}
+.env-select .e-icon.rs{background:#CE422B;color:#fff}
+.env-select .e-name{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.env-select .e-ver{color:var(--muted);font-size:11px}
+.env-select .caret{width:12px;height:12px;color:var(--muted);margin-left:2px}
+.env-select.missing{border-color:var(--danger);color:var(--danger)}
+.env-select .warn-flag{width:7px;height:7px;border-radius:50%;background:var(--danger)}
+.tool-spacer{flex:1}
+/* 编辑区 */
+.editor{display:flex;font-family:var(--mono);font-size:13px;line-height:1.65;min-height:210px}
+.gutter{width:52px;background:var(--bg);color:#616161;text-align:right;padding:10px 10px 10px 0;
+  user-select:none;flex-shrink:0;border-right:1px solid #2B2B2B}
+.gutter div{padding-right:4px}
+.gutter .cur{color:var(--brand)}
+.code{padding:10px 14px;white-space:pre;flex:1;overflow-x:auto;color:#D4D4D4}
+.code .kw{color:#569CD6}
+.code .fn{color:#DCDCAA}
+.code .str{color:#CE9178}
+.code .num{color:#B5CEA8}
+.code .cmt{color:#6A9955}
+.code .imp{color:#C586C0}
+.code .line-cur{background:#222222}
+/* 分隔条 */
+.divider{height:5px;background:var(--sidebar);cursor:ns-resize;border-top:1px solid #2F2F2F;
+  border-bottom:1px solid #2F2F2F;display:flex;align-items:center;justify-content:center}
+.divider::after{content:"";width:48px;height:2px;background:#4A4A4A;border-radius:1px}
+/* 结果区 */
+.result-pane{background:var(--bg)}
+.result-tabs{display:flex;align-items:center;gap:2px;height:30px;background:var(--tabbar);
+  border-bottom:1px solid var(--border);padding:0 6px}
+.rtab{height:100%;display:flex;align-items:center;gap:6px;padding:0 10px;font-size:12px;
+  color:#9C9C9C;border-right:1px solid var(--border)}
+.rtab.active{background:var(--bg);color:#E6E6E6}
+.rtab .ch{font-size:9.5px;padding:1px 6px;border-radius:8px;background:#2D4A2F;color:#7EC97F}
+.rtab .ch.stale{background:#3A3420;color:var(--warn)}
+.rtab.stale-tab{color:var(--warn)}
+.result-toolbar{height:30px;display:flex;align-items:center;gap:10px;padding:0 10px;
+  font-size:12px;color:var(--muted);border-bottom:1px solid #2F2F2F}
+.result-toolbar .meta b{color:#C8C8C8;font-weight:500}
+.result-toolbar .spacer{flex:1}
+.rt-btn{display:flex;align-items:center;gap:5px;padding:2px 7px;border-radius:4px;font-size:11.5px;
+  color:#B4B4B4;cursor:pointer;border:1px solid var(--border);background:#2A2D2E}
+.rt-btn:hover{background:var(--hover)}
+.rt-btn .ico{width:12px;height:12px}
+.stale-note{display:none;align-items:center;gap:6px;padding:5px 10px;font-size:11.5px;
+  background:#3A3420;color:var(--warn);border-bottom:1px solid #4A4120}
+.stale-note.show{display:flex}
+.stale-note .ico{width:12px;height:12px}
+/* 表格 */
+.grid-wrap{overflow:auto;max-height:230px}
+table.grid{border-collapse:collapse;width:100%;font-size:12.5px;font-family:var(--mono)}
+.grid th,.grid td{padding:3px 12px 3px 8px;border-bottom:1px solid #2B2B2B;text-align:left;
+  white-space:nowrap}
+.grid th{background:var(--sidebar);color:#9C9C9C;font-weight:500;position:sticky;top:0;
+  font-size:11.5px;text-transform:none}
+.grid td.rn{color:#616161;text-align:right;padding-right:10px}
+.grid td.num{color:#B5CEA8;text-align:right}
+.grid td.null{color:#6E6E6E;font-style:italic}
+.grid th .sort{float:right;color:var(--muted);padding-left:6px;cursor:pointer;display:inline-flex;align-items:center}
+.grid th .sort:hover{color:var(--brand)}
+.grid tr:hover td{background:#222426}
+.result-status{height:28px;display:flex;align-items:center;gap:14px;padding:0 10px;
+  font-size:12px;color:var(--muted);border-top:1px solid #2F2F2F}
+.result-status b{color:#BDBDBD;font-weight:500}
+/* 空态 */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:170px;gap:8px;color:#5E5E5E}
+.empty-state .t{font-size:12.5px}
+/* 状态栏（编辑面板专属，非软件全局状态栏） */
+.statusbar{height:24px;background:var(--statusbar);color:#FFF;display:flex;align-items:center;
+  gap:10px;padding:0 12px;font-size:11.5px;white-space:nowrap;overflow:hidden}
+.statusbar .seg{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.statusbar .lbl{color:rgba(255,255,255,.62);font-weight:400}
+.statusbar .right{margin-left:auto;display:flex;align-items:center;gap:12px;overflow:hidden}
+/* 可点击状态项（VSCode 式：点击重设） */
+.sb-click{padding:1px 6px;border-radius:4px;cursor:pointer;border:1px solid transparent}
+.sb-click:hover{background:rgba(255,255,255,.15)}
+.sb-click:active{background:rgba(255,255,255,.22)}
+/* 行编辑 / 列编辑切换（TabBar::segmented 风格） */
+.mode-toggle{display:flex;background:rgba(0,0,0,.25);border-radius:5px;padding:1px;gap:1px;margin-left:2px}
+.mode-toggle .opt{font-size:10.5px;padding:2px 8px;border-radius:4px;color:rgba(255,255,255,.78);cursor:pointer;user-select:none}
+.mode-toggle .opt:hover{color:#FFF}
+.mode-toggle .opt.on{background:rgba(255,255,255,.92);color:#A84A38;font-weight:600}
+/* 状态栏小菜单（编码/换行/缩进） */
+.seg-menu{position:fixed;width:218px;background:var(--sidebar);border:1px solid #4A4A4A;
+  border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,.6);z-index:70;display:none;padding:5px}
+.seg-menu.open{display:block}
+.seg-menu .m-title{font-size:10.5px;color:#757575;padding:4px 8px 2px;letter-spacing:.5px}
+.seg-menu .m-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:6px 9px;border-radius:5px;font-size:12px;color:#D8D8D8;cursor:pointer}
+.seg-menu .m-item:hover{background:var(--hover)}
+.seg-menu .m-item.on{color:var(--brand-hover);font-weight:600}
+.seg-menu .m-item.disabled{cursor:not-allowed;color:#777}
+.seg-menu .m-item.disabled:hover{background:transparent}
+.seg-menu .m-item .m-note{font-size:10px;color:#9A6A6A}
+.seg-menu .m-item.disabled .m-note{color:#7A5A5A}
+.seg-menu .m-item .m-check{color:var(--brand-hover);font-size:11px}
+/* 左侧环境徽标（语言色圆点 + 环境名） */
+.langdot{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;
+  justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
+.langdot.py{background:#3776AB;color:#fff}
+.langdot.r{background:#2266B1;color:#fff}
+.langdot.rs{background:#CE422B;color:#fff}
+.langdot.missing{background:#8C3A32;color:#fff}
+/* 脏标记点 */
+.dirty-dot{color:#FFD9D0;font-size:9px}
+/* LSP 状态徽标 */
+.lsp-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.lsp-dot.off{background:#C98A8A}
+/* 文件类型徽标 */
+.ft-badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(0,0,0,.2);
+  color:#FFF;font-family:var(--mono)}
+/* ===== 环境 popover ===== */
+.env-popover{position:fixed;width:360px;background:var(--sidebar);border:1px solid #4A4A4A;
+  border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,.6);z-index:60;display:none;overflow:hidden}
+.env-popover.open{display:block}
+.env-search{padding:10px 10px 6px}
+.env-search input{width:100%;height:28px;background:var(--bg);border:1px solid var(--input-border);
+  border-radius:5px;color:#E0E0E0;font-size:12.5px;padding:0 10px;outline:none;font-family:var(--sans)}
+.env-search input:focus{border-color:var(--brand)}
+.env-list{max-height:330px;overflow:auto;padding:4px 6px 8px}
+.env-group{padding:8px 8px 2px;font-size:10.5px;color:#757575;letter-spacing:.6px;font-weight:600}
+.env-item{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:5px;cursor:pointer;
+  font-size:12.5px}
+.env-item:hover{background:var(--hover)}
+.env-item .e-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;
+  justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.env-item .e-icon.py{background:#3776AB;color:#fff}
+.env-item .e-icon.r{background:#2266B1;color:#fff}
+.env-item .e-icon.rs{background:#CE422B;color:#fff}
+.env-item .info{flex:1;min-width:0}
+.env-item .info .name{color:#E4E4E4;font-weight:500}
+.env-item .info .path{font-size:10.5px;color:var(--muted);font-family:var(--mono);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.env-item .st{display:flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 6px;
+  border-radius:8px;white-space:nowrap}
+.env-item .st.ok{background:#25322A;color:#7EC97F}
+.env-item .st.miss{background:#3A2323;color:var(--danger)}
+.env-item .st.cur{background:var(--brand);color:#1E1E1E;font-weight:600}
+.env-item.missing-row .info .name{color:#B98A8A}
+.env-item.disabled{cursor:not-allowed}
+.env-foot{padding:8px 10px;border-top:1px solid var(--border);display:flex;gap:8px}
+.env-foot button{flex:1;height:28px;background:#2A2D2E;border:1px solid var(--input-border);
+  border-radius:5px;color:#D0D0D0;font-size:12px;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;gap:6px}
+.env-foot button:hover{background:var(--hover)}
+/* ===== 管理环境 modal ===== */
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:80;display:none;
+  align-items:center;justify-content:center}
+.modal-mask.open{display:flex}
+.modal{width:640px;max-width:92vw;background:var(--sidebar);border:1px solid #4A4A4A;
+  border-radius:10px;overflow:hidden;box-shadow:0 22px 60px rgba(0,0,0,.6)}
+.modal-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)}
+.modal-head h2{font-size:14px;color:#E8E8E8;font-weight:600}
+.modal-head .close{margin-left:auto;width:24px;height:24px;display:flex;align-items:center;
+  justify-content:center;color:var(--muted);cursor:pointer;border-radius:4px}
+.modal-head .close:hover{background:var(--hover);color:#E0E0E0}
+.modal-body{padding:10px 16px 16px;max-height:52vh;overflow:auto}
+.menv-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);
+  border-radius:7px;margin-bottom:8px;background:var(--bg)}
+.menv-row .e-icon{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;
+  justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;color:#fff}
+.menv-row .info{flex:1;min-width:0}
+.menv-row .info .name{font-size:12.5px;color:#E4E4E4;font-weight:500}
+.menv-row .info .sub{font-size:10.5px;color:var(--muted);font-family:var(--mono);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.menv-row .actions{display:flex;gap:6px}
+.menv-row .mini{height:24px;padding:0 9px;border-radius:4px;background:#2A2D2E;
+  border:1px solid var(--border);color:#BDBDBD;font-size:11px;cursor:pointer}
+.menv-row .mini:hover{background:var(--hover)}
+.menv-row .mini.primary{background:var(--brand);color:#1E1E1E;font-weight:600;border-color:transparent}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.modal-foot button{height:30px;padding:0 18px;border-radius:5px;font-size:12.5px;cursor:pointer}
+.btn-plain{background:#2A2D2E;border:1px solid var(--input-border);color:#D0D0D0}
+.btn-brand{background:var(--brand);border:1px solid transparent;color:#1E1E1E;font-weight:600}
+/* toast */
+.toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(80px);
+  background:#37373D;color:#E6E6E6;border:1px solid #4A4A4A;padding:9px 18px;border-radius:7px;
+  font-size:12.5px;z-index:100;opacity:0;transition:all .25s;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* 图例 */
+.legend{max-width:1080px;width:100%;margin-top:16px;display:flex;gap:16px;flex-wrap:wrap;
+  font-size:12px;color:var(--muted);background:var(--sidebar);border:1px solid var(--border);
+  border-radius:8px;padding:12px 16px}
+.legend .lg-title{font-weight:600;color:#C8C8C8;margin-right:4px}
+.legend span b{color:#AFAFAF;font-weight:500}
+@media (max-width:760px){
+  body{padding:14px 8px 40px}
+  .env-select .e-ver{display:none}
+  .tool-btn span.txt{display:none}
+  .tool-btn.icon-only span.txt{display:none}
+  .statusbar .right .hide-m{display:none}
+  .gutter{width:38px}
+  .env-popover{width:92vw;max-width:360px}
+  .modal{width:94vw}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>通用模式 · 脚本执行与环境切换入口 — 高保真原型</h1>
+  <p>模拟 RdataStation 编辑器工作台。<b>模式切换 = 工具栏左侧</b>（通用 / SQL / 分析，点击切换）；工具栏按 gpui-kit 图标体系（<b>Lucide</b>，尺寸 14px = ICON_SIZE_SM）图标化；重点交互：<b>环境选择器</b> → 弹出环境菜单 → 切换；选择缺失环境可看运行入口降级；「运行」把脚本输出落到<b>结果区（复用结果集）</b>。数据为演示示例。</p>
+  <div class="hints">
+    <span class="hint">① 点 <b>Python · rds-env ▾</b> 打开环境菜单</span>
+    <span class="hint">② 切换环境 → 旧结果标 <b>stale</b></span>
+    <span class="hint">③ 选「cargo script 未安装」→ 运行按钮<b>不亮</b></span>
+    <span class="hint">④ 点「管理环境…」看环境配置表</span>
+  </div>
+</div>
+
+<!-- ===== 模拟窗口 ===== -->
+<div class="app">
+  <div class="titlebar">
+    <div class="win-dots"><i></i><i></i><i></i></div>
+    <div class="tabs">
+      <div class="tab active"><span class="lang-badge">py</span>analyze.py<span class="dot"></span><span class="x" title="关闭"><svg class="ico xs stroke" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+      <div class="tab"><span class="lang-badge">md</span>notes.md<span class="x" title="关闭"><svg class="ico xs stroke" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+    </div>
+    <div class="plus" id="tabPlus" title="新建标签"><svg class="ico stroke" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg></div>
+  </div>
+
+  <div class="toolbar">
+    <!-- 模式切换：工具栏左侧（通用 / SQL / 分析，点击切换） -->
+    <div class="tool-btn" id="modeSlot" title="模式切换：通用 / SQL / 分析（点击切换）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 8h8"/><path d="M8 12h5"/></svg>
+      <span>通用</span>
+      <svg class="ico stroke" style="width:12px;height:12px;color:var(--muted)" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="tool-sep"></div>
+    <button class="tool-btn primary-btn" id="runBtn" title="运行当前脚本（缺解释器则不亮）">
+      <svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg><span class="txt">运行</span>
+    </button>
+    <div class="tool-btn icon-only" id="runSelBtn" title="运行选区（演示中）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 8 6 4-6 4Z"/></svg>
+    </div>
+    <div class="tool-sep"></div>
+    <!-- 环境切换入口 -->
+    <div class="env-select" id="envSelect" title="切换脚本执行环境">
+      <span class="e-icon" id="envIcon">py</span>
+      <span class="e-name" id="envName">rds-env</span>
+      <span class="e-ver" id="envVer">3.12.4</span>
+      <svg class="ico stroke caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="tool-spacer"></div>
+    <div class="tool-btn icon-only find-btn" id="findBtn" title="查找：Ctrl+F（内核能力）">
+      <svg class="ico stroke" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    </div>
+    <div class="tool-btn" id="readonlyBadge" title="只读档位：当前文档可编辑">
+      <svg class="ico stroke" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="txt">只读</span>
+    </div>
+  </div>
+
+  <div class="editor">
+    <div class="gutter" id="gutter"></div>
+    <div class="code" id="codeArea"></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="result-pane">
+    <div class="result-tabs">
+      <div class="rtab active" id="resultTab"><span>结果 1</span><span class="ch" id="resultCh">本地脚本·python</span></div>
+    </div>
+    <div class="stale-note" id="staleNote">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+      <span id="staleText">环境已切换，此结果来自旧环境，已失效</span>
+    </div>
+    <div class="result-toolbar">
+      <span class="meta">行数 <b id="rowCount">—</b></span>
+      <span class="meta">耗时 <b id="elapsed">—</b></span>
+      <span class="meta">来源 <b id="srcLabel">未执行</b></span>
+      <span class="spacer"></span>
+      <span class="rt-btn" id="filterBtn">
+        <svg class="ico stroke" viewBox="0 0 24 24"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg><span>筛选</span>
+      </span>
+      <span class="rt-btn" id="exportBtn">
+        <svg class="ico stroke" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg><span>导出</span>
+      </span>
+      <span class="rt-btn icon-only" id="clearBtn" title="清空结果">
+        <svg class="ico stroke" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </span>
+    </div>
+    <div id="gridArea"></div>
+    <div class="result-status">
+      <span>第 1/1 页</span><span>共 <b id="totalRows">—</b> 行</span><span>已选 0 行</span>
+      <span style="margin-left:auto" id="envStatusLabel">环境：—</span>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <!-- 左侧：环境 / 文件类型 / LSP -->
+    <span class="seg" title="当前脚本执行环境">
+      <span class="langdot" id="sbEnvDot">py</span><span id="sbEnvName">rds-env</span>
+    </span>
+    <span class="seg" title="文件类型">
+      <span class="ft-badge" id="sbFileType">py</span><span id="sbFileTypeName">Python</span>
+    </span>
+    <span class="seg" title="语言服务状态"><span class="lsp-dot"></span><b class="lbl">LSP</b><span>就绪</span></span>
+    <!-- 右侧：微标 + 数据（编辑面板通用，VSCode 式英文微标） -->
+    <span class="right">
+      <span class="seg" title="定位"><b class="lbl">Ln</b><span id="sbLn">3</span><span style="color:rgba(255,255,255,.4)">,</span><b class="lbl">Col</b><span id="sbCol">28</span></span>
+      <span class="seg" title="选中字符"><b class="lbl">Ch</b><span>0</span></span>
+      <span class="seg" title="选中行"><b class="lbl">Row</b><span>1</span></span>
+      <span class="seg sb-click" id="encItem" title="点击重设编码（VSCode 式）"><span id="encVal">UTF-8</span></span>
+      <span class="seg sb-click" id="lfItem" title="点击重设换行（VSCode 式）"><span id="lfVal">LF</span></span>
+      <span class="seg sb-click" id="indentItem" title="点击重设缩进（内核原生支持）"><span id="indentVal">Spaces: 4</span></span>
+      <span class="seg" title="文件大小"><span>1.2 KB</span></span>
+      <span class="seg" title="文档有未保存更改"><span class="lbl">脏</span><span class="dirty-dot">●</span></span>
+      <!-- 行编辑 / 列编辑切换（编辑内容模式，DBeaver/VSCode 式） -->
+      <span class="seg mode-toggle" id="rowColToggle" title="编辑模式：行编辑 / 列编辑（块选择）">
+        <span class="opt on" data-m="row">行</span><span class="opt" data-m="col">列</span>
+      </span>
+    </span>
+  </div>
+</div>
+
+<!-- ===== 环境 popover ===== -->
+<div class="env-popover" id="envPopover">
+  <div class="env-search"><input type="text" id="envSearch" placeholder="搜索环境…"></div>
+  <div class="env-list" id="envList"></div>
+  <div class="env-foot">
+    <button id="manageBtn">
+      <svg class="ico stroke" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>管理环境…</span>
+    </button>
+  </div>
+</div>
+
+<!-- ===== 状态栏小菜单（编码 / 换行 / 缩进） ===== -->
+<div class="seg-menu" id="segMenu">
+  <div class="m-title" id="segMenuTitle"></div>
+  <div id="segMenuItems"></div>
+</div>
+
+<!-- ===== 管理环境 modal ===== -->
+<div class="modal-mask" id="modalMask">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>环境管理</h2>
+      <span class="close" id="modalClose"><svg class="ico stroke" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot">
+      <button class="btn-plain" id="modalCancel">关闭</button>
+      <button class="btn-brand" id="modalAdd">添加环境</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ===== 图例 ===== -->
+<div class="legend">
+  <span class="lg-title">设计要点</span>
+  <span>图标体系：<b>Lucide</b>（gpui-kit IconName 同源），工具栏 14px、结果栏 12px；文字随语义保留（模式名 / 环境名不纯图标化）</span>
+  <span>环境选择器：<b>工具栏常驻</b>（与 SQL 模式连接选择器同位），显示当前解释器 + 版本</span>
+  <span>切换语义：环境 = 变量空间 → 旧结果 <b style="color:var(--warn)">stale</b></span>
+  <span>降级：缺解释器 → 运行 <b>不亮</b> + 状态栏说明</span>
+  <span>输出：表格/结构化，<b>复用结果集</b>（§2.4）</span>
+  <span>状态栏：<b>编辑面板专属</b>（非软件全局状态栏）——左=环境/文件类型/LSP；右=<b>英文微标+数据</b>（Ln/Col/Ch/Row/UTF-8/LF/Spaces/大小），VSCode 式可点击重设</span>
+  <span>内核能力：缩进（TabSize）与<b>列编辑</b>（ColumnarPoint/多光标）<b style="color:var(--ok)">原生支持</b>；编码/换行重设 <b style="color:var(--warn)">需外层转换层</b>（内核只 Unicode/LF，菜单项已降级标注）</span>
+</div>
+
+<script>
+/* ===== 状态 ===== */
+var ENVIRONMENTS = [
+  {id:"rdsenv", lang:"py", group:"Python", name:"rds-env", ver:"3.12.4", path:"D:\\envs\\rds-env\\python.exe", ok:true},
+  {id:"base",   lang:"py", group:"Python", name:"base",     ver:"3.11.9", path:"D:\\miniconda\\envs\\base\\python.exe", ok:true},
+  {id:"syspy",  lang:"py", group:"Python", name:"系统 Python", ver:"3.12.1", path:"C:\\Python312\\python.exe", ok:true},
+  {id:"r431",   lang:"r",  group:"R",      name:"R 4.3.1",   ver:"4.3.1",  path:"C:\\Program Files\\R\\R-4.3.1\\bin\\Rscript.exe", ok:true},
+  {id:"rscript",lang:"rs", group:"Rust",   name:"rust-script", ver:"1.35.0", path:"D:\\tools\\rust-script\\rust-script.exe", ok:true},
+  {id:"cargos", lang:"rs", group:"Rust",   name:"cargo script", ver:"—",  path:"未安装（cargo install cargo-script）", ok:false}
+];
+var state = {
+  envId: "rdsenv",
+  running: false,
+  hasResult: false,
+  stale: false
+};
+var RUN_RESULT = {
+  rows: [
+    ["10023","1280.00","2026-09-02 14:21"],
+    ["10024","326.50","2026-09-02 15:08"],
+    ["10025","8475.10","2026-09-03 09:12"],
+    ["10026","56.00","2026-09-03 11:45"],
+    ["10027","12033.80","2026-09-04 08:03"]
+  ]
+};
+
+function curEnv(){ for(var i=0;i<ENVIRONMENTS.length;i++){ if(ENVIRONMENTS[i].id===state.envId) return ENVIRONMENTS[i]; } return ENVIRONMENTS[0]; }
+function findEnv(id){ for(var i=0;i<ENVIRONMENTS.length;i++){ if(ENVIRONMENTS[i].id===id) return ENVIRONMENTS[i]; } return null; }
+function byId(id){ return document.getElementById(id); }
+/* 状态栏设置项（微标+数据） */
+var encVal = "UTF-8", lfVal = "LF";
+var indentMode = { n:4, hard:false };
+var editMode = "row"; // 行编辑 | 列编辑（块选择）
+var ICO_PLAY = '<svg class="ico fill" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+var ICO_SPIN = '<svg class="ico stroke spin" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+
+/* ===== 编辑区代码（着色模拟） ===== */
+var SRC = [
+  '<span class="imp">import</span> duckdb',
+  '<span class="imp">import</span> pandas <span class="imp">as</span> pd',
+  '',
+  '<span class="cmt"># 本月订单汇总（DuckDB 内存分析）</span>',
+  'conn = duckdb.connect(<span class="str">":memory:"</span>)',
+  'df = conn.execute(<span class="str">"SELECT date_trunc(\'month\', created) AS m, sum(total) AS amt FROM orders GROUP BY 1 ORDER BY 1"</span>).fetch_df()',
+  '',
+  '<span class="fn">print</span>(df)',
+  '<span class="cmt"># 运行 ▸ 输出到下方结果区（复用结果集）</span>'
+].join("\n");
+function renderCode(){
+  var html = "";
+  var lines = SRC.split("\n");
+  for(var i=0;i<lines.length;i++){
+    var cur = i===2;
+    html += '<div class="'+(cur?'line-cur':'')+'">'+lines[i]+'</div>';
+  }
+  byId("codeArea").innerHTML = html;
+  var g = "";
+  for(var i=0;i<lines.length;i++){ g += '<div class="'+(i===2?'cur':'')+'">'+(i+1)+'</div>'; }
+  byId("gutter").innerHTML = g;
+}
+
+/* ===== 环境选择器 ===== */
+function renderSelector(){
+  var e = curEnv();
+  var el = byId("envSelect");
+  byId("envIcon").textContent = e.lang;
+  byId("envIcon").className = "e-icon "+e.lang;
+  byId("envName").textContent = e.name;
+  byId("envVer").textContent = e.ver;
+  el.classList.toggle("missing", !e.ok);
+  var flag = el.querySelector(".warn-flag");
+  if(e.ok){ if(flag) flag.remove(); }
+  else if(!flag){ var s=document.createElement("span"); s.className="warn-flag"; el.insertBefore(s, el.querySelector(".caret")); }
+  byId("sbEnvName").textContent = e.name;
+  byId("sbEnvDot").textContent = e.lang;
+  byId("sbEnvDot").className = "langdot "+(e.ok?e.lang:"missing");
+  byId("runBtn").disabled = !e.ok;
+  byId("runBtn").title = e.ok ? "运行当前脚本" : "环境缺失：运行入口不亮（诚实降级）";
+  if(!e.ok){ byId("runBtn").innerHTML = ICO_PLAY+'<span class="txt">无法运行</span>'; }
+  else { byId("runBtn").innerHTML = ICO_PLAY+'<span class="txt">运行</span>'; }
+}
+
+/* ===== 环境 popover ===== */
+function renderEnvList(filter){
+  var list = byId("envList");
+  var html = "";
+  var groups = ["Python","R","Rust"];
+  for(var g=0;g<groups.length;g++){
+    var grp = groups[g];
+    var has = false;
+    var items = "";
+    for(var i=0;i<ENVIRONMENTS.length;i++){
+      var e = ENVIRONMENTS[i];
+      if(e.group!==grp) continue;
+      if(filter && e.name.toLowerCase().indexOf(filter)<0 && e.ver.indexOf(filter)<0) continue;
+      has = true;
+      var st = e.ok ? (e.id===state.envId ? '<span class="st cur">当前</span>' : '<span class="st ok">可用</span>')
+                    : '<span class="st miss">缺失</span>';
+      items += '<div class="env-item'+(e.ok?"":" missing-row disabled")+'" data-id="'+e.id+'">'+
+        '<span class="e-icon '+e.lang+'">'+e.lang+'</span>'+
+        '<span class="info"><span class="name">'+e.name+'</span>'+
+        '<span class="path">'+e.path+'</span></span>'+st+'</div>';
+    }
+    if(has) html += '<div class="env-group">'+grp+'</div>'+items;
+  }
+  list.innerHTML = html || '<div style="padding:14px;color:#6E6E6E;font-size:12px">没有匹配的环境</div>';
+}
+
+/* ===== 结果区 ===== */
+function renderEmpty(){
+  byId("gridArea").innerHTML = '<div class="empty-state"><span class="t">执行后在此显示结果</span></div>';
+  byId("rowCount").textContent = "—";
+  byId("elapsed").textContent = "—";
+  byId("srcLabel").textContent = "未执行";
+  byId("totalRows").textContent = "—";
+  byId("envStatusLabel").textContent = "环境：—";
+}
+function renderGrid(){
+  var h = '<table class="grid"><colgroup><col style="width:46px"><col style="width:auto"><col style="width:auto"><col style="width:auto"></colgroup><thead><tr>'+
+    '<th class="rn">#</th><th>order_id <span class="sort"><svg class="ico xs stroke" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></span></th><th>total <span class="sort"><svg class="ico xs stroke" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span></th><th>created <span class="sort"><svg class="ico xs stroke" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span></th></tr></thead><tbody>';
+  for(var i=0;i<RUN_RESULT.rows.length;i++){
+    var r = RUN_RESULT.rows[i];
+    h += '<tr><td class="rn">'+(i+1)+'</td><td class="num">'+r[0]+'</td><td class="num">'+r[1]+'</td><td>'+r[2]+'</td></tr>';
+  }
+  h += '</tbody></table>';
+  byId("gridArea").innerHTML = '<div class="grid-wrap">'+h+'</div>';
+  byId("rowCount").textContent = "5";
+  byId("elapsed").textContent = "0.42s";
+  byId("srcLabel").textContent = "本地脚本·python";
+  byId("totalRows").textContent = "5";
+  byId("envStatusLabel").textContent = "环境："+curEnv().name;
+}
+function setStale(v, text){
+  state.stale = v;
+  byId("staleNote").classList.toggle("show", v);
+  if(text) byId("staleText").textContent = text;
+  byId("resultCh").classList.toggle("stale", v);
+  byId("resultCh").textContent = v ? "本地脚本·stale" : "本地脚本·python";
+}
+
+/* ===== 运行 ===== */
+function runScript(){
+  var e = curEnv();
+  if(!e.ok){ toast("环境缺失，无法运行：请先切换可用环境"); return; }
+  if(state.running) return;
+  state.running = true;
+  byId("runBtn").innerHTML = ICO_SPIN+'<span class="txt">运行中…</span>';
+  byId("runBtn").disabled = true;
+  setTimeout(function(){
+    state.running = false;
+    state.hasResult = true;
+    setStale(false);
+    renderSelector();
+    renderGrid();
+    toast("已运行（"+e.name+" "+e.ver+"）");
+  }, 900);
+}
+
+/* ===== toast ===== */
+var toastTimer;
+function toast(msg){
+  var t = byId("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 2200);
+}
+
+/* ===== modal ===== */
+function openModal(){
+  byId("modalMask").classList.add("open");
+  var h = "";
+  for(var i=0;i<ENVIRONMENTS.length;i++){
+    var e = ENVIRONMENTS[i];
+    h += '<div class="menv-row"><span class="e-icon '+e.lang+'" style="background:'+(e.lang==="py"?"#3776AB":e.lang==="r"?"#2266B1":"#CE422B")+'">'+e.lang+'</span>'+
+      '<span class="info"><span class="name">'+e.name+' <span style="color:#757575;font-size:11px">'+e.ver+'</span></span>'+
+      '<span class="sub">'+e.path+'</span></span>'+
+      '<span class="actions"><button class="mini '+(e.id===state.envId?"primary":"")+'" onclick="setDefaultEnv(\''+e.id+'\')">'+(e.id===state.envId?"默认":"设为默认")+'</button>'+
+      '<button class="mini" onclick="toast(\'编辑环境（演示中）\')">编辑</button>'+
+      '<button class="mini" onclick="toast(\'删除环境（演示中）\')">删除</button></span></div>';
+  }
+  byId("modalBody").innerHTML = h;
+}
+function setDefaultEnv(id){
+  state.envId = id;
+  renderSelector();
+  renderEnvList("");
+  toast("已切换默认环境："+findEnv(id).name);
+}
+
+/* ===== 事件 ===== */
+byId("envSelect").addEventListener("click", function(e){
+  e.stopPropagation();
+  var pop = byId("envPopover");
+  var open = pop.classList.toggle("open");
+  if(open){ renderEnvList(""); byId("envSearch").value=""; byId("envSearch").focus(); positionPopover(); }
+});
+document.addEventListener("click", function(e){
+  var pop = byId("envPopover");
+  if(!pop.classList.contains("open")) return;
+  if(!pop.contains(e.target) && e.target.id!=="envSelect") pop.classList.remove("open");
+});
+byId("envList").addEventListener("click", function(e){
+  var item = e.target.closest(".env-item");
+  if(!item) return;
+  var id = item.getAttribute("data-id");
+  var env = findEnv(id);
+  if(!env.ok){ toast("环境缺失："+env.name+" — 运行入口不亮"); return; }
+  var prev = curEnv();
+  setDefaultEnv(id);
+  if(state.hasResult && prev.id!==id){
+    setStale(true, "环境已切换（"+prev.name+" → "+env.name+"），此结果来自旧环境，已失效");
+  }
+  byId("envPopover").classList.remove("open");
+});
+byId("envSearch").addEventListener("input", function(){ renderEnvList(this.value.trim().toLowerCase()); });
+byId("runBtn").addEventListener("click", runScript);
+byId("manageBtn").addEventListener("click", function(){ byId("envPopover").classList.remove("open"); openModal(); });
+byId("modalClose").addEventListener("click", function(){ byId("modalMask").classList.remove("open"); });
+byId("modalCancel").addEventListener("click", function(){ byId("modalMask").classList.remove("open"); });
+byId("modalAdd").addEventListener("click", function(){ toast("添加环境（演示中：原型展示交互，不做真实添加）"); });
+byId("modalMask").addEventListener("click", function(e){ if(e.target===this) this.classList.remove("open"); });
+byId("tabPlus").addEventListener("click", function(){ toast("新建标签（演示中）"); });
+byId("readonlyBadge").addEventListener("click", function(){ toast("只读档位：当前文档可编辑（演示中）"); });
+byId("clearBtn").addEventListener("click", function(){ state.hasResult=false; setStale(false); renderEmpty(); toast("结果已清空"); });
+byId("modeSlot").addEventListener("click", function(){ toast("模式切换：通用 / SQL / 分析（工具栏左侧入口，演示中）"); });
+byId("runSelBtn").addEventListener("click", function(){ toast("运行选区（演示中：原型只演示整文件运行）"); });
+byId("findBtn").addEventListener("click", function(){ toast("查找：Ctrl+F 内核能力（演示中）"); });
+byId("filterBtn").addEventListener("click", function(){ toast("本地筛选：300ms 防抖不重查（演示中）"); });
+byId("exportBtn").addEventListener("click", function(){ toast("导出：CSV / JSON / Parquet（演示中）"); });
+
+/* ===== 状态栏设置项：编码 / 换行 / 缩进（VSCode 式点击重设） ===== */
+var MENU_META = {
+  enc:    { title:"编码", anchor:"encItem" },
+  lf:     { title:"换行", anchor:"lfItem" },
+  indent: { title:"缩进", anchor:"indentItem" }
+};
+var segMenuOpen = null;
+function segMenuItems(kind){
+  if(kind==="enc"){
+    var opts = [["UTF-8", false],["GBK", true],["GB18030", true],["UTF-16 LE", true]];
+    return opts.map(function(o){
+      var on = o[0]===encVal;
+      return '<div class="m-item'+(on?" on":"")+(o[1]?" disabled":"")+'" data-v="'+o[0]+'" data-ok="'+(!o[1])+'">'+
+        '<span>'+o[0]+(o[1]?'<span class="m-note">内核不支持 · 需外层转换层</span>':'')+'</span>'+
+        (on?'<span class="m-check">✓</span>':'')+'</div>';
+    }).join("");
+  }
+  if(kind==="lf"){
+    var opts = [["LF", false],["CRLF", true],["CR", true]];
+    return opts.map(function(o){
+      var on = o[0]===lfVal;
+      return '<div class="m-item'+(on?" on":"")+(o[1]?" disabled":"")+'" data-v="'+o[0]+'" data-ok="'+(!o[1])+'">'+
+        '<span>'+o[0]+(o[1]?'<span class="m-note">内核不支持 · 需外层转换层</span>':'')+'</span>'+
+        (on?'<span class="m-check">✓</span>':'')+'</div>';
+    }).join("");
+  }
+  var opts = [["Spaces: 2",{n:2,hard:false}],["Spaces: 4",{n:4,hard:false}],["Spaces: 8",{n:8,hard:false}],["Tab",{n:4,hard:true}]];
+  var cur = indentMode;
+  return opts.map(function(o){
+    var on = o[1].n===cur.n && o[1].hard===cur.hard;
+    var label = o[0];
+    return '<div class="m-item'+(on?" on":"")+'" data-v="'+o[0]+'" data-n="'+o[1].n+'" data-hard="'+o[1].hard+'" data-ok="true">'+
+      '<span>'+label+(o[1].hard?'<span class="m-note">硬制表符 \\t</span>':'')+'</span>'+
+      (on?'<span class="m-check">✓</span>':'')+'</div>';
+  }).join("");
+}
+function openSegMenu(kind){
+  var meta = MENU_META[kind];
+  byId("segMenuTitle").textContent = meta.title;
+  byId("segMenuItems").innerHTML = segMenuItems(kind);
+  segMenuOpen = kind;
+  var m = byId("segMenu");
+  m.classList.add("open");
+  var a = byId(meta.anchor).getBoundingClientRect();
+  var left = a.left;
+  if(left + 218 > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 226);
+  m.style.left = left + "px";
+  m.style.top = (a.top - 8 - m.offsetHeight) + "px"; // 状态栏上方弹出
+}
+byId("encItem").addEventListener("click", function(e){ e.stopPropagation(); openSegMenu("enc"); });
+byId("lfItem").addEventListener("click", function(e){ e.stopPropagation(); openSegMenu("lf"); });
+byId("indentItem").addEventListener("click", function(e){ e.stopPropagation(); openSegMenu("indent"); });
+byId("segMenuItems").addEventListener("click", function(e){
+  var item = e.target.closest(".m-item");
+  if(!item) return;
+  var kind = segMenuOpen;
+  if(item.getAttribute("data-ok")==="false"){
+    toast(item.getAttribute("data-v")+"：gpui-kit 内核不支持，需外层转换层（加载/保存边界）");
+    return;
+  }
+  if(kind==="indent"){
+    indentMode.n = parseInt(item.getAttribute("data-n"),10);
+    indentMode.hard = item.getAttribute("data-hard")==="true";
+    byId("indentVal").textContent = indentMode.hard ? "Tab" : "Spaces: "+indentMode.n;
+    toast("缩进已切换："+byId("indentVal").textContent+"（内核 TabSize 原生支持）");
+  }
+  if(kind==="enc"){ encVal = item.getAttribute("data-v"); byId("encVal").textContent = encVal; }
+  if(kind==="lf"){ lfVal = item.getAttribute("data-v"); byId("lfVal").textContent = lfVal; }
+  byId("segMenu").classList.remove("open");
+});
+document.addEventListener("click", function(e){
+  var m = byId("segMenu");
+  if(m.classList.contains("open") && !m.contains(e.target) &&
+     !e.target.closest(".sb-click")) m.classList.remove("open");
+});
+
+/* ===== 行编辑 / 列编辑切换（编辑内容模式，内核 ColumnarPoint 原生支持） ===== */
+byId("rowColToggle").addEventListener("click", function(e){
+  var opt = e.target.closest(".opt");
+  if(!opt) return;
+  var m = opt.getAttribute("data-m");
+  editMode = m;
+  var all = byId("rowColToggle").querySelectorAll(".opt");
+  for(var i=0;i<all.length;i++) all[i].classList.toggle("on", all[i]===opt);
+  toast(m==="row" ? "行编辑模式：逐行输入" : "列编辑模式已开启：Alt+拖拽 块选择（多光标，内核原生）");
+});
+
+function positionPopover(){
+  var sel = byId("envSelect");
+  var r = sel.getBoundingClientRect();
+  var pop = byId("envPopover");
+  var left = r.left;
+  if(left + 360 > window.innerWidth - 8) left = Math.max(8, window.innerWidth - 368);
+  pop.style.left = left + "px";
+  pop.style.top = (r.bottom + 6) + "px";
+}
+window.addEventListener("resize", function(){ if(byId("envPopover").classList.contains("open")) positionPopover(); });
+
+/* ===== 初始化 ===== */
+renderCode();
+renderSelector();
+renderEnvList("");
+renderEmpty();
+</script>
+</body>
+</html>
