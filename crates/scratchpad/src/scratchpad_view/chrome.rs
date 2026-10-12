@@ -2,13 +2,22 @@
 //! 这是 `render_scratchpad` 的落点�?��?�草稿�?�?��的主视图（虚拟列表的装配也在这里�?//! 行本�?�� `rows.rs`）�??
 use super::*;
 
-use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::collapsible::Collapsible;
-use gpui_kit::component::button::DropdownButton;
+use gpui_kit::component::button::Toggle;
+use gpui_kit::component::Icon;
+use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::label::Label;
-// `Size` �?gpui 泛型 `Size<Pixels>` 冲突 �?�?�� `KitSize`（gpui-component 枚举）�
-use gpui_kit::component::Size as KitSize;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
+
+/// 拖拽期间的浮层视图（gpui `on_drag` 要求 W: Render；内容透明，仅承接拖拽会话）。
+pub(super) struct ToolbarDragOverlay;
+impl gpui_kit::Render for ToolbarDragOverlay {
+    fn render(&mut self, _: &mut gpui_kit::Window, _: &mut gpui_kit::Context<Self>) -> impl gpui_kit::IntoElement {
+        gpui_kit::div().w_full().h_full()
+    }
+}
+
 
 impl ScratchpadView {
     /// 草�?箱面板（M5）：�?= `{project}/scratchpad/`�?    ///
@@ -102,7 +111,7 @@ impl ScratchpadView {
                 .pb_1();
             if let Some(input) = filter_input {
                 row = row
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+                    .child(div().flex_1().min_w_0().child(Input::new(&input).bordered(false).focus_bordered(true).w_full()))
                     .child(
                         div()
                             .id("sp-file-search-run")
@@ -200,13 +209,43 @@ impl ScratchpadView {
         let body = self.render_scratchpad_refs_and_trash(cx);
 
         // 引用 / 回收站限高可滚，保证草�?树�?终有�?��高度�
+        // 拖拽分区 handle（2026-10-12 用户点名：草稿 | 引用+回收站 高度可拖拽调整，进程内）。
+        let group_max_h = self.scratchpad.borrow().group_max_h;
+        let split_handle = {
+            let entity = entity.clone();
+            div()
+                .id("sp-split-handle")
+                .w_full()
+                .h(rems(0.375))
+                .flex_none()
+                .cursor_row_resize()
+                .hover(move |s| s.bg(hover_bg))
+                .on_drag(0u8, |_, _, _, cx| cx.new(|_| ToolbarDragOverlay))
+                .on_drag_move::<u8>(move |event, _, app| {
+                    let delta_px = event.event.position.y.as_f32() - event.bounds.top().as_f32();
+                    if delta_px.abs() > 1.0 {
+                        entity.update(app, |this, cx| {
+                            let mut v = this.scratchpad.borrow_mut();
+                            v.group_max_h = (v.group_max_h + delta_px / 16.0).clamp(2.0, 18.0);
+                            drop(v);
+                            cx.notify();
+                        });
+                    }
+                })
+        };
         panel = panel.child(
             div()
                 .v_flex()
                 .w_full()
-                .max_h(rems(ui::SCRATCHPAD_GROUP_MAX_HEIGHT))
-                .overflow_y_scrollbar()
-                .child(body),
+                .child(split_handle)
+                .child(
+                    div()
+                        .v_flex()
+                        .w_full()
+                        .max_h(rems(group_max_h))
+                        .overflow_y_scrollbar()
+                        .child(body),
+                ),
         );
 
         // �?�? 撤销�?�?�?
@@ -247,21 +286,80 @@ impl ScratchpadView {
         }
 
         // �?�? 底部状�??�?�?
+        // 底部状态行（2026-10-12 图标化：文件/文件夹/引用/回收站 + 排序方向，无中文）。
         panel = panel.child(
             div()
                 .w_full()
                 .px_2()
                 .py_1()
+                .h_flex()
+                .items_center()
+                .gap_1()
                 .text_xs()
                 .text_color(muted)
-                .child(format!(
-                    "{}{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
-                    if loading { "加载中… · " } else { "" },
-                    external_refs.len(),
-                    trash.len(),
-                    scratchpad_sort_label(sort, sort_desc)
-                )),
+                .child(if loading {
+                    Icon::empty()
+                        .text_color(fg)
+                        .path("icons/loader.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none()
+                } else {
+                    Icon::empty()
+                        .text_color(fg)
+                        .path("icons/file.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none()
+                })
+                .child(file_count.to_string())
+                .child(
+                    Icon::empty()
+                        .text_color(fg)
+                        .path("icons/folder.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none(),
+                )
+                .child(folder_count.to_string())
+                .child(
+                    Icon::empty()
+                        .text_color(fg)
+                        .path("icons/link.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none(),
+                )
+                .child(external_refs.len().to_string())
+                .child(
+                    Icon::empty()
+                        .text_color(fg)
+                        .path("icons/delete.svg")
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none(),
+                )
+                .child(trash.len().to_string())
+                .child(div().flex_1())
+                .child(
+                    Icon::empty()
+                        .text_color(fg)
+                        .path(if sort_desc {
+                            "icons/sort-descending.svg"
+                        } else {
+                            "icons/sort-ascending.svg"
+                        })
+                        .size(rems(ui::ICON_SIZE_MD))
+                        .flex_none(),
+                )
+                .child(match sort {
+                    ScratchpadSort::Name => div().flex_none().text_xs().child("名称"),
+                    ScratchpadSort::Size => div().flex_none().text_xs().child("大小"),
+                    ScratchpadSort::Modified => div().flex_none().text_xs().child("时间"),
+                }),
         );
+
+        // 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：打开时渲染 Dialog。
+        let ref_dialog_el = if self.scratchpad.borrow().ref_dialog_open {
+            Some(self.render_ref_dialog(window, cx))
+        } else {
+            None
+        };
 
         panel
             .key_context("scratchpad")
@@ -401,8 +499,10 @@ impl ScratchpadView {
                     });
                 }
             })
+            .when_some(ref_dialog_el, |this, el| this.child(el))
     }
 }
+
 
 impl ScratchpadView {
     /// 分组标�?行（「草�?(N)」�?��?部引�?(N)」共�?��：紧凑�?�?+ 弱文�?+ 计数�
@@ -435,13 +535,13 @@ impl ScratchpadView {
         let info = theme.colors.info;
 
         let entity = cx.entity();
-        let view_handle = self.scratchpad.clone();
-        let (external_refs, trash, trash_expanded, edit) = {
+        let (external_refs, trash, trash_expanded, refs_expanded, edit) = {
             let view = self.scratchpad.borrow();
             (
                 view.external_refs.clone(),
                 view.trash.clone(),
                 view.trash_expanded,
+                view.refs_expanded,
                 view.edit.clone(),
             )
         };
@@ -588,7 +688,13 @@ impl ScratchpadView {
                         ),
                 );
             }
-        // 引用区块 = 常驻 Accordion（原�?415-424：acc-item「引用�?? badge；空列表也显示头）�?
+        // 引用区块 = Collapsible（2026-10-12 与草稿区统一：标题 chevron + badge + 点击折叠）
+        let hdr_add_ref = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.open_ref_dialog(window, cx));
+            }
+        };
         let ref_count = external_refs.len();
         let ref_badge = div()
             .flex_none()
@@ -598,26 +704,55 @@ impl ScratchpadView {
             .text_color(muted)
             .bg(hover_bg)
             .child(ref_count.to_string());
+        let toggle_refs = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    let mut v = this.scratchpad.borrow_mut();
+                    v.refs_expanded = !v.refs_expanded;
+                    cx.notify();
+                });
+            }
+        };
+        let ref_head = div()
+            .debug_selector(|| "sp-refs-head".into())
+            .id("sp-refs-head")
+            .group("sp-refs-head")
+            .cursor_pointer()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .child(tree::disclosure_slot().child(tree::disclosure_icon(refs_expanded, muted)))
+            .child("引用")
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_none()
+                    .invisible()
+                    .group_hover("sp-refs-head", |s| s.visible())
+                    .h_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        Button::new("sp-refs-head-add")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .tooltip("添加外部引用（软连接）")
+                            .on_click(hdr_add_ref),
+                    ),
+            )
+            .child(ref_badge)
+            .on_click(toggle_refs);
         body = body.child(
-            Accordion::new("sp-acc-refs")
-                .multiple(false)
-                .bordered(true)
-                .with_size(KitSize::XSmall)
-                .item(move |item| {
-                    item.open(true)
-                        .title(
-                            div()
-                                .debug_selector(|| "sp-refs-head".into())
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child("引用")
-                                .child(div().flex_1())
-                                .child(ref_badge),
-                        )
-                        .content_style(StyleRefinement::default().px_1().pb_1())
-                        .child(ref_rows)
-                }),
+            div()
+                .v_flex()
+                .w_full()
+                .child(ref_head)
+                .child(Collapsible::new().open(refs_expanded).content(
+                    div().w_full().px_1().pb_1().child(ref_rows),
+                )),
         );
 
         // �?�? 回收站（原型 425-432 acc-item「垃圾�?」；2026-10-11 对齐：可折叠 Accordion +
@@ -674,6 +809,8 @@ impl ScratchpadView {
                             .cursor_pointer()
                             .text_xs()
                             .text_color(primary)
+                            .invisible()
+                            .group_hover("sp-trash-head", |s| s.visible())
                             .child("清空")
                             .on_click(move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
                                 entity.update(app, |this, cx| this.empty_scratchpad_trash(cx));
@@ -689,42 +826,45 @@ impl ScratchpadView {
                 .text_color(muted)
                 .bg(hover_bg)
                 .child(trash.len().to_string());
+            let toggle_trash = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        let mut v = this.scratchpad.borrow_mut();
+                        v.trash_expanded = !v.trash_expanded;
+                        cx.notify();
+                    });
+                }
+            };
+            let trash_head = div()
+                .debug_selector(|| "sp-trash-head".into())
+                .id("sp-trash-head")
+                .group("sp-trash-head")
+                .cursor_pointer()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .child(tree::disclosure_slot().child(tree::disclosure_icon(trash_expanded, muted)))
+                .child("回收站")
+                .child(div().flex_1())
+                .child(trash_badge)
+                .when_some(empty_btn, |this, btn| this.child(btn))
+                .on_click(toggle_trash);
             body = body.child(
-                Accordion::new("sp-acc-trash")
-                    .multiple(false)
-                    .bordered(true)
-                    .with_size(KitSize::XSmall)
-                    .item(move |item| {
-                        item.open(trash_expanded)
-                            .title(
-                                div()
-                                    .debug_selector(|| "sp-trash-head".into())
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child("回收站")
-                                    .child(div().flex_1())
-                                    .child(trash_badge)
-                                    .when_some(empty_btn, |this, btn| this.child(btn)),
-                            )
-                            .content_style(StyleRefinement::default().px_1().pb_1())
-                            .child(trash_rows)
-                    })
-                    // 折叠状�?�回�?`trash_expanded`（保持面板状态与组件�?致；�
-                    // 折叠状态回写 trash_expanded（保持面板状态与组件一致；单 item 索引 0）。
-                    .on_toggle_click({
-                        let view = view_handle.clone();
-                        let entity = entity.clone();
-                        move |open: &[usize], _: &mut gpui_kit::Window, app: &mut App| {
-                            view.borrow_mut().trash_expanded = open.contains(&0);
-                            entity.update(app, |_, cx| cx.notify());
-                        }
-                    }),
+                div()
+                    .v_flex()
+                    .w_full()
+                    .child(trash_head)
+                    .child(Collapsible::new().open(trash_expanded).content(
+                        div().w_full().px_1().pb_1().child(trash_rows),
+                    )),
             );
         }
         body
     }
 }
+
 
 impl ScratchpadView {
     /// 面板头与工具栏：新建 / 新建文件�?/ 导入 / 引用 / 排序 / 刷新 + 选中时的�?��板�?�?    /// 以及 C-4 的冲突条（同�?份草稿在编辑器里有未保存�?��、�?盘上又�?外部改了）�??    ///
@@ -807,36 +947,15 @@ impl ScratchpadView {
             let entity_template = entity.clone();
             move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                 let entity = entity_template.clone();
-                // 引用 = �??�?��、不复制，因�?*文件或目�?*均可（区�?��导入）�?
-                let receiver = app.prompt_for_paths(PathPromptOptions {
-                    files: true,
-                    directories: true,
-                    multiple: false,
-                    prompt: Some("选择要引用的文件或目录".into()),
-                });
-                window
-                    .spawn(app, async move |cx| {
-                        if let Ok(Ok(Some(paths))) = receiver.await {
-                            if let Some(path) = paths.into_iter().next() {
-                                let _ = cx.update(|window, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.start_scratchpad_edit(
-                                            ScratchpadEdit::NewReference { path },
-                                            window,
-                                            cx,
-                                        )
-                                    });
-                                });
-                            }
-                        }
-                    })
-                    .detach();
+                // 2026-10-12 对齐原型「弹窗输入路径+别名」：改弹应用内 Dialog 输入。
+                entity.update(app, |this, cx| this.open_ref_dialog(window, cx));
             }
         };
 
         // K9：工具栏图标按钮由自�?div 换成 gpui-kit `Button`（ghost 变体透明�?+
         // hover 出背�?��与原 24×24 �?��样式同尺寸；`small` = 24px �?`w_6 h_6` 对齐）�?
         let tool_btn = |id: &'static str,
+                        tip: &'static str,
                         glyph: &'static str,
                         handler: Box<
             dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
@@ -845,10 +964,12 @@ impl ScratchpadView {
                 .ghost()
                 .small()
                 .label(glyph)
+                .tooltip(tip)
                 .on_click(move |ev, window, app| handler(ev, window, app))
         };
         // 图标版（2026-10-11 对齐）：内�?搜索入口与普通�?图文件搜索�?统一�?        // `IconName::Search`（用户�?「两处图标建�?��分，没有就可用同�?图标」→ 统一 SVG 图标）�?
         let tool_icon_btn = |id: &'static str,
+                             tip: &'static str,
                              icon: IconName,
                              handler: Box<
             dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
@@ -857,6 +978,21 @@ impl ScratchpadView {
                 .ghost()
                 .small()
                 .icon(icon)
+                .tooltip(tip)
+                .on_click(move |ev, window, app| handler(ev, window, app))
+        };
+        // path 版图标按钮（assets 全量 SVG 不经 106 子集枚举）：如引用图标换用 link.svg。
+        let tool_path_btn = |id: &'static str,
+                             tip: &'static str,
+                             icon_path: &'static str,
+                             handler: Box<
+            dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+        >| {
+            Button::new(id)
+                .ghost()
+                .small()
+                .icon(Icon::empty().path(icon_path))
+                .tooltip(tip)
                 .on_click(move |ev, window, app| handler(ev, window, app))
         };
 
@@ -872,14 +1008,11 @@ impl ScratchpadView {
 // 菜单闭包需捕获外部 clone（闭包体内的 `clone()` 与 move 捕获整个 tb_cfg。
         // 与下方过滤判断的借用冲突）
         let menu_cfg = tb_cfg.clone();
-        let more_btn = DropdownButton::new("sp-more")
-            .button(
-                Button::new("sp-more-trigger")
-                    .ghost()
-                    .small()
-                    .label("更多设置")
-                    .tooltip("更多设置（显示/隐藏工具栏按钮 + 左/右位置）"),
-            )
+        let more_btn = Button::new("sp-more-trigger")
+            .ghost()
+            .small()
+            .icon(Icon::empty().path("icons/ellipsis-vertical.svg"))
+            .tooltip("更多设置（显示/隐藏/左右位置/拖拽排序）")
             .dropdown_menu(move |menu, _, _| {
                 let entity = more_entity.clone();
                 let cfg = menu_cfg.clone();
@@ -900,15 +1033,45 @@ impl ScratchpadView {
                         let entity = entity.clone();
                         let key = key;
                         let cur_side = cur_side;
-                        let side_btn = |target: &'static str, active: bool| {
+                        let checked = checked;
+                        let key_icon = match key {
+                            ToolbarButtonKey::Search => Icon::new(IconName::Search),
+                            ToolbarButtonKey::NewFile => Icon::new(IconName::Plus),
+                            ToolbarButtonKey::NewFolder => Icon::new(IconName::Folder),
+                            ToolbarButtonKey::Reference => Icon::empty().path("icons/link.svg"),
+                            ToolbarButtonKey::Import => Icon::new(IconName::Inbox),
+                            ToolbarButtonKey::Sort => Icon::empty().path("icons/sort-ascending.svg"),
+                            ToolbarButtonKey::Refresh => Icon::new(IconName::RefreshCw),
+                        }
+                        .size(rems(1.));
+                        // 可见：眼睛图标（eye=显示 / eye-off=隐藏），点击切换。
+                        let eye_btn = {
                             let entity = entity.clone();
                             let key = key;
-                            let target = target;
-                            Button::new(format!("sp-side-{target}-{}", key.as_str()))
-                                .ghost()
-                                .small()
-                                .label(target)
-                                .toggled(active)
+                            div()
+                                .id(format!("sp-eye-{}", key.as_str()))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .w(rems(1.5))
+                                .h(rems(1.5))
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .child(
+                                    Icon::empty()
+                                        .path(if checked { "icons/eye.svg" } else { "icons/eye-off.svg" })
+                                        .size(rems(1.)),
+                                )
+                                .tooltip(move |window, cx| {
+                                    Tooltip::element(move |_, _| {
+                                        div().text_xs().child(if checked {
+                                            "隐藏该按钮"
+                                        } else {
+                                            "显示该按钮"
+                                        })
+                                    })
+                                    .build(window, cx)
+                                })
                                 .on_click(move |_, _, app| {
                                     app.stop_propagation();
                                     entity.update(app, |this, cx| {
@@ -917,6 +1080,48 @@ impl ScratchpadView {
                                             ToolbarButtonCfg {
                                                 visible: true,
                                                 side: key.default_side_text().to_string(),
+                                                order: -1,
+                                                ..Default::default()
+                                            }
+                                        });
+                                        cfg.visible = !cfg.visible;
+                                        drop(v);
+                                        this.persist_toolbar_cfg(cx);
+                                        cx.notify();
+                                    });
+                                })
+                        };
+                        // 左右：Toggle 滑动开关（panel-left / panel-right），当前侧 checked。
+                        let side_toggle = |target: &'static str, active: bool| {
+                            let entity = entity.clone();
+                            let key = key;
+                            let target = target;
+                            Toggle::new(format!("sp-st-{target}-{}", key.as_str()))
+                                .icon(
+                                    Icon::empty()
+                                        .path(if target == "left" {
+                                            "icons/panel-left.svg"
+                                        } else {
+                                            "icons/panel-right.svg"
+                                        })
+                                        .size(rems(1.)),
+                                )
+                                .checked(active)
+                                .tooltip(if target == "left" {
+                                    "放在左侧"
+                                } else {
+                                    "放在右侧"
+                                })
+                                .on_click(move |_, _, app| {
+                                    app.stop_propagation();
+                                    entity.update(app, |this, cx| {
+                                        let mut v = this.scratchpad.borrow_mut();
+                                        let cfg = v.toolbar_cfg.entry(key).or_insert_with(|| {
+                                            ToolbarButtonCfg {
+                                                visible: true,
+                                                side: key.default_side_text().to_string(),
+                                                order: -1,
+                                                ..Default::default()
                                             }
                                         });
                                         cfg.side = target.to_string();
@@ -926,15 +1131,55 @@ impl ScratchpadView {
                                     });
                                 })
                         };
+                        // 顺序调整 ↑↓（2026-10-12 用户补充：工具栏按钮顺序可调；order 持久化）。
+                        // 拖拽把手：on_drag 开始（携带 ToolbarButtonKey），on_drag_move 按位移重排。
+                        let grip = {
+                            let entity = entity.clone();
+                            let key = key;
+                            div()
+                                .id(format!("sp-grip-{}", key.as_str()))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .w(rems(1.5))
+                                .h(rems(1.5))
+                                .rounded_sm()
+                                .cursor_grab()
+                                .child(
+                                    Icon::empty()
+                                        .path("icons/grip-vertical.svg")
+                                        .size(rems(1.)),
+                                )
+                                .tooltip(move |window, cx| {
+                                    Tooltip::element(move |_, _| div().text_xs().child("拖动调整顺序"))
+                                        .build(window, cx)
+                                })
+                                .on_drag(key, |_, _, _, cx| cx.new(|_| ToolbarDragOverlay))
+                                .on_drag_move::<ToolbarButtonKey>(move |event, _, app| {
+                                    let pos_y = event.event.position.y.as_f32();
+                                    let row_h = event.bounds.size.height.as_f32();
+                                    let row_top = event.bounds.top().as_f32() - row_h / 2.0;
+                                    let delta = ((pos_y - row_top) / row_h).round() as i32;
+                                    if delta != 0 {
+                                        entity.update(app, |this, cx| {
+                                            this.reorder_toolbar(key, delta, cx);
+                                            cx.notify();
+                                        });
+                                    }
+                                })
+                        };
                         div()
                             .h_flex()
                             .w_full()
                             .gap_1()
                             .items_center()
+                            .child(key_icon)
                             .child(Label::new(key.label()))
                             .child(div().flex_1())
-                            .child(side_btn("left", cur_side == "left"))
-                            .child(side_btn("right", cur_side == "right"))
+                            .child(eye_btn)
+                            .child(side_toggle("left", cur_side == "left"))
+                            .child(side_toggle("right", cur_side == "right"))
+                            .child(grip)
                     })
                     .checked(checked)
                     .on_click(move |_, _, app| {
@@ -944,6 +1189,8 @@ impl ScratchpadView {
                                 ToolbarButtonCfg {
                                     visible: true,
                                     side: key.default_side_text().to_string(),
+ order: -1,
+                                    ..Default::default()
                                 }
                             });
                             cfg.visible = !cfg.visible;
@@ -986,34 +1233,62 @@ impl ScratchpadView {
             .items_center()
             .gap_1()
             .debug_selector(|| "sp-toolbar-right".into());
+        let (hdr_sort, hdr_sort_desc) = {
+            let v = self.scratchpad.borrow();
+            (v.sort, v.sort_desc)
+        };
         let buttons = [
             (
                 ToolbarButtonKey::Search,
-                tool_icon_btn("sp-content-search", IconName::Search, Box::new(open_search_panel)),
+                tool_icon_btn("sp-content-search", "内容搜索（全文查找/替换）", IconName::Search, Box::new(open_search_panel)),
             ),
             (
                 ToolbarButtonKey::NewFile,
-                tool_btn("sp-new-file", "＋", Box::new(start_new_file)),
+                tool_icon_btn("sp-new-file", "新建文件", IconName::Plus, Box::new(start_new_file)),
             ),
             (
                 ToolbarButtonKey::NewFolder,
-                tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)),
+                tool_icon_btn("sp-new-folder", "新建目录", IconName::Folder, Box::new(start_new_folder)),
             ),
             (
                 ToolbarButtonKey::Import,
-                tool_btn("sp-import", "⬇", Box::new(import_files)),
+                tool_icon_btn("sp-import", "导入文件（复制到草稿箱）", IconName::Inbox, Box::new(import_files)),
             ),
             (
                 ToolbarButtonKey::Reference,
-                tool_btn("sp-add-ref", "🔗", Box::new(add_reference)),
+                tool_path_btn("sp-add-ref", "添加外部引用（软连接）", "icons/link.svg", Box::new(add_reference)),
             ),
-            (ToolbarButtonKey::Sort, tool_btn("sp-sort", "⇅", Box::new(cycle_sort))),
+            (
+                ToolbarButtonKey::Sort,
+                tool_icon_btn(
+                    "sp-sort",
+                    scratchpad_sort_label(hdr_sort, hdr_sort_desc),
+                    if hdr_sort_desc { IconName::SortDescending } else { IconName::SortAscending },
+                    Box::new(cycle_sort),
+                ),
+            ),
             (
                 ToolbarButtonKey::Refresh,
-                tool_btn("sp-refresh", "↻", Box::new(refresh)),
+                tool_icon_btn("sp-refresh", "刷新草稿箱", IconName::RefreshCw, Box::new(refresh)),
             ),
         ];
-        for (key, btn) in buttons {
+        let mut ordered: Vec<_> = buttons.into_iter().collect();
+        // 工具栏顺序（2026-10-12 用户补充：⋯ 菜单 ↑↓ 调整）：已调整（order ≥ 0）按 order 升序；
+        // 未调整（order = -1）按原型默认序（ALL 枚举序）。
+        let default_order = |k: ToolbarButtonKey| {
+            ToolbarButtonKey::ALL
+                .iter()
+                .position(|x| *x == k)
+                .unwrap_or(usize::MAX) as i32
+        };
+        ordered.sort_by_key(|(k, _)| {
+            tb_cfg
+                .get(k)
+                .map(|c| c.order)
+                .filter(|o| *o >= 0)
+                .unwrap_or_else(|| default_order(*k))
+        });
+        for (key, btn) in ordered {
             if !tb_visible(key) {
                 continue;
             }
@@ -1116,6 +1391,7 @@ impl ScratchpadView {
     }
 }
 
+
 impl ScratchpadView {
     /// 搜索行：文件名过�?/ 内�?搜索的模�?chip + 输入�?+ 内�?模式下的 `.*` �?`Aa`�?    ///
     /// 搜索状�?�在点击回调里改（`view.search_mode` 等），这里只做投影与渲染�?    /// 搜索态完整面板（2026-10-11 VSCode 对齐；由�??��?图工具栏 �?进入，← 返回�?出）�?    /// 顶部工具栏（�?/ 刷新 / 清除 / 新建编辑器查�?/ 展开折叠明细）→ 垂直表单
@@ -1185,31 +1461,36 @@ impl ScratchpadView {
             let entity = entity.clone();
             move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
                 let mut v = view.borrow_mut();
-                if v.search_expanded.is_empty() {
+                let has_hit_collapsed = v.search_expanded.iter().any(|k| k.starts_with("h:"));
+                if !has_hit_collapsed {
                     // 全部收起：按当前结果收集�?�� / 文件 key�
+                    // 只收集命中明细键（h:{file}#{line}），目录/文件行折叠状态不受影响（2026-10-12）。
                     let mut keys: Vec<String> = Vec::new();
-                    let mut files_seen: Vec<&String> = Vec::new();
                     if let Some(sv) = &v.search_view {
                         for hit in &sv.hits {
-                            let file = &hit.file;
-                            if !files_seen.contains(&file) {
-                                let dir = std::path::Path::new(file)
-                                    .parent()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_default();
-                                keys.push(format!("d:{dir}"));
-                                keys.push(format!("f:{file}"));
-                                files_seen.push(file);
-                            }
+                            keys.push(format!("h:{}#{}", hit.file, hit.line));
                         }
                     }
-                    v.search_expanded = keys.into_iter().collect();
+                    v.search_expanded.extend(keys);
                 } else {
-                    v.search_expanded.clear();
+                    v.search_expanded.retain(|k| !k.starts_with("h:"));
                 }
                 drop(v);
                 entity.update(app, |_, cx| cx.notify());
             }
+        };
+        // 展开/折叠明细按钮图标两态（2026-10-12）：h: 键存在（明细已收起）→ ChevronDown（点击展开）；
+        // 无 h: 键（明细已展开）→ ChevronUp（点击收起）。
+        let details_icon = if self
+            .scratchpad
+            .borrow()
+            .search_expanded
+            .iter()
+            .any(|k| k.starts_with("h:"))
+        {
+            IconName::ChevronDown
+        } else {
+            IconName::ChevronUp
         };
         let toolbar = div()
             .h_flex()
@@ -1265,7 +1546,7 @@ impl ScratchpadView {
                 Button::new("sp-search-details")
                     .ghost()
                     .small()
-                    .label("▸")
+                    .icon(details_icon)
                     .tooltip("展开/折叠下方匹配明细")
                     .on_click(toggle_details),
             );
@@ -1386,6 +1667,8 @@ impl ScratchpadView {
             search_row = search_row.child(
                 div().flex_1().min_w_0().child(
                     Input::new(&input)
+                        .bordered(false)
+                        .focus_bordered(true)
                         .w_full()
                         .suffix(
                             div()
@@ -1398,6 +1681,8 @@ impl ScratchpadView {
                         ),
                 ),
             );
+
+
         }
 
         // �?�? VSCode 搜索面板形�?�（2026-10-10 对齐）：搜索框下�?= 替换�?+ 高级选项 �?�?
@@ -1470,6 +1755,8 @@ impl ScratchpadView {
                 replace_row = replace_row.child(
                     div().flex_1().min_w_0().child(
                         Input::new(&input)
+                            .bordered(false)
+                            .focus_bordered(true)
                             .w_full()
                             .suffix(div().h_flex().items_center().gap_0p5().child(ab_btn)),
                     ),
@@ -1530,12 +1817,12 @@ impl ScratchpadView {
                 let mut include_row = div().h_flex().w_full().items_center().gap_1();
                 if let Some(input) = include_input {
                     include_row = include_row
-                        .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+                        .child(div().flex_1().min_w_0().child(Input::new(&input).bordered(false).focus_bordered(true).w_full()))
                         .child(
                             Button::new("sp-glob-edit")
                                 .ghost()
                                 .small()
-                                .label("编辑")
+                                .icon(IconName::Settings2)
                                 .tooltip("编辑包含文件规则（glob）")
                                 .on_click(hint_include.clone()),
                         )
@@ -1551,7 +1838,7 @@ impl ScratchpadView {
                 let mut exclude_row = div().h_flex().w_full().items_center().gap_1();
                 if let Some(input) = exclude_input {
                     exclude_row = exclude_row
-                        .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+                        .child(div().flex_1().min_w_0().child(Input::new(&input).bordered(false).focus_bordered(true).w_full()))
                         .child(
                             Button::new("sp-glob-settings")
                                 .ghost()
@@ -1631,8 +1918,14 @@ impl ScratchpadView {
                         .items_center()
                         .gap_1()
                         .w_full()
-                        .child(div().text_xs().text_color(muted).child(stats_text))
-                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(stats_text),
+                        )
                         .child(
                             Button::new("sp-stats-open")
                                 .ghost()
@@ -1654,6 +1947,7 @@ impl ScratchpadView {
         search_block
     }
 }
+
 
 impl ScratchpadView {
     /// 草�?树：内联新建行的落点、�?高表、虚拟列表与空�?�（面板�?��滚动区）�?    ///
@@ -1780,6 +2074,31 @@ impl ScratchpadView {
             // 2026-10-12 用户方向：Accordion 内嵌虚拟列表高度测量异常（树空白），
             // 改用 Collapsible（gpui_base 揭盖容器，content 收起时不渲染）承载草稿主体。
             let drafts_expanded = self.scratchpad.borrow().drafts_expanded;
+            let hdr_new_file = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
+                    });
+                }
+            };
+            let hdr_new_folder = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.start_scratchpad_edit(ScratchpadEdit::NewFolder, window, cx)
+                    });
+                }
+            };
+            let hdr_refresh = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.scratchpad.borrow_mut().loaded = false;
+                        cx.notify();
+                    });
+                }
+            };
             let toggle_drafts = {
                 let entity = entity.clone();
                 move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
@@ -1793,13 +2112,48 @@ impl ScratchpadView {
             let drafts_head = div()
                 .debug_selector(|| "sp-drafts-head".into())
                 .id("sp-drafts-head")
+                .group("sp-drafts-head")
                 .cursor_pointer()
                 .h_flex()
                 .items_center()
                 .gap_1()
+                .text_xs()
                 .child(tree::disclosure_slot().child(tree::disclosure_icon(drafts_expanded, muted)))
                 .child("草稿")
                 .child(div().flex_1())
+                .child(
+                    div()
+                        .flex_none()
+                        .invisible()
+                        .group_hover("sp-drafts-head", |s| s.visible())
+                        .h_flex()
+                        .items_center()
+                        .gap_0p5()
+                        .child(
+                            Button::new("sp-drafts-head-new-file")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Plus)
+                                .tooltip("新建文件")
+                                .on_click(hdr_new_file),
+                        )
+                        .child(
+                            Button::new("sp-drafts-head-new-folder")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Folder)
+                                .tooltip("新建目录")
+                                .on_click(hdr_new_folder),
+                        )
+                        .child(
+                            Button::new("sp-drafts-head-refresh")
+                                .ghost()
+                                .small()
+                                .icon(IconName::RefreshCw)
+                                .tooltip("刷新草稿箱")
+                                .on_click(hdr_refresh),
+                        ),
+                )
                 .child(
                     div()
                         .flex_none()
@@ -1816,7 +2170,8 @@ impl ScratchpadView {
                     .v_flex()
                     .w_full()
                     .min_h_0()
-                    .flex_1()
+                    .when(drafts_expanded, |s| s.flex_1())
+                    .when(!drafts_expanded, |s| s.flex_none())
                     .child(drafts_head)
                     .child(Collapsible::new().open(drafts_expanded).h_full().content(
                         div().flex_1().min_h_0().w_full().child(list),
@@ -1851,6 +2206,58 @@ impl ScratchpadView {
             let snapshot = cx.global::<settings::model::Settings>().clone();
             let _ = settings::save_settings(&snapshot);
         }
+    }
+
+    /// 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：
+    /// gpui-kit Dialog + 路径/别名两个 TextField，确认后创建引用（on_ok 返回 true 关闭）。
+    fn render_ref_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        let path_input = self.scratchpad.borrow().ref_path_input.clone();
+        let alias_input = self.scratchpad.borrow().ref_alias_input.clone();
+        let close = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.scratchpad.borrow_mut().ref_dialog_open = false;
+                    cx.notify();
+                });
+            }
+        };
+        let confirm = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| -> bool {
+                entity.update(app, |this, cx| this.confirm_ref_dialog(window, cx))
+            }
+        };
+        Dialog::new(cx)
+            .title(div().child("添加外部引用"))
+            .content({
+                let path_input = path_input.clone();
+                let alias_input = alias_input.clone();
+                move |content: DialogContent, window: &mut Window, cx: &mut App| {
+                    let _ = (window, cx);
+                    let mut body = div().v_flex().w_full().gap_1().px_3().py_1();
+                    if let Some(input) = &path_input {
+                        body = body
+                            .child(Label::new("路径（文件或目录）"))
+                            .child(Input::new(input).w_full());
+                    }
+                    if let Some(input) = &alias_input {
+                        body = body
+                            .child(Label::new("别名（默认取名称）"))
+                            .child(Input::new(input).w_full());
+                    }
+                    content.child(body)
+                }
+            })
+            .button_props(
+                DialogButtonProps::default()
+                    .show_cancel(true)
+                    .ok_text("添加")
+                    .on_ok(confirm),
+            )
+            .on_close(close)
+            .into_any_element()
     }
 }
 

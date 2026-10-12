@@ -7,11 +7,14 @@
 //! `cx.defer_in` 建面板并加入中央 tab 组（`tab_name = "搜索: query"`）→
 //! 面板每次渲染从 `Shared::scratchpad_search` 读最新结果。
 //!
-//! 与属性面板同例：面板实体只建一次（`Shared::search_results_panel` 弱句柄），
-//! 重复搜索结果只聚焦 + 重绘，不重建。面板内「关闭」→ 清空结果（面板显示空态）；
+//! 多开语义（2026-10-12 用户点名）：每次**不同查询词**的搜索结果新建独立 tab
+//!（`WorkbenchView::render` 按面板 `query()` 与全局最新查询是否一致判定：一致 → 聚焦复用，
+//! 不同 → 新建；旧 tab 保留创建时结果快照，不随新搜索变化）。面板内「关闭」→ 清空结果；
 //! tab ✕ 由 dock 的 Close 事件移除面板。
 
 use std::rc::Rc;
+
+use scratchpad::ScratchpadSearchView;
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -44,10 +47,18 @@ pub struct SearchResultsHostPanel {
     panel_case: bool,
     panel_regex: bool,
     panel_word: bool,
+    /// 本 tab 的查询词（新建时捕获；多开语义：与全局最新一致才实时，否则用快照）。
+    query: Option<String>,
+    /// 本 tab 创建时刻的结果快照（旧 tab 不随新搜索变化）。
+    snapshot: Option<ScratchpadSearchView>,
 }
 
 impl SearchResultsHostPanel {
     pub fn new(shared: Shared, cx: &mut gpui::Context<Self>) -> Self {
+        let (query, snapshot) = {
+            let s = shared.scratchpad_search.borrow().clone();
+            (s.as_ref().map(|v| v.query.clone()), s)
+        };
         Self {
             shared,
             focus_handle: cx.focus_handle(),
@@ -57,17 +68,22 @@ impl SearchResultsHostPanel {
             panel_case: false,
             panel_regex: false,
             panel_word: false,
+            query,
+            snapshot,
         }
     }
 
     /// 当前搜索结果查询词（tab 标题「搜索: query」；无结果回退「搜索」）。
     fn tab_label(&self, _cx: &App) -> String {
-        self.shared
-            .scratchpad_search
-            .borrow()
+        self.query
             .as_ref()
-            .map(|s| format!("搜索: {}", s.query.clone()))
+            .map(|q| format!("搜索: {}", q))
             .unwrap_or_else(|| "搜索".to_string())
+    }
+
+    /// 本 tab 的查询词（WorkbenchView 多开判定：全局最新查询与任一存活面板相同则聚焦复用，否则新建）。
+    pub fn query(&self) -> Option<String> {
+        self.query.clone()
     }
 }
 
@@ -86,8 +102,13 @@ impl Render for SearchResultsHostPanel {
         let muted = theme.colors.muted_foreground;
         let border = theme.colors.border;
 
-        // 无结果（面板打开但搜索被清空）：空态占位。
-        let search = self.shared.scratchpad_search.borrow().clone();
+        // 多开语义（2026-10-12）：本 tab 查询词与全局最新一致 → 实时显示；否则显示创建时快照。
+        let mut search = self.snapshot.clone();
+        if let Some(s) = self.shared.scratchpad_search.borrow().clone() {
+            if Some(&s.query) == self.query.as_ref() {
+                search = Some(s);
+            }
+        }
         let Some(search) = search else {
             return div()
                 .id("search-results-host")
@@ -342,6 +363,8 @@ impl SearchResultsHostPanel {
         if query.is_empty() {
             return;
         }
+        // 多开：顶部查询词更新到本 tab（回填后全局 query 与面板一致 → 实时显示本 tab）。
+        self.query = Some(query.clone());
         let (case, regex, word) = (self.panel_case, self.panel_regex, self.panel_word);
         let Some(root) = self.shared.project_root() else {
             return;

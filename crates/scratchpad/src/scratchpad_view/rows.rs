@@ -841,8 +841,7 @@ impl ScratchpadView {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| file.clone());
-                // 命中明细行复用文件名（文件行文本节点会按值消费 `fname`，此处提前克隆）。
-                let fname_ref = fname.clone();
+
                 let count = file_hits.len();
                 let file_collapsed = collapsed.contains(file);
                 let toggle_file = {
@@ -935,6 +934,11 @@ impl ScratchpadView {
                 // ── 命中明细：缩进对齐文件节点名（TREE_INDENT×1 + 槽+图标+间距补偿 2.125rem）、
                 //    无行号、命中关键词高亮、点击跳转到编辑器对应行 ──
                 for hit in file_hits {
+                    // 命中明细独立折叠（2026-10-12：工具栏「展开/折叠明细」只作用于 h: 键）。
+                    let hit_key = format!("h:{file}#{}", hit.line);
+                    if collapsed.contains(&hit_key) {
+                        continue;
+                    }
                     let open_hit = {
                         let entity = entity.clone();
                         let target = ScratchpadSearchHitTarget {
@@ -966,14 +970,12 @@ impl ScratchpadView {
                             .child(tree::disclosure_slot())
                             // 与文件行同一 Icon 组件渲染路径（空 div 占位实测不占宽度，
                             // 导致命中行靠左 16px；改用同款微标保证像素级对齐）。
+                            // 命中明细对齐占位（2026-10-12 用户点名：明细行不应显示类型微标）。
                             .child(
-                                Icon::empty()
-                                    .path(scratchpad_type_icon(&fname_ref))
-                                    .size(rems(ui::ICON_SIZE_MD))
-                                    .flex_none()
-                                    .text_color(scratchpad_icon_color(
-                                        &fname_ref, info, success, primary, muted,
-                                    )),
+                                div()
+                                    .w(rems(ui::ICON_SIZE_MD))
+                                    .h(rems(ui::ICON_SIZE_MD))
+                                    .flex_none(),
                             )
                             // 命中文本：包裹 div 的 left 即文本起点（无 padding），元素断言锚点。
                             .child(

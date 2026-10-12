@@ -751,8 +751,15 @@ impl WorkbenchView {
             .as_ref()
             .and_then(|weak| weak.upgrade())
         {
-            crate::panels::focus_search_tab(&panel, window, cx);
-            return;
+            let same_query = {
+                let s = self.shared.scratchpad_search.borrow();
+                panel.read(cx).query() == s.as_ref().map(|v| v.query.clone())
+            };
+            if same_query {
+                crate::panels::focus_search_tab(&panel, window, cx);
+                return;
+            }
+            // 查询词不同 → 新建独立 tab（多开），旧面板保留显示其快照。
         }
         let Some(area) = self.area.clone() else {
             return;
@@ -998,6 +1005,14 @@ impl WorkbenchView {
             return;
         };
         sidebar.update(cx, |panel, cx| panel.request_resources_refresh(cx));
+    }
+
+    /// 草稿箱随项目切换重新加载（on_opened 事件路径，与资产库同一形态）。
+    pub(crate) fn request_scratchpad_refresh(&self, cx: &mut Context<Self>) {
+        let Some(sidebar) = self.sidebar.clone() else {
+            return;
+        };
+        sidebar.update(cx, |panel, cx| panel.request_scratchpad_refresh(cx));
     }
 
     fn apply_left_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1870,15 +1885,20 @@ impl Render for WorkbenchView {
         // 则不重复入队——新搜索结果只更新全局状态，面板每帧读到最新内容。
         // 用户 tab ✕ 关闭过标签页（`search_results_dismissed`）则不自动重建——
         // 关标签保留结果，直到再次搜索（`show_scratchpad_search(Some)` 清标志）。
+        let search_matches = self
+            .shared
+            .search_results_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .map(|panel| {
+                let s = self.shared.scratchpad_search.borrow();
+                panel.read(cx).query() == s.as_ref().map(|v| v.query.clone())
+            })
+            .unwrap_or(false);
         if self.shared.scratchpad_search.borrow().is_some()
             && !*self.shared.search_results_dismissed.borrow()
-            && self
-                .shared
-                .search_results_panel
-                .borrow()
-                .as_ref()
-                .and_then(|weak| weak.upgrade())
-                .is_none()
+            && !search_matches
         {
             cx.defer_in(window, |this, window, cx| {
                 this.ensure_search_results_panel(window, cx);

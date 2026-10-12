@@ -48,6 +48,12 @@ pub struct WorkbenchCompletion {
     shared: Shared,
     /// 已载好的原始目录（按 conn_id）：**未做通道限定**，限定在返回时按通道拼
     loaded: Arc<Mutex<HashMap<String, Catalog>>>,
+    /// 【T2a-2】已载好的主键映射（按 conn_id → `schema.表` → 主键列；与 `loaded` 同一次预载）
+    ///
+    /// 为什么单独存一份而不是塞进 `Catalog`：补全候选只要「列名 + 类型」，主键是**写回**才
+    /// 问的（`CompletionPort::primary_key`），两者读的时机不同；但数据来自同一份导航缓存，
+    /// 所以**同一线程同一遍遍历**一起装（零额外 I/O），只是存两处、各取所需。
+    keys: Arc<Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
     /// 正在载的 conn_id（去重：同一连接同时只载一次）
     loading: Arc<Mutex<HashSet<String>>>,
     /// 【B9 切片二】模板片段（启动时一次性预载；内存读——菜单弹出时会问它）
@@ -59,6 +65,7 @@ impl WorkbenchCompletion {
         Self {
             shared,
             loaded: Arc::new(Mutex::new(HashMap::new())),
+            keys: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
             templates: Arc::new(Mutex::new(Vec::new())),
         }
@@ -89,6 +96,20 @@ impl WorkbenchCompletion {
         None
     }
 
+    /// 【T2a-2】主键映射（命中即给；未命中就安排一次后台预载，本次给空）
+    ///
+    /// 与 [`Self::raw`] 同一策略：预载是**一次性的**（`loaded` / `keys` 同线程同遍历），
+    /// 这里未命中时 `schedule_load` 已在上一次 `raw` 命中检查里去重——重复调用是 no-op。
+    fn keys_map(&self, conn_id: &str) -> Option<HashMap<String, Vec<String>>> {
+        if let Ok(keys) = self.keys.lock()
+            && let Some(map) = keys.get(conn_id)
+        {
+            return Some(map.clone());
+        }
+        self.schedule_load(conn_id);
+        None
+    }
+
     /// 起一次后台预载（**同一连接只起一次**；完成前重复调用都是 no-op）
     fn schedule_load(&self, conn_id: &str) {
         {
@@ -104,12 +125,17 @@ impl WorkbenchCompletion {
             .project_root()
             .map(|root| root.to_string_lossy().to_string());
         let loaded = self.loaded.clone();
+        let keys = self.keys.clone();
         let loading = self.loading.clone();
         let conn_id = conn_id.to_string();
         std::thread::spawn(move || {
-            let catalog = load_raw_catalog(&conn_id, project_root.as_deref());
+            // 【T2a-2】一次遍历同时产出候选目录与主键映射（同一份导航缓存，零额外 I/O）
+            let (catalog, keys_map) = load_raw_catalog(&conn_id, project_root.as_deref());
             if let Ok(mut loaded) = loaded.lock() {
                 loaded.insert(conn_id.clone(), catalog);
+            }
+            if let Ok(mut slot) = keys.lock() {
+                slot.insert(conn_id.clone(), keys_map);
             }
             if let Ok(mut loading) = loading.lock() {
                 loading.remove(&conn_id);
@@ -147,6 +173,33 @@ impl CompletionPort for WorkbenchCompletion {
             .map(|slot| slot.clone())
             .unwrap_or_default()
     }
+
+    /// 【T2a-2】表的主键列（内存读：与候选目录同一次预载；没载好就是空）
+    ///
+    /// 联邦通道不探测：联邦是只读副本（写回先被编辑判据的 `ChannelReadOnly` 拦下），
+    /// 探测了也用不上。`table` 是 `default_table_name` 猜出来的裸表名。
+    fn primary_key(&self, conn_id: Option<&str>, channel: ExecChannel, table: &str) -> Option<Vec<String>> {
+        if channel == ExecChannel::Federated {
+            return None;
+        }
+        let conn_id = conn_id?;
+        let map = self.keys_map(conn_id)?;
+        lookup_primary_key(&map, table)
+    }
+}
+
+/// 【T2a-2】在主键映射里按表名找键：限定名直取（`schema.表`）→ 裸名匹配（首个命中）
+///
+/// 为什么两步：`default_table_name` 猜出来的是裸表名（`orders`），而映射的键是
+/// 导航缓存的限定名（`public.orders`）。同库不同 schema 下重名罕见，取第一个命中即可；
+/// 真遇到重名，写回落错表的风险由「编辑判据还要过项目只读闸」再兜一层，不在这里猜。
+fn lookup_primary_key(keys: &HashMap<String, Vec<String>>, table: &str) -> Option<Vec<String>> {
+    if let Some(columns) = keys.get(table) {
+        return Some(columns.clone());
+    }
+    keys.iter()
+        .find(|(qualified, _)| qualified.rsplit('.').next() == Some(table))
+        .map(|(_, columns)| columns.clone())
 }
 
 /// 把一个已挂上的源并进联邦候选（`别名.schema.表`；L2 源按两段名）
@@ -175,13 +228,20 @@ fn add_federated_source(port: &WorkbenchCompletion, entry: &MountedSource, into:
     into.truncated |= raw.truncated;
 }
 
-/// 从导航缓存装一份原始目录（**后台线程里跑**：这里允许 I/O）
-fn load_raw_catalog(conn_id: &str, project_root: Option<&str>) -> Catalog {
+/// 从导航缓存装一份原始目录 + 主键映射（**后台线程里跑**：这里允许 I/O）
+///
+/// 第二返回值是 **`schema.表` → 主键列** 的映射（写回的行定位依据，T2a-2）；与候选目录
+/// 同一次遍历（同一份列数据），只在列上多读一个 `is_primary_key` 位，零额外 I/O。
+fn load_raw_catalog(
+    conn_id: &str,
+    project_root: Option<&str>,
+) -> (Catalog, HashMap<String, Vec<String>>) {
     let Some(cache) = NavCache::open(conn_id, project_root) else {
         // 缓存不可用（项目连接缺项目根 / 打开失败）→ 没有候选，如实空着
-        return Catalog::default();
+        return (Catalog::default(), HashMap::new());
     };
     let mut catalog = Catalog::default();
+    let mut keys: HashMap<String, Vec<String>> = HashMap::new();
     for (_, schema, schema_id) in cache.all_schemas() {
         for want_view in [false, true] {
             let Some(objects) = cache.objects(schema_id, want_view) else {
@@ -199,20 +259,25 @@ fn load_raw_catalog(conn_id: &str, project_root: Option<&str>) -> Catalog {
                 }
                 catalog.objects.push(candidate);
                 if let Some(columns) = cache.columns(schema_id, &name) {
+                    let qualified = format!("{schema}.{name}");
                     for column in columns {
                         catalog
                             .columns
-                            .push((format!("{schema}.{name}"), column.name, Some(column.data_type)));
+                            .push((qualified.clone(), column.name.clone(), Some(column.data_type)));
+                        // 【T2a-2】主键列按表结构顺序收集（NavCache 的列序即 ordinal）
+                        if column.is_primary_key {
+                            keys.entry(qualified.clone()).or_default().push(column.name);
+                        }
                     }
                 }
                 if catalog.objects.len() >= MAX_OBJECTS || catalog.columns.len() >= MAX_COLUMNS {
                     catalog.truncated = true;
-                    return catalog;
+                    return (catalog, keys);
                 }
             }
         }
     }
-    catalog
+    (catalog, keys)
 }
 
 /// 【B9 切片二】把模板片段从库里读出来（**后台线程里跑**：这里允许 I/O）
@@ -252,7 +317,8 @@ pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{WorkbenchCompletion, load_raw_catalog};
+    use super::{WorkbenchCompletion, load_raw_catalog, lookup_primary_key};
+    use std::collections::HashMap;
     use database::cache::NavCache;
     use editor::channel::ExecChannel;
     use editor::completion::{CandidateKind, CompletionPort};
@@ -283,18 +349,32 @@ mod tests {
         cache.put_columns(
             sid,
             "orders",
-            &[ColumnDetail {
-                name: "total".to_string(),
-                data_type: "numeric".to_string(),
-                nullable: true,
-                is_primary_key: false,
-                is_foreign_key: false,
-                default_value: None,
-                comment: None,
-                extra: Default::default(),
-                references: None,
-                ordinal: 0,
-            }],
+            &[
+                ColumnDetail {
+                    name: "id".to_string(),
+                    data_type: "integer".to_string(),
+                    nullable: false,
+                    is_primary_key: true,
+                    is_foreign_key: false,
+                    default_value: None,
+                    comment: None,
+                    extra: Default::default(),
+                    references: None,
+                    ordinal: 0,
+                },
+                ColumnDetail {
+                    name: "total".to_string(),
+                    data_type: "numeric".to_string(),
+                    nullable: true,
+                    is_primary_key: false,
+                    is_foreign_key: false,
+                    default_value: None,
+                    comment: None,
+                    extra: Default::default(),
+                    references: None,
+                    ordinal: 1,
+                },
+            ],
         );
         cache.rebuild_index("main", "public");
     }
@@ -306,7 +386,7 @@ mod tests {
         let root_s = root.to_string_lossy().to_string();
         seed("P_completion_raw", &root);
 
-        let catalog = load_raw_catalog("P_completion_raw", Some(&root_s));
+        let (catalog, keys) = load_raw_catalog("P_completion_raw", Some(&root_s));
         assert_eq!(catalog.objects.len(), 2, "{:?}", catalog.objects);
         assert_eq!(catalog.objects[0].label, "public.orders");
         assert_eq!(catalog.objects[0].kind, CandidateKind::Table);
@@ -314,18 +394,45 @@ mod tests {
         assert_eq!(catalog.objects[1].kind, CandidateKind::View);
         assert_eq!(
             catalog.columns,
-            vec![(
-                "public.orders".to_string(),
-                "total".to_string(),
-                Some("numeric".to_string())
-            )]
+            vec![
+                ("public.orders".to_string(), "id".to_string(), Some("integer".to_string())),
+                ("public.orders".to_string(), "total".to_string(), Some("numeric".to_string()))
+            ]
         );
         assert!(!catalog.truncated);
 
+        // 【T2a-2】主键映射：主键列按表结构顺序收；非主键列不收；视图没列 → 无映射
+        assert_eq!(keys.get("public.orders"), Some(&vec!["id".to_string()]), "{keys:?}");
+        assert_eq!(keys.get("public.order_stats"), None, "视图没有主键列");
+
         // 缓存不可用（项目连接缺项目根）→ 空目录，不崩
-        assert!(load_raw_catalog("P_completion_raw", None).is_empty());
+        assert!(load_raw_catalog("P_completion_raw", None).0.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 【T2a-2】按表名找主键：限定名直取；裸名匹配任意 schema；没有 = `None`
+    #[test]
+    fn primary_key_lookup_prefers_qualified_then_falls_back_to_bare_name() {
+        let mut keys = HashMap::new();
+        keys.insert("public.orders".to_string(), vec!["id".to_string()]);
+        keys.insert("audit.orders".to_string(), vec!["batch_id".to_string()]);
+
+        // 限定名直取
+        assert_eq!(
+            lookup_primary_key(&keys, "public.orders"),
+            Some(vec!["id".to_string()])
+        );
+        // 裸名匹配 → 第一个命中（迭代序不保证，但两者都是 orders，取到任一个都成立）
+        let bare = lookup_primary_key(&keys, "orders").expect("裸名应命中");
+        assert!(
+            bare == vec!["id".to_string()] || bare == vec!["batch_id".to_string()],
+            "裸名 orders 应命中两个 schema 之一，实际 {bare:?}"
+        );
+        // 没有这张表
+        assert_eq!(lookup_primary_key(&keys, "nope"), None);
+        // 空映射
+        assert_eq!(lookup_primary_key(&HashMap::new(), "orders"), None);
     }
 
     /// 【B9 切片二】库里的行 → 编辑器片段：只留名字 / 内容 / 说明，空说明当“无”

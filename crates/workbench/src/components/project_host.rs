@@ -99,8 +99,12 @@ pub fn build_host(
             refresh_after_open(&shared, cx);
             // M6：资产库列表随项目切换重新取数——面板可能正开着，不重取会一直
             // 显示上一项目的存档（“切了项目但内容没变”是最难发现的一类错）。
+            // 草稿箱同一理由：loaded 缓存不失效会残留上一项目的内容（需手动刷新）。
             if let Some(view) = view.upgrade() {
-                view.update(cx, |this, cx| this.request_resources_refresh(cx));
+                view.update(cx, |this, cx| {
+                    this.request_resources_refresh(cx);
+                    this.request_scratchpad_refresh(cx);
+                });
             }
         })
     };

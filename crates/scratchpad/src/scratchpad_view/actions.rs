@@ -677,6 +677,45 @@ impl ScratchpadView {
     }
 
     /// 懒创建草稿箱输入框（名称内联编辑 + 文件名过滤）并订阅事件。
+    /// 更多菜单拖拽排序（2026-10-12）：把 `key` 相对当前显示顺序移动 `delta` 格，
+    /// 重算全部按钮的 `order` 并落盘。`delta` 由 on_drag_move 的鼠标位移换算。
+    pub(super) fn reorder_toolbar(&mut self, key: ToolbarButtonKey, delta: i32, cx: &mut Context<Self>) {
+        let mut v = self.scratchpad.borrow_mut();
+        let default_order = |k: ToolbarButtonKey| {
+            ToolbarButtonKey::ALL
+                .iter()
+                .position(|x| *x == k)
+                .unwrap_or(usize::MAX) as i32
+        };
+        let mut keys: Vec<ToolbarButtonKey> = ToolbarButtonKey::ALL.to_vec();
+        keys.sort_by_key(|k| {
+            v.toolbar_cfg
+                .get(k)
+                .map(|c| c.order)
+                .filter(|o| *o >= 0)
+                .unwrap_or_else(|| default_order(*k))
+        });
+        let Some(idx) = keys.iter().position(|k| *k == key) else {
+            return;
+        };
+        let new_idx = (idx as i32 + delta).clamp(0, keys.len() as i32 - 1) as usize;
+        if new_idx == idx {
+            return;
+        }
+        keys.remove(idx);
+        keys.insert(new_idx, key);
+        for (i, k) in keys.iter().enumerate() {
+            let cfg = v.toolbar_cfg.entry(*k).or_insert_with(|| ToolbarButtonCfg {
+                visible: true,
+                side: k.default_side_text().to_string(),
+                order: -1,
+            });
+            cfg.order = i as i32;
+        }
+        drop(v);
+        self.persist_toolbar_cfg(cx);
+    }
+
     pub(super) fn ensure_scratchpad_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.scratchpad.borrow().name_input.is_some() {
             return;
@@ -691,7 +730,7 @@ impl ScratchpadView {
                 }
             },
         );
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件文字"));
         let search_sub = cx.subscribe_in(
             &search_input,
             window,
@@ -728,6 +767,13 @@ impl ScratchpadView {
         let exclude_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("排除的文件")
         });
+        // 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：路径 + 别名两个输入框。
+        let ref_path_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("外部文件或目录路径")
+        });
+        let ref_alias_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("别名（默认取名称）")
+        });
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
@@ -737,6 +783,8 @@ impl ScratchpadView {
         view.search_include_input = Some(include_input);
         view.search_exclude_input = Some(exclude_input);
         view._search_replace_sub = Some(replace_sub);
+        view.ref_path_input = Some(ref_path_input);
+        view.ref_alias_input = Some(ref_alias_input);
     }
 
     /// 开始内联编辑（新建 / 重命名）。
@@ -1640,5 +1688,78 @@ impl ScratchpadView {
                 }
             })
             .detach();
+    }
+
+    /// 打开「添加外部引用」弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：
+    /// 清空上次输入、置打开标志、聚焦路径输入框。
+    pub(super) fn open_ref_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.scratchpad.borrow().ref_path_input.clone() {
+            input.update(cx, |s, cx| s.set_value(String::new(), window, cx));
+            let handle = input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        }
+        if let Some(input) = self.scratchpad.borrow().ref_alias_input.clone() {
+            input.update(cx, |s, cx| s.set_value(String::new(), window, cx));
+        }
+        self.scratchpad.borrow_mut().ref_dialog_open = true;
+        cx.notify();
+    }
+
+    /// 确认「添加外部引用」：校验路径存在 + 别名（空则取路径文件名），
+    /// 创建成功返回 `true`（Dialog `on_ok` 据此关闭弹窗），失败提示并不关闭。
+    pub(super) fn confirm_ref_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let (path, alias) = {
+            let v = self.scratchpad.borrow();
+            (
+                v.ref_path_input
+                    .as_ref()
+                    .map(|i| i.read(cx).value().trim().to_string())
+                    .unwrap_or_default(),
+                v.ref_alias_input
+                    .as_ref()
+                    .map(|i| i.read(cx).value().trim().to_string())
+                    .unwrap_or_default(),
+            )
+        };
+        if path.is_empty() {
+            self.host.notice("请填写外部文件或目录路径".to_string(), cx);
+            return false;
+        }
+        if !std::path::Path::new(&path).exists() {
+            self.host.notice("路径不存在，请检查".to_string(), cx);
+            return false;
+        }
+        let alias = if alias.is_empty() {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            alias
+        };
+        if alias.is_empty() {
+            self.host.notice("别名不能为空".to_string(), cx);
+            return false;
+        }
+        match self.scratchpad_store() {
+            Ok((store, rt)) => {
+                match rt.block_on(store.add_external_reference(alias.clone(), path.into())) {
+                    Ok(_) => {
+                        self.scratchpad.borrow_mut().ref_dialog_open = false;
+                        self.host.notice(format!("已添加引用：{alias}"), cx);
+                        cx.notify();
+                        true
+                    }
+                    Err(e) => {
+                        self.host.notice(format!("添加引用失败：{e}"), cx);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                self.host.notice(e, cx);
+                false
+            }
+        }
     }
 }

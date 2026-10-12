@@ -223,6 +223,12 @@ pub struct ScratchpadViewState {
     trash_expanded: bool,
     /// 草稿主体分组是否展开（Collapsible 承载，默认展开）。
     drafts_expanded: bool,
+    /// 引用分组是否展开（Collapsible 承载，默认展开）。
+    refs_expanded: bool,
+    /// 底部引用/回收站区域的最大高度（拖拽分区 handle 调整，进程内；默认 7.5rem）。
+    group_max_h: f32,
+    /// 更多菜单拖拽排序进行中的按钮（on_drag 开始写入，on_drag_move 每帧重排）。
+    toolbar_drag: Option<ToolbarButtonKey>,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,
     /// 当前选中条目路径集合（多选）。
@@ -283,6 +289,11 @@ pub struct ScratchpadViewState {
     search_include_input: Option<Entity<InputState>>,
     search_exclude_input: Option<Entity<InputState>>,
     _search_replace_sub: Option<Subscription>,
+    /// 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：
+    /// 打开标志 + 路径/别名两个输入框（懒创建，视图构建时建）。
+    ref_dialog_open: bool,
+    ref_path_input: Option<Entity<InputState>>,
+    ref_alias_input: Option<Entity<InputState>>,
     /// 草稿树的滚动句柄（虚拟列表内部滚动；键盘导航可滚到选中项）。
     list_scroll: ScratchpadListScroll,
     /// 是否正有 OS 文件拖入面板上方（`on_drag_move::<ExternalPaths>` 置位，drop / exit 复位）。
@@ -371,6 +382,9 @@ impl Default for ScratchpadViewState {
             trash: Vec::new(),
             trash_expanded: false,
             drafts_expanded: true,
+            refs_expanded: true,
+            group_max_h: 7.5,
+            toolbar_drag: None,
             expanded: HashSet::new(),
             selected: HashSet::new(),
             anchor: None,
@@ -403,6 +417,9 @@ impl Default for ScratchpadViewState {
             search_include_input: None,
             search_exclude_input: None,
             _search_replace_sub: None,
+            ref_dialog_open: false,
+            ref_path_input: None,
+            ref_alias_input: None,
             list_scroll: ScratchpadListScroll::default(),
             external_drag_over: false,
             external_drag_count: 0,
@@ -493,6 +510,13 @@ impl ScratchpadView {
             active_search: None,
             dirty_seen: RefCell::new(Rc::new(HashSet::new())),
         }
+    }
+
+    /// 宿主主动要求重载草稿箱（项目切换 / 外部事件）：置 `loaded=false`，
+    /// 下一次 render 触发按新项目根重新加载。
+    pub fn request_refresh(&self, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().loaded = false;
+        cx.notify();
     }
 }
 

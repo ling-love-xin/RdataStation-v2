@@ -8,6 +8,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, Sizable as _, Theme};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use workbench_shell::ui::ICON_SIZE_SM;
 
 /// 搜索命中项（视图模型）。
@@ -272,11 +273,10 @@ pub fn render_search_pane(
             let line_row = div()
                 .id(format!("sp-line-{}-{}", hit.file, hit.line))
                 .h_flex()
-                .items_center()
+                .items_start()
                 .gap_1()
                 .w_full()
                 .min_w_0()
-                .overflow_hidden()
                 .pl_3()
                 .cursor_pointer()
                 .hover(move |s| s.text_color(primary))
@@ -304,5 +304,5 @@ pub fn render_search_pane(
         .gap_1()
         // VS Code 结果视图平铺形态：无卡片边框（替代旧版 border+bg 卡片，用户截图对比）。
         .child(header)
-        .child(div().max_h(rems(16.)).overflow_hidden().child(list))
+        .child(div().max_h(rems(32.)).overflow_y_scrollbar().child(list))
 }

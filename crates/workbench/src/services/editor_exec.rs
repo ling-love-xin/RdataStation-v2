@@ -566,6 +566,113 @@ impl QueryRunner for EngineQueryRunner {
         result.map(|_status| ()).map_err(|error| error.to_string())
     }
 
+    /// 【T2a】批量提交：把编辑器生成的 UPDATE 文本逐条跑在**同一个事务**里
+    ///
+    /// 口径（与 `QueryRunner::commit_changes` 的文档一致，这里定实现细节）：
+    ///
+    /// - **通道闸**：写回只走源库通道——加速 / 联邦是**只读挂载**（DuckDB 侧会拒作用源对象的
+    ///   写），在这里提前说清，而不是让用户等一个"看着跑完、实际没写进去"的结果。
+    /// - **独立事务**：提交 = 自己的原子单元。连接**已在一个事务里**（B4 手动事务开着）就回绝——
+    ///   混进用户事务会让"已提交 N 条"说不清（它可能随用户的下一次回滚一起没了）。
+    ///   提交自己负责 `BEGIN` → 逐条 → `COMMIT`；任一条失败 → `ROLLBACK` 并如实报错。
+    /// - **影响行数**：每条 UPDATE 的 `affected_rows` 按语句顺序收集进
+    ///   [`CommitReport::per_statement`]（**执行器只报数**——它不知道每条对应结果集哪一行哪一列，
+    ///   那个映射在编辑器生成时才有，面板组装回执用）。`committed` = 影响行数 ≥ 1 的条数；
+    ///   驱动没报行数（异常，UPDATE 一般都会报）按 0 记——宁可标冲突让用户回看，不假装成功。
+    /// - **历史**：逐条 UPDATE 都进历史（引擎 `execute` 的 `record_history: true`；耗时/行数是真值）。
+    fn commit_changes(
+        &self,
+        connection: Option<&str>,
+        channel: ExecChannel,
+        table: &str,
+        key: &editor::export::RowKey,
+        updates: &str,
+    ) -> Result<editor::execution::CommitReport, String> {
+        // ① 通道闸：写回只走源库通道
+        if channel != ExecChannel::Source {
+            return Err(format!(
+                "提交只支持源库通道（当前是 {}）：加速 / 联邦是只读挂载，改不了源库",
+                channel.code()
+            ));
+        }
+
+        // ② 解析连接（绑定优先 → 当前活动连接；与 run 同一口径）
+        let conn_id = self
+            .resolve_conn_id(connection)
+            .ok_or_else(|| "提交需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
+
+        // ③ 逐条 UPDATE（空行分隔；去掉空白行——生成器以空行拼接）
+        let statements: Vec<&str> = updates
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if statements.is_empty() {
+            return Err("没有可提交的 UPDATE".to_string());
+        }
+
+        // ④ 独立事务：已有事务（B4 手动开着）→ 回绝（见方法文档）
+        let manager = engine::connection_manager::get_connection_manager();
+        if self
+            .runtime
+            .block_on(manager.has_transaction(&conn_id))
+        {
+            return Err("当前连接已在事务中：先提交 / 回滚它，再批量提交（提交要自己的原子事务）".to_string());
+        }
+
+        // ⑤ 单事务跑：全部成功 COMMIT，任一条失败 ROLLBACK 并整体报错
+        let timeout_ms = self.runtime.block_on(self.query_timeout_ms(Some(&conn_id)));
+        let affected = self.runtime.block_on(async {
+            let conn = Some(conn_id.clone());
+            self.service
+                .begin_transaction(conn.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut per_statement = Vec::with_capacity(statements.len());
+            for statement in &statements {
+                let options = SqlExecuteOptions {
+                    // 提交语句进历史（真值：耗时 / 影响行数由驱动报）
+                    record_history: true,
+                    timeout_ms,
+                    // 已有事务（刚开的这个）→ 引擎走事务对象；不会另开一个
+                    use_transaction: false,
+                    channel: Some(channel.code().to_string()),
+                    ..Default::default()
+                };
+                match self.service.execute(conn.clone(), statement, options).await {
+                    Ok(outcome) => {
+                        // 影响行数由驱动报（B5 口径）；UPDATE 报 0 = 冲突（旧值已变）；
+                        // 驱动没报（异常，UPDATE 一般都会报）按 0 记——不假装成功
+                        per_statement.push(outcome.result.affected_rows.unwrap_or(0) as usize);
+                    }
+                    Err(error) => {
+                        // 一条 UPDATE 语法错 / 超时：整批回滚（原子性），原因如实上报
+                        let reason = error.to_string();
+                        self.service
+                            .rollback_transaction(conn.clone())
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        return Err(format!("批量提交失败（已回滚）：{reason}"));
+                    }
+                }
+            }
+            self.service
+                .commit_transaction(conn.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(per_statement)
+        })?;
+
+        let committed = affected.iter().filter(|&&n| n >= 1).count();
+        // 冲突的行/列映射在编辑器侧组装（面板有生成时的行/列对应），这里只报数
+        Ok(editor::execution::CommitReport {
+            committed,
+            skipped: 0,
+            per_statement: affected,
+            conflicts: Vec::new(),
+        })
+    }
+
     /// 事务闸门：读**该连接实际的运行时能力位**（`DataSourceMeta::supports_transaction`），
     /// 不再恒 `true`——能力 Tab 的声明与运行时位必须是同一份事实
     /// （键 → 位的对应见 `engine::driver::capability`；两边不漂移由引擎侧单测钉住）。

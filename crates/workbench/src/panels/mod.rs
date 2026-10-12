@@ -109,6 +109,12 @@ impl SidebarPanel {
             .update(cx, |panel, cx| panel.ensure_scratchpad_pump(cx));
     }
 
+    /// 请求草稿箱按当前项目根重新加载（项目打开 / 切换之后调用，避免残留上一项目内容）。
+    pub(crate) fn request_scratchpad_refresh(&self, cx: &mut Context<Self>) {
+        self.scratchpad_panel
+            .update(cx, |panel, cx| panel.request_refresh(cx));
+    }
+
     /// 转发导航面板渲染（含滚动与空态都在 crate 内）。
     fn render_nav_panel(&mut self) -> Div {
         let panel = self.nav_panel.clone();

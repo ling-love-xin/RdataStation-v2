@@ -75,6 +75,9 @@ pub struct ToolbarButtonCfg {
     /// 因此空配置与「未写 side」都回到原型默认左 5 右 2）。
     #[serde(default = "default_toolbar_side")]
     pub side: String,
+    /// 工具栏显示顺序（⋯ 菜单 ↑↓ 调整；未写/负值 = 原型默认顺序（ALL 枚举序））。
+    #[serde(default = "default_toolbar_order")]
+    pub order: i32,
 }
 
 impl Default for ToolbarButtonCfg {
@@ -82,8 +85,13 @@ impl Default for ToolbarButtonCfg {
         Self {
             visible: default_toolbar_visible(),
             side: default_toolbar_side(),
+            order: default_toolbar_order(),
         }
     }
+}
+
+fn default_toolbar_order() -> i32 {
+    -1
 }
 
 fn default_toolbar_visible() -> bool {
