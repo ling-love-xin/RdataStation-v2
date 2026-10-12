@@ -21,6 +21,7 @@
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::model::{EditorMode, ReadOnly};
@@ -49,6 +50,8 @@ pub struct StatusInputs<'a> {
     pub elapsed: Option<std::time::Duration>,
     /// 连接段（已格式化的文案，如 `●P·orders`）；`None` = 不显示（文本模式没有连接概念）
     pub connection: Option<&'a str>,
+    /// 【T2c-2】方言段（`方言 PostgreSQL`；从绑定连接的 db_type 解析）；`None` = 不显示
+    pub dialect: Option<&'a str>,
     /// 【B13】执行通道段（`通道 源库` / `通道 本地加速（快照）`）；`None` = 不显示
     pub channel: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
@@ -60,6 +63,8 @@ pub struct StatusInputs<'a> {
 /// 文案走 [`labels`]（纯函数、可穷举），控件走这里——两者分开才能把“该显示什么”测干净。
 #[derive(Default)]
 pub struct StatusControls {
+    /// 【T2c-1】连接 ▸ 库 ▸ Schema 面包屑（可点切换；有它时替代文本连接段——它自己带连接信息）
+    pub breadcrumb: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B3】中断按钮，挂在**右段**
@@ -69,46 +74,54 @@ pub struct StatusControls {
 /// 状态栏文案（左右两段）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusLabels {
-    pub left: String,
+    /// 连接段（`●P·orders` / `○ 未绑定连接`）；`None` = 无连接概念（文本模式）
+    ///
+    /// 渲染时若有面包屑控件，这一段被控件替代（控件自己显示 连接 ▸ 库 ▸ Schema）。
+    pub connection: Option<String>,
+    /// 方言段（`方言 PostgreSQL`）；`None` = 无绑定连接（不占位）
+    pub dialect: Option<String>,
+    /// 左段正文（通道 · 事务 · 模式 · 语句数 · 未保存 · 执行中 · 提示）
+    pub body: String,
+    /// 右段（只读两维 · 光标 · 选区）
     pub right: String,
 }
 
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
-    // 左：连接（会通信的模式才有）+ 通道 + 事务 + 模式 + 语句数（SQL 模式才有语句概念）
-    //     + 未保存 + 动作提示
-    let mut left = String::new();
-    if let Some(connection) = inputs.connection {
-        left.push_str(connection);
-        left.push_str(" · ");
-    }
+    // 连接段独立成一段：面包屑控件渲染时用它替代（控件显示 连接▸库▸Schema，比纯文本信息量更大）
+    let connection = inputs.connection.map(str::to_string);
+    // 方言段独立成一段：它跟着「绑定连接」走，面包屑控件里不含它（连接▸库▸schema 是路径，方言是引擎）
+    let dialect = inputs.dialect.map(|d| format!("方言 {d}"));
+
+    // 左段正文：通道 + 事务 + 模式 + 语句数（SQL 模式才有语句概念） + 未保存 + 动作提示
+    let mut body = String::new();
     if let Some(channel) = inputs.channel {
         // 【B13】通道紧跟连接：同一个连接上，源库直连与本地加速看的是两份数据
-        left.push_str(channel);
-        left.push_str(" · ");
+        body.push_str(channel);
+        body.push_str(" · ");
     }
     if let Some(tx) = inputs.tx {
         // 【B4】事务是**连接级**的事实，紧跟在连接段后面
-        left.push_str(tx);
-        left.push_str(" · ");
+        body.push_str(tx);
+        body.push_str(" · ");
     }
-    left.push_str(inputs.mode.short_label());
+    body.push_str(inputs.mode.short_label());
     if inputs.mode == EditorMode::Sql {
-        left.push_str(&format!(" · {} 条语句", inputs.statements));
+        body.push_str(&format!(" · {} 条语句", inputs.statements));
     }
     if inputs.dirty {
-        left.push_str(" · 未保存");
+        body.push_str(" · 未保存");
     }
     if inputs.executing {
         // 耗时累加（原型 §4.6：执行中要看得见跑了多久——它也是“该不该中断”的判断依据）
         match inputs.elapsed {
-            Some(elapsed) => left.push_str(&format!(" · 执行中 {}…", elapsed_text(elapsed))),
-            None => left.push_str(" · 执行中…"),
+            Some(elapsed) => body.push_str(&format!(" · 执行中 {}…", elapsed_text(elapsed))),
+            None => body.push_str(" · 执行中…"),
         }
     }
     if let Some(message) = inputs.message {
         // 提示紧跟在左侧状态段之后：它是“刚才那个动作”的后果，不是文档属性
-        left.push_str(&format!(" · {message}"));
+        body.push_str(&format!(" · {message}"));
     }
 
     // 右：两个只读维度分别表达 + 光标 + 选区
@@ -125,7 +138,9 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     }
 
     StatusLabels {
-        left,
+        connection,
+        dialect,
+        body,
         right: parts.join(" · "),
     }
 }
@@ -156,13 +171,23 @@ pub fn render(
     let muted = theme.colors.muted_foreground;
     let border = theme.colors.border;
 
+    // 面包屑优先于文本连接段（它自己显示 连接 ▸ 库 ▸ Schema，比纯文本信息量更大）
+    let has_breadcrumb = controls.breadcrumb.is_some();
     let left = div()
         .h_flex()
         .items_center()
         .gap_1()
         .text_xs()
         .text_color(muted)
-        .child(text.left)
+        .children(controls.breadcrumb)
+        .when(!has_breadcrumb, |row| {
+            row.child(text.connection.unwrap_or_default())
+        })
+        // 方言段紧跟连接（面包屑/文本连接段之后）：它是「这个连接是什么引擎」，不是路径
+        .when(text.dialect.is_some(), |row| {
+            row.child(text.dialect.clone().unwrap())
+        })
+        .child(text.body)
         .children(controls.tx);
 
     StatusBar::new()
@@ -202,52 +227,55 @@ mod tests {
             elapsed: None,
             // 连接段默认不显示；连接相关的断言在下面的专用用例里给值
             connection: None,
+            // 方言段默认不显示（没绑定连接）；方言相关的断言在专用用例里给值
+            dialect: None,
             channel: None,
             tx: None,
         }
     }
 
-    /// 连接段（B1）放在最左：读状态栏第一眼要知道“这条 SQL 会发到哪”
+    /// 连接段（B1）独立成一段：面包屑控件渲染时用它替代（控件显示 连接▸库▸Schema）
     #[test]
-    fn connection_leads_the_left_segment() {
+    fn connection_segment_is_separable_and_leads() {
         let mut with_connection = inputs(ReadOnly::none());
         with_connection.connection = Some("●P·orders");
         let text = labels(&with_connection);
+        assert_eq!(text.connection.as_deref(), Some("●P·orders"));
         assert!(
-            text.left.starts_with("●P·orders · SQL"),
-            "连接在前、模式在后：{}",
-            text.left
+            text.body.starts_with("SQL"),
+            "正文从模式开始（连接已拆出去）：{}",
+            text.body
         );
 
-        // 文本模式没有连接概念：整段不出现
+        // 文本模式没有连接概念：连接段不出现
         let plain = labels(&inputs(ReadOnly::none()));
-        assert!(!plain.left.contains('●') && !plain.left.contains("未绑定"));
+        assert!(plain.connection.is_none(), "无连接时不占位");
     }
 
     #[test]
     fn left_shows_mode_and_statement_count() {
         let text = labels(&inputs(ReadOnly::none()));
-        assert!(text.left.starts_with("SQL"), "{}", text.left);
-        assert!(text.left.contains("3 条语句"), "语句数必须真实：{}", text.left);
-        assert!(!text.left.contains("未保存"));
+        assert!(text.body.starts_with("SQL"), "{}", text.body);
+        assert!(text.body.contains("3 条语句"), "语句数必须真实：{}", text.body);
+        assert!(!text.body.contains("未保存"));
     }
 
     #[test]
     fn statement_count_follows_content() {
         let mut one = inputs(ReadOnly::none());
         one.statements = 1;
-        assert!(labels(&one).left.contains("1 条语句"));
+        assert!(labels(&one).body.contains("1 条语句"));
 
         let mut nine = inputs(ReadOnly::none());
         nine.statements = 9;
-        assert!(labels(&nine).left.contains("9 条语句"));
+        assert!(labels(&nine).body.contains("9 条语句"));
     }
 
     #[test]
     fn dirty_state_is_visible() {
         let mut dirty = inputs(ReadOnly::none());
         dirty.dirty = true;
-        assert!(labels(&dirty).left.contains("未保存"));
+        assert!(labels(&dirty).body.contains("未保存"));
     }
 
     #[test]
@@ -255,8 +283,8 @@ mod tests {
         // 文本模式是纯记事本：没有语句概念，不该出现"N 条语句"
         let mut text = inputs(ReadOnly::none());
         text.mode = EditorMode::Text;
-        assert!(!labels(&text).left.contains("条语句"));
-        assert!(labels(&text).left.starts_with("TXT"));
+        assert!(!labels(&text).body.contains("条语句"));
+        assert!(labels(&text).body.starts_with("TXT"));
     }
 
     #[test]
@@ -304,17 +332,17 @@ mod tests {
 
     #[test]
     fn failed_actions_leave_a_visible_reason() {
-        // 动作失败必须在状态栏留痕迹（“按了没反应”不可接受）；提示属于**左段**
+        // 动作失败必须在状态栏留痕迹（“按了没反应”不可接受）；提示属于**左段正文**
         let mut failed = inputs(ReadOnly::none());
         failed.dirty = true;
         failed.message = Some("未命名文档，请先另存为");
         let text = labels(&failed);
-        assert!(text.left.contains("未命名文档，请先另存为"), "{}", text.left);
-        assert!(text.left.contains("未保存"), "提示不挤掉文档状态：{}", text.left);
+        assert!(text.body.contains("未命名文档，请先另存为"), "{}", text.body);
+        assert!(text.body.contains("未保存"), "提示不挤掉文档状态：{}", text.body);
         assert!(!text.right.contains("另存为"), "提示不进右段：{}", text.right);
 
         // 无提示时不显示占位
-        assert!(!labels(&inputs(ReadOnly::none())).left.contains("另存为"));
+        assert!(!labels(&inputs(ReadOnly::none())).body.contains("另存为"));
     }
 
     /// 执行中要看得见“跑了多久”（B3）：它是判断该不该中断的依据
@@ -322,15 +350,15 @@ mod tests {
     fn executing_segment_counts_the_time_up() {
         let mut running = inputs(ReadOnly::none());
         running.executing = true;
-        assert!(labels(&running).left.contains("执行中…"), "没耗时也得说在执行");
+        assert!(labels(&running).body.contains("执行中…"), "没耗时也得说在执行");
 
         running.elapsed = Some(std::time::Duration::from_millis(3400));
-        let text = labels(&running).left;
+        let text = labels(&running).body;
         assert!(text.contains("执行中 3.4s…"), "{text}");
 
         // 不在执行时不留耗时（它是执行态的一部分，不是文档属性）
         let idle = inputs(ReadOnly::none());
-        assert!(!labels(&idle).left.contains("执行中"));
+        assert!(!labels(&idle).body.contains("执行中"));
     }
 
     #[test]
@@ -349,18 +377,20 @@ mod tests {
         let mut with_tx = inputs(ReadOnly::none());
         with_tx.connection = Some("●P·orders");
         with_tx.tx = Some("TX 未开启");
-        let text = labels(&with_tx).left;
+        let text = labels(&with_tx);
+        assert_eq!(text.connection.as_deref(), Some("●P·orders"), "连接段独立");
         assert!(
-            text.starts_with("●P·orders · TX 未开启 · SQL"),
-            "事务紧随连接、在模式之前：{text}"
+            text.body.starts_with("TX 未开启 · SQL"),
+            "事务紧随连接段（正文从事务开始，模式在后）：{}",
+            text.body
         );
 
         let mut running = inputs(ReadOnly::none());
         running.tx = Some("TX 已开启 3.4s");
-        assert!(labels(&running).left.contains("TX 已开启 3.4s"));
+        assert!(labels(&running).body.contains("TX 已开启 3.4s"));
 
         // 没有事务信息（未接执行）时不出现占位文案
-        assert!(!labels(&inputs(ReadOnly::none())).left.contains("TX"));
+        assert!(!labels(&inputs(ReadOnly::none())).body.contains("TX"));
     }
 
     /// 【B13】通道段在连接与事务之间（原型 §2.5 的那一行顺序），没给就不占位
@@ -370,13 +400,32 @@ mod tests {
         with_channel.connection = Some("●P·orders");
         with_channel.channel = Some("通道 源库");
         with_channel.tx = Some("TX 未开启");
-        let text = labels(&with_channel).left;
+        let text = labels(&with_channel);
+        assert_eq!(text.connection.as_deref(), Some("●P·orders"));
         assert!(
-            text.starts_with("●P·orders · 通道 源库 · TX 未开启 · SQL"),
-            "通道在连接之后、事务之前：{text}"
+            text.body.starts_with("通道 源库 · TX 未开启 · SQL"),
+            "通道在事务之前、模式在后：{}",
+            text.body
         );
 
         // 没给通道（文本模式）时不留占位
-        assert!(!labels(&inputs(ReadOnly::none())).left.contains("通道"));
+        assert!(!labels(&inputs(ReadOnly::none())).body.contains("通道"));
+    }
+
+    /// 【T2c-2】方言段独立成段、紧跟连接段（渲染层放面包屑/连接文本之后）；
+    /// 没绑定连接就不出现（真实值原则）
+    #[test]
+    fn dialect_segment_is_separable_and_only_with_a_connection() {
+        let mut with_dialect = inputs(ReadOnly::none());
+        with_dialect.connection = Some("●P·orders");
+        // 输入是裸引擎名（host 从 db_type 解析出的产品名），前缀「方言 」是 labels 加的
+        with_dialect.dialect = Some("PostgreSQL");
+        let text = labels(&with_dialect);
+        assert_eq!(text.connection.as_deref(), Some("●P·orders"));
+        assert_eq!(text.dialect.as_deref(), Some("方言 PostgreSQL"));
+        assert!(!text.body.contains("PostgreSQL"), "方言不进正文：{}", text.body);
+
+        // 没绑定连接（文本模式 / 未绑定）→ 方言段不占位
+        assert!(labels(&inputs(ReadOnly::none())).dialect.is_none());
     }
 }

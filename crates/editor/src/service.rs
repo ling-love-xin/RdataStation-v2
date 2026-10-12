@@ -43,6 +43,8 @@ pub struct Document {
     connection: Option<String>,
     /// 【B13】执行通道（文档级属性，与连接绑定同类；随会话持久化）
     channel: crate::channel::ExecChannel,
+    /// 【T2c-1】绑定的 schema（文档级属性，与连接绑定同类；`None` = 未选 → 执行用连接默认）
+    schema: Option<String>,
 }
 
 impl Document {
@@ -57,6 +59,7 @@ impl Document {
         tier: FileTier,
         connection: Option<String>,
         channel: crate::channel::ExecChannel,
+        schema: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -69,6 +72,7 @@ impl Document {
             tier,
             connection,
             channel,
+            schema,
         }
     }
 
@@ -110,6 +114,11 @@ impl Document {
     /// 【B13】执行通道（文档级属性；默认源库直连）
     pub fn channel(&self) -> crate::channel::ExecChannel {
         self.channel
+    }
+
+    /// 【T2c-1】绑定的 schema（`None` = 未选 → 执行用连接默认 schema）
+    pub fn schema(&self) -> Option<&str> {
+        self.schema.as_deref()
     }
 
     /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
@@ -177,6 +186,8 @@ pub struct OpenRequest {
     pub connection: Option<String>,
     /// 【B13】执行通道（默认源库直连）
     pub channel: crate::channel::ExecChannel,
+    /// 【T2c-1】绑定 schema（默认未选 → 执行用连接默认 schema）
+    pub schema: Option<String>,
 }
 
 impl OpenRequest {
@@ -190,6 +201,7 @@ impl OpenRequest {
             tier: FileTier::Normal,
             connection: None,
             channel: crate::channel::ExecChannel::default(),
+            schema: None,
         }
     }
 
@@ -203,6 +215,7 @@ impl OpenRequest {
             tier: FileTier::Normal,
             connection: None,
             channel: crate::channel::ExecChannel::default(),
+            schema: None,
         }
     }
 
@@ -354,6 +367,7 @@ impl EditorService {
             request.tier,
             request.connection,
             request.channel,
+            request.schema,
         ));
         self.active = Some(id.clone());
 
@@ -480,6 +494,26 @@ impl EditorService {
             .find(|doc| doc.id() == id)
             .map(|doc| doc.channel)
             .unwrap_or_default()
+    }
+
+    /// 【T2c-1】绑定 / 解绑某文档的 schema（`None` = 未选 → 执行用连接默认 schema）
+    pub fn set_schema(&mut self, id: &DocumentId, schema: Option<String>) -> bool {
+        match self.documents.iter_mut().find(|doc| doc.id() == id) {
+            Some(doc) => {
+                let changed = doc.schema != schema;
+                doc.schema = schema;
+                changed
+            }
+            None => false,
+        }
+    }
+
+    /// 【T2c-1】某文档绑定的 schema（执行时用；`None` = 未选或文档不存在）
+    pub fn schema_for(&self, id: &DocumentId) -> Option<String> {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .and_then(|doc| doc.schema().map(str::to_string))
     }
 
     /// 某文档绑定的连接（执行时用；`None` = 未绑定或文档不存在）

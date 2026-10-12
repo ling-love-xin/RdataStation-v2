@@ -1360,6 +1360,16 @@ impl EditorHostPanel {
         self.set_message(Some(message), cx);
     }
 
+    /// 【T2c-1】切换文档绑定的 schema（`None` = 用连接默认 schema）
+    pub(crate) fn set_schema(&mut self, schema: Option<String>, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .update(|service| service.set_schema(&self.document, schema));
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
     fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
         // 【B15】本地分析不碰源库（数据是桥接过来的行）——通道闸管的是“写源库对象”，放行
@@ -4278,6 +4288,22 @@ impl Render for EditorHostPanel {
         // 【B13】通道段：会通信的模式才有（文本模式没有“执行位置”这回事）
         let current_channel = self.channel();
         let channel_text = communicating.then(|| channel::status_text(current_channel));
+        // 【T2c-2】方言段：从绑定连接的 db_type 解析（会通信 + 绑定连接才有；
+        // 未绑定连接不摆——「跟随当前连接」时方言是谁都说不准，如实不显示）
+        let dialect_text = communicating.then(|| {
+            let bound = self
+                .with_document(|doc| doc.connection().map(str::to_string))
+                .flatten();
+            bound.as_deref().and_then(|conn_id| {
+                self.shared
+                    .connection_options()
+                    .iter()
+                    .find(|option| option.id == conn_id)
+                    .map(|option| crate::connection::dialect_label(&option.db_type))
+            })
+        });
+        // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
+        let dialect_owned = dialect_text.flatten();
         // TX 区（B4）：会通信 + 执行器真支持事务 + **当前通道支持事务**
         // （加速 / 联邦没有事务语义，那时摆一个 TX 区就是摆了个假控件）
         let tx_available = communicating
@@ -4298,9 +4324,73 @@ impl Render for EditorHostPanel {
             executing: self.pending > 0,
             elapsed: self.running_since.map(|since| since.elapsed()),
             connection: connection_text.as_deref(),
+            dialect: dialect_owned.as_deref(),
             channel: channel_text.as_deref(),
             tx: tx_text.as_deref(),
         };
+
+        // 【T2c-1】连接 ▸ 库 ▸ Schema 面包屑（参考 DBeaver）：连接绑定且有 schema 列表才构造
+        // （没有可切项就退化为文本连接段——`labels` 的 `connection` 段兜底，不造一个假控件）。
+        // 点击 schema 段弹出列表：选中写回文档绑定（`None` = 用连接默认 schema）。
+        let breadcrumb = communicating.then(|| {
+            let conn_id = self.bound_connection();
+            let schemas = self.shared.schemas(conn_id.as_deref());
+            if schemas.is_empty() {
+                return None;
+            }
+            let current = self
+                .with_document(|doc| doc.schema().map(str::to_string))
+                .flatten();
+            let crumb = crate::connection::breadcrumb(
+                conn_id.as_deref(),
+                &self.shared.connection_options(),
+                &schemas,
+                current.as_deref(),
+            );
+            let mut label = crumb.connection.clone();
+            if let Some(catalog) = crumb.catalog {
+                label.push_str(" ▸ ");
+                label.push_str(&catalog);
+            }
+            label.push_str(" ▸ ");
+            label.push_str(crumb.schema.as_deref().unwrap_or("schema"));
+            let entity = cx.entity();
+            let items = schemas.clone();
+            let label_clone = label.clone();
+            Some(
+                DropdownButton::new("editor-breadcrumb")
+                    .small()
+                    .button(
+                        Button::new("editor-breadcrumb-btn")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-breadcrumb".to_string())
+                            .label(label_clone),
+                    )
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        for item in items.iter() {
+                            let entity = entity.clone();
+                            let schema = item.schema.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(schema.clone()).on_click(move |_, _window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_schema(Some(schema.clone()), cx);
+                                    });
+                                }),
+                            );
+                        }
+                        // 分隔项：显式回到连接默认 schema（文档绑定解绑）
+                        let entity = entity.clone();
+                        menu.separator().item(
+                            PopupMenuItem::new("使用连接默认").on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| panel.set_schema(None, cx));
+                            }),
+                        )
+                    })
+                    .into_any_element(),
+            )
+        });
 
         // 中断（B3）：只在本文档真有语句没回填时出现（原型 §5.1：「中断」挂在状态栏■）
         let interrupt = self.can_interrupt().then(|| {
@@ -4769,6 +4859,7 @@ impl Render for EditorHostPanel {
         root.child(status_bar::render(
             &status,
             status_bar::StatusControls {
+                breadcrumb: breadcrumb.flatten(),
                 tx: tx_controls,
                 interrupt,
             },

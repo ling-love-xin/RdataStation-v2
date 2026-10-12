@@ -95,6 +95,8 @@ pub struct EditorShared {
     insight_column: Rc<RefCell<Option<InsightColumnPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
+    /// 【T2c-1】库 / schema 列表端口：宿主注入后才有（无宿主 = 状态栏面包屑没有可切项）
+    schemas: Rc<RefCell<Option<crate::connection::SchemasHandle>>>,
     /// 【B13】通道门控端口：宿主注入后才有（无宿主 = 加速 / 联邦两档都不可用并给原因）
     channels: Rc<RefCell<Option<ChannelsHandle>>>,
     /// 【B13/T1.6】源清单端口：宿主注入后才有（无宿主 = 「源清单 ▾」没有内容）
@@ -124,6 +126,7 @@ impl EditorShared {
             export_path: Rc::new(RefCell::new(None)),
             insight_column: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
+            schemas: Rc::new(RefCell::new(None)),
             channels: Rc::new(RefCell::new(None)),
             sources: Rc::new(RefCell::new(None)),
             project: Rc::new(RefCell::new(None)),
@@ -493,6 +496,26 @@ impl EditorShared {
             .as_ref()
             .map(|port| port.options())
             .unwrap_or_default()
+    }
+
+    /// 【T2c-1】注入 schema 端口（**宿主调用一次**：workbench 从导航缓存读库 / schema 列表）
+    pub fn attach_schemas(&self, port: crate::connection::SchemasHandle) {
+        *self.schemas.borrow_mut() = Some(port);
+    }
+
+    /// 【T2c-1】某连接的库 / schema 列表（**渲染路径可调**：端口实现必须是内存快照；
+    /// 未接端口 = 空列表 → 状态栏不显示可切的面包屑，如实降级）
+    pub fn schemas(&self, conn_id: Option<&str>) -> Vec<crate::connection::SchemaInfo> {
+        let guard = self.schemas.borrow();
+        match guard.as_ref() {
+            Some(port) => conn_id.map(|id| port.schemas(id)).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// 【T2c-1】某文档绑定的 schema（`None` = 未选或文档不存在）
+    pub fn document_schema(&self, id: &DocumentId) -> Option<String> {
+        self.service().schema_for(id)
     }
 
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）

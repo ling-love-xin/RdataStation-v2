@@ -51,6 +51,68 @@ pub trait ConnectionsPort {
 /// 端口句柄（与 `QueryRunner` / `SessionStore` 同一模式：宿主注入、可缺省）
 pub type ConnectionsHandle = Rc<dyn ConnectionsPort>;
 
+/// 一个库 / schema 项（状态栏面包屑的数据源；来自宿主导航缓存，渲染路径只读快照）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaInfo {
+    /// 库（catalog）名；无 Catalog 层的驱动（MySQL 侧库即 schema）为 `None`
+    pub catalog: Option<String>,
+    /// schema 名
+    pub schema: String,
+}
+
+/// schema 列表端口（T2c-1，宿主注入；未注入 = 没有 schema 可切）
+///
+/// 与 [`ConnectionsPort`] 同口径：**必须是内存快照**（状态栏每帧都读它）；
+/// 实现侧未命中时安排后台预载、本次给空（渲染路径不做 I/O）。
+pub trait SchemasPort {
+    /// 某连接的库 / schema 列表（按导航缓存返回；连接不认识 = 空列表）
+    fn schemas(&self, conn_id: &str) -> Vec<SchemaInfo>;
+}
+
+/// 端口句柄
+pub type SchemasHandle = Rc<dyn SchemasPort>;
+
+/// 状态栏面包屑（T2c-1）：`连接 ▸ 库 ▸ Schema`
+///
+/// 分段由纯函数算出来（可穷举断言）；缺哪段就不占哪段（零 UI 造数据）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breadcrumb {
+    /// 连接段（`●P·orders` / [`UNBOUND_LABEL`]）
+    pub connection: String,
+    /// 库段（当前 schema 所在库；无 Catalog 层或未选 schema 时 `None`）
+    pub catalog: Option<String>,
+    /// schema 段（文档当前绑定；`None` = 未选 → 控件层显示可点的「schema ▾」占位）
+    pub schema: Option<String>,
+}
+
+/// 面包屑分段（纯函数）：连接 → 库 → schema
+///
+/// 库 / schema 段都从「schema 列表 + 当前绑定」推导：有绑定 → 带它所在库；
+/// 没绑定 → 两段都不占（不拿列表第一个假装是当前）。
+pub fn breadcrumb(
+    conn_id: Option<&str>,
+    options: &[ConnectionOption],
+    schemas: &[SchemaInfo],
+    current_schema: Option<&str>,
+) -> Breadcrumb {
+    let connection = status_text(conn_id, options);
+    let (catalog, schema) = match current_schema {
+        Some(current) => {
+            let catalog = schemas
+                .iter()
+                .find(|item| item.schema == current)
+                .and_then(|item| item.catalog.clone());
+            (catalog, Some(current.to_string()))
+        }
+        None => (None, None),
+    };
+    Breadcrumb {
+        connection,
+        catalog,
+        schema,
+    }
+}
+
 /// 连接选择器的展示数据（纯函数算出来的，便于穷举断言）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionChip {
@@ -79,6 +141,19 @@ impl ConnectionChip {
 
 /// 未绑定连接时的状态栏文案（说明“会跟随当前连接”，而不是含糊的“无”）
 pub const UNBOUND_LABEL: &str = "○ 未绑定连接";
+
+/// 【T2c-2】驱动的用户可读方言名（状态栏「方言 X」）
+///
+/// 已知驱动映射成产品名；未知驱动**不猜**——原样显示（如实原则：猜错方言比不显示更糟）。
+pub fn dialect_label(db_type: &str) -> String {
+    match db_type {
+        "mysql_native" | "mysql" => "MySQL".to_string(),
+        "postgres_native" | "postgresql" | "postgres" => "PostgreSQL".to_string(),
+        "sqlite" => "SQLite".to_string(),
+        "duckdb" => "DuckDB".to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// 把绑定的 id 解析成展示数据；`None` = 解析不出（宿主没给这个连接 / 没接端口）
 pub fn chip_for(
@@ -174,5 +249,56 @@ mod tests {
             connected: true,
         };
         assert_eq!(chip.clone().text(), chip.text());
+    }
+
+    /// T2c-1：面包屑分段——连接段恒在；库/schema 段只从「列表 + 绑定」推导
+    #[test]
+    fn breadcrumb_segments_follow_truth() {
+        use super::{SchemaInfo, breadcrumb};
+        let options = vec![option("P_orders", "orders", true)];
+        let schemas = vec![
+            SchemaInfo {
+                catalog: Some("rdb".to_string()),
+                schema: "public".to_string(),
+            },
+            SchemaInfo {
+                catalog: Some("rdb".to_string()),
+                schema: "analytics".to_string(),
+            },
+        ];
+
+        // 没绑定 schema：库 / schema 段都不占（不拿第一个假装是当前）
+        let crumb = breadcrumb(Some("P_orders"), &options, &schemas, None);
+        assert_eq!(crumb.connection, "●P·orders");
+        assert_eq!(crumb.catalog, None, "未选 schema 不该有库段");
+        assert_eq!(crumb.schema, None, "未选 schema 不该有 schema 段");
+
+        // 绑定了：带它所在库
+        let crumb = breadcrumb(Some("P_orders"), &options, &schemas, Some("analytics"));
+        assert_eq!(crumb.catalog.as_deref(), Some("rdb"));
+        assert_eq!(crumb.schema.as_deref(), Some("analytics"));
+
+        // 绑定在列表里找不到（列表没载好 / 连接不认识）：schema 段仍显示绑定，库段不猜
+        let crumb = breadcrumb(Some("P_orders"), &options, &schemas, Some("ghost"));
+        assert_eq!(crumb.schema.as_deref(), Some("ghost"));
+        assert_eq!(crumb.catalog, None, "列表里没有就不能编一个库出来");
+
+        // 未绑定连接：连接段如实说「未绑定」
+        let crumb = breadcrumb(None, &options, &schemas, None);
+        assert_eq!(crumb.connection, UNBOUND_LABEL);
+    }
+
+    /// T2c-2：方言名如实映射——已知驱动给产品名，未知驱动原样（不猜）
+    #[test]
+    fn dialect_labels_known_drivers_and_keeps_unknown() {
+        use super::dialect_label;
+        assert_eq!(dialect_label("mysql_native"), "MySQL");
+        assert_eq!(dialect_label("mysql"), "MySQL");
+        assert_eq!(dialect_label("postgres_native"), "PostgreSQL");
+        assert_eq!(dialect_label("sqlite"), "SQLite");
+        assert_eq!(dialect_label("duckdb"), "DuckDB");
+        // 未知驱动：原样显示（猜错比不显示更糟）
+        assert_eq!(dialect_label("oracle"), "oracle");
+        assert_eq!(dialect_label(""), "");
     }
 }

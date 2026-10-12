@@ -24,7 +24,7 @@ use crate::commands::{
     TriggerCompletion,
 };
 use crate::completion::{Candidate, CandidateKind, Catalog};
-use crate::connection::{ConnectionOption, ConnectionsPort};
+use crate::connection::{ConnectionOption, ConnectionsPort, SchemaInfo};
 use crate::execution::{self, CommitReport, QueryData, QueryRunner};
 use crate::export::{self, ExportFormat, ExportScope, RowKey};
 use crate::fold::{FoldSpan, spans as fold_spans};
@@ -6658,4 +6658,124 @@ fn discard_controls_clear_pending_and_keep_conflicts(cx: &mut TestAppContext) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// T2c-1 连接 ▸ 库 ▸ Schema 面包屑（状态栏最左；可切换，参考 DBeaver）
+// ---------------------------------------------------------------------------
 
+/// T2c-1 假 schema 端口：内存列表，渲染路径可调（不做 I/O）
+struct FakeSchemas(Vec<SchemaInfo>);
+
+impl crate::connection::SchemasPort for FakeSchemas {
+    fn schemas(&self, _conn_id: &str) -> Vec<SchemaInfo> {
+        self.0.clone()
+    }
+}
+
+fn schema_doc(shared: &EditorShared, id: &DocumentId) -> Option<String> {
+    shared.document_schema(id)
+}
+
+/// T2c-1①：面包屑在「SQL 模式 + 绑定连接 + 有 schema 列表」时渲染；
+/// 切 schema = 文档绑定真变；「使用连接默认」= 解绑（None）
+#[gpui_kit::test]
+fn breadcrumb_renders_and_switches_schema_binding(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let shared = EditorShared::new();
+    shared.attach_schemas(Rc::new(FakeSchemas(vec![
+        SchemaInfo {
+            catalog: Some("rdb".to_string()),
+            schema: "public".to_string(),
+        },
+        SchemaInfo {
+            catalog: Some("rdb".to_string()),
+            schema: "analytics".to_string(),
+        },
+    ])));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 面包屑渲染出来（debug_selector 在 DropdownButton 的按钮上）
+    assert!(
+        cx.debug_bounds("editor-breadcrumb").is_some(),
+        "SQL 模式 + 绑定连接 + 有 schema 列表 → 面包屑应渲染"
+    );
+    // 未选 schema：文档绑定保持 None（不拿列表第一个假装是当前）
+    assert_eq!(schema_doc(&shared, &id), None);
+
+    // 菜单项点击与直接调 set_schema 是同一函数（headless 弹菜单不可靠，走提交函数纪律）：
+    // 切到 analytics → 文档绑定真变
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_schema(Some("analytics".to_string()), cx);
+        });
+    });
+    assert_eq!(
+        schema_doc(&shared, &id).as_deref(),
+        Some("analytics"),
+        "切 schema 必须落进文档绑定（不是纯 UI 装饰）"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 「使用连接默认」= 解绑：绑定回 None
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_schema(None, cx);
+        });
+    });
+    assert_eq!(
+        schema_doc(&shared, &id),
+        None,
+        "「使用连接默认」应解绑文档级 schema"
+    );
+}
+
+/// T2c-1②：没有 schema 列表（端口未接 / 连接无缓存）→ 面包屑不渲染
+/// （退化为文本连接段——`labels` 的 connection 段兜底，不造一个假控件）
+#[gpui_kit::test]
+fn breadcrumb_absent_without_schema_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = shared_with_document(r"D:\sql\report.sql", "select 1");
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+    let (_panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("editor-breadcrumb").is_none(),
+        "没有 schema 列表就不该有面包屑控件（文本连接段兜底）"
+    );
+}
+
+/// T2c-1③：文本模式不显示面包屑（无 execute 能力 → 无连接概念）
+#[gpui_kit::test]
+fn breadcrumb_absent_in_text_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let shared = EditorShared::new();
+    shared.attach_schemas(Rc::new(FakeSchemas(vec![SchemaInfo {
+        catalog: Some("rdb".to_string()),
+        schema: "public".to_string(),
+    }])));
+    let id = shared
+        .open(OpenRequest::untitled("随便记点什么", EditorMode::Text))
+        .id()
+        .clone();
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+    let (_panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("editor-breadcrumb").is_none(),
+        "文本模式是纯记事本：没有执行就没有面包屑"
+    );
+}

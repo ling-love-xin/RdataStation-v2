@@ -1,10 +1,11 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；下一项 **2c UI 对齐**（或 2b 通用模式，见 §0）。
+> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**2c UI 对齐进行中**（T2c-1 通道面包屑完成，2026-10-12；下一项 T2c-2 方言段）。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
-> 基线（代码现状，2026-10-11 核实，2a 完成后更新）：
+> 基线（代码现状，2026-10-11 核实，2a/2c 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
-> - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 478 passed / rds-workbench lib 132 / 集成测试除环境占用项外全绿）
+> - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 482 passed / rds-workbench lib 134 / 集成测试除环境占用项外全绿）
+> - Phase 2c（壳收口）**进行中**（T2c-1 通道面包屑完成：rds-editor 482 / rds-workbench 134 测绿）
 > - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
 > - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
@@ -18,7 +19,7 @@
 | 期 | 名称 | 一句话 | 依赖 |
 | --- | --- | --- | --- |
 | 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **全部完成**（T2a-1~7 测绿）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
-| 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快 | 无 |
+| 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快（**T2c-1 完成**） | 无 |
 | 2b | 通用模式：更名 + 环境 + 脚本执行 | 全新能力（当前 Text 无脚本执行） | 状态栏微标部分依赖 2c |
 | 2d | 分析模式骨架 1c | Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
 
@@ -112,8 +113,8 @@
 - 工具栏三层（执行级/文档级/通道级）：已有
 
 ### 任务清单
-- [ ] **T2c-1 通道面包屑**：状态栏最左 `连接 ▸ 库 ▸ Schema`（可切换，同 DBeaver）；schema 列表来自 `CompletionPort::catalog`（已有 `all_schemas`）；切换 → 文档 Schema 绑定（随会话持久化，与 connection 同类）；SQL 模式显示、通用/分析模式不显示。
-- [ ] **T2c-2 方言段**：从连接 `db_type` 解析（`editor_connections` 已有）→ 状态栏「方言 PostgreSQL」；未绑定连接不摆（真实值原则）。
+- [x] **T2c-1 通道面包屑**：状态栏最左 `连接 ▸ 库 ▸ Schema`（可切换，同 DBeaver）；schema 列表来自 `CompletionPort::catalog`（已有 `all_schemas`）；切换 → 文档 Schema 绑定（随会话持久化，与 connection 同类）；SQL 模式显示、通用/分析模式不显示。✅ 2026-10-12 完成（见下「T2c-1 完成记录」）
+- [x] **T2c-2 方言段**：从连接 `db_type` 解析（`editor_connections` 已有）→ 状态栏「方言 PostgreSQL」；未绑定连接不摆（真实值原则）。✅ 2026-10-12 完成（`connection.rs::dialect_label` 纯函数——已知驱动映射产品名、未知驱动原样；`StatusInputs/StatusLabels.dialect` 独立段，渲染在连接段（面包屑/文本）之后、正文之前；host 从绑定连接 db_type 解析——未绑定不摆）
 - [ ] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。
 - [ ] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。
 - [ ] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。
@@ -123,6 +124,17 @@
 - 单测：面包屑分段纯函数（连接/库/schema 缺项不占位）；方言解析（识别/未绑定）；微标格式化（Ln/Col/Ch/大小/脏）。
 - 窗口用例：状态栏切 schema → 文档 Schema 绑定真变（真机：PG 切 schema 后执行落新 schema）；行|列切换入口真开列编辑（内核多光标）；重设菜单缩进真改内核 `TabSize`；工具栏面板折叠/移动/插分隔符/重置全链路（复用原型交互矩阵）。
 - 契约：`ui_contract` 全绿（状态栏/工具栏改动登记）；`check --all-targets` 零告警。
+
+### T2c-1 完成记录（2026-10-12，面包屑已接线并测绿）
+- **落点（文件级）**：`editor/src/connection.rs`（`SchemaInfo{catalog: Option<String>, schema}`——注释：MySQL 无 Catalog 层时 catalog=None、`SchemasPort{fn schemas(conn_id)->Vec<SchemaInfo>}`（要求内存快照，渲染路径可调）、`SchemasHandle=Rc<dyn SchemasPort>`、`Breadcrumb{connection, catalog: Option, schema: Option}`、纯函数 `breadcrumb(conn_id, options, schemas, current_schema)`——**库/schema 段只从「列表+绑定」推导**：未选 schema → 两段都不占（不拿列表第一个假装当前）；绑定在列表找不到 → schema 段仍显示绑定、库段不猜；未绑定 → `UNBOUND_LABEL`；文件尾单测 `breadcrumb_segments_follow_truth`）+ `service.rs`（`Document.schema: Option<String>` + `schema()` 访问器 + `OpenRequest.schema` + `Document::new` 签名加参 + `set_schema`（返回是否真变）/`schema_for`）+ `shared.rs`（`schemas` 端口字段 + `attach_schemas`/`schemas(conn_id)`/`document_schema(id)`——未接端口=空列表如实降级）+ `view/widgets/status_bar.rs`（`StatusControls.breadcrumb: Option<AnyElement>` 最前；**`StatusLabels` 结构重构** `{connection: Option, body, right}`——连接段独立成段，面包屑渲染时用它替代文本连接段；左段渲染 `.children(breadcrumb).when(无breadcrumb, 文本连接段).child(body)`）+ `view/host.rs`（`set_schema(&mut self, Option<String>, cx)` 紧跟 set_channel；render 在 interrupt 前插入 breadcrumb 构造块——`communicating.then(||…)`：`shared.schemas(conn_id)` 空 → 返回 None 退化文本连接段；label = 连接 ▸ 库 ▸ schema（未选显 "schema"）；`DropdownButton::new("editor-breadcrumb")` + 菜单每 schema 一项 → `set_schema(Some)` + 分隔「使用连接默认」→ `set_schema(None)`）+ `workbench/src/services/editor_schema.rs`（**新**：`WorkbenchSchemas` 预载+内存读，与 `editor_completion` 同款——`NavCache::open(conn_id, project_root)` → `all_schemas()` 的 `(catalog, schema, id)` 映射 `SchemaInfo`；`attach(shared, workbench)`；`view.rs` 装配在 editor_completion 后一行）+ `view.rs`（装配）。
+- **测试**：rds-editor **482 passed**（478 + `breadcrumb_segments_follow_truth` + 3 窗口用例：`breadcrumb_renders_and_switches_schema_binding`（面包屑渲染 + 切 schema → 文档绑定真变 + 「使用连接默认」解绑）/ `breadcrumb_absent_without_schema_port`（无 schema 列表 → 控件不渲染，退文本连接段）/ `breadcrumb_absent_in_text_mode`）；rds-workbench lib **134 passed**（132 + `load_schemas_maps_catalog_and_schema_segments`（含排序后比较——`list_schemas` 不保证插入序）/ `catalog_segment_stays_empty_without_a_catalog_layer`）。
+- **踩坑记录**：`status_bar.rs` render 用 `.when(...)` 缺 `use gpui_kit::prelude::FluentBuilder as _;`（E0599）；`communicating.then(||…)` 闭包返回 `Option<AnyElement>` → `breadcrumb` 类型 `Option<Option<…>>`，构造处 `.flatten()`（E0308）；`.children(controls.breadcrumb)` move 后再 `controls.breadcrumb.is_none()` 借用冲突（E0382）→ 先 `let has_breadcrumb = controls.breadcrumb.is_some();`。
+- **未做（本轮）**：面包屑持久化（`Document.schema` 随会话跨重启）——任务书「随会话持久化，与 connection 同类」尚未落到 `session.rs`/`editor_session.rs`（engine EditorContext 加列），排 T2c-6 面板持久化前补；**切 schema 真影响执行**（限定名/会话默认 schema）——验收风险栏「不做纯 UI 装饰」需执行链（`editor_exec`/engine 会话级 `SET search_path`）接上，本轮先落「绑定真变 + 菜单全链路」。
+
+### T2c-2 完成记录（2026-10-12，方言段已接线并测绿）
+- **落点**：`connection.rs::dialect_label(db_type)` 纯函数（`mysql_native/mysql`→MySQL、`postgres_native/postgresql/postgres`→PostgreSQL、`sqlite`→SQLite、`duckdb`→DuckDB、**未知驱动原样显示**——猜错方言比不显示更糟）；`status_bar.rs` `StatusInputs.dialect: Option<&str>` + `StatusLabels.dialect: Option<String>`（labels 加「方言 」前缀，输入为裸引擎名）+ 渲染 `.when(dialect.is_some(), …)` 在连接段之后、正文之前；`host.rs` 从绑定连接的 `ConnectionOption.db_type` 解析（`communicating` + 绑定连接才有；未绑定不摆——「跟随当前连接」时方言是谁都说不准）。
+- **测试**：rds-editor **484 passed**（+`dialect_labels_known_drivers_and_keeps_unknown`、`dialect_segment_is_separable_and_only_with_a_connection`）。
+- **踩坑**：`dialect_text.flatten().as_deref()` E0716（flatten 的临时值撑不过语句）→ 先 `let dialect_owned = dialect_text.flatten();` 再 `.as_deref()`；测试输入给裸引擎名（前缀是 labels 的职责，两边都加会重复「方言 方言 PostgreSQL」）。
 
 ### 涉及文件
 `editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, session.rs(面包屑绑定持久化), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口)}` + `app/src/main.rs`（行|列切换命令注册）。
