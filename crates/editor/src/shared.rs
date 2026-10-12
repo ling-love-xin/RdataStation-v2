@@ -518,6 +518,11 @@ impl EditorShared {
         self.service().schema_for(id)
     }
 
+    /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)）
+    pub fn document_len(&self, id: &DocumentId) -> usize {
+        self.service().document_len(id)
+    }
+
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）
     pub fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
         let guard = self.connections.borrow();

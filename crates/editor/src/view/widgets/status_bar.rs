@@ -40,6 +40,12 @@ pub struct StatusInputs<'a> {
     /// 光标位置（1 基，与主流编辑器一致）
     pub line: usize,
     pub column: usize,
+    /// 【T2c-3】光标全文偏移（字符；状态栏「Ch」微标）
+    pub cursor_offset: usize,
+    /// 【T2c-3】缩进宽度（内核 TabSize，状态栏「Sp」微标；真实值）
+    pub tab_size: usize,
+    /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)）
+    pub bytes: usize,
     /// 选中的字符数（0 = 无选区）
     pub selected_chars: usize,
     /// 动作失败的原因（未命名需另存为 / 有未保存改动 / 只读拒绝）；`None` = 无提示
@@ -65,6 +71,8 @@ pub struct StatusInputs<'a> {
 pub struct StatusControls {
     /// 【T2c-1】连接 ▸ 库 ▸ Schema 面包屑（可点切换；有它时替代文本连接段——它自己带连接信息）
     pub breadcrumb: Option<AnyElement>,
+    /// 【T2c-3】行｜列编辑切换入口（PopupMenu；列编辑内核多光标 API 未公开 → 列项置灰标注）
+    pub edit_mode: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B3】中断按钮，挂在**右段**
@@ -124,7 +132,7 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         body.push_str(&format!(" · {message}"));
     }
 
-    // 右：两个只读维度分别表达 + 光标 + 选区
+    // 右（T2c-3 英文微标）：两个只读维度分别表达 + Ln/Col/Ch + 编码/换行/缩进 + 大小 + 脏
     let mut parts: Vec<String> = Vec::new();
     if inputs.read_only.editor {
         parts.push("只读".to_string());
@@ -132,7 +140,18 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if inputs.read_only.connection {
         parts.push("连接只读".to_string());
     }
-    parts.push(format!("Ln {}, Col {}", inputs.line, inputs.column));
+    // 编码 / 换行是内核文本模型的统一事实（UTF-8 存储、`\n` 换行），不是编的
+    parts.push(format!(
+        "Ln {}, Col {}, Ch {} · UTF-8 · LF · Sp {} · {}",
+        inputs.line,
+        inputs.column,
+        inputs.cursor_offset,
+        inputs.tab_size,
+        human_size(inputs.bytes),
+    ));
+    if inputs.dirty {
+        parts.push("脏".to_string());
+    }
     if inputs.selected_chars > 0 {
         parts.push(format!("已选 {} 字", inputs.selected_chars));
     }
@@ -142,6 +161,19 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         dialect,
         body,
         right: parts.join(" · "),
+    }
+}
+
+/// 【T2c-3】字节数的人读微标（`<1K` / `1.2K` / `3.4M`；纯函数，可穷举）
+pub fn human_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}K", bytes as f32 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}M", bytes as f32 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", bytes as f32 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 
@@ -199,6 +231,7 @@ pub fn render(
                 .gap_1()
                 .text_xs()
                 .text_color(muted)
+                .children(controls.edit_mode)
                 .child(text.right)
                 .children(controls.interrupt),
         )
@@ -221,6 +254,9 @@ mod tests {
             statements: 3,
             line: 12,
             column: 4,
+            cursor_offset: 42,
+            tab_size: 2,
+            bytes: 1536,
             selected_chars: 0,
             message: None,
             executing: false,
@@ -427,5 +463,38 @@ mod tests {
 
         // 没绑定连接（文本模式 / 未绑定）→ 方言段不占位
         assert!(labels(&inputs(ReadOnly::none())).dialect.is_none());
+    }
+
+    /// 【T2c-3】字节数人读微标：B / K / M / G 四档，纯函数可穷举
+    #[test]
+    fn human_size_formats_b_k_m_g() {
+        use super::human_size;
+        assert_eq!(human_size(0), "0B");
+        assert_eq!(human_size(1023), "1023B");
+        assert_eq!(human_size(1536), "1.5K");
+        assert_eq!(human_size(1024 * 1024), "1.0M");
+        assert_eq!(human_size(5 * 1024 * 1024 * 1024), "5.0G");
+    }
+
+    /// 【T2c-3】右段英文微标：Ln/Col/Ch + 编码/换行/缩进 + 大小 + 脏，全部真实值
+    #[test]
+    fn right_segment_uses_english_badges_with_real_values() {
+        let text = labels(&inputs(ReadOnly::none()));
+        assert!(
+            text.right.contains("Ln 12, Col 4, Ch 42"),
+            "行/列/光标偏移：{}",
+            text.right
+        );
+        assert!(
+            text.right.contains("UTF-8 · LF · Sp 2 · 1.5K"),
+            "编码/换行/缩进/大小：{}",
+            text.right
+        );
+        // 不脏不占位（真实值原则）
+        assert!(!text.right.contains("脏"), "干净文档不显示脏：{}", text.right);
+
+        let mut dirty = inputs(ReadOnly::none());
+        dirty.dirty = true;
+        assert!(labels(&dirty).right.contains("脏"), "脏文档要显脏点");
     }
 }

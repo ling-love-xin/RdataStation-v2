@@ -516,6 +516,15 @@ impl EditorService {
             .and_then(|doc| doc.schema().map(str::to_string))
     }
 
+    /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)，渲染路径可调）
+    pub fn document_len(&self, id: &DocumentId) -> usize {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.content.len())
+            .unwrap_or(0)
+    }
+
     /// 某文档绑定的连接（执行时用；`None` = 未绑定或文档不存在）
     pub fn connection_for(&self, id: &DocumentId) -> Option<String> {
         self.documents

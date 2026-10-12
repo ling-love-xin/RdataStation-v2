@@ -4263,13 +4263,14 @@ impl Render for EditorHostPanel {
         let _ = (primary, muted);
         let read_only = self.editor_read_only();
 
-        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示）
-        let (line, column, selected_chars) = {
+        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移）
+        let (line, column, cursor_offset, selected_chars) = {
             let state = self.editor.read(cx);
             let cursor = state.cursor_position();
             (
                 cursor.line as usize + 1,
                 cursor.character as usize + 1,
+                state.selected_range().start,
                 state.selected_text().chars().count(),
             )
         };
@@ -4319,6 +4320,10 @@ impl Render for EditorHostPanel {
             statements: self.statements,
             line,
             column,
+            cursor_offset,
+            // 缩进宽度：内核未改过 → TabSize 默认即实际（2；T2c-4 重设后从这里走 Shared）
+            tab_size: gpui_kit::component::input::TabSize::default().tab_size,
+            bytes: self.shared.document_len(&self.document),
             selected_chars,
             message: self.message.as_deref(),
             executing: self.pending > 0,
@@ -4391,6 +4396,40 @@ impl Render for EditorHostPanel {
                     .into_any_element(),
             )
         });
+
+        // 【T2c-3】行｜列编辑切换入口：列编辑 = 多光标（内核 `add_cursor_above/below` 已实现
+        // 但 0.7.1 暴露为 `pub(super)`，外部 crate 调不到）→ 列项置灰 + 标注，不假装能用
+        // （用户约束：确认内核不支持才自研；这里已确认「存在但未公开」→ 列项如实置灰）。
+        let edit_mode = {
+            let entity = cx.entity();
+            DropdownButton::new("editor-edit-mode")
+                .small()
+                .button(
+                    Button::new("editor-edit-mode-btn")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-edit-mode".to_string())
+                        .label("行 ▾"),
+                )
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let entity = entity.clone();
+                    menu.item(PopupMenuItem::new("行编辑").checked(true))
+                        .item(
+                            PopupMenuItem::new("列编辑")
+                                .disabled(true)
+                                .on_click(move |_, _window, app| {
+                                    // 置灰项不该被点到；点到也只是提示（真实值原则，不假切）
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_message(
+                                            Some("列编辑：内核多光标 API 未公开（gpui-base 0.7.1）".to_string()),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
+                })
+                .into_any_element()
+        };
 
         // 中断（B3）：只在本文档真有语句没回填时出现（原型 §5.1：「中断」挂在状态栏■）
         let interrupt = self.can_interrupt().then(|| {
@@ -4860,6 +4899,7 @@ impl Render for EditorHostPanel {
             &status,
             status_bar::StatusControls {
                 breadcrumb: breadcrumb.flatten(),
+                edit_mode: Some(edit_mode),
                 tx: tx_controls,
                 interrupt,
             },

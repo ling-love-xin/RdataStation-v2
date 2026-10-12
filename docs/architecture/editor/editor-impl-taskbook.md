@@ -115,7 +115,7 @@
 ### 任务清单
 - [x] **T2c-1 通道面包屑**：状态栏最左 `连接 ▸ 库 ▸ Schema`（可切换，同 DBeaver）；schema 列表来自 `CompletionPort::catalog`（已有 `all_schemas`）；切换 → 文档 Schema 绑定（随会话持久化，与 connection 同类）；SQL 模式显示、通用/分析模式不显示。✅ 2026-10-12 完成（见下「T2c-1 完成记录」）
 - [x] **T2c-2 方言段**：从连接 `db_type` 解析（`editor_connections` 已有）→ 状态栏「方言 PostgreSQL」；未绑定连接不摆（真实值原则）。✅ 2026-10-12 完成（`connection.rs::dialect_label` 纯函数——已知驱动映射产品名、未知驱动原样；`StatusInputs/StatusLabels.dialect` 独立段，渲染在连接段（面包屑/文本）之后、正文之前；host 从绑定连接 db_type 解析——未绑定不摆）
-- [ ] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。
+- [x] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。✅ 2026-10-12 完成（见下「T2c-3 完成记录」）
 - [ ] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。
 - [ ] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。
 - [ ] **T2c-6 面板持久化**：自定义布局（顺序/可见性/分组）随会话持久化；重置默认清除（恢复"执行 + 全部运行"两按钮布局）。
@@ -135,6 +135,13 @@
 - **落点**：`connection.rs::dialect_label(db_type)` 纯函数（`mysql_native/mysql`→MySQL、`postgres_native/postgresql/postgres`→PostgreSQL、`sqlite`→SQLite、`duckdb`→DuckDB、**未知驱动原样显示**——猜错方言比不显示更糟）；`status_bar.rs` `StatusInputs.dialect: Option<&str>` + `StatusLabels.dialect: Option<String>`（labels 加「方言 」前缀，输入为裸引擎名）+ 渲染 `.when(dialect.is_some(), …)` 在连接段之后、正文之前；`host.rs` 从绑定连接的 `ConnectionOption.db_type` 解析（`communicating` + 绑定连接才有；未绑定不摆——「跟随当前连接」时方言是谁都说不准）。
 - **测试**：rds-editor **484 passed**（+`dialect_labels_known_drivers_and_keeps_unknown`、`dialect_segment_is_separable_and_only_with_a_connection`）。
 - **踩坑**：`dialect_text.flatten().as_deref()` E0716（flatten 的临时值撑不过语句）→ 先 `let dialect_owned = dialect_text.flatten();` 再 `.as_deref()`；测试输入给裸引擎名（前缀是 labels 的职责，两边都加会重复「方言 方言 PostgreSQL」）。
+
+### T2c-3 完成记录（2026-10-12，英文微标已接线并测绿；行|列入口已摆，列编辑待内核公开）
+- **落点**：`service.rs::document_len(id)`（文档字节数 O(1)，渲染路径可调）+ `shared.rs::document_len`（转发）+ `view/widgets/status_bar.rs`（`StatusInputs` 加 `cursor_offset` / `tab_size` / `bytes`；`StatusControls` 加 `edit_mode: Option<AnyElement>` 放右段最前；`labels` 右段微标化 `Ln {line}, Col {col}, Ch {offset} · UTF-8 · LF · Sp {tab} · {size}` + 只读维度 + 脏 + 已选；`human_size(bytes)` 纯函数 B/K/M/G 四档）+ `view/host.rs`（光标读取加 `state.selected_range().start` 作 Ch；`tab_size` = `TabSize::default().tab_size`（内核未改 → 默认即实际，真值）；`bytes` = `shared.document_len(&self.document)`；行|列切换 `DropdownButton::new("editor-edit-mode")`——「行编辑」checked、「列编辑」disabled + on_click 提示「内核多光标 API 未公开（gpui-base 0.7.1）」）。
+- **测试**：rds-editor **486 passed**（+`human_size_formats_b_k_m_g`、`right_segment_uses_english_badges_with_real_values`）；rds-workbench lib **134 passed**。
+- **内核核实（多光标）**：gpui-base 0.7.1 `InputBaseState::add_cursor_above/below`（`input/base/state.rs:2150/:2159`）与 `Selections`（`cursor.rs:134`）**已实现但全部 `pub(super)`**——外部 crate 经 `gpui_kit::component::input::EditorState` 不可达；公开面只有 `select_all()`/`cursor_position()`/`selected_range()`。**结论：列编辑能力存在但未公开 → 入口如实置灰 + 标注，不假装能用**；后续若要真列编辑，走 **vendor 补丁暴露 `add_cursor_*`**（项目已有 vendor gpui-component + tab_panel patch 先例）——记入 §6 开放决定。
+- **编码/换行/Spaces 数据源**：UTF-8 / LF 是内核文本模型的统一事实（utf8 rope、`\n` 存储）——真值常量，非编造；Spaces = `TabSize::default().tab_size`（=2，内核未设过）——T2c-4 缩进重设后改从 Shared 读。
+- **T2c-3 遗留**：列编辑真实多光标（待内核公开）；`editor-edit-mode` 菜单在 headless 下弹层不可靠（走「渲染断言 + 提交函数纪律」），未写窗口用例——入口本身常显（行/列对三模式都是编辑内容语义）。
 
 ### 涉及文件
 `editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, session.rs(面包屑绑定持久化), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口)}` + `app/src/main.rs`（行|列切换命令注册）。
