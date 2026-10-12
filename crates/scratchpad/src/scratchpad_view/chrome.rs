@@ -3,6 +3,7 @@
 use super::*;
 
 use gpui_kit::component::accordion::Accordion;
+use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::button::DropdownButton;
 use gpui_kit::component::label::Label;
 // `Size` �?gpui 泛型 `Size<Pixels>` 冲突 �?�?�� `KitSize`（gpui-component 枚举）�
@@ -1774,37 +1775,52 @@ impl ScratchpadView {
             )
             .track_scroll(scroll.handle());
             // 原型 387-411（2026-10-11 用户点名「主体 Tree 也用 Accordion，显示
-            // 项目·草稿 或 草稿」）：主体草稿区块 = 单个 Accordion，默认展开。
+            // 项目·草稿 或 草稿」）：主体草稿区块 = 单个折叠容器，默认展开。
             // 标题 = 「草稿」，右侧圆形胶囊 badge（条数），折叠头自带 chevron。
+            // 2026-10-12 用户方向：Accordion 内嵌虚拟列表高度测量异常（树空白），
+            // 改用 Collapsible（gpui_base 揭盖容器，content 收起时不渲染）承载草稿主体。
+            let drafts_expanded = self.scratchpad.borrow().drafts_expanded;
+            let toggle_drafts = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        let mut v = this.scratchpad.borrow_mut();
+                        v.drafts_expanded = !v.drafts_expanded;
+                        cx.notify();
+                    });
+                }
+            };
+            let drafts_head = div()
+                .debug_selector(|| "sp-drafts-head".into())
+                .id("sp-drafts-head")
+                .cursor_pointer()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .child(tree::disclosure_slot().child(tree::disclosure_icon(drafts_expanded, muted)))
+                .child("草稿")
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .rounded_full()
+                        .text_xs()
+                        .text_color(muted)
+                        .bg(hover_bg)
+                        .child(row_count.to_string()),
+                )
+                .on_click(toggle_drafts);
             drafts = drafts.child(
-                Accordion::new("sp-acc-drafts")
-                    .multiple(false)
-                    .bordered(false)
-                    .with_size(KitSize::XSmall)
-                    .item(move |item| {
-                        item.open(true)
-                            .title(
-                                div()
-                                    .debug_selector(|| "sp-drafts-head".into())
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child("草稿")
-                                    .child(div().flex_1())
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .px_1()
-                                            .rounded_full()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .bg(hover_bg)
-                                            .child(row_count.to_string()),
-                                    ),
-                            )
-                            .content_style(StyleRefinement::default().pb_1().px_0p5())
-                            .child(div().flex_1().min_h_0().w_full().child(list))
-                    }),
+                div()
+                    .v_flex()
+                    .w_full()
+                    .min_h_0()
+                    .flex_1()
+                    .child(drafts_head)
+                    .child(Collapsible::new().open(drafts_expanded).h_full().content(
+                        div().flex_1().min_h_0().w_full().child(list),
+                    )),
             );
         }
 

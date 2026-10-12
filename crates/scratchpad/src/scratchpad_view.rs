@@ -221,6 +221,8 @@ pub struct ScratchpadViewState {
     trash: Vec<TrashEntry>,
     /// 回收站分组是否展开。
     trash_expanded: bool,
+    /// 草稿主体分组是否展开（Collapsible 承载，默认展开）。
+    drafts_expanded: bool,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,
     /// 当前选中条目路径集合（多选）。
@@ -368,6 +370,7 @@ impl Default for ScratchpadViewState {
             external_refs: Vec::new(),
             trash: Vec::new(),
             trash_expanded: false,
+            drafts_expanded: true,
             expanded: HashSet::new(),
             selected: HashSet::new(),
             anchor: None,
