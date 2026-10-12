@@ -9,13 +9,17 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 
 ## 布局灰度分层（核心骨架）
 
+> 2026-10-12 对齐 VS Code Dark/Light Modern 灰阶骨架（来源 `docs/architecture/ui/vscode-ui-design-system.md` §5.4）；
+> 品牌强调色（coral）保留。层级规则：**外层 chrome 比内容区暗**（暗色）——标题栏/侧栏/活动栏/状态栏/tab 栏同底 `#181818`，
+> 编辑器/活动 tab/挖空槽 `#1F1F1F`，弹层 `#202020`；亮色 chrome `#F8F8F8`、编辑器白。
+
 | 区域 | Dark | Light | 说明 |
 | --- | --- | --- | --- |
-| 编辑器背景 | `#1E1E1E` | `#FFFFFF` | 中央编辑区 |
-| 侧边栏背景 | `#252526` | `#F3F3F3` | 左右侧边栏 |
-| 活动栏背景 | `#333333` | `#ECECEC` | 产品语义 token |
-| 标题栏背景 | `#323233` | `#DDDDDD` | 标准字段 `title_bar.background` |
-| 挖空槽背景 | `#252526` | `#F3F3F3` | 产品语义 token |
+| 编辑器背景 | `#1F1F1F` | `#FFFFFF` | 中央编辑区 |
+| 侧边栏背景 | `#181818` | `#F8F8F8` | 左右侧边栏 |
+| 活动栏背景 | `#181818` | `#F8F8F8` | 产品语义 token（与侧栏同底，靠激活条/图标区分） |
+| 标题栏背景 | `#181818` | `#F8F8F8` | 标准字段 `title_bar.background` |
+| 挖空槽背景 | `#1F1F1F` | `#FFFFFF` | 产品语义 token（比标题栏亮一档，内嵌感） |
 | 状态栏背景 | `#A84A38` | `#C25B46` | 品牌 coral，`primary` 派生 |
 
 ## 取色规则（硬约束）

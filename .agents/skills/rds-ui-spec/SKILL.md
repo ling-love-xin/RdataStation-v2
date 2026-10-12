@@ -91,6 +91,8 @@ div().border_b(ui::HAIRLINE)
 - **活动栏**：宽 3rem；单项 2.75×2.5rem；激活条 2px（左栏在左、右栏在右）
 - **Dock 边栏**：左 15rem / 右 17.5rem 起步（`set_dock_size`，用户可拖拽）
 - **状态栏**：品牌色 + 白字；左右各一个自绘「完全隐藏 / 恢复」开关
+- **徽标（计数徽章）**：最小 1.125rem（18px，与 `NAV_BADGE_SIZE` 同档）；内距 3/5px；**圆角 11px 胶囊**；字号 @16 取 `text_sm`（13–14px）；长文本变体圆角 2px；活动栏角标 ≥10–11px（不取 9px）——规格来源 VS Code `countBadge`，见 `docs/architecture/ui/ui-design-spec.md` §4 与 `vscode-ui-design-system.md` §4.5
+- **换算纪律**：以 VS Code（13px 基准）为参照时一律「×16/13≈1.23 → 圆整 4px 网格」，换算依据登记在 `ui.rs` 模块头；11px 元信息字号与 22px 紧凑档**禁止引入**
 - **树节点**：行高 1.5rem（数据源导航树按虚拟列表用 `NAV_ROW_*`：分组 24 / 连接 26 / 对象 22）；缩进 = 0.5rem + 0.875rem × depth；激活条 2px；标题 `text_sm`（导航树按密度用 `text_xs`）；**悬停不覆盖激活态**；类别靠形状（图标）而非颜色
 - **列表行**：行高 1.5rem；`list` / `list_hover` / `list_active`
 - **输入框 / 下拉框**：高 2rem（紧凑 1.625rem）；圆角 `theme.radius`；弹层 `popover` + 内距 0.5rem
