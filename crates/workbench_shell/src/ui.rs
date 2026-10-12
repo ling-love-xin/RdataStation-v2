@@ -169,6 +169,12 @@ pub const NAV_ERR_SUMMARY_W: f32 = 6.5;
 pub const CONTROL_HEIGHT_SM: f32 = 1.625;
 /// 标准控件高度（输入框、按钮；2rem = 32px）
 pub const CONTROL_HEIGHT_MD: f32 = 2.0;
+/// 行内动作按钮最小命中区（1.25rem = 20px；可点区下限，ui-constraints §8.3）。
+///
+/// 导航行尾操作按钮（`NAV_ROW_ACTION_SIZE`）同值——本常量是**通用语义名**，
+/// 草稿箱等面板的行内轻量动作（hover 才显的 `+` / `✎` / `✕` 类）用它；
+/// 18px（1.125rem）小于命中区下限，曾导致草稿箱行尾按钮难点（2026-10-12 收口）。
+pub const ROW_ACTION_SIZE: f32 = 1.25;
 /// 内联图标尺寸（0.75rem = 12px）——行内小图标（展开指示 / 行尾操作 / 勾选）。
 ///
 /// 图标阶梯的第三档（`docs/architecture/theme/ui-constraints.md` §2：12 / 14 / 16px）。

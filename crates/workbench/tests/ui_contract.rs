@@ -56,6 +56,7 @@ fn ui_size_constants_match_design() {
         (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),
         (CONTROL_HEIGHT_MD, 32.0, "标准控件高"),
         (CONTROL_HEIGHT_SM, 26.0, "小控件高"),
+        (ROW_ACTION_SIZE, 20.0, "行内动作按钮最小命中区（ui-constraints §8.3）"),
         (ICON_SIZE_XS, 12.0, "内联图标"),
         (ICON_SIZE_SM, 14.0, "小图标"),
         (ICON_SIZE_MD, 16.0, "标准图标"),

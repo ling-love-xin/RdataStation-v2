@@ -74,6 +74,30 @@ pub fn disclosure_icon(expanded: bool, color: Hsla) -> Icon {
         .text_color(color)
 }
 
+/// 行内**计数徽章**（对齐 VS Code `countBadge` 胶囊规格：最小 18px、圆角全、
+/// 内距 4px（Tailwind `px_1`）、字号 `text_sm`（13–14px 档））。
+///
+/// 消费方（2026-10-12 起收口）：草稿箱树命中数角标、搜索结果树文件行命中数角标——
+/// 此前两处各写一遍「`px_1 + rounded_sm + text_xs + text_color(primary) + bg(hover_bg)`」。
+/// 规格来源：`docs/architecture/ui/ui-design-spec.md` §4 徽标行
+/// （VS Code `countBadge` 2026-10-12 实证，见 `vscode-ui-design-system.md` §4.5）。
+/// 颜色口径沿用既有消费点：`fg` = 强调色文字、`bg` = 浅底（信息类角标，非实底徽章）。
+pub fn count_badge(count: usize, fg: Hsla, bg: Hsla) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .min_w(rems(ui::NAV_BADGE_SIZE))
+        .h(rems(ui::NAV_BADGE_SIZE))
+        .px_1()
+        .rounded_full()
+        .text_sm()
+        .text_color(fg)
+        .bg(bg)
+        .child(count.to_string())
+}
+
 /// 缩进占位（子元素形式）：宽度 = `depth × step`。
 ///
 /// 用于「行的第一个子元素是缩进」的排版（草稿箱）；导航那边缩进走 `pl`，

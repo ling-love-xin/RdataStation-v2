@@ -69,6 +69,7 @@
 | 草稿箱行（虚拟列表） | `SCRATCHPAD_ROW_CHIPS` | 1.625 | 26 | `h(rems(…))` |
 | 控件 / 图标 | `CONTROL_HEIGHT_SM` | 1.625 | 26 | `rems(1.625)` |
 | | `CONTROL_HEIGHT_MD` | 2.0 | 32 | `h_8` |
+| | `ROW_ACTION_SIZE` | 1.25 | 20 | `rems(1.25)` |
 | | `ICON_SIZE_XS` | 0.75 | 12 | `size_3` |
 | | `ICON_SIZE_SM` | 0.875 | 14 | `size_3p5` |
 | | `ICON_SIZE_MD` | 1.0 | 16 | `size_4` |

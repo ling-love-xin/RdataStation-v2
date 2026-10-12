@@ -252,16 +252,7 @@ impl ScratchpadView {
                     if count == 0 {
                         this
                     } else {
-                        this.child(
-                            div()
-                                .flex_none()
-                                .px_1()
-                                .rounded_sm()
-                                .text_xs()
-                                .text_color(primary)
-                                .bg(hover_bg)
-                                .child(count.to_string()),
-                        )
+                        this.child(tree::count_badge(count, primary, hover_bg))
                     }
                 },
             )
@@ -310,7 +301,7 @@ impl ScratchpadView {
                 .child(
                     div()
                         .id(format!("sp-open-{key}"))
-                        .w(rems(1.125))
+                        .w(rems(ui::ROW_ACTION_SIZE))
                         .h_flex()
                         .items_center()
                         .justify_center()
@@ -324,7 +315,7 @@ impl ScratchpadView {
                 .child(
                     div()
                         .id(format!("sp-ren-{key}"))
-                        .w(rems(1.125))
+                        .w(rems(ui::ROW_ACTION_SIZE))
                         .h_flex()
                         .items_center()
                         .justify_center()
@@ -338,7 +329,7 @@ impl ScratchpadView {
                 .child(
                     div()
                         .id(format!("sp-del-{key}"))
-                        .w(rems(1.125))
+                        .w(rems(ui::ROW_ACTION_SIZE))
                         .h_flex()
                         .items_center()
                         .justify_center()
@@ -934,16 +925,7 @@ impl ScratchpadView {
                                 .overflow_hidden()
                                 .child(fname),
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .px_1()
-                                .rounded_sm()
-                                .text_xs()
-                                .text_color(primary)
-                                .bg(hover_bg)
-                                .child(count.to_string()),
-                        )
+                        .child(tree::count_badge(count, primary, hover_bg))
                         .child(file_ops),
                 );
 
