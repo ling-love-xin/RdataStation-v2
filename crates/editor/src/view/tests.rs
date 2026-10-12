@@ -6546,4 +6546,116 @@ fn submit_pending_changes_refuses_without_changes(cx: &mut TestAppContext) {
     assert!(reason.contains("没有待提交的变更"), "{reason}");
 }
 
+/// T2a-7①：结果工具栏的提交/回滚对只在有**待提交**变更时出现（参考 DBeaver）；
+/// 计数来自权威变更集（改 N 格 = 提交 N 处）
+#[gpui_kit::test]
+fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared("select * from orders", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 没改格：按钮组不出现
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "无变更时提交/回滚对不该出现"
+    );
+
+    // 改两格 → 按钮组出现；计数 = 权威变更集的待提交条数
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_some(),
+        "有待提交变更时提交/回滚对应出现"
+    );
+    let count = shared
+        .results()
+        .change_set(&id, 0)
+        .expect("变更集在")
+        .pending_count();
+    assert_eq!(count, 2, "按钮计数来源应为权威变更集的待提交条数");
+}
+
+/// T2a-7②：提交请求被接受（在途）后，提交中再提交被拦（按钮置灰的行为侧）；
+/// 回执全部成功回来后变更清空、按钮组消失（对齐 DBeaver：提交完就没有可提交的）
+#[gpui_kit::test]
+fn commit_controls_submit_then_vanish_on_receipt(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared(
+        "select * from orders",
+        Ok(CommitReport {
+            committed: 1,
+            skipped: 0,
+            per_statement: vec![1],
+            conflicts: vec![],
+        }),
+    );
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+
+    // 提交请求被接受 → 在途；提交中再提交被拦（置灰对应的行为：不重复提交）
+    assert!(
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).is_ok())
+        }),
+        "有变更时应接受提交"
+    );
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("已有提交在进行中"), "{reason}");
+
+    // 回执回来：提交成功 → 没有待提交 → 按钮组消失
+    wait_commit_done(cx, &panel);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "提交全部成功后按钮组应消失"
+    );
+}
+
+/// T2a-7③：撤销（回滚侧）→ 待提交变更全部丢弃、按钮组消失；冲突项保留（是证据，不抹掉）
+#[gpui_kit::test]
+fn discard_controls_clear_pending_and_keep_conflicts(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared("select * from orders", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    // 预置：1 条待提交 + 1 条冲突（冲突模拟提交回执留下的证据）
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    shared.update_results(|store| {
+        store.mutate_change_set(&id, 0, |changes| {
+            changes.upsert(crate::changes::CellChange::pending(1, 1, "bob", "bob2"));
+            changes.mark_conflict(1, 1);
+        });
+    });
+    assert_eq!(
+        shared.results().change_set(&id, 0).map(|c| c.pending_count()),
+        Some(1),
+        "预置：待提交 1 条 + 冲突 1 条"
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.discard_pending_changes(cx));
+    });
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 0, "撤销应清空待提交");
+    assert_eq!(set.conflicts(), vec![(1, 1)], "冲突是证据，回滚不该抹掉");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-commit-group").is_none(),
+        "撤销后没有待提交变更，按钮组应消失"
+    );
+}
+
 

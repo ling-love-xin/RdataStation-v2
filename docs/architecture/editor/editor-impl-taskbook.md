@@ -1,10 +1,10 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**已完成并测试绿**（T2a-1~6，2026-10-12）；下一项 **T2a-7 批量提交入口 UI**。
+> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；下一项 **2c UI 对齐**（或 2b 通用模式，见 §0）。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
 > 基线（代码现状，2026-10-11 核实，2a 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
-> - Phase 2a（单元格编辑 + 变更集 + 批量提交）**已完成**（T2a-1~6 测试绿：rds-editor 475 passed / rds-workbench 132 / rds-scratchpad 42）
+> - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 478 passed / rds-workbench lib 132 / 集成测试除环境占用项外全绿）
 > - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
 > - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
@@ -17,7 +17,7 @@
 
 | 期 | 名称 | 一句话 | 依赖 |
 | --- | --- | --- | --- |
-| 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **已完成**（T2a-1~6 测绿；剩 T2a-7 批量入口按钮）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
+| 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **全部完成**（T2a-1~7 测绿）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
 | 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快 | 无 |
 | 2b | 通用模式：更名 + 环境 + 脚本执行 | 全新能力（当前 Text 无脚本执行） | 状态栏微标部分依赖 2c |
 | 2d | 分析模式骨架 1c | Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
@@ -42,7 +42,7 @@
 - [x] **T2a-4 单元格编辑交互**：双击进编辑（组件 Input / 编辑器内核复用）；Enter 提交、Esc 取消、失焦提交；只读单元格不响应。✅（`grid.rs` `CellEdit` + `CommitEditHook` + 编辑方法集 + `_edit_sub` 订阅；commit hook 只落 Shared 权威变更集；脏格 `warning opacity(0.16)`）
 - [x] **T2a-5 批量提交**：`ExecTarget::Commit { changes, table, key }` + `QueryRunner::commit_changes`（默认实现如实不支持）；引擎/宿主生成 `UPDATE … WHERE key=…`（按行标识逐条，**单事务**包装）；影响行数 0 = 冲突（旧值已变），逐条报告。✅（`execution.rs::CommitReport.per_statement`——执行器只按语句顺序报影响行数；`workbench/editor_exec.rs::EngineQueryRunner::commit_changes`：通道闸 + 独立事务 BEGIN-COMMIT-ROLLBACK + 逐条 affected_rows + 逐条 UPDATE 进历史）
 - [x] **T2a-6 回执与失败**：回执落状态栏（"已提交 N 条变更（M 条冲突）"）；失败逐条原因；不打断其余提交；**四道防线**（通道/项目/连接只读/无行标识）在提交前拒（沿用 `project_write_check` 同一处闸门）。✅ 2026-10-12 完成（见下「Phase 2a 完成记录」；实际防线为**五道 + 空变更**复核）
-- [ ] **T2a-7 批量入口**：结果工具栏「提交变更」按钮（有变更集才亮）+ 变更计数（原型 SQL 模式）；参考 DBeaver 的提交/回滚对。⏳ 待做（`panel.submit_pending_changes` 入口已就位，只差按钮接线）
+- [x] **T2a-7 批量入口**：结果工具栏「提交变更」按钮（有变更集才亮）+ 变更计数（原型 SQL 模式）；参考 DBeaver 的提交/回滚对。✅ 2026-10-12 完成（`ResultControls.commit`：提交/回滚对只在 `pending_count > 0` 时出现；提交中提交按钮置灰；`discard_pending_changes` 丢弃全部待提交、保留冲突证据；3 个窗口级用例见下「Phase 2a 完成记录」）
 
 ### 验收标准（测试断言式）
 - 单测：编辑能力判据全矩阵（四种只读 × 有/无行标识）；行标识探测（有/无/复合键）；变更集 CRUD 与换结果清空；提交 SQL 生成（含主键 WHERE、列引用转义、单事务包装）；影响行数 0 → 冲突文案。
@@ -53,12 +53,15 @@
 ### 涉及文件（现状基线）
 `editor/src/{editability.rs(新), store.rs, execution.rs, export.rs(表名猜测复用), ui.rs, commands.rs}` + `editor/src/view/{results/grid.rs, host.rs, tests.rs}` + `workbench/src/services/{editor_exec.rs(commit 实现), editor_connections.rs(主键探测端口)}` + `engine/src/services/*`（写回语句执行）。
 
-### Phase 2a 完成记录（2026-10-12，T2a-1~6 已测绿）
-- **实际落点**（对照"涉及文件"基线）：`editor/src/changes.rs`（变更集）、`completion.rs`（行标识 trait）、`store.rs`（`DocumentResults.changes`）、`execution.rs`（`CommitReport.per_statement`）、`view/host.rs`（提交闸 + 泵回执）、`view/results/grid.rs`（`CellEdit` + 脏/冲突底色）、`view/tests.rs`（窗口级用例）；`workbench/src/services/editor_exec.rs`（`commit_changes` 实现）。
+### Phase 2a 完成记录（2026-10-12，T2a-1~7 已测绿）
+- **实际落点**（对照"涉及文件"基线）：`editor/src/changes.rs`（变更集）、`completion.rs`（行标识 trait）、`store.rs`（`DocumentResults.changes`）、`execution.rs`（`CommitReport.per_statement`）、`view/host.rs`（提交闸 + 泵回执 + 入口按钮 + 回滚）、`view/results/grid.rs`（`CellEdit` + 脏/冲突底色 + `ResultControls.commit`）、`view/tests.rs`（窗口级用例）；`workbench/src/services/editor_exec.rs`（`commit_changes` 实现）。
 - **T2a-6 细节**：提交前复核实际为**五道防线 + 空变更**——① 有提交在途回绝 ② 非源库通道回绝（label 来自 `ExecChannel`）③ `project_read_only` 回绝 ④ 文档连接只读回绝 ⑤ 无行标识回绝 ⑥ 空变更回绝；`commit_updates_rows` 返回 `CommitUpdates{sql, skipped, per_line: Vec<(usize,Vec<usize>)>}`（语句↔数据行/列索引，回执组装原料）；泵分支 `drain_commit_notes`：Ok → per_line×per_statement 逐条组装，影响行数 ≥1 → `mark_committed`，=0 → `mark_conflict` + 冲突文案；Err → `commit_in_flight=None` + 状态栏失败文案。
 - **踩坑记录**：`sync_result_view` 末尾按结果成败 `set_message(None)` 会清掉提交文案——必须先 `sync_result_view(cx)` 再 `set_message(Some(..))`（grid 冲突色已投影同步）；借用临时 `Ref` 需先 `let store = shared.results()` 绑定（E0716 四处）；`BTreeMap` 全路径。
 - **顺手修（quick_open 测试隔离缺陷）**：现象=workbench 全量并行时 `opening_the_palette_loads_scratchpad_files` 稳定 20s 超时（单跑 0.09s、串行全量绿）。根因= `scratchpad::jobs` 结果队列是**进程级全局单例**（`JOBS: OnceLock<Shared>`），quick_open 每个测试都建 palette、各自的 60ms 泵都会 `drain_file_lists()`——并行时别的泵把文件用例的清单 drain 走丢弃（root 不匹配）→ `files_pending` 卡真、永不重发。修复=`jobs.rs` 暴露跨 crate `pub fn test_lock()`（与 scratchpad 自身测试同一把锁，`#[cfg(test)]` 对依赖不可见故必须 pub），**quick_open 6 个用例全部持锁**（只锁文件用例无效，已实证）。验证=5 连跑全绿（0.5s）。
 - **跨会话协作说明**：另一会话给 `settings::model::ToolbarButtonCfg` 新增 `order: i32` 字段（serde default `default_toolbar_order`），`scratchpad_view/chrome.rs` 3 处 + `tests.rs` 2 处构造未跟上导致编译挂——已用 `..Default::default()` 补齐（chrome.rs 混着另一会话的状态栏图标化改动，未随本轮提交；settings 侧由对方会话收尾提交）。
+- **T2a-7 细节**：`ResultControls` 加 `commit: Option<AnyElement>`（渲染顺序：筛选 → **提交/回滚** → 分析 → 导出 → 刷新 → 复制）；按钮组只在 `pending_count > 0` 时构造（无变更不占位）；「提交变更 (N)」计数 = 权威变更集待提交条数，提交中（`commit_in_flight` 非空）`Button.disabled(true)`（走 `gpui_kit::base::Disableable`，host 需导入 trait）；「撤销变更」→ `discard_pending_changes` → `ChangeSet::discard_pending()`（只清 Pending，Committed 已落库/Conflict 是证据都保留）→ `sync_result_view` 投影脏格消失；提交回调 `Err` 落状态栏（复用 `submit_pending_changes` 五道防线文案）。
+- **T2a-7 测试**：3 个窗口级用例（`tests.rs`）——① `commit_controls_appear_with_pending_changes`：无变更按钮组不出现、改 2 格出现且计数 = `pending_count` ② `commit_controls_submit_then_vanish_on_receipt`：提交被接受后在途、提交中再提交被拦（"已有提交在进行中"）、回执后按钮组消失 ③ `discard_controls_clear_pending_and_keep_conflicts`：撤销清空待提交、冲突格保留、按钮组消失。断言用 `debug_bounds("editor-result-commit-group")`（按钮组容器带 debug_selector）。
+- **环境性测试失败（非本轮引入）**：`workbench/tests/zz_fixture_probe.rs` 的 DuckDB fixture `D:\data\123` 被 VS Code（PID 13612）占用 → 真实连接失败（文件独占锁）。`rds-workbench --lib` 132 passed 与基线一致；并行集成测试编译在另一会话构建交错时出现 flaky `can't find crate`（target 元数据竞争，`-j 2` 可规避，与代码无关）。
 - **待办（用户侧）**：hygiene-check 报告根目录散落 `build_diag*.log` / `test_*.log` / `wc_*.png|bmp` / `window_capture*`（测试日志 + 用户截图，AI 只归拢不删除，由用户清理）。
 
 ### 依赖与风险

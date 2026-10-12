@@ -103,6 +103,15 @@ impl ChangeSet {
             .retain(|change| change.status != CellChangeStatus::Committed);
     }
 
+    /// 【T2a-7】丢弃全部**待提交**变更（回滚：用户放弃未落库的编辑）
+    ///
+    /// 与 [`Self::clear_committed`] 互补：Committed 已落库不可回滚（保留成事实），
+    /// Conflict 是源库旧值被改过的证据（保留给用户看），只清 Pending。
+    pub fn discard_pending(&mut self) {
+        self.cells
+            .retain(|change| change.status != CellChangeStatus::Pending);
+    }
+
     /// 全部待提交变更（提交时取数）
     pub fn pending(&self) -> Vec<&CellChange> {
         self.cells

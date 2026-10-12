@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
@@ -1503,6 +1504,21 @@ impl EditorHostPanel {
     /// 提交中的真值（结果工具栏据此把「提交变更」置灰 / 显示进行中）
     pub fn commit_pending(&self) -> bool {
         self.commit_in_flight.is_some()
+    }
+
+    /// 【T2a-7】丢弃全部**待提交**变更（回滚：DBeaver 提交/回滚对的「回滚」侧）
+    ///
+    /// 清掉变更集里的 Pending 项（Committed 已落库、Conflict 是证据，都保留），
+    /// 网格的脏格底色随 [`Self::sync_result_view`] 的投影一起消失。
+    pub(crate) fn discard_pending_changes(&mut self, cx: &mut Context<Self>) {
+        let index = self.result_active;
+        let changed = self.shared.update_results(|store| {
+            store.mutate_change_set(&self.document, index, |changes| changes.discard_pending())
+        });
+        if changed {
+            self.sync_result_view(cx);
+            self.set_message(Some("已撤销未提交的变更".to_string()), cx);
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -4441,6 +4457,56 @@ impl Render for EditorHostPanel {
                 })
                 .into_any_element();
 
+            // 【T2a-7】批量提交/回滚对（参考 DBeaver）：有**待提交**变更才摆（改过的格才能
+            // 提交/撤销）；提交中提交按钮置灰（回执回来前不重复提交）。
+            let pending_changes = self
+                .shared
+                .results()
+                .change_set(&self.document, self.result_active)
+                .map(|changes| changes.pending_count())
+                .unwrap_or(0);
+            let commit = (pending_changes > 0).then(|| {
+                let entity = cx.entity();
+                let count = pending_changes;
+                let submitting = self.commit_pending();
+                let commit_entity = entity.clone();
+                let discard_entity = entity.clone();
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    // 测试按选择器断言按钮组的出现/消失（有变更才亮）
+                    .debug_selector(|| "editor-result-commit-group".to_string())
+                    .child(
+                        Button::new("editor-result-commit")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-commit".to_string())
+                            .disabled(submitting)
+                            .label(format!("提交变更 ({count})"))
+                            .on_click(move |_, _window, app| {
+                                commit_entity.update(app, |panel, cx| {
+                                    if let Err(reason) = panel.submit_pending_changes(cx) {
+                                        panel.set_message(Some(reason), cx);
+                                    }
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new("editor-result-discard")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-discard".to_string())
+                            .label("撤销变更")
+                            .on_click(move |_, _window, app| {
+                                discard_entity.update(app, |panel, cx| {
+                                    panel.discard_pending_changes(cx)
+                                });
+                            }),
+                    )
+                    .into_any_element()
+            });
+
             // 动作：有网格才摆复制（没东西可复制就不摆）；有 SQL 就摆重跑（原位刷新）
             let copy = self.result_can_copy.then(|| {
                 let entity = cx.entity();
@@ -4635,6 +4701,7 @@ impl Render for EditorHostPanel {
                     status: self.result_status.clone(),
                     controls: result_grid::ResultControls {
                         filter: Some(filter),
+                        commit,
                         analysis,
                         copy,
                         export,

@@ -1465,6 +1465,8 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 pub struct ResultControls {
     /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
     pub filter: Option<AnyElement>,
+    /// 【T2a-7】批量提交/回滚对（有待提交变更才给；参考 DBeaver 的提交/回滚对）
+    pub commit: Option<AnyElement>,
     /// 【B15】本地分析（下拉：计数 / 逐列分组计数；数据是桥接过来的行）
     pub analysis: Option<AnyElement>,
     /// 复制当前结果集（TSV）
@@ -1625,8 +1627,9 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
                         .children(controls.filter)
+                        .children(controls.commit)
                         .children(controls.analysis)
                         .children(controls.export)
                         .children(controls.refresh)
