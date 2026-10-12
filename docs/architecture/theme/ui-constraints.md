@@ -152,6 +152,20 @@
 - 口径来源：导航侧 `docs/architecture/database/database-navigator-prototype-design.md` v8 / v11 修订点（最早落定的一套）、草稿箱 `scratchpad-architecture.md` D14–D16、资产库 `docs/architecture/analytics_resource/analytics-resource-dev-plan.md`。
 - 这条规矩本身是为了防「同一件事在两个会话里各拍一次」（曾发生）：改口径就改本表 + 在相关面板文档留痕。
 
+### 8.4 VS Code 交互约定参照（2026-10-12 登记）
+
+以下约定以 VS Code 为**参照系**（来源：`docs/architecture/ui/vscode-ui-design-system.md` §7，全部源码实证），供组件层实现与面板治理时对齐；**不为了对齐而照抄 13px 基准下的绝对数值**（换算规则见 `ui.rs` 模块头）：
+
+| 约定 | 参照值 | 落点建议 |
+| --- | --- | --- |
+| 焦点环（全局） | 1px `focusBorder` + `outline-offset: -1px`（按钮例外 2px） | 用 `theme.ring` / 组件焦点态；**焦点必须可见**（键盘可达性的硬约束） |
+| 分隔条 Sash | 槽宽 4px、hover 显示延迟 300ms、**双击复位布局** | 后续实现 / 选用组件时按此语义 |
+| 滚动条（两套） | 工作台小部件 10px / 内容区（编辑器、表格）12–14px；淡入 100ms、淡出 800ms | 数据表格区用 12–14px 档（已有 `RESULT_TABLE_SIZE` 等组件档），普通列表走组件默认 |
+| 行态语义 | 活动（active）/ 未激活（inactive）= 键盘焦点在不在该视图 | 已固化于 §8.3（悬停不覆盖选中） |
+| 键盘导航（通用） | ↑↓←→ 移动焦点、Enter 确认、Esc 取消 / 关闭、Tab 补全（Quick Open）；Alt 聚焦菜单栏 | Quick Open / 列表 / 树均按此 |
+| 层级栈 | sash 35 → 遮罩 2540 → toast 2545 → Quick Input 2550 → dialog 2575 | 弹层 z-index 由 gpui-kit 组件栈承担；自绘覆盖层不得高于对话框 |
+| 密度档位 | 官方两档：default / compact（1.83 editorTabHeight、1.141 layout） | 若做紧凑档，取 **28px 语义**（状态栏 / tab / 行高 24 / 控件 26），**不引入 22px**（16px 基准下不可读） |
+
 ## 9. 提交前检查清单
 
 - [ ] 无裸色值；颜色全部来自 `theme.colors`
