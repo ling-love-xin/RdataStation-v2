@@ -1,12 +1,13 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**待评审**（用户拍板"先出实现任务书"，评审通过后按序开工）
+> 状态：**推进中**——Phase 2a（共用表格编辑）**已完成并测试绿**（T2a-1~6，2026-10-12）；下一项 **T2a-7 批量提交入口 UI**。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
-> 基线（代码现状，2026-10-11 核实）：
+> 基线（代码现状，2026-10-11 核实，2a 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
-> - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**
+> - Phase 2a（单元格编辑 + 变更集 + 批量提交）**已完成**（T2a-1~6 测试绿：rds-editor 475 passed / rds-workbench 132 / rds-scratchpad 42）
+> - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
-> - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/**滚动到底自动加载**；**值编辑（写回库）未做**（1b 余项）
+> - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
 
 ---
 
@@ -16,7 +17,7 @@
 
 | 期 | 名称 | 一句话 | 依赖 |
 | --- | --- | --- | --- |
-| 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | 你最拍板、最闭环的一块；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
+| 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **已完成**（T2a-1~6 测绿；剩 T2a-7 批量入口按钮）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
 | 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快 | 无 |
 | 2b | 通用模式：更名 + 环境 + 脚本执行 | 全新能力（当前 Text 无脚本执行） | 状态栏微标部分依赖 2c |
 | 2d | 分析模式骨架 1c | Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
@@ -35,13 +36,13 @@
 - **不做**：单元格下拉/日期等**列类型化编辑器**（无列类型，维持文本编辑）；行内新增/删除行（DBeaver 的 Insert Row / Delete Row 属二期，需先有行标识）；值预览弹层。
 
 ### 任务清单
-- [ ] **T2a-1 编辑能力判据**（纯函数，新模块 `editability.rs`）：`editable(通道, 项目态, 文档只读, 连接只读, 行标识, 列) -> Reason`；无主键/复合键/只读 → 编辑入口不亮且给原因（原型 §2.4）。
-- [ ] **T2a-2 行标识探测**：结果集来源 SQL 的表名（已有 `export.rs` 的表名猜测）→ 取主键/唯一键（经 `CompletionPort::catalog` 已有目录，或经连接端口补一个 `primary_key(conn, table)`）；探测不到 = 行标识 None → 整表只读。
-- [ ] **T2a-3 变更集模型**：`ChangeSet { cells: Vec<CellChange{row, col, original, edited, status}> }`，随结果集切换清空；脏单元格标色（待提交态）；按视图行序映射回数据行序（复用 `view_rows`）。
-- [ ] **T2a-4 单元格编辑交互**：双击进编辑（组件 Input / 编辑器内核复用）；Enter 提交、Esc 取消、失焦提交；只读单元格不响应。
-- [ ] **T2a-5 批量提交**：`ExecTarget::Commit { changes, table, key }` + `QueryRunner::commit_changes`（默认实现如实不支持）；引擎/宿主生成 `UPDATE … WHERE key=…`（按行标识逐条，**单事务**包装）；影响行数 0 = 冲突（旧值已变），逐条报告。
-- [ ] **T2a-6 回执与失败**：回执落状态栏（"已提交 N 条变更（M 条冲突）"）；失败逐条原因；不打断其余提交；**四道防线**（通道/项目/连接只读/无行标识）在提交前拒（沿用 `project_write_check` 同一处闸门）。
-- [ ] **T2a-7 批量入口**：结果工具栏「提交变更」按钮（有变更集才亮）+ 变更计数（原型 SQL 模式）；参考 DBeaver 的提交/回滚对。
+- [x] **T2a-1 编辑能力判据**（纯函数，新模块 `editability.rs`）：`editable(通道, 项目态, 文档只读, 连接只读, 行标识, 列) -> Reason`；无主键/复合键/只读 → 编辑入口不亮且给原因（原型 §2.4）。✅ 2026-10-12 前完成（EditGate 六枚举 + `cell_editable`/`result_editable`）
+- [x] **T2a-2 行标识探测**：结果集来源 SQL 的表名（已有 `export.rs` 的表名猜测）→ 取主键/唯一键（经 `CompletionPort::catalog` 已有目录，或经连接端口补一个 `primary_key(conn, table)`）；探测不到 = 行标识 None → 整表只读。✅（`completion.rs` trait `primary_key` + `ResultEntry.key_columns`/`row_key()`；`FakeCompletion.primary_key` 只认表名 `orders`）
+- [x] **T2a-3 变更集模型**：`ChangeSet { cells: Vec<CellChange{row, col, original, edited, status}> }`，随结果集切换清空；脏单元格标色（待提交态）；按视图行序映射回数据行序（复用 `view_rows`）。✅（`changes.rs` `CellChange`/`ChangeSet` 含 `mark_committed`/`mark_conflict`/`has_conflicts`/`pending_by_row`；`store.rs::DocumentResults.changes` + `change_set`/`mutate_change_set`）
+- [x] **T2a-4 单元格编辑交互**：双击进编辑（组件 Input / 编辑器内核复用）；Enter 提交、Esc 取消、失焦提交；只读单元格不响应。✅（`grid.rs` `CellEdit` + `CommitEditHook` + 编辑方法集 + `_edit_sub` 订阅；commit hook 只落 Shared 权威变更集；脏格 `warning opacity(0.16)`）
+- [x] **T2a-5 批量提交**：`ExecTarget::Commit { changes, table, key }` + `QueryRunner::commit_changes`（默认实现如实不支持）；引擎/宿主生成 `UPDATE … WHERE key=…`（按行标识逐条，**单事务**包装）；影响行数 0 = 冲突（旧值已变），逐条报告。✅（`execution.rs::CommitReport.per_statement`——执行器只按语句顺序报影响行数；`workbench/editor_exec.rs::EngineQueryRunner::commit_changes`：通道闸 + 独立事务 BEGIN-COMMIT-ROLLBACK + 逐条 affected_rows + 逐条 UPDATE 进历史）
+- [x] **T2a-6 回执与失败**：回执落状态栏（"已提交 N 条变更（M 条冲突）"）；失败逐条原因；不打断其余提交；**四道防线**（通道/项目/连接只读/无行标识）在提交前拒（沿用 `project_write_check` 同一处闸门）。✅ 2026-10-12 完成（见下「Phase 2a 完成记录」；实际防线为**五道 + 空变更**复核）
+- [ ] **T2a-7 批量入口**：结果工具栏「提交变更」按钮（有变更集才亮）+ 变更计数（原型 SQL 模式）；参考 DBeaver 的提交/回滚对。⏳ 待做（`panel.submit_pending_changes` 入口已就位，只差按钮接线）
 
 ### 验收标准（测试断言式）
 - 单测：编辑能力判据全矩阵（四种只读 × 有/无行标识）；行标识探测（有/无/复合键）；变更集 CRUD 与换结果清空；提交 SQL 生成（含主键 WHERE、列引用转义、单事务包装）；影响行数 0 → 冲突文案。
@@ -52,9 +53,17 @@
 ### 涉及文件（现状基线）
 `editor/src/{editability.rs(新), store.rs, execution.rs, export.rs(表名猜测复用), ui.rs, commands.rs}` + `editor/src/view/{results/grid.rs, host.rs, tests.rs}` + `workbench/src/services/{editor_exec.rs(commit 实现), editor_connections.rs(主键探测端口)}` + `engine/src/services/*`（写回语句执行）。
 
+### Phase 2a 完成记录（2026-10-12，T2a-1~6 已测绿）
+- **实际落点**（对照"涉及文件"基线）：`editor/src/changes.rs`（变更集）、`completion.rs`（行标识 trait）、`store.rs`（`DocumentResults.changes`）、`execution.rs`（`CommitReport.per_statement`）、`view/host.rs`（提交闸 + 泵回执）、`view/results/grid.rs`（`CellEdit` + 脏/冲突底色）、`view/tests.rs`（窗口级用例）；`workbench/src/services/editor_exec.rs`（`commit_changes` 实现）。
+- **T2a-6 细节**：提交前复核实际为**五道防线 + 空变更**——① 有提交在途回绝 ② 非源库通道回绝（label 来自 `ExecChannel`）③ `project_read_only` 回绝 ④ 文档连接只读回绝 ⑤ 无行标识回绝 ⑥ 空变更回绝；`commit_updates_rows` 返回 `CommitUpdates{sql, skipped, per_line: Vec<(usize,Vec<usize>)>}`（语句↔数据行/列索引，回执组装原料）；泵分支 `drain_commit_notes`：Ok → per_line×per_statement 逐条组装，影响行数 ≥1 → `mark_committed`，=0 → `mark_conflict` + 冲突文案；Err → `commit_in_flight=None` + 状态栏失败文案。
+- **踩坑记录**：`sync_result_view` 末尾按结果成败 `set_message(None)` 会清掉提交文案——必须先 `sync_result_view(cx)` 再 `set_message(Some(..))`（grid 冲突色已投影同步）；借用临时 `Ref` 需先 `let store = shared.results()` 绑定（E0716 四处）；`BTreeMap` 全路径。
+- **顺手修（quick_open 测试隔离缺陷）**：现象=workbench 全量并行时 `opening_the_palette_loads_scratchpad_files` 稳定 20s 超时（单跑 0.09s、串行全量绿）。根因= `scratchpad::jobs` 结果队列是**进程级全局单例**（`JOBS: OnceLock<Shared>`），quick_open 每个测试都建 palette、各自的 60ms 泵都会 `drain_file_lists()`——并行时别的泵把文件用例的清单 drain 走丢弃（root 不匹配）→ `files_pending` 卡真、永不重发。修复=`jobs.rs` 暴露跨 crate `pub fn test_lock()`（与 scratchpad 自身测试同一把锁，`#[cfg(test)]` 对依赖不可见故必须 pub），**quick_open 6 个用例全部持锁**（只锁文件用例无效，已实证）。验证=5 连跑全绿（0.5s）。
+- **跨会话协作说明**：另一会话给 `settings::model::ToolbarButtonCfg` 新增 `order: i32` 字段（serde default `default_toolbar_order`），`scratchpad_view/chrome.rs` 3 处 + `tests.rs` 2 处构造未跟上导致编译挂——已用 `..Default::default()` 补齐（chrome.rs 混着另一会话的状态栏图标化改动，未随本轮提交；settings 侧由对方会话收尾提交）。
+- **待办（用户侧）**：hygiene-check 报告根目录散落 `build_diag*.log` / `test_*.log` / `wc_*.png|bmp` / `window_capture*`（测试日志 + 用户截图，AI 只归拢不删除，由用户清理）。
+
 ### 依赖与风险
 - 依赖：1b 表格 delegate 已就绪（`render_td` 自绘可挂编辑、`view_rows` 视图行序）。
-- 风险：主键探测缺数据源 → 先接 `CompletionPort::catalog`（已有 schema/表/列），探测不到如实降级只读，不编造行标识。
+- 风险：主键探测缺数据源 → 先接 `CompletionPort::catalog`（已有 schema/表/列），探测不到如实降级只读，不编造行标识。**已化解**：探测经 `completion.rs` 的 `primary_key` trait + `ResultEntry.key_columns`/`row_key()`，探测不到 → 提交前回绝并说明。
 
 ---
 
@@ -170,8 +179,9 @@
 
 | # | 问题 | 建议 | 影响 |
 | --- | --- | --- | --- |
-| 1 | 2a 值编辑的写回：编辑器生成 `UPDATE` 还是引擎生成？ | 引擎生成（与改写族同层，方言/引用转义一处管），编辑器只发意图 | 决定 2a 涉及文件 |
+| 1 | 2a 值编辑的写回：编辑器生成 `UPDATE` 还是引擎生成？ | **已定（2026-10-12）**：宿主执行器侧生成——`workbench/src/services/editor_exec.rs::EngineQueryRunner::commit_changes` 按行标识逐条生成 `UPDATE … WHERE key=…`，独立事务 BEGIN-COMMIT-ROLLBACK 包装（非 engine crate 层，与改写族同层思路一致；方言/引用转义由执行器一处管，编辑器只发 `CommitUpdates` 意图 + 语句映射） | 已落地（T2a-5/6） |
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | 本轮不做，菜单置灰+标注；另立事项 | 避免假按钮 |
-| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改 | 排期 |
+| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度**：2a 完成 → 下一项 **T2a-7**（2a 收尾），之后按 2c→2b→2d | 排期 |
+| 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |
