@@ -595,6 +595,7 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
                 let cfg = v.toolbar_cfg.entry(key).or_insert_with(|| ToolbarButtonCfg {
                     visible: true,
                     side: key.default_side_text().to_string(),
+                    ..Default::default()
                 });
                 cfg.visible = !cfg.visible;
             }
@@ -644,6 +645,7 @@ fn toolbar_more_toggles_visibility_and_reset(cx: &mut TestAppContext) {
                 ToolbarButtonCfg {
                     visible: true,
                     side: ToolbarButtonKey::Sort.default_side_text().to_string(),
+                    ..Default::default()
                 }
             });
             cfg.side = "left".to_string();

@@ -31,8 +31,10 @@
 
 use ::shared::string::tsv_row;
 
+use crate::changes::ChangeSet;
 use crate::channel::ExecChannel;
 use crate::execution::ResultPlacement;
+use crate::export::RowKey;
 use crate::model::DocumentId;
 
 /// 每份文档保留的结果集上限（原型 §2.4；超出淘汰最旧的**未选中**项）
@@ -249,6 +251,15 @@ pub struct ResultEntry {
     /// 原型 §2.4 要求结果集携带来源摘要：进到第三份结果后，用户得能看出哪份是重查、
     /// 哪份是本地分析（只靠标签序号是看不出来的）。界面在有自定义标题时用标题（执行计划 / 分析）。
     pub lineage: Option<String>,
+    /// 【T2a-2】行标识：这份结果来源表的主键列（探测结果；`None` = 未探测 / 探测不到）
+    ///
+    /// 两条不变式：
+    /// - `None` = 没探测到 → 判据层（`result_editable` 的 `NoRowKey`）把整份结果**置为只读**，
+    ///   不编造行标识（写回靠主键 WHERE 定位行，猜一个键就是改错行的风险）；
+    /// - `Some(vec![])` 不会出现：探测不到主键直接 `None`（有主键才有 `Some`）。
+    ///   探测经宿主导航缓存（`CompletionPort::primary_key`，内存读），失败结果 / 写语句
+    ///   （没有可编辑的行）不探测。
+    pub key_columns: Option<Vec<String>>,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -309,6 +320,8 @@ impl ResultEntry {
             title: None,
             analysis: false,
             lineage: None,
+            // 【T2a-2】主键探测在回执路径回填（`host` 的 `probe_primary_key`）：构造时如实未知
+            key_columns: None,
             columns,
             rows,
             // 类型由上游补（`with_column_types`）：默认空 = “没报”，渲染与今天一致
@@ -334,6 +347,20 @@ impl ResultEntry {
                 .collect();
         }
         self
+    }
+
+    /// 【T2a-2】这份结果的行定位依据：主键列里**结果集真选中的那几列**（过滤后非空才给）
+    ///
+    /// 为什么过滤：写回生成的 `UPDATE … WHERE key=…` 要拿**本行结果里的值**绑到键上，
+    /// 结果没 SELECT 主键列（比如 `SELECT name FROM orders`）就没有可绑的值——
+    /// 返回 `None`，判据层（`NoRowKey`）如实置只读，而不是生成一条定位不到行的 SQL。
+    pub fn row_key(&self) -> Option<RowKey> {
+        let key_columns = self.key_columns.as_deref()?;
+        let present = key_columns
+            .iter()
+            .filter(|name| self.columns.iter().any(|column| column == *name))
+            .cloned();
+        RowKey::new(present)
     }
 
     /// 第 `col` 列（**数据列**下标）的类型；没报 / 越界 = `None`
@@ -403,6 +430,7 @@ impl ResultEntry {
             title: None,
             analysis: false,
             lineage: None,
+            key_columns: None,
             columns: Vec::new(),
             rows: Vec::new(),
             column_types: Vec::new(),
@@ -525,6 +553,9 @@ impl ResultEntry {
 struct DocumentResults {
     document: DocumentId,
     sets: Vec<ResultEntry>,
+    /// 【T2a-3】每份结果集的**未提交变更**（与 `sets` 同序同增减；选中项切换不清空——
+    /// 用户切标签看别的结果，回来编辑还在。清空只发生在结果被替换 / 淘汰 / 已提交时）
+    changes: Vec<ChangeSet>,
     /// 当前选中的结果集下标（始终指向 `sets` 中的有效位置；`sets` 非空时必有）
     active: usize,
 }
@@ -553,6 +584,7 @@ impl ResultStore {
                 self.documents.push(DocumentResults {
                     document,
                     sets: Vec::new(),
+                    changes: Vec::new(),
                     active: 0,
                 });
                 self.documents.last_mut().expect("刚插入")
@@ -564,14 +596,20 @@ impl ResultStore {
             ResultPlacement::Replace => {
                 if let Some(current) = slot.sets.get_mut(slot.active) {
                     *current = entry;
+                    // 【T2a-3】结果被覆盖：旧变更集随旧结果一起作废（新结果是新数据）
+                    if let Some(changes) = slot.changes.get_mut(slot.active) {
+                        *changes = ChangeSet::new();
+                    }
                 } else {
                     slot.sets.push(entry);
+                    slot.changes.push(ChangeSet::new());
                     slot.active = 0;
                 }
             }
             // 追加一份新的，选中项**不动**；只有“还没有任何结果”时新结果才需要被选中
             ResultPlacement::NewSet => {
                 slot.sets.push(entry);
+                slot.changes.push(ChangeSet::new());
                 if slot.sets.len() == 1 {
                     slot.active = 0;
                 }
@@ -595,8 +633,13 @@ impl ResultStore {
                     current.adopt_column_types(entry.column_types);
                 } else if let Some(current) = slot.sets.get_mut(slot.active) {
                     *current = entry;
+                    // 同上：形状对不上落成替换，旧变更作废
+                    if let Some(changes) = slot.changes.get_mut(slot.active) {
+                        *changes = ChangeSet::new();
+                    }
                 } else {
                     slot.sets.push(entry);
+                    slot.changes.push(ChangeSet::new());
                     slot.active = 0;
                 }
             }
@@ -635,6 +678,9 @@ impl ResultStore {
     }
 
     /// 选中某个结果集（标签条点击；下标越界 = 不改，返回是否真的改了）
+    ///
+    /// **变更集不因切换选中而清空**：变更集按结果集存（`changes` 与 `sets` 同序），
+    /// 换标签看别的结果、再切回来，这份的编辑还在——清空只发生在结果被覆盖 / 淘汰 / 提交后。
     pub fn select(&mut self, document: &DocumentId, index: usize) -> bool {
         let Some(slot) = self
             .documents
@@ -647,6 +693,37 @@ impl ResultStore {
             return false;
         }
         slot.active = index;
+        true
+    }
+
+    /// 【T2a-3】某份结果集的**未提交变更**（只读：UI 标脏格 / 变更计数都读它）
+    pub fn change_set(&self, document: &DocumentId, index: usize) -> Option<&ChangeSet> {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .and_then(|slot| slot.changes.get(index))
+    }
+
+    /// 【T2a-3】变更某份结果集的变更集（单元格提交 / Esc 撤销 / 提交回执标记都走这里）
+    ///
+    /// 返回是否真的改到（文档或结果集下标不存在 = `false`，调用方据此决定要不要报错）。
+    pub fn mutate_change_set(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        update: impl FnOnce(&mut ChangeSet),
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(changes) = slot.changes.get_mut(index) else {
+            return false;
+        };
+        update(changes);
         true
     }
 
@@ -697,6 +774,8 @@ fn evict_oldest(slot: &mut DocumentResults) {
             .find(|index| *index != slot.active)
             .expect("选中项只有一个，上限 > 1 时必有可淘汰项");
         slot.sets.remove(victim);
+        // 【T2a-3】变更集跟着结果集一起淘汰（被淘汰那份的编辑没有可提交的对象了）
+        slot.changes.remove(victim);
         if victim < slot.active {
             slot.active -= 1;
         }
@@ -725,6 +804,41 @@ mod tests {
         store
             .active(&DocumentId::new(document))
             .map(|entry| entry.sql.clone())
+    }
+
+    /// 【T2a-2】`row_key`：主键列里只留**结果真选中的列**；没探测 / 键列不在结果里 = `None`
+    #[test]
+    fn row_key_keeps_only_present_key_columns() {
+        let mut entry = entry("doc-1", "select id, name from orders", 1);
+        entry.columns = vec!["id".to_string(), "name".to_string()];
+
+        // 未探测（构造默认）：没有行定位依据 → None（判据 NoRowKey 置只读）
+        assert_eq!(entry.row_key(), None, "没探测 = None，不猜键");
+
+        // 探测出主键：结果里有该列 → Some
+        entry.key_columns = Some(vec!["id".to_string()]);
+        assert_eq!(
+            entry.row_key(),
+            Some(crate::export::RowKey::single("id")),
+            "主键列在结果里 → 行标识成立"
+        );
+
+        // 复合键：都选中才算（AND 顺序 = 探测顺序）
+        entry.key_columns = Some(vec!["a".to_string(), "id".to_string()]);
+        assert_eq!(
+            entry.row_key().map(|key| key.columns().to_vec()),
+            Some(vec!["id".to_string()]),
+            "结果里没有的键列（a）被过滤掉；只剩 id 仍可定位行"
+        );
+
+        // 结果没 SELECT 主键（select name）→ None（写回没有可绑定的值）
+        entry.columns = vec!["name".to_string()];
+        assert_eq!(entry.row_key(), None, "键列不在结果里 = 无法生成 WHERE 绑定");
+
+        // 探测到“空主键”不出现（约定 Some(vec![]) 不产生）——防御断言
+        entry.columns = vec!["id".to_string()];
+        entry.key_columns = Some(vec![]);
+        assert_eq!(entry.row_key(), None);
     }
 
     /// 【M8】「洞察此列」的入场条件：四条全满足才给入口。

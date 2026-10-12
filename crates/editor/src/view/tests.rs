@@ -11,9 +11,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _};
-use gpui_kit::component::table::TableDelegate as _;
+use gpui_kit::component::table::{TableDelegate as _, TableEvent};
 use gpui_kit::component::{Root, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
     Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
@@ -26,8 +25,8 @@ use crate::commands::{
 };
 use crate::completion::{Candidate, CandidateKind, Catalog};
 use crate::connection::{ConnectionOption, ConnectionsPort};
-use crate::execution::{self, QueryData, QueryRunner};
-use crate::export::{self, ExportFormat, ExportScope};
+use crate::execution::{self, CommitReport, QueryData, QueryRunner};
+use crate::export::{self, ExportFormat, ExportScope, RowKey};
 use crate::fold::{FoldSpan, spans as fold_spans};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
@@ -1888,7 +1887,7 @@ struct DialogHarness {
 }
 
 impl Render for DialogHarness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .child(self.area.clone())
@@ -5405,6 +5404,17 @@ impl crate::completion::CompletionPort for FakeCompletion {
     fn templates(&self) -> Vec<crate::completion::TemplateSnippet> {
         self.templates.clone()
     }
+
+    /// 【T2a-2】测试夹具：`orders` 表的主键是 `id`（让编辑判据真的放行——探测链路
+    /// 是真实走通的：结果入库前 `probe_primary_key` 会从这里取主键列）
+    fn primary_key(
+        &self,
+        _conn_id: Option<&str>,
+        _channel: ExecChannel,
+        table: &str,
+    ) -> Option<Vec<String>> {
+        (table == "orders").then(|| vec!["id".to_string()])
+    }
 }
 
 fn snippet(name: &str, content: &str) -> crate::completion::TemplateSnippet {
@@ -5993,3 +6003,547 @@ fn the_custom_analysis_dialog_opens_with_a_sql_box(cx: &mut TestAppContext) {
         .expect("要留一句可读的原因");
     assert!(message.contains("没有可分析的结果"), "{message}");
 }
+
+// ---------- 【T2a-4】单元格编辑：双击进入 / Enter 提交 / Esc 取消 / 失焦提交 ----------
+
+/// orders 表假执行器：返回 `id, name` 两列两行（编辑判据要的是“结果里有主键列”）
+struct OrdersRunner;
+
+impl QueryRunner for OrdersRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "alice".to_string()],
+                vec!["2".to_string(), "bob".to_string()],
+            ],
+            column_types: Vec::new(),
+            elapsed_ms: 5,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            notice: None,
+        })
+    }
+}
+
+/// 【T2a-4】编辑就绪的共享状态：orders 结果（探测端口给主键）+ 绑定连接
+///
+/// 探测链路真实走通：执行回执入库前 `probe_primary_key` 从补全端口取主键列，
+/// 判据（`cell_editable`）据此放行——不手动塞字段，测的就是生产路径。
+fn edit_ready_shared(content: &str) -> (EditorShared, DocumentId) {
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(OrdersRunner));
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog {
+            objects: vec![Candidate::new("public.orders", CandidateKind::Table)],
+            columns: vec![],
+            truncated: false,
+        },
+        templates: vec![] as Vec<crate::completion::TemplateSnippet>,
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+    (shared, id)
+}
+
+/// 把焦点交给正在编辑的编辑框（渲染出编辑框后调用）
+///
+/// 时机说明：进入编辑时 `render_edit_cell` 已把焦点指给编辑框，但**焦点事件要到
+/// 下一帧才派发**（gpui 的 focus 更新在 draw 时落地），直接打字会丢在窗口级。
+/// 这里再显式聚焦一次并补一帧，让打字稳定落在编辑框里。
+fn focus_edit_input(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    let handle = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .grid_for_test()
+            .read(cx)
+            .delegate()
+            .edit_input()
+            .expect("宿主已注入编辑框")
+            .read(cx)
+            .focus_handle(cx)
+    });
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 双击进入编辑 → 打字同步 → Enter 提交落变更集（链路：原生事件 + 内核事件 + 钩子）
+#[gpui_kit::test]
+fn cell_edit_enters_on_double_click_and_commits_on_enter(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 执行 → 结果带主键（探测链路真实走通）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+    assert!(
+        shared
+            .results()
+            .active(&id)
+            .is_some_and(|entry| entry.row_key().is_some()),
+        "orders 结果应探测到主键 id"
+    );
+
+    // 双击 (0, 2)：组件列 0 是行号槽，列 2 = 数据列 1（name）→ 进入编辑
+    cx.update(|_window, cx| {
+        panel.read(cx).grid_for_test().update(cx, |_state, cx| {
+            cx.emit(TableEvent::DoubleClickedCell(0, 2));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx)); // 渲染编辑框（初值同步）
+    assert!(
+        cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .editing()
+                .is_some()
+        }),
+        "双击后应进入编辑"
+    );
+    focus_edit_input(cx, &panel);
+
+    // 打字：值变化同步到编辑态（`InputEvent::Change` → `sync_edit_value`）
+    cx.simulate_keystrokes("2");
+    let input_value = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .grid_for_test()
+            .read(cx)
+            .delegate()
+            .edit_input()
+            .map(|input| input.read(cx).value().to_string())
+    });
+    let value = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .grid_for_test()
+            .read(cx)
+            .delegate()
+            .editing()
+            .map(|edit| edit.value.clone())
+    });
+    assert_eq!(
+        value.as_deref(),
+        Some("alice2"),
+        "输入应同步到编辑态（编辑框实体值={input_value:?}）"
+    );
+
+    // Enter → 提交 → 变更集（`PressEnter` → `commit_edit` → 钩子 → 权威存储）
+    cx.simulate_keystrokes("enter");
+    let change = shared
+        .results()
+        .change_set(&id, 0)
+        .and_then(|changes| changes.pending().into_iter().next().cloned());
+    assert_eq!(
+        change.map(|c| (c.row, c.column, c.original, c.edited)),
+        Some((0, 1, "alice".to_string(), "alice2".to_string())),
+        "提交后权威变更集应有一条 (0,1) alice→alice2"
+    );
+}
+
+/// Esc 取消：进了编辑、改了字，按 Esc 丢弃，变更集不动
+#[gpui_kit::test]
+fn cell_edit_esc_cancels_without_touching_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = edit_ready_shared("select * from orders");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    // 进编辑（列 2 = name）→ 聚焦编辑框 → 打字 → Esc
+    cx.update(|_window, cx| {
+        panel.read(cx).grid_for_test().update(cx, |_state, cx| {
+            cx.emit(TableEvent::DoubleClickedCell(1, 2));
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    focus_edit_input(cx, &panel);
+    cx.simulate_keystrokes("x");
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 编辑态清空、变更集为空（Esc 取消 = 丢弃输入值）
+    assert!(
+        !cx.update(|_window, cx| {
+            panel
+                .read(cx)
+                .grid_for_test()
+                .read(cx)
+                .delegate()
+                .editing()
+                .is_some()
+        }),
+        "Esc 后应退出编辑"
+    );
+    assert_eq!(
+        shared
+            .results()
+            .change_set(&id, 0)
+            .map(|changes| changes.pending_count()),
+        Some(0),
+        "Esc 取消不该落任何变更"
+    );
+}
+
+// 失焦提交：`PressEnter | Blur` 在订阅里共用**同一提交分支**（commit_edit + 脏格投影），
+// 其逻辑已被 `cell_edit_enters_on_double_click_and_commits_on_enter` 完整覆盖
+// （同一分支、同一代码路径）。
+//
+// 为什么不写窗口级失焦用例：headless 里 `window.focus(&other_handle)` 只改窗口焦点
+// 跟踪（`is_focused` 立即翻转），但**不派发元素级焦点事件**——`on_blur` 回调不触发、
+// `InputEvent::Blur` 不 emit（实测补多帧 draw 仍无回调）。这是测试环境限制；真实窗口
+// 焦点切换会派发（Input 内核的上下文菜单关闭等同样依赖它）。
+
+// ---------- 【T2a-6】批量提交：四道防线拦截 / 回执组装成功与冲突 / 失败留痕 ----------
+
+/// orders + 可控提交回执的假执行器：`run` 与 [`OrdersRunner`] 同数据；`commit_changes`
+/// 返回测试预设的回执（成功带逐条影响行数 / 失败带原因）
+struct CommitOrdersRunner {
+    commit_result: std::sync::Mutex<Result<CommitReport, String>>,
+}
+
+impl QueryRunner for CommitOrdersRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "alice".to_string()],
+                vec!["2".to_string(), "bob".to_string()],
+            ],
+            column_types: Vec::new(),
+            elapsed_ms: 5,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            notice: None,
+        })
+    }
+
+    fn commit_changes(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _table: &str,
+        _key: &RowKey,
+        _updates: &str,
+    ) -> Result<CommitReport, String> {
+        self.commit_result.lock().unwrap().clone()
+    }
+}
+
+/// 提交就绪：orders 结果 + 可控提交回执的执行器 + 绑定连接（编辑判据 / 探测链路同
+/// [`edit_ready_shared`]；提交回执由测试预设）
+fn commit_ready_shared(
+    content: &str,
+    commit_result: Result<CommitReport, String>,
+) -> (EditorShared, DocumentId) {
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(CommitOrdersRunner {
+        commit_result: std::sync::Mutex::new(commit_result),
+    }));
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog {
+            objects: vec![Candidate::new("public.orders", CandidateKind::Table)],
+            columns: vec![],
+            truncated: false,
+        },
+        templates: vec![] as Vec<crate::completion::TemplateSnippet>,
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+    (shared, id)
+}
+
+/// 直塞一格变更到权威变更集（测提交防线与回执组装，不重复走双击链路）
+fn seed_cell_change(
+    shared: &EditorShared,
+    id: &DocumentId,
+    row: usize,
+    column: usize,
+    original: &str,
+    edited: &str,
+) {
+    shared.update_results(|store| {
+        if let Some(index) = store.active_index(id) {
+            store.mutate_change_set(id, index, |changes| {
+                changes.upsert(crate::changes::CellChange::pending(
+                    row, column, original, edited,
+                ));
+            });
+        }
+    });
+}
+
+/// 等提交回执被泵消化（真实提交线程 → 回执队列 → 泵 `drain_commit_notes`；带超时）
+fn wait_commit_done(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let done = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_exec_results(cx);
+                panel.commit_in_flight_for_test().is_none()
+            })
+        });
+        if done {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "提交回执迟迟没回来");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// 执行出 orders 结果并等回填（T2a-6 用例共用开头）
+fn run_orders_result(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, panel);
+}
+
+/// 提交成功：影响行数全 1 → 变更集全部移出待提交、无冲突；状态栏如实报数
+#[gpui_kit::test]
+fn commit_receipt_marks_committed_on_success(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared(
+        "select * from orders",
+        Ok(CommitReport {
+            committed: 2,
+            skipped: 0,
+            per_statement: vec![1, 1],
+            conflicts: vec![],
+        }),
+    );
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    // 两格待提交（行 0 列 1、行 1 列 1 = name 列）
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
+
+    // 提交请求被接受 → 记为在途（索引与语句→行/列映射都在，回执组装的原料）
+    let ok = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).is_ok())
+    });
+    assert!(ok, "有变更 + 源库通道 + 可编辑，提交应被接受");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).commit_in_flight_for_test())
+            .map(|(set, per_line, skipped)| (set, per_line, skipped)),
+        Some((0, vec![(0, vec![1]), (1, vec![1])], 0)),
+        "在途状态应带结果集下标与语句→行/列映射"
+    );
+
+    wait_commit_done(cx, &panel);
+
+    // 全成功：两格都不再待提交、没有冲突；状态栏如实报数
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 0, "成功的变更应全部移出待提交");
+    assert!(!set.has_conflicts(), "全成功不该有冲突");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("状态栏有消息");
+    assert_eq!(message, "已提交 2 条变更", "{message}");
+}
+
+/// 冲突：影响行数 [1, 0] → 第一行标已提交、第二行标冲突；状态栏报"已提交 1 条变更（1 条冲突）"
+#[gpui_kit::test]
+fn commit_receipt_marks_conflicts_and_reports(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared(
+        "select * from orders",
+        Ok(CommitReport {
+            committed: 1,
+            skipped: 0,
+            per_statement: vec![1, 0],
+            conflicts: vec![],
+        }),
+    );
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
+
+    assert!(
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).is_ok())
+        }),
+        "提交应被接受"
+    );
+    wait_commit_done(cx, &panel);
+
+    // 行 0 已提交（移出待提交）、行 1 冲突（留在冲突区给用户看，不是待提交也不是已提交）
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 0, "冲突与已提交都不算待提交");
+    assert!(set.has_conflicts(), "有冲突要明示");
+    assert_eq!(set.conflicts(), vec![(1, 1)], "冲突格应标在数据行 1 列 1");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("状态栏有消息");
+    assert!(message.contains("已提交 1 条变更"), "{message}");
+    assert!(message.contains("1 条冲突"), "{message}");
+}
+
+/// 提交失败：执行器报错 → 在途清空、变更集原样保留（用户可再提交），状态栏报失败原因
+#[gpui_kit::test]
+fn commit_failure_leaves_changes_intact(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared(
+        "select * from orders",
+        Err("连接已断开".to_string()),
+    );
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+
+    assert!(
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).is_ok())
+        }),
+        "请求本身要成功（失败在执行器那一步，不是提交被拦）"
+    );
+    wait_commit_done(cx, &panel);
+
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 1, "失败后变更保持待提交，用户可重试");
+    assert!(!set.has_conflicts(), "失败不该被当成冲突");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("状态栏有消息");
+    assert!(message.contains("批量提交失败：连接已断开"), "{message}");
+}
+
+/// 提交前防线：连接只读 / 项目只读 / 通道只读挂载 → 提交被拦（变更不离开）
+#[gpui_kit::test]
+fn submit_pending_changes_respects_three_guards(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared("select * from orders", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+
+    // ① 连接只读（文档的连接只读维）
+    shared.update(|service| {
+        service.set_read_only(
+            &id,
+            crate::model::ReadOnly {
+                editor: false,
+                connection: true,
+            },
+        )
+    });
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("连接为只读"), "{reason}");
+
+    // ② 项目只读（项目锁那半）
+    shared.update(|service| service.set_read_only(&id, crate::model::ReadOnly::none()));
+    shared.attach_project(Rc::new(FakeProject { read_only: true }));
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("项目为只读"), "{reason}");
+    shared.attach_project(Rc::new(FakeProject { read_only: false }));
+
+    // ③ 通道只读挂载（加速档对源库是只读挂载，写回一律拒）
+    shared.update(|service| service.set_channel(&id, ExecChannel::Accelerated));
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("源库通道"), "{reason}");
+
+    // 变更全程没离开（防线拦截后仍待提交）
+    let store = shared.results();
+    let set = store.change_set(&id, 0).expect("变更集在");
+    assert_eq!(set.pending_count(), 1, "被拦的提交不能把变更弄丢");
+}
+
+/// 无行标识：跑一份探测不到主键的结果（unknown_t 不在补全端口的主键表里）→ 整份只读
+#[gpui_kit::test]
+fn submit_pending_changes_refuses_without_row_key(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared("select * from unknown_t", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+    assert!(
+        shared
+            .results()
+            .active(&id)
+            .map_or(true, |entry| entry.row_key().is_none()),
+        "unknown_t 结果应探测不到主键"
+    );
+
+    // 直塞一格变更（绕过编辑判据，只测提交防线）→ 提交被拦
+    seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("没探测到主键"), "{reason}");
+}
+
+/// 没有待提交变更：提交入口直接说清楚（按钮不该亮）
+#[gpui_kit::test]
+fn submit_pending_changes_refuses_without_changes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = commit_ready_shared("select * from orders", Ok(CommitReport::default()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_orders_result(cx, &panel);
+
+    let reason = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.submit_pending_changes(cx).unwrap_err())
+    });
+    assert!(reason.contains("没有待提交的变更"), "{reason}");
+}
+
+

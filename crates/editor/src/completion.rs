@@ -116,6 +116,18 @@ pub trait CompletionPort: 'static {
     fn templates(&self) -> Vec<TemplateSnippet> {
         Vec::new()
     }
+
+    /// 【T2a-2】表的主键 / 唯一键探测（写回的行定位依据；**同步 + 内存**）
+    ///
+    /// 与 [`Self::catalog`] 同一口径：实现必须内存读（宿主预载），不在编辑/回执路径做 I/O。
+    /// `table` 是 [`crate::export::default_table_name`] 猜出来的表名（裸名或 `schema.表` 都可，
+    /// 实现自行匹配）。返回：主键列名（表结构顺序）；`None` = 宿主不探测 / 没接 / 缓存没这表。
+    /// 默认实现给 `None`：不接的宿主如实不给行标识——判据层（`result_editable` 的
+    /// `NoRowKey`）会把该结果整表置为只读，**绝不编造一个键**（写回靠主键 WHERE 定位行，
+    /// 猜键就是改错行的风险）。
+    fn primary_key(&self, _conn_id: Option<&str>, _channel: ExecChannel, _table: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// 共享句柄

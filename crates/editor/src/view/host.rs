@@ -24,6 +24,7 @@ use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::changes::CellChange;
 use crate::channel::{self, ExecChannel};
 use crate::commands::{
     CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
@@ -62,6 +63,21 @@ struct PendingExport {
     format: ExportFormat,
     path: std::path::PathBuf,
     set: usize,
+}
+
+/// 【T2a-6】一次批量提交的在途状态（回执回来前暂存）
+///
+/// 为什么索引要**在生成时存下来**：执行器的回执只按语句顺序报影响行数
+/// （`CommitReport::per_statement`），它不知道每条对应结果集的哪一行哪一列——
+/// 那个映射在 `commit_updates_rows` 生成 UPDATE 时才有。回执一到，用它把
+/// 「影响行数 0 = 冲突」标到具体的格子（`mark_conflict`），不猜不重算。
+struct CommitInFlight {
+    /// 发起提交的结果集下标（回执处理要 `mutate_change_set` 定位它）
+    set_index: usize,
+    /// 每条 UPDATE 对应的 `(数据行号, 变更列)`（与执行器逐条影响行数**同序**）
+    per_line: Vec<(usize, Vec<usize>)>,
+    /// 生成时跳过的行数（键值 NULL 定位不到）——回执文案要如实说出来
+    skipped: usize,
 }
 
 /// 一份文档的编辑面板
@@ -196,6 +212,11 @@ pub struct EditorHostPanel {
     _grid_sub: Option<Subscription>,
     /// 【B15】筛选框订阅（输入 → 防抖）
     _filter_sub: Option<Subscription>,
+    /// 【T2a-4】编辑框订阅（输入变化 → 同步编辑态；Enter / 失焦 → 提交）。
+    /// 句柄即生命周期：不存字段就会被 drop、订阅即刻取消（编辑器内踩过一次）。
+    _edit_sub: Option<Subscription>,
+    /// 【T2a-6】提交中的一次批量提交（`None` = 没有提交在跑；回执回来前按钮保持灰）
+    commit_in_flight: Option<CommitInFlight>,
 }
 
 impl EditorHostPanel {
@@ -294,7 +315,7 @@ impl EditorHostPanel {
             cx,
         );
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
-        let grid_sub = cx.subscribe(&grid, |panel, grid, event: &TableEvent, cx| {
+        let grid_sub = cx.subscribe_in(&grid, window, |panel, grid, event: &TableEvent, window, cx| {
             let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
             // 【B14】`Ctrl+C` 复制谁：只认**最近一次选择事件**（组件没公开“当前是选格还是选行”，
             // 而它两个字段可以同时有值）。键位失效之后再选也就自动作废了，不用额外清理。
@@ -307,6 +328,43 @@ impl EditorHostPanel {
                 TableEvent::ClearSelection => None,
                 _ => panel.result_selection,
             };
+            // 【T2a-4】双击单元格 → 进入编辑（原生 `DoubleClickedCell` 事件；判据一次
+            // 问清：通道 / 项目 / 文档 / 连接 / 行标识 / 列。不过就不进编辑，顶部说明原因。
+            if let TableEvent::DoubleClickedCell(row, col) = event {
+                let gate = {
+                    let store = panel.shared.results();
+                    let entry = store.active(&panel.document);
+                    crate::editability::cell_editable(
+                        panel.channel(),
+                        crate::project::ProjectState {
+                            read_only: panel.shared.project_read_only(),
+                        },
+                        panel.read_only_flags(),
+                        entry.and_then(|entry| entry.row_key()).as_ref(),
+                        entry.map(|entry| entry.columns.len()).unwrap_or(0),
+                        col.saturating_sub(1),
+                    )
+                };
+                match gate {
+                    Ok(()) => {
+                        grid.update(cx, |state, cx| {
+                            if state.delegate_mut().begin_edit(*row, *col) {
+                                cx.notify();
+                            }
+                        });
+                        // 【T2a-4】进入编辑后**立即**把焦点交给编辑框（事件路径，不是 render——
+                        // render 是纯读阶段，那里的 `window.focus` 不可靠）。焦点事件在下一帧
+                        // draw 时派发，输入内核据此激活文本输入，用户才能直接打字。
+                        if let Some(input) = grid.read(cx).delegate().edit_input() {
+                            let focus = input.read(cx).focus_handle(cx);
+                            window.focus(&focus, cx);
+                        }
+                    }
+                    Err(reason) => {
+                        panel.result_notice = Some(format!("编辑被拦：{}", reason.reason()));
+                    }
+                }
+            }
             if let Some(status) = panel.result_status.take() {
                 panel.result_status = Some(ResultStatus {
                     selected_row,
@@ -315,6 +373,82 @@ impl EditorHostPanel {
             }
             cx.notify();
         });
+
+        // 【T2a-4】结果表格的单元格编辑框：**一个复用实体**（每次编辑复用同一个，
+        // 不做“每格一个实体”的泄漏）。初值同步与聚焦在网格渲染路径做（幂等一次）。
+        let edit_input = cx.new(|cx| InputState::new(window, cx));
+        // 编辑框事件（原生 `InputEvent`）：输入变化 → 同步到编辑态；Enter / 失焦 → 提交。
+        // 提交幂等：`commit_edit` 先清编辑态，失焦带起的第二次 Blur 是空转。
+        let _edit_sub = cx.subscribe_in(
+            &edit_input,
+            window,
+            |panel, state, event, _window, cx| match event {
+                InputEvent::Change => {
+                    let value = state.read(cx).value().to_string();
+                    panel.grid.update(cx, |table, _cx| {
+                        table.delegate_mut().sync_edit_value(value);
+                    });
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    panel.grid.update(cx, |table, cx| {
+                        table.delegate_mut().commit_edit(cx);
+                    });
+                    // 【T2a-4】提交完成后再刷新脏格底色（grid 已退出上面的 update，
+                    // 这里可安全再 update；投影数据读权威变更集——与真实状态同一口径）
+                    let dirty = {
+                        let store = panel.shared.results();
+                        let active = store.active_index(&panel.document).unwrap_or(0);
+                        store
+                            .change_set(&panel.document, active)
+                            .map(|changes| {
+                                changes
+                                    .pending()
+                                    .iter()
+                                    .map(|change| (change.row, change.column))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    };
+                    panel.grid.update(cx, |table, cx| {
+                        table.delegate_mut().set_dirty(dirty);
+                        cx.notify();
+                    });
+                }
+                _ => {}
+            },
+        );
+        // 编辑框实体 + 提交钩子注入网格（提交走钩子交回面板落变更集）
+        {
+            let edit_weak = edit_input.clone();
+            grid.update(cx, |state, _cx| {
+                state.delegate_mut().set_edit_input(edit_weak);
+            });
+            let shared_for_commit = shared.clone();
+            let document_for_commit = document.clone();
+            grid.update(cx, |state, _cx| {
+                state.delegate_mut().set_commit_edit_hook(std::rc::Rc::new(
+                    move |row, column, original, edited, _cx| {
+                        // 【T2a-4】提交落权威变更集：只动 Shared（独立实体，可安全 update）。
+                        // 钩子是在网格 delegate 内部（`commit_edit`）被调用的——这里再
+                        // update 网格就是重入 panic；脏格重投影由订阅闭包（PressEnter /
+                        // Blur 分支）在 commit 完成后做，那里 grid 已退出 update。
+                        shared_for_commit.update_results(|store| {
+                            let active = store.active_index(&document_for_commit).unwrap_or(0);
+                            store.mutate_change_set(&document_for_commit, active, |changes| {
+                                if edited == original {
+                                    // 值没变（改回来）：清掉这条变更
+                                    changes.remove(row, column);
+                                } else {
+                                    changes.upsert(CellChange::pending(
+                                        row, column, original, edited,
+                                    ));
+                                }
+                            });
+                        });
+                    },
+                ));
+            });
+        }
 
         // 【B5b】滚动到底自动加载：组件库在可见范围接近末尾时调 delegate 的 `load_more`，
         // 而“该不该再取一段”只有面板知道（选中哪份结果、忙不忙）——走钩子交回给面板。
@@ -412,6 +546,8 @@ impl EditorHostPanel {
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
             _filter_sub: Some(filter_sub),
+            _edit_sub: Some(_edit_sub),
+            commit_in_flight: None,
         }
     }
 
@@ -1275,6 +1411,111 @@ impl EditorHostPanel {
             editor: document.editor,
             connection: document.connection || self.shared.project_read_only(),
         }
+    }
+
+    /// 【T2a-6】批量提交当前结果集的变更集（提交前复核四道防线，与编辑判据同一套口径）
+    ///
+    /// 四道防线（通道 / 项目只读 / 连接只读 / 无行标识）在**提交前**复核而不是只信编辑时的
+    /// 判据：用户可能改完几格才切通道 / 锁项目，提交时防线已变——这里把变了的拦下。
+    ///
+    /// 返回 `Err(可读原因)` = 提交被拦（调用方负责展示）；成功则把这次提交记为在途
+    /// （[`CommitInFlight`]），回执回来在轮询泵里组装冲突并落状态栏。
+    pub(crate) fn submit_pending_changes(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        // ① 提交中不再接新提交（回执回来前按钮保持灰）
+        if self.commit_in_flight.is_some() {
+            return Err("已有提交在进行中（等回执回来）".to_string());
+        }
+        // ② 通道闸：写回只走源库通道（加速 / 联邦只读挂载，改不了源库）
+        let channel = self.channel();
+        if !channel.allows_source_writes() {
+            return Err(format!("提交只支持源库通道（当前是 {}）", channel.label()));
+        }
+        // ③ 项目只读（沿用 project_write_check 的判据：强只读直接拒）
+        if self.shared.project_read_only() {
+            return Err("项目为只读模式：写语句被拒（要改数据先解锁项目）".to_string());
+        }
+        // ④ 连接只读
+        let connection_read_only = self
+            .with_document(|doc| doc.read_only().connection)
+            .unwrap_or(false);
+        if connection_read_only {
+            return Err("连接为只读模式：批量提交被拒".to_string());
+        }
+        // ⑤ 无行标识 → 整份只读（判据层已拦住编辑；这里防判据变化后仍能提交）
+        let entry = self
+            .shared
+            .results_active(&self.document)
+            .ok_or_else(|| "当前没有可提交的结果集".to_string())?;
+        let set_index = self
+            .shared
+            .results()
+            .active_index(&self.document)
+            .ok_or_else(|| "当前没有可提交的结果集".to_string())?;
+        let key_columns = entry
+            .key_columns
+            .clone()
+            .ok_or_else(|| "这份结果没探测到主键：改不了（提交靠主键定位行）".to_string())?;
+        let key = crate::export::RowKey::new(key_columns)
+            .ok_or_else(|| "主键列为空（不该发生：探测到就不会是空）".to_string())?;
+
+        // ⑥ 生成 UPDATE 文本（含语句→行/列索引）；表名与主键探测同一处猜测（probe_primary_key）
+        let table = crate::export::default_table_name(Some(&entry.sql), 0);
+        // pending 克隆出借用边界（不拖住 results() 的 Ref）
+        let pending: Vec<crate::changes::CellChange> = {
+            let results = self.shared.results();
+            results
+                .change_set(&self.document, set_index)
+                .map(|changes| changes.pending().iter().map(|c| (*c).clone()).collect())
+                .unwrap_or_default()
+        };
+        if pending.is_empty() {
+            return Err("没有待提交的变更".to_string());
+        }
+        let mut by_row: std::collections::BTreeMap<usize, Vec<&crate::changes::CellChange>> =
+            std::collections::BTreeMap::new();
+        for change in &pending {
+            by_row.entry(change.row).or_default().push(change);
+        }
+        let updates = crate::changes::commit_updates_rows(
+            &table,
+            &key,
+            &entry.columns,
+            &entry.rows,
+            &by_row,
+        )?;
+
+        // ⑦ 请执行器提交；成则记为在途（回执回来前不重复提交）
+        self.shared.request_commit_changes(
+            self.document.clone(),
+            table,
+            key,
+            entry.sql.clone(),
+            updates.sql,
+        )?;
+        self.commit_in_flight = Some(CommitInFlight {
+            set_index,
+            per_line: updates.per_line,
+            skipped: updates.skipped,
+        });
+        Ok(())
+    }
+
+    /// 提交中的真值（结果工具栏据此把「提交变更」置灰 / 显示进行中）
+    pub fn commit_pending(&self) -> bool {
+        self.commit_in_flight.is_some()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn commit_in_flight_for_test(
+        &self,
+    ) -> Option<(usize, Vec<(usize, Vec<usize>)>, usize)> {
+        self.commit_in_flight.as_ref().map(|inflight| {
+            (
+                inflight.set_index,
+                inflight.per_line.clone(),
+                inflight.skipped,
+            )
+        })
     }
 
     /// 【B13】通道现在能不能执行（不可用就给可读原因）
@@ -2254,7 +2495,7 @@ impl EditorHostPanel {
     }
 
     /// 网格实体（测试用：滚动到底自动加载得真在表格上调 `load_more` 才算验到链路）
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grid_for_test(&self) -> Entity<TableState<ResultGridDelegate>> {
         self.grid.clone()
     }
@@ -2372,6 +2613,73 @@ impl EditorHostPanel {
             }
         }
 
+        // 【T2a-6】批量提交的回执（成功/冲突/失败都要说清楚；冲突格在变更集里标出来）
+        //
+        // 组装规则：执行器按语句顺序报影响行数（`per_statement`），面板拿**生成时存的**
+        // 语句→(行,列) 索引（`CommitInFlight::per_line`）对齐——影响行数 0 = 这一行在源库
+        // 已定位不到（键值被改/行被删），该行所有变更列标冲突；≥1 = 这一格真的写到了，标已提交。
+        for note in self.shared.drain_commit_notes() {
+            if note.document != self.document {
+                continue;
+            }
+            match note.result {
+                Ok(mut report) => {
+                    let Some(inflight) = self.commit_in_flight.take() else {
+                        continue; // 过期回执（没有在途提交）——不误清别家状态
+                    };
+                    // 组装冲突回执（执行器不编造行/列，这里补全）：影响行数 0 = 这一行在源库
+                    // 已定位不到（键值被改 / 行被删），该行所有变更列标冲突；≥1 = 这一格真的写到了
+                    let mut committed = 0usize;
+                    for (i, (row, columns)) in inflight.per_line.iter().enumerate() {
+                        let affected = report.per_statement.get(i).copied().unwrap_or(0);
+                        for &column in columns {
+                            if affected >= 1 {
+                                committed += 1;
+                                self.shared.update_results(|store| {
+                                    store.mutate_change_set(
+                                        &note.document,
+                                        inflight.set_index,
+                                        |changes| changes.mark_committed(*row, column),
+                                    );
+                                });
+                            } else {
+                                report.conflicts.push((
+                                    *row,
+                                    column,
+                                    "影响行数 0：源库里的旧值已被别人改过".to_string(),
+                                ));
+                                self.shared.update_results(|store| {
+                                    store.mutate_change_set(
+                                        &note.document,
+                                        inflight.set_index,
+                                        |changes| changes.mark_conflict(*row, column),
+                                    );
+                                });
+                            }
+                        }
+                    }
+                    let mut message = format!("已提交 {committed} 条变更");
+                    if !report.conflicts.is_empty() {
+                        message.push_str(&format!(
+                            "（{} 条冲突：源库里的旧值已被改过）",
+                            report.conflicts.len()
+                        ));
+                    }
+                    if inflight.skipped > 0 {
+                        message.push_str(&format!("（{} 行键值为空，已跳过）", inflight.skipped));
+                    }
+                    // 先同步网格（冲突格标色）再落文案：`sync_result_view` 末尾会按结果成败
+                    // 重写状态栏（本次无失败 → `set_message(None)`），顺序反了文案会被清掉
+                    self.sync_result_view(cx);
+                    self.set_message(Some(message), cx);
+                }
+                Err(reason) => {
+                    self.commit_in_flight = None;
+                    self.set_message(Some(format!("批量提交失败：{reason}")), cx);
+                }
+            }
+        }
+
         // 【B13/T1.6】源动作的回执（成败都要说出来：它是用户按的一个动作）
         for note in self.shared.drain_source_notes() {
             self.refresh_pending = self.refresh_pending.saturating_sub(1);
@@ -2443,6 +2751,10 @@ impl EditorHostPanel {
             if let Some(title) = title {
                 entry = entry.with_title(title);
             }
+            // 【T2a-2】行标识探测：结果来自哪张表 → 宿主导航缓存查主键（内存读，不阻塞）。
+            // 探测不到 = `None` → 判据 `NoRowKey` 如实置只读；有主键但结果没 SELECT 键列
+            // → `row_key()` 也为 `None`（写回没有可绑定的值），同样只读。
+            entry.key_columns = probe_primary_key(self, &entry);
             if is_mine && entry.failed() {
                 // 【B5b】取下一段失败：**已经抓到的行是用户的成果**，不能因为再抓失败就清掉。
                 // 所以这次失败不入存储（选中那份原样不动），只把原因说出来。
@@ -2508,8 +2820,7 @@ impl EditorHostPanel {
     /// 很难靠看界面发现）。
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let current_channel = self.channel();
-        let (
+        let current_channel = self.channel();        let (
             tabs,
             active,
             grid_data,
@@ -2604,6 +2915,38 @@ impl EditorHostPanel {
         self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
         self.result_can_copy = can_copy;
         self.result_is_analysis = extra_analysis;
+        // 【T2a-3/4/6】这份结果能不能编辑（入口级判据）+ 脏格 / 冲突格集合（投影自权威变更集）
+        //
+        // 冲突格与脏格分开投影：冲突格（提交没写进去）不是待提交变更，底色用 danger，
+        // 网格里 `set_conflict` 与 `set_dirty` 分开标，渲染时互不覆盖。
+        let (editable, dirty, conflict) = {
+            let store = self.shared.results();
+            let editable = store.active(&self.document).is_some_and(|entry| {
+                crate::editability::result_editable(
+                    self.channel(),
+                    crate::project::ProjectState {
+                        read_only: self.shared.project_read_only(),
+                    },
+                    self.read_only_flags(),
+                    entry.row_key().as_ref(),
+                )
+                .is_ok()
+            });
+            let change_set = store.change_set(&self.document, active);
+            let dirty = change_set
+                .map(|changes| {
+                    changes
+                        .pending()
+                        .into_iter()
+                        .map(|change| (change.row, change.column))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let conflict = change_set
+                .map(|changes| changes.conflicts())
+                .unwrap_or_default();
+            (editable, dirty, conflict)
+        };
         self.grid.update(cx, |state, cx| {
             match grid_data {
                 Some((columns, rows, types)) => {
@@ -2620,6 +2963,10 @@ impl EditorHostPanel {
             // 【B5b】这份结果还能不能再取一段 / 是不是正在取
             state.delegate_mut().set_has_more(has_more);
             state.delegate_mut().set_loading_more(loading_more);
+            // 【T2a-4/6】单元格编辑开关 + 脏格 / 冲突格底色（双击进编辑 / 标脏 / 冲突都看这里）
+            state.delegate_mut().set_editable(editable);
+            state.delegate_mut().set_dirty(dirty);
+            state.delegate_mut().set_conflict(conflict);
             state.refresh(cx);
         });
 
@@ -3415,8 +3762,28 @@ impl EditorHostPanel {
 impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
 
 /// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
-fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
-    let connection = outcome.connection.clone();
+/// 【T2a-2】结果集的行标识探测：从结果 SQL 猜表名 → 宿主导航缓存查主键列（内存读）
+///
+/// 返回 `None` 的四种情况（都如实置只读，不编造行标识）：
+/// - 失败结果 / 写语句（没有可编辑的行）——不探测，省一次查询；
+/// - 未绑定连接（`entry.connection` 为空）——不知道去哪张表；
+/// - 宿主没接补全端口 / 端口不支持探测——如实没有行标识；
+/// - 缓存没这张表 / 表没有主键——探测结果为空，同样给 `None`。
+fn probe_primary_key(panel: &EditorHostPanel, entry: &ResultEntry) -> Option<Vec<String>> {
+    if entry.error.is_some() || entry.columns.is_empty() {
+        return None;
+    }
+    let Some(connection) = entry.connection.as_deref() else {
+        return None;
+    };
+    let table = export::default_table_name(Some(&entry.sql), 0);
+    panel
+        .shared
+        .primary_key_for(Some(connection), entry.channel, &table)
+        .filter(|columns| !columns.is_empty())
+}
+
+fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connection = outcome.connection.clone();
     // 【B13】通道也随结论回来：标签星徽标与“切通道后标灰”靠它
     let channel = outcome.channel;
     // 【B15】血缘：失败也照样带（“这句话是下发筛选发出去的”对排查同样有用）

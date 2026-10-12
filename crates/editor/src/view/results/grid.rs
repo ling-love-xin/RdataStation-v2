@@ -43,6 +43,7 @@ use std::rc::Rc;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -63,6 +64,32 @@ use crate::view::widgets::status_bar;
 /// 而 delegate 在 `TableState` 里拿不到面板实体，所以走这个钩子（与执行通道同一个口径：
 /// 视图不自己发执行，只把意图交回给知道全局的那一层）。
 pub type LoadMoreHook = Rc<dyn Fn(&mut App)>;
+
+/// 【T2a-4】单元格编辑**提交**的回调（面板注入：把（数据行序、数据列序、原值、新值）
+/// 交给面板落变更集；面板自己在变更集里决定 upsert 还是移除）
+pub type CommitEditHook = Rc<dyn Fn(usize, usize, String, String, &mut App)>;
+
+/// 【T2a-4】正在编辑的单元格（编辑态由网格持有；提交 / 取消走钩子交回面板）
+///
+/// - 行号存两序：**视图行序**管渲染匹配（组件只懂视图行），**数据行序**管变更集与写回
+///   （筛选 / 排序之后视图行与数据行可以不同，而变更集的“行”必须是数据行）。
+/// - 列下标是**数据列序**（不含 `#` 行号槽；进入编辑时从组件列序折算掉）。
+/// - `settled`：编辑框的初值同步与聚焦是幂等一次性动作（在 render_td 里做），
+///   做过了就不再碰——免得每次重渲染都重设值 / 抢焦点。
+pub struct CellEdit {
+    /// 视图行序（渲染匹配用）
+    view_row: usize,
+    /// 数据行序（变更集与写回用）
+    data_row: usize,
+    /// 数据列序
+    column: usize,
+    /// 进入编辑时的原值（提交时若没变，面板据此不落变更）
+    original: String,
+    /// 当前输入值（`InputEvent::Change` 时从编辑框同步；提交时读它）
+    pub value: String,
+    /// 编辑框是否已完成首次聚焦与初值同步
+    settled: bool,
+}
 
 /// 【B14】「按值筛选」的钩子（面板注入：把值写进筛选框并立刻生效）
 pub type FilterValueHook = Rc<dyn Fn(&str, &mut App)>;
@@ -244,6 +271,23 @@ pub struct ResultGridDelegate {
     /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
     /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
     view_rows: Option<Vec<usize>>,
+    /// 【T2a-4】这份结果能不能编辑（面板同步数据时算：`ResultEntry` 编辑判据 +
+    /// 面板当前连接 / 项目只读防线；`false` 时双击不进入编辑）
+    editable: bool,
+    /// 【T2a-4】正在编辑的单元格（有值 = 编辑中；编辑框只在这一格渲染）
+    editing: Option<CellEdit>,
+    /// 【T2a-4】复用的编辑框实体（宿主构造时创建，同步数据时注入；每次编辑
+    /// 复用同一个，不做“每格一个实体”的泄漏）
+    edit_input: Option<Entity<InputState>>,
+    /// 【T2a-4】提交回调（面板注入：落变更集）
+    on_commit_edit: Option<CommitEditHook>,
+    /// 【T2a-3】脏格集合（**数据行序**，含列序；面板从权威变更集投影，标底色）
+    dirty: Vec<(usize, usize)>,
+    /// 【T2a-6】冲突格集合（提交回执标过 `Conflict` 的格子；面板从权威变更集投影）
+    ///
+    /// 与 `dirty` 分开：冲突格**不是**待提交的变更（提交已结束），它是「这一格没写进去、
+    /// 源库里的旧值已被别人改过」的**提示**——底色用 danger 而不是 warning，一眼能分清。
+    conflict: Vec<(usize, usize)>,
 }
 
 impl ResultGridDelegate {
@@ -265,6 +309,10 @@ impl ResultGridDelegate {
         // 冻结也一样：列都换了一批，钉子留在旧列号上没有意义
         self.frozen.clear();
         self.context_cell = None;
+        // 【T2a-3/4】数据被新结果顶掉：正在编辑的格子、标脏的集合都随旧数据作废
+        self.editing = None;
+        self.dirty.clear();
+        self.conflict.clear();
         // 类型是**这一份结果自己的**：先把上一份的清掉，等面板紧跟着给新的一份
         // （漏给就是“没类型”，不会错套到新数据上）
         self.column_types.clear();
@@ -290,6 +338,10 @@ impl ResultGridDelegate {
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
         self.has_more = false;
         self.loading_more = false;
+        // 【T2a-3/4】结果没了，编辑态与脏格一起作废
+        self.editing = None;
+        self.dirty.clear();
+        self.conflict.clear();
     }
 
     /// 【B14】记下最近右键的单元格（由 `render_td` 上的右键处理调用）
@@ -519,6 +571,185 @@ impl ResultGridDelegate {
             .get(col_ix - 1)
             .and_then(Option::as_ref)
             .map(|column| column.name.as_str())
+    }
+
+    // ---------- 【T2a-4】单元格编辑 ----------
+
+    /// 这份结果能否编辑（面板同步数据时算；`false` 时双击不进入编辑）
+    pub fn set_editable(&mut self, editable: bool) {
+        self.editable = editable;
+    }
+
+    /// 编辑框实体（宿主构造时创建、同步数据时注入；编辑框渲染用同一个实体）
+    pub fn set_edit_input(&mut self, input: Entity<InputState>) {
+        self.edit_input = Some(input);
+    }
+
+    /// 提交回调（宿主注入：落变更集）
+    pub fn set_commit_edit_hook(&mut self, hook: CommitEditHook) {
+        self.on_commit_edit = Some(hook);
+    }
+
+    /// 【T2a-3】脏格集合（面板从权威变更集投影；**数据行序**，含数据列序）
+    pub fn set_dirty(&mut self, dirty: Vec<(usize, usize)>) {
+        self.dirty = dirty;
+    }
+
+    /// 【T2a-6】冲突格集合（提交回执标过 `Conflict`；面板从权威变更集投影）
+    pub fn set_conflict(&mut self, conflict: Vec<(usize, usize)>) {
+        self.conflict = conflict;
+    }
+
+    /// 这一格是不是脏的（视图行序 + 组件列序 → 数据行 / 数据列比较）
+    fn is_dirty(&self, row_ix: usize, col_ix: usize) -> bool {
+        if Self::is_row_number(col_ix) {
+            return false;
+        }
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return false;
+        };
+        self.dirty.contains(&(data_ix, col_ix - 1))
+    }
+
+    /// 这一格是不是冲突的（提交没写进去；与脏格分开标色）
+    fn is_conflict(&self, row_ix: usize, col_ix: usize) -> bool {
+        if Self::is_row_number(col_ix) {
+            return false;
+        }
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return false;
+        };
+        self.conflict.contains(&(data_ix, col_ix - 1))
+    }
+
+    /// 这一格是否正在编辑（视图行序 + 组件列序匹配）
+    pub fn is_editing(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.editing
+            .as_ref()
+            .is_some_and(|edit| edit.view_row == row_ix && edit.column + 1 == col_ix)
+    }
+
+    /// 进入编辑：只设状态（初值同步 / 聚焦由 render_td 首次渲染时一次性做）。
+    /// 返回是否真的进入了（不可编辑 / 点行号槽 / 行越界 = `false`）。
+    pub fn begin_edit(&mut self, view_row: usize, col_ix: usize) -> bool {
+        if !self.editable || self.editing.is_some() || Self::is_row_number(col_ix) {
+            return false;
+        }
+        let Some(data_row) = self.data_row(view_row) else {
+            return false;
+        };
+        let column = col_ix - 1;
+        let original = self
+            .row_cell_text(view_row, col_ix)
+            .unwrap_or_default()
+            .to_string();
+        self.editing = Some(CellEdit {
+            view_row,
+            data_row,
+            column,
+            value: original.clone(),
+            original,
+            settled: false,
+        });
+        true
+    }
+
+    /// 取消编辑（Esc）：丢弃输入值回到非编辑态。**不**动变更集。
+    pub fn cancel_edit(&mut self) {
+        self.editing = None;
+    }
+
+    /// 提交编辑（Enter / 失焦）：取当前输入值走钩子交回面板。
+    /// 这里先清编辑态——面板落变更集后，编辑框不再渲染，InputState 失焦
+    /// 触发的 Blur 看到编辑态已空，不会重复提交。
+    pub fn commit_edit(&mut self, cx: &mut App) {
+        let Some(edit) = self.editing.take() else {
+            return;
+        };
+        if let Some(hook) = &self.on_commit_edit {
+            hook(edit.data_row, edit.column, edit.original, edit.value, cx);
+        }
+    }
+
+    /// 编辑框输入值同步（`InputEvent::Change` 时由宿主调；不区分“谁发的”）
+    pub fn sync_edit_value(&mut self, value: String) {
+        if let Some(edit) = &mut self.editing {
+            edit.value = value;
+        }
+    }
+
+    /// 当前编辑态（render_td 画编辑框用；借读不拷贝）
+    pub fn editing(&self) -> Option<&CellEdit> {
+        self.editing.as_ref()
+    }
+
+    /// 编辑框实体（宿主与测试聚焦 / 读值时用；未进入编辑也可能已注入——实体是复用的）
+    pub fn edit_input(&self) -> Option<Entity<InputState>> {
+        self.edit_input.clone()
+    }
+
+    /// 标记编辑框已完成“初值同步 + 聚焦”（render_td 首次渲染时调，防重复）
+    fn mark_edit_settled(&mut self) {
+        if let Some(edit) = &mut self.editing {
+            edit.settled = true;
+        }
+    }
+
+    /// 【T2a-4】编辑框（正在编辑的那一格）：`Input` 组件 + 初值同步 / 聚焦（幂等一次）+
+    /// Escape 取消。渲染位仍是原生的 `render_td`（属于 `TableDelegate` 的调用点）；
+    /// Enter 提交走 `InputEvent::PressEnter` 订阅（宿主接），Esc 因输入内核默认
+    /// `cx.propagate()`（不消费、不清值）能传到外层这里。
+    ///
+    /// 为什么放在普通 impl 而不是 trait impl：这是网格**自己的**渲染细节，不是
+    /// `TableDelegate` 接口的一部分（组件库不关心编辑框长什么样）。
+    fn render_edit_cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let state = self.edit_input.clone().expect("宿主必注入编辑框实体");
+        // 幂等一次性：首次渲染时同步初值（`set_value` **不发** `InputEvent::Change`，
+        // 不会把“用户改了才做”的副作用重跑一遍）。
+        // 聚焦**不在这里做**（render 是纯读阶段，`window.focus` 不可靠）：由宿主在
+        // 进入编辑的事件路径给（`host.rs` 双击分支），焦点事件在下一帧 draw 时派发。
+        if self.editing().is_some_and(|edit| !edit.settled) {
+            let initial = self
+                .editing()
+                .map(|edit| edit.value.clone())
+                .unwrap_or_default();
+            state.update(cx, |state, cx| state.set_value(initial, window, cx));
+            self.mark_edit_settled();
+        }
+        let theme = cx.theme();
+        // Escape：输入内核默认 `cx.propagate()`（不消费、不清值），在这里拦下 → 取消编辑。
+        // 元素回调没有实体参数，把表格实体抓到闭包里再 update。
+        let table = cx.entity().clone();
+        div()
+            .id(format!("editor-result-edit-cell-{row_ix}-{col_ix}"))
+            .size_full()
+            .h_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .on_key_down(move |event: &KeyDownEvent, _window, cx| {
+                // gpui 的键名是字符串（`Keystroke.key`），与 keymap 绑定一致：`"escape"`
+                if event.keystroke.key == "escape" {
+                    table.update(cx, |state, cx| {
+                        state.delegate_mut().cancel_edit();
+                        cx.notify();
+                    });
+                }
+            })
+            .child(
+                Input::new(&state)
+                    .id(format!("editor-result-cell-input-{row_ix}-{col_ix}"))
+                    .w_full()
+                    .h_full()
+                    .bordered(false)
+                    .bg(theme.colors.background),
+            )
     }
 
     /// 单元格文案：首列是行号，其余按 `col_ix - 1` 取数据
@@ -935,9 +1166,13 @@ impl TableDelegate for ResultGridDelegate {
         &mut self,
         row_ix: usize,
         col_ix: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        // 【T2a-4】正在编辑的这一格：画编辑框，不画普通文本（渲染位仍是原生 render_td）
+        if self.is_editing(row_ix, col_ix) {
+            return self.render_edit_cell(row_ix, col_ix, window, cx).into_any_element();
+        }
         let text = self.cell(row_ix, col_ix);
         // 类型决定“怎么画”（数字右对齐、布尔 / 时间族等宽）；没带类型就是 `Unknown`
         // ——那一档与今天完全一致
@@ -979,6 +1214,15 @@ impl TableDelegate for ResultGridDelegate {
             .truncate()
             .text_xs()
             .text_color(if is_null { muted } else { foreground })
+            // 【T2a-3】脏格（未提交变更）：浅警告底色，一眼看出哪些格子会被写回
+            .when(self.is_dirty(row_ix, col_ix), |cell| {
+                cell.bg(theme.colors.warning.opacity(0.16))
+            })
+            // 【T2a-6】冲突格（提交没写进去）：danger 底色，与脏格区分——优先级高于脏格
+            // （冲突格先被标过 dirty 的可能性存在：同一格再编辑后提交，两段底色会叠）
+            .when(self.is_conflict(row_ix, col_ix), |cell| {
+                cell.bg(theme.colors.danger.opacity(0.16))
+            })
             // 【类型感知】数字右对齐；其余左对齐
             .text_align(style.align)
             // 【类型感知】布尔 / 时间族用主题的等宽字体（两列放一起时字形对得齐）

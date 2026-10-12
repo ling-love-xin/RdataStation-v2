@@ -159,6 +159,7 @@ fn open_palette_in(
 /// 打开即聚焦：真按键要落进输入框（而不是掉在地上）。
 #[gpui_kit::test]
 fn typing_reaches_the_input_after_open(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
     let (_host, _shared, harness, cx) = open_palette(cx);
 
     cx.simulate_keystrokes("s");
@@ -174,6 +175,7 @@ fn typing_reaches_the_input_after_open(cx: &mut TestAppContext) {
 /// ↑↓ 漫游 + ↵ 执行：选中按业务键走，确认经宿主端口落地并关面板。
 #[gpui_kit::test]
 fn arrow_keys_move_selection_and_enter_executes(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
     let (host, shared, harness, cx) = open_palette(cx);
     cx.simulate_keystrokes("s");
 
@@ -217,6 +219,7 @@ fn arrow_keys_move_selection_and_enter_executes(cx: &mut TestAppContext) {
 fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
     use std::time::Duration;
 
+    let _queue_guard = scratchpad::jobs::test_lock();
     let (host, shared, harness, cx) = open_palette(cx);
     let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
     // 与生产同形：键位绑在 `workbench` 上下文，调度沿焦点链向上找。
@@ -315,6 +318,7 @@ fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
 /// `⌥↵` 在不支持定位的行上**什么都不做**：不派发动作、也不关面板。
 #[gpui_kit::test]
 fn locate_key_is_a_no_op_on_rows_that_cannot_be_located(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
     let (host, shared, _harness, cx) = open_palette(cx);
     cx.update(|_, cx| {
         cx.bind_keys([KeyBinding::new(
@@ -338,6 +342,7 @@ fn locate_key_is_a_no_op_on_rows_that_cannot_be_located(cx: &mut TestAppContext)
 /// Esc 关闭（单行 Input 不消费 Esc，会冒泡到浮层根）。
 #[gpui_kit::test]
 fn escape_closes_the_palette(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
     let (_host, shared, _harness, cx) = open_palette(cx);
     cx.simulate_keystrokes("s");
 
@@ -376,6 +381,13 @@ fn metadata_search_starts_only_from_two_chars(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn opening_the_palette_loads_scratchpad_files(cx: &mut TestAppContext) {
     use std::time::{Duration, Instant};
+
+    // 结果队列是**进程级共享**的（`scratchpad::jobs` 全局单例）：本用例经 `enqueue_flatten_files`
+    // + 泵消费同一队列，若不同步，全量并行时结果会被别的测试 drain 走（实测稳定 20s 超时）。
+    // 与 scratchpad 自身测试共用同一把锁（`jobs::test_lock`），全量并行才互不打扰。
+    // 注意：**本文件 6 个用例都要持锁**——它们都建 palette，各自的 60ms 泵都会
+    // `drain_file_lists`，只锁文件用例的话，并行时其它泵会把这份清单抢走丢弃。
+    let _queue_guard = scratchpad::jobs::test_lock();
 
     let project = temp_project("qo_files");
     std::fs::create_dir_all(project.join("scratchpad/notes")).unwrap();

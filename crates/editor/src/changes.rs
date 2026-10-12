@@ -160,6 +160,23 @@ impl ChangeSet {
 }
 
 /// 批量提交生成的 UPDATE 文本（**每行一条**，只 SET 变更列）
+
+/// `commit_updates_rows` 的产物：UPDATE 文本 + 与语句顺序一一对应的行/列索引
+///
+/// `per_line` 为什么存在：执行器逐条跑完后回报**每条**的影响行数（`CommitReport::per_statement`），
+/// 但执行器不知道每条对应结果集的哪一行哪一列——那个映射只有在这里生成时才有。
+/// 面板拿两份对起来，才能把「影响行数 0 = 冲突」标到具体的格子（T2a-6）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitUpdates {
+    /// 多条 UPDATE 拼接（空行分隔）
+    pub sql: String,
+    /// 键值 NULL / 无赋值而跳过的行数（键值 NULL 的行宁可跳过，也不生成改不到行的 UPDATE）
+    pub skipped: usize,
+    /// 每条 UPDATE 对应的 `(数据行号, 该行 UPDATE 涉及的变更列)`（与 `sql` 里语句顺序一一对应）
+    pub per_line: Vec<(usize, Vec<usize>)>,
+}
+
+/// 批量提交生成的 UPDATE 文本（**每行一条**，只 SET 变更列）
 ///
 /// `rows` = 结果集的**数据行**（`ResultEntry.rows`）：键列原值从它取（变更集不存键列，
 /// 键列也不可改）。行号必须与 `pending_by_row` 的键对应（`pending` 里的 `row` 就是 rows 下标）。
@@ -175,15 +192,17 @@ impl ChangeSet {
 ///
 /// ## 返回
 ///
-/// `Ok((sql, skipped))`：`sql` 是多条 UPDATE 拼接（空行分隔），`skipped` 是键值为
-/// NULL 而跳过的行数。`Err(说明)`：整份无法生成（键列缺失 / 没有变更 / 没有可 SET 的列）。
+/// [`CommitUpdates`]：`sql` 是多条 UPDATE 拼接（空行分隔），`skipped` 是键值为
+/// NULL 而跳过的行数，`per_line` 是每条 UPDATE 对应的 `(数据行号, 变更列)`——
+/// 面板组装冲突回执（T2a-6）靠它与执行器的逐条影响行数对起来。
+/// `Err(说明)`：整份无法生成（键列缺失 / 没有变更 / 没有可 SET 的列）。
 pub fn commit_updates_rows(
     table: &str,
     key: &RowKey,
     columns: &[String],
     rows: &[Vec<String>],
     pending_by_row: &BTreeMap<usize, Vec<&CellChange>>,
-) -> Result<(String, usize), String> {
+) -> Result<CommitUpdates, String> {
     if pending_by_row.is_empty() {
         return Err("没有待提交的变更".to_string());
     }
@@ -193,6 +212,7 @@ pub fn commit_updates_rows(
 
     let target = quote_ident(table);
     let mut lines = Vec::with_capacity(pending_by_row.len());
+    let mut per_line = Vec::with_capacity(pending_by_row.len());
     let mut skipped = 0usize;
     for (row, changes) in pending_by_row {
         // 键列原值：从数据行取（键列下标在结果列里；行比列短 / 缺格按 NULL 处理）
@@ -233,6 +253,8 @@ pub fn commit_updates_rows(
             .collect::<Vec<_>>()
             .join(" AND ");
         lines.push(format!("UPDATE {target} SET {assignments} WHERE {predicate};"));
+        // 与 lines 同步收集：这一条 UPDATE 对应结果集的哪一行、涉及哪些变更列（跳过的不进）
+        per_line.push((*row, changes.iter().map(|c| c.column).collect()));
     }
 
     if lines.is_empty() {
@@ -243,7 +265,11 @@ pub fn commit_updates_rows(
         };
         return Err(reason);
     }
-    Ok((format!("{}\n", lines.join("\n")), skipped))
+    Ok(CommitUpdates {
+        sql: format!("{}\n", lines.join("\n")),
+        skipped,
+        per_line,
+    })
 }
 
 #[cfg(test)]
@@ -322,12 +348,18 @@ mod tests {
         set.upsert(change(0, 2, "3.5", "3.0"));
         set.upsert(change(1, 2, "2.0", "1.8"));
         let by_row = set.pending_by_row();
-        let (sql, skipped) = commit_updates_rows("fruit", &key, &columns, &rows, &by_row).unwrap();
-        assert_eq!(skipped, 0);
-        assert!(sql.contains("UPDATE fruit SET name = '苹果(特价)', price = 3.0 WHERE id = 1;"));
-        assert!(sql.contains("UPDATE fruit SET price = 1.8 WHERE id = 2;"));
+        let updates = commit_updates_rows("fruit", &key, &columns, &rows, &by_row).unwrap();
+        assert_eq!(updates.skipped, 0);
+        assert!(updates.sql.contains("UPDATE fruit SET name = '苹果(特价)', price = 3.0 WHERE id = 1;"));
+        assert!(updates.sql.contains("UPDATE fruit SET price = 1.8 WHERE id = 2;"));
         // 键列（id）不进 SET
-        assert!(!sql.contains("SET id"));
+        assert!(!updates.sql.contains("SET id"));
+        // 语句 ↔ 行/列索引：第一条对应数据行 0（变更列 name/price），第二条对应行 1（列 price）
+        assert_eq!(
+            updates.per_line,
+            vec![(0, vec![1, 2]), (1, vec![2])],
+            "per_line 与 sql 语句顺序一一对应（面板组装冲突回执的原料）"
+        );
     }
 
     #[test]
@@ -342,10 +374,12 @@ mod tests {
         set.upsert(change(0, 1, "无名", "改名"));
         set.upsert(change(1, 1, "有号", "改名2"));
         let by_row = set.pending_by_row();
-        let (sql, skipped) = commit_updates_rows("t", &key, &columns, &rows, &by_row).unwrap();
-        assert_eq!(skipped, 1);
-        assert!(!sql.contains("id = NULL"));
-        assert!(sql.contains("WHERE id = 2"));
+        let updates = commit_updates_rows("t", &key, &columns, &rows, &by_row).unwrap();
+        assert_eq!(updates.skipped, 1);
+        assert!(!updates.sql.contains("id = NULL"));
+        assert!(updates.sql.contains("WHERE id = 2"));
+        // 键值 NULL 的那行（数据行 0）被跳过：per_line 里只剩行 1
+        assert_eq!(updates.per_line, vec![(1, vec![1])]);
     }
 
     #[test]

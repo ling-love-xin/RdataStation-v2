@@ -807,7 +807,16 @@ pub struct CommitReport {
     pub committed: usize,
     /// 键值 NULL 而跳过的行数（生成时已报告过，回执再合一次，界面不用自己数）
     pub skipped: usize,
+    /// 逐条影响行数（**按 `updates` 语句顺序**；执行器只报数，不猜行/列）
+    ///
+    /// 为什么这个字段在这里：执行器拿到的是拼接好的 UPDATE 文本，不知道每条对应结果集
+    /// 的哪一行哪一列（那个映射在编辑器生成 `commit_updates_rows` 时才有）；`conflicts`
+    /// 的行/列由面板拿 `per_statement` + 生成时的映射组装（T2a-6），执行器不编造。
+    pub per_statement: Vec<usize>,
     /// 影响行数 0 的冲突：`(数据行号, 变更列, 说明)`——界面要标出这一格"没改到"
+    ///
+    /// 本字段由面板在组装回执时填（见 [`Self::per_statement`]）；执行器返回的这份里
+    /// 保持空——0 行语句的信息都在 `per_statement` 里，没有丢。
     pub conflicts: Vec<(usize, usize, String)>,
 }
 
@@ -1304,9 +1313,9 @@ impl Drop for ExecQueue {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecMenuKind, ExecQueue, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
-        SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot, all_target,
-        batch_target, resolve_target, statement_target, target_for_menu,
+        CommitReport, ExecMenuKind, ExecQueue, ExecTarget, QueryData, QueryRunner, ResultPlacement,
+        RunOptions, SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot,
+        all_target, batch_target, resolve_target, statement_target, target_for_menu,
     };
     use crate::channel::ExecChannel;
     use crate::model::DocumentId;
@@ -2593,5 +2602,161 @@ mod tests {
         // 线程退出是异步的：这里只要求不 panic、不阻塞进程退出
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // ===== 批量提交（T2a-5）=====
+
+    /// 假提交执行器：记录收到的参数（连接 / 通道 / 表 / 键 / UPDATE 文本），返回固定回执
+    ///
+    /// 提交的**执行与事务**在执行器侧（真机在 workbench 的 `EngineQueryRunner::commit_changes`，
+    /// 依赖真实连接跑不了离线单测）；这里钉的是编辑器侧的回执链路：请求参数原样送达、
+    /// `drain_commit_notes` 把回执完整搬回。
+    struct CommitRunner {
+        report: CommitReport,
+        seen: Arc<Mutex<Vec<(Option<String>, ExecChannel, String, String, String)>>>,
+    }
+
+    impl QueryRunner for CommitRunner {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            _channel: ExecChannel,
+            _sql: &str,
+            _options: RunOptions,
+        ) -> Result<QueryData, String> {
+            Err("这个执行器只服务提交".to_string())
+        }
+
+        fn commit_changes(
+            &self,
+            connection: Option<&str>,
+            channel: ExecChannel,
+            table: &str,
+            key: &crate::export::RowKey,
+            updates: &str,
+        ) -> Result<CommitReport, String> {
+            self.seen
+                .lock()
+                .expect("锁")
+                .push((
+                    connection.map(str::to_string),
+                    channel,
+                    table.to_string(),
+                    key.columns().join(","),
+                    updates.to_string(),
+                ));
+            Ok(self.report.clone())
+        }
+    }
+
+    /// 轮询等待提交回执（与 [`wait`] 同一套超时口径）
+    fn wait_commit(queue: &ExecQueue) -> Vec<super::CommitNote> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let notes = queue.drain_commit_notes();
+            if !notes.is_empty() {
+                return notes;
+            }
+            assert!(Instant::now() < deadline, "提交回执迟迟没回来");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// 请求参数（连接 / 通道 / 表 / 键 / 原查询 / UPDATE 文本）原样送达执行器，回执完整搬回
+    #[test]
+    fn commit_requests_carry_the_full_payload_and_return_the_receipt() {
+        let report = CommitReport {
+            committed: 2,
+            skipped: 1,
+            per_statement: vec![1, 0, 1],
+            conflicts: Vec::new(),
+        };
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let queue = ExecQueue::new(Arc::new(CommitRunner {
+            report,
+            seen: seen.clone(),
+        }));
+        let updates = "UPDATE orders SET name = 'a' WHERE id = 1;\nUPDATE orders SET name = 'b' WHERE id = 2;\n";
+
+        queue
+            .request_commit_changes(
+                DocumentId::new("doc1"),
+                Some("P_orders".to_string()),
+                ExecChannel::Source,
+                "orders".to_string(),
+                crate::export::RowKey::single("id"),
+                "select * from orders".to_string(),
+                updates.to_string(),
+            )
+            .expect("提交请求该受理");
+
+        let notes = wait_commit(&queue);
+        assert_eq!(notes.len(), 1);
+        let note = &notes[0];
+        assert_eq!(note.document, DocumentId::new("doc1"));
+        assert_eq!(note.connection.as_deref(), Some("P_orders"));
+        assert_eq!(note.channel, ExecChannel::Source);
+        assert_eq!(note.sql, "select * from orders");
+        assert_eq!(note.table, "orders");
+        assert_eq!(note.key.columns(), &["id"]);
+        // 回执明细完整搬回（逐条影响行数 = 面板组装冲突格的原料）
+        let receipt = note.result.clone().expect("提交该成功");
+        assert_eq!(receipt.committed, 2);
+        assert_eq!(receipt.skipped, 1);
+        assert_eq!(receipt.per_statement, vec![1, 0, 1]);
+
+        // 执行器收到的参数原样
+        let seen = seen.lock().expect("锁");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0.as_deref(), Some("P_orders"));
+        assert_eq!(seen[0].1, ExecChannel::Source);
+        assert_eq!(seen[0].2, "orders");
+        assert_eq!(seen[0].3, "id");
+        assert_eq!(seen[0].4, updates);
+    }
+
+    /// 有执行在跑时提交被拒（提交插在执行中间会让"提交了什么"说不清）
+    #[test]
+    fn commit_is_refused_while_an_execution_is_running() {
+        /// 每句慢 60ms：足够在作业跑完之前观察到忙状态
+        struct SlowStatementRunner;
+        impl QueryRunner for SlowStatementRunner {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
+                std::thread::sleep(Duration::from_millis(60));
+                Ok(QueryData::default())
+            }
+        }
+
+        let queue = ExecQueue::new(Arc::new(SlowStatementRunner));
+        queue
+            .submit(
+                DocumentId::new("doc-busy"),
+                &ExecTarget::Statement("select 1".to_string()),
+                None,
+                ResultPlacement::NewSet,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("提交");
+
+        let error = queue
+            .request_commit_changes(
+                DocumentId::new("doc-busy"),
+                Some("P_orders".to_string()),
+                ExecChannel::Source,
+                "orders".to_string(),
+                crate::export::RowKey::single("id"),
+                "select * from orders".to_string(),
+                "UPDATE orders SET name = 'x' WHERE id = 1;".to_string(),
+            )
+            .expect_err("有执行在跑该被拒");
+        assert!(error.contains("有执行在跑"), "{error}");
+        wait_until_idle(&queue);
     }
 }

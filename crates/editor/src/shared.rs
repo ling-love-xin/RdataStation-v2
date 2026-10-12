@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
+use crate::channel::{ChannelAvailabilitySet, ChannelsHandle, ExecChannel};
 use crate::completion::{Catalog, CompletionHandle};
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
@@ -336,6 +336,50 @@ impl EditorShared {
             .unwrap_or(false)
     }
 
+    /// 【T2a】请一次批量提交（把变更集写回源库）
+    ///
+    /// 与 [`Self::request_transaction`] 同一口径：连接从**服务层**取（调用方不需要知道绑定在哪），
+    /// 没有执行器就直说（不静默失败）。`updates` 是编辑器侧生成好的 UPDATE 文本
+    /// （`changes::commit_updates_rows`），`sql` 是原查询（血缘 / 历史），`table` / `key` 供诊断。
+    pub fn request_commit_changes(
+        &self,
+        document: crate::model::DocumentId,
+        table: String,
+        key: crate::export::RowKey,
+        sql: String,
+        updates: String,
+    ) -> Result<(), String> {
+        let (connection, channel) = {
+            let service = self.service.borrow();
+            (
+                service.connection_for(&document),
+                service.channel_for(&document),
+            )
+        };
+        let guard = self.exec.borrow();
+        match guard.as_ref() {
+            Some(queue) => queue.request_commit_changes(
+                document,
+                connection,
+                channel,
+                table,
+                key,
+                sql,
+                updates,
+            ),
+            None => Err("当前未接入执行".to_string()),
+        }
+    }
+
+    /// 【T2a】批量提交的回执（面板轮询取走）
+    pub fn drain_commit_notes(&self) -> Vec<crate::execution::CommitNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|queue| queue.drain_commit_notes())
+            .unwrap_or_default()
+    }
+
     /// 是否有执行在跑
     pub fn is_executing(&self) -> bool {
         let guard = self.exec.borrow();
@@ -561,6 +605,23 @@ impl EditorShared {
             Some(port) => port.catalog(connection.as_deref(), channel),
             None => Catalog::default(),
         }
+    }
+
+    /// 【T2a-2】行标识探测：表的主键列（**内存读**；结果集回执路径可调）
+    ///
+    /// 与 [`Self::completion_catalog`] 同一端口与口径：`conn_id` / `channel` 是**结果实际
+    /// 跑在哪条连接、哪个通道**（来自 `ResultEntry`，不是文档当前绑定——执行时可能跟随
+    /// 当前活动连接）。未绑定连接 / 未接端口 / 宿主探测不到 = `None`（如实不给行标识，
+    /// 判据 `NoRowKey` 会把该结果整表置为只读，不编造键）。
+    pub fn primary_key_for(
+        &self,
+        conn_id: Option<&str>,
+        channel: ExecChannel,
+        table: &str,
+    ) -> Option<Vec<String>> {
+        let port = self.completion.borrow();
+        port.as_ref()
+            .and_then(|port| port.primary_key(conn_id, channel, table))
     }
 
     /// 补全开不开：能力表（文本模式 / 分析模式的每单元由能力表回答）+ 编辑器只读 + 文件档位

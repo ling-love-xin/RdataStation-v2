@@ -906,6 +906,20 @@ pub fn enqueue_diff(project_root: &Path, relative_path: &str, other_content: Str
     });
 }
 
+/// 结果队列的**进程级测试锁**（跨 crate 测试用）
+///
+/// 为什么要有它：结果队列是**进程级共享**的（[`JOBS`] 全局单例），本 crate 自己的测试
+/// 用 [`tests::TEST_LOCK`] 串行执行；**别的 crate**（workbench 的 quick_open 端到端用例）
+/// 也经 `enqueue_*` + `drain_*` 消费同一队列——它们若不同步，并行跑全量测试时会互相
+/// drain 走对方的结果（实测 quick_open 用例 20s 超时）。
+///
+/// **仅测试用**：生产代码无调用；跨 crate 必须 `pub`（`#[cfg(test)]` 的项对依赖 crate
+/// 不可见——依赖按普通构建编译）。锁体即 [`tests::TEST_LOCK`] 的同一份。
+pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
@@ -913,10 +927,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// 结果队列是**进程级共享**的，测试之间会互相取走结果 —— 用锁串行执行。
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    /// 与跨 crate 的 [`super::test_lock`] 同一把锁（外部用例也持它，全量并行才不会互抢）。
     fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        super::test_lock()
     }
 
     /// 临时项目目录（每个用例一个，避免互扰）。
