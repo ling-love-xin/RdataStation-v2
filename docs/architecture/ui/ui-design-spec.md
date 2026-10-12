@@ -121,6 +121,7 @@
 | **下拉框** | 同输入框 | 弹层 `popover` + 圆角 `theme.radius` + 内距 `PANEL_PADDING`，最大高 ≈ `ROW_HEIGHT` × 10 |
 | **Tab 标签** | 头高 `PANEL_HEADER_HEIGHT`；内距 `GAP_LG` / `GAP_SM` | 激活 `tab_active` + `tab_active_foreground`；非激活 `tab` + `tab_foreground`；底 `tab_bar` |
 | **图标（微标）** | `ICON_SIZE_SM` / `ICON_SIZE_MD` | 取色由调用点定（文字色 / 语义色）；**通用图标用组件库自带的 Lucide 全量集**，数据库类型图标与品牌标口径见 `db-icons.md` |
+| **徽标（计数徽章）** | 最小 `NAV_BADGE_SIZE`（1.125rem = 18px）；内距 3/5px（Tailwind `px_1p25` / `py_0p75`）；**圆角 11px 胶囊**；字号 11px 基准 → @16px 取 `text_sm`（13–14px）；长文本变体 `.long` 圆角 2px | 背景 = 状态语义色（`info` / `danger` / `success` 等）+ 前景 `primary_foreground` 类；**活动栏角标特例**：16px 高、圆角 20px、字号 ≥10–11px（不随 VS Code 取 9px——16px 基准下不可读）；规格来源：VS Code `countBadge`（2026-10-12 实证，见 `vscode-ui-design-system.md` §4.5） |
 | **Quick Open 弹层** | 宽 `QUICK_OPEN_PANEL_WIDTH`；顶部 `QUICK_OPEN_PANEL_TOP`；最大高 `QUICK_OPEN_PANEL_MAX_HEIGHT` | `popover` + `border` + `shadow_lg` |
 
 ### 4.1 动效（2026-09-20 起）

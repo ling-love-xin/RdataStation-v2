@@ -17,6 +17,15 @@
 //! （`cx.theme().colors.*`、`theme.radius`），不在此定义。
 //! 规范与数值来源见 `docs/architecture/ui/ui-design-spec.md`。
 //!
+//! VS Code 参照换算依据（2026-10-12，来源 `docs/architecture/ui/vscode-ui-design-system.md`）：
+//! VS Code 以 13px 为 UI 根字号基准，本模块是 16px rem 基准——新增尺寸一律按
+//! 「参照 → ×16/13≈1.23 → 圆整到 4px 网格」取值，不引入 13px 基准下的绝对 px：
+//! 行高 22→28 或保留 24、按钮高 26→32（= CONTROL_HEIGHT_MD）、状态栏 22→28、
+//! tab compact 22→28、徽标字号 11→13–14（text_sm）、树箭头 10→12（= ICON_SIZE_XS）、
+//! 状态栏字号 12→14–15（text_sm）、tab 字号 13→15–16（text_sm/base）。
+//! 结论：本模块常量与 VS Code 处于同一密度区间（换算落点大多命中现有档位）；
+//! 11px 元信息字号与 22px 紧凑档**不可引入**（16px 基准下不可读 / 过小）。
+//!
 //! 使用约定：
 //! 1. 新增**结构性尺寸**先在本模块登记倍率，再在视图中换算引用；
 //! 2. 视图不得出现与布局结构相关的裸 `px(N.)`；局部间距用 Tailwind 尺度方法；
