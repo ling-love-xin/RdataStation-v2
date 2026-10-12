@@ -6779,3 +6779,33 @@ fn breadcrumb_absent_in_text_mode(cx: &mut TestAppContext) {
         "文本模式是纯记事本：没有执行就没有面包屑"
     );
 }
+
+/// T2c-4：缩进重设真改文档状态 + 内核调用不 panic（重设菜单走「渲染断言 + 直调函数」纪律）
+#[gpui_kit::test]
+fn indent_reset_changes_document_and_renders(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = shared_with_document(r"D:\sql\indent.sql", "select 1");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 默认：空格 × 2，非制表符
+    assert_eq!(shared.document_tab_size(&id), 2, "默认缩进宽度");
+    assert!(!shared.document_hard_tabs(&id), "默认不用制表符");
+
+    // 重设空格宽度为 4：文档状态真变 + 渲染正常（内核 set_tab_size 调用不 panic）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_tab_size(4, cx));
+    });
+    assert_eq!(shared.document_tab_size(&id), 4, "重设要落到文档上");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 切制表符：状态真变 + 宽度保留 + 渲染正常
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_hard_tabs(true, cx));
+    });
+    assert!(shared.document_hard_tabs(&id), "制表符开关要落到文档上");
+    assert_eq!(shared.document_tab_size(&id), 4, "切制表符保留空格宽度");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}

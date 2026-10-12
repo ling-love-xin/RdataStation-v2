@@ -45,6 +45,10 @@ pub struct Document {
     channel: crate::channel::ExecChannel,
     /// 【T2c-1】绑定的 schema（文档级属性，与连接绑定同类；`None` = 未选 → 执行用连接默认）
     schema: Option<String>,
+    /// 【T2c-4】缩进宽度（文档级；状态栏「Sp」微标 + Tab 键缩进都走它；随会话持久化）
+    tab_size: usize,
+    /// 【T2c-4】缩进用制表符（`true` = Tab 缩进，状态栏显「Tab」；`false` = 空格 × tab_size）
+    hard_tabs: bool,
 }
 
 impl Document {
@@ -73,6 +77,8 @@ impl Document {
             connection,
             channel,
             schema,
+            tab_size: 2,
+            hard_tabs: false,
         }
     }
 
@@ -119,6 +125,16 @@ impl Document {
     /// 【T2c-1】绑定的 schema（`None` = 未选 → 执行用连接默认 schema）
     pub fn schema(&self) -> Option<&str> {
         self.schema.as_deref()
+    }
+
+    /// 【T2c-4】文档缩进宽度（状态栏「Sp」微标 + Tab 键缩进的权威值）
+    pub fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+
+    /// 【T2c-4】缩进用制表符还是空格（`true` = Tab 缩进）
+    pub fn hard_tabs(&self) -> bool {
+        self.hard_tabs
     }
 
     /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
@@ -516,6 +532,48 @@ impl EditorService {
             .and_then(|doc| doc.schema().map(str::to_string))
     }
 
+    /// 【T2c-4】文档缩进宽度（状态栏「Sp」微标 + Tab 键缩进；默认 2）
+    pub fn document_tab_size(&self, id: &DocumentId) -> usize {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.tab_size())
+            .unwrap_or(2)
+    }
+
+    /// 【T2c-4】文档缩进是否用制表符（`true` = Tab 缩进，状态栏显「Tab」）
+    pub fn document_hard_tabs(&self, id: &DocumentId) -> bool {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.hard_tabs())
+            .unwrap_or(false)
+    }
+
+    /// 【T2c-4】重设文档缩进宽度；返回是否真变（重复设置同值 = 未变）
+    pub fn set_document_tab_size(&mut self, id: &DocumentId, size: usize) -> bool {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
+            return false;
+        };
+        if doc.tab_size == size {
+            return false;
+        }
+        doc.tab_size = size;
+        true
+    }
+
+    /// 【T2c-4】重设缩进用制表符还是空格；返回是否真变
+    pub fn set_document_hard_tabs(&mut self, id: &DocumentId, hard: bool) -> bool {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
+            return false;
+        };
+        if doc.hard_tabs == hard {
+            return false;
+        }
+        doc.hard_tabs = hard;
+        true
+    }
+
     /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)，渲染路径可调）
     pub fn document_len(&self, id: &DocumentId) -> usize {
         self.documents
@@ -828,5 +886,35 @@ mod tests {
         );
         // 取不到文件名时不能返回空标题
         assert_eq!(title_for_path(Path::new(r"D:\")), r"D:\");
+    }
+
+    /// 【T2c-4】缩进重设：宽度与制表符各自独立存储，重复设置同值 = 未变
+    #[test]
+    fn indent_reset_tracks_width_and_hard_tabs_separately() {
+        let (mut service, id) = opened_file(r"D:\a.sql", "select 1");
+
+        // 默认：空格 × 2，非制表符
+        assert_eq!(service.document_tab_size(&id), 2);
+        assert!(!service.document_hard_tabs(&id));
+
+        // 改宽度：真变 + 重复设置同值不变
+        assert!(service.set_document_tab_size(&id, 4), "改宽要报真变");
+        assert_eq!(service.document_tab_size(&id), 4);
+        assert!(!service.set_document_tab_size(&id, 4), "同值重设 = 未变");
+        assert!(!service.document_hard_tabs(&id), "改宽度不影响制表符开关");
+
+        // 切制表符：真变 + 宽度保留（切回空格时用）
+        assert!(service.set_document_hard_tabs(&id, true));
+        assert!(service.document_hard_tabs(&id));
+        assert_eq!(service.document_tab_size(&id), 4, "切制表符保留空格宽度");
+        assert!(!service.set_document_hard_tabs(&id, true), "同值重设 = 未变");
+        assert!(service.set_document_hard_tabs(&id, false));
+        assert!(!service.document_hard_tabs(&id));
+
+        // 不存在的文档：读取回退默认、设置返回 false
+        let ghost = DocumentId::new("ghost-doc");
+        assert_eq!(service.document_tab_size(&ghost), 2);
+        assert!(!service.document_hard_tabs(&ghost));
+        assert!(!service.set_document_tab_size(&ghost, 8));
     }
 }

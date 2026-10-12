@@ -1370,6 +1370,48 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【T2c-4】重设文档缩进宽度：文档级状态 + 内核 `set_tab_size` 双写（Tab 键缩进真变）
+    pub(crate) fn set_tab_size(&mut self, size: usize, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .set_document_tab_size(&self.document, size);
+        if changed {
+            // 内核 TabSize 随文档状态走（0.7.1 `set_tab_size` 公开在 EditorState 别名上）
+            self.editor
+                .update(cx, |state, cx| {
+                    state.set_tab_size(
+                        gpui_kit::component::input::TabSize {
+                            tab_size: size,
+                            hard_tabs: false,
+                        },
+                        cx,
+                    );
+                });
+            cx.notify();
+        }
+    }
+
+    /// 【T2c-4】重设缩进用制表符还是空格：文档状态 + 内核 TabSize 双写
+    pub(crate) fn set_hard_tabs(&mut self, hard: bool, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .set_document_hard_tabs(&self.document, hard);
+        if changed {
+            let size = self.shared.document_tab_size(&self.document);
+            self.editor
+                .update(cx, |state, cx| {
+                    state.set_tab_size(
+                        gpui_kit::component::input::TabSize {
+                            tab_size: size,
+                            hard_tabs: hard,
+                        },
+                        cx,
+                    );
+                });
+            cx.notify();
+        }
+    }
+
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
     fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
         // 【B15】本地分析不碰源库（数据是桥接过来的行）——通道闸管的是“写源库对象”，放行
@@ -4321,8 +4363,10 @@ impl Render for EditorHostPanel {
             line,
             column,
             cursor_offset,
-            // 缩进宽度：内核未改过 → TabSize 默认即实际（2；T2c-4 重设后从这里走 Shared）
-            tab_size: gpui_kit::component::input::TabSize::default().tab_size,
+            // 缩进宽度：文档级权威值（T2c-4 重设后从这读；默认 2）
+            tab_size: self.shared.document_tab_size(&self.document),
+            // 缩进是否制表符：文档级权威值（T2c-4）
+            hard_tabs: self.shared.document_hard_tabs(&self.document),
             bytes: self.shared.document_len(&self.document),
             selected_chars,
             message: self.message.as_deref(),
@@ -4427,6 +4471,80 @@ impl Render for EditorHostPanel {
                                     });
                                 }),
                         )
+                })
+                .into_any_element()
+        };
+
+        // 【T2c-4】重设菜单（编码 / 换行 / 缩进）：缩进真改内核 TabSize（空格宽或制表符）；
+        // 编码 / 换行内核文本模型统一 UTF-8 + LF，重设需外层转换层 → 置灰（不假装能做）
+        let reset_menu = {
+            let entity = cx.entity();
+            let current_tab = self.shared.document_tab_size(&self.document);
+            let hard_tabs = self.shared.document_hard_tabs(&self.document);
+            DropdownButton::new("editor-reset-menu")
+                .small()
+                .button(
+                    Button::new("editor-reset-menu-btn")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-reset-menu".to_string())
+                        .label("重设 ▾"),
+                )
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let entity = entity.clone();
+                    menu.separator()
+                        .item(PopupMenuItem::new("编码").disabled(true))
+                        .item(PopupMenuItem::new("UTF-8").checked(true))
+                        .item(PopupMenuItem::new("UTF-8 (BOM) / GBK").disabled(true))
+                        .separator()
+                        .item(PopupMenuItem::new("换行").disabled(true))
+                        .item(PopupMenuItem::new("LF").checked(true))
+                        .item(PopupMenuItem::new("CRLF").disabled(true))
+                        .separator()
+                        .item(PopupMenuItem::new("缩进").disabled(true))
+                        .item({
+                            let entity = entity.clone();
+                            PopupMenuItem::new("空格: 2")
+                                .checked(!hard_tabs && current_tab == 2)
+                                .on_click(move |_, _, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_hard_tabs(false, cx);
+                                        panel.set_tab_size(2, cx);
+                                    });
+                                })
+                        })
+                        .item({
+                            let entity = entity.clone();
+                            PopupMenuItem::new("空格: 4")
+                                .checked(!hard_tabs && current_tab == 4)
+                                .on_click(move |_, _, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_hard_tabs(false, cx);
+                                        panel.set_tab_size(4, cx);
+                                    });
+                                })
+                        })
+                        .item({
+                            let entity = entity.clone();
+                            PopupMenuItem::new("空格: 8")
+                                .checked(!hard_tabs && current_tab == 8)
+                                .on_click(move |_, _, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_hard_tabs(false, cx);
+                                        panel.set_tab_size(8, cx);
+                                    });
+                                })
+                        })
+                        .item({
+                            let entity = entity.clone();
+                            PopupMenuItem::new("制表符")
+                                .checked(hard_tabs)
+                                .on_click(move |_, _, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_hard_tabs(true, cx);
+                                    });
+                                })
+                        })
                 })
                 .into_any_element()
         };
@@ -4900,6 +5018,7 @@ impl Render for EditorHostPanel {
             status_bar::StatusControls {
                 breadcrumb: breadcrumb.flatten(),
                 edit_mode: Some(edit_mode),
+                reset_menu: Some(reset_menu),
                 tx: tx_controls,
                 interrupt,
             },

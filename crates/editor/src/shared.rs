@@ -523,6 +523,26 @@ impl EditorShared {
         self.service().document_len(id)
     }
 
+    /// 【T2c-4】文档缩进宽度（状态栏「Sp」微标 + Tab 键缩进的权威值）
+    pub fn document_tab_size(&self, id: &DocumentId) -> usize {
+        self.service().document_tab_size(id)
+    }
+
+    /// 【T2c-4】重设文档缩进宽度；返回是否真变
+    pub fn set_document_tab_size(&self, id: &DocumentId, size: usize) -> bool {
+        self.update(|svc| svc.set_document_tab_size(id, size))
+    }
+
+    /// 【T2c-4】文档缩进是否用制表符（`true` = Tab 缩进，状态栏显「Tab」）
+    pub fn document_hard_tabs(&self, id: &DocumentId) -> bool {
+        self.service().document_hard_tabs(id)
+    }
+
+    /// 【T2c-4】重设缩进用制表符还是空格；返回是否真变
+    pub fn set_document_hard_tabs(&self, id: &DocumentId, hard: bool) -> bool {
+        self.update(|svc| svc.set_document_hard_tabs(id, hard))
+    }
+
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）
     pub fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
         let guard = self.connections.borrow();

@@ -116,7 +116,7 @@
 - [x] **T2c-1 通道面包屑**：状态栏最左 `连接 ▸ 库 ▸ Schema`（可切换，同 DBeaver）；schema 列表来自 `CompletionPort::catalog`（已有 `all_schemas`）；切换 → 文档 Schema 绑定（随会话持久化，与 connection 同类）；SQL 模式显示、通用/分析模式不显示。✅ 2026-10-12 完成（见下「T2c-1 完成记录」）
 - [x] **T2c-2 方言段**：从连接 `db_type` 解析（`editor_connections` 已有）→ 状态栏「方言 PostgreSQL」；未绑定连接不摆（真实值原则）。✅ 2026-10-12 完成（`connection.rs::dialect_label` 纯函数——已知驱动映射产品名、未知驱动原样；`StatusInputs/StatusLabels.dialect` 独立段，渲染在连接段（面包屑/文本）之后、正文之前；host 从绑定连接 db_type 解析——未绑定不摆）
 - [x] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。✅ 2026-10-12 完成（见下「T2c-3 完成记录」）
-- [ ] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。
+- [x] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。✅ 2026-10-12 完成（见下「T2c-4 完成记录」）
 - [ ] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。
 - [ ] **T2c-6 面板持久化**：自定义布局（顺序/可见性/分组）随会话持久化；重置默认清除（恢复"执行 + 全部运行"两按钮布局）。
 
@@ -142,6 +142,12 @@
 - **内核核实（多光标）**：gpui-base 0.7.1 `InputBaseState::add_cursor_above/below`（`input/base/state.rs:2150/:2159`）与 `Selections`（`cursor.rs:134`）**已实现但全部 `pub(super)`**——外部 crate 经 `gpui_kit::component::input::EditorState` 不可达；公开面只有 `select_all()`/`cursor_position()`/`selected_range()`。**结论：列编辑能力存在但未公开 → 入口如实置灰 + 标注，不假装能用**；后续若要真列编辑，走 **vendor 补丁暴露 `add_cursor_*`**（项目已有 vendor gpui-component + tab_panel patch 先例）——记入 §6 开放决定。
 - **编码/换行/Spaces 数据源**：UTF-8 / LF 是内核文本模型的统一事实（utf8 rope、`\n` 存储）——真值常量，非编造；Spaces = `TabSize::default().tab_size`（=2，内核未设过）——T2c-4 缩进重设后改从 Shared 读。
 - **T2c-3 遗留**：列编辑真实多光标（待内核公开）；`editor-edit-mode` 菜单在 headless 下弹层不可靠（走「渲染断言 + 提交函数纪律」），未写窗口用例——入口本身常显（行/列对三模式都是编辑内容语义）。
+
+### T2c-4 完成记录（2026-10-12，重设菜单已接线并测绿；缩进真改内核 TabSize）
+- **内核核实（缩进）**：gpui-base 0.7.1 `InputBaseState<M: MultiLineMode>::set_tab_size`（`input/editor/indent.rs:504`，**pub**）挂 `MultiLineMode` impl（`EditorMode: MultiLineMode` 在 `base/kind.rs:67`）→ `EditorState`（=`InputBaseState<EditorMode>` 别名，gpui-base `editor/mod.rs:11`）**可直接调 set_tab_size**——**编译实证**：`self.editor.update(cx, |state, cx| state.set_tab_size(TabSize{…}, cx))` 通过，无需给 rds-editor 加 gpui-base 直接依赖。`TabSize{tab_size, hard_tabs}`——**制表符缩进（hard_tabs=true）内核原生支持**（`indent.rs:13-27`），一并真做。注意：`mode.tab_size()` 读访问器仍是 `pub(super)`——**读不走内核**，走文档级状态（双写）。
+- **落点**：`service.rs`（`Document.tab_size: usize`（默认 2）+ `hard_tabs: bool`（默认 false）+ 访问器 + `set_document_tab_size`/`set_document_hard_tabs`（真变判定）+ `document_tab_size`/`document_hard_tabs` 服务查询）+ `shared.rs`（`document_tab_size`/`set_document_tab_size`/`document_hard_tabs`/`set_document_hard_tabs` 转发）+ `view/widgets/status_bar.rs`（`StatusInputs.hard_tabs` + 微标 `Sp {n}` / `Tab` + `StatusControls.reset_menu` 位（edit_mode 后、右段文本前））+ `view/host.rs`（`set_tab_size(size, cx)` 双写文档+内核、`set_hard_tabs(hard, cx)` 双写；重设菜单 `DropdownButton::new("editor-reset-menu")` 三组（分隔 + disabled 组头）：编码（UTF-8 checked + UTF-8(BOM)/GBK disabled）、换行（LF checked + CRLF disabled）、缩进（空格: 2/4/8 按当前态 checked、制表符 checked 按 hard_tabs）——每项闭包先 `let entity = entity.clone()`（链式 move 借用修复 E0382）。
+- **测试**：rds-editor **488 passed**（+service `indent_reset_tracks_width_and_hard_tabs_separately`（宽度/制表符独立存储、同值重设未变、ghost 文档回退默认）+ 窗口 `indent_reset_changes_document_and_renders`（直调 set_tab_size(4)/set_hard_tabs(true) → shared 真变 + 内核调用不 panic））；rds-workbench lib **134**、ui_contract **8**。
+- **T2c-4 遗留**：编码/换行重设**内核不支持**（文本模型统一 UTF-8 + `\n`）——菜单已置灰标注，真转换需外层转换层（读写文件时按目标编码/换行编解码），排 2b/文件 IO 层；缩进文档状态**随会话持久化未落**（T2c-6 面板持久化一起）。
 
 ### 涉及文件
 `editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, session.rs(面包屑绑定持久化), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口)}` + `app/src/main.rs`（行|列切换命令注册）。

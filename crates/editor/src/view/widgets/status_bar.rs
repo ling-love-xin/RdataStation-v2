@@ -44,6 +44,8 @@ pub struct StatusInputs<'a> {
     pub cursor_offset: usize,
     /// 【T2c-3】缩进宽度（内核 TabSize，状态栏「Sp」微标；真实值）
     pub tab_size: usize,
+    /// 【T2c-4】缩进用制表符（`true` 时状态栏微标显「Tab」而非「Sp n」）
+    pub hard_tabs: bool,
     /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)）
     pub bytes: usize,
     /// 选中的字符数（0 = 无选区）
@@ -73,6 +75,8 @@ pub struct StatusControls {
     pub breadcrumb: Option<AnyElement>,
     /// 【T2c-3】行｜列编辑切换入口（PopupMenu；列编辑内核多光标 API 未公开 → 列项置灰标注）
     pub edit_mode: Option<AnyElement>,
+    /// 【T2c-4】重设菜单入口（编码 / 换行 / 缩进；缩进真改内核 TabSize，编码换行置灰标注）
+    pub reset_menu: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
     /// 【B3】中断按钮，挂在**右段**
@@ -140,13 +144,19 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if inputs.read_only.connection {
         parts.push("连接只读".to_string());
     }
-    // 编码 / 换行是内核文本模型的统一事实（UTF-8 存储、`\n` 换行），不是编的
+    // 编码 / 换行是内核文本模型的统一事实（UTF-8 存储、`\n` 换行），不是编的；
+    // 缩进：制表符模式显「Tab」，否则显「Sp n」（n = 空格宽度，真实值）
+    let indent_badge = if inputs.hard_tabs {
+        "Tab".to_string()
+    } else {
+        format!("Sp {}", inputs.tab_size)
+    };
     parts.push(format!(
-        "Ln {}, Col {}, Ch {} · UTF-8 · LF · Sp {} · {}",
+        "Ln {}, Col {}, Ch {} · UTF-8 · LF · {} · {}",
         inputs.line,
         inputs.column,
         inputs.cursor_offset,
-        inputs.tab_size,
+        indent_badge,
         human_size(inputs.bytes),
     ));
     if inputs.dirty {
@@ -232,6 +242,7 @@ pub fn render(
                 .text_xs()
                 .text_color(muted)
                 .children(controls.edit_mode)
+                .children(controls.reset_menu)
                 .child(text.right)
                 .children(controls.interrupt),
         )
@@ -256,6 +267,7 @@ mod tests {
             column: 4,
             cursor_offset: 42,
             tab_size: 2,
+            hard_tabs: false,
             bytes: 1536,
             selected_chars: 0,
             message: None,
@@ -496,5 +508,14 @@ mod tests {
         let mut dirty = inputs(ReadOnly::none());
         dirty.dirty = true;
         assert!(labels(&dirty).right.contains("脏"), "脏文档要显脏点");
+
+        // 制表符缩进模式：微标显「Tab」而非「Sp n」（T2c-4 真实值）
+        let mut tabs = inputs(ReadOnly::none());
+        tabs.hard_tabs = true;
+        assert!(
+            labels(&tabs).right.contains("· Tab ·"),
+            "制表符缩进要显 Tab：{}",
+            labels(&tabs).right
+        );
     }
 }
