@@ -23,6 +23,7 @@ use crate::persistence::driver_store::{self, DataSourceType, Driver, DriverFile}
 use crate::persistence::env_store;
 use crate::persistence::network_store;
 use crate::persistence::plugin_store;
+use crate::persistence::script_env_store::ScriptEnvStore;
 use crate::persistence::sql_template_store::SqlTemplateStore;
 use crate::persistence::workbench_context_store::WorkbenchContextStore;
 
@@ -1698,6 +1699,11 @@ impl GlobalDatabaseManager {
     /// 获取工作台上下文存储
     pub fn get_workbench_context_store(&self) -> Result<WorkbenchContextStore, CoreError> {
         WorkbenchContextStore::new(self.sqlite_pool.clone())
+    }
+
+    /// 获取脚本执行环境配置存储（T2b-3 管理环境：通用模式的解释器配置表）
+    pub fn get_script_env_store(&self) -> Result<ScriptEnvStore, CoreError> {
+        ScriptEnvStore::new(self.sqlite_pool.clone())
     }
 
     /// 列出所有数据源类型

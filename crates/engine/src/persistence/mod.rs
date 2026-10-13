@@ -37,6 +37,7 @@ pub mod plugin_store;
 pub mod project_connection_store;
 pub mod project_db;
 pub mod project_store;
+pub mod script_env_store;
 pub mod sql_template_store;
 pub mod trash;
 pub mod workbench_context_store;
@@ -68,6 +69,7 @@ pub use metadata_cache_index::{
 };
 pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};
+pub use script_env_store::{ScriptEnvRow, ScriptEnvStore};
 pub use sql_template_store::{SqlTemplate, SqlTemplateStore};
 pub use workbench_context_store::{EditorContext, WorkbenchContextStore, WorkbenchLayout};
 

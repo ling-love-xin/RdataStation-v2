@@ -66,6 +66,9 @@ pub struct Environment {
     pub args: Vec<String>,
     /// 探测到的版本（`Some("3.12.1")`）；`None` = 没探测到
     pub version: Option<String>,
+    /// 是否只读（系统探测的内置环境 = 只读，管理环境 modal 不提供增删改）；
+    /// 自定义环境 = 可增删改。
+    pub readonly: bool,
 }
 
 impl Environment {
@@ -110,16 +113,52 @@ pub struct ScriptNote {
     pub result: Result<ScriptOutcome, String>,
 }
 
-/// 环境端口：宿主注入"有哪些环境 / 装没装"
+/// 环境端口：宿主注入"有哪些环境 / 装没装 / 能不能改"
 ///
 /// 与 `CompletionPort` 同款口径：editor 不依赖任何具体探测逻辑（系统命令探测、
 /// 配置目录、还是假数据，都归宿主决定；单测注入假实现）。
+///
+/// 增删改（[`EnvPort::create`] / [`EnvPort::update`] / [`EnvPort::delete`]）的默认实现
+/// **如实不支持**——宿主没接管理能力（比如全局库未就绪）时，管理环境 modal 会收到一条
+/// 可读拒绝，而不是假装改了。
 pub trait EnvPort: 'static {
     /// 列出可用环境（未注入 = 空列表，如实）
     fn list(&self) -> Vec<Environment>;
 
     /// 该环境是否已安装（命令可达；缺解释器 = 运行不亮的原因）
     fn installed(&self, id: &str) -> bool;
+
+    /// 新增自定义环境（名字 / 类型 / 命令 / 参数；id 由宿主生成）。
+    /// 返回**落定后的环境**（带生成的 id 与探测到的版本），供 UI 回显。
+    fn create(
+        &self,
+        name: &str,
+        kind: EnvKind,
+        command: &str,
+        args: &[String],
+    ) -> Result<Environment, String> {
+        let _ = (name, kind, command, args);
+        Err("管理环境未接入（宿主未提供环境配置存储）".to_string())
+    }
+
+    /// 更新自定义环境（按 id；改命令后重新探测版本）。
+    fn update(
+        &self,
+        id: &str,
+        name: &str,
+        kind: EnvKind,
+        command: &str,
+        args: &[String],
+    ) -> Result<Environment, String> {
+        let _ = (id, name, kind, command, args);
+        Err("管理环境未接入（宿主未提供环境配置存储）".to_string())
+    }
+
+    /// 删除自定义环境（按 id）。
+    fn delete(&self, id: &str) -> Result<(), String> {
+        let _ = id;
+        Err("管理环境未接入（宿主未提供环境配置存储）".to_string())
+    }
 }
 
 /// 环境端口的句柄（宿主注入）
@@ -134,7 +173,7 @@ pub struct EnvSelection {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**（父模块引入了 gpui 相关符号，`use super::*` 有风险）
-    use super::{EnvKind, Environment};
+    use super::{EnvKind, EnvPort, Environment};
 
     #[test]
     fn env_kind_keys_round_trip_and_are_not_the_display_names() {
@@ -160,6 +199,7 @@ mod tests {
             command: "python".to_string(),
             args: vec![],
             version: None,
+            readonly: true,
         };
         assert_eq!(plain.display_name(), "Python");
 
@@ -168,5 +208,27 @@ mod tests {
             ..plain.clone()
         };
         assert_eq!(versioned.display_name(), "Python 3.12.1");
+    }
+
+    /// 管理能力（增删改）默认**如实拒绝**：宿主没接存储时，modal 不能假装改了
+    #[test]
+    fn manage_crud_defaults_to_honest_rejection() {
+        struct NoopPort;
+        impl EnvPort for NoopPort {
+            fn list(&self) -> Vec<Environment> {
+                Vec::new()
+            }
+            fn installed(&self, _id: &str) -> bool {
+                false
+            }
+        }
+        let port = NoopPort;
+        assert!(port
+            .create("Python", EnvKind::Python, "python", &[])
+            .is_err());
+        assert!(port
+            .update("py", "Python", EnvKind::Python, "python", &[])
+            .is_err());
+        assert!(port.delete("py").is_err());
     }
 }

@@ -798,7 +798,7 @@ impl QueryRunner for EngineQueryRunner {
     fn run_script(&self, request: &editor::env::ScriptRequest) -> Result<editor::env::ScriptOutcome, String> {
         let env = crate::services::editor_env::resolve(&request.env_id)?;
         self.runtime.block_on(crate::services::editor_env::run_script_process(
-            env.command,
+            &env.command,
             &env.args,
             &request.code,
             crate::services::editor_env::SCRIPT_TIMEOUT_MS,

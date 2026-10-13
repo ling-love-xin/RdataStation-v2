@@ -1057,6 +1057,7 @@ fn fake_envs() -> Vec<crate::env::Environment> {
             command: "python".to_string(),
             args: vec!["-u".to_string()],
             version: Some("3.12".to_string()),
+            readonly: true,
         },
         crate::env::Environment {
             id: "rs".to_string(),
@@ -1065,6 +1066,7 @@ fn fake_envs() -> Vec<crate::env::Environment> {
             command: "rustc".to_string(),
             args: vec![],
             version: None,
+            readonly: true,
         },
     ]
 }

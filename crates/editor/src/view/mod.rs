@@ -9,6 +9,7 @@ pub mod fold;
 pub mod highlight;
 pub mod history;
 pub mod host;
+pub mod manage_env;
 pub mod results;
 pub mod widgets;
 

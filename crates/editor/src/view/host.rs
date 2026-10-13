@@ -1099,7 +1099,6 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-env-picker".to_string())
-            .disabled(envs.is_empty())
             .label(label)
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
@@ -1120,6 +1119,19 @@ impl EditorHostPanel {
                     }
                     menu = menu.item(item);
                 }
+                // 分隔 + 「管理环境…」：列表可能为空（没探测到任何解释器），
+                // 入口**不置灰**——这正是新增自定义环境的那条路。
+                if !envs.is_empty() {
+                    menu = menu.separator();
+                }
+                let manage_entity = entity.clone();
+                let manage = PopupMenuItem::new("管理环境…")
+                    .on_click(move |_, window, app| {
+                        manage_entity.update(app, |panel, cx| {
+                            panel.open_manage_environments(window, cx);
+                        });
+                    });
+                menu = menu.item(manage);
                 menu
             })
     }
@@ -1627,6 +1639,32 @@ impl EditorHostPanel {
     /// 【2b】可用环境列表（宿主注入的 EnvPort；未接端口 = 空，如实）
     fn envs(&self) -> Vec<crate::env::Environment> {
         self.shared.envs()
+    }
+
+    /// 【2b】打开「管理环境」对话框（环境配置表：增删改路径 / 参数）
+    ///
+    /// 增删改经端口直呼宿主（全局库 `script_environments` 表）；删除成功后回调
+    /// [`Self::delete_env`]：把文档里选中了这条环境的绑定清掉，选择器不会显示一条
+    /// 已不存在的 id。
+    pub(crate) fn open_manage_environments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(port) = self.shared.env_port() else {
+            self.set_message(Some("环境端口未接入".to_string()), cx);
+            return;
+        };
+        let entity = cx.entity();
+        crate::view::manage_env::open_manage_environments(window, cx, port, {
+            let entity = entity.clone();
+            move |id, window, app| {
+                entity.update(app, |panel, cx| panel.delete_env(&id, window, cx));
+            }
+        });
+    }
+
+    /// 【2b】删除环境后的收尾：本文档正选中这条 → 解绑（选择器回「选择环境」）
+    pub(crate) fn delete_env(&mut self, id: &str, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.env_for().as_deref() == Some(id) {
+            self.set_env(None, cx);
+        }
     }
 
     /// 【2b】运行脚本：把**当前文档内容**交给选中的环境执行（spawn + stdin + 超时 + 杀进程树

@@ -95,5 +95,24 @@ pub const RESULT_MIN_HEIGHT: f32 = 7.0;
 /// 能放下“执行当前语句”这种最长的成员名；再窄就要挤掉可见性开关了。
 pub const TOOLBAR_CUSTOMIZE_WIDTH: f32 = 20.0;
 
+/// 【T2b-3】管理环境对话框宽（38rem = 608px）：环境配置表要放下
+/// 名称 / 类型 / 命令 / 参数 / 版本 / 操作 六列，窄了会挤；
+/// 编辑表单同一宽度，进出切换不跳。
+pub const MANAGE_ENV_DIALOG_WIDTH: f32 = 38.0;
+
+/// 【T2b-3】管理环境列表最大高（16rem = 256px：约十行；再多就滚动）
+pub const MANAGE_ENV_LIST_MAX_HEIGHT: f32 = 16.0;
+
+/// 【T2b-3】管理环境表各列宽（rem）：列宽进常量表，视图不写裸 px。
+/// 名称列 flex_1 吃掉剩余宽度，其余固定。
+pub const MANAGE_ENV_COL_KIND: f32 = 4.5;
+pub const MANAGE_ENV_COL_COMMAND: f32 = 9.0;
+pub const MANAGE_ENV_COL_ARGS: f32 = 6.5;
+pub const MANAGE_ENV_COL_VERSION: f32 = 4.5;
+pub const MANAGE_ENV_COL_ACTION: f32 = 7.0;
+
+/// 【T2b-3】管理环境表单标签列宽（4rem = 64px：放「名称 / 命令 / 参数」这类两字标签）
+pub const MANAGE_ENV_FORM_LABEL: f32 = 4.0;
+
 /// 【T2c-5】工具栏自定义面板与触发按钮的间距（4px；结构尺寸进常量表，视图不写裸 px）
 pub const TOOLBAR_CUSTOMIZE_OFFSET: Pixels = px(4.);

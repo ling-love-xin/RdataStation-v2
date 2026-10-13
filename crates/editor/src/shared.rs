@@ -666,6 +666,11 @@ impl EditorShared {
             .unwrap_or(false)
     }
 
+    /// 【2b】环境端口句柄（管理环境 modal 用：增删改要直呼宿主端口；未接 = None）
+    pub fn env_port(&self) -> Option<crate::env::EnvHandle> {
+        self.env.borrow().clone()
+    }
+
     /// 是否接了补全端口（未接 = 只给关键字与函数）
     pub fn has_completion(&self) -> bool {
         self.completion.borrow().is_some()
