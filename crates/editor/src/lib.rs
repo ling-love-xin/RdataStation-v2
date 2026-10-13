@@ -11,7 +11,18 @@
 //!
 //! `workbench → editor → engine / database / shared`；editor **不得**依赖 workbench。
 //!
-//! ## 当前状态（Phase 0 地基 + 1a 进行中）
+//! ## 当前状态（2026-10-12）
+//!
+//! - ✅ Phase 0 / 1a / 1b 已收口（执行闭环 / 三通道 / 补全 / 格式化转译计划 / 导出五档 / 分析）
+//! - ✅ Phase 2a 结果集就地编辑已落地：`changes.rs`（变更集 pending/committed/conflict 三态）/
+//!   `editability.rs`（六道防线纯函数）/ `execution.rs`（`ExecTarget::Commit`）/
+//!   `view/results/grid.rs`（脏格与双击入口），宿主 `workbench::services::editor_exec::commit_changes`
+//!   独立事务逐条 UPDATE、失败回滚、0 行判冲突；只做 UPDATE，增删行属二期
+//! - 🟡 Phase 2c 进行中：T2c-1~4 已完成（Schema 面包屑 / 方言段 / 英文微标 / 重设菜单，488 tests passed），
+//!   余 T2c-5/T2c-6；权威排期见 `docs/architecture/editor/editor-impl-taskbook.md`
+//! - ⬜ 2b（通用模式）与 2d（分析笔记本视图，`notebook.rs` / `notebook_view.rs` 未建）未开工
+//!
+//! 以下为 Phase 0/1a/1b 的实现流水（历史记录，保留细节）。
 //!
 //! - ✅ `model`：文档 / 模式 / 只读 / 能力表
 //! - ✅ `mode`：模式判定规则表（纯函数 + 表驱动测试）
@@ -79,19 +90,20 @@
 //!   候选来自宿主端口（`workbench` 侧读导航缓存，后台预载 + 内存读，按通道给限定名）；
 //!   触发 = 打字 + `Ctrl+Space` 手动 + 模板片段（`view/host.rs`，候选与手动触发同一份）；
 //!   ⬜ 余：缓存未命中时回落实时内省
-//! - ⬜ 1b 待做：B15 DuckDB 分析入口 · 结果区分栏可拖拽（B5）·
-//!   标签的血缘摘要（B5 余项，通道徽标已有）· 导出 Parquet / XLSX（B7 切片二，待 DuckDB 扩展）
-//!   · 绑定随会话持久化（B1 余项）· 值预览弹层（B14 余项）
-//!   · 事务内的语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）
-//! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
+//! - ✅ 1b 收口项（2026-09-18/21）：B15 DuckDB 分析入口 · 导出 Parquet / XLSX（B7 切片二）·
+//!   绑定随会话持久化（B1 余项）。仍开放：结果区分栏拖拽高度不持久化（B5 余项）·
+//!   血缘只在标签做 UI 摘要、未落库（B5 余项）· 值预览弹层（B14 余项）·
+//!   事务内语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）·
+//!   补全缓存未命中时无实时内省回退（B9 余项）
+//! - ⬜ 1c/2d：`session` 端口已建；`notebook`（Cell / Output / Session）未建
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
 //! 状态的 SQL 文本原语，属 engine（`core/sql` 是 sqlglot 的唯一接入点），editor 直接消费，
 //! 不在本 crate 重复实现。
 
 pub mod analysis;
-pub mod channel;
 pub mod changes;
+pub mod channel;
 pub mod commands;
 pub mod completion;
 pub mod connection;

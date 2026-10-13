@@ -1,6 +1,7 @@
 # SQL 编辑器模块 · 设计理念与架构（三模式：文本 / SQL / 分析）
 
-> 状态：**设计稿（待确认，2026-09-15）** · 本文回答**为什么这样设计 / 怎么运转**：概念模型、分层与依赖、状态所有权、数据流、决策取舍、降级容错、测试策略、实现映射、已知问题。
+> 状态：**设计稿（2026-09-15 起持续更新）** · 本文回答**为什么这样设计 / 怎么运转**：概念模型、分层与依赖、状态所有权、数据流、决策取舍、降级容错、测试策略、实现映射、已知问题。
+> **2026-10-12 口径更新**：Phase 2a（T2a-1~7）已把**结果集单元格编辑 + 变更集 + 单事务批量提交**落地在 `crates/editor` 内（`changes.rs` / `editability.rs` / `store.rs` / `execution.rs` / `view/results/grid.rs` + 宿主 `workbench::services::editor_exec::EngineQueryRunner::commit_changes`）；D23 原决策（结果集只读、编辑归 M4）已被该期取代，详见 §6 D23 与 §3.6 的订正。最新排期与任务状态以 `editor-impl-taskbook.md` 为准。
 > 长什么样 / 怎么交互 → `editor-prototype-design.md`；做到哪 / 下一步 → `editor-dev-plan.md`；模块入口 → `README.md`。
 > 本文的"现状盘点"（§7）与"已知问题"（§12）是**权威清单**，含逐条代码证据。
 
@@ -142,7 +143,7 @@
 | --- | --- | --- |
 | M4 导航「在 SQL 编辑器中打开」 | `EditorService::open_sql(conn_id, sql) -> DocumentId` | 现有 `Shared::editor_set` + `SidebarEvent::OpenSqlEditor` 的语义升级 |
 | M4 「查看数据」 | `execute(OpenSql, conn_id, sql, Target::All)`（可自动执行） | 关闭 dev-plan 遗留项“查看数据仅注入不执行” |
-| M4 表数据浏览 / 编辑（驱动能力位 `table_editor`；字典标 `NotBuilt`、驱动已不再声明，见能力矩阵 §3.3 / §7 #13） | 结果集**只读**；行内编辑 + 写回源库 + row identity + 事务属 M4 | 避免重演 V1 的“结果集与表数据语义纠缠 + 脏状态双轨（`dirtyRows` vs `dirtyCells`）”；两者共享网格**渲染层**，各自持有数据（见 §3.6） |
+| M4 表数据浏览 / 编辑（独立表数据视图） | **结果集网格的就地编辑已于 2026-10-12 在 editor 侧落地（Phase 2a，T2a-1~7）**：双击编辑 → 变更集暂存 → 工具栏「提交变更」单事务批量 `UPDATE` 写回源库；能力判据 `editability.rs`（通道 / 项目 / 文档 / 连接 / 行标识六道防线），探测不到主键 / 唯一键则整表只读。M4 独立的「表数据浏览面板」（分页浏览源表）仍未做，驱动能力位 `table_editor` 字典标 `NotBuilt`、驱动未声明（能力矩阵 §3.3 / §7 #13） | 结果集侧暂存只有一份 `ChangeSet`（`DocumentResults.changes`），不重演 V1 的 `dirtyRows` / `dirtyCells` 双轨；提交是独立事务、回执带冲突行。M4 表浏览将来落地时与结果集**共享渲染层、不共享状态**（见 §3.6） |
 | M5 草稿箱打开文件 | `open_path(path) -> DocumentId`（按 §1.2 规则定模式） | 草稿箱不再自己造"草稿文件模式" |
 | M1 项目管理（未保存拦截） | `ProjectEditorBridge`（`is_dirty` / `sql` / `clear` / `mark_clean`） | **契约不变**，实现改由 `EditorService` 提供（M1 侧零改动） |
 | M7 Mock / M8 洞察 | 输出类型 `Output::Insight` / `Output::Table` | 第二期 |
@@ -172,6 +173,8 @@ crates/editor/src/
 
 > 语句切分（「执行当前语句」与「批量执行」的基础）**不在本 crate**：它是纯 SQL 文本原语，
 > 已落在 `engine/src/sql/split.rs`（`core/sql` 是 sqlglot 的唯一接入点），editor / 其它消费方直接调用。
+>
+> **2026-10-12 现状注记**：实际落地与上面的计划树有两处演化——① 三模式没有拆 `text_mode.rs` / `sql_mode.rs` / `notebook_view.rs`，视图收敛在单个 `view/host.rs`（一面板 = 一标签 = 一文档，按能力表分支渲染）+ `view/results/`（grid / sets / error_card）+ `view/widgets/status_bar.rs`；② Phase 2a 后新增 `changes.rs`（变更集）、`editability.rs`（编辑判据）、`sources.rs`（联邦源清单）、`diagnostics.rs`、`scan.rs`、`language_service.rs` 等模块；`notebook.rs` 仍未建（2d）。
 
 ### 3.6 网格（表格）归属与提炼时机
 
@@ -181,8 +184,8 @@ crates/editor/src/
 | --- | --- | --- | --- |
 | 数据来源 | 一次执行的产物（`ResultSet`，驻 DuckDB 临时表） | 源库某表的分页抓取 | 无关（由数据源 trait 提供） |
 | 生命周期 | 结果集（会话内 / 可持久化引用） | 面板/标签（+ 事务） | 无状态 |
-| 可写性 | **只读**（D23） | 可编辑并写回源库（row identity + 事务） | 不适用 |
-| 归属 | `crates/editor` | `crates/database`（M4 后续项；驱动能力位 `table_editor`，字典标 `NotBuilt`、驱动未声明） | 实际落在 `editor/src/view/results/grid.rs`（原写的 `view/widgets/grid/` 未落地；trait 也暂未抽——只有一个使用方，见下） |
+| 可写性 | **有条件可写**（2026-10-12 起，Phase 2a：满足行标识 + 四道只读防线时可就地编辑并批量提交；D23 已修订） | 可编辑并写回源库（row identity + 事务）；M4 独立面板未做 | 不适用 |
+| 归属 | `crates/editor` | 规划归 `crates/database`（M4 后续项；驱动能力位 `table_editor`，字典标 `NotBuilt`、驱动未声明） | 实际落在 `editor/src/view/results/grid.rs`（trait 暂未抽——结果集是唯一使用方；编辑状态在 `changes.rs` / `store.rs`，见下） |
 
 **为什么不建独立 grid crate（现在）**：① 项目判定标准明确“**不建 crate 的对象：无独立状态的能力**”（如主题）——纯渲染+交互层无独立业务状态；② 1a/1b 期只有**一个**真实使用方，此时冻结接口基本必错；③ 重活（虚拟滚动、表格基座）已由 gpui-component 的 `table::{DataTable, TableState, TableDelegate}` 提供，自写部分只是 delegate + 交互，量级撑不起 crate 边界。
 
@@ -201,7 +204,9 @@ trait GridDataSource {            // 谁提供数据、怎么翻段（无业务�
     fn rows(&self, offset: u64, limit: u32) -> Vec<Row>;
 }
 
-trait GridEditSink {              // 只有“可编辑网格”实现（结果集不实现 → 天然只读）
+trait GridEditSink {             // 结果集已在 editor 内部实现这一形状（2026-10-12，Phase 2a）：
+                                 // changes.rs 的 ChangeSet + execution.rs 的 commit_changes 端口；
+                                 // 尚未抽成公开 trait（唯一使用方，接口不冻结）
     fn identity(&self) -> RowIdentity;
     fn commit(&self, changes: &[CellChange]) -> Result<(), CoreError>;
 }
@@ -213,9 +218,13 @@ trait GridEditSink {              // 只有“可编辑网格”实现（结果�
 **提炼触发（三条全中才动手）**：① 第二个真实使用方出现（表数据浏览，或 Mock/洞察预览复用）；② trait 形状稳定一个迭代；③ 共享部分规模够（~500 行以上）。提炼落点二选一：`shared/`（≥2 使用方的稳定能力进 shared，且 shared 已允许依赖 gpui-base/gpui-component）或独立 `crates/grid`（若届时它已拥有自己的状态）。
 
 **共享部件**（将来一起搬）：虚拟滚动适配 · 列头（排序/列宽/隐藏）· 单元格渲染器（NULL/数字/长文本/JSON）· 值查看器 · 复制（单元格/行/JSON/INSERT）· 分页 · 列状态持久化 · 导出菜单。
-**永不合并**：数据源与分页策略 · 编辑缓冲与提交 · row identity / 主键解析 · 事务与冲突 · 权限与只读策略。
+**永不合并**：数据源与分页策略 · 事务策略（结果集提交用自己的独立短事务，不并入用户会话事务） · 权限与只读策略的**判据来源**。
 
-**例外**：若产品把“表数据编辑”定为一等公民（而非 SQL 的附属展示），则应建独立 `crates/dataset`（它此时确有独立状态：列宽/排序/筛选/编辑缓冲/提交状态），`editor` 与 `database` 均依赖它。判据只有一条：**表编辑是“附属展示”还是“独立能力”**——按当前文档口径（M4 只给了“查看数据”入口、`table_editor` 仅为能力位）定为**附属**。
+> **2026-10-12 订正（Phase 2a 落地后）**：原清单中的「编辑缓冲与提交 · row identity / 主键解析 · 事务与冲突」三样**已经在 editor 内实现**（`changes.rs` 的 `ChangeSet` 暂存、`completion.rs::primary_key` + `store.rs::row_key()` 的行标识、`editability.rs` 的六道防线、宿主侧独立事务提交）。它们仍属于“结果集自己的状态”，驻在 `store.rs::DocumentResults`（按结果集隔离、切换即清空），没有与网格渲染层合并；将来 M4 表浏览落地时，这三样**不与 M4 面板共享**（各持各的状态，只共享渲染层）。
+
+**例外**：若产品把“表数据编辑”定为一等公民（而非 SQL 的附属展示），则应建独立 `crates/dataset`（它此时确有独立状态：列宽/排序/筛选/编辑缓冲/提交状态），`editor` 与 `database` 均依赖它。判据只有一条：**表编辑是“附属展示”还是“独立能力”**。
+
+> **2026-10-12 路线变更记录**：产品在原型 2026-10-11 修订 ② 中把「结果网格内建编辑」定为一等交互（M4 独立模块不再排期），Phase 2a 据此在 editor 侧落地了结果集就地编辑与批量提交。但这**不等于**已建 `crates/dataset`：当前编辑能力只作用于「一次查询的结果集」（按结果 SQL 猜表名 + 主键探测），没有独立的「表数据浏览面板」（源表分页 / 排序 / 筛选浏览）。是否继续走向独立 dataset crate / M4 面板仍是开放决定（见 `editor-impl-taskbook.md` §6）。
 
 ---
 
@@ -229,6 +238,7 @@ trait GridEditSink {              // 只有“可编辑网格”实现（结果�
 | 脏状态 | `Document.dirty`（**与基线比较的派生量**） | 文档 | 内核 `InputEvent` → 与 `baseline` 比较 | 标签脏点、关闭确认、M1 拦截 |
 | 光标 / 选区 | 内核（`EditorState` 自带） | 文档 | 内核 | 状态栏、执行目标解析 |
 | 结果集 | `ResultStore`（每文档一份**结果集列表 + 选中项**；`run_id` / 血缘字段在 B5 引入） | 会话内（可持久化引用） | `execution` 回填 | 结果面板、内联输出、导出 |
+| 结果集的待提交编辑 | `DocumentResults.changes`（`ChangeSet`，按结果集隔离：随结果切换清空） | 随结果集 | 结果网格双击编辑（T2a）；提交 / 回滚由 `execution` 提交口驱动 | 结果工具栏「提交变更 (N) / 撤销变更」、脏格 / 冲突格上色 |
 | 执行态（运行中/耗时/可中断） | `Document.exec_state` / `Cell.state` | 单次执行 | `execution` | 状态栏、单元卡片、中断按钮 |
 | 会话（连接 + DuckDB 命名空间 + 临时表） | `SessionRegistry`（按 `session_id`） | 应用（可显式重启） | `session` | 单元执行、变量面板 |
 | 笔记结构（单元顺序 / 折叠 / 选中） | `NoteBook` | 笔记 | `EditorService::{insert,move,delete}_cell` | 笔记本视图 |
@@ -423,7 +433,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D20 | 会话间数据交换用 **Arrow** | 项目已全链路 Arrow（`duckdb` + `arrow 58.4` 同源，`shared/src/arrow.rs` 在），天然是 SQL/DuckDB/Python 的公共语言 | 第一期只有 SQL 一个内核，接口先留签名 |
 | D21 | **执行通道与执行族正交**：通道（源库 / 本地加速 / 联邦）是会话/连接级属性，用「执行位置」指示器表达，**不做成一排执行按钮** | 三者互斥、长期有效、决定能力边界；V1 把加速做成常驻执行按钮（且因硬编码从未显示），语义混乱 | 通道需持久化随文档绑定；通道能力差异需在 UI 可见（写/事务/新鲜度） |
 | D22 | **结果集带通道徽标 + 血缘**，重查与分析**产生新结果集**（不就地替换） | V1 就地替换 `columns/rows`，用户丢失“原始查的是什么”；通道不明导致无法判断数据新鲜度 | 结果集数量增长（受上限 5 与淘汰约束）；需定义标签展示方式 |
-| D23 | **结果集只读**；行内编辑与写回源库归 M4 表格能力 | V1 把表编辑塞进结果区，导致语义纠缠与脏状态双轨（`dirtyRows` / `dirtyCells`） | 用户若想在结果区改数据需走 SQL（DML）或去 M4 表格 |
+| D23 | ~~**结果集只读**；行内编辑与写回源库归 M4 表格能力~~ → **2026-10-12 修订（Phase 2a 已落地）**：结果网格支持就地编辑（双击）→ `ChangeSet` 暂存 → 单事务批量提交写回源库；无主键 / 只读档 / 非源库通道下编辑入口不亮（`editability.rs` 六道防线，只报第一条原因） | 原 D23 针对 V1 把表编辑塞进结果区导致的脏状态双轨（`dirtyRows` / `dirtyCells`） | 暂存只有一份 `ChangeSet`（不双轨）；提交是独立短事务（连接已在手动事务中则回绝）；冲突（影响 0 行）逐条标记、不覆盖证据；**只做 UPDATE**：新增 / 删除行、列类型化编辑器属二期；M4 独立表浏览面板仍未做 |
 | D24 | **结果集分段抓取**（已确认 2026-09-15）：数据源暴露「已抓取窗口 + 取下一段」，未知总数显示 `N+` | DBeaver 的大表体验基线；一次抓取 + 上限截断在亿行级表上不可用；且接口形状一旦定型难改 | 多一层窗口状态；导出需区分「仅已抓取」与「抓全量」两种语义 |
 | D25 | **导出分两条路**（✅ B7 切片二）：CSV / JSON / INSERT 在编辑器里**同步编码**（纯函数、即时）；**Parquet / XLSX 经 DuckDB `COPY … TO …` 且在一次性线程上跑**（多一条 `ExportNote` 回执，不占执行位） | 前三种是字符串拼装，拼错了看得见；后两种是带 schema 的二进制 / OOXML 包，手写编码器几乎必然产出别人读不了的文件；而 XLSX 首次要 `INSTALL excel`（联网几秒，探针实测 3–11 s），放在事件路径上就是界面假死 | 多一层分叉判据（`ExportFormat::is_duckdb_backed`）与一条回执队列；文本档与 DuckDB 档的行数回执文案要各自成文（都已断言） |
 | D26 | **折叠候选自己算**（`fold::spans` 纯函数：括号组 / `CASE`·`BEGIN`·`IF` 到 `END` / 多行注释与字面量；共享 `sql::highlight` 那一份词法），经公开入口 `EditorState::apply_highlighter_fold_candidates` 喂给内核 | 上游（`gpui-base` 0.6.1）的候选**唯一来源是 highlighter**（`highlighter.fold_ranges`，`state.rs:3604`），而我们走语义 token、不注册 grammar（D12）→ 内核自己产不出候选；但折叠**机制**全在内核（`fold_map` 12.5k 行 / 渲染与 chevron / 点击折叠 / 开关默认 true，且 `EditorMode::CODE_EDITOR = true`），自研等于白扔 | 后果要认下：**候选的产物与刷新都归我们**——编辑后内核不会替我们平移候选（`state.rs:3591/3611` 无 highlighter 就早退），所以每条文本变更路径都要重喂（`view/fold.rs`），且 `set_value` 不发 `Change`，重加载那条要显式重算；大文件档位**真关开关**（`set_folding(false)`） |
@@ -534,10 +544,10 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D1 能力表 / D2 模式属性 / D3 切换矩阵 | `crates/editor/src/{mode.rs, model.rs, service.rs}` |
 | D4 只读两维度 | `model.rs`（`ReadOnly { editor, connection }`）+ `view/*` 表现 + `execution.rs` 校验 |
 | D5 执行唯一入口 / D19 后台任务 | `crates/editor/src/execution.rs` + `engine::SqlService`（模式参考 `crates/workbench/src/services/nav_jobs.rs`） |
-| D6 结果单权威 | `crates/editor/src/store.rs`（`ResultStore`）+ `view/widgets` 两个视图 |
+| D6 结果单权威 | `crates/editor/src/store.rs`（`ResultStore`）+ `view/results/`（网格 `grid.rs` / 结果集标签条 `sets.rs` / 错误卡 `error_card.rs`） |
 | D21 执行通道（源库/加速/联邦）与门控 | `crates/editor/src/channel.rs` + `crates/workbench/src/services/{editor_exec.rs,editor_channels.rs}` + `engine/src/duckdb/{accel,federation/}` |
 | D22 结果通道徽标与血缘 | `crates/editor/src/store.rs`（结果集元数据：`channel` / `lineage`） |
-| D23 结果集只读 / 网格归属与提炼 | `crates/editor/src/view/results/grid.rs`（`ResultGridDelegate` 实现组件的 `TableDelegate`；设计里的 `GridDataSource` / `GridEditSink` trait **尚末抽**——结果集是唯一使用方，先不冻结接口，见 §3.6）+ 架构 §3.6 |
+| D23（已修订，见 §6）结果集就地编辑 / 网格归属与提炼 | 编辑判据 `crates/editor/src/editability.rs`（`EditGate` 六道防线，纯函数）+ 变更集 `changes.rs`（`CellChange` / `ChangeSet`）+ `store.rs`（`DocumentResults.changes` / `ResultEntry.key_columns` / `row_key()`）+ 行标识探测 `completion.rs::primary_key` + 提交口 `execution.rs`（`ExecTarget::Commit` / `CommitReport`）+ `view/results/grid.rs`（`CellEdit` 双击编辑 / 脏格 / 冲突格，`ResultGridDelegate` 实现组件 `TableDelegate`）+ `view/host.rs`（提交 / 回滚按钮 + 回执泵）+ 宿主 `crates/workbench/src/services/editor_exec.rs::EngineQueryRunner::commit_changes`（独立事务逐条 UPDATE）。设计里的 `GridDataSource` / `GridEditSink` **公开 trait 尚未抽**（唯一使用方，先不冻结接口，见 §3.6）+ 架构 §3.6 |
 | D24 分段抓取 | `crates/editor/src/store.rs`（结果集的窗口状态：`has_more` / `append_rows`）+ `view/results/grid.rs`（「取下一段」入口 + `has_more` 驱动的滚动到底自动续取）+ `crates/workbench/src/services/editor_exec.rs`（`fetch_next` 的宿侧实现） |
 | D26 折叠候选自算 + 随文本重喂 | `crates/editor/src/fold.rs`（纯函数 `spans` / `MAX_BYTES` / `FoldSpan`）+ `view/fold.rs`（`install` / `refresh` / `is_enabled` / `to_kernel`）+ `view/host.rs`（构造一次 + 每次 `InputEvent::Change` 后 `cx.defer` 重喂；`reload_from_document` 因 `set_value` 不发 `Change` 而显式重算；`sync_mode` 按能力表装 / 关）+ `shared.rs::folding_enabled`（能力表 + 档位，**不看只读**）|
 | 结果网格的呈现口径（密度 / 截断与悬停全文 / 右键复制 / 键位） | `crates/editor/src/ui.rs`（`RESULT_TABLE_SIZE` 行高档 · `RESULT_TOOLTIP_MAX_WIDTH`）+ `view/results/grid.rs`（`render_th` / `render_td` 自画挂悬停全文与坐标选择器 · `new_table_state` 的 `row_header(false)`（行把手只留 `#` 一列）· `GridSelection` + `selection_text` · 网格那层的 `key_context` · `ContextTarget` + `context_menu_items` 定菜单 · `column_text` / `row_text` 拼复制文本）+ `crates/editor/src/commands.rs`（`CopyGridSelection` + `RESULT_GRID_CONTEXT`）+ `view/host.rs`（`copy_grid_selection` + `on_copy_grid_selection`；选择种类由 `TableEvent` 订阅记下）+ **`crates/shared/src/utils/string.rs`（`tsv_cell` / `tsv_row`：剪贴板与导出的唯一实现，`ResultEntry::to_tsv` 与 mock 预览共用）** |
@@ -552,7 +562,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D10 补全 | ✅ 切片一 / 二（2026-09-18）：`crates/editor/src/completion.rs`（上下文判定 + 候选挑排 + `word_start` + `TemplateSnippet`/`placeholder_range`，纯函数）+ `crates/editor/src/view/completion.rs`（`CompletionProvider` 适配，**只给 `label`**；另导出 `items_at` 给手动触发）+ 宿主端口 `workbench/src/services/editor_completion.rs`（读 `database::cache::NavCache`，后台预载 + 内存读；按通道给限定名；**模板从 `sql_template_store` 启动时预载一次**）；`Ctrl+Space` 与「⋯ 更多 ▾ ▸ 插入模板」都真注册。⬜ 余：实时内省回稳 |
 | D12 SQL 高亮 | ✅ `crates/engine/src/sql/highlight.rs`（tokenizer → 字节区间 + 类别）+ `crates/editor/src/view/`（按主题语法色板上色） |
 | D13 多文档标签 | `crates/editor/src/view/host.rs`（优先 `dock` 的 `Panel::{title,title_suffix,closable}`） |
-| D14/D15/D18 会话与单元 | `crates/editor/src/{session.rs, notebook.rs}` + `view/notebook_view.rs` |
+| D14/D15/D18 会话与单元 | `crates/editor/src/session.rs`（已有：会话快照 / 持久化端口）+ `notebook.rs` / `view/notebook_view.rs`（**未建**，属 Phase 2d，见 `editor-impl-taskbook.md` §4） |
 | 持久化（光标/选区/模式/连接） | `engine::persistence::workbench_context_store`（扩展 `EditorContext`：加 mode / dialect / baseline 等） |
 | `.rdsnote` 读写 | `crates/editor/src/persist.rs`（第二期接入项目版本链） |
 | 宿主装配（中央区 / 对话框层 / 属性面板） | `crates/workbench/src/view.rs`（`init_workspace` 中央区改装配 editor 宿主）+ `components/project_host.rs`（桥不变） |
@@ -591,7 +601,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 23 | 🔴 | **面板不能从自己的 `update` 里让 Dock 移除自己**（**实测踩到 2026-09-15**）：`DockArea` 移除面板要读面板本体（可见性 / 可关闭性 / `on_removed` 回调），而动作处理器（`on_action`）本身就在面板的 `update` 中 → GPUI 直接 panic `cannot read … while it is already being updated`。更阴的是：`Context::listener` 的实现是 `view.update(…).ok()`，在真实按键路径上这个错误表现为**按键毫无反应**（静默），只有窗口测试里才能看到。`cx.defer_in` 也救不了：它的闭包第一参数就是面板自己，仍在 `update` 中 | 任何“面板自注销 / 自关闭”的设计都会踩（不只 `Ctrl+W`） | 已定：**关闭由宿主发起**——`editor::view::host::close_document_in_dock(&area, panel, window, cx)` 在宿主（workbench `WorkbenchView::close_active_editor`）里调，面板只回答“能不能关”（脏则拦下并写状态栏原因）。今后凡会读到面板本体的容器操作，都从宿主（或 `Window::defer` 而不经面板 `update`）发起 |
 | 24 | ✅ | **内核已绑定的键，外层 context 收不到**（**已实测并修正结论，2026-09-15**）：内核在 `Input` context 里绑了 `ctrl-f` → `input::Search`、`ctrl-h` → `input::Replace`，**而且注册了 listener**（`gpui-base/src/input/base/state.rs:4195` 的 `on_action_search` / `on_action_replace`，`searchable` 为真时打开查找 / 替换会话）；按键派发一旦找到 listener 就 `propagate_event = false`，`dispatch_key` **不再尝试后续 binding** → 外层（面板 `editor` context）的同名绑定**收不到**。查找 / 替换的界面由组件库的 `SearchPanel`（`gpui-component/src/input/search.rs`，`CONTEXT = "SearchPanel"`）渲染为浮层 | 本条早先的结论是“**内核没有 handler**，只 grep 了会话字段 `search_session`，没看 listener 注册”----**错的**，据此曾自建一套查找栏 + 匹配器，属 **重复劳动（已撤）** | 已定：**查找 / 替换一律用内核 + 组件库能力，应用层零自建、不绑键**；判断“内核有没有这个能力”要读 `input/base/state.rs` 的 `on_action` 注册表，而不是只看某个字段的可见性。已用窗口测试钉住：`Ctrl+F` / `Ctrl+H` 之后焦点被内核交给查找框（`the_kernel_find_panel_takes_over_on_ctrl_f` / `ctrl_h_opens_the_kernel_replace_panel`） |
 | 25 | 🟡 | **面板不 `track_focus` 就收不到快捷键**（**实测踩到 2026-09-15**）：`key_context` 只负责“能不能匹配绑定”，action 还要能沿 **dispatch path** 找到 listener；dispatch path 由**已渲染元素树的焦点节点向上**构成。面板根元素没 `track_focus(&self.focus_handle)` 时，焦点不在那棵子树里，快捷键就落不到 `on_action`（表现为静默无反应） | 每个自己处理键盘动作的面板都要记得写 | 已定：面板根元素 `.key_context("editor").track_focus(&self.focus_handle)`；窗口测试用 `window.focus(&handle, cx)` + `simulate_keystrokes` 验证（这类“静默”错误只有测试能抳住） |
-| 26 | 🟡 | **执行通道的连接绑定**（**1a 划定范围；B1 切片一已部分关闭，2026-09-16**）：1a 时 `EngineQueryRunner` 调 `SqlService::execute(None, …)` → `DEFAULT_CONN_KEY = "active"`（**连接管理器里的活动连接**），界面上看不出“这条 SQL 会发到哪” | 多连接场景下可能发错库；与原型 §5.7「执行位置（源库/加速/联邦）」相差一档 | **已做**：绑定成为**文档属性**（`Document.connection`）+ 工具栏「连接 ▾」选择器（选中先自动建连）+ 状态栏最左连接段（`●P·orders`）+ 执行通道带连接（`QueryRunner::run(conn, sql)`，未绑定才回退到活动连接）——“发到哪”现在在界面上看得见、可改 · **绑定随会话持久化 ✅ 2026-09-18**（`SavedSession.connection` → `editor_contexts.connection_id` 写真值；恢复时校验还在不在列表里，不在就回退“跟随当前连接”并说原因）。**剩余**：只读锁 ⓘ（连接侧写策略来源；“提醒后放行”那档随它一起做）· 「执行位置」三通道（**B13 切片一 / 二 / 三全已完成**：三档状态是一等文档属性 + 门控置灰给原因 + 随会话持久化 + 切通道旧结果标灰与提示 + 加速档与联邦档真执行 + 历史带参与源；剩源清单浮层） |
+| 26 | 🟡 | **执行通道的连接绑定**（**1a 划定范围；B1 切片一已部分关闭，2026-09-16**）：1a 时 `EngineQueryRunner` 调 `SqlService::execute(None, …)` → `DEFAULT_CONN_KEY = "active"`（**连接管理器里的活动连接**），界面上看不出“这条 SQL 会发到哪” | 多连接场景下可能发错库；与原型 §5.7「执行位置（源库/加速/联邦）」相差一档 | **已做**：绑定成为**文档属性**（`Document.connection`）+ 工具栏「连接 ▾」选择器（选中先自动建连）+ 状态栏最左连接段（`●P·orders`）+ 执行通道带连接（`QueryRunner::run(conn, sql)`，未绑定才回退到活动连接）——“发到哪”现在在界面上看得见、可改 · **绑定随会话持久化 ✅ 2026-09-18**（`SavedSession.connection` → `editor_contexts.connection_id` 写真值；恢复时校验还在不在列表里，不在就回退“跟随当前连接”并说原因）。**剩余**：只读锁 ⓘ（连接侧写策略来源；“提醒后放行”那档随它一起做）· 「执行位置」三通道（**B13 切片一 / 二 / 三全已完成**：三档状态是一等文档属性 + 门控置灰给原因 + 随会话持久化 + 切通道旧结果标灰与提示 + 加速档与联邦档真执行 + 历史带参与源；~~剩源清单浮层~~ ✅ **T1.6 已完成（2026-09-18）**：联邦档「源清单 ▾」见 `sources.rs` / `view/host.rs::render_sources_picker`） |
 | 27 | ✅ | **执行链路真机四库实测通过**（**2026-09-15，A14**）：`editor_exec_real.rs` 走**生产路径**（`editor_exec::attach` → `EditorShared` → 工作线程 → `SqlService` → 驱动 → `batches`/`to_rows()`），四库各一次 `select 1 as n`：mysql 43ms · postgres 173ms · sqlite 1ms · duckdb 6ms，均 1 行 × 1 列、列名 `n` | 验证了执行端口抽象可用，且取数口径（不读 `rows` 字段）在四个驱动上一致 | 保持：新增驱动时把它的名字加进 `TARGETS` 表（环境变量未设自动跳过） |
 | 28 | 🔴 | **同步存储 API 不能在 tokio 运行时上下文里调用**（**实测踩到 2026-09-15，A12**）：`GlobalSqlitePool::acquire_sync` 早先用 `Handle::current()`，于是——无 runtime 的线程（GPUI 主线程、普通 `#[test]`）**直接 panic**；`#[tokio::test]` 里又因嵌套 `block_on` panic（“Cannot start a runtime from within a runtime”）。而 `WorkbenchContextStore` 的整个 API 都是同步的 | 接会话持久化时“第一次真调它”就撞上；这种错误看上去像是测试环境问题，实际是接口约定缺失 | 已修：在 tokio 上下文里**返回可读错误**（而不是 panic），否则自建一个短命 current-thread runtime 驱动（`Semaphore`/`Mutex` 不绑 reactor，新 runtime 只当驱动器）。**今后接存储层要记住**：同步 API 的调用点是 GPUI 主线程（无 runtime）或工作线程，不能是 async 函数体 |
 | 29 | 🟡 | **对话框要弹出来，窗口根视图必须是 `gpui_component::Root`**（**实测踩到 2026-09-16，A9**）：`Window::open_dialog` 内部走 `Root::update`，找不到 Root 就 `expect("BUG: window first layer should be a gpui_component::Root")` **直接 panic**；且对话框层要由宿主 render 调 `Root::render_dialog_layer` 才会进元素树（只“打开”不渲染 = 看不见）。两个陷阱都不报错：前者是 panic，后者表现为“点了没反应”。**附带一条测试口径**：headless 下 `debug_bounds(选择器)` 的坐标与鼠标命中测试**对不上**（同一个用例单跑能点中、全套跑必不中；已排除并行与动画两个假设），所以对话框按钮的“真点击”**不做**，改成“断言层与按钮真渲染（`debug_bounds`）+ 直接驱动落地入口（`resolve_close_choice` / `confirm_mode_switch`）” | 写窗口级对话框测试与新增对话框时必踩 | 已定：对话框均挂 `Root::render_dialog_layer`（workbench 根视图已有）· 测试夹具用 `Root::new(宿主, window, cx)` 包起来（见 `editor/src/view/tests.rs` 的 `dialog_harness`）· 落地逻辑与弹窗分开（弹窗只收集选择） |
@@ -648,7 +658,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | 决策 | 边界 | 依据 |
 | --- | --- | --- |
-| D23 | **结果集只读**；行内编辑与写回源库归 M4 表格能力（不重走 V1 的 `dirtyRows` / `dirtyCells` 双轨） | 本文件 §6 D23 · §3.6；表编辑的边界与验收表见 `editor-table-editing-plan.md` |
+| D23（**2026-10-12 已修订**，见 §6） | ~~结果集只读~~ → **结果网格支持就地编辑 + 批量提交**（Phase 2a，T2a-1~7）：双击进编辑（`TableEvent::DoubleClickedCell`）、`ChangeSet` 暂存、单事务批量 `UPDATE`、冲突（0 行）逐行标记；六道防线（非源库通道 / 项目只读 / 文档只读 / 连接只读 / 无行标识 / 空变更）。**仍不做**：新增 / 删除行、列类型化编辑器；M4 独立表浏览面板（源表分页浏览）仍未做 | 本文件 §6 D23 · §3.6 · `editor-impl-taskbook.md` §1 · `editor-table-editing-plan.md`（原立项书，已加路线变更说明） |
 | D4 | **只读两维度分离**（编辑器只读 / 连接只读，互不蕴含） | §6 D4 · §8 |
 | D11 · D12 · D17 | 不引 LSP（单进程内 Rust 自建补全 / 诊断）· **不用 tree-sitter**（高亮只到词法层：写不完的 SQL 也能着色，语法树会失败而词法不会）· 不引入 Zed 编辑器代码（GPL-3.0-or-later） | §6 D11 / D12 / D17 |
 | D13 | 多文档标签**优先用 Dock 自带能力**（不自绘标签条）；未保存确认走「拦在动作层 + 状态栏说明」 | §6 D13 · §12 #1 / #18 · §13 #15 |
@@ -690,12 +700,16 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | 未做项 | 说明 | 依据 |
 | --- | --- | --- |
-| **表数据编辑 / 写回源库** | 能力位 `table_editor` = `Stage::NotBuilt` 且无人声明；边界、验收表与四刀排法见 `editor-table-editing-plan.md` | `../driver-capability-matrix.md` §3.3 / §7 #13 · 本文件 §3.6 |
-| **1c 分析模式（Cell / Output / Session）** | `crates/editor/src/notebook.rs` 不存在；`analysis.rs` 只在结果集上跑一次聚合（不重跑源库） | `crates/editor/src/lib.rs` ⬜ 1c · `editor-dev-plan.md` §0（1c 已搁置） |
+| **结果集就地编辑 / 写回** | ✅ **已落地（2026-10-12，Phase 2a）**：`changes.rs` + `editability.rs` + `store.rs` + `execution.rs` + `view/results/grid.rs` + 宿主 `editor_exec.rs::commit_changes`；双击编辑 / 变更集 / 单事务批量提交 / 冲突回执，见 `editor-impl-taskbook.md` §1。**未做（二期）**：新增 / 删除行、列类型化编辑器、值预览弹层。**另未做**：M4 独立的「源表分页浏览面板」与驱动能力位 `table_editor`（字典仍 `Stage::NotBuilt`、驱动未声明，见 `../driver-capability-matrix.md` §3.3 / §7 #13）——当前写回能力只作用于查询结果集，不经驱动能力位门控 | `editor-impl-taskbook.md` §1 · 本文件 §3.6 / §6 D23 |
+| **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | 面包屑切 schema 已真改文档绑定，但**未跨会话持久化**（`session.rs` 无 schema 字段），且切 schema **尚未影响执行**（无 `SET search_path` / 限定名注入）——排 T2c-6 与执行链接线 | `editor-impl-taskbook.md` §3 T2c-1 完成记录「未做（本轮）」 |
+| **列编辑（多光标）** | 入口已摆（状态栏行｜列切换）但**置灰**：gpui-base 0.7.1 `add_cursor_above/below` 已实现却是 `pub(super)`，外部不可达；要真做需 vendor 补丁暴露 | `editor-impl-taskbook.md` §3 T2c-3 完成记录 / §6 |
+| **编码 / 换行重设** | 内核文本模型统一 UTF-8 + `\n`，重设菜单对应项**置灰标注**；真转换需外层（读写文件时的编解码层） | `editor-impl-taskbook.md` §3 T2c-4 / §6 #4 |
+| **T2c-5 / T2c-6**：工具栏分组自定义（三栏面板 / 组折叠 / 分隔符 / 重置）· 面板布局随会话持久化 | 任务书剩余两项 | `editor-impl-taskbook.md` §3 |
+| **2b 通用模式**（`EditorMode::Text → General` 更名 + 环境切换 + 外部解释器脚本执行） / **2d 分析模式骨架**（Cell / Output / Session + 内联输出 + `.rdsnote`） | 均未开工；模式枚举仍叫 `Text`，`notebook.rs` 不存在 | `editor-impl-taskbook.md` §2 / §4 |
 | 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | 今天看全一个值只能靠悬停全文（原型 §2.6 已订正为 ❌） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
 | 补全：缓存未命中时**回落实时内省** | 今天未接端口时只给关键字与函数（如实，不假装有元数据） | `crates/editor/src/lib.rs` ⬜（B9 余项） |
 | 事务内语句**不可取消 / 无超时** | 驱动 `Transaction` trait 没有取消入口（已核实：只有 `query` / `commit` / `rollback`） | `crates/editor/src/lib.rs` ⬜ · `crates/engine/src/driver/traits.rs::Transaction` |
-| 联邦：**源清单浮层** ·「用作联邦源」标记存储 · 扫描量可见 | 三档通道本身已通（三切片已完成） | `editor-dev-plan.md` §0 2026-09-18（B13 切片三后半）⬜ 余 |
+| 联邦：~~源清单浮层~~ ·「用作联邦源」标记存储 · 扫描量可见 | ✅ **源清单浮层已上线（T1.6，2026-09-18）**：`editor/src/sources.rs` + `view/host.rs::render_sources_picker`（联邦档才摆「源清单 ▾」，失败行带原话 / 按源重挂 / 设为主源），见联邦架构与 `federation-dev-plan.md`。⬜ 余：「用作联邦源」标记存储、扫描量可见 | `federation-dev-plan.md` §0（2026-09-18 T1.6 收圆） |
 | **只读锁 ⓘ**（连接侧写策略来源）+「提醒后放行」那一档 | 今天落地的是「项目锁 = 强只读」；另一档随连接策略做 | 本文件 §12 #26（剩余）· §13 #9 |
 | 结果**血缘落库 / 会话恢复** | 只做到 UI 摘要级（重启后回看不了「这份结果怎么来的」） | §12 #16 |
 | **重查包裹语义**（原查询带 `ORDER BY` / `LIMIT` 时外层重查语义会变） | 需要定规则：保留外层 `ORDER BY`；有 `LIMIT` 时提示「重查将去掉 LIMIT」 | §12 #15 |
@@ -704,7 +718,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | **多文档恢复** | 恢复侧仍只恢复最近更新的一份（未命名 / 空文档不持久化） | `editor-dev-plan.md` §0 2026-09-19（E3）⬜ 余 |
 | 参数绑定（`:name`） | V1 有原语无闭环；优先走驱动层 prepared statement | §12 #7 |
 | 变量浏览器 · `.ipynb` 互操作 · 迷你系统目录 | 三个后续项（分析模式可用性 / 生态互通 / 离线补全） | §12 #9 / #10 / #11 |
-| 使用手册 `editor-user-guide.md` | 与其它模块的六件套不齐（需以真实实现为准） | §12 #12 |
+
 | 结果网格**全量 `to_string()`**（1000 行 × N 列的惰性格式化 / 虚拟化） | 逐模块对比里的「落后」项 | `../references/README.md` §5 |
 | **导入管线**（我们只有导出） | 逐模块对比里的「落后」项（跨模块） | `../references/README.md` §5 |
 

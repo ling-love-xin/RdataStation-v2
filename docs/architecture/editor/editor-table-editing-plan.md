@@ -1,6 +1,8 @@
 # SQL 编辑器模块 · 表数据编辑（编辑回写）立项
 
 > 状态：**立项，未开工**（2026-09-21）。本文是 M4 表格能力的**边界与验收表**，不是排期承诺。
+>
+> ⚠️ **路线变更（2026-10-12，先读这条）**：本文立项后，产品于 2026-10-11 修订②把"结果集就地编辑"定为一等交互，**Phase 2a（T2a-1~7）已在 `crates/editor` 侧落地**——双击脏格 → 提交变更写回源库（六道防线、独立事务逐条 UPDATE、只做 UPDATE）。这与本文三条硬边界（尤其第 1、2 条"不共享状态 / 结果区不变"）的路线**相反**，对应原文已加"已被 Phase 2a 取代"标注，**原文保留以留痕**。本文的验收表（§2 dbui A1–A19 等）**仍有效**，作为未来 **M4 独立表浏览能力**（分页 / 行身份 / 整批事务 / 删除行）的验收参考——Phase 2a 只实现了其中"按主键 UPDATE 已有行"的子集。两个产品口径仍待拍板（见 `editor-architecture.md` §13）：① 驱动级 `table_editor` 能力位仍为 `NotBuilt`，与已落地的结果集写回存在语义空档；② M4 独立表浏览面板 / 独立 `crates/dataset` 是否还做。
 > 关联：`editor-architecture.md` §3.6（网格归属与提炼时机）/ §4（状态地图）/ §6 D23 / §11 / §12；`../driver-capability-matrix.md` §3.3（`table_editor` = `Stage::NotBuilt`）、§7 #13；`../database/database-navigator-prototype-design.md` §6.2（今天的「查看数据」是什么）。
 > 本文即 `../references/README.md` §4 **R6** 的交付物（"把 dbui 的交互清单落成我们的验收表；'只读连接服务端强制'纳入设计"）。
 > 许可口径（`../references/README.md` §0）：**dbui = MIT** → 抄语义（§2 的验收表来自它）；**fluxDB = GPL-3.0** → 只写思路、独立实现（§3.2）。
@@ -18,13 +20,15 @@
 | --- | --- | --- | --- |
 | 数据来源 | 一次执行的产物（`ResultSet`，驻 DuckDB 临时表） | 源库某表的分页抓取 | 由数据源 trait 提供 |
 | 生命周期 | 结果集（会话内 / 可持久化引用） | 面板 / 标签（+ 事务） | 无状态 |
-| 可写性 | **只读**（D23） | 可编辑并写回源库（行身份 + 事务） | 不适用 |
+| 可写性 | **有条件可写**（2026-10-12 起：Phase 2a 就地 UPDATE；D23 已修订） | 可编辑并写回源库（行身份 + 事务） | 不适用 |
 | 归属 | `crates/editor` | **`crates/database`（M4）** | 今天在 `crates/editor/src/view/results/grid.rs` |
 
 三条硬边界（**已核实**）：
 
 1. **不共享状态，只共享渲染**。架构 §3.6 的"永不合并"清单写明：数据源与分页策略 · 编辑缓冲与提交 · row identity / 主键解析 · 事务与冲突 · 权限与只读策略 —— 这五样**永不合并**。结果集的状态在 `ResultStore`（架构 §4 状态地图：每文档一份**结果集列表 + 选中项**），表编辑的草稿 / 行身份 / 提交态属于 M4 面板自己；两侧共享的只有"怎么画一个单元格"。
+   > 📌 **部分被 Phase 2a 打破（2026-10-12）**：编辑缓冲（`changes.rs`）、行身份（`ResultEntry.key_columns` / `row_key()`）、事务策略（宿主 `commit_changes` 独立事务）三样**已在 editor 侧实现**；"数据源与分页策略、判据来源"仍按结果集隔离（结果集是一次执行的产物，不是分页表浏览）。
 2. **结果区不变**。D23 已定：结果集只读，行内编辑与写回源库归 M4 表格能力；理由写在同一行里（V1 把表编辑塞进结果区 → 语义纠缠 + `dirtyRows` / `dirtyCells` 双轨）。
+   > 📌 **已被 Phase 2a 取代（2026-10-12）**：产品修订②把结果集就地编辑定为一等交互，D23 已修订（见架构 §6 D23），结果区已支持就地编辑与写回；新增 / 删除行仍属二期，独立表浏览仍不做。
 3. **能力位不许提前声明**。`table_editor` 在能力字典里是 `Stage::NotBuilt`，六个驱动已撤掉声明，并有单测盯住「未实现的键不许被声明」（`capability::tests::not_built_keys_are_claimed_by_nobody`）；功能落地才在 `descriptors.rs::capability_keys()` 里加回。依据 `../driver-capability-matrix.md` §3.3 / §7 #13。
 
 **为什么本文放 `editor/` 而不是 `database/`**：默认放这里，因为它与结果网格共享渲染层（§3.6 的 ③），而验收表里的分页 / 行身份 / 只读三条都要在那一层对齐；M4 目录只留一句指针即可。**若产品将来把"表数据编辑"定为一等公民**（不是 SQL 的附属展示），按 §3.6 的例外条款应改立独立 `crates/dataset`（它此时确有独立状态），本文连同渲染层一起迁过去 —— 判据只有一条：**附属展示还是独立能力**（今天的口径是**附属**）。
@@ -104,7 +108,7 @@ dbui 仓在项目外，目录名 `dbui-ref`（路径口径见 `../references/REA
 
 | 目标 | 结论 | 依据 |
 | --- | --- | --- |
-| `crates/editor/src/store.rs` 的 `ResultEntry` / `ResultStore` | **不动**。D23 结果集只读；表编辑的草稿 / 行身份 / 提交态属于 M4 面板自己的状态。"往 `ResultEntry` 里加 `dirty` 字段"就是 V1 的 `dirtyRows` / `dirtyCells` 双轨重来 | 架构 §6 D23 · §4 状态地图（`ResultStore` 的职责是"结果集列表 + 选中项"）· §3.6 的"永不合并"清单 |
+| `crates/editor/src/store.rs` 的 `ResultEntry` / `ResultStore` | **~~不动~~**（2026-10-12 订正：**已动**）。Phase 2a 已在 `DocumentResults` 上加 `changes`（待提交变更集）、在 `ResultEntry` 上加 `key_columns` / `row_key()`——但变更态挂在"结果集"语义下（pending/committed/conflict 三态），不是 M4 面板的草稿双轨。M4 独立表浏览若立项，其分页 / 行身份状态仍应独立 | 架构 §6 D23（2026-10-12 修订）· `changes.rs` / `store.rs` |
 | `crates/editor/src/view/results/grid.rs`（渲染层） | **将来借，今天不抽**。它现在是"一个使用方"（结果集）；架构 §3.6 的三条提炼触发（第二个真实使用方 / trait 形状稳定一个迭代 / 共享部分够 ~500 行）**一条都还没中**，所以设计里的 `GridDataSource` / `GridEditSink` trait **尚末抽**（§11 映射表原文）。到第二刀才是纯机械移动 | 架构 §3.6（提炼触发与落点二选一）· §11（D23 行）· `crates/editor/src/view/results/mod.rs`（原生能力台账） |
 | 驱动 trait：要不要加 `update_row` / `insert_row` / `delete_row` | **不要**。已核实：`Database::query_with_params` 在四个原生驱动都是**真 prepared statement**，事务走 `begin_transaction` → `Transaction::{query, commit, rollback}`，影响行数由 `driver::utils::affected_rows_result` 回填 —— 行编辑要的三样（参数化语句 / 事务 / 影响行数）**驱动面已经全有**。要补的是**上层**：编辑器的执行端口 `QueryRunner` 今天只吃文本 SQL（架构 §12 #7「参数绑定」仍是 ⚪ 余项），表编辑需要一条**参数化下发**的通道 | `crates/engine/src/driver/traits.rs`（`query_with_params` 的文档写明四驱动均为真 prepared statement）· `crates/engine/src/driver/utils.rs::affected_rows_result` · 架构 §12 #7 |
 | 驱动能力位 `table_editor` | **落地时才声明**。今天 `Stage::NotBuilt` 且无人声明；功能真做完再把键加回 `descriptors.rs::capability_keys()`，并给**真机用例名**（字典里的验收引用会被 `acceptance_evidence_is_real.rs` 校验"用例名必须真实存在"） | `../driver-capability-matrix.md` §3.3 / §7 #13 · `crates/engine/src/driver/capability.rs`（`Stage` / `Acceptance` 与两条守卫测试） |
@@ -113,6 +117,7 @@ dbui 仓在项目外，目录名 `dbui-ref`（路径口径见 `../references/REA
 ### 4.2 今天不要动的（清单）
 
 - **`ResultEntry` / `ResultStore` / `view/results/**` 的结果区口径**（只读、分段抓取、导出、右键菜单、键位）—— B5 / B5b / B7 / B14 / B15 / B17 已定稿。
+  > 📌 2026-10-12："只读"口径已被 Phase 2a 修订（有条件可写，见文首路线变更块）；分段抓取 / 导出 / 右键菜单 / 键位口径不变。
 - **`Database` / `Transaction` trait 的方法面**（够用；加 `update_row` 是把业务语义塞进驱动层）。
 - **驱动能力声明**：`table_editor` 不许提前声明（`capability` 的单测会红）。
 - **`crates/engine/src/driver/*` 的内省面暂时不动**：外键跟随要的"目标表 / 目标列"确实缺（`ConstraintDetail.referenced_table` / `referenced_columns` 在 v2 里**没有任何驱动写入**，已核实），但那是刀 E3 的事，且应复用 `MetadataService` 这条唯一闸门，而不是各驱动自开一条。
