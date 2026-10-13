@@ -92,6 +92,12 @@ pub enum ExecTarget {
     /// （`QueryRunner::run_script`），编辑器不猜解释器命令与平台差异（Windows 的 `taskkill /T`）。
     /// 结果不是网格形状（stdout 文本），走独立的 `ScriptNote` 通道回主线程。
     Script(crate::env::ScriptRequest),
+    /// 【2d】分析模式的单元执行：跑一个 **SQL 单元**（会话 id + 单元 id + SQL 正文）
+    ///
+    /// 与 `Script` 同款“编辑器只表达意图”口径：**怎么跑、连接怎么回退、通道怎么分流**都是执行器
+    /// 的事（`QueryRunner::run_cell`，宿主复用 1b 执行链）。只有 SQL 单元会提交执行（T2d-4）；
+    /// 结果不是停靠面板的形状（内联输出），走独立的 `CellNote` 通道回主线程。
+    Cell(crate::cell::CellRequest),
     /// 【T2a】批量提交：把结果集变更集写回源库（每行一条 UPDATE，**单事务**）
     ///
     /// `updates` 是编辑器侧生成好的 UPDATE 文本（`changes::commit_updates_rows`），
@@ -128,6 +134,14 @@ impl ExecTarget {
             _ => None,
         }
     }
+
+    /// 【2d】单元目标带的载荷（其他目标为 `None`）
+    pub fn cell(&self) -> Option<&crate::cell::CellRequest> {
+        match self {
+            Self::Cell(request) => Some(request),
+            _ => None,
+        }
+    }
 }
 
 /// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
@@ -146,6 +160,8 @@ impl ExecTarget {
             Self::Analysis(_) => None,
             // 脚本没有 SQL（走 `run_script`）
             Self::Script(_) => None,
+            // 单元走 `run_cell`（SQL 正文在 `CellRequest` 里，不走 `sql`）
+            Self::Cell(_) => None,
             // 提交不走 `run`（UPDATE 文本走 `commit_changes`），原查询只作血缘记录
             Self::Commit { .. } => None,
         }
@@ -166,6 +182,8 @@ impl ExecTarget {
             Self::Analysis(request) => vec![request.sql.clone()],
             // 脚本不归 `statements`（它走 `run_script`，不数语句）
             Self::Script(_) => Vec::new(),
+            // 单元不归 `statements`（它走 `run_cell`，SQL 正文在 `CellRequest` 里）
+            Self::Cell(_) => Vec::new(),
             // 提交的语句由执行器按 `updates` 逐条跑，不归 `statements`（它会进 `run` 通道）
             Self::Commit { .. } => Vec::new(),
         }
@@ -216,6 +234,7 @@ impl ExecTarget {
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
             Self::Script(_) => "脚本执行",
+            Self::Cell(_) => "单元执行",
             Self::Commit { .. } => "批量提交",
         }
     }
@@ -232,6 +251,7 @@ impl ExecTarget {
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
             Self::Script(_) => "脚本执行",
+            Self::Cell(_) => "单元执行",
             // 提交是写回动作，血缘说清“这份是改回源库的结果”——与下发类同源口径
             Self::Commit { .. } => "本地写回",
             // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
@@ -679,6 +699,14 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持脚本执行".to_string())
     }
 
+    /// 【2d】分析模式的单元执行：跑一个 **SQL 单元**（复用 1b 执行链，宿主实现）
+    ///
+    /// 默认实现 = 不支持（宿主没接单元执行能力的真实状态，不是静默失败）。
+    /// 与 [`Self::run_script`] 一样在**工作线程**上调用（实现里可以阻塞）。
+    fn run_cell(&self, _request: &crate::cell::CellRequest) -> Result<crate::cell::CellOutcome, String> {
+        Err("当前执行器不支持单元执行".to_string())
+    }
+
     /// 【B7 切片二】经 DuckDB 把行落成 Parquet / XLSX（`COPY … TO …`）
     ///
     /// 返回写出去的行数。默认实现 = 不支持（宿主没接 DuckDB 导出的真实状态）。
@@ -719,6 +747,8 @@ struct ExecJob {
     analysis: Option<crate::analysis::AnalysisRequest>,
     /// 【2b】脚本执行的载荷；`Some` 时走 `run_script`（且**只一条**，不走 statements 循环）
     script: Option<crate::env::ScriptRequest>,
+    /// 【2d】单元执行的载荷；`Some` 时走 `run_cell`（且**只一条**，不走 statements 循环）
+    cell: Option<crate::cell::CellRequest>,
     /// 【B15】血缘摘要（回填时写到结果条目上；工具栏的来源段）
     lineage: &'static str,
 }
@@ -916,6 +946,8 @@ pub struct ExecQueue {
     commit_notes: Arc<Mutex<VecDeque<CommitNote>>>,
     /// 【2b】脚本执行的结论（主线程轮询取走；与 `ExecOutcome` 分开——脚本结果不是网格形状）
     script_notes: Arc<Mutex<VecDeque<crate::env::ScriptNote>>>,
+    /// 【2d】单元执行的结论（主线程轮询取走；与 `ExecOutcome` 分开——结果走内联输出）
+    cell_notes: Arc<Mutex<VecDeque<crate::cell::CellNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -940,6 +972,8 @@ impl ExecQueue {
         let commit_notes: Arc<Mutex<VecDeque<CommitNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let script_notes: Arc<Mutex<VecDeque<crate::env::ScriptNote>>> =
             Arc::new(Mutex::new(VecDeque::new()));
+        let cell_notes: Arc<Mutex<VecDeque<crate::cell::CellNote>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
@@ -947,6 +981,7 @@ impl ExecQueue {
         let worker_cancelled = cancel_requested.clone();
         let worker_runner = runner.clone();
         let worker_script_done = script_notes.clone();
+        let worker_cell_done = cell_notes.clone();
         std::thread::Builder::new()
             .name("rds-editor-exec".to_string())
             // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
@@ -1037,6 +1072,23 @@ impl ExecQueue {
                             });
                         }
                     }
+                    // 【2d】单元执行：同脚本，独立跑一次 `run_cell`，结论进 `cell_notes`
+                    // （回执带会话 + 单元 id，主线程据此回填内联输出）。
+                    if let Some(request) = job.cell.as_ref() {
+                        let result = if worker_cancelled.load(Ordering::SeqCst) {
+                            Err(CANCELED.to_string())
+                        } else {
+                            worker_runner.run_cell(request)
+                        };
+                        if let Ok(mut queue) = worker_cell_done.lock() {
+                            queue.push_back(crate::cell::CellNote {
+                                document: job.document.clone(),
+                                session_id: request.session_id.clone(),
+                                cell_id: request.cell_id.clone(),
+                                result,
+                            });
+                        }
+                    }
                     *lock(&worker_running) = None;
                     worker_busy.store(false, Ordering::SeqCst);
                 }
@@ -1055,6 +1107,7 @@ impl ExecQueue {
             export_notes,
             commit_notes,
             script_notes,
+            cell_notes,
             runner,
         }
     }
@@ -1062,6 +1115,15 @@ impl ExecQueue {
     /// 【2b】脚本执行的结论（主线程轮询取走；与 `ExecOutcome` 分开）
     pub fn drain_script_notes(&self) -> Vec<crate::env::ScriptNote> {
         let mut queue = match self.script_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
+    }
+
+    /// 【2d】单元执行的结论（主线程轮询取走；与 `ExecOutcome` 分开）
+    pub fn drain_cell_notes(&self) -> Vec<crate::cell::CellNote> {
+        let mut queue = match self.cell_notes.lock() {
             Ok(queue) => queue,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -1084,7 +1146,7 @@ impl ExecQueue {
         channel: crate::channel::ExecChannel,
     ) -> Result<(), SubmitError> {
         let statements = target.statements();
-        if statements.is_empty() && target.script().is_none() {
+        if statements.is_empty() && target.script().is_none() && target.cell().is_none() {
             return Err(SubmitError::Empty);
         }
         if self.is_busy() {
@@ -1122,6 +1184,8 @@ impl ExecQueue {
                 analysis: target.analysis().cloned(),
                 // 【2b】脚本执行：载荷原样带过去（工作线程据此走 `run_script`）
                 script: target.script().cloned(),
+                // 【2d】单元执行：载荷原样带过去（工作线程据此走 `run_cell`）
+                cell: target.cell().cloned(),
                 // 【B15】血缘：结果回填时贴到条目上（工具栏显示“这份是怎么来的”）
                 lineage: target.lineage(),
             })
@@ -2938,5 +3002,103 @@ mod tests {
             .expect_err("有执行在跑该被拒");
         assert!(error.contains("有执行在跑"), "{error}");
         wait_until_idle(&queue);
+    }
+
+    /// 【2d】`run_cell` 默认实现如实拒绝（宿主没接单元执行能力的真实状态）
+    #[test]
+    fn run_cell_defaults_to_honest_rejection() {
+        struct NoopRunner;
+        impl QueryRunner for NoopRunner {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _schema: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
+                Ok(QueryData::default())
+            }
+        }
+
+        let request = crate::cell::CellRequest {
+            session_id: "s1".to_string(),
+            cell_id: "c1".to_string(),
+            sql: "select 1".to_string(),
+        };
+        let err = NoopRunner.run_cell(&request).expect_err("默认实现必须拒绝");
+        assert!(err.contains("不支持单元执行"), "{err}");
+    }
+
+    /// 【2d】单元目标走 `run_cell`，结论经 `drain_cell_notes` 回主线程（真队列线程）
+    #[test]
+    fn a_cell_runs_through_the_queue_and_its_note_comes_back() {
+        /// 假执行器：记下收到的请求，回一份成功的结论
+        struct CellRunner {
+            seen: Arc<Mutex<Option<crate::cell::CellRequest>>>,
+        }
+        impl QueryRunner for CellRunner {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _schema: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
+                Ok(QueryData::default())
+            }
+            fn run_cell(
+                &self,
+                request: &crate::cell::CellRequest,
+            ) -> Result<crate::cell::CellOutcome, String> {
+                *self.seen.lock().unwrap() = Some(request.clone());
+                Ok(crate::cell::CellOutcome {
+                    sql: request.sql.clone(),
+                    elapsed_ms: 3,
+                    affected_rows: None,
+                    truncated: false,
+                    result: Ok(QueryData::default()),
+                })
+            }
+        }
+
+        let seen: Arc<Mutex<Option<crate::cell::CellRequest>>> = Arc::new(Mutex::new(None));
+        let queue = ExecQueue::new(Arc::new(CellRunner {
+            seen: seen.clone(),
+        }));
+        let request = crate::cell::CellRequest {
+            session_id: "s1".to_string(),
+            cell_id: "c1".to_string(),
+            sql: "select 1".to_string(),
+        };
+        queue
+            .submit(
+                DocumentId::new("doc-nb"),
+                &ExecTarget::Cell(request.clone()),
+                Some("P_orders".to_string()),
+                None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                ExecChannel::default(),
+            )
+            .expect("单元提交");
+
+        // 工作线程收请求 + 回执到达
+        wait_until_idle(&queue);
+        let seen = seen.lock().unwrap().clone().expect("执行器收到请求");
+        assert_eq!(seen.session_id, "s1");
+        assert_eq!(seen.cell_id, "c1");
+        assert_eq!(seen.sql, "select 1");
+
+        let notes = queue.drain_cell_notes();
+        assert_eq!(notes.len(), 1);
+        let note = &notes[0];
+        assert_eq!(note.document, DocumentId::new("doc-nb"));
+        assert_eq!(note.session_id, "s1");
+        assert_eq!(note.cell_id, "c1");
+        let outcome = note.result.as_ref().expect("成功回执");
+        assert_eq!(outcome.sql, "select 1");
+        assert_eq!(outcome.elapsed_ms, 3);
     }
 }

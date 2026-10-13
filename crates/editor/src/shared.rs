@@ -107,6 +107,8 @@ pub struct EditorShared {
     completion: Rc<RefCell<Option<CompletionHandle>>>,
     /// 【2b】环境端口：宿主注入后才有（无宿主 = 环境列表为空，通用模式运行不亮）
     env: Rc<RefCell<Option<crate::env::EnvHandle>>>,
+    /// 【2d】分析笔记状态（每文档一份：会话 + 单元序列；输出是会话级内存状态）
+    notebooks: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, crate::cell::NotebookState>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -134,6 +136,7 @@ impl EditorShared {
             project: Rc::new(RefCell::new(None)),
             completion: Rc::new(RefCell::new(None)),
             env: Rc::new(RefCell::new(None)),
+            notebooks: Rc::new(RefCell::new(std::collections::HashMap::new())),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -308,6 +311,130 @@ impl EditorShared {
             .as_ref()
             .map(|channel| channel.drain_script_notes())
             .unwrap_or_default()
+    }
+
+    // ===== 【2d】分析笔记：会话级单元序列（每文档一份） =====
+
+    /// 某文档的笔记状态（没有 = 默认会话 + 空单元）
+    pub fn notebook_state(&self, document: &crate::model::DocumentId) -> crate::cell::NotebookState {
+        self.notebooks
+            .borrow()
+            .get(document)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 某文档的单元序列（快照；视图渲染读它）
+    pub fn notebook_cells(&self, document: &crate::model::DocumentId) -> Vec<crate::cell::Cell> {
+        self.notebook_state(document).cells
+    }
+
+    /// 某文档的当前会话
+    pub fn notebook_session(&self, document: &crate::model::DocumentId) -> crate::session::Session {
+        self.notebook_state(document).session
+    }
+
+    /// 替换某文档的整份笔记状态（打开 `.rdsnote` / 落盘前取快照用）
+    pub fn set_notebook_state(
+        &self,
+        document: &crate::model::DocumentId,
+        state: crate::cell::NotebookState,
+    ) {
+        self.notebooks.borrow_mut().insert(document.clone(), state);
+    }
+
+    /// 替换某文档的单元序列（新增 / 删除 / 重排后回写）
+    pub fn set_notebook_cells(
+        &self,
+        document: &crate::model::DocumentId,
+        cells: Vec<crate::cell::Cell>,
+    ) {
+        let mut notebooks = self.notebooks.borrow_mut();
+        let state = notebooks.entry(document.clone()).or_default();
+        state.cells = cells;
+    }
+
+    /// 会话切换：绑定换掉 + 全部输出 stale（T2d-2）
+    pub fn switch_notebook_session(
+        &self,
+        document: &crate::model::DocumentId,
+        session: crate::session::Session,
+    ) {
+        let mut notebooks = self.notebooks.borrow_mut();
+        let state = notebooks.entry(document.clone()).or_default();
+        state.switch_session(session);
+    }
+
+    /// 提交一次**单元执行**（分析模式；走 `run_cell`，连接 / schema / 通道从服务层取）
+    ///
+    /// 与 [`Self::submit`] 同一口径：没有执行器 / 有执行在跑 → 如实拒绝，不静默。
+    pub fn submit_cell(
+        &self,
+        document: crate::model::DocumentId,
+        request: &crate::cell::CellRequest,
+    ) -> Result<(), String> {
+        let (connection, schema, channel) = {
+            let service = self.service.borrow();
+            (
+                service.connection_for(&document),
+                service.schema_for(&document),
+                service.channel_for(&document),
+            )
+        };
+        let guard = self.exec.borrow();
+        let Some(queue) = guard.as_ref() else {
+            return Err("当前未接入执行".to_string());
+        };
+        queue.submit(
+            document,
+            &crate::execution::ExecTarget::Cell(request.clone()),
+            connection,
+            schema,
+            crate::execution::ResultPlacement::Replace,
+            crate::execution::RunOptions {
+                use_transaction: false,
+            },
+            channel,
+        )
+        .map_err(|e| e.message().to_string())
+    }
+
+    /// 【2d】单元执行的结论（宿主 / 视图轮询取走）
+    pub fn drain_cell_notes(&self) -> Vec<crate::cell::CellNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_cell_notes())
+            .unwrap_or_default()
+    }
+
+    /// 把一条单元回执**落到某文档的笔记状态**上（Running → Done / Error）
+    ///
+    /// 回执带会话 id：切会话后到期的回执不落（会话已经换了，别把旧结果贴进新会话）。
+    pub fn apply_cell_note(
+        &self,
+        document: &crate::model::DocumentId,
+        note: &crate::cell::CellNote,
+    ) {
+        let mut notebooks = self.notebooks.borrow_mut();
+        let Some(state) = notebooks.get_mut(document) else {
+            return;
+        };
+        if state.session.id != note.session_id {
+            return; // 会话已切换：回执作废
+        }
+        let Some(cell) = state.cell_mut(&note.cell_id) else {
+            return;
+        };
+        if cell.state != crate::cell::CellState::Running {
+            return; // 没在跑的回执不落（防止迟到的旧回执覆盖新结果）
+        }
+        match &note.result {
+            Ok(outcome) => {
+                cell.mark_done(crate::cell::Output::Table(build_inline_entry(document, outcome)))
+            }
+            Err(reason) => cell.mark_error(reason.clone()),
+        }
     }
 
     /// 中断当前执行（B3）；没在跑就回绝（理由可读，不是静默）
@@ -758,5 +885,169 @@ impl EditorShared {
             folds: plan.folding && doc.capabilities().folding,
             diagnostics: plan.diagnostics,
         }
+    }
+}
+
+/// 【2d】把单元执行的结论拼成内联表格要的 [`crate::store::ResultEntry`]
+///
+/// 内联表格复用 2a 共用表格（吃 `ResultEntry`）：连接 / 通道在单元上下文里没有面板那一套
+/// 结果区元数据，这里用 `None` / 默认通道如实带过（单元卡片自己展示连接信息）。
+fn build_inline_entry(
+    document: &crate::model::DocumentId,
+    outcome: &crate::cell::CellOutcome,
+) -> crate::store::ResultEntry {
+    let mut entry = match &outcome.result {
+        Ok(query) => crate::store::ResultEntry::success(
+            document.clone(),
+            outcome.sql.clone(),
+            outcome.elapsed_ms,
+            outcome.truncated,
+            query.columns.clone(),
+            query.rows.clone(),
+        )
+        .with_column_types(&query.column_types),
+        Err(reason) => crate::store::ResultEntry::failure(
+            document.clone(),
+            outcome.sql.clone(),
+            reason.clone(),
+            outcome.elapsed_ms,
+        ),
+    };
+    entry.affected_rows = outcome.affected_rows;
+    entry.lineage = Some("单元执行".to_string());
+    entry
+}
+
+#[cfg(test)]
+mod tests {
+    // 安全模式：**不通配导入**
+    use super::EditorShared;
+    use crate::cell::{Cell, CellKind, CellNote, CellOutcome, CellRequest, CellState, NotebookState, Output};
+    use crate::model::DocumentId;
+    use crate::session::Session;
+
+    fn notebook(doc: &DocumentId) -> (EditorShared, NotebookState) {
+        let shared = EditorShared::new();
+        let mut state = NotebookState::new();
+        let mut c1 = Cell::new("c1", CellKind::Sql, "select 1");
+        c1.mark_running();
+        state.cells = vec![c1, Cell::new("c2", CellKind::Text, "# 备注")];
+        shared.set_notebook_state(doc, state.clone());
+        (shared, state)
+    }
+
+    fn note(doc: &DocumentId, session_id: &str, cell_id: &str, ok: bool) -> CellNote {
+        let result = if ok {
+            Ok(CellOutcome {
+                sql: "select 1".to_string(),
+                elapsed_ms: 2,
+                affected_rows: None,
+                truncated: false,
+                result: Ok(crate::execution::QueryData::default()),
+            })
+        } else {
+            Err("表不存在".to_string())
+        };
+        CellNote {
+            document: doc.clone(),
+            session_id: session_id.to_string(),
+            cell_id: cell_id.to_string(),
+            result,
+        }
+    }
+
+    /// 【2d】回执落单元：Running → Done（带内联 Table 输出）；失败 → Error
+    #[test]
+    fn applying_a_note_marks_the_running_cell_done_or_error() {
+        let doc = DocumentId::new("nb");
+        let (shared, _) = notebook(&doc);
+
+        // 成功回执 → Done + Table 输出（内联表格吃 ResultEntry）
+        shared.apply_cell_note(&doc, &note(&doc, "default", "c1", true));
+        let cells = shared.notebook_cells(&doc);
+        assert_eq!(cells[0].state, CellState::Done);
+        assert!(
+            matches!(&cells[0].output, Some(Output::Table(entry)) if entry.columns.is_empty()),
+            "成功回执拼成内联 Table"
+        );
+        assert_eq!(cells[0].output.as_ref().and_then(|o| match o {
+            Output::Table(_) => Some(()),
+            _ => None,
+        })
+        .is_some(), true);
+    }
+
+    /// 会话切换后到期的回执**不落**（会话已经换了，别把旧结果贴进新会话）
+    #[test]
+    fn a_note_from_a_stale_session_is_dropped() {
+        let doc = DocumentId::new("nb");
+        let (shared, _) = notebook(&doc);
+
+        // 先切会话（c1 在跑 → 状态回 Idle，输出清空）
+        shared.switch_notebook_session(&doc, Session::new("s2", Some("P_orders".to_string()), None));
+        // 旧会话（default）的回执到了：不落
+        shared.apply_cell_note(&doc, &note(&doc, "default", "c1", true));
+        let cells = shared.notebook_cells(&doc);
+        assert_eq!(cells[0].state, CellState::Idle, "旧会话回执不落");
+        assert_eq!(cells[0].output, None);
+        assert_eq!(shared.notebook_session(&doc).id, "s2");
+        assert_eq!(shared.notebook_session(&doc).default_connection.as_deref(), Some("P_orders"));
+    }
+
+    /// 没在跑的回执不落（防迟到的旧回执覆盖新结果）
+    #[test]
+    fn a_note_for_an_idle_cell_is_dropped() {
+        let doc = DocumentId::new("nb");
+        let (shared, _) = notebook(&doc);
+        // c2 从没跑过（Idle）：回执到了不落
+        shared.apply_cell_note(&doc, &note(&doc, "default", "c2", true));
+        let cells = shared.notebook_cells(&doc);
+        assert_eq!(cells[1].state, CellState::Idle);
+        assert_eq!(cells[1].output, None);
+    }
+
+    /// 提交单元执行：没有执行器 = 如实拒绝（不静默）
+    #[test]
+    fn submit_cell_without_a_runner_is_rejected() {
+        let doc = DocumentId::new("nb");
+        let (shared, _) = notebook(&doc);
+        let request = CellRequest {
+            session_id: "default".to_string(),
+            cell_id: "c1".to_string(),
+            sql: "select 1".to_string(),
+        };
+        let err = shared.submit_cell(doc.clone(), &request).expect_err("没接执行器该被拒");
+        assert!(!err.is_empty());
+    }
+
+    /// 替换单元序列 / 会话是纯内存操作：快照原样往返
+    #[test]
+    fn cells_and_session_round_trip_through_the_holder() {
+        let doc = DocumentId::new("nb");
+        let shared = EditorShared::new();
+        let mut state = NotebookState::new();
+        state.switch_session(Session::new("s9", None, Some("py".to_string())));
+        state.cells = vec![Cell::new("x1", CellKind::Sql, "select 9")];
+        shared.set_notebook_state(&doc, state.clone());
+
+        assert_eq!(shared.notebook_session(&doc).id, "s9");
+        assert_eq!(shared.notebook_session(&doc).env.as_deref(), Some("py"));
+        let cells = shared.notebook_cells(&doc);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].id, "x1");
+    }
+
+    /// 【2d】切换会话会把全部有输出的单元标 stale（T2d-2 验收口径）
+    #[test]
+    fn switching_session_stales_cells_in_the_holder() {
+        let doc = DocumentId::new("nb");
+        let (shared, _) = notebook(&doc);
+        // 先让 c1 跑出结果（Done），再切会话
+        shared.apply_cell_note(&doc, &note(&doc, "default", "c1", true));
+        assert_eq!(shared.notebook_cells(&doc)[0].state, CellState::Done);
+
+        shared.switch_notebook_session(&doc, Session::default_session());
+        let cells = shared.notebook_cells(&doc);
+        assert_eq!(cells[0].state, CellState::Stale, "切换会话 → 有输出单元 stale");
     }
 }

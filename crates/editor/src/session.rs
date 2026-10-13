@@ -18,8 +18,54 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::channel::ExecChannel;
 use crate::model::EditorMode;
+
+/// 分析会话（T2d-2）：一份笔记在「哪个连接 + 哪个环境」上跑
+///
+/// 与 [`SavedSession`]（文档持久化：光标 / 模式 / 内容）是**两回事**：
+/// 分析会话回答的是「笔记的单元往哪发」（绑定连接 / 执行环境），
+/// 会话切换 → 全部输出标 stale（见 [`crate::cell::Cell::mark_stale`]）。
+///
+/// 会话是**笔记级**的：落 `.rdsnote` 时跟随文件（重开笔记原样恢复绑定），
+/// 但单元输出不跟随（那是会话级内存状态）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Session {
+    /// 会话 id（`default` = 默认会话；未来可扩展多会话列表）
+    pub id: String,
+    /// 绑定连接（`None` = 跟随当前活动连接，与 SQL 模式的 B1 同口径）
+    pub default_connection: Option<String>,
+    /// 执行环境（通用模式的解释器 id；分析模式暂只跑 SQL 单元，`None` = 未绑定）
+    pub env: Option<String>,
+}
+
+impl Session {
+    /// 默认会话（id = `default`，未绑定连接与环境）
+    pub fn default_session() -> Self {
+        Self {
+            id: "default".to_string(),
+            default_connection: None,
+            env: None,
+        }
+    }
+
+    /// 新建一个带绑定的会话
+    pub fn new(id: impl Into<String>, default_connection: Option<String>, env: Option<String>) -> Self {
+        Self {
+            id: id.into(),
+            default_connection,
+            env,
+        }
+    }
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::default_session()
+    }
+}
 
 /// 一份可恢复的编辑器会话
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +339,29 @@ mod tests {
         typed.cursor = 0;
         typed.selection = None;
         assert!(worth_saving(&typed), "有内容就该存");
+    }
+
+    /// 【T2d-2】分析会话：默认会话 + 带绑定会话，序列化往返（落 `.rdsnote` 用）
+    #[test]
+    fn analysis_session_round_trips_through_json() {
+        use super::Session;
+
+        let default = Session::default_session();
+        assert_eq!(default.id, "default");
+        assert_eq!(default.default_connection, None);
+        assert_eq!(default.env, None);
+
+        let bound = Session::new("s1", Some("P_orders".to_string()), None);
+        assert_eq!(bound.id, "s1");
+        assert_eq!(bound.default_connection.as_deref(), Some("P_orders"));
+
+        // 序列化往返（`.rdsnote` 会话字段走同一形状）
+        let json = serde_json::to_string(&bound).expect("serialize");
+        let back: Session = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back, bound);
+
+        // `Default` 与 `default_session` 同义（新建笔记的初值）
+        assert_eq!(Session::default(), Session::default_session());
     }
 
     /// 【T2c-6】文档为空但布局 / schema / 缩进被改过 → 值得存（重启不丢文档属性）

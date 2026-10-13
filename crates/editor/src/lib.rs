@@ -18,9 +18,9 @@
 //!   `editability.rs`（六道防线纯函数）/ `execution.rs`（`ExecTarget::Commit`）/
 //!   `view/results/grid.rs`（脏格与双击入口），宿主 `workbench::services::editor_exec::commit_changes`
 //!   独立事务逐条 UPDATE、失败回滚、0 行判冲突；只做 UPDATE，增删行属二期
-//! - 🟡 Phase 2c 进行中：T2c-1~4 已完成（Schema 面包屑 / 方言段 / 英文微标 / 重设菜单，488 tests passed），
-//!   余 T2c-5/T2c-6；权威排期见 `docs/architecture/editor/editor-impl-taskbook.md`
-//! - ⬜ 2b（通用模式）与 2d（分析笔记本视图，`notebook.rs` / `notebook_view.rs` 未建）未开工
+//! - ✅ 2b 通用模式（T2b-1~3）：脚本执行环境（内置探测 + 自定义增删改落全局库）与执行链已落地
+//! - ⬜ 2d 分析笔记本视图（`view/analysis.rs` 未建）：数据层（`cell.rs` / `Session` / `run_cell` /
+//!   `.rdsnote` JSON）已就位，视图与接线待做
 //!
 //! 以下为 Phase 0/1a/1b 的实现流水（历史记录，保留细节）。
 //!
@@ -95,13 +95,15 @@
 //!   血缘只在标签做 UI 摘要、未落库（B5 余项）· 值预览弹层（B14 余项）·
 //!   事务内语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）·
 //!   补全缓存未命中时无实时内省回退（B9 余项）
-//! - ⬜ 1c/2d：`session` 端口已建；`notebook`（Cell / Output / Session）未建
+//! - 🟡 1c/2d 数据层：`cell.rs`（Cell / Output / 状态机）与 `Session` 已建，`.rdsnote` JSON 已定；
+//!   余视图（`view/analysis.rs`）与宿主接线（`run_cell`）
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
 //! 状态的 SQL 文本原语，属 engine（`core/sql` 是 sqlglot 的唯一接入点），editor 直接消费，
 //! 不在本 crate 重复实现。
 
 pub mod analysis;
+pub mod cell;
 pub mod changes;
 pub mod channel;
 pub mod commands;

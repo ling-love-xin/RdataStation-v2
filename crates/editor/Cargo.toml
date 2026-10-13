@@ -17,6 +17,9 @@ lsp-types.workspace = true
 anyhow.workspace = true
 # 历史面板（B8）：引擎的历史记录带 `chrono::DateTime`（相对时间文案在 `history.rs`）
 chrono.workspace = true
+# 分析笔记（2d）：`.rdsnote` 落盘是 JSON（cell.rs / session.rs 的序列化形状）
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
