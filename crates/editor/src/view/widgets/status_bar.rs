@@ -351,12 +351,12 @@ mod tests {
     }
 
     #[test]
-    fn text_mode_has_no_statement_count() {
-        // 文本模式是纯记事本：没有语句概念，不该出现"N 条语句"
+    fn general_mode_has_no_statement_count() {
+        // 通用模式是纯记事本（无连接档）：没有语句概念，不该出现"N 条语句"
         let mut text = inputs(ReadOnly::none());
-        text.mode = EditorMode::Text;
+        text.mode = EditorMode::General;
         assert!(!labels(&text).body.contains("条语句"));
-        assert!(labels(&text).body.starts_with("TXT"));
+        assert!(labels(&text).body.starts_with("通用"));
     }
 
     #[test]

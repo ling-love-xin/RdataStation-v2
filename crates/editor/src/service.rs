@@ -701,11 +701,11 @@ mod tests {
     fn untitled_documents_get_distinct_identity_and_title() {
         let mut service = EditorService::new();
         let a = service
-            .open(OpenRequest::untitled("", EditorMode::Text))
+            .open(OpenRequest::untitled("", EditorMode::General))
             .id()
             .clone();
         let b = service
-            .open(OpenRequest::untitled("", EditorMode::Text))
+            .open(OpenRequest::untitled("", EditorMode::General))
             .id()
             .clone();
 
@@ -862,9 +862,9 @@ mod tests {
             OutputTarget::DockPanel
         );
 
-        assert!(service.set_mode(&id, EditorMode::Text));
+        assert!(service.set_mode(&id, EditorMode::General));
         let text = service.find(&id).expect("doc");
-        assert_eq!(text.mode(), EditorMode::Text);
+        assert_eq!(text.mode(), EditorMode::General);
         assert_eq!(text.output_target(), OutputTarget::None);
         assert!(
             !text.capabilities().talks_to_database(),

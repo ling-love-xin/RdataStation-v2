@@ -35,7 +35,7 @@ use crate::model::EditorMode;
 /// 折叠是**缓冲区的编辑能力**，不是语言服务：文本模式（记事本）与 SQL 模式都该有；
 /// 分析模式是逐单元语言、单元层结构属 1c，现在整篇笔记不开（与 `view/highlight` 同一口径）。
 pub fn is_enabled(mode: EditorMode) -> bool {
-    matches!(mode, EditorMode::Text | EditorMode::Sql)
+    matches!(mode, EditorMode::General | EditorMode::Sql)
 }
 
 /// 候选 → 内核形状（纯函数，可逐条断言）
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn folding_is_on_for_buffers_and_off_for_the_notebook() {
-        assert!(is_enabled(EditorMode::Text));
+        assert!(is_enabled(EditorMode::General));
         assert!(is_enabled(EditorMode::Sql));
         // 分析模式是逐单元结构（1c），整篇笔记不开
         assert!(!is_enabled(EditorMode::Analysis));

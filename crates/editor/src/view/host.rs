@@ -270,7 +270,7 @@ impl EditorHostPanel {
                     !doc.read_only().can_edit(),
                     doc.mode(),
                 ),
-                None => (String::new(), true, EditorMode::Text),
+                None => (String::new(), true, EditorMode::General),
             }
         };
 
@@ -5048,7 +5048,7 @@ impl Render for EditorHostPanel {
         let status = StatusInputs {
             mode: self
                 .with_document(|doc| doc.mode())
-                .unwrap_or(EditorMode::Text),
+                .unwrap_or(EditorMode::General),
             dirty: self.is_dirty(),
             read_only: self.read_only_flags(),
             statements: self.statements,
@@ -5327,7 +5327,7 @@ impl Render for EditorHostPanel {
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
         let mode = self
             .with_document(|doc| doc.mode())
-            .unwrap_or(EditorMode::Text);
+            .unwrap_or(EditorMode::General);
         root = root.child(self.render_toolbar(mode, cx));
         // 提示卡（A13）：档位带来的限制要在界面上说清，而不是让用户自己撞上（“能编辑却改不了”）
         if let Some(notice) = self.tier_notice() {

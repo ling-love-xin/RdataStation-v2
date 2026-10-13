@@ -27,7 +27,7 @@ pub const SQL_EXTENSIONS: &[&str] = &["sql", "mysql", "pgsql", "psql", "ddl", "t
 
 /// 按最后一段扩展名判定模式（不含"显式记忆"与"入口语义"两条更高优先级规则）
 ///
-/// 未匹配或没有扩展名 → [`EditorMode::Text`]（安全默认：文本模式不碰数据库）。
+/// 未匹配或没有扩展名 → [`EditorMode::General`]（安全默认：文本模式不碰数据库）。
 pub fn mode_for_extension(path: &Path) -> EditorMode {
     let ext = path
         .extension()
@@ -40,7 +40,7 @@ pub fn mode_for_extension(path: &Path) -> EditorMode {
     } else if SQL_EXTENSIONS.contains(&ext.as_str()) {
         EditorMode::Sql
     } else {
-        EditorMode::Text
+        EditorMode::General
     }
 }
 
@@ -188,7 +188,7 @@ pub fn plan_switch(
 
     match (from, to) {
         // 文本 → SQL：无内容影响；连接可以晚点再绑（执行时才要求）
-        (EditorMode::Text, EditorMode::Sql) => SwitchPlan {
+        (EditorMode::General, EditorMode::Sql) => SwitchPlan {
             from,
             to,
             confirm: None,
@@ -196,7 +196,7 @@ pub fn plan_switch(
             note: Some("已启用 SQL 语言服务；执行前需绑定连接"),
         },
         // SQL → 文本：结果不丢，但不再可交互
-        (EditorMode::Sql, EditorMode::Text) => SwitchPlan {
+        (EditorMode::Sql, EditorMode::General) => SwitchPlan {
             from,
             to,
             confirm: Some(ConfirmKind::HideResults),
@@ -224,7 +224,7 @@ pub fn plan_switch(
             note: Some("输出与 stale 状态不会被带过来"),
         },
         // 文本 → 分析：等价于先转 SQL 再转分析（同样需要确认单元粒度）
-        (EditorMode::Text, EditorMode::Analysis) => SwitchPlan {
+        (EditorMode::General, EditorMode::Analysis) => SwitchPlan {
             from,
             to,
             confirm: Some(ConfirmKind::ConvertToCells),
@@ -232,7 +232,7 @@ pub fn plan_switch(
             note: Some("文本将按所选粒度拆为单元（等价于先切 SQL 再切分析）"),
         },
         // 分析 → 文本：单元结构展开为纯脚本，输出丢弃
-        (EditorMode::Analysis, EditorMode::Text) => SwitchPlan {
+        (EditorMode::Analysis, EditorMode::General) => SwitchPlan {
             from,
             to,
             confirm: Some(ConfirmKind::ExportToScript),
@@ -398,14 +398,14 @@ mod switch_tests {
     #[test]
     fn plan_confirmation_kinds_are_covered_by_wording() {
         // 文本 → SQL 免确认
-        assert!(plan(EditorMode::Text, EditorMode::Sql, "select 1", false).confirm.is_none());
+        assert!(plan(EditorMode::General, EditorMode::Sql, "select 1", false).confirm.is_none());
 
         // 需要确认的四个方向都能取到各自文案
         for (from, to) in [
-            (EditorMode::Sql, EditorMode::Text),
+            (EditorMode::Sql, EditorMode::General),
             (EditorMode::Sql, EditorMode::Analysis),
             (EditorMode::Analysis, EditorMode::Sql),
-            (EditorMode::Text, EditorMode::Analysis),
+            (EditorMode::General, EditorMode::Analysis),
         ] {
             let plan = plan(from, to, "select 1", false);
             let kind = plan.confirm.expect("{from:?} → {to:?} 需要确认");
@@ -423,7 +423,7 @@ mod switch_tests {
 
     #[test]
     fn text_to_sql_is_free_and_keeps_content() {
-        let plan = plan(EditorMode::Text, EditorMode::Sql, "select 1", false);
+        let plan = plan(EditorMode::General, EditorMode::Sql, "select 1", false);
         assert!(!plan.needs_confirmation(), "文本 → SQL 不需要确认");
         assert_eq!(plan.content, SwitchContent::Unchanged);
         // 连接可以晚点绑：只是执行前需要
@@ -432,11 +432,11 @@ mod switch_tests {
 
     #[test]
     fn sql_to_text_warns_only_about_results() {
-        let with_results = plan(EditorMode::Sql, EditorMode::Text, "select 1", true);
+        let with_results = plan(EditorMode::Sql, EditorMode::General, "select 1", true);
         assert_eq!(with_results.confirm, Some(ConfirmKind::HideResults));
         assert!(with_results.note.is_some_and(|n| n.contains("置灰")));
 
-        let without = plan(EditorMode::Sql, EditorMode::Text, "select 1", false);
+        let without = plan(EditorMode::Sql, EditorMode::General, "select 1", false);
         assert_eq!(without.confirm, Some(ConfirmKind::HideResults));
         assert!(without.note.is_some_and(|n| n.contains("没有结果")));
     }
@@ -484,11 +484,11 @@ mod switch_tests {
 
     #[test]
     fn text_and_analysis_pairs_ask_for_confirmation_too() {
-        let up = plan(EditorMode::Text, EditorMode::Analysis, "select 1", false);
+        let up = plan(EditorMode::General, EditorMode::Analysis, "select 1", false);
         assert_eq!(up.confirm, Some(ConfirmKind::ConvertToCells));
         assert!(matches!(up.content, SwitchContent::Cells(_)));
 
-        let down = plan(EditorMode::Analysis, EditorMode::Text, "select 1", false);
+        let down = plan(EditorMode::Analysis, EditorMode::General, "select 1", false);
         assert_eq!(down.confirm, Some(ConfirmKind::ExportToScript));
         assert_eq!(down.content, SwitchContent::Sql("select 1;".to_string()));
     }
@@ -575,7 +575,7 @@ mod tests {
             ".gitignore",
             "a/b/",
         ] {
-            assert_eq!(mode_of(path), EditorMode::Text, "{path}");
+            assert_eq!(mode_of(path), EditorMode::General, "{path}");
         }
     }
 
@@ -591,8 +591,8 @@ mod tests {
         let path = Path::new("query.sql");
         assert_eq!(mode_for_extension(path), EditorMode::Sql);
         assert_eq!(
-            resolve_mode(path, Some(EditorMode::Text)),
-            EditorMode::Text,
+            resolve_mode(path, Some(EditorMode::General)),
+            EditorMode::General,
             "显式记忆优先于扩展名"
         );
         assert_eq!(resolve_mode(path, None), EditorMode::Sql);
@@ -606,6 +606,6 @@ mod tests {
 
     #[test]
     fn unknown_paths_default_to_safe_text_mode() {
-        assert_eq!(resolve_mode(Path::new("unknown.bin"), None), EditorMode::Text);
+        assert_eq!(resolve_mode(Path::new("unknown.bin"), None), EditorMode::General);
     }
 }

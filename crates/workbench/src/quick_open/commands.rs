@@ -52,8 +52,8 @@ pub(crate) fn command_specs() -> Vec<CommandSpec> {
             id: "file.new_file",
             label: "新建文件",
             shortcut: "",
-            keywords: "new file text 文件",
-            action: Action::NewDocument(EditorMode::Text),
+            keywords: "new file text 通用 文件",
+            action: Action::NewDocument(EditorMode::General),
         },
         CommandSpec {
             id: "panel.draft",

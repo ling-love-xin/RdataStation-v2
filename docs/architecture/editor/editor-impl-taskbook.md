@@ -81,7 +81,7 @@
 - **不做**：**不接 Jupyter 协议**（二期再评 `jupyter-zmq-client` 等）；不做内联输出（分析模式 2d 才有）；不做 LSP 接入（仅状态栏指示）。
 
 ### 任务清单
-- [ ] **T2b-1 更名与口径**：`model.rs` `EditorMode::Text → General`（含 `label()` = "通用"）；**删除"文本 ⊂ SQL ⊂ 分析 严格递进"注释**，改为"通用=无连接档（文件编辑 + 本地脚本执行），与 SQL 平行"；`mode.rs` / `host.rs` / 状态栏 / 用户可见文案同步；扩展名判定不变（md/log/json/csv → 通用；sql 系列 → SQL；rdsnote → 分析）。
+- [x] **T2b-1 更名与口径**：`model.rs` `EditorMode::Text → General`（含 `label()` = "通用"）；**删除"文本 ⊂ SQL ⊂ 分析 严格递进"注释**，改为"通用=无连接档（文件编辑 + 本地脚本执行），与 SQL 平行"；`mode.rs` / `host.rs` / 状态栏 / 用户可见文案同步；扩展名判定不变（md/log/json/csv → 通用；sql 系列 → SQL；rdsnote → 分析）。✅ 2026-10-13（见下「T2b-1 完成记录」）
 - [ ] **T2b-2 环境模型**（新模块 `env.rs`）：`Environment{ id, name, kind(解释器类型: Python/RScript/Rustc/自定义), command, args, version }` + `EnvPort::list` / `EnvPort::installed(id) -> bool`（宿主注入，默认接系统探测：`python --version` 等）；未注入 = 空环境列表（如实，不假装有）。
 - [ ] **T2b-3 环境选择器 UI**：工具栏 env-select（环境名 + 版本 ▾，原型通用模式）→ 菜单列环境 + 「管理环境…」（modal：环境配置表，增删改路径/参数）；选中的环境持久化到文档（与 connection 同类）。
 - [ ] **T2b-4 脚本执行**：`ExecTarget::Script{ env, code }` + `QueryRunner::run_script`（默认实现如实不支持）；宿主实现：`spawn(env.command, args)` + stdin 写入代码（或临时文件，Windows 下避免命令行引号问题）+ stdout/stderr 收集 + 超时（可配）+ 中断（kill 进程树）+ 退出码。
@@ -156,6 +156,11 @@
 - **接线**：`EditMode` 枚举（Row 默认 / Column）+ `EditorHostPanel::edit_mode`（面板内存态，不随会话持久化）；状态栏入口「行 ▾/列 ▾」两项都可用、checked 真实、列编辑不再置灰；`set_edit_mode` + `enforce_edit_mode`（行编辑 = 多光标收拢到活动光标；菜单 on_click 持有 window 立即收拢一次）；**Change 事件处理器后卫**：行编辑模式下文本变更时若 `cursor_count() > 1` 直接 `state.update(cx, collapse_cursors)`（键盘 Ctrl+Alt+↓ 加的光标也逃不掉）；`StatusInputs.cursor_count` + 右段「N 光标」徽标（>1 才显示，真实值）。
 - **测试**：rds-editor lib **519 passed**（+`multi_cursor_badge_shows_only_when_count_above_one`、`column_edit_toggles_multi_cursor_via_the_kernel`、`row_edit_collapses_multi_cursor_on_the_next_change`）；rds-workbench ui_contract **8**、rds-engine **532** 全绿；`cargo check --workspace` 干净。
 - **已知边界**：列编辑的**鼠标框选**（拖选矩形选区）未做——内核 `build_columnar_selection` 仍是 `pub(super)` 且需鼠标捕获；当前列编辑 = 多光标（Ctrl+Alt+↑/↓ 加光标 + N 光标徽标），框选留待后续。
+
+### T2b-1 完成记录（2026-10-13，更名与口径：Text → General）
+- **落点**：`model.rs` 变体 `Text → General`（`label()` = "通用"、`short_label()` = "通用"；**持久化键 `as_key()` 保持 `"text"`**、`from_key("text") → General`——变体名改了，存储键不动，旧会话兼容）；删掉「能力严格递进」注释，改「通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行」；全仓 54 处 `EditorMode::Text`（editor 9 文件 + workbench 2 文件）批量更名；模式指示器（`mode.label()`）与状态栏短标自动跟随；`default_file_name` 仍是「未命名.txt」、扩展名判定不变。
+- **测试**：rds-editor **519 passed**（+`model::tests::mode_keys_round_trip…` 断言 label="通用"、`general_mode_has_no_statement_count`）；rds-workbench ui_contract **8** 全绿；workspace check 干净。
+- **口径**：quick_open「新建文件」关键词加「通用」；架构文档历史记录里的「文本模式」属历史纪事，不改（完成记录才反映现状）。
 
 ### T2c-4 完成记录（2026-10-12，重设菜单已接线并测绿；缩进真改内核 TabSize）
 - **内核核实（缩进）**：gpui-base 0.7.1 `InputBaseState<M: MultiLineMode>::set_tab_size`（`input/editor/indent.rs:504`，**pub**）挂 `MultiLineMode` impl（`EditorMode: MultiLineMode` 在 `base/kind.rs:67`）→ `EditorState`（=`InputBaseState<EditorMode>` 别名，gpui-base `editor/mod.rs:11`）**可直接调 set_tab_size**——**编译实证**：`self.editor.update(cx, |state, cx| state.set_tab_size(TabSize{…}, cx))` 通过，无需给 rds-editor 加 gpui-base 直接依赖。`TabSize{tab_size, hard_tabs}`——**制表符缩进（hard_tabs=true）内核原生支持**（`indent.rs:13-27`），一并真做。注意：`mode.tab_size()` 读访问器仍是 `pub(super)`——**读不走内核**，走文档级状态（双写）。

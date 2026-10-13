@@ -29,12 +29,12 @@ impl fmt::Display for DocumentId {
     }
 }
 
-/// 编辑器模式（三档能力，能力严格递进：文本 ⊂ SQL ⊂ 分析）
+/// 编辑器模式（通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorMode {
-    /// 文本：带高亮的记事本，禁止一切数据库通信
+    /// 通用：带高亮的记事本（无连接档；文件编辑 + 本地脚本执行）
     #[default]
-    Text,
+    General,
     /// SQL：脚本 + 连接 + 执行 + 结果
     Sql,
     /// 分析：单元 + 会话 + 输出（`.rdsnote`）
@@ -42,13 +42,13 @@ pub enum EditorMode {
 }
 
 impl EditorMode {
-    /// 三个模式的声明顺序（= 模式指示器菜单顺序：能力递进 文本 → SQL → 分析）
-    pub const ALL: [EditorMode; 3] = [Self::Text, Self::Sql, Self::Analysis];
+    /// 三个模式的声明顺序（= 模式指示器菜单顺序）
+    pub const ALL: [EditorMode; 3] = [Self::General, Self::Sql, Self::Analysis];
 
     /// 界面展示名（与原型文档用词一致）
     pub fn label(self) -> &'static str {
         match self {
-            Self::Text => "文本",
+            Self::General => "通用",
             Self::Sql => "SQL",
             Self::Analysis => "分析",
         }
@@ -57,7 +57,7 @@ impl EditorMode {
     /// 状态栏 / 标签用的短标签
     pub fn short_label(self) -> &'static str {
         match self {
-            Self::Text => "TXT",
+            Self::General => "通用",
             Self::Sql => "SQL",
             Self::Analysis => "NOTE",
         }
@@ -66,9 +66,10 @@ impl EditorMode {
     /// 持久化用的键（存库 / 存配置）
     ///
     /// 与展示名（`label()`）分开：展示名可以随时改文案，存库的值不能。
+    /// 通用模式的键沿用历史 `"text"`（旧会话兼容；变体名改了，存储键不动）。
     pub fn as_key(self) -> &'static str {
         match self {
-            Self::Text => "text",
+            Self::General => "text",
             Self::Sql => "sql",
             Self::Analysis => "analysis",
         }
@@ -77,7 +78,7 @@ impl EditorMode {
     /// 未命名文档的另存为默认文件名（扩展名与模式一致，另存后判定规则不会跟模式打架）
     pub fn default_file_name(self) -> &'static str {
         match self {
-            Self::Text => "未命名.txt",
+            Self::General => "未命名.txt",
             Self::Sql => "未命名.sql",
             Self::Analysis => "未命名.rdsnote",
         }
@@ -88,7 +89,7 @@ impl EditorMode {
     /// 认不出来的值当作 SQL（老库默认值就是 `sql`）：**不 panic，也不丢掉整份会话**。
     pub fn from_key(key: &str) -> Self {
         match key {
-            "text" => Self::Text,
+            "text" => Self::General,
             "analysis" => Self::Analysis,
             _ => Self::Sql,
         }
@@ -195,7 +196,7 @@ impl Capabilities {
     /// 取某模式的能力集
     pub fn for_mode(mode: EditorMode) -> Self {
         match mode {
-            EditorMode::Text => Self {
+            EditorMode::General => Self {
                 kind: DocumentKind::Document,
                 language: LanguageService::None,
                 completion: false,
@@ -245,12 +246,12 @@ mod tests {
 
     #[test]
     fn mode_keys_round_trip_and_are_not_the_display_names() {
-        for mode in [EditorMode::Text, EditorMode::Sql, EditorMode::Analysis] {
+        for mode in [EditorMode::General, EditorMode::Sql, EditorMode::Analysis] {
             assert_eq!(EditorMode::from_key(mode.as_key()), mode);
         }
         // 键是存库值：与展示文案解耦（展示文案改了不影响老库）
-        assert_eq!(EditorMode::Text.as_key(), "text");
-        assert_eq!(EditorMode::Text.label(), "文本");
+        assert_eq!(EditorMode::General.as_key(), "text");
+        assert_eq!(EditorMode::General.label(), "通用");
         // 认不出的值回到 SQL（老库默认值），不 panic
         assert_eq!(EditorMode::from_key(""), EditorMode::Sql);
         assert_eq!(EditorMode::from_key("notebook-v2"), EditorMode::Sql);
@@ -258,7 +259,7 @@ mod tests {
 
     #[test]
     fn text_mode_never_touches_the_database() {
-        let caps = Capabilities::for_mode(EditorMode::Text);
+        let caps = Capabilities::for_mode(EditorMode::General);
         assert!(!caps.talks_to_database());
         assert!(!caps.execute);
         assert!(!caps.connection_binding);

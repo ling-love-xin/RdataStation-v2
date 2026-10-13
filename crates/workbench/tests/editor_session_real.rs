@@ -149,7 +149,7 @@ fn closing_a_document_saves_its_session_and_reopening_restores_cursor_and_mode(
                 .service()
                 .find(&reopened)
                 .map(|doc| doc.mode())
-                .unwrap_or(EditorMode::Text),
+                .unwrap_or(EditorMode::General),
         )
     });
     assert_eq!(cursor_after, 12, "重开后光标回到原处");

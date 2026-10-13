@@ -233,12 +233,12 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
 
     // 切到文本模式：不再上色（判定的“计划”在 `mode::plan_switch`，视图只跟随）
     shared.update(|service| {
-        service.set_mode(&id, EditorMode::Text);
+        service.set_mode(&id, EditorMode::General);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert_eq!(
         cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
-        Some(EditorMode::Text)
+        Some(EditorMode::General)
     );
     assert!(
         !cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
@@ -1677,7 +1677,7 @@ fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (_shared, id, seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Text);
+    let (_shared, id, seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::General);
     let (panel, cx) = open_panel(cx, &_shared, &id);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1950,7 +1950,7 @@ fn switching_to_text_asks_before_hiding_results(cx: &mut TestAppContext) {
     let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.request_mode_switch(EditorMode::Text, window, cx)
+            panel.request_mode_switch(EditorMode::General, window, cx)
         });
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -2047,7 +2047,7 @@ fn switching_from_text_to_sql_needs_no_dialog(cx: &mut TestAppContext) {
         .open(OpenRequest::file(
             r"D:\sql\notes.txt",
             "select 1;",
-            EditorMode::Text,
+            EditorMode::General,
         ))
         .id()
         .clone();
@@ -2629,7 +2629,7 @@ fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) 
 
     // 文本模式：不与数据库通信 → 连不上问题都不该问，两个选择器都不出现
     shared.update(|service| {
-        service.set_mode(&id, EditorMode::Text);
+        service.set_mode(&id, EditorMode::General);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -2705,7 +2705,7 @@ fn the_toolbar_only_offers_execution_in_sql_mode(cx: &mut TestAppContext) {
 
     // 文本模式：只剩模式指示器（不与数据库通信）
     shared.update(|service| {
-        service.set_mode(&id, EditorMode::Text);
+        service.set_mode(&id, EditorMode::General);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert!(!exec_present(cx), "文本模式不得出现执行按钮");
@@ -2737,7 +2737,7 @@ fn the_toolbar_offers_format_only_in_sql_mode(cx: &mut TestAppContext) {
     };
     assert!(format_present(cx), "SQL 模式应当有「格式化」");
 
-    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert!(!format_present(cx), "文本模式不解析 SQL，不得出现格式化");
 }
@@ -2854,7 +2854,7 @@ fn formatting_a_readonly_document_is_refused(cx: &mut TestAppContext) {
 fn formatting_in_text_mode_is_refused(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\notes.txt", "select a,b from t");
-    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
@@ -2889,7 +2889,7 @@ fn the_toolbar_offers_the_more_menu_only_in_sql_mode(cx: &mut TestAppContext) {
     };
     assert!(more_present(cx), "SQL 模式应当有「⋯ 更多」");
 
-    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert!(!more_present(cx), "文本模式不解析 SQL，不得出现更多菜单");
 }
@@ -2994,7 +2994,7 @@ fn transpiling_a_readonly_document_is_refused(cx: &mut TestAppContext) {
 fn transpiling_in_text_mode_is_refused(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\notes.txt", "SELECT `a` FROM `t`");
-    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|window, cx| {
@@ -3109,7 +3109,7 @@ fn explain_without_a_connection_is_refused(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn explain_in_text_mode_is_refused(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (shared, id, seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Text);
+    let (shared, id, seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::General);
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.explain_current(cx)));
@@ -5181,7 +5181,7 @@ fn completion_is_gated_by_mode_and_falls_back_to_keywords(cx: &mut TestAppContex
         "未接端口 → 没有元数据候选（如实，不假装有）"
     );
 
-    let (text_shared, text_id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::Text);
+    let (text_shared, text_id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::General);
     assert!(
         !text_shared.completion_enabled(&text_id),
         "文本模式不与数据库通信，也不该补全"
@@ -5702,7 +5702,7 @@ fn ctrl_space_presents_the_completion_menu(cx: &mut TestAppContext) {
 fn ctrl_space_refuses_with_a_reason_outside_sql_mode(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
-    let (shared, id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::Text);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::General);
     shared.attach_completion(Rc::new(FakeCompletion {
         catalog: Catalog::default(),
         templates: vec![] as Vec<crate::completion::TemplateSnippet>,
@@ -7001,7 +7001,7 @@ fn breadcrumb_absent_in_text_mode(cx: &mut TestAppContext) {
         schema: "public".to_string(),
     }])));
     let id = shared
-        .open(OpenRequest::untitled("随便记点什么", EditorMode::Text))
+        .open(OpenRequest::untitled("随便记点什么", EditorMode::General))
         .id()
         .clone();
     shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));

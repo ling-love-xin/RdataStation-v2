@@ -17,7 +17,7 @@ use crate::model::EditorMode;
 /// 1b 起按方言取（`engine::sql` 有方言表），分析模式按**单元语言**取（1c）。
 pub fn comment_prefix(mode: EditorMode) -> &'static str {
     match mode {
-        EditorMode::Text | EditorMode::Sql | EditorMode::Analysis => "--",
+        EditorMode::General | EditorMode::Sql | EditorMode::Analysis => "--",
     }
 }
 
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn prefix_follows_the_mode() {
-        assert_eq!(comment_prefix(EditorMode::Text), "--");
+        assert_eq!(comment_prefix(EditorMode::General), "--");
         assert_eq!(comment_prefix(EditorMode::Sql), "--");
     }
 }

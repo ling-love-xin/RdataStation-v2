@@ -259,11 +259,11 @@ mod tests {
     fn latest_follows_the_last_save() {
         let store = MemorySessionStore::new();
         store.save(&session("a.sql", "select 1;", EditorMode::Sql)).expect("save");
-        store.save(&session("b.txt", "hello", EditorMode::Text)).expect("save");
+        store.save(&session("b.txt", "hello", EditorMode::General)).expect("save");
 
         let latest = store.load_latest().expect("load").expect("有");
         assert_eq!(latest.id, "b.txt");
-        assert_eq!(latest.mode, EditorMode::Text);
+        assert_eq!(latest.mode, EditorMode::General);
     }
 
     #[test]
