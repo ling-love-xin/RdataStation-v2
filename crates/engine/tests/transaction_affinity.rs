@@ -44,6 +44,8 @@ fn options() -> SqlExecuteOptions {
         use_transaction: false,
         timeout_ms: Some(15_000),
         use_cache: false,
+        // 事务亲和探针：无 schema 概念（各驱动默认），不注入会话上下文
+        schema: None,
     }
 }
 

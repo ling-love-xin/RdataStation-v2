@@ -192,11 +192,12 @@ impl EditorShared {
         placement: crate::execution::ResultPlacement,
         options: crate::execution::RunOptions,
     ) -> Result<(), crate::execution::SubmitError> {
-        // 先把文档属性拷出来（不把服务层的 `Ref` 带到下面的借用里）：B1 的连接 + B13 的通道
-        let (connection, channel) = {
+        // 先把文档属性拷出来（不把服务层的 `Ref` 带到下面的借用里）：B1 的连接 + T2c-1 的 schema + B13 的通道
+        let (connection, schema, channel) = {
             let service = self.service.borrow();
             (
                 service.connection_for(&document),
+                service.schema_for(&document),
                 service.channel_for(&document),
             )
         };
@@ -204,7 +205,15 @@ impl EditorShared {
         let Some(channel_queue) = guard.as_ref() else {
             return Err(crate::execution::SubmitError::NoRunner);
         };
-        channel_queue.submit(document, target, connection, placement, options, channel)
+        channel_queue.submit(
+            document,
+            target,
+            connection,
+            schema,
+            placement,
+            options,
+            channel,
+        )
     }
 
     /// 【B13】请一个源动作（重挂 / 换主源）
@@ -352,10 +361,11 @@ impl EditorShared {
         sql: String,
         updates: String,
     ) -> Result<(), String> {
-        let (connection, channel) = {
+        let (connection, schema, channel) = {
             let service = self.service.borrow();
             (
                 service.connection_for(&document),
+                service.schema_for(&document),
                 service.channel_for(&document),
             )
         };
@@ -364,6 +374,7 @@ impl EditorShared {
             Some(queue) => queue.request_commit_changes(
                 document,
                 connection,
+                schema,
                 channel,
                 table,
                 key,

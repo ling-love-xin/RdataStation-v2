@@ -944,6 +944,17 @@ impl Transaction for MySqlTransaction {
                 || sql_upper.starts_with("SHOW")
                 || sql_upper.starts_with("DESCRIBE");
 
+            // T2c-1：事务控制 / 会话类语句必须走文本协议（与主连接 `Database::query` 的
+            // `needs_text_protocol` 同一口径）——`USE schema` 走 prepared 会被 MySQL 直接拒
+            // （1295），而切 schema 的会话上下文正是靠事务内首条 `USE` 落地的。
+            if needs_text_protocol(sql) {
+                let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(|e| mysql_query_error(sql, &e))?;
+                return Ok(affected_rows_result(result.rows_affected()));
+            }
+
             // B5 / P0.6：事务内的写语句同样要真实影响行数
             if !is_read_only_sql(sql) && !returns_rows(sql) {
                 let result = sqlx::query(sqlx::AssertSqlSafe(sql))

@@ -701,7 +701,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 未做项 | 说明 | 依据 |
 | --- | --- | --- |
 | **结果集就地编辑 / 写回** | ✅ **已落地（2026-10-12，Phase 2a）**：`changes.rs` + `editability.rs` + `store.rs` + `execution.rs` + `view/results/grid.rs` + 宿主 `editor_exec.rs::commit_changes`；双击编辑 / 变更集 / 单事务批量提交 / 冲突回执，见 `editor-impl-taskbook.md` §1。**未做（二期）**：新增 / 删除行、列类型化编辑器、值预览弹层。**另未做**：M4 独立的「源表分页浏览面板」与驱动能力位 `table_editor`（字典仍 `Stage::NotBuilt`、驱动未声明，见 `../driver-capability-matrix.md` §3.3 / §7 #13）——当前写回能力只作用于查询结果集，不经驱动能力位门控 | `editor-impl-taskbook.md` §1 · 本文件 §3.6 / §6 D23 |
-| **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | 面包屑切 schema 已真改文档绑定，且**绑定已跨会话持久化**（T2c-6 完成：`session.rs` schema 字段 + `editor_contexts.schema` 列）；但切 schema **尚未影响执行**（无 `SET search_path` / 限定名注入）——排 2b 前接执行链 | `editor-impl-taskbook.md` §3 T2c-1 / T2c-6 完成记录 |
+| **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | ✅ **已落地（2026-10-13，T2c-1 验收收尾）**：面包屑切 schema 真改文档绑定并跨会话持久化（T2c-6）；执行链逐执行携带文档 schema（`QueryRunner` 五方法加 `schema` → `SqlExecuteOptions.schema` → 引擎发语句前在同一连接上应用会话上下文：PG `SET search_path` / MySQL `USE` / DuckDB `USE`，SQLite 无此概念；事务内作为首条语句），未限定表名真落到所选 schema。边界：加速/联邦档与未知驱动不接（见任务书 T2c-1 补记） | `editor-impl-taskbook.md` §3 T2c-1 补记 |
 | **列编辑（多光标）** | 入口已摆（状态栏行｜列切换）但**置灰**：gpui-base 0.7.1 `add_cursor_above/below` 已实现却是 `pub(super)`，外部不可达；要真做需 vendor 补丁暴露 | `editor-impl-taskbook.md` §3 T2c-3 完成记录 / §6 |
 | **编码 / 换行重设** | 内核文本模型统一 UTF-8 + `\n`，重设菜单对应项**置灰标注**；真转换需外层（读写文件时的编解码层） | `editor-impl-taskbook.md` §3 T2c-4 / §6 #4 |
 | **T2c-6 面板布局持久化** | ✅ **已落地（2026-10-13）**：工具栏自定义布局（顺序/可见性/分组/折叠）+ schema 绑定 + 缩进（宽/制表符）跨会话持久化——`toolbar.rs` encode/decode + `session.rs` 四字段 + `editor_contexts` 四列 + 恢复校验（布局坏数据回默认 / schema 不在列表回退连接默认），见任务书 T2c-6 完成记录 | `editor-impl-taskbook.md` §3 |

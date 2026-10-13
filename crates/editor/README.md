@@ -21,11 +21,11 @@ workbench → editor → engine / database / shared
 
 editor **不得**依赖 workbench（壳层）或任何 Feature 的视图。
 
-## 当前状态（2026-10-12）
+## 当前状态（2026-10-13）
 
 - ✅ **Phase 0 / 1a / 1b 已完成**：三模式内核与服务层、Dock 标签面板、执行闭环（执行族 / 中断超时 / 事务 / 历史）、三档执行通道（源库 / 本地加速 / 联邦，含联邦「源清单」）、补全、格式化 / 转译 / 执行计划、导出五档、DuckDB 分析、折叠。
 - ✅ **Phase 2a 已完成**：结果集就地编辑（双击脏格 → 提交变更写回源库；`changes.rs` / `editability.rs` / `execution.rs`，六道防线、只做 UPDATE）。
-- 🟡 **Phase 2c 进行中**（T2c-1~4 已完成：Schema 面包屑 / 方言段 / 英文微标 / 重设菜单；488 tests passed，余 T2c-5/T2c-6）；之后转 2b → 2d。
+- ✅ **Phase 2c 已完成 + 验收收尾**（T2c-1~6：Schema 面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义 / 面板布局持久化；**T2c-1「切 schema 真影响执行」2026-10-13 落地**——执行链逐执行携带文档 schema → 引擎会话上下文注入（SET search_path / USE），未限定表名真落到所选 schema；**516 tests passed**）；之后转 2b → 2d。
 - ⬜ **未开工**：2b（通用模式）、1c/2d（分析模式笔记本视图，`notebook.rs` / `notebook_view.rs` 尚不存在）。
 
 语句切分在 `engine::sql::split`（SQL 文本原语属 engine，本 crate 消费而不重复实现）。

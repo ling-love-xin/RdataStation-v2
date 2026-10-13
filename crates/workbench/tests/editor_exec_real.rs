@@ -659,6 +659,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
                 limit,
                 offset,
                 None,
+                None,
             ));
             let result = outcome.unwrap_or_else(|error| {
                 panic!("{}：第 {offset} 段取数失败 —— {error}", target.driver)
@@ -692,6 +693,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             &format!("DELETE FROM {seg_table} WHERE n = 99"),
             2,
             0,
+            None,
             None,
         ));
         assert!(dml.is_err(), "{}：DML 不该能分段", target.driver);
@@ -1025,6 +1027,72 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             target.driver
         );
         eprintln!("✅ {}：超时可读（{error}）", target.driver);
+
+        // T2c-1：切 schema 真影响执行 —— 未限定表名要落到**文档绑定的 schema**
+        // 只对 PG / MySQL 验（SQLite / DuckDB 无此概念：schema 映射返回 None，不注入）。
+        // 建库 / 建表在**未绑定**时做：MySQL 的 `USE` 是切默认库，不能 USE 一个还不存在的库。
+        if target.driver.contains("postgres") || target.driver.contains("mysql") {
+            let schema_name = format!("rds_schema_probe_{}", std::process::id());
+            let ddl_create = if target.driver.contains("postgres") {
+                format!("CREATE SCHEMA IF NOT EXISTS {schema_name}")
+            } else {
+                format!("CREATE DATABASE IF NOT EXISTS `{schema_name}`")
+            };
+            run_one(&shared, document.clone(), &ddl_create);
+
+            let table = format!("rds_inside_{}", std::process::id());
+            let qualified = if target.driver.contains("postgres") {
+                format!("{schema_name}.{table}")
+            } else {
+                format!("`{schema_name}`.`{table}`")
+            };
+            run_one(
+                &shared,
+                document.clone(),
+                &format!("CREATE TABLE {qualified} (n INTEGER)"),
+            );
+            run_one(
+                &shared,
+                document.clone(),
+                &format!("INSERT INTO {qualified} VALUES (1), (2), (3)"),
+            );
+
+            // 绑定文档 schema → 未限定名应落到它
+            shared.update(|service| {
+                service.set_schema(&document, Some(schema_name.clone()));
+            });
+            assert_eq!(
+                count_rows(&shared, document.clone(), &table),
+                3,
+                "{}：切到 {schema_name} 后，未限定名应落到所选 schema（3 行）",
+                target.driver
+            );
+
+            // 解绑（None = 连接默认）→ 未限定名不该再命中所选 schema（默认里没这张表）
+            shared.update(|service| {
+                service.set_schema(&document, None);
+            });
+            let unbound = run_one_allowing_failure(
+                &shared,
+                document.clone(),
+                &format!("SELECT count(*) AS n FROM {table}"),
+            );
+            assert!(
+                unbound.error.is_some(),
+                "{}：解绑后未限定名不该再命中所选 schema（默认 schema 里没这张表）",
+                target.driver
+            );
+
+            // 清理
+            run_one(&shared, document.clone(), &format!("DROP TABLE {qualified}"));
+            let ddl_drop = if target.driver.contains("postgres") {
+                format!("DROP SCHEMA {schema_name}")
+            } else {
+                format!("DROP DATABASE `{schema_name}`")
+            };
+            run_one(&shared, document.clone(), &ddl_drop);
+            eprintln!("✅ {}：切 schema 真影响执行（未限定名落到所选 schema）", target.driver);
+        }
 
         runtime.block_on(manager.close_all_connections());
     }

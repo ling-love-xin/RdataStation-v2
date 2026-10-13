@@ -102,7 +102,13 @@ fn an_oracle_record_joins_the_federation() {
     let sql = "SELECT count(*) AS n FROM mysql_src.mysql.user u \
                JOIN oracle_query('rds_oracle_src', 'SELECT 1 AS one FROM dual') o ON 1 = 1";
     let data = runner
-        .run(Some(&mysql_id), ExecChannel::Federated, sql, options())
+        .run(
+            Some(&mysql_id),
+            None,
+            ExecChannel::Federated,
+            sql,
+            options(),
+        )
         .expect("Oracle × MySQL 跨源查询该成功");
     assert_eq!(data.rows.len(), 1, "聚合该回一行：{:?}", data.rows);
     let count: i64 = data.rows[0][0].parse().expect("计数是数字");
@@ -138,6 +144,7 @@ fn an_oracle_record_joins_the_federation() {
     let refusal = runner
         .run(
             Some(&mysql_id),
+            None,
             ExecChannel::Federated,
             "INSERT INTO oracle_src.SOME_TABLE VALUES (1)",
             options(),
@@ -151,6 +158,7 @@ fn an_oracle_record_joins_the_federation() {
     runner
         .run(
             Some(&mysql_id),
+            None,
             ExecChannel::Federated,
             "CREATE TEMP TABLE scratch AS SELECT 1 AS n",
             options(),

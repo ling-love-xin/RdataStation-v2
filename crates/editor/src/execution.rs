@@ -480,6 +480,11 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// `connection` = 本文档绑定的连接 id（B1）；`None` = 未绑定，由实现决定回退口径
     /// （workbench 的实现回退到“当前活动连接”，与 1a 一致）
     ///
+    /// 【T2c-1】`schema` = 本文档绑定的 schema（`None` = 未选 → 用连接默认 schema）。
+    /// 必须**逐执行**传递而不是靠连接级状态：同一连接可被多个文档绑定到不同 schema，
+    /// 隐式状态会串（架构 §12 #2 的“会话亲和”教训）。实现须在发语句前把它应用为
+    /// 会话上下文（引擎 `SqlExecuteOptions.schema`）。
+    ///
     /// 【B13】`channel` = 本文档的**执行通道**（源库 / 本地加速 / 联邦）：回答“这条语句
     /// 到底发到哪儿”。实现必须**按它分流**——源库档走驱动，加速档走 DuckDB 上的附加源；
     /// 不分流就等于把用户的“执行位置”当成了装饰。
@@ -488,6 +493,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn run(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         options: RunOptions,
@@ -546,6 +552,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn run_filtered(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _filter: &str,
@@ -560,6 +567,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn run_sorted_down(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _column: &str,
@@ -576,6 +584,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn fetch_next(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _offset: usize,
@@ -597,6 +606,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn commit_changes(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _table: &str,
         _key: &RowKey,
@@ -661,6 +671,8 @@ struct ExecJob {
     document: DocumentId,
     /// 文档绑定的连接（B1；`None` = 未绑定）
     connection: Option<String>,
+    /// 【T2c-1】文档绑定的 schema（`None` = 未选 → 连接默认）；提交时从服务层拷出
+    schema: Option<String>,
     /// 要跑的语句（逐条独立）
     statements: Vec<String>,
     /// 结果落到哪里（B2）
@@ -918,6 +930,7 @@ impl ExecQueue {
                             // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
                             worker_runner.fetch_next(
                                 job.connection.as_deref(),
+                                job.schema.as_deref(),
                                 job.channel,
                                 &sql,
                                 offset,
@@ -927,6 +940,7 @@ impl ExecQueue {
                             // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
                             worker_runner.run_filtered(
                                 job.connection.as_deref(),
+                                job.schema.as_deref(),
                                 job.channel,
                                 &sql,
                                 filter,
@@ -936,6 +950,7 @@ impl ExecQueue {
                             // 【B14】排序下发：同上，改写与方言差异都在执行器
                             worker_runner.run_sorted_down(
                                 job.connection.as_deref(),
+                                job.schema.as_deref(),
                                 job.channel,
                                 &sql,
                                 column,
@@ -948,6 +963,7 @@ impl ExecQueue {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                             worker_runner.run(
                                 job.connection.as_deref(),
+                                job.schema.as_deref(),
                                 job.channel,
                                 &sql,
                                 job.options,
@@ -1001,6 +1017,7 @@ impl ExecQueue {
         document: DocumentId,
         target: &ExecTarget,
         connection: Option<String>,
+        schema: Option<String>,
         placement: ResultPlacement,
         options: RunOptions,
         channel: crate::channel::ExecChannel,
@@ -1025,6 +1042,7 @@ impl ExecQueue {
             .send(ExecJob {
                 document,
                 connection,
+                schema,
                 statements,
                 placement,
                 options,
@@ -1184,6 +1202,7 @@ impl ExecQueue {
         &self,
         document: DocumentId,
         connection: Option<String>,
+        schema: Option<String>,
         channel: crate::channel::ExecChannel,
         table: String,
         key: RowKey,
@@ -1200,6 +1219,7 @@ impl ExecQueue {
             .spawn(move || {
                 let result = runner.commit_changes(
                     connection.as_deref(),
+                    schema.as_deref(),
                     channel,
                     &table,
                     &key,
@@ -1626,6 +1646,7 @@ mod tests {
         fn run(
             &self,
             connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             sql: &str,
             _options: RunOptions,
@@ -1654,6 +1675,7 @@ mod tests {
         fn fetch_next(
             &self,
             connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             _sql: &str,
             offset: usize,
@@ -1772,6 +1794,7 @@ mod tests {
         fn run(
             &self,
             _connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             sql: &str,
             _options: RunOptions,
@@ -1817,7 +1840,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-cancel"),
                 &target,
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -1850,7 +1873,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-cancel-early"),
                 &target,
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -1889,7 +1912,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-batch-cancel"),
                 &target,
-                None,
+                None, None,
                 ResultPlacement::NewSet,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -1929,6 +1952,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -1951,7 +1975,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-nothing"),
                 &ExecTarget::Statement("select 1".to_string()),
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2018,6 +2042,7 @@ mod tests {
         fn run(
             &self,
             _connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             _sql: &str,
             options: RunOptions,
@@ -2093,6 +2118,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -2177,6 +2203,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -2284,7 +2311,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-tx-busy"),
                 &ExecTarget::Statement("select slow".to_string()),
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2311,7 +2338,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-tx-run"),
                 &ExecTarget::Statement("insert into t values (1)".to_string()),
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions {
                     use_transaction: true,
@@ -2349,7 +2376,7 @@ mod tests {
                     offset: 1_000,
                     limit: 2,
                 },
-                None,
+                None, None,
                 ResultPlacement::Append,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2384,7 +2411,7 @@ mod tests {
             .submit(
                 document.clone(),
                 &target,
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2409,6 +2436,91 @@ mod tests {
         assert!(!channel.is_busy(), "结束后必须回到空闲");
     }
 
+    // ===== T2c-1：schema 随执行传递 =====
+
+    /// 记录每次 `run` 收到的 schema（断言“文档绑定的 schema 原样到执行器”用）
+    struct SchemaRunner {
+        seen_schemas: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    impl QueryRunner for SchemaRunner {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            schema: Option<&str>,
+            _channel: ExecChannel,
+            _sql: &str,
+            _options: RunOptions,
+        ) -> Result<QueryData, String> {
+            self.seen_schemas
+                .lock()
+                .expect("锁")
+                .push(schema.map(str::to_string));
+            Ok(QueryData::default())
+        }
+    }
+
+    /// 【T2c-1】切 schema 真影响执行的第一环：文档绑定的 schema 要从 `submit`
+    /// 一路流到执行器（而不是丢在提交线程）。这条盯住流水，引擎侧的应用在 engine。
+    #[test]
+    fn the_document_schema_flows_from_submit_to_the_runner() {
+        let seen_schemas: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let channel = ExecQueue::new(Arc::new(SchemaRunner {
+            seen_schemas: seen_schemas.clone(),
+        }));
+
+        let target = ExecTarget::Statement("select * from orders".to_string());
+        channel
+            .submit(
+                DocumentId::new("doc-schema"),
+                &target,
+                Some("P_orders".to_string()),
+                Some("sales".to_string()),
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                crate::channel::ExecChannel::Source,
+            )
+            .expect("提交");
+
+        wait(&channel);
+        assert_eq!(
+            seen_schemas.lock().expect("锁").as_slice(),
+            [Some("sales".to_string())],
+            "文档绑定的 schema 必须原样交给执行器（逐执行传递，不能靠连接级状态）"
+        );
+        wait_until_idle(&channel);
+    }
+
+    /// 【T2c-1】未选 schema 时执行器收到 `None`（用连接默认，不注入会话上下文）
+    #[test]
+    fn unset_schema_reaches_the_runner_as_none() {
+        let seen_schemas: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let channel = ExecQueue::new(Arc::new(SchemaRunner {
+            seen_schemas: seen_schemas.clone(),
+        }));
+
+        let target = ExecTarget::Statement("select 1".to_string());
+        channel
+            .submit(
+                DocumentId::new("doc-no-schema"),
+                &target,
+                Some("P_orders".to_string()),
+                None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                crate::channel::ExecChannel::Source,
+            )
+            .expect("提交");
+
+        wait(&channel);
+        assert_eq!(
+            seen_schemas.lock().expect("锁").as_slice(),
+            [None],
+            "未选 schema = None（执行器按连接默认处理）"
+        );
+        wait_until_idle(&channel);
+    }
+
     #[test]
     fn driver_errors_come_back_as_errors_not_panics() {
         let (channel, _calls, _seen) = channel();
@@ -2417,7 +2529,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-err"),
                 &target,
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2441,7 +2553,7 @@ mod tests {
             .submit(
                 document.clone(),
                 &target,
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ResultPlacement::NewSet,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2473,6 +2585,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -2488,7 +2601,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-busy-batch"),
                 &target,
-                None,
+                None, None,
                 ResultPlacement::NewSet,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2511,7 +2624,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-empty"),
                 &ExecTarget::Empty,
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2532,6 +2645,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -2558,7 +2672,7 @@ mod tests {
             .submit(
                 document.clone(),
                 &target,
-                None,
+                None, None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2576,7 +2690,7 @@ mod tests {
                 .submit(
                     document,
                     &target,
-                    None,
+                    None, None,
                     ResultPlacement::Replace,
                     RunOptions::default(),
                     crate::channel::ExecChannel::default(),
@@ -2620,6 +2734,7 @@ mod tests {
         fn run(
             &self,
             _connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             _sql: &str,
             _options: RunOptions,
@@ -2630,6 +2745,7 @@ mod tests {
         fn commit_changes(
             &self,
             connection: Option<&str>,
+            _schema: Option<&str>,
             channel: ExecChannel,
             table: &str,
             key: &crate::export::RowKey,
@@ -2681,7 +2797,7 @@ mod tests {
         queue
             .request_commit_changes(
                 DocumentId::new("doc1"),
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ExecChannel::Source,
                 "orders".to_string(),
                 crate::export::RowKey::single("id"),
@@ -2724,6 +2840,7 @@ mod tests {
             fn run(
                 &self,
                 _connection: Option<&str>,
+                _schema: Option<&str>,
                 _channel: ExecChannel,
                 _sql: &str,
                 _options: RunOptions,
@@ -2738,7 +2855,7 @@ mod tests {
             .submit(
                 DocumentId::new("doc-busy"),
                 &ExecTarget::Statement("select 1".to_string()),
-                None,
+                None, None,
                 ResultPlacement::NewSet,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
@@ -2748,7 +2865,7 @@ mod tests {
         let error = queue
             .request_commit_changes(
                 DocumentId::new("doc-busy"),
-                Some("P_orders".to_string()),
+                Some("P_orders".to_string()), None,
                 ExecChannel::Source,
                 "orders".to_string(),
                 crate::export::RowKey::single("id"),

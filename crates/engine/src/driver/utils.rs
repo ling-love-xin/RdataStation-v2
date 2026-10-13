@@ -927,6 +927,56 @@ pub fn parse_driver_id(url: &str) -> Option<&str> {
     }
 }
 
+/// 【T2c-1】驱动 id（`ConnectionInfo.db_type` 的串）→ 方言族（会话上下文映射用）
+///
+/// `db_type` 是驱动 id（`mysql_native` / `postgres_native` / `sqlite` / `duckdb` 等，
+/// 见 `driver::factory`），按前缀归类——与 `SqlService::run_filtered` 的
+/// `starts_with("mysql")` 同一口径。不认识的驱动（JDBC 等）返回 `None`：**宁可不注入
+/// 会话上下文，也不发一句驱动不认的 `SET` 把执行搅黄**。
+pub fn flavor_from_db_type(db_type: &str) -> Option<SqlFlavor> {
+    let t = db_type.to_ascii_lowercase();
+    if t.starts_with("postgres") {
+        Some(SqlFlavor::PostgreSql)
+    } else if t.starts_with("mysql") {
+        Some(SqlFlavor::MySql)
+    } else if t.starts_with("duckdb") {
+        Some(SqlFlavor::DuckDb)
+    } else if t.starts_with("sqlite") {
+        Some(SqlFlavor::Sqlite)
+    } else {
+        None
+    }
+}
+
+/// 【T2c-1】把所选 schema 映射成「会话上下文」语句（方言差异在此定死，纯函数可测）
+///
+/// 切 schema 真影响执行的落点：执行用户语句前，先在这条连接的会话里把未限定名的
+/// 解析指向所选 schema。方言映射：
+///
+/// - PostgreSQL：`SET search_path TO "schema"`（会话级；引号内 `"` 转义为 `""`）；
+/// - MySQL：`` USE `schema` ``（文本协议执行；`needs_text_protocol` 已认 `USE`，
+///   事务内的 `USE` 由 `MySqlTransaction::query` 的文本协议路由兜底）；
+/// - DuckDB：`USE "schema"`（切换默认 catalog/schema）；
+/// - SQLite：无 schema 概念（文件即库）→ `None`，调用方不注入。
+///
+/// schema 名来自导航缓存的元数据（不是用户手敲的对抗性输入），但统一按**标识符**
+/// 加引号 + 转义，避免名里带特殊字符（空格 / 点 / 引号）时拼出语法错。
+pub fn schema_context_sql(schema: &str, flavor: SqlFlavor) -> Option<String> {
+    let name = schema.trim();
+    if name.is_empty() {
+        return None;
+    }
+    match flavor {
+        SqlFlavor::PostgreSql => Some(format!(
+            "SET search_path TO \"{}\"",
+            name.replace('"', "\"\"")
+        )),
+        SqlFlavor::MySql => Some(format!("USE `{}`", name.replace('`', "``"))),
+        SqlFlavor::DuckDb => Some(format!("USE \"{}\"", name.replace('"', "\"\""))),
+        SqlFlavor::Sqlite => None,
+    }
+}
+
 /// 1 基的**字符**位置（数据库常这么报）→ SQL 里的**字节**偏移
 ///
 /// PG 协议的 `position` 字段就是「第 1 个字符是 1、按字符数」；而编辑器内核按字节收
@@ -1151,5 +1201,68 @@ mod read_only_tests {
         assert!(is_read_only_sql("/* 注释 */ set search_path to public", SqlFlavor::MySql));
         // 只有注释：认不出语句，按「不是只读」算（交给 `returns_rows` 与驱动自己报错）。
         assert!(!is_read_only_sql("-- 半句话", SqlFlavor::PostgreSql));
+    }
+}
+
+#[cfg(test)]
+mod schema_context_tests {
+    use super::{SqlFlavor, flavor_from_db_type, schema_context_sql};
+
+    /// 【T2c-1】方言归类：驱动 id 前缀 → 方言族；不认识的驱动不硬猜。
+    #[test]
+    fn flavor_from_db_type_classifies_known_drivers() {
+        assert_eq!(flavor_from_db_type("postgres_native"), Some(SqlFlavor::PostgreSql));
+        assert_eq!(flavor_from_db_type("postgres"), Some(SqlFlavor::PostgreSql));
+        assert_eq!(flavor_from_db_type("mysql_native"), Some(SqlFlavor::MySql));
+        assert_eq!(flavor_from_db_type("mysql"), Some(SqlFlavor::MySql));
+        assert_eq!(flavor_from_db_type("duckdb"), Some(SqlFlavor::DuckDb));
+        assert_eq!(flavor_from_db_type("sqlite"), Some(SqlFlavor::Sqlite));
+        // 大小写不敏感（与 `run_filtered` 的 starts_with 口径一致）。
+        assert_eq!(flavor_from_db_type("MySQL_NATIVE"), Some(SqlFlavor::MySql));
+        // 不认识的驱动（JDBC 等）：宁可不注入也不发一句不认的 SET。
+        assert_eq!(flavor_from_db_type("jdbc:postgresql"), None);
+        assert_eq!(flavor_from_db_type(""), None);
+    }
+
+    /// 【T2c-1】会话上下文语句按方言映射；SQLite 无 schema 概念不注入。
+    #[test]
+    fn schema_context_sql_maps_per_flavor() {
+        assert_eq!(
+            schema_context_sql("sales", SqlFlavor::PostgreSql).as_deref(),
+            Some("SET search_path TO \"sales\"")
+        );
+        assert_eq!(
+            schema_context_sql("sales", SqlFlavor::MySql).as_deref(),
+            Some("USE `sales`")
+        );
+        assert_eq!(
+            schema_context_sql("sales", SqlFlavor::DuckDb).as_deref(),
+            Some("USE \"sales\"")
+        );
+        // SQLite：文件即库，没有可切的 schema。
+        assert_eq!(schema_context_sql("main", SqlFlavor::Sqlite), None);
+    }
+
+    /// 【T2c-1】标识符引号 + 转义：名里带特殊字符不能拼出语法错。
+    #[test]
+    fn schema_names_are_quoted_and_escaped() {
+        // PG / DuckDB：双引号内 `"` → `""`。
+        assert_eq!(
+            schema_context_sql("a\"b", SqlFlavor::PostgreSql).as_deref(),
+            Some("SET search_path TO \"a\"\"b\"")
+        );
+        // MySQL：反引号内 `` ` `` → ````。
+        assert_eq!(
+            schema_context_sql("a`b", SqlFlavor::MySql).as_deref(),
+            Some("USE `a``b`")
+        );
+        // 空串 / 纯空白：不注入。
+        assert_eq!(schema_context_sql("", SqlFlavor::PostgreSql), None);
+        assert_eq!(schema_context_sql("   ", SqlFlavor::MySql), None);
+        // 名里带空格 / 点：引号包住即可，不该被拆成语段。
+        assert_eq!(
+            schema_context_sql("my schema", SqlFlavor::PostgreSql).as_deref(),
+            Some("SET search_path TO \"my schema\"")
+        );
     }
 }

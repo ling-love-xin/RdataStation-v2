@@ -97,6 +97,7 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
         use_transaction: false,
         timeout_ms: Some(15000),
         use_cache: false,
+        schema: None,
     };
     let run = |conn_id: &str, sql: String| {
         let service = SqlService::new(manager.clone());

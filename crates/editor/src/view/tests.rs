@@ -698,6 +698,7 @@ impl QueryRunner for ScriptRunner {
     fn run(
         &self,
         connection: Option<&str>,
+        _schema: Option<&str>,
         channel: crate::channel::ExecChannel,
         sql: &str,
         _options: execution::RunOptions,
@@ -769,6 +770,7 @@ impl QueryRunner for SizedRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         sql: &str,
         _options: execution::RunOptions,
@@ -816,6 +818,7 @@ impl QueryRunner for ToolbarRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         sql: &str,
         _options: execution::RunOptions,
@@ -884,6 +887,7 @@ impl QueryRunner for SegmentRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -903,6 +907,7 @@ impl QueryRunner for SegmentRunner {
     fn fetch_next(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         offset: usize,
@@ -949,6 +954,7 @@ impl QueryRunner for MoreUnsupportedRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -970,6 +976,7 @@ impl QueryRunner for LocatedFailureRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         sql: &str,
         _options: execution::RunOptions,
@@ -1329,6 +1336,7 @@ impl QueryRunner for BlockingRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -1479,6 +1487,7 @@ impl QueryRunner for TxRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         options: crate::execution::RunOptions,
@@ -2531,6 +2540,7 @@ impl QueryRunner for CountingRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -4053,6 +4063,7 @@ impl QueryRunner for PushdownRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -4072,6 +4083,7 @@ impl QueryRunner for PushdownRunner {
     fn run_filtered(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         sql: &str,
         filter: &str,
@@ -4097,6 +4109,7 @@ impl QueryRunner for PushdownRunner {
     fn run_sorted_down(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         column: &str,
@@ -4951,6 +4964,7 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
         fn run(
             &self,
             _connection: Option<&str>,
+            _schema: Option<&str>,
             _channel: ExecChannel,
             _sql: &str,
             _options: execution::RunOptions,
@@ -5807,6 +5821,7 @@ impl QueryRunner for DuckDbExportRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -6007,6 +6022,7 @@ impl QueryRunner for AnalysisRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -6228,6 +6244,7 @@ impl QueryRunner for OrdersRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -6446,6 +6463,7 @@ impl QueryRunner for CommitOrdersRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
@@ -6468,6 +6486,7 @@ impl QueryRunner for CommitOrdersRunner {
     fn commit_changes(
         &self,
         _connection: Option<&str>,
+        _schema: Option<&str>,
         _channel: ExecChannel,
         _table: &str,
         _key: &RowKey,

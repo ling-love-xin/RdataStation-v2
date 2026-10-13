@@ -92,6 +92,7 @@ fn opts() -> SqlExecuteOptions {
         use_transaction: false,
         timeout_ms: Some(15000),
         use_cache: false,
+        schema: None,
     }
 }
 

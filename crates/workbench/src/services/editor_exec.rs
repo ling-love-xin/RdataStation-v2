@@ -350,11 +350,14 @@ impl QueryRunner for EngineQueryRunner {
     fn run(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         run_options: editor::execution::RunOptions,
     ) -> Result<QueryData, String> {
-        // 【B13】本地跑的两档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）
+        // 【B13】本地跑的两档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）。
+        // 这两档**不接 schema 上下文**：schema 面包屑是**源库**的概念，DuckDB 侧挂载的
+        // 源表名通常已限定（`alias.table`）；等加速/联邦做自己的 schema 语义再接。
         if channel == ExecChannel::Federated {
             return self.run_on_federation(connection, sql);
         }
@@ -371,6 +374,8 @@ impl QueryRunner for EngineQueryRunner {
             use_transaction: run_options.use_transaction,
             // 【B13】历史要记“这句在哪儿跑的”（源库档也记，别让加速档成为唯一带标记的）
             channel: Some(channel.code().to_string()),
+            // 【T2c-1】文档绑定的 schema：引擎在发语句前在同一连接上应用会话上下文
+            schema: schema.map(str::to_string),
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -402,6 +407,7 @@ impl QueryRunner for EngineQueryRunner {
     fn run_filtered(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         filter: &str,
@@ -441,6 +447,8 @@ impl QueryRunner for EngineQueryRunner {
             record_history: true,
             timeout_ms,
             channel: Some(channel.code().to_string()),
+            // 【T2c-1】下发筛选在原查询的 schema 上下文里重查（不能漂回连接默认）
+            schema: schema.map(str::to_string),
             ..Default::default()
         };
         let executed = self.runtime.block_on(self.service.execute(
@@ -462,6 +470,7 @@ impl QueryRunner for EngineQueryRunner {
     fn run_sorted_down(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         column: &str,
@@ -484,6 +493,8 @@ impl QueryRunner for EngineQueryRunner {
             record_history: true,
             timeout_ms,
             channel: Some(channel.code().to_string()),
+            // 【T2c-1】排序下发同筛选：在原查询的 schema 上下文里重查
+            schema: schema.map(str::to_string),
             ..Default::default()
         };
         let executed = self.runtime.block_on(self.service.execute(
@@ -504,6 +515,7 @@ impl QueryRunner for EngineQueryRunner {
     fn fetch_next(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         sql: &str,
         offset: usize,
@@ -525,6 +537,7 @@ impl QueryRunner for EngineQueryRunner {
                 limit,
                 offset,
                 timeout_ms,
+                schema.map(str::to_string),
             ))
             .map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
@@ -583,6 +596,7 @@ impl QueryRunner for EngineQueryRunner {
     fn commit_changes(
         &self,
         connection: Option<&str>,
+        schema: Option<&str>,
         channel: ExecChannel,
         table: &str,
         key: &editor::export::RowKey,
@@ -637,6 +651,9 @@ impl QueryRunner for EngineQueryRunner {
                     // 已有事务（刚开的这个）→ 引擎走事务对象；不会另开一个
                     use_transaction: false,
                     channel: Some(channel.code().to_string()),
+                    // 【T2c-1】提交的 UPDATE 表名未限定（`changes::commit_updates_rows`），
+                    // schema 上下文必须带上，否则落到连接默认 schema
+                    schema: schema.map(str::to_string),
                     ..Default::default()
                 };
                 match self.service.execute(conn.clone(), statement, options).await {

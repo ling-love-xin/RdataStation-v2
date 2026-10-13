@@ -109,6 +109,8 @@ impl ResultService {
             use_transaction: true,
             timeout_ms: Some(10000),
             use_cache: false,
+            // 遗留的单格更新路径（无调用方；T2a 批量提交已取代它）：不接 schema 上下文
+            schema: None,
         };
 
         let result = service.execute(Some(conn_id), &sql, opts).await?;

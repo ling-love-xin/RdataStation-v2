@@ -1,6 +1,6 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 全部完成**（T2c-1~6：通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义 / 面板布局持久化，2026-10-13，rds-editor 514 passed）；之后按 2b → 2d 推进。
+> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 全部完成**（T2c-1~6：通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义 / 面板布局持久化，2026-10-13，rds-editor 516 passed）；**T2c-1 验收收尾「切 schema 真影响执行」已落地**（2026-10-13：执行链逐执行携带文档 schema → 引擎会话上下文注入，rds-editor 516 / rds-engine 532 测绿，见 T2c-1 完成记录补记）；之后按 2b → 2d 推进。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
 > 基线（代码现状，2026-10-11 核实，2a/2c 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
@@ -19,7 +19,7 @@
 | 期 | 名称 | 一句话 | 依赖 |
 | --- | --- | --- | --- |
 | 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **全部完成**（T2a-1~7 测绿）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
-| 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快（**T2c-1 完成**） | 无 |
+| 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快（**T2c-1 完成 + 验收收尾「切 schema 真影响执行」2026-10-13 落地**） | 无 |
 | 2b | 通用模式：更名 + 环境 + 脚本执行 | 全新能力（当前 Text 无脚本执行） | 状态栏微标部分依赖 2c |
 | 2d | 分析模式骨架 1c | Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
 
@@ -129,7 +129,15 @@
 - **落点（文件级）**：`editor/src/connection.rs`（`SchemaInfo{catalog: Option<String>, schema}`——注释：MySQL 无 Catalog 层时 catalog=None、`SchemasPort{fn schemas(conn_id)->Vec<SchemaInfo>}`（要求内存快照，渲染路径可调）、`SchemasHandle=Rc<dyn SchemasPort>`、`Breadcrumb{connection, catalog: Option, schema: Option}`、纯函数 `breadcrumb(conn_id, options, schemas, current_schema)`——**库/schema 段只从「列表+绑定」推导**：未选 schema → 两段都不占（不拿列表第一个假装当前）；绑定在列表找不到 → schema 段仍显示绑定、库段不猜；未绑定 → `UNBOUND_LABEL`；文件尾单测 `breadcrumb_segments_follow_truth`）+ `service.rs`（`Document.schema: Option<String>` + `schema()` 访问器 + `OpenRequest.schema` + `Document::new` 签名加参 + `set_schema`（返回是否真变）/`schema_for`）+ `shared.rs`（`schemas` 端口字段 + `attach_schemas`/`schemas(conn_id)`/`document_schema(id)`——未接端口=空列表如实降级）+ `view/widgets/status_bar.rs`（`StatusControls.breadcrumb: Option<AnyElement>` 最前；**`StatusLabels` 结构重构** `{connection: Option, body, right}`——连接段独立成段，面包屑渲染时用它替代文本连接段；左段渲染 `.children(breadcrumb).when(无breadcrumb, 文本连接段).child(body)`）+ `view/host.rs`（`set_schema(&mut self, Option<String>, cx)` 紧跟 set_channel；render 在 interrupt 前插入 breadcrumb 构造块——`communicating.then(||…)`：`shared.schemas(conn_id)` 空 → 返回 None 退化文本连接段；label = 连接 ▸ 库 ▸ schema（未选显 "schema"）；`DropdownButton::new("editor-breadcrumb")` + 菜单每 schema 一项 → `set_schema(Some)` + 分隔「使用连接默认」→ `set_schema(None)`）+ `workbench/src/services/editor_schema.rs`（**新**：`WorkbenchSchemas` 预载+内存读，与 `editor_completion` 同款——`NavCache::open(conn_id, project_root)` → `all_schemas()` 的 `(catalog, schema, id)` 映射 `SchemaInfo`；`attach(shared, workbench)`；`view.rs` 装配在 editor_completion 后一行）+ `view.rs`（装配）。
 - **测试**：rds-editor **482 passed**（478 + `breadcrumb_segments_follow_truth` + 3 窗口用例：`breadcrumb_renders_and_switches_schema_binding`（面包屑渲染 + 切 schema → 文档绑定真变 + 「使用连接默认」解绑）/ `breadcrumb_absent_without_schema_port`（无 schema 列表 → 控件不渲染，退文本连接段）/ `breadcrumb_absent_in_text_mode`）；rds-workbench lib **134 passed**（132 + `load_schemas_maps_catalog_and_schema_segments`（含排序后比较——`list_schemas` 不保证插入序）/ `catalog_segment_stays_empty_without_a_catalog_layer`）。
 - **踩坑记录**：`status_bar.rs` render 用 `.when(...)` 缺 `use gpui_kit::prelude::FluentBuilder as _;`（E0599）；`communicating.then(||…)` 闭包返回 `Option<AnyElement>` → `breadcrumb` 类型 `Option<Option<…>>`，构造处 `.flatten()`（E0308）；`.children(controls.breadcrumb)` move 后再 `controls.breadcrumb.is_none()` 借用冲突（E0382）→ 先 `let has_breadcrumb = controls.breadcrumb.is_some();`。
-- **未做（本轮）**：**切 schema 真影响执行**（限定名/会话默认 schema）——验收风险栏「不做纯 UI 装饰」需执行链（`editor_exec`/engine 会话级 `SET search_path`）接上；schema 绑定持久化已在 T2c-6 完成（`Document.schema` 随会话跨重启，见下「T2c-6 完成记录」）。
+- **未做（本轮）**：~~切 schema 真影响执行~~ **✅ 已补（2026-10-13，T2c-1 验收收尾）**——执行链逐执行携带文档 schema（`ExecJob.schema` → `QueryRunner` 五方法加 `schema: Option<&str>` → `SqlExecuteOptions.schema` → 引擎发语句前在同一连接上应用会话上下文（PG `SET search_path` / MySQL `USE` / DuckDB `USE`；SQLite 无此概念不注入；事务内作为首条语句，MySQL 侧补 `MySqlTransaction::query` 文本协议路由），详见下「T2c-1 补记（切 schema 真影响执行）」；schema 绑定持久化已在 T2c-6 完成（`Document.schema` 随会话跨重启，见下「T2c-6 完成记录」）。
+
+### T2c-1 补记（2026-10-13，切 schema 真影响执行——执行链收尾，全链路测绿）
+- **设计**：schema 是**文档绑定**（同连接多文档可绑不同 schema）→ 必须**逐执行显式传递**，不做连接级隐式状态（多面板共享一个 `EngineQueryRunner`，隐式状态会串——架构 §12 #2 会话亲和的教训）。传递链：`EditorShared::submit/request_commit_changes` 从服务层拷 `schema_for(&document)` → `ExecJob.schema` → worker 逐语句传给 `QueryRunner`（`run`/`run_filtered`/`run_sorted_down`/`fetch_next`/`commit_changes` 五方法在 `connection` 后加 `schema: Option<&str>`）→ `EngineQueryRunner`（源库档放进 `SqlExecuteOptions.schema`；加速/联邦档**不接**——schema 面包屑是源库概念，DuckDB 侧源表名已限定，见方法文档）→ 引擎 `SqlService::execute` 发用户语句**前**、在同一连接上应用方言会话上下文（`SET search_path` / `USE`），**不进历史、不记缓存**（是管道不是用户意图）。
+- **引擎注入（sql_service.rs）**：`SqlExecuteOptions.schema` 新字段；`execute()` 计算方言映射（`db_type_of(conn_key)` → `flavor_from_db_type` → `schema_context_sql`）——非事务路径 `db.query(context)` 落在主连接（每 conn_id 单物理连接，PG 有 1s 空闲回收 → **每次执行前重应用**，天然正确）；事务路径作为**事务内首条语句**（`query_in_transaction`，与用户语句同一事务连接；应用失败如实报错）。`execute_segment` 加 `schema` 参数（后续段必须落在首段的同一 schema）。`driver/utils.rs` 新增纯函数：`flavor_from_db_type`（驱动 id 前缀归类，未知驱动 `None`——宁可不注入也不发驱动不认的 SET）+ `schema_context_sql`（PG `SET search_path TO "s"` / MySQL `` USE `s` `` / DuckDB `USE "s"` / SQLite `None`；标识符加引号+转义）。
+- **驱动修复（mysql.rs）**：`MySqlTransaction::query` 补 `needs_text_protocol` 路由（镜像主连接）——事务内 `USE` 走 prepared 会被 MySQL 拒（1295），文本协议下可用。
+- **测试**：rds-editor **516 passed**（+`the_document_schema_flows_from_submit_to_the_runner` / `unset_schema_reaches_the_runner_as_none`，fake runner 记录收到 schema）；rds-engine **532 passed**（+`flavor_from_db_type_classifies_known_drivers` / `schema_context_sql_maps_per_flavor` / `schema_names_are_quoted_and_escaped`）；`editor_exec_real.rs` 加 PG/MySQL 真机用例（切 schema → 未限定名落到所选 schema 3 行；解绑 → 未限定名不再命中；建/清理 `rds_schema_probe_<pid>`，环境门控，无 RDS_TEST_* 自动跳过）。
+- **改动面**：editor（`execution.rs` trait+ExecJob+submit+worker+request_commit_changes+10 fake runner、`shared.rs`、`view/tests.rs` 15 fake runner）+ workbench（`editor_exec.rs` 5 方法、`result_service.rs` 遗留路径）+ engine（`sql_service.rs`、`execution_service.rs`、`driver/utils.rs`、`driver/native/mysql.rs`）+ insight（`persistence.rs` 3 处取样 `schema: None`）+ 集成测试（`editor_exec_real.rs`/`oracle_federation.rs`/`federation_sources.rs`/`insight_*`/`transaction_affinity.rs` 调用点补 `None`）。
+- **边界（如实记）**：加速 / 联邦档不接 schema（DuckDB 上源表名已限定，等该档自己的 schema 语义）；未知驱动（JDBC 等）不注入（宁缺毋滥）；MySQL 事务连接是独立一次性连接，`USE` 作为事务内首条语句由文本协议兜底。
 
 ### T2c-2 完成记录（2026-10-12，方言段已接线并测绿）
 - **落点**：`connection.rs::dialect_label(db_type)` 纯函数（`mysql_native/mysql`→MySQL、`postgres_native/postgresql/postgres`→PostgreSQL、`sqlite`→SQLite、`duckdb`→DuckDB、**未知驱动原样显示**——猜错方言比不显示更糟）；`status_bar.rs` `StatusInputs.dialect: Option<&str>` + `StatusLabels.dialect: Option<String>`（labels 加「方言 」前缀，输入为裸引擎名）+ 渲染 `.when(dialect.is_some(), …)` 在连接段之后、正文之前；`host.rs` 从绑定连接的 `ConnectionOption.db_type` 解析（`communicating` + 绑定连接才有；未绑定不摆——「跟随当前连接」时方言是谁都说不准）。
@@ -166,7 +174,7 @@
 - **接线（host.rs）**：`session_snapshot` 带 `toolbar.encode()` + `doc.schema()` + `document_tab_size/hard_tabs`；`restore_session` 顺序——`restore_channel` → `restore_connection` → 布局解码（`None`/坏数据保持默认）→ `restore_schema`（**必须在连接恢复后**：schema 列表按连接查；列表里没有 → 回退连接默认 + 状态栏说原因；端口未接/连接未绑 → 不校验也不丢）→ 缩进双写（先 `set_tab_size` 后 `set_hard_tabs`，后者读前者）。
 - **测试**：rds-editor **514 passed**（505 + toolbar 编解码 4 单测 + session 新字段往返/ worth_saving 2 + 窗口用例 3：`the_toolbar_layout_rides_along_with_the_session`（改布局→快照带编码串→新面板恢复一致；旧会话 None → 不覆盖默认）/ `the_schema_binding_comes_back_with_the_session`（在列表恢复 / 不在回退连接默认留痕 / 端口未接不丢）/ `the_indent_rides_along_with_the_session`）；rds-engine workbench_context_store **6 passed**（+T2c-6 往返与老库补列默认断言）；rds-workbench editor_session **6 passed**（+列映射往返）；ui_contract **8 passed**。
 - **踩坑**：encode 折叠段若当槽位 join 会出 `,;`（解码槽位段尾缀空 token → 拒）→ 改为 `format!("{};{}", …)` 直接拼接；`worth_saving` 的 `tab_size != Some(2)` 会把 `None`（旧会话）误判为改过 → 改 `is_some_and(|s| s != 2)`。
-- **未做**：**切 schema 真影响执行**（执行链按文档绑定生成限定名 / 会话级 `SET search_path`）——排 2b 前（验收风险栏「不做纯 UI 装饰」的收尾）。
+- **未做**：~~切 schema 真影响执行~~ **✅ 已补（2026-10-13）**——执行链逐执行携带文档 schema + 引擎会话上下文注入（见上「T2c-1 补记」）。
 
 ### 涉及文件
 `editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, toolbar.rs(T2c-5/6 新), session.rs(T2c-6 布局/schema/缩进字段), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口), editor_session.rs(T2c-6 列映射)}` + `engine/src/persistence/workbench_context_store.rs(T2c-6 四列 + 幂等补列)` + `app/src/main.rs`（行|列切换命令注册）。
@@ -230,5 +238,5 @@
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | 本轮不做，菜单置灰+标注；另立事项 | 避免假按钮 |
-| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c（T2c-1~6，含面板布局持久化）**全部完成** → 下一项 **2b**（通用模式范围），2b 前补「切 schema 真影响执行」（T2c-1 验收收尾），之后 2d | 排期 |
+| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c（T2c-1~6，含面板布局持久化）**全部完成**；**T2c-1 验收收尾「切 schema 真影响执行」也已落地**（2026-10-13）→ 下一项 **2b**（通用模式范围），之后 2d | 排期 |
 | 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |

@@ -102,6 +102,7 @@ fn marked_connections_become_federated_sources() {
     let data = runner
         .run(
             Some(&mysql_id),
+            None,
             ExecChannel::Federated,
             sql,
             RunOptions {
@@ -139,6 +140,7 @@ fn marked_connections_become_federated_sources() {
     let after = runner
         .run(
             Some(&mysql_id),
+            None,
             ExecChannel::Federated,
             "SELECT count(*) AS n FROM sqlite_src.main.blob",
             RunOptions {
@@ -170,6 +172,7 @@ fn marked_connections_become_federated_sources() {
     let error = runner
         .run(
             Some(&mysql_id),
+            None,
             ExecChannel::Federated,
             "SELECT 1",
             RunOptions {

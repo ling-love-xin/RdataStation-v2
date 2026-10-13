@@ -61,6 +61,13 @@ pub struct SqlExecuteOptions {
     ///
     /// 由**执行器**填（它是唯一知道通道的一方）；不填 = 没接通道信息（老调用方）。
     pub channel: Option<String>,
+    /// 【T2c-1】本次执行的 schema 上下文（`None` = 未选 → 用连接默认 schema）
+    ///
+    /// 由**执行器**填（它从文档绑定取；编辑器侧 `EditorShared` 在提交时从服务层拷出）。
+    /// 引擎在执行用户语句**前**、在同一连接上应用方言对应的会话上下文（PG `SET search_path`
+    /// / MySQL `USE` / DuckDB `USE`；SQLite 无此概念）——这样未限定表名才真的落到所选
+    /// schema。上下文语句是**管道**不是用户意图：不进历史、不记缓存。
+    pub schema: Option<String>,
 }
 
 /// 把一条查询套成**窗口**（`LIMIT n OFFSET m`）——分段抓取的取数方式
@@ -386,6 +393,7 @@ impl SqlService {
         limit: usize,
         offset: usize,
         timeout_ms: Option<u64>,
+        schema: Option<String>,
     ) -> Result<SqlExecuteResult, CoreError> {
         let Some(window) = window_segment(sql, limit, offset) else {
             return Err(CoreError::database(DatabaseError::Query {
@@ -406,6 +414,8 @@ impl SqlService {
                     use_cache: false,
                     // 分段抓取本身不记历史（第一段那条已经记了），通道也无需带
                     channel: None,
+                    // T2c-1：后续段必须落在**同一 schema**（首段是在这个 schema 上下文里取的）
+                    schema,
                 },
             )
             .await;
@@ -480,6 +490,20 @@ impl SqlService {
             None => DEFAULT_CONN_KEY.to_string(),
         };
 
+        // ---- T2c-1：schema 会话上下文 ----
+        // 切 schema 真影响执行：执行用户语句**前**、在**同一连接**上应用所选 schema 的
+        // 方言映射（PG `SET search_path` / MySQL `USE` / DuckDB `USE`；SQLite 无此概念）。
+        // 与用户语句同连接（非事务 = 主连接 `db`；事务 = 事务连接，见下），且**不进历史**
+        // （是管道不是用户意图）。方言识别用运行时连接的 `db_type`；不认识的驱动不注入。
+        let schema_context: Option<String> =
+            if let Some(schema) = options.schema.as_deref().filter(|s| !s.trim().is_empty()) {
+                let db_type = self.db_type_of(&conn_key).await.unwrap_or_default();
+                crate::driver::utils::flavor_from_db_type(&db_type)
+                    .and_then(|flavor| crate::driver::utils::schema_context_sql(schema, flavor))
+            } else {
+                None
+            };
+
         // ---- B4：事务路由 ----
         // ① 会话里**已经有事务** → 这条语句必须走事务对象（同一物理连接，架构 §12 #2 的会话亲和）；
         // ② 自动提交关闭（`use_transaction`）且还没事务 → 本次执行先自动开一个。
@@ -499,12 +523,25 @@ impl SqlService {
         //
         // 这里不用 `?` 提前返回：失败也要写历史（v1 只在成功时记，失败查询在历史里不可见）。
         let query_result = if in_transaction || auto_begin {
+            // T2c-1：schema 上下文作为**事务内首条语句**（与用户语句同一事务连接）。
+            // PG 的 `SET search_path` 走 prepared 正常；MySQL 的 `USE` 走 prepared 会被拒
+            // （1295）——由 `MySqlTransaction::query` 的文本协议路由兜底。应用失败如实报错
+            // （不假装 schema 已生效）。
+            if let Some(context) = schema_context.as_deref() {
+                if let Some(result) = self.manager.query_in_transaction(&tx_key, context).await {
+                    result?;
+                }
+            }
             match self.manager.query_in_transaction(&tx_key, sql).await {
                 Some(result) => result,
                 // 竞态兜底：刚判过还有、这会儿被别处提交/回滚了 → 回落普通路径
                 None => run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await,
             }
         } else {
+            // T2c-1：非事务路径——schema 上下文落在主连接 `db` 上（与用户语句同连接）。
+            if let Some(context) = schema_context.as_deref() {
+                db.query(context).await?;
+            }
             run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
         };
 

@@ -58,6 +58,8 @@ async fn sample_from_connection(
         use_transaction: false,
         timeout_ms: Some(15_000),
         use_cache: false,
+        // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
+        schema: None,
     };
     let result = service
         .execute(Some(conn_id.to_string()), sample_sql, opts)
@@ -250,6 +252,8 @@ pub async fn profile_column_from_table(
         use_transaction: false,
         timeout_ms: Some(15000),
         use_cache: false,
+        // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
+        schema: None,
     };
 
     let result = service
@@ -313,6 +317,8 @@ pub async fn batch_evaluate_columns(
         use_transaction: false,
         timeout_ms: Some(15000),
         use_cache: false,
+        // 取样用三段限定名（`db`.`schema`.`table`），无需会话上下文
+        schema: None,
     };
 
     let result = service.execute(Some(conn_id), &sample_sql, opts).await?;
