@@ -85,6 +85,27 @@ struct CommitInFlight {
     skipped: usize,
 }
 
+/// 【T2c-3 收尾】编辑内容模式：行编辑（默认，单光标）/ 列编辑（多光标）。
+///
+/// 列编辑 = 内核多光标能力（`add_cursor_above|below`，0.7.1 经 vendor 补丁公开）；
+/// 行编辑模式下宿主在文本变更时强制收拢到单光标（见 Change 事件处理器）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum EditMode {
+    #[default]
+    Row,
+    Column,
+}
+
+impl EditMode {
+    /// 状态栏入口的短标签（`行 ▾` / `列 ▾`）
+    pub(crate) fn short_label(self) -> &'static str {
+        match self {
+            EditMode::Row => "行",
+            EditMode::Column => "列",
+        }
+    }
+}
+
 /// 一份文档的编辑面板
 pub struct EditorHostPanel {
     shared: EditorShared,
@@ -109,6 +130,8 @@ pub struct EditorHostPanel {
     ///
     /// 有它才不会有“按了没反应”的动作：失败必须留下可见痕迹。成功即清空。
     pub(crate) message: Option<String>,
+    /// 【T2c-3 收尾】编辑内容模式（行编辑 / 列编辑；面板内存态，不随会话持久化）
+    edit_mode: EditMode,
     /// 是否已被 Dock 移除（移除即关闭文档，见 `Panel::on_removed`）
     pub(crate) closed: bool,
     /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
@@ -272,8 +295,14 @@ impl EditorHostPanel {
         let sub = cx.subscribe_in(
             &editor,
             window,
-            |this, _state, event: &InputEvent, _window, cx| {
+            |this, state, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
+                    // 【T2c-3 收尾】行编辑模式强制单光标（列编辑 = 多光标）：文本变更时
+                    // 把多光标收拢到活动光标。订阅闭包里的 `state` 是内核实体的引用，
+                    // 先 `read` 判断、再 `update` 收拢（避免与后面的 `this.editor_text` 争用）。
+                    if this.edit_mode == EditMode::Row && state.read(cx).cursor_count() > 1 {
+                        state.update(cx, |state, cx| state.collapse_cursors(window, cx));
+                    }
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
                     // 【B18】语句数 / 折叠候选 / 打字期诊断一律**不在事件路径上算**：
@@ -512,6 +541,7 @@ impl EditorHostPanel {
             group: None,
             area: None,
             message: None,
+            edit_mode: EditMode::Row,
             closed: false,
             grid,
             pending: 0,
@@ -1478,6 +1508,29 @@ impl EditorHostPanel {
                 });
             cx.notify();
         }
+    }
+
+    /// 【T2c-3 收尾】切换编辑内容模式（行编辑 / 列编辑）。只改面板态并重绘；
+    /// 切回行编辑时的多光标收拢由调用方（菜单 on_click 持有 window）经 [`Self::enforce_edit_mode`] 触发。
+    pub(crate) fn set_edit_mode(&mut self, mode: EditMode, cx: &mut Context<Self>) {
+        if self.edit_mode == mode {
+            return;
+        }
+        self.edit_mode = mode;
+        cx.notify();
+    }
+
+    /// 【T2c-3 收尾】按当前编辑模式对齐内核光标：行编辑 = 强制单光标（多光标收拢到活动光标）；
+    /// 列编辑 = 保持多光标。需要 `window`（内核 `collapse_cursors` 的签名要求，实参未用）。
+    pub(crate) fn enforce_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit_mode != EditMode::Row {
+            return;
+        }
+        self.editor.update(cx, |state, cx| {
+            if state.cursor_count() > 1 {
+                state.collapse_cursors(window, cx);
+            }
+        });
     }
 
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
@@ -3178,6 +3231,37 @@ impl EditorHostPanel {
     ) {
         self.editor
             .update(cx, |state, cx| state.set_selected_range(range, cx));
+    }
+
+    /// 【T2c-3 收尾】光标数（多光标 = 列编辑；经 vendor 公开的 `cursor_count` 读内核真实值）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn cursor_count_for_test(&self, cx: &App) -> usize {
+        self.editor.read(cx).cursor_count()
+    }
+
+    /// 【T2c-3 收尾】给活动光标加一个下方光标（列编辑多光标；调内核公开的 `add_cursor_below_line`）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn add_cursor_below_for_test(&mut self, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |state, cx| state.add_cursor_below_line(cx));
+    }
+
+    /// 【T2c-3 收尾】当前编辑模式（行 / 列）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn edit_mode_for_test(&self) -> EditMode {
+        self.edit_mode
+    }
+
+    /// 【T2c-3 收尾】设置编辑模式（走生产代码同一条 `set_edit_mode`）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn set_edit_mode_for_test(&mut self, mode: EditMode, cx: &mut Context<Self>) {
+        self.set_edit_mode(mode, cx);
+    }
+
+    /// 【T2c-3 收尾】按当前模式对齐内核光标（走生产代码同一条 `enforce_edit_mode`）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn enforce_edit_mode_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.enforce_edit_mode(window, cx);
     }
 
     /// 启动结果轮询（已有存活任务时不重复启动）
@@ -4911,14 +4995,16 @@ impl Render for EditorHostPanel {
         let _ = (primary, muted);
         let read_only = self.editor_read_only();
 
-        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移）
-        let (line, column, cursor_offset, selected_chars) = {
+        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移；
+        // 光标数 = 列编辑多光标真实值）
+        let (line, column, cursor_offset, cursor_count, selected_chars) = {
             let state = self.editor.read(cx);
             let cursor = state.cursor_position();
             (
                 cursor.line as usize + 1,
                 cursor.character as usize + 1,
                 state.selected_range().start,
+                state.cursor_count(),
                 state.selected_text().chars().count(),
             )
         };
@@ -4969,6 +5055,7 @@ impl Render for EditorHostPanel {
             line,
             column,
             cursor_offset,
+            cursor_count,
             // 缩进宽度：文档级权威值（T2c-4 重设后从这读；默认 2）
             tab_size: self.shared.document_tab_size(&self.document),
             // 缩进是否制表符：文档级权威值（T2c-4）
@@ -5047,11 +5134,12 @@ impl Render for EditorHostPanel {
             )
         });
 
-        // 【T2c-3】行｜列编辑切换入口：列编辑 = 多光标（内核 `add_cursor_above/below` 已实现
-        // 但 0.7.1 暴露为 `pub(super)`，外部 crate 调不到）→ 列项置灰 + 标注，不假装能用
-        // （用户约束：确认内核不支持才自研；这里已确认「存在但未公开」→ 列项如实置灰）。
+        // 【T2c-3 收尾】行｜列编辑切换入口：列编辑 = 多光标（内核 `add_cursor_above|below`
+        // 已由 vendor 补丁公开，`cursor_count` 徽标是真实值）。行编辑 = 单光标（文本变更时
+        // 宿主强制收拢，见 Change 事件处理器）；切回行编辑时立即收拢一次。
         let edit_mode = {
             let entity = cx.entity();
+            let mode = self.edit_mode;
             DropdownButton::new("editor-edit-mode")
                 .small()
                 .button(
@@ -5059,24 +5147,35 @@ impl Render for EditorHostPanel {
                         .ghost()
                         .small()
                         .debug_selector(|| "editor-edit-mode".to_string())
-                        .label("行 ▾"),
+                        .label(format!("{} ▾", mode.short_label())),
                 )
                 .dropdown_menu(move |menu, _window, _cx| {
-                    let entity = entity.clone();
-                    menu.item(PopupMenuItem::new("行编辑").checked(true))
-                        .item(
-                            PopupMenuItem::new("列编辑")
-                                .disabled(true)
-                                .on_click(move |_, _window, app| {
-                                    // 置灰项不该被点到；点到也只是提示（真实值原则，不假切）
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_message(
-                                            Some("列编辑：内核多光标 API 未公开（gpui-base 0.7.1）".to_string()),
-                                            cx,
-                                        );
-                                    });
-                                }),
-                        )
+                    let row_entity = entity.clone();
+                    let col_entity = entity.clone();
+                    let row = mode == EditMode::Row;
+                    let column = mode == EditMode::Column;
+                    menu.item(
+                        PopupMenuItem::new("行编辑")
+                            .checked(row)
+                            .on_click(move |_, window, app| {
+                                row_entity.update(app, |panel, cx| {
+                                    panel.set_edit_mode(EditMode::Row, cx)
+                                });
+                                // 切回行编辑：立即收拢多光标（走生产代码同一条 `enforce_edit_mode`）
+                                row_entity.update(app, |panel, cx| {
+                                    panel.enforce_edit_mode(window, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("列编辑")
+                            .checked(column)
+                            .on_click(move |_, _window, app| {
+                                col_entity.update(app, |panel, cx| {
+                                    panel.set_edit_mode(EditMode::Column, cx);
+                                });
+                            }),
+                    )
                 })
                 .into_any_element()
         };

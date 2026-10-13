@@ -42,6 +42,8 @@ pub struct StatusInputs<'a> {
     pub column: usize,
     /// 【T2c-3】光标全文偏移（字符；状态栏「Ch」微标）
     pub cursor_offset: usize,
+    /// 【T2c-3 收尾】光标数（列编辑 = 多光标；`> 1` 时右段显「N 光标」徽标，真实值）
+    pub cursor_count: usize,
     /// 【T2c-3】缩进宽度（内核 TabSize，状态栏「Sp」微标；真实值）
     pub tab_size: usize,
     /// 【T2c-4】缩进用制表符（`true` 时状态栏微标显「Tab」而非「Sp n」）
@@ -165,6 +167,10 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if inputs.selected_chars > 0 {
         parts.push(format!("已选 {} 字", inputs.selected_chars));
     }
+    // 【T2c-3 收尾】多光标（列编辑）徽标：真实光标数，行编辑模式下恒为 1 不显示
+    if inputs.cursor_count > 1 {
+        parts.push(format!("{} 光标", inputs.cursor_count));
+    }
 
     StatusLabels {
         connection,
@@ -266,6 +272,7 @@ mod tests {
             line: 12,
             column: 4,
             cursor_offset: 42,
+            cursor_count: 1,
             tab_size: 2,
             hard_tabs: false,
             bytes: 1536,
@@ -324,6 +331,23 @@ mod tests {
         let mut dirty = inputs(ReadOnly::none());
         dirty.dirty = true;
         assert!(labels(&dirty).body.contains("未保存"));
+    }
+
+    /// 【T2c-3 收尾】多光标徽标：列编辑（多光标）时才出现，且数字是真实值；
+    /// 行编辑（单光标）恒为 1，不显示占位。
+    #[test]
+    fn multi_cursor_badge_shows_only_when_count_above_one() {
+        let single = labels(&inputs(ReadOnly::none()));
+        assert!(
+            !single.right.contains("光标"),
+            "单光标不显示徽标：{}",
+            single.right
+        );
+
+        let mut multi = inputs(ReadOnly::none());
+        multi.cursor_count = 3;
+        let text = labels(&multi);
+        assert!(text.right.contains("3 光标"), "{} 应含 3 光标", text.right);
     }
 
     #[test]

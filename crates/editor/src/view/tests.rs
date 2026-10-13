@@ -7256,3 +7256,93 @@ fn toolbar_exec_run_cannot_be_hidden_from_the_panel(cx: &mut TestAppContext) {
     let layout = cx.update(|_window, cx| panel.read(cx).toolbar_layout_for_test());
     assert!(!layout.is_visible(crate::toolbar::ToolbarItemId::ExecAll), "全部运行已隐藏");
 }
+
+/// 【T2c-3 收尾】列编辑 = 内核多光标：默认行编辑单光标；切列编辑后经公开的内核
+/// `add_cursor_below_line` 真加光标（`cursor_count` 是内核真实值）；切回行编辑经
+/// `enforce_edit_mode` 立即收拢回单光标。
+#[gpui_kit::test]
+fn column_edit_toggles_multi_cursor_via_the_kernel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    // 多行文本：给“在下方加光标”留出移动空间（最后一行再加会因到底被内核跳过）
+    let (shared, id) = shared_with_document(r"D:\sql\col.sql", "select 1;\nselect 2;\nselect 3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 默认行编辑 + 单光标
+    let mode = cx.update(|_window, cx| panel.read(cx).edit_mode_for_test());
+    assert_eq!(mode, crate::view::host::EditMode::Row, "默认行编辑");
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 1, "初始单光标");
+
+    // 光标停在第二行行首（字节偏移："select 1;\n" 是 10 字节）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_caret_for_test(10, cx));
+    });
+
+    // 切列编辑 → 加一个下方光标 → 内核真实多光标
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_edit_mode_for_test(crate::view::host::EditMode::Column, cx);
+        });
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.add_cursor_below_for_test(cx));
+    });
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 2, "列编辑下加光标：内核多光标 = 2");
+
+    // 切回行编辑：立即收拢回单光标（`enforce_edit_mode` 走生产代码同一条路径）
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_edit_mode_for_test(crate::view::host::EditMode::Row, cx);
+            panel.enforce_edit_mode_for_test(window, cx);
+        });
+    });
+    let mode = cx.update(|_window, cx| panel.read(cx).edit_mode_for_test());
+    assert_eq!(mode, crate::view::host::EditMode::Row, "已切回行编辑");
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 1, "行编辑强制单光标");
+
+    // 列编辑模式下多光标不受收拢影响（再次切回列编辑 + 加光标仍成立）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_edit_mode_for_test(crate::view::host::EditMode::Column, cx);
+            panel.add_cursor_below_for_test(cx);
+        });
+    });
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 2, "列编辑下多光标保持");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 【T2c-3 收尾】行编辑模式下的多光标会在**下一次文本变更**（Change 事件）时被收拢——
+/// 这是“行编辑 = 单光标”的后卫路径（键盘 Ctrl+Alt+↓ 加的光标也逃不掉）。
+#[gpui_kit::test]
+fn row_edit_collapses_multi_cursor_on_the_next_change(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id) = shared_with_document(r"D:\sql\row.sql", "select 1;\nselect 2;\nselect 3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 光标在第二行行首，行编辑模式下加一个下方光标（模拟 Ctrl+Alt+↓：内核真多光标）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_caret_for_test(10, cx));
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.add_cursor_below_for_test(cx));
+    });
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 2, "加光标后内核多光标 = 2");
+
+    // 聚焦内核并输入一个字符 → Change 事件 → 行编辑后卫收拢回单光标
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).editor_focus_handle_for_test(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("x");
+
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 1, "行编辑下输入后收拢为单光标");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
