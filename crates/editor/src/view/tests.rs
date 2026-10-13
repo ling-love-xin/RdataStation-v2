@@ -7684,3 +7684,219 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
+
+// ===== 【2d】分析笔记本：窗口级测试 =====
+
+/// 假执行器：只实现 `run_cell`（单元执行走这一条），记录请求并回成功结论
+struct NotebookRunner {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl QueryRunner for NotebookRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _schema: Option<&str>,
+        _channel: crate::channel::ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData::default())
+    }
+    fn run_cell(
+        &self,
+        request: &crate::cell::CellRequest,
+    ) -> Result<crate::cell::CellOutcome, String> {
+        self.seen.lock().unwrap().push(format!("{}:{}", request.session_id, request.cell_id));
+        Ok(crate::cell::CellOutcome {
+            sql: request.sql.clone(),
+            elapsed_ms: 3,
+            affected_rows: None,
+            truncated: false,
+            result: Ok(QueryData {
+                columns: vec!["n".to_string()],
+                rows: vec![vec!["1".to_string()]],
+                ..Default::default()
+            }),
+        })
+    }
+}
+
+/// 空态引导：分析模式的空笔记不是空白，而是引导卡（两个新增入口真在）
+#[gpui_kit::test]
+fn analysis_mode_shows_the_empty_state_guide(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(NotebookRunner {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 层真渲染：空态引导卡的两个入口按钮都在（headless 弹层不可靠，用 debug_bounds）
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).notebook_state().cells.is_empty()),
+        "新建笔记 = 空单元"
+    );
+    assert!(cx.debug_bounds("editor-nb-empty-sql").is_some(), "空态要有 SQL 入口");
+    assert!(cx.debug_bounds("editor-nb-empty-text").is_some(), "空态要有文本入口");
+
+    // 走面板方法（与按钮回调同一条路）：加一个 SQL 单元 → 空态消失、卡片出现
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).notebook_state().cells.len()),
+        1
+    );
+    assert!(cx.debug_bounds("editor-nb-add-cell").is_some(), "列表尾有插入入口");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 单元动作（上移 / 下移 / 复制 / 删除 / 转类型）全真实生效
+#[gpui_kit::test]
+fn notebook_cell_actions_are_real(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 加三个单元：SQL / 文本 / SQL
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Text, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells.len(), 3);
+    let first = cells[0].id.clone();
+    let second = cells[1].id.clone();
+    assert_eq!(cells[1].kind, crate::cell::CellKind::Text);
+
+    // 转类型：文本 → SQL（正文原样，类型翻转）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_convert_cell(&id, &second, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[1].kind, crate::cell::CellKind::Sql, "文本转 SQL");
+
+    // 复制第一个：副本插在后面，id 不同、正文原样
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_duplicate_cell(&id, &first, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells.len(), 4);
+    assert_eq!(cells[1].id, format!("{first}-copy"), "副本紧跟原单元");
+    assert_eq!(cells[1].body, cells[0].body);
+
+    // 上移第三个：与第二个换位
+    let third = cells[2].id.clone();
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_move_cell(&id, &third, -1, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[1].id, third, "上移一位");
+
+    // 删除第二个（原来的 third）：列表变短、id 消失
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_delete_cell(&id, &third, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells.len(), 3);
+    assert!(!cells.iter().any(|cell| cell.id == third));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 运行 SQL 单元：走 `run_cell` 假执行器 → 回执经泵落到单元输出（内联 Table 投影）
+#[gpui_kit::test]
+fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(NotebookRunner {
+        seen: seen.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 加 SQL 单元 + 一个文本单元
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellKind::Text, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    let sql_id = cells[0].id.clone();
+    let text_id = cells[1].id.clone();
+
+    // 运行 SQL 单元：提交成功 → 状态 Running
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &sql_id, cx));
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[0].state, crate::cell::CellState::Running);
+
+    // 泵回执：Done + 内联 Table 输出（1 行 × 1 列）
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let done = loop {
+        let done = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_cell_notes(cx);
+                panel.notebook_state().cells[0].state == crate::cell::CellState::Done
+            })
+        });
+        if done || std::time::Instant::now() > deadline {
+            break done;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(done, "回执要落到单元上（Done）");
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[format!("default:{sql_id}")],
+        "执行器收到会话 + 单元 id"
+    );
+    match &cells[0].output {
+        Some(crate::cell::Output::Table(entry)) => {
+            assert_eq!(entry.rows.len(), 1);
+            assert_eq!(entry.columns, vec!["n".to_string()]);
+            assert_eq!(entry.lineage.as_deref(), Some("单元执行"));
+        }
+        other => panic!("SQL 单元成功回执要拼成内联 Table，实际：{other:?}"),
+    }
+
+    // 文本单元不可执行：如实拒绝并给原因（不假装能跑）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.notebook_run_cell(&id, &text_id, cx));
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[1].state, crate::cell::CellState::Idle, "文本单元不可执行");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}

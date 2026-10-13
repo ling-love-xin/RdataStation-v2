@@ -1749,6 +1749,221 @@ impl EditorHostPanel {
         cx.notify();
     }
 
+    // ===== 【2d】分析笔记本：单元动作（状态在 `EditorShared` 的笔记本持有器） =====
+
+    /// 取本文档的笔记状态（渲染用快照）
+    pub(crate) fn notebook_state(&self) -> crate::cell::NotebookState {
+        self.shared.notebook_state(&self.document)
+    }
+
+    /// 新增一个单元（追加到序列尾部；新建即 Idle）
+    pub(crate) fn notebook_add_cell(
+        &mut self,
+        _document: &DocumentId,
+        kind: crate::cell::CellKind,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        let id = format!(
+            "cell-{}-{}",
+            state.cells.len() + 1,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        );
+        let body = if kind.is_executable() {
+            "select 1;".to_string()
+        } else {
+            String::new()
+        };
+        state.cells.push(crate::cell::Cell::new(id, kind, body));
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        cx.notify();
+    }
+
+    /// 删除一个单元（按 id；不存在 = 忽略）
+    pub(crate) fn notebook_delete_cell(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        state.cells.retain(|cell| cell.id != id);
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        cx.notify();
+    }
+
+    /// 上移 / 下移一个单元（`delta` = ±1；到边界不动）
+    pub(crate) fn notebook_move_cell(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        delta: isize,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        let Some(pos) = state.cells.iter().position(|cell| cell.id == id) else {
+            return;
+        };
+        let target = pos as isize + delta;
+        if target < 0 || target >= state.cells.len() as isize {
+            return; // 到边界不动（如实）
+        }
+        state.cells.swap(pos, target as usize);
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        cx.notify();
+    }
+
+    /// 复制一个单元（副本插在原单元后面；新 id，正文 / 类型原样，输出清空）
+    pub(crate) fn notebook_duplicate_cell(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        let Some(pos) = state.cells.iter().position(|cell| cell.id == id) else {
+            return;
+        };
+        let original = state.cells[pos].clone();
+        let copy = crate::cell::Cell::new(
+            format!("{}-copy", original.id),
+            original.kind,
+            original.body,
+        );
+        state.cells.insert(pos + 1, copy);
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        cx.notify();
+    }
+
+    /// SQL ↔ 文本互转（正文原样，类型翻转；有输出则清空并标 Idle）
+    pub(crate) fn notebook_convert_cell(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        let Some(cell) = state.cell_mut(id) else {
+            return;
+        };
+        cell.kind = if cell.kind == crate::cell::CellKind::Sql {
+            crate::cell::CellKind::Text
+        } else {
+            crate::cell::CellKind::Sql
+        };
+        cell.state = crate::cell::CellState::Idle;
+        cell.output = None;
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        cx.notify();
+    }
+
+    /// 运行一个单元（仅 SQL 单元；Text / 空正文 / 有执行在跑都如实拒绝）
+    pub(crate) fn notebook_run_cell(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        if state.has_running() {
+            self.set_message(Some("已有单元在执行中".to_string()), cx);
+            return;
+        }
+        // 会话 id 先克隆出来（`cell_mut` 会可变借用 state，不能同时借 `state.session`）
+        let session_id = state.session.id.clone();
+        let Some(cell) = state.cell_mut(id) else {
+            return;
+        };
+        if !cell.kind.is_executable() {
+            self.set_message(Some("文本单元不可执行（只能做备注）".to_string()), cx);
+            return;
+        }
+        if cell.body.trim().is_empty() {
+            self.set_message(Some("这个 SQL 单元是空的，没有可执行的语句".to_string()), cx);
+            return;
+        }
+        let sql = cell.body.clone();
+        cell.mark_running();
+        let request = crate::cell::CellRequest {
+            session_id,
+            cell_id: id.to_string(),
+            sql,
+        };
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        match self.shared.submit_cell(self.document.clone(), &request) {
+            Ok(()) => {
+                if self.pending == 0 {
+                    self.running_since = Some(std::time::Instant::now());
+                }
+                self.pending += 1;
+                self.set_message(None, cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(reason) => {
+                // 提交被拒：把 Running 标回去（不假装在跑）
+                let mut state = self.notebook_state();
+                if let Some(cell) = state.cell_mut(id) {
+                    cell.state = crate::cell::CellState::Idle;
+                    cell.output = None;
+                }
+                self.shared.set_notebook_cells(&self.document, state.cells);
+                self.set_message(Some(reason), cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
+    pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
+        match self.shared.cancel() {
+            Ok(()) => self.set_message(Some("已请求中断".to_string()), cx),
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 【2d】收单元执行的结论（主线程轮询取走）：按会话 + 单元 id 回填内联输出
+    pub(crate) fn drain_cell_notes(&mut self, cx: &mut Context<Self>) {
+        let mut mine_arrived = 0usize;
+        for note in self.shared.drain_cell_notes() {
+            if note.document != self.document {
+                continue;
+            }
+            mine_arrived += 1;
+            self.shared.apply_cell_note(&self.document, &note);
+        }
+        // 回执按本文档的份数收口 pending（与脚本同口径）
+        if mine_arrived > 0 {
+            self.pending = self.pending.saturating_sub(mine_arrived);
+            if self.pending == 0 {
+                self.running_since = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// 编辑区正文：分析模式 = 笔记本（单元卡片）；其它模式 = 内核编辑器
+    fn render_editor_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mode = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General);
+        if mode != EditorMode::Analysis {
+            let read_only = self.editor_read_only();
+            return Editor::new(&self.editor)
+                .appearance(false)
+                .bordered(false)
+                .readonly(read_only)
+                .size_full()
+                .into_any_element();
+        }
+        // 分析模式：笔记本正文（单元卡片列表 / 空态引导卡）。编辑区可滚动。
+        let state = self.notebook_state();
+        let entity = cx.entity();
+        crate::view::analysis::render(cx, &state, &self.document, entity).into_any_element()
+    }
+
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
     fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
         // 【B15】本地分析不碰源库（数据是桥接过来的行）——通道闸管的是“写源库对象”，放行
@@ -3689,6 +3904,8 @@ impl EditorHostPanel {
 
         // 【2b】脚本执行的结论：独立通道，先于 exec outcomes 收（脚本与 SQL 互不挤占）
         self.drain_script_notes(cx);
+        // 【2d】单元执行的结论：独立通道（结果走内联输出，不是结果区）
+        self.drain_cell_notes(cx);
 
         let outcomes = self.shared.drain_exec();
         let mut mine_arrived = 0usize;
@@ -5224,7 +5441,6 @@ impl Render for EditorHostPanel {
             )
         };
         let _ = (primary, muted);
-        let read_only = self.editor_read_only();
 
         // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移；
         // 光标数 = 列编辑多光标真实值）
@@ -5941,13 +6157,7 @@ impl Render for EditorHostPanel {
                             });
                         }
                     })
-                    .child(
-                        Editor::new(&self.editor)
-                            .appearance(false)
-                            .bordered(false)
-                            .readonly(read_only)
-                            .size_full(),
-                    ),
+                    .child(self.render_editor_body(cx)),
             ),
         );
         if let Some(pane) = result_pane {

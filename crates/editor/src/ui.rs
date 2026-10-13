@@ -116,3 +116,16 @@ pub const MANAGE_ENV_FORM_LABEL: f32 = 4.0;
 
 /// 【T2c-5】工具栏自定义面板与触发按钮的间距（4px；结构尺寸进常量表，视图不写裸 px）
 pub const TOOLBAR_CUSTOMIZE_OFFSET: Pixels = px(4.);
+
+/// 【2d】分析笔记本：单元卡片的最大宽度（48rem = 768px：卡片居中于编辑区，
+/// 比这更宽会被窗口边缘截掉；窄窗口里自动收窄）
+pub const NOTEBOOK_CELL_MAX_WIDTH: f32 = 48.0;
+
+/// 【2d】分析笔记本：单元卡片间距（0.5rem = 8px）
+pub const NOTEBOOK_CELL_GAP: f32 = 0.5;
+
+/// 【2d】分析笔记本：空态引导卡的最大宽度（36rem = 576px）
+pub const NOTEBOOK_EMPTY_MAX_WIDTH: f32 = 36.0;
+
+/// 【2d】分析笔记本：单元卡片顶部工具行（徽标 + 序号 + 动作）高（1.5rem = 24px）
+pub const NOTEBOOK_CELL_HEADER_HEIGHT: f32 = 1.5;
