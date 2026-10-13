@@ -15,6 +15,10 @@ use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::{Icon};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
@@ -218,6 +222,8 @@ pub struct EditorHostPanel {
     _edit_sub: Option<Subscription>,
     /// 【T2a-6】提交中的一次批量提交（`None` = 没有提交在跑；回执回来前按钮保持灰）
     commit_in_flight: Option<CommitInFlight>,
+    /// 【T2c-5】工具栏分组自定义布局（权威状态；render 纯读，改动走面板方法）
+    toolbar: crate::toolbar::ToolbarLayout,
 }
 
 impl EditorHostPanel {
@@ -549,6 +555,7 @@ impl EditorHostPanel {
             _filter_sub: Some(filter_sub),
             _edit_sub: Some(_edit_sub),
             commit_in_flight: None,
+            toolbar: crate::toolbar::ToolbarLayout::default(),
         }
     }
 
@@ -889,16 +896,18 @@ impl EditorHostPanel {
         (state.value().to_string(), state.selected_range())
     }
 
-    /// 工具栏（原型 §2.2）：按其分层只放**今天真有动作**的控件
+    /// 工具栏（原型 §2.2 + T2c-5 分组自定义）：按其分层只放**今天真有动作**的控件
     ///
-    /// - 最左：**模式指示器**（文本 / SQL / 分析，点击切换）
-    /// - 执行级：**执行 ▾**——主按钮 = 执行（选区优先 → 当前语句），下拉 = 执行族里已经能跑的
-    ///   三项（当前语句 / 选区 / 全部）。**只在 SQL 模式出现**：文本模式按能力表不通信，
-    ///   分析模式的执行属笔记级动作（1c 随单元落地）。
-    /// - 文档级：**⇤ 格式化**——整篇 / 选区，与 `Ctrl+Shift+F` 同一条路。同样只在
-    ///   SQL 模式出现（文本模式不解析 SQL；分析模式的格式化为笔记级动作）。
-    /// - 还没实现的（历史 / ⋯更多）**不放按钮**——
-    ///   “只宣传不实现”是原型 §2.2 的明确排除项。
+    /// - 最左：**模式指示器**（文本 / SQL / 分析，点击切换）——固定项，不参与
+    ///   分组 / 排序 / 可见性（原型 ⑯）。
+    /// - 左区：按 [`crate::toolbar`] 的分组模型渲染（组 = 分隔符界定的连续段；折叠组
+    ///   显示为「首组件 + ▾」，▾ 收纳组内其余可见成员；展开组逐可见项渲染）。
+    ///   **只在 SQL 模式出现**：文本模式按能力表不通信，分析模式的执行属笔记级动作
+    ///   （1c 随单元落地）。
+    /// - 右对齐簇（执行位置 + 连接）：T2c-5 里固定在最右，不参与分组移动
+    ///   （右对齐语义稳定；T2c-6 随会话持久化时再放开）。
+    /// - 最右：**`···` 定制按钮**——打开「工具栏自定义」面板（可见性 / 折叠 / 移动 /
+    ///   竖线分隔符 / 重置）。
     fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
@@ -940,14 +949,14 @@ impl EditorHostPanel {
             );
 
         if mode == EditorMode::Sql {
-            // 只有 SQL 模式的执行是“对当前文档执行”：文本模式按能力表不通信，
-            // 分析模式的执行是**笔记级**动作（单元级按钮 + Shift+Enter，1c 落地）
-            toolbar = toolbar.child(self.render_exec_group(cx));
-            // 文档级：格式化（原型 §2.2：执行级之后是文档级）
-            toolbar = toolbar.child(self.render_format_button(cx));
-            // 文档级：⋯ 更多 ▾（低频动作收拢：方言转译 …）
-            toolbar = toolbar.child(self.render_more_group(cx));
-            // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边
+            // 左区：组列表（T2c-5）。只有 SQL 模式的执行是“对当前文档执行”：
+            // 文本模式按能力表不通信，分析模式的执行是**笔记级**动作（1c 落地）。
+            let groups = self.toolbar.groups();
+            for group in &groups {
+                toolbar = toolbar.child(self.render_toolbar_group(group, cx));
+            }
+            // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边；
+            // T2c-5 固定不动（右对齐语义稳定）。
             toolbar = toolbar.child(
                 div()
                     .ml_auto()
@@ -960,6 +969,8 @@ impl EditorHostPanel {
                     .child(self.render_channel_picker(cx))
                     .child(self.render_connection_picker(cx)),
             );
+            // 最右：`···` 定制面板（与 `⋯ 更多 ▾` 并存：一个是布局自定义，一个是低频动作）
+            toolbar = toolbar.child(self.render_toolbar_customize(cx));
         }
         toolbar
     }
@@ -1691,44 +1702,191 @@ impl EditorHostPanel {
         }
     }
 
-    /// 执行族（执行级）：主按钮 + 下拉菜单
+    /// 【T2c-5】渲染一个组（组 = 分隔符界定的连续段，见 [`crate::toolbar`]）
     ///
-    /// 主按钮与 `Ctrl+Enter` 走**同一条路**（`resolve_target`：选区优先）；下拉里的五项是
-    /// **显式目标**（`target_for_menu`，后两项见 [`ExecMenuKind`] 的注释）——“执行选区”
-    /// 没选区时置灰、“批量执行”语句不足两条时置灰，比“点了没反应”明确。
-    fn render_exec_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// - 折叠（且组内可见成员 ≥ 2，且组头不是 `⋯ 更多`）：显示为「首组件 + ▾」——▾ 收纳
+    ///   组内其余**可见**成员；这正是旧 `render_exec_group` 的形态，所以折叠 / 展开是同一组
+    ///   的两副面孔。
+    /// - 展开：逐可见项渲染（执行 / 格式化 / ⋯更多 都是独立按钮）。
+    ///
+    /// 组头是 `⋯ 更多` 时**退化为展开**：它本身是嵌套菜单，没法再套一层 ▾（菜单嵌菜单）。
+    /// 折叠状态仍记在模型里（面板开关照常显示），只是视图上不套壳。
+    fn render_toolbar_group(
+        &self,
+        group: &crate::toolbar::ToolbarGroup,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use crate::toolbar::ToolbarItemId;
+        let visible: Vec<crate::toolbar::ToolbarItemId> = group.visible_items(&self.toolbar);
+        let collapsed = visible.len() >= 2
+            && group.head != ToolbarItemId::More
+            && self.toolbar.is_collapsed(group.head);
+        if collapsed {
+            self.render_collapsed_group(group.head, &visible, cx)
+                .into_any_element()
+        } else {
+            let mut row = div().h_flex().items_center().gap_1();
+            for id in &visible {
+                row = row.child(self.render_toolbar_item(*id, cx));
+            }
+            row.into_any_element()
+        }
+    }
+
+    /// 【T2c-5】渲染一个单项（目录 [`crate::toolbar::ToolbarItemId`]；动作统一走
+    /// [`Self::run_toolbar_item_action`]——渲染只按 id 挂事件，动作语义集中在那一处）
+    fn render_toolbar_item(
+        &self,
+        id: crate::toolbar::ToolbarItemId,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        match id {
+            crate::toolbar::ToolbarItemId::ExecRun => self.render_exec_run_button(cx).into_any_element(),
+            crate::toolbar::ToolbarItemId::ExecAll => {
+                self.render_exec_all_button(cx).into_any_element()
+            }
+            crate::toolbar::ToolbarItemId::ExecCurrent => self
+                .render_exec_kind_button(id, ExecMenuKind::CurrentStatement, cx)
+                .into_any_element(),
+            crate::toolbar::ToolbarItemId::ExecSelection => self
+                .render_exec_kind_button(id, ExecMenuKind::Selection, cx)
+                .into_any_element(),
+            crate::toolbar::ToolbarItemId::ExecBatch => self
+                .render_exec_kind_button(id, ExecMenuKind::Batch, cx)
+                .into_any_element(),
+            crate::toolbar::ToolbarItemId::Format => {
+                self.render_format_button(cx).into_any_element()
+            }
+            crate::toolbar::ToolbarItemId::More => self.render_more_group(cx).into_any_element(),
+        }
+    }
+
+    /// 【T2c-5】执行主按钮：与 `Ctrl+Enter` 走同一条路（选区优先 → 当前语句）
+    fn render_exec_run_button(&self, cx: &mut Context<Self>) -> Button {
         let entity = cx.entity();
-        let run_entity = cx.entity();
+        Button::new("editor-exec-run")
+            .primary()
+            .small()
+            .debug_selector(|| "editor-exec-run".to_string())
+            .label("执行")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.execute_preferring_selection(cx));
+            })
+    }
+
+    /// 【T2c-5】全部运行：与 `Ctrl+Shift+Enter` 同一条路（整篇脚本）
+    fn render_exec_all_button(&self, cx: &mut Context<Self>) -> Button {
+        let entity = cx.entity();
+        Button::new("editor-exec-all")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-exec-all".to_string())
+            .label("全部运行")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.run_all(cx));
+            })
+    }
+
+    /// 【T2c-5】执行族的显式目标按钮（当前语句 / 选区 / 批量）：`target_for_menu` 解析，
+    /// 与旧下拉菜单的**显式目标**语义一致——“执行选区”没选区时置灰、“批量执行”语句不足
+    /// 两条时置灰，比“点了没反应”明确。
+    fn render_exec_kind_button(
+        &self,
+        id: crate::toolbar::ToolbarItemId,
+        kind: ExecMenuKind,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        let entity = cx.entity();
         let (_, selection) = self.editor_snapshot(cx);
         let statements = self.statements;
-
-        DropdownButton::new("editor-exec")
+        let available = kind.is_available(&selection, statements);
+        let selector = match id {
+            crate::toolbar::ToolbarItemId::ExecCurrent => "editor-exec-current",
+            crate::toolbar::ToolbarItemId::ExecSelection => "editor-exec-selection",
+            crate::toolbar::ToolbarItemId::ExecBatch => "editor-exec-batch",
+            _ => unreachable!("执行族显式目标按钮只有这三种"),
+        };
+        Button::new(selector)
+            .ghost()
             .small()
-            .button(
-                Button::new("editor-exec-run")
-                    .primary()
-                    .small()
-                    .debug_selector(|| "editor-exec-run".to_string())
-                    .label("执行")
-                    .on_click(move |_, _window, app| {
-                        run_entity.update(app, |panel, cx| {
-                            panel.execute_preferring_selection(cx);
-                        });
-                    }),
-            )
+            .debug_selector(move || selector.to_string())
+            .label(id.label())
+            .disabled(!available)
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.execute_menu_kind(kind, cx));
+            })
+    }
+
+    /// 【T2c-5】折叠组：首组件 + ▾，▾ 收纳组内其余可见成员
+    ///
+    /// ▾ 菜单只收执行族（`Exec*`）：格式化要 `&mut Window` 而菜单回调拿不到可靠的窗口，
+    /// ⋯更多本身是嵌套菜单——两都放不进折叠菜单。执行族动作都不需要窗口，收进来没问题。
+    ///
+    /// 组头（`head`）必须是可 `Button` 化的项；`⋯ 更多` 由 [`Self::render_toolbar_group`]
+    /// 提前退化为展开，到不了这里。
+    fn render_collapsed_group(
+        &self,
+        head: crate::toolbar::ToolbarItemId,
+        visible: &[crate::toolbar::ToolbarItemId],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use crate::toolbar::ToolbarItemId;
+        let entity = cx.entity();
+        let (_, selection) = self.editor_snapshot(cx);
+        let statements = self.statements;
+        // ElementId 用业务键（组头）不用下标：折叠多组时也互不冲突
+        let key = format!("editor-toolbar-{:?}", head);
+        let head_button: Button = match head {
+            ToolbarItemId::ExecRun => self.render_exec_run_button(cx),
+            ToolbarItemId::ExecAll => self.render_exec_all_button(cx),
+            ToolbarItemId::ExecCurrent => {
+                self.render_exec_kind_button(head, ExecMenuKind::CurrentStatement, cx)
+            }
+            ToolbarItemId::ExecSelection => {
+                self.render_exec_kind_button(head, ExecMenuKind::Selection, cx)
+            }
+            ToolbarItemId::ExecBatch => self.render_exec_kind_button(head, ExecMenuKind::Batch, cx),
+            ToolbarItemId::Format => self.render_format_button(cx),
+            ToolbarItemId::More => unreachable!("⋯ 更多 不能作折叠组头（已在 render_toolbar_group 退化）"),
+        };
+        let menu_items: Vec<ToolbarItemId> = visible
+            .iter()
+            .copied()
+            .filter(|id| {
+                *id != head
+                    && matches!(
+                        *id,
+                        ToolbarItemId::ExecRun
+                            | ToolbarItemId::ExecAll
+                            | ToolbarItemId::ExecCurrent
+                            | ToolbarItemId::ExecSelection
+                            | ToolbarItemId::ExecBatch
+                    )
+            })
+            .collect();
+        DropdownButton::new(key)
+            .small()
+            .button(head_button)
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
-                for kind in ExecMenuKind::ALL {
+                for id in menu_items.iter() {
                     let entity = entity.clone();
+                    let kind = match id {
+                        ToolbarItemId::ExecRun => ExecMenuKind::All,
+                        ToolbarItemId::ExecAll => ExecMenuKind::All,
+                        ToolbarItemId::ExecCurrent => ExecMenuKind::CurrentStatement,
+                        ToolbarItemId::ExecSelection => ExecMenuKind::Selection,
+                        ToolbarItemId::ExecBatch => ExecMenuKind::Batch,
+                        _ => unreachable!("折叠菜单只收执行族"),
+                    };
                     let available = kind.is_available(&selection, statements);
+                    let id = *id;
                     menu = menu.item(
-                        PopupMenuItem::new(kind.label())
+                        PopupMenuItem::new(id.label())
                             .disabled(!available)
-                            .on_click(move |_, _window, app| {
+                            .on_click(move |_, window, app| {
                                 entity.update(app, |panel, cx| {
-                                    let (text, selection) = panel.editor_snapshot(cx);
-                                    let target = execution::target_for_menu(kind, &text, selection);
-                                    panel.execute(target, kind.placement(), cx);
+                                    panel.run_toolbar_item_action(id, window, cx);
                                 });
                             }),
                     );
@@ -1738,7 +1896,7 @@ impl EditorHostPanel {
     }
 
     /// 【B10】文档级：格式化按钮（原型 §2.2 的「⇤ 格式化」，紧随执行级）
-    fn render_format_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_format_button(&self, cx: &mut Context<Self>) -> Button {
         let entity = cx.entity();
         Button::new("editor-format")
             .ghost()
@@ -1822,6 +1980,277 @@ impl EditorHostPanel {
                         }
                     })
                 })
+            })
+    }
+
+    /// 【T2c-5】`···` 定制按钮 + 三栏设置面板（可见性 / 折叠 / 移动 / 竖线分隔符 / 重置）
+    ///
+    /// 为什么用 `Popover` 而不是 `DropdownMenu`：菜单实体是**缓存**的，切换可见性后内容会
+    /// 陈旧；`Popover::content` 的闭包**每帧重建**，能实时反映面板状态。面板不是菜单——
+    /// 它是「图标功能｜可见｜移动」三栏的设置视图，用 `Checkbox` / `Switch` / `Button` /
+    /// `Separator` 现成组件拼装（组件禁手搓）。
+    ///
+    /// 面板分四段：标题 → 组头行（组名 + 折叠开关 + 组移动↑↓）→ 成员行（图标+标签｜
+    /// 可见 ▢｜单项移动↑↓）→ 段尾分隔符行（┃ 竖线分隔符 + ✕）→ 底部（＋添加竖线分隔符｜
+    /// ↺ 重置默认）。所有动作走面板方法（事件路径），render 只按 id 挂回调。
+    fn render_toolbar_customize(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::toolbar::MoveDir;
+        let entity = cx.entity();
+        let panel_width = rems(ui::TOOLBAR_CUSTOMIZE_WIDTH);
+        Popover::new("editor-toolbar-customize-popover")
+            // 最右的按钮：面板向右下展开，避免被窗口右缘截断
+            .anchor(Anchor::BottomRight)
+            .offset(ui::TOOLBAR_CUSTOMIZE_OFFSET)
+            .trigger(
+                Button::new("editor-toolbar-customize")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-toolbar-customize".to_string())
+                    .icon(IconName::Ellipsis)
+                    .tooltip("自定义工具栏"),
+            )
+            .content(move |_state, _window, cx| {
+                let muted = cx.theme().colors.muted_foreground;
+                let panel = entity.read(cx);
+                let layout = &panel.toolbar;
+                let groups = layout.groups();
+
+                let mut body = div()
+                    .v_flex()
+                    .gap_1()
+                    .p_2()
+                    .w(panel_width)
+                    .debug_selector(|| "editor-toolbar-customize-panel".to_string());
+                body = body.child(
+                    div()
+                        .px_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("自定义工具栏"),
+                );
+                body = body.child(Separator::horizontal());
+                // 竖线分隔符位置快照：分离出来，避免 `'static` 闭包借用临时值
+                let separator_positions = layout.separator_positions();
+
+                for group in &groups {
+                    // 组头行：组名 + 折叠开关 + 组移动↑↓
+                    let head = group.head;
+                    let collapsed = layout.is_collapsed(head);
+                    let can_move_left = head != group_of_first(&groups);
+                    let can_move_right = head != group_of_last(&groups);
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .debug_selector(move || {
+                                format!("editor-toolbar-customize-group-{:?}", head)
+                            })
+                            .child(panel.item_icon_row(head, cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(head.label()),
+                            )
+                            .child(Switch::new(format!("toolbar-fold-{:?}", head))
+                                .checked(collapsed)
+                                .label("折叠")
+                                .on_click({
+                                    let entity = entity.clone();
+                                    move |_, _window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.toggle_toolbar_collapsed(head, cx);
+                                        });
+                                    }
+                                }))
+                            .child(panel.small_icon_button(
+                                &entity,
+                                format!("toolbar-group-up-{:?}", head),
+                                IconName::ChevronUp,
+                                can_move_left,
+                                move |panel, cx| panel.move_toolbar_group(head, MoveDir::Left, cx),
+                            ))
+                            .child(panel.small_icon_button(
+                                &entity,
+                                format!("toolbar-group-down-{:?}", head),
+                                IconName::ChevronDown,
+                                can_move_right,
+                                move |panel, cx| panel.move_toolbar_group(head, MoveDir::Right, cx),
+                            )),
+                    );
+                    // 成员行：图标+标签｜可见 ▢｜单项移动↑↓
+                    for id in &group.items {
+                        let id = *id;
+                        let visible = layout.is_visible(id);
+                        let fixed = id.fixed_visible();
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .pl_3()
+                                .debug_selector(move || {
+                                    format!("editor-toolbar-customize-item-{:?}", id)
+                                })
+                                .child(panel.item_icon_row(id, cx))
+                                .child(div().flex_1().text_xs().child(id.label()))
+                                .child(
+                                    Checkbox::new(format!("toolbar-vis-{:?}", id))
+                                        .checked(visible)
+                                        .disabled(fixed)
+                                        .on_click({
+                                            let entity = entity.clone();
+                                            move |&on, _window, app| {
+                                                entity.update(app, |panel, cx| {
+                                                    panel.set_toolbar_visible(id, on, cx);
+                                                });
+                                            }
+                                        }),
+                                )
+                                .child(panel.small_icon_button(
+                                    &entity,
+                                    format!("toolbar-item-up-{:?}", id),
+                                    IconName::ChevronUp,
+                                    true,
+                                    move |panel, cx| panel.move_toolbar_item(id, MoveDir::Left, cx),
+                                ))
+                                .child(panel.small_icon_button(
+                                    &entity,
+                                    format!("toolbar-item-down-{:?}", id),
+                                    IconName::ChevronDown,
+                                    true,
+                                    move |panel, cx| {
+                                        panel.move_toolbar_item(id, MoveDir::Right, cx)
+                                    },
+                                )),
+                        );
+                    }
+                }
+
+                // 段尾分隔符行：每条竖线分隔符一个「┃ 竖线分隔符 + ✕」
+                for (index, pos) in separator_positions.iter().enumerate() {
+                    let key = format!("toolbar-sep-{index}");
+                    let pos = *pos;
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .pl_3()
+                            .debug_selector(move || key.clone())
+                            .child(Separator::vertical().h(rems(0.75)))
+                            .child(div().flex_1().text_xs().text_color(muted).child("竖线分隔符"))
+                            .child(panel.small_icon_button(
+                                &entity,
+                                format!("toolbar-sep-up-{index}"),
+                                IconName::ChevronUp,
+                                true,
+                                move |panel, cx| {
+                                    panel.move_toolbar_separator(pos, MoveDir::Left, cx)
+                                },
+                            ))
+                            .child(panel.small_icon_button(
+                                &entity,
+                                format!("toolbar-sep-down-{index}"),
+                                IconName::ChevronDown,
+                                true,
+                                move |panel, cx| {
+                                    panel.move_toolbar_separator(pos, MoveDir::Right, cx)
+                                },
+                            ))
+                            .child(panel.small_icon_button(
+                                &entity,
+                                format!("toolbar-sep-remove-{index}"),
+                                IconName::X,
+                                true,
+                                move |panel, cx| panel.remove_toolbar_separator(pos, cx),
+                            )),
+                    );
+                }
+
+                body = body.child(Separator::horizontal());
+                // 底部：＋添加竖线分隔符｜↺ 重置默认
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            Button::new("editor-toolbar-customize-add-sep")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("添加竖线分隔符")
+                                .on_click({
+                                    let entity = entity.clone();
+                                    move |_, _window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.insert_toolbar_separator(cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("editor-toolbar-customize-reset")
+                                .ghost()
+                                .small()
+                                .icon(IconName::RotateCcw)
+                                .label("重置默认")
+                                .on_click({
+                                    let entity = entity.clone();
+                                    move |_, _window, app| {
+                                        entity.update(app, |panel, cx| panel.reset_toolbar(cx));
+                                    }
+                                }),
+                        ),
+                );
+                body
+            })
+    }
+
+    /// 【T2c-5】面板成员行的最左列：功能图标（挂 `editor-toolbar-customize-icon-*` 选择器）
+    ///
+    /// 从 Popover content 闭包里调：那儿的 `cx` 是 `Context<PopoverState>`，所以只收 `&App`
+    /// 取主题色，不做任何面板状态的读写（状态由 content 闭包在外层 `entity.read` 统一读）。
+    fn item_icon_row(
+        &self,
+        id: crate::toolbar::ToolbarItemId,
+        cx: &gpui_kit::App,
+    ) -> impl IntoElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let key = format!("editor-toolbar-customize-icon-{:?}", id);
+        div()
+            .w_4()
+            .h_flex()
+            .items_center()
+            .justify_center()
+            .debug_selector(move || key.clone())
+            .child(Icon::new(id.icon()).text_color(muted))
+    }
+
+    /// 【T2c-5】面板里的小图标按钮（↑↓ / ✕ 用；统一 ghost + small + 图标）
+    ///
+    /// 为什么显式传 `entity` 而不是 `cx.entity()`：Popover content 闭包里的 `cx` 是
+    /// `Context<PopoverState>`，拿不到面板实体——由调用方把捕获的 `entity` 传进来，
+    /// 动作统一 `entity.update` 转交面板方法。
+    fn small_icon_button(
+        &self,
+        entity: &Entity<Self>,
+        id: impl Into<gpui_kit::ElementId>,
+        icon: IconName,
+        enabled: bool,
+        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+    ) -> Button {
+        let entity = entity.clone();
+        Button::new(id)
+            .ghost()
+            .small()
+            .icon(icon)
+            .disabled(!enabled)
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| action(panel, cx));
             })
     }
 
@@ -2006,6 +2435,116 @@ impl EditorHostPanel {
             });
         }
         self.set_message(Some(format!("已插入模板「{name}」")), cx);
+    }
+
+    /// 【T2c-5】工具栏单项动作的统一分发（渲染只按 id 挂事件，语义集中在这里）
+    ///
+    /// 折叠 ▾ 菜单点击项也走这里（执行族）。`More` 是嵌套菜单本身、不参与折叠菜单，
+    /// 这里兜底空转（不会真被调到——`render_collapsed_group` 已把它过滤掉）。
+    /// 格式化的 `&mut Window` 从事件回调（按钮 / 菜单项都带窗口）透传进来。
+    pub(crate) fn run_toolbar_item_action(
+        &mut self,
+        id: crate::toolbar::ToolbarItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::toolbar::ToolbarItemId;
+        match id {
+            ToolbarItemId::ExecRun => self.execute_preferring_selection(cx),
+            ToolbarItemId::ExecAll => self.run_all(cx),
+            ToolbarItemId::ExecCurrent => self.execute_menu_kind(ExecMenuKind::CurrentStatement, cx),
+            ToolbarItemId::ExecSelection => self.execute_menu_kind(ExecMenuKind::Selection, cx),
+            ToolbarItemId::ExecBatch => self.execute_menu_kind(ExecMenuKind::Batch, cx),
+            ToolbarItemId::Format => self.format_document(window, cx),
+            ToolbarItemId::More => {}
+        }
+    }
+
+    /// 【T2c-5】按显式菜单目标执行（`target_for_menu`；工具栏显式目标按钮与折叠 ▾ 菜单共用）
+    pub(crate) fn execute_menu_kind(&mut self, kind: ExecMenuKind, cx: &mut Context<Self>) {
+        let (text, selection) = self.editor_snapshot(cx);
+        let target = execution::target_for_menu(kind, &text, selection);
+        self.execute(target, kind.placement(), cx);
+    }
+
+    /// 【T2c-5】面板：切换某项可见性（`fixed_visible` 项不可隐藏，面板上 Checkbox 置灰）
+    ///
+    /// 返回是否真的变了（测试断言「不可隐藏」用）。
+    pub(crate) fn set_toolbar_visible(
+        &mut self,
+        id: crate::toolbar::ToolbarItemId,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self.toolbar.set_visible(id, on);
+        cx.notify();
+        changed
+    }
+
+    /// 【T2c-5】面板：单项移动（可跨组；跨过分隔符自然形成新组）
+    pub(crate) fn move_toolbar_item(
+        &mut self,
+        id: crate::toolbar::ToolbarItemId,
+        dir: crate::toolbar::MoveDir,
+        cx: &mut Context<Self>,
+    ) {
+        self.toolbar.move_item(id, dir);
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：整组移动（含段尾分隔符；`false` = 已在边缘）
+    pub(crate) fn move_toolbar_group(
+        &mut self,
+        head: crate::toolbar::ToolbarItemId,
+        dir: crate::toolbar::MoveDir,
+        cx: &mut Context<Self>,
+    ) {
+        self.toolbar.move_group(head, dir);
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：切换某组折叠（折叠 = 只显示首组件 + ▾）
+    pub(crate) fn toggle_toolbar_collapsed(
+        &mut self,
+        head: crate::toolbar::ToolbarItemId,
+        cx: &mut Context<Self>,
+    ) {
+        self.toolbar.toggle_collapsed(head);
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：在左区末尾加一条竖线分隔符
+    pub(crate) fn insert_toolbar_separator(&mut self, cx: &mut Context<Self>) {
+        self.toolbar.insert_separator();
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：移除某条竖线分隔符
+    pub(crate) fn remove_toolbar_separator(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.toolbar.remove_separator(index);
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：移动某条竖线分隔符（跨过一项即改变组边界）
+    pub(crate) fn move_toolbar_separator(
+        &mut self,
+        index: usize,
+        dir: crate::toolbar::MoveDir,
+        cx: &mut Context<Self>,
+    ) {
+        self.toolbar.move_separator(index, dir);
+        cx.notify();
+    }
+
+    /// 【T2c-5】面板：重置默认（清折叠 / 可见性回默认 / 删新增分隔符）
+    pub(crate) fn reset_toolbar(&mut self, cx: &mut Context<Self>) {
+        self.toolbar.reset();
+        cx.notify();
+    }
+
+    /// 【T2c-5】测试访问器：当前工具栏布局快照（断言折叠 / 可见性 / 顺序）
+    pub fn toolbar_layout_for_test(&self) -> crate::toolbar::ToolbarLayout {
+        self.toolbar.clone()
     }
 
     /// `Ctrl+/`：行注释开关
@@ -3828,6 +4367,16 @@ impl EditorHostPanel {
 }
 
 impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
+
+/// 【T2c-5】第一个组的组头（组移动↑↓ 的左边缘判定）
+fn group_of_first(groups: &[crate::toolbar::ToolbarGroup]) -> crate::toolbar::ToolbarItemId {
+    groups.first().map(|g| g.head).unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
+}
+
+/// 【T2c-5】最后一个组的组头（组移动↑↓ 的右边缘判定）
+fn group_of_last(groups: &[crate::toolbar::ToolbarGroup]) -> crate::toolbar::ToolbarItemId {
+    groups.last().map(|g| g.head).unwrap_or(crate::toolbar::ToolbarItemId::ExecRun)
+}
 
 /// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
 /// 【T2a-2】结果集的行标识探测：从结果 SQL 猜表名 → 宿主导航缓存查主键列（内存读）

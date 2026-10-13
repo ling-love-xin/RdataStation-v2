@@ -90,3 +90,10 @@ pub const RESULT_HEADER_TYPE_FONT_SIZE: f32 = 0.6875;
 ///
 /// 拖拽不许把它压得比这更小——再小就只剩一条工具栏，看不出自己看的是哪份结果。
 pub const RESULT_MIN_HEIGHT: f32 = 7.0;
+
+/// 【T2c-5】工具栏自定义面板宽（20rem = 320px）：三栏（图标｜可见｜移动）+ 组头行
+/// 能放下“执行当前语句”这种最长的成员名；再窄就要挤掉可见性开关了。
+pub const TOOLBAR_CUSTOMIZE_WIDTH: f32 = 20.0;
+
+/// 【T2c-5】工具栏自定义面板与触发按钮的间距（4px；结构尺寸进常量表，视图不写裸 px）
+pub const TOOLBAR_CUSTOMIZE_OFFSET: Pixels = px(4.);

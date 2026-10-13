@@ -128,6 +128,7 @@ pub mod shared;
 /// 【T1.6】联邦源清单（「源清单 ▾」浮层的数据侧与纯函数模型）
 pub mod sources;
 pub mod store;
+pub mod toolbar;
 pub mod translate;
 pub mod ui;
 pub mod view;

@@ -1,11 +1,11 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 已完成 T2c-1~4**（通道面包屑 / 方言段 / 英文微标 / 重设菜单，2026-10-12，rds-editor 488 passed）；剩余 **T2c-5 工具栏分组自定义**与 **T2c-6 面板持久化**（含 schema 绑定与缩进跨会话持久化），之后按 2b → 2d 推进。
+> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 已完成 T2c-1~5**（通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义，2026-10-13，rds-editor 505 passed）；剩余 **T2c-6 面板持久化**（含 schema 绑定与缩进跨会话持久化），之后按 2b → 2d 推进。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
 > 基线（代码现状，2026-10-11 核实，2a/2c 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
 > - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 482 passed / rds-workbench lib 134 / 集成测试除环境占用项外全绿）
-> - Phase 2c（壳收口）**进行中**：T2c-1~4 已完成（rds-editor 488 / rds-workbench 134 测绿）；T2c-5（工具栏分组自定义）、T2c-6（面板持久化）未做
+> - Phase 2c（壳收口）**进行中**：T2c-1~5 已完成（rds-editor 505 / rds-workbench 134 测绿）；T2c-6（面板持久化）未做
 > - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
 > - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
@@ -117,7 +117,7 @@
 - [x] **T2c-2 方言段**：从连接 `db_type` 解析（`editor_connections` 已有）→ 状态栏「方言 PostgreSQL」；未绑定连接不摆（真实值原则）。✅ 2026-10-12 完成（`connection.rs::dialect_label` 纯函数——已知驱动映射产品名、未知驱动原样；`StatusInputs/StatusLabels.dialect` 独立段，渲染在连接段（面包屑/文本）之后、正文之前；host 从绑定连接 db_type 解析——未绑定不摆）
 - [x] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。✅ 2026-10-12 完成（见下「T2c-3 完成记录」）
 - [x] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。✅ 2026-10-12 完成（见下「T2c-4 完成记录」）
-- [ ] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。
+- [x] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。✅ 2026-10-13 完成（见下「T2c-5 完成记录」）
 - [ ] **T2c-6 面板持久化**：自定义布局（顺序/可见性/分组）随会话持久化；重置默认清除（恢复"执行 + 全部运行"两按钮布局）。
 
 ### 验收标准
@@ -148,6 +148,15 @@
 - **落点**：`service.rs`（`Document.tab_size: usize`（默认 2）+ `hard_tabs: bool`（默认 false）+ 访问器 + `set_document_tab_size`/`set_document_hard_tabs`（真变判定）+ `document_tab_size`/`document_hard_tabs` 服务查询）+ `shared.rs`（`document_tab_size`/`set_document_tab_size`/`document_hard_tabs`/`set_document_hard_tabs` 转发）+ `view/widgets/status_bar.rs`（`StatusInputs.hard_tabs` + 微标 `Sp {n}` / `Tab` + `StatusControls.reset_menu` 位（edit_mode 后、右段文本前））+ `view/host.rs`（`set_tab_size(size, cx)` 双写文档+内核、`set_hard_tabs(hard, cx)` 双写；重设菜单 `DropdownButton::new("editor-reset-menu")` 三组（分隔 + disabled 组头）：编码（UTF-8 checked + UTF-8(BOM)/GBK disabled）、换行（LF checked + CRLF disabled）、缩进（空格: 2/4/8 按当前态 checked、制表符 checked 按 hard_tabs）——每项闭包先 `let entity = entity.clone()`（链式 move 借用修复 E0382）。
 - **测试**：rds-editor **488 passed**（+service `indent_reset_tracks_width_and_hard_tabs_separately`（宽度/制表符独立存储、同值重设未变、ghost 文档回退默认）+ 窗口 `indent_reset_changes_document_and_renders`（直调 set_tab_size(4)/set_hard_tabs(true) → shared 真变 + 内核调用不 panic））；rds-workbench lib **134**、ui_contract **8**。
 - **T2c-4 遗留**：编码/换行重设**内核不支持**（文本模型统一 UTF-8 + `\n`）——菜单已置灰标注，真转换需外层转换层（读写文件时按目标编码/换行编解码），排 2b/文件 IO 层；缩进文档状态**随会话持久化未落**（T2c-6 面板持久化一起）。
+
+### T2c-5 完成记录（2026-10-13，工具栏分组自定义已接线并测绿）
+- **模型（新 `toolbar.rs`，纯函数 + 12 单测）**：`ToolbarItemId`（执行族五成员 + 格式化 + ⋯更多；`ALL` 目录、`label`/`icon`/`visible_by_default`/`fixed_visible`）——**右对齐簇（通道/连接）与模式指示器不进模型**（原型 ⑯：模式指示器固定最左；右对齐语义稳定，T2c-6 随会话持久化时再放开）；`ToolbarLayout { left: Vec<ToolbarSlot::Item|Separator>, folded }`；组 = 分隔符界定的连续段（分隔符归前一段尾，`groups()` 投影）；纯函数：`default_layout`（执行簇五成员 + 格式化 + ⋯更多，三段间两条分隔符；执行簇默认只显示「执行 + 全部运行」）、`is_visible`/`set_visible`（`fixed_visible` 不可隐藏）、`toggle_collapsed`（按组头）、`move_item`（可跨组）、`move_group`（整段摘出插到相邻组外侧）、`insert_separator`/`remove_separator`/`move_separator`（跨过一项即改变组边界）、`separator_positions`/`has_extra_separator`（>2 即用户新增）、`reset`。
+- **接线（host.rs）**：`render_toolbar` 重写——模式指示器固定最左 → 组循环（`render_toolbar_group`：折叠组 = 首组件 + ▾（`DropdownButton`，▾ 收纳组内其余可见成员，只收执行族——格式化要窗口、⋯更多是嵌套菜单，两都放不进折叠菜单）；展开组逐可见项）→ `ml_auto` 右对齐簇（通道 + 连接，不变）→ 最右 `···` 定制按钮（`Popover`——菜单实体缓存会让面板状态陈旧，`Popover::content` 每帧重建）；`render_toolbar_item` 按 id 分派到 `render_exec_run_button`（`editor-exec-run`）/`render_exec_all_button`（`editor-exec-all`）/`render_exec_kind_button`（`editor-exec-current/selection/batch`，`target_for_menu` 显式目标，无选区/语句不足置灰）/`render_format_button`/`render_more_group`；动作语义集中在 `run_toolbar_item_action(id, window, cx)`（执行族 → `execute_menu_kind`/`run_all`/`execute_preferring_selection`；格式化 → `format_document`）。
+- **定制面板（`render_toolbar_customize`）**：`Popover::new("editor-toolbar-customize-popover").anchor(Anchor::BottomRight)`；四段——标题、组头行（组名 + 折叠 `Switch` + 组移动↑↓，`small_icon_button` 统一 ghost 图标按钮）、成员行（图标 + 标签｜可见 `Checkbox`（`fixed_visible` 置灰）｜单项移动↑↓）、段尾分隔符行（┃ 竖线分隔符｜↑↓ 移动｜✕ 移除）、底部（＋添加竖线分隔符｜↺ 重置默认）；所有动作走面板方法（`set_toolbar_visible`/`move_toolbar_item`/`move_toolbar_group`/`toggle_toolbar_collapsed`/`insert_toolbar_separator`/`move_toolbar_separator`/`remove_toolbar_separator`/`reset_toolbar`，每个内部 `toolbar.xxx()` + `cx.notify()`）；`small_icon_button`/`item_icon_row` 收 `&App` + 显式 `entity`（Popover content 闭包的 `cx` 是 `Context<PopoverState>`，拿不到面板实体）。
+- **结构尺寸**：`ui.rs` 加 `TOOLBAR_CUSTOMIZE_WIDTH`（20rem）/`TOOLBAR_CUSTOMIZE_OFFSET`（4px，Pixels 常量——ui_contract 禁裸 `px`）。
+- **测试**：toolbar.rs 12 单测 + tests.rs 6 窗口用例（默认两按钮布局 / 折叠↔展开 / 单项跨组移动 / 整组交换 / 插分隔符 + 重置 / `fixed_visible` 不可隐藏）——全走「渲染断言 + 直调面板方法」纪律；rds-editor **505 passed**（488 + 17 新）、ui_contract **8**。
+- **顺手修（模型 bug）**：`move_group` 原实现「删左邻单槽 + 尾插」无法真正换组（分隔符在中间时组序不变）——重写为「整段槽位摘出 + 插到相邻组外侧」（左移插到前组开头前、右移插到后组末尾后），`moving_a_group_swaps_with_its_neighbor` 从红变绿。
+- **T2c-5 遗留**：布局状态**随会话持久化未落**（T2c-6 一起：`ToolbarLayout` 序列化进 `SavedSession`）；折叠 ▾ 菜单只收执行族（格式化/⋯更多 在折叠态不可达，用户可展开或移出该组）。
 
 ### 涉及文件
 `editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, session.rs(面包屑绑定持久化), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口)}` + `app/src/main.rs`（行|列切换命令注册）。
@@ -211,5 +220,5 @@
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | 本轮不做，菜单置灰+标注；另立事项 | 避免假按钮 |
-| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-12）**：2a（T2a-1~7）与 2c 的 T2c-1~4 已完成 → 下一项 **T2c-5**（工具栏分组自定义），之后 T2c-6 → 2b → 2d | 排期 |
+| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c 的 T2c-1~5 已完成（含工具栏分组自定义）→ 下一项 **T2c-6**（面板布局持久化），之后 2b → 2d | 排期 |
 | 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |

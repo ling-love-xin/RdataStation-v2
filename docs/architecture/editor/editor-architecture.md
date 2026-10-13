@@ -704,7 +704,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | 面包屑切 schema 已真改文档绑定，但**未跨会话持久化**（`session.rs` 无 schema 字段），且切 schema **尚未影响执行**（无 `SET search_path` / 限定名注入）——排 T2c-6 与执行链接线 | `editor-impl-taskbook.md` §3 T2c-1 完成记录「未做（本轮）」 |
 | **列编辑（多光标）** | 入口已摆（状态栏行｜列切换）但**置灰**：gpui-base 0.7.1 `add_cursor_above/below` 已实现却是 `pub(super)`，外部不可达；要真做需 vendor 补丁暴露 | `editor-impl-taskbook.md` §3 T2c-3 完成记录 / §6 |
 | **编码 / 换行重设** | 内核文本模型统一 UTF-8 + `\n`，重设菜单对应项**置灰标注**；真转换需外层（读写文件时的编解码层） | `editor-impl-taskbook.md` §3 T2c-4 / §6 #4 |
-| **T2c-5 / T2c-6**：工具栏分组自定义（三栏面板 / 组折叠 / 分隔符 / 重置）· 面板布局随会话持久化 | 任务书剩余两项 | `editor-impl-taskbook.md` §3 |
+| **T2c-6 面板布局持久化** | T2c-5（工具栏分组自定义：三栏面板 / 组折叠 / 分隔符 / 重置）✅ **已落地（2026-10-13）**；布局状态**未随会话持久化**（`session.rs` 无 `ToolbarLayout` 字段）——排 T2c-6 | `editor-impl-taskbook.md` §3 |
 | **2b 通用模式**（`EditorMode::Text → General` 更名 + 环境切换 + 外部解释器脚本执行） / **2d 分析模式骨架**（Cell / Output / Session + 内联输出 + `.rdsnote`） | 均未开工；模式枚举仍叫 `Text`，`notebook.rs` 不存在 | `editor-impl-taskbook.md` §2 / §4 |
 | 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | 今天看全一个值只能靠悬停全文（原型 §2.6 已订正为 ❌） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
 | 补全：缓存未命中时**回落实时内省** | 今天未接端口时只给关键字与函数（如实，不假装有元数据） | `crates/editor/src/lib.rs` ⬜（B9 余项） |
