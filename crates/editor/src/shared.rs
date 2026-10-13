@@ -105,6 +105,8 @@ pub struct EditorShared {
     project: Rc<RefCell<Option<ProjectHandle>>>,
     /// 补全端口：宿主注入后才有（无宿主 = 只给关键字与函数，不给元数据候选）
     completion: Rc<RefCell<Option<CompletionHandle>>>,
+    /// 【2b】环境端口：宿主注入后才有（无宿主 = 环境列表为空，通用模式运行不亮）
+    env: Rc<RefCell<Option<crate::env::EnvHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -131,6 +133,7 @@ impl EditorShared {
             sources: Rc::new(RefCell::new(None)),
             project: Rc::new(RefCell::new(None)),
             completion: Rc::new(RefCell::new(None)),
+            env: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -296,6 +299,15 @@ impl EditorShared {
     /// 取走执行回执（宿主轮询调用；每个回执只交付一次）
     pub fn drain_exec_receipts(&self) -> Vec<ExecReceipt> {
         std::mem::take(&mut self.receipts.borrow_mut())
+    }
+
+    /// 【2b】脚本执行的结论（宿主轮询取走；脚本结果不是网格形状，走独立通道）
+    pub fn drain_script_notes(&self) -> Vec<crate::env::ScriptNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_script_notes())
+            .unwrap_or_default()
     }
 
     /// 中断当前执行（B3）；没在跑就回绝（理由可读，不是静默）
@@ -633,6 +645,25 @@ impl EditorShared {
     /// 注入补全端口（**宿主调用一次**：workbench 接连接级元数据缓存）
     pub fn attach_completion(&self, port: CompletionHandle) {
         *self.completion.borrow_mut() = Some(port);
+    }
+
+    /// 【2b】注入环境端口（**宿主调用一次**：workbench 接系统解释器探测）
+    pub fn attach_env(&self, port: crate::env::EnvHandle) {
+        *self.env.borrow_mut() = Some(port);
+    }
+
+    /// 【2b】可用环境列表（未接端口 = 空，如实；缺解释器 = 运行不亮）
+    pub fn envs(&self) -> Vec<crate::env::Environment> {
+        let port = self.env.borrow();
+        port.as_ref().map(|port| port.list()).unwrap_or_default()
+    }
+
+    /// 【2b】该环境是否已安装（命令可达；运行按钮据此亮/灰）
+    pub fn env_installed(&self, env_id: &str) -> bool {
+        let port = self.env.borrow();
+        port.as_ref()
+            .map(|port| port.installed(env_id))
+            .unwrap_or(false)
     }
 
     /// 是否接了补全端口（未接 = 只给关键字与函数）

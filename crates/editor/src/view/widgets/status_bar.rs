@@ -64,6 +64,8 @@ pub struct StatusInputs<'a> {
     pub dialect: Option<&'a str>,
     /// 【B13】执行通道段（`通道 源库` / `通道 本地加速（快照）`）；`None` = 不显示
     pub channel: Option<&'a str>,
+    /// 【2b】通用模式的执行环境段（`环境 Python 3.12`）；`None` = 不显示（非通用模式 / 未选）
+    pub env: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
     pub tx: Option<&'a str>,
 }
@@ -122,6 +124,11 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     body.push_str(inputs.mode.short_label());
     if inputs.mode == EditorMode::Sql {
         body.push_str(&format!(" · {} 条语句", inputs.statements));
+    }
+    // 【2b】通用模式：环境段紧跟模式（`通用 · 环境 Python 3.12`）；未选环境如实不摆
+    if let Some(env) = inputs.env {
+        body.push_str(" · ");
+        body.push_str(env);
     }
     if inputs.dirty {
         body.push_str(" · 未保存");
@@ -285,6 +292,7 @@ mod tests {
             // 方言段默认不显示（没绑定连接）；方言相关的断言在专用用例里给值
             dialect: None,
             channel: None,
+            env: None,
             tx: None,
         }
     }

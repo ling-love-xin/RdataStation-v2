@@ -45,6 +45,8 @@ pub struct Document {
     channel: crate::channel::ExecChannel,
     /// 【T2c-1】绑定的 schema（文档级属性，与连接绑定同类；`None` = 未选 → 执行用连接默认）
     schema: Option<String>,
+    /// 【2b】选中的执行环境 id（通用模式的脚本执行；`None` = 未选 → 运行不亮）
+    env: Option<String>,
     /// 【T2c-4】缩进宽度（文档级；状态栏「Sp」微标 + Tab 键缩进都走它；随会话持久化）
     tab_size: usize,
     /// 【T2c-4】缩进用制表符（`true` = Tab 缩进，状态栏显「Tab」；`false` = 空格 × tab_size）
@@ -64,6 +66,7 @@ impl Document {
         connection: Option<String>,
         channel: crate::channel::ExecChannel,
         schema: Option<String>,
+        env: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -77,6 +80,7 @@ impl Document {
             connection,
             channel,
             schema,
+            env,
             tab_size: 2,
             hard_tabs: false,
         }
@@ -125,6 +129,11 @@ impl Document {
     /// 【T2c-1】绑定的 schema（`None` = 未选 → 执行用连接默认 schema）
     pub fn schema(&self) -> Option<&str> {
         self.schema.as_deref()
+    }
+
+    /// 【2b】选中的执行环境 id（通用模式脚本执行；`None` = 未选）
+    pub fn env(&self) -> Option<&str> {
+        self.env.as_deref()
     }
 
     /// 【T2c-4】文档缩进宽度（状态栏「Sp」微标 + Tab 键缩进的权威值）
@@ -204,6 +213,8 @@ pub struct OpenRequest {
     pub channel: crate::channel::ExecChannel,
     /// 【T2c-1】绑定 schema（默认未选 → 执行用连接默认 schema）
     pub schema: Option<String>,
+    /// 【2b】选中执行环境 id（通用模式脚本执行；默认未选 → 运行不亮）
+    pub env: Option<String>,
 }
 
 impl OpenRequest {
@@ -218,6 +229,7 @@ impl OpenRequest {
             connection: None,
             channel: crate::channel::ExecChannel::default(),
             schema: None,
+            env: None,
         }
     }
 
@@ -232,6 +244,7 @@ impl OpenRequest {
             connection: None,
             channel: crate::channel::ExecChannel::default(),
             schema: None,
+            env: None,
         }
     }
 
@@ -384,6 +397,7 @@ impl EditorService {
             request.connection,
             request.channel,
             request.schema,
+            request.env,
         ));
         self.active = Some(id.clone());
 
@@ -530,6 +544,26 @@ impl EditorService {
             .iter()
             .find(|doc| doc.id() == id)
             .and_then(|doc| doc.schema().map(str::to_string))
+    }
+
+    /// 【2b】绑定 / 解绑某文档的执行环境（`None` = 未选 → 运行不亮）
+    pub fn set_env(&mut self, id: &DocumentId, env: Option<String>) -> bool {
+        match self.documents.iter_mut().find(|doc| doc.id() == id) {
+            Some(doc) => {
+                let changed = doc.env != env;
+                doc.env = env;
+                changed
+            }
+            None => false,
+        }
+    }
+
+    /// 【2b】某文档选中的执行环境（脚本执行用；`None` = 未选或文档不存在）
+    pub fn env_for(&self, id: &DocumentId) -> Option<String> {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .and_then(|doc| doc.env().map(str::to_string))
     }
 
     /// 【T2c-4】文档缩进宽度（状态栏「Sp」微标 + Tab 键缩进；默认 2）

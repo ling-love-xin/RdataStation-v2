@@ -110,6 +110,7 @@ pub mod connection;
 pub mod diagnostics;
 pub mod edit;
 pub mod editability;
+pub mod env;
 pub mod execution;
 pub mod export;
 pub mod fold;

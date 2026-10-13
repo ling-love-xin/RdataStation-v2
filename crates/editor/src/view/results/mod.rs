@@ -34,4 +34,5 @@
 
 pub mod error_card;
 pub mod grid;
+pub mod script_card;
 pub mod sets;

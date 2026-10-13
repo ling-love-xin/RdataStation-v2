@@ -54,6 +54,7 @@ use crate::view::dialogs;
 use crate::view::fold;
 use crate::view::highlight;
 use crate::view::results::error_card::{self, ErrorCard};
+use crate::view::results::script_card;
 use crate::view::results::grid::{
     self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar,
 };
@@ -178,6 +179,8 @@ pub struct EditorHostPanel {
     result_can_copy: bool,
     /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
     result_error_card: Option<ErrorCard>,
+    /// 【2b】脚本执行的输出卡片（通用模式跑完才有；`None` = 没跑过 / 已切走）
+    script_card: Option<crate::view::results::script_card::ScriptCard>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     error_site: Option<diagnostics::ErrorSite>,
     /// 【B6】上一次算过的位置是哪条结论（`(这次跑的 SQL, 错误文本)`）
@@ -561,6 +564,7 @@ impl EditorHostPanel {
             result_is_analysis: false,
             result_can_copy: false,
             result_error_card: None,
+            script_card: None,
             error_site: None,
             error_site_key: None,
             window: window.window_handle(),
@@ -1058,8 +1062,83 @@ impl EditorHostPanel {
             );
             // 最右：`···` 定制面板（与 `⋯ 更多 ▾` 并存：一个是布局自定义，一个是低频动作）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
+        } else if mode == EditorMode::General {
+            // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
+            toolbar = toolbar.child(
+                div()
+                    .ml_auto()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(self.render_env_picker(cx))
+                    .child(self.render_run_script_button(cx)),
+            );
         }
         toolbar
+    }
+
+    /// 【2b】通用模式的环境选择器（工具栏右侧）：环境名 + 版本 ▾；未接端口 / 空列表如实置灰。
+    fn render_env_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let envs = self.envs();
+        let current = self.env_for();
+        // 装没装是 EnvPort 的 `installed`（命令可达），在闭包外一次算好（闭包是 `move`）
+        let env_installed_states: std::collections::HashMap<String, bool> = envs
+            .iter()
+            .map(|env| (env.id.clone(), self.shared.env_installed(&env.id)))
+            .collect();
+        let label = match &current {
+            Some(id) => envs
+                .iter()
+                .find(|env| env.id == *id)
+                .map(|env| env.display_name())
+                .unwrap_or_else(|| format!("{id}（不在列表）")),
+            None => "选择环境 ▾".to_string(),
+        };
+        Button::new("editor-env-picker")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-env-picker".to_string())
+            .disabled(envs.is_empty())
+            .label(label)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for env in &envs {
+                    let id = env.id.clone();
+                    let entity = entity.clone();
+                    let checked = Some(id.as_str()) == current.as_deref();
+                    let installed = env_installed_states.get(env.id.as_str()).copied().unwrap_or(false);
+                    let mut item = PopupMenuItem::new(env.display_name())
+                        .checked(checked)
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.set_env(Some(id.clone()), cx);
+                            });
+                        });
+                    if !installed {
+                        item = item.disabled(true);
+                    }
+                    menu = menu.item(item);
+                }
+                menu
+            })
+    }
+
+    /// 【2b】通用模式的运行按钮：未选环境 / 环境未装 / 只读 → 置灰 + 悬停原因。
+    fn render_run_script_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let enabled = self
+            .env_for()
+            .map(|id| self.shared.env_installed(&id) && !self.editor_read_only())
+            .unwrap_or(false);
+        Button::new("editor-run-script")
+            .small()
+            .debug_selector(|| "editor-run-script".to_string())
+            .label("▶ 运行")
+            .when(!enabled, |b| b.disabled(true))
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.run_script(cx));
+            })
     }
 
     /// 【B13】执行位置选择器（工具栏右侧：原型 §2.2 的「执行位置 ▾」）
@@ -1531,6 +1610,105 @@ impl EditorHostPanel {
                 state.collapse_cursors(window, cx);
             }
         });
+    }
+
+    /// 【2b】绑定 / 解绑本文档的执行环境（`None` = 未选 → 运行不亮）
+    pub(crate) fn set_env(&mut self, env: Option<String>, cx: &mut Context<Self>) {
+        self.shared
+            .update(|service| service.set_env(&self.document, env));
+        cx.notify();
+    }
+
+    /// 【2b】本文档选中的执行环境 id（`None` = 未选）
+    pub(crate) fn env_for(&self) -> Option<String> {
+        self.shared.service().env_for(&self.document)
+    }
+
+    /// 【2b】可用环境列表（宿主注入的 EnvPort；未接端口 = 空，如实）
+    fn envs(&self) -> Vec<crate::env::Environment> {
+        self.shared.envs()
+    }
+
+    /// 【2b】运行脚本：把**当前文档内容**交给选中的环境执行（spawn + stdin + 超时 + 杀进程树
+    /// 都在执行器侧）。缺环境 / 未选中 / 没内容 / 只读都如实拒绝，不假装能跑。
+    pub(crate) fn run_script(&mut self, cx: &mut Context<Self>) {
+        let Some(env_id) = self.env_for() else {
+            self.set_message(Some("未选中执行环境——先在工具栏选一个".to_string()), cx);
+            return;
+        };
+        if !self.shared.env_installed(&env_id) {
+            self.set_message(Some("所选环境未安装（命令不可达）".to_string()), cx);
+            return;
+        }
+        if self.editor_read_only() {
+            self.set_message(Some("文档只读，不能执行脚本".to_string()), cx);
+            return;
+        }
+        let code = self.editor_text(cx);
+        if code.trim().is_empty() {
+            self.set_message(Some("文档是空的，没有可执行的脚本".to_string()), cx);
+            return;
+        }
+        let target = ExecTarget::Script(crate::env::ScriptRequest { env_id, code });
+        match self
+            .shared
+            .submit(self.document.clone(), &target, ResultPlacement::NewSet, execution::RunOptions::default())
+        {
+            Ok(()) => {
+                if self.pending == 0 {
+                    self.running_since = Some(std::time::Instant::now());
+                }
+                self.pending += 1;
+                self.set_message(None, cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(error) => self.set_message(Some(error.message().to_string()), cx),
+        }
+    }
+
+    /// 【2b】收脚本执行的结论（主线程轮询取走）：变成一张输出卡片钉在结果区
+    pub(crate) fn drain_script_notes(&mut self, cx: &mut Context<Self>) {
+        let mut mine_arrived = 0usize;
+        for note in self.shared.drain_script_notes() {
+            if note.document != self.document {
+                continue;
+            }
+            mine_arrived += 1;
+            let env_name = self
+                .envs()
+                .into_iter()
+                .find(|env| env.id == note.env_id)
+                .map(|env| env.display_name())
+                .unwrap_or_else(|| note.env_id.clone());
+            let card = match note.result {
+                Ok(outcome) => crate::view::results::script_card::ScriptCard {
+                    env_name,
+                    result: Ok(crate::view::results::script_card::ScriptOutcomeView {
+                        stdout: outcome.stdout.clone(),
+                        stderr: outcome.stderr.clone(),
+                        exit_code: outcome.exit_code,
+                        timed_out: outcome.timed_out,
+                        elapsed_ms: self
+                            .running_since
+                            .map(|s| s.elapsed().as_millis() as u64)
+                            .unwrap_or(0),
+                    }),
+                },
+                Err(reason) => crate::view::results::script_card::ScriptCard {
+                    env_name,
+                    result: Err(reason),
+                },
+            };
+            self.script_card = Some(card);
+        }
+        // 脚本回执不走 `drain_exec`（它是独立通道），所以 `pending` 在这里按本文档的份数收口
+        if mine_arrived > 0 {
+            self.pending = self.pending.saturating_sub(mine_arrived);
+            if self.pending == 0 {
+                self.running_since = None;
+            }
+        }
+        cx.notify();
     }
 
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
@@ -3171,6 +3349,13 @@ impl EditorHostPanel {
         self.result_error_card.clone()
     }
 
+    /// 【2b】脚本输出卡片（供测试断言脚本执行的结果形态；`None` = 还没有结论）
+    pub fn script_card_for_test(
+        &self,
+    ) -> Option<crate::view::results::script_card::ScriptCard> {
+        self.script_card.clone()
+    }
+
     /// 【B5】选中网格里的某一行（供测试断言状态行⑦的“已选第 N 行”；真机上点行就是这条路）
     pub fn select_grid_row_for_test(&mut self, row: usize, cx: &mut Context<Self>) {
         self.grid
@@ -3463,6 +3648,9 @@ impl EditorHostPanel {
                 Err(reason) => self.set_message(Some(format!("导出失败：{reason}")), cx),
             }
         }
+
+        // 【2b】脚本执行的结论：独立通道，先于 exec outcomes 收（脚本与 SQL 互不挤占）
+        self.drain_script_notes(cx);
 
         let outcomes = self.shared.drain_exec();
         let mut mine_arrived = 0usize;
@@ -4470,7 +4658,12 @@ impl EditorHostPanel {
 
     /// 是否要显示结果区（本文档有结果或正在执行；且模式允许通信）
     fn result_visible(&self) -> bool {
-        self.execution_allowed() && (self.pending > 0 || self.result_toolbar.is_some())
+        // 【2b】通用模式的脚本输出卡片走**独立通道**（本地进程，没有连接概念，不占
+        // `execute` 能力位）：有卡片或脚本在跑时结果区照常显示。其余模式沿用
+        // 「能执行才有结果区」（SQL / 分析模式不会出现 script_card，此分支天然互斥）。
+        let script_showing = self.script_card.is_some() || self.pending > 0;
+        (self.execution_allowed() && (self.pending > 0 || self.result_toolbar.is_some()))
+            || script_showing
     }
 
     /// 【B6】复制错误原文（错误卡片上的「复制」）：便于拿去搜索 / 报 bug
@@ -5045,6 +5238,19 @@ impl Render for EditorHostPanel {
             && self.shared.has_transactions()
             && current_channel.allows_transactions();
         let tx_text = tx_available.then(|| self.tx_text());
+        // 【2b】通用模式：环境段（环境名 + 版本；非通用 / 未选 = 不显示）。
+        // 环境只在通用模式才有语义（脚本执行目标），其它模式如实不摆。
+        let env_text = (self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General)
+            == EditorMode::General)
+        .then(|| {
+            self.env_for()
+                .and_then(|id| self.envs().into_iter().find(|env| env.id == id))
+                .map(|env| format!("环境 {}", env.display_name()))
+        });
+        // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
+        let env_owned = env_text.flatten();
         let status = StatusInputs {
             mode: self
                 .with_document(|doc| doc.mode())
@@ -5068,6 +5274,7 @@ impl Render for EditorHostPanel {
             connection: connection_text.as_deref(),
             dialect: dialect_owned.as_deref(),
             channel: channel_text.as_deref(),
+            env: env_owned.as_deref(),
             tx: tx_text.as_deref(),
         };
 
@@ -5644,6 +5851,13 @@ impl Render for EditorHostPanel {
                     cx,
                 )
                 .into_any_element()
+            });
+
+            // 【2b】脚本输出卡片：错误卡片没有时才顶上来（脚本结果也是“替掉网格”的那类卡片）
+            let card = card.or_else(|| {
+                self.script_card.clone().map(|script| {
+                    script_card::render(&script, cx).into_any_element()
+                })
             });
 
             result_grid::render(

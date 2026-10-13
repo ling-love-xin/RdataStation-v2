@@ -86,6 +86,12 @@ pub enum ExecTarget {
     /// 与另两个下发都不同：它**不碰源库**（数据是桥接过来的行），所以通道闸 / 项目只读闸
     /// 对它一律放行（那两道管的是“写源库对象”）。
     Analysis(crate::analysis::AnalysisRequest),
+    /// 【2b】通用模式的脚本执行：把代码交给**外部解释器**（环境 id + 代码；执行器负责 spawn）
+    ///
+    /// 与 `Analysis` 同款“编辑器只表达意图”口径：**进程怎么跑、超时怎么杀，都是执行器的事**
+    /// （`QueryRunner::run_script`），编辑器不猜解释器命令与平台差异（Windows 的 `taskkill /T`）。
+    /// 结果不是网格形状（stdout 文本），走独立的 `ScriptNote` 通道回主线程。
+    Script(crate::env::ScriptRequest),
     /// 【T2a】批量提交：把结果集变更集写回源库（每行一条 UPDATE，**单事务**）
     ///
     /// `updates` 是编辑器侧生成好的 UPDATE 文本（`changes::commit_updates_rows`），
@@ -114,6 +120,14 @@ impl ExecTarget {
             _ => None,
         }
     }
+
+    /// 【2b】脚本目标带的载荷（其他目标为 `None`）
+    pub fn script(&self) -> Option<&crate::env::ScriptRequest> {
+        match self {
+            Self::Script(request) => Some(request),
+            _ => None,
+        }
+    }
 }
 
 /// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
@@ -130,6 +144,8 @@ impl ExecTarget {
             | Self::SortedDown { sql, .. } => Some(sql),
             // 分析 SQL 不发给源库驱动（它在本地 DuckDB 上跑，见 `analysis`）
             Self::Analysis(_) => None,
+            // 脚本没有 SQL（走 `run_script`）
+            Self::Script(_) => None,
             // 提交不走 `run`（UPDATE 文本走 `commit_changes`），原查询只作血缘记录
             Self::Commit { .. } => None,
         }
@@ -148,6 +164,8 @@ impl ExecTarget {
             }
             // 分析 SQL 走同一条“一句一条结论”的路（它不经过通道闸，见 `analysis`）
             Self::Analysis(request) => vec![request.sql.clone()],
+            // 脚本不归 `statements`（它走 `run_script`，不数语句）
+            Self::Script(_) => Vec::new(),
             // 提交的语句由执行器按 `updates` 逐条跑，不归 `statements`（它会进 `run` 通道）
             Self::Commit { .. } => Vec::new(),
         }
@@ -197,6 +215,7 @@ impl ExecTarget {
             Self::Filtered { .. } => "下发筛选",
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
+            Self::Script(_) => "脚本执行",
             Self::Commit { .. } => "批量提交",
         }
     }
@@ -212,6 +231,7 @@ impl ExecTarget {
             Self::Filtered { .. } => "下发筛选",
             Self::SortedDown { .. } => "排序下发",
             Self::Analysis(_) => "本地分析",
+            Self::Script(_) => "脚本执行",
             // 提交是写回动作，血缘说清“这份是改回源库的结果”——与下发类同源口径
             Self::Commit { .. } => "本地写回",
             // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
@@ -648,7 +668,15 @@ pub trait QueryRunner: Send + Sync + 'static {
     ///
     /// 默认实现 = 不支持（宿主没接分析能力的真实状态，不是静默失败）。
     fn analyze(&self, _request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
-        Err("当前执行器不支持 DuckDB 分析".to_string())
+        Err("当前执行器不支持本地分析".to_string())
+    }
+
+    /// 【2b】通用模式的脚本执行：把代码交给外部解释器（spawn + stdin + 超时 + 杀进程树）
+    ///
+    /// 默认实现 = 不支持（宿主没接脚本执行能力的真实状态，不是静默失败）。
+    /// 与 [`Self::run`] 一样在**工作线程**上调用（实现里可以阻塞）。
+    fn run_script(&self, _request: &crate::env::ScriptRequest) -> Result<crate::env::ScriptOutcome, String> {
+        Err("当前执行器不支持脚本执行".to_string())
     }
 
     /// 【B7 切片二】经 DuckDB 把行落成 Parquet / XLSX（`COPY … TO …`）
@@ -689,6 +717,8 @@ struct ExecJob {
     sorted_down: Option<(String, bool)>,
     /// 【B15】本地分析的载荷；`Some` 时走 `analyze`（且**只一条**）
     analysis: Option<crate::analysis::AnalysisRequest>,
+    /// 【2b】脚本执行的载荷；`Some` 时走 `run_script`（且**只一条**，不走 statements 循环）
+    script: Option<crate::env::ScriptRequest>,
     /// 【B15】血缘摘要（回填时写到结果条目上；工具栏的来源段）
     lineage: &'static str,
 }
@@ -884,6 +914,8 @@ pub struct ExecQueue {
     export_notes: Arc<Mutex<VecDeque<ExportNote>>>,
     /// 【T2a】批量提交的回执（主线程轮询取走）
     commit_notes: Arc<Mutex<VecDeque<CommitNote>>>,
+    /// 【2b】脚本执行的结论（主线程轮询取走；与 `ExecOutcome` 分开——脚本结果不是网格形状）
+    script_notes: Arc<Mutex<VecDeque<crate::env::ScriptNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -906,12 +938,15 @@ impl ExecQueue {
         let source_notes: Arc<Mutex<VecDeque<SourceNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let export_notes: Arc<Mutex<VecDeque<ExportNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let commit_notes: Arc<Mutex<VecDeque<CommitNote>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let script_notes: Arc<Mutex<VecDeque<crate::env::ScriptNote>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
         let worker_running = running_connection.clone();
         let worker_cancelled = cancel_requested.clone();
         let worker_runner = runner.clone();
+        let worker_script_done = script_notes.clone();
         std::thread::Builder::new()
             .name("rds-editor-exec".to_string())
             // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
@@ -986,6 +1021,22 @@ impl ExecQueue {
                             });
                         }
                     }
+                    // 【2b】脚本执行：不走上面的 statements 循环（Script 的 `statements` 恒为空），
+                    // 独立跑一次 `run_script`，结论进 `script_notes`（不是网格形状的 `ExecOutcome`）。
+                    if let Some(request) = job.script.as_ref() {
+                        let result = if worker_cancelled.load(Ordering::SeqCst) {
+                            Err(CANCELED.to_string())
+                        } else {
+                            worker_runner.run_script(request)
+                        };
+                        if let Ok(mut queue) = worker_script_done.lock() {
+                            queue.push_back(crate::env::ScriptNote {
+                                document: job.document.clone(),
+                                env_id: request.env_id.clone(),
+                                result,
+                            });
+                        }
+                    }
                     *lock(&worker_running) = None;
                     worker_busy.store(false, Ordering::SeqCst);
                 }
@@ -1003,8 +1054,18 @@ impl ExecQueue {
             source_notes,
             export_notes,
             commit_notes,
+            script_notes,
             runner,
         }
+    }
+
+    /// 【2b】脚本执行的结论（主线程轮询取走；与 `ExecOutcome` 分开）
+    pub fn drain_script_notes(&self) -> Vec<crate::env::ScriptNote> {
+        let mut queue = match self.script_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
     }
 
     /// 提交一次执行（忙 / 空目标会被拒，**不排队**：排队会让"再按一次"变成隐藏的批量执行）
@@ -1023,7 +1084,7 @@ impl ExecQueue {
         channel: crate::channel::ExecChannel,
     ) -> Result<(), SubmitError> {
         let statements = target.statements();
-        if statements.is_empty() {
+        if statements.is_empty() && target.script().is_none() {
             return Err(SubmitError::Empty);
         }
         if self.is_busy() {
@@ -1059,6 +1120,8 @@ impl ExecQueue {
                     .map(|(_, column, descending)| (column.to_string(), descending)),
                 // 【B15】本地分析：载荷原样带过去（工作线程据此走 `analyze`）
                 analysis: target.analysis().cloned(),
+                // 【2b】脚本执行：载荷原样带过去（工作线程据此走 `run_script`）
+                script: target.script().cloned(),
                 // 【B15】血缘：结果回填时贴到条目上（工具栏显示“这份是怎么来的”）
                 lineage: target.lineage(),
             })
