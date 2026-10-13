@@ -84,6 +84,7 @@
 | 外部引用（添加文件或目录 / 自定义别名 / 改名 / 打开 / 移除 / 可用性探测 / **失效后重新引用**）、文件元数据（数据源绑定：读 `file_meta` + 写 `bind_connections` / `update_file_meta`） | 引用目录的展开浏览（当前只作入口；K6 待拍板） |
 | **文件监控**（`notify` 递归监听模块根 + 1.2 s 去抖重拉；启动失败降级为手动 `↻`）+ **外部改动后自动重搜**已打开的搜索结果 | — |
 | 面板侧：多选（Ctrl/Shift/Ctrl+A）、剪切/复制/粘贴、撤销栏（5s 自动消失）、右键菜单、F2/Del/Esc/↑↓/Enter/Ctrl+N、导入、打开所在位置、**脏点**（编辑器未保存修改）、只读模式禁写 | Phase D 回收站与资源删除的合并展示 |
+| 工具栏自定义（⋯ 更多设置四栏：图标功能 / 眼睛可见 / 左右切换 / `grip` 拖拽排序，`order` 持久化）+ 引用/回收站**分区拖拽调高**（分隔把手，2-18rem） | — |
 
 > 连接绑定的**回写**发生在宿主：`crates/workbench/src/services/scratchpad_meta.rs`（编辑器回执 → 只回写模块内草稿，见 `docs/architecture/scratchpad/scratchpad-architecture.md` §6.13）。
 
@@ -91,5 +92,5 @@
 
 - 设计（权威）：`docs/architecture/scratchpad/` 五件套——`README.md`（模块入口）· `scratchpad-architecture.md`（设计理念与架构 + 已知问题）· `scratchpad-prototype-design.md` + `scratchpad-prototype.html`（原型）· `scratchpad-dev-plan.md`（进度）· `scratchpad-user-guide.md`（使用手册）。
 - 对外宣传 / 新人先读：`docs/architecture/scratchpad/scratchpad-showcase.html`（视觉版：吸顶导航 + 关键数字 + 卡片排版）· `scratchpad-showcase.md`（可贴版：纯文本 + 流程图，适合 PR / wiki）。
-- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**37 项**：域逻辑 + 面板纯函数 + 后台任务）。
+- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**42 项**：域逻辑 + 面板纯函数 + 后台任务）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

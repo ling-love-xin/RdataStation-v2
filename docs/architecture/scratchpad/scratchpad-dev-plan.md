@@ -1,10 +1,62 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / 拖放待接 · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / **拖放✅（拖入编辑器插入 + 系统文件拖入导入）** / **命中跳行✅** · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
+
+### 2026-10-12（二十九次）— 更多设置四栏重构（眼睛/左右滑动/拖拽排序）+ 分区拖拽 + 搜索态细节对齐
+
+用户拍板「更多设置按四栏重构」——二十五次的 ⋯ 菜单（勾选 + 左/右位置）升级为**直接弹出调整面板**；引用/回收站分区支持拖拽调高；搜索态细节对齐：
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **更多菜单 trigger 改 `Button` + `DropdownMenu`**（去下拉箭头），点击直接弹调整面板 | `chrome.rs::render_scratchpad_header` |
+| 2 | **调整面板四栏**：图标功能 ｜ 眼睛可见（`eye`/`eye-off`）｜ 左右 `Toggle`（`panel-left`/`panel-right`）｜ `grip` 拖拽排序 | `chrome.rs` |
+| 3 | `ToolbarButtonCfg` 新增 `order` 字段持久化；`reorder_toolbar` 按当前显示序重排落盘 | `crates/settings/src/model.rs` + `actions.rs` |
+| 4 | **分区拖拽**：引用/回收站区域加拖拽分隔把手（`group_max_h`），高度可调 **2-18rem**（默认 7.5、clamp 2-18rem） | `scratchpad_view.rs`（L227）+ `chrome.rs` |
+| 5 | 搜索态 placeholder 改「搜索文件文字」，搜索框去除 3rem 占位恢复充满左对齐 | `chrome.rs` |
+| 6 | 中央搜索 tab 结果遮挡修复、切换项目自动刷新、多开搜索 tab 等前批改动一并提交 | `crates/workbench/src/panels/search_results.rs` 等 |
+
+**验证**：`cargo test -p rds-scratchpad --lib` → **42 passed**（本次无 `tests.rs` 改动，基线不变；2026-10-13 复核一致）；`cargo build -p rds-app` 成功。注：本提交混入 workbench editor 相关改动（`editor_completion.rs` +161、`editor_exec.rs` 新增、`view.rs` 等），与草稿箱无关，属同一提交内的其他工作。
+
+### 2026-10-12（二十八次）— 草稿树空白根因修复：Accordion 换 Collapsible + 高度链 + 折叠状态
+
+用户现场反馈「草稿箱有文件（badge 11）但树空白」——二十六次曾判环境性，本轮定位**代码根因**并修复：
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **根因**：折叠容器内嵌虚拟列表无高度约束——Accordion 内容区由内容驱动高度、`flex_1` 不传导，虚拟列表高度 0 → 树空白 | — |
+| 2 | 按用户方向改用 **Collapsible** 承载草稿主体，高度链修复：`drafts flex_1 → 折叠容器 flex_1 → Collapsible h_full → content flex_1` | `chrome.rs` |
+| 3 | 新增 `drafts_expanded` 折叠状态字段 + 标题行 chevron 箭头 + 点击折叠/展开 | `scratchpad_view.rs`（+3）+ `chrome.rs` |
+| 4 | 二十六次新增的两条回归测试在修复后持续通过，转为防回归护栏 | `tests.rs` |
+
+**验证**：窗口正常显示，草稿树完整渲染（文件+目录+badge+缩进+大小），底部引用/回收站/统计行正常；`cargo test -p rds-scratchpad --lib` → **42 passed**。
+
+### 2026-10-12（二十七次）— 命中数角标收口徽标胶囊原语 + 行尾动作命中区 20px
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | `tree.rs` 新增 `count_badge` 共用原语（对齐 VS Code countBadge 规格：最小 18px、`rounded_full` 胶囊、`px_1` 内距、`text_sm` 字号） | `crates/workbench_shell/src/tree.rs` |
+| 2 | 草稿树/搜索结果树两处命中数角标收口到原语 | `rows.rs` |
+| 3 | 行尾操作按钮 **18px → 20px**（`ROW_ACTION_SIZE`，1.25rem），对齐 ui-constraints §8.3 命中区下限；`ui.rs` 新增通用 `ROW_ACTION_SIZE` 常量 | `rows.rs` + `crates/workbench_shell/src/ui.rs` |
+| 4 | `ui-design-spec` §2.1 与 `ui_contract` 契约同步登记 `ROW_ACTION_SIZE` | `docs/architecture/ui/ui-design-spec.md` + `crates/workbench/tests/ui_contract.rs` |
+
+**验证**：`ui_contract` 8/8、`rds-scratchpad` **42/42**、`workbench_shell` doctests 全过。
+
+### 2026-10-12（二十六次）— 树空白排查（环境性，非代码缺陷）+ 面板层回归测试；合并分支验证
+
+2026-10-11 用户现场反馈「草稿箱有文件但树空白」（badge 11）——排查定位为**环境性**（前台进程/窗口遮挡，非代码缺陷），同时补两条**固定尺寸回归测试**，并完成分支合并验证：
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | **树空白排查回归**：注入根加载 + 文件条目 → 渲染普通视图 → 断言文件行文本 `debug_bounds` 高度 > 0（定位 Accordion 高度链可疑点，后续二十八次确认根因） | `tests.rs` |
+| 2 | **固定尺寸 Harness**：`SizedDraftsHarness`（320×860 模拟真实 LeftPanel）复现窄面板下树渲染，断言文件行可见 | `tests.rs` |
+| 3 | 新增回归测试 2 项（`drafts_accordion_tree_row_has_visible_height` / `drafts_tree_renders_in_real_panel_size`）→ 40 → **42** | `tests.rs`（+105） |
+| 4 | 合并分支验证通过；`data-paths.md` 测试数据根隔离补充、user-guide 状态同步 | `docs/architecture/runtime/data-paths.md`、`scratchpad-user-guide.md` |
+
+**验证**：`cargo test -p rds-scratchpad --lib` → **42 passed**（新增 2 条回归）；另清理 `tools/` 下一次性脚本（不入库）。
 
 ### 2026-10-11（二十五次）— 完全接线统一收口：AB 保留大小写 + ⋯ 持久化/位置切换 + settings 测试稳定
 
