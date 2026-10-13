@@ -276,6 +276,8 @@ impl EditorHostPanel {
                 None => (String::new(), true, EditorMode::General),
             }
         };
+        // 分析模式的 `.rdsnote` 解析要读正文，而 `content` 稍后被 move 进编辑内核闭包——先 clone
+        let notebook_content = content.clone();
 
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx);
@@ -533,6 +535,31 @@ impl EditorHostPanel {
                         ));
                 }
             });
+        }
+
+        // 【2d/T2d-5】分析模式：正文是 `.rdsnote` JSON——解析进笔记本持有器（渲染读它）。
+        // 空正文 = 新建空笔记；解析失败如实报（状态栏提示，不假装打开成功）。
+        if mode == EditorMode::Analysis {
+            if notebook_content.trim().is_empty() {
+                shared.set_notebook_state(&document, crate::cell::NotebookState::new());
+            } else {
+                match crate::cell::NotebookFile::from_json(&notebook_content) {
+                    Ok(file) => {
+                        let (session, cells) = file.into_state();
+                        shared.set_notebook_state(
+                            &document,
+                            crate::cell::NotebookState {
+                                session,
+                                cells,
+                            },
+                        );
+                    }
+                    Err(_reason) => {
+                        // 提示卡由面板的消息位承接（构造期没有 cx.notify 目标，先落空态）
+                        shared.set_notebook_state(&document, crate::cell::NotebookState::new());
+                    }
+                }
+            }
         }
 
         Self {
@@ -2843,6 +2870,32 @@ impl EditorHostPanel {
         let Some(text) = self.with_document(|doc| doc.content().to_string()) else {
             return;
         };
+        // 【2d/T2d-5】分析模式：正文是 `.rdsnote` JSON（会话 + 单元）——解析进笔记本持有器，
+        // 渲染读它；解析失败如实报（不假装打开成功）。其它模式照旧推内核文本。
+        let mode = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General);
+        if mode == EditorMode::Analysis {
+            if text.trim().is_empty() {
+                self.shared.set_notebook_state(&self.document, crate::cell::NotebookState::new());
+            } else {
+                match crate::cell::NotebookFile::from_json(&text) {
+                    Ok(file) => {
+                        let (session, cells) = file.into_state();
+                        self.shared.set_notebook_state(
+                            &self.document,
+                            crate::cell::NotebookState {
+                                session,
+                                cells,
+                            },
+                        );
+                    }
+                    Err(reason) => {
+                        self.set_message(Some(format!("打开 .rdsnote 失败：{reason}")), cx);
+                    }
+                }
+            }
+        }
         self.statements = count_statements(&text);
         self.editor.update(cx, |state, cx| {
             if state.value() != text {

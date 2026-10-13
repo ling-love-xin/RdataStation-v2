@@ -141,6 +141,9 @@ fn open_file_with(
 /// 保存某文档：写盘成功后清脏（**先写盘、后清脏**，写失败不留"已保存"的假状态）
 ///
 /// 返回落盘路径（未命名文档返回 [`PersistError::Untitled`]，调用方先另存为）。
+///
+/// 【2d】分析模式：正文不是内核文本，而是笔记本（会话 + 单元序列）的 JSON 序列化
+/// （`.rdsnote`，见 [`crate::cell::NotebookFile`]）；其它模式写文档正文。
 pub fn save_document(
     shared: &EditorShared,
     id: &DocumentId,
@@ -154,7 +157,7 @@ pub fn save_document(
             .path()
             .map(Path::to_path_buf)
             .ok_or_else(|| PersistError::Untitled(id.clone()))?;
-        (path, document.content().to_string())
+        (path, content_for_save(shared, id, document.mode())?)
     };
 
     write(&path, &content)?;
@@ -175,7 +178,7 @@ pub fn save_as(
         let document = service
             .find(id)
             .ok_or_else(|| PersistError::UnknownDocument(id.clone()))?;
-        document.content().to_string()
+        content_for_save(shared, id, document.mode())?
     };
 
     write(path, &content)?;
@@ -184,6 +187,29 @@ pub fn save_as(
         service.mark_saved(id);
     });
     Ok(path.to_path_buf())
+}
+
+/// 某文档要落盘的内容：分析模式 = 笔记本 JSON；其它模式 = 服务层正文
+///
+/// 序列化失败（理论上不该发生）如实转成 [`PersistError::Io`]（不假装能保存）。
+fn content_for_save(
+    shared: &EditorShared,
+    id: &DocumentId,
+    mode: EditorMode,
+) -> Result<String, PersistError> {
+    if mode == EditorMode::Analysis {
+        let state = shared.notebook_state(id);
+        let file = crate::cell::NotebookFile::from_state(&state.session, &state.cells);
+        return file.to_json().map_err(|message| PersistError::Io {
+            path: std::path::PathBuf::from(".rdsnote"),
+            message,
+        });
+    }
+    let service = shared.service();
+    let document = service
+        .find(id)
+        .ok_or_else(|| PersistError::UnknownDocument(id.clone()))?;
+    Ok(document.content().to_string())
 }
 
 #[cfg(test)]
@@ -400,6 +426,41 @@ mod tests {
         // 文件消失也算外部变化（保存会重建它，值得提示）
         std::fs::remove_file(&path).expect("删除");
         assert!(external_modified(&path, recorded));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 【2d/T2d-5】分析模式保存：正文不是内核文本，而是笔记本 JSON（会话 + 单元，输出不落盘）
+    #[test]
+    fn analysis_mode_saves_the_notebook_json() {
+        use crate::cell::{Cell, CellKind, NotebookFile};
+
+        let dir = temp_dir("nb_save");
+        let path = dir.join("note.rdsnote");
+
+        let shared = EditorShared::new();
+        let id = shared
+            .open(OpenRequest::untitled("", EditorMode::Analysis))
+            .id()
+            .clone();
+        // 塞一份带输出 / 运行过的笔记状态（输出不落盘）
+        let mut state = crate::cell::NotebookState::new();
+        let mut c1 = Cell::new("c1", CellKind::Sql, "select 1");
+        c1.mark_done(crate::cell::Output::Text("1".to_string()));
+        state.cells = vec![c1, Cell::new("c2", CellKind::Text, "# 备注")];
+        shared.set_notebook_state(&id, state);
+
+        save_as(&shared, &id, &path).expect("另存为");
+        let raw = load(&path).expect("读盘");
+        assert!(raw.contains("\"version\": 1"), "落盘的是 JSON + 版本号");
+        assert!(!raw.contains("output"), "输出不落盘");
+
+        // 从 JSON 还原：单元原样回来，输出清空
+        let file = NotebookFile::from_json(&raw).expect("还原");
+        let (_session, cells) = file.into_state();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].body, "select 1");
+        assert_eq!(cells[0].output, None, "输出不跟随文件");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

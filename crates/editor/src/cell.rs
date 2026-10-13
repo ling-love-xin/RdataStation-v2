@@ -33,7 +33,10 @@ use crate::store::ResultEntry;
 /// 单元种类
 ///
 /// 只有 SQL 单元可执行（T2d-4 验收：Text 单元 ▶ 不亮，状态栏说原因）。
+/// 持久化键与变体名对齐（serde 小写化）：`sql` / `text`（与 [`Self::as_key`] 同值，
+/// 展示文案可改、存盘的值不能）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CellKind {
     /// 可执行：跑在会话绑定的连接上（复用 1b 执行链）
     Sql,

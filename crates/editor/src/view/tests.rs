@@ -7900,3 +7900,51 @@ fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
     assert_eq!(cells[1].state, crate::cell::CellState::Idle, "文本单元不可执行");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
+
+/// 【T2d-5】打开 `.rdsnote`：正文 JSON 解析进笔记本持有器（单元回来、输出清空）
+#[gpui_kit::test]
+fn opening_an_rdsnote_populates_the_notebook(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    // 先造一份 .rdsnote 内容（与 persist 测试同一形状：会话 + 两个单元）
+    let json = r##"{
+      "version": 1,
+      "session": { "id": "default", "default_connection": null, "env": null },
+      "cells": [
+        { "id": "c1", "kind": "sql", "body": "select 1;" },
+        { "id": "c2", "kind": "text", "body": "# 备注" }
+      ]
+    }"##;
+    let dir = std::env::temp_dir().join(format!("rds_editor_rdsnote_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let path = dir.join("note.rdsnote");
+    std::fs::write(&path, json).expect("写盘");
+
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Analysis)
+        .expect("打开")
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 文档正文确为 .rdsnote JSON（服务层没丢内容）
+    let doc_content = shared.service().find(&id).map(|doc| doc.content().to_string());
+    assert!(doc_content.as_deref().unwrap_or("").contains("\"version\": 1"), "服务层要留着 JSON 正文");
+
+    // 笔记本持有器：单元按文件回来（输出 / 状态不跟随）
+    let state = cx.update(|_window, cx| panel.read(cx).notebook_state());
+    assert_eq!(state.cells.len(), 2);
+    assert_eq!(state.cells[0].id, "c1");
+    assert_eq!(state.cells[0].kind, crate::cell::CellKind::Sql);
+    assert_eq!(state.cells[0].body, "select 1;");
+    assert_eq!(state.cells[1].body, "# 备注");
+    assert!(state.cells.iter().all(|cell| cell.output.is_none()), "输出不跟随文件");
+
+    // 层真渲染：两个单元卡片都画出来了（▶ 按钮按单元 id 存在）
+    assert!(
+        cx.debug_bounds("editor-nb-run-c1").is_some() || cx.debug_bounds("editor-nb-menu-c1").is_some(),
+        "SQL 单元卡片渲染出来（按 id 找得到）"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
