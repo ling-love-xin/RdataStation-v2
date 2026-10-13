@@ -5225,6 +5225,10 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         content: "select 1;".to_string(),
         cursor: 0,
         selection: None,
+        toolbar: None,
+        schema: None,
+        tab_size: None,
+        hard_tabs: None,
     };
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
@@ -5304,6 +5308,10 @@ fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         content: "select 1;".to_string(),
         cursor: 0,
         selection: None,
+        toolbar: None,
+        schema: None,
+        tab_size: None,
+        hard_tabs: None,
     };
 
     // ① 连接还在列表里 → 绑定真的写回文档
@@ -5384,6 +5392,213 @@ fn the_session_snapshot_carries_the_connection_binding(cx: &mut TestAppContext) 
         .update(|_window, cx| panel.read(cx).session_snapshot(cx))
         .expect("有路径就该存会话");
     assert_eq!(snapshot.connection.as_deref(), Some("P_orders"));
+}
+
+/// 【T2c-6】工具栏布局随会话走：改布局 → 快照带编码串 → 恢复后原样回来
+#[gpui_kit::test]
+fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document("D:/sql/toolbar.sql", "select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 默认布局也能进快照（改动即存，不设“值得存”阈值）
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(
+        snapshot.toolbar.as_deref(),
+        Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More"),
+        "快照携带默认布局的编码串"
+    );
+
+    // 改布局：隐藏 Format、折叠执行簇、加一条分隔符、移动 More
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::Format, false, cx);
+            panel.toggle_toolbar_collapsed(crate::toolbar::ToolbarItemId::ExecRun, cx);
+            panel.insert_toolbar_separator(cx);
+            panel.move_toolbar_item(crate::toolbar::ToolbarItemId::More, crate::toolbar::MoveDir::Left, cx);
+        });
+    });
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    let code = snapshot
+        .toolbar
+        .as_deref()
+        .expect("改动后的布局要进快照")
+        .to_string();
+
+    // 新面板（模拟重启）：恢复会话 → 布局原样回来
+    let (panel2, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| {
+            panel.restore_session(&snapshot, window, cx)
+        });
+    });
+    let restored = cx
+        .update(|_window, cx| panel2.read(cx).toolbar_layout_for_test());
+    let expected = crate::toolbar::ToolbarLayout::decode(&code).expect("快照串必可解码");
+    assert_eq!(restored, expected, "恢复后布局与改动时一致");
+    assert!(
+        !restored.is_visible(crate::toolbar::ToolbarItemId::Format),
+        "隐藏的 Format 恢复后仍隐藏"
+    );
+    assert!(
+        restored.is_collapsed(crate::toolbar::ToolbarItemId::ExecRun),
+        "折叠的执行簇恢复后仍折叠"
+    );
+
+    // 旧会话没有工具栏字段（None）→ 不覆盖：保持面板默认
+    let mut legacy = crate::session::SavedSession {
+        id: "d:/sql/toolbar.sql".to_string(),
+        path: Some("D:/sql/toolbar.sql".to_string()),
+        mode: EditorMode::Sql,
+        channel: ExecChannel::Source,
+        connection: None,
+        content: "select 1;".to_string(),
+        cursor: 0,
+        selection: None,
+        toolbar: None,
+        schema: None,
+        tab_size: None,
+        hard_tabs: None,
+    };
+    let (panel3, cx) = open_panel(cx, &shared, &id);
+    legacy.toolbar = None;
+    cx.update(|window, cx| {
+        panel3.update(cx, |panel, cx| panel.restore_session(&legacy, window, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel3.read(cx).toolbar_layout_for_test()),
+        crate::toolbar::ToolbarLayout::default_layout(),
+        "旧会话没存布局 → 恢复用默认"
+    );
+}
+
+/// 【T2c-1 余项】schema 绑定随会话走：在列表里就恢复；**不在就回退连接默认并说原因**
+#[gpui_kit::test]
+fn the_schema_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let session = |schema: Option<&str>| crate::session::SavedSession {
+        id: "d:/sql/a.sql".to_string(),
+        path: Some("D:/sql/a.sql".to_string()),
+        mode: EditorMode::Sql,
+        channel: ExecChannel::Source,
+        connection: Some("P_orders".to_string()),
+        content: "select 1;".to_string(),
+        cursor: 0,
+        selection: None,
+        toolbar: None,
+        schema: schema.map(str::to_string),
+        tab_size: None,
+        hard_tabs: None,
+    };
+
+    // ① schema 在列表里 → 绑定真的写回文档
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_schemas(Rc::new(FakeSchemas(vec![SchemaInfo {
+        catalog: Some("rdb".to_string()),
+        schema: "analytics".to_string(),
+    }])));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("analytics")), window, cx)
+        });
+    });
+    assert_eq!(
+        schema_doc(&shared, &id).as_deref(),
+        Some("analytics"),
+        "重启后应该还绑着原来的 schema"
+    );
+
+    // ② schema 已被删 / 换库 → 回退未绑定 + 可读原因
+    let (shared2, id2, _seen2, _seen_conn2) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared2.attach_schemas(Rc::new(FakeSchemas(vec![SchemaInfo {
+        catalog: Some("rdb".to_string()),
+        schema: "public".to_string(),
+    }])));
+    let (panel2, cx) = open_panel(cx, &shared2, &id2);
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("analytics")), window, cx)
+        });
+    });
+    assert_eq!(
+        schema_doc(&shared2, &id2),
+        None,
+        "不存在的 schema 绑定不能留着（执行时会发错库）"
+    );
+    let message = cx
+        .update(|_window, cx| panel2.read(cx).message.clone())
+        .expect("回退要留痕");
+    assert!(message.contains("analytics"), "{message}");
+    assert!(message.contains("连接默认"), "{message}");
+
+    // ③ 没接 schema 端口 → 不校验也不丢（宁可不猜，也不抹掉用户的绑定）
+    let (shared3, id3, _seen3, _seen_conn3) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared3.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    let (panel3, cx) = open_panel(cx, &shared3, &id3);
+    cx.update(|window, cx| {
+        panel3.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("analytics")), window, cx)
+        });
+    });
+    assert_eq!(
+        schema_doc(&shared3, &id3).as_deref(),
+        Some("analytics"),
+        "没有列表可查就不该动手抹"
+    );
+}
+
+/// 【T2c-4 余项】缩进随会话走：快照带宽度与制表符，恢复后文档状态 + 内核双写
+#[gpui_kit::test]
+fn the_indent_rides_along_with_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document("D:/sql/indent.sql", "select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 默认：宽度 2、空格缩进
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(snapshot.tab_size, Some(2));
+    assert_eq!(snapshot.hard_tabs, Some(false));
+
+    // 改成 4 + 制表符
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_hard_tabs(true, cx);
+            panel.set_tab_size(4, cx);
+        });
+    });
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(snapshot.tab_size, Some(4));
+    assert_eq!(snapshot.hard_tabs, Some(true));
+
+    // 新面板（模拟重启）：恢复会话 → 缩进原样回来
+    let (panel2, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| {
+            panel.restore_session(&snapshot, window, cx)
+        });
+    });
+    assert_eq!(shared.document_tab_size(&id), 4, "文档级宽度恢复");
+    assert!(shared.document_hard_tabs(&id), "文档级制表符恢复");
+    // 双写不 panic：恢复后照常渲染（内核 set_tab_size / set_hard_tabs 走通）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 /// 【B9 切片二】保补全端口的假实现：一份目录 + 一批模板（都是内存读）

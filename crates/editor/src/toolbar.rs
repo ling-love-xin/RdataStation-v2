@@ -400,6 +400,94 @@ impl ToolbarLayout {
         *self = Self::default_layout();
     }
 
+    /// 【T2c-6】编码为稳定字符串（会话持久化用：存进 `editor_contexts` 的 TEXT 列）
+    ///
+    /// 格式（人可读、可手改）：槽位用 `,` 连接——可见项写 id、隐藏项写 `~id`、分隔符写 `|`；
+    /// 折叠的组头若不为空，追加 `;` + 逗号连接的组头列表。不依赖 serde，往返见 [`Self::decode`]。
+    pub fn encode(&self) -> String {
+        let mut out: Vec<String> = Vec::new();
+        for slot in &self.left {
+            match slot {
+                ToolbarSlot::Item { id, visible } => {
+                    let tag = if *visible { "" } else { "~" };
+                    out.push(format!("{tag}{id:?}"));
+                }
+                ToolbarSlot::Separator => out.push("|".to_string()),
+            }
+        }
+        if !self.folded.is_empty() {
+            // 折叠段直接拼接（不能当槽位 join，否则 `,;` 会把解码的槽位段尾缀空 token）
+            let heads: Vec<String> = self.folded.iter().map(|id| format!("{id:?}")).collect();
+            return format!("{};{}", out.join(","), heads.join(","));
+        }
+        out.join(",")
+    }
+
+    /// 【T2c-6】从 [`Self::encode`] 的字符串解码；非法 / 缺项 / 重复一律回 `None`（调用方保持默认）
+    ///
+    /// 校验：目录里 7 项必须**恰好出现一次**（顺序任意）、`folded` 里只留真实组头、
+    /// 未知 id / 空串 / 重复项都视为坏数据。分隔符位置宽松（前导 / 尾部 / 连续都接受，
+    /// 与 [`Self::groups`] 忽略空段的投影一致）；旧会话没这列 → `None`（不覆盖默认）。
+    pub fn decode(code: &str) -> Option<Self> {
+        let (slots_part, folded_part) = match code.split_once(';') {
+            Some((left, right)) => (left, Some(right)),
+            None => (code, None),
+        };
+        if slots_part.is_empty() {
+            return None;
+        }
+
+        let mut left: Vec<ToolbarSlot> = Vec::new();
+        let mut seen: Vec<ToolbarItemId> = Vec::new();
+        for token in slots_part.split(',') {
+            if token == "|" {
+                left.push(ToolbarSlot::Separator);
+                continue;
+            }
+            let (hidden, name) = match token.strip_prefix('~') {
+                Some(rest) => (true, rest),
+                None => (false, token),
+            };
+            let id = ToolbarItemId::ALL
+                .iter()
+                .copied()
+                .find(|item| format!("{item:?}") == name)?;
+            if seen.contains(&id) {
+                return None; // 重复项
+            }
+            seen.push(id);
+            left.push(ToolbarSlot::Item {
+                id,
+                visible: !hidden,
+            });
+        }
+        if seen.len() != ToolbarItemId::ALL.len() {
+            return None; // 缺项（目录必须全在，布局才有意义）
+        }
+
+        let mut folded: Vec<ToolbarItemId> = Vec::new();
+        if let Some(part) = folded_part {
+            // 折叠键是组头：先按已解码的布局投影组，只收真实组头（脏键不产生布局差异）
+            let layout = Self {
+                left: left.clone(),
+                folded: Vec::new(),
+            };
+            let heads: Vec<ToolbarItemId> =
+                layout.groups().into_iter().map(|g| g.head).collect();
+            for name in part.split(',').filter(|s| !s.is_empty()) {
+                let id = ToolbarItemId::ALL
+                    .iter()
+                    .copied()
+                    .find(|item| format!("{item:?}") == name)?;
+                if heads.contains(&id) && !folded.contains(&id) {
+                    folded.push(id);
+                }
+            }
+        }
+
+        Some(Self { left, folded })
+    }
+
     fn position_of(&self, id: ToolbarItemId) -> Option<usize> {
         self.left.iter().position(|slot| match slot {
             ToolbarSlot::Item { id: slot_id, .. } => *slot_id == id,
@@ -619,5 +707,81 @@ mod tests {
                 .count();
             assert_eq!(count, 1, "{:?} 应在默认布局恰出现一次", id);
         }
+    }
+
+    /// 【T2c-6】默认布局编码 / 解码往返：不变
+    #[test]
+    fn default_layout_round_trips_through_its_code() {
+        let layout = ToolbarLayout::default_layout();
+        let code = layout.encode();
+        assert_eq!(
+            code,
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More",
+            "默认布局的编码应稳定可读"
+        );
+        let back = ToolbarLayout::decode(&code).expect("默认布局必可解码");
+        assert_eq!(back, layout);
+    }
+
+    /// 【T2c-6】改过的布局（隐藏 / 折叠 / 移动 / 加分隔符）编码解码往返：不变
+    #[test]
+    fn a_customized_layout_round_trips_through_its_code() {
+        let mut layout = ToolbarLayout::default_layout();
+        layout.set_visible(ToolbarItemId::Format, false);
+        layout.toggle_collapsed(ToolbarItemId::ExecRun);
+        layout.move_item(ToolbarItemId::More, MoveDir::Left);
+        layout.insert_separator();
+
+        let code = layout.encode();
+        let back = ToolbarLayout::decode(&code).expect("自定布局必可解码");
+        assert_eq!(back, layout);
+        assert!(!back.is_visible(ToolbarItemId::Format));
+        assert!(back.is_collapsed(ToolbarItemId::ExecRun));
+    }
+
+    /// 【T2c-6】坏数据解码回 `None`（缺项 / 重复 / 未知 id / 空串）：调用方保持默认
+    #[test]
+    fn decode_rejects_bad_data() {
+        // 缺一项
+        assert_eq!(
+            ToolbarLayout::decode("ExecRun,ExecAll,|,Format,|,More"),
+            None,
+            "缺项：执行簇其余三项不在"
+        );
+        // 重复项
+        assert_eq!(
+            ToolbarLayout::decode(
+                "ExecRun,ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More"
+            ),
+            None,
+            "重复项"
+        );
+        // 未知 id
+        assert_eq!(
+            ToolbarLayout::decode(
+                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,Nope"
+            ),
+            None,
+            "未知 id"
+        );
+        // 空串
+        assert_eq!(ToolbarLayout::decode(""), None, "空串");
+        // 只分隔符（没有项）
+        assert_eq!(ToolbarLayout::decode("|"), None, "没有项不成布局");
+    }
+
+    /// 【T2c-6】折叠段只收真实组头：脏键解码后不产生折叠（不报错、不丢布局）
+    #[test]
+    fn decode_drops_folded_keys_that_are_not_group_heads() {
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More;Format";
+        let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
+        // Format 是第二组组头：折叠应保留
+        assert!(layout.is_collapsed(ToolbarItemId::Format));
+
+        // ExecCurrent 是组内成员不是组头：折叠键被丢
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More;ExecCurrent";
+        let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
+        assert!(!layout.is_collapsed(ToolbarItemId::ExecCurrent));
+        assert_eq!(layout.folded, Vec::new());
     }
 }

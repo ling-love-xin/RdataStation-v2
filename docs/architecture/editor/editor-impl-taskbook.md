@@ -1,11 +1,11 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 已完成 T2c-1~5**（通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义，2026-10-13，rds-editor 505 passed）；剩余 **T2c-6 面板持久化**（含 schema 绑定与缩进跨会话持久化），之后按 2b → 2d 推进。
+> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 全部完成**（T2c-1~6：通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义 / 面板布局持久化，2026-10-13，rds-editor 514 passed）；之后按 2b → 2d 推进。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
 > 基线（代码现状，2026-10-11 核实，2a/2c 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
 > - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 482 passed / rds-workbench lib 134 / 集成测试除环境占用项外全绿）
-> - Phase 2c（壳收口）**进行中**：T2c-1~5 已完成（rds-editor 505 / rds-workbench 134 测绿）；T2c-6（面板持久化）未做
+> - Phase 2c（壳收口）**全部完成**：T2c-1~6（rds-editor 514 / rds-workbench 137 测绿）；Phase 1b 余项「切 schema 真影响执行」排 2b 前
 > - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
 > - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
@@ -118,7 +118,7 @@
 - [x] **T2c-3 英文微标 + 行|列编辑切换**：右段 `Ln · Col · Ch · UTF-8 · LF · Spaces · 大小 · 脏` + **行｜列**切换入口（切换编辑内容模式：列编辑 = 内核 `ColumnarPoint`/`add_cursor_above|below` 原生能力；入口为 PopupMenu/Button，禁手搓）。✅ 2026-10-12 完成（见下「T2c-3 完成记录」）
 - [x] **T2c-4 编码/换行/缩进重设**（VSCode 式小菜单）：缩进重设 = 内核 `TabSize`（原生，直接可做）；**LF/CRLF 与编码重设内核不支持**（文本模型统一 `\n`）→ 菜单项置灰 + 标注"需外层转换层"（与原型一致，不假装能做）。✅ 2026-10-12 完成（见下「T2c-4 完成记录」）
 - [x] **T2c-5 工具栏分组自定义**（SQL 模式）：最右 `···` → 三栏面板（图标功能｜可见｜移动）；组=分隔符界定的连续段（执行簇只是例子，**分组通用**）；组可折叠为「首组件 + ▾」、整体移动、插竖线分隔符拆分、重置默认；模式指示器为固定项不参与排序（原型 ⑯ 已定）。✅ 2026-10-13 完成（见下「T2c-5 完成记录」）
-- [ ] **T2c-6 面板持久化**：自定义布局（顺序/可见性/分组）随会话持久化；重置默认清除（恢复"执行 + 全部运行"两按钮布局）。
+- [x] **T2c-6 面板持久化**：自定义布局（顺序/可见性/分组）随会话持久化；重置默认清除（恢复"执行 + 全部运行"两按钮布局）。✅ 2026-10-13 完成（见下「T2c-6 完成记录」）
 
 ### 验收标准
 - 单测：面包屑分段纯函数（连接/库/schema 缺项不占位）；方言解析（识别/未绑定）；微标格式化（Ln/Col/Ch/大小/脏）。
@@ -129,7 +129,7 @@
 - **落点（文件级）**：`editor/src/connection.rs`（`SchemaInfo{catalog: Option<String>, schema}`——注释：MySQL 无 Catalog 层时 catalog=None、`SchemasPort{fn schemas(conn_id)->Vec<SchemaInfo>}`（要求内存快照，渲染路径可调）、`SchemasHandle=Rc<dyn SchemasPort>`、`Breadcrumb{connection, catalog: Option, schema: Option}`、纯函数 `breadcrumb(conn_id, options, schemas, current_schema)`——**库/schema 段只从「列表+绑定」推导**：未选 schema → 两段都不占（不拿列表第一个假装当前）；绑定在列表找不到 → schema 段仍显示绑定、库段不猜；未绑定 → `UNBOUND_LABEL`；文件尾单测 `breadcrumb_segments_follow_truth`）+ `service.rs`（`Document.schema: Option<String>` + `schema()` 访问器 + `OpenRequest.schema` + `Document::new` 签名加参 + `set_schema`（返回是否真变）/`schema_for`）+ `shared.rs`（`schemas` 端口字段 + `attach_schemas`/`schemas(conn_id)`/`document_schema(id)`——未接端口=空列表如实降级）+ `view/widgets/status_bar.rs`（`StatusControls.breadcrumb: Option<AnyElement>` 最前；**`StatusLabels` 结构重构** `{connection: Option, body, right}`——连接段独立成段，面包屑渲染时用它替代文本连接段；左段渲染 `.children(breadcrumb).when(无breadcrumb, 文本连接段).child(body)`）+ `view/host.rs`（`set_schema(&mut self, Option<String>, cx)` 紧跟 set_channel；render 在 interrupt 前插入 breadcrumb 构造块——`communicating.then(||…)`：`shared.schemas(conn_id)` 空 → 返回 None 退化文本连接段；label = 连接 ▸ 库 ▸ schema（未选显 "schema"）；`DropdownButton::new("editor-breadcrumb")` + 菜单每 schema 一项 → `set_schema(Some)` + 分隔「使用连接默认」→ `set_schema(None)`）+ `workbench/src/services/editor_schema.rs`（**新**：`WorkbenchSchemas` 预载+内存读，与 `editor_completion` 同款——`NavCache::open(conn_id, project_root)` → `all_schemas()` 的 `(catalog, schema, id)` 映射 `SchemaInfo`；`attach(shared, workbench)`；`view.rs` 装配在 editor_completion 后一行）+ `view.rs`（装配）。
 - **测试**：rds-editor **482 passed**（478 + `breadcrumb_segments_follow_truth` + 3 窗口用例：`breadcrumb_renders_and_switches_schema_binding`（面包屑渲染 + 切 schema → 文档绑定真变 + 「使用连接默认」解绑）/ `breadcrumb_absent_without_schema_port`（无 schema 列表 → 控件不渲染，退文本连接段）/ `breadcrumb_absent_in_text_mode`）；rds-workbench lib **134 passed**（132 + `load_schemas_maps_catalog_and_schema_segments`（含排序后比较——`list_schemas` 不保证插入序）/ `catalog_segment_stays_empty_without_a_catalog_layer`）。
 - **踩坑记录**：`status_bar.rs` render 用 `.when(...)` 缺 `use gpui_kit::prelude::FluentBuilder as _;`（E0599）；`communicating.then(||…)` 闭包返回 `Option<AnyElement>` → `breadcrumb` 类型 `Option<Option<…>>`，构造处 `.flatten()`（E0308）；`.children(controls.breadcrumb)` move 后再 `controls.breadcrumb.is_none()` 借用冲突（E0382）→ 先 `let has_breadcrumb = controls.breadcrumb.is_some();`。
-- **未做（本轮）**：面包屑持久化（`Document.schema` 随会话跨重启）——任务书「随会话持久化，与 connection 同类」尚未落到 `session.rs`/`editor_session.rs`（engine EditorContext 加列），排 T2c-6 面板持久化前补；**切 schema 真影响执行**（限定名/会话默认 schema）——验收风险栏「不做纯 UI 装饰」需执行链（`editor_exec`/engine 会话级 `SET search_path`）接上，本轮先落「绑定真变 + 菜单全链路」。
+- **未做（本轮）**：**切 schema 真影响执行**（限定名/会话默认 schema）——验收风险栏「不做纯 UI 装饰」需执行链（`editor_exec`/engine 会话级 `SET search_path`）接上；schema 绑定持久化已在 T2c-6 完成（`Document.schema` 随会话跨重启，见下「T2c-6 完成记录」）。
 
 ### T2c-2 完成记录（2026-10-12，方言段已接线并测绿）
 - **落点**：`connection.rs::dialect_label(db_type)` 纯函数（`mysql_native/mysql`→MySQL、`postgres_native/postgresql/postgres`→PostgreSQL、`sqlite`→SQLite、`duckdb`→DuckDB、**未知驱动原样显示**——猜错方言比不显示更糟）；`status_bar.rs` `StatusInputs.dialect: Option<&str>` + `StatusLabels.dialect: Option<String>`（labels 加「方言 」前缀，输入为裸引擎名）+ 渲染 `.when(dialect.is_some(), …)` 在连接段之后、正文之前；`host.rs` 从绑定连接的 `ConnectionOption.db_type` 解析（`communicating` + 绑定连接才有；未绑定不摆——「跟随当前连接」时方言是谁都说不准）。
@@ -147,7 +147,7 @@
 - **内核核实（缩进）**：gpui-base 0.7.1 `InputBaseState<M: MultiLineMode>::set_tab_size`（`input/editor/indent.rs:504`，**pub**）挂 `MultiLineMode` impl（`EditorMode: MultiLineMode` 在 `base/kind.rs:67`）→ `EditorState`（=`InputBaseState<EditorMode>` 别名，gpui-base `editor/mod.rs:11`）**可直接调 set_tab_size**——**编译实证**：`self.editor.update(cx, |state, cx| state.set_tab_size(TabSize{…}, cx))` 通过，无需给 rds-editor 加 gpui-base 直接依赖。`TabSize{tab_size, hard_tabs}`——**制表符缩进（hard_tabs=true）内核原生支持**（`indent.rs:13-27`），一并真做。注意：`mode.tab_size()` 读访问器仍是 `pub(super)`——**读不走内核**，走文档级状态（双写）。
 - **落点**：`service.rs`（`Document.tab_size: usize`（默认 2）+ `hard_tabs: bool`（默认 false）+ 访问器 + `set_document_tab_size`/`set_document_hard_tabs`（真变判定）+ `document_tab_size`/`document_hard_tabs` 服务查询）+ `shared.rs`（`document_tab_size`/`set_document_tab_size`/`document_hard_tabs`/`set_document_hard_tabs` 转发）+ `view/widgets/status_bar.rs`（`StatusInputs.hard_tabs` + 微标 `Sp {n}` / `Tab` + `StatusControls.reset_menu` 位（edit_mode 后、右段文本前））+ `view/host.rs`（`set_tab_size(size, cx)` 双写文档+内核、`set_hard_tabs(hard, cx)` 双写；重设菜单 `DropdownButton::new("editor-reset-menu")` 三组（分隔 + disabled 组头）：编码（UTF-8 checked + UTF-8(BOM)/GBK disabled）、换行（LF checked + CRLF disabled）、缩进（空格: 2/4/8 按当前态 checked、制表符 checked 按 hard_tabs）——每项闭包先 `let entity = entity.clone()`（链式 move 借用修复 E0382）。
 - **测试**：rds-editor **488 passed**（+service `indent_reset_tracks_width_and_hard_tabs_separately`（宽度/制表符独立存储、同值重设未变、ghost 文档回退默认）+ 窗口 `indent_reset_changes_document_and_renders`（直调 set_tab_size(4)/set_hard_tabs(true) → shared 真变 + 内核调用不 panic））；rds-workbench lib **134**、ui_contract **8**。
-- **T2c-4 遗留**：编码/换行重设**内核不支持**（文本模型统一 UTF-8 + `\n`）——菜单已置灰标注，真转换需外层转换层（读写文件时按目标编码/换行编解码），排 2b/文件 IO 层；缩进文档状态**随会话持久化未落**（T2c-6 面板持久化一起）。
+- **T2c-4 遗留**：编码/换行重设**内核不支持**（文本模型统一 UTF-8 + `\n`）——菜单已置灰标注，真转换需外层转换层（读写文件时按目标编码/换行编解码），排 2b/文件 IO 层；缩进文档状态**随会话持久化已落**（T2c-6，见下完成记录）。
 
 ### T2c-5 完成记录（2026-10-13，工具栏分组自定义已接线并测绿）
 - **模型（新 `toolbar.rs`，纯函数 + 12 单测）**：`ToolbarItemId`（执行族五成员 + 格式化 + ⋯更多；`ALL` 目录、`label`/`icon`/`visible_by_default`/`fixed_visible`）——**右对齐簇（通道/连接）与模式指示器不进模型**（原型 ⑯：模式指示器固定最左；右对齐语义稳定，T2c-6 随会话持久化时再放开）；`ToolbarLayout { left: Vec<ToolbarSlot::Item|Separator>, folded }`；组 = 分隔符界定的连续段（分隔符归前一段尾，`groups()` 投影）；纯函数：`default_layout`（执行簇五成员 + 格式化 + ⋯更多，三段间两条分隔符；执行簇默认只显示「执行 + 全部运行」）、`is_visible`/`set_visible`（`fixed_visible` 不可隐藏）、`toggle_collapsed`（按组头）、`move_item`（可跨组）、`move_group`（整段摘出插到相邻组外侧）、`insert_separator`/`remove_separator`/`move_separator`（跨过一项即改变组边界）、`separator_positions`/`has_extra_separator`（>2 即用户新增）、`reset`。
@@ -156,10 +156,20 @@
 - **结构尺寸**：`ui.rs` 加 `TOOLBAR_CUSTOMIZE_WIDTH`（20rem）/`TOOLBAR_CUSTOMIZE_OFFSET`（4px，Pixels 常量——ui_contract 禁裸 `px`）。
 - **测试**：toolbar.rs 12 单测 + tests.rs 6 窗口用例（默认两按钮布局 / 折叠↔展开 / 单项跨组移动 / 整组交换 / 插分隔符 + 重置 / `fixed_visible` 不可隐藏）——全走「渲染断言 + 直调面板方法」纪律；rds-editor **505 passed**（488 + 17 新）、ui_contract **8**。
 - **顺手修（模型 bug）**：`move_group` 原实现「删左邻单槽 + 尾插」无法真正换组（分隔符在中间时组序不变）——重写为「整段槽位摘出 + 插到相邻组外侧」（左移插到前组开头前、右移插到后组末尾后），`moving_a_group_swaps_with_its_neighbor` 从红变绿。
-- **T2c-5 遗留**：布局状态**随会话持久化未落**（T2c-6 一起：`ToolbarLayout` 序列化进 `SavedSession`）；折叠 ▾ 菜单只收执行族（格式化/⋯更多 在折叠态不可达，用户可展开或移出该组）。
+- **T2c-5 遗留**：布局状态**随会话持久化已落**（T2c-6，见下完成记录）；折叠 ▾ 菜单只收执行族（格式化/⋯更多 在折叠态不可达，用户可展开或移出该组）。
+
+### T2c-6 完成记录（2026-10-13，面板布局 + schema + 缩进跨会话持久化，全链路测绿）
+- **模型（toolbar.rs）**：`ToolbarLayout::encode/decode` 纯函数——**不引入 serde**（`SavedSession` 是端口结构，列落 SQLite TEXT）：槽位用 `,` 连接（可见项 `ExecRun`、隐藏项 `~ExecRun`、分隔符 `|`），折叠段 `;` + 组头 `,` 连接（如 `…,|,More;ExecRun`）；`decode` 校验「目录 7 项恰各一次 + 未知 id 拒 + 折叠只收真实组头」，坏数据回 `None`（调用方保持默认）；分隔符位置宽松（前导/尾部/连续都收，与 `groups()` 忽略空段一致——保证**模型能产的布局必能解回**）。
+- **会话（session.rs）**：`SavedSession` 加 4 个 `Option` 字段——`toolbar: Option<String>`（编码串）、`schema: Option<String>`（绑定）、`tab_size: Option<usize>`、`hard_tabs: Option<bool>`（`None` = 旧会话没存过 → 恢复不覆盖默认）；`worth_saving` 扩展——布局≠默认编码 / schema 绑了 / 缩进显式非默认（宽≠2 或制表符）→ 空文档也值得存；`None` 不算「改过」（旧会话不背默认差异）。
+- **存储（engine `workbench_context_store.rs`）**：`EditorContext` 加 4 列（`toolbar`/`schema` TEXT NOT NULL DEFAULT ''、`tab_size` INTEGER NOT NULL DEFAULT 2、`hard_tabs` INTEGER NOT NULL DEFAULT 0）——CREATE TABLE 带列 + `ensure_column` 幂等补列（老库升级）；save/load（含 load_latest）全列映射。
+- **映射（workbench `services/editor_session.rs`）**：`to_context` 空串/默认落列；`to_session` 空串→`None`（布局/schema 没存过）、缩进列默认→`Some(2)/Some(false)`（列默认即语义默认）。
+- **接线（host.rs）**：`session_snapshot` 带 `toolbar.encode()` + `doc.schema()` + `document_tab_size/hard_tabs`；`restore_session` 顺序——`restore_channel` → `restore_connection` → 布局解码（`None`/坏数据保持默认）→ `restore_schema`（**必须在连接恢复后**：schema 列表按连接查；列表里没有 → 回退连接默认 + 状态栏说原因；端口未接/连接未绑 → 不校验也不丢）→ 缩进双写（先 `set_tab_size` 后 `set_hard_tabs`，后者读前者）。
+- **测试**：rds-editor **514 passed**（505 + toolbar 编解码 4 单测 + session 新字段往返/ worth_saving 2 + 窗口用例 3：`the_toolbar_layout_rides_along_with_the_session`（改布局→快照带编码串→新面板恢复一致；旧会话 None → 不覆盖默认）/ `the_schema_binding_comes_back_with_the_session`（在列表恢复 / 不在回退连接默认留痕 / 端口未接不丢）/ `the_indent_rides_along_with_the_session`）；rds-engine workbench_context_store **6 passed**（+T2c-6 往返与老库补列默认断言）；rds-workbench editor_session **6 passed**（+列映射往返）；ui_contract **8 passed**。
+- **踩坑**：encode 折叠段若当槽位 join 会出 `,;`（解码槽位段尾缀空 token → 拒）→ 改为 `format!("{};{}", …)` 直接拼接；`worth_saving` 的 `tab_size != Some(2)` 会把 `None`（旧会话）误判为改过 → 改 `is_some_and(|s| s != 2)`。
+- **未做**：**切 schema 真影响执行**（执行链按文档绑定生成限定名 / 会话级 `SET search_path`）——排 2b 前（验收风险栏「不做纯 UI 装饰」的收尾）。
 
 ### 涉及文件
-`editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, session.rs(面包屑绑定持久化), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口)}` + `app/src/main.rs`（行|列切换命令注册）。
+`editor/src/{view/widgets/status_bar.rs, view/host.rs, ui.rs, toolbar.rs(T2c-5/6 新), session.rs(T2c-6 布局/schema/缩进字段), lib.rs}` + `workbench/src/services/{editor_connections.rs(方言/库/schema), editor_schema.rs(新, schema 切换端口), editor_session.rs(T2c-6 列映射)}` + `engine/src/persistence/workbench_context_store.rs(T2c-6 四列 + 幂等补列)` + `app/src/main.rs`（行|列切换命令注册）。
 
 ### 依赖与风险
 - 风险：schema 切换要真实影响执行（`USE schema` / 限定名）——**执行时按文档 Schema 绑定生成限定名或设会话默认 schema**，不做成纯 UI 装饰（真机验证）。
@@ -220,5 +230,5 @@
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | 本轮不做，菜单置灰+标注；另立事项 | 避免假按钮 |
-| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c 的 T2c-1~5 已完成（含工具栏分组自定义）→ 下一项 **T2c-6**（面板布局持久化），之后 2b → 2d | 排期 |
+| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c（T2c-1~6，含面板布局持久化）**全部完成** → 下一项 **2b**（通用模式范围），2b 前补「切 schema 真影响执行」（T2c-1 验收收尾），之后 2d | 排期 |
 | 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |

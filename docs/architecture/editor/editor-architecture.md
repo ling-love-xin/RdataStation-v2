@@ -701,10 +701,10 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 未做项 | 说明 | 依据 |
 | --- | --- | --- |
 | **结果集就地编辑 / 写回** | ✅ **已落地（2026-10-12，Phase 2a）**：`changes.rs` + `editability.rs` + `store.rs` + `execution.rs` + `view/results/grid.rs` + 宿主 `editor_exec.rs::commit_changes`；双击编辑 / 变更集 / 单事务批量提交 / 冲突回执，见 `editor-impl-taskbook.md` §1。**未做（二期）**：新增 / 删除行、列类型化编辑器、值预览弹层。**另未做**：M4 独立的「源表分页浏览面板」与驱动能力位 `table_editor`（字典仍 `Stage::NotBuilt`、驱动未声明，见 `../driver-capability-matrix.md` §3.3 / §7 #13）——当前写回能力只作用于查询结果集，不经驱动能力位门控 | `editor-impl-taskbook.md` §1 · 本文件 §3.6 / §6 D23 |
-| **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | 面包屑切 schema 已真改文档绑定，但**未跨会话持久化**（`session.rs` 无 schema 字段），且切 schema **尚未影响执行**（无 `SET search_path` / 限定名注入）——排 T2c-6 与执行链接线 | `editor-impl-taskbook.md` §3 T2c-1 完成记录「未做（本轮）」 |
+| **schema 绑定持久化 / 真影响执行**（T2c-1 余项） | 面包屑切 schema 已真改文档绑定，且**绑定已跨会话持久化**（T2c-6 完成：`session.rs` schema 字段 + `editor_contexts.schema` 列）；但切 schema **尚未影响执行**（无 `SET search_path` / 限定名注入）——排 2b 前接执行链 | `editor-impl-taskbook.md` §3 T2c-1 / T2c-6 完成记录 |
 | **列编辑（多光标）** | 入口已摆（状态栏行｜列切换）但**置灰**：gpui-base 0.7.1 `add_cursor_above/below` 已实现却是 `pub(super)`，外部不可达；要真做需 vendor 补丁暴露 | `editor-impl-taskbook.md` §3 T2c-3 完成记录 / §6 |
 | **编码 / 换行重设** | 内核文本模型统一 UTF-8 + `\n`，重设菜单对应项**置灰标注**；真转换需外层（读写文件时的编解码层） | `editor-impl-taskbook.md` §3 T2c-4 / §6 #4 |
-| **T2c-6 面板布局持久化** | T2c-5（工具栏分组自定义：三栏面板 / 组折叠 / 分隔符 / 重置）✅ **已落地（2026-10-13）**；布局状态**未随会话持久化**（`session.rs` 无 `ToolbarLayout` 字段）——排 T2c-6 | `editor-impl-taskbook.md` §3 |
+| **T2c-6 面板布局持久化** | ✅ **已落地（2026-10-13）**：工具栏自定义布局（顺序/可见性/分组/折叠）+ schema 绑定 + 缩进（宽/制表符）跨会话持久化——`toolbar.rs` encode/decode + `session.rs` 四字段 + `editor_contexts` 四列 + 恢复校验（布局坏数据回默认 / schema 不在列表回退连接默认），见任务书 T2c-6 完成记录 | `editor-impl-taskbook.md` §3 |
 | **2b 通用模式**（`EditorMode::Text → General` 更名 + 环境切换 + 外部解释器脚本执行） / **2d 分析模式骨架**（Cell / Output / Session + 内联输出 + `.rdsnote`） | 均未开工；模式枚举仍叫 `Text`，`notebook.rs` 不存在 | `editor-impl-taskbook.md` §2 / §4 |
 | 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | 今天看全一个值只能靠悬停全文（原型 §2.6 已订正为 ❌） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
 | 补全：缓存未命中时**回落实时内省** | 今天未接端口时只给关键字与函数（如实，不假装有元数据） | `crates/editor/src/lib.rs` ⬜（B9 余项） |

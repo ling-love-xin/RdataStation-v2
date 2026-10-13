@@ -678,13 +678,14 @@ impl EditorHostPanel {
     ///
     /// 未命名文档没有稳定标识，返回 `None`（不存——重启后无法把它认回来）。
     pub fn session_snapshot(&self, cx: &App) -> Option<crate::session::SavedSession> {
-        let (path, mode, channel, connection) = self.with_document(|doc| {
+        let (path, mode, channel, connection, schema) = self.with_document(|doc| {
             let path = doc.path()?.to_string_lossy().into_owned();
             Some((
                 path,
                 doc.mode(),
                 doc.channel(),
                 doc.connection().map(str::to_string),
+                doc.schema().map(str::to_string),
             ))
         })??;
         let id = crate::session::session_id_for_path(std::path::Path::new(&path));
@@ -705,6 +706,13 @@ impl EditorHostPanel {
             content: self.editor_text(cx),
             cursor,
             selection,
+            // 【T2c-6】工具栏布局：面板权威状态的编码串（改动即存，不设“值得存”阈值）
+            toolbar: Some(self.toolbar.encode()),
+            // 【T2c-1 余项】schema 绑定随会话走（`None` = 未选 → 连接默认）
+            schema,
+            // 【T2c-4 余项】缩进随会话走（文档级权威值）
+            tab_size: Some(self.shared.document_tab_size(&self.document)),
+            hard_tabs: Some(self.shared.document_hard_tabs(&self.document)),
         })
     }
 
@@ -759,7 +767,56 @@ impl EditorHostPanel {
         self.restore_channel(session.channel, cx);
         // 【B1】连接绑定同理：那条连接可能已经被删了 / 不在当前项目
         self.restore_connection(session.connection.as_deref(), cx);
+        // 【T2c-6】工具栏布局：旧会话没存（`None`）或解码失败 → 保持默认，不覆盖当前
+        if let Some(code) = session.toolbar.as_deref() {
+            if let Some(layout) = crate::toolbar::ToolbarLayout::decode(code) {
+                self.toolbar = layout;
+            }
+        }
+        // 【T2c-1 余项】schema 绑定：必须在连接恢复之后（schema 列表按连接查）
+        self.restore_schema(session.schema.as_deref(), cx);
+        // 【T2c-4 余项】缩进双写（文档状态 + 内核 TabSize）；先宽度后制表符（后者读前者）
+        if let Some(size) = session.tab_size {
+            self.set_tab_size(size, cx);
+        }
+        if let Some(hard) = session.hard_tabs {
+            self.set_hard_tabs(hard, cx);
+        }
         cx.notify();
+    }
+
+    /// 【T2c-1 余项】把会话里的 **schema 绑定**写回文档
+    ///
+    /// 判据同 `restore_connection`：schema 列表里没有 = schema 被删 / 换库 → **回退到
+    /// 「使用连接默认」并把原因说出来**。schema 列表按**当前连接**查（连接恢复在前）。
+    /// 端口未接 / 连接未绑 = **不校验也不丢**（宁可不猜也不把用户的绑定抹掉）。
+    fn restore_schema(&mut self, schema: Option<&str>, cx: &mut Context<Self>) {
+        let Some(schema_name) = schema else {
+            return;
+        };
+        let conn = self.bound_connection();
+        let list = self.shared.schemas(conn.as_deref());
+        let apply = |service: &mut crate::service::EditorService| {
+            service.set_schema(&self.document, Some(schema_name.to_string()))
+        };
+        if list.is_empty() {
+            // 端口未接 / 连接未绑：不校验也不丢（与 restore_connection 同语义）
+            self.shared.update(apply);
+            return;
+        }
+        if list.iter().any(|info| info.schema == schema_name) {
+            self.shared.update(apply);
+            return;
+        }
+        self.shared.update(|service| {
+            service.set_schema(&self.document, None)
+        });
+        self.set_message(
+            Some(format!(
+                "schema {schema_name} 不在当前连接里：已回退到连接默认"
+            )),
+            cx,
+        );
     }
 
     /// 【B1 余项】把会话里的**连接绑定**写回文档

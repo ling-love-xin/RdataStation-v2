@@ -88,6 +88,15 @@ pub struct EditorContext {
     /// 选中范围
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,
+    /// 【T2c-6】工具栏自定义布局（[`editor::toolbar::ToolbarLayout::encode`] 的编码串；
+    /// 空串 = 未存过 → 恢复用默认布局）
+    pub toolbar: String,
+    /// 【T2c-1 余项】绑定的 schema（空串 = 未选 → 连接默认 schema）
+    pub schema: String,
+    /// 【T2c-4 余项】文档缩进宽度（默认 2）
+    pub tab_size: usize,
+    /// 【T2c-4 余项】缩进是否制表符（默认 false）
+    pub hard_tabs: bool,
     /// 更新时间
     pub updated_at_ms: u64,
 }
@@ -149,6 +158,10 @@ impl WorkbenchContextStore {
                     cursor_position INTEGER NOT NULL DEFAULT 0,
                     selection_start INTEGER,
                     selection_end INTEGER,
+                    toolbar TEXT NOT NULL DEFAULT '',
+                    schema TEXT NOT NULL DEFAULT '',
+                    tab_size INTEGER NOT NULL DEFAULT 2,
+                    hard_tabs INTEGER NOT NULL DEFAULT 0,
                     updated_at_ms INTEGER NOT NULL
                 )",
                 [],
@@ -176,6 +189,11 @@ impl WorkbenchContextStore {
                 "channel",
                 "TEXT NOT NULL DEFAULT 'source'",
             )?;
+            // 【T2c-6】老库也要能存工具栏布局 / schema / 缩进（空串 = 未存过 → 恢复用默认）
+            ensure_column(conn, "editor_contexts", "toolbar", "TEXT NOT NULL DEFAULT ''")?;
+            ensure_column(conn, "editor_contexts", "schema", "TEXT NOT NULL DEFAULT ''")?;
+            ensure_column(conn, "editor_contexts", "tab_size", "INTEGER NOT NULL DEFAULT 2")?;
+            ensure_column(conn, "editor_contexts", "hard_tabs", "INTEGER NOT NULL DEFAULT 0")?;
 
             Ok(())
         })
@@ -244,8 +262,9 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO editor_contexts
-                 (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
+                  toolbar, schema, tab_size, hard_tabs, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     context.id,
                     context.connection_id,
@@ -255,6 +274,10 @@ impl WorkbenchContextStore {
                     context.cursor_position as i64,
                     context.selection_start.map(|v| v as i64),
                     context.selection_end.map(|v| v as i64),
+                    context.toolbar,
+                    context.schema,
+                    context.tab_size as i64,
+                    context.hard_tabs as i64,
                     context.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
@@ -271,7 +294,8 @@ impl WorkbenchContextStore {
     pub fn load_editor_context(&self, editor_id: &str) -> Result<Option<EditorContext>, CoreError> {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms
+                "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
+                        toolbar, schema, tab_size, hard_tabs, updated_at_ms
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -289,7 +313,11 @@ impl WorkbenchContextStore {
                     cursor_position: row.get::<_, i64>(5)? as usize,
                     selection_start: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
                     selection_end: row.get::<_, Option<i64>>(7)?.map(|v| v as usize),
-                    updated_at_ms: row.get::<_, i64>(8)? as u64,
+                    toolbar: row.get(8)?,
+                    schema: row.get(9)?,
+                    tab_size: row.get::<_, i64>(10)? as usize,
+                    hard_tabs: row.get::<_, i64>(11)? != 0,
+                    updated_at_ms: row.get::<_, i64>(12)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -309,7 +337,8 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms
+                    "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
+                            toolbar, schema, tab_size, hard_tabs, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -331,7 +360,11 @@ impl WorkbenchContextStore {
                         cursor_position: row.get::<_, i64>(5)? as usize,
                         selection_start: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
                         selection_end: row.get::<_, Option<i64>>(7)?.map(|v| v as usize),
-                        updated_at_ms: row.get::<_, i64>(8)? as u64,
+                        toolbar: row.get(8)?,
+                        schema: row.get(9)?,
+                        tab_size: row.get::<_, i64>(10)? as usize,
+                        hard_tabs: row.get::<_, i64>(11)? != 0,
+                        updated_at_ms: row.get::<_, i64>(12)? as u64,
                     })
                 })
                 .optional()
@@ -473,6 +506,10 @@ mod tests {
             cursor_position: 4,
             selection_start: Some(1),
             selection_end: Some(3),
+            toolbar: String::new(),
+            schema: String::new(),
+            tab_size: 2,
+            hard_tabs: false,
             updated_at_ms: 1_700_000_000_000,
         }
     }
@@ -537,6 +574,52 @@ mod tests {
         assert_eq!(loaded.mode, "text");
         assert_eq!(loaded.content, "select 2;");
         assert_eq!(store.load_editor_context("nope.sql").expect("load"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 【T2c-6】工具栏布局 / schema / 缩进与模式通道同类：必须一起落库（否则重启全丢）
+    #[test]
+    fn editor_context_round_trips_with_toolbar_schema_and_indent() {
+        let (dir, db) = temp_db("t2c6");
+        let store = open_store(&db);
+
+        let mut customized = context("doc.sql", "sql");
+        customized.toolbar =
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun"
+                .to_string();
+        customized.schema = "analytics".to_string();
+        customized.tab_size = 4;
+        customized.hard_tabs = true;
+        store.save_editor_context(&customized).expect("save");
+
+        let loaded = store
+            .load_editor_context("doc.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(loaded.toolbar, customized.toolbar);
+        assert_eq!(loaded.schema, "analytics");
+        assert_eq!(loaded.tab_size, 4);
+        assert!(loaded.hard_tabs);
+
+        let latest = store
+            .load_latest_editor_context()
+            .expect("load")
+            .expect("有记录");
+        assert_eq!(latest.toolbar, customized.toolbar, "最近一份走同一条列映射");
+        assert_eq!(latest.schema, "analytics");
+
+        // 没设过的字段落库是默认值（空串 / 2 / false），不掺入旧值
+        let plain = context("plain.sql", "text");
+        store.save_editor_context(&plain).expect("save");
+        let loaded_plain = store
+            .load_editor_context("plain.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(loaded_plain.toolbar, "");
+        assert_eq!(loaded_plain.schema, "");
+        assert_eq!(loaded_plain.tab_size, 2);
+        assert!(!loaded_plain.hard_tabs);
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -608,6 +691,11 @@ mod tests {
         assert_eq!(loaded.mode, "sql", "补列后旧行取默认模式");
         assert_eq!(loaded.channel, "source", "通道列同样补默认档：认不出就是源库");
         assert_eq!(loaded.content, "select 9;");
+        // 【T2c-6】老库补列后默认值：空布局串 / 空 schema / 缩进 2 / 空格缩进
+        assert_eq!(loaded.toolbar, "", "旧行没有工具栏布局 → 空串（恢复用默认布局）");
+        assert_eq!(loaded.schema, "", "旧行没有 schema 绑定 → 空串（连接默认）");
+        assert_eq!(loaded.tab_size, 2, "旧行缩进宽度补默认 2");
+        assert!(!loaded.hard_tabs, "旧行缩进方式补默认空格");
 
         // 再开一次也不该报错（幂等：列已存在）
         let store_again = open_store(&db);

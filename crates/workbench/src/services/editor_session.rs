@@ -65,6 +65,13 @@ impl WorkbenchSessionStore {
             cursor_position: session.cursor,
             selection_start: session.selection.map(|(start, _)| start),
             selection_end: session.selection.map(|(_, end)| end),
+            // 【T2c-6】工具栏布局编码串（`None` = 没存过 → 空串，恢复用默认布局）
+            toolbar: session.toolbar.clone().unwrap_or_default(),
+            // 【T2c-1 余项】schema 绑定（`None` = 未选 → 空串）
+            schema: session.schema.clone().unwrap_or_default(),
+            // 【T2c-4 余项】缩进宽度 / 制表符（`None` = 旧会话没存过 → 列默认）
+            tab_size: session.tab_size.unwrap_or(2),
+            hard_tabs: session.hard_tabs.unwrap_or(false),
             updated_at_ms: now_ms(),
         }
     }
@@ -85,6 +92,12 @@ impl WorkbenchSessionStore {
                 (Some(start), Some(end)) => Some((start, end)),
                 _ => None,
             },
+            // 【T2c-6】空串 = 没存过（恢复用默认布局 / 连接默认 schema）；非空原样回来
+            toolbar: (!context.toolbar.is_empty()).then_some(context.toolbar),
+            schema: (!context.schema.is_empty()).then_some(context.schema),
+            // 缩进列总有值（默认 2 / false）：旧会话恢复成默认而不是不覆盖——列默认即语义默认
+            tab_size: Some(context.tab_size),
+            hard_tabs: Some(context.hard_tabs),
         }
     }
 }
@@ -138,6 +151,10 @@ mod tests {
             content: "select 1;".to_string(),
             cursor: 7,
             selection: Some((1, 3)),
+            toolbar: None,
+            schema: None,
+            tab_size: None,
+            hard_tabs: None,
         }
     }
 
@@ -195,6 +212,36 @@ mod tests {
             ExecChannel::Source,
             "认不出的通道不该把整份会话弄丢，也不能冒充别的档"
         );
+    }
+
+    /// 【T2c-6】工具栏布局 / schema / 缩进都存在列上（空串 = 没存过）；两种情形都要能往返
+    #[test]
+    fn the_toolbar_schema_and_indent_travel_through_the_row() {
+        let mut customized = session();
+        customized.toolbar =
+            Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More".to_string());
+        customized.schema = Some("analytics".to_string());
+        customized.tab_size = Some(4);
+        customized.hard_tabs = Some(true);
+
+        let row = WorkbenchSessionStore::to_context(&customized);
+        assert_eq!(row.toolbar, customized.toolbar.as_deref().unwrap_or_default());
+        assert_eq!(row.schema, "analytics");
+        assert_eq!(row.tab_size, 4);
+        assert!(row.hard_tabs);
+
+        let back = WorkbenchSessionStore::to_session(row);
+        assert_eq!(back.toolbar, customized.toolbar);
+        assert_eq!(back.schema.as_deref(), Some("analytics"));
+        assert_eq!(back.tab_size, Some(4));
+        assert_eq!(back.hard_tabs, Some(true));
+
+        // 没存过（空串 / 列默认）→ 回来是 None / 默认值：恢复侧不覆盖
+        let plain = WorkbenchSessionStore::to_session(WorkbenchSessionStore::to_context(&session()));
+        assert_eq!(plain.toolbar, None, "空串 = 没存过布局");
+        assert_eq!(plain.schema, None, "空串 = 没绑 schema");
+        assert_eq!(plain.tab_size, Some(2), "列默认缩进宽度 2");
+        assert_eq!(plain.hard_tabs, Some(false), "列默认空格缩进");
     }
 
     #[test]

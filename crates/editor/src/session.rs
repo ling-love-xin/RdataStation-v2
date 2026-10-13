@@ -42,6 +42,15 @@ pub struct SavedSession {
     pub cursor: usize,
     /// 选区（字节区间；无选区为 `None`）
     pub selection: Option<(usize, usize)>,
+    /// 【T2c-6】工具栏自定义布局（[`crate::toolbar::ToolbarLayout::encode`] 的编码串；
+    /// `None` = 旧会话没存过 → 恢复用默认布局）
+    pub toolbar: Option<String>,
+    /// 【T2c-1 余项】绑定的 schema（`None` = 未选 → 连接默认 schema；空串与未绑同一语义）
+    pub schema: Option<String>,
+    /// 【T2c-4 余项】文档缩进宽度（默认 2；`None` = 旧会话没存过 → 不覆盖当前）
+    pub tab_size: Option<usize>,
+    /// 【T2c-4 余项】缩进是否制表符（默认 false；`None` = 旧会话没存过 → 不覆盖当前）
+    pub hard_tabs: Option<bool>,
 }
 
 /// 会话存储端口（宿主注入）
@@ -122,8 +131,24 @@ pub fn session_id(document: &crate::service::Document) -> Option<String> {
 }
 
 /// 会话内容是否值得恢复（空文档 + 无光标的不写库：避免每次开 app 都留一条空记录）
+///
+/// 【T2c-6】布局 / schema / 缩进被改过也值得存：哪怕文档是空的，
+/// 这些**文档属性**重启后不该丢（工具栏布局是用户花时间排的）。
+/// `None`（旧会话没存过）不等于“改过”：只认**显式非默认**的值。
 pub fn worth_saving(session: &SavedSession) -> bool {
-    !session.content.trim().is_empty() || session.cursor > 0 || session.selection.is_some()
+    if !session.content.trim().is_empty() || session.cursor > 0 || session.selection.is_some() {
+        return true;
+    }
+    // 工具栏布局 ≠ 默认布局（编码串对比；`None` = 旧会话没这字段 → 不算“改过”)
+    if let Some(code) = session.toolbar.as_deref() {
+        if code != crate::toolbar::ToolbarLayout::default_layout().encode() {
+            return true;
+        }
+    }
+    // schema 绑了 / 缩进显式非默认（宽 2、空格）
+    session.schema.is_some()
+        || session.tab_size.is_some_and(|size| size != 2)
+        || session.hard_tabs == Some(true)
 }
 
 #[cfg(test)]
@@ -143,6 +168,10 @@ mod tests {
             content: content.to_string(),
             cursor: 7,
             selection: Some((1, 3)),
+            toolbar: None,
+            schema: None,
+            tab_size: None,
+            hard_tabs: None,
         }
     }
 
@@ -192,6 +221,40 @@ mod tests {
         assert_eq!(loaded.channel, ExecChannel::Accelerated);
     }
 
+    /// 【T2c-6】工具栏布局 / schema / 缩进都是文档属性：随会话原样往返
+    #[test]
+    fn the_toolbar_schema_and_indent_ride_along_with_the_session() {
+        let store = MemorySessionStore::new();
+        let mut saved = session("d:/sql/a.sql", "select 1;", EditorMode::Sql);
+        saved.toolbar = Some(
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun"
+                .to_string(),
+        );
+        saved.schema = Some("analytics".to_string());
+        saved.tab_size = Some(4);
+        saved.hard_tabs = Some(true);
+        store.save(&saved).expect("save");
+
+        let loaded = store.load("d:/sql/a.sql").expect("load").expect("有");
+        assert_eq!(
+            loaded.toolbar.as_deref(),
+            Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun")
+        );
+        assert_eq!(loaded.schema.as_deref(), Some("analytics"));
+        assert_eq!(loaded.tab_size, Some(4));
+        assert_eq!(loaded.hard_tabs, Some(true));
+
+        // 旧会话没有这些字段：`None` 原样往返（恢复侧据此不覆盖默认）
+        store
+            .save(&session("d:/sql/c.sql", "select 2;", EditorMode::Sql))
+            .expect("save");
+        let plain = store.load("d:/sql/c.sql").expect("load").expect("有");
+        assert_eq!(plain.toolbar, None);
+        assert_eq!(plain.schema, None);
+        assert_eq!(plain.tab_size, None);
+        assert_eq!(plain.hard_tabs, None);
+    }
+
     #[test]
     fn latest_follows_the_last_save() {
         let store = MemorySessionStore::new();
@@ -230,5 +293,35 @@ mod tests {
         typed.cursor = 0;
         typed.selection = None;
         assert!(worth_saving(&typed), "有内容就该存");
+    }
+
+    /// 【T2c-6】文档为空但布局 / schema / 缩进被改过 → 值得存（重启不丢文档属性）
+    #[test]
+    fn customized_document_properties_are_worth_saving_even_when_blank() {
+        let mut blank = session("a.sql", "   \n", EditorMode::Sql);
+        blank.cursor = 0;
+        blank.selection = None;
+
+        // 默认布局（编码串与默认一致）不算改过
+        blank.toolbar = Some(crate::toolbar::ToolbarLayout::default_layout().encode());
+        assert!(!worth_saving(&blank));
+
+        // 布局被改过 → 值得存
+        let mut customized = blank.clone();
+        customized.toolbar =
+            Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More;ExecRun"
+                .to_string());
+        assert!(worth_saving(&customized), "排过的工具栏重启不该丢");
+
+        // schema 绑了 / 缩进改了 → 值得存
+        let mut with_schema = blank.clone();
+        with_schema.schema = Some("analytics".to_string());
+        assert!(worth_saving(&with_schema));
+        let mut wide_indent = blank.clone();
+        wide_indent.tab_size = Some(4);
+        assert!(worth_saving(&wide_indent));
+        let mut hard = blank.clone();
+        hard.hard_tabs = Some(true);
+        assert!(worth_saving(&hard));
     }
 }
