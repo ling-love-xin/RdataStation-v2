@@ -10,15 +10,17 @@
 
 ## 模块特点
 
-### 1. 三种 kind，本体各不相同（语义取"混合模型"）
+### 1. 两种 kind，本体各不相同（语义取"混合模型"）——2026-10-13：`table_ref` 已划掉
 
-| kind | 本体在哪 | 复现强度 | 期次 |
+| kind | 本体在哪 | 复现强度 | 状态 |
 | --- | --- | --- | --- |
-| `file` | `{项目}/resources/`（受管文件，归档后只读） | **强**：内容冻结，重跑得同解 | 第一期 |
-| `analysis` | `{项目}/.RSmeta/analytics.duckdb`（靠定义重建） | 中：定义冻结，数据可重建 | 第二期 |
-| `table_ref` | 远端（不在本机） | **弱**：只记"当时指向哪"，失效风险最高 | 不承诺 |
+| `file` | `{项目}/resources/`（**copy 默认**：复制进受管目录 + 只读，草稿箱那份保留为工作副本；**reference**：本体留原位、只存元数据） | **强**：内容冻结，重跑得同解（reference：读源 + 指纹校验） | ✅ 第一期 |
+| `analysis` | `{项目}/.RSmeta/analytics.duckdb`（靠定义重建） | 中：定义冻结，数据可重建 | ✅ 第二期（P4.1 指纹已落） |
+| ~~`table_ref`~~ | ~~远端（不在本机）~~ | ~~**弱**~~ | ❌ 划掉：跨文件表引用属编辑器 / 联邦层语义（代码保留兼容读取） |
 
-界面上**复现强度必须常显**（`已归档` / `分析表` / `引用`）——用户要一眼知道"这东西半年后还打不打得开"。
+界面上**复现强度必须常显**（`已归档` / `分析表`）——用户要一眼知道"这东西半年后还打不打得开"。
+
+> **File 档归档粒度（2026-10-13 裁决）**：两档都做、默认 copy。copy = 本体复制进 `resources/`（版本冻结、回溯读副本永不失效，草稿箱 = 工作副本 checkout 语义）；reference = 只存元数据（地址 + 文件名 + 指纹 + 版本记录，本体留原位，打开校验指纹，不一致提示"源已变更，快照失效"）。不做真 diff；血缘任何模式都有（`source_path` + `source_fingerprint` + 版本链）；purge 一起清除。
 
 ### 2. 归档凭证 = 来源 + 代码 + 内容指纹
 
@@ -29,6 +31,8 @@
 | 来源 | `promoted_from` / `source_connection_id` / `source_table` | 这结论是用什么数据得出的 |
 | 代码 | 本体文件本身（`file`）或 `definition_sql`（`analysis`） | 怎么算的 |
 | 内容指纹 | `content_hash`（sha256） | 还是不是当初那份 |
+
+> **来源口径（2026-10-13 裁决）**：草稿箱 = **文件地址 + 文件名**；数据库 = **连接身份指纹 + 表**（复用 `engine::persistence::metadata_identity::ConnectionIdentity::fingerprint`，不新造）。
 
 ### 3. 目录与真相源
 
@@ -55,6 +59,8 @@
 取回的坑已处理：**Windows 下 `CopyFile` 会继承源文件的只读属性**，`copy_out` 会显式清除，否则"取回的文件改不了"。
 
 ### 5. 版本由内容指纹触发，历史内容有保留上限
+
+- **版本 = 内容 + 体积 + 元数据快照**（结构 / 指纹 / 来源 / 配方 / 时间）；名称 / 别名 / 标签 / 分组是**活状态不进版本**（改它们不涨版本、不发 `ChangeReason` 事件，保存后刷新即可）；版本区展示全部元信息；版本链补展示 / 检索（列表 / 相邻差异 / 血缘 / 按版本·时间·来源过滤）。
 
 - `content_hash` 未变**不产生新版本**（否则"改个别名"也会消耗一个版本号——v1 的行为）。
 - 版本表是**写前快照**语义：当前版本在资源行上、不进版本表；`parent_version_id` 指向本次写入的快照行（v1 写的是资源自身 id，无信息量）。
@@ -102,16 +108,17 @@
 | --- | --- |
 | `crates/engine/migrations/project_meta/007_analytics_resources.sql` | v1 原样：7 张表 + 索引 + 两个 `updated_at` 触发器 |
 | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql` | **本轮新增**：9 个语义列（`kind` / `content_hash` / `file_rel_path` / `readonly` / `promoted_from` / `source_connection_id` / `source_table` / `definition_sql` / `archived_at`）+ `file_rel_path` 部分唯一索引 + kind/指纹索引。**不改 007**，老库直接升级（旧行默认 `kind = 'file'`、指纹为空） |
+| `crates/engine/migrations/project_meta/023_analytics_resource_payload_mode.sql` | **2026-10-13 新增**：File 档两档粒度——`payload_mode`（`copy` 默认 / `reference`）+ `source_path`（reference 的源绝对路径）。旧行默认 `copy`（历史 move 语义归并到 copy） |
 
-> 编号先到先得：019 已被 M8 洞察规则索引占用，故取 020；建文件前重新核对过。
+> 编号先到先得：019 已被 M8 洞察规则索引占用，故取 020；021 / 022 已被导航树占用，故取 023；建文件前重新核对过。
 
 ## 能力状态
 
 | 已实现 | 待补 |
 | --- | --- |
-| **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | — |
+| **归档 / 取回 / 再归档闭环**【Phase 0 + 2026-10-13 第一刀】`ArchiveService`：本体 copy（默认，草稿保留为工作副本）+ 登记 + 指纹版本 + 事件；索引失败回滚副本；取回产出可写工作副本；**File 档两档粒度已落**：`PayloadMode`（copy / reference）+ 迁移 023 + `copy_in`/`resolve_source`/`copy_out_source` + 服务层按模式分派（归档 / 再归档 / 取回 / 撤销）；reference 的 UI 入口与打开校验留后续刀 | File 档 **reference 模式的 UI 接线**（归档对话框选模式、打开校验指纹提示“源已变更，快照失效”、删除入口）；reference 的历史版本还原（当前拒绝，走「取回该版本」） |
 | **索引修复**【Phase 0 + Phase 3 第二刀 + P0.8】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / **从回收站还原**（按原相对路径找条目）/ 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行 | 按目录批量补登 |
-| **版本历史**【Phase 3 第一刀】`dialogs/version.rs` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（副本缺失行露出来）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**、**删除内容副本**（`AlertDialog` 确认）；动作后宿主换行，不关窗；还原后的裁剪按设置项（见下行） | 详情面板的"最近 3 条"明细（需批量取数） |
+| **版本历史**【Phase 3 第一刀】`dialogs/version.rs` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（副本缺失行露出来）；**行本体走 `list::ListItem`**（hover / 选中由组件承担，不再手搓）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**、**删除内容副本**（`AlertDialog` 确认）；动作后宿主换行，不关窗；还原后的裁剪按设置项（见下行） | 详情面板的"最近 3 条"明细（需批量取数）；**版本链补展示 / 检索**（列表 / 相邻差异 / 血缘 / 按版本·时间·来源过滤，2026-10-13 裁决） |
 | **回收站**【P0.8】`engine::persistence::trash::ProjectTrash`（上提 + 中性化：来源是字符串 `origin`、不返回 M5 类型）+ `dialogs/trash.rs` + 宿主接线：移入回收站（单选 / 多选批量，本体进 `.RSmeta/trash`、登记行**软删**——还原能恢复别名 / 标签 / 指纹）/ 还原（`origin` 校验、同名避让并同步登记路径）/ 永久删除 / 清空（`empty_origin`，**只动本模块的条目**）；索引修复的「从回收站还原」走 `restore_archive_by_rel_path` | 保留策略与回收站的联动（例如按时间自动清）；回收站的“打开原位置”入口 |
 | **面板**【Phase 1 + Phase 2 第一 / 二 / 三刀 + 2026-09-20 UI 收尾】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选（含**标签维**）·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / **分组折叠区（会话级折叠）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情与标签）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | `F2` 重命名（待重命名入口）、标题点击折叠（需与 M4/M5 面板头一起做）、折叠状态持久化（P2.4 后半） |
 | **行态与控件口径**【2026-09-20 UI 收尾 / 开发方案 V1–V12】：行距钉在 `ui::ROW_HEIGHT`（24px，`list_row()` 压掉 `ListItem` 默认 `py_1`——组件只量一个样本行定全局行距）；悬停不覆盖选中；分组头展开指示走共用原语 `tree::disclosure_slot` + `disclosure_icon`（字符 `▸/▾` 退场）+ 色条 `primary`（与 M4 同角色）；**停在分组头上按 `Enter` 也能折叠 / 展开**；撤销 / 复制 / chip `×` 一律 `Button::ghost().xsmall()`（键盘可达 + 命中区 20px）；加载骨架走组件 `Skeleton`；固定描边统一 `ui::HAIRLINE` | 行尾「相对时间 → 悬浮显示绝对时间」要等 div 级 tooltip 基建（0.7.1 的 `.tooltip()` 只挂组件上，0.6.1 核实 / 0.7.1 复测） |
@@ -132,5 +139,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **127 项单测**（16 存储 + 5 领域 + 13 本体 + 19 归档服务 + 7 索引修复 + 16 筛选/排序/分区 + **10 面板** + 5 详情 + 14 呈现 + 8 对话框（归档 5 / 取回 2 / 草稿多选 1）+ 3 版本对话框 + 3 索引修复对话框 + 3 回收站对话框 + **4 标签对话框** + 1 分组对话框）+ `tests/panel_window.rs` **18 项面板窗口测试** + `tests/dialog_window.rs` **9 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource --lib -j 2` → **162 项单测全绿**（2026-10-13 实测，含 reference 模式 5 项新用例）+ `tests/panel_window.rs` **25 项面板窗口测试** + `tests/dialog_window.rs` **10 项对话框窗口测试**（README 旧文案 127/18/9 已过时，以实测为准）；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。
