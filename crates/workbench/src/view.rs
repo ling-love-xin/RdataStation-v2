@@ -138,6 +138,9 @@ impl WorkbenchView {
         ));
         // A14：把执行端口接上（文档绑定/活动连接）。未接时执行动作会明确报“未接入执行”。
         crate::services::editor_exec::attach(&editor_service);
+        // 【2b】把执行环境端口接上（通用模式脚本执行；attach 时探测解释器并缓存，
+        // 渲染路径零 I/O。未接时环境列表为空 → 运行按钮不亮）。
+        crate::services::editor_env::attach(&editor_service);
         // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
         crate::services::editor_session::attach(&editor_service);
         // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）

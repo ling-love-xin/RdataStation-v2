@@ -17,6 +17,7 @@ pub mod driver_service;
 pub mod editor_channels;
 pub mod editor_completion;
 pub mod editor_connections;
+pub mod editor_env;
 pub mod editor_exec;
 pub mod editor_files;
 pub mod editor_insight;

@@ -1328,3 +1328,135 @@ fn check_accelerated_channel(
     assert!(late_cleanup[0].error.is_none(), "清理失败：{:?}", late_cleanup[0].error);
     runtime.block_on(manager.close_all_connections());
 }
+
+// ===== 【2b】通用模式：脚本执行的真机验证 =====
+//
+// 链路：`EditorShared::submit(ExecTarget::Script)` → 编辑器执行通道（工作线程）→
+// `EngineQueryRunner::run_script` → `editor_env::run_script_process`（spawn 解释器 + stdin
+// 写代码）→ `drain_script_notes` 回结论（独立通道，不是网格形）。
+//
+// 不依赖 `RDS_TEST_*`：脚本执行的目标是**本机解释器**（不是远程库），门控就看解释器在不在。
+// Windows 的 `python` 可能是 Store 桩（`--version` 退出码 49），所以按候选回退探测
+// `py`；两者都不可用才跳过（不算失败）。
+
+/// 找本机可用的 Python 命令（`python` → `py` 回退），都不可用 = `None`
+fn local_python() -> Option<&'static str> {
+    for command in ["python", "py"] {
+        let ok = std::process::Command::new(command)
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if ok {
+            return Some(command);
+        }
+    }
+    None
+}
+
+/// 【2b】真机：脚本经编辑器全链路跑在真解释器上（stdout / 退出码回结论）
+///
+/// 验三件事：① 环境端口能列出已装解释器（attach 时探测）；② 提交的脚本真被 spawn，
+/// stdout / 退出码原样回到 `ScriptNote`；③ 未装的环境如实拒绝（不会 spawn）。
+#[test]
+fn real_python_script_runs_through_the_editor() {
+    let Some(python) = local_python() else {
+        eprintln!("⏭️  脚本执行真机验证：本机没有可用的 python / py，跳过");
+        return;
+    };
+    eprintln!("🐍 用 {python} 验证脚本执行链路");
+
+    // 生产路径：环境端口 + 执行器都接到编辑器上
+    let shared = EditorShared::new();
+    rds_workbench::services::editor_env::attach(&shared);
+    rds_workbench::services::editor_exec::attach(&shared);
+
+    // ① 环境端口已列出 python（探测过一次并缓存）
+    let envs = shared.envs();
+    let python_env = envs
+        .iter()
+        .find(|env| env.id == "python")
+        .expect("环境端口应列出 python");
+    assert!(
+        shared.env_installed(&python_env.id),
+        "本机有 python/py，python 环境应报已安装"
+    );
+
+    let document = shared
+        .open(OpenRequest::untitled("print('rds-2b-hi')", EditorMode::General))
+        .id()
+        .clone();
+    assert!(
+        shared.update(|service| service.set_env(&document, Some("python".to_string()))),
+        "绑定 python 环境应当算作变更"
+    );
+
+    // ② 提交脚本 → 等回结论（独立通道，手动轮询）
+    shared
+        .submit(
+            document.clone(),
+            &ExecTarget::Script(editor::env::ScriptRequest {
+                env_id: "python".to_string(),
+                code: "print('rds-2b-hi')".to_string(),
+            }),
+            ResultPlacement::NewSet,
+            RunOptions::default(),
+        )
+        .expect("提交脚本执行");
+
+    let notes = collect_script_notes(&shared, 1);
+    let note = notes.into_iter().next().expect("应有脚本结论");
+    assert_eq!(note.env_id, "python", "结论带目标环境 id");
+    match note.result {
+        Ok(outcome) => {
+            assert!(
+                outcome.stdout.contains("rds-2b-hi"),
+                "stdout 应原样回到结论：{:?}",
+                outcome.stdout
+            );
+            assert_eq!(outcome.exit_code, Some(0), "正常退出码应为 0");
+            assert!(!outcome.timed_out, "不应超时");
+        }
+        Err(reason) => panic!("脚本执行失败：{reason}"),
+    }
+    eprintln!("✅ 脚本执行真机链路跑通（stdout 回结论）");
+
+    // ③ 未装的环境如实拒绝（rscript 在本机探测失败 → 没装 → 不 spawn 直接拒）
+    let refused = shared.submit(
+        document.clone(),
+        &ExecTarget::Script(editor::env::ScriptRequest {
+            env_id: "rscript".to_string(),
+            code: "1+1".to_string(),
+        }),
+        ResultPlacement::NewSet,
+        RunOptions::default(),
+    );
+    // 执行器侧 resolve 到未探测的环境会 Err；若是探测到了但不可用同样会被拒。
+    // 这里不强求 submit 一定 Err（exec 队列允许提交），关键是**结论**如实报错：
+    let notes = collect_script_notes(&shared, 1);
+    let note = notes.into_iter().next().expect("应有拒绝结论");
+    assert!(
+        note.result.is_err(),
+        "rscript 未安装时应如实拒绝，而不是假装跑成功"
+    );
+    let _ = refused; // submit 侧是否 Err 由队列忙态决定，结论侧才是真值
+    eprintln!("✅ 未装环境如实拒绝（结论为 Err）");
+}
+
+/// 等脚本结论（生产由面板轮询泵做；这里手动轮询 `drain_script_notes`）
+fn collect_script_notes(
+    shared: &EditorShared,
+    expected: usize,
+) -> Vec<editor::env::ScriptNote> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut collected = Vec::new();
+    while collected.len() < expected {
+        collected.extend(shared.drain_script_notes());
+        if collected.len() >= expected {
+            return collected;
+        }
+        assert!(Instant::now() < deadline, "脚本结论迟迟没回来");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    collected
+}

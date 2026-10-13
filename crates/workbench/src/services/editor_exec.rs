@@ -790,6 +790,21 @@ impl QueryRunner for EngineQueryRunner {
         })
     }
 
+    /// 【2b】通用模式的脚本执行：解析环境命令 → 在专用 runtime 上跑进程
+    ///
+    /// 编辑器在工作线程上调用（可阻塞）：这里把 env_id 翻译成命令（`editor_env::resolve`），
+    /// 再交给 `run_script_process`（stdin 写代码 + 并发收输出 + 超时杀进程树）。
+    /// 环境未注册（T2b-3 管理环境落地前只有内置的 python / Rscript / rustc）如实拒绝。
+    fn run_script(&self, request: &editor::env::ScriptRequest) -> Result<editor::env::ScriptOutcome, String> {
+        let env = crate::services::editor_env::resolve(&request.env_id)?;
+        self.runtime.block_on(crate::services::editor_env::run_script_process(
+            env.command,
+            &env.args,
+            &request.code,
+            crate::services::editor_env::SCRIPT_TIMEOUT_MS,
+        ))
+    }
+
     /// 【B7 切片二】经 DuckDB 落盘（Parquet / XLSX）
     ///
     /// 行按**展示文本**桥接（与本地分析同一口径：`"NULL"` → 真 null，其余按字符串；
