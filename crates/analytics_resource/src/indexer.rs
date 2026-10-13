@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput};
+use crate::model::{ArchiveBinding, ArchiveKind, NewArchiveInput, PayloadMode};
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore, CoreError};
 
@@ -135,6 +135,12 @@ impl<'a> IndexRepair<'a> {
             if ArchiveKind::from_db_str(&row.kind) != ArchiveKind::File {
                 continue;
             }
+            // reference 模式的本体在**源位置**（`source_path`，可能在项目外），不在
+            // `resources/` 下：文件级存在性与指纹比对都不适用（源被改 / 删的校验在打开时做，
+            // 见 service 的 `resolve_source`）。扫描跳过，避免把每条引用都报成“本体缺失”。
+            if PayloadMode::from_db_str(&row.payload_mode) == PayloadMode::Reference {
+                continue;
+            }
 
             let path = self.payload.resolve(rel_path)?;
             if !path.is_file() {
@@ -211,6 +217,9 @@ impl<'a> IndexRepair<'a> {
                 row_count: None,
                 column_count: None,
                 file_rel_path: rel_path.to_string(),
+                // 补登的文件就在 `resources/` 下（copy 语义）；不做 reference。
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
                 file_size,
                 binding: ArchiveBinding::default(),
                 scope: "project".to_string(),
@@ -291,8 +300,10 @@ mod tests {
         include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
     const ARCHIVE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+    const PAYLOAD_MODE_MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
 
-    /// 建好临时项目 + 两段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
+    /// 建好临时项目 + 三段迁移 + 归档服务；修复器借用服务里的本体层与索引层。
     async fn test_env() -> (ArchiveService, PathBuf) {
         let dir = std::env::temp_dir().join(format!("rds_indexer_{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).await.expect("create temp project");
@@ -308,6 +319,9 @@ mod tests {
             inner
                 .execute_batch(ARCHIVE_MIGRATION_SQL)
                 .expect("migration 020");
+            inner
+                .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
+                .expect("migration 023");
         }
         let store = AnalyticsResourceStore::new(pool);
         (ArchiveService::new(&dir, store), dir)
@@ -320,6 +334,7 @@ mod tests {
             name: "dau_report".to_string(),
             alias: None,
             kind: ArchiveKind::File,
+            payload_mode: crate::model::PayloadMode::Copy,
             analysis: None,
             binding: ArchiveBinding::default(),
             tags: Vec::new(),

@@ -639,6 +639,8 @@ mod tests {
             kind: kind.to_string(),
             content_hash: Some("abc".to_string()),
             file_rel_path: Some(format!("{id}.sql")),
+            payload_mode: crate::model::PayloadMode::Copy.as_db_str().to_string(),
+            source_path: None,
             readonly: 1,
             promoted_from: None,
             source_connection_id: None,

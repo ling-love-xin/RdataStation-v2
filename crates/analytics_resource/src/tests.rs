@@ -12,7 +12,10 @@ mod tests {
     const ARCHIVE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
 
-    /// 测试库跑**两段**迁移：007（表结构）+ 020（分析存档新列）。
+    const PAYLOAD_MODE_MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+
+    /// 测试库跑**三段**迁移：007（表结构）+ 020（分析存档新列）+ 023（copy/reference 两档）。
     ///
     /// 跑齐是刻意的：只跑 007 的话，测试库的表结构与生产库不一致，行映射一旦引用新列
     /// 就会在测试里报 "no such column"（是缺陷，不是噪声）。
@@ -34,6 +37,9 @@ mod tests {
             inner
                 .execute_batch(ARCHIVE_MIGRATION_SQL)
                 .expect("run migration 020");
+            inner
+                .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
+                .expect("run migration 023");
         }
         let store = AnalyticsResourceStore::new(pool);
         (store, dir)
@@ -878,6 +884,8 @@ mod tests {
                 row_count: None,
                 column_count: None,
                 file_rel_path: "reports/dau.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
                 file_size: Some(1024),
                 binding: ArchiveBinding::default(),
                 scope: "project".to_string(),
@@ -954,6 +962,8 @@ mod tests {
                 row_count: None,
                 column_count: None,
                 file_rel_path: "reports/dau.sql".to_string(),
+                payload_mode: crate::model::PayloadMode::Copy,
+                source_path: None,
                 file_size: Some(2048),
                 binding: ArchiveBinding::default(),
                 scope: "project".to_string(),

@@ -16,7 +16,7 @@ use shared::error::{CoreError, StorageError};
 
 use crate::model::{
     ArchiveKind, ArchiveOutcome, ArchiveRequest, ArchiveUndo, ChangeReason, CheckoutOutcome,
-    CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, ResourcesChanged,
+    CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, PayloadMode, ResourcesChanged,
     TrashArchiveEntry,
 };
 use crate::payload::PayloadStore;
@@ -166,6 +166,29 @@ impl ArchiveService {
         self.events.subscribe()
     }
 
+    /// 解析存档的本体路径（按归档模式分派）。
+    ///
+    /// copy：`resources/` 相对路径（`PayloadStore::resolve`，越界守卫生效）；
+    /// reference：源**绝对**路径（`PayloadStore::resolve_source`，只校验绝对与存在）。
+    ///
+    /// 失败即返回错误——本体不在 / 源已删都要明说，不静默降级。
+    fn payload_path_for(&self, resource: &AnalyticsResource) -> Result<PathBuf, CoreError> {
+        match PayloadMode::from_db_str(&resource.payload_mode) {
+            PayloadMode::Copy => {
+                let rel = resource.file_rel_path.clone().ok_or_else(|| {
+                    service_err("resolve", "该存档没有登记本体路径（非文件型或旧行）")
+                })?;
+                self.payload.resolve(&rel)
+            }
+            PayloadMode::Reference => {
+                let source = resource.source_path.clone().ok_or_else(|| {
+                    service_err("resolve", "引用型存档没有登记源路径（数据异常）")
+                })?;
+                self.payload.resolve_source(&source)
+            }
+        }
+    }
+
     pub fn payload(&self) -> &PayloadStore {
         &self.payload
     }
@@ -207,7 +230,10 @@ impl ArchiveService {
         }
     }
 
-    /// 首次归档：本体 move + 写索引行；索引失败把本体移回原处。
+    /// 首次归档：copy 模式本体复制 + 写索引行；reference 模式只登记元数据（本体留原位）。
+    ///
+    /// 冲突检查两模式同一条（`find_archive_by_rel_path`）：reference 的 `file_rel_path`
+    /// 存源绝对路径，唯一索引天然防"同一源被归档两次"（一个源一份引用）。
     async fn archive_new(
         &self,
         req: ArchiveRequest,
@@ -224,10 +250,22 @@ impl ArchiveService {
             ));
         }
 
-        let payload_path = self
-            .payload
-            .archive_in(&req.source_path, &req.rel_path)
-            .await?;
+        let mode = req.payload_mode;
+        // reference 模式的"登记路径"：源绝对路径（本体留原位）。
+        // copy 模式：`resources/` 相对路径（搬运前定好，失败即中止）。
+        let registered_rel = match mode {
+            PayloadMode::Copy => req.rel_path.clone(),
+            PayloadMode::Reference => req
+                .source_path
+                .to_string_lossy()
+                .replace('\\', "/"),
+        };
+
+        if mode == PayloadMode::Copy {
+            self.payload
+                .copy_in(&req.source_path, &req.rel_path)
+                .await?;
+        }
 
         let input = NewArchiveInput {
             resource_type: default_resource_type(req.kind),
@@ -242,7 +280,11 @@ impl ArchiveService {
                     .map(|rows| rows.clamp(0, i32::MAX as i64) as i32)
             }),
             column_count: req.analysis.as_ref().map(|f| f.column_count()),
-            file_rel_path: req.rel_path.clone(),
+            file_rel_path: registered_rel,
+            payload_mode: mode,
+            // reference 模式记录源绝对路径；copy 模式为 None。
+            source_path: (mode == PayloadMode::Reference)
+                .then(|| req.source_path.to_string_lossy().replace('\\', "/")),
             file_size,
             binding: req.binding.clone(),
             // 作用域为派生只读量：数据住项目库 → project（架构 §4.3）。
@@ -252,18 +294,16 @@ impl ArchiveService {
         let resource = match self.store.insert_archive(input).await {
             Ok(resource) => resource,
             Err(error) => {
-                // 回滚本体：宁可回到"文件还在草稿箱"，也不要"文件没了、列表里也没有"。
-                if let Err(rollback) = self
-                    .payload
-                    .move_payload_out(&req.rel_path, &req.source_path)
-                    .await
-                {
-                    tracing::error!(
-                        error = %rollback,
-                        rel = %req.rel_path,
-                        path = %payload_path.display(),
-                        "归档回滚失败：本体留在 resources/，需经索引修复处理"
-                    );
+                // 回滚本体（copy 模式）：宁可回到"文件还在草稿箱"，也不要"副本留了、记录没有"。
+                // reference 模式没搬任何东西，无需回滚。
+                if mode == PayloadMode::Copy {
+                    if let Err(rollback) = self.payload.remove_payload(&req.rel_path).await {
+                        tracing::error!(
+                            error = %rollback,
+                            rel = %req.rel_path,
+                            "归档回滚失败：副本留在 resources/，需经索引修复处理"
+                        );
+                    }
                 }
                 return Err(error);
             }
@@ -300,6 +340,7 @@ impl ArchiveService {
         if current.deleted_at.is_some() {
             return Err(service_err("re_archive", "存档已删除，无法再归档"));
         }
+        let mode = PayloadMode::from_db_str(&current.payload_mode);
         let rel_path = current
             .file_rel_path
             .clone()
@@ -322,9 +363,24 @@ impl ArchiveService {
             });
         }
 
-        self.payload
-            .store_version_copy(resource_id, current.version, &rel_path)
-            .await?;
+        // 旧内容留副本：copy 从 `resources/` 本体复制；reference 从源绝对路径复制。
+        // reference 模式的源在外部（可能正是草稿箱工作副本），本体不归我们覆盖。
+        let copy_result = match mode {
+            PayloadMode::Copy => {
+                self.payload
+                    .store_version_copy(resource_id, current.version, &rel_path)
+                    .await?
+            }
+            PayloadMode::Reference => {
+                let source = self.payload_path_for(&current)?;
+                self.payload
+                    .store_version_copy_from(resource_id, current.version, &source)
+                    .await?
+            }
+        };
+        if copy_result.is_none() {
+            tracing::warn!(resource_id, version = current.version, "再归档时旧内容副本未落（本体缺失？）");
+        }
 
         let snapshot = serde_json::to_string(&current).map_err(|e| {
             CoreError::storage(StorageError::Serialization {
@@ -337,9 +393,13 @@ impl ArchiveService {
             .save_resource_version(resource_id, current.version, &snapshot)
             .await?;
 
-        self.payload
-            .replace_payload(&req.source_path, &rel_path)
-            .await?;
+        // copy：用工作区源覆盖 `resources/` 副本（源保留——它是工作副本）。
+        // reference：不覆盖源（本体在外部，M6 不动它），只更新指纹 / 规模 / 版本。
+        if mode == PayloadMode::Copy {
+            self.payload
+                .replace_payload(&req.source_path, &rel_path)
+                .await?;
+        }
 
         let updated = self
             .store
@@ -385,7 +445,15 @@ impl ArchiveService {
             .clone()
             .ok_or_else(|| service_err("checkout", "该存档没有本体（非文件型或旧行）"))?;
 
-        self.payload.copy_out(&rel_path, &req.dest_path).await?;
+        match PayloadMode::from_db_str(&resource.payload_mode) {
+            // copy：从 `resources/` 副本复制（本体不动、仍只读）。
+            PayloadMode::Copy => self.payload.copy_out(&rel_path, &req.dest_path).await?,
+            // reference：从源绝对路径复制（本体在源位置，M6 不动它）。
+            PayloadMode::Reference => {
+                let source = self.payload_path_for(&resource)?;
+                self.payload.copy_out_source(&source, &req.dest_path).await?;
+            }
+        }
         self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
 
         Ok(CheckoutOutcome {
@@ -410,6 +478,15 @@ impl ArchiveService {
         let current = self.store.get_resource_by_id(resource_id).await?;
         if current.deleted_at.is_some() {
             return Err(service_err("restore", "存档已删除，无法还原"));
+        }
+        // reference 模式的本体在源位置，不归 M6 管辖——"还原为旧版本"意味着覆盖源文件，
+        // 那可能正是用户工作区里在用的活文件，风险不可控；M6 定位"留存 + 版本"不做覆盖外部源。
+        // 出口：取回该版本为草稿（`checkout_version`），需要旧内容时从历史副本拿。
+        if PayloadMode::from_db_str(&current.payload_mode) == PayloadMode::Reference {
+            return Err(service_err(
+                "restore",
+                "引用型存档的本体在源位置，不支持覆盖还原；请用「取回该版本为草稿」",
+            ));
         }
         let rel_path = current
             .file_rel_path
@@ -571,6 +648,18 @@ impl ArchiveService {
             return Err(service_err(
                 "trash",
                 &format!("「{}」已经在回收站里", resource.name),
+            ));
+        }
+        // reference 模式的本体在源位置（可能是用户工作区 / 外部路径），M6 不能把它
+        // 搬进项目回收站——那等于未经同意移动用户的文件。删除引用 = 删登记记录（血缘一起清），
+        // 出口是详情面板 / 版本历史的删除（后续刀接入），这里明确拒绝而不是假成功。
+        if PayloadMode::from_db_str(&resource.payload_mode) == PayloadMode::Reference {
+            return Err(service_err(
+                "trash",
+                &format!(
+                    "「{}」是引用型存档（本体在源位置），不支持移入回收站；删除请走「删除登记记录」",
+                    resource.name
+                ),
             ));
         }
         let rel_path = resource.file_rel_path.clone().ok_or_else(|| {
@@ -769,14 +858,14 @@ impl ArchiveService {
         Ok(entries.len())
     }
 
-    /// 撤销一次归档（原型 §4.1：归档是“把文件从工作区搬走”的不可逆动作，必须给一个立即反悔的窗口）。
+    /// 撤销一次归档（原型 §4.1：归档的立即反悔窗口）。
     ///
-    /// **只管刚发生的那一次**，三条都不静默降级：
+    /// **只管刚发生的那一次**，两条都不静默降级：
     ///
     /// - 版本 > 1（即已经再归档过）→ 拒绝：撤销会连带丢掉新内容；
-    /// - 原位置已被占用 → 拒绝：撤销必须**精确**还原，覆盖别人不叫撤销；
-    /// - 顺序与归档同构（本体先行、索引后动、失败回滚）：掉索引失败就把本体搬回去，
-    ///   宁可回到"文件还在 resources/ 且记录还在"，也不要"文件没了、记录也没了"。
+    /// - 顺序与归档同构（本体先行、索引后动、失败回滚）：
+    ///   - copy 模式：源文件本来就在原处（归档是复制、草稿保留为工作副本），撤销 = 删掉副本 + 删登记行；
+    ///   - reference 模式：没搬过本体，撤销 = 只删登记行（源文件本来就在原位）。
     pub async fn undo_archive(&self, undo: &ArchiveUndo) -> Result<(), CoreError> {
         let resource = self.store.get_resource_by_id(&undo.resource_id).await?;
         if ArchiveKind::from_db_str(&resource.kind) != ArchiveKind::File {
@@ -795,27 +884,26 @@ impl ArchiveService {
                 ),
             ));
         }
-        if undo.source_path.exists() {
-            return Err(service_err(
-                "undo",
-                &format!(
-                    "原位置已有文件（{}）：撤销要精确还原，请先移走它",
-                    undo.source_path.display()
-                ),
-            ));
-        }
+        let mode = PayloadMode::from_db_str(&resource.payload_mode);
 
-        self.payload
-            .move_payload_out(&rel_path, &undo.source_path)
-            .await?;
+        // copy：删掉副本即可（源文件本来就在原处——归档是复制，不是搬走）。
+        if mode == PayloadMode::Copy {
+            self.payload.remove_payload(&rel_path).await?;
+        }
         if let Err(error) = self.store.hard_delete_row(&undo.resource_id).await {
-            // 回滚本体：与 `archive_new` 的"索引失败把本体移回去"同一条纪律。
-            if let Err(rollback) = self.payload.archive_in(&undo.source_path, &rel_path).await {
-                tracing::error!(
-                    error = %rollback,
-                    rel = %rel_path,
-                    "撤销回滚失败：本体留在原位置且记录仍在，需经索引修复处理"
-                );
+            // 回滚本体（copy 模式）：删行失败 → 把副本放回去（与 archive_new 的回滚同纪律）。
+            if mode == PayloadMode::Copy {
+                if let Err(rollback) = self
+                    .payload
+                    .copy_in(undo.source_path.as_path(), &rel_path)
+                    .await
+                {
+                    tracing::error!(
+                        error = %rollback,
+                        rel = %rel_path,
+                        "撤销回滚失败：副本未恢复，需经索引修复处理"
+                    );
+                }
             }
             return Err(error);
         }
@@ -854,7 +942,7 @@ fn service_err(operation: &str, reason: &str) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ArchiveBinding, ArchiveKind};
+    use crate::model::{ArchiveBinding, ArchiveKind, PayloadMode};
     use engine::persistence::ProjectSqlitePool;
     use std::sync::Arc;
     use tokio::fs;
@@ -863,6 +951,8 @@ mod tests {
         include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
     const ARCHIVE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+    const PAYLOAD_MODE_MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
 
     /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
     ///
@@ -887,6 +977,9 @@ mod tests {
             inner
                 .execute_batch(ARCHIVE_MIGRATION_SQL)
                 .expect("migration 020");
+            inner
+                .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
+                .expect("migration 023");
         }
         let store = AnalyticsResourceStore::new(pool);
         (
@@ -903,6 +996,7 @@ mod tests {
             alias: None,
             kind: ArchiveKind::File,
             // 大多数服务用例是文件型归档；分析表那条路见 `archive_analysis_req`。
+            payload_mode: PayloadMode::Copy,
             analysis: None,
             binding: ArchiveBinding {
                 promoted_from: Some("scratchpad/dau.sql".to_string()),
@@ -923,7 +1017,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn t101_archive_first_time_moves_payload_and_writes_registry() {
+    async fn t101_archive_first_time_copies_payload_and_writes_registry() {
         let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
         let mut events = service.subscribe();
         let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
@@ -935,7 +1029,8 @@ mod tests {
 
         assert!(outcome.created_new_version);
         assert_eq!(outcome.version, 1);
-        assert!(!draft.exists(), "归档是移动");
+        // copy 语义（2026-10-13 裁决）：归档是**复制**，草稿保留为工作副本（checkout 语义）。
+        assert!(draft.exists(), "归档是复制：草稿箱那份保留为工作副本");
 
         let payload = service
             .payload()
@@ -1445,7 +1540,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn t120_undo_moves_payload_back_and_drops_the_row() {
+    async fn t120_undo_removes_copy_and_drops_the_row_keeps_draft() {
         let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
         let mut events = service.subscribe();
         let draft = write_draft(&dir, "undo.sql", b"select 1;").await;
@@ -1453,7 +1548,7 @@ mod tests {
             .archive(archive_req(&draft, "reports/undo.sql", None))
             .await
             .expect("archive");
-        assert!(!draft.exists(), "归档后本体离开原位");
+        assert!(draft.exists(), "copy 语义：归档后草稿仍在（工作副本）");
 
         let undo = ArchiveUndo {
             resource_id: outcome.resource_id.clone(),
@@ -1462,14 +1557,15 @@ mod tests {
         };
         service.undo_archive(&undo).await.expect("undo");
 
-        assert!(draft.is_file(), "撤销后本体回到原位");
+        // copy 语义：撤销 = 删掉 `resources/` 副本 + 删登记行；草稿本来就在，不动它。
+        assert!(draft.is_file(), "草稿（工作副本）不受撤销影响");
         assert!(
             !service
                 .payload()
                 .resolve("reports/undo.sql")
                 .expect("resolve")
                 .exists(),
-            "本体不再留在 resources/"
+            "副本不再留在 resources/"
         );
         assert!(
             service
@@ -1489,7 +1585,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn t121_undo_refuses_on_occupied_origin_or_newer_version() {
+    async fn t121_undo_refuses_when_rearchived_but_allows_with_draft_in_place() {
         let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
         let draft = write_draft(&dir, "occupied.sql", b"select 1;").await;
         let outcome = service
@@ -1502,33 +1598,50 @@ mod tests {
             source_path: draft.clone(),
         };
 
-        // ① 原位置又被占：拒绝，且**两边都不动**（撤销不覆盖别人）。
+        // ① copy 语义：草稿在“原位”是常态（它是工作副本），撤销**不受它阻挡**——
+        // 撤销删的是 `resources/` 副本与登记行，不碰草稿。
         fs::write(&draft, b"other").await.expect("write again");
+        service
+            .undo_archive(&undo)
+            .await
+            .expect("copy 语义下原草稿在位不阻挡撤销");
+        assert!(draft.is_file(), "草稿原样保留");
         assert!(
-            service.undo_archive(&undo).await.is_err(),
-            "原位置已有文件要拒绝"
-        );
-        assert!(
-            service
+            !service
                 .payload()
                 .resolve("occupied.sql")
                 .expect("resolve")
-                .is_file(),
-            "被拒后本体仍在 resources/"
+                .exists(),
+            "副本已被撤销删掉"
         );
 
         // ② 已经再归档过（v2）：撤销窗口已过（否则会连带丢掉新内容）。
-        fs::write(&draft, b"select 2;").await.expect("rewrite");
-        service
+        let draft2 = write_draft(&dir, "occupied2.sql", b"select 2;").await;
+        let re_archived = service
             .archive(archive_req(
-                &draft,
-                "occupied.sql",
-                Some(&outcome.resource_id),
+                &draft2,
+                "occupied2.sql",
+                None,
             ))
             .await
-            .expect("re-archive");
+            .expect("archive");
+        // 先构造“v2 同档”场景：对同一资源再归档一次（版本 +1）。
+        fs::write(&draft2, b"select 3;").await.expect("rewrite");
+        service
+            .archive(archive_req(
+                &draft2,
+                "occupied2.sql",
+                Some(&re_archived.resource_id),
+            ))
+            .await
+            .expect("re-archive to v2");
+        let undo_v2 = ArchiveUndo {
+            resource_id: re_archived.resource_id.clone(),
+            name: "dau_report".to_string(),
+            source_path: draft2.clone(),
+        };
         assert!(
-            service.undo_archive(&undo).await.is_err(),
+            service.undo_archive(&undo_v2).await.is_err(),
             "已有新版本不给撤销"
         );
 
@@ -2102,5 +2215,188 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    // ===== File 档 reference 模式（2026-10-13 裁决：两档都做、默认 copy）=====
+
+    /// 构造 reference 归档请求：本体留原位、只登记元数据。
+    fn reference_req(source: &std::path::Path, rel: &str) -> ArchiveRequest {
+        let mut req = archive_req(source, rel, None);
+        req.payload_mode = PayloadMode::Reference;
+        req
+    }
+
+    /// reference 归档：本体不移动、源保留；登记 `file_rel_path`=源绝对路径 + `source_path`；
+    /// 指纹照算（源文件字节 sha256）。
+    #[tokio::test]
+    async fn t134_reference_archive_keeps_source_in_place_and_registers_metadata() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        // 源在项目外（reference 的典型场景：大文件 / 外部路径），但要绝对路径。
+        let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
+        fs::write(&outside, b"a,b\n1,2\n").await.expect("write external source");
+
+        let outcome = service
+            .archive(reference_req(&outside, "data/big.csv"))
+            .await
+            .expect("reference archive");
+
+        assert!(outcome.created_new_version);
+        assert!(outside.is_file(), "reference：本体留原位，不搬走");
+        assert!(
+            !service.payload().resources_dir().join("data/big.csv").exists(),
+            "reference：不复制进 resources/"
+        );
+
+        let row = service
+            .store()
+            .get_resource_by_id(&outcome.resource_id)
+            .await
+            .expect("row");
+        assert_eq!(row.payload_mode, "reference");
+        assert_eq!(
+            row.file_rel_path.as_deref(),
+            Some(outside.to_string_lossy().replace('\\', "/").as_str()),
+            "reference 的 file_rel_path = 源绝对路径（唯一索引防同一源重复归档）"
+        );
+        assert_eq!(
+            row.source_path.as_deref(),
+            Some(outside.to_string_lossy().replace('\\', "/").as_str()),
+            "source_path 记录源绝对路径"
+        );
+        assert!(row.content_hash.is_some(), "指纹照算（源文件字节）");
+
+        let _ = fs::remove_dir_all(&dir).await;
+        let _ = fs::remove_file(&outside).await;
+    }
+
+    /// reference 取回：从**源**复制出可写工作副本（不是从 `resources/`）。
+    #[tokio::test]
+    async fn t135_reference_checkout_copies_from_source() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
+        fs::write(&outside, b"a,b\n1,2\n").await.expect("write external source");
+        let archived = service
+            .archive(reference_req(&outside, "data/big.csv"))
+            .await
+            .expect("reference archive");
+
+        let dest = dir.join("scratchpad").join("big（工作副本）.csv");
+        let checked = service
+            .checkout(CheckoutRequest {
+                resource_id: archived.resource_id.clone(),
+                dest_path: dest.clone(),
+            })
+            .await
+            .expect("reference checkout");
+
+        assert_eq!(checked.dest_path, dest);
+        assert_eq!(fs::read(&dest).await.expect("read"), b"a,b\n1,2\n");
+        assert!(!service.payload().is_readonly(&dest), "工作副本必须可写");
+        assert!(outside.is_file(), "源不受取回影响");
+
+        let _ = fs::remove_dir_all(&dir).await;
+        let _ = fs::remove_file(&outside).await;
+    }
+
+    /// reference 再归档：内容变了 → 版本 +1、指纹更新；源**不被覆盖**（本体在外部，M6 不动它）。
+    #[tokio::test]
+    async fn t136_reference_rearchive_updates_fingerprint_without_touching_source() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
+        fs::write(&outside, b"a,b\n1,2\n").await.expect("write source v1");
+        let archived = service
+            .archive(reference_req(&outside, "data/big.csv"))
+            .await
+            .expect("reference archive");
+        assert_eq!(archived.version, 1);
+
+        // 源内容被外部改掉（活文件）→ 再归档 = 新版本（指纹变了）。
+        fs::write(&outside, b"a,b,c\n1,2,3\n").await.expect("mutate source");
+        let mut re = reference_req(&outside, "data/big.csv");
+        re.existing_resource_id = Some(archived.resource_id.clone());
+        let updated = service
+            .archive(re).await
+            .expect("reference re-archive");
+
+        assert!(updated.created_new_version);
+        assert_eq!(updated.version, 2);
+        assert!(
+            !service.payload().resources_dir().join("data/big.csv").exists(),
+            "reference 再归档不产生 resources/ 副本"
+        );
+        // 源内容保持（不是被“还原/覆盖”成什么别的）——M6 不动外部本体。
+        assert_eq!(fs::read(&outside).await.expect("read"), b"a,b,c\n1,2,3\n");
+
+        let _ = fs::remove_dir_all(&dir).await;
+        let _ = fs::remove_file(&outside).await;
+    }
+
+    /// reference 撤销：只删登记行（源本来就在原位，没什么要搬回去）。
+    #[tokio::test]
+    async fn t137_reference_undo_drops_row_only() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
+        fs::write(&outside, b"a,b\n1,2\n").await.expect("write external source");
+        let archived = service
+            .archive(reference_req(&outside, "data/big.csv"))
+            .await
+            .expect("reference archive");
+
+        service
+            .undo_archive(&ArchiveUndo {
+                resource_id: archived.resource_id.clone(),
+                name: "big".to_string(),
+                source_path: outside.clone(),
+            })
+            .await
+            .expect("reference undo");
+
+        assert!(outside.is_file(), "源不动");
+        assert!(
+            service
+                .store()
+                .get_resource_by_id(&archived.resource_id)
+                .await
+                .is_err(),
+            "登记行已删"
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+        let _ = fs::remove_file(&outside).await;
+    }
+
+    /// reference 移入回收站：明确拒绝（本体在源位置，M6 不能搬用户的文件）。
+    #[tokio::test]
+    async fn t138_reference_trash_is_refused() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
+        fs::write(&outside, b"a,b\n1,2\n").await.expect("write external source");
+        let archived = service
+            .archive(reference_req(&outside, "data/big.csv"))
+            .await
+            .expect("reference archive");
+
+        let error = service
+            .move_to_trash(&[archived.resource_id.clone()])
+            .await
+            .expect_err("reference trash must be refused");
+        assert!(
+            error.to_string().contains("引用型存档"),
+            "错误要说明是引用型：{error}"
+        );
+        assert!(outside.is_file(), "源不动");
+        assert!(
+            service
+                .store()
+                .get_resource_by_id(&archived.resource_id)
+                .await
+                .expect("row")
+                .deleted_at
+                .is_none(),
+            "被拒的行不能变成软删态"
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+        let _ = fs::remove_file(&outside).await;
     }
 }

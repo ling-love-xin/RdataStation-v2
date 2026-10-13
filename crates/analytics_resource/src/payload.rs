@@ -126,6 +126,65 @@ impl PayloadStore {
         Ok(())
     }
 
+    /// 归档搬运（copy 模式的默认粒度，2026-10-13 裁决）：把源文件**复制**进 `resources/<rel>`，
+    /// 并标记只读；**源文件保留在原处**（草稿箱那份 = 工作副本，checkout 语义）。
+    ///
+    /// 与 [`archive_in`](Self::archive_in)（move 语义，历史路径 / 回滚用）的区别只在"源留不留"：
+    /// 顺序与失败语义一致——目标已存在即报错（**不静默覆盖**）；只读标记失败只警告。
+    pub async fn copy_in(&self, source: &Path, rel: &str) -> Result<PathBuf, CoreError> {
+        if !source.is_file() {
+            return Err(io_err(source, "copy_in", "源文件不存在或不是普通文件"));
+        }
+        let dest = self.resolve(rel)?;
+        if dest.exists() {
+            return Err(io_err(
+                &dest,
+                "copy_in",
+                "目标已存在，请改名或先移除旧存档（不覆盖）",
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| io_err(parent, "copy_create_parent", e))?;
+        }
+
+        fs::copy(source, &dest)
+            .await
+            .map_err(|e| io_err(source, "copy_in_copy", e))?;
+
+        if let Err(e) = self.set_readonly(&dest, true).await {
+            tracing::warn!(error = %e, path = %dest.display(), "设置只读属性失败（应用层守卫仍生效）");
+        }
+
+        Ok(dest)
+    }
+
+    /// 解析 **reference 模式**的本体：源文件**绝对**路径（迁移 023 的 `source_path`）。
+    ///
+    /// 与 [`resolve`](Self::resolve)（`resources/` 相对路径 + 越界守卫）分开：reference 模式的
+    /// 本体不在本模块管辖的目录里，守卫不适用——但**必须**是绝对路径（拒绝相对路径逃逸）。
+    /// 文件不存在时返回错误：reference 快照的"打开 / 取回"依赖源在位，源没了要明说
+    /// （"源已变更 / 源已删，快照失效"由调用方拼文案）。
+    pub fn resolve_source(&self, source_path: &str) -> Result<PathBuf, CoreError> {
+        let path = PathBuf::from(source_path);
+        if !path.is_absolute() {
+            return Err(io_err(
+                &path,
+                "resolve_source",
+                "reference 模式的本体必须是绝对路径（数据异常）",
+            ));
+        }
+        if !path.is_file() {
+            return Err(io_err(
+                &path,
+                "resolve_source",
+                "源文件已不在（reference 快照失效：源被删除或移动）",
+            ));
+        }
+        Ok(path)
+    }
+
     /// 归档搬运：把源文件**移动**进 `resources/<rel>`，并标记只读。
     ///
     /// 顺序与失败语义（架构 §6.3）：目标已存在即报错（**不静默覆盖**）；跨设备 `rename`
@@ -189,6 +248,20 @@ impl PayloadStore {
                 .await
                 .map_err(|e| io_err(&source, "move_out_remove_source", e))?;
         }
+        Ok(())
+    }
+
+    /// **删除** `resources/` 下的一份本体（copy 模式的撤销 / 索引修复路径用）。
+    ///
+    /// 与 [`move_payload_out`](Self::move_payload_out) 的差别：没有目标位置——直接删掉副本。
+    pub async fn remove_payload(&self, rel: &str) -> Result<(), CoreError> {
+        let path = self.resolve(rel)?;
+        if !path.is_file() {
+            return Err(io_err(&path, "remove_payload", "本体不存在"));
+        }
+        fs::remove_file(&path)
+            .await
+            .map_err(|e| io_err(&path, "remove_payload", e))?;
         Ok(())
     }
 
@@ -270,6 +343,27 @@ impl PayloadStore {
             tracing::warn!(error = %e, path = %dest.display(), "清除工作副本只读属性失败");
         }
 
+        Ok(())
+    }
+
+    /// 取回（检出）的 **reference 变体**：源是**绝对路径**（本体在源位置，不经 `resources/` 守卫）。
+    ///
+    /// 与 [`copy_out`](Self::copy_out) 同一语义（复制、目标可写），只换源。
+    pub async fn copy_out_source(&self, source: &Path, dest: &Path) -> Result<(), CoreError> {
+        if !source.is_file() {
+            return Err(io_err(source, "copy_out_source", "源文件已不在（reference 快照失效）"));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| io_err(parent, "checkout_create_parent", e))?;
+        }
+        fs::copy(source, dest)
+            .await
+            .map_err(|e| io_err(dest, "checkout_copy", e))?;
+        if let Err(e) = self.set_readonly(dest, false).await {
+            tracing::warn!(error = %e, path = %dest.display(), "清除工作副本只读属性失败");
+        }
         Ok(())
     }
 
@@ -415,12 +509,25 @@ impl PayloadStore {
         rel: &str,
     ) -> Result<Option<PathBuf>, CoreError> {
         let source = self.resolve(rel)?;
+        self.store_version_copy_from(resource_id, version, &source).await
+    }
+
+    /// 同上，但源是 **reference 模式的绝对路径**（本体在源位置，不经 `resources/` 守卫）。
+    ///
+    /// 与 [`store_version_copy`](Self::store_version_copy) 的差别只在源的解析方式：
+    /// 本体缺失时返回 `Ok(None)`（源被删 → 该版本无副本，界面上以“副本缺失”呈现）。
+    pub async fn store_version_copy_from(
+        &self,
+        resource_id: &str,
+        version: i32,
+        source: &Path,
+    ) -> Result<Option<PathBuf>, CoreError> {
         if !source.is_file() {
             return Ok(None);
         }
         let file_name = source
             .file_name()
-            .ok_or_else(|| io_err(&source, "version_copy", "本体没有文件名"))?;
+            .ok_or_else(|| io_err(source, "version_copy", "本体没有文件名"))?;
 
         let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
         fs::create_dir_all(&dir)
@@ -431,7 +538,7 @@ impl PayloadStore {
         if dest.exists() {
             return Ok(Some(dest));
         }
-        fs::copy(&source, &dest)
+        fs::copy(source, &dest)
             .await
             .map_err(|e| io_err(&dest, "version_copy", e))?;
         Ok(Some(dest))

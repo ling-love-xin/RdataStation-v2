@@ -389,6 +389,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                             alias: result.alias,
                             // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
                             kind: archive_kind_for(&draft.abs_path),
+                            payload_mode: analytics_resource::model::PayloadMode::Copy,
                             analysis: None,
                             binding: ArchiveBinding {
                                 // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
@@ -427,6 +428,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                             alias: None,
                             // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
                             kind: archive_kind_for(&draft.abs_path),
+                            payload_mode: analytics_resource::model::PayloadMode::Copy,
                             analysis: None,
                             binding: ArchiveBinding {
                                 promoted_from: Some(format!(
@@ -512,6 +514,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                 alias: result.alias,
                 // 同上：数据文件走分析档（探测在工作线程上做）。
                 kind: archive_kind_for(&source),
+                payload_mode: analytics_resource::model::PayloadMode::Copy,
                 analysis: None,
                 binding: ArchiveBinding {
                     promoted_from: None,

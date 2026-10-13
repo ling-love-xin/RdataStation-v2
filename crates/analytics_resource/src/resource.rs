@@ -13,7 +13,8 @@ pub(crate) const RESOURCE_COLUMNS: &str = "\
     version, parent_version_id, parent_resource_id, source_query, created_at, updated_at, \
     created_by, deleted_at, \
     kind, content_hash, file_rel_path, readonly, promoted_from, source_connection_id, \
-    source_table, definition_sql, archived_at";
+    source_table, definition_sql, archived_at, \
+    payload_mode, source_path";
 
 /// 每页上限：`page_size` 夹紧到 [1, MAX]。
 ///
@@ -77,6 +78,8 @@ pub(crate) fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Anal
             .ok()
             .flatten()
             .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
+        payload_mode: row.get(26)?,
+        source_path: row.get(27)?,
     })
 }
 
@@ -290,8 +293,9 @@ impl AnalyticsResourceStore {
                 row_count, column_count, version, parent_version_id, parent_resource_id, source_query,
                 created_at, updated_at,
                 kind, content_hash, file_rel_path, readonly,
-                promoted_from, source_connection_id, source_table, definition_sql, archived_at
-            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                promoted_from, source_connection_id, source_table, definition_sql, archived_at,
+                payload_mode, source_path
+            ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
             "#,
                 rusqlite::params![
                     &id,
@@ -312,6 +316,8 @@ impl AnalyticsResourceStore {
                     &input.binding.source_table,
                     &input.definition_sql,
                     &now,
+                    input.payload_mode.as_db_str(),
+                    &input.source_path,
                 ],
             )
             .map_err(|e| persistence_err("insert", e))?;

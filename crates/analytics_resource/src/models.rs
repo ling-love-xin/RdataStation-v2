@@ -30,6 +30,10 @@ pub struct AnalyticsResource {
     pub content_hash: Option<String>,
     /// 本体在 `resources/` 下的相对路径（`kind = file`）。
     pub file_rel_path: Option<String>,
+    /// File 档归档粒度：`copy` / `reference`（迁移 023；用 `PayloadMode::from_db_str` 解析）。
+    pub payload_mode: String,
+    /// reference 模式的源绝对路径（迁移 023；copy 模式为 `None`）。
+    pub source_path: Option<String>,
     /// 归档后只读标记（应用层守卫为主）。
     pub readonly: i32,
     /// 来源草稿相对路径。

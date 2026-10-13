@@ -8012,6 +8012,8 @@ dependencies = [
  "rds-engine",
  "rds-paths",
  "rds-shared",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

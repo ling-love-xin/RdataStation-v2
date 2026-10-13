@@ -109,6 +109,49 @@ pub struct ArchiveBinding {
     pub source_table: Option<String>,
 }
 
+/// File 档归档粒度（2026-10-13 裁决：两档都做、默认 copy）。
+///
+/// 回答"本体放哪"：copy = 复制进 `resources/`（版本冻结、回溯读副本永不失效，草稿箱保留为
+/// 工作副本 checkout 语义）；reference = 只存元数据（地址 + 文件名 + 指纹 + 版本记录），
+/// 本体留原位、打开校验指纹（不一致提示"源已变更，快照失效"）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadMode {
+    /// 本体复制进 `resources/` + 只读；草稿箱那份保留为工作副本。
+    Copy,
+    /// 本体留原位；只存元数据 + 源指纹；打开时校验指纹。
+    Reference,
+}
+
+impl PayloadMode {
+    /// 默认模式：copy（裁决）。
+    pub const DEFAULT: Self = Self::Copy;
+
+    /// 落库值（迁移 023 的 `payload_mode` 列，带 `CHECK`）。
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Reference => "reference",
+        }
+    }
+
+    /// 从库值解析：**未知值回退 `Copy`**（与 `ArchiveKind::from_db_str` 同一取舍：
+    /// 旧版本读到新值不应整表失败；旧行默认 copy）。
+    pub fn from_db_str(value: &str) -> Self {
+        match value {
+            "reference" => Self::Reference,
+            _ => Self::Copy,
+        }
+    }
+
+    /// 界面文案（归档对话框 / 详情面板标注用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Copy => "复制",
+            Self::Reference => "引用",
+        }
+    }
+}
+
 /// 历史内容副本的保留策略（设置项 `resources.keep_versions` 的领域口径，架构 §5.2）。
 ///
 /// 保留的只是**内容副本**：版本行（元数据）永久保留，界面上以"副本缺失"标注。
@@ -179,6 +222,12 @@ pub struct ArchiveRequest {
     pub alias: Option<String>,
     /// 存档种类。
     pub kind: ArchiveKind,
+    /// **File 档归档粒度**（默认 `Copy`，2026-10-13 裁决）：copy = 本体复制进 `resources/`；
+    /// reference = 本体留原位、只存元数据。
+    ///
+    /// `Analysis` 档（`analysis` 为 `Some` 时）恒为 `Copy`（本体由采集侧落库），
+    /// 此字段只对 `File` 档有意义。
+    pub payload_mode: PayloadMode,
     /// **分析表事实**（`kind = Analysis` 时由宿主采集后随请求带入）。
     ///
     /// `Some` 时：指纹取 [`crate::analysis::AnalysisFacts::fingerprint`]（定义 + 结构）
@@ -342,6 +391,12 @@ pub struct NewArchiveInput {
     pub column_count: Option<i32>,
     /// 本体相对路径。
     pub file_rel_path: String,
+    /// **File 档归档粒度**（迁移 023）：copy / reference。
+    pub payload_mode: PayloadMode,
+    /// reference 模式的源**绝对**路径（copy 模式为 `None`）。
+    ///
+    /// 打开 / 取回 / 历史副本 / 指纹校验都从它解析本体；源被删 / 改 → “源已变更，快照失效”。
+    pub source_path: Option<String>,
     /// 本体字节数（登记时现读；读不到给 `None`，不假装 0）。
     ///
     /// 三个去处：行的体积尾巴、详情面板的大小、列表的「大小」排序——排序比的是这个原始值，
