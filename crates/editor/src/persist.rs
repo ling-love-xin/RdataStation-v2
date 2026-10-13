@@ -44,17 +44,48 @@ impl fmt::Display for PersistError {
 
 impl std::error::Error for PersistError {}
 
-/// 读文件（打开入口用）
+/// 读文件并解码成 Unicode（打开入口用；BOM / 非 UTF-8 按 `encoding::decode_bytes` 兜底）
+///
+/// 返回的文本是**内核格式**（LF 换行保持原样——CRLF 文件照常打开，换行检测在
+/// [`load_with_meta`] 里做）。
 pub fn load(path: &Path) -> Result<String, PersistError> {
-    std::fs::read_to_string(path).map_err(|error| PersistError::Io {
+    read_bytes(path).map(|bytes| crate::encoding::decode_bytes(&bytes).0)
+}
+
+/// 读文件 + 判定保存格式（`open_file_with` 用：检测到的编码 / 换行要落到文档级状态）
+pub fn load_with_meta(
+    path: &Path,
+) -> Result<(String, crate::encoding::SaveFormat), PersistError> {
+    let bytes = read_bytes(path)?;
+    let (text, encoding) = crate::encoding::decode_bytes(&bytes);
+    let eol = crate::encoding::LineEnding::detect(&text);
+    Ok((
+        text,
+        crate::encoding::SaveFormat { encoding, eol },
+    ))
+}
+
+/// 读原始字节（统一的 Io 错误包装）
+fn read_bytes(path: &Path) -> Result<Vec<u8>, PersistError> {
+    std::fs::read(path).map_err(|error| PersistError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
     })
 }
 
-/// 写文件（保存用）
+/// 写文件（按目标保存格式编码；调用方给文档级 format）
 pub fn write(path: &Path, content: &str) -> Result<(), PersistError> {
-    std::fs::write(path, content).map_err(|error| PersistError::Io {
+    write_with_format(path, content, crate::encoding::SaveFormat::default())
+}
+
+/// 写文件：换行先规范化，再按编码编码（[`crate::encoding::encode`] 的最后一步落盘）
+pub fn write_with_format(
+    path: &Path,
+    content: &str,
+    format: crate::encoding::SaveFormat,
+) -> Result<(), PersistError> {
+    let bytes = crate::encoding::encode(content, format);
+    std::fs::write(path, bytes).map_err(|error| PersistError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
     })
@@ -118,14 +149,17 @@ fn open_file_with(
 
     // A13 文件档位：按**实际大小**定策略（>50MB 关重能力，≥200MB 不加载内容）
     let tier = crate::limits::tier_for_path(path);
-    let content = if tier.opens_read_only() {
+    let (content, format) = if tier.opens_read_only() {
         // 超大文件**不整份读进来**——那正是这个档位要避免的事：读进来就已经把内存吃掉了，
         // 之后再置只读也救不回来。原型 §4 的语义是“不建编辑器会话，只给提示卡”。
-        String::new()
+        (String::new(), crate::encoding::SaveFormat::default())
     } else {
-        load(path)?
+        load_with_meta(path)?
     };
-    let mut request = crate::service::OpenRequest::file(path, content, mode).with_tier(tier);
+    let mut request =
+        crate::service::OpenRequest::file(path, content, mode)
+            .with_tier(tier)
+            .with_format(format);
     if let Some(true) = editor_read_only {
         // 连接维不动（它是另一回事：能不能写库，不是能不能改文本）；
         // 先取值再移动（`with_read_only` 按值收 `self`）。
@@ -148,7 +182,7 @@ pub fn save_document(
     shared: &EditorShared,
     id: &DocumentId,
 ) -> Result<PathBuf, PersistError> {
-    let (path, content) = {
+    let (path, content, format) = {
         let service = shared.service();
         let document = service
             .find(id)
@@ -157,10 +191,14 @@ pub fn save_document(
             .path()
             .map(Path::to_path_buf)
             .ok_or_else(|| PersistError::Untitled(id.clone()))?;
-        (path, content_for_save(shared, id, document.mode())?)
+        (
+            path,
+            content_for_save(shared, id, document.mode())?,
+            document.save_format(),
+        )
     };
 
-    write(&path, &content)?;
+    write_with_format(&path, &content, format)?;
     shared.update(|service| {
         service.mark_saved(id);
     });
@@ -173,15 +211,18 @@ pub fn save_as(
     id: &DocumentId,
     path: &Path,
 ) -> Result<PathBuf, PersistError> {
-    let content = {
+    let (content, format) = {
         let service = shared.service();
         let document = service
             .find(id)
             .ok_or_else(|| PersistError::UnknownDocument(id.clone()))?;
-        content_for_save(shared, id, document.mode())?
+        (
+            content_for_save(shared, id, document.mode())?,
+            document.save_format(),
+        )
     };
 
-    write(path, &content)?;
+    write_with_format(path, &content, format)?;
     shared.update(|service| {
         let _ = service.rename(id, path);
         service.mark_saved(id);

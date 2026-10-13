@@ -51,6 +51,14 @@ pub struct Document {
     tab_size: usize,
     /// 【T2c-4】缩进用制表符（`true` = Tab 缩进，状态栏显「Tab」；`false` = 空格 × tab_size）
     hard_tabs: bool,
+    /// 【2c】显示空白字符（空格 `•` / 制表符 `→`；视图偏好，不随会话持久化）
+    show_whitespaces: bool,
+    /// 【2c】显示隐藏字符标注（零宽 / 全角空格 / 控制字符；视图偏好，不随会话持久化）
+    show_invisible: bool,
+    /// 【2c】当前保存格式（编码 + 换行；文档级权威值）
+    format: crate::encoding::SaveFormat,
+    /// 【2c】上次加载 / 保存时的保存格式（格式切换也是未保存的改动）
+    saved_format: crate::encoding::SaveFormat,
 }
 
 impl Document {
@@ -67,6 +75,7 @@ impl Document {
         channel: crate::channel::ExecChannel,
         schema: Option<String>,
         env: Option<String>,
+        format: crate::encoding::SaveFormat,
     ) -> Self {
         Self {
             id,
@@ -83,6 +92,10 @@ impl Document {
             env,
             tab_size: 2,
             hard_tabs: false,
+            show_whitespaces: false,
+            show_invisible: false,
+            saved_format: format,
+            format,
         }
     }
 
@@ -146,6 +159,21 @@ impl Document {
         self.hard_tabs
     }
 
+    /// 【2c】是否显示空白字符（空格 `•` / 制表符 `→`）
+    pub fn show_whitespaces(&self) -> bool {
+        self.show_whitespaces
+    }
+
+    /// 【2c】是否显示隐藏字符标注
+    pub fn show_invisible(&self) -> bool {
+        self.show_invisible
+    }
+
+    /// 【2c】当前保存格式（编码 + 换行）
+    pub fn save_format(&self) -> crate::encoding::SaveFormat {
+        self.format
+    }
+
     /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
     pub fn tier_notice(&self) -> Option<&'static str> {
         self.tier.notice()
@@ -160,9 +188,9 @@ impl Document {
         self.capabilities().output
     }
 
-    /// 是否与基线不同（唯一的脏判据）
+    /// 是否与基线不同（脏判据：内容变了，或保存格式换了——保存会产出不同字节）
     pub fn is_dirty(&self) -> bool {
-        self.content != self.baseline
+        self.content != self.baseline || self.format != self.saved_format
     }
 
     /// 供视图做差异比较的基线长度等统计（不暴露基线本身，避免外部改写）
@@ -174,9 +202,10 @@ impl Document {
         self.content = content;
     }
 
-    /// 把当前内容记为已保存（保存成功后调用）
+    /// 把当前内容记为已保存（保存成功后调用；格式同时前移）
     fn mark_saved(&mut self) {
         self.baseline = self.content.clone();
+        self.saved_format = self.format;
     }
 
     fn set_mode(&mut self, mode: EditorMode) {
@@ -215,6 +244,8 @@ pub struct OpenRequest {
     pub schema: Option<String>,
     /// 【2b】选中执行环境 id（通用模式脚本执行；默认未选 → 运行不亮）
     pub env: Option<String>,
+    /// 【2c】保存格式（默认 UTF-8 + LF；`persist::open_file` 按检测结果给）
+    pub format: crate::encoding::SaveFormat,
 }
 
 impl OpenRequest {
@@ -230,6 +261,7 @@ impl OpenRequest {
             channel: crate::channel::ExecChannel::default(),
             schema: None,
             env: None,
+            format: crate::encoding::SaveFormat::default(),
         }
     }
 
@@ -245,6 +277,7 @@ impl OpenRequest {
             channel: crate::channel::ExecChannel::default(),
             schema: None,
             env: None,
+            format: crate::encoding::SaveFormat::default(),
         }
     }
 
@@ -256,6 +289,12 @@ impl OpenRequest {
 
     pub fn with_read_only(mut self, read_only: ReadOnly) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// 【2c】带上保存格式（`persist::open_file` 按磁盘检测结果给）
+    pub fn with_format(mut self, format: crate::encoding::SaveFormat) -> Self {
+        self.format = format;
         self
     }
 
@@ -398,6 +437,7 @@ impl EditorService {
             request.channel,
             request.schema,
             request.env,
+            request.format,
         ));
         self.active = Some(id.clone());
 
@@ -605,6 +645,73 @@ impl EditorService {
             return false;
         }
         doc.hard_tabs = hard;
+        true
+    }
+
+    /// 【2c】文档是否显示空白字符（空格 `•` / 制表符 `→`）
+    pub fn document_show_whitespaces(&self, id: &DocumentId) -> bool {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.show_whitespaces())
+            .unwrap_or(false)
+    }
+
+    /// 【2c】重设显示空白字符；返回是否真变
+    pub fn set_document_show_whitespaces(&mut self, id: &DocumentId, show: bool) -> bool {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
+            return false;
+        };
+        if doc.show_whitespaces == show {
+            return false;
+        }
+        doc.show_whitespaces = show;
+        true
+    }
+
+    /// 【2c】文档是否显示隐藏字符标注
+    pub fn document_show_invisible(&self, id: &DocumentId) -> bool {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.show_invisible())
+            .unwrap_or(false)
+    }
+
+    /// 【2c】重设显示隐藏字符标注；返回是否真变
+    pub fn set_document_show_invisible(&mut self, id: &DocumentId, show: bool) -> bool {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
+            return false;
+        };
+        if doc.show_invisible == show {
+            return false;
+        }
+        doc.show_invisible = show;
+        true
+    }
+
+    /// 【2c】文档当前保存格式（编码 + 换行）
+    pub fn document_save_format(&self, id: &DocumentId) -> crate::encoding::SaveFormat {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.save_format())
+            .unwrap_or_default()
+    }
+
+    /// 【2c】重设文档保存格式（编码 / 换行）；返回是否真变（同值 = 未变）
+    pub fn set_document_save_format(
+        &mut self,
+        id: &DocumentId,
+        format: crate::encoding::SaveFormat,
+    ) -> bool {
+        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id() == id) else {
+            return false;
+        };
+        if doc.format == format {
+            return false;
+        }
+        doc.format = format;
         true
     }
 
@@ -950,5 +1057,67 @@ mod tests {
         assert_eq!(service.document_tab_size(&ghost), 2);
         assert!(!service.document_hard_tabs(&ghost));
         assert!(!service.set_document_tab_size(&ghost, 8));
+    }
+
+    /// 【2c】保存格式（编码 + 换行）：默认 UTF-8 + LF；切换标脏、保存后干净、切回原格式不脏
+    #[test]
+    fn save_format_switch_marks_dirty_and_mark_saved_clears_it() {
+        let (mut service, id) = opened_file(r"D:\a.sql", "select 1");
+
+        // 默认 UTF-8 + LF，不脏
+        let default = crate::encoding::SaveFormat::default();
+        assert_eq!(service.document_save_format(&id), default);
+        assert!(!service.find(&id).expect("doc").is_dirty());
+
+        // 切编码（UTF-8 → GBK）：真变 + 标脏（保存会产出不同字节）
+        let gbk = crate::encoding::SaveFormat {
+            encoding: crate::encoding::TextEncoding::Gbk,
+            ..default
+        };
+        assert!(service.set_document_save_format(&id, gbk));
+        assert_eq!(service.document_save_format(&id), gbk);
+        assert!(service.find(&id).expect("doc").is_dirty(), "切编码 = 未保存的改动");
+        assert!(!service.set_document_save_format(&id, gbk), "同值重设 = 未变");
+
+        // 保存：格式前移，干净
+        service.mark_saved(&id);
+        assert!(!service.find(&id).expect("doc").is_dirty());
+
+        // 再切回默认：又脏，直到保存
+        assert!(service.set_document_save_format(&id, default));
+        assert!(service.find(&id).expect("doc").is_dirty());
+        service.mark_saved(&id);
+        assert!(!service.find(&id).expect("doc").is_dirty());
+
+        // 不存在的文档：读回退默认、设置 false
+        let ghost = DocumentId::new("ghost-doc");
+        assert_eq!(service.document_save_format(&ghost), default);
+        assert!(!service.set_document_save_format(&ghost, gbk));
+    }
+
+    /// 【2c】显示空白 / 隐藏字符：独立开关、重复设置同值 = 未变、不影响脏状态
+    #[test]
+    fn show_flags_are_independent_and_do_not_mark_dirty() {
+        let (mut service, id) = opened_file(r"D:\a.sql", "select 1");
+
+        assert!(!service.document_show_whitespaces(&id));
+        assert!(!service.document_show_invisible(&id));
+
+        assert!(service.set_document_show_whitespaces(&id, true));
+        assert!(service.document_show_whitespaces(&id));
+        assert!(!service.document_show_whitespaces(&id) == false);
+        assert!(!service.set_document_show_whitespaces(&id, true), "同值重设 = 未变");
+        // 视图偏好不影响脏状态
+        assert!(!service.find(&id).expect("doc").is_dirty());
+
+        assert!(service.set_document_show_invisible(&id, true));
+        assert!(service.document_show_invisible(&id));
+        assert!(!service.document_show_whitespaces(&id) == false, "两个开关独立");
+        assert!(!service.set_document_show_invisible(&id, true), "同值重设 = 未变");
+
+        let ghost = DocumentId::new("ghost-doc");
+        assert!(!service.document_show_whitespaces(&ghost));
+        assert!(!service.document_show_invisible(&ghost));
+        assert!(!service.set_document_show_whitespaces(&ghost, true));
     }
 }

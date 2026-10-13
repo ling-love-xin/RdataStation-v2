@@ -88,6 +88,8 @@ arrow = "58.4.0"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 # 错误类型（gpui-base 的 provider trait 用 `anyhow::Result`）
 anyhow = "1.0"
+# 文本编码转码（editor 2c：磁盘字节 ↔ 内核 Unicode）；已在锁里（reqwest 传递依赖），无需新增编译
+encoding_rs = "0.8.41"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
 # 只用 MySQL / Postgres：关闭默认 feature 以移除 `any` 驱动。
 # `any` 会带入 sqlx-sqlite → libsqlite3-sys（声明 links = "sqlite3"），

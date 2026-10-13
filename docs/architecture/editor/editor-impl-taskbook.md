@@ -167,6 +167,7 @@
 - **落点**：`service.rs`（`Document.tab_size: usize`（默认 2）+ `hard_tabs: bool`（默认 false）+ 访问器 + `set_document_tab_size`/`set_document_hard_tabs`（真变判定）+ `document_tab_size`/`document_hard_tabs` 服务查询）+ `shared.rs`（`document_tab_size`/`set_document_tab_size`/`document_hard_tabs`/`set_document_hard_tabs` 转发）+ `view/widgets/status_bar.rs`（`StatusInputs.hard_tabs` + 微标 `Sp {n}` / `Tab` + `StatusControls.reset_menu` 位（edit_mode 后、右段文本前））+ `view/host.rs`（`set_tab_size(size, cx)` 双写文档+内核、`set_hard_tabs(hard, cx)` 双写；重设菜单 `DropdownButton::new("editor-reset-menu")` 三组（分隔 + disabled 组头）：编码（UTF-8 checked + UTF-8(BOM)/GBK disabled）、换行（LF checked + CRLF disabled）、缩进（空格: 2/4/8 按当前态 checked、制表符 checked 按 hard_tabs）——每项闭包先 `let entity = entity.clone()`（链式 move 借用修复 E0382）。
 - **测试**：rds-editor **488 passed**（+service `indent_reset_tracks_width_and_hard_tabs_separately`（宽度/制表符独立存储、同值重设未变、ghost 文档回退默认）+ 窗口 `indent_reset_changes_document_and_renders`（直调 set_tab_size(4)/set_hard_tabs(true) → shared 真变 + 内核调用不 panic））；rds-workbench lib **134**、ui_contract **8**。
 - **T2c-4 遗留**：编码/换行重设**内核不支持**（文本模型统一 UTF-8 + `\n`）——菜单已置灰标注，真转换需外层转换层（读写文件时按目标编码/换行编解码），排 2b/文件 IO 层；缩进文档状态**随会话持久化已落**（T2c-6，见下完成记录）。
+- **【2c 补记（2026-10-14）编码/换行重设 + 不可见字符显示，已立项落地】**：遗留项**收口**——按「内核永是 Unicode，编码/换行差异属 IO 层」的模型落地：新 `encoding.rs`（`TextEncoding`：Utf8/Utf8Bom/Gbk/Utf16Le/Utf16Be + `LineEnding`：Lf/Crlf + `SaveFormat{encoding, eol}` 文档级保存契约；`decode_bytes` 判定链 = BOM → UTF-8 严格 → GBK 兜底（**未加 chardetng，编码集合刻意收敛**，乱码交给用户菜单手动重设）；`encode` 换行先 `normalize` 再编码）+ 新 `hidden.rs`（`hidden_ranges`/`is_hidden`：零宽/特殊空格/双向控制/C0（排 \t\n\r）/C1，视图层做 RangeDecoration 标注，**不做符号替换**）；落点 `service.rs`（`Document` 加 `show_whitespaces`/`show_invisible`/`format`/`saved_format`；`is_dirty = 内容变 ∥ format != saved_format`）+ `shared.rs` 转发 + `persist.rs`（`load_with_meta` 返回 `(text, SaveFormat)`、`write_with_format`、open/save 全走文档格式）+ `status_bar.rs`（右段 `{编码短标} · {换行} · …`）+ `host.rs`（重设菜单**点亮**：编码 5 项/换行 2 项/缩进 4 项 + 新增「显示」组：空白字符（内核 `set_show_whitespaces` 双写）/隐藏字符（`RangeDecorationCollection` 懒建，Change 事件 + `reload_from_document` 重算区间）；面板方法 `set_encoding`/`set_eol`/`set_show_whitespaces`/`set_show_invisible`）。**两个决策**：① 编码/eol **不随会话持久化**——打开时按字节重新检测（BOM/判定链），文档级 `SaveFormat` 只在本次会话内是保存契约；② UTF-16 编码端**必须带 BOM 写**（`encoding_rs::UTF_16LE.encode` 输出编码是 UTF-8，实际不产出 UTF-16 字节——踩坑实证，改标准库 `encode_utf16()` 手写 + 手动拼 `FF FE`/`FE FF`；无 BOM 的 UTF-16 字节（ASCII 区）是合法 UTF-8（带 NUL），`decode_bytes` 只认 BOM 才判 UTF-16，不带 BOM 会静默误判）。测试：rds-editor **579 passed**（encoding 11 单测 + hidden 6 单测 + 窗口 3：面板切编码/换行标脏 / GBK 文件 open→decode→save 往返字节一致 / 显示开关双写不炸）。
 
 ### T2c-5 完成记录（2026-10-13，工具栏分组自定义已接线并测绿）
 - **模型（新 `toolbar.rs`，纯函数 + 12 单测）**：`ToolbarItemId`（执行族五成员 + 格式化 + ⋯更多；`ALL` 目录、`label`/`icon`/`visible_by_default`/`fixed_visible`）——**右对齐簇（通道/连接）与模式指示器不进模型**（原型 ⑯：模式指示器固定最左；右对齐语义稳定，T2c-6 随会话持久化时再放开）；`ToolbarLayout { left: Vec<ToolbarSlot::Item|Separator>, folded }`；组 = 分隔符界定的连续段（分隔符归前一段尾，`groups()` 投影）；纯函数：`default_layout`（执行簇五成员 + 格式化 + ⋯更多，三段间两条分隔符；执行簇默认只显示「执行 + 全部运行」）、`is_visible`/`set_visible`（`fixed_visible` 不可隐藏）、`toggle_collapsed`（按组头）、`move_item`（可跨组）、`move_group`（整段摘出插到相邻组外侧）、`insert_separator`/`remove_separator`/`move_separator`（跨过一项即改变组边界）、`separator_positions`/`has_extra_separator`（>2 即用户新增）、`reset`。
@@ -192,7 +193,7 @@
 
 ### 依赖与风险
 - 风险：schema 切换要真实影响执行（`USE schema` / 限定名）——**执行时按文档 Schema 绑定生成限定名或设会话默认 schema**，不做成纯 UI 装饰（真机验证）。
-- 编码/换行重设明确**不做**（外层转换层另议），菜单置灰说清，避免"看着能点却没用"。
+- 编码/换行重设**已落地（2026-10-14，见上「2c 补记」）**：内核文本模型仍是统一 UTF-8 + `\n`，差异收敛到 IO 层（文档级 `SaveFormat` 保存契约 + 打开时字节检测），不再置灰。
 
 ---
 
@@ -248,6 +249,6 @@
 | 1 | 2a 值编辑的写回：编辑器生成 `UPDATE` 还是引擎生成？ | **已定（2026-10-12）**：宿主执行器侧生成——`workbench/src/services/editor_exec.rs::EngineQueryRunner::commit_changes` 按行标识逐条生成 `UPDATE … WHERE key=…`，独立事务 BEGIN-COMMIT-ROLLBACK 包装（非 engine crate 层，与改写族同层思路一致；方言/引用转义由执行器一处管，编辑器只发 `CommitUpdates` 意图 + 语句映射） | 已落地（T2a-5/6） |
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
-| 4 | 2c 编码/换行重设是否立项（外层转换层） | 本轮不做，菜单置灰+标注；另立事项 | 避免假按钮 |
+| 4 | 2c 编码/换行重设是否立项（外层转换层） | **已定（2026-10-14）**：**已立项落地**（见上「T2c-4 补记 2c」）——内核永是 Unicode，编码/换行差异收敛到 IO 层（文档级 `SaveFormat` 保存契约 + 打开时字节检测；编码/换行不随会话持久化）；含不可见字符显示（空白字符内核原生 `set_show_whitespaces` + 隐藏字符 `RangeDecoration` 标注） | 已落地（T2c-4 补记 2c） |
 | 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c（T2c-1~6，含面板布局持久化）**全部完成**；**T2c-1 验收收尾「切 schema 真影响执行」也已落地**（2026-10-13）→ 下一项 **2b**（通用模式范围），之后 2d | 排期 |
 | 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |

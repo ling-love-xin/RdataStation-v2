@@ -15,6 +15,8 @@ shared.workspace = true
 # 语义着色（A4）：trait 签名用到 lsp-types 与 anyhow（版本随 gpui-base，已在根 Cargo.toml 登记）
 lsp-types.workspace = true
 anyhow.workspace = true
+# 编码/换行（2c）：磁盘字节 ↔ 内核 Unicode 的转码（版本随 reqwest 已在锁里，无新增编译）
+encoding_rs.workspace = true
 # 历史面板（B8）：引擎的历史记录带 `chrono::DateTime`（相对时间文案在 `history.rs`）
 chrono.workspace = true
 # 分析笔记（2d）：`.rdsnote` 落盘是 JSON（cell.rs / session.rs 的序列化形状）

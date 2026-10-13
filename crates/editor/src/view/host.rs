@@ -22,7 +22,10 @@ use gpui_kit::component::{Icon};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
-use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
+use gpui_kit::component::input::{
+    Editor, EditorState, Input, InputEvent, InputState, RangeDecoration, RangeDecorationCollection,
+    RangeDecorationStyle,
+};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableEvent, TableState};
@@ -250,6 +253,10 @@ pub struct EditorHostPanel {
     commit_in_flight: Option<CommitInFlight>,
     /// 【T2c-5】工具栏分组自定义布局（权威状态；render 纯读，改动走面板方法）
     toolbar: crate::toolbar::ToolbarLayout,
+    /// 【2c】隐藏字符标注集合（`show_invisible` 开启时懒创建；`None` = 未启用/未建）
+    ///
+    /// 集合句柄借的是内核实体：面板 drop 时随内核一起释放，无需手动 `dispose`。
+    invisible_decorations: Option<RangeDecorationCollection>,
 }
 
 impl EditorHostPanel {
@@ -318,6 +325,12 @@ impl EditorHostPanel {
                     this.submit_scan(text.clone(), cx);
                     this.shared
                         .update(|service| service.set_content(&this.document, text));
+                    // 【2c】显示隐藏字符开启时：正文变了，标注区间要跟着重算（区间是字节偏移，
+                    // 文字一动就全失效；没开显示则集合为空 / 未建，直接跳过）
+                    if this.shared.document_show_invisible(&this.document) {
+                        let ranges = crate::hidden::hidden_ranges(&this.editor_text(cx));
+                        this.refresh_invisible_decorations(ranges, cx);
+                    }
                     // 重绘以刷新标签脏点与状态栏
                     cx.notify();
                 }
@@ -617,6 +630,7 @@ impl EditorHostPanel {
             _edit_sub: Some(_edit_sub),
             commit_in_flight: None,
             toolbar: crate::toolbar::ToolbarLayout::default(),
+            invisible_decorations: None,
         }
     }
 
@@ -1626,6 +1640,108 @@ impl EditorHostPanel {
                 });
             cx.notify();
         }
+    }
+
+    /// 【2c】重设文档保存编码（UTF-8 / UTF-8 (BOM) / GBK / UTF-16 LE / UTF-16 BE）
+    ///
+    /// 只改**保存契约**：内核文本永远是 Unicode，切换编码不会实时重新解码（无从重解码），
+    /// 只让下次保存按新编码产出字节。`is_dirty` 由 `format != saved_format` 得出，切换即标脏。
+    pub(crate) fn set_encoding(
+        &mut self,
+        encoding: crate::encoding::TextEncoding,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.shared.document_save_format(&self.document);
+        if current.encoding == encoding {
+            return;
+        }
+        let changed = self
+            .shared
+            .set_document_save_format(&self.document, current.with_encoding(encoding));
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// 【2c】重设文档保存换行符（LF / CRLF）
+    ///
+    /// 同上：只改保存契约；load 时 CRLF 原样进内核（编辑语义不变），保存时才按这里
+    /// 的 eol 统一生成。切换即标脏（会产出不同字节）。
+    pub(crate) fn set_eol(&mut self, eol: crate::encoding::LineEnding, cx: &mut Context<Self>) {
+        let current = self.shared.document_save_format(&self.document);
+        if current.eol == eol {
+            return;
+        }
+        let changed = self
+            .shared
+            .set_document_save_format(&self.document, current.with_eol(eol));
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// 【2c】显示空白字符（空格 `•` / 制表符 `→`）：文档状态 + 内核 `set_show_whitespaces` 双写
+    pub(crate) fn set_show_whitespaces(
+        &mut self,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self
+            .shared
+            .set_document_show_whitespaces(&self.document, show);
+        if changed {
+            self.editor.update(cx, |state, cx| {
+                state.set_show_whitespaces(show, window, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    /// 【2c】显示隐藏字符标注（零宽 / 全角空格 / 控制字符）：文档状态 + 内核 RangeDecoration 双写
+    ///
+    /// 启用时懒创建标注集合（`.set` 会把当前正文里所有隐藏字符刷一遍）；停用时清空集合。
+    pub(crate) fn set_show_invisible(&mut self, show: bool, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .set_document_show_invisible(&self.document, show);
+        if !changed {
+            return;
+        }
+        if show {
+            if self.invisible_decorations.is_none() {
+                // 懒创建：句柄借内核实体，面板 drop 随内核一起释放
+                self.invisible_decorations = Some(self.editor.update(cx, |state, cx| {
+                    state.create_range_decorations_collection(Vec::new(), cx)
+                }));
+            }
+            let ranges = crate::hidden::hidden_ranges(&self.editor_text(cx));
+            self.refresh_invisible_decorations(ranges, cx);
+        } else if let Some(collection) = &self.invisible_decorations {
+            collection.clear(cx);
+        }
+        cx.notify();
+    }
+
+    /// 【2c】把当前隐藏字符区间刷进标注集合（`None` = 没开显示，什么都不做）
+    fn refresh_invisible_decorations(
+        &mut self,
+        ranges: Vec<std::ops::Range<usize>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(collection) = &self.invisible_decorations else {
+            return;
+        };
+        let color = cx.theme().colors.warning.opacity(0.3);
+        let decorations = ranges
+            .into_iter()
+            .map(|range| {
+                RangeDecoration::new(range)
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(color)
+            })
+            .collect::<Vec<_>>();
+        collection.set(decorations, cx);
     }
 
     /// 【T2c-3 收尾】切换编辑内容模式（行编辑 / 列编辑）。只改面板态并重绘；
@@ -2906,6 +3022,12 @@ impl EditorHostPanel {
             // 否则重新加载后候选还指着旧文本的行号。
             sync_fold(&self.shared, &self.document, state, window, cx);
         });
+        // 【2c】同上：隐藏字符标注也走不到 Change 事件（区间是字节偏移，整篇换文本必失效），
+        // 开着显示就显式重算一遍；没开则集合未建，直接跳过。
+        if self.shared.document_show_invisible(&self.document) {
+            let ranges = crate::hidden::hidden_ranges(&self.editor_text(cx));
+            self.refresh_invisible_decorations(ranges, cx);
+        }
         cx.notify();
     }
 
@@ -5573,6 +5695,8 @@ impl Render for EditorHostPanel {
             tab_size: self.shared.document_tab_size(&self.document),
             // 缩进是否制表符：文档级权威值（T2c-4）
             hard_tabs: self.shared.document_hard_tabs(&self.document),
+            // 【2c】保存格式（编码 + 换行）：状态栏右段微标真实值
+            format: self.shared.document_save_format(&self.document),
             bytes: self.shared.document_len(&self.document),
             selected_chars,
             message: self.message.as_deref(),
@@ -5694,12 +5818,18 @@ impl Render for EditorHostPanel {
                 .into_any_element()
         };
 
-        // 【T2c-4】重设菜单（编码 / 换行 / 缩进）：缩进真改内核 TabSize（空格宽或制表符）；
-        // 编码 / 换行内核文本模型统一 UTF-8 + LF，重设需外层转换层 → 置灰（不假装能做）
+        // 【T2c-4】重设菜单（编码 / 换行 / 缩进 / 显示）：
+        // - 缩进真改内核 TabSize（空格宽或制表符）；
+        // - 编码 / 换行只改**保存契约**（内核文本统一 Unicode，IO 层按 `SaveFormat` 产出字节），
+        //   切换即标脏（`format != saved_format`），见 `set_encoding` / `set_eol`；
+        // - 显示组（空白字符 / 隐藏字符）是视图偏好：双写文档状态 + 内核（见下面各 `set_*`）。
         let reset_menu = {
             let entity = cx.entity();
             let current_tab = self.shared.document_tab_size(&self.document);
             let hard_tabs = self.shared.document_hard_tabs(&self.document);
+            let format = self.shared.document_save_format(&self.document);
+            let show_whitespaces = self.shared.document_show_whitespaces(&self.document);
+            let show_invisible = self.shared.document_show_invisible(&self.document);
             DropdownButton::new("editor-reset-menu")
                 .small()
                 .button(
@@ -5710,17 +5840,56 @@ impl Render for EditorHostPanel {
                         .label("重设 ▾"),
                 )
                 .dropdown_menu(move |menu, _window, _cx| {
-                    let entity = entity.clone();
-                    menu.separator()
-                        .item(PopupMenuItem::new("编码").disabled(true))
-                        .item(PopupMenuItem::new("UTF-8").checked(true))
-                        .item(PopupMenuItem::new("UTF-8 (BOM) / GBK").disabled(true))
+                    // ── 编码组：5 项全亮；checked 按当前保存格式；on_click 只改保存契约 ──
+                    let mut menu = menu;
+                    let enc = format.encoding;
+                    menu = menu.separator().item(PopupMenuItem::new("编码").disabled(true));
+                    for (label, variant) in [
+                        ("UTF-8", crate::encoding::TextEncoding::Utf8),
+                        ("UTF-8 (BOM)", crate::encoding::TextEncoding::Utf8Bom),
+                        ("GBK", crate::encoding::TextEncoding::Gbk),
+                        ("UTF-16 LE", crate::encoding::TextEncoding::Utf16Le),
+                        ("UTF-16 BE", crate::encoding::TextEncoding::Utf16Be),
+                    ] {
+                        let entity = entity.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(enc == variant)
+                                .on_click(move |_, _, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_encoding(variant, cx);
+                                    });
+                                }),
+                        );
+                    }
+                    // ── 换行组：LF / CRLF ──
+                    let eol = format.eol;
+                    let lf_entity = entity.clone();
+                    let crlf_entity = entity.clone();
+                    menu = menu
                         .separator()
                         .item(PopupMenuItem::new("换行").disabled(true))
-                        .item(PopupMenuItem::new("LF").checked(true))
-                        .item(PopupMenuItem::new("CRLF").disabled(true))
-                        .separator()
-                        .item(PopupMenuItem::new("缩进").disabled(true))
+                        .item(
+                            PopupMenuItem::new("LF")
+                                .checked(eol == crate::encoding::LineEnding::Lf)
+                                .on_click(move |_, _, app| {
+                                    lf_entity.update(app, |panel, cx| {
+                                        panel.set_eol(crate::encoding::LineEnding::Lf, cx);
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("CRLF")
+                                .checked(eol == crate::encoding::LineEnding::Crlf)
+                                .on_click(move |_, _, app| {
+                                    crlf_entity.update(app, |panel, cx| {
+                                        panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
+                                    });
+                                }),
+                        );
+                    // ── 缩进组：真改内核 TabSize（空格宽 / 制表符）──
+                    menu = menu.separator().item(PopupMenuItem::new("缩进").disabled(true));
+                    menu = menu
                         .item({
                             let entity = entity.clone();
                             PopupMenuItem::new("空格: 2")
@@ -5763,7 +5932,30 @@ impl Render for EditorHostPanel {
                                         panel.set_hard_tabs(true, cx);
                                     });
                                 })
-                        })
+                        });
+                    // ── 显示组：视图偏好（双写文档状态 + 内核）──
+                    let ws_entity = entity.clone();
+                    let inv_entity = entity.clone();
+                    menu.separator()
+                        .item(PopupMenuItem::new("显示").disabled(true))
+                        .item(
+                            PopupMenuItem::new("显示空白字符")
+                                .checked(show_whitespaces)
+                                .on_click(move |_, window, app| {
+                                    ws_entity.update(app, |panel, cx| {
+                                        panel.set_show_whitespaces(!show_whitespaces, window, cx);
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("显示隐藏字符")
+                                .checked(show_invisible)
+                                .on_click(move |_, _window, app| {
+                                    inv_entity.update(app, |panel, cx| {
+                                        panel.set_show_invisible(!show_invisible, cx);
+                                    });
+                                }),
+                        )
                 })
                 .into_any_element()
         };

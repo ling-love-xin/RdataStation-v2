@@ -8007,6 +8007,7 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "encoding_rs",
  "gpui-kit",
  "lsp-types",
  "rds-engine",

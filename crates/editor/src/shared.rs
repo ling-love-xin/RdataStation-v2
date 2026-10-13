@@ -693,6 +693,40 @@ impl EditorShared {
         self.update(|svc| svc.set_document_hard_tabs(id, hard))
     }
 
+    /// 【2c】文档是否显示空白字符（空格 `•` / 制表符 `→`）
+    pub fn document_show_whitespaces(&self, id: &DocumentId) -> bool {
+        self.service().document_show_whitespaces(id)
+    }
+
+    /// 【2c】重设显示空白字符；返回是否真变
+    pub fn set_document_show_whitespaces(&self, id: &DocumentId, show: bool) -> bool {
+        self.update(|svc| svc.set_document_show_whitespaces(id, show))
+    }
+
+    /// 【2c】文档是否显示隐藏字符标注
+    pub fn document_show_invisible(&self, id: &DocumentId) -> bool {
+        self.service().document_show_invisible(id)
+    }
+
+    /// 【2c】重设显示隐藏字符标注；返回是否真变
+    pub fn set_document_show_invisible(&self, id: &DocumentId, show: bool) -> bool {
+        self.update(|svc| svc.set_document_show_invisible(id, show))
+    }
+
+    /// 【2c】文档当前保存格式（编码 + 换行）
+    pub fn document_save_format(&self, id: &DocumentId) -> crate::encoding::SaveFormat {
+        self.service().document_save_format(id)
+    }
+
+    /// 【2c】重设文档保存格式（编码 / 换行）；返回是否真变
+    pub fn set_document_save_format(
+        &self,
+        id: &DocumentId,
+        format: crate::encoding::SaveFormat,
+    ) -> bool {
+        self.update(|svc| svc.set_document_save_format(id, format))
+    }
+
     /// 确保某个连接已建连（事件路径调用：可能真的去建连）
     pub fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
         let guard = self.connections.borrow();

@@ -111,12 +111,15 @@ pub mod completion;
 pub mod connection;
 pub mod diagnostics;
 pub mod edit;
+/// 【2c】文本编码与换行（检测 / 解码 / 编码 / 换行规范化的纯函数）
+pub mod encoding;
 pub mod editability;
 pub mod env;
 pub mod execution;
 pub mod export;
 pub mod fold;
 pub mod format;
+pub mod hidden;
 pub mod history;
 pub mod language_service;
 pub mod limits;

@@ -48,6 +48,8 @@ pub struct StatusInputs<'a> {
     pub tab_size: usize,
     /// 【T2c-4】缩进用制表符（`true` 时状态栏微标显「Tab」而非「Sp n」）
     pub hard_tabs: bool,
+    /// 【2c】保存格式（编码 + 换行；状态栏右段微标真实值）
+    pub format: crate::encoding::SaveFormat,
     /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)）
     pub bytes: usize,
     /// 选中的字符数（0 = 无选区）
@@ -153,7 +155,7 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if inputs.read_only.connection {
         parts.push("连接只读".to_string());
     }
-    // 编码 / 换行是内核文本模型的统一事实（UTF-8 存储、`\n` 换行），不是编的；
+    // 编码 / 换行是文档级保存格式（2c：打开按磁盘检测、菜单可切），不是编的；
     // 缩进：制表符模式显「Tab」，否则显「Sp n」（n = 空格宽度，真实值）
     let indent_badge = if inputs.hard_tabs {
         "Tab".to_string()
@@ -161,10 +163,12 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         format!("Sp {}", inputs.tab_size)
     };
     parts.push(format!(
-        "Ln {}, Col {}, Ch {} · UTF-8 · LF · {} · {}",
+        "Ln {}, Col {}, Ch {} · {} · {} · {} · {}",
         inputs.line,
         inputs.column,
         inputs.cursor_offset,
+        inputs.format.encoding.short_label(),
+        inputs.format.eol.label(),
         indent_badge,
         human_size(inputs.bytes),
     ));
@@ -282,6 +286,7 @@ mod tests {
             cursor_count: 1,
             tab_size: 2,
             hard_tabs: false,
+            format: crate::encoding::SaveFormat::default(),
             bytes: 1536,
             selected_chars: 0,
             message: None,
@@ -548,6 +553,44 @@ mod tests {
             labels(&tabs).right.contains("· Tab ·"),
             "制表符缩进要显 Tab：{}",
             labels(&tabs).right
+        );
+    }
+
+    /// 【2c】编码/换行微标跟随文档保存格式（不硬编码 UTF-8 · LF）
+    #[test]
+    fn encoding_and_eol_badges_follow_save_format() {
+        // 默认 UTF-8 · LF
+        let text = labels(&inputs(ReadOnly::none()));
+        assert!(
+            text.right.contains("UTF-8 · LF ·"),
+            "默认格式微标：{}",
+            text.right
+        );
+
+        // GBK + CRLF：两个微标都跟着变
+        let mut gbk = inputs(ReadOnly::none());
+        gbk.format = crate::encoding::SaveFormat {
+            encoding: crate::encoding::TextEncoding::Gbk,
+            eol: crate::encoding::LineEnding::Crlf,
+        };
+        let text = labels(&gbk);
+        assert!(
+            text.right.contains("GBK · CRLF ·"),
+            "GBK/CRLF 微标：{}",
+            text.right
+        );
+
+        // UTF-8 BOM 用短标（状态栏一行放不下长名）
+        let mut bom = inputs(ReadOnly::none());
+        bom.format = crate::encoding::SaveFormat {
+            encoding: crate::encoding::TextEncoding::Utf8Bom,
+            eol: crate::encoding::LineEnding::Lf,
+        };
+        let text = labels(&bom);
+        assert!(
+            text.right.contains("UTF-8 BOM · LF ·"),
+            "UTF-8 BOM 短标：{}",
+            text.right
         );
     }
 }
