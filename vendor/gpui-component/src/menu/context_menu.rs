@@ -407,6 +407,18 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                             }
                         });
 
+                        // With an assistive technology active, gpui allows only one
+                        // element to claim a11y focus per frame. The menu is focused
+                        // from the deferred draw — after the trigger's own tree
+                        // already claimed focus — which panics in debug builds
+                        // ("set_focus called more than once in a single frame").
+                        // Blur the current focus so only the menu claims a11y focus
+                        // on the frame it opens; `previous_focus_handle` (captured
+                        // above) restores it on dismiss.
+                        if window.is_a11y_active() && window.focused(cx).is_some() {
+                            window.blur(cx);
+                        }
+
                         {
                             let mut shared_state = shared_state.borrow_mut();
                             // Clear any existing menu view to allow immediate replacement
