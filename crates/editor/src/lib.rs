@@ -125,6 +125,8 @@ pub mod hidden;
 pub mod history;
 pub mod language_service;
 pub mod limits;
+/// LSP 客户端（JSON-RPC 2.0 over stdio）：宿主侧 provider bridge 的数据源
+pub mod lsp;
 pub mod mode;
 pub mod model;
 pub mod persist;
