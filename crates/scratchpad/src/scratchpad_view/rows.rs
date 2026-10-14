@@ -535,7 +535,9 @@ impl ScratchpadView {
             .px_1()
             .child(div().w(rems(depth as f32 * ui::TREE_INDENT)).flex_none())
             .child(div().w_2p5().flex_none())
-            .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+            // 输入框与树行同字号（`xsmall` → `text_xs` 12px，行高 20px 落在 26px 编辑行内），
+            // 边框保持 1px 细边框（`bordered` 默认 true：`border_1` + 主题 `input` 色）。
+            .child(div().flex_1().min_w_0().child(Input::new(&input).xsmall().w_full()))
             .child(
                 div()
                     .id("sp-edit-ok")

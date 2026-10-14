@@ -380,7 +380,7 @@ pub fn scratchpad_type_icon(name: &str) -> &'static str {
         "txt" => "icons/file-text.svg",
         "csv" | "tsv" => "icons/table.svg",
         "toml" => "icons/settings.svg",
-        "yaml" | "yml" => "icons/file-code-2.svg",
+        "yaml" | "yml" => "icons/file-code.svg",
         "html" | "htm" => "icons/code.svg",
         "css" => "icons/palette.svg",
         "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "rs" | "go" | "java" | "c" | "h"

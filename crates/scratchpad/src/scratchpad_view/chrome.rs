@@ -1434,10 +1434,16 @@ impl ScratchpadView {
                 entity.update(app, |this, cx| this.run_scratchpad_content_search(cx));
             }
         };
-        let clear_results = {
+        let clear_search_box = {
             let view = view_handle.clone();
             let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                // 用户点名（2026-10-14）：工具栏「清除」清的是**搜索框内容**而不是结果。
+                // `InputState::set_value` 不发 `Change` 事件（程序化回填不触发副作用），
+                // 所以结果要在这里同步清掉，界面不会残留旧结果。
+                if let Some(input) = view.borrow().search_input.clone() {
+                    input.update(app, |s, cx| s.set_value("", window, cx));
+                }
                 {
                     let mut v = view.borrow_mut();
                     v.search_view = None;
@@ -1536,8 +1542,8 @@ impl ScratchpadView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("清除结果")
-                    .on_click(clear_results),
+                    .tooltip("清除搜索内容")
+                    .on_click(clear_search_box),
             )
             .child(
                 Button::new("sp-search-newtab")
