@@ -3,6 +3,7 @@
 > 用途：交给另一个会话独立执行。本说明自包含：前置状态（含本轮已完成项）、验收口径、执行步骤、过程产物约定、插件口径。执行者不需要回看主会话。
 > 生成时间：2026-10-14（深夜）· 生成者：主会话（本轮已完成「闪退修复 + 4 项 UI 修缮 + 全量 check 0 告警 + 增量报告」）
 > 后续维护：本文件已归位到 `docs/reports/`（入库，不再放 `.rds/tmp/`，避免误删）；可复用脚本已迁到 `tools/`（见 §6）。
+> **2026-10-14 夜 2 更新**：新闪退（资产右键 a11y 双 set_focus）已修复并提交 `398067a`；3 项功能缺口（高亮/洞察/Mock 入口）核查为**均已完成已接线**；崩溃现场 crate 197/197、editor 616/616 复验通过；全量 check/集成测试被并发会话的 `workbench/src/services/editor_lsp.rs`（E0716）阻塞，**完成 §5 待办后即可跑通**。
 
 ---
 
@@ -14,16 +15,18 @@
 
 | 项 | 状态 |
 | --- | --- |
-| Git 分支 | `main`，工作树有**本轮未提交改动**（见 §5），未 push |
-| 最近提交 | `cfc70af0` feat(editor) LSP 客户端核心（上一会话）；本轮修复尚未提交（见 §5） |
-| 闪退 | **已修复**：`focus_self` 的 `select_tab` 重入 double-lease panic（`cannot read EditorHostPanel while it is already being updated`），改用 `spawn_in` 异步切标签；回归测试 `focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic` 已加并验证通过 |
+| Git 分支 | `main`，工作树有**并发会话未提交改动**（见 §5），未 push |
+| 最近提交 | `398067a` fix(menu) 上下文菜单 a11y 双 set_focus 闪退修复（本轮）；`bb1ce46a` 上轮集成测试数字补全 |
+| 闪退（多标签） | **已修复**：`focus_self` 的 `select_tab` 重入 double-lease panic，改用 `spawn_in` 异步切标签；回归测试 `focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic` 已加并验证通过 |
+| 闪退（资产右键） | **已修复**：`set_focus called more than once in a single frame`（gpui a11y 单帧单焦点 × 菜单 deferred 夺焦）→ vendored gpui-component `context_menu.rs` 右键时 blur 旧焦点（仅 a11y 激活时）；提交 `398067a` |
 | UI 修缮 | 4 项已完成：①暗色标题栏边框 `#2B2B2B`；②草稿箱内联输入框 `xsmall`；③搜索清除按钮改清输入框；④启动空白文档显示欢迎页（+2 个新单测） |
 | 图标资产 | `file-code-2.svg` 缺失刷屏已修（改 `file-code.svg`）；全库 50 处图标引用与 0.7.1 图标集核对全命中 |
-| editor 单测 | **609/609 通过 / 0 失败 / 0 告警**（含 2 个新测试） |
-| scratchpad 单测 | **42/42 通过** |
-| 全量 check（本轮） | `Finished dev profile in 21.46s`，**0 warning / 0 error**（日志 `.rds/tmp/rds-check-2026-10-14.log`） |
-| 全量集成测试（本轮） | 已启动复验（日志 `.rds/tmp/rds-integration-2026-10-14.log`）；上轮基线 116 目标 / 2775 通过 / 0 失败 / 44 忽略 |
-| 增量报告 | `docs/reports/integration-test-report-incremental-2026-10-14-crashfix.md`（本轮，已入库） |
+| 3 项功能缺口核查 | 高亮 / 洞察 / Mock 入口**均为已实现已接线**（非缺口）：SQL 语义高亮（Sql 模式安装）、洞察（导航右键 + 列头右键 + 右 Dock + 命令）、Mock（右活动栏 `RightPanel::Mock` + 命令）。详见 `integration-test-report-incremental-2026-10-14-crashfix2.md` §2 |
+| analytics_resource 单测 | **197/197 通过**（162 lib + 10 dialog + 25 panel 窗口级） |
+| editor 单测 | **616/616 通过 / 0 失败** |
+| 全量 check（本轮） | **被并发会话阻塞**：`crates/workbench/src/services/editor_lsp.rs:161` E0716 + `:41` unused import（并发会话 LSP server 进行中，带 FFFD）；其余 crate 无告警无错误 |
+| 全量集成测试（本轮） | **build 阶段失败**（同上，workbench 编译错误阻塞全部测试目标）；上轮基线 116 目标 / 2799 通过 / 0 失败 / 44 忽略 |
+| 增量报告 | `docs/reports/integration-test-report-incremental-2026-10-14-crashfix.md`（上轮）；`...-crashfix2.md`（本轮，已入库） |
 
 ### 环境要点（必须遵守，否则编译失败）
 
