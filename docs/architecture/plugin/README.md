@@ -41,6 +41,7 @@
 | D4 | 数据面 Arrow / 控制面 JSON，混在**字节流层**（1 字节 `kind`）；阈值 `inline_json_max_rows=200` / `256 KiB` |
 | D5 | stdio + 二进制分帧（不是本地端口；Arrow IPC 是二进制） |
 | D6 | 扩展宿主运行时 = 内置 QuickJS（`rquickjs`）；**有意不兼容 npm**；重计算下沉 `rds.duckdb` |
+| D7 | **宿主侧接入暂缓**：`PluginService` 现 0 调用方；等插件完成度达标（P1 真机三项 + P2 收尾）后**另行评估**是否接入 workbench；期间不写 P4 接线代码 |
 | Q7 | ✅ = D6 |
 | Q8 | ✅ webview **可提供，但限全屏面板 / 独立窗口**；与 GPUI 元素混排**实践上不支持**（z-order）；本仓要接就锁 `gpui-wry = "=0.6.1"` |
 | — | 错误码表见 `plugin-dev-plan.md` §4.2.2（`-32001`…`-32008`；能力拒绝是 `-32006 capability_denied`） |
@@ -52,6 +53,7 @@
 | Q1 | 项目引用表：迁移到 `project_resources(kind,id,version,enabled,enforce,config_json)` vs 沿用现有两表 | P0 是否含一次迁移（现无生产调用方，建议迁） |
 | Q9 | 键位贡献是否开放 | 命令面板之外的可见性 |
 | Q10 | wasm 轨：保留为「纯计算/性能轨」vs 冻结 | M9 范围大小（Q7 定了之后建议冻结） |
+| Q11 | ER 建模视图渲染路线：webview 轨**已否决**（drawdb / erd-editor / Mermaid 均需 webview；用户定调：本项目由 tauri 迁来，不引入前端栈）；候选 = (a) **GPUI 原生渲染**（推荐）｜ (b) 暂缓 | 评估见 `plugin-prototype-design.md` §11.3；宿主侧接入仍随 D7 暂缓 |
 
 ## 4. 代码地图（`crates/plugin/`，现状实测）
 
@@ -76,7 +78,7 @@
 | `tests/supervisor_real_process.rs` | ✅ **P1 真进程端到端**（靶子同上）：开会话过进程边界 / 串行排队与自动放行 / 放行失败如实作废且不卡住实例 / 崩溃要求人工重启 / 心跳判死 / 空闲回收后旧事件不误伤新实例 / 起不来不留僵尸 `Starting` / 收摊全部作废；8 条集成测试 |
 | `tests/fixture/sidecar.rs`（`[[bin]] rds-sidecar-fixture`） | ✅ **测试靶子**：**独立的**帧编解码对端（两侧不共用实现，见 `dev-plan` §6.1），并用 arrow crate 真的编出 IPC 流。脚本化 SQL：`select rows=<n>` / `hold_ms=<n>`（可取消的慢查询）/ `fail`；开关 `--ignore-eof` / `--exit-ms=<n>` / `--force-inline`。**不连真库** —— 真库那一步属实机验收 |
 | `tests/spawn_real_process.rs` | ✅ **P1 进程层端到端**：起进程 → 握手 → 调用 → 收摊、超时不断连、崩溃交还在飞调用并给出退出码、**没调用也能发现它死了**、不守 EOF 约定时强杀、stderr 落盘；8 条集成测试 |
-| `sidecar/{health_checker,hot_reload_manager}.rs` | **0 字节**空文件（P1 健康检查会落在这里） |
+| `sidecar/{health_checker,hot_reload_manager}.rs` | **2 字节**空文件（P1 健康检查会落在这里） |
 | ~~`sidecar/driver.rs`~~（311 行） | ✅ **P0 删除**：未编译过，且传输假设（HTTP/单端口/JSON 行）与 D5/D4 相反 → 驱动桥 **P1 新建** |
 | ~~`storage.rs`~~（107 行） | ✅ **P0 删除**：未编译、全仓零引用、`flush_to_disk()` 是 TODO 空壳 |
 | ~~`wasm/host_functions.rs`~~（98 行） | ✅ **P0 删除**（含 `wasm/mod.rs` 的 `pub mod` 声明）：4 个函数全部无条件返回错误且零调用，签名也不对。口径：**现在不提供任何 host function**，P3 重建 |
@@ -120,9 +122,15 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 ## 7. 当前进度
 
-见 `plugin-dev-plan.md` §11。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
+见 `plugin-dev-plan.md` §11，**进度口径以它为准**。**P0 已完成**（2026-09-20）：`paths` 六个函数 + 插件 id 白名单 + 权限四轨 + 删三个死文件 + 修 `client.rs` 反向判据 + 文档清理。
 
-**P1 进行中**：八块已落地（`sidecar/proto.rs` 帧与流读写 / `sidecar/router.rs` 附件语义 / `sidecar/lifecycle.rs` 决策内核 / `sidecar/conn.rs` 异步客户端 / `sidecar/process.rs` 进程启动与回收 / `manifest.rs` 的 `[backend]` 段 / `sidecar/supervisor.rs` 运行时接线 / `sidecar/driver.rs` 驱动桥，P1 共 86 条新单测 + 22 条真进程集成测试）。
-P1 代码面**基本齐了**：协议 / 进程 / 内核 / 运行时 / 驱动桥 / 接引擎 / 注册路径全通，39 条真进程集成测试。剩下的是**要在真机上才做得了**的：① 拿 PostgreSQL 包一层 sidecar 做靶子（真库 + 真 Arrow）；② 跨语言 Arrow 互通（Go `arrow-go` 或 Python `pyarrow` 写、我们读 —— 本仓当前环境拉不到这些依赖）；③ 把这两条固化成验收脚本。之后进 P2（`meta.*` 四件套 + `DriverCapability` 门控 + 导航树）。
+**P1 代码面已齐**（十块 = `sidecar/` 八个模块 proto / router / lifecycle / conn / process / supervisor / driver / factory + `manifest.rs` 的 `[backend]` 段 + 集成测试集）：`cargo test -p rds-plugin` **106/106** 单测 + **44/44** 真进程集成测试。协议 / 进程 / 内核 / 运行时 / 驱动桥 / 接引擎 / 注册路径全通。剩下的是**要在真机上才做得了**的三项：① 拿 PostgreSQL 包一层 sidecar 做靶子（真库 + 真 Arrow）；② 跨语言 Arrow 互通（Go `arrow-go` 或 Python `pyarrow` 写、我们读 —— 本仓当前环境拉不到这些依赖）；③ 把这两条固化成验收脚本。
+
+**P2 代码面已齐**（四刀：`meta.*` 元数据面 + `DriverCapability` 能力门控 + 导航树相关）：`cargo test -p rds-plugin` **114/114** 单测 + **61/61** 集成测试。其中导航层的「置灰」视觉没算完成，随导航层一起进实机验收。
+
+**P2.5 第 1 刀（Arrow 直灌底座）已落地**：`cargo test -p rds-engine --lib` **483/483**。第 2/3 刀未做 —— 卡点是 `ResultEntry` 目前不带 Arrow。
+
+**P3（wasm host function 面）、P4（注册表与界面）、P5（生态）未开始**。当前没有 wasm host function，wasm 插件拿不到任何宿主能力（与「默认拒绝」一致）。
+
 HTTP 旧路径（`client.rs` + 旧 `manager.rs`）已删除，`rds-plugin` 不再依赖 `reqwest`。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。

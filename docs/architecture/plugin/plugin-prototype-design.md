@@ -330,7 +330,7 @@ function deactivate() {}   // 无需额外清理：全部挂在 context.subscrip
 | 扩展能否定义视觉 | 不能（用宿主既有控件） | 能（用宿主给的原语 + 主题 token） |
 | 宿主原语 | 无（只有贡献点） | `div`/`h_flex`/`Button`/`Input`/`PathBuilder`… |
 | 适合 | 覆盖 ~90% 需求：命令、面板数据、设置、通知、状态栏 | 「我需要一个带表格和按钮的自定义界面」 |
-| 上游状态 | 需自建（本文即设计） | `publish = false`、M0，等发布 |
+| 上游状态 | 需自建（本文即设计） | `publish = false`（未发布 crates.io）；0.7.1 源码与文档已完整（`plugin.rs` 198 符号、`docs/gpui-shell.md` 28 章），门面 `gpui-kit` **不聚合 shell**，要用需 path/vendor；接入与否待 P4 重启时评估 |
 
 **分工建议**：**默认走 VS Code 模型**（能力可控、UI 一致、启动快）；「自定义界面」作为**显式声明的可选能力**，后端可以是 gpui-shell（待发布）或独立的「插件视图区」（若提供 webview）。**不要**让两条路对同一块 UI 都能改——那会产生两套视觉语言。
 
@@ -357,6 +357,7 @@ function deactivate() {}   // 无需额外清理：全部挂在 context.subscrip
 | **Q8** | **是否提供 Webview** | ✅ **可提供，但限两种承载**（全屏面板 / 独立窗口）；混排**写得出、但会被原生子窗口盖住**（z-order）→ 实践上不支持 —— 依据见 §11.2 | `gpui-wry` 与 `gpui-kit` **同仓不同 crate**，需单独加依赖且**本仓应锁 `=0.6.1`**（否则顶起整条 gpui 栈）；它与 `gpui-shell`（`publish = false`）**不是同一回事** |
 | **Q9** | **键位贡献是否开放** | (a) 开放（宿主裁决冲突）｜(b) 不开放，只允许在命令面板里出现 | VS Code 开放；但你们有「注册了才宣传」的快捷键纪律，冲突裁决规则要先定 |
 | **Q10** | **wasm 轨是否保留** | (a) 保留为「纯计算/性能轨」｜(b) 冻结（用 JS 宿主吸收） | 见 §12 |
+| **Q11** | **ER 建模视图渲染路线** | webview 轨 **已否决**（drawdb / erd-editor / Mermaid 均需 webview；用户定调：本项目由 tauri 迁来，不引入前端栈）；候选 = (a) **GPUI 原生渲染**（推荐：视图 = 宿主原生 panel，插件贡献视图声明 + 数据）｜ (b) 暂缓 | 见 §11.3；宿主侧接入仍随 D7 暂缓 |
 
 ### 11.1 Q7 定案依据（2026-09-20 核实）
 
@@ -491,6 +492,44 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 - 若要 Linux 同等支持 → webview 只能作为**平台可选能力**，清单 `platforms` 字段（§3 已有）就是为这类情况准备的
 
 **建议**：把 webview 作为**显式声明的可选能力**开放，**限 ① ② 两种承载**；插件在能力声明里写 `requires: webview`，宿主据平台置灰并给出原因（对照 dev-plan §4.2.2 的错误码 `-32006 capability_denied`）。
+
+### 11.3 ER 建模视图插件评估（2026-10-14，方向收窄：webview 轨否决）
+
+**结论（更新）**：ER 图模型设计以插件形式进入**合适，但视图不走 webview**。用户定调：本项目由 tauri 架构迁来，**不引入 webview / 前端栈**（避免 z-order、输入桥接、主题不一致、性能一类前端问题）。替代路线：**GPUI 原生渲染**——视图 = 宿主原生 panel；插件系统退到**数据源 + 视图声明**角色。
+
+**论证**：
+
+- **桌面工具先例清一色原生渲染**（本次核实，非 webview）：
+
+  | 工具 | 技术栈 | ER 图实现 |
+  | --- | --- | --- |
+  | DBeaver | Java + SWT | Eclipse **GEF/Draw2D**（SWT 图形框架）：实体 = 矩形 figure、关系 = 连线 + crow's foot、拖拽 / 自动布局 |
+  | DataGrip（JetBrains 系） | Java + Swing | IntelliJ Platform **Diagram 框架**（`com.intellij.diagram`）：Swing/Java2D 原生渲染，figure + connection 模型 |
+  | Navicat / HeidiSQL | C++ Qt / Delphi | 各自原生图形框架 |
+
+- **web 生态图编辑器全部隔着 webview**：drawdb、erd-editor、dbdiagram、Mermaid 都是浏览器应用。**erd-editor 与 drawdb 同判**——TS + DOM + Canvas 2D，QuickJS 扩展宿主跑不了（依赖 DOM）、wasm 轨冻结（Q10），只能走 webview → 一并否决。
+- **「以插件形式进入」的成立方式**：视图渲染本身不进插件（无轨可承载自由画布），但插件贡献 `contributes.views` 声明 + 数据变换（`rds.metadata` → ER 输入模型；后续 DDL 生成）。v1 只读渲染甚至可不依赖插件系统（宿主 `MetadataBrowser` 直取），插件是**加分项不是前提**——与 D7 节奏天然对齐。
+- **数据源现成**（不变）：P2 的 `meta.*` 五件套（schemas / tables / columns / constraints / triggers）+ 宿主 `MetadataBrowser`；符合硬约束 #1：不直连库、不碰凭据——ER 建模本就只看结构。
+- **回程分层**（不变）：正向（元数据 → ER 图）第一期就做；导出 DDL 可先做；**写回源库后置**（涉及凭据 / 权限，与 mock「永不回写源库」纪律对齐）。
+- **原生渲染的成本说明**：等于自研一个**小型图编辑器**（实体卡片 + 关系连线 + 布局 + pan/zoom），比 webview 轨集成工程量更大；但没有 webview 的坑，且与 DBeaver / DataGrip 同构，是桌面工具的行业主流路线。「组件选型不手搓」约束适用的是**组件层**（按钮 / 列表仍用 gpui-kit），图视图是宿主面板级能力，二者不冲突。
+
+**候选**（2026-10-14 更新；许可均**未核实**，按用户口径**不阻塞**）：
+
+| 候选 | 形态 | 结论 |
+| --- | --- | --- |
+| drawdb / erd-editor / Mermaid | web（React / TS / SVG） | ❌ **已否决**：全部需要 webview，用户定调不引入前端栈 |
+| **petgraph** | Rust 图库 | ✅ 图结构 + 遍历（关系建模） |
+| **自研 ER 分层布局** | Rust | ✅ 按外键引用分层排布，~数百行 |
+| **GPUI 原生绘制**（Path / Text / 事件循环） | Rust | ✅ 视图层：实体卡片 + 折线 + crow's foot + pan/zoom |
+| graphviz 布局（可选） | C 库绑定 | ⚠️ 布局可借用 `dot`/`neato`，但引入 C 依赖，非必需 |
+
+**附：gpui-kit shell 自带 QuickJS 插件系统**（2026-10-14 本地索引核实）：
+
+`gpui-kit` 的 `shell` crate 有完整插件机制：`PluginManifest`（id / name / version / shell_version / entry / dependencies / capabilities）+ `PluginManager`（discover / load / unload）+ 能力门控（fs / network / storage / clipboard / process，http 精确到 scheme / host / port / methods / paths）。运行时是 **QuickJS**（`engine/quickjs/`），插件 entry 是脚本，在 `Policy` 下执行，构建的是 **GPUI 原生元素树**（`ScriptView` → `materialize`），**不是 webview**。
+
+含义：① RdataStation 扩展宿主（D6：QuickJS + VS Code 模式）与 gpui-kit shell **同一家族**，可作设计参考与未来对齐对象；但 shell 插件系统依附其 shell 框架（窗口 / 主题 / 布局全托管），替换现有 `crates/plugin`（P1 完成度高）等于重写，**不建议**。② 该脚本元素模型是「宿主注册组件 + 脚本组合」，未见 canvas / path 自由绘制元素 → **不适合画 ER**，ER v1 仍走原生 Rust panel。
+
+**落地顺序**（均属 P4，现在不写代码）：① schema → 渲染模型桥（`meta.*` → 表 / 列 / 外键 → 布局输入）；② 只读渲染（实体卡片 + 连线 + 自动布局）；③ pan/zoom + 拖拽排布 + 布局持久化；④ DDL 导出；⑤ 写回源库后置。
 
 ---
 
