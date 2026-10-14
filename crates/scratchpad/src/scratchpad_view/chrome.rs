@@ -1,5 +1,7 @@
-//! 面板外壳：面板头 / 工具�?/ 搜索�?/ 草�?树�?�?/ 引用 / 回收站/ 撤销�?/ 状�?��?�?//!
-//! 这是 `render_scratchpad` 的落点�?��?�草稿�?�?��的主视图（虚拟列表的装配也在这里�?//! 行本�?�� `rows.rs`）�??
+//! 面板外壳：面板头 / 工具栏 / 搜索行 / 草稿树装配 / 引用 / 回收站 / 撤销栏 / 状态行。
+//!
+//! 这是 `render_scratchpad` 的落点——草稿箱唯一的主视图（虚拟列表的装配也在这里，
+//! 行本身在 `rows.rs`）。
 use super::*;
 
 use gpui_kit::component::collapsible::Collapsible;
@@ -20,8 +22,9 @@ impl gpui_kit::Render for ToolbarDragOverlay {
 
 
 impl ScratchpadView {
-    /// 草�?箱面板（M5）：�?= `{project}/scratchpad/`�?    ///
-    /// �?��：新建（内联�?重命�?删除→回收站+撤销�?回收站恢复与清空/文件名过�?外部引用移除�
+    /// 草稿箱面板（M5）：根 = `{project}/scratchpad/`。
+    ///
+    /// 闭环：新建（内联）/重命名/删除→回收站+撤销栏/回收站恢复与清空/文件名过滤/外部引用移除。
     pub fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.scratchpad.borrow().loaded {
             self.request_scratchpad_load(cx);
@@ -35,8 +38,8 @@ impl ScratchpadView {
         let primary = theme.colors.primary;
 
         let entity = cx.entity();
-        // �?�? 搜索态整体切�?��2026-10-11 用户点名，VSCode 对齐）：面板打开时侧栏只显示
-        // 搜索面板（普通工具栏 / �?���?/ 底部引用回收站整体消失）�?�?
+        // ── 搜索态整体切换（2026-10-11 用户点名，VSCode 对齐）：面板打开时侧栏只显示
+        // 搜索面板（普通工具栏 / 撤销栏 / 底部引用回收站整体消失）──
         if self.scratchpad.borrow().search_panel_open {
             return self.render_scratchpad_search_pane(window, cx);
         }
@@ -47,7 +50,7 @@ impl ScratchpadView {
                 .as_ref()
                 .map(|i| i.read(cx).value().trim().to_string())
                 .unwrap_or_default();
-            // �??��?图的文件搜索 = 恒文件名过滤（VSCode：普通搜索�?=搜文件，工具�?�?搜内容）�
+            // 草稿图的文件搜索 = 恒文件名过滤（VSCode：普通搜索 = 搜文件，工具栏 = 搜内容）。
             let (search_mode, search_regex, search_case) =
                 (ScratchpadSearchMode::Name, view.search_regex, view.search_case);
             let mut flat = Vec::new();
@@ -77,7 +80,7 @@ impl ScratchpadView {
                 view.loading,
             )
         };
-        // OS 文件拖入状�?�（Phase C）：进入面板时置位并计数，drop / exit 复位�
+        // OS 文件拖入状态（Phase C）：进入面板时置位并计数，drop / exit 复位。
         let drag_hint = {
             let view = self.scratchpad.borrow();
             (view.external_drag_over, view.external_drag_count)
@@ -85,15 +88,15 @@ impl ScratchpadView {
 
         let toolbar = self.render_scratchpad_header(cx);
 
-        // �?�? �??��?图文件搜索�?（VSCode 形�?�，2026-10-11 用户点名）：输入�?+ 框�?右侧 �?�?�?
-        // �?��：按文件名过滤树（实时）；⌕ = 聚焦输入框（Enter 等效，过滤实时无�?��执�?）；
-        // 内�?搜索入口在普通工具栏 ⌕（`open_search_panel`），两�?图标区分（搜文件 vs 搜内容）�
+        // ── 草稿图文件搜索行（VSCode 形态，2026-10-11 用户点名）：输入框 + 框内右侧 ⌕ ──
+        // 作用：按文件名过滤树（实时）；⌕ = 聚焦输入框（Enter 等效，过滤实时无需额外执行）；
+        // 内容搜索入口在普通工具栏 ⌕（`open_search_panel`），两处图标区分（搜文件 vs 搜内容）。
         let search_row = {
             let theme = cx.theme();
             let filter_input = self.scratchpad.borrow().search_input.clone();
             let filter_input_for_btn = filter_input.clone();
             let run_file_filter = move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                // 点击 ⌕：聚焦输入框（实时过滤已生效；�?Enter 同�?义）�
+                // 点击 ⌕：聚焦输入框（实时过滤已生效；与 Enter 同语义）。
                 if let Some(input) = &filter_input_for_btn {
                     let _ = input
                         .read(app)
@@ -148,7 +151,7 @@ impl ScratchpadView {
             .child(toolbar)
             .child(search_row);
 
-        // OS 文件拖入提示条（Phase C：进入面板即提示，松�?落盘导入）�?
+        // OS 文件拖入提示条（Phase C：进入面板即提示，松开落盘导入）。
         if drag_hint.0 {
             panel = panel.child(
                 div()
@@ -175,19 +178,20 @@ impl ScratchpadView {
             );
         }
 
-        // 顶部内联新建（仅「新建引用�?�：文件/文件夹的内联行插在目标文件夹下）�
+        // 顶部内联新建（仅「新建引用」：文件/文件夹的内联行插在目标文件夹下）。
         if matches!(edit.as_ref(), Some(ScratchpadEdit::NewReference { .. })) {
             panel = panel.child(div().px_1().child(self.render_scratchpad_edit_row(0, cx)));
         }
 
-        // �?�? 草�?树（面板�?��滚动区）�?�? �??�?`render_scratchpad_tree` 里�?
+        // ── 草稿树（面板唯一滚动区）── 本段在 `render_scratchpad_tree` 里。
         let row_count = rows.len();
         let file_count = rows
             .iter()
             .filter(|(_, e)| e.kind == ScratchpadEntryKind::File)
             .count();
         let folder_count = row_count - file_count;
-        // 过滤三�?素（mode/regex/case）与 flatten 同一来源，供树�?命中数�?标用�?        // �??��?图恒为文件名过滤（Name；内容搜索只在搜索�?�面板，2026-10-11 对齐）�?
+        // 过滤三要素（mode/regex/case）与 flatten 同一来源，供树行命中数标用。
+        // 草稿图恒为文件名过滤（Name；内容搜索只在搜索态面板，2026-10-11 对齐）。
         let (filter_mode, filter_regex, filter_case) = {
             let view = self.scratchpad.borrow();
             (ScratchpadSearchMode::Name, view.search_regex, view.search_case)
@@ -204,11 +208,11 @@ impl ScratchpadView {
         );
         panel = panel.child(drafts);
 
-        // �?�? 底部固定区（引用 / 回收站/ 撤销�?/ 状�?�；不随草�?树滚�?���?�?
-        // 引用与回收站两块抽成方法（`render_scratchpad_refs_and_trash`）：主�?图只留�?配顺序�?
+        // ── 底部固定区（引用 / 回收站 / 撤销栏 / 状态；不随草稿树滚动）──
+        // 引用与回收站两块抽成方法（`render_scratchpad_refs_and_trash`）：主视图只留装配顺序。
         let body = self.render_scratchpad_refs_and_trash(cx);
 
-        // 引用 / 回收站限高可滚，保证草�?树�?终有�?��高度�
+        // 引用 / 回收站限高可滚，保证草稿树始终有可用高度。
         // 拖拽分区 handle（2026-10-12 用户点名：草稿 | 引用+回收站 高度可拖拽调整，进程内）。
         let group_max_h = self.scratchpad.borrow().group_max_h;
         let split_handle = {
@@ -248,7 +252,7 @@ impl ScratchpadView {
                 ),
         );
 
-        // �?�? 撤销�?�?�?
+        // ── 撤销栏 ──
         if let Some(undo) = &undo {
             let undo_click = {
                 let entity = entity.clone();
@@ -275,7 +279,7 @@ impl ScratchpadView {
                             .child(format!("已删除 {}", undo.label)),
                     )
                     .child(
-                        // K9：撤�?动作按钮（自绘链�?�?gpui-kit `Button` ghost）�
+                        // K9：撤销动作按钮（自绘链路 → gpui-kit `Button` ghost）。
                         Button::new("sp-undo")
                             .ghost()
                             .small()
@@ -285,7 +289,7 @@ impl ScratchpadView {
             );
         }
 
-        // �?�? 底部状�??�?�?
+        // ── 底部状态 ──
         // 底部状态行（2026-10-12 图标化：文件/文件夹/引用/回收站 + 排序方向，无中文）。
         panel = panel.child(
             div()
@@ -364,9 +368,10 @@ impl ScratchpadView {
         panel
             .key_context("scratchpad")
             .track_focus(&self.focus_handle)
-            // 拖放残留兜底（工程�?�，用户实测）：`on_file_drop_exit` �?��元素�?            // hover 时派发（gpui-pre `div.rs` �?`is_hovered_ignoring_last_input`
-            // 门控），鼠标拖出窗口�?hover 先丢，Exited 不再送达。鼠标�?�?面板
-            // （移到窗口其它区域或移出窗口）都会触�?`MouseExited`，在这里统一复位�?
+            // 拖放残留兜底（工程坑，用户实测）：`on_file_drop_exit` 在元素
+            // hover 时派发（gpui-pre `div.rs` 的 `is_hovered_ignoring_last_input`
+            // 门控），鼠标拖出窗口后 hover 先丢，Exited 不再送达。鼠标移出面板
+            // （移到窗口其它区域或移出窗口）都会触发 `MouseExited`，在这里统一复位。
             .on_mouse_exit({
                 let entity = entity.clone();
                 move |_: &gpui_kit::MouseExitEvent,
@@ -383,8 +388,8 @@ impl ScratchpadView {
                     });
                 }
             })
-            // M5 Phase C：OS 文件拖入面板 �?导入。平台把 `FileDropEvent::Entered` �?��
-            // `active_drag(ExternalPaths)` + 鼠标移动，`Submit` �?�� mouse-up �?drop�?
+            // M5 Phase C：OS 文件拖入面板 → 导入。平台把 `FileDropEvent::Entered` 转成
+            // `active_drag(ExternalPaths)` + 鼠标移动，`Submit` 在 mouse-up 时 drop。
             .on_drag_move::<gpui_kit::ExternalPaths>({
                 let entity = entity.clone();
                 move |event: &gpui_kit::DragMoveEvent<gpui_kit::ExternalPaths>,
@@ -395,8 +400,8 @@ impl ScratchpadView {
                         let mut state = this.scratchpad.borrow_mut();
                         state.external_drag_over = true;
                         state.external_drag_count = count;
-                        // 记录�?��时刻：`on_file_drop_exit` 在鼠标拖出窗口时
-                        // �?���?hover 先丢而不派发（�?字�?注释），�??�??兜底�?
+                        // 记录拖入时刻：`on_file_drop_exit` 在鼠标拖出窗口时
+                        // 鼠标先丢而不派发（见上面注释），用它做兜底。
                         state.external_drag_since = Some(std::time::Instant::now());
                         cx.notify();
                     });
@@ -525,8 +530,10 @@ impl ScratchpadView {
             .child(count.to_string())
     }
 
-    /// 底部固定区的「�?部引�?+ 回收站�?�两块（不随草�?树滚�?���?    ///
-    /// 为什么单�?��方法：`render_scratchpad` �?��板唯�?主�?图，接近千�?—�?�把与�?�数�?���?���?    /// 无关的两块搬出来，主视图�?��装配顺序（�?为不变：同一元素树，�?��了落点）�
+    /// 底部固定区的「外部引用 + 回收站」两块（不随草稿树滚动）。
+    ///
+    /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图，接近千行——把与「数据从哪来」
+    /// 无关的两块搬出来，主视图只剩装配顺序（行为不变：同一元素树，只换了落点）。
     fn render_scratchpad_refs_and_trash(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let fg = theme.colors.foreground;
@@ -549,11 +556,11 @@ impl ScratchpadView {
         };
 
         let mut body = div().v_flex().w_full().gap_1().px_1().pb_1();
-        // �?�? 外部引用（原�?415-424 acc-item「引用�?�；2026-10-11 对齐：常驻可折叠
-        // Accordion + 胶囊 badge；改�?/ 打开 / 移除 / 重新引用操作保留）─�?
+        // ── 外部引用（原型 415-424 acc-item「引用」；2026-10-11 对齐：常驻可折叠
+        // Accordion + 胶囊 badge；改名 / 打开 / 移除 / 重新引用操作保留）──
         let mut ref_rows = div().v_flex().w_full().gap_1();
         for r in &external_refs {
-                // �?��用�?在改�?�?行内输入�
+                // 本引用正在改名 → 行内输入。
                 if let Some(ScratchpadEdit::RenameReference { alias }) = &edit {
                     if alias == &r.alias {
                         body = body.child(self.render_scratchpad_edit_row(0, cx));
@@ -594,7 +601,7 @@ impl ScratchpadView {
                         });
                     }
                 };
-                // 失效引用提供「重新引用�?�（选择新路径后�?���?��）�?
+                // 失效引用提供「重新引用」（选择新路径后只改路径）。
                 let relink = {
                     let entity = entity.clone();
                     let alias = r.alias.clone();
@@ -757,11 +764,11 @@ impl ScratchpadView {
                 )),
         );
 
-        // �?�? 回收站（原型 425-432 acc-item「垃圾�?」；2026-10-11 对齐：可折叠 Accordion +
-        // 胶囊 badge + 标�?右侧清空按钮；还原�?保留）─�?
+        // ── 回收站（原型 425-432 acc-item「垃圾箱」；2026-10-11 对齐：可折叠 Accordion +
+        // 胶囊 badge + 标题右侧清空按钮；还原不保留）──
         {
-            // 回收站�?（还原）—�?�Accordion 面板内�?；`trash_expanded` �?��初�?展开态，
-            // 折叠状�?�由 Accordion �??理（`on_toggle_click` 回写字�?保状态一致）�
+            // 回收站行（还原）── Accordion 面板内行；`trash_expanded` 记录初始展开态，
+            // 折叠状态由 Accordion 管理（`on_toggle_click` 回写字段保状态一致）。
             let mut trash_rows = div().v_flex().w_full().gap_1();
             for t in &trash {
                 let restore = {
@@ -799,7 +806,8 @@ impl ScratchpadView {
                             ),
                     );
             }
-            // 清空按钮（标题右侧；原型 431 acc-foot「清空垃圾�?」收敛到头内右侧�?            // 2026-10-11 对齐：垃圾桶非空才显示）�
+            // 清空按钮（标题右侧；原型 431 acc-foot「清空垃圾箱」收敛到头内右侧；
+            // 2026-10-11 对齐：垃圾桶非空才显示）。
             let empty_btn = {
                 let entity = entity.clone();
                 if trash.is_empty() {
@@ -869,8 +877,11 @@ impl ScratchpadView {
 
 
 impl ScratchpadView {
-    /// 面板头与工具栏：新建 / 新建文件�?/ 导入 / 引用 / 排序 / 刷新 + 选中时的�?��板�?�?    /// 以及 C-4 的冲突条（同�?份草稿在编辑器里有未保存�?��、�?盘上又�?外部改了）�??    ///
-    /// 为什么单�?��方法：`render_scratchpad` �?��板唯�?主�?图�?��?�把「一行按�??�么摆�?�这�?    /// �?部细节搬出来，主视图�?��装配顺序（�?为不变：同一元素树，�?��了落点）�
+    /// 面板头与工具栏：新建 / 新建文件夹 / 导入 / 引用 / 排序 / 刷新 + 选中时的剪贴板行，
+    /// 以及 C-4 的冲突条（同一份草稿在编辑器里有未保存修改、磁盘上又被外部改了）。
+    ///
+    /// 为什么单独成方法：`render_scratchpad` 是面板唯一主视图——把「一行按钮怎么摆」这类
+    /// 局部细节搬出来，主视图只剩装配顺序（行为不变：同一元素树，只换了落点）。
     fn render_scratchpad_header(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let warning = theme.colors.warning;
@@ -886,7 +897,7 @@ impl ScratchpadView {
                 .collect::<Vec<_>>()
         };
 
-        // �?�? 工具栏（新建文件 / 新建文件�?/ 刷新）─�?
+        // ── 工具栏（新建文件 / 新建文件夹 / 刷新）──
         let start_new_file = {
             let entity = entity.clone();
             move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
@@ -911,7 +922,8 @@ impl ScratchpadView {
                 entity.update(app, |_, cx| cx.notify());
             }
         };
-        // 内�?搜索入口（VSCode 对齐�?026-10-11 用户点名）：进入搜索态�?��?�侧栏整体切�?        // 为搜索面板（�??�工具栏/�?���?底部区隐藏）；与�??��?图�?�搜文件」输入�?区分�
+        // 内容搜索入口（VSCode 对齐，2026-10-11 用户点名）：进入搜索态时侧栏整体切换
+        // 为搜索面板（隐藏工具栏/撤销栏/底部区隐藏）；与草稿图「搜文件」输入区分。
         let open_search_panel = {
             let view = view_handle.clone();
             let entity = entity.clone();
@@ -954,8 +966,8 @@ impl ScratchpadView {
             }
         };
 
-        // K9：工具栏图标按钮由自�?div 换成 gpui-kit `Button`（ghost 变体透明�?+
-        // hover 出背�?��与原 24×24 �?��样式同尺寸；`small` = 24px �?`w_6 h_6` 对齐）�?
+        // K9：工具栏图标按钮由自绘 div 换成 gpui-kit `Button`（ghost 变体透明底）＋
+        // hover 出背景；与原 24×24 按钮样式同尺寸；`small` = 24px 与 `w_6 h_6` 对齐）。
         let tool_icon_btn = |id: &'static str,
                              tip: &'static str,
                              icon: IconName,
@@ -985,14 +997,15 @@ impl ScratchpadView {
         };
 
         let mut toolbar = div().v_flex().w_full().gap_1().px_1p5().py_1();
-        // �?�? �?更�?设置�?026-10-11 原型 644-658 对齐 + 持久化接线）：菜单勾选显�?隐藏
-        // 各入�?+ �?右位�?���?+ 重置为默认布局；配�?���?`settings.scratchpad.toolbar`
-        // （空�?= 全部显示 + 默�?位置�?5 �?2）�?�状态快照在渲染时捕获进�?��：菜单每�?        // 打开重建�?��，点击后 notify 重渲染刷新快照，因�? checked/位置初�?��?终与�?近渲染一致�?
+        // ── 更多设置（2026-10-11 原型 644-658 对齐 + 持久化接线）：菜单勾选显示/隐藏
+        // 各入口 + 左右位置调整 + 重置为默认布局；配置项 `settings.scratchpad.toolbar`
+        // （空表 = 全部显示 + 默认位置（5 左 2 右））。状态快照在渲染时捕获进菜单：菜单每次
+        // 打开重建菜单，点击后 notify 重渲染刷新快照，因此 checked/位置初始化始终与最近渲染一致。
         let (tb_cfg, more_entity) = {
             let view = self.scratchpad.borrow();
             (view.toolbar_cfg.clone(), entity.clone())
         };
-        // 菜单�?��捕获外部 clone（闭包体�?`clone()` �
+        // 菜单每次打开重建：闭包需捕获外部 clone（闭包体内的 `clone()` 与
 // 菜单闭包需捕获外部 clone（闭包体内的 `clone()` 与 move 捕获整个 tb_cfg。
         // 与下方过滤判断的借用冲突）
         let menu_cfg = tb_cfg.clone();
@@ -1010,12 +1023,13 @@ impl ScratchpadView {
                     let entity = entity.clone();
                     let current = cfg.get(&key).cloned().unwrap_or_default();
                     let checked = current.visible;
-                    // �?��存在（用户没改过）→ 按钮默�?侧；存在 �?落盘 side（非 right 兜底左）�
+                    // 键不存在（用户没改过）→ 按钮默认侧；存在则取落盘 side（非 right 兜底左）。
                     let cur_side = cfg
                         .get(&key)
                         .map(|c| if c.side == "right" { "right" } else { "left" })
                         .unwrap_or_else(|| key.default_side_text());
-                    // 行点�?= 切换显示/隐藏（保留既有交互）；�?内�?�左」�?�右」按�?                    // `app.stop_propagation()` 后只切位�?��不触发�?的显�?隐藏�
+                    // 行点击 = 切换显示/隐藏（保留既有交互）；「放在左」「放在右」按钮
+                    // `app.stop_propagation()` 后只切位置，不触发行显隐。
                     let row_entity = entity.clone();
                     let row = PopupMenuItem::element(move |_window, _app| {
                         let entity = entity.clone();
@@ -1202,7 +1216,7 @@ impl ScratchpadView {
                 menu
             });
 
-        // �??�?+ �?在侧（缺�?= 显示 + 默�?侧；side �?right 兜底左）�
+        // 可见性 + 所在侧（缺失 = 显示 + 默认侧；side 非 right 兜底左）。
         let tb_visible = |key: ToolbarButtonKey| tb_cfg.get(&key).map(|c| c.visible).unwrap_or(true);
         let tb_side = |key: ToolbarButtonKey| {
             tb_cfg
@@ -1210,7 +1224,8 @@ impl ScratchpadView {
                 .map(|c| if c.side == "right" { "right" } else { "left" })
                 .unwrap_or_else(|| key.default_side_text())
         };
-        // 按钮按�?�可�?+ �?在侧」归组；左右分组�?debug_selector（元素级对齐测试锚点�?        // �?`sp-res-file-text-*` 同�?先例）：空组宽度�?0，可像素级断�?「按�??隐藏」�?
+        // 按钮按「可见性 + 所在侧」归组；左右分组加 debug_selector（元素级对齐测试锚点，
+        // 与 `sp-res-file-text-*` 同为先例）：空组宽度为 0，可像素级断言「按钮已隐藏」。
         let mut left = div()
             .h_flex()
             .items_center()
@@ -1299,7 +1314,7 @@ impl ScratchpadView {
         );
 
 
-        // �?�? 冲突条（C-4）：同一份草稿在编辑器里有未保存�?��，�?盘上又�?外部改了 �?�?
+        // ── 冲突条（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了 ──
         for (relative, absolute, diff_ready) in conflicts {
             let show_diff = {
                 let entity = entity.clone();
@@ -1381,9 +1396,12 @@ impl ScratchpadView {
 
 
 impl ScratchpadView {
-    /// 搜索行：文件名过�?/ 内�?搜索的模�?chip + 输入�?+ 内�?模式下的 `.*` �?`Aa`�?    ///
-    /// 搜索状�?�在点击回调里改（`view.search_mode` 等），这里只做投影与渲染�?    /// 搜索态完整面板（2026-10-11 VSCode 对齐；由�??��?图工具栏 �?进入，← 返回�?出）�?    /// 顶部工具栏（�?/ 刷新 / 清除 / 新建编辑器查�?/ 展开折叠明细）→ 垂直表单
-    /// （搜�?/ 替换 / 包含 / 排除）→ 统�?�?�?搜索结果树�?
+    /// 搜索行：文件名过滤 / 内容搜索的模式 chip + 输入框 + 内容模式下的 `.*` 与 `Aa`。
+    ///
+    /// 搜索状态在点击回调里改（`view.search_mode` 等），这里只做投影与渲染。
+    /// 搜索态完整面板（2026-10-11 VSCode 对齐；由草稿图工具栏 ⌕ 进入，← 返回退出）。
+    /// 顶部工具栏（返回 / 刷新 / 清除 / 新建编辑器查询 / 展开折叠明细）→ 垂直表单
+    /// （搜索 / 替换 / 包含 / 排除）→ 统一搜索结果树。
     fn render_scratchpad_search_pane(
         &self,
         window: &mut Window,
@@ -1398,7 +1416,7 @@ impl ScratchpadView {
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
 
-        // �?�? 顶部工具栏（VSCode 搜索面板形�?�；原型 437-445）─�?
+        // ── 顶部工具栏（VSCode 搜索面板形态；原型 437-445）──
         let close_panel = {
             let view = view_handle.clone();
             let entity = entity.clone();
@@ -1443,7 +1461,7 @@ impl ScratchpadView {
                 });
             }
         };
-        // �?展开/折叠下方匹配明细：点击切�??�全部收�?�?全部展开」�?
+        // ─ 展开/折叠下方匹配明细：点击切换「全部收起 / 全部展开」。
         let toggle_details = {
             let view = view_handle.clone();
             let entity = entity.clone();
@@ -1451,7 +1469,7 @@ impl ScratchpadView {
                 let mut v = view.borrow_mut();
                 let has_hit_collapsed = v.search_expanded.iter().any(|k| k.starts_with("h:"));
                 if !has_hit_collapsed {
-                    // 全部收起：按当前结果收集�?�� / 文件 key�
+                    // 全部收起：按当前结果收集命中 / 文件 key。
                     // 只收集命中明细键（h:{file}#{line}），目录/文件行折叠状态不受影响（2026-10-12）。
                     let mut keys: Vec<String> = Vec::new();
                     if let Some(sv) = &v.search_view {
@@ -1530,7 +1548,7 @@ impl ScratchpadView {
                     .on_click(open_in_editor_tab),
             )
             .child(
-                // 原型 445 sp-details：文�??�▸」（2026-10-11 对齐；展�?/折叠下方匹配明细）�
+                // 原型 445 sp-details：「文件 ▸」（2026-10-11 对齐；展开/折叠下方匹配明细）。
                 Button::new("sp-search-details")
                     .ghost()
                     .small()
@@ -1539,7 +1557,7 @@ impl ScratchpadView {
                     .on_click(toggle_details),
             );
 
-        // �?�? 搜索（内容搜�?���??��?图文件搜索入口已�?��为普通工具栏下方的过滤�?）─�?
+        // ── 搜索（内容搜索；草稿图文件搜索入口已收敛为普通工具栏下方的过滤行）──
         let (search_regex, search_case) = {
             let v = self.scratchpad.borrow();
             (v.search_regex, v.search_case)
@@ -1577,9 +1595,9 @@ impl ScratchpadView {
                 entity.update(app, |_, cx| cx.notify());
             }
         };
-        // �?�? 搜索行（VSCode 式，2026-10-11 用户点名）：�?�?Aa/ab/.* 嵌在输入框内右侧 �?�?
-        // 运�?�?��：输入�? Enter 触发（`ensure_scratchpad_inputs` �?PressEnter 订阅）；
-        // 不再有模�?chip / 运�?按钮（原�?449-460，用户�?决确认删除）�
+        // ── 搜索行（VSCode 式，2026-10-11 用户点名）：Aa/ab/.* 嵌在输入框内右侧 ──
+        // 运行方式：输入框 Enter 触发（`ensure_scratchpad_inputs` 的 PressEnter 订阅）；
+        // 不再有模式 chip / 运行按钮（原型 449-460，用户拍板确认删除）。
         let mut search_row = div()
             .h_flex()
             .items_center()
@@ -1674,12 +1692,13 @@ impl ScratchpadView {
 
         }
 
-        // �?�? VSCode 搜索面板形�?�（2026-10-10 对齐）：搜索框下�?= 替换�?+ 高级选项 �?�?
-        // 替换输入/包含/排除输入�?`ensure_scratchpad_inputs` 懒建；搜索�?�内恒为内�?搜索�
+        // ── VSCode 搜索面板形态（2026-10-10 对齐）：搜索框下方 = 替换行 + 高级选项 ──
+        // 替换输入/包含/排除输入由 `ensure_scratchpad_inputs` 懒建；搜索态内恒为内容搜索。
         let mut search_block = div().v_flex().w_full().gap_1().px_1p5().pb_1();
         search_block = search_block.child(toolbar).child(search_row);
-        // 替换行：`[输入(placeholder=替换, 内嵌 AB)] [�?全部替换] [�?高级选项�?关]`
-        // �?026-10-11 用户点名：搜�?替换�?��入�?的提示�?明；AB=保留大小写开关嵌框内�?            //   �?控制包含/排除文件 glob 的展�?与收起，默�?收起。）
+        // 替换行：`[输入(placeholder=替换, 内嵌 AB)] [⬇ 全部替换] [⋯ 高级选项开关]`
+        // （2026-10-11 用户点名：搜索/替换输入框的提示已明；AB=保留大小写开关嵌框内；
+        //    ⋯ 控制包含/排除文件 glob 的展开与收起，默认收起。）
         let replace_filled = self
                 .scratchpad
                 .borrow()
@@ -1719,7 +1738,7 @@ impl ScratchpadView {
             let replace_case = self.scratchpad.borrow().search_replace_case;
             let mut replace_row = div().h_flex().items_center().gap_1().w_full();
             if let Some(input) = self.scratchpad.borrow().search_replace_input.clone() {
-                // AB �?关嵌在替换输入�?内右侧（VSCode 式；与搜索�?�?Aa/.* 同形态）�
+                // AB 开关嵌在替换输入框内右侧（VSCode 式；与搜索行 Aa/.* 同形态）。
                 let ab_btn = div()
                     .id("sp-replace-case")
                     .h_flex()
@@ -1754,8 +1773,8 @@ impl ScratchpadView {
                 replace_row = replace_row.child(div().flex_1());
             }
             replace_row = replace_row.child(
-                // 用户点名�?026-10-10）：查找/替换这类动作按钮用图�?+ tooltip �?��提示
-                // （gpui-kit 组件；图�?`IconName::Replace`，�?义与 VSCode 替换入口�?致）�
+                // 用户点名（2026-10-10）：查找/替换这类动作按钮用图标 + tooltip 做提示
+                // （gpui-kit 组件；图标 `IconName::Replace`，语义与 VSCode 替换入口一致）。
                 Button::new("sp-replace-all")
                     .small()
                     .icon(IconName::Replace)
@@ -1777,7 +1796,10 @@ impl ScratchpadView {
             );
             search_block = search_block.child(replace_row);
 
-            // 高级选项：`包含的文�?/ 排除的文件`（VSCode glob；由替换行右�?�?展开收起）�??            // 2026-10-11 用户点名对齐原型�?*无�?�?label**（placeholder 即提示）�?            // 行尾操作按钮（包�?�?编辑 / 👁 查看；排�?�?设置）�??            // 输入框聚焦时显示 glob 样例 hint�
+            // 高级选项：`包含的文件 / 排除的文件`（VSCode glob；由替换行右侧 ⋯ 展开收起）。
+            // 2026-10-11 用户点名对齐原型：**无显式 label**（placeholder 即提示）。
+            // 行尾操作按钮（包含：编辑 / 👁 查看；排除：设置）。
+            // 输入框聚焦时显示 glob 样例 hint。
             if advanced {
                 let include_input =
                     self.scratchpad.borrow().search_include_input.clone();
@@ -1839,8 +1861,8 @@ impl ScratchpadView {
                 }
                 search_block = search_block.child(include_row).child(exclude_row);
 
-                // glob 样例 hint�?026-10-11 用户点名：点击输入�?时给出包�?排除样例）：
-                // 聚焦输入框或点操作按�?��显示，浅色小�?+ 斜杠分隔�
+                // glob 样例 hint（2026-10-11 用户点名：点击输入框时给出包含/排除样例）：
+                // 聚焦输入框或点操作按钮时显示，浅色小字 + 斜杠分隔。
                 let (include_focused, exclude_focused) = {
                     let v = self.scratchpad.borrow();
                     (
@@ -1884,7 +1906,9 @@ impl ScratchpadView {
                 }
             }
 
-            // 统�?行（VSCode 搜索面板「N 文件�?�� M �?��果�?�）：最近一次内容搜索的去重文件数�??            // 命中行数与扫描文件数；`search_stats = None`（未搜索 / 已清空）时不显示�?            // 右侧「在编辑器中打开」链接（原型 484�?026-10-11 用户点名新�?）�?
+            // 统计行（VSCode 搜索面板「N 文件中的 M 个结果」）：最近一次内容搜索的去重文件数、
+            // 命中行数与扫描文件数；`search_stats = None`（未搜索 / 已清空）时不显示。
+            // 右侧「在编辑器中打开」链接（原型 484，2026-10-11 用户点名新增）。
             if let Some((files, hits, scanned)) = self.scratchpad.borrow().search_stats {
                 let stats_text = if hits == 0 {
                     format!("无结果 · 已扫描 {scanned} 个文件")
@@ -1925,7 +1949,8 @@ impl ScratchpadView {
                 );
             }
 
-            // 侧栏搜索结果树（2026-10-11 用户点名：结构与草�?箱树�?致�?��?�目�?folder 图标�?            // 文件类型�?��、层级缩进�?�命�?��细缩进�?齐文件节点名）�?
+            // 侧栏搜索结果树（2026-10-11 用户点名：结构与草稿箱树一致，目录用 folder 图标、
+            // 文件类型图标、层级缩进，命中明细缩进对齐文件节点名）。
             if let Some(search) = self.scratchpad.borrow().search_view.clone() {
                 if !search.hits.is_empty() {
                     search_block =
@@ -1939,8 +1964,10 @@ impl ScratchpadView {
 
 
 impl ScratchpadView {
-    /// 草�?树：内联新建行的落点、�?高表、虚拟列表与空�?�（面板�?��滚动区）�?    ///
-    /// 为什么单�?��方法：这�?��板的主体，`render_scratchpad` 里它�?长的�?段脚手架�?    /// �?��来之后主视图�?��「状态投�?+ 装配顺序」（行为不变：同�?元素树，�?��了落点）�
+    /// 草稿树：内联新建行的落点、行高表、虚拟列表与空态（面板唯一滚动区）。
+    ///
+    /// 为什么单独成方法：这是面板的主体，`render_scratchpad` 里它最长的一段脚手架；
+    /// 搬出来之后主视图只剩「状态投影 + 装配顺序」（行为不变：同一元素树，只换了落点）。
     fn render_scratchpad_tree(
         &self,
         rows: Vec<(usize, ScratchpadEntry)>,
@@ -1975,7 +2002,7 @@ impl ScratchpadView {
             )
         };
 
-        // 内联新建的文�?文件夹�?定位：在�?��文件夹下�?行（�??�中文件夹则列表首�?）�?
+        // 内联新建的文件/文件夹行定位：在目标文件夹下一行（未选中文件夹则列表首行）。
         let new_target = self.scratchpad.borrow().new_target.clone();
         let edit_insert: Option<(usize, usize)> = match edit.as_ref() {
             Some(ScratchpadEdit::NewFile) | Some(ScratchpadEdit::NewFolder) => {
@@ -2023,7 +2050,7 @@ impl ScratchpadView {
 
         let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1().px_1();
         if display_count == 0 {
-            // 加载�?��显示空�?�引导，避免「草稿�?�?��的�?�闪现�?
+            // 加载中不显示空态引导，避免「草稿箱是空的」闪现。
             if loading {
                 drafts = drafts.child(
                     div()
@@ -2171,8 +2198,8 @@ impl ScratchpadView {
         drafts
     }
 
-    /// �?更�?设置持久化（2026-10-11 接线）：把面�?`toolbar_cfg` 全量写回
-    /// `settings.scratchpad.toolbar`（与默�?�?致的�?��落盘，保持�?�空�?= 全部显示 +
+    /// 更多设置持久化（2026-10-11 接线）：把面板 `toolbar_cfg` 全量写回
+    /// `settings.scratchpad.toolbar`（与默认一致的键不落盘，保持「空表 = 全部显示 +
     /// 默认位置」定义），再原子写盘。落盘失败不改本进程已生效。
     /// （`settings::save_settings` 会记录原因，见上面的 `last_save_error`）。
     pub(super) fn persist_toolbar_cfg(&self, cx: &mut Context<Self>) {
@@ -2180,7 +2207,7 @@ impl ScratchpadView {
             let v = self.scratchpad.borrow();
             let mut out = std::collections::BTreeMap::new();
             for (key, cfg) in &v.toolbar_cfg {
-                // 与默认完全一致（显示 + 默�?侧）的键不落盘：空表 = 全默认�?义�?
+                // 与默认完全一致（显示 + 默认侧）的键不落盘：空表 = 全默认语义。
                 if cfg.visible && cfg.side == key.default_side_text() {
                     continue;
                 }
