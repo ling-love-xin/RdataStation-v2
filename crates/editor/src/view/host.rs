@@ -138,6 +138,9 @@ pub struct EditorHostPanel {
     edit_mode: EditMode,
     /// 是否已被 Dock 移除（移除即关闭文档，见 `Panel::on_removed`）
     pub(crate) closed: bool,
+    /// 欢迎页是否已被用户点掉（启动空白文档的“空编辑器”换成欢迎页；
+    /// 点「开始编写」或内容非空后回到正常编辑器）
+    welcome_dismissed: bool,
     /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
     grid: Entity<TableState<ResultGridDelegate>>,
     /// 本文档**已提交、尚未回填**的语句数（B2：批量 = 多条；`> 0` 就是“执行中”）
@@ -586,6 +589,7 @@ impl EditorHostPanel {
             message: None,
             edit_mode: EditMode::Row,
             closed: false,
+            welcome_dismissed: false,
             grid,
             pending: 0,
             running_since: None,
@@ -715,6 +719,13 @@ impl EditorHostPanel {
     /// “当前文档”在这里**直接**置位，不等 Dock 的帧末激活回调：面板是组里唯一标签时
     /// `select_tab` 会因“已经是当前标签”而早退（不发 `ActiveChanged`），
     /// 但服务层的当前文档可能已经被别的打开动作抢走过。
+    ///
+    /// 切标签必须**离开本面板的 update**：`select_tab` 内部会经
+    /// `active_panel() → visible()` 同步 `read` 回本面板（`panel.rs` 的 `Entity::read`），
+    /// 而 `focus_self` 永远跑在本面板自己的 `update` 闭包里——此时直接调会触发
+    /// gpui 的 double-lease panic（“cannot read … while it is already being updated”）。
+    /// `spawn_in` 把动作放进异步任务：在**当前帧所有 effect 处理完之后**才运行，
+    /// 面板的更新租约早已归还，`select_tab` 读面板是安全的。
     pub fn focus_self(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.shared
             .update(|service| service.activate(&self.document));
@@ -722,20 +733,29 @@ impl EditorHostPanel {
             return;
         };
         let id = PanelId::from(cx.entity_id());
-        let found = group.update(cx, |group, cx| {
-            let index = group
-                .panels()
-                .iter()
-                .position(|panel| panel.panel_id(cx) == id);
-            if let Some(index) = index {
-                group.select_tab(index, window, cx);
-            }
-            index.is_some()
-        });
-        if !matches!(found, Ok(true)) {
-            // 组已不在（面板被拖到另一个组 / 整棵 Dock 被重建）：动作不落地，但不静默
-            self.set_message(Some("面板不在标签组里，无法激活".to_string()), cx);
-        }
+        cx.spawn_in(window, async move |this, cx| {
+            _ = cx.update(|window, cx| {
+                let found = group.update(cx, |group, cx| {
+                    let index = group
+                        .panels()
+                        .iter()
+                        .position(|panel| panel.panel_id(cx) == id);
+                    if let Some(index) = index {
+                        group.select_tab(index, window, cx);
+                    }
+                    index.is_some()
+                });
+                if !matches!(found, Ok(true)) {
+                    // 组已不在（面板被拖到另一个组 / 整棵 Dock 被重建）：动作不落地，但不静默。
+                    // 任务里面板不在更新中，这里可以安全地更新它。
+                    this.update(cx, |panel, cx| {
+                        panel.set_message(Some("面板不在标签组里，无法激活".to_string()), cx)
+                    })
+                    .ok();
+                }
+            });
+        })
+        .detach();
     }
 
     /// 状态栏提示（`None` = 清空）
@@ -2088,11 +2108,17 @@ impl EditorHostPanel {
     }
 
     /// 编辑区正文：分析模式 = 笔记本（单元卡片）；其它模式 = 内核编辑器
-    fn render_editor_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_editor_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let mode = self
             .with_document(|doc| doc.mode())
             .unwrap_or(EditorMode::General);
         if mode != EditorMode::Analysis {
+            // 欢迎页：启动空白文档（未命名 + 空内容 + 未点过「开始编写」）显示欢迎页
+            // 而不是光秃秃的空编辑器（2026-10-14 用户点名）。点按钮或输入内容后
+            // 回到正常编辑器（`welcome_dismissed` 置位 / 内容非空即退出欢迎态）。
+            if self.show_welcome() {
+                return self.render_welcome_page(cx);
+            }
             let read_only = self.editor_read_only();
             return Editor::new(&self.editor)
                 .appearance(false)
@@ -2105,6 +2131,80 @@ impl EditorHostPanel {
         let state = self.notebook_state();
         let entity = cx.entity();
         crate::view::analysis::render(cx, &state, &self.document, entity).into_any_element()
+    }
+
+    /// 是否显示欢迎页：启动空白文档（未命名 + 内容为空 + 用户没点过「开始编写」）。
+    ///
+    /// 判据特意用**服务层的文档路径与内容**：路径为空 = 未命名，内容空 = 还没写东西。
+    /// 用户一旦开始输入（内容非空）或点了欢迎页按钮（`welcome_dismissed`），立即退出欢迎态。
+    pub(crate) fn show_welcome(&self) -> bool {
+        if self.welcome_dismissed || self.document_path().is_some() {
+            return false;
+        }
+        self.with_document(|doc| doc.content().trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// 点掉欢迎页（「开始编写」按钮）：置位后回到正常编辑器。
+    pub(crate) fn dismiss_welcome(&mut self, cx: &mut Context<Self>) {
+        self.welcome_dismissed = true;
+        cx.notify();
+    }
+
+    /// 欢迎页：启动空白文档的“空编辑器”换成一页引导（2026-10-14 用户点名）。
+    ///
+    /// 内容：居中品牌字 + 短标语 + 「开始编写」按钮（点掉欢迎态、聚焦编辑内核）。
+    /// 不接任何工作台级动作（打开草稿 / 搜索等要宿主能力，留到后续版本），
+    /// 按钮只做“从欢迎页进入编辑”这一件事。
+    fn render_welcome_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let primary = theme.colors.primary;
+        let entity = cx.entity();
+
+        let start = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.dismiss_welcome(cx));
+                // 关掉欢迎页后把焦点交给编辑内核，用户可以直接开始打字
+                entity.update(app, |this, cx| {
+                    let handle = this.editor.read(cx).focus_handle(cx);
+                    handle.focus(window, cx);
+                });
+            }
+        };
+
+        div()
+            .size_full()
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .text_color(fg)
+            .child(
+                Icon::new(IconName::Database)
+                    .size(rems(2.5))
+                    .text_color(primary),
+            )
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child("欢迎使用 RdataStation"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("连接数据，分析洞察——从一段 SQL 开始"),
+            )
+            .child(
+                Button::new("welcome-start")
+                    .label("开始编写 SQL")
+                    .on_click(start),
+            )
+            .into_any_element()
     }
 
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）

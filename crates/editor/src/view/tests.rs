@@ -674,6 +674,109 @@ fn focusing_a_tab_activates_its_document(cx: &mut TestAppContext) {
     );
 }
 
+/// 回归测试（2026-10-14 闪退）：同组**多个标签**时，对非激活面板调 `focus_self`。
+///
+/// 闪退现场：`focus_self` 永远跑在面板自己的 `update` 闭包里，而 `TabGroup::select_tab`
+/// 内部会经 `active_panel() → visible()` **同步 read 回本面板**——面板还在更新中就被读，
+/// 触发 gpui 的 double-lease panic（“cannot read … while it is already being updated”）。
+/// 修复：切标签改用 `spawn_in`（异步任务在当前帧所有 effect 处理完之后才运行，
+/// 面板更新租约早已归还；`defer_in` 不够——它的闭包又包了一次本面板的 `update`，
+/// 仍然会重入）。
+#[gpui_kit::test]
+fn focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let shared = EditorShared::new();
+    let ids: Vec<DocumentId> = ["select 1", "select 2"]
+        .into_iter()
+        .map(|text| {
+            shared
+                .open(OpenRequest::untitled(text, EditorMode::Sql))
+                .id()
+                .clone()
+        })
+        .collect();
+
+    let (harness, cx) = {
+        let shared = shared.clone();
+        let ids = ids.clone();
+        cx.add_window_view(move |window, cx| {
+            let (area, _skin) = DockSkin::dock_area("editor-focus-multi", Some(1), window, cx);
+            let mut panels = Vec::new();
+            for id in ids {
+                let panel = cx.new(|cx| EditorHostPanel::new(shared.clone(), id, window, cx));
+                panels.push(panel.clone());
+                area.update(cx, |area, cx| {
+                    area.add_panel(panel, DockPlacement::Center, None, window, cx);
+                });
+            }
+            Harness { area, panels }
+        })
+    };
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 第二个面板是激活标签（后 add 者 active_ix = 1）。
+    // 对第一个（非激活）面板调 `focus_self`：修复前这里直接 double-lease panic。
+    let first_panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        first_panel.update(cx, |panel, cx| panel.focus_self(window, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert_eq!(
+        shared.service().active_id(),
+        Some(&ids[0]),
+        "非激活标签被激活后，服务层当前文档要切到它"
+    );
+}
+
+/// 欢迎页（2026-10-14 用户点名）：启动空白文档（未命名 + 空内容 + 未点过「开始编写」）
+/// 显示欢迎页，而不是光秃秃的空编辑器；一旦内容非空或点了按钮，立即退出欢迎态。
+#[gpui_kit::test]
+fn welcome_page_shows_only_for_a_pristine_untitled_document(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let shared = EditorShared::new();
+    let blank = shared
+        .open(OpenRequest::untitled("", EditorMode::Sql))
+        .id()
+        .clone();
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let blank = blank.clone();
+        cx.add_window_view(move |window, cx| {
+            EditorHostPanel::new(shared.clone(), blank, window, cx)
+        })
+    };
+
+    // 空白未命名文档：欢迎页判定成立
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).show_welcome()),
+        "空白未命名文档应显示欢迎页"
+    );
+    // 欢迎页要真能画出来（render 路径不 panic）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 内容非空 → 退出欢迎态（判据读服务层内容）
+    shared.update(|service| service.set_content(&blank, "select 9".to_string()));
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).show_welcome()),
+        "内容非空后不再显示欢迎页"
+    );
+
+    // 点掉欢迎页（`welcome_dismissed` 置位）→ 不再显示，即使内容又变空
+    shared.update(|service| service.set_content(&blank, String::new()));
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.dismiss_welcome(cx)));
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).show_welcome()),
+        "点掉欢迎页后不再显示"
+    );
+
+    // 回到正常编辑器后也要能画出来
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
 // ===== A14：执行（假执行器，真线程）=====
 
 /// 执行器看到的 SQL 序列（A14 断言用）
