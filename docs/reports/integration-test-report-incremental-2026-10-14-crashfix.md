@@ -7,9 +7,10 @@
 | 项 | 上轮（2026-10-14 晚） | **本轮（2026-10-14 深夜）** | 变化 |
 | --- | --- | --- | --- |
 | 工作区测试目标 | 116 | **116** | = |
-| 通过 | 2775 | **见 §5 实跑数** | 新增 2 个 editor 测试 |
+| 通过 | 2775 | **2799** | +24（editor 新增 2 个测试 + 各包 lib 计数差异） |
 | 失败 | 0 | **0** | = |
 | 忽略 | 44 | **44** | = |
+| 目标配对 | 116/116 | **116/116** | = |
 | 编译告警 | 0 | **0** | = |
 | 编译错误 | 0 | **0** | = |
 | 闪退 | **有（1 次 panic）** | **已修复 + 回归测试** | ✅ |
@@ -79,9 +80,13 @@ show_document (workbench/src/view.rs:489)
 
 `cargo check --workspace --all-targets -j 2`（日志 `rds-check-2026-10-14.log`）：`Finished dev profile in 21.46s`，**0 warning / 0 error**。上轮 103 处告警修复保持零复发；本轮新增代码（欢迎页 / 回归测试 / 清除按钮）也未引入告警。
 
-## 5. 全量集成测试（见摘要）
+## 5. 全量集成测试
 
-`cargo test --workspace -j 2 --no-fail-fast` 全量复验中，完成判据：116 目标全配对、0 FAILED、0 error、尾部 cargo 最终输出；editor 新增 2 个测试（闪退回归 + 欢迎页）已单包验证通过（editor 609/609、scratchpad 42/42）。
+`cargo test --workspace -j 2 --no-fail-fast` 全量复验（日志 `.rds/tmp/rds-integration-2026-10-14.log`）：
+
+- **116 目标 ↔ 116 结果全部配对**（`tools/verify-integration-log.ps1` 校验），0 个 `test result: FAILED`，0 个 `error[`，尾部 `all doctests ran in 0.84s`；
+- **2799 通过 / 0 失败 / 44 忽略**（上轮 2775 → +24：editor 新增 2 个测试 + 各包 lib 计数差异）；
+- 单包已单独验证：editor **609/609**、scratchpad **42/42**，均 0 告警。
 
 ## 6. 插件（M9）状态
 
