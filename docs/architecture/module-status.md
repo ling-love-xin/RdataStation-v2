@@ -5,7 +5,7 @@
 > - 各模块 `README.md` / `*-dev-plan.md` §0 仍是该模块的**语义权威**；本文件的数字是**某一时刻的实测快照**，两者冲突时：语义看模块文档，**数字看本文件**（或照 §1 重跑一遍）。
 > - 约定：本文件的每个数字都必须能在**本机一条命令重跑出来**；跑不出来的一律不写。
 >
-> 基线：**2026-09-19**（Windows · stable · `-j 2`）· 当日**两次复跑**，下表是**第二次**（死代码清理三批之后）的数字 · 维护方式见 §7。
+> 基线：**2026-10-14**（Windows · stable · `-j 2`）· 全仓**第五次**复跑（§6.4），下表即其数字 · 此前基线为 2026-09-19（当日四次复跑，见 §6.3 与 §6.4）· 维护方式见 §7。
 
 ---
 
@@ -13,13 +13,13 @@
 
 | 项 | 实测值 |
 | --- | --- |
-| 工作区测试目标 | **85**（含 16 个 Doc-tests 目标） |
-| 通过 | **2005** |
+| 工作区测试目标 | **116**（含 18 个 Doc-tests 目标） |
+| 通过 | **2775** |
 | 失败 | **0**（本轮全绿） |
-| 忽略 | **51**（真机探针 24 + Doc-tests 27） |
-| 编译告警 | `cargo check --workspace --all-targets` 零告警 |
-| 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；2026-09-19 第二次复跑时实测） |
-| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 84 个目标 / 2004 项**，见 §2 的表下注 |
+| 忽略 | **44**（engine 单测 24 + Doc-tests 20） |
+| 编译告警 | `cargo check --workspace --all-targets` **103 行 warning 头**（基线「零告警」已漂移，见 §6.4） |
+| 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**） |
+| 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 115 个目标 / 2774 项**，见 §2 的表下注 |
 
 ---
 
@@ -53,34 +53,38 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 ---
 
-## 2. 逐包基线（2026-09-19 第四次复跑）
+## 2. 逐包基线（2026-10-14 第五次复跑）
 
 「本包合计」= lib 单测 + 本包 `tests/` 下各集成目标。
 
 | 包 | lib 单测 | 集成目标（`tests/`） | 本包合计 | 忽略 |
 | --- | --- | --- | --- | --- |
-| `rds-engine` | **452** | 32（8 个目标） | **484** | 24 |
-| `rds-editor` | **377** | — | **377** | — |
-| `rds-workbench` | **116** | 135（33 个目标） | **251** | — |
+| `rds-engine` | **536** | 55（15 个目标） | **591** | 24 |
+| `rds-editor` | **585** | 5（`offline_baseline`） | **590** | — |
+| `rds-workbench` | **142** | 154（36 个目标） | **296** | — |
 | `rds-insight` | **227** | 14（`column_profile_e2e`） | **241** | — |
-| `rds-mock` | **190** | 48（4 个目标） | **238** | — |
-| `rds-analytics-resource` | **125** | 27（`panel_window` 18 · `dialog_window` 9） | **152** | — |
-| `rds-database` | **59** | — | **59** | — |
-| `rds-connection` | **48** | 4（`tunnel_roundtrip`） | **52** | — |
-| `rds-project` | **43** | 5（`project_registry` 1 · `project_store` 4） | **48** | — |
-| `rds-scratchpad` | **37** | — | **37** | — |
-| `rds-shared` | **22** | — | **22** | 9（doctest） |
-| `rds-settings` | **21** | — | **21** | — |
-| `rds-plugin` | **11** | — | **11** | — |
-| `rds-paths` | **10** | 1（`test_support_is_wired`） | **11** | — |
-| `rds-workbench-shell` | **1** | — | **1** | — |
-| `rds-app` | 0 | — | 0 | — |
-| **合计** | **1739** | **266** | **2005** | **51** |
+| `rds-mock` | **213** | 52（5 个目标） | **265** | — |
+| `rds-analytics-resource` | **162** | 35（`panel_window` 25 · `dialog_window` 10） | **197** | — |
+| `rds-database` | **113** | 15（`ddl_from_real_schema` 6 · `source_ddl_from_real_schema` 5 · `postgres_cross_database` 2 · `postgres_nav_introspection` 2） | **128** | — |
+| `rds-connection` | **102** | 6（`tunnel_roundtrip`） | **108** | — |
+| `rds-project` | **43** | 9（`project_registry` 1 · `project_store` 3 · `project_service_lifecycle` 5） | **52** | — |
+| `rds-scratchpad` | **42** | — | **42** | — |
+| `rds-shared` | **19** | — | **19** | — |
+| `rds-settings` | **29** | — | **29** | — |
+| `rds-plugin` | **114** | 61（9 个 sidecar 真机目标） | **175** | — |
+| `rds-paths` | **15** | 1（`test_support_is_wired`） | **16** | — |
+| `rds-workbench-shell` | **9** | — | **9** | — |
+| `rds-app` | **6**（`src/main.rs`，非 lib） | — | **6** | — |
+| `rds-property` | **6**（新 crate） | — | **6** | — |
+| `rds-search` | **5**（新 crate） | — | **5** | — |
+| **合计** | **2368** | **407** | **2775** | **44** |
 
-> **口径注（重要）**：合计里的 `rds-workbench` 集成 135 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
-> 去掉它：**项目自身套件 = 84 个目标 / 2004 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
+> **口径注（重要）**：合计里的 `rds-workbench` 集成 154 项中，**1 项来自本机诊断 `zz_fixture_probe`**（未跟踪、不入库，见 §6.1）。
+> 去掉它：**项目自身套件 = 115 个目标 / 2774 项通过**。两个数都是真的，**引用时必须写明用的是哪个口径**。
 >
-> `rds-plugin` 有 11 项单测且全绿，但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
+> 忽略合计 44 = engine lib 单测 24 + Doc-tests 20（connection 1 · engine 16 · insight 1 · plugin 1 · workbench_shell 1）。
+>
+> `rds-plugin` 有 175 项测试且全绿（含 61 项 sidecar 真机集成），但这**不代表它接通了**——整包仍**无任何 crate 依赖**（见 §5）。
 
 ### 2.1 `rds-engine` 的 8 个探针目标
 
@@ -95,27 +99,28 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `federation_credentials_probe` | 1 | 凭据脱敏出口 |
 | `oracle_probe` | 1 | Oracle 扩展腿 |
 
-### 2.2 `rds-workbench` 的 33 个集成目标（134 项）
+### 2.2 `rds-workbench` 的 36 个集成目标（154 项）
 
 | 目标 | 数量 | | 目标 | 数量 |
 | --- | --- | --- | --- | --- |
-| `data_source_lifecycle` | 28 | | `insight_entry` | 2 |
-| `mock_generator` | 12 | | `insight_editor_entry` | 2 |
+| `data_source_lifecycle` | 30 | | `insight_entry` | 2 |
+| `mock_generator` | 12（本次修复目标，见 §6.4） | | `insight_editor_entry` | 2 |
 | `mock_jobs` | 11 | | `query_export` | 3 |
 | `connection_project_picker` | 7 | | `query_history` | 3 |
-| `connection_type_driver` | 7 | | `connection_dialog_ui` | 4 |
-| `ui_contract` | 7 | | `dialog_host_layer` | 4 |
-| `connection_staging` | 6 | | `editor_session_real` | 4 |
-| `real_connections` | 5 | | `connection_multi_save` | 3 |
-| `connection_tunnel_cleanup` | 1 | | `connection_render_matrix` | 2 |
+| `connection_type_driver` | 9 | | `connection_dialog_ui` | 4 |
+| `ui_contract` | 8 | | `dialog_host_layer` | 5 |
+| `connection_staging` | 7 | | `editor_session_real` | 5 |
+| `real_connections` | 5 | | `connection_multi_save` | 4 |
+| `connection_tunnel_cleanup` | 1 | | `connection_render_matrix` | 6 |
 | `connection_drafts_persist` | 1 | | `connection_scope_and_state` | 2 |
 | `connection_edit_backfill` | 1 | | `connection_template` | 2 |
 | `db_navigator` | 2 | | `global_service_singleton` | 2 |
-| `editor_exec_real` | 1 | | `insight_source_real` | 2 |
-| `official_driver_real` | 4 | | `insight_schema_real` | 1 |
+| `editor_exec_real` | 2 | | `insight_source_real` | 2 |
+| `official_driver_real` | 5 | | `insight_schema_real` | 1 |
 | `federation_sources` | 1 | | `log_dialog_layer` | 1 |
 | `oracle_federation` | 1 | | `mock_job_cancel` | 1 |
-| `zz_fixture_probe` | 1（本机诊断，未跟踪） | | | |
+| `connection_rule12` | 2（新增，`27e854ac`） | | `nav_property_real` | 2（新增，`b12c65a5`） |
+| `scratchpad_editor_entry` | 1（新增，`8e4a7a55`） | | `zz_fixture_probe` | 1（本机诊断，未跟踪） |
 
 > 真机目标（`*_real` / `*_probe` / `oracle_*` / `federation_*`）在无环境变量或无服务时按设计跳过或空跑；
 > `zz_fixture_probe` 是**本机专用**脚本（未跟踪、`.gitignore` 已挡），**不属于项目测试套件**——它出现在上表只是因为本机命令输出里确实有它。
@@ -148,7 +153,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 | 项 | 值 | 出处 |
 | --- | --- | --- |
-| 工作区 crate 数 | 16 | 根 `Cargo.toml` |
+| 工作区 crate 数 | **18**（新增 `rds-property`、`rds-search`） | 根 `Cargo.toml` |
 | `default-members` | `crates/app`（裸 `cargo test` **不含** `plugin`） | 根 `Cargo.toml` |
 | 驱动 | 6 个，覆盖 4 类引擎 | `engine/src/driver/loader.rs` |
 | 迁移目录 | 4 套（global / project_meta / connection_metadata / project_analysis） | `engine/migrations/` |
@@ -292,6 +297,65 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 > **口径差异（重要）**：本节数字是本机 `cargo test-all` 的**目标计数**（37）；§0 / §2 的「85 目标 / 2005 通过」
 > 是含集成目标与并行会话已提交内容的旧口径，两者**不可直接相减**。下次系统复跑时以 §1 命令、逐目标落数。
+
+#### 6.4 全仓第五次全量复跑（2026-10-14）：116 目标 / 2775 通过
+
+**基线已更新为本次**（§0 / §2 即其数字）。命令与 §1 相同（`cargo test --workspace -j 2 --no-fail-fast`，绕 rustup shim）；
+测试日志 `.rds/tmp/rds-integration-workspace-2026-10-14.log`（4158 行），check 日志 `.rds/tmp/rds-check-workspace-2026-10-14.log`
+（`Finished dev profile in 5m 08s`，无 error）。
+
+**回归修复（本次唯一代码改动）**：`crates/workbench/tests/mock_generator.rs::parse_data_type_maps_common_types` 的 6 处
+`parse_data_type("...")` → `.unwrap()`。根因：`4d5051db`（Mock S1–S5 收口）把 `crates/mock/src/schema_map.rs::parse_data_type`
+签名改为 `MockResult<ColumnDataType>`，workbench 集成测试没跟上 → 6 个 E0308，曾使全量批在**测试目标构建阶段**整体中止
+（`--no-fail-fast` 只管运行阶段）。已核对 6 个用例全部返回 `Ok(...)`（未知类型回退 `Ok(Text)`），`.unwrap()` 安全；
+修复后该目标 12 项全绿。
+
+**逐包变化（lib + 集成，通过数）**：
+
+| 包 | 基线（09-19） | 本次（10-14） | 说明 |
+| --- | --- | --- | --- |
+| `rds-engine` | 484 | **591** | 集成 32→55（8→15 目标） |
+| `rds-editor` | 377 | **590** | 新增 `offline_baseline` 5 |
+| `rds-workbench` | 251 | **296** | 集成 135→154（33→36 目标） |
+| `rds-insight` | 241 | **241** | = |
+| `rds-mock` | 238 | **265** | 集成 48→52（4→5 目标） |
+| `rds-analytics-resource` | 152 | **197** | `panel_window` 25 · `dialog_window` 10 |
+| `rds-database` | 59 | **128** | 新增 4 个真机集成目标 |
+| `rds-connection` | 52 | **108** | lib 102 + `tunnel_roundtrip` 6 |
+| `rds-project` | 48 | **52** | 新增 `project_service_lifecycle` 5 |
+| `rds-scratchpad` | 37 | **42** | — |
+| `rds-shared` | 22 | **19** | doctest 忽略 9→0（示例移除） |
+| `rds-settings` | 21 | **29** | — |
+| `rds-plugin` | 11 | **175** | sidecar 集成 61 全绿，**仍无调用方**（§5） |
+| `rds-paths` | 11 | **16** | — |
+| `rds-workbench-shell` | 1 | **9** | — |
+| `rds-app` | 0 | **6** | 来自 `src/main.rs` 单测 |
+| `rds-property` | （新 crate） | **6** | 属性面板独立 crate |
+| `rds-search` | （新 crate） | **5** | — |
+| **合计** | **2005** | **2775** | 0 失败 |
+
+**workbench 集成目标 33 → 36**：基线 33 个目标全部通过且多数数量增长（`data_source_lifecycle` 28→30 ·
+`connection_render_matrix` 2→6 · `connection_type_driver` 7→9 · `ui_contract` 7→8 · `dialog_host_layer` 4→5 ·
+`editor_session_real` 4→5 · `official_driver_real` 4→5 · `connection_staging` 6→7 · `connection_multi_save` 3→4 ·
+`editor_exec_real` 1→2），`zz_fixture_probe` 1 ✅（本机诊断）；**新增 3 个**：`connection_rule12` 2（`27e854ac`）、
+`nav_property_real` 2（`b12c65a5`）、`scratchpad_editor_entry` 1（`8e4a7a55`）——均为属性面板 / 草稿盘 / 连接规则线。
+
+**engine 探针与新增集成**：8 个探针目标（§2.1）全 ✅；另 7 个新增集成目标（`acceptance_evidence_is_real` 2 ·
+`dependency_citations_match_lock` 1 · `error_location_from_real_errors` 6 · `mysql_rsa_auth_probe` 2 ·
+`read_only_flag_from_real_servers` 4 · `result_rows_reach_the_temp_table` 4 · `type_decode_fidelity` 4 = 23 项）全 ✅。
+plugin 9 个真机 sidecar 集成目标（61 项）全 ✅。
+
+**告警漂移（基线「零告警」不再成立）**：`cargo check --workspace --all-targets -j 2` 输出 **103 行 `warning` 头**，
+典型类型：未用 import / 变量 / 字段 / 方法 / 常量、`unexpected cfg test-support`、unused doc comment、`unused_must_use`、
+未构造变体。大头：`rds-scratchpad` lib 18 · `rds-workbench` 测试目标 41 · `rds-workbench` lib 3 · `rds-engine` lib 2 ·
+`rds-shared` lib 2 · `rds-settings` lib 1 · `rds-editor` lib 2 · `rds-analytics-resource` 测试 4 ·
+`rds-insight` / `rds-mock` lib test 6 / 3。本轮的职责是**如实记账**（§0 已把「零告警」改为实测值），告警清理留给后续。
+
+**口径与完整性**：116 目标 = 21 单测二进制 + 77 集成 / 探针二进制 + 18 Doc-tests 目标；2775 = 2368 单测 + 407 集成 + 0 doctest；
+44 忽略 = engine 单测 24 + Doc-tests 20（connection 1 · engine 16 · insight 1 · plugin 1 · workbench_shell 1）。
+完整性硬证据：116 个 `Running` / `Doc-tests` ↔ 116 个 `test result:` **全部配对**，0 `FAILED`，日志尾部为 cargo 最终输出
+（`all doctests ran`）。包装进程（Start-Process 外层）被外部因素终止、未输出 `EXIT_CODE=`——已知现象，不影响配对完整性。
+代码规模（行数 / `.rs` 文件数）本轮未重测，§0 仍为 09-19 快照。
 
 ---
 

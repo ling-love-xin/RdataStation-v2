@@ -329,24 +329,27 @@ fn schema_sources_carry_connection_defaults() {
 fn parse_data_type_maps_common_types() {
     // 类型串解析的权威在 mock crate（`schema_map`）；本用例锁住它对导航树类型的表现。
     assert!(matches!(
-        parse_data_type("INTEGER"),
+        parse_data_type("INTEGER").unwrap(),
         ColumnDataType::Integer
     ));
     assert!(matches!(
-        parse_data_type("VARCHAR(64)"),
+        parse_data_type("VARCHAR(64)").unwrap(),
         ColumnDataType::Varchar { .. }
     ));
     assert!(matches!(
-        parse_data_type("DECIMAL(12,2)"),
+        parse_data_type("DECIMAL(12,2)").unwrap(),
         ColumnDataType::Decimal { .. }
     ));
     assert!(matches!(
-        parse_data_type("BOOLEAN"),
+        parse_data_type("BOOLEAN").unwrap(),
         ColumnDataType::Boolean
     ));
     assert!(matches!(
-        parse_data_type("TIMESTAMP"),
+        parse_data_type("TIMESTAMP").unwrap(),
         ColumnDataType::Timestamp
     ));
-    assert!(matches!(parse_data_type("WEIRD"), ColumnDataType::Text));
+    assert!(matches!(
+        parse_data_type("WEIRD").unwrap(),
+        ColumnDataType::Text
+    ));
 }
