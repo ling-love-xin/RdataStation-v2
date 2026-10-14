@@ -31,6 +31,7 @@ use scratchpad::ScratchpadView;
 use ::editor::shared::EditorShared;
 
 mod editor;
+mod metadata_search;
 mod property_panel;
 mod resources;
 mod right;
@@ -44,6 +45,7 @@ pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;
+pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
 pub use search_results::{SearchResultsHostPanel, focus_search_tab};
 pub use shared::append_sql;
 pub use shared::{

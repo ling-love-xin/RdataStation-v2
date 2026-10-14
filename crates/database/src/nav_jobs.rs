@@ -148,6 +148,12 @@ pub const SEARCH_LIMIT_PER_CONN: usize = 50;
 /// 一次搜索的总命中上限（多连接时防止“30 个连接 × 50 条”把命中列表与渲染拖垮）。
 pub const SEARCH_MAX_HITS: usize = 300;
 
+/// 一次索引搜索的并行度：目标连接数按此分块，每块一条 scoped 线程直开临时缓存连接。
+///
+/// 经验值（2026-10-14 拍板）：8 块既能把 30+ 连接的搜索摊到多核，又不至于为每次搜索
+/// 开几十条线程（每条都要建连 + 跑 PRAGMA + 迁移校验，线程数不等于加速）。
+pub const SEARCH_PARALLEL: usize = 8;
+
 /// 一次索引搜索的目标连接（宿主可见且通过 facet 筛选的连接）。
 #[derive(Clone, Debug)]
 pub struct SearchTarget {
@@ -223,8 +229,8 @@ pub struct SearchResult {
     pub hits: Vec<SearchHit>,
 }
 
-/// 索引搜索的**消费方**：同一条后台通道被两个入口用（导航面板的树顶结果行、
-/// Quick Open 浮层），结果必须按消费方分发——`drain` 是「取走」语义，
+/// 索引搜索的**消费方**：同一条后台通道被多个入口用（导航面板的树顶结果行、
+/// Quick Open 浮层、元数据搜索面板），结果必须按消费方分发——`drain` 是「取走」语义，
 /// 不分流就是谁先取谁得，另一个入口会永远拿到空结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchConsumer {
@@ -232,17 +238,20 @@ pub enum SearchConsumer {
     Navigator,
     /// Quick Open 浮层。
     QuickOpen,
+    /// 元数据搜索面板（中央「搜索: query」tab，2026-10-14 P0）。
+    Panel,
 }
 
 impl SearchConsumer {
     /// 槽位数量（`search_results` / `pending_search` 两张表共用）。
-    const COUNT: usize = 2;
+    const COUNT: usize = 3;
 
     /// 内部槽位下标。
     fn ix(self) -> usize {
         match self {
             SearchConsumer::Navigator => 0,
             SearchConsumer::QuickOpen => 1,
+            SearchConsumer::Panel => 2,
         }
     }
 }
@@ -905,47 +914,47 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             project_root,
             targets,
         } => {
-            let mut hits = Vec::new();
+            // 并行搜索（2026-10-14 P1）：目标连接按 `SEARCH_PARALLEL` 分块，每块一条
+            // scoped 线程**直开临时缓存连接**（`NavCache::open_direct`，不走池——搜索目标
+            // 是全部可见连接，池会让从未浏览过的连接也永久注册并预热，白占句柄）。
+            // 线程只读各自连接自己的缓存文件（不同缓存文件 = 不同 SQLite 库），无共享可变
+            // 状态，也无需抢 `LOAD_SEM` / `PREFETCH_SEM`。
+            //
+            // 排序：合并按「chunk 序 + target 序」保持确定性（并行只提速，不重排结果）；
+            // 每目标限额固定 `SEARCH_LIMIT_PER_CONN`，全局 300 截断放在合并后统一做——
+            // 尾部连接因此更公平（旧实现一边搜一边按剩余名额限流，越靠后的连接越吃亏）。
+            // 块线程 panic（join 返回 Err）按空块处理：不毁整次搜索，只少这一块的命中。
+            let chunk_size = targets.len().div_ceil(SEARCH_PARALLEL).max(1);
             let mut searched = 0usize;
-            for target in &targets {
-                if hits.len() >= SEARCH_MAX_HITS {
-                    break;
-                }
-                // 没落盘缓存的连接直接跳过：搜索不建文件（见 `cache::cache_file_exists`）。
-                if !crate::cache::cache_file_exists(&target.conn_id, project_root.as_deref()) {
-                    continue;
-                }
-                let Some(cache) =
-                    crate::cache::NavCache::open(&target.conn_id, project_root.as_deref())
-                else {
-                    continue;
-                };
-                searched += 1;
-                let room = SEARCH_MAX_HITS - hits.len();
-                let limit = SEARCH_LIMIT_PER_CONN.min(room);
-                match kind {
-                    SearchKind::Name => {
-                        for hit in cache.search_index(&query, limit) {
-                            hits.push(SearchHit {
-                                conn_id: target.conn_id.clone(),
-                                conn_label: target.label.clone(),
-                                driver: target.driver.clone(),
-                                object_type: hit.object_type,
-                                object_name: hit.object_name,
-                                parent_name: hit.parent_name,
-                                catalog: hit.catalog_name,
-                                schema: hit.schema_name,
-                                snippet: None,
-                            });
+            let mut hits = Vec::new();
+            std::thread::scope(|s| {
+                let handles: Vec<_> = targets
+                    .chunks(chunk_size)
+                    .map(|chunk| {
+                        // 每块克隆查询词与项目根（至多 SEARCH_PARALLEL 份，开销可忽略）；
+                        // `kind` 是 Copy 直接带上。scoped 线程在 `scope` 结束前必先 join，
+                        // 克隆的是 String 值本身，不借 `chunk` 之外的任何栈变量。
+                        let query = query.clone();
+                        let project_root = project_root.clone();
+                        s.spawn(move || search_targets(kind, &query, project_root.as_deref(), chunk))
+                    })
+                    .collect();
+                // 按 chunk 序收集（join 失败 = 该块 panic → 空块，不 panic 整任务）。
+                for handle in handles {
+                    match handle.join() {
+                        Ok((s, h)) => {
+                            searched += s;
+                            hits.extend(h);
                         }
-                    }
-                    SearchKind::FullText => {
-                        for hit in cache.search_fts(&query, limit) {
-                            hits.push(fts_hit_to_search_hit(target, hit));
+                        Err(_) => {
+                            tracing::error!(
+                                "并行索引搜索块执行失败（该块无结果，本次搜索继续）"
+                            );
                         }
                     }
                 }
-            }
+            });
+            hits.truncate(SEARCH_MAX_HITS);
             shared().push_search_result(
                 consumer,
                 SearchResult {
@@ -973,6 +982,53 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
         #[cfg(test)]
         Job::PanicForTest { .. } => panic!("测试用：故意 panic，验证 worker 会把这次任务隔离掉"),
     }
+}
+
+/// 搜索一个连接块（单条 scoped 线程内执行；纯函数，便于确定性单测）。
+///
+/// 返回 `(搜了的连接数, 命中)`：无落盘缓存的连接直接跳过（搜索不建文件）；
+/// 每连接命中封顶 [`SEARCH_LIMIT_PER_CONN`]（全局 300 截断由调用方在合并后统一做）。
+fn search_targets(
+    kind: SearchKind,
+    query: &str,
+    project_root: Option<&str>,
+    targets: &[SearchTarget],
+) -> (usize, Vec<SearchHit>) {
+    let mut searched = 0usize;
+    let mut hits = Vec::new();
+    for target in targets {
+        // 没落盘缓存的连接直接跳过：搜索不建文件（见 `cache::cache_file_exists`）。
+        if !crate::cache::cache_file_exists(&target.conn_id, project_root) {
+            continue;
+        }
+        let Some(cache) = crate::cache::NavCache::open_direct(&target.conn_id, project_root) else {
+            continue;
+        };
+        searched += 1;
+        match kind {
+            SearchKind::Name => {
+                for hit in cache.search_index(query, SEARCH_LIMIT_PER_CONN) {
+                    hits.push(SearchHit {
+                        conn_id: target.conn_id.clone(),
+                        conn_label: target.label.clone(),
+                        driver: target.driver.clone(),
+                        object_type: hit.object_type,
+                        object_name: hit.object_name,
+                        parent_name: hit.parent_name,
+                        catalog: hit.catalog_name,
+                        schema: hit.schema_name,
+                        snippet: None,
+                    });
+                }
+            }
+            SearchKind::FullText => {
+                for hit in cache.search_fts(query, SEARCH_LIMIT_PER_CONN) {
+                    hits.push(fts_hit_to_search_hit(target, hit));
+                }
+            }
+        }
+    }
+    (searched, hits)
 }
 
 /// 提交导航树懒加载（首屏）。
@@ -1316,7 +1372,7 @@ mod tests {
         }
     }
 
-    /// 两个消费方的槽互不可见：取走自己的批次不会动到对方（本仓曾经的“互抢”就是这里错的）。
+    /// 三个消费方的槽互不可见：取走自己的批次不会动到对方（本仓曾经的“互抢”就是这里错的）。
     #[test]
     fn search_results_are_partitioned_by_consumer() {
         let shared = test_shared();
@@ -1328,15 +1384,22 @@ mod tests {
             SearchConsumer::QuickOpen,
             result(SearchConsumer::QuickOpen, "qo"),
         );
+        shared.push_search_result(
+            SearchConsumer::Panel,
+            result(SearchConsumer::Panel, "panel"),
+        );
 
         let quick_open = shared.take_search_results(SearchConsumer::QuickOpen);
         assert_eq!(quick_open.len(), 1);
         assert_eq!(quick_open[0].query, "qo");
 
-        // Quick Open 取走自己的批次后，导航的批次仍在槽里
+        // Quick Open 取走自己的批次后，导航 / 面板的批次仍在各自槽里
         let nav = shared.take_search_results(SearchConsumer::Navigator);
         assert_eq!(nav.len(), 1);
         assert_eq!(nav[0].query, "nav");
+        let panel = shared.take_search_results(SearchConsumer::Panel);
+        assert_eq!(panel.len(), 1);
+        assert_eq!(panel[0].query, "panel");
 
         // `take` 是取走语义：再取为空
         assert!(
@@ -1347,6 +1410,11 @@ mod tests {
         assert!(
             shared
                 .take_search_results(SearchConsumer::Navigator)
+                .is_empty()
+        );
+        assert!(
+            shared
+                .take_search_results(SearchConsumer::Panel)
                 .is_empty()
         );
     }
@@ -1464,7 +1532,132 @@ mod tests {
             SearchConsumer::Navigator.ix(),
             SearchConsumer::QuickOpen.ix()
         );
+        assert_ne!(
+            SearchConsumer::Navigator.ix(),
+            SearchConsumer::Panel.ix()
+        );
+        assert_ne!(
+            SearchConsumer::QuickOpen.ix(),
+            SearchConsumer::Panel.ix()
+        );
         assert!(SearchConsumer::Navigator.ix() < SearchConsumer::COUNT);
         assert!(SearchConsumer::QuickOpen.ix() < SearchConsumer::COUNT);
+        assert!(SearchConsumer::Panel.ix() < SearchConsumer::COUNT);
+    }
+
+    fn search_temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_navsearch_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// 播种一个连接缓存：schema + 一张表 + 一列，重建索引（此后 `search_index` 可命中）。
+    fn seed_cache(conn_id: &str, root: &std::path::Path, table: &str) {
+        use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
+        let mut cache = crate::cache::NavCache::open(conn_id, Some(&root.to_string_lossy())).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
+        let sid = cache.schema_id("main", "public").expect("schema_id");
+        cache.put_objects(sid, &[NodeInfo::new(table, SchemaObjectKind::Table)]);
+        cache.put_columns(
+            sid,
+            table,
+            &[ColumnDetail {
+                name: "order_id".to_string(),
+                data_type: "INTEGER".to_string(),
+                nullable: false,
+                is_primary_key: true,
+                is_foreign_key: false,
+                default_value: None,
+                comment: None,
+                extra: Default::default(),
+                references: None,
+                ordinal: 0,
+            }],
+        );
+        cache.rebuild_index("main", "public");
+    }
+
+    fn target(conn_id: &str) -> SearchTarget {
+        SearchTarget {
+            conn_id: conn_id.to_string(),
+            label: conn_id.to_string(),
+            driver: "postgres".to_string(),
+        }
+    }
+
+    /// 纯函数 `search_targets`：保序（target 序）、跳过无缓存连接、每连接命中封顶。
+    #[test]
+    fn search_targets_keeps_target_order_and_skips_missing_cache() {
+        let root = search_temp_root("chunk");
+        let root_s = root.to_string_lossy().to_string();
+        // 只播前两个连接的缓存；第三个不建（模拟从未内省过的连接）。
+        seed_cache("P_chunk_a", &root, "orders_a");
+        seed_cache("P_chunk_b", &root, "orders_b");
+        let targets = [target("P_chunk_a"), target("P_chunk_b"), target("P_chunk_c")];
+
+        let (searched, hits) = search_targets(SearchKind::Name, "order", Some(&root_s), &targets);
+        assert_eq!(searched, 2, "无缓存的连接不计入 searched");
+        // 保序：按 target 序（a 的命中在前，b 的在后）
+        let conns: Vec<&str> = hits.iter().map(|h| h.conn_id.as_str()).collect();
+        let a_first = conns.iter().position(|&c| c == "P_chunk_a").unwrap();
+        let b_first = conns.iter().position(|&c| c == "P_chunk_b").unwrap();
+        assert!(a_first < b_first, "块内保序：{conns:?}");
+        assert!(
+            hits.iter().all(|h| h.conn_id != "P_chunk_c"),
+            "无缓存连接不得有命中"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 并行路径走真实 worker：分块并行后按「chunk 序 + target 序」合并，`searched` 全计，
+    /// 全局 300 截断在合并后统一生效。
+    #[test]
+    fn parallel_search_merges_in_order_and_truncates_globally() {
+        let root = search_temp_root("parallel");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_ids = ["P_par_0", "P_par_1", "P_par_2", "P_par_3", "P_par_4", "P_par_5"];
+        for (i, conn_id) in conn_ids.iter().enumerate() {
+            seed_cache(conn_id, &root, &format!("orders_{i}"));
+        }
+        let targets: Vec<SearchTarget> = conn_ids.iter().map(|c| target(c)).collect();
+
+        enqueue_search(SearchConsumer::Panel, SearchKind::Name, "order", Some(&root_s), targets);
+        // 轮询等 worker 回填（与 `worker_isolates_panics…` 同一 deadline 模式）
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let mut results = Vec::new();
+        while std::time::Instant::now() < deadline {
+            results.extend(drain_search_results(SearchConsumer::Panel));
+            if !results.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!results.is_empty(), "并行搜索应有回音");
+        let batch = &results[0];
+        assert_eq!(batch.searched, 6, "全部有缓存的连接都应被搜到");
+        // 保序：6 张表按 target 序（orders_0..orders_5）出现。
+        // 注意每连接还命中列 `order_id`（也是中缀命中），所以整列表是
+        // [orders_0, order_id, orders_1, order_id, …]——只断言表命中的相对顺序。
+        let table_names: Vec<&str> = batch
+            .hits
+            .iter()
+            .filter(|h| h.object_name.starts_with("orders_"))
+            .map(|h| h.object_name.as_str())
+            .collect();
+        let expected: Vec<String> = (0..6).map(|i| format!("orders_{i}")).collect();
+        assert_eq!(table_names, expected, "并行只提速不重排结果");
+        // 同一连接内：表命中的所属连接正确
+        assert!(
+            batch.hits.iter().all(|h| h.object_name == "order_id" || h.conn_id.starts_with("P_par_")),
+            "命中所属连接应与 target 一致"
+        );
+        assert!(
+            batch.hits.len() <= SEARCH_MAX_HITS,
+            "全局命中数不得超过 SEARCH_MAX_HITS"
+        );
+        assert!(!has_pending_search(SearchConsumer::Panel), "计数必须配平");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

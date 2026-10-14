@@ -783,6 +783,47 @@ impl WorkbenchView {
         crate::panels::focus_search_tab(&panel, window, cx);
     }
 
+    /// 元数据搜索标签页（P0，VSCode「搜索: query」形态，搜的是连接级元数据缓存）：
+    /// 面板未建 → 建并加入中央 tab 组 + 聚焦；已建（弱句柄有效）→ 只聚焦不重建。
+    ///
+    /// **只在 `cx.defer_in` 里调用**（render 检测到结果后 defer，事件路径可改 dock）；
+    /// 与 `ensure_search_results_panel` 同例：面板实体只建一次（`Shared::metadata_search_panel`
+    /// 弱句柄）；面板自持结果回填泵（`new` 内 `ensure_pump`）。
+    fn ensure_metadata_search_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self
+            .shared
+            .metadata_search_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        {
+            let same_query = {
+                let s = self.shared.metadata_search.borrow();
+                panel.read(cx).query() == s.as_ref().map(|v| v.query.clone())
+            };
+            if same_query {
+                crate::panels::focus_metadata_search_tab(&panel, window, cx);
+                return;
+            }
+            // 查询词不同 → 新建独立 tab（多开），旧面板保留显示其快照。
+        }
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        let shared = self.shared.clone();
+        let panel =
+            cx.new(|cx| crate::panels::MetadataSearchHostPanel::new(shared.clone(), cx));
+        self.shared
+            .metadata_search_panel
+            .borrow_mut()
+            .replace(panel.downgrade());
+        let handle = panel_handle(panel.clone());
+        area.update(cx, |area, cx| {
+            area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
+        });
+        crate::panels::focus_metadata_search_tab(&panel, window, cx);
+    }
+
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
     fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1907,6 +1948,29 @@ impl Render for WorkbenchView {
         {
             cx.defer_in(window, |this, window, cx| {
                 this.ensure_search_results_panel(window, cx);
+            });
+        }
+        // 元数据搜索标签页（P0，VSCode「搜索: query」形态，搜连接级元数据缓存）：
+        // 面板自持泵把结果写进 `Shared::metadata_search`（有值）且面板未建 →
+        // `cx.defer_in` 建面板（事件路径可改 dock）。用户 tab ✕ 关闭过则不自动重建——
+        // 关标签保留结果，直到再次搜索（`publish_metadata_search(Some)` 清标志）。
+        let md_search_matches = self
+            .shared
+            .metadata_search_panel
+            .borrow()
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .map(|panel| {
+                let s = self.shared.metadata_search.borrow();
+                panel.read(cx).query() == s.as_ref().map(|v| v.query.clone())
+            })
+            .unwrap_or(false);
+        if self.shared.metadata_search.borrow().is_some()
+            && !*self.shared.metadata_search_dismissed.borrow()
+            && !md_search_matches
+        {
+            cx.defer_in(window, |this, window, cx| {
+                this.ensure_metadata_search_panel(window, cx);
             });
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。

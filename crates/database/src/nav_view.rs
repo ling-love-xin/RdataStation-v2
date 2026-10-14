@@ -92,6 +92,15 @@ use dnd::*;
 pub use dnd::{NavConnDragPayload, NavDragPayload, NavGroupDragPayload};
 use primitives::*;
 
+/// 索引搜索命中是否**能在导航树中定位**（面板「定位」按钮的摆出判据）。
+///
+/// 判据与树定位状态机**同一处**（`RevealTarget::from_hit`）：类别 → 文件夹只判一次，
+/// 不会面板 / 浮层 / 结果行各写一套而后分叉。
+/// 不可定位的命中（无 schema 归属、catalog 层、未知类别）摆了却点了没反应，比不摆更伤。
+pub fn search_hit_locatable(hit: &nav_jobs::SearchHit) -> bool {
+    RevealTarget::from_hit(hit).is_some()
+}
+
 /// 待定位目标（搜索结果 → 树）。
 ///
 /// 只描述「要找什么」，不持有视图句柄：整条定位是**跨多帧**完成的——连接 → catalog →

@@ -53,6 +53,24 @@ impl NavCache {
     ///
     /// 路径不可用（如项目连接缺少项目根）或打开失败时返回 `None`，调用方降级为实时内省。
     pub fn open(conn_id: &str, project_root: Option<&str>) -> Option<Self> {
+        Self::open_impl(conn_id, project_root, true)
+    }
+
+    /// 直接打开连接级缓存（**不走池**，临时连接用完即弃）。
+    ///
+    /// 搜索并行任务专用：搜索目标 = 全部可见连接（可 30+），若走 [`Self::open`] 的池路径，
+    /// 每个**从未浏览过**的连接也会被池永久注册并预热 2 条连接（`MetadataCachePool::create`
+    /// 会先 `ensure_schema_at` 再预热），白占句柄；直开一条临时连接用完即释放，不留下池条目。
+    ///
+    /// 前提：`MetadataCacheManager::open` 自带幂等迁移（`ensure_schema_at`），所以已存在
+    /// 的缓存文件（由池路径创建过）schema 必然齐备；不存在的文件会被建出——调用方必须先经
+    /// [`cache_file_exists`] 过滤（与 [`Self::open`] 搜索路径同一口径，搜索不建文件）。
+    pub fn open_direct(conn_id: &str, project_root: Option<&str>) -> Option<Self> {
+        Self::open_impl(conn_id, project_root, false)
+    }
+
+    /// [`Self::open`] / [`Self::open_direct`] 的公共实现：`pooled` 决定连接取自池还是直开。
+    fn open_impl(conn_id: &str, project_root: Option<&str>, pooled: bool) -> Option<Self> {
         let connection_type = match NavSource::from_conn_id(conn_id) {
             NavSource::Global => ConnectionType::Global,
             _ => ConnectionType::Project,
@@ -60,15 +78,22 @@ impl NavCache {
         // 路径仍由 `MetadataCacheManager` 唯一定义（布局知识不在本 crate 重写）。
         let manager = MetadataCacheManager::new(conn_id, connection_type, project_root).ok()?;
 
-        // 池化取用：把「开文件 + 5 条 PRAGMA + 一次迁移校验」从**每次缓存访问**
-        // 挪到「每个缓存文件一次」。以前每次 `open()` 都要付这份固定开销，
-        // 与「L2 命中 <5ms」的设计目标相抵（L1 空时尤其明显）。
-        let pool = MetadataCachePool::get_or_create(manager.db_path().clone(), 2).ok()?;
-        let guard = pool.acquire().ok()?;
+        let ops = if pooled {
+            // 池化取用：把「开文件 + 5 条 PRAGMA + 一次迁移校验」从**每次缓存访问**
+            // 挪到「每个缓存文件一次」。以前每次 `open()` 都要付这份固定开销，
+            // 与「L2 命中 <5ms」的设计目标相抵（L1 空时尤其明显）。
+            let pool = MetadataCachePool::get_or_create(manager.db_path().clone(), 2).ok()?;
+            let guard = pool.acquire().ok()?;
+            MetadataCacheOps::from_pooled(guard)
+        } else {
+            // 直开：`manager.open()` 内部做 WAL + busy_timeout + 幂等迁移（见 open_direct 注释）。
+            let conn = manager.open().ok()?;
+            MetadataCacheOps::new(conn)
+        };
 
         Some(Self {
             conn_id: conn_id.to_string(),
-            ops: MetadataCacheOps::from_pooled(guard),
+            ops,
         })
     }
 

@@ -31,6 +31,8 @@ use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchVie
 use super::property_panel::PropertyHostPanel;
 // 搜索结果标签页（中央 Dock 独立 tab，VSCode「搜索: query」形态）：同上持弱句柄。
 use super::search_results::SearchResultsHostPanel;
+// P0：元数据搜索标签页（同一形态，搜的是**连接级元数据缓存**，不是草稿箱内容）。
+use super::metadata_search::{MetadataSearchHostPanel, MetadataSearchView};
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
 pub use workbench_shell::model::QueryRequest;
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
@@ -281,6 +283,14 @@ pub struct Shared {
     /// `true` = 用户已关闭标签页 → `WorkbenchView::render` 不再自动重建；
     /// 新的搜索结果到达（`show_scratchpad_search(Some)`）自动置 `false`（重新搜索 → 重建并聚焦）。
     pub search_results_dismissed: Rc<RefCell<bool>>,
+    /// P0：元数据搜索结果（连接级元数据缓存搜索，中央「搜索: query」tab 的全局数据源）。
+    /// 面板自持后台泵，把 `nav_jobs::drain_search_results(Panel)` 的结果写到这里；
+    /// 标签页每帧从这里读。`None` = 尚无结果（空态）。
+    pub metadata_search: Rc<RefCell<Option<MetadataSearchView>>>,
+    /// 元数据搜索标签页实体弱句柄（已关闭则为死弱引用，下次有结果时重建）。
+    pub metadata_search_panel: Rc<RefCell<Option<WeakEntity<MetadataSearchHostPanel>>>>,
+    /// 「元数据搜索」标签页被 tab ✕ 关闭（与 `search_results_dismissed` 同语义）。
+    pub metadata_search_dismissed: Rc<RefCell<bool>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
@@ -333,6 +343,9 @@ impl Shared {
             scratchpad_search: Rc::new(RefCell::new(None)),
             search_results_panel: Rc::new(RefCell::new(None)),
             search_results_dismissed: Rc::new(RefCell::new(false)),
+            metadata_search: Rc::new(RefCell::new(None)),
+            metadata_search_panel: Rc::new(RefCell::new(None)),
+            metadata_search_dismissed: Rc::new(RefCell::new(false)),
             host_redraw: Rc::new(RefCell::new(None)),
         }
     }
@@ -510,6 +523,19 @@ impl Shared {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {
             (*bridge.show_diff)(view, cx);
         }
+    }
+
+    /// 发布元数据搜索结果（面板后台泵写入；`None` = 清空显示空态）。
+    ///
+    /// 与 `show_scratchpad_search` 同口径：新结果到达（`Some`）＝ 用户重新搜索 →
+    /// 允许重建标签页（tab ✕ 关闭只置 `metadata_search_dismissed`，关标签保留结果）。
+    pub fn publish_metadata_search(&self, view: Option<MetadataSearchView>, cx: &mut App) {
+        let is_new = view.is_some();
+        *self.metadata_search.borrow_mut() = view;
+        if is_new {
+            *self.metadata_search_dismissed.borrow_mut() = false;
+        }
+        self.notify_host(cx);
     }
 
     /// 投递草稿箱文件属性弹窗（右键 → 属性；`None` = 关闭）。
