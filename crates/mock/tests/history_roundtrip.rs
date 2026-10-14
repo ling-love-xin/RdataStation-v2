@@ -79,6 +79,7 @@ fn succeeded() -> RunRecord {
             rows: 250,
             elapsed_ms: Some(31),
         },
+        scene: None,
     }
 }
 
@@ -169,6 +170,7 @@ async fn history_is_newest_first_and_failures_keep_their_reason() {
                 outcome: RunOutcome::Failed {
                     reason: "项目分析库已存在表 second".to_string(),
                 },
+                scene: None,
             },
         ),
     ] {

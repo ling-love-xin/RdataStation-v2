@@ -33,13 +33,15 @@
 //! `insert_statements`（文本）保留给「导出 SQL 脚本」那个出口。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use mock::mock_view::{
     MockColumnSpec, MockDraft, MockGenInfo, MockPreview, SchemaRequest, SchemaSource,
 };
 use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat, ScenarioTemplate};
-use mock::{MockEngine, TempTableWriteMode, parse_data_type, sanitize_identifier};
+use mock::{MockEngine, TempTableWriteMode, new_cancel_token, parse_data_type, sanitize_identifier};
 
 use crate::services::nav_runtime;
 
@@ -133,6 +135,67 @@ fn table_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>, 
     Ok(stmt.column_names().iter().map(|c| c.to_string()).collect())
 }
 
+/// 目标表指定列的 `MAX`（S3 自增接续用）。
+///
+/// 列不存在 / 表为空 → `Ok(None)`（调用方按「从 1 开始」处理）；
+/// 目标表没有该列时**不报错**——v2 不建主键 DDL，追加目标可能是任意结构。
+fn max_of_column(
+    conn: &duckdb::Connection,
+    table: &str,
+    column: &str,
+) -> Result<Option<i64>, String> {
+    let target_columns = table_columns(conn, table)?;
+    if !target_columns.iter().any(|c| c == column) {
+        return Ok(None);
+    }
+    let sql = SqlEngine::build_select(table, &[&format!("MAX(\"{column}\")")], None);
+    conn.query_row(&sql, [], |row| row.get(0))
+        .map_err(|e| format!("读取 {table} 的 {column} 最大值失败: {e}"))
+}
+
+/// 追加目标表的现状快照（S3：对话框展示 + 自增起点接续都用它）。
+///
+/// `pk_column` / `max_pk`：**本次生成的隐含主键**（草稿里 `AutoIncrement` 生成器的列）
+/// 对应到目标表同名列的最大值——v2 不建主键 DDL，但自增列就是语义上的主键，
+/// 追加时按 `MAX(pk) + 1` 接续（而不是按行数 + 1，行数在目标表被删行后就会偏）。
+#[derive(Debug, Clone)]
+pub struct TableAppendStatus {
+    /// 目标表现有行数
+    pub row_count: i64,
+    /// 自增（隐含主键）列名；目标表没有该列 / 草稿没有自增列时为 `None`
+    pub pk_column: Option<String>,
+    /// 自增列现有最大值（表空为 `None`）
+    pub max_pk: Option<i64>,
+}
+
+/// 追加目标表现状（S3）：行数 + 自增列 MAX。
+///
+/// `pk_hint` 是**本次生成的自增列名**（草稿里 `AutoIncrement` 生成器的列）：
+/// 它对应目标表的隐含主键。目标表没有该列时 `pk_column` 回落 `None`（自增起点按行数 + 1）。
+pub fn table_append_status(
+    db_path: &Path,
+    table: &str,
+    pk_hint: Option<&str>,
+) -> Result<TableAppendStatus, String> {
+    let conn = open_analysis_db(db_path)?;
+    let row_count = table_row_count(&conn, table)?;
+    let (pk_column, max_pk) = match pk_hint {
+        Some(pk) => {
+            let safe = sanitize_identifier(pk);
+            // `max_of_column` 已处理「列不存在 → Ok(None)」，目标表没有该列时回落 None
+            let max = max_of_column(&conn, table, &safe)?;
+            let present = table_columns(&conn, table)?.iter().any(|c| c == &safe);
+            (present.then(|| safe), max)
+        }
+        None => (None, None),
+    };
+    Ok(TableAppendStatus {
+        row_count,
+        pk_column,
+        max_pk,
+    })
+}
+
 // ==================== 生成 ====================
 
 /// 生成到内存临时表（**不写库**）：`append_to` 给定时按目标表现有行数接续主键自增起点
@@ -147,17 +210,21 @@ pub fn generate_at(
     draft: &MockDraft,
     append_to: Option<&str>,
 ) -> Result<MockGenInfo, String> {
-    generate_at_with_progress(db_path, draft, append_to, |_, _| {})
+    generate_at_with_progress(db_path, draft, append_to, new_cancel_token(), |_, _| {})
 }
 
 /// [`generate_at`] 的带进度版本：`on_progress(已完成批次, 总批次)` 由引擎按批回调。
 ///
 /// 回调在工作线程上执行（`Fn + Send + 'static`），只能写共享原子量 / 锁保护的状态，
 /// 不得回到 UI 线程。
+///
+/// S4：`cancel` 是本任务的取消令牌，由任务层创建并持有一份，`cancel()` 置位后
+/// 引擎在批次边界返回 `Err("生成已取消")`。
 pub fn generate_at_with_progress<F>(
     db_path: Option<&Path>,
     draft: &MockDraft,
     append_to: Option<&str>,
+    cancel: Arc<AtomicBool>,
     on_progress: F,
 ) -> Result<MockGenInfo, String>
 where
@@ -176,12 +243,20 @@ where
         let existing = table_row_count(&conn, table)?;
         for def in columns.iter_mut() {
             if let GeneratorConfig::AutoIncrement { step, .. } = def.generator {
+                // S3：自增起点 = 目标表同名列的 MAX + 1（隐含主键；MAX 为空表时从 1 开始）。
+                // 不能按行数 + 1：目标表被删过行后行数会偏，撞主键。
+                let safe = sanitize_identifier(&def.name);
+                let start = match max_of_column(&conn, table, &safe)? {
+                    Some(max) => max + 1,
+                    None => 1,
+                };
                 def.generator = GeneratorConfig::AutoIncrement {
-                    start: (existing + 1).clamp(1, i32::MAX as i64) as i32,
+                    start: start.clamp(1, i32::MAX as i64) as i32,
                     step,
                 };
             }
         }
+        let _ = existing;
     }
 
     let config = MockConfig {
@@ -195,7 +270,7 @@ where
 
     let rt = nav_runtime::bridge_runtime()?;
     let result = rt
-        .block_on(MockEngine::generate_with_progress(config, on_progress))
+        .block_on(MockEngine::generate_with_progress(config, cancel, on_progress))
         .map_err(|e| format!("Mock 生成失败: {e}"))?;
 
     Ok(MockGenInfo {
@@ -225,6 +300,7 @@ const PREVIEW_ROWS: usize = 20;
 /// 进度回调按「张表」上报（`on_table_progress(已完成表数, 总表数)`），与单表生成的批次量纲不同。
 pub fn generate_scenario_at<F>(
     template: &ScenarioTemplate,
+    cancel: Arc<AtomicBool>,
     on_table_progress: F,
 ) -> Result<(String, Vec<MockGenInfo>), String>
 where
@@ -238,7 +314,7 @@ where
 
     let rt = nav_runtime::bridge_runtime()?;
     let scenario = rt
-        .block_on(MockEngine::generate_scenario(template, on_table_progress))
+        .block_on(MockEngine::generate_scenario(template, cancel, on_table_progress))
         .map_err(|e| format!("场景生成失败: {e}"))?;
 
     let mut tables = Vec::with_capacity(scenario.tables.len());
@@ -336,7 +412,15 @@ pub fn append_table_at(db_path: &Path, info: &MockGenInfo, table: &str) -> Resul
         db_path,
         &info.temp_table_name,
         table,
-        TempTableWriteMode::Append,
+        TempTableWriteMode::Append {
+            // S3：本批次要保全局唯一的列 = 临时表里 `unique: true` 的列
+            unique_columns: info
+                .columns
+                .iter()
+                .filter(|def| def.unique)
+                .map(|def| sanitize_identifier(&def.name))
+                .collect(),
+        },
     )
     .map_err(|e| format!("追加到 {table} 失败: {e}"))?;
 
@@ -466,7 +550,7 @@ pub fn import_columns(
         return Err("请填写表名".to_string());
     }
     let details = load_column_details(request, project_root)?;
-    Ok(map_details(&details))
+    map_details(&details)
 }
 
 /// 读列详情（唯一实现）：L2 命中即返回，未命中实时内省并回写。
@@ -512,12 +596,22 @@ fn load_column_details(
 }
 
 /// 列详情 → mock 列规格（类型串唯一入口 + 智能映射）。
-fn map_details(details: &[engine::driver::traits::ColumnDetail]) -> Vec<MockColumnSpec> {
+///
+/// 类型串解析失败（如 `DECIMAL(4,10)` 标度大于精度）**整体报错**而不是悄悄落回默认列：
+/// 坏类型不拦下来，生成期建表也会被 DuckDB 拒绝，届时错误就与「哪一列」对不上了。
+fn map_details(
+    details: &[engine::driver::traits::ColumnDetail],
+) -> Result<Vec<MockColumnSpec>, String> {
     details
         .iter()
         .enumerate()
         .map(|(index, detail)| {
-            let data_type = parse_data_type(&detail.data_type);
+            let data_type = parse_data_type(&detail.data_type).map_err(|e| {
+                format!(
+                    "列「{}」的类型「{}」不合法：{e}",
+                    detail.name, detail.data_type
+                )
+            })?;
             let mapped = MockEngine::map_column(&detail.name, &detail.data_type).ok();
             let (generator, confidence, sample_value) = match mapped {
                 Some(response) => (
@@ -532,7 +626,7 @@ fn map_details(details: &[engine::driver::traits::ColumnDetail]) -> Vec<MockColu
                     String::new(),
                 ),
             };
-            MockColumnSpec {
+            Ok(MockColumnSpec {
                 id: index as u64 + 1,
                 def: ColumnDef {
                     name: detail.name.clone(),
@@ -544,7 +638,7 @@ fn map_details(details: &[engine::driver::traits::ColumnDetail]) -> Vec<MockColu
                 },
                 confidence,
                 sample_value,
-            }
+            })
         })
         .collect()
 }

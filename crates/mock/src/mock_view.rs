@@ -171,6 +171,20 @@ pub struct MockGenInfo {
     pub preview: MockPreview,
 }
 
+/// 追加目标表现状（S3：追加确认对话框展示「行数 / 隐含主键 / 最大值」）。
+///
+/// 与 workbench 装配层的 [`TableAppendStatus`] 同构，但定义在视图侧：
+/// `MockHost` 的实现（宿主）负责把库侧信息翻译成这个结构，视图只读它来渲染。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppendTargetStatus {
+    /// 目标表现有行数
+    pub row_count: i64,
+    /// 自增（隐含主键）列名；目标表没有该列时为 `None`
+    pub pk_column: Option<String>,
+    /// 自增列现有最大值（表空为 `None`）
+    pub max_pk: Option<i64>,
+}
+
 /// 预览数据（已字符串化，视图不依赖 Arrow）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MockPreview {
@@ -503,6 +517,11 @@ pub trait MockHost: 'static {
     fn cancel_job(&self);
     /// 分析库既有表（追加目标候选）
     fn existing_tables(&self) -> Vec<String>;
+    /// 追加目标表现状（S3）：行数 / 隐含主键列 / 最大值；表不存在或未打开项目 → `None`。
+    ///
+    /// `pk_hint` 是**本次生成的自增列名**（草稿里 `AutoIncrement` 生成器的列）——
+    /// 它对应目标表的隐含主键（v2 不建主键 DDL，自增列就是语义上的主键）。
+    fn append_target_status(&self, table: &str, pk_hint: Option<&str>) -> Option<AppendTargetStatus>;
     /// 可导入结构的连接
     fn schema_sources(&self) -> Vec<SchemaSource>;
     /// 读某表的列（源库结构）
@@ -1118,11 +1137,36 @@ fn generator_menu(
 
 /// 菜单项文案：推荐项加后缀（组件没有「右侧说明」的位置，标在标签里最省事）。
 fn generator_menu_label(name: &str, label: &str, recommended: &str) -> String {
-    if name == recommended {
-        format!("{label}（推荐）")
+    // A2：语言敏感的生成器在菜单里标「随语言偏好」——值跟随面板的语言下拉，
+    // 不保证所选语言都有母语数据（fake 对缺数据的组合回落英文）。
+    let locale_note = if is_locale_sensitive(name) {
+        " · 随语言偏好"
     } else {
-        label.to_string()
+        ""
+    };
+    if name == recommended {
+        format!("{label}（推荐）{locale_note}")
+    } else {
+        format!("{label}{locale_note}")
     }
+}
+
+/// A2：语言敏感生成器的 spec 名（与 [`crate::generators`] 里 `locale_faker!` 的分支一一对应）。
+///
+/// 值取自 fake 的 locale 数据：姓名 / 电话 / 城市 / 街道 / 公司名等有母语数据，
+/// 其余生成器（数值 / 时间 / UUID 等）与语言无关。
+fn is_locale_sensitive(name: &str) -> bool {
+    matches!(
+        name,
+        "name"
+            | "first_name"
+            | "last_name"
+            | "phone_number"
+            | "cell_number"
+            | "city"
+            | "street_name"
+            | "company_name"
+    )
 }
 
 // ==================== 生成器搜索（第二条路径） ====================
@@ -1373,6 +1417,8 @@ pub struct MockPanel {
     last_relations: Vec<ScenarioRelation>,
     /// 「加关系」对话框里正在选的四个位置（都是名字；`None` = 未选）。
     relation_pick: Rc<RefCell<RelationPick>>,
+    /// 「追加确认」对话框的状态（`None` = 没开）。
+    append_pick: Rc<RefCell<Option<AppendPick>>>,
     /// 「编辑表」对话框正在改哪张表（`None` = 没开）
     table_editing: Option<String>,
     /// 「编辑表」对话框的输入：表名 / 行数
@@ -1383,6 +1429,10 @@ pub struct MockPanel {
     table_pending: Option<String>,
     rows_input: Option<Entity<InputState>>,
     seed_input: Option<Entity<InputState>>,
+    /// 场景生成用的种子输入（`None` = 场景态未开）；值与 `self.scenario.seed` 互相同步
+    scenario_seed_input: Option<Entity<InputState>>,
+    /// 待写入场景种子输入的值（`load_scenario` 置位，下一帧 `ensure_inputs` 落地）
+    scenario_seed_pending: Option<String>,
     /// 导入结构对话框：选中的连接（`None` = 未选）
     import_conn: Rc<RefCell<Option<String>>>,
     import_catalog: Option<Entity<InputState>>,
@@ -1563,6 +1613,18 @@ struct RelationPick {
     parent_column: Option<String>,
 }
 
+/// 「追加确认」对话框正在等的确认（S3）：选中的目标表 + 它的现状快照。
+///
+/// `None` = 没开对话框。状态在**打开时**读一次（对话框期间库可能被改，
+/// 但「确认前看一眼现状」的用途不受影响）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AppendPick {
+    /// 目标表名
+    table: String,
+    /// 目标表现状（行数 / 隐含主键 / 最大值）；读不到时为 `None`（只显示表名）
+    status: Option<AppendTargetStatus>,
+}
+
 /// 内置场景模板的轻量清单（构造面板时取一次）。
 fn builtin_scenario_choices() -> Vec<ScenarioChoice> {
     crate::templates::get_builtin_templates()
@@ -1600,6 +1662,7 @@ impl MockPanel {
             scenario: None,
             last_relations: Vec::new(),
             relation_pick: Rc::new(RefCell::new(RelationPick::default())),
+            append_pick: Rc::new(RefCell::new(None)),
             table_editing: None,
             edit_name_input: None,
             edit_rows_input: None,
@@ -1607,6 +1670,8 @@ impl MockPanel {
             table_pending: None,
             rows_input: None,
             seed_input: None,
+            scenario_seed_input: None,
+            scenario_seed_pending: None,
             import_conn: Rc::new(RefCell::new(None)),
             import_catalog: None,
             import_schema: None,
@@ -2121,7 +2186,7 @@ impl MockPanel {
                 self.history_error = None;
             }
             Ok(HistoryReply::Replayed(detail)) => {
-                self.apply_replay(*detail);
+                self.apply_replay(*detail, cx);
                 self.history_loaded = true;
                 self.history_error = None;
             }
@@ -2164,7 +2229,25 @@ impl MockPanel {
     }
 
     /// 重放落地：草稿整体换成历史里的那一套（纯状态动作，测试直接调）。
-    pub(crate) fn apply_replay(&mut self, detail: MockGenerationDetail) {
+    ///
+    /// S5：场景历史（`scene_id` 有值）不落草稿——多表配置存不进单表列行，
+    /// 重放按模板 id 重新取内置模板并套用当时的种子（编辑过的关系不随历史恢复）。
+    pub(crate) fn apply_replay(&mut self, detail: MockGenerationDetail, cx: &mut Context<Self>) {
+        if let Some(scene_id) = detail.task.scene_id.clone() {
+            let seed = detail.task.seed.map(|seed| seed as u32);
+            let Some(mut template) = crate::templates::get_template_by_id(&scene_id) else {
+                self.fail(format!("场景模板不存在：{scene_id}（可能已从内置清单移除）"), cx);
+                return;
+            };
+            template.seed = seed;
+            let name = template.name.clone();
+            self.load_scenario(template, cx);
+            self.outcome = Some(format!(
+                "已重放场景 {name}（seed {}）：确认后再点生成",
+                seed.map(|s| s.to_string()).unwrap_or_else(|| "随机".to_string())
+            ));
+            return;
+        }
         let draft = history::draft_of_detail(&detail);
         let table = draft.table_name.clone();
         let columns = draft.columns.len();
@@ -2319,7 +2402,9 @@ impl MockPanel {
 
     /// 载入场景工作副本（[`Self::open_scenario`] 按 id 取到模板后调它；测试直接给模板）。
     pub(crate) fn load_scenario(&mut self, template: ScenarioTemplate, cx: &mut Context<Self>) {
-        self.scenario = Some(template);
+        self.scenario = Some(template.clone());
+        // S5：种子输入跟着模板走（重放 / 换模板时把当时的 seed 摆回来）
+        self.scenario_seed_pending = template.seed.map(|seed| seed.to_string());
         *self.relation_pick.borrow_mut() = RelationPick::default();
         // 已结果及其关系快照不动：载入工作副本不等于重新生成，旧结果仍然能导出
         self.error = None;
@@ -2336,10 +2421,21 @@ impl MockPanel {
 
     /// 场景态下的「生成」（后台任务：一次产出模板里的全部表；**不写库**）。
     pub fn run_scenario(&mut self, cx: &mut Context<Self>) {
-        let Some(template) = self.scenario.clone() else {
+        let Some(mut template) = self.scenario.clone() else {
             self.fail("先选一套场景模板", cx);
             return;
         };
+        // S5：种子输入 → 模板 seed（留空 = 随机，与单表 seed 输入同一语义）。
+        // 同步在这里而不是 `sync_inputs`：场景不读草稿，输入也只在此刻消费。
+        if let Some(input) = self.scenario_seed_input.clone() {
+            match parse_seed(&input.read(cx).value()) {
+                Ok(seed) => template.seed = seed,
+                Err(e) => {
+                    self.fail(e, cx);
+                    return;
+                }
+            }
+        }
         // 生成前校验引用（父表 / 父列不合适就不提交；错误在面板上就地显示）
         if let Err(e) = MockEngine::resolve_reference_domains(&template) {
             self.fail(format!("表间关系有问题：{e}"), cx);
@@ -2954,7 +3050,7 @@ impl MockPanel {
                         }
                         Some(column) => {
                             column.dependency =
-                                Some(ColumnDependency::foreign_key(&parent_table, &parent_column));
+                                Some(ColumnDependency::referenced(&parent_table, &parent_column));
                             column.generator = GeneratorConfig::RandomInt {
                                 min: domain.first as i32,
                                 max: domain.last() as i32,
@@ -3019,12 +3115,140 @@ impl MockPanel {
         }
     }
 
+    /// S3：追加前先看目标表现状——打开确认对话框（行数 / 隐含主键 / 最大值），
+    /// 确认后再追加。
+    ///
+    /// 状态在**打开时**读一次：`append_target_status` 是宿主查分析库的只读操作，
+    /// 对话框期间库被改的概率与影响都小，「确认前看一眼现状」的用途不受影响。
+    pub fn open_append_dialog(&mut self, table: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host.read_only() {
+            self.fail("只读模式：不允许写入项目分析库", cx);
+            return;
+        }
+        // 隐含主键 = 草稿里 AutoIncrement 生成器的列（v2 不建主键 DDL，自增列就是主键）
+        let pk_hint = self
+            .draft
+            .columns
+            .iter()
+            .find(|c| matches!(c.def.generator, GeneratorConfig::AutoIncrement { .. }))
+            .map(|c| c.def.name.clone());
+        let status = match &pk_hint {
+            Some(pk) => self.host.append_target_status(&table, Some(pk)),
+            None => self.host.append_target_status(&table, None),
+        };
+        *self.append_pick.borrow_mut() = Some(AppendPick {
+            table: table.clone(),
+            status,
+        });
+
+        let pick = self.append_pick.clone();
+        let panel = cx.entity();
+        let table_clone = table.clone();
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            let fg = theme.colors.foreground;
+            let muted = theme.colors.muted_foreground;
+            let warning = theme.colors.warning;
+            let info = theme.colors.info;
+            let current = pick.borrow().clone().unwrap_or(AppendPick {
+                table: table_clone.clone(),
+                status: None,
+            });
+
+            let mut body = div().v_flex().gap_2();
+            // 目标表现状：行数 / 隐含主键 / 最大值
+            match &current.status {
+                Some(status) => {
+                    let pk_text = match (&status.pk_column, status.max_pk) {
+                        (Some(pk), Some(max)) => format!("{pk} 最大 {max}"),
+                        (Some(pk), None) => format!("{pk}（空表）"),
+                        (None, _) => "（未识别到自增主键列）".to_string(),
+                    };
+                    body = body
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child("目标表现状"),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_xs()
+                                        .text_color(fg)
+                                        .child(format!(
+                                            "{} 行 · {pk_text}",
+                                            with_thousands(status.row_count.max(0) as u64)
+                                        )),
+                                ),
+                        );
+                    // 自增起点预告：本次生成的自增列会从 MAX + 1 接续
+                    if let (Some(pk), Some(max)) = (&status.pk_column, status.max_pk) {
+                        body = body.child(
+                            div()
+                                .text_xs()
+                                .text_color(info)
+                                .child(format!("{pk} 从 {} 开始接续（MAX + 1）", max + 1)),
+                        );
+                    }
+                }
+                None => {
+                    body = body.child(
+                        div()
+                            .text_xs()
+                            .text_color(warning)
+                            .child("读不到目标表现状：将按现有行数接续自增，唯一冲突会整批拒绝。"),
+                    );
+                }
+            }
+
+            let cancel_panel = panel.clone();
+            let ok_panel = panel.clone();
+            let table_for_ok = current.table.clone();
+            dialog
+                .title(format!("追加到 {}", current.table))
+                .child(body)
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("mock-append-cancel")
+                                .secondary()
+                                .label("取消")
+                                .on_click(move |_, window, app| {
+                                    let _ = cancel_panel.update(app, |panel, _cx| {
+                                        *panel.append_pick.borrow_mut() = None;
+                                    });
+                                    window.close_dialog(app);
+                                }),
+                        )
+                        .child(
+                            Button::new("mock-append-ok")
+                                .with_variant(ButtonVariant::Primary)
+                                .label("确认追加")
+                                .on_click(move |_, window, app| {
+                                    let _ = ok_panel.update(app, |panel, cx| {
+                                        panel.append_table(table_for_ok.clone(), cx);
+                                    });
+                                    window.close_dialog(app);
+                                }),
+                        ),
+                )
+        });
+    }
+
     /// 出口：追加到**项目**分析库既有表（显式选择；后台任务：生成 + 追加在一次任务里完成）。
     pub fn append_table(&mut self, table: String, cx: &mut Context<Self>) {
         if self.host.read_only() {
             self.fail("只读模式：不允许写入项目分析库", cx);
             return;
         }
+        *self.append_pick.borrow_mut() = None;
         self.start_job(MockJobKind::AppendTo(table), cx);
     }
 
@@ -3107,9 +3331,8 @@ impl MockPanel {
             MockJobState::Running(progress) => {
                 let mut notify = false;
                 if let Some(job) = self.job.as_mut() {
-                    // 取消要**持续压**：引擎在每次生成开始时清一次取消标志（`reset_cancel`），
-                    // 提交后头几百毫秒点的取消会被那一下清掉。这里每个轮询周期重发一次，
-                    // 直到任务真的结束——`cancel` 幂等，重发无副作用。
+                    // 取消要**持续压**：任务可能跨多个轮询周期才结束（S4 起取消是任务级令牌），
+                    // 这里每个轮询周期重发一次直到任务真的结束——`cancel_job` 幂等，重发无副作用。
                     if job.cancel_requested {
                         self.host.cancel_job();
                     }
@@ -3639,6 +3862,22 @@ impl MockPanel {
         if self.seed_input.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
             self.seed_input = Some(state);
+        }
+        // S5：场景种子输入（只在场态渲染；随模板载入预填）
+        if self.scenario.is_some() {
+            if self.scenario_seed_input.is_none() {
+                let state = cx.new(|cx| InputState::new(window, cx).placeholder("场景种子"));
+                self.scenario_seed_input = Some(state);
+            }
+            if let (Some(pending), Some(input)) = (
+                self.scenario_seed_pending.take(),
+                self.scenario_seed_input.clone(),
+            ) {
+                input.update(cx, |s, cx| s.set_value(pending, window, cx));
+            }
+        } else {
+            self.scenario_seed_input = None;
+            self.scenario_seed_pending = None;
         }
         if self.column_filter.is_none() {
             let state =
@@ -4425,6 +4664,12 @@ impl MockPanel {
                     }
                     button
                 };
+                // S5：场景种子（留空 = 随机；填了 = 整组可复现，历史行标注 seed）
+                let seed_box = self
+                    .scenario_seed_input
+                    .clone()
+                    .map(|input| div().w(rems(ui::NUM_INPUT_WIDTH)).flex_none().child(Input::new(&input)))
+                    .unwrap_or_else(|| div().flex_none());
                 let exit = {
                     let entity = cx.entity();
                     let mut button = Button::new("mock-scenario-exit")
@@ -4440,6 +4685,7 @@ impl MockPanel {
                 };
                 row = row
                     .child(div().flex_1().min_w_0().child(start))
+                    .child(seed_box)
                     .child(div().flex_none().child(exit));
             }
             row
@@ -4533,9 +4779,11 @@ impl MockPanel {
                         let table = name.clone();
                         let entity = entity.clone();
                         menu = menu.item(PopupMenuItem::new(name.clone()).on_click(
-                            move |_, _, app| {
+                            move |_, window, app| {
                                 let table = table.clone();
-                                entity.update(app, |panel, cx| panel.append_table(table, cx));
+                                entity.update(app, |panel, cx| {
+                                    panel.open_append_dialog(table, window, cx);
+                                });
                             },
                         ));
                     }
@@ -4935,6 +5183,16 @@ impl MockPanel {
                 .then(|| div().flex_none().text_xs().text_color(muted).child(stamp));
             // 状态文案按语义取色：失败的原因原文展出来（截断由布局管）
             let (status_text, status_color) = match task.status.as_str() {
+                // S5：场景历史行标注「场景 X · seed Y」（模板名已作为行标题展示）
+                "success" if task.scene_id.is_some() => (
+                    format!(
+                        "成功 · seed {}",
+                        task.seed
+                            .map(|seed| seed.to_string())
+                            .unwrap_or_else(|| "随机".to_string())
+                    ),
+                    success,
+                ),
                 "success" if task.save_format.as_deref() == Some(history::SAVE_FORMAT_TABLE) => {
                     (format!("成功 · {rows} 行 · 已追加"), success)
                 }
@@ -6105,6 +6363,13 @@ impl MockDetailView {
             } else {
                 summary
             };
+            // S1④：跨表引用徽标 + 常驻说明（挂在列上的关系，不是外键 DDL）
+            let ref_badge = column.def.dependency.as_ref().map(|dep| {
+                format!("↳ 引用 {}.{}", dep.ref_table, dep.ref_column)
+            });
+            let ref_note = column.def.dependency.is_some().then(|| {
+                "引用目标仅支持自增主键，按自增规律推算取值域，不读取父表已生成的数据。"
+            });
             let panel = self.panel.clone();
             list = list.child(
                 div()
@@ -6147,7 +6412,15 @@ impl MockDetailView {
                                     .text_xs()
                                     .text_color(badge_color)
                                     .child(badge),
-                            ),
+                            )
+                            .child({
+                                // 引用徽标：挂关系的列一眼可见「引用谁」
+                                let mut badge_el = div().flex_none().text_xs();
+                                if let Some(text) = &ref_badge {
+                                    badge_el = badge_el.text_color(info).child(text.clone());
+                                }
+                                badge_el
+                            }),
                     )
                     .child(
                         div()
@@ -6222,7 +6495,15 @@ impl MockDetailView {
                                     .text_ellipsis()
                                     .child(format!("{unique}空值 {null_percent}% · {detail}")),
                             ),
-                    ),
+                    )
+                    .child({
+                        // S1④：引用列常驻说明（解释「为什么不读父表数据」）
+                        let mut note = div().w_full().text_xs();
+                        if let Some(text) = &ref_note {
+                            note = note.text_color(muted).child(*text);
+                        }
+                        note
+                    }),
             );
         }
 

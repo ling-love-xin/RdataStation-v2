@@ -47,8 +47,13 @@ const ATTACH_ALIAS: &str = "rds_mock_sink";
 pub enum TempTableWriteMode {
     /// 新建表：用给定列定义建表（列类型 / 唯一 / 非空是产品语义，由调用方给）
     Create(Vec<ColumnDefInfo>),
-    /// 追加到既有表：调用方负责先校验「目标表存在且含临时表全部列」（报错更早、更好懂）
-    Append,
+    /// 追加到既有表：调用方负责先校验「目标表存在且含临时表全部列」（报错更早、更好懂）。
+    ///
+    /// `unique_columns` 是本批次要保**全局唯一**的列（= 临时表里 `unique: true` 的列，
+    /// 通常是隐含主键）：写入前引擎对目标表同名列做冲突预检，有冲突**整批拒绝**
+    /// （DuckDB 单条 `INSERT SELECT` 本身是原子的，这里再给一次**可读**的冲突原因，
+    /// 而不是让约束错误原样冒到界面上）。
+    Append { unique_columns: Vec<String> },
 }
 
 /// 临时表的列名（与 `insert_statements` 同一取法：`query` 之后再读 `column_names`）。
@@ -61,33 +66,23 @@ fn temp_table_columns(conn: &duckdb::Connection, temp_table: &str) -> MockResult
 const BATCH_SIZE: usize = 10_000;
 const PREVIEW_ROWS: usize = 10;
 
-/// 全局取消标志，用于中断正在进行的生成任务
-static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+/// 新建一个「未取消」的任务级取消令牌。
+///
+/// S4：取消从**进程级全局标志**改为**任务级令牌**——每个生成任务持自己的
+/// `Arc<AtomicBool>`，`cancel()` 只影响当前这一个任务，不会误伤并行 / 后续任务。
+pub fn new_cancel_token() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
 
 impl MockEngine {
-    /// 请求取消当前正在执行的生成任务
-    pub fn cancel() {
-        CANCEL_FLAG.store(true, Ordering::SeqCst);
-    }
-
-    /// 重置取消标志（在每次生成前调用）
-    fn reset_cancel() {
-        CANCEL_FLAG.store(false, Ordering::SeqCst);
-    }
-
-    /// 检查是否已请求取消
-    fn is_cancelled() -> bool {
-        CANCEL_FLAG.load(Ordering::SeqCst)
-    }
-
     // ==================== 数据生成 ====================
 
     /// 生成 Mock 数据（无进度回调）
     ///
     /// 根据 `MockConfig` 配置在 DuckDB 内存临时表中生成指定行数/列数的模拟数据。
-    /// 内部调用 `generate_with_progress`，回调为空。
+    /// 内部调用 `generate_with_progress`，回调为空，取消令牌用默认（新建、未取消）。
     pub async fn generate(config: MockConfig) -> MockResult<MockGenerateResult> {
-        Self::generate_with_progress(config, |_, _| {}).await
+        Self::generate_with_progress(config, new_cancel_token(), |_, _| {}).await
     }
 
     /// 生成 Mock 数据（带进度回调）
@@ -95,14 +90,18 @@ impl MockEngine {
     /// 分批次生成数据（每批 BATCH_SIZE 行），每完成一批调用 `on_progress(batch_idx, total_batches)`。
     /// 结果存储在 DuckDB 内存临时表 `temp_mock_{table_name}` 中。
     /// 返回 `MockGenerateResult` 包含预览 `QueryResult` 和耗时。
+    ///
+    /// S4：`cancel` 是本任务的取消令牌——宿主置位后，生成在**批次边界**响应
+    /// （返回 `Err("生成已取消")`）。任务结束即可丢弃该令牌，不影响别的任务。
     pub async fn generate_with_progress<F>(
         config: MockConfig,
+        cancel: Arc<AtomicBool>,
         on_progress: F,
     ) -> MockResult<MockGenerateResult>
     where
         F: Fn(usize, usize) + Send + 'static,
     {
-        Self::generate_table(config, &[], on_progress).await
+        Self::generate_table(config, &[], cancel, on_progress).await
     }
 
     /// 生成一张表（内部实现）：`domains` 是本次多表生成的父表取值域，供声明了跨表引用的列采样。
@@ -114,6 +113,7 @@ impl MockEngine {
     async fn generate_table<F>(
         config: MockConfig,
         domains: &[ReferenceDomain],
+        cancel: Arc<AtomicBool>,
         on_progress: F,
     ) -> MockResult<MockGenerateResult>
     where
@@ -126,7 +126,6 @@ impl MockEngine {
             return Err(MockError::InvalidColumn("无列定义".to_string()));
         }
 
-        Self::reset_cancel();
         for col in &config.columns {
             if col.nullable_ratio < 0.0 || col.nullable_ratio > 1.0 {
                 return Err(MockError::InvalidColumn(format!(
@@ -190,7 +189,7 @@ impl MockEngine {
             .collect::<MockResult<Vec<_>>>()?;
 
         for batch_idx in 0..total_batches {
-            if Self::is_cancelled() {
+            if cancel.load(Ordering::Relaxed) {
                 return Err(MockError::Generation("生成已取消".to_string()));
             }
             let start_row = batch_idx * BATCH_SIZE as u32;
@@ -501,6 +500,32 @@ impl MockEngine {
                 // 那时表可能是别人的（同名表已在），删掉就是数据丢失
                 conn.execute_batch(&SqlEngine::build_create_table_in(&target, defs, false))?;
             }
+            // S3：追加前对「要保全局唯一的列」做冲突预检——目标表同名列里若已有本次
+            // 生成的值，整批拒绝（可读原因；DuckDB 单条 INSERT SELECT 本身也会整语句
+            // 失败，这里把「撞了哪个值」讲清楚，而不是把约束错误原样抛出去）。
+            if let TempTableWriteMode::Append { unique_columns } = &mode {
+                for col in unique_columns {
+                    // 列名是 `sanitize_identifier` 后的产物（不可能是空 / 含引号），
+                    // 表名带引号：这里拼 SQL 是安全的。
+                    let conflict = format!(
+                        "SELECT 1 FROM \"{target_table}\" WHERE \"{col}\" IN \
+                         (SELECT \"{col}\" FROM \"{temp_table}\") LIMIT 1"
+                    );
+                    let hit = conn
+                        .query_row(&conflict, [], |row| row.get::<_, i32>(0))
+                        .map_err(|e| {
+                            MockError::Generation(format!(
+                                "追加冲突预检失败（{col}）：{e}"
+                            ))
+                        })?;
+                    if hit == 1 {
+                        return Err(MockError::Generation(format!(
+                            "追加被拒绝：目标表已有 {col} 与本次生成相同的值（唯一列不能重复）——\
+                             请调整列参数或删掉目标表里的冲突行"
+                        )));
+                    }
+                }
+            }
             if let Err(e) = conn.execute_batch(&SqlEngine::build_insert_select(
                 &target, temp_table, &columns,
             )) {
@@ -556,7 +581,7 @@ impl MockEngine {
     /// 根据列名和数据类型的语义分析，自动推荐最合适的 `GeneratorConfig`。
     /// 返回 `ColumnMappingResponse` 含置信度和示例值。
     pub fn map_column(column_name: &str, data_type: &str) -> MockResult<ColumnMappingResponse> {
-        let dt = parse_data_type(data_type);
+        let dt = parse_data_type(data_type)?;
         Ok(ColumnMapper::infer(column_name, &dt))
     }
 
@@ -734,7 +759,7 @@ pub fn sanitize_identifier(name: &str) -> String {
 /// - `RandomFloat` / `RandomDecimal` / `Words` / `Sentence` / `Sentences` / `Password` 的 `min..max`
 ///   是**半开区间**，`min >= max` 即空区间（`random_range` panic）；
 /// - `Date` / `DateTime` / `DateTimeBetween` 走 fake 的 `(0..分钟差)`，区间不足一分钟也是空区间；
-/// - `ForeignKey` 向空集合取随机索引、`Sequence` 做 `row_index % len`（除零）、
+/// - `ValueSet` 向空集合取随机索引、`Sequence` 做 `row_index % len`（除零）、
 ///   `Weighted` 抽 `0.0..total`（总权重非正）。
 ///
 /// 后果不是「这一次任务失败」：panic 发生在**持有内存库连接锁**期间，锁会被毒化，
@@ -743,8 +768,8 @@ pub fn sanitize_identifier(name: &str) -> String {
 fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
     match generator {
         // ===== 集合类：空集合 / 全零权重（生成期除零或空区间）=====
-        GeneratorConfig::ForeignKey { values } if values.is_empty() => {
-            Some("的「外键取值」集合为空：请在列编辑对话框里填取值（一行一个）".to_string())
+        GeneratorConfig::ValueSet { values } if values.is_empty() => {
+            Some("的「取值集合」为空：请在列编辑对话框里填取值（一行一个）".to_string())
         }
         GeneratorConfig::Sequence { values, .. } if values.is_empty() => {
             Some("的「序列取值」集合为空：请在列编辑对话框里填取值（一行一个）".to_string())
@@ -1293,8 +1318,11 @@ impl MockEngine {
     /// 模板里声明了**表间引用**的列（列上带 `dependency`）从**父表主键域**取值，
     /// 域由父列的自增参数与行数算出——不读任何已落地的数据（见 [`Self::resolve_reference_domains`]）。
     /// 返回 `MockScenarioResult` 包含每张表的生成结果摘要。
+    ///
+    /// S4：`cancel` 是本任务的取消令牌，在**表边界**响应（一张表一个检查点）。
     pub async fn generate_scenario(
         template: &ScenarioTemplate,
+        cancel: Arc<AtomicBool>,
         on_table_progress: impl Fn(usize, usize) + Send + 'static,
     ) -> MockResult<MockScenarioResult> {
         let start = Instant::now();
@@ -1304,14 +1332,17 @@ impl MockEngine {
         let domains = Self::resolve_reference_domains(template)?;
 
         for (idx, table) in template.tables.iter().enumerate() {
-            if Self::is_cancelled() {
+            if cancel.load(Ordering::Relaxed) {
                 return Err(MockError::Generation("场景生成已取消".to_string()));
             }
 
+            // S5：场景级种子 → 每表派生种子（`seed + 表下标`）——整组可复现，
+            // 且表间不会因同种子产出相同数据（跨表引用域由参数算出，不受种子影响）。
+            let table_seed = template.seed.map(|base| base.wrapping_add(idx as u32));
             let config = MockConfig {
                 table_name: table.name.clone(),
                 row_count: table.row_count,
-                seed: None,
+                seed: table_seed,
                 locale: match template.locale.as_str() {
                     "zh_cn" => Locale::ZhCn,
                     "en" | "en_us" => Locale::En,
@@ -1321,7 +1352,7 @@ impl MockEngine {
                 columns: table.columns.clone(),
             };
 
-            let result = Self::generate_table(config, &domains, |_, _| {}).await?;
+            let result = Self::generate_table(config, &domains, cancel.clone(), |_, _| {}).await?;
             total_rows += result.row_count;
 
             table_results.push(MockScenarioTableResult {
@@ -1340,6 +1371,7 @@ impl MockEngine {
         Ok(MockScenarioResult {
             template_id: template.id.clone(),
             template_name: template.name.clone(),
+            seed: template.seed,
             table_count: template.tables.len() as u32,
             total_rows,
             total_elapsed_ms,

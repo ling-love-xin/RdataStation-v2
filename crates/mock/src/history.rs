@@ -40,7 +40,7 @@ use crate::generator_catalog;
 use crate::mock_view::{
     MockColumnSpec, MockDraft, MockJobDone, MockJobKind, default_generator_for,
 };
-use crate::models::{ColumnDef, GeneratorConfig, Locale};
+use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 use crate::persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationStore, MockGenerationTask,
     MockTemplateColumn, MockUserTemplate,
@@ -90,12 +90,32 @@ pub enum RunOutcome {
     Failed { reason: String },
 }
 
+/// 场景运行的标注（S5）：历史行据此展示「场景 X · seed Y」并按模板重放。
+///
+/// 场景是多表配置，历史只存**标注**（模板 id + 种子 + 场景名），不存单表列行：
+/// 重放按 `scene_id` 重新取模板（内置模板自带语言与表结构），编辑过的关系不随历史恢复。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneRunMark {
+    /// 模板 id（重放时按它重新取模板）
+    pub scene_id: String,
+    /// 模板名（历史行「场景 X」）
+    pub scene_name: String,
+    /// 场景级种子（`None` = 当时未固定，随机）
+    pub seed: Option<u32>,
+    /// 模板语言（原样入库；重放时模板自带，这里只是让历史行信息完整）
+    pub locale: String,
+    /// 模板计划总行数（失败时历史行仍能显示「计划 N 行」）
+    pub planned_rows: u32,
+}
+
 /// 一次生成运行的记录请求（面板在任务收尾时组装）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRecord {
     /// 落点：`Some("table")` = 追加进分析库既有表；`None` = 只产内存临时表。
     pub save_format: Option<String>,
     pub outcome: RunOutcome,
+    /// S5：场景运行的标注；`Some` = 这次运行是场景模板生成（历史行按它标注与重放）。
+    pub scene: Option<SceneRunMark>,
 }
 
 impl RunRecord {
@@ -103,14 +123,27 @@ impl RunRecord {
     ///
     /// - 出口类（落库 / 导出 / 草稿箱）不产新配置，记了只是重复上一条；
     /// - 用户主动取消的运行没有数据，记下来只会把真记录挤掉。
+    ///
+    /// 场景（[`MockJobKind::Scenario`]）也是一次**产数据**的运行：记标注不记列行，
+    /// 见 [`SceneRunMark`]。
     pub fn of(
         kind: &MockJobKind,
         result: &Result<MockJobDone, String>,
         draft: &MockDraft,
     ) -> Option<Self> {
-        let save_format = match kind {
-            MockJobKind::Generate => None,
-            MockJobKind::AppendTo(_) => Some(SAVE_FORMAT_TABLE.to_string()),
+        let (save_format, scene) = match kind {
+            MockJobKind::Generate => (None, None),
+            MockJobKind::AppendTo(_) => (Some(SAVE_FORMAT_TABLE.to_string()), None),
+            MockJobKind::Scenario(template) => (
+                None,
+                Some(SceneRunMark {
+                    scene_id: template.id.clone(),
+                    scene_name: template.name.clone(),
+                    seed: template.seed,
+                    locale: template.locale.clone(),
+                    planned_rows: template.tables.iter().map(|table| table.row_count).sum(),
+                }),
+            ),
             _ => return None,
         };
         let outcome = match result {
@@ -123,6 +156,11 @@ impl RunRecord {
                 rows: kind.rows_total(draft) as i32,
                 elapsed_ms: None,
             },
+            // 场景：行数 = 各表生成行数之和；耗时 = 各表生成耗时之和（无独立总耗时）
+            Ok(MockJobDone::ScenarioGenerated { tables, .. }) => RunOutcome::Succeeded {
+                rows: tables.iter().map(|table| table.row_count).sum::<u32>() as i32,
+                elapsed_ms: Some(tables.iter().map(|table| table.elapsed_ms).sum::<u32>() as i32),
+            },
             Err(reason) if reason.contains("取消") => return None,
             Err(reason) => RunOutcome::Failed {
                 reason: reason.clone(),
@@ -133,6 +171,7 @@ impl RunRecord {
         Some(Self {
             save_format,
             outcome,
+            scene,
         })
     }
 }
@@ -247,6 +286,29 @@ pub fn task_of_run(
         RunOutcome::Succeeded { rows, elapsed_ms } => ("success", None, Some(*rows), *elapsed_ms),
         RunOutcome::Failed { reason } => ("failed", Some(reason.clone()), None, None),
     };
+
+    // S5：场景运行只存**标注**（模板 id / 种子 / 场景名），不落单表列行——
+    // 多表配置存不进列行，重放按 `scene_id` 重新取模板（见 [`SceneRunMark`]）。
+    if let Some(scene) = &run.scene {
+        let task = MockGenerationTask {
+            id: task_id.clone(),
+            table_name: scene.scene_name.clone(),
+            table_alias: None,
+            row_count: scene.planned_rows as i32,
+            // seed 是 u32：按位存进 i32 列，重放侧按位读回（`u32::MAX` 也不会丢）
+            seed: scene.seed.map(|seed| seed as i32),
+            locale: scene.locale.clone(),
+            scene_id: Some(scene.scene_id.clone()),
+            save_format: None,
+            status: status.to_string(),
+            error_message,
+            generated_rows,
+            generation_time_ms: elapsed_ms,
+            created_at: Some(stamp.clone()),
+            updated_at: Some(stamp),
+        };
+        return (task, Vec::new());
+    }
 
     let task = MockGenerationTask {
         id: task_id.clone(),
@@ -375,7 +437,9 @@ fn draft_of_parts(
 
 /// 存下来的列 → 草稿列（两张「列」表共用的读取面）。
 fn spec_of_stored(column: &impl StoredColumn) -> MockColumnSpec {
-    let data_type = parse_data_type(column.column_type());
+    // 写入时类型串是合法的；读回遇到解析失败（手工改库 / 旧版本写入的怪串）退 Text，不拦重放
+    let data_type = parse_data_type(column.column_type())
+        .unwrap_or_else(|_| ColumnDataType::Text);
     let generator = config_from_parts(column.generator(), column.generator_params())
         .unwrap_or_else(|| default_generator_for(&data_type));
     MockColumnSpec {
@@ -701,6 +765,7 @@ mod tests {
                 rows: 500,
                 elapsed_ms: Some(42),
             },
+            scene: None,
         }
     }
 
@@ -776,12 +841,55 @@ mod tests {
     }
 
     #[test]
+    fn scenario_runs_keep_columns_empty_and_mark_scene_fields() {
+        let template = scenario_template();
+        let record = RunRecord::of(
+            &MockJobKind::Scenario(Box::new(template.clone())),
+            &Ok(MockJobDone::ScenarioGenerated {
+                template_name: "电商系统".to_string(),
+                tables: vec![gen_info()],
+            }),
+            &draft(),
+        )
+        .expect("场景生成记历史");
+        let (task, columns) = task_of_run(&draft(), &record, Utc::now());
+
+        assert_eq!(task.table_name, "电商系统", "历史行标题就是场景名");
+        assert_eq!(task.scene_id.as_deref(), Some("builtin:ecommerce"));
+        assert_eq!(task.seed, Some(42));
+        assert_eq!(task.locale, "zh_cn", "模板语言原样入库");
+        assert_eq!(task.row_count, 18, "计划总行数");
+        assert_eq!(task.generated_rows, Some(500));
+        assert_eq!(task.save_format, None);
+        assert!(columns.is_empty(), "场景不落单表列行：重放按模板重取");
+    }
+
+    /// 一个最小场景模板（两张表共 18 行）。
+    fn scenario_template() -> crate::models::ScenarioTemplate {
+        let table = |name: &str, rows: u32| crate::models::TemplateTable {
+            name: name.to_string(),
+            row_count: rows,
+            columns: Vec::new(),
+        };
+        crate::models::ScenarioTemplate {
+            id: "builtin:ecommerce".to_string(),
+            name: "电商系统".to_string(),
+            description: String::new(),
+            category: "商业".to_string(),
+            locale: "zh_cn".to_string(),
+            seed: Some(42),
+            tables: vec![table("users", 10), table("orders", 8)],
+        }
+    }
+
+    #[test]
     fn failed_runs_keep_the_reason_and_have_no_rows() {
         let run = RunRecord {
             save_format: Some(SAVE_FORMAT_TABLE.to_string()),
             outcome: RunOutcome::Failed {
                 reason: "项目分析库已存在表 orders".to_string(),
             },
+            scene: None,
         };
         let (task, _) = task_of_run(&draft(), &run, Utc::now());
 
@@ -815,6 +923,32 @@ mod tests {
                 rows: 500,
                 elapsed_ms: None,
             }
+        );
+
+        // 场景模板也是一次产数据的运行：记标注（scene_id + seed + 场景名），不记列行
+        let scenario = Ok(MockJobDone::ScenarioGenerated {
+            template_name: "电商系统".to_string(),
+            tables: vec![gen_info(), gen_info()],
+        });
+        let scene_record = RunRecord::of(
+            &MockJobKind::Scenario(Box::new(scenario_template())),
+            &scenario,
+            &draft,
+        )
+        .expect("场景生成也是一次运行");
+        assert_eq!(scene_record.save_format, None);
+        let mark = scene_record.scene.expect("场景运行带标注");
+        assert_eq!(mark.scene_id, "builtin:ecommerce");
+        assert_eq!(mark.scene_name, "电商系统");
+        assert_eq!(mark.seed, Some(42));
+        assert_eq!(mark.planned_rows, 18, "模板各表行数之和");
+        assert_eq!(
+            scene_record.outcome,
+            RunOutcome::Succeeded {
+                rows: 1000,
+                elapsed_ms: Some(84),
+            },
+            "行数与耗时取各表之和"
         );
 
         // 出口类不产新配置：记了只是重复上一条

@@ -37,7 +37,7 @@ macro_rules! col {
 
 /// 引用列：`col_ref!(列名, 类型, 生成器, "父表", "父列")`；末位可缀 `nullable`。
 ///
-/// 关系挂在列上（`ColumnDependency::foreign_key`），是本模块表达关系的**唯一处**：
+/// 关系挂在列上（`ColumnDependency::referenced`），是本模块表达关系的**唯一处**：
 /// 父表必须在同一模板里，**不要求排在子表之前**（域由模板参数算出，与“哪张表先跑”无关），
 /// 引用自身（自关联）也允许。
 ///
@@ -51,7 +51,7 @@ macro_rules! col_ref {
             generator: $gen,
             nullable_ratio: 0.0,
             unique: false,
-            dependency: Some(ColumnDependency::foreign_key($parent, $parent_col)),
+            dependency: Some(ColumnDependency::referenced($parent, $parent_col)),
         }
     };
     ($name:expr, $data_type:expr, $gen:expr, $parent:expr, $parent_col:expr, nullable) => {
@@ -61,7 +61,7 @@ macro_rules! col_ref {
             generator: $gen,
             nullable_ratio: 0.3,
             unique: false,
-            dependency: Some(ColumnDependency::foreign_key($parent, $parent_col)),
+            dependency: Some(ColumnDependency::referenced($parent, $parent_col)),
         }
     };
 }
@@ -104,6 +104,7 @@ fn ecommerce_template() -> ScenarioTemplate {
         description: "包含用户、商品、订单、订单明细四张表，模拟典型 B2C 电商数据".to_string(),
         category: "商业".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "users".to_string(),
@@ -238,7 +239,7 @@ fn ecommerce_template() -> ScenarioTemplate {
                     col!(
                         "status",
                         ColumnDataType::Varchar { length: Some(20) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "pending".into(),
                                 "processing".into(),
@@ -331,6 +332,7 @@ fn hr_template() -> ScenarioTemplate {
         description: "包含员工、部门、薪资三张表，模拟企业内部 HR 管理数据".to_string(),
         category: "企业管理".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "employees".to_string(),
@@ -395,7 +397,7 @@ fn hr_template() -> ScenarioTemplate {
                     col!(
                         "salary_grade",
                         ColumnDataType::Varchar { length: Some(10) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "P1".into(),
                                 "P2".into(),
@@ -517,6 +519,7 @@ fn blog_template() -> ScenarioTemplate {
         description: "包含用户、文章、评论、标签四张表，模拟 UGC 内容平台数据".to_string(),
         category: "内容平台".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "users".to_string(),
@@ -702,6 +705,7 @@ fn finance_template() -> ScenarioTemplate {
         description: "包含交易记录、账户信息、产品三张表，模拟金融交易数据".to_string(),
         category: "金融".to_string(),
         locale: "en".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "transactions".to_string(),
@@ -792,7 +796,7 @@ fn finance_template() -> ScenarioTemplate {
                     col!(
                         "account_type",
                         ColumnDataType::Varchar { length: Some(30) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "savings".into(),
                                 "checking".into(),
@@ -821,7 +825,7 @@ fn finance_template() -> ScenarioTemplate {
                     col!(
                         "status",
                         ColumnDataType::Varchar { length: Some(20) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "active".into(),
                                 "dormant".into(),
@@ -862,7 +866,7 @@ fn finance_template() -> ScenarioTemplate {
                     col!(
                         "product_type",
                         ColumnDataType::Varchar { length: Some(30) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "stock".into(),
                                 "bond".into(),
@@ -889,7 +893,7 @@ fn finance_template() -> ScenarioTemplate {
                     col!(
                         "risk_level",
                         ColumnDataType::Varchar { length: Some(10) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "low".into(),
                                 "medium".into(),
@@ -916,6 +920,7 @@ fn social_media_template() -> ScenarioTemplate {
         description: "包含用户、帖子、关注关系、点赞四张表，模拟社交平台数据".to_string(),
         category: "社交".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "users".to_string(),
@@ -1112,6 +1117,7 @@ fn company_template() -> ScenarioTemplate {
         description: "包含公司、子公司、部门层级、项目、客户五张表，模拟集团企业数据".to_string(),
         category: "企业管理".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "companies".to_string(),
@@ -1325,7 +1331,7 @@ fn company_template() -> ScenarioTemplate {
                     col!(
                         "status",
                         ColumnDataType::Varchar { length: Some(20) },
-                        GeneratorConfig::ForeignKey {
+                        GeneratorConfig::ValueSet {
                             values: vec![
                                 "planning".into(),
                                 "active".into(),

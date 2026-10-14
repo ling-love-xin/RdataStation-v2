@@ -4,11 +4,49 @@ use fake::{Fake, Faker};
 
 use crate::models::{GeneratorConfig, Locale};
 
+/// A2：按语言偏好（[`Locale`]）把 faker 派发到 fake crate 的对应 locale 模块。
+///
+/// fake 的 `def_fakers!` 给每个 locale 生成**同名函数**（如 `name::zh_cn::Name()` 与
+/// `name::en::Name()`），所以这里是编译期可枚举的 match，不是运行时查表。
+/// 数据未覆盖的 (faker, locale) 由 fake 的 `Data` trait 默认实现**静默回落英文**——
+/// 本模块不重复它（UI 层已有「随语言偏好」标记，提示用户不保证所有生成器都有母语数据）。
+macro_rules! locale_faker {
+    ($locale:expr, $module:ident, $faker:ident, $rng:expr) => {
+        match $locale {
+            Locale::ZhCn => fake::faker::$module::zh_cn::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::En => fake::faker::$module::en::$faker().fake_with_rng::<String, _>($rng),
+            Locale::JaJp => fake::faker::$module::ja_jp::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::ZhTw => fake::faker::$module::zh_tw::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::FrFr => fake::faker::$module::fr_fr::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::DeDe => fake::faker::$module::de_de::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::ItIt => fake::faker::$module::it_it::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::PtBr => fake::faker::$module::pt_br::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::PtPt => fake::faker::$module::pt_pt::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::NlNl => fake::faker::$module::nl_nl::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::ArSa => fake::faker::$module::ar_sa::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::TrTr => fake::faker::$module::tr_tr::$faker()
+                .fake_with_rng::<String, _>($rng),
+            Locale::FaIr => fake::faker::$module::fa_ir::$faker()
+                .fake_with_rng::<String, _>($rng),
+        }
+    };
+}
+
 pub(super) fn generate_cell(
     generator: &GeneratorConfig,
     rng: &mut StdRng,
     row_index: usize,
-    _locale: &Locale,
+    locale: &Locale,
 ) -> String {
     match generator {
         // ========== 数值类 ==========
@@ -169,22 +207,14 @@ pub(super) fn generate_cell(
         GeneratorConfig::Template { template } => generate_from_template(template, rng),
 
         // ========== 个人信息 ==========
-        GeneratorConfig::Name => {
-            use fake::faker::name::zh_cn::Name;
-            Name().fake_with_rng::<String, _>(rng)
-        }
+        // A2：姓名 / 电话 / 邮箱 / 城市 / 公司名等按语言偏好派发（`locale_faker!`）
+        GeneratorConfig::Name => locale_faker!(locale, name, Name, rng),
         GeneratorConfig::NameWithTitle => {
             use fake::faker::name::en::NameWithTitle;
             NameWithTitle().fake_with_rng::<String, _>(rng)
         }
-        GeneratorConfig::FirstName => {
-            use fake::faker::name::zh_cn::FirstName;
-            FirstName().fake_with_rng::<String, _>(rng)
-        }
-        GeneratorConfig::LastName => {
-            use fake::faker::name::zh_cn::LastName;
-            LastName().fake_with_rng::<String, _>(rng)
-        }
+        GeneratorConfig::FirstName => locale_faker!(locale, name, FirstName, rng),
+        GeneratorConfig::LastName => locale_faker!(locale, name, LastName, rng),
         GeneratorConfig::Title => {
             use fake::faker::name::en::Title;
             Title().fake_with_rng::<String, _>(rng)
@@ -213,14 +243,8 @@ pub(super) fn generate_cell(
             use fake::faker::internet::en::FreeEmail;
             FreeEmail().fake_with_rng::<String, _>(rng)
         }
-        GeneratorConfig::PhoneNumber => {
-            use fake::faker::phone_number::zh_cn::PhoneNumber;
-            PhoneNumber().fake_with_rng::<String, _>(rng)
-        }
-        GeneratorConfig::CellNumber => {
-            use fake::faker::phone_number::zh_cn::CellNumber;
-            CellNumber().fake_with_rng::<String, _>(rng)
-        }
+        GeneratorConfig::PhoneNumber => locale_faker!(locale, phone_number, PhoneNumber, rng),
+        GeneratorConfig::CellNumber => locale_faker!(locale, phone_number, CellNumber, rng),
         GeneratorConfig::Username => {
             use fake::faker::internet::en::Username;
             Username().fake_with_rng::<String, _>(rng)
@@ -243,10 +267,7 @@ pub(super) fn generate_cell(
             use fake::faker::address::en::CountryName;
             CountryName().fake_with_rng::<String, _>(rng)
         }
-        GeneratorConfig::City => {
-            use fake::faker::address::zh_cn::CityName;
-            CityName().fake_with_rng::<String, _>(rng)
-        }
+        GeneratorConfig::City => locale_faker!(locale, address, CityName, rng),
         GeneratorConfig::CityPrefix => {
             use fake::faker::address::en::CityPrefix;
             CityPrefix().fake_with_rng::<String, _>(rng)
@@ -263,10 +284,7 @@ pub(super) fn generate_cell(
             use fake::faker::address::en::StateAbbr;
             StateAbbr().fake_with_rng::<String, _>(rng)
         }
-        GeneratorConfig::StreetName => {
-            use fake::faker::address::zh_cn::StreetName;
-            StreetName().fake_with_rng::<String, _>(rng)
-        }
+        GeneratorConfig::StreetName => locale_faker!(locale, address, StreetName, rng),
         GeneratorConfig::StreetSuffix => {
             use fake::faker::address::en::StreetSuffix;
             StreetSuffix().fake_with_rng::<String, _>(rng)
@@ -516,10 +534,7 @@ pub(super) fn generate_cell(
         }
 
         // ========== 商业类 ==========
-        GeneratorConfig::CompanyName => {
-            use fake::faker::company::zh_cn::CompanyName;
-            CompanyName().fake_with_rng::<String, _>(rng)
-        }
+        GeneratorConfig::CompanyName => locale_faker!(locale, company, CompanyName, rng),
         GeneratorConfig::CompanySuffix => {
             use fake::faker::company::en::CompanySuffix;
             CompanySuffix().fake_with_rng::<String, _>(rng)
@@ -880,7 +895,7 @@ pub(super) fn generate_cell(
         }
 
         // ========== 约束类 ==========
-        GeneratorConfig::ForeignKey { values } => {
+        GeneratorConfig::ValueSet { values } => {
             let idx = (0..values.len()).fake_with_rng::<usize, _>(rng);
             values[idx].clone()
         }

@@ -2005,7 +2005,7 @@ pub fn spec_of(config: &GeneratorConfig) -> &'static GeneratorSpec {
         GeneratorConfig::ValidStatusCode => &SPEC_VALID_STATUS_CODE,
         GeneratorConfig::LicencePlate => &SPEC_LICENCE_PLATE,
         GeneratorConfig::HealthInsuranceCode => &SPEC_HEALTH_INSURANCE_CODE,
-        GeneratorConfig::ForeignKey { .. } => &SPEC_FOREIGN_KEY,
+        GeneratorConfig::ValueSet { .. } => &SPEC_FOREIGN_KEY,
         GeneratorConfig::Sequence { .. } => &SPEC_SEQUENCE,
         GeneratorConfig::Weighted { .. } => &SPEC_WEIGHTED,
     }
@@ -2445,7 +2445,7 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
         "valid_status_code" => GeneratorConfig::ValidStatusCode,
         "licence_plate" => GeneratorConfig::LicencePlate,
         "health_insurance_code" => GeneratorConfig::HealthInsuranceCode,
-        "foreign_key" => GeneratorConfig::ForeignKey { values: Vec::new() },
+        "foreign_key" => GeneratorConfig::ValueSet { values: Vec::new() },
         "sequence" => GeneratorConfig::Sequence {
             cycle: false,
             values: Vec::new(),

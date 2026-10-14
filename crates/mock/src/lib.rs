@@ -31,6 +31,7 @@ pub mod ui;
 
 pub use engine::MockEngine;
 pub use engine::TempTableWriteMode;
+pub use engine::new_cancel_token;
 pub use engine::sanitize_identifier;
 pub use error::{MockError, MockResult};
 pub use generator_catalog::{

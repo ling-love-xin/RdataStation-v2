@@ -19,11 +19,11 @@ use gpui_kit::{
 };
 
 use super::{
-    DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView, MockDraft,
-    MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
-    MockPanel, MockPreview, MockRunOptions, RelationPick, ScenarioRelation, SchemaRequest,
-    SchemaSource, TableStatus, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
-    parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
+    AppendTargetStatus, DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView,
+    MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress,
+    MockJobState, MockPanel, MockPreview, MockRunOptions, RelationPick, ScenarioRelation,
+    SchemaRequest, SchemaSource, TableStatus, focus_detail_tab, param_text, parse_percent_ratio,
+    parse_rows, parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
 use crate::commands::GenerateMock;
 use crate::generator_catalog::{self, ParamKind};
@@ -425,7 +425,7 @@ fn calendar_date_lists_round_trip_and_allow_empty() {
 /// 参数摘要带上集合项数（字段行一眼可见「取值集合 3 项」）。
 #[test]
 fn summary_counts_complex_items() {
-    let config = GeneratorConfig::ForeignKey {
+    let config = GeneratorConfig::ValueSet {
         values: vec!["a".to_string(), "b".to_string(), "c".to_string()],
     };
     let summary = super::summarize_params(&config);
@@ -746,6 +746,11 @@ impl MockHost for TestHost {
 
     fn existing_tables(&self) -> Vec<String> {
         self.rec.tables.borrow().clone()
+    }
+
+    fn append_target_status(&self, _table: &str, _pk_hint: Option<&str>) -> Option<AppendTargetStatus> {
+        // 测试桩不读真实库：追加对话框的「现状」在窗口测试里不校验
+        None
     }
 
     fn schema_sources(&self) -> Vec<SchemaSource> {
@@ -2467,8 +2472,8 @@ fn switching_tabs_in_a_real_dock_updates_the_current_table(cx: &mut TestAppConte
     drop(area);
 }
 
-/// 取消要**持续压**：引擎在生成开始会清一次取消标志（`reset_cancel`），
-/// 提交后头几百毫秒点的取消会被那一下清掉——所以轮询周期里要重发（`cancel` 幂等）。
+/// 取消要**持续压**：任务可能跨多个轮询周期才结束（S4 起取消是任务级令牌，
+/// 面板在任务结束前每个轮询周期重发一次 `cancel_job`——幂等，重发无副作用）。
 #[gpui_kit::test]
 fn cancel_is_reasserted_on_every_poll_while_running(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -3427,6 +3432,76 @@ fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppConte
     });
 }
 
+// S5：场景历史重放 → 回到场景态，模板按 scene_id 重取并套用当时的 seed
+#[gpui_kit::test]
+fn replaying_a_scene_row_restores_the_template_and_seed(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        let mut task = history_task("t_scene", "success");
+        task.table_name = "电商系统".to_string();
+        task.scene_id = Some("builtin:ecommerce".to_string());
+        task.seed = Some(42);
+        panel.accept_history(
+            Ok(HistoryReply::Replayed(Box::new(MockGenerationDetail {
+                task,
+                columns: Vec::new(),
+            }))),
+            cx,
+        );
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("重放后应回到场景态");
+        assert_eq!(template.id, "builtin:ecommerce");
+        assert_eq!(template.seed, Some(42), "历史里的 seed 套回模板");
+        assert_eq!(template.tables.len(), 4, "电商系统内置模板四张表");
+        assert!(panel.scenario_source().is_none(), "场景态：结果来源标注清空");
+        assert!(
+            panel
+                .outcome
+                .as_deref()
+                .unwrap_or_default()
+                .contains("已重放场景 电商系统"),
+            "回执要说清是哪个场景：{:?}",
+            panel.outcome
+        );
+        assert!(panel.error.is_none());
+    });
+}
+
+// 场景重放：模板 id 已从内置清单移除 → 可读报错，不进场景态
+#[gpui_kit::test]
+fn replaying_a_missing_scene_template_reports_readable_error(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        let mut task = history_task("t_ghost", "success");
+        task.table_name = "消失的场景".to_string();
+        task.scene_id = Some("builtin:ghost".to_string());
+        panel.accept_history(
+            Ok(HistoryReply::Replayed(Box::new(MockGenerationDetail {
+                task,
+                columns: Vec::new(),
+            }))),
+            cx,
+        );
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.scenario().is_none(), "找不到模板就不该进场景态");
+        let err = panel.error.as_deref().unwrap_or_default();
+        assert!(err.contains("场景模板不存在"), "err: {err}");
+        assert!(err.contains("builtin:ghost"), "err: {err}");
+    });
+}
+
 // ==================== 用户模板（C4） ====================
 
 /// 一个用户模板（列表 / 应用用）。
@@ -3610,7 +3685,7 @@ fn toy_scenario() -> ScenarioTemplate {
         generator: GeneratorConfig::RandomInt { min: 1, max },
         nullable_ratio: 0.0,
         unique: false,
-        dependency: Some(ColumnDependency::foreign_key(parent, "id")),
+        dependency: Some(ColumnDependency::referenced(parent, "id")),
     };
     ScenarioTemplate {
         id: "toy:scenario".to_string(),
@@ -3618,6 +3693,7 @@ fn toy_scenario() -> ScenarioTemplate {
         description: String::new(),
         category: "测试".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "orders".to_string(),

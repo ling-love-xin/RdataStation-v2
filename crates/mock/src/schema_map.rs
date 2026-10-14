@@ -1,3 +1,4 @@
+use crate::error::{MockError, MockResult};
 use crate::models::{ColumnDataType, ColumnMappingResponse, GeneratorConfig};
 
 #[derive(Debug, Clone)]
@@ -17,7 +18,11 @@ pub struct ColumnMappingRule {
 ///
 /// 两类输入都按大写前缀/全等匹配，因此同一张表不会因为「谁调用的」而得到不同列类型。
 /// 未知类型回退 `Text`（DDL 渲染同为 `VARCHAR`，见 `ColumnDataType::to_duckdb_type`）。
-pub fn parse_data_type(data_type: &str) -> ColumnDataType {
+///
+/// 返回 `Result` 的原因是 `DECIMAL(p,s)` 的两类边界（见 [`parse_decimal`]）：
+/// 标度大于精度（`s > p`）是无解的坏类型，直接报错比「建表时被 DuckDB 拒绝」更好懂；
+/// 其余路径全部 `Ok`（未知 / 带修饰的类型仍走回退，不因签名变化收紧旧行为）。
+pub fn parse_data_type(data_type: &str) -> MockResult<ColumnDataType> {
     let up = data_type.trim().to_uppercase();
     // 先剁掉参数部分，再取首词：
     // `VARCHAR(64)` → `VARCHAR`；`INT(11) UNSIGNED` → `INT`；`DOUBLE PRECISION` → `DOUBLE`；
@@ -31,7 +36,7 @@ pub fn parse_data_type(data_type: &str) -> ColumnDataType {
         .unwrap_or("")
         .to_string();
     if word.starts_with("VARCHAR") || word.starts_with("CHAR") {
-        ColumnDataType::Varchar { length: None }
+        Ok(ColumnDataType::Varchar { length: None })
     } else if word == "TINYINT"
         || word == "SMALLINT"
         || word == "MEDIUMINT"
@@ -40,37 +45,84 @@ pub fn parse_data_type(data_type: &str) -> ColumnDataType {
         || word == "INT2"
         || word == "INT4"
     {
-        ColumnDataType::Integer
+        Ok(ColumnDataType::Integer)
     } else if word == "BIGINT" || word == "INT8" {
-        ColumnDataType::BigInt
+        Ok(ColumnDataType::BigInt)
     } else if word.starts_with("DECIMAL")
         || word.starts_with("NUMERIC")
         || word.starts_with("NUMBER")
     {
-        // 精度 / 标度不解析：mock 只需要一个可用的 DECIMAL 列型（写死 18,2，与旧行为一致）
-        ColumnDataType::Decimal {
-            precision: 18,
-            scale: 2,
-        }
+        parse_decimal(&up)
     } else if word == "BOOLEAN" || word == "BOOL" {
-        ColumnDataType::Boolean
+        Ok(ColumnDataType::Boolean)
     } else if word == "DOUBLE" || word == "FLOAT8" {
-        ColumnDataType::Double
+        Ok(ColumnDataType::Double)
     } else if word == "FLOAT" || word == "FLOAT4" || word == "REAL" {
-        ColumnDataType::Float
+        Ok(ColumnDataType::Float)
     } else if word == "DATE" {
-        ColumnDataType::Date
+        Ok(ColumnDataType::Date)
     } else if word.starts_with("TIMESTAMP") || word.starts_with("DATETIME") {
-        ColumnDataType::Timestamp
+        Ok(ColumnDataType::Timestamp)
     } else if word == "UUID" {
-        ColumnDataType::Uuid
+        Ok(ColumnDataType::Uuid)
     } else if word == "BLOB" || word == "BYTEA" || word.starts_with("BINARY") {
-        ColumnDataType::Blob
+        Ok(ColumnDataType::Blob)
     } else {
         // `TEXT` / `CLOB` / `STRING` 与真正认不出的类型一律归到 `Text`
         // （DDL 同为 `VARCHAR`；两者在 mock 里不需要区分）
-        ColumnDataType::Text
+        Ok(ColumnDataType::Text)
     }
+}
+
+/// `DECIMAL(p,s)`（含 `NUMERIC(p,s)` / `NUMBER(p,s)`）的**完整**解析。
+///
+/// - 无参数 / 参数残缺（如 `DECIMAL(10)`）→ 默认 `DECIMAL(18,2)`（旧行为，不收紧）；
+/// - `s > p` → 报错：标度超过精度在 DuckDB 里直接拒建表，这里把错误提前到「导入 / 读回」时；
+/// - `p == 0` → 报错：零精度不是合法的十进制列；
+/// - `p > 38` → **显式降级 `DOUBLE`** 并记警告：DuckDB `DECIMAL` 精度上限是 38，
+///   写 `DECIMAL(65,30)` 会被拒，与其让列悄悄落成 VARCHAR，不如明确降级成双精度浮点。
+fn parse_decimal(raw: &str) -> MockResult<ColumnDataType> {
+    let Some(open) = raw.find('(') else {
+        return Ok(ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        });
+    };
+    let Some(close) = raw.rfind(')') else {
+        return Ok(ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        });
+    };
+    let parts: Vec<&str> = raw[open + 1..close].split(',').map(str::trim).collect();
+    // 只认「两参」形式（与计划口径一致）：参数残缺 / 多参 / 非数字都回到默认 18,2
+    if parts.len() != 2 {
+        return Ok(ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        });
+    }
+    let (Ok(precision), Ok(scale)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>()) else {
+        return Ok(ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        });
+    };
+    if scale > precision || precision == 0 {
+        return Err(MockError::InvalidColumn(format!(
+            "DECIMAL({precision},{scale}) 的标度大于精度（或精度为 0）：标度不能超过精度，如 DECIMAL(10,2)"
+        )));
+    }
+    if precision > 38 {
+        tracing::warn!(
+            "Mock: DECIMAL({precision},{scale}) 的精度超出 DuckDB 上限（38），已降级为 DOUBLE"
+        );
+        return Ok(ColumnDataType::Double);
+    }
+    Ok(ColumnDataType::Decimal {
+        precision,
+        scale,
+    })
 }
 
 pub struct ColumnMapper;
@@ -545,7 +597,7 @@ impl ColumnMapper {
             },
             ColumnMappingRule {
                 patterns: &["gender", "sex"],
-                generator: || GeneratorConfig::ForeignKey {
+                generator: || GeneratorConfig::ValueSet {
                     values: vec!["男".to_string(), "女".to_string()],
                 },
                 confidence: "high",
@@ -582,7 +634,7 @@ impl ColumnMapper {
         vec![
             ColumnMappingRule {
                 patterns: &["status", "state"],
-                generator: || GeneratorConfig::ForeignKey {
+                generator: || GeneratorConfig::ValueSet {
                     values: vec![
                         "active".to_string(),
                         "pending".to_string(),
@@ -870,37 +922,44 @@ mod tests {
     #[test]
     fn test_parse_data_type_integer_family() {
         assert!(matches!(
-            parse_data_type("INTEGER"),
-            ColumnDataType::Integer
-        ));
-        assert!(matches!(parse_data_type("int"), ColumnDataType::Integer));
-        assert!(matches!(
-            parse_data_type("TINYINT"),
+            parse_data_type("INTEGER").unwrap(),
             ColumnDataType::Integer
         ));
         assert!(matches!(
-            parse_data_type("SMALLINT"),
+            parse_data_type("int").unwrap(),
             ColumnDataType::Integer
         ));
-        assert!(matches!(parse_data_type("BIGINT"), ColumnDataType::BigInt));
+        assert!(matches!(
+            parse_data_type("TINYINT").unwrap(),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(
+            parse_data_type("SMALLINT").unwrap(),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(
+            parse_data_type("BIGINT").unwrap(),
+            ColumnDataType::BigInt
+        ));
     }
 
     #[test]
     fn test_parse_data_type_parameterized_types() {
         // 源库元数据带长度/精度：仍应识别到真实类型，而不是回退到 VARCHAR。
         assert!(matches!(
-            parse_data_type("VARCHAR(64)"),
+            parse_data_type("VARCHAR(64)").unwrap(),
             ColumnDataType::Varchar { .. }
         ));
-        assert!(matches!(
-            parse_data_type("DECIMAL(12,2)"),
+        // DECIMAL 精度标度**完整解析**（不再写死 18,2）
+        assert_eq!(
+            parse_data_type("DECIMAL(12,2)").unwrap(),
             ColumnDataType::Decimal {
-                precision: 18,
+                precision: 12,
                 scale: 2
             }
-        ));
+        );
         assert!(matches!(
-            parse_data_type("NUMERIC"),
+            parse_data_type("NUMERIC").unwrap(),
             ColumnDataType::Decimal { .. }
         ));
     }
@@ -925,7 +984,7 @@ mod tests {
             ("MEDIUMINT", "integer"),
             ("BYTEA", "blob"),
         ] {
-            let actual = match parse_data_type(raw) {
+            let actual = match parse_data_type(raw).unwrap() {
                 ColumnDataType::Decimal { .. } => "decimal",
                 ColumnDataType::Double => "double",
                 ColumnDataType::Float => "float",
@@ -941,73 +1000,183 @@ mod tests {
         }
     }
 
+    /// S2：`DECIMAL(p,s)` 四种边界——常规透传 / 上限内透传 / 超上限降级 / 非法组合报错。
+    #[test]
+    fn test_parse_data_type_decimal_precision_scale() {
+        // 常规：精度标度原样透传
+        assert_eq!(
+            parse_data_type("DECIMAL(10,4)").unwrap(),
+            ColumnDataType::Decimal {
+                precision: 10,
+                scale: 4
+            }
+        );
+        // 上限（38）内：原样透传
+        assert_eq!(
+            parse_data_type("DECIMAL(38,10)").unwrap(),
+            ColumnDataType::Decimal {
+                precision: 38,
+                scale: 10
+            }
+        );
+        // 无参数：仍是旧默认（不收紧既有行为）
+        assert_eq!(
+            parse_data_type("DECIMAL").unwrap(),
+            ColumnDataType::Decimal {
+                precision: 18,
+                scale: 2
+            }
+        );
+        // 单参形式：不满足两参，按旧默认
+        assert_eq!(
+            parse_data_type("DECIMAL(10)").unwrap(),
+            ColumnDataType::Decimal {
+                precision: 18,
+                scale: 2
+            }
+        );
+    }
+
+    /// S2：精度超过 DuckDB 上限（38）→ 显式降级 `DOUBLE`（写 65,30 会被库拒，降级比落 VARCHAR 强）。
+    #[test]
+    fn test_parse_data_type_decimal_over_precision_degrades_to_double() {
+        assert_eq!(parse_data_type("DECIMAL(65,30)").unwrap(), ColumnDataType::Double);
+        assert_eq!(parse_data_type("NUMERIC(100,10)").unwrap(), ColumnDataType::Double);
+    }
+
+    /// S2：标度大于精度（或精度为 0）是坏类型，报错而不是悄悄写死默认。
+    #[test]
+    fn test_parse_data_type_decimal_illegal_combos_error() {
+        let err = parse_data_type("DECIMAL(4,10)")
+            .expect_err("标度大于精度必须报错")
+            .to_string();
+        assert!(err.contains("DECIMAL(4,10)"), "{err}");
+        assert!(err.contains("标度"), "{err}");
+
+        let err_zero = parse_data_type("DECIMAL(0,2)")
+            .expect_err("精度为 0 必须报错")
+            .to_string();
+        assert!(err_zero.contains("DECIMAL(0,2)"), "{err_zero}");
+    }
+
     #[test]
     fn test_parse_data_type_numeric_and_boolean() {
-        assert!(matches!(parse_data_type("DOUBLE"), ColumnDataType::Double));
-        assert!(matches!(parse_data_type("FLOAT"), ColumnDataType::Float));
-        assert!(matches!(parse_data_type("REAL"), ColumnDataType::Float));
         assert!(matches!(
-            parse_data_type("BOOLEAN"),
+            parse_data_type("DOUBLE").unwrap(),
+            ColumnDataType::Double
+        ));
+        assert!(matches!(
+            parse_data_type("FLOAT").unwrap(),
+            ColumnDataType::Float
+        ));
+        assert!(matches!(
+            parse_data_type("REAL").unwrap(),
+            ColumnDataType::Float
+        ));
+        assert!(matches!(
+            parse_data_type("BOOLEAN").unwrap(),
             ColumnDataType::Boolean
         ));
-        assert!(matches!(parse_data_type("bool"), ColumnDataType::Boolean));
+        assert!(matches!(
+            parse_data_type("bool").unwrap(),
+            ColumnDataType::Boolean
+        ));
     }
 
     #[test]
     fn test_parse_data_type_time_and_misc() {
-        assert!(matches!(parse_data_type("DATE"), ColumnDataType::Date));
         assert!(matches!(
-            parse_data_type("TIMESTAMP"),
+            parse_data_type("DATE").unwrap(),
+            ColumnDataType::Date
+        ));
+        assert!(matches!(
+            parse_data_type("TIMESTAMP").unwrap(),
             ColumnDataType::Timestamp
         ));
         assert!(matches!(
-            parse_data_type("DATETIME"),
+            parse_data_type("DATETIME").unwrap(),
             ColumnDataType::Timestamp
         ));
-        assert!(matches!(parse_data_type("UUID"), ColumnDataType::Uuid));
-        assert!(matches!(parse_data_type("BLOB"), ColumnDataType::Blob));
-        assert!(matches!(parse_data_type("  text  "), ColumnDataType::Text));
+        assert!(matches!(
+            parse_data_type("UUID").unwrap(),
+            ColumnDataType::Uuid
+        ));
+        assert!(matches!(
+            parse_data_type("BLOB").unwrap(),
+            ColumnDataType::Blob
+        ));
+        assert!(matches!(
+            parse_data_type("  text  ").unwrap(),
+            ColumnDataType::Text
+        ));
     }
 
     #[test]
     fn test_parse_data_type_unknown_falls_back_to_text() {
-        assert!(matches!(parse_data_type("WEIRD"), ColumnDataType::Text));
-        assert!(matches!(parse_data_type(""), ColumnDataType::Text));
+        assert!(matches!(
+            parse_data_type("WEIRD").unwrap(),
+            ColumnDataType::Text
+        ));
+        assert!(matches!(
+            parse_data_type("").unwrap(),
+            ColumnDataType::Text
+        ));
     }
 
     /// 内部规范名（模板使用）必须与源库类型串走同一套判定。
     #[test]
     fn test_parse_data_type_canonical_names() {
         assert!(matches!(
-            parse_data_type("integer"),
+            parse_data_type("integer").unwrap(),
             ColumnDataType::Integer
         ));
-        assert!(matches!(parse_data_type("bigint"), ColumnDataType::BigInt));
-        assert!(matches!(parse_data_type("float"), ColumnDataType::Float));
-        assert!(matches!(parse_data_type("double"), ColumnDataType::Double));
         assert!(matches!(
-            parse_data_type("decimal"),
+            parse_data_type("bigint").unwrap(),
+            ColumnDataType::BigInt
+        ));
+        assert!(matches!(
+            parse_data_type("float").unwrap(),
+            ColumnDataType::Float
+        ));
+        assert!(matches!(
+            parse_data_type("double").unwrap(),
+            ColumnDataType::Double
+        ));
+        assert!(matches!(
+            parse_data_type("decimal").unwrap(),
             ColumnDataType::Decimal { .. }
         ));
         assert!(matches!(
-            parse_data_type("boolean"),
+            parse_data_type("boolean").unwrap(),
             ColumnDataType::Boolean
         ));
         assert!(matches!(
-            parse_data_type("varchar"),
+            parse_data_type("varchar").unwrap(),
             ColumnDataType::Varchar { .. }
         ));
-        assert!(matches!(parse_data_type("text"), ColumnDataType::Text));
-        assert!(matches!(parse_data_type("date"), ColumnDataType::Date));
         assert!(matches!(
-            parse_data_type("datetime"),
+            parse_data_type("text").unwrap(),
+            ColumnDataType::Text
+        ));
+        assert!(matches!(
+            parse_data_type("date").unwrap(),
+            ColumnDataType::Date
+        ));
+        assert!(matches!(
+            parse_data_type("datetime").unwrap(),
             ColumnDataType::Timestamp
         ));
         assert!(matches!(
-            parse_data_type("timestamp"),
+            parse_data_type("timestamp").unwrap(),
             ColumnDataType::Timestamp
         ));
-        assert!(matches!(parse_data_type("uuid"), ColumnDataType::Uuid));
-        assert!(matches!(parse_data_type("blob"), ColumnDataType::Blob));
+        assert!(matches!(
+            parse_data_type("uuid").unwrap(),
+            ColumnDataType::Uuid
+        ));
+        assert!(matches!(
+            parse_data_type("blob").unwrap(),
+            ColumnDataType::Blob
+        ));
     }
 }

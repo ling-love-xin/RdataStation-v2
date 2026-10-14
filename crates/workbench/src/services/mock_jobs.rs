@@ -16,16 +16,18 @@
 //! 阶段（[`MockJobPhase`]）：生成有批次粒度进度；写入分析库与写文件跑在 DuckDB / 文件系统内部，
 //! 探不到中间点，只能报「进行中」——面板据此切成不定量进度条。
 //!
-//! 取消：`cancel()` 置引擎的进程级取消标志，引擎在**批次边界**响应（10k 行/批），
-//! 结果以 `Err("生成已取消")` 回传。只有含生成阶段的任务能取消；出口类不给取消
+//! 取消：`cancel()` 置位**当前任务**的取消令牌（S4：任务级，每任务一把），
+//! 引擎在**批次边界**响应（10k 行/批），结果以 `Err("生成已取消")` 回传。
+//! 只有含生成阶段的任务能取消；出口类不给取消
 //! （强中断会留下半张表 / 半个文件），视图也不渲染取消按钮。
 //!
 //! 状态一致性：进度与结果放在**同一把锁下的同一个槽**里——worker 收尾时一次性
 //! 「清进度 + 写结果」，UI 侧因此不会观察到「既无进度也无结果」的空洞。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use mock::mock_view::{
     MockDraft, MockGenInfo, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
@@ -48,12 +50,18 @@ pub struct JobPaths {
     pub project_root: Option<PathBuf>,
 }
 
-/// 槽：进行中的进度 + 已完成未被取走的结果。
+/// 槽：进行中的进度 + 已完成未被取走的结果 + 当前任务的取消令牌。
 struct Slot {
     /// `None` = 无进行中任务
     progress: Option<MockJobProgress>,
     /// `Some` = 已完成、等待 UI 取走
     done: Option<Result<MockJobDone, String>>,
+    /// 当前任务的取消令牌（S4）：`cancel()` 置位它；任务结束即丢弃。
+    ///
+    /// 与 [`Job::cancel`] 是**同一个** `Arc`（`start()` 里创建后同时放两处）——
+    /// worker 用 `job.cancel` 传给引擎，`cancel()` 用槽里的这份置位，
+    /// 单 worker 串行下两者总是指向当前正在跑的那个任务。
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 /// 共享状态：任务队列（串行语义由槽的 `progress` 保证）+ 结果槽。
@@ -78,6 +86,7 @@ fn shared() -> &'static Shared {
             slot: Mutex::new(Slot {
                 progress: None,
                 done: None,
+                cancel: None,
             }),
         }
     })
@@ -94,15 +103,18 @@ struct Job {
     kind: MockJobKind,
     /// 任务需要的路径（提交时由 UI 线程解析）
     paths: JobPaths,
+    /// 本任务的取消令牌（S4）：与槽里的 [`Slot::cancel`] 是同一个 `Arc`
+    cancel: Arc<AtomicBool>,
 }
 
 fn worker(rx: mpsc::Receiver<Job>) {
     while let Ok(job) = rx.recv() {
         let result = run_job_catching(|| run_job(&job));
         let mut slot = lock(&shared().slot);
-        // 一次性收尾：清进度 + 写结果（UI 不会看到中间态）
+        // 一次性收尾：清进度 + 写结果（UI 不会看到中间态）；取消令牌随任务结束丢弃
         slot.progress = None;
         slot.done = Some(result);
+        slot.cancel = None;
     }
 }
 
@@ -138,6 +150,7 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
             // 场景模板不写库：不需要 `db_path`（未打开项目也能生成）
             let (template_name, tables) = mock_generator::generate_scenario_at(
                 template,
+                job.cancel.clone(),
                 move |tables_done, tables_total| {
                     let mut slot = lock(&shared().slot);
                     if let Some(progress) = slot.progress.as_mut() {
@@ -219,6 +232,7 @@ fn generate(job: &Job, append_to: Option<&str>) -> Result<MockGenInfo, String> {
         db_path,
         &job.draft,
         append_to,
+        job.cancel.clone(),
         move |batches_done, batches_total| {
             let mut slot = lock(&shared().slot);
             if let Some(progress) = slot.progress.as_mut() {
@@ -249,6 +263,8 @@ fn set_tables_progress(done: usize, total: usize) {
 
 /// 提交后台任务；已有任务在进行中时返回 `Err`。
 pub fn start(draft: &MockDraft, kind: MockJobKind, paths: &JobPaths) -> Result<(), String> {
+    // S4：每个任务一把取消令牌——任务结束即丢弃，`cancel()` 只影响当前这个任务
+    let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut slot = lock(&shared().slot);
         if slot.progress.is_some() {
@@ -262,6 +278,7 @@ pub fn start(draft: &MockDraft, kind: MockJobKind, paths: &JobPaths) -> Result<(
             batches_total: 0,
             rows_total: kind.rows_total(draft),
         });
+        slot.cancel = Some(cancel.clone());
     }
 
     let sent = shared()
@@ -270,6 +287,7 @@ pub fn start(draft: &MockDraft, kind: MockJobKind, paths: &JobPaths) -> Result<(
             draft: draft.clone(),
             kind,
             paths: paths.clone(),
+            cancel,
         })
         .is_ok();
     if !sent {
@@ -277,6 +295,7 @@ pub fn start(draft: &MockDraft, kind: MockJobKind, paths: &JobPaths) -> Result<(
         let mut slot = lock(&shared().slot);
         slot.progress = None;
         slot.done = Some(Err("后台工作线程不可用".to_string()));
+        slot.cancel = None;
         return Err("后台工作线程不可用".to_string());
     }
     Ok(())
@@ -296,11 +315,14 @@ pub fn take_done() -> Option<Result<MockJobDone, String>> {
     lock(&shared().slot).done.take()
 }
 
-/// 请求取消进行中的任务：置引擎的进程级取消标志（引擎在批次边界响应）。
+/// 请求取消**当前进行中的任务**：置位该任务的取消令牌（引擎在批次 / 表边界响应）。
 ///
-/// 无任务时调用无害：下一次生成开始会重置该标志。
+/// S4：令牌是任务级的——没有进行中的任务时调用无害（没有令牌可置）；
+/// 任务结束后令牌即丢弃，下一次任务不受上一次取消的影响（不再需要「生成前重置」）。
 pub fn cancel() {
-    mock::MockEngine::cancel();
+    if let Some(cancel) = lock(&shared().slot).cancel.clone() {
+        cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]

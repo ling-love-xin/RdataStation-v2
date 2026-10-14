@@ -30,7 +30,7 @@
 | 数值分布族与时序 | 数值类不止均匀与正态：还有对数正态 / 泊松 / 指数 / 帕累托 / Beta / 二项，另有**时序数值**（起始值 + 趋势 + 周期 + 噪声，按行序展开）；分布实现自建（Box-Muller / 逆变换 / Marsaglia-Tsang，大 λ 走正态近似），不引 `rand_distr`（架构 D41） |
 | 工作日历就在列上 | **列级参数**（不与别的列共享、不内置节假日表）：仅工作日 + 工作周掩码（`1111100` = 周一~周五）+ 跳过日期（节假日）+ 上班日期（调休，优先）；顺序日期按**工作日数**推进，其余日期生成器落在休息日就重抽（不成则顺延），另有「仅工作时段」且**窗口可自定义**（`HH:MM`，起 > 止 = 跨零点 / 夜班）。判定顺序与预算：架构 D42 |
 | 生成器两条找法 | 分类子菜单（知道属于哪类）+ **搜索对话框**（只记得名字：按中文标签 / 名称 / 分类过滤，多词 AND） |
-| 集合类参数可编辑 | `ForeignKey.values` / `Sequence.values` / `Weighted.choices` 在列编辑对话框里用多行文本填（一行一项 / 一行「值, 权重」）；留空或全零权重在生成前拦住，不会 panic |
+| 集合类参数可编辑 | `ValueSet.values` / `Sequence.values` / `Weighted.choices` 在列编辑对话框里用多行文本填（一行一项 / 一行「值, 权重」）；留空或全零权重在生成前拦住，不会 panic |
 | 场景模板与列依赖 | 内置 6 套多表场景模板，**中央表头**「场景模板 ▾」选一套 → 右 Dock 拿回工作副本（清单 + 关系）→「生成 N 张表」（逐表进度按「张表」计，进度与取消也在那一段）；结果**一张表一个中央 tab**、右 Dock 结果表清单是管理入口（状态点 + 关系子行）；列间依赖字段 `dependency` 只用于**跨表引用**（取值域由父表参数算出）——**没有拓扑排序，也不解释依赖表达式**；v1 的空壳变体与空字段已从模型里删掉（架构 D40） |
 | SQL 全量走构造器 | DDL/DML/DQL 一律 `engine::sql::SqlEngine` 生成，`format!` 仅保留给 DuckDB 专有 `COPY` |
 
@@ -106,7 +106,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 165 单元（含 86 视图）+ 34 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 213 单元（含 111 视图）+ 41 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 11 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）

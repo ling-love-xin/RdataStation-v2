@@ -37,7 +37,7 @@ fn default_nullable_ratio() -> f64 {
 
 // ==================== 列数据类型 ====================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ColumnDataType {
     Integer,
@@ -448,7 +448,7 @@ pub enum GeneratorConfig {
     HealthInsuranceCode,
 
     // 约束类
-    ForeignKey {
+    ValueSet {
         values: Vec<String>,
     },
     Sequence {
@@ -599,6 +599,12 @@ pub struct ScenarioTemplate {
     pub category: String,
     pub locale: String,
     pub tables: Vec<TemplateTable>,
+    /// S5：场景级随机种子（`None` = 每次随机，不可复现）。
+    ///
+    /// 给定时整个场景**可复现**：每张表用「`seed` + 表下标」派生各自的种子，
+    /// 保证表间不因同种子而产出相同数据，但整组数据在相同 seed 下稳定重现。
+    #[serde(default)]
+    pub seed: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -638,6 +644,8 @@ pub struct MockPersistAssetResult {
 pub struct MockScenarioResult {
     pub template_id: String,
     pub template_name: String,
+    /// S5：本次场景用的种子（`None` = 随机）；历史重放靠它复现同一组数据
+    pub seed: Option<u32>,
     pub table_count: u32,
     pub total_rows: u32,
     pub total_elapsed_ms: u32,
@@ -678,7 +686,7 @@ impl ColumnDependency {
     ///
     /// 内置模板、用户自定义关系、测试都走它，避免各处手写同一组字段
     /// （漏设一个字段就变成“看着像引用、实际没人读得懂”）。
-    pub fn foreign_key(table: &str, column: &str) -> Self {
+    pub fn referenced(table: &str, column: &str) -> Self {
         Self {
             ref_table: table.to_string(),
             ref_column: column.to_string(),

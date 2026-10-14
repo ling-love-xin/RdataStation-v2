@@ -14,12 +14,12 @@
 //! 因此每个用例使用互不相同的表名。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use rds_mock::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockConfig, MockEngine,
-    MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable, parse_data_type,
+    MockError, MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable, parse_data_type,
 };
 use shared::models::QueryResult;
 
@@ -208,7 +208,9 @@ async fn write_temp_table_appends_to_existing_table() {
         &db,
         &second.temp_table_name,
         "t_sink_append",
-        TempTableWriteMode::Append,
+        TempTableWriteMode::Append {
+            unique_columns: Vec::new(),
+        },
     )
     .expect("追加应当成功");
     assert_eq!(
@@ -630,15 +632,27 @@ fn map_columns_batch_returns_one_response_per_column() {
 
 // ==================== 取消 ====================
 
+/// S4：取消令牌是**任务级**的——预置位的令牌会让生成立刻取消，
+/// 而默认（新建）令牌的生成不受任何「上次取消」影响（没有全局标志可残留）。
 #[tokio::test]
-async fn cancel_flag_is_reset_by_next_generate() {
-    MockEngine::cancel();
-    let result = MockEngine::generate(basic_config("t_cancel")).await;
+async fn cancel_token_is_per_task() {
+    // 预置位的令牌：生成在第一批边界就报「已取消」
+    let cancelled = Arc::new(AtomicBool::new(true));
+    let result = MockEngine::generate_with_progress(
+        basic_config("t_cancel_prearmed"),
+        cancelled,
+        |_, _| {},
+    )
+    .await;
     assert!(
-        result.is_ok(),
-        "每次生成前应重置取消标志: {:?}",
+        matches!(result, Err(MockError::Generation(_))),
+        "预置位的令牌应让生成报已取消: {:?}",
         result.err()
     );
+
+    // 新建令牌：不受上面那次取消影响（每次任务独立令牌）
+    let result = MockEngine::generate(basic_config("t_cancel_fresh")).await;
+    assert!(result.is_ok(), "新建令牌的生成应正常: {:?}", result.err());
 }
 
 // ==================== 数据类型 ====================
@@ -671,16 +685,23 @@ fn column_data_type_to_duckdb_type() {
 
 #[test]
 fn parse_data_type_is_public_and_loose() {
+    // `parse_data_type` 现在可失败（DECIMAL 非法组合报错），这里用 unwrap 校验常规输入
     assert!(matches!(
-        parse_data_type("VARCHAR(64)"),
+        parse_data_type("VARCHAR(64)").unwrap(),
         ColumnDataType::Varchar { .. }
     ));
     assert!(matches!(
-        parse_data_type("DECIMAL(12,2)"),
+        parse_data_type("DECIMAL(12,2)").unwrap(),
         ColumnDataType::Decimal { .. }
     ));
-    assert!(matches!(parse_data_type("BIGINT"), ColumnDataType::BigInt));
-    assert!(matches!(parse_data_type("WEIRD"), ColumnDataType::Text));
+    assert!(matches!(
+        parse_data_type("BIGINT").unwrap(),
+        ColumnDataType::BigInt
+    ));
+    assert!(matches!(
+        parse_data_type("WEIRD").unwrap(),
+        ColumnDataType::Text
+    ));
 }
 
 // ==================== 导出 ====================
@@ -855,6 +876,7 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
         description: "两张表，验证多表生成与进度回调".to_string(),
         category: "测试".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "it_parent".to_string(),
@@ -885,10 +907,14 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
 
     let seen = Arc::new(AtomicUsize::new(0));
     let progress = seen.clone();
-    let result = MockEngine::generate_scenario(&template, move |_done, total| {
-        assert_eq!(total, 2, "总表数应为 2");
-        progress.fetch_add(1, Ordering::SeqCst);
-    })
+    let result = MockEngine::generate_scenario(
+        &template,
+        rds_mock::new_cancel_token(),
+        move |_done, total| {
+            assert_eq!(total, 2, "总表数应为 2");
+            progress.fetch_add(1, Ordering::SeqCst);
+        },
+    )
     .await
     .expect("场景生成应当成功");
 
@@ -905,7 +931,7 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
 
 /// 声明一条跨表引用（挂在列上，是本模块表达关系的唯一处）。
 fn reference(parent_table: &str, parent_column: &str) -> ColumnDependency {
-    ColumnDependency::foreign_key(parent_table, parent_column)
+    ColumnDependency::referenced(parent_table, parent_column)
 }
 
 /// 引用列：场景生成时值从父表主键域取；单表生成时按自己的生成器取值。
@@ -950,6 +976,7 @@ async fn scenario_references_stay_inside_the_parent_key_domain() {
         description: "父表 5 行、子表 40 行，子表两列引用父表主键".to_string(),
         category: "测试".to_string(),
         locale: "zh_cn".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "it_ref_parent".to_string(),
@@ -978,7 +1005,7 @@ async fn scenario_references_stay_inside_the_parent_key_domain() {
         ],
     };
 
-    let result = MockEngine::generate_scenario(&template, |_, _| {})
+    let result = MockEngine::generate_scenario(&template, rds_mock::new_cancel_token(), |_, _| {})
         .await
         .expect("场景生成应当成功");
 
@@ -1019,6 +1046,7 @@ async fn scenario_references_allow_self_and_forward_targets() {
         description: "child 引用自己（parent_id）并引用后生成的 later 表".to_string(),
         category: "测试".to_string(),
         locale: "en".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "it_selfref_child".to_string(),
@@ -1047,9 +1075,13 @@ async fn scenario_references_allow_self_and_forward_targets() {
         ],
     };
 
-    let result = MockEngine::generate_scenario(&template, |_, _| {})
-        .await
-        .expect("自关联与前向引用都应当成功");
+    let result = MockEngine::generate_scenario(
+        &template,
+        rds_mock::new_cancel_token(),
+        |_, _| {},
+    )
+    .await
+    .expect("自关联与前向引用都应当成功");
 
     let own = column_of(&result.tables[0].temp_table_name, "id");
     assert!(
@@ -1078,6 +1110,7 @@ fn scenario_reference_resolution_reports_readable_errors() {
         description: String::new(),
         category: "测试".to_string(),
         locale: "en".to_string(),
+        seed: None,
         tables: vec![
             TemplateTable {
                 name: "it_bad_parent".to_string(),
@@ -1137,6 +1170,155 @@ fn scenario_reference_resolution_reports_readable_errors() {
     assert_eq!(domains[0].count, 8);
 }
 
+// ==================== S5：场景可复现（seed） ====================
+
+/// 把场景结果的每一列都物化出来（表名 + 列名 + 逐行值）。
+///
+/// 临时表同名会被下一次生成重建，所以必须在每次生成后**立刻**快照。
+fn snapshot(result: &rds_mock::MockScenarioResult) -> Vec<(String, String, Vec<String>)> {
+    let mut out = Vec::new();
+    for table in &result.tables {
+        for column in &table.columns {
+            out.push((
+                table.table_name.clone(),
+                column.clone(),
+                column_of(&table.temp_table_name, column),
+            ));
+        }
+    }
+    out
+}
+
+/// 固定 seed 的场景：两次生成**逐表逐列完全一致**（整组可复现，S5 核心承诺）。
+#[tokio::test]
+async fn fixed_seed_scenarios_repeat_exactly() {
+    let template = ScenarioTemplate {
+        id: "it:repro-fixed".to_string(),
+        name: "固定种子场景".to_string(),
+        description: String::new(),
+        category: "测试".to_string(),
+        locale: "zh_cn".to_string(),
+        seed: Some(7),
+        tables: vec![
+            TemplateTable {
+                name: "it_repro_fixed_parent".to_string(),
+                row_count: 5,
+                columns: vec![
+                    auto_increment("id"),
+                    col(
+                        "name",
+                        ColumnDataType::Varchar { length: Some(20) },
+                        GeneratorConfig::FirstName,
+                    ),
+                ],
+            },
+            TemplateTable {
+                name: "it_repro_fixed_child".to_string(),
+                row_count: 12,
+                columns: vec![
+                    auto_increment("id"),
+                    ref_col(
+                        "parent_id",
+                        "it_repro_fixed_parent",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 5 },
+                    ),
+                ],
+            },
+        ],
+    };
+
+    let first = MockEngine::generate_scenario(
+        &template,
+        rds_mock::new_cancel_token(),
+        |_, _| {},
+    )
+    .await
+    .expect("第一次生成");
+    // 临时表同名会被下一次生成重建：立刻快照
+    let first_snapshot = snapshot(&first);
+
+    let second = MockEngine::generate_scenario(
+        &template,
+        rds_mock::new_cancel_token(),
+        |_, _| {},
+    )
+    .await
+    .expect("第二次生成");
+    let second_snapshot = snapshot(&second);
+
+    assert_eq!(first.total_rows, second.total_rows);
+    assert_eq!(first.seed, Some(7), "结果应回带 seed，供历史标注");
+    assert_eq!(
+        first_snapshot, second_snapshot,
+        "同 seed 场景应逐表逐列一致（整组可复现）"
+    );
+}
+
+/// 不同 seed 的场景：数据不同（证明「一致」来自 seed，不是生成器恰好输出相同）。
+#[tokio::test]
+async fn different_seeds_produce_different_scenario_data() {
+    let build = |seed: Option<u32>| ScenarioTemplate {
+        id: "it:repro-diff".to_string(),
+        name: "对照场景".to_string(),
+        description: String::new(),
+        category: "测试".to_string(),
+        locale: "zh_cn".to_string(),
+        seed,
+        tables: vec![
+            TemplateTable {
+                name: "it_repro_diff_parent".to_string(),
+                row_count: 5,
+                columns: vec![
+                    auto_increment("id"),
+                    col(
+                        "name",
+                        ColumnDataType::Varchar { length: Some(20) },
+                        GeneratorConfig::FirstName,
+                    ),
+                ],
+            },
+            TemplateTable {
+                name: "it_repro_diff_child".to_string(),
+                row_count: 12,
+                columns: vec![
+                    auto_increment("id"),
+                    ref_col(
+                        "parent_id",
+                        "it_repro_diff_parent",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 5 },
+                    ),
+                ],
+            },
+        ],
+    };
+
+    let first = MockEngine::generate_scenario(
+        &build(Some(7)),
+        rds_mock::new_cancel_token(),
+        |_, _| {},
+    )
+    .await
+    .expect("seed=7 生成");
+    let first_snapshot = snapshot(&first);
+
+    let second = MockEngine::generate_scenario(
+        &build(Some(8)),
+        rds_mock::new_cancel_token(),
+        |_, _| {},
+    )
+    .await
+    .expect("seed=8 生成");
+    let second_snapshot = snapshot(&second);
+
+    let differ = first_snapshot
+        .iter()
+        .zip(second_snapshot.iter())
+        .any(|(a, b)| a != b);
+    assert!(differ, "不同 seed 至少有一列数据不同，seed 才真正生效");
+}
+
 // ==================== 约束类生成器（集合类参数） ====================
 
 /// 集合为空 / 权重全为 0：**生成前**拦住并给可读错误。
@@ -1147,8 +1329,8 @@ fn scenario_reference_resolution_reports_readable_errors() {
 async fn empty_constraint_collection_is_rejected_before_generating() {
     for (hint, generator) in [
         (
-            "外键取值",
-            GeneratorConfig::ForeignKey { values: Vec::new() },
+            "取值集合",
+            GeneratorConfig::ValueSet { values: Vec::new() },
         ),
         (
             "序列取值",

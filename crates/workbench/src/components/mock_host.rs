@@ -29,8 +29,8 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 use mock::mock_view::{
-    MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind, MockJobState, MockPreview,
-    SchemaRequest, SchemaSource,
+    AppendTargetStatus, MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind, MockJobState,
+    MockPreview, SchemaRequest, SchemaSource,
 };
 
 use crate::panels::Shared;
@@ -103,6 +103,18 @@ impl MockHost for WorkbenchMockHost {
     fn existing_tables(&self) -> Vec<String> {
         let root = self.project_root();
         crate::services::mock_generator::existing_tables(root.as_deref())
+    }
+
+    fn append_target_status(&self, table: &str, pk_hint: Option<&str>) -> Option<AppendTargetStatus> {
+        let root = self.project_root();
+        let db = crate::services::mock_generator::analysis_db_path(root.as_deref())?;
+        let status =
+            crate::services::mock_generator::table_append_status(&db, table, pk_hint).ok()?;
+        Some(AppendTargetStatus {
+            row_count: status.row_count,
+            pk_column: status.pk_column,
+            max_pk: status.max_pk,
+        })
     }
 
     fn schema_sources(&self) -> Vec<SchemaSource> {

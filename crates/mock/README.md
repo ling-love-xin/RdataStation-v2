@@ -27,8 +27,8 @@
 
 生成与「追加」都提交给 `services::mock_jobs` 的**工作线程**执行（`MockHost::start_job`），
 面板只做三件事：读进度（`job_state`）、取一次性结果（`take_job_done`）、请求取消（`cancel_job`）；
-进度由 120ms 定时泵拉取（任务进行中没有其他事件会触发重绘）。取消置引擎的进程级标志，
-引擎在**批次边界**（10k 行/批）响应，回传可读的「生成已取消」。
+进度由 120ms 定时泵拉取（任务进行中没有其他事件会触发重绘）。取消是**任务级令牌**（`Arc<AtomicBool>`，
+每任务一个，任务结束即丢弃，互不干扰）；引擎在**批次边界**（10k 行/批）响应，回传可读的「生成已取消」。
 
 为何不在视图里直接 `spawn`：`MockHost` 是 `Rc<dyn>`（持 `Shared`，非 Send），无法搬进 GPUI
 的后台执行器；因此沿用 `nav_jobs` / `scratchpad_jobs` 的成熟模式——宿主内部起工作线程。
@@ -51,6 +51,10 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 `seed: Some(s)` 时同配置逐值可复现（`StdRng`）；`seed: None` 走随机。
 集成测试 `generate_is_reproducible_with_same_seed` 锁定该契约。
 
+S5 起**场景同样可复现**：`ScenarioTemplate::seed` 是场景级种子，引擎按「`seed + 表下标`」派生每张表的种子
+（表间不会因同种子产出相同数据，但整组数据在相同 seed 下稳定重现）；面板场景操作区有种子输入（留空 = 随机），
+场景历史行标注「场景 X · seed Y」，重放按模板 id 重取并套用当时的 seed。
+
 ### 6. 场景模板与列依赖
 
 - 内置 6 套多表模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录），引擎 `generate_scenario` 逐表生成并按**表**回调进度；
@@ -60,10 +64,11 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 - **选模板先载入工作副本**（不立即生成）：清单列出本次要生成的表（每行可编辑 / 删除）+ 关系子行（可删）
   +「＋ 加表 / ＋ 加关系」，改完再点「生成 N 张表」——关系是这次生成的一部分，生成完再补就只能去改已落地的数据了；
 - **不写库**（与单表生成同一定律），且**草稿不参与**（目标表 / 列 / 行数全来自模板）；
-- **表间引用**：关系挂在列上（`ColumnDependency::foreign_key` 是唯一构造点），取值域由父表参数**算出**
+- **表间引用**：关系挂在列上（`ColumnDependency::referenced` 是唯一构造点），取值域由父表参数**算出**
   （父列自增 + 行数），因此 **O(1) 内存、不读任何已落地数据**，也不要求父表先于子表
   （自关联与前向引用合法）；单表生成没有父表上下文，按该列自己的 `generator` 取值（域落在父域内，自检锁定）；
   父列不是自增（uuid / 随机）就拒，并在**生成前**把关（`resolve_reference_domains`）。
+  引用目标**仅支持自增主键**：跨表引用能力受限（不读父表已生成的真实数据），面板字段卡有常驻说明。
 - 列依赖 `dependency` = **跨表引用**（`ColumnDependency { ref_table, ref_column }`，存在即引用）；生成器按 `columns` 顺序取值，**没有拓扑排序，也不解释依赖表达式**——v1 的 `DependencyType` 四个变体与三个只服务于它们的空字段已删（架构 D40）；真要做模板 / 加权 / 算术求值，需**带求值器一起进来**。
 - 模板里的引用关系是**声明式的**（`col_ref!(列, 类型, 生成器, "父表", "父列")`），不是手写范围：
   6 套模板共 24 处；`*_id` 列要么声明引用、要么进 `NOT_A_REFERENCE` 白名单（目前只有 `companies.tax_id`），
@@ -99,20 +104,20 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | 文件 | 职责 |
 | --- | --- |
 | `src/lib.rs` | crate 入口与 re-export（含依赖方向声明） |
-| `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(143) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
-| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消 + **集合类参数生成前校验**）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT）** / **`clear_temp_tables`·`temp_tables`（临时表生命周期）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
+| `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(143) / `Locale`(13) / 导出与持久化模型 / 依赖模型（`ColumnDependency::referenced` 唯一构造点） |
+| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + **任务级取消令牌** + **集合类参数生成前校验**）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT；追加先做唯一列冲突预检，整批拒绝）** / **`clear_temp_tables`·`temp_tables`（临时表生命周期）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / **场景生成（seed 派生，整组可复现）** / `sanitize_identifier` |
 | `src/generators.rs` | `generate_cell`：143 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
 | `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：表清单 + 场景动作 + 出口 + 折叠历史 / 模板；输入状态与动作也归它）/ `MockDetailView`（中央 tab：一个目标一个，表头 + 列 + 预览）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索 + 加关系 + 编辑表对话框 |
-| `src/mock_view/tests.rs` | 视图测试（23 纯逻辑 + 56 项 GPUI headless 窗口测试；含测试宿主桥） |
+| `src/mock_view/tests.rs` | 视图测试（32 纯逻辑 + 79 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/ui.rs` | 视图尺寸常量（结构尺寸单一来源 = `workbench_shell::ui`，与外壳同源的走重导出；本 crate 自有的输入宽 / 列表高上限 / 行号槽宽在此声明） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写；读写两侧由真库往返测试验住） |
-| `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
+| `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」）；场景运行记**标注**（scene_id + seed，不落单表列行），历史行标「场景 X · seed Y」 |
 | `src/error.rs` | `MockError` / `MockResult`（含 DuckDB / 锁错误桥接） |
 | `src/{commands,model,generator}.rs` | 占位（全项目统一脚手架；命令层按 Round 14 退役） |
-| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（34 项） |
+| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（41 项，含 S5 场景可复现：同 seed 整组一致 / 不同 seed 不同数据） |
 | `tests/persistence_roundtrip.rs` | 持久化层真库往返（5 项；走真迁移链，含级联删除） |
 | `tests/history_roundtrip.rs` | 生成历史 / 用户模板端到端（4 项；记录 / 列表 / 详情 / 重放 / 模板存取用删 + 可读错误） |
 
@@ -138,19 +143,22 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **数值分布族与时序**：正态 / 对数正态 / 泊松 / 指数 / 帕累托 / Beta / 二项 + 时序数值（起始值 · 趋势 · 周期 · 噪声，按行序展开） | 「跟随另一列取值」（跨列求值，独立特性） |
 | **工作日历就在列上**（不共享、不内置节假日表）：「仅工作日」+ 工作周掩码（`1111100` = 周一~周五）+ 跳过日期（节假日）+ 上班日期（调休，优先）；`date_time` / `date_time_before` / `date_time_after` / `date_time_between` 另有「仅工作时段」，**窗口可自定义**（`HH:MM`，起 > 止 按跨零点 / 夜班理解）；`date` 只要工作日 | 「跟随另一列取值」（跨列求值，独立特性） |
 | **生成器搜索**：分类子菜单 + 搜索对话框（中文标签 / 名称 / 分类，多词 AND，`List` 自带搜索框与空态） | —— |
-| **集合类参数可编辑**：外键取值 / 序列取值 / 加权选项用多行文本填（一行一项 / 一行「值, 权重」） | 集合的导入 / 粘贴（从 CSV 列拷值） |
+| **集合类参数可编辑**：取值集合 / 序列取值 / 加权选项用多行文本填（一行一项 / 一行「值, 权重」） | 集合的导入 / 粘贴（从 CSV 列拷值） |
 | **面板：表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果** | —— |
 | **详情 tab：字段卡片（生成器分类子菜单 / 搜索对话框 + 编辑 / 智能 / 删除 + 列搜索框）+ 预览表格（组件库 `DataTable`，与编辑器结果集同一套原语；列头可排序 / 行数档可调 / 单元格与列名可悬停看全文 / 右键可复制值·列·行）** | 预览筛选（取样会变成长度未知的子集）；结果表 tab 的列只读，要筛先回草稿；预览排序与行数档**不是**就地生效（会重查临时表，见架构 §9-I26）；「复制此列」只给取样内的值（整列请落库 / 导出后查） |
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 导出到源库（M7 约束：不回传源库） |
 | **列编辑对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）** | 列间求值（模板 / 加权 / 算术）——若要做，是一次**带求值器**的独立特性（v1 空壳已删，架构 D40） |
 | **导入源库结构（连接 / 库 / schema / 表，cache-aside 取列）** | 表结构浏览选择器（现在是手填表名 + 连接默认库预填） |
 | **场景模板一键生成 + 自定义多表**：6 套内置模板起步，工作副本可**加表（当前草稿）/ 删表 / 编辑表（表名 · 行数）/ 调关系** + 多结果**一张表一个 tab**（切 tab 即切表） | 跨模板 / 跨库引用；从已落地数据取值（后续的**影子数据**，见架构 §9-I13） |
+| **场景可复现（S5）**：`ScenarioTemplate::seed` 场景级种子 → 每表派生种子，整组可复现；场景操作区种子输入（留空 = 随机）；历史行标注「场景 X · seed Y」，重放回模板 + seed | —— |
+| **语言偏好（A2）**：姓名 / 电话 / 城市 / 公司名等 8 类生成器随 `Locale` 取对应 fake 语言包（缺数据静默回落英文），菜单标注「· 随语言偏好」 | —— |
+| **追加到既有表（S3）**：自增起点按目标表 `MAX + 1` 接续；追加前对话框显示目标表现状与接续预告；写前对唯一列做冲突预检，撞唯一约束整批拒绝并报可读错误 | —— |
 | **时间 / 十进制值可见**：预览与 SQL 导出不再把时间戳 / 日期 / 十进制写成 `NULL`（值 → 文本只有 `engine::duckdb::value_text` 一处，架构 D34） | —— |
 | **参数护栏**：不能采样的参数（反向区间 / 半开空区间 / 负权重 / 时间区间不足一分钟）在生成前拦住并报出具体数字（架构 D33） | 生成期 `catch_unwind` 兑底只当保险，不做主要手段 |
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | —— 落库已经就是**项目级持久表**，不再做「资源注册」这一步（M6 存档由用户在资源管理器发起） |
 | **生成历史**（最近 20 条，重放 / 删除 / 自动落库）+ **用户模板**（保存 / 应用 / 删除）都落 `{项目}/.RSmeta/project.db` | —— |
-| 公开 API 集成 37 项 + 视图测试 92 项（27 纯逻辑 + 65 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 11 项 + 取消 1 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
+| 公开 API 集成 41 项 + 视图测试 111 项（32 纯逻辑 + 79 窗口） + 单元 102 项 + 持久化往返 5 项 + 历史/模板 4 项 + 清理 2 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
 
 ## 设计与验证
 
@@ -162,7 +170,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels/right.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
-- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock --lib --tests -j 2`（190 单元（27 纯逻辑 + 65 窗口 + 98 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
+- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock --lib --tests -j 2`（213 单元（111 视图 = 32 纯逻辑 + 79 窗口 + 102 其他）+ 41 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 12 + 后台任务 11 + 取消 1）。
   测试带 `--lib --tests` 是因为本机 `rustdoc` 会被 `third_party/duckdb`「不受信任的装入点」挡住（os error 448），失败与代码无关。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
