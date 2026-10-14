@@ -8,6 +8,8 @@
 2. **一次性过程脚本**（fix_/migrate_/inspect_ 这类跑完就扔的）→ `tools/_archive/`（不入库；可复用工具才放 `tools/`）
 3. **手动命令输出**（diff、检查、反汇编、截图、列表）→ 统一重定向到 `.rds/tmp/<名字>`，**绝不**落在当前工作目录
 
+**报告 / 说明 / 交接文档**（给人读、给后续会话读的）：**不放 `.rds/tmp/` 或 `docs/tmp/`**（会被 `clean-temp` 误删），一律入 `docs/reports/`（入库）——用户 2026-10-14 明确。可复用工具脚本入 `tools/`（入库）。
+
 ## 硬约束（gitignore 已挡，无需再确认）
 
 - 根目录 `*.log`、`*.asm`、`*.bak`、`tools/*.exe/.pdb`、`examples/instance-project/` 生成物一律不入库

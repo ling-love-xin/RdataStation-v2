@@ -29,11 +29,12 @@ MOVED=0
 TOTAL=0
 
 # ---- 白名单（与 data-paths.md §目录 一致；改文档后同步这里） ----
-ROOT_FILES=".gitignore .gitattributes Cargo.toml Cargo.lock LICENSE NOTICE README.md README.en.md rust-toolchain.toml rust-analyzer.toml"
+ROOT_FILES="AGENTS.md .gitignore .gitattributes Cargo.toml Cargo.lock LICENSE NOTICE README.md README.en.md rust-toolchain.toml rust-analyzer.toml"
 ROOT_DIRS=".agents .cargo .delta .github assets crates dist docs examples target third_party tools vendor v1 .rds"
 RDS_DIRS="config data extensions logs plugin-cache plugin-data plugins tmp .migrated-from-legacy"
 # tools/ 白名单 = 可复用工具；hygiene-check.sh 自己也在里面
-TOOLS_FILES="add_m1_tests.py build-instance-project.py check_logs_encoding.py clean-temp.sh fetch-duckdb.sh gen_mock_generator_catalog.py hygiene-check.sh install-linux-deps.sh package-release.sh target-guard.sh verify-instance-project.py zip-dir.ps1"
+# 集成测试工具链（2026-10-14 归位）：run-*/launch-*/poll-* + 校验/分析/清理脚本，见 docs/reports/README.md
+TOOLS_FILES="add_m1_tests.py build-instance-project.py check_logs_encoding.py clean-temp.sh cleanup-test-residue.ps1 count-warnings.ps1 diff-test-runs.ps1 extract-test-pairs.ps1 fetch-duckdb.sh gen_mock_generator_catalog.py hygiene-check.sh install-linux-deps.sh launch-check.ps1 launch-integration-test.ps1 package-release.sh poll-check.ps1 poll-integration-test.ps1 run-check.cmd run-integration-test.cmd scan-fffd.py target-guard.sh test-per-pkg.ps1 verify-instance-project.py verify-integration-log.ps1 zip-dir.ps1"
 TOOLS_DIRS="_archive"
 
 # 检查一处；参数：<标签> <路径> <白名单(空格分隔)> 是文件还是目录

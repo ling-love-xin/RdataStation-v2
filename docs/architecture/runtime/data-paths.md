@@ -183,6 +183,7 @@ paths::assets_dir()      // 随包只读资源（主题 / 图标）——**不**
 | 手动命令输出（diff / 检查 / 反汇编 / 列表） | 统一重定向 `.rds/tmp/<名字>` | **不要在"当前目录"生成 `*.txt` / `*.asm` / `*.log`** |
 | 调试截图 | `docs/tmp/` | `shot.py` 产物的 `screenshot.png` 可入库；`grab*.png` 等调试截图属临时物 |
 | 内嵌实例项目构建产物 | `examples/instance-project/` **不入库**（已忽略） | `tools/build-instance-project.py` 可再生；运行时的演示项目副本在 `.rds/data/samples/` |
+| **报告 / 说明 / 交接文档**（给人读、给后续会话读） | `docs/reports/`（**入库**） | 2026-10-14 用户明确：**不放 `.rds/tmp/` / `docs/tmp/`**（会被 `clean-temp` 误删）。命名 `integration-test-report-<日期>.md` 等；`docs/reports/README.md` 有细则 |
 
 **闸门**：`tools/hygiene-check.sh`（默认 dry-run）按白名单扫根目录 / `.rds` 顶层 / `tools/` 三处，
 偏离即报告；`--yes` 把偏离项移入 `.rds/tmp/`（两阶段删除）。提交或发布前跑一次，发现偏离先归位再提交。
