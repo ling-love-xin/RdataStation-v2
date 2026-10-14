@@ -596,6 +596,8 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 
 **为什么值得做**：Oracle / MySQL / PostgreSQL 三家的**官方 JDBC 驱动是一等公民**（协议稳定、文档全、版本跟随库端发布），而 Rust 侧原生驱动生态参差（尤其 Oracle 无官方 Rust 驱动）。用 JDBC 桥接，一个 sidecar 就能覆盖三家，且与「驱动插件不在扩展宿主、凭据只进 sidecar」（§2 硬约束 1/2）完全吻合。
 
+**定位（2026-10-14 用户口径）**：JDBC 是**保底（兜底）方案，不是主路径**。第一梯队 = 既有 Rust 原生驱动（P1/P2 已落地）；JDBC 只在原生覆盖不足时兜底（典型：Oracle 无官方 Rust 驱动、小众库长尾）。→ 服务于「多驱动策略」的长尾覆盖；按「兜底」取舍（体积 / 常驻 / 验收口径都不必与原生驱动同级卷）。
+
 **与既有基建的接点**（全部现成，不新增协议）：
 
 | 基建 | 复用方式 |
@@ -618,11 +620,11 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 
 **一致性验收**（呼应 P1 遗留「跨语言 Arrow 互通」）：`sidecar_conformance.rs` 验证的是**协议面**（初始化握手、meta 导航、Arrow 批量、取消、stdin 关闭退出），与实现语言无关 → JDBC sidecar 通过同一套 conformance = 协议一致性达成，不另造验收。
 
-**需拍板（未定）**：
-- JVM 启动成本（每进程约数百 ms）vs 常驻 JVM 复用；进程池规格是否给 JDBC 单独一档；
-- jar 体积与分发（ojdbc 数 MB 级），是否纳入签名 / 完整性校验范围（P5）；
-- Java 最低版本（8 / 11 / 17）与 sidecar 构建产物形态（自带 JRE 还是依赖系统 Java）；
-- 许可：ojdbc / mysql-connector 等许可**未核实**，按用户口径「标注即可、不阻塞」。
+**需拍板（未定，附建议）**：
+- JVM 启动成本 vs 常驻：**建议常驻 JVM**——进程池给 JDBC 单独一档（如 Concurrency=1），进程内跑连接池复用；兜底路径不该每次承担数百 ms 启动；
+- jar 分发：**建议随插件分发 + manifest checksum 完整性**（签名并入 P5 整体做）；体积（ojdbc 数 MB）后续可做「首次用才拉取、缓存到 data_home」，首版不阻塞；
+- Java 版本 / JRE 形态：**建议依赖系统 Java（探测 JAVA_HOME/PATH），不自带 JRE**——兜底方案不值得携带数百 MB JRE；最低 **Java 11**（主流 JDBC 驱动普遍兼容 11+），探测失败给可读错误；jlink 精简 JRE 仅在有离线 / 企业诉求时再考虑；
+- 许可：**按用户口径标注即可、不阻塞**（ojdbc / mysql-connector-j / pgjdbc 具体条款留待插件正式打包时核实，此处不承诺细节）。
 
 ### 14.2 LSP + Python + Markdown 插件（编辑器的通用模式 / 分析模式）
 
@@ -669,10 +671,11 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 
 > ⚠️ 措辞区分：gpui-kit 的 `TextViewPlugin`（`crates/base`，渲染扩展）与本仓 `crates/plugin`（sidecar 插件系统）**是两回事**，不要混用术语。
 
-**需拍板（未定）**：
-- 接法 (a) / (b)（建议 a）；LSP server 选型（pylsp / pyright / jedi-language-server 等，未核实选型清单）；
-- 「通用 / 分析」模式的确切定义与入口（是否显式模式切换，还是同一视图按内容自动判定）；
-- Markdown 渲染粒度：纯文本预览（TextView）还是富文档视图（若富文档，画 ER 是否同轨——见 §14.3）。
+**需拍板（未定，附建议）**：
+- 接法：**定 (a) 宿主 provider bridge**（复用编辑器接口，宿主写 client adapter）；
+- LSP server 选型：**建议「按语言声明 + 探测」机制，不锁单一 server**；Python 环境内 v1 先接成熟可跑的（jedi-language-server / pylsp，服务 Python + Markdown）；**SQL 诊断 v1 用本地 lint（如 sqlfluff）作「通用模式」最小可用集**——SQL 专用 LSP（sqls / sqlls / sql-language-server）非 Python，留待后置（具体清单正式做时再核实）；
+- 模式切换：**建议不显式切换**——同一视图按内容自动判定（分析模式 = 通用模式超集），至多顶栏一个只读 mode 指示器；
+- Markdown 渲染粒度：**建议 v1 走 TextView 插件做轻量预览**（语法高亮 + 代码块）；富文档（表格 / 图表 / 可复跑结果区）归入分析模式、P4 后置，与 ER（§14.3 原生面板）保持同轨判断。
 
 ### 14.3 ER 建模视图（浓缩，详见 §11.3）
 
@@ -715,4 +718,4 @@ meta.* 五件套（catalogs/schemas/objects/object_detail/routine_source）
 | 三版本（0.7.1 / 0.7.2 / 0.7.3）shell 都在 | 本仓 lock 是 **0.7.1**，引用按 0.7.1 |
 | 0.7.3 升级 | **暂不升**（结论不变），原因见 §10 与既有口径 |
 
-**需拍板（未定）**：看板是否为值得接的场景（是否近期有真实诉求）；若接，作为独立宿主面板（非 shell 插件）实现还是真用 shell 插件系统，二选一即可，不必两者都做。
+**需拍板（未定，附建议）**：**建议暂不做**（无近期真实诉求时）——保留为设计参考；若做，先做**独立宿主面板**（复用现有布局 / 组件，成本低），真 shell 插件系统仅作未来对齐对象、不进 P4。
