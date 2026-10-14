@@ -167,7 +167,7 @@
 - **T2b-3 环境选择器 + 管理环境 modal**：`host.rs` 环境选择器（`EnvSelection` 持久化到文档，与 connection 同类）；管理环境 = `view/manage_env.rs`（905 行：列表 + 表单两视图，内置只读、自定义增删改）+ `engine/src/persistence/script_env_store.rs`（全局库 `script_environments` 表，args 存 JSON）+ `ui.rs` 尺寸常量。
 - **T2b-4 脚本执行**：`execution.rs` `ExecTarget::Script{env_id, code}` + `QueryRunner::run_script`（默认如实拒绝）+ `script_notes` 独立通道（`ExecQueue` 泵回主线程）；宿主 `workbench/src/services/editor_env.rs` `SystemEnvPort` 探测（python/py 候选回退、attach 一次缓存、**渲染零 I/O**）+ `run_script_process`（tokio spawn + stdin 写代码 + 并发收输出 + 超时 `taskkill /T` 进程树 + 退出码）；`EngineQueryRunner::run_script` 真实现（62cd461f）。
 - **T2b-5 输出落结果区**：`view/results/script_card.rs`（144 行）脚本输出卡片——成功 stdout / 失败 Alert danger（退出码 + stderr 摘录）；`result_visible` 补脚本卡片分支（通用模式脚本结果区照常显示）；`drain_script_notes` 泵回执。
-- **T2b-6 状态栏左段**：`status_bar.rs` 环境段（环境名 · 文件类型 · LSP 占位——2c 统一壳，先做数据源）。
+- **T2b-6 状态栏左段**：`status_bar.rs` 环境段（环境名 · 文件类型 · LSP 占位——2c 统一壳，先做数据源）。**补记（2026-10-14，开放决定 #2）**：「文件类型」位落地——`mode.rs::script_file_type` 纯函数（`.py/.r/.rs/.md/.csv/.json/.log` → `ScriptFileType`，`label()` 展示名，表驱动测试）+ 状态栏通用模式「类型 Python」段（`StatusInputs.file_type`，紧随环境段）；**如实边界**：这是文件类型门控不是高亮本体（内核 `InputHighlighter` 是应用提供解析器的 seam，无 py/r/rs 语法），脚本上色未做、不假装能上色。
 - **测试**：rds-editor **519 passed**（ab16ac5b 窗口级：工具栏显隐 / 选环境运行真提交 Script 目标 / 失败卡片 / 状态栏环境段）；rds-workbench lib **134** + ui_contract **8**；真机 e2e（`editor_exec_real.rs`）：py 全链路跑通（`print("hi")` → Text 卡片带 hi / `sys.exit(1)` → Error 卡片带退出码 / 未装环境如实拒，环境门控无 RDS_TEST_* 自动跳过）。
 - **踩坑记录**：脚本代码**经 stdin 传入**不走命令行参数（Windows 下 `-c` 引号坑）；`resolve` 读探测 memo——执行命令 = 探测成功的那一个（python Store 桩回退 py）；管理环境 `script_env_store` 是**新表**（`global_db` 加 `script_environments`），args 以 JSON 文本落列。
 - **遗留（如实记）**：不做 Jupyter 协议（二期再评）；不做 LSP 接入（仅状态栏指示）；脚本输出**只落卡片**不落内联（内联输出归 2d 分析模式独有）。
@@ -268,7 +268,7 @@
 | # | 问题 | 建议 | 影响 |
 | --- | --- | --- | --- |
 | 1 | 2a 值编辑的写回：编辑器生成 `UPDATE` 还是引擎生成？ | **已定（2026-10-12）**：宿主执行器侧生成——`workbench/src/services/editor_exec.rs::EngineQueryRunner::commit_changes` 按行标识逐条生成 `UPDATE … WHERE key=…`，独立事务 BEGIN-COMMIT-ROLLBACK 包装（非 engine crate 层，与改写族同层思路一致；方言/引用转义由执行器一处管，编辑器只发 `CommitUpdates` 意图 + 语句映射） | 已落地（T2a-5/6） |
-| 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
+| 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | **已定（2026-10-14，按建议落地）**：纳入**脚本文件类型门控**——`mode.rs::script_file_type` 纯函数（扩展名 → `ScriptFileType`：Python/R/Rust/Markdown/CSV/JSON/Log，表驱动测试），状态栏通用模式新增「类型 Python」段（T2b-6 文件类型位的落地）。**如实边界**：门控是**文件类型判定**不是高亮本体——内核的 `InputHighlighter` 是应用提供解析器的 seam，项目未自带 py/r/rs 语法（语义 token provider 只注册了 SQL），脚本上色未做，不做假装高亮；后续要上色需接语法解析器（tree-sitter 或自研词法器） | 已落地（T2b-6 补记，2026-10-14） |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | **已定（2026-10-14）**：**已立项落地**（见上「T2c-4 补记 2c」）——内核永是 Unicode，编码/换行差异收敛到 IO 层（文档级 `SaveFormat` 保存契约 + 打开时字节检测；编码/换行不随会话持久化）；含不可见字符显示（空白字符内核原生 `set_show_whitespaces` + 隐藏字符 `RangeDecoration` 标注） | 已落地（T2c-4 补记 2c） |
 | 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）、2c（T2c-1~6，含面板布局持久化）、2b（T2b-1~6 通用模式）、2d（T2d-1~6 分析模式骨架）**全部完成**；**2c 遗留收尾（编码/换行/不可见字符）也已落地**（2026-10-14）→ 四期与遗留全部收口，编辑器三模式能力齐备 | 排期（已完成） |

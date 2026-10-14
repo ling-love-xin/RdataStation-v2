@@ -5680,6 +5680,19 @@ impl Render for EditorHostPanel {
         });
         // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
         let env_owned = env_text.flatten();
+        // 【2b/开放决定 #2】通用模式：脚本文件类型段（`.py` → `类型 Python`；非脚本扩展名不摆）。
+        // 判定走 `mode::script_file_type` 纯函数；只标类型不假装高亮（内核无 py/r/rs 语法）。
+        let file_type_text = (self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General)
+            == EditorMode::General)
+            .then(|| {
+                self.document_path()
+                    .as_deref()
+                    .and_then(crate::mode::script_file_type)
+                    .map(|t| format!("类型 {}", t.label()))
+            });
+        let file_type_owned = file_type_text.flatten();
         let status = StatusInputs {
             mode: self
                 .with_document(|doc| doc.mode())
@@ -5706,6 +5719,7 @@ impl Render for EditorHostPanel {
             dialect: dialect_owned.as_deref(),
             channel: channel_text.as_deref(),
             env: env_owned.as_deref(),
+            file_type: file_type_owned.as_deref(),
             tx: tx_text.as_deref(),
         };
 

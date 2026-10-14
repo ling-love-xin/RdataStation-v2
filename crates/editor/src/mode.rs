@@ -25,6 +25,64 @@ pub const NOTEBOOK_EXTENSIONS: &[&str] = &["rdsnote", "sqlnote"];
 /// SQL 脚本的扩展名
 pub const SQL_EXTENSIONS: &[&str] = &["sql", "mysql", "pgsql", "psql", "ddl", "tsql"];
 
+/// 通用模式的脚本文件类型（扩展名 → 类型标签）
+///
+/// 只消费「通用模式」：SQL 与分析模式有自己的语言语义（`LanguageService`），不在此列。
+/// 判定是**门控**不是高亮——高亮本体未接（内核的 `InputHighlighter` 是应用提供解析器的
+/// seam，项目未自带 py/r/rs 语法），这里只给状态栏「文件类型」段一个真值，不假装能上色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptFileType {
+    Python,
+    R,
+    Rust,
+    Markdown,
+    Csv,
+    Json,
+    Log,
+}
+
+impl ScriptFileType {
+    /// 界面展示名
+    pub fn label(self) -> &'static str {
+        match self {
+            ScriptFileType::Python => "Python",
+            ScriptFileType::R => "R",
+            ScriptFileType::Rust => "Rust",
+            ScriptFileType::Markdown => "Markdown",
+            ScriptFileType::Csv => "CSV",
+            ScriptFileType::Json => "JSON",
+            ScriptFileType::Log => "Log",
+        }
+    }
+}
+
+/// 扩展名 → 通用模式脚本文件类型（大小写不敏感；未知扩展名 = `None`）
+pub const SCRIPT_FILE_TYPES: &[(&str, ScriptFileType)] = &[
+    ("py", ScriptFileType::Python),
+    ("r", ScriptFileType::R),
+    ("rs", ScriptFileType::Rust),
+    ("md", ScriptFileType::Markdown),
+    ("csv", ScriptFileType::Csv),
+    ("json", ScriptFileType::Json),
+    ("log", ScriptFileType::Log),
+];
+
+/// 通用模式的脚本文件类型判定（纯函数）
+///
+/// 与 [`mode_for_extension`] 的关系：后者决定**哪一档能力**（这些扩展名都落通用），
+/// 前者在通用档内部再细分**文件类型**（状态栏「文件类型」段 + 后续高亮/语言服务的接入点）。
+pub fn script_file_type(path: &Path) -> Option<ScriptFileType> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    SCRIPT_FILE_TYPES
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, t)| *t)
+}
+
 /// 按最后一段扩展名判定模式（不含"显式记忆"与"入口语义"两条更高优先级规则）
 ///
 /// 未匹配或没有扩展名 → [`EditorMode::General`]（安全默认：文本模式不碰数据库）。
@@ -607,5 +665,66 @@ mod tests {
     #[test]
     fn unknown_paths_default_to_safe_text_mode() {
         assert_eq!(resolve_mode(Path::new("unknown.bin"), None), EditorMode::General);
+    }
+}
+
+#[cfg(test)]
+mod script_file_type_tests {
+    use super::{script_file_type, ScriptFileType};
+
+    fn kind_of(path: &str) -> Option<ScriptFileType> {
+        script_file_type(std::path::Path::new(path))
+    }
+
+    #[test]
+    fn script_extensions_map_to_their_types() {
+        // 表驱动：每个扩展名落到它该有的类型（大小写不敏感，覆盖目录路径与 Windows 盘符）
+        for (path, expected) in [
+            ("script.py", ScriptFileType::Python),
+            ("a/b/run.py", ScriptFileType::Python),
+            ("C:/work/deep/dir/script.PY", ScriptFileType::Python),
+            ("analysis.r", ScriptFileType::R),
+            ("lib.R", ScriptFileType::R),
+            ("main.rs", ScriptFileType::Rust),
+            ("notes.md", ScriptFileType::Markdown),
+            ("data.csv", ScriptFileType::Csv),
+            ("config.json", ScriptFileType::Json),
+            ("app.log", ScriptFileType::Log),
+        ] {
+            assert_eq!(kind_of(path), Some(expected), "{path}");
+        }
+    }
+
+    #[test]
+    fn unknown_and_no_extension_return_none() {
+        for path in [
+            "script.txt",
+            "query.sql",
+            "笔记.rdsnote",
+            "no_extension",
+            ".gitignore",
+            "a/b/",
+        ] {
+            assert_eq!(kind_of(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn labels_are_stable_display_names() {
+        // 展示名是给状态栏看的，不是存库键：改了文案不影响任何存储
+        assert_eq!(ScriptFileType::Python.label(), "Python");
+        assert_eq!(ScriptFileType::R.label(), "R");
+        assert_eq!(ScriptFileType::Rust.label(), "Rust");
+        assert_eq!(ScriptFileType::Markdown.label(), "Markdown");
+        assert_eq!(ScriptFileType::Csv.label(), "CSV");
+        assert_eq!(ScriptFileType::Json.label(), "JSON");
+        assert_eq!(ScriptFileType::Log.label(), "Log");
+    }
+
+    #[test]
+    fn sql_and_notebook_extensions_are_not_script_file_types() {
+        // 通用档的细分不碰 SQL 与分析：它们有自己的语言语义（LanguageService）
+        assert_eq!(kind_of("query.sql"), None);
+        assert_eq!(kind_of("笔记.rdsnote"), None);
     }
 }

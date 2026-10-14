@@ -68,6 +68,9 @@ pub struct StatusInputs<'a> {
     pub channel: Option<&'a str>,
     /// 【2b】通用模式的执行环境段（`环境 Python 3.12`）；`None` = 不显示（非通用模式 / 未选）
     pub env: Option<&'a str>,
+    /// 【2b/开放决定 #2】通用模式的脚本文件类型段（`类型 Python`）；`None` = 不显示
+    /// （非通用模式 / 非脚本扩展名）。判定走 `mode::script_file_type`，如实：只标类型不假装高亮。
+    pub file_type: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
     pub tx: Option<&'a str>,
 }
@@ -131,6 +134,11 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if let Some(env) = inputs.env {
         body.push_str(" · ");
         body.push_str(env);
+    }
+    // 【2b/开放决定 #2】通用模式：脚本文件类型段紧跟环境（`通用 · 类型 Python`）；非脚本扩展名不摆
+    if let Some(file_type) = inputs.file_type {
+        body.push_str(" · ");
+        body.push_str(file_type);
     }
     if inputs.dirty {
         body.push_str(" · 未保存");
@@ -298,6 +306,7 @@ mod tests {
             dialect: None,
             channel: None,
             env: None,
+            file_type: None,
             tx: None,
         }
     }
