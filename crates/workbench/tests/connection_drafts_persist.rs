@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::Root;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled as _,
     TestAppContext, Window, div,
@@ -49,7 +48,7 @@ impl Harness {
 }
 
 impl Render for Harness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .child(self.editor.clone())

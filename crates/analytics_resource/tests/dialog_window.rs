@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
-    AppContext as _, Context, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
+    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext,
     VisualTestContext, Window, div,
 };
 
@@ -52,8 +52,8 @@ use rds_analytics_resource::resource_view::GroupOption;
 struct DialogHarness;
 
 impl Render for DialogHarness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut root = div().size_full();
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let root = div().size_full();
         root
     }
 }

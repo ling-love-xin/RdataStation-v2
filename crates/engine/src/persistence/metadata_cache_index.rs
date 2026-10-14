@@ -20,10 +20,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use shared::error::{CommonError, CoreError};
+use shared::error::CoreError;
 
-/// 索引库路径覆盖（仅测试用：**线程局部**——并行测试各自隔离，互不打断；
-/// 生产路径固定 `{system}/metadata_cache_index.sqlite`）。
+// 索引库路径覆盖（仅测试用：**线程局部**——并行测试各自隔离，互不打断；
+// 生产路径固定 `{system}/metadata_cache_index.sqlite`）。
+// 注：`thread_local!` 是宏展开，rustdoc 不为其生成文档，故用普通注释。
 thread_local! {
     static INDEX_PATH_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }

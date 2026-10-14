@@ -368,8 +368,6 @@ impl ScratchpadView {
             row.context_menu(move |menu, _window, _cx| {
                 let open_doc_entity = menu_open.clone();
                 let open_doc_key = menu_open_key.clone();
-                let open_entity = menu_entity.clone();
-                let open_key = menu_key.clone();
                 let rename_entity = menu_entity.clone();
                 let rename_key = menu_key.clone();
                 let cut_entity = menu_entity.clone();
@@ -434,7 +432,7 @@ impl ScratchpadView {
                         this.show_scratchpad_file_info(info_key.clone(), cx)
                     });
                 }));
-                let mut menu = menu;
+                let menu = menu;
                 menu.item(
                     PopupMenuItem::new("重命名").on_click(move |_, window, app| {
                         rename_entity.update(app, |this, cx| {
@@ -572,6 +570,9 @@ impl ScratchpadView {
     }
 
     /// 切换新建文件模板（并把已输入名字的后缀跟着换）。
+    /// 注：模板 chip 行已随「去模板」移除（用户点名），本方法与 `commit_scratchpad_edit`
+    /// 的模板应用逻辑保留供未来「分析文件」类型引导复用（见上方 render 注释）。
+    #[allow(dead_code)]
     pub(super) fn set_scratchpad_template(
         &mut self,
         template: ScratchpadTemplate,

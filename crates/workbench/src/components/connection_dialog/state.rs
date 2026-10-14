@@ -1323,7 +1323,7 @@ impl ClonedDialogState {
 mod tests {
     // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
     use super::{
-        AuthConfig, ClonedDialogState, ConnectionDialogState, ConnectionDraft, ConnectionScope,
+        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope,
         Driver, Environment, NetworkConfig,
     };
     use gpui_kit::{

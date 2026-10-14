@@ -20,7 +20,7 @@ use database::navigator_service::NavigatorService;
 use database::property_panel;
 use database::property_providers::global_registry;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
-use engine::driver::{AutoDriverRegistrar, DriverRegistry};
+use engine::driver::AutoDriverRegistrar;
 use engine::driver::registry::DriverConnectionConfig;
 use rds_workbench::services::connection_service::{ConnectRequest, ConnectionService};
 use rds_workbench::services::data_source_service::DataSourceService;

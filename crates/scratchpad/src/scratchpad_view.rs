@@ -228,6 +228,8 @@ pub struct ScratchpadViewState {
     /// 底部引用/回收站区域的最大高度（拖拽分区 handle 调整，进程内；默认 7.5rem）。
     group_max_h: f32,
     /// 更多菜单拖拽排序进行中的按钮（on_drag 开始写入，on_drag_move 每帧重排）。
+    /// 注：拖拽排序尚未接线（调整面板四栏的自绘 grip 已就位），字段暂只写不读 → 预留。
+    #[allow(dead_code)]
     toolbar_drag: Option<ToolbarButtonKey>,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,

@@ -456,7 +456,8 @@ impl SettingsService {
             Some(window) => window.set_rem_size(px(font_size)),
             None => {
                 for handle in cx.windows() {
-                    handle.update(cx, |_view, window, _| window.set_rem_size(px(font_size)));
+                    // update 返回 Result（窗口可能已失效），此处无更优处理路径，显式忽略。
+                    let _ = handle.update(cx, |_view, window, _| window.set_rem_size(px(font_size)));
                 }
             }
         }

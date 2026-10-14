@@ -1358,10 +1358,10 @@ fn cleanup_asks_first_and_reports_in_payload(cx: &mut TestAppContext) {
     impl Render for Harness {
         fn render(
             &mut self,
-            window: &mut Window,
-            cx: &mut gpui_kit::Context<Self>,
+            _window: &mut Window,
+            _cx: &mut gpui_kit::Context<Self>,
         ) -> impl IntoElement {
-            let mut root = div().size_full().child(self.panel.clone());
+            let root = div().size_full().child(self.panel.clone());
             root
         }
     }

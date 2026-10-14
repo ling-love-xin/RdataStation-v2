@@ -12,10 +12,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::component::{Root, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, ElementId, Entity, IntoElement, ParentElement, Render, SharedString,
+    AppContext as _, Context, ElementId, Entity, IntoElement, Render, SharedString,
     Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
@@ -72,7 +71,7 @@ impl DialogHarness {
 }
 
 impl Render for DialogHarness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
     }

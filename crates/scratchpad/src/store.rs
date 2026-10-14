@@ -2,9 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
-use tokio::time::{Duration, timeout};
 
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,

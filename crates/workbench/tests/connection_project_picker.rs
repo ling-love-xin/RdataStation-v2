@@ -16,9 +16,8 @@ use std::rc::Rc;
 
 use gpui_kit::component::searchable_list::SearchableListItem as _;
 use gpui_kit::component::{Root, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled as _,
+    AppContext as _, Context, Entity, IntoElement, Render, SharedString, Styled as _,
     TestAppContext, VisualTestContext, Window, div,
 };
 
@@ -66,7 +65,7 @@ impl PickerHarness {
 }
 
 impl Render for PickerHarness {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
     }

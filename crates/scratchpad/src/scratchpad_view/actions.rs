@@ -1069,6 +1069,8 @@ impl ScratchpadView {
     /// 粘贴剪贴板到当前选中的文件夹（未选中文件夹则粘到模块根）。
     ///
     /// 复制可能搬运大量字节（递归复制），故入队到后台；结果由 `apply_scratchpad_ops` 回填。
+    /// 注：剪切/复制已接线（右键菜单），粘贴入口尚未接 UI（上下文菜单 / 快捷键）→ 按预留保留。
+    #[allow(dead_code)]
     pub(super) fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止写入草稿。
         if self.host.read_only() {

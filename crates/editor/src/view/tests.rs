@@ -7741,7 +7741,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
         ))
         .id()
         .clone();
-    let (panel, cx) = open_panel(cx, &shared, &id);
+    let (_panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
 

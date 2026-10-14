@@ -134,7 +134,7 @@ mod tests {
     fn load_schemas_maps_catalog_and_schema_segments() {
         let root = temp_root("map");
         let root_s = root.to_string_lossy().to_string();
-        let mut cache = NavCache::open("P_s", Some(&root_s)).expect("打开缓存");
+        let cache = NavCache::open("P_s", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("rdb", &["public".to_string(), "analytics".to_string()]);
         drop(cache);
 
@@ -164,7 +164,7 @@ mod tests {
     fn catalog_segment_stays_empty_without_a_catalog_layer() {
         let root = temp_root("nocat");
         let root_s = root.to_string_lossy().to_string();
-        let mut cache = NavCache::open("P_nc", Some(&root_s)).expect("打开缓存");
+        let cache = NavCache::open("P_nc", Some(&root_s)).expect("打开缓存");
         cache.put_schemas("", &["mydb".to_string()]);
         drop(cache);
 

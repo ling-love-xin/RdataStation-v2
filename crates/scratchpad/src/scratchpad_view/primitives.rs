@@ -16,6 +16,9 @@ pub(super) enum ScratchpadEdit {
     NewFile,
     NewFolder,
     /// 已选定外部路径，待输入别名（引用不复制文件，只记路径）。
+    /// 注：`start_scratchpad_edit` / `commit_scratchpad_edit` 已处理该变体，但「新建引用」
+    /// 的 UI 入口（引用弹窗确认后的 edit 装配）尚未接线，暂无人构造 → 按预留保留。
+    #[allow(dead_code)]
     NewReference {
         path: std::path::PathBuf,
     },
@@ -39,6 +42,8 @@ pub(super) enum ScratchpadTemplate {
 }
 
 impl ScratchpadTemplate {
+    /// 模板显示名（「去模板」后仅剩 Blank；未来「分析文件」类型加回时再接线）。
+    #[allow(dead_code)]
     pub(super) fn label(self) -> &'static str {
         match self {
             ScratchpadTemplate::Blank => "空白",
@@ -95,7 +100,10 @@ pub(super) enum ScratchpadClipboardMode {
 }
 
 /// 文件剪贴板（路径相对模块根）。
+/// 注：剪切/复制已接线（`set_scratchpad_clipboard`），粘贴入口（`paste_scratchpad_clipboard`）
+/// 尚未接 UI → `mode` / `paths` 暂只写不读，按预留保留。
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(super) struct ScratchpadClipboard {
     pub(super) mode: ScratchpadClipboardMode,
     pub(super) paths: Vec<String>,
@@ -398,6 +406,8 @@ pub(super) fn scratchpad_meta_label(entry: &ScratchpadEntry) -> String {
 }
 
 /// RFC3339 → 相对时间（刚刚 / N 分钟 / N 小时 / N 天 / 日期）。
+/// 注：暂无调用方（行内相对时间展示预留），保留纯函数供后续行 meta 接线。
+#[allow(dead_code)]
 pub(super) fn scratchpad_relative_time(rfc3339: &str) -> Option<String> {
     let parsed = chrono::DateTime::parse_from_rfc3339(rfc3339).ok()?;
     let seconds = chrono::Utc::now()

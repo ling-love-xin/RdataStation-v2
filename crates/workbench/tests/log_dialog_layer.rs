@@ -8,9 +8,8 @@
 //! 带入作用域，与 `#[gpui_kit::test]` 冲突）。
 
 use gpui_kit::component::{Root, WindowExt as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, IntoElement, ParentElement, Render, Styled as _, TestAppContext, Window,
+    AppContext as _, Context, IntoElement, Render, Styled as _, TestAppContext, Window,
     div,
 };
 
@@ -18,7 +17,7 @@ use gpui_kit::{
 struct HostView;
 
 impl Render for HostView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
     }

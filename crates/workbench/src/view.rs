@@ -1587,7 +1587,7 @@ impl WorkbenchView {
     /// 包一层（内置 overlay / Esc / 遮罩点击关闭），内容只有 6 行键值（`render_scratchpad_file_info_pane`）。
     fn render_scratchpad_file_info_popover(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let view = (*self.shared.scratchpad_file_info.borrow()).clone()?;

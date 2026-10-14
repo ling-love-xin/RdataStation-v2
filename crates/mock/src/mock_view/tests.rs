@@ -856,10 +856,10 @@ struct Harness {
 impl Render for Harness {
     fn render(
         &mut self,
-        window: &mut Window,
-        cx: &mut gpui_kit::Context<Self>,
+        _window: &mut Window,
+        _cx: &mut gpui_kit::Context<Self>,
     ) -> impl IntoElement {
-        let mut root = div()
+        let root = div()
             .size_full()
             .child(div().w_96().child(self.panel.clone()))
             .child(self.detail.clone());

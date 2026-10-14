@@ -23,6 +23,12 @@ chrono.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
+# 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
+# `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；
+# 仅测试构建启用，生产构建（含 cargo run / release）拿不到它。
+[features]
+test-support = []
+
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }

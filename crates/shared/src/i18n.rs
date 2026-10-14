@@ -68,8 +68,10 @@ pub fn current() -> Locale {
 }
 
 /// 编译期嵌入的语言资源（目录化：`crates/shared/locales/`）。
-const ZH_JSON: &str = include_str!("../locales/zh.json");
 const EN_JSON: &str = include_str!("../locales/en.json");
+/// 源语言资源（中文原文集合，完整性校验基线；仅测试用）。
+#[cfg(test)]
+const ZH_JSON: &str = include_str!("../locales/zh.json");
 
 /// 英文翻译表（中文原文 → 英文）。惰性解析一次；键值借用 `EN_JSON` 的 `'static` 内存，
 /// `tr()` 返回值维持 `&'static str`（与旧静态表签名一致，调用点零改动）。
@@ -77,7 +79,8 @@ static EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     serde_json::from_str(EN_JSON).expect("en.json 必须是合法 JSON 键值对象（键=中文原文，值=英文）")
 });
 
-/// 源语言资源（中文原文集合，完整性校验基线）。
+/// 源语言资源（中文原文集合，完整性校验基线；仅测试用）。
+#[cfg(test)]
 static ZH: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     serde_json::from_str(ZH_JSON).expect("zh.json 必须是合法 JSON 键值对象（键=值=中文原文）")
 });

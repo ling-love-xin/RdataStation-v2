@@ -598,8 +598,8 @@ impl QueryRunner for EngineQueryRunner {
         connection: Option<&str>,
         schema: Option<&str>,
         channel: ExecChannel,
-        table: &str,
-        key: &editor::export::RowKey,
+        _table: &str,
+        _key: &editor::export::RowKey,
         updates: &str,
     ) -> Result<editor::execution::CommitReport, String> {
         // ① 通道闸：写回只走源库通道

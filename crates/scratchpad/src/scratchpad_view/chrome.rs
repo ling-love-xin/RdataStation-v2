@@ -505,7 +505,9 @@ impl ScratchpadView {
 
 
 impl ScratchpadView {
-    /// 分组标�?行（「草�?(N)」�?��?部引�?(N)」共�?��：紧凑�?�?+ 弱文�?+ 计数�
+    /// 分组标题行（「草稿(N)」/「外部引用(N)」共用：紧凑高度 + 弱文字 + 计数）。
+    /// 注：分组标题当前由行渲染内联实现，本方法暂无调用方 → 预留。
+    #[allow(dead_code)]
     fn scratchpad_group_header(&self, label: &str, count: usize, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         div()
@@ -954,20 +956,6 @@ impl ScratchpadView {
 
         // K9：工具栏图标按钮由自�?div 换成 gpui-kit `Button`（ghost 变体透明�?+
         // hover 出背�?��与原 24×24 �?��样式同尺寸；`small` = 24px �?`w_6 h_6` 对齐）�?
-        let tool_btn = |id: &'static str,
-                        tip: &'static str,
-                        glyph: &'static str,
-                        handler: Box<
-            dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
-        >| {
-            Button::new(id)
-                .ghost()
-                .small()
-                .label(glyph)
-                .tooltip(tip)
-                .on_click(move |ev, window, app| handler(ev, window, app))
-        };
-        // 图标版（2026-10-11 对齐）：内�?搜索入口与普通�?图文件搜索�?统一�?        // `IconName::Search`（用户�?「两处图标建�?��分，没有就可用同�?图标」→ 统一 SVG 图标）�?
         let tool_icon_btn = |id: &'static str,
                              tip: &'static str,
                              icon: IconName,
@@ -1029,7 +1017,7 @@ impl ScratchpadView {
                         .unwrap_or_else(|| key.default_side_text());
                     // 行点�?= 切换显示/隐藏（保留既有交互）；�?内�?�左」�?�右」按�?                    // `app.stop_propagation()` 后只切位�?��不触发�?的显�?隐藏�
                     let row_entity = entity.clone();
-                    let row = PopupMenuItem::element(move |_window, app| {
+                    let row = PopupMenuItem::element(move |_window, _app| {
                         let entity = entity.clone();
                         let key = key;
                         let cur_side = cur_side;
@@ -1675,7 +1663,8 @@ impl ScratchpadView {
                                 .h_flex()
                                 .items_center()
                                 .gap_0p5()
-                                // 顺序对齐原型 450-452：Aa / ab / .*�?026-10-11 全面对齐�?                                // 与中�?es-bar �?致）�?                                .child(case_btn)
+                                // 顺序对齐原型 450-452：Aa / ab / .*（2026-10-11 全面对齐：与中间 es-bar 一致）。
+                                .child(case_btn)
                                 .child(word_btn)
                                 .child(reg_btn),
                         ),
@@ -2210,7 +2199,7 @@ impl ScratchpadView {
 
     /// 添加外部引用弹窗（2026-10-12 原型「弹窗输入路径+别名」对齐）：
     /// gpui-kit Dialog + 路径/别名两个 TextField，确认后创建引用（on_ok 返回 true 关闭）。
-    fn render_ref_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_ref_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity();
         let path_input = self.scratchpad.borrow().ref_path_input.clone();
         let alias_input = self.scratchpad.borrow().ref_alias_input.clone();
@@ -2260,4 +2249,3 @@ impl ScratchpadView {
             .into_any_element()
     }
 }
-

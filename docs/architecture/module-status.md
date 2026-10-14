@@ -17,7 +17,7 @@
 | 通过 | **2775** |
 | 失败 | **0**（本轮全绿） |
 | 忽略 | **44**（engine 单测 24 + Doc-tests 20） |
-| 编译告警 | `cargo check --workspace --all-targets` **103 行 warning 头**（基线「零告警」已漂移，见 §6.4） |
+| 编译告警 | `cargo check --workspace --all-targets` **0 行 warning 头**（零告警，2026-10-14 第六轮复跑确认，见 §6.4） |
 | 代码规模 | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**） |
 | 口径 | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 115 个目标 / 2774 项**，见 §2 的表下注 |
 
@@ -345,11 +345,13 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 `read_only_flag_from_real_servers` 4 · `result_rows_reach_the_temp_table` 4 · `type_decode_fidelity` 4 = 23 项）全 ✅。
 plugin 9 个真机 sidecar 集成目标（61 项）全 ✅。
 
-**告警漂移（基线「零告警」不再成立）**：`cargo check --workspace --all-targets -j 2` 输出 **103 行 `warning` 头**，
-典型类型：未用 import / 变量 / 字段 / 方法 / 常量、`unexpected cfg test-support`、unused doc comment、`unused_must_use`、
-未构造变体。大头：`rds-scratchpad` lib 18 · `rds-workbench` 测试目标 41 · `rds-workbench` lib 3 · `rds-engine` lib 2 ·
-`rds-shared` lib 2 · `rds-settings` lib 1 · `rds-editor` lib 2 · `rds-analytics-resource` 测试 4 ·
-`rds-insight` / `rds-mock` lib test 6 / 3。本轮的职责是**如实记账**（§0 已把「零告警」改为实测值），告警清理留给后续。
+**告警已清零（2026-10-14 第六轮复跑）**：第五轮（2026-10-14）曾记录 **103 行 `warning` 头**（未用 import / 变量 / 字段 / 方法 / 常量、`unexpected cfg test-support`、unused doc comment、`unused_must_use`、未构造变体；大头：`rds-scratchpad` lib 18 · `rds-workbench` 测试目标 41 · `rds-workbench` lib 3 · `rds-engine` lib 2 · `rds-shared` lib 2 · `rds-settings` lib 1 · `rds-editor` lib 2 · `rds-analytics-resource` 测试 4 · `rds-insight` / `rds-mock` lib test 6 / 3）。本轮逐条清理：
+- **未用导入/参数/变量**：render 签名未用参数加 `_` 前缀（workbench/analytics/insight/mock 测试宿主）；测试目标删除未用 `FluentBuilder` / `ParentElement` 导入；`editor_exec` / `workbench view` 未用参数加 `_`；`metadata_cache_index` 删未用 `CommonError` 导入。
+- **dead_code 预留项**：`rds-scratchpad` 的 `NewReference` / `ScratchpadClipboard` / `scratchpad_relative_time` / `set_scratchpad_template` / `toolbar_drag` / `paste_scratchpad_clipboard` 为预留入口，`#[allow(dead_code)]` + 注释留痕；`chrome.rs` 删除全库零调用的 `tool_btn` 闭包。
+- **结构性根因**：`rds-editor` 新增 `[features] test-support = []`（消 `unexpected cfg`，照抄 `paths` 模式）；`shared::i18n` 的 `ZH_JSON` / `ZH` 仅测试用，加 `#[cfg(test)]`；`settings` 未处理返回值显式 `let _ =`。
+- **顺带修复**：`chrome.rs` 一处注释换行损坏吞掉了 `.child(case_btn)`（case 按钮未渲染 + 未用变量告警）——恢复代码行与中文注释，UI 按钮恢复渲染。
+
+复跑 `cargo check --workspace --all-targets -j 2`：**0 行 warning 头**，`Finished` 1m 17s。
 
 **口径与完整性**：116 目标 = 21 单测二进制 + 77 集成 / 探针二进制 + 18 Doc-tests 目标；2775 = 2368 单测 + 407 集成 + 0 doctest；
 44 忽略 = engine 单测 24 + Doc-tests 20（connection 1 · engine 16 · insight 1 · plugin 1 · workbench_shell 1）。

@@ -1583,10 +1583,10 @@ mod tests {
     impl Render for Harness {
         fn render(
             &mut self,
-            window: &mut Window,
-            cx: &mut gpui_kit::Context<Self>,
+            _window: &mut Window,
+            _cx: &mut gpui_kit::Context<Self>,
         ) -> impl IntoElement {
-            let mut root = div().size_full().child(self.rules.clone());
+            let root = div().size_full().child(self.rules.clone());
             // gpui-kit 0.7.1：Root 自动挂载 dialog 层，测试 Harness 无需手动渲染。
             root
         }

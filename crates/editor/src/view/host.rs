@@ -2168,7 +2168,7 @@ impl EditorHostPanel {
     ///
     /// 返回 `Err(可读原因)` = 提交被拦（调用方负责展示）；成功则把这次提交记为在途
     /// （[`CommitInFlight`]），回执回来在轮询泵里组装冲突并落状态栏。
-    pub(crate) fn submit_pending_changes(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+    pub(crate) fn submit_pending_changes(&mut self, _cx: &mut Context<Self>) -> Result<(), String> {
         // ① 提交中不再接新提交（回执回来前按钮保持灰）
         if self.commit_in_flight.is_some() {
             return Err("已有提交在进行中（等回执回来）".to_string());
