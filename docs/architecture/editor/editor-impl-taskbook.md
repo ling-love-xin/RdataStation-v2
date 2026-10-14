@@ -1,12 +1,12 @@
 # 编辑器三模式 · 实现任务书（通用 / SQL / 分析）
 
-> 状态：**推进中**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 全部完成**（T2c-1~6：通道面包屑 / 方言段 / 英文微标 / 重设菜单 / 工具栏分组自定义 / 面板布局持久化，2026-10-13，rds-editor 516 passed）；**T2c-1 验收收尾「切 schema 真影响执行」已落地**（2026-10-13：执行链逐执行携带文档 schema → 引擎会话上下文注入，rds-editor 516 / rds-engine 532 测绿，见 T2c-1 完成记录补记）；之后按 2b → 2d 推进。
+> 状态：**全部 Phase 完成**——Phase 2a（共用表格编辑）**全部完成并测试绿**（T2a-1~7，2026-10-12）；**Phase 2c 全部完成**（T2c-1~6，2026-10-13，rds-editor 516 passed）+ **T2c-1 验收收尾「切 schema 真影响执行」已落地**（2026-10-13）；**Phase 2b 通用模式全部完成**（T2b-1~6：更名 / 环境模型 / 选择器与管理环境 modal / 脚本执行 / 输出卡片 / 状态栏左段，2026-10-13，rds-editor 519 passed + workbench 真机接线）；**Phase 2d 分析模式骨架全部完成**（T2d-1~6：单元/会话模型 / 分析视图 / 单元执行 / `.rdsnote` 落盘 / 空态引导，2026-10-13）；**2c 编码/换行/不可见字符收尾已落地**（2026-10-14，T2c-4 补记 2c，rds-editor 579 passed）。四期（2a→2c→2b→2d）与 2c 遗留收尾全部收口。
 > 依据：`editor-prototype-design.md`（修订 ①~⑯）+ 三模式高保真原型（通用 / SQL / 分析）
 > 基线（代码现状，2026-10-11 核实，2a/2c 完成后更新）：
 > - Phase 1a（内核 + 文本 + SQL 编辑体验）**已完成**；Phase 1b（SQL 执行闭环）**主体完成**（2026-09-21 USIT 第 1 轮收尾）
 > - Phase 2a（单元格编辑 + 变更集 + 批量提交 + 入口 UI）**全部完成**（T2a-1~7 测试绿：rds-editor 482 passed / rds-workbench lib 134 / 集成测试除环境占用项外全绿）
 > - Phase 2c（壳收口）**全部完成**：T2c-1~6（rds-editor 514 / rds-workbench 137 测绿）；Phase 1b 余项「切 schema 真影响执行」排 2b 前
-> - Phase 1c（分析模式骨架 Cell/Output/Session）**未开始**（2d）
+> - Phase 1c（分析模式骨架 Cell/Output/Session）**已完成**（2026-10-13，2d 全部落地，见 §4）
 > - 模式切换**已实现在工具栏最左**（`editor/src/view/host.rs` `render_toolbar` → `editor-mode-indicator` Button → `request_mode_switch`，与最新原型一致）
 > - 结果表格已实现排序/筛选/冻结/右键菜单/复制/分段抓取/滚动到底自动加载；**值编辑（写回库）已实现**（2a 完成）
 
@@ -20,8 +20,8 @@
 | --- | --- | --- | --- |
 | 2a | 共用表格：单元格编辑 + 变更集 + 批量提交 | ✅ **全部完成**（T2a-1~7 测绿）；表格是**共用件**（SQL 结果 + 分析内联输出） | 无（1b 表格已就绪） |
 | 2c | UI 对齐最新原型 | 状态栏面包屑/方言/微标/重设 + 工具栏分组自定义；改动小、见效快（**T2c-1 完成 + 验收收尾「切 schema 真影响执行」2026-10-13 落地**） | 无 |
-| 2b | 通用模式：更名 + 环境 + 脚本执行 | 全新能力（当前 Text 无脚本执行） | 状态栏微标部分依赖 2c |
-| 2d | 分析模式骨架 1c | Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
+| 2b | 通用模式：更名 + 环境 + 脚本执行 | ✅ **全部完成**（T2b-1~6 测绿，2026-10-13）；通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行 | 状态栏微标部分依赖 2c |
+| 2d | 分析模式骨架 1c | ✅ **全部完成**（T2d-1~6 测绿，2026-10-13）；Cell/Output/Session + 内联输出 + `.rdsnote` | 内联表格依赖 2a；会话依赖 1b 执行链 |
 
 理由：2a 是「其余全部的地基」（分析内联表格直接复用它的编辑/变更集/提交）；2c 把三模式共享的壳（模式切换、状态栏、工具栏）收口，2b/2d 落地时不会再动壳；2b 新能力与 2d 骨架都吃 2a 的输出形态，放后面。
 
@@ -82,11 +82,11 @@
 
 ### 任务清单
 - [x] **T2b-1 更名与口径**：`model.rs` `EditorMode::Text → General`（含 `label()` = "通用"）；**删除"文本 ⊂ SQL ⊂ 分析 严格递进"注释**，改为"通用=无连接档（文件编辑 + 本地脚本执行），与 SQL 平行"；`mode.rs` / `host.rs` / 状态栏 / 用户可见文案同步；扩展名判定不变（md/log/json/csv → 通用；sql 系列 → SQL；rdsnote → 分析）。✅ 2026-10-13（见下「T2b-1 完成记录」）
-- [ ] **T2b-2 环境模型**（新模块 `env.rs`）：`Environment{ id, name, kind(解释器类型: Python/RScript/Rustc/自定义), command, args, version }` + `EnvPort::list` / `EnvPort::installed(id) -> bool`（宿主注入，默认接系统探测：`python --version` 等）；未注入 = 空环境列表（如实，不假装有）。
-- [ ] **T2b-3 环境选择器 UI**：工具栏 env-select（环境名 + 版本 ▾，原型通用模式）→ 菜单列环境 + 「管理环境…」（modal：环境配置表，增删改路径/参数）；选中的环境持久化到文档（与 connection 同类）。
-- [ ] **T2b-4 脚本执行**：`ExecTarget::Script{ env, code }` + `QueryRunner::run_script`（默认实现如实不支持）；宿主实现：`spawn(env.command, args)` + stdin 写入代码（或临时文件，Windows 下避免命令行引号问题）+ stdout/stderr 收集 + 超时（可配）+ 中断（kill 进程树）+ 退出码。
-- [ ] **T2b-5 输出落结果区**：成功 → 新结果（表格/结构化输出复用结果集表格；纯文本 → Text 输出卡片）；失败 → Error 卡片（退出码 + stderr 摘录）；运行中 → 状态栏「执行中 Ns…」；切环境 → 旧结果标 stale（复用通道切换的 stale 机制，原型通用模式交互）。
-- [ ] **T2b-6 状态栏左段**：环境名 · 文件类型 · LSP（通用模式显示，SQL 模式显示连接面包屑——2c 统一壳，本段先做数据源）。
+- [x] **T2b-2 环境模型**（新模块 `env.rs`）：`Environment{ id, name, kind(解释器类型: Python/RScript/Rustc/自定义), command, args, version }` + `EnvPort::list` / `EnvPort::installed(id) -> bool`（宿主注入，默认接系统探测：`python --version` 等）；未注入 = 空环境列表（如实，不假装有）。✅ 2026-10-13（见下「T2b-2~6 完成记录」）
+- [x] **T2b-3 环境选择器 UI**：工具栏 env-select（环境名 + 版本 ▾，原型通用模式）→ 菜单列环境 + 「管理环境…」（modal：环境配置表，增删改路径/参数）；选中的环境持久化到文档（与 connection 同类）。✅ 2026-10-13（见下「T2b-2~6 完成记录」）
+- [x] **T2b-4 脚本执行**：`ExecTarget::Script{ env, code }` + `QueryRunner::run_script`（默认实现如实不支持）；宿主实现：`spawn(env.command, args)` + stdin 写入代码（或临时文件，Windows 下避免命令行引号问题）+ stdout/stderr 收集 + 超时（可配）+ 中断（kill 进程树）+ 退出码。✅ 2026-10-13（见下「T2b-2~6 完成记录」）
+- [x] **T2b-5 输出落结果区**：成功 → 新结果（表格/结构化输出复用结果集表格；纯文本 → Text 输出卡片）；失败 → Error 卡片（退出码 + stderr 摘录）；运行中 → 状态栏「执行中 Ns…」；切环境 → 旧结果标 stale（复用通道切换的 stale 机制，原型通用模式交互）。✅ 2026-10-13（见下「T2b-2~6 完成记录」）
+- [x] **T2b-6 状态栏左段**：环境名 · 文件类型 · LSP（通用模式显示，SQL 模式显示连接面包屑——2c 统一壳，本段先做数据源）。✅ 2026-10-13（见下「T2b-2~6 完成记录」）
 
 ### 验收标准
 - 单测：环境模型/持久化往返；`EditorMode::ALL` 顺序与 label（含"通用"）；`ExecTarget::Script` 的 `sql()`/`label()`；脚本执行意图原样到执行器。
@@ -162,6 +162,16 @@
 - **测试**：rds-editor **519 passed**（+`model::tests::mode_keys_round_trip…` 断言 label="通用"、`general_mode_has_no_statement_count`）；rds-workbench ui_contract **8** 全绿；workspace check 干净。
 - **口径**：quick_open「新建文件」关键词加「通用」；架构文档历史记录里的「文本模式」属历史纪事，不改（完成记录才反映现状）。
 
+### T2b-2~6 完成记录（2026-10-13，通用模式接线 + 管理环境 + 真机执行，四提交收口）
+- **T2b-2 环境模型（`env.rs` 新模块）**：`EnvKind{Python, RScript, Rustc, Custom}`（`label`/`as_key`/`from_key` 键值分离）+ `Environment{ id, name, kind, command, args, version, readonly }` + `display_name()`（带版本）+ `ScriptRequest{env_id, code}` + `ScriptOutcome{exit_code, stdout, stderr, timed_out}` + `ScriptNote`（回主线程回执）+ `EnvPort::list/installed/create/update/delete`（trait；**增删改默认如实拒绝**——宿主没接存储时 modal 收到可读拒绝，不假装改了）。未注入 = 空列表（如实，不假装探测过）。
+- **T2b-3 环境选择器 + 管理环境 modal**：`host.rs` 环境选择器（`EnvSelection` 持久化到文档，与 connection 同类）；管理环境 = `view/manage_env.rs`（905 行：列表 + 表单两视图，内置只读、自定义增删改）+ `engine/src/persistence/script_env_store.rs`（全局库 `script_environments` 表，args 存 JSON）+ `ui.rs` 尺寸常量。
+- **T2b-4 脚本执行**：`execution.rs` `ExecTarget::Script{env_id, code}` + `QueryRunner::run_script`（默认如实拒绝）+ `script_notes` 独立通道（`ExecQueue` 泵回主线程）；宿主 `workbench/src/services/editor_env.rs` `SystemEnvPort` 探测（python/py 候选回退、attach 一次缓存、**渲染零 I/O**）+ `run_script_process`（tokio spawn + stdin 写代码 + 并发收输出 + 超时 `taskkill /T` 进程树 + 退出码）；`EngineQueryRunner::run_script` 真实现（62cd461f）。
+- **T2b-5 输出落结果区**：`view/results/script_card.rs`（144 行）脚本输出卡片——成功 stdout / 失败 Alert danger（退出码 + stderr 摘录）；`result_visible` 补脚本卡片分支（通用模式脚本结果区照常显示）；`drain_script_notes` 泵回执。
+- **T2b-6 状态栏左段**：`status_bar.rs` 环境段（环境名 · 文件类型 · LSP 占位——2c 统一壳，先做数据源）。
+- **测试**：rds-editor **519 passed**（ab16ac5b 窗口级：工具栏显隐 / 选环境运行真提交 Script 目标 / 失败卡片 / 状态栏环境段）；rds-workbench lib **134** + ui_contract **8**；真机 e2e（`editor_exec_real.rs`）：py 全链路跑通（`print("hi")` → Text 卡片带 hi / `sys.exit(1)` → Error 卡片带退出码 / 未装环境如实拒，环境门控无 RDS_TEST_* 自动跳过）。
+- **踩坑记录**：脚本代码**经 stdin 传入**不走命令行参数（Windows 下 `-c` 引号坑）；`resolve` 读探测 memo——执行命令 = 探测成功的那一个（python Store 桩回退 py）；管理环境 `script_env_store` 是**新表**（`global_db` 加 `script_environments`），args 以 JSON 文本落列。
+- **遗留（如实记）**：不做 Jupyter 协议（二期再评）；不做 LSP 接入（仅状态栏指示）；脚本输出**只落卡片**不落内联（内联输出归 2d 分析模式独有）。
+
 ### T2c-4 完成记录（2026-10-12，重设菜单已接线并测绿；缩进真改内核 TabSize）
 - **内核核实（缩进）**：gpui-base 0.7.1 `InputBaseState<M: MultiLineMode>::set_tab_size`（`input/editor/indent.rs:504`，**pub**）挂 `MultiLineMode` impl（`EditorMode: MultiLineMode` 在 `base/kind.rs:67`）→ `EditorState`（=`InputBaseState<EditorMode>` 别名，gpui-base `editor/mod.rs:11`）**可直接调 set_tab_size**——**编译实证**：`self.editor.update(cx, |state, cx| state.set_tab_size(TabSize{…}, cx))` 通过，无需给 rds-editor 加 gpui-base 直接依赖。`TabSize{tab_size, hard_tabs}`——**制表符缩进（hard_tabs=true）内核原生支持**（`indent.rs:13-27`），一并真做。注意：`mode.tab_size()` 读访问器仍是 `pub(super)`——**读不走内核**，走文档级状态（双写）。
 - **落点**：`service.rs`（`Document.tab_size: usize`（默认 2）+ `hard_tabs: bool`（默认 false）+ 访问器 + `set_document_tab_size`/`set_document_hard_tabs`（真变判定）+ `document_tab_size`/`document_hard_tabs` 服务查询）+ `shared.rs`（`document_tab_size`/`set_document_tab_size`/`document_hard_tabs`/`set_document_hard_tabs` 转发）+ `view/widgets/status_bar.rs`（`StatusInputs.hard_tabs` + 微标 `Sp {n}` / `Tab` + `StatusControls.reset_menu` 位（edit_mode 后、右段文本前））+ `view/host.rs`（`set_tab_size(size, cx)` 双写文档+内核、`set_hard_tabs(hard, cx)` 双写；重设菜单 `DropdownButton::new("editor-reset-menu")` 三组（分隔 + disabled 组头）：编码（UTF-8 checked + UTF-8(BOM)/GBK disabled）、换行（LF checked + CRLF disabled）、缩进（空格: 2/4/8 按当前态 checked、制表符 checked 按 hard_tabs）——每项闭包先 `let entity = entity.clone()`（链式 move 借用修复 E0382）。
@@ -208,12 +218,12 @@
 - 会话持久化基建：`workbench/src/services/editor_session.rs`（SavedSession：mode/connection/channel）
 
 ### 任务清单
-- [ ] **T2d-1 单元模型**（新模块 `cell.rs`）：`Cell{ id, kind(Sql|Text), body, output: Option<Output>, state(Idle|Running|Done|Error|Stale) }`；`Output::Table(ResultEntry)` / `Text(String)` / `Error(reason)`；`EditorShared` 挂会话级单元序列。
-- [ ] **T2d-2 会话模型**（新模块 `session.rs`）：`Session{ id, default_connection, env }`；会话切换 → `plan_session_switch`（已实现）确认 → 全部输出标 stale；会话列表 + 默认会话。
-- [ ] **T2d-3 单元视图**（新 `view/analysis.rs`）：单元卡片（类型徽标：颜色=可执行性、形状=语言）+ ▶ 执行/中断 + ⋮ 菜单（上移/下移/复制/转文本/折叠/删除，全真实动作）+ 耗时/序号/stale 元信息；单元间 hover 插入点（＋代码/＋文本）+ 工具栏「＋插入单元」（原型分析模式）。
-- [ ] **T2d-4 单元执行**：`ExecTarget::Cell{ session, cell }` + `QueryRunner::run_cell`（默认实现如实不支持）；宿主实现复用 1b 执行链（**仅 SQL 单元**：`execute_first_segment` 同款；Text 单元不可执行，▶ 不亮）；输出落 `Output`（表格 → 内联 Table，复用 2a；文本/错误 → 卡片）。
-- [ ] **T2d-5 `.rdsnote` 落盘**：格式定 **JSON**（dev-plan 1c 备忘；文本层互转函数保留作导出实现）；`SavedSession` 加会话字段（mode 已有）；打开/保存往返。
-- [ ] **T2d-6 空态与引导**：空笔记本 → 空态引导卡（§4.4）；Tab 切换/会话切换交互（stale 计数、脏标记，复用原型矩阵）。
+- [x] **T2d-1 单元模型**（新模块 `cell.rs`）：`Cell{ id, kind(Sql|Text), body, output: Option<Output>, state(Idle|Running|Done|Error|Stale) }`；`Output::Table(ResultEntry)` / `Text(String)` / `Error(reason)`；`EditorShared` 挂会话级单元序列。✅ 2026-10-13（见下「T2d 完成记录」）
+- [x] **T2d-2 会话模型**（新模块 `session.rs`）：`Session{ id, default_connection, env }`；会话切换 → `plan_session_switch`（已实现）确认 → 全部输出标 stale；会话列表 + 默认会话。✅ 2026-10-13（见下「T2d 完成记录」）
+- [x] **T2d-3 单元视图**（新 `view/analysis.rs`）：单元卡片（类型徽标：颜色=可执行性、形状=语言）+ ▶ 执行/中断 + ⋮ 菜单（上移/下移/复制/转文本/折叠/删除，全真实动作）+ 耗时/序号/stale 元信息；单元间 hover 插入点（＋代码/＋文本）+ 工具栏「＋插入单元」（原型分析模式）。✅ 2026-10-13（见下「T2d 完成记录」）
+- [x] **T2d-4 单元执行**：`ExecTarget::Cell{ session, cell }` + `QueryRunner::run_cell`（默认实现如实不支持）；宿主实现复用 1b 执行链（**仅 SQL 单元**：`execute_first_segment` 同款；Text 单元不可执行，▶ 不亮）；输出落 `Output`（表格 → 内联 Table，复用 2a；文本/错误 → 卡片）。✅ 2026-10-13（见下「T2d 完成记录」）
+- [x] **T2d-5 `.rdsnote` 落盘**：格式定 **JSON**（dev-plan 1c 备忘；文本层互转函数保留作导出实现）；`SavedSession` 加会话字段（mode 已有）；打开/保存往返。✅ 2026-10-13（见下「T2d 完成记录」）
+- [x] **T2d-6 空态与引导**：空笔记本 → 空态引导卡（§4.4）；Tab 切换/会话切换交互（stale 计数、脏标记，复用原型矩阵）。✅ 2026-10-13（见下「T2d 完成记录」）
 
 ### 验收标准
 - 单测：单元 CRUD/状态机（Idle→Running→Done/Error/Stale）；会话切换 → 全单元 stale；`.rdsnote` JSON 往返（含单元/输出不跟随）；仅 SQL 单元可执行（Text 单元 ▶ 不亮且状态栏说原因）。
@@ -227,6 +237,17 @@
 ### 依赖与风险
 - 依赖：2a 共用表格（内联 Table 编辑/提交直接复用）；1b 执行链。
 - 风险：`.rdsnote` JSON 格式一旦落盘难改 → 先定 schema（版本字段），文本层互转保留；单元编辑器 = 内核实例复用（每个单元一个 Input/编辑器），注意 **ElementId 业务键**（单元 id，非下标）与焦点管理。
+
+### T2d 完成记录（2026-10-13，三提交收口：数据层 → 视图 → 落盘往返）
+- **T2d-1 单元模型（`cell.rs` 新模块，474 行）**：`Cell{ id, kind, body, output, state }` + `CellState{Idle|Running|Done|Error|Stale}` + `Output::Table(ResultEntry)/Text/Error` + `CellKind`（**serde 小写化**——存盘键 `sql/text` 与 `as_key()` 对齐）+ `NotebookState`（切会话全 stale）；`EditorShared` 挂每文档笔记本状态（`submit_cell` / `apply_cell_note`——**旧会话回执不落**）。
+- **T2d-2 会话模型（`session.rs`）**：`Session{ id, default_connection, env }`（绑定连接/环境，**随文件落盘**）；会话切换 → `plan_session_switch`（已有确认）→ 全部输出标 stale；会话列表 + 默认会话。
+- **T2d-3 单元视图（`view/analysis.rs` 新模块，442 行）**：单元卡片（类型徽标 + ▶ 执行/中断 + ⋮ 菜单：上移/下移/复制/转文本/折叠/删除全真实动作）+ 底部「＋插入单元」+ 空态引导卡（§4.4）；`ui.rs` 尺寸常量登记。
+- **T2d-4 单元执行**：`execution.rs` `ExecTarget::Cell` + `QueryRunner::run_cell`（默认如实拒绝）+ `CellNote` 回执通道；host `submit_cell` 走 run_cell 队列，泵回执落内联输出；**仅 SQL 单元可执行**（Text 单元 ▶ 不亮 + 状态栏原因）；输出落 `Output`（表格 → 内联 Table 复用 2a / 文本与错误 → 卡片）。
+- **T2d-5 `.rdsnote` 落盘**：`persist.rs` 分析模式保存 = 笔记本 JSON（**会话 + 单元，输出不落盘**——`{"version": 1, …}`）；host 打开 `.rdsnote` 解析进笔记本持有器（new + reload 两路）；保存/打开往返（22364375）。
+- **T2d-6 空态与引导**：空笔记本 → 空态引导卡；Tab 切换/会话切换交互（stale 标记，复用原型矩阵）。
+- **测试**：rds-editor **579 passed**（含窗口级：插入单元 → 运行 SQL 单元 → 内联 Table 真渲染（复用 2a 表格）/ 切会话 stale / ⋮ 菜单全真实动作 / 空态引导卡 / `.rdsnote` 保存 → 重开还原）。
+- **踩坑记录**：`CellKind` serde 必须小写化（默认 derive 是 `Sql`/`Text` 帕斯卡命名，与 `as_key()` 不一致会破坏落盘往返）；旧会话回执不落（`submit_cell` 的 note 带 session/cell id，apply 时校验归属）。
+- **遗留（如实记）**：单元格编辑器是内核实例复用——**ElementId 业务键用单元 id 不用下标**；`.rdsnote` 文本层互转函数保留作导出实现（导出五档不含 .rdsnote）。
 
 ---
 
@@ -250,5 +271,5 @@
 | 2 | 2b 通用模式是否纳入 `.rdsnote` 之外的脚本文件类型门控（.py/.r/.rs 高亮） | 高亮走内核已实现（Text 档有语法高亮能力），先不做 LSP | 决定 2b 范围 |
 | 3 | 2d `.rdsnote` JSON schema 版本 | `{"version": 1, "cells": [...]}`，`CELL_SEPARATOR` 文本层保留 | 落盘格式一次性定 |
 | 4 | 2c 编码/换行重设是否立项（外层转换层） | **已定（2026-10-14）**：**已立项落地**（见上「T2c-4 补记 2c」）——内核永是 Unicode，编码/换行差异收敛到 IO 层（文档级 `SaveFormat` 保存契约 + 打开时字节检测；编码/换行不随会话持久化）；含不可见字符显示（空白字符内核原生 `set_show_whitespaces` + 隐藏字符 `RangeDecoration` 标注） | 已落地（T2c-4 补记 2c） |
-| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）与 2c（T2c-1~6，含面板布局持久化）**全部完成**；**T2c-1 验收收尾「切 schema 真影响执行」也已落地**（2026-10-13）→ 下一项 **2b**（通用模式范围），之后 2d | 排期 |
-| 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | 用户 2026-10-11 问过"内核设计是否开发完成、有无开源组件支持"，未答复。待 2d 开工前定：gpui-kit 无现成笔记本内核（68 模块清单已核实），倾向自研薄骨架（参考 2d 任务清单） | 决定 2d 范围与工作量 |
+| 5 | 顺序是否按 2a→2c→2b→2d | 按依赖推荐；用户可改。**当前进度（2026-10-13）**：2a（T2a-1~7）、2c（T2c-1~6，含面板布局持久化）、2b（T2b-1~6 通用模式）、2d（T2d-1~6 分析模式骨架）**全部完成**；**2c 遗留收尾（编码/换行/不可见字符）也已落地**（2026-10-14）→ 四期与遗留全部收口，编辑器三模式能力齐备 | 排期（已完成） |
+| 6 | 分析模式内核（Cell/Output/Session）自研 vs 开源组件 | **已定（2026-10-13）**：自研薄骨架已落地（`cell.rs` / `session.rs` / `view/analysis.rs`，见 §4 T2d 完成记录）——gpui-kit 无现成笔记本内核（68 模块清单已核实），自研薄骨架不引新依赖 | 已落地（T2d） |

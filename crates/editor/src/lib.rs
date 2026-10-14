@@ -18,9 +18,11 @@
 //!   `editability.rs`（六道防线纯函数）/ `execution.rs`（`ExecTarget::Commit`）/
 //!   `view/results/grid.rs`（脏格与双击入口），宿主 `workbench::services::editor_exec::commit_changes`
 //!   独立事务逐条 UPDATE、失败回滚、0 行判冲突；只做 UPDATE，增删行属二期
-//! - ✅ 2b 通用模式（T2b-1~3）：脚本执行环境（内置探测 + 自定义增删改落全局库）与执行链已落地
-//! - ⬜ 2d 分析笔记本视图（`view/analysis.rs` 未建）：数据层（`cell.rs` / `Session` / `run_cell` /
-//!   `.rdsnote` JSON）已就位，视图与接线待做
+//! - ✅ 2b 通用模式（T2b-1~6）：更名 `Text → General`（无连接档，与 SQL 平行）+ 脚本执行环境
+//!   （`env.rs` 模型 + 选择器 + 管理环境 modal 落全局库 + `ExecTarget::Script`/`run_script`
+//!   + 输出卡片 + 状态栏环境段）全部落地，宿主真机接线（python 探测 + 进程执行）
+//! - ✅ 2d 分析模式（T2d-1~6）：数据层（`cell.rs` / `session.rs` / `run_cell` / `.rdsnote` JSON）
+//!   + 视图（`view/analysis.rs`：单元卡片 / 动作 / 空态引导）全部落地
 //!
 //! 以下为 Phase 0/1a/1b 的实现流水（历史记录，保留细节）。
 //!
@@ -95,8 +97,8 @@
 //!   血缘只在标签做 UI 摘要、未落库（B5 余项）· 值预览弹层（B14 余项）·
 //!   事务内语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）·
 //!   补全缓存未命中时无实时内省回退（B9 余项）
-//! - 🟡 1c/2d 数据层：`cell.rs`（Cell / Output / 状态机）与 `Session` 已建，`.rdsnote` JSON 已定；
-//!   余视图（`view/analysis.rs`）与宿主接线（`run_cell`）
+//! - ✅ 2d 分析模式已全量落地（2026-10-13）：`cell.rs`（Cell / Output / 状态机）、`Session`、
+//!   `view/analysis.rs`（单元卡片 / 动作 / 空态引导）与 `.rdsnote` JSON 均已建、均已接线
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
 //! 状态的 SQL 文本原语，属 engine（`core/sql` 是 sqlglot 的唯一接入点），editor 直接消费，
