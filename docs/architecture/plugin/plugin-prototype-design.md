@@ -582,3 +582,137 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 | P2 / P2.5 | 无变化（元数据与 Arrow 直灌） |
 | **P4 注册表 + 引用 + 网格** | **本原型 §4（`rds` API 面）与 §5（激活/生命周期）在此落地**：三张注册表 + 扩展宿主进程 + `activate/deactivate` |
 | P5 分发与签名 | 补：`contributes` 的 schema 校验、发布者信任、`engines.rds` 强制 |
+
+---
+
+## 14. 四种插件场景示例（2026-10-14）
+
+> 本节把「插件能长成什么样」落到四个具体场景：① **JDBC 驱动插件**（外接 Java 环境）；② **LSP + Python + Markdown**（外接 Python 环境 + 渲染）；③ **ER 建模视图**；④ **gpui-kit shell 插件系统**示例。
+> 前三项落在本仓 `crates/plugin`（sidecar 轨，P1 完成度高）；第 ④ 项是 gpui-kit 上游 shell 能力的单独示例，**不替代** `crates/plugin`（§11.3 附注已述，本节给出实现逻辑）。
+
+### 14.1 JDBC 驱动插件（`contributes.drivers` + sidecar JVM）
+
+**形态**：一个 `contributes.drivers`（§3 清单已有）声明的外接驱动；进程模型 = sidecar（`backend.kind = sidecar`），sidecar 内部**自嵌 JVM**（Java + JDBC jar），对外仍走既有分帧协议。
+
+**为什么值得做**：Oracle / MySQL / PostgreSQL 三家的**官方 JDBC 驱动是一等公民**（协议稳定、文档全、版本跟随库端发布），而 Rust 侧原生驱动生态参差（尤其 Oracle 无官方 Rust 驱动）。用 JDBC 桥接，一个 sidecar 就能覆盖三家，且与「驱动插件不在扩展宿主、凭据只进 sidecar」（§2 硬约束 1/2）完全吻合。
+
+**与既有基建的接点**（全部现成，不新增协议）：
+
+| 基建 | 复用方式 |
+| --- | --- |
+| `backend.kind = sidecar` + `executable`（manifest.rs 已实现） | 声明可执行文件；四道闸（形态→传输→平台→路径）解析 |
+| `sidecar/supervisor.rs` / `process.rs` 生命周期 | 进程池、Concurrency、健康检查、热重载、无孤儿退出全复用 |
+| 分帧协议（`BackendTransport::Framed`，4B 大端整帧长 + 1B 种类） | **宿主↔sidecar 协议不变**；JDBC 是它内部的一种实现 |
+| `DriverCapabilities`（`[capabilities.driver]`） | 能力门控：`driver.transaction` / `cancel` / `cursor` / `arrow` 真门控在 engine 侧 |
+| `meta.*` 五件套形状（sidecar/meta.rs） | `meta.catalogs/schemas/objects/object_detail/routine_source` 解析器现成；JDBC 侧按同一形状实现即可 |
+| `tests/sidecar_conformance.rs` | **跨语言一致性验收现成参照**：`RDS_SIDECAR_BIN` / `RDS_SIDECAR_DRIVER` 已支持注入外部二进制 → 真 JDBC sidecar 直接跑同一套「导航面答得出来且形状对」 |
+
+**JDBC 特有的工作**（这才是要写的新代码）：
+
+| 项 | 说明 |
+| --- | --- |
+| **Java 环境探测** | 启动时探测 `JAVA_HOME` / PATH 上的 `java`，解析版本；找不到给可读错误（对照 dev-plan §4.2.2 错误码口径） |
+| **jar 管理** | JDBC 驱动 jar（ojdbc / mysql-connector / pgjdbc）随插件分发在 plugin 目录；sidecar 拼 classpath 启动；版本与库端兼容性（Oracle 8~21c、PG 各小版本）由插件自己负责 |
+| **凭据只进 sidecar** | 连接参数经宿主转发但**不落宿主日志**；驱动进程持有（§2 约束 2 的延续） |
+| **连接池与并发** | 与既有驱动同口径：进程池规格、Concurrency 由 supervisor 管；JVM 内可跑连接池 |
+
+**一致性验收**（呼应 P1 遗留「跨语言 Arrow 互通」）：`sidecar_conformance.rs` 验证的是**协议面**（初始化握手、meta 导航、Arrow 批量、取消、stdin 关闭退出），与实现语言无关 → JDBC sidecar 通过同一套 conformance = 协议一致性达成，不另造验收。
+
+**需拍板（未定）**：
+- JVM 启动成本（每进程约数百 ms）vs 常驻 JVM 复用；进程池规格是否给 JDBC 单独一档；
+- jar 体积与分发（ojdbc 数 MB 级），是否纳入签名 / 完整性校验范围（P5）；
+- Java 最低版本（8 / 11 / 17）与 sidecar 构建产物形态（自带 JRE 还是依赖系统 Java）；
+- 许可：ojdbc / mysql-connector 等许可**未核实**，按用户口径「标注即可、不阻塞」。
+
+### 14.2 LSP + Python + Markdown 插件（编辑器的通用模式 / 分析模式）
+
+**场景拆两半**：① **语言服务**——外接 Python 环境跑 LSP server，给 SQL 编辑器（M4 SQL 编辑器所在 feature crate）提供诊断 / 补全 / 跳转；② **渲染**——Markdown 渲染进预览 / 文档视图。
+
+**关键接缝判断：LSP 与本仓分帧协议是两回事**。
+
+| 协议 | 面向 | 传输 | 关系 |
+| --- | --- | --- | --- |
+| **LSP** | 语言服务（编辑体验） | 行业标准 **JSON-RPC 2.0 over stdio** | 与 D5 自定义二进制分帧**不同协议** |
+| **D5 分帧**（`BackendTransport::Framed`） | 数据库驱动 | 4B 整帧长 + 1B 种类 + 内容 | 面向驱动的自有协议 |
+
+**gpui-kit 编辑器已自带 LSP 扩展接口（本地 MCP 索引核实，0.7.1）**：
+
+| 事实 | 位置（0.7.1） |
+| --- | --- |
+| 编辑器持有 `Lsp` 配置：`EditorState.lsp()` / `lsp_mut()` | `crates/base/src/input/editor/mod.rs` L199-206 |
+| `Lsp` 结构体 = 六个 `Rc<dyn Provider>` **trait 对象**（宿主实现逻辑） | `crates/base/src/input/editor/lsp/mod.rs` L39-70 |
+| 六个 provider：`CompletionProvider` / `CodeActionProvider` / `HoverProvider` / `DefinitionProvider` / `DocumentColorProvider` / `DocumentRangeSemanticTokensProvider` | `lsp/completions.rs` 等（数据模型直接用 `lsp-types`） |
+| 诊断展示模型：`Diagnostic` / `DiagnosticEntry` / `DiagnosticSet` / `DiagnosticSeverity` | `crates/base/src/input/editor/diagnostics.rs` |
+| 宿主接法官方范例：`ExampleLspStore`（内存 store + 模拟 lint） | `examples/editor/src/main.rs` |
+
+> ⚠️ 结论：gpui-kit 编辑器自带的是 **LSP provider 接口 + `lsp-types` 数据模型**，**不含 LSP 客户端**（无 JSON-RPC / stdio / initialize / publishDiagnostics 推送）。数据源（真 LSP server 或本地 lint）与 bridge 逻辑由**宿主**提供——`ExampleLspStore` 就是宿主自己起逻辑、按 `lsp-types` 形状回填的示范。
+
+两种接法（**建议选 a**）：
+
+| 方案 | 做法 | 判断 |
+| --- | --- | --- |
+| **(a) 宿主实现 provider bridge 连 LSP server**（推荐） | **复用 gpui-kit 编辑器接口**（`EditorState.lsp()` 注入 `Lsp`，宿主实现六个 provider trait）；宿主内部起 Python LSP server 走 JSON-RPC 2.0 over stdio，结果按 `lsp-types` 形状回填；诊断由宿主收（publishDiagnostics 或本地 lint）→ 推入 editor `DiagnosticSet`；插件只负责声明 + 环境探测 | ✅ 编辑器侧零改动（接口现成）；只写一个 client adapter；LSP 是行业标准，复用而非自研 |
+| **(b) 插件 sidecar 内做适配器** | sidecar 内翻译 LSP ↔ 分帧 | ❌ 多一层、双协议维护，除非要严格走插件隔离边界才考虑 |
+
+> 判断依据：LSP 与 D5 分帧**服务对象不同**（语言服务 vs 数据库驱动），不必强行统一；本仓 `crates/plugin` 侧（grep 核实）目前**无任何 LSP 基建**（真 client / JSON-RPC 均无），但**gpui-kit 编辑器侧接口现成**——因此不是从零，宿主只需补 client adapter 这一块。文档先定方向、代码 P4 再写。
+
+**Python 环境探测与进程形态**：manifest 的 `backend.kind = script` **已实现**（manifest.rs）：`interpreter = "python3"`（按 PATH 解析）+ `executable = 相对插件目录的脚本` → 由 `PluginBackend::command` 解析成 `python3 <script>`，走既有子进程池（`Sidecar` 同款生命周期）。→ **LSP 的 server 进程可声明为 `script` 形态**，不新增后端形态。
+
+**两种模式定义**（用户此前未定义，给出合理定义）：
+
+| 模式 | 内容 | 依赖 |
+| --- | --- | --- |
+| **通用模式**（编辑体验） | LSP 诊断 / 补全 / 跳转 / 悬停；Markdown 语法高亮与**预览渲染** | LSP server + Markdown 渲染 |
+| **分析模式**（数据工作流） | 文档嵌**可复跑 SQL 块**（`rds.results` 联动，查询结果可回填）；分析结论与数据沉淀进文档；结果渲染（表格 / 图表占位） | 通用模式 + 结果区 / 草稿箱联动 |
+
+**Markdown 渲染挂钩**：gpui-kit `TextView`（`crates/base/src/text/text_view.rs`）是文本查看器（字段 `format/text/state/text_view_style/…`）；`TextViewPlugin` trait（`fn setup(self, text_view: TextView) -> TextView`）+ `TextView::plugin(P)` 是它的极简扩展点；0.7.1 测试 `plugin_accepts_text_view_plugins_beyond_markdown` 佐证「markdown 及更广」可扩展。→ **Markdown 预览走 TextView 插件机制**。
+
+> ⚠️ 措辞区分：gpui-kit 的 `TextViewPlugin`（`crates/base`，渲染扩展）与本仓 `crates/plugin`（sidecar 插件系统）**是两回事**，不要混用术语。
+
+**需拍板（未定）**：
+- 接法 (a) / (b)（建议 a）；LSP server 选型（pylsp / pyright / jedi-language-server 等，未核实选型清单）；
+- 「通用 / 分析」模式的确切定义与入口（是否显式模式切换，还是同一视图按内容自动判定）；
+- Markdown 渲染粒度：纯文本预览（TextView）还是富文档视图（若富文档，画 ER 是否同轨——见 §14.3）。
+
+### 14.3 ER 建模视图（浓缩，详见 §11.3）
+
+**结论**（§11.3 已定案，这里只引用）：以插件形式进入**合适**；webview 轨**否决**（drawdb / erd-editor / Mermaid 均需 webview，本项目由 tauri 迁来、不引入前端栈）；路线 = **GPUI 原生渲染**，插件退到「数据源 + 视图声明」角色。
+
+**数据流**（一句话链路）：
+
+```text
+meta.* 五件套（catalogs/schemas/objects/object_detail/routine_source）
+  → 宿主 MetadataBrowser（已存在，P2）
+  → ER 输入模型（表 / 列 / 主外键，仅结构，不碰凭据——硬约束 #1）
+  → 分层布局（petgraph 或自研 ~数百行，按外键引用分层）
+  → GPUI 原生绘制（Path / Text：实体卡片 + 折线 + crow's foot + pan/zoom）
+```
+
+**插件角色**：`contributes.views` 声明 + 数据变换（`rds.metadata` → ER 输入模型）；v1 只读渲染甚至可不依赖插件系统（宿主直取），插件是**加分项不是前提**（§11.3）。落地顺序五步见 §11.3（schema→渲染模型桥 / 只读渲染 / pan-zoom+拖拽 / DDL 导出 / 写回源库后置）。
+
+### 14.4 gpui-kit shell 插件系统示例（查询结果看板 / 仪表盘卡片）
+
+**场景选型**：shell 插件 = 宿主注册组件 + QuickJS 脚本**组合元素树**（无 canvas / path 自由绘制）→ 适合「**查询结果数据看板**」：脚本用 Button / List / Table 组合出卡片，订阅 rds 事件刷新。**不适合画 ER**（§11.3 附注已述，ER 走 §14.3 原生面板）。
+
+**实现逻辑**（锚定 0.7.1 API，本地索引核实）：
+
+| 步骤 | 0.7.1 API | 说明 |
+| --- | --- | --- |
+| 1 | `PluginManifest::parse/read` | `id/name/version/shell_version/entry/dependencies/capabilities` |
+| 2 | `PluginManager::new`（或 `with_data_home`）→ `discover()` → `available()/loaded()` | 字段 `data_home` + `catalog` + `discovered`；`directories()` |
+| 3 | 能力门控 `CapabilitiesFile::default/grant/validate_placeholders/validate_network` | http 精确到 scheme / host / port / methods / paths |
+| 4 | `ShellRuntime::load(root, window, cx) -> Entity<ShellRoot>`（或 `try_load` / `check`） | 挂进窗口 |
+| 5 | QuickJS 脚本在 `Policy` 下执行 | 构建 **GPUI 原生元素树**，非 webview |
+| 6 | `ScriptView::render` | 主题同步 → dirty 时 `rebuild` → `materialize(&self.runtime, snapshot, window, cx)`；**构建失败保留最后好快照** + `error_banner`；从未成功 → `error_overlay` |
+| 7 | 宿主订阅 rds 事件刷新看板 | 查询结果变更 → 重新渲染 |
+
+**集成边界（重要）**：
+
+| 点 | 结论 |
+| --- | --- |
+| 门面 crate `kit` 只 re-export `open_window` / `init`，**不聚合 shell** | 要用 shell 需以 **path 直取 `gpui-kit/crates/shell`**（0.7.1）或 vendor |
+| shell 依附其 shell 框架（窗口 / 主题 / 布局全托管） | 替换本仓 `crates/plugin`（P1 完成度高）等于重写，**不替代**；只作设计参考与未来对齐对象 |
+| 三版本（0.7.1 / 0.7.2 / 0.7.3）shell 都在 | 本仓 lock 是 **0.7.1**，引用按 0.7.1 |
+| 0.7.3 升级 | **暂不升**（结论不变），原因见 §10 与既有口径 |
+
+**需拍板（未定）**：看板是否为值得接的场景（是否近期有真实诉求）；若接，作为独立宿主面板（非 shell 插件）实现还是真用 shell 插件系统，二选一即可，不必两者都做。
