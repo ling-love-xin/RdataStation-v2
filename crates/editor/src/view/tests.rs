@@ -7444,6 +7444,35 @@ fn row_edit_collapses_multi_cursor_on_the_next_change(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+/// 【T2c-3 收尾】列编辑鼠标框选：直调内核公开的 `select_columnar_block` 框选一块——
+/// 同 Alt+Shift 拖拽产出的矩形选区（每显示行一条选区、同一列跨），免鼠标捕获。
+/// 真实鼠标路径由内核 `on_mouse_down`/`on_drag_move` 驱动，这里验证框选逻辑真到内核。
+#[gpui_kit::test]
+fn column_edit_selects_a_block_via_the_kernel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    // 三行同长："select 1;\n" 10 字节 / "select 2;\n" 10 字节 / "select 3;" 9 字节
+    let (shared, id) =
+        shared_with_document(r"D:\sql\col.sql", "select 1;\nselect 2;\nselect 3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 框选 col 1..8 跨三行（起始 offset 1 → 行0列1；结束 offset 28 → 行2列8）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_edit_mode_for_test(crate::view::host::EditMode::Column, cx);
+            panel.select_columnar_block_for_test(1, 28, cx);
+        });
+    });
+
+    let count = cx.update(|_window, cx| panel.read(cx).cursor_count_for_test(cx));
+    assert_eq!(count, 3, "三行各一条选区");
+    let mut offsets = cx.update(|_window, cx| panel.read(cx).cursor_offsets_for_test(cx));
+    offsets.sort_unstable();
+    assert_eq!(offsets, vec![8, 18, 28], "每行同列（col 8）落一块的结尾（光标在选区尾）");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
 // ===== 2b：通用模式窗口级测试 =====
 //
 // 环境选择器 + 运行按钮只在通用模式出现（SQL / 分析模式不摆）；脚本结论走独立通道变成

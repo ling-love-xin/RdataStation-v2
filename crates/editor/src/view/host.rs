@@ -3859,6 +3859,26 @@ impl EditorHostPanel {
             .update(cx, |state, cx| state.add_cursor_below_line(cx));
     }
 
+    /// 【T2c-3 收尾】直调内核公开的 `select_columnar_block` 框选一块（列编辑鼠标框选）——
+    /// 同 Alt+Shift 拖拽产出的矩形选区，免鼠标捕获，供窗口用例验证框选路径真到了内核。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn select_columnar_block_for_test(
+        &mut self,
+        start_offset: usize,
+        end_offset: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |state, cx| {
+            state.select_columnar_block(start_offset, end_offset, cx)
+        });
+    }
+
+    /// 【T2c-3 收尾】所有光标字节偏移（活动在前；经 vendor 公开的 `cursor_offsets` 读内核真实值）
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn cursor_offsets_for_test(&self, cx: &App) -> Vec<usize> {
+        self.editor.read(cx).cursor_offsets()
+    }
+
     /// 【T2c-3 收尾】当前编辑模式（行 / 列）
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn edit_mode_for_test(&self) -> EditMode {

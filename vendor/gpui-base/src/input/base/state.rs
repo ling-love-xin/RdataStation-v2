@@ -2304,6 +2304,24 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.notify();
     }
 
+    /// RdataStation vendor patch (0.7.1): build a columnar (block) selection between two
+    /// byte offsets directly, for external callers and tests that have no mouse drag.
+    ///
+    /// Both offsets land on their row's natural column (no columns past the line end), so
+    /// this is the same block an Alt+Shift drag from `start_offset` to `end_offset` would
+    /// produce, minus the mouse capture. Multi-line only: a single-line document returns
+    /// with the selection untouched (the `build_columnar_selection` guard applies).
+    pub fn select_columnar_block(
+        &mut self,
+        start_offset: usize,
+        end_offset: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let start = ColumnarPoint::new(start_offset, 0);
+        let end = ColumnarPoint::new(end_offset, 0);
+        self.build_columnar_selection(start, end, cx);
+    }
+
     /// Resolve a columnar point to the display row it is on and the column it reaches,
     /// counting the columns beyond the row's end so a short row keeps the full span.
     fn columnar_row_column(&self, point: ColumnarPoint) -> (usize, usize) {

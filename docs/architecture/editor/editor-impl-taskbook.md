@@ -157,6 +157,13 @@
 - **测试**：rds-editor lib **519 passed**（+`multi_cursor_badge_shows_only_when_count_above_one`、`column_edit_toggles_multi_cursor_via_the_kernel`、`row_edit_collapses_multi_cursor_on_the_next_change`）；rds-workbench ui_contract **8**、rds-engine **532** 全绿；`cargo check --workspace` 干净。
 - **已知边界**：列编辑的**鼠标框选**（拖选矩形选区）未做——内核 `build_columnar_selection` 仍是 `pub(super)` 且需鼠标捕获；当前列编辑 = 多光标（Ctrl+Alt+↑/↓ 加光标 + N 光标徽标），框选留待后续。
 
+### T2c-3 补记 2（2026-10-14，列编辑鼠标框选收口）
+- **内核核实（本次）**：gpui-base 0.7.1 `InputBaseState` 其实**已完整实现** Alt+Shift 拖拽框选——`ColumnarPoint`（offset + columns_past_line_end，短行不缩窄块宽）+ `build_columnar_selection`（按行区间逐行 `display_row_column_to_offset` 建选区 + `replace_all`）+ `on_mouse_down`（Alt+Shift 设锚 + Linux 另收 Ctrl+Alt）/ `on_drag_move`（含 auto_scroll）全链路在，且自带三个内核测试（含短行保宽）。缺口只在**可见性**：`ColumnarPoint`/`build_columnar_selection`/鼠标处理器全是 `pub(super)`。
+- **vendor 补丁（本次）**：沿用 T2c-3 模式，在 `src/input/base/state.rs` 新增公开直调包装 `select_columnar_block(start_offset, end_offset, cx)`——内部 `ColumnarPoint::new(start, 0)`/`new(end, 0)` + 调 `build_columnar_selection`，**不公开内部点类型**（最小改动）；多行守卫沿用内核（单行文档不动选区）。真实鼠标路径仍是内核 `on_mouse_down`/`on_drag_move`，本补丁只补直调入口。
+- **接线**：`EditorHostPanel` 新增 `select_columnar_block_for_test`（镜像 `add_cursor_below_for_test` 的 `self.editor.update` 直调）+ `cursor_offsets_for_test`（经 vendor 公开的 `cursor_offsets` 读内核真实值）。
+- **测试**：rds-editor lib **585 passed**（+`column_edit_selects_a_block_via_the_kernel`：三行文本直调 `select_columnar_block(1, 28)` → 3 条选区、光标落 `[8, 18, 28]`（每行同列 col 8、光标在选区尾）；沿用「渲染断言 + 直调面板方法」纪律，不模拟真实鼠标拖拽）。
+- **已知边界（更新）**：鼠标框选已收口，但**鼠标框选与面板/状态栏的联动**（如框选后状态栏选区计数）仍走内核事件，不在本收口范围；框选只能多光标，行编辑模式下文本变更后卫收拢仍生效。
+
 ### T2b-1 完成记录（2026-10-13，更名与口径：Text → General）
 - **落点**：`model.rs` 变体 `Text → General`（`label()` = "通用"、`short_label()` = "通用"；**持久化键 `as_key()` 保持 `"text"`**、`from_key("text") → General`——变体名改了，存储键不动，旧会话兼容）；删掉「能力严格递进」注释，改「通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行」；全仓 54 处 `EditorMode::Text`（editor 9 文件 + workbench 2 文件）批量更名；模式指示器（`mode.label()`）与状态栏短标自动跟随；`default_file_name` 仍是「未命名.txt」、扩展名判定不变。
 - **测试**：rds-editor **519 passed**（+`model::tests::mode_keys_round_trip…` 断言 label="通用"、`general_mode_has_no_statement_count`）；rds-workbench ui_contract **8** 全绿；workspace check 干净。
