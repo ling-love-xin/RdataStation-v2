@@ -46,3 +46,6 @@ test-run*.log
 
 # docs/tmp 为临时分析产物（含嵌套 git 仓库 dbx-src 与一次性分析 html），一律不入库
 docs/tmp/
+# 根目录验证截图（PrintWindow 等一次性产物）一律不入门库
+/*.bmp
+/*.png

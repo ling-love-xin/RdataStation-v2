@@ -53,7 +53,7 @@ pub use model::{NavPath, NavSource};
 - **三级缓存 cache-aside（L1 内存 / L2 连接级 SQLite / L3 实时内省）**：命中即渲染、未命中取数回写；刷新只重建该范围**不删其他缓存**（唯一删除入口「缓存管理…」）。新增数据源写入连接表即启动缓存——首次展开走 L3 回写，之后命中 L2 不再打库。
 - **展开即建连**：连接根未建连先自动建连再加载，未连接时不排加载、改显提示，避免 `CONN_NOT_FOUND` 噪音。
 - **render 期零 I/O**：所有取数走 `nav_jobs` 队列；`render` 只读状态、`Shared` 更新 + `cx.notify()` 走事件路径（既有欠债见 `docs/architecture/layout/panels-modules.md` §4，新代码不得再犯）。
-- **属性面板抽独立 crate（`rds-property`）**：描述驱动 + 能力灰置；数据预览复用同一链路（`table_data` 只读分页，编辑回写待 `table_editor` 能力位）。
+- **属性面板抽独立 crate（`rds-property`）**：描述驱动 + 能力灰置；数据预览复用同一链路（`table_data` 只读分页，编辑回写待 `table_editor` 能力位）。注：**编辑器结果集的就地写回已于 2026-10-12 在 `crates/editor` 侧落地（Phase 2a，双击脏格 → 提交变更，独立事务逐条 UPDATE），不经 `table_editor` 能力位**；该能力位仍为 `NotBuilt`，语义待定，本条说的是 M4 属性面板/表数据预览这条独立链路，两者不要混为一谈（详见 `docs/architecture/editor/editor-architecture.md` §6 D23、§13）。
 - **数据预览从 Arrow `batches` 提取行**（`rows_as_json`）：native 驱动 `query` 只填 `batches`、`rows` 字段恒空（引擎已知坑）；文本单元格经 `serde_json::Value::String` 取内部值（避免 JSON 序列化自带引号）。
 - **分组 / 标签分轨**：分组是结构（多对多 + 主组），标签是检索（多值、不进树）；归组 / 排序整容器写 `0..n`。
 
