@@ -1,25 +1,29 @@
 # RdataStation v2 集成测试——下一会话独立任务说明
 
 > 用途：交给另一个会话独立执行。本说明自包含：前置状态（含本轮已完成项）、验收口径、执行步骤、过程产物约定、插件口径。执行者不需要回看主会话。
-> 生成时间：2026-10-14（晚）· 生成者：主会话（本轮已完成「清理 + 全量复验 + 0 告警确认 + 增量报告」）
-> 后续维护：本文件已归位到 `docs/reports/`（入库，不再放 `.rds/tmp/`，避免误删）；可复用脚本已从 `.rds/tmp/` 迁到 `tools/`（见 §6）。
+> 生成时间：2026-10-14（深夜）· 生成者：主会话（本轮已完成「闪退修复 + 4 项 UI 修缮 + 全量 check 0 告警 + 增量报告」）
+> 后续维护：本文件已归位到 `docs/reports/`（入库，不再放 `.rds/tmp/`，避免误删）；可复用脚本已迁到 `tools/`（见 §6）。
 
 ---
 
 ## 0. 任务目标（一句话）
 
-在**主会话已验证全绿**的基础上，对 RdataStation v2 工作区继续做整体联动集成维护：维持 `cargo check --workspace --all-targets` 零告警 + `cargo test --workspace` 全绿，处理后续出现的任何告警/回归并提交，产出增量报告。**插件（M9）不接入**（用户明确「先不用管插件模式，目前是先不接入，后面差不多后再接入」）。
+在**主会话已修复闪退并完成 UI 修缮**的基础上，对 RdataStation v2 工作区继续做整体联动集成维护：维持 `cargo check --workspace --all-targets` 零告警 + `cargo test --workspace` 全绿，处理后续出现的任何告警/回归并提交，产出增量报告。**插件（M9）不接入**（用户明确「先不用管插件模式，目前是先不接入，后面差不多后再接入」）。
 
 ## 1. 前置状态（已验证，直接采信）
 
 | 项 | 状态 |
 | --- | --- |
-| Git 分支 | `main`，工作树**干净**（`git status` 无输出），领先 `origin/main` **8 笔**提交，未 push |
-| 最近提交 | `589973c4` docs(plugin) §14 场景示例 · `0a54049b` docs(plugin) 落地状态 · `ca7cc12b` fix(scratchpad) chrome.rs 乱码 · `65a5d856` Fix 103 compiler warnings |
-| 全量集成测试（本轮复验） | **116 目标 ↔ 116 结果全配对，2775 通过 / 0 失败 / 44 忽略**，逐目标与上轮 **0 差异**（日志 `.rds/tmp/rds-integration-final-2026-10-14.log`） |
-| 全量 check（本轮） | `Finished dev profile in 51.40s`，**0 warning / 0 error**（日志 `.rds/tmp/rds-check-final-2026-10-14.log`） |
-| 项目过程信息 | 已清理：删 795 个测试残留目录 + 27 个测试垃圾文件（`.rds/tmp/` 下），保留 101 个日志/脚本过程产物 |
-| 增量报告 | `docs/reports/integration-test-report-incremental-2026-10-14.md`（本轮，已入库） |
+| Git 分支 | `main`，工作树有**本轮未提交改动**（见 §5），未 push |
+| 最近提交 | `cfc70af0` feat(editor) LSP 客户端核心（上一会话）；本轮修复尚未提交（见 §5） |
+| 闪退 | **已修复**：`focus_self` 的 `select_tab` 重入 double-lease panic（`cannot read EditorHostPanel while it is already being updated`），改用 `spawn_in` 异步切标签；回归测试 `focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic` 已加并验证通过 |
+| UI 修缮 | 4 项已完成：①暗色标题栏边框 `#2B2B2B`；②草稿箱内联输入框 `xsmall`；③搜索清除按钮改清输入框；④启动空白文档显示欢迎页（+2 个新单测） |
+| 图标资产 | `file-code-2.svg` 缺失刷屏已修（改 `file-code.svg`）；全库 50 处图标引用与 0.7.1 图标集核对全命中 |
+| editor 单测 | **609/609 通过 / 0 失败 / 0 告警**（含 2 个新测试） |
+| scratchpad 单测 | **42/42 通过** |
+| 全量 check（本轮） | `Finished dev profile in 21.46s`，**0 warning / 0 error**（日志 `.rds/tmp/rds-check-2026-10-14.log`） |
+| 全量集成测试（本轮） | 已启动复验（日志 `.rds/tmp/rds-integration-2026-10-14.log`）；上轮基线 116 目标 / 2775 通过 / 0 失败 / 44 忽略 |
+| 增量报告 | `docs/reports/integration-test-report-incremental-2026-10-14-crashfix.md`（本轮，已入库） |
 
 ### 环境要点（必须遵守，否则编译失败）
 
@@ -31,7 +35,7 @@
   ```
   裸调 `cargo` 报 `os error 448（不受信任的装入点）`；用 `cmd /c "set RUSTC=... && set RUSTDOC=... && cargo.exe ..."` 包一层即可（已实测）。
 - `.cargo/config.toml` 强制 `TEMP/TMP/TMPDIR=.rds/tmp`、`RDS_HOME=.rds`，**不要改**。
-- 长编译（workbench 目标）超过工具超时：**用分离进程**。参考 `.rds/tmp/launch_workspace_test_final.ps1`（`Start-Process cmd /c wrapper.cmd -WindowStyle Hidden -PassThru`）+ wrapper（`.rds/tmp/run_integration_final.cmd`，内部重定向日志 + `echo EXIT_CODE=%ERRORLEVEL%`）+ 轮询（`.rds/tmp/poll_test_final.ps1`）。
+- 长编译（workbench 目标）超过工具超时：**用分离进程**（`tools/launch-check.ps1` / `tools/launch-integration-test.ps1` + 轮询）。
 - **不用 `head`/`tail`/`findstr` 截断**：工具自带 `head_lines`/`tail_lines` 参数；windows shell 里 `tail` 不存在。PowerShell 脚本里 `$` 变量会被 bash 吞，**一律写成 `.ps1` 文件用 `-File` 执行**。
 - 中文提交信息用 `git commit -F <消息文件>`（`cmd /c "set GIT_EDITOR=true && git commit"` 写法在主会话也验证可用）。
 
