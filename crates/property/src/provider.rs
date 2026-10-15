@@ -16,8 +16,7 @@
 //! 新增数据库（如 Oracle）= `database` crate 注册一个 provider，
 //! **property crate 模型 / 通用骨架 / 渲染层零改动**。
 
-use crate::descriptor::PageId;
-use crate::model::{PropertyKind, PropertyRow, PropertyTable};
+use crate::model::{PropertyKind, PropertyRow, PropertySection};
 
 /// 属性目标（从 `database::model::PropertyRef` 提取的轻量引用；不依赖 database crate）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +53,9 @@ pub struct ProviderInput<'a> {
     /// 调用方统计（洞察指标：schemas / tables / views / cache_hits / row_estimate / size …；
     /// 未提供则 provider 省略对应指标卡）
     pub counts: &'a [(&'a str, String)],
+    /// Select 候选列表（骨架执行 [`ExtraQuery`] 时按行收集首列：**单行 → `counts`，
+    /// 多行 → 这里**；`editable_row(.., Select, candidates)` 的第三参取它）
+    pub candidates: &'a [(&'a str, Vec<String>)],
     /// 骨架传入的附加对象（列明细等；provider 自行 downcast，`None` 则跳过特异行）
     pub detail: Option<&'a dyn std::any::Any>,
 }
@@ -65,6 +67,14 @@ impl<'a> ProviderInput<'a> {
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// 读取 Select 候选（`candidates` 中按 key 取值；无候选返回 `None`，渲染回退文本）。
+    pub fn candidates(&self, key: &str) -> Option<&'a [String]> {
+        self.candidates
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_slice())
     }
 }
 
@@ -108,39 +118,18 @@ pub struct ObjectOverview {
     pub meta: Vec<(String, String)>,
 }
 
-/// 子项类别（DBeaver 下部左侧类别树的一类）。
+/// 子项分区（下部左侧类别树 / 右部子项列表的一类；DBeaver 类别树对齐）。
 ///
 /// `table` 由通用骨架按 [`PageId`] 合并（列/索引/约束/DDL 已通用取数）；
 /// provider 只声明类别集合、顺序与可用性——**新增类别 / 灰置类别都在这里**。
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyCategory {
-    pub id: PageId,
-    pub label: String,
-    /// `false` = 先绘制、置灰标注（能力未实现，DBeaver 同样有灰置页）
-    pub enabled: bool,
-    pub table: PropertyTable,
-}
+/// 结构与置灰辅助见 [`crate::model::PropertySection`]。
 
-impl PropertyCategory {
-    /// 置灰类别（内容区显示「暂不可用」占位）。
-    pub fn disabled(id: PageId, label: &str) -> Self {
-        Self {
-            id,
-            label: label.to_string(),
-            enabled: false,
-            table: PropertyTable {
-                headers: Vec::new(),
-                rows: Vec::new(),
-            },
-        }
-    }
-}
-
-/// 驱动无关的统计查询（洞察 counts 的补充来源）。
+/// 驱动无关的补充查询（洞察 counts + Select 候选的来源）。
 ///
-/// provider 声明（key → SQL）；通用骨架用连接执行、取首行首列，写入
-/// [`ProviderInput`] 的 `counts`。SQL 模板里 `{qualified}` = 目标对象的限定名
-/// （由骨架替换；provider 自行负责引号 / 方言）。
+/// provider 声明（key → SQL）；通用骨架用连接执行：
+/// - **单行结果** → 取首行首列，写入 [`ProviderInput`] 的 `counts`（洞察指标）；
+/// - **多行结果** → 收集首列全量，写入 [`ProviderInput`] 的 `candidates`（Select 候选）。
+/// SQL 模板里 `{qualified}` = 目标对象的限定名（由骨架替换；provider 自行负责引号 / 方言）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtraQuery {
     pub key: &'static str,
@@ -162,8 +151,8 @@ pub trait PropertyProvider: Send + Sync {
     /// 洞察总览（RDS 新增；运行时 / 统计事实，与 General 去重）。
     fn overview(&self, input: &ProviderInput) -> ObjectOverview;
 
-    /// 子项类别树（驱动能力掩码；灰置类别 = `enabled: false`）。
-    fn categories(&self, input: &ProviderInput) -> Vec<PropertyCategory>;
+    /// 子项分区树（驱动能力掩码；灰置分区 = `enabled: false`，渲染「暂不可用」占位）。
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertySection>;
 
     /// 洞察统计查询（默认无；PG 表级行估计 / 大小等懒加载指标在此声明）。
     fn extra_queries(&self, _input: &ProviderInput) -> Vec<ExtraQuery> {
@@ -222,14 +211,40 @@ impl ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::descriptor::PageId;
 
-    /// 类别置灰辅助：enabled=false + 空表。
+    /// 置灰分区辅助：enabled=false + 空表。
     #[test]
-    fn disabled_category_has_empty_table() {
-        let c = PropertyCategory::disabled(PageId::Privileges, "权限");
+    fn disabled_section_has_empty_table() {
+        let c = PropertySection::disabled(PageId::Privileges, "权限");
         assert!(!c.enabled);
         assert!(c.table.headers.is_empty());
         assert!(c.table.rows.is_empty());
+    }
+
+    /// Select 候选访问器：按 key 命中；缺失返回 None。
+    #[test]
+    fn provider_input_candidates_lookup() {
+        let input = ProviderInput {
+            target: &PropertyTargetRef {
+                kind: PropertyKind::Table,
+                name: "t".into(),
+                catalog: None,
+                schema: None,
+                parent: None,
+                conn_id: "c".into(),
+                source: "P".into(),
+            },
+            conn_label: "c",
+            type_id: Some("postgresql"),
+            db_type: Some("PostgreSQL"),
+            stats: ProviderStats::default(),
+            counts: &[],
+            candidates: &[("roles", vec!["postgres".to_string(), "rds".to_string()])],
+            detail: None,
+        };
+        assert_eq!(input.candidates("roles").map(|v| v.len()), Some(2));
+        assert_eq!(input.candidates("nope"), None);
     }
 
     /// 注册表按 数据库类型 × 对象类型 命中；未注册返回 None；族别名归一。
@@ -247,7 +262,7 @@ mod tests {
                     cards: vec![], kv: vec![], note: String::new(), meta: vec![],
                 }
             }
-            fn categories(&self, _i: &ProviderInput) -> Vec<PropertyCategory> { vec![] }
+            fn categories(&self, _i: &ProviderInput) -> Vec<PropertySection> { vec![] }
             fn apply_edit_sql(&self, _i: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
                 Err("unsupported".to_string())
             }

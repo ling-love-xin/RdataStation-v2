@@ -242,9 +242,6 @@ pub struct Navigator {
     /// 来源标识用短码（`P` / `G` / `GP`）；false 时用文字（项目 / 全局 / 共享）。
     #[serde(default = "default_true")]
     pub source_short_code: bool,
-    /// 属性面板宽度（rem 倍率，随界面缩放；默认 24.5 ≈ 392px）。
-    #[serde(default = "default_property_width")]
-    pub property_panel_width: f32,
     /// 连接行是否显示标签 chip（默认关；开启后「≤2 chip + `+N`」）。
     #[serde(default)]
     pub show_tags: bool,
@@ -260,7 +257,6 @@ impl Default for Navigator {
     fn default() -> Self {
         Self {
             source_short_code: true,
-            property_panel_width: default_property_width(),
             show_tags: false,
             show_scope: true,
             filters: NavigatorFilters::default(),
@@ -391,9 +387,6 @@ fn default_connect_timeout_ms() -> u64 {
 fn default_project_sort() -> String {
     "last_opened".to_string()
 }
-fn default_property_width() -> f32 {
-    24.5
-}
 fn default_keep_versions() -> i64 {
     5
 }
@@ -429,7 +422,6 @@ mod tests {
         assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
         assert!(s.connection_defaults.lan_disable_tls);
         assert!(s.navigator.source_short_code);
-        assert_eq!(s.navigator.property_panel_width, 24.5);
         // v7 新增：标签默认不显、归属域列默认显。
         assert!(!s.navigator.show_tags, "标签默认不显示");
         assert!(s.navigator.show_scope, "归属域列默认显示");

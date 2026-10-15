@@ -11,12 +11,12 @@ pub mod descriptor;
 pub mod model;
 pub mod provider;
 
-pub use descriptor::{PageId, PropertyEntry, PropertyPage, PropertyRegistry, SupportState};
+pub use descriptor::PageId;
 pub use model::{
     ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable,
     PropertyValueKind, TableDataColumn, TableDataPage,
 };
 pub use provider::{
-    ExtraQuery, ObjectOverview, OverviewCard, OverviewStatus, PropertyCategory,
-    PropertyProvider, PropertyTargetRef, ProviderInput, ProviderRegistry, ProviderStats,
+    ExtraQuery, ObjectOverview, OverviewCard, OverviewStatus, PropertyProvider,
+    PropertyTargetRef, ProviderInput, ProviderRegistry, ProviderStats,
 };

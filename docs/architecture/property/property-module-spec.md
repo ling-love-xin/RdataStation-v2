@@ -14,17 +14,17 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 一句话 | 把「一个数据库对象长什么样、能看哪些属性」做成**描述驱动**的可复用面板：对象类型 → 属性页集合（注册表）→ 动态渲染；暂不支持的能力（如权限）**先绘制、置灰标注**，不做硬编码分支 |
-| 交付状态 | 抽取 + 重设计（2026-10-03 起）；抽取后 `crates/property` 独立 crate，`database` 仅保留取数实现 |
+| 一句话 | 把「一个数据库对象长什么样、能看哪些属性」做成**Provider 驱动**的可复用面板：对象类型 → provider（`PropertyProvider` trait，按驱动/类型注册）→ 动态渲染；暂不支持的能力（如权限）**先绘制、置灰标注**，不做硬编码分支 |
+| 交付状态 | 抽取 + 重设计（2026-10-03 起）；抽取后 `crates/property` 独立 crate，`database` 仅保留取数实现；2026-10-15 描述模型（`PropertyPage`/`PropertyEntry`/`PropertyRegistry`）删除，能力掩码并入 `PropertySection` |
 | 权威文档 | 本文件（§13 = 已知问题唯一权威） |
 | 主要文件 | 见 §4 代码地图 |
-| 测试基线 | rds-property 单测（模型 / 描述模型 / 注册表契约）；rds-database / rds-workbench 回归全绿 |
+| 测试基线 | rds-property 单测（模型 / provider 契约）；rds-database / rds-workbench 回归全绿 |
 
 ### 1.1 模块边界（做什么 / 不做什么）
 
 **做**：属性面板领域模型（`PropertyKind`）、数据容器（`ObjectProperties` / `PropertyRow` /
-`PropertyTable` / `PropertySection`）、面板状态（`PropertyState`）、描述模型（`PropertyPage` /
-`PropertyEntry` / `PageId` / 支持状态）、注册表契约（`PropertyRegistry` trait）。
+`PropertyTable` / `PropertySection`）、面板状态（`PropertyState`）、provider 契约（`PropertyProvider` trait
+与 `ProviderRegistry`，见 §16）。
 **不做**：数据库对象树导航（M4 `nav_view`，仍属 `database`）；属性面板的停靠容器（中央 Dock
 `PropertyHostPanel` 独立 tab，与编辑器同级别，2026-10-09 起；宽度由 Dock 拖拽记忆）；元数据实时内省
 与驱动（`engine`）；对象定位参数（`PropertyRef` / `PropertyRequest`，留在 `database::model` —— 它们是
@@ -36,7 +36,7 @@
 | --- | --- |
 | 序列化 | serde（`PropertyKind` 参与 `PropertyRef` 序列化） |
 | 数据容器 | 纯 Rust 结构体（`String` / `Vec`），无运行时依赖 |
-| 注册表契约 | `trait PropertyRegistry`（无默认实现，由数据生产方实现） |
+| provider 契约 | `trait PropertyProvider` + `ProviderRegistry`（无默认实现，由 `database::property_providers` 注册各驱动实现） |
 | 异步 | 不涉及（取数在 `database`，入队 / 轮询在 `nav_jobs` / `PropertyHostPanel`） |
 | 构建约束 | `cargo build/test` 必须 `-j 2`（Windows 已知）；`.cargo/config.toml` 已设 `RDS_HOME=.rds` |
 | 目标平台 | Windows（本机验证环境）；PowerShell 交互（Bash 不可用） |
@@ -80,7 +80,8 @@ mock（未来）────────► property（消费 ObjectProperties /
 | --- | --- |
 | `src/lib.rs` | crate 导出与公共 API |
 | `src/model.rs` | `PropertyKind`（自 `database::model` 迁入）；`ObjectProperties` / `PropertyRow` / `PropertyTable` / `PropertySection` / `PropertyState`（自 `database::property_panel` 迁入） |
-| `src/descriptor.rs` | 描述模型：`PageId` / `PropertyPage` / `PropertyEntry` / `SupportState` / `PropertyRegistry` trait |
+| `src/descriptor.rs` | `PageId` enum（页 id 集合；描述模型 `PropertyPage` / `PropertyEntry` / `SupportState` / `PropertyRegistry` 已于 2026-10-15 删除，能力掩码并入 `PropertySection.enabled`） |
+| `src/provider.rs` | provider 契约：`PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertySection`（原 `PropertyCategory`） |
 | `src/tests.rs` | 单测（kind 覆盖、描述模型、状态默认值） |
 
 ### 4.2 `crates/database/`（保留取数实现）
@@ -88,14 +89,14 @@ mock（未来）────────► property（消费 ObjectProperties /
 | 文件 | 职责（改动后） |
 | --- | --- |
 | `src/model.rs` | 删除 `PropertyKind` 定义（改 `use property::PropertyKind`）；`PropertyRef` / `PropertyRequest` / `property_ref_of` 保留（字段类型改用 `property::PropertyKind`） |
-| `src/property_panel.rs` | 删除数据容器定义（改 `use property::…`）；保留 `load_properties`（取数，返回 `property::ObjectProperties`）；新增 `PropertyRegistryImpl`（实现 `property::PropertyRegistry`，注册各类型页集合 + 支持状态） |
+| `src/property_panel.rs` | 删除数据容器定义（改 `use property::…`）；保留 `load_properties`（取数，返回 `property::ObjectProperties`）；provider 分派（`property_providers::global_registry()` 按 type_id 选源） |
 | `src/nav_jobs.rs` | `PropsResult` 改用 `property::ObjectProperties`；`enqueue_properties` 不变 |
 
 ### 4.3 `crates/workbench/`（消费与渲染）
 
 | 文件 | 职责（改动后） |
 | --- | --- |
-| `src/panels/editor.rs` | `render_property_panel` 改为**描述驱动 tab 渲染**（见 §10）；`PropertyState` 增加 `active_page` |
+| `src/panels/property_panel.rs` | `PropertyHostPanel`（中央 Dock 独立 tab，2026-10-09 起）**Provider 驱动渲染**（见 §10 / §16）；`PropertyState` 增加 `active_page` |
 | `src/quick_open/model.rs` | `PropertyRequest` 类型不变；tests 中 `PropertyKind` 引用改 `property::PropertyKind` |
 
 ## 5. 公开接口
@@ -103,11 +104,13 @@ mock（未来）────────► property（消费 ObjectProperties /
 `lib.rs` 导出：
 
 ```text
-pub mod descriptor;   // 描述模型 + PropertyRegistry trait
+pub mod descriptor;   // PageId（页 id 集合）
 pub mod model;        // PropertyKind / ObjectProperties / PropertyRow / PropertyTable / PropertySection / PropertyState / TableDataColumn / TableDataPage
+pub mod provider;     // PropertyProvider trait / ProviderRegistry / ProviderInput / ObjectOverview / ExtraQuery / ProviderStats
 
-pub use descriptor::{PageId, PropertyEntry, PropertyPage, PropertyRegistry, SupportState};
-pub use model::{ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable, TableDataColumn, TableDataPage};
+pub use descriptor::PageId;
+pub use model::{ObjectProperties, PropertyKind, PropertyRow, PropertySection, PropertyState, PropertyTable, PropertyValueKind, TableDataColumn, TableDataPage};
+pub use provider::{ExtraQuery, ObjectOverview, OverviewCard, OverviewStatus, PropertyProvider, PropertyTargetRef, ProviderInput, ProviderRegistry, ProviderStats};
 ```
 
 ## 6. 领域模型
@@ -129,7 +132,7 @@ pub struct ObjectProperties {
 }
 ```
 
-`PropertySection` 增加 `id: PageId` 字段（供描述模型映射「页 → 内容」）。
+`PropertySection` 带 `id: PageId` 字段（分区标识，渲染按 id 匹配内容；能力掩码见 §7）。
 
 ### 6.4 数据页模型（M4 表数据预览首期，2026-10-03 新增）
 
@@ -172,61 +175,37 @@ pub struct PropertyState {
 }
 ```
 
-## 7. 描述模型与能力掩码
+## 7. 能力掩码（子项分区）
+
+> 2026-10-15：描述模型（`PropertyPage` / `PropertyEntry` / `SupportState` / `PropertyRegistry` trait）已删除，
+> 能力掩码由 **provider 的分区声明**承担——每个子项分区 = `PropertySection`（`id` / `label` / `table` / `enabled`），
+> `enabled=false` 即「先绘制、置灰标注」（原 `SupportState::Unsupported` 的语义，不再需要双份模型）。
 
 ```text
-/// 属性页 id（页 → 内容映射键，也是 tab 标识）。
-pub enum PageId {
-    General,       // 属性网格
-    Columns,       // 列
-    Indexes,       // 索引
-    Constraints,   // 约束
-    Ddl,           // DDL（源版 / 合成）
-    Data,          // 表数据预览（分页抓取；见 §9 数据流）
-    Source,        // 例程序源码
-    Privileges,    // 权限（当前不支持 → 置灰）
-    Dependencies,  // 依赖（当前不支持 → 置灰）
-}
-
-/// 支持状态：驱动 / 类型能力位决定。
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SupportState {
-    Supported,      // 可渲染实际内容
-    Unsupported,    // 置灰渲染（内容区显示「暂不可用」占位）
-}
-
-/// 一个属性页的描述。
-pub struct PropertyPage {
+/// 子实体分区（带页 id，供渲染映射「分区 → 内容」）。
+pub struct PropertySection {
     pub id: PageId,
-    pub title: String,
-    pub state: SupportState,
-}
-
-/// 属性网格中的一个条目（可扩展：editable 预留编辑能力）。
-pub struct PropertyEntry {
     pub label: String,
-    pub value: String,
-    pub state: SupportState,
-    pub editable: bool,
-}
-
-/// 对象类型 → 属性页集合的注册表契约（数据生产方实现）。
-pub trait PropertyRegistry {
-    /// 返回某类型对象的页集合（顺序即 tab 顺序）。
-    fn pages_for(&self, kind: PropertyKind) -> Vec<PropertyPage>;
+    pub table: PropertyTable,
+    /// `false` = 先绘制、置灰标注（权限 / 依赖等能力未实现）
+    pub enabled: bool,
 }
 ```
 
-**动态渲染原则**：渲染层只遍历 `registry.pages_for(kind)` + `ObjectProperties`，
-不按 `kind` 写分支；新增对象类型 / 新增属性 = 注册表加条目，渲染零改动。
+- `PropertySection::supported(id, label, table)`：可用分区（默认形态）。
+- `PropertySection::disabled(id, label)`：置灰分区（内容区显示「暂不可用」占位）。
+- provider 的 `categories()` 返回 `Vec<PropertySection>`（连接级灰置分区由
+  `database::property_providers::connection_categories()` 统一提供：权限 / 事件触发器）。
+- **动态渲染原则**：渲染层只遍历 `ObjectProperties.sections`，不按 `kind` 写分支；
+  新增对象类型 / 新增属性 = provider 加条目（或新注册一个 provider），渲染零改动。
 
 ## 8. 权限页灰置规格（示例）
 
-- `PropertyRegistry::pages_for` 对 `Table` / `View` / `Connection` 注册 `Privileges` 页，`state = Unsupported`
+- provider 的 `categories()` 对 `Table` / `View` / `Connection` 返回含 `Privileges` 分区，`enabled = false`
   （`engine::MetadataBrowser` 暂无 `get_privileges` 内省实现）。
-- 渲染：tab 条上该页以 muted 色呈现（可点，点了内容区显示「权限查看与授权暂不支持（驱动能力未实现）」）。
-- 将来驱动补上 `get_privileges` 能力位后，注册表把该页 `state` 翻为 `Supported`，渲染零改动自动激活。
-- `Dependencies`（依赖 / 被引用）页同理先灰置。
+- 渲染：左栏子标签以 muted 色呈现（可点，点了内容区显示「（暂不可用）」）。
+- 将来驱动补上 `get_privileges` 能力位后，把该分区 `enabled` 翻为 `true`（provider 填充真实表格），渲染零改动自动激活。
+- `Dependencies`（依赖 / 被引用）分区同理先灰置。
 
 ## 9. 数据流
 
@@ -243,7 +222,8 @@ pub trait PropertyRegistry {
           → 真 COUNT(*) 单独一问 → 单元格 JSON 化，null → None）
   → property::ObjectProperties（含 data: Option<TableDataPage>，回填 PropertyState，
     key 不匹配的过期结果丢弃）
-  → PropertyHostPanel::render_property_panel：registry.pages_for(kind) 逐页渲染
+  → PropertyHostPanel::render_property_panel：按 `ObjectProperties` 渲染（General 网格 +
+    子项分区列表；「属性 | 数据」两页签）
   → 「数据」页：render_data_page（列头排序 / 上一页 / 下一页 → 事件路径
     reload_properties_data 重发请求，渲染零 I/O）
 ```
@@ -253,14 +233,13 @@ pub trait PropertyRegistry {
 
 ## 10. 渲染协议（tab 化）
 
-1. 顶部 tab 条：`registry.pages_for(kind)` 的页集合（gpui-kit TabBar），当前页 = `PropertyState.active_page`。
-2. 当前页内容按 `PageId` 从 `ObjectProperties` 取：
-   - `General` → `properties` 网格；
-   - `Columns` / `Indexes` / `Constraints` → `sections` 中 `id` 匹配的分区表格；
-   - `Ddl` / `Source` → `sections` 中对应分区（多行文本单列表）；
+1. 顶部 tab 条：`属性 | 数据`（仅表 / 视图两页签，gpui-kit TabBar）；当前页 = `PropertyState.active_page`。
+2. 当前页内容：
+   - `General` → `ObjectProperties`：① 洞察总览卡（`overview`）+ ② General 网格（`properties`，
+     双栏/三栏）+ ③ 子项分区列表（`sections`，多分区时左栏子标签 + 右栏表格）；
    - `Data` → `data` 网格（行号 + 列名 + 单元格；NULL 灰置；列头排序；分页按钮）；
-   - `Privileges` / `Dependencies` 且 `state = Unsupported` → 灰置占位内容；
-   - 找不到对应 section 且 `state = Supported` → 空态文案（不报错）。
+   - `enabled=false` 的分区 → 灰置占位内容（左栏标签置灰 + 内容区「（暂不可用）」）；
+   - 找不到对应 section → 空态文案（不报错）。
 3. 宽高沿用右 Dock（280px 基准，宽度可拖拽记忆），行内无裸 px / 裸色值（走 `workbench_shell::ui` 与主题 token）。
 
 ## 11. 使用方
@@ -273,7 +252,7 @@ pub trait PropertyRegistry {
 
 ## 12. 测试
 
-- `rds-property`：kind 覆盖 / 描述模型构造 / `PropertyState` 默认值 / 注册表契约（mock registry）。
+- `rds-property`：kind 覆盖 / provider 契约（`ProviderInput.candidates` 查表、registry 分派、灰置分区空表）/ `PropertyState` 默认值。
 - `rds-database`：`property_ref_of` 映射（kind 全量）、`load_properties` 各类型分区、列表 / 索引 / 约束表渲染、
   `table_data` 分页抓取（quote_ident 转义 / has_more 探测 / COUNT / 排序补齐）。
 - `rds-workbench`：Quick Open `ShowProperties` 构造、`apply_props_results` 过期 key 丢弃、
@@ -394,8 +373,10 @@ SQLite / DuckDB 无 ALTER 语义等价物，明确报错。
 1. 编辑成功后**导航树列节点未自动刷新**（重命名 / 可空变更需手动刷新或等树刷新事件接入）；
 2. `resetPropertyValue`（重置为默认）未实现；
 3. MySQL 列注释 / 默认值编辑未实现（需驱动侧 MODIFY 支持）；
-4. 表级属性（注释 / 描述）编辑未实现（列级先行）；
-5. Select 形态控件（`select_options`）渲染未接（当前提供者未产生 Select 行）。
+4. ~~表级属性（注释 / 描述）编辑未实现（列级先行）~~ → 已实现：表/Schema/视图 `description`
+   接 `COMMENT ON`、表级行级安全接 `ALTER TABLE … ENABLE|DISABLE ROW LEVEL SECURITY`（2026-10-15，见 §16.5.6）；
+5. ~~Select 形态控件（`select_options`）渲染未接（当前提供者未产生 Select 行）~~ → 已接入：
+   常驻下拉选中即提交（2026-10-15，见 §16.5）。
 
 ## 16. 属性源接口化 + 三部分布局（2026-10-09 实现）
 
@@ -417,7 +398,7 @@ pub trait PropertyProvider: Send + Sync {
     fn kind(&self) -> PropertyKind;                         // 每驱动族 × 对象类型一个 provider
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow>;   // getProperties()
     fn overview(&self, input: &ProviderInput) -> ObjectOverview;          // RDS 新增：洞察总览
-    fn categories(&self, input: &ProviderInput) -> Vec<PropertyCategory>; // 子项类别树（能力掩码）
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertySection>; // 子项分区（能力掩码）
     fn extra_queries(&self, input: &ProviderInput) -> Vec<ExtraQuery>;    // 懒加载统计（key + SQL 模板）
     fn apply_edit_sql(&self, input, row_id, value) -> Result<String, String>; // setPropertyValue → SQL
 }
@@ -440,7 +421,7 @@ pub trait PropertyProvider: Send + Sync {
 | 模型/契约 | `PropertyRow` / `ObjectOverview` / `PropertyCategory` / `ProviderRegistry` | `crates/property/src/{model,descriptor,provider}.rs` | 否 |
 | 通用骨架 | 列/索引/约束/DDL/数据取数 + 类别内容合并 + 编辑执行 | `crates/database/src/property_panel.rs` | 否 |
 | 驱动 provider | 属性行 / 洞察 / 类别 / 懒加载统计 / 编辑 SQL | `crates/database/src/property_providers/`（pg/sqlite/duckdb/mysql.rs） | **是（只加一个文件 + register 一行）** |
-| 渲染层 | 三部分布局 / 编辑控件 / 数据页 | `crates/workbench/src/panels/editor.rs` | 否 |
+| 渲染层 | 三部分布局 / 编辑控件 / 数据页 | `crates/workbench/src/panels/property_panel.rs`（`PropertyHostPanel`，中央 Dock 独立 tab） | 否 |
 
 **已注册 provider**（`property_providers/mod.rs::register_all`）：
 PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQLite / DuckDB 各 3 类
@@ -459,8 +440,8 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 - **表 / 视图两页签【属性 | 数据】**（去掉旧「图」页签；数据页懒加载，首屏 200 行）；
 - 其余对象为单属性视图（无页签条）；
 - 灰置类别（权限/依赖/触发器/规则/策略/分区/Statistics）先绘制、置灰标注，不发内省查询；
-- 编辑控件：Boolean → Switch（即改即提交）；Text/LongText → 值 + 编辑按钮 → 行内输入 + 保存/取消；
-  Select 候选已入模型（`select_options`），渲染待 provider 产出 Select 行后接入。
+- 编辑控件：Boolean → Switch（即改即提交）；Select → 常驻下拉（`use_keyed_state` 惰性创建，
+  选中即提交，2026-10-15 接入；空候选回退文本）；Text/LongText → 值 + 编辑按钮 → 行内输入 + 保存/取消。
 
 ### 16.4 数据流（事件路径，渲染零 I/O）
 
@@ -480,15 +461,26 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
    取首行首列入洞察指标卡）；其余驱动 / 对象的统计随内省逐步接入；
 2. 连接级属性编辑（描述/管理员/连接限制/允许连接）待 settings 接入——**当前渲染为只读占位**，
    值标注「待接入」（避免"可点但提交报错"），编辑链路 `apply_property_edit` 已按类型 id 分派；
-3. `PropertyCategory` 的「左侧类别树 + 右侧表格」DBeaver 形态暂以纵向堆叠呈现（原型 v2 一致）；
+3. `PropertySection`（原 `PropertyCategory`）的「左栏子标签 + 右栏内容」DBeaver 形态已落地
+   （多分区时左栏竖排子标签 + 右栏表格；单分区退化为直接堆叠）；
 4. **Oracle 暂不接入**（驱动内省未就绪；壳 provider 已移除，后续按「注册 provider」机制接入）；
-5. 旧版属性面板（右侧停靠 + 页集合 tab）代码已重建，未删旧物（原型与文档保留供对照）。
+5. 旧版属性面板（右侧停靠 + 页集合 tab）代码已重建，未删旧物（原型与文档保留供对照）；
+6. 对象级编辑补全（2026-10-15）：`Table.description`→`COMMENT ON TABLE`、
+   `Schema.description`→`COMMENT ON SCHEMA`、`View.description`→`COMMENT ON VIEW`
+   （单引号双写转义）；`Table.row_level_security`→`ALTER TABLE … ENABLE|DISABLE ROW
+   LEVEL SECURITY`（`relrowsecurity` 真值经 `extra_queries` 懒加载，Switch 初始态真实，
+   避免用户基于假开关误提交）；`Table.partition_by` / `Table.reloptions` 无直接 ALTER
+   语法 → **降为只读行**，杜绝"可点但提交报错"；
+7. Schema 子项类别修正（2026-10-15）：删除旧实现把「表→Columns」「视图→Constraints」
+   「外部表→Indexes」「物化视图→Ddl」「索引→Source」的错位 PageId 灰置声明（类别 id
+   是 provider 增删时的稳定业务键，错位会让未来启用时内容进错分支）；表/视图/函数/
+   序列等 Schema 子项类别待新 PageId + 内省查询接入后再声明。
 
 ### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
 
 | 设计决策 | 代码文件 |
 | --- | --- |
-| `PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertyCategory` | `crates/property/src/provider.rs` |
+| `PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertySection` | `crates/property/src/provider.rs` |
 | `ObjectProperties.overview` / `PropertySection.enabled` / `PageId::{Routines,Partitions}` | `crates/property/src/{model,descriptor}.rs` |
 | 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |

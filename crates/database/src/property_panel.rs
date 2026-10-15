@@ -15,9 +15,9 @@ use crate::property_providers::global_registry;
 use crate::table_data::{self, TableDataRequest};
 use engine::driver::traits::SchemaObjectKind;
 use property::{
-    ObjectOverview, ObjectProperties, PageId, PropertyCategory, PropertyKind,
-    PropertyRow, PropertySection, PropertyTable, PropertyTargetRef, PropertyValueKind,
-    ProviderInput, ProviderStats, TableDataPage,
+    ObjectOverview, ObjectProperties, PageId, PropertyKind, PropertyRow, PropertySection,
+    PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderStats,
+    TableDataPage,
 };
 use shared::error::CoreError;
 
@@ -167,6 +167,7 @@ pub async fn load_properties(
             column_detail = all.into_iter().find(|c| c.name == ref_.name);
         }
         PropertyKind::Routine => {
+            // 例程种类未知：先按过程取，未命中再按函数取（`PropertyRef` 不带种类）。
             routine_source = metadata
                 .get_routine_source(
                     &ref_.conn_id,
@@ -177,11 +178,7 @@ pub async fn load_properties(
                 )
                 .await
                 .ok()
-                .flatten()
-                .or_else(|| {
-                    // 例程种类未知：按过程未命中再按函数取（`PropertyRef` 不带种类）。
-                    None
-                });
+                .flatten();
             if routine_source.is_none() {
                 routine_source = metadata
                     .get_routine_source(
@@ -240,6 +237,8 @@ pub async fn load_properties(
         }
         counts.push(("url", info.url));
     }
+    // Select 候选（骨架执行 provider 的补充查询时按行收集首列全量）。
+    let mut candidates: Vec<(&str, Vec<String>)> = Vec::new();
     if let Some(p) = provider {
         let pre_input = ProviderInput {
             target: &target,
@@ -248,17 +247,27 @@ pub async fn load_properties(
             db_type,
             stats,
             counts: &counts,
+            candidates: &candidates,
             detail: None,
         };
+        // 补充查询结果按行数分流：单行 → 洞察 counts；多行 → Select 候选（首列全量）。
         for q in p.extra_queries(&pre_input) {
             if let Ok(res) = metadata
                 .execute_query(&ref_.conn_id, ref_.catalog.as_deref().unwrap_or("main"), &q.sql)
                 .await
             {
-                if let Some(first) = res.rows.first() {
-                    if let Some(v) = first.first() {
-                        counts.push((q.key, v.to_string()));
-                    }
+                if res.rows.is_empty() {
+                    continue;
+                }
+                let values: Vec<String> = res
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.first().map(|v| v.to_string()))
+                    .collect();
+                if values.len() == 1 {
+                    counts.push((q.key, values[0].clone()));
+                } else if !values.is_empty() {
+                    candidates.push((q.key, values));
                 }
             }
         }
@@ -273,6 +282,7 @@ pub async fn load_properties(
                 db_type,
                 stats,
                 counts: &counts,
+                candidates: &candidates,
                 detail: column_detail
                     .as_ref()
                     .map(|c| c as &dyn std::any::Any),
@@ -419,9 +429,15 @@ fn fallback_properties(
             properties.push(row("归属域", source));
             properties.push(row("驱动", driver));
         }
-        PropertyKind::Catalog | PropertyKind::Schema => {
+        PropertyKind::Catalog => {
             properties.push(row("名称", ref_.name.clone()));
-            properties.push(row("类型", "Catalog/Schema"));
+            properties.push(row("类型", "Catalog"));
+            properties.push(row("归属域", source));
+            properties.push(row("限定名", qualify(ref_)));
+        }
+        PropertyKind::Schema => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("类型", "Schema"));
             properties.push(row("归属域", source));
             properties.push(row("限定名", qualify(ref_)));
         }
@@ -434,7 +450,7 @@ fn fallback_properties(
         PropertyKind::Column => {
             properties.push(row("名称", ref_.name.clone()));
             properties.push(row("所属表", qualify(ref_)));
-            properties.push(row("提示", "通用展示（驱动 provider 未注册）"));
+            properties.push(row("提示", "该驱动的列级属性未单独接入，当前为通用展示"));
         }
         PropertyKind::Sequence | PropertyKind::Trigger => {
             properties.push(row("名称", ref_.name.clone()));
@@ -478,15 +494,15 @@ fn fallback_overview(
 }
 
 /// 未注册 provider 时的通用类别（fallback：仅 General）。
-fn fallback_categories(kind: PropertyKind) -> Vec<PropertyCategory> {
-    let mut cats = vec![PropertyCategory {
+fn fallback_categories(kind: PropertyKind) -> Vec<PropertySection> {
+    let mut cats = vec![PropertySection {
         id: PageId::General,
         label: "通用".to_string(),
         enabled: true,
         table: PropertyTable { headers: Vec::new(), rows: Vec::new() },
     }];
     if matches!(kind, PropertyKind::Table | PropertyKind::View | PropertyKind::Routine) {
-        cats.push(PropertyCategory::disabled(PageId::Privileges, "权限"));
+        cats.push(PropertySection::disabled(PageId::Privileges, "权限"));
     }
     cats
 }
@@ -532,6 +548,7 @@ pub async fn apply_property_edit(
                 db_type: None,
                 stats: ProviderStats::default(),
                 counts: &[],
+                candidates: &[],
                 detail: column_detail
                     .as_ref()
                     .map(|c| c as &dyn std::any::Any),

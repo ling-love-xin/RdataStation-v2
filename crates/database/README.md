@@ -17,7 +17,7 @@
 - 连接生命周期衔接：展开即建连（未连接自动建连）；连接 / 断开状态与徽标数据
 - 分组 / 标签服务接口：`ConnectionOrgStore`（`engine::persistence`）的读写编排（归组 / 排序 / 打标签 / 主组）
 - 搜索：面板名称档（树内过滤）与 `SearchIndex` 后台任务（跨连接索引）
-- 属性面板取数：`load_properties`（实时内省 + 属性 L2 缓存）+ `PropertyRegistryImpl`（页签集合与灰置能力位）
+- 属性面板取数：`load_properties`（实时内省 + 属性 L2 缓存）+ provider 分派（`property_providers::global_registry()` 按驱动 type_id 选源；通用骨架取数 + 各驱动 provider 组装）
 - 表数据预览：`table_data` 分页抓取（排序 + 主键补齐 / `limit+1` 探测 / 真 COUNT / NULL 置灰）
 - 后台任务队列：`nav_jobs` 单工作线程（render 期零 I/O 的纪律底座）
 
@@ -42,7 +42,8 @@ pub mod nav_jobs;           // 后台任务队列：LoadChildren / LoadPropertie
                             //   / PrefetchColumns / GenerateDml / TestConnection
 pub mod model;              // NavPath / NavNode / NavSource / PropertyRef / PropertyRequest(含 data)
 pub mod nav_view;           // 视图状态（展开 / 选中 / 过滤 / 分页游标）与行交互载荷
-pub mod property_panel;     // load_properties（属性 + 数据同一次往返）+ PropertyRegistryImpl
+pub mod property_panel;     // load_properties（属性 + 数据同一次往返）+ provider 分派骨架
+pub mod property_providers; // 各驱动 provider 注册（pg/sqlite/duckdb/mysql）
 pub mod table_data;         // 数据预览分页核心：TableDataRequest / quote_ident / load_table_data
 
 pub use model::{NavPath, NavSource};
@@ -59,13 +60,13 @@ pub use model::{NavPath, NavSource};
 
 ## 接线关系
 
-- **workbench → database**：`panels/nav.rs` 消费 `nav_view` 状态 + `navigator_service`（经 `nav_jobs` 入队）；`panels/editor.rs` 属性面板与拖拽落点经 `Shared` 桥请求属性 / 打开查询；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
-- **database → property（rds-property）**：`load_properties` 是数据生产者，`PropertyRegistryImpl` 是注册表实现；渲染方（workbench）只消费描述模型，三方互不依赖视图。
+- **workbench → database**：`panels/nav.rs` 消费 `nav_view` 状态 + `navigator_service`（经 `nav_jobs` 入队）；`panels/property_panel.rs`（`PropertyHostPanel`）经 `Shared` 桥请求属性；Quick Open `ShowProperties` 构造 `PropertyRequest`（`data: None`，数据页懒加载）。
+- **database → property（rds-property）**：`load_properties` 是数据生产者（通用骨架取数 + provider 分派），provider（`property_providers/`）实现 `PropertyProvider` trait；渲染方（workbench）只消费 `ObjectProperties`，三方互不依赖视图。
 - **database → engine**：驱动内省走 `MetadataBrowser`；L2 缓存与分组 / 标签落库走 `engine::persistence`；`engine` 不回依赖本 crate。
 
 ## 测试
 
-- crate 内单测：`nav_view` 状态机 / 分页 / 失败重试、`property_ref_of` 映射、`table_data` 转义与分页探测、`property_panel` 注册表与分区。
+- crate 内单测：`nav_view` 状态机 / 分页 / 失败重试、`property_ref_of` 映射、`table_data` 转义与分页探测、`property_panel` 骨架 / provider（含 PG roles/tablespaces 候选与编辑 SQL）。
 - 真机全链路（`crates/workbench/tests/nav_property_real.rs`）：SQLite 3.53.2 / DuckDB v1.5.5 各跑同一参数化链路——测试连接 → 真实连接 → Catalog / 类别文件夹（带计数）/ 表 / 视图 / 列 → 属性面板 → 数据页（分页 / 排序 / NULL）→ 注册表灰置 → 二次加载 cache-aside。结果见 `docs/architecture/database/database-navigator-test-report-2026-10-03.md`。
 - 已知缺口：MySQL / PG 无端点（本环境）；大 schema（>500 对象）真机未做；GUI 像素级冒烟未做。
 

@@ -197,9 +197,6 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
-        Slot::NavigatorPropertyWidth => {
-            SettingValue::Number(settings.navigator.property_panel_width as f64)
-        }
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
         Slot::ResourcesKeepVersions => {
@@ -302,12 +299,6 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_show_scope(on, cx);
-            }
-            Slot::NavigatorPropertyWidth => {
-                let Some(rem) = value.as_number() else {
-                    return false;
-                };
-                Self::set_property_panel_width(rem as f32, cx);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters => return false,
@@ -532,11 +523,6 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
-    /// 属性面板宽度（rem 倍率）。
-    pub fn property_panel_width(cx: &App) -> f32 {
-        cx.global::<Settings>().navigator.property_panel_width
-    }
-
     /// 连接行是否显示标签 chip。
     pub fn show_tags(cx: &App) -> bool {
         cx.global::<Settings>().navigator.show_tags
@@ -710,16 +696,6 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.connection_defaults.lan_disable_tls = on;
-        }
-        let settings = cx.global::<Settings>().clone();
-        persist(&settings);
-    }
-
-    /// 设置并持久化属性面板宽度（rem 倍率）。
-    pub fn set_property_panel_width(width: f32, cx: &mut App) {
-        {
-            let settings = cx.global_mut::<Settings>();
-            settings.navigator.property_panel_width = width;
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);

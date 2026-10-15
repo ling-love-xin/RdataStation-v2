@@ -9,15 +9,16 @@
 //! （`nav_jobs::enqueue_properties`）→ 轮询回填 `PropertyState` → 渲染只读。
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
-use gpui_kit::StatefulInteractiveElement as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Size, Sizable as _, Theme};
@@ -30,7 +31,7 @@ use database::nav_jobs;
 use database::table_data::{DEFAULT_PAGE_LIMIT, TableDataRequest};
 use property::{ObjectProperties, PageId, PropertyRow, PropertySection, PropertyValueKind};
 use property::PropertyState;
-use workbench_shell::tree;
+use workbench_shell::{tree, ui};
 
 /// 属性行内编辑态（DBeaver 属性编辑：点击可编辑值 → 行内编辑控件）。
 #[derive(Clone)]
@@ -55,6 +56,10 @@ pub struct PropertyHostPanel {
     property_edit: Rc<RefCell<Option<PropertyEdit>>>,
     /// 子项区当前选中的类别索引（「子 tab + 内容」左右结构；切对象时重置 0）。
     active_category: Cell<usize>,
+    /// Select 常驻下拉：已挂订阅的行 id（渲染时按业务键查重，避免重复订阅）。
+    select_sub_keys: RefCell<HashSet<String>>,
+    /// Select 订阅句柄（保活；切对象时 clear 注销，避免跨对象残留回调）。
+    select_subs: RefCell<Vec<Subscription>>,
 }
 
 impl PropertyHostPanel {
@@ -68,6 +73,8 @@ impl PropertyHostPanel {
             property_target: Rc::new(RefCell::new(None)),
             property_edit: Rc::new(RefCell::new(None)),
             active_category: Cell::new(0),
+            select_sub_keys: RefCell::new(HashSet::new()),
+            select_subs: RefCell::new(Vec::new()),
         }
     }
 
@@ -116,6 +123,10 @@ impl PropertyHostPanel {
         }
         // 切对象回到第一子项（子项区「子 tab + 内容」左栏选中态归零）。
         self.active_category.set(0);
+        // 切对象：Select 常驻下拉的旧订阅注销（行 id 随属性集重建；旧 state 由
+        // `use_keyed_state` 在元素消失后自动回收，无需显式释放）。
+        self.select_sub_keys.borrow_mut().clear();
+        self.select_subs.borrow_mut().clear();
         nav_jobs::enqueue_properties(
             &key,
             request.property.clone(),
@@ -294,7 +305,7 @@ impl PropertyHostPanel {
     /// 页集合来自 [`PropertyRegistry`]（`PropertyRegistryImpl`），渲染只遍历页描述，
     /// 不按 `PropertyKind` 写分支；暂不支持页（权限 / 依赖）先绘制、置灰标注
     /// （`docs/architecture/property/property-module-spec.md` §8）。
-    fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
+    fn render_property_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let Some(target) = self.property_target.borrow().clone() else {
             let muted = cx.theme().colors.muted_foreground;
             return div()
@@ -312,7 +323,9 @@ impl PropertyHostPanel {
 
         let st = self.property.borrow();
 
-        let theme = cx.theme();
+        // clone 主题对象：渲染子树需要同时拿 `&Theme` 与 `&mut cx`（`cx.theme()` 会一直
+        // 借用 cx，直接传会 E0502；Theme 是轻量值类型，clone 成本可忽略）。
+        let theme = cx.theme().clone();
         let entity = cx.entity();
         // 表 / 视图两页签【属性 | 数据】；其余对象为单属性视图（无页签条）。
         let is_tabbed = matches!(
@@ -341,9 +354,9 @@ impl PropertyHostPanel {
         }
         if let Some(props) = &st.props {
             if active == PageId::Data {
-                body = body.child(self.render_data_page(entity.clone(), props, theme));
+                body = body.child(self.render_data_page(entity.clone(), props, &theme));
             } else {
-                body = body.child(self.render_property_view(entity.clone(), props, theme));
+                body = body.child(self.render_property_view(entity.clone(), props, &theme, window, cx));
             }
         }
 
@@ -422,11 +435,13 @@ impl PropertyHostPanel {
         entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Div {
         let mut body = div().v_flex().w_full().gap_3();
         body = body.child(self.render_overview_section(props, theme));
-        body = body.child(self.render_general_grid(entity.clone(), props, theme));
-        body = body.child(self.render_category_list(entity.clone(), props, theme));
+        body = body.child(self.render_general_grid(entity.clone(), props, theme, window, cx));
+        body = body.child(self.render_category_list(entity.clone(), props, theme, cx));
         body
     }
 
@@ -485,8 +500,8 @@ impl PropertyHostPanel {
         head = head
             .child(
                 div()
-                    .w(rems(0.625))
-                    .h(rems(0.625))
+                    .w(rems(ui::PROPERTY_STATUS_DOT_SIZE))
+                    .h(rems(ui::PROPERTY_STATUS_DOT_SIZE))
                     .flex_none()
                     .rounded_full()
                     .bg(status_color),
@@ -522,7 +537,7 @@ impl PropertyHostPanel {
                 div()
                     .v_flex()
                     .gap_1()
-                    .min_w(rems(4.5))
+                    .min_w(rems(ui::PROPERTY_CARD_MIN_WIDTH))
                     .flex_1()
                     .p_2()
                     .border_1()
@@ -559,7 +574,7 @@ impl PropertyHostPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .child(div().w(rems(5.5)).flex_none().text_color(muted).child(label.clone()))
+                    .child(div().w(rems(ui::PROPERTY_KEY_LABEL_WIDTH)).flex_none().text_color(muted).child(label.clone()))
                     .child(div().flex_1().min_w_0().text_color(fg).child(value.clone())),
             );
         }
@@ -584,6 +599,8 @@ impl PropertyHostPanel {
         entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Div {
         let muted = theme.colors.muted_foreground;
         let rows = &props.properties;
@@ -605,7 +622,7 @@ impl PropertyHostPanel {
         for chunk in rows.chunks(cols) {
             let mut line = div().h_flex().items_start().w_full().gap_2();
             for row in chunk {
-                line = line.child(self.render_property_cell(entity.clone(), row, theme));
+                line = line.child(self.render_property_cell(entity.clone(), row, theme, window, cx));
             }
             line = line.child(div().flex_1().min_w_0());
             section = section.child(line);
@@ -623,6 +640,7 @@ impl PropertyHostPanel {
         entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
+        cx: &mut Context<Self>,
     ) -> Div {
         let mut section = div()
             .v_flex()
@@ -649,14 +667,14 @@ impl PropertyHostPanel {
         // 左栏：竖排子标签（固定宽，类别切换）。
         let mut rail = div()
             .v_flex()
-            .w(rems(10.5))
+            .w(rems(ui::PROPERTY_CAT_RAIL_WIDTH))
             .flex_none()
             .border_1()
             .border_color(theme.colors.border)
             .rounded_md()
             .overflow_y_scrollbar();
         for (ix, s) in props.sections.iter().enumerate() {
-            rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme));
+            rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme, cx));
         }
         // 右栏：选中类别内容。
         let content = div().flex_1().min_w_0().child(self.render_category_section(&props.sections[active], theme));
@@ -666,8 +684,11 @@ impl PropertyHostPanel {
     }
 
     /// 左栏单个子标签（「子 tab + 内容」的 tab 本体）：
-    /// 选中态 = 底色 `list_active` + 左侧 2px 激活条（与导航树行同原语）；
-    /// 灰置态 = 置灰 + 「暂不可用」尾注，仍可点（切过去看占位说明）。
+    /// 选中态 = `Button` toggled 底色 + 左侧 2px 激活条（与导航树行同原语）；
+    /// 灰置态 = custom 变体置灰文字 + 「暂不可用」尾注，仍可点（切过去看占位说明）。
+    ///
+    /// 2026-10-15 由自绘可点行迁移到语义 `Button`：拿到 hover / 焦点 / 键盘（Enter/Space
+    /// 在 KeyUp 激活）；计数徽标 / 尾注外置行尾（不并入按钮命中区，保持右对齐）。
     fn render_category_tab(
         &self,
         entity: gpui::Entity<PropertyHostPanel>,
@@ -675,36 +696,46 @@ impl PropertyHostPanel {
         ix: usize,
         selected: bool,
         theme: &Theme,
-    ) -> gpui_kit::Stateful<Div> {
-        let fg = theme.colors.foreground;
+        cx: &mut Context<Self>,
+    ) -> Div {
         let muted = theme.colors.muted_foreground;
-        let selected_bg = theme.colors.list_active;
         let active_border = theme.colors.sidebar_accent;
         let count = s.table.rows.len();
 
+        // 按钮本体：id 用类别名（业务键，provider 增删类别时焦点 / hover 态不串位）。
+        let mut btn = Button::new(format!("property-cat-{}", s.label))
+            .ghost()
+            .toggled(selected)
+            .small()
+            .flex_1()
+            .min_w_0()
+            .label(s.label.clone());
+        // 灰置类别：`Button` 无公开前景色 setter，走 `ButtonCustomVariant` 保持置灰文字
+        //（hover / active 底色与可用行同一套，避免“灰置行点了没反馈”）。
+        if !s.enabled {
+            btn = btn.custom(
+                ButtonCustomVariant::new(&**cx)
+                    .foreground(muted)
+                    .hover(theme.colors.list_hover)
+                    .active(theme.colors.list_active),
+            );
+        }
         let mut tab = div()
-            // `.id()` 使元素进入 stateful 态（`StatefulInteractiveElement::on_click` 才可用）；
-            // 键用类别名而非索引，避免 provider 增删类别时 hover/焦点态串位。
-            .id(format!("property-cat-{}", s.label))
             .relative()
             .h_flex()
             .items_center()
             .gap_2()
             .w_full()
-            .h(rems(1.75))
-            .px_2()
-            .text_xs()
-            .cursor_pointer()
-            .rounded_md()
-            .when(selected, |el| el.bg(selected_bg).child(tree::active_bar(active_border)))
-            .when(!s.enabled, |el| el.text_color(muted))
+            .h(rems(ui::PROPERTY_CAT_ROW_HEIGHT))
+            .px_1()
+            .when(selected, |el| el.child(tree::active_bar(active_border)))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_ellipsis()
-                    .text_color(if selected { fg } else { muted })
-                    .child(s.label.clone()),
+                btn.on_click(move |_, _, app| {
+                    entity.update(app, |this, cx| {
+                        this.active_category.set(ix);
+                        cx.notify();
+                    });
+                }),
             );
         if !s.enabled {
             tab = tab.child(div().flex_none().text_xs().text_color(muted).child("暂不可用"));
@@ -717,12 +748,7 @@ impl PropertyHostPanel {
                     .child(count.to_string()),
             );
         }
-        tab.on_click(move |_, _, app| {
-            entity.update(app, |this, cx| {
-                this.active_category.set(ix);
-                cx.notify();
-            });
-        })
+        tab
     }
 
     /// 单个子项类别：可用 → 标题 + 表头 + 行；灰置 → 标题置灰 + 「暂不可用」占位。
@@ -874,7 +900,7 @@ impl PropertyHostPanel {
             .pb_1()
             .text_xs()
             .text_color(muted);
-        header = header.child(div().w(rems(2.0)).flex_none().child("#"));
+        header = header.child(div().w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH)).flex_none().child("#"));
         for (ix, col) in data.columns.iter().enumerate() {
             let sorted = current
                 .order_by
@@ -882,38 +908,41 @@ impl PropertyHostPanel {
                 .find(|(c, _)| c == &col.name)
                 .map(|(_, asc)| if *asc { " ↑" } else { " ↓" })
                 .unwrap_or("");
-            let mut cell = div()
-                .id(SharedString::from(format!("data-col-{}-{ix}", col.name)))
-                .flex_1()
-                .min_w_0()
-                .cursor_pointer()
-                .child(format!("{}{}", col.name, sorted));
             let entity = entity.clone();
             let col_name = col.name.clone();
             let current = current.clone();
-            cell = cell.on_click(move |_ev, _window, app| {
-                // 点击列头：同列切向 → 升序 → 降序（循环），回到第一页。
-                let asc = match current.order_by.iter().find(|(c, _)| c == &col_name) {
-                    Some((_, true)) => false,
-                    Some((_, false)) => true,
-                    None => true,
-                };
-                let mut order_by = current
-                    .order_by
-                    .iter()
-                    .filter(|(c, _)| c != &col_name)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                order_by.push((col_name.clone(), asc));
-                entity.update(app, |this, cx| {
-                    this.reload_properties_data(TableDataRequest {
-                        offset: 0,
-                        limit: current.limit,
-                        order_by,
-                    }, cx);
-                });
-            });
-            header = header.child(cell);
+            header = header.child(
+                // 列头排序迁移到语义 `Button`（2026-10-15）：拿到 hover / 焦点 / 键盘，
+                // 不再自绘可点 div；id 保留业务键（列名 + 下标，与行渲染一致）。
+                Button::new(SharedString::from(format!("data-col-{}-{ix}", col.name)))
+                    .ghost()
+                    .xsmall()
+                    .flex_1()
+                    .min_w_0()
+                    .label(format!("{}{}", col.name, sorted))
+                    .on_click(move |_ev, _window, app| {
+                        // 点击列头：同列切向 → 升序 → 降序（循环），回到第一页。
+                        let asc = match current.order_by.iter().find(|(c, _)| c == &col_name) {
+                            Some((_, true)) => false,
+                            Some((_, false)) => true,
+                            None => true,
+                        };
+                        let mut order_by = current
+                            .order_by
+                            .iter()
+                            .filter(|(c, _)| c != &col_name)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        order_by.push((col_name.clone(), asc));
+                        entity.update(app, |this, cx| {
+                            this.reload_properties_data(TableDataRequest {
+                                offset: 0,
+                                limit: current.limit,
+                                order_by,
+                            }, cx);
+                        });
+                    }),
+            );
         }
         body = body.child(header);
 
@@ -929,7 +958,7 @@ impl PropertyHostPanel {
                 .border_color(border)
                 .text_color(fg);
             line = line
-                .child(div().w(rems(2.0)).flex_none().text_color(muted).child(row_no.to_string()));
+                .child(div().w(rems(ui::PROPERTY_ROW_NUMBER_WIDTH)).flex_none().text_color(muted).child(row_no.to_string()));
             for cell in row {
                 line = match cell {
                     Some(v) => line.child(div().flex_1().min_w_0().py_px().child(v.clone())),
@@ -997,12 +1026,15 @@ impl PropertyHostPanel {
     /// 属性网格单元（General 双栏 / 三栏网格的一格：label 上 / 值下，紧凑竖排）。
     ///
     /// 编辑逻辑与旧整行版本一致：Boolean → Switch（点击即切换提交）；
-    /// Text / LongText → 未编辑时「值 + 编辑按钮」，编辑中 → 输入框 + 保存 / 取消。
+    /// Select → 常驻下拉（选中即提交，见下方分支）；Text / LongText →
+    /// 未编辑时「值 + 编辑按钮」，编辑中 → 输入框 + 保存 / 取消。
     fn render_property_cell(
         &self,
         entity: gpui::Entity<PropertyHostPanel>,
         row: &PropertyRow,
         theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Div {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
@@ -1046,6 +1078,67 @@ impl PropertyHostPanel {
                                         });
                                     }),
                             ),
+                    )
+            }
+            PropertyValueKind::Select if row.select_options.is_empty() => {
+                // 空候选回退文本展示（provider 未给候选时不做空下拉）。
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .text_xs()
+                    .child(label)
+                    .child(div().w_full().min_w_0().text_color(fg).child(row.value.clone()))
+            }
+            PropertyValueKind::Select => {
+                // 常驻下拉（不经编辑按钮，选中即提交）：`use_keyed_state` 在渲染管线内
+                // 惰性创建 SelectState（元素消失自动回收，无需手工清理）；Confirm 走公共
+                // `run_property_edit` 后台 ALTER 路径（与 Boolean / 文本同一提交链）。
+                let row_id = row.id.clone();
+                let options = row.select_options.clone();
+                let state = window.use_keyed_state(
+                    format!("prop-select-{row_id}"),
+                    cx,
+                    move |window, cx| {
+                        SelectState::new(SearchableVec::new(options), None, window, cx)
+                    },
+                );
+                // 首次渲染该行挂订阅（按业务键查重，切对象时在 show_properties 注销）。
+                if !self.select_sub_keys.borrow().contains(&row_id) {
+                    self.select_sub_keys.borrow_mut().insert(row_id.clone());
+                    let sub = cx.subscribe_in(
+                        &state,
+                        window,
+                        move |panel, _state, event: &SelectEvent<SearchableVec<String>>, _window, cx| {
+                            if let SelectEvent::Confirm(Some(value)) = event {
+                                if let Some(target) = panel.property_target.borrow().clone() {
+                                    panel.run_property_edit(target, row_id.clone(), value.to_string(), cx);
+                                }
+                            }
+                        },
+                    );
+                    self.select_subs.borrow_mut().push(sub);
+                }
+                // 渲染同步：模型值（编辑重载后变化）→ 控件选中；`set_selected_value` 不触发
+                // Confirm（程序化写入不发事件），不会造成重复提交。
+                if state.read(cx).selected_value().map(|v| v.as_str()) != Some(row.value.as_str()) {
+                    let value = row.value.clone();
+                    state.update(cx, |s, cx| {
+                        s.set_selected_value(&value, window, cx);
+                    });
+                }
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .text_xs()
+                    .child(label)
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Select::new(&state).w_full().placeholder("选择…")),
                     )
             }
             _ => {
@@ -1151,9 +1244,9 @@ impl Focusable for PropertyHostPanel {
 }
 
 impl Render for PropertyHostPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 先渲染（可变借用 cx），再取色（不可变借用）——顺序反过来会 E0502。
-        let panel = self.render_property_panel(cx);
+        let panel = self.render_property_panel(window, cx);
         let bg = cx.theme().colors.background;
         panel.id("property-host-panel").bg(bg).size_full()
     }

@@ -95,6 +95,19 @@ impl PropertySection {
             enabled: true,
         }
     }
+
+    /// 置灰分区（能力未实现；内容区显示「暂不可用」占位，DBeaver 同样有灰置页）。
+    pub fn disabled(id: PageId, label: &str) -> Self {
+        Self {
+            id,
+            label: label.to_string(),
+            enabled: false,
+            table: PropertyTable {
+                headers: Vec::new(),
+                rows: Vec::new(),
+            },
+        }
+    }
 }
 
 /// 表数据预览的一列（名称 + 类型）。

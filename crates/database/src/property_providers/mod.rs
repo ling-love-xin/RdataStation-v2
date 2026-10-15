@@ -16,8 +16,8 @@ pub mod pg;
 pub mod sqlite;
 
 use property::{
-    ObjectOverview, OverviewCard, OverviewStatus, PropertyCategory,
-    PropertyRow, PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderRegistry,
+    ObjectOverview, OverviewCard, OverviewStatus, PropertyRow, PropertySection,
+    PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderRegistry,
 };
 use std::sync::OnceLock;
 
@@ -117,11 +117,11 @@ pub(crate) fn connection_base_overview(input: &ProviderInput, driver_label: &str
     }
 }
 
-/// 连接级灰置类别（权限 / 事件触发器——先绘制，能力未实现）。
-pub(crate) fn connection_categories() -> Vec<PropertyCategory> {
+/// 连接级灰置分区（权限 / 事件触发器——先绘制，能力未实现）。
+pub(crate) fn connection_categories() -> Vec<PropertySection> {
     vec![
-        PropertyCategory::disabled(property::PageId::Privileges, "权限"),
-        PropertyCategory::disabled(property::PageId::Dependencies, "事件触发器"),
+        PropertySection::disabled(property::PageId::Privileges, "权限"),
+        PropertySection::disabled(property::PageId::Dependencies, "事件触发器"),
     ]
 }
 

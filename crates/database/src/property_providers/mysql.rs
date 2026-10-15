@@ -4,7 +4,7 @@
 
 use super::{connection_base_overview, editable_row, empty_table, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PageId, PropertyCategory, PropertyKind, PropertyProvider,
+    ObjectOverview, OverviewStatus, PageId, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
 };
 
@@ -43,7 +43,7 @@ impl PropertyProvider for MysqlConnectionProvider {
         ov
     }
 
-    fn categories(&self, _input: &ProviderInput) -> Vec<PropertyCategory> {
+    fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
         super::connection_categories()
     }
 
@@ -89,15 +89,15 @@ impl PropertyProvider for MysqlTableProvider {
         }
     }
 
-    fn categories(&self, _input: &ProviderInput) -> Vec<PropertyCategory> {
+    fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
         vec![
-            PropertyCategory { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertyCategory { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
-            PropertyCategory { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
-            PropertyCategory { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertyCategory { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertyCategory::disabled(PageId::Privileges, "权限"),
-            PropertyCategory::disabled(PageId::Dependencies, "依赖"),
+            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
+            PropertySection { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
+            PropertySection { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
+            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
+            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
+            PropertySection::disabled(PageId::Privileges, "权限"),
+            PropertySection::disabled(PageId::Dependencies, "依赖"),
         ]
     }
 
