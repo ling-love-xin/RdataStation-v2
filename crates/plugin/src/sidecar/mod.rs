@@ -13,6 +13,10 @@
 //! | [`driver`] | 会话之上的驱动调用：`driver.describe` / `query.execute` / `query.cancel` … |
 //! | [`meta`] | `meta.*` 的线格式与引擎类型翻译（导航树 / 属性面板的那一份） |
 //! | [`method`] | 协议 method 常量表 + 声明白名单（`is_allowed_declaration`，防拼写错误悄悄变“不支持”） |
+//! | [`host`] | 反向 Host API（`host.*`）：扩展请求宿主做事（凭据 / 通知 / 存储 / 日志 / SSH 隧道） |
+//! | [`host_provider`] | 宿主默认实现：storage 落盘 + log，其余诚实 `Unsupported` |
+//! | [`runtime`] | 运行时循环：tick 驱动事件落地 / 热插拔 / 回收 / 心跳 + 反向请求回帧 |
+//! | [`ssh`] | 正向 SSH 协议方法面（`x.ssh.*`）：SSH sidecar 插件的驱动契约（connect/exec/shell/forward/close） |
 //!
 //! # HTTP / 端口那条路已经删掉
 //!
@@ -21,8 +25,9 @@
 //! 同时去掉了 `rds-plugin` 对 `reqwest` 的依赖 —— 旧的那份 JSON-RPC 信封也随之下线
 //! （信封只该有一份，见 §3.5「契约重复两份」的教训）。
 //!
-//! [`health_checker`] 与 [`hot_reload_manager`] 仍是空文件：进程探活的基本盘已经由
-//! [`supervisor`] 的 `ping_all` 承担；热重载属于后面的事（P3/P5）。
+//! [`health_checker`] 仍是空文件：进程探活的基本盘已经由 [`supervisor`] 的 `ping_all`
+//! 承担；[`hot_reload_manager`] 已落为 [`crate::manager::PluginManager`] reload 能力的
+//! 薄封装（2026-10-15）。
 
 pub mod conn;
 pub mod driver;
@@ -38,4 +43,5 @@ pub mod process;
 pub mod proto;
 pub mod router;
 pub mod runtime;
+pub mod ssh;
 pub mod supervisor;
