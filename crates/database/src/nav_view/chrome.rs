@@ -18,6 +18,19 @@ impl NavView {
             // 同时把搜索词标脏（防抖落库，重启后搜索框回到原样）。
             let sub = cx.subscribe_in(&state, window, |this, _e, ev: &InputEvent, _w, cx| {
                 if matches!(ev, InputEvent::Change) {
+                    // 索引搜索排程走**事件路径**（render 是纯读路径，不再入队）：
+                    // 查询词只能由输入变化与恢复回填两条路改，这里覆盖「用户真敲键」；
+                    // 程序化 `set_value`（恢复面板状态）不发 `Change`，恢复路径单独排一次
+                    //（见 `ensure_panel_state_loaded`）。
+                    let filter = this
+                        .nav_search
+                        .as_ref()
+                        .map(|s| s.read(cx).value().to_string())
+                        .unwrap_or_default();
+                    let conn_filter =
+                        NavConnFilter::snapshot(&this.nav.borrow(), this.nav.borrow().source_filter);
+                    let conns = this.host.connections();
+                    this.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
                     this.mark_panel_state_dirty(cx);
                     cx.notify();
                 }
@@ -91,8 +104,23 @@ impl NavView {
                 let stale = self.nav_tag_input.is_none()
                     || self.nav_tag_input_for.as_deref() != Some(conn_id.as_str());
                 if stale {
-                    let current =
-                        crate::nav_store::list_tags(conn_id, self.host.project_root().as_deref());
+                    // 预填标签来自 `+` 按钮**事件回调**里的快照（`tag_editor_tags`）：
+                    // render 零 I/O——读库已从 render 路径移到 `+` 点击时完成。
+                    let current = {
+                        let view = self.nav.borrow();
+                        if view
+                            .tag_editor_tags
+                            .as_ref()
+                            .is_some_and(|(c, _)| c == conn_id)
+                        {
+                            view.tag_editor_tags
+                                .as_ref()
+                                .map(|(_, t)| t.clone())
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        }
+                    };
                     let text = current.join(", ");
                     let input =
                         cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔"));
@@ -238,18 +266,10 @@ impl NavView {
                         .child(format!("预热 {done}/{total}")),
                 )
                 .child(
-                    div()
-                        .id("nav-warm-cancel")
-                        .px_1()
-                        .rounded_md()
-                        .text_xs()
-                        .text_color(muted)
-                        .cursor_pointer()
-                        .hover({
-                            let h = cx.theme().colors.list_hover;
-                            move |s| s.bg(h)
-                        })
-                        .child("取消")
+                    Button::new("nav-warm-cancel")
+                        .ghost()
+                        .small()
+                        .label("取消")
                         .on_click(|_, _, _| nav_jobs::cancel_warm()),
                 )
             })
@@ -271,21 +291,14 @@ impl NavView {
                 // 新建分组：项目级自定义分组。
                 // 图标走资产（`folder-plus`）而不是 emoji `🗂＋`：emoji 是全库唯一的字形图标，
                 // 字宽随字体变，与同排的 `IconName` 按钮对不齐。
-                div()
-                    .id("nav-new-group")
-                    .w_6()
-                    .h_6()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover({
-                        let h = cx.theme().colors.list_hover;
-                        move |s| s.bg(h)
-                    })
-                    .child(nav_icon("icons/folder-plus.svg", ui::ICON_SIZE_SM, muted))
+                Button::new("nav-new-group")
+                    .ghost()
+                    .small()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/folder-plus.svg")
+                            .text_color(muted),
+                    )
                     .on_click({
                         let entity = cx.entity();
                         let host = self.host.clone();
@@ -414,12 +427,11 @@ impl NavView {
             .pl_2p5()
             .pr_2()
             .pb_1p5()
-            .child(self.nav_source_chip("全部", None, source_filter, fg, muted, accent, cx))
+            .child(self.nav_source_chip("全部", None, source_filter, muted, accent, cx))
             .child(self.nav_source_chip(
                 "项目",
                 Some(NavSource::Project),
                 source_filter,
-                fg,
                 muted,
                 accent,
                 cx,
@@ -428,7 +440,6 @@ impl NavView {
                 "全局",
                 Some(NavSource::Global),
                 source_filter,
-                fg,
                 muted,
                 accent,
                 cx,
@@ -437,7 +448,6 @@ impl NavView {
                 "共享",
                 Some(NavSource::Shared),
                 source_filter,
-                fg,
                 muted,
                 accent,
                 cx,
@@ -669,13 +679,16 @@ impl NavView {
     }
 
     /// 来源筛选 chip（全部 / 项目 / 全局 / 共享）；点击切换筛选，不占一级结构。
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// 用 `Button` 骨架（ghost + selected + toggled）：白拿 hover / 焦点 / 键盘 / aria；
+    /// 选中态视觉靠调用方样式（实底 accent 胶囊 / 未选中透明 + muted 字）——`Button` 的
+    /// `.styles()` 会在选中 / 悬停状态内**后置重放**调用方样式（button.rs:788 注释原文），
+    /// 所以选中实底在 hover / 选中态都不被组件样式覆盖。
     pub(super) fn nav_source_chip(
         &self,
         label: &str,
         target: Option<NavSource>,
         current: Option<NavSource>,
-        _fg: Hsla,
         muted: Hsla,
         accent: Hsla,
         cx: &mut Context<Self>,
@@ -693,36 +706,27 @@ impl NavView {
         } else {
             FontWeight::NORMAL
         };
-        // 未选中态在 hover 时给一层浅底，保持“可点”的反馈。
-        let hover_bg = if active {
-            accent
-        } else {
-            cx.theme().colors.list_hover
-        };
-        div()
-            .id(format!(
-                "nav-source-{}",
-                target.map(|s| s.code()).unwrap_or("all")
-            ))
-            .h_flex()
-            .items_center()
-            .px_1p5()
-            .py_0p5()
-            .rounded_full()
-            .bg(bg)
-            .text_xs()
-            .font_weight(weight)
-            .text_color(text)
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .child(label.to_string())
-            .on_click(move |_, _, app| {
-                entity.update(app, |this, cx| {
-                    this.nav.borrow_mut().source_filter = target;
-                    this.write_nav_filters(cx);
-                    cx.notify();
-                });
-            })
+        Button::new(format!(
+            "nav-source-{}",
+            target.map(|s| s.code()).unwrap_or("all")
+        ))
+        .ghost()
+        .xsmall()
+        .selected(active)
+        .toggled(active)
+        .label(label.to_string())
+        .rounded_full()
+        .px_1p5()
+        .bg(bg)
+        .text_color(text)
+        .font_weight(weight)
+        .on_click(move |_, _, app| {
+            entity.update(app, |this, cx| {
+                this.nav.borrow_mut().source_filter = target;
+                this.write_nav_filters(cx);
+                cx.notify();
+            });
+        })
     }
 
     /// 面板头连接状态徽标（原型建议①）：`N 连接 · M 在线`，hover 出逐连接明细。

@@ -351,6 +351,10 @@ impl NavView {
                     view.connected.insert(r.conn_id.clone());
                     view.prewarming.remove(&r.conn_id);
                     view.prefetched.clear();
+                    // 连接成功 = 「最近使用」：刷新会话内排序缓存（跨会话由最近记录
+                    // JSON 持久化恢复；`note_connection_used` 是事件路径 I/O，低频可接受）。
+                    view.recent.retain(|id| id != &r.conn_id);
+                    view.recent.insert(0, r.conn_id.clone());
                     // 连接成功 = 新的事实：清掉该连接**全部**节点的 attempted/errors/loading
                     // 痕迹（不止连接根）。此前连接未注册时，子层（schema 等）在渲染驱动的
                     // 渐进加载里吃到 CONN_NOT_FOUND / 排队超时，错误留在 attempted 里，
@@ -368,6 +372,7 @@ impl NavView {
                         nav_forget_attempt(&mut view, &k);
                     }
                 }
+                self.host.note_connection_used(&r.conn_id);
                 // 建连是后台调度式（修 UI 卡死）：展开动作发生在连接注册进
                 // `ConnectionManager` 之前，会先吃一次 `CONN_NOT_FOUND` 失败。
                 // 连接就绪后若不自动重载，树就一直空着——用户得收起再展开一次。
@@ -1095,11 +1100,18 @@ impl NavView {
         }
         if !state.filter_text.is_empty() {
             if let Some(input) = self.nav_search.clone() {
-                // `set_value` 会发 `InputEvent::Change`（订阅里 notify），下一帧的
-                // `render_nav` 就把本地过滤词重算成它了。
+                // 恢复回填：`set_value` 是程序化写值，**不发** `InputEvent::Change`
+                //（gpui-base `input/base/state.rs` 内部临时关事件），订阅里的搜索排程
+                // 不会被触发——所以这里**显式排一次**，否则恢复的搜索词永远等不到命中行；
+                // 下一帧 `render_nav` 自会把本地过滤词重算成它。
                 input.update(cx, |s, cx| {
                     s.set_value(state.filter_text.clone(), window, cx)
                 });
+                let filter = state.filter_text.clone();
+                let conn_filter =
+                    NavConnFilter::snapshot(&self.nav.borrow(), self.nav.borrow().source_filter);
+                let conns = self.host.connections();
+                self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
             }
         }
         cx.notify();
@@ -1220,13 +1232,14 @@ impl NavView {
             })
             .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
             .collect();
+        let recent = view.recent.clone();
         nav_order_members(&stored, |id| {
             conns
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| id.to_string())
-        })
+        }, &recent)
     }
 
     /// 拖拽落点动作：把连接移到 `scope_id` 容器的指定位置。
@@ -1407,11 +1420,13 @@ impl NavView {
             .iter()
             .map(|c| (c.id.clone(), c.name.clone()))
             .collect();
+        // 最近使用顺序（新→旧）：组内与未分组容器共用（手动排序优先原则不受影响）。
+        let recent = self.host.recent_connection_ids();
         for group in &groups {
             let stored = crate::nav_store::list_group_members_detailed(root.as_deref(), &group.id);
             let ids = nav_order_members(&stored, |id| {
                 names.get(id).cloned().unwrap_or_else(|| id.to_string())
-            });
+            }, &recent);
             for cid in &ids {
                 membership
                     .entry(cid.clone())
@@ -1432,6 +1447,7 @@ impl NavView {
         view.ungrouped_order = ungrouped_order;
         view.primary_group = primary_group;
         view.tags = tags;
+        view.recent = recent;
         view.groups_loaded = true;
     }
 

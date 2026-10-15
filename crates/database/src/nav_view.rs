@@ -47,7 +47,7 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Selectable as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -252,6 +252,9 @@ pub struct NavViewState {
     group_order: HashMap<String, Vec<String>>,
     /// 「未分组」容器里**已手动排序**的连接 ID（顺序）。未列出的回退到名称升序。
     ungrouped_order: Vec<String>,
+    /// 最近使用过的连接 ID（新→旧；来自宿主最近连接记录，`reload_nav_org` 缓存，
+    /// 连接成功时由 `note_connection_used` 更新）。「最近连接排序」的数据源。
+    recent: Vec<String>,
     /// 连接 ID → **显式主组** ID（仅用户显式指定过的连接；缺省回退到分组排序推导）。
     primary_group: HashMap<String, String>,
     /// 节点 key → 该路径下的对象总数（来自 `metadata_index` 计数或全量结果长度）。
@@ -289,6 +292,11 @@ pub struct NavViewState {
     group_picker_for: Option<String>,
     /// 正在内联编辑**标签**的连接 ID（None = 未打开；`+` 专用）。
     tag_editor_for: Option<String>,
+    /// 行内标签编辑器打开时的预填快照（连接 ID + 标签列表）。
+    ///
+    /// 由 `+` 按钮在**事件回调**里预读一次并缓存（render 零 I/O），
+    /// 编辑器打开期间直接复用；换连接打开时被新快照覆盖。
+    tag_editor_tags: Option<(String, Vec<String>)>,
     /// 正在内联「复制为模板」的连接 ID（None = 未打开）。
     copy_for: Option<String>,
     /// 正在内联重命名的分组 ID（None = 未打开）。

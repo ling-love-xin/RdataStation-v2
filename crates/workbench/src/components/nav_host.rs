@@ -26,6 +26,7 @@ use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightP
 use crate::panels::Shared;
 use crate::services::data_source_service::DataSourceService;
 use crate::services::{nav_runtime, workspace_loader};
+use engine::persistence::connection_store;
 
 /// 宿主端口实现（无状态外壳，状态全在 [`Shared`]）。
 pub struct WorkbenchNavHost {
@@ -154,6 +155,20 @@ impl NavHost for WorkbenchNavHost {
         // `nav_runtime::test_entry` 的签名与本类型一致（无状态函数：内部自取
         // `DataSourceService` 单例 + 进程级桥接运行时），故可直接作为函数指针使用。
         nav_runtime::test_entry
+    }
+
+    fn recent_connection_ids(&self) -> Vec<String> {
+        // 最近连接记录按「最后使用」维护（`add_connection` 提到列表头 + touch），
+        // 遍历顺序即新→旧；`None` conn_id（旧数据）跳过，未保存过的连接不在列。
+        connection_store::get_recent_connections()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|r| r.conn_id)
+            .collect()
+    }
+
+    fn note_connection_used(&self, conn_id: &str) {
+        connection_store::touch_recent_connection(conn_id);
     }
 
     // ==================== 连接增删改 / 共享 ====================

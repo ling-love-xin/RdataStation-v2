@@ -658,6 +658,8 @@ pub struct ConnectionRecord {
     pub db_type: String,
     pub url: String,
     pub last_used_at: chrono::DateTime<chrono::Utc>,
+    /// 连接记录 ID（`db_type-url` 之外的应用内连接 ID；`None` = 旧数据未回填）。
+    pub conn_id: Option<String>,
     pub description: Option<String>,
     pub driver_id: Option<String>,
     pub environment_id: Option<String>,
@@ -745,6 +747,7 @@ pub fn get_recent_connections() -> Result<Vec<ConnectionRecord>, std::io::Error>
             url: c.url.clone(),
             last_used_at: chrono::DateTime::from_timestamp(c.last_used as i64, 0)
                 .unwrap_or_else(chrono::Utc::now),
+            conn_id: c.conn_id.clone(),
             description: c.description.clone(),
             driver_id: c.driver_id.clone(),
             environment_id: c.environment_id.clone(),
@@ -778,6 +781,29 @@ pub fn remove_recent_connection(name: &str) -> Result<(), std::io::Error> {
     }
 
     store.save()
+}
+
+/// 连接**成功**时刷新「最近使用」时间（导航「最近连接」排序的数据源）。
+///
+/// 按应用内连接 ID（`conn_id`）定位记录，`add_connection` 自带 touch + 去重 + 提到列表头。
+/// 记录里没有该连接（从未保存过 / 旧数据未回填 `conn_id`）时静默跳过——排序回退名称序。
+pub fn touch_recent_connection(conn_id: &str) {
+    let Ok(mut store) = GLOBAL_STORE.lock() else {
+        return;
+    };
+    if store.load().is_err() {
+        return;
+    }
+    let Some(conn) = store
+        .get_connections()
+        .iter()
+        .find(|c| c.conn_id.as_deref() == Some(conn_id))
+        .cloned()
+    else {
+        return;
+    };
+    store.add_connection(conn);
+    let _ = store.save();
 }
 
 // 测试已外移至 src-tauri/tests/connection_store_tests.rs

@@ -416,14 +416,16 @@ pub(super) fn nav_step(ids: &[String], moving: &str, delta: i32) -> Option<Vec<S
     }
 }
 
-/// 容器成员顺序：手动排序过的按存储序号在前，**未排过的按名称升序在后**。
+/// 容器成员顺序：手动排序过的按存储序号在前，**未排过的按「最近使用 → 名称」在后**。
 ///
 /// `stored` 来自引擎的「成员 + 是否手动排序过」列表。显式段在这里再排一次序号
-/// （不依赖引擎的返回顺序），未排段按名称排——名称不在组织存储里，只能在这一层做。
+/// （不依赖引擎的返回顺序）；未排段里：`recent`（新→旧）中的成员按最近顺序在前，
+/// 其余按名称——「手动排序优先」原则不变（用户显式排的序不被最近使用覆盖）。
 /// 排序均稳定，同键保持传入顺序。纯函数，便于单测。
 pub(super) fn nav_order_members(
     stored: &[(String, Option<i64>)],
     name_of: impl Fn(&str) -> String,
+    recent: &[String],
 ) -> Vec<String> {
     let mut ordered: Vec<(i64, String)> = Vec::with_capacity(stored.len());
     let mut unset: Vec<String> = Vec::new();
@@ -434,15 +436,28 @@ pub(super) fn nav_order_members(
         }
     }
     ordered.sort_by_key(|(o, _)| *o);
+    // 未排段分区：最近使用过的（保持 `recent` 的新→旧顺序）与非最近（按名称）。
+    let recent_set: std::collections::HashSet<&str> =
+        recent.iter().map(|s| s.as_str()).collect();
+    let recent_used: Vec<String> = recent
+        .iter()
+        .filter(|id| unset.iter().any(|u| u == *id))
+        .cloned()
+        .collect();
+    let mut others: Vec<String> = unset
+        .into_iter()
+        .filter(|id| !recent_set.contains(id.as_str()))
+        .collect();
     // 名称大小写不敏感；同名再按 ID 定序，保证结果稳定。
-    unset.sort_by(|a, b| {
+    others.sort_by(|a, b| {
         name_of(a)
             .to_lowercase()
             .cmp(&name_of(b).to_lowercase())
             .then_with(|| a.cmp(b))
     });
     let mut out: Vec<String> = ordered.into_iter().map(|(_, id)| id).collect();
-    out.extend(unset);
+    out.extend(recent_used);
+    out.extend(others);
     out
 }
 

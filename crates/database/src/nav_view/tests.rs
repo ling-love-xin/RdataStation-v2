@@ -43,6 +43,8 @@ mod stub_host {
     pub(super) struct StubNavHost {
         connected: RefCell<HashSet<String>>,
         connections: Vec<ConnectionItem>,
+        /// 最近使用顺序（新→旧）：`note_connection_used` 维护，供排序用例断言。
+        recent: RefCell<Vec<String>>,
         /// 项目根：默认 `None`（面板级状态就没有落点）；恢复类用例用它注入临时目录。
         root: Option<PathBuf>,
     }
@@ -67,6 +69,7 @@ mod stub_host {
                     created_at: String::new(),
                     updated_at: String::new(),
                 }],
+                recent: RefCell::new(Vec::new()),
                 root: None,
             }
         }
@@ -117,6 +120,14 @@ mod stub_host {
         }
         fn connection_probe(&self) -> ConnectionProbe {
             |_, _| Err("stub 不做真探测".to_string())
+        }
+        fn recent_connection_ids(&self) -> Vec<String> {
+            self.recent.borrow().clone()
+        }
+        fn note_connection_used(&self, conn_id: &str) {
+            let mut recent = self.recent.borrow_mut();
+            recent.retain(|id| id != conn_id);
+            recent.insert(0, conn_id.to_string());
         }
         fn reload_connections(&self, _cx: &mut App) {}
         fn copy_connection(&self, _from_id: &str, _new_name: &str) -> Result<(), String> {
@@ -1649,16 +1660,43 @@ fn nav_order_members_puts_manual_first_then_names() {
         ("P_e".to_string(), None),
     ];
     assert_eq!(
-        nav_order_members(&stored, name),
+        nav_order_members(&stored, name, &[]),
         ids(&["P_d", "P_a", "P_c", "P_e", "P_b"])
     );
     // 全未排：纯名称序。
     let stored = vec![("P_b".to_string(), None), ("P_c".to_string(), None)];
-    assert_eq!(nav_order_members(&stored, name), ids(&["P_c", "P_b"]));
+    assert_eq!(nav_order_members(&stored, name, &[]), ids(&["P_c", "P_b"]));
     // 全已排：按序号（与本传入顺序无关）。
     let stored = vec![("P_b".to_string(), Some(1)), ("P_a".to_string(), Some(0))];
-    assert_eq!(nav_order_members(&stored, name), ids(&["P_a", "P_b"]));
-    assert!(nav_order_members(&[], name).is_empty());
+    assert_eq!(nav_order_members(&stored, name, &[]), ids(&["P_a", "P_b"]));
+    assert!(nav_order_members(&[], name, &[]).is_empty());
+}
+
+#[test]
+fn nav_order_members_puts_recent_before_names_but_after_manual() {
+    let name = |id: &str| id.to_string();
+    // 未排段里：最近使用过的（新→旧）在最前，其余按名称；手动排序仍优先。
+    let stored = vec![
+        ("P_a".to_string(), None),
+        ("P_b".to_string(), None),
+        ("P_c".to_string(), None),
+        ("P_d".to_string(), Some(0)),
+    ];
+    // 最近顺序 P_b → P_c：未排段 = P_b, P_c, P_a（P_a 按名称殿后）。
+    assert_eq!(
+        nav_order_members(&stored, name, &["P_b".into(), "P_c".into()]),
+        ids(&["P_d", "P_b", "P_c", "P_a"])
+    );
+    // 最近列表里含已手动排序的连接：不影响手动段，也不重复出现。
+    assert_eq!(
+        nav_order_members(&stored, name, &["P_d".into(), "P_b".into()]),
+        ids(&["P_d", "P_b", "P_a", "P_c"])
+    );
+    // 最近列表里的连接不在成员中：忽略。
+    assert_eq!(
+        nav_order_members(&stored, name, &["P_x".into()]),
+        ids(&["P_d", "P_a", "P_b", "P_c"])
+    );
 }
 
 #[test]

@@ -120,6 +120,14 @@ pub trait NavHost: 'static {
     /// **无状态**函数（内部自取服务单例与进程级桥接运行时），因而天然 `Send`。
     fn connection_probe(&self) -> ConnectionProbe;
 
+    // ==================== 最近连接（排序数据源） ====================
+
+    /// 最近使用过的连接 ID（新→旧；来自最近连接记录，可能不含从未保存过的连接）。
+    fn recent_connection_ids(&self) -> Vec<String>;
+
+    /// 记录一次连接**成功**（刷新「最近使用」时间）。静默失败。
+    fn note_connection_used(&self, conn_id: &str);
+
     // ==================== 连接增删改 / 共享 ====================
 
     /// 重载当前作用域可见连接并回填 [`NavHost::connections`]；

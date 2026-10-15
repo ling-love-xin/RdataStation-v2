@@ -232,7 +232,7 @@ impl NavView {
     /// 两处副作用跟着顺序走（[`Self::ensure_nav_loaded`] / [`Self::nav_schedule_index_search`]）：
     /// 把它们留在旧渲染路径上，切到虚拟列表后就会静默失效——展开不再加载、搜索不再排队。
     ///
-    /// 分组 / 成员尚未就绪时只返回搜索命中行（`cx` 仍需传入：搜索排程就在本函数里）。
+    /// 分组 / 成员尚未就绪时只返回搜索命中行。
     pub(crate) fn collect_nav_rows(
         &self,
         source_filter: Option<NavSource>,
@@ -266,10 +266,9 @@ impl NavView {
         let primary_gid =
             |conn_id: &str| nav_primary_scope(&membership, &primary_explicit, conn_id);
 
-        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
-
-        // 命中行排在最前（与旧的「结果区在树顶」同观感），且必须在**排程之后**取：
-        // 排程可能把过期命中清掉（查询词改了 / 太短），先取会把“刚被清掉的结果”多画一帧。
+        // 索引搜索排程不在 render 里做（render 是纯读路径）：查询词只能来自输入框
+        // 与恢复路径，已分别由 `InputEvent::Change` 订阅与 `ensure_panel_state_loaded`
+        // 在**事件路径**排队（用户敲键 / 恢复回填各触发一次）。
         let mut rows: Vec<NavRow> = self.collect_search_rows();
 
         // 运行时连接状态与错误集（分组头聚合健康度用；一次算完避免逐条查询）。
@@ -352,12 +351,13 @@ impl NavView {
             .iter()
             .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
             .collect();
+        let recent = self.nav.borrow().recent.clone();
         let ungrouped: Vec<&ConnectionItem> = nav_order_members(&stored, |id| {
             by_id
                 .get(id)
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| id.to_string())
-        })
+        }, &recent)
         .iter()
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .collect();
@@ -626,18 +626,10 @@ impl NavView {
             // （组 = 同一批业务库的集合，DBeaver 的组连接同款）。
             // 已连接 / 正在连接的跳过；失败的逐个落 notice（仍不阻塞其余）。
             .child(
-                div()
-                    .id(format!("nav-group-connectall-{group_id}"))
-                    .w_6()
-                    .h_6()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .child(nav_icon("icons/plug.svg", ui::ICON_SIZE_XS, muted))
+                Button::new(format!("nav-group-connectall-{group_id}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::empty().path("icons/plug.svg").text_color(muted))
                     .on_click({
                         let entity = entity.clone();
                         // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
@@ -678,22 +670,14 @@ impl NavView {
             // 命中区按行高上限取 24×24（`w_6 h_6`）：旧写法 10×10 不仅难点中，
             // 而且 `⇅` 字形漏写 `text_xs`，以 16px 字号渲染进 10px 盒必然溢出。
             .child(
-                div()
-                    .id(format!("nav-group-foldall-{group_id}"))
-                    .w_6()
-                    .h_6()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .child(nav_icon(
-                        "icons/chevrons-up-down.svg",
-                        ui::ICON_SIZE_XS,
-                        muted,
-                    ))
+                Button::new(format!("nav-group-foldall-{group_id}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/chevrons-up-down.svg")
+                            .text_color(muted),
+                    )
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app: &mut App| {
@@ -1253,7 +1237,6 @@ impl NavView {
             let entity = cx.entity();
             let host = self.host.clone();
             let cid = conn_id.clone();
-            let hover_bg = cx.theme().colors.list_hover;
             let mut ops = div()
                 .h_flex()
                 .items_center()
@@ -1267,19 +1250,14 @@ impl NavView {
                 let cid_retry = conn_id.clone();
                 let root_retry = project_root.clone();
                 ops = ops.child(
-                    div()
-                        .id(format!("nav-conn-retry-{}::{}", scope_key, conn.id))
-                        .w(rems(ui::NAV_ROW_ACTION_SIZE))
-                        .h(rems(ui::NAV_ROW_ACTION_SIZE))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .text_color(danger)
-                        .hover(move |s| s.bg(hover_bg))
-                        .child(nav_icon("icons/refresh-cw.svg", ui::ICON_SIZE_XS, danger))
+                    Button::new(format!("nav-conn-retry-{}::{}", scope_key, conn.id))
+                        .ghost()
+                        .xsmall()
+                        .icon(
+                            Icon::empty()
+                                .path("icons/refresh-cw.svg")
+                                .text_color(danger),
+                        )
                         .on_click(move |_, _, app: &mut App| {
                             let cid = cid_retry.clone();
                             let root = root_retry.clone();
@@ -1292,19 +1270,10 @@ impl NavView {
             }
             // `+`：仅**标签**行内编辑（`+` 只处理标签；归组走右键「移动到分组…」）。
             ops = ops.child(
-                div()
-                    .id(format!("nav-conn-addtag-{}::{}", scope_key, conn.id))
-                    .w(rems(ui::NAV_ROW_ACTION_SIZE))
-                    .h(rems(ui::NAV_ROW_ACTION_SIZE))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_color(muted)
-                    .hover(move |s| s.bg(hover_bg))
-                    .child(nav_icon("icons/plus.svg", ui::ICON_SIZE_XS, muted))
+                Button::new(format!("nav-conn-addtag-{}::{}", scope_key, conn.id))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::empty().path("icons/plus.svg").text_color(muted))
                     .on_click({
                         let entity = entity.clone();
                         let cid = cid.clone();
@@ -1312,12 +1281,16 @@ impl NavView {
                             let cid = cid.clone();
                             entity.update(app, |this, cx| {
                                 let mut view = this.nav.borrow_mut();
-                                view.tag_editor_for =
-                                    if view.tag_editor_for.as_deref() == Some(cid.as_str()) {
-                                        None
-                                    } else {
-                                        Some(cid.clone())
-                                    };
+                                let open = view.tag_editor_for.as_deref() != Some(cid.as_str());
+                                view.tag_editor_for = if open { Some(cid.clone()) } else { None };
+                                if open {
+                                    // 预填标签在**事件路径**读一次库并缓存：
+                                    // render 只读快照（`tag_editor_tags`），render 零 I/O。
+                                    let root = this.host.project_root();
+                                    let tags =
+                                        crate::nav_store::list_tags(&cid, root.as_deref());
+                                    view.tag_editor_tags = Some((cid.clone(), tags));
+                                }
                                 cx.notify();
                             });
                         }
@@ -1325,19 +1298,10 @@ impl NavView {
             );
             // `✎`：在对话框中编辑连接。
             ops = ops.child(
-                div()
-                    .id(format!("nav-conn-edit-{}::{}", scope_key, conn.id))
-                    .w(rems(ui::NAV_ROW_ACTION_SIZE))
-                    .h(rems(ui::NAV_ROW_ACTION_SIZE))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_color(muted)
-                    .hover(move |s| s.bg(hover_bg))
-                    .child(nav_icon("icons/pencil.svg", ui::ICON_SIZE_XS, muted))
+                Button::new(format!("nav-conn-edit-{}::{}", scope_key, conn.id))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::empty().path("icons/pencil.svg").text_color(muted))
                     .on_click({
                         let host = host.clone();
                         let cid = cid.clone();
@@ -1349,9 +1313,6 @@ impl NavView {
             // 连接 / 断开不进 hover 行操作：仅右键菜单提供（避免误触与视觉噪声）。
             ops
         };
-
-        // 徽标 tooltip 材料（接入 `Tooltip` 组件前，事实统一在属性面板展示）。
-        let _ = (&driver_name, danger);
 
         // 「设为主组」子菜单数据（仅归组的连接出现）：所属分组 + 当前主组 + 是否显式。
         let (menu_groups, menu_primary, menu_primary_explicit) = {
@@ -2579,25 +2540,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         if RevealTarget::from_hit(hit).is_some() {
             let hit_for_locate = hit.clone();
             row = row.child(
-                div()
-                    .id(format!("nav-locate-{id}"))
-                    .flex_none()
-                    .h_5()
-                    .px_1p5()
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .text_xs()
+                Button::new(format!("nav-locate-{id}"))
+                    .ghost()
+                    .xsmall()
+                    .label("定位")
                     .text_color(pri)
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover).text_color(fg))
                     .on_click(move |_, _, app| {
                         // 行本身的单击是「看属性」：点「定位」不该同时把属性面板也推出来。
                         app.stop_propagation();
                         let hit = hit_for_locate.clone();
                         entity_locate.update(app, |this, cx| this.reveal_hit(&hit, cx));
-                    })
-                    .child("定位"),
+                    }),
             );
         }
 

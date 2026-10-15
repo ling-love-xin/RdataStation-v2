@@ -19,7 +19,6 @@ impl NavView {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
-        let hover = cx.theme().colors.list_hover;
         let accent = cx.theme().colors.primary;
         let bg = cx.theme().colors.popover;
 
@@ -55,92 +54,65 @@ impl NavView {
             let cid = conn.id.clone();
             let root = root.clone();
             panel = panel.child(
-                div()
-                    .id(format!(
-                        "nav-org-g-{}::{}::{}",
-                        scope_key, group.id, conn.id
-                    ))
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .px_1()
-                    .py_0p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .child(
-                        // 勾选符号走资产（`check`）：与全应用的图标语言一致，不靠字体字形。
-                        div()
-                            .w_3()
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .when(checked, |slot| {
-                                slot.child(nav_icon("icons/check.svg", ui::ICON_SIZE_XS, accent))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(fg)
-                            .child(group.name.clone()),
-                    )
-                    .on_click({
-                        let entity = cx.entity();
-                        move |_, _, app: &mut App| {
-                            let gid = gid.clone();
-                            let cid = cid.clone();
-                            let root = root.clone();
-                            entity.update(app, |this, cx| {
-                                let in_group = this
-                                    .nav
-                                    .borrow()
-                                    .membership
-                                    .get(&cid)
-                                    .map(|gs| gs.iter().any(|g| g == &gid))
-                                    .unwrap_or(false);
-                                let result = if in_group {
-                                    crate::nav_store::remove_from_group(root.as_deref(), &gid, &cid)
-                                } else {
-                                    crate::nav_store::add_to_group(root.as_deref(), &gid, &cid)
-                                };
-                                match result {
-                                    Ok(()) => this.reload_nav_org(),
-                                    Err(e) => {
-                                        this.host.notice(format!("更新分组失败: {e}"), cx);
-                                    }
+                Button::new(format!(
+                    "nav-org-g-{}::{}::{}",
+                    scope_key, group.id, conn.id
+                ))
+                .ghost()
+                .xsmall()
+                .selected(checked)
+                .toggled(checked)
+                // B 方案（用户选定）：勾选行不用 Checkbox 方框，用「勾槽」——
+                // 选中 accent 勾，未选中透明占位（勾槽宽度恒等，文本不跳动）；
+                // 交互骨架白拿 Button 的 hover / 焦点 / 键盘 / aria。
+                .icon(
+                    Icon::empty()
+                        .path("icons/check.svg")
+                        .text_color(if checked { accent } else { transparent_black() }),
+                )
+                .label(group.name.clone())
+                .text_color(fg)
+                .on_click({
+                    let entity = cx.entity();
+                    move |_, _, app: &mut App| {
+                        let gid = gid.clone();
+                        let cid = cid.clone();
+                        let root = root.clone();
+                        entity.update(app, |this, cx| {
+                            let in_group = this
+                                .nav
+                                .borrow()
+                                .membership
+                                .get(&cid)
+                                .map(|gs| gs.iter().any(|g| g == &gid))
+                                .unwrap_or(false);
+                            let result = if in_group {
+                                crate::nav_store::remove_from_group(root.as_deref(), &gid, &cid)
+                            } else {
+                                crate::nav_store::add_to_group(root.as_deref(), &gid, &cid)
+                            };
+                            match result {
+                                Ok(()) => this.reload_nav_org(),
+                                Err(e) => {
+                                    this.host.notice(format!("更新分组失败: {e}"), cx);
                                 }
-                                cx.notify();
-                            });
-                        }
-                    }),
+                            }
+                            cx.notify();
+                        });
+                    }
+                }),
             );
         }
 
         // 新建分组并直接归入当前连接。
         let cid_new = conn.id.clone();
         panel = panel.child(
-            div()
-                .id(format!("nav-org-new::{}::{}", scope_key, conn.id))
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .px_1()
-                .py_0p5()
-                .rounded_md()
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover))
-                .child(
-                    div()
-                        .w_3()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .child(nav_icon("icons/plus.svg", ui::ICON_SIZE_XS, accent)),
-                )
-                .child(div().text_xs().text_color(accent).child("新建分组"))
+            Button::new(format!("nav-org-new::{}::{}", scope_key, conn.id))
+                .ghost()
+                .xsmall()
+                .icon(Icon::empty().path("icons/plus.svg").text_color(accent))
+                .label("新建分组")
+                .text_color(accent)
                 .on_click({
                     let entity = cx.entity();
                     let host = self.host.clone();

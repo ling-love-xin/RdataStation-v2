@@ -462,7 +462,7 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 | 单击节点 | 选中（**选中即聚焦导航面板**，供键盘操作） |
 | 单击箭头 | 展开 / 折叠（懒加载；连接根未建连时**先自动建连**） |
 | **双击对象** | **右侧属性面板**（DBeaver，§7） |
-| **双击连接** | 连接 / 断开切换 |
+| **双击连接** | **右侧属性面板**（连接项类型 / 驱动友好名；以架构 §连接双击为口径——不再做连接 / 断开切换，断开走右键菜单） |
 | 悬停 / 选中连接行 | 行尾浮出 **`+`（加标签）** 与行操作（断开、刷新、⋯）；常驻零 affordance |
 | **拖拽表 / 视图到编辑器** | 插入**限定名**（`db.table` / `schema.table`，同段去重）：落 **SQL 区**→插到光标处；落编辑区其它位置→追加到草稿末尾 |
 | **拖拽连接行到分组头** | 归组：拖到自定义分组头 = 加入该组（**保留**其它归属，多对多）；拖到「未分组」头 = **移出全部分组** |
@@ -506,7 +506,7 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
   内容档（`search_fts`，trigram，≥ 3 字）在 **Quick Open 的 `#` 档**（`workbench/src/quick_open/`），
   两档都不落编辑区，命中行单击开属性面板。
 - `↑↓` 选择、`Enter` 打开（✅ 已实现：`↑↓` 走 `nav_order`，命中行自 v11 起就在序列里；`Enter` 与行单击同一件事 = 开属性面板）；300ms 防抖、上限 500（防抖在 Quick Open 侧，导航面板目前不防抖：`nav_search_query_ready` ≥ 2 字即排一次索引搜索）。
-  **未实现**：`Esc` 清空搜索框（`nav_view` 里目前没有任何 `Escape` 绑定）。
+  `Esc` 清空搜索框（✅ 已实现：`crates/app/src/main.rs:269` `KeyBinding::new("escape", NavClearSearch, Some("database-nav"))`，清空并保持搜索框聚焦）。
 
 ### 6.4 状态持久化：SQLite 表 vs K-V 文件（选型建议）
 
@@ -651,20 +651,20 @@ flowchart TD
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 面板容器 | `crates/workbench/src/panels/`（`SidebarPanel::render_database_nav`，按现有面板归属实现，未独立拆文件） |
-| 左 Dock 装配 | `crates/workbench/src/panels/`（`SidebarPanel` 的 `LeftPanel::Database` 分支） |
-| 归属域 facet（原来源筛选 chips） | `database/src/nav_view.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部） |
-| 连接行瘦身 + 双通道徽标（v6/v7） | ✅ `database/src/nav_view.rs::{render_connection_row, nav_type_badge, NavBadgeStatus}`；驱动目录 `nav_runtime::driver_catalog()` → `Shared::driver_catalog`（`defer_in` 一次性加载，render 无 I/O） |
-| 徽标 hover 卡（v7） | ✅ `database/src/nav_view.rs::nav_badge_hover_card`（`gpui_kit::component::hover_card::HoverCard`，300ms 延迟） |
-| 归属域右对齐固定列 + 标签（名称下一行）+ 行内 `+`/`✎`（v7） | ✅ `database/src/nav_view.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化） |
-| 筛选 facet 入口（类型 / 驱动 / 标签）（v7） | ✅ `database/src/nav_view.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet, clear_nav_filters}` + `settings::model::NavigatorFilters`（`settings.json` 持久化）；搜索 token 解析 `parse_nav_search` |
-| 分组头健康度 / 全折叠（v6） | ✅ `database/src/nav_view.rs::{render_group_header, render_nav_tree}`（`已连接/总数` + 失败计数 + 全折叠） |
-| 多组引用样式 / 主组（v6） | ✅ `database/src/nav_view.rs::{render_nav_tree, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组显式指定走右键 `设为主组 ▸`（`ConnectionOrgStore::{set_primary_group, clear_primary_group, list_primary_group_pairs}`），未指定回退分组排序 |
-| 行操作悬停显隐（v6/v7） | ✅ `database/src/nav_view.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
+| 面板容器 | `crates/workbench/src/panels/`（`LeftPanel::Database` 分支 → `SidebarPanel::render_nav_panel`，装配点 `panels/mod.rs:79` `NavView::new`） |
+| 左 Dock 装配 | `crates/workbench/src/panels/mod.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支） |
+| 归属域 facet（原来源筛选 chips） | `database/src/nav_view/chrome.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部；Button 骨架 + selected/toggled） |
+| 连接行瘦身 + 双通道徽标（v6/v7） | ✅ `database/src/nav_view/rows.rs::render_connection_row` + `primitives.rs::nav_type_badge` + `nav_view.rs::NavBadgeStatus`；驱动目录 `nav_runtime::driver_catalog()` → `Shared::driver_catalog`（`defer_in` 一次性加载，render 无 I/O） |
+| 徽标 hover 卡（v7） | ✅ `database/src/nav_view/primitives.rs::nav_badge_hover_card`（`gpui_kit::component::hover_card::HoverCard`，300ms 延迟） |
+| 归属域右对齐固定列 + 标签（名称下一行）+ 行内 `+`/`✎`（v7） | ✅ `database/src/nav_view/rows.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化）；行尾 `+`/`✎`/重试为 `Button::ghost().xsmall()` |
+| 筛选 facet 入口（类型 / 驱动 / 标签）（v7） | ✅ `database/src/nav_view/chrome.rs::{render_nav, build_facet_items}` + `actions.rs::{nav_facet_candidates, apply_facet, clear_nav_filters}` + `settings::model::NavigatorFilters`（`settings.json` 持久化）；搜索 token 解析 `parse_nav_search` |
+| 分组头健康度 / 全折叠（v6） | ✅ `database/src/nav_view/rows.rs::{render_group_header, render_nav_body}`（`已连接/总数` + 失败计数 + 全折叠；全折叠 / 组内批量连接为 `Button::ghost().xsmall()`） |
+| 多组引用样式 / 主组（v6） | ✅ `database/src/nav_view/rows.rs::{render_nav_body, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组显式指定走右键 `设为主组 ▸`（`ConnectionOrgStore::{set_primary_group, clear_primary_group, list_primary_group_pairs}`），未指定回退分组排序 |
+| 行操作悬停显隐（v6/v7） | ✅ `database/src/nav_view/rows.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
 | 属性面板（连接项类型 / 驱动友好名） | ✅ `crates/database/src/property_panel.rs::load_properties`（`db_type` 行）+ `navigator_service::load_properties` + `panels/editor.rs::EditorPanel::render_property_panel` |
 | 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
 | 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
-| 分组一级视图 / 行内归组 | `database/src/nav_view.rs::{render_nav_tree, render_group_header, render_org_editor}` |
+| 分组一级视图 / 行内归组 | `database/src/nav_view/rows.rs::render_nav_body` + `editors.rs::render_group_editor`（多选行为 `Button` 骨架 + 勾槽 icon，见用户选定 B 方案） |
 | 右键菜单（连接 / 对象 / 分组） | `panels/` 的 `ContextMenuExt::context_menu`（`gpui_kit::component::menu`） |
 | 连接右键常驻模块入口（SQL 编辑器 / Mock / 洞察） | ✅ `database/src/nav_view.rs::render_connection_row` 菜单底部三项 → `SidebarEvent::{OpenSqlEditor, OpenRightPanel}`；`view.rs::init_workspace` 订阅处理（选中连接 + 右 Dock 展开切面板） |
 | 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels/` / `view.rs` 消费） |
