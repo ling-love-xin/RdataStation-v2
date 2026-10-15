@@ -308,6 +308,33 @@ pub struct CapabilitiesWasm {
     pub max_cpu_time_ms: Option<u64>,
     #[serde(default)]
     pub allowed_host_functions: Vec<String>,
+    /// 渲染计算轨（借鉴 dodo `mermaid source → SVG`，参考 `docs/architecture/plugin/README.md` §7）：
+    /// 声明后宿主把文档源文本交给 wasm 插件的渲染函数，插件返回渲染产物（SVG / HTML）。
+    /// **纯计算**，不需要 host function；函数签名约定：input = 源文本字节，output = 产物字节。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_document: Option<RenderDocumentSpec>,
+}
+
+/// 渲染计算能力声明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDocumentSpec {
+    /// wasm 导出函数名（宿主调它传源文本、收产物）。
+    #[serde(default = "default_render_function")]
+    pub function: String,
+    /// 支持的输入格式（`mermaid` / `dot` / `text` / …），宿主按此选渲染器。
+    #[serde(default)]
+    pub formats: Vec<String>,
+    /// 产出格式，默认 `svg`。
+    #[serde(default = "default_render_output")]
+    pub output_format: String,
+}
+
+fn default_render_function() -> String {
+    "render".into()
+}
+
+fn default_render_output() -> String {
+    "svg".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

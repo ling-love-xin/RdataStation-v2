@@ -26,6 +26,7 @@ pub mod installer;
 pub mod manager;
 pub mod manifest;
 pub mod permission;
+pub mod render;
 
 pub use dependency::*;
 pub use events::*;
