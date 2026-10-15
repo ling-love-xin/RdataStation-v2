@@ -89,7 +89,7 @@ impl Harness {
     fn dialog(
         &self,
         cx: &App,
-    ) -> Rc<rds_workbench::components::connection_dialog::ConnectionDialogState> {
+    ) -> Rc<rds_workbench::components::connection_dialog::ConnectionDialogState<EditorPanel>> {
         self.editor
             .read(cx)
             .dialog_state()

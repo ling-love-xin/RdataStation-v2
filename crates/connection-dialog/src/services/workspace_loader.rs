@@ -18,7 +18,7 @@ use engine::persistence::global_db::{GlobalConnectionInfo, GlobalDatabaseManager
 use engine::persistence::project_connection_store::{ProjectConnection, ProjectConnectionStore};
 use engine::persistence::project_db::ProjectDatabaseManager;
 
-use crate::view::ConnectionItem;
+use workbench_shell::model::ConnectionItem;
 
 /// 全局系统目录：`<RDS_HOME>/data/system`（global.db 与分析库 analytics.duckdb 均在此）。
 pub fn default_global_dir() -> PathBuf {

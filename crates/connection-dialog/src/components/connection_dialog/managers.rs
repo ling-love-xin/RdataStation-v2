@@ -72,11 +72,11 @@ fn load_auth_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)
         .flatten()
 }
 
-pub(crate) fn open_manager(
+pub(crate) fn open_manager<H: 'static>(
     kind: usize,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
-    entity: Entity<crate::panels::EditorPanel>,
-    shared: Shared,
+    entity: Entity<H>,
+    shared: Rc<dyn ConnectionDialogHost>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -85,10 +85,7 @@ pub(crate) fn open_manager(
     let shared_for_layer = shared.clone();
 
     // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
-    let project_root = shared
-        .project
-        .borrow()
-        .as_ref()
+    let project_root = shared.current_project()
         .map(|p| p.root.to_string_lossy().to_string());
 
     // 拉取列表（按 kind）。
@@ -644,18 +641,18 @@ pub(crate) fn open_manager(
                                 move |_, window, app| {
                                     window.close_dialog(app);
                                     // 宿主重绘：移除内层对话框
-                                    shared.notify_host(app);
+                                    shared.dialog_redraw(app);
                                 }
                             }),
                     ),
             )
             .on_close({
                 let shared = shared_layer.clone();
-                move |_, _, app| shared.notify_host(app)
+                move |_, _, app| shared.dialog_redraw(app)
             })
     });
     // 宿主重绘：内层（管理器）对话框由宿主 render 渲染，打开后需重建元素树。
-    shared.notify_host(cx);
+    shared.dialog_redraw(cx);
 }
 
 /// 刷新管理器列表（block_on stores + 引用计数）。

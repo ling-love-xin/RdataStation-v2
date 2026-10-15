@@ -84,7 +84,7 @@ fn select_type_prefills_project_root_for_file_db_only(cx: &mut TestAppContext) {
 
     let (_, cx) = cx.add_window_view(|_, _cx| Host);
     let cx: &mut VisualTestContext = cx;
-    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
 
     // 项目根（open() 会从会话注入；这里直接设置模拟已打开项目）。
     cx.update(|window, cx| {
@@ -145,7 +145,7 @@ fn save_flow_captures_then_appends_blank_draft(cx: &mut TestAppContext) {
 
     let (_, cx) = cx.add_window_view(|_, _cx| Host);
     let cx: &mut VisualTestContext = cx;
-    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
 
     // 初始 1 个空草稿：do_stage 的空草稿拦截口径（全空不追加；`is_empty_draft` 为
     // pub(crate)，集成测试按同口径内联判断）。

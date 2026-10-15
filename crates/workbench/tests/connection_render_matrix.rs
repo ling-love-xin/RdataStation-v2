@@ -63,7 +63,7 @@ impl Harness {
     }
 
     /// 面板持有的对话框状态（首次 open 后才有）。
-    fn dialog(&self, cx: &App) -> Rc<ConnectionDialogState> {
+    fn dialog(&self, cx: &App) -> Rc<ConnectionDialogState<EditorPanel>> {
         self.editor
             .read(cx)
             .dialog_state()

@@ -71,7 +71,7 @@ fn two_connections_staged_then_batch_committed(cx: &mut TestAppContext) {
 
     let service = DataSourceService::global().expect("单例可用");
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
 
     // 模拟「保存」= 仅暂存后的暂存栏：两条约定已暂存的非空草稿。
     // （对话框保存按钮内部走同一服务调用；`draft_to_save_input` 与 `collect` 同口径，
@@ -146,7 +146,7 @@ fn batch_commit_updates_editing_entry(cx: &mut TestAppContext) {
 
     let service = DataSourceService::global().expect("单例可用");
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
 
     // 先落库一条，再模拟编辑打开（草稿箱光标位 = saved_id 条目，批量时走 update）。
     let cid = rt
@@ -207,7 +207,7 @@ fn staging_lists_only_unsaved_drafts(cx: &mut TestAppContext) {
 
     let service = DataSourceService::global().expect("单例可用");
     let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
 
     // 库里先存一条真实连接（不得出现在暂存区），再塞一条历史残留的已保存条目（应被清理）。
     let saved = rt

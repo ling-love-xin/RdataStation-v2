@@ -25,6 +25,11 @@ paths.workspace = true
 # 依赖方向：workbench → workbench-shell；特性 crate（database / scratchpad）下沉视图后 → workbench-shell。
 workbench_shell.workspace = true
 
+# ===== 连接对话框组件 + 连接服务层（2026-10-15 自本 crate 下沉）=====
+# 依赖方向：workbench → connection-dialog → {engine, connection, shared, project, workbench_shell, gpui-kit}；
+# workbench `services/mod.rs` 经 `pub use` 重导保持 `crate::services::*` 路径不变。
+connection-dialog.workspace = true
+
 # ===== GPUI-kit 视图层（Round 19）=====
 gpui-kit.workspace = true
 

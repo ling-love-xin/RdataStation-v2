@@ -150,7 +150,7 @@ impl ConnectionDraft {
 
 
 
-impl ConnectionDialogState {
+impl<H: 'static> ConnectionDialogState<H> {
     // ===== 暂存列表（多连接连续编辑；原型设计 §2.2）=====
 
     /// UI 条目 → 持久化行（**不写密码**：记录结构本身无 password 字段）。

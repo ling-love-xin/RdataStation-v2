@@ -123,7 +123,7 @@ fn ds_type(id: &str, name: &str, icon: &str) -> DataSourceType {
 }
 
 /// 预置类型 + 驱动目录（不依赖全局库）。
-fn seed_catalog(dialog: &ConnectionDialogState) {
+fn seed_catalog(dialog: &ConnectionDialogState<Harness>) {
     *dialog.types.borrow_mut() = vec![
         ds_type("mysql", "MySQL", "🐬"),
         ds_type("postgresql", "PostgreSQL", "🐘"),
@@ -141,7 +141,7 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         seed_catalog(&dialog);
         dialog
     });
@@ -210,7 +210,7 @@ fn type_without_enabled_driver_is_refused(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         // 目录里有 Oracle 类型，但无对应驱动（与种子目录一致：只内置 4 个驱动）。
         *dialog.types.borrow_mut() = vec![
             ds_type("mysql", "MySQL", "🐬"),
@@ -260,7 +260,7 @@ fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         *dialog.types.borrow_mut() = vec![ds_type("mysql", "MySQL", "🐬")];
         // 两个驱动声明不同的认证方法：sqlx 只有 password；Official 额外声明 ssl。
         *dialog.drivers.borrow_mut() = vec![
@@ -482,7 +482,7 @@ fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         *dialog.types.borrow_mut() = vec![
             ds_type("sqlite", "SQLite", "🪶"),
             ds_type("mysql", "MySQL", "🐬"),
@@ -538,7 +538,7 @@ fn draft_snapshot_carries_type_and_driver_id(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         seed_catalog(&dialog);
         dialog
     });

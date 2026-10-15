@@ -2,7 +2,9 @@
 //! M4：数据库导航宿主桥；M7：Mock 面板宿主桥；M2：日志查看对话框）。
 
 pub mod cache_dialog;
-pub mod connection_dialog;
+// 连接对话框已下沉 `rds-connection-dialog`（2026-10-15）：此处重导保持
+// `crate::components::connection_dialog::*` 路径不变（editor.rs 等引用点零改动）。
+pub use connection_dialog::components::connection_dialog;
 pub mod group_form_dialog;
 pub mod insight_actions;
 pub mod log_dialog;

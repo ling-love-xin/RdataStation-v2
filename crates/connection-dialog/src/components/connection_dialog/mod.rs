@@ -50,7 +50,7 @@ use engine::persistence::id_prefix;
 use engine::persistence::network_store::NetworkConfig;
 
 use crate::commands::{DraftNext, DraftPrev, SaveConnection, TestConnection};
-use crate::panels::Shared;
+use crate::host::ConnectionDialogHost;
 use crate::services::data_source_service::DataSourceService;
 use connection::model::DataSource;
 
@@ -305,7 +305,10 @@ pub enum BusyOp {
 }
 
 /// 对话框状态（EditorPanel 持有；open_dialog builder 每次渲染重建 UI，状态持久）。
-pub struct ConnectionDialogState {
+///
+/// 泛型宿主 `H`：对话框不依赖具体面板类型，只要求宿主实现 [`ConnectionDialogHost`]
+/// （workbench 侧为 `EditorPanel`）；`Entity<H>` 用于通知宿主重绘，`Rc<dyn ConnectionDialogHost>` 承载宿主能力。
+pub struct ConnectionDialogState<H: 'static> {
     // ---- Phase A ----
     pub name: Entity<InputState>,
     pub url: Entity<InputState>,
@@ -376,6 +379,10 @@ pub struct ConnectionDialogState {
     pub groups: Rc<RefCell<Vec<ConnectionGroup>>>,
     /// 分组勾选态（id, name, checked）——多对多，保存时替换成员关系。
     pub group_checks: Rc<RefCell<Vec<(String, String, bool)>>>,
+    /// 分组卡「＋ 新建分组」输入行是否展开（纯 UI 态，不落库）。
+    pub group_new_open: Rc<Cell<bool>>,
+    /// 新建分组名称输入（提交时名称非空才建组）。
+    pub group_new_name: Entity<InputState>,
     /// SSL/TLS 模式。
     pub ssl_mode: Entity<SelectState<SearchableVec<SharedString>>>,
     /// 连接设置字段（网络型可编辑；与 Header URI 双向同步，URI 仍是落库权威）。
@@ -405,7 +412,7 @@ pub struct ConnectionDialogState {
     /// 侧栏「暂存列表」（`List` 组件；与类型列表同一套做法）。
     ///
     /// 同 `type_tree`：`open()` 里懒建（需要 `Rc<Self>` 与面板 / 宿主句柄）。
-    pub draft_list: Rc<RefCell<Option<Entity<ListState<DraftListDelegate>>>>>,
+    pub draft_list: Rc<RefCell<Option<Entity<ListState<DraftListDelegate<H>>>>>>,
     /// 当前编辑条目索引（暂存列表光标）。
     pub draft_cursor: Rc<Cell<usize>>,
     /// 是否已从 `connection_drafts` 表恢复过（进程内只恢复一次，避免覆盖会话内编辑）。
@@ -430,7 +437,7 @@ pub struct ConnectionDialogState {
     /// 侧栏「数据库类型」列表（`List` 组件；小节 = 分类）。
     ///
     /// `open()` 里懒建（委托要拿对话框自身的 `Rc`，`new()` 里还拿不到）。
-    pub type_tree: Rc<RefCell<Option<Entity<ListState<TypeTreeDelegate>>>>>,
+    pub type_tree: Rc<RefCell<Option<Entity<ListState<TypeTreeDelegate<H>>>>>>,
 }
 
 /// 创建一个**掩码显示**的单行输入（凭据：密码 / 私钥口令）。

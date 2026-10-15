@@ -62,7 +62,7 @@ impl DialogHarness {
     }
 
     /// 面板持有的对话框状态（首次 `open` 后才有）。
-    fn dialog(&self, cx: &gpui_kit::App) -> Rc<ConnectionDialogState> {
+    fn dialog(&self, cx: &gpui_kit::App) -> Rc<ConnectionDialogState<EditorPanel>> {
         self.editor
             .read(cx)
             .dialog_state()

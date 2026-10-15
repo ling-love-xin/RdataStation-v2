@@ -27,6 +27,8 @@ use rds_workbench::components::connection_dialog::{
     ProjectItemKind,
 };
 use rds_workbench::panels::{EditorPanel, ProjectActionRequest, Shared};
+// 宿主 trait（`handle_project_confirm` 现收 trait 对象；经 extern crate 路径导入）。
+use connection_dialog::host::ConnectionDialogHost;
 
 /// 测试宿主：持有对话框状态与 `Entity<EditorPanel>`（`open` 的宿主参数），
 /// 并在渲染时挂上对话框层（`open_dialog` 依赖窗口根是 `Root`）。
@@ -56,7 +58,7 @@ impl PickerHarness {
     }
 
     /// 面板持有的对话框状态（首次 `open` 后才有）。
-    fn dialog(&self, cx: &gpui_kit::App) -> Rc<ConnectionDialogState> {
+    fn dialog(&self, cx: &gpui_kit::App) -> Rc<ConnectionDialogState<EditorPanel>> {
         self.editor
             .read(cx)
             .dialog_state()
@@ -178,7 +180,7 @@ fn confirm_new_entry_requests_creation_and_clears_selection(cx: &mut TestAppCont
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        dialog.handle_project_confirm(None, &shared, window, cx)
+        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(None, &host, window, cx) }
     });
     assert!(!cleared, "空确认不应请求新增项目");
     assert!(
@@ -193,7 +195,7 @@ fn confirm_new_entry_requests_creation_and_clears_selection(cx: &mut TestAppCont
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        dialog.handle_project_confirm(Some(&new_label), &shared, window, cx)
+        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&new_label), &host, window, cx) }
     });
     assert!(requested, "应识别为「＋ 新增项目」");
     assert!(
@@ -233,7 +235,7 @@ fn confirm_project_writes_back_path(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        dialog.handle_project_confirm(Some(&label), &shared, window, cx)
+        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
     });
     assert!(!requested, "普通项目确认不应请求新增项目");
     let path_value =
@@ -260,7 +262,7 @@ fn confirm_open_folder_requests_folder_dialog(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        dialog.handle_project_confirm(Some(&label), &shared, window, cx)
+        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
     });
     assert!(requested, "应识别为动作项（打开现有目录…）");
     assert!(
@@ -305,7 +307,7 @@ fn confirm_no_project_switches_scope_to_global(cx: &mut TestAppContext) {
             let h = harness.read(cx);
             (h.dialog(cx), h.shared.clone())
         };
-        dialog.handle_project_confirm(Some(&label), &shared, window, cx)
+        { let host: Rc<dyn ConnectionDialogHost> = Rc::new(shared.clone()); dialog.handle_project_confirm(Some(&label), &host, window, cx) }
     });
     assert!(requested, "应识别为动作项（不需要项目）");
     // 作用域回到「仅全局」，项目路径清空、下拉选中清空。

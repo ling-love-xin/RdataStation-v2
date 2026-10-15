@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/app",
     "crates/workbench",
+    "crates/connection-dialog",
     "crates/project",
     "crates/engine",
     "crates/connection",
@@ -59,6 +60,7 @@ rds_search = { path = "crates/rds-search", package = "rds-search" }
 analytics_resource = { path = "crates/analytics_resource", package = "rds-analytics-resource" }
 workbench_shell = { path = "crates/workbench_shell", package = "rds-workbench-shell" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
+connection-dialog = { path = "crates/connection-dialog", package = "rds-connection-dialog" }
 
 # ===== 表现层 =====
 # gpui-kit 与 gpui 版本强绑定：gpui-kit / gpui-base / gpui-component /

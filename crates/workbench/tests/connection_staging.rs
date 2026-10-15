@@ -24,7 +24,7 @@ use rds_workbench::panels::{EditorPanel, Shared};
 struct Harness {
     _shared: Shared,
     editor: Entity<EditorPanel>,
-    dialog: Rc<ConnectionDialogState>,
+    dialog: Rc<ConnectionDialogState<Harness>>,
 }
 
 impl Harness {
@@ -35,7 +35,7 @@ impl Harness {
             cx.set_global(settings::model::Settings::default());
         }
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
-        let dialog = Rc::new(ConnectionDialogState::new(_window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(_window, cx));
         // 宿主重绘桥（生产由 `WorkbenchView::new` 注入）。
         let weak = cx.entity().downgrade();
         let bridge: Rc<dyn Fn(&mut App)> = Rc::new(move |cx: &mut App| {

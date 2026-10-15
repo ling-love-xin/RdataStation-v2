@@ -1,0 +1,38 @@
+[package]
+name = "rds-connection-dialog"
+version.workspace = true
+edition.workspace = true
+description = "连接对话框组件与连接服务层（自 rds-workbench 下沉：connection_dialog / connection_service / driver_service / data_source_service / workspace_loader / secret_integration）"
+
+[dependencies]
+# ===== 内部 crate（依赖键沿用迁移代码里的模块名）=====
+engine.workspace = true
+connection.workspace = true
+shared.workspace = true
+workbench_shell.workspace = true
+project.workspace = true
+settings.workspace = true
+# 运行时数据路径唯一解析点（全局系统库目录）
+paths.workspace = true
+
+# ===== GPUI-kit 视图层（connection_dialog 组件）=====
+gpui-kit.workspace = true
+
+# ===== Async 运行时 / 序列化（services 与对话框共用）=====
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# ===== 时间 / 数据库 =====
+chrono.workspace = true
+rusqlite.workspace = true
+
+# ===== 其他 =====
+percent-encoding.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }

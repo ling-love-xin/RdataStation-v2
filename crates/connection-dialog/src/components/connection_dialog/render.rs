@@ -15,10 +15,10 @@ struct BatchOutcome {
     /// 分组未同步条数（#28：成功提示降级 warning 级）。
     group_degrade: usize,
     /// 刷新后的连接列表（全部成功时写回共享列表）。
-    items: Vec<crate::view::ConnectionItem>,
+    items: Vec<workbench_shell::model::ConnectionItem>,
 }
 
-impl ConnectionDialogState {
+impl<H: 'static> ConnectionDialogState<H> {
     /// 订阅项目下拉确认事件（返回的句柄必须由 `EditorPanel` 持有，释放即取消）。
     ///
     /// 选中「＋ 新增项目」→ 置位 `Shared::project_new_request`（宿主 render 消费并开新建入口）；
@@ -28,9 +28,9 @@ impl ConnectionDialogState {
     /// `open()` 处于面板的 `update` 上下文中，在那里再 `update` 面板会触发重入 panic。
     pub fn subscribe_project_confirm(
         self: &Rc<Self>,
-        shared: &Shared,
+        shared: &Rc<dyn ConnectionDialogHost>,
         window: &mut Window,
-        cx: &mut Context<crate::panels::EditorPanel>,
+        cx: &mut Context<H>,
     ) -> Subscription {
         let state = Rc::clone(self);
         let shared_sel = shared.clone();
@@ -40,7 +40,34 @@ impl ConnectionDialogState {
             move |_editor, _sel, event: &SelectEvent<SearchableVec<ProjectItem>>, window, cx| {
                 let SelectEvent::Confirm(value) = event;
                 state.handle_project_confirm(value.as_ref(), &shared_sel, window, cx);
-                shared_sel.notify_host(cx);
+                shared_sel.dialog_redraw(cx);
+            },
+        )
+    }
+
+    /// 环境下拉确认订阅（切环境 → 异步刷新启用策略；`EditorPanel` 持有句柄）。
+    ///
+    /// 订阅建立放在面板入口而非 `open`（`open` 在面板 `update` 上下文内被调用，再 `update`
+    /// 面板会触发重入 panic——与 `subscribe_project_confirm` 同约定）。刷新走
+    /// `refresh_env_policies_async`：查库在工作线程，完成回主线程写清单 + 通知宿主重绘。
+    pub fn subscribe_env_confirm(
+        self: &Rc<Self>,
+        entity: &Entity<H>,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) -> Subscription {
+        let state = Rc::clone(self);
+        let entity = entity.clone();
+        cx.subscribe_in(
+            &self.env,
+            window,
+            move |_editor, _sel, event: &SelectEvent<SearchableVec<SharedString>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                let Some(value) = value else { return; };
+                let env_name = value.to_string();
+                // 切环境 → 异步刷新策略覆盖（`env_policies_loaded_for` 先置位，渲染期不再重复触发）。
+                state.refresh_env_policies_async(&env_name, &entity, window, cx);
+                let _ = entity.update(cx, |_, cx| cx.notify());
             },
         )
     }
@@ -52,8 +79,8 @@ impl ConnectionDialogState {
     /// 面板的请求入口（`EditorPanel::request_*`）建立。
     pub fn open(
         self: &Rc<Self>,
-        entity: Entity<crate::panels::EditorPanel>,
-        shared: Shared,
+        entity: Entity<H>,
+        shared: Rc<dyn ConnectionDialogHost>,
         editing_id: Option<String>,
         window: &mut Window,
         cx: &mut App,
@@ -69,10 +96,7 @@ impl ConnectionDialogState {
         self.blocked_hint.set(false);
         // 当前项目会话接入（C2）：项目根先取会话快照，编辑回读（项目侧 P_/GP_ 只存项目库）
         // 与项目栏预填共用它。
-        let session_root = shared
-            .project
-            .borrow()
-            .as_ref()
+        let session_root = shared.current_project()
             .map(|p| p.root.to_string_lossy().to_string());
         if let Some(id) = &editing_id {
             self.load_for_edit(id, session_root.as_deref(), window, cx);
@@ -158,6 +182,9 @@ impl ConnectionDialogState {
         let sec_overrides = self.policy_override_keys.clone();
         let env_policies = self.env_policies.clone();
         let env_policies_loaded_for = self.env_policies_loaded_for.clone();
+        // 分组新建输入行状态（`org_body` 卡片用；与「＋ 新建分组」输入行展开/提交联动）。
+        let group_new_open = self.group_new_open.clone();
+        let group_new_name = self.group_new_name.clone();
         // 连接设置字段（主机 / 端口 / 数据库）与同步标记：与 Header URI 双向同步。
         let host_input = self.host_input.clone();
         let port_input = self.port_input.clone();
@@ -166,10 +193,7 @@ impl ConnectionDialogState {
 
         // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
         // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
-        let session_now = shared
-            .project
-            .borrow()
-            .as_ref()
+        let session_now = shared.current_project()
             .map(|p| (p.name.clone(), p.root.to_string_lossy().to_string()));
         if *self.session_project.borrow() != session_now {
             *self.session_project.borrow_mut() = session_now.clone();
@@ -519,10 +543,7 @@ impl ConnectionDialogState {
 
             // 项目会话（供常规 Tab 组织卡片与 Header 共用）：已打开项目时 Header 只显示项目名
             // （悬停气泡展示完整路径）；未打开项目则保留可编辑的项目根输入。
-            let project_session: Option<(String, String)> = shared
-                .project
-                .borrow()
-                .as_ref()
+            let project_session: Option<(String, String)> = shared.current_project()
                 .map(|p| (p.name.clone(), p.root.to_string_lossy().to_string()));
 
             // ---- 单列分组大纲：共用的分组构造器（常规与高级 Tab 同一套排版）----
@@ -1394,6 +1415,54 @@ impl ConnectionDialogState {
                         }
                     }
 
+                    // 「＋ 新建分组」输入行（#7）：分组为项目级能力，未打开项目不提供入口。
+                    // 点击展开输入行（纯 UI 态 `group_new_open`），名称非空才创建（`submit_group_new`，
+                    // 与服务层 `create_group` 闭环——建完导航栏立即可见）。
+                    if project_session.is_some() {
+                        let mut group_new = div()
+                            .v_flex()
+                            .gap_0p5()
+                            .child(
+                                Button::new(SharedString::from("conn-group-new-toggle"))
+                                    .ghost()
+                                    .icon(IconName::Plus)
+                                    .label(tr("新建分组"))
+                                    .with_size(Size::XSmall)
+                                    .on_click({
+                                        let state = state.clone();
+                                        let entity = entity.clone();
+                                        move |_, _, app| {
+                                            state
+                                                .group_new_open
+                                                .set(!state.group_new_open.get());
+                                            entity.update(app, |_, cx| cx.notify());
+                                        }
+                                    }),
+                            );
+                        if group_new_open.get() {
+                            group_new = group_new.child(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(Input::new(&group_new_name).disabled(form_disabled))
+                                    .child(
+                                        Button::new(SharedString::from("conn-group-new-submit"))
+                                            .label(tr("创建"))
+                                            .with_size(Size::Small)
+                                            .disabled(form_disabled)
+                                            .on_click({
+                                                let state = state.clone();
+                                                move |_, window, app| {
+                                                    state.submit_group_new(window, app);
+                                                }
+                                            }),
+                                    ),
+                            );
+                        }
+                        org_body = org_body.child(group_new);
+                    }
+
                     // 首次使用引导（#29）：仅在“未选类型 + 名称/地址都还空”时出现，选完类型即自动消失
                     // （不占老手版面）；文案只陈述可执行动作与快捷键，不引外链。
                     let onboarding = {
@@ -1544,24 +1613,110 @@ impl ConnectionDialogState {
                                         .child(tr("暂存列表")),
                                 )
                                 .child(
-                                    // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
-                                    // 不再是一个可点的文本 div。
-                                    Button::new("staging-add")
-                                        .ghost()
-                                        .icon(IconName::Plus)
-                                        .label(tr("添加"))
-                                        .with_size(Size::XSmall)
-                                        .tooltip("新增一条空草稿（连续配置多个连接）")
-                                        .on_click({
-                                            let state = state.clone();
-                                            let shared = shared.clone();
-                                            let entity = entity.clone();
-                                            move |_, window, app| {
-                                                state.staging_add(window, app);
-                                                shared.notify_host(app);
-                                                let _ = entity.update(app, |_, cx| cx.notify());
-                                            }
-                                        })
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            // 「导出模板」（#5）：未保存且非空的草稿 → 模板 JSON → 剪贴板；
+                                            // 结果行提示条数。密码不入模板（见 `templates_export` 的过滤规则）。
+                                            Button::new("staging-export")
+                                                .ghost()
+                                                .label(tr("导出"))
+                                                .with_size(Size::XSmall)
+                                                .tooltip("导出未保存草稿为模板 JSON（写入剪贴板）")
+                                                .on_click({
+                                                    let state = state.clone();
+                                                    let entity = entity.clone();
+                                                    move |_, _, app| {
+                                                        let count = state.templates_export_count();
+                                                        let json = state.templates_export();
+                                                        app.write_to_clipboard(
+                                                            gpui_kit::ClipboardItem::new_string(
+                                                                json,
+                                                            ),
+                                                        );
+                                                        let level = if count > 0 {
+                                                            ResultLevel::Success
+                                                        } else {
+                                                            ResultLevel::Info
+                                                        };
+                                                        set_result(
+                                                            &state.result,
+                                                            level,
+                                                            if count > 0 {
+                                                                format!(
+                                                                    "已导出 {count} 条草稿为模板（剪贴板）"
+                                                                )
+                                                            } else {
+                                                                "暂存区没有未保存的草稿可导出"
+                                                                    .to_string()
+                                                            },
+                                                        );
+                                                        let _ =
+                                                            entity.update(app, |_, cx| cx.notify());
+                                                    }
+                                                }),
+                                        )
+                                        .child(
+                                            // 「导入模板」（#5）：读剪贴板 JSON → 校验 → 追加为草稿并选中；
+                                            // 密码留空（模板不含凭据），导入后提示补填。
+                                            Button::new("staging-import")
+                                                .ghost()
+                                                .label(tr("导入"))
+                                                .with_size(Size::XSmall)
+                                                .tooltip("从剪贴板导入模板 JSON（追加为草稿，密码请补填）")
+                                                .on_click({
+                                                    let state = state.clone();
+                                                    let entity = entity.clone();
+                                                    move |_, window, app| {
+                                                        let text = app
+                                                            .read_from_clipboard()
+                                                            .and_then(|item| {
+                                                                item.text().map(|s| s.to_string())
+                                                            })
+                                                            .unwrap_or_default();
+                                                        match state
+                                                            .templates_import(&text, window, app)
+                                                        {
+                                                            Ok(count) => set_result(
+                                                                &state.result,
+                                                                ResultLevel::Success,
+                                                                format!(
+                                                                    "已导入 {count} 条草稿（密码请补填）"
+                                                                ),
+                                                            ),
+                                                            Err(e) => set_result(
+                                                                &state.result,
+                                                                ResultLevel::Error,
+                                                                format!("导入失败：{e}"),
+                                                            ),
+                                                        }
+                                                        let _ =
+                                                            entity.update(app, |_, cx| cx.notify());
+                                                    }
+                                                }),
+                                        )
+                                        .child(
+                                            // 「添加草稿」：真按钮（hover / 焦点 / 键盘激活 / tooltip），
+                                            // 不再是一个可点的文本 div。
+                                            Button::new("staging-add")
+                                                .ghost()
+                                                .icon(IconName::Plus)
+                                                .label(tr("添加"))
+                                                .with_size(Size::XSmall)
+                                                .tooltip("新增一条空草稿（连续配置多个连接）")
+                                                .on_click({
+                                                    let state = state.clone();
+                                                    let shared = shared.clone();
+                                                    let entity = entity.clone();
+                                                    move |_, window, app| {
+                                                        state.staging_add(window, app);
+                                                        shared.dialog_redraw(app);
+                                                        let _ = entity.update(app, |_, cx| cx.notify());
+                                                    }
+                                                }),
+                                        )
                                 )
                         )
                         // 暂存区固定高度 + 内部滚动：条目再多也只在区域内滚动，不拉长对话框。
@@ -1941,7 +2096,7 @@ impl ConnectionDialogState {
                 let pass = pass.clone();
                 let driver = driver.clone();
                 let result = result.clone();
-                let state = ConnectionDialogState::cloned_state(
+                let state = ConnectionDialogState::<H>::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
@@ -1995,7 +2150,7 @@ impl ConnectionDialogState {
                                 busy_c.set(BusyOp::None);
                                 set_result_ok(&result_c, ok, msg);
                                 // 结果行 / 按钮状态变了：面板与宿主都要重绘（层挂在宿主 render 上）。
-                                shared_c.notify_host(app);
+                                shared_c.dialog_redraw(app);
                                 let _ = editor.update(app, |_, cx| cx.notify());
                             })
                             .ok();
@@ -2073,7 +2228,7 @@ impl ConnectionDialogState {
                         ResultLevel::Info,
                         format!("已暂存「{label}」，并新建空草稿（可继续填写下一条；保存并退出时统一提交）"),
                     );
-                    shared.notify_host(app);
+                    shared.dialog_redraw(app);
                     entity.update(app, |_, cx| cx.notify());
                 })
             };
@@ -2081,7 +2236,7 @@ impl ConnectionDialogState {
             // 「保存并退出」＝批量提交暂存栏全部 + 清空草稿箱 + 关闭。
             let do_batch_commit: Rc<dyn Fn(&mut Window, &mut App)> = {
                 let dialog = Rc::clone(&state);
-                let state = ConnectionDialogState::cloned_state(
+                let state = ConnectionDialogState::<H>::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
@@ -2198,10 +2353,7 @@ impl ConnectionDialogState {
                     }
                     let total = pending.len();
                     // 列表刷新用**当前会话项目根**（保存落点由各条目 project_path 决定，可不同）。
-                    let session_root = shared
-                        .project
-                        .borrow()
-                        .as_ref()
+                    let session_root = shared.current_project()
                         .map(|p| p.root.clone());
                     busy.set(BusyOp::Save);
                     set_result(&result, ResultLevel::Info, format!("保存并退出：提交 {total} 条…"));
@@ -2281,10 +2433,12 @@ impl ConnectionDialogState {
                                         ),
                                     );
                                 } else {
-                                    *shared_c.connections.borrow_mut() = outcome.items;
-                                    shared_c.refresh_mock_connections(app);
-                                    *shared_c.notice.borrow_mut() =
-                                        Some(format!("已保存 {} 条连接", outcome.total));
+                                    // 宿主副作用（连接列表 / Mock 刷新 / 状态栏提示）由宿主 trait 承载。
+                                    shared_c.apply_saved_connections(
+                                        outcome.items,
+                                        format!("已保存 {} 条连接", outcome.total),
+                                        app,
+                                    );
                                     // 全成功：清空草稿箱（用户决策：提交后不留草稿）。
                                     dialog_c.staging_clear(app);
                                     let msg = if outcome.group_degrade > 0 {
@@ -2299,7 +2453,7 @@ impl ConnectionDialogState {
                                     window.close_dialog(app);
                                 }
                                 // 宿主重绘：刷新层内容（暂存列表 + 连接列表），并让面板重算按钮态。
-                                shared_c.notify_host(app);
+                                shared_c.dialog_redraw(app);
                                 let _ = editor.update(app, |_, cx| cx.notify());
                             })
                             .ok();
@@ -2355,7 +2509,7 @@ impl ConnectionDialogState {
                                     set_result_ok(&state.result, false, format!("同步失败: {e}"));
                                 }
                             }
-                            shared.notify_host(app);
+                            shared.dialog_redraw(app);
                         }
                     })
             });
@@ -2414,7 +2568,7 @@ impl ConnectionDialogState {
                                         state.staging_flush(app);
                                         window.close_dialog(app);
                                         // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
-                                        shared.notify_host(app);
+                                        shared.dialog_redraw(app);
                                     }
                                 }),
                         )
@@ -2471,7 +2625,7 @@ impl ConnectionDialogState {
                     let state = state.clone();
                     move |_, _, app| {
                         state.staging_flush(app);
-                        shared.notify_host(app)
+                        shared.dialog_redraw(app)
                     }
                 })
                 .child(
@@ -2512,7 +2666,7 @@ impl ConnectionDialogState {
                                 let cur = state.draft_cursor.get();
                                 if cur > 0 {
                                     state.staging_select(cur - 1, window, app);
-                                    shared.notify_host(app);
+                                    shared.dialog_redraw(app);
                                 }
                             }
                         })
@@ -2524,7 +2678,7 @@ impl ConnectionDialogState {
                                 let len = state.drafts.borrow().len();
                                 if cur + 1 < len {
                                     state.staging_select(cur + 1, window, app);
-                                    shared.notify_host(app);
+                                    shared.dialog_redraw(app);
                                 }
                             }
                         })
@@ -2560,7 +2714,7 @@ impl ConnectionDialogState {
                                     // `select_type` 自带「无可用驱动不切换 + 结果行给原因」的守卫。
                                     state_for_key.select_type(&type_id, window, app);
                                     entity_for_key.update(app, |_, cx| cx.notify());
-                                    shared_for_key.notify_host(app);
+                                    shared_for_key.dialog_redraw(app);
                                 }
                             }
                         })

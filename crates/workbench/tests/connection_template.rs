@@ -84,7 +84,7 @@ fn driver(id: &str, type_id: &str, name: &str) -> Driver {
     }
 }
 
-fn seed_catalog(dialog: &ConnectionDialogState) {
+fn seed_catalog(dialog: &ConnectionDialogState<Harness>) {
     *dialog.drivers.borrow_mut() = vec![
         driver("mysql", "mysql", "MySQL (sqlx)"),
         driver("postgres", "postgresql", "PostgreSQL (sqlx)"),
@@ -92,7 +92,7 @@ fn seed_catalog(dialog: &ConnectionDialogState) {
 }
 
 /// 造一条可导出的草稿（含密码，用于验证导出脱敏）。
-fn seed_draft(dialog: &ConnectionDialogState, window: &mut Window, cx: &mut gpui_kit::App) {
+fn seed_draft(dialog: &ConnectionDialogState<Harness>, window: &mut Window, cx: &mut gpui_kit::App) {
     dialog
         .name
         .update(cx, |s, cx| s.set_value("生产 PG", window, cx));
@@ -119,7 +119,7 @@ fn export_excludes_password_and_import_restores(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         seed_catalog(&dialog);
         dialog
     });
@@ -169,7 +169,7 @@ fn import_rejects_invalid_payloads(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|window, cx| {
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let dialog = Rc::new(ConnectionDialogState::<Harness>::new(window, cx));
         seed_catalog(&dialog);
         dialog
     });

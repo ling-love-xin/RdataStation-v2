@@ -15,10 +15,10 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 
 /// 草稿列表委托（小节只有 1 个）。
-pub struct DraftListDelegate {
-    dialog: Rc<ConnectionDialogState>,
-    entity: Entity<crate::panels::EditorPanel>,
-    shared: Shared,
+pub struct DraftListDelegate<H: 'static> {
+    dialog: Rc<ConnectionDialogState<H>>,
+    entity: Entity<H>,
+    shared: Rc<dyn ConnectionDialogHost>,
     /// 行数 / 光标位（渲染期同步）。
     len: usize,
     /// 组件记录的行号（确认时用）。
@@ -27,11 +27,11 @@ pub struct DraftListDelegate {
     fingerprint: String,
 }
 
-impl DraftListDelegate {
+impl<H: 'static> DraftListDelegate<H> {
     pub(crate) fn new(
-        dialog: Rc<ConnectionDialogState>,
-        entity: Entity<crate::panels::EditorPanel>,
-        shared: Shared,
+        dialog: Rc<ConnectionDialogState<H>>,
+        entity: Entity<H>,
+        shared: Rc<dyn ConnectionDialogHost>,
     ) -> Self {
         Self {
             dialog,
@@ -83,7 +83,7 @@ impl DraftListDelegate {
     }
 }
 
-impl ListDelegate for DraftListDelegate {
+impl<H: 'static> ListDelegate for DraftListDelegate<H> {
     type Item = ListItem;
 
     fn items_count(&self, _section: usize, _: &App) -> usize {
@@ -143,7 +143,7 @@ impl ListDelegate for DraftListDelegate {
                 .tooltip(tr("删除这条草稿"))
                 .on_click(move |_, window, app| {
                     dialog.staging_remove(del_row, window, app);
-                    shared.notify_host(app);
+                    shared.dialog_redraw(app);
                     let _ = entity.update(app, |_, cx| cx.notify());
                     app.stop_propagation();
                 })
@@ -257,7 +257,7 @@ impl ListDelegate for DraftListDelegate {
         if let Some(ix) = ix {
             if ix.row != self.dialog.draft_cursor.get() && ix.row < self.len {
                 self.dialog.staging_select(ix.row, window, cx);
-                self.shared.notify_host(cx);
+                self.shared.dialog_redraw(cx);
                 let _ = self.entity.update(cx, |_, cx| cx.notify());
             }
         }
@@ -272,7 +272,7 @@ impl ListDelegate for DraftListDelegate {
         }
         // 与点击路径同一个入口：先把当前表单写回草稿，再载入目标草稿（原型 §2.2 规则 1）。
         self.dialog.staging_select(ix.row, window, cx);
-        self.shared.notify_host(cx);
+        self.shared.dialog_redraw(cx);
         let _ = self.entity.update(cx, |_, cx| cx.notify());
     }
 }

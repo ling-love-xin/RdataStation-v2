@@ -382,6 +382,22 @@ impl DataSourceService {
             .unwrap_or_default()
     }
 
+    /// 新建分组（项目级；未打开项目 → Err，分组只存在于项目库）。
+    ///
+    /// 与导航侧分组管理同一存储（`ConnectionOrgStore`）：对话框内新建的分组
+    /// 导航栏立即可见（#7 闭环）。返回新分组 id，目录刷新由调用方负责。
+    pub fn create_group(
+        &self,
+        name: &str,
+        description: &str,
+        project_path: Option<&str>,
+    ) -> Result<String, CoreError> {
+        let store = open_org_store(self.global_db, project_path)?;
+        let id = id_prefix::generate_pid("grp");
+        store.create_group(&id, name, (!description.is_empty()).then_some(description))?;
+        Ok(id)
+    }
+
     /// 某连接所属分组 id（项目级；未打开项目返回空）。
     pub fn groups_of(&self, conn_id: &str, project_path: Option<&str>) -> Vec<String> {
         open_org_store(self.global_db, project_path)

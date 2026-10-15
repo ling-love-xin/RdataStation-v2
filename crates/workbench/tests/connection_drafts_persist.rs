@@ -80,7 +80,7 @@ fn drafts_survive_restart_and_drop_password(cx: &mut TestAppContext) {
     let harness = slot.borrow().clone().expect("harness 已创建");
 
     // 2) 会话一：填写两条草稿（含密码）并触发持久化。
-    let d1 = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let d1 = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Harness>::new(window, cx)));
     cx.update(|window, cx| {
         d1.name.update(cx, |s, cx| s.set_value("草稿A", window, cx));
         d1.url
@@ -106,7 +106,7 @@ fn drafts_survive_restart_and_drop_password(cx: &mut TestAppContext) {
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
 
     // 3) 会话二（模拟重启）：新状态从库恢复。
-    let d2 = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+    let d2 = cx.update(|window, cx| Rc::new(ConnectionDialogState::<Harness>::new(window, cx)));
     cx.update(|window, cx| d2.staging_restore(window, cx));
 
     let drafts = cx.update(|_, _cx| d2.drafts.borrow().clone());

@@ -9,11 +9,17 @@
 //! - `editor_files`：编辑器的系统文件对话框（A9 打开 / 另存为）
 //! - `editor_connections`：编辑器的连接端口（B1 连接列表 + 自动建连）
 //! - `editor_channels`：【B13】编辑器的执行通道端口（源库 / 本地加速 / 联邦 的门控真值）
+//! - `editor_lsp`：【LSP】编辑器的语言服务端口（探测 Python → 起 jedi-language-server → 文档 ↔ 会话）
+//!
+//! 下沉（2026-10-15）：`connection_service` / `data_source_service` / `driver_service` /
+//! `workspace_loader` / `secret_integration` 已迁至 `rds-connection-dialog`（只依赖 engine /
+//! connection / shared / workbench_shell）。此处 `pub use` 重导，保持 `crate::services::*` 路径不变，
+//! 本 crate 内既有引用点（connection_dialog / nav_host / editor_exec / nav_runtime / view 等）零改动。
 
-pub mod connection_service;
-pub mod data_source_service;
+pub use connection_dialog::services::connection_service;
+pub use connection_dialog::services::data_source_service;
 pub mod db_navigator;
-pub mod driver_service;
+pub use connection_dialog::services::driver_service;
 pub mod editor_channels;
 pub mod editor_completion;
 pub mod editor_connections;
@@ -34,6 +40,6 @@ pub mod query_history;
 pub mod resource_jobs;
 pub mod result_service;
 pub mod scratchpad_meta;
-pub mod secret_integration;
+pub use connection_dialog::services::secret_integration;
 
-pub mod workspace_loader;
+pub use connection_dialog::services::workspace_loader;

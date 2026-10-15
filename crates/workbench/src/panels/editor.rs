@@ -18,7 +18,10 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::*;
 
-use crate::components::connection_dialog;
+// 连接对话框状态与宿主 trait 直接经 extern crate 路径导入——`crate::components::connection_dialog`
+// 的 use 会遮蔽 crate 名，导致 `connection_dialog::host` 解析失败（E0432）。
+use connection_dialog::host::ConnectionDialogHost;
+use connection_dialog::ConnectionDialogState;
 
 use crate::services::db_navigator::NavTable;
 // M5 草稿箱替换入口已收敛到侧栏搜索面板（chrome.rs），本面板不再直接入队草稿箱任务。
@@ -39,9 +42,11 @@ pub struct EditorPanel {
     focus_handle: FocusHandle,
     // Phase A：新建连接对话框状态（懒创建，open_dialog 由"新建连接"按钮触发）。
     // `Rc` 包装：对话框内部（暂存列表 / 管理器等）需把状态句柄 clone 进回调。
-    dialog: Option<Rc<connection_dialog::ConnectionDialogState>>,
+    dialog: Option<Rc<ConnectionDialogState<EditorPanel>>>,
     /// 连接对话框项目下拉确认订阅（由 `ensure_dialog_subscription` 持有；句柄释放即取消）。
     _dialog_sub: Option<Subscription>,
+    /// 环境下拉确认订阅（切环境刷新策略覆盖；仅持有，回调不重入面板）。
+    _env_sub: Option<Subscription>,
     /// Round 25：连接详情卡「分析库元数据树」缓存（哪个连接加载的 + 表列表）。
     ///
     /// 宿主 / 项目宿主 / Mock 宿主**不直接读写这里**：它们只递增
@@ -81,6 +86,7 @@ impl EditorPanel {
             focus_handle: cx.focus_handle(),
             dialog: None,
             _dialog_sub: None,
+            _env_sub: None,
             nav_for: Rc::new(RefCell::new(None)),
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             nav_cache_epoch: 0,
@@ -109,7 +115,7 @@ impl EditorPanel {
     }
 
     /// 连接对话框状态（懒创建：首次 `request_*` 时建立；宿主 / 测试只读访问）。
-    pub fn dialog_state(&self) -> Option<Rc<connection_dialog::ConnectionDialogState>> {
+    pub fn dialog_state(&self) -> Option<Rc<ConnectionDialogState<EditorPanel>>> {
         self.dialog.clone()
     }
 
@@ -119,7 +125,7 @@ impl EditorPanel {
     /// 而 `Root` 的 notify 不会让子视图重建元素树。
     pub fn request_new_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(
                 window, cx,
             )));
             // 新状态 → 旧订阅（若有）失去意义，重建。
@@ -129,7 +135,9 @@ impl EditorPanel {
         // 重新打开：重置元数据标记，强制下一次渲染重新拉取引用 / 类型 / 驱动目录。
         dialog.meta_refreshed.set(false);
         self.ensure_dialog_subscription(&dialog, window, cx);
-        dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
+        let shared_host: Rc<dyn ConnectionDialogHost> =
+            Rc::new(self.shared.clone());
+        dialog.open(cx.entity(), shared_host, None, window, cx);
         self.shared.notify_host(cx);
     }
 
@@ -141,7 +149,7 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(
                 window, cx,
             )));
             self._dialog_sub = None;
@@ -150,22 +158,31 @@ impl EditorPanel {
         // 重新打开：重置元数据标记，强制下一次渲染重新拉取（引用 / 类型 / 驱动目录）。
         dialog.meta_refreshed.set(false);
         self.ensure_dialog_subscription(&dialog, window, cx);
-        dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
+        let shared_host: Rc<dyn ConnectionDialogHost> =
+            Rc::new(self.shared.clone());
+        dialog.open(cx.entity(), shared_host, Some(conn_id), window, cx);
         self.shared.notify_host(cx);
     }
 
-    /// 确保项目下拉确认订阅已建立（只建一次；订阅句柄由本面板持有）。
+    /// 确保项目下拉 / 环境下拉确认订阅已建立（只建一次；订阅句柄由本面板持有）。
     ///
     /// 订阅建立放在面板入口而非 `ConnectionDialogState::open`：`open` 在面板 `update`
     /// 上下文内被调用，在那里再 `update` 面板会触发重入 panic。
     fn ensure_dialog_subscription(
         &mut self,
-        dialog: &Rc<connection_dialog::ConnectionDialogState>,
+        dialog: &Rc<ConnectionDialogState<EditorPanel>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 宿主能力经 trait 对象传入（对话框不依赖 Shared 具体类型；字段级 Rc 共享，语义一致）。
+        let shared_host: Rc<dyn ConnectionDialogHost> =
+            Rc::new(self.shared.clone());
         if self._dialog_sub.is_none() {
-            self._dialog_sub = Some(dialog.subscribe_project_confirm(&self.shared, window, cx));
+            self._dialog_sub = Some(dialog.subscribe_project_confirm(&shared_host, window, cx));
+        }
+        // 环境下拉确认订阅（切环境 → 刷新策略覆盖；句柄同样由面板持有）。
+        if self._env_sub.is_none() {
+            self._env_sub = Some(dialog.subscribe_env_confirm(&cx.entity(), window, cx));
         }
     }
 
@@ -219,7 +236,7 @@ impl Render for EditorPanel {
         // 宿主失效信号（切换连接 / 项目 / Mock 落库）在渲染入口消费：只读 Shared，不写别家数据。
         self.sync_shared_epochs();
         if self.dialog.is_none() {
-            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+            self.dialog = Some(Rc::new(ConnectionDialogState::new(
                 window, cx,
             )));
         }
@@ -362,9 +379,10 @@ impl Render for EditorPanel {
                     .child(
                         div().h_flex().items_center().gap_2().mt_2()
                             .child(
-                                div()
-                                    .id("delete-connection")
-                                    .cursor_pointer()
+                                Button::new("delete-connection")
+                                    .danger()
+                                    .outline()
+                                    .label("删除连接")
                                     .on_click(move |_, _, app| {
                                         // 项目作用域删除需要当前项目根（未打开项目时传 None）。
                                         let project_root = shared
@@ -393,14 +411,7 @@ impl Render for EditorPanel {
                                             }
                                         }
                                         entity.update(app, |_, cx| cx.notify());
-                                    })
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.colors.danger)
-                                            .child("删除连接"),
-                                    ),
+                                    }),
                             ),
                     )
                     .child(
@@ -442,7 +453,6 @@ impl Render for EditorPanel {
                                                 .gap_2()
                                                 .child(
                                                     div()
-                                                        .w(rems(8.125))
                                                         .flex_none()
                                                         .text_xs()
                                                         .child(col.name.clone()),

@@ -26,6 +26,7 @@ use gpui_kit::*;
 use database::model::PropertyRequest;
 
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
+use connection_dialog::host::ConnectionDialogHost;
 use scratchpad::{ScratchpadDiffView, ScratchpadFileInfoView, ScratchpadSearchView};
 // 属性面板（中央 Dock 独立 tab）：Shared 只持弱句柄与打开回调。
 use super::property_panel::PropertyHostPanel;
@@ -776,6 +777,34 @@ impl Shared {
         if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
             panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
+    }
+}
+
+/// 连接对话框宿主能力实现（`rds-connection-dialog` 的 `ConnectionDialogHost`）。
+/// 下沉后对话框不依赖 `Shared` 的具体类型，只依赖该 trait 的最小能力面。
+impl ConnectionDialogHost for Shared {
+    fn dialog_redraw(&self, cx: &mut App) {
+        self.notify_host(cx);
+    }
+
+    fn current_project(&self) -> Option<project::ui::OpenProject> {
+        self.project.borrow().clone()
+    }
+
+    fn request_new_project(&self, cx: &mut App) {
+        self.project_new_request.set(true);
+        self.notify_host(cx);
+    }
+
+    fn request_open_project(&self, cx: &mut App) {
+        self.project_open_request.set(true);
+        self.notify_host(cx);
+    }
+
+    fn apply_saved_connections(&self, items: Vec<ConnectionItem>, notice: String, cx: &mut App) {
+        *self.connections.borrow_mut() = items;
+        self.refresh_mock_connections(cx);
+        *self.notice.borrow_mut() = Some(notice);
     }
 }
 

@@ -26,12 +26,12 @@ pub(crate) const TYPE_CATEGORIES: [(&str, &str); 4] = [
 ];
 
 /// 类型树委托：小节 = 分类，行 = 类型。
-pub struct TypeTreeDelegate {
+pub struct TypeTreeDelegate<H: 'static> {
     /// 对话框状态：确认（点击 / Enter）时走与鼠标路径**同一个入口** `select_type`。
-    dialog: Rc<ConnectionDialogState>,
+    dialog: Rc<ConnectionDialogState<H>>,
     /// 面板实体 + 宿主桥（选中后要重绘：对话框层挂在宿主 render 上）。
-    entity: Entity<crate::panels::EditorPanel>,
-    shared: Shared,
+    entity: Entity<H>,
+    shared: Rc<dyn ConnectionDialogHost>,
     /// 过滤后的分类小节（标签 + 行）。
     sections: Vec<(&'static str, Vec<DataSourceType>)>,
     /// 驱动目录快照（判断「暂无驱动」；不参与指纹，随 sync 一起换）。
@@ -46,11 +46,11 @@ pub struct TypeTreeDelegate {
     fingerprint: String,
 }
 
-impl TypeTreeDelegate {
+impl<H: 'static> TypeTreeDelegate<H> {
     pub(crate) fn new(
-        dialog: Rc<ConnectionDialogState>,
-        entity: Entity<crate::panels::EditorPanel>,
-        shared: Shared,
+        dialog: Rc<ConnectionDialogState<H>>,
+        entity: Entity<H>,
+        shared: Rc<dyn ConnectionDialogHost>,
     ) -> Self {
         Self {
             dialog,
@@ -126,7 +126,7 @@ impl TypeTreeDelegate {
     }
 }
 
-impl ListDelegate for TypeTreeDelegate {
+impl<H: 'static> ListDelegate for TypeTreeDelegate<H> {
     type Item = ListItem;
 
     fn sections_count(&self, _: &App) -> usize {
@@ -257,6 +257,6 @@ impl ListDelegate for TypeTreeDelegate {
         // 与点击路径同一个入口：`select_type` 自带「无可用驱动不切换 + 结果行给原因」的守卫。
         self.dialog.select_type(&type_id, window, cx);
         let _ = self.entity.update(cx, |_, cx| cx.notify());
-        self.shared.notify_host(cx);
+        self.shared.dialog_redraw(cx);
     }
 }

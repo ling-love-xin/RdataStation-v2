@@ -1,6 +1,6 @@
 use super::*;
 
-impl ConnectionDialogState {
+impl<H: 'static> ConnectionDialogState<H> {
     /// 当前结果行级别（无提示 → `None`；UI 与测试共用）。
     pub fn result_level(&self) -> Option<ResultLevel> {
         self.result.borrow().as_ref().map(|l| l.level)
@@ -195,6 +195,9 @@ impl ConnectionDialogState {
             url_placeholder_for: Rc::new(RefCell::new(String::new())),
             driver_derived: Rc::new(RefCell::new(DriverDerived::default())),
             pending_driver_value: Rc::new(RefCell::new(None)),
+            // 分组卡「＋ 新建分组」输入行（与 mod.rs 字段声明对应）。
+            group_new_open: Rc::new(Cell::new(false)),
+            group_new_name: cx.new(|cx| InputState::new(window, cx)),
         }
     }
 
@@ -331,7 +334,7 @@ impl ConnectionDialogState {
     pub fn handle_project_confirm(
         &self,
         value: Option<&SharedString>,
-        shared: &Shared,
+        shared: &Rc<dyn ConnectionDialogHost>,
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
@@ -340,12 +343,12 @@ impl ConnectionDialogState {
         };
         let label = value.to_string();
         if label == PROJECT_NEW_LABEL {
-            shared.project_new_request.set(true);
+            shared.request_new_project(cx);
             self.set_project_value("", window, cx);
             return true;
         }
         if label == PROJECT_OPEN_LABEL {
-            shared.project_open_request.set(true);
+            shared.request_open_project(cx);
             self.set_project_value("", window, cx);
             return true;
         }
@@ -412,6 +415,97 @@ impl ConnectionDialogState {
         })()
         .unwrap_or_default();
         *self.env_policies.borrow_mut() = rows;
+    }
+
+    /// 按当前选中的环境**异步**加载启用策略（数据源：`environment_policies`）。
+    ///
+    /// 查库在工作线程（`background_executor`），完成回主线程写清单并通知宿主重绘；
+    /// 避免同步 `block_on` 阻塞 UI 线程（决策 #6）。环境为空 / 不存在 / 查库失败 → 清空清单。
+    /// 由 `subscribe_env_confirm`（切环境事件）驱动；程序化回填（编辑回读）仍走同步版兜底。
+    pub(crate) fn refresh_env_policies_async(
+        &self,
+        env_name: &str,
+        entity: &Entity<H>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let name = env_name.trim().to_string();
+        *self.env_policies_loaded_for.borrow_mut() = Some(name.clone());
+        if name.is_empty() {
+            self.env_policies.borrow_mut().clear();
+            return;
+        }
+        let policies_c = self.env_policies.clone();
+        let work = cx.background_executor().spawn(async move {
+            (|| {
+                let service = DataSourceService::global().ok()?;
+                let rt = tokio::runtime::Runtime::new().ok()?;
+                let policies = rt
+                    .block_on(service.list_environment_policies_by_name(&name))
+                    .ok()?;
+                Some(
+                    policies
+                        .into_iter()
+                        .filter(|p| p.enabled)
+                        .map(|p| {
+                            (
+                                p.policy_type.clone(),
+                                policy_type_label(&p.policy_type),
+                                policy_summary(p.policy_config.as_deref()),
+                            )
+                        })
+                        .collect(),
+                )
+            })()
+            .unwrap_or_default()
+        });
+        // 回主线程写清单：`spawn_in` 是实体上下文方法，用宿主实体包一层（订阅回调里
+        // 更新宿主实体是安全的——此处不在宿主的 update 上下文中）。
+        entity.update(cx, |_, cx| {
+            cx.spawn_in(window, async move |editor, cx| {
+                let rows = work.await;
+                cx.update(|_window, app| {
+                    *policies_c.borrow_mut() = rows;
+                    // 策略清单变了：对话框层挂宿主 render，通知宿主重绘即可见。
+                    let _ = editor.update(app, |_, cx| cx.notify());
+                })
+                .ok();
+            })
+            .detach();
+        });
+    }
+
+    /// 提交「＋ 新建分组」（名称非空才建；建后重载目录 + 同步勾选态）。
+    ///
+    /// 走服务层 `create_group`（与导航侧分组管理同一存储，建完导航栏立即可见——#7 闭环）；
+    /// 未打开项目时输入行不渲染，此处仍按「无项目根」防御（项目级能力）。
+    pub(crate) fn submit_group_new(&self, window: &mut Window, cx: &mut App) {
+        let name = self.group_new_name.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let root = self.project_path.read(cx).value().trim().to_string();
+        let project_path = if root.is_empty() { None } else { Some(root.as_str()) };
+        match DataSourceService::global()
+            .and_then(|s| s.create_group(&name, "", project_path))
+        {
+            Ok(_) => {
+                // 重载目录 + 同步勾选态（新组默认未勾选；多对多保存时以勾选态为准）。
+                if let Some(service) = DataSourceService::global().ok() {
+                    let groups =
+                        service.list_groups(if root.is_empty() { None } else { Some(root.as_str()) });
+                    *self.groups.borrow_mut() = groups;
+                    self.sync_group_checks();
+                }
+                self.group_new_open.set(false);
+                self.group_new_name
+                    .update(cx, |s, cx| s.set_value(String::new(), window, cx));
+                set_result(&self.result, ResultLevel::Success, format!("已创建分组「{name}」"));
+            }
+            Err(e) => {
+                set_result(&self.result, ResultLevel::Error, format!("创建分组失败：{e}"));
+            }
+        }
     }
 
     /// 切换策略覆盖勾选（按策略类型增删）。
@@ -509,7 +603,7 @@ impl ConnectionDialogState {
     pub(crate) fn pick_db_file(
         self: &Rc<Self>,
         create_new: bool,
-        entity: Entity<crate::panels::EditorPanel>,
+        entity: Entity<H>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -923,7 +1017,7 @@ pub(crate) struct ClonedDialogState {
     tags_input: Entity<InputState>,
 }
 
-impl ConnectionDialogState {
+impl<H: 'static> ConnectionDialogState<H> {
     pub(crate) fn cloned_state(
         _name: Entity<InputState>,
         _url: Entity<InputState>,
@@ -1323,9 +1417,15 @@ impl ClonedDialogState {
 mod tests {
     // 不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）；需用到的类型显式引入。
     use super::{
-        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope,
-        Driver, Environment, NetworkConfig,
+        AuthConfig, ConnectionDialogState, ConnectionDraft, ConnectionScope, Driver,
+        Environment, NetworkConfig, ResultLevel,
     };
+    use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::OnceLock;
+
+    use engine::migration::install_global_db_manager;
+    use engine::persistence::global_db::GlobalDatabaseManager;
     use gpui_kit::{
         IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
     };
@@ -1386,7 +1486,7 @@ mod tests {
 
     /// 构造对话框 + 注入引用列表 / 驱动目录，返回 `ClonedDialogState` 的等价句柄。
     fn dialog(cx: &mut VisualTestContext) -> super::ClonedDialogState {
-        let dialog = cx.update(|window, cx| ConnectionDialogState::new(window, cx));
+        let dialog = cx.update(|window, cx| ConnectionDialogState::<Host>::new(window, cx));
         cx.update(|_, _cx| {
             *dialog.auth_list.borrow_mut() = vec![auth_cfg("auth-1", "跳板机凭据")];
             *dialog.network_list.borrow_mut() = vec![net_cfg("net-1", "跳板")];
@@ -1430,7 +1530,7 @@ mod tests {
                 },
             ];
         });
-        super::ConnectionDialogState::cloned_state(
+        super::ConnectionDialogState::<Host>::cloned_state(
             dialog.name.clone(),
             dialog.url.clone(),
             dialog.user.clone(),
@@ -1584,19 +1684,123 @@ mod tests {
             "缺地址应拒绝"
         );
     }
+
+    /// 测试专用临时全局库单例（进程内一次，与 workbench 集成测试同一注入模式）。
+    static TEST_BASE: OnceLock<PathBuf> = OnceLock::new();
+    fn test_base_dir() -> PathBuf {
+        TEST_BASE
+            .get_or_init(|| {
+                let dir = std::env::temp_dir().join(format!(
+                    "rds_conn_dlg_test_{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).expect("create temp dir");
+                let rt = tokio::runtime::Runtime::new().expect("runtime");
+                let manager = rt
+                    .block_on(GlobalDatabaseManager::new(
+                        dir.join("global.db"),
+                        dir.join("analytics.duckdb"),
+                        2,
+                    ))
+                    .expect("init global db");
+                // 已有注入（其他测试）时忽略：全局单例进程内唯一。
+                let _ = install_global_db_manager(manager);
+                std::mem::forget(rt);
+                dir
+            })
+            .clone()
+    }
+
+    /// 新建分组（#7 重建验证）：非空名 → 服务层建组 → 目录重载 + 输入清空 + 成功提示。
+    /// 分组为项目级能力：先建项目根（`.RSmeta`）并把项目路径写进输入。
+    #[gpui_kit::test]
+    fn submit_group_new_creates_group_via_service(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let base = test_base_dir();
+        let project_root = base.join("proj-groups");
+        std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+        let root_str = project_root.to_string_lossy().to_string();
+
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let dialog = cx.update(|window, cx| {
+            let d = Rc::new(ConnectionDialogState::<Host>::new(window, cx));
+            d.project_path
+                .update(cx, |s, cx| s.set_value(root_str.clone(), window, cx));
+            d
+        });
+        cx.update(|window, cx| {
+            dialog
+                .group_new_name
+                .update(cx, |s, cx| s.set_value("测试分组".to_string(), window, cx));
+            dialog.submit_group_new(window, cx);
+        });
+        let (has, cleared, success) = cx.update(|_, cx| {
+            let has = dialog.groups.borrow().iter().any(|g| g.name == "测试分组");
+            let cleared = dialog.group_new_name.read(cx).value().is_empty();
+            let success = dialog
+                .result
+                .borrow()
+                .as_ref()
+                .map(|r| r.level) == Some(ResultLevel::Success);
+            (has, cleared, success)
+        });
+        assert!(has, "新分组应出现在目录");
+        assert!(cleared, "输入应清空");
+        assert!(success, "结果行应为成功级");
+    }
+
+    /// 空名早退：不建组、不改目录（名称输入为空时直接返回）。
+    #[gpui_kit::test]
+    fn submit_group_new_empty_name_is_noop(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let dialog =
+            cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
+        cx.update(|window, cx| {
+            dialog.submit_group_new(window, cx);
+        });
+        assert!(dialog.groups.borrow().is_empty(), "空名不应建组");
+    }
+
+    /// 策略异步刷新的空环境早退（#6 重建验证）：空名 → 清空清单 + 记录 `loaded_for`，不发查询。
+    #[gpui_kit::test]
+    fn refresh_env_policies_async_empty_name_clears(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (host_entity, cx) = cx.add_window_view(|_, _cx| Host);
+        let cx: &mut VisualTestContext = cx;
+        let dialog =
+            cx.update(|window, cx| Rc::new(ConnectionDialogState::<Host>::new(window, cx)));
+        // 预置一条清单，验证空环境会清空（而不是保留旧策略）。
+        cx.update(|_, _cx| {
+            *dialog.env_policies.borrow_mut() = vec![("x".into(), "y".into(), "z".into())];
+        });
+        cx.update(|window, cx| {
+            dialog.refresh_env_policies_async("", &host_entity, window, cx);
+        });
+        let (cleared, marked) = cx.update(|_, _cx| {
+            let cleared = dialog.env_policies.borrow().is_empty();
+            let marked = dialog.env_policies_loaded_for.borrow().as_deref() == Some("");
+            (cleared, marked)
+        });
+        assert!(cleared, "空环境应清空清单");
+        assert!(marked, "应记录已加载环境（避免渲染期重复触发）");
+    }
 }
 
 /// 写回文件选择结果（打开 / 新建共用）：有值时更新地址输入；所有结局都写结果行并通知宿主重渲。
 ///
 /// `cx` 为窗口异步上下文（`App::prompt_for_paths` / `prompt_for_new_path` 的 oneshot 回传约定），
 /// `set_value` 需要窗口句柄，故统一在 `cx.update` 内完成。
-fn apply_file_pick(
+fn apply_file_pick<H: 'static>(
     target: &Entity<InputState>,
     result: &Rc<RefCell<Option<ResultLine>>>,
     value: Option<String>,
     message: String,
     ok: bool,
-    entity: &Entity<crate::panels::EditorPanel>,
+    entity: &Entity<H>,
     cx: &mut gpui_kit::AsyncWindowContext,
 ) {
     let _ = cx.update(|window, cx| {
