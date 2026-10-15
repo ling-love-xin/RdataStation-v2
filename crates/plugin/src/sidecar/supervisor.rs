@@ -159,6 +159,23 @@ pub enum SupervisorEvent {
         method: String,
         params: Value,
     },
+    /// 插件的流数据（`KIND_STREAM` 上行，SSH shell stdout / 端口转发数据）。
+    /// 宿主向插件写流用 [`SidecarSupervisor::session_conn_handle`] 的
+    /// [`SidecarConn::write_stream`] / [`SidecarConn::write_eof`]。
+    StreamData {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        channel_id: String,
+        data: Vec<u8>,
+    },
+    /// 插件的流 EOF（该通道数据发完）。
+    StreamEof {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        channel_id: String,
+    },
     /// 线路层面的不对（错位帧、超时后迟到的响应……）。
     Issue { plugin_id: String, detail: String },
 }
@@ -238,6 +255,21 @@ enum InstanceEvent {
         id: u64,
         method: String,
         params: Value,
+    },
+    /// 流数据（KIND_STREAM 上行）：SSH shell stdout / 端口转发数据。
+    StreamData {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        channel_id: String,
+        data: Vec<u8>,
+    },
+    /// 流 EOF：该通道数据发完。
+    StreamEof {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        channel_id: String,
     },
     Issue {
         plugin_id: String,
@@ -433,6 +465,39 @@ impl SidecarSupervisor {
                             id,
                             method,
                             params,
+                        });
+                    }
+                }
+                InstanceEvent::StreamData {
+                    plugin_id,
+                    index,
+                    generation,
+                    channel_id,
+                    data,
+                } => {
+                    // 流数据同样按代过滤：旧连接遗留的流分片没有消费者，不转发
+                    if self.is_current(&plugin_id, generation) {
+                        self.out(SupervisorEvent::StreamData {
+                            plugin_id,
+                            index,
+                            generation,
+                            channel_id,
+                            data,
+                        });
+                    }
+                }
+                InstanceEvent::StreamEof {
+                    plugin_id,
+                    index,
+                    generation,
+                    channel_id,
+                } => {
+                    if self.is_current(&plugin_id, generation) {
+                        self.out(SupervisorEvent::StreamEof {
+                            plugin_id,
+                            index,
+                            generation,
+                            channel_id,
                         });
                     }
                 }
@@ -1055,6 +1120,22 @@ fn spawn_event_pump(
                     id,
                     method,
                     params,
+                },
+                ConnEvent::StreamData {
+                    channel_id,
+                    data,
+                } => InstanceEvent::StreamData {
+                    plugin_id: plugin_id.clone(),
+                    index,
+                    generation,
+                    channel_id,
+                    data,
+                },
+                ConnEvent::StreamEof { channel_id } => InstanceEvent::StreamEof {
+                    plugin_id: plugin_id.clone(),
+                    index,
+                    generation,
+                    channel_id,
                 },
                 ConnEvent::Issue { detail } => InstanceEvent::Issue {
                     plugin_id: plugin_id.clone(),

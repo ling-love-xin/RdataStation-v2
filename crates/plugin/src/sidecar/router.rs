@@ -28,7 +28,7 @@
 use serde_json::{Map, Value};
 
 use super::proto::{FRAME_HEADER_LEN, MAX_FRAME_LEN, ProtocolError, RpcErrorCode};
-use super::proto::{Frame, FrameKind};
+use super::proto::{Frame, FrameKind, STREAM_FLAG_DATA, STREAM_FLAG_EOF};
 
 /// 附件种类：目前只有一种（Arrow IPC stream）。
 pub const KIND_ARROW_IPC_STREAM: &str = "arrow-ipc-stream";
@@ -42,6 +42,52 @@ pub struct Attachment {
     pub kind: String,
     /// 拼好的完整载荷（多个 `0x02` 帧按顺序拼回，即完整 Arrow IPC 流）。
     pub payload: Vec<u8>,
+}
+
+/// 一帧流数据的解析结果（`KIND_STREAM` payload）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamPayload {
+    /// 通道 id（`x.ssh.shell` / `x.ssh.forward` 结果的 `channel_id`）。
+    pub channel_id: String,
+    /// 本侧数据已发完（`STREAM_FLAG_EOF`；无数据段）。
+    pub eof: bool,
+    /// 流数据（`eof` 时为空）。
+    pub data: Vec<u8>,
+}
+
+/// 解析一帧 `KIND_STREAM` 的 payload。
+///
+/// 布局见 [`super::proto::KIND_STREAM`]。任何错位（长度域越界 / id 非 UTF-8 /
+/// 未知 flags）都返回 `Err`，调用方报成 `Issue`——**不 panic、不静默丢**。
+pub fn decode_stream_payload(payload: &[u8]) -> Result<StreamPayload, String> {
+    if payload.len() < 3 {
+        return Err(format!("流帧载荷过短（{} 字节，至少 3）", payload.len()));
+    }
+    let id_len = u16::from_be_bytes([payload[0], payload[1]]) as usize;
+    let id_end = 2 + id_len;
+    if id_end + 1 > payload.len() {
+        return Err(format!(
+            "流帧通道 id 长度域声明 {id_len} 字节，载荷只剩 {} 字节",
+            payload.len() - 2
+        ));
+    }
+    let channel_id = std::str::from_utf8(&payload[2..id_end])
+        .map_err(|e| format!("流帧通道 id 不是 UTF-8：{e}"))?
+        .to_string();
+    let flags = payload[id_end];
+    match flags {
+        STREAM_FLAG_DATA => Ok(StreamPayload {
+            channel_id,
+            eof: false,
+            data: payload[id_end + 1..].to_vec(),
+        }),
+        STREAM_FLAG_EOF => Ok(StreamPayload {
+            channel_id,
+            eof: true,
+            data: Vec::new(),
+        }),
+        other => Err(format!("未知的流帧标志 0x{other:02x}")),
+    }
 }
 
 /// 路由产出的事件。
@@ -73,6 +119,11 @@ pub enum RouterEvent {
     /// 判据是 JSON-RPC 语义：**带 `id` 且带 `method` 的帧是请求**（响应帧只有
     /// `result` / `error`，没有 `method`）。即使 id 撞上宿主的在飞集合也不误判。
     InboundRequest { id: u64, method: String, params: Value },
+    /// 流数据（插件 → 宿主 方向；`KIND_STREAM` 帧）：SSH shell 的 stdout、
+    /// 端口转发收到的数据等持续字节流分片。
+    StreamData { channel_id: String, data: Vec<u8> },
+    /// 流 EOF（插件 → 宿主）：该通道的数据发完了。
+    StreamEof { channel_id: String },
     /// 连接断了：把在飞请求一次性交还给调用方（逐个失败，不静默丢弃）。
     Disconnected {
         reason: String,
@@ -169,6 +220,22 @@ impl Router {
         match frame.kind {
             FrameKind::Json => self.on_json_frame(&frame.payload),
             FrameKind::ArrowIpc => self.on_arrow_frame(frame.payload),
+            FrameKind::Stream => self.on_stream_frame(frame.payload),
+        }
+    }
+
+    fn on_stream_frame(&mut self, payload: Vec<u8>) -> Vec<RouterEvent> {
+        // 流帧不参与「响应扣住等附件」的装配：随时可插队（shell 输出与查询响应
+        // 可以在同一连接上并存）。解析失败报 Issue，不 panic、不静默丢。
+        match decode_stream_payload(&payload) {
+            Ok(p) if p.eof => vec![RouterEvent::StreamEof {
+                channel_id: p.channel_id,
+            }],
+            Ok(p) => vec![RouterEvent::StreamData {
+                channel_id: p.channel_id,
+                data: p.data,
+            }],
+            Err(detail) => vec![RouterEvent::Issue { detail }],
         }
     }
 
@@ -848,5 +915,122 @@ mod tests {
         // 之后来的附件帧就变成孤儿帧（错位）—— 不能拿它去拼已放弃的响应
         let ev = r.on_frame(Frame::arrow(b"late".to_vec()));
         assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
+    }
+
+    // ==================== 流帧（KIND_STREAM） ====================
+
+    /// 插件上行流数据 → StreamData 事件（数据原样，不分块不组装）。
+    #[test]
+    fn stream_data_frame_becomes_stream_data_event() {
+        let mut r = Router::new();
+        let ev = r.on_frame(Frame::stream("ch-1", b"hello ssh").unwrap());
+        assert_eq!(
+            ev,
+            vec![RouterEvent::StreamData {
+                channel_id: "ch-1".into(),
+                data: b"hello ssh".to_vec(),
+            }]
+        );
+    }
+
+    /// 插件上行流 EOF → StreamEof 事件。
+    #[test]
+    fn stream_eof_frame_becomes_stream_eof_event() {
+        let mut r = Router::new();
+        let ev = r.on_frame(Frame::stream_eof("ch-1").unwrap());
+        assert_eq!(
+            ev,
+            vec![RouterEvent::StreamEof {
+                channel_id: "ch-1".into(),
+            }]
+        );
+    }
+
+    /// 流帧与响应附件**正交**：扣着附件（等 Arrow）时来流帧不算错位，
+    /// 流数据照常产出事件，附件装配不受影响。
+    #[test]
+    fn stream_frame_interleaves_with_pending_attachments() {
+        let mut r = Router::new();
+        r.register(7);
+        // 先扣住一个声明 1 帧附件的响应
+        assert!(
+            r.on_frame(json_frame(&response_with_one_attachment(7, 1)))
+                .is_empty()
+        );
+        assert_eq!(r.awaiting_arrow_frames(), 1);
+
+        // 流帧插队：必须产出 StreamData，且不报 Issue、不吞附件
+        let ev = r.on_frame(Frame::stream("ch-1", b"mid").unwrap());
+        assert_eq!(
+            ev,
+            vec![RouterEvent::StreamData {
+                channel_id: "ch-1".into(),
+                data: b"mid".to_vec(),
+            }]
+        );
+        assert_eq!(r.awaiting_arrow_frames(), 1, "附件装配不该被流帧干扰");
+
+        // 附件帧随后到达：响应收齐交付
+        let ev = r.on_frame(Frame::arrow(b"arrow-data".to_vec()));
+        assert!(matches!(&ev[0], RouterEvent::Response { .. }), "{ev:?}");
+    }
+
+    /// 流 payload 错位（长度域越界 / 非 UTF-8 / 未知 flags）→ Issue，不 panic。
+    #[test]
+    fn broken_stream_payloads_are_issues() {
+        let mut r = Router::new();
+        // 过短：连 [2B 长 + 1B flags] 都不够
+        let ev = r.on_frame(Frame {
+            kind: FrameKind::Stream,
+            payload: vec![0, 5],
+        });
+        assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
+
+        // 长度域声明 100 字节，载荷没那么多
+        let mut p = vec![0, 100];
+        p.extend_from_slice(b"ch-1");
+        p.push(STREAM_FLAG_DATA);
+        let ev = r.on_frame(Frame {
+            kind: FrameKind::Stream,
+            payload: p,
+        });
+        assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
+
+        // 未知 flags（0x7f）
+        let ev = r.on_frame(Frame {
+            kind: FrameKind::Stream,
+            payload: vec![0, 1, b'c', 0x7f, 1],
+        });
+        assert!(matches!(&ev[0], RouterEvent::Issue { .. }), "{ev:?}");
+    }
+
+    /// 解码函数本身（独立于 Router 状态机）：正常与错位路径。
+    #[test]
+    fn decode_stream_payload_paths() {
+        // 正常数据
+        let f = Frame::stream("ch-9", b"abc").unwrap();
+        assert_eq!(
+            decode_stream_payload(&f.payload).unwrap(),
+            StreamPayload {
+                channel_id: "ch-9".into(),
+                eof: false,
+                data: b"abc".to_vec(),
+            }
+        );
+        // EOF（无数据段）
+        let f = Frame::stream_eof("ch-9").unwrap();
+        assert_eq!(
+            decode_stream_payload(&f.payload).unwrap(),
+            StreamPayload {
+                channel_id: "ch-9".into(),
+                eof: true,
+                data: Vec::new(),
+            }
+        );
+        // 非 UTF-8 通道 id
+        let bad = vec![0, 1, 0xFF, STREAM_FLAG_DATA];
+        assert!(decode_stream_payload(&bad).is_err());
+        // 过短
+        assert!(decode_stream_payload(&[0, 0]).is_err());
     }
 }

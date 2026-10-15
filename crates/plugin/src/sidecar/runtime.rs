@@ -137,6 +137,29 @@ async fn dispatch_event(
                 }
             }
         }
+        // 流数据（SSH shell stdout / 端口转发数据）：宿主侧暂没有消费者
+        // （P4 终端面板 / 隧道管理面板会订阅），先打 debug 日志；
+        // 注意只记元信息，**不记数据本体**（可能很大，且可能是敏感内容）。
+        SupervisorEvent::StreamData {
+            plugin_id,
+            channel_id,
+            data,
+            ..
+        } => {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel_id,
+                bytes = data.len(),
+                "插件流数据上行"
+            );
+        }
+        SupervisorEvent::StreamEof {
+            plugin_id,
+            channel_id,
+            ..
+        } => {
+            tracing::debug!(plugin = %plugin_id, channel = %channel_id, "插件流 EOF");
+        }
         // 其余事件（崩溃 / 会话失效 / 通知 / 线路问题）如实打日志；
         // 转 UI 通知是 P4 的活（那层要订阅并渲染成界面元素）。
         other => {

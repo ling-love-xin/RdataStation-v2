@@ -102,6 +102,11 @@ pub enum ConnEvent {
     /// 反向请求（插件 → 宿主，请求-响应）：`host.*` 面。宿主处理完用
     /// [`SidecarConn::reply`] / [`SidecarConn::reply_error`] 回帧。
     InboundRequest { id: u64, method: String, params: Value },
+    /// 流数据（插件 → 宿主）：SSH shell 的 stdout / 端口转发收到的数据。
+    /// 宿主向插件写流用 [`SidecarConn::write_stream`] / [`SidecarConn::write_eof`]。
+    StreamData { channel_id: String, data: Vec<u8> },
+    /// 流 EOF（插件 → 宿主）：该通道的数据发完了。
+    StreamEof { channel_id: String },
     /// 流层面的不对：错位、未知种类、超时后迟到的响应……
     Issue { detail: String },
     /// 连接断开（对端断开时在飞调用各自收到带理由的 [`CallError::Disconnected`]；
@@ -142,6 +147,10 @@ enum DriverCommand {
     /// 回一个反向请求的响应帧（`host.*` 面；不登记 Router——in_flight 是
     /// 宿主发出请求的 id 空间，反向响应由对端自己匹配）。
     Reply {
+        frame: Frame,
+    },
+    /// 写一帧流数据 / 流 EOF（下行：宿主 → 插件，如 SSH shell 的 stdin）。
+    WriteStream {
         frame: Frame,
     },
     Shutdown,
@@ -312,6 +321,35 @@ impl SidecarConn {
             .map_err(|_| CallError::Closed)
     }
 
+    /// 向插件写一段流数据（下行，SSH shell 的 stdin / 转发数据）。
+    ///
+    /// 通道 id 与 `x.ssh.shell` / `x.ssh.forward` 结果的 `channel_id` 对应；
+    /// 连接已关（driver 任务退出）时返回 [`CallError::Closed`]。
+    pub async fn write_stream(
+        &self,
+        channel_id: &str,
+        data: &[u8],
+    ) -> Result<(), CallError> {
+        let frame = Frame::stream(channel_id, data).map_err(|e| CallError::Frame {
+            detail: e.to_string(),
+        })?;
+        self.cmd_tx
+            .send(DriverCommand::WriteStream { frame })
+            .await
+            .map_err(|_| CallError::Closed)
+    }
+
+    /// 通知插件本侧数据已发完（流 EOF）。
+    pub async fn write_eof(&self, channel_id: &str) -> Result<(), CallError> {
+        let frame = Frame::stream_eof(channel_id).map_err(|e| CallError::Frame {
+            detail: e.to_string(),
+        })?;
+        self.cmd_tx
+            .send(DriverCommand::WriteStream { frame })
+            .await
+            .map_err(|_| CallError::Closed)
+    }
+
     /// 反向请求处理失败：写一帧 JSON-RPC 错误响应。
     pub async fn reply_error(
         &self,
@@ -374,6 +412,15 @@ async fn driver_loop<W>(
                 }
                 Some(DriverCommand::Reply { frame }) => {
                     // 反向请求的响应：直接写帧（不登记在飞），失败与请求同路径收摊
+                    if let Err(e) = write_frame(&mut writer, &frame).await {
+                        let reason = format!("写帧失败：{e}");
+                        let error = CallError::Disconnected { reason: reason.clone() };
+                        close(&mut pending, &mut cmd_rx, &event_tx, reason, error, false);
+                        return;
+                    }
+                }
+                Some(DriverCommand::WriteStream { frame }) => {
+                    // 下行流数据（SSH stdin / 转发数据）：不登记在飞，失败同路径收摊
                     if let Err(e) = write_frame(&mut writer, &frame).await {
                         let reason = format!("写帧失败：{e}");
                         let error = CallError::Disconnected { reason: reason.clone() };
@@ -477,6 +524,12 @@ fn dispatch(
             RouterEvent::InboundRequest { id, method, params } => {
                 let _ = event_tx.send(ConnEvent::InboundRequest { id, method, params });
             }
+            RouterEvent::StreamData { channel_id, data } => {
+                let _ = event_tx.send(ConnEvent::StreamData { channel_id, data });
+            }
+            RouterEvent::StreamEof { channel_id } => {
+                let _ = event_tx.send(ConnEvent::StreamEof { channel_id });
+            }
             RouterEvent::Issue { detail } => {
                 let _ = event_tx.send(ConnEvent::Issue { detail });
             }
@@ -532,7 +585,7 @@ fn close(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sidecar::proto::FrameKind;
+    use crate::sidecar::proto::{FrameKind, STREAM_FLAG_DATA, STREAM_FLAG_EOF};
     use crate::sidecar::router::encode_response_with_arrow;
 
     fn reply_frame(id: u64, result: Value) -> Frame {
@@ -982,5 +1035,65 @@ mod tests {
         assert_eq!(msg["id"], 4);
         assert_eq!(msg["error"]["code"], -32602);
         assert_eq!(msg["error"]["message"], "参数不合法");
+    }
+
+    /// 流上行（插件 → 宿主）：对端发 `KIND_STREAM` 数据帧与 EOF 帧，
+    /// 宿主收到 `ConnEvent::StreamData` / `StreamEof`。
+    #[tokio::test]
+    async fn stream_upstream_reaches_the_host_as_events() {
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, mut events) = SidecarConn::spawn(host_r, host_w);
+        let (_pr, mut pw) = tokio::io::split(peer);
+
+        // 对端（SSH 插件）上行一段 stdout
+        write_frame(&mut pw, &Frame::stream("ch-1", b"hello from shell").unwrap())
+            .await
+            .unwrap();
+        write_frame(&mut pw, &Frame::stream_eof("ch-1").unwrap())
+            .await
+            .unwrap();
+
+        let ev = events.recv().await.expect("应有 StreamData 事件");
+        match ev {
+            ConnEvent::StreamData { channel_id, data } => {
+                assert_eq!(channel_id, "ch-1");
+                assert_eq!(data, b"hello from shell");
+            }
+            other => panic!("期望 StreamData，得到 {other:?}"),
+        }
+        let ev = events.recv().await.expect("应有 StreamEof 事件");
+        assert!(
+            matches!(&ev, ConnEvent::StreamEof { channel_id } if channel_id == "ch-1"),
+            "{ev:?}"
+        );
+        drop(conn);
+    }
+
+    /// 流下行（宿主 → 插件）：`write_stream` / `write_eof` 写出的帧对端能
+    /// 按 `KIND_STREAM` 收到，payload 布局与 `x.ssh.*` 通道契约一致。
+    #[tokio::test]
+    async fn stream_downstream_reaches_the_peer_as_frames() {
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, _events) = SidecarConn::spawn(host_r, host_w);
+        let (mut pr, _pw) = tokio::io::split(peer);
+
+        // 宿主（终端面板）向插件的 shell stdin 写数据，然后发 EOF。
+        // 注意：`write_stream` 只保证命令入队，帧由 driver 任务异步写；
+        // 必须**先读完帧再 drop(conn)**——drop 会 abort driver（可能写一半被掐）。
+        conn.write_stream("ch-1", b"ls -la\n").await.unwrap();
+        conn.write_eof("ch-1").await.unwrap();
+
+        let f1 = read_frame(&mut pr).await.expect("对端应收流数据帧");
+        assert_eq!(f1.kind, FrameKind::Stream);
+        assert_eq!(f1.payload[6], STREAM_FLAG_DATA);
+        assert_eq!(&f1.payload[7..], b"ls -la\n");
+
+        let f2 = read_frame(&mut pr).await.expect("对端应收流 EOF 帧");
+        assert_eq!(f2.kind, FrameKind::Stream);
+        assert_eq!(f2.payload[6], STREAM_FLAG_EOF);
+
+        drop(conn);
     }
 }

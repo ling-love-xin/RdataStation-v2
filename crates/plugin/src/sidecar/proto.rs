@@ -42,6 +42,25 @@ pub const MAX_PAYLOAD_LEN: usize = MAX_FRAME_LEN - FRAME_HEADER_LEN;
 pub const KIND_JSON: u8 = 0x01;
 /// 种类字节：Arrow IPC stream 分片（二进制）。
 pub const KIND_ARROW: u8 = 0x02;
+/// 种类字节：持续双向字节流分片（SSH shell / 端口转发等流式通道）。
+///
+/// payload 布局（`router.rs` 的 [`super::router::decode_stream_payload`] 解析）：
+///
+/// ```text
+/// [u16 BE 通道 id 长度][channel_id UTF-8][u8 flags][流数据]
+///
+/// flags: 0x00 = 数据（后面是流数据）; 0x01 = EOF（本侧数据发完，无数据）
+/// ```
+///
+/// 方向由**发送者**隐含：插件发来 = 上行（stdout / 转发数据），宿主发 = 下行
+/// （stdin / 转发数据）。与 Arrow 附件（`KIND_ARROW`）正交：流帧随时可插队，
+/// 不参与「响应扣住等附件」的装配。
+pub const KIND_STREAM: u8 = 0x03;
+
+/// 流帧 flags：数据（后面带流数据段）。
+pub const STREAM_FLAG_DATA: u8 = 0x00;
+/// 流帧 flags：EOF（本侧数据发完，无数据段）。
+pub const STREAM_FLAG_EOF: u8 = 0x01;
 
 /// 协议版本。写进 `initialize` 握手与版本闸（dev-plan §4.2.3）。
 ///
@@ -60,6 +79,8 @@ pub enum FrameKind {
     Json,
     /// Arrow IPC 数据面（结果集分片）。
     ArrowIpc,
+    /// 流数据面（SSH shell / 端口转发等持续双向字节流）。
+    Stream,
 }
 
 impl FrameKind {
@@ -67,6 +88,7 @@ impl FrameKind {
         match self {
             Self::Json => KIND_JSON,
             Self::ArrowIpc => KIND_ARROW,
+            Self::Stream => KIND_STREAM,
         }
     }
 
@@ -74,6 +96,7 @@ impl FrameKind {
         match b {
             KIND_JSON => Some(Self::Json),
             KIND_ARROW => Some(Self::ArrowIpc),
+            KIND_STREAM => Some(Self::Stream),
             _ => None,
         }
     }
@@ -82,6 +105,7 @@ impl FrameKind {
         match self {
             Self::Json => "json",
             Self::ArrowIpc => "arrow-ipc",
+            Self::Stream => "stream",
         }
     }
 }
@@ -104,6 +128,8 @@ pub enum ProtocolError {
     /// 实践中不会发生（输入本来就是解析好的 `Value`），但**不 panic**：
     /// 一个能报错的返回面比一个可能把宿主拉下去的分支更划算。
     Serialization { detail: String },
+    /// 流帧的通道 id 超过 u16 长度域（写入前截断会错位，直接拒绝）。
+    ChannelIdTooLong { len: usize, max: usize },
 }
 
 impl fmt::Display for ProtocolError {
@@ -124,6 +150,9 @@ impl fmt::Display for ProtocolError {
                 write!(f, "帧头声明 {declared} 字节，缓冲区实际 {actual} 字节")
             }
             Self::Serialization { detail } => write!(f, "帧载荷 JSON 编码失败：{detail}"),
+            Self::ChannelIdTooLong { len, max } => {
+                write!(f, "流帧通道 id 长 {len} 字节超过长度域上限 {max}")
+            }
         }
     }
 }
@@ -150,6 +179,41 @@ impl Frame {
             kind: FrameKind::ArrowIpc,
             payload: payload.into(),
         }
+    }
+
+    /// 流数据帧：`[u16 BE id 长][channel_id][0x00][data]`。
+    ///
+    /// channel_id 必须 ≤ u16::MAX 字节（写入前截断会错位，这里直接报错）。
+    pub fn stream(channel_id: &str, data: &[u8]) -> Result<Self, ProtocolError> {
+        Self::stream_with_flags(channel_id, STREAM_FLAG_DATA, data)
+    }
+
+    /// 流 EOF 帧：本侧数据发完（无数据段）。
+    pub fn stream_eof(channel_id: &str) -> Result<Self, ProtocolError> {
+        Self::stream_with_flags(channel_id, STREAM_FLAG_EOF, &[])
+    }
+
+    fn stream_with_flags(
+        channel_id: &str,
+        flags: u8,
+        data: &[u8],
+    ) -> Result<Self, ProtocolError> {
+        let id_len = channel_id.len();
+        if id_len > u16::MAX as usize {
+            return Err(ProtocolError::ChannelIdTooLong {
+                len: id_len,
+                max: u16::MAX as usize,
+            });
+        }
+        let mut payload = Vec::with_capacity(2 + id_len + 1 + data.len());
+        payload.extend_from_slice(&(id_len as u16).to_be_bytes());
+        payload.extend_from_slice(channel_id.as_bytes());
+        payload.push(flags);
+        payload.extend_from_slice(data);
+        Ok(Self {
+            kind: FrameKind::Stream,
+            payload,
+        })
     }
 
     /// 本帧编码后的总长度（含头）。
@@ -498,10 +562,45 @@ mod tests {
         for f in [
             Frame::json(br#"{"jsonrpc":"2.0","id":1}"#.to_vec()),
             Frame::arrow([0u8, 1, 2, 3, 255].to_vec()),
+            Frame::stream("ch-1", b"hello").expect("流帧构造"),
         ] {
             let bytes = f.encode().unwrap();
             assert_eq!(Frame::decode(&bytes).unwrap(), f);
         }
+    }
+
+    #[test]
+    fn stream_frame_layout_and_kind() {
+        let f = Frame::stream("ch-1", b"hello").unwrap();
+        assert_eq!(f.kind, FrameKind::Stream);
+        // payload = [u16 BE id 长=4][ch-1][0x00][hello]
+        assert_eq!(&f.payload[..2], &4u16.to_be_bytes());
+        assert_eq!(&f.payload[2..6], b"ch-1");
+        assert_eq!(f.payload[6], STREAM_FLAG_DATA);
+        assert_eq!(&f.payload[7..], b"hello");
+        assert_eq!(f.encode().unwrap()[4], KIND_STREAM);
+    }
+
+    #[test]
+    fn stream_eof_frame_has_no_data() {
+        let f = Frame::stream_eof("ch-1").unwrap();
+        // payload = [u16 BE id 长=4][ch-1][0x01]
+        assert_eq!(f.payload.len(), 7);
+        assert_eq!(f.payload[6], STREAM_FLAG_EOF);
+        assert_eq!(f.kind, FrameKind::Stream);
+    }
+
+    #[test]
+    fn stream_channel_id_too_long_is_refused() {
+        // 长度域是 u16：超过 65535 字节的通道 id 写入前就拒绝（截断会错位）
+        let long_id = "x".repeat(u16::MAX as usize + 1);
+        assert_eq!(
+            Frame::stream(&long_id, b""),
+            Err(ProtocolError::ChannelIdTooLong {
+                len: u16::MAX as usize + 1,
+                max: u16::MAX as usize,
+            })
+        );
     }
 
     /// stdio 上读到的字节流不会正好切在帧边界：逐字节喂也必须能解出来。
