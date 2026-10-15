@@ -11,7 +11,7 @@ use engine::persistence::plugin_store::{
 };
 use engine::persistence::project_connection_store::ProjectConnectionStore;
 use crate::events::*;
-use crate::loader::get_plugin_loader;
+use crate::manager::get_plugin_manager;
 use specta::Type;
 
 /// 安装插件输入参数
@@ -179,9 +179,10 @@ impl PluginService {
             .await?;
         emit_plugin_enabled(plugin_id);
 
-        // 尝试激活插件
-        let loader = get_plugin_loader()?;
-        let _ = loader.activate_plugin(plugin_id).await;
+        // 尝试激活插件（管理器未初始化时跳过 —— 宿主尚未接入，见 README D7）
+        if let Some(manager) = get_plugin_manager() {
+            let _ = manager.activate_plugin(plugin_id).await;
+        }
 
         Ok(())
     }
@@ -196,8 +197,9 @@ impl PluginService {
         }
 
         // 先停用插件
-        let loader = get_plugin_loader()?;
-        let _ = loader.deactivate_plugin(plugin_id).await;
+        if let Some(manager) = get_plugin_manager() {
+            let _ = manager.deactivate_plugin(plugin_id).await;
+        }
 
         self.global_db
             .update_plugin_enabled(plugin_id, false)
@@ -217,9 +219,10 @@ impl PluginService {
         }
 
         // 先停用和卸载
-        let loader = get_plugin_loader()?;
-        let _ = loader.deactivate_plugin(plugin_id).await;
-        let _ = loader.unload_plugin(plugin_id).await;
+        if let Some(manager) = get_plugin_manager() {
+            let _ = manager.deactivate_plugin(plugin_id).await;
+            let _ = manager.unload_plugin(plugin_id).await;
+        }
 
         self.global_db.delete_plugin(plugin_id).await?;
         emit_plugin_uninstalled(plugin_id);
@@ -363,19 +366,32 @@ impl PluginService {
             .filter(|p| p.is_enabled)
             .collect::<Vec<_>>();
 
-        // 扫描并加载插件到 PluginManager
-        let loader = get_plugin_loader()?;
-        let loaded = loader.scan_and_load_plugins().await;
+        let Some(manager) = get_plugin_manager() else {
+            tracing::info!("PluginManager 未初始化，跳过启动加载（宿主尚未接入，见 README D7）");
+            return Ok(enabled_plugins);
+        };
+
+        // 扫描并加载安装目录（安装态）
+        let loaded = manager.scan_and_load_plugins().await?;
+
+        // 只激活 DB 里标记为启用的插件（按 code+version 匹配）。
+        // 此前 enabled_plugins 只用于计数日志，实际激活了目录里全部插件，与 DB 启用状态无关 —— 已修正。
+        let mut activated = 0;
+        for loaded_plugin in &loaded {
+            let matches_enabled = enabled_plugins.iter().any(|p| {
+                p.code == loaded_plugin.manifest.plugin.id
+                    && p.version == loaded_plugin.manifest.plugin.version
+            });
+            if matches_enabled && manager.activate_plugin(&loaded_plugin.id).await.is_ok() {
+                activated += 1;
+            }
+        }
 
         tracing::info!(
-            "Loaded {} enabled plugins on startup",
-            enabled_plugins.len()
+            "Loaded {} enabled plugins on startup（实际激活 {}）",
+            enabled_plugins.len(),
+            activated
         );
-
-        // 尝试激活已加载的插件
-        for loaded_plugin in loaded.unwrap_or_default() {
-            let _ = loader.activate_plugin(&loaded_plugin.id).await;
-        }
 
         Ok(enabled_plugins)
     }
@@ -388,7 +404,10 @@ impl PluginService {
         let project_plugins = self.get_project_plugins(project_store).await?;
         let mut result = Vec::with_capacity(project_plugins.len());
 
-        let loader = get_plugin_loader()?;
+        let Some(manager) = get_plugin_manager() else {
+            tracing::info!("PluginManager 未初始化，跳过项目插件加载（宿主尚未接入）");
+            return Ok(result);
+        };
 
         for used_plugin in project_plugins {
             if used_plugin.enabled {
@@ -401,11 +420,12 @@ impl PluginService {
                 {
                     result.push(plugin.clone());
 
-                    // 尝试加载并激活插件
+                    // 尝试加载并激活插件（install_path 来自 DB；load_plugin_from_dir
+                    // 内部会过 validate_plugin_id）
                     let install_path = std::path::PathBuf::from(&plugin.install_path);
                     if install_path.exists() {
-                        if let Ok(loaded) = loader.load_plugin_from_dir(&install_path).await {
-                            let _ = loader.activate_plugin(&loaded.id).await;
+                        if let Ok(loaded) = manager.load_plugin_from_dir(&install_path).await {
+                            let _ = manager.activate_plugin(&loaded.id).await;
                         }
                     }
                 }

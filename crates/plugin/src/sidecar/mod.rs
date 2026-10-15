@@ -12,6 +12,7 @@
 //! | [`supervisor`] | 把内核的动作落到进程上，把崩溃 / 判死 / 通知如实报给宿主 |
 //! | [`driver`] | 会话之上的驱动调用：`driver.describe` / `query.execute` / `query.cancel` … |
 //! | [`meta`] | `meta.*` 的线格式与引擎类型翻译（导航树 / 属性面板的那一份） |
+//! | [`method`] | 协议 method 常量表 + 声明白名单（`is_allowed_declaration`，防拼写错误悄悄变“不支持”） |
 //!
 //! # HTTP / 端口那条路已经删掉
 //!
@@ -27,10 +28,14 @@ pub mod conn;
 pub mod driver;
 pub mod factory;
 pub mod health_checker;
+pub mod host;
+pub mod host_provider;
 pub mod hot_reload_manager;
 pub mod lifecycle;
 pub mod meta;
+pub mod method;
 pub mod process;
 pub mod proto;
 pub mod router;
+pub mod runtime;
 pub mod supervisor;

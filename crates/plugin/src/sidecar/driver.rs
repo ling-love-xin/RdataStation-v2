@@ -38,6 +38,7 @@ use super::meta::{
     MetaObject, MetaObjectDetail, MetaObjectKind, MetaSchema, parse_catalogs,
     parse_object_detail, parse_objects, parse_routine_source, parse_schemas,
 };
+use super::method;
 use super::proto::RpcErrorCode;
 use super::supervisor::SidecarSupervisor;
 use shared::models::ArrowBatch;
@@ -322,19 +323,19 @@ impl<'a> SessionDriver<'a> {
         let outcome = self
             .conn
             .call(
-                "driver.describe",
+                method::DRIVER_DESCRIBE,
                 json!({ "driver_id": driver_id }),
                 DESCRIBE_RPC_TIMEOUT,
             )
             .await
-            .map_err(|e| DriverError::from_call("driver.describe", e))?;
+            .map_err(|e| DriverError::from_call(method::DRIVER_DESCRIBE, e))?;
         parse_descriptor(driver_id, &outcome.result)
     }
 
     /// 元数据：catalog 清单（§4.2.2 `meta.catalogs`）。
     pub async fn meta_catalogs(&self) -> Result<Vec<String>, DriverError> {
         let result = self
-            .call_meta("meta.catalogs", json!({ "session_id": self.session_id }))
+            .call_meta(method::META_CATALOGS, json!({ "session_id": self.session_id }))
             .await?;
         parse_catalogs(&result)
     }
@@ -343,7 +344,7 @@ impl<'a> SessionDriver<'a> {
     pub async fn meta_schemas(&self, catalog: &str) -> Result<Vec<MetaSchema>, DriverError> {
         let result = self
             .call_meta(
-                "meta.schemas",
+                method::META_SCHEMAS,
                 json!({ "session_id": self.session_id, "catalog": catalog }),
             )
             .await?;
@@ -361,7 +362,7 @@ impl<'a> SessionDriver<'a> {
     ) -> Result<Vec<MetaObject>, DriverError> {
         let result = self
             .call_meta(
-                "meta.objects",
+                method::META_OBJECTS,
                 json!({
                     "session_id": self.session_id,
                     "catalog": catalog,
@@ -381,7 +382,7 @@ impl<'a> SessionDriver<'a> {
     ) -> Result<MetaObjectDetail, DriverError> {
         let result = self
             .call_meta(
-                "meta.object_detail",
+                method::META_OBJECT_DETAIL,
                 json!({
                     "session_id": self.session_id,
                     "catalog": catalog,
@@ -402,7 +403,7 @@ impl<'a> SessionDriver<'a> {
     ) -> Result<Option<String>, DriverError> {
         let result = self
             .call_meta(
-                "meta.routine_source",
+                method::META_ROUTINE_SOURCE,
                 json!({
                     "session_id": self.session_id,
                     "catalog": catalog,
@@ -447,9 +448,9 @@ impl<'a> SessionDriver<'a> {
         });
         let outcome = self
             .conn
-            .call("query.execute", params, EXECUTE_RPC_TIMEOUT)
+            .call(method::QUERY_EXECUTE, params, EXECUTE_RPC_TIMEOUT)
             .await
-            .map_err(|e| DriverError::from_call("query.execute", e))?;
+            .map_err(|e| DriverError::from_call(method::QUERY_EXECUTE, e))?;
         parse_page(&outcome.result, &outcome.attachments)
     }
 
@@ -468,9 +469,9 @@ impl<'a> SessionDriver<'a> {
         });
         let outcome = self
             .conn
-            .call("query.fetch", params, EXECUTE_RPC_TIMEOUT)
+            .call(method::QUERY_FETCH, params, EXECUTE_RPC_TIMEOUT)
             .await
-            .map_err(|e| DriverError::from_call("query.fetch", e))?;
+            .map_err(|e| DriverError::from_call(method::QUERY_FETCH, e))?;
         parse_page(&outcome.result, &outcome.attachments)
     }
 
@@ -481,20 +482,20 @@ impl<'a> SessionDriver<'a> {
     pub async fn cancel(&self, request_id: &str) -> Result<(), DriverError> {
         let params = json!({ "session_id": self.session_id, "request_id": request_id });
         self.conn
-            .call("query.cancel", params, CANCEL_RPC_TIMEOUT)
+            .call(method::QUERY_CANCEL, params, CANCEL_RPC_TIMEOUT)
             .await
             .map(|_| ())
-            .map_err(|e| DriverError::from_call("query.cancel", e))
+            .map_err(|e| DriverError::from_call(method::QUERY_CANCEL, e))
     }
 
     /// 这条会话还活着吗（§4.2.2 `session.ping`；进程级探活是 supervisor 的 `ping()`）。
     pub async fn session_ping(&self) -> Result<(), DriverError> {
         let params = json!({ "session_id": self.session_id });
         self.conn
-            .call("session.ping", params, DESCRIBE_RPC_TIMEOUT)
+            .call(method::SESSION_PING, params, DESCRIBE_RPC_TIMEOUT)
             .await
             .map(|_| ())
-            .map_err(|e| DriverError::from_call("session.ping", e))
+            .map_err(|e| DriverError::from_call(method::SESSION_PING, e))
     }
 }
 
@@ -680,7 +681,7 @@ mod tests {
     #[test]
     fn call_errors_map_to_typed_driver_errors() {
         let cancelled = DriverError::from_call(
-            "query.execute",
+            method::QUERY_EXECUTE,
             CallError::Rpc {
                 code: RpcErrorCode::Cancelled,
                 message: "用户取消".into(),
@@ -690,7 +691,7 @@ mod tests {
         assert!(cancelled.is_cancelled() && !cancelled.is_sql_error());
 
         let denied = DriverError::from_call(
-            "query.execute",
+            method::QUERY_EXECUTE,
             CallError::Rpc {
                 code: RpcErrorCode::CapabilityDenied,
                 message: "驱动不支持事务".into(),
@@ -701,7 +702,7 @@ mod tests {
         assert!(denied.to_string().contains("transactions"));
 
         let unknown = DriverError::from_call(
-            "query.execute",
+            method::QUERY_EXECUTE,
             CallError::RpcUnknownCode {
                 raw_code: -32099,
                 message: "对端比我们新".into(),
@@ -710,7 +711,7 @@ mod tests {
         assert!(matches!(unknown, DriverError::UnknownCode { raw_code, .. } if raw_code == -32099));
 
         let gone = DriverError::from_call(
-            "query.execute",
+            method::QUERY_EXECUTE,
             CallError::Disconnected {
                 reason: "对端退出".into(),
             },
@@ -948,7 +949,7 @@ impl SidecarDatabase {
         SessionDriver::new(&conn, &self.session_id)
             .meta_objects(catalog, &schema)
             .await
-            .map_err(|e| self.map_error("meta.objects", e))
+            .map_err(|e| self.map_error(method::META_OBJECTS, e))
     }
 
     /// 驱动错误 → 引擎错误域的映射。
@@ -1029,7 +1030,7 @@ impl SidecarDatabase {
             }
             DriverError::Protocol { detail } => CoreError::plugin(PluginError::ExecutionFailed {
                 plugin_id: db_type,
-                function: "query.execute".to_string(),
+                function: method::QUERY_EXECUTE.to_string(),
                 reason: detail,
             }),
         }
@@ -1141,7 +1142,7 @@ impl Database for SidecarDatabase {
         SessionDriver::new(&conn, &self.session_id)
             .meta_catalogs()
             .await
-            .map_err(|e| self.map_error("meta.catalogs", e))
+            .map_err(|e| self.map_error(method::META_CATALOGS, e))
     }
 
     async fn list_schemas(&self, catalog: &str) -> Result<Vec<String>, CoreError> {
@@ -1150,7 +1151,7 @@ impl Database for SidecarDatabase {
             .meta_schemas(catalog)
             .await
             .map(|schemas| schemas.into_iter().map(|s| s.name).collect())
-            .map_err(|e| self.map_error("meta.schemas", e))
+            .map_err(|e| self.map_error(method::META_SCHEMAS, e))
     }
 
     /// 表与视图一次拿全：导航按 `kind == View` 把这一份结果分成两个文件夹
@@ -1187,7 +1188,7 @@ impl Database for SidecarDatabase {
                     .map(|c| c.into_column_detail())
                     .collect()
             })
-            .map_err(|e| self.map_error("meta.object_detail", e))
+            .map_err(|e| self.map_error(method::META_OBJECT_DETAIL, e))
     }
 
     async fn list_procedures(
@@ -1252,7 +1253,7 @@ impl Database for SidecarDatabase {
         SessionDriver::new(&conn, &self.session_id)
             .meta_routine_source(catalog, &schema, name)
             .await
-            .map_err(|e| self.map_error("meta.routine_source", e))
+            .map_err(|e| self.map_error(method::META_ROUTINE_SOURCE, e))
     }
 
     /// 索引 / 约束的**明细**：协议面还没定（`meta.object_detail` 只给个数）。
@@ -1282,7 +1283,7 @@ impl Database for SidecarDatabase {
         SessionDriver::new(&conn, &self.session_id)
             .session_ping()
             .await
-            .map_err(|e| self.map_error("session.ping", e))
+            .map_err(|e| self.map_error(method::SESSION_PING, e))
     }
 }
 
@@ -1341,13 +1342,13 @@ impl MetadataBrowser for SidecarDatabase {
         let detail = SessionDriver::new(&conn, &self.session_id)
             .meta_object_detail(catalog, &schema, table)
             .await
-            .map_err(|e| self.map_error("meta.object_detail", e))?;
+            .map_err(|e| self.map_error(method::META_OBJECT_DETAIL, e))?;
 
         // 类别摆不进导航就没法当详情看（属性面板按类别选表单）：如实报，不拿「表」顶上
         let Some(node) = detail.object.into_node_info() else {
             return Err(CoreError::plugin(PluginError::ExecutionFailed {
                 plugin_id: self.db_type.clone(),
-                function: "meta.object_detail".to_string(),
+                function: method::META_OBJECT_DETAIL.to_string(),
                 reason: format!("{table} 的类别摆不进导航，属性面板没有它的位置"),
             }));
         };

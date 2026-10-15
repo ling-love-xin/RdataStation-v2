@@ -33,6 +33,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use super::method;
 use super::proto::{
     Frame, FrameIoError, PROTOCOL_VERSION, RpcErrorCode, check_protocol_version, read_frame,
     write_frame,
@@ -98,6 +99,9 @@ impl std::error::Error for CallError {}
 pub enum ConnEvent {
     /// 通知（插件 → 宿主）：`log` / `progress` 等。
     Notification { method: String, params: Value },
+    /// 反向请求（插件 → 宿主，请求-响应）：`host.*` 面。宿主处理完用
+    /// [`SidecarConn::reply`] / [`SidecarConn::reply_error`] 回帧。
+    InboundRequest { id: u64, method: String, params: Value },
     /// 流层面的不对：错位、未知种类、超时后迟到的响应……
     Issue { detail: String },
     /// 连接断开（对端断开时在飞调用各自收到带理由的 [`CallError::Disconnected`]；
@@ -134,6 +138,11 @@ enum DriverCommand {
     },
     Abandon {
         id: u64,
+    },
+    /// 回一个反向请求的响应帧（`host.*` 面；不登记 Router——in_flight 是
+    /// 宿主发出请求的 id 空间，反向响应由对端自己匹配）。
+    Reply {
+        frame: Frame,
     },
     Shutdown,
 }
@@ -253,7 +262,7 @@ impl SidecarConn {
     ) -> Result<CallOutcome, CallError> {
         let outcome = self
             .call(
-                "initialize",
+                method::INIT,
                 json!({
                     "protocol": PROTOCOL_VERSION,
                     "host": { "name": host_name, "version": host_version },
@@ -284,6 +293,46 @@ impl SidecarConn {
     /// 那条约定（`dev-plan` §4.2.1），进程的等待与强杀属于 `manager` 的职责。
     pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(DriverCommand::Shutdown).await;
+    }
+
+    /// 回复一个反向请求（`host.*` 面）：写一帧 JSON-RPC 响应。
+    ///
+    /// 反向请求通过 [`ConnEvent::InboundRequest`] 到达宿主侧；处理完用本方法回帧，
+    /// id 必须原样带回。连接已关（driver 任务退出）时返回 [`CallError::Closed`]。
+    pub async fn reply(&self, id: u64, result: Value) -> Result<(), CallError> {
+        let body = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+        let payload = serde_json::to_vec(&body).map_err(|e| CallError::Frame {
+            detail: e.to_string(),
+        })?;
+        self.cmd_tx
+            .send(DriverCommand::Reply {
+                frame: Frame::json(payload),
+            })
+            .await
+            .map_err(|_| CallError::Closed)
+    }
+
+    /// 反向请求处理失败：写一帧 JSON-RPC 错误响应。
+    pub async fn reply_error(
+        &self,
+        id: u64,
+        code: i32,
+        message: impl Into<String>,
+    ) -> Result<(), CallError> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message.into() },
+        });
+        let payload = serde_json::to_vec(&body).map_err(|e| CallError::Frame {
+            detail: e.to_string(),
+        })?;
+        self.cmd_tx
+            .send(DriverCommand::Reply {
+                frame: Frame::json(payload),
+            })
+            .await
+            .map_err(|_| CallError::Closed)
     }
 }
 
@@ -322,6 +371,15 @@ async fn driver_loop<W>(
                     // 超时/取消：两边都摘掉，之后迟到的响应由 Router 报成 Issue
                     pending.remove(&id);
                     router.abandon(id);
+                }
+                Some(DriverCommand::Reply { frame }) => {
+                    // 反向请求的响应：直接写帧（不登记在飞），失败与请求同路径收摊
+                    if let Err(e) = write_frame(&mut writer, &frame).await {
+                        let reason = format!("写帧失败：{e}");
+                        let error = CallError::Disconnected { reason: reason.clone() };
+                        close(&mut pending, &mut cmd_rx, &event_tx, reason, error, false);
+                        return;
+                    }
                 }
                 Some(DriverCommand::Shutdown) | None => {
                     // 本地主动要的收摊：调用方拿 `Closed`（不是「对端没了」）
@@ -415,6 +473,9 @@ fn dispatch(
             }
             RouterEvent::Notification { method, params } => {
                 let _ = event_tx.send(ConnEvent::Notification { method, params });
+            }
+            RouterEvent::InboundRequest { id, method, params } => {
+                let _ = event_tx.send(ConnEvent::InboundRequest { id, method, params });
             }
             RouterEvent::Issue { detail } => {
                 let _ = event_tx.send(ConnEvent::Issue { detail });
@@ -595,7 +656,7 @@ mod tests {
         });
 
         let out = conn
-            .call("query.execute", json!({}), Duration::from_secs(5))
+            .call(method::QUERY_EXECUTE, json!({}), Duration::from_secs(5))
             .await
             .expect("调用应成功");
         assert_eq!(out.attachments.len(), 1);
@@ -626,7 +687,7 @@ mod tests {
         });
 
         let err = conn
-            .call("query.execute", json!({}), Duration::from_millis(30))
+            .call(method::QUERY_EXECUTE, json!({}), Duration::from_millis(30))
             .await
             .unwrap_err();
         assert!(matches!(err, CallError::Timeout { .. }), "{err:?}");
@@ -649,7 +710,7 @@ mod tests {
             vec![
                 Frame::json(
                     serde_json::to_vec(&json!({
-                        "jsonrpc": "2.0", "method": "progress",
+                        "jsonrpc": "2.0", "method": method::EVENT_PROGRESS,
                         "params": { "phase": "fetch", "done": 1, "total": 2 }
                     }))
                     .unwrap(),
@@ -658,14 +719,14 @@ mod tests {
             ]
         });
 
-        conn.call("query.execute", json!({}), Duration::from_secs(5))
+        conn.call(method::QUERY_EXECUTE, json!({}), Duration::from_secs(5))
             .await
             .expect("调用应成功");
 
         let event = events.recv().await.expect("应有事件");
         match event {
             ConnEvent::Notification { method, params } => {
-                assert_eq!(method, "progress");
+                assert_eq!(method, method::EVENT_PROGRESS);
                 assert_eq!(params["done"], 1);
             }
             other => panic!("期望 Notification，得到 {other:?}"),
@@ -677,7 +738,7 @@ mod tests {
         let (conn, _events, _side) = harness(|_msg, id| vec![error_frame(id, -32004, "cancelled")]);
 
         let err = conn
-            .call("query.execute", json!({}), Duration::from_secs(5))
+            .call(method::QUERY_EXECUTE, json!({}), Duration::from_secs(5))
             .await
             .unwrap_err();
         match err {
@@ -743,7 +804,7 @@ mod tests {
     #[tokio::test]
     async fn initialize_accepts_a_matching_version() {
         let (conn, _events, _side) = harness(|msg, id| {
-            assert_eq!(method_of(&msg), "initialize");
+            assert_eq!(method_of(&msg), method::INIT);
             vec![reply_frame(
                 id,
                 json!({ "protocol": PROTOCOL_VERSION, "driver_ids": ["oracle-jdbc"] }),
@@ -767,7 +828,7 @@ mod tests {
         let calling = {
             let conn = conn.clone();
             tokio::spawn(async move {
-                conn.call("query.execute", json!({}), Duration::from_secs(30))
+                conn.call(method::QUERY_EXECUTE, json!({}), Duration::from_secs(30))
                     .await
             })
         };
@@ -846,5 +907,80 @@ mod tests {
                 "排队中的那些要知道为什么：{err:?}"
             );
         }
+    }
+
+    /// 反向请求（host.* 面）端到端：对端发带 id+method 的帧 → 宿主收到
+    /// InboundRequest 事件 → 宿主 reply → 对端收到同一 id 的响应帧。
+    #[tokio::test]
+    async fn inbound_request_round_trips_with_reply() {
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, mut events) = SidecarConn::spawn(host_r, host_w);
+        let (mut pr, mut pw) = tokio::io::split(peer);
+
+        // 对端主动发一个反向请求（模拟扩展进程向宿主要能力）
+        let req = json!({
+            "jsonrpc": "2.0", "id": 9, "method": "host.log",
+            "params": { "level": "info", "message": "来自扩展" }
+        });
+        write_frame(
+            &mut pw,
+            &Frame::json(serde_json::to_vec(&req).unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let ev = events.recv().await.expect("应有 InboundRequest 事件");
+        match ev {
+            ConnEvent::InboundRequest { id, method, params } => {
+                assert_eq!(id, 9);
+                assert_eq!(method, "host.log");
+                assert_eq!(params["message"], "来自扩展");
+            }
+            other => panic!("期望 InboundRequest，得到 {other:?}"),
+        }
+
+        // 宿主处理完回帧
+        conn.reply(9, json!({ "accepted": true })).await.unwrap();
+
+        // 对端按 id 收到响应
+        let frame = read_frame(&mut pr).await.expect("对端应收响应帧");
+        let msg: Value = serde_json::from_slice(&frame.payload).unwrap();
+        assert_eq!(msg["id"], 9);
+        assert_eq!(msg["result"], json!({ "accepted": true }));
+        assert!(msg.get("method").is_none(), "响应帧不该带 method");
+    }
+
+    /// 反向请求处理失败：宿主回 error 帧，对端按 id 收到错误。
+    #[tokio::test]
+    async fn inbound_request_error_reply_reaches_peer() {
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, mut events) = SidecarConn::spawn(host_r, host_w);
+        let (mut pr, mut pw) = tokio::io::split(peer);
+
+        write_frame(
+            &mut pw,
+            &Frame::json(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0", "id": 4, "method": "host.storage.get",
+                    "params": { "key": "k" }
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let ev = events.recv().await.expect("应有 InboundRequest 事件");
+        assert!(matches!(ev, ConnEvent::InboundRequest { id: 4, .. }), "{ev:?}");
+
+        conn.reply_error(4, -32602, "参数不合法").await.unwrap();
+
+        let frame = read_frame(&mut pr).await.expect("对端应收错误帧");
+        let msg: Value = serde_json::from_slice(&frame.payload).unwrap();
+        assert_eq!(msg["id"], 4);
+        assert_eq!(msg["error"]["code"], -32602);
+        assert_eq!(msg["error"]["message"], "参数不合法");
     }
 }

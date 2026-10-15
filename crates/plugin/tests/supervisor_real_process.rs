@@ -413,3 +413,50 @@ async fn shutdown_all_invalidates_sessions_and_reaps_every_process() {
     assert_eq!(supervisor.live_instances(), 0);
     assert!(supervisor.instances_of(id).is_empty());
 }
+
+/// 停用 / 卸载的前置：`shutdown_plugin` 只停**那一个插件**的实例，
+/// 不碰其他插件 —— 卸载 A 不能让 B 的进程跟着没了。
+#[tokio::test]
+async fn shutdown_plugin_reaps_only_that_plugins_instances() {
+    let id_a = "test.supervisor.shutdown_one_a";
+    let id_b = "test.supervisor.shutdown_one_b";
+    let now = Instant::now();
+    let mut supervisor = SidecarSupervisor::new();
+    supervisor.deploy(deployment(id_a, &[], 1)).unwrap();
+    supervisor.deploy(deployment(id_b, &[], 1)).unwrap();
+
+    supervisor
+        .open_session(id_a, "fixture", "sa", json!({}), now)
+        .await
+        .unwrap();
+    supervisor
+        .open_session(id_b, "fixture", "sb", json!({}), now)
+        .await
+        .unwrap();
+    assert_eq!(supervisor.live_instances(), 2);
+
+    supervisor.shutdown_plugin(id_a, now, Duration::from_secs(10)).await;
+
+    let events = collect_events(&mut supervisor);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            SupervisorEvent::SessionInvalidated { session_id, .. } if session_id == "sa"
+        )),
+        "A 的会话要如实作废：{events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            SupervisorEvent::SessionInvalidated { session_id, .. } if session_id == "sb"
+        )),
+        "B 的会话不该被动：{events:?}"
+    );
+    assert_eq!(supervisor.live_instances(), 1, "只收 A，B 的进程要留着");
+    assert!(supervisor.instances_of(id_a).is_empty());
+    assert_eq!(supervisor.instances_of(id_b).len(), 1);
+    assert!(supervisor.session("sa").is_none());
+    assert!(supervisor.session("sb").is_some(), "B 的会话要还活着");
+
+    supervisor.shutdown_all(now, Duration::from_secs(10)).await;
+}

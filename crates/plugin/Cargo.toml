@@ -22,6 +22,8 @@ arrow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
+# 反向 Host API 的 secret 一次性值走 base64（见 sidecar/host.rs）
+base64.workspace = true
 
 # ===== WASM 运行时 =====
 extism.workspace = true
@@ -32,6 +34,11 @@ thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 toml.workspace = true
+
+# ===== 插件包解压（installer：zip / tar.gz）=====
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

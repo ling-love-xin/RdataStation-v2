@@ -423,6 +423,15 @@ fn init_global_system() {
         // 不阻断启动：拿不到订阅者时日志只走 stderr（代码里大量 eprintln! 仍在）。
         Err(e) => eprintln!("[startup] 日志系统未启用（只输出 stderr）: {e}"),
     }
+
+    // 插件运行时初始化（宿主接线，2026-10-15）：扫描 `<RDS_HOME>/plugins/` 的已安装
+    // 插件并拉起运行时循环（sidecar 的心跳/空闲回收/反向 host.* 请求分发全靠它 tick）。
+    // 失败不阻断启动（与全局库同口径）：插件不可用只影响扩展能力，不影响核心功能。
+    let plugin_outcome = runtime.block_on(plugin::init_plugin_manager(paths::plugins_dir()));
+    match &plugin_outcome {
+        Ok(()) => tracing::info!("插件管理器已就绪（{}）", paths::plugins_dir().display()),
+        Err(e) => eprintln!("[startup] 插件管理器初始化失败: {e}"),
+    }
 }
 
 /// 同步读取主题目录内的 JSON 资产并注册到 `ThemeRegistry`。

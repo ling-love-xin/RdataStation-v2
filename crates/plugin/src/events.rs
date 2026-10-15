@@ -51,8 +51,13 @@ impl PluginEventManager {
     }
 
     /// 发布事件
+    ///
+    /// broadcast 容量 100：慢消费者会 `Lagged`（事件被丢）——生命周期事件低频，
+    /// 可接受；但丢事件要能看见，所以 send 失败打 trace（曾静默忽略）。
     pub fn emit(&self, event: PluginEvent) {
-        let _ = self.sender.send(event);
+        if let Err(e) = self.sender.send(event) {
+            tracing::trace!("plugin event dropped (receiver lagged): {e:?}");
+        }
     }
 
     /// 订阅事件

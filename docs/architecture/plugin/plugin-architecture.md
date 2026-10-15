@@ -79,7 +79,7 @@ install（installer / PluginService + global.sqlite 注册）
 完整设计在 `../runtime/data-paths.md` §8，此处只列结论：
 
 ```
-<RDS_HOME>/plugins/<plugin-id>/       插件本体（wasm / sidecar 二进制 + manifest.json）
+<RDS_HOME>/plugins/<plugin-id>/       插件本体（wasm / sidecar 二进制 + plugin.toml 清单）
 <RDS_HOME>/plugin-data/<plugin-id>/   插件私有数据（沙箱内唯一可写区，默认卸载后保留）
 <RDS_HOME>/plugin-cache/<plugin-id>/  wasmtime 编译缓存、sidecar 日志与临时文件
 <RDS_HOME>/tmp/sidecar/<plugin-id>/   sidecar 进程 current_dir
@@ -192,7 +192,7 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 
 | 项 | 现状 | 处理建议 |
 | --- | --- | --- |
-| `storage` 模块 | `lib.rs` 的模块文档列了「核心：… storage」，但 `pub mod` 列表里**没有** | 三期补：插件私有数据访问层（对应 §6 的 `plugin-data/<id>`） |
+| `storage` 模块 | ~~`lib.rs` 模块文档列了「核心：… storage」但 `pub mod` 没有~~（2026-10-15 已核对：当前 `lib.rs` 不再提 storage，该行过时） | 三期补：插件私有数据访问层（对应 §6 的 `plugin-data/<id>`） |
 | 插件发现目录 | 依赖 CWD + 写 C 盘 | 见 §6 |
 | 前端扩展（wasm 侧栏） | 清单已有 `capabilities.frontend` / `contributes.panel`，宿主侧消费未接线 | 三期做：面板注册表 + 沙箱内 UI 渲染契约 |
 | 版本与依赖 | `dependency.rs` 从清单解析，未定版本范围与冲突策略 | 三期做：语义化版本 + 冲突报错口径 |
@@ -221,7 +221,7 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 | --- | --- |
 | 清单与扩展点 | `crates/plugin/src/manifest.rs` |
 | 权限模型 | `crates/plugin/src/permission.rs` |
-| 生命周期 | `crates/plugin/src/manager.rs`、`plugin_service.rs`、`installer.rs`、`loader.rs` |
+| 生命周期 | `crates/plugin/src/manager.rs`（2026-10-15 起 `loader.rs` 已并入：发现 → 加载 → 激活 → 停用 → 卸载单一入口）、`plugin_service.rs`、`installer.rs` |
 | WASM 适配 | `crates/plugin/src/wasm/*`（Extism） |
 | Sidecar 适配 | `crates/plugin/src/sidecar/*`（JSON-RPC + 健康检查 + 热重载） |
 | 驱动发现 | `crates/engine/src/driver/loader.rs` |

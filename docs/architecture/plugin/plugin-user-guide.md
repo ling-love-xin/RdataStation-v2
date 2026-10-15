@@ -256,6 +256,10 @@ sidecar 是**独立进程**：宿主起它、用 stdio 与它说 JSON-RPC + Arro
     stderr ──▶   plugin-cache/<id>/sidecar.log（宿主替你落盘）
 ```
 
+> method 字符串的**权威清单**在 `crates/plugin/src/sidecar/method.rs` 的常量表
+> （与 dev-plan §4.2.2 方法表一一对应）；清单里声明 `methods` 时，拼写不在白名单
+> 里的会在安装期被拒（协议已知 method 或 `x.` 私有前缀，见 `is_allowed_declaration`）。
+
 帧格式（5 字节头，`total_len` **含头**）：
 
 ```text

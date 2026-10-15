@@ -529,7 +529,7 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 
 含义：① RdataStation 扩展宿主（D6：QuickJS + VS Code 模式）与 gpui-kit shell **同一家族**，可作设计参考与未来对齐对象；但 shell 插件系统依附其 shell 框架（窗口 / 主题 / 布局全托管），替换现有 `crates/plugin`（P1 完成度高）等于重写，**不建议**。② 该脚本元素模型是「宿主注册组件 + 脚本组合」，未见 canvas / path 自由绘制元素 → **不适合画 ER**，ER v1 仍走原生 Rust panel。
 
-**落地顺序**（均属 P4，现在不写代码）：① schema → 渲染模型桥（`meta.*` → 表 / 列 / 外键 → 布局输入）；② 只读渲染（实体卡片 + 连线 + 自动布局）；③ pan/zoom + 拖拽排布 + 布局持久化；④ DDL 导出；⑤ 写回源库后置。
+**落地顺序**：① schema → 渲染模型桥（`meta.*` → 表 / 列 / 外键 → 布局输入）+ 分层布局 —— **已落地（2026-10-15，`crates/database/src/er/`）**；② 只读渲染（实体卡片 + 连线 + 自动布局）双接入面板；③ pan/zoom + 拖拽排布 + 布局持久化；④ DDL 导出；⑤ 写回源库后置。②~⑤ 待做；全文设计见 [`../database/database-er-model-view-design.md`](../database/database-er-model-view-design.md)。
 
 ---
 
@@ -677,6 +677,23 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 - 模式切换：**建议不显式切换**——同一视图按内容自动判定（分析模式 = 通用模式超集），至多顶栏一个只读 mode 指示器；
 - Markdown 渲染粒度：**建议 v1 走 TextView 插件做轻量预览**（语法高亮 + 代码块）；富文档（表格 / 图表 / 可复跑结果区）归入分析模式、P4 后置，与 ER（§14.3 原生面板）保持同轨判断。
 
+**代码落地（五刀已完工，`crates/editor/src/lsp/` + `crates/workbench/src/services/editor_lsp.rs`）**：
+
+| 刀 | 内容 | 位置 | 状态 |
+| --- | --- | --- | --- |
+| 一 | 分帧（`Content-Length` 头帧编解码，纯函数）+ 最小 client（握手 / 请求-响应关联 / `didOpen·didChange` / `publishDiagnostics`→事件 / 停机无孤儿） | `frame.rs` / `client.rs` | ✅（9 + 5 项测试） |
+| 二 | provider bridge：`LspCompletionProvider`（`completions()` 后台 `call` 转发）+ 诊断翻译纯函数 + `install/uninstall` 挂点 | `bridge.rs` | ✅（8 项测试） |
+| 三 | 宿主装配：`LspPort` 端口（宿主注入「文档 → 服务」+ 按 `uri` 认领事件）+ `choose_completion` 三选一（SQL 本地 / 通用分析 LSP / 无）+ `didOpen/didChange/didClose` 全文同步 + 事件轮询并入三源诊断（执行 / 词法 / LSP）+ `IoError` 降级摘服务 | `host.rs` + `view/host.rs` | ✅（6 + 1 项测试） |
+| 四 | **宿主起真 server**：`client.rs` 加 `from_process`（`ProcessIo` 拆读写两半）；workbench `editor_lsp.rs` 探测 Python 环境 → spawn `python -m jedi_language_server` → 后台 `initialize`（不阻塞主线程）→ `LspPort` 实现（反查文档模式/路径定语言，`service()` 就绪才给）+ 事件按 `uri` 认领 / `IoError` 广播；装配点 `WorkbenchView::assemble` | `client.rs` + `editor_lsp.rs` + `view.rs::assemble` | ✅（5 项测试 + 616/616 + 147/147） |
+| 五 | **状态栏 LSP 管理器 + 生命周期**：`LspPort::wants`（「想要 ≠ 就绪」——被停 / 崩溃后保持轻轮询，**重启即自动重连**）；面板泵每拍重问宿主 + 崩溃清僵尸会话（`same` 判据并上 `Arc::ptr_eq`）；`WorkbenchLsp` 改**按需启动 + 空闲回收（`reap_if_idle`）+ 手动启停 + 崩溃探测（`mark_dead`）**；状态栏指示 + 管理器浮层（启动 / 停止）+ 1 s 回收泵 | `lsp/host.rs` / `shared.rs` / `view/host.rs` + `editor_lsp.rs` + `view.rs` / `ui.rs` | ✅（新增纯函数测试 + 全量回归） |
+
+**遗留（未定，后续待做）**：
+- **server 生命周期**：已落地「**关最后一个需要服务的面板 → 空闲回收停 server**」（视图 1 s 泵 `reap_if_idle`，只停服务、下次需要自动重启）+ **状态栏 LSP 管理器手动启停**（`start` / `stop`）+ **崩溃探测**（读线程断 / 握手失败 → `mark_dead`：广播死讯、摘句柄、待手动重启，避免崩溃热循环）。**仍留**：`shutdown()` 未挂应用退出路径（v1 靠 `LspClient::Drop` 关读线程 + 写侧 EOF 兜底）；生命周期默认策略（按需启动 / 空闲 1 s 回收 / 崩溃不自动重启）可后续做成可配项；
+- **多语言 server 声明**：v1 硬编码 `python -m jedi_language_server` 只服务 Python；设计目标是「按语言声明 + 探测」多 server（jedi / pylsp / 未来 markdown server），需等插件 manifest 的 `backend.kind = script` 落地后把命令来源换成插件声明；
+- **多面板共享**：`drain_for` 按 `uri` 认领已保证事件不丢，但尚无窗口级集成测试（editor crate 无窗口测试基建，纯 `#[test]` 覆盖到端口契约与折叠逻辑）；
+- **UTF-16 编码**：跟随内核 char 数编码（bridge 注释已述），与 LSP 规范在非 BMP 字符上有已知偏差，暂不另造转换；
+- **其余 provider 槽位**：hover / definition / codeAction / semantic tokens 未实现（`Lsp` 六个槽位只接了 completion + 诊断）；Markdown 的 LSP 未接（v1 只 Python，`.md` 文档无服务）。
+
 ### 14.3 ER 建模视图（浓缩，详见 §11.3）
 
 **结论**（§11.3 已定案，这里只引用）：以插件形式进入**合适**；webview 轨**否决**（drawdb / erd-editor / Mermaid 均需 webview，本项目由 tauri 迁来、不引入前端栈）；路线 = **GPUI 原生渲染**，插件退到「数据源 + 视图声明」角色。
@@ -691,7 +708,9 @@ meta.* 五件套（catalogs/schemas/objects/object_detail/routine_source）
   → GPUI 原生绘制（Path / Text：实体卡片 + 折线 + crow's foot + pan/zoom）
 ```
 
-**插件角色**：`contributes.views` 声明 + 数据变换（`rds.metadata` → ER 输入模型）；v1 只读渲染甚至可不依赖插件系统（宿主直取），插件是**加分项不是前提**（§11.3）。落地顺序五步见 §11.3（schema→渲染模型桥 / 只读渲染 / pan-zoom+拖拽 / DDL 导出 / 写回源库后置）。
+**插件角色**：`contributes.views` 声明 + 数据变换（`rds.metadata` → ER 输入模型）；v1 只读渲染甚至可不依赖插件系统（宿主直取），插件是**加分项不是前提**（§11.3）。落地顺序五步见 §11.3。
+
+**落地（2026-10-15）**：第一期骨架已落地——ER 输入模型 + 「元数据 → 模型」桥 + 分层布局（纯函数，带单测，`crates/database/src/er/{model.rs,layout.rs}`，`cargo test -p rds-database --lib` 133/133 通过）；渲染与面板装配为下一片。设计全文（含模块归属判定、桥规则、布局算法、开放项、实现位置映射表）见 [`../database/database-er-model-view-design.md`](../database/database-er-model-view-design.md)。
 
 ### 14.4 gpui-kit shell 插件系统示例（查询结果看板 / 仪表盘卡片）
 

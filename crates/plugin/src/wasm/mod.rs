@@ -26,61 +26,23 @@
 //! 2. **驱动插件**: 自定义数据库驱动
 //! 3. **工具插件**: SQL 格式化、代码生成
 
-use engine::CoreError;
 use serde::Serialize;
 
 // 导出子模块
 pub mod api;
 pub mod extism;
-pub mod plugin_manager;
 // 注：`host_functions` 已于 P0 删除。原有 4 个 host function 全是“无条件返回错误”的占位
 // （签名也不对：Extism 读宿主内存要走 `host_fn!` + `Memory`，不是 Val 数组），且全仓零调用。
 // 回收口径：**现在不提供任何 host function**（wasm 插件拿不到宿主能力，与“默认拒绝”一致）；
 // 真正的 host function 面在 P3 按 Q4 收敛后重建。
+//
+// `plugin_manager.rs`（AdvancedPluginManager / PluginSandbox / ResourceLimits）已于 2026-10-15
+// 删除：与 `ExtismPluginManager` 职责重复且**全仓零调用**，沙箱资源计量是 `cpu_time_used_ms += 1`
+// 的假数据。wasm 沙箱/资源限制的真相归 P3 与 `CapabilitiesWasm`（max_memory_mb / max_cpu_time_ms /
+// allowed_host_functions）一起重建 —— 那是「运行期强制」，不是一张自维护的表。
 
 // 重新导出核心类型
 pub use self::extism::ExtismPluginManager;
-pub use self::plugin_manager::{
-    AdvancedPluginManager, PluginSandbox, PluginSandboxConfig, ResourceLimits, ResourceUsage,
-};
-
-/// WASM 适配错误
-#[derive(Debug)]
-pub enum WasmAdapterError {
-    /// 插件加载错误
-    LoadError(String),
-    /// 运行时错误
-    RuntimeError(String),
-    /// 通信错误
-    CommunicationError(String),
-    /// 权限错误
-    PermissionError(String),
-    /// 资源限制错误
-    ResourceLimitError(String),
-    /// Core 错误
-    CoreError(CoreError),
-}
-
-impl std::fmt::Display for WasmAdapterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LoadError(msg) => write!(f, "Plugin load error: {}", msg),
-            Self::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
-            Self::CommunicationError(msg) => write!(f, "Communication error: {}", msg),
-            Self::PermissionError(msg) => write!(f, "Permission error: {}", msg),
-            Self::ResourceLimitError(msg) => write!(f, "Resource limit error: {}", msg),
-            Self::CoreError(e) => write!(f, "Core error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for WasmAdapterError {}
-
-impl From<CoreError> for WasmAdapterError {
-    fn from(err: CoreError) -> Self {
-        Self::CoreError(err)
-    }
-}
 
 /// 插件类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -110,53 +72,4 @@ pub struct PluginMetadata {
     pub author: String,
     /// 入口函数
     pub entry_point: String,
-}
-
-/// 插件管理器 trait
-pub trait PluginManager {
-    /// 加载插件
-    fn load_plugin(&mut self, path: &str) -> Result<PluginMetadata, WasmAdapterError>;
-
-    /// 卸载插件
-    fn unload_plugin(&mut self, id: &str) -> Result<(), WasmAdapterError>;
-
-    /// 获取已加载插件列表
-    fn list_plugins(&self) -> Vec<PluginMetadata>;
-
-    /// 调用插件函数
-    fn call_plugin(&self, id: &str, func: &str, args: &[u8]) -> Result<Vec<u8>, WasmAdapterError>;
-}
-
-/// WASM 运行时配置
-#[derive(Debug, Clone)]
-pub struct WasmRuntimeConfig {
-    /// 最大内存限制 (MB)
-    pub max_memory_mb: usize,
-    /// 最大执行时间 (ms)
-    pub max_execution_time_ms: u64,
-    /// 是否允许文件系统访问
-    pub allow_fs: bool,
-    /// 是否允许网络访问
-    pub allow_network: bool,
-}
-
-impl Default for WasmRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            max_memory_mb: 512,
-            max_execution_time_ms: 30000,
-            allow_fs: false,
-            allow_network: false,
-        }
-    }
-}
-
-/// 创建默认的插件管理器
-pub fn create_default_plugin_manager() -> AdvancedPluginManager {
-    AdvancedPluginManager::new(None)
-}
-
-/// 创建自定义配置的插件管理器
-pub fn create_plugin_manager(config: WasmRuntimeConfig) -> AdvancedPluginManager {
-    AdvancedPluginManager::new(Some(config))
 }

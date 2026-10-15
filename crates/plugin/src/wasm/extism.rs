@@ -4,7 +4,7 @@ use extism::{Manifest, Plugin, Wasm};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
-use super::{PluginMetadata, PluginType};
+use super::{PluginMetadata};
 use shared::error::{CommonError, CoreError};
 
 /// 插件状态枚举
@@ -61,10 +61,15 @@ impl ExtismPluginManager {
     }
 
     /// 加载插件（增强版）
+    ///
+    /// `metadata` 来自清单解析（`PluginManager::try_discover_plugin`），不再在运行时
+    /// 硬编码 name/version —— 那会让「列表里看到的名字」与清单脱节（曾硬编码为
+    /// name=id、version="0.1.0"）。
     pub fn load_plugin(
         &self,
         id: &str,
         wasm_bytes: &[u8],
+        metadata: PluginMetadata,
         config: Option<HashMap<String, String>>,
         env_vars: Option<HashMap<String, String>>,
     ) -> Result<PluginMetadata, CoreError> {
@@ -83,16 +88,6 @@ impl ExtismPluginManager {
                 id, e
             )))
         })?;
-
-        let metadata = PluginMetadata {
-            id: id.to_string(),
-            name: id.to_string(),
-            version: "0.1.0".to_string(),
-            plugin_type: PluginType::Tool,
-            description: String::new(),
-            author: String::new(),
-            entry_point: "main".to_string(),
-        };
 
         let mut managed = ManagedPlugin::new(plugin, metadata.clone());
         managed.config = config.unwrap_or_default();
@@ -173,6 +168,7 @@ impl ExtismPluginManager {
         let new_metadata = self.load_plugin(
             id,
             new_wasm,
+            old_plugin.metadata.clone(),
             Some(old_plugin.config.clone()),
             Some(old_plugin.env_vars.clone()),
         )?;

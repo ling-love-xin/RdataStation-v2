@@ -19,6 +19,22 @@ pub struct PluginManifest {
     /// `[backend]`：这个插件**怎么跑**（dev-plan §4.3）。不写 `[backend]` = 只有进程内形态（前端/wasm）。
     #[serde(default)]
     pub backend: Option<PluginBackend>,
+    /// `api`：这个插件实现**什么能力面**（借鉴 navop driver.json 的 `api` 命名空间）。
+    ///
+    /// 数据库驱动声明 `"database"`；未来 Redis / MongoDB / SSH 隧道 / 终端等 sidecar
+    /// 各占一个命名空间。**不写 = 未声明**（老清单没有这个字段照常解析）。
+    /// 校验只认小写字母、数字、连字符 —— 名字将来要拼进路由与市场分类，
+    /// 不能允许任意字符串。
+    #[serde(default)]
+    pub api: Option<String>,
+    /// `methods`：sidecar 轨声明的 RPC method 清单。
+    ///
+    /// 每一项必须是协议已知 method（[`crate::sidecar::method::ALL_METHODS`]）或以
+    /// `x.` 开头的私有能力 —— 拼错的方法名等于对宿主承诺一个它不会履行的能力，
+    /// **安装期就拒绝**（navop `extension-protocol/method.rs` 的 `is_allowed_declaration`
+    /// 同款闸）。空 = 未声明（后端进程仍是合法 sidecar，只是没有能力声明）。
+    #[serde(default)]
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +331,12 @@ pub struct PluginPermissions {
     /// 凭据口径：`"database"` = 该插件会收到你的数据库密码（dev-plan §4.6.3）。
     #[serde(default)]
     pub credentials: Option<String>,
+    /// 反向 Host API（`host.*` 面）的权限声明：点分 glob（`secrets.read.*` /
+    /// `host.ssh_tunnel`），由运行时 [`crate::sidecar::host::HostApiHandler`] 门控，
+    /// **默认拒绝**。安装期不校验格式（glob 语义宽松），写错的最坏结果是请求被拒
+    /// 并拿到可读错误，不会静默放行。
+    #[serde(default)]
+    pub host: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -410,6 +432,36 @@ impl PluginManifest {
             ));
         }
         self.validate_backend()?;
+        self.validate_api()?;
+        self.validate_methods()?;
+        Ok(())
+    }
+
+    /// `api` 的字符白名单：小写字母开头，只含小写字母 / 数字 / 连字符。
+    fn validate_api(&self) -> Result<(), CoreError> {
+        let Some(api) = &self.api else {
+            return Ok(());
+        };
+        let mut chars = api.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid {
+            return Err(manifest_error(format!(
+                "api = {api:?} 必须是 ^[a-z][a-z0-9-]*$（小写字母开头，只含小写字母/数字/连字符）"
+            )));
+        }
+        Ok(())
+    }
+
+    /// `methods` 声明白名单：协议已知 method 或 `x.` 私有前缀（见 `sidecar/method.rs`）。
+    fn validate_methods(&self) -> Result<(), CoreError> {
+        for declared in &self.methods {
+            if !crate::sidecar::method::is_allowed_declaration(declared) {
+                return Err(manifest_error(format!(
+                    "methods 里的 {declared:?} 不是协议已知 method，也没有 x. 私有前缀（见 sidecar/method.rs 白名单）"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -474,6 +526,12 @@ impl PluginManifest {
     pub fn check_engine_compatibility(&self, current_version: &str) -> Result<(), CoreError> {
         let required = &self.plugin.engines.rdatastation;
 
+        // 硬约束（plugin/README.md §5 #4）：`engines.rds` 必填（serde 保证非空字段）且**不可 `*`**。
+        // `*` 等于放弃版本闸，任何引擎版本都能装上 —— 与「不满足当场拒绝并报出两个版本号」的口径相反。
+        if required.trim() == "*" {
+            return Err(manifest_error("engines.rds 不允许 \"*\"，必须声明具体版本范围"));
+        }
+
         let current_major: u32 = current_version
             .split('.')
             .next()
@@ -524,6 +582,9 @@ impl ManifestParser {
 
         manifest.validate()?;
 
+        // 引擎版本取 workspace 统一版本（`version.workspace = true`，= 应用版本 0.2.x）。
+        // rds-plugin 不单独发版，它的 `CARGO_PKG_VERSION` 就是宿主版本；若将来拆出版本
+        // 号独立管理，这里应改为显式入参（当前是隐式耦合，见 check_engine_compatibility）。
         manifest.check_engine_compatibility(env!("CARGO_PKG_VERSION"))?;
 
         Ok(manifest)
@@ -582,6 +643,7 @@ allowed_host_functions = ["db_query"]
 [permissions]
 frontend = ["data:query"]
 wasm = ["wasm:db_query"]
+host = ["secrets.read.*", "storage.read", "host.ssh_tunnel"]
 
 [[contributes.commands]]
 id = "test.hello"
@@ -646,6 +708,10 @@ version = "^1.0.0"
 
         assert_eq!(manifest.permissions.frontend, vec!["data:query"]);
         assert_eq!(manifest.permissions.wasm, vec!["wasm:db_query"]);
+        assert_eq!(
+            manifest.permissions.host,
+            vec!["secrets.read.*", "storage.read", "host.ssh_tunnel"]
+        );
 
         assert_eq!(manifest.contributes.commands.len(), 1);
         assert_eq!(manifest.contributes.commands[0].id, "test.hello");
@@ -812,6 +878,8 @@ rdatastation = "^0.1.0"
             contributes: PluginContributes::default(),
             dependencies: vec![],
             backend: None,
+            api: None,
+            methods: vec![],
         };
 
         assert!(manifest.check_engine_compatibility("0.1.0").is_ok());
@@ -847,6 +915,8 @@ rdatastation = "^0.1.0"
             contributes: PluginContributes::default(),
             dependencies: vec![],
             backend: None,
+            api: None,
+            methods: vec![],
         };
 
         assert!(manifest.check_engine_compatibility("1.0.0").is_ok());
@@ -1183,5 +1253,124 @@ executable = "bin/agent"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ========== api / methods 声明（P4 市场前置，借鉴 navop driver.json） ==========
+
+    /// 合法的能力声明：api 小写标识符；methods 要么是协议已知、要么带 `x.` 私有前缀。
+    #[test]
+    fn api_and_methods_declare_accept_known_and_private() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+# 顶层键必须放在任何 [表] 头之前（TOML 语义：表头之后的键属于该表）
+api = "redis"
+methods = ["session.ping", "query.execute", "x.redis.command"]
+
+[plugin]
+id = "com.example.redis"
+name = "Redis Driver"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#,
+        )
+        .unwrap();
+        manifest.validate().expect("合法的 api / methods 应当通过");
+
+        assert_eq!(manifest.api.as_deref(), Some("redis"));
+        assert_eq!(manifest.methods, vec![
+            "session.ping".to_string(),
+            "query.execute".to_string(),
+            "x.redis.command".to_string(),
+        ]);
+    }
+
+    /// 拼错的方法名必须在**安装期**被拒 —— 否则就是对一个它不会履行的能力做承诺。
+    #[test]
+    fn manifest_rejects_unknown_method_declarations() {
+        for bad in ["query.execut", "driver.describ", "session/ping", "", "x."] {
+            let manifest: PluginManifest = toml::from_str(&format!(
+                r#"
+methods = [{bad:?}]
+
+[plugin]
+id = "com.example.bad"
+name = "Bad"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#
+            ))
+            .unwrap();
+            let err = manifest.validate().unwrap_err().to_string();
+            assert!(err.contains("不是协议已知 method"), "{bad:?} 应当被拒：{err}");
+        }
+    }
+
+    /// api 的字符白名单：小写字母开头，只含小写字母 / 数字 / 连字符。
+    #[test]
+    fn manifest_rejects_malformed_api_names() {
+        for bad in ["DataBase", "1db", "db@2", "db name", ""] {
+            let manifest: PluginManifest = toml::from_str(&format!(
+                r#"
+api = {bad:?}
+
+[plugin]
+id = "com.example.bad"
+name = "Bad"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[capabilities.frontend]
+entry = "main.js"
+"#
+            ))
+            .unwrap();
+            let err = manifest.validate().unwrap_err().to_string();
+            assert!(
+                err.contains("小写字母") || err.contains("api"),
+                "{bad:?} 应当被拒：{err}"
+            );
+        }
+    }
+
+    /// 老清单（没有 api / methods 字段）照常解析：字段默认 `None` / 空集。
+    #[test]
+    fn legacy_manifests_without_api_or_methods_still_parse() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.legacy"
+name = "Legacy"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+"#,
+        )
+        .unwrap();
+        manifest.validate().expect("老清单应当照常通过");
+        assert_eq!(manifest.api, None);
+        assert!(manifest.methods.is_empty());
     }
 }

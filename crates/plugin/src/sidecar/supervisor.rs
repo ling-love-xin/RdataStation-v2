@@ -41,6 +41,7 @@ use super::lifecycle::{
     Action, Decision, Event, ExitCause, ProcessInstance, ProcessSpec, Registry, RejectReason,
     SessionId, SessionRecord,
 };
+use super::method;
 use super::process::{DEFAULT_REAP_GRACE, SidecarProcess, SpawnSpec};
 use crate::manifest::{BackendCommand, PluginManifest};
 
@@ -148,6 +149,16 @@ pub enum SupervisorEvent {
         method: String,
         params: Value,
     },
+    /// 插件的反向请求（`host.*` 面）：插件向宿主请求能力。宿主处理完用
+    /// [`SidecarSupervisor::session_conn_handle`] 拿到连接句柄调 [`SidecarConn::reply`] 回帧。
+    InboundRequest {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        id: u64,
+        method: String,
+        params: Value,
+    },
     /// 线路层面的不对（错位帧、超时后迟到的响应……）。
     Issue { plugin_id: String, detail: String },
 }
@@ -211,10 +222,20 @@ struct OpenFailure {
 }
 
 /// 事件泵送进总通道的东西（带上「是哪个实例的哪一代」）。
+#[derive(Debug)]
 enum InstanceEvent {
     Notification {
         plugin_id: String,
         generation: u64,
+        method: String,
+        params: Value,
+    },
+    /// 反向请求（host.* 面）：插件向宿主要能力，宿主回帧后结束。
+    InboundRequest {
+        plugin_id: String,
+        index: usize,
+        generation: u64,
+        id: u64,
         method: String,
         params: Value,
     },
@@ -394,6 +415,27 @@ impl SidecarSupervisor {
                     self.handle_disconnect(&plugin_id, index, generation, reason, now)
                         .await;
                 }
+                InstanceEvent::InboundRequest {
+                    plugin_id,
+                    index,
+                    generation,
+                    id,
+                    method,
+                    params,
+                } => {
+                    // 同样按代过滤：旧连接的遗留请求不该交给宿主（宿主会回帧，但那帧
+                    // 写进一条已死连接的 socket 里没有意义）
+                    if self.is_current(&plugin_id, generation) {
+                        self.out(SupervisorEvent::InboundRequest {
+                            plugin_id,
+                            index,
+                            generation,
+                            id,
+                            method,
+                            params,
+                        });
+                    }
+                }
             }
         }
         received
@@ -533,7 +575,7 @@ impl SidecarSupervisor {
                 // 起进程成功 ≠ 会话开出来了：放行后的 `session.open` 可能失败
                 if let Some(failure) = failures.into_iter().find(|f| f.session_id == session_id) {
                     return Err(SupervisorError::Rpc {
-                        method: "session.open".to_string(),
+                        method: method::SESSION_OPEN.to_string(),
                         error: failure.error,
                     });
                 }
@@ -587,7 +629,7 @@ impl SidecarSupervisor {
             if let Err(e) = instance
                 .process
                 .conn()
-                .call("session.close", params, SESSION_RPC_TIMEOUT)
+                .call(method::SESSION_CLOSE, params, SESSION_RPC_TIMEOUT)
                 .await
             {
                 tracing::warn!(session_id, error = %e, "session.close 调用失败；本地照撤");
@@ -632,11 +674,11 @@ impl SidecarSupervisor {
         instance
             .process
             .conn()
-            .call("session.open", call, SESSION_RPC_TIMEOUT)
+            .call(method::SESSION_OPEN, call, SESSION_RPC_TIMEOUT)
             .await
             .map(|_| ())
             .map_err(|error| SupervisorError::Rpc {
-                method: "session.open".to_string(),
+                method: method::SESSION_OPEN.to_string(),
                 error,
             })
     }
@@ -766,7 +808,7 @@ impl SidecarSupervisor {
                 // 握不上手也要把进程收干净：不能留一个不会说协议的进程在那儿
                 let _ = process.retire(SHUTDOWN_GRACE).await;
                 return Err(SupervisorError::Rpc {
-                    method: "initialize".to_string(),
+                    method: method::INIT.to_string(),
                     error: e,
                 });
             }
@@ -906,6 +948,28 @@ impl SidecarSupervisor {
         }
     }
 
+    /// 停掉**一个插件**的全部实例（停用 / 卸载时用）。
+    ///
+    /// 与 [`Self::shutdown_all`] 同一套顺序（先内核摘表、会话如实作废，再收进程），
+    /// 只过滤 `plugin_id`，不碰其他插件 —— 卸载安全的前提是**进程停干净了，
+    /// Windows 才删得掉插件目录**（exe 被占用会删失败）。
+    pub async fn shutdown_plugin(&mut self, plugin_id: &str, now: Instant, grace: Duration) {
+        let keys: Vec<InstanceKey> = self
+            .instances
+            .keys()
+            .filter(|(pid, _)| pid.as_str() == plugin_id)
+            .cloned()
+            .collect();
+        for (pid, index) in keys {
+            let events = self
+                .registry
+                .on_process_exit(&pid, index, ExitCause::Shutdown, now);
+            self.forget_pending_opens(&events);
+            self.forward(events);
+            self.kill_instance(&pid, index, grace).await;
+        }
+    }
+
     // ==================== 查询 ====================
 
     /// 会话 → 连接（驱动桥用它发 `query.execute` / `meta.*`）。
@@ -925,6 +989,16 @@ impl SidecarSupervisor {
         let record = self.registry.session(session_id)?;
         self.instances
             .get(&(record.plugin_id.clone(), record.index))
+            .map(|i| i.process.conn_handle())
+    }
+
+    /// 按实例键拿连接句柄（**反向请求回帧用**）：`SupervisorEvent::InboundRequest`
+    /// 只带 `(plugin_id, index)`，没有 session_id——host.* 请求是插件进程级的，
+    /// 不依赖任何会话。实例已被收掉时返回 `None`，宿主只能丢弃该请求
+    /// （连接都没了，回帧也没人收）。
+    pub fn instance_conn_handle(&self, plugin_id: &str, index: usize) -> Option<Arc<SidecarConn>> {
+        self.instances
+            .get(&(plugin_id.to_string(), index))
             .map(|i| i.process.conn_handle())
     }
 
@@ -967,6 +1041,18 @@ fn spawn_event_pump(
                 ConnEvent::Notification { method, params } => InstanceEvent::Notification {
                     plugin_id: plugin_id.clone(),
                     generation,
+                    method,
+                    params,
+                },
+                ConnEvent::InboundRequest {
+                    id,
+                    method,
+                    params,
+                } => InstanceEvent::InboundRequest {
+                    plugin_id: plugin_id.clone(),
+                    index,
+                    generation,
+                    id,
                     method,
                     params,
                 },
@@ -1190,5 +1276,60 @@ entry = "main.js"
             "旧代事件不该把当前会话作废"
         );
         assert!(supervisor.try_event().is_none(), "也不该往外报事件");
+    }
+
+    /// 事件泵把反向请求如实带上实例上下文（plugin_id / index / generation）。
+    /// 宿主之后按这些字段找到连接句柄、用 [`SidecarConn::reply`] 回帧。
+    #[tokio::test]
+    async fn event_pump_forwards_inbound_requests_with_instance_context() {
+        use crate::sidecar::proto::{Frame, write_frame};
+
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, events) = SidecarConn::spawn(host_r, host_w);
+        let (mut pr, mut pw) = tokio::io::split(peer);
+
+        // 事件泵（与真实路径同一条：spawn_instance 会把 conn 的事件接到这里）
+        let (tx, mut rx) = mpsc::unbounded_channel::<InstanceEvent>();
+        let pump = spawn_event_pump("com.example.fixture".to_string(), 0, 3, events, tx);
+
+        // 对端（扩展进程）发一个 host.* 反向请求
+        write_frame(
+            &mut pw,
+            &Frame::json(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0", "id": 12, "method": "host.log",
+                    "params": { "level": "info", "message": "来自扩展" }
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let ev = rx.recv().await.expect("事件泵应收 InboundRequest");
+        match ev {
+            InstanceEvent::InboundRequest {
+                plugin_id,
+                index,
+                generation,
+                id,
+                method,
+                params,
+            } => {
+                assert_eq!(plugin_id, "com.example.fixture");
+                assert_eq!(index, 0);
+                assert_eq!(generation, 3);
+                assert_eq!(id, 12);
+                assert_eq!(method, "host.log");
+                assert_eq!(params["message"], "来自扩展");
+            }
+            other => panic!("期望 InboundRequest，得到 {other:?}"),
+        }
+
+        // 收摊（事件泵由实例持有，这里显式 abort，避免测试泄漏后台任务）
+        conn.shutdown().await;
+        pump.abort();
+        drop(pr);
     }
 }

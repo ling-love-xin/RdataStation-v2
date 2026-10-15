@@ -1,8 +1,9 @@
 //! RdataStation v2 插件 crate（plugin，M9）
 //!
 //! 插件系统核心 + 运行时适配器：
-//! - 核心：dependency（依赖解析）/ events（事件总线）/ installer / loader（热加载）
-//!   / manager（生命周期）/ manifest（清单）/ permission（权限，四轨）
+//! - 核心：dependency（依赖解析）/ events（事件总线）/ installer / manager（生命周期：
+//!   发现 → 加载 → 激活 → 停用 → 卸载，2026-10-15 起 loader 已并入）/ manifest（清单）/
+//!   permission（权限，四轨）
 //! - 服务：plugin_bridge（桥接）/ plugin_service（插件管理服务）
 //! - Sidecar 适配器：进程生命周期 + JSON-RPC 客户端（**P1 已落地：stdio + 二进制分帧，D5**；HTTP/端口旧版已删）
 //! - WASM 适配器：Extism 运行时（分析/驱动/工具插件）
@@ -22,14 +23,12 @@
 pub mod dependency;
 pub mod events;
 pub mod installer;
-pub mod loader;
 pub mod manager;
 pub mod manifest;
 pub mod permission;
 
 pub use dependency::*;
 pub use events::*;
-pub use loader::*;
 pub use manager::*;
 pub use manifest::*;
 pub use permission::*;

@@ -274,6 +274,11 @@ inline_json_max_bytes = 256 KiB
 
 #### 4.2.2 RPC 方法表
 
+> method 字符串的**权威常量表**在 `crates/plugin/src/sidecar/method.rs`（P2.6 起集中，
+> 与下表一一对应，业务代码零字面量）。扩展在清单里声明 `methods` 时，逐项过
+> `is_allowed_declaration`：协议已知 method（本表）或 `x.` 私有前缀；拼写错误在
+> **安装期**被拒，不许悄悄变成「这个方法没人认」（借鉴 navop `extension-protocol/method.rs`）。
+
 **握手与进程**
 ```
 initialize({protocol, host:{name,version}, plugin_config}) -> {protocol, driver_ids[], runtime{}}
@@ -349,6 +354,40 @@ progress({request_id, phase, done, total})
 | 句柄丢掉 = 关连接 | `SidecarDatabase` 带 `owner` 时在 `Drop` 里把会话交还内核（`tokio::spawn` 一个关闭任务）；不带 `owner` 的是借用式用法，由调用方安排 | 会话是宿主的资源：不交还就会一直占着那个串行实例，后续连接全排住 | SQL 错 → `DatabaseError::Query`（`position` 由 1 基**字符**换算成 0 基**字节**）；断线 → `ConnectionError::Network`；缺能力 → `CommonError::NotSupported`；对端说话不算话 → `PluginError::ExecutionFailed` | UI 要能按域分流：SQL 错跳光标、缺能力置灰、断线提示重连，不能都堆成一句「查询失败」 |
 | 连接失败 | ✅ **P2 已补一等码 `-32009 connect_failed`**，落 `ConnectionError::Refused`；细因（拒连 / 口令 / TLS）由驱动写在 `message` 里，**宿主不按子串猜**分类 | 连接失败是驱动最常见的失败，界面上的动作与 SQL 错不同（改配置 / 重连 vs 改 SQL）。参考实现就是靠 `containsAny` 猜的（§3.5），那套我们不要 |
 
+#### 4.2.2.0 反向 Host API（`host.*`，P3 前半已落地，2026-10-15）
+
+> 上面整张表都是**正向**调用（宿主 → sidecar，请求/响应）；反向面是 sidecar → 宿主：
+> 扩展进程向宿主请求能力（凭据 / 通知 / 存储 / 日志 / SSH 隧道），method 统一 `host.` 前缀，
+> 走同一个 JSON-RPC 帧（带 id + method 即反向请求，宿主用响应帧回）。
+> **权威实现与权限表在 `crates/plugin/src/sidecar/host.rs`**（蓝本：navop `extension-protocol/src/host.rs`；
+> 分隔符 `host.` vs `host/`；权限点分 glob vs `secrets:read:<glob>`）。
+
+```
+host.request_credential({kind, prompt?, save_as?, remember_option, retry_count?})
+  -> {secret_ref: SecretRef, remembered}              # 只给引用，不给明文
+host.secret.resolve({secret_ref}) -> {value: base64}   # 一次性字节值，宿主不得记日志
+host.notify({level, title, body?, duration_ms?, actions?}) -> {clicked?}
+host.storage.get({key, namespace?}) -> {value?}
+host.storage.set({key, value, namespace?, ttl_secs?}) -> {}
+host.log({level, message, module?, fields?}) -> {}
+host.ssh.open_tunnel({ssh_connection_id, remote_host?, remote_port, local_port?, idle_secs?})
+  -> {session_ref, local_port}                          # 宿主已有 SSH 连接上开隧道
+```
+
+**权限是方法级 glob**（`HostApiHandler` 构造时收扩展声明的权限列表，默认拒绝）：
+`request_credential`/`resolve` 需 `secrets.read`（`save_as` 另验 `secrets.write`）、`notify` 需
+`notifications.show`、`storage.get/set` 需 `storage.read/write`、`log` 需 `logs.write`、
+`ssh.open_tunnel` 需 `host.ssh_tunnel`；`prefix.*` 的点号并入通配（`secrets.read.*` 覆盖
+`secrets.read` 与 `secrets.read.<目标>`）。
+
+**宿主接线已闭环**（2026-10-15）：`permissions.host` 承载权限声明（`host_provider.rs` 的
+storage / log 为默认实现）；`runtime.rs` 运行时循环把事件泵出来的 `InboundRequest`
+路由到 handler，再按 `SidecarConn::reply` / `reply_error` 回帧（实例已收掉则丢弃）；
+app 启动时 `init_plugin_manager` 自动 spawn 循环。**仍保持 `Unsupported`** 的方法：
+`request_credential` / `secret.resolve`（宿主还没有通用 secret store）、`notify`
+（通知按钮要 UI 回调通道）、`ssh.open_tunnel`（宿主还没有 SSH 连接引擎）——协议
+面就绪，宿主没有对应设施就不假装有。
+
 #### 4.2.2.1 `meta.*` 的线格式（P2 落地，2026-09-20）
 
 | 方法 | 请求 | 返回 |
@@ -397,10 +436,19 @@ progress({request_id, phase, done, total})
 
 ### 4.3 清单契约（`PluginManifest` 演进）
 
-沿用现有结构，新增 `[backend]` 段：
+沿用现有结构，新增 `[backend]` 段；**P2.6 起**增顶层 `api` / `methods` 能力声明
+（TOML 语义：无表头的顶层键必须放在**任何 `[表]` 头之前**，即文件最前）：
 
 ```toml
 schema_version = 1
+
+# 能力面命名空间（借鉴 navop driver.json 的 `api`）：小写字母开头，只含小写/数字/连字符。
+# database | redis | mongodb | ssh | terminal …；不写 = 未声明（老清单向后兼容）
+api = "database"
+
+# sidecar 轨声明的 RPC method 白名单：协议已知 method（§4.2.2 方法表）或 `x.` 私有前缀；
+# 拼写错误的在安装期被拒（`sidecar/method.rs::is_allowed_declaration`）
+methods = ["driver.describe", "query.execute", "query.fetch", "query.cancel", "meta.catalogs"]
 
 [plugin]
 id = "com.example.sqlserver"
@@ -625,6 +673,47 @@ CREATE TABLE IF NOT EXISTS project_resources (
 ```
 
 迁移成本低：现有 6 个持久化方法 + 6 个 service 方法**均无生产调用方**。
+
+#### 4.8.1 生命周期状态机（2026-10-15 设计定稿，VS Code 口径）
+
+```
+Uninstalled ──install──▶ Installed ──load──▶ Loaded ──activate──▶ Active
+   ▲                        │                  ▲                     │
+   └────uninstall───────────┘                  └──deactivate──────────┘
+   （磁盘删除）          （enable/disable 只改标记，不动运行时）
+```
+
+- **六态**：`Uninstalled / Installed / Loaded / Active / Deactivated(=Loaded) / Disabled(=Installed)`。
+  安装态（`loaded_plugins` 缓存 + 磁盘目录）与会话态（`plugin_index` + sidecar 实例表）分开记：
+  `deactivate` 只回 `Loaded` 不删磁盘；`uninstall` 才是磁盘删除。
+- **disabled 语义**：权威状态 = global.db `plugins.is_enabled`（不是内存标记）——重启后依然禁用；
+  扫描 / 自动加载按它决定要不要 activate。
+- **三个决策点（用户已拍板）**：
+  1. 卸载安全 = **依赖反向索引**：被其他插件引用（`dependency.rs::check_dependents`，遍历 DB 全部
+     插件解析 manifest 找引用者）→ **拒绝卸载**并列出引用者；
+  2. 卸载**保留 `plugin-data/<id>/`**（可能含连接 / 凭据），UI 给 checkbox 默认保留；
+  3. 更新（清单 hash 变化）→ 置 `needs_reload`，**重启 / 手动重载生效**，不热更新运行中插件。
+
+#### 4.8.2 热插拔（目录即插件）
+
+- **不做 watcher**：挂在运行时循环的 5s tick 做目录 diff（`scan_and_diff_plugins`）——
+  安装 / 手动拷贝都是低频动作，5s 足够；省掉 watcher 的递归监听与平台差异。
+- 判定基准 = `install_dir/<id>/plugin.toml` 的**内容 hash**（换版本 / 改能力 / 改权限都触发）：
+  - 新目录 → 解析清单 → 加载 + 激活（DB 未禁用才激活）；
+  - 目录消失 → 停用（含停 sidecar 进程）+ 移出运行时索引 + 清该插件的重载标记；
+  - 清单变化 → 置 `needs_reload`（UI 读 `pending_reloads()` 提示「重启生效」）。
+- `reload_plugins()` = VS Code「Reload Window」：停全部已激活 → 清 `needs_reload` →
+  **清扫描快照**（否则 diff 判「无变化」会空转）→ 重扫全部重新加载激活。
+
+#### 4.8.3 卸载安全三件套（2026-10-15 已落地）
+
+1. **进程停干净**：`supervisor::shutdown_plugin(id)` 只停那一个插件的全部实例（先内核摘表、
+   会话如实作废，再收进程）——Windows 上 exe 被占用会删目录失败，所以**先停进程再删目录**；
+2. **依赖检查**：被引用 → 拒绝（`UninstallFailed` 带引用者列表）；
+3. **DB 记录清理**：`GlobalDatabaseManager::delete_plugin`（engine::migration 全局访问器）。
+
+> 未接（诚实列出）：`install_package` 尚无调用方（安装 UI 是 P4）；依赖检查在 DB 未初始化时
+> 保守放行（卸载只删目录）；`enable/disable` 的 UI 开关是 P4。
 
 ### 4.9 面板 / 命令 / 设置（宿主注册表）
 
@@ -872,7 +961,8 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | P1 | 🟡 进行中，**代码面已齐**（协议 / 附件 / 生命周期 / 异步客户端 / 进程层 / 清单 `[backend]` / 运行时接线 / 驱动桥 / 接引擎 / 注册路径十块已落地） | `sidecar/proto.rs`：帧 + 增量解码 + async 流读写 + 版本闸 + 阈值 + 错误码。`sidecar/router.rs`：附件语义两个方向 + 错位上报 + 断线交还 + 放弃。`sidecar/lifecycle.rs`：三层对象模型决策内核（去重 / max_instances / serial 排队 / ping 判死 / 空闲回收 / 崩溃不静默重连）。`sidecar/conn.rs`：异步客户端（三任务、在飞状态只一份、超时显式放弃、`initialize` 含版本闸）。`sidecar/process.rs`：起/收真实进程（`SpawnSpec` → `paths::*` 目录 + stderr 日志；`retire` 先关 stdin 再等，不信 EOF 就强杀）。`manifest.rs`：`[backend]` 段与 `process_spec()`（口径见 §4.3.1）。`sidecar/supervisor.rs`：运行时接线（`Deployment` + `SidecarSupervisor`：执行内核动作、把 `Decision::Open` 兑现成 `session.open`、事件显式 `drain_events`、generation 防旧事件误伤、起不来告诉内核不留僵尸）。`lifecycle.rs` 的 `acquire` 按规则 1 修正分流（并行共享 / 串行有额度就起新实例）。`sidecar/driver.rs`：驱动桥（`SessionDriver`：describe / execute / fetch / cancel / session.ping；`PageData` 把内联 JSON 与 Arrow 统一成一个类型；Arrow 在宿主侧解成 `RecordBatch`；`DriverError` 按错误码分流）。`cargo test -p rds-plugin` 103/103 + 集成 22/22（P1 新增 86 条单测 + 22 条真进程集成测试）。`sidecar/factory.rs`：注册路径（`SidecarDriverFactory` + `register_sidecar_drivers`；`create` = 起进程 → 握手 → 会话 → describe；排队超时明确失败并撤排队；`Drop` 交还会话）。`lifecycle.rs` 修一处内核缺口：撤掉**还在排队**的会话（原先从队列里摘不掉，别人关闭时会被放行成幽灵会话）。`sidecar/driver.rs` 再接上引擎：`SidecarDatabase` 实现 `engine::driver::Database`（`QueryPage` → `QueryResult` 只填 `batches`；错误按域映射；弱引用连接；令牌取消走**真取消**）。HTTP 旧路径两个文件（`client.rs` + 旧 `manager.rs`）已删，`reqwest` 依赖随之去掉。`cargo test -p rds-plugin` 106/106 + 集成 44/44（新增 `tests/sidecar_conformance.rs`：5 条把 P1 退出标准做成可反复执行的检查，换 `RDS_SIDECAR_BIN` 就能拿同一套检查去验任何语言的 sidecar）。**代码面到此齐了**；剩下的要在真机上做：**PostgreSQL 靶子**（真库 + 真 Arrow）、**跨语言 Arrow 互通**（Go `arrow-go` / Python `pyarrow`，本机拉不到依赖）、把这两条固化成验收脚本。之后进 P2（`meta.*` + `DriverCapability` 门控 + 导航树） |
 | P2 | 🟡 **代码面已齐**（四刀：协议 / 引擎元数据面 / 能力门控 / 一致性验收） | 见 §11.1（`cargo test -p rds-plugin` = 114/114 + 集成 61/61） |
 | P2.5 | 🟡 **底座已落地**（第 1 刀），接线未做 | 见 §11.2 |
-| P3 | ⬜ 未开始 | 面已收窄：`host_functions.rs` 已删，P3 是**从零建**而不是“已有面收敛” |
+| P3 | 🟢 **前半（反向 Host API 面）已闭环**（2026-10-15）；wasm host function 面未建 | `sidecar/host.rs`：`host.*` 七个方法常量 + `SecretRef` 引用制 + params/result 类型 + `HostApiProvider` trait（默认 `Unsupported`）+ `HostApiHandler`（方法级 glob 权限闸）；`router.rs` 按 JSON-RPC 判据识别反向请求（带 id + method）；`conn.rs` 增 `ConnEvent::InboundRequest` + `reply` / `reply_error`；`supervisor.rs` 事件泵透传 `InboundRequest`（按代过滤）+ `instance_conn_handle`（反向请求无 session_id，按插件实例键拿句柄回帧）。**宿主接线闭环**：`permissions.host` 承载声明、`host_provider.rs`（storage 落盘 + log）、`runtime.rs` 运行时循环（tick 驱动 + 分发回帧）、app 启动 `init_plugin_manager` 自动 spawn。**仍 Unsupported**：credential / notify-actions / ssh（宿主无对应设施，诚实口径）。`cargo test -p rds-plugin` **155/155** 单测 + **61/61** 集成。蓝本：navop `extension-protocol/src/host.rs` |
+| P4 前置 | 🟢 **生命周期已落地**（2026-10-15，VS Code 口径，方案见 §4.8.1–§4.8.3） | `supervisor::shutdown_plugin(id)`（只停一个插件全部实例，会话如实作废，双插件集成测试只停 A 不碰 B）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin`（依赖反向索引 `check_dependents` 拒绝被引用者 → 停用 → 删 `install_dir/<id>/` → `delete_plugin` 清 DB → 事件；**保留 plugin-data**；id 安全校验）；`enable_plugin` / `disable_plugin`（DB `is_enabled` 权威状态 + 事件 + 运行中立刻停用/激活）；`scan_and_diff_plugins` 热插拔（目录即插件，内容 hash diff：新增自动加载激活 / 消失自动停用移除 / 变化置 needs_reload 不热生效）挂在运行时循环 tick；`reload_plugins`（清快照重扫全量重新加载激活）+ `pending_reloads()`；`hot_reload_manager.rs` 空壳落为薄封装。修一处静默失败：`load_plugin_from_dir` 此前不登记 `plugin_index`（热插拔 activate 会 not_found）。`cargo test -p rds-plugin` **155/155** 单测 + **75/75** 集成（新增 `tests/lifecycle.rs` 6 条 + `supervisor_real_process.rs` 1 条）。**未接**：`install_package` 无调用方（安装 UI 是 P4）；`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；enable/disable 的 UI 开关是 P4；依赖检查在 DB 未初始化时保守放行 |
 | P4 | ⬜ 未开始 | — |
 | P5 | ⬜ 未开始 | — |
 ### 11.2 P2.5 的落地清单

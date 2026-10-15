@@ -68,6 +68,11 @@ pub enum RouterEvent {
     },
     /// 通知（无 `id`）：`log` / `progress` 等插件 → 宿主方向的消息。
     Notification { method: String, params: Value },
+    /// 反向请求（sidecar → 宿主）：插件进程向宿主请求能力（`host.*` 面）。
+    ///
+    /// 判据是 JSON-RPC 语义：**带 `id` 且带 `method` 的帧是请求**（响应帧只有
+    /// `result` / `error`，没有 `method`）。即使 id 撞上宿主的在飞集合也不误判。
+    InboundRequest { id: u64, method: String, params: Value },
     /// 连接断了：把在飞请求一次性交还给调用方（逐个失败，不静默丢弃）。
     Disconnected {
         reason: String,
@@ -204,6 +209,17 @@ impl Router {
             let params = obj.get("params").cloned().unwrap_or(Value::Null);
             return vec![RouterEvent::Notification { method, params }];
         };
+
+        // 带 id 且带 method = 反向请求（响应帧不会带 method；优先判请求，
+        // 即使这个 id 恰好也在宿主的在飞集合里——两个方向各自用各自的 id 空间）
+        if let Some(method) = obj.get("method").and_then(Value::as_str) {
+            let params = obj.get("params").cloned().unwrap_or(Value::Null);
+            return vec![RouterEvent::InboundRequest {
+                id,
+                method: method.to_string(),
+                params,
+            }];
+        }
 
         // 只校验"登记过"，**不在这里移除**：
         // 被附件扣住的响应，调用方还在等，它就该继续算在飞（否则断线时交还不回去）。
@@ -576,6 +592,45 @@ mod tests {
             }
             other => panic!("期望 Notification，得到 {other:?}"),
         }
+    }
+
+    /// 反向请求：带 `id` + `method` 的帧是插件向宿主要能力的请求（`host.*` 面）。
+    #[test]
+    fn inbound_request_is_routed_by_id_and_method() {
+        let mut r = Router::new();
+        let ev = r.on_frame(json_frame(&json!({
+            "jsonrpc": "2.0", "id": 5, "method": "host.log",
+            "params": {"level": "info", "message": "hi"}
+        })));
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        match &ev[0] {
+            RouterEvent::InboundRequest { id, method, params } => {
+                assert_eq!(*id, 5);
+                assert_eq!(method, "host.log");
+                assert_eq!(params["level"], "info");
+            }
+            other => panic!("期望 InboundRequest，得到 {other:?}"),
+        }
+        assert_eq!(r.in_flight(), 0, "反向请求不进在飞集合");
+    }
+
+    /// id 恰好撞上宿主的在飞请求也不误判：优先按「带 method = 请求」分类。
+    #[test]
+    fn inbound_request_id_collision_with_in_flight_is_still_a_request() {
+        let mut r = Router::new();
+        r.register(7);
+        let ev = r.on_frame(json_frame(&json!({
+            "jsonrpc": "2.0", "id": 7, "method": "host.notify",
+            "params": {"level": "info", "title": "x"}
+        })));
+        match &ev[0] {
+            RouterEvent::InboundRequest { id, method, .. } => {
+                assert_eq!(*id, 7);
+                assert_eq!(method, "host.notify");
+            }
+            other => panic!("期望 InboundRequest，得到 {other:?}"),
+        }
+        assert_eq!(r.in_flight(), 1, "宿主的在飞请求不受影响");
     }
 
     /// 超时之后姗姗来迟的响应：id 已不在在飞集合里 → 报 Issue，不当正常响应交付。
