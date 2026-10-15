@@ -1453,6 +1453,21 @@ mod tests {
         );
     }
 
+    /// 计数归零是**异步**的：worker 先回填结果、后 `fetch_sub`（见 [`worker`]），且
+    /// 并发套件下兄弟测试的在途任务也会让全局计数暂时非零。结果 drain 到手后
+    /// 还要给计数一个归零窗口再断言，否则 15s 轮询结束的最后一个微窗口会偶发误报
+    /// （2026-10-15 并发负载下实测 flake 一次；隔离复跑 5/5 通过）。
+    fn settle_pending_loads(max_wait: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + max_wait;
+        while std::time::Instant::now() < deadline {
+            if !has_pending_loads() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        !has_pending_loads()
+    }
+
     /// **一次 panic 不再拖垮整条导航加载队列**（真机踩到的形态：一个坏表 → worker 线程死掉
     /// → 之后所有展开都没有回音，界面永远「加载中」，且挂起计数让进度条停在半路）。
     ///
@@ -1490,7 +1505,7 @@ mod tests {
             assert!(r.result.is_err(), "两者都该是错误结果：{}", r.key);
         }
         assert!(
-            !has_pending_loads(),
+            settle_pending_loads(std::time::Duration::from_secs(5)),
             "计数必须配平：panic 那条路曾经漏减，界面会永远「加载中」"
         );
 
@@ -1522,7 +1537,10 @@ mod tests {
             recovered.iter().any(|r| r.key == "after-restart"),
             "worker 死掉后任务要能自愈（换通道 + 重启）：{recovered_keys:?}"
         );
-        assert!(!has_pending_loads(), "自愈那条路同样要配平计数");
+        assert!(
+            settle_pending_loads(std::time::Duration::from_secs(5)),
+            "自愈那条路同样要配平计数"
+        );
     }
 
     /// 槽位下标两两不同且落在 `COUNT` 内（`ix()` 与 `COUNT` 的契约）。

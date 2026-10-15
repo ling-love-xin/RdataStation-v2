@@ -422,6 +422,7 @@ async fn run_nav_property_chain(driver: &str) {
         db_type: Some(driver),
         stats: property::ProviderStats::default(),
         counts: &[],
+        candidates: &[],
         detail: None,
     });
     let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
