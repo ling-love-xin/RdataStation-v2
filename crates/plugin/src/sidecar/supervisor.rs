@@ -1311,10 +1311,13 @@ entry = "main.js"
         );
     }
 
-    /// 旧代连接的遗留事件**不能**动当前实例。
+    /// 断开事件在**实例不在表里**时被安全忽略（不误伤、不外报）。
     ///
-    /// 这不是杞人忧天：实例被回收/重启之后，旧连接的 `Disconnected` 仍可能后到
-    /// （事件泵转发与放行之间有窗口）；不加代次判定的话，它会把**新实例**判死。
+    /// 注意本条验证的是防御路径：`registry` 摆好了内核状态但没有起真实实例，
+    /// `handle_disconnect` 因 `self.instances` 查无此键而直接返回。「旧代事件
+    /// 不该动**新**实例」的按代判定（`is_current`）需要真实实例，由集成测试
+    /// `supervisor_real_process.rs` 的 `idle_sweep_reaps_and_a_stale_disconnect_does_not_kill_the_new_instance`
+    /// 覆盖——那里有真实进程，代次才会变化。
     #[tokio::test]
     async fn a_stale_disconnect_does_not_touch_the_current_instance() {
         use crate::sidecar::lifecycle::ProcessState;
@@ -1412,5 +1415,122 @@ entry = "main.js"
         conn.shutdown().await;
         pump.abort();
         drop(pr);
+    }
+
+    /// 事件泵把流事件（KIND_STREAM 上行）如实带上实例上下文。
+    /// SSH shell stdout / 端口转发数据的宿主侧入口就靠这一条。
+    #[tokio::test]
+    async fn event_pump_forwards_stream_events_with_instance_context() {
+        use crate::sidecar::proto::{write_frame, Frame};
+
+        let (host, peer) = tokio::io::duplex(1 << 20);
+        let (host_r, host_w) = tokio::io::split(host);
+        let (conn, events) = SidecarConn::spawn(host_r, host_w);
+        let (mut pr, mut pw) = tokio::io::split(peer);
+
+        // 事件泵（与真实路径同一条：spawn_instance 会把 conn 的事件接到这里）
+        let (tx, mut rx) = mpsc::unbounded_channel::<InstanceEvent>();
+        let pump = spawn_event_pump("com.example.fixture".to_string(), 0, 3, events, tx);
+
+        // 对端（SSH 插件）上行一段 shell stdout，再发 EOF
+        write_frame(
+            &mut pw,
+            &Frame::stream("ch-1", b"hello from shell").unwrap(),
+        )
+        .await
+        .unwrap();
+        write_frame(&mut pw, &Frame::stream_eof("ch-1").unwrap())
+            .await
+            .unwrap();
+
+        let ev = rx.recv().await.expect("事件泵应收 StreamData");
+        match ev {
+            InstanceEvent::StreamData {
+                plugin_id,
+                index,
+                generation,
+                channel_id,
+                data,
+            } => {
+                assert_eq!(plugin_id, "com.example.fixture");
+                assert_eq!(index, 0);
+                assert_eq!(generation, 3);
+                assert_eq!(channel_id, "ch-1");
+                assert_eq!(data, b"hello from shell");
+            }
+            other => panic!("期望 StreamData，得到 {other:?}"),
+        }
+        let ev = rx.recv().await.expect("事件泵应收 StreamEof");
+        assert!(
+            matches!(
+                &ev,
+                InstanceEvent::StreamEof {
+                    channel_id,
+                    generation: 3,
+                    ..
+                } if channel_id == "ch-1"
+            ),
+            "{ev:?}"
+        );
+
+        // 收摊
+        conn.shutdown().await;
+        pump.abort();
+        drop(pr);
+    }
+
+    /// `drain_events` 的按代过滤也作用于流事件：**没有 live 实例**（未部署 /
+    /// 实例已收 / 重启窗口期）时，任何来源的流事件都不该外报——旧连接遗留的
+    /// 流分片没有消费者，隔离是默认行为，不能冒成「幽灵数据」交给宿主。
+    ///
+    /// 「有实例时当前代流事件会转发」这一条由事件泵单测（上下文透传）+ 真实进程
+    /// 集成路径覆盖；单测摆不出 `SidecarProcess`（字段私有），不在这里硬造。
+    #[tokio::test]
+    async fn drain_events_drops_stream_events_without_a_live_instance() {
+        let now = Instant::now();
+        let manifest: PluginManifest = toml::from_str(SIDECAR_MANIFEST).unwrap();
+        let mut supervisor = SidecarSupervisor::new();
+        supervisor
+            .deploy_manifest(&manifest, Path::new("."))
+            .unwrap();
+
+        // 没有起任何实例：`is_current` 对任何 generation 恒 false。
+        // 当前代（1）与旧代（99）的流事件都应被处理但全部丢弃。
+        supervisor
+            .instance_events_tx
+            .send(InstanceEvent::StreamData {
+                plugin_id: "com.example.fixture".into(),
+                index: 0,
+                generation: 1,
+                channel_id: "ch-1".into(),
+                data: b"live".to_vec(),
+            })
+            .unwrap();
+        supervisor
+            .instance_events_tx
+            .send(InstanceEvent::StreamData {
+                plugin_id: "com.example.fixture".into(),
+                index: 0,
+                generation: 99,
+                channel_id: "ch-stale".into(),
+                data: b"ghost".to_vec(),
+            })
+            .unwrap();
+        supervisor
+            .instance_events_tx
+            .send(InstanceEvent::StreamEof {
+                plugin_id: "com.example.fixture".into(),
+                index: 0,
+                generation: 99,
+                channel_id: "ch-stale".into(),
+            })
+            .unwrap();
+
+        let processed = supervisor.drain_events(now).await;
+        assert_eq!(processed, 3, "三条都该被处理（且全部被丢弃）");
+        assert!(
+            supervisor.try_event().is_none(),
+            "没有 live 实例时流事件不该外报"
+        );
     }
 }
