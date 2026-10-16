@@ -52,8 +52,8 @@
 | --- | --- | --- |
 | Q1 | 项目引用表：迁移到 `project_resources(kind,id,version,enabled,enforce,config_json)` vs 沿用现有两表 | P0 是否含一次迁移（现无生产调用方，建议迁） |
 | Q9 | 键位贡献是否开放 | 命令面板之外的可见性 |
-| Q10 | wasm 轨：保留为「纯计算/性能轨」vs 冻结 | M9 范围大小（Q7 定了之后建议冻结） |
-| Q11 | ER 建模视图渲染路线：webview 轨**已否决**（drawdb / erd-editor / Mermaid 均需 webview；用户定调：本项目由 tauri 迁来，不引入前端栈）；候选 = (a) **GPUI 原生渲染**（推荐）｜ (b) 暂缓 | 评估见 `plugin-prototype-design.md` §11.3；宿主侧接入仍随 D7 暂缓 |
+| Q10 | wasm 轨：**已定案**（2026-10-16，方案 A）降为**可选性能轨**：仅保留「一次性渲染 / 导出」实证（`tools/plugin-render-mermaid`，Mermaid 文本 → SVG）；**不再扩建** wasm 轨（冻结口径不变，等真有需求再启） | wasm 轨场景收敛为纯计算 / 导出 |
+| Q11 | ER 建模视图渲染路线：**已定案**（2026-10-16，方案 A）webview 轨**已否决**（用户定调不引入前端栈）；主路线 = **GPUI 原生渲染**（`crates/database/src/er/` 已启动）；**Mermaid 降为导出轨**——mermaid-rs-renderer 纯 Rust 可编 wasm（原否决前提「需 webview」已被推翻），仅服务一次性渲染/导出，不承载交互画布 | 交互画布走原生，一次性产出走导出轨；宿主侧接入仍随 D7 暂缓 |
 
 ## 4. 代码地图（`crates/plugin/`，现状实测）
 
@@ -150,7 +150,9 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 **SSH sidecar 轨 · 字节流帧（第二刀）已落地**（2026-10-15）：`KIND_STREAM = 0x03` 让 shell/forward 成为**持续双向字节流**（不是一次一答）。payload 布局 `[u16 BE 通道 id 长][channel_id UTF-8][u8 flags][流数据]`，flags `0x00`=数据 / `0x01`=EOF；方向由发送者隐含（插件→宿主=上行，宿主→插件=下行）；与 Arrow 附件（KIND_ARROW）**正交**——流帧随时可插队，不进入「响应扣住等附件」的装配。五文件改动：`proto.rs`（新 kind + `Frame::stream`/`stream_eof`，通道 id 超 `u16::MAX` 构造前拒绝）、`router.rs`（`StreamData`/`StreamEof` 事件 + `decode_stream_payload`，坏 payload = Issue 不 panic）、`conn.rs`（`ConnEvent` 流两变体 + `DriverCommand::WriteStream` + `write_stream`/`write_eof`）、`supervisor.rs`（事件泵按代透传，旧连接遗留流分片不转发）、`runtime.rs`（显式分发，debug 日志**只记元信息**不记数据本体——流数据可能大且敏感）。`cargo test -p rds-plugin` **183/183** 单测 + **75/75** 集成（supervisor 新增 2 条：事件泵透传带上下文、无 live 实例时流事件不外报）。**宿主侧消费未接**（P4）：终端面板订阅 `StreamData` 渲染 shell 输出并回写 stdin、端口转发面板订阅通道数据——协议面已就绪，宿主 UI 是下一段工作。
 
-**渲染计算轨（wasm render-document）第一刀已落地**（2026-10-15）：`manifest.capabilities.wasm.render_document` 声明段（函数名 / formats / output_format）+ `render.rs` 渲染服务（`renderer_for` 按格式选渲染器 + `render_document` 调 wasm 插件收产物 + `resolve_spec` 契约预览），纯计算、无 host function 依赖。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。**未做**：真实 wasm 渲染资产（mermaid-rs-renderer 编 wasm，P4 真机验收）；宿主 UI 面板调用（P4）。
+**渲染计算轨（wasm render-document）第一刀已落地**（2026-10-15）：`manifest.capabilities.wasm.render_document` 声明段（函数名 / formats / output_format）+ `render.rs` 渲染服务（`renderer_for` 按格式选渲染器 + `render_document` 调 wasm 插件收产物 + `resolve_spec` 契约预览），纯计算、无 host function 依赖。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。
+
+**渲染计算轨第二刀（wasm 实证 + 定位更正）已落地**（2026-10-16，commit 4b2274d1）：`tools/plugin-render-mermaid`（mermaid-rs-renderer 0.3.1 编 wasm，Extism PDK 1.4）——JSON 信封契约（source + theme.preset/overrides，非 JSON 退化纯文本）+ 嵌入 DejaVu Sans 子集（200KB）+ 全链路实证 12/12（5 图类型 / CJK / 信封 / 退化 / 明暗 / 语法错）。wasm 2.59MB，首调 26ms。宿主 `render.rs` 信封辅助 + `extism.rs` host_log no-op（panic hook 诊断通道）。`cargo test -p rds-plugin` **186/186** 单测 + 集成全绿。**定位更正（用户拍板方案 A）**：本刀产物属「**一次性渲染 / 导出轨**」（Mermaid 文本 → SVG 预览 / 导出 / 文档嵌入），**不是** ER 绘图交互主路线——主路线是 Q11 定案的 GPUI 原生渲染（`crates/database/src/er/` 已启动）；wasm 轨维持「不再扩建」口径。详见 `plugin-dev-plan.md` §11.4 + `plugin-prototype-design.md` §11.3.1。
 
 **P3（wasm host function 面）、P4（注册表与界面）、P5（生态）未开始**。当前 wasm 插件拿不到任何宿主能力（与「默认拒绝」一致）。
 

@@ -531,6 +531,19 @@ WebViewElement new(...)                     ← 作为 GPUI 元素挂进布局
 
 **落地顺序**：① schema → 渲染模型桥（`meta.*` → 表 / 列 / 外键 → 布局输入）+ 分层布局 —— **已落地（2026-10-15，`crates/database/src/er/`）**；② 只读渲染（实体卡片 + 连线 + 自动布局）双接入面板；③ pan/zoom + 拖拽排布 + 布局持久化；④ DDL 导出；⑤ 写回源库后置。②~⑤ 待做；全文设计见 [`../database/database-er-model-view-design.md`](../database/database-er-model-view-design.md)。
 
+### 11.3.1 定案更新（2026-10-16）：Mermaid 降为「导出轨」，主路线不变
+
+**新事实（推翻上表否决的前提）**：上表判 Mermaid「❌ 已否决：全部需要 webview」——不准确。mermaid-rs-renderer（dodo 所用）是**纯 Rust 库**，已实证可编译为 wasm32 并由宿主 Extism 加载渲染 SVG（`tools/plugin-render-mermaid`，2.59MB，见 `plugin-dev-plan.md` §11.4）——**不依赖任何 webview / 前端栈**，原否决前提不成立。
+
+**但方向结论不变（用户拍板 2026-10-16，方案 A）**：
+
+| 场景 | 路线 |
+| --- | --- |
+| **交互编辑视图**（拖拽 / pan / zoom / 连线编辑 / 布局持久化） | **GPUI 原生渲染**（主路线，`crates/database/src/er/` 已启动：模型桥 + 分层布局已落地，只读渲染面板待接） |
+| **一次性渲染 / 导出**（Mermaid 文本 → SVG 预览、导出 SVG、文档嵌入） | **wasm Mermaid 导出轨**（`tools/plugin-render-mermaid`，可选性能轨实证） |
+
+**定位口径**：导出轨属于「插件贡献**数据变换**」角色（`rds.render` → SVG 数据），与 Q11「视图渲染本身不进插件、插件退到数据源 + 视图声明」**不冲突**——SVG 是宿主消费的数据产物，不是自由画布交互视图；交互视图仍是宿主原生 panel。两条线并存的分工边界：**能交互的画布走原生，一次性产出走导出轨**。
+
 ---
 
 ## 12. 这个方式是否合适
