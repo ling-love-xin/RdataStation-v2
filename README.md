@@ -124,7 +124,18 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 | 截图 | 说明 |
 | --- | --- |
-| ![主工作台](assets/screenshots/main-window.png) | **主工作台**：左侧数据库导航（数据源树，`[项目]/[共享]` 归属域 + 连接状态）、右侧编辑器（草稿箱文件），顶部项目与工作台标签页、全局搜索 |
+| ![主工作台](assets/screenshots/RDS-beta-0.2.2/main-window.png) | **主工作台**：左侧数据库导航（数据源树，`[项目]/[共享]` 归属域 + 连接状态）、右侧编辑器（草稿箱文件），顶部项目与工作台标签页、全局搜索 |
+| ![数据库导航](assets/screenshots/RDS-beta-0.2.2/database-navigator.png) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
+| ![SQL 编辑器](assets/screenshots/RDS-beta-0.2.2/editor-sql.png) | **SQL 编辑器**：SQL 工具栏（执行 / 全部运行 / 格式化 / 更多）· 执行位置（源库 · 本地加速 · 联邦）· 欢迎引导 |
+| ![资产库](assets/screenshots/RDS-beta-0.2.2/analytics-resource.png) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
+| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：列表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键选择洞察） |
+| ![Mock 生成](assets/screenshots/RDS-beta-0.2.2/mock.png) | **Mock 生成（M7）**：目标行数 · 生成状态（未生成 / 生成中 / 已生成 / 已落库）· 出口选项（持久化 / 追加 / 草稿箱 / 另存） |
+| ![查询历史](assets/screenshots/RDS-beta-0.2.2/history.png) | **查询历史**：SQL 执行留痕（语句 · 时间 · 耗时 · 返回行 · 引擎）· 搜索与清空 |
+| ![草稿箱](assets/screenshots/RDS-beta-0.2.2/scratchpad.png) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
+| ![Quick Open](assets/screenshots/RDS-beta-0.2.2/quick-open.png) | **Quick Open**：三前缀搜索（`>` 命令 · `#` 全文 · `@`）· 文件与连接结果分类展示 |
+| ![设置](assets/screenshots/RDS-beta-0.2.2/settings.png) | **设置页**：主题模式（浅色 / 深色 / 跟随系统）· 界面字号 · 界面语言 |
+
+> 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换；未接通模块（如 M9 plugin）暂无截图。
 
 ### 设计原型
 
@@ -255,6 +266,7 @@ RdataStation-v2/
 ├── assets/
 │   ├── themes/              # 主题定义与产品语义 token
 │   ├── icons/  public/      # 应用图标与品牌资产
+│   └── screenshots/         # 实际运行截图（按版本归档：screenshots/RDS-beta-0.2.2/）
 ├── crates/                  # 16 个 crate（见上表）
 ├── docs/
 │   ├── architecture/        # 架构说明（模块文档集：入口 / 原型 / 交互稿 / 架构 / 方案 / 手册）
@@ -272,7 +284,8 @@ RdataStation-v2/
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | **beta 0.1.0**（`RDS-beta-0.1.0`） | ✅ 已发布 | Windows x86_64 分发包 + sha256 挂载 Release；云端构建流水线已修复（beta 阶段矩阵收敛为 Windows） |
-| **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | ✅ 已发布 | 基于 gpui-kit 0.7.1 的版本线；0.2.1 为当前最新（2026-10-16，工作区版本 `0.2.1`） |
+| **beta 0.2.2**（`RDS-beta-0.2.2`） | ✅ 已发布 | 2026-10-16，工作区版本 `0.2.2`（补丁级）；含 UI 调整进度与 10-16 测试基线更新，Release 由云端 CI 构建挂载 |
+| **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | ✅ 已发布 | 基于 gpui-kit 0.7.1 的版本线；0.2.1 为上一版本（工作区版本 `0.2.1`） |
 | **gpui-kit 0.7.0 → 0.7.1 升级** | ✅ 已合入 main | 分支 `verify/gpui-kit-0.7` → main（2026-10-01，`RDS-beta-0.2.0` 基于此）；`render_dialog_layer` 手动挂载移除（0.7 由 Root 自动挂载），全仓 0 error / 0 warning；`a11y_roles` 等 4 项集成目标已在 0.7.1 下全过 |
 | **连接模块增量**（#A 留痕 / #B 环境策略 / #C 管理窗） | 🟡 原型定稿待评审 | 权威设计见 [`docs/architecture/connection/`](docs/architecture/connection/)；交互原型 v2.3（网络测试 / 认证引用与手动二选一 / 四分类 / chain 拓扑）与增量计划见 `docs/tmp/`，评审表 Y/N/改 待填；**连接对话框本体已收尾**（决策 #104–#109：列表 / 折叠 / 开关全组件化，2026-09-20） |
 | **数据源 ID / 认证 / 网络 / 环境 / 标签分组** | 🟡 设计中 | 双轨三态 ID、AES-256-GCM 字段级加密、网络递归加密、环境策略 5+1（脱敏明确不做） |
