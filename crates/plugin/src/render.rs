@@ -17,17 +17,56 @@
 //!
 //! 宿主调 `render_document` 时：按 `plugin_id` 定位插件 → 校验声明与格式 →
 //! `ExtismPluginManager::call_plugin(id, function, source)` → 产物字节按 UTF-8 收。
-//! **函数签名约定**：input = 源文本字节，output = 产物（SVG/HTML）字节。
-//! 不需要 host function（纯计算），所以与 `allowed_host_functions` 正交。
+//! **函数签名约定（第二刀）**：input = 源文本字节 **或 JSON 信封字节**
+//! （见 [`render_request_json`]，插件侧宽容解析：非 JSON / 缺 `source` 字段按纯文本）；
+//! output = 产物（SVG/HTML）字节。不需要 host function（纯计算），所以与
+//! `allowed_host_functions` 正交。
 //!
 //! ## 第一刀边界
 //!
 //! - 多渲染器并存时宿主按「声明顺序第一个匹配」选（`renderer_for` 纯函数，可测）。
-//! - 真实 wasm 资产（把 mermaid-rs-renderer 编成 wasm）属于 P4 真机验收；
-//!   本模块单测覆盖**选择器与错误路径**，调用层走 Extism 现成 API（集成级再验）。
+//! - 真实 wasm 资产（把 mermaid-rs-renderer 编成 wasm，`tools/plugin-render-mermaid`）
+//!   已随第二刀落地；本模块单测覆盖**选择器 / 错误路径 / 信封构造**。
 
 use crate::manager::{LoadedPlugin, PluginManager};
 use crate::manifest::RenderDocumentSpec;
+use serde::Serialize;
+
+// ============================================================================
+// 渲染请求信封（第二刀契约）
+// ============================================================================
+
+/// 宿主侧构造的渲染请求（JSON 信封）。
+///
+/// `theme` 为 `None` 时信封只带 `source`——与纯文本输入等价，宿主可据此在
+/// 「要不要外部控制主题」之间自由切换。`%%{init}%%` 指令在 mermaid 语义里
+/// 覆盖外部 options（上游 `resolve_options` 行为），宿主对此应有预期。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenderRequest<'a> {
+    /// 文档源文本（如 mermaid 源）。
+    pub source: &'a str,
+    /// 外部主题引用；`None` = 插件默认主题。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<RenderThemeRef<'a>>,
+}
+
+/// 主题引用：预设 + 字段覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenderThemeRef<'a> {
+    /// 预设名：`modern` | `mermaid_default` | `dark` | `forest` | `neutral`；缺省 modern。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<&'a str>,
+    /// 对插件 `Theme` pub 字段的覆盖（键 = 字段名，如 `font_family` / `primary_color`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<std::collections::HashMap<&'a str, serde_json::Value>>,
+}
+
+/// 把渲染请求序列化为 JSON 信封（传给 `render_document` 的 input）。
+///
+/// 序列化不会失败（全为可序列化字段），失败返回空串由调用方兜底。
+pub fn render_request_json(request: &RenderRequest) -> String {
+    serde_json::to_string(request).unwrap_or_default()
+}
 
 // ============================================================================
 // 错误
@@ -118,7 +157,9 @@ pub fn renderer_for(plugins: &[LoadedPlugin], format: &str) -> Option<String> {
 
 /// 指定插件渲染一份文档源文本。
 ///
-/// `source` = 文档源（如 mermaid 文本）；`format` 与插件声明的 `formats` 匹配。
+/// `source` = 文档源（如 mermaid 文本）或 `render_request_json` 构造的 JSON 信封
+/// （第二刀契约：插件侧宽容解析，非 JSON / 缺 `source` 按纯文本退化）；
+/// `format` 与插件声明的 `formats` 匹配。
 pub fn render_document(
     manager: &PluginManager,
     plugin_id: &str,
@@ -314,5 +355,53 @@ mod tests {
         let spec = m.capabilities.wasm.unwrap().render_document.unwrap();
         assert_eq!(spec.function, "render");
         assert_eq!(spec.output_format, "svg");
+    }
+
+    // —— 渲染请求信封（第二刀契约）——
+
+    #[test]
+    fn render_request_json_without_theme_omits_theme_key() {
+        let request = RenderRequest {
+            source: "flowchart LR\n  A --> B\n",
+            theme: None,
+        };
+        let json = render_request_json(&request);
+        // 主题缺省 → 信封只有 source；插件侧把它与纯文本等价处理
+        assert_eq!(json, r#"{"source":"flowchart LR\n  A --> B\n"}"#);
+    }
+
+    #[test]
+    fn render_request_json_with_theme_includes_preset_and_overrides() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("primary_color", serde_json::json!("#123456"));
+        let request = RenderRequest {
+            source: "flowchart LR",
+            theme: Some(RenderThemeRef {
+                preset: Some("dark"),
+                overrides: Some(overrides),
+            }),
+        };
+        let json = render_request_json(&request);
+        assert_eq!(
+            json,
+            r##"{"source":"flowchart LR","theme":{"preset":"dark","overrides":{"primary_color":"#123456"}}}"##
+        );
+    }
+
+    #[test]
+    fn render_request_envelope_roundtrips_through_serde() {
+        let request = RenderRequest {
+            source: "pie\n  \"A\" : 1\n",
+            theme: Some(RenderThemeRef {
+                preset: Some("neutral"),
+                overrides: None,
+            }),
+        };
+        let json = render_request_json(&request);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["source"], "pie\n  \"A\" : 1\n");
+        assert_eq!(parsed["theme"]["preset"], "neutral");
+        // 与插件侧信封结构一致（插件 envelope.rs 同字段名）
+        assert!(parsed["theme"]["overrides"].is_null());
     }
 }

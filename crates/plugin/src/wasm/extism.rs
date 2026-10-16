@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use extism::{Manifest, Plugin, Wasm};
+use extism::{Function, Manifest, Plugin, UserData, ValType, Wasm};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
@@ -82,7 +82,19 @@ impl ExtismPluginManager {
             }
         }
 
-        let plugin = Plugin::new(&manifest, [], true).map_err(|e| {
+        // 注册诊断通道 host_log（no-op）：插件侧 panic hook 把 wasm panic message
+        // 经 extism:host/user/host_log 上报，宿主丢弃（日志侧未来可接）。
+        // 必须注册：wasm 导入缺失会导致实例化失败。
+        let host_log = Function::new(
+            "host_log",
+            [ValType::I64],
+            [],
+            UserData::new(()),
+            |_plugin, _inputs, _outputs, _ud| Ok(()),
+        )
+        .with_namespace("extism:host/user");
+
+        let plugin = Plugin::new(&manifest, [host_log], true).map_err(|e| {
             CoreError::common(CommonError::Internal(format!(
                 "Failed to load plugin {}: {}",
                 id, e

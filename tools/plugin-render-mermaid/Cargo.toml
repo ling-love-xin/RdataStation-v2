@@ -1,0 +1,31 @@
+[package]
+name = "rds-render-mermaid-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "RdataStation Mermaid 渲染插件（wasm / Extism PDK）：源文本或 JSON 信封进、SVG 出"
+license = "MIT"
+
+# 独立 crate：不入根 workspace（与宿主 rds-plugin 分层，P4 插件市场语境再拆仓库）。
+# 空 [workspace] 表声明自己是 workspace 根，避免被上层 D:\RdataStation\RDS\RdataStation-v2 吸附。
+[workspace]
+
+# 插件必须是 cdylib：向 wasm 导出符号，Extism 宿主按 `call_plugin(id, func, input)` 调用。
+# 加 rlib 仅为了让 native 单测能链接（wasm 产物不受影响）。
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# PDK 只用于导出函数与 bytes 进出；不需要 http / msgpack（信封解析自己用 serde_json）
+extism-pdk = { version = "1.4", default-features = false }
+# 上游 0.3.1 vendor 于 vendor/，含本仓补丁（text_metrics 字体注入点）。
+# default-features=false 关掉 cli(clap)/png(resvg/usvg)，SVG 才是规范输出（dodo 同款承重注释）
+mermaid-rs-renderer = { path = "vendor/mermaid-rs-renderer", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# wasm 体积优先：z 级优化 + 单 codegen unit + 去符号
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

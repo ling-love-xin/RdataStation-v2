@@ -964,7 +964,7 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 | P3 | 🟢 **前半（反向 Host API 面）已闭环**（2026-10-15）；wasm host function 面未建 | `sidecar/host.rs`：`host.*` 七个方法常量 + `SecretRef` 引用制 + params/result 类型 + `HostApiProvider` trait（默认 `Unsupported`）+ `HostApiHandler`（方法级 glob 权限闸）；`router.rs` 按 JSON-RPC 判据识别反向请求（带 id + method）；`conn.rs` 增 `ConnEvent::InboundRequest` + `reply` / `reply_error`；`supervisor.rs` 事件泵透传 `InboundRequest`（按代过滤）+ `instance_conn_handle`（反向请求无 session_id，按插件实例键拿句柄回帧）。**宿主接线闭环**：`permissions.host` 承载声明、`host_provider.rs`（storage 落盘 + log）、`runtime.rs` 运行时循环（tick 驱动 + 分发回帧）、app 启动 `init_plugin_manager` 自动 spawn。**仍 Unsupported**：credential / notify-actions / ssh（宿主无对应设施，诚实口径）。`cargo test -p rds-plugin` **155/155** 单测 + **61/61** 集成。蓝本：navop `extension-protocol/src/host.rs` |
 | P4 前置 | 🟢 **生命周期已落地**（2026-10-15，VS Code 口径，方案见 §4.8.1–§4.8.3） | `supervisor::shutdown_plugin(id)`（只停一个插件全部实例，会话如实作废，双插件集成测试只停 A 不碰 B）；`deactivate_plugin` Sidecar 分支先停进程（卸载删目录的前提）；`uninstall_plugin`（依赖反向索引 `check_dependents` 拒绝被引用者 → 停用 → 删 `install_dir/<id>/` → `delete_plugin` 清 DB → 事件；**保留 plugin-data**；id 安全校验）；`enable_plugin` / `disable_plugin`（DB `is_enabled` 权威状态 + 事件 + 运行中立刻停用/激活）；`scan_and_diff_plugins` 热插拔（目录即插件，内容 hash diff：新增自动加载激活 / 消失自动停用移除 / 变化置 needs_reload 不热生效）挂在运行时循环 tick；`reload_plugins`（清快照重扫全量重新加载激活）+ `pending_reloads()`；`hot_reload_manager.rs` 空壳落为薄封装。修一处静默失败：`load_plugin_from_dir` 此前不登记 `plugin_index`（热插拔 activate 会 not_found）。`cargo test -p rds-plugin` **155/155** 单测 + **75/75** 集成（新增 `tests/lifecycle.rs` 6 条 + `supervisor_real_process.rs` 1 条）。**未接**：`install_package` 无调用方（安装 UI 是 P4）；`request_credential` / `notify` / `ssh.open_tunnel` 仍 `Unsupported`；enable/disable 的 UI 开关是 P4；依赖检查在 DB 未初始化时保守放行 |
 | SSH 轨 | 🟢 **两刀已落地**（2026-10-15）：协议方法面 + 字节流帧 | **第一刀**：`sidecar/ssh.rs` 正向 `x.ssh.*` 五方法 + 参数/结果类型（connect 凭据走 SecretRef / exec 一次一答 / shell+forward 通道契约就绪 / close 幂等）；`x.` 私有前缀天然通过安装期声明校验（不污染协议命名空间）；与反向 `host.ssh.open_tunnel`（宿主是引擎）方向互补；10 条单测。**第二刀**：`KIND_STREAM=0x03` 承载 shell/forward 持续双向字节流——payload `[u16 BE 通道 id 长][channel_id][u8 flags(0=数据/1=EOF)][流数据]`，方向由发送者隐含，与 Arrow 附件正交可插队；`proto.rs` 新 kind + 构造器（通道 id 超 `u16::MAX` 拒绝）、`router.rs` 流事件 + `decode_stream_payload`（坏 payload=Issue）、`conn.rs` `write_stream`/`write_eof`（下行）+ 事件（上行）、`supervisor.rs` 事件泵按代透传、`runtime.rs` 显式分发（debug 只记元信息）。`cargo test -p rds-plugin` **183/183** 单测（supervisor 新增：事件泵透传带上下文、无 live 实例时流事件不外报）+ **75/75** 集成。**未接**：宿主侧消费（终端面板订阅流渲染 shell / 隧道面板订阅通道数据，P4；真实进程级流帧用例随宿主消费一起补，fixture 届时需支持发 `KIND_STREAM` 帧） |
-| 渲染计算轨 | 🟢 **render-document 第一刀已落地**（2026-10-15）；真实 wasm 资产未做 | `manifest.capabilities.wasm.render_document` 声明段（function 默认 `render` / formats / output_format 默认 `svg`）+ `render.rs` 服务（`renderer_for` 按格式选渲染器、`render_document` 调 wasm 插件收产物、`resolve_spec` 契约预览）；纯计算、无 host function 依赖（与 `allowed_host_functions` 正交）；6 条单测。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。**未做**：真实 wasm 渲染资产（mermaid-rs-renderer 编 wasm，P4 真机验收）；宿主 UI 面板调用（P4） |
+| 渲染计算轨 | 🟢 **render-document 第一刀已落地**（2026-10-15）；**wasm 第二刀可行性评估完成**（2026-10-16，结论：**可行**，详见 §11.3）；真实 wasm 资产未做 | `manifest.capabilities.wasm.render_document` 声明段（function 默认 `render` / formats / output_format 默认 `svg`）+ `render.rs` 服务（`renderer_for` 按格式选渲染器、`render_document` 调 wasm 插件收产物、`resolve_spec` 契约预览）；纯计算、无 host function 依赖（与 `allowed_host_functions` 正交）；6 条单测。`cargo test -p rds-plugin` **171/171** 单测 + **75/75** 集成。**未做**：真实 wasm 渲染资产（mermaid-rs-renderer 编 wasm，第二刀决策待用户拍板后动手）；宿主 UI 面板调用（P4） |
 | P4 | ⬜ 未开始 | — |
 | P5 | ⬜ 未开始 | — |
 ### 11.2 P2.5 的落地清单
@@ -990,3 +990,86 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 **「不支持的文件夹置灰并说明」还没做到**（P2 这一条**不算完成**）：现在只能做到「文件夹计数 0」—— 要置灰还得让 `NavNode` 支持「禁用 + 原因」，那是导航模型的事，与 P4 的 `PanelRegistry` 一起动；能力信息已经在 `SidecarDatabase::descriptor()` 上等着读者了。
 
 **P2 剩下的（都不属 P2 的必要路径）**：`rds.*` 的 schema metadata 读到消费方（P2.5 的 Arrow 直灌会用到）；`cursor` / `explain` / `readonly` 等能力等到有消费者再谈；`meta.indexes` / `meta.constraints` 的明细面（属性面板要列明细时定）。
+
+### 11.3 wasm 渲染第二刀：mermaid-rs-renderer 编 wasm 可行性评估（2026-10-16）
+
+**结论：可行**。mermaid-rs-renderer 0.3.1（`default-features = false`）可编译为 wasm32-unknown-unknown，宿主 Extism 运行时可直接加载；唯一质量降级点是**无系统字体 → 文本宽度走估算**（不 panic、SVG 仍产出，布局宽度与原生渲染有偏差）。以下证据全部实测（crates.io API / GitHub MCP / 本地 registry 源码），非估计。
+
+#### 证据链（逐条可复核）
+
+| # | 项 | 证据 | 影响 |
+| --- | --- | --- | --- |
+| E1 | 上游**无现成 wasm 资产** | repo 根 `package.json` 仅 dev-tools（`@mermaid-js/mermaid-cli ^11.12.0` + vega-cli/vega-lite，用于对比基准），非 wasm 构建 | wasm 资产必须自建（本仓侧），无现成可抄 |
+| E2 | 依赖树全纯 Rust，wasm 兼容 | crates.io `0.3.1/dependencies` API：无默认 features 时 = anyhow ^1.0 / fontdb ^0.23 / json5 ^1.3 / once_cell ^1.21.4 / regex ^1.12 / serde(derive) / serde_json ^1.0 / thiserror ^2.0 / ttf-parser ^0.25；可选 = clap(cli) / resvg+usvg(png) | 无 C 依赖、无系统库，wasm32-unknown-unknown 可编译 |
+| E3 | `fontdb::load_system_fonts` 在 wasm 下是**空函数体** | fontdb 0.23.0 本地源码（`D:/Dev/Rust/.cargo/registry/src/.../fontdb-0.23.0/src/lib.rs:399-476`）：`load_system_fonts` 函数体全为 `#[cfg(target_os = windows/macos/redox/unix)]` 分支，wasm32 不命中任何分支 | 调用不 panic；`db.query()` 返回 None → 测量失败 |
+| E4 | 测量失败全链路有 fallback | GitHub code search `measure_text_width repo:1jehuang/mermaid-rs-renderer` 5 处调用：`render.rs`（`.unwrap_or(字符数 × font_size × 0.55)`）、`layout/text.rs`（`.unwrap_or_else(|| fallback_text_width(...))`，且 `fast_metrics && is_ascii` 时根本不查字体）、`layout/c4.rs`（同款）、`layout/pie.rs` | 无系统字体 → 宽度估算，**不 panic、SVG 照常产出** |
+| E5 | 字体缓存 fs 写用 `let _` 忽略错误 | `text_metrics.rs`：`fs::create_dir_all` / `fs::write` 全部 `let _ =`；`cache_paths` 依赖 `XDG_CACHE_HOME|HOME` env（wasm 下 `var_os` 为 None → 直接返回 None） | wasm 下缓存路径空操作，不 panic |
+| E6 | 工具链满足 edition 2024 | 本仓 `rustc 1.98.0`（2026-08-18），rust-toolchain stable；edition 2024 需 ≥1.85 | 可编译 |
+| E7 | 宿主运行时就绪 | `crates/plugin/src/wasm/extism.rs` `ExtismPluginManager`：`load_plugin(id, wasm_bytes, ...)`（`Manifest::new([Wasm::data(bytes)])`）+ `call_plugin(id, func, &[u8]) -> Result<Vec<u8>>`（要求 Active）；根 `Cargo.toml` `extism = "1.30.0"` | 契约与第一刀 `render.rs`（input=源文本字节、output=产物字节）吻合 |
+| E8 | 调用面可纯函数导出 | 上游 API：`render / render_with_options / render_strict / render_with_timing / measure`（`RenderOptions { theme: Theme(40 字段), layout }`，5 preset：modern/mermaid_default/dark/forest/neutral；`%%{init}%%` 指令覆盖显式 options）；dodo 参考：`render_with_timing(source, RenderOptions) -> RenderResult{svg, parse_us, layout_us, render_us}`，`MermaidRenderer` trait 抽象 | wasm 导出函数 = input bytes → 解析 → `render_*` → output bytes，无状态持有（上游 API 是自由函数，无 font cache/parser 状态要跨调用持有） |
+
+#### 结论拆解
+
+1. **编译可行**：E2 + E6。`default-features = false`（不开 `cli`/`png`，与 dodo 承重注释一致），SVG 是规范输出，不引入 resvg/usvg。
+2. **运行可行**：E3 + E4 + E5。wasm 下字体测量降级为估算宽度；ASCII 快路径（`fast_metrics`）甚至不碰 fontdb。渲染不 panic、SVG 可产出。
+3. **宿主接入可行**：E7 + E8。`call_plugin(id, "render", source_bytes)` 直接吻合第一刀契约。
+4. **质量降级点（唯一）**：无系统字体 → 非 ASCII 文本（CJK 等）宽度估算偏差 → 节点框/标签布局偏紧或偏松。mermaid-rs-renderer 自身在 CJK 上已有宽字符处理（`consume_cluster` / `is_cjk_wide_char`，按 1em 计），估算路径质量可接受但非像素级。
+   - **根治路径（后续刀）**：fontdb 支持 `load_font_data(Vec<u8>)` 二进制注入（E3 源码 195 行）——把一款开源字体（如 DejaVu Sans 子集）`include_bytes!` 进 wasm，`TextMeasurer::new()` 后注入，即得真实测量；代价是产物体积增加（百 KB 级起）。
+
+#### 未决设计决策（待用户拍板，动码前确认）
+
+| # | 决策 | 选项 | 我的倾向 |
+| --- | --- | --- | --- |
+| D1 | 插件 crate 形态 | (a) 新 workspace member `crates/plugin-render-mermaid`（依赖只向下：只依赖 mermaid-rs-renderer + extism-pdk，不依赖 rds-plugin）｜(b) 独立目录（tools/ 或插件仓库，不入 workspace） | (a)：同仓可编译、产物 .wasm 可被安装流程引用；P4 插件市场语境再拆仓库 |
+| D2 | 导出契约 | (a) 保持纯源文本（主题走 `%%{init}%%` 指令）｜(b) JSON 信封 `{"source":..., "theme":{preset, overrides}}`，非 JSON 或缺 source 退化纯文本 | (b)：绘图面板必然要宿主侧控制主题（明暗跟随），信封一次到位；第一刀无消费者，升级零成本；退化保证老调用仍工作 |
+| D3 | 字体策略 | (a) 第二刀不嵌字体（估算宽度，链路优先）｜(b) 直接嵌 DejaVu Sans 子集（真实测量，体积 +100KB~1MB） | (a)：先验证链路；字体作第三刀质量增强，单独权衡体积 |
+| D4 | 冒烟验证范围 | (a) 只编 .wasm（`rustup target add wasm32-unknown-unknown` + 临时 crate 编译，产物放 `.rds/tmp/` 用完即删）｜(b) 编 + 宿主 `call_plugin` 真调用跑通（临时宿主测试）｜(c) 全链路含渲染质量对照 | (b)：实证主义——协议版本配对（extism 1.30 host vs extism-pdk）必须在运行期验证，静态证据盖不住 |
+
+#### 已知风险
+
+- **Extism 版本配对**：宿主 `extism = 1.30.0`，插件侧需 `extism-pdk` 同代（1.x）；配对错误在运行期报 manifest/ABI 错。D4(b) 冒烟即为此验证。
+- **wasm 产物体积**：mermaid-rs-renderer 本体 + regex 等，估算 1~3MB（无字体）；可接受（vs sidecar 二进制量级相当）。
+- **首次 `rustup target add wasm32-unknown-unknown` 需联网**（rustup channel 下载；crates.io 依赖走 tuna 镜像已通）。
+- **上游升级漂移**：dodo 注释已警示「`default-features = false` is load-bearing」，未来 release 若把 png 折入非可选路径，本方案要停下来重测。
+
+### 11.4 wasm 渲染第二刀：落地记录（2026-10-16，D1-D4 全部拍板后实施）
+
+**结论：全链路实证通过**。插件 crate（`tools/plugin-render-mermaid`）编译为 wasm32-unknown-unknown，经 Extism 1.30 host 加载调用，12/12 场景核验全绿；宿主契约升级为 JSON 信封（非 JSON 退化纯文本）。
+
+#### 落地内容（与 D1-D4 决策一一对应）
+
+| 决策 | 落地 |
+| --- | --- |
+| D1 独立目录 | `tools/plugin-render-mermaid/`（`[workspace]` 空表声明独立，不入根 workspace；P4 插件市场语境再拆仓库）。crate = `rds-render-mermaid-wasm`（cdylib+rlib，rlib 仅为 native 单测） |
+| D2 JSON 信封 | 插件侧 `src/envelope.rs`：非 JSON / 缺 `source` → 纯文本退化；`preset` 五档 + 未知回退 modern；`overrides` 经 preset Theme serde 序列化 → 逐键覆盖 → 反序列化（未知键 serde 忽略）。宿主侧 `crates/plugin/src/render.rs` 新增 `RenderRequest<'a>` / `RenderThemeRef<'a>` / `render_request_json`（skip_serializing_if 精简信封），`render_document` input 语义更新为「源文本或信封」 |
+| D3 嵌入字体子集 | DejaVu Sans 2.37 子集（fonttools pyftsubset 200KB，拉丁/拉丁扩展/希腊/西里尔/通用标点符号/箭头/数学/几何 + CJK 区段）`include_bytes!` 进 wasm；vendor patch 在 `text_metrics.rs` 加 `register_font` + `INJECTED_FONTS`，`TextMeasurer::new()` 灌入 fontdb。上游默认字体栈含 `"DejaVu Sans"`（modern/mermaid_default 双预设），注入即命中 |
+| D4 全链路实证 | `.rds/tmp/wasm-smoke/`（用完即删）：extism 1.30 SDK 加载 wasm + 12 场景核验（见「实证数字」） |
+
+#### 实证数字（smoke 实测）
+
+- **wasm 产物体积 2.59 MB**（strip 后；含 200KB 字体子集）。全布局引擎（23 图类型）+ regex + fontdb 的体积在预估 1~3MB 区间上沿，可接受。
+- **渲染耗时**：首次调用 26ms（wasmtime 编译实例），后续单图 0~5ms；SVG 单图 2.9~5.0KB。
+- **12 场景核验**：5 图类型纯文本（flowchart/sequence/class/state/er）✓、CJK 标签 ✓、信封 preset=dark ✓、信封 overrides（`primary_color` 进 SVG）✓、信封仅 source ✓、非法 JSON 退化（Err 不崩溃）✓、明暗主题输出不同 ✓、语法错误映射为调用错误 ✓。
+- **测试基线**：插件 crate native 单测 9/9（envelope 7 + 渲染 2）；宿主 `cargo test -p rds-plugin` 186 单测 + 集成测试全绿（信封 3 条新增）。
+
+#### 踩坑与修复（全部已落地）
+
+| # | 坑 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | **wasm 全图类型 panic（unreachable trap）** | 上游 `layout/flowchart/edge_pipeline.rs` 与 `layout/mod.rs` 的 stage 计时用 `std::time::Instant::now()`——wasm32-unknown-unknown 的 std 无计时实现，`Instant::now()` 直接 panic（`sys/time/unsupported.rs` "time not implemented on this platform"）。定位法：插件装 `std::panic::set_hook` → message 经自定义 host 函数 `extism:host/user/host_log` 透出 → 宿主（smoke）注册 no-op 读取，backtrace 直接指到 `build_routed_edges` | vendor patch：新增 `wasm_time.rs`（`Instant` 恒 0 stub，`elapsed()=ZERO`），`#[cfg(target_arch="wasm32")]` 下替换两处 `use std::time::Instant`；stage metrics 在 wasm 下恒 0（纯诊断，不进产物） |
+| 2 | `rustup target add` 镜像 404 | 用户级 `RUSTUP_DIST_SERVER` 固化 tuna，rustup 组件下载在 tuna/rsproxy 都 404；进程级 env 对 native exe 无效 | 手动安装：rsproxy.cn 下载 `rust-std-1.98.0-wasm32-unknown-unknown.tar.xz` → 解压 → 复制 `lib/rustlib/wasm32-unknown-unknown`（54 个 lib 文件）到 toolchain（注意双层目录） |
+| 3 | 独立 crate 被根 workspace 吸附 | `tools/` 在仓库根下，cargo 自动归入根 workspace | Cargo.toml 加空 `[workspace]` 表声明独立 |
+| 4 | raw string 提前闭合 | `r#"..."#` 内 JSON 色值 `"#123456"` 的 `"#` 序列提前终止 raw string | 改 `r##"..."##`（插件 envelope 测试 + 宿主 render.rs 测试 + smoke 各一处） |
+| 5 | PDK native 测试链接失败 | `#[plugin_fn]` 展开引用 PDK 的 wasm 导入符号（`load_input` 等），native 测试二进制链接不到 | 插件 `render` 壳 `#[cfg(target_arch = "wasm32")]` 隔离；渲染逻辑抽 `render_inner` 纯函数（`Result<String, String>`，不依赖 PDK 类型），native 单测直测 |
+| 6 | `FnResult` 错误转换 | `extism_pdk::Error` = `anyhow::Error`，`?` 不接受 `Box<dyn Error>` / `String` 歧义 | 壳内 `match` + `WithReturnCode::from(Error::msg(e))` 显式构造 |
+
+#### 插件与宿主的诊断通道（保留，生产无害）
+
+插件侧 panic hook（`install_panic_hook`）把 wasm panic message 经 `extism:host/user/host_log` 上报；宿主 `ExtismPluginManager::load_plugin` 注册同名 no-op Function（**必须注册**：wasm import 缺失导致实例化失败）。后续宿主日志侧可接真实落盘。
+
+#### 本刀未做（边界明确）
+
+- **宿主真机验收**：`ExtismPluginManager::call_plugin` 真调用 wasm（插件的 `render_document` 全链路经宿主入口）→ P4 注册表接线 + 插件资产目录就绪后做；本轮实证到 extism 引擎层（smoke = 与宿主同一引擎/同版本），宿主契约由单测覆盖。
+- **`render_with_detailed_timing` 的 Instant**（`lib.rs`）未 patch：插件契约不用 timing 面，wasm 下该函数被调用才会 panic；未来加 timing 契约时需同样替换。
+- **PNG 输出 / resvg**：`default-features=false` 明确关闭，SVG 是唯一规范输出。
+
