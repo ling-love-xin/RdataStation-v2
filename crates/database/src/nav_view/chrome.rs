@@ -8,7 +8,7 @@ use super::*;
 
 impl NavView {
     /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
-    pub fn render_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub fn render_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.nav_search.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx));
             state.update(cx, |s, cx| {
@@ -676,6 +676,8 @@ impl NavView {
                     }
                 }
             }))
+            .id("nav-panel")
+            .role(gpui::Role::Group)
     }
 
     /// 来源筛选 chip（全部 / 项目 / 全局 / 共享）；点击切换筛选，不占一级结构。

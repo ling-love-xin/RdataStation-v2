@@ -1242,6 +1242,8 @@ impl WorkbenchView {
         let qo_entity = entity.clone();
         let quick_open = div()
             .id("quick-open-entry")
+            .role(gpui::Role::Button)
+            .test_support()
             .h_flex()
             .items_center()
             .gap_2()
@@ -1813,6 +1815,7 @@ fn mock_status_chip(panel: Entity<MockPanel>, cx: &mut App) -> Div {
         // 出口类任务不可取消（DuckDB / 文件系统内没有中断点），所以那一档只给文字
         let mut cancel = div()
             .id("status-mock-cancel")
+            .role(gpui::Role::Button)
             .px_1()
             .rounded_sm()
             .text_color(fg)

@@ -589,7 +589,9 @@ impl Focusable for NavView {
 
 impl Render for NavView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_nav(window, cx)
+        div()
+            .size_full()
+            .child(self.render_nav(window, cx))
     }
 }
 

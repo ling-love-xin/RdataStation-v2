@@ -210,7 +210,15 @@ impl Render for RightSidebarPanel {
             RightPanel::History => self.render_history_panel(cx),
             RightPanel::Archive => self.render_archive_detail(cx),
         };
-        div().v_flex().size_full().min_h_0().bg(bg).child(content)
+        div()
+            .id("right-sidebar-panel")
+            .role(gpui::Role::Group)
+            .test_support()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .bg(bg)
+            .child(content)
     }
 }
 

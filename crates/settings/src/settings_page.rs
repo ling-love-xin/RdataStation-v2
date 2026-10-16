@@ -723,6 +723,7 @@ impl Render for SettingsPage {
                 }
             })
             .id(ElementId::Name("settings-page".into()))
+            .role(gpui::Role::Group)
             .debug_selector(|| "settings-page".to_string())
     }
 }

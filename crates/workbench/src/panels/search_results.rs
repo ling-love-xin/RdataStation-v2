@@ -111,7 +111,7 @@ impl Render for SearchResultsHostPanel {
         }
         let Some(search) = search else {
             return div()
-                .id("search-results-host")
+                .id("search-results-host").role(gpui::Role::Group).test_support()
                 .size_full()
                 .bg(theme.colors.background)
                 .v_flex()
@@ -342,7 +342,7 @@ impl Render for SearchResultsHostPanel {
             clear,
         );
         div()
-            .id("search-results-host")
+            .id("search-results-host").role(gpui::Role::Group).test_support()
             .size_full()
             .bg(theme.colors.background)
             .v_flex()

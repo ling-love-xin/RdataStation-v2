@@ -1248,7 +1248,7 @@ impl Render for PropertyHostPanel {
         // 先渲染（可变借用 cx），再取色（不可变借用）——顺序反过来会 E0502。
         let panel = self.render_property_panel(window, cx);
         let bg = cx.theme().colors.background;
-        panel.id("property-host-panel").bg(bg).size_full()
+        panel.id("property-host-panel").role(gpui::Role::Group).test_support().bg(bg).size_full()
     }
 }
 

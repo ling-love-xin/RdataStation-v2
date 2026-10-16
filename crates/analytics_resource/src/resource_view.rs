@@ -2353,6 +2353,7 @@ impl Render for ResourcesPanel {
 
         div()
             .id("analytics-resource-panel")
+            .role(gpui::Role::List)
             // `track_focus` 不能省：没有它面板不在 dispatch path 上，快捷键就落不到动作（已踩）。
             .track_focus(&self.focus_handle)
             // 键盘上下文：快捷键由 app 层绑到 `analytics-resource` context（视图不自注全局键）。

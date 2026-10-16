@@ -565,7 +565,13 @@ impl Render for EditorPanel {
 
         // `h_flex()` 默认交叉轴居中：不写 items_stretch，内容列会按内容高度被竖直居中，
         // 高于面板的部分上下同时被裁。
-        let mut root = div().h_flex().items_stretch().size_full();
+        let mut root = div()
+            .id("editor-panel")
+            .role(gpui::Role::Group)
+            .test_support()
+            .h_flex()
+            .items_stretch()
+            .size_full();
         root = root.child(div().flex_1().min_w_0().child(content));
         root
     }

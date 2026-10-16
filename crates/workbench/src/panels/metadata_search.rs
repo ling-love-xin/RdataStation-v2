@@ -223,7 +223,7 @@ impl Render for MetadataSearchHostPanel {
         }
         let Some(search) = search else {
             return div()
-                .id("metadata-search-host")
+                .id("metadata-search-host").role(gpui::Role::Group).test_support()
                 .size_full()
                 .bg(theme.colors.background)
                 .v_flex()
@@ -465,7 +465,7 @@ impl Render for MetadataSearchHostPanel {
 
         let pane = render_metadata_search_pane(&search, &theme, &open_hit, &locate_hit, pending);
         div()
-            .id("metadata-search-host")
+            .id("metadata-search-host").role(gpui::Role::Group).test_support()
             .size_full()
             .bg(theme.colors.background)
             .v_flex()

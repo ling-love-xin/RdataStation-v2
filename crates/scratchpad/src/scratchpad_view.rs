@@ -530,7 +530,9 @@ impl Focusable for ScratchpadView {
 
 impl Render for ScratchpadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_scratchpad(window, cx)
+        div()
+            .size_full()
+            .child(self.render_scratchpad(window, cx))
     }
 }
 

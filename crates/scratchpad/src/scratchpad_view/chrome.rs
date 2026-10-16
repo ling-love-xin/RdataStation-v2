@@ -25,7 +25,7 @@ impl ScratchpadView {
     /// 草稿箱面板（M5）：根 = `{project}/scratchpad/`。
     ///
     /// 闭环：新建（内联）/重命名/删除→回收站+撤销栏/回收站恢复与清空/文件名过滤/外部引用移除。
-    pub fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.scratchpad.borrow().loaded {
             self.request_scratchpad_load(cx);
         }
@@ -41,7 +41,10 @@ impl ScratchpadView {
         // ── 搜索态整体切换（2026-10-11 用户点名，VSCode 对齐）：面板打开时侧栏只显示
         // 搜索面板（普通工具栏 / 撤销栏 / 底部引用回收站整体消失）──
         if self.scratchpad.borrow().search_panel_open {
-            return self.render_scratchpad_search_pane(window, cx);
+            return self
+                .render_scratchpad_search_pane(window, cx)
+                .id("scratchpad-search-pane")
+                .role(gpui::Role::Group);
         }
         let (rows, error, external_refs, trash, sort, sort_desc, edit, undo, filter, loading) = {
             let view = self.scratchpad.borrow();
@@ -166,16 +169,19 @@ impl ScratchpadView {
         }
 
         if let Some(err) = &error {
-            return panel.child(
-                div()
-                    .flex_1()
-                    .w_full()
-                    .px_2p5()
-                    .py_3()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(err.clone()),
-            );
+            return panel
+                .child(
+                    div()
+                        .flex_1()
+                        .w_full()
+                        .px_2p5()
+                        .py_3()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(err.clone()),
+                )
+                .id("scratchpad-panel")
+                .role(gpui::Role::Group);
         }
 
         // 顶部内联新建（仅「新建引用」：文件/文件夹的内联行插在目标文件夹下）。
@@ -505,6 +511,8 @@ impl ScratchpadView {
                 }
             })
             .when_some(ref_dialog_el, |this, el| this.child(el))
+            .id("scratchpad-panel")
+            .role(gpui::Role::Group)
     }
 }
 

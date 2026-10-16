@@ -6146,6 +6146,8 @@ impl Render for EditorHostPanel {
         });
 
         let mut root = div()
+            .id("editor-host-panel")
+            .role(gpui::Role::Group)
             .v_flex()
             .size_full()
             .min_h_0()

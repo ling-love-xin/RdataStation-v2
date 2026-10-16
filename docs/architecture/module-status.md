@@ -46,7 +46,7 @@
 > ；跑不出来的一律不写。
 > 基线：
 >
-> **2026-10-15**
+> **2026-10-16**
 >
 > （Windows · stable 1.98.0 · 
 >
@@ -54,9 +54,9 @@
 >
 > ）・全仓
 >
-> **第六次**
+> **第七次**
 >
-> 复跑（§6.5），下表即其数字・此前基线为 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
+> 复跑（§6.6，**排除 `rds-plugin`**，plugin 因工作树未提交改动编译失败）・下表即其数字・此前基线为 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
 
 
 
@@ -68,13 +68,13 @@
 
 | 项       | 实测值                                                                                                                                        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 工作区测试目标 | **119**（含 19 个 Doc-tests 目标）                                                                                                               |
-| 通过      | **2908**                                                                                                                                   |
-| 失败      | **0**（本轮全绿）                                                                                                                                |
-| 忽略      | **44**（engine 单测 24 + Doc-tests 20）                                                                                                        |
+| 工作区测试目标 | **108**（排除 `rds-plugin`；含 19 个 Doc-tests 目标）                                                                                               |
+| 通过      | **2727**                                                                                                                                   |
+| 失败      | **0**（本轮全绿，排除 plugin）                                                                                                                        |
+| 忽略      | **43**（engine 单测 24 + Doc-tests 19）                                                                                                        |
 | 编译告警    | `cargo check --workspace --all-targets` **0 行 warning 头**（零告警，2026-10-15 第六次复跑确认，见 §6.5）                                                   |
 | 代码规模    | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**）                                                                |
-| 口径      | 上表是**原始命令的输出**；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件 = 118 个目标 / 2907 项**，见 §2 的表下注 |
+| 口径      | 上表是**原始命令的输出**；本次为 2026-10-16 复跑（§6.6），**`--exclude rds-plugin`**（plugin 因工作树未提交改动编译失败被排除，见 §6.6）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（排除 plugin）= 107 个目标 / 2726 项** |
 
 
 
@@ -209,7 +209,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `federation_credentials_probe` | 1  | 凭据脱敏出口                   |
 | `oracle_probe`                 | 1  | Oracle 扩展腿               |
 
-### 2.2 `rds-workbench` 的 36 个集成目标（155 项）
+### 2.2 `rds-workbench` 的 37 个集成目标（159 项）
 
 
 
@@ -233,6 +233,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `oracle_federation`         | 1                 |   | `mock_job_cancel`            | 1                |
 | `connection_rule12`         | 2（新增，`27e854ac`）  |   | `nav_property_real`          | 2（新增，`b12c65a5`） |
 | `scratchpad_editor_entry`   | 1（新增，`8e4a7a55`）  |   | `zz_fixture_probe`           | 1（本机诊断，未跟踪）      |
+| `a11y_roles`                | 4（新增，2026-10-16 a11y 断言，见 §6.6） |   |                              |                  |
 
 > 真机目标（
 >
@@ -733,6 +734,37 @@ HEAD `f8f2bf35`（2026-10-15 19:04「feat (property) 属性面板优化」）为
 逐包数字按「目标名 ↔ test result」配对提取并经目录清单（`crates/*/tests/`）复核，合计 2499 + 409 = **2908**。
 
 代码规模（行数 / `.rs` 文件数）本轮未重测，§0 仍为 09-19 快照。
+
+### 6.6 2026-10-16 第七次复跑：a11y 修复两批 + gpui-kit headless 断言（排除 `rds-plugin`）
+
+**背景**：2026-10-15 冒烟启动日志发现 21 条 a11y INFO 告警（9 个不同 FocusId）——聚焦元素缺无障碍节点。根因：全 `crates/` 零 `.role(`（gpui 聚焦元素须 `.id(...)` + `.role(...)` 才建节点）。
+
+**修复（两批，共 12 个文件）**：
+
+1. **批次 1（6 元素 8 处 role）**：`property-host-panel`→Group、`search-results-host`×2→Group、`metadata-search-host`×2→Group、`analytics-resource-panel`→List、`quick-open-entry`→Button、`status-mock-cancel`→Button。
+2. **批次 2（无 id 7 元素补 id+role）**：`sidebar-panel`、`right-sidebar-panel`、`editor-panel`、`editor-host-panel`、`nav-panel`、`scratchpad-panel`、`mock-detail`（另 `mock-draft-open`/`mock-result-open` 补 Button role，`settings-page` 补 Group）。
+
+**gpui-kit headless 断言（用户点名路径，替代 OCR 定位）**：
+
+- workbench 主界面 7 个已修元素补 `.test_support()`（`gpui_base::observe.rs` 转发：非 `test-support` 构建零成本返回原元素，`test-support` 构建包 `Observed` 进观测注册表）。
+- 新增集成目标 `a11y_roles`（§2.2，4 项全过）：`sidebar-panel`/`right-sidebar-panel`/`editor-panel` 断言 `Role::Group` + 可见；`quick-open-entry` 断言 `Role::Button` + 可见。
+- `window.focused(cx)` 探针：headless 窗口启动无焦点（142v1 的“启动即焦点”是真机特有路径）。
+
+**真机复核（重启 + UIA 激活）**：
+
+- 原 21 条告警 → **1 条残留**：`FocusId(142v1)`（“有 id 无 role”，启动默认焦点）——39v3 已消失（`mock-draft-open` 修复生效）。
+- 142v1 排查已到项目代码极限：crates/ 内 8 个 `track_focus` 宿主全部补齐 id+role 仍报；启动路径无 `focus` 调用（main.rs / view.rs / nav 预连）；headless `window.focused()` = None；UIA 系统键盘焦点不在 rds-app；vendor 内 “id+track_focus 无 role” 仅在测试代码。**结论**：142v1 不在项目代码可修范围（最大嫌疑：vendor/gpui-component 组件内部或 gpui 窗口激活时 accesskit 初始树的焦点 fallback）——vendor 属第三方库，不改（保持可升级性）。
+
+**本次复跑（第七次，2026-10-16）**：
+
+- 命令：`cargo test --workspace --exclude rds-plugin -j 2`（`test-all` 别名等价）。
+- **排除 plugin 原因**：`crates/plugin/src/render.rs:387` 测试断言 raw string `r#"..."#` 内含 `"#123456"` 提前闭合（`r#...#` 定界符冲突）——**用户未提交在途改动**（`render.rs` +94 行，渲染计算轨），用户选择跳过 plugin。
+- 结果：**108 目标 / 2727 通过 / 0 失败 / 43 忽略**（项目自身套件 107 目标 / 2726 项，去掉 `zz_fixture_probe`）。
+- 对比 10-15（119/2908）：减项 = plugin 目标与忽略数；增项 = `a11y_roles`（+1 目标 +4 项）。
+- **并发 flake 记录**：首跑（含 plugin 缓存）`rds-editor --lib` 的 `lsp::client` 2 项（`publish_diagnostics_becomes_an_event` / `other_notifications_are_passed_through`，均为“事件未收到”）在 `-j 2` 下偶发；单跑 `--test-threads=1` 6/6 全过——**时序类 flake（非代码缺陷）**，与 §6.5 的 nav_jobs flake 同类。
+- 非测试构建：`cargo check -p rds-app -j 1` 通过（test_support 零成本转发确认）；`cargo test -p rds-workbench -j 1` exit=0（含新 `a11y_roles` 与既有 connection 套件）。
+
+**待办**：plugin `render.rs` 语法错误由用户修（或确认后我改 `r#"` → `r##"`）；修好后补跑 `-p rds-plugin` 可恢复全量口径。
 
 
 

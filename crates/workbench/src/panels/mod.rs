@@ -359,7 +359,15 @@ impl Render for SidebarPanel {
             LeftPanel::Resources => self.render_resources_panel(cx),
             LeftPanel::Plugin => self.render_plugin_placeholder(fg),
         };
-        div().v_flex().size_full().min_h_0().bg(bg).child(content)
+        div()
+            .id("sidebar-panel")
+            .role(gpui::Role::Group)
+            .test_support()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .bg(bg)
+            .child(content)
     }
 }
 
