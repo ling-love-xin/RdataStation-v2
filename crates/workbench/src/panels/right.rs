@@ -5,9 +5,10 @@
 
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::*;
 
 use crate::view::RightPanel;
@@ -238,5 +239,35 @@ impl ComponentPanel for RightSidebarPanel {
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .child(self.shared.active_right.get().label())
+    }
+
+    /// M7：Mock 面板标题栏工具栏的「新增表」入口（+）。
+    ///
+    /// 与右 Dock 清单里的草稿行同一目标（`DetailTarget::Draft`）：打开 / 聚焦中央
+    /// 草稿 tab（空态起手卡片）。只对 Mock 面板显示——洞察 / 历史 / 存档详情没有
+    /// 「新建一张表」的动作，不该多一个会误导的按钮。
+    /// 挂点用 `toolbar_buttons`（面板头工具栏，VSCode 侧栏惯例，只渲染一次）而
+    /// 非 `title_suffix`：右 Dock 已设 `PanelStyle::TabBar`，title_suffix 会在
+    /// 「每个 tab + 栏尾」渲染两遍（它是为 dirty dot / 自定义关闭设计的）。
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        if self.shared.active_right.get() != RightPanel::Mock {
+            return None;
+        }
+        let mock_panel = self.mock_panel.clone();
+        Some(vec![Button::new("mock-new-table").icon(IconName::Plus).on_click(
+            move |_, window, app| {
+                mock_panel.update(app, |panel, cx| {
+                    panel.open_detail_for(
+                        mock::mock_view::DetailTarget::Draft,
+                        window,
+                        cx,
+                    );
+                });
+            },
+        )])
     }
 }
