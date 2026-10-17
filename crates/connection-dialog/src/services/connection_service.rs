@@ -223,6 +223,12 @@ impl ConnectionService {
             }));
         }
 
+        // 历史数据卫生：空字符串的 network_config_id（旧版 UI 保存空选项曾把
+        // Some("") 写进数据）不构成档案引用——统一在入口规范化为 None，后续
+        // 判定与隧道应用都按「无引用」处理。否则探针会把「引用的网络配置无法
+        // 解析（）」当成 ERROR（G_conn_SQLite_Example 实例）。
+        let network_config_id = network_config_id.filter(|s| !s.trim().is_empty());
+
         // 结构化 TLS 请求（证书路径 / 校验意图）：URL 只能表达「要不要加密」，
         // 证书与 verify 档由 native 驱动从这份请求落到 TLS 连接器。
         // 在这里派生（而不是等 URL 处理完）：下面所有建配置的分支（含重连回退）都要用它。
