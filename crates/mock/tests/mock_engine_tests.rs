@@ -1,7 +1,7 @@
 //! Mock 引擎集成测试（`MockEngine` 公开 API 端到端）。
 //!
 //! 覆盖 v1 `backend/tests/mock_engine_tests.rs` 的设计意图，并补齐它从未覆盖的出口链路
-//! （export / persist_as_asset / save_to_scratchpad / 场景模板）。
+//! （export / save_to_scratchpad / 场景模板）。
 //!
 //! **与 v1 那份测试的关系**：v1 文件停留在旧 API（断言 `response.confidence > 0.0`、
 //! `response.generator.type_name()`、`preview.rows` 非空），迁移时已无法编译、也从未通过，
@@ -613,23 +613,6 @@ fn map_column_resolves_parameterized_source_types() {
     assert!(matches!(stamp.generator, GeneratorConfig::DateTime { .. }));
 }
 
-#[test]
-fn map_columns_batch_returns_one_response_per_column() {
-    let columns = vec![
-        ("id".to_string(), "INTEGER".to_string()),
-        ("name".to_string(), "VARCHAR".to_string()),
-        ("created_at".to_string(), "DATETIME".to_string()),
-        ("amount".to_string(), "NUMERIC".to_string()),
-    ];
-    let responses = MockEngine::map_columns_batch(columns).expect("批量映射应当成功");
-    assert_eq!(responses.len(), 4);
-    for response in &responses {
-        assert!(!response.sample_value.is_empty());
-        assert!(!response.confidence.is_empty());
-    }
-    assert_eq!(responses[0].column_name, "id");
-}
-
 // ==================== 取消 ====================
 
 /// S4：取消令牌是**任务级**的——预置位的令牌会让生成立刻取消，
@@ -805,26 +788,6 @@ async fn export_table_creates_named_table_and_drops_temp() {
 // ==================== 持久化出口 ====================
 
 #[tokio::test]
-async fn persist_as_asset_creates_table_and_consumes_temp() {
-    let result = MockEngine::generate(basic_config("t_persist"))
-        .await
-        .expect("生成应当成功");
-
-    let (name, row_count, column_count) =
-        MockEngine::persist_as_asset(&result.temp_table_name, "orders_asset")
-            .expect("持久化应当成功");
-
-    assert_eq!(name, "orders_asset");
-    assert_eq!(row_count, 50);
-    assert_eq!(column_count, 3);
-    // 临时表已被 drop，预览应报错——这是「持久化为资产」与「临时表」的分界。
-    assert!(
-        MockEngine::preview(&result.temp_table_name, 10).is_err(),
-        "持久化后临时表应已释放"
-    );
-}
-
-#[tokio::test]
 async fn save_to_scratchpad_writes_file_into_dir() {
     let dir = temp_dir("scratchpad");
     let result = MockEngine::generate(basic_config("t_scratchpad"))
@@ -855,18 +818,6 @@ async fn save_to_scratchpad_writes_file_into_dir() {
 }
 
 // ==================== 场景模板 ====================
-
-#[test]
-fn list_templates_returns_builtins() {
-    let templates = MockEngine::list_templates().expect("列出模板应当成功");
-    assert_eq!(templates.len(), 6, "内置 6 个场景模板");
-    let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
-    assert!(ids.contains(&"builtin:ecommerce"));
-
-    let ecommerce = MockEngine::apply_template("builtin:ecommerce").expect("模板应当存在");
-    assert_eq!(ecommerce.tables.len(), 4);
-    assert!(MockEngine::apply_template("builtin:nope").is_err());
-}
 
 #[tokio::test]
 async fn generate_scenario_generates_every_table_and_reports_progress() {

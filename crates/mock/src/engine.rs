@@ -17,7 +17,6 @@ use crate::models::{
     ReferenceDomain, ScenarioTemplate,
 };
 use crate::schema_map::{ColumnMapper, parse_data_type};
-use crate::templates;
 use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
 use engine::duckdb::{DuckDBManager, TempTableSource};
 use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
@@ -583,36 +582,6 @@ impl MockEngine {
     pub fn map_column(column_name: &str, data_type: &str) -> MockResult<ColumnMappingResponse> {
         let dt = parse_data_type(data_type)?;
         Ok(ColumnMapper::infer(column_name, &dt))
-    }
-
-    /// 批量列智能映射
-    ///
-    /// 对多列表名+数据类型对进行批量推断，返回 `Vec<ColumnMappingResponse>`。
-    pub fn map_columns_batch(
-        columns: Vec<(String, String)>,
-    ) -> MockResult<Vec<ColumnMappingResponse>> {
-        columns
-            .into_iter()
-            .map(|(name, dt)| Self::map_column(&name, &dt))
-            .collect()
-    }
-
-    // ==================== 场景模板 ====================
-
-    /// 列出所有内置场景模板
-    ///
-    /// 返回 6 个预定义模板：电商/HR/博客/金融/社交媒体/企业通讯录。
-    /// 每个模板包含表结构、列定义、推荐 GeneratorConfig。
-    pub fn list_templates() -> MockResult<Vec<ScenarioTemplate>> {
-        Ok(templates::get_builtin_templates())
-    }
-
-    /// 按 ID 查找场景模板详情
-    ///
-    /// 返回完整的 `ScenarioTemplate`，包含该场景下所有表的列定义和推荐配置。
-    pub fn apply_template(template_id: &str) -> MockResult<ScenarioTemplate> {
-        templates::get_template_by_id(template_id)
-            .ok_or_else(|| MockError::TemplateNotFound(template_id.to_string()))
     }
 
     // ==================== 私有方法 ====================
@@ -1191,39 +1160,6 @@ impl MockEngine {
         Ok(output_path)
     }
 
-    /// 将临时表持久化为项目资产
-    ///
-    /// 以新名称将临时表转为 DuckDB 持久化双挂载表（内存+文件），
-    /// 返回 `(表名, 行数, 列数)`。
-    pub fn persist_as_asset(
-        temp_table_name: &str,
-        new_name: &str,
-    ) -> MockResult<(String, i64, i32)> {
-        let db = Self::get_db()?;
-        let conn = Self::get_conn(&db)?;
-
-        let safe_name = sanitize_table_name(new_name);
-
-        // 第二个参数是源**表名**（不是 SELECT 语句），见 `SqlEngine::build_create_table_as_select`。
-        let create_sql = SqlEngine::build_create_table_as_select(&safe_name, temp_table_name);
-        conn.execute_batch(&create_sql)?;
-
-        let count_sql = SqlEngine::build_select(&safe_name, &["COUNT(*)"], None);
-        let row_count: i64 = conn.query_row(&count_sql, [], |row| row.get(0))?;
-
-        let column_count: i32;
-        {
-            let desc_sql = SqlEngine::build_select_all(&safe_name, Some(0));
-            let mut stmt_desc = conn.prepare(&desc_sql)?;
-            let _rows = stmt_desc.query([])?;
-            column_count = stmt_desc.column_count() as i32;
-        }
-
-        let drop_sql = SqlEngine::build_drop_table(temp_table_name, true);
-        conn.execute_batch(&drop_sql)?;
-
-        Ok((safe_name, row_count, column_count))
-    }
 }
 
 impl MockEngine {

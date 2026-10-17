@@ -172,13 +172,15 @@ button{font-family:inherit;cursor:pointer;}
 [data-scn="constraint"] .st-new,[data-scn="scenario"] .st-new,
 [data-scn="generated"] .st-ok,[data-scn="writing"] .st-ok,[data-scn="persist"] .st-ok,
 [data-scn="running"] .st-run,[data-scn="failed"] .st-fail{display:inline-flex;}
-/* 静态状态（多表清单里写死的那种）：○ 未落库 / ● 已落库 / ⚠ 引用的表未落库 */
+/* 静态状态（多表清单里写死的那种）：● 已生成 / ✓ 已落库 / ⚠ 引用的表未落库 */
 .sd{font-size:11px;flex:none;}
 .sd::before{margin-right:4px;}
 .sd.o::before{content:"○";}
+.sd.d::before{content:"●";}
 .sd.k::before{content:"✓";}
 .sd.w::before{content:"⚠";}
 .sd.o{color:var(--muted);}
+.sd.d{color:var(--success);}
 .sd.k{color:var(--success);}
 .sd.w{color:var(--warning);}
 /* 生成中那一场是 10 万行（10 批）的任务：输入框与清单行数跟着切 */
@@ -766,8 +768,8 @@ button{font-family:inherit;cursor:pointer;}
           <!-- ── ② 结果表清单：每张结果表一个中央 tab；⚠ = 它引用的表还没落库 ── -->
           <div class="lst only-scenario-result">
             <div class="lrow"><span class="name grow">users</span><span class="hint">1,000 行</span><span class="sd k">已落库</span></div>
-            <div class="lrow"><span class="name grow">products</span><span class="hint">500 行</span><span class="sd o">未落库</span></div>
-            <div class="lrow sel"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="sd o">未落库</span></div>
+            <div class="lrow"><span class="name grow">products</span><span class="hint">500 行</span><span class="sd d">已生成</span></div>
+            <div class="lrow sel"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="sd d">已生成</span></div>
             <div class="lsub"><span>↳</span><span class="rel grow">user_id → users.id · 1..1,000</span></div>
             <div class="lrow"><span class="name grow">order_items</span><span class="hint">15,000 行</span><span class="sd w">引用的表未落库</span></div>
             <div class="lsub"><span>↳</span><span class="rel grow">order_id → orders.id · 1..5,000</span></div>
@@ -819,7 +821,7 @@ button{font-family:inherit;cursor:pointer;}
                 <div class="line"><span class="name">电商主数据</span><button class="btn sm">应用</button><button class="btn sm">删除</button></div>
                 <div class="line"><span class="hint grow">1000 行 · 4 列</span></div>
               </div>
-              <div class="hint">模板只存「怎么造数据」（行数 / 种子 / 语言 / 列），不存目标表名；场景生成不记入生成历史。</div>
+              <div class="hint">模板只存「怎么造数据」（行数 / 种子 / 语言 / 列），不存目标表名；场景运行记入历史（标注 scene + seed，重放按模板重取 + 套用 seed）。</div>
             </div>
           </details>
         </div>

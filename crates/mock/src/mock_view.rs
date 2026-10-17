@@ -4273,7 +4273,7 @@ impl MockPanel {
     ///
     /// 行 = 状态点 + 表名 + 行数；点一行 = 切 / 开那张表的中央 tab（选中行就是当前表）。
     /// 关系挂在**子表**行下的 `↳` 子行（真身是列上的 `dependency`），不再单开一段。
-    fn render_table_list(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_table_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let success = cx.theme().colors.success;
         let warning = cx.theme().colors.warning;
@@ -4303,7 +4303,7 @@ impl MockPanel {
                 let name = info.table_name.clone();
                 let (glyph, status, color) = match self.table_status(&name) {
                     TableStatus::Persisted => ("✓", "已落库".to_string(), success),
-                    TableStatus::NotPersisted => ("○", "未落库".to_string(), muted),
+                    TableStatus::NotPersisted => ("●", "已生成".to_string(), success),
                     TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
                     // 生成中的那一行把百分比说出口（D38 的 `◐ orders 40%`）：
                     // 集合任务不敢保证看到的是哪一张，但单表任务停在哪个百分位一眼就能读
@@ -4316,10 +4316,27 @@ impl MockPanel {
                 let open = {
                     let entity = cx.entity();
                     let click_name = name.clone();
+                    // 键盘可达：行内左对齐文本不宜换 `Button`（其内容容器固定 `justify_center`，
+                    // 换上去会破坏左对齐与选中加粗），按 skill 的自绘下限补焦点——
+                    // `use_keyed_state` 每行一个独立焦点句柄（与 Button 同款），Enter/Space 激活。
+                    // id 必须是稳定业务键（表名），不能随选中态变，否则一换选中就丢焦点。
+                    let open_handle = window
+                        .use_keyed_state(
+                            ElementId::Name(SharedString::from(format!(
+                                "mock-result-open-{click_name}"
+                            ))),
+                            cx,
+                            |_, cx| cx.focus_handle(),
+                        )
+                        .read(cx)
+                        .clone();
+                    let entity_kb = entity.clone();
+                    let click_kb = name.clone();
                     div()
                         .id(ElementId::Name(SharedString::from(format!(
                             "mock-result-open-{click_name}"
                         ))))
+                        .role(gpui::Role::Button)
                         .flex_1()
                         .min_w_0()
                         .text_xs()
@@ -4330,6 +4347,8 @@ impl MockPanel {
                         })
                         .text_ellipsis()
                         .cursor_pointer()
+                        .track_focus(&open_handle)
+                        .tab_stop(true)
                         .child(name.clone())
                         .on_click(move |_, window, app| {
                             let name = click_name.clone();
@@ -4337,6 +4356,17 @@ impl MockPanel {
                                 panel.select_result(index, cx);
                                 panel.open_table_detail(&name, window, cx);
                             });
+                        })
+                        .on_key_down(move |event: &KeyDownEvent, window, app| {
+                            // Enter / Space 与点击同一动作（gpui 可点元素在 KeyUp 激活，
+                            // 这里在 KeyDown 直接触发同一入口，行为与 Button 的键盘点击等价）
+                            if event.keystroke.key == "enter" || event.keystroke.key == "space" {
+                                let name = click_kb.clone();
+                                entity_kb.update(app, |panel, cx| {
+                                    panel.select_result(index, cx);
+                                    panel.open_table_detail(&name, window, cx);
+                                });
+                            }
                         })
                 };
                 let mut row = div()
@@ -4582,19 +4612,42 @@ impl MockPanel {
         };
         let open = {
             let entity = cx.entity();
+            // 键盘可达：与结果行同一口径（keyed focus + Enter/Space 激活；`mock-draft-open` 固定 id）
+            let open_handle = window
+                .use_keyed_state(
+                    ElementId::Name(SharedString::from("mock-draft-open")),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx)
+                .clone();
+            let entity_kb = entity.clone();
             div()
                 .id("mock-draft-open")
+                .role(gpui::Role::Button)
+                // 自绘可点行：test_support 让 headless 测试可观察（与导航行同口径）；
+                // 无 test_support 的元素不进 observation 注册表，会被误判为「未渲染」
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_ellipsis()
                 .cursor_pointer()
+                .track_focus(&open_handle)
+                .tab_stop(true)
                 .child(name.clone())
                 .on_click(move |_, window, app| {
                     entity.update(app, |panel, cx| {
                         panel.open_detail_for(DetailTarget::Draft, window, cx);
                     });
+                })
+                .on_key_down(move |event: &KeyDownEvent, window, app| {
+                    if event.keystroke.key == "enter" || event.keystroke.key == "space" {
+                        entity_kb.update(app, |panel, cx| {
+                            panel.open_detail_for(DetailTarget::Draft, window, cx);
+                        });
+                    }
                 })
         };
         list.child(
@@ -4634,7 +4687,7 @@ impl MockPanel {
     /// 只看**本会话的**落库记录（`landed_tables`）：项目库里本来就有同名表不算它落过。
 
     /// 右 Dock 的面板主体：表清单 + 集合动作 + 出口 + 出口反馈（D38）。
-    fn render_actions(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let success = cx.theme().colors.success;
         let danger = cx.theme().colors.danger;
@@ -4692,7 +4745,7 @@ impl MockPanel {
         };
 
         // ① 表清单：唯一的管理入口（单表 / 本次生成 / 结果表三态共用一个渲染器）
-        let table_list = self.render_table_list(cx);
+        let table_list = self.render_table_list(window, cx);
 
         // 关系闭包里还没落库的：摆出来 + 一键依次落（免得漏落，留下悬空引用）
         let pending_row = {
@@ -4924,7 +4977,6 @@ impl MockPanel {
     /// 为何收起来：面板天天用的是上面那份「有哪些表」清单，历史与模板是偶尔翻一次的落盘记录；
     /// 展开状态存实体（不是每帧派生的），展开体走 `Collapsible`（不手搮揭示动画）。
     fn render_folds(&mut self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
         let open = self.fold_open;
         let toggle = {
@@ -4961,13 +5013,8 @@ impl MockPanel {
             // 段序与折叠标题一致（「生成历史 · 用户模板」，见原型 §2 / 使用手册 §3）：
             // 展开后第一眼读到的就是标题先说的那一段
             .child(self.render_history(cx))
-            // 历史口径：场景一次产 N 张表，记进去反而误导（`RunRecord::of` 对 Scenario 返回 None）
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("场景生成不记入生成历史（历史是单表配置的重放来源）"),
-            )
+            // S5 起场景运行也记入历史（标注：scene_id + seed + 场景名，不落单表列行），
+            // 所以这里没有「场景不进历史」的说明行——那条口径已随 S5 反转
             .child(self.render_templates(cx));
 
         div()
@@ -4976,9 +5023,16 @@ impl MockPanel {
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(border)
-            // `Collapsible` 是「揭盖」容器：触发行是普通子元素，内容走 `content`（收起时不渲染）
+            // `Collapsible` 是「揭盖」容器：触发行是普通子元素，内容走 `content`（收起时不渲染）；
+            // `motion_id` 给「展开 / 收起」一段 spring 揭示动效（0.7.1 `collapsible.rs` 的 `reveal`），
+            // 不给则收起 / 展开直接切，观感上是「啪」一下
             .child(toggle)
-            .child(Collapsible::new().open(open).content(body))
+            .child(
+                Collapsible::new()
+                    .open(open)
+                    .motion_id(ElementId::Name("mock-fold-reveal".into()))
+                    .content(body),
+            )
     }
 
     /// 用户模板段：把当前配置存下来 / 套用已有模板 / 删除。
@@ -5586,7 +5640,7 @@ fn complex_form_line(
 impl Render for MockPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = window;
-        let actions = self.render_actions(cx);
+        let actions = self.render_actions(window, cx);
         // 右 Dock 内容区自身可滚动（Dock 的 `#tab-content` 不产生滚动，见布局规格）
         div()
             .v_flex()
@@ -6713,7 +6767,15 @@ impl Render for MockDetailView {
             head
         };
 
-        let mut body = div().v_flex().size_full().min_h_0().gap_2().p_3().child(
+        let mut body = div()
+            .id("mock-detail")
+            .role(gpui::Role::Group)
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_2()
+            .p_3()
+            .child(
             div()
                 .v_flex()
                 .gap_1()

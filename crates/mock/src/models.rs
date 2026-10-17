@@ -552,17 +552,6 @@ pub enum MockExportFormat {
     SqlInsert,
 }
 
-// ==================== 导出请求 ====================
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MockExportInput {
-    pub temp_table_name: String,
-    pub format: MockExportFormat,
-    pub output_path: Option<String>,
-    pub table_name: Option<String>,
-}
-
 // ==================== 列映射响应 ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -572,20 +561,6 @@ pub struct ColumnMappingResponse {
     pub generator: GeneratorConfig,
     pub confidence: String,
     pub sample_value: String,
-}
-
-// ==================== 生成历史记录 ====================
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MockHistoryRecord {
-    pub id: String,
-    pub table_name: String,
-    pub row_count: u32,
-    pub seed: Option<u32>,
-    pub config_json: String,
-    pub generated_at: String,
-    pub status: String,
 }
 
 // ==================== 场景模板 ====================
@@ -613,28 +588,6 @@ pub struct TemplateTable {
     pub name: String,
     pub row_count: u32,
     pub columns: Vec<ColumnDef>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MockSaveToScratchpadInput {
-    pub temp_table_name: String,
-    pub format: MockExportFormat,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MockPersistAssetInput {
-    pub temp_table_name: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct MockPersistAssetResult {
-    pub table_name: String,
-    pub row_count: i32,
-    pub column_count: i32,
 }
 
 // ==================== 多表场景生成结果 ====================

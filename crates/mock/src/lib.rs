@@ -40,8 +40,7 @@ pub use generator_catalog::{
 };
 pub use models::{
     ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, GeneratorConfig, Locale,
-    MockConfig, MockExportFormat, MockExportInput, MockGenerateResult, MockPersistAssetInput,
-    MockPersistAssetResult, MockSaveToScratchpadInput, MockScenarioResult, MockScenarioTableResult,
+    MockConfig, MockExportFormat, MockGenerateResult, MockScenarioResult, MockScenarioTableResult,
     ReferenceDomain, ScenarioTemplate, TemplateTable,
 };
 pub use persistence::{
