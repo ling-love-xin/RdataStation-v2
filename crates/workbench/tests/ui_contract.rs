@@ -15,6 +15,47 @@
 use rds_workbench::SidebarMode;
 use rds_workbench::view::toggle_hidden_mode;
 
+/// 契约 5：LSP 状态指示的图标 / 文案映射（状态栏 LSP 管理器）。
+///
+/// 状态优先级固定：就绪 > 启动中 > 拦住（停止 / 启动失败 / 断开）> 未启动。
+#[test]
+fn lsp_status_chip_reflects_port_state() {
+    use gpui_kit::assets::IconName as Catalog;
+    use rds_workbench::services::editor_lsp::LspBlock;
+    use rds_workbench::view::lsp_status_chip;
+
+    // 就绪：server 图标 + 「就绪」
+    let (icon, text) = lsp_status_chip(true, true, None);
+    assert_eq!(icon, Catalog::Server);
+    assert!(text.contains("就绪"), "文案：{text}");
+
+    // 启动中：握手未完成
+    let (icon, text) = lsp_status_chip(true, false, None);
+    assert_eq!(icon, Catalog::ServerCog);
+    assert!(text.contains("启动中"), "文案：{text}");
+
+    // 手动停止 / 未启动：off（未拦住也当未启动）
+    assert_eq!(
+        lsp_status_chip(false, false, Some(&LspBlock::Manual)).0,
+        Catalog::ServerOff
+    );
+    assert_eq!(lsp_status_chip(false, false, None).0, Catalog::ServerOff);
+
+    // 启动失败：off + 原因
+    let (icon, text) = lsp_status_chip(
+        false,
+        false,
+        Some(&LspBlock::StartFailed("没有 Python".into())),
+    );
+    assert_eq!(icon, Catalog::ServerOff);
+    assert!(text.contains("没有 Python"), "文案：{text}");
+
+    // 崩溃：crash 图标 + 原因
+    let (icon, text) = lsp_status_chip(false, false, Some(&LspBlock::Crashed("对端已关".into())));
+    assert_eq!(icon, Catalog::ServerCrash);
+    assert!(text.contains("对端已关"), "文案：{text}");
+}
+
 /// 默认正文字号（`ui.rs` 倍率换算基准）。
 const BASE_FONT_SIZE: f32 = 16.0;
 
@@ -69,6 +110,8 @@ fn ui_size_constants_match_design() {
         (SETTINGS_SECTION_HEAD_HEIGHT, 28.0, "设置页节标题行高"),
         (SETTINGS_CARD_RADIUS, 6.0, "设置页分组卡圆角"),
         (SETTINGS_CARD_PADDING, 12.0, "设置页分组卡内边距"),
+        // 状态栏 LSP 管理器浮层
+        (STATUS_LSP_MANAGER_WIDTH, 240.0, "LSP 管理器浮层宽"),
     ];
 
     for (ratio, expected_px, label) in cases {
@@ -92,6 +135,7 @@ fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
         ("view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        ("panels/project_picker.rs", include_str!("../src/panels/project_picker.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
         (
@@ -170,29 +214,39 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/quick_open/palette.rs"),
         ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
+        // connection-dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
+        // （`crates/connection-dialog/src/components/connection_dialog/`）。
         (
             "connection_dialog/render.rs",
-            include_str!("../src/components/connection_dialog/render.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/render.rs"),
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/helpers.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../src/components/connection_dialog/project_picker.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/project_picker.rs"),
         ),
         (
             "connection_dialog/managers.rs",
-            include_str!("../src/components/connection_dialog/managers.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/managers.rs"),
         ),
         (
             "connection_dialog/staging.rs",
-            include_str!("../src/components/connection_dialog/staging.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/staging.rs"),
+        ),
+        (
+            "connection_dialog/type_tree.rs",
+            include_str!("../../connection-dialog/src/components/connection_dialog/type_tree.rs"),
+        ),
+        (
+            "connection_dialog/draft_list.rs",
+            include_str!("../../connection-dialog/src/components/connection_dialog/draft_list.rs"),
         ),
         (
             "connection_dialog/mod.rs",
-            include_str!("../src/components/connection_dialog/mod.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/mod.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描；UI 尺寸/颜色契约同样适用）
         (
@@ -280,6 +334,7 @@ fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
         ("workbench/view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        ("panels/project_picker.rs", include_str!("../src/panels/project_picker.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
         (
@@ -356,29 +411,39 @@ fn ui_sources_have_no_raw_color_literals() {
             "quick_open/palette.rs",
             include_str!("../src/quick_open/palette.rs"),
         ),
+        // connection-dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
+        // （`crates/connection-dialog/src/components/connection_dialog/`）。
         (
             "connection_dialog/render.rs",
-            include_str!("../src/components/connection_dialog/render.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/render.rs"),
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/helpers.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../src/components/connection_dialog/project_picker.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/project_picker.rs"),
         ),
         (
             "connection_dialog/managers.rs",
-            include_str!("../src/components/connection_dialog/managers.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/managers.rs"),
         ),
         (
             "connection_dialog/staging.rs",
-            include_str!("../src/components/connection_dialog/staging.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/staging.rs"),
+        ),
+        (
+            "connection_dialog/type_tree.rs",
+            include_str!("../../connection-dialog/src/components/connection_dialog/type_tree.rs"),
+        ),
+        (
+            "connection_dialog/draft_list.rs",
+            include_str!("../../connection-dialog/src/components/connection_dialog/draft_list.rs"),
         ),
         (
             "connection_dialog/mod.rs",
-            include_str!("../src/components/connection_dialog/mod.rs"),
+            include_str!("../../connection-dialog/src/components/connection_dialog/mod.rs"),
         ),
         ("project/ui.rs", include_str!("../../project/src/ui.rs")),
         (

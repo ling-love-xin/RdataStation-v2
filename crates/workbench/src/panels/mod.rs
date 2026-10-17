@@ -32,6 +32,7 @@ use ::editor::shared::EditorShared;
 
 mod editor;
 mod metadata_search;
+mod project_picker;
 mod property_panel;
 mod resources;
 mod right;
@@ -42,6 +43,7 @@ mod shared;
 pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use property_panel::{PropertyHostPanel, focus_property_tab};
+pub use project_picker::ProjectPickerPanel;
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;

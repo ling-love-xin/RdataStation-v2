@@ -11,13 +11,16 @@
 
 use std::rc::Rc;
 
-use gpui_kit::base::{Selectable, StyledExt};
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::assets::IconName as CatalogIcon;
+use gpui_kit::base::{Disableable as _, Selectable, StyledExt};
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
 };
 use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
 use gpui_kit::*;
@@ -33,6 +36,7 @@ use crate::panels::{
 };
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
+use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
 use settings::commands::{CloseSettings, OpenSettings, ToggleThemeMode};
@@ -63,6 +67,8 @@ pub struct WorkbenchView {
     settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
     project_inputs: Option<project::ui::ProjectInputs>,
+    /// M1 项目选择器面板（中央 tab 组常驻 tab；强持有防 GC，见 `project_picker.rs`）。
+    project_picker: Option<Entity<crate::panels::ProjectPickerPanel>>,
     /// M1 项目视图宿主（构造期组装；项目视图位于 `project` crate）。
     project_host: Option<project::ui::ProjectUiHost>,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
@@ -88,6 +94,13 @@ pub struct WorkbenchView {
     editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
     /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
     scratchpad_meta_pump: Option<Task<()>>,
+    /// 【LSP】语言服务端口句柄（状态栏 LSP 管理器持有它做启停 / 回收）；
+    /// 测试装配 / 未启用 = `None`（状态栏不摆这一项）。
+    lsp: Option<Rc<WorkbenchLsp>>,
+    /// 【LSP】空闲回收 + 状态栏指示刷新泵（1 s 一拍；句柄必须被持有，drop 即停）。
+    lsp_reaper: Option<Task<()>>,
+    /// 【LSP】上一次看到的端口状态版本（不同则 `notify` 重绘状态栏指示）。
+    last_lsp_epoch: u64,
 }
 
 impl WorkbenchView {
@@ -104,7 +117,7 @@ impl WorkbenchView {
         // 启动恢复的项目也要**取写锁**——与改动前同一时机：**在端口装配之前**
         //（端口只是拄着 `Shared` 的句柄，真正读锁状态是调用 / 渲染那一刻）。
         Self::lock_startup_project(&shared, project_root);
-        let mut view = Self::assemble(shared, cx);
+        let mut view = Self::assemble(shared, true, cx);
         view.install_startup_side_effects();
         view
     }
@@ -119,13 +132,17 @@ impl WorkbenchView {
     pub fn new_for_test(project: Option<project::ui::OpenProject>, cx: &mut Context<Self>) -> Self {
         let shared = Shared::with_connections(Vec::new(), None);
         *shared.project.borrow_mut() = project;
-        Self::assemble(shared, cx)
+        // 测试装配不 spawn LSP server（真起子进程是测试副作用）：editor 侧测试用假端口直注，
+        // workbench 侧不测 LSP——这里保持「未注入 = 无语言服务」的口径即可。
+        Self::assemble(shared, false, cx)
     }
 
     /// 装配核心（真机与测试**共用这一份**）：端口注入 → 项目宿主 → 重绘桥。
     ///
     /// 调用方负责先建好 `Shared`（带项目会话与连接快照），以及自己那档的启动副作用。
-    fn assemble(shared: Shared, cx: &mut Context<Self>) -> Self {
+    /// `spawn_lsp`：真机传 `true`（**接语言服务端口为例，按需启动，这里不 spawn**），
+    /// 测试传 `false`（不接，保持「未注入 = 无语言服务」）。
+    fn assemble(shared: Shared, spawn_lsp: bool, cx: &mut Context<Self>) -> Self {
         // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
         // 因为下面构造 `editor_service` 时不能再借 `self`。
         let editor_shared_for_conn = shared.clone();
@@ -141,6 +158,14 @@ impl WorkbenchView {
         // 【2b】把执行环境端口接上（通用模式脚本执行；attach 时探测解释器并缓存，
         // 渲染路径零 I/O。未接时环境列表为空 → 运行按钮不亮）。
         crate::services::editor_env::attach(&editor_service);
+        // 【LSP】把语言服务端口接上（通用模式 Python 文档 → jedi-language-server）：
+        // **按需启动**（这里只建端口不 spawn，首个要服务的文档才拉起）+ 按需回收（视图 1 s 泵）。
+        // 测试装配不接（见 `new_for_test`，否则会真起子进程）。
+        let lsp = if spawn_lsp {
+            Some(crate::services::editor_lsp::attach(&editor_service))
+        } else {
+            None
+        };
         // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
         crate::services::editor_session::attach(&editor_service);
         // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
@@ -184,7 +209,7 @@ impl WorkbenchView {
                 }
             }));
         }
-        Self {
+        let mut view = Self {
             shared,
             area: None,
             sidebar: None,
@@ -194,6 +219,7 @@ impl WorkbenchView {
             quick_open_open_pending: false,
             settings_page: None,
             project_inputs: None,
+            project_picker: None,
             project_host: Some(host),
             _editor_subscription: None,
             _archive_subscription: None,
@@ -201,7 +227,15 @@ impl WorkbenchView {
             editor_service,
             editor_hosts: Vec::new(),
             scratchpad_meta_pump: None,
+            lsp,
+            lsp_reaper: None,
+            last_lsp_epoch: 0,
+        };
+        // 【LSP】空闲回收 + 状态栏指示刷新（1 s 一拍）：关掉最后一个需要服务的面板 → 停 server
+        if view.lsp.is_some() {
+            view.lsp_reaper = view.spawn_lsp_reaper(cx);
         }
+        view
     }
 
     /// 启动恢复的项目也要**取写锁**：`project_ui.lock/read_only` 原本只在交互式打开时写，
@@ -902,17 +936,48 @@ impl WorkbenchView {
 
         let editor_handle = panel_handle(editor.clone());
         let host_handle = panel_handle(editor_host);
+        // M1：项目选择器迁入中央 tab 组（第三个 tab）。
+        //
+        // 原设计是无项目时用选择器覆盖中央区；但那样 DockArea 在无项目时不挂树，
+        // 左右 Dock（Mock / 洞察 / 历史面板）整体不可达。Mock 面板「纯生成不受
+        // 影响」（mock-architecture I8「未打开项目也能跑」），无项目时点 Mock
+        // 图标必须能打开右 Dock——选择器面板 `visible()` 随 `host.session` 开关：
+        // 无项目可见并激活（打开项目入口），有项目隐藏（Dock 渲染回退编辑器）。
+        if self.project_inputs.is_none() {
+            self.project_inputs = Some(project::ui::ProjectInputs::new(window, cx));
+        }
+        let inputs = self
+            .project_inputs
+            .clone()
+            .expect("project inputs initialized");
+        let picker_panel = cx.new(|cx| {
+            crate::panels::ProjectPickerPanel::new(
+                self.project_host().clone(),
+                inputs,
+                cx,
+            )
+        });
+        self.project_picker = Some(picker_panel.clone());
+        let picker_handle = panel_handle(picker_panel);
+        // 先取 tab id 再进闭包：`area.update` 的闭包会捕获（move）`picker_handle`，
+        // 激活用的 id 提前算好，避免 Arc 在闭包外被二次使用（E0382）。
+        let picker_id = picker_handle.panel_id(cx);
         area.update(cx, |area, cx| {
             // 中央编辑区单独占满（左右 dock 独立装配，不用 h_split）。
-            // A9：标签条交给 Dock——同一个 tab 组里两个面板 = 两个标签。
+            // A9：标签条交给 Dock——同一个 tab 组里三个面板 = 三个标签。
             area.set_center(
                 DockLayout::tabs()
                     .panel_view(editor_handle, cx)
-                    .panel_view(host_handle, cx),
+                    .panel_view(host_handle, cx)
+                    .panel_view(picker_handle, cx),
                 window,
                 cx,
             );
         });
+        // 无项目启动：激活选择器 tab（有项目时默认激活编辑器——set_center 后首个 tab）。
+        if self.project_host().session.borrow().is_none() {
+            area.update(cx, |area, cx| area.select_panel(picker_id, window, cx));
+        }
 
         // 属性面板（中央 Dock 独立 tab，单实例）：双击对象 / F4 → 打开或聚焦。
         // 与 Mock 详情同例：面板实体只建一次，重复请求聚焦 + 替换内容。
@@ -1178,9 +1243,9 @@ impl WorkbenchView {
         let pt = settings::product_tokens::get(cx);
         let entity = cx.entity();
 
-        // 软件图标（明亮版；暗黑版未设计，dark 主题先复用，见 theme-design.md）。
+        // 软件图标（明亮版在 `assets/icons/light/`；暗黑版在 `assets/icons/dark/`，见 theme-design.md）。
         // 路径走 `paths::assets_dir()`：发布包取可执行文件同级 `assets/`，开发期回退仓库那份。
-        let icon_path = paths::assets_dir().join("icons").join("32x32.png");
+        let icon_path = paths::assets_dir().join("icons").join("light").join("32x32.png");
         let logo = img(icon_path.as_path()).w_5().h_5().rounded_sm();
 
         // 挖空项目槽：产品语义 token `title_bar.slot.background`。
@@ -1690,9 +1755,97 @@ impl WorkbenchView {
         cx.notify();
     }
 
+    // ===== LSP 管理器（状态栏入口 + 空闲回收） =====
+
+    /// 【LSP】空闲回收 + 状态栏指示刷新（1 s 一拍；句柄必须被持有，drop 即停）
+    ///
+    /// 两件事共用一个节拍：① `reap_if_idle`——**关掉最后一个需要服务的面板 → 停 server**
+    /// （只停服务、不设拦住原因，下次需要会自动重启）；② 端口状态版本变了就 `notify`，
+    /// 让状态栏指示（图标 / 文案）跟上（启动 / 停止 / 就绪 / 崩溃）。
+    fn spawn_lsp_reaper(&self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.lsp.as_ref()?;
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        Some(cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(1000)).await;
+                let keep = weak
+                    .update(cx, |view, cx| {
+                        // 复用自持端口句柄（与 `view.lsp` 同一个 Rc；先 clone 开，
+                        // 避开 `view` 的借用与 `cx.notify` 的写冲突）
+                        let Some(lsp) = view.lsp.clone() else {
+                            return false;
+                        };
+                        lsp.reap_if_idle();
+                        let epoch = lsp.epoch();
+                        if epoch != view.last_lsp_epoch {
+                            view.last_lsp_epoch = epoch;
+                            cx.notify();
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    return;
+                }
+            }
+        }))
+    }
+
+    /// 【LSP】立即把状态版本对齐到端口最新值（手动启停后立刻重绘，不等 1 s 泵）
+    fn sync_lsp_epoch(&mut self) {
+        if let Some(lsp) = self.lsp.as_ref() {
+            self.last_lsp_epoch = lsp.epoch();
+        }
+    }
+
+    /// 【LSP】状态栏「语言服务」指示 + 管理器浮层（点击弹：启动 / 停止）
+    ///
+    /// 未接端口（测试 / 未启用）→ 空元素（不摆这一项）。触发元素必须是 `Button`
+    /// （`Popover::trigger` 要求 `Selectable`，元素侧唯一实现者是 `Button`）；用 `.xsmall()`
+    /// + 自定义变体对齐状态栏本色（`primary` / `primary_foreground`），避开把 h_6 的按钮
+    /// 挤进 `text_xs` 的状态栏里把整条撑高。
+    fn lsp_status_item(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(lsp) = self.lsp.as_ref() else {
+            return div().into_any_element();
+        };
+        let (icon, label) = lsp_status_chip(
+            lsp.is_running(),
+            lsp.is_initialized(),
+            lsp.block().as_ref(),
+        );
+        let (fg, hover) = {
+            let colors = &cx.theme().colors;
+            (colors.primary_foreground, colors.primary_active)
+        };
+        let entity = cx.entity();
+        Popover::new("status-lsp-popover")
+            // 状态栏在最下：向左上展开，避开被窗口下缘截断
+            .anchor(Anchor::BottomRight)
+            .offset(ui::STATUS_LSP_OFFSET)
+            .trigger(
+                Button::new("status-lsp")
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(cx.theme().transparent)
+                            .foreground(fg)
+                            .hover(hover),
+                    )
+                    .xsmall()
+                    .icon(icon)
+                    .label(label)
+                    .tooltip("语言服务（LSP）"),
+            )
+            .content(move |_state, _window, cx| render_lsp_manager(&entity, cx))
+            .into_any_element()
+    }
+
     // ===== 状态栏 =====
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // 【LSP】语言服务指示 + 管理器浮层（未接端口 = 空元素）——
+        // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
+        let lsp_item = self.lsp_status_item(cx);
         // M7：Mock 任务在跑时给状态栏一个指示 + 取消入口（读面板实体自己的状态，不另存一份）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let mock_chip = self
@@ -1770,6 +1923,7 @@ impl WorkbenchView {
                     .child(div().child(format!("连接：{selected}")))
                     .child(div().child("DuckDB 就绪"))
                     .child(div().child("UTF-8"))
+                    .child(lsp_item)
                     .child(right_toggle),
             )
     }
@@ -1840,8 +1994,8 @@ fn mock_status_chip(panel: Entity<MockPanel>, cx: &mut App) -> Div {
 /// 状态栏开关按钮（自绘，对齐设计稿 .sb-btn）：图标 + 文字 + hover 高亮。
 fn sb_toggle(
     id: &'static str,
-    icon: IconName,
-    label: &'static str,
+    icon: impl Into<Icon>,
+    label: impl Into<SharedString>,
     fg: Hsla,
     hover_bg: Hsla,
     on_click: impl Fn(&mut App) + 'static,
@@ -1857,8 +2011,125 @@ fn sb_toggle(
         .text_color(fg)
         .hover(move |s| s.bg(hover_bg))
         .child(Icon::new(icon).size_3p5())
-        .child(div().child(label))
+        .child(div().child(label.into()))
         .on_click(move |_, _, app| on_click(app))
+}
+
+/// 状态栏 LSP 指示的（图标，文案）（**纯函数，可单测**）
+///
+/// 状态优先级：**就绪 > 启动中 > 拦住（停止 / 启动失败 / 断开）> 未启动**。
+/// 图标用完整 Lucide 目录（组件子集里没有 `server-*` 系列）。
+pub fn lsp_status_chip(
+    running: bool,
+    initialized: bool,
+    block: Option<&LspBlock>,
+) -> (CatalogIcon, String) {
+    if running && initialized {
+        (CatalogIcon::Server, "语言服务：就绪".to_string())
+    } else if running {
+        (CatalogIcon::ServerCog, "语言服务：启动中".to_string())
+    } else {
+        match block {
+            Some(LspBlock::Manual) => (CatalogIcon::ServerOff, "语言服务：已停止".to_string()),
+            Some(LspBlock::StartFailed(reason)) => {
+                (CatalogIcon::ServerOff, format!("语言服务：未启动（{reason}）"))
+            }
+            Some(LspBlock::Crashed(reason)) => {
+                (CatalogIcon::ServerCrash, format!("语言服务：已断开（{reason}）"))
+            }
+            None => (CatalogIcon::ServerOff, "语言服务：未启动".to_string()),
+        }
+    }
+}
+
+/// LSP 管理器浮层内容：状态 + 在用面板数 + 拦住原因 + 启动 / 停止
+///
+/// 从 `entity` **现读**端口状态（浮层每次重绘都重读，启动 / 停止后立刻反映）；`cx` 是
+/// `Context<PopoverState>`，只当 `App` 用（与编辑器工具栏定制面板同一约定）。
+fn render_lsp_manager(entity: &Entity<WorkbenchView>, cx: &mut App) -> AnyElement {
+    let Some(lsp) = entity.read(cx).lsp.clone() else {
+        return div().into_any_element();
+    };
+    let running = lsp.is_running();
+    let (icon, label) = lsp_status_chip(running, lsp.is_initialized(), lsp.block().as_ref());
+    let count = lsp.active_document_count();
+    let reason = match lsp.block() {
+        Some(LspBlock::StartFailed(reason)) | Some(LspBlock::Crashed(reason)) => Some(reason),
+        _ => None,
+    };
+    let muted = cx.theme().colors.muted_foreground;
+
+    let mut body = div()
+        .v_flex()
+        .gap_2()
+        .p_3()
+        .w(rems(ui::STATUS_LSP_MANAGER_WIDTH));
+    body = body.child(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(icon).size_3p5())
+            .child(div().text_sm().child("语言服务（LSP）")),
+    );
+    body = body.child(div().text_sm().child(label));
+    body = body.child(
+        div()
+            .text_xs()
+            .text_color(muted)
+            .child(format!("在用面板：{count}")),
+    );
+    if let Some(reason) = reason {
+        body = body.child(div().text_xs().text_color(muted).child(reason));
+    }
+    // 面板为空时提醒：服务会在空闲回收时自动停（下次需要再启）
+    if count == 0 && running {
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child("无面板使用，稍后会自动停止"),
+        );
+    }
+
+    let start_entity = entity.clone();
+    let stop_entity = entity.clone();
+    body = body.child(
+        div()
+            .h_flex()
+            .gap_2()
+            .child(
+                Button::new("lsp-manager-start")
+                    .small()
+                    .label("启动")
+                    .disabled(running)
+                    .on_click(move |_, _, app| {
+                        if let Some(lsp) = start_entity.read(app).lsp.clone() {
+                            lsp.start();
+                        }
+                        start_entity.update(app, |view, cx| {
+                            view.sync_lsp_epoch();
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("lsp-manager-stop")
+                    .small()
+                    .label("停止")
+                    .disabled(!running)
+                    .on_click(move |_, _, app| {
+                        if let Some(lsp) = stop_entity.read(app).lsp.clone() {
+                            lsp.stop();
+                        }
+                        stop_entity.update(app, |view, cx| {
+                            view.sync_lsp_epoch();
+                            cx.notify();
+                        });
+                    }),
+            ),
+    );
+    body.into_any_element()
 }
 
 /// 完全隐藏切换的纯状态转移：返回 `(新模式, 新快照)`。
@@ -2037,23 +2308,14 @@ impl Render for WorkbenchView {
         let settings_panel = self.render_settings_panel(window, cx);
         let scratchpad_info = self.render_scratchpad_file_info_popover(window, cx);
 
-        // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
-        let inputs = self
-            .project_inputs
-            .clone()
-            .expect("project inputs lazy init");
-        let no_project = { self.shared.project.borrow().is_none() };
+        // M1：项目选择器已是中央 tab 组常驻面板（`ProjectPickerPanel::visible` 随
+        // 项目开关），DockArea 不再分「有项目 / 无项目」两套挂法——无项目时左右
+        // Dock 照常渲染，Mock 面板「纯生成不受影响」（mock-architecture I8）。
         let mut middle = div().h_flex().items_stretch().flex_1().min_h_0();
         if let Some(bar) = left_bar {
             middle = middle.child(bar);
         }
-        if no_project {
-            let host = self.project_host().clone();
-            let picker = project::ui::render_picker(&host, &inputs, cx);
-            middle = middle.child(picker);
-        } else {
-            middle = middle.child(area);
-        }
+        middle = middle.child(area);
         if let Some(bar) = right_bar {
             middle = middle.child(bar);
         }
@@ -2205,9 +2467,13 @@ impl Render for WorkbenchView {
         if let Some(info) = scratchpad_info {
             root = root.child(info);
         }
-        // M1：项目设置（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
-        if !no_project {
+        // M1：项目设置浮层（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
+        if self.shared.project.borrow().is_some() {
             let host = self.project_host().clone();
+            let inputs = self
+                .project_inputs
+                .clone()
+                .expect("project inputs initialized");
             if let Some(settings) = project::ui::render_settings(&host, &inputs, cx) {
                 root = root.child(settings);
             }
