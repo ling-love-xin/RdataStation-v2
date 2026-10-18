@@ -3117,22 +3117,25 @@ fn formatting_in_text_mode_is_refused(cx: &mut TestAppContext) {
 // 只读拒绝 · 文本模式拒绝 · **源方言不明拒绝**（方向错不得）；真翻成功则文本、
 // 服务层、状态栏三处都有据可查。
 
-/// 工具栏按能力分层：`⋯ 更多` 只在 SQL 模式出现
+/// 工具栏按能力分层：分析组（执行计划 / 方言转换 / 模板）只在 SQL 模式出现
+/// （原型 §2.2：分析组常驻；文本模式按能力表不解析 SQL，不摆）
 #[gpui_kit::test]
-fn the_toolbar_offers_the_more_menu_only_in_sql_mode(cx: &mut TestAppContext) {
+fn the_toolbar_offers_the_analysis_group_only_in_sql_mode(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\more.sql", "select 1;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    let more_present = |cx: &mut VisualTestContext| {
+    let analysis_present = |cx: &mut VisualTestContext| {
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        cx.debug_bounds("editor-more").is_some()
+        cx.debug_bounds("editor-explain").is_some()
+            || cx.debug_bounds("editor-translate").is_some()
+            || cx.debug_bounds("editor-template").is_some()
     };
-    assert!(more_present(cx), "SQL 模式应当有「⋯ 更多」");
+    assert!(analysis_present(cx), "SQL 模式应当有分析组（执行计划/方言转换/模板）");
 
     shared.update(|service| service.set_mode(&id, EditorMode::General));
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
-    assert!(!more_present(cx), "文本模式不解析 SQL，不得出现更多菜单");
+    assert!(!analysis_present(cx), "文本模式不解析 SQL，不得出现分析组");
 }
 
 /// 绑定 MySQL 连接 → 转译为 PostgreSQL：文本真被翻、服务层拿到新文本、状态栏报条数
@@ -5721,17 +5724,19 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         .expect("有路径就该存会话");
     assert_eq!(
         snapshot.toolbar.as_deref(),
-        Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,History,|,More"),
+        Some(
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
+        ),
         "快照携带默认布局的编码串"
     );
 
-    // 改布局：隐藏 Format、折叠执行簇、加一条分隔符、移动 More
+    // 改布局：隐藏 Format、折叠执行簇、加一条分隔符、移动 History
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_toolbar_visible(crate::toolbar::ToolbarItemId::Format, false, cx);
             panel.toggle_toolbar_collapsed(crate::toolbar::ToolbarItemId::ExecRun, cx);
             panel.insert_toolbar_separator(cx);
-            panel.move_toolbar_item(crate::toolbar::ToolbarItemId::More, crate::toolbar::MoveDir::Left, cx);
+            panel.move_toolbar_item(crate::toolbar::ToolbarItemId::History, crate::toolbar::MoveDir::Left, cx);
         });
     });
     let snapshot = cx
@@ -7416,15 +7421,19 @@ fn toolbar_default_shows_exec_and_exec_all_but_not_explicit_targets(cx: &mut Tes
     // 两按钮都常驻（不再是单个「执行 ▾」下拉）
     assert!(present(cx, "editor-exec-run"), "执行主按钮在");
     assert!(present(cx, "editor-exec-all"), "全部运行在");
+    // 分析组 / 事务开关 / 文档级常驻（原型 §2.2：密度靠 ⋯ 自定义不靠隐藏）
+    assert!(present(cx, "editor-explain"), "执行计划常驻");
+    assert!(present(cx, "editor-translate"), "方言转换常驻");
+    assert!(present(cx, "editor-template"), "模板常驻");
+    assert!(present(cx, "editor-autocommit"), "事务开关常驻");
     assert!(present(cx, "editor-format"), "格式化在");
-    assert!(present(cx, "editor-more"), "⋯ 更多在");
     assert!(present(cx, "editor-toolbar-customize"), "最右 ··· 定制按钮在");
     // 默认隐藏的执行族显式目标
     assert!(!present(cx, "editor-exec-current"), "执行当前语句默认隐藏");
     assert!(!present(cx, "editor-exec-selection"), "执行选区默认隐藏");
     assert!(!present(cx, "editor-exec-batch"), "批量执行默认隐藏");
 
-    // 模型也照同一份真值：默认可见集合 = 执行 + 全部运行 + 格式化 + ⋯更多
+    // 模型也照同一份真值：默认可见集合与目录一致（执行簇两按钮 + 分析组 + 事务开关 + 文档级）
     let layout = cx.update(|_window, cx| panel.read(cx).toolbar_layout_for_test());
     for id in crate::toolbar::ToolbarItemId::ALL {
         assert_eq!(
@@ -7485,13 +7494,13 @@ fn toolbar_move_item_crosses_separators_and_reshapes_groups(cx: &mut TestAppCont
         heads,
         vec![
             crate::toolbar::ToolbarItemId::ExecRun,
-            crate::toolbar::ToolbarItemId::Format,
-            crate::toolbar::ToolbarItemId::More,
+            crate::toolbar::ToolbarItemId::Explain,
+            crate::toolbar::ToolbarItemId::TxAutoCommit,
         ],
-        "默认三段：执行簇 | 格式化 | ⋯更多"
+        "默认三段：执行簇 | 分析组 | 事务+文档级"
     );
 
-    // 把格式化左移（跨过分隔符，进执行簇）
+    // 把格式化左移（跨过分隔符，进分析组）
     for _ in 0..2 {
         cx.update(|_window, cx| {
             panel.update(cx, |panel, cx| {
@@ -7504,19 +7513,19 @@ fn toolbar_move_item_crosses_separators_and_reshapes_groups(cx: &mut TestAppCont
         });
     }
 
-    // 移动后执行簇里多了一个成员（格式化不再是独立组头）
+    // 移动后分析组里多了一个成员（格式化不再是事务组的成员）
     let layout = cx.update(|_window, cx| panel.read(cx).toolbar_layout_for_test());
-    let exec_group = layout
-        .group_of(crate::toolbar::ToolbarItemId::ExecRun)
-        .expect("执行组仍在");
+    let explain_group = layout
+        .group_of(crate::toolbar::ToolbarItemId::Explain)
+        .expect("分析组仍在");
     assert!(
-        exec_group.items.contains(&crate::toolbar::ToolbarItemId::Format),
-        "格式化被移进执行簇：{:?}",
-        exec_group.items
+        explain_group.items.contains(&crate::toolbar::ToolbarItemId::Format),
+        "格式化被移进分析组：{:?}",
+        explain_group.items
     );
 }
 
-/// T2c-5④：整组移动 = 与相邻组整体交换（格式化组移到最前，执行簇紧随其后）
+/// T2c-5④：整组移动 = 与相邻组整体交换（分析组移到最前，执行簇紧随其后）
 #[gpui_kit::test]
 fn toolbar_move_group_swaps_whole_groups(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -7525,7 +7534,7 @@ fn toolbar_move_group_swaps_whole_groups(cx: &mut TestAppContext) {
 
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.move_toolbar_group(crate::toolbar::ToolbarItemId::Format, crate::toolbar::MoveDir::Left, cx);
+            panel.move_toolbar_group(crate::toolbar::ToolbarItemId::Explain, crate::toolbar::MoveDir::Left, cx);
         });
     });
 
@@ -7534,11 +7543,11 @@ fn toolbar_move_group_swaps_whole_groups(cx: &mut TestAppContext) {
     assert_eq!(
         heads,
         vec![
-            crate::toolbar::ToolbarItemId::Format,
+            crate::toolbar::ToolbarItemId::Explain,
             crate::toolbar::ToolbarItemId::ExecRun,
-            crate::toolbar::ToolbarItemId::More,
+            crate::toolbar::ToolbarItemId::TxAutoCommit,
         ],
-        "格式化组整体换到最前"
+        "分析组整体换到最前"
     );
 }
 
@@ -7562,12 +7571,12 @@ fn toolbar_insert_separator_then_reset_restores_default(cx: &mut TestAppContext)
     assert!(layout.has_extra_separator(), "新增分隔符超过默认两条");
     assert_eq!(layout.separator_positions().len(), 3, "默认 2 + 新增 1");
 
-    // 追加在末尾 → ⋯更多 组获得段尾分隔符（组数不变，但分隔符可再移动切开）
+    // 追加在末尾 → 事务+文档级组获得段尾分隔符（组数不变，但分隔符可再移动切开）
     assert_eq!(layout.groups().len(), 3, "末尾追加不切出新组");
-    let more_group = layout
-        .group_of(crate::toolbar::ToolbarItemId::More)
-        .expect("⋯更多 组仍在");
-    assert!(more_group.tail_separator, "⋯更多 组现在有段尾分隔符");
+    let tx_group = layout
+        .group_of(crate::toolbar::ToolbarItemId::TxAutoCommit)
+        .expect("事务+文档级 组仍在");
+    assert!(tx_group.tail_separator, "事务+文档级 组现在有段尾分隔符");
 
     // 重置：分隔符回默认两条、执行簇两按钮回来
     cx.update(|_window, cx| {

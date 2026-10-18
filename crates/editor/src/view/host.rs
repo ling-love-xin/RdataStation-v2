@@ -1238,7 +1238,7 @@ impl EditorHostPanel {
                     .child(self.render_channel_picker(cx))
                     .child(self.render_connection_picker(cx)),
             );
-            // 最右：`···` 定制面板（与 `⋯ 更多 ▾` 并存：一个是布局自定义，一个是低频动作）
+            // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
             }
             crate::model::ToolbarStyle::Minimal => {
@@ -2981,23 +2981,16 @@ impl EditorHostPanel {
 
     /// 【T2c-5】渲染一个组（组 = 分隔符界定的连续段，见 [`crate::toolbar`]）
     ///
-    /// - 折叠（且组内可见成员 ≥ 2，且组头不是 `⋯ 更多`）：显示为「首组件 + ▾」——▾ 收纳
-    ///   组内其余**可见**成员；这正是旧 `render_exec_group` 的形态，所以折叠 / 展开是同一组
-    ///   的两副面孔。
-    /// - 展开：逐可见项渲染（执行 / 格式化 / ⋯更多 都是独立按钮）。
-    ///
-    /// 组头是 `⋯ 更多` 时**退化为展开**：它本身是嵌套菜单，没法再套一层 ▾（菜单嵌菜单）。
-    /// 折叠状态仍记在模型里（面板开关照常显示），只是视图上不套壳。
+    /// - 折叠（且组内可见成员 ≥ 2）：显示为「首组件 + ▾」——▾ 收纳组内其余**可见**成员；
+    ///   这正是旧 `render_exec_group` 的形态，所以折叠 / 展开是同一组的两副面孔。
+    /// - 展开：逐可见项渲染（执行 / 格式化 / 执行计划等独立按钮）。
     fn render_toolbar_group(
         &self,
         group: &crate::toolbar::ToolbarGroup,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        use crate::toolbar::ToolbarItemId;
         let visible: Vec<crate::toolbar::ToolbarItemId> = group.visible_items(&self.toolbar);
-        let collapsed = visible.len() >= 2
-            && group.head != ToolbarItemId::More
-            && self.toolbar.is_collapsed(group.head);
+        let collapsed = visible.len() >= 2 && self.toolbar.is_collapsed(group.head);
         if collapsed {
             self.render_collapsed_group(group.head, &visible, cx)
                 .into_any_element()
@@ -3031,13 +3024,24 @@ impl EditorHostPanel {
             crate::toolbar::ToolbarItemId::ExecBatch => self
                 .render_exec_kind_button(id, ExecMenuKind::Batch, cx)
                 .into_any_element(),
+            crate::toolbar::ToolbarItemId::Explain => {
+                self.render_explain_button(cx).into_any_element()
+            }
+            crate::toolbar::ToolbarItemId::Translate => {
+                self.render_translate_button(cx).into_any_element()
+            }
+            crate::toolbar::ToolbarItemId::Template => {
+                self.render_template_button(cx).into_any_element()
+            }
+            crate::toolbar::ToolbarItemId::TxAutoCommit => {
+                self.render_tx_auto_commit_button(cx).into_any_element()
+            }
             crate::toolbar::ToolbarItemId::Format => {
                 self.render_format_button(cx).into_any_element()
             }
             crate::toolbar::ToolbarItemId::History => {
                 self.render_history_button(cx).into_any_element()
             }
-            crate::toolbar::ToolbarItemId::More => self.render_more_group(cx).into_any_element(),
         }
     }
 
@@ -3126,9 +3130,21 @@ impl EditorHostPanel {
                 self.render_exec_kind_button(head, ExecMenuKind::Selection, cx)
             }
             ToolbarItemId::ExecBatch => self.render_exec_kind_button(head, ExecMenuKind::Batch, cx),
+            ToolbarItemId::Explain => self.render_explain_button(cx),
+            // 折叠组头只放纯按钮：下拉菜单由 DropdownButton 的 ▾ 半区提供，
+            // 完整「方言转换 ▾ / 模板 ▾」本体见 render_translate_button / render_template_button
+            ToolbarItemId::Translate => Button::new("editor-translate")
+                .ghost()
+                .small()
+                .label("方言转换"),
+            ToolbarItemId::Template => Button::new("editor-template")
+                .ghost()
+                .small()
+                .disabled(self.shared.completion_templates().is_empty())
+                .label("模板"),
+            ToolbarItemId::TxAutoCommit => self.render_tx_auto_commit_button(cx),
             ToolbarItemId::Format => self.render_format_button(cx),
             ToolbarItemId::History => self.render_history_button(cx),
-            ToolbarItemId::More => unreachable!("⋯ 更多 不能作折叠组头（已在 render_toolbar_group 退化）"),
         };
         let menu_items: Vec<ToolbarItemId> = visible
             .iter()
@@ -3213,39 +3229,36 @@ impl EditorHostPanel {
             })
     }
 
-    /// 【B10】文档级：`⋯ 更多 ▾`（原型 §2.2 的“低频动作收拢”，不占常驻宽度）
-    ///
-    /// 今天只有 **方言转译**（切片二）；原型的“执行计划”随切片三进来，“校验语法 / 保存为
-    /// 片段 / 复制为 INSERT”还没实现——**没实现就不摆**。
+    /// 【原型 §2.2 分析组】执行计划（EXPLAIN）：常驻按钮（2026-10-11 提升常驻，不再进"更多"）
+    fn render_explain_button(&self, cx: &mut Context<Self>) -> Button {
+        let entity = cx.entity();
+        Button::new("editor-explain")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-explain".to_string())
+            .label("执行计划")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.explain_current(cx));
+            })
+    }
+
+    /// 【原型 §2.2 分析组】方言转换：常驻按钮（目标方言列表）
     ///
     /// 目标清单在**渲染时**定好（源方言已知就排除它自己）；菜单回调是 `Fn`，不能在里头读面板。
     /// 源方言未知（未绑定连接）时仍把目标列出来——点下去会收到一句可读的拒绝，
     /// 比“菜单里什么都没有”更容易看懂。
-    fn render_more_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_translate_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let targets: Vec<translate::Target> = match self.source_dialect() {
             Ok(source) => translate::targets_for(source),
             Err(_) => translate::TARGETS.to_vec(),
         };
-        // 【B9 切片二】模板片段（内存读：菜单弹出时读一次；没模板 / 没接端口就不摆这项）
-        let templates = {
-            let items = self.shared.completion_templates();
-            (!items.is_empty()).then_some(items)
-        };
-
-        Button::new("editor-more")
+        Button::new("editor-translate")
             .ghost()
             .small()
-            .debug_selector(|| "editor-more".to_string())
-            .label("⋯ 更多 ▾")
+            .debug_selector(|| "editor-translate".to_string())
+            .label("方言转换 ▾")
             .dropdown_menu(move |menu, window, cx| {
-                // 【B10】执行计划在“转译”之前（原型 §2.2 的更多菜单顺序）
-                let plan_entity = entity.clone();
-                let menu = menu.item(PopupMenuItem::new("执行计划").on_click(
-                    move |_, _window, app| {
-                        plan_entity.update(app, |panel, cx| panel.explain_current(cx));
-                    },
-                ));
                 menu.submenu("转译为", window, cx, {
                     let entity = entity.clone();
                     let targets = targets.clone();
@@ -3265,26 +3278,51 @@ impl EditorHostPanel {
                         sub
                     }
                 })
-                // 【B9 切片二】插入模板（来自 `sql_template_store`；没模板就不摆这一项）
-                .when_some(templates.clone(), |menu, templates| {
-                    menu.submenu("插入模板", window, cx, {
-                        let entity = entity.clone();
-                        move |sub, _window, _cx| {
-                            let mut sub = sub;
-                            for (index, template) in templates.iter().enumerate() {
-                                let entity = entity.clone();
-                                sub = sub.item(PopupMenuItem::new(template.name.clone()).on_click(
-                                    move |_, window, app| {
-                                        entity.update(app, |panel, cx| {
-                                            panel.insert_template(index, window, cx);
-                                        });
-                                    },
-                                ));
-                            }
-                            sub
-                        }
-                    })
-                })
+            })
+    }
+
+    /// 【原型 §2.2 事务/模板】模板 / 代码片段：常驻按钮（无模板时置灰，菜单不摆空项）
+    fn render_template_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        // 【B9 切片二】模板片段（内存读：渲染时读一次；没模板 / 没接端口就置灰）
+        let templates = self.shared.completion_templates();
+        let has_templates = !templates.is_empty();
+        Button::new("editor-template")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-template".to_string())
+            .disabled(!has_templates)
+            .label("模板 ▾")
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for (index, template) in templates.iter().enumerate() {
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new(template.name.clone()).on_click(
+                        move |_, window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.insert_template(index, window, cx);
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
+    }
+
+    /// 【原型 §2.2 事务/模板】事务提交方式（自动 ⇄ 手动）：常驻开关（模式要一直看得见）
+    ///
+    /// 从状态栏 TX 区移到工具栏（原型 §2.2 的“事务开关常显”）；状态栏 TX 区只留
+    /// 状态文本 + 事务开启时的提交 / 回滚。
+    fn render_tx_auto_commit_button(&self, cx: &mut Context<Self>) -> Button {
+        let entity = cx.entity();
+        Button::new("editor-autocommit")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-autocommit".to_string())
+            .toggled(self.autocommit)
+            .label("自动提交")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.toggle_autocommit(cx));
             })
     }
 
@@ -3893,10 +3931,14 @@ impl EditorHostPanel {
             ToolbarItemId::ExecSelection => self.execute_menu_kind(ExecMenuKind::Selection, cx),
             ToolbarItemId::ExecBatch => self.execute_menu_kind(ExecMenuKind::Batch, cx),
             ToolbarItemId::Format => self.format_document(window, cx),
-            // History / More 不参与折叠菜单（折叠菜单只收执行族，见 `render_collapsed_group`），
-            // 文档级按钮各自独立渲染；这里兜底空转（不会真被调到）
+            // Explain / Translate / Template / TxAutoCommit / History 是带下拉的文档级
+            // 按钮（`dropdown_menu` 回调内直接调方法，不走这条兜底）；折叠菜单只收执行族
+            // （见 `render_collapsed_group`），这里兜底空转（不会真被调到）
+            ToolbarItemId::Explain => {}
+            ToolbarItemId::Translate => {}
+            ToolbarItemId::Template => {}
+            ToolbarItemId::TxAutoCommit => {}
             ToolbarItemId::History => {}
-            ToolbarItemId::More => {}
         }
     }
 
@@ -6910,22 +6952,11 @@ impl Render for EditorHostPanel {
                 .into_any_element()
         });
 
-        // 事务区控件（B4）：自动提交常显（它是模式，模式要一直看得见），
-        // 提交 / 回滚只在事务真开着时出现（原型 §2.5：事务区）
+        // 事务区控件（B4）：自动提交开关已移到工具栏（原型 §2.2「事务开关常显」——
+        // 它是模式，模式要一直看得见，放工具栏比状态栏更显眼）；状态栏 TX 区只留
+        // 提交 / 回滚（事务真开着时出现，原型 §2.5：事务区）
         let tx_controls = tx_available.then(|| {
             let mut row = div().h_flex().items_center().gap_1();
-            let autocommit_entity = cx.entity();
-            row = row.child(
-                Button::new("editor-autocommit")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-autocommit".to_string())
-                    .toggled(self.autocommit)
-                    .label("自动提交")
-                    .on_click(move |_, _window, app| {
-                        autocommit_entity.update(app, |panel, cx| panel.toggle_autocommit(cx));
-                    }),
-            );
             if self.tx_open {
                 for (action, id) in [
                     (execution::TxAction::Commit, "editor-tx-commit"),

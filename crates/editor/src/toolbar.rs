@@ -48,12 +48,18 @@ pub enum ToolbarItemId {
     ExecSelection,
     /// 批量执行（原型 `runBatchBtn`，默认隐藏）
     ExecBatch,
+    /// 【原型 §2.2 分析组】执行计划（EXPLAIN）：常驻按钮（2026-10-11 提升常驻，不再进"更多"）
+    Explain,
+    /// 【原型 §2.2 分析组】方言转换：常驻按钮（目标方言列表；源方言已知排除自身）
+    Translate,
+    /// 【原型 §2.2 事务/模板】模板 / 代码片段：常驻按钮（无模板时置灰）
+    Template,
+    /// 【原型 §2.2 事务/模板】事务提交方式（自动 ⇄ 手动）：常驻开关（模式要一直看得见）
+    TxAutoCommit,
     /// 格式化（文档级）
     Format,
     /// 【B8 余项】历史（原型 §2.2 的 `⟲ 历史`）：打开右 Dock 历史面板；文档级常驻
     History,
-    /// ⋯ 更多 ▾（低频动作收拢：执行计划 / 转译 / 模板）
-    More,
 }
 
 impl ToolbarItemId {
@@ -64,9 +70,12 @@ impl ToolbarItemId {
         Self::ExecCurrent,
         Self::ExecSelection,
         Self::ExecBatch,
+        Self::Explain,
+        Self::Translate,
+        Self::Template,
+        Self::TxAutoCommit,
         Self::Format,
         Self::History,
-        Self::More,
     ];
 
     /// 面板里的显示名（与工具栏按钮文案一致）
@@ -77,9 +86,12 @@ impl ToolbarItemId {
             Self::ExecCurrent => "执行当前语句",
             Self::ExecSelection => "执行选区",
             Self::ExecBatch => "批量执行",
+            Self::Explain => "执行计划",
+            Self::Translate => "方言转换",
+            Self::Template => "模板",
+            Self::TxAutoCommit => "自动提交",
             Self::Format => "格式化",
             Self::History => "历史",
-            Self::More => "⋯ 更多",
         }
     }
 
@@ -91,17 +103,28 @@ impl ToolbarItemId {
             Self::ExecCurrent => IconName::Play,
             Self::ExecSelection => IconName::Square,
             Self::ExecBatch => IconName::Menu,
+            Self::Explain => IconName::Braces,
+            Self::Translate => IconName::ArrowRightLeft,
+            Self::Template => IconName::FilePlus,
+            Self::TxAutoCommit => IconName::ArrowUpDown,
             Self::Format => IconName::Replace,
             Self::History => IconName::Timeline,
-            Self::More => IconName::Ellipsis,
         }
     }
 
-    /// 默认可见性（原型 ⑬：执行簇默认只有「执行 + 全部运行」；文档级「格式化 · 历史」常驻）
+    /// 默认可见性（原型 §2.2：执行簇默认「执行 + 全部运行」；分析组 / 事务开关 /
+    /// 文档级「格式化 · 历史」常驻——2026-10-11 修订，密度靠 ⋯ 自定义不靠隐藏）
     pub fn visible_by_default(self) -> bool {
         matches!(
             self,
-            Self::ExecRun | Self::ExecAll | Self::Format | Self::History | Self::More
+            Self::ExecRun
+                | Self::ExecAll
+                | Self::Explain
+                | Self::Translate
+                | Self::Template
+                | Self::TxAutoCommit
+                | Self::Format
+                | Self::History
         )
     }
 
@@ -158,10 +181,12 @@ impl Default for ToolbarLayout {
 impl ToolbarLayout {
     /// 默认布局（原型 ⑬「重置恢复两按钮布局」的基准）：
     ///
-    /// `[执行, 全部运行, 执行当前语句, 执行选区, 批量执行] │ [格式化, 历史] │ [⋯ 更多]`
+    /// `[执行, 全部运行, 执行当前语句, 执行选区, 批量执行] │ [执行计划, 方言转换, 模板] │
+    /// [自动提交, 格式化, 历史]`
     ///
-    /// 执行簇默认只显示前两个；其余三项隐藏。文档级「格式化 · 历史」同组常驻（原型 §2.2
-    /// 「文档级常驻 1–2 个 + 更多」），三段之间各有一条竖线分隔符。
+    /// 执行簇默认只显示前两个；其余三项隐藏。分析组（执行计划 / 方言转换 / 模板）与
+    /// 事务开关、文档级「格式化 · 历史」常驻（原型 §2.2 + 2026-10-11 修订：密度靠 ⋯
+    /// 自定义不靠隐藏），各组之间各有一条竖线分隔符。
     pub fn default_layout() -> Self {
         Self {
             left: vec![
@@ -187,16 +212,28 @@ impl ToolbarLayout {
                 },
                 ToolbarSlot::Separator,
                 ToolbarSlot::Item {
+                    id: ToolbarItemId::Explain,
+                    visible: true,
+                },
+                ToolbarSlot::Item {
+                    id: ToolbarItemId::Translate,
+                    visible: true,
+                },
+                ToolbarSlot::Item {
+                    id: ToolbarItemId::Template,
+                    visible: true,
+                },
+                ToolbarSlot::Separator,
+                ToolbarSlot::Item {
+                    id: ToolbarItemId::TxAutoCommit,
+                    visible: true,
+                },
+                ToolbarSlot::Item {
                     id: ToolbarItemId::Format,
                     visible: true,
                 },
                 ToolbarSlot::Item {
                     id: ToolbarItemId::History,
-                    visible: true,
-                },
-                ToolbarSlot::Separator,
-                ToolbarSlot::Item {
-                    id: ToolbarItemId::More,
                     visible: true,
                 },
             ],
@@ -448,7 +485,7 @@ impl ToolbarLayout {
 
     /// 【T2c-6】从 [`Self::encode`] 的字符串解码；非法 / 缺项 / 重复一律回 `None`（调用方保持默认）
     ///
-    /// 校验：目录里 7 项必须**恰好出现一次**（顺序任意）、`folded` 里只留真实组头、
+    /// 校验：目录里 11 项必须**恰好出现一次**（顺序任意）、`folded` 里只留真实组头、
     /// 未知 id / 空串 / 重复项都视为坏数据。分隔符位置宽松（前导 / 尾部 / 连续都接受，
     /// 与 [`Self::groups`] 忽略空段的投影一致）；旧会话没这列 → `None`（不覆盖默认）。
     pub fn decode(code: &str) -> Option<Self> {
@@ -546,7 +583,7 @@ mod tests {
         );
     }
 
-    /// 默认布局：三组、执行簇两按钮可见、文档级「格式化 · 历史」常驻
+    /// 默认布局：三组、执行簇两按钮可见、分析组 / 事务开关 / 文档级常驻
     #[test]
     fn default_layout_is_exec_plus_all_visible() {
         let layout = ToolbarLayout::default_layout();
@@ -555,12 +592,16 @@ mod tests {
         assert!(!layout.is_visible(ToolbarItemId::ExecCurrent));
         assert!(!layout.is_visible(ToolbarItemId::ExecSelection));
         assert!(!layout.is_visible(ToolbarItemId::ExecBatch));
+        // 原型 §2.2：分析组 / 事务开关 / 文档级常驻（2026-10-11 修订，不再进"更多"）
+        assert!(layout.is_visible(ToolbarItemId::Explain));
+        assert!(layout.is_visible(ToolbarItemId::Translate));
+        assert!(layout.is_visible(ToolbarItemId::Template));
+        assert!(layout.is_visible(ToolbarItemId::TxAutoCommit));
         assert!(layout.is_visible(ToolbarItemId::Format));
         assert!(layout.is_visible(ToolbarItemId::History));
-        assert!(layout.is_visible(ToolbarItemId::More));
 
         let groups = layout.groups();
-        assert_eq!(groups.len(), 3, "执行簇 │ 文档级 │ ⋯ 更多");
+        assert_eq!(groups.len(), 3, "执行簇 │ 分析组 │ 事务+文档级");
         assert_eq!(groups[0].head, ToolbarItemId::ExecRun);
         assert_eq!(
             groups[0].items,
@@ -572,15 +613,28 @@ mod tests {
                 ToolbarItemId::ExecBatch,
             ]
         );
-        assert!(groups[0].tail_separator, "执行簇与文档级之间有一条分隔符");
-        assert_eq!(groups[1].head, ToolbarItemId::Format);
+        assert!(groups[0].tail_separator, "执行簇与分析组之间有一条分隔符");
+        assert_eq!(groups[1].head, ToolbarItemId::Explain);
         assert_eq!(
             groups[1].items,
-            vec![ToolbarItemId::Format, ToolbarItemId::History],
-            "文档级「格式化 · 历史」同组"
+            vec![
+                ToolbarItemId::Explain,
+                ToolbarItemId::Translate,
+                ToolbarItemId::Template,
+            ],
+            "分析组「执行计划 · 方言转换 · 模板」"
         );
         assert!(groups[1].tail_separator);
-        assert_eq!(groups[2].head, ToolbarItemId::More);
+        assert_eq!(groups[2].head, ToolbarItemId::TxAutoCommit);
+        assert_eq!(
+            groups[2].items,
+            vec![
+                ToolbarItemId::TxAutoCommit,
+                ToolbarItemId::Format,
+                ToolbarItemId::History,
+            ],
+            "事务开关 + 文档级「格式化 · 历史」"
+        );
         assert!(!groups[2].tail_separator, "末组没有尾分隔符");
     }
 
@@ -588,29 +642,30 @@ mod tests {
     #[test]
     fn moving_an_item_across_a_separator_reshapes_groups() {
         let mut layout = ToolbarLayout::default_layout();
-        // 把「格式化」左移到执行簇末尾（越过一条分隔符）：格式化与历史拆开
-        assert!(layout.move_item(ToolbarItemId::Format, MoveDir::Left));
+        // 把「格式化」左移到分析组末尾（越过一条分隔符）：格式化与事务/历史拆开
+        // 默认位置（组2 中间）：Format 在 TxAutoCommit 之后，先左移一次换位，再跨分隔符
+        assert!(layout.move_item(ToolbarItemId::Format, MoveDir::Left)); // TxAutoCommit ↔ Format
+        assert!(layout.move_item(ToolbarItemId::Format, MoveDir::Left)); // 跨过分隔符 → 分析组尾
         let groups = layout.groups();
-        assert_eq!(groups.len(), 3, "格式化并入执行簇，历史自成一段");
+        assert_eq!(groups.len(), 3, "格式化并入分析组，事务+历史自成一段");
         assert_eq!(groups[0].head, ToolbarItemId::ExecRun);
         assert_eq!(
-            groups[0].items.last(),
+            groups[1].items.last(),
             Some(&ToolbarItemId::Format),
-            "格式化成为执行簇的末成员"
+            "格式化成为分析组的末成员"
         );
-        assert_eq!(groups[1].head, ToolbarItemId::History, "历史独立成组");
-        assert_eq!(groups[2].head, ToolbarItemId::More);
+        assert_eq!(groups[2].head, ToolbarItemId::TxAutoCommit, "事务+历史独立成组");
     }
 
-    /// 组整体移动：执行簇与格式化组交换位置
+    /// 组整体移动：执行簇与格式化所在组交换位置
     #[test]
     fn moving_a_group_swaps_with_its_neighbor() {
         let mut layout = ToolbarLayout::default_layout();
-        assert!(layout.move_group(ToolbarItemId::Format, MoveDir::Left));
+        assert!(layout.move_group(ToolbarItemId::Explain, MoveDir::Left));
         let groups = layout.groups();
-        assert_eq!(groups[0].head, ToolbarItemId::Format, "格式化组移到最前");
+        assert_eq!(groups[0].head, ToolbarItemId::Explain, "分析组移到最前");
         assert_eq!(groups[1].head, ToolbarItemId::ExecRun, "执行簇紧随其后");
-        assert_eq!(groups[2].head, ToolbarItemId::More);
+        assert_eq!(groups[2].head, ToolbarItemId::TxAutoCommit);
     }
 
     /// 组边缘移动被拒绝（不 panic）
@@ -622,7 +677,7 @@ mod tests {
             "首组不能再左移"
         );
         assert!(
-            !layout.move_group(ToolbarItemId::More, MoveDir::Right),
+            !layout.move_group(ToolbarItemId::TxAutoCommit, MoveDir::Right),
             "末组不能再右移"
         );
         assert!(
@@ -630,7 +685,7 @@ mod tests {
             "首项不能再左移"
         );
         assert!(
-            !layout.move_item(ToolbarItemId::More, MoveDir::Right),
+            !layout.move_item(ToolbarItemId::History, MoveDir::Right),
             "末项不能再右移"
         );
     }
@@ -737,7 +792,7 @@ mod tests {
         layout.set_visible(ToolbarItemId::Format, false);
         layout.toggle_collapsed(ToolbarItemId::ExecRun);
         layout.insert_separator();
-        layout.move_item(ToolbarItemId::More, MoveDir::Left);
+        layout.move_item(ToolbarItemId::History, MoveDir::Left);
 
         layout.reset();
         assert_eq!(layout, ToolbarLayout::default_layout());
@@ -767,7 +822,7 @@ mod tests {
         let code = layout.encode();
         assert_eq!(
             code,
-            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,History,|,More",
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History",
             "默认布局的编码应稳定可读"
         );
         let back = ToolbarLayout::decode(&code).expect("默认布局必可解码");
@@ -780,7 +835,7 @@ mod tests {
         let mut layout = ToolbarLayout::default_layout();
         layout.set_visible(ToolbarItemId::Format, false);
         layout.toggle_collapsed(ToolbarItemId::ExecRun);
-        layout.move_item(ToolbarItemId::More, MoveDir::Left);
+        layout.move_item(ToolbarItemId::History, MoveDir::Left);
         layout.insert_separator();
 
         let code = layout.encode();
@@ -795,14 +850,16 @@ mod tests {
     fn decode_rejects_bad_data() {
         // 缺一项
         assert_eq!(
-            ToolbarLayout::decode("ExecRun,ExecAll,|,Format,|,More"),
+            ToolbarLayout::decode(
+                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format"
+            ),
             None,
-            "缺项：执行簇其余三项不在"
+            "缺项：历史不在"
         );
         // 重复项
         assert_eq!(
             ToolbarLayout::decode(
-                "ExecRun,ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More"
+                "ExecRun,ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
             ),
             None,
             "重复项"
@@ -810,7 +867,7 @@ mod tests {
         // 未知 id
         assert_eq!(
             ToolbarLayout::decode(
-                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,Nope"
+                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,Nope"
             ),
             None,
             "未知 id"
@@ -824,13 +881,13 @@ mod tests {
     /// 【T2c-6】折叠段只收真实组头：脏键解码后不产生折叠（不报错、不丢布局）
     #[test]
     fn decode_drops_folded_keys_that_are_not_group_heads() {
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,History,|,More;Format";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;TxAutoCommit";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
-        // Format 是文档级组头：折叠应保留
-        assert!(layout.is_collapsed(ToolbarItemId::Format));
+        // TxAutoCommit 是末组组头：折叠应保留
+        assert!(layout.is_collapsed(ToolbarItemId::TxAutoCommit));
 
         // ExecCurrent 是组内成员不是组头：折叠键被丢
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,History,|,More;ExecCurrent";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;ExecCurrent";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
         assert!(!layout.is_collapsed(ToolbarItemId::ExecCurrent));
         assert_eq!(layout.folded, Vec::new());
