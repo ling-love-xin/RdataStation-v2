@@ -352,6 +352,7 @@ mod tests {
     // 安全模式：**不通配导入**——`use super::*` 会把 gpui 的 `test` 宏带进来，
     // `#[test]` 因而解析到它自己（recursion limit reached）。依赖显式列举。
     use engine::sql::TokenClass;
+    use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::component::input::{DocumentRangeSemanticTokensProvider as _, Rope};
 
     use super::{
@@ -587,6 +588,62 @@ mod tests {
             (TokenClass::Property, "property"),
         ] {
             assert_eq!(token_name(class), Some(name), "{class:?} 应映射 {name}");
+        }
+    }
+
+    // ---- 主题侧实证（2026-10-19）：语义 token 的颜色最终由活跃主题按名字解析，
+    // ---- 「没颜色」的可能断点不在 provider / 词法器，而在主题资产或解析链。----
+
+    /// 生产资产（RDS Light / Dark）必须能解析我们产出的全部 14 个 token 名，且都有色。
+    ///
+    /// 与 app 启动路径同构：`load_theme_assets` 读 `assets/themes/rds-theme.json` 注册
+    /// ThemeConfig，`Theme::edit`（切模式 / 热更新）走 `apply_config` 把 `highlight` 装进
+    /// `theme.highlight_theme`；此处直接反序列化同一份资产做「名字 → 颜色」验证。
+    /// 测试 cwd 是 crate 根，资产在仓库根，用 `CARGO_MANIFEST_DIR` 定位。
+    #[gpui_kit::test]
+    fn rds_theme_assets_resolve_every_emitted_token_name(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/themes/rds-theme.json");
+        let content = std::fs::read_to_string(&path).expect("RDS 主题资产应存在");
+        let set: gpui_kit::component::theme::ThemeSet =
+            serde_json::from_str(&content).expect("RDS 主题资产应可解析");
+        assert_eq!(set.themes.len(), 2, "应有 RDS Light / Dark 两套");
+        for theme in &set.themes {
+            let style = theme
+                .highlight
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} 必须有 highlight 段", theme.name));
+            for name in TOKEN_NAMES {
+                let resolved = style.syntax.style(name);
+                assert!(
+                    resolved.is_some(),
+                    "{}: {name} 必须能被主题解析",
+                    theme.name
+                );
+                assert!(
+                    resolved.unwrap().color.is_some(),
+                    "{}: {name} 必须解析出颜色",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    /// 默认主题（gpui-kit 兜底，未加载 RDS 资产时的降级）对核心 SQL 词汇也必须有色；
+    /// `operator` / `punctuation` 是默认主题的已知缺口（RDS 资产已补，见上面那条）。
+    #[gpui_kit::test]
+    fn default_theme_resolves_the_core_sql_vocabulary(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let resolver = cx.update(|cx| cx.theme().highlight_theme.clone());
+        for name in ["keyword", "string", "number", "comment", "function", "type", "boolean"] {
+            let style = resolver
+                .style(name)
+                .unwrap_or_else(|| panic!("默认主题必须认识 {name}"));
+            assert!(
+                style.color.is_some(),
+                "默认主题的 {name} 必须有色（否则 SQL 核心词整片无颜色）"
+            );
         }
     }
 }
