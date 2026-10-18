@@ -72,6 +72,9 @@ pub struct StatusInputs<'a> {
     /// （非通用模式 / 非脚本扩展名）。判定走 `mode::script_file_type`，展示类型名；
     /// 上色本体由 `view::highlight` 按类型分派词法器（CSV 走表格展示不上色）。
     pub file_type: Option<&'a str>,
+    /// 【LSP】通用模式的语言服务状态段（`LSP 就绪` / `LSP 未就绪`）；`None` = 不显示
+    /// （非通用模式 / 该文档类型不需要语言服务）
+    pub lsp: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
     pub tx: Option<&'a str>,
 }
@@ -140,6 +143,12 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     if let Some(file_type) = inputs.file_type {
         body.push_str(" · ");
         body.push_str(file_type);
+    }
+    // 【LSP】通用模式：语言服务状态段（原型 §2.5「环境 · 文件类型 · LSP」）；
+    // `None` = 该文档不需要语言服务（不是“服务关了”）
+    if let Some(lsp) = inputs.lsp {
+        body.push_str(" · ");
+        body.push_str(lsp);
     }
     if inputs.dirty {
         body.push_str(" · 未保存");
@@ -308,6 +317,7 @@ mod tests {
             channel: None,
             env: None,
             file_type: None,
+            lsp: None,
             tx: None,
         }
     }
@@ -380,6 +390,33 @@ mod tests {
         text.mode = EditorMode::General;
         assert!(!labels(&text).body.contains("条语句"));
         assert!(labels(&text).body.starts_with("通用"));
+    }
+
+    /// 【LSP】通用模式左侧环境族第三项：语言服务状态段（原型 §2.5「环境 · 文件类型 · LSP」）
+    #[test]
+    fn general_mode_shows_the_lsp_segment_only_when_supplied() {
+        // 没接端口 / 文档不需要语言服务：不摆（不是“服务关了”）
+        let plain = labels(&inputs(ReadOnly::none()));
+        assert!(!plain.body.contains("LSP"), "{}", plain.body);
+
+        // 通用模式 + 配了语言服务：会话健康显示「就绪」
+        let mut ready = inputs(ReadOnly::none());
+        ready.mode = EditorMode::General;
+        ready.lsp = Some("LSP 就绪");
+        let text = labels(&ready);
+        assert!(text.body.contains("通用"), "{}", text.body);
+        assert!(text.body.contains("LSP 就绪"), "{}", text.body);
+
+        // 服务没起 / 挂了：如实报「未就绪」，不假装有服务
+        let mut down = inputs(ReadOnly::none());
+        down.mode = EditorMode::General;
+        down.lsp = Some("LSP 未就绪");
+        assert!(labels(&down).body.contains("LSP 未就绪"));
+
+        // 给了值就展示（labels 是纯展示；模式过滤在 host——只有通用模式会传 lsp 值）
+        let mut sql = inputs(ReadOnly::none());
+        sql.lsp = Some("LSP 就绪");
+        assert!(labels(&sql).body.contains("LSP 就绪"));
     }
 
     #[test]

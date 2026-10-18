@@ -26,6 +26,7 @@ pub mod editor_connections;
 pub mod editor_env;
 pub mod editor_exec;
 pub mod editor_files;
+pub mod editor_history;
 pub mod editor_insight;
 pub mod editor_kernels;
 pub mod editor_lsp;

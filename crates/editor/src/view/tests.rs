@@ -2944,6 +2944,45 @@ fn the_toolbar_offers_format_only_in_sql_mode(cx: &mut TestAppContext) {
     assert!(!format_present(cx), "文本模式不解析 SQL，不得出现格式化");
 }
 
+// ===== 【B8 余项】工具栏「⟲ 历史」=====
+//
+// 历史面板本体（右 Dock `HistoryView` + 重放）在 B8 已落地；这里补的是原型 §2.2
+// 文档级那个入口。能力分层与格式化同档（SQL 模式才放），点击走「打开历史面板」端口。
+
+/// 工具栏按能力分层：历史只在 SQL 模式出现（与格式化同档，文档级常驻）
+#[gpui_kit::test]
+fn the_toolbar_offers_history_only_in_sql_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\history.sql", "select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let history_present = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds("editor-history").is_some()
+    };
+    assert!(history_present(cx), "SQL 模式应当有「历史」按钮");
+
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert!(!history_present(cx), "文本模式不放文档级 SQL 按钮");
+}
+
+/// 注入「打开历史面板」端口后可从 shared 读出（宿主装配期接线；渲染路径只读）
+#[gpui_kit::test]
+fn open_history_port_is_readable_after_attach(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, _id) = shared_with_document(r"D:\sql\history.sql", "select 1;");
+    assert!(
+        shared.open_history_port().is_none(),
+        "未注入时端口应缺席（按钮置灰）"
+    );
+    shared.attach_open_history(std::rc::Rc::new(|_cx: &mut gpui_kit::App| {}));
+    assert!(
+        shared.open_history_port().is_some(),
+        "注入后端口应可读（按钮可点）"
+    );
+}
+
 /// `Ctrl+Shift+F`：真按键 → 文本真被排版、状态栏报“改了几条”
 #[gpui_kit::test]
 fn ctrl_shift_f_formats_the_document_and_reports_the_count(cx: &mut TestAppContext) {
@@ -5682,7 +5721,7 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         .expect("有路径就该存会话");
     assert_eq!(
         snapshot.toolbar.as_deref(),
-        Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More"),
+        Some("ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,History,|,More"),
         "快照携带默认布局的编码串"
     );
 
@@ -7920,6 +7959,7 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
             channel: None,
             env: Some("环境 Python 3.12"),
             file_type: Some("类型 Python"),
+            lsp: None,
             tx: None,
         },
     )
@@ -7985,6 +8025,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             channel: None,
             env: None,
             file_type: Some("类型 Python"),
+            lsp: None,
             tx: None,
         },
     )
@@ -8018,6 +8059,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             channel: None,
             env: None,
             file_type: None,
+            lsp: None,
             tx: None,
         },
     )

@@ -27,6 +27,8 @@ use gpui_kit::*;
 
 use scratchpad::scratchpad_view::render_scratchpad_file_info_pane;
 
+use insight::InsightWorkspacePanel;
+
 use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
@@ -79,6 +81,12 @@ pub struct WorkbenchView {
     /// 观察的是**面板实体**而不是 `SidebarPanel`：子实体的 `notify` 不级联到父面板，
     /// 订在侧栏上一条都收不到。句柄必须被持有——drop 即解除观察。
     _archive_subscription: Option<Subscription>,
+    /// M8 洞察**中间工作页**的取数 / 动作订阅句柄（`jobs::attach` +
+    /// `insight_actions::attach` + 右栏联动 observe；面板懒创建时建立一次）。
+    ///
+    /// 面板实体本身只经 `Shared::insight_workspace_panel` 弱句柄持有：tab ✕ 关闭后
+    /// 实体随 Dock 移除而 drop，下次入口自动重建（与 search_results 同例）。
+    _insight_ws_subs: Vec<Subscription>,
     /// M8 洞察规则目录监听句柄（改动 `.rule.toml` 后自动重载规则集）。
     ///
     /// 句柄必须**被持有**：它是 RAII 语义——drop 即停后台线程，
@@ -178,6 +186,8 @@ impl WorkbenchView {
         crate::services::editor_sources::attach(&editor_service);
         // M8：把「洞察此列」端口接上（结果集列头右键 → 右 Dock 洞察面板；未接时不摆这一项）
         crate::services::editor_insight::attach(&editor_service, &shared);
+        // 【B8 余项】把「打开历史面板」端口接上（工具栏「⟲ 历史」→ 右 Dock 历史面板）
+        crate::services::editor_history::attach(&editor_service, &shared);
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
         crate::services::editor_project::attach(&editor_service, &shared);
         // B9：把补全端口接上（连接级元数据缓存 → 候选目录；未接时只有关键字与函数）
@@ -227,6 +237,7 @@ impl WorkbenchView {
             project_host: Some(host),
             _editor_subscription: None,
             _archive_subscription: None,
+            _insight_ws_subs: Vec::new(),
             _insight_rules_watcher: None,
             editor_service,
             editor_hosts: Vec::new(),
@@ -860,6 +871,90 @@ impl WorkbenchView {
             area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
         });
         crate::panels::focus_metadata_search_tab(&panel, window, cx);
+    }
+
+    /// 洞察**中间工作页**（D63 中央洞察 tab）：消费 `Shared::pending_insight_target`，
+    /// 建（或激活）面板并递目标。
+    ///
+    /// **只在 `cx.defer_in` 里调用**（render 检测到待打开目标后 defer，事件路径可改 dock）；
+    /// 与 `ensure_search_results_panel` 同例：面板实体只建一次（`Shared::insight_workspace_panel`
+    /// 弱句柄）。面板被 tab ✕ 关闭后实体 drop（宿主只持弱句柄），下次入口自动重建。
+    fn ensure_insight_workspace_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 只消费一次：入口连点多个目标时以后到者为准（同帧内不排队）
+        let Some(target) = self.shared.pending_insight_target.borrow_mut().take() else {
+            return;
+        };
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        if let Some(panel) = self
+            .shared
+            .insight_workspace_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+        {
+            // 已建（tab 被切走也只是失焦）：递目标 + 聚焦，不重复加入。
+            panel.update(cx, |panel, cx| panel.open_target(target, cx));
+            insight::focus_insight_workspace_tab(&panel, window, cx);
+            return;
+        }
+        // 首次：建面板 + 登记弱句柄 + 订阅取数 / 动作事件 + 加入中央 tab 组。
+        // 订阅与右栏同款（`RightSidebarPanel::new`）：事件接缝在 insight crate，
+        // 宿主只提供「项目根在哪」；动作类（下钻 / 导出）要窗口与工作台状态。
+        self._insight_ws_subs.clear();
+        let shared = self.shared.clone();
+        let panel = cx.new(|cx| InsightWorkspacePanel::new(cx));
+        self.shared
+            .insight_workspace_panel
+            .borrow_mut()
+            .replace(panel.downgrade());
+        let insight_view = panel.read(cx).insight_view().clone();
+        let root_shared = self.shared.clone();
+        self._insight_ws_subs
+            .push(insight::jobs::attach(&insight_view, cx, move || {
+                root_shared
+                    .project
+                    .borrow()
+                    .as_ref()
+                    .map(|session| session.root.clone())
+            }));
+        self._insight_ws_subs
+            .push(crate::components::insight_actions::attach(&insight_view, &shared, cx));
+        // D65 双栏单源：中间工作页目标变化（对比点行 / 后续工具栏切换）→ 右栏摘要联动。
+        // 观察回调在事件路径触发，比较两栏当前目标，只有不同才同步（避免 set_target
+        // 把右栏载荷也清掉重发请求——同目标重复设置会白白重取样）。
+        let shared_for_sync = self.shared.clone();
+        let panel_for_sync = panel.clone();
+        self._insight_ws_subs.push(cx.observe(&panel_for_sync.clone(), move |_, _, cx| {
+            let Some(ws_target) = panel_for_sync
+                .read(cx)
+                .insight_view()
+                .read(cx)
+                .target()
+                .cloned()
+            else {
+                return;
+            };
+            let Some(right) = shared_for_sync
+                .insight_panel
+                .borrow()
+                .clone()
+                .and_then(|weak| weak.upgrade())
+            else {
+                return;
+            };
+            let right_target = right.read(cx).target().cloned();
+            if right_target != Some(ws_target.clone()) {
+                right.update(cx, |panel, cx| panel.set_target(ws_target, cx));
+            }
+        }));
+        let handle = panel_handle(panel.clone());
+        area.update(cx, |area, cx| {
+            area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
+        });
+        panel.update(cx, |panel, cx| panel.open_target(target, cx));
+        insight::focus_insight_workspace_tab(&panel, window, cx);
     }
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
@@ -2249,6 +2344,14 @@ impl Render for WorkbenchView {
         {
             cx.defer_in(window, |this, window, cx| {
                 this.ensure_metadata_search_panel(window, cx);
+            });
+        }
+        // 洞察中间工作页（D63）：入口（导航树 / 结果列表 / SQL 编辑器）登记了待打开
+        // 目标 → `cx.defer_in` 建 / 激活中央洞察 tab（事件路径可改 dock；render 纯读）。
+        // 面板已建且正在渲染同一目标时，入口重复触发只聚焦不重发（ensure 消费后为空）。
+        if self.shared.pending_insight_target.borrow().is_some() {
+            cx.defer_in(window, |this, window, cx| {
+                this.ensure_insight_workspace_panel(window, cx);
             });
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。

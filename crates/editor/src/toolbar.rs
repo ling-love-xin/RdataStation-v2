@@ -50,6 +50,8 @@ pub enum ToolbarItemId {
     ExecBatch,
     /// 格式化（文档级）
     Format,
+    /// 【B8 余项】历史（原型 §2.2 的 `⟲ 历史`）：打开右 Dock 历史面板；文档级常驻
+    History,
     /// ⋯ 更多 ▾（低频动作收拢：执行计划 / 转译 / 模板）
     More,
 }
@@ -63,6 +65,7 @@ impl ToolbarItemId {
         Self::ExecSelection,
         Self::ExecBatch,
         Self::Format,
+        Self::History,
         Self::More,
     ];
 
@@ -75,6 +78,7 @@ impl ToolbarItemId {
             Self::ExecSelection => "执行选区",
             Self::ExecBatch => "批量执行",
             Self::Format => "格式化",
+            Self::History => "历史",
             Self::More => "⋯ 更多",
         }
     }
@@ -88,15 +92,16 @@ impl ToolbarItemId {
             Self::ExecSelection => IconName::Square,
             Self::ExecBatch => IconName::Menu,
             Self::Format => IconName::Replace,
+            Self::History => IconName::Timeline,
             Self::More => IconName::Ellipsis,
         }
     }
 
-    /// 默认可见性（原型 ⑬：执行簇默认只有「执行 + 全部运行」）
+    /// 默认可见性（原型 ⑬：执行簇默认只有「执行 + 全部运行」；文档级「格式化 · 历史」常驻）
     pub fn visible_by_default(self) -> bool {
         matches!(
             self,
-            Self::ExecRun | Self::ExecAll | Self::Format | Self::More
+            Self::ExecRun | Self::ExecAll | Self::Format | Self::History | Self::More
         )
     }
 
@@ -153,9 +158,10 @@ impl Default for ToolbarLayout {
 impl ToolbarLayout {
     /// 默认布局（原型 ⑬「重置恢复两按钮布局」的基准）：
     ///
-    /// `[执行, 全部运行, 执行当前语句, 执行选区, 批量执行] │ [格式化] │ [⋯ 更多]`
+    /// `[执行, 全部运行, 执行当前语句, 执行选区, 批量执行] │ [格式化, 历史] │ [⋯ 更多]`
     ///
-    /// 执行簇默认只显示前两个；其余三项隐藏。三段之间各有一条竖线分隔符。
+    /// 执行簇默认只显示前两个；其余三项隐藏。文档级「格式化 · 历史」同组常驻（原型 §2.2
+    /// 「文档级常驻 1–2 个 + 更多」），三段之间各有一条竖线分隔符。
     pub fn default_layout() -> Self {
         Self {
             left: vec![
@@ -182,6 +188,10 @@ impl ToolbarLayout {
                 ToolbarSlot::Separator,
                 ToolbarSlot::Item {
                     id: ToolbarItemId::Format,
+                    visible: true,
+                },
+                ToolbarSlot::Item {
+                    id: ToolbarItemId::History,
                     visible: true,
                 },
                 ToolbarSlot::Separator,
@@ -536,7 +546,7 @@ mod tests {
         );
     }
 
-    /// 默认布局：三组、执行簇两按钮可见、三条分隔符
+    /// 默认布局：三组、执行簇两按钮可见、文档级「格式化 · 历史」常驻
     #[test]
     fn default_layout_is_exec_plus_all_visible() {
         let layout = ToolbarLayout::default_layout();
@@ -546,10 +556,11 @@ mod tests {
         assert!(!layout.is_visible(ToolbarItemId::ExecSelection));
         assert!(!layout.is_visible(ToolbarItemId::ExecBatch));
         assert!(layout.is_visible(ToolbarItemId::Format));
+        assert!(layout.is_visible(ToolbarItemId::History));
         assert!(layout.is_visible(ToolbarItemId::More));
 
         let groups = layout.groups();
-        assert_eq!(groups.len(), 3, "执行簇 │ 格式化 │ ⋯ 更多");
+        assert_eq!(groups.len(), 3, "执行簇 │ 文档级 │ ⋯ 更多");
         assert_eq!(groups[0].head, ToolbarItemId::ExecRun);
         assert_eq!(
             groups[0].items,
@@ -561,8 +572,13 @@ mod tests {
                 ToolbarItemId::ExecBatch,
             ]
         );
-        assert!(groups[0].tail_separator, "执行簇与格式化之间有一条分隔符");
+        assert!(groups[0].tail_separator, "执行簇与文档级之间有一条分隔符");
         assert_eq!(groups[1].head, ToolbarItemId::Format);
+        assert_eq!(
+            groups[1].items,
+            vec![ToolbarItemId::Format, ToolbarItemId::History],
+            "文档级「格式化 · 历史」同组"
+        );
         assert!(groups[1].tail_separator);
         assert_eq!(groups[2].head, ToolbarItemId::More);
         assert!(!groups[2].tail_separator, "末组没有尾分隔符");
@@ -572,16 +588,18 @@ mod tests {
     #[test]
     fn moving_an_item_across_a_separator_reshapes_groups() {
         let mut layout = ToolbarLayout::default_layout();
-        // 把「格式化」左移到执行簇末尾（越过一条分隔符）
+        // 把「格式化」左移到执行簇末尾（越过一条分隔符）：格式化与历史拆开
         assert!(layout.move_item(ToolbarItemId::Format, MoveDir::Left));
         let groups = layout.groups();
-        assert_eq!(groups.len(), 2, "格式化并入执行簇后剩两组");
+        assert_eq!(groups.len(), 3, "格式化并入执行簇，历史自成一段");
         assert_eq!(groups[0].head, ToolbarItemId::ExecRun);
         assert_eq!(
             groups[0].items.last(),
             Some(&ToolbarItemId::Format),
             "格式化成为执行簇的末成员"
         );
+        assert_eq!(groups[1].head, ToolbarItemId::History, "历史独立成组");
+        assert_eq!(groups[2].head, ToolbarItemId::More);
     }
 
     /// 组整体移动：执行簇与格式化组交换位置
@@ -694,9 +712,13 @@ mod tests {
         let mut layout = ToolbarLayout::default_layout();
         layout.insert_separator();
 
-        // 新增的分隔符在末尾（下标 9）：一路左移到执行簇内部（下标 1，紧挨执行主按钮）
-        let mut index = 9;
-        for _ in 0..8 {
+        // 新增的分隔符在末尾：一路左移到执行簇内部（下标 1，紧挨执行主按钮）。
+        // 起始下标动态取（布局加项不改这里——见 `default_layout` 的注释）
+        let mut index = *layout
+            .separator_positions()
+            .last()
+            .expect("有一条新分隔符");
+        while index > 1 {
             assert!(layout.move_separator(index, MoveDir::Left), "第 {index} 步应可左移");
             index -= 1;
         }
@@ -745,7 +767,7 @@ mod tests {
         let code = layout.encode();
         assert_eq!(
             code,
-            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,|,More",
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Format,History,|,More",
             "默认布局的编码应稳定可读"
         );
         let back = ToolbarLayout::decode(&code).expect("默认布局必可解码");
@@ -802,13 +824,13 @@ mod tests {
     /// 【T2c-6】折叠段只收真实组头：脏键解码后不产生折叠（不报错、不丢布局）
     #[test]
     fn decode_drops_folded_keys_that_are_not_group_heads() {
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More;Format";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,History,|,More;Format";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
-        // Format 是第二组组头：折叠应保留
+        // Format 是文档级组头：折叠应保留
         assert!(layout.is_collapsed(ToolbarItemId::Format));
 
         // ExecCurrent 是组内成员不是组头：折叠键被丢
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,|,More;ExecCurrent";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Format,History,|,More;ExecCurrent";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
         assert!(!layout.is_collapsed(ToolbarItemId::ExecCurrent));
         assert_eq!(layout.folded, Vec::new());

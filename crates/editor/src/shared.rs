@@ -61,6 +61,11 @@ pub struct InsightColumnRequest {
 /// 【M8】「洞察此列」端口（由宿主注入：workbench 接到右 Dock 洞察面板）
 pub type InsightColumnPort = Rc<dyn Fn(InsightColumnRequest, &mut gpui_kit::App)>;
 
+/// 【B8 余项】「打开历史面板」端口（由宿主注入：workbench 接到右 Dock 历史面板）。
+///
+/// 工具栏「⟲ 历史」按钮点击后经它通知宿主——编辑器不依赖工作台的 Dock。
+pub type OpenHistoryPort = Rc<dyn Fn(&mut gpui_kit::App)>;
+
 /// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
 ///
 /// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
@@ -122,6 +127,8 @@ pub struct EditorShared {
     export_path: Rc<RefCell<Option<ExportPathPicker>>>,
     /// 【M8】「洞察此列」端口：宿主注入后才有（未接时列头右键不摆这一项）
     insight_column: Rc<RefCell<Option<InsightColumnPort>>>,
+    /// 【B8 余项】「打开历史面板」端口：宿主注入后才有（未接时工具栏「历史」按钮置灰并给原因）
+    open_history: Rc<RefCell<Option<OpenHistoryPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
     /// 【T2c-1】库 / schema 列表端口：宿主注入后才有（无宿主 = 状态栏面包屑没有可切项）
@@ -167,6 +174,7 @@ impl Clone for EditorShared {
             save_path: self.save_path.clone(),
             export_path: self.export_path.clone(),
             insight_column: self.insight_column.clone(),
+            open_history: self.open_history.clone(),
             connections: self.connections.clone(),
             schemas: self.schemas.clone(),
             channels: self.channels.clone(),
@@ -200,6 +208,7 @@ impl EditorShared {
             save_path: Rc::new(RefCell::new(None)),
             export_path: Rc::new(RefCell::new(None)),
             insight_column: Rc::new(RefCell::new(None)),
+            open_history: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             schemas: Rc::new(RefCell::new(None)),
             channels: Rc::new(RefCell::new(None)),
@@ -777,6 +786,16 @@ impl EditorShared {
     /// 【M8】「洞察此列」端口（未注入时列头右键不摆这一项）
     pub fn insight_column_port(&self) -> Option<InsightColumnPort> {
         self.insight_column.borrow().clone()
+    }
+
+    /// 【B8 余项】注入「打开历史面板」端口（由宿主在装配期调用一次）
+    pub fn attach_open_history(&self, port: OpenHistoryPort) {
+        *self.open_history.borrow_mut() = Some(port);
+    }
+
+    /// 【B8 余项】「打开历史面板」端口（未注入时工具栏按钮置灰并给原因）
+    pub fn open_history_port(&self) -> Option<OpenHistoryPort> {
+        self.open_history.borrow().clone()
     }
 
     /// 【M8】文档未绑定连接时执行会落到哪条连接上（口径在执行器：绑定优先 → 回退活动连接）

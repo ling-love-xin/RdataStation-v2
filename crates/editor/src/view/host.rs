@@ -3034,6 +3034,9 @@ impl EditorHostPanel {
             crate::toolbar::ToolbarItemId::Format => {
                 self.render_format_button(cx).into_any_element()
             }
+            crate::toolbar::ToolbarItemId::History => {
+                self.render_history_button(cx).into_any_element()
+            }
             crate::toolbar::ToolbarItemId::More => self.render_more_group(cx).into_any_element(),
         }
     }
@@ -3124,6 +3127,7 @@ impl EditorHostPanel {
             }
             ToolbarItemId::ExecBatch => self.render_exec_kind_button(head, ExecMenuKind::Batch, cx),
             ToolbarItemId::Format => self.render_format_button(cx),
+            ToolbarItemId::History => self.render_history_button(cx),
             ToolbarItemId::More => unreachable!("⋯ 更多 不能作折叠组头（已在 render_toolbar_group 退化）"),
         };
         let menu_items: Vec<ToolbarItemId> = visible
@@ -3182,6 +3186,30 @@ impl EditorHostPanel {
             .label("格式化")
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| panel.format_document(window, cx));
+            })
+    }
+
+    /// 【B8 余项】文档级「⟲ 历史」：打开右 Dock 历史面板（端口注入——编辑器不依赖工作台
+    /// 的 Dock）。未接端口时按钮置灰（`.disabled`），点了也会在状态栏给可读原因（不静默）。
+    fn render_history_button(&self, cx: &mut Context<Self>) -> Button {
+        let entity = cx.entity();
+        let available = self.shared.open_history_port().is_some();
+        Button::new("editor-history")
+            .ghost()
+            .small()
+            .disabled(!available)
+            .debug_selector(|| "editor-history".to_string())
+            .label("历史")
+            .on_click(move |_, _window, app| {
+                if entity.read(app).shared.open_history_port().is_none() {
+                    // 未接端口：状态栏给原因，而不是“点了没反应”
+                    entity.update(app, |panel, cx| {
+                        panel.set_message(Some("未接入历史面板".to_string()), cx);
+                    });
+                    return;
+                }
+                let port = entity.read(app).shared.open_history_port().unwrap();
+                port(app);
             })
     }
 
@@ -3865,6 +3893,9 @@ impl EditorHostPanel {
             ToolbarItemId::ExecSelection => self.execute_menu_kind(ExecMenuKind::Selection, cx),
             ToolbarItemId::ExecBatch => self.execute_menu_kind(ExecMenuKind::Batch, cx),
             ToolbarItemId::Format => self.format_document(window, cx),
+            // History / More 不参与折叠菜单（折叠菜单只收执行族，见 `render_collapsed_group`），
+            // 文档级按钮各自独立渲染；这里兜底空转（不会真被调到）
+            ToolbarItemId::History => {}
             ToolbarItemId::More => {}
         }
     }
@@ -6559,6 +6590,19 @@ impl Render for EditorHostPanel {
                     .map(|t| format!("类型 {}", t.label()))
             });
         let file_type_owned = file_type_text.flatten();
+        // 【LSP】通用模式语言服务状态段（原型 §2.5 左侧环境族第三项「环境 · 文件类型 · LSP」）：
+        // 只有“本文档配了语言服务”（`lsp_wants`，如 Python 脚本）才摆；会话健康显示「就绪」，
+        // 服务没起 / 被停 / 崩溃时如实报「未就绪」——状态栏不假装有服务。
+        let lsp_text = (self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General)
+            == EditorMode::General)
+            .then(|| {
+                self.shared.lsp_wants(&self.document).then(|| {
+                    if self.lsp_alive { "LSP 就绪" } else { "LSP 未就绪" }
+                })
+            });
+        let lsp_owned = lsp_text.flatten();
         let status = StatusInputs {
             mode: self
                 .with_document(|doc| doc.mode())
@@ -6586,6 +6630,7 @@ impl Render for EditorHostPanel {
             channel: channel_text.as_deref(),
             env: env_owned.as_deref(),
             file_type: file_type_owned.as_deref(),
+            lsp: lsp_owned.as_deref(),
             tx: tx_text.as_deref(),
         };
 
