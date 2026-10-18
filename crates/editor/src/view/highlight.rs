@@ -64,6 +64,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use anyhow::Result;
+use gpui_kit::base::input::{FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter};
 use gpui_kit::component::input::{
     DocumentRangeSemanticTokensProvider, EditorState, Rope, RopeExt as _,
 };
@@ -239,12 +240,69 @@ impl DocumentRangeSemanticTokensProvider for ModeSemanticTokensProvider {
 /// `refresh` 把 `_pending_update` 置真，下一帧 `Render::render` 里跑一遍
 /// `refresh_language_features` → `update_semantic_tokens` 取到 provider 并取数。
 /// （这正是 gpui-base 在 `InputBaseState::refresh` 文档里给的用法：设完 LSP provider 就 `refresh`。）
+/// 哑语法高亮器：不做 tree-sitter 词法，只让 gpui-base 的高亮管线「有高亮器」。
+///
+/// **为什么需要它（2026-10-19 运行期探针实证）**：gpui-base 的 `highlight_lines`
+/// （`vendor/gpui-base/src/input/base/element.rs:2132`）在 `LayoutMode::CodeEditor.highlighter`
+/// 为 `None` 时**提前返回**——语义 token（`semantic_token_styles`）只是 tree-sitter 高亮的
+/// **补充**，没有高亮器就永远不渲染。本仓词法走自研（`engine::sql` / `engine::script`）→
+/// 语义 token，刻意不注册 tree-sitter grammar；因此用一个**空实现**把管线打开：
+/// `styles` 返回覆盖请求范围的 `HighlightStyle::default()`（不改颜色），语义样式经
+/// `combine_highlights` 叠加其上；`update` / `fold_ranges` 空实现（折叠走 `view::fold`，
+/// 不依赖 tree-sitter）。
+struct EmptyHighlighter;
+
+impl InputHighlighter for EmptyHighlighter {
+    fn language(&self) -> SharedString {
+        "rds-semantic".into()
+    }
+
+    fn update(
+        &mut self,
+        _edit: Option<InputEdit>,
+        _text: &Rope,
+        _folding: bool,
+        _window: &mut Window,
+        _cx: &mut Context<EditorState>,
+    ) {
+    }
+
+    fn styles(
+        &self,
+        range: &Range<usize>,
+        _resolver: &dyn HighlightStyleResolver,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
+        // 覆盖请求范围但不改变颜色（default = 全 None）；语义样式随后叠加
+        vec![(range.clone(), HighlightStyle::default())]
+    }
+
+    fn fold_ranges(&self, _text: &Rope) -> Vec<FoldRange> {
+        Vec::new()
+    }
+}
+
+/// 把 provider 装到某个文档的编辑内核上，并**立刻请求一次刷新**（`InputBaseState::refresh`）。
+///
+/// 每个文档一份 `EditorState` → 一份 provider：着色只依赖文本与文档类型，无跨文档状态。
+/// `kind = None`（CSV / 分析模式）时摘除 provider。
+///
+/// **装完必须刷一次**：内核只在**文本变更**时拉取语义 token（`editor/mod.rs` 的
+/// `refresh_language_features` → `Lsp::update` → `update_semantic_tokens`）。文档刚打开、
+/// 或刚切到着色模式时都没有文本变更，不刷就会一直「不上色」，直到用户敲下第一个键。
+/// `refresh` 把 `_pending_update` 置真，下一帧 `Render::render` 里跑一遍
+/// `refresh_language_features` → `update_semantic_tokens` 取到 provider 并取数。
+/// （这正是 gpui-base 在 `InputBaseState::refresh` 文档里给的用法：设完 LSP provider 就 `refresh`。）
+///
+/// **必须同时装哑高亮器**（见 [`EmptyHighlighter`]）：gpui-base 渲染高亮时要求
+/// `highlighter` 存在，否则语义 token 的消费点（`semantic_token_styles`）根本不会执行。
 pub fn install(state: &mut EditorState, cx: &mut Context<EditorState>, kind: HighlightKind) {
     state.lsp_mut().semantic_tokens_provider = match kind {
         HighlightKind::None => None,
         _ => Some(Rc::new(ModeSemanticTokensProvider::new(kind))),
     };
     if !matches!(kind, HighlightKind::None) {
+        // 哑高亮器：任何语言名都返回空实现（语义着色不需要 tree-sitter 词法）
+        state.set_highlighter_factory(Rc::new(|_| Some(Box::new(EmptyHighlighter))), cx);
         state.refresh(cx);
     }
 }
