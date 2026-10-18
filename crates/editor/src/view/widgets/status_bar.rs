@@ -54,6 +54,9 @@ pub struct StatusInputs<'a> {
     pub bytes: usize,
     /// 选中的字符数（0 = 无选区）
     pub selected_chars: usize,
+    /// 【原型 §2.5】选中的行数（`Row N` 微标；0 = 无选区，不显示）——选中跨行数，
+    /// 与 `selected_chars` 同源（`selected_range` 首尾偏移 → 行号差 + 1）
+    pub selected_rows: usize,
     /// 动作失败的原因（未命名需另存为 / 有未保存改动 / 只读拒绝）；`None` = 无提示
     pub message: Option<&'a str>,
     /// 是否有执行在跑（真实状态，不猜）
@@ -105,10 +108,14 @@ pub struct StatusLabels {
     pub connection: Option<String>,
     /// 方言段（`方言 PostgreSQL`）；`None` = 无绑定连接（不占位）
     pub dialect: Option<String>,
-    /// 左段正文（通道 · 事务 · 模式 · 语句数 · 未保存 · 执行中 · 提示）
+    /// 左段正文（通道 · 事务 · 环境族 · 未保存 · 执行中 · 提示）
     pub body: String,
-    /// 右段（只读两维 · 光标 · 选区）
-    pub right: String,
+    /// 右段微标（VSCode 式独立分段：定位 · 选区 · 编码 · 换行 · 缩进 · 大小 · 语句数 ·
+    /// 模式 · 脏……每一项一个元素，而不是拼成一个长字符串）
+    ///
+    /// 渲染层把每一项画成独立微标（独立 `div` + 分隔），互不挤占：
+    /// 宽窗口全显，窄窗口从左裁（最不重要的先走）而不是整段消失。
+    pub right: Vec<String>,
 }
 
 /// 计算状态栏文案（纯函数）
@@ -118,7 +125,7 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     // 方言段独立成一段：它跟着「绑定连接」走，面包屑控件里不含它（连接▸库▸schema 是路径，方言是引擎）
     let dialect = inputs.dialect.map(|d| format!("方言 {d}"));
 
-    // 左段正文：通道 + 事务 + 模式 + 语句数（SQL 模式才有语句概念） + 未保存 + 动作提示
+    // 左段正文：通道 + 事务 + 环境族（通用模式）+ 未保存 + 执行中 + 提示
     let mut body = String::new();
     if let Some(channel) = inputs.channel {
         // 【B13】通道紧跟连接：同一个连接上，源库直连与本地加速看的是两份数据
@@ -130,82 +137,87 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         body.push_str(tx);
         body.push_str(" · ");
     }
-    body.push_str(inputs.mode.short_label());
-    if inputs.mode == EditorMode::Sql {
-        body.push_str(&format!(" · {} 条语句", inputs.statements));
-    }
     // 【2b】通用模式：环境段紧跟模式（`通用 · 环境 Python 3.12`）；未选环境如实不摆
     if let Some(env) = inputs.env {
-        body.push_str(" · ");
         body.push_str(env);
+        body.push_str(" · ");
     }
     // 【2b/开放决定 #2】通用模式：脚本文件类型段紧跟环境（`通用 · 类型 Python`）；非脚本扩展名不摆
     if let Some(file_type) = inputs.file_type {
-        body.push_str(" · ");
         body.push_str(file_type);
+        body.push_str(" · ");
     }
     // 【LSP】通用模式：语言服务状态段（原型 §2.5「环境 · 文件类型 · LSP」）；
     // `None` = 该文档不需要语言服务（不是“服务关了”）
     if let Some(lsp) = inputs.lsp {
-        body.push_str(" · ");
         body.push_str(lsp);
+        body.push_str(" · ");
     }
     if inputs.dirty {
-        body.push_str(" · 未保存");
+        body.push_str("未保存 · ");
     }
     if inputs.executing {
         // 耗时累加（原型 §4.6：执行中要看得见跑了多久——它也是“该不该中断”的判断依据）
         match inputs.elapsed {
-            Some(elapsed) => body.push_str(&format!(" · 执行中 {}…", elapsed_text(elapsed))),
-            None => body.push_str(" · 执行中…"),
+            Some(elapsed) => body.push_str(&format!("执行中 {}… · ", elapsed_text(elapsed))),
+            None => body.push_str("执行中… · "),
         }
     }
     if let Some(message) = inputs.message {
         // 提示紧跟在左侧状态段之后：它是“刚才那个动作”的后果，不是文档属性
-        body.push_str(&format!(" · {message}"));
+        body.push_str(&format!("{message} · "));
+    }
+    // 去掉尾部的「 · 」（有内容时；全空则保持空串——渲染层据此判断不摆空段）
+    if body.ends_with(" · ") {
+        body.truncate(body.len() - " · ".len());
     }
 
-    // 右（T2c-3 英文微标）：两个只读维度分别表达 + Ln/Col/Ch + 编码/换行/缩进 + 大小 + 脏
-    let mut parts: Vec<String> = Vec::new();
+    // 右段微标（VSCode 式独立分段，原型 §2.5）：每项一个元素，窄窗口从左裁
+    let mut right: Vec<String> = Vec::new();
+    // 两个只读维度分别表达
     if inputs.read_only.editor {
-        parts.push("只读".to_string());
+        right.push("只读".to_string());
     }
     if inputs.read_only.connection {
-        parts.push("连接只读".to_string());
+        right.push("连接只读".to_string());
     }
-    // 编码 / 换行是文档级保存格式（2c：打开按磁盘检测、菜单可切），不是编的；
-    // 缩进：制表符模式显「Tab」，否则显「Sp n」（n = 空格宽度，真实值）
-    let indent_badge = if inputs.hard_tabs {
+    // 定位（VSCode `Ln 1, Col 1`）
+    right.push(format!("Ln {}, Col {}", inputs.line, inputs.column));
+    // 选区：选中字符（Ch）+ 选中行（Row）——原型 §2.5 的 `Ch 0` · `Row 1`；无选区不摆
+    if inputs.selected_chars > 0 {
+        right.push(format!("Ch {}", inputs.selected_chars));
+    }
+    if inputs.selected_rows > 0 {
+        right.push(format!("Row {}", inputs.selected_rows));
+    }
+    // 编码 / 换行 / 缩进 / 大小：文档级保存格式（2c：打开按磁盘检测、菜单可切），独立微标
+    right.push(inputs.format.encoding.short_label().to_string());
+    right.push(inputs.format.eol.label().to_string());
+    right.push(if inputs.hard_tabs {
         "Tab".to_string()
     } else {
-        format!("Sp {}", inputs.tab_size)
-    };
-    parts.push(format!(
-        "Ln {}, Col {}, Ch {} · {} · {} · {} · {}",
-        inputs.line,
-        inputs.column,
-        inputs.cursor_offset,
-        inputs.format.encoding.short_label(),
-        inputs.format.eol.label(),
-        indent_badge,
-        human_size(inputs.bytes),
-    ));
+        format!("Spaces: {}", inputs.tab_size)
+    });
+    right.push(human_size(inputs.bytes));
+    // SQL 模式：语句数（原型 ⑧ 状态栏的 `2 条语句`）
+    if inputs.mode == EditorMode::Sql {
+        right.push(format!("{} 条语句", inputs.statements));
+    }
+    // 模式（原型 ⑧ 状态栏末尾的 `SQL`；通用模式左段已含环境族，右段仍标模式）
+    right.push(inputs.mode.short_label().to_string());
     if inputs.dirty {
-        parts.push("脏".to_string());
+        right.push("脏".to_string());
     }
-    if inputs.selected_chars > 0 {
-        parts.push(format!("已选 {} 字", inputs.selected_chars));
-    }
-    // 【T2c-3 收尾】多光标（列编辑）徽标：真实光标数，行编辑模式下恒为 1 不显示
+    // 多光标（列编辑）徽标：真实光标数，行编辑模式下恒为 1 不显示
     if inputs.cursor_count > 1 {
-        parts.push(format!("{} 光标", inputs.cursor_count));
+        right.push(format!("{} 光标", inputs.cursor_count));
     }
 
     StatusLabels {
         connection,
         dialect,
         body,
-        right: parts.join(" · "),
+        right,
     }
 }
 
@@ -267,20 +279,36 @@ pub fn render(
         .child(text.body)
         .children(controls.tx);
 
+    // 右段微标（VSCode 式）：每个微标独立成段，段间用竖线分隔；宽窗口全显、
+    // 窄窗口从左裁（`flex_none` + 容器 `overflow_hidden`）——不会整段消失。
+    let mut right = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(muted)
+        .children(controls.edit_mode)
+        .children(controls.reset_menu);
+    for (index, badge) in text.right.iter().enumerate() {
+        if index > 0 {
+            right = right.child(
+                div()
+                    .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT * 0.5))
+                    .w_px()
+                    .bg(border),
+            );
+        }
+        let badge = div()
+            .flex_none()
+            .debug_selector(move || format!("status-badge-{}", index))
+            .child(badge.clone());
+        right = right.child(badge);
+    }
+    right = right.children(controls.interrupt);
+
     StatusBar::new()
         .left(left)
-        .right(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .text_color(muted)
-                .children(controls.edit_mode)
-                .children(controls.reset_menu)
-                .child(text.right)
-                .children(controls.interrupt),
-        )
+        .right(right)
         .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
         .border_t(ui::HAIRLINE)
         .border_color(border)
@@ -307,6 +335,7 @@ mod tests {
             format: crate::encoding::SaveFormat::default(),
             bytes: 1536,
             selected_chars: 0,
+            selected_rows: 0,
             message: None,
             executing: false,
             elapsed: None,
@@ -330,8 +359,8 @@ mod tests {
         let text = labels(&with_connection);
         assert_eq!(text.connection.as_deref(), Some("●P·orders"));
         assert!(
-            text.body.starts_with("SQL"),
-            "正文从模式开始（连接已拆出去）：{}",
+            !text.body.starts_with("SQL"),
+            "模式已移右段微标，正文不再从模式开始（连接已拆出去）：{}",
             text.body
         );
 
@@ -341,22 +370,28 @@ mod tests {
     }
 
     #[test]
-    fn left_shows_mode_and_statement_count() {
+    fn left_shows_channel_and_env_family() {
         let text = labels(&inputs(ReadOnly::none()));
-        assert!(text.body.starts_with("SQL"), "{}", text.body);
-        assert!(text.body.contains("3 条语句"), "语句数必须真实：{}", text.body);
+        assert!(!text.body.contains("条语句"), "语句数已移右段：{}", text.body);
         assert!(!text.body.contains("未保存"));
+        // 模式与语句数在右段微标（原型 ⑧：… │ 2 条语句 │ SQL │ 脏）
+        assert!(text.right.iter().any(|b| b.contains("SQL")), "{:?}", text.right);
+        assert!(
+            text.right.iter().any(|b| b.contains("3 条语句")),
+            "{:?}",
+            text.right
+        );
     }
 
     #[test]
     fn statement_count_follows_content() {
         let mut one = inputs(ReadOnly::none());
         one.statements = 1;
-        assert!(labels(&one).body.contains("1 条语句"));
+        assert!(labels(&one).right.iter().any(|b| b.contains("1 条语句")));
 
         let mut nine = inputs(ReadOnly::none());
         nine.statements = 9;
-        assert!(labels(&nine).body.contains("9 条语句"));
+        assert!(labels(&nine).right.iter().any(|b| b.contains("9 条语句")));
     }
 
     #[test]
@@ -372,15 +407,19 @@ mod tests {
     fn multi_cursor_badge_shows_only_when_count_above_one() {
         let single = labels(&inputs(ReadOnly::none()));
         assert!(
-            !single.right.contains("光标"),
-            "单光标不显示徽标：{}",
+            !single.right.iter().any(|b| b.contains("光标")),
+            "单光标不显示徽标：{:?}",
             single.right
         );
 
         let mut multi = inputs(ReadOnly::none());
         multi.cursor_count = 3;
         let text = labels(&multi);
-        assert!(text.right.contains("3 光标"), "{} 应含 3 光标", text.right);
+        assert!(
+            text.right.iter().any(|b| b.contains("3 光标")),
+            "{:?} 应含 3 光标",
+            text.right
+        );
     }
 
     #[test]
@@ -388,8 +427,9 @@ mod tests {
         // 通用模式是纯记事本（无连接档）：没有语句概念，不该出现"N 条语句"
         let mut text = inputs(ReadOnly::none());
         text.mode = EditorMode::General;
-        assert!(!labels(&text).body.contains("条语句"));
-        assert!(labels(&text).body.starts_with("通用"));
+        assert!(!labels(&text).right.iter().any(|b| b.contains("条语句")));
+        // 模式名在右段微标：通用模式标「通用」
+        assert!(labels(&text).right.iter().any(|b| b.contains("通用")));
     }
 
     /// 【LSP】通用模式左侧环境族第三项：语言服务状态段（原型 §2.5「环境 · 文件类型 · LSP」）
@@ -404,8 +444,12 @@ mod tests {
         ready.mode = EditorMode::General;
         ready.lsp = Some("LSP 就绪");
         let text = labels(&ready);
-        assert!(text.body.contains("通用"), "{}", text.body);
         assert!(text.body.contains("LSP 就绪"), "{}", text.body);
+        assert!(
+            text.right.iter().any(|b| b.contains("通用")),
+            "模式名在右段：{:?}",
+            text.right
+        );
 
         // 服务没起 / 挂了：如实报「未就绪」，不假装有服务
         let mut down = inputs(ReadOnly::none());
@@ -423,13 +467,17 @@ mod tests {
     fn read_only_dimensions_are_reported_separately() {
         // 三种组合：都不只读 / 仅编辑器 / 仅连接 / 两者
         let none = labels(&inputs(ReadOnly::none()));
-        assert!(!none.right.contains("只读"));
+        assert!(!none.right.iter().any(|b| b.contains("只读")));
 
         let editor = labels(&inputs(ReadOnly::editor_only()));
-        assert!(editor.right.contains("只读"), "{}", editor.right);
         assert!(
-            !editor.right.contains("连接只读"),
-            "编辑器只读不等于连接只读：{}",
+            editor.right.iter().any(|b| b.contains("只读")),
+            "{:?}",
+            editor.right
+        );
+        assert!(
+            !editor.right.iter().any(|b| b.contains("连接只读")),
+            "编辑器只读不等于连接只读：{:?}",
             editor.right
         );
 
@@ -437,10 +485,10 @@ mod tests {
             editor: false,
             connection: true,
         }));
-        assert!(connection.right.contains("连接只读"));
+        assert!(connection.right.iter().any(|b| b.contains("连接只读")));
         assert!(
-            !connection.right.contains("· 只读 ·"),
-            "连接只读不等于编辑器只读：{}",
+            !connection.right.iter().any(|b| b == "只读"),
+            "连接只读不等于编辑器只读：{:?}",
             connection.right
         );
 
@@ -448,18 +496,39 @@ mod tests {
             editor: true,
             connection: true,
         }));
-        assert!(both.right.contains("只读") && both.right.contains("连接只读"));
+        assert!(
+            both.right.iter().any(|b| b.contains("只读"))
+                && both.right.iter().any(|b| b.contains("连接只读"))
+        );
     }
 
     #[test]
     fn cursor_and_selection_are_shown_with_real_values() {
         let text = labels(&inputs(ReadOnly::none()));
-        assert!(text.right.contains("Ln 12, Col 4"), "{}", text.right);
-        assert!(!text.right.contains("已选"), "没有选区就不显示选区段");
+        assert!(
+            text.right.iter().any(|b| b.contains("Ln 12, Col 4")),
+            "{:?}",
+            text.right
+        );
+        assert!(
+            !text.right.iter().any(|b| b.contains("Ch")),
+            "没有选区就不显示选区段：{:?}",
+            text.right
+        );
 
         let mut selecting = inputs(ReadOnly::none());
         selecting.selected_chars = 7;
-        assert!(labels(&selecting).right.contains("已选 7 字"));
+        selecting.selected_rows = 2;
+        assert!(
+            labels(&selecting).right.iter().any(|b| b.contains("Ch 7")),
+            "{:?}",
+            labels(&selecting).right
+        );
+        assert!(
+            labels(&selecting).right.iter().any(|b| b.contains("Row 2")),
+            "选中行数微标：{:?}",
+            labels(&selecting).right
+        );
     }
 
     #[test]
@@ -471,7 +540,11 @@ mod tests {
         let text = labels(&failed);
         assert!(text.body.contains("未命名文档，请先另存为"), "{}", text.body);
         assert!(text.body.contains("未保存"), "提示不挤掉文档状态：{}", text.body);
-        assert!(!text.right.contains("另存为"), "提示不进右段：{}", text.right);
+        assert!(
+            !text.right.iter().any(|b| b.contains("另存为")),
+            "提示不进右段：{:?}",
+            text.right
+        );
 
         // 无提示时不显示占位
         assert!(!labels(&inputs(ReadOnly::none())).body.contains("另存为"));
@@ -512,8 +585,8 @@ mod tests {
         let text = labels(&with_tx);
         assert_eq!(text.connection.as_deref(), Some("●P·orders"), "连接段独立");
         assert!(
-            text.body.starts_with("TX 未开启 · SQL"),
-            "事务紧随连接段（正文从事务开始，模式在后）：{}",
+            text.body.starts_with("TX 未开启"),
+            "事务紧随连接段（正文从事务开始）：{}",
             text.body
         );
 
@@ -535,8 +608,8 @@ mod tests {
         let text = labels(&with_channel);
         assert_eq!(text.connection.as_deref(), Some("●P·orders"));
         assert!(
-            text.body.starts_with("通道 源库 · TX 未开启 · SQL"),
-            "通道在事务之前、模式在后：{}",
+            text.body.starts_with("通道 源库 · TX 未开启"),
+            "通道在事务之前：{}",
             text.body
         );
 
@@ -572,33 +645,53 @@ mod tests {
         assert_eq!(human_size(5 * 1024 * 1024 * 1024), "5.0G");
     }
 
-    /// 【T2c-3】右段英文微标：Ln/Col/Ch + 编码/换行/缩进 + 大小 + 脏，全部真实值
+    /// 【T2c-3】右段英文微标：Ln/Col + Ch/Row + 编码/换行/缩进 + 大小 + 语句数/模式 + 脏，
+    /// 全部真实值、各自独立成段（VSCode 式，不拼长串）
     #[test]
     fn right_segment_uses_english_badges_with_real_values() {
         let text = labels(&inputs(ReadOnly::none()));
         assert!(
-            text.right.contains("Ln 12, Col 4, Ch 42"),
-            "行/列/光标偏移：{}",
+            text.right.iter().any(|b| b.contains("Ln 12, Col 4")),
+            "行/列：{:?}",
             text.right
         );
         assert!(
-            text.right.contains("UTF-8 · LF · Sp 2 · 1.5K"),
-            "编码/换行/缩进/大小：{}",
+            text.right.iter().any(|b| b.contains("UTF-8")),
+            "编码微标独立：{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b.contains("LF")),
+            "换行微标独立：{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b.contains("Spaces: 2")),
+            "缩进微标独立（Spaces: N 文案）：{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b.contains("1.5K")),
+            "大小微标独立：{:?}",
             text.right
         );
         // 不脏不占位（真实值原则）
-        assert!(!text.right.contains("脏"), "干净文档不显示脏：{}", text.right);
+        assert!(
+            !text.right.iter().any(|b| b.contains("脏")),
+            "干净文档不显示脏：{:?}",
+            text.right
+        );
 
         let mut dirty = inputs(ReadOnly::none());
         dirty.dirty = true;
-        assert!(labels(&dirty).right.contains("脏"), "脏文档要显脏点");
+        assert!(labels(&dirty).right.iter().any(|b| b.contains("脏")));
 
-        // 制表符缩进模式：微标显「Tab」而非「Sp n」（T2c-4 真实值）
+        // 制表符缩进模式：微标显「Tab」而非「Spaces: n」（T2c-4 真实值）
         let mut tabs = inputs(ReadOnly::none());
         tabs.hard_tabs = true;
         assert!(
-            labels(&tabs).right.contains("· Tab ·"),
-            "制表符缩进要显 Tab：{}",
+            labels(&tabs).right.iter().any(|b| b == "Tab"),
+            "制表符缩进要显 Tab：{:?}",
             labels(&tabs).right
         );
     }
@@ -609,8 +702,13 @@ mod tests {
         // 默认 UTF-8 · LF
         let text = labels(&inputs(ReadOnly::none()));
         assert!(
-            text.right.contains("UTF-8 · LF ·"),
-            "默认格式微标：{}",
+            text.right.iter().any(|b| b == "UTF-8"),
+            "默认编码微标：{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b == "LF"),
+            "默认换行微标：{:?}",
             text.right
         );
 
@@ -622,8 +720,8 @@ mod tests {
         };
         let text = labels(&gbk);
         assert!(
-            text.right.contains("GBK · CRLF ·"),
-            "GBK/CRLF 微标：{}",
+            text.right.iter().any(|b| b == "GBK") && text.right.iter().any(|b| b == "CRLF"),
+            "GBK/CRLF 微标：{:?}",
             text.right
         );
 
@@ -635,8 +733,8 @@ mod tests {
         };
         let text = labels(&bom);
         assert!(
-            text.right.contains("UTF-8 BOM · LF ·"),
-            "UTF-8 BOM 短标：{}",
+            text.right.iter().any(|b| b == "UTF-8 BOM") && text.right.iter().any(|b| b == "LF"),
+            "UTF-8 BOM 短标：{:?}",
             text.right
         );
     }

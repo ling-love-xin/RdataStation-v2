@@ -7934,9 +7934,9 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
     });
 
-    // 状态栏正文由 `labels()` 纯函数计算：通用模式 + 环境 → body 含环境段。
-    // 这里直接断言纯函数（窗口级把 env 输入喂对，纯函数保证渲染一致）。
-    let body = crate::view::widgets::status_bar::labels(
+    // 状态栏文案由 `labels()` 纯函数计算：通用模式 → 模式名在右段微标（原型 §2.5），
+    // body 含环境段。这里直接断言纯函数（窗口级把 env 输入喂对，纯函数保证渲染一致）。
+    let text = crate::view::widgets::status_bar::labels(
         &crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
@@ -7951,6 +7951,7 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
             format: crate::encoding::SaveFormat::default(),
             bytes: 10,
             selected_chars: 0,
+            selected_rows: 0,
             message: None,
             executing: false,
             elapsed: None,
@@ -7962,11 +7963,14 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
             lsp: None,
             tx: None,
         },
-    )
-    .body;
+    );
     assert!(
-        body.contains("通用") && body.contains("环境 Python 3.12") && body.contains("类型 Python"),
-        "状态栏左段应含模式 + 环境段 + 文件类型段：{body}"
+        text.right.iter().any(|b| b.contains("通用"))
+            && text.body.contains("环境 Python 3.12")
+            && text.body.contains("类型 Python"),
+        "模式名在右段微标、环境段+文件类型段在左段正文：body={} right={:?}",
+        text.body,
+        text.right
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
@@ -8000,9 +8004,9 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 状态栏正文由 `labels()` 纯函数计算：通用模式 + .py 扩展名 → body 含文件类型段。
-    // 这里直接断言纯函数（窗口级把 file_type 输入喂对，纯函数保证渲染一致）。
-    let body = crate::view::widgets::status_bar::labels(
+    // 状态栏文案由 `labels()` 纯函数计算：通用模式 → 模式名在右段微标，
+    // body 含文件类型段。这里直接断言纯函数（窗口级把 file_type 输入喂对，纯函数保证渲染一致）。
+    let text = crate::view::widgets::status_bar::labels(
         &crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
@@ -8017,6 +8021,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             format: crate::encoding::SaveFormat::default(),
             bytes: 10,
             selected_chars: 0,
+            selected_rows: 0,
             message: None,
             executing: false,
             elapsed: None,
@@ -8028,15 +8033,16 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             lsp: None,
             tx: None,
         },
-    )
-    .body;
+    );
     assert!(
-        body.contains("通用") && body.contains("类型 Python"),
-        "状态栏左段应含模式 + 脚本文件类型段：{body}"
+        text.right.iter().any(|b| b.contains("通用")) && text.body.contains("类型 Python"),
+        "模式名在右段微标、脚本文件类型段在左段正文：body={} right={:?}",
+        text.body,
+        text.right
     );
 
     // 未命名 / 未知扩展名（无路径）→ file_type 输入为 None → body 不含「类型」
-    let untitled_body = crate::view::widgets::status_bar::labels(
+    let untitled = crate::view::widgets::status_bar::labels(
         &crate::view::widgets::status_bar::StatusInputs {
             mode: EditorMode::General,
             dirty: false,
@@ -8051,6 +8057,7 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             format: crate::encoding::SaveFormat::default(),
             bytes: 10,
             selected_chars: 0,
+            selected_rows: 0,
             message: None,
             executing: false,
             elapsed: None,
@@ -8062,11 +8069,11 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             lsp: None,
             tx: None,
         },
-    )
-    .body;
+    );
     assert!(
-        !untitled_body.contains("类型"),
-        "无路径/未知扩展名时如实不摆文件类型段：{untitled_body}"
+        !untitled.body.contains("类型"),
+        "无路径/未知扩展名时如实不摆文件类型段：{}",
+        untitled.body
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }

@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
-use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
+use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position, RopeExt as _};
 use gpui_kit::base::text::TextView;
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
@@ -6514,16 +6514,26 @@ impl Render for EditorHostPanel {
         let _ = (primary, muted);
 
         // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移；
-        // 光标数 = 列编辑多光标真实值）
-        let (line, column, cursor_offset, cursor_count, selected_chars) = {
+        // 光标数 = 列编辑多光标真实值；选中行数 = 选区跨行数，供状态栏 `Row N` 微标）
+        let (line, column, cursor_offset, cursor_count, selected_chars, selected_rows) = {
             let state = self.editor.read(cx);
             let cursor = state.cursor_position();
+            let range = state.selected_range();
+            let rows = if range.is_empty() {
+                0
+            } else {
+                // 首尾偏移 → 行号差 + 1（0 基行号，差 +1 即跨行数）
+                let start = state.text().offset_to_position(range.start).line;
+                let end = state.text().offset_to_position(range.end).line;
+                (end - start + 1) as usize
+            };
             (
                 cursor.line as usize + 1,
                 cursor.character as usize + 1,
                 state.selected_range().start,
                 state.cursor_count(),
                 state.selected_text().chars().count(),
+                rows,
             )
         };
         // 连接段只在会通信的模式出现（文本模式没有连接概念，不显示占位）
@@ -6622,6 +6632,7 @@ impl Render for EditorHostPanel {
             format: self.shared.document_save_format(&self.document),
             bytes: self.shared.document_len(&self.document),
             selected_chars,
+            selected_rows,
             message: self.message.as_deref(),
             executing: self.pending > 0,
             elapsed: self.running_since.map(|since| since.elapsed()),
