@@ -53,6 +53,7 @@ pub type PanelEntity = Entity<EditorHostPanel>;
 /// **不能 read 面板实体**（面板正在被 render = 正在被 update，`Entity::read` 会重入
 /// panic）——实例由面板按引用传进来。
 /// `connections` 是连接列表的内存快照（右下角执行源选择器的数据源；渲染路径可调）
+/// `kernels` 是内核注册表快照（执行源「内核」档的菜单数据源；渲染路径可调）
 pub fn render(
     cx: &App,
     state: &NotebookState,
@@ -60,6 +61,7 @@ pub fn render(
     entity: PanelEntity,
     cell_editors: &HashMap<String, Entity<EditorState>>,
     connections: &[ConnectionOption],
+    kernels: &[rds_kernel::KernelSpec],
 ) -> impl IntoElement {
     let theme = cx.theme();
     if state.cells.is_empty() {
@@ -82,6 +84,7 @@ pub fn render(
             &entity,
             cell_editors,
             connections,
+            kernels,
         ));
     }
     // 底部「＋ 插入单元」（列表尾追加；空态另有引导卡）
@@ -202,6 +205,7 @@ fn cell_card(
     entity: &PanelEntity,
     cell_editors: &HashMap<String, Entity<EditorState>>,
     connections: &[ConnectionOption],
+    kernels: &[rds_kernel::KernelSpec],
 ) -> impl IntoElement {
     let badge = badge(theme, cell.language);
     let run_button = run_button(cell, document, entity);
@@ -291,7 +295,7 @@ fn cell_card(
             card.child(output_section(theme, cell))
         })
         // 右下角指示器（对齐 VS Code Jupyter：语言 + 执行源，可点切换）
-        .child(cell_footer(theme, cell, document, entity, connections))
+        .child(cell_footer(theme, cell, document, entity, connections, kernels))
 }
 
 /// 右下角指示器：语言标签 + 执行源（连接 / 内核）
@@ -304,6 +308,7 @@ fn cell_footer(
     document: &DocumentId,
     entity: &PanelEntity,
     connections: &[ConnectionOption],
+    kernels: &[rds_kernel::KernelSpec],
 ) -> impl IntoElement {
     let muted = theme.colors.muted_foreground;
     // 语言标签（左下）：与工具行徽标一致的颜色语义
@@ -316,8 +321,8 @@ fn cell_footer(
     let source_button = match cell.language.runs_on() {
         None => None, // Markdown：无执行源
         Some(_) => {
-            let label = execution_source_label(cell, connections);
-            let menu = execution_source_menu(cell, document, entity, connections);
+            let label = execution_source_label(cell, connections, kernels);
+            let menu = execution_source_menu(cell, document, entity, connections, kernels);
             Some(
                 Button::new(format!("editor-nb-source-{}", cell.id))
                     .ghost()
@@ -345,7 +350,11 @@ fn cell_footer(
 }
 
 /// 执行源当前值文案（`None` = 会话默认：SQL 用会话绑定连接 / 内核用上次用过的）
-fn execution_source_label(cell: &Cell, connections: &[ConnectionOption]) -> String {
+fn execution_source_label(
+    cell: &Cell,
+    connections: &[ConnectionOption],
+    kernels: &[rds_kernel::KernelSpec],
+) -> String {
     match &cell.execution_source {
         None => match cell.language.runs_on() {
             Some(crate::cell::ExecutionTarget::Connection) => "默认连接".to_string(),
@@ -357,19 +366,21 @@ fn execution_source_label(cell: &Cell, connections: &[ConnectionOption]) -> Stri
             .find(|c| &c.id == id)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("连接 {id}")),
-        Some(crate::cell::ExecutionSource::Kernel(id)) => {
-            // 内核注册表在 #17 接入 KernelSession 后才有；当前按 id 直显
-            id.clone()
-        }
+        Some(crate::cell::ExecutionSource::Kernel(id)) => kernels
+            .iter()
+            .find(|spec| &spec.id == id)
+            .map(|spec| spec.display_name.clone())
+            .unwrap_or_else(|| format!("内核 {id}")),
     }
 }
 
-/// 执行源切换菜单（数据源：连接 = 宿主注入的连接列表；内核 = 注册表，未接）
+/// 执行源切换菜单（数据源：连接 = 宿主注入的连接列表；内核 = 注册表快照）
 fn execution_source_menu(
     cell: &Cell,
     document: &DocumentId,
     entity: &PanelEntity,
     connections: &[ConnectionOption],
+    kernels: &[rds_kernel::KernelSpec],
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     let cell_id = cell.id.clone();
     let entity = entity.clone();
@@ -377,9 +388,10 @@ fn execution_source_menu(
     let runs_on = cell.language.runs_on();
     let language = cell.language;
     let current = cell.execution_source.clone();
-    // 连接列表 clone 进闭包（dropdown_menu 要 `'static`；渲染路径的内存快照本来就
-    // 在宿主侧生成，这里只多一次拷贝，量级很小）
+    // 连接 / 内核列表 clone 进闭包（dropdown_menu 要 `'static`；渲染路径的内存快照
+    // 本来就该在宿主侧生成，这里只多一次拷贝，量级很小）
     let conns: Vec<ConnectionOption> = connections.to_vec();
+    let kernels: Vec<rds_kernel::KernelSpec> = kernels.to_vec();
     move |menu, _window, _cx| {
         // 第一项：回到会话默认
         let default = PopupMenuItem::new(match runs_on {
@@ -432,13 +444,53 @@ fn execution_source_menu(
                 menu
             }
             Some(crate::cell::ExecutionTarget::Kernel) => {
-                // 内核注册表 #17 接入；当前占位：只有「默认」可点，附加说明不可点
-                let placeholder = PopupMenuItem::new(format!(
-                    "{} 内核列表在后续版本开放（当前用默认）",
-                    language.label()
-                ))
-                .disabled(true);
-                menu.item(placeholder)
+                // 内核注册表（#20）：ready 的可选、未 ready 置灰 + 原因；一个都没有时
+                // 说明本机没有该语言的可用内核（「默认」保持可点，执行时给完整原因）
+                let mut menu = menu;
+                for spec in &kernels {
+                    let selected = matches!(
+                        &current,
+                        Some(crate::cell::ExecutionSource::Kernel(id)) if id == &spec.id
+                    );
+                    // 未 ready 的内核：原因拼进 label（PopupMenuItem 无 suffix 槽位，
+                    // 置灰 + 原因已足够——用户知道要装什么）
+                    let label = match (spec.ready, spec.note) {
+                        (false, Some(note)) => format!("{}（{}）", spec.display_name, note),
+                        _ => spec.display_name.clone(),
+                    };
+                    let item = PopupMenuItem::new(label)
+                        .checked(selected)
+                        .disabled(!spec.ready)
+                        .on_click({
+                            let entity = entity.clone();
+                            let document = document.clone();
+                            let cell_id = cell_id.clone();
+                            let kernel_id = spec.id.clone();
+                            move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.notebook_set_execution_source(
+                                        &document,
+                                        &cell_id,
+                                        Some(crate::cell::ExecutionSource::Kernel(
+                                            kernel_id.clone(),
+                                        )),
+                                        cx,
+                                    );
+                                });
+                            }
+                        });
+
+                    menu = menu.item(item);
+                }
+                if kernels.is_empty() {
+                    let placeholder = PopupMenuItem::new(format!(
+                        "{} 内核未检测到（本机没有可用内核）",
+                        language.label()
+                    ))
+                    .disabled(true);
+                    menu = menu.item(placeholder);
+                }
+                menu
             }
             None => menu,
         }

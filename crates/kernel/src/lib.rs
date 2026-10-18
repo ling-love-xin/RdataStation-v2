@@ -14,6 +14,8 @@
 //! kernel 不依赖 gpui / editor，可独立测试。
 
 pub mod connection;
+pub mod registry;
 pub mod session;
 
+pub use registry::{detect_kernels, KernelLanguage, KernelSpec};
 pub use session::{KernelEvent, KernelSession, KernelStatus};

@@ -8493,8 +8493,12 @@ fn cell_connection_prefers_execution_source_over_document_default(cx: &mut TestA
 fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let shared = EditorShared::new();
+    // #20：注册表化后真实命令 = RDS_KERNEL_PYTHON 指向的解释器（与 rds-kernel 集成测试同口径）
+    let python = std::env::var_os("RDS_KERNEL_PYTHON")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("python"));
     shared
-        .ensure_kernel("python3")
+        .ensure_kernel("python3", &python.to_string_lossy())
         .expect("内核启动（RDS_KERNEL_PYTHON 是否指向带 ipykernel 的解释器？）");
     shared
         .kernel_execute("python3", "1 + 1")

@@ -36,6 +36,8 @@ gpui-kit.workspace = true
 # ===== SQL 编辑器（A9 接线：中央编辑区面板 + 打开/保存）=====
 # 依赖方向：workbench → editor → engine / database / shared；editor 不反向依赖本 crate。
 editor.workspace = true
+# #20 内核注册表：workbench 宿主做探测（rds_kernel 是 editor 的已用依赖，探测函数直接复用）
+rds-kernel.workspace = true
 
 # 系统文件对话框（编辑器打开 / 另存为，A9 收尾）
 rfd.workspace = true

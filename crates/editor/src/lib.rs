@@ -127,6 +127,8 @@ pub mod language_service;
 pub mod limits;
 /// LSP 客户端（JSON-RPC 2.0 over stdio）：宿主侧 provider bridge 的数据源
 pub mod lsp;
+/// 【#20】内核注册表端口：执行源「内核」档的宿主接口与解析纯函数
+pub mod kernel;
 pub mod mode;
 pub mod model;
 /// 【#14】Jupyter mime bundle → 原生输出的纯函数分发器

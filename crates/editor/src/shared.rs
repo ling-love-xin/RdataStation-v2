@@ -78,26 +78,27 @@ pub struct ExecReceipt {
 /// 无人取走时回执队列的上限（只保留最近的一批，避免无限长）。
 const MAX_EXEC_RECEIPTS: usize = 64;
 
-/// 一个内核条目的运行态（`kernel_id` → 会话 + 事件流 + 启动解释器）
+/// 一个内核条目的运行态（`kernel_id` → 会话 + 事件流 + 启动命令）
 pub struct KernelEntry {
     /// 真内核会话（进程 + ZMQ 四通道；命令经它发出）
     pub session: rds_kernel::KernelSession,
     /// spawn 后立即取走的唯一事件流（持续 poll；`take_events` 每次都会换新通道，
     /// 但取走之后 session 内部那个就作废了——这里只持有最初那个）
     pub events: tokio::sync::mpsc::UnboundedReceiver<rds_kernel::KernelEvent>,
-    /// 启动该内核用的解释器（指示器回显；来源见 [`kernel_python_path`]）
+    /// 启动该内核用的解释器可执行路径（指示器回显；来自注册表 spec，见 [`crate::kernel`]）
     pub python: std::path::PathBuf,
 }
 
-/// 内核解释器来源：`RDS_KERNEL_PYTHON` 环境变量优先（与本机 venv 场景对齐），
-/// 否则回退系统 `python`（装了 ipykernel 即可）
+/// 【#17 → #20】旧的单解释器来源已被注册表取代（见 [`crate::kernel`]）：本函数仅保留给
+/// 测试 / 集成环境（`RDS_KERNEL_PYTHON` 优先，否则系统 `python`），不再参与 UI 路由。
 pub fn kernel_python_path() -> std::path::PathBuf {
     std::env::var_os("RDS_KERNEL_PYTHON")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("python"))
 }
 
-/// 从语言推导默认内核 id（执行源未指定时；`ExecutionSource::Kernel` 指定时用它）
+/// 从语言推导默认内核 id（**#20 已废弃**：UI 路由走 [`Self::resolve_kernel_for`]，
+/// 显式指定 / 会话默认 / 注册表第一个可用；本函数仅保留给测试断言语言→内核档位）
 pub fn default_kernel_id(language: crate::cell::CellLanguage) -> &'static str {
     match language {
         crate::cell::CellLanguage::Python => "python3",
@@ -147,6 +148,9 @@ pub struct EditorShared {
     /// 生命周期 = 笔记本生命周期：`notebook_close` 时逐个 shutdown。启动 / 执行都是
     /// 事件路径（`KernelSession::spawn` 内部起后台线程，不阻塞 UI）；render 不碰它。
     kernels: Rc<RefCell<std::collections::HashMap<String, KernelEntry>>>,
+    /// 【#20】内核注册表端口（宿主注入 `rds_kernel::detect_kernels()` 的快照；
+    /// 未注入 = 空列表，菜单如实置灰）
+    kernel_port: Rc<RefCell<Option<Rc<dyn crate::kernel::KernelsPort>>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -174,6 +178,7 @@ impl Clone for EditorShared {
             table_keys: self.table_keys.clone(),
             notebooks: self.notebooks.clone(),
             kernels: self.kernels.clone(),
+            kernel_port: self.kernel_port.clone(),
             receipts: self.receipts.clone(),
         }
     }
@@ -206,6 +211,7 @@ impl EditorShared {
             table_keys: Rc::new(RefCell::new(None)),
             notebooks: Rc::new(RefCell::new(std::collections::HashMap::new())),
             kernels: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            kernel_port: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -423,6 +429,18 @@ impl EditorShared {
         state.cells = cells;
     }
 
+    /// 【#20】回写会话默认内核（“上次用过的内核”；执行提交成功后调）
+    pub fn set_session_default_kernel(
+        &self,
+        document: &crate::model::DocumentId,
+        kernel_id: Option<String>,
+    ) {
+        let mut notebooks = self.notebooks.borrow_mut();
+        if let Some(state) = notebooks.get_mut(document) {
+            state.session.default_kernel = kernel_id;
+        }
+    }
+
     /// 【#16】重设某个单元的执行源（连接 / 内核 id；`None` = 回会话默认）；
     /// 返回是否真变（调用方按需 notify）
     pub fn set_cell_execution_source(
@@ -445,23 +463,23 @@ impl EditorShared {
         true
     }
 
-    /// 【#17】确保某个内核已启动（无则 `spawn` + 取事件流存好）；
-    /// 失败给可读原因（python 解释器没装 ipykernel / 握手超时等）
-    pub fn ensure_kernel(&self, kernel_id: &str) -> Result<(), String> {
+    /// 【#17 → #20】确保某个内核已启动（无则 `spawn` + 取事件流存好）；
+    /// `command` = 注册表解析出的解释器可执行路径（见 [`crate::kernel::resolve_kernel`]）。
+    /// 失败给可读原因（解释器没装 ipykernel / 握手超时等）
+    pub fn ensure_kernel(&self, kernel_id: &str, command: &str) -> Result<(), String> {
         let mut kernels = self.kernels.borrow_mut();
         if kernels.contains_key(kernel_id) {
             return Ok(());
         }
-        let python = kernel_python_path();
-        let mut session =
-            rds_kernel::KernelSession::spawn(&python).map_err(|e| e.to_string())?;
+        let mut session = rds_kernel::KernelSession::spawn(std::path::Path::new(command))
+            .map_err(|e| e.to_string())?;
         let events = session.take_events();
         kernels.insert(
             kernel_id.to_string(),
             KernelEntry {
                 session,
                 events,
-                python,
+                python: std::path::PathBuf::from(command),
             },
         );
         Ok(())
@@ -828,6 +846,37 @@ impl EditorShared {
     /// 【B7 切片三】注入表结构端口（**宿主调用一次**：workbench 从导航缓存读键列）
     pub fn attach_table_keys(&self, port: crate::export::TableKeysHandle) {
         *self.table_keys.borrow_mut() = Some(port);
+    }
+
+    /// 【#20】注入内核注册表端口（**宿主调用一次**：workbench 把
+    /// `rds_kernel::detect_kernels()` 的快照注进来；探测在宿主侧后台线程做一次）
+    pub fn attach_kernels(&self, port: Rc<dyn crate::kernel::KernelsPort>) {
+        *self.kernel_port.borrow_mut() = Some(port);
+    }
+
+    /// 【#20】内核注册表快照（渲染路径可调：端口实现是内存读；未接端口 = 空）
+    pub fn kernel_specs(&self) -> Vec<rds_kernel::KernelSpec> {
+        let guard = self.kernel_port.borrow();
+        guard
+            .as_ref()
+            .map(|port| port.list())
+            .unwrap_or_default()
+    }
+
+    /// 【#20】执行源「内核」档的实际内核解析（**纯函数**，见 [`crate::kernel::resolve_kernel`]）：
+    /// 显式指定 > 会话默认（上次用过的）> 注册表第一个可用；一个都没有给可读原因。
+    pub fn resolve_kernel_for(
+        &self,
+        document: &crate::model::DocumentId,
+        source: Option<&crate::cell::ExecutionSource>,
+        language: crate::cell::CellLanguage,
+    ) -> Result<rds_kernel::KernelSpec, String> {
+        let session_default = self
+            .notebook_state(document)
+            .session
+            .default_kernel
+            .clone();
+        crate::kernel::resolve_kernel(&self.kernel_specs(), source, session_default.as_deref(), language)
     }
 
     /// 【B7 切片三】某连接下表的主键列（**只在导出菜单弹出时查一次**——事件路径；

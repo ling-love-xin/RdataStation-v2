@@ -2353,11 +2353,10 @@ impl EditorHostPanel {
         cx.notify();
     }
 
-    /// 【#17】跑一个内核单元（Python / R / Julia）：
-    /// 启动（复用）内核 → 标记 Running → 提交代码 → 内核泵轮询事件回填输出
-    ///
-    /// 内核 id = 单元执行源指定（`ExecutionSource::Kernel(id)`），否则语言默认
-    /// （`shared::default_kernel_id`）。启动失败给可读原因（解释器没装 ipykernel 等）。
+    /// 【#17 → #20】跑一个内核单元（Python / R / Julia）：
+    /// 解析实际内核（显式指定 > 会话默认 > 注册表第一个可用）→ 启动（复用）内核 →
+    /// 标记 Running → 提交代码 → 内核泵轮询事件回填输出；成功后把内核回写为
+    /// 会话默认（“上次用过的内核”）。
     ///
     /// 与 SQL 分支分开读 shared（`notebook_run_cell` 里不保留对 state 的借用再调这里）
     fn run_kernel_cell(
@@ -2377,12 +2376,27 @@ impl EditorHostPanel {
             );
             return;
         }
-        // 内核 id：执行源指定优先，否则语言默认
-        let kernel_id = match &cell.execution_source {
-            Some(crate::cell::ExecutionSource::Kernel(id)) => id.clone(),
-            _ => crate::shared::default_kernel_id(cell.language).to_string(),
+        // 实际内核：执行源指定优先，否则会话默认 / 注册表第一个可用（#20 注册表路由）
+        let source = cell.execution_source.clone();
+        let language = cell.language;
+        let kernel_id = match self.shared.resolve_kernel_for(&self.document, source.as_ref(), language) {
+            Ok(spec) => spec.id.clone(),
+            Err(reason) => {
+                self.set_message(Some(reason), cx);
+                return;
+            }
         };
-        if let Err(reason) = self.shared.ensure_kernel(&kernel_id) {
+        let Some(command) = self
+            .shared
+            .kernel_specs()
+            .into_iter()
+            .find(|spec| spec.id == kernel_id)
+            .map(|spec| spec.command)
+        else {
+            self.set_message(Some(format!("内核「{kernel_id}」已从注册表消失，请重启面板")), cx);
+            return;
+        };
+        if let Err(reason) = self.shared.ensure_kernel(&kernel_id, &command) {
             self.set_message(Some(format!("内核 {kernel_id} 启动失败：{reason}")), cx);
             return;
         }
@@ -2405,6 +2419,8 @@ impl EditorHostPanel {
             self.set_message(Some(reason), cx);
             return;
         }
+        // 执行提交成功 → 回写会话默认（“上次用过的内核”）
+        self.shared.set_session_default_kernel(&self.document, Some(kernel_id));
         self.set_message(None, cx);
         self.ensure_kernel_pump(cx);
     }
@@ -2588,6 +2604,8 @@ impl EditorHostPanel {
         let entity = cx.entity();
         // 连接列表是内存快照（右下角执行源选择器数据源）；render 纯读
         let connections = self.shared.connection_options();
+        // 【#20】内核注册表快照（执行源「内核」档的菜单数据源）；render 纯读
+        let kernels = self.shared.kernel_specs();
         // render 纯读：单元编辑器实例按引用传入（不能 read 正在被 render 的面板）
         crate::view::analysis::render(
             cx,
@@ -2596,6 +2614,7 @@ impl EditorHostPanel {
             entity,
             &self.cell_editors,
             &connections,
+            &kernels,
         )
         .into_any_element()
     }

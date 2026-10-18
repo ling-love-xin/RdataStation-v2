@@ -37,8 +37,12 @@ pub struct Session {
     pub id: String,
     /// 绑定连接（`None` = 跟随当前活动连接，与 SQL 模式的 B1 同口径）
     pub default_connection: Option<String>,
-    /// 执行环境（通用模式的解释器 id；分析模式暂只跑 SQL 单元，`None` = 未绑定）
+    /// 执行环境（通用模式的解释器 id；`None` = 未绑定）
     pub env: Option<String>,
+    /// 【#20】上次用过的内核 id（分析模式「默认执行源」的记忆：执行成功后回写，
+    /// 菜单「默认（上次用过的内核）」指向它；`None` = 还没用过 → 注册表第一个可用）
+    #[serde(default)]
+    pub default_kernel: Option<String>,
 }
 
 impl Session {
@@ -48,6 +52,7 @@ impl Session {
             id: "default".to_string(),
             default_connection: None,
             env: None,
+            default_kernel: None,
         }
     }
 
@@ -57,6 +62,7 @@ impl Session {
             id: id.into(),
             default_connection,
             env,
+            default_kernel: None,
         }
     }
 }

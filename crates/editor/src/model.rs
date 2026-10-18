@@ -30,6 +30,10 @@ impl fmt::Display for DocumentId {
 }
 
 /// 编辑器模式（通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行）
+///
+/// 「本地脚本执行」走 **2b 独立链**（`EnvPort` + `run_script` → script_card），
+/// 不走能力表的 `execute` 字段——后者只表示**数据库执行**（通用模式恒 false，
+/// 保证 `talks_to_database()` 为假、不碰连接）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorMode {
     /// 通用：带高亮的记事本（无连接档；文件编辑 + 本地脚本执行）
@@ -108,7 +112,8 @@ pub enum DocumentKind {
 /// 结果去向（结果集是唯一权威，两个视图是它的投影）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputTarget {
-    /// 无结果（文本模式）
+    /// 无停靠结果区（通用模式：数据库无输出；本地脚本的 script_card 内嵌在
+    /// 结果区独立通道渲染，不经该字段，见 `EditorMode` 文档）
     None,
     /// 停靠结果面板（SQL 模式的默认视图）
     DockPanel,
@@ -130,7 +135,8 @@ pub enum LanguageService {
 /// 工具栏形态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolbarStyle {
-    /// 极简（模式指示 + 查找）
+    /// 通用档：模式指示 + 查找 + 脚本执行（环境选择器 + 运行按钮；Markdown 另有
+    /// 预览切换）。不是「无执行」——本地脚本执行走 2b 链，见 `EditorMode` 文档。
     Minimal,
     /// 完整（执行族 + 文档级动作 + 执行位置 + 连接）
     Full,
@@ -182,7 +188,8 @@ pub struct Capabilities {
     pub completion: bool,
     /// 是否启用折叠（大文件档位下会被运行时降级；候选由我们自己算，见 `fold` 模块）
     pub folding: bool,
-    /// 是否允许执行（文本模式恒为 false）
+    /// 是否允许**数据库执行**（文本模式恒为 false；通用模式的本地脚本执行走
+    /// 2b 独立链，不经过该字段，见 `EditorMode` 文档）
     pub execute: bool,
     pub output: OutputTarget,
     /// 是否显示「执行位置」（源库 / 本地加速 / 联邦）
