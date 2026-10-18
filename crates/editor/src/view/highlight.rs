@@ -352,6 +352,7 @@ mod tests {
     // 安全模式：**不通配导入**——`use super::*` 会把 gpui 的 `test` 宏带进来，
     // `#[test]` 因而解析到它自己（recursion limit reached）。依赖显式列举。
     use engine::sql::TokenClass;
+    use gpui_kit::AppContext as _;
     use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::component::input::{DocumentRangeSemanticTokensProvider as _, Rope};
 
@@ -645,5 +646,58 @@ mod tests {
                 "默认主题的 {name} 必须有色（否则 SQL 核心词整片无颜色）"
             );
         }
+    }
+
+    /// 真实装配路径实证（2026-10-19）：按 host.rs 的写法建内核编辑器 → `install(Sql)`，
+    /// 断言 **provider 装配到内核上可被观测**，并渲染一帧 + 推过 100ms 防抖（`update_semantic_tokens`
+    /// 的 timer）后仍稳定——即「装 provider → refresh → 下一帧取数」这段在真实窗口环境不 panic、不丢装配。
+    /// 颜色解析由上面两条主题测试 + `tokens_for` 单测各证一段，此处补装配与渲染段。
+    #[gpui_kit::test]
+    fn installed_sql_provider_is_observable_and_survives_a_render(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        // 容纳内核编辑器的视图：`EditorState` 实体不实现 `Render`，要经 `Editor` 组件渲染
+        struct Harness {
+            state: gpui_kit::Entity<gpui_kit::component::input::EditorState>,
+        }
+        impl gpui_kit::Render for Harness {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::component::input::Editor::new(&self.state)
+            }
+        }
+
+        let mut installed = false;
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = gpui_kit::component::input::EditorState::new(window, cx);
+                state.set_value("SELECT 1 FROM t;", window, cx);
+                crate::view::highlight::install(
+                    &mut state,
+                    cx,
+                    crate::view::highlight::HighlightKind::Sql,
+                );
+                // provider 装配必须可观测（gpui-base 的 `Lsp.semantic_tokens_provider` 公开）
+                installed = state.lsp().semantic_tokens_provider.is_some();
+                state
+            });
+            Harness { state }
+        });
+        assert!(installed, "install 后语义着色 provider 必须挂在内核上");
+
+        // 渲染一帧消费 `_pending_update`（触发 refresh_language_features → update_semantic_tokens），
+        // 推进虚拟时钟越过 100ms 防抖并让就绪任务跑完（写回缓存不可外部观测，
+        // 断言「不 panic + 视图可读」即此段在真实窗口环境稳定）。
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.executor().advance_clock(std::time::Duration::from_millis(120));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|_window, cx| {
+            let _ = view.read(cx);
+        });
     }
 }
