@@ -29,9 +29,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui_kit::component::input::{CompletionProvider, EditorState, Rope, RopeExt as _};
+use gpui_kit::component::input::{
+    CompletionProvider, EditorState, HoverProvider, Rope, RopeExt as _,
+};
 use gpui_kit::*;
-use lsp_types::{CompletionContext, CompletionResponse, Diagnostic, Position};
+use lsp_types::{CompletionContext, CompletionResponse, Diagnostic, Hover, Position};
 
 use super::client::LspClient;
 
@@ -92,6 +94,66 @@ fn build_completion_params(uri: &str, position: Position) -> serde_json::Value {
     })
 }
 
+/// 把请求转发给语言服务的 hover provider（无状态：可随时建、可共享）
+///
+/// hover 弹层由 gpui-base 编辑内核**自带**（鼠标停留 150ms 防抖 → 调 `hover()`
+/// → 结果存 `HoverPopoverState` 自动渲染 + 随鼠标离开自动收起），这里只补"数据源"：
+/// 与补全同构——后台线程走 `textDocument/hover`，把响应解析回 `Option<Hover>`。
+pub struct LspHoverProvider {
+    client: Arc<LspClient>,
+    document_uri: String,
+}
+
+impl LspHoverProvider {
+    pub fn new(client: Arc<LspClient>, document_uri: impl Into<String>) -> Self {
+        Self {
+            client,
+            document_uri: document_uri.into(),
+        }
+    }
+}
+
+impl HoverProvider for LspHoverProvider {
+    fn hover(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<Hover>>> {
+        let position = text.offset_to_position(offset);
+        let client = Arc::clone(&self.client);
+        let uri = self.document_uri.clone();
+        // `LspClient::call` 是同步阻塞：放后台线程跑，别卡 UI
+        cx.background_spawn(async move { request_hover(&client, &uri, position) })
+    }
+}
+
+/// hover 请求的超时：与补全同档（语言服务偶发慢启动）
+const HOVER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 纯逻辑（可测）：组 `textDocument/hover` 请求参数（与补全共用同一位置编码）
+fn build_hover_params(uri: &str, position: Position) -> serde_json::Value {
+    build_completion_params(uri, position)
+}
+
+/// 纯逻辑（可测）：发 hover 请求并解析响应（**阻塞**；生产在后台线程跑）
+///
+/// 语言服务没有 hover 时回 `result: null`——`from_value(null)` 解出 `None`，
+/// 内核收起弹层；有则解出 `Some(Hover)`（`contents` + 可选 `range`）。
+fn request_hover(
+    client: &LspClient,
+    uri: &str,
+    position: Position,
+) -> Result<Option<Hover>> {
+    let result = client.call(
+        "textDocument/hover",
+        build_hover_params(uri, position),
+        HOVER_TIMEOUT,
+    )?;
+    Ok(serde_json::from_value(result)?)
+}
+
 /// 纯逻辑（可测）：发补全请求并解析响应（**阻塞**；生产在后台线程跑）
 fn request_completions(
     client: &LspClient,
@@ -128,6 +190,16 @@ pub fn uninstall(state: &mut EditorState) {
     state.lsp_mut().completion_provider = None;
 }
 
+/// 【#21】装 hover provider（`EditorState::lsp_mut`；与补全并列的独立槽位，互不影响）
+pub fn install_hover(state: &mut EditorState, provider: Rc<LspHoverProvider>) {
+    state.lsp_mut().hover_provider = Some(provider);
+}
+
+/// 摘掉 hover（语言服务不可用时）
+pub fn uninstall_hover(state: &mut EditorState) {
+    state.lsp_mut().hover_provider = None;
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
@@ -136,8 +208,8 @@ mod tests {
     use gpui_kit::component::input::{Rope, RopeExt as _};
 
     use super::{
-        LspClient, build_completion_params, diagnostics_from_params, is_trigger_char,
-        request_completions,
+        LspClient, build_completion_params, build_hover_params, diagnostics_from_params,
+        is_trigger_char, request_completions, request_hover,
     };
     use crate::lsp::{LspReader, LspWriter};
 
@@ -358,6 +430,70 @@ mod tests {
         let params = serde_json::json!({ "uri": "file:///a.sql" });
         let list = diagnostics_from_params(&params).expect("缺数组时应解析成空列表");
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn hover_params_carry_uri_and_position() {
+        let position = lsp_types::Position::new(3, 7);
+        let params = build_hover_params("file:///b.py", position);
+        assert_eq!(params["textDocument"]["uri"], "file:///b.py");
+        assert_eq!(params["position"]["line"], 3);
+        assert_eq!(params["position"]["character"], 7);
+    }
+
+    #[test]
+    fn hover_request_round_trips_content() {
+        let (recv_rx, reply_tx, client) = harness();
+        let position = lsp_types::Position::new(0, 4);
+
+        let client_for_thread = client.clone();
+        let handle = std::thread::spawn(move || {
+            request_hover(&client_for_thread, "file:///b.py", position)
+        });
+
+        let (req_id, req) = next_request(&recv_rx, "textDocument/hover");
+        assert_eq!(req["params"]["textDocument"]["uri"], "file:///b.py");
+        assert_eq!(req["params"]["position"]["character"], 4);
+
+        let reply = serde_json::json!({
+            "jsonrpc": "2.0", "id": req_id,
+            "result": {
+                "contents": { "kind": "markdown", "value": "```python\ndef f():\n```\n说明" },
+                "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 5 } }
+            }
+        });
+        reply_tx
+            .send(crate::lsp::frame::encode(&serde_json::to_vec(&reply).unwrap()))
+            .unwrap();
+
+        let hover = handle.join().expect("hover 线程应结束").expect("应成功").expect("应有内容");
+        // HoverContents 无 Display：按变体取 Markup 的 value 断言
+        let value = match &hover.contents {
+            lsp_types::HoverContents::Markup(m) => m.value.clone(),
+            _ => String::new(),
+        };
+        assert!(value.contains("def f()"));
+        assert_eq!(hover.range.expect("应有 range").start.character, 2);
+    }
+
+    #[test]
+    fn hover_request_null_result_is_none() {
+        let (recv_rx, reply_tx, client) = harness();
+        let position = lsp_types::Position::new(0, 0);
+
+        let client_for_thread = client.clone();
+        let handle = std::thread::spawn(move || {
+            request_hover(&client_for_thread, "file:///b.py", position)
+        });
+
+        let (req_id, _req) = next_request(&recv_rx, "textDocument/hover");
+        let reply = serde_json::json!({ "jsonrpc": "2.0", "id": req_id, "result": null });
+        reply_tx
+            .send(crate::lsp::frame::encode(&serde_json::to_vec(&reply).unwrap()))
+            .unwrap();
+
+        let hover = handle.join().expect("hover 线程应结束").expect("应成功");
+        assert!(hover.is_none(), "null 结果应解析为无 hover");
     }
 
     #[test]

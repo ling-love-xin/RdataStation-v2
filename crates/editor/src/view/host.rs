@@ -3588,6 +3588,13 @@ impl EditorHostPanel {
                         session.uri.clone(),
                     ));
                     crate::lsp::bridge::install(state, provider);
+                    // 【#21】hover 与补全同源（语言服务）：一起挂、一起摘。
+                    // 弹层由内核自带（150ms 防抖 + 自动渲染/收起），这里只补数据源。
+                    let hover = std::rc::Rc::new(crate::lsp::bridge::LspHoverProvider::new(
+                        session.client.clone(),
+                        session.uri.clone(),
+                    ));
+                    crate::lsp::bridge::install_hover(state, hover);
                 }
             }
             crate::lsp::CompletionChoice::Sql => {
@@ -3595,6 +3602,7 @@ impl EditorHostPanel {
             }
             crate::lsp::CompletionChoice::None => {
                 crate::lsp::bridge::uninstall(state);
+                crate::lsp::bridge::uninstall_hover(state);
                 completion::uninstall(state);
             }
         }
