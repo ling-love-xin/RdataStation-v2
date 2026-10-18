@@ -140,7 +140,8 @@ pub enum ToolbarStyle {
     Minimal,
     /// 完整（执行族 + 文档级动作 + 执行位置 + 连接）
     Full,
-    /// 笔记级（会话 / 全部运行 / 重启）+ 单元级动作
+    /// 笔记级（会话 / 全部运行 / 重启）+ 单元级动作；**笔记级动作当前未实现**
+    /// （1c 留白：宿主工具栏只渲染模式指示器，见 render_toolbar 的 Notebook 分支）
     Notebook,
 }
 
@@ -184,7 +185,9 @@ impl ReadOnly {
 pub struct Capabilities {
     pub kind: DocumentKind,
     pub language: LanguageService,
-    /// 是否启用补全（大文件档位下会被运行时降级）
+    /// 本地 SQL 目录补全档（SQL 模式为真值；通用模式恒 false——.py 的 LSP 补全
+    /// 走独立判定 lsp_available，与该位无关；分析模式为 1c 预留，逐单元补全
+    /// 尚未装 provider，见 sync_completion_provider 注释）
     pub completion: bool,
     /// 是否启用折叠（大文件档位下会被运行时降级；候选由我们自己算，见 `fold` 模块）
     pub folding: bool,

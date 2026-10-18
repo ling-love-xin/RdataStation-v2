@@ -1214,7 +1214,10 @@ impl EditorHostPanel {
                     }),
             );
 
-        if mode == EditorMode::Sql {
+        // 【核对】工具栏形态以能力表为唯一分叉（不再按 mode 硬编码）：Full = SQL 组列表 +
+        // 执行位置 / 连接；Minimal = 环境 + 脚本运行；Notebook = 笔记级动作 1c 留白。
+        match crate::model::Capabilities::for_mode(mode).toolbar {
+            crate::model::ToolbarStyle::Full => {
             // 左区：组列表（T2c-5）。只有 SQL 模式的执行是“对当前文档执行”：
             // 文本模式按能力表不通信，分析模式的执行是**笔记级**动作（1c 落地）。
             let groups = self.toolbar.groups();
@@ -1237,7 +1240,8 @@ impl EditorHostPanel {
             );
             // 最右：`···` 定制面板（与 `⋯ 更多 ▾` 并存：一个是布局自定义，一个是低频动作）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
-        } else if mode == EditorMode::General {
+            }
+            crate::model::ToolbarStyle::Minimal => {
             // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
             // Markdown 文档额外有「预览 / 源码」切换（渲染态是只读视图）。
             toolbar = toolbar.child(
@@ -1252,6 +1256,9 @@ impl EditorHostPanel {
                     .child(self.render_env_picker(cx))
                     .child(self.render_run_script_button(cx)),
             );
+            }
+            // Notebook：笔记级工具栏（会话 / 全部运行 / 重启）1c 留白，当前仅模式指示器
+            crate::model::ToolbarStyle::Notebook => {}
         }
         toolbar
     }
