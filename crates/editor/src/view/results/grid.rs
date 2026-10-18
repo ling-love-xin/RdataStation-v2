@@ -103,9 +103,15 @@ pub type SortDownHook = Rc<dyn Fn(&str, bool, &mut App)>;
 /// 与「按值筛选」同一种分工：**网格只负责说“用户点了谁”**。
 pub type InsightColumnHook = Rc<dyn Fn(&str, &mut App)>;
 
+/// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行。
+/// 弹层是宿主的事（对话框生命周期归宿主），网格只负责发意图。
+pub type PreviewValueHook = Rc<dyn Fn(String, String, usize, usize, &mut App)>;
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
+    /// 【遗留 #7】查看完整值（原值原样交给面板，弹层里展示）
+    PreviewValue(String),
     /// 按值筛选（值原样交给面板）
     FilterByValue(String),
     /// 复制此值
@@ -168,6 +174,13 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     let column_name = target.column_name.as_str();
     let preview = preview_of(value);
     let mut items = vec![
+        ContextMenuItem {
+            // 【遗留 #7】查看完整值：右键菜单里的「按值筛选「预览」」只给 24 字符截断，
+            // 长值（JSON / 文本）要从这里真正看全
+            label: "查看完整值…".to_string(),
+            action: ContextAction::PreviewValue(value.to_string()),
+            separator_before: false,
+        },
         ContextMenuItem {
             label: format!("按值筛选「{preview}」"),
             action: ContextAction::FilterByValue(value.to_string()),
@@ -260,6 +273,8 @@ pub struct ResultGridDelegate {
     on_sort_down: Option<SortDownHook>,
     /// 【M8】「洞察此列」的钩子（宿主接端口时面板才注入）
     on_insight_column: Option<InsightColumnHook>,
+    /// 【遗留 #7】「查看完整值」的钩子（面板注入）
+    on_preview_value: Option<PreviewValueHook>,
     /// 【M8】这份结果能不能洞察（面板同步数据时算：见 `ResultEntry::can_insight_column`）
     insight_available: bool,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
@@ -357,6 +372,11 @@ impl ResultGridDelegate {
     /// 【M8】注入「洞察此列」钩子（宿主接了端口时面板构造一次）
     pub fn set_insight_column_hook(&mut self, hook: InsightColumnHook) {
         self.on_insight_column = Some(hook);
+    }
+
+    /// 【遗留 #7】注入「查看完整值」钩子（面板构造时一次）
+    pub fn set_preview_value_hook(&mut self, hook: PreviewValueHook) {
+        self.on_preview_value = Some(hook);
     }
 
     /// 【M8】这份结果能不能洞察（面板每次同步结果时设；钩子没装也等于不能）
@@ -1271,7 +1291,8 @@ impl TableDelegate for ResultGridDelegate {
         let insight_available = self.on_insight_column.is_some() && self.insight_available;
         let target = ContextTarget {
             value: self.cell(row, col),
-            column_name,
+            // clone 进 target：外部的 column_name 留着给「查看完整值」分支用
+            column_name: column_name.clone(),
             column,
             row,
             rows: self.view_len(),
@@ -1283,6 +1304,19 @@ impl TableDelegate for ResultGridDelegate {
                 menu = menu.separator();
             }
             match item.action {
+                ContextAction::PreviewValue(value) => {
+                    // 【遗留 #7】没接钩子就不摆这一项（能力没有就不给入口）
+                    if let Some(hook) = self.on_preview_value.clone() {
+                        // 分支内克隆副本给闭包（外部的 column_name 后续分支还要用）；
+                        // 闭包是 Fn（可多次调用）：取值必须 clone，不能 move 捕获
+                        let column_name = column_name.clone();
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| {
+                                hook(value.clone(), column_name.clone(), column, row, app)
+                            },
+                        ));
+                    }
+                }
                 ContextAction::FilterByValue(needle) => {
                     // 没接钩子就不摆这一项（能力没有就不给入口）
                     if let Some(hook) = self.on_filter_value.clone() {
@@ -1761,6 +1795,7 @@ mod tests {
         assert_eq!(
             labels,
             [
+                "查看完整值…",
                 "按值筛选「orders」",
                 "复制此值",
                 "复制此列（2 个取值）",
@@ -1772,45 +1807,50 @@ mod tests {
         );
         assert_eq!(
             items[0].action,
+            ContextAction::PreviewValue("orders".to_string()),
+            "【遗留 #7】查看完整值：值原样给面板（弹层是宿主的事）"
+        );
+        assert_eq!(
+            items[1].action,
             ContextAction::FilterByValue("orders".to_string()),
             "值原样给面板（预览只管显示）"
         );
-        assert_eq!(items[1].action, ContextAction::CopyValue("orders".to_string()));
+        assert_eq!(items[2].action, ContextAction::CopyValue("orders".to_string()));
         assert_eq!(
-            items[2].action,
+            items[3].action,
             ContextAction::CopyColumn(1),
             "复制整列认的是**数据列**下标（1 列、行号槽已折算掉）"
         );
         assert_eq!(
-            items[3].action,
+            items[4].action,
             ContextAction::CopyRow(0),
             "复制整行认的是**视图行**下标，不是列下标（两个都是数字，传反了菜单照样能摆出来）"
         );
         assert_eq!(
-            items[4].action,
+            items[5].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: false
             }
         );
         assert_eq!(
-            items[5].action,
+            items[6].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: true
             }
         );
         assert!(
-            items[4].separator_before,
+            items[5].separator_before,
             "“对整份结果的操作”那组前面要有分隔线"
         );
-        assert!(!items[6].separator_before, "冻结与排序同组");
-        assert_eq!(items[6].action, ContextAction::ToggleFreeze(1));
+        assert!(!items[7].separator_before, "冻结与排序同组");
+        assert_eq!(items[7].action, ContextAction::ToggleFreeze(1));
 
         let mut done = target;
         done.frozen = true;
         let items = context_menu_items(&done);
-        assert_eq!(items[6].label, "取消冻结此列", "已冻结时给的是反向动作");
+        assert_eq!(items[7].label, "取消冻结此列", "已冻结时给的是反向动作");
     }
 
     /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：

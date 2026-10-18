@@ -28,8 +28,8 @@ pub const SQL_EXTENSIONS: &[&str] = &["sql", "mysql", "pgsql", "psql", "ddl", "t
 /// 通用模式的脚本文件类型（扩展名 → 类型标签）
 ///
 /// 只消费「通用模式」：SQL 与分析模式有自己的语言语义（`LanguageService`），不在此列。
-/// 判定是**门控**不是高亮——高亮本体未接（内核的 `InputHighlighter` 是应用提供解析器的
-/// seam，项目未自带 py/r/rs 语法），这里只给状态栏「文件类型」段一个真值，不假装能上色。
+/// 判定是**文件类型门控**：状态栏「文件类型」段用它展示类型名；上色本体已接
+/// （`view::highlight` 按此分派 `engine::script` 词法器，遗留 #14），CSV 走表格展示不上色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptFileType {
     Python,

@@ -22,6 +22,14 @@ chrono.workspace = true
 # 分析笔记（2d）：`.rdsnote` 落盘是 JSON（cell.rs / session.rs 的序列化形状）
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+# Jupyter 渲染分发（#14）：media.rs 消费 kernel 回传的 mime bundle（Media / MediaType）；
+# image/* 的 data 是 base64 字符串，解码用 base64 crate
+jupyter-protocol.workspace = true
+base64.workspace = true
+# Python 内核执行（#17）：KernelSession 真内核协议（依赖只向下——kernel 不依赖 editor / gpui）
+rds-kernel.workspace = true
+# 内核事件流是 tokio mpsc（shared.rs 的 KernelEntry；UI 线程用 try_recv 轮询）
+tokio.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；

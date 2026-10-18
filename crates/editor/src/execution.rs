@@ -3025,6 +3025,7 @@ mod tests {
             session_id: "s1".to_string(),
             cell_id: "c1".to_string(),
             sql: "select 1".to_string(),
+            conn_id: None,
         };
         let err = NoopRunner.run_cell(&request).expect_err("默认实现必须拒绝");
         assert!(err.contains("不支持单元执行"), "{err}");
@@ -3071,6 +3072,7 @@ mod tests {
             session_id: "s1".to_string(),
             cell_id: "c1".to_string(),
             sql: "select 1".to_string(),
+            conn_id: None,
         };
         queue
             .submit(

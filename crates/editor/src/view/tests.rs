@@ -13,6 +13,7 @@ use std::rc::Rc;
 use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _};
 use gpui_kit::component::table::{TableDelegate as _, TableEvent};
 use gpui_kit::component::{Root, WindowExt as _};
+use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
     Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
@@ -231,7 +232,8 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
         );
     }
 
-    // 切到文本模式：不再上色（判定的“计划”在 `mode::plan_switch`，视图只跟随）
+    // 切到通用模式：**仍然上色**（通用模式里写的就是 SQL 脚本 / 片段，UIST 反馈要求一并
+    // 着色；与 `view::fold` 对通用 + SQL 两模式开启折叠同口径）
     shared.update(|service| {
         service.set_mode(&id, EditorMode::General);
     });
@@ -241,8 +243,8 @@ fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
         Some(EditorMode::General)
     );
     assert!(
-        !cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
-        "文本模式是纯记事本：着色器要真摘掉（留着旧 token 就会画成 SQL）"
+        cx.update(|_window, cx| panel.read(cx).highlight_installed_for_test(cx)),
+        "通用模式也要着上 SQL 色（通用模式里常常写的就是 SQL）"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
@@ -4249,6 +4251,53 @@ fn export_follows_the_filter(cx: &mut TestAppContext) {
     std::fs::remove_file(&path).ok();
 }
 
+/// 【B7 切片三】`SQL Updates` 落盘用**表结构端口**给的键列（菜单与落盘同一份 key）
+#[gpui_kit::test]
+fn export_sql_updates_uses_key_columns_from_the_table_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select * from orders");
+    // 注入假连接（绑定后 `bound_connection()` 才有值——键列查询按连接走）
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    // 注入假表结构端口：orders 表的主键是 n（与结果列一致；note 列可 SET）
+    shared.attach_table_keys(std::rc::Rc::new(OrdersKeyPort));
+    let path = export_temp_path("updates", "sql");
+    std::fs::remove_file(&path).ok();
+    attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_orders".to_string()), cx)
+        });
+    });
+
+    run_statement(
+        cx,
+        &panel,
+        "select * from orders",
+        execution::ResultPlacement::Replace,
+    );
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result(ExportFormat::SqlUpdates, cx)
+        });
+    });
+
+    let text = std::fs::read_to_string(&path).expect("要真的写出来");
+    assert!(
+        text.lines().all(|line| line.starts_with("UPDATE")),
+        "有键列时 SQL Updates 真编码成 UPDATE 语句，而不是回绝"
+    );
+    assert!(text.contains("WHERE n = 1"), "键列来自端口（n）");
+    assert!(text.contains("SET note = 'a'"), "非键列进 SET");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("导出回执");
+    assert!(message.contains("SQL Updates"), "回执说清格式：{message}");
+    std::fs::remove_file(&path).ok();
+}
+
 // ===== B14：下发源库 =====
 
 /// 假执行器（B14）：记下发筛选收到的原料，并回一条**带提示**的结果
@@ -4613,6 +4662,16 @@ fn attach_export_picker(shared: &EditorShared, path: Option<PathBuf>) -> PickedE
         path.clone()
     }));
     seen
+}
+
+/// 【B7 切片三】假表结构端口：orders 表主键 = n（测试用；见
+/// `export_sql_updates_uses_key_columns_from_the_table_port`）
+struct OrdersKeyPort;
+
+impl crate::export::TableKeysPort for OrdersKeyPort {
+    fn primary_key_columns(&self, _conn_id: &str, table: &str) -> Option<Vec<String>> {
+        (table == "orders").then(|| vec!["n".to_string()])
+    }
 }
 
 /// 导出用的临时文件路径（不写产品目录；`.cargo/config.toml` 把临时目录钉在仓库内）
@@ -5443,6 +5502,7 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_height: None,
     };
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
@@ -5526,6 +5586,7 @@ fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_height: None,
     };
 
     // ① 连接还在列表里 → 绑定真的写回文档
@@ -5677,6 +5738,7 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
+        result_height: None,
     };
     let (panel3, cx) = open_panel(cx, &shared, &id);
     legacy.toolbar = None;
@@ -5687,6 +5749,55 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel3.read(cx).toolbar_layout_for_test()),
         crate::toolbar::ToolbarLayout::default_layout(),
         "旧会话没存布局 → 恢复用默认"
+    );
+}
+
+/// 【遗留 #5】结果区分栏高度随会话走：存了就恢复；**旧会话没存（None）→ 保持面板默认**
+#[gpui_kit::test]
+fn the_result_pane_height_comes_back_with_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // ① 会话带高度 → 恢复写回面板（钳到合法区间：这里给一个超上限的值，应被钳住）
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    let mut session = crate::session::SavedSession {
+        id: "d:/sql/a.sql".to_string(),
+        path: Some("D:/sql/a.sql".to_string()),
+        mode: EditorMode::Sql,
+        channel: ExecChannel::Source,
+        connection: None,
+        content: "select 1;".to_string(),
+        cursor: 0,
+        selection: None,
+        toolbar: None,
+        schema: None,
+        tab_size: None,
+        hard_tabs: None,
+        result_height: Some(crate::ui::RESULT_MAX_HEIGHT * 2.0),
+    };
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_height_for_test()),
+        crate::ui::RESULT_MAX_HEIGHT,
+        "超上限的高度被钳到上限"
+    );
+
+    // ② 旧会话没有高度字段（None）→ 不覆盖：保持面板默认
+    session.result_height = None;
+    let (panel2, cx2) = {
+        let (shared2, id2, _s, _c) = shared_with_runner("select 1;", EditorMode::Sql);
+        let (panel2, cx2) = open_panel(cx, &shared2, &id2);
+        (panel2, cx2)
+    };
+    cx2.update(|window, cx| {
+        panel2.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+    });
+    assert_eq!(
+        cx2.update(|_window, cx| panel2.read(cx).result_height_for_test()),
+        crate::ui::RESULT_PANE_HEIGHT,
+        "旧会话没存高度 → 保持面板默认"
     );
 }
 
@@ -5708,6 +5819,7 @@ fn the_schema_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: schema.map(str::to_string),
         tab_size: None,
         hard_tabs: None,
+        result_height: None,
     };
 
     // ① schema 在列表里 → 绑定真的写回文档
@@ -7978,9 +8090,9 @@ fn analysis_mode_shows_the_empty_state_guide(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("editor-nb-empty-text").is_some(), "空态要有文本入口");
 
     // 走面板方法（与按钮回调同一条路）：加一个 SQL 单元 → 空态消失、卡片出现
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx)
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx)
         });
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -8005,32 +8117,32 @@ fn notebook_cell_actions_are_real(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 加三个单元：SQL / 文本 / SQL
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Text, cx);
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
     assert_eq!(cells.len(), 3);
     let first = cells[0].id.clone();
     let second = cells[1].id.clone();
-    assert_eq!(cells[1].kind, crate::cell::CellKind::Text);
+    assert_eq!(cells[1].language, crate::cell::CellLanguage::Markdown);
 
     // 转类型：文本 → SQL（正文原样，类型翻转）
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_convert_cell(&id, &second, cx);
+            panel.notebook_convert_cell(&id, &second, window, cx);
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
-    assert_eq!(cells[1].kind, crate::cell::CellKind::Sql, "文本转 SQL");
+    assert_eq!(cells[1].language, crate::cell::CellLanguage::Sql, "Markdown 转 SQL");
 
     // 复制第一个：副本插在后面，id 不同、正文原样
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_duplicate_cell(&id, &first, cx);
+            panel.notebook_duplicate_cell(&id, &first, window, cx);
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
@@ -8049,9 +8161,9 @@ fn notebook_cell_actions_are_real(cx: &mut TestAppContext) {
     assert_eq!(cells[1].id, third, "上移一位");
 
     // 删除第二个（原来的 third）：列表变短、id 消失
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_delete_cell(&id, &third, cx);
+            panel.notebook_delete_cell(&id, &third, window, cx);
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
@@ -8077,10 +8189,10 @@ fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 加 SQL 单元 + 一个文本单元
-    cx.update(|_window, cx| {
+    cx.update(|window, cx| {
         panel.update(cx, |panel, cx| {
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Sql, cx);
-            panel.notebook_add_cell(&id, crate::cell::CellKind::Text, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx);
         });
     });
     let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
@@ -8115,8 +8227,8 @@ fn running_a_sql_cell_applies_the_inline_output(cx: &mut TestAppContext) {
         &[format!("default:{sql_id}")],
         "执行器收到会话 + 单元 id"
     );
-    match &cells[0].output {
-        Some(crate::cell::Output::Table(entry)) => {
+    match &cells[0].outputs[0] {
+        crate::cell::Output::Table(entry) => {
             assert_eq!(entry.rows.len(), 1);
             assert_eq!(entry.columns, vec!["n".to_string()]);
             assert_eq!(entry.lineage.as_deref(), Some("单元执行"));
@@ -8168,10 +8280,10 @@ fn opening_an_rdsnote_populates_the_notebook(cx: &mut TestAppContext) {
     let state = cx.update(|_window, cx| panel.read(cx).notebook_state());
     assert_eq!(state.cells.len(), 2);
     assert_eq!(state.cells[0].id, "c1");
-    assert_eq!(state.cells[0].kind, crate::cell::CellKind::Sql);
+    assert_eq!(state.cells[0].language, crate::cell::CellLanguage::Sql);
     assert_eq!(state.cells[0].body, "select 1;");
     assert_eq!(state.cells[1].body, "# 备注");
-    assert!(state.cells.iter().all(|cell| cell.output.is_none()), "输出不跟随文件");
+    assert!(state.cells.iter().all(|cell| cell.outputs.is_empty()), "输出不跟随文件");
 
     // 层真渲染：两个单元卡片都画出来了（▶ 按钮按单元 id 存在）
     assert!(
@@ -8179,6 +8291,255 @@ fn opening_an_rdsnote_populates_the_notebook(cx: &mut TestAppContext) {
         "SQL 单元卡片渲染出来（按 id 找得到）"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 【#14】多输出渲染：一个单元带「文本 + Markdown + 图片 + HTML 表格」四条输出，
+/// 渲染后每一条都独立成块（业务键 id 逐个可找）；类型转化正确性由 media.rs 单测负责，
+/// 这里只验「输出序列真的画出来了」
+#[gpui_kit::test]
+fn analysis_cell_renders_multiple_output_blocks(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 塞一个带四条输出的单元（顺序 = 到达顺序；图片用真实 1×1 PNG，
+    // 渲染期解码不 panic）
+    let mut state = crate::cell::NotebookState::new();
+    let mut cell = crate::cell::Cell::new("c1", crate::cell::CellLanguage::Sql, "1+1");
+    cell.mark_done(crate::cell::Output::Text("2\n".to_string()));
+    cell.mark_done(crate::cell::Output::Markdown("**加粗** 正文".to_string()));
+    cell.mark_done(crate::cell::Output::Image {
+        bytes: base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .expect("1×1 PNG base64"),
+        mime: "image/png".to_string(),
+    });
+    cell.mark_done(crate::cell::Output::TableData {
+        columns: vec!["a".to_string(), "b".to_string()],
+        rows: vec![vec!["1".to_string(), "2".to_string()]],
+    });
+    state.cells = vec![cell];
+    shared.set_notebook_state(&id, state);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 四条输出块按序渲染（try_find：不在树里返回 None，隐藏/被裁也算 in-tree）
+    for ix in 0..4 {
+        assert!(
+            cx.update(|window, _| window.try_find(format!("editor-nb-output-{ix}"))).is_some(),
+            "输出块 {ix} 应渲染出来"
+        );
+    }
+    // 状态栏信息：单元 Done（渲染路径读的是共享状态）
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[0].state, crate::cell::CellState::Done);
+    assert_eq!(cells[0].outputs.len(), 4);
+}
+
+/// 【#16】右下角指示器：可执行单元有执行源按钮（默认连接），Markdown 单元没有
+#[gpui_kit::test]
+fn cell_footer_shows_source_button_only_for_executable_cells(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_connections(std::rc::Rc::new(FakeConnections::new(vec![
+        option("P_orders", "P", "orders"),
+        option("G_analytics", "G", "analytics"),
+    ])));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // SQL 单元 + Markdown 单元各一
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    let sql_id = cells[0].id.clone();
+    let md_id = cells[1].id.clone();
+
+    // 可执行单元：右下角有执行源按钮；Markdown 单元没有
+    assert!(
+        cx.update(|window, _| window.try_find(format!("editor-nb-source-{sql_id}")))
+            .is_some(),
+        "SQL 单元要渲染执行源按钮"
+    );
+    assert!(
+        cx.update(|window, _| window.try_find(format!("editor-nb-source-{md_id}")))
+            .is_none(),
+        "Markdown 单元没有执行源按钮"
+    );
+}
+
+/// 【#16】切换执行源：面板方法写 shared，同值重设 = 无操作
+#[gpui_kit::test]
+fn switching_execution_source_persists_to_shared(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_connections(std::rc::Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    let cell_id = cells[0].id.clone();
+    assert_eq!(cells[0].execution_source, None, "新单元执行源 = 会话默认");
+
+    // 切到指定连接：shared 落库
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_set_execution_source(
+                &id,
+                &cell_id,
+                Some(crate::cell::ExecutionSource::Connection("P_orders".to_string())),
+                cx,
+            );
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(
+        cells[0].execution_source,
+        Some(crate::cell::ExecutionSource::Connection("P_orders".to_string()))
+    );
+
+    // 回会话默认
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_set_execution_source(&id, &cell_id, None, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    assert_eq!(cells[0].execution_source, None, "可以切回默认");
+}
+
+/// 【#17】SQL 单元的执行连接：**执行源指定优先**，否则文档默认绑定
+#[gpui_kit::test]
+fn cell_connection_prefers_execution_source_over_document_default(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    // bind_connection 要先 ensure_connected（连接端口注入才有建连能力）
+    shared.attach_connections(std::rc::Rc::new(FakeConnections::new(vec![
+        option("P_A", "P", "a"),
+        option("P_B", "P", "b"),
+    ])));
+    let id = shared
+        .open(OpenRequest::untitled("", EditorMode::Analysis))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 文档绑定 P_A（默认）；加 SQL 单元
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_A".to_string()), cx);
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Sql, window, cx);
+        });
+    });
+    let cells = cx.update(|_window, cx| panel.read(cx).notebook_state().cells);
+    let cell_id = cells[0].id.clone();
+    let request = crate::cell::CellRequest {
+        session_id: "default".to_string(),
+        cell_id: cell_id.clone(),
+        sql: "select 1".to_string(),
+        conn_id: None,
+    };
+    // 未指定执行源 → 文档默认
+    assert_eq!(shared.cell_connection_for(&id, &request).as_deref(), Some("P_A"));
+
+    // 指定执行源 → 它优先
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_set_execution_source(
+                &id,
+                &cell_id,
+                Some(crate::cell::ExecutionSource::Connection("P_B".to_string())),
+                cx,
+            );
+        });
+    });
+    let request = crate::cell::CellRequest {
+        conn_id: Some("P_B".to_string()),
+        ..request
+    };
+    assert_eq!(shared.cell_connection_for(&id, &request).as_deref(), Some("P_B"));
+}
+
+/// 【#17】真内核链路（shared 层，不依赖 pump）：启动 → 执行 → 事件轮询 → mime 分发
+///
+/// `#[ignore]`：需要本机 ipykernel；跑法见 rds-kernel 的集成测试。
+#[gpui_kit::test]
+#[ignore = "需要本机 ipykernel（RDS_KERNEL_PYTHON 指向对应解释器）"]
+fn python_cell_runs_via_real_kernel_and_dispatches_media(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared
+        .ensure_kernel("python3")
+        .expect("内核启动（RDS_KERNEL_PYTHON 是否指向带 ipykernel 的解释器？）");
+    shared
+        .kernel_execute("python3", "1 + 1")
+        .expect("提交执行");
+
+    // 轮询事件直到 ExecuteReply（真时钟；内核回执通常 <2s）
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut outputs: Vec<crate::cell::Output> = Vec::new();
+    let mut status: Option<String> = None;
+    loop {
+        for event in shared.kernel_drain("python3") {
+            match event {
+                rds_kernel::KernelEvent::Display(media) => {
+                    outputs.extend(crate::media::media_to_outputs(&media));
+                }
+                rds_kernel::KernelEvent::Stream { text, .. } => {
+                    outputs.push(crate::cell::Output::Text(text));
+                }
+                rds_kernel::KernelEvent::ExecuteReply { status: s, .. } => {
+                    status = Some(s);
+                }
+                rds_kernel::KernelEvent::Error { ename, evalue, .. } => {
+                    outputs.push(crate::cell::Output::Error(format!("{ename}: {evalue}")));
+                }
+                rds_kernel::KernelEvent::Failed(reason) => panic!("内核通道失败：{reason}"),
+                rds_kernel::KernelEvent::Status(_) => {}
+            }
+        }
+        if status.is_some() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "内核 20s 未回执（outputs={outputs:?}）"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // `1 + 1` 的富输出：text/plain "2" → 文本输出；执行回复 ok
+    assert_eq!(status.as_deref(), Some("ok"));
+    assert!(
+        outputs.iter().any(|o| matches!(o, crate::cell::Output::Text(t) if t.trim() == "2")),
+        "text/plain 结果要分发成文本输出：{outputs:?}"
+    );
+    shared.kernel_shutdown("python3");
 }
 
 // ===== 2c：编码 / 换行 / 不可见字符显示（接线层）=====
@@ -8307,4 +8668,192 @@ fn show_whitespaces_and_invisible_toggle_through_panel(cx: &mut TestAppContext) 
     });
     assert!(!shared.document_show_invisible(&id));
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+// ===== 【遗留 #10】单元内联编辑 =====
+
+/// 一份带两个单元的 `.rdsnote`（SQL + 文本）
+fn analysis_note_two_cells() -> &'static str {
+    r###"{"version":1,"session":{"id":"default","default_connection":null,"env":null},"cells":[
+        {"id":"c1","kind":"sql","body":"select 1;"},
+        {"id":"c2","kind":"text","body":"## 备注"}]}"###
+}
+
+/// 打开分析文档 → 面板为每个单元建内核编辑器实例（编辑能力随文档就位；
+/// 渲染据此走内核，不再是纯文本）
+#[gpui_kit::test]
+fn opening_an_analysis_document_builds_a_cell_editor_per_cell(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\a.rdsnote",
+            analysis_note_two_cells(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    // 单元编辑器在事件路径建（生产=on_added_to；测试窗口没挂 Dock，手动走同一入口）
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let mut ids = cx
+        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["c1".to_string(), "c2".to_string()],
+        "每个单元都要有内核编辑器实例（键 = 稳定 cell_id；HashMap 迭代顺序不保证，先排序再比）"
+    );
+
+    // 渲染层：单元源以内核呈现（带业务键 id 的包装元素在树里，可被 headless 观察）
+    let rendered = cx
+        .update(|window, _cx| window.try_find("editor-nb-cell-source-c1").is_some());
+    assert!(rendered, "单元源在渲染树里是内核编辑器（不是纯文本回退）");
+}
+
+/// 新增 / 复制 / 删除单元时，编辑器实例与单元序列保持同步（创建 / 移除随生命周期）
+#[gpui_kit::test]
+fn cell_editors_follow_add_duplicate_and_delete(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\b.rdsnote",
+            analysis_note_two_cells(),
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 新增文本单元 → 编辑器随之建出
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_add_cell(&id, crate::cell::CellLanguage::Markdown, window, cx)
+        });
+    });
+    let keys = cx
+        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    assert!(keys.len() == 3, "新增后三个单元都有编辑器：{keys:?}");
+
+    // 复制 c1 → 副本 c1-copy 有独立编辑器
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_duplicate_cell(&id, "c1", window, cx)
+        });
+    });
+    let keys = cx
+        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    assert!(
+        keys.contains(&"c1-copy".to_string()),
+        "副本要有自己的编辑器：{keys:?}"
+    );
+
+    // 删除 c1-copy → 编辑器与订阅一并移除
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.notebook_delete_cell(&id, "c1-copy", window, cx)
+        });
+    });
+    let keys = cx
+        .update(|_window, cx| panel.read(cx).cell_editors.keys().cloned().collect::<Vec<_>>());
+    assert!(
+        !keys.contains(&"c1-copy".to_string()),
+        "删除后编辑器要移除（订阅句柄一并释放）：{keys:?}"
+    );
+}
+
+/// 回写回路：在单元的内核编辑器里真打字 → Change 事件 → 面板订阅 → 单元正文落回
+/// shared（下次运行 / 落盘读的都是编辑后的正文）
+#[gpui_kit::test]
+fn typing_in_a_cell_editor_writes_back_to_the_notebook_body(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\notes\c.rdsnote",
+            r#"{"version":1,"session":{"id":"default","default_connection":null,"env":null},"cells":[
+                {"id":"c1","kind":"sql","body":"select 1;"}]}"#,
+            EditorMode::Analysis,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_cell_editors(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 聚焦第一个单元的内核编辑器（点带业务键的包装元素；点击即聚焦）
+    cx.update(|window, cx| {
+        window.click("editor-nb-cell-source-c1", cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 真打一个字符：内核发出 Change → 面板订阅回写 shared 的单元正文
+    //（VisualTestContext 的单参版自动打到当前窗口 / 当前聚焦）
+    cx.simulate_input("x");
+
+    let body = cx.update(|_window, _cx| shared.notebook_cells(&id)[0].body.clone());
+    assert_ne!(body, "select 1;", "击键要写回笔记本正文（当前：{body}）");
+    assert!(body.contains('x'), "正文要包含刚打进去的字符：{body}");
+}
+
+/// 通用模式打开 `.md` 文档：默认源码编辑器；工具栏有「预览」切换；
+/// 切预览 → 渲染视图（TextView::markdown）出现；再切回 → 编辑器恢复。
+#[gpui_kit::test]
+fn markdown_document_toggles_between_source_and_rendered_preview(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\notes.md", "# 标题\n\n- 列表项\n");
+    // .md 走通用模式（与 SQL 文档区分）；`sync_mode` 让面板按记忆模式渲染
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 初始：源码编辑器态（预览根不出现）；工具栏有切换按钮
+    assert!(
+        cx.debug_bounds("editor-markdown-preview-toggle").is_some(),
+        "Markdown 文档工具栏应有预览切换按钮"
+    );
+    assert!(
+        cx.update(|window, _| window.try_find("markdown-preview-root"))
+            .is_none(),
+        "初始应为源码编辑器态（预览根不出现）"
+    );
+
+    // 切到预览：渲染视图出现
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_markdown_preview(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, _| window.try_find("markdown-preview-root"))
+            .is_some(),
+        "预览态应有渲染视图根"
+    );
+
+    // 再切回：源码编辑器恢复
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_markdown_preview(cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, _| window.try_find("markdown-preview-root"))
+            .is_none(),
+        "切回源码态后预览根应消失"
+    );
+}
+
+/// 非 Markdown 文档（如 `.py`）不出现预览切换按钮（切换只对 Markdown 语义有意义）
+#[gpui_kit::test]
+fn non_markdown_documents_have_no_preview_toggle(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\py\run.py", "print('hi')");
+    shared.update(|service| service.set_mode(&id, EditorMode::General));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-markdown-preview-toggle").is_none(),
+        "非 Markdown 文档不出现预览切换"
+    );
 }

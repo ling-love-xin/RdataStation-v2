@@ -29,13 +29,17 @@
 use sqlglot_rust::tokens::{Token, TokenType, Tokenizer};
 
 /// 高亮类别（视图层映射到主题的语法色板）
+///
+/// 这是 **SQL 与脚本词法器共用** 的通用类别集合：SQL 词法器（本模块）只产出前 10 类，
+/// 脚本词法器（`crate::script`，Python / R / Rust / Markdown / JSON / Log）额外产出后 5 类
+/// （常量 / 布尔 / 标题 / 标签 / 属性键），`view::highlight::token_name` 一并映射到主题词汇。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenClass {
     /// 关键字（SELECT / FROM / WHERE / JOIN …）
     Keyword,
-    /// 类型名（INT / VARCHAR / TIMESTAMPTZ …）
+    /// 类型名（INT / VARCHAR / TIMESTAMPTZ …；Rust 生命周期 `'a` 也归此类）
     Type,
-    /// 函数名（`count(` / `sum(` …；启发式判定）
+    /// 函数名（`count(` / `sum(` …；启发式判定；Rust 宏 `println!` 也归此类）
     Function,
     /// 字符串字面量（含引号本身）
     String,
@@ -45,12 +49,25 @@ pub enum TokenClass {
     Comment,
     /// 占位符（`$1` / `:name` / `?`）
     Parameter,
-    /// 标识符（表名 / 列名 / 别名）
+    /// 标识符（表名 / 列名 / 别名 / 普通变量）
     Identifier,
+    /// 变量名（Log 的 `key=value` 键；映射主题 `variable`——与 Parameter 同词汇，
+    /// 语义上区分占位符与命名变量）
+    Variable,
     /// 运算符（`+ - * / = <> || ::` …）
     Operator,
     /// 标点（`( ) , ; .` …）
     Punctuation,
+    /// 常量（`True/False/None` 之外的语义常量、日志 ERROR 级别、JSON `null`）
+    Constant,
+    /// 布尔字面量（JSON `true/false`）
+    Boolean,
+    /// 标题（Markdown ATX 标题整行）
+    Title,
+    /// 标签（Markdown 围栏 / 引用标记等行首结构标记）
+    Tag,
+    /// 属性键（JSON 对象键，字符串后紧跟 `:` 的那一段）
+    Property,
 }
 
 /// 一段高亮区间（字节偏移，始终落在字符边界上）

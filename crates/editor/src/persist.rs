@@ -474,7 +474,7 @@ mod tests {
     /// 【2d/T2d-5】分析模式保存：正文不是内核文本，而是笔记本 JSON（会话 + 单元，输出不落盘）
     #[test]
     fn analysis_mode_saves_the_notebook_json() {
-        use crate::cell::{Cell, CellKind, NotebookFile};
+        use crate::cell::{Cell, CellLanguage, NotebookFile};
 
         let dir = temp_dir("nb_save");
         let path = dir.join("note.rdsnote");
@@ -486,14 +486,14 @@ mod tests {
             .clone();
         // 塞一份带输出 / 运行过的笔记状态（输出不落盘）
         let mut state = crate::cell::NotebookState::new();
-        let mut c1 = Cell::new("c1", CellKind::Sql, "select 1");
+        let mut c1 = Cell::new("c1", CellLanguage::Sql, "select 1");
         c1.mark_done(crate::cell::Output::Text("1".to_string()));
-        state.cells = vec![c1, Cell::new("c2", CellKind::Text, "# 备注")];
+        state.cells = vec![c1, Cell::new("c2", CellLanguage::Markdown, "# 备注")];
         shared.set_notebook_state(&id, state);
 
         save_as(&shared, &id, &path).expect("另存为");
         let raw = load(&path).expect("读盘");
-        assert!(raw.contains("\"version\": 1"), "落盘的是 JSON + 版本号");
+        assert!(raw.contains("\"version\": 2"), "落盘的是 JSON + 版本号");
         assert!(!raw.contains("output"), "输出不落盘");
 
         // 从 JSON 还原：单元原样回来，输出清空
@@ -501,7 +501,7 @@ mod tests {
         let (_session, cells) = file.into_state();
         assert_eq!(cells.len(), 2);
         assert_eq!(cells[0].body, "select 1");
-        assert_eq!(cells[0].output, None, "输出不跟随文件");
+        assert!(cells[0].outputs.is_empty(), "输出不跟随文件");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -129,3 +129,15 @@ pub const NOTEBOOK_EMPTY_MAX_WIDTH: f32 = 36.0;
 
 /// 【2d】分析笔记本：单元卡片顶部工具行（徽标 + 序号 + 动作）高（1.5rem = 24px）
 pub const NOTEBOOK_CELL_HEADER_HEIGHT: f32 = 1.5;
+
+/// 【遗留 #10】分析笔记本：单元源编辑器（内核实例）的定高（12rem = 192px，
+/// 与输出区展开上限同档；多行超出由内核滚动——单元卡片不是整页，不做无限长）
+pub const NOTEBOOK_CELL_EDITOR_HEIGHT: f32 = 12.0;
+
+/// 【#14】分析笔记本：图片输出的最大宽度（36rem = 576px：与空态卡同档；
+/// matplotlib 图按 Contain 缩放，防原图撑破单元卡片）
+pub const NOTEBOOK_OUTPUT_IMAGE_MAX_WIDTH: f32 = 36.0;
+
+/// 【遗留 #7】值查看器弹层：值显示区最大高（22rem = 352px：约 20 行等宽文本；
+/// 再长就滚动——值查看器要的是「原样看全」，不是截断）
+pub const VALUE_PREVIEW_MAX_HEIGHT: f32 = 22.0;

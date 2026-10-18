@@ -78,8 +78,36 @@ pub struct ExecReceipt {
 /// 无人取走时回执队列的上限（只保留最近的一批，避免无限长）。
 const MAX_EXEC_RECEIPTS: usize = 64;
 
+/// 一个内核条目的运行态（`kernel_id` → 会话 + 事件流 + 启动解释器）
+pub struct KernelEntry {
+    /// 真内核会话（进程 + ZMQ 四通道；命令经它发出）
+    pub session: rds_kernel::KernelSession,
+    /// spawn 后立即取走的唯一事件流（持续 poll；`take_events` 每次都会换新通道，
+    /// 但取走之后 session 内部那个就作废了——这里只持有最初那个）
+    pub events: tokio::sync::mpsc::UnboundedReceiver<rds_kernel::KernelEvent>,
+    /// 启动该内核用的解释器（指示器回显；来源见 [`kernel_python_path`]）
+    pub python: std::path::PathBuf,
+}
+
+/// 内核解释器来源：`RDS_KERNEL_PYTHON` 环境变量优先（与本机 venv 场景对齐），
+/// 否则回退系统 `python`（装了 ipykernel 即可）
+pub fn kernel_python_path() -> std::path::PathBuf {
+    std::env::var_os("RDS_KERNEL_PYTHON")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("python"))
+}
+
+/// 从语言推导默认内核 id（执行源未指定时；`ExecutionSource::Kernel` 指定时用它）
+pub fn default_kernel_id(language: crate::cell::CellLanguage) -> &'static str {
+    match language {
+        crate::cell::CellLanguage::Python => "python3",
+        crate::cell::CellLanguage::R => "r",
+        crate::cell::CellLanguage::Julia => "julia",
+        crate::cell::CellLanguage::Sql | crate::cell::CellLanguage::Markdown => "python3",
+    }
+}
+
 /// 共享句柄（`Clone` 即克隆 `Rc`，各面板指向同一份状态）
-#[derive(Clone)]
 pub struct EditorShared {
     service: Rc<RefCell<EditorService>>,
     results: Rc<RefCell<ResultStore>>,
@@ -107,10 +135,48 @@ pub struct EditorShared {
     completion: Rc<RefCell<Option<CompletionHandle>>>,
     /// 【2b】环境端口：宿主注入后才有（无宿主 = 环境列表为空，通用模式运行不亮）
     env: Rc<RefCell<Option<crate::env::EnvHandle>>>,
+    /// 【LSP】语言服务端口：宿主注入后才有（无宿主 = 无语言服务，通用模式不接 LSP）
+    lsp: Rc<RefCell<Option<crate::lsp::LspPortHandle>>>,
+    /// 【B7 切片三】表结构端口（键列）：宿主注入后才有（无宿主 = 导出菜单不摆
+    /// `SQL Updates`——没有键列的 `UPDATE` 只能猜，宁可回绝）
+    table_keys: Rc<RefCell<Option<crate::export::TableKeysHandle>>>,
     /// 【2d】分析笔记状态（每文档一份：会话 + 单元序列；输出是会话级内存状态）
     notebooks: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, crate::cell::NotebookState>>>,
+    /// 【#17】分析模式的内核注册表（kernel_id → 真内核会话 + 事件流）
+    ///
+    /// 生命周期 = 笔记本生命周期：`notebook_close` 时逐个 shutdown。启动 / 执行都是
+    /// 事件路径（`KernelSession::spawn` 内部起后台线程，不阻塞 UI）；render 不碰它。
+    kernels: Rc<RefCell<std::collections::HashMap<String, KernelEntry>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
+}
+
+impl Clone for EditorShared {
+    fn clone(&self) -> Self {
+        // 全部字段都是 `Rc`，克隆 = 复制句柄（KernelEntry 不 Clone——tokio 事件接收端
+        // 只能有一个消费者，所以这里不能 derive）
+        Self {
+            service: self.service.clone(),
+            results: self.results.clone(),
+            exec: self.exec.clone(),
+            sessions: self.sessions.clone(),
+            save_path: self.save_path.clone(),
+            export_path: self.export_path.clone(),
+            insight_column: self.insight_column.clone(),
+            connections: self.connections.clone(),
+            schemas: self.schemas.clone(),
+            channels: self.channels.clone(),
+            sources: self.sources.clone(),
+            project: self.project.clone(),
+            completion: self.completion.clone(),
+            env: self.env.clone(),
+            lsp: self.lsp.clone(),
+            table_keys: self.table_keys.clone(),
+            notebooks: self.notebooks.clone(),
+            kernels: self.kernels.clone(),
+            receipts: self.receipts.clone(),
+        }
+    }
 }
 
 impl Default for EditorShared {
@@ -136,7 +202,10 @@ impl EditorShared {
             project: Rc::new(RefCell::new(None)),
             completion: Rc::new(RefCell::new(None)),
             env: Rc::new(RefCell::new(None)),
+            lsp: Rc::new(RefCell::new(None)),
+            table_keys: Rc::new(RefCell::new(None)),
             notebooks: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            kernels: Rc::new(RefCell::new(std::collections::HashMap::new())),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -354,6 +423,81 @@ impl EditorShared {
         state.cells = cells;
     }
 
+    /// 【#16】重设某个单元的执行源（连接 / 内核 id；`None` = 回会话默认）；
+    /// 返回是否真变（调用方按需 notify）
+    pub fn set_cell_execution_source(
+        &self,
+        document: &crate::model::DocumentId,
+        cell_id: &str,
+        source: Option<crate::cell::ExecutionSource>,
+    ) -> bool {
+        let mut notebooks = self.notebooks.borrow_mut();
+        let Some(state) = notebooks.get_mut(document) else {
+            return false;
+        };
+        let Some(cell) = state.cells.iter_mut().find(|cell| cell.id == cell_id) else {
+            return false;
+        };
+        if cell.execution_source == source {
+            return false;
+        }
+        cell.execution_source = source;
+        true
+    }
+
+    /// 【#17】确保某个内核已启动（无则 `spawn` + 取事件流存好）；
+    /// 失败给可读原因（python 解释器没装 ipykernel / 握手超时等）
+    pub fn ensure_kernel(&self, kernel_id: &str) -> Result<(), String> {
+        let mut kernels = self.kernels.borrow_mut();
+        if kernels.contains_key(kernel_id) {
+            return Ok(());
+        }
+        let python = kernel_python_path();
+        let mut session =
+            rds_kernel::KernelSession::spawn(&python).map_err(|e| e.to_string())?;
+        let events = session.take_events();
+        kernels.insert(
+            kernel_id.to_string(),
+            KernelEntry {
+                session,
+                events,
+                python,
+            },
+        );
+        Ok(())
+    }
+
+    /// 【#17】向某内核提交一段代码（排到单命令队列；结果经事件流回传）
+    pub fn kernel_execute(&self, kernel_id: &str, code: &str) -> Result<(), String> {
+        let kernels = self.kernels.borrow();
+        let Some(entry) = kernels.get(kernel_id) else {
+            return Err(format!("内核 {kernel_id} 未启动"));
+        };
+        entry.session.execute(code.to_string());
+        Ok(())
+    }
+
+    /// 【#17】非阻塞取走某内核当前积压的事件（UI 线程轮询；`try_recv` 不等待）
+    pub fn kernel_drain(&self, kernel_id: &str) -> Vec<rds_kernel::KernelEvent> {
+        let mut kernels = self.kernels.borrow_mut();
+        let Some(entry) = kernels.get_mut(kernel_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Ok(event) = entry.events.try_recv() {
+            out.push(event);
+        }
+        out
+    }
+
+    /// 【#17】关闭并摘除某内核（笔记本关闭时逐个调；不 panic 于未启动）
+    pub fn kernel_shutdown(&self, kernel_id: &str) {
+        let mut kernels = self.kernels.borrow_mut();
+        if let Some(entry) = kernels.remove(kernel_id) {
+            entry.session.shutdown();
+        }
+    }
+
     /// 会话切换：绑定换掉 + 全部输出 stale（T2d-2）
     pub fn switch_notebook_session(
         &self,
@@ -368,6 +512,18 @@ impl EditorShared {
     /// 提交一次**单元执行**（分析模式；走 `run_cell`，连接 / schema / 通道从服务层取）
     ///
     /// 与 [`Self::submit`] 同一口径：没有执行器 / 有执行在跑 → 如实拒绝，不静默。
+    /// 【#17】单元执行的目标连接：**执行源指定优先**，否则文档 / 会话默认
+    pub fn cell_connection_for(
+        &self,
+        document: &crate::model::DocumentId,
+        request: &crate::cell::CellRequest,
+    ) -> Option<String> {
+        request
+            .conn_id
+            .clone()
+            .or_else(|| self.service().connection_for(document))
+    }
+
     pub fn submit_cell(
         &self,
         document: crate::model::DocumentId,
@@ -376,7 +532,8 @@ impl EditorShared {
         let (connection, schema, channel) = {
             let service = self.service.borrow();
             (
-                service.connection_for(&document),
+                // 执行源指定连接优先（#17），否则文档 / 会话默认
+                self.cell_connection_for(&document, request),
                 service.schema_for(&document),
                 service.channel_for(&document),
             )
@@ -668,6 +825,22 @@ impl EditorShared {
         self.service().schema_for(id)
     }
 
+    /// 【B7 切片三】注入表结构端口（**宿主调用一次**：workbench 从导航缓存读键列）
+    pub fn attach_table_keys(&self, port: crate::export::TableKeysHandle) {
+        *self.table_keys.borrow_mut() = Some(port);
+    }
+
+    /// 【B7 切片三】某连接下表的主键列（**只在导出菜单弹出时查一次**——事件路径；
+    /// 端口实现读导航 L2 缓存，非每帧调用）。未接端口 / 查不到 = `None`
+    /// （菜单不摆 `SQL Updates`，如实降级）
+    pub fn table_key_columns(&self, conn_id: Option<&str>, table: &str) -> Option<Vec<String>> {
+        let guard = self.table_keys.borrow();
+        match (guard.as_ref(), conn_id) {
+            (Some(port), Some(conn)) => port.primary_key_columns(conn, table),
+            _ => None,
+        }
+    }
+
     /// 【T2c-3】文档字节数（状态栏「大小」微标；O(1)）
     pub fn document_len(&self, id: &DocumentId) -> usize {
         self.service().document_len(id)
@@ -832,6 +1005,35 @@ impl EditorShared {
         self.env.borrow().clone()
     }
 
+    /// 【LSP】注入语言服务端口（**宿主调用一次**：workbench / 插件宿主接「文档 → 服务」）
+    pub fn attach_lsp(&self, port: crate::lsp::LspPortHandle) {
+        *self.lsp.borrow_mut() = Some(port);
+    }
+
+    /// 【LSP】文档当前可用的语言服务（未接端口 / 宿主判无可服务 = `None`，如实）
+    pub fn lsp_service(&self, document: &DocumentId) -> Option<crate::lsp::LspSession> {
+        let port = self.lsp.borrow();
+        port.as_ref().and_then(|port| port.service(document))
+    }
+
+    /// 【LSP】取走**属于本文档**的语言服务事件（未接端口 = 空；端口按 `uri` 认领）
+    pub fn drain_lsp_events(&self, document: &DocumentId) -> Vec<crate::lsp::LspEvent> {
+        let port = self.lsp.borrow();
+        port.as_ref()
+            .map(|port| port.drain_for(document))
+            .unwrap_or_default()
+    }
+
+    /// 【LSP】本文档是否**想要**语言服务（未接端口 = false，如实）
+    ///
+    /// 与 [`Self::lsp_service`] 的分工：那个只在服务就绪时给会话，这个不管启没启都回"本该配
+    /// 服务"。面板据此在服务未起 / 被停 / 崩溃时保持轮询，重启后自动重连。
+    pub fn lsp_wants(&self, document: &DocumentId) -> bool {
+        let port = self.lsp.borrow();
+        port.as_ref()
+            .is_some_and(|port| port.wants(document))
+    }
+
     /// 是否接了补全端口（未接 = 只给关键字与函数）
     pub fn has_completion(&self) -> bool {
         self.completion.borrow().is_some()
@@ -956,16 +1158,16 @@ fn build_inline_entry(
 mod tests {
     // 安全模式：**不通配导入**
     use super::EditorShared;
-    use crate::cell::{Cell, CellKind, CellNote, CellOutcome, CellRequest, CellState, NotebookState, Output};
+    use crate::cell::{Cell, CellLanguage, CellNote, CellOutcome, CellRequest, CellState, NotebookState, Output};
     use crate::model::DocumentId;
     use crate::session::Session;
 
     fn notebook(doc: &DocumentId) -> (EditorShared, NotebookState) {
         let shared = EditorShared::new();
         let mut state = NotebookState::new();
-        let mut c1 = Cell::new("c1", CellKind::Sql, "select 1");
+        let mut c1 = Cell::new("c1", CellLanguage::Sql, "select 1");
         c1.mark_running();
-        state.cells = vec![c1, Cell::new("c2", CellKind::Text, "# 备注")];
+        state.cells = vec![c1, Cell::new("c2", CellLanguage::Markdown, "# 备注")];
         shared.set_notebook_state(doc, state.clone());
         (shared, state)
     }
@@ -1001,14 +1203,16 @@ mod tests {
         let cells = shared.notebook_cells(&doc);
         assert_eq!(cells[0].state, CellState::Done);
         assert!(
-            matches!(&cells[0].output, Some(Output::Table(entry)) if entry.columns.is_empty()),
+            matches!(&cells[0].outputs[0], Output::Table(entry) if entry.columns.is_empty()),
             "成功回执拼成内联 Table"
         );
-        assert_eq!(cells[0].output.as_ref().and_then(|o| match o {
-            Output::Table(_) => Some(()),
-            _ => None,
-        })
-        .is_some(), true);
+        assert!(
+            cells[0]
+                .outputs
+                .iter()
+                .any(|o| matches!(o, Output::Table(_))),
+            "回执输出是 Table"
+        );
     }
 
     /// 会话切换后到期的回执**不落**（会话已经换了，别把旧结果贴进新会话）
@@ -1023,7 +1227,7 @@ mod tests {
         shared.apply_cell_note(&doc, &note(&doc, "default", "c1", true));
         let cells = shared.notebook_cells(&doc);
         assert_eq!(cells[0].state, CellState::Idle, "旧会话回执不落");
-        assert_eq!(cells[0].output, None);
+        assert!(cells[0].outputs.is_empty());
         assert_eq!(shared.notebook_session(&doc).id, "s2");
         assert_eq!(shared.notebook_session(&doc).default_connection.as_deref(), Some("P_orders"));
     }
@@ -1037,7 +1241,7 @@ mod tests {
         shared.apply_cell_note(&doc, &note(&doc, "default", "c2", true));
         let cells = shared.notebook_cells(&doc);
         assert_eq!(cells[1].state, CellState::Idle);
-        assert_eq!(cells[1].output, None);
+        assert!(cells[1].outputs.is_empty());
     }
 
     /// 提交单元执行：没有执行器 = 如实拒绝（不静默）
@@ -1049,6 +1253,7 @@ mod tests {
             session_id: "default".to_string(),
             cell_id: "c1".to_string(),
             sql: "select 1".to_string(),
+            conn_id: None,
         };
         let err = shared.submit_cell(doc.clone(), &request).expect_err("没接执行器该被拒");
         assert!(!err.is_empty());
@@ -1061,7 +1266,7 @@ mod tests {
         let shared = EditorShared::new();
         let mut state = NotebookState::new();
         state.switch_session(Session::new("s9", None, Some("py".to_string())));
-        state.cells = vec![Cell::new("x1", CellKind::Sql, "select 9")];
+        state.cells = vec![Cell::new("x1", CellLanguage::Sql, "select 9")];
         shared.set_notebook_state(&doc, state.clone());
 
         assert_eq!(shared.notebook_session(&doc).id, "s9");

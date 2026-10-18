@@ -215,6 +215,26 @@ pub const TREE_ACTIVE_BAR_INSET: Pixels = px(3.);
 /// 导航分组头左侧色条宽度（2px；与激活条同宽，语义独立）
 pub const NAV_GROUP_BAR_WIDTH: Pixels = px(2.);
 
+// ===== ER 建模视图（M4）专用尺寸（rem 基准；登记在此，视图只引用） =====
+//
+// 数值来源：`docs/architecture/database/database-er-model-view-design.md` §7 / §8。
+// 布局度量由视图经 `er::view::metrics_for_theme` 把下列倍率 × 主题字号换算成逻辑像素。
+
+/// ER 实体卡片宽（15rem = 240px）
+pub const ER_CARD_WIDTH: f32 = 15.0;
+/// ER 卡片表头（表名行）高（2rem = 32px）
+pub const ER_CARD_HEADER_HEIGHT: f32 = 2.0;
+/// ER 卡片列行高（1.5rem = 24px）
+pub const ER_CARD_ROW_HEIGHT: f32 = 1.5;
+/// ER 层间水平间距（5rem = 80px）
+pub const ER_LAYER_H_GAP: f32 = 5.0;
+/// ER 同层卡片垂直间距（1.5rem = 24px）
+pub const ER_NODE_V_GAP: f32 = 1.5;
+/// ER 画布内边距（1.5rem = 24px）
+pub const ER_CANVAS_PADDING: f32 = 1.5;
+/// ER 外键连线线宽（1.5px 细线，不随字号缩放）
+pub const ER_EDGE_WIDTH: Pixels = px(1.5);
+
 // ===== 草稿箱（M5）专用尺寸（rem 基准；登记在此，视图只引用） =====
 /// 外部引用 / 回收站区域最大高度（7.5rem = 120px；超出内部滚动，保证草稿树始终有可用高度）
 pub const SCRATCHPAD_GROUP_MAX_HEIGHT: f32 = 7.5;
@@ -274,6 +294,8 @@ pub const DIALOG_STATUS_DOT_SIZE: f32 = 0.4375;
 pub const DIALOG_CHIP_RADIUS: f32 = 0.125;
 /// 「数据(JSON)」输入框宽（12.5rem = 200px；网络页 JSON 数据行）
 pub const DIALOG_JSON_INPUT_WIDTH: f32 = 12.5;
+/// 网络 / 认证配置字段输入框宽（14rem = 224px；`managers.rs` 配置管理表单）
+pub const DIALOG_NET_FIELD_WIDTH: f32 = 14.0;
 /// 名称输入框宽（11.25rem = 180px；新建文件/网络页名称行）
 pub const DIALOG_NAME_INPUT_WIDTH: f32 = 11.25;
 /// 对话框侧栏宽（12.5rem = 200px；`conn-side-panel`，与「两列行」同底等高）
@@ -300,6 +322,13 @@ pub const DIALOG_LOG_LEVEL_WIDTH: f32 = 3.25;
 /// 模块列定宽（9.75rem = 156px；超长截断，不抢消息列）
 pub const DIALOG_LOG_TARGET_WIDTH: f32 = 9.75;
 
+// ===== 状态栏 LSP 管理器浮层专用尺寸 =====
+
+/// LSP 管理器浮层宽度（15rem = 240px；容纳状态行 + 在用面板数 + 启停按钮）
+pub const STATUS_LSP_MANAGER_WIDTH: f32 = 15.0;
+/// LSP 管理器浮层与状态栏指示的间距（4px；浮层锚在状态栏上方）
+pub const STATUS_LSP_OFFSET: Pixels = px(4.);
+
 // ===== 设置页（应用级）专用尺寸（rem 基准；登记在此，视图只引用） =====
 //
 // 设置页是居中模态弹层，两栏 = 分节导航 + 内容区；尺寸自成一套，不与主界面行高混用。
@@ -321,3 +350,23 @@ pub const SETTINGS_SECTION_HEAD_HEIGHT: f32 = 1.75;
 pub const SETTINGS_CARD_RADIUS: f32 = 0.375;
 /// 分组卡内边距（0.75rem = 12px）
 pub const SETTINGS_CARD_PADDING: f32 = 0.75;
+
+// ===== 属性面板 / 连接详情卡专用尺寸（rem 基准；登记在此，视图只引用） =====
+//
+// 来源：`panels/property_panel.rs` / `panels/editor.rs` 既有布局值（2026-10-15 收口登记，
+// 消除面板内裸 `rems(N.)` 倍率）。数值为既有实现原值，视觉零变化。
+
+/// 数据页行号列宽（2rem = 32px；行号 `#N` 定宽让名称列对齐）
+pub const PROPERTY_ROW_NUMBER_WIDTH: f32 = 2.0;
+/// 洞察页状态点直径（0.625rem = 10px）
+pub const PROPERTY_STATUS_DOT_SIZE: f32 = 0.625;
+/// 指标卡最小宽（4.5rem = 72px；卡内两行文本的换行下限）
+pub const PROPERTY_CARD_MIN_WIDTH: f32 = 4.5;
+/// 关键信息 label 列宽（5.5rem = 88px；值与 label 各占半栏对齐）
+pub const PROPERTY_KEY_LABEL_WIDTH: f32 = 5.5;
+/// 子项类别左栏宽（10.5rem = 168px；类别 rail 定宽，右侧内容列吃剩余）
+pub const PROPERTY_CAT_RAIL_WIDTH: f32 = 10.5;
+/// 子项类别行高（1.75rem = 28px；行内含计数徽标，比普通行高一档）
+pub const PROPERTY_CAT_ROW_HEIGHT: f32 = 1.75;
+/// 连接详情卡「导航」列名宽（8.125rem = 130px；对象名定宽截断，右侧状态 / 徽标对齐）
+pub const DATA_NAV_COL_NAME_WIDTH: f32 = 8.125;

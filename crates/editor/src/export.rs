@@ -35,6 +35,23 @@
 
 use crate::store::ResultEntry;
 
+use std::rc::Rc;
+
+/// 【B7 切片三】表结构端口：查「连接 + 表名 → 键列」（主键；唯一列留待以后）
+///
+/// 结果区导出 `SQL Updates` 需要键列来定位行；结果集自己不知道主键
+/// （[`ResultEntry`] 只有列名与展示文本），键列由宿主给（导航侧 L2 缓存，
+/// workbench 实现见 `workbench::services::editor_table_keys`）。
+///
+/// **查不到 = `None`**（面板不猜“拿第一列当键”，菜单不摆 `SQL Updates`）：
+/// `UPDATE … WHERE 随便一列` 猜错的代价是改错行，这是本模块“宁可回绝也不猜”的口径。
+pub trait TableKeysPort {
+    /// 该连接下表的主键列名（按列序）；查不到 / 表不认识 = `None`
+    fn primary_key_columns(&self, conn_id: &str, table: &str) -> Option<Vec<String>>;
+}
+
+pub type TableKeysHandle = Rc<dyn TableKeysPort>;
+
 /// 导出格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {

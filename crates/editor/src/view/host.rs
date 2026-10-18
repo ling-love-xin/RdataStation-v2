@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
+use gpui_kit::base::text::TextView;
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
@@ -89,6 +90,15 @@ struct CommitInFlight {
     skipped: usize,
 }
 
+/// 【遗留 #7】值查看器的目标（右键「查看完整值」弹出；`value_preview` 为 `Some` 时
+/// 渲染期就弹 [`dialogs::open_value_preview`]）
+#[derive(Clone)]
+struct ValuePreview {
+    value: String,
+    column: String,
+    row: usize,
+}
+
 /// 【T2c-3 收尾】编辑内容模式：行编辑（默认，单光标）/ 列编辑（多光标）。
 ///
 /// 列编辑 = 内核多光标能力（`add_cursor_above|below`，0.7.1 经 vendor 补丁公开）；
@@ -111,6 +121,17 @@ impl EditMode {
 }
 
 /// 一份文档的编辑面板
+/// 【#17】一次进行中的内核单元执行（同一时间最多一个）
+#[derive(Clone)]
+struct KernelRun {
+    /// 目标内核（`ExecutionSource::Kernel` 指定，否则语言默认 id）
+    kernel_id: String,
+    /// 目标单元 id（事件回执按它回填输出）
+    cell_id: String,
+    /// 目标会话 id（切换会话后回执到了不落）
+    session_id: String,
+}
+
 pub struct EditorHostPanel {
     shared: EditorShared,
     document: DocumentId,
@@ -200,6 +221,11 @@ pub struct EditorHostPanel {
     ///
     /// 只活在这个面板里（尚未随会话持久化——原型同。）
     result_height: std::rc::Rc<std::cell::Cell<f32>>,
+    /// 【遗留 #7】值查看器：右键「查看完整值」弹出的目标（`Some` = 弹层开着）
+    value_preview: Option<ValuePreview>,
+    /// 【遗留 #14】CSV 表格展示：文档是 CSV 且网格已填（渲染据此走精简结果区；
+    /// 数据在 `grid` 里，不经过结果 store——CSV 没有 SQL 执行语义）
+    csv_active: bool,
     /// 【B7】「抓全量后导出」的在途状态（`None` = 没有导出在跑）
     ///
     /// 抓全量是**多轮取段**：每段回来推进一次，最后一段（没拿满）才落盘。中途换结果集、
@@ -243,6 +269,10 @@ pub struct EditorHostPanel {
     error_reason: Option<String>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
+    /// 【#17】正在跑的内核单元（同一时间最多一个，与 `has_running` 防并发一致）
+    kernel_running: Option<KernelRun>,
+    /// 【#17】内核事件轮询任务句柄（空闲即退出）
+    kernel_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
@@ -260,6 +290,23 @@ pub struct EditorHostPanel {
     ///
     /// 集合句柄借的是内核实体：面板 drop 时随内核一起释放，无需手动 `dispose`。
     invisible_decorations: Option<RangeDecorationCollection>,
+    /// 【LSP】本文档的语言服务会话（`None` = 宿主办无可用的服务；didOpen 已发）
+    lsp: Option<crate::lsp::LspSession>,
+    /// 【LSP】本文档的 LSP 文档版本（didOpen = 1，此后每次 didChange 自增）
+    lsp_version: i64,
+    /// 【LSP】语言服务是否健康（收到 IoError / EOF 后置 false → 摘 provider、停轮询）
+    lsp_alive: bool,
+    /// 【LSP】语言服务最近一次推送的诊断（与执行错误 / 词法诊断三源合并重画）
+    lsp_diagnostics: Vec<lsp_types::Diagnostic>,
+    /// 【遗留 #10】分析笔记本：单元源的内核编辑器实例（键 = 稳定 `cell_id`，不用下标；
+    /// 渲染据此用 [`Editor`] 画单元正文——原型 §4.2「源编辑区 = 内核编辑器」）
+    /// `pub(crate)`：analysis.rs（同 crate）渲染期只读取它
+    pub(crate) cell_editors: std::collections::HashMap<String, Entity<EditorState>>,
+    /// 【遗留 #10】单元编辑器的 Change 订阅（句柄即生命周期；移除单元时一并丢弃）
+    _cell_editor_subs: std::collections::HashMap<String, Subscription>,
+    /// 【遗留】通用模式 Markdown 文档的渲染态：true = 显示渲染视图（TextView::markdown），
+    /// false = 源码编辑器（默认）。仅对 `ScriptFileType::Markdown` 生效；非 markdown 文档忽略。
+    markdown_preview: bool,
 }
 
 impl EditorHostPanel {
@@ -288,14 +335,23 @@ impl EditorHostPanel {
         };
         // 分析模式的 `.rdsnote` 解析要读正文，而 `content` 稍后被 move 进编辑内核闭包——先 clone
         let notebook_content = content.clone();
+        // 语义着色类型在闭包外算好：SQL 模式与未识别扩展名走 SQL 词法，通用模式按
+        // 脚本扩展名分派（CSV 走表格展示不上色）。`service.find` 拿文档路径做判定。
+        let highlight_kind = {
+            let service = shared.service();
+            match service.find(&document) {
+                Some(doc) => highlight::kind_for_document(doc.path(), doc.mode()),
+                None => highlight::kind_for_document(None, mode),
+            }
+        };
 
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx);
             state.set_value(content, window, cx);
             state.set_readonly(editor_read_only, cx);
-            // A4：SQL 语义着色（文本模式是纯记事本，不解析不上色；分析模式留 1c 逐单元处理）
+            // A4：语义着色（SQL 词法；通用模式按脚本类型分派；CSV / 分析模式不上色）
             if highlight::is_enabled(mode) {
-                highlight::install(&mut state);
+                highlight::install(&mut state, cx, highlight_kind);
             }
             // B9：SQL 补全（候选来自宿主端口；文本模式 / 大文件档位不装）
             if shared.completion_enabled(&document) {
@@ -320,6 +376,15 @@ impl EditorHostPanel {
                     }
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
+                    // 【LSP】全文同步给语言服务（版本自增；会话健康才发，死了不写）
+                    if this.lsp_alive {
+                        if let Some(session) = this.lsp.as_ref() {
+                            this.lsp_version += 1;
+                            let _ = session
+                                .client
+                                .did_change(&session.uri, this.lsp_version, &text);
+                        }
+                    }
                     // 【B18】语句数 / 折叠候选 / 打字期诊断一律**不在事件路径上算**：
                     // 提交一份带修订号的扫描（正文要两份——服务层一份、扫描器一份，所以克隆一次），
                     // 回执由结果轮询泵回填（`drain_exec_results`）——陈旧的那份会被丢掉。
@@ -328,6 +393,10 @@ impl EditorHostPanel {
                     this.submit_scan(text.clone(), cx);
                     this.shared
                         .update(|service| service.set_content(&this.document, text));
+                    // 【遗留 #14】CSV 表格展示：编辑 CSV 文本时实时重解析进网格
+                    //（每次击键全量解析对大数据文件有开销，但 CSV 预览场景数据量
+                    //  通常可控；卡顿再换防抖泵）
+                    this.sync_csv_grid(cx);
                     // 【2c】显示隐藏字符开启时：正文变了，标注区间要跟着重算（区间是字节偏移，
                     // 文字一动就全失效；没开显示则集合为空 / 未建，直接跳过）
                     if this.shared.document_show_invisible(&this.document) {
@@ -516,6 +585,7 @@ impl EditorHostPanel {
             let filter_weak = cx.entity().downgrade();
             let sort_weak = cx.entity().downgrade();
             let insight_weak = cx.entity().downgrade();
+            let preview_weak = cx.entity().downgrade();
             // 【M8】宿主没接「洞察此列」端口就不装钩子——菜单据此不摆那一项（能力没有就不给入口）
             let insight_port = shared.insight_column_port();
             grid.update(cx, |state, _cx| {
@@ -550,6 +620,14 @@ impl EditorHostPanel {
                             },
                         ));
                 }
+                // 【遗留 #7】「查看完整值」：弹层是宿主的事（对话框生命周期归宿主），
+                // 钩子只把 值 / 列名 / 视图行 带回面板
+                state.delegate_mut().set_preview_value_hook(std::rc::Rc::new(
+                    move |value: String, column: String, _column_ix: usize, row: usize, app: &mut App| {
+                        _ = preview_weak
+                            .update(app, |panel, cx| panel.open_value_preview(&value, &column, row, cx));
+                    },
+                ));
             });
         }
 
@@ -578,7 +656,7 @@ impl EditorHostPanel {
             }
         }
 
-        Self {
+        let mut panel = Self {
             shared,
             document,
             focus_handle,
@@ -593,6 +671,8 @@ impl EditorHostPanel {
             grid,
             pending: 0,
             running_since: None,
+            kernel_running: None,
+            kernel_pump: RefCell::new(None),
             autocommit: true,
             tx_open: false,
             tx_since: None,
@@ -613,6 +693,8 @@ impl EditorHostPanel {
             error_site_key: None,
             window: window.window_handle(),
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
+            value_preview: None,
+            csv_active: false,
             pending_export: None,
             fetching_more: false,
             filter_input,
@@ -635,7 +717,26 @@ impl EditorHostPanel {
             commit_in_flight: None,
             toolbar: crate::toolbar::ToolbarLayout::default(),
             invisible_decorations: None,
-        }
+            lsp: None,
+            lsp_version: 0,
+            lsp_alive: false,
+            lsp_diagnostics: Vec::new(),
+            cell_editors: std::collections::HashMap::new(),
+            _cell_editor_subs: std::collections::HashMap::new(),
+            markdown_preview: false,
+        };
+        // 【LSP】建面板即向宿主要一次服务（有 → didOpen + 挂 provider；无 → 如实不接）
+        panel.sync_lsp_session(cx);
+        // 【LSP】新会话的 provider 装配：`new` 里的内联 install 只按 SQL 能力装，
+        // 通用模式的 LSP provider 走这里（`sync_mode` 只在切模式时跑，新建不经过它）
+        panel.editor.update(cx, |state, _cx| panel.sync_completion_provider(state));
+        // 【遗留 #14】CSV 表格展示：打开即把内容解析进结果网格（空文本也是合法 CSV，
+        // 给一个空表而非不显示）
+        panel.sync_csv_grid(cx);
+        // 【遗留 #10】单元编辑器**不在构造期创建**：构造上下文里 `cx.new` + 订阅会
+        // 触发「面板正在被更新」重入 panic。建实例走事件路径——`on_added_to`
+        // （面板进 Dock）与单元增删方法。
+        panel
     }
 
     pub fn document(&self) -> &DocumentId {
@@ -808,6 +909,8 @@ impl EditorHostPanel {
             // 【T2c-4 余项】缩进随会话走（文档级权威值）
             tab_size: Some(self.shared.document_tab_size(&self.document)),
             hard_tabs: Some(self.shared.document_hard_tabs(&self.document)),
+            // 【遗留 #5】结果区分栏高度随会话走（用户拖出来的比例是布局的一部分）
+            result_height: Some(self.result_height.get()),
         })
     }
 
@@ -876,6 +979,11 @@ impl EditorHostPanel {
         }
         if let Some(hard) = session.hard_tabs {
             self.set_hard_tabs(hard, cx);
+        }
+        // 【遗留 #5】结果区分栏高度：旧会话没存（`None`）→ 保持默认，不覆盖当前；
+        // 值钳到合法区间（与拖拽条 `size_range` 同一套上下界）
+        if let Some(height) = session.result_height {
+            self.result_height.set(height.clamp(ui::RESULT_MIN_HEIGHT, ui::RESULT_MAX_HEIGHT));
         }
         cx.notify();
     }
@@ -1011,12 +1119,16 @@ impl EditorHostPanel {
             .is_some()
     }
 
+    /// 【遗留 #5】结果区分栏高度（rem；测试断言「会话恢复带高度回来」用）
+    pub fn result_height_for_test(&self) -> f32 {
+        self.result_height.get()
+    }
+
     /// 【A4】装上内核的那个着色器声明的 token 名（供测试断言「装的是 SQL 着色器」）
     ///
     /// 名字必须落在活跃主题的词汇里，否则内核会静默跳过该 token——所以这份图例就是「染不染色」
     /// 的对外契约（见 `crate::view::highlight::TOKEN_NAMES`）。
-    pub fn highlight_legend_for_test(&self, cx: &App) -> Vec<String> {
-        self.editor
+    pub fn highlight_legend_for_test(&self, cx: &App) -> Vec<String> {        self.editor
             .read(cx)
             .lsp()
             .semantic_tokens_provider
@@ -1079,6 +1191,8 @@ impl EditorHostPanel {
                     .small()
                     // 测试按选择器断言“这个模式该有哪些控件”：模式与工具栏分层不是装饰
                     .debug_selector(|| "editor-mode-indicator".to_string())
+                    // 原型 ⑯：图标 + 模式名 + ▾（图标由 toolbar 层的纯函数给出）
+                    .icon(crate::toolbar::mode_icon(mode))
                     .label(format!("{} ▾", mode.label()))
                     .dropdown_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
@@ -1125,17 +1239,52 @@ impl EditorHostPanel {
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
         } else if mode == EditorMode::General {
             // 【2b】通用模式：环境选择器 + 运行按钮（无连接档：不摆执行位置 / 连接面包屑）
+            // Markdown 文档额外有「预览 / 源码」切换（渲染态是只读视图）。
             toolbar = toolbar.child(
                 div()
                     .ml_auto()
                     .h_flex()
                     .items_center()
                     .gap_1()
+                    .when(self.is_markdown_document(), |row| {
+                        row.child(self.render_markdown_preview_toggle(cx))
+                    })
                     .child(self.render_env_picker(cx))
                     .child(self.render_run_script_button(cx)),
             );
         }
         toolbar
+    }
+
+    /// 当前文档是否为 Markdown（通用模式下的 `.md` 脚本类型）。决定「预览」切换是否出现。
+    fn is_markdown_document(&self) -> bool {
+        let Some(path) = self.document_path() else {
+            return false;
+        };
+        crate::mode::script_file_type(&path) == Some(crate::mode::ScriptFileType::Markdown)
+    }
+
+    /// 【遗留】Markdown 文档「预览 / 源码」切换按钮（通用模式工具栏右侧）。
+    /// 预览态 = 只读渲染视图（TextView::markdown），源码态 = 内核编辑器。
+    fn render_markdown_preview_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let previewing = self.markdown_preview;
+        Button::new("editor-markdown-preview-toggle")
+            .ghost()
+            .small()
+            // 测试按选择器断言「预览态下渲染视图出现 / 源码态下编辑器出现」
+            .debug_selector(|| "editor-markdown-preview-toggle".to_string())
+            .label(if previewing { "源码" } else { "预览" })
+            .toggled(previewing)
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.toggle_markdown_preview(cx));
+            })
+    }
+
+    /// 切换 Markdown 渲染态：预览 ↔ 源码编辑器（纯状态切换，渲染由 render 分支体现）。
+    pub(crate) fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
+        self.markdown_preview = !self.markdown_preview;
+        cx.notify();
     }
 
     /// 【2b】通用模式的环境选择器（工具栏右侧）：环境名 + 版本 ▾；未接端口 / 空列表如实置灰。
@@ -1914,16 +2063,72 @@ impl EditorHostPanel {
 
     // ===== 【2d】分析笔记本：单元动作（状态在 `EditorShared` 的笔记本持有器） =====
 
+    /// 【遗留 #10】把笔记本现有单元的编辑器实例补齐（面板进 Dock / 测试入口调用；
+    /// 渲染期只读不建实体，创建一律走事件路径——构造期建会重入 panic）
+    pub(crate) fn sync_cell_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document_mode() != Some(EditorMode::Analysis) {
+            return;
+        }
+        let cells = self.notebook_state().cells;
+        for cell in &cells {
+            self.ensure_cell_editor(cell, window, cx);
+        }
+    }
+
+    /// 【遗留 #10】为一个单元确保内核编辑器实例存在（无则创建 + 订阅 Change → 回写正文）
+    ///
+    /// 订阅挂在单元编辑器实体上：Change 事件从它发出，面板此刻不在更新中，
+    /// 回写 shared 不会重入（gpui-kit-dev「不要在回调里重入 update 当前实体」）。
+    fn ensure_cell_editor(&mut self, cell: &crate::cell::Cell, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cell_editors.contains_key(&cell.id) {
+            return;
+        }
+        let body = cell.body.clone();
+        // 内核编辑器语言 = 单元语言的持久化键（EditorState::language 吃 "sql"/"markdown" 等）
+        let language = cell.language.as_key();
+        let editor = cx.new(|cx| {
+            // `language` 是消费式 builder：链在 `new` 后面
+            let mut state = EditorState::new(window, cx).language(language);
+            state.set_value(body, window, cx);
+            state
+        });
+        let document = self.document.clone();
+        let shared = self.shared.clone();
+        let cell_id = cell.id.clone();
+        // 订阅挂面板上下文会 read 面板（subscribe_in 的 ensure_window），面板正被
+        // update 时直接 panic；改用无窗口版 `subscribe`（回调里不需要 window，
+        // 只回写 shared）——派发时面板已不在更新中
+        let sub = cx.subscribe(
+            &editor,
+            move |_this, state, event: &InputEvent, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                // 正文从单元编辑器实体读（事件路径，可直接 read）
+                let text = state.read(cx).text().to_string();
+                let mut cells = shared.notebook_cells(&document);
+                if let Some(target) = cells.iter_mut().find(|c| c.id == cell_id) {
+                    target.body = text;
+                }
+                shared.set_notebook_cells(&document, cells);
+                cx.notify();
+            },
+        );
+        self.cell_editors.insert(cell.id.clone(), editor);
+        self._cell_editor_subs.insert(cell.id.clone(), sub);
+    }
+
     /// 取本文档的笔记状态（渲染用快照）
     pub(crate) fn notebook_state(&self) -> crate::cell::NotebookState {
         self.shared.notebook_state(&self.document)
     }
 
-    /// 新增一个单元（追加到序列尾部；新建即 Idle）
+    /// 新增一个单元（追加到序列尾部；新建即 Idle，执行源默认 = 会话）
     pub(crate) fn notebook_add_cell(
         &mut self,
         _document: &DocumentId,
-        kind: crate::cell::CellKind,
+        language: crate::cell::CellLanguage,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut state = self.notebook_state();
@@ -1935,14 +2140,38 @@ impl EditorHostPanel {
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0)
         );
-        let body = if kind.is_executable() {
-            "select 1;".to_string()
-        } else {
-            String::new()
+        let body = match language {
+            crate::cell::CellLanguage::Sql => "select 1;".to_string(),
+            crate::cell::CellLanguage::Markdown => String::new(),
+            // Python / R / Julia：给一段最小可执行样板，用户一进来就知道能跑
+            crate::cell::CellLanguage::Python => "print('hello')".to_string(),
+            crate::cell::CellLanguage::R => "print(1 + 1)".to_string(),
+            crate::cell::CellLanguage::Julia => "println(1 + 1)".to_string(),
         };
-        state.cells.push(crate::cell::Cell::new(id, kind, body));
+        state.cells.push(crate::cell::Cell::new(id, language, body));
         self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【遗留 #10】新单元同步建内核编辑器（编辑能力随单元出现就位）
+        if let Some(last) = self.notebook_state().cells.last() {
+            let cell = last.clone();
+            self.ensure_cell_editor(&cell, window, cx);
+        }
         cx.notify();
+    }
+
+    /// 【#16】重设单元执行源（连接 / 内核；`None` = 会话默认）；同值 = 无操作
+    pub(crate) fn notebook_set_execution_source(
+        &mut self,
+        _document: &DocumentId,
+        id: &str,
+        source: Option<crate::cell::ExecutionSource>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .shared
+            .set_cell_execution_source(&self.document, id, source)
+        {
+            cx.notify();
+        }
     }
 
     /// 删除一个单元（按 id；不存在 = 忽略）
@@ -1950,11 +2179,15 @@ impl EditorHostPanel {
         &mut self,
         _document: &DocumentId,
         id: &str,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut state = self.notebook_state();
         state.cells.retain(|cell| cell.id != id);
         self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【遗留 #10】编辑器实例与订阅一并丢弃（句柄即生命周期）
+        self.cell_editors.remove(id);
+        self._cell_editor_subs.remove(id);
         cx.notify();
     }
 
@@ -1984,6 +2217,7 @@ impl EditorHostPanel {
         &mut self,
         _document: &DocumentId,
         id: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut state = self.notebook_state();
@@ -1991,13 +2225,18 @@ impl EditorHostPanel {
             return;
         };
         let original = state.cells[pos].clone();
-        let copy = crate::cell::Cell::new(
+        let mut copy = crate::cell::Cell::new(
             format!("{}-copy", original.id),
-            original.kind,
+            original.language,
             original.body,
         );
+        // 副本继承执行源（复制的就是同一语言的同一执行目标）
+        copy.execution_source = original.execution_source.clone();
         state.cells.insert(pos + 1, copy);
         self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【遗留 #10】副本同步建编辑器实例（新 id）
+        let copy = self.notebook_state().cells[pos + 1].clone();
+        self.ensure_cell_editor(&copy, window, cx);
         cx.notify();
     }
 
@@ -2006,20 +2245,32 @@ impl EditorHostPanel {
         &mut self,
         _document: &DocumentId,
         id: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut state = self.notebook_state();
         let Some(cell) = state.cell_mut(id) else {
             return;
         };
-        cell.kind = if cell.kind == crate::cell::CellKind::Sql {
-            crate::cell::CellKind::Text
+        // SQL ↔ Markdown 互转（其余语言本版本不做 convert：python 单元要换执行目标，
+        // 属于 #17 的职责）
+        cell.language = if cell.language == crate::cell::CellLanguage::Sql {
+            crate::cell::CellLanguage::Markdown
         } else {
-            crate::cell::CellKind::Sql
+            crate::cell::CellLanguage::Sql
         };
+        cell.execution_source = None;
         cell.state = crate::cell::CellState::Idle;
-        cell.output = None;
+        cell.outputs.clear();
         self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【遗留 #10】类型翻转 → 编辑器语言跟着变：丢弃旧实例重建（正文原样由
+        // `ensure_cell_editor` 从 shared 读，不需要手动搬运）
+        self.cell_editors.remove(id);
+        self._cell_editor_subs.remove(id);
+        if let Some(cell) = self.notebook_state().cells.iter().find(|c| c.id == id) {
+            let cell = cell.clone();
+            self.ensure_cell_editor(&cell, window, cx);
+        }
         cx.notify();
     }
 
@@ -2037,23 +2288,46 @@ impl EditorHostPanel {
         }
         // 会话 id 先克隆出来（`cell_mut` 会可变借用 state，不能同时借 `state.session`）
         let session_id = state.session.id.clone();
-        let Some(cell) = state.cell_mut(id) else {
-            return;
+        // 判据先读出来、放开借用（内核分支要在 shared 上另起读，不能挂在同一个借用上）
+        let (is_executable, is_sql, is_empty) = {
+            let Some(cell) = state.cell_mut(id) else {
+                return;
+            };
+            (
+                cell.language.is_executable(),
+                cell.language == crate::cell::CellLanguage::Sql,
+                cell.body.trim().is_empty(),
+            )
         };
-        if !cell.kind.is_executable() {
-            self.set_message(Some("文本单元不可执行（只能做备注）".to_string()), cx);
+        if !is_executable {
+            self.set_message(Some("Markdown 单元不可执行（只能做备注）".to_string()), cx);
             return;
         }
-        if cell.body.trim().is_empty() {
+        // SQL 走执行链（跑在连接上：单元指定连接优先，否则会话默认）；
+        // Python / R / Julia 走内核执行（KernelSession，见 `run_kernel_cell`）
+        if !is_sql {
+            self.run_kernel_cell(&session_id, id, cx);
+            return;
+        }
+        if is_empty {
             self.set_message(Some("这个 SQL 单元是空的，没有可执行的语句".to_string()), cx);
             return;
         }
+        let Some(cell) = state.cell_mut(id) else {
+            return;
+        };
+        // 执行源指定的连接（None = 文档 / 会话默认）
+        let conn_id = match &cell.execution_source {
+            Some(crate::cell::ExecutionSource::Connection(id)) => Some(id.clone()),
+            _ => None,
+        };
         let sql = cell.body.clone();
         cell.mark_running();
         let request = crate::cell::CellRequest {
             session_id,
             cell_id: id.to_string(),
             sql,
+            conn_id,
         };
         self.shared.set_notebook_cells(&self.document, state.cells);
         match self.shared.submit_cell(self.document.clone(), &request) {
@@ -2070,13 +2344,181 @@ impl EditorHostPanel {
                 let mut state = self.notebook_state();
                 if let Some(cell) = state.cell_mut(id) {
                     cell.state = crate::cell::CellState::Idle;
-                    cell.output = None;
+                    cell.outputs.clear();
                 }
                 self.shared.set_notebook_cells(&self.document, state.cells);
                 self.set_message(Some(reason), cx);
             }
         }
         cx.notify();
+    }
+
+    /// 【#17】跑一个内核单元（Python / R / Julia）：
+    /// 启动（复用）内核 → 标记 Running → 提交代码 → 内核泵轮询事件回填输出
+    ///
+    /// 内核 id = 单元执行源指定（`ExecutionSource::Kernel(id)`），否则语言默认
+    /// （`shared::default_kernel_id`）。启动失败给可读原因（解释器没装 ipykernel 等）。
+    ///
+    /// 与 SQL 分支分开读 shared（`notebook_run_cell` 里不保留对 state 的借用再调这里）
+    fn run_kernel_cell(
+        &mut self,
+        session_id: &str,
+        cell_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut state = self.notebook_state();
+        let Some(cell) = state.cell_mut(cell_id) else {
+            return;
+        };
+        if cell.body.trim().is_empty() {
+            self.set_message(
+                Some(format!("这个 {} 单元是空的，没有可执行的代码", cell.language.label())),
+                cx,
+            );
+            return;
+        }
+        // 内核 id：执行源指定优先，否则语言默认
+        let kernel_id = match &cell.execution_source {
+            Some(crate::cell::ExecutionSource::Kernel(id)) => id.clone(),
+            _ => crate::shared::default_kernel_id(cell.language).to_string(),
+        };
+        if let Err(reason) = self.shared.ensure_kernel(&kernel_id) {
+            self.set_message(Some(format!("内核 {kernel_id} 启动失败：{reason}")), cx);
+            return;
+        }
+        let code = cell.body.clone();
+        cell.mark_running();
+        self.kernel_running = Some(KernelRun {
+            kernel_id: kernel_id.clone(),
+            cell_id: cell_id.to_string(),
+            session_id: session_id.to_string(),
+        });
+        self.shared.set_notebook_cells(&self.document, state.cells);
+        if let Err(reason) = self.shared.kernel_execute(&kernel_id, &code) {
+            self.kernel_running = None;
+            let mut state = self.notebook_state();
+            if let Some(cell) = state.cell_mut(cell_id) {
+                cell.state = crate::cell::CellState::Idle;
+                cell.outputs.clear();
+            }
+            self.shared.set_notebook_cells(&self.document, state.cells);
+            self.set_message(Some(reason), cx);
+            return;
+        }
+        self.set_message(None, cx);
+        self.ensure_kernel_pump(cx);
+    }
+
+    /// 【#17】内核事件泵：60ms 一拍轮询当前内核单元的事件，回填输出直到 ExecuteReply /
+    /// Failed（内核空闲即退出循环，下次执行重新起）
+    fn ensure_kernel_pump(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.kernel_pump.borrow().as_ref()
+            && !task.is_ready()
+        {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(60)).await;
+                let keep_going = weak
+                    .update(cx, |this, cx| {
+                        let before = this.kernel_running.is_some();
+                        this.drain_kernel_events(cx);
+                        if before {
+                            cx.notify();
+                        }
+                        this.kernel_running.is_some()
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    return;
+                }
+            }
+        });
+        *self.kernel_pump.borrow_mut() = Some(task);
+    }
+
+    /// 【#17】取走内核事件并落到当前运行的单元：
+    /// 流式输出实时上屏（Display / Stream 追加），ExecuteReply 收口（成功置 Done /
+    /// 失败置 Error），Failed 给原因
+    fn drain_kernel_events(&mut self, _cx: &mut Context<Self>) {
+        let Some(run) = self.kernel_running.clone() else {
+            return;
+        };
+        let events = self.shared.kernel_drain(&run.kernel_id);
+        if events.is_empty() {
+            return;
+        }
+        let mut state = self.notebook_state();
+        // 会话 id 先克隆（`cell_mut` 之后不能同时借 `state.session`）
+        let session_id = state.session.id.clone();
+        let Some(cell) = state.cell_mut(&run.cell_id) else {
+            // 单元没了：执行作废（不再等回执）
+            self.kernel_running = None;
+            return;
+        };
+        // 会话已切换：回执不落，执行作废
+        if session_id != run.session_id {
+            self.kernel_running = None;
+            cell.state = crate::cell::CellState::Idle;
+            cell.outputs.clear();
+            self.shared.set_notebook_cells(&self.document, state.cells);
+            return;
+        }
+        let mut finished = false;
+        let mut failed_reason: Option<String> = None;
+        for event in events {
+            match event {
+                rds_kernel::KernelEvent::Display(media) => {
+                    // mime bundle → 原生输出（图片 / 表格 / markdown / 文本）
+                    let outputs = crate::media::media_to_outputs(&media);
+                    cell.outputs.extend(outputs);
+                }
+                rds_kernel::KernelEvent::Stream { name, text } => {
+                    // stdout 无前缀；stderr 带标记（如实反映来源）
+                    if name == "stderr" {
+                        cell.outputs
+                            .push(crate::cell::Output::Text(format!("stderr: {text}")));
+                    } else {
+                        cell.outputs.push(crate::cell::Output::Text(text));
+                    }
+                }
+                rds_kernel::KernelEvent::ExecuteReply { status, .. } => {
+                    finished = true;
+                    if status != "ok" {
+                        failed_reason = Some("内核返回执行失败".to_string());
+                    }
+                }
+                rds_kernel::KernelEvent::Error { ename, evalue, .. } => {
+                    cell.outputs.push(crate::cell::Output::Error(format!(
+                        "{ename}: {evalue}"
+                    )));
+                }
+                rds_kernel::KernelEvent::Status(_) => {}
+                rds_kernel::KernelEvent::Failed(reason) => {
+                    finished = true;
+                    failed_reason = Some(reason);
+                }
+            }
+        }
+        if finished {
+            self.kernel_running = None;
+            if let Some(reason) = failed_reason {
+                cell.state = crate::cell::CellState::Error;
+                if !cell
+                    .outputs
+                    .iter()
+                    .any(|o| matches!(o, crate::cell::Output::Error(_)))
+                {
+                    cell.outputs.push(crate::cell::Output::Error(reason));
+                }
+            } else {
+                cell.state = crate::cell::CellState::Done;
+            }
+        }
+        self.shared.set_notebook_cells(&self.document, state.cells);
     }
 
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
@@ -2119,6 +2561,20 @@ impl EditorHostPanel {
             if self.show_welcome() {
                 return self.render_welcome_page(cx);
             }
+            // 【遗留】通用模式 Markdown 文档的渲染态：渲染视图（只读）替代源码编辑器。
+            // 判据 = 预览开关 + 文档类型是 Markdown；其余文档一律走编辑器。
+            if self.markdown_preview && self.is_markdown_document() {
+                let source = self
+                    .with_document(|doc| doc.content().to_string())
+                    .unwrap_or_default();
+                // 外层带 id + test_support 的容器：headless 测试用 find 断言渲染视图出现
+                return div()
+                    .id("markdown-preview-root")
+                    .test_support()
+                    .size_full()
+                    .child(TextView::markdown("md-preview", source).scrollable(true).size_full())
+                    .into_any_element();
+            }
             let read_only = self.editor_read_only();
             return Editor::new(&self.editor)
                 .appearance(false)
@@ -2130,7 +2586,18 @@ impl EditorHostPanel {
         // 分析模式：笔记本正文（单元卡片列表 / 空态引导卡）。编辑区可滚动。
         let state = self.notebook_state();
         let entity = cx.entity();
-        crate::view::analysis::render(cx, &state, &self.document, entity).into_any_element()
+        // 连接列表是内存快照（右下角执行源选择器数据源）；render 纯读
+        let connections = self.shared.connection_options();
+        // render 纯读：单元编辑器实例按引用传入（不能 read 正在被 render 的面板）
+        crate::view::analysis::render(
+            cx,
+            &state,
+            &self.document,
+            entity,
+            &self.cell_editors,
+            &connections,
+        )
+        .into_any_element()
     }
 
     /// 是否显示欢迎页：启动空白文档（未命名 + 内容为空 + 用户没点过「开始编写」）。
@@ -3052,13 +3519,21 @@ impl EditorHostPanel {
             return;
         };
         let read_only = self.editor_read_only();
+        // 语义着色类型：模式切换后按新模式与文档扩展名重算（脚本分派 / CSV 不上色）
+        let highlight_kind =
+            self.with_document(|doc| highlight::kind_for_document(doc.path(), doc.mode()))
+                .unwrap_or(highlight::HighlightKind::None);
+
+        // 【LSP】模式切换时重新向宿主要服务（插件加载 / 宿主判定变了能接上；没变 = 无操作）
+        self.sync_lsp_session(cx);
 
         self.editor.update(cx, |state, cx| {
             state.set_readonly(read_only, cx);
             if highlight::is_enabled(mode) {
-                highlight::install(state);
+                highlight::install(state, cx, highlight_kind);
             } else {
-                // 非 SQL 模式去掉着色（已缓存的 token 会随内容变化失效）
+                // 未启用的模式（当前只剩分析）：摘掉着色器，不再取新 token。内核的
+                // token 缓存没有公开的清入口，摘除后旧 token 要等下一次文本变更才失效。
                 state.lsp_mut().semantic_tokens_provider = None;
             }
             // B9：补全按能力表装 / 摘（文本模式不接，分析模式留 1c 逐单元）
@@ -3071,13 +3546,85 @@ impl EditorHostPanel {
 
     /// 按当前文档的能力与档位装 / 摘补全 provider（**唯一开关处**：新建与切模式都走它）
     ///
-    /// 真值在 `EditorShared::completion_enabled`（能力表 + 编辑器只读 + 大文件档位）——
-    /// 这里只把那个判断落到内核上，不另写一套判据。
+    /// 三选一（纯逻辑在 [`crate::lsp::host::choose_completion`]）：
+    /// - SQL 模式 → 本地 SQL 目录补全（`completion_enabled`：能力表 + 只读 + 大文件档位）；
+    /// - 通用 / 分析模式且语言服务健康可编辑 → LSP 补全（请求转发给语言服务）；
+    /// - 都没有 → 摘干净（两个 provider 都摘，不残留）。
     fn sync_completion_provider(&self, state: &mut gpui_kit::component::input::EditorState) {
-        if self.shared.completion_enabled(&self.document) {
-            completion::install(state, self.shared.clone(), self.document.clone());
-        } else {
-            completion::uninstall(state);
+        let sql_enabled = self.shared.completion_enabled(&self.document);
+        let lsp_available = self.lsp_alive
+            && self.lsp.is_some()
+            && !self.editor_read_only()
+            && !self
+                .with_document(|doc| doc.tier().disables_completion())
+                .unwrap_or(true);
+        let mode = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General);
+        match crate::lsp::host::choose_completion(mode, lsp_available, sql_enabled) {
+            crate::lsp::CompletionChoice::Lsp => {
+                if let Some(session) = self.lsp.as_ref() {
+                    let provider = std::rc::Rc::new(crate::lsp::bridge::LspCompletionProvider::new(
+                        session.client.clone(),
+                        session.uri.clone(),
+                    ));
+                    crate::lsp::bridge::install(state, provider);
+                }
+            }
+            crate::lsp::CompletionChoice::Sql => {
+                completion::install(state, self.shared.clone(), self.document.clone());
+            }
+            crate::lsp::CompletionChoice::None => {
+                crate::lsp::bridge::uninstall(state);
+                completion::uninstall(state);
+            }
+        }
+    }
+
+    /// 【LSP】按当前文档重新向宿主要服务（建面板 / 切模式 / 泵每拍都调用）
+    ///
+    /// 会话有变化才动作：换会话先给旧服务发 `didClose`（尽力），清旧诊断，再 `didOpen`
+    /// 新会话并置健康；没变化 = 无操作（不重复 didOpen）。服务不可得 = 如实摘干净。
+    ///
+    /// **两个判据都不可省**：① `uri` / `language_id` 相同也可能是**换了连接**（server 崩溃
+    /// 重启后 uri 不变），所以并上 `Arc::ptr_eq`；② 末尾**无条件**按「会话健康」或「本该有
+    /// 服务」决定是否保持泵——`.py` 文档初始化期间正是「没会话但想要」，early return 会错过它。
+    fn sync_lsp_session(&mut self, cx: &mut Context<Self>) {
+        let session = self.shared.lsp_service(&self.document);
+        let same = match (&self.lsp, &session) {
+            (Some(old), Some(new)) => {
+                old.uri == new.uri
+                    && old.language_id == new.language_id
+                    && std::sync::Arc::ptr_eq(&old.client, &new.client)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            // 旧会话收尾（尽力）：关文档 + 清诊断（服务端缓存别留垃圾）
+            if let Some(old) = self.lsp.take() {
+                let _ = old.client.did_close(&old.uri);
+            }
+            self.lsp_diagnostics.clear();
+            self.lsp_version = 0;
+            self.lsp_alive = false;
+            if let Some(session) = session {
+                let text = self.editor_text(cx);
+                let _ = session.client.did_open(&session.uri, &session.language_id, &text);
+                self.lsp_version = 1;
+                self.lsp_alive = true;
+                self.lsp = Some(session);
+            }
+            // 会话变了（挂或摘）都要整体重画一遍三源诊断：摘了不清内核里旧的 LSP 标记
+            self.apply_error_marks(self.error_reason.clone(), cx);
+            // provider 的摘 / 挂跟着会话走（泵里重连也靠这里——不只 `new` / `sync_mode` 那两次）
+            self.editor.update(cx, |state, _cx| {
+                self.sync_completion_provider(state);
+            });
+        }
+        // 会话健康，或「本该有服务但还没起 / 已被停」→ 保持轮询（重启后自动重连靠这条）
+        if self.lsp_alive || self.shared.lsp_wants(&self.document) {
+            self.ensure_exec_pump(cx);
         }
     }
 
@@ -3113,15 +3660,27 @@ impl EditorHostPanel {
             }
         }
         self.statements = count_statements(&text);
-        self.editor.update(cx, |state, cx| {
-            if state.value() != text {
-                state.set_value(text, window, cx);
+        let value_changed = {
+            let before = self.editor.read(cx).value().to_string();
+            let changed = before != text;
+            self.editor.update(cx, |state, cx| {
+                if changed {
+                    state.set_value(text.clone(), window, cx);
+                }
+                // **`set_value` 不发 `InputEvent::Change`**（内核里 `emit_events = false`，`state.rs:901`），
+                // 所以整篇换文本这条路不会经过事件订阅——折叠候选必须在这里显式重算，
+                // 否则重新加载后候选还指着旧文本的行号。
+                sync_fold(&self.shared, &self.document, state, window, cx);
+            });
+            changed
+        };
+        // 【LSP】同上：整篇换文本不走 Change 事件，didChange 也要在这里显式补发（版本自增）
+        if value_changed && self.lsp_alive {
+            if let Some(session) = self.lsp.as_ref() {
+                self.lsp_version += 1;
+                let _ = session.client.did_change(&session.uri, self.lsp_version, &text);
             }
-            // **`set_value` 不发 `InputEvent::Change`**（内核里 `emit_events = false`，`state.rs:901`），
-            // 所以整篇换文本这条路不会经过事件订阅——折叠候选必须在这里显式重算，
-            // 否则重新加载后候选还指着旧文本的行号。
-            sync_fold(&self.shared, &self.document, state, window, cx);
-        });
+        }
         // 【2c】同上：隐藏字符标注也走不到 Change 事件（区间是字节偏移，整篇换文本必失效），
         // 开着显示就显式重算一遍；没开则集合未建，直接跳过。
         if self.shared.document_show_invisible(&self.document) {
@@ -4032,6 +4591,8 @@ impl EditorHostPanel {
                 // 还有执行在跑（含别的文档）就继续等；一个都没有了就退出，下次提交重新起
                 let keep_going = weak
                     .update(cx, |this, cx| {
+                        // 【LSP】每拍重问宿主：握手就绪 / 服务被停 / 崩溃重启都在这里收敛
+                        this.sync_lsp_session(cx);
                         this.drain_exec_results(cx);
                         if this.pending > 0 || this.tx_pending > 0 || this.refresh_pending > 0 {
                             cx.notify();
@@ -4043,6 +4604,10 @@ impl EditorHostPanel {
                             || this.export_pending > 0
                             // 【B18】后台扫描在途（回执到手就结束，不为扫描留常驻定时器）
                             || this.scan_pending
+                            // 【LSP】语言服务是常驻连接：诊断随时会来，会话健康就一直轮询
+                            || this.lsp_alive
+                            // 【LSP】本该有服务但还没起 / 被停（重启后自动重连靠这条）
+                            || this.shared.lsp_wants(&this.document)
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -4053,11 +4618,49 @@ impl EditorHostPanel {
         *self.exec_pump.borrow_mut() = Some(task);
     }
 
+    /// 【LSP】取走语言服务事件并按本文档折叠（诊断 → 三源合并；IoError → 摘服务 / 报告）
+    ///
+    /// 纯逻辑在 [`crate::lsp::host::fold_events`]（按 `uri` 认领 + 后者覆盖），这里只落面板状态：
+    /// 有诊断重画错误标记；服务断开则摘 provider（补全、轮询一起停）并给状态栏原因。
+    fn drain_lsp_events(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.lsp.clone() else {
+            return;
+        };
+        let events = self.shared.drain_lsp_events(&self.document);
+        if events.is_empty() {
+            return;
+        }
+        let fold = crate::lsp::host::fold_events(&session.uri, events);
+        let mut changed = false;
+        if let Some(diags) = fold.diagnostics {
+            self.lsp_diagnostics = diags;
+            changed = true;
+        }
+        if let Some(reason) = fold.io_error {
+            self.lsp_alive = false;
+            self.lsp_diagnostics.clear();
+            changed = true;
+            // 服务死了：清僵尸会话（否则重启时 `same` 判据会挡住重连），并给状态栏原因
+            self.lsp.take();
+            self.set_message(Some(format!("语言服务已断开：{reason}")), cx);
+            // 服务死了：补全不再走语言服务（摘 provider，回到无 / 本地路径）
+            self.editor.update(cx, |state, _cx| {
+                self.sync_completion_provider(state);
+            });
+        }
+        if changed {
+            self.apply_error_marks(self.error_reason.clone(), cx);
+            cx.notify();
+        }
+    }
+
     /// 取回已完成的执行，填入结果存储与网格
     ///
     /// **一条语句一条结论**：批量执行会连续回来多条，每条各自落一个结果集（落位由 outcome
     /// 自带）。本文档的回填计数减到 0 才算执行完。
     pub(crate) fn drain_exec_results(&mut self, cx: &mut Context<Self>) {
+        // 【LSP】语言服务事件先收（诊断异步推送，独立于执行通道）
+        self.drain_lsp_events(cx);
         // 【B18】后台扫描的回执先收：**只接受与当前修订号相等的那一份**（陈旧丢弃），
         // 然后三件产物各归各位：语句数进状态栏、候选喂内核、诊断与执行错误一起重画
         if let Some(report) = self.scanner.try_recv() {
@@ -4304,6 +4907,54 @@ impl EditorHostPanel {
     /// **结果区唯一的读点**：结果集可能因一次执行回填、点标签、批量推进而变，但界面只从
     /// 这里读一次——否则会出现“网格还是上一份、摘要已经换了”的错位（多结果集之后这种错位
     /// 很难靠看界面发现）。
+    /// 【遗留 #14】CSV 表格展示：把编辑器文本解析成表格填进结果网格
+    ///
+    /// 只对 CSV 文档生效（扩展名判定，口径与状态栏文件类型一致）；非 CSV 文档
+    /// 把 `csv_active` 复位——**不动网格**，那是 SQL 执行结果的区域。
+    /// 表头取第一行（CSV 常见约定）；列类型未知，全部 `None`（不做类型推断）。
+    pub fn sync_csv_grid(&mut self, cx: &mut Context<Self>) {
+        let is_csv = self
+            .document_path()
+            .as_deref()
+            .and_then(crate::mode::script_file_type)
+            == Some(crate::mode::ScriptFileType::Csv);
+        if !is_csv {
+            self.csv_active = false;
+            return;
+        }
+        let text = self.editor_text(cx);
+        let rows = engine::csv::parse(&text);
+        let (columns, body) = match rows.split_first() {
+            Some((header, rest)) => (header.clone(), rest.to_vec()),
+            None => (Vec::new(), Vec::new()),
+        };
+        let column_count = columns.len();
+        self.grid.update(cx, |state, cx| {
+            state.delegate_mut().set_data(columns, body);
+            // 类型必须**在 set_data 之后**设（set_data 会清空类型，防串台）
+            state.delegate_mut().set_column_types(vec![None; column_count]);
+            state.refresh(cx);
+        });
+        self.csv_active = true;
+    }
+
+    /// 【遗留 #14】CSV 表格展示：复制整个 CSV 表格（TSV，与结果集复制同口径）
+    pub fn copy_csv_table(&mut self, cx: &mut Context<Self>) {
+        let (headers, rows) = self.grid.read(cx).dump(cx);
+        if headers.is_empty() {
+            self.set_message(Some("CSV 没有内容可复制".to_string()), cx);
+            return;
+        }
+        let mut out = String::new();
+        out.push_str(&headers.join("\t"));
+        for row in &rows {
+            out.push('\n');
+            out.push_str(&row.join("\t"));
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(out));
+        self.set_message(Some(format!("已复制 {} 行（TSV）", rows.len())), cx);
+    }
+
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
         let current_channel = self.channel();        let (
@@ -4494,14 +5145,15 @@ impl EditorHostPanel {
 
     /// 【B6】把出错范围画进编辑内核（行内高亮 + 悬停弹层；没有位置就只清旧的）
     ///
-    /// 【B18】它同时负责**两个来源的合并**：执行错误回填 + 打字期词法诊断。两源必须走同一条
-    /// 重建流程：内核的诊断集合只有 `clear` + `push`，分开各写一份就会互相擦掉
-    /// （“执行出错了，词法诊断没了”那种抳不到的怪象）。
+    /// 【B18】它同时负责**三个来源的合并**：执行错误回填 + 打字期词法诊断 + LSP 语言服务
+    /// 诊断。三源必须走同一条重建流程：内核的诊断集合只有 `clear` + `push`，分开各写一份
+    /// 就会互相擦掉（“执行出错了，词法诊断没了”那种抳不到的怪象）。
     fn apply_error_marks(&mut self, reason: Option<String>, cx: &mut Context<Self>) {
         self.error_reason = reason;
         let site = self.error_site.clone();
         let reason = self.error_reason.clone();
         let lexical = self.scan_diagnostics.clone();
+        let lsp_diags = self.lsp_diagnostics.clone();
         self.editor.update(cx, |state, cx| {
             // 文本先取：`diagnostics_mut` 借的就是同一份状态，两个借用不能同时活着
             let text = state.value().to_string();
@@ -4522,6 +5174,10 @@ impl EditorHostPanel {
                     .with_source("语法")
                     .with_code(one.code),
                 );
+            }
+            // LSP 语言服务诊断（内核有 `From<lsp_types::Diagnostic>`，source 一并带过来）
+            for one in &lsp_diags {
+                diagnostics.push(Diagnostic::from(one.clone()));
             }
             if let (Some(site), Some(reason)) = (site, reason) {
                 let (end_line, end_column) = site.end();
@@ -4795,6 +5451,36 @@ impl EditorHostPanel {
             input.update(app, |state, cx| state.set_value(text, window, cx));
         });
         self.apply_filter(cx);
+    }
+
+    /// 【遗留 #7】右键「查看完整值」：记录目标并弹值查看器（对话框由 dialogs 层开）
+    ///
+    /// 钩子给的是 `&mut App`（拿不到窗口），对话框要 `&mut Window`——所以经
+    /// `self.window.update` 转一手（与 `apply_filter_value` 回填筛选框同一模式）。
+    pub(crate) fn open_value_preview(
+        &mut self,
+        value: &str,
+        column: &str,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.value_preview = Some(ValuePreview {
+            value: value.to_string(),
+            column: column.to_string(),
+            row,
+        });
+        let target = self.value_preview.clone().expect("刚写入");
+        let _ = self.window.update(cx, move |_panel, window, app| {
+            dialogs::open_value_preview(
+                window,
+                app,
+                target.value.clone(),
+                target.column.clone(),
+                target.row,
+                // 复制不关弹层：用户复制完可能还要接着看
+                move |app| app.write_to_clipboard(ClipboardItem::new_string(target.value.clone())),
+            );
+        });
     }
 
     /// 【B14】排序下发（右键菜单来的）：按这一列重查源库，结果落**新结果集**
@@ -5127,9 +5813,20 @@ impl EditorHostPanel {
             return;
         }
         let table = export::default_table_name(Some(&entry.sql), index);
+        // 【B7 切片三】`SQL Updates` 的键列：与菜单同一来源（表结构端口），
+        // 给了键就真编码成 UPDATE（`encode_rows_with_key`）；没键走普通编码
+        // （`WHERE 子句` 不需要键，其余档不受影响）
+        let key = self
+            .bound_connection()
+            .as_deref()
+            .and_then(|conn| {
+                self.shared
+                    .table_key_columns(Some(conn), &table)
+            })
+            .and_then(|columns| export::RowKey::new(columns));
         let text = match &visible {
-            Some(rows) => export::encode_rows(entry, format, &table, rows),
-            None => export::encode(entry, format, &table),
+            Some(rows) => export::encode_rows_with_key(entry, format, &table, key.as_ref(), rows),
+            None => export::encode_rows_with_key(entry, format, &table, key.as_ref(), &entry.rows),
         };
         // INSERT 对空结果给空串（没有行就没有语句）；CSV / JSON 空结果仍有表头 / `[]`
         if text.is_empty() {
@@ -5251,6 +5948,18 @@ impl EditorHostPanel {
 }
 
 impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
+
+impl Drop for EditorHostPanel {
+    /// 面板关闭（文档随之关闭）：给语言服务发 `didClose`（尽力），别把文档留在服务端缓存里。
+    ///
+    /// Drop 期间不做任何面板 / 内核操作——只发一条不期待响应的通知；client 已停机时
+    /// `notify` 返回错误，静默忽略。
+    fn drop(&mut self) {
+        if let Some(session) = self.lsp.take() {
+            let _ = session.client.did_close(&session.uri);
+        }
+    }
+}
 
 /// 【T2c-5】第一个组的组头（组移动↑↓ 的左边缘判定）
 fn group_of_first(groups: &[crate::toolbar::ToolbarGroup]) -> crate::toolbar::ToolbarItemId {
@@ -5644,10 +6353,12 @@ impl BasePanel for EditorHostPanel {
     fn on_added_to(
         &mut self,
         group: WeakEntity<TabGroup>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
         self.group = Some(group);
+        // 【遗留 #10】分析模式：进 Dock 时把单元编辑器建齐（事件路径；构造期不能建）
+        self.sync_cell_editors(window, cx);
     }
 
     /// 成为当前显示的标签 → 把焦点交给编辑内核，切过去就能直接打字
@@ -5800,8 +6511,9 @@ impl Render for EditorHostPanel {
         });
         // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
         let env_owned = env_text.flatten();
-        // 【2b/开放决定 #2】通用模式：脚本文件类型段（`.py` → `类型 Python`；非脚本扩展名不摆）。
-        // 判定走 `mode::script_file_type` 纯函数；只标类型不假装高亮（内核无 py/r/rs 语法）。
+        // 【2b/遗留 #14】通用模式：脚本文件类型段（`.py` → `类型 Python`；非脚本扩展名不摆）。
+        // 判定走 `mode::script_file_type` 纯函数；上色本体已接（`view::highlight` 按类型分派
+        // 词法器），这里仍只展示类型名，与高亮互不干扰。
         let file_type_text = (self
             .with_document(|doc| doc.mode())
             .unwrap_or(EditorMode::General)
@@ -6193,7 +6905,90 @@ impl Render for EditorHostPanel {
         }
         // 结果区（B5）：有结果或正在执行时才出现（否则不占位置——不显示空壳）
         let font_size = cx.theme().font_size;
-        let result_pane = self.result_visible().then(|| {
+        let result_pane = if self.csv_active {
+            // 【遗留 #14】CSV 表格展示：精简结果区（本地筛选 + 复制 + 行数状态）。
+            // 不摆 SQL 语义控件（提交 / 分析 / 导出 / 刷新 / 取下一段）——CSV 没有
+            // 执行语义，那些按钮点了就是错。
+            let row_count = self.grid.read(cx).delegate().data_row_count();
+            let toolbar = ResultToolbar {
+                rows: Some(row_count),
+                affected_rows: None,
+                failed: false,
+                elapsed_ms: None,
+                connection: None,
+                lineage: Some("CSV 预览".to_string()),
+                filtered: None,
+            };
+            let status = Some(ResultStatus {
+                total_rows: row_count,
+                selected_row: None,
+                truncated_hint: None,
+                has_more: false,
+            });
+            // 本地筛选复用 SQL 结果区的同一套（`on_filter_input` 走网格 delegate，
+            // 对 CSV 数据同样生效：只筛选视图行，不重读文件）
+            let filter = div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .debug_selector(|| "editor-result-filter".to_string())
+                .child(
+                    div()
+                        .w(rems(ui::RESULT_FILTER_WIDTH))
+                        .child(Input::new(&self.filter_input)),
+                )
+                .when(!self.filter_text.trim().is_empty(), |row| {
+                    let entity = cx.entity();
+                    row.child(
+                        Button::new("editor-result-filter-clear")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-filter-clear".to_string())
+                            .label("✕")
+                            .on_click(move |_, window, app| {
+                                entity.update(app, |panel, cx| panel.clear_filter(window, cx));
+                            }),
+                    )
+                });
+            let copy = {
+                let entity = cx.entity();
+                Button::new("editor-result-copy")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-copy".to_string())
+                    .label("⧉ 复制")
+                    .on_click(move |_, _window, app| {
+                        entity.update(app, |panel, cx| panel.copy_csv_table(cx));
+                    })
+                    .into_any_element()
+            };
+            // 与 SQL 结果区同一渲染入口（`result_grid::render` 消费 `ResultPane`）：
+            // 本分支只准备数据，渲染交给同一个函数，避免两套结果区渲染
+            Some(
+                result_grid::render(
+                    &self.grid,
+                    result_grid::ResultPane {
+                        toolbar,
+                        status,
+                        controls: result_grid::ResultControls {
+                            filter: Some(filter.into_any_element()),
+                            commit: None,
+                            analysis: None,
+                            copy: Some(copy),
+                            export: None,
+                            refresh: None,
+                            more: None,
+                        },
+                        card: None,
+                        tabs: None,
+                        notice: None,
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            )
+        } else {
+            self.result_visible().then(|| {
             // ⑥ 工具栏：投影里已经有真值；还没结论时（刚提交）只报“执行中…”
             let toolbar = self.result_toolbar.clone().unwrap_or(ResultToolbar {
                 elapsed_ms: None,
@@ -6348,6 +7143,15 @@ impl Render for EditorHostPanel {
             // 菜单项由 `export::menu_items` 给（纯函数，可逐项断言）——这里只负责画。
             let export = self.result_can_copy.then(|| {
                 let entity = cx.entity();
+                // 【B7 切片三】`SQL Updates` 的键列查询只在**菜单弹出时**做（事件路径，
+                // 端口读导航 L2 缓存）：render 里只把「连接 + 表名」算好（纯内存），
+                // 不在这里查端口（render 不做 I/O）
+                let conn = self.bound_connection();
+                let entry_sql = self
+                    .shared
+                    .results_active(&self.document)
+                    .map(|entry| (entry.sql.clone(), self.result_active + 1));
+                let shared = self.shared.clone();
                 let rows_text = self
                     .result_status
                     .as_ref()
@@ -6368,12 +7172,18 @@ impl Render for EditorHostPanel {
                     )
                     .dropdown_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
-                        // 【B7 切片三】附加上下文：今天只开「WHERE 子句」这一档
-                        // （`SQL Updates` 要有**键列**才摆，而结果集自己不知道主键——键列要等 M4 的表元数据搬过来；
-                        // 没键就不摆，不猜“拿第一列当键”）
+                        // 【B7 切片三】附加上下文：`SQL Updates` 要有**键列**才摆
+                        // （结果集自己不知道主键，键列由表结构端口给——导航侧 L2 缓存）。
+                        // 查不到 / 没接端口 = 不摆，不猜“拿第一列当键”（改错行的代价太高）
+                        let key = entry_sql.as_ref().and_then(|(sql, index)| {
+                            let table = export::default_table_name(Some(sql), *index);
+                            conn.as_deref()
+                                .and_then(|conn| shared.table_key_columns(Some(conn), &table))
+                                .and_then(|columns| export::RowKey::new(columns))
+                        });
                         let extras = export::ExportExtras {
                             sql_text: true,
-                            key: None,
+                            key,
                         };
                         for item in export::menu_items_for(has_more, &rows_text, &extras) {
                             if item.separator_before {
@@ -6516,7 +7326,8 @@ impl Render for EditorHostPanel {
                 cx,
             )
             .into_any_element()
-        });
+            })
+        };
 
         // 编辑区 + 结果区：下半区可拖拽改高（原型 §2.1 ④ 分隔条；拖动条是组件库的
         // `ResizablePanel`，不手搓鼠标拖拽）。没有结果时只有一个面板，编辑区独占。

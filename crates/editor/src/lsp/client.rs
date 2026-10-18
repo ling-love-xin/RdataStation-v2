@@ -41,31 +41,13 @@ pub trait LspWriter: Send + 'static {
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()>;
 }
 
-/// 进程 stdio 的生产实现（stdin = 写侧，stdout = 读侧）
-pub struct ProcessIo {
-    stdin: std::process::ChildStdin,
+/// 进程 stdout 的读侧（LSP 帧解析；`ProcessIo` 拆出来的半）
+struct ProcessReader {
     stdout: std::process::ChildStdout,
     read_limit: usize,
 }
 
-impl ProcessIo {
-    pub fn new(stdin: std::process::ChildStdin, stdout: std::process::ChildStdout) -> Self {
-        Self {
-            stdin,
-            stdout,
-            read_limit: frame::MAX_BODY_BYTES,
-        }
-    }
-}
-
-impl LspWriter for ProcessIo {
-    fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.stdin.write_all(bytes)?;
-        self.stdin.flush()
-    }
-}
-
-impl LspReader for ProcessIo {
+impl LspReader for ProcessReader {
     fn read_frame(&mut self) -> io::Result<Option<Vec<u8>>> {
         // LSP 帧：先读头到 \r\n\r\n，再按 Content-Length 读正文。逐字节攒头即可
         // （头本身很小；正文按声明长度一次读齐）。
@@ -92,6 +74,56 @@ impl LspReader for ProcessIo {
         let mut body = vec![0u8; content_length];
         self.stdout.read_exact(&mut body)?;
         Ok(Some(body))
+    }
+}
+
+/// 进程 stdin 的写侧（`ProcessIo` 拆出来的半）
+struct ProcessWriter {
+    stdin: std::process::ChildStdin,
+}
+
+impl LspWriter for ProcessWriter {
+    fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.stdin.write_all(bytes)?;
+        self.stdin.flush()
+    }
+}
+
+/// 进程 stdio 的生产实现（stdin = 写侧，stdout = 读侧）
+///
+/// 自身同时实现 [`LspReader`] / [`LspWriter`]（合体形态）；`split` 拆成两半供
+/// [`LspClient::new`] 使用（读侧交读线程、写侧由内部锁共享）。
+pub struct ProcessIo {
+    reader: ProcessReader,
+    writer: ProcessWriter,
+}
+
+impl ProcessIo {
+    pub fn new(stdin: std::process::ChildStdin, stdout: std::process::ChildStdout) -> Self {
+        Self {
+            reader: ProcessReader {
+                stdout,
+                read_limit: frame::MAX_BODY_BYTES,
+            },
+            writer: ProcessWriter { stdin },
+        }
+    }
+
+    /// 拆成读 / 写两半（读侧给读线程，写侧由内部锁共享）
+    pub fn split(self) -> (Box<dyn LspReader>, Box<dyn LspWriter>) {
+        (Box::new(self.reader), Box::new(self.writer))
+    }
+}
+
+impl LspWriter for ProcessIo {
+    fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.writer.write_frame(bytes)
+    }
+}
+
+impl LspReader for ProcessIo {
+    fn read_frame(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.reader.read_frame()
     }
 }
 
@@ -195,6 +227,19 @@ impl LspClient {
     /// （`Sender` 留在客户端内部，保证 `LspClient` 是 `Send + Sync`）。
     ///
     /// 生产：`reader`/`writer` 是同一个 `ProcessIo` 的两半；测试：内存对端两半。
+    /// 从一条已 spawn 的进程 stdio 起客户端（生产路径的便捷构造）
+    ///
+    /// `stdin` = 写侧（对端读），`stdout` = 读侧（对端写）。**stderr 由调用方自理**：
+    /// spawn 时丢 `Stdio::null()` 或另开线程 drain——别让管道填满卡死对端。
+    pub fn from_process(
+        stdin: std::process::ChildStdin,
+        stdout: std::process::ChildStdout,
+    ) -> (Arc<Self>, Receiver<LspEvent>) {
+        let io = ProcessIo::new(stdin, stdout);
+        let (reader, writer) = io.split();
+        Self::new(reader, writer)
+    }
+
     pub fn new(reader: Box<dyn LspReader>, writer: Box<dyn LspWriter>) -> (Arc<Self>, Receiver<LspEvent>) {
         let shared = Arc::new(Shared {
             pending: Mutex::new(Pending::new()),
@@ -313,6 +358,14 @@ impl LspClient {
                 "textDocument": { "uri": uri, "version": version },
                 "contentChanges": [{ "text": text }],
             }),
+        )
+    }
+
+    /// 通知对端关闭某文档（`didClose`；面板关闭 / 会话换绑时尽力发，别把文档留在服务端）
+    pub fn did_close(&self, uri: &str) -> Result<(), CallError> {
+        self.notify(
+            "textDocument/didClose",
+            json!({ "textDocument": { "uri": uri } }),
         )
     }
 
@@ -632,6 +685,19 @@ mod tests {
             }
             other => panic!("应当收到 Diagnostics 事件，得到 {other:?}"),
         }
+    }
+
+    #[test]
+    fn did_close_notifies_server_with_uri() {
+        let (recv_rx, _reply_tx, client, _events_rx) = harness();
+
+        // didClose 是通知（不需要握手，也不期待响应）
+        client.did_close("file:///a.sql").expect("didClose 应成功");
+        let frame = recv_rx.recv().expect("应收到 didClose 通知");
+        let notify = body_of(&frame);
+        assert_eq!(notify["method"], "textDocument/didClose");
+        assert_eq!(notify["params"]["textDocument"]["uri"], "file:///a.sql");
+        assert!(notify.get("id").is_none(), "通知不该带 id");
     }
 
     #[test]

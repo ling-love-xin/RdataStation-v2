@@ -72,6 +72,8 @@ impl WorkbenchSessionStore {
             // 【T2c-4 余项】缩进宽度 / 制表符（`None` = 旧会话没存过 → 列默认）
             tab_size: session.tab_size.unwrap_or(2),
             hard_tabs: session.hard_tabs.unwrap_or(false),
+            // 【遗留 #5】结果区分栏高度（rem；`None` = 旧会话没存过 → 列默认 18）
+            result_height: session.result_height.unwrap_or(18.0),
             updated_at_ms: now_ms(),
         }
     }
@@ -98,6 +100,8 @@ impl WorkbenchSessionStore {
             // 缩进列总有值（默认 2 / false）：旧会话恢复成默认而不是不覆盖——列默认即语义默认
             tab_size: Some(context.tab_size),
             hard_tabs: Some(context.hard_tabs),
+            // 【遗留 #5】结果区高度列总有值：旧会话恢复默认高度（列默认即语义默认）
+            result_height: Some(context.result_height),
         }
     }
 }
@@ -155,6 +159,7 @@ mod tests {
             schema: None,
             tab_size: None,
             hard_tabs: None,
+            result_height: None,
         }
     }
 

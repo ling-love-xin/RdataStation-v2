@@ -15,8 +15,9 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::{ActiveTheme, IconName};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
 use gpui_kit::*;
+use workbench_shell::ui;
 
 // 连接对话框状态与宿主 trait 直接经 extern crate 路径导入——`crate::components::connection_dialog`
 // 的 use 会遮蔽 crate 名，导致 `connection_dialog::host` 解析失败（E0432）。
@@ -382,6 +383,7 @@ impl Render for EditorPanel {
                                 Button::new("delete-connection")
                                     .danger()
                                     .outline()
+                                    .small()
                                     .label("删除连接")
                                     .on_click(move |_, _, app| {
                                         // 项目作用域删除需要当前项目根（未打开项目时传 None）。
@@ -453,6 +455,7 @@ impl Render for EditorPanel {
                                                 .gap_2()
                                                 .child(
                                                     div()
+                                                        .w(rems(ui::DATA_NAV_COL_NAME_WIDTH))
                                                         .flex_none()
                                                         .text_xs()
                                                         .child(col.name.clone()),

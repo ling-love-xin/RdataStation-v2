@@ -1,0 +1,25 @@
+[package]
+name = "rds-kernel"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation v2 kernel crate: Jupyter 内核协议客户端（ZMQ），供分析模式 Python/R/Julia 内核执行"
+
+[dependencies]
+# 依赖键名：jupyter-zmq-client 提供内核发现/启动 + ZMQ 四通道客户端；jupyter-protocol 提供消息类型
+# tokio-runtime：纯 Rust zeromq 的 tokio 后端（no-default-features，避免拉 async-dispatcher）
+jupyter-zmq-client = { workspace = true, features = ["tokio-runtime"] }
+jupyter-protocol.workspace = true
+
+# ===== Async 运行时（与 engine 同源：tokio full）=====
+tokio.workspace = true
+tokio-util.workspace = true
+
+# ===== 序列化 =====
+serde.workspace = true
+serde_json.workspace = true
+
+# ===== 标识（connection file key 用）=====
+uuid.workspace = true
+
+# ===== 通用 =====
+anyhow.workspace = true

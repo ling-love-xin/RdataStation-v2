@@ -129,6 +129,8 @@ pub mod limits;
 pub mod lsp;
 pub mod mode;
 pub mod model;
+/// 【#14】Jupyter mime bundle → 原生输出的纯函数分发器
+pub mod media;
 pub mod persist;
 pub mod project;
 pub mod scan;

@@ -22,6 +22,19 @@
 
 use gpui_kit::assets::IconName;
 
+use crate::model::EditorMode;
+
+/// 模式指示器图标（原型 ⑯：工具栏最左「图标 + 模式名 + ▾」）
+///
+/// 模式图标是**工具栏概念**（放这里而不是 `EditorMode`：模型层不依赖图标资产）。
+pub fn mode_icon(mode: EditorMode) -> IconName {
+    match mode {
+        EditorMode::General => IconName::FileCode,
+        EditorMode::Sql => IconName::Database,
+        EditorMode::Analysis => IconName::Notebook,
+    }
+}
+
 /// 工具栏项的唯一业务键（ElementId 用键不用下标）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolbarItemId {
@@ -506,6 +519,22 @@ pub enum MoveDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 模式指示器图标：三模式各配一个（⑯），与菜单顺序一致
+    #[test]
+    fn mode_icons_cover_all_three_modes() {
+        assert_eq!(
+            mode_icon(EditorMode::General),
+            IconName::FileCode,
+            "通用 = 脚本/文件"
+        );
+        assert_eq!(mode_icon(EditorMode::Sql), IconName::Database, "SQL = 数据库");
+        assert_eq!(
+            mode_icon(EditorMode::Analysis),
+            IconName::Notebook,
+            "分析 = 笔记"
+        );
+    }
 
     /// 默认布局：三组、执行簇两按钮可见、三条分隔符
     #[test]

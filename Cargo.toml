@@ -11,6 +11,7 @@ members = [
     "crates/property",
     "crates/editor",
     "crates/scratchpad",
+    "crates/kernel",
     "crates/rds-search",
     "crates/analytics_resource",
     "crates/mock",
@@ -162,6 +163,12 @@ tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["full"] }
 futures = "0.3.34"
 async-trait = "0.1.92"
+
+# ===== Jupyter 内核协议（分析模式 Python/R/Julia 内核，走纯 Rust ZMQ）=====
+jupyter-zmq-client = "1.0.1"
+jupyter-protocol = "2.0.1"
+# 内核接入层 crate（编辑器的分析模式依赖它；依赖只向下，kernel 不依赖 editor / gpui）
+rds-kernel = { path = "crates/kernel" }
 
 # ===== 序列化 =====
 serde = { version = "1.0.229", features = ["derive"] }

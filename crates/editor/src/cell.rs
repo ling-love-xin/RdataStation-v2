@@ -1,27 +1,29 @@
-//! 分析笔记的单元模型（T2d-1）与 `.rdsnote` 落盘形状（T2d-5）
+//! 分析笔记的单元模型（T2d-1）与 `.rdsnote` 落盘形状（T2d-5，#15 升 v2）
 //!
 //! ## 单元（Cell）
 //!
-//! 一份分析笔记 = 一个**单元序列**。每个单元要么是 SQL（可执行）要么是文本
-//! （Markdown 备注，不可执行）。单元状态是会话级的：切换会话（T2d-2）会把全部输出
-//! 标 stale，但**单元本身（id / kind / body）不动**。
+//! 一份分析笔记 = 一个**单元序列**。每个单元带**语言**（[`CellLanguage`]：SQL 可执行
+//! 跑在连接上、Python 可执行跑在内核上、Markdown 是备注）与**执行源**
+//! （[`ExecutionSource`]：连接 id / 内核 id；`None` = 用会话默认）。单元状态是
+//! 会话级的：切换会话会把全部输出标 stale，但**单元本身（id / language / body）不动**。
 //!
 //! ## 输出（Output）
 //!
 //! 单元输出是**内联**的（分析模式独有，`OutputTarget::Inline`）：表格复用 2a 共用表格
 //! （吃 [`crate::store::ResultEntry`]），文本 / 错误是卡片。输出**跟随会话不跟随文件**：
-//! `.rdsnote` 落盘只存单元（id / kind / body），不存输出与运行状态——重开笔记，
-//! 单元原样回来，输出清空（如实，不假装记得）。
+//! `.rdsnote` 落盘只存单元（id / language / execution_source / body），不存输出与运行状态。
 //!
 //! ## 落盘格式
 //!
 //! ```json
-//! { "version": 1, "session": { "id": "default", "default_connection": null, "env": null },
-//!   "cells": [ { "id": "c1", "kind": "sql", "body": "select 1;" } ] }
+//! { "version": 2, "session": { "id": "default", "default_connection": null, "env": null },
+//!   "cells": [ { "id": "c1", "language": "sql", "execution_source": null, "body": "select 1;" } ] }
 //! ```
 //!
-//! - `version` 是**顶层版本号**：格式一旦落盘难改，先钉版本字段（任务书风险条款）；
-//! - `kind` 存持久化键（`sql` / `text`），不是展示名——展示文案可改，存盘的值不能；
+//! - `version` 是**顶层版本号**；当前 **2**（#15 起语言 + 执行源落盘）；
+//! - v1（`kind: "sql"|"text"`）读盘时**兼容迁移**：`sql` → `language: sql`，
+//!   `text` → `language: markdown`，执行源补 `null`（= 会话默认）；
+//! - `language` 存持久化键，不是展示名——展示文案可改，存盘的值不能；
 //! - 单元 id 在**新建时生成**（稳定；跨编辑 / 落盘往返不变，界面不得用下标当身份）。
 
 use serde::{Deserialize, Serialize};
@@ -30,26 +32,35 @@ use crate::model::DocumentId;
 use crate::session::Session;
 use crate::store::ResultEntry;
 
-/// 单元种类
+/// 单元语言
 ///
-/// 只有 SQL 单元可执行（T2d-4 验收：Text 单元 ▶ 不亮，状态栏说原因）。
-/// 持久化键与变体名对齐（serde 小写化）：`sql` / `text`（与 [`Self::as_key`] 同值，
-/// 展示文案可改、存盘的值不能）。
+/// 语义分两档：**可执行**（SQL → 跑在连接上；Python / R / Julia → 跑在内核上）与
+/// **不可执行**（Markdown 备注）。持久化键与变体名对齐（serde 小写化），
+/// 展示文案可改、存盘的值不能。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CellKind {
-    /// 可执行：跑在会话绑定的连接上（复用 1b 执行链）
+pub enum CellLanguage {
+    /// 可执行：跑在连接的 DuckDB / 外部数据库上（复用 1b 执行链）
     Sql,
+    /// 可执行：跑在 Python 内核上（jupyter 协议；matplotlib / pandas 生态）
+    Python,
     /// 不可执行：Markdown 备注（原型 §4.4 的「文本单元」）
-    Text,
+    Markdown,
+    /// 可执行占位：R 内核（后续接入，先有语言标签）
+    R,
+    /// 可执行占位：Julia 内核
+    Julia,
 }
 
-impl CellKind {
+impl CellLanguage {
     /// 界面展示名
     pub fn label(self) -> &'static str {
         match self {
             Self::Sql => "SQL",
-            Self::Text => "文本",
+            Self::Python => "Python",
+            Self::Markdown => "Markdown",
+            Self::R => "R",
+            Self::Julia => "Julia",
         }
     }
 
@@ -57,21 +68,74 @@ impl CellKind {
     pub fn as_key(self) -> &'static str {
         match self {
             Self::Sql => "sql",
-            Self::Text => "text",
+            Self::Python => "python",
+            Self::Markdown => "markdown",
+            Self::R => "r",
+            Self::Julia => "julia",
         }
     }
 
-    /// 从持久化键还原（认不出来的值 = 文本，不 panic）
+    /// 从持久化键还原（认不出来的值 = Markdown，不 panic）
     pub fn from_key(key: &str) -> Self {
         match key {
             "sql" => Self::Sql,
-            _ => Self::Text,
+            "python" => Self::Python,
+            "markdown" => Self::Markdown,
+            "r" => Self::R,
+            "julia" => Self::Julia,
+            _ => Self::Markdown,
         }
     }
 
     /// 是否可执行（决定 ▶ 亮不亮）
     pub fn is_executable(self) -> bool {
-        matches!(self, Self::Sql)
+        !matches!(self, Self::Markdown)
+    }
+
+    /// 是否是备注语言
+    pub fn is_markdown(self) -> bool {
+        matches!(self, Self::Markdown)
+    }
+
+    /// 该语言跑在哪里：连接（SQL）还是内核（Python / R / Julia）
+    pub fn runs_on(self) -> Option<ExecutionTarget> {
+        match self {
+            Self::Sql => Some(ExecutionTarget::Connection),
+            Self::Python | Self::R | Self::Julia => Some(ExecutionTarget::Kernel),
+            Self::Markdown => None,
+        }
+    }
+}
+
+/// 语言运行目标（决定执行源字段的类型；`CellLanguage::runs_on` 返回）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionTarget {
+    /// 跑在某个连接上
+    Connection,
+    /// 跑在某个内核上
+    Kernel,
+}
+
+/// 执行源（该语言跑在哪）
+///
+/// `None` = 未指定 → 用**会话默认**（SQL 默认 = 会话绑定连接；内核默认 = 上次用过的
+/// 内核，没有就提示创建）。持久化键小写：`{"kind":"connection","id":"P_orders"}`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "lowercase")]
+pub enum ExecutionSource {
+    /// 连接 id（SQL 单元）
+    Connection(String),
+    /// 内核 id（Python / R / Julia 单元）
+    Kernel(String),
+}
+
+impl ExecutionSource {
+    /// 执行源的人类可读描述（指示器展示；`None` 时显示「默认」由调用方决定）
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Connection(_) => "连接",
+            Self::Kernel(_) => "内核",
+        }
     }
 }
 
@@ -92,12 +156,23 @@ pub enum CellState {
 }
 
 /// 单元输出（内联；分析模式独有）
+///
+/// 一个单元可以有**多个输出**（Jupyter 语义：stdout 流 + display 富输出可以并存），
+/// 顺序 = 到达顺序，渲染时逐个展示。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
     /// 结果集（表格复用 2a 共用表格；`ResultEntry` 是结果区唯一权威的形状）
     Table(ResultEntry),
-    /// 文本输出（脚本 stdout 等；卡片渲染）
+    /// 轻量表格（HTML 表格解析产物：pandas DataFrame 默认 `text/html`；
+    /// 比 `ResultEntry` 少所有结果区字段，纯列 + 行）
+    TableData { columns: Vec<String>, rows: Vec<Vec<String>> },
+    /// 文本输出（脚本 stdout / `text/plain`；卡片渲染）
     Text(String),
+    /// Markdown 输出（`text/markdown`；`TextView::markdown` 渲染）
+    Markdown(String),
+    /// 图片输出（`image/png` / `image/jpeg` 等：matplotlib 主力；`mime` 存原值，
+    /// 渲染时映射成 gpui `ImageFormat`，模型层不依赖 UI 类型）
+    Image { bytes: Vec<u8>, mime: String },
     /// 失败原因（卡片渲染，不是表格）
     Error(String),
 }
@@ -107,43 +182,52 @@ pub enum Output {
 pub struct Cell {
     /// 稳定 id（新建时生成；跨落盘往返不变，界面不得用下标当身份）
     pub id: String,
-    pub kind: CellKind,
-    /// 单元正文（SQL 语句 / Markdown）
+    pub language: CellLanguage,
+    /// 执行源（连接 id / 内核 id；`None` = 会话默认）
+    pub execution_source: Option<ExecutionSource>,
+    /// 单元正文（SQL 语句 / Python 代码 / Markdown）
     pub body: String,
     /// 运行状态（会话级）
     pub state: CellState,
-    /// 输出（`None` = 没跑过 / 没输出）
-    pub output: Option<Output>,
+    /// 输出序列（空 = 没跑过 / 没输出；一次执行可产多条：stdout + 富输出）
+    pub outputs: Vec<Output>,
 }
 
 impl Cell {
-    /// 新建一个单元（初始 Idle、无输出）
-    pub fn new(id: impl Into<String>, kind: CellKind, body: impl Into<String>) -> Self {
+    /// 新建一个单元（初始 Idle、无输出、执行源默认）
+    pub fn new(id: impl Into<String>, language: CellLanguage, body: impl Into<String>) -> Self {
         Self {
             id: id.into(),
-            kind,
+            language,
+            execution_source: None,
             body: body.into(),
             state: CellState::Idle,
-            output: None,
+            outputs: Vec::new(),
         }
     }
 
     /// 标为运行中（`Idle` / `Done` / `Error` / `Stale` → `Running`；旧的失败输出清掉）
     pub fn mark_running(&mut self) {
         self.state = CellState::Running;
-        self.output = None;
+        self.outputs.clear();
     }
 
-    /// 标为成功（带输出）
+    /// 标为成功（追加一条输出；同一单元可多次 append —— 多输出语义）
     pub fn mark_done(&mut self, output: Output) {
         self.state = CellState::Done;
-        self.output = Some(output);
+        self.outputs.push(output);
+    }
+
+    /// 标为成功（一次落地一批输出：stdout 流 + display 富输出按序呈现）
+    pub fn mark_done_all(&mut self, outputs: Vec<Output>) {
+        self.state = CellState::Done;
+        self.outputs.extend(outputs);
     }
 
     /// 标为失败（带原因）
     pub fn mark_error(&mut self, reason: String) {
         self.state = CellState::Error;
-        self.output = Some(Output::Error(reason));
+        self.outputs.push(Output::Error(reason));
     }
 
     /// 会话切换：输出作废（stale），但单元本体不动
@@ -151,8 +235,8 @@ impl Cell {
         if matches!(self.state, CellState::Running) {
             // 正在跑的单元切会话：跑完的回执到了也别落（会话已经换了）
             self.state = CellState::Idle;
-            self.output = None;
-        } else if self.output.is_some() {
+            self.outputs.clear();
+        } else if !self.outputs.is_empty() {
             self.state = CellState::Stale;
         }
     }
@@ -170,6 +254,8 @@ pub struct CellRequest {
     pub cell_id: String,
     /// 单元正文（SQL；只有 SQL 单元会提交执行）
     pub sql: String,
+    /// 执行连接 id（`None` = 文档 / 会话默认；#17：单元执行源指定连接优先）
+    pub conn_id: Option<String>,
 }
 
 /// 一次单元执行的结论（宿主给的真实值；编辑器据此拼 `Output::Table` / `Error`）
@@ -201,7 +287,10 @@ pub struct CellNote {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellFile {
     pub id: String,
-    pub kind: CellKind,
+    pub language: CellLanguage,
+    /// 执行源（v1 旧文件没有该字段 → `default` 补 `None` = 会话默认）
+    #[serde(default)]
+    pub execution_source: Option<ExecutionSource>,
     pub body: String,
 }
 
@@ -209,20 +298,28 @@ impl CellFile {
     fn from_cell(cell: &Cell) -> Self {
         Self {
             id: cell.id.clone(),
-            kind: cell.kind,
+            language: cell.language,
+            execution_source: cell.execution_source.clone(),
             body: cell.body.clone(),
         }
     }
 
     fn into_cell(self) -> Cell {
-        Cell::new(self.id, self.kind, self.body)
+        Cell {
+            id: self.id,
+            language: self.language,
+            execution_source: self.execution_source,
+            body: self.body,
+            state: CellState::Idle,
+            outputs: Vec::new(),
+        }
     }
 }
 
 /// `.rdsnote` 落盘形状（顶层带版本号；格式一旦落盘难改，先钉版本）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotebookFile {
-    /// 格式版本（当前 1；读盘时版本不认识 = 拒绝，不猜测旧格式）
+    /// 格式版本（当前 2；v1 读盘兼容迁移，更老的版本 = 拒绝，不猜测旧格式）
     pub version: u32,
     /// 会话绑定（默认连接 / 环境；重开笔记原样恢复）
     pub session: Session,
@@ -230,8 +327,16 @@ pub struct NotebookFile {
     pub cells: Vec<CellFile>,
 }
 
-/// `.rdsnote` 当前格式版本
-pub const NOTEBOOK_VERSION: u32 = 1;
+/// `.rdsnote` 当前格式版本（#15：v1 → v2 = 单元加语言 + 执行源）
+pub const NOTEBOOK_VERSION: u32 = 2;
+
+/// v1 的单元形状（只读迁移用，不入内存模型）
+#[derive(Deserialize)]
+struct CellFileV1 {
+    id: String,
+    kind: String,
+    body: String,
+}
 
 /// 一份分析笔记的**运行时状态**（每文档一份，`EditorShared` 持有）
 ///
@@ -302,30 +407,70 @@ impl NotebookFile {
         serde_json::to_string_pretty(self).map_err(|e| format!("序列化 .rdsnote 失败：{e}"))
     }
 
-    /// 从 JSON 文本还原；版本不认识 / 结构坏 = 如实报错（不猜旧格式）
+    /// 从 JSON 文本还原；当前版本直读，v1 兼容迁移，其余版本如实拒绝
     pub fn from_json(text: &str) -> Result<Self, String> {
-        let file: Self =
-            serde_json::from_str(text).map_err(|e| format!("解析 .rdsnote 失败：{e}"))?;
-        if file.version != NOTEBOOK_VERSION {
-            return Err(format!(
-                "不认识的 .rdsnote 版本 {}（当前支持 {}）",
-                file.version, NOTEBOOK_VERSION
-            ));
+        let value: serde_json::Value = serde_json::from_str(text)
+            .map_err(|e| format!("解析 .rdsnote 失败：{e}"))?;
+        let version = value
+            .get("version")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| "缺少版本号，无法识别 .rdsnote 格式".to_string())?;
+        match version {
+            1 => {
+                // v1（kind: sql|text）→ v2（language + execution_source）兼容迁移
+                let v1: V1Notebook = serde_json::from_value(value)
+                    .map_err(|e| format!("解析 v1 .rdsnote 失败：{e}"))?;
+                Ok(Self {
+                    version: NOTEBOOK_VERSION,
+                    session: v1.session,
+                    cells: v1
+                        .cells
+                        .into_iter()
+                        .map(|c| CellFile {
+                            id: c.id,
+                            language: match c.kind.as_str() {
+                                "sql" => CellLanguage::Sql,
+                                _ => CellLanguage::Markdown,
+                            },
+                            execution_source: None,
+                            body: c.body,
+                        })
+                        .collect(),
+                })
+            }
+            v if v == NOTEBOOK_VERSION as u64 => {
+                serde_json::from_value(value).map_err(|e| format!("解析 .rdsnote 失败：{e}"))
+            }
+            other => Err(format!(
+                "不认识的 .rdsnote 版本 {}（当前支持 {NOTEBOOK_VERSION}）",
+                other
+            )),
         }
-        Ok(file)
     }
+}
+
+/// v1 落盘形状（只读迁移用；与 v2 的差别：单元用 `kind` 不用 `language`）
+#[derive(Deserialize)]
+struct V1Notebook {
+    session: Session,
+    cells: Vec<CellFileV1>,
 }
 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        Cell, CellFile, CellKind, CellState, NotebookFile, NotebookState, NOTEBOOK_VERSION, Output,
+        Cell, CellFile, CellLanguage, CellState, ExecutionSource, NotebookFile, NotebookState,
+        NOTEBOOK_VERSION, Output,
     };
     use crate::session::Session;
 
     fn sql_cell(id: &str, body: &str) -> Cell {
-        Cell::new(id, CellKind::Sql, body)
+        Cell::new(id, CellLanguage::Sql, body)
+    }
+
+    fn md_cell(id: &str, body: &str) -> Cell {
+        Cell::new(id, CellLanguage::Markdown, body)
     }
 
     /// 单元状态机：Idle → Running → Done / Error；会话切换 → Stale
@@ -333,66 +478,89 @@ mod tests {
     fn cell_state_machine_transitions() {
         let mut cell = sql_cell("c1", "select 1;");
         assert_eq!(cell.state, CellState::Idle);
-        assert_eq!(cell.output, None);
+        assert!(cell.outputs.is_empty());
 
         cell.mark_running();
         assert_eq!(cell.state, CellState::Running);
 
         cell.mark_done(Output::Text("1".to_string()));
         assert_eq!(cell.state, CellState::Done);
-        assert!(matches!(cell.output, Some(Output::Text(_))));
+        assert!(matches!(cell.outputs[0], Output::Text(_)));
 
         // 失败：Error + 原因输出
         let mut failing = sql_cell("c2", "select * from nope;");
         failing.mark_running();
         failing.mark_error("表不存在".to_string());
         assert_eq!(failing.state, CellState::Error);
-        assert_eq!(failing.output, Some(Output::Error("表不存在".to_string())));
+        assert_eq!(failing.outputs[0], Output::Error("表不存在".to_string()));
 
         // 会话切换：有输出的标 stale（不删），没跑过的不动
         let mut with_output = sql_cell("c3", "select 2;");
         with_output.mark_done(Output::Text("2".to_string()));
         with_output.mark_stale();
         assert_eq!(with_output.state, CellState::Stale);
-        assert!(with_output.output.is_some(), "stale 不删输出，只是作废");
+        assert!(!with_output.outputs.is_empty(), "stale 不删输出，只是作废");
 
         // 正在跑的切会话：回执作废，输出清空、状态回 Idle（不假装 Done）
         let mut running = sql_cell("c4", "select 3;");
         running.mark_running();
         running.mark_stale();
         assert_eq!(running.state, CellState::Idle);
-        assert_eq!(running.output, None);
+        assert!(running.outputs.is_empty());
     }
 
-    /// 单元 kind 的持久化键往返（键与展示名分开）
+    /// 语言标签 / 持久化键 / 可执行性与运行目标（键与展示名分开）
     #[test]
-    fn cell_kind_keys_round_trip() {
-        assert_eq!(CellKind::Sql.label(), "SQL");
-        assert_eq!(CellKind::Text.label(), "文本");
-        assert_eq!(CellKind::Sql.as_key(), "sql");
-        assert_eq!(CellKind::Text.as_key(), "text");
-        assert_eq!(CellKind::from_key("sql"), CellKind::Sql);
-        assert_eq!(CellKind::from_key("text"), CellKind::Text);
-        assert_eq!(CellKind::from_key("wat"), CellKind::Text, "认不出的值回文本");
-        assert!(CellKind::Sql.is_executable());
-        assert!(!CellKind::Text.is_executable());
+    fn language_keys_round_trip() {
+        assert_eq!(CellLanguage::Sql.label(), "SQL");
+        assert_eq!(CellLanguage::Python.label(), "Python");
+        assert_eq!(CellLanguage::Markdown.label(), "Markdown");
+        assert_eq!(CellLanguage::R.label(), "R");
+        assert_eq!(CellLanguage::Julia.label(), "Julia");
+        assert_eq!(CellLanguage::Sql.as_key(), "sql");
+        assert_eq!(CellLanguage::Markdown.as_key(), "markdown");
+        assert_eq!(CellLanguage::from_key("sql"), CellLanguage::Sql);
+        assert_eq!(CellLanguage::from_key("python"), CellLanguage::Python);
+        assert_eq!(CellLanguage::from_key("markdown"), CellLanguage::Markdown);
+        assert_eq!(CellLanguage::from_key("wat"), CellLanguage::Markdown, "认不出的值回 Markdown");
+
+        // 可执行性 + 运行目标
+        assert!(CellLanguage::Sql.is_executable());
+        assert!(CellLanguage::Python.is_executable());
+        assert!(!CellLanguage::Markdown.is_executable());
+        assert!(CellLanguage::Markdown.is_markdown());
+        assert_eq!(CellLanguage::Sql.runs_on(), Some(super::ExecutionTarget::Connection));
+        assert_eq!(CellLanguage::Python.runs_on(), Some(super::ExecutionTarget::Kernel));
+        assert_eq!(CellLanguage::Markdown.runs_on(), None);
+
+        // 执行源 serde 形状（tagged：{"kind":"connection","id":...}）
+        let src = ExecutionSource::Connection("P_orders".to_string());
+        let json = serde_json::to_string(&src).expect("序列化");
+        assert_eq!(json, r#"{"kind":"connection","id":"P_orders"}"#);
+        let back: ExecutionSource = serde_json::from_str(&json).expect("反序列化");
+        assert_eq!(back, src);
     }
 
-    /// `.rdsnote` JSON 往返：单元 id / kind / body 原样回来；输出与状态不落盘
+    /// `.rdsnote` JSON 往返：单元 id / language / execution_source / body 原样回来；
+    /// 输出与状态不落盘
     #[test]
     fn notebook_file_round_trips_and_drops_outputs() {
         let session = Session::default_session();
         let mut cells = vec![sql_cell("c1", "select 1;")];
-        cells.push(Cell::new("c2", CellKind::Text, "# 备注\n一段说明"));
+        cells.push(md_cell("c2", "# 备注\n一段说明"));
         // 给第一个单元一个"运行过"的样子：输出与状态**不落盘**
         cells[0].mark_done(Output::Text("1".to_string()));
         cells[0].state = CellState::Done;
+        // 指定执行源（连接 id）：落盘要带
+        cells[0].execution_source = Some(ExecutionSource::Connection("P_orders".to_string()));
 
         let file = NotebookFile::from_state(&session, &cells);
         assert_eq!(file.version, NOTEBOOK_VERSION);
 
         let json = file.to_json().expect("serialize");
-        assert!(json.contains("\"version\": 1"), "顶层版本号要落盘");
+        assert!(json.contains("\"version\": 2"), "顶层版本号要落盘");
+        assert!(json.contains("\"language\": \"sql\""), "语言落盘");
+        assert!(json.contains("\"kind\": \"connection\""), "执行源落盘");
         assert!(!json.contains("output"), "输出不落盘");
 
         let back = NotebookFile::from_json(&json).expect("parse");
@@ -401,10 +569,11 @@ mod tests {
         assert_eq!(session_back, session);
         assert_eq!(cells_back.len(), 2);
         assert_eq!(cells_back[0].id, "c1");
-        assert_eq!(cells_back[0].kind, CellKind::Sql);
+        assert_eq!(cells_back[0].language, CellLanguage::Sql);
+        assert_eq!(cells_back[0].execution_source, Some(ExecutionSource::Connection("P_orders".to_string())));
         assert_eq!(cells_back[0].body, "select 1;");
         assert_eq!(cells_back[0].state, CellState::Idle, "状态不跟随文件");
-        assert_eq!(cells_back[0].output, None, "输出不跟随文件");
+        assert!(cells_back[0].outputs.is_empty(), "输出不跟随文件");
         assert_eq!(cells_back[1].body, "# 备注\n一段说明");
     }
 
@@ -414,6 +583,26 @@ mod tests {
         let json = r#"{"version": 99, "session": {"id": "default"}, "cells": []}"#;
         let err = NotebookFile::from_json(json).expect_err("不认识的版本必须拒绝");
         assert!(err.contains("99"), "错误里要说清是哪个版本：{err}");
+    }
+
+    /// v1 兼容迁移：`kind: sql|text` → `language: sql|markdown`，执行源补 None
+    #[test]
+    fn v1_files_migrate_to_v2() {
+        let json = r##"{
+          "version": 1,
+          "session": { "id": "default", "default_connection": null, "env": null },
+          "cells": [
+            { "id": "c1", "kind": "sql", "body": "select 1;" },
+            { "id": "c2", "kind": "text", "body": "# 备注" }
+          ]
+        }"##;
+        let file = NotebookFile::from_json(json).expect("v1 要能读");
+        assert_eq!(file.version, NOTEBOOK_VERSION, "读 v1 后落在当前版本");
+        let (_session, cells) = file.into_state();
+        assert_eq!(cells[0].language, CellLanguage::Sql, "v1 sql → language sql");
+        assert_eq!(cells[1].language, CellLanguage::Markdown, "v1 text → language markdown");
+        assert_eq!(cells[0].execution_source, None, "v1 没有执行源 → 默认（会话）");
+        assert_eq!(cells[0].body, "select 1;");
     }
 
     /// 结构坏 = 如实报错（不 panic、不静默回空）
@@ -429,12 +618,13 @@ mod tests {
         let cell = sql_cell("c1", "select 1;");
         let file = CellFile::from_cell(&cell);
         assert_eq!(file.id, "c1");
-        assert_eq!(file.kind, CellKind::Sql);
+        assert_eq!(file.language, CellLanguage::Sql);
+        assert_eq!(file.execution_source, None);
         assert_eq!(file.body, "select 1;");
         let back = file.into_cell();
         assert_eq!(back.id, "c1");
         assert_eq!(back.state, CellState::Idle);
-        assert_eq!(back.output, None);
+        assert!(back.outputs.is_empty());
     }
 
     /// 【T2d-2】会话切换：绑定换掉，全部有输出的单元 stale；没跑过的不动
@@ -457,7 +647,7 @@ mod tests {
         assert_eq!(notebook.cells[0].state, CellState::Stale);
         assert_eq!(notebook.cells[1].state, CellState::Stale);
         assert_eq!(notebook.cells[2].state, CellState::Idle, "没跑过的不动");
-        assert!(notebook.cells[0].output.is_some(), "stale 不删输出");
+        assert!(!notebook.cells[0].outputs.is_empty(), "stale 不删输出");
     }
 
     /// 运行中 + 会话切换：状态回 Idle、输出清空（回执到了也不落）
@@ -472,6 +662,24 @@ mod tests {
         notebook.switch_session(Session::default_session());
         assert!(!notebook.has_running());
         assert_eq!(notebook.cells[0].state, CellState::Idle);
-        assert_eq!(notebook.cells[0].output, None);
+        assert!(notebook.cells[0].outputs.is_empty());
+    }
+
+    /// 多输出：一次执行可追加多条（stdout + 富输出），顺序 = 到达顺序
+    #[test]
+    fn cell_accumulates_multiple_outputs_in_order() {
+        let mut cell = sql_cell("c1", "print('hi')");
+        cell.mark_running();
+        cell.mark_done(Output::Text("hi\n".to_string()));
+        cell.mark_done(Output::Markdown("**bold**".to_string()));
+        cell.mark_done(Output::Image { bytes: vec![1, 2, 3], mime: "image/png".to_string() });
+        assert_eq!(cell.outputs.len(), 3);
+        assert!(matches!(cell.outputs[0], Output::Text(_)));
+        assert!(matches!(cell.outputs[1], Output::Markdown(_)));
+        assert!(matches!(cell.outputs[2], Output::Image { .. }));
+
+        // 重新运行：旧输出清空，不会追加在旧输出后面
+        cell.mark_running();
+        assert!(cell.outputs.is_empty());
     }
 }

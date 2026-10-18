@@ -14,16 +14,19 @@
 //!
 //! ## 落点与后续
 //!
-//! 本模块只做 client 核心（进程 I/O + 请求/响应关联 + 通知分发），**不含** gpui-kit
-//! provider trait 的翻译层（completion / hover / definition 各 `Rc<dyn Provider>` 实现，
-//! 挂在 `EditorState::lsp_mut()` 上，见 `view/completion.rs` 的 install 模式）。
-//! provider bridge 是下一步切片，宿主轮询 [`LspEvent`] 把 `publishDiagnostics` 合并进内核
-//! 诊断（`DiagnosticSet` 已有 `From<lsp_types::Diagnostic>`，可直接 extend）。
+//! 本模块只做 client 核心（进程 I/O + 请求/响应关联 + 通知分发）+ provider bridge
+//! （[`bridge`]：把请求转发给语言服务的 `CompletionProvider` 实现 + 诊断翻译纯函数，
+//! 挂在 `EditorState::lsp_mut()` 上）。其余 hover / definition 等 provider 槽位暂未实现，
+//! 宿主轮询 [`LspEvent`] 把 `publishDiagnostics` 合并进内核诊断（`DiagnosticSet` 已有
+//! `From<lsp_types::Diagnostic>`，可直接 extend）。
 
+pub mod bridge;
 pub mod client;
 pub mod frame;
+pub mod host;
 
 pub use client::{
     CallError, LspClient, LspEvent, LspHandle, LspNotification, LspReader, LspWriter, ProcessIo,
 };
 pub use frame::{FrameError, LspMessage, MAX_BODY_BYTES};
+pub use host::{CompletionChoice, LspPort, LspPortHandle, LspSession};

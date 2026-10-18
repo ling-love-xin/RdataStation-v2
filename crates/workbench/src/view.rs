@@ -184,6 +184,8 @@ impl WorkbenchView {
         crate::services::editor_completion::attach(&editor_service, &shared);
         // T2c-1：把库 / schema 端口接上（导航缓存 → 状态栏面包屑可切项；未接时退文本连接段）
         crate::services::editor_schema::attach(&editor_service, &shared);
+        // B7 切片三：把表结构端口接上（导航缓存 → 导出 SQL Updates 的键列；未接时菜单不摆该档）
+        crate::services::editor_table_keys::attach(&editor_service, &shared);
         // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
         //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
         // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。
