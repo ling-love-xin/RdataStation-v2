@@ -63,9 +63,10 @@ pub use metadata_identity_registry::{
     unregister_identity,
 };
 pub use metadata_cache_index::{
-    CacheIndexEntry, CacheScope, index_path, list as list_cache_index,
-    orphans as orphans_cache_index, prune_orphans as prune_cache_index_orphans,
-    record as record_cache_index, release as release_cache_index,
+    CacheIndexEntry, CacheScope, OrphanCacheEntry, cleanup_orphan_meta_files, index_path,
+    list as list_cache_index, list_orphan_cache_entries, orphans as orphans_cache_index,
+    prune_orphans as prune_cache_index_orphans, record as record_cache_index,
+    release as release_cache_index,
 };
 pub use navigator_state::{NavState, NavigatorStateStore, PANEL_STATE_CONN_ID};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};

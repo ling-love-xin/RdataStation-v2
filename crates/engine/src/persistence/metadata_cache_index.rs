@@ -15,7 +15,7 @@
 //! 缓存管理 UI 轮再按 `conn_id` 反查补全。
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -266,6 +266,88 @@ pub fn prune_orphans() -> Result<usize, CoreError> {
     Ok(n)
 }
 
+/// 孤儿缓存条目（缓存管理 UI 展示用）。
+///
+/// 指纹缓存文件路径仅在**全局域**可定位（`{system}/global_metadata/meta_{fp}.sqlite`）；
+/// 项目域孤儿在索引里没有 `project_path`（register 时推导不到，见模块头注），
+/// `file_path = None`，文件无法自动定位。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanCacheEntry {
+    pub fingerprint: String,
+    pub description: String,
+    pub last_used_at: i64,
+    pub scope: CacheScope,
+    /// 全局域缓存文件路径（可定位）；项目域孤儿 → `None`
+    pub file_path: Option<PathBuf>,
+    /// 文件字节数（文件不存在 / 项目域 = 0）
+    pub file_size: u64,
+}
+
+/// 孤儿缓存条目列表（含文件路径与大小）。
+///
+/// `system_dir = None` 用生产系统目录（`{RDS_HOME}/data/system`）；测试注入临时目录隔离。
+pub fn list_orphan_cache_entries(
+    system_dir: Option<&Path>,
+) -> Result<Vec<OrphanCacheEntry>, CoreError> {
+    let dir = system_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or(crate::migration::get_system_dir()?);
+    let meta_dir = dir.join("global_metadata");
+    Ok(orphans()?
+        .into_iter()
+        .map(|e| {
+            if e.scope == CacheScope::Global {
+                let path = meta_dir.join(format!("meta_{}.sqlite", e.fingerprint));
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                OrphanCacheEntry {
+                    fingerprint: e.fingerprint,
+                    description: e.description,
+                    last_used_at: e.last_used_at,
+                    scope: e.scope,
+                    file_path: Some(path),
+                    file_size: size,
+                }
+            } else {
+                OrphanCacheEntry {
+                    fingerprint: e.fingerprint,
+                    description: e.description,
+                    last_used_at: e.last_used_at,
+                    scope: e.scope,
+                    file_path: None,
+                    file_size: 0,
+                }
+            }
+        })
+        .collect())
+}
+
+/// 清理**全局域**孤儿缓存文件（`meta_{fp}.sqlite`）。
+///
+/// 索引行清理由 [`prune_orphans`] 负责；本函数只删文件（先删文件后清索引，避免
+/// 索引先清导致文件无法归类）。文件不存在（已手动删 / 从未落盘）幂等跳过；
+/// 仍被引用的缓存不在孤儿列表里，天然不会被删。返回实际删除文件数。
+pub fn cleanup_orphan_meta_files(system_dir: Option<&Path>) -> Result<usize, CoreError> {
+    let dir = system_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or(crate::migration::get_system_dir()?);
+    let meta_dir = dir.join("global_metadata");
+    let mut removed = 0usize;
+    for e in orphans()? {
+        if e.scope != CacheScope::Global {
+            continue;
+        }
+        let path = meta_dir.join(format!("meta_{}.sqlite", e.fingerprint));
+        if !path.exists() {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(err) => tracing::warn!("[cache-index] 孤儿缓存文件删除失败 {:?}: {err}", path),
+        }
+    }
+    Ok(removed)
+}
+
 fn io_err(e: rusqlite::Error) -> CoreError {
     CoreError::storage(shared::error::StorageError::Persistence {
         store: "sqlite".to_string(),
@@ -363,6 +445,51 @@ mod tests {
                 by_fp("fp_idx_a", &all).unwrap().fingerprint,
                 by_fp("fp_idx_b", &all).unwrap().fingerprint
             );
+        });
+    }
+
+    /// 孤儿文件清理只删**全局域孤儿**：项目域无法定位不动，仍在引用的不动。
+    #[test]
+    fn orphan_file_cleanup_removes_only_global_orphans() {
+        isolated(|| {
+            record("fp_orph_g", "G_conn_orph", "全局孤儿").unwrap();
+            record("fp_orph_p", "P_conn_orph", "项目孤儿").unwrap();
+            record("fp_live_g", "G_conn_live", "仍在引用").unwrap();
+            release("G_conn_orph").unwrap();
+            release("P_conn_orph").unwrap();
+
+            let sys = std::env::temp_dir().join(format!(
+                "rds_orphan_test_{}_{}",
+                std::process::id(),
+                now_secs()
+            ));
+            let meta_dir = sys.join("global_metadata");
+            std::fs::create_dir_all(&meta_dir).unwrap();
+            let file_a = meta_dir.join("meta_fp_orph_g.sqlite");
+            let file_p = meta_dir.join("meta_fp_orph_p.sqlite");
+            let file_live = meta_dir.join("meta_fp_live_g.sqlite");
+            std::fs::write(&file_a, b"x").unwrap();
+            std::fs::write(&file_p, b"x").unwrap();
+            std::fs::write(&file_live, b"x").unwrap();
+
+            // 展示条目：全局孤儿带路径与大小，项目孤儿无路径。
+            let entries = list_orphan_cache_entries(Some(&sys)).unwrap();
+            let g = entries.iter().find(|e| e.fingerprint == "fp_orph_g").unwrap();
+            assert_eq!(g.scope, CacheScope::Global);
+            assert_eq!(g.file_size, 1);
+            assert!(g.file_path.is_some());
+            let p = entries.iter().find(|e| e.fingerprint == "fp_orph_p").unwrap();
+            assert_eq!(p.scope, CacheScope::Project);
+            assert!(p.file_path.is_none());
+
+            // 清理：只删全局孤儿文件，引用中的与项目域文件都不动。
+            let removed = cleanup_orphan_meta_files(Some(&sys)).unwrap();
+            assert_eq!(removed, 1);
+            assert!(!file_a.exists());
+            assert!(file_live.exists(), "引用中的缓存不删");
+            assert!(file_p.exists(), "项目域文件不在全局目录，本函数不删");
+
+            let _ = std::fs::remove_dir_all(&sys);
         });
     }
 }

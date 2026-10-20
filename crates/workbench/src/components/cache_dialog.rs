@@ -11,10 +11,14 @@ use std::rc::Rc;
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::*;
 
-use engine::persistence::{ConnectionType, MetadataCacheManager};
+use engine::persistence::{
+    CacheScope, ConnectionType, MetadataCacheManager, cleanup_orphan_meta_files,
+    list_orphan_cache_entries, prune_cache_index_orphans,
+};
 
 use crate::panels::Shared;
 use crate::view::ConnectionItem;
@@ -26,6 +30,34 @@ struct CacheEntry {
     name: String,
     size: u64,
     exists: bool,
+}
+
+/// 「最近使用」人性化时间（孤儿条目展示用；`last_used_at` 为 unix 秒）。
+fn days_ago(secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = (now - secs) / 86400;
+    if days <= 0 {
+        "今天".to_string()
+    } else {
+        format!("{days} 天前")
+    }
+}
+
+/// 采集孤儿缓存条目（指纹索引，跨会话持久）。
+///
+/// 孤儿 = 连接已删除（`release` 后引用清空）但缓存文件仍在；全局域可定位文件，
+/// 项目域索引无 `project_path`，仅展示、文件无法自动定位。
+fn collect_orphans() -> Vec<engine::persistence::OrphanCacheEntry> {
+    match list_orphan_cache_entries(None) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("[cache-dialog] 孤儿缓存条目读取失败: {e}");
+            Vec::new()
+        }
+    }
 }
 
 /// 连接 ID 前缀 → 元数据缓存归属（`G_` 全局目录；`P_`/`GP_` 项目目录）。
@@ -95,6 +127,8 @@ fn human_size(bytes: u64) -> String {
 pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
     let entries = Rc::new(RefCell::new(collect_entries(shared)));
     let entries_build = entries.clone();
+    let orphans = Rc::new(RefCell::new(collect_orphans()));
+    let orphans_build = orphans.clone();
     let shared_build = shared.clone();
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
@@ -172,6 +206,96 @@ pub fn open_cache_dialog(window: &mut Window, cx: &mut App, shared: &Shared) {
                                 }),
                             ),
                     );
+            }
+        }
+
+        // 孤儿缓存分区：连接已删除（引用清空）但缓存文件仍在，来自跨会话指纹索引。
+        // 全局域文件可定位删除；项目域索引无 project_path，仅展示（无法自动定位）。
+        let orphan_list = orphans_build.borrow();
+        let orphan_total: u64 = orphan_list.iter().map(|e| e.file_size).sum();
+        let orphan_global = orphan_list
+            .iter()
+            .filter(|e| e.scope == CacheScope::Global)
+            .count();
+        body = body.child(Separator::horizontal().label("孤儿缓存"));
+        body = body.child(
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .child(div().flex_1().child(format!(
+                    "{orphan_global} 项可清理 · {}",
+                    human_size(orphan_total)
+                )))
+                .child(
+                    Button::new("cache-clear-orphans")
+                        .ghost()
+                        .small()
+                        .label("清理孤儿")
+                        .disabled(orphan_global == 0)
+                        .on_click({
+                            let shared = shared_build.clone();
+                            let orphans = orphans_build.clone();
+                            move |_, _, app| {
+                                // 先删全局孤儿文件、再清索引行（顺序避免索引先清后文件无法归类）。
+                                if let Err(e) = cleanup_orphan_meta_files(None) {
+                                    *shared.notice.borrow_mut() =
+                                        Some(format!("孤儿文件清理失败：{e}"));
+                                }
+                                if let Err(e) = prune_cache_index_orphans() {
+                                    *shared.notice.borrow_mut() =
+                                        Some(format!("孤儿索引清理失败：{e}"));
+                                }
+                                *orphans.borrow_mut() = collect_orphans();
+                                shared.notify_host(app);
+                            }
+                        }),
+                ),
+        );
+        if orphan_list.is_empty() {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("暂无孤儿缓存。"),
+            );
+        } else {
+            for e in orphan_list.iter() {
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .w_full()
+                        .gap_2()
+                        .text_xs()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .child(e.description.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.colors.muted_foreground)
+                                .child(format!(
+                                    "{} · {}",
+                                    if e.scope == CacheScope::Global {
+                                        "全局"
+                                    } else {
+                                        "项目"
+                                    },
+                                    days_ago(e.last_used_at)
+                                )),
+                        )
+                        .child(div().text_color(theme.colors.muted_foreground).child(
+                            match &e.file_path {
+                                Some(_) => human_size(e.file_size),
+                                None => "无法定位".to_string(),
+                            },
+                        )),
+                );
             }
         }
 
