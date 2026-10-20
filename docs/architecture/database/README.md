@@ -83,6 +83,7 @@
 | 内省调用（catalog/schema/table/column…） | `crates/database/src/metadata_service.rs` |
 | 各数据库内省实现 / 能力位 | `crates/engine/src/driver/native/{mysql,postgres,sqlite,duckdb}.rs`（`MetadataBrowser`） |
 | 键盘动作（↑↓ / F4 / Alt+↑↓） | `crates/database/src/commands.rs` |
+| ER 建模视图（模型 / 桥 / 布局；渲染待做） | `crates/database/src/er/`（`model.rs` 桥 · `layout.rs` 分层布局；设计见 `database-er-model-view-design.md`） |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs` |
 
 数据链路：`NavView（导航面板）→ nav_jobs（后台工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标数据库`；
@@ -139,6 +140,7 @@ cargo check --workspace --all-targets -j 2
 | `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版（含 mermaid 流程图），章节一一对应，适合贴 PR / wiki |
 | `database-navigator-test-report-2026-10-03.md` | **验证（对齐 M3 测试报告体例）**：SQLite / DuckDB 真机全链路断言 + 单元回归基线 + 文档 - 代码一致性核对 + 缺陷修复记录 |
 | `metadata-cache-vs-dbeaver-datagrip.md` | **缓存为什么这样设计**：与 DBeaver / DataGrip 的 10 维度对照、三条硬约束、分页与搜索的落地记录、仍缺项的触发条件 |
+| `database-er-model-view-design.md` | **ER 建模视图怎么做**（原生 GPUI，不引入 webview）：定位与边界 / 数据流 / 模块归属判定 / ER 模型与「元数据 → 模型」桥 / 分层布局 / 渲染与面板 / 分期落地 / 开放项 / 实现位置映射表 |
 | `database-navigator-cache-invalidation.md` | **缓存缺陷与修复（2026-10-03）**：半成品缓存实证、`is_loaded` 完成标记语义修正、读侧过滤与重扫清残留、失效策略现状（删除 / 刷新 / 变更各自的设计决策） |
 | `../connection/README.md` | 上游：连接的新建 / 编辑与作用域路由（M3） |
 

@@ -193,7 +193,7 @@ impl NavView {
         &self,
         conn_filter: &NavConnFilter,
         conn: &ConnectionItem,
-        tags: &HashMap<String, Vec<String>>,
+        tags: &HashMap<String, Vec<tag::Tag>>,
     ) -> bool {
         conn_filter.passes(conn, tags.get(&conn.id), |driver| self.nav_type_of(driver))
     }
@@ -206,7 +206,7 @@ impl NavView {
         &self,
         conn_filter: &NavConnFilter,
         conn: &ConnectionItem,
-        tags: &HashMap<String, Vec<String>>,
+        tags: &HashMap<String, Vec<tag::Tag>>,
         filter: &str,
     ) -> bool {
         if !self.nav_conn_passes_facets(conn_filter, conn, tags) {
@@ -219,7 +219,7 @@ impl NavView {
             return true;
         }
         tags.get(&conn.id)
-            .map(|ts| ts.iter().any(|t| t.to_lowercase().contains(filter)))
+            .map(|ts| ts.iter().any(|t| t.name.to_lowercase().contains(filter)))
             .unwrap_or(false)
     }
 
@@ -1145,7 +1145,7 @@ impl NavView {
         } else {
             NavBadgeStatus::Idle
         };
-        let tag_list: Vec<String> = nav_view.tags.get(&conn.id).cloned().unwrap_or_default();
+        let tag_list: Vec<tag::Tag> = nav_view.tags.get(&conn.id).cloned().unwrap_or_default();
         drop(nav_view);
 
         // #3 连接显示名：区域前缀（`[项目]/[共享]/[全局]`）功能已移除（区域由归属域列承载）；
@@ -1246,8 +1246,10 @@ impl NavView {
 
         // 标签 chip（`⋯ → 显示标签` 开关）：开 = 常显；关 = 原型建议③「hover 显」
         // （连接行悬停时出现 ≤2 chip + `+N`，不进树）。两种模式都不在名称行内占位。
+        // 实体化后（规格 §7.5）：chip 名 = 定义名，色点 = 名称映射语义色（TagVariant 兜底）。
         let tag_chips = if !tag_list.is_empty() {
             let chip_bg = cx.theme().colors.list_hover;
+            let theme = cx.theme();
             // 标签字号用最初版小字 `text_xs`（与行内文字同尺寸，不因换行而变大）。
             let mut chips = div()
                 .h_flex()
@@ -1256,13 +1258,17 @@ impl NavView {
                 .flex_none()
                 .text_xs();
             for t in tag_list.iter().take(2) {
+                let dot = nav_tag_color(&t.name, theme);
                 chips = chips.child(
                     div()
+                        .h_flex()
+                        .items_center()
+                        .gap_0p5()
                         .px_1()
                         .rounded_sm()
                         .bg(chip_bg)
-                        .text_color(muted)
-                        .child(t.clone()),
+                        .child(div().size_1p5().rounded_full().bg(dot))
+                        .child(div().text_color(muted).child(t.name.clone())),
                 );
             }
             if tag_list.len() > 2 {

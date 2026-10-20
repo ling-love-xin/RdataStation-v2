@@ -344,7 +344,7 @@ fn scratchpad_job_writes_under_project_root() {
         }
         other => panic!("期望 Exported，实际 {other:?}"),
     }
-    let saved: Vec<String> = std::fs::read_dir(dir.join("mock"))
+    let saved: Vec<String> = std::fs::read_dir(dir.join("scratchpad").join("mock"))
         .expect("mock 目录")
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())

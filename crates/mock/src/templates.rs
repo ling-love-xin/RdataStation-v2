@@ -1442,6 +1442,22 @@ pub fn get_template_by_id(id: &str) -> Option<ScenarioTemplate> {
     get_builtin_templates().into_iter().find(|t| t.id == id)
 }
 
+/// 空白场景模板（工具栏「▦ 新增场景」的起点）：0 张表，从「＋ 加表」开始。
+///
+/// 不放进 `get_builtin_templates`（那不是用户可选模板，是「从零开始」的入口）；
+/// 只在面板的「新增场景」动作里按需构造。
+pub fn blank_scene_template() -> ScenarioTemplate {
+    ScenarioTemplate {
+        id: "builtin:blank".to_string(),
+        name: "空白场景".to_string(),
+        description: "从 0 张表开始的自定义多表生成：加表 / 加关系后一次生成。".to_string(),
+        category: "custom".to_string(),
+        locale: "zh-CN".to_string(),
+        tables: Vec::new(),
+        seed: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

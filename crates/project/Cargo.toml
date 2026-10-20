@@ -13,6 +13,8 @@ paths.workspace = true
 
 # ===== UI（视图与 model/service 同 crate，见 GPUI-kit 编码指南）=====
 gpui-kit.workspace = true
+# 面板/控件尺寸常量与树行原语（ui.rs / tree 模块；shell 不依赖任何特性 crate，方向安全）
+workbench_shell.workspace = true
 
 # ===== 时间 =====
 chrono.workspace = true

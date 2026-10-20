@@ -158,6 +158,10 @@ fn flatten_respects_expand_and_filter() {
         ScratchpadSearchMode::Name,
         false,
         false,
+        // 无标签筛选（测试用例都走树形语义；标签维度由 primitives.rs 单测覆盖）。
+        None,
+        None,
+        &HashMap::new(),
         &mut out,
     );
     assert_eq!(out.len(), 1);
@@ -178,6 +182,10 @@ fn flatten_respects_expand_and_filter() {
         ScratchpadSearchMode::Name,
         false,
         false,
+        // 无标签筛选（测试用例都走树形语义；标签维度由 primitives.rs 单测覆盖）。
+        None,
+        None,
+        &HashMap::new(),
         &mut out,
     );
     assert_eq!(out.len(), 3);
@@ -196,6 +204,10 @@ fn flatten_respects_expand_and_filter() {
         ScratchpadSearchMode::Name,
         false,
         false,
+        // 无标签筛选（测试用例都走树形语义；标签维度由 primitives.rs 单测覆盖）。
+        None,
+        None,
+        &HashMap::new(),
         &mut out,
     );
     let names: Vec<&str> = out.iter().map(|(_, e)| e.name.as_str()).collect();

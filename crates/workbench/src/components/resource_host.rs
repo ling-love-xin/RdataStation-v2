@@ -76,6 +76,7 @@ fn archive_seed(
     source_connection: Option<String>,
     groups: Vec<GroupOption>,
     group_id: Option<String>,
+    initial_tags: Vec<String>,
 ) -> (ArchiveDialogSeed, String) {
     let resolved = PayloadStore::new(root.to_path_buf()).free_rel_path(rel_path);
     let conflict = (resolved != rel_path).then(|| ArchiveConflict {
@@ -90,6 +91,7 @@ fn archive_seed(
         conflict,
         groups,
         group_id,
+        initial_tags,
     };
     (seed, resolved)
 }
@@ -367,6 +369,12 @@ impl ResourcesHost for WorkbenchResourceHost {
                 // 选一个：展开完整的归档确认（与「从本地文件归档…」同一条路）——
                 // 能改显示名、能看到"目标被占则改名到哪"。
                 [draft] => {
+                    // 归档继承（规格 §7.4）：草稿条目标签预填进归档对话框，用户可改可删；
+                    // 读标签失败不阻断归档（继承是"能带就带"）。
+                    let inherited_tags = scratchpad::ScratchpadStore::new(root.clone())
+                        .tags_of_entry(&draft.rel_path)
+                        .map(|tags| tags.into_iter().map(|t| t.name).collect())
+                        .unwrap_or_default();
                     let (seed, resolved_rel) = archive_seed(
                         &root,
                         format!("草稿箱：{}", draft.rel_path),
@@ -375,6 +383,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                         draft.connection_id.clone(),
                         known_groups.clone(),
                         default_group.clone(),
+                        inherited_tags,
                     );
                     let shared = shared.clone();
                     let draft = draft.clone();
@@ -421,6 +430,12 @@ impl ResourcesHost for WorkbenchResourceHost {
                         if resolved_rel != draft.rel_path {
                             renamed += 1;
                         }
+                        // 归档继承（规格 §7.4）：多选没有标签输入框，草稿条目标签直接带入；
+                        // 读标签失败不阻断归档（继承是"能带就带"）。
+                        let inherited_tags = scratchpad::ScratchpadStore::new(root.clone())
+                            .tags_of_entry(&draft.rel_path)
+                            .map(|tags| tags.into_iter().map(|t| t.name).collect())
+                            .unwrap_or_default();
                         let request = ArchiveRequest {
                             source_path: draft.abs_path.clone(),
                             rel_path: resolved_rel,
@@ -439,7 +454,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                                 source_connection_id: draft.connection_id.clone(),
                                 source_table: None,
                             },
-                            tags: Vec::new(),
+                            tags: inherited_tags,
                             group_id: None,
                             keep_versions: None,
                             existing_resource_id: None,
@@ -502,6 +517,8 @@ impl ResourcesHost for WorkbenchResourceHost {
             None,
             self.known_groups(cx),
             self.default_group_for_archive(cx),
+            // 本地文件没有草稿标签可继承。
+            Vec::new(),
         );
 
         let shared = self.shared.clone();

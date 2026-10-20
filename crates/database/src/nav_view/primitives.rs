@@ -786,3 +786,46 @@ pub(super) fn nav_row_height(
     }
     height
 }
+
+/// 标签名 → 色档下标（纯函数，可单测；哈希取模保证同名稳定、异名分散）。
+pub(super) fn nav_tag_palette_index(name: &str, len: usize) -> usize {
+    let mut h = 0u64;
+    for b in name.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(u64::from(b));
+    }
+    (h as usize) % len
+}
+
+/// 标签 chip 色点：按名称稳定映射到主题语义色（规格 §14 color→TagVariant 映射，
+/// 第 5 步导航接入统一做；不直渲 hex——标签颜色统一走语义 token，避免裸色值）。
+pub(super) fn nav_tag_color(name: &str, theme: &gpui_kit::component::Theme) -> Hsla {
+    let palette = [
+        theme.colors.info,
+        theme.colors.success,
+        theme.colors.warning,
+        theme.colors.primary,
+        theme.colors.muted_foreground,
+        theme.colors.info,
+        theme.colors.success,
+        theme.colors.warning,
+    ];
+    palette[nav_tag_palette_index(name, palette.len())]
+}
+
+#[cfg(test)]
+mod tests {
+    // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
+    use super::nav_tag_palette_index;
+
+    /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
+    #[test]
+    fn tag_palette_is_stable_and_spread() {
+        assert_eq!(nav_tag_palette_index("报表", 8), nav_tag_palette_index("报表", 8));
+        let names = ["报表", "核心", "待整理", "月报", "prod", "archive"];
+        let mut seen = std::collections::HashSet::new();
+        for n in names {
+            seen.insert(nav_tag_palette_index(n, 8));
+        }
+        assert!(seen.len() >= 2, "不同标签应落在不同色档（至少两档）");
+    }
+}

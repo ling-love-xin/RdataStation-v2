@@ -51,6 +51,15 @@ pub enum ProfileRequest {
 }
 
 impl ProfileRequest {
+    /// 源目标的取样来源（临时表目标为 `None`）。
+    pub fn source(&self) -> Option<&crate::model::SampleSource> {
+        match self {
+            ProfileRequest::SourceColumn { source, .. }
+            | ProfileRequest::SourceTable { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+
     /// 从面板目标解析出请求；**当前不支持的形态返回 `None`**。
     ///
     /// Phase 1 做列画像，Phase 3 加表探查；多列与结构在后续期次落地（结构走
@@ -401,6 +410,77 @@ pub fn request_profile(
     cx: &mut App,
 ) {
     let weak = view.downgrade();
+    // 源目标（要取样）：拆成「取样 → 画像」两段，中间把加载说明推进一档。
+    //
+    // 取样是慢的那一段：源库查询 + DuckDB 建分析临时表（大表 CTAS 可能较久，
+    // 且 CTAS 在库内完成、拿不到真百分比）——所以分阶段给文字说明 + 不确定进度条，
+    // 而不是让用户对着干骨架以为卡住了。
+    if let Some(source) = request.source() {
+        let source = source.clone();
+        let _ = weak.update(cx, |panel, cx| {
+            panel.set_loading_note(
+                Some("正在取样并建分析临时表（大表可能需要一些时间）…".into()),
+                cx,
+            );
+        });
+        let sample_task = cx.background_executor().spawn(async move {
+            // gpui 的 background_executor 不是 Tokio：驱动层 `tokio::time`（PG 探活）在
+            // 非 Tokio 上下文会 panic（`there is no reactor running`）。包一层进程级单例
+            // runtime 的 block_on，把整条取样 async 链放回 Tokio 上下文再 await。
+            crate::service::block_on(
+                crate::service::persistence::sample_source_to_analysis_table(&source),
+            )
+        });
+        cx.spawn(async move |cx| {
+            let temp_table = match sample_task.await {
+                Ok(table) => table,
+                Err(err) => {
+                    let info = InsightService::describe_error(&err);
+                    let _ = weak.update(cx, |panel, cx| {
+                        panel.set_error(info.message, info.retryable, cx)
+                    });
+                    return;
+                }
+            };
+            // 取样完成，进入画像阶段
+            let _ = weak.update(cx, |panel, cx| {
+                panel.set_loading_note(Some("正在计算画像…".into()), cx);
+            });
+            let profile_task = cx.background_executor().spawn(async move {
+                let root = project_root.as_deref();
+                match request {
+                    ProfileRequest::SourceColumn { column, .. } => {
+                        InsightService::profile_column_view(root, &temp_table, &column)
+                            .map(|view| ProfileOutcome::SourceColumn { temp_table, view })
+                    }
+                    ProfileRequest::SourceTable { table_name, .. } => {
+                        InsightService::profile_table_view(root, &temp_table, &table_name)
+                            .map(|view| ProfileOutcome::SourceTable { temp_table, view })
+                    }
+                    _ => unreachable!(),
+                }
+            });
+            let result = profile_task.await;
+            let _ = weak.update(cx, |panel, cx| match result {
+                Ok(ProfileOutcome::SourceColumn { temp_table, view }) => {
+                    panel.set_source_sample(temp_table, cx);
+                    panel.set_profile(view, cx);
+                }
+                Ok(ProfileOutcome::SourceTable { temp_table, view }) => {
+                    panel.set_source_sample(temp_table, cx);
+                    panel.set_table_profile(view, cx);
+                }
+                Err(err) => {
+                    let info = InsightService::describe_error(&err);
+                    panel.set_error(info.message, info.retryable, cx);
+                }
+                _ => {}
+            });
+        })
+        .detach();
+        return;
+    }
+
     let task = cx.background_executor().spawn(async move {
         let root = project_root.as_deref();
         match request {
@@ -414,13 +494,8 @@ pub fn request_profile(
                 table_name,
             } => InsightService::profile_table_view(root, &temp_table, &table_name)
                 .map(ProfileOutcome::Table),
-            ProfileRequest::SourceColumn { source, column } => {
-                InsightService::profile_source_column(root, &source, &column)
-                    .map(|(temp_table, view)| ProfileOutcome::SourceColumn { temp_table, view })
-            }
-            ProfileRequest::SourceTable { source, table_name } => {
-                InsightService::profile_source_table(&source, &table_name)
-                    .map(|(temp_table, view)| ProfileOutcome::SourceTable { temp_table, view })
+            ProfileRequest::SourceColumn { .. } | ProfileRequest::SourceTable { .. } => {
+                unreachable!("源目标已在上方两段式分支处理")
             }
         }
     });

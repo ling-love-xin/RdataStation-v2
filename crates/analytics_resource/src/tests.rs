@@ -14,8 +14,13 @@ mod tests {
 
     const PAYLOAD_MODE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+    /// 关联表去 tag 外键（标签定义上移全局库，规格 §7.2；跨库无法 FK 约束）。
+    const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
+        "../../engine/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
+    );
 
-    /// 测试库跑**三段**迁移：007（表结构）+ 020（分析存档新列）+ 023（copy/reference 两档）。
+    /// 测试库跑**四段**迁移：007（表结构）+ 020（分析存档新列）+ 023（copy/reference 两档）+
+    /// 024（关联表去 tag 外键）。
     ///
     /// 跑齐是刻意的：只跑 007 的话，测试库的表结构与生产库不一致，行映射一旦引用新列
     /// 就会在测试里报 "no such column"（是缺陷，不是噪声）。
@@ -40,8 +45,12 @@ mod tests {
             inner
                 .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
                 .expect("run migration 023");
+            inner
+                .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
+                .expect("run migration 024");
         }
-        let store = AnalyticsResourceStore::new(pool);
+        // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
+        let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));
         (store, dir)
     }
 
@@ -389,9 +398,9 @@ mod tests {
         let counts = store.tag_usage_counts().await.expect("counts");
         assert_eq!(counts.get(&tag.id).copied(), Some(1));
 
-        // 删除：解除关联 + 标签从列表消失（再建同名不再撞旧行）。
-        let unlinked = store.delete_tag(&tag.id).await.expect("delete tag");
-        assert_eq!(unlinked, 1, "删除要报告解除了几条关联");
+        // 删除：只软删定义行（规格 D2），标签从活跃列表消失（查询侧过滤软删行）；
+        // 关联保留在库里，但同名重建的新 id 不会把它带回。
+        store.delete_tag(&tag.id).await.expect("delete tag");
         assert!(
             store
                 .get_tags_for_resource(&resource.id)

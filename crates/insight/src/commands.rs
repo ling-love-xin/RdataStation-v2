@@ -6,17 +6,17 @@
 //! 也不写进文档的快捷键表）。
 //!
 //! 键位的 key context 是 `insight`（面板根元素的 `key_context`）。
+//!
+//! 曾经定义过 `OpenInsight` / `ReloadInsightRules` 两个动作，但全仓库无使用点：
+//! Quick Open 的「打开洞察」走 `Action::OpenRightPanel(RightPanel::Insight)`，规则重载走
+//! `RulesEvent::ReloadRequested`——按「注册了才宣传」原则删除，避免误导。
 
 use gpui_kit::*;
 
 actions!(
     insight,
     [
-        /// 打开右 Dock 洞察面板（Quick Open 的「打开洞察」项走同一条路）
-        OpenInsight,
         /// 重算当前目标画像（保持 Tab 与折叠态）
-        InsightRefresh,
-        /// 规则热加载的兜底 / 排障入口（常规改动由目录监听处理）
-        ReloadInsightRules
+        InsightRefresh
     ]
 );

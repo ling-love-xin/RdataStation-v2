@@ -1710,6 +1710,135 @@ pub(crate) fn unique_path(path: PathBuf) -> PathBuf {
     parent.join(&new_name)
 }
 
+// ===== 标签（统一规格 §7.3：project tags + scratchpad_tags 关联） =====
+//
+// 草稿条目是磁盘文件，身份 = 模块内相对路径（entry_id）；标签定义在项目库 `tags` 表
+// （scope=project，由 rds-tag 懒建），关联在 `scratchpad_tags`（迁移 025，同库无外键，
+// 引用完整性由「定义先写、关联后写」+ 读取侧过滤 deleted_at 保证，规格 §3.4 D1）。
+// 标签是索引，不写文件元数据（规格 §7.3「文件本体不动」）。
+
+impl ScratchpadStore {
+    /// 打开项目库标签表（scope=project；`tags` 表由 TagTable 懒建 ensure_tables，幂等）。
+    fn project_tags(&self) -> Result<tag::TagTable, CoreError> {
+        tag::TagTable::open_project(&self.project_root)
+    }
+
+    /// 项目标签定义（活跃，按名称升序）。
+    pub fn list_project_tags(&self) -> Result<Vec<tag::Tag>, CoreError> {
+        use ::tag::TagDefinitions as _;
+        self.project_tags()?.list_tags()
+    }
+
+    /// 新建项目标签（同名活跃存在时撞部分唯一索引报错；`key:value` 约定见规格 §6）。
+    pub fn create_project_tag(&self, name: &str) -> Result<tag::Tag, CoreError> {
+        use ::tag::TagDefinitions as _;
+        self.project_tags()?.create_tag(name, None, None)
+    }
+
+    /// 某草稿条目的活跃标签（关联 + 定义同库 JOIN，过滤软删；按名称升序）。
+    pub fn tags_of_entry(&self, rel_path: &str) -> Result<Vec<tag::Tag>, CoreError> {
+        let table = self.project_tags()?;
+        let mut stmt = table
+            .conn()
+            .prepare(
+                "SELECT t.id, t.name, t.color, t.icon, t.scope, t.created_at, t.deleted_at
+                 FROM scratchpad_tags st
+                 JOIN tags t ON t.id = st.tag_id
+                 WHERE st.entry_id = ?1 AND t.deleted_at IS NULL
+                 ORDER BY t.name COLLATE NOCASE, t.created_at",
+            )
+            .map_err(|e| self.tag_err("prepare_entry_tags", e))?;
+        let rows = stmt
+            .query_map([rel_path], |row| {
+                Ok(tag::Tag {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    icon: row.get(3)?,
+                    scope: row.get(4)?,
+                    created_at: row.get(5)?,
+                    deleted_at: row.get(6)?,
+                })
+            })
+            .map_err(|e| self.tag_err("query_entry_tags", e))?;
+        let mut tags = Vec::new();
+        for row in rows {
+            tags.push(row.map_err(|e| self.tag_err("row_entry_tags", e))?);
+        }
+        Ok(tags)
+    }
+
+    /// 全部草稿条目的活跃标签（一次查全，列表标签筛选的数据源；键 = 模块内相对路径）。
+    pub fn tags_by_entry(&self) -> Result<std::collections::HashMap<String, Vec<tag::Tag>>, CoreError> {
+        let table = self.project_tags()?;
+        let mut stmt = table
+            .conn()
+            .prepare(
+                "SELECT st.entry_id, t.id, t.name, t.color, t.icon, t.scope, t.created_at, t.deleted_at
+                 FROM scratchpad_tags st
+                 JOIN tags t ON t.id = st.tag_id
+                 WHERE t.deleted_at IS NULL
+                 ORDER BY t.name COLLATE NOCASE, t.created_at",
+            )
+            .map_err(|e| self.tag_err("prepare_all_entry_tags", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let tag = tag::Tag {
+                    id: row.get(1)?,
+                    name: row.get(2)?,
+                    color: row.get(3)?,
+                    icon: row.get(4)?,
+                    scope: row.get(5)?,
+                    created_at: row.get(6)?,
+                    deleted_at: row.get(7)?,
+                };
+                Ok((row.get::<_, String>(0)?, tag))
+            })
+            .map_err(|e| self.tag_err("query_all_entry_tags", e))?;
+        let mut out = std::collections::HashMap::<String, Vec<tag::Tag>>::new();
+        for row in rows {
+            let (entry_id, tag) = row.map_err(|e| self.tag_err("row_all_entry_tags", e))?;
+            out.entry(entry_id).or_default().push(tag);
+        }
+        Ok(out)
+    }
+
+    /// 打标（幂等：重复关联忽略）。
+    pub fn attach_tag(&self, rel_path: &str, tag_id: &str) -> Result<(), CoreError> {
+        let table = self.project_tags()?;
+        table
+            .conn()
+            .execute(
+                "INSERT OR IGNORE INTO scratchpad_tags (entry_id, tag_id) VALUES (?1, ?2)",
+                rusqlite::params![rel_path, tag_id],
+            )
+            .map_err(|e| self.tag_err("attach_tag", e))?;
+        Ok(())
+    }
+
+    /// 去标（不存在则无操作）。
+    pub fn detach_tag(&self, rel_path: &str, tag_id: &str) -> Result<(), CoreError> {
+        let table = self.project_tags()?;
+        table
+            .conn()
+            .execute(
+                "DELETE FROM scratchpad_tags WHERE entry_id = ?1 AND tag_id = ?2",
+                rusqlite::params![rel_path, tag_id],
+            )
+            .map_err(|e| self.tag_err("detach_tag", e))?;
+        Ok(())
+    }
+
+    /// 标签操作错误（定义侧错误由 `tag::TagTable` 自带透传）。
+    fn tag_err(&self, operation: &str, reason: impl std::fmt::Display) -> CoreError {
+        CoreError::storage(StorageError::Persistence {
+            store: "scratchpad_tags".to_string(),
+            operation: operation.to_string(),
+            reason: reason.to_string(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2317,6 +2446,68 @@ mod tests {
                 .await
                 .is_err()
         );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    /// 测试里建 `scratchpad_tags` 表（迁移 025 的等价 DDL；生产由迁移系统建）。
+    fn ensure_scratchpad_tags_table(store: &ScratchpadStore) {
+        let table = store.project_tags().expect("open project tags");
+        table
+            .conn()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS scratchpad_tags (
+                    entry_id TEXT NOT NULL,
+                    tag_id   TEXT NOT NULL,
+                    PRIMARY KEY (entry_id, tag_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_scratchpad_tags_tag ON scratchpad_tags(tag_id);",
+            )
+            .expect("create scratchpad_tags");
+    }
+
+    #[tokio::test]
+    async fn tag_attach_detach_and_read_back() {
+        let project = temp_project("tags");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        ensure_scratchpad_tags_table(&store);
+
+        // 新建项目标签（scope=project）。
+        let a = store.create_project_tag("报表").unwrap();
+        let b = store.create_project_tag("重要").unwrap();
+        assert_eq!(a.scope, tag::SCOPE_PROJECT, "草稿箱标签作用域 = project");
+        // 同名活跃拒绝（部分唯一索引）。
+        assert!(store.create_project_tag("报表").is_err());
+
+        // 打标 + 读取（幂等：重复关联忽略）。
+        store.attach_tag("drafts/a.sql", &a.id).unwrap();
+        store.attach_tag("drafts/a.sql", &b.id).unwrap();
+        store.attach_tag("drafts/a.sql", &a.id).unwrap();
+        store.attach_tag("drafts/b.sql", &a.id).unwrap();
+        let tags_a = store.tags_of_entry("drafts/a.sql").unwrap();
+        assert_eq!(tags_a.len(), 2, "两条标签，重复打标不叠加");
+        assert_eq!(tags_a[0].name, "报表", "按名称升序：报表在前");
+        assert_eq!(tags_a[1].name, "重要");
+
+        // 一次查全（列表筛选数据源）。
+        let by_entry = store.tags_by_entry().unwrap();
+        assert_eq!(by_entry.len(), 2, "两个条目各带标签");
+        assert_eq!(by_entry["drafts/b.sql"][0].id, a.id);
+
+        // 去标（不存在则无操作）。
+        store.detach_tag("drafts/a.sql", &a.id).unwrap();
+        store.detach_tag("drafts/a.sql", &a.id).unwrap();
+        let tags_a = store.tags_of_entry("drafts/a.sql").unwrap();
+        assert_eq!(tags_a.len(), 1);
+        assert_eq!(tags_a[0].id, b.id);
+
+        // 软删定义后读取侧过滤（规格 §5 D2：删除不清关联）。
+        use ::tag::TagDefinitions as _;
+        let table = store.project_tags().unwrap();
+        table.delete_tag(&b.id).unwrap();
+        let tags_a = store.tags_of_entry("drafts/a.sql").unwrap();
+        assert!(tags_a.is_empty(), "定义软删后关联读取侧过滤掉");
 
         std::fs::remove_dir_all(&project).ok();
     }

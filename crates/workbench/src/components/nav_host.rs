@@ -316,6 +316,10 @@ impl NavHost for WorkbenchNavHost {
         crate::components::group_manager_dialog::open_group_manager_dialog(window, cx, &self.shared);
     }
 
+    fn open_tag_manager(&self, window: &mut Window, cx: &mut App) {
+        crate::components::tag_manager_dialog::open_tag_manager_dialog(window, cx, &self.shared);
+    }
+
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
         self.shared.open_right_panel(panel, cx);
     }

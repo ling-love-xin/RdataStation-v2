@@ -1,7 +1,13 @@
-//! 工作台 Dock 面板（Round 20）
+//! 工作台 Dock 面板（Round 20 / 真面板化）
 //!
 //! DockArea 布局系统接入后，原侧边栏/内容区拆为独立面板实体：
-//! - `SidebarPanel`：按活动工具渲染连接列表 / 导航树 / 资源 / 设置；
+//! - 左 dock 4 个模块 tab：`left_tabs.rs`（数据库导航 / 草稿箱 / 资产库 / 插件）；
+//! - 右 dock 4 个模块 tab：`right_tabs.rs`（洞察 / Mock 生成 / 历史 / 存档详情）；
+//!   每个模块 = 独立 dock tab（薄壳面板持有各 crate 自持视图），dock 自动生成
+//!   tab 条 → 同面切换 / 拖拽分栏；活动栏点击经宿主 `select_*_panel` 切 tab，
+//!   tab 点击经 `set_active` 同步回活动栏高亮（双向同步）。
+//! - `SidebarPanel` / `RightSidebarPanel`：构造期外壳（创建内层视图实体 + 注入
+//!   宿主桥 + 对话框动作），不再注册进 dock；对话框 / reveal 消费在宿主 render。
 //! - `EditorPanel`：中央内容区（连接详情 + 新建连接）；
 //! - `Shared`：面板与工作台之间共享的状态（工具 / 选中连接 / 连接数据 / 通知文案）。
 //!
@@ -31,20 +37,24 @@ use scratchpad::ScratchpadView;
 use ::editor::shared::EditorShared;
 
 mod editor;
+mod left_tabs;
 mod metadata_search;
 mod project_picker;
 mod property_panel;
 mod resources;
 mod right;
+mod right_tabs;
 mod search_results;
 mod shared;
 
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
 pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
+pub use left_tabs::{DatabaseNavPanel, PluginPanel, ResourcePanelTab, ScratchPanel};
 pub use property_panel::{PropertyHostPanel, focus_property_tab};
 pub use project_picker::ProjectPickerPanel;
 pub use right::RightSidebarPanel;
+pub use right_tabs::{ArchivePanel, HistoryPanelTab, InsightPanelTab, MockPanelTab};
 pub use scratchpad::ScratchpadDiffView;
 pub use scratchpad::ScratchpadSearchView;
 pub use metadata_search::{MetadataSearchHostPanel, focus_metadata_search_tab};
@@ -125,11 +135,37 @@ impl SidebarPanel {
         div().v_flex().size_full().min_h_0().child(panel)
     }
 
+    // ===== 真面板化访问器：左 dock 模块 tab 薄壳取内层实体 =====
+
+    /// 数据源导航视图实体（`left_tabs::DatabaseNavPanel` 持有）。
+    pub(crate) fn nav_entity(&self) -> Entity<NavView> {
+        self.nav_panel.clone()
+    }
+
+    /// 草稿箱视图实体（`left_tabs::ScratchPanel` 持有）。
+    pub(crate) fn scratchpad_entity(&self) -> Entity<ScratchpadView> {
+        self.scratchpad_panel.clone()
+    }
+
+    /// 资产库面板实体（`left_tabs::ResourcePanelTab` 持有）。
+    pub(crate) fn resources_entity(&self) -> Entity<ResourcesPanel> {
+        self.resources_panel.clone()
+    }
+
+    /// 消费「在导航树中定位」请求（原在 `SidebarPanel::render`，面板不再渲染后
+    /// 由宿主 render 转发到这里；render 仍是权威同步点，不在事件路径碰面板状态）。
+    pub(crate) fn consume_reveal(&self, cx: &mut Context<Self>) {
+        if let Some(object) = self.shared.take_reveal() {
+            let panel = self.nav_panel.clone();
+            panel.update(cx, |panel, cx| panel.reveal_ref(&object, cx));
+        }
+    }
+
     /// 消费「待开的版本历史对话框」（M6）：建状态 → 存会话 → 开窗。
     ///
     /// 开窗与关窗都要 `Window`，而轮询任务里没有——所以取数回来只置 `pending`，
     /// 在这一帧（render）里开。关窗时清会话：再开同一存档才会走"新开"那条。
-    fn ensure_version_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_version_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rows) = self.shared.version_dialog.borrow_mut().pending.take() else {
             return;
         };
@@ -180,7 +216,7 @@ impl SidebarPanel {
     /// 消费「待开的索引修复对话框」（M6）：与版本历史同一形态（见 `ensure_version_dialog`）。
     ///
     /// 不分资源且一次只开一个：关窗就把会话清掉（下次扫描回来重新开）。
-    fn ensure_repair_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_repair_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(scan) = self.shared.repair_dialog.borrow_mut().pending.take() else {
             return;
         };
@@ -214,7 +250,7 @@ impl SidebarPanel {
     ///
     /// 项目级回收站一个项目只有一处，同样一次只开一个：关窗就把会话清掉
     /// （下次取数回来重新开，拿到的是当时的最新条目）。
-    fn ensure_trash_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_trash_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(seed) = self.shared.trash_dialog.borrow_mut().pending.take() else {
             return;
         };
@@ -250,7 +286,7 @@ impl SidebarPanel {
     ///
     /// 输入实体在这里建（开窗要 `Window`，轮询任务里没有）；会话带 `targets`——
     /// 换一批存档要重开（同一批再要一次只是刷新行）。
-    fn ensure_tag_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_tag_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rows) = self.shared.tag_dialog.borrow_mut().pending.take() else {
             return;
         };

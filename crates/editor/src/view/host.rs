@@ -162,6 +162,9 @@ pub struct EditorHostPanel {
     /// 欢迎页是否已被用户点掉（启动空白文档的“空编辑器”换成欢迎页；
     /// 点「开始编写」或内容非空后回到正常编辑器）
     welcome_dismissed: bool,
+    /// 【2026-10-19】脏态自绘 ✕ 的悬浮开关：鼠标悬停标题才显示关闭按钮，
+    /// 避免常驻 ✕ 与标题内容互相遮挡（见 `title_suffix`）。
+    title_hovered: std::cell::Cell<bool>,
     /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
     grid: Entity<TableState<ResultGridDelegate>>,
     /// 本文档**已提交、尚未回填**的语句数（B2：批量 = 多条；`> 0` 就是“执行中”）
@@ -668,6 +671,7 @@ impl EditorHostPanel {
             edit_mode: EditMode::Row,
             closed: false,
             welcome_dismissed: false,
+            title_hovered: std::cell::Cell::new(false),
             grid,
             pending: 0,
             running_since: None,
@@ -6504,6 +6508,9 @@ impl ComponentPanel for EditorHostPanel {
     }
 
     /// 脏点：Dock 没有"关闭前询问"钩子，脏状态必须**在标签上可见**（否则用户会误关）
+    ///
+    /// 2026-10-19：自绘 ✕ 改为**悬停显示**（`title_hovered` 随标题区 hover 翻转），
+    /// 平时只留脏点；鼠标移上标题才出现关闭按钮，避免常驻 ✕ 遮挡标题（#16）。
     fn title_suffix(
         &mut self,
         _window: &mut Window,
@@ -6516,10 +6523,24 @@ impl ComponentPanel for EditorHostPanel {
             // （`request_close_document`），保证“编辑区也有关闭入口”且不会误丢。
             let panel = cx.entity();
             let area = self.area.clone();
+            let hovered = self.title_hovered.get();
             div()
+                .id(format!("sp-dirty-hover-{}", panel.entity_id()))
                 .h_flex()
                 .items_center()
                 .gap_1()
+                .on_hover({
+                    // hover 闭包用 clone：不消耗 `panel`，留给下方 on_click 用。
+                    let panel_hover = panel.clone();
+                    move |&hovering, _, app| {
+                        panel_hover.update(app, |this, cx| {
+                            if this.title_hovered.get() != hovering {
+                                this.title_hovered.set(hovering);
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
                 .child(
                     div()
                         .size(rems(ui::STATUS_DOT_SIZE))
@@ -6532,6 +6553,7 @@ impl ComponentPanel for EditorHostPanel {
                         .xsmall()
                         .ghost()
                         .tab_stop(false)
+                        .opacity(if hovered { 1.0 } else { 0.0 })
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             if let Some(area) = area.as_ref().and_then(|weak| weak.upgrade()) {

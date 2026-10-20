@@ -6,7 +6,7 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, IconName, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
 use gpui_kit::*;
 
 use super::{grade_color, ratio_bar};
@@ -105,10 +105,10 @@ impl InsightView {
                             .child(format!("正在评估 {}/{} 列…", progress.done, progress.total)),
                     )
                     .child(ratio_bar(
+                        "insight-eval-progress",
                         progress.ratio(),
-                        ui::INSIGHT_RATIO_BAR_HEIGHT,
+                        Size::Small,
                         colors.primary,
-                        theme,
                     )),
             );
         }

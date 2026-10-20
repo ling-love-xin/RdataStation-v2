@@ -484,6 +484,26 @@ fn postgres_native_rows_to_arrow(
 // ============================================================================
 
 /// 把查询结果装进 `QueryResult`（`is_read_only` 如实填，理由见 sqlx 那份）。
+/// 0 行结果的列名兜底：`SELECT` 空表 / 过滤后无匹配行时 `rows` 为空，
+/// 但结果集**仍有列结构**（洞察的空表取样靠列名建「有列无行」的临时表，
+/// 此前 0 行直接给空列，导致 `result_columns_and_rows` 报「取样没有拿到列」）。
+///
+/// tokio-postgres 的 `prepare` 只准备语句不执行（列描述可从 `statement.columns()` 取）。
+async fn describe_columns_pg_native(
+    client: &tokio_postgres::Client,
+    sql: &str,
+) -> Result<Vec<String>, CoreError> {
+    let statement = client
+        .prepare(sql)
+        .await
+        .map_err(|e| query_error(sql, e))?;
+    Ok(statement
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect())
+}
+
 fn build_query_result(
     columns: &[String],
     rows: &[tokio_postgres::Row],
@@ -566,9 +586,12 @@ impl Database for PostgresNativeDatabase {
             .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
+            // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+            let columns = describe_columns_pg_native(&client, sql).await?;
             return Ok(QueryResult {
-                columns: vec![],
+                columns,
                 batches: vec![],
+                is_read_only: Some(is_read_only),
                 ..Default::default()
             });
         }
@@ -624,9 +647,12 @@ impl Database for PostgresNativeDatabase {
             .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
+            // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+            let columns = describe_columns_pg_native(&client, sql).await?;
             return Ok(QueryResult {
-                columns: vec![],
+                columns,
                 batches: vec![],
+                is_read_only: Some(is_read_only),
                 ..Default::default()
             });
         }
@@ -665,9 +691,12 @@ impl Database for PostgresNativeDatabase {
                     .map_err(|e| query_error(&sql_owned, e))?;
 
                 if rows.is_empty() {
+                    // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+                    let columns = describe_columns_pg_native(&guard, &sql_owned).await?;
                     return Ok(QueryResult {
-                        columns: vec![],
+                        columns,
                         batches: vec![],
+                        is_read_only: Some(is_read_only),
                         ..Default::default()
                     });
                 }
@@ -971,9 +1000,12 @@ impl Transaction for PostgresNativeTransaction {
             .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
+            // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+            let columns = describe_columns_pg_native(&client, sql).await?;
             return Ok(QueryResult {
-                columns: vec![],
+                columns,
                 batches: vec![],
+                is_read_only: Some(is_read_only),
                 ..Default::default()
             });
         }

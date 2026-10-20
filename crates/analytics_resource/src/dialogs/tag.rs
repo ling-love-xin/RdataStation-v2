@@ -429,7 +429,7 @@ pub fn open_tag_dialog(
                                     .confirm()
                                     .title(format!("删除标签「{name}」？"))
                                     .description(
-                                        "标签会从所有存档上摘掉（关联一并清除），但存档本身不受影响。",
+                                        "标签定义会软删并从列表消失，存档上的关联不再显示（存档本身不受影响；同名重建不会带回旧关联）。",
                                     )
                                     .button_props(
                                         DialogButtonProps::default()

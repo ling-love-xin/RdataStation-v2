@@ -332,7 +332,8 @@ fn set_tab_ignores_out_of_range_index(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.set_tab_from_index(99, cx);
         assert_eq!(view.tab(), PanelTab::Column, "越界下标不得改变 Tab");
-        view.set_tab_from_index(4, cx);
+        // 六 Tab（摘要首置）后，末位「历史」的索引是 5
+        view.set_tab_from_index(5, cx);
         assert_eq!(view.tab(), PanelTab::History);
     });
 }
@@ -452,6 +453,76 @@ fn renders_every_state_and_tab(cx: &mut TestAppContext) {
             window.draw(cx).clear(cx);
         });
     }
+}
+
+/// 大表取样加载说明：源目标 Loading 且 note 已设置时渲染「说明 + 进度条」，
+/// 没设置时是纯骨架（两种都必须能渲染一帧）。
+///
+/// note 由 `jobs::request_profile` 分阶段写入（取样中 → 画像中）；本测试直接
+/// 走 `set_loading_note`，钉「有 note 渲染说明行、无 note 不渲染」这个契约。
+#[gpui_kit::test]
+fn source_loading_renders_sample_note_only_when_set(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+
+    let source = crate::model::SampleSource::new("G_1", "SELECT 1", "shop.orders");
+    // 源表目标 → 落到「表」Tab 并进入加载态
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::SourceTable {
+                    source,
+                    table_name: "orders".into(),
+                },
+                cx,
+            );
+        });
+        window.draw(cx).clear(cx);
+    });
+    // 取样说明未设置：纯骨架，不应出现说明行
+    let note = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from(
+            "insight-sample-loading-note",
+        )))
+    });
+    assert!(
+        note.is_none(),
+        "没写 loading_note 时不得渲染取样说明（临时表目标保持纯骨架）"
+    );
+
+    // jobs 写阶段说明后：说明行出现
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_loading_note(
+                Some("正在取样并建分析临时表（大表可能需要一些时间）…".into()),
+                cx,
+            )
+        });
+        window.draw(cx).clear(cx);
+    });
+    let note = cx.update(|window, _| {
+        window.find(ElementId::Name(SharedString::from(
+            "insight-sample-loading-note",
+        )))
+    });
+    assert!(note.visible(), "取样说明行应可见");
+
+    // 阶段推进到「画像中」：文案跟着 jobs 的更新走（仍渲染说明行）
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_loading_note(Some("正在计算画像…".into()), cx)
+        });
+        window.draw(cx).clear(cx);
+    });
+    let note = cx.update(|window, _| {
+        window.find(ElementId::Name(SharedString::from(
+            "insight-sample-loading-note",
+        )))
+    });
+    assert!(note.visible(), "画像阶段说明行应可见");
 }
 
 /// 表探查（Tab「表」）：四类状态（未评估 / 评估中 / 评估完 / 空列清单）都能渲染一帧。
@@ -907,6 +978,101 @@ fn schema_tab_requests_the_report_and_drills_down(cx: &mut TestAppContext) {
             Some(4)
         );
     });
+}
+
+/// 回归：同一分区里多行引用同一张表时，下钻按钮的元素 id 必须两两不同。
+///
+/// 两个外键候选都指向 `users`（`orders.user_id` / `orders.ship_id`）。旧实现只按表名拼
+/// 元素 id，同一帧会推出两个同 id 元素：a11y 节点重复，debug 构建直接 panic。
+///
+/// 测试窗口不激活 a11y（`Window::is_a11y_active` 恒 false），推不进 a11y 树，真渲染也
+/// 复现不出这个 panic；所以这里按**渲染时的同一套下标**（分区 / 行 / 表）重建 id 清单，
+/// 断言两两不同。顺带整帧绘制一遍，保证这块渲染本身不炸。
+#[gpui_kit::test]
+fn schema_drilldown_ids_are_unique_when_rows_share_a_table(cx: &mut TestAppContext) {
+    use crate::schema_analyzer::{ForeignKeyCandidate, SchemaInsightReport};
+    use std::collections::HashSet;
+
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+
+    let report = crate::schema_view::SchemaReportView::from_report(&SchemaInsightReport {
+        schema_name: "public".into(),
+        table_count: 2,
+        total_columns: 8,
+        fk_candidates: vec![
+            ForeignKeyCandidate {
+                source_table: "orders".into(),
+                source_column: "user_id".into(),
+                target_table: "users".into(),
+                target_column: "id".into(),
+                confidence: "high".into(),
+                naming_pattern: "{table}_id".into(),
+            },
+            ForeignKeyCandidate {
+                source_table: "orders".into(),
+                source_column: "ship_id".into(),
+                target_table: "users".into(),
+                target_column: "id".into(),
+                confidence: "medium".into(),
+                naming_pattern: "{table}_id".into(),
+            },
+        ],
+        type_mismatches: Vec::new(),
+        orphan_tables: Vec::new(),
+        redundant_columns: Vec::new(),
+        summary: "两份到 users 的外键候选".into(),
+        health_score: 80.0,
+        health_level: "良好".into(),
+    });
+
+    // id 清单按渲染口径重建：分区 → 行 → 表，三级下标都进 id
+    let ids: Vec<String> = crate::schema_view::SchemaSection::ALL
+        .iter()
+        .flat_map(|section| {
+            let section = *section;
+            report.group(section).into_iter().flat_map(move |group| {
+                group
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(row_ix, row)| {
+                        row.tables
+                            .iter()
+                            .take(crate::ui::INSIGHT_SCHEMA_DRILLDOWN_LIMIT)
+                            .enumerate()
+                            .map(move |(table_ix, table)| {
+                                crate::view::schema::drilldown_button_id(
+                                    section, row_ix, table_ix, table,
+                                )
+                                .to_string()
+                            })
+                    })
+            })
+        })
+        .collect();
+    assert_eq!(ids.len(), 4, "两个候选各露出两张表：{ids:?}");
+    assert_eq!(
+        ids.len(),
+        ids.iter().collect::<HashSet<_>>().len(),
+        "同一分区里两行引用同一张表，下钻按钮 id 仍要两两不同：{ids:?}"
+    );
+
+    // 整帧绘制：这块渲染本身也不能炸
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::Schema {
+                    conn_id: "G_pg".into(),
+                    database: "shop".into(),
+                    schema: Some("public".into()),
+                },
+                cx,
+            );
+            view.set_schema_report(report, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 /// 结构 Tab 的导出：内容与文件名都在面板侧算好（导出与界面同源，D36），

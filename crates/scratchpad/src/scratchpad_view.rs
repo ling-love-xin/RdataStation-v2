@@ -315,6 +315,18 @@ pub struct ScratchpadViewState {
     /// `key → { visible, side }`；缺省 = 显示 + 默认位置（左 5 右 2），⋯ 恒显。
     /// 空表 = 全默认（与 `settings.scratchpad.toolbar` 空表语义一致）。
     toolbar_cfg: BTreeMap<ToolbarButtonKey, ToolbarButtonCfg>,
+    /// 标签筛选（统一规格 §7.3）：`Some(tag_id)` = 只显示打了该标签的草稿文件（平铺）；
+    /// `None` = 全部。与文件名过滤相互独立（可叠加：两者都过才显示）。
+    tag_filter: Option<String>,
+    /// 草稿条目 → 活跃标签（键 = 模块内相对路径；加载树后回填，打标/去标后更新）。
+    entry_tags: std::collections::HashMap<String, Vec<tag::Tag>>,
+    /// 项目标签字典（scope=project，加载时读取；筛选下拉与打标弹窗共用，新建后更新）。
+    project_tags: Vec<tag::Tag>,
+    /// 标签编辑弹窗：正在打标的条目相对路径（`None` = 关闭）。
+    tag_dialog: Option<String>,
+    /// 标签编辑弹窗里的「新建标签」名称输入（懒创建）。
+    tag_new_input: Option<Entity<InputState>>,
+    _tag_new_sub: Option<Subscription>,
 }
 
 /// 草稿树滚动句柄包装（`VirtualListScrollHandle` 无 `Default`，此处补一个）。
@@ -434,6 +446,12 @@ impl Default for ScratchpadViewState {
             external_drag_since: None,
             // 工具栏按钮配置（⋯ 更多设置）：空表 = 全部显示 + 默认位置（缺省语义）。
             toolbar_cfg: BTreeMap::new(),
+            tag_filter: None,
+            entry_tags: HashMap::new(),
+            project_tags: Vec::new(),
+            tag_dialog: None,
+            tag_new_input: None,
+            _tag_new_sub: None,
         }
     }
 }

@@ -54,15 +54,46 @@ pub use service::ArchiveService;
 #[derive(Clone)]
 pub struct AnalyticsResourceStore {
     pool: Arc<ProjectSqlitePool>,
+    /// 全局标签定义存储（懒加载：首次标签操作时打开全局库；测试经 `paths` test-support
+    /// 隔离到临时全局库，不碰产品数据根）。
+    global_tags: Arc<std::sync::Mutex<Option<::tag::TagTable>>>,
+    /// 存量标签迁移是否已执行（进程内一次性；迁移本身幂等，可重跑不重复）。
+    tags_migrated: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AnalyticsResourceStore {
     pub fn new(pool: Arc<ProjectSqlitePool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            global_tags: Arc::new(std::sync::Mutex::new(None)),
+            tags_migrated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     async fn get_conn(&self) -> Result<SqlitePoolConnection, CoreError> {
         self.pool.acquire().await
+    }
+
+    /// 全局标签定义存储（懒加载打开 + 首次使用前跑存量迁移）。
+    ///
+    /// 闭包模式：同步段内完成即放锁（不跨 `await` 持有 `MutexGuard`，避免 async future
+    /// 非 `Send`；`MutexGuard::map` 需要 unstable feature，stable 不可用）。
+    /// 打开失败向上传播——全局库打不开时标签功能不可用，不静默降级。
+    fn with_global_tags<T>(
+        &self,
+        f: impl FnOnce(&::tag::TagTable) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let mut guard = self.global_tags.lock().map_err(|_| {
+            shared::error::CoreError::storage(shared::error::StorageError::Persistence {
+                store: "tags".to_string(),
+                operation: "lock_global_tags".to_string(),
+                reason: "全局标签表锁中毒".to_string(),
+            })
+        })?;
+        if guard.is_none() {
+            *guard = Some(::tag::TagTable::open_global()?);
+        }
+        f(guard.as_ref().expect("刚打开过，必为 Some"))
     }
 
     pub(crate) fn parse_datetime(s: String) -> Result<DateTime<Utc>, CoreError> {
@@ -77,6 +108,19 @@ impl AnalyticsResourceStore {
     #[cfg(test)]
     pub(crate) fn pool(&self) -> &Arc<ProjectSqlitePool> {
         &self.pool
+    }
+
+    /// 测试构造：全局标签库注入**本测试独立**路径（避免共享进程级隔离根导致的
+    /// 跨测试同名标签冲突；`open_at` 语义见 `rds-tag`）。
+    #[cfg(test)]
+    pub(crate) fn new_for_test(pool: Arc<ProjectSqlitePool>, global_db: std::path::PathBuf) -> Self {
+        let tags = ::tag::TagTable::open_at(global_db, ::tag::SCOPE_GLOBAL)
+            .expect("测试全局标签库打开失败");
+        Self {
+            pool,
+            global_tags: Arc::new(std::sync::Mutex::new(Some(tags))),
+            tags_migrated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 }
 

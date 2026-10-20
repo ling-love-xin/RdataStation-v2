@@ -198,7 +198,8 @@ fn click_draft_row_opens_central_empty_state(cx: &mut TestAppContext) {
     assert!(card.visible(), "中央空态卡片应渲染（mock-detail-scenario-empty）");
 }
 
-/// 场景 4：Mock 面板标题栏的「+」按钮（title_suffix 挂点）——可见，且点击打开中央草稿 tab。
+/// 场景 4：Mock 面板**工具栏**的「+」按钮（2026-10-18 起 ＋ 从标题栏迁到面板内工具栏）——
+/// 可见，且点击打开中央草稿 tab。
 #[gpui_kit::test]
 fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -209,14 +210,14 @@ fn title_suffix_plus_opens_draft_tab(cx: &mut TestAppContext) {
     cx.update(|_, app| shared.open_right_panel(RightPanel::Mock, app));
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 标题栏右侧「+」按钮存在且可见（Button 自带观测注册）
-    let plus = snap(cx, "mock-new-table");
-    assert!(plus.visible(), "Mock 面板标题栏应有「+」按钮（mock-new-table）");
+    // 工具栏「+」按钮存在且可见（标题栏只留标题，按钮在面板内 toolbar 一行）
+    let plus = snap(cx, "mock-toolbar-new-table");
+    assert!(plus.visible(), "Mock 工具栏应有「+」按钮（mock-toolbar-new-table）");
 
     // 点击「+」→ 打开 / 聚焦中央草稿 tab（与清单草稿行同一目标）
     cx.update(|window, app| {
         window.click(
-            ElementId::Name(SharedString::from("mock-new-table")),
+            ElementId::Name(SharedString::from("mock-toolbar-new-table")),
             app,
         )
     });

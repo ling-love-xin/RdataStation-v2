@@ -1456,18 +1456,16 @@ impl WorkbenchView {
             return;
         };
         // Hidden → Expanded 重建 dock 时，把当前激活模块设为 dock 初始 tab。
-        let initial_id = match self.shared.active_right.get() {
-            RightPanel::Insight => {
-                self.right_insight_tab.clone().map(|t| panel_handle(t).panel_id(cx))
-            }
-            RightPanel::Mock => self.right_mock_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
-            RightPanel::History => {
-                self.right_history_tab.clone().map(|t| panel_handle(t).panel_id(cx))
-            }
-            RightPanel::Archive => {
-                self.right_archive_tab.clone().map(|t| panel_handle(t).panel_id(cx))
-            }
+        // 这里同时留句柄：dock 已存在时要把 active 面板**挂载并激活**（见下方
+        // Expanded 分支的补丁——`Shared::open_right_panel` 等无窗口入口只改状态，
+        // dock 同步必须由宿主这拍完成，否则 tab 切不过去）。
+        let active_tab = match self.shared.active_right.get() {
+            RightPanel::Insight => self.right_insight_tab.clone().map(panel_handle),
+            RightPanel::Mock => self.right_mock_tab.clone().map(panel_handle),
+            RightPanel::History => self.right_history_tab.clone().map(panel_handle),
+            RightPanel::Archive => self.right_archive_tab.clone().map(panel_handle),
         };
+        let active_id = active_tab.as_ref().map(|handle| handle.panel_id(cx));
         area.update(cx, |area, cx| {
             // DockLayout 不可 clone：Expanded / Collapsed 两分支互斥，各自消费 layout。
             if mode == SidebarMode::Expanded {
@@ -1480,11 +1478,27 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    if let Some(id) = initial_id {
+                    if let Some(id) = active_id.clone() {
                         area.select_panel(id, window, cx);
                     }
                 } else if !area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
+                }
+                // 面板化后右 dock 是动态 tab 集：active 模块未挂载 → 挂载（自动激活）；
+                // 已挂载但未激活 → 切激活。`select_panel` / `add_panel_view` 幂等，
+                // render 每帧调用无副作用（与 `apply_left_mode` 的 set_dock 同先例）。
+                if let (Some(handle), Some(id)) = (&active_tab, &active_id) {
+                    if area.panel(id.clone()).is_none() {
+                        area.add_panel_view(
+                            handle.clone(),
+                            DockPlacement::Right,
+                            None,
+                            window,
+                            cx,
+                        );
+                    } else {
+                        area.select_panel(id.clone(), window, cx);
+                    }
                 }
             } else if mode == SidebarMode::Collapsed {
                 if !area.has_dock(DockPlacement::Right) {

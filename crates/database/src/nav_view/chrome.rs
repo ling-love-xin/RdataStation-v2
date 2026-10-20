@@ -518,6 +518,16 @@ impl NavView {
                                     }
                                 }),
                             )
+                            .item(
+                                // 管理标签覆盖层（tag-system-spec §12 #3 标签侧）：
+                                // 批量重命名 / 清理空标签；标签定义跨模块共享（导航 / 资源 / 草稿）。
+                                PopupMenuItem::new("管理标签…").on_click({
+                                    let host_tags = host_groups.clone();
+                                    move |_, window, app| {
+                                        host_tags.open_tag_manager(window, app);
+                                    }
+                                }),
+                            )
                             .separator()
                             .item(
                                 // 删除当前连接（原型对齐）：作用于当前选中的连接；

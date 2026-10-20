@@ -10,8 +10,12 @@
 //! - 不可关闭（`closable() = false`）——这是无项目时打开项目的持久入口。
 
 use gpui_kit::EventEmitter;
+use gpui_kit::assets::IconName as CatalogIcon;
+use gpui_kit::base::StyledExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
+use gpui_kit::component::{ActiveTheme, Icon, IconName};
 use gpui_kit::*;
 
 /// 项目选择器（最近 / 全部 / 已移除 + 新建 / 打开），作为中央 tab 组的常驻面板。
@@ -22,10 +26,13 @@ pub struct ProjectPickerPanel {
     inputs: project::ui::ProjectInputs,
     /// Dock 面板的焦点句柄（`BasePanel: Focusable` 要求）。
     focus_handle: FocusHandle,
+    /// 宿主共享状态（欢迎页「新建连接」入口经 `Shared::new_connection` 走 EditorBridge）。
+    shared: super::Shared,
 }
 
 impl ProjectPickerPanel {
     pub fn new(
+        shared: super::Shared,
         host: project::ui::ProjectUiHost,
         inputs: project::ui::ProjectInputs,
         cx: &mut Context<Self>,
@@ -34,6 +41,7 @@ impl ProjectPickerPanel {
             host,
             inputs,
             focus_handle: cx.focus_handle(),
+            shared,
         }
     }
 }
@@ -48,12 +56,92 @@ impl Focusable for ProjectPickerPanel {
 
 impl Render for ProjectPickerPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 欢迎横幅（#17：无项目时的三入口）：
+        // 新建连接 → EditorBridge；打开项目 → 文件夹选择对话框；最近使用 → 下方列表
+        //（TabBar 默认停在「最近」）。横幅之下保留完整选择器（搜索 / 状态筛选 / 列表）。
+        let shared = self.shared.clone();
+        let host_new = self.host.clone();
+        let inputs_new = self.inputs.clone();
+        let host_recent = self.host.clone();
+        let theme = cx.theme();
+        let banner = div()
+            .v_flex()
+            .items_center()
+            .gap_3()
+            .pt_10()
+            .pb_2()
+            .child(
+                Icon::new(CatalogIcon::Database)
+                    .size(rems(2.5))
+                    .text_color(theme.colors.primary),
+            )
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.colors.foreground)
+                    .child("欢迎使用 RdataStation"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.colors.muted_foreground)
+                    .child("新建连接、打开项目，或从最近使用继续"),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("welcome-new-connection")
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("新建连接")
+                            .on_click(move |_, window, app| {
+                                shared.new_connection(window, app);
+                            }),
+                    )
+                    .child(
+                        Button::new("welcome-open-project")
+                            .secondary()
+                            .icon(IconName::FolderOpen)
+                            .label("打开项目")
+                            .on_click(move |_, window, app| {
+                                project::ui::open_folder_dialog(
+                                    &host_new,
+                                    &inputs_new,
+                                    window,
+                                    app,
+                                );
+                            }),
+                    )
+                    .child(
+                        Button::new("welcome-recent")
+                            .ghost()
+                            .icon(CatalogIcon::Clock)
+                            .label("最近使用")
+                            .on_click(move |_, _, app| {
+                                // 刷新最近列表并停留（TabBar 默认「最近」，重绘即回到最近项目）。
+                                project::ui::refresh_picker(&host_recent, app);
+                            }),
+                    ),
+            );
+
         // 先渲染（可变借用 cx），再挂 id / role——顺序与 property 面板一致。
         let picker = project::ui::render_picker(&self.host, &self.inputs, cx);
-        picker
-            .id("project-picker-panel")
-            .role(gpui::Role::Group)
-            .test_support()
+        div()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .child(banner)
+            .child(
+                picker
+                    .id("project-picker-panel")
+                    .role(gpui::Role::Group)
+                    .test_support(),
+            )
+            .into_any_element()
     }
 }
 

@@ -34,10 +34,8 @@ use gpui_kit::component::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::Theme;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
@@ -191,6 +189,9 @@ impl MetadataSearchHostPanel {
             SearchConsumer::Panel,
             kind,
             &query,
+            // 工作台全局搜索（跨连接索引）：无 `.*` / `Aa` 开关，走默认关。
+            false,
+            false,
             project_root.as_deref(),
             targets,
         );
@@ -297,69 +298,29 @@ impl Render for MetadataSearchHostPanel {
                 });
             }
         };
-        let word_btn = div()
-            .id("md-es-word")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_word { fg } else { muted })
-            .when(panel_word, |this| this.bg(theme.colors.list_active))
-            .when(!panel_word, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child("ab")
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("全字匹配（第二版生效）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_word);
-        let case_btn = div()
-            .id("md-es-case")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_case { fg } else { muted })
-            .when(panel_case, |this| this.bg(theme.colors.list_active))
-            .when(!panel_case, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child(IconName::CaseSensitive)
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("区分大小写（第二版生效）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_case);
-        let regex_btn = div()
-            .id("md-es-regex")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_regex { fg } else { muted })
-            .when(panel_regex, |this| this.bg(theme.colors.list_active))
-            .when(!panel_regex, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child(".*")
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("使用正则表达式（第二版生效）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_regex);
+        // Aa / ab / .* 三个开关：与中央「搜索: query」标签页共用同一形态（`search_option_button`，
+        // 2026-10-15 由两处自绘 div 收口到一处；键盘可达、选中底走主题 toggled 色）。
+        let word_btn = crate::panels::shared::search_option_button(
+            "md-es-word",
+            panel_word,
+            "全字匹配（第二版生效）",
+            crate::panels::shared::SearchOptionKind::Text("ab"),
+            toggle_panel_word,
+        );
+        let case_btn = crate::panels::shared::search_option_button(
+            "md-es-case",
+            panel_case,
+            "区分大小写（第二版生效）",
+            crate::panels::shared::SearchOptionKind::Icon(IconName::CaseSensitive),
+            toggle_panel_case,
+        );
+        let regex_btn = crate::panels::shared::search_option_button(
+            "md-es-regex",
+            panel_regex,
+            "使用正则表达式（第二版生效）",
+            crate::panels::shared::SearchOptionKind::Text(".*"),
+            toggle_panel_regex,
+        );
         let mut es_bar = div()
             .h_flex()
             .items_center()
@@ -617,24 +578,16 @@ fn render_metadata_search_pane(
             // 摆了却点了没反应，比不摆更伤。
             if search_hit_locatable(hit) {
                 row = row.child(
-                    div()
-                        .id(format!("md-locate-{conn_id}-{row_ix}"))
-                        .flex_none()
-                        .h_5()
-                        .px_1p5()
-                        .flex()
-                        .items_center()
-                        .rounded_md()
-                        .text_xs()
-                        .text_color(theme.colors.primary)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(hover).text_color(fg))
+                    // 行内动作迁移到语义 `Button`（2026-10-15）：`stop_propagation` 保留，
+                    // 点「定位」不触发行本身的「看属性」。
+                    Button::new(format!("md-locate-{conn_id}-{row_ix}"))
+                        .ghost()
+                        .xsmall()
+                        .label("定位")
                         .on_click(move |_, _, app| {
-                            // 行本身的单击是「看属性」：点「定位」不该同时把属性面板也推出来。
                             app.stop_propagation();
                             locate_hit(hit_for_locate.clone(), app);
-                        })
-                        .child("定位"),
+                        }),
                 );
             }
             let hit_for_open = hit_for_open.clone();

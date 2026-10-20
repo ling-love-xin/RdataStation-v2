@@ -119,7 +119,10 @@ impl InsightView {
                         Some(group) if !group.is_empty() => group
                             .rows
                             .iter()
-                            .map(|row| schema_row(row, entity, theme, inline_icon))
+                            .enumerate()
+                            .map(|(row_ix, row)| {
+                                schema_row(row, *section, row_ix, entity, theme, inline_icon)
+                            })
                             .collect::<Vec<_>>(),
                         _ => vec![muted_line(section.empty_hint(), theme).into_any_element()],
                     }
@@ -151,8 +154,14 @@ fn schema_section_title(section: SchemaSection, count: usize, theme: &Theme) -> 
 }
 
 /// 报告的一行：主文案 + 说明 + 可下钻的表名热点
+///
+/// 下钻按钮的元素 id 必须**逐分区、逐行、逐表唯一**：同一分区里多行可能引用同一张表
+/// （两个外键候选指向同一目标表、同名列散在多张表）——只按表名拼 id，同一帧就会推出
+/// 两个同 id 元素，a11y 节点重复，debug 构建直接 panic。
 fn schema_row(
     row: &crate::schema_view::SchemaRowView,
+    section: SchemaSection,
+    row_ix: usize,
     entity: &Entity<InsightView>,
     theme: &Theme,
     inline_icon: Pixels,
@@ -189,25 +198,50 @@ fn schema_row(
     // 涉及的表 → 下钻热点（最多几个，长清单会让面板变成一条链接列表）
     if !row.tables.is_empty() {
         let mut links = div().h_flex().flex_wrap().gap_1().pl_4();
-        for table in row.tables.iter().take(ui::INSIGHT_SCHEMA_DRILLDOWN_LIMIT) {
+        for (table_ix, table) in row
+            .tables
+            .iter()
+            .take(ui::INSIGHT_SCHEMA_DRILLDOWN_LIMIT)
+            .enumerate()
+        {
             links = links.child(
-                Button::new(ElementId::Name(
-                    format!("insight-schema-to-{}", table).into(),
-                ))
-                .ghost()
-                .xsmall()
-                .label(table.clone())
-                .tooltip("看这张表的表探查")
-                .on_click({
-                    let entity = entity.clone();
-                    let table = table.clone();
-                    move |_, _, app| {
-                        entity.update(app, |view, cx| view.request_table_drilldown(table.clone(), cx))
-                    }
-                }),
+                Button::new(drilldown_button_id(section, row_ix, table_ix, table))
+                    .ghost()
+                    .xsmall()
+                    .label(table.clone())
+                    .tooltip("看这张表的表探查")
+                    .on_click({
+                        let entity = entity.clone();
+                        let table = table.clone();
+                        move |_, _, app| {
+                            entity
+                                .update(app, |view, cx| view.request_table_drilldown(table.clone(), cx))
+                        }
+                    }),
             );
         }
         body = body.child(links);
     }
     body.into_any_element()
+}
+
+/// 下钻按钮的稳定元素 id：**分区 / 行 / 表**三级下标都进 id。
+///
+/// 同一分区里多行可能引用同一张表（两个外键候选指向同一目标表、同名列散在多张表，
+/// 甚至自引用外键在同一行里列两次同一张表）——只按表名拼，同一帧就会推出两个同 id
+/// 元素：a11y 节点重复，debug 构建在 `A11yNodeBuilder::push` 直接 panic。
+///
+/// 单独抽出来是为了能在测试里按同一套下标重建 id 清单、断言两两不同
+/// （测试窗口不激活 a11y，推不进 a11y 树，跑真渲染也复现不出这个 panic）。
+pub(crate) fn drilldown_button_id(
+    section: SchemaSection,
+    row_ix: usize,
+    table_ix: usize,
+    table: &str,
+) -> SharedString {
+    format!(
+        "insight-schema-to-{}-{row_ix}-{table_ix}-{table}",
+        section.key()
+    )
+    .into()
 }

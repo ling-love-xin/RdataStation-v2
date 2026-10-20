@@ -28,14 +28,7 @@ impl InsightView {
             .gap_1()
             .border_b_1()
             .border_color(colors.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .text_color(colors.foreground)
-                    .child("洞察"),
-            )
+            // 右 Dock 面板：标题靠右（与左栏镜像），操作按钮靠左
             .child(
                 Button::new("insight-rules")
                     .ghost()
@@ -69,6 +62,15 @@ impl InsightView {
                             entity.update(app, |view, cx| view.reload(cx));
                         }
                     }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(colors.foreground)
+                    .text_right()
+                    .child("洞察"),
             )
     }
 
@@ -112,7 +114,7 @@ impl InsightView {
                             .text_ellipsis()
                             .child(target.title()),
                     )
-                    .child(kind_badge(self.data_kind(), theme)),
+                    .child(kind_badge(self.data_kind())),
             );
         if let Some(detail) = target.detail() {
             head = head.child(

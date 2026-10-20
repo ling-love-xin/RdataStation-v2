@@ -720,6 +720,22 @@ impl MockHost for TestHost {
                     message: "已保存到草稿箱：/proj/mock/mock_x.csv".to_string(),
                 })
             }
+            MockJobKind::ScratchpadAll { infos, format } => {
+                for info in infos {
+                    self.rec
+                        .sink_temps
+                        .borrow_mut()
+                        .push(info.temp_table_name.clone());
+                }
+                self.rec
+                    .scratchpads
+                    .borrow_mut()
+                    .push(format!("batch:{format:?}"));
+                Ok(MockJobDone::ScratchpadAll {
+                    saved: infos.iter().map(|i| i.table_name.clone()).collect(),
+                    failed: Vec::new(),
+                })
+            }
         };
         if !self.rec.hold_job.get() {
             *self.rec.job_result.borrow_mut() = Some(result);
@@ -797,6 +813,11 @@ impl MockHost for TestHost {
                 .map(|n| vec![format!("{column}:{dir}:{n}")])
                 .collect(),
         }))
+    }
+
+    /// 刷新重查（TestHost 不背内存库）：恒 `None` = 拿不到锁，面板保持现状。
+    fn temp_table_row_count(&self, _temp_table: &str) -> Result<Option<i64>, String> {
+        Ok(None)
     }
 
     fn export_dir(&self) -> String {

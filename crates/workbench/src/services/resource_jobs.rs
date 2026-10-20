@@ -1172,8 +1172,8 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
             },
         },
         TagJobAction::DeleteTag { id } => match store.delete_tag(id).await {
-            Ok(unlinked) => OpOutcome::TagDone {
-                note: format!("已删除该标签（从 {unlinked} 条存档上摘掉）"),
+            Ok(()) => OpOutcome::TagDone {
+                note: "已删除该标签（定义软删，已挂关联不再显示）".to_string(),
             },
             Err(error) => OpOutcome::Failed {
                 action: "删除标签",

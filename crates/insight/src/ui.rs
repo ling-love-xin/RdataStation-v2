@@ -9,9 +9,11 @@
 
 /// Tab 条高度（1.75rem = 28px；五项 2 字标签在 17.5rem 面板宽内不溢出）
 pub const INSIGHT_TAB_HEIGHT: f32 = 1.75;
-/// 直方图条高度（0.5rem = 8px）
+/// 直方图条高度（0.5rem = 8px；**已由 `Progress` 的 `Size::Medium` 档消费**，
+/// 保留作设计值登记，与 `view/mod.rs::ratio_bar` 的档位映射注释互证）
 pub const INSIGHT_HISTOGRAM_BAR_HEIGHT: f32 = 0.5;
-/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布与评分卡四维共用）
+/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布与评分卡四维共用。
+/// **已由 `Progress` 的 `Size::Small` 档消费**，保留作设计值登记）
 pub const INSIGHT_RATIO_BAR_HEIGHT: f32 = 0.375;
 /// 样本单元格最大字符数（超出截断，长文本不得撑破面板）
 pub const INSIGHT_SAMPLE_MAX_CHARS: usize = 200;
@@ -37,6 +39,19 @@ pub const INSIGHT_TABLE_FLAG_WIDTH: f32 = 1.75;
 pub const INSIGHT_TABLE_QUALITY_WIDTH: f32 = 3.25;
 /// 版本对比：标签列宽（4rem = 64px，容得下「长度范围」四个中文字）
 pub const INSIGHT_DIFF_LABEL_WIDTH: f32 = 4.0;
+/// 中间工作页对比表：数值列宽（行数 / 列数，4.5rem = 72px）
+pub const INSIGHT_WS_NUM_WIDTH: f32 = 4.5;
+/// 中间工作页对比表：评分列宽（3.25rem = 52px，容得下「95 优秀」）
+pub const INSIGHT_WS_SCORE_WIDTH: f32 = 3.25;
+/// 中间工作页对比表：等级列宽（3.25rem = 52px）
+pub const INSIGHT_WS_GRADE_WIDTH: f32 = 3.25;
+/// 中间工作页：数据源列宽（3.5rem = 56px，容得下「来源 MySQL …」截断）
+pub const INSIGHT_WS_SOURCE_WIDTH: f32 = 3.5;
+/// 中间工作页质量评分环直径（5.5rem = 88px，对齐原型中央评分环 viewBox 88；
+/// 经 `ProgressCircle::Size::Size` 消费，环内数字随主题字号缩放）
+pub const INSIGHT_WS_RING_SIZE: f32 = 5.5;
+/// 右栏摘要 Tab 评分环直径（4.25rem = 68px，对齐原型右栏 score-ring viewBox 68）
+pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

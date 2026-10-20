@@ -6,6 +6,7 @@ use super::*;
 
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::button::Toggle;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::Icon;
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::label::Label;
@@ -56,6 +57,13 @@ impl ScratchpadView {
             // 草稿图的文件搜索 = 恒文件名过滤（VSCode：普通搜索 = 搜文件，工具栏 = 搜内容）。
             let (search_mode, search_regex, search_case) =
                 (ScratchpadSearchMode::Name, view.search_regex, view.search_case);
+            // 标签筛选（§7.3）：模块根换算相对路径；`tag_filter` 与文件名过滤可叠加。
+            let module_root = self
+                .host
+                .project_root()
+                .map(|root| crate::store::ScratchpadStore::new(root).scratchpad_dir().to_path_buf());
+            let tag_filter = view.tag_filter.clone();
+            let entry_tags = view.entry_tags.clone();
             let mut flat = Vec::new();
             flatten_scratchpad(
                 &view.entries,
@@ -68,6 +76,9 @@ impl ScratchpadView {
                 search_mode,
                 search_regex,
                 search_case,
+                module_root.as_deref(),
+                tag_filter.as_deref(),
+                &entry_tags,
                 &mut flat,
             );
             (
@@ -145,6 +156,47 @@ impl ScratchpadView {
             } else {
                 row = row.child(div().flex_1());
             }
+            // 标签筛选下拉（统一规格 §7.3）：选中 = 只显示打了该标签的文件（平铺），
+            // 与文件名过滤可叠加；「全部」清除。菜单每次打开重建（checked 与最近渲染一致）。
+            let tag_menu_entity = entity.clone();
+            let tag_menu_tags = self.scratchpad.borrow().project_tags.clone();
+            let tag_menu_current = self.scratchpad.borrow().tag_filter.clone();
+            row = row.child(
+                Button::new("sp-tag-filter")
+                    .ghost()
+                    .small()
+                    .icon(Icon::empty().path("icons/tag.svg"))
+                    .tooltip("按标签筛选（可叠加文件名过滤）")
+                    .dropdown_menu(move |menu, _, _| {
+                        let tags = tag_menu_tags.clone();
+                        let current = tag_menu_current.clone();
+                        let mut menu = menu;
+                        let all_entity = tag_menu_entity.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new("全部")
+                                .checked(current.is_none())
+                                .on_click(move |_, _, app| {
+                                    all_entity.update(app, |this, cx| this.clear_tag_filter(cx))
+                                }),
+                        );
+                        menu = menu.item(PopupMenuItem::separator());
+                        for tag in &tags {
+                            let tag_id = tag.id.clone();
+                            let checked = current.as_deref() == Some(tag_id.as_str());
+                            let entity = tag_menu_entity.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(tag.name.clone())
+                                    .checked(checked)
+                                    .on_click(move |_, _, app| {
+                                        entity.update(app, |this, cx| {
+                                            this.set_tag_filter(&tag_id, cx)
+                                        })
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            );
             row
         };
 
@@ -373,6 +425,13 @@ impl ScratchpadView {
             None
         };
 
+        // 标签编辑弹窗（统一规格 §7.3）：右键「标签…」打开，勾选打标 / 新建标签。
+        let tag_dialog_el = if self.scratchpad.borrow().tag_dialog.is_some() {
+            Some(self.render_tag_dialog(window, cx))
+        } else {
+            None
+        };
+
         panel
             .key_context("scratchpad")
             .track_focus(&self.focus_handle)
@@ -513,6 +572,7 @@ impl ScratchpadView {
                 }
             })
             .when_some(ref_dialog_el, |this, el| this.child(el))
+            .when_some(tag_dialog_el, |this, el| this.child(el))
             .id("scratchpad-panel")
             .role(gpui::Role::Group)
     }
@@ -2287,6 +2347,128 @@ impl ScratchpadView {
                     .show_cancel(true)
                     .ok_text("添加")
                     .on_ok(confirm),
+            )
+            .on_close(close)
+            .into_any_element()
+    }
+
+    /// 标签编辑弹窗（统一规格 §7.3）：项目标签勾选列表（勾 = 打标）+ 新建标签输入行。
+    ///
+    /// 内容每帧从 `scratchpad` 状态重读（勾选态随 toggle 更新）；勾选 / 新建走事件路径
+    /// （`toggle_entry_tag` / `create_entry_tag`），本方法只装配。
+    fn render_tag_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        let scratchpad = self.scratchpad.clone();
+        let new_input = self.scratchpad.borrow().tag_new_input.clone();
+        let close = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.close_tag_dialog(cx));
+            }
+        };
+        let done = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| -> bool {
+                entity.update(app, |this, cx| this.close_tag_dialog(cx));
+                true
+            }
+        };
+        Dialog::new(cx)
+            .title(div().child("标签"))
+            .content({
+                let entity = entity.clone();
+                let scratchpad = scratchpad.clone();
+                let new_input = new_input.clone();
+                move |content: DialogContent, _window: &mut Window, cx: &mut App| {
+                    let theme = cx.theme();
+                    let (rel_path, tags, entry) = {
+                        let view = scratchpad.borrow();
+                        let Some(rel) = view.tag_dialog.clone() else {
+                            return content.child(div());
+                        };
+                        let tags = view.project_tags.clone();
+                        let entry = view.entry_tags.get(&rel).cloned().unwrap_or_default();
+                        (rel, tags, entry)
+                    };
+                    let mut body = div().v_flex().w_full().gap_1().px_3().py_1();
+                    if tags.is_empty() {
+                        body = body.child(
+                            div()
+                                .w_full()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("还没有标签——在下面输入一个名字即可新建"),
+                        );
+                    }
+                    for tag in &tags {
+                        let checked = entry.iter().any(|t| t.id == tag.id);
+                        let toggle_entity = entity.clone();
+                        let toggle_id = tag.id.clone();
+                        let toggle_rel = rel_path.clone();
+                        let toggle =
+                            move |_checked: &bool, _: &mut gpui_kit::Window, app: &mut App| {
+                                toggle_entity.update(app, |this, cx| {
+                                    this.toggle_entry_tag(&toggle_rel, &toggle_id, cx)
+                                });
+                            };
+                        body = body.child(
+                            div()
+                                .id(format!("sp-tag-{}", tag.id))
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .when(checked, |row| row.bg(theme.colors.list_active))
+                                .hover(|s| s.bg(theme.colors.list_hover))
+                                .child(
+                                    Checkbox::new(SharedString::from(format!(
+                                        "sp-tag-check-{}",
+                                        tag.id
+                                    )))
+                                    .checked(checked)
+                                    .on_click(toggle),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .text_ellipsis()
+                                        .text_color(theme.colors.foreground)
+                                        .child(tag.name.clone()),
+                                ),
+                        );
+                    }
+                    if let Some(input) = &new_input {
+                        let add_entity = entity.clone();
+                        let add_rel = rel_path.clone();
+                        let add =
+                            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                                add_entity.update(app, |this, cx| this.create_entry_tag(&add_rel, cx));
+                            };
+                        body = body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .w_full()
+                                .pt_1()
+                                .child(div().flex_1().min_w_0().child(Input::new(input).w_full()))
+                                .child(Button::new("sp-tag-add").small().label("添加").on_click(add)),
+                        );
+                    }
+                    content.child(body)
+                }
+            })
+            .button_props(
+                DialogButtonProps::default()
+                    .show_cancel(false)
+                    .ok_text("完成")
+                    .on_ok(done),
             )
             .on_close(close)
             .into_any_element()

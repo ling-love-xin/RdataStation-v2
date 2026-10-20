@@ -42,6 +42,12 @@ pub struct NavState {
     pub selected_key: Option<String>,
     /// 搜索过滤词（面板级行用它；按连接的行留空——搜索框是面板级的）
     pub filter_text: String,
+    /// 搜索框「正则（`.*`）」开关（面板级；旧数据缺省关）。
+    #[serde(default)]
+    pub search_regex: bool,
+    /// 搜索框「区分大小写（`Aa`）」开关（面板级；旧数据缺省关）。
+    #[serde(default)]
+    pub search_case_sensitive: bool,
     /// 格式版本（便于后续迁移）
     pub version: u32,
 }
@@ -52,6 +58,8 @@ impl Default for NavState {
             expanded_keys: Vec::new(),
             selected_key: None,
             filter_text: String::new(),
+            search_regex: false,
+            search_case_sensitive: false,
             version: 1,
         }
     }
@@ -135,6 +143,10 @@ impl NavigatorStateStore {
                 expanded_keys: serde_json::from_str(&expanded).unwrap_or_default(),
                 selected_key,
                 filter_text,
+                // 旧库无开关列：读回默认关（表结构没加列，开关只随面板级 JSON 走，见
+                // `save_state` 的序列化——连接级行这两个字段恒为默认值）。
+                search_regex: false,
+                search_case_sensitive: false,
                 version: version as u32,
             },
             _ => NavState::default(),
@@ -195,6 +207,8 @@ mod tests {
             expanded_keys: vec!["P_a/db".into(), "P_a/db/public".into()],
             selected_key: Some("P_a/db/public".into()),
             filter_text: "order".into(),
+            search_regex: false,
+            search_case_sensitive: false,
             version: 1,
         };
         store.save_state("P_a", "project", &state).expect("save");

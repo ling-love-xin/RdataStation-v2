@@ -8,7 +8,8 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable as _};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme, Icon, Size, Sizable as _};
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus};
@@ -200,11 +201,11 @@ pub struct DetailActions {
 ///
 /// `actions` 为 `None`（crate 单测 / 无宿主场景）或项目只读时，只摆 chips 不给动作——
 /// 与另两个动作区的口径一致。
+///
+/// chip 用 gpui-kit `tag::Tag`（规格 §7.2 UI 统一；Small 档字号/内距最接近原自绘 chip），
+/// 关闭入口组合 `Button::ghost` 内嵌（0.7.1 `Tag` 无内置 ×，决策 D5）。
 fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, cx: &App) -> Div {
-    let (muted, border, foreground) = {
-        let colors = cx.theme().colors;
-        (colors.muted_foreground, colors.border, colors.foreground)
-    };
+    let muted = cx.theme().colors.muted_foreground;
     let read_only = actions.map(|a| a.read_only).unwrap_or(true);
 
     let mut chips = div().h_flex().w_full().flex_wrap().items_center().gap_1();
@@ -212,18 +213,7 @@ fn render_tag_section(detail: &ArchiveDetail, actions: Option<&DetailActions>, c
         chips = chips.child(div().text_xs().text_color(muted).child("（还没有标签）"));
     }
     for chip in &detail.tags {
-        let mut line = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .px_1p5()
-            .py_0p5()
-            .rounded_sm()
-            .border_1()
-            .border_color(border)
-            .text_xs()
-            .text_color(foreground)
-            .child(chip.name.clone());
+        let mut line = Tag::secondary().with_size(Size::Small).gap_1().child(chip.name.clone());
         if let Some(actions) = actions {
             if !read_only {
                 // × = 去掉这个标签（不再要一次确认：重新打上只需两步）。

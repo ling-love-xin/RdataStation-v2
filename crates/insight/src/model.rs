@@ -40,9 +40,11 @@ pub const EXTREME_LIST_LIMIT: usize = 2;
 
 // ==================== 面板骨架 ====================
 
-/// 面板的五个 Tab（顺序固定；标签一律 2 字，17.5rem 面板宽内五项不溢出）
+/// 面板的六个 Tab（顺序固定；标签 2~3 字，280px 右栏内六项不溢出）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelTab {
+    /// 摘要（D66 对齐原型右栏六 Tab：首置，汇总当前目标的画像摘要）
+    Overview,
     /// 列画像（Phase 1 落地）
     Column,
     /// 表探查（Phase 3）
@@ -57,7 +59,8 @@ pub enum PanelTab {
 
 impl PanelTab {
     /// 展示顺序
-    pub const ALL: [PanelTab; 5] = [
+    pub const ALL: [PanelTab; 6] = [
+        PanelTab::Overview,
         PanelTab::Column,
         PanelTab::Table,
         PanelTab::MultiColumn,
@@ -67,6 +70,7 @@ impl PanelTab {
 
     pub fn label(self) -> &'static str {
         match self {
+            PanelTab::Overview => "摘要",
             PanelTab::Column => "列",
             PanelTab::Table => "表",
             PanelTab::MultiColumn => "多列",
@@ -1885,13 +1889,13 @@ mod tests {
     #[test]
     fn tab_labels_are_short_and_ordered() {
         let labels: Vec<&str> = PanelTab::ALL.iter().map(|t| t.label()).collect();
-        assert_eq!(labels, vec!["列", "表", "多列", "结构", "历史"]);
+        assert_eq!(labels, vec!["摘要", "列", "表", "多列", "结构", "历史"]);
         for (i, tab) in PanelTab::ALL.iter().enumerate() {
             assert_eq!(tab.index(), i, "index() 必须与 ALL 顺序一致");
             assert_eq!(PanelTab::from_index(i), Some(*tab));
             assert!(
                 tab.label().chars().count() <= 2,
-                "标签一律 2 字，否则 17.5rem 内五项溢出"
+                "标签一律 2 字，否则 280px 右栏内六项溢出"
             );
         }
         assert_eq!(PanelTab::from_index(9), None);

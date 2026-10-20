@@ -213,6 +213,23 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
                 mock_generator::save_scratchpad(info, format, job.paths.project_root.as_deref())?;
             Ok(MockJobDone::Exported { message })
         }
+        MockJobKind::ScratchpadAll { infos, format } => {
+            set_phase(MockJobPhase::Exporting);
+            let root = job.paths.project_root.clone();
+            let total = infos.len();
+            let mut saved = Vec::new();
+            let mut failed = Vec::new();
+            for (index, info) in infos.iter().enumerate() {
+                // 逐张报进度（量纲是「张表」，与 PersistAll 同口径）
+                set_tables_progress(index, total);
+                match mock_generator::save_scratchpad(info, format, root.as_deref()) {
+                    Ok(_) => saved.push(info.table_name.clone()),
+                    Err(e) => failed.push((info.table_name.clone(), e)),
+                }
+            }
+            set_tables_progress(total, total);
+            Ok(MockJobDone::ScratchpadAll { saved, failed })
+        }
     }
 }
 

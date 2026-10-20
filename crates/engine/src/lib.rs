@@ -14,12 +14,14 @@
 
 pub mod cache;
 pub mod connection_manager;
+pub mod csv;
 pub mod driver;
 pub mod duckdb;
 pub mod logging;
 pub mod migration;
 pub mod persistence;
 pub mod refs;
+pub mod script;
 pub mod services;
 pub mod sql;
 

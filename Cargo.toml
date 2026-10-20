@@ -14,6 +14,7 @@ members = [
     "crates/kernel",
     "crates/rds-search",
     "crates/analytics_resource",
+    "crates/tag",
     "crates/mock",
     "crates/insight",
     "crates/plugin",
@@ -32,7 +33,7 @@ default-members = ["crates/app"]
 exclude = ["v1"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 
 # ============================================================================
@@ -59,6 +60,7 @@ settings = { path = "crates/settings", package = "rds-settings" }
 scratchpad = { path = "crates/scratchpad", package = "rds-scratchpad" }
 rds_search = { path = "crates/rds-search", package = "rds-search" }
 analytics_resource = { path = "crates/analytics_resource", package = "rds-analytics-resource" }
+tag = { path = "crates/tag", package = "rds-tag" }
 workbench_shell = { path = "crates/workbench_shell", package = "rds-workbench-shell" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
 connection-dialog = { path = "crates/connection-dialog", package = "rds-connection-dialog" }

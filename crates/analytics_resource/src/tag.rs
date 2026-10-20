@@ -1,146 +1,160 @@
 use super::*;
 use shared::error::{CoreError, StorageError};
 use chrono::Utc;
+use std::sync::atomic::Ordering;
+// `TagTable` 的定义方法是 `TagDefinitions` trait 提供的（本地 `mod tag` 遮蔽外部 crate，
+// 故用 `::tag::` 绝对路径 + 显式导入 trait）。
+use ::tag::TagDefinitions;
 
-/// 标签表的错误（与 `resource.rs` 的 `persistence_err` 同形，store 名不同）。
+/// 标签关联表的错误（定义侧错误由 `tag::TagTable` 自带 `tags` 域错误透传）。
 fn tag_err(operation: &str, reason: impl std::fmt::Display) -> CoreError {
     CoreError::storage(StorageError::Persistence {
-        store: "analytics_tags".to_string(),
+        store: "analytics_resource_tags".to_string(),
         operation: operation.to_string(),
         reason: reason.to_string(),
     })
 }
 
-/// 标签行映射（四处查询共用；列序即 `SELECT` 的列序）。
-fn map_tag_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsTag> {
-    Ok(AnalyticsTag {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        color: row.get(2)?,
-        icon: row.get(3)?,
-        scope: row.get(4)?,
-        created_at: AnalyticsResourceStore::parse_datetime_sqlite(row.get(5)?)?,
-        deleted_at: row
-            .get(6)
-            .ok()
-            .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
-    })
+/// 全局 `tags` 定义 → 分析资源行模型（`created_at` 双格式解析：全局表存 RFC3339）。
+fn tag_to_analytics(tag: &::tag::Tag) -> AnalyticsTag {
+    AnalyticsTag {
+        id: tag.id.clone(),
+        name: tag.name.clone(),
+        color: tag.color.clone(),
+        icon: tag.icon.clone(),
+        scope: tag.scope.clone(),
+        created_at: AnalyticsResourceStore::parse_datetime(tag.created_at.clone())
+            .unwrap_or_else(|_| Utc::now()),
+        deleted_at: tag
+            .deleted_at
+            .as_deref()
+            .and_then(|s| AnalyticsResourceStore::parse_datetime(s.to_string()).ok()),
+    }
 }
 
 impl AnalyticsResourceStore {
-    /// 新建标签。
+    /// 存量标签迁移（规格 §10.2 / §7.2）：项目库 `analytics_tags` 行 → 全局 `tags` 表。
     ///
-    /// **同名（未删）拒绝**：库里本就有 `(name, scope) WHERE deleted_at IS NULL` 的部分唯一
-    /// 索引兑底，但那条约束报的是英文 SQLite 原话——先查一次，给一句人能读、能直接纠正的话。
-    pub async fn create_tag(&self, req: CreateTagRequest) -> Result<AnalyticsTag, CoreError> {
-        let name = req.name.trim();
-        if name.is_empty() {
-            return Err(tag_err("insert", "标签名不能为空"));
+    /// 幂等（按 id 判重）：全局已有该 id 跳过；全局已有**同名活跃**标签时按规格 D3
+    /// 「同名复用」把项目库关联重映射到全局行，不重复建定义。软删行原样迁入（保留标记）。
+    /// 并发双跑安全：重映射与插入都是幂等语句。
+    pub async fn ensure_tags_migrated(&self) -> Result<(), CoreError> {
+        if self.tags_migrated.load(Ordering::Relaxed) {
+            return Ok(());
         }
-        if self.tag_name_taken(name, &req.scope).await? {
-            return Err(tag_err("insert", &format!("已经有同名标签「{name}」")));
-        }
-
-        let conn = self.get_conn().await?;
-        let id = format!("at_{}", uuid::Uuid::new_v4().simple());
-        let now = Utc::now();
-
-        conn.inner()?
-            .execute(
-                r#"
-            INSERT INTO analytics_tags (id, name, color, icon, scope, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            "#,
-                rusqlite::params![
-                    &id,
-                    name,
-                    req.color,
-                    req.icon,
-                    &req.scope,
-                    now.to_rfc3339()
-                ],
-            )
-            .map_err(|e| tag_err("insert", e))?;
-
-        self.get_tag_by_id(&id).await
+        self.migrate_analytics_tags().await?;
+        self.tags_migrated.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// 名字是否已被（未删的）标签占用。
-    async fn tag_name_taken(&self, name: &str, scope: &str) -> Result<bool, CoreError> {
+    async fn migrate_analytics_tags(&self) -> Result<(), CoreError> {
+        // 1. 读项目库存量行（含软删；created_at 双格式）。
         let conn = self.get_conn().await?;
-        let count: i64 = conn
-            .inner()?
-            .query_row(
-                "SELECT COUNT(*) FROM analytics_tags \
-                 WHERE name = ? AND scope = ? AND deleted_at IS NULL",
-                rusqlite::params![name, scope],
-                |row| row.get(0),
-            )
-            .map_err(|e| tag_err("select", e))?;
-        Ok(count > 0)
-    }
-
-    pub async fn get_tag_by_id(&self, id: &str) -> Result<AnalyticsTag, CoreError> {
-        let conn = self.get_conn().await?;
-
         let mut stmt = conn
             .inner()?
             .prepare(
                 r#"
             SELECT id, name, color, icon, scope, created_at, deleted_at
             FROM analytics_tags
-            WHERE id = ?
+            ORDER BY created_at ASC
             "#,
             )
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_tags".to_string(),
-                    operation: "select".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
+            .map_err(|e| tag_err("migrate_select", e))?;
+        let rows = stmt
+            .query_map([], map_tag_row)
+            .map_err(|e| tag_err("migrate_select", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| tag_err("migrate_select", e))?;
+        drop(stmt);
+        drop(conn);
 
-        let tag = stmt
-            .query_row(rusqlite::params![id], map_tag_row)
-            .map_err(|e| tag_err("select", e))?;
-
-        Ok(tag)
-    }
-
-    pub async fn list_tags(&self, scope: Option<&str>) -> Result<Vec<AnalyticsTag>, CoreError> {
-        let conn = self.get_conn().await?;
-
-        let mut sql = String::from(
-            r#"
-            SELECT id, name, color, icon, scope, created_at, deleted_at
-            FROM analytics_tags
-            WHERE deleted_at IS NULL
-            "#,
-        );
-
-        let mut params: Vec<rusqlite::types::Value> = Vec::new();
-
-        if let Some(s) = scope {
-            sql.push_str(" AND scope = ?");
-            params.push(rusqlite::types::Value::Text(s.to_string()));
-        }
-
-        sql.push_str(" ORDER BY name ASC");
-
-        let mut stmt = conn.inner()?.prepare(&sql).map_err(|e| {
-            CoreError::storage(StorageError::Persistence {
-                store: "analytics_tags".to_string(),
-                operation: "select".to_string(),
-                reason: e.to_string(),
-            })
+        // 2. 在全局库内完成判重与「同名 → 重映射 / 异名 → 插入」的决策（同步段，不跨 await 持锁）。
+        let (to_insert, to_remap) = self.with_global_tags(|global| {
+            let mut to_insert: Vec<AnalyticsTag> = Vec::new();
+            let mut to_remap: Vec<(String, String)> = Vec::new();
+            for row in rows {
+                if global.get_tag(&row.id).is_ok() {
+                    continue; // 已迁移（幂等）
+                }
+                match global.get_tag_by_name(&row.name)? {
+                    Some(existing) => to_remap.push((row.id, existing.id)),
+                    None => to_insert.push(row),
+                }
+            }
+            Ok((to_insert, to_remap))
         })?;
 
-        let tags = stmt
-            .query_map(rusqlite::params_from_iter(params), map_tag_row)
-            .map_err(|e| tag_err("select", e))?;
+        // 3. 锁外执行：重映射写项目库关联，插入写全局定义。
+        for (old_id, new_id) in to_remap {
+            self.remap_tag_links(&old_id, &new_id).await?;
+        }
+        for row in to_insert {
+            let created = row.created_at.to_rfc3339();
+            let deleted = row.deleted_at.map(|d| d.to_rfc3339());
+            let inserted = self.with_global_tags(|global| {
+                global.insert_migrated(
+                    &row.id,
+                    &row.name,
+                    row.color.as_deref(),
+                    row.icon.as_deref(),
+                    &created,
+                    deleted.as_deref(),
+                )
+            });
+            // 并发窗口内全局出现同名活跃 → 降级为关联重映射（幂等，无半状态）。
+            if inserted.is_err() {
+                if let Some(existing) = self.with_global_tags(|g| g.get_tag_by_name(&row.name))? {
+                    self.remap_tag_links(&row.id, &existing.id).await?;
+                } else {
+                    return inserted;
+                }
+            }
+        }
+        Ok(())
+    }
 
-        tags.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| tag_err("select", e))
+    /// 把项目库关联从旧标签 id 改挂到全局同名标签 id（`INSERT OR REPLACE` 防撞
+    /// `(resource_id, tag_id)` 主键，再清旧行；两步幂等）。
+    async fn remap_tag_links(&self, old_tag_id: &str, new_tag_id: &str) -> Result<(), CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        inner
+            .execute(
+                "INSERT OR REPLACE INTO analytics_resource_tags (resource_id, tag_id) \
+                 SELECT resource_id, ?1 FROM analytics_resource_tags WHERE tag_id = ?2",
+                rusqlite::params![new_tag_id, old_tag_id],
+            )
+            .map_err(|e| tag_err("remap_insert", e))?;
+        inner
+            .execute(
+                "DELETE FROM analytics_resource_tags WHERE tag_id = ?1",
+                rusqlite::params![old_tag_id],
+            )
+            .map_err(|e| tag_err("remap_delete", e))?;
+        Ok(())
+    }
+
+    /// 新建标签。
+    ///
+    /// 定义写**全局库**（规格 §3.2 / §7.2：分析资源标签定义上移全局表）。`req.scope`
+    /// 字段已废弃——作用域由存储域派生（恒为 global），不再参与落库。
+    pub async fn create_tag(&self, req: CreateTagRequest) -> Result<AnalyticsTag, CoreError> {
+        let created = self.with_global_tags(|t| {
+            t.create_tag(&req.name, req.color.as_deref(), req.icon.as_deref())
+        })?;
+        Ok(tag_to_analytics(&created))
+    }
+
+    pub async fn get_tag_by_id(&self, id: &str) -> Result<AnalyticsTag, CoreError> {
+        let tag = self.with_global_tags(|t| t.get_tag(id))?;
+        Ok(tag_to_analytics(&tag))
+    }
+
+    /// 活跃标签列表。`scope` 参数保留仅为调用方兼容（分析资源标签恒为 global，忽略之）。
+    pub async fn list_tags(&self, _scope: Option<&str>) -> Result<Vec<AnalyticsTag>, CoreError> {
+        self.ensure_tags_migrated().await?;
+        let tags = self.with_global_tags(|t| t.list_tags())?;
+        Ok(tags.iter().map(tag_to_analytics).collect())
     }
 
     pub async fn add_tag_to_resource(
@@ -197,37 +211,33 @@ impl AnalyticsResourceStore {
 
     // ==================== 标签双向查询 ====================
 
+    /// 存档的活跃标签。定义在全局库、关联在项目库（sqlite 无跨库 join，规格 §7.2 D1）：
+    /// 先在关联表取 id 集合，再批量 `IN` 查全局定义。
     pub async fn get_tags_for_resource(
         &self,
         resource_id: &str,
     ) -> Result<Vec<AnalyticsTag>, CoreError> {
+        self.ensure_tags_migrated().await?;
         let conn = self.get_conn().await?;
 
         let mut stmt = conn
             .inner()?
             .prepare(
-                r#"
-            SELECT t.id, t.name, t.color, t.icon, t.scope, t.created_at, t.deleted_at
-            FROM analytics_tags t
-            INNER JOIN analytics_resource_tags rt ON t.id = rt.tag_id
-            WHERE rt.resource_id = ? AND t.deleted_at IS NULL
-            ORDER BY t.name ASC
-            "#,
+                "SELECT tag_id FROM analytics_resource_tags WHERE resource_id = ?1",
             )
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "analytics_resource_tags".to_string(),
-                    operation: "select".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-
-        let tags = stmt
-            .query_map(rusqlite::params![resource_id], map_tag_row)
             .map_err(|e| tag_err("select", e))?;
+        let ids = stmt
+            .query_map(rusqlite::params![resource_id], |row| row.get::<_, String>(0))
+            .map_err(|e| tag_err("select", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| tag_err("select", e))?;
+        drop(stmt);
+        drop(conn);
 
-        tags.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| tag_err("select", e))
+        let tags = self.with_global_tags(|t| t.get_tags_by_ids(&ids))?;
+        let mut result: Vec<AnalyticsTag> = tags.iter().map(tag_to_analytics).collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(result)
     }
 
     pub async fn get_resources_by_tag(
@@ -272,116 +282,67 @@ impl AnalyticsResourceStore {
     }
 
     /// 改名（**补 v1 缺失的能力**）：只改显示名，`scope` 不动——作用域由标签住哪个库决定，
-    /// 不是可编辑项（架构 §4.3 的“scope 派生”同一条原则）。
-    ///
-    /// 幂等：改成现在这个名字直接返回原行（不报“同名”——那是用户自己的名字）。
+    /// 不是可编辑项（架构 §4.3 的“scope 派生”同一条原则）。同名检查与幂等由全局存储处理。
     pub async fn rename_tag(&self, id: &str, name: &str) -> Result<AnalyticsTag, CoreError> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(tag_err("rename", "标签名不能为空"));
-        }
-        let current = self.get_tag_by_id(id).await?;
-        if current.name == name {
-            return Ok(current);
-        }
-        if self.tag_name_taken(name, &current.scope).await? {
-            return Err(tag_err("rename", &format!("已经有同名标签「{name}」")));
-        }
-
-        let conn = self.get_conn().await?;
-        let affected = conn
-            .inner()?
-            .execute(
-                "UPDATE analytics_tags SET name = ? WHERE id = ? AND deleted_at IS NULL",
-                rusqlite::params![name, id],
-            )
-            .map_err(|e| tag_err("rename", e))?;
-        if affected == 0 {
-            return Err(tag_err("rename", "标签不存在或已删除"));
-        }
-        self.get_tag_by_id(id).await
+        let renamed = self.with_global_tags(|t| t.rename_tag(id, name))?;
+        Ok(tag_to_analytics(&renamed))
     }
 
-    /// 删除标签：**软删标签行 + 清掉它的全部资源关联**（返回解除的关联数）。
-    ///
-    /// 两件事必须在同一事务里：只软删行会让关联留在库里（“以后重建同名标签”会把旧归属带回来），
-    /// 只清关联又会在标签列表里留一条空标签——都是半个状态。
-    pub async fn delete_tag(&self, id: &str) -> Result<usize, CoreError> {
-        let conn = self.get_conn().await?;
-        let inner = conn.inner()?;
-        inner
-            .execute_batch("BEGIN IMMEDIATE")
-            .map_err(|e| tag_err("begin_immediate", e))?;
-
-        let result = (|| -> Result<usize, CoreError> {
-            let affected = inner
-                .execute(
-                    "UPDATE analytics_tags SET deleted_at = ? \
-                     WHERE id = ? AND deleted_at IS NULL",
-                    rusqlite::params![Utc::now().to_rfc3339(), id],
-                )
-                .map_err(|e| tag_err("delete", e))?;
-            if affected == 0 {
-                return Err(tag_err("delete", "标签不存在或已删除"));
-            }
-            let unlinked = inner
-                .execute(
-                    "DELETE FROM analytics_resource_tags WHERE tag_id = ?",
-                    rusqlite::params![id],
-                )
-                .map_err(|e| tag_err("delete", e))?;
-            Ok(unlinked)
-        })();
-
-        match result {
-            Ok(unlinked) => {
-                inner
-                    .execute_batch("COMMIT")
-                    .map_err(|e| tag_err("commit", e))?;
-                Ok(unlinked)
-            }
-            Err(error) => {
-                let _ = inner.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+    /// 删除标签：**只软删全局定义行，不清关联**（规格 §5 决策 D2——软删后同名重建产生
+    /// 新 id，旧关联查询侧被 `deleted_at IS NULL` 过滤，不会带回；不需要跨库级联清关联）。
+    pub async fn delete_tag(&self, id: &str) -> Result<(), CoreError> {
+        self.with_global_tags(|t| t.delete_tag(id))
     }
 
     /// 一次查完全部资源的标签（`resource_id → 标签`，按标签名升序）。
     ///
     /// 详情与筛选都要按行给标签；逐行 `get_tags_for_resource` 会把一次刷新变成 N+1 次查询
-    /// （`version_counts` 同理，见 `version.rs`）。
+    /// （`version_counts` 同理，见 `version.rs`）。跨库：关联对 + 批量 `IN` 查全局定义。
     pub async fn tags_by_resource(
         &self,
     ) -> Result<std::collections::HashMap<String, Vec<AnalyticsTag>>, CoreError> {
+        self.ensure_tags_migrated().await?;
         let conn = self.get_conn().await?;
         let mut stmt = conn
             .inner()?
             .prepare(
                 r#"
-            SELECT rt.resource_id, t.id, t.name, t.color, t.icon, t.scope, t.created_at, t.deleted_at
+            SELECT rt.resource_id, rt.tag_id
             FROM analytics_resource_tags rt
-            INNER JOIN analytics_tags t ON t.id = rt.tag_id
             INNER JOIN analytics_resources r ON r.id = rt.resource_id
-            WHERE t.deleted_at IS NULL AND r.deleted_at IS NULL
-            ORDER BY rt.resource_id ASC, t.name ASC
+            WHERE r.deleted_at IS NULL
             "#,
             )
             .map_err(|e| tag_err("select", e))?;
-
-        let rows = stmt
+        let pairs = stmt
             .query_map([], |row| {
-                let resource_id: String = row.get(0)?;
-                // 列 1.. 与 `map_tag_row` 同形，但多了一列前缀（resource_id）。
-                Ok((resource_id, map_tag_row_offset(row, 1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
+            .map_err(|e| tag_err("select", e))?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| tag_err("select", e))?;
+        drop(stmt);
+        drop(conn);
+
+        // 去重收集 tag id，一次批量解析定义（活跃过滤在 `get_tags_by_ids`）。
+        let mut ids: Vec<String> = pairs.iter().map(|(_, tag_id)| tag_id.clone()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let tags = self.with_global_tags(|t| t.get_tags_by_ids(&ids))?;
+        let by_id: std::collections::HashMap<String, AnalyticsTag> = tags
+            .iter()
+            .map(|t| (t.id.clone(), tag_to_analytics(t)))
+            .collect();
 
         let mut grouped: std::collections::HashMap<String, Vec<AnalyticsTag>> =
             std::collections::HashMap::new();
-        for row in rows {
-            let (resource_id, tag) = row.map_err(|e| tag_err("select", e))?;
-            grouped.entry(resource_id).or_default().push(tag);
+        for (resource_id, tag_id) in pairs {
+            if let Some(tag) = by_id.get(&tag_id) {
+                grouped.entry(resource_id).or_default().push(tag.clone());
+            }
+        }
+        for values in grouped.values_mut() {
+            values.sort_by(|a, b| a.name.cmp(&b.name));
         }
         Ok(grouped)
     }
@@ -417,17 +378,17 @@ impl AnalyticsResourceStore {
     }
 }
 
-/// 带列偏移的标签行映射（`tags_by_resource` 的 `SELECT` 前面多一列 `resource_id`）。
-fn map_tag_row_offset(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<AnalyticsTag> {
+/// 项目库存量行映射（仅迁移读取 `analytics_tags` 用；列序即 `SELECT` 的列序）。
+fn map_tag_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsTag> {
     Ok(AnalyticsTag {
-        id: row.get(offset)?,
-        name: row.get(offset + 1)?,
-        color: row.get(offset + 2)?,
-        icon: row.get(offset + 3)?,
-        scope: row.get(offset + 4)?,
-        created_at: AnalyticsResourceStore::parse_datetime_sqlite(row.get(offset + 5)?)?,
+        id: row.get(0)?,
+        name: row.get(1)?,
+        color: row.get(2)?,
+        icon: row.get(3)?,
+        scope: row.get(4)?,
+        created_at: AnalyticsResourceStore::parse_datetime_sqlite(row.get(5)?)?,
         deleted_at: row
-            .get(offset + 6)
+            .get(6)
             .ok()
             .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
     })

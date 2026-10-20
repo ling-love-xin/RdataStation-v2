@@ -447,6 +447,19 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                     menu.set_previous_focus(previous_focus_handle, cx);
                                 });
 
+                                // 在 draw 之前把 a11y 焦点迁移到菜单：树主体等常驻
+                                // `track_focus` 元素若在菜单打开帧仍持有焦点，会与菜单在
+                                // prepaint 阶段同帧双 claim，debug 下触发 `set_focus called
+                                // more than once in a single frame`（K21）。先 blur 当前
+                                // 焦点、再 focus 菜单，保证下一帧 prepaint 只有菜单 claim；
+                                // 关闭时由 `previous_focus_handle` 恢复原焦点。
+                                if window.is_a11y_active() && window.focused(cx).is_some() {
+                                    window.blur(cx);
+                                }
+                                menu.update(cx, |menu, cx| {
+                                    menu.focus_handle.focus(window, cx);
+                                });
+
                                 // Set up the subscription for dismiss handling.
                                 // Hold a Weak here, not a strong clone: the closure
                                 // would otherwise close the cycle

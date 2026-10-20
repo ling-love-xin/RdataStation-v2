@@ -70,7 +70,9 @@ impl InsightView {
     }
 
     /// 列画像四区
-    pub(in crate::view) fn render_column_profile(
+    ///
+    /// `pub(crate)`：中间工作页（`workspace.rs`）对列目标复用同一版式（宽版）。
+    pub(crate) fn render_column_profile(
         &self,
         profile: &ColumnProfileView,
         entity: &Entity<Self>,
@@ -130,10 +132,10 @@ fn dimension_row(dim: &DimensionView, theme: &Theme) -> Div {
                 ),
         )
         .child(ratio_bar(
+            format!("insight-score-dim-{}", dim.name),
             (dim.score / 100.0).clamp(0.0, 1.0) as f32,
-            ui::INSIGHT_RATIO_BAR_HEIGHT,
+            Size::Small,
             color,
-            theme,
         ))
 }
 
@@ -202,20 +204,20 @@ fn distribution_zone(profile: &ColumnProfileView, theme: &Theme) -> Vec<AnyEleme
         };
         return vec![muted_line(hint, theme).into_any_element()];
     }
-    // 布尔列只有一条 True 占比：用矮条，其余用直方图条高
-    let bar_height = if profile.kind == ColumnKind::Boolean {
-        ui::INSIGHT_RATIO_BAR_HEIGHT
+    // 布尔列只有一条 True 占比：用矮条（Small），其余用直方图条高（Medium）
+    let bar_size = if profile.kind == ColumnKind::Boolean {
+        Size::Small
     } else {
-        ui::INSIGHT_HISTOGRAM_BAR_HEIGHT
+        Size::Medium
     };
     profile
         .distribution
         .iter()
-        .map(|bar| distribution_bar(bar, bar_height, theme).into_any_element())
+        .map(|bar| distribution_bar(bar, bar_size, theme).into_any_element())
         .collect()
 }
 
-fn distribution_bar(bar: &DistributionBar, bar_height: f32, theme: &Theme) -> Div {
+fn distribution_bar(bar: &DistributionBar, bar_size: Size, theme: &Theme) -> Div {
     let colors = theme.colors;
     let ratio = bar.ratio.clamp(0.0, 1.0) as f32;
     div()
@@ -243,7 +245,13 @@ fn distribution_bar(bar: &DistributionBar, bar_height: f32, theme: &Theme) -> Di
                         .child(bar.text.clone()),
                 ),
         )
-        .child(ratio_bar(ratio, bar_height, colors.primary, theme))
+        // 元素 id 用值域标签：同一分布内每个值域只出现一次（若未来同标签多行，需加下标兜底）
+        .child(ratio_bar(
+            format!("insight-dist-{}", bar.label),
+            ratio,
+            bar_size,
+            colors.primary,
+        ))
 }
 
 /// 数据质量：提示列表（Info / Warning 两档）

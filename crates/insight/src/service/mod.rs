@@ -653,7 +653,13 @@ impl IndexStores {
 ///
 /// 用多线程 runtime 而不是 current_thread：池的空闲回收 / 连接保活是后台任务，
 /// 只在 `block_on` 期间推进是不够的。两条 worker 线程常驻，代价可接受。
-fn block_on<T>(
+/// 进程级单例 Tokio runtime 上的 `block_on`（K19 的修根，见上注）。
+///
+/// `pub(crate)` 供 `jobs.rs` 复用：源库取数（`sample_source_to_analysis_table` 等 async
+/// 链）跑在 gpui `background_executor`（非 Tokio）上时，驱动层 `tokio::time` 找不到
+/// reactor 会直接 panic（K21 真机暴露，PG 探活 `postgres.rs:237`）——包一层 block_on
+/// 把整条 async 链放回单例 runtime。
+pub(crate) fn block_on<T>(
     future: impl std::future::Future<Output = Result<T, CoreError>>,
 ) -> Result<T, CoreError> {
     static RUNTIME: std::sync::OnceLock<Result<tokio::runtime::Runtime, String>> =

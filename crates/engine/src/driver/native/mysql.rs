@@ -1,4 +1,4 @@
-use sqlx::{Column, ConnectOptions as _, MySql, Pool, Row, TypeInfo as _};
+use sqlx::{Column, ConnectOptions as _, MySql, Pool, Row, SqlSafeStr, Statement, TypeInfo as _};
 
 /// 单列名字结果集 → 对象列表（例程 / 序列等只在内省里露名字的类别）。
 fn names_to_nodes(
@@ -360,7 +360,10 @@ impl Database for MySqlDatabase {
                 .map(|c| c.name().to_string())
                 .collect()
         } else {
-            vec![]
+            // 0 行结果也要给列名：空表/过滤后无行的 SELECT 仍应报出结果集结构
+            // （洞察的空表取样靠列名建「有列无行」的临时表，此前 0 行直接给空列）。
+            let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+            describe_columns_mysql(conn, sql).await?
         };
 
         build_query_result(&columns, &rows, is_read_only)
@@ -414,7 +417,10 @@ impl Database for MySqlDatabase {
                 .map(|c| c.name().to_string())
                 .collect()
         } else {
-            vec![]
+            // 0 行结果也要给列名：空表/过滤后无行的 SELECT 仍应报出结果集结构
+            // （洞察的空表取样靠列名建「有列无行」的临时表，此前 0 行直接给空列）。
+            let conn = guard.as_mut().expect("lock_mysql_conn 保证 Some");
+            describe_columns_mysql(conn, sql).await?
         };
 
         build_query_result(&columns, &rows, is_read_only)
@@ -453,7 +459,8 @@ impl Database for MySqlDatabase {
                 let columns: Vec<String> = if let Some(first) = rows.first() {
                     first.columns().iter().map(|c| c.name().to_string()).collect()
                 } else {
-                    vec![]
+                    // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构）
+                    describe_columns_mysql(&mut conn, &sql_owned).await?
                 };
 
                 build_query_result(&columns, &rows, is_read_only)
@@ -970,8 +977,10 @@ impl Transaction for MySqlTransaction {
                 .map_err(|e| mysql_query_error(sql, &e))?;
 
             if rows.is_empty() {
+                // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，事务路径同主连接）
+                let columns = describe_columns_mysql(&mut **tx, sql).await?;
                 return Ok(QueryResult {
-                    columns: vec![],
+                    columns,
                     batches: vec![],
                     ..Default::default()
                 });
@@ -1163,6 +1172,28 @@ async fn execute_via_text_protocol_single(url: &str, sql: &str) -> Result<QueryR
         is_read_only: Some(false),
         ..Default::default()
     })
+}
+
+/// 0 行结果的列名兜底：`SELECT` 空表 / 过滤后无匹配行时 `rows` 为空，
+/// 但结果集**仍有列结构**（洞察的空表取样靠列名建「有列无行」的临时表，
+/// 此前 0 行直接给空列，导致 `result_columns_and_rows` 报「取样没有拿到列」）。
+///
+/// 做法：单独 `prepare` 一次拿 statement 的列描述（不再执行查询）；
+/// prepare 失败按原路径报错（与 fetch 阶段同一错误包装）。
+async fn describe_columns_mysql(
+    conn: &mut sqlx::MySqlConnection,
+    sql: &str,
+) -> Result<Vec<String>, CoreError> {
+    use sqlx::Executor as _;
+    let statement = conn
+        .prepare(sqlx::AssertSqlSafe(sql).into_sql_str())
+        .await
+        .map_err(|e| mysql_query_error(sql, &e))?;
+    Ok(statement
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect())
 }
 
 /// 把查询结果装进 `QueryResult`。

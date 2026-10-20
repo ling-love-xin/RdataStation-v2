@@ -66,7 +66,9 @@ pub struct WorkbenchLayout {
 }
 
 /// 编辑器上下文
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 注意：含 `f32`（结果区高度）→ 只派 `PartialEq`，不派 `Eq`。
+#[derive(Debug, Clone, PartialEq)]
 pub struct EditorContext {
     /// 编辑器 ID（有路径的文档用路径键，见 `editor::persist::session_id_for_path`）
     pub id: String,
@@ -97,6 +99,9 @@ pub struct EditorContext {
     pub tab_size: usize,
     /// 【T2c-4 余项】缩进是否制表符（默认 false）
     pub hard_tabs: bool,
+    /// 【遗留 #5】结果区分栏高度（rem；默认 18 = `editor::ui::RESULT_PANE_HEIGHT`）。
+    /// 重启后结果区不该回到默认高度——用户拖出来的比例是**布局的一部分**。
+    pub result_height: f32,
     /// 更新时间
     pub updated_at_ms: u64,
 }
@@ -162,6 +167,7 @@ impl WorkbenchContextStore {
                     schema TEXT NOT NULL DEFAULT '',
                     tab_size INTEGER NOT NULL DEFAULT 2,
                     hard_tabs INTEGER NOT NULL DEFAULT 0,
+                    result_height REAL NOT NULL DEFAULT 18,
                     updated_at_ms INTEGER NOT NULL
                 )",
                 [],
@@ -194,6 +200,8 @@ impl WorkbenchContextStore {
             ensure_column(conn, "editor_contexts", "schema", "TEXT NOT NULL DEFAULT ''")?;
             ensure_column(conn, "editor_contexts", "tab_size", "INTEGER NOT NULL DEFAULT 2")?;
             ensure_column(conn, "editor_contexts", "hard_tabs", "INTEGER NOT NULL DEFAULT 0")?;
+            // 【遗留 #5】老库也要能存结果区分栏高度（默认 18rem 与 editor 默认一致）
+            ensure_column(conn, "editor_contexts", "result_height", "REAL NOT NULL DEFAULT 18")?;
 
             Ok(())
         })
@@ -263,8 +271,8 @@ impl WorkbenchContextStore {
             conn.execute(
                 "INSERT OR REPLACE INTO editor_contexts
                  (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                  toolbar, schema, tab_size, hard_tabs, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     context.id,
                     context.connection_id,
@@ -278,6 +286,7 @@ impl WorkbenchContextStore {
                     context.schema,
                     context.tab_size as i64,
                     context.hard_tabs as i64,
+                    context.result_height,
                     context.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
@@ -295,7 +304,7 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                        toolbar, schema, tab_size, hard_tabs, updated_at_ms
+                        toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -317,7 +326,8 @@ impl WorkbenchContextStore {
                     schema: row.get(9)?,
                     tab_size: row.get::<_, i64>(10)? as usize,
                     hard_tabs: row.get::<_, i64>(11)? != 0,
-                    updated_at_ms: row.get::<_, i64>(12)? as u64,
+                    result_height: row.get::<_, f64>(12)? as f32,
+                    updated_at_ms: row.get::<_, i64>(13)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -338,7 +348,7 @@ impl WorkbenchContextStore {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
-                            toolbar, schema, tab_size, hard_tabs, updated_at_ms
+                            toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -364,7 +374,8 @@ impl WorkbenchContextStore {
                         schema: row.get(9)?,
                         tab_size: row.get::<_, i64>(10)? as usize,
                         hard_tabs: row.get::<_, i64>(11)? != 0,
-                        updated_at_ms: row.get::<_, i64>(12)? as u64,
+                        result_height: row.get::<_, f64>(12)? as f32,
+                        updated_at_ms: row.get::<_, i64>(13)? as u64,
                     })
                 })
                 .optional()
@@ -510,6 +521,7 @@ mod tests {
             schema: String::new(),
             tab_size: 2,
             hard_tabs: false,
+            result_height: 18.0,
             updated_at_ms: 1_700_000_000_000,
         }
     }

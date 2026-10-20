@@ -10,6 +10,7 @@ use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::tag::{Tag, TagVariant};
 use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
 use gpui_kit::*;
 
@@ -297,13 +298,13 @@ fn history_entry_row(
     // 标记只给「值得一眼看出」的几行：最新一版、首版、链被剪过的头部。
     // 其余行都挂在链上（有父版本），逐行打标只是噪声。
     if entry.is_latest {
-        row = row.child(history_chip("当前", colors.primary, theme));
+        row = row.child(history_chip("当前", TagVariant::Primary));
     } else if !entry.has_parent {
-        row = row.child(history_chip("首版", colors.muted_foreground, theme));
+        row = row.child(history_chip("首版", TagVariant::Secondary));
     } else if entry.chain_truncated {
         // K14：清理剪掉了链的起段——**不谎称首版**，也不假装链是完整的。
         // 数据层面不改（父版号是真的），只在界面上如实说明。
-        row = row.child(history_chip("更早的版本已清理", colors.muted_foreground, theme));
+        row = row.child(history_chip("更早的版本已清理", TagVariant::Secondary));
     }
 
     // 最新那行不给点击：方向固定为「选中 → 最新」，拿最新当基准无从比
@@ -318,14 +319,14 @@ fn history_entry_row(
     })
 }
 
-/// 版本行上的小标记（文案色 + 淡底；不写裸 hex）
-fn history_chip(text: &str, color: Hsla, theme: &Theme) -> Div {
-    div()
+/// 版本行上的小标记。`Tag` outline 变体：透明底 + 语义色文字 + 同色描边，
+/// 替代手搓「淡底 + 色字」div（list_hover 底不再需要——Tag 自带语义色档）。
+fn history_chip(text: &str, variant: TagVariant) -> Tag {
+    Tag::new()
+        .with_variant(variant)
+        .outline()
+        .small()
         .flex_none()
-        .px_1()
-        .rounded_sm()
-        .bg(theme.colors.list_hover)
-        .text_color(color)
         .child(text.to_string())
 }
 

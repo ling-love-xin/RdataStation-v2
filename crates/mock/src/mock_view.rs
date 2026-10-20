@@ -10,7 +10,7 @@
 //! | 打开这张表（右 Dock 清单点一行） | 中央「Mock · {表}」tab：列（草稿可编辑 / 结果只读）+ 预览表格 |
 //! | 持久化为项目分析库表 | 在**项目**分析库（`{项目}/.RSmeta/analytics.duckdb`）**新建**表（已存在则报错，引导改用「追加」） |
 //! | 追加到既有表 | **显式**选择既有表；主键自增起点接续表内行数 |
-//! | 保存到草稿箱 | `{项目}/mock/mock_*.{ext}`（时间戳命名，只读项目禁写） |
+//! | 保存到草稿箱 | `{项目}/scratchpad/mock/mock_*.{ext}`（时间戳命名，只读项目禁写；必须落在草稿箱扫描的 scratchpad 树下） |
 //! | 另存为 | CSV / Parquet / Xlsx / SQL INSERT 文件（调用方在系统对话框选路径） |
 //!
 //! **生成不写库**：`generate` 只产临时表 + 预览（内存 DuckDB），一切落库与落盘都由出口按钮触发。
@@ -46,6 +46,7 @@ use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
 // `.when(..)`（条件挂样式 / 事件）：组件库把 `FluentBuilder` 放在 prelude，通配导入不含它
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
@@ -275,10 +276,20 @@ pub enum MockJobKind {
         /// 目标路径
         path: String,
     },
-    /// 出口：把已生成结果保存到草稿箱（`{项目}/mock/`）
+    /// 出口：把已生成结果保存到草稿箱（`{项目}/scratchpad/mock/`）
     Scratchpad {
         /// 已生成结果
         info: MockGenInfo,
+        /// 文件格式
+        format: MockExportFormat,
+    },
+    /// 出口：把多张已生成结果**依次**存到草稿箱（`{项目}/scratchpad/mock/`；逐张报进度）
+    ///
+    /// 与 [`Self::PersistAll`] 对称：落库走分析库新表，草稿箱走 CSV 文件。
+    /// 批量先固定 CSV（最通用）；后续要支持 Parquet/Xlsx 再挂 dropdown。
+    ScratchpadAll {
+        /// 已生成结果（多张）
+        infos: Vec<MockGenInfo>,
         /// 文件格式
         format: MockExportFormat,
     },
@@ -298,7 +309,7 @@ impl MockJobKind {
     /// 场景生成与批量落库都是一次处理多张表，`rows_total` 为 0，面板据此把
     /// `batches_done / batches_total` 读作表计数。
     pub fn by_table(&self) -> bool {
-        matches!(self, Self::Scenario(_) | Self::PersistAll(_))
+        matches!(self, Self::Scenario(_) | Self::PersistAll(_) | Self::ScratchpadAll { .. })
     }
 
     /// 是否**以当前草稿为输入**（目标表 / 列 / 行数）。
@@ -315,7 +326,9 @@ impl MockJobKind {
         match self {
             Self::Generate | Self::AppendTo(_) | Self::Scenario(_) => MockJobPhase::Generating,
             Self::Persist(_) | Self::PersistAll(_) => MockJobPhase::Writing,
-            Self::Export { .. } | Self::Scratchpad { .. } => MockJobPhase::Exporting,
+            Self::Export { .. } | Self::Scratchpad { .. } | Self::ScratchpadAll { .. } => {
+                MockJobPhase::Exporting
+            }
         }
     }
 
@@ -326,7 +339,7 @@ impl MockJobKind {
     pub fn rows_total(&self, draft: &MockDraft) -> u32 {
         match self {
             Self::Generate | Self::AppendTo(_) => draft.options.rows,
-            Self::Scenario(_) | Self::PersistAll(_) => 0,
+            Self::Scenario(_) | Self::PersistAll(_) | Self::ScratchpadAll { .. } => 0,
             Self::Persist(info) | Self::Export { info, .. } | Self::Scratchpad { info, .. } => {
                 info.row_count
             }
@@ -346,6 +359,7 @@ impl MockJobKind {
             ),
             Self::Export { path, .. } => format!("导出中…（{path}）"),
             Self::Scratchpad { .. } => "保存到草稿箱中…".to_string(),
+            Self::ScratchpadAll { infos, .. } => format!("存草稿箱 {} 张表中…", infos.len()),
         }
     }
 }
@@ -389,6 +403,15 @@ pub enum MockJobDone {
     Exported {
         /// 结果文案
         message: String,
+    },
+    /// 批量存草稿箱完成：成功的表名与失败的表（表名 + 可读原因）
+    ///
+    /// 与 [`Self::PersistedAll`] 同口径：已存的不回滚，失败的单独列出来。
+    ScratchpadAll {
+        /// 保存成功的表名
+        saved: Vec<String>,
+        /// 保存失败的表（表名 + 可读原因）
+        failed: Vec<(String, String)>,
     },
 }
 
@@ -539,6 +562,8 @@ pub trait MockHost: 'static {
         order: Option<(&str, bool)>,
         limit: usize,
     ) -> Result<Option<MockPreview>, String>;
+    /// 工具栏「刷新」：重读内存临时表的**当前行数**（`Ok(None)` = 内存库连接正忙，保持现状）。
+    fn temp_table_row_count(&self, temp_table: &str) -> Result<Option<i64>, String>;
     /// 文件出口的默认目录（项目根 / 工作目录；空串表示由视图回退到当前目录）
     fn export_dir(&self) -> String;
     /// 只读项目？（落库与写文件据此拒绍）
@@ -1433,6 +1458,10 @@ pub struct MockPanel {
     scenario_seed_input: Option<Entity<InputState>>,
     /// 待写入场景种子输入的值（`load_scenario` 置位，下一帧 `ensure_inputs` 落地）
     scenario_seed_pending: Option<String>,
+    /// 清单搜索框（懒创建：`InputState` 要 window；搜索词存在它里，不另存一份）
+    search_input: Option<Entity<InputState>>,
+    /// 工具栏「＋」的表名序号（每次点击递增：mock_table_1 → mock_table_2 → …）
+    draft_seq: u32,
     /// 导入结构对话框：选中的连接（`None` = 未选）
     import_conn: Rc<RefCell<Option<String>>>,
     import_catalog: Option<Entity<InputState>>,
@@ -1672,6 +1701,8 @@ impl MockPanel {
             seed_input: None,
             scenario_seed_input: None,
             scenario_seed_pending: None,
+            search_input: None,
+            draft_seq: 0,
             import_conn: Rc::new(RefCell::new(None)),
             import_catalog: None,
             import_schema: None,
@@ -2419,6 +2450,62 @@ impl MockPanel {
         cx.notify();
     }
 
+    /// 工具栏「▦ 新增场景」：从空白场景（0 张表）开始建工作副本。
+    ///
+    /// 与「选模板」同一入口（[`Self::load_scenario`]）：进来的是 0 张表的模板，
+    /// 之后用「＋ 加表（当前草稿）」「＋ 加关系」从零搭起（`add_draft_to_scenario` 的
+    /// 「先选一套场景模板」门槛由空模板本身满足）。
+    pub fn new_blank_scene(&mut self, cx: &mut Context<Self>) {
+        if self.is_running() {
+            self.fail("已有任务在进行中（请等它结束或先取消）", cx);
+            return;
+        }
+        self.load_scenario(crate::templates::blank_scene_template(), cx);
+    }
+
+    /// 工具栏「＋」：新建一张草稿表（对齐原型 `newMockTable`——每次点击从一张新表开始配）。
+    ///
+    /// 单表态的草稿只有一份（清单那一行就是它，design.md 单表态 = 草稿与结果一行），
+    /// 所以「清单加一条记录」落到实现里 = 把草稿换成一张**新表**（表名递增、列清空、
+    /// 行数复位），并聚焦它的中央 tab（配字段 / 名称都在 tab 里）；上一张若已生成，
+    /// 结果仍留在清单（`results`），新表生成后再续一条。
+    pub fn new_draft_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.draft_seq += 1;
+        self.draft = MockDraft {
+            table_name: format!("mock_table_{}", self.draft_seq),
+            columns: Vec::new(),
+            options: MockRunOptions::new(1000, None, self.draft.options.locale.clone()),
+        };
+        // 新表从「未生成」开始：清掉上一张的生成反馈（error 留给失败现场，这里不误清）
+        self.outcome = None;
+        cx.notify();
+        self.open_detail_for(DetailTarget::Draft, window, cx);
+    }
+
+    /// 工具栏「⟳ 刷新」：重读内存临时表的**当前行数**，同步清单行尾数字。
+    ///
+    /// 测试过程中可能改过这张表（加字段 / 增删行 / 外部写入）：`results` 里的行数是
+    /// 生成时的快照，刷新把它与库内现状对齐。查不到（连接正忙 / 表已被清）保持现状，
+    /// 不打断用户——刷新是随手动作，不为它弹错。
+    pub fn refresh_tables(&mut self, cx: &mut Context<Self>) {
+        let mut changed = 0usize;
+        for info in self.results.iter_mut() {
+            if let Ok(Some(rows)) = self.host.temp_table_row_count(&info.temp_table_name) {
+                if info.row_count != rows as u32 {
+                    info.row_count = rows as u32;
+                    changed += 1;
+                }
+            }
+        }
+        self.outcome = Some(if changed == 0 {
+            "已刷新：临时表行数与清单一致".to_string()
+        } else {
+            format!("已刷新：{changed} 张表行数已同步")
+        });
+        self.error = None;
+        cx.notify();
+    }
+
     /// 场景态下的「生成」（后台任务：一次产出模板里的全部表；**不写库**）。
     pub fn run_scenario(&mut self, cx: &mut Context<Self>) {
         let Some(mut template) = self.scenario.clone() else {
@@ -2435,6 +2522,11 @@ impl MockPanel {
                     return;
                 }
             }
+        }
+        // 空白场景（0 张表）先别提交：生成空结果没有意义，引导用户先加第一张表
+        if template.tables.is_empty() {
+            self.fail("空白场景还没有表：先用「＋ 加表（当前草稿）」添加第一张", cx);
+            return;
         }
         // 生成前校验引用（父表 / 父列不合适就不提交；错误在面板上就地显示）
         if let Err(e) = MockEngine::resolve_reference_domains(&template) {
@@ -2515,6 +2607,29 @@ impl MockPanel {
             .cloned()
             .collect();
         self.start_job(MockJobKind::PersistAll(infos), cx);
+    }
+
+    /// 批量存草稿箱：把当前所有结果表一次写到 `{项目}/scratchpad/mock/`。
+    ///
+    /// 与「落库这 N 张」对称：落库走分析库新表，草稿箱走 CSV 文件。
+    /// 没项目根直接拦（草稿箱只写项目目录；出口区按钮也据此禁用）。
+    fn scratchpad_all(&mut self, cx: &mut Context<Self>) {
+        if self.results.is_empty() {
+            self.fail("没有结果表可导出", cx);
+            return;
+        }
+        if self.host.project_root().is_none() {
+            self.fail("未打开项目：草稿箱只写项目目录", cx);
+            return;
+        }
+        let infos = self.results.clone();
+        self.start_job(
+            MockJobKind::ScratchpadAll {
+                infos,
+                format: MockExportFormat::Csv,
+            },
+            cx,
+        );
     }
 
     /// 当前结果表的**跨表后果**（用于出口提示；`None` = 它不参与任何关系）。
@@ -3486,6 +3601,36 @@ impl MockPanel {
                 }
             }
             Ok(MockJobDone::Exported { message }) => self.succeed(message, cx),
+            Ok(MockJobDone::ScratchpadAll { saved, failed }) => {
+                // 与 PersistedAll 同口径：成功的不回滚，部分失败时把原因摆出来
+                let mut parts: Vec<String> = Vec::new();
+                if !saved.is_empty() {
+                    parts.push(format!(
+                        "已存草稿箱 {} 张：{}",
+                        saved.len(),
+                        saved.join("、")
+                    ));
+                }
+                if !failed.is_empty() {
+                    parts.push(format!(
+                        "失败 {} 张：{}",
+                        failed.len(),
+                        failed
+                            .iter()
+                            .map(|(table, reason)| format!("{table}（{reason}）"))
+                            .collect::<Vec<_>>()
+                            .join("；")
+                    ));
+                }
+                if failed.is_empty() {
+                    self.succeed(parts.join("；"), cx);
+                } else {
+                    self.error = Some(parts.join("；"));
+                    self.outcome = None;
+                    self.host.notify(cx);
+                    cx.notify();
+                }
+            }
             Err(e) => {
                 let cancelled = e.contains("取消");
                 // 同名表已存在是落库失败的常见情形：刷新清单，引导到「追加到既有表」
@@ -3891,6 +4036,11 @@ impl MockPanel {
                 }));
             self.column_filter = Some(state);
         }
+        // 清单搜索框（工具栏下方 / 清单顶部；搜索词一变就重画，与 `column_filter` 同一订阅模式）
+        if self.search_input.is_none() {
+            let state = cx.new(|cx| InputState::new(window, cx).placeholder("搜索表名"));
+            self.search_input = Some(state);
+        }
     }
 
     /// 表头第一行：表名 / 行数 / 种子 / 语言（草稿可改）。
@@ -4288,6 +4438,20 @@ impl MockPanel {
 
         let mut list = div().v_flex().gap_1().w_full();
 
+        // 清单搜索框：按表名过滤行（与原型「搜索表名…」对齐；空搜索 = 全显示）。
+        // 搜索词只影响显示，不影响下标语义（index 仍是 results 里的真实位置）。
+        let search = self.search_input.clone();
+        list = list.child(
+            div()
+                .w_full()
+                .child(search.map(|input| div().child(Input::new(&input))).unwrap_or_else(|| div())),
+        );
+        let query = self
+            .search_input
+            .clone()
+            .map(|input| input.read(cx).value().trim().to_lowercase())
+            .unwrap_or_default();
+
         // ── 结果表：每张结果表一个中央 tab；状态点说「落了没 / 缺不缺父表」──
         if !self.results.is_empty() {
             let count = self.results.len();
@@ -4299,6 +4463,9 @@ impl MockPanel {
                     .child(format!("结果表（{count}）· 点一行切到它的 tab")),
             );
             for (index, info) in self.results.iter().enumerate() {
+                if !query.is_empty() && !info.table_name.to_lowercase().contains(&query) {
+                    continue;
+                }
                 let selected = index == current_index;
                 let name = info.table_name.clone();
                 let (glyph, status, color) = match self.table_status(&name) {
@@ -4423,19 +4590,24 @@ impl MockPanel {
 
         // ── 本次 Mock 表：场景工作副本（还没有结果）——行尾「编辑 / ✕」，关系挂子表行下 ──
         if let Some(template) = self.scenario.clone() {
+            // 空白场景（0 张表）用原型专门的引导文案，别让「本次 Mock 表（0）」空着不知所云
+            let heading = if template.tables.is_empty() {
+                "空白场景 · 0 张表——从「＋ 加表」开始".to_string()
+            } else {
+                format!(
+                    "本次 Mock 表（{}）· {}",
+                    template.tables.len(),
+                    template.name
+                )
+            };
             list = list.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(format!(
-                        "本次 Mock 表（{}）· {}",
-                        template.tables.len(),
-                        template.name
-                    )),
+                div().text_xs().text_color(muted).text_ellipsis().child(heading),
             );
             let relations = relations_of(&template);
             for table in template.tables.iter() {
+                if !query.is_empty() && !table.name.to_lowercase().contains(&query) {
+                    continue;
+                }
                 let name = table.name.clone();
                 let edit = {
                     let entity = cx.entity();
@@ -4600,6 +4772,14 @@ impl MockPanel {
         }
 
         // ── 单表态：草稿（与它的结果）就这一行 ──
+        // 标题行对齐原型清单头「本次 Mock 表（1）」（结果态走上面的「结果表（N）」分支）
+        list = list.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .text_ellipsis()
+                .child("本次 Mock 表（1）"),
+        );
         let name = self.draft.table_name.clone();
         let rows = with_thousands(self.draft.options.rows as u64);
         let (glyph, status, color) = match self.table_status(&name) {
@@ -4711,8 +4891,16 @@ impl MockPanel {
                                 format!("生成 {} 张表", template.tables.len())
                             });
                     if !running {
-                        button = button.on_click(move |_, _, app| {
-                            entity.update(app, |panel, cx| panel.run_scenario(cx));
+                        button = button.on_click(move |_, window, app| {
+                            entity.update(app, |panel, cx| {
+                                // 点生成 = 这一轮数据重新验收：先清掉上一轮残留的搜索过滤，
+                                // 免得新清单被旧关键词挡住（曾误判「只生成了一张表」）
+                                if let Some(search) = panel.search_input.clone() {
+                                    search
+                                        .update(cx, |state, cx| state.set_value("", window, cx));
+                                }
+                                panel.run_scenario(cx);
+                            });
                         });
                     }
                     button
@@ -4786,6 +4974,41 @@ impl MockPanel {
                             )),
                     )
                     .child(button)
+            }
+        };
+
+        // 多表结果（场景生成）：与「落库这 N 张」对称的批量草稿箱出口。
+        // 单表结果（1 张）不显示——单表走出口区「保存到草稿箱」即可。
+        // 没项目根不显示：草稿箱只写项目目录（与单表出口同口径）。
+        let batch_row = {
+            let count = self.results.len();
+            let has_root = self.host.project_root().is_some();
+            if count > 1 && has_root && !running {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-scratchpad-all")
+                    .secondary()
+                    .xsmall()
+                    .label(format!("全部存草稿箱（{} 张）", count));
+                button = button.on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| panel.scratchpad_all(cx));
+                });
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(cx.theme().colors.muted_foreground)
+                            .text_ellipsis()
+                            .child("场景结果一键导出（CSV）："),
+                    )
+                    .child(button)
+            } else {
+                div()
             }
         };
 
@@ -4919,6 +5142,7 @@ impl MockPanel {
             .p_2()
             .child(table_list)
             .child(pending_row)
+            .child(batch_row)
             // ② 集合级动作与它的进度：单表任务的在中央表头（D38）
             .child(scenario_actions)
             .child(job_row)
@@ -4972,6 +5196,127 @@ impl MockPanel {
     }
 
     /// 打开「导入源库结构」对话框。
+    /// 标题栏下方的工具栏（2026-10-18 对齐原型）：＋ 新增 Mock 表 / ⇄ 引用结构 /
+    /// ▦ 新增场景 / ⟳ 刷新。
+    ///
+    /// 按钮语义全部是 `Button`（自带 hover / 焦点 / 键盘）；标题栏只留标题，
+    /// 「＋」从标题栏工具栏迁到这里（原型同构：mock-toolbar 在面板头下方一行）。
+    /// 行高走 `CONTROL_HEIGHT_SM`（与数据导航筛选行同档），底部分隔线用 `HAIRLINE`。
+    fn render_toolbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let running = self.is_running();
+        let entity = cx.entity();
+        let muted = cx.theme().colors.muted_foreground;
+
+        let new_table = {
+            let entity = entity.clone();
+            Button::new("mock-toolbar-new-table")
+                .icon(IconName::Plus)
+                .ghost()
+                .tooltip("新增 Mock 表：开一个中央 tab 配字段与名称")
+                .on_click(move |_, window, app| {
+                    entity.update(app, |panel, cx| panel.new_draft_table(window, cx));
+                })
+        };
+        // ⇄ 引用结构 = 原型 conn-pop：先弹连接列表选来源，再进对话框（库 / schema 按连接预填）。
+        // 来源在 `open_import_dialog` 里填充，render 只读内存里的 `sources`（不触发 I/O）；
+        // 还没有来源时菜单给一句说明 + 「在对话框里选择连接…」兜底（保持同一弹出组件形态）。
+        let import = {
+            let entity = entity.clone();
+            let sources = self.sources.clone();
+            Button::new("mock-toolbar-import")
+                .icon(IconName::HardDrive)
+                .ghost()
+                .tooltip("引用数据库结构：选连接读表结构")
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    if sources.is_empty() {
+                        let entity = entity.clone();
+                        menu = menu.item(PopupMenuItem::new("（暂无数据源）").disabled(true));
+                        return menu.item(
+                            PopupMenuItem::new("在对话框里选择连接…").on_click(
+                                move |_, window, app| {
+                                    let entity = entity.clone();
+                                    entity.update(app, |panel, cx| {
+                                        panel.open_import_dialog(window, cx);
+                                    });
+                                },
+                            ),
+                        );
+                    }
+                    for source in sources.iter() {
+                        let entity = entity.clone();
+                        let conn_id = source.conn_id.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(source.label.clone()).on_click(
+                                move |_, window, app| {
+                                    let entity = entity.clone();
+                                    let conn_id = conn_id.clone();
+                                    entity.update(app, |panel, cx| {
+                                        panel.open_import_for(&conn_id, window, cx);
+                                    });
+                                },
+                            ),
+                        );
+                    }
+                    menu
+                })
+        };
+        let new_scene = {
+            let entity = entity.clone();
+            Button::new("mock-toolbar-new-scene")
+                .icon(IconName::LayoutDashboard)
+                .ghost()
+                .tooltip("新增场景：从 0 张表开始的工作副本")
+                .disabled(running)
+                .on_click(move |_, _window, app| {
+                    entity.update(app, |panel, cx| panel.new_blank_scene(cx));
+                })
+        };
+        let refresh = {
+            let entity = entity.clone();
+            Button::new("mock-toolbar-refresh")
+                .icon(IconName::RefreshCw)
+                .ghost()
+                .tooltip("刷新：重读临时表与生成状态")
+                .disabled(self.results.is_empty())
+                .on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| panel.refresh_tables(cx));
+                })
+        };
+        // 工具栏右侧的清单状态提示（对齐原型 mockToolHint：单表态「N 张草稿」；
+        // 场景 / 结果态显示本批表数——比原型残留的「1 张草稿」更贴合当前清单）。
+        let hint = if self.results.is_empty() {
+            match &self.scenario {
+                Some(template) => format!("{} 张表", template.tables.len()),
+                None => "1 张草稿".to_string(),
+            }
+        } else {
+            format!("{} 张结果", self.results.len())
+        };
+
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .h(rems(ui::CONTROL_HEIGHT_SM))
+            .px_1()
+            .border_b(ui::HAIRLINE)
+            .child(new_table)
+            .child(import)
+            .child(new_scene)
+            .child(refresh)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(hint),
+            )
+    }
+
     /// 底部折叠段：生成历史 + 用户模板（默认收起）。
     ///
     /// 为何收起来：面板天天用的是上面那份「有哪些表」清单，历史与模板是偶尔翻一次的落盘记录；
@@ -5417,6 +5762,19 @@ impl MockPanel {
         });
     }
 
+    /// ⇄ 连接菜单选中：记下连接后直接进导入对话框（库 / schema 由对话框按连接记录预填，
+    /// 见 [`Self::open_import_dialog`] 的 `panel_match` 分支）——对应原型 conn-pop 的
+    /// 「选一个连接读它的库表结构」。
+    pub fn open_import_for(
+        &mut self,
+        conn_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        *self.import_conn.borrow_mut() = Some(conn_id.to_string());
+        self.open_import_dialog(window, cx);
+    }
+
     pub fn open_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sources.is_empty() {
             self.sources = self.host.schema_sources();
@@ -5659,7 +6017,8 @@ impl Render for MockPanel {
                             .gap_2()
                             .w_full()
                             // Dock 的面板头已经写着「Mock 生成」：面板内不再重复一个标题，
-                            // 直接从「有哪些表」那份清单开始（D38）
+                            // 工具栏（＋⇄▦⟳）直接接在标题栏下面（D38 + 2026-10-18 对齐原型）
+                            .child(self.render_toolbar(window, cx))
                             .child(actions)
                             .child(self.render_folds(cx)),
                     ),

@@ -56,6 +56,8 @@ pub struct ArchiveDialogSeed {
     pub groups: Vec<GroupOption>,
     /// 预选分组（`None` = 未分组）：默认分组设置项给的初值。
     pub group_id: Option<String>,
+    /// 标签输入框的**继承预填**（草稿箱归档时带草稿条目标签名；用户可改可删）。
+    pub initial_tags: Vec<String>,
 }
 
 /// 目标占用：不静默覆盖，也不让用户手改路径——由宿主给出确定的改名落点。
@@ -150,7 +152,12 @@ pub fn build_inputs(
     let name_value = seed.name.clone();
     name.update(cx, |state, cx| state.set_value(name_value, window, cx));
 
+    // 标签预填 = 归档继承（草稿条目标签名）；同样走 `set_value`（不发 Change，校验仍从值推导）。
     let tags = cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔（可空）"));
+    if !seed.initial_tags.is_empty() {
+        let tags_value = seed.initial_tags.join(", ");
+        tags.update(cx, |state, cx| state.set_value(tags_value, window, cx));
+    }
     let alias = cx.new(|cx| InputState::new(window, cx).placeholder("别名（可空）"));
     let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder("跟随设置（-1 全留）"));
     ArchiveDialogInputs {
@@ -466,6 +473,18 @@ mod tests {
         );
         assert!(parse_tags("   ").is_empty(), "全空白 = 没有标签");
         assert!(parse_tags("").is_empty());
+    }
+
+    /// 归档继承（规格 §7.4）的预填语义：`initial_tags` → `join(", ")` 预填 → `parse_tags` 解析，
+    /// 对不含分隔符的标签集合 roundtrip 保持原集合（顺序、去重）。
+    #[test]
+    fn initial_tags_roundtrip_through_comma_join() {
+        let tags = vec!["报表".to_string(), "重要".to_string()];
+        assert_eq!(parse_tags(&tags.join(", ")), tags);
+        assert!(
+            parse_tags(&Vec::<String>::new().join(", ")).is_empty(),
+            "无继承标签时预填空串，提交即空"
+        );
     }
 
     #[test]

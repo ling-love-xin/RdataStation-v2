@@ -18,6 +18,8 @@ mock.workspace = true
 settings.workspace = true
 scratchpad.workspace = true
 analytics_resource.workspace = true
+# 标签定义与治理（管理标签覆盖层：批量重命名 / 清理空标签，规格 tag-system-spec §12 #3）
+tag.workspace = true
 # 运行时数据路径唯一解析点（全局系统库目录）
 paths.workspace = true
 

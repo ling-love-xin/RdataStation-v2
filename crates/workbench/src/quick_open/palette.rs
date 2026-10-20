@@ -379,6 +379,9 @@ impl QuickOpenPalette {
                     database::nav_jobs::SearchConsumer::QuickOpen,
                     kind,
                     &needle,
+                    // 快速打开（Quick Open）：无 `.*` / `Aa` 开关，走默认关。
+                    false,
+                    false,
                     project_root.as_deref(),
                     targets,
                 );

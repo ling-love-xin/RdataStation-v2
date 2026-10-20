@@ -337,6 +337,37 @@ impl MockEngine {
             .map_err(|e| MockError::Preview(e.to_string()))
     }
 
+    /// 工具栏「刷新」：重读内存临时表的行数。
+    ///
+    /// 测试过程中可能改过这张表（加字段 / 增删行 / 外部写入），清单行尾的数字
+    /// 是生成时的快照；刷新用**当前实际行数**把清单与预览对齐。
+    ///
+    /// **非阻塞**：拿不到内存库连接锁（有任务在跑）时返回 `Ok(None)`，由调用方保持现状，
+    /// 口径与 [`Self::try_preview_sample`] 一致（刷新是随手动作，不值得为它冻住 UI）。
+    pub fn try_temp_table_row_count(temp_table_name: &str) -> MockResult<Option<i64>> {
+        let db = Self::get_db()?;
+        let conn = match db.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                tracing::warn!("Mock: 内存库连接锁曾被毒化（刷新重查），已恢复复用");
+                poisoned.into_inner()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+        };
+        let sql = format!("SELECT COUNT(*) FROM \"{temp_table_name}\"");
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| MockError::Preview(e.to_string()))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| MockError::Preview(e.to_string()))?;
+        let count = match rows.next().map_err(|e| MockError::Preview(e.to_string()))? {
+            Some(row) => row.get(0).map_err(|e| MockError::Preview(e.to_string()))?,
+            None => return Ok(None),
+        };
+        Ok(Some(count))
+    }
+
     // ==================== 导出 ====================
 
     /// 导出临时表数据到文件

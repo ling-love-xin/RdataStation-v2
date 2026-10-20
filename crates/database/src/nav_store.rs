@@ -126,20 +126,33 @@ pub fn set_tags(conn_id: &str, project_root: Option<&Path>, tags: &[String]) -> 
     store.set_tags(conn_id, tags).map_err(|e| e.to_string())
 }
 
-/// 读取当前项目可见连接的全部标签映射（全局库 + 项目库合并）。
-pub fn list_all_tags(project_root: Option<&Path>) -> HashMap<String, Vec<String>> {
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    let mut merge = |pairs: Vec<(String, String)>| {
-        for (conn_id, tag) in pairs {
-            map.entry(conn_id).or_default().push(tag);
+/// 读取当前项目可见连接的全部标签映射（全局库 + 项目库合并），值为实体标签。
+///
+/// 定义来自同库 `tags` 表（scope 由存储域派生，D4）；导航标签实体化后上层渲染
+/// （chip 颜色 / facet 筛选）直接用 `tag::Tag`，不再拿裸字符串。
+pub fn list_all_tags(project_root: Option<&Path>) -> HashMap<String, Vec<tag::Tag>> {
+    use engine::persistence::connection_org_store::NavTagRow;
+    let mut map: HashMap<String, Vec<tag::Tag>> = HashMap::new();
+    // scope 由存储域派生（D4）：全局库 = global、项目库 = project。
+    let mut merge = |pairs: Vec<(String, NavTagRow)>, scope: &str| {
+        for (conn_id, row) in pairs {
+            map.entry(conn_id).or_default().push(tag::Tag {
+                id: row.id,
+                name: row.name,
+                color: row.color,
+                icon: row.icon,
+                scope: scope.to_string(),
+                created_at: String::new(),
+                deleted_at: None,
+            });
         }
     };
     if let Ok(store) = ConnectionOrgStore::open_global() {
-        merge(store.list_tag_pairs());
+        merge(store.list_tag_rows(), tag::SCOPE_GLOBAL);
     }
     if let Some(root) = project_root {
         if let Ok(store) = ConnectionOrgStore::open_project(root) {
-            merge(store.list_tag_pairs());
+            merge(store.list_tag_rows(), tag::SCOPE_PROJECT);
         }
     }
     map

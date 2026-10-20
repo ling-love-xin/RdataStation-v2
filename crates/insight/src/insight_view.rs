@@ -191,6 +191,12 @@ pub struct InsightView {
     pub(crate) history_notice: Option<String>,
     /// 结构四区的展开态（顺序同 `SchemaSection::ALL`；默认全展开）
     pub(crate) open_schema_sections: [bool; SchemaSection::ALL.len()],
+    /// 加载期的阶段说明（源目标取样：DuckDB 建分析临时表在大表上可能较久，
+    /// 而 CTAS 在库内完成、拿不到真百分比——只给阶段文字 + 不确定进度条）。
+    ///
+    /// 由 [`crate::jobs::request_profile`] 分阶段更新：取样中 → 画像中；渲染在
+    /// `state == Loading` 时读它，`None` 走纯骨架。
+    pub(crate) loading_note: Option<SharedString>,
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
@@ -217,6 +223,7 @@ impl InsightView {
             compare_target: None,
             history_notice: None,
             open_schema_sections: [true; SchemaSection::ALL.len()],
+            loading_note: None,
         }
     }
 
@@ -276,6 +283,20 @@ impl InsightView {
     pub fn set_source_sample(&mut self, temp_table: impl Into<String>, cx: &mut Context<Self>) {
         self.data.source_sample = Some(temp_table.into());
         cx.notify();
+    }
+
+    /// 更新加载期的阶段说明（jobs 分阶段调用：取样中 → 画像中）。
+    ///
+    /// `None` 清掉说明（切到非源目标时恢复纯骨架）。说明只是加载态的文字，
+    /// 不改变 `state`——它必须仍是 `Loading` 才被渲染。
+    pub fn set_loading_note(&mut self, note: Option<SharedString>, cx: &mut Context<Self>) {
+        self.loading_note = note;
+        cx.notify();
+    }
+
+    /// 当前加载期的阶段说明（`None` = 纯骨架；测试与宿主读）。
+    pub fn loading_note(&self) -> Option<&SharedString> {
+        self.loading_note.as_ref()
     }
 
     /// 数据态载荷（宿主与测试读；三个 Tab 各自的最近一次结果）
@@ -724,6 +745,8 @@ impl InsightView {
         // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表；
         // 快照落项目目录，所以「历史」还要项目已打开（无项目看不了，不是错误）
         let request = match tab {
+            // 摘要不取数：只用已加载的载荷渲染（缺数据走空态，不重复请求）
+            PanelTab::Overview => None,
             PanelTab::Column => match &target {
                 InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => {
                     Some(InsightEvent::ProfileRequested { target })
@@ -821,6 +844,7 @@ impl InsightView {
             return;
         }
         let missing = match tab {
+            PanelTab::Overview => false,
             PanelTab::Column => self.data.column.is_none(),
             PanelTab::Table => self.data.table.is_none(),
             PanelTab::MultiColumn => !self
@@ -875,6 +899,8 @@ impl Render for InsightView {
         let rem = window.rem_size();
         let empty_icon = rem * ui::EMPTY_ICON_SIZE;
         let inline_icon = rem * ui::INSIGHT_INLINE_ICON_SIZE;
+        // 摘要 Tab 的评分环（68px 外框，对齐原型右栏 score-ring）
+        let overview_ring = rem * ui::INSIGHT_OVERVIEW_RING_SIZE;
 
         div()
             .key_context("insight")
@@ -907,6 +933,7 @@ impl Render for InsightView {
                                 theme,
                                 empty_icon,
                                 inline_icon,
+                                overview_ring,
                             )),
                     ),
             )

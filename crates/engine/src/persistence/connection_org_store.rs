@@ -56,6 +56,18 @@ pub struct ConnectionOrgStore {
     is_project: bool,
 }
 
+/// 连接标签关联行（含定义 id / 颜色 / 图标），供上层组装实体标签。
+///
+/// 只读标签定义表（`JOIN tags` 取列），不建 tag crate 类型——engine 是数据层，
+/// 上层（`crates/database`）按需组装成 `tag::Tag`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavTagRow {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub icon: Option<String>,
+}
+
 impl ConnectionOrgStore {
     /// 打开全局库（`{system}/global.db`）。
     pub fn open_global() -> Result<Self, CoreError> {
@@ -94,17 +106,24 @@ impl ConnectionOrgStore {
     }
 
     fn ensure_tables(&self) -> Result<(), CoreError> {
+        // 连接标签关联表：`tag_id` 引用同库 `tags` 定义（实体化，规格 tag-system-spec §7.5）。
+        // 老库经 `ensure_connection_tags_tag_id` 幂等补列；`tag` 列保留作主键载体，
+        // 实体化后新写入的 `tag` 列即定义 id（读取一律 JOIN `tag_id`，不看 `tag`）。
         self.conn
             .execute(
                 "CREATE TABLE IF NOT EXISTS connection_tags (
                     connection_id TEXT NOT NULL,
                     tag           TEXT NOT NULL,
+                    tag_id        TEXT,
                     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (connection_id, tag)
                 )",
                 [],
             )
             .map_err(|e| self.err("create_connection_tags", e))?;
+        self.ensure_tags_table()?;
+        self.ensure_connection_tags_tag_id()?;
+        self.backfill_connection_tag_ids()?;
         if self.is_project {
             self.conn
                 .execute(
@@ -151,6 +170,91 @@ impl ConnectionOrgStore {
         Ok(())
     }
 
+    /// 标签定义表（跨模块共享：导航 / 草稿箱 / 分析资源）。
+    ///
+    /// DDL 与 `crates/tag` 的 `TagTable::ensure_tables` 及引擎迁移保持**逐列一致**（幂等建表，
+    /// 任何一方先建都成立；本处是 engine 侧兜底——导航归并/写路径不依赖 tag crate，
+    /// 依赖方向 engine → shared 不含 feature crate）。`created_at` 用 RFC3339 风格字符串，
+    /// 与 tag crate `chrono::Utc::now().to_rfc3339()` 同为 UTC 时间戳、字符串可比。
+    fn ensure_tags_table(&self) -> Result<(), CoreError> {
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS tags (
+                    id         TEXT PRIMARY KEY,
+                    name       TEXT NOT NULL,
+                    color      TEXT,
+                    icon       TEXT,
+                    scope      TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    deleted_at TEXT
+                )",
+                [],
+            )
+            .map_err(|e| self.err("create_tags_table", e))?;
+        // 部分唯一索引：软删后可同名重建（规格 §5）。
+        self.conn
+            .execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS tags_name_scope_active
+                 ON tags (name, scope) WHERE deleted_at IS NULL",
+                [],
+            )
+            .map_err(|e| self.err("create_tags_unique_index", e))?;
+        Ok(())
+    }
+
+    /// 幂等补 `connection_tags.tag_id` 列（老库没有；新库建表时已含）。
+    fn ensure_connection_tags_tag_id(&self) -> Result<(), CoreError> {
+        let has = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(connection_tags)")
+                .map_err(|e| self.err("pragma_connection_tags", e))?;
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| self.err("pragma_connection_tags_rows", e))?;
+            names.filter_map(Result::ok).any(|n| n == "tag_id")
+        };
+        if !has {
+            self.conn
+                .execute(
+                    "ALTER TABLE connection_tags ADD COLUMN tag_id TEXT",
+                    [],
+                )
+                .map_err(|e| self.err("alter_connection_tags_tag_id", e))?;
+        }
+        Ok(())
+    }
+
+    /// 存量归并（幂等）：老 `tag` 名字 → 定义行（scope 按库派生），回填 `tag_id`。
+    ///
+    /// 语义对齐规格决策：D3 同名复用现成定义；D2 软删定义不清关联（读取过滤 deleted_at）。
+    /// 只处理 `tag_id` 为空的关联行（新写入都直接带 tag_id，天然跳过）；颜色/图标留空
+    /// （导航旧标签无这些信息，chip 视觉由 TagVariant 映射兜底）。
+    fn backfill_connection_tag_ids(&self) -> Result<(), CoreError> {
+        let scope = if self.is_project { "project" } else { "global" };
+        self.conn
+            .execute(
+                "INSERT INTO tags (id, name, color, icon, scope, created_at)
+                 SELECT 'nav_' || lower(hex(randomblob(8))), tag, NULL, NULL, ?1,
+                        strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                 FROM (SELECT DISTINCT tag FROM connection_tags
+                       WHERE tag_id IS NULL
+                         AND tag NOT IN (SELECT name FROM tags WHERE deleted_at IS NULL AND scope = ?1))",
+                params![scope],
+            )
+            .map_err(|e| self.err("backfill_tags_insert", e))?;
+        self.conn
+            .execute(
+                "UPDATE connection_tags SET tag_id = (
+                    SELECT id FROM tags
+                    WHERE name = connection_tags.tag AND scope = ?1 AND deleted_at IS NULL
+                 ) WHERE tag_id IS NULL",
+                params![scope],
+            )
+            .map_err(|e| self.err("backfill_tags_update", e))?;
+        Ok(())
+    }
+
     /// 幂等确保 `connection_group_members.is_primary` 存在（老库补齐）。
     fn ensure_member_primary_column(&self) -> Result<(), CoreError> {
         let has = {
@@ -185,12 +289,17 @@ impl ConnectionOrgStore {
 
     // ==================== 标签 ====================
 
-    /// 读取连接标签（按字母序）。
+    /// 读取连接标签名（按名称升序，过滤软删定义）。
+    ///
+    /// prepare 失败静默返回空（与历史行为一致：只读查询不打断调用方；失败多由
+    /// 库结构异常导致，调用方读不到标签会回退为无标签视图）。
     pub fn list_tags(&self, conn_id: &str) -> Vec<String> {
-        let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT tag FROM connection_tags WHERE connection_id = ?1 ORDER BY tag")
-        else {
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT t.name FROM connection_tags ct
+             JOIN tags t ON t.id = ct.tag_id
+             WHERE ct.connection_id = ?1 AND t.deleted_at IS NULL
+             ORDER BY t.name COLLATE NOCASE, t.created_at",
+        ) else {
             return Vec::new();
         };
         match stmt.query_map(params![conn_id], |r| r.get::<_, String>(0)) {
@@ -199,33 +308,77 @@ impl ConnectionOrgStore {
         }
     }
 
-    /// 覆盖式设置连接标签（去空白、去重）。
+    /// 覆盖式设置连接标签（去空白、去重）。定义实体化：名字 → 同库 `tags` 定义行
+    /// （同名复用现成定义 D3；颜色/图标留空，chip 视觉由 TagVariant 映射兜底），
+    /// 关联写 `tag_id`（同库引用；软删定义不清关联，读取过滤 deleted_at，D2）。
     pub fn set_tags(&self, conn_id: &str, tags: &[String]) -> Result<(), CoreError> {
+        let scope = if self.is_project { "project" } else { "global" };
+        let mut tag_ids = Vec::new();
+        for raw in tags {
+            let name = raw.trim();
+            if name.is_empty() {
+                continue;
+            }
+            // 幂等定义：部分唯一索引挡住同名 active；软删后同名可重建（新 id）。
+            self.conn
+                .execute(
+                    "INSERT OR IGNORE INTO tags (id, name, color, icon, scope, created_at)
+                     VALUES ('nav_' || lower(hex(randomblob(8))), ?1, NULL, NULL, ?2,
+                             strftime('%Y-%m-%dT%H:%M:%SZ','now'))",
+                    params![name, scope],
+                )
+                .map_err(|e| self.err("ensure_nav_tag", e))?;
+            let id = {
+                let mut stmt = self
+                    .conn
+                    .prepare(
+                        "SELECT id FROM tags WHERE name = ?1 AND scope = ?2 AND deleted_at IS NULL",
+                    )
+                    .map_err(|e| self.err("ensure_nav_tag_select", e))?;
+                let mut rows = stmt
+                    .query_map(params![name, scope], |r| r.get::<_, String>(0))
+                    .map_err(|e| self.err("ensure_nav_tag_query", e))?;
+                match rows.next() {
+                    Some(Ok(id)) => id,
+                    Some(Err(e)) => return Err(self.err("ensure_nav_tag_row", e)),
+                    None => {
+                        // INSERT OR IGNORE 成功后 SELECT 必应命中（唯一索引不挡软删行，
+                        // 会新建而非忽略）；此处兜底，避免静默写坏关联。
+                        return Err(CoreError::storage(StorageError::Persistence {
+                            store: "sqlite".to_string(),
+                            operation: "ensure_nav_tag_missing".to_string(),
+                            reason: "定义写入后仍缺失".to_string(),
+                        }));
+                    }
+                }
+            };
+            tag_ids.push(id);
+        }
         self.conn
             .execute(
                 "DELETE FROM connection_tags WHERE connection_id = ?1",
                 params![conn_id],
             )
             .map_err(|e| self.err("clear_connection_tags", e))?;
-        for tag in tags {
-            let tag = tag.trim();
-            if tag.is_empty() {
-                continue;
-            }
+        for tid in &tag_ids {
             self.conn
                 .execute(
-                    "INSERT OR IGNORE INTO connection_tags (connection_id, tag) VALUES (?1, ?2)",
-                    params![conn_id, tag],
+                    "INSERT OR IGNORE INTO connection_tags (connection_id, tag, tag_id)
+                     VALUES (?1, ?2, ?3)",
+                    params![conn_id, tid, tid],
                 )
                 .map_err(|e| self.err("insert_connection_tag", e))?;
         }
         Ok(())
     }
 
-    /// 按标签检索连接 ID（跨连接，按连接 ID 排序）。
+    /// 按标签名检索连接 ID（跨连接，按连接 ID 排序；过滤软删定义）。
     pub fn list_connections_by_tag(&self, tag: &str) -> Vec<String> {
         let Ok(mut stmt) = self.conn.prepare(
-            "SELECT connection_id FROM connection_tags WHERE tag = ?1 ORDER BY connection_id",
+            "SELECT ct.connection_id FROM connection_tags ct
+             JOIN tags t ON t.id = ct.tag_id
+             WHERE t.name = ?1 AND t.deleted_at IS NULL
+             ORDER BY ct.connection_id",
         ) else {
             return Vec::new();
         };
@@ -235,10 +388,13 @@ impl ConnectionOrgStore {
         }
     }
 
-    /// 全部标签及使用次数（按次数降序、名称升序）。
+    /// 全部标签及使用次数（按次数降序、名称升序；过滤软删定义）。
     pub fn list_all_tags(&self) -> Vec<(String, i64)> {
         let Ok(mut stmt) = self.conn.prepare(
-            "SELECT tag, COUNT(*) AS n FROM connection_tags GROUP BY tag ORDER BY n DESC, tag ASC",
+            "SELECT t.name, COUNT(*) AS n FROM connection_tags ct
+             JOIN tags t ON t.id = ct.tag_id
+             WHERE t.deleted_at IS NULL
+             GROUP BY t.name ORDER BY n DESC, t.name ASC",
         ) else {
             return Vec::new();
         };
@@ -248,14 +404,43 @@ impl ConnectionOrgStore {
         }
     }
 
-    /// 全部「连接 → 标签」对（按连接 ID、标签升序）。
+    /// 全部「连接 → 标签实体」对（按连接 ID、名称升序；过滤软删定义）。
+    pub fn list_tag_rows(&self) -> Vec<(String, NavTagRow)> {
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT ct.connection_id, t.id, t.name, t.color, t.icon
+             FROM connection_tags ct
+             JOIN tags t ON t.id = ct.tag_id
+             WHERE t.deleted_at IS NULL
+             ORDER BY ct.connection_id, t.name COLLATE NOCASE",
+        ) else {
+            return Vec::new();
+        };
+        match stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                NavTagRow {
+                    id: r.get::<_, String>(1)?,
+                    name: r.get::<_, String>(2)?,
+                    color: r.get::<_, Option<String>>(3)?,
+                    icon: r.get::<_, Option<String>>(4)?,
+                },
+            ))
+        }) {
+            Ok(iter) => iter.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// 全部「连接 → 标签名」对（按连接 ID、名称升序；过滤软删定义）。
     ///
     /// 供导航面板一次性建立完整映射，避免渲染期逐连接查询。
     pub fn list_tag_pairs(&self) -> Vec<(String, String)> {
-        let Ok(mut stmt) = self
-            .conn
-            .prepare("SELECT connection_id, tag FROM connection_tags ORDER BY connection_id, tag")
-        else {
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT ct.connection_id, t.name FROM connection_tags ct
+             JOIN tags t ON t.id = ct.tag_id
+             WHERE t.deleted_at IS NULL
+             ORDER BY ct.connection_id, t.name COLLATE NOCASE",
+        ) else {
             return Vec::new();
         };
         match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
@@ -823,6 +1008,77 @@ mod tests {
         // 覆盖式：清空后旧标签不再命中
         store.set_tags("P_b", &[]).expect("clear");
         assert_eq!(store.list_connections_by_tag("prod"), vec!["P_a".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 实体化迁移（规格 §7.5）：老库（`connection_tags` 无 `tag_id` 列）打开后
+    /// 自动补列 + 存量归并；读取走 JOIN 返回实体。
+    ///
+    /// 同时验证两条语义决策：D3 同名复用同一定义（部分唯一索引挡同名 active）；
+    /// D2 软删定义**不清关联**——读取过滤 deleted_at，软删后同名可重建。
+    #[test]
+    fn tag_entity_backfill_and_soft_delete() {
+        let dir = temp_dir("tag_entity");
+        let db = dir.join("p.db");
+        {
+            // 手工造老库：仅 connection_tags 老结构（无 tag_id）+ 老数据
+            let raw = rusqlite::Connection::open(&db).expect("open raw");
+            raw.execute_batch(
+                "CREATE TABLE connection_tags (
+                    connection_id TEXT NOT NULL,
+                    tag           TEXT NOT NULL,
+                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (connection_id, tag)
+                );
+                 INSERT INTO connection_tags (connection_id, tag)
+                 VALUES ('P_a', 'prod'), ('P_a', 'core'), ('P_b', 'prod');",
+            )
+            .expect("seed legacy");
+        }
+        let store = ConnectionOrgStore::open_at(db, true).expect("open upgraded");
+        // 归并后实体读取（scope=project）
+        assert_eq!(
+            store.list_tags("P_a"),
+            vec!["core".to_string(), "prod".to_string()]
+        );
+        assert_eq!(
+            store.list_connections_by_tag("prod"),
+            vec!["P_a".to_string(), "P_b".to_string()]
+        );
+        let rows: Vec<(String, NavTagRow)> = store.list_tag_rows();
+        assert_eq!(rows.len(), 3, "三个关联各归并出一条定义");
+        assert!(
+            rows.iter().all(|(_, r)| r.name != "core" || r.color.is_none()),
+            "导航旧标签无颜色/图标，归并定义留空"
+        );
+
+        // 覆盖式重存（同名复用同一 id，D3）
+        store.set_tags("P_a", &["prod".into()]).expect("resave");
+        let rows2: Vec<(String, NavTagRow)> = store.list_tag_rows();
+        assert_eq!(rows2.len(), 2, "core 关联被覆盖清除，prod 定义复用");
+        let prod_id = rows2
+            .iter()
+            .find(|(c, _)| c == "P_a")
+            .map(|(_, r)| r.id.clone())
+            .expect("P_a/prod 存在");
+
+        // 软删定义后读取过滤（关联不清，D2）
+        store
+            .conn
+            .execute(
+                "UPDATE tags SET deleted_at = '2026-01-01T00:00:00Z' WHERE id = ?1",
+                [&prod_id],
+            )
+            .expect("soft delete");
+        assert_eq!(
+            store.list_connections_by_tag("prod"),
+            Vec::<String>::new(),
+            "软删定义不再命中"
+        );
+
+        // 软删后同名重建：部分唯一索引不挡，关联落新 id
+        store.set_tags("P_a", &["prod".into()]).expect("recreate");
+        assert_eq!(store.list_tags("P_a"), vec!["prod".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

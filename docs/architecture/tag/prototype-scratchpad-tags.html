@@ -1,0 +1,643 @@
+<html style="margin:0;padding:0;">
+<title>草稿箱标签交互原型</title>
+<style>
+  :root {
+    --chrome: #181818; --editor: #1F1F1F; --popover: #202020;
+    --border: #2A2A2A; --text: #E6E6E6; --muted: #858585;
+    --hover: #252526; --active: #2D2D2D; --accent: #A84A38;
+    --accent-fg: #FFFFFF; --coral: #E08B7A;
+  }
+  html.light {
+    --chrome: #F8F8F8; --editor: #FFFFFF; --popover: #FFFFFF;
+    --border: #E0E0E0; --text: #1F1F1F; --muted: #616161;
+    --hover: #F0F0F0; --active: #E8E8E8; --accent: #C25B46;
+    --accent-fg: #FFFFFF; --coral: #A84A38;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.45; color: var(--text);
+    background: #111; padding: 20px; min-width: 760px;
+  }
+  html.light body { background: #EEEEEE; }
+
+  /* ── 顶部说明条 ── */
+  .topbar {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #2A2A2A; color: #D8B4A8; border: 1px solid #4A342E;
+    border-radius: 4px; padding: 3px 8px; font-size: 12px;
+  }
+  html.light .badge { background: #F2E9E5; color: #8C4A34; border-color: #D9B8AC; }
+  .topbar h1 { font-size: 15px; font-weight: 600; }
+  .topbar .hint { color: var(--muted); font-size: 12px; }
+  .theme-toggle {
+    margin-left: auto; background: var(--chrome); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 12px; font-size: 13px; cursor: pointer; min-height: 44px;
+  }
+  .theme-toggle:hover { background: var(--hover); }
+
+  /* ── 主区 ── */
+  .main { display: flex; gap: 16px; align-items: flex-start; }
+
+  /* ── 草稿箱面板（模拟） ── */
+  .panel {
+    width: 380px; background: var(--chrome); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  html.light .panel { box-shadow: 0 8px 30px rgba(0,0,0,.12); }
+  .panel-header {
+    display: flex; align-items: center; gap: 8px; height: 36px;
+    padding: 0 10px; border-bottom: 1px solid var(--border);
+  }
+  .panel-header .title { font-size: 13px; font-weight: 600; }
+  .count {
+    background: var(--accent); color: var(--accent-fg); border-radius: 11px;
+    font-size: 11px; padding: 1px 7px; line-height: 16px;
+  }
+  .spacer { flex: 1; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--muted); border: none; border-radius: 4px;
+    width: 26px; height: 26px; font-size: 15px; cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+  /* 搜索行 */
+  .search-row { display: flex; align-items: center; gap: 4px; padding: 0 6px 4px; }
+  .search-input {
+    flex: 1; min-width: 0; height: 28px; background: var(--editor);
+    border: 1px solid transparent; border-radius: 4px; color: var(--text);
+    padding: 0 8px; font-size: 12px; outline: none;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-input::placeholder { color: var(--muted); }
+  .search-run {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--muted); border: none;
+    width: 26px; height: 26px; cursor: pointer; border-radius: 4px;
+  }
+  .search-run:hover { background: var(--hover); }
+
+  /* 标签筛选按钮（带下拉） */
+  .filter-wrap { position: relative; }
+  .filter-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: transparent; color: var(--muted); border: none; border-radius: 4px;
+    height: 26px; padding: 0 8px; font-size: 12px; cursor: pointer; max-width: 150px;
+  }
+  .filter-btn:hover, .filter-btn.open { background: var(--hover); color: var(--text); }
+  .filter-btn.active { color: var(--coral); }
+  .filter-btn .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 下拉菜单 */
+  .dropdown {
+    position: absolute; top: 30px; right: 0; z-index: 50;
+    min-width: 170px; background: var(--popover); border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    padding: 4px; font-size: 13px;
+  }
+  html.light .dropdown { box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+  .menu-item {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+    border-radius: 4px; cursor: pointer; white-space: nowrap; min-height: 32px;
+  }
+  .menu-item:hover { background: var(--hover); }
+  .menu-item .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .menu-item .check { width: 12px; color: var(--coral); flex: none; font-size: 12px; }
+  .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+  /* 树列表 */
+  .tree { padding: 2px 0 8px; }
+  .row {
+    display: flex; align-items: center; gap: 6px; height: 26px;
+    padding-right: 6px; position: relative; cursor: default;
+  }
+  .row:hover { background: var(--hover); }
+  .row.active { background: var(--active); }
+  .row .indent { width: var(--ind, 8px); flex: none; }
+  .row .chev { width: 12px; flex: none; color: var(--muted); font-size: 10px; text-align: center; }
+  .row .file-ico { width: 14px; height: 14px; border-radius: 3px; flex: none; position: relative; }
+  .row .fname {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 12.5px;
+  }
+  .row .fname.dim { color: var(--muted); }
+  .row .fname.hit { background: #4A3F00; color: #E6D86A; border-radius: 2px; }
+  html.light .row .fname.hit { background: #FFF3C4; color: #6B5B00; }
+  .chips { display: flex; gap: 4px; flex: none; max-width: 110px; overflow: hidden; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--editor); border: 1px solid var(--border); border-radius: 4px;
+    font-size: 10.5px; color: var(--muted); padding: 1px 5px; white-space: nowrap;
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .more {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--muted); border: none;
+    width: 22px; height: 22px; border-radius: 4px; cursor: pointer; font-size: 13px;
+    opacity: 0; flex: none;
+  }
+  .row:hover .more, .more.open { opacity: 1; }
+  .more:hover { background: var(--editor); color: var(--text); }
+
+  /* 右键菜单 */
+  .ctx-menu {
+    position: fixed; z-index: 60; min-width: 170px;
+    background: var(--popover); border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.4); padding: 4px;
+    font-size: 13px;
+  }
+  html.light .ctx-menu { box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+  .ctx-menu .menu-item .label { flex: 1; }
+  .ctx-menu .menu-item .kbd { color: var(--muted); font-size: 11px; }
+  .ctx-menu .menu-item.tag-item { color: var(--coral); }
+
+  /* 状态栏 */
+  .status-bar {
+    display: flex; align-items: center; height: 24px; gap: 12px;
+    border-top: 1px solid var(--border); padding: 0 10px; font-size: 11px;
+    color: var(--muted);
+  }
+  .status-bar .right { margin-left: auto; }
+
+  /* ── 说明区 ── */
+  .notes { flex: 1; min-width: 280px; max-width: 420px; }
+  .notes h2 { font-size: 14px; margin-bottom: 8px; }
+  .notes ol { margin-left: 18px; color: var(--text); }
+  .notes li { margin-bottom: 6px; font-size: 13px; }
+  .state-card {
+    margin-top: 12px; background: var(--chrome); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px; font-size: 12.5px;
+  }
+  .state-card .k { color: var(--muted); }
+  .state-card .v { color: var(--coral); font-weight: 600; }
+  .state-card div { margin-bottom: 4px; }
+  .note-foot { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+  /* ── 打标弹窗 ── */
+  .overlay {
+    position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dialog {
+    width: 300px; background: var(--popover); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    overflow: hidden; font-size: 13px;
+  }
+  html.light .dialog { box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+  .dialog-head {
+    display: flex; align-items: center; height: 40px; padding: 0 14px;
+    border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600;
+  }
+  .dialog-body { padding: 10px 12px 14px; }
+  .dialog-target { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .tag-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+    border-radius: 4px; cursor: pointer; min-height: 32px;
+  }
+  .tag-row:hover { background: var(--hover); }
+  .tag-row.checked { background: var(--active); }
+  .tag-row .box {
+    width: 14px; height: 14px; border: 1px solid var(--muted); border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--accent-fg); font-size: 10px; flex: none; background: var(--editor);
+  }
+  .tag-row.checked .box { background: var(--accent); border-color: var(--accent); }
+  .tag-row .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tag-row .tname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty-tip { color: var(--muted); font-size: 12px; padding: 6px 8px; }
+  .new-tag-row { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .new-tag-row input {
+    flex: 1; min-width: 0; height: 28px; background: var(--editor);
+    border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+    padding: 0 8px; font-size: 12px; outline: none;
+  }
+  .new-tag-row input:focus { border-color: var(--accent); }
+  .add-btn {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 12px; font-size: 12px; cursor: pointer; min-height: 30px;
+  }
+  .add-btn:hover { background: var(--hover); }
+  .dialog-foot {
+    display: flex; justify-content: flex-end; padding: 10px 14px;
+    border-top: 1px solid var(--border);
+  }
+  .ok-btn {
+    background: var(--accent); color: var(--accent-fg); border: none;
+    border-radius: 4px; padding: 6px 16px; font-size: 12.5px; cursor: pointer; min-height: 32px;
+  }
+  .ok-btn:hover { filter: brightness(1.08); }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: var(--popover); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 14px; font-size: 12.5px; z-index: 90;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4); opacity: 0; transition: opacity .15s;
+  }
+  .toast.show { opacity: 1; }
+</style>
+<div id="root"></div>
+<script>
+(function () {
+  'use strict';
+  try {
+    var state = {
+      theme: 'dark',
+      filter: null,          // tagId；null = 全部
+      search: '',
+      menuFor: null,         // 行 key（⋯ 右键菜单）
+      menuPos: { x: 0, y: 0 },
+      filterOpen: false,
+      dialog: null,          // 打标弹窗目标 rel key
+      newTag: '',
+    };
+    var nextTagId = 5;
+    var tags = [
+      { id: 't1', name: '报表', color: '#4A8FD8' },
+      { id: 't2', name: '核心', color: '#C25B46' },
+      { id: 't3', name: '待整理', color: '#8A8A8A' },
+      { id: 't4', name: '月报', color: '#5AA857' },
+    ];
+    // rel key -> 标签 id 列表（entry_id = 模块内相对路径）
+    var entryTags = {
+      'sales/2026-10-月报.sql': ['t1', 't4'],
+      'sales/客户清单.csv': ['t1'],
+      'etl/清洗脚本.py': ['t2'],
+      'etl/临时查询.sql': ['t3'],
+      'README.md': [],
+    };
+    // 树（depth 由结构派生）；图标点色对齐 primitives.rs 语义：sql=蓝 / py=绿 / csv·json=橙红 / 其他=灰
+    var tree = [
+      { name: 'sales', kind: 'dir', children: [
+        { name: '2026-10-月报.sql', kind: 'sql', key: 'sales/2026-10-月报.sql' },
+        { name: '客户清单.csv', kind: 'csv', key: 'sales/客户清单.csv' },
+      ]},
+      { name: 'etl', kind: 'dir', children: [
+        { name: '清洗脚本.py', kind: 'py', key: 'etl/清洗脚本.py' },
+        { name: '临时查询.sql', kind: 'sql', key: 'etl/临时查询.sql' },
+      ]},
+      { name: 'README.md', kind: 'md', key: 'README.md' },
+    ];
+    var icoColor = { sql: '#4A8FD8', py: '#5AA857', csv: '#C2854A', md: '#8A8A8A' };
+
+    var root = document.getElementById('root');
+    function el(tag, cls, html) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (html !== undefined) n.innerHTML = html;
+      return n;
+    }
+    function t(sel) { return document.querySelector(sel); }
+
+    /* 当前可见行（标签筛选 = 平铺命中文件；无筛选 = 原树） */
+    function visibleRows() {
+      var out = [];
+      function walk(node, depth) {
+        if (state.filter) {
+          if (node.kind === 'dir') return;                 // 目录跳过、不递归
+          var rel = node.key;
+          var hit = (entryTags[rel] || []).indexOf(state.filter) >= 0;
+          if (!hit) return;
+          out.push({ node: node, depth: 0 });              // 平铺 depth=0
+          return;
+        }
+        out.push({ node: node, depth: depth });
+        if (node.kind === 'dir') node.children.forEach(function (c) { walk(c, depth + 1); });
+      }
+      tree.forEach(function (n) { walk(n, 0); });
+      if (state.search) {
+        out = out.filter(function (r) {
+          return r.node.name.toLowerCase().indexOf(state.search.toLowerCase()) >= 0;
+        });
+      }
+      return out;
+    }
+    function flatFileCount() {
+      var n = 0;
+      function walk(node) {
+        if (node.kind !== 'dir') { n++; } else { node.children.forEach(walk); }
+      }
+      tree.forEach(walk);
+      return n;
+    }
+
+    function render() {
+      var html =
+        '<div class="topbar">' +
+          '<span class="badge">交互原型 · 示意（非真实截图）</span>' +
+          '<h1>草稿箱标签功能原型</h1>' +
+          '<span class="hint">对齐 gpui-kit 0.7.1 / RDS 主题 · 明暗双主题</span>' +
+          '<button class="theme-toggle" id="themeBtn">' + (state.theme === 'dark' ? '切换亮色' : '切换暗色') + '</button>' +
+        '</div>' +
+        '<div class="main">' +
+          panelHtml() +
+          '<div class="notes">' +
+            '<h2>交互说明（可全部点击操作）</h2>' +
+            '<ol>' +
+              '<li>点文件行末尾的 <b>⋯</b> → 右键菜单 → <b>「标签…」</b> 打开打标弹窗（目录无此项）。</li>' +
+              '<li>弹窗里 <b>勾选 / 取消</b> 项目标签，行内标签 chip 即时增删。</li>' +
+              '<li>底部输入新名字 + <b>添加</b> → 立即新建标签并自动打给当前条目。</li>' +
+              '<li>点搜索行右侧 <b>标签按钮</b> → 筛选下拉 → 选某标签 = 只看打了它的文件（平铺、可叠加文件名过滤）。</li>' +
+              '<li>「全部」清除筛选；明暗主题用右上角按钮切换。</li>' +
+            '</ol>' +
+            stateCardHtml() +
+            '<div class="note-foot">' +
+              '注：本原型覆盖第 4 步（草稿箱轻接入）已交付功能。<br>' +
+              '「管理分组与标签覆盖层」属第 5 步（导航 UI 调整），不在本原型内。' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      root.innerHTML = html;
+      bind();
+    }
+
+    function panelHtml() {
+      var rows = visibleRows();
+      var rowHtml = rows.map(function (r) {
+        var isFile = r.node.kind !== 'dir';
+        var chips = isFile ? (entryTags[r.node.key] || []).map(function (tid) {
+          var tg = tags.filter(function (x) { return x.id === tid; })[0];
+          return '<span class="chip"><span class="dot" style="background:' + tg.color + '"></span>' + tg.name + '</span>';
+        }).join('') : '';
+        var chev = r.node.kind === 'dir' ? '<span class="chev">▾</span>' : '<span class="chev"></span>';
+        var hit = !!state.search && r.node.name.toLowerCase().indexOf(state.search.toLowerCase()) >= 0;
+        var fname = '<span class="fname' + (isFile ? '' : ' dim') + (hit ? ' hit' : '') + '">' + r.node.name + '</span>';
+        var more = isFile
+          ? '<button class="more" data-more="' + r.node.key + '" title="更多操作">⋯</button>'
+          : '<button class="more" data-more="' + r.node.key + '" title="更多操作">⋯</button>';
+        return '<div class="row" data-key="' + r.node.key + '">' +
+          '<span class="indent" style="--ind:' + (8 + r.depth * 14) + 'px"></span>' +
+          chev +
+          (isFile ? '<span class="file-ico" style="background:' + icoColor[r.node.kind] + '"></span>' : '<span class="file-ico" style="background:transparent"></span>') +
+          fname + chips + more +
+        '</div>';
+      }).join('');
+
+      var filterName = state.filter ? (tags.filter(function (x) { return x.id === state.filter; })[0] || {}).name : '';
+      var filterLabel = filterName ? '<span class="name">' + filterName + '</span>' : '<span class="name">标签</span>';
+      return '<div class="panel">' +
+        '<div class="panel-header"><span class="title">草稿箱</span><span class="count">' + flatFileCount() + '</span>' +
+          '<span class="spacer"></span>' +
+          '<button class="icon-btn" id="newBtn" title="新建草稿">＋</button>' +
+        '</div>' +
+        '<div class="search-row">' +
+          '<input class="search-input" id="searchInput" placeholder="搜索文件（按文件名过滤目录树）" value="' + state.search + '">' +
+          '<button class="search-run" id="searchRun" title="搜索">⌕</button>' +
+          '<div class="filter-wrap">' +
+            '<button class="filter-btn' + (state.filterOpen ? ' open' : '') + (state.filter ? ' active' : '') + '" id="filterBtn">' +
+              '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 14.6 7.2 16.9l.9-5.4L4.2 7.7l5.4-.8z"/></svg>' +
+              filterLabel +
+            '</button>' +
+            (state.filterOpen ? '<div class="dropdown" id="filterMenu"></div>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="tree">' + (rowHtml || '<div class="row"><span class="fname dim" style="padding-left:20px">没有命中的文件</span></div>') + '</div>' +
+        '<div class="status-bar">' +
+          '<span>' + rows.length + ' 个文件</span>' +
+          '<span class="right">筛选：' + (filterName || '全部') + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function stateCardHtml() {
+      var dialogTarget = state.dialog
+        ? (function () {
+            var parts = state.dialog.split('/');
+            return parts[parts.length - 1];
+          })()
+        : '无';
+      return '<div class="state-card">' +
+        '<div><span class="k">当前筛选：</span><span class="v">' + (state.filter ? (tags.filter(function (x) { return x.id === state.filter; })[0] || {}).name : '全部') + '</span></div>' +
+        '<div><span class="k">打标目标：</span><span class="v">' + dialogTarget + '</span></div>' +
+        '<div><span class="k">项目标签字典：</span><span class="v">' + tags.length + ' 个</span></div>' +
+      '</div>';
+    }
+
+    function bind() {
+      var themeBtn = document.getElementById('themeBtn');
+      if (themeBtn) themeBtn.addEventListener('click', function () {
+        state.theme = state.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.classList.toggle('light', state.theme === 'light');
+        render();
+      });
+
+      var newBtn = document.getElementById('newBtn');
+      if (newBtn) newBtn.addEventListener('click', function () { toast('原型省略新建草稿（文件系统侧已有）'); });
+
+      var searchInput = document.getElementById('searchInput');
+      if (searchInput) searchInput.addEventListener('input', function () {
+        state.search = searchInput.value;
+        render();
+        var keep = document.getElementById('searchInput');
+        if (keep) keep.focus();
+      });
+
+      var filterBtn = document.getElementById('filterBtn');
+      if (filterBtn) filterBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        state.filterOpen = !state.filterOpen;
+        render();
+        renderFilterMenu();
+      });
+
+      // 行 ⋯ 菜单
+      document.querySelectorAll('[data-more]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var key = btn.getAttribute('data-more');
+          var rect = btn.getBoundingClientRect();
+          state.menuPos = { x: rect.left - 150, y: rect.bottom + 2 };
+          state.menuFor = key;
+          renderCtxMenu();
+        });
+      });
+
+      // 行单击 = 选中态演示
+      document.querySelectorAll('.row[data-key]').forEach(function (row) {
+        row.addEventListener('click', function () {
+          document.querySelectorAll('.row.active').forEach(function (r) { r.classList.remove('active'); });
+          row.classList.add('active');
+        });
+      });
+    }
+
+    function renderFilterMenu() {
+      var menu = document.getElementById('filterMenu');
+      if (!menu) return;
+      var all = '<div class="menu-item" data-filter=""><span class="check">' + (!state.filter ? '✓' : '') + '</span><span>全部</span></div>';
+      var items = tags.map(function (tg) {
+        return '<div class="menu-item" data-filter="' + tg.id + '">' +
+          '<span class="check">' + (state.filter === tg.id ? '✓' : '') + '</span>' +
+          '<span class="dot" style="background:' + tg.color + '"></span><span>' + tg.name + '</span></div>';
+      }).join('');
+      menu.innerHTML = all + '<div class="menu-sep"></div>' + items;
+      menu.querySelectorAll('[data-filter]').forEach(function (item) {
+        item.addEventListener('click', function () {
+          var id = item.getAttribute('data-filter');
+          state.filter = id ? id : null;
+          state.filterOpen = false;
+          render();
+        });
+      });
+    }
+
+    function renderCtxMenu() {
+      var old = t('.ctx-menu');
+      if (old) old.remove();
+      if (!state.menuFor) return;
+      var isFile = tree.some(function (n) {
+        if (n.key === state.menuFor) return false; // 顶层文件
+        if (n.kind === 'dir') return n.children.some(function (c) { return c.key === state.menuFor; });
+        return n.key === state.menuFor;
+      });
+      var menu = el('div', 'ctx-menu');
+      menu.style.left = state.menuPos.x + 'px';
+      menu.style.top = state.menuPos.y + 'px';
+      var items =
+        '<div class="menu-item" data-ctx="open"><span class="label">打开位置</span><span class="kbd">⌥↵</span></div>' +
+        '<div class="menu-sep"></div>' +
+        (isFile ? '<div class="menu-item tag-item" data-ctx="tags"><span class="label">标签…</span></div>' : '') +
+        '<div class="menu-sep"></div>' +
+        '<div class="menu-item" data-ctx="rename"><span class="label">重命名</span></div>' +
+        '<div class="menu-item" data-ctx="cut"><span class="label">剪切</span></div>' +
+        '<div class="menu-item" data-ctx="copy"><span class="label">复制</span></div>' +
+        '<div class="menu-sep"></div>' +
+        '<div class="menu-item" data-ctx="del"><span class="label">删除</span></div>';
+      menu.innerHTML = items;
+      document.body.appendChild(menu);
+      menu.querySelectorAll('[data-ctx]').forEach(function (item) {
+        item.addEventListener('click', function () {
+          var act = item.getAttribute('data-ctx');
+          var key = state.menuFor;
+          state.menuFor = null;
+          var m = t('.ctx-menu'); if (m) m.remove();
+          if (act === 'tags') { openDialog(key); }
+          else if (act === 'open') toast('原型省略：在文件管理器中显示');
+          else toast('原型占位：' + act);
+        });
+      });
+    }
+
+    function openDialog(key) {
+      state.dialog = key;
+      state.newTag = '';
+      render();
+      renderDialog();
+      var inp = document.getElementById('newTagInput');
+      if (inp) inp.focus();
+    }
+
+    function renderDialog() {
+      var old = t('.overlay');
+      if (old) old.remove();
+      if (!state.dialog) return;
+      var rel = state.dialog;
+      var name = rel.split('/').pop();
+      var current = entryTags[rel] || [];
+      var list = tags.map(function (tg) {
+        var checked = current.indexOf(tg.id) >= 0;
+        return '<div class="tag-row' + (checked ? ' checked' : '') + '" data-tag="' + tg.id + '">' +
+          '<span class="box">' + (checked ? '✓' : '') + '</span>' +
+          '<span class="dot" style="background:' + tg.color + '"></span>' +
+          '<span class="tname">' + tg.name + '</span></div>';
+      }).join('');
+      var empty = tags.length ? '' : '<div class="empty-tip">还没有标签——在下面输入一个名字即可新建</div>';
+      var overlay = el('div', 'overlay');
+      overlay.innerHTML =
+        '<div class="dialog">' +
+          '<div class="dialog-head">标签</div>' +
+          '<div class="dialog-body">' +
+            '<div class="dialog-target">正在给：' + name + ' 打标</div>' +
+            list + empty +
+            '<div class="new-tag-row">' +
+              '<input id="newTagInput" placeholder="新标签名（如 key:value）" value="' + state.newTag + '">' +
+              '<button class="add-btn" id="addTagBtn">添加</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="dialog-foot"><button class="ok-btn" id="dialogOk">完成</button></div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('mousedown', function (e) {
+        if (e.target === overlay) closeDialog();
+      });
+
+      document.querySelectorAll('.tag-row[data-tag]').forEach(function (row) {
+        row.addEventListener('click', function () {
+          var tid = row.getAttribute('data-tag');
+          toggleTag(rel, tid);
+        });
+      });
+
+      var newInput = document.getElementById('newTagInput');
+      if (newInput) newInput.addEventListener('input', function () { state.newTag = newInput.value; });
+
+      var addBtn = document.getElementById('addTagBtn');
+      if (addBtn) addBtn.addEventListener('click', function () { addTag(rel); });
+
+      var ok = document.getElementById('dialogOk');
+      if (ok) ok.addEventListener('click', closeDialog);
+    }
+
+    function toggleTag(rel, tid) {
+      var cur = entryTags[rel] || [];
+      var i = cur.indexOf(tid);
+      if (i >= 0) cur.splice(i, 1);
+      else cur.push(tid);
+      entryTags[rel] = cur;
+      render();
+      renderDialog();
+    }
+
+    function addTag(rel) {
+      var name = (state.newTag || '').trim();
+      if (!name) return;
+      if (tags.some(function (x) { return x.name === name; })) { toast('已存在同名标签：' + name); return; }
+      var colors = ['#4A8FD8', '#C2854A', '#5AA857', '#B06AB3', '#4FA8A0'];
+      var tg = { id: 't' + nextTagId++, name: name, color: colors[(nextTagId - 6) % colors.length] };
+      tags.push(tg);
+      var cur = entryTags[rel] || [];
+      if (cur.indexOf(tg.id) < 0) cur.push(tg.id);
+      entryTags[rel] = cur;
+      state.newTag = '';
+      render();
+      renderDialog();
+    }
+
+    function closeDialog() {
+      state.dialog = null;
+      render();
+    }
+
+    var toastTimer = null;
+    function toast(msg) {
+      var old = t('.toast');
+      if (old) old.remove();
+      var box = el('div', 'toast.show');
+      box.textContent = msg;
+      document.body.appendChild(box);
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () {
+        box.classList.remove('show');
+        setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 200);
+      }, 1600);
+    }
+
+    // 点击空白处关闭下拉/右键菜单
+    document.addEventListener('click', function () {
+      if (state.filterOpen) { state.filterOpen = false; render(); }
+      var m = t('.ctx-menu');
+      if (m) { m.remove(); state.menuFor = null; }
+    });
+
+    render();
+  } catch (e) {
+    document.getElementById('root').innerHTML = '<div style="color:#E08B7A;padding:20px">原型加载失败：' + e.message + '</div>';
+  }
+})();
+</script>
+</html>

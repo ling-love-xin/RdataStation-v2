@@ -464,6 +464,17 @@ impl ScratchpadView {
                         view.trash = r.trash;
                         view.children = r.children.into_iter().collect();
                         view.error = None;
+                        // 标签字典回填（统一规格 §7.3）：项目标签 + 条目关联一次读全；
+                        // 失败降级为空（标签是索引，读不到不阻断树加载）。
+                        if let Some(root) = self.host.project_root() {
+                            let store = ScratchpadStore::new(root);
+                            if let Ok(tags) = store.list_project_tags() {
+                                view.project_tags = tags;
+                            }
+                            if let Ok(by_entry) = store.tags_by_entry() {
+                                view.entry_tags = by_entry;
+                            }
+                        }
                     }
                     Err(e) => {
                         view.error = Some(format!("加载草稿箱失败: {e}"));
@@ -795,6 +806,105 @@ impl ScratchpadView {
         view._search_replace_sub = Some(replace_sub);
         view.ref_path_input = Some(ref_path_input);
         view.ref_alias_input = Some(ref_alias_input);
+    }
+
+    // ===== 标签（统一规格 §7.3：打标弹窗 / 筛选） =====
+    //
+    // 标签写项目库（`tags` + `scratchpad_tags`），是同步 SQLite 的**单次系统调用**（微秒级，
+    // K1c 口径同新建/重命名）；读取在加载回填时一次读全缓存进状态，事件路径不再开库。
+
+    /// 打开标签编辑弹窗（右键「标签…」）：懒建新建输入框，记录目标条目相对路径。
+    pub(super) fn open_tag_dialog(&mut self, window: &mut Window, rel_path: &str, cx: &mut Context<Self>) {
+        // 标签写项目库属写操作，只读模式拒绝。
+        if self.host.read_only() {
+            self.host.notice("只读模式：不能修改标签".to_string(), cx);
+            return;
+        }
+        if self.scratchpad.borrow().tag_new_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名，点添加"));
+            self.scratchpad.borrow_mut().tag_new_input = Some(input);
+        }
+        self.scratchpad.borrow_mut().tag_dialog = Some(rel_path.to_string());
+        cx.notify();
+    }
+
+    /// 关闭标签编辑弹窗。
+    pub(super) fn close_tag_dialog(&mut self, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().tag_dialog = None;
+        cx.notify();
+    }
+
+    /// 勾选/取消一个标签（attach / detach；随后重读该条目标签更新缓存）。
+    pub(super) fn toggle_entry_tag(&mut self, rel_path: &str, tag_id: &str, cx: &mut Context<Self>) {
+        let Some(root) = self.host.project_root() else {
+            return;
+        };
+        let store = ScratchpadStore::new(root);
+        let attached = self
+            .scratchpad
+            .borrow()
+            .entry_tags
+            .get(rel_path)
+            .map(|tags| tags.iter().any(|t| t.id == tag_id))
+            .unwrap_or(false);
+        let result = if attached {
+            store.detach_tag(rel_path, tag_id)
+        } else {
+            store.attach_tag(rel_path, tag_id)
+        };
+        if let Err(e) = result {
+            self.host.notice(format!("标签操作失败：{e}"), cx);
+            return;
+        }
+        let fresh = store.tags_of_entry(rel_path).unwrap_or_default();
+        let mut view = self.scratchpad.borrow_mut();
+        view.entry_tags.insert(rel_path.to_string(), fresh);
+        cx.notify();
+    }
+
+    /// 新建标签并打标（打标弹窗「添加」）：create_project_tag + attach；更新字典与条目缓存。
+    pub(super) fn create_entry_tag(&mut self, rel_path: &str, cx: &mut Context<Self>) {
+        let name = self
+            .scratchpad
+            .borrow()
+            .tag_new_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if name.is_empty() {
+            return;
+        }
+        let Some(root) = self.host.project_root() else {
+            return;
+        };
+        let store = ScratchpadStore::new(root);
+        let tag = match store.create_project_tag(&name) {
+            Ok(tag) => tag,
+            Err(e) => {
+                self.host.notice(format!("新建标签失败：{e}"), cx);
+                return;
+            }
+        };
+        if let Err(e) = store.attach_tag(rel_path, &tag.id) {
+            self.host.notice(format!("打标失败：{e}"), cx);
+            return;
+        }
+        let mut view = self.scratchpad.borrow_mut();
+        view.project_tags.push(tag.clone());
+        view.entry_tags.entry(rel_path.to_string()).or_default().push(tag);
+        cx.notify();
+    }
+
+    /// 设置标签筛选（筛选下拉选中某标签）。
+    pub(super) fn set_tag_filter(&mut self, tag_id: &str, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().tag_filter = Some(tag_id.to_string());
+        cx.notify();
+    }
+
+    /// 清空标签筛选（筛选下拉「全部」）。
+    pub(super) fn clear_tag_filter(&mut self, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().tag_filter = None;
+        cx.notify();
     }
 
     /// 开始内联编辑（新建 / 重命名）。
@@ -1323,6 +1433,13 @@ impl ScratchpadView {
             .unwrap_or_default();
         let (search_mode, search_regex, search_case) =
             (view.search_mode, view.search_regex, view.search_case);
+        // 标签筛选（§7.3）：键盘导航与可见行同步（按筛选后的行序走）。
+        let module_root = self
+            .host
+            .project_root()
+            .map(|root| ScratchpadStore::new(root).scratchpad_dir().to_path_buf());
+        let tag_filter = view.tag_filter.clone();
+        let entry_tags = view.entry_tags.clone();
         let mut flat = Vec::new();
         flatten_scratchpad(
             &view.entries,
@@ -1335,6 +1452,9 @@ impl ScratchpadView {
             search_mode,
             search_regex,
             search_case,
+            module_root.as_deref(),
+            tag_filter.as_deref(),
+            &entry_tags,
             &mut flat,
         );
         flat.into_iter()

@@ -88,6 +88,7 @@ fn archive_seed(conflict: Option<ArchiveConflict>) -> ArchiveDialogSeed {
             },
         ],
         group_id: None,
+        initial_tags: Vec::new(),
     }
 }
 

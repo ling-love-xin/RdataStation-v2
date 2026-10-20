@@ -117,7 +117,7 @@ impl RightPanel {
     /// 活动栏图标（Lucide），与左侧同样按资产路径引用。
     pub fn icon(self) -> Icon {
         let path = match self {
-            RightPanel::Insight => "icons/lightbulb.svg",
+            RightPanel::Insight => "icons/chart-line.svg",
             RightPanel::Mock => "icons/dice-5.svg",
             RightPanel::History => "icons/clock.svg",
             RightPanel::Archive => "icons/file-text.svg",
@@ -193,6 +193,31 @@ impl GroupFormSeed {
             id: Some(id.into()),
             name: name.into(),
             description,
+        }
+    }
+}
+
+#[cfg(test)]
+mod activity_icon_tests {
+    use super::*;
+
+    /// 右活动栏每个面板的图标必须真的在资产里能取到——
+    /// 漏了就是渲染成空白，用户看不到入口（曾因 `icons/lightbulb.svg` 不存在
+    /// 导致洞察图标空白，用户误以为模块未接入）。
+    #[test]
+    fn right_activity_bar_icons_resolve_in_the_asset_source() {
+        for panel in RightPanel::ALL {
+            // Icon 结构不暴露 path，这里用 label 反查路径表（与 icon() 的 match 同构）
+            let path = match panel {
+                RightPanel::Insight => "icons/chart-line.svg",
+                RightPanel::Mock => "icons/dice-5.svg",
+                RightPanel::History => "icons/clock.svg",
+                RightPanel::Archive => "icons/file-text.svg",
+            };
+            assert!(
+                gpui_kit::assets::AllAssets::get(path).is_some(),
+                "右活动栏图标资产里没有 {path}（面板 {panel:?}）"
+            );
         }
     }
 }

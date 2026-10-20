@@ -15,18 +15,23 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::base::{Selectable as _, StyledExt};
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::empty::{Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::service::{self as project_service, OpenOutcome, ProjectSummary, TargetDirState};
+// 结构尺寸与树/列表行原语：统一走 workbench_shell（shell 不依赖特性 crate，方向安全）
+use workbench_shell::{tree, ui};
+
+use crate::service::{self as project_service, OpenOutcome, ProjectSummary, ProjectVersionRow, TargetDirState};
 
 /// 选择器视图 Tab。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,19 +69,18 @@ pub enum ProjectSort {
 }
 
 impl ProjectSort {
+    /// 全部排序（下拉菜单展示顺序）。
+    pub const ALL: [ProjectSort; 3] = [
+        ProjectSort::LastOpened,
+        ProjectSort::Name,
+        ProjectSort::Created,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             ProjectSort::LastOpened => "最近打开",
             ProjectSort::Name => "名称",
             ProjectSort::Created => "创建时间",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            ProjectSort::LastOpened => ProjectSort::Name,
-            ProjectSort::Name => ProjectSort::Created,
-            ProjectSort::Created => ProjectSort::LastOpened,
         }
     }
 
@@ -110,8 +114,8 @@ pub enum StatusFilter {
 }
 
 impl StatusFilter {
-    /// 循环顺序（按钮点击轮转）。
-    pub const CYCLE: [StatusFilter; 5] = [
+    /// 全部状态（下拉菜单展示顺序）。
+    pub const ALL: [StatusFilter; 5] = [
         StatusFilter::All,
         StatusFilter::Active,
         StatusFilter::Archived,
@@ -140,11 +144,6 @@ impl StatusFilter {
         }
     }
 
-    fn next(self) -> Self {
-        let ix = Self::CYCLE.iter().position(|f| *f == self).unwrap_or(0);
-        Self::CYCLE[(ix + 1) % Self::CYCLE.len()]
-    }
-
     /// 名册条目是否命中（`All` 命中任意状态）。
     fn matches(self, status: &str) -> bool {
         match self {
@@ -155,6 +154,44 @@ impl StatusFilter {
             StatusFilter::Syncing => status == "syncing",
         }
     }
+}
+
+/// 状态筛选菜单项描述（渲染与测试共用同一份判据，避免断言菜单内部结构）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusFilterMenuSpec {
+    pub filter: StatusFilter,
+    /// 当前筛选（勾选并置灰，单选语义）。
+    pub checked: bool,
+}
+
+/// 状态筛选菜单项（顺序 = [`StatusFilter::ALL`]；当前项勾选置灰）。
+pub fn status_filter_menu_entries(current: StatusFilter) -> Vec<StatusFilterMenuSpec> {
+    StatusFilter::ALL
+        .into_iter()
+        .map(|filter| StatusFilterMenuSpec {
+            filter,
+            checked: filter == current,
+        })
+        .collect()
+}
+
+/// 排序菜单项描述（渲染与测试共用同一份判据，避免断言菜单内部结构）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SortMenuSpec {
+    pub sort: ProjectSort,
+    /// 当前排序（勾选并置灰，单选语义）。
+    pub checked: bool,
+}
+
+/// 排序菜单项（顺序 = [`ProjectSort::ALL`]；当前项勾选置灰）。
+pub fn sort_menu_entries(current: ProjectSort) -> Vec<SortMenuSpec> {
+    ProjectSort::ALL
+        .into_iter()
+        .map(|sort| SortMenuSpec {
+            sort,
+            checked: sort == current,
+        })
+        .collect()
 }
 
 /// 选择器搜索的 facet 解析结果（`状态:` / `固定:` / `锁:`）。
@@ -583,18 +620,16 @@ pub fn set_tab(host: &ProjectUiHost, tab: PickerTab, cx: &mut App) {
     refresh_picker(host, cx);
 }
 
-/// 循环切换排序（交宿主持久化）并刷新。
-pub fn cycle_sort(host: &ProjectUiHost, cx: &mut App) {
-    let next = host.state.borrow().picker.sort.next();
-    host.state.borrow_mut().picker.sort = next;
-    (host.save_sort)(next, cx);
+/// 直接设置排序（下拉菜单单选；交宿主持久化）并刷新。
+pub fn set_sort(host: &ProjectUiHost, sort: ProjectSort, cx: &mut App) {
+    host.state.borrow_mut().picker.sort = sort;
+    (host.save_sort)(sort, cx);
     refresh_picker(host, cx);
 }
 
-/// 循环切换状态筛选（不持久化：临时视图状态，不影响查询）。
-pub fn cycle_status_filter(host: &ProjectUiHost, cx: &mut App) {
-    let next = host.state.borrow().picker.status_filter.next();
-    host.state.borrow_mut().picker.status_filter = next;
+/// 直接设置状态筛选（下拉菜单单选；不持久化：临时视图状态，不影响查询）。
+pub fn set_status_filter(host: &ProjectUiHost, filter: StatusFilter, cx: &mut App) {
+    host.state.borrow_mut().picker.status_filter = filter;
     host.notify(cx);
 }
 
@@ -1761,8 +1796,8 @@ fn human_size(bytes: u64) -> String {
 
 /// 设置面板的「磁盘 + 名册」快照。
 ///
-/// 在**事件路径**（打开设置 / 点刷新）一次性取，render 只纯读：`.RSmeta` 目录遍历与名册
-/// 查询都不该每帧做（与「render 不做 I/O」的约定一致）。
+/// 在**事件路径**（打开设置 / 点刷新）一次性取，render 只纯读：`.RSmeta` 目录遍历、名册
+/// 查询与版本台账都不该每帧做（与「render 不做 I/O」的约定一致）。
 #[derive(Default)]
 pub struct SettingsSnapshot {
     pub meta_rows: Vec<MetaTreeRow>,
@@ -1773,6 +1808,10 @@ pub struct SettingsSnapshot {
     pub default_connection: Option<String>,
     /// 默认连接候选（同一快照取一次，render 里不再问宿主）。
     pub connection_options: Vec<ConnectionOption>,
+    /// 版本台账快照（同一快照取一次；render 不查库）。
+    pub versions: Vec<ProjectVersionRow>,
+    /// 版本台账取数失败信息（成功为 `None`，render 显示告警行）。
+    pub versions_error: Option<String>,
     /// 是否取过（未取时显示「—」，不当成「没有」）。
     pub loaded: bool,
 }
@@ -1785,6 +1824,11 @@ pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
     let summary = project_service::list_all()
         .ok()
         .and_then(|items| items.into_iter().find(|p| p.path == root));
+    // 版本台账与磁盘/名册同一拍取齐：render 不查库（曾每帧开 SQLite 列版本表）。
+    let (versions, versions_error) = match project_service::list_versions(&root) {
+        Ok(versions) => (versions, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
     let snapshot = SettingsSnapshot {
         meta_rows: meta_tree_rows(&root.join(project_service::RS_META_DIR_NAME)),
         description: summary.as_ref().and_then(|p| p.description.clone()),
@@ -1793,6 +1837,8 @@ pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
             .ok()
             .flatten(),
         connection_options: (host.connections)(cx),
+        versions,
+        versions_error,
         loaded: true,
     };
     host.state.borrow_mut().settings = snapshot;
@@ -1815,27 +1861,61 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
     let facet_hint = parse_search(&needle).has_facet();
 
     // ---- 顶部：标题 + Tab ----
-    // 语义 `Button`（而非可点 div）：自动获得 track_focus + tab_stop，键盘可达、Enter/Space 可激活。
-    let mut tabs = div().h_flex().items_center().gap_2();
-    for tab in [PickerTab::Recent, PickerTab::All, PickerTab::Removed] {
-        let on = picker.tab == tab;
-        let host_t = host.clone();
-        tabs = tabs.child(
-            Button::new(ElementId::Name(SharedString::from(format!(
-                "picker-tab-{}",
-                tab.key()
-            ))))
-            .ghost()
-            .small()
-            .selected(on)
-            .label(tab.label())
-            .on_click(move |_, _, app| set_tab(&host_t, tab, app)),
+    // 语义 `TabBar`（分段控件，而非三个 Button 拼装）：选中态 / hover / 键盘导航由组件负责。
+    let tabs = TabBar::new("picker-tabs")
+        .segmented()
+        .selected_index(match picker.tab {
+            PickerTab::Recent => 0,
+            PickerTab::All => 1,
+            PickerTab::Removed => 2,
+        })
+        .children(
+            [PickerTab::Recent, PickerTab::All, PickerTab::Removed]
+                .into_iter()
+                .map(|tab| {
+                    let host_t = host.clone();
+                    // tab_stop(true)：TabBar 的 Tab 默认不进 Tab 焦点序（Button 默认 true），
+                    // 不补会丢失键盘可达（C4 契约：Tab 停到控件 Enter 激活）。
+                    Tab::new()
+                        .label(tab.label())
+                        .tab_stop(true)
+                        .on_click(move |_, _, app| set_tab(&host_t, tab, app))
+                }),
         );
-    }
 
-    // ---- 搜索 + 状态筛选 + 排序（筛选/排序均为语义 Button，固定 id 以保住键盘焦点） ----
-    let host_sort = host.clone();
+    // ---- 搜索 + 状态筛选 + 排序（筛选/排序为语义 DropdownMenu，单选直接设值） ----
+    let status_current = picker.status_filter;
     let host_status = host.clone();
+    let status_menu = move |menu: PopupMenu, _window: &mut Window, _cx: &mut Context<PopupMenu>| {
+        let mut menu = menu;
+        for spec in status_filter_menu_entries(status_current) {
+            let host = ProjectUiHost::clone(&host_status);
+            let filter = spec.filter;
+            menu = menu.item(
+                PopupMenuItem::new(filter.label())
+                    .checked(spec.checked)
+                    .disabled(spec.checked)
+                    .on_click(move |_, _, app| set_status_filter(&host, filter, app)),
+            );
+        }
+        menu
+    };
+    let sort_current = picker.sort;
+    let host_sort = host.clone();
+    let sort_menu = move |menu: PopupMenu, _window: &mut Window, _cx: &mut Context<PopupMenu>| {
+        let mut menu = menu;
+        for spec in sort_menu_entries(sort_current) {
+            let host = ProjectUiHost::clone(&host_sort);
+            let sort = spec.sort;
+            menu = menu.item(
+                PopupMenuItem::new(sort.label())
+                    .checked(spec.checked)
+                    .disabled(spec.checked)
+                    .on_click(move |_, _, app| set_sort(&host, sort, app)),
+            );
+        }
+        menu
+    };
     let search_row = div()
         .h_flex()
         .items_center()
@@ -1845,16 +1925,15 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
             Button::new("picker-status")
                 .ghost()
                 .small()
-                .selected(picker.status_filter != StatusFilter::All)
                 .label(format!("状态：{}", picker.status_filter.label()))
-                .on_click(move |_, _, app| cycle_status_filter(&host_status, app)),
+                .dropdown_menu(status_menu),
         )
         .child(
             Button::new("picker-sort")
                 .ghost()
                 .small()
                 .label(format!("排序：{}", picker.sort.label()))
-                .on_click(move |_, _, app| cycle_sort(&host_sort, app)),
+                .dropdown_menu(sort_menu),
         );
 
     // ---- 列表 ----
@@ -1895,8 +1974,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
     let rail = div()
         .v_flex()
         .gap_2()
-        // 240px @ 16px 基准：用 rem 让选择器侧栏随界面缩放。
-        .w(rems(15.))
+        // 侧栏宽引用 workbench_shell::ui 常量（与工作台左 Dock 同档，随界面缩放）
+        .w(rems(ui::LEFT_DOCK_WIDTH))
         .flex_none()
         .p_3()
         .bg(theme.colors.sidebar)
@@ -1905,7 +1984,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .child(
             Button::new("picker-new")
                 .primary()
-                .label("＋ 新建项目")
+                .icon(IconName::Plus)
+                .label("新建项目")
                 .on_click(move |_, window, app| {
                     open_create_dialog(&host_new, &inputs_new, window, app);
                 }),
@@ -1913,7 +1993,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .child(
             Button::new("picker-open")
                 .secondary()
-                .label("🗀 打开文件夹…")
+                .icon(IconName::FolderOpen)
+                .label("打开文件夹…")
                 .on_click(move |_, window, app| {
                     open_folder_dialog(&host_open, &inputs_open, window, app);
                 }),
@@ -1921,7 +2002,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .child(
             Button::new("picker-sample")
                 .secondary()
-                .label("▦ 从示例项目开始")
+                .icon(IconName::Copy)
+                .label("从示例项目开始")
                 .on_click(move |_, window, app| create_sample(&host_sample, window, app)),
         )
         .child(
@@ -2328,7 +2410,8 @@ fn meta_line(item: &ProjectSummary) -> String {
     format!("最后打开：{} · 状态：{}", last, item.status)
 }
 
-fn empty_state(tab: PickerTab, loaded: bool) -> Div {
+/// 选择器空态：语义 `Empty`（图标 + 标题 + 描述居中列），未加载时标题显示「加载中…」。
+fn empty_state(tab: PickerTab, loaded: bool) -> impl IntoElement {
     let (title, desc) = match tab {
         PickerTab::Recent => (
             "还没有最近项目",
@@ -2337,18 +2420,17 @@ fn empty_state(tab: PickerTab, loaded: bool) -> Div {
         PickerTab::All => ("还没有项目", "新建一个项目开始使用。"),
         PickerTab::Removed => ("没有已移除的项目", "被移出名册的项目会出现在这里，可恢复。"),
     };
-    div()
-        .v_flex()
-        .items_center()
-        .justify_center()
-        .gap_1()
-        .py_8()
-        .child(if loaded {
-            div().child(title)
-        } else {
-            div().child("加载中…")
-        })
-        .child(div().child(desc))
+    Empty::new()
+        .header(
+            EmptyHeader::new()
+                .media(
+                    EmptyMedia::new()
+                        .with_variant(EmptyMediaVariant::Icon)
+                        .child(Icon::new(IconName::Inbox)),
+                )
+                .title(EmptyTitle::new().child(if loaded { title } else { "加载中…" }))
+                .description(EmptyDescription::new().child(desc)),
+        )
 }
 
 fn error_line(message: &str, theme: &gpui_kit::component::Theme) -> Div {
@@ -2717,13 +2799,14 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                     .child(
                         Button::new("proj-open-meta")
                             .secondary()
-                            .label("🗀 打开 .RSmeta")
+                            .icon(IconName::FolderOpen)
+                            .label("打开 .RSmeta")
                             .on_click(move |_, _, _| reveal_in_explorer(&host_reveal)),
                     )
                     .child(section(theme, "依赖"))
                     .child(deps)
                     .child(section(theme, "版本"))
-                    .child(versions_view(&root, theme))
+                    .child(versions_view(&ui.settings, theme))
                     .child(
                         div()
                             .h_flex()
@@ -2817,8 +2900,8 @@ fn meta_tree_row(row: &MetaTreeRow, theme: &gpui_kit::component::Theme) -> Div {
         .h_flex()
         .items_center()
         .gap_2()
-        // 根目录自身占一级缩进（子项从 1 级起）
-        .pl(rems((row.depth + 1) as f32))
+        // 缩进走树/列表共用原语（0.5rem + 0.875rem × depth），不再各写各的倍率
+        .pl(rems(tree::indent_rem(ui::TREE_BASE_PADDING, ui::TREE_INDENT, row.depth)))
         .child(
             Icon::new(if row.is_dir {
                 IconName::FolderOpen
@@ -2900,7 +2983,9 @@ fn default_connection_picker(
     Button::new("proj-default-connection")
         .secondary()
         .disabled(read_only)
-        .label(format!("{label} ▾"))
+        .label(label)
+        // 下拉指示用组件自带的 caret（替代字符 ▾，随档位缩放）
+        .dropdown_caret(true)
         .dropdown_menu(move |menu, _window, _cx| {
             let mut menu = menu.item(
                 PopupMenuItem::new("（不设默认）")
@@ -2946,34 +3031,36 @@ fn section(theme: &gpui_kit::component::Theme, title: &str) -> Div {
         .child(title.to_string())
 }
 
-/// 项目版本列表（只读；失败降级为提示行）。
-fn versions_view(root: &std::path::Path, theme: &gpui_kit::component::Theme) -> Div {
+/// 项目版本列表（只读；数据来自快照，render 不查库；失败降级为提示行）。
+fn versions_view(snapshot: &SettingsSnapshot, theme: &gpui_kit::component::Theme) -> Div {
     let mut list = div().v_flex().gap_1().text_xs();
-    match project_service::list_versions(root) {
-        Ok(versions) if versions.is_empty() => {
+    if !snapshot.loaded {
+        list = list.child(
+            div()
+                .text_color(theme.colors.muted_foreground)
+                .child("正在读取…"),
+        );
+    } else if let Some(e) = &snapshot.versions_error {
+        list = list.child(div().text_color(theme.colors.warning).child(e.clone()));
+    } else if snapshot.versions.is_empty() {
+        list = list.child(
+            div()
+                .text_color(theme.colors.muted_foreground)
+                .child("暂无版本记录"),
+        );
+    } else {
+        for v in &snapshot.versions {
             list = list.child(
                 div()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("暂无版本记录"),
+                    .h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(v.created_at.clone()),
+                    )
+                    .child(div().text_color(theme.colors.foreground).child(v.message.clone())),
             );
-        }
-        Ok(versions) => {
-            for v in versions {
-                list = list.child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_color(theme.colors.muted_foreground)
-                                .child(v.created_at),
-                        )
-                        .child(div().text_color(theme.colors.foreground).child(v.message)),
-                );
-            }
-        }
-        Err(e) => {
-            list = list.child(div().text_color(theme.colors.warning).child(e));
         }
     }
     list
@@ -2990,7 +3077,17 @@ pub fn create_version_action(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &
     };
     let message = inputs.version_msg.read(cx).value().trim().to_string();
     match project_service::create_version(&root, &message) {
-        Ok(()) => host.state.borrow_mut().notice = Some("已创建版本快照".to_string()),
+        Ok(()) => {
+            // 台账变了：只刷新版本快照（不重走目录遍历；render 仍不查库）。
+            let (versions, versions_error) = match project_service::list_versions(&root) {
+                Ok(versions) => (versions, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+            let mut ui = host.state.borrow_mut();
+            ui.settings.versions = versions;
+            ui.settings.versions_error = versions_error;
+            ui.notice = Some("已创建版本快照".to_string());
+        }
         Err(e) => host.state.borrow_mut().notice = Some(e),
     }
     host.notify(cx);

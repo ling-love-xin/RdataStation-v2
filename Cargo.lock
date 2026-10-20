@@ -8018,7 +8018,7 @@ dependencies = [
 
 [[package]]
 name = "rds-analytics-resource"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8026,6 +8026,7 @@ dependencies = [
  "rds-engine",
  "rds-paths",
  "rds-shared",
+ "rds-tag",
  "rds-workbench-shell",
  "rusqlite",
  "serde",
@@ -8039,7 +8040,7 @@ dependencies = [
 
 [[package]]
 name = "rds-app"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gpui-kit",
  "rds-analytics-resource",
@@ -8058,7 +8059,7 @@ dependencies = [
 
 [[package]]
 name = "rds-connection"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8084,7 +8085,7 @@ dependencies = [
 
 [[package]]
 name = "rds-connection-dialog"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8105,14 +8106,16 @@ dependencies = [
 
 [[package]]
 name = "rds-database"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gpui-kit",
  "rds-engine",
  "rds-paths",
  "rds-property",
  "rds-shared",
+ "rds-tag",
  "rds-workbench-shell",
+ "regex",
  "serde",
  "serde_json",
  "specta",
@@ -8122,7 +8125,7 @@ dependencies = [
 
 [[package]]
 name = "rds-editor"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8142,7 +8145,7 @@ dependencies = [
 
 [[package]]
 name = "rds-engine"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8189,7 +8192,7 @@ dependencies = [
 
 [[package]]
 name = "rds-insight"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow",
  "duckdb",
@@ -8212,7 +8215,7 @@ dependencies = [
 
 [[package]]
 name = "rds-kernel"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "jupyter-protocol",
@@ -8226,7 +8229,7 @@ dependencies = [
 
 [[package]]
 name = "rds-mock"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8249,14 +8252,14 @@ dependencies = [
 
 [[package]]
 name = "rds-paths"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "dirs 7.0.0",
 ]
 
 [[package]]
 name = "rds-plugin"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -8282,7 +8285,7 @@ dependencies = [
 
 [[package]]
 name = "rds-project"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8302,7 +8305,7 @@ dependencies = [
 
 [[package]]
 name = "rds-property"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -8310,7 +8313,7 @@ dependencies = [
 
 [[package]]
 name = "rds-scratchpad"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -8321,8 +8324,10 @@ dependencies = [
  "rds-search",
  "rds-settings",
  "rds-shared",
+ "rds-tag",
  "rds-workbench-shell",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "similar",
@@ -8333,7 +8338,7 @@ dependencies = [
 
 [[package]]
 name = "rds-search"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -8344,7 +8349,7 @@ dependencies = [
 
 [[package]]
 name = "rds-settings"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gpui-kit",
  "rds-paths",
@@ -8356,7 +8361,7 @@ dependencies = [
 
 [[package]]
 name = "rds-shared"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes-gcm",
  "arrow",
@@ -8385,8 +8390,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-tag"
+version = "0.2.3"
+dependencies = [
+ "chrono",
+ "rds-engine",
+ "rds-shared",
+ "rusqlite",
+ "uuid",
+]
+
+[[package]]
 name = "rds-workbench"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "duckdb",
@@ -8400,6 +8416,7 @@ dependencies = [
  "rds-editor",
  "rds-engine",
  "rds-insight",
+ "rds-kernel",
  "rds-mock",
  "rds-paths",
  "rds-project",
@@ -8407,6 +8424,7 @@ dependencies = [
  "rds-scratchpad",
  "rds-settings",
  "rds-shared",
+ "rds-tag",
  "rds-workbench-shell",
  "rfd",
  "rusqlite",
@@ -8420,7 +8438,7 @@ dependencies = [
 
 [[package]]
 name = "rds-workbench-shell"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gpui-kit",
  "serde",

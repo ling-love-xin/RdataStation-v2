@@ -1,0 +1,11 @@
+[package]
+name = "rds-tag"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared = { workspace = true }
+engine = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

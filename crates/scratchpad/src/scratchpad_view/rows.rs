@@ -358,6 +358,20 @@ impl ScratchpadView {
             );
         }
 
+        // 右键「标签…」的目标：绝对路径 → 模块内相对路径（entry_id 语义；目录不是打标对象）。
+        let rel_for_tags = if !is_folder {
+            self.host
+                .project_root()
+                .map(|root| {
+                    ScratchpadStore::new(root)
+                        .relative_path_of(std::path::Path::new(&key))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         // 右键菜单（打开位置 / 重命名 / 剪切 / 复制 / 删除）。
         {
             let menu_entity = entity.clone();
@@ -432,6 +446,20 @@ impl ScratchpadView {
                         this.show_scratchpad_file_info(info_key.clone(), cx)
                     });
                 }));
+                // 「标签…」（统一规格 §7.3）：只给文件；打开标签编辑弹窗（勾选打标 / 新建）。
+                if !is_folder {
+                    let tag_entity = menu_entity.clone();
+                    let tag_rel = rel_for_tags.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("标签…").on_click(move |_, window, app| {
+                            if !tag_rel.is_empty() {
+                                tag_entity.update(app, |this, cx| {
+                                    this.open_tag_dialog(window, &tag_rel, cx)
+                                });
+                            }
+                        }),
+                    );
+                }
                 let menu = menu;
                 menu.item(
                     PopupMenuItem::new("重命名").on_click(move |_, window, app| {

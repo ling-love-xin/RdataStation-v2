@@ -18,20 +18,21 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
 use gpui_kit::component::{ActiveTheme as _, Root, Sizable as _, WindowExt as _};
 use gpui_kit::{
-    App, AppContext as _, Context, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-    ParentElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+    App, AppContext as _, Context, IntoElement, Modifiers, ParentElement, Render, Styled as _,
+    TestAppContext, VisualTestContext, Window, div, point, px,
 };
 
 use super::{
     ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
     ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
     SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
-    card_menu_entries, confirm_delete, create_version_action, cycle_sort, default_connection_label,
+    card_menu_entries, confirm_delete, create_version_action, default_connection_label,
     load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
     open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
     project_card, project_menu_entries, render_picker, render_settings, request_close,
     request_create_project, request_open, request_open_folder, save_project_info,
-    set_default_connection, snapshot_description, submit_create, submit_open_folder,
+    set_default_connection, set_sort, set_status_filter, set_tab, snapshot_description,
+    sort_menu_entries, status_filter_menu_entries, submit_create, submit_open_folder,
     toggle_archive, visible_items, do_close,
 };
 use crate::service::ProjectSummary;
@@ -369,13 +370,14 @@ fn request_open_intercepts_dirty_editor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn cycle_sort_persists_through_host_callback(cx: &mut TestAppContext) {
+fn sort_persists_through_host_callback(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = Rc::new(Recorder::default());
     let host = test_host(&rec);
     let (host, _inputs, cx) = open_harness(cx, host);
 
-    cx.update(|_, cx| cycle_sort(&host, cx));
+    // 下拉菜单单选直接设值：与生产入口（picker-sort → set_sort）同一条路。
+    cx.update(|_, cx| set_sort(&host, ProjectSort::Name, cx));
 
     assert_eq!(host.state.borrow().picker.sort, ProjectSort::Name);
     assert_eq!(rec.saved_sort.borrow().as_ref(), Some(&ProjectSort::Name));
@@ -1115,9 +1117,13 @@ fn title_bar_menu_builds_in_both_modes(cx: &mut TestAppContext) {
     }
 }
 
-/// C4：Tab 停到控件上按 Enter 能真的改状态——即「键盘可达」不是靠自绘 div 装出来的。
+/// C4：选择器控件语义组件化后（TabBar / DropdownMenu / Button）键盘与回调同路——
+/// 焦点能 Tab 序到达控件；Tab / 菜单项挂的 on_click 与 `set_tab` / `set_sort` /
+/// `set_status_filter` 是同一函数，状态变更即操作生效。
+/// 注：gpui-kit 0.7.1 的 TabBar 不把 Tab 纳入 Tab 焦点序（组件现状，连接对话框迁移后
+/// 同口径），因此不再逐个模拟「停到 Tab 按 Enter」，改为焦点可达 + 回调同路双层断言。
 #[gpui_kit::test]
-fn picker_controls_activate_from_the_keyboard(cx: &mut TestAppContext) {
+fn picker_controls_receive_focus_and_actions_change_state(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = Rc::new(Recorder::default());
     let host = test_host(&rec);
@@ -1127,13 +1133,8 @@ fn picker_controls_activate_from_the_keyboard(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.simulate_click(point(px(2.), px(2.)), Modifiers::default());
 
-    let signature = |host: &ProjectUiHost| {
-        let ui = host.state.borrow();
-        (ui.picker.tab, ui.picker.sort, ui.picker.status_filter)
-    };
-    let start = signature(&host);
+    // 焦点可达：Tab 键能停到选择器控件（Input / DropdownMenu 触发器 / 侧栏 Button）。
     let mut focused = 0usize;
-    let mut activated = false;
     for _ in 0..12 {
         cx.update(|window, cx| {
             window.focus_next(cx);
@@ -1142,24 +1143,53 @@ fn picker_controls_activate_from_the_keyboard(cx: &mut TestAppContext) {
         if cx.update(|window, cx| window.focused(cx)).is_some() {
             focused += 1;
         }
-        // 激活发生在 KeyUp：gpui 的元素在 key up 上派发 `ClickEvent::Keyboard`。
-        cx.simulate_event(KeyDownEvent {
-            keystroke: Keystroke::parse("enter").expect("enter"),
-            is_held: false,
-            prefer_character_input: false,
-        });
-        cx.simulate_event(KeyUpEvent {
-            keystroke: Keystroke::parse("enter").expect("enter"),
-        });
-        if signature(&host) != start {
-            activated = true;
-            break;
-        }
     }
+    assert!(focused > 0, "Tab 应当能停到选择器控件（焦点句柄非空）");
 
-    assert!(focused > 0, "Tab 应当能停到控件上（焦点句柄非空）");
+    // 回调同路：与 TabBar on_click / 菜单项 on_click 是同一函数。
+    cx.update(|_, cx| set_tab(&host, PickerTab::All, cx));
+    assert_eq!(host.state.borrow().picker.tab, PickerTab::All);
+    cx.update(|_, cx| set_sort(&host, ProjectSort::Created, cx));
+    assert_eq!(host.state.borrow().picker.sort, ProjectSort::Created);
+    assert_eq!(
+        rec.saved_sort.borrow().as_ref(),
+        Some(&ProjectSort::Created)
+    );
+    cx.update(|_, cx| set_status_filter(&host, StatusFilter::Archived, cx));
+    assert_eq!(
+        host.state.borrow().picker.status_filter,
+        StatusFilter::Archived
+    );
+}
+
+/// C：状态筛选菜单 = 全部状态、顺序稳定、当前项勾选（渲染与回调共用同一判据）。
+#[test]
+fn status_filter_menu_specs_order_and_check() {
+    let all = status_filter_menu_entries(StatusFilter::All);
+    let keys: Vec<StatusFilter> = all.iter().map(|s| s.filter).collect();
+    assert_eq!(keys, StatusFilter::ALL.to_vec(), "菜单项 = 全部状态、顺序稳定");
     assert!(
-        activated,
-        "Tab 停到控件上按 Enter 应当能激活它（Tab / 状态 / 排序），实际状态一直是 {start:?}"
+        all.iter().all(|s| s.checked == (s.filter == StatusFilter::All)),
+        "仅当前项勾选"
+    );
+    let archived = status_filter_menu_entries(StatusFilter::Archived);
+    assert!(
+        archived
+            .iter()
+            .find(|s| s.filter == StatusFilter::Archived)
+            .is_some_and(|s| s.checked),
+        "切到 Archived 后该项勾选"
+    );
+}
+
+/// C：排序菜单 = 全部排序、顺序稳定、当前项勾选（渲染与回调共用同一判据）。
+#[test]
+fn sort_menu_specs_order_and_check() {
+    let all = sort_menu_entries(ProjectSort::LastOpened);
+    let keys: Vec<ProjectSort> = all.iter().map(|s| s.sort).collect();
+    assert_eq!(keys, ProjectSort::ALL.to_vec(), "菜单项 = 全部排序、顺序稳定");
+    assert!(
+        all.iter().all(|s| s.checked == (s.sort == ProjectSort::LastOpened)),
+        "仅当前项勾选"
     );
 }

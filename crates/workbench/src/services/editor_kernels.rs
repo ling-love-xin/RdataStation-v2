@@ -39,7 +39,7 @@ pub fn attach(shared: &EditorShared, cx: &gpui_kit::App) {
     let cache = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let port = Rc::new(WorkbenchKernels { cache: cache.clone() });
     shared.attach_kernels(port);
-    cx.background_executor().spawn(async move {
+    let _ = cx.background_executor().spawn(async move {
         // 探测一次（后台线程：起子进程查解释器 / ipykernel）
         let specs = rds_kernel::detect_kernels();
         if let Ok(mut slot) = cache.lock() {

@@ -21,9 +21,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable as _};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
@@ -186,69 +184,29 @@ impl Render for SearchResultsHostPanel {
                 });
             }
         };
-        let word_btn = div()
-            .id("sp-es-word")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_word { fg } else { muted })
-            .when(panel_word, |this| this.bg(theme.colors.list_active))
-            .when(!panel_word, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child("ab")
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("全字匹配（ab 开关：只匹配完整单词）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_word);
-        let case_btn = div()
-            .id("sp-es-case")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_case { fg } else { muted })
-            .when(panel_case, |this| this.bg(theme.colors.list_active))
-            .when(!panel_case, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child(IconName::CaseSensitive)
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("区分大小写（Aa 开关）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_case);
-        let regex_btn = div()
-            .id("sp-es-regex")
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .px_1()
-            .h_5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(if panel_regex { fg } else { muted })
-            .when(panel_regex, |this| this.bg(theme.colors.list_active))
-            .when(!panel_regex, move |s| s.hover(move |s| s.bg(theme.colors.list_hover)))
-            .child(".*")
-            .tooltip(|window, cx| {
-                Tooltip::element(move |_, _| {
-                    div().text_xs().child("使用正则表达式（如 \\d+ 匹配数字）")
-                })
-                .build(window, cx)
-            })
-            .on_click(toggle_panel_regex);
+        // Aa / ab / .* 三个开关：与侧栏元数据搜索共用同一形态（`search_option_button`，
+        // 2026-10-15 由两处自绘 div 收口到一处；键盘可达、选中底走主题 toggled 色）。
+        let word_btn = crate::panels::shared::search_option_button(
+            "sp-es-word",
+            panel_word,
+            "全字匹配（ab 开关：只匹配完整单词）",
+            crate::panels::shared::SearchOptionKind::Text("ab"),
+            toggle_panel_word,
+        );
+        let case_btn = crate::panels::shared::search_option_button(
+            "sp-es-case",
+            panel_case,
+            "区分大小写（Aa 开关）",
+            crate::panels::shared::SearchOptionKind::Icon(IconName::CaseSensitive),
+            toggle_panel_case,
+        );
+        let regex_btn = crate::panels::shared::search_option_button(
+            "sp-es-regex",
+            panel_regex,
+            "使用正则表达式（如 \\d+ 匹配数字）",
+            crate::panels::shared::SearchOptionKind::Text(".*"),
+            toggle_panel_regex,
+        );
         let mut es_bar = div()
             .h_flex()
             .items_center()

@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use insight::{InsightTarget, InsightView};
+use insight::{InsightTarget, InsightView, InsightWorkspacePanel};
 use mock::mock_view::{DetailTarget, MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
@@ -22,6 +22,8 @@ use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
 
 use gpui_kit::*;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{IconName, Sizable as _};
 
 use database::model::PropertyRequest;
 
@@ -186,6 +188,35 @@ pub fn append_sql(current: &str, snippet: &str) -> String {
     }
 }
 
+/// 搜索选项开关的内容形态（`Aa` 图标 / `ab`、`.*` 文本）。
+#[derive(Clone)]
+pub enum SearchOptionKind {
+    /// 文本型开关（`ab` / `.*`）。
+    Text(&'static str),
+    /// 图标型开关（`Aa` 大小写）。
+    Icon(IconName),
+}
+
+/// 搜索选项开关（Aa / ab / .*）：语义 `Button`（ghost + toggled + tooltip），键盘可达。
+///
+/// 侧栏元数据搜索（`metadata_search.rs`）与中央「搜索: query」标签页（`search_results.rs`）
+/// 此前各手搓一份（自绘 div + cursor_pointer，无键盘可达）；2026-10-15 抽到一处共用，
+/// 改样式 / 形态只改这里。选中底走 `toggled` 主题色，与导航「搜索选项」观感一致。
+pub fn search_option_button(
+    id: impl Into<ElementId>,
+    selected: bool,
+    tip: &'static str,
+    kind: SearchOptionKind,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Button {
+    let mut btn = Button::new(id).ghost().toggled(selected).xsmall().tooltip(tip);
+    btn = match kind {
+        SearchOptionKind::Text(label) => btn.label(label),
+        SearchOptionKind::Icon(icon) => btn.icon(icon),
+    };
+    btn.on_click(on_click)
+}
+
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
 pub struct Shared {
@@ -194,6 +225,11 @@ pub struct Shared {
     /// 左右边栏三模式（展开 / 收起 / 完全隐藏），互不影响。
     pub left_mode: Rc<Cell<SidebarMode>>,
     pub right_mode: Rc<Cell<SidebarMode>>,
+    /// 真面板化：左右 dock 已打开过的模块（tab 条只显示点过的模块）。
+    /// 活动栏点击登记；`apply_*_mode` 建 dock 时按它挂 tab；dock 移除不重置
+    /// （Hidden → Expanded 恢复同样的 tab 集）。
+    pub left_open_panels: Rc<RefCell<Vec<LeftPanel>>>,
+    pub right_open_panels: Rc<RefCell<Vec<RightPanel>>>,
     /// 完全隐藏前的模式快照：状态栏独立开关恢复时还原，避免丢失隐藏前状态。
     pub left_mode_before_hidden: Rc<Cell<SidebarMode>>,
     pub right_mode_before_hidden: Rc<Cell<SidebarMode>>,
@@ -252,6 +288,19 @@ pub struct Shared {
     ///
     /// 面板自带状态与视图（`insight::InsightView`），工作台只持句柄 + 订阅它的取数请求。
     pub insight_panel: Rc<RefCell<Option<WeakEntity<InsightView>>>>,
+    /// M8：洞察**中间工作页**面板实体句柄（弱引用；D63 中央洞察 tab）。
+    ///
+    /// 与右栏 `insight_panel` 同例：面板自带状态与视图（`insight::InsightWorkspacePanel`
+    /// 内部持一个 `InsightView` 完整画像宿主），宿主只持句柄 + 订阅它的取数请求。
+    pub insight_workspace_panel: Rc<RefCell<Option<WeakEntity<InsightWorkspacePanel>>>>,
+    /// M8：等待在中间打开的洞察目标（D65 入口语义）。
+    ///
+    /// 四个洞察入口（导航树 / 结果列表 / SQL 编辑器等）大多在**无 window 的事件路径**
+    /// （`cx: &mut App`），而中央 Dock tab 的创建 / 激活需要 window——所以入口只把
+    /// 目标登记在这里并 `notify_host`，宿主 `render`（权威同步点）检测到后
+    /// `cx.defer_in` 建 / 激活面板并消费。右栏摘要版的目标仍在入口里**同步设置**
+    /// （双栏单源，D65）。
+    pub pending_insight_target: Rc<RefCell<Option<InsightTarget>>>,
     /// M6：资产库面板实体句柄（弱引用；右侧「存档详情」取它的选中项）。
     ///
     /// 与 `mock_panel` / `insight_panel` 同例：面板自带状态与视图
@@ -303,6 +352,8 @@ impl Shared {
         Self {
             active_left: Rc::new(Cell::new(LeftPanel::Database)),
             active_right: Rc::new(Cell::new(RightPanel::Insight)),
+            left_open_panels: Rc::new(RefCell::new(vec![LeftPanel::Database])),
+            right_open_panels: Rc::new(RefCell::new(vec![RightPanel::Insight])),
             left_mode: Rc::new(Cell::new(SidebarMode::Expanded)),
             right_mode: Rc::new(Cell::new(SidebarMode::Collapsed)),
             left_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
@@ -330,6 +381,8 @@ impl Shared {
             mock_panel: Rc::new(RefCell::new(None)),
             pending_temp_cleanup: Rc::new(Cell::new(false)),
             insight_panel: Rc::new(RefCell::new(None)),
+            insight_workspace_panel: Rc::new(RefCell::new(None)),
+            pending_insight_target: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
@@ -568,7 +621,6 @@ impl Shared {
             redraw(cx);
         }
     }
-
     /// 状态栏回执（一次性动作的结果）：写入 `notice` 并请求宿主重绘。
     ///
     /// 动作结果统一从这里说出口（资产库 / 草稿箱 / 洞察的宿主侧动作）——
@@ -587,6 +639,16 @@ impl Shared {
     /// **放在这里而不是各入口各写一遍**：活动栏 / 命令面板 / 导航右键 / 编辑器按钮最终都走到本方法，
     /// 漏掉一个入口就会出现「连接清册或既有表清单还是上一次的」——M7 已知缺陷正是这个形态（架构 §9-I18）。
     pub fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
+        // 与 `WorkbenchView::open_right_panel` 同一口径：先把模块登记进 `right_open_panels`
+        //（tab 条只显示点过的模块）。只改 `active_right` 不改清单时，dock 已存在则新模块
+        // 永远不会挂载（真面板化后 `apply_right_mode` 只处理 dock 缺失场景）——
+        // 导航右键 / 命令面板 / 测试宿主都走本方法，漏登记即「打开面板无反应」。
+        {
+            let mut open = self.right_open_panels.borrow_mut();
+            if !open.contains(&panel) {
+                open.push(panel);
+            }
+        }
         self.active_right.set(panel);
         self.right_mode.set(SidebarMode::Expanded);
         if panel == RightPanel::Mock {
@@ -645,19 +707,14 @@ impl Shared {
         cx: &mut App,
     ) {
         self.open_right_panel(RightPanel::Insight, cx);
-        let panel = self.insight_panel.borrow().clone();
-        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
-            panel.update(cx, |panel, cx| {
-                panel.set_target(
-                    InsightTarget::Column {
-                        temp_table: temp_table.into(),
-                        column: column.into(),
-                        data_type: data_type.into(),
-                    },
-                    cx,
-                );
-            });
-        }
+        let target = InsightTarget::Column {
+            temp_table: temp_table.into(),
+            column: column.into(),
+            data_type: data_type.into(),
+        };
+        self.set_right_insight_target(&target, cx);
+        // 中间工作页：登记待打开目标，宿主 render 的 ensure 消费（defer 内建 / 激活 tab）
+        self.queue_workspace_insight(target, cx);
     }
 
     /// M8：源表取样 SQL——限定名各段按**连接驱动**加引号（MySQL 系反引号，其余双引号）。
@@ -700,19 +757,14 @@ impl Shared {
         table_name: impl Into<String>,
         cx: &mut App,
     ) {
+        let table_name = table_name.into();
         self.open_right_panel(RightPanel::Insight, cx);
-        let panel = self.insight_panel.borrow().clone();
-        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
-            panel.update(cx, |panel, cx| {
-                panel.set_target(
-                    InsightTarget::SourceTable {
-                        source,
-                        table_name: table_name.into(),
-                    },
-                    cx,
-                );
-            });
-        }
+        let target = InsightTarget::SourceTable {
+            source,
+            table_name: table_name.clone(),
+        };
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
     }
 
     /// M8：打开洞察面板并**指向一个 Schema**（导航树右键「结构洞察」）。
@@ -722,20 +774,14 @@ impl Shared {
     /// 结构报告的取数在洞察侧的 `SchemaReportRequested`，这里只递目标。
     pub fn open_insight_schema(&self, schema: database::model::ObjectRef, cx: &mut App) {
         self.open_right_panel(RightPanel::Insight, cx);
-        let panel = self.insight_panel.borrow().clone();
-        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
-            panel.update(cx, |panel, cx| {
-                panel.set_target(
-                    InsightTarget::Schema {
-                        conn_id: schema.conn_id,
-                        database: schema.catalog,
-                        // 空串 = 该驱动无独立 schema 层（导航侧口径），这里回归 `Option` 语义。
-                        schema: Some(schema.schema).filter(|s| !s.is_empty()),
-                    },
-                    cx,
-                );
-            });
-        }
+        let target = InsightTarget::Schema {
+            conn_id: schema.conn_id,
+            database: schema.catalog,
+            // 空串 = 该驱动无独立 schema 层（导航侧口径），这里回归 `Option` 语义。
+            schema: Some(schema.schema).filter(|s| !s.is_empty()),
+        };
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
     }
 
     /// M8：打开洞察面板并**指向源数据里的一列**（结果集列头右键「洞察此列」等入口）。
@@ -747,19 +793,29 @@ impl Shared {
         cx: &mut App,
     ) {
         self.open_right_panel(RightPanel::Insight, cx);
+        let target = InsightTarget::SourceColumn {
+            source,
+            column: column.into(),
+            data_type: data_type.into(),
+        };
+        self.set_right_insight_target(&target, cx);
+        self.queue_workspace_insight(target, cx);
+    }
+
+    /// 右栏摘要版：目标联动（D65 双栏单源——入口 / 中间面板的目标变化都同步到这里）
+    fn set_right_insight_target(&self, target: &InsightTarget, cx: &mut App) {
         let panel = self.insight_panel.borrow().clone();
         if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
             panel.update(cx, |panel, cx| {
-                panel.set_target(
-                    InsightTarget::SourceColumn {
-                        source,
-                        column: column.into(),
-                        data_type: data_type.into(),
-                    },
-                    cx,
-                );
+                panel.set_target(target.clone(), cx);
             });
         }
+    }
+
+    /// 中间工作页：登记待打开目标 + 唤醒宿主 render（render 的 ensure 消费，见 view.rs）
+    fn queue_workspace_insight(&self, target: InsightTarget, cx: &mut App) {
+        *self.pending_insight_target.borrow_mut() = Some(target);
+        self.notify_host(cx);
     }
 
     /// 打开 Mock 面板；`source` 给定时按**源库表**定向（导航右键「生成 Mock 数据」）。

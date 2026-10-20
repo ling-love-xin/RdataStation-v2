@@ -9,6 +9,10 @@ shared.workspace = true
 # 项目级回收站（`engine::persistence::trash`）：原来的 `src/trash.rs` 只有本模块一个使用方，
 # M6 资产库也要用它，于是按 rds-architecture 的「≥ 2 使用方上提」规则搬到 engine 并中性化。
 engine.workspace = true
+# 统一标签能力（规格 §7.3：project tags + scratchpad_tags 关联；打标 / 读取 / 归档继承）。
+tag.workspace = true
+# 标签关联表 SQL（`scratchpad_tags` 与 `tags` 同库 JOIN / INSERT / DELETE）。
+rusqlite.workspace = true
 # 内容搜索独立 crate（用户点名 2026-10-10 抽取：后端模型 + 目录扫描 + 逐行匹配；
 # 渲染面板第二阶段迁入，type_icon 由调用方注入）。
 rds_search.workspace = true

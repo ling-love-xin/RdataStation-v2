@@ -139,6 +139,11 @@ impl MockHost for WorkbenchMockHost {
         crate::services::mock_generator::preview_sample(temp_table, order, limit)
     }
 
+    fn temp_table_row_count(&self, temp_table: &str) -> Result<Option<i64>, String> {
+        // 与 `preview_sample` 同一口径：只读 COUNT 查询，同步调用；拿不到锁返回 `None`。
+        crate::services::mock_generator::temp_table_row_count(temp_table)
+    }
+
     fn export_dir(&self) -> String {
         match self.project_root() {
             Some(root) => root.to_string_lossy().to_string(),

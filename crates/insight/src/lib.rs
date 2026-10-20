@@ -39,6 +39,8 @@ pub(crate) mod test_support;
 pub mod ui;
 /// 洞察面板的渲染片段（按 Tab 分文件；状态宿主在 [`insight_view`]）
 mod view;
+/// 洞察**中间工作页**（D63：右栏摘要 + 中央可停靠洞察 tab 并存；含多表对比视图）
+pub mod workspace;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -103,6 +105,9 @@ pub use schema_analyzer::{
 pub use schema_view::{
     confidence_label, schema_export_file_stem, SchemaExportFormat, SchemaGroupView,
     SchemaReportView, SchemaRowView, SchemaSection, SchemaTone,
+};
+pub use workspace::{
+    focus_insight_workspace_tab, InsightWorkspacePanel, OpenedTarget, TargetSummary, WorkspaceMode,
 };
 
 pub const BUILTIN_RULES_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/insight-rules");

@@ -35,8 +35,8 @@ use gpui_kit::*;
 
 // ===== 五段布局（rem 基准；注释为 16px 字号下的实际值） =====
 
-/// 标题栏高度（2.25rem ≈ 36px）
-pub const TITLE_BAR_HEIGHT: f32 = 2.25;
+/// 标题栏高度（2.75rem ≈ 44px，2026-10-19 由 36px 调高）
+pub const TITLE_BAR_HEIGHT: f32 = 2.75;
 /// 活动栏宽度，左右一致（3rem = 48px）
 pub const ACTIVITY_BAR_WIDTH: f32 = 3.0;
 
@@ -51,10 +51,10 @@ pub const ACTIVITY_ITEM_HEIGHT: f32 = 2.5;
 
 // ===== Dock 边栏（rem 基准） =====
 
-/// 左侧边栏起步宽度（15rem = 240px，设计 §2.3）
-pub const LEFT_DOCK_WIDTH: f32 = 15.0;
-/// 右侧边栏起步宽度（17.5rem = 280px，设计 §2.3）
-pub const RIGHT_DOCK_WIDTH: f32 = 17.5;
+/// 左侧边栏起步宽度（18rem = 288px，2026-10-19 由 240px 调大）
+pub const LEFT_DOCK_WIDTH: f32 = 18.0;
+/// 右侧边栏起步宽度（20rem = 320px，2026-10-19 由 280px 调大）
+pub const RIGHT_DOCK_WIDTH: f32 = 20.0;
 
 // ===== 标题栏元素（rem 基准） =====
 
@@ -62,14 +62,14 @@ pub const RIGHT_DOCK_WIDTH: f32 = 17.5;
 pub const TITLE_LOGO_SIZE: f32 = 1.25;
 /// 标题栏左侧内边距（0.625rem = 10px）
 pub const TITLE_BAR_PADDING_X: f32 = 0.625;
-/// 挖空项目槽高度（1.625rem ≈ 26px）
-pub const TITLE_SLOT_HEIGHT: f32 = 1.625;
+/// 挖空项目槽高度（1.75rem ≈ 28px，随标题栏调高）
+pub const TITLE_SLOT_HEIGHT: f32 = 1.75;
 /// 挖空项目槽水平内边距（0.875rem ≈ 14px）
 pub const TITLE_SLOT_PADDING_X: f32 = 0.875;
 /// Quick Open 入口宽度（20rem = 320px）
 pub const QUICK_OPEN_ENTRY_WIDTH: f32 = 20.0;
-/// Quick Open 入口高度（1.625rem ≈ 26px）
-pub const QUICK_OPEN_ENTRY_HEIGHT: f32 = 1.625;
+/// Quick Open 入口高度（1.75rem ≈ 28px，随标题栏调高）
+pub const QUICK_OPEN_ENTRY_HEIGHT: f32 = 1.75;
 /// Quick Open 入口水平内边距（0.625rem = 10px）
 pub const QUICK_OPEN_ENTRY_PADDING_X: f32 = 0.625;
 /// Quick Open 弹层宽度（35rem = 560px）

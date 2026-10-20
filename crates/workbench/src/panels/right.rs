@@ -8,7 +8,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::{ActiveTheme, IconName};
+use gpui_kit::component::{ActiveTheme};
 use gpui_kit::*;
 
 use crate::view::RightPanel;
@@ -43,6 +43,23 @@ pub struct RightSidebarPanel {
 }
 
 impl RightSidebarPanel {
+    // ===== 真面板化访问器：右 dock 模块 tab 薄壳取内层实体 =====
+
+    /// 洞察视图实体（`right_tabs::InsightPanelTab` 持有）。
+    pub(crate) fn insight_entity(&self) -> Entity<InsightView> {
+        self.insight_panel.clone()
+    }
+
+    /// Mock 面板实体（`right_tabs::MockPanelTab` 持有）。
+    pub(crate) fn mock_entity(&self) -> Entity<MockPanel> {
+        self.mock_panel.clone()
+    }
+
+    /// 历史面板实体（`right_tabs::HistoryPanelTab` 持有）。
+    pub(crate) fn history_entity(&self) -> Entity<HistoryView> {
+        self.history_panel.clone()
+    }
+
     pub fn new(shared: Shared, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // 构造期创建 Mock 面板实体（不触 I/O）：导航右键定向导入结构需要在事件路径
         // 拿到句柄，懒创建（首帧 render）会让「先右键、后面板尚未渲染」的路径丢目标。
@@ -241,33 +258,16 @@ impl ComponentPanel for RightSidebarPanel {
             .child(self.shared.active_right.get().label())
     }
 
-    /// M7：Mock 面板标题栏工具栏的「新增表」入口（+）。
-    ///
-    /// 与右 Dock 清单里的草稿行同一目标（`DetailTarget::Draft`）：打开 / 聚焦中央
-    /// 草稿 tab（空态起手卡片）。只对 Mock 面板显示——洞察 / 历史 / 存档详情没有
-    /// 「新建一张表」的动作，不该多一个会误导的按钮。
-    /// 挂点用 `toolbar_buttons`（面板头工具栏，VSCode 侧栏惯例，只渲染一次）而
-    /// 非 `title_suffix`：右 Dock 已设 `PanelStyle::TabBar`，title_suffix 会在
-    /// 「每个 tab + 栏尾」渲染两遍（它是为 dirty dot / 自定义关闭设计的）。
+    /// M7：Mock 面板标题栏不再放工具栏按钮（2026-10-18 对齐原型）：
+    /// 「＋ 新增 Mock 表 / ⇄ 引用结构 / ▦ 新增场景 / ⟳ 刷新」全部迁到**面板内工具栏**
+    /// （标题栏下方一排，mock_view 渲染）。标题栏只留标题——TabBar 样式下
+    /// `toolbar_buttons` 仍是唯一可靠的挂点（`title_suffix` 渲染两遍），
+    /// 只是本轮起没有需要挂在这里的动作了。
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<Button>> {
-        if self.shared.active_right.get() != RightPanel::Mock {
-            return None;
-        }
-        let mock_panel = self.mock_panel.clone();
-        Some(vec![Button::new("mock-new-table").icon(IconName::Plus).on_click(
-            move |_, window, app| {
-                mock_panel.update(app, |panel, cx| {
-                    panel.open_detail_for(
-                        mock::mock_view::DetailTarget::Draft,
-                        window,
-                        cx,
-                    );
-                });
-            },
-        )])
+        None
     }
 }

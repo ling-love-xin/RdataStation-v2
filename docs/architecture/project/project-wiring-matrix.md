@@ -38,7 +38,7 @@
 | `update_meta` / `set_pinned` / `set_archived` | ✅ | 重命名 / 固定 / 归档 |
 | `load_default_connection` / `save_default_connection` | ✅ | 默认连接（U3） |
 | `soft_remove` / `restore` / `delete_disk` / `forget` | ✅ | 软删 / 恢复 / 硬删 / 移出 |
-| `has_recent_available` | ✅ | 会话解析辅助 |
+| `has_recent_available` | 🔴 生产零调用（仅测试） | 会话解析辅助；暂无用例，保留为预留能力 |
 | `relocate` | ✅ | 重新定位 |
 | `list_versions` / `create_version` / `ensure_project_meta` | ✅ | **手动快照台账**（唯一在用的版本能力） |
 

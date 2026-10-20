@@ -7,6 +7,7 @@ pub mod cache_dialog;
 pub use connection_dialog::components::connection_dialog;
 pub mod group_form_dialog;
 pub mod group_manager_dialog;
+pub mod tag_manager_dialog;
 pub mod saved_view_dialog;
 pub mod insight_actions;
 pub mod log_dialog;

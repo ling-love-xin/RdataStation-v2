@@ -953,6 +953,10 @@ mod tests {
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
     const PAYLOAD_MODE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/023_analytics_resource_payload_mode.sql");
+    /// 关联表去 tag 外键（标签定义上移全局库，规格 §7.2；跨库无法 FK 约束）。
+    const TAG_LINK_FK_MIGRATION_SQL: &str = include_str!(
+        "../../engine/migrations/project_meta/024_analytics_resource_tags_drop_tag_fk.sql"
+    );
 
     /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
     ///
@@ -980,8 +984,12 @@ mod tests {
             inner
                 .execute_batch(PAYLOAD_MODE_MIGRATION_SQL)
                 .expect("migration 023");
+            inner
+                .execute_batch(TAG_LINK_FK_MIGRATION_SQL)
+                .expect("migration 024");
         }
-        let store = AnalyticsResourceStore::new(pool);
+        // 全局标签库注入本测试独立路径（避免共享进程级隔离根 → 跨测试同名标签冲突）。
+        let store = AnalyticsResourceStore::new_for_test(pool, dir.join("global.db"));
         (
             ArchiveService::new(&dir, store).with_keep_versions(keep_versions),
             dir,

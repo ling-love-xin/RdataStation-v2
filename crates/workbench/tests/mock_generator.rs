@@ -284,11 +284,11 @@ fn scratchpad_without_project_errors() {
     let err = save_scratchpad(&info, &MockExportFormat::Csv, None).expect_err("应报错");
     assert!(err.contains("未打开项目"), "err: {err}");
 
-    // 有项目根：写入 {项目}/mock/mock_<表>_<时间戳>.csv
+    // 有项目根：写入 {项目}/scratchpad/mock/mock_<表>_<时间戳>.csv（必须落在草稿箱扫描的 scratchpad 树下）
     let message = save_scratchpad(&info, &MockExportFormat::Csv, Some(&dir))
         .expect("save to scratchpad");
     assert!(message.contains("已保存到草稿箱"), "{message}");
-    let mock_dir = dir.join("mock");
+    let mock_dir = dir.join("scratchpad").join("mock");
     let saved: Vec<String> = std::fs::read_dir(&mock_dir)
         .expect("mock dir")
         .filter_map(|e| e.ok())

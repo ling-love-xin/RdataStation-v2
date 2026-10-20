@@ -19,6 +19,10 @@ use gpui_kit::{Pixels, px};
 // 清单行行高必须与 M4 导航 / M5 草稿箱的列表行同值（同一份 `ROW_HEIGHT`）；
 // 选中行的左侧标识条走共用原语 `workbench_shell::tree::active_bar`（不在本 crate 手搓）。
 pub use workbench_shell::ui::ROW_HEIGHT;
+/// 工具栏行高（26px，与数据导航筛选行同档；对齐原型 30px 行的视觉密度）
+pub use workbench_shell::ui::CONTROL_HEIGHT_SM;
+/// 固定描边（工具栏底部分隔线）
+pub use workbench_shell::ui::HAIRLINE;
 
 // ===== 本 crate 自有尺寸 =====
 

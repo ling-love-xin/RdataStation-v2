@@ -4,7 +4,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use sqlx::{Column, ConnectOptions as _, Pool, Postgres, Row, TypeInfo as _};
+use sqlx::{Column, ConnectOptions as _, Pool, Postgres, Row, SqlSafeStr, Statement, TypeInfo as _};
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
@@ -286,6 +286,28 @@ fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
 
+/// 0 行结果的列名兜底：`SELECT` 空表 / 过滤后无匹配行时 `rows` 为空，
+/// 但结果集**仍有列结构**（洞察的空表取样靠列名建「有列无行」的临时表，
+/// 此前 0 行直接给空列，导致 `result_columns_and_rows` 报「取样没有拿到列」）。
+///
+/// 做法：单独 `prepare` 一次拿 statement 的列描述（不再执行查询）；
+/// prepare 失败按原路径报错（与 fetch 阶段同一错误包装）。
+async fn describe_columns_pg(
+    conn: &mut sqlx::PgConnection,
+    sql: &str,
+) -> Result<Vec<String>, CoreError> {
+    use sqlx::Executor as _;
+    let statement = conn
+        .prepare(sqlx::AssertSqlSafe(sql).into_sql_str())
+        .await
+        .map_err(|e| query_error(sql, e))?;
+    Ok(statement
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect())
+}
+
 /// 把查询结果装进 `QueryResult`。
 ///
 /// `is_read_only` 要**真的填进去**：出口层（`SqlService` 的历史记录）据它决定这行结论
@@ -372,9 +394,13 @@ impl Database for PostgresDatabase {
             tracing::warn!(elapsed_ms = t_qry, sql = %sql.chars().take(120).collect::<String>(), "PG 查询执行偏慢（>500ms）");
         }
         if rows.is_empty() {
+            // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+            let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+            let columns = describe_columns_pg(conn, sql).await?;
             return Ok(QueryResult {
-                columns: vec![],
+                columns,
                 batches: vec![],
+                is_read_only: Some(read_only),
                 ..Default::default()
             });
         }
@@ -439,9 +465,13 @@ impl Database for PostgresDatabase {
         }
 
         if rows.is_empty() {
+            // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+            let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
+            let columns = describe_columns_pg(conn, sql).await?;
             return Ok(QueryResult {
-                columns: vec![],
+                columns,
                 batches: vec![],
+                is_read_only: Some(read_only),
                 ..Default::default()
             });
         }
@@ -481,9 +511,12 @@ impl Database for PostgresDatabase {
                     .map_err(|e| query_error(&sql_owned, e))?;
 
                 if rows.is_empty() {
+                    // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
+                    let columns = describe_columns_pg(&mut conn, &sql_owned).await?;
                     return Ok(QueryResult {
-                        columns: vec![],
+                        columns,
                         batches: vec![],
+                        is_read_only: Some(read_only),
                         ..Default::default()
                     });
                 }

@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洞察工作区原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --coral-bright: #C25B46;
+    --coral-fg: #FFFFFF;
+    --active: #2A2A2A;
+    --hover: #2A2A2A;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --titlebar-h: 36px;
+    --activity-w: 48px;
+    --left-w: 240px;
+    --right-w: 280px;
+    --status-h: 22px;
+    --tab-h: 36px;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); min-width: 940px; }
+  @media (max-width: 980px) {
+    body { overflow-x: auto; }
+  }
+  button { font-family: inherit; font-size: 12px; color: var(--text); background: transparent; border: none; cursor: pointer; }
+  button:focus-visible { outline: 1px solid var(--coral); outline-offset: -1px; }
+  select { font-family: inherit; font-size: 12px; color: var(--text); background: var(--editor); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #3A3A3A; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  /* ===== 标题栏 ===== */
+  .titlebar { height: var(--titlebar-h); flex: none; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 12px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  .tb-logo { width: 20px; height: 20px; border-radius: 4px; background: var(--coral); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 11px; }
+  .tb-slot { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: #252526; border-radius: 4px; font-size: 12px; }
+  .tb-slot .k { color: var(--dim); }
+  .tb-center { flex: 1; display: flex; justify-content: center; }
+  .quick-open { width: 320px; height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 10px; background: #252526; border-radius: 4px; color: var(--dim); font-size: 12px; cursor: pointer; }
+  .quick-open:hover { background: #2A2A2A; }
+  .tb-right { display: flex; align-items: center; gap: 2px; }
+  .win-btn { width: 36px; height: 30px; display: flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 4px; }
+  .win-btn:hover { background: var(--hover); color: var(--text); }
+  .win-btn.close:hover { background: var(--danger); color: #fff; }
+
+  /* ===== 工作区 ===== */
+  .workbench { flex: 1; display: flex; min-height: 0; }
+  .activity { width: var(--activity-w); flex: none; background: var(--chrome); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 4px; }
+  .activity.right { border-right: none; border-left: 1px solid var(--border); }
+  .activity .icon { position: relative; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--dim); }
+  .activity .icon:hover { background: var(--hover); color: var(--text); }
+  .activity .icon.active { color: #fff; }
+  .activity .icon.active::before { content: ""; position: absolute; left: -4px; top: 8px; bottom: 8px; width: 2px; background: #fff; border-radius: 1px; }
+  .activity .icon .badge { position: absolute; top: 4px; right: 4px; min-width: 14px; height: 14px; padding: 0 3px; background: var(--coral); color: #fff; border-radius: 7px; font-size: 10px; line-height: 14px; text-align: center; }
+  .activity .spacer { flex: 1; }
+
+  /* ===== Dock ===== */
+  .dock { flex: none; display: flex; flex-direction: column; background: var(--chrome); min-height: 0; }
+  .dock.left { width: var(--left-w); border-right: 1px solid var(--border); }
+  .dock.right { width: var(--right-w); border-left: 1px solid var(--border); }
+  .dock-head { height: var(--tab-h); flex: none; display: flex; align-items: center; padding: 0 10px; color: var(--muted); font-size: 11px; letter-spacing: 0.5px; }
+  .dock-head .right { margin-left: auto; display: flex; gap: 2px; }
+  .dock-head .icon-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 4px; }
+  .dock-head .icon-btn:hover { background: var(--hover); color: var(--text); }
+
+  /* ===== 导航树 ===== */
+  .tree { flex: 1; overflow-y: auto; padding: 4px 0 12px; }
+  .tree-row { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; font-size: 12.5px; color: var(--text); cursor: pointer; user-select: none; white-space: nowrap; }
+  .tree-row:hover { background: var(--hover); }
+  .tree-row.selected { background: var(--active); }
+  .tree-row .chev { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--dim); transition: transform 0.12s; }
+  .tree-row .chev.open { transform: rotate(90deg); }
+  .tree-row .chev.leaf { visibility: hidden; }
+  .tree-row .nm { overflow: hidden; text-overflow: ellipsis; }
+  .tree-row .meta { margin-left: auto; color: var(--dim); font-size: 11px; flex: none; }
+  .tree-row .chk { flex: none; width: 14px; height: 14px; border: 1px solid var(--dim); border-radius: 3px; display: flex; align-items: center; justify-content: center; margin-right: 2px; }
+  .tree-row .chk.checked { background: var(--coral); border-color: var(--coral); }
+  .tree-row .chk.checked::after { content: ""; width: 6px; height: 3px; border-left: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(-45deg) translate(0, -1px); }
+  .tree-children { margin-left: 16px; }
+  .tree-row.kind-conn { color: #E8E8E8; }
+  .tree-row.kind-table { padding-left: 16px; }
+  .tree-row .tt { color: var(--info); font-family: var(--mono); font-size: 11.5px; }
+
+  /* ===== 中央 tab 条 ===== */
+  .center { flex: 1; display: flex; flex-direction: column; background: var(--editor); min-width: 0; min-height: 0; }
+  .tab-strip { height: var(--tab-h); flex: none; display: flex; align-items: stretch; background: var(--chrome); border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tab-strip::-webkit-scrollbar { height: 0; }
+  .ctab { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 12.5px; color: var(--muted); border-right: 1px solid var(--border); max-width: 200px; white-space: nowrap; cursor: pointer; position: relative; }
+  .ctab .nm { overflow: hidden; text-overflow: ellipsis; }
+  .ctab .close { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 3px; color: var(--dim); }
+  .ctab .close:hover { background: var(--hover); color: var(--text); }
+  .ctab.active { color: var(--text); background: var(--editor); }
+  .ctab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--coral); }
+  .ctab .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--dim); }
+  .ctab .dot.busy { background: var(--warning); animation: pulse 1s infinite; }
+  .ctab .dot.done { background: var(--success); }
+  .ctab .dot.conn { background: var(--info); }
+  .tab-new { width: 34px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--dim); cursor: pointer; }
+  .tab-new:hover { color: var(--text); }
+
+  /* ===== 中央内容 ===== */
+  .center-body { flex: 1; min-height: 0; position: relative; }
+  .page { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .page.active { display: flex; }
+  .page-title { height: 34px; flex: none; display: flex; align-items: center; padding: 0 14px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border-soft); }
+  .page-scroll { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+  /* ===== 洞察工作页 ===== */
+  .insight-toolbar { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); background: var(--editor); }
+  .insight-toolbar .divider { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 4px; color: var(--text); background: transparent; border: 1px solid var(--border); font-size: 12px; }
+  .btn:hover { background: var(--hover); border-color: #3A3A3A; }
+  .btn.primary { background: var(--coral); border-color: var(--coral); color: #fff; }
+  .btn.primary:hover { background: var(--coral-bright); }
+  .btn.ghost { border-color: transparent; }
+  .btn.ghost:hover { background: var(--hover); border-color: transparent; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn .b-ico { width: 14px; height: 14px; flex: none; }
+  .target-chip { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 4px; background: #252526; font-size: 12px; max-width: 300px; overflow: hidden; }
+  .target-chip .conn { color: var(--muted); }
+  .target-chip .sep { color: var(--dim); }
+  .target-chip .tbl { font-family: var(--mono); color: var(--info); }
+  .toolbar-spacer { flex: 1; }
+
+  /* ===== 卡片 ===== */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+  .card .k { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .card .v { font-size: 18px; font-weight: 600; color: var(--text); font-family: var(--mono); }
+  .card .s { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .panel { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; }
+  .panel-head { height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border-soft); }
+  .panel-head .tag { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--dim); }
+  .panel-body { padding: 12px 14px; }
+
+  /* ===== 评分卡 ===== */
+  .score-wrap { display: flex; gap: 24px; align-items: flex-start; }
+  .score-ring { width: 88px; height: 88px; flex: none; position: relative; }
+  .score-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .score-ring .val { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .score-ring .val .n { font-size: 24px; font-weight: 700; font-family: var(--mono); }
+  .score-ring .val .l { font-size: 10px; color: var(--muted); }
+  .dims { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+  .dim-row { display: grid; grid-template-columns: 64px 1fr 32px; align-items: center; gap: 8px; font-size: 12px; }
+  .dim-row .bar { height: 6px; background: #2E2E2E; border-radius: 3px; overflow: hidden; }
+  .dim-row .bar i { display: block; height: 100%; border-radius: 3px; background: var(--coral); }
+  .dim-row .sc { text-align: right; font-family: var(--mono); color: var(--muted); }
+
+  /* ===== 直方图 ===== */
+  .hist { display: flex; flex-direction: column; gap: 6px; }
+  .hist-row { display: grid; grid-template-columns: 90px 1fr 52px; align-items: center; gap: 10px; font-size: 12px; }
+  .hist-row .lb { color: var(--muted); font-family: var(--mono); text-align: right; }
+  .hist-row .bar { height: 14px; background: #2E2E2E; border-radius: 3px; overflow: hidden; }
+  .hist-row .bar i { display: block; height: 100%; background: var(--coral-bright); border-radius: 3px; opacity: 0.85; }
+  .hist-row .pc { font-family: var(--mono); color: var(--muted); }
+
+  /* ===== 表格 ===== */
+  table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.data th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.data td { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); font-family: var(--mono); white-space: nowrap; }
+  table.data tr:hover td { background: var(--hover); }
+  table.data .ok { color: var(--success); }
+  table.data .warn { color: var(--warning); }
+  table.data .bad { color: var(--danger); }
+
+  /* ===== 右栏摘要 ===== */
+  .right-tabs { height: 30px; flex: none; display: flex; border-bottom: 1px solid var(--border); }
+  .rtab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .rtab:hover { color: var(--text); }
+  .rtab.active { color: var(--text); border-bottom-color: var(--coral); }
+  .right-body { flex: 1; overflow-y: auto; padding: 10px; }
+  .summary-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
+  .summary-card .sc-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+  .summary-card .sc-head .tt { font-family: var(--mono); color: var(--info); }
+  .kv { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: var(--mono); }
+  .kv .v.good { color: var(--success); }
+  .kv .v.bad { color: var(--danger); }
+  .empty-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--muted); }
+  .empty-state .ico { width: 44px; height: 44px; border-radius: 10px; background: var(--popover); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--dim); }
+  .empty-state .t { font-size: 13px; color: var(--text); }
+  .empty-state .d { font-size: 12px; line-height: 1.6; }
+
+  /* ===== 取样进度 ===== */
+  .sample-progress { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+  .sp-title { font-size: 12.5px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .sp-stage { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .sp-stage .step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  .sp-stage .step .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--dim); flex: none; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+  .sp-stage .step.done { color: var(--muted); }
+  .sp-stage .step.done .dot { background: var(--success); border-color: var(--success); color: #fff; }
+  .sp-stage .step.busy { color: var(--text); }
+  .sp-stage .step.busy .dot { border-color: var(--coral); border-top-color: transparent; animation: spin 0.8s linear infinite; }
+  .sp-stage .step .ln { width: 20px; height: 1px; background: var(--border); }
+  .sp-note { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .sp-note .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); animation: pulse 1s infinite; }
+  .sp-bar { height: 6px; background: #2E2E2E; border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .sp-bar i { display: block; height: 100%; width: 30%; background: linear-gradient(90deg, var(--coral), var(--coral-bright)); border-radius: 3px; animation: slide 1.2s ease-in-out infinite; }
+  .sp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .sp-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-soft); }
+  .sp-table td:first-child { color: var(--muted); width: 90px; }
+  .sp-skeleton { display: flex; flex-direction: column; gap: 10px; }
+  .sk { height: 14px; border-radius: 4px; background: linear-gradient(90deg, #242424 25%, #2C2C2C 50%, #242424 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  .sk.w60 { width: 60%; } .sk.w80 { width: 80%; } .sk.w40 { width: 40%; } .sk.h20 { height: 20px; } .sk.h40 { height: 40px; }
+
+  /* ===== 多表对比 ===== */
+  .compare-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); }
+  .compare-head .info { font-size: 12px; color: var(--muted); }
+  .progress-line { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+  .progress-line .pbar { flex: 1; height: 5px; background: #2E2E2E; border-radius: 3px; overflow: hidden; }
+  .progress-line .pbar i { display: block; height: 100%; background: var(--coral); border-radius: 3px; transition: width 0.3s; }
+
+  /* ===== 状态栏 ===== */
+  .statusbar { height: var(--status-h); flex: none; display: flex; align-items: center; background: var(--coral); color: var(--coral-fg); font-size: 11px; padding: 0 10px; gap: 12px; }
+  .statusbar .sbtn { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 3px; color: var(--coral-fg); }
+  .statusbar .sbtn:hover { background: rgba(255,255,255,0.15); }
+  .statusbar .right { margin-left: auto; display: flex; gap: 12px; }
+  .statusbar .item { display: flex; align-items: center; gap: 4px; }
+
+  /* ===== 右键菜单 ===== */
+  .ctx-menu { position: fixed; z-index: 200; min-width: 180px; background: var(--popover); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); }
+  .ctx-menu .mi { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 4px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+  .ctx-menu .mi:hover { background: var(--hover); }
+  .ctx-menu .mi .mi-ico { width: 14px; height: 14px; flex: none; color: var(--muted); }
+  .ctx-menu .mi .mi-key { margin-left: auto; font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  .ctx-menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+  /* ===== 下拉 ===== */
+  .menu-pop { position: fixed; z-index: 210; min-width: 180px; background: var(--popover); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); }
+  .menu-pop .mi { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 4px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+  .menu-pop .mi:hover { background: var(--hover); }
+  .menu-pop .mi .mi-ico { width: 14px; height: 14px; flex: none; color: var(--muted); }
+  .menu-pop .mi .tick { margin-left: auto; color: var(--coral); font-size: 13px; }
+
+  /* ===== Toast ===== */
+  .toast-wrap { position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 300; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast { background: var(--popover); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; font-size: 12.5px; color: var(--text); box-shadow: 0 6px 20px rgba(0,0,0,0.4); animation: rise 0.18s ease-out; }
+  .toast .k { color: var(--dim); }
+
+  /* ===== 历史 Tab ===== */
+  .hist-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  .hist-item:hover { background: var(--hover); }
+  .hist-item .hi-ico { width: 22px; height: 22px; flex: none; border-radius: 5px; background: #252526; display: flex; align-items: center; justify-content: center; color: var(--info); }
+  .hist-item .hi-main { flex: 1; min-width: 0; }
+  .hist-item .hi-t { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist-item .hi-s { font-size: 11px; color: var(--dim); margin-top: 1px; }
+
+  /* ===== 动画 ===== */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .ico { width: 18px; height: 18px; flex: none; }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .note { font-size: 11px; color: var(--dim); margin-top: 12px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== 标题栏 ===== -->
+  <div class="titlebar">
+    <div class="tb-logo">RS</div>
+    <div class="tb-slot"><span class="k">项目</span><span>RdataStation-v2</span></div>
+    <div class="tb-center">
+      <div class="quick-open" id="quickOpen">
+        <svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5 L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span>快速打开（Ctrl+P）</span>
+      </div>
+    </div>
+    <div class="tb-right">
+      <button class="win-btn" id="winMin" title="最小化"><svg class="ico" viewBox="0 0 16 16"><path d="M3 8h10" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn" id="winMax" title="最大化"><svg class="ico" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" stroke="currentColor" stroke-width="1.2" fill="none"/></svg></button>
+      <button class="win-btn close" id="winClose" title="关闭"><svg class="ico" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    </div>
+  </div>
+
+  <div class="workbench">
+    <!-- ===== 左活动栏 ===== -->
+    <div class="activity">
+      <div class="icon" data-activity="scratch"><svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M5 6.5h6M5 9h4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+      <div class="icon active" data-activity="nav"><svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><circle cx="5.5" cy="5.5" r="1.2" fill="currentColor"/><path d="M5.5 8v3.5M9.5 5.5H12M9.5 8H12M9.5 10.5H12" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+      <div class="icon" data-activity="res"><svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-width="0.8"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg></div>
+      <div class="icon" data-activity="plug"><svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M6 2.5v3M10 2.5v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><rect x="5" y="5" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M8 9v2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="12.5" r="1" fill="currentColor"/></svg></div>
+    </div>
+
+    <!-- ===== 左 Dock：导航树 ===== -->
+    <div class="dock left">
+      <div class="dock-head">数据库导航</div>
+      <div class="tree" id="navTree"></div>
+    </div>
+
+    <!-- ===== 中央 ===== -->
+    <div class="center">
+      <div class="tab-strip" id="tabStrip"></div>
+      <div class="center-body" id="centerBody"></div>
+    </div>
+
+    <!-- ===== 右 Dock：洞察摘要 ===== -->
+    <div class="dock right">
+      <div class="dock-head">
+        <span>洞察</span>
+        <span class="right">
+          <button class="icon-btn" id="insightRules" title="规则管理"><svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.8" stroke="currentColor" stroke-width="1.3"/><path d="M8 2.8v1.8M8 11.4v1.8M2.8 8h1.8M11.4 8h1.8M4.3 4.3l1.3 1.3M10.4 10.4l1.3 1.3M11.7 4.3l-1.3 1.3M5.6 10.4l-1.3 1.3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></button>
+          <button class="icon-btn" id="insightRefresh" title="刷新"><svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M13 8a5 5 0 1 1-1.4-3.4M13 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </span>
+      </div>
+      <div class="right-tabs" id="rightTabs"></div>
+      <div class="right-body" id="rightBody"></div>
+    </div>
+
+    <!-- ===== 右活动栏 ===== -->
+    <div class="activity right">
+      <div class="icon active" data-activity="insight"><svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M2.5 12.5L6 6l2.5 4 2-3.5 3 6" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/><circle cx="6.5" cy="3.5" r="1.2" fill="currentColor"/></svg><span class="badge" id="insightBadge">0</span></div>
+      <div class="icon" data-activity="mock"><svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M6 6h4M6 8.5h4M6 11h2.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+      <div class="icon" data-activity="history"><svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 3.5a4.5 4.5 0 1 1-3.7 7.2M3.5 8H1.8M3.5 8l2-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8 5.5V8l1.8 1.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></div>
+      <div class="spacer"></div>
+      <div class="icon" data-activity="settings"><svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.3" stroke="currentColor" stroke-width="1.3"/><path d="M8 2.8v1.6M8 11.6v1.6M2.8 8h1.6M11.6 8h1.6M4.2 4.2l1.1 1.1M10.7 10.7l1.1 1.1M11.8 4.2l-1.1 1.1M5.3 10.7l-1.1 1.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg></div>
+    </div>
+  </div>
+
+  <!-- ===== 状态栏 ===== -->
+  <div class="statusbar">
+    <button class="sbtn" id="hideSidebars"><span>« 完全隐藏</span></button>
+    <button class="sbtn" id="activityIndicator"><span>◉</span><span>工作正常</span></button>
+    <div class="right">
+      <span class="item" id="statusConn">MySQL · 192.168.3.138</span>
+      <span class="item">DuckDB 就绪</span>
+      <span class="item">UTF-8</span>
+    </div>
+  </div>
+</div>
+
+<!-- 弹层容器 -->
+<div id="overlay"></div>
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+/* ===== 数据 ===== */
+const ICONS = {
+  conn: '<svg class="ico" viewBox="0 0 16 16" fill="none"><ellipse cx="8" cy="8" rx="6" ry="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5.4v5.2M2 8c0 1.44 2.69 2.6 6 2.6s6-1.16 6-2.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+  schema: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M2.5 5.5h11M2.5 5.5L4 3h8l1.5 2.5v7a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z" stroke="currentColor" stroke-width="1.2"/></svg>',
+  table: '<svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="3" width="11" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M2.5 6.5h11M6 6.5V13" stroke="currentColor" stroke-width="1.1"/></svg>',
+  view: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M2.5 8s2.2-3.5 5.5-3.5 5.5 3.5 5.5 3.5-2.2 3.5-5.5 3.5S2.5 8 2.5 8z" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+  proc: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M4 2.5v11M12 2.5v11M2.5 4h11M2.5 12h11" stroke="currentColor" stroke-width="1.2"/></svg>',
+  func: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M9.5 3.5c-1 0-1.5.8-1.5 2v2.5c0 1.2-.5 2-1.5 2s-1.5-.8-1.5-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 7h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  seq: '<svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="3.5" y="4.5" width="9" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M6 8h4M8 6v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  refresh: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M13 8a5 5 0 1 1-1.4-3.4M13 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  download: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 2.5v7M4.8 6.5L8 9.8l3.2-3.3M3 12.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  clock: '<svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  flask: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M6.5 2.5v3.5L3 13a1.5 1.5 0 0 0 1.3 2.2h7.4A1.5 1.5 0 0 0 13 13L9.5 6V2.5M5.5 2.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  eye: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M2.5 8s2.2-3.5 5.5-3.5 5.5 3.5 5.5 3.5-2.2 3.5-5.5 3.5S2.5 8 2.5 8z" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="1.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+  grid: '<svg class="ico" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="9" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/></svg>',
+  columns: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M2.5 3h11v10h-11z" stroke="currentColor" stroke-width="1.2"/><path d="M6.5 3v10M11 3v10" stroke="currentColor" stroke-width="1.1"/></svg>',
+  layers: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 2.5l6 3-6 3-6-3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2.5 8.5l5.5 2.8 5.5-2.8M2.5 11l5.5 2.8L13.5 11" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
+  history: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 3.5a4.5 4.5 0 1 1-3.7 7.2M3.5 8H1.8M3.5 8l2-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8 5.5V8l1.8 1.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  check: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M3 8.5L6.5 12L13 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  alert: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 2.8L14 13H2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8 6v3.2M8 11.2v.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  info: '<svg class="ico" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 7v3.5M8 5.2v.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  play: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
+  pause: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M5.5 3v10M10.5 3v10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  chevR: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  close: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  plus: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  file: '<svg class="ico" viewBox="0 0 16 16" fill="none"><path d="M3.5 2.5h6l3 3v8h-9z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9.5 2.5v3h3" stroke="currentColor" stroke-width="1.1"/></svg>',
+};
+
+/* 连接树 */
+const TREE = [
+  { id: "c1", kind: "conn", name: "全局 MySQL", host: "192.168.3.138", driver: "MySQL", open: false, children: [
+    { id: "c1s1", kind: "schema", name: "main", open: false, children: [
+      { id: "c1s1t", kind: "cat", name: "表", icon: "table", open: false, children: [
+        { id: "c1s1t1", kind: "table", name: "batch_insert_order", rows: 12845302 },
+        { id: "c1s1t2", kind: "table", name: "batch_insert_payment", rows: 8044321 },
+        { id: "c1s1t3", kind: "table", name: "batch_insert_product", rows: 120044 },
+        { id: "c1s1t4", kind: "table", name: "batch_insert_user", rows: 3512008 },
+        { id: "c1s1t5", kind: "table", name: "orders", rows: 12845302 },
+        { id: "c1s1t6", kind: "table", name: "order_item", rows: 30412077 },
+        { id: "c1s1t7", kind: "table", name: "payment_record", rows: 9045122 },
+        { id: "c1s1t8", kind: "table", name: "users", rows: 3512008 },
+      ]},
+      { id: "c1s1v", kind: "cat", name: "视图", icon: "view", open: false, children: [
+        { id: "c1s1v1", kind: "view", name: "v_order_summary", rows: 12845302 },
+        { id: "c1s1v2", kind: "view", name: "v_payment_daily", rows: 89213 },
+      ]},
+      { id: "c1s1p", kind: "cat", name: "存储过程", icon: "proc", open: false, children: [
+        { id: "c1s1p1", kind: "proc", name: "sp_order_batch" },
+        { id: "c1s1p2", kind: "proc", name: "sp_cleanup_expired" },
+      ]},
+    ]},
+  ]},
+  { id: "c2", kind: "conn", name: "SQLite EN", host: "本地文件", driver: "SQLite", open: false, children: [
+    { id: "c2s1", kind: "schema", name: "main", open: false, children: [
+      { id: "c2s1t", kind: "cat", name: "表", icon: "table", open: false, children: [
+        { id: "c2s1t1", kind: "table", name: "users", rows: 1240 },
+        { id: "c2s1t2", kind: "table", name: "sessions", rows: 458 },
+        { id: "c2s1t3", kind: "table", name: "audit_log", rows: 22140 },
+      ]},
+    ]},
+  ]},
+  { id: "c3", kind: "conn", name: "DuckDB EN", host: "内存库", driver: "DuckDB", open: false, children: [
+    { id: "c3s1", kind: "schema", name: "main", open: false, children: [
+      { id: "c3s1t", kind: "cat", name: "表", icon: "table", open: false, children: [
+        { id: "c3s1t1", kind: "table", name: "analytics_events", rows: 5012330 },
+        { id: "c3s1t2", kind: "table", name: "user_dim", rows: 1240 },
+      ]},
+    ]},
+  ]},
+  { id: "c4", kind: "conn", name: "AD1", host: "192.168.3.100", driver: "MySQL", open: false, children: [
+    { id: "c4s1", kind: "schema", name: "main", open: false, children: [
+      { id: "c4s1t", kind: "cat", name: "表", icon: "table", open: false, children: [
+        { id: "c4s1t1", kind: "table", name: "mall_business", rows: 90213 },
+        { id: "c4s1t2", kind: "table", name: "product", rows: 120044 },
+      ]},
+    ]},
+  ]},
+];
+
+/* 列画像模拟数据（按表 id） */
+const PROFILES = {
+  "c1s1t1": {
+    conn: "全局 MySQL 192.168.3.138", tbl: "batch_insert_order", rows: "12,845,302", cols: 12,
+    sample: "500 行", sampleMs: "8.4s", score: 82, grade: "良好",
+    dims: [["完整性", 92], ["唯一性", 78], ["类型一致", 100], ["分布均匀", 63]],
+    hist: [["0–999", 58.2], ["1k–1.9k", 31.0], ["2k–2.9k", 8.4], ["3k+", 2.4]],
+    columns: [
+      ["id", "BIGINT", 0, 100, "主键"],
+      ["order_no", "VARCHAR(32)", 0.2, 99.8, ""],
+      ["status", "TINYINT", 0.4, 6.2, "索引"],
+      ["amount", "DECIMAL(10,2)", 5.0, 88.1, ""],
+      ["customer_id", "BIGINT", 1.2, 71.3, "外键"],
+      ["created_at", "DATETIME", 0, 100, "索引"],
+    ],
+    notes: ["空值率 5.0% 接近阈值", "分布右偏（偏度 3.42）", "customer_id 存在孤儿引用 12 条"],
+    viewCols: [["id", "BIGINT"], ["order_no", "VARCHAR(32)"], ["status", "TINYINT"], ["amount", "DECIMAL(10,2)"], ["customer_id", "BIGINT"], ["created_at", "DATETIME"]],
+  },
+  "c1s1t5": {
+    conn: "全局 MySQL 192.168.3.138", tbl: "orders", rows: "12,845,302", cols: 12,
+    sample: "500 行", sampleMs: "8.4s", score: 82, grade: "良好",
+    dims: [["完整性", 92], ["唯一性", 78], ["类型一致", 100], ["分布均匀", 63]],
+    hist: [["0–999", 58.2], ["1k–1.9k", 31.0], ["2k–2.9k", 8.4], ["3k+", 2.4]],
+    columns: [
+      ["id", "BIGINT", 0, 100, "主键"],
+      ["order_no", "VARCHAR(32)", 0.2, 99.8, ""],
+      ["status", "TINYINT", 0.4, 6.2, "索引"],
+      ["amount", "DECIMAL(10,2)", 5.0, 88.1, ""],
+      ["customer_id", "BIGINT", 1.2, 71.3, "外键"],
+      ["created_at", "DATETIME", 0, 100, "索引"],
+    ],
+    notes: ["空值率 5.0% 接近阈值", "分布右偏（偏度 3.42）", "customer_id 存在孤儿引用 12 条"],
+    viewCols: [["id", "BIGINT"], ["order_no", "VARCHAR(32)"], ["status", "TINYINT"], ["amount", "DECIMAL(10,2)"], ["customer_id", "BIGINT"], ["created_at", "DATETIME"]],
+  },
+  "c1s1t6": {
+    conn: "全局 MySQL 192.168.3.138", tbl: "order_item", rows: "30,412,077", cols: 9,
+    sample: "500 行", sampleMs: "12.1s", score: 91, grade: "优秀",
+    dims: [["完整性", 97], ["唯一性", 88], ["类型一致", 100], ["分布均匀", 79]],
+    hist: [["0–99", 34.5], ["100–499", 41.2], ["500–999", 18.3], ["1k+", 6.0]],
+    columns: [
+      ["id", "BIGINT", 0, 100, "主键"],
+      ["order_id", "BIGINT", 0, 92.4, "外键"],
+      ["product_id", "BIGINT", 0.1, 68.8, "外键"],
+      ["quantity", "INT", 0.3, 44.2, ""],
+      ["price", "DECIMAL(10,2)", 0.8, 81.5, ""],
+    ],
+    notes: ["完整性良好", "quantity 分布较集中"],
+    viewCols: [["id", "BIGINT"], ["order_id", "BIGINT"], ["product_id", "BIGINT"], ["quantity", "INT"], ["price", "DECIMAL(10,2)"]],
+  },
+  "c1s1t7": {
+    conn: "全局 MySQL 192.168.3.138", tbl: "payment_record", rows: "9,045,122", cols: 8,
+    sample: "500 行", sampleMs: "6.2s", score: 76, grade: "良好",
+    dims: [["完整性", 84], ["唯一性", 72], ["类型一致", 95], ["分布均匀", 58]],
+    hist: [["0–999", 62.0], ["1k–4.9k", 26.4], ["5k–9.9k", 8.1], ["10k+", 3.5]],
+    columns: [
+      ["id", "BIGINT", 0, 100, "主键"],
+      ["order_id", "BIGINT", 0.5, 90.1, "外键"],
+      ["channel", "VARCHAR(16)", 3.2, 8.4, ""],
+      ["pay_time", "DATETIME", 1.0, 99.2, "索引"],
+      ["amount", "DECIMAL(10,2)", 2.8, 79.6, ""],
+    ],
+    notes: ["channel 空值率 3.2%", "存在 2 笔金额为 0 的异常记录"],
+    viewCols: [["id", "BIGINT"], ["order_id", "BIGINT"], ["channel", "VARCHAR(16)"], ["pay_time", "DATETIME"], ["amount", "DECIMAL(10,2)"]],
+  },
+  "c2s1t1": {
+    conn: "SQLite EN main", tbl: "users", rows: "1,240", cols: 7,
+    sample: "500 行", sampleMs: "0.2s", score: 95, grade: "优秀",
+    dims: [["完整性", 99], ["唯一性", 94], ["类型一致", 100], ["分布均匀", 88]],
+    hist: [["0–19", 22.0], ["20–39", 45.0], ["40–59", 24.0], ["60+", 9.0]],
+    columns: [
+      ["id", "INTEGER", 0, 100, "主键"],
+      ["name", "TEXT", 0, 99.6, ""],
+      ["email", "TEXT", 0.4, 99.1, "唯一"],
+      ["age", "INTEGER", 2.1, 40.2, ""],
+    ],
+    notes: ["小表，取样覆盖率高"],
+    viewCols: [["id", "INTEGER"], ["name", "TEXT"], ["email", "TEXT"], ["age", "INTEGER"]],
+  },
+  "c1s1t2": {
+    conn: "全局 MySQL 192.168.3.138", tbl: "batch_insert_payment", rows: "8,044,321", cols: 9,
+    sample: "500 行", sampleMs: "5.8s", score: 79, grade: "良好",
+    dims: [["完整性", 88], ["唯一性", 74], ["类型一致", 96], ["分布均匀", 60]],
+    hist: [["0–999", 55.0], ["1k–4.9k", 30.1], ["5k–9.9k", 10.2], ["10k+", 4.7]],
+    columns: [
+      ["id", "BIGINT", 0, 100, "主键"],
+      ["batch_no", "VARCHAR(24)", 0, 88.3, "索引"],
+      ["channel", "VARCHAR(16)", 2.0, 9.1, ""],
+      ["amount", "DECIMAL(10,2)", 3.5, 77.2, ""],
+    ],
+    notes: ["batch_no 索引存在碎片", "amount 空值率 3.5%"],
+    viewCols: [["id", "BIGINT"], ["batch_no", "VARCHAR(24)"], ["channel", "VARCHAR(16)"], ["amount", "DECIMAL(10,2)"]],
+  },
+  "c3s1t1": {
+    conn: "DuckDB EN main", tbl: "analytics_events", rows: "5,012,330", cols: 14,
+    sample: "500 行", sampleMs: "3.1s", score: 88, grade: "优秀",
+    dims: [["完整性", 95], ["唯一性", 82], ["类型一致", 100], ["分布均匀", 74]],
+    hist: [["0–99", 28.0], ["100–499", 44.0], ["500–999", 20.0], ["1k+", 8.0]],
+    columns: [
+      ["event_id", "UBIGINT", 0, 100, "主键"],
+      ["event_type", "VARCHAR(32)", 0.1, 12.6, "索引"],
+      ["user_id", "UBIGINT", 0.8, 55.4, ""],
+      ["ts", "TIMESTAMP", 0, 100, "索引"],
+      ["payload", "JSON", 4.2, 99.9, ""],
+    ],
+    notes: ["payload JSON 空值率 4.2%", "event_type 枚举分布集中"],
+    viewCols: [["event_id", "UBIGINT"], ["event_type", "VARCHAR(32)"], ["user_id", "UBIGINT"], ["ts", "TIMESTAMP"], ["payload", "JSON"]],
+  },
+};
+
+/* 历史快照（模拟） */
+const HISTORY = [
+  { id: "h1", tbl: "orders", when: "2026-10-18 09:24", rows: "12,845,302", score: 82, note: "2 天前" },
+  { id: "h2", tbl: "orders", when: "2026-10-16 15:02", rows: "12,790,118", score: 81, note: "4 天前" },
+  { id: "h3", tbl: "payment_record", when: "2026-10-15 11:40", rows: "9,045,122", score: 76, note: "5 天前" },
+  { id: "h4", tbl: "users", when: "2026-10-12 17:33", rows: "1,240", score: 95, note: "8 天前" },
+];
+
+/* ===== 状态 ===== */
+const state = {
+  navOpen: {},       // id -> bool
+  navSelected: null, // 最近右键对象
+  selTables: new Set(), // 多选表 id
+  centerTabs: [],    // { id, kind: 'browse'|'insight'|'compare', targetId, title, status:'idle'|'busy'|'done', stage: 0..3 }
+  activeTab: 'browse',
+  rightTab: 'overview', // overview | columns | tables | multi | schema | history
+  insightBadge: 0,
+  compare: { selected: new Set(), running: false, done: false, progress: 0, results: [] },
+  busyTargets: new Set(), // 正在取数的表 id
+  timers: [],
+};
+
+/* 辅助 */
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function findNode(id){ for(const n of TREE){ const f=(nn)=>{ if(nn.id===id) return nn; for(const c of (nn.children||[])){ const r=f(c); if(r) return r; } return null; }; const r=f(n); if(r) return r; } return null; }
+function tableKey(node){ return node.kind==='table'||node.kind==='view' ? node.id : null; }
+function isBigTable(id){ const n=findNode(id); return n && n.rows > 5000000; }
+function labelOf(id){ const n=findNode(id); return n ? n.name : id; }
+function connLabelOf(id){ const n=findNode(id); if(!n) return ''; if(n.kind==='conn') return n.name; return (n.host? n.host + ' ': '') + n.name; }
+
+/* ===== 渲染 ===== */
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstElementChild; }
+
+function renderNav(){
+  const tree = document.getElementById('navTree');
+  tree.innerHTML = '';
+  for(const node of TREE){ tree.appendChild(renderNode(node, 0)); }
+}
+function renderNode(node, depth){
+  const open = !!state.navOpen[node.id];
+  const isSel = state.navSelected === node.id;
+  const pad = depth===0 ? '' : '16px';
+  const isLeaf = !node.children || node.children.length===0;
+  const meta = node.kind==='table'||node.kind==='view' ? (node.rows>=10000 ? (node.rows/10000).toFixed(1)+' 万' : node.rows) : '';
+  const chk = (node.kind==='table'||node.kind==='view');
+  const wrap = document.createElement('div');
+  let row = `<div class="tree-row kind-${node.kind}${isSel?' selected':''}" data-id="${node.id}" style="padding-left:${pad}" title="${esc(node.name)}">`;
+  if(chk){
+    row += `<span class="chk${state.selTables.has(node.id)?' checked':''}" data-chk="${node.id}"></span>`;
+  }
+  row += `<span class="chev ${open?'open':''}${isLeaf?' leaf':''}">${ICONS.chevR.replace('class="ico"','class="ico" style="width:14px;height:14px"')}</span>`;
+  row += `<span class="nm">${ICONS[node.icon||node.kind]} ${esc(node.name)}</span>`;
+  if(meta) row += `<span class="meta">${meta}</span>`;
+  row += '</div>';
+  wrap.appendChild(el(row));
+  if(node.children && open){
+    const kids = document.createElement('div');
+    kids.className = 'tree-children';
+    for(const c of node.children){ kids.appendChild(renderNode(c, depth+1)); }
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+
+/* 中央 tab */
+function renderTabs(){
+  const strip = document.getElementById('tabStrip');
+  strip.innerHTML = '';
+  const dots = { browse:'conn', insight:'done', compare:'layers' };
+  for(const t of state.centerTabs){
+    const dotCls = t.status==='busy' ? 'busy' : (t.status==='done' ? 'done' : 'idle');
+    const d = el(`<div class="ctab${state.activeTab===t.id?' active':''}" data-tab="${t.id}">
+      <span class="dot ${dotCls}"></span><span class="nm">${esc(t.title)}</span>
+      <span class="close" data-close="${t.id}">${ICONS.close.replace('class="ico"','class="ico" style="width:13px;height:13px"')}</span>
+    </div>`);
+    strip.appendChild(d);
+  }
+  const add = el(`<div class="tab-new" id="tabNew" title="新建数据浏览页">${ICONS.plus.replace('class="ico"','class="ico" style="width:16px;height:16px"')}</div>`);
+  strip.appendChild(add);
+  // 同步右活动栏洞察徽标
+  const n = state.centerTabs.filter(t=>t.kind==='insight').length;
+  const b = document.getElementById('insightBadge');
+  if(b){ b.textContent = n>0 ? String(n) : '0'; b.style.display = n>0 ? '' : 'none'; }
+}
+
+function renderCenterBody(){
+  const body = document.getElementById('centerBody');
+  body.innerHTML = '';
+  for(const t of state.centerTabs){
+    const page = el(`<div class="page${state.activeTab===t.id?' active':''}" data-page="${t.id}"></div>`);
+    if(t.id==='browse'){ page.appendChild(renderBrowsePage()); }
+    else if(t.kind==='compare'){ page.appendChild(renderComparePage(t)); }
+    else { page.appendChild(renderInsightPage(t)); }
+    body.appendChild(page);
+  }
+}
+
+/* 数据浏览占位页 */
+function renderBrowsePage(){
+  const p = document.createElement('div');
+  p.innerHTML = `
+    <div class="page-title">数据浏览 · 未命名-1</div>
+    <div class="page-scroll">
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div class="card" style="min-width:200px;flex:1"><div class="k">当前数据源</div><div class="v" style="font-size:14px">全局 MySQL 192.168.3.138</div><div class="s">main · orders</div></div>
+        <div class="card" style="min-width:200px;flex:1"><div class="k">SQL 编辑器</div><div class="v" style="font-size:14px">SELECT * FROM orders LIMIT 100</div><div class="s">最近执行 · 2.1s</div></div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-head">执行结果 <span class="tag">100 行 · 12 列</span></div>
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="data" style="table-layout:fixed">
+            <colgroup><col style="width:80px"><col style="width:140px"><col style="width:80px"><col style="width:120px"><col style="width:120px"></colgroup>
+            <thead><tr><th>id</th><th>order_no</th><th>status</th><th>amount</th><th>created_at</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>ORD-20261001-0001</td><td>2</td><td>127.35</td><td>2026-10-01 09:12:33</td></tr>
+              <tr><td>2</td><td>ORD-20261001-0002</td><td>3</td><td>88.00</td><td>2026-10-01 09:15:07</td></tr>
+              <tr><td>3</td><td>ORD-20261001-0003</td><td>1</td><td>1,024.50</td><td>2026-10-01 09:22:41</td></tr>
+              <tr><td>4</td><td>ORD-20261001-0004</td><td>2</td><td>66.00</td><td>2026-10-01 09:30:12</td></tr>
+              <tr><td>5</td><td>ORD-20261001-0005</td><td>4</td><td>509.99</td><td>2026-10-01 09:41:55</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note">提示：在导航树上右键「表」，选择「查看统计」可在中间打开洞察工作页，或在右侧查看摘要。</div>
+    </div>`;
+  return p;
+}
+
+/* 洞察工作页（中间详细版） */
+function renderInsightPage(tab){
+  const p = document.createElement('div');
+  const prof = PROFILES[tab.targetId];
+  const busy = tab.status==='busy';
+  p.innerHTML = `
+    <div class="insight-toolbar">
+      <button class="btn ghost" data-refresh="${tab.id}" title="重新取样并画像">${ICONS.refresh}<span>刷新</span></button>
+      <button class="btn ghost" data-sample="${tab.id}" title="取样控制">${ICONS.flask}<span>取样</span></button>
+      <button class="btn ghost" data-export="${tab.id}" title="导出报告">${ICONS.download}<span>导出</span></button>
+      <span class="divider"></span>
+      <select class="target-switch" data-switch="${tab.id}" title="切换洞察目标">
+        ${state.centerTabs.filter(t=>t.kind==='insight').map(t=>`<option value="${t.targetId}" ${t.targetId===tab.targetId?'selected':''}>${esc(labelOf(t.targetId))}</option>`).join('')}
+        <option value="__compare__">打开多表对比…</option>
+      </select>
+      <span class="toolbar-spacer"></span>
+      <span class="target-chip" title="当前目标"><span class="conn">${esc(prof.conn)}</span><span class="sep">·</span><span class="tbl">${esc(prof.tbl)}</span></span>
+    </div>
+    ${busy ? renderSampleProgress(tab) : renderInsightContent(prof, tab)}
+    <div style="padding:0 12px 8px;color:var(--dim);font-size:11px">原型演示 · 模拟数据 · 交互示意</div>
+  `;
+  return p;
+}
+
+/* 取样进度（两段式：源取样 → 画像） */
+function renderSampleProgress(tab){
+  const stage = tab.stage || 0;
+  const prof = PROFILES[tab.targetId];
+  const big = isBigTable(tab.targetId);
+  const step1 = stage>=1 ? 'done' : (stage===0 ? 'busy' : '');
+  const step2 = stage>=2 ? 'done' : (stage===1 ? 'busy' : '');
+  const note = stage===0 ? (big ? `正在从源库取样「${esc(prof.tbl)}」，目标约 ${prof.rows} 行，预计耗时 ${prof.sampleMs}` : `正在从源库取样「${esc(prof.tbl)}」`) : (stage===1 ? `取样完成，正在计算画像（列统计 / 评分 / 分布）` : `画像完成`);
+  return `
+    <div class="page-scroll">
+      <div class="sample-progress">
+        <div class="sp-title">${ICONS.flask} 洞察分析中 <span class="muted" style="font-weight:400">· ${esc(prof.tbl)}</span></div>
+        <div class="sp-stage">
+          <span class="step ${step1}"><span class="dot">${stage>=1?'✓':''}</span>${stage===0?'取样中':'源取样'}</span>
+          <span class="ln"></span>
+          <span class="step ${step2}"><span class="dot">${stage>=2?'✓':''}</span>${stage===1?'画像中':'画像'}</span>
+        </div>
+        <div class="sp-note"><span class="pulse"></span><span id="sampleNote">${note}</span></div>
+        <div class="sp-bar"><i></i></div>
+        ${stage>=1 ? `
+        <table class="sp-table" style="margin-top:12px">
+          <tr><td>取样行数</td><td class="mono">500 / 500</td></tr>
+          <tr><td>源目标</td><td class="mono">${esc(prof.tbl)}（${prof.rows} 行）</td></tr>
+          <tr><td>临时表</td><td class="mono">tmp_i_${esc(tab.targetId.replace(/\W/g,''))}</td></tr>
+        </table>` : ''}
+      </div>
+      <div class="sp-skeleton">
+        <div class="sk h40"></div>
+        <div class="sk w80"></div>
+        <div class="sk w60"></div>
+        <div class="sk w80"></div>
+      </div>
+    </div>`;
+}
+
+/* 洞察内容（画像结果） */
+function renderInsightContent(prof, tab){
+  const ring = 2 * Math.PI * 40;
+  const filled = ring * prof.score/100;
+  const colRows = prof.columns.map(c=>`<tr><td>${esc(c[0])}</td><td class="tt">${esc(c[1])}</td><td>${c[2]}%</td><td>${c[3]}%</td><td>${esc(c[4]||'—')}</td></tr>`).join('');
+  const histRows = prof.hist.map(h=>`<div class="hist-row"><span class="lb">${h[0]}</span><div class="bar"><i style="width:${h[1]}%"></i></div><span class="pc">${h[1]}%</span></div>`).join('');
+  const dimRows = prof.dims.map(d=>`<div class="dim-row"><span>${esc(d[0])}</span><div class="bar"><i style="width:${d[1]}%"></i></div><span class="sc">${d[1]}</span></div>`).join('');
+  const notes = prof.notes.map(n=>`<div style="display:flex;align-items:flex-start;gap:6px;font-size:12px;padding:3px 0;color:var(--muted)"><span style="flex:none">${ICONS[ n.includes('右偏')||n.includes('孤儿')?'alert':'info']}</span><span>${esc(n)}</span></div>`).join('');
+  return `
+    <div class="page-scroll">
+      <div class="cards">
+        <div class="card"><div class="k">总行数</div><div class="v">${prof.rows}</div><div class="s">源库全表</div></div>
+        <div class="card"><div class="k">列数</div><div class="v">${prof.cols}</div><div class="s">含主键 / 索引</div></div>
+        <div class="card"><div class="k">取样</div><div class="v" style="font-size:14px">${prof.sample}</div><div class="s">基于 ${prof.sample} 采样</div></div>
+        <div class="card"><div class="k">取样耗时</div><div class="v" style="font-size:14px">${prof.sampleMs}</div><div class="s">源取样 + 画像</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">质量评分 <span class="tag">${prof.grade}</span></div>
+        <div class="panel-body">
+          <div class="score-wrap">
+            <div class="score-ring">
+              <svg viewBox="0 0 88 88"><circle cx="44" cy="44" r="40" fill="none" stroke="#2E2E2E" stroke-width="8"/><circle cx="44" cy="44" r="40" fill="none" stroke="var(--coral)" stroke-width="8" stroke-linecap="round" stroke-dasharray="${filled} ${ring}"/></svg>
+              <div class="val"><div class="n">${prof.score}</div><div class="l">/ 100</div></div>
+            </div>
+            <div class="dims">${dimRows}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">数据分布 <span class="tag">amount · 直方图</span></div>
+        <div class="panel-body"><div class="hist">${histRows}</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">列画像 <span class="tag">${prof.cols} 列</span></div>
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="data">
+            <thead><tr><th>列名</th><th>类型</th><th>空值率</th><th>唯一值</th><th>角标</th></tr></thead>
+            <tbody>${colRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">质量提示</div>
+        <div class="panel-body">${notes}</div>
+      </div>
+    </div>`;
+}
+
+/* 多表对比页 */
+function renderComparePage(tab){
+  const p = document.createElement('div');
+  const sel = [...state.selTables];
+  const all = sel.length>0 ? sel : ['c1s1t1','c1s1t5','c1s1t6','c1s1t7','c2s1t1','c3s1t1'];
+  const running = state.compare.running;
+  const done = state.compare.done;
+  let head, bodyHtml = '';
+  if(!running && !done){
+    head = `<div class="compare-head">
+      <span style="font-size:13px;font-weight:600">多表洞察对比</span>
+      <span class="info">已选择 ${sel.length} 张表 · 勾选导航树「表」前的方框后可批量加入</span>
+      <span class="toolbar-spacer"></span>
+      <button class="btn primary" data-compare-run>${ICONS.play}<span>开始对比</span></button>
+    </div>`;
+    const rows = all.map(id=>{
+      const n=findNode(id); const pr=PROFILES[id] || PROFILES['c2s1t1'];
+      const checked = sel.includes(id);
+      return `<tr data-pick="${id}"><td><span class="chk ${checked?'checked':''}" data-compare-chk="${id}"></span></td><td class="tt">${esc(n.name)}</td><td>${esc(pr.conn)}</td><td>${pr.rows}</td><td>${pr.cols}</td><td>${pr.sampleMs}</td></tr>`;
+    }).join('');
+    bodyHtml = `<div class="page-scroll">
+      <div class="panel"><div class="panel-head">候选表 <span class="tag">${all.length} 张</span></div>
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="data"><thead><tr><th></th><th>表名</th><th>数据源</th><th>行数</th><th>列数</th><th>取样耗时</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>
+      </div>
+      <div class="note">对比为列表式汇总：行数 / 列数 / 取样率 / 耗时 / 健康度；点某行可在中间打开该表洞察工作页。</div>
+    </div>`;
+  } else if(running){
+    head = `<div class="compare-head">
+      <span style="font-size:13px;font-weight:600">多表洞察对比</span>
+      <span class="toolbar-spacer"></span>
+      <span class="progress-line"><span>${Math.round(state.compare.progress*100)}%</span><div class="pbar"><i style="width:${state.compare.progress*100}%"></i></div><span id="compareCur">${state.compare.cur||''}</span></span>
+    </div>`;
+    const rows = all.map(id=>{
+      const n=findNode(id);
+      const status = state.compare.cur===id ? 'busy' : '';
+      return `<tr><td class="tt">${esc(n.name)}</td><td>${status?'<span class="pulse" style="color:var(--warning)">取样中…</span>':'<span style="color:var(--dim)">排队中</span>'}</td></tr>`;
+    }).join('');
+    bodyHtml = `<div class="page-scroll"><div class="panel"><div class="panel-body" style="padding:0"><table class="data"><tbody>${rows}</tbody></table></div></div></div>`;
+  } else {
+    const rows = state.compare.results.map(r=>{
+      const healthCls = r.score>=85?'ok':(r.score>=70?'warn':'bad');
+      return `<tr data-pick="${r.id}" style="cursor:pointer"><td class="tt">${esc(r.tbl)}</td><td>${esc(r.conn)}</td><td>${r.rows}</td><td>${r.cols}</td><td>${r.sampleMs}</td><td class="${healthCls}">${r.score} 分</td><td>${esc(r.grade)}</td></tr>`;
+    }).join('');
+    head = `<div class="compare-head">
+      <span style="font-size:13px;font-weight:600">多表洞察对比</span>
+      <span class="info">${state.compare.results.length} 张表 · 已完成</span>
+      <span class="toolbar-spacer"></span>
+      <button class="btn" data-compare-again>${ICONS.refresh}<span>重新对比</span></button>
+    </div>`;
+    bodyHtml = `<div class="page-scroll">
+      <div class="panel"><div class="panel-head">对比结果 <span class="tag">点行打开洞察页</span></div>
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="data"><thead><tr><th>表名</th><th>数据源</th><th>行数</th><th>列数</th><th>取样耗时</th><th>健康分</th><th>评级</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>
+      </div>
+      <div class="note">阶段 ③ 真·并发取数（批量取样 → 聚合 → 点行进 tab）。若并发负载过大，退化为多 tab 切换（阶段 ①）。</div>
+    </div>`;
+  }
+  p.innerHTML = head + bodyHtml;
+  return p;
+}
+
+/* ===== 右栏摘要 ===== */
+const RIGHT_TABS = [['overview','摘要'],['columns','列'],['tables','表'],['multi','多列'],['schema','结构'],['history','历史']];
+function renderRightTabs(){
+  const el2 = document.getElementById('rightTabs');
+  el2.innerHTML = RIGHT_TABS.map(t=>`<div class="rtab${state.rightTab===t[0]?' active':''}" data-rtab="${t[0]}">${t[1]}</div>`).join('');
+}
+function renderRightBody(){
+  const body = document.getElementById('rightBody');
+  body.innerHTML = '';
+  const active = state.centerTabs.find(t=>t.id===state.activeTab && t.kind==='insight');
+  const prof = active && PROFILES[active.targetId];
+  if(state.rightTab==='history'){
+    body.appendChild(renderRightHistory());
+    return;
+  }
+  if(!active || !prof){
+    body.innerHTML = `<div class="empty-state">
+      <div class="ico">${ICONS.eye}</div>
+      <div class="t">暂无洞察目标</div>
+      <div class="d">在结果列表头或导航树上右键，选择「查看统计」<br>中间区域将打开洞察工作页，本栏同步显示摘要</div>
+    </div>`;
+    return;
+  }
+  const ring = 2*Math.PI*34;
+  const filled = ring*prof.score/100;
+  let content = '';
+  if(state.rightTab==='overview'){
+    content = `
+      <div class="summary-card">
+        <div class="sc-head">${ICONS.table} <span class="tt">${esc(prof.tbl)}</span><span class="muted" style="margin-left:auto;font-size:11px">${esc(prof.conn)}</span></div>
+        <div class="kv"><span class="k">总行数</span><span class="v">${prof.rows}</span></div>
+        <div class="kv"><span class="k">列数</span><span class="v">${prof.cols}</span></div>
+        <div class="kv"><span class="k">取样</span><span class="v">${prof.sample} / ${prof.sampleMs}</span></div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-head">${ICONS.check} 质量评分 <span class="muted" style="margin-left:auto;font-size:11px">${prof.grade}</span></div>
+        <div class="score-ring" style="width:68px;height:68px;margin:6px auto 10px">
+          <svg viewBox="0 0 68 68"><circle cx="34" cy="34" r="30" fill="none" stroke="#2E2E2E" stroke-width="6"/><circle cx="34" cy="34" r="30" fill="none" stroke="var(--coral)" stroke-width="6" stroke-linecap="round" stroke-dasharray="${filled} ${ring}"/></svg>
+          <div class="val"><div class="n" style="font-size:19px">${prof.score}</div></div>
+        </div>
+        ${prof.dims.map(d=>`<div class="dim-row" style="grid-template-columns:48px 1fr 28px"><span style="font-size:11px">${esc(d[0])}</span><div class="bar"><i style="width:${d[1]}%"></i></div><span class="sc" style="font-size:11px">${d[1]}</span></div>`).join('')}
+      </div>
+      <div class="summary-card"><div class="sc-head">${ICONS.alert} 质量提示</div>
+        ${prof.notes.slice(0,2).map(n=>`<div style="font-size:11.5px;color:var(--muted);padding:2px 0">· ${esc(n)}</div>`).join('')}
+      </div>`;
+  } else if(state.rightTab==='columns'){
+    content = `<div class="summary-card"><div class="sc-head">${ICONS.columns} 列画像 <span class="muted" style="margin-left:auto;font-size:11px">${prof.cols} 列</span></div>
+      ${prof.columns.slice(0,5).map(c=>`<div class="kv"><span class="k">${esc(c[0])}</span><span class="v" style="color:var(--info)">${esc(c[1])}</span></div>`).join('')}
+      </div>`;
+  } else if(state.rightTab==='tables'){
+    content = `<div class="summary-card"><div class="sc-head">${ICONS.grid} 表概况</div>
+      <div class="kv"><span class="k">引擎</span><span class="v">InnoDB</span></div>
+      <div class="kv"><span class="k">索引</span><span class="v">3</span></div>
+      <div class="kv"><span class="k">估算大小</span><span class="v">1.2 GB</span></div>
+      </div>`;
+  } else if(state.rightTab==='multi'){
+    content = `<div class="summary-card"><div class="sc-head">${ICONS.layers} 多列分析</div>
+      <div class="kv"><span class="k">相关列对</span><span class="v">amount × quantity</span></div>
+      <div class="kv"><span class="k">相关系数</span><span class="v">0.82</span></div>
+      <div class="kv"><span class="k">交叉分组</span><span class="v">status × channel</span></div>
+      </div>`;
+  } else if(state.rightTab==='schema'){
+    content = `<div class="summary-card"><div class="sc-head">${ICONS.layers} 结构洞察</div>
+      <div class="kv"><span class="k">外键</span><span class="v">1</span></div>
+      <div class="kv"><span class="k">孤立表</span><span class="v good">0</span></div>
+      <div class="kv"><span class="k">类型不一致</span><span class="v good">0</span></div>
+      <div class="kv"><span class="k">健康分</span><span class="v">88</span></div>
+      </div>`;
+  }
+  body.innerHTML = content;
+}
+function renderRightHistory(){
+  const items = HISTORY.map(h=>`<div class="hist-item" data-hopen="${h.id}">
+    <div class="hi-ico">${ICONS.history}</div>
+    <div class="hi-main"><div class="hi-t">${esc(h.tbl)} · ${h.score} 分</div><div class="hi-s">${h.when} · ${h.rows} 行 · ${h.note}</div></div>
+  </div>`).join('');
+  return el(`<div>
+    <div class="summary-card" style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:12px;font-weight:600">洞察快照历史</span><span style="font-size:11px;color:var(--dim)">保留 30 天</span></div>
+    ${items}
+    <div class="note">历史对比列表（阶段 ②）：不重新取数，复用快照记录逐条对比。</div>
+  </div>`);
+}
+
+/* ===== 事件 ===== */
+document.addEventListener('click', e => {
+  // 导航树
+  const row = e.target.closest('.tree-row');
+  if(row){
+    const id = row.dataset.id;
+    const node = findNode(id);
+    if(node && node.children && node.children.length){
+      state.navOpen[id] = !state.navOpen[id];
+      renderNav();
+    } else {
+      state.navSelected = id;
+      renderNav();
+    }
+    return;
+  }
+  const chk = e.target.closest('[data-chk]');
+  if(chk){
+    const id = chk.dataset.chk;
+    if(state.selTables.has(id)) state.selTables.delete(id); else state.selTables.add(id);
+    renderNav();
+    const cmp = state.centerTabs.find(t=>t.kind==='compare');
+    if(cmp){ renderCenterBody(); }
+    return;
+  }
+  // 中央 tab 切换 / 关闭
+  const tab = e.target.closest('[data-tab]');
+  if(tab){ state.activeTab = tab.dataset.tab; renderTabs(); renderCenterBody(); renderRightBody(); return; }
+  const close = e.target.closest('[data-close]');
+  if(close){
+    const id = close.dataset.close;
+    state.centerTabs = state.centerTabs.filter(t=>t.id!==id);
+    if(state.activeTab===id){
+      state.activeTab = state.centerTabs.length>0 ? state.centerTabs[0].id : 'browse';
+      if(state.centerTabs.length===0){ state.centerTabs.push({id:'browse',kind:'browse',title:'数据浏览',status:'done'}); state.activeTab='browse'; }
+    }
+    renderTabs(); renderCenterBody(); renderRightBody();
+    return;
+  }
+  // 右栏 tab
+  const rtab = e.target.closest('[data-rtab]');
+  if(rtab){ state.rightTab = rtab.dataset.rtab; renderRightTabs(); renderRightBody(); return; }
+  // 洞察页工具栏
+  const refresh = e.target.closest('[data-refresh]');
+  if(refresh){ runSample(refresh.dataset.refresh); return; }
+  const sampleBtn = e.target.closest('[data-sample]');
+  if(sampleBtn){ showSampleMenu(sampleBtn, sampleBtn.dataset.sample); return; }
+  const exportBtn = e.target.closest('[data-export]');
+  if(exportBtn){ toast('导出', '原型演示：导出 JSON / Markdown 报告'); return; }
+  const switchSel = e.target.closest('[data-switch]');
+  if(switchSel){ /* 下拉 onchange 单独处理 */ return; }
+  // 对比
+  const runBtn = e.target.closest('[data-compare-run]');
+  if(runBtn){ startCompare(); return; }
+  const againBtn = e.target.closest('[data-compare-again]');
+  if(againBtn){ state.compare.running=false; state.compare.done=false; state.compare.progress=0; renderCenterBody(); return; }
+  const cchk = e.target.closest('[data-compare-chk]');
+  if(cchk){
+    const id = cchk.dataset.compareChk;
+    if(state.selTables.has(id)) state.selTables.delete(id); else state.selTables.add(id);
+    renderNav(); renderCenterBody();
+    return;
+  }
+  const pick = e.target.closest('[data-pick]');
+  if(pick){ openInsightFor(pick.dataset.pick); return; }
+  const hopen = e.target.closest('[data-hopen]');
+  if(hopen){ toast('快照', '原型演示：在中间打开该次快照'); return; }
+  const act = e.target.closest('.activity .icon');
+  if(act){ const k=act.dataset.activity; if(k==='insight'){ ensureRightDock(); toast('洞察','右侧洞察摘要面板'); } else { toast('活动栏', '原型演示：' + k); } return; }
+  const hide = e.target.closest('#hideSidebars');
+  if(hide){ document.querySelector('.dock.left').style.display = document.querySelector('.dock.left').style.display==='none'?'':'none'; document.querySelector('.dock.right').style.display = document.querySelector('.dock.right').style.display==='none'?'':'none'; return; }
+  const tabNew = e.target.closest('#tabNew');
+  if(tabNew){
+    state.centerTabs.push({id:'browse-'+(state.centerTabs.length+1),kind:'browse',title:'数据浏览',status:'done'});
+    state.activeTab=state.centerTabs[state.centerTabs.length-1].id;
+    renderTabs(); renderCenterBody();
+    return;
+  }
+});
+
+/* 右键菜单 */
+document.addEventListener('contextmenu', e => {
+  const row = e.target.closest('.tree-row');
+  if(row){
+    e.preventDefault();
+    const id = row.dataset.id;
+    const node = findNode(id);
+    if(node && (node.kind==='table'||node.kind==='view'||node.kind==='schema'||node.kind==='conn')){
+      state.navSelected = id;
+      renderNav();
+      showCtxMenu(e.clientX, e.clientY, node);
+    }
+  }
+});
+function showCtxMenu(x, y, node){
+  closeOverlay();
+  const wrap = document.createElement('div');
+  wrap.className = 'ctx-menu';
+  const key = node.kind==='table'||node.kind==='view';
+  wrap.innerHTML = `
+    <div class="mi" data-act="stats" data-id="${node.id}">${ICONS.flask}<span>查看统计</span><span class="mi-key">${key?'T':'⌘T'}</span></div>
+    <div class="mi" data-act="schema" data-id="${node.id}">${ICONS.layers}<span>结构洞察</span></div>
+    ${key ? `<div class="mi" data-act="insight" data-id="${node.id}">${ICONS.eye}<span>查看洞察</span></div>` : ''}
+    <div class="sep"></div>
+    <div class="mi" data-act="copy" data-id="${node.id}">${ICONS.file}<span>复制名称</span></div>`;
+  wrap.style.left = Math.min(x, window.innerWidth-210) + 'px';
+  wrap.style.top = Math.min(y, window.innerHeight-180) + 'px';
+  wrap.addEventListener('click', ev => {
+    const mi = ev.target.closest('[data-act]');
+    if(mi){
+      const act = mi.dataset.act, id = mi.dataset.id;
+      if(act==='stats'){ openInsightFor(id); }
+      else if(act==='schema'){ openInsightFor(id); toast('结构洞察','原型演示：结构报告页'); }
+      else if(act==='insight'){ openInsightFor(id); }
+      else if(act==='copy'){ toast('复制','已复制 ' + labelOf(id)); }
+    }
+    closeOverlay();
+  });
+  document.getElementById('overlay').appendChild(wrap);
+}
+
+/* 取样菜单 */
+function showSampleMenu(btn, tabId){
+  closeOverlay();
+  const rect = btn.getBoundingClientRect();
+  const wrap = document.createElement('div');
+  wrap.className = 'menu-pop';
+  wrap.innerHTML = `
+    <div class="mi" data-size="500">取样 500 行<span class="tick" id="sz500">✓</span></div>
+    <div class="mi" data-size="2000">取样 2000 行</div>
+    <div class="mi" data-size="full">全表取样</div>`;
+  wrap.style.left = rect.left + 'px';
+  wrap.style.top = (rect.bottom + 6) + 'px';
+  wrap.addEventListener('click', ev => {
+    const mi = ev.target.closest('[data-size]');
+    if(mi){ toast('取样', '已切换为 ' + mi.dataset.size + (mi.dataset.size==='full'?'（大表全表扫描，谨慎）':' 行') + '，重新取样'); runSample(tabId); }
+    closeOverlay();
+  });
+  document.getElementById('overlay').appendChild(wrap);
+}
+
+function closeOverlay(){ const o=document.getElementById('overlay'); o.innerHTML=''; }
+document.addEventListener('click', e => { if(!e.target.closest('.ctx-menu') && !e.target.closest('.menu-pop')) closeOverlay(); });
+
+/* ===== 动作 ===== */
+function openInsightFor(id){
+  const node = findNode(id);
+  if(!node || !(node.kind==='table'||node.kind==='view')){
+    toast('洞察', '该节点暂不支持洞察（原型仅表 / 视图可分析）');
+    return;
+  }
+  const exist = state.centerTabs.find(t=>t.kind==='insight' && t.targetId===id);
+  if(exist){
+    state.activeTab = exist.id;
+    renderTabs(); renderCenterBody(); renderRightBody();
+    toast('洞察', '已激活现有洞察页：' + labelOf(id));
+    return;
+  }
+  const tabId = 'ins-' + id + '-' + Date.now();
+  state.centerTabs.push({ id: tabId, kind:'insight', targetId: id, title:'洞察：'+labelOf(id), status:'busy', stage:0 });
+  state.activeTab = tabId;
+  state.insightBadge = state.centerTabs.filter(t=>t.kind==='insight').length;
+  renderTabs(); renderCenterBody(); renderRightBody();
+  runSample(tabId);
+}
+
+function runSample(tabId){
+  const tab = state.centerTabs.find(t=>t.id===tabId);
+  if(!tab) return;
+  tab.status='busy'; tab.stage=0;
+  renderCenterBody(); renderRightBody();
+  const prof = PROFILES[tab.targetId];
+  const big = isBigTable(tab.targetId);
+  const t1 = big ? 2200 : 900;
+  const t2 = big ? 2600 : 1000;
+  clearTimers();
+  state.timers.push(setTimeout(()=>{ tab.stage=1; renderCenterBody(); renderRightBody(); }, t1));
+  state.timers.push(setTimeout(()=>{
+    tab.stage=2; tab.status='done';
+    renderTabs(); renderCenterBody(); renderRightBody();
+    toast('洞察完成', labelOf(tab.targetId) + ' 画像就绪');
+  }, t1+t2));
+}
+function clearTimers(){ state.timers.forEach(clearTimeout); state.timers=[]; }
+
+function startCompare(){
+  const targets = [...(state.selTables.size? state.selTables : ['c1s1t1','c1s1t5','c1s1t6','c1s1t7','c2s1t1'])];
+  if(!state.centerTabs.find(t=>t.kind==='compare')){
+    state.centerTabs.push({ id:'compare', kind:'compare', title:'多表对比', status:'done' });
+  }
+  state.activeTab='compare';
+  state.compare.running=true; state.compare.done=false; state.compare.progress=0; state.compare.cur='';
+  state.compare.results=[];
+  renderTabs(); renderCenterBody();
+  let i=0;
+  const step = ()=>{
+    if(i>=targets.length){ state.compare.running=false; state.compare.done=true; state.compare.progress=1; renderCenterBody(); toast('对比完成', targets.length+' 张表已聚合'); return; }
+    const id=targets[i]; const pr=PROFILES[id] || PROFILES['c2s1t1'];
+    state.compare.cur=id;
+    state.compare.progress = (i+0.5)/targets.length;
+    renderCenterBody();
+    setTimeout(()=>{
+      state.compare.results.push({ id, tbl: labelOf(id), conn: pr.conn, rows: pr.rows, cols: pr.cols, sampleMs: pr.sampleMs, score: pr.score, grade: pr.grade });
+      i++;
+      state.compare.progress = i/targets.length;
+      renderCenterBody();
+      setTimeout(step, 350);
+    }, 500);
+  };
+  setTimeout(step, 400);
+}
+
+function ensureRightDock(){
+  const d=document.querySelector('.dock.right');
+  if(d.style.display==='none') d.style.display='';
+}
+
+function toast(title, msg){
+  const w=document.getElementById('toastWrap');
+  const t=el(`<div class="toast"><span class="k">${esc(title)}</span> · ${esc(msg)}</div>`);
+  w.appendChild(t);
+  setTimeout(()=>{ t.remove(); }, 2600);
+}
+
+/* 下拉切换目标 */
+document.addEventListener('change', e => {
+  const sel = e.target.closest('[data-switch]');
+  if(!sel) return;
+  const tabId = sel.dataset.switch;
+  const val = sel.value;
+  if(val==='__compare__'){
+    const cmp = state.centerTabs.find(t=>t.kind==='compare');
+    if(!cmp){ state.centerTabs.push({id:'compare',kind:'compare',title:'多表对比',status:'done'}); }
+    state.activeTab='compare';
+    renderTabs(); renderCenterBody(); renderRightBody();
+    return;
+  }
+  const tab = state.centerTabs.find(t=>t.id===tabId);
+  if(tab){ tab.targetId=val; tab.title='洞察：'+labelOf(val); tab.status='busy'; tab.stage=0; state.activeTab=tabId; renderTabs(); renderCenterBody(); renderRightBody(); runSample(tabId); }
+});
+
+/* 窗口按钮 */
+document.getElementById('winMin').addEventListener('click', ()=>toast('最小化','原型演示'));
+document.getElementById('winMax').addEventListener('click', ()=>toast('最大化','原型演示'));
+document.getElementById('winClose').addEventListener('click', ()=>toast('关闭','原型演示：关闭窗口'));
+document.getElementById('insightRules').addEventListener('click', ()=>toast('规则管理','原型演示：打开规则管理对话框'));
+document.getElementById('insightRefresh').addEventListener('click', ()=>{
+  const active=state.centerTabs.find(t=>t.id===state.activeTab && t.kind==='insight');
+  if(active){ runSample(active.id); } else { toast('刷新','当前无洞察目标'); }
+});
+
+document.getElementById('insightBadge').textContent='0';
+document.getElementById('activityIndicator').addEventListener('click', ()=>toast('活动指示','原型演示：DuckDB 引擎工作正常'));
+document.getElementById('quickOpen').addEventListener('click', ()=>toast('快速打开','原型演示：Ctrl+P 快速打开文件 / 表'));
+
+/* ===== 初始化 ===== */
+state.centerTabs.push({ id:'browse', kind:'browse', title:'数据浏览', status:'done' });
+state.activeTab='browse';
+renderNav(); renderTabs(); renderCenterBody(); renderRightTabs(); renderRightBody();
+// 支持 #insight=表id / #compare 直接进入演示态（原型自检与直达入口）
+(function(){
+  const h = location.hash;
+  if(h.indexOf('#insight=')===0){
+    const id = h.slice('#insight='.length);
+    if(findNode(id)) setTimeout(()=>openInsightFor(id), 50);
+  } else if(h==='#compare'){
+    setTimeout(()=>{ startCompare(); }, 50);
+  }
+})();
+
+</script>
+</body>
+</html>

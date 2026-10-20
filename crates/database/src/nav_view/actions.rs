@@ -166,7 +166,7 @@ impl NavView {
             .borrow()
             .tags
             .values()
-            .flat_map(|v| v.iter().cloned())
+            .flat_map(|v| v.iter().map(|t| t.name.clone()))
             .collect();
         let mut types: Vec<(String, String)> = types.into_iter().collect();
         types.sort_by(|a, b| a.1.cmp(&b.1));

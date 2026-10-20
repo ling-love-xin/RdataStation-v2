@@ -160,6 +160,7 @@ mod stub_host {
         }
         fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_group_manager(&self, _window: &mut Window, _cx: &mut App) {}
+        fn open_tag_manager(&self, _window: &mut Window, _cx: &mut App) {}
         fn saved_views(&self, _cx: &App) -> Vec<SavedViewMeta> {
             Vec::new()
         }
@@ -709,7 +710,18 @@ fn collected_rows_match_render_order(cx: &mut gpui_kit::TestAppContext) {
         view.update(cx, |view, cx| {
             let mut state = view.nav.borrow_mut();
             state.jumped.clear();
-            state.tags.insert(conn.to_string(), vec!["表".to_string()]);
+            state.tags.insert(
+                conn.to_string(),
+                vec![tag::Tag {
+                    id: "t1".to_string(),
+                    name: "表".to_string(),
+                    color: None,
+                    icon: None,
+                    scope: tag::SCOPE_GLOBAL.to_string(),
+                    created_at: String::new(),
+                    deleted_at: None,
+                }],
+            );
             cx.notify();
         });
         set_search_text(&view, "表", window, cx);

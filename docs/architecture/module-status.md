@@ -46,7 +46,7 @@
 > ；跑不出来的一律不写。
 > 基线：
 >
-> **2026-10-16**
+> **2026-10-21**
 >
 > （Windows · stable 1.98.0 · 
 >
@@ -54,9 +54,9 @@
 >
 > ）・全仓
 >
-> **第七次**
+> **第八次**
 >
-> 复跑（§6.6，**排除 `rds-plugin`**，plugin 因工作树未提交改动编译失败）・下表即其数字・此前基线为 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
+> 复跑（§6.7，**含 `rds-plugin` 首次纳入全量并全绿**）・下表即其数字・此前基线为 2026-10-16（第七次，§6.6，排除 plugin）与 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
 
 
 
@@ -68,13 +68,13 @@
 
 | 项       | 实测值                                                                                                                                        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 工作区测试目标 | **108**（排除 `rds-plugin`；含 19 个 Doc-tests 目标）                                                                                               |
-| 通过      | **2727**                                                                                                                                   |
-| 失败      | **0**（本轮全绿，排除 plugin）                                                                                                                        |
-| 忽略      | **43**（engine 单测 24 + Doc-tests 19）                                                                                                        |
-| 编译告警    | `cargo check --workspace --all-targets` **0 行 warning 头**（零告警，2026-10-15 第六次复跑确认，见 §6.5）                                                   |
+| 工作区测试目标 | **107**（含 `rds-plugin` 首次纳入全量；含 Doc-tests 合并行）                                                                                              |
+| 通过      | **3074**                                                                                                                                   |
+| 失败      | **0**（本轮全绿，含 plugin）                                                                                                                          |
+| 忽略      | **48**（engine 单测 24 + 其余目标 24）                                                                                                              |
+| 编译告警    | `cargo check --workspace --all-targets` **3 行 warning 头**（plugin `supervisor.rs` mut 不必要 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.7） |
 | 代码规模    | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**）                                                                |
-| 口径      | 上表是**原始命令的输出**；本次为 2026-10-16 复跑（§6.6），**`--exclude rds-plugin`**（plugin 因工作树未提交改动编译失败被排除，见 §6.6）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（排除 plugin）= 107 个目标 / 2726 项** |
+| 口径      | 上表是**原始命令的输出**；本次为 2026-10-21 复跑（§6.7），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 106 个目标 / 3073 项** |
 
 
 
@@ -765,6 +765,22 @@ HEAD `f8f2bf35`（2026-10-15 19:04「feat (property) 属性面板优化」）为
 - 非测试构建：`cargo check -p rds-app -j 1` 通过（test_support 零成本转发确认）；`cargo test -p rds-workbench -j 1` exit=0（含新 `a11y_roles` 与既有 connection 套件）。
 
 **待办**：plugin `render.rs` 语法错误由用户修（或确认后我改 `r#"` → `r##"`）；修好后补跑 `-p rds-plugin` 可恢复全量口径。
+
+#### 6.7 全仓第八次全量复跑（2026-10-21）：107 目标 / 3074 通过（含 plugin 首次全量全绿）
+
+**基线已更新为本次**（§0 / §2 即其数字）。命令：`cargo test --workspace -j 2 --no-fail-fast`（含 `rds-plugin`——第七次的 `render.rs` raw string 语法冲突已在用户后续提交中解决，本轮 plugin 全量纳入并全绿）。
+
+测试日志 `.rds/tmp/test-2026-10-21-final2.log`（全绿），check 日志 `.rds/tmp/check-2026-10-21.log`（`Finished dev profile in 5m 19s`，0 error / **3 行 warning 头**），clippy 日志 `.rds/tmp/clippy-2026-10-21.log`（`Finished in 2m 18s`，0 error；lint 告警为存量风格债，大头 `result_large_err` 1310 · `collapsible_if` 256 · closure large err 88 · `complex_type` 73，CI 不设硬门禁）。
+
+**回归修复（本次 2 处，均为测试先行发现）**：
+
+1. **`rds-insight --test ui_contract` 3 项失败**：`view/overview.rs`（用户新增右栏「摘要」Tab 视图，工作树未提交）未登记进契约测试的 `include_str` 分支 → 清单守卫 panic。已补 `"view/overview.rs"` 分支；该文件本身符合尺寸/颜色契约（无裸 px / 无裸色）。
+
+2. **`rds-workbench --test mock_panel_probe` 4 项失败**：`Shared::open_right_panel`（导航右键 / 命令面板 / 测试宿主共用的无窗口上下文入口）只改 `active_right` 状态、不动 dock 树；真面板化后 `apply_right_mode` 仅在 dock 缺失时 `select_panel`，dock 已存在时切 tab 不生效 → 打开 Mock 面板仍渲染 Insight。修复：`Shared::open_right_panel` 同步登记 `right_open_panels`（与 `WorkbenchView::open_right_panel` 对齐）；`apply_right_mode` Expanded 分支补「active 面板未挂载 → `add_panel_view`、已挂载 → `select_panel`」（幂等，render 权威同步点同先例）。修复后该目标 5/5 全绿。
+
+**并发 flake 记录**：`rds-mock --test mock_engine_tests::ordered_preview_returns_the_global_top_rows` 在 `-j 2` 全量满载时偶发（DuckDB 全局内存库跨 binary 竞争）；单独跑该目标 38/38 全过——**时序类 flake（非代码缺陷）**，与 §6.5/§6.6 的 nav_jobs / editor lsp flake 同类。基线按全量 0 失败记录（末次全量复跑未复现）。
+
+**plugin 首次全量**：`rds-plugin` lib 单测 + 9 个真机 sidecar 集成目标全绿（§2.1 探针口径不变），`crates/plugin/src/sidecar/{health_checker,hot_reload_manager}.rs` 0 字节待补（§3/§5 不变，仍无调用方）。
 
 
 

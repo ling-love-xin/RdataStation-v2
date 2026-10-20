@@ -120,7 +120,7 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 ### 实际运行截图
 
-> 以下为 **2026-10-17 真实运行中的 rds-app**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
+> 以下为 **2026-10-18 真实运行中的 rds-app**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
 
 | 截图 | 说明 |
 | --- | --- |
@@ -128,7 +128,7 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 | ![数据库导航](assets/screenshots/RDS-beta-0.2.2/database-navigator.png) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
 | ![SQL 编辑器](assets/screenshots/RDS-beta-0.2.2/editor-sql.png) | **SQL 编辑器**：SQL 工具栏（执行 / 全部运行 / 格式化 / 更多）· 执行位置（源库 · 本地加速 · 联邦）· 欢迎引导 |
 | ![资产库](assets/screenshots/RDS-beta-0.2.2/analytics-resource.png) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
-| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：列表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键选择洞察） |
+| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：列 / 表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键，选择洞察） |
 | ![Mock 生成](assets/screenshots/RDS-beta-0.2.2/mock.png) | **Mock 生成（M7）**：标题栏 **+** 入口打开 Mock 草稿 tab（列定义 / 表名 / 行数 / 预览）· 右侧清单面板（目标行数 · 生成状态（未生成 / 生成中 / 已生成 / 已落库）· 出口选项（持久化 / 追加 / 草稿箱 / 另存）） |
 | ![查询历史](assets/screenshots/RDS-beta-0.2.2/history.png) | **查询历史**：SQL 执行留痕（语句 · 时间 · 耗时 · 返回行 · 引擎）· 搜索与清空 |
 | ![草稿箱](assets/screenshots/RDS-beta-0.2.2/scratchpad.png) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
@@ -284,6 +284,7 @@ RdataStation-v2/
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | **beta 0.1.0**（`RDS-beta-0.1.0`） | ✅ 已发布 | Windows x86_64 分发包 + sha256 挂载 Release；云端构建流水线已修复（beta 阶段矩阵收敛为 Windows） |
+| **beta 0.2.3**（`RDS-beta-0.2.3`） | 🚀 构建中 | 2026-10-21，工作区版本 `0.2.3`（补丁级）；全仓第八次复跑 **107 目标 / 3074 通过 / 0 失败**（plugin 首次纳入全量全绿）；含右 dock 面板化装配修复（`Shared::open_right_panel` dock 同步）与洞察契约登记修复 |
 | **beta 0.2.2**（`RDS-beta-0.2.2`） | ✅ 已发布 | 2026-10-16，工作区版本 `0.2.2`（补丁级）；含 UI 调整进度与 10-16 测试基线更新，Release 由云端 CI 构建挂载 |
 | **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | ✅ 已发布 | 基于 gpui-kit 0.7.1 的版本线；0.2.1 为上一版本（工作区版本 `0.2.1`） |
 | **gpui-kit 0.7.0 → 0.7.1 升级** | ✅ 已合入 main | 分支 `verify/gpui-kit-0.7` → main（2026-10-01，`RDS-beta-0.2.0` 基于此）；`render_dialog_layer` 手动挂载移除（0.7 由 Root 自动挂载），全仓 0 error / 0 warning；`a11y_roles` 等 4 项集成目标已在 0.7.1 下全过 |
@@ -466,11 +467,13 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 
 测试分四层：**纯函数单测** → **GPUI headless 窗口测试** → **集成 / 契约测试** → **真机探针**（需真数据库，默认 `#[ignore]`，约定「默认 `cargo test` 不依赖外部服务」）。
 
-> **最新全量基线（2026-10-16，第七次复跑，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.6）**：
+> **最新全量基线（2026-10-21，第八次复跑，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.7）**：
 >
-> - `cargo test --workspace --exclude rds-plugin -j 2` = **108 个目标 · 2727 通过 · 43 忽略 · 0 失败**（排除 plugin：其 `render.rs` 测试断言 raw string 定界符冲突来自工作树未提交改动，修后补跑可恢复全量口径；plugin 亦因 wasmtime 在 Windows+rustc 1.98 崩溃而未纳入基线）
-> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **107 个目标 · 2726 项通过**；`rds-workbench` 含新增 `a11y_roles` 集成目标 4 项（gpui-kit headless 断言）
-> - 并发 flake 记录：`rds-editor --lib` 的 `lsp::client` 2 项在 `-j 2` 下偶发「事件未收到」，`--test-threads=1` 6/6 全过——时序类 flake，非代码缺陷
+> - `cargo test --workspace -j 2 --no-fail-fast` = **107 个目标 · 3074 通过 · 48 忽略 · 0 失败**（**含 `rds-plugin` 首次纳入全量并全绿**——第七次排除 plugin 的 `render.rs` raw string 定界符冲突已在用户后续提交中解决）
+> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **106 个目标 · 3073 项通过**
+> - 编译门禁：`cargo check --workspace --all-targets` 0 error / 3 行 warning 头（plugin `supervisor.rs` mut · workbench unused import · kernel unused var）；`clippy` 0 error（lint 告警为存量风格债，CI 不设硬门禁）
+> - 本次修复 2 处回归（测试先行发现）：洞察 `ui_contract` 补 `view/overview.rs` 登记；右 dock 面板化装配修复（`Shared::open_right_panel` 现同步登记 `right_open_panels` 并让宿主挂载激活 tab）
+> - 并发 flake 记录：`rds-mock` 的 `ordered_preview_returns_the_global_top_rows` 在 `-j 2` 全量满载下偶发（DuckDB 全局内存库竞争），单跑 38/38 全过——时序类 flake，非代码缺陷
 
 下表为 **2026-09-19 的逐包实测快照**（同一套 `cargo test-all`，逐目标台账见 `module-status.md` §6.5 前的历史段；两期数字口径有差异——10-16 起排除 plugin）：
 

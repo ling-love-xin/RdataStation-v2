@@ -289,8 +289,9 @@ pub struct NavViewState {
     jumped: HashMap<String, usize>,
     /// 定位失败的一行如实说明（没找到 / 索引没重建）；成功或未开定位时为空。
     reveal_note: Option<String>,
-    /// 连接 ID → 标签列表（一次读库缓存，避免渲染期逐条查询）。
-    tags: HashMap<String, Vec<String>>,
+    /// 连接 ID → 标签实体列表（一次读库缓存，避免渲染期逐条查询；定义在 `tags` 表，
+    /// 值含 id/name/color/icon——导航标签实体化，规格 tag-system-spec §7.5）。
+    tags: HashMap<String, Vec<tag::Tag>>,
     /// 分组是否已加载。
     groups_loaded: bool,
     /// 折叠的自定义分组 ID（缺省展开）。
@@ -467,7 +468,7 @@ impl NavConnFilter {
     fn passes(
         &self,
         conn: &ConnectionItem,
-        conn_tags: Option<&Vec<String>>,
+        conn_tags: Option<&Vec<tag::Tag>>,
         type_of: impl Fn(&str) -> String,
     ) -> bool {
         if !self.sources.is_empty() {
@@ -487,7 +488,7 @@ impl NavConnFilter {
         }
         if self.tags.iter().any(|want| {
             !conn_tags
-                .map(|ts| ts.iter().any(|t| t == want))
+                .map(|ts| ts.iter().any(|t| t.name == *want))
                 .unwrap_or(false)
         }) {
             return false;

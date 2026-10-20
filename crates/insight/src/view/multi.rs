@@ -221,7 +221,7 @@ fn multi_column_row(
                 .text_ellipsis()
                 .child(column.name.clone()),
         )
-        .child(kind_badge(column.kind, theme));
+        .child(kind_badge(column.kind));
     if column.kind == ColumnKind::Unknown {
         return row.child(
             Icon::new(IconName::Info)

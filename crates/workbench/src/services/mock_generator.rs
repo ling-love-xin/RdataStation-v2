@@ -18,7 +18,7 @@
 //! | `persist_table_at` | 项目分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
 //! | `append_table_at` | 项目分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
 //! | `export_file` | 调用方指定路径 | CSV / Parquet / Xlsx / SQL INSERT |
-//! | `save_scratchpad` | `{项目}/mock/` | 时间戳命名；无项目报错 |
+//! | `save_scratchpad` | `{项目}/scratchpad/mock/` | 时间戳命名；无项目报错（草稿箱只扫 scratchpad 树，必须落在它下面） |
 //! | `preview_sample` | 内存临时表（`temp_mock_*`） | **只读重查**：前 N 行（可选按某列排序；不是就地重排取样窗口）；拿不到内存库锁则 `None` |
 //!
 //! 本层全是**同步**实现（阻塞当前线程）：生产入口是 `services::mock_jobs` 的任务种类，
@@ -448,7 +448,10 @@ pub fn export_file(
     .map(|_| format!("已导出：{path}"))
 }
 
-/// 出口：保存到草稿箱项目目录（`{项目}/mock/`）。
+/// 出口：保存到草稿箱项目目录（`{项目}/scratchpad/mock/`）。
+///
+/// 必须落在 `scratchpad/` 下面：草稿箱面板只扫项目的 scratchpad 目录树，
+/// 写到 `{项目}/mock/` 草稿箱根本列不出来（2026-10-18 用户指出）。
 pub fn save_scratchpad(
     info: &MockGenInfo,
     format: &MockExportFormat,
@@ -456,7 +459,7 @@ pub fn save_scratchpad(
 ) -> Result<String, String> {
     let root =
         project_root.ok_or_else(|| "未打开项目：草稿箱不可用（请先打开或新建项目）".to_string())?;
-    let dir = root.join("mock");
+    let dir = root.join("scratchpad").join("mock");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 {} 失败: {e}", dir.display()))?;
     let dir_text = dir.to_string_lossy().to_string();
     let path = MockEngine::save_to_scratchpad(&info.temp_table_name, format, &dir_text)
@@ -495,6 +498,14 @@ pub fn preview_sample(
             },
         )?;
     Ok(preview.as_ref().map(flatten_preview))
+}
+
+/// 工具栏「刷新」：重读内存临时表的**当前行数**（测试中改过属性后同步清单）。
+///
+/// `Ok(None)` = 内存库连接正被别的任务占用：调用方保持现状（与 `preview_sample` 同一口径）。
+pub fn temp_table_row_count(temp_table: &str) -> Result<Option<i64>, String> {
+    mock::MockEngine::try_temp_table_row_count(temp_table)
+        .map_err(|e| format!("重读临时表行数失败：{e}"))
 }
 
 /// 预览：Arrow 批次 → 字符串网格（视图层不依赖 Arrow）。

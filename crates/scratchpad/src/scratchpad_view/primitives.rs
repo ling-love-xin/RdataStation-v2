@@ -9,6 +9,8 @@
 
 use super::*;
 
+use std::path::Path;
+
 /// 内联编辑（新建 / 重命名 / 新建引用 / 引用改名）。
 #[derive(Clone)]
 pub(super) enum ScratchpadEdit {
@@ -304,6 +306,8 @@ pub(super) fn scratchpad_entry_matches(
 ///
 /// 子目录优先取懒加载缓存 `loaded`，无缓存时用 `entry.children`；每层按排序设置排列。
 /// 有过滤时自动展开命中子树。
+/// 标签筛选（`tag_filter` = 标签 id）独立于文件名过滤：生效时**平铺**只收打了该标签的
+/// 文件行（depth=0，目录跳过）——「筛选某标签」的语义是看这批文件，不是保留树形。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn flatten_scratchpad(
     entries: &[ScratchpadEntry],
@@ -316,11 +320,31 @@ pub(super) fn flatten_scratchpad(
     mode: ScratchpadSearchMode,
     regex: bool,
     case_sensitive: bool,
+    module_root: Option<&Path>,
+    tag_filter: Option<&str>,
+    entry_tags: &HashMap<String, Vec<tag::Tag>>,
     out: &mut Vec<(usize, ScratchpadEntry)>,
 ) {
     let mut sorted: Vec<ScratchpadEntry> = entries.to_vec();
     scratchpad_sort_entries(&mut sorted, sort, sort_desc);
     for entry in &sorted {
+        // 标签筛选分支：文件且命中 → 平铺；其余（目录 / 未命中）跳过，不递归。
+        if let Some(tag_id) = tag_filter {
+            if entry.kind == ScratchpadEntryKind::File {
+                let rel = module_root
+                    .and_then(|root| entry.path.strip_prefix(root).ok())
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let hit = entry_tags
+                    .get(&rel)
+                    .map(|tags| tags.iter().any(|t| t.id == tag_id))
+                    .unwrap_or(false);
+                if hit {
+                    out.push((0, entry.clone()));
+                }
+            }
+            continue;
+        }
         if !scratchpad_entry_matches(entry, filter, mode, regex, case_sensitive, loaded) {
             continue;
         }
@@ -342,6 +366,9 @@ pub(super) fn flatten_scratchpad(
                     mode,
                     regex,
                     case_sensitive,
+                    module_root,
+                    tag_filter,
+                    entry_tags,
                     out,
                 );
             }
@@ -487,5 +514,128 @@ pub(super) fn scratchpad_icon_color(
         "py" => success,
         "csv" | "tsv" | "parquet" | "xlsx" | "xls" | "json" | "ndjson" | "db" | "duckdb" => primary,
         _ => muted,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
+    use super::{
+        flatten_scratchpad, ScratchpadEntry, ScratchpadEntryKind, ScratchpadSearchMode, ScratchpadSort,
+    };
+    use std::collections::{HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+
+    fn entry(name: &str, kind: ScratchpadEntryKind) -> ScratchpadEntry {
+        ScratchpadEntry {
+            name: name.to_string(),
+            path: PathBuf::from(format!("C:/proj/scratchpad/{name}")),
+            kind,
+            size: 0,
+            modified_at: None,
+            children: None,
+        }
+    }
+
+    fn tag(id: &str, name: &str) -> tag::Tag {
+        tag::Tag {
+            id: id.to_string(),
+            name: name.to_string(),
+            color: None,
+            icon: None,
+            scope: tag::SCOPE_PROJECT.to_string(),
+            created_at: String::new(),
+            deleted_at: None,
+        }
+    }
+
+    /// 标签筛选（统一规格 §7.3）：命中文件平铺（depth=0），目录与未命中文件跳过。
+    #[test]
+    fn flatten_with_tag_filter_flat_lists_only_tagged_files() {
+        let root = Path::new("C:/proj/scratchpad");
+        let entries = vec![
+            entry("a.sql", ScratchpadEntryKind::File),
+            entry("b.csv", ScratchpadEntryKind::File),
+            entry("sub", ScratchpadEntryKind::Folder),
+        ];
+        let mut entry_tags = HashMap::new();
+        entry_tags.insert("a.sql".to_string(), vec![tag("t1", "报表")]);
+        let mut out = Vec::new();
+        flatten_scratchpad(
+            &entries,
+            0,
+            &HashSet::new(),
+            &HashMap::new(),
+            ScratchpadSort::Name,
+            false,
+            "",
+            ScratchpadSearchMode::Name,
+            false,
+            false,
+            Some(root),
+            Some("t1"),
+            &entry_tags,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1, "只收打了该标签的文件");
+        assert_eq!(out[0].0, 0, "标签筛选平铺，depth=0");
+        assert_eq!(out[0].1.name, "a.sql");
+    }
+
+    /// 未命中标签 → 空列表（目录即使"已展开"也不输出）。
+    #[test]
+    fn flatten_with_tag_filter_miss_returns_empty() {
+        let root = Path::new("C:/proj/scratchpad");
+        let entries = vec![entry("a.sql", ScratchpadEntryKind::File)];
+        let entry_tags = HashMap::new();
+        let mut out = Vec::new();
+        flatten_scratchpad(
+            &entries,
+            0,
+            &HashSet::new(),
+            &HashMap::new(),
+            ScratchpadSort::Name,
+            false,
+            "",
+            ScratchpadSearchMode::Name,
+            false,
+            false,
+            Some(root),
+            Some("t2"),
+            &entry_tags,
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+
+    /// 无标签筛选时保持树形原语义（文件夹递归，depth 递增）。
+    #[test]
+    fn flatten_without_tag_filter_keeps_tree_shape() {
+        let root = Path::new("C:/proj/scratchpad");
+        let mut sub = entry("sub", ScratchpadEntryKind::Folder);
+        sub.children = Some(vec![entry("c.sql", ScratchpadEntryKind::File)]);
+        let entries = vec![sub, entry("a.sql", ScratchpadEntryKind::File)];
+        let mut out = Vec::new();
+        flatten_scratchpad(
+            &entries,
+            0,
+            &HashSet::new(),
+            &HashMap::new(),
+            ScratchpadSort::Name,
+            false,
+            "",
+            ScratchpadSearchMode::Name,
+            false,
+            false,
+            Some(root),
+            None,
+            &HashMap::new(),
+            &mut out,
+        );
+        assert_eq!(out.len(), 2, "无筛选 = 原树压平（文件夹在前，未展开不递归）");
+        assert_eq!(out[0].0, 0);
+        assert_eq!(out[0].1.name, "sub");
+        assert_eq!(out[1].0, 0);
+        assert_eq!(out[1].1.name, "a.sql");
     }
 }
