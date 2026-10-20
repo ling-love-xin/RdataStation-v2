@@ -522,7 +522,7 @@ impl NavView {
         }
     }
 
-    /// 分组头：左侧统一色条 + 略深底 + **健康度**（已连/总）+ 计数 + 全折叠；右键菜单（重命名 / 新建 / 删除）。
+    /// 分组头：左侧统一色条 + 略深底 + **状态点 + 计数胶囊** + 全折叠；右键菜单（重命名 / 新建 / 删除）。
     pub(super) fn render_group_header(
         &self,
         group_id: &str,
@@ -534,7 +534,6 @@ impl NavView {
     ) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
-        let danger = cx.theme().colors.danger;
         let bar = cx.theme().colors.primary;
         let bg = cx.theme().colors.sidebar_accent;
         let hover = cx.theme().colors.list_hover;
@@ -543,14 +542,33 @@ impl NavView {
         let gid = group_id.to_string();
         let gname = name.to_string();
         let is_ungrouped = group_id == GROUP_UNGROUPED;
-        let health_text = format!("{connected_count}/{count}");
-        let health_label = if failed_count > 0 {
-            format!("已连 {health_text} · {failed_count} 失败")
-        } else if connected_count < count {
-            format!("已连 {health_text}")
-        } else {
-            count.to_string()
+        // 原型分组头带**状态点**（`dot ok/off/err/load`）：点色 = 该组最差状态，
+        // 计数用胶囊（总数，见下方合成元素）。加载中给 `info` + 呼吸（同徽标动效）。
+        let member_ids: Vec<String> = {
+            let view = self.nav.borrow();
+            if is_ungrouped {
+                view.ungrouped_order.clone()
+            } else {
+                view.group_order.get(group_id).cloned().unwrap_or_default()
+            }
         };
+        let loading_count = {
+            let view = self.nav.borrow();
+            member_ids
+                .iter()
+                .filter(|id| view.loading.contains(*id))
+                .count()
+        };
+        let dot_status = if failed_count > 0 {
+            NavBadgeStatus::Failed
+        } else if loading_count > 0 {
+            NavBadgeStatus::Connecting
+        } else if connected_count == count && count > 0 {
+            NavBadgeStatus::Connected
+        } else {
+            NavBadgeStatus::Idle
+        };
+        let dot_color = dot_status.color(cx.theme());
         // 分组表单初值：新建用自动去重默认名，编辑预填现有名称与描述。
         let default_group_name = self.next_group_name();
         let group_seed = self.group_form_seed(group_id);
@@ -611,16 +629,48 @@ impl NavView {
                     .text_color(fg)
                     .child(name.to_string()),
             )
-            // 聚合健康度与计数**合成一个元素**：`1/2` 的分母就是总数，再跟一个 `2`
-            // 会被读成重复（原型 v9 修订点）。三档：全连 → 只报数（安静态）；
-            // 有未连 → `已连 c/n`；有失败 → 追加 `· N 失败`（danger）。
-            .child(
-                div()
+            // 聚合健康度与计数**合成一个元素**：状态点（色 = 组内最差状态）+ 计数胶囊（总数）。
+            // 截图反馈的「已连 1/4」与「4」双计数：v9 文字口径与原型 `.cnt` 胶囊并存会读成
+            // 重复数字，对齐原型只保留点 + 胶囊；状态细节（全连 / 部分 / 失败 / 加载中）由
+            // 点色承载（ok / off / err / info 呼吸），hover 卡补充人话。
+            .child({
+            let mut health = div()
+                .h_flex()
+                .items_center()
+                .gap_0p5()
+                .flex_none();
+                let dot = div()
+                    .w(rems(0.375))
+                    .h(rems(0.375))
                     .flex_none()
-                    .text_xs()
-                    .text_color(if failed_count > 0 { danger } else { muted })
-                    .child(health_label),
-            )
+                    .rounded_full()
+                    .bg(dot_color);
+                let dot: AnyElement = if matches!(dot_status, NavBadgeStatus::Connecting) {
+                    dot.with_animation(
+                        SharedString::from(format!("nav-health-pulse-{group_id}")),
+                        Animation::new(std::time::Duration::from_millis(ui::NAV_BADGE_PULSE_MS))
+                            .repeat()
+                            .with_easing(bounce(ease_in_out)),
+                        |dot, delta| dot.opacity(1.0 - delta * 0.5),
+                    )
+                    .into_any_element()
+                } else {
+                    dot.into_any_element()
+                };
+                health = health
+                    .child(dot)
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(muted.alpha(0.14))
+                            .text_xs()
+                            .text_color(muted)
+                            .child(count.to_string()),
+                    );
+                health
+            })
             // 「连接组内所有数据库」：批量把该组里未连接的连接逐条后台建连。
             // 单个连接的语义是「只连那一个库」；这里给**组**一个批量入口
             // （组 = 同一批业务库的集合，DBeaver 的组连接同款）。
@@ -1026,14 +1076,25 @@ impl NavView {
             let view = self.nav.borrow();
             view.expanded.contains(&conn.id)
         };
-        let (connected, error, children) = {
+        let (connected, error) = {
             let view = self.nav.borrow();
             (
                 view.connected.contains(&conn.id) || conn.connected,
                 view.errors.get(&conn.id).cloned(),
-                view.children.get(&conn.id).cloned().unwrap_or_default(),
             )
         };
+        // #31 展开图标与**真实子树**同步：`expanded` 只是意图（会跨重启恢复），
+        // 树是否有内容取决于 children 是否已加载 / 是否正在加载。
+        // 未连接或空连接：children 永远为空且不会排队加载 → 图标应显示「收起」
+        // （此前显示展开但树关着，正是用户反馈的「图标展开、树关闭」）。
+        let (children_nonempty, loading_here) = {
+            let view = self.nav.borrow();
+            (
+                view.children.get(&conn.id).map(|c| !c.is_empty()).unwrap_or(false),
+                view.loading.contains(&conn.id),
+            )
+        };
+        let tree_open = expanded && (children_nonempty || loading_here);
         // 展开未加载时的「排一次后台加载」不在这里：它已随顺序一起搬到 `collect_nav_rows`
         //（渲染只画一行，副作用不能藏在「这一行恰好被画到」里）。
 
@@ -1086,6 +1147,23 @@ impl NavView {
         };
         let tag_list: Vec<String> = nav_view.tags.get(&conn.id).cloned().unwrap_or_default();
         drop(nav_view);
+
+        // #3 连接显示名：区域前缀（`[项目]/[共享]/[全局]`）功能已移除（区域由归属域列承载）；
+        // 类型简称以方括号短标识显示（`[MY] 192.168.3.138`），与原先区域前缀同形态，
+        // 简称来自设置「类型简称映射」表（默认同徽标缩写），可整体关闭。
+        let conn_disp_name = {
+            let base = strip_nav_scope_prefix(&conn.name);
+            if self.host.show_name_type_short(cx) {
+                let short = self.host.type_short(&type_id, cx);
+                if !short.is_empty() {
+                    format!("[{short}] {base}")
+                } else {
+                    base
+                }
+            } else {
+                base
+            }
+        };
 
         let (badge_path, badge_letters) = nav_type_badge(&type_id);
         let badge_color = badge_status.color(cx.theme());
@@ -1166,8 +1244,9 @@ impl NavView {
             nav_badge_hover_card(hover_id, badge, type_label, status_label, driver_label)
         };
 
-        // 标签 chip（可选显示，`⋯ → 显示标签`）：默认关；开启后「≤2 chip + `+N`」。
-        let tag_chips = if self.host.show_tags(cx) && !tag_list.is_empty() {
+        // 标签 chip（`⋯ → 显示标签` 开关）：开 = 常显；关 = 原型建议③「hover 显」
+        // （连接行悬停时出现 ≤2 chip + `+N`，不进树）。两种模式都不在名称行内占位。
+        let tag_chips = if !tag_list.is_empty() {
             let chip_bg = cx.theme().colors.list_hover;
             // 标签字号用最初版小字 `text_xs`（与行内文字同尺寸，不因换行而变大）。
             let mut chips = div()
@@ -1193,6 +1272,14 @@ impl NavView {
                         .child(format!("+{}", tag_list.len() - 2)),
                 );
             }
+            let chips = if self.host.show_tags(cx) {
+                chips
+            } else {
+                // 与行尾 `+` / `✎` 同一把组钥匙（`nav-conn-row`）：hover / 选中才显。
+                chips
+                    .invisible()
+                    .group_hover("nav-conn-row", |s| s.visible())
+            };
             Some(chips)
         } else {
             None
@@ -1207,7 +1294,9 @@ impl NavView {
         };
         let scope_color = match source {
             NavSource::Project => cx.theme().colors.info,
-            NavSource::Global => muted,
+            // #4 归属域与连接状态交互：Global 未连接=灰（无色）、连接成功也要给彩色，
+            // 否则「连接成功显示颜色」在全局域永远不成立（此前该域连接前后都是灰）。
+            NavSource::Global => cx.theme().colors.cyan,
             NavSource::Shared => cx.theme().colors.primary,
         };
 
@@ -1401,7 +1490,11 @@ impl NavView {
                         });
                     }
                 })
-                .child(nav_disclosure(true, expanded, muted))
+                .child(nav_disclosure(
+                    children_nonempty || loading_here,
+                    tree_open,
+                    muted,
+                ))
                 .group("nav-conn-row")
                 .child(badge)
                 .child(
@@ -1412,20 +1505,44 @@ impl NavView {
                         .text_xs()
                         .text_color(fg)
                         .text_ellipsis()
-                        .child(nav_name_highlight(&conn.name, &filter, match_bg, fg)),
+                        .child(nav_name_highlight(&conn_disp_name, &filter, match_bg, fg)),
                 )
                 // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
                 .when_some(err_summary, |s, e| s.child(e))
                 .when(scope_visible, |s| {
                     // 列本身包在 hover 卡里（§2.3）：短码不是自解释的，hover 给一句人话。
+                    // #30 来源标识加背景框：未连接时中性底 + 灰字（不显示颜色）；
+                    // 连接成功才给来源色文字 + 同色淡底（胶囊）。
+                    let scope_badge = if connected {
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_center()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(scope_color.alpha(0.14))
+                            .text_xs()
+                            .text_color(scope_color)
+                            .child(source_text.clone())
+                    } else {
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_center()
+                            .px_1()
+                            .rounded_sm()
+                            .bg(muted.alpha(0.12))
+                            .text_xs()
+                            .text_color(muted)
+                            .child(source_text.clone())
+                    };
                     let column = div()
                         .w(rems(scope_col))
                         .flex_none()
                         .flex()
                         .justify_end()
-                        .text_xs()
-                        .text_color(scope_color)
-                        .child(source_text.clone());
+                        .items_center()
+                        .child(scope_badge);
                     s.child(nav_scope_hover_card(
                         SharedString::from(format!("nav-scope-{}::{}", scope_key, conn.id)),
                         column,
@@ -1766,8 +1883,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             block = block.child(nav_subline("加载中…", muted));
         }
 
-        // 标签（v7 修订）：显示在连接名**下一行**（不在名称行内），仅 `⋯ → 显示标签`
-        // 开启时；以「≤2 chip + `+N`」呈现，避免撑爆名称行 / 挤掉归属域列。
+        // 标签（v7 修订）：显示在连接名**下一行**（不在名称行内）；`⋯ → 显示标签`
+        // 开启时**常显**，关闭时**hover / 选中显**（原型建议③）；以「≤2 chip + `+N`」
+        // 呈现，避免撑爆名称行 / 挤掉归属域列。
         if let Some(chips) = tag_chips {
             block = block.child(
                 div()
@@ -1798,11 +1916,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             block = block.child(self.render_copy_editor(cx));
         }
 
-        // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
-        let loading_here = self.nav.borrow().loading.contains(&conn.id);
-        if expanded && !connected && children.is_empty() && error.is_none() && !loading_here {
-            block = block.child(nav_subline("未连接 · 右键「连接」或再次展开", muted));
-        }
+        // 展开但未连接（如上次会话遗留的展开态）：不报错、不提示——连接动作本身
+        // 已有足够的显式入口（行尾状态点 hover 卡 + 右键菜单），副行提示只会占高度。
+        // （用户要求取消该提示词与占用的空间。）
         if let Some(err) = error {
             // 失败行可点：点它重试（见 `retry_nav_node`）。只给红字不给动作的话，
             // 用户除了右键「刷新元数据」没有别的出路——而那条路是**跳过缓存**的重查。
@@ -1855,7 +1971,21 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 view.errors.get(&node.key).cloned(),
             )
         };
-        let kind_icon = nav_kind_icon(&node.kind, expanded);
+        // #31 节点行图标与**真实子树**同步：`expanded`（跨重启恢复 / 筛选激活）只是意图；
+        // 子树是否真的展开取决于 children 是否已加载、分页是否未拉完、是否正在加载。
+        // 恢复会话时曾展开的节点 children 为空且未排队加载 → 图标显示「收起」（树确实关着）。
+        let (children_nonempty, pending_more, loading_here) = {
+            let view = self.nav.borrow();
+            let children = view.children.get(&node.key).cloned().unwrap_or_default();
+            let pending_more = view
+                .child_total
+                .get(&node.key)
+                .map(|total| *total > children.len())
+                .unwrap_or(false);
+            (!children.is_empty(), pending_more, view.loading.contains(&node.key))
+        };
+        let tree_open = expanded && (children_nonempty || pending_more || loading_here);
+        let kind_icon = nav_kind_icon(&node.kind, tree_open);
         // 图标颜色只承载状态：正常情况下中性色（类别靠形状，见 `nav_kind_icon`），
         // 加载失败才转 `danger`——与连接行「徽标色 = 状态」是同一套语言。
         let icon_color = if error.is_some() { danger } else { muted };
@@ -1937,7 +2067,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 s.bg(selected_bg).child(tree::active_bar(active_border))
             })
             .when(!selected, move |s| s.hover(move |s| s.bg(hover)))
-            .child(nav_disclosure(node.has_children, expanded, muted))
+            .child(nav_disclosure(node.has_children, tree_open, muted))
             .child(nav_icon(kind_icon, ui::ICON_SIZE_SM, icon_color))
             .child(
                 div()

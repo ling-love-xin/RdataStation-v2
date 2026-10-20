@@ -19,7 +19,7 @@ use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
 };
-use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
@@ -33,8 +33,9 @@ use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{
-    EditorPanel, ProjectActionRequest, PropertyRequest, QueryRequest, RightSidebarPanel, Shared,
-    SidebarPanel,
+    ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
+    PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
+    RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
 };
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
@@ -61,6 +62,17 @@ pub struct WorkbenchView {
     sidebar: Option<Entity<SidebarPanel>>,
     editor: Option<Entity<EditorPanel>>,
     right_sidebar: Option<Entity<RightSidebarPanel>>,
+    // 真面板化（左右 dock 模块 tab 薄壳）：每个模块 = 独立 dock tab。
+    // 壳持有内层 crate 视图实体（经 sidebar / right_sidebar 的访问器取），
+    // dock 自动生成 tab 条 → 同面切换 / 拖拽分栏；活动栏点击走 `select_*_panel`。
+    left_nav_tab: Option<Entity<DatabaseNavPanel>>,
+    left_scratch_tab: Option<Entity<ScratchPanel>>,
+    left_resource_tab: Option<Entity<ResourcePanelTab>>,
+    left_plugin_tab: Option<Entity<PluginPanel>>,
+    right_insight_tab: Option<Entity<InsightPanelTab>>,
+    right_mock_tab: Option<Entity<MockPanelTab>>,
+    right_history_tab: Option<Entity<HistoryPanelTab>>,
+    right_archive_tab: Option<Entity<ArchivePanel>>,
     /// Quick Open 浮层实体（首帧渲染时懒创建）；浮层自持输入 / 结果 / 键盘通道。
     quick_open_palette: Option<Entity<QuickOpenPalette>>,
     /// 打开后待办：通知浮层去清输入 / 落选中 / 聚焦（浮层可能上一帧才创建）。
@@ -229,6 +241,14 @@ impl WorkbenchView {
             sidebar: None,
             editor: None,
             right_sidebar: None,
+            left_nav_tab: None,
+            left_scratch_tab: None,
+            left_resource_tab: None,
+            left_plugin_tab: None,
+            right_insight_tab: None,
+            right_mock_tab: None,
+            right_history_tab: None,
+            right_archive_tab: None,
             quick_open_palette: None,
             quick_open_open_pending: false,
             settings_page: None,
@@ -969,10 +989,43 @@ impl WorkbenchView {
                 self.shared.active_left.set(panel);
             }
         }
+        // 真面板化：初始 tab 集 = 当前激活模块（tab 条只显示点过的模块，
+        // 其余模块等用户点活动栏时经 `open_left_panel` 动态挂载）。
+        *self.shared.left_open_panels.borrow_mut() = vec![self.shared.active_left.get()];
+        *self.shared.right_open_panels.borrow_mut() = vec![self.shared.active_right.get()];
         let shared = self.shared.clone();
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), &self.editor_service, cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), window, cx));
+        // 真面板化：左右 dock 各注册 4 个模块 tab（薄壳面板持有内层 crate 视图）。
+        // 实体先取出再 `cx.new`：闭包里不能再借 `sidebar` / `right_sidebar`；
+        // 薄壳 `set_active` 把 dock 切 tab 同步回活动栏（双向同步的另一半）。
+        let nav_entity = sidebar.read(cx).nav_entity();
+        let scratch_entity = sidebar.read(cx).scratchpad_entity();
+        let resources_entity = sidebar.read(cx).resources_entity();
+        let insight_entity = right_sidebar.read(cx).insight_entity();
+        let mock_entity = right_sidebar.read(cx).mock_entity();
+        let history_entity = right_sidebar.read(cx).history_entity();
+        self.left_nav_tab = Some(cx.new(|cx| {
+            DatabaseNavPanel::new(shared.clone(), nav_entity, cx)
+        }));
+        self.left_scratch_tab = Some(cx.new(|cx| {
+            ScratchPanel::new(shared.clone(), scratch_entity, cx)
+        }));
+        self.left_resource_tab = Some(cx.new(|cx| {
+            ResourcePanelTab::new(shared.clone(), resources_entity, cx)
+        }));
+        self.left_plugin_tab = Some(cx.new(|cx| PluginPanel::new(shared.clone(), cx)));
+        self.right_insight_tab = Some(cx.new(|cx| {
+            InsightPanelTab::new(shared.clone(), insight_entity, cx)
+        }));
+        self.right_mock_tab = Some(cx.new(|cx| {
+            MockPanelTab::new(shared.clone(), mock_entity, cx)
+        }));
+        self.right_history_tab = Some(cx.new(|cx| {
+            HistoryPanelTab::new(shared.clone(), history_entity, cx)
+        }));
+        self.right_archive_tab = Some(cx.new(|cx| ArchivePanel::new(shared.clone(), cx)));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
@@ -1051,6 +1104,7 @@ impl WorkbenchView {
             .expect("project inputs initialized");
         let picker_panel = cx.new(|cx| {
             crate::panels::ProjectPickerPanel::new(
+                shared.clone(),
                 self.project_host().clone(),
                 inputs,
                 cx,
@@ -1186,10 +1240,13 @@ impl WorkbenchView {
             .and_then(|weak| weak.upgrade())
         {
             let shared_for_archive = shared.clone();
-            let right_for_archive = right_sidebar.clone();
+            // 真面板化：唤醒目标是右 dock 的「存档详情」tab（不再是右栏外壳实体）。
+            let right_for_archive = self.right_archive_tab.clone();
             self._archive_subscription = Some(cx.observe(&panel, move |_, _, cx| {
                 if shared_for_archive.active_right.get() == RightPanel::Archive {
-                    right_for_archive.update(cx, |_, cx| cx.notify());
+                    if let Some(archive) = right_for_archive.clone() {
+                        archive.update(cx, |_, cx| cx.notify());
+                    }
                 }
             }));
         }
@@ -1225,21 +1282,80 @@ impl WorkbenchView {
         sidebar.update(cx, |panel, cx| panel.request_scratchpad_refresh(cx));
     }
 
+    /// 真面板化装配：只挂**已打开过**的模块 tab（`Shared::left_open_panels`）。
+    /// 空列表兜底为当前激活模块（启动早期 / 状态被清空的防御）。
+    fn left_dock_layout(&self, cx: &Context<Self>) -> Option<DockLayout> {
+        // 类型交给推断：`panel_handle` 返回 `Arc<dyn base::PanelView>`。
+        let mut handles = Vec::new();
+        let open = self.shared.left_open_panels.borrow();
+        for panel in open.iter() {
+            match panel {
+                LeftPanel::Draft => {
+                    if let Some(tab) = &self.left_scratch_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                LeftPanel::Database => {
+                    if let Some(tab) = &self.left_nav_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                LeftPanel::Resources => {
+                    if let Some(tab) = &self.left_resource_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                LeftPanel::Plugin => {
+                    if let Some(tab) = &self.left_plugin_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+            }
+        }
+        drop(open);
+        if handles.is_empty() {
+            // 兜底：空列表时至少挂当前激活模块（各 arm 同构为 `Option<Arc<dyn PanelView>>`）。
+            let active = self.shared.active_left.get();
+            let tab = match active {
+                LeftPanel::Draft => self.left_scratch_tab.clone().map(panel_handle),
+                LeftPanel::Database => self.left_nav_tab.clone().map(panel_handle),
+                LeftPanel::Resources => self.left_resource_tab.clone().map(panel_handle),
+                LeftPanel::Plugin => self.left_plugin_tab.clone().map(panel_handle),
+            };
+            if let Some(handle) = tab {
+                handles.push(handle);
+            }
+        }
+        if handles.is_empty() {
+            return None;
+        }
+        let mut layout = DockLayout::tabs();
+        for handle in handles {
+            layout = layout.panel_view(handle, cx);
+        }
+        Some(layout)
+    }
+
     fn apply_left_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = self.shared.left_mode.get();
-        let (Some(area), Some(sidebar)) = (&self.area, &self.sidebar) else {
+        let (Some(area), Some(layout)) = (self.area.clone(), self.left_dock_layout(cx)) else {
             return;
         };
-        area.update(cx, |area, cx| match mode {
-            SidebarMode::Expanded => {
+        // Hidden → Expanded 重建 dock 时，把当前激活模块设为 dock 初始 tab
+        //（事件路径的 `select_panel` 在 dock 缺失时安全 no-op，重建发生在 render）。
+        let initial_id = match self.shared.active_left.get() {
+            LeftPanel::Draft => self.left_scratch_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
+            LeftPanel::Database => self.left_nav_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
+            LeftPanel::Resources => {
+                self.left_resource_tab.clone().map(|t| panel_handle(t).panel_id(cx))
+            }
+            LeftPanel::Plugin => self.left_plugin_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
+        };
+        area.update(cx, |area, cx| {
+            // DockLayout 不可 clone：Expanded / Collapsed 两分支互斥，各自消费 layout。
+            if mode == SidebarMode::Expanded {
                 if !area.has_dock(DockPlacement::Left) {
-                    let handle = panel_handle(sidebar.clone());
-                    area.set_dock(
-                        DockPlacement::Left,
-                        DockLayout::tabs().panel_view(handle, cx),
-                        window,
-                        cx,
-                    );
+                    area.set_dock(DockPlacement::Left, layout, window, cx);
                     // 起步宽度 240px（= 15rem 基准，随界面缩放；layout-design §2.3，用户拖拽可调）。
                     area.set_dock_size(
                         DockPlacement::Left,
@@ -1247,19 +1363,15 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    if let Some(id) = initial_id {
+                        area.select_panel(id, window, cx);
+                    }
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
-            }
-            SidebarMode::Collapsed => {
+            } else if mode == SidebarMode::Collapsed {
                 if !area.has_dock(DockPlacement::Left) {
-                    let handle = panel_handle(sidebar.clone());
-                    area.set_dock(
-                        DockPlacement::Left,
-                        DockLayout::tabs().panel_view(handle, cx),
-                        window,
-                        cx,
-                    );
+                    area.set_dock(DockPlacement::Left, layout, window, cx);
                     area.set_dock_size(
                         DockPlacement::Left,
                         cx.theme().font_size * ui::LEFT_DOCK_WIDTH,
@@ -1270,30 +1382,88 @@ impl WorkbenchView {
                 if area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
-            }
-            SidebarMode::Hidden => {
-                if area.has_dock(DockPlacement::Left) {
-                    area.remove_dock(DockPlacement::Left, window, cx);
-                }
+            } else if area.has_dock(DockPlacement::Left) {
+                area.remove_dock(DockPlacement::Left, window, cx);
             }
         });
     }
 
+    /// 右 dock 装配（与 `left_dock_layout` 同构：只挂已打开的模块 tab）。
+    fn right_dock_layout(&self, cx: &Context<Self>) -> Option<DockLayout> {
+        // 类型交给推断：`panel_handle` 返回 `Arc<dyn base::PanelView>`。
+        let mut handles = Vec::new();
+        let open = self.shared.right_open_panels.borrow();
+        for panel in open.iter() {
+            match panel {
+                RightPanel::Insight => {
+                    if let Some(tab) = &self.right_insight_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                RightPanel::Mock => {
+                    if let Some(tab) = &self.right_mock_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                RightPanel::History => {
+                    if let Some(tab) = &self.right_history_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+                RightPanel::Archive => {
+                    if let Some(tab) = &self.right_archive_tab {
+                        handles.push(panel_handle(tab.clone()));
+                    }
+                }
+            }
+        }
+        drop(open);
+        if handles.is_empty() {
+            // 兜底：空列表时至少挂当前激活模块（各 arm 同构为 `Option<Arc<dyn PanelView>>`）。
+            let active = self.shared.active_right.get();
+            let tab = match active {
+                RightPanel::Insight => self.right_insight_tab.clone().map(panel_handle),
+                RightPanel::Mock => self.right_mock_tab.clone().map(panel_handle),
+                RightPanel::History => self.right_history_tab.clone().map(panel_handle),
+                RightPanel::Archive => self.right_archive_tab.clone().map(panel_handle),
+            };
+            if let Some(handle) = tab {
+                handles.push(handle);
+            }
+        }
+        if handles.is_empty() {
+            return None;
+        }
+        let mut layout = DockLayout::tabs();
+        for handle in handles {
+            layout = layout.panel_view(handle, cx);
+        }
+        Some(layout)
+    }
+
     fn apply_right_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = self.shared.right_mode.get();
-        let (Some(area), Some(right)) = (&self.area, &self.right_sidebar) else {
+        let (Some(area), Some(layout)) = (self.area.clone(), self.right_dock_layout(cx)) else {
             return;
         };
-        area.update(cx, |area, cx| match mode {
-            SidebarMode::Expanded => {
+        // Hidden → Expanded 重建 dock 时，把当前激活模块设为 dock 初始 tab。
+        let initial_id = match self.shared.active_right.get() {
+            RightPanel::Insight => {
+                self.right_insight_tab.clone().map(|t| panel_handle(t).panel_id(cx))
+            }
+            RightPanel::Mock => self.right_mock_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
+            RightPanel::History => {
+                self.right_history_tab.clone().map(|t| panel_handle(t).panel_id(cx))
+            }
+            RightPanel::Archive => {
+                self.right_archive_tab.clone().map(|t| panel_handle(t).panel_id(cx))
+            }
+        };
+        area.update(cx, |area, cx| {
+            // DockLayout 不可 clone：Expanded / Collapsed 两分支互斥，各自消费 layout。
+            if mode == SidebarMode::Expanded {
                 if !area.has_dock(DockPlacement::Right) {
-                    let handle = panel_handle(right.clone());
-                    area.set_dock(
-                        DockPlacement::Right,
-                        DockLayout::tabs().panel_view(handle, cx),
-                        window,
-                        cx,
-                    );
+                    area.set_dock(DockPlacement::Right, layout, window, cx);
                     // 起步宽度 280px（= 17.5rem 基准）。
                     area.set_dock_size(
                         DockPlacement::Right,
@@ -1301,19 +1471,15 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    if let Some(id) = initial_id {
+                        area.select_panel(id, window, cx);
+                    }
                 } else if !area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
                 }
-            }
-            SidebarMode::Collapsed => {
+            } else if mode == SidebarMode::Collapsed {
                 if !area.has_dock(DockPlacement::Right) {
-                    let handle = panel_handle(right.clone());
-                    area.set_dock(
-                        DockPlacement::Right,
-                        DockLayout::tabs().panel_view(handle, cx),
-                        window,
-                        cx,
-                    );
+                    area.set_dock(DockPlacement::Right, layout, window, cx);
                     area.set_dock_size(
                         DockPlacement::Right,
                         cx.theme().font_size * ui::RIGHT_DOCK_WIDTH,
@@ -1324,11 +1490,125 @@ impl WorkbenchView {
                 if area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
                 }
+            } else if area.has_dock(DockPlacement::Right) {
+                area.remove_dock(DockPlacement::Right, window, cx);
             }
-            SidebarMode::Hidden => {
-                if area.has_dock(DockPlacement::Right) {
-                    area.remove_dock(DockPlacement::Right, window, cx);
+        });
+    }
+
+    // ===== 活动栏 ↔ dock tab 双向同步（事件路径，另一半在模块 tab 的 `set_active`） =====
+
+    /// 左活动栏点击 → 打开对应模块：
+    /// 1. 登记进 `left_open_panels`（tab 条只显示点过的模块）；
+    /// 2. 已在 dock → `select_panel` 切激活；不在 → `add_panel_view` 挂载（自动激活）；
+    /// 3. dock 不存在（Hidden）→ 不动作，render 的 `apply_left_mode` 按 open 列表重建。
+    fn open_left_panel(&self, panel: LeftPanel, window: &mut Window, cx: &mut Context<Self>) {
+        {
+            let mut open = self.shared.left_open_panels.borrow_mut();
+            if !open.contains(&panel) {
+                open.push(panel);
+            }
+        }
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        // 各 tab 类型不同：match 统一返回 `(handle, id)` 元组（类型一致）。
+        let (handle, id) = match panel {
+            LeftPanel::Draft => match self.left_scratch_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
                 }
+                None => return,
+            },
+            LeftPanel::Database => match self.left_nav_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            LeftPanel::Resources => match self.left_resource_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            LeftPanel::Plugin => match self.left_plugin_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+        };
+        area.update(cx, |area, cx| {
+            if area.panel(id).is_some() {
+                // 已打开过：切 tab（dock 关闭时也改树，render 打开后即正确）。
+                area.select_panel(id, window, cx);
+            } else if area.has_dock(DockPlacement::Left) {
+                // 首次打开：挂载进左 dock 第一个 tab 组（`add_panel_view` 自带激活）。
+                area.add_panel_view(handle, DockPlacement::Left, None, window, cx);
+            }
+        });
+    }
+
+    /// 右活动栏点击 → 打开对应模块（同上，右侧 dock）。
+    fn open_right_panel(&self, panel: RightPanel, window: &mut Window, cx: &mut Context<Self>) {
+        {
+            let mut open = self.shared.right_open_panels.borrow_mut();
+            if !open.contains(&panel) {
+                open.push(panel);
+            }
+        }
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        // 各 tab 类型不同：match 统一返回 `(handle, id)` 元组（类型一致）。
+        let (handle, id) = match panel {
+            RightPanel::Insight => match self.right_insight_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            RightPanel::Mock => match self.right_mock_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            RightPanel::History => match self.right_history_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+            RightPanel::Archive => match self.right_archive_tab.clone() {
+                Some(tab) => {
+                    let handle = panel_handle(tab);
+                    let id = handle.panel_id(cx);
+                    (handle, id)
+                }
+                None => return,
+            },
+        };
+        area.update(cx, |area, cx| {
+            if area.panel(id).is_some() {
+                area.select_panel(id, window, cx);
+            } else if area.has_dock(DockPlacement::Right) {
+                area.add_panel_view(handle, DockPlacement::Right, None, window, cx);
             }
         });
     }
@@ -1337,6 +1617,16 @@ impl WorkbenchView {
     // 差异点：无窗口标题文本。承载 gpui-kit 官方 TitleBar（对应 layout-design.md §2.1）：
     // - 窗口拖拽（Drag hitbox，Windows 系统级）、双击最大化、窗口控制按钮（─ □ ✕）由组件自带；
     // - 高度覆盖为 36px、背景覆盖为主题 title_bar 纯色（对齐 layout-proposal.html v5）。
+
+    /// 快速布局预设（UI 先行，未接线）：仅提供菜单外观与文案，点击暂不改变布局状态。
+    /// 接线时每项应一次性写入 `left_mode`/`right_mode`（复用 `apply_*_mode` 同步到 dock）。
+    const QUICK_LAYOUT_PRESETS: &[(&str, &str)] = &[
+        ("left", "仅左栏"),
+        ("right", "仅右栏"),
+        ("both", "双栏"),
+        ("full", "全屏"),
+    ];
+
     fn render_title_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let pt = settings::product_tokens::get(cx);
@@ -1358,17 +1648,22 @@ impl WorkbenchView {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "未打开项目".to_string());
         // 触发器用语义控件（`Selectable` + 键盘可达由 `Button` 自带），不自己画可点 div。
+        // 2026-10-19：随标题栏调高到 28px；加文件夹图标 + 1px 边框，让“挖空”槽在
+        // 标题栏上有明确的可视轮廓（此前只有背景色，显得“显示不清楚”）。
         let slot = Button::new("project-slot")
             .ghost()
-            .h(rems(1.625))
+            .h(rems(ui::TITLE_SLOT_HEIGHT))
             .px_3p5()
             .rounded_md()
+            .border_1()
+            .border_color(theme.colors.border)
             .bg(pt.title_bar_slot_background(theme))
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
+                    .child(Icon::new(CatalogIcon::Folder).size_3p5())
                     .child(
                         div()
                             .text_xs()
@@ -1412,7 +1707,7 @@ impl WorkbenchView {
             .items_center()
             .gap_2()
             .w_80()
-            .h(rems(1.625))
+            .h(rems(ui::QUICK_OPEN_ENTRY_HEIGHT))
             .px_2p5()
             .rounded_sm()
             .bg(theme.colors.border)
@@ -1436,12 +1731,68 @@ impl WorkbenchView {
                     let _ = window;
                     this.toggle_quick_open(cx)
                 });
+            })
+            // 2026-10-19 修复：gpui-kit TitleBar 把整个 bar（含全部 children）标记为
+            // `WindowControlArea::Drag`，Windows 无边框窗口下点击命中 HTCAPTION 会被
+            // 系统当作标题栏拖动吞掉，on_click 永远收不到（主题按钮“无法切换”根因）。
+            // `.occlude()` 让本元素的 hitbox 挡掉后方（父 bar）的 Drag hitbox，命中时
+            // 不再返回 HTCAPTION，点击正常派发。
+            .occlude();
+
+        // 主题切换入口：图标随当前外观策略（暗→月、亮→日、跟随系统→显示器），
+        // 点击走与 Ctrl+Shift+L 同一条命令路径（`ToggleThemeMode`）。
+        let appearance = SettingsService::theme_mode(cx);
+        let theme_icon = match appearance {
+            settings::model::AppearanceMode::Dark => CatalogIcon::Moon,
+            settings::model::AppearanceMode::System => CatalogIcon::Monitor,
+            settings::model::AppearanceMode::Light => CatalogIcon::Sun,
+        };
+        let theme_toggle = Button::new("theme-toggle")
+            .ghost()
+            .icon(Icon::new(theme_icon).size_3p5())
+            .tooltip("切换明暗主题 (Ctrl+Shift+L)")
+            .on_click(|_, window, app| {
+                SettingsService::toggle_theme_mode(Some(window), app);
             });
+        // 标题栏可点击控件统一包 `occlude()`：从父 bar 的 `WindowControlArea::Drag`
+        // 命中区剔除（见 quick-open-entry 注释），否则 Windows 上点击被系统吞掉。
+        let theme_toggle = div()
+            .h_flex()
+            .flex_none()
+            .items_center()
+            .occlude()
+            .child(theme_toggle);
+
+        // 语言切换入口：先做入口与写库，翻译覆盖是渐进的（`tr()` 逐处替换）。
+        let lang_switch = Button::new("lang-switch")
+            .ghost()
+            .icon(Icon::new(CatalogIcon::Languages).size_3p5())
+            .tooltip("界面语言")
+            .dropdown_menu(|menu, _, _| {
+                let mut menu = menu.item(PopupMenuItem::label("界面语言"));
+                menu = menu.item(PopupMenuItem::separator());
+                menu = menu.item(
+                    PopupMenuItem::new("简体中文").on_click(|_, window, app| {
+                        SettingsService::set_locale("zh-CN", Some(window), app);
+                    }),
+                );
+                menu.item(PopupMenuItem::new("English").on_click(
+                    |_, window, app| {
+                        SettingsService::set_locale("en-US", Some(window), app);
+                    },
+                ))
+            });
+        let lang_switch = div()
+            .h_flex()
+            .flex_none()
+            .items_center()
+            .occlude()
+            .child(lang_switch);
 
         // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
         // 右侧窗口控制按钮（─ □ ✕）由 TitleBar 自带渲染，无需自绘。
         TitleBar::new()
-            .h_9()
+            .h(rems(ui::TITLE_BAR_HEIGHT))
             .pl_2p5()
             .bg(theme.colors.title_bar)
             .child(
@@ -1451,10 +1802,73 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .child(logo)
-                    .child(slot),
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_none()
+                            .items_center()
+                            .occlude()
+                            .child(slot),
+                    ),
             )
             .child(quick_open)
             .child(div().flex_1())
+            .child(theme_toggle)
+            .child(lang_switch)
+            .child(
+                div()
+                    .h_flex()
+                    .flex_none()
+                    .items_center()
+                    .occlude()
+                    .child(self.render_quick_layout_button(cx)),
+            )
+    }
+
+    // 快速布局下拉：布局图标 + 预设菜单。已接线——每项一次性写入左右 dock 模式
+    // （复用 `apply_left_mode`/`apply_right_mode` 同步到 dock，见 `apply_quick_layout`）。
+    fn render_quick_layout_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        Button::new("quick-layout")
+            .ghost()
+            .icon(IconName::LayoutDashboard)
+            .tooltip("快速布局")
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.item(PopupMenuItem::label("布局预设"));
+                menu = menu.item(PopupMenuItem::separator());
+                for (key, label) in Self::QUICK_LAYOUT_PRESETS.iter().copied() {
+                    let entity = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label).on_click(move |_, window, app| {
+                            entity.update(app, |this, cx| {
+                                this.apply_quick_layout(key, window, cx);
+                            });
+                        }),
+                    );
+                }
+                menu
+            })
+    }
+
+    /// 快速布局预设接线：一次性写入左右 dock 模式（复用 `apply_*_mode` 同步）。
+    fn apply_quick_layout(&self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use SidebarMode::*;
+        let (lm, rm) = match key {
+            "left" => (Expanded, Collapsed),
+            "right" => (Collapsed, Expanded),
+            "both" => (Expanded, Expanded),
+            // 全屏：双栏收起（活动栏保留，dock 以 strip 收边，可再点开）。
+            "full" => (Collapsed, Collapsed),
+            _ => return,
+        };
+        if self.shared.left_mode.get() != lm {
+            self.shared.left_mode.set(lm);
+        }
+        if self.shared.right_mode.get() != rm {
+            self.shared.right_mode.set(rm);
+        }
+        self.apply_left_mode(window, cx);
+        self.apply_right_mode(window, cx);
     }
 
     // ===== 活动栏 =====
@@ -1480,6 +1894,9 @@ impl WorkbenchView {
             let entity = cx.entity();
             let shared = self.shared.clone();
             let selected = active == panel;
+            // 右键菜单需要独立句柄（左键 on_click 已 move 上面的 shared/entity）。
+            let shared_menu = shared.clone();
+            let entity_menu = entity.clone();
             // VSCode 行为：激活项左侧 2px 亮条（activity_bar.active_border）。
             bar = bar.child(
                 div()
@@ -1501,7 +1918,7 @@ impl WorkbenchView {
                             .ghost()
                             .selected(selected)
                             .toggled(selected)
-                            .on_click(move |_, _, app| {
+                            .on_click(move |_, window, app| {
                                 let mode = shared.left_mode.get();
                                 // 激活（而非收起）时才需要取数；收起路径不动面板状态。
                                 let activating = !(mode == SidebarMode::Expanded
@@ -1516,12 +1933,42 @@ impl WorkbenchView {
                                 let activating_resources =
                                     activating && panel == LeftPanel::Resources;
                                 entity.update(app, |this, cx| {
+                                    // 真面板化：展开时打开对应模块 tab（首次挂载 / 已开则切换）。
+                                    if activating {
+                                        this.open_left_panel(panel, window, cx);
+                                    }
                                     // M6：切到资产库时取一次列表（结果由面板轮询回填）。
                                     if activating_resources {
                                         this.request_resources_refresh(cx);
                                     }
                                     cx.notify();
                                 });
+                            })
+                            // 右键：隐藏 / 收起整个左侧栏（mode 写入后由 render 的
+                            // `apply_left_mode` 同步 dock 树）。
+                            .context_menu(move |menu, _, _| {
+                                let mut menu = menu.item(PopupMenuItem::label("左侧栏"));
+                                menu = menu.item(PopupMenuItem::separator());
+                                // builder 是 `Fn`（可多次调用）：每次求值时 clone 再 move，
+                                // 保证每轮 on_click 闭包持有自己的句柄。
+                                menu = menu.item(
+                                    PopupMenuItem::new("隐藏侧边栏").on_click({
+                                        let shared = shared_menu.clone();
+                                        let entity = entity_menu.clone();
+                                        move |_, _, app| {
+                                            shared.left_mode.set(SidebarMode::Hidden);
+                                            entity.update(app, |_, cx| cx.notify());
+                                        }
+                                    }),
+                                );
+                                menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                                    let shared = shared_menu.clone();
+                                    let entity = entity_menu.clone();
+                                    move |_, _, app| {
+                                        shared.left_mode.set(SidebarMode::Collapsed);
+                                        entity.update(app, |_, cx| cx.notify());
+                                    }
+                                }))
                             }),
                     ),
             );
@@ -1572,6 +2019,9 @@ impl WorkbenchView {
             let entity = cx.entity();
             let shared = self.shared.clone();
             let selected = active == panel;
+            // 右键菜单需要独立句柄（左键 on_click 已 move 上面的 shared/entity）。
+            let shared_menu = shared.clone();
+            let entity_menu = entity.clone();
             // 与左侧镜像：激活项 2px 亮条在右。
             bar = bar.child(
                 div()
@@ -1593,7 +2043,7 @@ impl WorkbenchView {
                             .ghost()
                             .selected(selected)
                             .toggled(selected)
-                            .on_click(move |_, _, app| {
+                            .on_click(move |_, window, app| {
                                 let mode = shared.right_mode.get();
                                 // 激活（而非收起）时才需要重读面板状态；收起路径不动面板。
                                 let activating = !(mode == SidebarMode::Expanded
@@ -1606,7 +2056,39 @@ impl WorkbenchView {
                                     // 就在那儿重读（四个入口共用这一条，见该方法的注释）。
                                     shared.open_right_panel(panel, app);
                                 }
-                                entity.update(app, |_, cx| cx.notify());
+                                entity.update(app, |this, cx| {
+                                    // 真面板化：展开时打开对应模块 tab（首次挂载 / 已开则切换）。
+                                    if activating {
+                                        this.open_right_panel(panel, window, cx);
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            // 右键：隐藏 / 收起整个右侧栏（mode 写入后由 render 的
+                            // `apply_right_mode` 同步 dock 树）。
+                            .context_menu(move |menu, _, _| {
+                                let mut menu = menu.item(PopupMenuItem::label("右侧栏"));
+                                menu = menu.item(PopupMenuItem::separator());
+                                // builder 是 `Fn`（可多次调用）：每次求值时 clone 再 move，
+                                // 保证每轮 on_click 闭包持有自己的句柄。
+                                menu = menu.item(
+                                    PopupMenuItem::new("隐藏侧边栏").on_click({
+                                        let shared = shared_menu.clone();
+                                        let entity = entity_menu.clone();
+                                        move |_, _, app| {
+                                            shared.right_mode.set(SidebarMode::Hidden);
+                                            entity.update(app, |_, cx| cx.notify());
+                                        }
+                                    }),
+                                );
+                                menu.item(PopupMenuItem::new("收起侧边栏").on_click({
+                                    let shared = shared_menu.clone();
+                                    let entity = entity_menu.clone();
+                                    move |_, _, app| {
+                                        shared.right_mode.set(SidebarMode::Collapsed);
+                                        entity.update(app, |_, cx| cx.notify());
+                                    }
+                                }))
                             }),
                     ),
             );
@@ -1677,11 +2159,16 @@ impl WorkbenchView {
                 std::rc::Rc::new(move |window, app| {
                     crate::components::log_dialog::open_log_dialog(window, app);
                 });
+            let on_open_type_short_map: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
+                std::rc::Rc::new(move |window, app| {
+                    crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
+                });
             let host = SettingsHost {
                 on_close,
                 on_open_cache,
                 on_open_log_dir,
                 on_open_log_view,
+                on_open_type_short_map,
             };
             self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
         }
@@ -2361,6 +2848,18 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
+        // 真面板化：版本 / 修复 / 回收站 / 标签对话框与导航「定位」请求原在
+        // `SidebarPanel::render` 消费（外壳已不再渲染），提升到宿主 render——
+        // render 仍是权威同步点，副作用不放到事件路径；动作仍经 `sidebar` 实体转发。
+        if let Some(sidebar) = self.sidebar.clone() {
+            sidebar.update(cx, |panel, cx| {
+                panel.ensure_version_dialog(window, cx);
+                panel.ensure_repair_dialog(window, cx);
+                panel.ensure_trash_dialog(window, cx);
+                panel.ensure_tag_dialog(window, cx);
+                panel.consume_reveal(cx);
+            });
+        }
         // 连接对话框项目下拉的动作项 → 复用项目管理的入口：
         // 「＋ 新增项目」开新建对话框；「打开现有目录…」开目录选择对话框。
         // 两者都会切换项目；有未保存草稿时先走确认，**确认后直接推进到目标对话框**（#4）。

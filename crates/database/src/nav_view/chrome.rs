@@ -368,7 +368,7 @@ impl NavView {
                     }),
             )
             .child(
-                // 更多（⋯）：刷新全部元数据 / 缓存管理。
+                // 更多（⋯）：刷新全部元数据 / 显示开关 / 缓存管理 / 删除当前连接（原型对齐）。
                 Button::new("nav-more")
                     .ghost()
                     .small()
@@ -377,9 +377,19 @@ impl NavView {
                         let entity = cx.entity();
                         let host_tags = self.host.clone();
                         let host_scope = self.host.clone();
+                        let host_short = self.host.clone();
                         let host_cache = self.host.clone();
                         let show_tags = self.host.show_tags(cx);
                         let show_scope = self.host.show_scope(cx);
+                        let source_short = self.host.source_short_code(cx);
+                        let del_conn = current_conn.clone();
+                        let del_name = current_conn.as_deref().and_then(|id| {
+                            self.host
+                                .connections()
+                                .iter()
+                                .find(|c| c.id == *id)
+                                .map(|c| c.name.clone())
+                        });
                         move |menu, _window, _cx| {
                             let e_refresh = entity.clone();
                             let host_cache = host_cache.clone();
@@ -389,15 +399,17 @@ impl NavView {
                                 },
                             ))
                             .separator()
+                            // 来源标识组（#29）：短码 / 归属域列 并排可独立开关；
+                            // 均即时生效并持久化（settings registry）。
                             .item(
-                                // 选中态用 `checked`（与同文件的「设为主组」菜单一致）：
-                                // 文本拼 `✓ ` 会在有勾 / 无勾时改变文案宽度。
-                                PopupMenuItem::new("显示标签").checked(show_tags).on_click({
-                                    let host_tags = host_tags.clone();
-                                    move |_, _, app| {
-                                        host_tags.set_show_tags(!show_tags, app);
-                                    }
-                                }),
+                                PopupMenuItem::new("来源短码")
+                                    .checked(source_short)
+                                    .on_click({
+                                        let host_short = host_short.clone();
+                                        move |_, _, app| {
+                                            host_short.set_source_short_code(!source_short, app);
+                                        }
+                                    }),
                             )
                             .item(
                                 PopupMenuItem::new("显示归属域")
@@ -411,9 +423,69 @@ impl NavView {
                             )
                             .separator()
                             .item(
+                                // 选中态用 `checked`（与同文件的「设为主组」菜单一致）：
+                                // 文本拼 `✓ ` 会在有勾 / 无勾时改变文案宽度。
+                                PopupMenuItem::new("显示标签").checked(show_tags).on_click({
+                                    let host_tags = host_tags.clone();
+                                    move |_, _, app| {
+                                        host_tags.set_show_tags(!show_tags, app);
+                                    }
+                                }),
+                            )
+                            .separator()
+                            .item(
                                 PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
                                     host_cache.open_cache_dialog(window, app);
                                 }),
+                            )
+                            .separator()
+                            .item(
+                                // 删除当前连接（原型对齐）：作用于当前选中的连接；
+                                // 与连接行右键「删除连接」同一确认对话框 + 删除动作。
+                                // 无选中连接时禁用（`disabled` 是菜单自身语义，不用 danger
+                                // 文案区分可用性）。
+                                PopupMenuItem::new("删除当前连接")
+                                    .disabled(del_conn.is_none())
+                                    .on_click({
+                                        let e = entity.clone();
+                                        let cid = del_conn.clone();
+                                        let name = del_name.clone();
+                                        move |_, window, app| {
+                                            let Some(cid) = cid.clone() else { return };
+                                            let Some(name) = name.clone() else { return };
+                                            let e = e.clone();
+                                            window.open_alert_dialog(app, move |alert, _, _cx| {
+                                                let e = e.clone();
+                                                let cid = cid.clone();
+                                                alert
+                                                    .confirm()
+                                                    .title("删除连接")
+                                                    .description(format!(
+                                                        "确定删除连接「{name}」？元数据缓存会保留（可在「缓存管理」清理）。"
+                                                    ))
+                                                    .button_props(
+                                                        DialogButtonProps::default()
+                                                            .ok_text("删除")
+                                                            .ok_variant(ButtonVariant::Danger)
+                                                            .show_cancel(true),
+                                                    )
+                                                    .on_ok({
+                                                        // `on_ok` 是 `Fn`（可多次调用）：捕获值须可重复消费，
+                                                        // 这里先 clone 一份再移进闭包（E0507 修复）。
+                                                        let cid = cid.clone();
+                                                        let value = name.clone();
+                                                        move |_, _window, app| {
+                                                            let cid = cid.clone();
+                                                            let value = value.clone();
+                                                            e.update(app, |this, cx| {
+                                                                this.delete_connection(&cid, &value, cx)
+                                                            });
+                                                            true
+                                                        }
+                                                    })
+                                            });
+                                        }
+                                    }),
                             )
                         }
                     }),
@@ -464,13 +536,10 @@ impl NavView {
         }
         let body = self.render_nav_body(window, cx);
 
-        // 搜索行：输入框 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签；归属域由上方 chips 承担）。
+        // 搜索行：输入框 + 「筛选」图标弹层（类型 / 驱动 / 标签；归属域由上方 chips 承担）。
+        // 2026-10-20：#27 筛选从文字按钮改为图标按钮，激活时着色；提示词沿用面板
+        // 搜索框当前 placeholder（"筛选数据源 / 表 / 列 / 标签…"）。
         let active_facets = self.nav_active_facet_count();
-        let facet_label = if active_facets > 0 {
-            format!("筛选 ▾ {active_facets}")
-        } else {
-            "筛选 ▾".to_string()
-        };
         let filters_active = self.nav_filters_active();
         let free_text = self.nav.borrow().search_facets.free.clone();
         let (cur_type, cur_driver, cur_tag) = {
@@ -514,7 +583,22 @@ impl NavView {
         let facet_button = Button::new("nav-facet-filter")
             .ghost()
             .small()
-            .label(facet_label)
+            // #27 筛选入口改图标（lucide filter），激活态用主题色强调；
+            // 具体筛选项与激活计数在 tooltip 里补。
+            .icon(nav_icon(
+                // #8 实测：资产集无 `icons/filter.svg`（lucide 此套资源命名不同），
+                // `sliders-horizontal.svg` 已确认存在（与 search.svg 同源）。
+                "icons/sliders-horizontal.svg",
+                ui::ICON_SIZE_SM,
+                if active_facets > 0 { accent } else { muted },
+            ))
+            .selected(active_facets > 0)
+            // `Button::tooltip` 只收静态文本：计数在构建期拼好（进入菜单可见具体项）。
+            .tooltip(if active_facets > 0 {
+                format!("已筛 {active_facets} 项：类型 / 驱动 / 标签")
+            } else {
+                "筛选：类型 / 驱动 / 标签".to_string()
+            })
             .dropdown_menu({
                 let entity = cx.entity();
                 let input = self.nav_search.clone();
@@ -590,16 +674,108 @@ impl NavView {
                 }
             });
 
-        let mut search_row = div().h_flex().items_center().w_full().gap_1().px_2().pb_2();
+        // #2 工具栏与内容分层：搜索行整体给一层底（明亮主题下与列表区边界清晰），
+        // 无边框搜索框在这层底上显形；间距上下对称（原只有 pb_2，顶不贴面板头）。
+        let mut search_row = div()
+            .h_flex()
+            .items_center()
+            .w_full()
+            .gap_1()
+            .px_2()
+            .py_1p5()
+            .bg(cx.theme().colors.group_box);
         if let Some(input) = &self.nav_search {
             // 搜索框前导放大镜（原型 §2 的 `[🔍 …]`）：面板头部三行控件里
             // 只有这一行是输入框，给个形状信号比只靠 placeholder 更快认出。
             let search_icon = nav_icon("icons/search.svg", ui::ICON_SIZE_SM, muted);
+            // #26 匹配开关（`.*` 正则 / `Aa` 区分大小写）移入输入框内部（suffix），
+            // 与草稿箱搜索输入框同一形态：`bordered(false)` + `focus_bordered(true)`
+            // 无边框风格，明暗主题下都靠 hover/focus 边框显形。
+            // 点击只翻状态 + 重排索引搜索（词没变但签名变了 → `nav_schedule_index_search` 会重搜）；
+            // 开关随面板状态持久化（重启后保持）。
+            let (regex, case_sensitive) = {
+                let v = self.nav.borrow();
+                (v.search_regex, v.search_case_sensitive)
+            };
+            let (selected_bg, hover_bg, fg) = {
+                let theme = cx.theme();
+                (
+                    theme.tokens.primary.alpha(0.14),
+                    theme.tokens.secondary_hover,
+                    theme.colors.foreground,
+                )
+            };
+            let entity_regex = cx.entity();
+            let entity_cs = cx.entity();
+            let reg_btn = div()
+                .id("nav-search-regex")
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .px_1()
+                .h_5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if regex { fg } else { muted })
+                .when(regex, |this| this.bg(selected_bg))
+                .when(!regex, move |s| s.hover(move |s| s.bg(hover_bg)))
+                .child(".*")
+                .on_click(move |_, _, app| {
+                    entity_regex.update(app, |this, cx| {
+                        {
+                            let mut v = this.nav.borrow_mut();
+                            v.search_regex = !v.search_regex;
+                        }
+                        this.mark_panel_state_dirty(cx);
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
+            let case_btn = div()
+                .id("nav-search-case")
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .px_1()
+                .h_5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if case_sensitive { fg } else { muted })
+                .when(case_sensitive, |this| this.bg(selected_bg))
+                .when(!case_sensitive, move |s| s.hover(move |s| s.bg(hover_bg)))
+                .child("Aa")
+                .on_click(move |_, _, app| {
+                    entity_cs.update(app, |this, cx| {
+                        {
+                            let mut v = this.nav.borrow_mut();
+                            v.search_case_sensitive = !v.search_case_sensitive;
+                        }
+                        this.mark_panel_state_dirty(cx);
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
             search_row = search_row.child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(Input::new(input).prefix(search_icon)),
+                    .child(
+                        Input::new(input)
+                            .bordered(false)
+                            .focus_bordered(true)
+                            .w_full()
+                            .prefix(search_icon)
+                            .suffix(
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_0p5()
+                                    .child(case_btn)
+                                    .child(reg_btn),
+                            ),
+                    ),
             );
         }
         search_row = search_row.child(facet_button);
@@ -1002,12 +1178,44 @@ impl NavView {
             body = body.child(header);
         }
         // 分组 / 成员 / 标签尚未就绪（首帧由 `render_nav` 的 defer 加载）。
+        // 原型 loading 态用骨架行（`skel`）：分组就绪前给 4 条呼吸占位，避免「加载中…」裸文本。
         if !self.nav.borrow().groups_loaded {
+            let muted = cx.theme().colors.muted_foreground;
             return body.child(
                 div()
-                    .text_xs()
-                    .text_color(cx.theme().colors.muted_foreground)
-                    .child("加载中…"),
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .px_1()
+                    .pt_1()
+                    .child(
+                        div()
+                            .h(rems(0.5625))
+                            .w(rems(11.5))
+                            .rounded_md()
+                            .bg(muted.alpha(0.16)),
+                    )
+                    .child(
+                        div()
+                            .h(rems(0.5625))
+                            .w(rems(8.5))
+                            .rounded_md()
+                            .bg(muted.alpha(0.16)),
+                    )
+                    .child(
+                        div()
+                            .h(rems(0.5625))
+                            .w(rems(10.))
+                            .rounded_md()
+                            .bg(muted.alpha(0.16)),
+                    )
+                    .child(
+                        div()
+                            .h(rems(0.5625))
+                            .w(rems(7.))
+                            .rounded_md()
+                            .bg(muted.alpha(0.16)),
+                    ),
             );
         }
         if self.rows.is_empty() {
@@ -1034,18 +1242,41 @@ impl NavView {
     }
 
     /// 空态：没有任何连接（引导新建）/ 有连接但都过不了筛选。
+    ///
+    /// 原型空态三要素：居中大图标块 + 标题 + 说明 + 主按钮（居中布局，非左上角文本）。
     pub(super) fn render_nav_empty_state(&self, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let fg = cx.theme().colors.foreground;
+        let icon_tile = |path: &'static str, cx: &mut Context<Self>| {
+            div()
+                .w(rems(2.75))
+                .h(rems(2.75))
+                .flex_none()
+                .rounded_md()
+                .bg(cx.theme().colors.list_hover)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::empty()
+                        .path(path)
+                        .size(rems(1.375))
+                        .text_color(muted),
+                )
+        };
         if self.host.connections().is_empty() {
             let host = self.host.clone();
+            let tile = icon_tile("icons/database.svg", cx);
             return div()
                 .w_full()
-                .pt_5()
+                .flex_1()
                 .px_3()
                 .v_flex()
-                .items_start()
+                .items_center()
+                .justify_center()
                 .gap_1p5()
+                .text_center()
+                .child(tile)
                 .child(
                     div()
                         .text_xs()
@@ -1079,13 +1310,17 @@ impl NavView {
         let entity = cx.entity();
         let input = self.nav_search.clone();
         let summary = self.nav_filter_summary(cx);
+        let tile = icon_tile("icons/search.svg", cx);
         let mut card = div()
             .w_full()
-            .pt_5()
+            .flex_1()
             .px_3()
             .v_flex()
-            .items_start()
+            .items_center()
+            .justify_center()
             .gap_1p5()
+            .text_center()
+            .child(tile)
             .child(
                 div()
                     .text_xs()

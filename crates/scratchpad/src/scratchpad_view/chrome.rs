@@ -117,7 +117,9 @@ impl ScratchpadView {
                 .pb_1();
             if let Some(input) = filter_input {
                 row = row
-                    .child(div().flex_1().min_w_0().child(Input::new(&input).bordered(false).focus_bordered(true).w_full()))
+                    .child(div().flex_1().min_w_0().child(
+                        Input::new(&input).bordered(false).focus_bordered(true).w_full(),
+                    ))
                     .child(
                         div()
                             .id("sp-file-search-run")
@@ -1619,7 +1621,7 @@ impl ScratchpadView {
             .w_full()
             .px_1p5()
             .pb_1();
-        if let Some(input) = self.scratchpad.borrow().search_input.clone() {
+        if let Some(input) = self.scratchpad.borrow().content_search_input.clone() {
             let search_word = self.scratchpad.borrow().search_word;
             let word_btn = div()
                 .id("sp-word")

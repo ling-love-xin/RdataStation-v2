@@ -197,6 +197,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
+        Slot::NavigatorShowNameTypeShort => {
+            SettingValue::Bool(settings.navigator.show_name_type_short)
+        }
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
         Slot::ResourcesKeepVersions => {
@@ -300,6 +303,12 @@ impl SettingsService {
                 };
                 Self::set_show_scope(on, cx);
             }
+            Slot::NavigatorShowNameTypeShort => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_name_type_short(on, cx);
+            }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters => return false,
             Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
@@ -384,7 +393,7 @@ impl SettingsService {
     ///
     /// `System` 走 `Theme::sync_system_appearance`（按系统外观解析）；显式模式走
     /// `Theme::change`。
-    pub fn set_theme_mode(mode: AppearanceMode, window: Option<&mut gpui_kit::Window>, cx: &mut App) {
+    pub fn set_theme_mode(mode: AppearanceMode, mut window: Option<&mut gpui_kit::Window>, cx: &mut App) {
         {
             let settings = cx.global_mut::<Settings>();
             settings.appearance.theme_mode = mode;
@@ -392,11 +401,19 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         match mode {
-            AppearanceMode::System => Theme::sync_system_appearance(window, cx),
+            AppearanceMode::System => Theme::sync_system_appearance(window.as_deref_mut(), cx),
             AppearanceMode::Light | AppearanceMode::Dark => {
-                Theme::change(explicit_theme_mode(mode).expect("显式模式必有映射"), window, cx);
+                Theme::change(
+                    explicit_theme_mode(mode).expect("显式模式必有映射"),
+                    window.as_deref_mut(),
+                    cx,
+                );
             }
         }
+        // 主题配置（RDS 资产声明 `font.size: 16`）会经 `apply_config` 重载 `theme.font_size`，
+        // 而窗口 rem 基准是用户字号——不重放一次，切换后 font_size 系与 rem 系错位，
+        // 表现就是「切明暗字体大小变了」。与启动装配同序：先主题、后字号。
+        Self::set_font_size(Self::font_size(cx), window, cx);
     }
 
     /// 明暗切换（`ToggleThemeMode` 命令与设置页「主题模式」两条路径共用）。
@@ -520,6 +537,44 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         // 导航面板按需重渲染（设置与面板是不同实体，不通知不会即时刷新）。
+        cx.refresh_windows();
+    }
+
+    /// 连接名称前是否以 `[简称]` 显示类型简称。
+    pub fn show_name_type_short(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_name_type_short
+    }
+
+    /// 设置并持久化「连接名称显示类型简称」开关。
+    pub fn set_show_name_type_short(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_name_type_short = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
+    /// 数据库类型 → 简称（`type_id` → 简称）。未登记类型回退类型名首 2 字母
+    /// （大写）；与导航徽标缩写（`nav_type_badge`）同源。
+    pub fn type_short(type_id: &str, cx: &App) -> String {
+        let map = &cx.global::<Settings>().navigator.type_short_map;
+        map.get(type_id).cloned().unwrap_or_else(|| {
+            let upper = type_id.to_uppercase();
+            let short: String = upper.chars().take(2).collect();
+            if short.is_empty() { "DB".into() } else { short }
+        })
+    }
+
+    /// 整体替换类型简称映射表（「类型简称映射…」弹窗保存时调用），并持久化 + 刷新。
+    pub fn set_type_short_map(map: std::collections::HashMap<String, String>, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.type_short_map = map;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
         cx.refresh_windows();
     }
 

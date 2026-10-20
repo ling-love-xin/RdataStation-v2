@@ -114,6 +114,18 @@ impl NavHost for WorkbenchNavHost {
         settings::SettingsService::source_short_code(cx)
     }
 
+    fn set_source_short_code(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_source_short_code(value, cx);
+    }
+
+    fn show_name_type_short(&self, cx: &App) -> bool {
+        settings::SettingsService::show_name_type_short(cx)
+    }
+
+    fn type_short(&self, type_id: &str, cx: &App) -> String {
+        settings::SettingsService::type_short(type_id, cx)
+    }
+
     fn nav_filters(&self, cx: &App) -> NavFilters {
         let f = settings::SettingsService::nav_filters(cx);
         NavFilters {

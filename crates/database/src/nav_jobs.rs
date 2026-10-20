@@ -290,6 +290,13 @@ enum Job {
         consumer: SearchConsumer,
         kind: SearchKind,
         query: String,
+        /// 搜索框「区分大小写（`Aa`）」：名称档在 LIKE 候选上做 Rust 侧 `contains` 精筛
+        /// （SQLite `LIKE` 对 ASCII 不敏感，候选是超集）。
+        case_sensitive: bool,
+        /// 搜索框「正则（`.*`）」：名称档在 LIKE 候选上做正则精筛
+        /// （LIKE 中缀候选先取，正则再过滤；锚定 / 转义类模式受候选集约束，见
+        /// [`search_targets`] 注）。
+        regex: bool,
         project_root: Option<String>,
         targets: Vec<SearchTarget>,
     },
@@ -911,6 +918,8 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             consumer,
             kind,
             query,
+            case_sensitive,
+            regex,
             project_root,
             targets,
         } => {
@@ -932,11 +941,21 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                     .chunks(chunk_size)
                     .map(|chunk| {
                         // 每块克隆查询词与项目根（至多 SEARCH_PARALLEL 份，开销可忽略）；
-                        // `kind` 是 Copy 直接带上。scoped 线程在 `scope` 结束前必先 join，
-                        // 克隆的是 String 值本身，不借 `chunk` 之外的任何栈变量。
+                        // `kind` / `case_sensitive` / `regex` 是 Copy 直接带上。scoped 线程
+                        // 在 `scope` 结束前必先 join，克隆的是 String 值本身，不借 `chunk`
+                        // 之外的任何栈变量。
                         let query = query.clone();
                         let project_root = project_root.clone();
-                        s.spawn(move || search_targets(kind, &query, project_root.as_deref(), chunk))
+                        s.spawn(move || {
+                            search_targets(
+                                kind,
+                                &query,
+                                case_sensitive,
+                                regex,
+                                project_root.as_deref(),
+                                chunk,
+                            )
+                        })
                     })
                     .collect();
                 // 按 chunk 序收集（join 失败 = 该块 panic → 空块，不 panic 整任务）。
@@ -988,9 +1007,17 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
 ///
 /// 返回 `(搜了的连接数, 命中)`：无落盘缓存的连接直接跳过（搜索不建文件）；
 /// 每连接命中封顶 [`SEARCH_LIMIT_PER_CONN`]（全局 300 截断由调用方在合并后统一做）。
+///
+/// `case_sensitive` / `regex`（搜索框 `Aa` / `.*` 开关）：名称档在 **LIKE 中缀候选**上
+/// 再做 Rust 侧精筛——SQLite `LIKE` 对 ASCII 不区分大小写，候选是超集，精筛不会漏；
+/// 正则同理叠加在候选集上（LIKE 已要求整词中缀命中，故 `^ord` 这类**锚定**模式与
+/// `.` 通配任意字符的语义**不完整**——这是「中缀 + 精筛」架构的已知边界，面板 UI 已注明）。
+/// 正则编译失败（非法模式）时退化为不精筛（日志留痕），避免一次手误让整个搜索报废。
 fn search_targets(
     kind: SearchKind,
     query: &str,
+    case_sensitive: bool,
+    regex: bool,
     project_root: Option<&str>,
     targets: &[SearchTarget],
 ) -> (usize, Vec<SearchHit>) {
@@ -1019,6 +1046,28 @@ fn search_targets(
                         schema: hit.schema_name,
                         snippet: None,
                     });
+                }
+                // 「Aa」区分大小写：`contains` 精筛（Rust 字符串比较区分大小写）。
+                if case_sensitive {
+                    hits.retain(|h| h.object_name.contains(query));
+                }
+                // 「.*」正则：正则精筛（`(?i)` 前缀与「Aa」关联动；编译失败退化为不筛）。
+                if regex {
+                    let pattern = if case_sensitive {
+                        query.to_string()
+                    } else {
+                        format!("(?i){query}")
+                    };
+                    match regex::Regex::new(&pattern) {
+                        Ok(re) => hits.retain(|h| re.is_match(&h.object_name)),
+                        Err(e) => {
+                            tracing::warn!(
+                                pattern = %pattern,
+                                error = %e,
+                                "导航搜索正则编译失败，本轮退化为中缀匹配"
+                            );
+                        }
+                    }
                 }
             }
             SearchKind::FullText => {
@@ -1244,6 +1293,8 @@ pub fn enqueue_search(
     consumer: SearchConsumer,
     kind: SearchKind,
     query: &str,
+    case_sensitive: bool,
+    regex: bool,
     project_root: Option<&str>,
     targets: Vec<SearchTarget>,
 ) {
@@ -1252,6 +1303,8 @@ pub fn enqueue_search(
         consumer,
         kind,
         query: query.to_string(),
+        case_sensitive,
+        regex,
         project_root: project_root.map(|s| s.to_string()),
         targets,
     });
@@ -1615,7 +1668,14 @@ mod tests {
         seed_cache("P_chunk_b", &root, "orders_b");
         let targets = [target("P_chunk_a"), target("P_chunk_b"), target("P_chunk_c")];
 
-        let (searched, hits) = search_targets(SearchKind::Name, "order", Some(&root_s), &targets);
+        let (searched, hits) = search_targets(
+            SearchKind::Name,
+            "order",
+            false,
+            false,
+            Some(&root_s),
+            &targets,
+        );
         assert_eq!(searched, 2, "无缓存的连接不计入 searched");
         // 保序：按 target 序（a 的命中在前，b 的在后）
         let conns: Vec<&str> = hits.iter().map(|h| h.conn_id.as_str()).collect();
@@ -1625,6 +1685,86 @@ mod tests {
         assert!(
             hits.iter().all(|h| h.conn_id != "P_chunk_c"),
             "无缓存连接不得有命中"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 搜索开关精筛（`Aa` 大小写 / `.*` 正则）：LIKE 中缀候选是超集，精筛只收不减；
+    /// 正则编译失败退化为不筛（不 panic）。
+    ///
+    /// 注意正则模式 = 搜索词本身：LIKE 已要求该词**字面**中缀命中，故 `^` 锚定、
+    /// `.` 通配、字符类这类「LIKE 字面不匹配」的模式天然无候选（架构边界，见
+    /// [`search_targets`]）；正则开关在本架构里的实际能力是大小写联动（`(?i)` 前缀）
+    /// 与非法模式退化。本测试按此真实行为断言。
+    #[test]
+    fn search_targets_applies_case_and_regex_flags() {
+        let root = search_temp_root("flags");
+        let root_s = root.to_string_lossy().to_string();
+        seed_cache("P_f_a", &root, "Orders");
+        seed_cache("P_f_b", &root, "orders");
+        seed_cache("P_f_c", &root, "orders[");
+        let targets = [
+            target("P_f_a"),
+            target("P_f_b"),
+            target("P_f_c"),
+        ];
+        let names = |hits: &[SearchHit]| -> std::collections::BTreeSet<String> {
+            hits.iter()
+                .map(|h| h.object_name.clone())
+                .collect::<std::collections::BTreeSet<String>>()
+        };
+
+        // 默认（LIKE 不敏感）：三种大小写/字形都命中（列 order_id 不含 "orders" 字面，不中）。
+        let (_, hits) =
+            search_targets(SearchKind::Name, "orders", false, false, Some(&root_s), &targets);
+        assert_eq!(
+            names(&hits),
+            ["Orders", "orders", "orders["]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            "默认全中"
+        );
+
+        // `Aa`：只留精确小写（`contains` 是中缀，`orders[` 含 `orders` 也在列）。
+        let (_, hits) =
+            search_targets(SearchKind::Name, "orders", true, false, Some(&root_s), &targets);
+        assert_eq!(
+            names(&hits),
+            ["orders", "orders["].into_iter().map(String::from).collect(),
+            "区分大小写只留小写"
+        );
+
+        // 正则（忽略大小写）：pattern = "(?i)orders"，`(?i)` 生效——`Orders` 保留
+        //（若没 (?i) 会被正则大小写敏感排除）；中缀无锚定，`orders[` 也在。
+        let (_, hits) =
+            search_targets(SearchKind::Name, "orders", false, true, Some(&root_s), &targets);
+        assert_eq!(
+            names(&hits),
+            ["Orders", "orders", "orders["]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            "正则 (?i) 生效：Orders 保留"
+        );
+
+        // 正则 + 大小写：pattern = "orders"（无 (?i)）→ `Orders` 被正则敏感排除，
+        // `orders[` 仍中（无锚定）。
+        let (_, hits) =
+            search_targets(SearchKind::Name, "orders", true, true, Some(&root_s), &targets);
+        assert_eq!(
+            names(&hits),
+            ["orders", "orders["].into_iter().map(String::from).collect(),
+            "正则 + 大小写：排除 Orders"
+        );
+
+        // 非法正则：退化为不筛（候选 `orders[` 保留，不 panic）。
+        let (_, hits) =
+            search_targets(SearchKind::Name, "orders[", false, true, Some(&root_s), &targets);
+        assert_eq!(
+            names(&hits),
+            ["orders["].into_iter().map(String::from).collect(),
+            "非法正则退化为不筛"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1641,7 +1781,15 @@ mod tests {
         }
         let targets: Vec<SearchTarget> = conn_ids.iter().map(|c| target(c)).collect();
 
-        enqueue_search(SearchConsumer::Panel, SearchKind::Name, "order", Some(&root_s), targets);
+        enqueue_search(
+            SearchConsumer::Panel,
+            SearchKind::Name,
+            "order",
+            false,
+            false,
+            Some(&root_s),
+            targets,
+        );
         // 轮询等 worker 回填（与 `worker_isolates_panics…` 同一 deadline 模式）
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut results = Vec::new();

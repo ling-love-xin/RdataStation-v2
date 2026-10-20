@@ -175,18 +175,27 @@ impl NavView {
         cx: &mut Context<Self>,
     ) {
         let query = filter.trim().to_string();
+        // 搜索签名 =（词, 正则, 大小写）：词没变但开关变了也要重搜
+        // （`Aa` / `.*` toggle 切换时 query 相同，旧 `search_query` 判断会误判“没变”）。
+        let (regex, case_sensitive) = {
+            let view = self.nav.borrow();
+            (view.search_regex, view.search_case_sensitive)
+        };
         let started = {
             let mut view = self.nav.borrow_mut();
+            let sig = (query.clone(), regex, case_sensitive);
             if !nav_search_query_ready(&query) {
                 view.search_query = None;
+                view.search_sig = None;
                 view.search_hits.clear();
                 view.search_searched = 0;
                 false
-            } else if view.search_query.as_deref() == Some(query.as_str()) {
-                // 查询词没变：不重搜（结果已经在状态里）。
+            } else if view.search_sig.as_ref() == Some(&sig) {
+                // 词与开关都没变：不重搜（结果已经在状态里）。
                 false
             } else {
                 view.search_query = Some(query.clone());
+                view.search_sig = Some(sig);
                 view.search_hits.clear();
                 view.search_searched = 0;
                 true
@@ -213,10 +222,29 @@ impl NavView {
             nav_jobs::SearchConsumer::Navigator,
             nav_jobs::SearchKind::Name,
             &query,
+            case_sensitive,
+            regex,
             root.as_deref(),
             targets,
         );
         self.ensure_nav_pump(cx);
+    }
+
+    /// 重排一次索引搜索（搜索开关 `.*` / `Aa` 切换用）：词与连接筛选照当前状态现取。
+    ///
+    /// 为什么不能只靠 `InputEvent::Change`：toggle 点按不发输入事件，而词本身没变时
+    /// [`Self::nav_schedule_index_search`] 靠**签名**（词, 正则, 大小写）判变——所以
+    /// 开关翻转后必须主动排一次，否则结果集永远是旧开关下的。
+    pub(super) fn rerun_nav_search(&self, cx: &mut Context<Self>) {
+        let filter = self
+            .nav_search
+            .as_ref()
+            .map(|s| s.read(cx).value().to_string())
+            .unwrap_or_default();
+        let conn_filter =
+            NavConnFilter::snapshot(&self.nav.borrow(), self.nav.borrow().source_filter);
+        let conns = self.host.connections();
+        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
     }
 
     /// 展开 / 折叠节点；首次展开（或已展开未加载）时排队后台懒加载，并持久化展开态。
@@ -1099,6 +1127,13 @@ impl NavView {
             self.nav_pending_scroll = Some(key);
         }
         if !state.filter_text.is_empty() {
+            // 恢复搜索开关（`Aa` / `.*` 随面板状态持久化；词空时开关也恢复——
+            // 否则「开过正则又清空词」下次打开 toggle 回到关）。
+            {
+                let mut view = self.nav.borrow_mut();
+                view.search_regex = state.search_regex;
+                view.search_case_sensitive = state.search_case_sensitive;
+            }
             if let Some(input) = self.nav_search.clone() {
                 // 恢复回填：`set_value` 是程序化写值，**不发** `InputEvent::Change`
                 //（gpui-base `input/base/state.rs` 内部临时关事件），订阅里的搜索排程
@@ -1168,6 +1203,8 @@ impl NavView {
             let state = crate::model::NavState {
                 selected_key: selected,
                 filter_text,
+                search_regex: self.nav.borrow().search_regex,
+                search_case_sensitive: self.nav.borrow().search_case_sensitive,
                 ..Default::default()
             };
             let _ = crate::nav_store::save_panel_state(root, &state);

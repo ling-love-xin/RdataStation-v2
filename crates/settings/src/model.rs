@@ -248,6 +248,14 @@ pub struct Navigator {
     /// 连接行是否显示归属域列（默认开）。
     #[serde(default = "default_true")]
     pub show_scope: bool,
+    /// 连接名称前是否以 `[简称]` 显示类型简称（如 `[MY] 192.168.3.138`）。默认开。
+    /// 简称来自 `type_short_map`（「类型简称映射…」弹窗维护），缺省回退徽标缩写。
+    #[serde(default = "default_true")]
+    pub show_name_type_short: bool,
+    /// 数据库类型 → 简称 映射表（`type_id` → 简称）。默认同徽标缩写
+    /// （PG/MY/MA/SQ/DK/MS/OR/CH/MG/RD/GH）；未登记类型回退类型名前 2 字母。
+    #[serde(default)]
+    pub type_short_map: std::collections::HashMap<String, String>,
     /// facet 筛选（类型 / 驱动 / 标签 / 归属域）。
     #[serde(default)]
     pub filters: NavigatorFilters,
@@ -259,9 +267,33 @@ impl Default for Navigator {
             source_short_code: true,
             show_tags: false,
             show_scope: true,
+            show_name_type_short: true,
+            type_short_map: default_type_short_map(),
             filters: NavigatorFilters::default(),
         }
     }
+}
+
+/// 类型简称映射默认值：与导航徽标缩写（`nav_type_badge`）同源，
+/// 设置层独立持有种子（不依赖 database crate，依赖只向下）。
+/// 需要新增类型时，同步维护 `primitives.rs::nav_type_badge` 与此表。
+pub fn default_type_short_map() -> std::collections::HashMap<String, String> {
+    [
+        ("postgresql", "PG"),
+        ("mysql", "MY"),
+        ("mariadb", "MA"),
+        ("sqlite", "SQ"),
+        ("duckdb", "DK"),
+        ("mssql", "MS"),
+        ("oracle", "OR"),
+        ("clickhouse", "CH"),
+        ("mongodb", "MG"),
+        ("redis", "RD"),
+        ("github", "GH"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 /// 资产库（M6）：分析存档策略。

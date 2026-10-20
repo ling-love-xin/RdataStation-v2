@@ -107,6 +107,7 @@ pub enum Slot {
     NavigatorSourceShortCode,
     NavigatorShowTags,
     NavigatorShowScope,
+    NavigatorShowNameTypeShort,
     NavigatorFilters,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
@@ -130,6 +131,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.source_short_code" => Slot::NavigatorSourceShortCode,
         "navigator.show_tags" => Slot::NavigatorShowTags,
         "navigator.show_scope" => Slot::NavigatorShowScope,
+        "navigator.show_name_type_short" => Slot::NavigatorShowNameTypeShort,
         "navigator.filters" => Slot::NavigatorFilters,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
@@ -152,7 +154,9 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::AppearanceFontSize => KindTag::Number,
         Slot::AppearanceLocale => KindTag::Enum,
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
-        Slot::NavigatorShowTags | Slot::NavigatorShowScope => KindTag::Bool,
+        Slot::NavigatorShowTags
+        | Slot::NavigatorShowScope
+        | Slot::NavigatorShowNameTypeShort => KindTag::Bool,
         Slot::ConnectTimeoutMs => KindTag::Number,
         // 保留份数是有符号数：`-1` = 全留（哨兵值，不是"少一份"）。
         Slot::ResourcesKeepVersions => KindTag::Number,
@@ -339,7 +343,21 @@ pub const REGISTRY: &[SettingSpec] = &[
         section: "navigator",
         section_label: "数据源导航",
         label: "显示归属域",
-        hint: "行尾右对齐的归属域列（便于扫视的一端对齐列）",
+        hint: "「来源标识」的一部分：行尾右对齐的归属域列（可独立于短码开关关闭；关闭后整列隐藏）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Both,
+        consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
+        composite: false,
+    },
+    SettingSpec {
+        key: "navigator.show_name_type_short",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "连接名称显示类型简称",
+        hint: "名称前以方括号显示类型简称（如 `[MY] 192.168.3.138`；简称表可在「类型简称映射…」弹窗维护，默认同徽标缩写）",
         kind: SettingKind::Bool,
         presets: &[],
         default_json: "true",
@@ -600,6 +618,11 @@ fn leaf_paths(root: &Value) -> Vec<String> {
         }
         match value {
             Value::Object(map) => {
+                // 字符串键值数据表（当前仅 `navigator.type_short_map`：类型 → 简称）由
+                // 弹窗维护，不是声明式设置项：整体豁免（不逐键下沉、不要求登记）。
+                if prefix == "navigator.type_short_map" {
+                    return;
+                }
                 for (k, v) in map {
                     let child = if prefix.is_empty() {
                         k.clone()

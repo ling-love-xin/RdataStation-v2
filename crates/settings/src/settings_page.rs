@@ -49,6 +49,8 @@ pub struct SettingsHost {
     pub on_open_log_dir: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 打开日志查看对话框（宿主实现）。
     pub on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 打开「类型简称映射」对话框（宿主实现；维护数据库类型 → 简称表）。
+    pub on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
@@ -293,6 +295,15 @@ impl SettingsPage {
                     "缓存管理…",
                     "settings-open-cache",
                     on_click,
+                    cx,
+                ));
+                let on_map = self.host.on_open_type_short_map.clone();
+                card = card.child(self.render_action_row(
+                    "类型简称映射",
+                    "维护「数据库类型 → 简称」映射表（连接名称 `[简称]` 与徽标缩写共用；默认同徽标缩写，未登记类型回退类型名前 2 字母）",
+                    "维护映射表…",
+                    "settings-open-type-short-map",
+                    on_map,
                     cx,
                 ));
             }
@@ -948,6 +959,7 @@ mod tests {
             on_open_cache: Rc::new(|_, _| {}),
             on_open_log_dir: Rc::new(|_, _| {}),
             on_open_log_view: Rc::new(|_, _| {}),
+            on_open_type_short_map: Rc::new(|_, _| {}),
         };
         let (page, cx) =
             cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));

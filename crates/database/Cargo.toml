@@ -30,6 +30,10 @@ specta.workspace = true
 # 缓存刷新（prune_schema）失败必须留痕：历史上它把底层错误吞成「刷新了但旧行还在」。
 tracing.workspace = true
 
+# ===== 搜索 =====
+# 搜索框「正则（`.*`）」开关：LIKE 中缀候选上做正则精筛（候选集为超集）。
+regex.workspace = true
+
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
 paths = { workspace = true, features = ["test-support"] }

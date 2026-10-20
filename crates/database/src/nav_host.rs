@@ -97,6 +97,14 @@ pub trait NavHost: 'static {
 
     /// 归属域用短码（`P`）还是文字（`项目`）。
     fn source_short_code(&self, cx: &App) -> bool;
+    fn set_source_short_code(&self, value: bool, cx: &mut App);
+
+    /// 连接名称前是否以 `[简称]` 显示类型简称（如 `[MY] 192.168.3.138`）。
+    fn show_name_type_short(&self, cx: &App) -> bool;
+
+    /// 数据库类型 → 简称（`type_id` → 简称；来源：设置「类型简称映射」表，
+    /// 未登记回退类型名首 2 字母大写）。
+    fn type_short(&self, type_id: &str, cx: &App) -> String;
 
     /// 当前筛选条件（面板头 facet）。
     fn nav_filters(&self, cx: &App) -> NavFilters;

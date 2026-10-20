@@ -13,3 +13,4 @@ pub mod nav_host;
 pub mod project_host;
 pub mod scratchpad_host;
 pub mod resource_host;
+pub mod type_short_map_dialog;

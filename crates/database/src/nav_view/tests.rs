@@ -105,6 +105,13 @@ mod stub_host {
         fn source_short_code(&self, _cx: &App) -> bool {
             false
         }
+        fn set_source_short_code(&self, _value: bool, _cx: &mut App) {}
+        fn show_name_type_short(&self, _cx: &App) -> bool {
+            false
+        }
+        fn type_short(&self, type_id: &str, _cx: &App) -> String {
+            type_id.to_uppercase().chars().take(2).collect()
+        }
         fn nav_filters(&self, _cx: &App) -> NavFilters {
             NavFilters::default()
         }

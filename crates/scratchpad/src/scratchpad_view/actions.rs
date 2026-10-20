@@ -730,22 +730,30 @@ impl ScratchpadView {
                 }
             },
         );
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件文字"));
+        let search_input = cx.new(|cx| {
+            // #32/#5 初始（文件过滤）搜索框提示词：搜索文件名或文件夹名（与内容搜索态区分）。
+            InputState::new(window, cx).placeholder("搜索文件名或文件夹名")
+        });
         let search_sub = cx.subscribe_in(
             &search_input,
             window,
+            |_this, _e, ev: &InputEvent, _w, cx| match ev {
+                InputEvent::Change => cx.notify(),
+                // #5 初始过滤框 Enter 仅作为过滤确认（过滤本身实时）；内容搜索由
+                // `content_search_input`（搜索面板查询框）独立触发。
+                _ => {}
+            },
+        );
+        // #5 内容搜索查询输入：搜索面板打开后独立于文件过滤框，placeholder「搜索文件内容」。
+        let content_search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("搜索文件内容")
+        });
+        let content_search_sub = cx.subscribe_in(
+            &content_search_input,
+            window,
             |this, _e, ev: &InputEvent, _w, cx| match ev {
                 InputEvent::Change => cx.notify(),
-                InputEvent::PressEnter { .. } => {
-                    // 内容搜索只在搜索态（面板打开）触发；普通视图 Enter 仅作为
-                    // 文件过滤的确认（过滤本身实时，Enter 无需额外动作）。
-                    let panel_open = this.scratchpad.borrow().search_panel_open;
-                    if panel_open {
-                        this.run_scratchpad_content_search(cx);
-                    } else {
-                        cx.notify();
-                    }
-                }
+                InputEvent::PressEnter { .. } => this.run_scratchpad_content_search(cx),
                 _ => {}
             },
         );
@@ -779,6 +787,8 @@ impl ScratchpadView {
         view._name_sub = Some(name_sub);
         view.search_input = Some(search_input);
         view._search_sub = Some(search_sub);
+        view.content_search_input = Some(content_search_input);
+        view._content_search_sub = Some(content_search_sub);
         view.search_replace_input = Some(replace_input);
         view.search_include_input = Some(include_input);
         view.search_exclude_input = Some(exclude_input);
@@ -1439,7 +1449,7 @@ impl ScratchpadView {
         let query = self
             .scratchpad
             .borrow()
-            .search_input
+            .content_search_input
             .as_ref()
             .map(|i| i.read(cx).value().trim().to_string())
             .unwrap_or_default();

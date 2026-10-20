@@ -268,6 +268,13 @@ pub struct NavViewState {
     child_total: HashMap<String, usize>,
     /// 已发给后台的索引搜索词（`None` = 当前无搜索；用于“查询词变了才重搜”）。
     search_query: Option<String>,
+    /// 搜索框「正则（`.*）」开关（面板级，随面板状态持久化）。
+    pub search_regex: bool,
+    /// 搜索框「区分大小写（`Aa`）」开关（面板级，随面板状态持久化）。
+    pub search_case_sensitive: bool,
+    /// 搜索**签名** =（词, 正则, 大小写）：词没变但开关变了也要重搜
+    /// （旧判断只看 `search_query`，toggle 切换会被误判为“没变”而永远不重搜）。
+    search_sig: Option<(String, bool, bool)>,
     /// 索引搜索命中（跨连接；命中行进列表最前，见 `NavRow::SearchHit`）。
     search_hits: Vec<nav_jobs::SearchHit>,
     /// 上批结果实际搜了几个连接（有缓存的那些；用于结果区的“已搜 N 个连接”）。

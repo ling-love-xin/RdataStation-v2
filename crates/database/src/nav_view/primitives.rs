@@ -84,8 +84,20 @@ pub(super) fn nav_scope_tooltip(source: NavSource) -> String {
     match source {
         NavSource::Project => "归属域：项目连接（仅本项目可见）".to_string(),
         NavSource::Global => "归属域：全局连接（所有项目可见）".to_string(),
-        NavSource::Shared => "归属域：项目共享（全局定义 + 当前项目快照）".to_string(),
+        NavSource::Shared => "归属域：项目 + 全局区域（共享连接同时出现在「项目」与「全局」两处）".to_string(),
     }
+}
+
+/// 剥离连接名里的区域前缀（`[项目] / [全局] / [共享] `）。
+/// 区域信息由「归属域」列承载；名称里的重复前缀只挤占宽度（设置项可开关）。
+pub(super) fn strip_nav_scope_prefix(name: &str) -> String {
+    let name = name.trim_start();
+    for prefix in ["[项目] ", "[全局] ", "[共享] "] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            return rest.to_string();
+        }
+    }
+    name.to_string()
 }
 
 pub(super) fn nav_badge_hover_card(
@@ -156,6 +168,7 @@ pub(super) fn nav_type_label(type_id: &str, from_catalog: Option<(&str, &str)>) 
         "clickhouse" => "ClickHouse（分析型）",
         "mongodb" => "MongoDB（文档型）",
         "redis" => "Redis（键值型）",
+        "github" => "GitHub（仓库源）",
         _ => "",
     };
     if known.is_empty() {
@@ -207,6 +220,8 @@ pub(super) fn nav_type_badge(type_id: &str) -> (&'static str, String) {
         "clickhouse" => ("icons/chart-column.svg", "CH"),
         "mongodb" => ("icons/leaf.svg", "MG"),
         "redis" => ("icons/braces.svg", "RD"),
+        // GitHub 连接（仓库源 / GitHub 联邦数据）：Lucide 官方 github 图标 + GH。
+        "github" => ("icons/github.svg", "GH"),
         _ => {
             let upper = type_id.to_uppercase();
             let short: String = upper.chars().take(2).collect();
@@ -739,12 +754,8 @@ pub(super) fn nav_row_height(
     let mut height = tree::RowHeight::new(base);
     match row {
         NavRow::Connection { conn, .. } => {
-            let connected = view.connected.contains(&conn.id) || conn.connected;
             let loading = view.loading.contains(&conn.id);
             let error = view.errors.contains_key(&conn.id);
-            // 「未连接 · 右键连接」提示：展开、没连上、也没孩子、没报错、没在加载。
-            let expanded = view.expanded.contains(&conn.id);
-            let has_children = view.children.get(&conn.id).is_some_and(|c| !c.is_empty());
             height = height
                 .add_if(loading, ui::NAV_SUBLINE)
                 .add_if(
@@ -762,10 +773,6 @@ pub(super) fn nav_row_height(
                 .add_if(
                     view.copy_for.as_deref() == Some(conn.id.as_str()),
                     ui::NAV_EDITOR_COPY,
-                )
-                .add_if(
-                    expanded && !connected && !has_children && !error && !loading,
-                    ui::NAV_SUBLINE,
                 )
                 .add_if(error, ui::NAV_SUBLINE);
         }

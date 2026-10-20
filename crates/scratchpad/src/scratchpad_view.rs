@@ -282,9 +282,13 @@ pub struct ScratchpadViewState {
     conflicts: Vec<ScratchpadConflict>,
     /// 当前在中央编辑区展示差异的那份草稿（关闭 / 忽略时知道该关谁）。
     shown_diff: Option<String>,
-    /// 搜索输入（懒创建）。
+    /// 搜索输入（懒创建；初始态 = 按文件名 / 文件夹名过滤）。
     search_input: Option<Entity<InputState>>,
     _search_sub: Option<Subscription>,
+    /// 内容搜索查询输入（懒创建；搜索面板打开后独立于文件过滤框，
+    /// placeholder「搜索文件内容」——两处搜索域不同、提示词不同）。
+    content_search_input: Option<Entity<InputState>>,
+    _content_search_sub: Option<Subscription>,
     /// 替换输入（侧栏搜索框正下方，VSCode 形态；内容搜索时才显示）。
     search_replace_input: Option<Entity<InputState>>,
     /// 包含 / 排除文件 glob 输入（高级选项展开后显示）。
@@ -415,6 +419,8 @@ impl Default for ScratchpadViewState {
             shown_diff: None,
             search_input: None,
             _search_sub: None,
+            content_search_input: None,
+            _content_search_sub: None,
             search_replace_input: None,
             search_include_input: None,
             search_exclude_input: None,
