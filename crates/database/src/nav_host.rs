@@ -60,6 +60,17 @@ pub struct NavFilters {
     pub tag: Option<String>,
 }
 
+/// 一个已保存视图的展示信息（宿主从 settings 转换而来；视图侧只渲染，不读 settings）。
+#[derive(Debug, Clone)]
+pub struct SavedViewMeta {
+    /// 视图名。
+    pub name: String,
+    /// 筛选摘要（如 `source:project · type:mysql`；全空 = `全部`）。
+    pub summary: String,
+    /// 筛选快照（「应用视图」时直接落 chips）。
+    pub filters: NavFilters,
+}
+
 /// 宿主注入的能力（`workbench` 实现，见 `crates/workbench/src/panels/nav_host.rs`）。
 pub trait NavHost: 'static {
     // ==================== 宿主状态（读） ====================
@@ -109,6 +120,23 @@ pub trait NavHost: 'static {
     /// 当前筛选条件（面板头 facet）。
     fn nav_filters(&self, cx: &App) -> NavFilters;
     fn set_nav_filters(&self, filters: NavFilters, cx: &mut App);
+
+    // ==================== 已保存视图（宿主自持 settings） ====================
+
+    /// 全部已保存视图（按保存顺序，含筛选摘要与快照）。渲染「已保存视图 ▸」子菜单。
+    fn saved_views(&self, cx: &App) -> Vec<SavedViewMeta>;
+
+    /// 保存一个命名视图（同名拦截：已存在 → `Err`，由调用方提示改名）。
+    fn save_saved_view(&self, name: String, filters: NavFilters, cx: &mut App) -> Result<(), String>;
+
+    /// 删除一个命名视图（不存在 → `Err`）。
+    fn delete_saved_view(&self, name: &str, cx: &mut App) -> Result<(), String>;
+
+    /// 打开「将当前筛选存为视图」对话框（预填当前筛选预览；保存动作经 `save_saved_view`）。
+    fn open_saved_view_dialog(&self, filters: NavFilters, window: &mut Window, cx: &mut App);
+
+    /// 打开「管理视图」对话框（列表 + 删除；删除动作经 `delete_saved_view`）。
+    fn open_manage_views_dialog(&self, window: &mut Window, cx: &mut App);
 
     // ==================== 连接生命周期 ====================
 

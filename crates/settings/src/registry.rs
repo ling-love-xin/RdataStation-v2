@@ -111,6 +111,8 @@ pub enum Slot {
     NavigatorShowScope,
     NavigatorShowNameTypeShort,
     NavigatorFilters,
+    /// 已保存视图（复合值：命名 facet 快照列表；读写走导航面板自己的入口）。
+    NavigatorSavedViews,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
     ResourcesCollapsedGroups,
@@ -137,6 +139,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.show_scope" => Slot::NavigatorShowScope,
         "navigator.show_name_type_short" => Slot::NavigatorShowNameTypeShort,
         "navigator.filters" => Slot::NavigatorFilters,
+        "navigator.saved_views" => Slot::NavigatorSavedViews,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
         "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
@@ -172,6 +175,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         // 复合值（项目根 → 默认分组 id）：同上（分组 id 是每项目自己生成的，不能平铺一份）。
         Slot::ResourcesDefaultGroup => KindTag::Composite,
         Slot::NavigatorFilters => KindTag::Composite,
+        Slot::NavigatorSavedViews => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
@@ -185,7 +189,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
 pub fn slot_is_scalar(slot: Slot) -> bool {
     !matches!(
         slot,
-        Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups | Slot::ScratchpadToolbar
+        Slot::NavigatorFilters
+            | Slot::NavigatorSavedViews
+            | Slot::ResourcesCollapsedGroups
+            | Slot::ScratchpadToolbar
     )
 }
 
@@ -424,6 +431,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
         consumer: "workbench/src/panels/mod.rs::SidebarPanel::new + nav.rs::write_nav_filters",
+        composite: true,
+    },
+    SettingSpec {
+        key: "navigator.saved_views",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "已保存视图",
+        hint: "命名 facet 快照列表（导航面板 ⋯ 菜单「将当前筛选存为视图…」保存、子菜单应用）",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{}",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "workbench/src/components/saved_view_dialog.rs + nav_view/chrome.rs（⋯ 菜单视图组）",
         composite: true,
     },
     SettingSpec {

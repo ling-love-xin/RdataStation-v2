@@ -499,7 +499,7 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 
 - 本地筛选：过滤已加载节点的名称与标签，命中自动展开祖先链。
 - **facet 语法（v7，✅ 已实现 2026-09-13）**：`scope:global` / `type:postgres` / `driver:native` / `tag:prod`（`source:` 为 `scope:` 历史别名）。解析出的 token 作为**额外约束与面板 chips 叠加（AND）**，不写回 chips；未识别的 token 原样留在自由文本，避免“输入中丢字”。另：chips 侧的 `type` 存 `drivers.type_id`、`driver` 存驱动 id。
-- **已保存视图（规划）**：可把 `scope:project tag:prod type:mysql` 存为命名视图，避免重复点 chips（存储与交互待定，见 §11）。
+- **已保存视图（✅ 已实现 2026-10-20）**：可把 `scope:project tag:prod type:mysql` 存为命名视图，避免重复点 chips。存储 = `settings.json` `navigator.saved_views`（视图名为键的 map，与 facet 同域、跨项目 UI 偏好）；保存 = 面板头 `⋯ → 将当前筛选存为视图…`（名称必填 + 预览，**同名拦截**不覆盖）；应用 = `⋯ → 已保存视图 ▸` 子菜单（点击把四项 facet 写入 chips + 持久化 + 重查，**不动搜索框**）；管理 = `⋯ → 管理视图…`（列表 + 删除确认）。全空筛选禁止保存（保存入口由菜单侧仅在快照非全空时提供）。tag 字段现状单值照存，随 tag crate 演进。
 - ~~FTS 全量搜索（≥2 字符）：`MetadataCacheOps::search_fts`，snippet 高亮；结果落**中央编辑区**专用面板。~~
   **已按实现更新**（2026-09-19）：名称档（`search_index`，≥ 2 字）落**导航面板列表最前**（命中行 = `NavRow::SearchHit`，
   2026-09-20 并入虚拟列表，见 v11 修订点）；
@@ -705,7 +705,7 @@ flowchart TD
 | 8 | 标签命名规范 `key:value`（`env:prod`） | ⬜ 待定（影响 `tag:` 解析） |
 | 9 | 连接排序：组内手动优先，未排按名称；「未分组」同 | ✅ 已定 |
 | 10 | 大 schema 列内联展开阈值（>50 列转属性面板） | ✅ 已实现（2026-10-20：`navigator_service::MAX_INLINE_COLUMNS = 50`，超阈值生成 `ColumnOverflow` 提示节点跳表属性面板「列 (N)」页签） |
-| 11 | **已保存视图**（`scope:project tag:prod` → 命名视图） | ⬜ 待定（v6 新提，§6.3） |
+| 11 | **已保存视图**（`scope:project tag:prod` → 命名视图） | ✅ 已实现（2026-10-20：settings.json `navigator.saved_views` 视图名键 map；`⋯` 菜单「将当前筛选存为视图… / 已保存视图 ▸ 子菜单 / 管理视图…」；同名拦截、只应用四项 facet 不动搜索框、全空禁存；访问器 `SettingsService::{saved_views, save_saved_view, delete_saved_view}` + NavHost 通道） |
 | 12 | **状态排序「最近连接」**（`recent_connections` 表已有） | ✅ 已实现（2026-10-15 提交 `6dfafc83`：NavHost 增 `recent_connection_ids` / `note_connection_used`，排序规则=手动优先 → 最近使用（新→旧）→ 名称） |
 | 13 | **标签不冗余事实**（`type:` / `driver:` / `scope:` 不写入标签表，仅作隐式 facet） | ✅ v6 定为原则（§1.1 规则 2） |
 | 14 | **标签行内显示开关**（`⋯ → 显示标签`，默认关） | ✅ v7 已实现（2026-09-13） |

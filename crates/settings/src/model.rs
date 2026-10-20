@@ -277,6 +277,12 @@ pub struct Navigator {
     /// facet 筛选（类型 / 驱动 / 标签 / 归属域）。
     #[serde(default)]
     pub filters: NavigatorFilters,
+    /// 已保存视图（命名 facet 快照，跨项目 UI 偏好）。
+    ///
+    /// 视图名为键（同名唯一、天然拦截）；`BTreeMap` 按名有序，子菜单与管理对话框
+    /// 按此顺序展示。读写走导航面板自己的入口。
+    #[serde(default)]
+    pub saved_views: BTreeMap<String, NavigatorFilters>,
 }
 
 impl Default for Navigator {
@@ -288,8 +294,18 @@ impl Default for Navigator {
             show_name_type_short: true,
             type_short_map: default_type_short_map(),
             filters: NavigatorFilters::default(),
+            saved_views: BTreeMap::new(),
         }
     }
+}
+
+/// 一个已保存视图（访问器返回载体：`name` 来自 map 键，`filters` 是快照）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedView {
+    /// 视图名（map 键，同名唯一）。
+    pub name: String,
+    /// 保存时的筛选快照（四项均可为 `None`；全空视图禁止保存）。
+    pub filters: NavigatorFilters,
 }
 
 /// 类型简称映射默认值：与导航徽标缩写（`nav_type_badge`）同源，
@@ -498,5 +514,33 @@ mod tests {
         assert_eq!(back.navigator.filters.db_type.as_deref(), Some("postgres"));
         assert!(back.navigator.filters.driver.is_none());
         assert_eq!(back.navigator.filters.tag.as_deref(), Some("prod"));
+    }
+
+    /// 已保存视图：序列化往返 + 空对象默认回退（旧配置无此节时不报错）。
+    #[test]
+    fn saved_views_roundtrip() {
+        let mut s = Settings::default();
+        s.navigator.saved_views.insert(
+            "生产库".into(),
+            NavigatorFilters {
+                source: Some("project".into()),
+                db_type: Some("postgres".into()),
+                driver: None,
+                tag: Some("prod".into()),
+            },
+        );
+        let text = serde_json::to_string(&s).expect("序列化");
+        let back: Settings = serde_json::from_str(&text).expect("反序列化");
+        let view = back
+            .navigator
+            .saved_views
+            .get("生产库")
+            .expect("视图名是键");
+        assert_eq!(view.source.as_deref(), Some("project"));
+        assert_eq!(view.tag.as_deref(), Some("prod"));
+
+        // 旧配置（无 saved_views 节）回退空 map，不 panic。
+        let legacy: Settings = serde_json::from_str("{}").expect("旧配置可读");
+        assert!(legacy.navigator.saved_views.is_empty());
     }
 }

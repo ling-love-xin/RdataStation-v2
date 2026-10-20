@@ -23,7 +23,9 @@ pub mod settings_page;
 // 此处重导保持 `settings::product_tokens::*` 路径不变。
 pub use workbench_shell::product_tokens;
 
-use crate::model::{AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, Settings};
+use crate::model::{
+    AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, SavedView, Settings,
+};
 use crate::registry::{SettingValue, Slot};
 
 /// 日志级别变更的副作用出口（**由装配层注册一次**，见 `crates/app/src/main.rs`）。
@@ -208,6 +210,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
+        // 复合值（已保存视图）：同上。
+        Slot::NavigatorSavedViews => return None,
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -349,7 +353,7 @@ impl SettingsService {
                 Self::set_show_name_type_short(on, cx);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
-            Slot::NavigatorFilters => return false,
+            Slot::NavigatorFilters | Slot::NavigatorSavedViews => return false,
             Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
             Slot::ResourcesKeepVersions => {
                 let Some(value) = value.as_number() else {
@@ -663,6 +667,50 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         cx.refresh_windows();
+    }
+
+    /// 全部已保存视图（按视图名排序；`name` 来自 map 键）。
+    pub fn saved_views(cx: &App) -> Vec<SavedView> {
+        cx.global::<Settings>()
+            .navigator
+            .saved_views
+            .iter()
+            .map(|(name, filters)| SavedView {
+                name: name.clone(),
+                filters: filters.clone(),
+            })
+            .collect()
+    }
+
+    /// 保存一个命名视图并持久化。
+    ///
+    /// 同名**拦截**（不覆盖、不自动改名）：返回 `Err("已存在同名视图…")`，由调用方提示改名。
+    pub fn save_saved_view(name: String, filters: NavigatorFilters, cx: &mut App) -> Result<(), String> {
+        {
+            let settings = cx.global_mut::<Settings>();
+            if settings.navigator.saved_views.contains_key(&name) {
+                return Err(format!("已存在同名视图「{name}」，请换个名称。"));
+            }
+            settings.navigator.saved_views.insert(name, filters);
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+        Ok(())
+    }
+
+    /// 删除一个命名视图并持久化。名称不存在时返回 `Err`。
+    pub fn delete_saved_view(name: &str, cx: &mut App) -> Result<(), String> {
+        {
+            let settings = cx.global_mut::<Settings>();
+            if settings.navigator.saved_views.remove(name).is_none() {
+                return Err(format!("视图「{name}」不存在。"));
+            }
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+        Ok(())
     }
 
     /// 每份存档保留的历史内容副本份数（`-1` = 全留，`0` = 只留元数据）。
@@ -1075,6 +1123,38 @@ mod tests {
                 shared::i18n::Locale::Zh,
                 "拒绝后值不变"
             );
+        });
+    }
+
+    /// 已保存视图访问器：保存 → 同名拦截 → 删除；持久化走同一 `persist` 通道。
+    #[gpui_kit::test]
+    fn saved_views_accessors_roundtrip(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            assert!(SettingsService::saved_views(cx).is_empty(), "初始无视图");
+
+            let filters = NavigatorFilters {
+                source: Some("global".into()),
+                db_type: Some("postgres".into()),
+                driver: None,
+                tag: Some("prod".into()),
+            };
+            assert!(SettingsService::save_saved_view("生产库".into(), filters, cx).is_ok());
+            // 同名拦截：不覆盖、不自动改名。
+            let dup = NavigatorFilters::default();
+            let err = SettingsService::save_saved_view("生产库".into(), dup, cx).unwrap_err();
+            assert!(err.contains("已存在同名视图"), "拦截文案含提示: {err}");
+            assert_eq!(SettingsService::saved_views(cx).len(), 1, "同名保存不生效");
+
+            let views = SettingsService::saved_views(cx);
+            assert_eq!(views[0].name, "生产库");
+            assert_eq!(views[0].filters.tag.as_deref(), Some("prod"));
+
+            assert!(SettingsService::delete_saved_view("生产库", cx).is_ok());
+            assert!(SettingsService::saved_views(cx).is_empty());
+            // 删不存在的视图 → Err。
+            assert!(SettingsService::delete_saved_view("没有的视图", cx).is_err());
         });
     }
 }

@@ -76,6 +76,20 @@ impl NavView {
         cx.notify();
     }
 
+    /// 应用一个已保存视图：把其筛选快照整体写入 chips（含归属域 `source`），
+    /// 持久化 + 重渲染。只动四项 facet，**不动搜索框**（搜索是临时查询，不是视图内容）。
+    pub(super) fn apply_saved_view(&mut self, filters: NavFilters, cx: &mut Context<Self>) {
+        {
+            let mut view = self.nav.borrow_mut();
+            view.source_filter = filters.source.as_deref().and_then(NavSource::from_key);
+            view.type_filter = filters.db_type;
+            view.driver_filter = filters.driver;
+            view.tag_filter = filters.tag;
+        }
+        self.write_nav_filters(cx);
+        cx.notify();
+    }
+
     /// 已生效的附加 facet 数（类型 / 驱动 / 标签；chips 与搜索 token 取并）。
     pub(super) fn nav_active_facet_count(&self) -> usize {
         let view = self.nav.borrow();

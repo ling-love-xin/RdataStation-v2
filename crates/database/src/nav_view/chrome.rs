@@ -380,6 +380,22 @@ impl NavView {
                         let host_short = self.host.clone();
                         let host_cache = self.host.clone();
                         let host_groups = self.host.clone();
+                        let host_views = self.host.clone();
+                        // 保存视图的筛选快照：菜单构建瞬间的 chips 状态（与 write_nav_filters 同构）。
+                        let cur_filters = {
+                            let v = self.nav.borrow();
+                            NavFilters {
+                                source: v.source_filter.map(|s| s.key().to_string()),
+                                db_type: v.type_filter.clone(),
+                                driver: v.driver_filter.clone(),
+                                tag: v.tag_filter.clone(),
+                            }
+                        };
+                        // 全空筛选没有保存意义（应用 = 清空筛选），入口禁用。
+                        let filters_all_empty = cur_filters.source.is_none()
+                            && cur_filters.db_type.is_none()
+                            && cur_filters.driver.is_none()
+                            && cur_filters.tag.is_none();
                         let show_tags = self.host.show_tags(cx);
                         let show_scope = self.host.show_scope(cx);
                         let source_short = self.host.source_short_code(cx);
@@ -391,7 +407,7 @@ impl NavView {
                                 .find(|c| c.id == *id)
                                 .map(|c| c.name.clone())
                         });
-                        move |menu, _window, _cx| {
+                        move |menu, window, cx| {
                             let e_refresh = entity.clone();
                             let host_cache = host_cache.clone();
                             menu.item(PopupMenuItem::new("刷新全部元数据").on_click(
@@ -430,6 +446,59 @@ impl NavView {
                                     let host_tags = host_tags.clone();
                                     move |_, _, app| {
                                         host_tags.set_show_tags(!show_tags, app);
+                                    }
+                                }),
+                            )
+                            .separator()
+                            .item(
+                                // 已保存视图（#10）：把当前四项 facet 存为命名视图 / 一键应用 /
+                                // 管理删除。只动 facet，不动搜索框。
+                                PopupMenuItem::new("将当前筛选存为视图…")
+                                    .disabled(filters_all_empty)
+                                    .on_click({
+                                        let host_save = host_views.clone();
+                                        let filters = cur_filters.clone();
+                                        move |_, window, app| {
+                                            host_save
+                                                .open_saved_view_dialog(filters.clone(), window, app);
+                                        }
+                                    }),
+                            )
+                            .submenu("已保存视图 ▸", window, cx, {
+                                let e = entity.clone();
+                                let host_views = host_views.clone();
+                                move |m, _w, cx| {
+                                    let views = host_views.saved_views(cx);
+                                    if views.is_empty() {
+                                        m.item(PopupMenuItem::new("暂无已保存视图").disabled(true))
+                                    } else {
+                                        let mut m = m;
+                                        for v in views {
+                                            let e = e.clone();
+                                            let filters = v.filters.clone();
+                                            // 名称 + 筛选摘要同行（如「生产库 · type:mysql tag:prod」）。
+                                            let label = format!("{} · {}", v.name, v.summary);
+                                            m = m.item(
+                                                PopupMenuItem::new(label).on_click(
+                                                    move |_, _, app| {
+                                                        e.update(app, |this, cx| {
+                                                            this.apply_saved_view(
+                                                                filters.clone(), cx,
+                                                            )
+                                                        });
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        m
+                                    }
+                                }
+                            })
+                            .item(
+                                PopupMenuItem::new("管理视图…").on_click({
+                                    let host_mgr = host_views.clone();
+                                    move |_, window, app| {
+                                        host_mgr.open_manage_views_dialog(window, app);
                                     }
                                 }),
                             )

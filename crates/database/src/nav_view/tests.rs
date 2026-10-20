@@ -37,7 +37,7 @@ mod stub_host {
     use gpui_kit::{App, Window};
 
     use crate::model::{ObjectRef, PropertyRequest};
-    use crate::nav_host::{ConnectionProbe, NavFilters, NavHost};
+    use crate::nav_host::{ConnectionProbe, NavFilters, NavHost, SavedViewMeta};
     use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
     pub(super) struct StubNavHost {
@@ -160,6 +160,23 @@ mod stub_host {
         }
         fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_group_manager(&self, _window: &mut Window, _cx: &mut App) {}
+        fn saved_views(&self, _cx: &App) -> Vec<SavedViewMeta> {
+            Vec::new()
+        }
+        fn save_saved_view(
+            &self,
+            _name: String,
+            _filters: NavFilters,
+            _cx: &mut App,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn delete_saved_view(&self, _name: &str, _cx: &mut App) -> Result<(), String> {
+            Ok(())
+        }
+        fn open_saved_view_dialog(&self, _filters: NavFilters, _window: &mut Window, _cx: &mut App) {
+        }
+        fn open_manage_views_dialog(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_right_panel(&self, _panel: RightPanel, _cx: &mut App) {}
         fn open_mock_panel(&self, _source: Option<ObjectRef>, _cx: &mut App) {}
         fn open_insight_table(&self, _source: ObjectRef, _cx: &mut App) {}

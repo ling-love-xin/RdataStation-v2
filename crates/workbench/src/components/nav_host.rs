@@ -20,7 +20,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Window};
 
 use database::model::{ObjectRef, PropertyRequest};
-use database::nav_host::{ConnectionProbe, NavFilters, NavHost};
+use database::nav_host::{ConnectionProbe, NavFilters, NavHost, SavedViewMeta};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
 use crate::panels::Shared;
@@ -146,6 +146,54 @@ impl NavHost for WorkbenchNavHost {
             },
             cx,
         );
+    }
+
+    // ==================== 已保存视图 ====================
+
+    fn saved_views(&self, cx: &App) -> Vec<SavedViewMeta> {
+        settings::SettingsService::saved_views(cx)
+            .into_iter()
+            .map(|v| SavedViewMeta {
+                summary: crate::components::saved_view_dialog::view_summary(&v.filters),
+                name: v.name,
+                filters: NavFilters {
+                    source: v.filters.source,
+                    db_type: v.filters.db_type,
+                    driver: v.filters.driver,
+                    tag: v.filters.tag,
+                },
+            })
+            .collect()
+    }
+
+    fn save_saved_view(
+        &self,
+        name: String,
+        filters: NavFilters,
+        cx: &mut App,
+    ) -> Result<(), String> {
+        settings::SettingsService::save_saved_view(
+            name,
+            settings::model::NavigatorFilters {
+                source: filters.source,
+                db_type: filters.db_type,
+                driver: filters.driver,
+                tag: filters.tag,
+            },
+            cx,
+        )
+    }
+
+    fn delete_saved_view(&self, name: &str, cx: &mut App) -> Result<(), String> {
+        settings::SettingsService::delete_saved_view(name, cx)
+    }
+
+    fn open_saved_view_dialog(&self, filters: NavFilters, window: &mut Window, cx: &mut App) {
+        crate::components::saved_view_dialog::open_save_view_dialog(window, cx, filters);
+    }
+
+    fn open_manage_views_dialog(&self, window: &mut Window, cx: &mut App) {
+        crate::components::saved_view_dialog::open_manage_views_dialog(window, cx, &self.shared);
     }
 
     // ==================== 连接生命周期 ====================
