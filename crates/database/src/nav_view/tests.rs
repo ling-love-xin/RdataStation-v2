@@ -159,6 +159,7 @@ mod stub_host {
         ) {
         }
         fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
+        fn open_group_manager(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_right_panel(&self, _panel: RightPanel, _cx: &mut App) {}
         fn open_mock_panel(&self, _source: Option<ObjectRef>, _cx: &mut App) {}
         fn open_insight_table(&self, _source: ObjectRef, _cx: &mut App) {}

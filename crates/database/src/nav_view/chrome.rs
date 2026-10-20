@@ -379,6 +379,7 @@ impl NavView {
                         let host_scope = self.host.clone();
                         let host_short = self.host.clone();
                         let host_cache = self.host.clone();
+                        let host_groups = self.host.clone();
                         let show_tags = self.host.show_tags(cx);
                         let show_scope = self.host.show_scope(cx);
                         let source_short = self.host.source_short_code(cx);
@@ -436,6 +437,16 @@ impl NavView {
                             .item(
                                 PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
                                     host_cache.open_cache_dialog(window, app);
+                                }),
+                            )
+                            .item(
+                                // 管理分组覆盖层（#9 分组部分）：集中重命名 / 合并分组 / 删除，
+                                // 标签部分（清理空标签 / 批量打标）归 tag crate 会话。
+                                PopupMenuItem::new("管理分组…").on_click({
+                                    let host_groups = host_groups.clone();
+                                    move |_, window, app| {
+                                        host_groups.open_group_manager(window, app);
+                                    }
                                 }),
                             )
                             .separator()

@@ -264,6 +264,10 @@ impl NavHost for WorkbenchNavHost {
         crate::components::cache_dialog::open_cache_dialog(window, cx, &self.shared);
     }
 
+    fn open_group_manager(&self, window: &mut Window, cx: &mut App) {
+        crate::components::group_manager_dialog::open_group_manager_dialog(window, cx, &self.shared);
+    }
+
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
         self.shared.open_right_panel(panel, cx);
     }

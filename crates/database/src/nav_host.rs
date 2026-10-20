@@ -180,6 +180,9 @@ pub trait NavHost: 'static {
     /// 打开「缓存管理」对话框。
     fn open_cache_dialog(&self, window: &mut Window, cx: &mut App);
 
+    /// 打开「管理分组」覆盖层对话框（批量重命名 / 合并分组 / 删除；标签部分归 tag crate 会话）。
+    fn open_group_manager(&self, window: &mut Window, cx: &mut App);
+
     /// 展开右 Dock 并切到指定面板（右键「查看洞察」等）。
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App);
 

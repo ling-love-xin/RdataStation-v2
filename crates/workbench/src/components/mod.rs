@@ -6,6 +6,7 @@ pub mod cache_dialog;
 // `crate::components::connection_dialog::*` 路径不变（editor.rs 等引用点零改动）。
 pub use connection_dialog::components::connection_dialog;
 pub mod group_form_dialog;
+pub mod group_manager_dialog;
 pub mod insight_actions;
 pub mod log_dialog;
 pub mod mock_host;
