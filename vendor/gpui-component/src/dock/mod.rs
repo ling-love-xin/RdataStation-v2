@@ -82,6 +82,11 @@ pub(crate) struct SkinShared {
     close_button_visible: Cell<bool>,
     /// The dock whose resize handle is being dragged, if any. Only one can be.
     resizing_dock: Cell<Option<DockPlacement>>,
+    /// 标签条单标签最大宽度（px）。RDS 装配期按设置写入（默认 200，与「关闭按钮
+    /// ✕ 不被裁切」的既有补丁同值）；`tab_panel.rs` 渲染时读取。
+    tab_bar_max_width: Cell<f32>,
+    /// 标签条形态（`TabVariant` 五态）。RDS 装配期按设置写入（默认 `Tab`）。
+    tab_bar_variant: Cell<crate::tab::TabVariant>,
 }
 
 impl SkinShared {
@@ -95,6 +100,14 @@ impl SkinShared {
 
     pub(crate) fn is_toggle_button_visible(&self) -> bool {
         self.toggle_button_visible.get()
+    }
+
+    pub(crate) fn tab_bar_max_width(&self) -> f32 {
+        self.tab_bar_max_width.get()
+    }
+
+    pub(crate) fn tab_bar_variant(&self) -> crate::tab::TabVariant {
+        self.tab_bar_variant.get()
     }
 
     pub(crate) fn resizing_dock(&self) -> &Cell<Option<DockPlacement>> {
@@ -157,6 +170,8 @@ impl DockSkin {
                 toggle_button_visible: Cell::new(true),
                 close_button_visible: Cell::new(false),
                 resizing_dock: Cell::new(None),
+                tab_bar_max_width: Cell::new(200.0),
+                tab_bar_variant: Cell::new(crate::tab::TabVariant::Tab),
             }),
         })
     }
@@ -172,6 +187,18 @@ impl DockSkin {
 
     pub fn set_panel_style(&self, style: PanelStyle, cx: &mut App) {
         self.shared.panel_style.set(style);
+        self.shared.notify(cx);
+    }
+
+    /// 标签条单标签最大宽度（px）。RDS 设置「标签栏最大宽度」的消费点。
+    pub fn set_tab_bar_max_width(&self, width_px: f32, cx: &mut App) {
+        self.shared.tab_bar_max_width.set(width_px);
+        self.shared.notify(cx);
+    }
+
+    /// 标签条形态（`TabVariant`）。RDS 设置「标签栏样式」的消费点。
+    pub fn set_tab_bar_variant(&self, variant: crate::tab::TabVariant, cx: &mut App) {
+        self.shared.tab_bar_variant.set(variant);
         self.shared.notify(cx);
     }
 

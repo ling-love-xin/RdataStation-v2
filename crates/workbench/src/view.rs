@@ -22,6 +22,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::tab::TabVariant;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, TitleBar};
 use gpui_kit::*;
 
@@ -121,6 +122,9 @@ pub struct WorkbenchView {
     lsp_reaper: Option<Task<()>>,
     /// 【LSP】上一次看到的端口状态版本（不同则 `notify` 重绘状态栏指示）。
     last_lsp_epoch: u64,
+    /// Dock 皮肤句柄（`init_workspace` 装配时持有；设置页「标签栏最大宽度 / 样式」
+    /// 变更经 `on_settings_changed` 应用到这里，渲染读取点在 vendor `dock/tab_panel.rs`）。
+    dock_skin: Option<Rc<DockSkin>>,
 }
 
 impl WorkbenchView {
@@ -265,6 +269,7 @@ impl WorkbenchView {
             lsp,
             lsp_reaper: None,
             last_lsp_epoch: 0,
+            dock_skin: None,
         };
         // 【LSP】空闲回收 + 状态栏指示刷新（1 s 一拍）：关掉最后一个需要服务的面板 → 停 server
         if view.lsp.is_some() {
@@ -979,8 +984,7 @@ impl WorkbenchView {
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
-    fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 启动默认模块（用户点名）：设置 `startup.default_left_panel` 覆盖构造期默认。
+    fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {        // 启动默认模块（用户点名）：设置 `startup.default_left_panel` 覆盖构造期默认。
         // 必须在这里（首次 render 装配期）读——早于 `apply_left_mode`，晚于设置加载
         //（app 开窗前 `SettingsService::init` 已跑）。未知值回退默认（`from_key` 的约定）。
         {
@@ -1064,6 +1068,11 @@ impl WorkbenchView {
         // 单面板只画简单标题，改 `TabBar` **总是显示 tab 栏**（VSCode 编辑区/搜索
         // 结果恒有标签页形态；单 tab 也显示「搜索: query」标签 + ✕）。
         skin.set_panel_style(PanelStyle::TabBar, cx);
+        // T-1：标签栏「最大宽度 / 样式」设置项装配到 DockSkin（启动一次 + 设置变更
+        // 经 `on_settings_changed` 再应用；渲染读取点在 vendor `dock/tab_panel.rs`）。
+        // 句柄存字段：设置页回调与后续装配（如重建）都要复用同一份皮肤配置。
+        self.dock_skin = Some(skin.clone());
+        Self::apply_tab_bar_settings(&skin, cx);
 
         // 编辑器宿主面板（A9 接线）：把 `editor_service` 的当前文档接进中央 tab 组。
         // 先 clone 到局部再 `cx.new`：闭包里不能再借 `self`。
@@ -2122,6 +2131,22 @@ impl WorkbenchView {
     ///
     /// 页面自持两栏结构（分节与行由 `settings::registry` 驱动）；宿主只提供 overlay、
     /// **宿主桥**（关闭 / 缓存管理，副作用在宿主侧）与互斥规则（与 Quick Open 不同时显示）。
+    /// T-1：把「标签栏最大宽度 / 样式」设置项装配到 DockSkin（启动一次 + 设置变更
+    /// 经 `on_settings_changed` 重应用）。vendor `dock/tab_panel.rs` 渲染时从
+    /// `SkinShared` 读取这两个值；未知样式字符串回退 `Tab`（设置页只给五档预设）。
+    fn apply_tab_bar_settings(skin: &Rc<DockSkin>, cx: &mut App) {
+        let appearance = &settings::SettingsService::get(cx).appearance;
+        skin.set_tab_bar_max_width(appearance.tab_bar_max_width, cx);
+        let variant = match appearance.tab_bar_variant.as_str() {
+            "outline" => TabVariant::Outline,
+            "pill" => TabVariant::Pill,
+            "segmented" => TabVariant::Segmented,
+            "underline" => TabVariant::Underline,
+            _ => TabVariant::Tab,
+        };
+        skin.set_tab_bar_variant(variant, cx);
+    }
+
     fn render_settings_panel(
         &mut self,
         window: &mut Window,
@@ -2163,12 +2188,22 @@ impl WorkbenchView {
                 std::rc::Rc::new(move |window, app| {
                     crate::components::type_short_map_dialog::open_type_short_map_dialog(window, app);
                 });
+            // T-1：设置落盘 → 重应用标签栏外观到 DockSkin（启动值在 `init_workspace`
+            // 已应用一次；这里是运行时路径）。皮肤句柄在装配期已存字段。
+            let dock_skin = self.dock_skin.clone();
+            let on_settings_changed: std::rc::Rc<dyn Fn(&mut App)> =
+                std::rc::Rc::new(move |app| {
+                    if let Some(skin) = &dock_skin {
+                        Self::apply_tab_bar_settings(skin, app);
+                    }
+                });
             let host = SettingsHost {
                 on_close,
                 on_open_cache,
                 on_open_log_dir,
                 on_open_log_view,
                 on_open_type_short_map,
+                on_settings_changed,
             };
             self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
         }

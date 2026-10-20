@@ -51,6 +51,9 @@ pub struct SettingsHost {
     pub on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 打开「类型简称映射」对话框（宿主实现；维护数据库类型 → 简称表）。
     pub on_open_type_short_map: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 任一设置项落盘后通知宿主（workbench 用它把新值装配到 DockSkin 等消费方；
+    /// 设置项自身有副作用时走 setter，此回调只负责「外部消费方重应用」）。
+    pub on_settings_changed: Rc<dyn Fn(&mut App)>,
 }
 
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
@@ -757,6 +760,9 @@ fn commit(
         return;
     }
     entity.update(app, |this, cx| this.reload(cx));
+    // 落盘成功 → 通知宿主重应用外部消费方（DockSkin 等）。
+    let notify = entity.read(app).host.on_settings_changed.clone();
+    notify(app);
 }
 
 /// 搜索匹配（纯函数，便于单测）：**节名 / 标签 / 说明 / key** 任一命中即可。
@@ -960,6 +966,7 @@ mod tests {
             on_open_log_dir: Rc::new(|_, _| {}),
             on_open_log_view: Rc::new(|_, _| {}),
             on_open_type_short_map: Rc::new(|_, _| {}),
+            on_settings_changed: Rc::new(|_| {}),
         };
         let (page, cx) =
             cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));

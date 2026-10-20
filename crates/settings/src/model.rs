@@ -142,6 +142,14 @@ pub struct Appearance {
     /// （全 UI 文案即时切换），见 `SettingsService::set_locale`。
     #[serde(default = "default_locale")]
     pub locale: String,
+    /// 标签栏单标签最大宽度（px，默认 200）。窗口多 / 长连接名时给上限 + 省略，
+    /// 关闭按钮（✕）保持完整。装配期应用到 DockSkin（vendor `tab_panel.rs` 读取）。
+    #[serde(default = "default_tab_bar_max_width")]
+    pub tab_bar_max_width: f32,
+    /// 标签栏样式（`"tab"` / `"outline"` / `"pill"` / `"segmented"` / `"underline"`，
+    /// 默认 `"tab"`），对应 `TabVariant` 五态；装配期映射后应用到 DockSkin。
+    #[serde(default = "default_tab_bar_variant")]
+    pub tab_bar_variant: String,
 }
 
 impl Default for Appearance {
@@ -150,6 +158,8 @@ impl Default for Appearance {
             theme_mode: AppearanceMode::Light,
             font_size: default_font_size(),
             locale: default_locale(),
+            tab_bar_max_width: default_tab_bar_max_width(),
+            tab_bar_variant: default_tab_bar_variant(),
         }
     }
 }
@@ -160,6 +170,14 @@ fn default_font_size() -> f32 {
 
 fn default_locale() -> String {
     "zh".to_string()
+}
+
+fn default_tab_bar_max_width() -> f32 {
+    200.0
+}
+
+fn default_tab_bar_variant() -> String {
+    "tab".to_string()
 }
 
 /// 主题模式：显式明暗，或跟随系统外观。

@@ -468,10 +468,12 @@ impl TabGroupSkin {
 
         TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
+            .with_variant(self.shared.tab_bar_variant())
             // 长标签（连接标签如「[共享] MySQL 192.168.3.138」）不设上限时按自然宽
             // 布局，会把尾部的关闭按钮（✕）挤出可视区并被裁切（用户反馈）。
-            // 上限 200px：标签文字 ellipsis 收缩，suffix（✕）flex_shrink_0 保持完整。
-            .max_width(px(200.))
+            // 上限可配（RDS 设置「标签栏最大宽度」，默认 200px）：标签文字 ellipsis
+            // 收缩，suffix（✕）flex_shrink_0 保持完整。
+            .max_width(px(self.shared.tab_bar_max_width()))
             .when(has_leading, |this| {
                 this.prefix(
                     h_flex()

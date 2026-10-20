@@ -194,6 +194,12 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Number(settings.appearance.font_size as f64)
         }
         Slot::AppearanceLocale => SettingValue::Text(settings.appearance.locale.clone()),
+        Slot::AppearanceTabBarMaxWidth => {
+            SettingValue::Number(settings.appearance.tab_bar_max_width as f64)
+        }
+        Slot::AppearanceTabBarVariant => {
+            SettingValue::Text(settings.appearance.tab_bar_variant.clone())
+        }
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -284,6 +290,39 @@ impl SettingsService {
                     return false;
                 }
                 Self::set_locale(&code, window, cx);
+            }
+            Slot::AppearanceTabBarMaxWidth => {
+                let Some(w) = value.as_number() else {
+                    return false;
+                };
+                // 只认 100–600px（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+                if !(100.0..=600.0).contains(&w) {
+                    return false;
+                }
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.appearance.tab_bar_max_width = w as f32;
+                }
+                persist(&cx.global::<Settings>().clone());
+                // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+            }
+            Slot::AppearanceTabBarVariant => {
+                let Some(v) = value.as_text() else {
+                    return false;
+                };
+                // 只认 TabVariant 五态的落盘值（页面只给预设档；手改坏时拒绝，不猜）。
+                if !matches!(
+                    v,
+                    "tab" | "outline" | "pill" | "segmented" | "underline"
+                ) {
+                    return false;
+                }
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.appearance.tab_bar_variant = v.to_string();
+                }
+                persist(&cx.global::<Settings>().clone());
+                // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
