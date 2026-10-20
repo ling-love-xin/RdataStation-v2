@@ -272,6 +272,7 @@ pub(super) fn nav_kind_icon(kind: &NavNodeKind, expanded: bool) -> &'static str 
         NavNodeKind::Table { .. } => "icons/table.svg",
         NavNodeKind::View => "icons/eye.svg",
         NavNodeKind::Column { .. } => "icons/columns-3.svg",
+        NavNodeKind::ColumnOverflow => "icons/info.svg",
         NavNodeKind::Routine { .. } => "icons/square-function.svg",
         NavNodeKind::Sequence => "icons/list-ordered.svg",
         NavNodeKind::Trigger => "icons/zap.svg",

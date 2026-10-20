@@ -15,6 +15,10 @@
 
 use std::sync::Arc;
 
+/// 表列内联渲染阈值（原型 §11 #6）：列数超过该值不再逐列生成树节点，
+/// 改由单个 [`NavNodeKind::ColumnOverflow`] 提示节点跳属性面板「列」页签。
+pub const MAX_INLINE_COLUMNS: usize = 50;
+
 use engine::cache::{CacheManager, MetadataCache};
 use engine::connection_manager::ConnectionManager;
 use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind, SchemaObjects};
@@ -672,6 +676,28 @@ impl NavigatorService {
         table: &str,
         columns: Vec<ColumnDetail>,
     ) -> Vec<NavNode> {
+        // 大 schema 阈值（原型 §11 #6）：列数超限不内联渲染（几十列会淹没树），
+        // 生成单个提示节点跳表属性面板——属性面板已有「列 (N)」页签（`PageId::Columns`）。
+        if columns.len() > MAX_INLINE_COLUMNS {
+            let key = NavNode::child_key(conn_id, &[catalog, schema, table, "~columns"]);
+            let prop = PropertyRef {
+                conn_id: conn_id.to_string(),
+                source: NavSource::from_conn_id(conn_id),
+                catalog: Some(catalog.to_string()),
+                schema: Some(schema.to_string()),
+                parent: None,
+                name: table.to_string(),
+                kind: PropertyKind::Table,
+            };
+            return vec![NavNode::new(
+                key,
+                format!("在属性面板查看列（{} 列）", columns.len()),
+                conn_id,
+                NavNodeKind::ColumnOverflow,
+                false,
+            )
+            .with_property(prop)];
+        }
         columns
             .into_iter()
             .map(|col| {
@@ -1258,6 +1284,33 @@ mod object_node_tests {
             nodes[0].property.as_ref().and_then(|p| p.parent.clone()),
             None
         );
+    }
+
+    /// 大 schema 阈值（>50 列）：不逐列生成节点，改单个提示节点跳表属性面板。
+    #[test]
+    fn oversized_column_sets_collapse_into_one_overflow_node() {
+        let cols: Vec<ColumnDetail> = (0..60)
+            .map(|i| ColumnDetail {
+                name: format!("c{i:02}"),
+                data_type: "int".to_string(),
+                nullable: true,
+                is_primary_key: false,
+                is_foreign_key: false,
+                references: None,
+                ordinal: 0,
+                default_value: None,
+                comment: None,
+                extra: Default::default(),
+            })
+            .collect();
+        let nodes = NavigatorService::column_nodes("G_1", "db", "public", "big_t", cols);
+        assert_eq!(nodes.len(), 1, "超阈值只生成一个提示节点");
+        assert_eq!(nodes[0].kind, NavNodeKind::ColumnOverflow);
+        assert!(nodes[0].name.contains("60"));
+        // 提示节点的属性定位指向表本身 → 点击打开表属性面板（列页签）。
+        let prop = nodes[0].property.as_ref().expect("提示节点应带属性定位");
+        assert_eq!(prop.kind, PropertyKind::Table);
+        assert_eq!(prop.name, "big_t");
     }
 }
 

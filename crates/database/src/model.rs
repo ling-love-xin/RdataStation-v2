@@ -150,6 +150,8 @@ pub enum NavNodeKind {
         primary: bool,
         foreign: bool,
     },
+    /// 列数超阈值（>50）时的提示节点：不内联渲染全部列，点击跳表属性面板「列」页签。
+    ColumnOverflow,
     /// 存储过程 / 函数
     Routine { routine_type: String },
     /// 序列
