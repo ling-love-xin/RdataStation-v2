@@ -20,6 +20,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{Icon};
+use gpui_kit::ScrollHandle;
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
@@ -199,6 +200,8 @@ pub struct EditorHostPanel {
     result_status: Option<ResultStatus>,
     /// 结果集标签（从 `ResultStore` 投影；同样不在渲染期重算）
     result_tabs: Vec<ResultSetTab>,
+    /// 结果集标签条的滚动句柄（标签随查询累积增多，传给 TabBar `track_scroll` 保持跨帧滚动状态）
+    result_tabs_scroll: ScrollHandle,
     /// 当前选中的结果集下标（标签条的选中态）
     result_active: usize,
     /// 【B5】当前选中结果集的 SQL（工具栏「刷新」重跑它；`None` = 无可重跑的东西）
@@ -693,6 +696,7 @@ impl EditorHostPanel {
             result_toolbar: None,
             result_status: None,
             result_tabs: Vec::new(),
+            result_tabs_scroll: ScrollHandle::default(),
             result_active: 0,
             result_sql: None,
             result_is_analysis: false,
@@ -7353,6 +7357,7 @@ impl Render for EditorHostPanel {
                         entity.update(app, |panel, cx| panel.select_result_set(index, cx));
                     },
                     cx,
+                    &self.result_tabs_scroll,
                 )
                 .into_any_element()
             });

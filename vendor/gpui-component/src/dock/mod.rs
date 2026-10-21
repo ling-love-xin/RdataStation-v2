@@ -24,7 +24,9 @@ mod test_support;
 
 use std::{cell::Cell, rc::Rc};
 
-use gpui::{App, AppContext as _, Context, Entity, SharedString, WeakEntity, Window, actions};
+use gpui::{
+    App, AppContext as _, Context, Entity, EventEmitter, SharedString, WeakEntity, Window, actions,
+};
 
 /// The behavior half of the panel traits, which every panel implements
 /// alongside [`Panel`]. Exported under this name because `Panel` in this
@@ -58,6 +60,59 @@ pub use tab_panel::DragPanelPreview;
 
 actions!(dock, [ToggleZoom, ClosePanel]);
 
+/// A dock that the user opened or closed with one of [`DockSkin`]'s controls:
+/// the collapse button in a tab bar, the strip of a collapsed bottom dock, or
+/// a resize handle dragged past the closed strip and released.
+///
+/// A [`DockArea`] drawn by [`DockSkin`] emits it after the dock has changed.
+/// [`DockArea::toggle_dock`] and the other dock setters do not, so an
+/// application can tell a user's toggle from one its own code made.
+pub struct DockToggleEvent {
+    placement: DockPlacement,
+    open: bool,
+}
+
+impl DockToggleEvent {
+    /// The dock that was toggled.
+    pub fn placement(&self) -> DockPlacement {
+        self.placement
+    }
+
+    /// Whether the dock is open now.
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl EventEmitter<DockToggleEvent> for DockArea {}
+
+/// Toggle a dock on the user's behalf and report it with [`DockToggleEvent`].
+/// A dock that refuses to close emits nothing.
+pub(crate) fn toggle_dock_by_user(
+    area: &mut DockArea,
+    placement: DockPlacement,
+    window: &mut Window,
+    cx: &mut Context<DockArea>,
+) {
+    let was_open = area.is_dock_open(placement);
+    area.toggle_dock(placement, window, cx);
+    report_user_toggle(area, placement, was_open, cx);
+}
+
+/// Emit [`DockToggleEvent`] if a user action moved the dock away from
+/// `was_open`.
+pub(crate) fn report_user_toggle(
+    area: &DockArea,
+    placement: DockPlacement,
+    was_open: bool,
+    cx: &mut Context<DockArea>,
+) {
+    let open = area.is_dock_open(placement);
+    if open != was_open {
+        cx.emit(DockToggleEvent { placement, open });
+    }
+}
+
 pub(crate) fn init(cx: &mut App) {
     // `gpui_base::dock::PanelRegistry::init` is crate-private, but the global
     // it installs is not: `DockArea::new` and `register_panel` both create it
@@ -82,10 +137,13 @@ pub(crate) struct SkinShared {
     close_button_visible: Cell<bool>,
     /// The dock whose resize handle is being dragged, if any. Only one can be.
     resizing_dock: Cell<Option<DockPlacement>>,
-    /// 标签条单标签最大宽度（px）。RDS 装配期按设置写入（默认 200，与「关闭按钮
-    /// ✕ 不被裁切」的既有补丁同值）；`tab_panel.rs` 渲染时读取。
+    /// Whether that dock was open when the drag began, so the release can
+    /// tell whether the drag opened or closed it.
+    resize_started_open: Cell<bool>,
+    /// RdataStation vendor patch (0.8.0): per-tab maximum width (px) and tab
+    /// variant for dock tab bars, consumed by the tab bar renderer. RDS
+    /// settings "appearance.tab_bar_max_width" / "appearance.tab_bar_variant".
     tab_bar_max_width: Cell<f32>,
-    /// 标签条形态（`TabVariant` 五态）。RDS 装配期按设置写入（默认 `Tab`）。
     tab_bar_variant: Cell<crate::tab::TabVariant>,
 }
 
@@ -98,10 +156,6 @@ impl SkinShared {
         self.panel_style.get()
     }
 
-    pub(crate) fn is_toggle_button_visible(&self) -> bool {
-        self.toggle_button_visible.get()
-    }
-
     pub(crate) fn tab_bar_max_width(&self) -> f32 {
         self.tab_bar_max_width.get()
     }
@@ -110,8 +164,16 @@ impl SkinShared {
         self.tab_bar_variant.get()
     }
 
+    pub(crate) fn is_toggle_button_visible(&self) -> bool {
+        self.toggle_button_visible.get()
+    }
+
     pub(crate) fn resizing_dock(&self) -> &Cell<Option<DockPlacement>> {
         &self.resizing_dock
+    }
+
+    pub(crate) fn resize_started_open(&self) -> &Cell<bool> {
+        &self.resize_started_open
     }
 
     /// Redraw the area after a setting changed. The skin is not an entity, so
@@ -170,6 +232,7 @@ impl DockSkin {
                 toggle_button_visible: Cell::new(true),
                 close_button_visible: Cell::new(false),
                 resizing_dock: Cell::new(None),
+                resize_started_open: Cell::new(false),
                 tab_bar_max_width: Cell::new(200.0),
                 tab_bar_variant: Cell::new(crate::tab::TabVariant::Tab),
             }),
@@ -190,18 +253,6 @@ impl DockSkin {
         self.shared.notify(cx);
     }
 
-    /// 标签条单标签最大宽度（px）。RDS 设置「标签栏最大宽度」的消费点。
-    pub fn set_tab_bar_max_width(&self, width_px: f32, cx: &mut App) {
-        self.shared.tab_bar_max_width.set(width_px);
-        self.shared.notify(cx);
-    }
-
-    /// 标签条形态（`TabVariant`）。RDS 设置「标签栏样式」的消费点。
-    pub fn set_tab_bar_variant(&self, variant: crate::tab::TabVariant, cx: &mut App) {
-        self.shared.tab_bar_variant.set(variant);
-        self.shared.notify(cx);
-    }
-
     /// Whether tab bars offer the affordance that collapses a neighbouring
     /// dock.
     pub fn is_toggle_button_visible(&self) -> bool {
@@ -217,6 +268,20 @@ impl DockSkin {
     /// own close constraints still decide whether its button appears.
     pub fn set_close_button_visible(&self, visible: bool, cx: &mut App) {
         self.shared.close_button_visible.set(visible);
+        self.shared.notify(cx);
+    }
+
+    /// RdataStation vendor patch (0.8.0): per-tab maximum width (px). RDS
+    /// setting "标签栏最大宽度" consumption point.
+    pub fn set_tab_bar_max_width(&self, width_px: f32, cx: &mut App) {
+        self.shared.tab_bar_max_width.set(width_px);
+        self.shared.notify(cx);
+    }
+
+    /// RdataStation vendor patch (0.8.0): tab variant for dock tab bars. RDS
+    /// setting "标签栏样式" consumption point.
+    pub fn set_tab_bar_variant(&self, variant: crate::tab::TabVariant, cx: &mut App) {
+        self.shared.tab_bar_variant.set(variant);
         self.shared.notify(cx);
     }
 }

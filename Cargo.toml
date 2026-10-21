@@ -71,7 +71,9 @@ plugin = { path = "crates/plugin", package = "rds-plugin" }
 # gpui-kit-assets 必须同版本（否则门面与内部错配），升级由 GPUI-kit 发布节奏统一决定。
 # 0.7.0：在 verify/gpui-kit-0.7 分支验证（2026-10-01），通过后合回 main。
 # 0.7.1：在 refactor/ui-standalone 分支随 UI 治理一起升级（2026-10-11），patch 级增量、符号零删除。
-gpui-kit = "0.7.1"
+# 0.8.0：在 upgrade/gpui-kit-0.8.0 分支升级（2026-10-21）。vendor 为 crates.io 发布包
+# （归一化 Cargo.toml，非仓库源码），项目 vendor patch 已重打于发布包源码。
+gpui-kit = "0.8.0"
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），

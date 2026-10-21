@@ -65,11 +65,15 @@ pub fn tabs(sets: &[ResultEntry], current: ExecChannel) -> Vec<ResultSetTab> {
 }
 
 /// 渲染标签条（`on_pick` 收下标；`active` 是当前选中的结果集）
+///
+/// `scroll_handle`：结果集标签会随查询累积增多（溢出），由宿主实体持有并传给
+/// TabBar（`track_scroll` 让点击标签滚入视野；`menu(true)` 溢出时收敛为「更多」菜单）。
 pub fn render(
     tabs: &[ResultSetTab],
     active: usize,
     on_pick: impl Fn(&usize, &mut Window, &mut App) + 'static,
     cx: &App,
+    scroll_handle: &ScrollHandle,
 ) -> impl IntoElement {
     let danger = cx.theme().colors.danger;
     // 【B13】徽标两档颜色：当前通道的结果用主色（“这就是现在这档”），
@@ -111,6 +115,8 @@ pub fn render(
             TabBar::new("editor-result-sets")
                 .segmented()
                 .with_size(Size::Small)
+                .track_scroll(scroll_handle)
+                .menu(true)
                 .selected_index(active)
                 .children(children)
                 .on_click(on_pick),
