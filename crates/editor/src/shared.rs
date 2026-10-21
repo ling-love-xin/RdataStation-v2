@@ -525,6 +525,12 @@ impl EditorShared {
         }
     }
 
+    /// 【2d-笔记级】当前**活跃**（已启动）的内核 id 列表（「重启」用它逐个关闭；
+    /// 空 = 一个都没起过）
+    pub fn active_kernel_ids(&self) -> Vec<String> {
+        self.kernels.borrow().keys().cloned().collect()
+    }
+
     /// 会话切换：绑定换掉 + 全部输出 stale（T2d-2）
     pub fn switch_notebook_session(
         &self,

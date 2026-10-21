@@ -276,6 +276,11 @@ pub struct EditorHostPanel {
     kernel_running: Option<KernelRun>,
     /// 【#17】内核事件轮询任务句柄（空闲即退出）
     kernel_pump: RefCell<Option<Task<()>>>,
+    /// 【2d-笔记级】「全部运行」队列（待跑单元 id；空 = 没排队）。
+    ///
+    /// 执行队列一次只跑一个（`ExecQueue` busy 检查），所以全部运行是**串行队列**：
+    /// 入队全部可执行单元，跑完一个（SQL 回执 / 内核收口）自动提交下一个。
+    notebook_pending: Vec<String>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
@@ -677,6 +682,7 @@ impl EditorHostPanel {
             running_since: None,
             kernel_running: None,
             kernel_pump: RefCell::new(None),
+            notebook_pending: Vec::new(),
             autocommit: true,
             tx_open: false,
             tx_since: None,
@@ -1261,10 +1267,107 @@ impl EditorHostPanel {
                     .child(self.render_run_script_button(cx)),
             );
             }
-            // Notebook：笔记级工具栏（会话 / 全部运行 / 重启）1c 留白，当前仅模式指示器
-            crate::model::ToolbarStyle::Notebook => {}
+            // Notebook：笔记级工具栏（会话 ▾ / 全部运行 / 重启）——1c 落地。
+            // 与 SQL 组模型无关：会话绑定（连接）是笔记级事实，执行是顺序跑全部单元。
+            crate::model::ToolbarStyle::Notebook => {
+                toolbar = toolbar.child(
+                    div()
+                        .ml_auto()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(self.render_notebook_session_button(cx))
+                        .child(self.render_notebook_run_all_button(cx))
+                        .child(self.render_notebook_restart_button(cx)),
+                );
+            }
         }
         toolbar
+    }
+
+    /// 【2d-笔记级】会话 ▾ 按钮：绑定连接的切换入口（笔记级事实）。
+    ///
+    /// 菜单 = 连接列表（当前会话绑定勾选）+「跟随当前活动连接」；空列表时保持
+    /// 「跟随当前活动连接」可点（与 SQL 模式 B1 同口径，不假装有连接）。
+    fn render_notebook_session_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let options = self.shared.connection_options();
+        let current = self.notebook_state().session.default_connection.clone();
+        // 会话绑定连接展示名（`None` = 跟随当前活动连接）
+        let label = match &current {
+            Some(id) => options
+                .iter()
+                .find(|c| &c.id == id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| format!("连接 {id}")),
+            None => "跟随当前连接".to_string(),
+        };
+        Button::new("editor-notebook-session")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-notebook-session".to_string())
+            .icon(IconName::Globe)
+            .tooltip("会话连接")
+            .label(format!("{label} ▾"))
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                // 第一项：跟随当前活动连接（默认态）
+                let follow = PopupMenuItem::new("跟随当前活动连接")
+                    .checked(current.is_none())
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.notebook_switch_connection(None, cx);
+                            });
+                        }
+                    });
+                menu = menu.item(follow);
+                for conn in &options {
+                    let selected = current.as_deref() == Some(conn.id.as_str());
+                    let item = PopupMenuItem::new(conn.name.clone())
+                        .checked(selected)
+                        .on_click({
+                            let entity = entity.clone();
+                            let conn_id = conn.id.clone();
+                            move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.notebook_switch_connection(Some(conn_id.clone()), cx);
+                                });
+                            }
+                        });
+                    menu = menu.item(item);
+                }
+                menu
+            })
+    }
+
+    /// 【2d-笔记级】全部运行按钮：顺序跑所有可执行单元（SQL / 内核）。
+    fn render_notebook_run_all_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        Button::new("editor-notebook-run-all")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-notebook-run-all".to_string())
+            .icon(IconName::Play)
+            .tooltip("全部运行")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.notebook_run_all(cx));
+            })
+    }
+
+    /// 【2d-笔记级】重启按钮：关闭活跃内核（下次执行自动重拉）。
+    fn render_notebook_restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        Button::new("editor-notebook-restart")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-notebook-restart".to_string())
+            .icon(IconName::RefreshCw)
+            .tooltip("重启内核")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.notebook_restart_kernel(cx));
+            })
     }
 
     /// 当前文档是否为 Markdown（通用模式下的 `.md` 脚本类型）。决定「预览」切换是否出现。
@@ -2364,6 +2467,88 @@ impl EditorHostPanel {
         cx.notify();
     }
 
+    /// 【2d-笔记级】切换分析会话（绑定连接 / 环境）：换绑定 + 全部输出标 stale。
+    ///
+    /// `conn_id` = 新的默认连接（`None` = 跟随当前活动连接，与 SQL 模式 B1 同口径）；
+    /// 环境维度暂不在此菜单改（分析环境跟随通用模式解释器，见 `env` 端口）。
+    pub(crate) fn notebook_switch_connection(
+        &mut self,
+        conn_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        // 防并发：有单元在跑时切换会话，回执会因会话不匹配而作废（输出会被清），
+        // 不如提前拒绝、让用户先中断。
+        if self.notebook_state().has_running() {
+            self.set_message(Some("有单元在执行中，先中断再切换会话".to_string()), cx);
+            return;
+        }
+        let mut session = self.notebook_state().session;
+        session.default_connection = conn_id;
+        self.shared
+            .switch_notebook_session(&self.document, session);
+        self.set_message(None, cx);
+        cx.notify();
+    }
+
+    /// 【2d-笔记级】全部运行：按顺序跑所有**可执行**单元（SQL / 内核）。
+    ///
+    /// 执行队列一次只跑一个（`ExecQueue` busy 检查），所以这里**只入队 + 提交队首**，
+    /// 跑完一个（SQL 回执 / 内核收口）由 [`Self::advance_notebook_queue`] 自动提交下一个。
+    /// 有单元在跑 → 拒绝；Markdown 备注 / 空单元不入队。
+    pub(crate) fn notebook_run_all(&mut self, cx: &mut Context<Self>) {
+        if self.notebook_state().has_running() || !self.notebook_pending.is_empty() {
+            self.set_message(Some("已有单元在执行中".to_string()), cx);
+            return;
+        }
+        let cells = self.notebook_state().cells;
+        self.notebook_pending = cells
+            .iter()
+            .filter(|cell| cell.language.is_executable() && !cell.body.trim().is_empty())
+            .map(|cell| cell.id.clone())
+            .collect();
+        if self.notebook_pending.is_empty() {
+            self.set_message(Some("没有可执行的单元（可执行单元要有代码）".to_string()), cx);
+            return;
+        }
+        self.advance_notebook_queue(cx);
+    }
+
+    /// 【2d-笔记级】推进「全部运行」队列：队首入执行，跑完一个自动接下一个。
+    ///
+    /// 守卫（防两个收口点重复推进）：队列空 / 还有单元在跑 → 不动。
+    /// 队列走完 = 全部运行完成（消息位清掉，不打扰）。
+    fn advance_notebook_queue(&mut self, cx: &mut Context<Self>) {
+        if self.notebook_pending.is_empty() || self.notebook_state().has_running() {
+            return;
+        }
+        let next = self.notebook_pending.remove(0);
+        // 复用的是单发入口（notebook_run_cell）：它自己会 mark_running + 提交；
+        // 此时无 running（上面守卫），不会自锁
+        let document = self.document.clone();
+        self.notebook_run_cell(&document, &next, cx);
+    }
+
+    /// 【2d-笔记级】重启：关闭当前**活跃**内核（下次执行自动重拉）。
+    ///
+    /// 空 = 没起过内核 → 提示无需重启；正在跑的内核单元也会被一并停掉
+    /// （`kernel_running` 作废，回执不再回填）。
+    pub(crate) fn notebook_restart_kernel(&mut self, cx: &mut Context<Self>) {
+        let active = self.shared.active_kernel_ids();
+        if active.is_empty() {
+            self.set_message(Some("没有活跃内核，无需重启".to_string()), cx);
+            return;
+        }
+        for id in &active {
+            self.shared.kernel_shutdown(id);
+        }
+        // 正在跑的内核单元：作废运行标记（内核已关，回执不会再回来）
+        self.kernel_running = None;
+        // 「全部运行」队列一并作废：当前单元被中断，后续单元不该继续自动跑
+        self.notebook_pending.clear();
+        self.set_message(Some(format!("已重启 {} 个内核", active.len())), cx);
+        cx.notify();
+    }
+
     /// 【#17 → #20】跑一个内核单元（Python / R / Julia）：
     /// 解析实际内核（显式指定 > 会话默认 > 注册表第一个可用）→ 启动（复用）内核 →
     /// 标记 Running → 提交代码 → 内核泵轮询事件回填输出；成功后把内核回写为
@@ -2546,6 +2731,11 @@ impl EditorHostPanel {
             }
         }
         self.shared.set_notebook_cells(&self.document, state.cells);
+        // 【2d-笔记级】全部运行队列推进：这个内核单元收口（ExecuteReply / Failed），
+        // 接下一个（advance 内部守卫：队列空 / 还有单元在跑就不动）
+        if finished {
+            self.advance_notebook_queue(_cx);
+        }
     }
 
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
@@ -2572,6 +2762,10 @@ impl EditorHostPanel {
             if self.pending == 0 {
                 self.running_since = None;
             }
+        }
+        // 【2d-笔记级】全部运行队列推进：这个单元跑完（回执已落），接下一个
+        if mine_arrived > 0 {
+            self.advance_notebook_queue(cx);
         }
         cx.notify();
     }
