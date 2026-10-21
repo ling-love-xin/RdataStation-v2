@@ -5308,6 +5308,8 @@ impl EditorHostPanel {
                         entry.rows.clone(),
                         // 【Q6】列类型跟数据一起交给网格
                         entry.column_types.clone(),
+                        // 【A9】来源表名（右键「为 INSERT」的目标；猜不到 = None → 不摆那一项）
+                        crate::export::table_from_sql(&entry.sql),
                     )
                 }),
                 entry
@@ -5406,10 +5408,12 @@ impl EditorHostPanel {
         };
         self.grid.update(cx, |state, cx| {
             match grid_data {
-                Some((columns, rows, types)) => {
+                Some((columns, rows, types, table)) => {
                     state.delegate_mut().set_data(columns, rows);
                     // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型（防"上一份结果的类型套到新数据上"）
                     state.delegate_mut().set_column_types(types);
+                    // 【A9】来源表名同理（set_data 会清掉旧的；紧跟同步，漏给 = 不摆 INSERT 项）
+                    state.delegate_mut().set_result_table(table);
                 }
                 None => state.delegate_mut().clear(empty),
             }

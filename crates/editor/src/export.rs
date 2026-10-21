@@ -429,6 +429,55 @@ pub(crate) fn is_null_cell(value: Option<&str>) -> bool {
     matches!(value, None | Some("NULL"))
 }
 
+/// 【A9】单值 JSON：`NULL` → `null`，其余 → JSON 字符串（与 [`encode_json`] 同口径）
+///
+/// 右键「复制此值为 JSON」用它：一个值就是一份合法 JSON，贴进接口 / 配置直接可用。
+pub(crate) fn value_to_json(value: &str) -> String {
+    json_value(Some(value))
+}
+
+/// 【A9】单行 JSON 对象（右键「复制整行为 JSON」）
+///
+/// 单元格口径与 [`encode_json`] 完全一致（`NULL` → `null`、其余字符串），
+/// 只是不包数组：一行就是一个对象，贴给接口 / 存配置时不用再剥一层。
+pub(crate) fn row_to_json(columns: &[String], row: &[String]) -> String {
+    let mut text = String::from("{");
+    for (col_ix, column) in columns.iter().enumerate() {
+        if col_ix > 0 {
+            text.push(',');
+        }
+        text.push_str(&format!(
+            "\n  {}: {}",
+            json_string(column),
+            json_value(row.get(col_ix).map(String::as_str))
+        ));
+    }
+    text.push_str("\n}");
+    text
+}
+
+/// 【A9】单行 INSERT（右键「复制整行为 INSERT」）
+///
+/// 值字面量与标识符引号**与导出档同一套口径**（[`cell_literal`] / [`quote_ident`]）：
+/// `NULL` 不加引号、数字布尔原样、其余单引号双写；表名 / 列名按需引号——
+/// 同一个结果集里，右键拷走的行与导出的 INSERT 写法一致，不会两套。
+pub(crate) fn row_to_insert(table: &str, columns: &[String], row: &[String]) -> String {
+    let columns = columns
+        .iter()
+        .map(|column| quote_ident(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = row
+        .iter()
+        .map(|value| cell_literal(Some(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {} ({columns}) VALUES ({values});",
+        quote_ident(table)
+    )
+}
+
 fn json_string(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
@@ -1000,6 +1049,53 @@ mod tests {
         assert_eq!(
             default_file_name(None, 2, ExportFormat::Insert),
             "result_2.sql"
+        );
+    }
+
+    #[test]
+    fn row_json_matches_export_cell_rules() {
+        use super::{row_to_json, value_to_json};
+        // 单值：NULL → null，其余 JSON 字符串（引号 / 换行转义）
+        assert_eq!(value_to_json("NULL"), "null");
+        assert_eq!(value_to_json("abc"), "\"abc\"");
+        assert_eq!(value_to_json("a\"b"), "\"a\\\"b\"");
+        assert_eq!(value_to_json("a\nb"), "\"a\\nb\"");
+        // 行对象：列名与值同口径（NULL → null，字符串照写）
+        let columns = vec!["id".to_string(), "name".to_string(), "note".to_string()];
+        let row = vec!["1".to_string(), "a\"b".to_string(), "NULL".to_string()];
+        assert_eq!(
+            row_to_json(&columns, &row),
+            "{\n  \"id\": \"1\",\n  \"name\": \"a\\\"b\",\n  \"note\": null\n}"
+        );
+        // 缺列（分段抓取边界）：按缺失处理
+        let short = vec!["1".to_string()];
+        assert_eq!(
+            row_to_json(&columns, &short),
+            "{\n  \"id\": \"1\",\n  \"name\": null,\n  \"note\": null\n}"
+        );
+    }
+
+    #[test]
+    fn row_insert_shares_export_literal_rules() {
+        use super::row_to_insert;
+        let columns = vec!["id".to_string(), "name".to_string(), "qty".to_string()];
+        // NULL 不加引号、数字原样、字符串单引号双写
+        let row = vec!["1".to_string(), "O'Brien".to_string(), "NULL".to_string()];
+        assert_eq!(
+            row_to_insert("orders", &columns, &row),
+            "INSERT INTO orders (id, name, qty) VALUES (1, 'O''Brien', NULL);"
+        );
+        // 标识符按需引号（只有含特殊字符的才包）
+        let quoted = vec!["select".to_string(), "Order Details".to_string()];
+        assert_eq!(
+            row_to_insert("orders", &quoted, &["x".to_string(), "y".to_string()]),
+            "INSERT INTO orders (select, \"Order Details\") VALUES ('x', 'y');"
+        );
+        // 表名同样按需引号
+        let plain = vec!["id".to_string()];
+        assert_eq!(
+            row_to_insert("Order Details", &plain, &["7".to_string()]),
+            "INSERT INTO \"Order Details\" (id) VALUES (7);"
         );
     }
 

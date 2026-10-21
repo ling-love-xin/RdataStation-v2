@@ -116,11 +116,17 @@ pub enum ContextAction {
     FilterByValue(String),
     /// 复制此值
     CopyValue(String),
+    /// 【A9】复制此值为 JSON（`NULL` → `null`，其余 JSON 字符串，与导出同口径）
+    CopyValueJson(String),
     /// 复制整列（**数据列**下标）：当前视图行序里这一列的全部取值，一行一个
     /// （与 mock 预览「复制此列」同一口径：只给已抓到的行，不重查源库）
     CopyColumn(usize),
     /// 复制整行（**视图行**下标）：整行拼成 TSV（列之间是制表符，粘进表格就能分列）
     CopyRow(usize),
+    /// 【A9】复制整行为 JSON（单对象，与导出 [`encode_json`] 同口径，只是不包数组）
+    CopyRowJson(usize),
+    /// 【A9】复制整行为 INSERT（表名猜得到才摆这一项；值 / 标识符与导出档同口径）
+    CopyRowInsert(usize),
     /// 冻结 / 取消冻结这一**数据列**
     ToggleFreeze(usize),
     /// 按这一列（列名）排序并**下发重查**
@@ -158,6 +164,9 @@ pub struct ContextTarget {
     pub frozen: bool,
     /// 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样）
     pub insight: bool,
+    /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
+    /// →「复制整行为 INSERT」不摆——宁可没有也不给一条插错表的语句）
+    pub table: Option<String>,
 }
 
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
@@ -192,6 +201,13 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         },
         ContextMenuItem {
+            // 【A9】值 JSON：`NULL` → `null`，其余 JSON 字符串（与「复制此值」平行，
+            // 口径在 export::value_to_json——同一个值两种格式不该两套转义）
+            label: "复制此值为 JSON".to_string(),
+            action: ContextAction::CopyValueJson(value.to_string()),
+            separator_before: false,
+        },
+        ContextMenuItem {
             // 个数写明：这一列拷走多少得让用户心里有数（与 mock 预览同一句文案）
             label: format!("复制此列（{} 个取值）", target.rows),
             action: ContextAction::CopyColumn(target.column),
@@ -203,31 +219,46 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         },
         ContextMenuItem {
-            label: format!("按「{column_name}」升序（下发源库）"),
-            action: ContextAction::SortDown {
-                column: column_name.to_string(),
-                descending: false,
-            },
-            separator_before: true,
-        },
-        ContextMenuItem {
-            label: format!("按「{column_name}」降序（下发源库）"),
-            action: ContextAction::SortDown {
-                column: column_name.to_string(),
-                descending: true,
-            },
-            separator_before: false,
-        },
-        ContextMenuItem {
-            label: if target.frozen {
-                "取消冻结此列".to_string()
-            } else {
-                format!("冻结「{column_name}」")
-            },
-            action: ContextAction::ToggleFreeze(target.column),
+            // 【A9】行 JSON：单对象（列名 → 值，`NULL` → `null`），与导出 JSON 档同口径
+            label: "复制整行为 JSON".to_string(),
+            action: ContextAction::CopyRowJson(target.row),
             separator_before: false,
         },
     ];
+    // 【A9】表名猜得到才摆 INSERT：猜不到宁可没有（照着一个不存在的表去插，
+    // 比右键里少一项更糟——表名猜测见 export::table_from_sql）
+    if let Some(table) = target.table.as_deref() {
+        items.push(ContextMenuItem {
+            label: format!("复制整行为 INSERT（{table}）"),
+            action: ContextAction::CopyRowInsert(target.row),
+            separator_before: false,
+        });
+    }
+    items.push(ContextMenuItem {
+        label: format!("按「{column_name}」升序（下发源库）"),
+        action: ContextAction::SortDown {
+            column: column_name.to_string(),
+            descending: false,
+        },
+        separator_before: true,
+    });
+    items.push(ContextMenuItem {
+        label: format!("按「{column_name}」降序（下发源库）"),
+        action: ContextAction::SortDown {
+            column: column_name.to_string(),
+            descending: true,
+        },
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: if target.frozen {
+            "取消冻结此列".to_string()
+        } else {
+            format!("冻结「{column_name}」")
+        },
+        action: ContextAction::ToggleFreeze(target.column),
+        separator_before: false,
+    });
     if target.insight {
         items.push(ContextMenuItem {
             label: format!("洞察「{column_name}」这一列"),
@@ -275,6 +306,9 @@ pub struct ResultGridDelegate {
     on_insight_column: Option<InsightColumnHook>,
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）
     on_preview_value: Option<PreviewValueHook>,
+    /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
+    /// → 右键不摆「复制整行为 INSERT」）
+    result_table: Option<String>,
     /// 【M8】这份结果能不能洞察（面板同步数据时算：见 `ResultEntry::can_insight_column`）
     insight_available: bool,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
@@ -331,6 +365,8 @@ impl ResultGridDelegate {
         // 类型是**这一份结果自己的**：先把上一份的清掉，等面板紧跟着给新的一份
         // （漏给就是“没类型”，不会错套到新数据上）
         self.column_types.clear();
+        // 【A9】来源表名同理（面板随后紧跟 set_result_table；漏给 = 不摆 INSERT 项）
+        self.result_table = None;
         self.rebuild_view_rows();
     }
 
@@ -343,11 +379,21 @@ impl ResultGridDelegate {
         self.column_types = types;
     }
 
+    /// 【A9】同步结果来源表名（与 `set_data` 同一次同步里、在它之后调）
+    ///
+    /// `None` = 从来源 SQL 猜不到 → 右键「复制整行为 INSERT」不摆（宁可没有，
+    /// 也不给一条插到错误表的语句）。
+    pub fn set_result_table(&mut self, table: Option<String>) {
+        self.result_table = table;
+    }
+
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
         self.rows.clear();
         self.column_types.clear();
+        // 【A9】来源表名跟着清（没有结果就没有 INSERT 目标）
+        self.result_table = None;
         self.view_rows = None;
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
@@ -874,6 +920,32 @@ impl ResultGridDelegate {
             .unwrap_or_default()
     }
 
+    /// 【A9】这一行拼成 JSON 对象（视图行序，与 [`Self::row_text`] 同口径）
+    fn row_json_text(&self, row_ix: usize) -> String {
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return String::new();
+        };
+        self.rows
+            .get(data_ix)
+            .map(|row| crate::export::row_to_json(&self.columns, row))
+            .unwrap_or_default()
+    }
+
+    /// 【A9】这一行拼成 INSERT（视图行序；表名来自面板同步的 [`Self::result_table`]——
+    /// 菜单摆出这一项时表名必然已确定，这里只是按当时的行取值）
+    fn row_insert_text(&self, row_ix: usize) -> String {
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return String::new();
+        };
+        let Some(table) = self.result_table.as_deref() else {
+            return String::new();
+        };
+        self.rows
+            .get(data_ix)
+            .map(|row| crate::export::row_to_insert(table, &self.columns, row))
+            .unwrap_or_default()
+    }
+
     /// 【B14】选中内容的复制文本（`Ctrl+C` 用）：一格给**原文**，一整行给 TSV
     ///
     /// 与右键「复制此值 / 复制整行（TSV）」同一套口径与同一份实现（本方法就是它俩的入口）：
@@ -1298,6 +1370,8 @@ impl TableDelegate for ResultGridDelegate {
             rows: self.view_len(),
             frozen: self.is_frozen(column),
             insight: insight_available,
+            // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
+            table: self.result_table.clone(),
         };
         for item in context_menu_items(&target) {
             if item.separator_before {
@@ -1337,6 +1411,33 @@ impl TableDelegate for ResultGridDelegate {
                     menu = menu.item(PopupMenuItem::new(item.label).on_click(
                         move |_, _window, app| {
                             app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                        },
+                    ));
+                }
+                ContextAction::CopyValueJson(copied) => {
+                    // 【A9】值 JSON 在菜单构造时拼好（`NULL` → null；与导出档同口径）
+                    let text = crate::export::value_to_json(&copied);
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        },
+                    ));
+                }
+                ContextAction::CopyRowJson(row) => {
+                    // 【A9】整行 JSON（视图行序，与「复制整行（TSV）」同口径）
+                    let text = self.row_json_text(row);
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        },
+                    ));
+                }
+                ContextAction::CopyRowInsert(row) => {
+                    // 【A9】整行 INSERT（表名已由面板同步；拼好的语句带上）
+                    let text = self.row_insert_text(row);
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                         },
                     ));
                 }
@@ -1783,7 +1884,15 @@ mod tests {
             rows: 2,
             frozen: false,
             insight: false,
+            table: None,
         }
+    }
+
+    /// 带表名的右键落点（【A9】INSERT 项只在表名猜得到时出现）
+    fn target_with_table(value: &str, name: &str, column: usize) -> ContextTarget {
+        let mut target = target(value, name, column);
+        target.table = Some("orders".to_string());
+        target
     }
 
     /// 【B14】右键菜单的项：按值筛选 / 复制（此值 · 此列 · 整行）/ 冻结（文案随冻结状态变）
@@ -1798,8 +1907,10 @@ mod tests {
                 "查看完整值…",
                 "按值筛选「orders」",
                 "复制此值",
+                "复制此值为 JSON",
                 "复制此列（2 个取值）",
                 "复制整行（TSV）",
+                "复制整行为 JSON",
                 "按「name」升序（下发源库）",
                 "按「name」降序（下发源库）",
                 "冻结「name」",
@@ -1818,39 +1929,69 @@ mod tests {
         assert_eq!(items[2].action, ContextAction::CopyValue("orders".to_string()));
         assert_eq!(
             items[3].action,
+            ContextAction::CopyValueJson("orders".to_string()),
+            "【A9】值 JSON 与「复制此值」平行（NULL → null，其余字符串）"
+        );
+        assert_eq!(
+            items[4].action,
             ContextAction::CopyColumn(1),
             "复制整列认的是**数据列**下标（1 列、行号槽已折算掉）"
         );
         assert_eq!(
-            items[4].action,
+            items[5].action,
             ContextAction::CopyRow(0),
             "复制整行认的是**视图行**下标，不是列下标（两个都是数字，传反了菜单照样能摆出来）"
         );
         assert_eq!(
-            items[5].action,
+            items[6].action,
+            ContextAction::CopyRowJson(0),
+            "【A9】整行 JSON（单对象，与导出 JSON 档同口径）"
+        );
+        assert_eq!(
+            items[7].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: false
             }
         );
         assert_eq!(
-            items[6].action,
+            items[8].action,
             ContextAction::SortDown {
                 column: "name".to_string(),
                 descending: true
             }
         );
         assert!(
-            items[5].separator_before,
+            items[7].separator_before,
             "“对整份结果的操作”那组前面要有分隔线"
         );
-        assert!(!items[7].separator_before, "冻结与排序同组");
-        assert_eq!(items[7].action, ContextAction::ToggleFreeze(1));
+        assert!(!items[9].separator_before, "冻结与排序同组");
+        assert_eq!(items[9].action, ContextAction::ToggleFreeze(1));
 
         let mut done = target;
         done.frozen = true;
         let items = context_menu_items(&done);
-        assert_eq!(items[7].label, "取消冻结此列", "已冻结时给的是反向动作");
+        assert_eq!(items[9].label, "取消冻结此列", "已冻结时给的是反向动作");
+    }
+
+    /// 【A9】「复制整行为 INSERT」只在表名猜得到时出现（面板从来源 SQL 猜好传来）：
+    /// 猜不到宁可少一项，也不给一条插到错误表的语句。
+    #[test]
+    fn context_menu_offers_insert_only_when_table_is_known() {
+        let without = context_menu_items(&target("orders", "name", 1));
+        assert!(
+            !without
+                .iter()
+                .any(|item| matches!(item.action, ContextAction::CopyRowInsert(_))),
+            "表名未知时不摆 INSERT 项"
+        );
+        let with = context_menu_items(&target_with_table("orders", "name", 1));
+        let insert = with
+            .iter()
+            .find(|item| matches!(item.action, ContextAction::CopyRowInsert(_)))
+            .expect("表名已知时要摆 INSERT 项");
+        assert_eq!(insert.label, "复制整行为 INSERT（orders）", "表名写进文案");
+        assert!(!insert.separator_before, "与复制组同组（紧跟整行 JSON 后）");
     }
 
     /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：
@@ -1926,6 +2067,36 @@ mod tests {
 
         grid.set_filter("two");
         assert_eq!(grid.column_text(0), "2", "筛选生效时只复制看得见的行");
+    }
+
+    /// 【A9】整行 JSON / INSERT：与 TSV 同一份视图行序口径；JSON 走导出 JSON 的 NULL /
+    /// 字符串规则，INSERT 走导出字面量规则；表名没同步时 INSERT 给空串（菜单不摆，防御）。
+    #[test]
+    fn row_json_and_insert_follow_the_view_order() {
+        let mut grid = grid_with(&[&["1", "a"], &["2", "NULL"]]);
+        // JSON：NULL → null；列名与值都是字符串
+        assert_eq!(
+            grid.row_json_text(0),
+            "{\n  \"id\": \"1\",\n  \"name\": \"a\"\n}"
+        );
+        assert_eq!(
+            grid.row_json_text(1),
+            "{\n  \"id\": \"2\",\n  \"name\": null\n}"
+        );
+        // 没同步表名 → INSERT 空串（界面已不摆那一项，这里是防御）
+        assert_eq!(grid.row_insert_text(0), "");
+        // 同步表名后：值字面量与导出档同口径（NULL 不加引号）
+        grid.set_result_table(Some("orders".to_string()));
+        assert_eq!(
+            grid.row_insert_text(1),
+            "INSERT INTO orders (id, name) VALUES (2, NULL);"
+        );
+        // 视图行序：排序后复制的是看着的那行
+        grid.apply_sort(Some((0, true)));
+        assert_eq!(grid.row_json_text(0), "{\n  \"id\": \"2\",\n  \"name\": null\n}");
+        // 换数据（set_data）→ 表名跟着清（防旧表名插到新结果上）
+        grid.set_data(vec!["x".to_string()], vec![vec!["y".to_string()]]);
+        assert_eq!(grid.row_insert_text(0), "");
     }
 
     /// 【B15】冻结列：切换、换数据时清空（列都换了一批，旧列号没意义）
