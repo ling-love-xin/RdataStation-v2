@@ -5804,7 +5804,9 @@ impl EditorHostPanel {
     /// 【遗留 #7】右键「查看完整值」：记录目标并弹值查看器（对话框由 dialogs 层开）
     ///
     /// 钩子给的是 `&mut App`（拿不到窗口），对话框要 `&mut Window`——所以经
-    /// `self.window.update` 转一手（与 `apply_filter_value` 回填筛选框同一模式）。
+    /// `self.window.update` 转手调 [`Self::open_value_preview_with_window`]。
+    /// headless 测试里窗口不在 `App::windows`（测试上下文持有），转手会报
+    /// `window not found` 而弹不出——这是测试环境限制，真实窗口下正常。
     pub(crate) fn open_value_preview(
         &mut self,
         value: &str,
@@ -5818,17 +5820,67 @@ impl EditorHostPanel {
             row,
         });
         let target = self.value_preview.clone().expect("刚写入");
-        let _ = self.window.update(cx, move |_panel, window, app| {
-            dialogs::open_value_preview(
+        let result = self.window.update(cx, move |_panel, window, app| {
+            // 转手闭包里 window 是真实窗口：直接弹
+            Self::open_value_preview_with_window_impl(
                 window,
                 app,
                 target.value.clone(),
                 target.column.clone(),
                 target.row,
-                // 复制不关弹层：用户复制完可能还要接着看
-                move |app| app.write_to_clipboard(ClipboardItem::new_string(target.value.clone())),
             );
         });
+        // 窗口句柄不可用（headless / 窗口已关）→ 留一句可读原因，不静默
+        if let Err(error) = result {
+            self.set_message(Some(format!("值查看器弹不出：{error}")), cx);
+        }
+    }
+
+    /// 【遗留 #7】带窗口的值查看器入口（测试走它做窗口级验收；生产钩子经
+    /// [`Self::open_value_preview`] 转手调同一实现）
+    pub(crate) fn open_value_preview_with_window(        &mut self,
+        value: &str,
+        column: &str,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.value_preview = Some(ValuePreview {
+            value: value.to_string(),
+            column: column.to_string(),
+            row,
+        });
+        Self::open_value_preview_with_window_impl(
+            window,
+            cx,
+            value.to_string(),
+            column.to_string(),
+            row,
+        );
+    }
+
+    /// 弹层实现（与窗口来源无关）：`dialogs::open_value_preview` 是模态弹层，
+    /// 复制不关弹层（用户复制完可能还要接着看）
+    fn open_value_preview_with_window_impl(
+        window: &mut Window,
+        cx: &mut App,
+        value: String,
+        column: String,
+        row: usize,
+    ) {
+        dialogs::open_value_preview(
+            window,
+            cx,
+            value.clone(),
+            column.clone(),
+            row,
+            move |app| app.write_to_clipboard(ClipboardItem::new_string(value.clone())),
+        );
+    }
+
+    /// 【遗留 #7】只读访问器：值查看器目标是否已记录（测试断言用；`ValuePreview` 是私有类型，只暴露 bool）
+    pub(crate) fn value_preview_for_test(&self) -> bool {
+        self.value_preview.is_some()
     }
 
     /// 【B14】排序下发（右键菜单来的）：按这一列重查源库，结果落**新结果集**

@@ -353,7 +353,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 ```
 
 - **本地 vs 源库的语义差异必须显式提示**：本地 = 只隐藏行（不重查、看不到未抓取的行）；源库 = 重查（数据更新、能看到未抓取行，但有往返成本）。
-- **待定（§12 #15）**：原查询含 `ORDER BY` / `LIMIT` 时的包裹语义。
+- **已定（§12 #15，2026-10-22 #30 落地）**：原查询含 `ORDER BY` / `LIMIT` 时的包裹语义——**保留外层 ORDER BY；有 LIMIT 时去掉并提示**（`engine/sql/filter.rs` 的 `rewrite_with_order` / `rewrite_with_filter`：子查询包裹 + ORDER BY 提到外层 + LIMIT 丢弃返回 `dropped_limit`；ESCAPE `!` 防通配符误伤、CAST 方言差异 MySQL 用 CHAR）。结果工具栏「⟳ 刷新」按结果的**形成形态**重查（`Pushdown` 原料随结论落 `ResultEntry`），下发筛选 / 排序下发不退回全量。
 
 ### 5.10 DuckDB 分析（派生新结果集 / 分析单元）
 
@@ -590,7 +590,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 12 | ✅ | ~~模块文档缺口：使用手册（`editor-user-guide.md`）~~ | 与其它模块的六件套不齐 | ✅ **已补（2026-09-21）**：`editor-user-guide.md` —— 能力与期次标注 / 入口 / 界面导览 / 典型流程 / 一次操作落到哪 / 已注册快捷键 / 只读四道防线 / FAQ / **USIT 验收清单**；三份文档地图（`docs/architecture/README.md`、本目录 `README.md`）已登记 |
 | 13 | ✅ | **通道可用性判定无来源**：`use_duckdb_fed` 曾只是“是否注册 Secret”的开关，而“Secret 是否注册成功 / 能否 ATTACH”没有可查询状态 | 通道门控只能靠猜，UI 给不出准确的“不可用原因” | **已关闭（2026-09-18，B13 切片二）**：门控真值来自宿主 `ChannelsPort`（连接开关 → 驱动类型 → 扩展可用性 `accel::extension_state`）+ 每个连接一条缓存的加速会话；扩展**没试过不拦**（让用户能选，执行时在工作线程真装一次），**试过且失败就把原话记下来**在菜单行尾显示（重试成功即清）。写保护落在引擎侧（`ATTACH … READ_ONLY`），不再依赖上层自觉 |
 | 14 | ✅ | **加速通道新鲜度**（ATTACH 快照 vs 实时）无表达、无重建入口 | 用户可能拿旧快照做决策 | **已关闭（2026-09-18，B13 切片二/三）**：实测**数据是实时的**（源库插一行，同一 DuckDB 会话立刻看得到），但在 `ATTACH` 时定型的**表清单**是静态的——所以界面写「源库只读」而**不是“快照”**；重建入口就是「执行位置 ▾」菜单里的「重新挂载源库（刷新表清单）」（旁路线程 + 回执，不占执行位）。⬜ 另：加速会话的临时表与分析会话（1c）暂不共享 |
-| 15 | 🟡 | **重查包裹语义**：`SELECT * FROM (<原SQL>) WHERE …` 遇原查询带 `ORDER BY` / `LIMIT` 时语义会变 | 重查结果与原查询不一致 | 定规则：保留外层 ORDER BY；有 LIMIT 时提示“重查将去掉 LIMIT” |
+| 15 | ✅ | **重查包裹语义**：`SELECT * FROM (<原SQL>) WHERE …` 遇原查询带 `ORDER BY` / `LIMIT` 时语义会变 | 重查结果与原查询不一致 | **已定（2026-10-22，#30）**：保留外层 ORDER BY；有 LIMIT 去掉并提示「重查将去掉 LIMIT」——`engine/sql/filter.rs` 完整实现（`rewrite_with_filter` / `rewrite_with_order`，tokenizer 扫括号外子句防字符串/注释误判，ESCAPE `!` 转义，MySQL 用 CHAR），测试 10+ 项；「⟳ 刷新」按形成形态重查（`Pushdown` 原料随 `ResultEntry`，下发不退回全量），刷新宿主测试 2 项。rds-editor 668 passed · ui_contract 9/9 |
 | 16 | ⚪ | 结果**血缘只到 UI 摘要级**，**未落库**（重启后无法回看“这个结果怎么来的”） | 重启/重开项目后看不到历史结果的来源 | ✅ **已做到 UI 那一半（2026-09-18，B15 收尾）**：`ExecTarget::lineage()` → `ExecOutcome.lineage` → `ResultEntry.lineage` → 结果工具栏左段（执行计划 / 分析用标题当来源）；⬜ 另一半（落库 / 会话恢复）仍后置 |
 | 17 | 🟡 | **驱动层不返回真实 `affected_rows`**（全部驱动目录无该字段写入；`from_batches` 已不再把 `total_rows` 当影响行数，现为 `None`） | DML/DDL 的“影响 N 行”无法展示，历史里写语句的 `rows_affected` 也为空 | 1b：native 驱动（mysql/postgres/sqlite/duckdb）在写路径填充 `QueryResult.affected_rows` 并补测试 |
 | 18 | ⚪ | **Dock 无“关闭前否决”钩子**（已静态核实 2026-09-15）：`DockArea` 订阅 `TabGroupEvent::ClosePanel` 后直接 `remove_panel_id`；`Panel::closable(cx)` 是唯一闸门（静态许可，不能问用户）；`remove_panel` / `with_renderer` 均为 `pub` | 决定了“标签 ✕ 能否弹未保存确认”——需要自绘标签条才能做到 | 见 §13 #15：默认走“草稿兜底”（关闭即落草稿），需要弹窗时再上自定义标签条。**2026-09-16 收口（B16）**：三条关闭路径统一为两条——① `Ctrl+W` → `request_close_document`（**三态确认**）；② Dock 的关闭入口（**组件库没有每标签 ✕**，只有标签栏 ⋯ 菜单里的 `Dock.Close`）——它按 `TabGroup::is_closable` → **当前标签**的 `closable(cx)` 决定要不要摆出来，而编辑器面板的判据是 `!is_dirty()`：**脏文档那里根本没有关闭项**，也就没有“点了没反应”。自绘标签条（能在 ✕ 上弹确认）仍留在 1b 之后 |
@@ -706,13 +706,13 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | **编码 / 换行重设** | ✅ **已落地（2026-10-14，T2c-4 补记 2c）**：内核永是 Unicode（统一 UTF-8 + `\n`），差异收敛到 IO 层——新 `encoding.rs`（`TextEncoding` 5 档 / `LineEnding` / `SaveFormat` 文档级保存契约）+ 新 `hidden.rs`（隐藏字符区间）；重设菜单点亮（编码 5 项 / 换行 2 项 / 缩进 4 项 + 「显示」组空白/隐藏字符）；编码/换行**不随会话持久化**（打开时按字节重新检测），文档级 `SaveFormat` 只在会话内是保存契约；含不可见字符显示（空白字符内核 `set_show_whitespaces` + 隐藏字符 `RangeDecoration` 标注，不做符号替换）。见 `editor-impl-taskbook.md` §3 T2c-4 补记 2c | `editor-impl-taskbook.md` §3 T2c-4 / §6 #4（已定） |
 | **T2c-6 面板布局持久化** | ✅ **已落地（2026-10-13）**：工具栏自定义布局（顺序/可见性/分组/折叠）+ schema 绑定 + 缩进（宽/制表符）跨会话持久化——`toolbar.rs` encode/decode + `session.rs` 四字段 + `editor_contexts` 四列 + 恢复校验（布局坏数据回默认 / schema 不在列表回退连接默认），见任务书 T2c-6 完成记录 | `editor-impl-taskbook.md` §3 |
 | **2b 通用模式**（`EditorMode::Text → General` 更名 + 环境切换 + 外部解释器脚本执行） / **2d 分析模式骨架**（Cell / Output / Session + 内联输出 + `.rdsnote`） | ✅ **均已落地（2026-10-13）**：2b 四提交（更名 T2b-1 + 环境模型/选择器/脚本执行/输出卡片 T2b-2~6 + 管理环境 modal + 工作台真机接线）；2d 三提交（数据层 `cell.rs`/`session.rs` + 视图 `view/analysis.rs` + `.rdsnote` 落盘往返）。rds-editor 579 passed。见 `editor-impl-taskbook.md` §2 T2b 完成记录 / §4 T2d 完成记录 | `editor-impl-taskbook.md` §2 / §4 |
-| 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | 今天看全一个值只能靠悬停全文（原型 §2.6 已订正为 ❌） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
+| 值预览弹层 / **值查看器**；右键「为 JSON」「为 INSERT」 | ✅ **已落地（2026-10-22，#29+#31）**：「为 JSON」「为 INSERT」= #29（行/选区右键，导出字面量共用一套规则）；值查看器 = #31（右键「查看完整值」→ 模态弹层，列/行/值 + 复制按钮，复制不关弹层；宿主钩子只给 `&mut App`，经 `self.window.update` 转手弹层，headless 下转手拿不到窗口是测试环境限制，窗口级验收走同一弹层实现的 `open_value_preview_with_window`，钩子路径验「目标记录 + 失败留可读原因」） | `crates/editor/src/lib.rs` ⬜ · `editor-dev-plan.md` §0 2026-09-20 ⬜ 余 |
 | 补全：缓存未命中时**回落实时内省** | 今天未接端口时只给关键字与函数（如实，不假装有元数据） | `crates/editor/src/lib.rs` ⬜（B9 余项） |
 | 事务内语句**不可取消 / 无超时** | 驱动 `Transaction` trait 没有取消入口（已核实：只有 `query` / `commit` / `rollback`） | `crates/editor/src/lib.rs` ⬜ · `crates/engine/src/driver/traits.rs::Transaction` |
 | 联邦：~~源清单浮层~~ ·「用作联邦源」标记存储 · 扫描量可见 | ✅ **源清单浮层已上线（T1.6，2026-09-18）**：`editor/src/sources.rs` + `view/host.rs::render_sources_picker`（联邦档才摆「源清单 ▾」，失败行带原话 / 按源重挂 / 设为主源），见联邦架构与 `federation-dev-plan.md`。⬜ 余：「用作联邦源」标记存储、扫描量可见 | `federation-dev-plan.md` §0（2026-09-18 T1.6 收圆） |
 | **只读锁 ⓘ**（连接侧写策略来源）+「提醒后放行」那一档 | 今天落地的是「项目锁 = 强只读」；另一档随连接策略做 | 本文件 §12 #26（剩余）· §13 #9 |
 | 结果**血缘落库 / 会话恢复** | 只做到 UI 摘要级（重启后回看不了「这份结果怎么来的」） | §12 #16 |
-| **重查包裹语义**（原查询带 `ORDER BY` / `LIMIT` 时外层重查语义会变） | 需要定规则：保留外层 `ORDER BY`；有 `LIMIT` 时提示「重查将去掉 LIMIT」 | §12 #15 |
+| **重查包裹语义**（原查询带 `ORDER BY` / `LIMIT` 时外层重查语义会变） | ✅ **已定（2026-10-22，#30）**：保留外层 ORDER BY；有 LIMIT 去掉并提示；「⟳ 刷新」按形成形态重查（不退回全量） | §12 #15 |
 | 结果区高度**不随会话持久化** | 分栏位置只在面板内存里记 | `editor-dev-plan.md` §0 2026-09-17（B5）⬜ 余 |
 | 折叠的**视觉**结果需人工看一眼 | chevron / 点击折叠由内核渲染，用例只覆盖候选与重喂 | `editor-dev-plan.md` §0 2026-09-21（B17）⬜ 余 |
 | **多文档恢复** | 恢复侧仍只恢复最近更新的一份（未命名 / 空文档不持久化） | `editor-dev-plan.md` §0 2026-09-19（E3）⬜ 余 |

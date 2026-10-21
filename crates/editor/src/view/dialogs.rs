@@ -387,6 +387,8 @@ pub fn open_value_preview(
                     .p_3()
                     .font_family("monospace")
                     .text_sm()
+                    // 测试可观测：值内容区（窗口级验收断言「值真的渲染在弹层里」）
+                    .debug_selector(|| "editor-dialog-editor-value-preview-body".to_string())
                     // 多行值（JSON / 文本）按 `\n` 自然换行；连续空格折叠可接受——
                     // 看全的是「换行结构」，不是空格字节
                     .child(value.clone()),

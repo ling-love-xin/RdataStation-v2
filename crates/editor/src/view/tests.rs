@@ -2111,6 +2111,72 @@ fn dialog_button_rendered(cx: &mut VisualTestContext, selector: &'static str) ->
     cx.debug_bounds(selector).is_some()
 }
 
+/// 【遗留 #7】值查看器：右键「查看完整值」→ 模态弹层真的弹出（列/行/值 + 复制按钮）
+///
+/// 钩子接线（网格右键 → `open_value_preview`）另有单测覆盖；这里验收的是**弹层行为**。
+/// 弹层要 `&mut Window`，而生产钩子只给 `&mut App`——宿主经 `self.window.update` 转手，
+/// 但 headless 测试里窗口不在 `App::windows`（测试上下文持有），转手会报
+/// `window not found` 而弹不出。所以窗口级验收走**同一弹层实现 + 真实窗口**的
+/// [`EditorHostPanel::open_value_preview_with_window`]（生产方法），钩子路径只验
+/// 「目标被记录 + 转手失败留可读原因」。
+#[gpui_kit::test]
+fn value_preview_opens_as_a_dialog_from_the_host(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\report.sql", "select 1");
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-value-preview");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    // 带窗口的生产方法：同一弹层实现 + 真实窗口
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_value_preview_with_window("第一行\n第二行", "notes", 3, window, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.debug_bounds("dialog-layer").is_some(),
+        "对话框层要真渲染（不是只有状态）"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-value-preview-copy"),
+        "复制按钮要在值查看器里"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-value-preview-body"),
+        "值内容要真渲染在弹层里"
+    );
+
+    // 关闭（Esc / 点遮罩 / 关闭按钮走同一条路）：弹层收起
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "关闭后弹层收起"
+    );
+
+    // 钩子路径（无 window）：headless 下转手必然失败（测试环境限制），
+    // 但目标要记录、失败要留可读原因——真实窗口下正常弹。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_value_preview("钩子值", "notes", 1, cx);
+        });
+    });
+    let (recorded, message) = cx.update(|_window, cx| {
+        let panel = panel.read(cx);
+        (panel.value_preview_for_test(), panel.message.clone())
+    });
+    assert!(recorded, "目标要记录（弹层内容在 with_window 路径已验证）");
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|m| m.contains("弹不出")),
+        "headless 转手失败要留可读原因：{message:?}"
+    );
+}
+
 /// 需要付出代价的切换：先问，不问就不切（禁止静默切换，原型 §1.3）
 #[gpui_kit::test]
 fn switching_to_text_asks_before_hiding_results(cx: &mut TestAppContext) {
@@ -4711,7 +4777,7 @@ fn refreshing_a_filtered_result_keeps_its_shape(cx: &mut TestAppContext) {
     assert_eq!(seen.lock().expect("锁").len(), 1, "下发执行了一次");
 
     // 切到下发结果（标签 2）再刷新
-    cx.update(|_window, cx| {
+    cx.update(|_window, _cx| {
         shared.update_results(|store| {
             assert!(store.select(&id, 1), "切到下发结果集");
         });
@@ -4756,7 +4822,7 @@ fn refreshing_a_sorted_result_keeps_its_shape(cx: &mut TestAppContext) {
     assert_eq!(sorted.lock().expect("锁").len(), 1, "排序下发执行了一次");
 
     // 切到排序结果再刷新
-    cx.update(|_window, cx| {
+    cx.update(|_window, _cx| {
         shared.update_results(|store| {
             assert!(store.select(&id, 1), "切到排序下发结果集");
         });
