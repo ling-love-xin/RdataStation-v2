@@ -40,6 +40,9 @@ use crate::rule_view::RulesView;
 use crate::schema_view::{SchemaExportFormat, SchemaSection};
 use crate::ui;
 
+use crate::model::InsightSetEntry;
+use crate::model::OverlapView;
+
 #[cfg(test)]
 mod tests;
 
@@ -54,6 +57,17 @@ pub enum InsightEvent {
     /// 带 payload 而不让宿主回读面板状态：宿主拿到事件就能直接开工，
     /// 不必再持面板实体（也避开了「读实体时它正在被更新」的租借冲突）。
     ProfileRequested { target: InsightTarget },
+    /// 请宿主以**全量**口径重新加载该源目标（大表手动全量：取样切换的
+    /// 另一半——源目标取样后用户点「全量统计」触发；结果仍落成 `tmp_i_` 临时表，
+    /// 后续分析链路与取样完全一致）。
+    FullProfileRequested { target: InsightTarget },
+    /// 请宿主**确认**后执行全量画像（大表全量是慢操作且占内存）。
+    ///
+    /// 面板在 `request_full` 时发这个而不是直接发 `FullProfileRequested`：确认
+    /// 弹窗要窗口（宿主侧），且宿主能读设置——「全量统计前确认」关闭时宿主
+    /// **不弹窗**、直接调 [`InsightView::confirm_full`]。确认期间面板 scope 保持不变；
+    /// 取消 = 宿主什么都不做（scope / 状态都不动）。
+    FullProfileConfirmRequested { target: InsightTarget },
     /// 请宿主评估整表质量（逐列串行 + 进度回填）。
     ///
     /// 只带 `temp_table`：列清单由接缝在后台现读（元数据可能已变，
@@ -89,6 +103,21 @@ pub enum InsightEvent {
         schema: String,
         table: String,
     },
+    /// 请宿主把某张已洞察表加入中间页对比候选并切到对比形态。
+    ///
+    /// 右栏集合行的「对比」按钮发出；候选勾选是中间页的状态（`compare_selected`），
+    /// 这里只报稳定业务键，由宿主转发（不跨实体直接改中间页状态）。
+    CompareRequested { key: String },
+    /// 请宿主对某张已洞察表与**当前目标表**做列值重叠排查（T19 关系引擎）。
+    ///
+    /// 只报发起方业务键：被对比方 = 集合里 `is_current` 的那张（右栏集合卡
+    /// 「关系」按钮语义是「与当前目标对比」），宿主从集合里解析表名。
+    RelationRequested { key: String },
+    /// 请宿主把某张已洞察表归档到资产库（T20：画像快照 JSON → 分析存档）。
+    ///
+    /// 归档在宿主侧（要 `ArchiveService` 与项目目录），这里只报业务键；
+    /// 宿主取画像快照、落盘、入资产库索引并回执。
+    ArchiveRequested { key: String },
     /// 请宿主保存当前列的一次快照（重取领域画像 + 双写 + 回填历史）
     SnapshotSaveRequested {
         temp_table: String,
@@ -109,6 +138,17 @@ pub enum InsightEvent {
     /// 不必知道 JSON 的分组键或 Markdown 的转义规则。
     SchemaExportRequested {
         format: SchemaExportFormat,
+        /// 默认文件名主名（不含扩展名，已净化）
+        file_stem: String,
+        content: String,
+    },
+    /// 请宿主把当前表画像的 EDA 报告存成 Markdown 文件（对齐原型「生成报告」）。
+    ///
+    /// 与 `SchemaExportRequested` 同一口径（D36）：`content` 由面板算好，
+    /// 宿主只选路径与写文件（`rfd` 保存对话框 → `std::fs::write` → 状态栏回执）。
+    /// 用户取消保存对话框不算失败。
+    TableReportExportRequested {
+        target: InsightTarget,
         /// 默认文件名主名（不含扩展名，已净化）
         file_stem: String,
         content: String,
@@ -197,6 +237,51 @@ pub struct InsightView {
     /// 由 [`crate::jobs::request_profile`] 分阶段更新：取样中 → 画像中；渲染在
     /// `state == Loading` 时读它，`None` 走纯骨架。
     pub(crate) loading_note: Option<SharedString>,
+    /// 已洞察表集合（中间工作页 `opened` 的快照，宿主经 [`Self::set_insight_set`] 推送）。
+    ///
+    /// 集合是**会话级管理**（可对比 / 关系排查 / 归档），独立于当前目标的 Tab 下钻——
+    /// 当前目标高亮由条目上的 `is_current` 表达，不参与 Tab 载荷。
+    pub(crate) insight_set: Vec<InsightSetEntry>,
+    /// 集合卡折叠态（用户偏好：切 Tab / 重算不清空）
+    pub(crate) insight_set_open: bool,
+    /// 跨洞察表关系排查的结果（T19；`None` = 尚未排查过）
+    pub(crate) overlap: Option<OverlapView>,
+    /// 关系排查执行中（集合卡关系区给进度提示）
+    pub(crate) overlap_running: bool,
+    /// 关系排查的失败提示（结果区给说明，不整页转错误态）
+    pub(crate) overlap_notice: Option<String>,
+    /// 当前画像的取样口径（中间页 scope 切换；右栏摘要跟随）。
+    ///
+    /// 默认取样；源目标手动切全量后为 `Full`（临时表目标没有取样概念，恒 `Sample`）。
+    pub(crate) scope: InsightScope,
+    /// 宿主推送的洞察偏好（对应设置页 `insight.*`；insight 不依赖 settings，
+    /// 由宿主在装配与设置变更时转发）。`status_usage` 关闭时 `memory` 恒 `None`。
+    pub(crate) status_usage: bool,
+    /// 洞察集合工作集提示阈值（表数超过该值集合卡提示先清理；0 = 不提示）。
+    pub(crate) work_set_limit: usize,
+    /// 分析引擎内存读数（后台轮询回填；工具栏显示「内存 X MB / 上限 · 表 N」）。
+    pub(crate) memory: Option<engine::duckdb::MemoryStats>,
+    /// 内存轮询任务是否在跑（防重复启动；偏好关闭后轮询自行退出）。
+    pub(crate) memory_poll_running: bool,
+}
+
+/// 画像取样口径：大表默认取样（`SOURCE_SAMPLE_LIMIT`），全量需手动触发。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InsightScope {
+    /// 取样（默认）：源表导入前 `LIMIT SOURCE_SAMPLE_LIMIT` 行
+    #[default]
+    Sample,
+    /// 全量：源表全部行导入（用户手动触发，大表会慢）
+    Full,
+}
+
+impl InsightScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            InsightScope::Sample => "取样",
+            InsightScope::Full => "全量",
+        }
+    }
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
@@ -224,7 +309,105 @@ impl InsightView {
             history_notice: None,
             open_schema_sections: [true; SchemaSection::ALL.len()],
             loading_note: None,
+            insight_set: Vec::new(),
+            insight_set_open: true,
+            overlap: None,
+            overlap_running: false,
+            overlap_notice: None,
+            scope: InsightScope::Sample,
+            // 初值与设置默认一致（宿主装配时会立刻用真实设置覆盖：`apply_insight_prefs`）
+            status_usage: true,
+            work_set_limit: 30,
+            memory: None,
+            memory_poll_running: false,
         }
+    }
+
+    /// 已洞察表集合（右栏渲染用）
+    pub fn insight_set(&self) -> &[InsightSetEntry] {
+        &self.insight_set
+    }
+
+    /// 宿主推送洞察表集合快照（中间页 `opened` 变化时调用；内容不变不重绘）。
+    ///
+    /// 在事件路径调用（`observe` 回调），只更新 Shared + `cx.notify()`。
+    ///
+    /// 顺带把集合同步成临时表的**保护名单**（T21）：集合内的表是用户的会话工作集
+    /// （可能随时对比 / 归档），TTL 与上限的惰性清理必须跳过它们；离开集合的表
+    /// 解除保护，恢复 30 分钟 TTL 管理。保护名单是内存登记，不是 I/O。
+    pub fn set_insight_set(&mut self, entries: Vec<InsightSetEntry>, cx: &mut Context<Self>) {
+        let manager = engine::DuckDBManager::temp_table_manager();
+        let incoming: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter_map(|entry| entry.temp_table.as_deref())
+            .collect();
+        for entry in &self.insight_set {
+            if let Some(name) = entry.temp_table.as_deref() {
+                if !incoming.contains(name) {
+                    manager.unprotect(name);
+                }
+            }
+        }
+        for name in incoming {
+            manager.protect(name);
+        }
+        if self.insight_set != entries {
+            self.insight_set = entries;
+            cx.notify();
+        }
+    }
+
+    /// 折叠 / 展开集合卡
+    pub fn toggle_insight_set(&mut self, cx: &mut Context<Self>) {
+        self.insight_set_open = !self.insight_set_open;
+        cx.notify();
+    }
+
+    /// 关系排查结果（右栏集合卡「关系排查」区渲染；`None` = 未排查过）
+    pub fn overlap(&self) -> Option<&OverlapView> {
+        self.overlap.as_ref()
+    }
+
+    /// 关系排查执行中（结果区进度提示）
+    pub fn overlap_running(&self) -> bool {
+        self.overlap_running
+    }
+
+    /// 关系排查失败提示（结果区说明；`None` = 无失败）
+    pub fn overlap_notice(&self) -> Option<&str> {
+        self.overlap_notice.as_deref()
+    }
+
+    /// 回填一次关系排查结果（作业线程经 `jobs` 调）。
+    ///
+    /// 顺带收起 loading 与清掉旧失败提示——结果与「正在跑」互斥。
+    pub fn set_overlap(&mut self, view: OverlapView, cx: &mut Context<Self>) {
+        self.overlap = Some(view);
+        self.overlap_running = false;
+        self.overlap_notice = None;
+        cx.notify();
+    }
+
+    /// 关系排查进行中（作业线程开始时置位）。
+    pub fn begin_overlap(&mut self, cx: &mut Context<Self>) {
+        self.overlap_running = true;
+        self.overlap_notice = None;
+        cx.notify();
+    }
+
+    /// 关系排查失败（作业线程报错时回填说明，保留上一次结果）。
+    pub fn set_overlap_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.overlap_running = false;
+        self.overlap_notice = Some(message.into());
+        cx.notify();
+    }
+
+    /// 收起关系排查结果区（结果 / 失败提示一起清）。
+    pub fn dismiss_overlap(&mut self, cx: &mut Context<Self>) {
+        self.overlap = None;
+        self.overlap_running = false;
+        self.overlap_notice = None;
+        cx.notify();
     }
 
     /// 规则管理对话框实体（宿主用它接 `insight::jobs::attach_rules`）。
@@ -271,11 +454,165 @@ impl InsightView {
         self.tab = target.default_tab();
         self.target = Some(target);
         self.data = PanelData::default();
-        // 对比基准只对旧目标（旧列）成立，跟着载荷一起清
+        // 取样口径跟着目标重置（新目标默认取样）；对比基准只对旧目标成立，跟着载荷清
+        self.scope = InsightScope::Sample;
         self.compare_target = None;
         self.state = InsightPanelState::Loading;
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
+        }
+    }
+
+    /// 当前取样口径（中间页 scope 切换按钮读它；测试与宿主读）。
+    pub fn scope(&self) -> InsightScope {
+        self.scope
+    }
+
+    /// 宿主装配 / 设置变更时推送洞察偏好（对应设置页 `insight.*`）。
+    ///
+    /// `insight` 不依赖 `settings`（依赖只向下），设置值由宿主读取后转发到这里；
+    /// 关闭「显示内存占用」时清空读数，轮询任务也会在下一次采样时自行退出。
+    pub fn apply_insight_prefs(
+        &mut self,
+        status_usage: bool,
+        work_set_limit: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.status_usage = status_usage;
+        self.work_set_limit = work_set_limit;
+        if !status_usage {
+            self.memory = None;
+        } else {
+            // 从关到开：轮询可能已退出，重新拉起（内部防重入）
+            self.ensure_memory_poll(cx);
+        }
+        cx.notify();
+    }
+
+    /// 启动内存轮询（每 5 秒采样一次分析引擎内存读数，写回 `memory`）。
+    ///
+    /// 采样在后台执行器跑（`memory_stats` 拿全局连接锁 + 两条 SQL，不占 UI 线程）；
+    /// `status_usage` 关闭或面板销毁时，`weak.update` 的返回会停下循环。
+    /// 轮询是事件路径（`cx.spawn` 回调更新状态 + notify），不违反 render 纯读约束。
+    pub(crate) fn ensure_memory_poll(&mut self, cx: &mut Context<Self>) {
+        if self.memory_poll_running {
+            return;
+        }
+        self.memory_poll_running = true;
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                // 先采样再睡：启动即有读数，不必等第一轮 5 秒
+                let stats = executor
+                    .spawn(async { engine::services::duckdb_service::DuckDbService::memory_stats() })
+                    .await
+                    .ok();
+                let keep = weak.update(cx, |view, cx| {
+                    if !view.status_usage {
+                        view.memory = None;
+                        view.memory_poll_running = false;
+                        cx.notify();
+                        return false;
+                    }
+                    view.memory = stats.clone();
+                    cx.notify();
+                    true
+                });
+                // 实体已销毁（weak 升级失败）或偏好已关闭 → 退出轮询
+                if !matches!(keep, Ok(true)) {
+                    break;
+                }
+                executor.timer(std::time::Duration::from_secs(5)).await;
+            }
+        })
+        .detach();
+    }
+
+    /// 切换为**全量**口径并重新画像（大表手动全量：源目标有效）。
+    ///
+    /// 非源目标（临时表 / 列 / 多列 / Schema）没有「取样」概念，静默忽略——
+    /// 它们的数据已是既定内容，无需也不应再全量取一遍。
+    ///
+    /// 源目标：先请宿主**确认**（大表全量慢且占内存；设置「全量统计前确认」
+    /// 关闭时宿主直接执行）。确认后由宿主调 [`Self::confirm_full`] 真正切口径。
+    pub fn request_full(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        if !matches!(target, InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. })
+        {
+            return;
+        }
+        cx.emit(InsightEvent::FullProfileConfirmRequested { target });
+        cx.notify();
+    }
+
+    /// 宿主确认全量后调用：真正切到全量口径并请求画像。
+    ///
+    /// 与 [`Self::request_full`] 是两段式的后半段（确认弹窗在宿主侧）；取消时宿主
+    /// 不调本方法，scope / 状态保持原样。
+    pub fn confirm_full(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        if !matches!(target, InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. })
+        {
+            return;
+        }
+        self.scope = InsightScope::Full;
+        self.state = InsightPanelState::Loading;
+        cx.emit(InsightEvent::FullProfileRequested { target });
+        cx.notify();
+    }
+
+    /// 切换回**取样**口径并重新画像（全量视图下点「取样统计」）。
+    pub fn request_sample(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        self.scope = InsightScope::Sample;
+        self.state = InsightPanelState::Loading;
+        cx.emit(InsightEvent::ProfileRequested { target });
+        cx.notify();
+    }
+
+    /// 导出当前表画像为 Markdown 报告（宿主选路径并写盘）。
+    ///
+    /// 无目标时静默忽略（工具栏按钮只在画像态可点，这里是防御）；`content`
+    /// 由中间页算好（渲染的同一份事实，D36），事件只搬运不重算。
+    pub fn request_report_export(&mut self, content: String, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        let file_stem = Self::sanitize_stem(&target.title());
+        cx.emit(InsightEvent::TableReportExportRequested {
+            target,
+            file_stem,
+            content,
+        });
+        cx.notify();
+    }
+
+    /// 导出文件名主名净化（与 Schema 报告同一口径：只换非法字符、保留中文，
+    /// 空名兜底 `insight`）。保存对话框里用户要看得懂名字，不 ASCII 化。
+    fn sanitize_stem(name: &str) -> String {
+        let cleaned: String = name
+            .trim()
+            .chars()
+            .map(|c| {
+                if c.is_control() || "\\/:*?\"<>|".contains(c) {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let cleaned = cleaned.trim_matches(|c: char| c == ' ' || c == '-' || c == '.');
+        if cleaned.is_empty() {
+            "insight".into()
+        } else {
+            cleaned.into()
         }
     }
 
@@ -928,6 +1265,8 @@ impl Render for InsightView {
                             .w_full()
                             .gap_2()
                             .p(rems(ui::PANEL_PADDING))
+                            // 已洞察表集合：会话级管理，先于当前目标的 Tab 下钻
+                            .child(self.render_insight_set(&entity, theme))
                             .children(self.render_body(
                                 &entity,
                                 theme,

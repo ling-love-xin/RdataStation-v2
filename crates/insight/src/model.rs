@@ -15,8 +15,8 @@ pub mod types;
 use std::fmt::Write as _;
 
 use types::{
-    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, NumericStats, QualityScore,
-    TableProfile, TableQuality, TextStats,
+    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, DistributionBin, NumericStats,
+    QualityScore, TableProfile, TableQuality, TextStats,
 };
 
 // 等级是 `quality_scorer` 的定义（阈值与文案的唯一来源），这里只借用类型
@@ -31,6 +31,8 @@ pub const NULL_RATE_WARN: f64 = 0.05;
 pub const NULL_RATE_NOTE: f64 = 0.10;
 /// |偏度| 超过此值：认为分布明显偏斜
 pub const SKEW_NOTABLE: f64 = 1.0;
+/// |超额峰度| 超过此值：认为峰态明显（DuckDB `KURTOSIS()` 以 0 为基准）
+pub const KURT_NOTABLE: f64 = 1.0;
 /// 布尔列某一侧占比超过此值：提示取值不平衡
 pub const BOOLEAN_IMBALANCE: f64 = 0.95;
 /// Top 值类数达到此值：提示字段更像类别型
@@ -39,6 +41,95 @@ pub const TOP_VALUE_CATEGORY_HINT: usize = 5;
 pub const EXTREME_LIST_LIMIT: usize = 2;
 
 // ==================== 面板骨架 ====================
+
+/// 已洞察表的来源种类（右栏「已洞察表」集合行的徽标）。
+///
+/// 对象统一是 DuckDB 临时表，但**入口来源**分三路（用户口径：数据库表 /
+/// 草稿箱 CSV 文件 / select 查询结果集），集合行据此给出第一眼辨识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsightSetKind {
+    /// 源库连接上的表（`InsightTarget::SourceTable` 且带连接）
+    SourceTable,
+    /// 查询结果集 / 已入内存库的表（`InsightTarget::Table`）
+    ResultSet,
+    /// 草稿箱文件（CSV / Parquet / Excel：`InsightTarget::SourceTable` 但跑在 DuckDB 内存库）
+    File,
+}
+
+impl InsightSetKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SourceTable => "源表",
+            Self::ResultSet => "结果集",
+            Self::File => "文件",
+        }
+    }
+}
+
+/// 已洞察表集合条目（右栏管理列表的一行）。
+///
+/// 数据源是中间工作页的 `opened`——只有**进入过洞察**的表才入列
+/// （用户口径「只有进入洞察后的表才能选择对比」）；这里只装展示与操作
+/// 所需的最小事实，画像载荷仍在中间页（对比聚合不重复存储）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InsightSetEntry {
+    /// 稳定业务键（与对比勾选共用 `target_key`）
+    pub key: String,
+    /// 展示名（表名）
+    pub label: String,
+    /// 对象来源种类
+    pub kind: InsightSetKind,
+    /// 来源描述（`source.label`；内存库对象给临时表名）
+    pub source: String,
+    /// 洞察临时表名（已完成取样的对象才有；`None` = 还在取样中）。
+    ///
+    /// 关系排查 / 归档的 SQL 前提：源表目标取样完成后中间页会把 target 更新为
+    /// `InsightTarget::Table`，`to_set_entry` 据此回填——未取样时按钮置灰，
+    /// 不拿 label 去猜表名。
+    pub temp_table: Option<String>,
+    /// 最近一次表画像的行数 / 列数（未完成画像为 `None`，不编假值）
+    pub row_count: Option<u64>,
+    pub column_count: Option<usize>,
+    /// 检查器命中计数（评估全表完成后才有；无评级语义）
+    pub checker_hits: Option<usize>,
+    pub checker_applicable: Option<usize>,
+    /// 是否中间页当前指向的目标（高亮用）
+    pub is_current: bool,
+}
+
+/// 跨洞察表列值重叠结果的一行（关系排查引擎的产出）。
+///
+/// 语义是「值重叠」而非「外键关系」：两表同名列各取去重值域，算交集占比——
+/// 值域高度重叠说明两表可能在描述同一批实体（可进一步做键级对齐）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlapRow {
+    /// 参与比较的列名（两表同名列）
+    pub column: String,
+    /// 交集唯一值数
+    pub overlap: i64,
+    /// 交集占 A 表（发起方）唯一值域的比例
+    pub rate_a: f64,
+    /// 交集占 B 表（被对比方）唯一值域的比例
+    pub rate_b: f64,
+}
+
+/// 一次跨洞察表关系排查的完整结果（右栏集合卡「关系排查」区渲染）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OverlapView {
+    /// 发起方表名（临时表名，展示用 label 由视图取集合条目）
+    pub table_a: String,
+    /// 被对比方表名
+    pub table_b: String,
+    /// 同名列值重叠明细（按交集数降序）
+    pub rows: Vec<OverlapRow>,
+}
+
+impl OverlapView {
+    /// 有没有可对比的同名列（空 = 两表没有类型兼容的同名列，UI 给说明）
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
 
 /// 面板的六个 Tab（顺序固定；标签 2~3 字，280px 右栏内六项不溢出）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -622,6 +713,15 @@ pub struct TableProfileView {
     pub quality: Option<TableQualityView>,
     /// 评估进度：进行中才有
     pub progress: Option<TableEvalProgress>,
+    /// EDA 样本（前 5 行）：画像时引擎顺带取的轻查询；失败为 `None`（不编假值）
+    pub sample: Option<TableSample>,
+}
+
+/// EDA 样本区数据（原型 .sample-section 表格）：列名 + 至多 5 行文本值。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableSample {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 /// 表探查里的一列
@@ -636,12 +736,63 @@ pub struct TableColumnView {
     pub primary_key: bool,
     /// 该列的质量分：未评估为 `None`（不显示假分值）
     pub score: Option<f64>,
+    /// EDA 列统计摘要：空值率（0–1）。表画像时由引擎一次查询回填；
+    /// 查询失败 / 未跑为 `None`（不编假值）。
+    pub null_rate: Option<f64>,
+    /// EDA 列统计摘要：唯一率（唯一值数 / 非空行数，0–1）。
+    pub unique_rate: Option<f64>,
+    /// 列级统计明细（评估全表后回填；未评估为 `None`）：
+    /// 列卡「基础统计 / 分布」区直接消费它，不再单独发查询。
+    pub stats_detail: Option<ColumnStatsDetail>,
+    /// 数值列直方图分箱（评估后回填；样本行数低于引擎下限时为 `None`）。
+    pub histogram: Option<Vec<DistributionBin>>,
+    /// 该列样本值（评估后从全量画像的样本列取前 5 条；未评估为空）。
+    pub sample_values: Vec<String>,
 }
 
 impl TableColumnView {
     pub fn grade(&self) -> Option<Grade> {
         self.score.map(Grade::of)
     }
+}
+
+/// EDA 列统计摘要：引擎对临时表所有列一次查询得到的最小统计集。
+///
+/// 用于概览五卡（缺失率 / 唯一率）、缺失矩阵与值得关注区——这些指标
+/// 从列级统计现算，不依赖逐列跑规则（规则是「评估全表」的贵工序）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnStatBrief {
+    pub name: String,
+    /// 空值率（0–1）；列全空 / 查询失败为 `None`
+    pub null_rate: Option<f64>,
+    /// 唯一率（唯一值数 / 非空行数，0–1）
+    pub unique_rate: Option<f64>,
+}
+
+/// 列检查器状态（原型「检查器」四态）：命中 / 未命中 / 不适用-类型 / 不适用-列排除。
+///
+/// 「列排除」是用户显式对某列关闭某规则的结果——规则按列指定执行功能未接入前
+/// 无数据来源，数据侧暂不产生该态（枚举位保留，视图口径先行对齐原型）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnCheckState {
+    /// 检查通过（命中）
+    Hit,
+    /// 检查未通过（未命中）
+    Miss,
+    /// 该检查器不适用于此列类型（如唯一率对未知类型列）
+    NotApplicableType,
+    /// 该检查器被显式排除（待「规则按列指定」接入）
+    Excluded,
+}
+
+/// 一条列检查器（原型「检查器」区的数据行）：列名 + 检查名 + 四态 + 判定依据。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnChecker {
+    pub column: String,
+    pub name: String,
+    pub state: ColumnCheckState,
+    /// 命中 = 判定依据；未命中 = 实际值；不适用 = 原因
+    pub detail: String,
 }
 
 /// 表级质量摘要（由各列分数聚合而来）
@@ -653,6 +804,12 @@ pub struct TableQualityView {
     /// 评分低于 [`TABLE_PROBLEM_SCORE`] 的列数
     pub problem_columns: usize,
     pub scored_columns: usize,
+    /// 列检查器（评估后逐列内置判定聚合）；无评级，只有事实计数
+    pub checker: Vec<ColumnChecker>,
+    /// 适用检查器数（排除不适用-类型 / 列排除）
+    pub checker_applicable: usize,
+    /// 命中检查器数（适用且通过的条数）
+    pub checker_hits: usize,
 }
 
 /// 「评估全表」的进度（串行评分，避免撞后端并发上限）
@@ -691,6 +848,11 @@ impl TableProfileView {
                 nullable: column.is_nullable,
                 primary_key: column.is_primary_key,
                 score: None,
+                null_rate: None,
+                unique_rate: None,
+                stats_detail: None,
+                histogram: None,
+                sample_values: Vec::new(),
             })
             .collect();
         Self {
@@ -700,6 +862,19 @@ impl TableProfileView {
             columns,
             quality: None,
             progress: None,
+            sample: None,
+        }
+    }
+
+    /// EDA 列统计摘要回填：按列名把引擎一次查询的结果写回视图模型。
+    ///
+    /// 摘要查询失败时调用方保留 `None`（不编假值），本方法只在拿到结果后调用。
+    pub fn fill_column_stats(&mut self, stats: &[ColumnStatBrief]) {
+        for column in &mut self.columns {
+            if let Some(brief) = stats.iter().find(|b| b.name == column.name) {
+                column.null_rate = brief.null_rate;
+                column.unique_rate = brief.unique_rate;
+            }
         }
     }
 
@@ -715,6 +890,29 @@ impl TableProfileView {
         let mut next = self.clone();
         if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
             row.score = Some(score);
+        }
+        next
+    }
+
+    /// 写入一列的级联明细（评估循环里与分数同批回填）。
+    ///
+    /// `stats_detail` / `histogram` 直接来自该列的 `ColumnInsightFull`（同一次查询，
+    /// 不重复取数）；`sample_values` 从全量画像的样本列截前 5 条文本值。
+    pub fn with_column_detail(&self, column: &str, full: &ColumnInsightFull) -> Self {
+        let mut next = self.clone();
+        if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
+            row.stats_detail = Some(full.stats.stats_detail.clone());
+            row.histogram = full.histogram.clone();
+            row.sample_values = full
+                .sample
+                .iter()
+                .take(5)
+                .map(|v| match v {
+                    serde_json::Value::Null => "NULL".to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
         }
         next
     }
@@ -736,7 +934,35 @@ impl TableProfileView {
                 .filter(|entry| entry.quality_score < TABLE_PROBLEM_SCORE)
                 .count(),
             scored_columns: quality.scored_count as usize,
+            checker: Vec::new(),
+            checker_applicable: 0,
+            checker_hits: 0,
         });
+        next
+    }
+
+    /// 评估完成：写入列检查器聚合（四态 + 适用/命中计数）。
+    ///
+    /// 检查器由 [`compute_column_checks`](crate::quality_scorer::compute_column_checks)
+    /// 在评估循环逐列现算，这里只做聚合；`applicable` 剔除不适用-类型 / 列排除，
+    /// 命中计数**无评级语义**（洞察侧不审计，评级在归档后的资产库）。
+    pub fn with_checker(&self, checks: Vec<ColumnChecker>) -> Self {
+        let mut next = self.clone();
+        if let Some(quality) = next.quality.as_mut() {
+            let applicable = checks
+                .iter()
+                .filter(|c| {
+                    c.state == ColumnCheckState::Hit || c.state == ColumnCheckState::Miss
+                })
+                .count();
+            let hits = checks
+                .iter()
+                .filter(|c| c.state == ColumnCheckState::Hit)
+                .count();
+            quality.checker = checks;
+            quality.checker_applicable = applicable;
+            quality.checker_hits = hits;
+        }
         next
     }
 }
@@ -1643,10 +1869,34 @@ fn fill_numeric(
             value: format!("{}（{}）", fmt_num(skew), skew_direction(skew)),
             emphasis: Emphasis::Normal,
         });
+        // 偏度明显就提示方向（峰度缺失也要能看出偏斜，不丢信息）
         if skew.abs() > SKEW_NOTABLE {
             view.notes.push(QualityNote {
                 level: NoteLevel::Info,
                 text: format!("分布{}（偏度 {}）", skew_direction(skew), fmt_num(skew)),
+            });
+        }
+    }
+    // 峰度 + 偏峰联合判定（科研级描述，只报 DuckDB 原生统计量——DuckDB
+    // `KURTOSIS()` 返回**超额峰度**（正态分布为 0），判定阈值是经验法则，
+    // 不做分布检验 p 值：p 值需要推断库（statrs），本轮明确不做）。
+    if let Some(kurt) = n.kurtosis {
+        view.basics.push(StatRow {
+            label: "峰度",
+            value: format!("{}（{}）", fmt_num(kurt), kurt_direction(kurt)),
+            emphasis: Emphasis::Normal,
+        });
+    }
+    if let (Some(skew), Some(kurt)) = (n.skewness, n.kurtosis) {
+        if let Some(judge) = normality_judge(skew, kurt) {
+            view.notes.push(QualityNote {
+                level: NoteLevel::Info,
+                text: format!(
+                    "分布{}（偏度 {} · 峰度 {}）",
+                    judge,
+                    fmt_num(skew),
+                    fmt_num(kurt)
+                ),
             });
         }
     }
@@ -1824,6 +2074,35 @@ pub fn skew_direction(skew: f64) -> &'static str {
         "左偏"
     } else {
         "近似对称"
+    }
+}
+
+/// 超额峰度方向（DuckDB `KURTOSIS()` 基准：正态分布为 0；阈值是经验法则）
+pub fn kurt_direction(kurt: f64) -> &'static str {
+    if kurt > KURT_NOTABLE {
+        "尖峰"
+    } else if kurt < -KURT_NOTABLE {
+        "平峰"
+    } else {
+        "近似正态峰度"
+    }
+}
+
+/// 偏峰联合判定 → 探索价值提示文案（`None` = 无需额外提示）。
+///
+/// 只报 DuckDB 原生统计量（偏度 / 超额峰度），阈值是经验法则而非分布检验：
+/// 分布检验 p 值需要推断库，本轮明确不做（用户口径：只处理 DuckDB 可提供的统计量）。
+/// 偏度明显时 [`fill_numeric`] 已按方向单独提示，这里**只补偏度正常但峰度明显**
+/// 的缺失信息，避免同一条分布出两条重复提示。
+pub fn normality_judge(skew: f64, kurt: f64) -> Option<&'static str> {
+    if skew.abs() <= SKEW_NOTABLE && kurt.abs() > KURT_NOTABLE {
+        if kurt > 0.0 {
+            Some("偏离正态（峰度尖峰）")
+        } else {
+            Some("偏离正态（峰度平缓）")
+        }
+    } else {
+        None
     }
 }
 

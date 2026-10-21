@@ -301,6 +301,11 @@ pub struct Shared {
     /// `cx.defer_in` 建 / 激活面板并消费。右栏摘要版的目标仍在入口里**同步设置**
     /// （双栏单源，D65）。
     pub pending_insight_target: Rc<RefCell<Option<InsightTarget>>>,
+    /// T18：等待切到中间页对比形态的请求（右栏集合「对比」发出）。
+    ///
+    /// 与 `pending_insight_target` 同款机制：右栏事件路径拿不到 window，
+    /// 只登记 key + `notify_host`，宿主 render 检测后 `cx.defer_in` 激活中央 tab。
+    pub pending_insight_compare: Rc<RefCell<Option<String>>>,
     /// M6：资产库面板实体句柄（弱引用；右侧「存档详情」取它的选中项）。
     ///
     /// 与 `mock_panel` / `insight_panel` 同例：面板自带状态与视图
@@ -383,6 +388,7 @@ impl Shared {
             insight_panel: Rc::new(RefCell::new(None)),
             insight_workspace_panel: Rc::new(RefCell::new(None)),
             pending_insight_target: Rc::new(RefCell::new(None)),
+            pending_insight_compare: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
@@ -815,6 +821,13 @@ impl Shared {
     /// 中间工作页：登记待打开目标 + 唤醒宿主 render（render 的 ensure 消费，见 view.rs）
     fn queue_workspace_insight(&self, target: InsightTarget, cx: &mut App) {
         *self.pending_insight_target.borrow_mut() = Some(target);
+        self.notify_host(cx);
+    }
+
+    /// 右栏集合「对比」：登记切到中间页对比形态的请求（宿主 render 消费：
+    /// 勾选该表 + 切 Compare + 激活中央 tab）。
+    pub fn request_insight_compare(&self, key: impl Into<String>, cx: &mut App) {
+        *self.pending_insight_compare.borrow_mut() = Some(key.into());
         self.notify_host(cx);
     }
 

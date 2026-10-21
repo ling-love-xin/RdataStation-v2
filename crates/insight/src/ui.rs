@@ -52,6 +52,8 @@ pub const INSIGHT_WS_SOURCE_WIDTH: f32 = 3.5;
 pub const INSIGHT_WS_RING_SIZE: f32 = 5.5;
 /// 右栏摘要 Tab 评分环直径（4.25rem = 68px，对齐原型右栏 score-ring viewBox 68）
 pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
+/// 列多选 / 列对选择浮层宽度（13.5rem = 216px；Checkbox 行 + 中文列名不换行）
+pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

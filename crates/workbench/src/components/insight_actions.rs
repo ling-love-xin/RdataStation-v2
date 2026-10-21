@@ -10,10 +10,14 @@
 
 use gpui_kit::{App, Context, Entity, Subscription};
 
+use analytics_resource::model::{
+    ArchiveBinding, ArchiveKind, ArchiveRequest, KeepVersions, PayloadMode,
+};
 use insight::insight_view::InsightView;
-use insight::{InsightEvent, SampleSource, SchemaExportFormat};
+use insight::{InsightEvent, InsightService, SampleSource, SchemaExportFormat};
 
 use crate::panels::Shared;
+use crate::services::resource_jobs;
 
 /// 订阅面板事件并落地两个宿主动作。
 ///
@@ -26,7 +30,7 @@ pub fn attach<H: 'static>(
     let shared = shared.clone();
     cx.subscribe(
         panel,
-        move |_host, _panel, event: &InsightEvent, cx| match event {
+        move |_host, panel, event: &InsightEvent, cx| match event {
             InsightEvent::TableDrilldownRequested {
                 conn_id,
                 database,
@@ -38,9 +42,98 @@ pub fn attach<H: 'static>(
                 file_stem,
                 content,
             } => export_report(&shared, *format, file_stem, content, cx),
+            InsightEvent::TableReportExportRequested {
+                file_stem, content, ..
+            } => export_markdown_report(&shared, file_stem, content, cx),
+            InsightEvent::CompareRequested { key } => {
+                shared.request_insight_compare(key, cx);
+            }
+            InsightEvent::ArchiveRequested { key } => {
+                archive_from_insight(&shared, &panel, key, cx);
+            }
             _ => {}
         },
     )
+}
+
+/// 洞察表归档到资产库（T20）：画像快照 JSON → `resources/insight/` File 档。
+///
+/// 数据流：面板只报业务键 → 这里从集合条目取临时表名与展示名 → 洞察服务把
+/// 表级画像快照导出为 JSON（`{项目}/.RSmeta/insight-archive/`）→ 走资产库
+/// `ArchiveService`（copy 进 `resources/insight/` + 登记 + 版本链）。
+/// 每次归档生成新时间戳 → 内容指纹不同 → 资产库自动开新版本（审计长在版本上）。
+///
+/// 快照导出要抢 DuckDB 锁，放后台线程；归档入队与回执回主线程。
+fn archive_from_insight(
+    shared: &Shared,
+    panel: &Entity<InsightView>,
+    key: &str,
+    cx: &mut App,
+) {
+    let Some(root) = shared.project_root() else {
+        shared.say("洞察：归档需要先打开项目", cx);
+        return;
+    };
+    if shared.project_ui.borrow().read_only {
+        shared.say("洞察：项目为只读，不能归档", cx);
+        return;
+    }
+    let Some((temp_table, label)) = panel
+        .read(cx)
+        .insight_set()
+        .iter()
+        .find(|entry| entry.key == key)
+        .and_then(|entry| entry.temp_table.clone().map(|t| (t, entry.label.clone())))
+    else {
+        shared.say("洞察：该表尚未完成取样，无法归档", cx);
+        return;
+    };
+
+    let shared2 = shared.clone();
+    // 保留策略在主线程读好随闭包带入：async 里拿不到 GPUI global 设置
+    let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
+    cx.spawn(async move |cx| {
+        let (path, name) =
+            match InsightService::export_table_snapshot(&root, &temp_table, &label) {
+                Ok(export) => export,
+                Err(error) => {
+                    let message = InsightService::describe_error(&error).message;
+                    let _ = cx.update(|cx| {
+                        shared2.say(format!("洞察：归档失败（{message}）"), cx);
+                    });
+                    return;
+                }
+            };
+        resource_jobs::enqueue_archive(
+            root.clone(),
+            false,
+            ArchiveRequest {
+                source_path: path,
+                rel_path: format!("insight/{name}.json"),
+                name: format!("洞察·{name}"),
+                alias: None,
+                kind: ArchiveKind::File,
+                payload_mode: PayloadMode::Copy,
+                analysis: None,
+                binding: ArchiveBinding {
+                    promoted_from: None,
+                    source_connection_id: None,
+                    source_table: Some(name.clone()),
+                },
+                tags: vec!["洞察".to_string()],
+                group_id: None,
+                keep_versions: None,
+                existing_resource_id: None,
+            },
+            keep_versions,
+            false,
+        );
+        let _ = cx.update(|cx| {
+            shared2.refresh_resources(cx);
+            shared2.say(format!("洞察：已归档「{name}」到资产库"), cx);
+        });
+    })
+    .detach();
 }
 
 /// 下钻：点中的源表 → 洞察目标（D58 的源取样通道）。
@@ -88,6 +181,26 @@ fn export_report(
     };
     match std::fs::write(&path, content) {
         Ok(()) => shared.say(format!("洞察：已导出 Schema 报告 → {}", path.display()), cx),
+        Err(error) => shared.say(format!("洞察：导出失败（{error}）"), cx),
+    }
+}
+
+/// 表画像 EDA 报告导出（缺口 1：`TableReportExportRequested` 宿主落地）。
+///
+/// 与 Schema 导出同一交互口径（D36）：用户选路径（取消 = 静默成功），
+/// 写盘失败才报状态栏。文件固定 `.md`。
+fn export_markdown_report(shared: &Shared, file_stem: &str, content: &str, cx: &mut App) {
+    let file_name = format!("{file_stem}.md");
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("导出洞察报告")
+        .set_file_name(&file_name)
+        .add_filter("Markdown", &["md"])
+        .save_file()
+    else {
+        return;
+    };
+    match std::fs::write(&path, content) {
+        Ok(()) => shared.say(format!("洞察：已导出报告 → {}", path.display()), cx),
         Err(error) => shared.say(format!("洞察：导出失败（{error}）"), cx),
     }
 }

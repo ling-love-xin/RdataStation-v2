@@ -17,7 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::insight_view::InsightView;
-use crate::model::{ColumnKind, ColumnProfileView, TableProfileView};
+use crate::model::{ColumnCheckState, ColumnKind, ColumnProfileView, TableProfileView};
 use crate::quality_scorer::Grade;
 use crate::ui;
 
@@ -108,11 +108,38 @@ fn overview_table(
         }
     }
 
-    let ring_value = quality.map(|q| q.overall as f32).unwrap_or(0.0);
-    let ring_color = match quality {
-        Some(q) => grade_color(q.grade, theme),
-        None => colors.muted_foreground,
+    // 检查器命中环（原型右栏）：事实计数，不做「良好 / 较差」评级（评级属资产库审计侧）
+    let checker_applicable = quality.map(|q| q.checker_applicable).unwrap_or(0);
+    let checker_hits = quality.map(|q| q.checker_hits).unwrap_or(0);
+    let ring_value = if checker_applicable > 0 {
+        checker_hits as f32 / checker_applicable as f32 * 100.0
+    } else {
+        0.0
     };
+    let ring_color = if checker_applicable == 0 {
+        colors.muted_foreground
+    } else if checker_hits == checker_applicable {
+        colors.success
+    } else if checker_hits == 0 {
+        colors.danger
+    } else {
+        colors.warning
+    };
+    // 检查器列表（四态）：命中 / 未命中 / 不适用-类型；列排除态接入后自动出现
+    let checker_rows: Vec<(String, String, Hsla)> = quality
+        .map(|q| q.checker.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            let (label, color) = match c.state {
+                ColumnCheckState::Hit => ("命中".into(), colors.success),
+                ColumnCheckState::Miss => ("未命中".into(), colors.danger),
+                ColumnCheckState::NotApplicableType => ("不适用".into(), colors.muted_foreground),
+                ColumnCheckState::Excluded => ("排除".into(), colors.muted_foreground),
+            };
+            (format!("{} · {}", c.column, c.name), label, color)
+        })
+        .collect();
 
     div().v_flex().w_full().gap_2()
         // 卡①概要：表名 + 来源 + kv
@@ -145,7 +172,7 @@ fn overview_table(
                 .child(kv_row("列数", profile.columns.len().to_string(), theme))
                 .child(kv_row("取样", crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(), theme)),
         )
-        // 卡②质量评分：68px 环 + 等级 + 四维条
+        // 卡②检查器命中：68px 环（适用/命中计数，无评级）+ 检查器四态列表 + 四维条
         .child(
             summary_card(theme)
                 .child(
@@ -159,19 +186,22 @@ fn overview_table(
                             div()
                                 .text_sm()
                                 .text_color(colors.foreground)
-                                .child("质量评分"),
+                                .child("检查器命中"),
                         )
                         .child(div().flex_1())
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(match quality {
-                                    Some(q) => grade_color(q.grade, theme),
-                                    None => colors.muted_foreground,
+                                    Some(q) if q.checker_applicable > 0 => ring_color,
+                                    _ => colors.muted_foreground,
                                 })
                                 .child(match quality {
-                                    Some(q) => q.grade.label(),
-                                    None => "未评估",
+                                    Some(q) if q.checker_applicable > 0 => {
+                                        format!("{}/{}", q.checker_hits, q.checker_applicable)
+                                    }
+                                    Some(_) => "无不适用检查".to_string(),
+                                    None => "未评估".to_string(),
                                 }),
                         ),
                 )
@@ -187,13 +217,13 @@ fn overview_table(
                                 .value(ring_value)
                                 .color(ring_color)
                                 .with_size(Size::Size(ring_px))
-                                .accessibility_label("表质量评分")
+                                .accessibility_label("检查器命中")
                                 .child(
                                     div()
                                         .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.6))
                                         .text_color(ring_color)
                                         .child(match quality {
-                                            Some(q) => format!("{:.0}", q.overall),
+                                            Some(_) => format!("{checker_hits}/{checker_applicable}"),
                                             None => "—".into(),
                                         }),
                                 ),
@@ -203,12 +233,47 @@ fn overview_table(
                                 .text_xs()
                                 .text_color(colors.muted_foreground)
                                 .child(match quality {
-                                    Some(_) => "评估全表后更新",
-                                    None => "评估全表后显示评分",
+                                    Some(q) if q.checker_applicable > 0 => {
+                                        format!("适用 {} 条 · 命中 {} 条", q.checker_applicable, q.checker_hits)
+                                    }
+                                    Some(_) => "评估全表后统计检查器命中".to_string(),
+                                    None => "评估全表后统计检查器命中".to_string(),
                                 }),
                         ),
                 )
-                .child(div().w_full().v_flex().gap_1().children(dims.into_iter().map(
+                .when(!checker_rows.is_empty(), |card| {
+                    card.child(
+                        div()
+                            .w_full()
+                            .v_flex()
+                            .gap_0p5()
+                            .children(checker_rows.into_iter().take(6).map(|(name, label, color)| {
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(color)
+                                            .child(label),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .text_xs()
+                                            .text_color(colors.foreground)
+                                            .text_ellipsis()
+                                            .child(name),
+                                    )
+                            })),
+                            )
+                        })
+                        .child(div().w_full().v_flex().gap_1().children(dims.into_iter().map(
                     |(name, ratio, fill)| {
                         div()
                             .w_full()

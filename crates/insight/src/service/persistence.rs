@@ -16,11 +16,18 @@ pub const SOURCE_SAMPLE_LIMIT: usize = 500;
 ///
 /// 外层**再包一层 `LIMIT`**：入口的查询可以不带限（源表全量查询），
 /// 也不能靠入口自觉——口径只在这里。
-pub async fn sample_source_to_analysis_table(source: &SampleSource) -> Result<String, CoreError> {
-    let sample_sql = format!(
-        "SELECT * FROM ({}) AS rds_sample LIMIT {SOURCE_SAMPLE_LIMIT}",
-        source.sql.trim().trim_end_matches(';')
-    );
+/// `full = true` 时**不带 LIMIT**（大表全量：用户手动触发，见洞察 scope 切换）；
+/// 全量表同样建为 `tmp_i_` 临时表，后续分析链路完全一致。
+pub async fn sample_source_to_analysis_table(
+    source: &SampleSource,
+    full: bool,
+) -> Result<String, CoreError> {
+    let inner = source.sql.trim().trim_end_matches(';');
+    let sample_sql = if full {
+        format!("SELECT * FROM ({inner}) AS rds_sample")
+    } else {
+        format!("SELECT * FROM ({inner}) AS rds_sample LIMIT {SOURCE_SAMPLE_LIMIT}")
+    };
 
     match source.conn_id() {
         // 源库连接：数据过 Rust（引擎的执行结果是 JSON，要重新打型建表）
@@ -79,7 +86,7 @@ async fn sample_from_connection(
     engine::duckdb::analysis::create_analysis_temp_table(&conn, &columns, &rows, "source_sample")
 }
 
-/// 源目标的列画像：取样 → 画像，返回**（样本表名, 视图）**。
+/// 源目标的列画像：取样（或全量）→ 画像，返回**（样本表名, 视图）**。
 ///
 /// 返回样本表名是必需的：面板保存快照 / 开多列 / 下钻都要接着用同一份样本
 /// （否则会再抽一次，两次结果还不一样）。
@@ -87,8 +94,9 @@ pub async fn profile_source_column(
     project_root: Option<&std::path::Path>,
     source: &SampleSource,
     column_name: &str,
+    full: bool,
 ) -> Result<(String, ColumnProfileView), CoreError> {
-    let temp_table = sample_source_to_analysis_table(source).await?;
+    let temp_table = sample_source_to_analysis_table(source, full).await?;
 
     let duckdb = insight_engine::get_or_create_duckdb()?;
     let conn = duckdb
@@ -101,16 +109,30 @@ pub async fn profile_source_column(
     Ok((temp_table, ColumnProfileView::from_domain(&full)))
 }
 
-/// 源目标的表探查：取样 → 内省，返回**（样本表名, 视图）**。
+/// 源目标的表探查：取样（或全量）→ 内省，返回**（样本表名, 视图）**。
 ///
 /// 表探查不跑规则（与临时表那一路同一口径）：逐列统计是「评估全表」的事。
 pub async fn profile_source_table(
     source: &SampleSource,
     table_name: &str,
+    full: bool,
 ) -> Result<(String, TableProfileView), CoreError> {
-    let temp_table = sample_source_to_analysis_table(source).await?;
+    let temp_table = sample_source_to_analysis_table(source, full).await?;
     let profile = insight_engine::get_temp_table_profile(&temp_table)?;
-    Ok((temp_table, TableProfileView::from_profile(&profile, table_name)))
+    let mut view = TableProfileView::from_profile(&profile, table_name);
+    // EDA 列统计摘要（缺失率 / 唯一率）：失败不阻塞画像（保留 None）
+    let column_names: Vec<String> =
+        profile.columns.iter().map(|c| c.column_name.clone()).collect();
+    if let Ok(stats) =
+        insight_engine::compute_table_column_summary(&temp_table, &column_names)
+    {
+        view.fill_column_stats(&stats);
+    }
+    // EDA 样本（前 5 行）：失败不阻塞画像（样本区给空态）
+    if let Ok(sample) = insight_engine::get_temp_table_sample(&temp_table) {
+        view.sample = Some(sample);
+    }
+    Ok((temp_table, view))
 }
 
 #[allow(clippy::too_many_arguments)]

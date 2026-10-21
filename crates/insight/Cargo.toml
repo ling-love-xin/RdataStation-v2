@@ -16,6 +16,8 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
+# 归档快照文件名时间戳
+chrono.workspace = true
 
 # ===== 领域存储（store/）=====
 # 快照主键与版本号生成。

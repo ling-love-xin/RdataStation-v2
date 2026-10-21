@@ -6,7 +6,7 @@ use specta::Type;
 
 // ==================== 洞察体系 — 顶层结构 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct ColumnInsightFull {
     pub stats: ColumnStats,
     #[specta(skip)]
@@ -14,7 +14,7 @@ pub struct ColumnInsightFull {
     pub histogram: Option<Vec<DistributionBin>>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct ColumnStats {
     pub column_name: String,
     pub data_type: String,
@@ -25,7 +25,7 @@ pub struct ColumnStats {
     pub stats_detail: ColumnStatsDetail,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 #[serde(tag = "kind")]
 pub enum ColumnStatsDetail {
     Numeric(NumericStats),
@@ -37,7 +37,7 @@ pub enum ColumnStatsDetail {
 
 // ==================== 数值列统计 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct NumericStats {
     pub min: f64,
     pub max: f64,
@@ -52,7 +52,7 @@ pub struct NumericStats {
     pub is_extreme: Vec<ExtremeValue>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct ExtremeValue {
     pub value: f64,
     pub kind: String,
@@ -60,14 +60,14 @@ pub struct ExtremeValue {
 
 // ==================== 文本列统计 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct TextStats {
     pub min_length: u32,
     pub max_length: u32,
     pub top_values: Vec<TextFrequency>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct TextFrequency {
     pub value: String,
     pub count: u32,
@@ -76,7 +76,7 @@ pub struct TextFrequency {
 
 // ==================== 日期时间列统计 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct DateTimeStats {
     pub earliest: String,
     pub latest: String,
@@ -86,7 +86,7 @@ pub struct DateTimeStats {
 
 // ==================== 布尔列统计 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct BooleanStats {
     pub true_count: u32,
     pub false_count: u32,
@@ -95,7 +95,7 @@ pub struct BooleanStats {
 
 // ==================== 分箱直方图 ====================
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Type)]
 pub struct DistributionBin {
     pub label: String,
     pub count: u32,

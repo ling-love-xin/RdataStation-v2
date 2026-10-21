@@ -8334,6 +8334,7 @@ name = "rds-insight"
 version = "0.2.3"
 dependencies = [
  "arrow",
+ "chrono",
  "duckdb",
  "gpui-kit",
  "include_dir",

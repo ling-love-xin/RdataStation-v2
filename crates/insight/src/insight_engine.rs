@@ -181,6 +181,179 @@ pub fn get_temp_table_profile_on(
     })
 }
 
+/// EDA 列统计摘要：对临时表**所有列一次查询**拿空值率与唯一值数。
+///
+/// 拼一条 `SELECT`（每列两个表达式：`AVG(col IS NULL)` 与 `COUNT(DISTINCT col)`），
+/// 只跑一次 DuckDB 查询——业务表 200+ 列也不该逐列往返。
+/// 唯一率 = 唯一值数 / 非空行数（`COUNT(DISTINCT)` 天然不算 NULL）；
+/// 行数为 0 或统计本身不可用（如空表）返回 `None`，调用方不编假值。
+pub fn compute_table_column_summary_on(
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    columns: &[String],
+) -> Result<Vec<ColumnStatBrief>, CoreError> {
+    let mut select_parts = Vec::with_capacity(columns.len() * 2 + 1);
+    select_parts.push("COUNT(*) AS \"__rows\"".to_string());
+    for (ix, column) in columns.iter().enumerate() {
+        // 双引号内的引号翻倍转义，防列名注入 / 含引号列名
+        let quoted = column.replace('"', "\"\"");
+        select_parts.push(format!(
+            "AVG(CAST(\"{quoted}\" IS NULL AS INTEGER)) AS \"__n{ix}\""
+        ));
+        select_parts.push(format!(
+            "COUNT(DISTINCT \"{quoted}\") AS \"__u{ix}\""
+        ));
+    }
+    let sql = format!(
+        "SELECT {} FROM \"{}\"",
+        select_parts.join(", "),
+        temp_table.replace('"', "\"\"")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB column summary prepare failed: {}",
+            e
+        )))
+    })?;
+
+    let mut rows = stmt.query([]).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB column summary query failed: {}",
+            e
+        )))
+    })?;
+    let mut result = Vec::with_capacity(columns.len());
+    if let Some(row) = rows.next().map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB column summary row failed: {}",
+            e
+        )))
+    })? {
+        let total: i64 = row.get::<_, Option<i64>>(0)?.unwrap_or(0);
+        for (ix, column) in columns.iter().enumerate() {
+            let null_rate = row.get::<_, Option<f64>>(ix * 2 + 1)?;
+            let unique: i64 = row.get::<_, Option<i64>>(ix * 2 + 2)?.unwrap_or(0);
+            let unique_rate = if total > 0 {
+                // 唯一率 = 唯一值数 / 非空行数（行数为 0 时无意义 → None）
+                Some((unique as f64) / (total as f64).max(1.0))
+            } else {
+                None
+            };
+            result.push(ColumnStatBrief {
+                name: column.clone(),
+                null_rate,
+                unique_rate,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// 带并发控制与全局连接的 EDA 列统计摘要入口（调用方拿不到连接时用）。
+pub fn compute_table_column_summary(
+    temp_table: &str,
+    columns: &[String],
+) -> Result<Vec<ColumnStatBrief>, CoreError> {
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+    compute_table_column_summary_on(&conn, temp_table, columns)
+}
+
+/// 临时表样本（EDA 样本区）：`SELECT * LIMIT 5` 的轻查询，文本化前 5 行。
+///
+/// 与画像分开（画像不依赖样本，样本失败不阻塞画像）：只给探索用的一瞥。
+/// 值经 `ValueRef` 手动文本化（`duckdb::types::Value` 没有 `Display`）；
+/// 空值显示为 `NULL` 字样，未覆盖类型兜底用 Debug 表示（不编假值）。
+pub fn get_temp_table_sample(temp_table: &str) -> Result<crate::model::TableSample, CoreError> {
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+    get_temp_table_sample_on(&conn, temp_table)
+}
+
+/// 在**调用方已持有的连接**上取样本（同 `*_on` 系列的口径）。
+pub fn get_temp_table_sample_on(
+    conn: &duckdb::Connection,
+    temp_table: &str,
+) -> Result<crate::model::TableSample, CoreError> {
+    use crate::model::TableSample;
+    let sql = format!("SELECT * FROM \"{}\" LIMIT 5", temp_table.replace('"', "\"\""));
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample prepare failed: {}",
+            e
+        )))
+    })?;
+    let mut rows = Vec::new();
+    let mut q = stmt.query([]).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample query failed: {}",
+            e
+        )))
+    })?;
+    // 列名在查询执行后才可读（duckdb crate 的 `column_names()` 要求已 execute，
+    // 否则断言 "The statement was not executed yet"）；`q` 内部持有执行后的
+    // `&Statement`，走 `as_ref()` 读 schema，避免与 `stmt` 的可变借用冲突
+    let columns: Vec<String> = q
+        .as_ref()
+        .map(|s| s.column_names().iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    while let Some(row) = q.next().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB sample row failed: {}", e)))
+    })? {
+        let mut cells = Vec::with_capacity(columns.len());
+        for ix in 0..columns.len() {
+            let value = row.get_ref(ix).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "DuckDB sample cell failed: {}",
+                    e
+                )))
+            })?;
+            cells.push(sample_cell_text(&value));
+        }
+        rows.push(cells);
+    }
+    Ok(TableSample { columns, rows })
+}
+
+/// 样本单元格文本化（`NULL` 显示为字样，未覆盖类型兜底 Debug——不编假值）。
+///
+/// DuckDB 的 `ValueRef` 按逻辑类型细分整型变体（Tiny/Small/Int/Big/Huge 与各无符号），
+/// 归并成字符串即可；时间 / Interval / Decimal 等走 Debug 兜底（仍有可读输出）。
+fn sample_cell_text(value: &duckdb::types::ValueRef) -> String {
+    use duckdb::types::ValueRef;
+    match value {
+        ValueRef::Null => "NULL".into(),
+        ValueRef::Boolean(b) => b.to_string(),
+        ValueRef::TinyInt(i) => i.to_string(),
+        ValueRef::SmallInt(i) => i.to_string(),
+        ValueRef::Int(i) => i.to_string(),
+        ValueRef::BigInt(i) => i.to_string(),
+        ValueRef::HugeInt(i) => i.to_string(),
+        ValueRef::UTinyInt(i) => i.to_string(),
+        ValueRef::USmallInt(i) => i.to_string(),
+        ValueRef::UInt(i) => i.to_string(),
+        ValueRef::UBigInt(i) => i.to_string(),
+        ValueRef::UHugeInt(i) => i.to_string(),
+        ValueRef::Float(f) => f.to_string(),
+        ValueRef::Double(f) => f.to_string(),
+        ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+        ValueRef::Blob(b) => format!("<blob {} 字节>", b.len()),
+        other => format!("{other:?}"),
+    }
+}
+
 /// 列基础统计（行数 / 空值 / 唯一值 + 类型专属详情），不含样本与直方图。
 ///
 /// 比 [`get_column_insight_full`] 轻：适合只需概览的调用方（如导航树「查看统计」）。
@@ -528,7 +701,7 @@ fn compute_boolean_stats(
 //
 // 已迁至 `crate::model`（唯一来源）：列画像与表探查都要用它，
 // 放在下层（领域词汇）后依赖方向才单一。此处仅导入使用。
-use crate::model::{is_array_type, is_binary_type, is_datetime_type, is_numeric_type};
+use crate::model::{is_array_type, is_binary_type, is_datetime_type, is_numeric_type, ColumnStatBrief};
 
 /// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
 ///
@@ -692,6 +865,121 @@ pub fn list_rules_for_column(
         })
         .collect();
     Ok(result)
+}
+
+// ==================== 跨表关系排查（T19） ====================
+
+/// 读一张临时表的列名 → 类型映射（`information_schema`，仅内存库 main schema）。
+///
+/// 为什么限定 `table_catalog = 'memory'`：`ATTACH` 进来的文件库表不是洞察对象，
+/// 列清单混进来只会让同名列比对失真（临时表 vs 文件库同名同型表，值域不相关）。
+fn temp_table_column_types(
+    conn: &duckdb::Connection,
+    table: &str,
+) -> Result<HashMap<String, String>, CoreError> {
+    let sql = format!(
+        "SELECT column_name, data_type FROM information_schema.columns \
+         WHERE table_catalog IN ('memory', 'temp') AND table_schema = 'main' AND table_name = ? \
+         ORDER BY ordinal_position"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
+    })?;
+    let mut rows = stmt.query(duckdb::params![table]).map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
+    })?;
+    let mut map = HashMap::new();
+    while let Some(row) = rows.next().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
+    })? {
+        let name: String = row.get(0).unwrap_or_default();
+        let ty: String = row.get(1).unwrap_or_default();
+        map.insert(name, ty);
+    }
+    Ok(map)
+}
+
+/// 类型是否属于同一**比较族**（数值 / 文本 / 日期 / 布尔）。
+///
+/// 值重叠只对同族列有意义：`id INTEGER` 与 `id VARCHAR` 值域类型不同，
+/// `INTERSECT` 虽能跑但比对的是不同语义，报出来只是噪音。
+fn same_type_family(a: &str, b: &str) -> bool {
+    let family = |t: &str| -> u8 {
+        let t = t.to_ascii_lowercase();
+        if is_numeric_type(&t) {
+            1
+        } else if is_datetime_type(&t) {
+            2
+        } else if t.starts_with("bool") {
+            3
+        } else if t.starts_with("varchar") || t.starts_with("text") || t == "string" || t.contains("char") {
+            4
+        } else {
+            0
+        }
+    };
+    family(a) != 0 && family(a) == family(b)
+}
+
+/// 两张洞察临时表的**同名列值重叠**报告（T19 关系排查引擎）。
+///
+/// 口径：对每个类型兼容的同名列，取两表各自去重值域的交集，
+/// 报交集数 + 占双方值域的比例。`INTERSECT` 在 DuckDB 对 NULL 的处理是
+/// 「NULL 与 NULL 相同」——但两表同列都是同一来源的样本时，NULL 重叠
+/// 不携带「关系」信息，这里不把 NULL 算进值域（`DISTINCT` 已含 NULL，
+/// 需要时再按列排除）。
+///
+/// 阻塞（内部加全局 DuckDB 锁），调用方放后台线程。
+pub fn compute_column_overlap(
+    conn: &duckdb::Connection,
+    table_a: &str,
+    table_b: &str,
+) -> Result<Vec<crate::model::OverlapRow>, CoreError> {
+    let cols_a = temp_table_column_types(conn, table_a)?;
+    let cols_b = temp_table_column_types(conn, table_b)?;
+
+    let mut rows = Vec::new();
+    for (name, ty_a) in &cols_a {
+        let Some(ty_b) = cols_b.get(name) else {
+            continue;
+        };
+        if !same_type_family(ty_a, ty_b) {
+            continue;
+        }
+        // 三个标量子查询一次查：避免三次往返（DuckDB 单连接串行，往返是主要开销）。
+        let sql = format!(
+            "SELECT \
+               (SELECT COUNT(DISTINCT \"{c}\") FROM \"{a}\"), \
+               (SELECT COUNT(DISTINCT \"{c}\") FROM \"{b}\"), \
+               (SELECT COUNT(*) FROM (SELECT DISTINCT \"{c}\" FROM \"{a}\" INTERSECT SELECT DISTINCT \"{c}\" FROM \"{b}\"))",
+            c = name,
+            a = table_a,
+            b = table_b
+        );
+        let (rate_a, rate_b, inter): (i64, i64, i64) = conn
+            .query_row(&sql, [], |row| {
+                Ok((
+                    row.get::<_, i64>(0).unwrap_or(0),
+                    row.get::<_, i64>(1).unwrap_or(0),
+                    row.get::<_, i64>(2).unwrap_or(0),
+                ))
+            })
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
+            })?;
+        if inter == 0 {
+            continue; // 无重叠的列不进结果（值域不同是常态，不刷屏）
+        }
+        rows.push(crate::model::OverlapRow {
+            column: name.clone(),
+            overlap: inter,
+            rate_a: inter as f64 / rate_a.max(1) as f64,
+            rate_b: inter as f64 / rate_b.max(1) as f64,
+        });
+    }
+
+    rows.sort_by(|x, y| y.overlap.cmp(&x.overlap));
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -1114,5 +1402,39 @@ mod tests {
         // `timestamp` 开头但不是时间类型的反例不存在；保留一条边界：空串
         assert!(!is_numeric_type(""));
         assert!(!is_datetime_type(""));
+    }
+
+    /// T19 跨洞察表列值重叠：A 表 id ⟷ B 表 id 部分重叠（1..=5），
+    /// 重叠行与两个方向的占比都要对；完全不重叠的列不进结果。
+    #[test]
+    fn test_compute_column_overlap_counts_shared_values() -> Result<(), CoreError> {
+        let duckdb = get_or_create_duckdb()?;
+        let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+        conn.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE t_overlap_a (
+                 id INTEGER, name VARCHAR
+             );
+             INSERT INTO t_overlap_a VALUES
+                 (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e'), (6,'f'), (7,'g');
+             CREATE OR REPLACE TEMP TABLE t_overlap_b (
+                 id INTEGER, tag VARCHAR
+             );
+             INSERT INTO t_overlap_b VALUES
+                 (1,'x'), (2,'y'), (3,'z'), (8,'w'), (9,'v');",
+        )
+        .expect("建重叠探针表");
+
+        let rows = compute_column_overlap(&conn, "t_overlap_a", "t_overlap_b")?;
+        // id：A=7 行、B=5 行，交集 {1,2,3} = 3
+        let id = rows.iter().find(|r| r.column == "id").expect("id 列应进结果");
+        assert_eq!(id.overlap, 3);
+        assert!((id.rate_a - 3.0 / 7.0).abs() < 1e-9);
+        assert!((id.rate_b - 3.0 / 5.0).abs() < 1e-9);
+        // name / tag：值域完全不同 → 不进结果（不刷屏）
+        assert!(
+            rows.iter().all(|r| r.column == "id"),
+            "无重叠的列不应出现：{rows:?}"
+        );
+        Ok(())
     }
 }

@@ -40,6 +40,7 @@ pub(crate) mod history;
 pub(crate) mod multi;
 pub(crate) mod overview;
 pub(crate) mod schema;
+pub(crate) mod set;
 pub(crate) mod table;
 
 use gpui_kit::base::StyledExt as _;

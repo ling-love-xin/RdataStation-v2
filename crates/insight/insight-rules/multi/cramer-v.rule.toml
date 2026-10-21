@@ -1,0 +1,84 @@
+[meta]
+id = "cramer-v"
+name = "Cramér's V 分类关联"
+description = "两个低基数文本/布尔列的关联强度（0 独立 → 1 完全关联），由卡方统计量现算"
+version = "1.0"
+category = "multi"
+applies_to = ["Text", "Text"]
+builtin = true
+
+[query]
+template = """
+WITH pairs AS (
+    SELECT "{col1}" AS a, "{col2}" AS b
+    FROM "{table}"
+    WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL
+),
+stats AS (
+    SELECT
+        COUNT(*) AS n,
+        COUNT(DISTINCT a) AS r,
+        COUNT(DISTINCT b) AS c
+    FROM pairs
+),
+chi AS (
+    SELECT
+        SUM(
+            (obs.cnt - exp.cnt) * (obs.cnt - exp.cnt) / NULLIF(exp.cnt, 0)
+        ) AS chi2
+    FROM (
+        SELECT a, b, COUNT(*) AS cnt FROM pairs GROUP BY a, b
+    ) obs
+    JOIN (
+        SELECT a, COUNT(*) AS row_total FROM pairs GROUP BY a
+    ) rt USING (a)
+    JOIN (
+        SELECT b, COUNT(*) AS col_total FROM pairs GROUP BY b
+    ) ct USING (b)
+    CROSS JOIN stats,
+    LATERAL (
+        SELECT (rt.row_total::DOUBLE * ct.col_total::DOUBLE / stats.n::DOUBLE) AS cnt
+    ) exp
+)
+SELECT
+    stats.n AS n,
+    stats.r AS distinct_a,
+    stats.c AS distinct_b,
+    chi.chi2 AS chi_square,
+    CASE
+        WHEN stats.n = 0 OR stats.r = 0 OR stats.c = 0 THEN NULL
+        WHEN stats.r = 1 OR stats.c = 1 THEN NULL
+        ELSE SQRT(chi.chi2 / (stats.n::DOUBLE * LEAST(stats.r - 1, stats.c - 1)))
+    END AS cramer_v
+FROM stats, chi
+"""
+parameters = ["table", "col1", "col2"]
+
+[[output]]
+sql_name = "n"
+json_name = "sample_size"
+value_type = "i64"
+
+[[output]]
+sql_name = "distinct_a"
+json_name = "distinct_a"
+value_type = "i64"
+
+[[output]]
+sql_name = "distinct_b"
+json_name = "distinct_b"
+value_type = "i64"
+
+[[output]]
+sql_name = "chi_square"
+json_name = "chi_square"
+value_type = "f64?"
+
+[[output]]
+sql_name = "cramer_v"
+json_name = "cramer_v"
+value_type = "f64?"
+
+[render]
+component = "CramerVResult"
+display_order = 1

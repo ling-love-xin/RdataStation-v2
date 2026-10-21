@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -222,6 +222,12 @@ pub struct TempTableManager {
     registry: Arc<RwLock<HashMap<String, Instant>>>,
     /// 全局 DuckDB 临时表上限
     global_max_tables: usize,
+    /// 保护名单：被保护的表不参与 TTL / 上限清理。
+    ///
+    /// 用途：洞察表集合 = **会话工作集**（用户正在探索、可能随时对比/归档），
+    /// 与纯中间计算表（多列子查询的临时结果，用完即弃）必须区别对待——
+    /// 集合内的表若被 30 分钟 TTL 悄悄清掉，右栏集合条目就指向不存在的表。
+    protected: Arc<RwLock<HashSet<String>>>,
 }
 
 impl TempTableManager {
@@ -233,7 +239,39 @@ impl TempTableManager {
         TempTableManager {
             registry: Arc::new(RwLock::new(HashMap::new())),
             global_max_tables,
+            protected: Arc::new(RwLock::new(HashSet::new())),
         }
+    }
+
+    /// 把一张表加入保护名单（TTL / 上限清理跳过它）。
+    ///
+    /// 幂等：已保护的表重复保护不报错。
+    pub fn protect(&self, name: &str) {
+        if let Ok(mut set) = self.protected.write() {
+            set.insert(name.to_string());
+        }
+    }
+
+    /// 把一张表移出保护名单（清理恢复对它的管理）。
+    ///
+    /// 幂等：不在名单里的表重复解除不报错。
+    pub fn unprotect(&self, name: &str) {
+        if let Ok(mut set) = self.protected.write() {
+            set.remove(name);
+        }
+    }
+
+    /// 查询是否受保护（清理决策用）。
+    pub fn is_protected(&self, name: &str) -> bool {
+        self.protected
+            .read()
+            .map(|set| set.contains(name))
+            .unwrap_or(false)
+    }
+
+    /// 保护名单数量（日志 / 测试）。
+    pub fn protected_count(&self) -> usize {
+        self.protected.read().map(|set| set.len()).unwrap_or(0)
     }
 
     /// 执行惰性清理：移除过期的临时表。
@@ -255,7 +293,10 @@ impl TempTableManager {
             // 检查洞察中间表 TTL
             let ttl = Duration::from_secs(1800); // 30分钟
             for (name, time) in reg.iter() {
-                if name.starts_with("tmp_i_") && now.duration_since(*time) >= ttl {
+                if name.starts_with("tmp_i_")
+                    && !self.is_protected(name)
+                    && now.duration_since(*time) >= ttl
+                {
                     to_drop.push(name.clone());
                 }
             }
@@ -409,7 +450,10 @@ impl TempTableManager {
             let ttl = Duration::from_secs(ttl_secs);
             let expired: Vec<_> = insight_tables
                 .iter()
-                .filter(|(_, time)| now.duration_since(*time) >= ttl)
+                // 保护名单（洞察表集合 = 会话工作集）不参与 TTL：用户可能正在探索它
+                .filter(|(name, time)| {
+                    !self.is_protected(name) && now.duration_since(*time) >= ttl
+                })
                 .map(|(name, _)| name.clone())
                 .collect();
 
@@ -422,13 +466,21 @@ impl TempTableManager {
             insight_tables.retain(|(name, _)| !expired.contains(name));
         }
 
-        // 检查数量上限，淘汰最旧表
+        // 检查数量上限，淘汰最旧表（保护名单内的表不淘汰）
         if let Some(max_count) = config.max_count {
-            while insight_tables.len() > max_count {
-                if let Some((oldest_name, _)) = insight_tables.first() {
-                    registry.remove(oldest_name);
-                    cleaned.push(oldest_name.clone());
-                    insight_tables.remove(0);
+            let mut queue: Vec<_> = insight_tables
+                .iter()
+                .filter(|(name, _)| !self.is_protected(name))
+                .map(|(name, time)| (name.clone(), *time))
+                .collect();
+            let mut drop_count = queue.len().saturating_sub(max_count);
+            while drop_count > 0 {
+                if let Some((oldest_name, _)) = queue.first() {
+                    let oldest_name = oldest_name.clone();
+                    registry.remove(&oldest_name);
+                    cleaned.push(oldest_name);
+                    queue.remove(0);
+                    drop_count -= 1;
                 } else {
                     break;
                 }
@@ -805,6 +857,85 @@ mod tests {
         let cleaned = manager.lazy_cleanup_insight_tables();
         assert_eq!(cleaned.len(), 5);
         assert_eq!(manager.count_by_prefix("tmp_i_"), 100);
+    }
+
+    /// T21：保护名单 = 会话工作集。TTL 过期与超上限淘汰都跳过受保护的表。
+    #[test]
+    fn test_lazy_cleanup_skips_protected_tables() {
+        let manager = TempTableManager::new(50);
+
+        // 两张过期表，其中一张受保护
+        {
+            let mut registry = manager.registry.write().unwrap();
+            let expired = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+            registry.insert("tmp_i_protected_20260512140000".to_string(), expired);
+            registry.insert("tmp_i_expired_20260512140001".to_string(), expired);
+        }
+        manager.protect("tmp_i_protected_20260512140000");
+
+        let cleaned = manager.lazy_cleanup_insight_tables();
+        assert_eq!(
+            cleaned,
+            vec!["tmp_i_expired_20260512140001".to_string()],
+            "受保护的表即使过期也不清理"
+        );
+        assert_eq!(manager.count(), 1, "受保护的表仍登记在册");
+
+        // 解除保护后再清理：恢复管理
+        manager.unprotect("tmp_i_protected_20260512140000");
+        let cleaned = manager.lazy_cleanup_insight_tables();
+        assert_eq!(cleaned.len(), 1);
+        assert_eq!(manager.count(), 0);
+    }
+
+    /// T21：数量上限淘汰同样跳过受保护的表（集合内表不被挤出上限）。
+    #[test]
+    fn test_lazy_cleanup_max_count_skips_protected() {
+        let manager = TempTableManager::new(50);
+
+        // 102 张表超上限（上限 100），最旧一张受保护
+        let mut registry = manager.registry.write().unwrap();
+        for i in 0..102 {
+            let name = format!("tmp_i_test_{i:04}_20260512140000");
+            let time = Instant::now() + Duration::from_secs(i as u64);
+            registry.insert(name, time);
+        }
+        drop(registry);
+        manager.protect("tmp_i_test_0000_20260512140000");
+
+        let cleaned = manager.lazy_cleanup_insight_tables();
+        // 102 - 1(受保护) = 101 张要减到 100 → 只淘汰 1 张
+        assert_eq!(cleaned.len(), 1, "受保护的最旧表不该被挤出上限");
+        assert!(
+            manager.is_protected("tmp_i_test_0000_20260512140000"),
+            "保护标记与表都还在"
+        );
+        assert_eq!(manager.count_by_prefix("tmp_i_"), 101);
+    }
+
+    /// T21：`perform_lazy_cleanup`（旧 TTL 入口）同样尊重保护名单。
+    #[test]
+    fn test_perform_lazy_cleanup_skips_protected() {
+        let manager = TempTableManager::new(50);
+        let conn = Connection::open_in_memory().expect("内存库");
+        conn.execute_batch(
+            "CREATE TABLE tmp_i_p1 (id INTEGER); CREATE TABLE tmp_i_p2 (id INTEGER);",
+        )
+        .expect("建表");
+        {
+            let mut registry = manager.registry.write().unwrap();
+            let expired = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+            registry.insert("tmp_i_p1".to_string(), expired);
+            registry.insert("tmp_i_p2".to_string(), expired);
+        }
+        manager.protect("tmp_i_p1");
+
+        let dropped = manager.perform_lazy_cleanup(&conn);
+        assert_eq!(dropped, vec!["tmp_i_p2".to_string()]);
+        // 被保护的表仍可查（库里还在）
+        let remaining = TempTableManager::list_by_source(&conn, TempTableSource::Insight)
+            .expect("列出");
+        assert_eq!(remaining, vec!["tmp_i_p1".to_string()]);
     }
 
     /// K16：统一的命名口——前缀跟来源走，同秒同描述不撞名（结果集表与洞察表共用）。

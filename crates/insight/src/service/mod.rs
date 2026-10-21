@@ -108,7 +108,7 @@ impl InsightService {
 
     // ==================== 源取样（统一入口契约）====================
 
-    /// 源目标列画像：**取样 → 分析临时表 → 画像**，返回（样本表名, 视图）。
+    /// 源目标列画像：**取样（或全量）→ 分析临时表 → 画像**，返回（样本表名, 视图）。
     ///
     /// 「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树 / 分析存档 / 草稿箱 /
     /// 编辑器结果集都只需给出「连接 + 只读查询 + 标签」，其余在这里完成。
@@ -119,20 +119,23 @@ impl InsightService {
         project_root: Option<&Path>,
         source: &crate::model::SampleSource,
         column_name: &str,
+        full: bool,
     ) -> Result<(String, ColumnProfileView), CoreError> {
         block_on(persistence::profile_source_column(
             project_root,
             source,
             column_name,
+            full,
         ))
     }
 
-    /// 源目标表探查：取样 → 内省，返回（样本表名, 视图）。
+    /// 源目标表探查：取样（或全量）→ 内省，返回（样本表名, 视图）。
     pub fn profile_source_table(
         source: &crate::model::SampleSource,
         table_name: &str,
+        full: bool,
     ) -> Result<(String, TableProfileView), CoreError> {
-        block_on(persistence::profile_source_table(source, table_name))
+        block_on(persistence::profile_source_table(source, table_name, full))
     }
 
     // ==================== 表探查（Phase 3.1） ====================
@@ -151,7 +154,99 @@ impl InsightService {
     ) -> Result<TableProfileView, CoreError> {
         let _ = project_root;
         let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
-        Ok(TableProfileView::from_profile(&profile, table_name))
+        let mut view = TableProfileView::from_profile(&profile, table_name);
+        // EDA 列统计摘要（缺失率 / 唯一率）：查询失败不阻塞画像——列清单仍可看，
+        // 只是概览卡 / 缺失矩阵少两列数字（保留 None，不编假值）。
+        let column_names: Vec<String> =
+            profile.columns.iter().map(|c| c.column_name.clone()).collect();
+        if let Ok(stats) = crate::insight_engine::compute_table_column_summary(
+            temp_table,
+            &column_names,
+        ) {
+            view.fill_column_stats(&stats);
+        }
+        // EDA 样本（前 5 行）：同样失败不阻塞画像（样本区给空态即可）
+        if let Ok(sample) = crate::insight_engine::get_temp_table_sample(temp_table) {
+            view.sample = Some(sample);
+        }
+        Ok(view)
+    }
+
+    // ==================== 跨表关系排查（T19） ====================
+
+    /// 两张洞察临时表的同名列值重叠报告（右栏集合卡「关系」按钮的取数）。
+    ///
+    /// 阻塞（抢 DuckDB 全局锁），调用方负责放后台线程（`jobs` 事件路径）。
+    pub fn overlap_report(
+        table_a: &str,
+        table_b: &str,
+    ) -> Result<crate::model::OverlapView, CoreError> {
+        let duckdb = crate::insight_engine::get_or_create_duckdb()?;
+        let conn = duckdb.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+        })?;
+        let rows = crate::insight_engine::compute_column_overlap(&conn, table_a, table_b)?;
+        Ok(crate::model::OverlapView {
+            table_a: table_a.to_string(),
+            table_b: table_b.to_string(),
+            rows,
+        })
+    }
+
+    // ==================== 归档快照（T20） ====================
+
+    /// 把一张洞察临时表的画像快照导出为 JSON 文件（归档到资产库的本体）。
+    ///
+    /// 快照 = 表探查元数据（列名 / 类型 / 可空 / 主键 / 行数）+ 生成时间戳：
+    /// 归档后它作为资产库 `File` 档的本体，版本链由资产库按内容指纹维护——
+    /// 同一张表两次归档生成两份不同内容（时间戳在指纹里）即两个版本。
+    ///
+    /// # 返回
+    /// `(文件绝对路径, 展示名)`；文件落在 `{项目}/.RSmeta/insight-archive/`，
+    /// 该目录在项目目录内（随项目备份），不入 resources/（那是资产库本体区，
+    /// 由资产库登记时复制，这里只负责「产生可归档的本体」）。
+    ///
+    /// 阻塞（抢 DuckDB 锁），调用方放后台线程。
+    pub fn export_table_snapshot(
+        project_root: &Path,
+        temp_table: &str,
+        table_name: &str,
+    ) -> Result<(PathBuf, String), CoreError> {
+        use chrono::Local;
+
+        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
+        let json = serde_json::json!({
+            "kind": "insight_table_snapshot",
+            "table": table_name,
+            "generated_at": Local::now().to_rfc3339(),
+            "row_count": profile.row_count,
+            "column_count": profile.columns.len(),
+            "columns": profile.columns.iter().map(|c| {
+                serde_json::json!({
+                    "name": c.column_name,
+                    "type": c.data_type,
+                    "nullable": c.is_nullable,
+                    "primary_key": c.is_primary_key,
+                })
+            }).collect::<Vec<_>>(),
+        });
+
+        let dir = project_root.join(".RSmeta").join("insight-archive");
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "创建洞察归档目录失败: {e}"
+            )))
+        })?;
+        let stamp = Local::now().format("%Y%m%d%H%M%S");
+        let file_name = format!("{table_name}_{stamp}.json");
+        let path = dir.join(&file_name);
+        let bytes = serde_json::to_vec_pretty(&json).map_err(|e| {
+            CoreError::common(CommonError::General(format!("快照序列化失败: {e}")))
+        })?;
+        std::fs::write(&path, bytes).map_err(|e| {
+            CoreError::common(CommonError::General(format!("快照写入失败: {e}")))
+        })?;
+        Ok((path, table_name.to_string()))
     }
 
     // ==================== 多列分析（Phase 3.2 / 3.3） ====================
@@ -928,5 +1023,44 @@ mod tests {
 
         let err = rule_params(&["table".into(), "col".into()], "t", &[]).expect_err("没选列");
         assert!(err.to_string().contains("需要 1 列"), "{err}");
+    }
+
+    /// T20 归档快照：画像元数据导出为 JSON，落在项目 `.RSmeta/insight-archive/`，
+    /// 内容可解析且带 `insight_table_snapshot` 类型标记（资产库按它识别洞察档）。
+    #[test]
+    fn export_table_snapshot_writes_parseable_json_under_project_meta() -> Result<(), CoreError> {
+        use crate::insight_engine::get_or_create_duckdb;
+
+        // 建表在独立作用域：`export_table_snapshot` 内部会自己抢 DuckDB 全局锁，
+        // 这里若继续持锁调用就是同一线程重入 Mutex → 死锁（测试曾卡 60s 被超时杀掉）。
+        {
+            let duckdb = get_or_create_duckdb()?;
+            let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+            conn.execute_batch(
+                "CREATE OR REPLACE TEMP TABLE t_archive_snapshot_probe (
+                     id INTEGER NOT NULL, amount DECIMAL(12,2), note VARCHAR
+                 );
+                 INSERT INTO t_archive_snapshot_probe VALUES
+                     (1, 1.5, 'a'), (2, NULL, NULL), (3, 9.9, 'c');",
+            )
+            .expect("建归档探针表");
+        }
+
+        // test-support 构建下 `paths::data_dir()` 已隔离到进程专属临时根
+        let root = paths::data_dir();
+        let (path, name) =
+            InsightService::export_table_snapshot(&root, "t_archive_snapshot_probe", "orders")?;
+        assert_eq!(name, "orders");
+        assert!(path.starts_with(root.join(".RSmeta").join("insight-archive")));
+        assert!(path.file_name().unwrap().to_string_lossy().starts_with("orders_"));
+        let text = std::fs::read_to_string(&path).expect("快照文件可读");
+        let json: serde_json::Value = serde_json::from_str(&text).expect("快照是合法 JSON");
+        assert_eq!(json["kind"], "insight_table_snapshot");
+        assert_eq!(json["table"], "orders");
+        assert_eq!(json["row_count"], 3);
+        assert_eq!(json["column_count"], 3);
+        assert_eq!(json["columns"][0]["name"], "id");
+        assert_eq!(json["columns"][1]["nullable"], serde_json::json!(true));
+        Ok(())
     }
 }

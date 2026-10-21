@@ -235,7 +235,7 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
             .expect("面板目标应带源取样")
     });
     let (temp_table, profile) =
-        insight::InsightService::profile_source_column(None, &source, "amount").expect("源取样 + 列画像");
+        insight::InsightService::profile_source_column(None, &source, "amount", false).expect("源取样 + 列画像");
     eprintln!(
         "✅ 编辑器入口：样本表 {temp_table} · amount {} 行 / {} 空值 / {:?}",
         profile.total_count, profile.null_count, profile.kind

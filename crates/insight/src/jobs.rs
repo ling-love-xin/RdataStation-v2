@@ -43,10 +43,14 @@ pub enum ProfileRequest {
     SourceColumn {
         source: crate::model::SampleSource,
         column: String,
+        /// `true` = 全量导入（用户手动触发；默认 `false` = 取样 `SOURCE_SAMPLE_LIMIT` 行）
+        full: bool,
     },
     SourceTable {
         source: crate::model::SampleSource,
         table_name: String,
+        /// `true` = 全量导入（用户手动触发；默认 `false` = 取样 `SOURCE_SAMPLE_LIMIT` 行）
+        full: bool,
     },
 }
 
@@ -60,11 +64,29 @@ impl ProfileRequest {
         }
     }
 
+    /// 取样 / 全量标志（临时表目标恒为 `false`——临时表已是既定数据）。
+    pub fn full(&self) -> bool {
+        match self {
+            ProfileRequest::SourceColumn { full, .. }
+            | ProfileRequest::SourceTable { full, .. } => *full,
+            _ => false,
+        }
+    }
+
     /// 从面板目标解析出请求；**当前不支持的形态返回 `None`**。
     ///
-    /// Phase 1 做列画像，Phase 3 加表探查；多列与结构在后续期次落地（结构走
-    /// `SchemaReportRequested`，不经这里），面板侧已按 Tab 给出期次提示。
+    /// 列画像 / 表画像都走这里；多列（`MultiColumnRequested`）与结构
+    /// （`SchemaReportRequested`）不经此路径，由各自事件分支处理。
     pub fn of(target: &InsightTarget) -> Option<Self> {
+        Self::of_scope(target, false)
+    }
+
+    /// 全量口径的请求（源目标手动切换为全量时用；临时表目标仍是取样语义）。
+    pub fn of_full(target: &InsightTarget) -> Option<Self> {
+        Self::of_scope(target, true)
+    }
+
+    fn of_scope(target: &InsightTarget, full: bool) -> Option<Self> {
         match target {
             InsightTarget::Column {
                 temp_table, column, ..
@@ -84,10 +106,12 @@ impl ProfileRequest {
             } => Some(Self::SourceColumn {
                 source: source.clone(),
                 column: column.clone(),
+                full,
             }),
             InsightTarget::SourceTable { source, table_name } => Some(Self::SourceTable {
                 source: source.clone(),
                 table_name: table_name.clone(),
+                full,
             }),
             InsightTarget::MultiColumn { .. } | InsightTarget::Schema { .. } => None,
         }
@@ -129,6 +153,16 @@ pub fn handle_event(
             };
             request_profile(view, project_root, request, cx);
         }
+        InsightEvent::FullProfileRequested { target } => {
+            // 全量口径：源目标重新取样为**不带 LIMIT** 的分析临时表
+            let Some(request) = ProfileRequest::of_full(target) else {
+                return;
+            };
+            request_profile(view, project_root, request, cx);
+        }
+        // 全量确认请求由宿主侧（`components::insight_actions`）弹窗后转
+        // `confirm_full` → `FullProfileRequested`；本取数链不直接处理。
+        InsightEvent::FullProfileConfirmRequested { .. } => {}
         InsightEvent::TableEvaluateRequested {
             temp_table,
             table_name,
@@ -204,7 +238,59 @@ pub fn handle_event(
         InsightEvent::SchemaExportRequested { format, .. } => {
             tracing::info!("Schema 报告导出请求（宿主未接）: {}", format.label());
         }
+        // 表画像 Markdown 报告导出：宿主（`components::insight_actions`）订阅
+        // 同一份事件选路径写盘；取数链不处理（面板已算好 content，D36）。
+        InsightEvent::TableReportExportRequested { target, .. } => {
+            tracing::info!("表画像报告导出请求（宿主未接）: {}", target.title());
+        }
+        // 右栏集合「对比」由工作台侧（`components::insight_actions`）转中间页；
+        // 中间页取数链（本文件）不处理它——没有宿主订阅时静默（按钮本就不该出现）
+        InsightEvent::CompareRequested { .. } => {}
+        // 关系排查：取数在洞察侧（DuckDB 全局连接），不依赖宿主窗口
+        InsightEvent::RelationRequested { key } => {
+            request_overlap(view, key.clone(), cx);
+        }
+        // 归档要宿主侧（`ArchiveService` + 项目目录），由 `components::insight_actions` 落地
+        InsightEvent::ArchiveRequested { .. } => {}
     }
+}
+
+/// 跨洞察表列值重叠排查（T19）：发起方（集合条目）⟷ 当前目标所在临时表。
+///
+/// 双方都必须是**已取样**的临时表（`temp_table` / `PanelData::sample_table`）；
+/// 没就绪给行内说明，不发起无谓的 SQL（拿 label 猜表名必然查错）。
+fn request_overlap(view: &Entity<InsightView>, key: String, cx: &mut App) {
+    let (table_a, table_b) = {
+        let snapshot = view.read(cx);
+        let entry = snapshot
+            .insight_set()
+            .iter()
+            .find(|entry| entry.key == key)
+            .and_then(|entry| entry.temp_table.clone());
+        let current = snapshot
+            .target()
+            .and_then(|target| snapshot.data().sample_table(target))
+            .map(str::to_string);
+        (entry, current)
+    };
+    let (Some(table_a), Some(table_b)) = (table_a, table_b) else {
+        view.update(cx, |view, cx| {
+            view.set_overlap_notice("当前目标或该表尚未完成取样，无法做关系排查", cx);
+        });
+        return;
+    };
+    view.update(cx, |view, cx| view.begin_overlap(cx));
+    let weak = view.downgrade();
+    cx.spawn(async move |cx| {
+        let result = InsightService::overlap_report(&table_a, &table_b);
+        let _ = weak.update(cx, |view, cx| match result {
+            Ok(overlap) => view.set_overlap(overlap, cx),
+            Err(error) => {
+                view.set_overlap_notice(InsightService::describe_error(&error).message, cx)
+            }
+        });
+    })
+    .detach();
 }
 
 // ==================== 规则管理（Phase 2.3） ====================
@@ -417,6 +503,8 @@ pub fn request_profile(
     // 而不是让用户对着干骨架以为卡住了。
     if let Some(source) = request.source() {
         let source = source.clone();
+        // full 标志先取出（`request` 还要留给画像阶段用，不能 move 进取样闭包）
+        let full = request.full();
         let _ = weak.update(cx, |panel, cx| {
             panel.set_loading_note(
                 Some("正在取样并建分析临时表（大表可能需要一些时间）…".into()),
@@ -428,7 +516,7 @@ pub fn request_profile(
             // 非 Tokio 上下文会 panic（`there is no reactor running`）。包一层进程级单例
             // runtime 的 block_on，把整条取样 async 链放回 Tokio 上下文再 await。
             crate::service::block_on(
-                crate::service::persistence::sample_source_to_analysis_table(&source),
+                crate::service::persistence::sample_source_to_analysis_table(&source, full),
             )
         });
         cx.spawn(async move |cx| {
@@ -572,6 +660,8 @@ pub fn request_table_evaluation(
 
         let total = base.columns.len();
         let mut evaluated: Vec<crate::model::types::ColumnInsightFull> = Vec::with_capacity(total);
+        // 列检查器聚合（评估完成后再随表级摘要一起写入；见下方 `with_checker`）
+        let mut column_checks: Vec<crate::model::ColumnChecker> = Vec::new();
         let mut current = base.evaluating(0, total);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
 
@@ -585,10 +675,16 @@ pub fn request_table_evaluation(
             match task.await {
                 Ok(full) => {
                     let score = InsightService::compute_column_quality(&full).overall_score;
-                    evaluated.push(full);
+                    column_checks.extend(
+                        crate::quality_scorer::compute_column_checks(&full),
+                    );
+                    // 明细回填（借用）先行，`evaluated` 收尾 move：`ColumnStats` 无 Clone，
+                    // 不能先 push 再借（会要求 full.clone()）
                     current = current
                         .with_column_score(&column.name, score)
-                        .evaluating(evaluated.len(), total);
+                        .with_column_detail(&column.name, &full)
+                        .evaluating(evaluated.len() + 1, total);
+                    evaluated.push(full);
                 }
                 Err(err) => {
                     // 单列失败不报废整表：直接报错（用户的下一步是重试或修正数据）
@@ -603,7 +699,7 @@ pub fn request_table_evaluation(
 
         // 表级摘要：与列分数的打分同源（`compute_table_quality` 内部逐列调用同一函数）
         let quality = InsightService::compute_table_quality(&table_name, &evaluated);
-        let done = current.evaluated(&quality);
+        let done = current.evaluated(&quality).with_checker(column_checks);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(done, cx));
     })
     .detach();
@@ -877,6 +973,7 @@ mod tests {
             Some(ProfileRequest::SourceColumn {
                 source: source.clone(),
                 column: "amount".into(),
+                full: false,
             }),
             "源列目标要走「取样 + 画像」那条路"
         );
@@ -890,6 +987,7 @@ mod tests {
             Some(ProfileRequest::SourceTable {
                 source,
                 table_name: "orders".into(),
+                full: false,
             })
         );
     }

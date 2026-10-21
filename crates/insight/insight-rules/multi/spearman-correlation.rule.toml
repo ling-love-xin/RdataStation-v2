@@ -1,0 +1,37 @@
+[meta]
+id = "spearman-correlation"
+name = "Spearman 秩相关系数"
+description = "两个数值列按秩次转 Pearson：DuckDB 无内置秩相关，用 CORR(rank(x), rank(y)) 等价表达"
+version = "1.0"
+category = "multi"
+applies_to = ["Numeric", "Numeric"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    CORR(r1, r2)::DOUBLE AS rho,
+    COUNT(*) FILTER (WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL) AS n
+FROM (
+    SELECT
+        RANK() OVER (ORDER BY "{col1}") AS r1,
+        RANK() OVER (ORDER BY "{col2}") AS r2
+    FROM "{table}"
+    WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL
+) ranks
+"""
+parameters = ["table", "col1", "col2"]
+
+[[output]]
+sql_name = "rho"
+json_name = "spearman_rho"
+value_type = "f64?"
+
+[[output]]
+sql_name = "n"
+json_name = "sample_size"
+value_type = "i64"
+
+[render]
+component = "CorrelationResult"
+display_order = 1

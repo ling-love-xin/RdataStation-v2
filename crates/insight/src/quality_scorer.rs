@@ -2,6 +2,7 @@ use crate::model::types::{
     ColumnInsightFull, ColumnQualityEntry, ColumnStatsDetail, QualityDimension, QualityScore,
     TableQuality,
 };
+use crate::model::{kurt_direction, skew_direction, ColumnCheckState, ColumnChecker, KURT_NOTABLE, SKEW_NOTABLE};
 
 /// Dimension weights for quality scoring (must sum to 1.0).
 pub const WEIGHT_COMPLETENESS: f64 = 0.35;
@@ -14,6 +15,10 @@ pub const GRADE_EXCELLENT: f64 = 85.0;
 pub const GRADE_GOOD: f64 = 70.0;
 pub const GRADE_FAIR: f64 = 50.0;
 pub const GRADE_POOR: f64 = 30.0;
+
+/// 唯一率上限：超过视为疑似键列 / 数据异常（检查器「唯一率」判定）。
+/// 阈值是业务经验默认，与原型演示数据口径一致（98% 未命中、1.7% 命中）。
+pub const CHECKER_UNIQUE_MAX: f64 = 0.95;
 
 /// 质量等级（总分 → 等级）。
 ///
@@ -212,6 +217,92 @@ pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
         dimensions,
         summary,
     }
+}
+
+/// 内置列检查器判定（原型「检查器」四态）：DuckDB 可算统计量现算，**无评级**。
+///
+/// 检查器是「非空率 / 唯一率 / 近似正态」这类可陈述规则，不是评分环：
+/// - 非空率：所有列适用（有 `null_rate`），阈值 [`crate::model::NULL_RATE_NOTE`]；
+/// - 唯一率：未知类型列不适用（无类型推断），阈值 [`CHECKER_UNIQUE_MAX`]；
+/// - 近似正态：仅数值列适用（DuckDB `SKEWNESS` / `KURTOSIS`），阈值复用
+///   [`SKEW_NOTABLE`] / [`KURT_NOTABLE`]（与探索价值区同源，不另立阈值）。
+/// 「列排除」态由「规则按列指定执行」驱动，接入前不产生（不编造）。
+pub fn compute_column_checks(stats: &ColumnInsightFull) -> Vec<ColumnChecker> {
+    let column = stats.stats.column_name.clone();
+    let null_rate = stats.stats.null_rate;
+    let mut checks = Vec::new();
+
+    // 1) 非空率（完整性）：所有列都有总行数 / 空值率，恒适用
+    let non_null = 1.0 - null_rate;
+    checks.push(ColumnChecker {
+        column: column.clone(),
+        name: "非空率".into(),
+        state: if non_null >= 1.0 - crate::model::NULL_RATE_NOTE {
+            ColumnCheckState::Hit
+        } else {
+            ColumnCheckState::Miss
+        },
+        detail: format!("非空率 {:.1}%（阈值 ≥ {:.0}%）", non_null * 100.0, (1.0 - crate::model::NULL_RATE_NOTE) * 100.0),
+    });
+
+    // 2) 唯一率（唯一值 / 非空行数）：未知类型列无类型推断 → 不适用-类型
+    if let Some(unique) = stats.stats.unique_count {
+        let non_null_rows = (stats.stats.total_count as f64 * (1.0 - null_rate)).max(1.0);
+        let ratio = unique as f64 / non_null_rows;
+        let applicable = !matches!(stats.stats.stats_detail, ColumnStatsDetail::Unknown);
+        if !applicable {
+            checks.push(ColumnChecker {
+                column: column.clone(),
+                name: "唯一率".into(),
+                state: ColumnCheckState::NotApplicableType,
+                detail: "未知类型列，无法判定唯一率".into(),
+            });
+        } else {
+            checks.push(ColumnChecker {
+                column: column.clone(),
+                name: "唯一率".into(),
+                state: if ratio <= CHECKER_UNIQUE_MAX {
+                    ColumnCheckState::Hit
+                } else {
+                    ColumnCheckState::Miss
+                },
+                detail: format!("唯一率 {:.1}%（阈值 ≤ {:.0}%）", ratio * 100.0, CHECKER_UNIQUE_MAX * 100.0),
+            });
+        }
+    }
+
+    // 3) 近似正态（偏度 / 超额峰度）：仅数值列有 DuckDB 原生偏峰统计
+    if let ColumnStatsDetail::Numeric(num) = &stats.stats.stats_detail {
+        match (num.skewness, num.kurtosis) {
+            (Some(skew), Some(kurt)) => {
+                let normal = skew.abs() <= SKEW_NOTABLE && kurt.abs() <= KURT_NOTABLE;
+                checks.push(ColumnChecker {
+                    column,
+                    name: "近似正态".into(),
+                    state: if normal {
+                        ColumnCheckState::Hit
+                    } else {
+                        ColumnCheckState::Miss
+                    },
+                    detail: if normal {
+                        format!("偏度 {} · 峰度 {}", skew_direction(skew), kurt_direction(kurt))
+                    } else {
+                        format!("偏度 {skew:.2} · 峰度 {kurt:.2}（偏离正态）")
+                    },
+                });
+            }
+            _ => {
+                checks.push(ColumnChecker {
+                    column,
+                    name: "近似正态".into(),
+                    state: ColumnCheckState::NotApplicableType,
+                    detail: "该列未提供偏度 / 峰度统计".into(),
+                });
+            }
+        }
+    }
+
+    checks
 }
 
 /// Computes aggregate quality for a table by scoring each column and
@@ -415,8 +506,7 @@ mod tests {
             tq.column_scores[0].quality_score <= tq.column_scores[1].quality_score,
             "column scores must be sorted ascending (worst first)"
         );
-        assert!(tq.column_scores[1].quality_score <= tq.column_scores[2].quality_score);
-    }
+        assert!(tq.column_scores[1].quality_score <= tq.column_scores[2].quality_score);    }
 
     #[test]
     fn test_table_quality_empty() {
@@ -491,5 +581,87 @@ mod tests {
         assert!(names.contains(&"唯一性"));
         assert!(names.contains(&"类型一致"));
         assert!(names.contains(&"分布均匀"));
+    }
+
+    // ==================== 内置检查器（T26） ====================
+
+    /// 数值列（带偏峰统计）：三检查器齐出，完美数据全命中。
+    #[test]
+    fn checker_numeric_column_all_hit() {
+        let mut qi = make_insight(0.0, 0.5);
+        if let ColumnStatsDetail::Numeric(num) = &mut qi.stats.stats_detail {
+            num.skewness = Some(0.1);
+            num.kurtosis = Some(0.2);
+        }
+        let checks = compute_column_checks(&qi);
+        assert_eq!(checks.len(), 3, "数值列应有非空率 / 唯一率 / 近似正态三条");
+        assert!(checks.iter().all(|c| c.state == ColumnCheckState::Hit));
+    }
+
+    /// 高空值率 → 非空率未命中；高唯一率 → 唯一率未命中；偏峰 → 正态未命中。
+    #[test]
+    fn checker_misses_on_bad_stats() {
+        let mut qi = make_insight(0.3, 0.98);
+        if let ColumnStatsDetail::Numeric(num) = &mut qi.stats.stats_detail {
+            num.skewness = Some(4.0);
+            num.kurtosis = Some(3.0);
+        }
+        let checks = compute_column_checks(&qi);
+        let non_null = checks.iter().find(|c| c.name == "非空率").unwrap();
+        assert_eq!(non_null.state, ColumnCheckState::Miss, "30% 空值率应未命中");
+        let unique = checks.iter().find(|c| c.name == "唯一率").unwrap();
+        assert_eq!(unique.state, ColumnCheckState::Miss, "98% 唯一率应未命中");
+        let normal = checks.iter().find(|c| c.name == "近似正态").unwrap();
+        assert_eq!(normal.state, ColumnCheckState::Miss, "偏度 4 应偏离正态");
+    }
+
+    /// 未知类型列：唯一率不适用-类型，且不产生正态检查。
+    #[test]
+    fn checker_unknown_type_marked_not_applicable() {
+        let qi = ColumnInsightFull {
+            stats: ColumnStats {
+                column_name: "blob_col".into(),
+                data_type: "BLOB".into(),
+                total_count: 100,
+                null_count: 0,
+                null_rate: 0.0,
+                unique_count: Some(100),
+                stats_detail: ColumnStatsDetail::Unknown,
+            },
+            sample: vec![],
+            histogram: None,
+        };
+        let checks = compute_column_checks(&qi);
+        let unique = checks.iter().find(|c| c.name == "唯一率").unwrap();
+        assert_eq!(unique.state, ColumnCheckState::NotApplicableType);
+        assert!(
+            checks.iter().all(|c| c.name != "近似正态"),
+            "未知类型列不应产生正态检查"
+        );
+    }
+
+    /// 文本列（无偏峰统计）：只有非空率 / 唯一率两条，无正态检查。
+    #[test]
+    fn checker_text_column_has_no_normality_check() {
+        let qi = ColumnInsightFull {
+            stats: ColumnStats {
+                column_name: "name".into(),
+                data_type: "VARCHAR".into(),
+                total_count: 100,
+                null_count: 5,
+                null_rate: 0.05,
+                unique_count: Some(80),
+                stats_detail: ColumnStatsDetail::Text(TextStats {
+                    min_length: 1,
+                    max_length: 20,
+                    top_values: vec![],
+                }),
+            },
+            sample: vec![],
+            histogram: None,
+        };
+        let checks = compute_column_checks(&qi);
+        assert_eq!(checks.len(), 2, "文本列应只有非空率 / 唯一率");
+        assert!(checks.iter().all(|c| c.state == ColumnCheckState::Hit));
     }
 }

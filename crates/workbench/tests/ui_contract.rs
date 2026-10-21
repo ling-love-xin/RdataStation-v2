@@ -614,6 +614,7 @@ fn shared_fields_are_whitelisted() {
         "notice",
         "open_mock_detail",
         "open_property",
+        "pending_insight_compare",
         "pending_insight_target",
         "pending_temp_cleanup",
         "project",
