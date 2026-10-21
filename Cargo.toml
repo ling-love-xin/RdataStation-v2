@@ -266,15 +266,16 @@ debug = false
 
 # ============================================================================
 # 多 tab 模式下 Dock 的 tab 不渲染 title_suffix（脏点 / 自绘关闭钮
-# 丢失）。vendor 一份 gpui-component 0.7.1（vendor/gpui-component），在
-# tab_panel.rs 的 render_tab 把 title_suffix 并入 tab 的 suffix。版本必须与
-# 工作区声明的 gpui-component（经 gpui-kit 0.7.1 带入）一致。
+# 丢失）。vendor 一份 gpui-component 0.8.0（vendor/gpui-component，crates.io
+# 发布包），在 tab_panel.rs 的 render_tab 把 title_suffix 并入 tab 的 suffix，
+# 并追加 DockSkin tab_bar_max_width / tab_bar_variant 项目扩展。版本必须与
+# 工作区声明的 gpui-component（经 gpui-kit 0.8.0 带入）一致。
 # ============================================================================
-# 列编辑（多光标）：gpui-base 0.7.1 的 `add_cursor_above/below` 已实现却是
-# `pub(super)`，外部 crate 调不到（见 editor-impl-taskbook.md §3 T2c-3）。
-# vendor 一份 gpui-base 0.7.1（vendor/gpui-base），把这两个动作处理器改 pub
-# 并补公开 `cursor_count()`/`cursor_offsets()`（状态栏徽标 + 测试断言）。
-# 版本必须与 lock 里的 gpui-base 0.7.1 一致。
+# 列编辑（多光标）：gpui-base 0.8.0 的 `add_cursor_above/below` 已 pub；
+# 项目 patch 追加 `add_cursor_above_line/below_line`、`collapse_cursors`、
+# `cursor_count()`/`cursor_offsets()`（状态栏徽标 + 测试断言）与
+# `select_columnar_block`（自 0.7.1 vendor 移植）。版本必须与 lock 里的
+# gpui-base 0.8.0 一致。patch 明细见 docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md §3。
 # ============================================================================
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
