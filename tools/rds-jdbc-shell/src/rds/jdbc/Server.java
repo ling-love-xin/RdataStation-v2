@@ -2,19 +2,29 @@ package rds.jdbc;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
- * rds-driver/1 服务端主循环：读帧 → JSON-RPC 分发 → 响应。
+ * rds-driver/1 服务端主循环：读帧 → 分发 → 响应。
+ *
+ * 线程模型（cancel 必须即时，否则执行阻塞时 cancel 帧读不到——单线程会排队到
+ * execute 结束后才处理，取消就成了空操作）：
+ * - 主线程：只读帧。`query.cancel` 立即处理（Statement.cancel() 线程安全、不阻塞），
+ *   其余请求入队交给 worker 顺序执行。
+ * - worker：顺序执行非 cancel 请求（保持 RPC 顺序语义），execute 阻塞不影响 cancel。
+ * - 响应写回：FrameIO 内部同步（worker 写 execute 响应、主线程写 cancel 响应并发）。
+ * - shutdown：交给 worker 收尾（保证先到先出），随后 join 退出。
  *
  * 信封（对齐宿主 `sidecar/conn.rs`）：
  * - 请求：{"jsonrpc":"2.0","id":n,"method":"...","params":{...}}
  * - 响应：{"jsonrpc":"2.0","id":n,"result":...} / {"jsonrpc":"2.0","id":n,"error":{"code","message"}}
- * - stdin EOF = 宿主已死，直接退出（协议级约定，dev-plan §4.2.1）
+ * - stdin EOF = 宿主已死，直接退出（协议级约定）
  *
  * v1 方法面：initialize / ping / shutdown / session.open|close|ping /
  * driver.describe / meta.catalogs|schemas|objects|object_detail|routine_source /
- * query.execute|fetch|cancel。Arrow 附件、query.fetch 游标第二期（fetch 显式报 -32001）。
+ * query.execute|fetch|cancel。Arrow 附件、query.fetch 游标第二期。
  */
 public final class Server {
 
@@ -32,11 +42,19 @@ public final class Server {
     /** 会话表（session_id → 会话）。 */
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
 
+    /** worker 队列里的一个请求。 */
+    private record Job(Json.Value id, String method, Json.Value params, boolean shutdown) {}
+
     public Server(FrameIO io) {
         this.io = io;
     }
 
     public void run() throws Exception {
+        BlockingQueue<Job> queue = new LinkedBlockingQueue<>();
+        Thread worker = new Thread(() -> runWorker(queue), "rds-jdbc-worker");
+        worker.setDaemon(true);
+        worker.start();
+
         while (true) {
             byte[] payload = io.read();
             if (payload == null) break; // stdin EOF：宿主已死
@@ -45,27 +63,30 @@ public final class Server {
             try {
                 req = (Json.Obj) Json.parse(text);
             } catch (Exception e) {
-                // 不是合法 JSON-RPC 请求：回标准解析错误
                 io.writeJson(errorFrame(null, -32700, "parse error: " + e.getMessage()));
                 continue;
             }
-            if (req.fields.get("method") == null) continue; // 响应帧（反向请求回执）——v1 宿主不回发，忽略
+            if (req.fields.get("method") == null) continue; // 响应帧（v1 宿主不回发），忽略
             String method = req.fields.get("method").asString();
             Json.Value id = req.fields.get("id");
             Json.Value params = req.fields.getOrDefault("params", Json.Null.INSTANCE);
 
-            boolean shutdown = "shutdown".equals(method);
-            try {
-                Json.Value result = dispatch(method, params);
-                io.writeJson(responseFrame(id, result));
-            } catch (RpcException e) {
-                io.writeJson(errorFrame(id, e.code, e.getMessage()));
-            } catch (java.sql.SQLException e) {
-                io.writeJson(errorFrame(id, CODE_SQL_ERROR, "SQL 错误：" + e.getMessage()));
-            } catch (Throwable t) {
-                io.writeJson(errorFrame(id, CODE_SQL_ERROR, "内部错误：" + t));
+            if ("query.cancel".equals(method)) {
+                // 主线程即时处理：stmt.cancel() 不阻塞，能打断 worker 里跑着的 execute
+                try {
+                    dispatch(method, params);
+                    io.writeJson(responseFrame(id, new Json.Obj()));
+                } catch (Throwable t) {
+                    io.writeJson(errorFrame(id, toErrorCode(t), messageOf(t)));
+                }
+                continue;
             }
-            if (shutdown) break;
+            boolean shutdown = "shutdown".equals(method);
+            queue.add(new Job(id, method, params, shutdown));
+            if (shutdown) {
+                worker.join(5000);
+                break;
+            }
         }
         // 收摊：关掉全部会话（stdin EOF 也会走到这里）
         for (Session s : sessions.values()) {
@@ -73,11 +94,47 @@ public final class Server {
         }
     }
 
+    private void runWorker(BlockingQueue<Job> queue) {
+        while (true) {
+            Job job;
+            try {
+                job = queue.take();
+            } catch (InterruptedException e) {
+                return;
+            }
+            try {
+                if (job.shutdown) {
+                    io.writeJson(responseFrame(job.id, new Json.Obj()));
+                    return;
+                }
+                Json.Value result = dispatch(job.method, job.params);
+                io.writeJson(responseFrame(job.id, result));
+            } catch (Throwable t) {
+                try {
+                    io.writeJson(errorFrame(job.id, toErrorCode(t), messageOf(t)));
+                } catch (Exception e) {
+                    return; // stdout 坏了（宿主已死），worker 退出
+                }
+            }
+        }
+    }
+
+    private static int toErrorCode(Throwable t) {
+        if (t instanceof RpcException e) return e.code;
+        if (t instanceof java.sql.SQLException) return CODE_SQL_ERROR;
+        return CODE_SQL_ERROR;
+    }
+
+    private static String messageOf(Throwable t) {
+        if (t instanceof RpcException e) return e.getMessage();
+        if (t instanceof java.sql.SQLException e) return "SQL 错误：" + e.getMessage();
+        return "内部错误：" + t;
+    }
+
     private Json.Value dispatch(String method, Json.Value params) throws Exception {
         switch (method) {
             case "initialize": return initialize(params);
             case "ping": return new Json.Obj();
-            case "shutdown": return new Json.Obj();
             case "session.open": return sessionOpen(params);
             case "session.close": {
                 session(params).close();

@@ -53,8 +53,8 @@ public final class FrameIO {
         return payload;
     }
 
-    /** 写一帧 JSON。 */
-    public void writeJson(byte[] payload) throws IOException {
+    /** 写一帧 JSON（synchronized：worker 与主线程并发写响应）。 */
+    public synchronized void writeJson(byte[] payload) throws IOException {
         int total = 5 + payload.length;
         if (total > MAX_FRAME_LEN) throw new IOException("帧超上限");
         out.write((total >>> 24) & 0xFF);
