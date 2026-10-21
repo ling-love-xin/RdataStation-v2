@@ -119,6 +119,13 @@ pub trait SessionStore: 'static {
     fn load_latest(&self) -> Result<Option<SavedSession>, String>;
     /// 按会话标识取（测试与将来的"恢复指定文档"用）
     fn load(&self, id: &str) -> Result<Option<SavedSession>, String>;
+    /// 取全部持久化会话（启动多文档恢复用；按最近更新倒序，上限由调用方定）
+    ///
+    /// 默认空实现：**未实现方不会静默丢数据**——多文档恢复对它们天然退化为
+    /// "没得恢复"（与 `load_latest` 返回 `None` 同语义），但明确可查。
+    fn load_all(&self) -> Result<Vec<SavedSession>, String> {
+        Ok(Vec::new())
+    }
 }
 
 /// 内存实现（测试用；也用于"宿主未接存储"时让功能可用而不是失败）
@@ -168,6 +175,10 @@ impl SessionStore for MemorySessionStore {
 
     fn load(&self, id: &str) -> Result<Option<SavedSession>, String> {
         Ok(self.sessions.borrow().get(id).cloned())
+    }
+
+    fn load_all(&self) -> Result<Vec<SavedSession>, String> {
+        Ok(self.sessions.borrow().values().cloned().collect())
     }
 }
 
@@ -245,6 +256,24 @@ mod tests {
         assert_eq!(loaded.cursor, 7);
         assert_eq!(loaded.selection, Some((1, 3)));
         assert_eq!(store.len(), 1);
+    }
+
+    /// 【E3 多文档恢复】内存实现的全量加载：多份都回来
+    #[test]
+    fn memory_store_loads_everything_back() {
+        let store = MemorySessionStore::new();
+        store
+            .save(&session("d:/sql/a.sql", "select 1;", EditorMode::Sql))
+            .expect("save");
+        store
+            .save(&session("d:/sql/b.sql", "select 2;", EditorMode::Analysis))
+            .expect("save");
+
+        let all = store.load_all().expect("load all");
+        assert_eq!(all.len(), 2, "多文档恢复要拿到每一份，不是只最近一份");
+        let mut contents: Vec<&str> = all.iter().map(|s| s.content.as_str()).collect();
+        contents.sort_unstable();
+        assert_eq!(contents, vec!["select 1;", "select 2;"]);
     }
 
     /// 【B1】连接绑定也是文档属性：与模式 / 通道一样得跟着会话回来

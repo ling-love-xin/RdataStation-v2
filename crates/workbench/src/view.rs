@@ -586,19 +586,20 @@ impl WorkbenchView {
         }
     }
 
-    /// 恢复上次的编辑器会话（A12）
+    /// 恢复上次的全部编辑器会话（A12 + E3 多文档恢复）
     ///
     /// 内容与模式取自会话（**不是从磁盘重读**：用户上次可能没保存），光标/选区交回面板。
+    /// 顺序：最早编辑的先开（tab 从左到右按历史），最近编辑的最后开并成为活动文档。
     /// 恢复成功后把启动时那份空的未命名文档收掉，免得每启动一次多一个空标签。
     ///
     /// 调用时机：`init_workspace` 的 `cx.defer_in`（读库是 I/O，不在构造与渲染里做）。
-    pub fn restore_last_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(Some(session)) = self.editor_service.load_latest_session() else {
+    pub fn restore_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(sessions) = self.editor_service.load_all_sessions() else {
             return;
         };
-        let Some(path) = session.path.clone() else {
+        if sessions.is_empty() {
             return;
-        };
+        }
 
         // 启动时那份空的未命名文档（在 `new` 里开的）——恢复成功后收掉
         let blank = self
@@ -609,35 +610,46 @@ impl WorkbenchView {
             .find(|doc| doc.path().is_none() && doc.content().trim().is_empty())
             .map(|doc| doc.id().clone());
 
-        let outcome = self.editor_service.open(editor::service::OpenRequest::file(
-            std::path::PathBuf::from(path),
-            session.content.clone(),
-            session.mode,
-        ));
-        let document = outcome.id().clone();
-        self.show_document(document.clone(), window, cx);
+        // 全局库按最近更新倒序（DESC）；反转成"最早编辑的先开"，
+        // 让最近编辑的文档最后 open 并成为活动标签（与 VSCode 重启后的直觉一致）
+        for session in sessions.into_iter().rev() {
+            let Some(path) = session.path.clone() else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
 
-        let restored = self
-            .editor_hosts
-            .iter()
-            .find(|panel| panel.read(cx).document() == &document)
-            .cloned();
-        if let Some(panel) = restored {
-            panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
-        }
+            let outcome = self.editor_service.open(editor::service::OpenRequest::file(
+                std::path::PathBuf::from(path),
+                session.content.clone(),
+                session.mode,
+            ));
+            let document = outcome.id().clone();
+            self.show_document(document.clone(), window, cx);
 
-        // 收掉空标签（走标准关闭路径：面板移除 → `on_removed` → 文档从服务层关掉）
-        if let Some(blank) = blank
-            && blank != document
-            && let Some(area) = self.area.clone()
-        {
-            let blank_panel = self
+            let restored = self
                 .editor_hosts
                 .iter()
-                .find(|panel| panel.read(cx).document() == &blank)
+                .find(|panel| panel.read(cx).document() == &document)
                 .cloned();
-            if let Some(panel) = blank_panel {
-                editor::view::host::close_document_in_dock(&area, panel, window, cx);
+            if let Some(panel) = restored {
+                panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+            }
+
+            // 收掉空标签（走标准关闭路径：面板移除 → `on_removed` → 文档从服务层关掉）
+            if let Some(blank) = blank.clone()
+                && blank != document
+                && let Some(area) = self.area.clone()
+            {
+                let blank_panel = self
+                    .editor_hosts
+                    .iter()
+                    .find(|panel| panel.read(cx).document() == &blank)
+                    .cloned();
+                if let Some(panel) = blank_panel {
+                    editor::view::host::close_document_in_dock(&area, panel, window, cx);
+                }
             }
         }
     }
@@ -973,12 +985,47 @@ impl WorkbenchView {
             if right_target != Some(ws_target.clone()) {
                 right.update(cx, |panel, cx| panel.set_target(ws_target, cx));
             }
+            // T18：已洞察表集合快照 → 右栏管理列表（中间页 `opened` 变化都经此同步）
+            let entries = panel_for_sync.read(cx).insight_set_entries(cx);
+            right.update(cx, |panel, cx| panel.set_insight_set(entries, cx));
         }));
         let handle = panel_handle(panel.clone());
         area.update(cx, |area, cx| {
             area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
         });
         panel.update(cx, |panel, cx| panel.open_target(target, cx));
+        insight::focus_insight_workspace_tab(&panel, window, cx);
+    }
+
+    /// T18：消费右栏集合的「对比」请求——中间页勾选该表 + 切到对比形态 + 激活中央 tab。
+    ///
+    /// 面板未建时集合里不可能有表（集合来自中间页 `opened`，同源），此分支只防御：
+    /// 丢弃请求，不编候选。
+    fn consume_insight_compare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.shared.pending_insight_compare.borrow_mut().take() else {
+            return;
+        };
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        let Some(panel) = self
+            .shared
+            .insight_workspace_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+        else {
+            return;
+        };
+        let exists = panel.read(cx).opened().iter().any(|entry| entry.key == key);
+        if !exists {
+            return;
+        }
+        panel.update(cx, |panel, cx| {
+            panel.toggle_candidate(&key, cx);
+            panel.set_mode(insight::workspace::WorkspaceMode::Compare, cx);
+        });
+        let _ = area;
         insight::focus_insight_workspace_tab(&panel, window, cx);
     }
 
@@ -1264,9 +1311,9 @@ impl WorkbenchView {
         self.editor = Some(editor);
         self.right_sidebar = Some(right_sidebar);
 
-        // A12：恢复上次会话（读库是 I/O → 放到 `defer_in`，不在构造/渲染里做）
+        // A12 + E3：恢复上次的全部编辑器会话（读库是 I/O → 放到 `defer_in`，不在构造/渲染里做）
         cx.defer_in(window, |this, window, cx| {
-            this.restore_last_session(window, cx);
+            this.restore_sessions(window, cx);
         });
     }
 
@@ -2888,6 +2935,12 @@ impl Render for WorkbenchView {
         if self.shared.pending_insight_target.borrow().is_some() {
             cx.defer_in(window, |this, window, cx| {
                 this.ensure_insight_workspace_panel(window, cx);
+            });
+        }
+        // T18：右栏集合「对比」请求 → 中间页切到对比形态（勾选该表 + 激活中央 tab）。
+        if self.shared.pending_insight_compare.borrow().is_some() {
+            cx.defer_in(window, |this, window, cx| {
+                this.consume_insight_compare(window, cx);
             });
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。

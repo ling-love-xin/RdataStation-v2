@@ -391,6 +391,65 @@ impl WorkbenchContextStore {
         })
     }
 
+    /// 加载**全部**编辑器上下文（启动多文档恢复用）
+    ///
+    /// 按最近更新倒序返回，`LIMIT` 由调用方（workbench 恢复侧）决定是否需要上限；
+    /// 未命名 / 空文档本就只存在内存、不落库，不会出现在这里。
+    pub fn load_all_editor_contexts(&self) -> Result<Vec<EditorContext>, CoreError> {
+        self.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end,
+                            toolbar, schema, tab_size, hard_tabs, result_height, updated_at_ms
+                     FROM editor_contexts ORDER BY updated_at_ms DESC",
+                )
+                .map_err(|e| {
+                    CoreError::storage(StorageError::Persistence {
+                        store: "sqlite".to_string(),
+                        operation: "prepare_load_all_editor_contexts".to_string(),
+                        reason: e.to_string(),
+                    })
+                })?;
+
+            let contexts = stmt
+                .query_map([], |row| {
+                    Ok(EditorContext {
+                        id: row.get(0)?,
+                        connection_id: row.get(1)?,
+                        mode: row.get(2)?,
+                        channel: row.get(3)?,
+                        content: row.get(4)?,
+                        cursor_position: row.get::<_, i64>(5)? as usize,
+                        selection_start: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
+                        selection_end: row.get::<_, Option<i64>>(7)?.map(|v| v as usize),
+                        toolbar: row.get(8)?,
+                        schema: row.get(9)?,
+                        tab_size: row.get::<_, i64>(10)? as usize,
+                        hard_tabs: row.get::<_, i64>(11)? != 0,
+                        result_height: row.get::<_, f64>(12)? as f32,
+                        updated_at_ms: row.get::<_, i64>(13)? as u64,
+                    })
+                })
+                .map_err(|e| {
+                    CoreError::storage(StorageError::Persistence {
+                        store: "sqlite".to_string(),
+                        operation: "query_map_load_all_editor_contexts".to_string(),
+                        reason: e.to_string(),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    CoreError::storage(StorageError::Persistence {
+                        store: "sqlite".to_string(),
+                        operation: "collect_load_all_editor_contexts".to_string(),
+                        reason: e.to_string(),
+                    })
+                })?;
+
+            Ok(contexts)
+        })
+    }
+
     /// 删除连接相关的所有上下文
     pub fn delete_connection_contexts(&self, connection_id: &str) -> Result<usize, CoreError> {
         self.with_connection(|conn| {
@@ -586,6 +645,35 @@ mod tests {
         assert_eq!(loaded.mode, "text");
         assert_eq!(loaded.content, "select 2;");
         assert_eq!(store.load_editor_context("nope.sql").expect("load"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 【E3 多文档恢复】全量加载：多份都回来，且按最近更新倒序
+    #[test]
+    fn load_all_editor_contexts_returns_every_row_newest_first() {
+        let (dir, db) = temp_db("load_all");
+        let store = open_store(&db);
+
+        // 三份文档，更新时刻刻意乱序（保存顺序 ≠ 时间顺序）
+        let mut newest = context("b.sql", "sql");
+        newest.updated_at_ms = 3_000;
+        let mut middle = context("a.sql", "text");
+        middle.updated_at_ms = 2_000;
+        let mut oldest = context("c.sql", "analysis");
+        oldest.updated_at_ms = 1_000;
+        store.save_editor_context(&oldest).expect("save old");
+        store.save_editor_context(&newest).expect("save new");
+        store.save_editor_context(&middle).expect("save mid");
+
+        let all = store.load_all_editor_contexts().expect("load all");
+        let ids: Vec<&str> = all.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["b.sql", "a.sql", "c.sql"],
+            "倒序按 updated_at_ms，与保存顺序无关"
+        );
+        assert!(all.iter().all(|c| c.channel == "source"), "行映射复用同一条列路径");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

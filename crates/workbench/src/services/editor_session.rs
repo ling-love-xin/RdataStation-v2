@@ -128,6 +128,17 @@ impl SessionStore for WorkbenchSessionStore {
             .map_err(|error| error.to_string())?
             .map(Self::to_session))
     }
+
+    /// 全量加载（启动多文档恢复用）：全局库按最近更新倒序返回，未命名/空文档不落库天然缺席
+    fn load_all(&self) -> Result<Vec<SavedSession>, String> {
+        Ok(self
+            .store
+            .load_all_editor_contexts()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(Self::to_session)
+            .collect())
+    }
 }
 
 fn now_ms() -> u64 {

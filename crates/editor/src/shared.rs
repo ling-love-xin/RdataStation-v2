@@ -757,6 +757,15 @@ impl EditorShared {
         }
     }
 
+    /// 取全部持久化会话（启动多文档恢复用；未注入存储时视为没有）
+    pub fn load_all_sessions(&self) -> Result<Vec<SavedSession>, String> {
+        let guard = self.sessions.borrow();
+        match guard.as_ref() {
+            Some(store) => store.load_all(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// 注入另存为路径选择器（**宿主调用一次**：workbench 接 `rfd`）
     pub fn attach_save_path_picker(&self, picker: SavePathPicker) {
         *self.save_path.borrow_mut() = Some(picker);
