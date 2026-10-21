@@ -18,7 +18,9 @@
 //! `labels()` 不碰 GPUI：哪一段该出现、数字是多少，全部可以在单测里穷举（三条只读组合、
 //! 语句数随内容变化）。`render()` 只负责把它画成一行。
 
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::Icon;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -118,6 +120,101 @@ pub struct StatusLabels {
     pub right: Vec<String>,
 }
 
+/// 右段单个微标：图标 + 文案（VSCode 式：语义徽标带图标、数据徽标纯文字）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusBadge {
+    pub icon: Option<IconName>,
+    pub text: String,
+}
+
+/// 计算右段微标（纯函数，**唯一真相源**）
+///
+/// [`labels`] 的 `right` 从这里派生（只取文案，657 条测试断字符串不受影响）；
+/// `render` 用它画图标 + 文案。语义徽标（只读 / 连接只读 / 脏 / 模式 / 语句数）图标化，
+/// 数据微标（定位 / 选区 / 编码 / 换行 / 缩进 / 大小）保留文字——VSCode 同款。
+pub fn right_badges(inputs: &StatusInputs) -> Vec<StatusBadge> {
+    let mut badges: Vec<StatusBadge> = Vec::new();
+    // 两个只读维度分别表达（图标语义：编辑器只读 = 锁，连接只读 = 锁 + 数据库）
+    if inputs.read_only.editor {
+        badges.push(StatusBadge {
+            icon: Some(IconName::Lock),
+            text: "只读".to_string(),
+        });
+    }
+    if inputs.read_only.connection {
+        badges.push(StatusBadge {
+            icon: Some(IconName::Lock),
+            text: "连接只读".to_string(),
+        });
+    }
+    // 定位（VSCode `Ln 1, Col 1`；数据微标，纯文字）
+    badges.push(StatusBadge {
+        icon: None,
+        text: format!("Ln {}, Col {}", inputs.line, inputs.column),
+    });
+    // 选区：选中字符（Ch）+ 选中行（Row）——原型 §2.5 的 `Ch 0` · `Row 1`；无选区不摆
+    if inputs.selected_chars > 0 {
+        badges.push(StatusBadge {
+            icon: None,
+            text: format!("Ch {}", inputs.selected_chars),
+        });
+    }
+    if inputs.selected_rows > 0 {
+        badges.push(StatusBadge {
+            icon: None,
+            text: format!("Row {}", inputs.selected_rows),
+        });
+    }
+    // 编码 / 换行 / 缩进 / 大小：文档级保存格式（2c：打开按磁盘检测、菜单可切），独立微标
+    badges.push(StatusBadge {
+        icon: None,
+        text: inputs.format.encoding.short_label().to_string(),
+    });
+    badges.push(StatusBadge {
+        icon: None,
+        text: inputs.format.eol.label().to_string(),
+    });
+    badges.push(StatusBadge {
+        icon: None,
+        text: if inputs.hard_tabs {
+            "Tab".to_string()
+        } else {
+            format!("Spaces: {}", inputs.tab_size)
+        },
+    });
+    badges.push(StatusBadge {
+        icon: None,
+        text: human_size(inputs.bytes),
+    });
+    // SQL 模式：语句数（原型 ⑧ 状态栏的 `2 条语句`；语义徽标带图标）
+    if inputs.mode == EditorMode::Sql {
+        badges.push(StatusBadge {
+            icon: Some(IconName::Hash),
+            text: format!("{} 条语句", inputs.statements),
+        });
+    }
+    // 模式（原型 ⑧ 状态栏末尾的 `SQL`；语义徽标带图标，与工具栏模式选择器同源）
+    badges.push(StatusBadge {
+        icon: Some(crate::toolbar::mode_icon(inputs.mode)),
+        text: inputs.mode.short_label().to_string(),
+    });
+    if inputs.dirty {
+        badges.push(StatusBadge {
+            icon: Some(IconName::Circle),
+            text: "脏".to_string(),
+        });
+    }
+    // 多光标（列编辑）徽标：真实光标数，行编辑模式下恒为 1 不显示
+    if inputs.cursor_count > 1 {
+        badges.push(StatusBadge {
+            icon: None,
+            text: format!("{} 光标", inputs.cursor_count),
+        });
+    }
+
+    badges
+}
+
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     // 连接段独立成一段：面包屑控件渲染时用它替代（控件显示 连接▸库▸Schema，比纯文本信息量更大）
@@ -172,46 +269,13 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         body.truncate(body.len() - " · ".len());
     }
 
-    // 右段微标（VSCode 式独立分段，原型 §2.5）：每项一个元素，窄窗口从左裁
-    let mut right: Vec<String> = Vec::new();
-    // 两个只读维度分别表达
-    if inputs.read_only.editor {
-        right.push("只读".to_string());
-    }
-    if inputs.read_only.connection {
-        right.push("连接只读".to_string());
-    }
-    // 定位（VSCode `Ln 1, Col 1`）
-    right.push(format!("Ln {}, Col {}", inputs.line, inputs.column));
-    // 选区：选中字符（Ch）+ 选中行（Row）——原型 §2.5 的 `Ch 0` · `Row 1`；无选区不摆
-    if inputs.selected_chars > 0 {
-        right.push(format!("Ch {}", inputs.selected_chars));
-    }
-    if inputs.selected_rows > 0 {
-        right.push(format!("Row {}", inputs.selected_rows));
-    }
-    // 编码 / 换行 / 缩进 / 大小：文档级保存格式（2c：打开按磁盘检测、菜单可切），独立微标
-    right.push(inputs.format.encoding.short_label().to_string());
-    right.push(inputs.format.eol.label().to_string());
-    right.push(if inputs.hard_tabs {
-        "Tab".to_string()
-    } else {
-        format!("Spaces: {}", inputs.tab_size)
-    });
-    right.push(human_size(inputs.bytes));
-    // SQL 模式：语句数（原型 ⑧ 状态栏的 `2 条语句`）
-    if inputs.mode == EditorMode::Sql {
-        right.push(format!("{} 条语句", inputs.statements));
-    }
-    // 模式（原型 ⑧ 状态栏末尾的 `SQL`；通用模式左段已含环境族，右段仍标模式）
-    right.push(inputs.mode.short_label().to_string());
-    if inputs.dirty {
-        right.push("脏".to_string());
-    }
-    // 多光标（列编辑）徽标：真实光标数，行编辑模式下恒为 1 不显示
-    if inputs.cursor_count > 1 {
-        right.push(format!("{} 光标", inputs.cursor_count));
-    }
+    // 右段微标（VSCode 式独立分段，原型 §2.5）：每项一个元素，窄窗口从左裁。
+    // 文案与图标都来自 `right_badges`（唯一真相源）；`labels` 只取文案，
+    // `render` 画图标 + 文案——两者不各写一遍语义判断。
+    let right = right_badges(inputs)
+        .into_iter()
+        .map(|b| b.text)
+        .collect::<Vec<_>>();
 
     StatusLabels {
         connection,
@@ -256,6 +320,7 @@ pub fn render(
     cx: &App,
 ) -> impl IntoElement {
     let text = labels(inputs);
+    let badges = right_badges(inputs);
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
     let border = theme.colors.border;
@@ -268,6 +333,8 @@ pub fn render(
         .gap_1()
         .text_xs()
         .text_color(muted)
+        .flex_1()
+        .min_w_0()
         .children(controls.breadcrumb)
         .when(!has_breadcrumb, |row| {
             row.child(text.connection.unwrap_or_default())
@@ -276,20 +343,29 @@ pub fn render(
         .when(text.dialect.is_some(), |row| {
             row.child(text.dialect.clone().unwrap())
         })
-        .child(text.body)
+        // 正文超宽时收缩截断而不是把右段推出窗口（VSCode 左段同款行为）
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_ellipsis()
+                .child(text.body),
+        )
         .children(controls.tx);
 
     // 右段微标（VSCode 式）：每个微标独立成段，段间用竖线分隔；宽窗口全显、
     // 窄窗口从左裁（`flex_none` + 容器 `overflow_hidden`）——不会整段消失。
+    // 语义徽标（只读 / 连接只读 / 模式 / 语句数 / 脏）带图标，数据微标纯文字。
     let mut right = div()
         .h_flex()
         .items_center()
         .gap_1()
         .text_xs()
         .text_color(muted)
+        .flex_none()
         .children(controls.edit_mode)
         .children(controls.reset_menu);
-    for (index, badge) in text.right.iter().enumerate() {
+    for (index, badge) in badges.iter().enumerate() {
         if index > 0 {
             right = right.child(
                 div()
@@ -298,10 +374,15 @@ pub fn render(
                     .bg(border),
             );
         }
+        let mut content = div().h_flex().items_center().gap_0p5();
+        if let Some(icon) = badge.icon {
+            content = content.child(Icon::new(icon).size_3().text_color(muted));
+        }
+        content = content.child(badge.text.clone());
         let badge = div()
             .flex_none()
             .debug_selector(move || format!("status-badge-{}", index))
-            .child(badge.clone());
+            .child(content);
         right = right.child(badge);
     }
     right = right.children(controls.interrupt);

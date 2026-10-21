@@ -52,7 +52,9 @@ pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
-const MIN_LINE_NUMBER_DIGITS: usize = 3;
+// 行号槽宽度随行数位数动态变化：小文档只留 1 位（VSCode 式紧凑行号区），
+// 位数不足时不空占宽度（原保底 3 位会无谓加宽行号区）。
+const MIN_LINE_NUMBER_DIGITS: usize = 1;
 const MAX_LINE_NUMBER_DIGITS: usize = 7;
 const MAX_DISPLAYED_LINE_NUMBER: usize = 9_999_999;
 

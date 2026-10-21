@@ -378,13 +378,13 @@ fn wait_for_scan(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>, fe
     }
 }
 
-/// 【B17】折叠：候选真的喂进了内核（构造一次），编辑后还会重算
+/// 【B17】折叠：行号槽收窄后折叠入口随槽关闭，候选不再喂进内核
 ///
 /// 内核没有公开的候选读口（`display_map` 不在公开面上），所以这里用探针（`fold::probe`）
-/// 确认**路径走到了**：打开文档一次、文本变更后又一次。折叠的**视觉**结果（侧边 chevron、
-/// 点击折叠）由内核渲染，属人工看一眼的那一类。
+/// 确认**路径真的没走**：打开文档、文本变更后都不喂候选——`sync_fold` 走的是
+/// `set_folding(false)` 分支（见 `Capabilities::folding: false` 与 `fold::is_enabled`）。
 #[gpui_kit::test]
-fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext) {
+fn folding_candidates_are_not_fed_after_the_gutter_shrunk(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
@@ -395,7 +395,7 @@ fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext)
             start_line: 0,
             end_line: 3
         }],
-        "这段 SQL 只有一个可折的行块（括号组）"
+        "文本本身仍有可折行块（`fold_spans` 是纯文本分析，与开关无关）"
     );
 
     let (shared, id) = shared_with_document("folding.sql", sql);
@@ -403,49 +403,37 @@ fn folding_candidates_reach_the_kernel_and_follow_edits(cx: &mut TestAppContext)
 
     let (panel, cx) = open_panel(cx, &shared, &id);
     let (feeds_at_open, candidates_at_open) = fold::probe::read();
-    assert!(
-        feeds_at_open > feeds_before,
-        "打开文档时应当喂过一次候选（构造路径）"
+    assert_eq!(
+        feeds_at_open, feeds_before,
+        "折叠入口已随行号槽关闭：打开文档不应喂候选（构造路径）"
     );
-    assert_eq!(candidates_at_open, 1, "构造时喂进去的正是那一个候选");
+    assert_eq!(
+        candidates_at_open, usize::MAX,
+        "关闭后从未喂过候选（探针哨兵 MAX = 从未记录，不是 0 个候选）"
+    );
 
     // 改一次文本：`Ctrl+/`（行注释开关）走 `replace_all`——与模板 / 格式化 / 转译**同一条**
-    // 内容替换路径，最终都发 `InputEvent::Change`。（逐字打字那条路要窗口先注册文本 handler，
-    // 这套 headless harness 不走它；本用例要验的是"内容变了有没有重算候选"。）
-    //
-    // 第一行被注释后，`(` 落进行注释、不再是代码里的括号 → 候选必须变成 0：
-    // 这一步才证明候选是**从当下文本重算**的，而不是"又调了一次同样的东西"。
+    // 内容替换路径，最终都发 `InputEvent::Change`。
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
     cx.update(|window, cx| window.focus(&handle, cx));
     cx.simulate_keystrokes("ctrl-/");
-    // 【B18】扫描已挪到后台：等回执被泵回填，再读探针
-    wait_for_scan(cx, &panel, feeds_at_open);
+    // 等一帧让替换落地（折叠已关，没有扫描回执可等；只等文本变更处理完）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 
     let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
     assert_eq!(text, format!("-- {sql}"), "注释真的落到文本上");
     let (feeds_after_comment, candidates_after_comment) = fold::probe::read();
-    assert!(
-        feeds_after_comment > feeds_at_open,
-        "文本变了就要重喂候选（内核不会替我们平移）"
+    assert_eq!(
+        feeds_after_comment, feeds_at_open,
+        "文本变了也不重喂候选（关闭状态：折叠不随内容变化）"
     );
     assert_eq!(
-        candidates_after_comment, 0,
-        "注释掉的括号不该再产候选（候选跟着内容走）"
+        candidates_after_comment, usize::MAX,
+        "关闭后内核候选恒为从未喂过哨兵"
     );
 
-    // 再按一次 → 去注释 → 候选回到 1（重算不是单向的）
-    let (feeds_after_comment, _) = fold::probe::read();
-    cx.simulate_keystrokes("ctrl-/");
-    wait_for_scan(cx, &panel, feeds_after_comment);
-    let (feeds_after_restore, candidates_after_restore) = fold::probe::read();
-    assert!(
-        feeds_after_restore > feeds_after_comment,
-        "还原也是一次文本变更"
-    );
-    assert_eq!(candidates_after_restore, 1, "去注释后括号回到代码里");
-
-    // 带着新候选再画一帧：候选若越界或反序，`FoldRange::new` 的断言会在这里爆
+    // 带着"无候选"再画一帧：确认渲染路径在无折叠下不炸
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 

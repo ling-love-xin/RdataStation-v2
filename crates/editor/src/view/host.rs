@@ -3056,7 +3056,8 @@ impl EditorHostPanel {
             .primary()
             .small()
             .debug_selector(|| "editor-exec-run".to_string())
-            .label("执行")
+            .icon(crate::toolbar::ToolbarItemId::ExecRun.icon())
+            .tooltip("执行（Ctrl+Enter）")
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.execute_preferring_selection(cx));
             })
@@ -3069,7 +3070,8 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-exec-all".to_string())
-            .label("全部运行")
+            .icon(crate::toolbar::ToolbarItemId::ExecAll.icon())
+            .tooltip("全部运行（Ctrl+Shift+Enter）")
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.run_all(cx));
             })
@@ -3098,7 +3100,8 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(move || selector.to_string())
-            .label(id.label())
+            .icon(id.icon())
+            .tooltip(id.label())
             .disabled(!available)
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.execute_menu_kind(kind, cx));
@@ -3140,12 +3143,14 @@ impl EditorHostPanel {
             ToolbarItemId::Translate => Button::new("editor-translate")
                 .ghost()
                 .small()
-                .label("方言转换"),
+                .icon(ToolbarItemId::Translate.icon())
+                .tooltip(ToolbarItemId::Translate.label()),
             ToolbarItemId::Template => Button::new("editor-template")
                 .ghost()
                 .small()
-                .disabled(self.shared.completion_templates().is_empty())
-                .label("模板"),
+                .icon(ToolbarItemId::Template.icon())
+                .tooltip(ToolbarItemId::Template.label())
+                .disabled(self.shared.completion_templates().is_empty()),
             ToolbarItemId::TxAutoCommit => self.render_tx_auto_commit_button(cx),
             ToolbarItemId::Format => self.render_format_button(cx),
             ToolbarItemId::History => self.render_history_button(cx),
@@ -3203,7 +3208,8 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-format".to_string())
-            .label("格式化")
+            .icon(crate::toolbar::ToolbarItemId::Format.icon())
+            .tooltip("格式化")
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| panel.format_document(window, cx));
             })
@@ -3219,7 +3225,8 @@ impl EditorHostPanel {
             .small()
             .disabled(!available)
             .debug_selector(|| "editor-history".to_string())
-            .label("历史")
+            .icon(crate::toolbar::ToolbarItemId::History.icon())
+            .tooltip("历史")
             .on_click(move |_, _window, app| {
                 if entity.read(app).shared.open_history_port().is_none() {
                     // 未接端口：状态栏给原因，而不是“点了没反应”
@@ -3240,7 +3247,8 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-explain".to_string())
-            .label("执行计划")
+            .icon(crate::toolbar::ToolbarItemId::Explain.icon())
+            .tooltip("执行计划")
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.explain_current(cx));
             })
@@ -3261,7 +3269,8 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-translate".to_string())
-            .label("方言转换 ▾")
+            .icon(crate::toolbar::ToolbarItemId::Translate.icon())
+            .tooltip("方言转换")
             .dropdown_menu(move |menu, window, cx| {
                 menu.submenu("转译为", window, cx, {
                     let entity = entity.clone();
@@ -3296,7 +3305,8 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-template".to_string())
             .disabled(!has_templates)
-            .label("模板 ▾")
+            .icon(crate::toolbar::ToolbarItemId::Template.icon())
+            .tooltip("模板")
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 for (index, template) in templates.iter().enumerate() {
@@ -3324,7 +3334,8 @@ impl EditorHostPanel {
             .small()
             .debug_selector(|| "editor-autocommit".to_string())
             .toggled(self.autocommit)
-            .label("自动提交")
+            .icon(crate::toolbar::ToolbarItemId::TxAutoCommit.icon())
+            .tooltip("自动提交")
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.toggle_autocommit(cx));
             })

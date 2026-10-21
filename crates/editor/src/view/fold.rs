@@ -1,5 +1,13 @@
 //! 折叠的**视图侧**（B17）：把纯函数算出的候选喂给编辑内核
 //!
+//! ## 当前状态（2026-10-21：行号槽收窄，折叠入口随槽关闭）
+//!
+//! 用户确认「关折叠槽」后，折叠 chevron 没有 18px 槽位可画，点击折叠入口随之消失：
+//! `Capabilities::folding` 置 `false`，`sync_fold` 恒走 `set_folding(false)` 分支，
+//! 本模块的 `install` / `refresh` 不再被调用（`fold_spans` 纯文本分析仍保留，测试可复用）。
+//! 若未来恢复折叠：把能力表 `folding` 置回 `true` 并同步打开行号槽（vendor
+//! `layout_line_numbers` 的折叠槽分支），本模块即可直接复活。
+//!
 //! ## 内核这边是什么情况（读 `gpui-base` 0.7.1 源码得来，别猜）
 //!
 //! 机制齐全、候选外供：
@@ -12,8 +20,8 @@
 //! | 喂候选的公开入口 | `EditorState::apply_highlighter_fold_candidates`（`state.rs:825`） | 公开可用（自带 `mode.is_folding()` 门） |
 //! | 渲染与点击折叠 | `element.rs` 的 `paint_fold_icons`（chevron + 点击） | 内核负责，我们不画 |
 //!
-//! 于是本模块只做两件事：**打开文档时喂一次**、**每次文本变更后再喂一次**（不重喂会指到别的行——
-//! 这一点是本模块存在的主要理由，不是"顺手补个功能"）。
+//! 关闭前本模块只做两件事：**打开文档时喂一次**、**每次文本变更后再喂一次**（不重喂会指到别的行——
+//! 这一点是本模块存在的主要理由，不是"顺手补个功能"）。代码路径保留（见上），便于恢复。
 //!
 //! ## 三条取舍
 //!
@@ -32,10 +40,10 @@ use crate::model::EditorMode;
 
 /// 该模式是否启用折叠
 ///
-/// 折叠是**缓冲区的编辑能力**，不是语言服务：文本模式（记事本）与 SQL 模式都该有；
-/// 分析模式是逐单元语言、单元层结构属 1c，现在整篇笔记不开（与 `view/highlight` 同一口径）。
-pub fn is_enabled(mode: EditorMode) -> bool {
-    matches!(mode, EditorMode::General | EditorMode::Sql)
+/// 行号槽收窄后折叠入口随槽关闭（chevron 没有槽位可画，点击折叠入口消失），
+/// `Capabilities::folding` 一并置 false；本函数与能力表同口径，恢复折叠需同步开两处。
+pub fn is_enabled(_mode: EditorMode) -> bool {
+    false
 }
 
 /// 候选 → 内核形状（纯函数，可逐条断言）
@@ -95,10 +103,10 @@ mod tests {
     use crate::model::EditorMode;
 
     #[test]
-    fn folding_is_on_for_buffers_and_off_for_the_notebook() {
-        assert!(is_enabled(EditorMode::General));
-        assert!(is_enabled(EditorMode::Sql));
-        // 分析模式是逐单元结构（1c），整篇笔记不开
+    fn folding_is_off_everywhere_after_the_gutter_shrunk() {
+        // 行号槽收窄后折叠入口随槽关闭：所有模式都不开（能力表 `folding: false` 同口径）
+        assert!(!is_enabled(EditorMode::General));
+        assert!(!is_enabled(EditorMode::Sql));
         assert!(!is_enabled(EditorMode::Analysis));
     }
 

@@ -210,8 +210,9 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::None,
                 completion: false,
-                // 折叠是缓冲区的编辑能力（与语言服务无关）：记事本也该能折括号块
-                folding: true,
+                // 行号槽收窄后折叠入口随槽关闭（chevron 没有槽位可画）；
+                // 恢复折叠需先恢复行号区折叠槽（vendor `layout_line_numbers`）
+                folding: false,
                 execute: false,
                 output: OutputTarget::None,
                 channel: false,
@@ -222,7 +223,8 @@ impl Capabilities {
                 kind: DocumentKind::Document,
                 language: LanguageService::Sql,
                 completion: true,
-                folding: true,
+                // 同上：行号槽收窄，折叠入口关闭
+                folding: false,
                 execute: true,
                 output: OutputTarget::DockPanel,
                 channel: true,
@@ -276,8 +278,8 @@ mod tests {
         assert!(!caps.channel);
         assert_eq!(caps.output, OutputTarget::None);
         assert_eq!(caps.toolbar, ToolbarStyle::Minimal);
-        // 折叠是编辑能力、不是语言服务：记事本也有（与 `language: None` 不矛盾）
-        assert!(caps.folding);
+        // 行号槽收窄后折叠入口随槽关闭（chevron 无槽可画）；不是语言服务问题
+        assert!(!caps.folding);
         assert_eq!(caps.language, LanguageService::None);
     }
 
