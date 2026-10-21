@@ -1,0 +1,1839 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洞察 EDA 报告原型 · RdataStation</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A84A38'/%3E%3Ctext x='16' y='22' font-family='Segoe UI, sans-serif' font-size='15' font-weight='700' fill='%23fff' text-anchor='middle'%3ERS%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --chrome: #181818;
+    --editor: #1F1F1F;
+    --popover: #202020;
+    --border: #2A2A2A;
+    --border-soft: #232323;
+    --text: #CCCCCC;
+    --muted: #858585;
+    --dim: #6E6E6E;
+    --coral: #A84A38;
+    --coral-bright: #C25B46;
+    --coral-fg: #FFFFFF;
+    --active: #2A2A2A;
+    --hover: #2A2A2A;
+    --success: #4A9B6B;
+    --warning: #C9A23A;
+    --danger: #D0534A;
+    --info: #4A8BC9;
+    --titlebar-h: 36px;
+    --activity-w: 48px;
+    --right-w: 280px;
+    --status-h: 22px;
+    --tab-h: 36px;
+    --radius: 6px;
+    --mono: "Cascadia Mono", "Consolas", monospace;
+    --sans: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow-x: auto; }
+  body { font-family: var(--sans); font-size: 13px; color: var(--text); background: var(--chrome); min-width: 1000px; }
+  @media (max-width: 980px) {
+    body { overflow-x: auto; }
+  }
+  button { font-family: inherit; font-size: 12px; color: var(--text); background: transparent; border: none; cursor: pointer; }
+  button:focus-visible { outline: 1px solid var(--coral); outline-offset: -1px; }
+  select { font-family: inherit; font-size: 12px; color: var(--text); background: var(--editor); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #3A3A3A; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  /* ===== 标题栏 ===== */
+  .titlebar { height: var(--titlebar-h); flex: none; display: flex; align-items: center; gap: 12px; padding: 0 8px 0 12px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  .tb-logo { width: 20px; height: 20px; border-radius: 4px; background: var(--coral); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 11px; }
+  .tb-slot { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; background: #252526; border-radius: 4px; font-size: 12px; }
+  .tb-slot .k { color: var(--dim); }
+  .tb-center { flex: 1; display: flex; justify-content: center; }
+  .quick-open { width: 320px; height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 10px; background: #252526; border-radius: 4px; color: var(--dim); font-size: 12px; cursor: pointer; }
+  .quick-open:hover { background: #2A2A2A; }
+  .tb-right { display: flex; align-items: center; gap: 2px; }
+  .win-btn { width: 36px; height: 30px; display: flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 4px; }
+  .win-btn:hover { background: var(--hover); color: var(--text); }
+  .win-btn.close:hover { background: var(--danger); color: #fff; }
+
+  /* ===== 工作区 ===== */
+  .workbench { flex: 1; display: flex; min-height: 0; }
+  .activity { width: var(--activity-w); flex: none; background: var(--chrome); border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 4px; }
+  .activity.right { border-right: none; border-left: 1px solid var(--border); }
+  .activity .icon { position: relative; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--dim); }
+  .activity .icon:hover { background: var(--hover); color: var(--text); }
+  .activity .icon.active { color: #fff; }
+  .activity .icon.active::before { content: ""; position: absolute; left: -4px; top: 8px; bottom: 8px; width: 2px; background: #fff; border-radius: 1px; }
+  .activity .icon .badge { position: absolute; top: 4px; right: 4px; min-width: 14px; height: 14px; padding: 0 3px; background: var(--coral); color: #fff; border-radius: 7px; font-size: 10px; line-height: 14px; text-align: center; }
+  .activity .spacer { flex: 1; }
+
+  /* ===== 右 Dock ===== */
+  .dock { flex: none; display: flex; flex-direction: column; background: var(--chrome); min-height: 0; }
+  .dock.right { width: var(--right-w); border-left: 1px solid var(--border); }
+  .dock-head { height: var(--tab-h); flex: none; display: flex; align-items: center; padding: 0 10px; color: var(--muted); font-size: 11px; letter-spacing: 0.5px; }
+
+  /* 右栏工具栏（对齐 Mock 模块） */
+  .right-toolbar { flex: none; display: flex; align-items: center; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  .tb-btn { width: 26px; height: 26px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--muted); border-radius: 4px; position: relative; }
+  .tb-btn:hover { background: var(--hover); color: var(--text); }
+  .tb-btn.spacer { flex: 1; }
+  .tb-btn .tip { display: none; position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: var(--popover); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px; font-size: 11px; white-space: nowrap; z-index: 6; }
+  .tb-btn:hover .tip { display: block; }
+  .tb-btn.disabled { opacity: .35; pointer-events: none; }
+
+  /* 洞察表集合 */
+  .right-body { flex: 1; overflow-y: auto; padding: 10px; }
+  .it-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 2px 2px 8px; }
+  .it-head .cnt { font-size: 11px; color: var(--dim); background: #2A2A2A; border-radius: 8px; padding: 0 6px; }
+  .it-head .act { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+  .it-head .mini-switch { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; }
+  .it-head .mini-switch input { accent-color: var(--coral); }
+  .it-list { display: flex; flex-direction: column; gap: 6px; }
+  .it-row { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; cursor: pointer; }
+  .it-row:hover { border-color: #3A3A3A; }
+  .it-row.cur { outline: 1px solid var(--coral); }
+  .it-row .r1 { display: flex; align-items: center; gap: 6px; }
+  .it-row .r1 .sel { flex: none; display: none; }
+  .multi .it-row .r1 .sel { display: block; }
+  .it-row .r1 .nm { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .it-row .r1 .rows { margin-left: auto; font-size: 11px; color: var(--dim); font-family: var(--mono); flex: none; }
+  .it-row .r2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .it-row .r2 .src { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .it-row .r2 .ops { margin-left: auto; display: flex; gap: 4px; flex: none; }
+  .it-row .ops .btn { font-size: 10.5px; height: 20px; padding: 0 7px; }
+  .it-note { font-size: 11px; color: var(--dim); margin-top: 8px; line-height: 1.6; }
+  .it-actions { flex: none; display: none; gap: 6px; padding: 8px 2px 2px; }
+  .it-actions.show { display: flex; }
+  .it-actions .btn { flex: 1; justify-content: center; }
+
+  /* 选中表下钻区 */
+  .drillzone { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .dz-title { font-size: 11px; color: var(--dim); letter-spacing: .5px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .dz-title .tt { font-family: var(--mono); color: var(--muted); font-weight: 600; }
+  .summary-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
+  .sc-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+  .sc-head .tt { font-family: var(--mono); color: var(--info); }
+  .kv { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: var(--mono); }
+  .grade-ring { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .ring { position: relative; width: 44px; height: 44px; flex: none; }
+  .ring svg { transform: rotate(-90deg); }
+  .ring .gv { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .ring-legend { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+  .ring-legend b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+
+  /* 表画像 */
+  .tbl-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--border-soft); }
+  .tbl-row .cn { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tbl-row .ck { flex: none; width: 34px; font-size: 10.5px; text-align: center; padding: 1px 0; border-radius: 3px; }
+  .tbl-row .cm { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); flex: none; }
+  .tbl-row .cm.bad { color: var(--danger); }
+  .tbl-eval { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .tbl-eval .row { display: flex; justify-content: space-between; font-size: 12px; }
+  .tbl-eval .row .k { color: var(--muted); }
+  .tbl-eval .row .v { font-family: var(--mono); }
+
+  /* 多列聚合统计（后续占位） */
+  .agg-placeholder { border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px; text-align: center; color: var(--dim); font-size: 11.5px; line-height: 1.7; }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--muted); }
+  .empty-state .t { font-size: 13px; color: var(--text); }
+
+  /* ===== 中央 ===== */
+  .center { flex: 1; display: flex; flex-direction: column; background: var(--editor); min-width: 0; min-height: 0; }
+  .tab-strip { height: var(--tab-h); flex: none; display: flex; align-items: stretch; background: var(--chrome); border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tab-strip::-webkit-scrollbar { height: 0; }
+  .ctab { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 12.5px; color: var(--muted); border-right: 1px solid var(--border); max-width: 240px; white-space: nowrap; cursor: pointer; position: relative; }
+  .ctab .nm { overflow: hidden; text-overflow: ellipsis; }
+  .ctab .close { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 3px; color: var(--dim); }
+  .ctab .close:hover { background: var(--hover); color: var(--text); }
+  .ctab.active { color: var(--text); background: var(--editor); }
+  .ctab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--coral); }
+  .ctab .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--dim); }
+  .ctab .dot.busy { background: var(--warning); animation: pulse 1s infinite; }
+  .ctab .dot.done { background: var(--success); }
+  .tab-new { width: 34px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--dim); cursor: pointer; }
+  .tab-new:hover { color: var(--text); }
+
+  .center-body { flex: 1; min-height: 0; position: relative; }
+  .page { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .page.active { display: flex; }
+  .page-scroll { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
+
+  /* ===== EDA 报告 ===== */
+  .report-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .rh-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; font-family: var(--mono); }
+  .rh-sub { font-size: 12px; color: var(--muted); }
+  .rh-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .tag { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 3px; font-size: 11px; font-weight: 500; }
+  .tag.sample { background: rgba(74,139,201,.16); color: #7FB0E0; }
+  .tag.full { background: rgba(74,155,107,.16); color: #6FBF8C; }
+  .tag.kind-source { background: var(--coral); color: #fff; }
+  .tag.kind-rs { background: rgba(74,139,201,.18); color: #9CC3E8; }
+  .tag.kind-csv { background: #3F3F5A; color: #B0A8E8; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 4px; color: var(--text); background: transparent; border: 1px solid var(--border); font-size: 12px; }
+  .btn:hover { background: var(--hover); border-color: #3A3A3A; }
+  .btn.primary { background: var(--coral); border-color: var(--coral); color: #fff; }
+  .btn.primary:hover { background: var(--coral-bright); }
+  .btn.ghost { border-color: transparent; }
+  .btn.ghost:hover { background: var(--hover); border-color: transparent; }
+
+  .section { margin-bottom: 18px; }
+  .sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .sec-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .sec-note { font-size: 11.5px; color: var(--dim); }
+
+  /* 概览五卡 */
+  .overview-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .o-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+  .o-card .k { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .o-card .v { font-size: 17px; font-weight: 600; font-family: var(--mono); }
+  .o-card .v.warn { color: var(--warning); }
+  .o-card .v.ok { color: var(--success); }
+  .o-card .s { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+  /* 类型分布 */
+  .type-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #2E2E2E; margin-bottom: 8px; }
+  .type-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .type-legend .it { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+  .type-legend .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+  /* 警告区 */
+  .alert-box { display: flex; flex-direction: column; gap: 6px; }
+  .alert-item { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--chrome); }
+  .alert-item .lvl { flex: none; width: 40px; text-align: center; font-size: 11px; padding: 2px 0; border-radius: 3px; }
+  .alert-item .lvl.sev { background: rgba(208,83,74,.15); color: var(--danger); }
+  .alert-item .lvl.warn { background: rgba(201,162,58,.14); color: var(--warning); }
+  .alert-item .lvl.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .alert-item .msg { color: var(--text); }
+  .alert-item .col { margin-left: auto; font-family: var(--mono); color: var(--info); font-size: 11.5px; flex: none; }
+  .alert-item .val { flex: none; font-family: var(--mono); color: var(--muted); font-size: 11.5px; }
+
+  /* 报告主 Tab */
+  .report-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .rtab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 12.5px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .rtab:hover { color: var(--text); }
+  .rtab.active { color: var(--text); border-bottom-color: var(--coral); }
+  .rtab .cnt { font-size: 11px; color: var(--dim); background: #2A2A2A; border-radius: 8px; padding: 0 6px; height: 15px; line-height: 15px; }
+
+  /* ===== 字段筛选器：搜索定位 + 下拉多选（200+ 字段） ===== */
+  .filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; position: relative; }
+  .filter-bar input[type=text] { height: 26px; padding: 0 8px; background: var(--editor); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; width: 170px; font-family: inherit; }
+  .filter-bar input[type=text]::placeholder { color: var(--dim); }
+  .filter-bar .cnt { font-size: 11.5px; color: var(--dim); margin-left: auto; }
+  .filter-bar .lbl { font-size: 11px; color: var(--dim); }
+  /* 下拉多选弹层（模拟 Combobox multiple+searchable） */
+  .col-pop-wrap { position: relative; }
+  .col-pop-trigger { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--editor); font-size: 12px; color: var(--text); }
+  .col-pop-trigger:hover { border-color: #3A3A3A; }
+  .col-pop-trigger .cnt { color: var(--coral-bright); font-family: var(--mono); margin-left: auto; }
+  .col-pop { display: none; position: absolute; top: calc(100% + 4px); left: 0; width: 300px; max-height: 320px; background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0,0,0,.45); z-index: 8; flex-direction: column; }
+  .col-pop.open { display: flex; }
+  .col-pop .cp-search { display: flex; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
+  .col-pop .cp-search input { flex: 1; height: 24px; padding: 0 8px; background: var(--editor); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; }
+  .col-pop .cp-list { flex: 1; overflow-y: auto; padding: 4px; max-height: 220px; }
+  .col-pop .cp-list .cck { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; padding: 3px 6px; border-radius: 3px; }
+  .col-pop .cp-list .cck:hover { background: var(--hover); }
+  .col-pop .cp-list .cck input { accent-color: var(--coral); flex: none; }
+  .col-pop .cp-list .cck .cn { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .col-pop .cp-list .cck .cm { margin-left: auto; font-size: 10.5px; color: var(--dim); flex: none; }
+  .col-pop .cp-foot { display: flex; align-items: center; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
+  .col-pop .cp-foot .cnt { font-size: 11px; color: var(--dim); margin-left: auto; }
+
+  /* 列卡：折叠概要 + 展开四区 */
+  .col-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .col-card { background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; }
+  .col-card:hover { border-color: #3A3A3A; }
+  .col-card .cc-head { display: flex; align-items: center; gap: 8px; }
+  .cc-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+  .kind-badge { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 3px; }
+  .kind-badge.text { background: rgba(74,139,201,.16); color: #7FB0E0; }
+  .kind-badge.num { background: rgba(74,155,107,.16); color: #6FBF8C; }
+  .kind-badge.dt { background: rgba(154,106,201,.16); color: #B48FE0; }
+  .kind-badge.bool { background: rgba(106,168,138,.16); color: #82C4A4; }
+  .kind-badge.unk { background: rgba(110,110,110,.18); color: #9A9A9A; }
+  .cc-chev { margin-left: auto; color: var(--dim); font-size: 14px; flex: none; }
+  .cc-stats { display: flex; gap: 10px; font-size: 11px; color: var(--dim); margin-top: 5px; }
+  .cc-stats .m b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+  .cc-stats .m.miss b { color: var(--danger); }
+  .cc-vis { margin-top: 8px; }
+  .cc-body { display: none; margin-top: 10px; border-top: 1px solid var(--border-soft); padding-top: 10px; }
+  .col-card.open .cc-body { display: block; }
+  /* 展开态四区 Tab */
+  .cc-zones { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+  .cc-zone { padding: 4px 9px; font-size: 11.5px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .cc-zone:hover { color: var(--text); }
+  .cc-zone.active { color: var(--text); border-bottom-color: var(--coral); }
+  .cc-zone-only { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); cursor: pointer; user-select: none; }
+  .cc-zone-only input { accent-color: var(--coral); }
+  .cc-zone-body { font-size: 12px; }
+  .cc-detail { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 16px; }
+  .cc-detail .row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--border-soft); }
+  .cc-detail .row span { color: var(--muted); }
+  .cc-detail .row b { font-family: var(--mono); font-weight: 500; }
+  .cc-detail.full { grid-template-columns: 1fr; }
+  /* 规则命中 */
+  .rule-list { display: flex; flex-direction: column; gap: 5px; }
+  .rule-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--chrome); }
+  .rule-item .st { flex: none; width: 32px; text-align: center; font-size: 10.5px; padding: 1px 0; border-radius: 3px; }
+  .rule-item .st.pass { background: rgba(74,155,107,.14); color: var(--success); }
+  .rule-item .st.fail { background: rgba(208,83,74,.15); color: var(--danger); }
+  .rule-item .rn { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rule-item .rm { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
+
+  /* 迷你分布 */
+  .freq-rows { display: flex; flex-direction: column; gap: 3px; }
+  .freq-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+  .freq-row .fk { width: 92px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-family: var(--mono); text-align: right; }
+  .freq-row .ftrk { flex: 1; height: 10px; background: #2E2E2E; border-radius: 3px; overflow: hidden; }
+  .freq-row .ftrk i { display: block; height: 100%; background: var(--coral); opacity: .75; border-radius: 3px; }
+  .freq-row .fv { width: 34px; flex: none; color: var(--muted); font-family: var(--mono); }
+  .mini-bar.num { display: flex; align-items: flex-end; gap: 3px; height: 52px; }
+  .mini-bar .bk { flex: 1; background: var(--coral); opacity: .72; border-radius: 2px 2px 0 0; position: relative; min-height: 6px; }
+  .mini-bar .bk:hover { opacity: 1; }
+  .bktip { display: none; position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: var(--popover); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px; font-size: 11px; white-space: nowrap; z-index: 5; }
+  .mini-bar .bk:hover .bktip { display: block; }
+  .range-line { display: flex; gap: 8px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .bool-split { display: flex; height: 10px; border-radius: 3px; overflow: hidden; }
+  .bool-split i.t { background: var(--success); }
+  .bool-split i.f { background: var(--danger); }
+  .bool-legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  /* 缺失矩阵 */
+  .miss-list { display: flex; flex-direction: column; gap: 5px; }
+  .miss-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .miss-row .mk { width: 140px; flex: none; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); text-align: right; }
+  .miss-row .mt { flex: 1; height: 10px; background: #2E2E2E; border-radius: 3px; overflow: hidden; }
+  .miss-row .mt i { display: block; height: 100%; border-radius: 3px; }
+  .miss-row .mv { width: 48px; flex: none; font-family: var(--mono); color: var(--muted); font-size: 11px; }
+
+  /* 关联性：列对选择 + 三分段 */
+  .corr-pick { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; position: relative; }
+  .corr-pick .lbl { font-size: 11px; color: var(--dim); }
+  .corr-wrap { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; }
+  .corr-matrix { display: flex; flex-direction: column; gap: 2px; }
+  .corr-cell { width: 38px; height: 26px; display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-family: var(--mono); color: #101010; border-radius: 2px; }
+  .corr-labels { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+  .corr-label { width: 90px; height: 26px; display: flex; align-items: center; font-size: 11px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .corr-legend { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--dim); margin-top: 6px; }
+  .corr-grad { width: 90px; height: 8px; border-radius: 3px; background: linear-gradient(90deg, rgb(210,80,70), rgb(120,120,80), rgb(40,195,95)); }
+  .corr-empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 22px 18px; text-align: center; color: var(--muted); font-size: 12.5px; }
+  .corr-empty .t { color: var(--text); margin-bottom: 6px; font-weight: 500; }
+
+  .rel-seg { display: flex; gap: 2px; margin-bottom: 10px; }
+  .rel-seg .seg { padding: 5px 10px; font-size: 12px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: transparent; }
+  .rel-seg .seg:hover { color: var(--text); }
+  .rel-seg .seg.active { color: var(--text); background: var(--active); border-color: var(--coral); }
+
+  .fk-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .fk-row { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--chrome); }
+  .fk-row .from { font-family: var(--mono); color: var(--text); flex: none; }
+  .fk-row .arrow { color: var(--dim); flex: none; }
+  .fk-row .to { font-family: var(--mono); color: var(--info); flex: none; }
+  .fk-row .ov { flex: none; color: var(--warning); font-weight: 500; }
+  .fk-row .note { color: var(--muted); margin-left: auto; }
+  .fk-empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 22px 18px; text-align: center; color: var(--muted); font-size: 12.5px; }
+  .fk-empty .t { color: var(--text); margin-bottom: 6px; font-weight: 500; }
+
+  .cat-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .cat-row { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--chrome); }
+  .cat-row .pair { font-family: var(--mono); color: var(--text); flex: none; }
+  .cat-row .v { flex: none; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cat-row .note { color: var(--muted); margin-left: auto; }
+
+  /* 样本 */
+  .sample-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  .sample-table table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  .sample-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .sample-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sample-note { font-size: 11.5px; color: var(--dim); margin-top: 8px; }
+
+  /* 质量对比（多选 ≥2 后中间页展示） */
+  .cmp-table { border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+  .cmp-table table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  .cmp-table th, .cmp-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-soft); text-align: left; white-space: nowrap; }
+  .cmp-table th { font-weight: 600; color: var(--muted); font-size: 11.5px; background: var(--chrome); }
+  .cmp-table td { font-family: var(--mono); }
+  .cmp-table .hd { background: var(--chrome); color: var(--text); font-weight: 600; }
+  .cmp-table .ok { color: var(--success); }
+  .cmp-table .warn { color: var(--warning); }
+  .cmp-table .bad { color: var(--danger); }
+
+  /* 下钻按钮 */
+  .drill { margin-top: 10px; }
+  .drill .btn { font-size: 11px; height: 22px; padding: 0 8px; }
+
+  /* 原型说明 */
+  .proto-note { margin-top: 22px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 11.5px; color: var(--dim); line-height: 1.7; }
+
+  /* ===== 状态栏 ===== */
+  .statusbar { height: var(--status-h); flex: none; display: flex; align-items: center; background: var(--coral); color: var(--coral-fg); font-size: 11px; padding: 0 10px; gap: 12px; }
+  .statusbar .right { margin-left: auto; display: flex; gap: 12px; }
+  .statusbar .item { display: flex; align-items: center; gap: 4px; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  /* ===== 值得关注（探索价值排序，替代分级警告） ===== */
+  .worth-list { display: flex; flex-direction: column; gap: 2px; }
+  .worth-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
+  .worth-item:hover { background: var(--hover); }
+  .worth-item .why { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 8px; background: rgba(255,255,255,.06); color: var(--dim); }
+  .worth-item .why.miss { color: #E0A06A; }
+  .worth-item .why.high { color: #8FC0E8; }
+  .worth-item .msg { flex: 1; font-size: 12px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .worth-item .col { flex: none; font-size: 11px; color: var(--info); font-family: var(--mono); }
+  .worth-item .val { flex: none; font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  .worth-item .go { flex: none; font-size: 10px; color: var(--dim); }
+
+  /* ===== 关联方法选择 ===== */
+  .rel-method { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .rel-method .lbl { font-size: 11px; color: var(--dim); }
+  .rel-method select { height: 22px; background: var(--popover); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; padding: 0 4px; }
+  .kind-filter { height: 22px; background: var(--popover); border: 1px solid var(--border); color: var(--text); border-radius: 4px; font-size: 11px; padding: 0 4px; }
+
+  /* ===== 列卡探索徽标 / 正态性 / 检查器不适用态 ===== */
+  .cc-explore { flex: none; font-size: 10px; padding: 1px 5px; border-radius: 8px; background: rgba(255,255,255,.05); color: var(--dim); }
+  .cc-explore.hot { color: #E0A06A; }
+  .norm-line { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 8px; border-radius: var(--radius); background: rgba(255,255,255,.03); font-size: 11px; flex-wrap: wrap; }
+  .norm-line .nlabel { color: var(--dim); flex: none; }
+  .norm-line .nval { font-family: var(--mono); }
+  .norm-line .njudge { flex: none; font-weight: 600; }
+  .norm-line.ok { border-left: 2px solid var(--success); }
+  .norm-line.warn { border-left: 2px solid var(--warning); }
+  .norm-line.bad { border-left: 2px solid var(--danger); }
+  .rule-item .st.na { background: transparent; color: var(--dim); border: 1px dashed var(--border); }
+
+  /* ===== 资产库审计视图（归档资产 · 版本快照 · 趋势） ===== */
+  .archive-head { display: flex; align-items: center; gap: 10px; padding: 10px 0 4px; }
+  .archive-head .ah-name { font-size: 15px; font-weight: 600; }
+  .archive-head .ah-meta { font-size: 11px; color: var(--dim); }
+  .archive-metrics { display: flex; gap: 8px; margin: 10px 0; }
+  .am-card { flex: 1; background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+  .am-card .k { font-size: 11px; color: var(--dim); }
+  .am-card .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .am-card .s { font-size: 10.5px; color: var(--dim); margin-top: 1px; }
+  .archive-timeline { margin: 8px 0; }
+  .tl-row { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-soft); align-items: center; }
+  .tl-row .tl-v { flex: none; width: 52px; font-weight: 600; font-size: 12px; color: var(--info); }
+  .tl-row .tl-t { flex: none; width: 118px; font-size: 11px; color: var(--dim); }
+  .tl-row .tl-m { flex: 1; display: flex; gap: 14px; font-size: 11px; flex-wrap: wrap; }
+  .tl-row .tl-m .m b { color: var(--dim); font-weight: 400; }
+  .tl-row .tl-grade { flex: none; font-size: 11px; font-weight: 600; }
+  .trend-wrap { display: flex; gap: 28px; margin: 6px 0 4px; }
+  .trend-block { flex: 1; }
+  .trend-block .tb-title { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .trend-bars { display: flex; align-items: flex-end; gap: 14px; height: 44px; padding: 4px 0; }
+  .trend-col { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .trend-col .bar { width: 22px; border-radius: 2px 2px 0 0; background: var(--info); }
+  .trend-col .bar.ok { background: var(--success); }
+  .trend-col .bar.warn { background: var(--warning); }
+  .trend-col .lbl { font-size: 10px; color: var(--dim); }
+  .checks-hist td.na, .checks-hist .na { color: var(--dim); }
+  .checks-hist { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  .checks-hist th, .checks-hist td { font-size: 11px; padding: 4px 6px; text-align: left; border-bottom: 1px solid var(--border-soft); }
+  .checks-hist th { color: var(--dim); font-weight: 400; }
+  .checks-hist .hd { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== 标题栏 ===== -->
+  <div class="titlebar">
+    <div class="tb-logo">RS</div>
+    <div class="tb-slot"><span class="k">项目</span><span>RdataStation-v2</span></div>
+    <div class="tb-center">
+      <div class="quick-open">Ctrl+P 快速打开</div>
+    </div>
+    <div class="tb-right">
+      <div class="win-btn">—</div>
+      <div class="win-btn">□</div>
+      <div class="win-btn close">✕</div>
+    </div>
+  </div>
+
+  <div class="workbench">
+    <!-- ===== 活动栏 ===== -->
+    <div class="activity">
+      <div class="icon active" title="数据源"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+      <div class="icon" title="编辑器"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 5l6 7-6 7"/></svg></div>
+      <div class="icon" title="洞察" data-view="eda"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 17l5-6 4 4 6-9"/><path d="M15 6h6v6"/></svg></div>
+      <div class="icon" title="资产库（归档 · 审计）" data-view="archive"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M8 13h8"/></svg></div>
+      <div class="spacer"></div>
+      <div class="icon" title="设置"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg></div>
+    </div>
+
+    <!-- ===== 中央 ===== -->
+    <div class="center">
+      <div class="tab-strip">
+        <div class="ctab active"><span class="dot done"></span><span class="nm" id="ctabName">洞察 · inventory_log</span><span class="close">✕</span></div>
+        <div class="tab-new">+</div>
+      </div>
+      <div class="center-body">
+        <div class="page active">
+          <div class="page-scroll" id="edaRoot"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 右活动栏 ===== -->
+    <div class="activity right">
+      <div class="icon active" title="面板"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></div>
+    </div>
+
+    <!-- ===== 右 Dock：工具栏 + 洞察表集合 + 选中表下钻 ===== -->
+    <div class="dock right">
+      <div class="dock-head" id="dockHead">洞察</div>
+      <div class="right-toolbar">
+        <button class="tb-btn" id="tbRules" title="规则管理"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="tip">规则管理</span></button>
+        <button class="tb-btn" id="tbRecalc" title="重算画像"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg><span class="tip">重算画像</span></button>
+        <button class="tb-btn" id="tbRefresh" title="刷新"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg><span class="tip">刷新</span></button>
+        <button class="tb-btn" id="tbFull" title="全量统计"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg><span class="tip">全量统计</span></button>
+        <span class="tb-btn spacer"></span>
+        <button class="tb-btn" id="tbNew" title="新建洞察"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg><span class="tip">新建洞察</span></button>
+      </div>
+      <div class="right-body">
+        <div class="it-head">
+          <span>已洞察表</span><span class="cnt" id="itCount">4</span>
+          <span class="act">
+            <label class="mini-switch"><input type="checkbox" id="multiSel"><span>多选</span></label>
+          </span>
+        </div>
+        <div class="it-list" id="itList"></div>
+        <div class="it-actions" id="itActions">
+          <button class="btn primary" id="btnQualityCmp" title="对勾选的表做质量对比">质量对比</button>
+        </div>
+        <div class="it-note">洞察对象统一为 DuckDB 临时表（源表取样 / 结果集 / CSV 映射）。勾选多张表可做质量对比；表间可关系排查（值重叠）；需要持久化的归档到分析存档。</div>
+
+        <!-- 选中表下钻区 -->
+        <div class="drillzone">
+          <div class="dz-title"><span>当前目标下钻</span><span class="tt" id="dzTarget">inventory_log</span></div>
+          <div class="summary-card">
+            <div class="sc-head"><span>摘要</span></div>
+            <div class="grade-ring" id="gradeRing"></div>
+            <div id="dzSummary"></div>
+          </div>
+          <div class="summary-card">
+            <div class="sc-head"><span>表画像</span></div>
+            <div id="dzTable"></div>
+          </div>
+          <div class="summary-card">
+            <div class="sc-head"><span>多列聚合统计</span></div>
+            <div class="agg-placeholder">选中列做 GROUP BY 分组 / 求和 / 均值 / 计数（DBeaver 式聚合）——后续实现</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 状态栏 ===== -->
+  <div class="statusbar">
+    <span>RdataStation</span>
+    <div class="right"><span class="item" id="sbScope">取样 500 行</span><span class="item" id="sbObject">源表</span></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+ * 洞察 EDA 原型 · 渲染与交互
+ * 对象类型：source（源表，可 FK）/ resultset（结果集，天然全量）/ csv（草稿箱文件）
+ * 布局：中间 = EDA 报告（概览/筛选器/列分布/关联性/样本）
+ *       右栏 = 工具栏 + 已洞察表集合（多选质量对比）+ 选中表下钻（摘要/表画像/多列聚合占位）
+ * ============================================================ */
+const KIND_LABEL = { text: "文本", num: "数值", dt: "时间", bool: "布尔", unk: "未识别" };
+const KIND_CLS = { text: "text", num: "num", dt: "dt", bool: "bool", unk: "unk" };
+const TYPE_COLORS = { text: "#4A8BC9", num: "#4A9B6B", dt: "#9A6AC9", bool: "#6AA88A", unk: "#6E6E6E" };
+const KIND_NAMES = { source: "源表", resultset: "结果集", csv: "CSV 文件" };
+const OBJECT_ORDER = ["inventory_log", "sales_orders", "mock_users_csv"];
+
+const state = {
+  table: "inventory_log",
+  rtab: "cols",
+  relTab: "corr",
+  relMethod: "pearson",     // 关联方法：pearson | spearman | kendall
+  kindFilter: "all",        // 列类型筛选：all | text | num | dt | bool | unk
+  openCols: new Set(["id"]),
+  filter: { q: "" },
+  selCols: null,        // 列分布勾选集合（下拉多选，切换对象时重建）
+  pickerOpen: false,    // 字段筛选下拉弹层
+  pickerQ: "",          // 下拉内搜索词
+  corrCols: null,       // 关联性列对选择（默认数值列）
+  corrPickOpen: false,
+  corrPickQ: "",
+  detailZone: "stats",  // 列卡展开区：stats/dist/quality/sample
+  ruleOnly: false,      // 列卡「只看规则属性」
+  multi: false,         // 集合多选模式
+  selTables: new Set(), // 勾选的表
+  view: "eda",          // eda | compare | archive（资产库审计）
+  archiveTable: null    // 资产库当前选中资产
+};
+
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function pct(x) { return (x * 100).toFixed(1) + "%"; }
+
+/* 探索价值：列在「值得先看」排序中的分值
+ * 高缺失 / 空值 / 高基数（唯一≈行数）/ 检查器未命中 / 分布偏离正态，都加分。
+ * 业务表 200+ 列时默认按此排序，把「有特点、要确认」的列顶到前面。 */
+function exploreScore(col, t) {
+  let s = 0;
+  if (col.missing > 0.2) s += 3;
+  else if (col.missing > 0.05) s += 1.5;
+  else if (col.missing > 0) s += 0.3;
+  const rows = parseFloat(String(t.overview[0].v).replace(/,/g, "")) || 0;
+  const u = typeof col.unique === "string" ? parseFloat(col.unique.replace(/,/g, "")) : (col.unique || 0);
+  if (rows > 0 && u > rows * 0.9 && col.name !== "id" && col.name !== "order_no") s += 2;
+  const fails = (col.rules || []).filter(r => r.pass === false && !r.na).length;
+  s += fails * 1.2;
+  if (col.norm && col.norm.judge && col.norm.judge !== "近似正态") s += 1.5;
+  return s;
+}
+
+/* ---------- 字段筛选：搜索定位 + 下拉多选（200+ 字段场景） ---------- */
+function colPop(t, idQ, idList, selSet, onToggle, pickQ) {
+  const q = (pickQ || "").toLowerCase();
+  const vis = t.columns.filter(c => !q || c.name.toLowerCase().includes(q));
+  const rows = vis.map(c => {
+    const checked = selSet.has(c.name);
+    const missCls = c.missing > 0.2 ? "miss" : "";
+    return `<label class="cck"><input type="checkbox" data-col="${esc(c.name)}" ${checked ? "checked" : ""}>
+      <span class="cn">${esc(c.name)}</span>
+      <span class="kind-badge ${KIND_CLS[c.kind]}" style="flex:none">${KIND_LABEL[c.kind]}</span>
+      <span class="cm ${missCls}">缺失 ${pct(c.missing)}</span></label>`;
+  }).join("");
+  return `<div class="col-pop ${state.pickerOpen ? "open" : ""}">
+    <div class="cp-search"><input type="text" id="${idQ}" placeholder="搜索字段定位…" value="${esc(pickQ || "")}"></div>
+    <div class="cp-list">${rows || '<div style="padding:12px;color:var(--dim);font-size:12px">无匹配字段</div>'}</div>
+    <div class="cp-foot">
+      <button class="btn ghost" id="cpAll">全选</button>
+      <button class="btn ghost" id="cpNone">反选</button>
+      <span class="cnt">已选 ${selSet.size} / ${t.columns.length} 列</span>
+    </div>
+  </div>`;
+}
+
+function colPicker(t) {
+  const trigger = `<div class="col-pop-wrap">
+    <button class="col-pop-trigger" id="colPick">列分布字段 <span class="cnt">${state.selCols.size}/${t.columns.length}</span> ▾</button>
+    ${colPop(t, "cpQ", "cpList", state.selCols)}
+  </div>`;
+  const kinds = [["all", "全部类型"], ["text", "文本"], ["num", "数值"], ["dt", "时间"], ["bool", "布尔"], ["unk", "未识别"]];
+  const kindSel = `<select id="kindFilter" title="按类型筛列" class="kind-filter">${kinds.map(([v, l]) =>
+    `<option value="${v}" ${state.kindFilter === v ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  return `<div class="filter-bar">
+    <input type="text" id="fq" placeholder="搜索字段定位…" value="${esc(state.filter.q)}">
+    ${kindSel}
+    ${trigger}
+    <button class="btn ghost" id="fAll" title="勾选全部列">全选</button>
+    <button class="btn ghost" id="fNone" title="清空勾选">反选</button>
+    <span class="cnt" id="colCnt">已选 ${state.selCols.size} / ${t.columns.length} 列</span>
+  </div>`;
+}
+
+/* 切换对象/全量时重置勾选集合为新表全部列 */
+function ensureSel(t) {
+  if (!state.selCols || state.selTable !== state.table) {
+    state.selCols = new Set(t.columns.map(c => c.name));
+    state.selTable = state.table;
+  }
+  if (!state.corrCols || state.corrTable !== state.table) {
+    state.corrCols = new Set(t.columns.filter(c => c.kind === "num" || c.kind === "bool").map(c => c.name));
+    state.corrTable = state.table;
+  }
+}
+
+/* ---------- 迷你分布 ---------- */
+function miniVis(col) {
+  const d = col.dist;
+  if (d.type === "freq") {
+    let html = '<div class="freq-rows">';
+    const total = d.items.reduce((a, b) => a + b[1], 0);
+    d.items.forEach(([k, v]) => {
+      const w = (v / d.max) * 100;
+      html += `<div class="freq-row"><span class="fk" title="${esc(k)}">${esc(k)}</span>
+        <span class="ftrk"><i style="width:${w}%"></i></span><span class="fv">${(v / total * 100).toFixed(0)}%</span></div>`;
+    });
+    return html + "</div>";
+  }
+  if (d.type === "hist") {
+    let html = '<div class="mini-bar num">';
+    d.bins.forEach((v, i) => {
+      const h = Math.max(6, (v / d.max) * 100);
+      html += `<div class="bk" style="height:${h}%"><span class="bktip">区间${i + 1}：${v}</span></div>`;
+    });
+    return html + "</div>";
+  }
+  if (d.type === "range") {
+    return `<div class="range-line"><span>${esc(d.lo)}</span><span>→</span><span>${esc(d.hi)}</span></div>`;
+  }
+  if (d.type === "bool") {
+    return `<div class="bool-split"><i class="t" style="width:${d.t}%"></i><i class="f" style="width:${100 - d.t}%"></i></div>
+      <div class="bool-legend"><span>TRUE ${d.t}%</span><span>FALSE ${100 - d.t}%</span></div>`;
+  }
+  return "";
+}
+
+/* ---------- 列卡：折叠概要 + 展开四区（统计/分布/检查器/样本）+ 只看规则 ---------- */
+function zoneBody(col, zone) {
+  if (zone === "stats") {
+    const rows = (col.stats || []).map(([k, v]) =>
+      `<div class="row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+    return `<div class="cc-detail">${rows}</div>`;
+  }
+  if (zone === "dist") {
+    // 数值列分布检验（科研级描述）：正态性 p 值 + 偏度/峰度（取样集上计算）
+    const norm = col.norm ? `<div class="norm-line ${col.norm.cls}">
+      <span class="nlabel">正态性</span>
+      <span class="nval">Shapiro-Wilk p=${col.norm.p}</span>
+      <span class="nval">偏度 ${col.norm.skew}</span>
+      <span class="nval">峰度 ${col.norm.kurt}</span>
+      <span class="njudge">${esc(col.norm.judge)}</span></div>` : "";
+    return `<div class="cc-vis">${miniVis(col)}</div>${norm}
+      <div class="sec-note" style="margin-top:6px">${esc(col.distNote || "完整分布直方图 / Top N（展开态）")}</div>`;
+  }
+  if (zone === "quality") {
+    const rows = (col.quality || []).map(([k, v, bad]) =>
+      `<div class="row"><span>${esc(k)}</span><b ${bad ? 'style="color:var(--danger)"' : ""}>${esc(v)}</b></div>`).join("");
+    return `<div class="cc-detail">${rows}</div>`;
+  }
+  if (zone === "sample") {
+    const rows = (col.samples || []).map(v =>
+      `<div class="row"><span>样本</span><b style="font-family:var(--mono)">${esc(v)}</b></div>`).join("");
+    return `<div class="cc-detail full">${rows}</div>`;
+  }
+  return "";
+}
+
+/* 检查器命中列表：四态（命中 / 未命中 / 不适用-类型 / 不适用-列排除） */
+function ruleList(col) {
+  const items = (col.rules || []).map(r => {
+    if (r.na) {
+      return `<div class="rule-item"><span class="st na">不适用</span><span class="rn">${esc(r.name)}</span><span class="rm">${esc(r.why || "类型不匹配")}</span></div>`;
+    }
+    return `<div class="rule-item"><span class="st ${r.pass ? "pass" : "fail"}">${r.pass ? "命中" : "未命中"}</span><span class="rn">${esc(r.name)}</span><span class="rm">${esc(r.msg)}</span></div>`;
+  }).join("");
+  const total = (col.rules || []).filter(r => !r.na).length;
+  const hits = (col.rules || []).filter(r => r.pass && !r.na).length;
+  const nas = (col.rules || []).filter(r => r.na).length;
+  return { items, total, hits, nas };
+}
+
+function colCard(col) {
+  const open = state.openCols.has(col.name);
+  const missCls = col.missing > 0.2 ? "miss" : "";
+  // 折叠态关键统计（比 v2 多一行：唯一/均值/空值率）
+  const statsLine = (col.statsLine || []).map(([k, v, bad]) =>
+    `<span class="m ${bad ? "miss" : ""}">${esc(k)} <b>${esc(v)}</b></span>`).join("");
+  // 探索价值徽标（默认按此排序，业务表 200+ 列时快速定位「值得看」的列）
+  const es = exploreScore(col, TABLES[state.table]);
+  const exploreBadge = es >= 3
+    ? `<span class="cc-explore hot" title="探索价值高：缺失 / 空值 / 高基数 / 检查器未命中">关注 ${es.toFixed(1)}</span>`
+    : es >= 1
+      ? `<span class="cc-explore" title="探索价值">${es.toFixed(1)}</span>`
+      : "";
+  // 展开态四区（质量区改名「检查器」，弱化审计心智）
+  const zones = [["stats", "基础统计"], ["dist", "分布"], ["quality", "检查器"], ["sample", "样本"]]
+    .map(([z, l]) => `<span class="cc-zone ${state.detailZone === z ? "active" : ""}" data-zone="${z}">${l}</span>`).join("");
+  const ruleToggle = `<label class="cc-zone-only"><input type="checkbox" id="ruleOnly" ${state.ruleOnly ? "checked" : ""}>只看规则属性</label>`;
+  const rl = ruleList(col);
+  const rules = rl.items;
+  const body = state.ruleOnly
+    ? `<div class="rule-list">${rules || '<div style="color:var(--dim)">该列无检查器属性</div>'}</div>`
+    : `<div class="cc-zones">${zones}${ruleToggle}</div><div class="cc-zone-body">${zoneBody(col, state.detailZone)}</div>${rules ? `<div style="margin-top:8px;border-top:1px dashed var(--border-soft);padding-top:8px"><div class="sec-note" style="margin-bottom:4px">检查器 ${rl.hits}/${rl.total} 命中${rl.nas ? ` · ${rl.nas} 不适用` : ""}</div><div class="rule-list">${rules}</div></div>` : ""}`;
+  return `<div class="col-card ${open ? "open" : ""}" data-col="${esc(col.name)}">
+    <div class="cc-head">
+      <span class="cc-name">${esc(col.name)}</span>
+      <span class="kind-badge ${KIND_CLS[col.kind]}">${KIND_LABEL[col.kind]}</span>
+      ${exploreBadge}
+      <span class="cc-chev">${open ? "▾" : "▸"}</span>
+    </div>
+    <div class="cc-stats">${statsLine || `<span class="m ${missCls}">缺失 <b>${pct(col.missing)}</b></span><span class="m">唯一 <b>${esc(col.unique)}</b></span>`}</div>
+    <div class="cc-vis">${open ? "" : miniVis(col)}</div>
+    <div class="cc-body">${body}
+      <div class="drill"><button class="btn ghost" data-drill="${esc(col.name)}" title="在 SQL 编辑器中打开针对该列的查询">在 SQL 编辑器中查看</button></div>
+    </div>
+  </div>`;
+}
+
+/* ---------- 值得关注（探索价值排序；替代「警告/严重」分级） ---------- */
+function worthSection(t) {
+  const reasons = { miss: "缺失", empty: "空值", high: "高基数", dup: "重复", zero: "零值", norm: "分布" };
+  const items = (t.alerts || []).filter(a => a.lvl !== "pass").map(a => {
+    let why = "miss", rank = 0;
+    if (a.msg.includes("高基数")) { why = "high"; rank = 2; }
+    else if (a.msg.includes("零值") || a.msg.includes("空串")) { why = "empty"; rank = 1.5; }
+    else if (a.msg.includes("重复")) { why = "dup"; rank = 1.5; }
+    else if (a.msg.includes("缺失")) { why = "miss"; rank = a.lvl === "sev" ? 3 : 2; }
+    else { why = "miss"; rank = 1; }
+    return { ...a, why, rank };
+  }).sort((a, b) => b.rank - a.rank);
+  if (!items.length) return `<div class="sec-note">没有需要特别关注的列。</div>`;
+  let html = `<div class="worth-list">`;
+  items.forEach(a => {
+    html += `<div class="worth-item" data-wcol="${esc(a.col)}" title="点击跳转到该列">
+      <span class="why ${a.why}">${reasons[a.why]}</span>
+      <span class="msg">${esc(a.msg)}</span><span class="col">${esc(a.col)}</span>
+      <span class="val">${esc(a.val)}</span><span class="go">›</span></div>`;
+  });
+  return html + `</div>`;
+}
+
+/* ---------- 概览 + 类型分布 ---------- */
+function overviewSection(t) {
+  let cards = '<div class="overview-grid">';
+  t.overview.forEach(o => {
+    cards += `<div class="o-card"><div class="k">${esc(o.k)}</div><div class="v ${o.cls}">${esc(o.v)}</div><div class="s">${esc(o.s)}</div></div>`;
+  });
+  cards += "</div>";
+  const keys = ["text", "num", "dt", "bool", "unk"];
+  let bar = '<div class="type-bar">';
+  let legend = '<div class="type-legend">';
+  keys.forEach(k => {
+    if (t.typeDist[k] > 0) {
+      const w = (t.typeDist[k] / t.columns.length) * 100;
+      bar += `<i style="width:${w}%;background:${TYPE_COLORS[k]}"></i>`;
+      legend += `<span class="it"><span class="sw" style="background:${TYPE_COLORS[k]}"></span>${KIND_LABEL[k]} ${t.typeDist[k]}</span>`;
+    }
+  });
+  bar += "</div>";
+  legend += "</div>";
+  return cards + bar + legend;
+}
+
+/* ---------- 关联性：列对选择 + 数值相关 / FK 候选 / 分类关联 ---------- */
+function corrColor(v) {
+  const t = Math.min(1, Math.abs(v));
+  if (v >= 0) {
+    const r = Math.round(120 - t * 120), g = Math.round(120 + t * 75), b = Math.round(80 + t * 20);
+    return `rgb(${r},${g},${b})`;
+  }
+  const r = Math.round(120 + t * 90), g = Math.round(120 - t * 80), b = Math.round(80 - t * 30);
+  return `rgb(${r},${g},${b})`;
+}
+
+/* 关联方法换算（演示）：Spearman 秩相关比 Pearson 稳健（弱相关略收敛）、Kendall 数值通常更小 */
+function corrValue(v, method) {
+  if (method === "spearman") return v > 0 ? Math.max(0, v - 0.03) : Math.min(0, v + 0.03);
+  if (method === "kendall") return v * 0.7;
+  return v;
+}
+
+function corrMatrix(t) {
+  // 只对「列对选择」勾选的数值/布尔列生成子矩阵
+  const chosen = (t.corr && t.corr.length ? t.corr[0] : []).filter(c => state.corrCols.has(c));
+  if (chosen.length < 2 || !t.corr) {
+    return `<div class="corr-empty"><div class="t">无可计算的相关性</div>${esc(t.corrNote || "勾选至少两个数值 / 布尔列生成列对矩阵。")}</div>`;
+  }
+  const full = t.corr;
+  const idx = full[0].map((c, i) => [c, i]).filter(([c]) => state.corrCols.has(c));
+  const sub = idx.map(([c, i]) => [c, ...idx.map(([, j]) => full[i + 1][j])]);
+  const [labels, ...rows] = sub;
+  let html = '<div class="corr-wrap"><div class="corr-matrix">';
+  rows.forEach((r, i) => {
+    let row = '<div style="display:flex;gap:2px">';
+    r.forEach((v, j) => {
+      const cv = corrValue(v, state.relMethod);
+      const bg = corrColor(cv);
+      row += `<div class="corr-cell" style="background:${bg}" title="${esc(labels[i])} × ${esc(labels[j])} = ${cv.toFixed(2)}">${cv.toFixed(2)}</div>`;
+    });
+    html += row + "</div>";
+  });
+  html += '</div><div><div class="corr-labels">';
+  labels.forEach(l => { html += `<div class="corr-label">${esc(l)}</div>`; });
+  html += '</div><div class="corr-legend"><span>-1</span><span class="corr-grad"></span><span>+1</span></div></div></div>';
+  const methodName = { pearson: "Pearson 线性相关", spearman: "Spearman 秩相关", kendall: "Kendall τ（序数）" }[state.relMethod];
+  html += `<div class="sec-note" style="margin-top:8px">${methodName} · ${esc(t.corrNote)}</div>`;
+  return html;
+}
+
+function corrPicker(t) {
+  const trigger = `<div class="col-pop-wrap">
+    <button class="col-pop-trigger" id="corrPick">列对选择 <span class="cnt">${state.corrCols.size}</span> ▾</button>
+    ${colPop(t, "cpQ2", "cpList2", state.corrCols)}
+  </div>`;
+  const methods = [["pearson", "Pearson r"], ["spearman", "Spearman ρ"], ["kendall", "Kendall τ"]];
+  const methodSel = `<div class="rel-method"><span class="lbl">方法</span><select id="relMethod">${methods.map(([v, l]) =>
+    `<option value="${v}" ${state.relMethod === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    <span class="cnt" style="font-size:11px;color:var(--dim)">数值 / 布尔列两两相关；分类列关联见「分类关联」</span></div>`;
+  return `${methodSel}<div class="corr-pick"><span class="lbl">参与列对分析：</span>${trigger}</div>`;
+}
+
+function fkSection(t) {
+  if (!t.fk || t.fk.length === 0) {
+    return `<div class="fk-empty"><div class="t">无 FK 候选分析</div>${esc(t.fkNote || "结果集 / CSV 无源库 catalog 上下文，无法做跨对象值重叠分析。")}</div>`;
+  }
+  let html = '<div class="fk-list">';
+  t.fk.forEach(f => {
+    html += `<div class="fk-row"><span class="from">${esc(f.from)}</span><span class="arrow">→</span><span class="to">${esc(f.to)}</span><span class="ov">重叠 ${esc(f.overlap)}</span><span class="note">${esc(f.note)}</span></div>`;
+  });
+  html += `</div><div class="sec-note" style="margin-top:8px">基于值重叠率检测（当前洞察表 × 已洞察表集合，均在 DuckDB 内存库；结果集 / CSV 表同样参与）。</div>`;
+  return html;
+}
+
+function catAssocSection(t) {
+  if (!t.catAssoc || t.catAssoc.length === 0) {
+    return `<div class="fk-empty"><div class="t">无可分类关联</div>需要至少两个低基数文本 / 布尔列。</div>`;
+  }
+  let html = '<div class="cat-list">';
+  t.catAssoc.forEach(c => {
+    html += `<div class="cat-row"><span class="pair">${esc(c.a)} × ${esc(c.b)}</span><span class="v">V=${esc(c.v)}</span><span class="note">${esc(c.note)}</span></div>`;
+  });
+  html += `</div><div class="sec-note" style="margin-top:8px">Cramér's V（0 独立 → 1 完全关联），适用于文本 / 布尔列对。</div>`;
+  return html;
+}
+
+function relSection(t) {
+  const segs = [
+    ["corr", "数值相关"], ["fk", "FK 候选"], ["cat", "分类关联"]
+  ].map(([v, l]) =>
+    `<button class="seg ${state.relTab === v ? "active" : ""}" data-rel="${v}">${l}</button>`).join("");
+  let body = "";
+  if (state.relTab === "corr") body = corrPicker(t) + corrMatrix(t);
+  else if (state.relTab === "fk") body = fkSection(t);
+  else body = catAssocSection(t);
+  return `<div class="rel-seg">${segs}</div>${body}`;
+}
+
+/* ---------- 样本 ---------- */
+function sampleSection(t) {
+  let html = `<div class="sample-table"><table class="smp"><thead><tr>`;
+  t.sample.headers.forEach(h => { html += `<th>${esc(h)}</th>`; });
+  html += "</tr></thead><tbody>";
+  t.sample.rows.forEach(r => {
+    html += "<tr>";
+    r.forEach(c => { html += `<td title="${esc(c)}">${esc(c)}</td>`; });
+    html += "</tr>";
+  });
+  html += "</tbody></table></div>";
+  html += `<div class="sample-note">${esc(t.sampleNote || "取样集前 5 行（取样模式只统计样本；全量模式展示全量前 5 行）")}</div>`;
+  return html;
+}
+
+/* ---------- 缺失矩阵 ---------- */
+function missSection(t) {
+  let html = '<div class="miss-list">';
+  [...t.columns].sort((a, b) => b.missing - a.missing).forEach(c => {
+    const w = Math.max(2, c.missing * 100);
+    const color = c.missing > 0.2 ? "var(--danger)" : c.missing > 0.05 ? "var(--warning)" : "var(--success)";
+    html += `<div class="miss-row"><span class="mk" title="${esc(c.name)}">${esc(c.name)}</span>
+      <span class="mt"><i style="width:${w}%;background:${color}"></i></span><span class="mv">${pct(c.missing)}</span></div>`;
+  });
+  return html + "</div>";
+}
+
+/* ---------- 报告头 ---------- */
+function reportHead(t) {
+  const kindTag = `<span class="tag kind-${t.kind}">${KIND_NAMES[t.kind]}</span>`;
+  const scopeTag = t.scope === "sample"
+    ? '<span class="tag sample">取样</span>'
+    : '<span class="tag full">全量</span>';
+  const scopeBtn = t.kind === "resultset"
+    ? ""
+    : `<button class="btn ghost" id="btnScope" title="${t.kind === "csv" ? "CSV 大文件默认取样；全量需手动触发" : "大表默认取样；全量需手动触发（可只选列）"}">${t.scope === "sample" ? "全量统计" : "取样统计"}</button>`;
+  return `<div class="report-head">
+    <div class="rh-title">${esc(t.name)} ${kindTag} ${scopeTag}</div>
+    <span class="rh-sub">${esc(t.source)} · ${esc(t.scopeNote)}</span>
+    <div class="rh-actions">
+      ${scopeBtn}
+      <button class="btn ghost" id="btnObject" title="切换洞察对象（源表 / 结果集 / CSV）">切换对象 ▾</button>
+      <button class="btn ghost" id="btnRefresh" title="重新取样并生成报告">刷新</button>
+      <button class="btn primary" id="btnGen" title="重新生成 EDA 报告">生成报告</button>
+    </div>
+  </div>`;
+}
+
+/* ---------- 轻量对比视图（多选 ≥2 → 中间页；事实指标，无评级感） ---------- */
+function compareView() {
+  const rows = INSIGHT_TABLES.filter(t => state.selTables.has(t.name));
+  const metricRows = [
+    ["总行数", t => t.rows, ""],
+    ["列数", t => String(t.cols), ""],
+    ["检查器命中", t => t.checks, ""],
+    ["缺失率", t => pct(t.miss), t.miss > 0.2 ? "bad" : t.miss > 0.05 ? "warn" : "ok"],
+    ["唯一率", t => pct(t.uniqueRate), ""],
+    ["值得关注", t => String(t.warns), t.warns > 3 ? "warn" : "ok"]
+  ];
+  let html = `<div class="report-head"><div class="rh-title">轻量对比 <span class="tag kind-source" style="margin-left:4px">${rows.length} 张表</span></div>
+    <span class="rh-sub">已洞察表集合 · 勾选结果并排（事实概览；深度列级对比走单表「对比」）</span>
+    <div class="rh-actions"><button class="btn ghost" id="btnBackEda">返回 EDA</button></div></div>`;
+  html += `<div class="cmp-table"><table><thead><tr><th style="width:18%">指标</th>`;
+  rows.forEach(t => { html += `<th>${esc(t.name)}</th>`; });
+  html += "</tr></thead><tbody>";
+  metricRows.forEach(([label, fn, _]) => {
+    html += `<tr><td class="hd">${label}</td>`;
+    rows.forEach(t => {
+      const cls = typeof fn === "function" ? fn(t) : "";
+      html += `<td class="${cls}">${esc(fn(t))}</td>`;
+    });
+    html += "</tr>";
+  });
+  html += "</tbody></table></div>";
+  html += `<div class="proto-note"><b>原型说明：</b>洞察表多选后的轻量并排概览（行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 / 值得关注列数）。审计与评级不在洞察侧——归档后的资产在资产库有版本级审计视图。</div>`;
+  return html;
+}
+
+/* ---------- 资产库审计视图（归档资产 · 版本快照 · 趋势） ---------- */
+/* 定位：洞察负责「看见」（会话级探索），资产库负责「记住并评判」。
+ * 归档 = 把洞察对象存为版本快照（画像 + 检查器结果）；审计长在版本上，
+ * 评级是资产元数据（参与标签 / 分组 / 检索），不搬回洞察。 */
+function archiveView() {
+  const a = ARCHIVE.find(x => x.name === state.archiveTable) || ARCHIVE[0];
+  if (!a) return `<div class="proto-note">尚无归档资产。在洞察右栏对表点「归档」即可生成带画像快照的资产版本。</div>`;
+  const last = a.versions[a.versions.length - 1];
+  const first = a.versions[0];
+  const delta = ((last.miss - first.miss) * 100).toFixed(1);
+  const deltaCls = delta <= 0 ? "ok" : "bad";
+  const cards = [
+    ["归档版本", `v${a.versions.length}`, "每次归档 = 一个画像快照"],
+    ["当前评级", `${last.grade}`, `v1 ${first.grade} → v${a.versions.length} ${last.grade}`],
+    ["最新缺失率", pct(last.miss), `较 v1 ${delta > 0 ? "上升" : "下降"} ${Math.abs(delta)}pp`],
+    ["检查器命中", `${last.checks}`, "适用检查器命中数"]
+  ].map(([k, v, s]) => `<div class="am-card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+  const tl = a.versions.map(v => `<div class="tl-row">
+    <span class="tl-v">v${v.v}</span><span class="tl-t">${esc(v.time)}</span>
+    <span class="tl-m"><span class="m">行数 <b>${esc(v.rows)}</b></span><span class="m">缺失率 <b>${pct(v.miss)}</b></span><span class="m">检查器 <b>${esc(v.checks)}</b></span></span>
+    <span class="tl-grade">评级 ${v.grade}</span></div>`).join("");
+  const missBars = a.versions.map(v =>
+    `<div class="trend-col"><span class="bar ${v.miss > 0.2 ? "warn" : "ok"}" style="height:${Math.max(6, Math.min(100, v.miss * 300))}px" title="缺失率 ${pct(v.miss)}"></span><span class="lbl">v${v.v}</span></div>`).join("");
+  const checksBars = a.versions.map(v => {
+    const [h, tot] = v.checks.split("/").map(Number);
+    const r = tot ? h / tot : 0;
+    return `<div class="trend-col"><span class="bar ${r >= 0.8 ? "ok" : "warn"}" style="height:${Math.max(6, r * 100)}px" title="检查器命中 ${v.checks}"></span><span class="lbl">v${v.v}</span></div>`;
+  }).join("");
+  const checkRows = a.checks.map(c => `<tr><td class="hd">${esc(c.name)}</td>${c.h.map((h, i) =>
+    `<td>${h === 1 ? "命中" : h === 0 ? "未命中" : "不适用"}</td>`).join("")}</tr>`).join("");
+  const vLabels = a.versions.map(v => `<th>v${v.v}</th>`).join("");
+  const head = `<div class="archive-head">
+    <div><div class="ah-name">${esc(a.name)} <span class="tag kind-source" style="margin-left:6px">归档资产</span></div>
+    <div class="ah-meta">${esc(a.path)} · 标签 ${esc(a.tags.join(" / "))} · 分组 ${esc(a.group)}</div></div></div>`;
+  return `${head}
+    <div class="archive-metrics">${cards}</div>
+    <div class="section"><div class="sec-head"><span class="sec-title">版本历史（画像快照）</span><span class="sec-note">洞察归档时自动生成快照；评级为资产元数据，参与标签 / 分组 / 检索</span></div>
+      <div class="archive-timeline">${tl}</div></div>
+    <div class="section"><div class="sec-head"><span class="sec-title">质量趋势</span><span class="sec-note">跨版本追踪（审计视角：长期观测资产质量演化）</span></div>
+      <div class="trend-wrap">
+        <div class="trend-block"><div class="tb-title">缺失率（越低越好）</div><div class="trend-bars">${missBars}</div></div>
+        <div class="trend-block"><div class="tb-title">检查器命中率（越高越好）</div><div class="trend-bars">${checksBars}</div></div>
+      </div></div>
+    <div class="section"><div class="sec-head"><span class="sec-title">检查器历史</span><span class="sec-note">逐版本检查器命中状态（不适用列不参与）</span></div>
+      <table class="checks-hist"><thead><tr><th style="width:52%">检查器</th>${vLabels}</tr></thead><tbody>${checkRows}</tbody></table></div>
+    <div class="proto-note"><b>原型说明：</b>资产库审计视图由「洞察 → 归档」闭环生成：洞察右栏对表点「归档」即生成带画像快照的新版本。审计长在版本上——评级 / 检查器历史 / 缺失率趋势都是跨版本追踪；评级是资产元数据（参与标签 / 分组 / 检索）。洞察本体保持 EDA 纯探索，无审计、无评级。</div>`;
+}
+
+/* 右栏资产库视角：归档资产列表（点击选中 → 中间审计视图联动） */
+function renderArchiveList() {
+  const list = document.getElementById("itList");
+  if (!list) return;
+  document.getElementById("dockHead").textContent = "资产库";
+  const count = document.getElementById("itCount");
+  if (count) count.textContent = String(ARCHIVE.length);
+  const actions = document.getElementById("itActions");
+  if (actions) actions.className = "it-actions";
+  list.className = "it-list";
+  list.innerHTML = ARCHIVE.map(a => {
+    const cur = a.name === state.archiveTable ? " cur" : "";
+    const last = a.versions[a.versions.length - 1];
+    return `<div class="it-row${cur}" data-arow="${esc(a.name)}">
+      <div class="r1"><span class="tag kind-source" style="flex:none">归档</span>
+        <span class="nm" title="${esc(a.name)}">${esc(a.name)}</span>
+        <span class="rows">v${a.versions.length}</span></div>
+      <div class="r2"><span class="src">${esc(a.path)} · ${esc(last.time)} · 评级 ${last.grade}</span></div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-arow]").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", () => {
+      if (state.view !== "archive") { state.view = "archive"; }
+      state.archiveTable = el.dataset.arow;
+      render();
+    });
+  });
+}
+
+/* ---------- 主渲染 ---------- */
+function render() {
+  const t = TABLES[state.table];
+  const root = document.getElementById("edaRoot");
+  if (state.view === "archive") {
+    root.innerHTML = archiveView();
+  } else if (state.view === "compare") {
+    root.innerHTML = compareView();
+  } else {
+    let html = reportHead(t);
+    html += `<div class="section">${overviewSection(t)}</div>`;
+    html += `<div class="section"><div class="sec-head"><span class="sec-title">值得关注</span><span class="sec-note">按探索价值排序（缺失 / 空值 / 高基数 / 检查器未命中）· 点击跳转到该列</span></div>${worthSection(t)}</div>`;
+    html += `<div class="report-tabs">
+      <div class="rtab ${state.rtab === "cols" ? "active" : ""}" data-rtab="cols">列分布<span class="cnt">${t.columns.length}</span></div>
+      <div class="rtab ${state.rtab === "miss" ? "active" : ""}" data-rtab="miss">缺失</div>
+      <div class="rtab ${state.rtab === "rel" ? "active" : ""}" data-rtab="rel">关联性</div>
+      <div class="rtab ${state.rtab === "sample" ? "active" : ""}" data-rtab="sample">样本</div>
+    </div>`;
+    if (state.rtab === "cols") {
+      ensureSel(t);
+      // 探索价值排序：高缺失 / 空值 / 高基数 / 检查器未命中 / 分布异常的列排前
+      const shown = t.columns
+        .filter(c => state.selCols.has(c.name))
+        .filter(c => state.kindFilter === "all" || c.kind === state.kindFilter)
+        .sort((a, b) => exploreScore(b, t) - exploreScore(a, t));
+      html += colPicker(t);
+      html += `<div class="col-grid" id="colGrid">${shown.map(colCard).join("")}</div>`;
+    } else if (state.rtab === "miss") {
+      html += missSection(t);
+    } else if (state.rtab === "rel") {
+      html += relSection(t);
+    } else {
+      html += sampleSection(t);
+    }
+    html += `<div class="proto-note"><b>原型说明：</b>数据为结构演示（非真实统计）。洞察对象三种：源表（可取样/全量 + FK 候选）、结果集（天然全量，无 FK）、CSV 文件（大文件取样/全量）。列卡默认按探索价值排序（业务表 200+ 列时先看「值得关注」的列）；展开四区含检查器（四态：命中/未命中/不适用）与数值列正态性检验；关联性支持 Pearson / Spearman / Kendall 方法切换。右栏统一管理已洞察表（多选 → 轻量对比）；「归档」把带画像快照的资产送入资产库（左活动栏切换），审计 / 评级在资产库侧，洞察本体保持 EDA 纯探索。</div>`;
+    root.innerHTML = html;
+  }
+
+  // 右侧栏与状态栏随对象联动
+  if (state.view === "archive") {
+    document.getElementById("dockHead").textContent = "资产库";
+    document.getElementById("ctabName").textContent = "资产库 · 审计";
+    document.getElementById("sbObject").textContent = "归档资产";
+    document.getElementById("sbScope").textContent = "版本快照";
+    renderArchiveList();
+  } else {
+    const kindTxt = { source: "源表 · SourceTable", resultset: "结果集 · Table", csv: "CSV 文件 · 草稿箱" }[t.kind];
+    document.getElementById("dockHead").textContent = "洞察";
+    document.getElementById("dzTarget").textContent = t.name;
+    document.getElementById("sbObject").textContent = KIND_NAMES[t.kind];
+    document.getElementById("sbScope").textContent = t.scope === "sample" ? "取样 500 行" : "全量";
+    document.getElementById("ctabName").textContent = "洞察 · " + (state.view === "compare" ? "质量对比" : t.name);
+    renderInsightTables(t);
+    renderDrillzone(t);
+    bindEvents(t);
+  }
+  syncActivityBar();
+}
+
+/* ---------- 右侧「已洞察表」集合 ---------- */
+const INSIGHT_TABLES = [
+  { name: "inventory_log", kind: "source", src: "postgres.public", rows: "128,450", cols: 12, scope: "取样 500 行", grade: 87, checks: "7/8", miss: 0.053, uniqueRate: 0.96, warns: 4 },
+  { name: "sales_orders", kind: "resultset", src: "SELECT 查询结果 · mysql.sales", rows: "18,240", cols: 8, scope: "全量", grade: 81, checks: "5/7", miss: 0.128, uniqueRate: 0.99, warns: 3 },
+  { name: "mock_users_20261018.csv", kind: "csv", src: "草稿箱", rows: "48,320", cols: 7, scope: "取样 500 行", grade: 74, checks: "5/7", miss: 0.071, uniqueRate: 0.97, warns: 3 },
+  { name: "warehouse_material", kind: "source", src: "postgres.public", rows: "2,184", cols: 9, scope: "取样 500 行", grade: 92, checks: "6/6", miss: 0.012, uniqueRate: 0.99, warns: 1 }
+];
+
+function renderInsightTables(cur) {
+  const list = document.getElementById("itList");
+  if (!list) return;
+  document.getElementById("itCount").textContent = INSIGHT_TABLES.length;
+  list.className = "it-list" + (state.multi ? " multi" : "");
+  list.innerHTML = INSIGHT_TABLES.map(t => {
+    const curMark = t.name === cur.name && !state.multi ? " cur" : "";
+    const checked = state.selTables.has(t.name);
+    return `<div class="it-row${curMark}" data-trow="${esc(t.name)}">
+      <div class="r1">
+        ${state.multi ? `<label class="sel"><input type="checkbox" data-sel="${esc(t.name)}" ${checked ? "checked" : ""}></label>` : ""}
+        <span class="tag kind-${t.kind}" style="flex:none">${KIND_NAMES[t.kind]}</span>
+        <span class="nm" title="${esc(t.name)}">${esc(t.name)}</span>
+        <span class="rows">${t.rows} 行</span>
+      </div>
+      <div class="r2"><span class="src">${esc(t.src)} · ${t.scope} · 检查器 ${t.checks}</span>
+        <span class="ops">
+          <button class="btn ghost" data-itop="对比">对比</button>
+          <button class="btn ghost" data-itop="关系">关系</button>
+          <button class="btn ghost" data-itop="归档">归档</button>
+          <button class="btn ghost" data-itop="版本" title="表级快照 / 重洞察历史">版本</button>
+        </span>
+      </div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-itop]").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", ev => {
+      ev.stopPropagation();
+      const op = el.dataset.itop;
+      if (op === "归档") {
+        const row = el.closest("[data-trow]");
+        if (row) { archiveFromInsight(row.dataset.trow); return; }
+      }
+      toast("原型演示：洞察表操作「" + op + "」");
+    });
+  });
+  document.querySelectorAll("[data-trow]").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", () => {
+      if (state.multi) return;
+      state.table = el.dataset.trow;
+      state.view = "eda";
+      render();
+    });
+  });
+  document.querySelectorAll("[data-sel]").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("change", () => {
+      const n = el.dataset.sel;
+      el.checked ? state.selTables.add(n) : state.selTables.delete(n);
+      renderInsightTables(TABLES[state.table]);
+      updateItActions();
+    });
+  });
+  const multi = document.getElementById("multiSel");
+  if (multi) {
+    multi.checked = state.multi;
+    if (!multi.dataset.bound) {
+      multi.dataset.bound = "1";
+      multi.addEventListener("change", () => {
+        state.multi = multi.checked;
+        if (!state.multi) state.selTables.clear();
+        renderInsightTables(TABLES[state.table]);
+        updateItActions();
+      });
+    }
+  }
+  updateItActions();
+}
+
+function updateItActions() {
+  const box = document.getElementById("itActions");
+  const btn = document.getElementById("btnQualityCmp");
+  if (!box || !btn) return;
+  const n = state.selTables.size;
+  box.className = "it-actions" + (n >= 2 ? " show" : "");
+  btn.textContent = n >= 2 ? `轻量对比（${n} 张）` : "轻量对比（至少勾选 2 张）";
+  btn.classList.toggle("disabled", n < 2);
+}
+
+/* ---------- 洞察 → 资产库归档（闭环演示） ---------- */
+/* 归档 = 把当前洞察对象存为资产库新版本快照（画像 + 检查器结果随版本一起落盘），
+ * 随后切入资产库审计视角。审计长在版本上：评级 / 检查器历史 / 缺失率趋势跨版本追踪。 */
+function archiveFromInsight(name) {
+  let a = ARCHIVE.find(x => x.name === name);
+  if (!a) {
+    const kindTxt = { source: "业务表", resultset: "查询结果", csv: "草稿箱" };
+    a = {
+      name, path: "分析存档/" + (kindTxt[TABLES[name] ? TABLES[name].kind : "source"] || "业务表") + "/" + name + "/",
+      tags: [kindTxt[TABLES[name] ? TABLES[name].kind : "source"] || "业务表"], group: "业务表", versions: [], checks: []
+    };
+    ARCHIVE.push(a);
+  }
+  const v = a.versions.length + 1;
+  const t = TABLES[name];
+  const meta = INSIGHT_TABLES.find(i => i.name === name);
+  const now = "2026-10-18 16:" + String((v * 7) % 60).padStart(2, "0");
+  const miss = meta ? meta.miss : 0.05;
+  const checks = meta ? meta.checks : (t ? (t.columns.filter(c => (c.rules || []).length > 0).length) + "/" + (t.columns.filter(c => (c.rules || []).length > 0).length) : "3/3");
+  const grade = Math.min(99, (meta ? meta.grade : 70) + Math.min(6, v));
+  a.versions.push({ v, time: now, rows: meta ? meta.rows : (t ? t.overview[0].v : "—"), miss, checks, grade });
+  if (!a.checks.length && t) {
+    a.checks = t.columns.filter(c => (c.rules || []).length).map(c => ({
+      name: c.name + " 检查器", h: a.versions.map(() => 0)
+    }));
+  }
+  state.view = "archive";
+  state.archiveTable = name;
+  toast("已归档「" + name + "」v" + v + "（带画像快照，可审计）");
+  render();
+}
+
+/* ---------- 选中表下钻区：摘要（检查器命中计数，无评级）+ 表画像 ---------- */
+function renderDrillzone(t) {
+  // 检查器命中环：事实计数，不做「良好/较差」评级（评级属资产库审计侧）
+  const ring = document.getElementById("gradeRing");
+  const meta = INSIGHT_TABLES.find(i => i.name === t.name) || { checks: "7/8" };
+  const [hits, tot] = (meta.checks || "7/8").split("/").map(Number);
+  const pctH = tot ? Math.round(hits / tot * 100) : 0;
+  const c = pctH >= 80 ? "var(--success)" : pctH >= 50 ? "var(--warning)" : "var(--danger)";
+  const r = 18, C = 2 * Math.PI * r;
+  ring.innerHTML = `<div class="ring"><svg width="44" height="44" viewBox="0 0 44 44">
+    <circle cx="22" cy="22" r="${r}" fill="none" stroke="#2E2E2E" stroke-width="4"/>
+    <circle cx="22" cy="22" r="${r}" fill="none" stroke="${c}" stroke-width="4" stroke-linecap="round"
+      stroke-dasharray="${(pctH / 100 * C).toFixed(1)} ${C.toFixed(1)}"/>
+    </svg><span class="gv" style="color:${c}">${hits}/${tot}</span></div>
+    <div class="ring-legend"><b>检查器命中</b><br>适用 ${tot} 条 · 命中 ${hits} 条<br>评级见归档后的资产库</div>`;
+  // 摘要关键指标
+  const sum = document.getElementById("dzSummary");
+  sum.innerHTML = `<div class="kv"><span class="k">总行数</span><span class="v">${t.overview[0].v}</span></div>
+    <div class="kv"><span class="k">列数</span><span class="v">${t.columns.length}</span></div>
+    <div class="kv"><span class="k">缺失单元格</span><span class="v">${t.overview[2].v}</span></div>
+    <div class="kv"><span class="k">重复行</span><span class="v">${t.overview[3].v}</span></div>`;
+  // 表画像：列清单（按探索价值排序前 8）+ 值得关注数
+  const tbl = document.getElementById("dzTable");
+  const sorted = [...t.columns].sort((a, b) => exploreScore(b, t) - exploreScore(a, t)).slice(0, 8);
+  const rows = sorted.map(c => {
+    const miss = c.missing > 0.2 ? "bad" : c.missing > 0.05 ? "" : "";
+    return `<div class="tbl-row"><span class="cn" title="${esc(c.name)}">${esc(c.name)}</span>
+      <span class="ck kind-badge ${KIND_CLS[c.kind]}">${KIND_LABEL[c.kind]}</span>
+      <span class="cm ${miss}">缺失 ${pct(c.missing)}</span></div>`;
+  }).join("");
+  const more = t.columns.length > 8 ? `<div class="sec-note" style="margin-top:4px">…共 ${t.columns.length} 列（完整清单见中间报告）</div>` : "";
+  const worth = (t.alerts || []).filter(a => a.lvl !== "pass").length;
+  tbl.innerHTML = rows + more + `<div class="tbl-eval">
+    <div class="row"><span class="k">值得关注列</span><span class="v">${worth} 条（缺失 / 空值 / 高基数）</span></div>
+    <div class="row"><span class="k">检查器</span><span class="v">${meta.checks} 命中</span></div>
+  </div>`;
+}
+
+function toast(msg) {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "toast";
+    t.style.cssText = "position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--popover);border:1px solid var(--border);border-radius:6px;padding:7px 14px;font-size:12px;color:var(--text);z-index:99;box-shadow:0 4px 16px rgba(0,0,0,.4);pointer-events:none;opacity:0;transition:opacity .15s";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = "1";
+  clearTimeout(t._h);
+  t._h = setTimeout(function () { t.style.opacity = "0"; }, 1600);
+}
+
+function bindChrome() {
+  document.querySelectorAll(".ctab, .win-btn, .quick-open, .tab-new").forEach(function (el) {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", function () { toast("原型演示：该控件不承载真实功能"); });
+  });
+  // 活动栏图标：带 data-view 的切换视角（洞察 / 资产库），其余演示 toast
+  document.querySelectorAll(".activity .icon").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", () => {
+      if (el.dataset.view) {
+        state.view = el.dataset.view;
+        if (state.view === "archive" && !state.archiveTable) state.archiveTable = ARCHIVE[0].name;
+        render();
+        return;
+      }
+      toast("原型演示：活动栏图标");
+    });
+  });
+  [["tbRules", "规则管理"], ["tbRecalc", "重算画像"], ["tbRefresh", "刷新洞察表"], ["tbFull", "全量统计"], ["tbNew", "新建洞察"]].forEach(([id, msg]) => {
+    const el = document.getElementById(id);
+    if (el && !el.dataset.bound) {
+      el.dataset.bound = "1";
+      el.addEventListener("click", () => toast("原型演示：" + msg));
+    }
+  });
+}
+
+/* 活动栏高亮：当前视角（洞察 / 资产库） */
+function syncActivityBar() {
+  document.querySelectorAll(".activity .icon[data-view]").forEach(el => {
+    el.classList.toggle("active", state.view === el.dataset.view);
+  });
+}
+
+function bindEvents(t) {
+  document.querySelectorAll(".rtab").forEach(el => {
+    el.addEventListener("click", () => { state.rtab = el.dataset.rtab; state.pickerOpen = false; render(); });
+  });
+  document.querySelectorAll(".rel-seg .seg").forEach(el => {
+    el.addEventListener("click", () => { state.relTab = el.dataset.rel; state.corrPickOpen = false; render(); });
+  });
+  document.querySelectorAll(".col-card").forEach(el => {
+    el.addEventListener("click", (ev) => {
+      if (ev.target.closest("[data-drill]") || ev.target.closest("[data-zone]") || ev.target.closest(".cc-zone-only")) return;
+      const n = el.dataset.col;
+      state.openCols.has(n) ? state.openCols.delete(n) : state.openCols.add(n);
+      state.detailZone = "stats";
+      state.ruleOnly = false;
+      render();
+    });
+  });
+  document.querySelectorAll(".cc-zone").forEach(el => {
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      state.detailZone = el.dataset.zone;
+      render();
+    });
+  });
+  document.querySelectorAll("[data-drill]").forEach(el => {
+    el.addEventListener("click", () => toast("原型演示：在 SQL 编辑器中打开「SELECT … WHERE " + el.dataset.drill + " …」"));
+  });
+  const ruleOnly = document.getElementById("ruleOnly");
+  if (ruleOnly) ruleOnly.addEventListener("change", () => { state.ruleOnly = ruleOnly.checked; render(); });
+
+  // 字段筛选：搜索定位 + 下拉多选
+  const fq = document.getElementById("fq");
+  if (fq) fq.addEventListener("input", () => { state.filter.q = fq.value; render(); });
+  const colPick = document.getElementById("colPick");
+  if (colPick) colPick.addEventListener("click", (ev) => { ev.stopPropagation(); state.pickerOpen = !state.pickerOpen; render(); });
+  const cpQ = document.getElementById("cpQ");
+  if (cpQ) cpQ.addEventListener("input", () => { state.pickerQ = cpQ.value; render(); });
+  const cpAll = document.getElementById("cpAll");
+  if (cpAll) cpAll.addEventListener("click", () => { TABLES[state.table].columns.forEach(c => state.selCols.add(c.name)); render(); });
+  const cpNone = document.getElementById("cpNone");
+  if (cpNone) cpNone.addEventListener("click", () => { state.selCols.clear(); render(); });
+  document.querySelectorAll(".col-pop .cp-list .cck input").forEach(el => {
+    el.addEventListener("change", () => {
+      const n = el.dataset.col;
+      el.checked ? state.selCols.add(n) : state.selCols.delete(n);
+      render();
+    });
+  });
+  const fAll = document.getElementById("fAll");
+  if (fAll) fAll.addEventListener("click", () => { TABLES[state.table].columns.forEach(c => state.selCols.add(c.name)); render(); });
+  const fNone = document.getElementById("fNone");
+  if (fNone) fNone.addEventListener("click", () => { state.selCols.clear(); render(); });
+
+  // 关联性列对选择
+  const corrPick = document.getElementById("corrPick");
+  if (corrPick) corrPick.addEventListener("click", (ev) => { ev.stopPropagation(); state.corrPickOpen = !state.corrPickOpen; render(); });
+  const cpQ2 = document.getElementById("cpQ2");
+  if (cpQ2) cpQ2.addEventListener("input", () => { state.corrPickQ = cpQ2.value; render(); });
+  const cpAll2 = document.getElementById("cpAll2");
+  if (cpAll2) cpAll2.addEventListener("click", () => { TABLES[state.table].columns.filter(c => c.kind === "num" || c.kind === "bool").forEach(c => state.corrCols.add(c.name)); render(); });
+  const cpNone2 = document.getElementById("cpNone2");
+  if (cpNone2) cpNone2.addEventListener("click", () => { state.corrCols.clear(); render(); });
+  document.querySelectorAll("#cpList2 .cck input").forEach(el => {
+    el.addEventListener("change", () => {
+      const n = el.dataset.col;
+      el.checked ? state.corrCols.add(n) : state.corrCols.delete(n);
+      render();
+    });
+  });
+
+  // 值得关注：点击直达该列（列分布 + 展开该列）
+  document.querySelectorAll(".worth-item[data-wcol]").forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = "1";
+    el.addEventListener("click", () => {
+      const n = el.dataset.wcol;
+      state.rtab = "cols";
+      state.openCols.add(n);
+      state.detailZone = "stats";
+      state.ruleOnly = false;
+      render();
+      document.getElementById("colGrid") && document.getElementById("colGrid").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  // 关联方法切换（Pearson / Spearman / Kendall）
+  const relMethod = document.getElementById("relMethod");
+  if (relMethod) relMethod.addEventListener("change", () => { state.relMethod = relMethod.value; render(); });
+  // 列类型筛选
+  const kindFilter = document.getElementById("kindFilter");
+  if (kindFilter) kindFilter.addEventListener("change", () => { state.kindFilter = kindFilter.value; render(); });
+
+  // 取样 / 全量切换
+  const btnScope = document.getElementById("btnScope");
+  if (btnScope) {
+    btnScope.addEventListener("click", () => {
+      const cur = TABLES[state.table];
+      cur.scope = cur.scope === "sample" ? "full" : "sample";
+      render();
+    });
+  }
+  // 切换对象
+  const btnObject = document.getElementById("btnObject");
+  if (btnObject) {
+    btnObject.addEventListener("click", () => {
+      const ix = OBJECT_ORDER.indexOf(state.table);
+      state.table = OBJECT_ORDER[(ix + 1) % OBJECT_ORDER.length];
+      state.rtab = "cols";
+      state.relTab = "corr";
+      state.filter.q = "";
+      state.view = "eda";
+      render();
+    });
+  }
+  const btnGen = document.getElementById("btnGen");
+  if (btnGen) btnGen.addEventListener("click", () => toast("原型演示：重新生成 EDA 报告"));
+  const btnRefresh = document.getElementById("btnRefresh");
+  if (btnRefresh) btnRefresh.addEventListener("click", () => toast("原型演示：重新取样并生成报告"));
+  // 质量对比
+  const btnQualityCmp = document.getElementById("btnQualityCmp");
+  if (btnQualityCmp) {
+    btnQualityCmp.addEventListener("click", () => {
+      if (state.selTables.size < 2) { toast("请至少勾选 2 张表"); return; }
+      state.view = "compare";
+      render();
+    });
+  }
+  const btnBackEda = document.getElementById("btnBackEda");
+  if (btnBackEda) btnBackEda.addEventListener("click", () => { state.view = "eda"; render(); });
+  bindChrome();
+}
+
+// 点击页面其他区域关闭下拉弹层
+document.addEventListener("click", () => {
+  if (state.pickerOpen || state.corrPickOpen) {
+    state.pickerOpen = false;
+    state.corrPickOpen = false;
+    const t = TABLES[state.table];
+    if (t) { render(); }
+  }
+});
+
+document.addEventListener("DOMContentLoaded", render);
+</script>
+<script>
+"use strict";
+/* 示例数据：结构演示用（非真实统计），页脚有标注。
+ * 三对象类型：source（inventory_log）/ resultset（sales_orders）/ csv（mock_users_csv）。
+ * 列卡 v3：statsLine 折叠统计 / stats·dist·quality·sample 四区 / rules 规则属性 */
+const TABLES = {
+  inventory_log: {
+    name: "inventory_log",
+    kind: "source",
+    source: "postgres.public",
+    scope: "sample",
+    scopeNote: "取样 500 行（源库全量 128,450 行）",
+    overview: [
+      { k: "总行数", v: "128,450", s: "源库全表统计", cls: "" },
+      { k: "列数", v: "12", s: "含主键 / 索引", cls: "" },
+      { k: "缺失单元格", v: "8,240", s: "占 0.53%", cls: "warn" },
+      { k: "重复行", v: "0", s: "主键约束", cls: "ok" },
+      { k: "内存估算", v: "≈ 38 MB", s: "取样集 500 行 ≈ 0.2 MB", cls: "" }
+    ],
+    typeDist: { text: 12, num: 0, dt: 0, bool: 0, unk: 0 },
+    alerts: [
+      { lvl: "sev", msg: "缺失率 28.6%，远高于全表平均", col: "remark", val: "36,740 / 128,450" },
+      { lvl: "warn", msg: "缺失率 12.4%", col: "serial_no", val: "15,930 / 128,450" },
+      { lvl: "warn", msg: "零值 / 空串占比 21%", col: "ext_ref", val: "27,120 / 128,450" },
+      { lvl: "warn", msg: "高基数（唯一值 ≈ 行数，疑为日志性字段）", col: "log_seq", val: "128,392 unique" },
+      { lvl: "pass", msg: "主键无缺失、无重复", col: "id", val: "通过" }
+    ],
+    columns: [
+      { name: "id", kind: "num", missing: 0, unique: "128,450", statsLine: [["缺失", "0%", false], ["唯一", "128,450", false], ["均值", "#64,225", false]],
+        stats: [["唯一值", "128,450"], ["缺失", "0"], ["最小", "#1"], ["最大", "#128450"], ["均值", "#64,225"], ["类型", "BIGINT (PK)"]],
+        quality: [["非空率", "100%", false], ["唯一率", "100%", false], ["空串", "0", false], ["规则命中", "3/3", false]],
+        samples: ["#1", "#2", "#3", "#4", "#5"],
+        rules: [{ name: "主键非空", pass: true, msg: "0 缺失" }, { name: "主键唯一", pass: true, msg: "无重复" }, { name: "整数范围", pass: true, msg: "1 ~ 128450" }],
+        dist: { type: "freq", items: [["#101", 1000], ["#102", 998], ["#103", 996], ["#104", 993], ["#105", 991]], max: 1000 } },
+      { name: "material_id", kind: "text", missing: 0, unique: "2,184", statsLine: [["缺失", "0%", false], ["唯一", "2,184", false], ["高频", "MAT-00841", false]],
+        stats: [["唯一值", "2,184"], ["缺失", "0"], ["高频", "MAT-00841 (412)"], ["低频", "MAT-00002 (1)"], ["类型", "VARCHAR(32)"]],
+        quality: [["非空率", "100%", false], ["唯一率", "1.7%", false], ["空串", "0", false], ["规则命中", "2/2", false]],
+        samples: ["MAT-00841", "MAT-00321", "MAT-01102", "MAT-00777", "MAT-00128"],
+        rules: [{ name: "非空", pass: true, msg: "0 缺失" }, { name: "引用完整性", pass: false, msg: "18 值不在 warehouse_material.id" }],
+        dist: { type: "freq", items: [["MAT-00841", 412], ["MAT-00321", 388], ["MAT-01102", 365], ["MAT-00777", 340], ["MAT-00128", 322]], max: 412 } },
+      { name: "area_id", kind: "text", missing: 0.03, unique: "86", statsLine: [["缺失", "3%", false], ["唯一", "86", false], ["高频", "WH-EAST", false]],
+        stats: [["唯一值", "86"], ["缺失", "3%"], ["高频", "WH-EAST"], ["类型", "VARCHAR(16)"]],
+        quality: [["非空率", "97%", false], ["唯一率", "0.07%", false], ["空串", "0", false], ["规则命中", "1/2", false]],
+        samples: ["WH-EAST", "WH-NORTH", "WH-SOUTH", "WH-WEST", "WH-CENTRAL"],
+        rules: [{ name: "非空", pass: false, msg: "3% 缺失" }, { name: "枚举范围", pass: true, msg: "86 个已知区域" }],
+        dist: { type: "freq", items: [["WH-EAST", 1], ["WH-NORTH", 1], ["WH-SOUTH", 1], ["WH-WEST", 1], ["WH-CENTRAL", 1]], max: 1 } },
+      { name: "serial_no", kind: "text", missing: 0.124, unique: "112,506", statsLine: [["缺失", "12.4%", true], ["唯一", "112,506", false], ["均值", "SN-2026-…", false]],
+        stats: [["唯一值", "112,506"], ["缺失", "12.4%"], ["类型", "VARCHAR(64)"]],
+        quality: [["非空率", "87.6%", true], ["唯一率", "98%", false], ["空串", "3,420", true], ["规则命中", "0/1", false]],
+        samples: ["SN-2026-0001", "SN-2026-0002", "SN-2026-0003", "", ""],
+        rules: [{ name: "非空率 ≥ 95%", pass: false, msg: "12.4% 缺失，超阈值" }],
+        dist: { type: "freq", items: [["SN-2026-0001", 2], ["SN-2026-0002", 2], ["SN-2026-0003", 2], ["SN-2026-0004", 1], ["SN-2026-0005", 1]], max: 2 } },
+      { name: "ext_ref", kind: "text", missing: 0.21, unique: "98,320", statsLine: [["缺失+空串", "21%", true], ["唯一", "98,320", false], ["空串", "27,120", true]],
+        stats: [["唯一值", "98,320"], ["缺失+空串", "21%"], ["类型", "VARCHAR(48)"]],
+        quality: [["非空率", "79%", true], ["空串", "27,120", true], ["规则命中", "0/1", false]],
+        samples: ["(空串)", "REF-88231", "REF-88230", "REF-88229", "REF-88228"],
+        rules: [{ name: "空串占比 ≤ 5%", pass: false, msg: "21% 空串" }],
+        dist: { type: "freq", items: [["(空串)", 27120], ["REF-88231", 1], ["REF-88230", 1], ["REF-88229", 1], ["REF-88228", 1]], max: 27120 } },
+      { name: "status", kind: "text", missing: 0, unique: 4, statsLine: [["缺失", "0%", false], ["唯一", "4", false], ["高频", "IN_STOCK", false]],
+        stats: [["唯一值", "4"], ["缺失", "0"], ["高频", "IN_STOCK (62%)"], ["类型", "VARCHAR(16)"]],
+        quality: [["非空率", "100%", false], ["唯一率", "0.003%", false], ["规则命中", "2/2", false]],
+        samples: ["IN_STOCK", "PICKED", "SHIPPED", "VOID"],
+        rules: [{ name: "枚举范围", pass: true, msg: "4 个已知状态" }, { name: "非空", pass: true, msg: "0 缺失" }],
+        dist: { type: "freq", items: [["IN_STOCK", 62], ["PICKED", 21], ["SHIPPED", 12], ["VOID", 5]], max: 62 } },
+      { name: "log_seq", kind: "num", missing: 0, unique: "128,392", statsLine: [["缺失", "0%", false], ["唯一", "128,392", false], ["提示", "高基数", false]],
+        stats: [["唯一值", "128,392"], ["缺失", "0"], ["提示", "高基数，疑日志序列"], ["类型", "BIGINT"]],
+        quality: [["非空率", "100%", false], ["唯一率", "99.9%", false], ["规则命中", "1/1", false]],
+        samples: ["10001", "10002", "10003", "10004", "10005"],
+        rules: [{ name: "高基数提示", pass: false, msg: "唯一值 ≈ 行数，疑日志序列" }],
+        dist: { type: "freq", items: [["10001", 1], ["10002", 1], ["10003", 1], ["10004", 1], ["10005", 1]], max: 1 } },
+      { name: "remark", kind: "text", missing: 0.286, unique: "44,210", statsLine: [["缺失", "28.6%", true], ["唯一", "44,210", false], ["空串", "36,740", true]],
+        stats: [["唯一值", "44,210"], ["缺失", "28.6%"], ["类型", "TEXT"]],
+        quality: [["非空率", "71.4%", true], ["空串", "36,740", true], ["规则命中", "0/1", false]],
+        samples: ["(空)", "例行盘点", "破损换新", "跨仓调拨", "批次追溯"],
+        rules: [{ name: "非空率 ≥ 90%", pass: false, msg: "28.6% 缺失，远高于全表平均" }],
+        dist: { type: "freq", items: [["(空)", 36740], ["例行盘点", 812], ["破损换新", 404], ["跨仓调拨", 366], ["批次追溯", 298]], max: 36740 } },
+      { name: "created_at", kind: "dt", missing: 0, unique: "128,441", statsLine: [["缺失", "0%", false], ["范围", "2026-01-01~09-30", false], ["类型", "TIMESTAMP", false]],
+        stats: [["范围", "2026-01-01 ~ 2026-09-30"], ["缺失", "0"], ["类型", "TIMESTAMP"]],
+        quality: [["非空率", "100%", false], ["规则命中", "1/1", false]],
+        samples: ["2026-01-01 00:00:12", "2026-09-30 08:12:44", "2026-09-30 23:59:41"],
+        rules: [{ name: "时间格式", pass: true, msg: "全部合法" }],
+        dist: { type: "range", lo: "2026-01-01 00:00:12", hi: "2026-09-30 23:59:41" } },
+      { name: "updated_at", kind: "dt", missing: 0.02, unique: "128,120", statsLine: [["缺失", "2%", false], ["范围", "2026-01-01~10-18", false], ["类型", "TIMESTAMP", false]],
+        stats: [["范围", "2026-01-01 ~ 2026-10-18"], ["缺失", "2%"], ["类型", "TIMESTAMP"]],
+        quality: [["非空率", "98%", false], ["规则命中", "1/1", false]],
+        samples: ["2026-01-01 00:00:12", "2026-10-18 12:03:22"],
+        rules: [{ name: "时间格式", pass: true, msg: "全部合法" }],
+        dist: { type: "range", lo: "2026-01-01 00:00:12", hi: "2026-10-18 12:03:22" } },
+      { name: "batch_no", kind: "text", missing: 0, unique: 512, statsLine: [["缺失", "0%", false], ["唯一", "512", false], ["高频", "B2026-001", false]],
+        stats: [["唯一值", "512"], ["缺失", "0"], ["类型", "VARCHAR(24)"]],
+        quality: [["非空率", "100%", false], ["规则命中", "1/1", false]],
+        samples: ["B2026-001", "B2026-002", "B2026-003", "B2026-004", "B2026-005"],
+        rules: [{ name: "格式", pass: true, msg: "B2026-xxx" }],
+        dist: { type: "freq", items: [["B2026-001", 251], ["B2026-002", 250], ["B2026-003", 251], ["B2026-004", 250], ["B2026-005", 251]], max: 251 } },
+      { name: "warehouse", kind: "text", missing: 0.05, unique: 8, statsLine: [["缺失", "5%", false], ["唯一", "8", false], ["高频", "华东仓", false]],
+        stats: [["唯一值", "8"], ["缺失", "5%"], ["类型", "VARCHAR(16)"]],
+        quality: [["非空率", "95%", false], ["规则命中", "1/1", false]],
+        samples: ["华东仓", "华北仓", "华南仓", "西南仓", "东北仓"],
+        rules: [{ name: "非空", pass: true, msg: "5% 缺失（容忍）" }],
+        dist: { type: "freq", items: [["华东仓", 34], ["华北仓", 27], ["华南仓", 18], ["西南仓", 12], ["东北仓", 9]], max: 34 } }
+    ],
+    corr: null,
+    corrNote: "12 列均为文本类型，无法计算数值相关性；文本/布尔列见「分类关联」。",
+    fk: [
+      { from: "material_id", to: "已洞察表 warehouse_material.id", overlap: "92%", note: "疑似外键" },
+      { from: "area_id", to: "已洞察表 warehouse_area.id", overlap: "88%", note: "疑似外键" },
+      { from: "batch_no", to: "已洞察表 warehouse_batch.id", overlap: "71%", note: "值重叠明显，可能弱关联" }
+    ],
+    fkNote: "",
+    catAssoc: [
+      { a: "status", b: "warehouse", v: "0.42", note: "中强关联：不同仓库的出库状态分布差异明显" },
+      { a: "area_id", b: "batch_no", v: "0.11", note: "弱关联：批次与区域基本独立" }
+    ],
+    sample: {
+      headers: ["id", "material_id", "area_id", "status", "created_at", "remark"],
+      rows: [
+        ["1", "MAT-00841", "WH-EAST", "IN_STOCK", "2026-09-30 08:12:44", "例行盘点"],
+        ["2", "MAT-00321", "WH-NORTH", "IN_STOCK", "2026-09-30 08:13:01", ""],
+        ["3", "MAT-01102", "WH-SOUTH", "PICKED", "2026-09-30 08:15:22", "跨仓调拨"],
+        ["4", "MAT-00777", "WH-WEST", "IN_STOCK", "2026-09-30 08:16:10", ""],
+        ["5", "MAT-00128", "WH-CENTRAL", "SHIPPED", "2026-09-30 08:20:47", "破损换新"]
+      ]
+    }
+  },
+
+  sales_orders: {
+    name: "sales_orders",
+    kind: "resultset",
+    source: "SELECT 查询结果 · mysql.sales",
+    scope: "full",
+    scopeNote: "18,240 行 · 天然全量（无取样）",
+    overview: [
+      { k: "总行数", v: "18,240", s: "查询结果全量", cls: "" },
+      { k: "列数", v: "8", s: "查询投影列", cls: "" },
+      { k: "缺失单元格", v: "1,862", s: "占 1.28%", cls: "warn" },
+      { k: "重复行", v: "3", s: "order_no 非唯一", cls: "warn" },
+      { k: "内存估算", v: "≈ 4.1 MB", s: "全量载入", cls: "" }
+    ],
+    typeDist: { text: 3, num: 3, dt: 1, bool: 1, unk: 0 },
+    alerts: [
+      { lvl: "sev", msg: "缺失率 12.6%", col: "discount", val: "2,298 / 18,240" },
+      { lvl: "warn", msg: "金额存在 0 值（未支付订单）", col: "amount", val: "1,140 / 18,240" },
+      { lvl: "warn", msg: "重复 order_no", col: "order_no", val: "3 组" },
+      { lvl: "pass", msg: "时间字段无缺失", col: "created_at", val: "通过" }
+    ],
+    columns: [
+      { name: "order_no", kind: "text", missing: 0, unique: "18,237", statsLine: [["缺失", "0%", false], ["唯一", "18,237", false], ["重复", "3 组", true]],
+        stats: [["唯一值", "18,237"], ["缺失", "0"], ["重复", "3 组"], ["类型", "VARCHAR(24)"]],
+        quality: [["非空率", "100%", false], ["唯一率", "99.98%", false], ["规则命中", "1/2", false]],
+        samples: ["SO-2026-01001", "SO-2026-01002", "SO-2026-01003"],
+        rules: [{ name: "订单号唯一", pass: false, msg: "3 组重复" }, { name: "非空", pass: true, msg: "0 缺失" }],
+        dist: { type: "freq", items: [["SO-2026-01001", 1], ["SO-2026-01002", 1], ["SO-2026-01003", 1], ["SO-2026-01004", 1], ["SO-2026-01005", 1]], max: 1 } },
+      { name: "amount", kind: "num", missing: 0, unique: "9,820", statsLine: [["均值", "482.6", false], ["中位", "468.0", false], ["0 值", "6.2%", true]],
+        stats: [["最小值", "0.00"], ["Q1", "128.50"], ["中位数", "468.00"], ["Q3", "1,220.00"], ["最大值", "8,640.00"], ["0 值占比", "6.2%"]],
+        quality: [["非空率", "100%", false], ["0 值", "6.2%", true], ["规则命中", "1/2", false]],
+        samples: ["1,280.00", "0.00", "640.50", "3,200.00", "86.00"],
+        rules: [{ name: "金额 ≥ 0", pass: true, msg: "负值 0" }, { name: "0 值占比 ≤ 2%", pass: false, msg: "6.2%（未支付订单）" }],
+        norm: { p: "0.0004", skew: "1.84", kurt: "5.21", judge: "偏离正态（右偏长尾，大单拖尾）", cls: "bad" },
+        dist: { type: "hist", bins: [12, 38, 64, 88, 71, 45, 22, 9], max: 88 } },
+      { name: "quantity", kind: "num", missing: 0, unique: 42, statsLine: [["均值", "4.2", false], ["中位", "3", false], ["最大", "500", false]],
+        stats: [["最小值", "1"], ["中位数", "3"], ["最大值", "500"], ["类型", "INT"]],
+        quality: [["非空率", "100%", false], ["规则命中", "1/1", false]],
+        samples: ["3", "1", "2", "8", "1"],
+        rules: [{ name: "数量 ≥ 1", pass: true, msg: "无 0 或负值" }],
+        norm: { p: "0.003", skew: "0.92", kurt: "1.12", judge: "偏离正态（离散整数分布）", cls: "warn" },
+        dist: { type: "hist", bins: [55, 30, 18, 9, 5, 3, 2, 1], max: 55 } },
+      { name: "discount", kind: "num", missing: 0.126, unique: 21, statsLine: [["缺失", "12.6%", true], ["均值", "0.11", false], ["范围", "0~0.5", false]],
+        stats: [["最小值", "0"], ["中位数", "0.10"], ["最大值", "0.50"], ["缺失", "12.6%"], ["类型", "DECIMAL(4,2)"]],
+        quality: [["非空率", "87.4%", true], ["规则命中", "0/1", false]],
+        samples: ["0.10", "", "0.05", "0.20", "0.00"],
+        rules: [{ name: "非空率 ≥ 95%", pass: false, msg: "12.6% 缺失" }],
+        norm: { p: "0.052", skew: "0.61", kurt: "2.88", judge: "弱偏离（右侧偏峰，可近似正态）", cls: "warn" },
+        dist: { type: "hist", bins: [2, 6, 12, 20, 26, 15, 7, 3], max: 26 } },
+      { name: "customer", kind: "text", missing: 0.01, unique: "3,240", statsLine: [["缺失", "1%", false], ["唯一", "3,240", false], ["高频", "CUST-8821", false]],
+        stats: [["唯一值", "3,240"], ["缺失", "1%"], ["类型", "VARCHAR(32)"]],
+        quality: [["非空率", "99%", false], ["规则命中", "1/1", false]],
+        samples: ["CUST-8821", "CUST-4410", "CUST-3302", "CUST-9917", "CUST-1002"],
+        rules: [{ name: "非空", pass: true, msg: "1% 缺失（容忍）" }],
+        dist: { type: "freq", items: [["CUST-8821", 28], ["CUST-4410", 22], ["CUST-3302", 19], ["CUST-9917", 17], ["CUST-1002", 15]], max: 28 } },
+      { name: "region", kind: "text", missing: 0, unique: 6, statsLine: [["缺失", "0%", false], ["唯一", "6", false], ["高频", "华东", false]],
+        stats: [["唯一值", "6"], ["缺失", "0"], ["类型", "VARCHAR(16)"]],
+        quality: [["非空率", "100%", false], ["规则命中", "1/1", false]],
+        samples: ["华东", "华北", "华南", "西南", "西北"],
+        rules: [{ name: "枚举范围", pass: true, msg: "6 个区域" }, { name: "数值相关（相关矩阵）", na: true, why: "类型不适用（文本枚举）" }],
+        dist: { type: "freq", items: [["华东", 38], ["华北", 26], ["华南", 19], ["西南", 11], ["西北", 6]], max: 38 } },
+      { name: "created_at", kind: "dt", missing: 0, unique: "18,238", statsLine: [["缺失", "0%", false], ["范围", "2026-01-02~10-18", false], ["类型", "DATETIME", false]],
+        stats: [["范围", "2026-01-02 ~ 2026-10-18"], ["缺失", "0"], ["类型", "DATETIME"]],
+        quality: [["非空率", "100%", false], ["规则命中", "2/2", false]],
+        samples: ["2026-01-02 09:15:00", "2026-10-18 18:44:12"],
+        rules: [{ name: "时间格式", pass: true, msg: "全部合法" }, { name: "数值统计（均值/分位）", na: true, why: "类型不适用（时间列）" }],
+        dist: { type: "range", lo: "2026-01-02 09:15:00", hi: "2026-10-18 18:44:12" } },
+      { name: "is_paid", kind: "bool", missing: 0.01, unique: 2, statsLine: [["TRUE", "88%", false], ["FALSE", "12%", false], ["缺失", "1%", false]],
+        stats: [["TRUE", "88%"], ["FALSE", "12%"], ["缺失", "1%"], ["类型", "BOOLEAN"]],
+        quality: [["非空率", "99%", false], ["规则命中", "1/1", false]],
+        samples: ["true", "false", "true", "true", "false"],
+        rules: [{ name: "布尔合法", pass: true, msg: "无异常值" }],
+        dist: { type: "bool", t: 88, f: 12 } }
+    ],
+    corr: [
+      ["order_no", "amount", "quantity", "discount", "is_paid"],
+      [1, 0.12, 0.08, -0.03, 0.02],
+      [0.12, 1, 0.68, 0.22, 0.41],
+      [0.08, 0.68, 1, 0.15, 0.33],
+      [-0.03, 0.22, 0.15, 1, -0.18],
+      [0.02, 0.41, 0.33, -0.18, 1]
+    ],
+    corrNote: "数值列 3 个 + 布尔 1 个：quantity 与 amount 相关 0.68；discount 与 is_paid 弱负相关。",
+    fk: null,
+    fkNote: "结果集无源库 catalog 上下文，不提供 FK 候选 / 值重叠分析。",
+    catAssoc: [
+      { a: "region", b: "is_paid", v: "0.23", note: "弱关联：各区域支付比例接近" },
+      { a: "region", b: "customer", v: "0.35", note: "中弱关联" }
+    ],
+    sample: {
+      headers: ["order_no", "amount", "quantity", "discount", "region", "is_paid"],
+      rows: [
+        ["SO-2026-01001", "1,280.00", "3", "0.10", "华东", "true"],
+        ["SO-2026-01002", "0.00", "1", "", "华北", "false"],
+        ["SO-2026-01003", "640.50", "2", "0.05", "华南", "true"],
+        ["SO-2026-01004", "3,200.00", "8", "0.20", "华东", "true"],
+        ["SO-2026-01005", "86.00", "1", "0.00", "西南", "false"]
+      ]
+    }
+  },
+
+  mock_users_csv: {
+    name: "mock_users_20261018.csv",
+    kind: "csv",
+    source: "草稿箱 · mock_users.csv",
+    scope: "sample",
+    scopeNote: "CSV 大文件 · 取样 500 行（全量 48,320 行）",
+    overview: [
+      { k: "总行数", v: "48,320", s: "文件全量", cls: "" },
+      { k: "列数", v: "7", s: "含首行表头", cls: "" },
+      { k: "缺失单元格", v: "2,410", s: "占 0.71%", cls: "warn" },
+      { k: "重复行", v: "12", s: "email 非唯一", cls: "warn" },
+      { k: "内存估算", v: "≈ 6 MB", s: "取样集 500 行 ≈ 0.06 MB", cls: "" }
+    ],
+    typeDist: { text: 3, num: 1, dt: 1, bool: 1, unk: 1 },
+    alerts: [
+      { lvl: "warn", msg: "缺失率 8.4%", col: "phone", val: "4,059 / 48,320" },
+      { lvl: "warn", msg: "score 存在负值（应 ∈ [0,100]）", col: "score", val: "214 行" },
+      { lvl: "warn", msg: "重复 email", col: "email", val: "12 组" },
+      { lvl: "pass", msg: "主键 id 无缺失、无重复", col: "id", val: "通过" }
+    ],
+    columns: [
+      { name: "id", kind: "num", missing: 0, unique: "48,320", statsLine: [["缺失", "0%", false], ["唯一", "48,320", false], ["类型", "INT PK", false]],
+        stats: [["唯一值", "48,320"], ["缺失", "0"], ["类型", "INT (PK)"]],
+        quality: [["非空率", "100%", false], ["唯一率", "100%", false], ["规则命中", "2/2", false]],
+        samples: ["1", "2", "3", "4", "5"],
+        rules: [{ name: "主键非空", pass: true, msg: "0 缺失" }, { name: "主键唯一", pass: true, msg: "无重复" }],
+        dist: { type: "freq", items: [["1", 1], ["2", 1], ["3", 1], ["4", 1], ["5", 1]], max: 1 } },
+      { name: "username", kind: "text", missing: 0.002, unique: "48,218", statsLine: [["缺失", "0.2%", false], ["唯一", "48,218", false], ["类型", "TEXT", false]],
+        stats: [["唯一值", "48,218"], ["缺失", "0.2%"], ["类型", "TEXT"]],
+        quality: [["非空率", "99.8%", false], ["规则命中", "1/1", false]],
+        samples: ["user_001", "user_002", "user_003", "user_004", "user_005"],
+        rules: [{ name: "非空", pass: true, msg: "0.2% 缺失（容忍）" }],
+        dist: { type: "freq", items: [["user_001", 1], ["user_002", 1], ["user_003", 1], ["user_004", 1], ["user_005", 1]], max: 1 } },
+      { name: "email", kind: "text", missing: 0.001, unique: "48,308", statsLine: [["缺失", "0.1%", false], ["唯一", "48,308", false], ["重复", "12 组", true]],
+        stats: [["唯一值", "48,308"], ["缺失", "0.1%"], ["重复", "12 组"], ["类型", "TEXT"]],
+        quality: [["非空率", "99.9%", false], ["规则命中", "1/2", false]],
+        samples: ["u1@ex.com", "u2@ex.com", "u3@ex.com", "u4@ex.com", "u5@ex.com"],
+        rules: [{ name: "邮箱格式", pass: true, msg: "合法" }, { name: "邮箱唯一", pass: false, msg: "12 组重复" }],
+        dist: { type: "freq", items: [["u1@ex.com", 1], ["u2@ex.com", 1], ["u3@ex.com", 1], ["u4@ex.com", 1], ["u5@ex.com", 1]], max: 1 } },
+      { name: "phone", kind: "unk", missing: 0.084, unique: "44,260", statsLine: [["缺失", "8.4%", true], ["唯一", "44,260", false], ["类型", "TEXT", false]],
+        stats: [["唯一值", "44,260"], ["缺失", "8.4%"], ["类型", "TEXT（未识别）"]],
+        quality: [["非空率", "91.6%", true], ["规则命中", "0/1", false]],
+        samples: ["(空)", "13800000001", "13800000002", "13800000003", "13800000004"],
+        rules: [{ name: "手机号格式", pass: false, msg: "8.4% 缺失；部分格式异常" }],
+        dist: { type: "freq", items: [["(空)", 4059], ["13800000001", 1], ["13800000002", 1], ["13800000003", 1], ["13800000004", 1]], max: 4059 } },
+      { name: "score", kind: "num", missing: 0.004, unique: "4,812", statsLine: [["均值", "71.5", false], ["中位", "72", false], ["负值", "214 行", true]],
+        stats: [["最小值", "-5"], ["中位数", "72"], ["最大值", "100"], ["负值", "214 行"], ["类型", "FLOAT"]],
+        quality: [["非空率", "99.6%", false], ["负值", "214 行", true], ["规则命中", "1/2", false]],
+        samples: ["88", "64", "", "91", "-5"],
+        rules: [{ name: "取值 ∈ [0,100]", pass: false, msg: "214 行负值" }, { name: "非空", pass: true, msg: "0.4% 缺失（容忍）" }],
+        norm: { p: "0.281", skew: "-0.34", kurt: "2.96", judge: "近似正态", cls: "ok" },
+        dist: { type: "hist", bins: [12, 45, 68, 82, 55, 30, 14, 4], max: 82 } },
+      { name: "is_active", kind: "bool", missing: 0.01, unique: 2, statsLine: [["TRUE", "81%", false], ["FALSE", "19%", false], ["缺失", "1%", false]],
+        stats: [["TRUE", "81%"], ["FALSE", "19%"], ["缺失", "1%"], ["类型", "BOOLEAN"]],
+        quality: [["非空率", "99%", false], ["规则命中", "1/1", false]],
+        samples: ["true", "true", "false", "true", "true"],
+        rules: [{ name: "布尔合法", pass: true, msg: "无异常值" }],
+        dist: { type: "bool", t: 81, f: 19 } },
+      { name: "created_at", kind: "dt", missing: 0, unique: "48,311", statsLine: [["缺失", "0%", false], ["范围", "2026-01-01~10-18", false], ["类型", "DATETIME", false]],
+        stats: [["范围", "2026-01-01 ~ 2026-10-18"], ["缺失", "0"], ["类型", "DATETIME"]],
+        quality: [["非空率", "100%", false], ["规则命中", "1/1", false]],
+        samples: ["2026-01-01 00:02:10", "2026-10-18 23:58:44"],
+        rules: [{ name: "时间格式", pass: true, msg: "全部合法" }],
+        dist: { type: "range", lo: "2026-01-01 00:02:10", hi: "2026-10-18 23:58:44" } }
+    ],
+    corr: [
+      ["id", "score", "is_active"],
+      [1, 0.04, -0.02],
+      [0.04, 1, 0.18],
+      [-0.02, 0.18, 1]
+    ],
+    corrNote: "数值列 score 与布尔 is_active 弱相关 0.18；id 为自增无信息。",
+    fk: null,
+    fkNote: "CSV 文件无 catalog 上下文，不提供 FK 候选 / 值重叠分析。",
+    catAssoc: [
+      { a: "is_active", b: "username", v: "0.02", note: "近似独立（用户名不携带状态信息）" }
+    ],
+    sample: {
+      headers: ["id", "username", "email", "score", "is_active", "created_at"],
+      rows: [
+        ["1", "user_001", "u1@ex.com", "88", "true", "2026-01-01 00:02:10"],
+        ["2", "user_002", "u2@ex.com", "64", "true", "2026-01-01 00:03:22"],
+        ["3", "user_003", "u3@ex.com", "", "false", "2026-01-01 00:05:41"],
+        ["4", "user_004", "u4@ex.com", "91", "true", "2026-01-01 00:07:05"],
+        ["5", "user_005", "u5@ex.com", "-5", "true", "2026-01-01 00:09:33"]
+      ]
+    }
+  }
+};
+
+/* 资产库归档资产（审计侧数据）：版本快照 = 洞察归档时生成
+ * h: 1 命中 / 0 未命中 / -1 不适用（按版本顺序） */
+const ARCHIVE = [
+  { name: "inventory_log", path: "分析存档/业务表/inventory_log/", tags: ["库存", "核心表"], group: "业务表",
+    versions: [
+      { v: 1, time: "2026-10-12 14:20", rows: "128,450", miss: 0.082, checks: "6/8", grade: 68 },
+      { v: 2, time: "2026-10-15 09:41", rows: "128,450", miss: 0.061, checks: "7/8", grade: 76 },
+      { v: 3, time: "2026-10-18 16:05", rows: "128,450", miss: 0.053, checks: "7/8", grade: 81 }
+    ],
+    checks: [
+      { name: "主键非空（id）", h: [1, 1, 1] },
+      { name: "非空率 ≥ 95%（remark）", h: [0, 0, 0] },
+      { name: "非空率 ≥ 95%（serial_no）", h: [0, 0, 1] },
+      { name: "空串占比 ≤ 5%（ext_ref）", h: [0, 0, 0] },
+      { name: "引用完整性（material_id）", h: [0, 1, 1] },
+      { name: "枚举范围（status）", h: [1, 1, 1] },
+      { name: "高基数提示（log_seq）", h: [-1, -1, -1] },
+      { name: "时间格式（created_at）", h: [1, 1, 1] }
+    ] },
+  { name: "sales_orders", path: "分析存档/查询结果/sales_orders/", tags: ["销售"], group: "查询结果",
+    versions: [
+      { v: 1, time: "2026-10-13 10:12", rows: "18,240", miss: 0.148, checks: "4/7", grade: 62 },
+      { v: 2, time: "2026-10-18 16:32", rows: "18,240", miss: 0.128, checks: "5/7", grade: 74 }
+    ],
+    checks: [
+      { name: "订单号唯一（order_no）", h: [0, 0] },
+      { name: "非空率 ≥ 95%（discount）", h: [0, 0] },
+      { name: "0 值占比 ≤ 2%（amount）", h: [0, 0] },
+      { name: "金额 ≥ 0（amount）", h: [1, 1] },
+      { name: "数量 ≥ 1（quantity）", h: [1, 1] },
+      { name: "枚举范围（region）", h: [1, 1] },
+      { name: "时间格式（created_at）", h: [1, 1] }
+    ] },
+  { name: "mock_users_20261018.csv", path: "分析存档/草稿箱/mock_users/", tags: ["测试数据"], group: "草稿箱",
+    versions: [
+      { v: 1, time: "2026-10-17 20:03", rows: "48,320", miss: 0.091, checks: "5/7", grade: 66 }
+    ],
+    checks: [
+      { name: "主键非空（id）", h: [1] },
+      { name: "邮箱唯一（email）", h: [0] },
+      { name: "邮箱格式（email）", h: [1] },
+      { name: "手机号格式（phone）", h: [0] },
+      { name: "取值 ∈ [0,100]（score）", h: [0] },
+      { name: "布尔合法（is_active）", h: [1] },
+      { name: "时间格式（created_at）", h: [1] }
+    ] }
+];
+</script>
+</body>
+</html>

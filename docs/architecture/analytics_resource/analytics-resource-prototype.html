@@ -136,6 +136,8 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .row.miss .nm{text-decoration:line-through;}
 .mdot{width:6px;height:6px;border-radius:50%;background:var(--danger);flex:none;}
 .sb{flex:none;display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 4px;border-radius:9px;font-size:9.5px;font-weight:600;border:1px solid currentColor;}
+/* 实例徽标（§13 双实例）：与强度徽标正交，muted 中性不抢视觉 */
+.scope-badge{flex:none;display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:8px;font-size:8.5px;color:var(--muted);border:1px dashed var(--sidebar-border);letter-spacing:.2px;}
 .sb .d{width:4px;height:4px;border-radius:50%;background:currentColor;flex:none;}
 .sb.b-ok{color:var(--success);background:color-mix(in srgb,var(--success) 14%,transparent);}
 .sb.b-info{color:var(--info);background:color-mix(in srgb,var(--info) 14%,transparent);}
@@ -324,13 +326,13 @@ table.dt tr.on td{background:var(--accent);}
 /* ── 状态可见性（场景 → 视图） ── */
 [data-panel="list"] .st-list,[data-panel="anomaly"] .st-anomaly,[data-panel="empty"] .st-empty,[data-panel="noresult"] .st-noresult{display:block;}
 [data-status="normal"] .pst-normal,[data-status="anomaly"] .pst-anomaly,[data-status="zero"] .pst-zero{display:flex;}
-[data-detail="file"] .dp-file,[data-detail="ref"] .dp-ref{display:flex;}
+[data-detail="file"] .dp-file,[data-detail="ref"] .dp-ref,[data-detail="insight"] .dp-insight{display:flex;}
 [data-detail="none"] .detail{display:none;}
 [data-tabs="file"] .ct-file,[data-tabs="ref"] .ct-ref,[data-tabs="none"] .ct-none{display:flex;}
 [data-tabs="file"] .cb-file,[data-tabs="ref"] .cb-ref{display:block;}
 [data-tabs="none"] .cb-none{display:flex;}
 [data-strip="ro"] .s-ro,[data-strip="ref"] .s-ref,[data-strip="reject"] .s-reject{display:flex;}
-[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair{display:flex;}
+[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair,[data-dialog="insight-archive"] .dlg-insight-archive{display:flex;}
 .dlg-archive{width:544px;}
 .dlg-checkout{width:480px;}
 .dlg-versions{width:768px;}
@@ -359,6 +361,30 @@ table.dt tr.on td{background:var(--accent);}
 .tchip .name{color:var(--muted);}
 .foot{max-width:1180px;margin:16px auto 0;font-size:11.5px;color:var(--muted);line-height:1.85;}
 .foot code{font-family:Consolas,monospace;background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:0 4px;color:var(--fg);}
+
+/* ── 洞察联动（T18–T21，2026-10-22 增量）：右栏「已洞察表」集合卡 ── */
+.dp-insight{width:320px;flex:none;border-left:1px solid var(--border);background:var(--bg);display:none;flex-direction:column;min-width:0;}
+.sethead{height:36px;flex:none;display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;border-bottom:1px solid var(--border);}
+.sethead .ttl2{font-size:12px;font-weight:600;color:var(--fg);}
+.sethead .cnt2{margin-left:auto;font-size:9.5px;color:var(--muted);}
+.setbody{flex:1;min-height:0;overflow:auto;padding:8px 10px 14px;}
+.setintro{font-size:10.5px;color:var(--muted);line-height:1.6;margin-bottom:8px;}
+.setitem{border:1px solid var(--sidebar-border);border-radius:8px;padding:8px 9px;margin-bottom:6px;background:var(--bg);}
+.setitem .srow1{display:flex;align-items:center;gap:6px;}
+.setitem .snm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;color:var(--fg);}
+.setitem .scur{flex:none;font-size:9px;color:var(--info);border:1px solid var(--info);border-radius:4px;padding:0 4px;}
+.setitem .ssrc{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);margin-top:3px;}
+.setitem .smeta{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums;}
+.setacts{display:flex;gap:6px;margin-top:7px;align-items:center;}
+.setacts .grow{flex:1;}
+.ovbox{display:none;margin-top:8px;border:1px solid var(--info);border-radius:7px;overflow:hidden;font-size:10.5px;background:var(--bg);}
+.ovbox.on{display:block;}
+.ov-h{display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;background:color-mix(in srgb,var(--info) 10%,transparent);color:var(--info);font-size:10.5px;font-weight:600;}
+.ov-tbl{width:100%;border-collapse:collapse;font-size:10px;}
+.ov-tbl th{text-align:left;color:var(--muted);font-weight:600;padding:4px 8px;border-bottom:1px solid var(--sidebar-border);}
+.ov-tbl td{padding:4px 8px;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 60%,transparent);}
+.ov-tbl td.num{font-variant-numeric:tabular-nums;}
+.ov-note{padding:5px 8px;font-size:9.5px;color:var(--muted);line-height:1.5;}
 </style>
 </head>
 <body>
@@ -391,13 +417,13 @@ table.dt tr.on td{background:var(--accent);}
 
 <header class="page-head">
   <div class="brand">
-    <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-chart"/></svg></span>
+    <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-chart" xlink:href="#i-chart"/></svg></span>
     <div>
       <h1>资产库 / 分析存档（M6）· 原型</h1>
-      <div class="sub">左 Dock 面板 240px + 右侧详情属性面板 320px · 复现强度常显（已归档 / 分析表 / 引用）· 只读是常态，修改走「取回（检出）」</div>
+      <div class="sub">左 Dock 面板 240px + 右侧详情属性面板 320px · 复现强度常显（已归档 / 分析表）· 只读是常态，修改走「取回（检出）」· TableRef 已划掉（2026-10-13，仅旧行兼容）</div>
     </div>
   </div>
-  <button class="theme-toggle" id="themeBtn"><svg class="ico-sm"><use href="#i-refresh"/></svg><span id="themeTxt">切换暗色</span></button>
+  <button class="theme-toggle" id="themeBtn"><svg class="ico-sm"><use href="#i-refresh" xlink:href="#i-refresh"/></svg><span id="themeTxt">切换暗色</span></button>
 </header>
 
 <div class="statebar" id="statebar">
@@ -414,6 +440,7 @@ table.dt tr.on td{background:var(--accent);}
   <button data-go="filter">筛选 / 排序弹层</button>
   <button data-go="menu">右键菜单</button>
   <button data-go="readonly">只读：直接编辑被拒</button>
+  <button data-go="insight">洞察联动（右栏集合 + 归档）</button>
 </div>
 
 <div class="workbench" id="wb" data-state="default" data-panel="list" data-status="normal" data-detail="file" data-tabs="file" data-strip="ro" data-dialog="none">
@@ -432,17 +459,17 @@ table.dt tr.on td{background:var(--accent);}
 
     <!-- 活动栏 48px（资产库 = 第 3 项） -->
     <nav class="activitybar">
-      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-seq"/></svg><span class="tip">草稿箱</span></div>
-      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-plug"/></svg><span class="tip">数据库导航</span></div>
-      <div class="act on"><svg class="ico" style="width:20px;height:20px"><use href="#i-chart"/></svg><span class="tip">资产库</span></div>
-      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-grid"/></svg><span class="tip">本地数据</span></div>
-      <div class="act spacer"><svg class="ico" style="width:20px;height:20px"><use href="#i-more"/></svg><span class="tip">设置</span></div>
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-seq" xlink:href="#i-seq"/></svg><span class="tip">草稿箱</span></div>
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-plug" xlink:href="#i-plug"/></svg><span class="tip">数据库导航</span></div>
+      <div class="act on"><svg class="ico" style="width:20px;height:20px"><use href="#i-chart" xlink:href="#i-chart"/></svg><span class="tip">资产库</span></div>
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-grid" xlink:href="#i-grid"/></svg><span class="tip">本地数据</span></div>
+      <div class="act spacer"><svg class="ico" style="width:20px;height:20px"><use href="#i-more" xlink:href="#i-more"/></svg><span class="tip">设置</span></div>
     </nav>
 
     <!-- 左 Dock：资产库面板 240px -->
     <aside class="sidebar-l">
       <div class="panel-head">
-        <svg class="ico-sm"><use href="#i-chart"/></svg>
+        <svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>
         <span class="ttl">资产库</span>
         <div class="acts">
           <button class="pact" id="addBtn" title="归档到资产库">＋<span class="caret">▾</span></button>
@@ -457,14 +484,14 @@ table.dt tr.on td{background:var(--accent);}
           <div class="hmi">打开资源目录</div>
           <div class="hsep"></div>
           <div class="hmi" data-go="trash">回收站…</div>
-          <div class="hmi"><svg class="ico-sm"><use href="#i-refresh"/></svg>刷新</div>
+          <div class="hmi"><svg class="ico-sm"><use href="#i-refresh" xlink:href="#i-refresh"/></svg>刷新</div>
         </div>
       </div>
 
       <!-- 工具栏 32px（输入框 26px） -->
       <div class="toolbar">
         <div class="sbox">
-          <svg class="ico-sm mag"><use href="#i-search"/></svg>
+          <svg class="ico-sm mag"><use href="#i-search" xlink:href="#i-search"/></svg>
           <input id="q" placeholder="搜索存档（显示名 / 别名 / 标签 / 来源表）">
         </div>
         <button class="tbtn" id="filterBtn" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
@@ -492,6 +519,11 @@ table.dt tr.on td{background:var(--accent);}
             <div class="pitem"><span class="tk">&#10003;</span>临时</div>
             <div class="pitem"><span class="tk">&#10003;</span>外部</div>
           </div>
+          <div class="psec">
+            <div class="ph">实例（§13）</div>
+            <div class="pitem on"><span class="tk">&#10003;</span>项目<span class="n">7</span></div>
+            <div class="pitem on"><span class="tk">&#10003;</span>全局<span class="n">1</span></div>
+          </div>
         </div>
 
         <div class="pop pop-sort" id="sortPop">
@@ -514,21 +546,21 @@ table.dt tr.on td{background:var(--accent);}
             <div class="ghead sub" data-fold="g1"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
             <div class="gbody" id="fold-g1">
               <div class="row sel" title="dau_report.sql · 文件 · v3 · 已归档（强）· 1.2 KB · 归档 2026-09-15 09:12">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">dau_report.sql</span>
                 <span class="ver">v3</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">1.2 KB · 3 天前</span>
               </div>
               <div class="row" title="渠道对比.py · 文件 · v2 · 已归档（强）· 4.6 KB · 归档 2026-09-10 15:40">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">渠道对比.py</span>
                 <span class="ver">v2</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">4.6 KB · 5 天前</span>
               </div>
               <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 归档 2026-09-14 20:05">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">临时订单分析.sql</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">12.4 KB · 昨天</span>
@@ -537,36 +569,38 @@ table.dt tr.on td{background:var(--accent);}
             <div class="ghead sub" data-fold="g2"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
             <div class="gbody" id="fold-g2">
               <div class="row" title="monthly.md · 文件 · v2 · 已归档（强）· 3.1 KB · 归档 2026-09-01 09:30">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">monthly.md</span>
                 <span class="ver">v2</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">3.1 KB · 2 周前</span>
               </div>
               <div class="row" title="mock_orders · 分析表（DuckDB）· v1（省略版本徽标）· 分析表（中）· 12,480 行 × 18 列 · 归档 2026-09-11 10:02">
-                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
                 <span class="nm">mock_orders</span>
+                <span class="scope-badge">项目</span>
                 <span class="sb b-info"><span class="d"></span>分析表</span>
                 <span class="meta">12,480 行 × 18 列</span>
               </div>
-              <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1,204,388 行 × 26 列 · 归档 2026-09-08 17:20">
-                <svg class="ico ic"><use href="#i-grid"/></svg>
+              <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1,204,388 行 × 26 列 · 全局实例（已升级）· 归档 2026-09-08 17:20">
+                <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
                 <span class="nm">dwd_orders_view</span>
                 <span class="ver">v2</span>
+                <span class="scope-badge">全局</span>
                 <span class="sb b-info"><span class="d"></span>分析表</span>
                 <span class="meta">1.2M 行 × 26 列</span>
               </div>
             </div>
             <div class="ghead sub" data-fold="g3"><span class="chev">▼</span>外部数据<span class="cnt">2</span></div>
             <div class="gbody" id="fold-g3">
-              <div class="row" title="ods.orders · 引用（TableRef）· 引用（弱）· 无内容指纹（引用不可指纹）· 归档 2026-09-09 16:40">
-                <svg class="ico ic"><use href="#i-link"/></svg>
+              <div class="row" title="ods.orders · 引用（TableRef 已划掉，仅旧行兼容）· 引用（弱）· 无内容指纹 · 归档 2026-09-09 16:40">
+                <svg class="ico ic"><use href="#i-link" xlink:href="#i-link"/></svg>
                 <span class="nm">ods.orders</span>
                 <span class="sb b-warn"><span class="d"></span>引用</span>
                 <span class="meta">无指纹 · 6 天前</span>
               </div>
               <div class="row" title="sales_daily.csv · 文件 · v2 · 已归档（强）· 8.7 KB · 归档 2026-08-18 11:02">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">sales_daily.csv</span>
                 <span class="ver">v2</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
@@ -583,21 +617,21 @@ table.dt tr.on td{background:var(--accent);}
             <div class="ghead sub"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
             <div class="gbody">
               <div class="row" title="dau_report.sql · 文件 · v3 · 已归档（强）· 指纹不匹配：期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8 · 行内已省略大小与相对时间（优先级最低）">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">dau_report.sql</span>
                 <span class="ver">v3</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="sb b-warn">内容已变</span>
               </div>
               <div class="row" title="渠道对比.py · 文件 · v2 · 已归档（强）· 指纹不匹配：期望 8c41d7e9b2aa / 实际 b90f42d6cc17 · 行内已省略大小与相对时间">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">渠道对比.py</span>
                 <span class="ver">v2</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="sb b-warn">内容已变</span>
               </div>
               <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 归档 2026-09-14 20:05">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">临时订单分析.sql</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">12.4 KB · 昨天</span>
@@ -606,20 +640,20 @@ table.dt tr.on td{background:var(--accent);}
             <div class="ghead sub"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
             <div class="gbody">
               <div class="row" title="monthly.md · 文件 · v2 · 已归档（强）· 3.1 KB · 归档 2026-09-01 09:30">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">monthly.md</span>
                 <span class="ver">v2</span>
                 <span class="sb b-ok"><span class="d"></span>已归档</span>
                 <span class="meta">3.1 KB · 2 周前</span>
               </div>
               <div class="row" title="mock_orders · 分析表（DuckDB）· v1（省略版本徽标）· 分析表（中）· 12,480 行 × 18 列">
-                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
                 <span class="nm">mock_orders</span>
                 <span class="sb b-info"><span class="d"></span>分析表</span>
                 <span class="meta">12,480 行 × 18 列</span>
               </div>
               <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1,204,388 行 × 26 列">
-                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <svg class="ico ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
                 <span class="nm">dwd_orders_view</span>
                 <span class="ver">v2</span>
                 <span class="sb b-info"><span class="d"></span>分析表</span>
@@ -628,14 +662,14 @@ table.dt tr.on td{background:var(--accent);}
             </div>
             <div class="ghead sub"><span class="chev">▼</span>外部数据<span class="cnt">2</span></div>
             <div class="gbody">
-              <div class="row sel" title="ods.orders · 引用（TableRef）· 引用（弱）· 无内容指纹 · 末次校验 2026-09-15 09:02 · 本次未校验">
-                <svg class="ico ic"><use href="#i-link"/></svg>
+              <div class="row sel" title="ods.orders · 引用（TableRef 已划掉，仅旧行兼容）· 引用（弱）· 无内容指纹 · 末次校验 2026-09-15 09:02 · 本次未校验">
+                <svg class="ico ic"><use href="#i-link" xlink:href="#i-link"/></svg>
                 <span class="nm">ods.orders</span>
                 <span class="sb b-warn"><span class="d"></span>引用</span>
                 <span class="meta">无指纹 · 未校验</span>
               </div>
               <div class="row miss" title="sales_daily.csv · 文件 · v2 · 已归档（强）· 本体缺失：期望 resources/data/sales_daily.csv（记录仍在，文件不在），行内已省略大小与相对时间">
-                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <svg class="ico ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
                 <span class="nm">sales_daily.csv</span>
                 <span class="mdot"></span>
                 <span class="ver">v2</span>
@@ -648,7 +682,7 @@ table.dt tr.on td{background:var(--accent);}
         <!-- 空库态 -->
         <div class="st st-empty">
           <div class="empty-state">
-            <div class="big"><svg><use href="#i-chart"/></svg></div>
+            <div class="big"><svg><use href="#i-chart" xlink:href="#i-chart"/></svg></div>
             <div class="t">还没有任何存档</div>
             <div class="d">把值得留存的草稿归档进来，<br>它就有了版本、来源与内容指纹。</div>
             <div class="btns">
@@ -656,7 +690,7 @@ table.dt tr.on td{background:var(--accent);}
               <button class="btn-s">了解资产库能做什么</button>
             </div>
             <div class="sug">
-              <svg class="ico-sm ic"><use href="#i-info"/></svg>
+              <svg class="ico-sm ic"><use href="#i-info" xlink:href="#i-info"/></svg>
               <span>草稿箱里有 <b>3</b> 个文件看起来值得归档（dau_report.sql · monthly.md · 渠道对比.py）<br><span class="dlink" data-go="archive" style="margin-top:2px">去归档…</span></span>
             </div>
           </div>
@@ -665,7 +699,7 @@ table.dt tr.on td{background:var(--accent);}
         <!-- 搜索无结果 -->
         <div class="st st-noresult">
           <div class="empty-state">
-            <div class="big"><svg><use href="#i-search"/></svg></div>
+            <div class="big"><svg><use href="#i-search" xlink:href="#i-search"/></svg></div>
             <div class="t">没有匹配的存档</div>
             <div class="d">当前条件：关键词「渠道」+ 标签 月报 + kind 引用（3 个条件叠加）<br>换个关键词，或放宽筛选条件。</div>
             <div class="btns">
@@ -698,13 +732,13 @@ table.dt tr.on td{background:var(--accent);}
     <!-- 中央编辑区（只读打开） -->
     <section class="center">
       <div class="ctabs">
-        <div class="ctab ct-file"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc"/></svg>dau_report.sql <span class="ro">只读</span><span class="x2">✕</span></div>
-        <div class="ctab ct-ref"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-link"/></svg>ods.orders <span class="ro">引用</span><span class="x2">✕</span></div>
-        <div class="ctab ct-none" style="color:var(--muted)"><svg class="ico-sm"><use href="#i-chart"/></svg>资产库</div>
+        <div class="ctab ct-file"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>dau_report.sql <span class="ro">只读</span><span class="x2">✕</span></div>
+        <div class="ctab ct-ref"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-link" xlink:href="#i-link"/></svg>ods.orders <span class="ro">引用 · 旧行</span><span class="x2">✕</span></div>
+        <div class="ctab ct-none" style="color:var(--muted)"><svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>资产库</div>
       </div>
 
       <div class="strip s-ro">
-        <svg class="ico-sm"><use href="#i-lock"/></svg>
+        <svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>
         <span>已归档（只读）· 归档后不可写，需取回编辑</span>
         <span class="grow"></span>
         <button class="btn-s warn" data-go="versions">版本历史…</button>
@@ -712,14 +746,14 @@ table.dt tr.on td{background:var(--accent);}
       </div>
 
       <div class="strip s-ref">
-        <svg class="ico-sm"><use href="#i-warn"/></svg>
-        <span>引用型存档：内容不在本机，下面显示的是远端当前内容（可能已变更）</span>
+        <svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>
+        <span>引用型存档（TableRef 已划掉，仅旧行兼容）：内容不在本机，下面显示的是远端当前内容（可能已变更）</span>
         <span class="grow"></span>
         <button class="btn-s warn" id="revalidateBtn2">立即校验</button>
       </div>
 
       <div class="strip s-reject">
-        <svg class="ico-sm"><use href="#i-warn"/></svg>
+        <svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>
         <span><b>保存被拒：这是归档本体，请先取回</b> · 路径落在 <span class="mono">{project}/resources/</span> 的写入由应用守卫直接拒绝</span>
         <span class="grow"></span>
         <button class="btn-s" data-go="checkout">取回（检出）…</button>
@@ -766,10 +800,10 @@ table.dt tr.on td{background:var(--accent);}
       <!-- File 型详情 -->
       <div class="dstate dp-file">
         <div class="dhead">
-          <svg class="ico-sm ic"><use href="#i-doc"/></svg>
+          <svg class="ico-sm ic"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="dnm">dau_report.sql</span>
           <span class="dver">v3</span>
-          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit"/></svg></button>
+          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
         </div>
         <div class="dsub">别名 渠道日报 · kind 文件（复现强度 强）</div>
         <div class="dbody">
@@ -780,7 +814,7 @@ table.dt tr.on td{background:var(--accent);}
             <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
             <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
             <div class="kv blk"><span class="k">物理路径</span><span class="v mono">resources/reports/dau_report.sql</span></div>
-            <div class="locknote"><svg class="ico-sm"><use href="#i-lock"/></svg><span>归档后不可写，需取回编辑</span></div>
+            <div class="locknote"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg><span>归档后不可写，需取回编辑</span></div>
           </div>
 
           <div class="sect">
@@ -812,7 +846,7 @@ table.dt tr.on td{background:var(--accent);}
           <div class="sect">
             <div class="sect-h">内容预览<span class="lock" style="color:var(--muted)">只读</span></div>
             <div class="prev">
-              <div class="prev-h"><svg class="ico-sm"><use href="#i-lock"/></svg>前 20 行 · 不可编辑</div>
+              <div class="prev-h"><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>前 20 行 · 不可编辑</div>
               <div class="prev-b">SELECT channel,
   count(*) AS orders,
   sum(amount) AS gmv
@@ -831,16 +865,16 @@ GROUP BY channel...</div>
       <!-- TableRef 型详情（顶部失效警告条） -->
       <div class="dstate dp-ref">
         <div class="warnstrip">
-          <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg>
+          <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg>
           <span class="grow">这是引用，源表可能已变更或被删除<br><span style="opacity:.85">最后校验：2026-09-15 09:02 · 存在</span></span>
           <button class="btn-s warn" id="revalidateBtn">立即校验</button>
         </div>
         <div class="dhead">
-          <svg class="ico-sm ic"><use href="#i-link"/></svg>
+          <svg class="ico-sm ic"><use href="#i-link" xlink:href="#i-link"/></svg>
           <span class="dnm">ods.orders</span>
-          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit"/></svg></button>
+          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit" xlink:href="#i-edit"/></svg></button>
         </div>
-        <div class="dsub">kind 引用（复现强度 弱）· 本体在远端，不在本机</div>
+        <div class="dsub">kind 引用 · TableRef 已划掉（2026-10-13），本页仅对旧行读取兼容</div>
         <div class="dbody">
 
           <div class="sect">
@@ -879,6 +913,95 @@ GROUP BY channel...</div>
         </div>
       </div>
 
+      <!-- 洞察联动（T18–T21，2026-10-22 增量）：右栏「已洞察表」集合卡 -->
+      <div class="dp-insight">
+        <div class="sethead">
+          <svg class="ico-sm ic"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+          <span class="ttl2">已洞察表</span>
+          <span class="cnt2">3 项 · 会话工作集</span>
+        </div>
+        <div class="setbody">
+          <div class="setintro">进入过洞察分析的表进入此集合（源表 / 结果集 / 文件三来源）；集合内临时表不参与 30 分钟 TTL 清理（T21）。右栏只读快照，集合与当前中间页同源。</div>
+
+          <div class="setitem" data-item="m0">
+            <div class="srow1">
+              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+              <span class="snm">orders_profile</span>
+              <span class="scur">当前</span>
+            </div>
+            <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-link" xlink:href="#i-link"/></svg>源表 · warehouse.orders</div>
+            <div class="smeta">12,480 行 × 18 列 · 画像 12 项</div>
+            <div class="setacts">
+              <button class="btn-s btn-xs" data-toast="已发起对比：orders_profile ↔ 选中条目 · 中间页已切对比形态（T18）">对比…</button>
+              <button class="btn-s btn-xs" data-ov="ov-m0">关系排查</button>
+              <button class="btn-p btn-xs" data-go="insight-archive">归档…</button>
+            </div>
+            <div class="ovbox" id="ov-m0">
+              <div class="ov-h"><svg class="ico-sm"><use href="#i-seq" xlink:href="#i-seq"/></svg>同名列值重叠 · orders_profile ↔ dwd_orders_view</div>
+              <table class="ov-tbl">
+                <thead><tr><th>同名列</th><th>交集数</th><th>占 orders_profile</th><th>占 dwd_orders_view</th></tr></thead>
+                <tbody>
+                  <tr><td>order_id</td><td class="num">12,344</td><td class="num">98.9%</td><td class="num">97.6%</td></tr>
+                  <tr><td>channel</td><td class="num">6</td><td class="num">100%</td><td class="num">100%</td></tr>
+                  <tr><td>amount</td><td class="num">—</td><td class="num">数值列不判重叠</td><td class="num">—</td></tr>
+                </tbody>
+              </table>
+              <div class="ov-note">语义 = 值域交集（非外键）；按交集数降序，无类型兼容同名列显示空态（T19）。</div>
+            </div>
+          </div>
+
+          <div class="setitem" data-item="m1">
+            <div class="srow1">
+              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+              <span class="snm">dwd_orders_view</span>
+            </div>
+            <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-plug" xlink:href="#i-plug"/></svg>结果集 · SELECT · 洞察中间页</div>
+            <div class="smeta">1,204,388 行 × 26 列</div>
+            <div class="setacts">
+              <button class="btn-s btn-xs" data-toast="已发起对比：dwd_orders_view ↔ 选中条目 · 中间页已切对比形态（T18）">对比…</button>
+              <button class="btn-s btn-xs" data-ov="ov-m1">关系排查</button>
+              <button class="btn-p btn-xs" data-go="insight-archive">归档…</button>
+            </div>
+            <div class="ovbox" id="ov-m1">
+              <div class="ov-h"><svg class="ico-sm"><use href="#i-seq" xlink:href="#i-seq"/></svg>同名列值重叠 · dwd_orders_view ↔ orders_profile</div>
+              <table class="ov-tbl">
+                <thead><tr><th>同名列</th><th>交集数</th><th>占 dwd_orders_view</th><th>占 orders_profile</th></tr></thead>
+                <tbody>
+                  <tr><td>order_id</td><td class="num">12,344</td><td class="num">97.6%</td><td class="num">98.9%</td></tr>
+                  <tr><td>channel</td><td class="num">6</td><td class="num">100%</td><td class="num">100%</td></tr>
+                </tbody>
+              </table>
+              <div class="ov-note">与上一条互为镜像（T19）。</div>
+            </div>
+          </div>
+
+          <div class="setitem" data-item="m2">
+            <div class="srow1">
+              <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
+              <span class="snm">sales_daily.csv</span>
+            </div>
+            <div class="ssrc"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>文件 · 本地导入（无连接）</div>
+            <div class="smeta">3,205 行 × 9 列</div>
+            <div class="setacts">
+              <button class="btn-s btn-xs" data-toast="已发起对比：sales_daily.csv ↔ 选中条目 · 中间页已切对比形态（T18）">对比…</button>
+              <button class="btn-s btn-xs" data-ov="ov-m2">关系排查</button>
+              <button class="btn-p btn-xs" data-go="insight-archive">归档…</button>
+            </div>
+            <div class="ovbox" id="ov-m2">
+              <div class="ov-h"><svg class="ico-sm"><use href="#i-seq" xlink:href="#i-seq"/></svg>同名列值重叠 · sales_daily.csv ↔ orders_profile</div>
+              <table class="ov-tbl">
+                <thead><tr><th>同名列</th><th>交集数</th><th>占 sales_daily.csv</th><th>占 orders_profile</th></tr></thead>
+                <tbody>
+                  <tr><td>date</td><td class="num">31</td><td class="num">100%</td><td class="num">0.3%</td></tr>
+                </tbody>
+              </table>
+              <div class="ov-note">仅日期维度重叠，无业务键（T19）。</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
     </aside>
   </div>
 
@@ -898,6 +1021,8 @@ GROUP BY channel...</div>
     <div class="mi">打标签…</div>
     <div class="mi">移动到分组 ▾</div>
     <div class="sep"></div>
+    <div class="mi" data-toast="已把 mock_orders 表 + 版本信息复制到全局 DuckDB（G_ 连接）· scope=global · 项目行保留并标记「已升级」（§13.3）">升级到全局…</div>
+    <div class="sep"></div>
     <div class="mi" data-toast="已在系统中显示 resources/reports/dau_report.sql">在系统中显示</div>
     <div class="mi" data-toast="已复制路径 resources/reports/dau_report.sql">复制路径</div>
     <div class="sep"></div>
@@ -913,6 +1038,8 @@ GROUP BY channel...</div>
     <div class="mi">批量打标签…<span class="k">3 项</span></div>
     <div class="mi">批量移动到分组 ▾<span class="k">3 项</span></div>
     <div class="sep"></div>
+    <div class="mi dim">升级到全局…（多选不可用，§13.3）</div>
+    <div class="sep"></div>
     <div class="mi danger">移入回收站（3 项）<span class="k">Del</span></div>
   </div>
 
@@ -921,10 +1048,10 @@ GROUP BY channel...</div>
 
   <!-- 归档确认对话框（§4.1） -->
   <div class="dlg dlg-archive">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-chart"/></svg>归档为存档<span class="sub2">来源：草稿箱</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-chart" xlink:href="#i-chart"/></svg>归档为存档<span class="sub2">来源：草稿箱</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
       <div class="srcbar">
-        <svg class="ico-sm"><use href="#i-doc"/></svg>
+        <svg class="ico-sm"><use href="#i-doc" xlink:href="#i-doc"/></svg>
         <span class="mono">scratchpad/reports/dau_report.sql</span>
         <span class="tagn">来自草稿箱</span>
       </div>
@@ -949,6 +1076,13 @@ GROUP BY channel...</div>
         <div class="fw"><input class="inp ro" value="本地 MySQL · analytics" readonly></div>
         <div class="fhint">自动带出草稿的 file_meta.last_connection_id —— 归档凭证的关键一环</div>
 
+        <div class="fl">归档模式</div>
+        <div class="fw"><div class="radios">
+          <label><span class="rdot on"></span>复制（默认）</label>
+          <label><span class="rdot"></span>引用（大文件省盘）</label>
+        </div></div>
+        <div class="fhint">复制：本体进 <span class="mono">resources/</span> + 只读，草稿保留为工作副本；引用：本体留原位只存元数据，打开时校验指纹（2026-10-13 两档粒度）</div>
+
         <div class="fl">保留历史内容</div>
         <div class="fw"><span class="selw">跟随设置（最近 5 份）<span class="ar">▾</span></span></div>
         <div class="fhint">默认 5 份，对话框里可单次覆盖；选 0 则只留元数据</div>
@@ -961,22 +1095,22 @@ GROUP BY channel...</div>
         </div></div>
         <div class="fhint">目标已存在 → 改名 / 取消，不静默覆盖</div>
       </div>
-      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>归档 = 移动 + 只读锁定：本体进入 <span class="mono">resources/</span>，草稿侧消失，同时生成 v1 与内容指纹。不存在「凭空创建存档」。</span></div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>归档 = 复制 + 只读锁定：本体复制进 <span class="mono">resources/</span> 并冻结，草稿保留为工作副本（2026-10-13 起默认 copy，不再搬走草稿），同时生成 v1 与内容指纹。不存在「凭空创建存档」。</span></div>
     </div>
     <div class="dlg-foot">
       <span>Ctrl+Shift+A 在草稿箱侧发起</span>
       <span class="grow"></span>
       <button class="btn-s" data-go="default">取消</button>
-      <button class="btn-p" data-toast="已归档 dau_report.sql → resources/reports/（v1）· 草稿侧已移出" data-go="default">归档</button>
+      <button class="btn-p" data-toast="已归档 dau_report.sql → resources/reports/（v1）· 草稿保留为工作副本" data-go="default">归档</button>
     </div>
   </div>
 
   <!-- 取回（检出）对话框（§4.2） -->
   <div class="dlg dlg-checkout">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-copy"/></svg>取回（检出）<span class="sub2">存档 → 草稿工作副本</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-copy" xlink:href="#i-copy"/></svg>取回（检出）<span class="sub2">存档 → 草稿工作副本</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
       <div class="srcbar">
-        <svg class="ico-sm"><use href="#i-lock"/></svg>
+        <svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>
         <span class="mono">dau_report.sql</span>
         <span>v3 · 1.2 KB</span>
         <span class="tagn">归档本体不动</span>
@@ -995,7 +1129,7 @@ GROUP BY channel...</div>
           <label><span class="ckbox"></span>只取回，不打开</label>
         </div></div>
       </div>
-      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>结果是草稿箱里出现一份副本，本体不动；草稿侧记录 <span class="mono">derived_from_resource_id</span>。<b>修改后再次归档将生成 v4</b>。</span></div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>结果是草稿箱里出现一份副本，本体不动；草稿侧记录 <span class="mono">derived_from_resource_id</span>。<b>修改后再次归档将生成 v4</b>。</span></div>
     </div>
     <div class="dlg-foot">
       <span>取回不会解锁本体</span>
@@ -1007,7 +1141,7 @@ GROUP BY channel...</div>
 
   <!-- 版本历史对话框（§4.3） -->
   <div class="dlg dlg-versions">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history" xlink:href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
       <table class="dt">
         <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
@@ -1044,7 +1178,7 @@ GROUP BY channel...</div>
         <button class="btn-s" data-vact="checkout">取回该版本为草稿</button>
         <button class="btn-s" data-vact="drop">删除该版本的内容副本</button>
       </div>
-      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <span class="mono">revert</span> 同构）；也不做行级 diff（文本 diff 归编辑器）。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
+      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <span class="mono">revert</span> 同构）；也不做行级 diff（文本 diff 归编辑器）。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
     </div>
     <div class="dlg-foot">
       <span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span>
@@ -1055,7 +1189,7 @@ GROUP BY channel...</div>
 
   <!-- 回收站对话框（§4.4） -->
   <div class="dlg dlg-trash">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash" xlink:href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
       <table class="dt">
         <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
@@ -1092,7 +1226,7 @@ GROUP BY channel...</div>
       </table>
 
       <div class="alertbox" id="alertTrash">
-        <div class="at"><svg class="ico-sm"><use href="#i-warn"/></svg>清空回收站</div>
+        <div class="at"><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>清空回收站</div>
         <div class="ad">将永久删除 3 项存档条目及其内容副本，并删除登记行。此操作不可撤销。</div>
         <div class="aa">
           <button class="btn-d" id="confirmEmpty">确认清空</button>
@@ -1100,7 +1234,7 @@ GROUP BY channel...</div>
         </div>
       </div>
 
-      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>跨模块条目（草稿箱 / 编辑器）只做呈现，不在这里还原 —— 语义由项目级 <span class="mono">ProjectTrash</span> 保证；永久删除与清空一律走 AlertDialog 二次确认。</span></div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>跨模块条目（草稿箱 / 编辑器）只做呈现，不在这里还原 —— 语义由项目级 <span class="mono">ProjectTrash</span> 保证；永久删除与清空一律走 AlertDialog 二次确认。</span></div>
     </div>
     <div class="dlg-foot">
       <span>共 3 项存档条目 · 1 项属于草稿箱</span>
@@ -1113,14 +1247,14 @@ GROUP BY channel...</div>
 
   <!-- 索引修复对话框（§4.5） -->
   <div class="dlg dlg-repair">
-    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn"/></svg>索引修复<span class="sub2">孤儿检测 · 文件系统是本体权威，登记表是索引</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn" xlink:href="#i-warn"/></svg>索引修复<span class="sub2">孤儿检测 · 文件系统是本体权威，登记表是索引</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
     <div class="dlg-body">
-      <div class="note warn" style="margin-top:0"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg><span>不做自动修复：三类问题全部需要用户逐条确认（静默导入会让存档变成用户没同意过的东西）。</span></div>
+      <div class="note warn" style="margin-top:0"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>不做自动修复：三类问题全部需要用户逐条确认（静默导入会让存档变成用户没同意过的东西）。</span></div>
 
       <div class="rgroup" style="margin-top:12px">
         <div class="rgroup-h"><span class="sym">1</span>有文件、无记录<span class="n">1 项</span></div>
         <div class="rrow">
-          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="rp">resources/reports/adhoc_orders.sql</span>
           <span class="rsub">2.3 KB · 修改于 3 天前</span>
           <div class="acts"><button class="btn-s" data-toast="已补登 adhoc_orders.sql 为存档（kind 文件 · 来源留空）">补登为存档（选择 kind / 来源留空）</button></div>
@@ -1130,7 +1264,7 @@ GROUP BY channel...</div>
       <div class="rgroup">
         <div class="rgroup-h"><span class="sym">2</span>有记录、无文件<span class="n">1 项</span></div>
         <div class="rrow err">
-          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="rp">sales_daily.csv <span style="color:var(--muted)">期望 resources/data/sales_daily.csv</span></span>
           <span class="rsub" style="color:var(--danger)">文件不存在</span>
           <div class="acts">
@@ -1143,7 +1277,7 @@ GROUP BY channel...</div>
       <div class="rgroup">
         <div class="rgroup-h"><span class="sym">3</span>指纹不匹配<span class="n">2 项</span></div>
         <div class="rrow err">
-          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="rp">dau_report.sql <span style="color:var(--muted)">期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8</span></span>
           <span class="rsub" style="color:var(--warning)">内容已变</span>
           <div class="acts">
@@ -1152,7 +1286,7 @@ GROUP BY channel...</div>
           </div>
         </div>
         <div class="rrow err">
-          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>
           <span class="rp">渠道对比.py <span style="color:var(--muted)">期望 8c41d7e9b2aa / 实际 b90f42d6cc17</span></span>
           <span class="rsub" style="color:var(--warning)">内容已变</span>
           <div class="acts">
@@ -1170,36 +1304,83 @@ GROUP BY channel...</div>
     </div>
   </div>
 
+  <!-- 洞察归档对话框（T20，2026-10-22 增量 · §12.2） -->
+  <div class="dlg dlg-insight-archive">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-grid" xlink:href="#i-grid"/></svg>洞察归档<span class="sub2">画像快照 → 资产库 File 档 copy</span><button class="x" data-go="insight"><svg class="ico-sm"><use href="#i-x" xlink:href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="srcbar">
+        <svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>
+        <span class="mono">insight/table_profile/orders_profile.json</span>
+        <span class="tagn">来自洞察中间页</span>
+      </div>
+      <div class="fgrid">
+        <div class="fl">显示名</div>
+        <div class="fw"><input class="inp" value="orders_profile 画像"></div>
+
+        <div class="fl">目标位置</div>
+        <div class="fw"><input class="inp ro" value="resources/insight/orders_profile 画像.json" readonly></div>
+        <div class="fhint">快照统一归档到 <span class="mono">resources/insight/</span>，名称与表名绑定</div>
+
+        <div class="fl">归档模式</div>
+        <div class="fw"><div class="radios">
+          <label><span class="rdot on"></span>复制（固定）</label>
+        </div></div>
+        <div class="fhint">洞察快照固定 copy（快照在 <span class="mono">.RSmeta/insight-archive/</span> 生成后复制进 <span class="mono">resources/insight/</span>），不提供 reference（§12.1.1）</div>
+
+        <div class="fl">标签</div>
+        <div class="fw"><div class="tags" style="margin:0">
+          <span class="tagc">洞察<span class="x">✕</span></span>
+          <span class="tagc">月报<span class="x">✕</span></span>
+          <span class="tagc add">＋ 添加标签</span>
+        </div></div>
+
+        <div class="fl">来源表</div>
+        <div class="fw"><input class="inp ro" value="warehouse.orders（binding.source_table）" readonly></div>
+
+        <div class="fl">保留历史内容</div>
+        <div class="fw"><span class="selw">跟随设置（最近 5 份）<span class="ar">▾</span></span></div>
+      </div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info" xlink:href="#i-info"/></svg><span>快照带 <span class="mono">generated_at</span> 时间戳 → 指纹必变 → <b>每次归档都开新版本</b>（有意：审计长在版本上；靠 <span class="mono">keep_versions</span> 兜底）。</span></div>
+      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn" xlink:href="#i-warn"/></svg><span>A2 两视图：报告视图（file 档）已落地；数据视图（analysis 档：配方 + 画像结构化数据，打开 = 桥接结果集二次分析）<b>待决策</b>（规格 §12.2.1，本期做 / 不做）。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>归档后回到洞察中间页 · 集合条目保留</span>
+      <span class="grow"></span>
+      <button class="btn-s" data-go="insight">取消</button>
+      <button class="btn-p" data-toast="已归档洞察快照 orders_profile 画像 → resources/insight/（v1）· 标签：洞察 · 集合条目保留" data-go="insight">归档</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 </div>
 
 <!-- 说明卡片 -->
 <div class="notes">
   <div class="card">
-    <h4><svg class="ico-sm"><use href="#i-chart"/></svg>三种 kind：本体在哪，决定复现强度</h4>
+    <h4><svg class="ico-sm"><use href="#i-chart" xlink:href="#i-chart"/></svg>三种 kind：本体在哪，决定复现强度</h4>
     <div class="legend">
-      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-doc"/></svg>文档形 = 文件</span>
-      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-grid"/></svg>表格形 = 分析表</span>
-      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-link"/></svg>链接形 = 引用</span>
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-doc" xlink:href="#i-doc"/></svg>文档形 = 文件</span>
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-grid" xlink:href="#i-grid"/></svg>表格形 = 分析表</span>
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-link" xlink:href="#i-link"/></svg>链接形 = 引用（TableRef 已划掉，仅旧行兼容）</span>
     </div>
     <div class="legend">
       <span class="li"><span class="sb b-ok"><span class="d"></span>已归档</span>强（内容冻结，重跑同解）</span>
       <span class="li"><span class="sb b-info"><span class="d"></span>分析表</span>中（定义冻结，数据可重建）</span>
     </div>
     <div class="legend">
-      <span class="li"><span class="sb b-warn"><span class="d"></span>引用</span>弱（只记当时指向哪）</span>
+      <span class="li"><span class="sb b-warn"><span class="d"></span>引用</span>弱（只记当时指向哪 · 已划掉，仅旧行）</span>
       <span class="li"><span class="sb b-warn">内容已变</span>指纹不匹配</span>
     </div>
     <ul>
       <li>强度徽标是行内<b>唯一色块</b>；kind 图标只靠形状区分（三者同色，避免与强度语义撞色）</li>
-      <li>版本徽标 <code>v3</code> 在 <code>v1</code> 时省略（减少噪声）；<code>TableRef</code> 无指纹 → 不显示版本</li>
+      <li>版本徽标 <code>v3</code> 在 <code>v1</code> 时省略（减少噪声）；<code>TableRef</code>（已划掉）无指纹 → 不显示版本</li>
       <li>行内字段优先级：<b>显示名 &gt; 复现强度徽标 &gt; 版本徽标 &gt; 相对时间 &gt; 大小</b>；放不下的一律省略号 + 悬浮 tooltip（行 tooltip 带全字段）</li>
       <li>文件型行尾 = 大小与相对时间<b>合并为一个 muted 字段</b>；分析表型 =「行数 × 列数」；引用型 =「无指纹」</li>
     </ul>
   </div>
 
   <div class="card">
-    <h4><svg class="ico-sm"><use href="#i-lock"/></svg>只读是常态（三重强制）</h4>
+    <h4><svg class="ico-sm"><use href="#i-lock" xlink:href="#i-lock"/></svg>只读是常态（三重强制）</h4>
     <ul>
       <li>应用守卫：写入路径落在 <code>resources/</code> 直接拒绝 → 提示「这是归档本体，请先取回」</li>
       <li>编辑器：以只读模式打开（专门的「分析资源锁定」只读来源），内容预览区也带锁标记</li>
@@ -1210,7 +1391,7 @@ GROUP BY channel...</div>
   </div>
 
   <div class="card">
-    <h4><svg class="ico-sm"><use href="#i-more"/></svg>右键菜单项与条件（§3.2）</h4>
+    <h4><svg class="ico-sm"><use href="#i-more" xlink:href="#i-more"/></svg>右键菜单项与条件（§3.2）</h4>
     <ul>
       <li>打开（只读）<code>Enter</code> · 等效双击：文件 → 编辑器只读；分析表 → 结果表格；引用 → 先校验存在性</li>
       <li>取回（检出）… / 版本历史… ：<b>仅单选可用</b>（多选时灰显）</li>
@@ -1221,12 +1402,35 @@ GROUP BY channel...</div>
   </div>
 
   <div class="card">
-    <h4><svg class="ico-sm"><use href="#i-warn"/></svg>异常入口与索引修复</h4>
+    <h4><svg class="ico-sm"><use href="#i-warn" xlink:href="#i-warn"/></svg>异常入口与索引修复</h4>
     <ul>
       <li>状态行 <code>缺失 W</code> / <code>索引异常 V</code> 非 0 时该段高亮可点 → 打开「索引修复」对话框</li>
       <li>本体缺失：行灰显 + 删除线 + <code>danger</code> 点；详情面板出横幅与修复入口</li>
-      <li>指纹不匹配：行内 <code>warning</code> 徽标「内容已变」；<code>TableRef</code> 未校验：详情面板顶部警告条 + 「立即校验」</li>
+      <li>指纹不匹配：行内 <code>warning</code> 徽标「内容已变」；<code>TableRef</code>（已划掉，仅旧行）未校验：详情面板顶部警告条 + 「立即校验」</li>
       <li>三分组处置：有文件无记录 → 补登为存档；有记录无文件 → 从回收站还原 / 删除记录；指纹不匹配 → 接受当前内容 / 从历史还原</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-seq" xlink:href="#i-seq"/></svg>洞察联动（T18–T21，2026-10-22 增量 · §12.2）</h4>
+    <ul>
+      <li>「已洞察表」集合 = 会话工作集（源表 / 结果集 / 文件三来源）；右栏只读快照，集合与中间页同源</li>
+      <li>对比：右栏勾选 → 中间页勾选该表 + 切 <code>Compare</code> 形态并激活中央 tab（T18）</li>
+      <li>关系排查：当前目标 ↔ 集合条目同名列值域交集（<code>OverlapView</code>，按交集数降序；非外键语义，T19）</li>
+      <li>归档：画像快照 JSON → 资产库 File 档 copy（<code>resources/insight/</code>）+ 版本链；标签预置「洞察」，<code>binding.source_table</code> = 表名（T20）</li>
+      <li>临时表保护：集合内表不参与 30 分钟 TTL 与上限淘汰，离开集合解除（内存登记，非 I/O，T21）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-grid" xlink:href="#i-grid"/></svg>双实例（全局 / 项目分析库，2026-10-22 澄清 · §13）</h4>
+    <ul>
+      <li>全局分析库 <code>{system}/analytics.duckdb</code>（G_ 连接）↔ 项目分析库 <code>{项目}/.RSmeta/analytics.duckdb</code>（P_ / GP_）；分析表的「实例」 = 定义所在库</li>
+      <li>展示：筛选层新增「实例」维度（全部 / 项目 / 全局）；行内虚线徽标（项目 / 全局，与强度徽标正交不抢视觉）；全局清单 = 用户数据表（系统内部表过滤，白名单待确认）</li>
+      <li>升级（项目 → 全局）= <b>表 + 版本信息</b>进全局 DuckDB：分析表 = 定义 + 数据全量复制；数据文件（CSV/Parquet/Excel/JSON）= 映射出 DuckDB 表；脚本文件（.sql/.py/.md）= 内容表进全局、分发时重建为文件（方案 A 推荐，待确认）</li>
+      <li>分发（全局 → 项目）：全局行右键「复制到项目…」= 读全局表写入当前项目库 + 版本链分支；脚本重建为 <code>resources/</code> 文件</li>
+      <li><b>跨项目唯一法定路径</b>：<code>项目 A → 全局 → 项目 B</code>；项目 ↔ 项目禁止直传（隔离：每个项目只看得到自己的库 + 全局库）</li>
+      <li><code>promoted_from</code>（草稿→归档）与 <code>scope</code>（项目→全局）是两层升级，不混用</li>
     </ul>
   </div>
 </div>
@@ -1277,7 +1481,8 @@ GROUP BY channel...</div>
 <div class="foot">
   落地：面板 <code>crates/workbench/src/panels.rs</code>（<code>LeftPanel::Resources</code>，活动栏第 3 项）+ 域模型与存储 <code>crates/analytics_resource</code>；详情属性面板沿用 <code>h_resizable</code>（宽度记忆写 <code>settings.json</code>）。<br>
   尺寸新增仅 4 项：<code>ARCHIVE_BADGE_HEIGHT</code> 18 / <code>DETAIL_PANEL_DEFAULT_WIDTH</code> 320 / <code>ARCHIVE_EMPTY_ICON_SIZE</code> 48 / <code>ARCHIVE_STATUS_BAR_HEIGHT</code> 24，其余复用既有常量（面板头 36 / 行高 24 / 控制件 26 / 左 Dock 240 / 活动栏 48）。<br>
-  色值只存在于主题资产（<code>assets/themes/</code>），组件经 <code>cx.theme()</code> 读取，代码零裸 hex；规格见 <code>analytics-resource-prototype-design.md</code>，语义裁决见 <code>analytics-resource-architecture.md</code>。
+  <b>2026-10-22 增量（原型 v2）</b>：归档 = copy（草稿保留工作副本）取代 move；<code>TableRef</code> 已划掉（仅旧行兼容）；归档对话框新增「归档模式」copy / reference 两档；新增洞察联动场景（右栏「已洞察表」集合卡 T18 / 关系排查 T19 / 洞察归档 T20 / 临时表保护 T21），洞察归档对话框 640px 复用详情面板 320px 宽。<br>
+  色值只存在于主题资产（<code>assets/themes/</code>），组件经 <code>cx.theme()</code> 读取，代码零裸 hex；规格见 <code>analytics-resource-prototype-design.md</code>（§12 增量），语义裁决见 <code>analytics-resource-architecture.md</code>，差距对账见 <code>analytics-resource-gap-review.md</code>。
 </div>
 
 <script>
@@ -1293,7 +1498,9 @@ var SCENES = {
   'checkout': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'checkout'},
   'versions': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'versions'},
   'trash':    {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'trash'},
-  'repair':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'repair'}
+  'repair':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'repair'},
+  'insight':  {panel:'list',    status:'normal',  detail:'insight', tabs:'file', strip:'ro',     dialog:'none'},
+  'insight-archive': {panel:'list', status:'normal', detail:'insight', tabs:'file', strip:'ro', dialog:'insight-archive'}
 };
 
 var root = document.documentElement;
@@ -1356,6 +1563,16 @@ wb.addEventListener('click', function(e){
   }
   var m = e.target.closest('[data-toast]');
   if (m){ showToast(m.dataset.toast); return; }
+});
+
+/* 关系排查（T19）：展开 / 收起集合条目内的值重叠表 */
+wb.addEventListener('click', function(e){
+  var ov = e.target.closest('[data-ov]');
+  if (ov){
+    var box = document.getElementById(ov.dataset.ov);
+    if (box) box.classList.toggle('on');
+    return;
+  }
 });
 
 /* 明暗切换 */
@@ -1438,7 +1655,7 @@ document.querySelectorAll('.ghead[data-fold]').forEach(function(h){
 
 /* 立即校验 / 复制指纹 / 重新扫描 */
 function revalidate(){
-  showToast('校验完成：远端 analytics.orders 仍存在 · 引用不复现内容，只记录当时指向');
+  showToast('校验完成：远端 analytics.orders 仍存在 · TableRef 已划掉（2026-10-13），本操作仅对旧行兼容');
 }
 document.getElementById('revalidateBtn').addEventListener('click', revalidate);
 document.getElementById('revalidateBtn2').addEventListener('click', revalidate);
