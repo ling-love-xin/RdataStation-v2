@@ -4680,6 +4680,102 @@ fn sorting_down_re_runs_on_the_source(cx: &mut TestAppContext) {
     );
 }
 
+/// 【A2】刷新**下发筛选**结果：带当初的筛选原料重查（保持形态，不退回全量）
+///
+/// 刷新前的结果集是「下发筛选」产物（`sql` 仍是原 SQL），刷新必须**再一次下发**，
+/// 而不是重跑原查询把用户看到的筛选结果变回全量。
+#[gpui_kit::test]
+fn refreshing_a_filtered_result_keeps_its_shape(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(PushdownRunner {
+        seen: seen.clone(),
+        sorted: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_filter_for_test("orders", cx);
+            panel.set_pushdown(true, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(shared.results().set_count(&id), 2, "下发产生新结果集");
+    assert_eq!(seen.lock().expect("锁").len(), 1, "下发执行了一次");
+
+    // 切到下发结果（标签 2）再刷新
+    cx.update(|_window, cx| {
+        shared.update_results(|store| {
+            assert!(store.select(&id, 1), "切到下发结果集");
+        });
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.refresh_active_result(cx));
+    });
+    wait_for_all_pending(cx, &panel);
+
+    let seen = seen.lock().expect("锁").clone();
+    assert_eq!(seen.len(), 2, "刷新 = 再一次下发（不是退回原查询）");
+    assert_eq!(
+        seen[1],
+        (
+            "select 1".to_string(),
+            "orders".to_string(),
+            vec!["id".to_string(), "name".to_string()],
+        ),
+        "筛选原料（词 + 列名）原样带过去"
+    );
+}
+
+/// 【A2】刷新**排序下发**结果：带当初的列与方向重查（保持形态）
+#[gpui_kit::test]
+fn refreshing_a_sorted_result_keeps_its_shape(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let sorted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(PushdownRunner {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        sorted: sorted.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.sort_down("name", true, cx)));
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(sorted.lock().expect("锁").len(), 1, "排序下发执行了一次");
+
+    // 切到排序结果再刷新
+    cx.update(|_window, cx| {
+        shared.update_results(|store| {
+            assert!(store.select(&id, 1), "切到排序下发结果集");
+        });
+    });
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.refresh_active_result(cx));
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        sorted.lock().expect("锁").clone(),
+        [
+            ("name".to_string(), true),
+            ("name".to_string(), true),
+        ],
+        "刷新 = 再一次排序下发（列与方向原样）"
+    );
+}
+
 /// 【B14】执行器不支持下发：留一句可读原因（不静默）
 #[gpui_kit::test]
 fn pushdown_without_support_says_so(cx: &mut TestAppContext) {

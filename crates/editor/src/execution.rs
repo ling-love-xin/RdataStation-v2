@@ -278,6 +278,39 @@ pub enum ResultPlacement {
     Append,
 }
 
+/// 【A2】一份结果的「形成方式」原料（刷新 ⟳ 时按它重查，保持用户看到的形态）
+///
+/// 下发筛选 / 排序下发的结果集，其 `sql` 仍是**原 SQL**（改写发生在执行器里，
+/// 回填不拿改写后的语句）——原料不随结论回去的话，刷新会退回全量原始查询。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pushdown {
+    /// 下发筛选：当初的筛选词 + 结果集的列（执行器拼 `WHERE` 用）
+    Filtered { filter: String, columns: Vec<String> },
+    /// 排序下发：当初点的列与方向
+    SortedDown { column: String, descending: bool },
+}
+
+impl Pushdown {
+    /// 从执行作业的下发载荷还原（`ExecJob` 的两个下发字段互斥：一次只有其一）
+    pub(crate) fn from_job(
+        filtered: &Option<(String, Vec<String>)>,
+        sorted_down: &Option<(String, bool)>,
+    ) -> Option<Self> {
+        filtered
+            .as_ref()
+            .map(|(filter, columns)| Pushdown::Filtered {
+                filter: filter.clone(),
+                columns: columns.clone(),
+            })
+            .or_else(|| {
+                sorted_down.as_ref().map(|(column, descending)| Pushdown::SortedDown {
+                    column: column.clone(),
+                    descending: *descending,
+                })
+            })
+    }
+}
+
 /// 一次执行的附加选项（B4）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RunOptions {
@@ -837,6 +870,9 @@ pub struct ExecOutcome {
     pub analysis: bool,
     /// 【B15】血缘摘要（“原查询” / “下发筛选” / “排序下发” / “取下一段” / “本地分析”）
     pub lineage: &'static str,
+    /// 【A2】这份结果的「形成方式」原料（下发筛选 / 排序下发时随结论回去；
+    /// 刷新 ⟳ 按它重查，见 [`Pushdown`]）
+    pub pushdown: Option<Pushdown>,
     pub result: Result<QueryData, String>,
 }
 
@@ -1043,6 +1079,8 @@ impl ExecQueue {
                         let transaction =
                             worker_runner.transaction_snapshot(job.connection.as_deref());
                         if let Ok(mut queue) = worker_done.lock() {
+                            // 【A2】下发载荷（filtered / sorted_down）还原成形成原料，随结论回去
+                            let pushdown = Pushdown::from_job(&job.filtered, &job.sorted_down);
                             queue.push_back(ExecOutcome {
                                 document: job.document.clone(),
                                 connection: job.connection.clone(),
@@ -1052,6 +1090,7 @@ impl ExecQueue {
                                 transaction,
                                 analysis: job.analysis.is_some(),
                                 lineage: job.lineage,
+                                pushdown,
                                 result,
                             });
                         }
@@ -1708,7 +1747,38 @@ mod tests {
         assert_eq!(all_target("select 1").segment(), None);
     }
 
-    /// 【B15】血缘摘要：四个下发动作各自有名，普通执行归「原查询」
+    /// 【A2】下发载荷还原成形成原料：filtered / sorted_down 互斥，只有其一
+    #[test]
+    fn pushdown_round_trips_from_the_job_payload() {
+        use super::Pushdown;
+        assert_eq!(
+            Pushdown::from_job(
+                &Some(("ab".to_string(), vec!["id".to_string(), "name".to_string()])),
+                &None,
+            ),
+            Some(Pushdown::Filtered {
+                filter: "ab".to_string(),
+                columns: vec!["id".to_string(), "name".to_string()],
+            })
+        );
+        assert_eq!(
+            Pushdown::from_job(&None, &Some(("created_at".to_string(), true))),
+            Some(Pushdown::SortedDown {
+                column: "created_at".to_string(),
+                descending: true,
+            })
+        );
+        // 两个都没有 = 普通执行（没有可保持的形态）
+        assert_eq!(Pushdown::from_job(&None, &None), None);
+        // 同时有（不该发生）→ 按 filtered 优先（一次只有一个下发载荷）
+        let both = Pushdown::from_job(
+            &Some(("ab".to_string(), vec!["id".to_string()])),
+            &Some(("id".to_string(), false)),
+        );
+        assert!(matches!(both, Some(Pushdown::Filtered { .. })));
+    }
+
+    /// 【A2】血缘摘要：四个下发动作各自有名，普通执行归「原查询」
     ///
     /// 与 `label()` 分开的理由写在这里：标签说的是“用户点了哪个动作”（当前语句 / 选区 / 批量），
     /// 血缘说的是“这份数据由什么产生”——两者在普通执行上恰好不同。

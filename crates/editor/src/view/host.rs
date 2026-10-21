@@ -5633,11 +5633,35 @@ impl EditorHostPanel {
 
     /// 【B5】重跑当前结果集的 SQL（结果**换掉选中那份**，不是新开一份——原位刷新）
     pub(crate) fn refresh_active_result(&mut self, cx: &mut Context<Self>) {
-        let Some(sql) = self.result_sql.clone() else {
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
             self.set_message(Some("这份结果没有可重跑的 SQL".to_string()), cx);
             return;
         };
-        self.execute(ExecTarget::Statement(sql), ResultPlacement::Replace, cx);
+        // 【A2】保持形态：下发筛选 / 排序下发的结果集带当初的原料重查（不退回全量）；
+        // 普通执行 = 原 SQL 重跑。
+        let target = match entry.pushdown.clone() {
+            Some(execution::Pushdown::Filtered { filter, columns }) => {
+                ExecTarget::Filtered {
+                    sql: entry.sql.clone(),
+                    filter,
+                    columns,
+                }
+            }
+            Some(execution::Pushdown::SortedDown {
+                column,
+                descending,
+            }) => ExecTarget::SortedDown {
+                sql: entry.sql.clone(),
+                column,
+                descending,
+            },
+            None => ExecTarget::Statement(entry.sql.clone()),
+        };
+        self.execute(target, ResultPlacement::Replace, cx);
     }
 
     /// 【B5b】取下一段（状态行⑦上的那个按钮）
@@ -6322,6 +6346,8 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connectio
     let channel = outcome.channel;
     // 【B15】血缘：失败也照样带（“这句话是下发筛选发出去的”对排查同样有用）
     let lineage = outcome.lineage;
+    // 【A2】形成原料（下发筛选 / 排序下发）：刷新 ⟳ 按它重查，保持形态
+    let pushdown = outcome.pushdown;
     match outcome.result {
         Ok(data) => ResultEntry::success(
             outcome.document,
@@ -6338,11 +6364,13 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connectio
         .with_connection(connection)
         .with_channel(channel)
         .with_analysis(outcome.analysis)
-        .with_lineage(lineage),
+        .with_lineage(lineage)
+        .with_pushdown(pushdown),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
             .with_connection(connection)
             .with_channel(channel)
-            .with_lineage(lineage),
+            .with_lineage(lineage)
+            .with_pushdown(pushdown),
     }
 }
 

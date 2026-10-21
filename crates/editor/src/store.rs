@@ -33,7 +33,7 @@ use ::shared::string::tsv_row;
 
 use crate::changes::ChangeSet;
 use crate::channel::ExecChannel;
-use crate::execution::ResultPlacement;
+use crate::execution::{Pushdown, ResultPlacement};
 use crate::export::RowKey;
 use crate::model::DocumentId;
 
@@ -251,6 +251,12 @@ pub struct ResultEntry {
     /// 原型 §2.4 要求结果集携带来源摘要：进到第三份结果后，用户得能看出哪份是重查、
     /// 哪份是本地分析（只靠标签序号是看不出来的）。界面在有自定义标题时用标题（执行计划 / 分析）。
     pub lineage: Option<String>,
+    /// 【A2】这份结果的「形成方式」原料：刷新（⟳）时按它重查，**保持形态**
+    ///
+    /// 下发筛选 / 排序下发的结果集，其 `sql` 仍是**原 SQL**（改写发生在执行器里，
+    /// 回填不拿改写后的语句）——不记原料的话，「⟳ 刷新」会退回全量原始查询，
+    /// 用户看着筛选结果点刷新却丢了筛选。`None` = 普通执行（刷新 = 原 SQL 重跑）。
+    pub pushdown: Option<Pushdown>,
     /// 【T2a-2】行标识：这份结果来源表的主键列（探测结果；`None` = 未探测 / 探测不到）
     ///
     /// 两条不变式：
@@ -326,6 +332,8 @@ impl ResultEntry {
             rows,
             // 类型由上游补（`with_column_types`）：默认空 = “没报”，渲染与今天一致
             column_types: Vec::new(),
+            // 【A2】形成原料由回执路径补（`entry_from` 的 `with_pushdown`）：默认 None = 普通执行
+            pushdown: None,
             error: None,
         }
     }
@@ -410,6 +418,13 @@ impl ResultEntry {
         self
     }
 
+    /// 【A2】带上「形成方式」原料（下发筛选 / 排序下发的结果集在刷新时按它重查，
+    /// 保持用户看到的形态；普通执行不填 = 刷新跑原 SQL）
+    pub fn with_pushdown(mut self, pushdown: Option<Pushdown>) -> Self {
+        self.pushdown = pushdown;
+        self
+    }
+
     /// 【B10】给结果集贴一个标题（如「执行计划」；不贴就是“结果 N”）
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -434,6 +449,8 @@ impl ResultEntry {
             columns: Vec::new(),
             rows: Vec::new(),
             column_types: Vec::new(),
+            // 【A2】失败结果没有可保持的形态（不能重查），同样如实 None
+            pushdown: None,
             error: Some(error),
         }
     }
