@@ -68,6 +68,20 @@ impl QueryResult {
 
     /// 从 Arrow 批处理创建查询结果
     pub fn from_batches(columns: Vec<String>, batches: Vec<ArrowBatch>) -> Self {
+        Self::with_batches(columns, batches, Some(true))
+    }
+
+    /// 从 Arrow 批创建查询结果（`is_read_only` 由调用方给）
+    ///
+    /// **列类型从 batch schema 提取**（`arrow_type_to_column_type`），是各驱动
+    /// 结果集类型的**唯一来源**——驱动别处再手写 `QueryResult { .. }` 构造时
+    /// 不补 `column_types`，列类型就静默丢在无类型档（历史教训见 P0 记录）。
+    /// 空 `batches`（0 行结果）没有 schema → 列类型为空 vec（界面按无类型档渲染）。
+    pub fn with_batches(
+        columns: Vec<String>,
+        batches: Vec<ArrowBatch>,
+        is_read_only: Option<bool>,
+    ) -> Self {
         let column_types = if let Some(batch) = batches.first() {
             batch
                 .schema()
@@ -100,7 +114,7 @@ impl QueryResult {
             // 使 SELECT 也带影响行数、DML 的真实影响行数反而不可信。
             // 写语句的真实影响行数需由驱动层提供（待办见 docs/architecture/editor/editor-dev-plan.md）。
             affected_rows: None,
-            is_read_only: Some(true),
+            is_read_only,
         }
     }
 
@@ -706,5 +720,30 @@ mod value_mapping_tests {
         assert_eq!(back.total_rows(), 2, "方法要认字段这一条来源");
         assert_eq!(back.to_rows().len(), 2, "`to_rows()` 同理");
         assert!(!back.is_empty());
+    }
+
+    /// P0：`with_batches` 必须从 Arrow schema 提取 `column_types`（驱动直连路径的
+    /// 列类型唯一来源），`is_read_only` 按调用方给；空 batches 给空类型。
+    #[test]
+    fn with_batches_extracts_column_types_and_read_only() {
+        let result = from_arrays(
+            &["id", "name"],
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1)])),
+                Arc::new(StringArray::from(vec![Some("x")])),
+            ],
+        );
+        assert_eq!(
+            result.column_types,
+            vec!["INT64".to_string(), "VARCHAR".to_string()],
+            "列类型要从 batch schema 提取（Int64→INT64、Utf8→VARCHAR）"
+        );
+        // from_batches 固定 is_read_only = Some(true)
+        assert_eq!(result.is_read_only, Some(true));
+
+        let empty = QueryResult::with_batches(vec!["id".to_string()], vec![], Some(false));
+        assert!(empty.column_types.is_empty(), "空 batches 无 schema → 无类型档");
+        assert_eq!(empty.is_read_only, Some(false), "is_read_only 由调用方透传");
+        assert!(empty.rows.is_empty() && empty.total_rows == 0);
     }
 }

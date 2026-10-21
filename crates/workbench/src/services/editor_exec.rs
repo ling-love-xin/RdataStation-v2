@@ -774,7 +774,8 @@ impl QueryRunner for EngineQueryRunner {
 
         Ok(QueryData {
             columns: result.columns,
-            // 【Q6】本地分析走内存 DuckDB：列类型今天不从这边报（空 = 界面按无类型档渲染）
+            // 【Q6】本地分析走内存 DuckDB：ResultSet 不带列类型（引擎侧 query_duckdb
+            // 只回列名+行值），这里按无类型档渲染；驱动直连路径的类型上报见 P0 记录
             column_types: Vec::new(),
             rows: result
                 .rows

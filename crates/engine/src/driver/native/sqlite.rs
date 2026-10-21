@@ -556,20 +556,14 @@ impl Database for SqliteDatabase {
             let batch = if row_count > 0 {
                 sqlite_rows_to_arrow(&columns, &row_data)?
             } else {
-                return Ok(QueryResult {
+                return Ok(QueryResult::with_batches(
                     columns,
-                    batches: vec![],
-                    is_read_only: Some(is_read_only),
-                    ..Default::default()
-                });
+                    vec![],
+                    Some(is_read_only),
+                ));
             };
 
-            Ok(QueryResult {
-                columns,
-                batches: vec![batch],
-                is_read_only: Some(is_read_only),
-                ..Default::default()
-            })
+            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
         })
         .await
         .map_err(|e| {
@@ -631,20 +625,14 @@ impl Database for SqliteDatabase {
                 let batch = if row_count > 0 {
                     sqlite_rows_to_arrow(&columns, &row_data)?
                 } else {
-                    return Ok(QueryResult {
+                    return Ok(QueryResult::with_batches(
                         columns,
-                        batches: vec![],
-                        is_read_only: Some(is_read_only),
-                        ..Default::default()
-                    });
+                        vec![],
+                        Some(is_read_only),
+                    ));
                 };
 
-                Ok(QueryResult {
-                    columns,
-                    batches: vec![batch],
-                    is_read_only: Some(is_read_only),
-                    ..Default::default()
-                })
+                Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
             }) => {
                 result.map_err(|e| CoreError::database(DatabaseError::query(
                     &sql_for_error,
@@ -1296,18 +1284,10 @@ impl Transaction for SqliteTransaction {
         let batch = if row_count > 0 {
             sqlite_rows_to_arrow(&columns, &row_data)?
         } else {
-            return Ok(QueryResult {
-                columns,
-                batches: vec![],
-                ..Default::default()
-            });
+            return Ok(QueryResult::with_batches(columns, vec![], None));
         };
 
-        Ok(QueryResult {
-            columns,
-            batches: vec![batch],
-            ..Default::default()
-        })
+        Ok(QueryResult::with_batches(columns, vec![batch], None))
     }
 
     async fn commit(&mut self) -> Result<(), CoreError> {
@@ -1666,6 +1646,48 @@ mod tests {
         let path = temp_db_path("query")?;
         let db = SqliteDatabase::new(&path)?;
         db.query("SELECT sqlite_version() AS version").await?;
+        Ok(())
+    }
+
+    /// P0：驱动直连结果必须带列类型（此前直接 `QueryResult { .. }` 构造把
+    /// `column_types` 落在空档，界面表头一直按「无类型」渲染）。
+    /// 类型名 = arrow 映射名（shared `arrow_type_to_column_type`：INT64/VARCHAR…）。
+    #[tokio::test]
+    async fn query_reports_column_types() -> Result<(), CoreError> {
+        let path = temp_db_path("coltypes")?;
+        let db = SqliteDatabase::new(&path)?;
+        db.query("CREATE TABLE t(id INTEGER, name TEXT, price REAL, data BLOB)")
+            .await?;
+        db.query("INSERT INTO t VALUES (1, 'a', 1.5, x'0A')").await?;
+        let result = db.query("SELECT * FROM t").await?;
+        assert_eq!(
+            result.column_types,
+            vec![
+                "INT64".to_string(),
+                "VARCHAR".to_string(),
+                "FLOAT64".to_string(),
+                "BINARY".to_string()
+            ],
+            "列类型要从 arrow schema 提取（INTEGER→INT64、TEXT→VARCHAR、REAL→FLOAT64、BLOB→BINARY）"
+        );
+        assert_eq!(result.columns.len(), result.column_types.len());
+        Ok(())
+    }
+
+    /// P0 边界：0 行结果（空表 SELECT）没有 arrow batch → 列类型留空（界面按
+    /// 无类型档渲染），但列名仍要如实给（洞察空表取样靠列名）。
+    #[tokio::test]
+    async fn query_zero_rows_keeps_columns_drops_types() -> Result<(), CoreError> {
+        let path = temp_db_path("coltypes_empty")?;
+        let db = SqliteDatabase::new(&path)?;
+        db.query("CREATE TABLE t(id INTEGER, name TEXT)").await?;
+        let result = db.query("SELECT * FROM t").await?;
+        assert_eq!(
+            result.columns,
+            vec!["id".to_string(), "name".to_string()]
+        );
+        assert!(result.column_types.is_empty(), "空结果无 schema → 无类型档");
+        assert!(result.is_empty());
         Ok(())
     }
 

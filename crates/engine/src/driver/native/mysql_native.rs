@@ -441,20 +441,18 @@ fn build_query_result(
     is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     if rows.is_empty() {
-        return Ok(QueryResult {
-            columns: columns.to_vec(),
-            batches: vec![],
-            is_read_only: Some(is_read_only),
-            ..Default::default()
-        });
+        return Ok(QueryResult::with_batches(
+            columns.to_vec(),
+            vec![],
+            Some(is_read_only),
+        ));
     }
     let batch = mysql_native_rows_to_arrow(columns, rows)?;
-    Ok(QueryResult {
-        columns: columns.to_vec(),
-        batches: vec![batch],
-        is_read_only: Some(is_read_only),
-        ..Default::default()
-    })
+    Ok(QueryResult::with_batches(
+        columns.to_vec(),
+        vec![batch],
+        Some(is_read_only),
+    ))
 }
 
 // ============================================================================

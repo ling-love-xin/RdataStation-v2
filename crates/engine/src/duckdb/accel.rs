@@ -389,19 +389,10 @@ pub(crate) fn run_sql_on(
         .collect();
 
     if data.is_empty() {
-        return Ok(QueryResult {
-            columns,
-            is_read_only: Some(true),
-            ..QueryResult::empty()
-        });
+        return Ok(QueryResult::with_batches(columns, vec![], Some(true)));
     }
     let batch = crate::duckdb::row_to_arrow::duckdb_rows_to_arrow(&columns, &data)?;
-    Ok(QueryResult {
-        columns,
-        batches: vec![batch],
-        is_read_only: Some(true),
-        ..QueryResult::empty()
-    })
+    Ok(QueryResult::with_batches(columns, vec![batch], Some(true)))
 }
 
 impl AccelSession {

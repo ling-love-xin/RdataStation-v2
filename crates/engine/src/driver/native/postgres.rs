@@ -319,12 +319,11 @@ fn build_query_result(
     is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     let batch = postgres_rows_to_arrow(columns, rows)?;
-    Ok(QueryResult {
-        columns: columns.to_vec(),
-        batches: vec![batch],
-        is_read_only: Some(is_read_only),
-        ..Default::default()
-    })
+    Ok(QueryResult::with_batches(
+        columns.to_vec(),
+        vec![batch],
+        Some(is_read_only),
+    ))
 }
 
 /// PgRow → ColumnDetail（列序契约 0..=9：name/type/nullable/ordinal/key/default/
@@ -397,12 +396,11 @@ impl Database for PostgresDatabase {
             // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
             let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
             let columns = describe_columns_pg(conn, sql).await?;
-            return Ok(QueryResult {
+            return Ok(QueryResult::with_batches(
                 columns,
-                batches: vec![],
-                is_read_only: Some(read_only),
-                ..Default::default()
-            });
+                vec![],
+                Some(read_only),
+            ));
         }
 
         let columns: Vec<String> = rows[0]
@@ -468,12 +466,11 @@ impl Database for PostgresDatabase {
             // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
             let conn = guard.as_mut().expect("lock_pg_conn 保证 Some");
             let columns = describe_columns_pg(conn, sql).await?;
-            return Ok(QueryResult {
+            return Ok(QueryResult::with_batches(
                 columns,
-                batches: vec![],
-                is_read_only: Some(read_only),
-                ..Default::default()
-            });
+                vec![],
+                Some(read_only),
+            ));
         }
 
         let columns: Vec<String> = rows[0]
@@ -513,12 +510,11 @@ impl Database for PostgresDatabase {
                 if rows.is_empty() {
                     // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，洞察空表取样靠它）
                     let columns = describe_columns_pg(&mut conn, &sql_owned).await?;
-                    return Ok(QueryResult {
+                    return Ok(QueryResult::with_batches(
                         columns,
-                        batches: vec![],
-                        is_read_only: Some(read_only),
-                        ..Default::default()
-                    });
+                        vec![],
+                        Some(read_only),
+                    ));
                 }
 
                 let columns: Vec<String> = rows[0].columns()
@@ -1056,11 +1052,7 @@ impl Transaction for PostgresTransaction {
                 .map_err(|e| query_error(sql, e))?;
 
             if rows.is_empty() {
-                return Ok(QueryResult {
-                    columns: vec![],
-                    batches: vec![],
-                    ..Default::default()
-                });
+                return Ok(QueryResult::with_batches(vec![], vec![], None));
             }
 
             let columns: Vec<String> = rows[0]

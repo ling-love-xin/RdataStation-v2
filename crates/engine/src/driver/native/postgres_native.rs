@@ -510,12 +510,11 @@ fn build_query_result(
     is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     let batch = postgres_native_rows_to_arrow(columns, rows)?;
-    Ok(QueryResult {
-        columns: columns.to_vec(),
-        batches: vec![batch],
-        is_read_only: Some(is_read_only),
-        ..Default::default()
-    })
+    Ok(QueryResult::with_batches(
+        columns.to_vec(),
+        vec![batch],
+        Some(is_read_only),
+    ))
 }
 
 fn rows_to_node_info(result: &QueryResult, kind: SchemaObjectKind) -> Vec<NodeInfo> {

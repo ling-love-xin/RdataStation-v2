@@ -979,11 +979,7 @@ impl Transaction for MySqlTransaction {
             if rows.is_empty() {
                 // 0 行也要给列名（空表/无匹配行的 SELECT 仍有结果集结构，事务路径同主连接）
                 let columns = describe_columns_mysql(&mut **tx, sql).await?;
-                return Ok(QueryResult {
-                    columns,
-                    batches: vec![],
-                    ..Default::default()
-                });
+                return Ok(QueryResult::with_batches(columns, vec![], None));
             }
 
             let columns: Vec<String> = rows[0]
@@ -994,11 +990,7 @@ impl Transaction for MySqlTransaction {
 
             let batch = mysql_rows_to_arrow(&columns, &rows)?;
 
-            Ok(QueryResult {
-                columns,
-                batches: vec![batch],
-                ..Default::default()
-            })
+            Ok(QueryResult::with_batches(columns, vec![batch], None))
         } else {
             Err(CoreError::database(DatabaseError::Driver {
                 db_type: "mysql".to_string(),
@@ -1207,20 +1199,18 @@ fn build_query_result(
     is_read_only: bool,
 ) -> Result<QueryResult, CoreError> {
     if rows.is_empty() {
-        return Ok(QueryResult {
-            columns: columns.to_vec(),
-            batches: vec![],
-            is_read_only: Some(is_read_only),
-            ..Default::default()
-        });
+        return Ok(QueryResult::with_batches(
+            columns.to_vec(),
+            vec![],
+            Some(is_read_only),
+        ));
     }
     let batch = mysql_rows_to_arrow(columns, rows)?;
-    Ok(QueryResult {
-        columns: columns.to_vec(),
-        batches: vec![batch],
-        is_read_only: Some(is_read_only),
-        ..Default::default()
-    })
+    Ok(QueryResult::with_batches(
+        columns.to_vec(),
+        vec![batch],
+        Some(is_read_only),
+    ))
 }
 
 /// 将 MySQL 行转换为 Arrow 批处理

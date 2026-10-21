@@ -476,20 +476,14 @@ impl Database for DuckDbDatabase {
             let batch = if row_count > 0 {
                 duckdb_rows_to_arrow(&columns, &row_data)?
             } else {
-                return Ok(QueryResult {
+                return Ok(QueryResult::with_batches(
                     columns,
-                    batches: vec![],
-                    is_read_only: Some(is_read_only),
-                    ..Default::default()
-                });
+                    vec![],
+                    Some(is_read_only),
+                ));
             };
 
-            Ok(QueryResult {
-                columns,
-                batches: vec![batch],
-                is_read_only: Some(is_read_only),
-                ..Default::default()
-            })
+            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
         })
         .await
         .map_err(|e| {
@@ -593,20 +587,14 @@ impl Database for DuckDbDatabase {
             let batch = if row_count > 0 {
                 duckdb_rows_to_arrow(&columns, &row_data)?
             } else {
-                return Ok(QueryResult {
+                return Ok(QueryResult::with_batches(
                     columns,
-                    batches: vec![],
-                    is_read_only: Some(is_read_only),
-                    ..Default::default()
-                });
+                    vec![],
+                    Some(is_read_only),
+                ));
             };
 
-            Ok(QueryResult {
-                columns,
-                batches: vec![batch],
-                is_read_only: Some(is_read_only),
-                ..Default::default()
-            })
+            Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
         })
         .await
         .map_err(|e| {
@@ -684,20 +672,14 @@ impl Database for DuckDbDatabase {
                 let batch = if row_count > 0 {
                     duckdb_rows_to_arrow(&columns, &row_data)?
                 } else {
-                    return Ok(QueryResult {
+                    return Ok(QueryResult::with_batches(
                         columns,
-                        batches: vec![],
-                        is_read_only: Some(is_read_only),
-                        ..Default::default()
-                    });
+                        vec![],
+                        Some(is_read_only),
+                    ));
                 };
 
-                Ok(QueryResult {
-                    columns,
-                    batches: vec![batch],
-                    is_read_only: Some(is_read_only),
-                    ..Default::default()
-                })
+                Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
             }) => {
                 result.map_err(|e| CoreError::database(DatabaseError::query(
                     &sql_for_error,
@@ -1127,20 +1109,14 @@ impl Transaction for DuckDbTransaction {
         let batch = if row_count > 0 {
             duckdb_rows_to_arrow(&columns, &row_data)?
         } else {
-            return Ok(QueryResult {
+            return Ok(QueryResult::with_batches(
                 columns,
-                batches: vec![],
-                is_read_only: Some(is_read_only),
-                ..Default::default()
-            });
+                vec![],
+                Some(is_read_only),
+            ));
         };
 
-        Ok(QueryResult {
-            columns,
-            batches: vec![batch],
-            is_read_only: Some(is_read_only),
-            ..Default::default()
-        })
+        Ok(QueryResult::with_batches(columns, vec![batch], Some(is_read_only)))
     }
 
     async fn commit(&mut self) -> Result<(), CoreError> {
