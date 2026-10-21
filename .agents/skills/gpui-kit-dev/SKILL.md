@@ -1,9 +1,9 @@
 ---
 name: gpui-kit-dev
-description: GPUI-kit 0.7.1 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（0.7.1 自带 Animation / with_animation，禁止手搓 request_animation_frame）、0.7.1 API 查证路径与常用组件 API、简体中文注释约定。编写或修改任何 GPUI 视图、元素、组件代码时使用。
+description: GPUI-kit 视图开发规范：依赖只向下、主题取色零裸色值、render 权威同步点、事件/Action 模式、布局与滚动陷阱、组件选型（禁止手搓）、动效（禁止手搓 request_animation_frame）、API 查证路径与常用组件 API、简体中文注释约定。API 细节以 0.7.1 实测为准；项目已升级 0.8.0（vendor 为 0.8.0，差异与迁移见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md`）。编写或修改任何 GPUI 视图、元素、组件代码时使用。
 ---
 
-# GPUI-kit 0.7 视图开发规范
+# GPUI-kit 视图开发规范（API 以 0.7.1 实测；项目已升级 0.8.0）
 
 ## 依赖与导入
 
@@ -197,8 +197,9 @@ element.with_animation(
 
 ## 查 API（版本对齐，必读）
 
-- **权威源（首选）是本地 vendor 0.7.1 源码**：`vendor/gpui-component/src/`（与 `Cargo.lock` 解析一致；gpui-kit 0.7.1 起本项目 vendor `gpui-component`，含 `tab_panel.rs` 的 `title_suffix` 补丁）。不确定 API 时 `grep -rn "pub fn xxx" <vendor>/gpui-component/src/`，或直接读 `src/` 对应文件。
-- **次选 crates.io 0.7.1 解包源码**：`D:/Dev/Rust/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda/gpui-kit-0.7.1/`、同目录下 `gpui-base-0.7.1/`、`gpui-component-0.7.1/`、`gpui-kit-assets-0.7.1/`（另存 `gpui-component-macros-0.7.1/`）。
-- **本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是 0.7.1**：与锁定版本仍有文件差异（main 已含 0.7.1 的 `speech/`、`empty.rs` 等，但后续演进可能继续领先）。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/`（ARCHITECTURE / STYLING-AND-MOTION）等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当 0.7.1 的 API 依据。
+- **权威源（首选）是本地 vendor 0.8.0 源码**：`vendor/gpui-component/src/`（与 `Cargo.lock` 解析一致；gpui-kit 0.8.0 起本项目 vendor `gpui-component`/`gpui-base`，含项目私有 patch：gpui-base `state.rs` 5 项 + gpui-component `dock/mod.rs` DockSkin tab_bar 配置，见升级报告 §3）。不确定 API 时 `grep -rn "pub fn xxx" <vendor>/gpui-component/src/`，或直接读 `src/` 对应文件。
+- **次选 crates.io 0.8.0 解包源码**：`D:/Dev/Rust/.cargo/registry/src/mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda/gpui-kit-0.8.0/`、同目录下 `gpui-base-0.8.0/`、`gpui-component-0.8.0/`、`gpui-kit-assets-0.8.0/`。
+- **本 skill 的组件清单 / 尺寸档位 / 行为描述按 0.7.1 实测**（2026-10-11）；0.8.0 差异（TabBar `track_scroll`/`menu`/`max_width`、TabVariant Folder、ScrollableMask::vertical_wheel、TabReveal、Dock tab_panel 原生接线等）见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` §7；若本 skill 与 vendor 0.8.0 冲突，以 vendor 为准并回写本 skill。
+- 本地 `D:\ABDM\Compressed\gpui-kit-main\gpui-kit-main` 是 main 分支快照，不是 0.8.0：与锁定版本仍有文件差异。它只用于读 `skills/`（coding-guides / design-guides）与 `docs/` 等**规范类内容**；**禁止**拿它的函数签名 / 组件清单当 0.8.0 的 API 依据。
 - 上游设计规范（选组件、版式、文案、动效）看本地包的 `skills/gpui-kit-design-guides/references/design-guides.md` 与 `skills/gpui-kit/references/coding-guides.md`（规范性文件，优先于任何示例代码）。
 - 找不到 API 时：宁可在该组件源码里找等价能力，也不要凭 React / CSS / 旧版 GPUI 经验“推断”一个方法名。
