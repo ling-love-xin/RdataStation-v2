@@ -713,8 +713,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | **只读锁 ⓘ**（连接侧写策略来源）+「提醒后放行」那一档 | 今天落地的是「项目锁 = 强只读」；另一档随连接策略做 | 本文件 §12 #26（剩余）· §13 #9 |
 | 结果**血缘落库 / 会话恢复** | 只做到 UI 摘要级（重启后回看不了「这份结果怎么来的」） | §12 #16 |
 | **重查包裹语义**（原查询带 `ORDER BY` / `LIMIT` 时外层重查语义会变） | ✅ **已定（2026-10-22，#30）**：保留外层 ORDER BY；有 LIMIT 去掉并提示；「⟳ 刷新」按形成形态重查（不退回全量） | §12 #15 |
-| 结果区高度**不随会话持久化** | 分栏位置只在面板内存里记 | `editor-dev-plan.md` §0 2026-09-17（B5）⬜ 余 |
-| 折叠的**视觉**结果需人工看一眼 | chevron / 点击折叠由内核渲染，用例只覆盖候选与重喂 | `editor-dev-plan.md` §0 2026-09-21（B17）⬜ 余 |
+| 结果区高度**不随会话持久化** | ✅ **已落地（2026-10-22 核验，文档补记）**：拖拽分栏 → `on_resize` 更新 `result_height`（内存）→ Ctrl+S / 关文档 / 退出批量（`save_all_editor_sessions` 挂 `on_window_should_close`）→ `WorkbenchSessionStore::to_context` 落 `editor_contexts.result_height` → 重开 `restore_session` 钳到 `RESULT_MIN..MAX` 恢复；编辑器侧 restore 测试（超上限钳制 / `None` 保持默认）+ workbench 往返测试已覆盖 | `editor-dev-plan.md` §0 2026-09-17（B5）⬜ 余 → ✅（2026-10-22 核验） |
+| 折叠的**视觉**结果需人工看一眼 | ✅ **已定（2026-10-22 核验）：折叠入口已随 #26「行号槽收窄（保底 1 位 + 关折叠槽）」关闭**——chevron 没有 18px 槽位可画，点击折叠入口随之消失；`Capabilities::folding` 三模式均 `false`、`view/fold.rs::is_enabled` 恒 `false`，`sync_fold` 恒走 `set_folding(false)`。候选纯函数（`fold.rs`）与视图喂候选（`view/fold.rs`）保留但不再被调用。恢复折叠需**同步**：能力表 `folding` 置回 `true` + 打开行号槽（vendor `layout_line_numbers` 折叠槽分支）。视觉核验项随关闭撤销 | `editor-dev-plan.md` §0 2026-09-21（B17）⬜ 余 → ✅（2026-10-22 已定：随 #26 关闭） |
 | **多文档恢复** | 恢复侧仍只恢复最近更新的一份（未命名 / 空文档不持久化） | `editor-dev-plan.md` §0 2026-09-19（E3）⬜ 余 |
 | 参数绑定（`:name`） | V1 有原语无闭环；优先走驱动层 prepared statement | §12 #7 |
 | 变量浏览器 · `.ipynb` 互操作 · 迷你系统目录 | 三个后续项（分析模式可用性 / 生态互通 / 离线补全） | §12 #9 / #10 / #11 |
