@@ -27,6 +27,7 @@ pub mod manager;
 pub mod manifest;
 pub mod permission;
 pub mod render;
+pub mod runtime;
 
 pub use dependency::*;
 pub use events::*;

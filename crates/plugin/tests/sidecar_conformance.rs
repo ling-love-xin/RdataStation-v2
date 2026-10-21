@@ -107,6 +107,7 @@ async fn connect(plugin_id: &str) -> (SidecarSupervisor, String) {
             },
             env: Vec::new(),
             protocol: None,
+            runtime_note: None,
         })
         .unwrap_or_else(|e| panic!("部署失败（{}）：{e}", binary().display()));
 

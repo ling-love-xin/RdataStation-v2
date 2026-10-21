@@ -44,6 +44,7 @@ async fn session_for_with(plugin_id: &str, args: &[&str]) -> (SidecarSupervisor,
             },
             env: Vec::new(),
             protocol: Some("rds-driver/1".to_string()),
+            runtime_note: None,
         })
         .unwrap();
 
@@ -275,6 +276,7 @@ async fn a_connect_failure_carries_its_own_code() {
             },
             env: Vec::new(),
             protocol: Some("rds-driver/1".to_string()),
+            runtime_note: None,
         })
         .unwrap();
 

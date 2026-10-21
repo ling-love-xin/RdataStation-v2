@@ -37,6 +37,7 @@ async fn database_for(plugin_id: &str) -> (SidecarSupervisor, String, SidecarDat
             },
             env: Vec::new(),
             protocol: Some("rds-driver/1".to_string()),
+            runtime_note: None,
         })
         .unwrap();
 

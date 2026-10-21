@@ -80,6 +80,14 @@ pub struct PluginBackend {
     /// `script` 型的解释器（如 `python3`；按 PATH 解析）。
     #[serde(default)]
     pub interpreter: Option<String>,
+    /// 运行时语言声明（java / python）。声明后宿主要先做**运行时解析**
+    /// （用户指定 → 环境变量 / PATH → third_party），解析结果填 `program`；
+    /// 不写 = 不启用运行时解析（老清单原样用 `interpreter` 起进程，向后兼容）。
+    #[serde(default)]
+    pub runtime: Option<BackendRuntime>,
+    /// `script` 型的解释器参数（如 Java 的 `-jar`），拼在解释器与脚本之间。
+    #[serde(default)]
+    pub interpreter_args: Vec<String>,
     /// 传输方式；P1 起只有 `framed`（dev-plan §4.2.1）。
     #[serde(default)]
     pub transport: BackendTransport,
@@ -123,6 +131,31 @@ impl BackendKind {
     /// 是不是子进程形态（是就进进程池、走 `sidecar/process.rs`）。
     pub fn is_subprocess(self) -> bool {
         matches!(self, Self::Sidecar | Self::Script)
+    }
+}
+
+/// 驱动 / 脚本运行时的实现语言 —— 宿主按它选**解释器解析策略**：
+/// `Java` 查 `JAVA_HOME\bin\java.exe`（其次 PATH），`Python` 查 PATH 里的 python3。
+/// 具体查找顺序（用户显式指定 → 环境变量 → third_party 兜底）在宿主 `runtime` 模块，
+/// 这里只声明「用哪套策略」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendRuntime {
+    /// Rust 原生进程（通常 kind = sidecar，无需解释器解析）。
+    Rust,
+    /// JVM 系驱动（JDBC）：解释器 = `java`。
+    Java,
+    /// Python 系驱动（DB-API）：解释器 = `python3`。
+    Python,
+}
+
+impl BackendRuntime {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Java => "java",
+            Self::Python => "python",
+        }
     }
 }
 
@@ -189,9 +222,13 @@ impl PluginBackend {
                     .as_deref()
                     .ok_or_else(|| manifest_error("backend.interpreter is required for script"))?;
                 let script = self.resolve_executable(plugin_dir)?;
+                // `interpreter_args` 插在解释器与脚本之间（Java 的 `-jar` 位）；
+                // 有 `runtime` 声明的清单，解释器路径会在宿主运行时解析后替换（此处形态不变）。
+                let mut args = self.interpreter_args.clone();
+                args.push(script.to_string_lossy().into_owned());
                 Ok(BackendCommand {
                     program: PathBuf::from(interpreter),
-                    args: vec![script.to_string_lossy().into_owned()],
+                    args,
                 })
             }
             _ => Ok(BackendCommand {
@@ -516,7 +553,29 @@ impl PluginManifest {
                 if backend.kind == BackendKind::Script
                     && backend.interpreter.as_deref().is_none_or(|s| s.is_empty())
                 {
-                    return Err(manifest_error("backend.interpreter is required for script"));
+                    // 有 `runtime` 声明的 script：解释器由宿主运行时解析补全（如 Java 的
+                    // `java -jar`），可以缺省 `interpreter`；无 runtime 的老清单仍必须显式给。
+                    if backend.runtime.is_none() {
+                        return Err(manifest_error("backend.interpreter is required for script"));
+                    }
+                }
+                if let Some(runtime) = backend.runtime {
+                    match runtime {
+                        // Rust 运行时通常配 sidecar 原生进程；声明了就当解释器解析（PATH 里的
+                        // rustc/cargo 也能起驱动），形态约束宽松 —— 不支持的组合留给进程启动报错。
+                        BackendRuntime::Rust => {}
+                        // interpreter_args 只对 script 形态有意义；sidecar 形态拼上去会
+                        // 把脚本路径当参数塞给原生进程，属于清单写错，当场拒绝。
+                        BackendRuntime::Java | BackendRuntime::Python => {
+                            if backend.kind == BackendKind::Sidecar
+                                && !backend.interpreter_args.is_empty()
+                            {
+                                return Err(manifest_error(
+                                    "backend.interpreter_args is only meaningful for script",
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1109,6 +1168,130 @@ interpreter = "python3"
             "{:?}",
             command.args
         );
+    }
+
+    /// `interpreter_args` 插在解释器与脚本之间（Java `-jar` 位）；`runtime` 声明解析。
+    #[test]
+    fn backend_command_puts_interpreter_args_between_interpreter_and_script() {
+        let dir = Path::new("plugins/com.example.jdbc");
+
+        let java: PluginBackend = toml::from_str(
+            r#"
+kind = "script"
+executable = "lib/rds-jdbc-shell.jar"
+interpreter = "java"
+runtime = "java"
+interpreter_args = ["-jar"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(java.runtime, Some(BackendRuntime::Java));
+        let command = java.command(dir).expect("java script 应当能解析");
+        assert_eq!(command.program, PathBuf::from("java"));
+        assert_eq!(command.args[0], "-jar");
+        assert!(
+            Path::new(&command.args[1]).ends_with("lib/rds-jdbc-shell.jar"),
+            "{:?}",
+            command.args
+        );
+
+        // 无 interpreter_args = 老清单形态，行为不变
+        let py: PluginBackend = toml::from_str(
+            r#"
+kind = "script"
+executable = "driver.py"
+interpreter = "python3"
+runtime = "python"
+"#,
+        )
+        .unwrap();
+        assert_eq!(py.runtime, Some(BackendRuntime::Python));
+        let command = py.command(dir).expect("python script 应当能解析");
+        assert_eq!(command.program, PathBuf::from("python3"));
+        assert_eq!(command.args.len(), 1);
+        assert!(
+            Path::new(&command.args[0]).ends_with("driver.py"),
+            "{:?}",
+            command.args
+        );
+    }
+
+    /// 声明了 runtime 的 script 可以缺省 interpreter（宿主运行时解析补全）；没声明不行。
+    #[test]
+    fn backend_runtime_relaxes_script_interpreter_requirement() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.jdbc"
+name = "JDBC 示例"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/rds-jdbc-shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        manifest.validate().expect("runtime 声明 + 无 interpreter 应当通过校验");
+
+        // 反例：无 runtime 也无 interpreter → 拒绝
+        let bad: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.bad"
+name = "坏清单"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "driver.py"
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        let err = bad.validate().unwrap_err().to_string();
+        assert!(err.contains("interpreter is required"), "{err}");
+    }
+
+    /// `interpreter_args` 只对 script 形态有意义：sidecar 形态声明了当场拒绝。
+    #[test]
+    fn backend_rejects_interpreter_args_on_sidecar() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.bad"
+name = "坏清单"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "sidecar"
+executable = "bin/agent"
+runtime = "java"
+interpreter_args = ["-jar"]
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        let err = manifest.validate().unwrap_err().to_string();
+        assert!(err.contains("only meaningful for script"), "{err}");
     }
 
     /// 不支持的传输 / 平台要在**解析完、起进程前**就说清原因（「不得静默退化」）。

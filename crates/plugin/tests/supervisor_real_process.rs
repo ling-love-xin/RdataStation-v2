@@ -34,6 +34,7 @@ fn deployment(plugin_id: &str, args: &[&str], max_instances: usize) -> Deploymen
         },
         env: Vec::new(),
         protocol: Some("rds-driver/1".to_string()),
+        runtime_note: None,
     }
 }
 

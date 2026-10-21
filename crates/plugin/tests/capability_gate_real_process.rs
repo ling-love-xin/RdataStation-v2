@@ -43,6 +43,7 @@ async fn app_for(plugin_id: &str, args: &[&str]) -> App {
             },
             env: Vec::new(),
             protocol: Some("rds-driver/1".to_string()),
+            runtime_note: None,
         })
         .unwrap();
 

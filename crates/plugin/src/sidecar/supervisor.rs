@@ -80,12 +80,17 @@ pub struct Deployment {
     pub env: Vec<(String, String)>,
     /// 诊断用：清单声明的协议标识。
     pub protocol: Option<String>,
+    /// 运行时解析的说明（java/python 从哪找的）；原生 sidecar / 无 runtime 声明为 `None`。
+    pub runtime_note: Option<String>,
 }
 
 impl Deployment {
     /// 从清单与插件目录解析；`Ok(None)` = 这个插件没有子进程形态（wasm / 纯前端）。
     ///
     /// 清单层面的矛盾（形态 / 传输 / 平台 / 路径）在这里就报出来，不要拖到起进程才发现。
+    /// 声明了 `backend.runtime` 的插件（java / python），这里同时做**解释器运行时解析**：
+    /// 用户指定 → 环境变量 / PATH → third_party 兜底（见 `crate::runtime`），
+    /// 解析出的解释器路径替换 `command.program`（`interpreter_args` 与脚本路径不动）。
     pub fn from_manifest(
         manifest: &PluginManifest,
         plugin_dir: &Path,
@@ -99,12 +104,23 @@ impl Deployment {
             // `process_spec()` 有值就必然有 `[backend]`
             .expect("process_spec 有值必然有 [backend]");
 
+        let mut command = backend.command(plugin_dir)?;
+        let runtime_note = match backend.runtime {
+            Some(runtime) => {
+                let resolved = crate::runtime::RuntimeResolver::global().resolve(runtime)?;
+                command.program = resolved.interpreter;
+                Some(resolved.note)
+            }
+            None => None,
+        };
+
         Ok(Some(Self {
             plugin_id: manifest.plugin.id.clone(),
             spec,
-            command: backend.command(plugin_dir)?,
+            command,
             env: Vec::new(),
             protocol: backend.protocol.clone(),
+            runtime_note,
         }))
     }
 }
