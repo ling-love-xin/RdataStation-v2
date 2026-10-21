@@ -34,6 +34,7 @@ pub use explain::explain_sql;
 pub use formatter::FormatReport;
 pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
+pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
 pub use split::{split_statements, SqlStatement};
 pub use transpiler::TranspileReport;

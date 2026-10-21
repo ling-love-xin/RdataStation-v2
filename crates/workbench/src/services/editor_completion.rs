@@ -31,10 +31,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use editor::channel::ExecChannel;
-use editor::completion::{Candidate, CandidateKind, Catalog, CompletionPort, TemplateSnippet};
+use editor::completion::{Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort, TemplateSnippet};
 
 use database::cache::NavCache;
 use engine::duckdb::federation::{registry::MountedSource, session as fed_session};
+use engine::sql::{ProjectionSource, SqlDialect};
 
 use crate::panels::Shared;
 
@@ -56,6 +57,12 @@ pub struct WorkbenchCompletion {
     keys: Arc<Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
     /// 正在载的 conn_id（去重：同一连接同时只载一次）
     loading: Arc<Mutex<HashSet<String>>>,
+    /// 【P1】已载好的列元数据（按 conn_id → `schema.表` → 列元数据；与 `loaded` / `keys` 同一次预载）
+    ///
+    /// 为什么单独存一份：字段注释（`CompletionPort::column_annotations`）按「来源表 + 来源列」
+    /// 查列注释 / 可空 / 默认，候选目录只有列名 + 类型，装不下这些位；数据来自同一份导航缓存，
+    /// 所以**同一线程同一遍遍历**一起装（零额外 I/O），只是存三处、各取所需。
+    meta: Arc<Mutex<HashMap<String, HashMap<String, Vec<ColumnMeta>>>>>,
     /// 【§710】已提交过「补全实时内省」的 conn_id（等 NavCache 被导航队列填上）。
     ///
     /// 与 `loading` 的差别：`loading` 挡**并发**（载完即移除）；这个挡**串行重试**
@@ -74,6 +81,7 @@ impl WorkbenchCompletion {
             keys: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
             warm_submitted: Arc::new(Mutex::new(HashSet::new())),
+            meta: Arc::new(Mutex::new(HashMap::new())),
             templates: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -117,6 +125,19 @@ impl WorkbenchCompletion {
         None
     }
 
+    /// 【P1】列元数据映射（命中即给；未命中就安排一次后台预载，本次给空）
+    ///
+    /// 与 [`Self::keys_map`] 同一策略：未命中时 `schedule_load` 已去重，重复调用是 no-op。
+    fn meta_map(&self, conn_id: &str) -> Option<HashMap<String, Vec<ColumnMeta>>> {
+        if let Ok(meta) = self.meta.lock()
+            && let Some(map) = meta.get(conn_id)
+        {
+            return Some(map.clone());
+        }
+        self.schedule_load(conn_id);
+        None
+    }
+
     /// 起一次后台预载（**同一连接只起一次**；完成前重复调用都是 no-op）
     fn schedule_load(&self, conn_id: &str) {
         {
@@ -133,12 +154,13 @@ impl WorkbenchCompletion {
             .map(|root| root.to_string_lossy().to_string());
         let loaded = self.loaded.clone();
         let keys = self.keys.clone();
+        let meta = self.meta.clone();
         let loading = self.loading.clone();
         let warm_submitted = self.warm_submitted.clone();
         let conn_id = conn_id.to_string();
         std::thread::spawn(move || {
-            // 【T2a-2】一次遍历同时产出候选目录与主键映射（同一份导航缓存，零额外 I/O）
-            let (catalog, keys_map) = load_raw_catalog(&conn_id, project_root.as_deref());
+            // 【T2a-2 / P1】一次遍历同时产出候选目录 / 主键映射 / 列元数据（同一份导航缓存，零额外 I/O）
+            let (catalog, keys_map, meta_map) = load_raw_catalog(&conn_id, project_root.as_deref());
             if catalog.objects.is_empty() && keys_map.is_empty() {
                 // 【§710】NavCache 没有对象（导航从未展开过 / 预热只暖了 schema）→
                 // 提交一次整条连接的实时内省（cache-aside 写回 L2，复用导航队列的
@@ -158,6 +180,9 @@ impl WorkbenchCompletion {
             }
             if let Ok(mut slot) = keys.lock() {
                 slot.insert(conn_id.clone(), keys_map);
+            }
+            if let Ok(mut slot) = meta.lock() {
+                slot.insert(conn_id.clone(), meta_map);
             }
             if let Ok(mut loading) = loading.lock() {
                 loading.remove(&conn_id);
@@ -208,6 +233,117 @@ impl CompletionPort for WorkbenchCompletion {
         let map = self.keys_map(conn_id)?;
         lookup_primary_key(&map, table)
     }
+
+    /// 【P1】结果集字段注释（血缘 + 表列元数据；内存读：与候选目录同一次预载）
+    ///
+    /// 逐级兜底，缺哪一级都**如实给空**（渲染只画列名，不影响结果）：
+    /// - 未绑定连接 / 联邦通道（SQL 跨源写别名限定，血缘不适用）/ 未知驱动方言 → 全 `None`；
+    /// - `projection_sources` 解析失败（非 SELECT / 语法错）→ 全 `None`；
+    /// - 列元数据没载好 → 安排一次预载（幂等），本次给空；
+    /// - 来源表找不到 / 列不在表列集里（表达式列、缓存列集滞后）→ 那一列 `None`。
+    fn column_annotations(
+        &self,
+        conn_id: Option<&str>,
+        channel: ExecChannel,
+        sql: &str,
+        column_count: usize,
+    ) -> Vec<Option<ColumnAnnotation>> {
+        let Some(conn_id) = conn_id else {
+            return vec![None; column_count];
+        };
+        if matches!(channel, ExecChannel::Federated) {
+            return vec![None; column_count];
+        }
+        // 方言从连接驱动 id 推（结果实际跑在 `conn_id` 上，不能用“当前选中连接”）
+        let Some(dialect) = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|item| item.id == conn_id)
+            .and_then(|item| driver_to_dialect(&item.driver))
+        else {
+            return vec![None; column_count];
+        };
+        let Ok(sources) = engine::SqlEngine::projection_sources(sql, dialect) else {
+            return vec![None; column_count];
+        };
+        let Some(meta_map) = self.meta_map(conn_id) else {
+            return vec![None; column_count];
+        };
+        let mut out: Vec<Option<ColumnAnnotation>> = Vec::new();
+        for source in sources {
+            match source {
+                ProjectionSource::Column { table, column } => {
+                    out.push(lookup_column(&meta_map, table.as_deref(), &column));
+                }
+                ProjectionSource::Star { table } => match table.as_deref() {
+                    // `SELECT *`：按表列集展开（实体表；子查询 / 派生表没有 schema 对应列）
+                    Some(table) => match find_table(&meta_map, table) {
+                        Some((key, columns)) => out
+                            .extend(columns.iter().map(|meta| Some(meta.to_annotation(&key)))),
+                        None => out.push(None),
+                    },
+                    None => out.push(None),
+                },
+                ProjectionSource::Expression => out.push(None),
+            }
+            // 展开超了（缓存列集比真实结果多）截断；`column_count` 是权威
+            if out.len() >= column_count {
+                break;
+            }
+        }
+        // 展开不够（表达式列 / 缓存列集比真实结果少）补足 None
+        out.extend(std::iter::repeat_n(None, column_count.saturating_sub(out.len())));
+        out
+    }
+}
+
+/// 【P1】驱动 id → SQL 方言（`projection_sources` 用）
+///
+/// 只映射**本仓实证存在**的驱动 id（连接对话框 / 测试夹具里见过：`mysql` / `mysql_native` /
+/// `postgres` / `postgres_native` / `sqlite` / `duckdb`）；其余驱动（未来接入）如实 `None` →
+/// 该连接的结果没有字段注释，而不是拿错方言解析出错。
+fn driver_to_dialect(driver: &str) -> Option<SqlDialect> {
+    match driver {
+        "mysql" | "mysql_native" => Some(SqlDialect::Mysql),
+        "postgres" | "postgres_native" => Some(SqlDialect::Postgres),
+        "sqlite" => Some(SqlDialect::Sqlite),
+        "duckdb" => Some(SqlDialect::Duckdb),
+        _ => None,
+    }
+}
+
+/// 【P1】表列集查找：限定名直接命中；裸名跨 schema 兜底（首个表名相同的）
+///
+/// 与 [`lookup_primary_key`] 同款两步：`projection_sources` 归位可能给裸名
+/// （FROM 没写 schema），而映射的键是导航缓存的限定名（`public.orders`）。
+/// 跨 schema 同名表取首个命中（罕见；DBeaver 的 JDBC 按默认 schema 解析，同样只取一个）。
+fn find_table<'a>(
+    meta_map: &'a HashMap<String, Vec<ColumnMeta>>,
+    table: &str,
+) -> Option<(String, &'a Vec<ColumnMeta>)> {
+    if let Some(columns) = meta_map.get(table) {
+        return Some((table.to_string(), columns));
+    }
+    meta_map
+        .iter()
+        .find(|(key, _)| key.rsplit('.').next() == Some(table))
+        .map(|(key, columns)| (key.clone(), columns))
+}
+
+/// 【P1】按来源表 + 来源列查列元数据（来源表找不到 / 列不在列集 = `None`）
+fn lookup_column(
+    meta_map: &HashMap<String, Vec<ColumnMeta>>,
+    table: Option<&str>,
+    column: &str,
+) -> Option<ColumnAnnotation> {
+    let table = table?;
+    let (key, columns) = find_table(meta_map, table)?;
+    columns
+        .iter()
+        .find(|meta| meta.name == column)
+        .map(|meta| meta.to_annotation(&key))
 }
 
 /// 【T2a-2】在主键映射里按表名找键：限定名直取（`schema.表`）→ 裸名匹配（首个命中）
@@ -250,20 +386,46 @@ fn add_federated_source(port: &WorkbenchCompletion, entry: &MountedSource, into:
     into.truncated |= raw.truncated;
 }
 
-/// 从导航缓存装一份原始目录 + 主键映射（**后台线程里跑**：这里允许 I/O）
+/// 【P1】预载的表列元数据（与主键映射同一遍遍历；字段注释的原料）
+#[derive(Debug, Clone)]
+struct ColumnMeta {
+    name: String,
+    data_type: Option<String>,
+    nullable: Option<bool>,
+    default_value: Option<String>,
+    comment: Option<String>,
+}
+
+impl ColumnMeta {
+    /// 转成编辑器端的注释（`table` = 查找命中的真实限定名）
+    fn to_annotation(&self, table: &str) -> ColumnAnnotation {
+        ColumnAnnotation {
+            source_table: Some(table.to_string()),
+            source_column: Some(self.name.clone()),
+            comment: self.comment.clone(),
+            data_type: self.data_type.clone(),
+            nullable: self.nullable,
+            default_value: self.default_value.clone(),
+        }
+    }
+}
+
+/// 从导航缓存装一份原始目录 + 主键映射 + 列元数据（**后台线程里跑**：这里允许 I/O）
 ///
-/// 第二返回值是 **`schema.表` → 主键列** 的映射（写回的行定位依据，T2a-2）；与候选目录
-/// 同一次遍历（同一份列数据），只在列上多读一个 `is_primary_key` 位，零额外 I/O。
+/// 第二返回值是 **`schema.表` → 主键列** 的映射（写回的行定位依据，T2a-2）；
+/// 第三返回值是 **`schema.表` → 列元数据**（字段注释原料，P1）。
+/// 三份同一次遍历（同一份列数据），只是在列上多读几个位，零额外 I/O。
 fn load_raw_catalog(
     conn_id: &str,
     project_root: Option<&str>,
-) -> (Catalog, HashMap<String, Vec<String>>) {
+) -> (Catalog, HashMap<String, Vec<String>>, HashMap<String, Vec<ColumnMeta>>) {
     let Some(cache) = NavCache::open(conn_id, project_root) else {
         // 缓存不可用（项目连接缺项目根 / 打开失败）→ 没有候选，如实空着
-        return (Catalog::default(), HashMap::new());
+        return (Catalog::default(), HashMap::new(), HashMap::new());
     };
     let mut catalog = Catalog::default();
     let mut keys: HashMap<String, Vec<String>> = HashMap::new();
+    let mut meta: HashMap<String, Vec<ColumnMeta>> = HashMap::new();
     for (_, schema, schema_id) in cache.all_schemas() {
         for want_view in [false, true] {
             let Some(objects) = cache.objects(schema_id, want_view) else {
@@ -282,24 +444,34 @@ fn load_raw_catalog(
                 catalog.objects.push(candidate);
                 if let Some(columns) = cache.columns(schema_id, &name) {
                     let qualified = format!("{schema}.{name}");
+                    let mut column_meta = Vec::with_capacity(columns.len());
                     for column in columns {
                         catalog
                             .columns
-                            .push((qualified.clone(), column.name.clone(), Some(column.data_type)));
+                            .push((qualified.clone(), column.name.clone(), Some(column.data_type.clone())));
                         // 【T2a-2】主键列按表结构顺序收集（NavCache 的列序即 ordinal）
                         if column.is_primary_key {
-                            keys.entry(qualified.clone()).or_default().push(column.name);
+                            keys.entry(qualified.clone()).or_default().push(column.name.clone());
                         }
+                        // 【P1】列元数据（字段注释原料：注释 / 类型 / 可空 / 默认）
+                        column_meta.push(ColumnMeta {
+                            name: column.name.clone(),
+                            data_type: Some(column.data_type.clone()),
+                            nullable: Some(column.nullable),
+                            default_value: column.default_value.clone(),
+                            comment: column.comment.clone(),
+                        });
                     }
+                    meta.insert(qualified, column_meta);
                 }
                 if catalog.objects.len() >= MAX_OBJECTS || catalog.columns.len() >= MAX_COLUMNS {
                     catalog.truncated = true;
-                    return (catalog, keys);
+                    return (catalog, keys, meta);
                 }
             }
         }
     }
-    (catalog, keys)
+    (catalog, keys, meta)
 }
 
 /// 【B9 切片二】把模板片段从库里读出来（**后台线程里跑**：这里允许 I/O）
@@ -339,13 +511,17 @@ pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{WorkbenchCompletion, load_raw_catalog, lookup_primary_key};
+    use super::{
+        driver_to_dialect, find_table, load_raw_catalog, lookup_column, lookup_primary_key,
+        WorkbenchCompletion,
+    };
     use std::collections::HashMap;
     use database::cache::NavCache;
     use editor::channel::ExecChannel;
-    use editor::completion::{CandidateKind, CompletionPort};
+    use editor::completion::{CandidateKind, ColumnAnnotation, CompletionPort};
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
     use project::ui::OpenProject;
+    use workbench_shell::model::ConnectionItem;
 
     use crate::panels::Shared;
 
@@ -402,7 +578,7 @@ mod tests {
                     is_primary_key: false,
                     is_foreign_key: false,
                     default_value: None,
-                    comment: None,
+                    comment: Some("总额".to_string()),
                     extra: Default::default(),
                     references: None,
                     ordinal: 1,
@@ -419,7 +595,7 @@ mod tests {
         let root_s = root.to_string_lossy().to_string();
         seed("P_completion_raw", &root);
 
-        let (catalog, keys) = load_raw_catalog("P_completion_raw", Some(&root_s));
+        let (catalog, keys, meta) = load_raw_catalog("P_completion_raw", Some(&root_s));
         assert_eq!(catalog.objects.len(), 2, "{:?}", catalog.objects);
         assert_eq!(catalog.objects[0].label, "public.orders");
         assert_eq!(catalog.objects[0].kind, CandidateKind::Table);
@@ -437,6 +613,15 @@ mod tests {
         // 【T2a-2】主键映射：主键列按表结构顺序收；非主键列不收；视图没列 → 无映射
         assert_eq!(keys.get("public.orders"), Some(&vec!["id".to_string()]), "{keys:?}");
         assert_eq!(keys.get("public.order_stats"), None, "视图没有主键列");
+
+        // 【P1】列元数据：注释 / 类型 / 可空 / 默认与 NavCache 列一致（视图没列 → 无映射）
+        let orders = meta.get("public.orders").expect("orders 列元数据");
+        assert_eq!(orders.len(), 2);
+        assert_eq!(orders[0].name, "id");
+        assert_eq!(orders[0].data_type.as_deref(), Some("integer"));
+        assert_eq!(orders[0].nullable, Some(false));
+        assert_eq!(orders[1].nullable, Some(true), "total 可空");
+        assert!(meta.get("public.order_stats").is_none(), "视图没有列元数据");
 
         // 缓存不可用（项目连接缺项目根）→ 空目录，不崩
         assert!(load_raw_catalog("P_completion_raw", None).0.is_empty());
@@ -487,6 +672,157 @@ mod tests {
         assert_eq!(snippet.name, "查询所有记录");
         assert_eq!(snippet.content, "SELECT * FROM {table};");
         assert_eq!(snippet.description, None, "空说明不该摆一个空字符串");
+    }
+
+    // ---------- 【P1】字段注释 ----------
+
+    /// 【P1】驱动 id → 方言：实证的 6 个 id 命中，其余如实 `None`（不拿错方言解析）
+    #[test]
+    fn driver_to_dialect_maps_known_drivers_only() {
+        use engine::sql::SqlDialect;
+        assert_eq!(driver_to_dialect("sqlite"), Some(SqlDialect::Sqlite));
+        assert_eq!(driver_to_dialect("mysql"), Some(SqlDialect::Mysql));
+        assert_eq!(driver_to_dialect("mysql_native"), Some(SqlDialect::Mysql));
+        assert_eq!(driver_to_dialect("postgres"), Some(SqlDialect::Postgres));
+        assert_eq!(driver_to_dialect("postgres_native"), Some(SqlDialect::Postgres));
+        assert_eq!(driver_to_dialect("duckdb"), Some(SqlDialect::Duckdb));
+        // 未实证的驱动：如实 None
+        assert_eq!(driver_to_dialect("oracle"), None);
+        assert_eq!(driver_to_dialect(""), None);
+    }
+
+    /// 【P1】表列集查找：限定名直取；裸名跨 schema 兜底；没有 = `None`
+    #[test]
+    fn find_table_prefers_qualified_then_falls_back_to_bare_name() {
+        let mut meta = HashMap::new();
+        meta.insert("public.orders".to_string(), Vec::new());
+        meta.insert("audit.orders".to_string(), Vec::new());
+
+        let (key, _) = find_table(&meta, "public.orders").expect("限定名直取");
+        assert_eq!(key, "public.orders");
+        let (key, _) = find_table(&meta, "orders").expect("裸名兜底");
+        assert!(key == "public.orders" || key == "audit.orders", "{key}");
+        assert!(find_table(&meta, "nope").is_none());
+        assert!(find_table(&HashMap::new(), "orders").is_none());
+    }
+
+    /// 【P1】lookup_column：限定名 / 裸名兜底 / 未命中逐级如实
+    #[test]
+    fn lookup_column_matches_qualified_then_bare_then_none() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "public.orders".to_string(),
+            vec![super::ColumnMeta {
+                name: "id".into(),
+                data_type: Some("integer".into()),
+                nullable: Some(false),
+                default_value: None,
+                comment: Some("订单号".into()),
+            }],
+        );
+        let ann = lookup_column(&meta, Some("public.orders"), "id").expect("限定名命中");
+        assert_eq!(ann.source_table.as_deref(), Some("public.orders"));
+        assert_eq!(ann.comment.as_deref(), Some("订单号"));
+        let ann = lookup_column(&meta, Some("orders"), "id").expect("裸名兜底");
+        assert_eq!(ann.source_table.as_deref(), Some("public.orders"), "来源显示真实限定名");
+        assert_eq!(lookup_column(&meta, Some("orders"), "nope"), None);
+        assert_eq!(lookup_column(&meta, None, "id"), None);
+        assert_eq!(lookup_column(&HashMap::new(), Some("orders"), "id"), None);
+    }
+
+    /// 【P1】端口：单表 SELECT 血缘命中（注释 / 可空从 NavCache 来）；表达式 / 非 SELECT /
+    /// 未绑定连接 / 列集滞后逐级如实给空
+    #[test]
+    fn column_annotations_resolve_single_table_select() {
+        let root = temp_root("p1");
+        let root_s = root.to_string_lossy().to_string();
+        seed("P1_annotations", &root);
+        let shared = Shared::with_connections(
+            vec![ConnectionItem {
+                id: "P1_annotations".into(),
+                name: "测试库".into(),
+                driver: "sqlite".into(),
+                connected: true,
+                host: None,
+                port: None,
+                database: None,
+                schema: None,
+                description: None,
+                use_duckdb_fed: false,
+                created_at: String::new(),
+                updated_at: String::new(),
+            }],
+            None,
+        );
+        // 项目根要指到 seed 的缓存目录：NavCache::open 缺项目根打不开缓存
+        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "P1"));
+        let port = WorkbenchCompletion::new(shared);
+
+        // 预载落笔前：第一次 `meta_map` 触发后台预载；轮询等到载好
+        wait_until(|| port.meta_map("P1_annotations").is_some(), "载好列元数据");
+
+        // 单表裸名 SELECT：两列都有注释，来源归位到限定名 public.orders
+        let anns = port.column_annotations(
+            Some("P1_annotations"),
+            ExecChannel::Source,
+            "SELECT id, total FROM orders",
+            2,
+        );
+        assert_eq!(anns.len(), 2);
+        let first = anns[0].clone().expect("id 有注释");
+        assert_eq!(first.source_table.as_deref(), Some("public.orders"));
+        assert_eq!(first.source_column.as_deref(), Some("id"));
+        assert_eq!(first.data_type.as_deref(), Some("integer"));
+        assert_eq!(first.nullable, Some(false));
+        let second = anns[1].clone().expect("total 有注释");
+        assert_eq!(second.comment.as_deref(), Some("总额"), "列注释来自 NavCache");
+        assert_eq!(second.nullable, Some(true));
+
+        // `SELECT *`：按表列集展开（2 列）
+        let anns = port.column_annotations(
+            Some("P1_annotations"),
+            ExecChannel::Source,
+            "SELECT * FROM orders",
+            2,
+        );
+        assert_eq!(anns.len(), 2);
+        assert_eq!(
+            anns[0].as_ref().and_then(|a| a.source_column.as_deref()),
+            Some("id")
+        );
+
+        // 表达式列：没有来源 → 那一列 None
+        let anns = port.column_annotations(
+            Some("P1_annotations"),
+            ExecChannel::Source,
+            "SELECT count(*) AS n FROM orders",
+            1,
+        );
+        assert_eq!(anns, vec![None]);
+
+        // 非 SELECT：解析失败 → 全 None（不影响结果）
+        let anns = port.column_annotations(
+            Some("P1_annotations"),
+            ExecChannel::Source,
+            "INSERT INTO orders(id) VALUES (1)",
+            1,
+        );
+        assert_eq!(anns, vec![None]);
+
+        // 未绑定连接 → 全 None
+        let anns = port.column_annotations(None, ExecChannel::Source, "SELECT id FROM orders", 1);
+        assert_eq!(anns, vec![None]);
+
+        // 列不在表列集里（缓存列集滞后）→ 那一列 None
+        let anns = port.column_annotations(
+            Some("P1_annotations"),
+            ExecChannel::Source,
+            "SELECT missing FROM orders",
+            1,
+        );
+        assert_eq!(anns, vec![None]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 端口：未绑定连接给空；未载过时先给空并安排预载（这一拍不阻塞）

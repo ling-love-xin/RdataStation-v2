@@ -81,6 +81,16 @@ impl SqlEngine {
         parser::validate(sql, dialect)
     }
 
+    /// 【P1】SELECT 的投影列来源（结果集字段注释的血缘；非 SELECT / 解析失败 = `Err`）
+    ///
+    /// 与输出列一一对应；口径见 [`parser::ProjectionSource`]。
+    pub fn projection_sources(
+        sql: &str,
+        dialect: SqlDialect,
+    ) -> Result<Vec<parser::ProjectionSource>, String> {
+        parser::projection_sources(sql, dialect)
+    }
+
     /// 语句切分（词法级）
     ///
     /// 返回每条语句在原文中的区间与起始行号，供「执行当前语句 / 批量执行 / 状态栏语句数」使用。

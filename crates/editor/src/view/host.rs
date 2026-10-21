@@ -51,6 +51,7 @@ use crate::persist;
 use crate::service::Document;
 use crate::shared::{EditorShared, InsightColumnRequest};
 use crate::sources;
+use crate::completion::ColumnAnnotation;
 use crate::store::ResultEntry;
 use crate::translate;
 use crate::ui;
@@ -5164,6 +5165,8 @@ impl EditorHostPanel {
             // 探测不到 = `None` → 判据 `NoRowKey` 如实置只读；有主键但结果没 SELECT 键列
             // → `row_key()` 也为 `None`（写回没有可绑定的值），同样只读。
             entry.key_columns = probe_primary_key(self, &entry);
+            // 【P1】字段注释：血缘 + 表列元数据（内存读；长度与 `columns` 一致）
+            entry.column_annotations = annotate_columns(self, &entry);
             if is_mine && entry.failed() {
                 // 【B5b】取下一段失败：**已经抓到的行是用户的成果**，不能因为再抓失败就清掉。
                 // 所以这次失败不入存储（选中那份原样不动），只把原因说出来。
@@ -5310,6 +5313,8 @@ impl EditorHostPanel {
                         entry.column_types.clone(),
                         // 【A9】来源表名（右键「为 INSERT」的目标；猜不到 = None → 不摆那一项）
                         crate::export::table_from_sql(&entry.sql),
+                        // 【P1】字段注释（表头 tooltip；与列同序，空 vec = 没报）
+                        entry.column_annotations.clone(),
                     )
                 }),
                 entry
@@ -5408,12 +5413,14 @@ impl EditorHostPanel {
         };
         self.grid.update(cx, |state, cx| {
             match grid_data {
-                Some((columns, rows, types, table)) => {
+                Some((columns, rows, types, table, annotations)) => {
                     state.delegate_mut().set_data(columns, rows);
                     // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型（防"上一份结果的类型套到新数据上"）
                     state.delegate_mut().set_column_types(types);
                     // 【A9】来源表名同理（set_data 会清掉旧的；紧跟同步，漏给 = 不摆 INSERT 项）
                     state.delegate_mut().set_result_table(table);
+                    // 【P1】字段注释同理（set_data 会清掉旧的；紧跟同步，漏给 = 表头只画列名）
+                    state.delegate_mut().set_column_annotations(annotations);
                 }
                 None => state.delegate_mut().clear(empty),
             }
@@ -6391,6 +6398,22 @@ fn probe_primary_key(panel: &EditorHostPanel, entry: &ResultEntry) -> Option<Vec
         .shared
         .primary_key_for(Some(connection), entry.channel, &table)
         .filter(|columns| !columns.is_empty())
+}
+
+/// 【P1】结果集字段注释：血缘（sqlglot 投影映射）+ 表列元数据（宿主导航缓存，内存读）
+///
+/// 与 [`probe_primary_key`] 同口径：失败结果 / 写语句 / 未绑定连接不探测；
+/// 宿主没接注释端口 = 全 `None`（渲染只画列名）。长度与 `entry.columns` 一致。
+fn annotate_columns(panel: &EditorHostPanel, entry: &ResultEntry) -> Vec<Option<ColumnAnnotation>> {
+    if entry.error.is_some() || entry.columns.is_empty() {
+        return vec![];
+    }
+    let Some(connection) = entry.connection.as_deref() else {
+        return vec![None; entry.columns.len()];
+    };
+    panel
+        .shared
+        .column_annotations_for(Some(connection), entry.channel, &entry.sql, entry.columns.len())
 }
 
 fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connection = outcome.connection.clone();

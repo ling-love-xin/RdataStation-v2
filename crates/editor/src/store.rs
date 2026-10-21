@@ -33,6 +33,7 @@ use ::shared::string::tsv_row;
 
 use crate::changes::ChangeSet;
 use crate::channel::ExecChannel;
+use crate::completion::ColumnAnnotation;
 use crate::execution::{Pushdown, ResultPlacement};
 use crate::export::RowKey;
 use crate::model::DocumentId;
@@ -277,6 +278,12 @@ pub struct ResultEntry {
     ///   行为与没有这个字段时**完全一致**；
     /// - 非空时**与 `columns` 等长**，这一列没报就是 `None`（[`ResultEntry::with_column_types`] 保证）。
     pub column_types: Vec<Option<ColumnType>>,
+    /// 【P1】**每列的元数据注释**（血缘 + 表列元数据；与 `columns` 同序；失败时为空）
+    ///
+    /// 两条不变式：
+    /// - **空 vec = 宿主没报注释**（未接注释端口 / 表达式列）→ 表头只画列名，与今天一致；
+    /// - 非空时**与 `columns` 等长**，这一列没注释就是 `None`（[`ResultEntry::with_column_annotations`] 保证）。
+    pub column_annotations: Vec<Option<ColumnAnnotation>>,
     /// 失败原因；`None` = 成功
     pub error: Option<String>,
 }
@@ -332,6 +339,8 @@ impl ResultEntry {
             rows,
             // 类型由上游补（`with_column_types`）：默认空 = “没报”，渲染与今天一致
             column_types: Vec::new(),
+            // 【P1】注释由回执路径补（`with_column_annotations`）：默认空 = “没报”
+            column_annotations: Vec::new(),
             // 【A2】形成原料由回执路径补（`entry_from` 的 `with_pushdown`）：默认 None = 普通执行
             pushdown: None,
             error: None,
@@ -352,6 +361,19 @@ impl ResultEntry {
                         .filter(|name| !name.is_empty())
                         .map(ColumnType::parse)
                 })
+                .collect();
+        }
+        self
+    }
+
+    /// 【P1】带上每列的元数据注释（宿主端口回填；与 `columns` 同序）
+    ///
+    /// - 空切片 = 宿主没报 → 保持空（不是“一列一个 None”：界面据此区分“没报”与“报了但没注释”）；
+    /// - 注释比列数少 → 缺的填 `None`；比列数多 → 多的丢掉（形状以 `columns` 为准）。
+    pub fn with_column_annotations(mut self, annotations: &[Option<ColumnAnnotation>]) -> Self {
+        if !annotations.is_empty() && !self.columns.is_empty() {
+            self.column_annotations = (0..self.columns.len())
+                .map(|index| annotations.get(index).cloned().flatten())
                 .collect();
         }
         self
@@ -449,6 +471,8 @@ impl ResultEntry {
             columns: Vec::new(),
             rows: Vec::new(),
             column_types: Vec::new(),
+            // 【P1】失败结果没有列可注释，如实空着
+            column_annotations: Vec::new(),
             // 【A2】失败结果没有可保持的形态（不能重查），同样如实 None
             pushdown: None,
             error: Some(error),

@@ -128,6 +128,38 @@ pub trait CompletionPort: 'static {
     fn primary_key(&self, _conn_id: Option<&str>, _channel: ExecChannel, _table: &str) -> Option<Vec<String>> {
         None
     }
+
+    /// 【P1】结果集字段注释（血缘 + 表列元数据；**同步 + 内存**，与 [`Self::catalog`] 同一口径）
+    ///
+    /// `sql` 是实际执行的 SQL；`column_count` 是结果集列数——返回长度**必须与它一致**，
+    /// 没有注释的列给 `None`（渲染只画列名，与今天一致）。
+    /// 默认实现给全 `None`：不接注释的宿主如实不给，不编造来源列。
+    fn column_annotations(
+        &self,
+        _conn_id: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        column_count: usize,
+    ) -> Vec<Option<ColumnAnnotation>> {
+        vec![None; column_count]
+    }
+}
+
+/// 【P1】一列的元数据注释（结果集字段注释；`None` = 该列没有来源列 / 表列元数据缺失）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnAnnotation {
+    /// 来源表（限定名 `schema.表` 或裸名；表达式列无来源 = `None`）
+    pub source_table: Option<String>,
+    /// 来源列名（表达式列无来源 = `None`）
+    pub source_column: Option<String>,
+    /// 字段注释（NavCache 列元数据；空 = 无注释）
+    pub comment: Option<String>,
+    /// 列类型（NavCache 的 `data_type`，驱动原始名；区别于渲染层的类型标签）
+    pub data_type: Option<String>,
+    /// 是否可空
+    pub nullable: Option<bool>,
+    /// 默认值
+    pub default_value: Option<String>,
 }
 
 /// 共享句柄

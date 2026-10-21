@@ -54,6 +54,7 @@ use gpui_kit::*;
 // `crate::shared`，所以 `shared` 得从 crate 外路径（`::`）进来
 use ::shared::string::{tsv_cell, tsv_row};
 
+use crate::completion::ColumnAnnotation;
 use crate::store::{ColumnKind, ColumnType};
 use crate::ui;
 use crate::view::widgets::status_bar;
@@ -281,6 +282,11 @@ pub struct ResultGridDelegate {
     /// 只影响怎么画（右对齐 / 等宽 / 表头小标签），不影响任何取值；没带类型时与今天完全一致。
     /// 由面板在 `set_data` **之后**同一次同步里给（见 [`ResultGridDelegate::set_column_types`]）。
     column_types: Vec<Option<ColumnType>>,
+    /// 【P1】**每列的元数据注释**（与 `columns` 同序；空 = 这份结果没报注释）
+    ///
+    /// 只影响表头 tooltip（来源表 / 来源列 / 注释 / 类型 / 可空 / 默认值）；没报时与今天完全一致。
+    /// 由面板在 `set_data` **之后**同一次同步里给（见 [`ResultGridDelegate::set_column_annotations`]）。
+    column_annotations: Vec<Option<ColumnAnnotation>>,
     /// 空态文案（没有结果 / 执行失败都在这里说清楚）
     empty_text: String,
     /// 这份结果**还能不能取下一段**（面板从权威结果同步过来；`load_more` 据此决定要不要真的取）
@@ -365,6 +371,8 @@ impl ResultGridDelegate {
         // 类型是**这一份结果自己的**：先把上一份的清掉，等面板紧跟着给新的一份
         // （漏给就是“没类型”，不会错套到新数据上）
         self.column_types.clear();
+        // 【P1】注释同理（面板随后紧跟 set_column_annotations；漏给 = 表头只画列名）
+        self.column_annotations.clear();
         // 【A9】来源表名同理（面板随后紧跟 set_result_table；漏给 = 不摆 INSERT 项）
         self.result_table = None;
         self.rebuild_view_rows();
@@ -377,6 +385,14 @@ impl ResultGridDelegate {
     /// 顺序反了（先给类型再 `set_data`）会被清掉——**不会**把上一份的类型套到新数据上。
     pub fn set_column_types(&mut self, types: Vec<Option<ColumnType>>) {
         self.column_types = types;
+    }
+
+    /// 【P1】同步每列的元数据注释（与 `set_data` 同一次同步里、在它之后调）
+    ///
+    /// 与 [`Self::set_column_types`] 同款时序：`set_data` 清掉上一份的注释，
+    /// 面板紧跟给新的一份；漏给 = 表头只画列名，不套旧注释。
+    pub fn set_column_annotations(&mut self, annotations: Vec<Option<ColumnAnnotation>>) {
+        self.column_annotations = annotations;
     }
 
     /// 【A9】同步结果来源表名（与 `set_data` 同一次同步里、在它之后调）
@@ -981,6 +997,49 @@ fn result_cell_tooltip(text: String, window: &mut Window, cx: &mut App) -> AnyVi
     .build(window, cx)
 }
 
+/// 【P1】表头悬停的分块内容：第一行「列名 · 类型」，后续行字段元数据（来源 / 注释 / 可空 / 默认）
+///
+/// 返回 `(标题行, 元数据行列表)`。注释缺失 = 空列表（与今天的单行 tooltip 等效）。
+/// 多行不拼 `\n` 字符串：tooltip 容器是 `whitespace_normal`，换行会被折叠成空格，
+/// 由调用方逐行 `child` 渲染成块。
+fn header_tooltip_lines(
+    name: &str,
+    label: Option<&str>,
+    annotation: Option<&ColumnAnnotation>,
+) -> (String, Vec<String>) {
+    let title = match label {
+        Some(label) => format!("{name} · {label}"),
+        None => name.to_string(),
+    };
+    let Some(annotation) = annotation else {
+        return (title, Vec::new());
+    };
+    let mut meta = Vec::new();
+    // 来源：表达式列两处都是 `None` → 不追加这一行
+    match (&annotation.source_table, &annotation.source_column) {
+        (Some(table), Some(column)) => meta.push(format!("来源：{table}.{column}")),
+        (Some(table), None) => meta.push(format!("来源表：{table}")),
+        _ => {}
+    }
+    if let Some(comment) = annotation.comment.as_deref().filter(|c| !c.is_empty()) {
+        meta.push(format!("注释：{comment}"));
+    }
+    if let Some(data_type) = annotation.data_type.as_deref().filter(|d| !d.is_empty()) {
+        meta.push(format!("类型：{data_type}"));
+    }
+    if let Some(nullable) = annotation.nullable {
+        meta.push(if nullable {
+            "可空：是".to_string()
+        } else {
+            "可空：否".to_string()
+        });
+    }
+    if let Some(default_value) = annotation.default_value.as_deref() {
+        meta.push(format!("默认：{default_value}"));
+    }
+    (title, meta)
+}
+
 /// 【B14】网格里**最近一次选中**（`Ctrl+C` 复制谁）
 ///
 /// 为什么由面板记事件而不是读组件状态：组件没公开“当前是选格还是选行”，而
@@ -1244,13 +1303,32 @@ impl TableDelegate for ResultGridDelegate {
         if Self::is_row_number(col_ix) || name.is_empty() {
             return head.into_any_element();
         }
-        // 悬停给全名 + 类型：类型在窄列上也可能被截掉（它带参数时很长，`numeric(38,10)`）
-        let full = match label {
-            Some(label) => format!("{name} · {label}"),
-            None => name,
-        };
+        // 【P1】悬停给全名 + 类型 + 字段元数据（来源 / 注释 / 可空 / 默认）：
+        // 有注释才追加分块行（没有 = 与今天的单行一致）；注释块里的类型是 NavCache 原始名，
+        // 与表头小标签（渲染层语义标签）并存不冲突。
+        let annotation = self.column_annotations.get(col_ix - 1).cloned().flatten();
+        let tip_name = name.clone();
+        let tip_label = label.clone();
         head.id(("editor-result-th", col_ix))
-            .tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx))
+            .tooltip(move |window, cx| {
+                let (title, meta) =
+                    header_tooltip_lines(&tip_name, tip_label.as_deref(), annotation.as_ref());
+                // `Tooltip::element` 的 F 是 Fn（可能被调多次）：body 必须**每次现建**，
+                // 只 clone 捕获的 title / meta，不能把构建好的 body move 进闭包
+                Tooltip::element(move |_, _| {
+                    let mut body = div()
+                        .v_flex()
+                        .gap_1()
+                        .max_w(rems(ui::RESULT_TOOLTIP_MAX_WIDTH))
+                        .text_xs()
+                        .child(SharedString::from(title.clone()));
+                    for line in meta.clone() {
+                        body = body.child(div().text_color(muted).child(SharedString::from(line)));
+                    }
+                    body
+                })
+                .build(window, cx)
+            })
             .into_any_element()
     }
 
@@ -1844,8 +1922,9 @@ mod tests {
     use super::{
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
         TextAlign, cell_matches, cell_style, compare_cells, context_menu_items, duration_text,
-        find_in_cell, preview_of, status_segments, thousands, truncated_hint,
+        find_in_cell, header_tooltip_lines, preview_of, status_segments, thousands, truncated_hint,
     };
+    use crate::completion::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
@@ -1893,6 +1972,53 @@ mod tests {
         let mut target = target(value, name, column);
         target.table = Some("orders".to_string());
         target
+    }
+
+    /// 【P1】表头悬停分块：无注释 = 单行（与今天一致）；有注释 = 标题 + 元数据行
+    #[test]
+    fn header_tooltip_lines_build_title_and_meta_blocks() {
+        // 无注释：单行「列名 · 类型标签」；无类型 = 只列名
+        let (title, meta) = header_tooltip_lines("total", Some("numeric"), None);
+        assert_eq!(title, "total · numeric");
+        assert!(meta.is_empty());
+        let (title, meta) = header_tooltip_lines("id", None, None);
+        assert_eq!(title, "id");
+        assert!(meta.is_empty());
+
+        // 有注释：标题 + 来源 / 注释 / 类型 / 可空 / 默认（缺的字段不摆那一行）
+        let ann = ColumnAnnotation {
+            source_table: Some("public.orders".into()),
+            source_column: Some("total".into()),
+            comment: Some("总额".into()),
+            data_type: Some("numeric".into()),
+            nullable: Some(true),
+            default_value: Some("0".into()),
+        };
+        let (title, meta) = header_tooltip_lines("total", Some("numeric"), Some(&ann));
+        assert_eq!(title, "total · numeric");
+        assert_eq!(
+            meta,
+            vec![
+                "来源：public.orders.total",
+                "注释：总额",
+                "类型：numeric",
+                "可空：是",
+                "默认：0",
+            ]
+        );
+
+        // 表达式列（来源两处 None）：标题在，元数据只剩注释 / 可空等
+        let ann = ColumnAnnotation {
+            source_table: None,
+            source_column: None,
+            comment: Some("合计".into()),
+            data_type: None,
+            nullable: None,
+            default_value: None,
+        };
+        let (title, meta) = header_tooltip_lines("cnt", None, Some(&ann));
+        assert_eq!(title, "cnt");
+        assert_eq!(meta, vec!["注释：合计"]);
     }
 
     /// 【B14】右键菜单的项：按值筛选 / 复制（此值 · 此列 · 整行）/ 冻结（文案随冻结状态变）

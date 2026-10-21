@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::channel::{ChannelAvailabilitySet, ChannelsHandle, ExecChannel};
-use crate::completion::{Catalog, CompletionHandle};
+use crate::completion::{Catalog, ColumnAnnotation, CompletionHandle};
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
 use crate::model::DocumentId;
@@ -1163,6 +1163,24 @@ impl EditorShared {
         let port = self.completion.borrow();
         port.as_ref()
             .and_then(|port| port.primary_key(conn_id, channel, table))
+    }
+
+    /// 【P1】结果集字段注释（血缘 + 表列元数据；未接端口 = 全 `None`，渲染只画列名）
+    ///
+    /// `conn_id` / `channel` 是**结果实际跑在哪条连接、哪个通道**（来自 `ResultEntry`）。
+    /// 返回长度与 `column_count` 一致；宿主实现必须同步 + 内存（与 `primary_key_for` 同口径）。
+    pub fn column_annotations_for(
+        &self,
+        conn_id: Option<&str>,
+        channel: ExecChannel,
+        sql: &str,
+        column_count: usize,
+    ) -> Vec<Option<ColumnAnnotation>> {
+        let port = self.completion.borrow();
+        port.as_ref().map_or_else(
+            || vec![None; column_count],
+            |port| port.column_annotations(conn_id, channel, sql, column_count),
+        )
     }
 
     /// 补全开不开：能力表（文本模式 / 分析模式的每单元由能力表回答）+ 编辑器只读 + 文件档位
