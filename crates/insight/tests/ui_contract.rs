@@ -123,6 +123,7 @@ fn view_sources() -> Vec<(String, &'static str)> {
             "view/multi.rs" => include_str!("../src/view/multi.rs"),
             "view/overview.rs" => include_str!("../src/view/overview.rs"),
             "view/schema.rs" => include_str!("../src/view/schema.rs"),
+            "view/set.rs" => include_str!("../src/view/set.rs"),
             "view/table.rs" => include_str!("../src/view/table.rs"),
             other => {
                 panic!("view/ 目录出现未登记的源文件：{other}（请在本函数补 include_str 分支）")
