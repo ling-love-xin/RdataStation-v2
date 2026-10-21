@@ -1168,6 +1168,62 @@ impl NavigatorService {
         Ok(done)
     }
 
+    /// 编辑器补全的实时内省回退（§710）：把整条连接的表 / 视图 / 列按 cache-aside
+    /// 写进 L2。
+    ///
+    /// 复用导航的 [`Self::collect_objects`] / [`Self::load_columns`]（同一套
+    /// L1→L2→实时内省→写回），不另起一套。大 schema 的列按分级门禁跳过
+    /// （与 C2 邻接预取同一口径：`should_load_columns()` 为假时不逐表拉列，
+    /// 列候选留给用户展开表时按需内省）——补全不该给源库加整库负载。
+    ///
+    /// 调用时机：补全端口首次未命中且 NavCache 无对象时，经导航队列提交
+    /// （[`crate::nav_jobs::enqueue_warm_completion`]，与导航内省共享信号量 /
+    /// 让位）；完成前补全只给关键字与函数（如实，不假装有元数据）。
+    pub async fn warm_completion_metadata(&self, conn_id: &str) -> Result<usize, CoreError> {
+        let catalogs = self
+            .metadata
+            .list_catalogs(conn_id)
+            .await
+            .unwrap_or_default();
+        let catalogs = if catalogs.is_empty() {
+            vec![FALLBACK_CONTAINER.to_string()]
+        } else {
+            catalogs
+        };
+        let mut touched = 0usize;
+        for catalog in catalogs {
+            let schemas = self
+                .metadata
+                .list_schemas(conn_id, &catalog)
+                .await
+                .unwrap_or_default();
+            let schemas = if schemas.is_empty() {
+                vec![FALLBACK_CONTAINER.to_string()]
+            } else {
+                schemas
+            };
+            for schema in schemas {
+                // 表 + 视图：一次批量内省（collect_objects 内部按 L1→L2→实时→写回）
+                let mut batch = None;
+                let tables = self
+                    .collect_objects(conn_id, &catalog, &schema, NavFolder::Tables, &mut batch)
+                    .await?;
+                let views = self
+                    .collect_objects(conn_id, &catalog, &schema, NavFolder::Views, &mut batch)
+                    .await?;
+                touched += tables.len() + views.len();
+                // 列：分级门禁（与 C2 预取同口径）——大库不为补全逐表拉列
+                if engine::driver::get_level(conn_id).should_load_columns() {
+                    for object in tables.iter().chain(views.iter()) {
+                        self.load_columns(conn_id, &catalog, &schema, &object.name)
+                            .await?;
+                    }
+                }
+            }
+        }
+        Ok(touched)
+    }
+
     /// C2 邻接预取：预取指定表 / 视图的列（命中 L2 则不再内省；失败静默）。
     pub async fn prefetch_columns(
         &self,
@@ -1311,6 +1367,36 @@ mod object_node_tests {
         let prop = nodes[0].property.as_ref().expect("提示节点应带属性定位");
         assert_eq!(prop.kind, PropertyKind::Table);
         assert_eq!(prop.name, "big_t");
+    }
+}
+
+#[cfg(test)]
+mod warm_completion_tests {
+    //! 【§710】补全实时内省回退的安全属性。
+    //!
+    //! 手法同 `l1_tests` / `paging_tests`：给**空的**连接管理器——任何走实时内省的
+    //! 路径都必然失败（`CONN_NOT_FOUND`）。「补全内省对不存在连接一拍内失败」是它的
+    //! 安全底线：编辑器补全未命中时在后台线程里调它，失败就该快速结束，
+    //! 之后补全继续只给关键字与函数（如实，不假装有元数据）。
+    //! 真实内省路径（活连接 → cache-aside 写 L2）需要真实端点，留给真机验证。
+
+    use std::sync::Arc;
+
+    use engine::connection_manager::ConnectionManager;
+
+    use super::*;
+
+    /// 空连接管理器下，`warm_completion_metadata` 必须快速失败（不 panic、不卡死）。
+    #[test]
+    fn warm_completion_metadata_fails_fast_without_a_live_connection() {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let svc =
+            NavigatorService::with_context(Arc::new(ConnectionManager::new()), None, false);
+        let result = rt.block_on(svc.warm_completion_metadata("P_no_such_conn_710"));
+        assert!(
+            result.is_err(),
+            "空管理器下实时内省必须失败（断言快速失败而非静默空成功）：{result:?}"
+        );
     }
 }
 

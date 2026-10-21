@@ -56,6 +56,12 @@ pub struct WorkbenchCompletion {
     keys: Arc<Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
     /// 正在载的 conn_id（去重：同一连接同时只载一次）
     loading: Arc<Mutex<HashSet<String>>>,
+    /// 【§710】已提交过「补全实时内省」的 conn_id（等 NavCache 被导航队列填上）。
+    ///
+    /// 与 `loading` 的差别：`loading` 挡**并发**（载完即移除）；这个挡**串行重试**
+    /// （NavCache 空时每次未命中都会读空，不能每敲一个字就向导航队列投一次内省）。
+    /// 命中对象后移除——连接元数据变化（如用户新建表后重新内省）时允许再投。
+    warm_submitted: Arc<Mutex<HashSet<String>>>,
     /// 【B9 切片二】模板片段（启动时一次性预载；内存读——菜单弹出时会问它）
     templates: Arc<Mutex<Vec<TemplateSnippet>>>,
 }
@@ -67,6 +73,7 @@ impl WorkbenchCompletion {
             loaded: Arc::new(Mutex::new(HashMap::new())),
             keys: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
+            warm_submitted: Arc::new(Mutex::new(HashSet::new())),
             templates: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -127,10 +134,25 @@ impl WorkbenchCompletion {
         let loaded = self.loaded.clone();
         let keys = self.keys.clone();
         let loading = self.loading.clone();
+        let warm_submitted = self.warm_submitted.clone();
         let conn_id = conn_id.to_string();
         std::thread::spawn(move || {
             // 【T2a-2】一次遍历同时产出候选目录与主键映射（同一份导航缓存，零额外 I/O）
             let (catalog, keys_map) = load_raw_catalog(&conn_id, project_root.as_deref());
+            if catalog.objects.is_empty() && keys_map.is_empty() {
+                // 【§710】NavCache 没有对象（导航从未展开过 / 预热只暖了 schema）→
+                // 提交一次整条连接的实时内省（cache-aside 写回 L2，复用导航队列的
+                // 信号量 / 让位），本次如实给空；填好后下一次按键就有候选。
+                let mut submitted = warm_submitted.lock().unwrap_or_else(|poison| poison.into_inner());
+                if submitted.insert(conn_id.clone()) {
+                    database::nav_jobs::enqueue_warm_completion(&conn_id, project_root.as_deref());
+                }
+            } else {
+                // 命中对象 → 允许未来再内省（元数据变化后重新提交）
+                if let Ok(mut submitted) = warm_submitted.lock() {
+                    submitted.remove(&conn_id);
+                }
+            }
             if let Ok(mut loaded) = loaded.lock() {
                 loaded.insert(conn_id.clone(), catalog);
             }
@@ -323,6 +345,7 @@ mod tests {
     use editor::channel::ExecChannel;
     use editor::completion::{CandidateKind, CompletionPort};
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
+    use project::ui::OpenProject;
 
     use crate::panels::Shared;
 
@@ -331,6 +354,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("建目录");
         dir
+    }
+
+    /// 轮询等到后台线程落笔（`schedule_load` 是 `thread::spawn`，无句柄可 join；
+    /// 落笔点是 `loaded` / `warm_submitted` 的写回）。
+    fn wait_until(cond: impl Fn() -> bool, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !cond() {
+            assert!(std::time::Instant::now() < deadline, "后台线程未在 3s 内{what}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     fn seed(conn_id: &str, root: &std::path::Path) {
@@ -470,5 +503,75 @@ mod tests {
         assert!(port.catalog(Some("P_nope"), ExecChannel::Source).is_empty());
         // 再问一次仍给空（预载还在跑或已失败），但不该 panic
         assert!(port.catalog(Some("P_nope"), ExecChannel::Source).is_empty());
+    }
+
+    /// 【§710】空 NavCache（导航从未展开过 / 预热只暖 schema）→ 补全未命中时提交
+    /// 一次实时内省：`warm_submitted` 记录该连接（insert 与投递在同一闭包内，
+    /// 记上即已投递）。后台内省对空连接管理器快速失败也无害——补全继续只给
+    /// 关键字与函数（如实，不假装有元数据）。
+    #[test]
+    fn an_empty_cache_submits_one_warm_introspection() {
+        let root = temp_root("warm_submit");
+        let shared = Shared::with_connections(Vec::new(), None);
+        // 项目根就位（NavCache 能打开）但没有种子对象 → 走「空目录 → 投递内省」分支
+        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
+        let port = WorkbenchCompletion::new(shared);
+
+        port.schedule_load("P_warm_710");
+        wait_until(
+            || {
+                port.warm_submitted
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .contains("P_warm_710")
+            },
+            "记录 warm_submitted",
+        );
+
+        // 同连接再调度：`loading` 去重（同一连接只起一次）→ 不重复投递；
+        // 标记仍在（未命中就不移除，防「每敲一字投一次内省」的串行重试）。
+        port.schedule_load("P_warm_710");
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        assert!(
+            port.warm_submitted
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains("P_warm_710"),
+            "空缓存未命中时标记必须保留"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 【§710】NavCache 命中对象 → 移除 `warm_submitted`（连接元数据变化后允许再内省）。
+    #[test]
+    fn a_hit_cache_clears_the_warm_marker() {
+        let root = temp_root("warm_hit");
+        seed("P_warm_hit_710", &root);
+        let shared = Shared::with_connections(Vec::new(), None);
+        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
+        let port = WorkbenchCompletion::new(shared);
+
+        port.schedule_load("P_warm_hit_710");
+        wait_until(
+            || {
+                port.loaded
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .contains_key("P_warm_hit_710")
+            },
+            "写入 loaded",
+        );
+
+        assert!(
+            !port
+                .warm_submitted
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains("P_warm_hit_710"),
+            "命中缓存后标记要移除（允许未来元数据变化后再内省）"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

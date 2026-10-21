@@ -304,6 +304,13 @@ enum Job {
         conn_id: String,
         project_root: Option<String>,
     },
+    /// 编辑器补全的实时内省回退（§710）：把整条连接的表 / 视图 / 列按 cache-aside
+    /// 写进 L2。与 [`Job::Warm`] 同策略（让位导航内省），但**不占预热进度**——
+    /// 补全没做全时只给关键字与函数，进度条不该为它转。
+    WarmCompletion {
+        conn_id: String,
+        project_root: Option<String>,
+    },
     PrefetchColumns {
         conn_id: String,
         project_root: Option<String>,
@@ -544,6 +551,7 @@ impl Job {
                 query: query.clone(),
             }),
             Job::Warm { .. } => Some(Ticket::Warm),
+            Job::WarmCompletion { .. } => None,
             Job::PrefetchColumns { .. } => None,
             #[cfg(test)]
             Job::PanicForTest {
@@ -571,7 +579,7 @@ impl Job {
             Job::GenerateDml { .. } => Some(&shared().pending_sql),
             Job::TestConnection { .. } => Some(&shared().pending_test),
             Job::SearchIndex { consumer, .. } => Some(&shared().pending_search[consumer.ix()]),
-            Job::Warm { .. } | Job::PrefetchColumns { .. } => None,
+            Job::Warm { .. } | Job::PrefetchColumns { .. } | Job::WarmCompletion { .. } => None,
             #[cfg(test)]
             Job::PanicForTest { .. } => Some(&shared().pending_loads),
         }
@@ -838,6 +846,19 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 |done| state.warm_done.store(done, Ordering::SeqCst),
             ));
             state.warm_active.store(false, Ordering::SeqCst);
+        }
+        Job::WarmCompletion {
+            conn_id,
+            project_root,
+        } => {
+            // 补全内省也是元数据内省：与导航共用串行信号量但**让位**（不阻塞排队）。
+            // 内省忙时放弃本批（补全下回按键会再试），不让后台线程堆积、不抢源库。
+            let Ok(_permit) = load_semaphore().try_acquire() else {
+                tracing::debug!(conn_id = %conn_id, "补全内省让位导航（跳过本批）");
+                return;
+            };
+            let svc = service(project_root);
+            let _ = rt.block_on(svc.warm_completion_metadata(&conn_id));
         }
         Job::PrefetchColumns {
             conn_id,
@@ -1169,6 +1190,16 @@ pub fn enqueue_properties(
 /// 连接成功后提交预热（C1）。重复连接会重新排队。
 pub fn warm_after_connect(conn_id: &str, project_root: Option<&str>) {
     submit(Job::Warm {
+        conn_id: conn_id.to_string(),
+        project_root: project_root.map(|s| s.to_string()),
+    });
+}
+
+/// 编辑器补全的实时内省回退（§710）：提交「整条连接的表 / 视图 / 列 cache-aside
+/// 内省」到导航队列。与导航内省共享信号量并让位；完成前补全只给关键字与函数
+/// （如实，不假装有元数据），写进 L2 后下一次按键就有候选。
+pub fn enqueue_warm_completion(conn_id: &str, project_root: Option<&str>) {
+    submit(Job::WarmCompletion {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
     });
