@@ -662,6 +662,50 @@ impl ResourcesHost for WorkbenchResourceHost {
         });
     }
 
+    fn request_promote_to_global(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        use analytics_resource::global::{PromoteKind, PromoteRequest};
+        let Some(root) = self.require_project("无法升级到全局", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能升级到全局", cx);
+            return;
+        }
+        // File 档才有本体相对路径；分析表型存档的本体在项目 `analytics.duckdb`，
+        // 数据读取 / 重建路径未接（resource_host.rs::request_open 同注），升级随 M8 后续批次。
+        let Some(rel) = detail.payload_rel_path.as_deref() else {
+            self.notice("资产库：分析表型存档的升级随 M8 后续批次接入", cx);
+            return;
+        };
+        let abs = root.join("resources").join(rel);
+        if !abs.exists() {
+            self.notice(format!("资产库：本体文件不存在（{rel}），无法升级"), cx);
+            return;
+        }
+        // 形态判定：白名单扩展名 → 数据文件映射出表；其余（sql/py/md…）→ 脚本内容表。
+        let kind = if is_data_file_ext(&abs) {
+            PromoteKind::DataFile
+        } else {
+            PromoteKind::Script
+        };
+        resource_jobs::enqueue_promote(
+            root,
+            PromoteRequest {
+                name: detail.name.clone(),
+                kind,
+                source_abs_path: abs,
+                rel_path: Some(rel.to_string()),
+                content_hash: detail
+                    .content_hash
+                    .clone()
+                    .unwrap_or_default(),
+                file_size: None,
+            },
+        );
+        self.shared.refresh_resources(cx);
+        self.notice("资产库：正在升级到全局…", cx);
+    }
+
     fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
         // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
         // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
@@ -1112,4 +1156,16 @@ pub fn build_host(shared: &Shared) -> Rc<dyn ResourcesHost> {
     Rc::new(WorkbenchResourceHost {
         shared: shared.clone(),
     })
+}
+
+/// 扩展名白名单判定（与 `analytics_resource::global::file_read_expr` 同口径）：
+/// 数据文件升级 = 映射出全局表；其余（sql/py/md 等） = 脚本内容表（方案 A）。
+fn is_data_file_ext(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("csv" | "tsv" | "txt" | "parquet" | "xlsx" | "xls" | "json" | "ndjson")
+    )
 }

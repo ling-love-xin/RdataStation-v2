@@ -4,6 +4,7 @@
 > 证据口径：所有「现状」均来自工作区源码与文档实读；`文件:行号` 为定位锚点（行号随代码演进会漂，以符号名为准）。评估基准 = `analytics-resource-prototype-design.md`（2026-09-15 定稿，415 行）+ `analytics-resource-architecture.md`（含 2026-10-13 裁决）+ `analytics-resource-dev-plan.md`（进度至 2026-10-13）+ 工作区未提交改动（T18–T21）。
 > 状态口径：✅ 已满足 / 🟢 已实现（未提交，编译+测试已验证）/ 🟡 部分 · 未落地 / 🔴 缺口 / ⚪ 文本过时。
 > **2026-10-22 复核**：T18–T21 洞察联动代码已修复括号失配并通过验证（cargo check 6 crate 全绿；rds-insight 234 单测 + 14 e2e + 4 契约、rds-analytics-resource 25 面板窗口、rds-engine temp_table 保护、rds-workbench 全套件含修复后的 insight_editor_entry / insight_source_real 均绿）；修复内容：`workspace.rs` 括号失配 + 两测试文件 7 处旧签名调用补 `full` 参数（见下 §5）。
+> **2026-10-22 复核②**：T18–T21 已提交（`002e2c98` feat + `2c81280d` docs），全仓 `cargo check/test --workspace` 全绿。§13 双实例（全局/项目分析库）规格已定稿（2026-10-22 用户澄清：升级 = 表 + 版本信息进全局 DuckDB；脚本方案 A 定稿；跨项目唯一法定路径 = 项目→全局→项目，项目↔项目禁止直传），实现评估见缺口 #8。
 
 ## 0. 结论（一页）
 
@@ -38,6 +39,7 @@
 | 5 | 🔴 | **A2 data 视图（analysis 档）**：快照 = 画像结构化数据 + 配方（取样查询 + 规则集），打开 = 桥接结果集可二次分析 | 未落地；原型 §12.2.1（规格已补全） | 当前只有 file 档 JSON；「打开即二次分析」闭环未通，**规格 §12.2.1 已就绪，待用户决策本期做 / 不做** |
 | 6 | 🔴 | **File 档 copy/reference 归档 UI**：归档对话框「选模式」、reference 打开校验指纹反馈、reference 删除入口 | 未落地；原型 §12.1.1（规格已补全）；`dialogs/archive.rs` 实读无模式控件 | 数据层已就位（`PayloadMode` / 迁移 023 / `copy_in` / `resolve_source`），**UI 规格 §12.1.1 已就绪，实现待排期** |
 | 7 | 🟢 | **临时表保护名单（T21）**：集合内表不参与 TTL / 上限清理 | `crates/engine/src/duckdb/temp_table.rs`（`protect` / `unprotect` / `is_protected`，TTL/上限均跳过 + 3 个单测）、`crates/insight/src/insight_view.rs`（`set_insight_set` 内同步） | engine 层机制，保护「会话工作集」不被 30 分钟 TTL 清掉；已实现（未提交） |
+| 8 | 🔴 | **双实例（全局 / 项目分析库）资源展示 + 升级 / 分发（§13）**：展示两实例资源表；项目 → 全局升级（分析表 / 数据文件映射出表 / 脚本内容表）；全局 → 项目分发（跨项目唯一法定路径） | 规格：原型 §13（2026-10-22 定稿）；**2026-10-22 实现进度（提交见 §5 验证记录）**：①engine 全局迁移 026（全局 SQLite `analytics_resources` + `analytics_resource_versions` 镜像表）；②服务层 `global.rs`（`GlobalInstanceStore`：升级 = 数据文件映射出表 / 脚本内容表 + 全局登记 + 版本链；分发 = Parquet 中转（Windows 单句柄下 ATTACH 不可行）+ 项目登记 + 版本链；`list_global_resources`）——6 个单测全绿（g001–g006）；③宿主接线：File 档右键菜单「升级到全局…」+ 后台 job（`resource_jobs::PromoteJob/DistributeJob`）+ 回执；workbench 90 测试全绿。**仍开**：a) 展示层「全局实例」列表 / 实例筛选 / scope 徽标未落地（分发动作已有 job 与回执，UI 入口待全局视图）；b) 升级 / 分发同名冲突仅 notice 提示（覆盖 / 改名 / 取消询问对话框待补）；c) 分析表型升级被阻塞（分析表数据读取 / 重建未接，`resource_host.rs`「随后续批次接」，面板已挡）；d) 全局登记结构已按「全局 SQLite 镜像表」落地（用户批准的推荐方案） |
 | 8 | 🟢 | **全局标签作用域**：定义上移全局库、跨模块共享 | `crates/tag/`（`TagTable::open_global` / `SCOPE_GLOBAL`）、`crates/analytics_resource/src/tag.rs`（`ensure_tags_migrated` 存量迁移） | 交互规格（chips / 筛选 / 批量）仍适用；「标签定义在全局库」超出原型假设，规格在 `docs/architecture/tag/tag-system-spec.md` |
 
 ## 3. 原型文本已过时（需修订，随本次原型更新一并处理）

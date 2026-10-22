@@ -439,6 +439,11 @@ pub trait ResourcesHost: 'static {
     ///
     /// 与「打开 / 切换项目」同一条取数路径；不做局部刷新——列表是一整份快照。
     fn request_refresh(&self, window: &mut Window, cx: &mut App);
+    /// 升级到全局实例（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
+    ///
+    /// 收**面板已有的那条详情**（本体路径与指纹都在它身上）；File 档才可升级
+    /// （分析表型升级依赖分析表读取路径，M8 后续批次接）。
+    fn request_promote_to_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 }
 
 /// 行点击归一化后的语义（修饰键与点击数 → 四种行为；纯数据便于单测）。
@@ -1073,6 +1078,23 @@ impl ListDelegate for ArchiveListDelegate {
                                     move |_, window, cx| {
                                         if let Some(detail) = detail.as_ref() {
                                             host.request_view_stats(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
+                        // 「升级到全局…」（§13）：项目 → 全局，表 + 版本信息进全局 DuckDB。
+                        // 判据与「打开」同源（File 档且本体在位）；只读项目不给升级
+                        // （升级会写全局库，本质是一次发布）。分析表型存档由宿主侧再挡一层
+                        // （其升级依赖分析表读取路径，M8 后续批次接）。
+                        menu = menu.item(
+                            PopupMenuItem::new("升级到全局…")
+                                .disabled(!can_open || multi_count > 1 || read_only)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_promote_to_global(detail, window, cx);
                                         }
                                     }
                                 }),

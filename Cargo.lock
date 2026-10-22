@@ -8160,6 +8160,7 @@ name = "rds-analytics-resource"
 version = "0.2.3"
 dependencies = [
  "chrono",
+ "duckdb",
  "gpui-kit",
  "hex",
  "rds-engine",
@@ -8172,6 +8173,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "specta",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "uuid",

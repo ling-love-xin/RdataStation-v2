@@ -231,6 +231,20 @@ enum Job {
     GroupAction(GroupActionJob),
     Rename(RenameJob),
     SetAlias(SetAliasJob),
+    Promote(PromoteJob),
+    Distribute(DistributeJob),
+}
+
+/// 一次「升级到全局」任务（§13：项目 → 全局，表 + 版本信息进全局 DuckDB）。
+struct PromoteJob {
+    project_root: PathBuf,
+    request: analytics_resource::global::PromoteRequest,
+}
+
+/// 一次「从全局分发」任务（§13：全局 → 项目；跨项目唯一法定路径）。
+struct DistributeJob {
+    project_root: PathBuf,
+    name: String,
 }
 
 /// 改显示名（不需要对话框取数：目标与当前名字都在事件路径上拿到）。
@@ -289,6 +303,17 @@ pub enum OpOutcome {
     TagDone { note: String },
     /// 分组动作完成（建 / 改名 / 删 / 移动，`note` 已是一句有信息量的话）。
     GroupDone { note: String },
+    /// 已升级到全局：显示名 / 版本（§13，表 + 版本信息进全局 DuckDB）。
+    Promoted {
+        name: String,
+        version: i32,
+    },
+    /// 已从全局分发到当前项目：显示名 / 版本 / 形态（表 or 文件）。
+    Distributed {
+        name: String,
+        version: i32,
+        shape: analytics_resource::global::DistributeShape,
+    },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed {
         action: &'static str,
@@ -451,6 +476,18 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 // 别名进详情头部：重取主列表（详情就在快照里）。
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
+            Job::Promote(job) => {
+                let outcome = rt.block_on(run_promote(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 升级只动全局库，项目列表不变，但重取无妨（同一 worker，成本可控）。
+                refresh_after_op(&rt, job.project_root, false);
+            }
+            Job::Distribute(job) => {
+                let outcome = rt.block_on(run_distribute(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 分发把全局表落进项目库：项目列表会出现新行，必须重取。
+                refresh_after_op(&rt, job.project_root, false);
+            }
         }
         jobs().pending.fetch_sub(1, Ordering::SeqCst);
     }
@@ -505,6 +542,114 @@ async fn run_set_alias(job: &SetAliasJob) -> OpOutcome {
         Err(error) => OpOutcome::Failed {
             action: "编辑别名",
             reason: error.to_string(),
+        },
+    }
+}
+
+/// 升级到全局（工作线程上执行；§13）。
+///
+/// 本体 = `{项目}/resources/<payload_rel_path>`（File 档）；`content_hash` 用
+/// 面板详情已算好的指纹（归档时算过 sha256），不在 worker 里重算。
+/// 形态判定：白名单扩展名（csv/tsv/txt/parquet/xlsx/xls/json/ndjson）→ 数据文件
+/// 映射出表；其余（sql/py/md 等）→ 脚本内容表（方案 A）。
+async fn run_promote(job: &PromoteJob) -> OpOutcome {
+    use analytics_resource::global::{GlobalInstanceStore, InstanceOpError};
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "升级到全局",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let outcome = match gstore.promote(&job.request).await {
+        Ok(outcome) => outcome,
+        Err(InstanceOpError::Conflict { name }) => {
+            return OpOutcome::Failed {
+                action: "升级到全局",
+                reason: format!(
+                    "全局已有同名资源「{name}」；请改名后重试，或先在全局实例中移除旧资源（覆盖询问对话框待补）"
+                ),
+            };
+        }
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "升级到全局",
+                reason: reason.to_string(),
+            };
+        }
+    };
+    OpOutcome::Promoted {
+        name: outcome.name,
+        version: outcome.version,
+    }
+}
+
+/// 从全局分发到当前项目（工作线程上执行；§13 跨项目唯一法定路径）。
+///
+/// 项目侧写连接：分发需要项目 DuckDB 写锁，按 M6 后台任务惯例在工作线程里
+/// `ProjectDatabaseManager::open`（动作完成后连接即释放，不与宿主主写连接长存并发）。
+async fn run_distribute(job: &DistributeJob) -> OpOutcome {
+    use analytics_resource::global::{DistributeShape, GlobalInstanceStore, InstanceOpError, ProjectDuckConn};
+
+    let gstore = match GlobalInstanceStore::production().await {
+        Ok(store) => store,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局分发",
+                reason: format!("打开全局系统库失败：{reason}"),
+            };
+        }
+    };
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局分发",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let Some(duckdb) = manager.duckdb_conn() else {
+        return OpOutcome::Failed {
+            action: "从全局分发",
+            reason: "项目 DuckDB 写连接未就绪".to_string(),
+        };
+    };
+    let duck_conn = match duckdb.acquire().await {
+        Ok(conn) => conn,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "从全局分发",
+                reason: reason.to_string(),
+            };
+        }
+    };
+    let project = ProjectDuckConn(duck_conn, manager.sqlite_pool());
+    match gstore.distribute(&project, &job.project_root, &job.name).await {
+        Ok(outcome) => OpOutcome::Distributed {
+            name: outcome.name,
+            version: outcome.version,
+            shape: match outcome.shape {
+                DistributeShape::Table => DistributeShape::Table,
+                DistributeShape::File => DistributeShape::File,
+            },
+        },
+        Err(InstanceOpError::Conflict { name }) => OpOutcome::Failed {
+            action: "从全局分发",
+            reason: format!(
+                "当前项目已有同名资源「{name}」；请改名后重试，或先移除项目旧资源（覆盖询问对话框待补）"
+            ),
+        },
+        Err(InstanceOpError::NotFound { name }) => OpOutcome::Failed {
+            action: "从全局分发",
+            reason: format!("全局实例中没有「{name}」"),
+        },
+        Err(reason) => OpOutcome::Failed {
+            action: "从全局分发",
+            reason: reason.to_string(),
         },
     }
 }
@@ -1442,12 +1587,26 @@ fn free_dest(dest: &Path) -> PathBuf {
 }
 
 /// 提交一次刷新（**事件路径**调用：激活面板 / 打开或切换项目 / 归档等变更之后）。
-pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {
-    jobs().pending.fetch_add(1, Ordering::SeqCst);
+pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {    jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Refresh(RefreshJob {
         project_root,
         read_only,
     }));
+}
+
+/// 提交一次「升级到全局」（§13；事件路径调用：右键菜单确认之后）。
+pub fn enqueue_promote(project_root: PathBuf, request: analytics_resource::global::PromoteRequest) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Promote(PromoteJob {
+        project_root,
+        request,
+    }));
+}
+
+/// 提交一次「从全局分发」（§13；事件路径调用：全局实例列表动作之后）。
+pub fn enqueue_distribute(project_root: PathBuf, name: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Distribute(DistributeJob { project_root, name }));
 }
 
 /// 提交一次归档（**事件路径**调用：对话框确认之后）。

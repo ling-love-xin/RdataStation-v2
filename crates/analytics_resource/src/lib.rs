@@ -41,6 +41,7 @@ pub mod service;
 pub mod ui;
 
 pub mod folder;
+pub mod global;
 pub mod resource;
 pub mod tag;
 pub mod version;

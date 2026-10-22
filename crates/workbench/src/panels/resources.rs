@@ -543,6 +543,21 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::TagDone { note } => format!("资产库：{note}"),
             // 分组动作（建 / 改名 / 删 / 移动）：同上。
             resource_jobs::OpOutcome::GroupDone { note } => format!("资产库：{note}"),
+            // 双实例（§13）：升级 / 分发回执。
+            resource_jobs::OpOutcome::Promoted { name, version } => {
+                format!("资产库：已升级「{name}」v{version} 到全局实例（跨项目可分发）")
+            }
+            resource_jobs::OpOutcome::Distributed {
+                name,
+                version,
+                shape,
+            } => format!(
+                "资产库：已从全局分发「{name}」v{version} 到本项目（{}）",
+                match shape {
+                    analytics_resource::global::DistributeShape::Table => "建分析表",
+                    analytics_resource::global::DistributeShape::File => "重建为文件",
+                }
+            ),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }

@@ -34,6 +34,10 @@ hex.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
 uuid.workspace = true
+# 双实例（§13）：直接执行全局 / 项目 DuckDB DDL（升级 = 表 + 版本信息进全局库）
+duckdb.workspace = true
+# 双实例操作错误（Conflict / NotFound 语义化，供 UI 弹询问）
+thiserror.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
