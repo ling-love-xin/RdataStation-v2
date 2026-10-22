@@ -16,7 +16,9 @@
 //! - `explain` — 执行计划（EXPLAIN）的方言前缀
 //! - `script` — 脚本级改写骸架（切分 → 逐条改写 → 原位回填，格式化与转译共用）
 //! - `filter` — 下发源库的筛选改写（包一层子查询 + WHERE + ORDER BY 提到外层）
+//! - `bind` — 参数绑定（DBeaver 式 `:name` 扫描与字面替换）
 
+mod bind;
 mod builder;
 mod engine;
 mod explain;
@@ -29,6 +31,7 @@ mod split;
 mod transpiler;
 
 pub use builder::QualifiedTable;
+pub use bind::{param_names, substitute_params};
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use explain::explain_sql;
 pub use formatter::FormatReport;

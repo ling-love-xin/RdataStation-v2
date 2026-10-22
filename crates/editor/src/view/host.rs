@@ -101,6 +101,30 @@ struct ValuePreview {
     row: usize,
 }
 
+/// 【B16】参数绑定挂起（DBeaver 式 `:name`）：执行目标 + 落点 + 标题原样存着，
+/// 等参数表单填完 → [`PendingBind::substitute`] 字面替换 → 继续原提交链。
+#[derive(Clone)]
+pub(crate) struct PendingBind {
+    target: ExecTarget,
+    placement: ResultPlacement,
+    title: Option<String>,
+}
+
+impl PendingBind {
+    /// 用填好的值替换目标里的 `:name`。只对**用户写的 SQL** 变体
+    /// （Selection / Statement / All / Batch）生效；内部生成的目标本就没有参数，原样。
+    fn substitute(&self, values: &std::collections::HashMap<String, String>) -> ExecTarget {
+        let rebind = |sql: &String| engine::sql::substitute_params(sql, values);
+        match &self.target {
+            ExecTarget::Selection(sql) => ExecTarget::Selection(rebind(sql)),
+            ExecTarget::Statement(sql) => ExecTarget::Statement(rebind(sql)),
+            ExecTarget::All(sql) => ExecTarget::All(rebind(sql)),
+            ExecTarget::Batch(list) => ExecTarget::Batch(list.iter().map(rebind).collect()),
+            other => other.clone(),
+        }
+    }
+}
+
 /// 【T2c-3 收尾】编辑内容模式：行编辑（默认，单光标）/ 列编辑（多光标）。
 ///
 /// 列编辑 = 内核多光标能力（`add_cursor_above|below`，0.7.1 经 vendor 补丁公开）；
@@ -215,6 +239,9 @@ pub struct EditorHostPanel {
     transposed: bool,
     /// 【P2-4】转置当前展示的数据行（越界由 delegate 夹取）
     transpose_row: usize,
+    /// 【B16】参数绑定挂起：执行目标里含 `:name` 时记在这里，等参数表单填完
+    /// 再替换执行（`None` = 没有在等表单）
+    pending_bind: Option<PendingBind>,
     /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
     result_error_card: Option<ErrorCard>,
     /// 【2b】脚本执行的输出卡片（通用模式跑完才有；`None` = 没跑过 / 已切走）
@@ -718,6 +745,7 @@ impl EditorHostPanel {
             result_can_copy: false,
             transposed: false,
             transpose_row: 0,
+            pending_bind: None,
             result_error_card: None,
             script_card: None,
             error_site: None,
@@ -4542,6 +4570,29 @@ impl EditorHostPanel {
             self.set_message(Some(reason), cx);
             return false;
         }
+        // 【B16】参数绑定（DBeaver 式）：目标里有 `:name` → 挂起等表单，填完再替换执行。
+        // 只扫**用户写的 SQL** 变体（`statements()` 为空的目标 = 内部生成，没有参数）。
+        // 参数名按首次出现顺序去重（表单就按这个顺序摆）
+        let names = {
+            let mut seen: Vec<String> = Vec::new();
+            for sql in target.statements() {
+                for name in engine::sql::param_names(&sql) {
+                    if !seen.contains(&name) {
+                        seen.push(name);
+                    }
+                }
+            }
+            seen
+        };
+        if !names.is_empty() {
+            self.pending_bind = Some(PendingBind {
+                target,
+                placement,
+                title,
+            });
+            self.open_bind_dialog(names, cx);
+            return false;
+        }
         let channel = self.channel();
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
         let expected = target.statements().len();
@@ -5896,6 +5947,7 @@ impl EditorHostPanel {
 
     /// 【遗留 #7】带窗口的值查看器入口（测试走它做窗口级验收；生产钩子经
     /// [`Self::open_value_preview`] 转手调同一实现）
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn open_value_preview_with_window(        &mut self,
         value: &str,
         column: &str,
@@ -5937,8 +5989,57 @@ impl EditorHostPanel {
     }
 
     /// 【遗留 #7】只读访问器：值查看器目标是否已记录（测试断言用；`ValuePreview` 是私有类型，只暴露 bool）
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn value_preview_for_test(&self) -> bool {
         self.value_preview.is_some()
+    }
+
+    /// 【B16】弹参数表单（生产入口；headless 下 `self.window.update` 转手会报
+    /// `window not found`——与 [`Self::open_value_preview`] 同款测试环境限制，留可读原因）
+    fn open_bind_dialog(&mut self, names: Vec<String>, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let result = self.window.update(cx, move |_panel, window, app| {
+            let run_entity = entity.clone();
+            let cancel_entity = entity.clone();
+            dialogs::open_bind_dialog(
+                window,
+                app,
+                names,
+                move |values, _window, cx| {
+                    run_entity.update(cx, |panel, cx| panel.finish_bind(values, cx));
+                },
+                move |cx| {
+                    cancel_entity.update(cx, |panel, cx| panel.cancel_bind(cx));
+                },
+            );
+        });
+        if let Err(error) = result {
+            self.set_message(Some(format!("参数表单弹不出：{error}")), cx);
+        }
+    }
+
+    /// 【B16】参数表单提交：替换 `:name` 后继续原提交链（替换后无参数，直接走执行）
+    pub(crate) fn finish_bind(
+        &mut self,
+        values: std::collections::HashMap<String, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.pending_bind.take() else {
+            return;
+        };
+        let target = pending.substitute(&values);
+        self.execute_labeled(target, pending.placement, pending.title, cx);
+    }
+
+    /// 【B16】取消参数表单：清掉挂起（「这次不跑了」不是只关个窗）
+    pub(crate) fn cancel_bind(&mut self, _cx: &mut Context<Self>) {
+        self.pending_bind = None;
+    }
+
+    /// 【B16】只读访问器：参数表单是否在挂起（测试断言用）
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn pending_bind_for_test(&self) -> bool {
+        self.pending_bind.is_some()
     }
 
     /// 【B14】排序下发（右键菜单来的）：按这一列重查源库，结果落**新结果集**

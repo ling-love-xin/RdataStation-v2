@@ -1865,6 +1865,88 @@ fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
     assert!(message.expect("拒绝要留原因").contains("文本模式"));
 }
 
+// ===== B16：参数绑定（DBeaver 式 `:name` → 弹表单 → 字面替换后执行）=====
+
+/// 带参数的目标不直接提交：挂起等表单；填完替换后继续执行（替换后的 SQL 才发给驱动）
+#[gpui_kit::test]
+fn named_parameters_hold_execution_until_filled(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let sql = "SELECT * FROM t WHERE id = :id AND name = :name";
+    let (shared, id, seen, _seen_conn) = shared_with_runner(sql, EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let submitted = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::All(sql.to_string()),
+                execution::ResultPlacement::Replace,
+                cx,
+            )
+        })
+    });
+    assert!(!submitted, "带参数的目标不直接提交");
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).pending_bind_for_test()),
+        "参数表单在挂起"
+    );
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "SQL 还没发给驱动（在等表单）"
+    );
+
+    // 填完：替换（含单引号转义）后继续原提交链
+    let mut values = std::collections::HashMap::new();
+    values.insert("id".to_string(), "7".to_string());
+    values.insert("name".to_string(), "o'brien".to_string());
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.finish_bind(values, cx));
+    });
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).pending_bind_for_test()),
+        "填完清掉挂起"
+    );
+    let seen = seen.lock().expect("锁");
+    assert_eq!(
+        seen.as_slice(),
+        &["SELECT * FROM t WHERE id = '7' AND name = 'o''brien'"],
+        "替换后的 SQL 才发给驱动"
+    );
+}
+
+/// 取消参数表单：清掉挂起，SQL 不发给驱动（「这次不跑了」不是只关个窗）
+#[gpui_kit::test]
+fn cancelling_bind_aborts_the_run(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let sql = "SELECT * FROM t WHERE id = :id";
+    let (shared, id, seen, _seen_conn) = shared_with_runner(sql, EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement(sql.to_string()),
+                execution::ResultPlacement::Replace,
+                cx,
+            )
+        });
+    });
+    assert!(cx.update(|_window, cx| panel.read(cx).pending_bind_for_test()));
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.cancel_bind(cx));
+    });
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).pending_bind_for_test()),
+        "取消清掉挂起"
+    );
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "取消后 SQL 不发给驱动"
+    );
+}
+
 // ===== A11：查找 / 替换（内核能力，本 crate 不自建）=====
 
 /// 建一份带内容的文档与面板（查找不需要执行器）

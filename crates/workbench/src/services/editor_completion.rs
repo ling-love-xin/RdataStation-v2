@@ -518,7 +518,7 @@ mod tests {
     use std::collections::HashMap;
     use database::cache::NavCache;
     use editor::channel::ExecChannel;
-    use editor::completion::{CandidateKind, ColumnAnnotation, CompletionPort};
+    use editor::completion::{CandidateKind, CompletionPort};
     use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
     use project::ui::OpenProject;
     use workbench_shell::model::ConnectionItem;
@@ -735,7 +735,6 @@ mod tests {
     #[test]
     fn column_annotations_resolve_single_table_select() {
         let root = temp_root("p1");
-        let root_s = root.to_string_lossy().to_string();
         seed("P1_annotations", &root);
         let shared = Shared::with_connections(
             vec![ConnectionItem {
