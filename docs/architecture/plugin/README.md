@@ -176,3 +176,9 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 清单 `[backend]` 新增 `driver_jars`（仅 `runtime = "java"`，绝对路径，文件或目录），
 宿主部署期校验存在性后经 `RDS_DRIVER_JARS` 环境变量注入 Java 壳进程，壳启动时与插件包
 `lib/` 驱动合并加载（`DriverRegistry.collectExternal`）。兑现「可以指定自己下载 jdbc 包」。
+
+**插件入口面板已打开**（2026-10-22）：左 dock「插件」tab 由占位改为已装插件列表——
+名称/版本/状态徽标（已激活/已加载/已停用/出错）+ 刷新 + 启用/停用操作。
+数据面 = 全局 `PluginManager`；`manager::runtime_handle` 把宿主 tokio runtime 句柄
+注入全局（enable/disable 依赖 tokio 上下文），面板事件回调在后台 `block_on` 执行不阻塞 UI。
+卸载按钮与下载引导同二期（需确认对话框）。

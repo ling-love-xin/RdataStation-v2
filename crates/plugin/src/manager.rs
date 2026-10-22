@@ -920,6 +920,23 @@ impl PluginManager {
 /// 全局插件管理器实例
 pub static PLUGIN_MANAGER: OnceLock<Arc<PluginManager>> = OnceLock::new();
 
+/// 全局 tokio runtime 句柄（UI 事件回调跨线程 `block_on` 用）。
+///
+/// 插件管理器的 `enable/disable/uninstall` 等操作依赖 tokio 上下文（DB 异步锁），
+/// UI 线程不在 tokio 里，由 `init_plugin_manager` 把宿主 runtime 句柄存到这里，
+/// 插件面板的事件回调在后台 executor 里 `handle.block_on(...)` 执行（不阻塞 UI）。
+pub static PLUGIN_RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+/// 宿主注入 tokio runtime 句柄（`init_plugin_manager` 内部调用；重复注入忽略）。
+pub fn set_runtime_handle(handle: tokio::runtime::Handle) {
+    let _ = PLUGIN_RUNTIME_HANDLE.set(handle);
+}
+
+/// 取全局 tokio runtime 句柄；未初始化（如测试进程）返回 `None`。
+pub fn runtime_handle() -> Option<&'static tokio::runtime::Handle> {
+    PLUGIN_RUNTIME_HANDLE.get()
+}
+
 /// 获取全局插件管理器实例
 ///
 /// 如果尚未初始化，将返回 None。必须先调用 [`init_plugin_manager`] 进行初始化。
@@ -934,6 +951,15 @@ pub fn get_plugin_manager() -> Option<&'static Arc<PluginManager>> {
 /// 事件落地全靠它 tick —— 此前只有测试在 tick）；`detach`：任务生命周期随 tokio
 /// runtime（宿主退出即停），无需句柄。
 pub async fn init_plugin_manager(install_dir: PathBuf) -> Result<(), CoreError> {
+    // 让 UI 事件回调能跨线程 block_on 管理操作（enable/disable/uninstall 依赖 tokio）
+    set_runtime_handle(
+        tokio::runtime::Handle::try_current().map_err(|_| {
+            CoreError::common(shared::error::CommonError::General(
+                "插件管理器初始化必须在 tokio runtime 上下文内".to_string(),
+            ))
+        })?,
+    );
+
     let manager = Arc::new(PluginManager::new(install_dir));
     manager.init().await?;
 

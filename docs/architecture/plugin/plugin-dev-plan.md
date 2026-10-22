@@ -1102,3 +1102,14 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 - 实证：壳单独目录（无驱动 jar）+ h2 仅在 `RDS_DRIVER_JARS` 指向目录 → initialize/open(H2)/query 全通；
   `tests/drivers_packaged.rs` 新增全链路用例（临时插件目录 + driver_jars 指向外部 h2，真连查询）。
 - 验证：rds-plugin 全量 196 lib + 71 集成全绿；插件包已重装（壳带新能力）。
+
+**插件入口面板**（2026-10-22，P4 一期）：
+- `crates/workbench/src/panels/left_tabs.rs` PluginPanel：占位 → 已装插件列表
+  （`plugin::manager::list_plugins`，会话态 `Rc<RefCell<Vec<PluginInfo>>>`，事件路径刷新）；
+  行 = 名称 v版本 + 状态徽标（Active/Loaded/Inactive/Error 语义色）+ 启用/停用 `Button::ghost`；
+  头部刷新按钮（`IconName::RefreshCw`）；空态与错误文案。
+- `manager.rs`：`PLUGIN_RUNTIME_HANDLE` 全局 tokio Handle（`set_runtime_handle` / `runtime_handle`），
+  `init_plugin_manager` 注入；UI 回调经 `handle.block_on` 跑 enable/disable（DB 异步锁 + 进程停启）。
+- workbench 新增 `plugin.workspace` 依赖（workbench → plugin，无环）。
+- 验证：`cargo check -p rds-workbench` 零警告；`ui_contract` 9 过（无裸色值/裸 px）；
+  rds-plugin lib 196 + drivers_packaged 3 全绿。
