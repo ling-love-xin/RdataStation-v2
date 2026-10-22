@@ -49,3 +49,8 @@ docs/tmp/
 # 根目录验证截图（PrintWindow 等一次性产物）一律不入门库
 /*.bmp
 /*.png
+
+# 原型工具一次性过程产物（截图 / 版本备份 / autofix 备份；正式原型 html 与 design.md 仍入库）
+docs/**/_backup/
+docs/**/_shots/
+docs/**/*autofix-backup-*.html
