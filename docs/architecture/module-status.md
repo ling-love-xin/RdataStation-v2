@@ -46,7 +46,7 @@
 > ；跑不出来的一律不写。
 > 基线：
 >
-> **2026-10-21**
+> **2026-10-22**
 >
 > （Windows · stable 1.98.0 · 
 >
@@ -54,9 +54,9 @@
 >
 > ）・全仓
 >
-> **第八次**
+> **第九次**
 >
-> 复跑（§6.7，**含 `rds-plugin` 首次纳入全量并全绿**）・下表即其数字・此前基线为 2026-10-16（第七次，§6.6，排除 plugin）与 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
+> 复跑（§6.8，**含 `rds-plugin` 全量全绿**）・下表即其数字・此前基线为 2026-10-21（第八次，§6.7，plugin 首次纳入全量）与 2026-10-16（第七次，§6.6，排除 plugin）与 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
 
 
 
@@ -68,13 +68,13 @@
 
 | 项       | 实测值                                                                                                                                        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 工作区测试目标 | **107**（含 `rds-plugin` 首次纳入全量；含 Doc-tests 合并行）                                                                                              |
-| 通过      | **3074**                                                                                                                                   |
+| 工作区测试目标 | **109**（含 `rds-plugin` 全量；含 Doc-tests 合并行；108 个 Running 目标 + 1 行合并 Doc-tests）                                                                                              |
+| 通过      | **3160**                                                                                                                                   |
 | 失败      | **0**（本轮全绿，含 plugin）                                                                                                                          |
-| 忽略      | **48**（engine 单测 24 + 其余目标 24）                                                                                                              |
-| 编译告警    | `cargo check --workspace --all-targets` **3 行 warning 头**（plugin `supervisor.rs` mut 不必要 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.7） |
+| 忽略      | **48**（lib 28：engine 真机探针 24 · editor 1 · kernel 3；Doc-tests 20：engine 16 · connection/insight/plugin/workbench_shell 各 1）                          |
+| 编译告警    | `cargo check --workspace --all-targets` **3 行 warning 头**（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.8） |
 | 代码规模    | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**）                                                                |
-| 口径      | 上表是**原始命令的输出**；本次为 2026-10-21 复跑（§6.7），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 106 个目标 / 3073 项** |
+| 口径      | 上表是**原始命令的输出**；本次为 2026-10-22 复跑（§6.8），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 108 个目标 / 3159 项** |
 
 
 
@@ -209,7 +209,7 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `federation_credentials_probe` | 1  | 凭据脱敏出口                   |
 | `oracle_probe`                 | 1  | Oracle 扩展腿               |
 
-### 2.2 `rds-workbench` 的 37 个集成目标（159 项）
+### 2.2 `rds-workbench` 的 39 个集成目标（165 项，含本机诊断 `zz_fixture_probe`；项目自身 38 目标 / 164 项）
 
 
 
@@ -233,7 +233,8 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | `oracle_federation`         | 1                 |   | `mock_job_cancel`            | 1                |
 | `connection_rule12`         | 2（新增，`27e854ac`）  |   | `nav_property_real`          | 2（新增，`b12c65a5`） |
 | `scratchpad_editor_entry`   | 1（新增，`8e4a7a55`）  |   | `zz_fixture_probe`           | 1（本机诊断，未跟踪）      |
-| `a11y_roles`                | 4（新增，2026-10-16 a11y 断言，见 §6.6） |   |                              |                  |
+| `a11y_roles`                | 4（新增，2026-10-16 a11y 断言，见 §6.6） |   | `history_editor_entry`      | 1                |
+| `mock_panel_probe`          | 5（§6.7 修复后 5/5 全绿，本轮补登台账） |   |                              |                  |
 
 > 真机目标（
 >
@@ -304,11 +305,11 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 
 | 项                 | 值                                                                  | 出处                               |
 | ----------------- | ------------------------------------------------------------------ | -------------------------------- |
-| 工作区 crate 数       | **19**（新增 `rds-property`、`rds-search`、`rds-connection-dialog`）     | 根 `Cargo.toml`                   |
+| 工作区 crate 数       | **21**（`rds-property`、`rds-search`、`rds-connection-dialog`、`rds-kernel`、`rds-tag` 为后补入独立 crate） | 根 `Cargo.toml`                   |
 | `default-members` | `crates/app`（裸 `cargo test` **不含** `plugin`）                       | 根 `Cargo.toml`                   |
 | 驱动                | 6 个，覆盖 4 类引擎                                                       | `engine/src/driver/loader.rs`    |
 | 迁移目录              | 4 套（global /project\_meta/connection\_metadata /project\_analysis） | `engine/migrations/`             |
-| 界面契约              | `ui_contract` 7 项：零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单                     | `workbench/tests/ui_contract.rs` |
+| 界面契约              | `ui_contract` 9 项：零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单                     | `workbench/tests/ui_contract.rs` |
 
 
 
@@ -781,6 +782,23 @@ HEAD `f8f2bf35`（2026-10-15 19:04「feat (property) 属性面板优化」）为
 **并发 flake 记录**：`rds-mock --test mock_engine_tests::ordered_preview_returns_the_global_top_rows` 在 `-j 2` 全量满载时偶发（DuckDB 全局内存库跨 binary 竞争）；单独跑该目标 38/38 全过——**时序类 flake（非代码缺陷）**，与 §6.5/§6.6 的 nav_jobs / editor lsp flake 同类。基线按全量 0 失败记录（末次全量复跑未复现）。
 
 **plugin 首次全量**：`rds-plugin` lib 单测 + 9 个真机 sidecar 集成目标全绿（§2.1 探针口径不变），`crates/plugin/src/sidecar/{health_checker,hot_reload_manager}.rs` 0 字节待补（§3/§5 不变，仍无调用方）。
+
+#### 6.8 全仓第九次全量复跑（2026-10-22）：109 目标 / 3160 通过（0 失败，含 plugin 全量）
+
+**基线已更新为本次**（§0 / §2 即其数字）。命令：`cargo test --workspace -j 2 --no-fail-fast`（含 `rds-plugin`）。测试日志 `.rds/tmp/test-2026-10-22.log`（全绿，exit 0）；check 日志 `.rds/tmp/check-2026-10-22-c.log`（0 error，**3 行既有 warning 头**：plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var）；clippy 日志 `.rds/tmp/clippy-2026-10-22.log`（exit 0，0 error，`Finished dev profile in 5m 11s`；63 个 crate lint 头为存量风格债，CI 不设硬门禁，本轮不逐条清理）。
+
+**本轮工作区改动（测试先行，随 0.2.4 一并提交）**：
+
+1. **SQL 命名参数绑定**：新增 `crates/engine/src/sql/bind.rs`（`param_names` / `substitute_params`，`:name` 扫描与字面替换）；editor 宿主以 `substitute` 替换执行目标。新增 2 项窗口测试：`view::tests::named_parameters_hold_execution_until_filled`（参数未填满前保持不执行）、`view::tests::cancelling_bind_aborts_the_run`（取消绑定即中止本轮执行）；bind.rs 内 8 项纯函数单测（同名多处 / `::` 类型转换 / 字符串与 `''` 转义 / 行块注释跳过 / 空值→NULL / 引号 `''` 转义 / 无参原样）随 engine lib 目标全绿。
+2. **洞察内存管理链**：settings 新增 `Insight` 分组（`memory_limit_mb` / `full_scan_confirm` / `work_set_limit` / `status_usage`）+ registry 登记 + `set_memory_limit_mb` 持久化通知；engine/duckdb 新增 `MemoryStats` / `apply_memory_limit_mb` / `set_memory_limit_mb` / `memory_stats` / `parse_human_size`，配套 3 项单测：`test_parse_human_size`、`test_memory_stats_and_set_limit`、`test_configure_connection_applies_memory_and_temp_settings`；insight 新增 3 项：`request_full_waits_for_host_confirmation`（全量统计等待宿主确认）、`request_full_is_noop_for_temp_table_targets`（临时表目标全量统计为空操作）、`apply_insight_prefs_updates_fields`（偏好装配落字段）；workbench 接入全量统计确认弹窗订阅与偏好装配，设置变更回调推送洞察偏好。
+3. **资产库全局实例分发**：analytics_resource 新增 `RowScope` / `InstanceFilter`（label）/ `to_global_rows`；`ResourcesHost` trait 新增 `request_distribute_from_global`；`resource_view` 接入 `set_instance` 与分发接线；workbench `resource_host` 实现该 trait 方法，`resource_jobs` 刷新任务配合。
+4. **测试夹具适配与 warning 清理**：首轮 `cargo check-all` 在 `rds-analytics-resource` 的 `panel_window` 编译失败 3 处——`RecordingHost` 缺 `request_promote_to_global` / `request_distribute_from_global` 两个新 trait 方法、`ArchiveRow` 字面量缺 `scope: RowScope`、`ResourcesSnapshot` 字面量缺 `global_rows: Vec<ArchiveRow>`；已补齐夹具。另清理本轮新增 5 条 warning：editor `host.rs` 三个仅测试调用方法补 `#[cfg(any(test, feature = "test-support"))]` 门控；`resource_view.rs` 空 `if is_global { menu = menu; }` 自赋值反转为 `if !is_global` 并把 `move_ids` 移入块内；`editor_completion.rs` 删 unused import `ColumnAnnotation` 与未用变量 `root_s`；`editor/host.rs` 删除无调用点的冗余 `open_bind_dialog_with_window`。
+5. **左 dock 命令面板修复**：`apply_left_mode` 对称右 dock 补 `active_tab` / `active_id` 句柄，Expanded 分支补「面板未挂载 → `add_panel_view`、已挂载 → `select_panel`」；`Action::OpenLeftPanel` 先登记 `left_open_panels`、置 `active_left` / `left_mode=Expanded`，再调 `apply_left_mode` 强制宿主这拍同步。右 dock 链路核对自洽（`Shared::open_right_panel` 状态登记 + `apply_right_mode` 对称补丁已于 §6.7 落地）。
+
+**数字口径（日志逐条 `Running` / `Doc-tests` ↔ `test result:` 配对复核）**：**109 目标** = 108 个 Running 目标 + 1 行合并 Doc-tests；**3160 passed · 0 failed · 48 ignored**。忽略 48 = lib 28（`rds-engine` 真机探针 24 · `rds-editor` 1 · `rds-kernel` 3）+ Doc-tests 20（engine 16 · connection / insight / plugin / workbench_shell 各 1）。项目自身套件（去掉本机诊断 `zz_fixture_probe` 1 项）= **108 目标 / 3159 项通过**。
+
+**用例增量说明**：本轮工作区新增 16 个用例（editor 窗口 2 + insight 3 + engine 11：DuckDB 内存 3 + 参数绑定 8，均见上文明细）；通过数较 §6.7 的 3074 增加 86，其余增量来自 0.2.3 tag 之后已提交的 32 个 commit（结果网格单行转置 / 隐藏列 / BLOB 摘要 / 列统计 / 历史面板接线 / 洞察联动 T18–T21 / 双实例服务层 / 用户自定驱动 jar / 分析模式串行队列 / gpui-kit 0.8.0 升级等，commit 清单见 Release 说明）。本轮全量 0 失败，未复现 §6.7 的 `rds-mock` 时序类 flake。
+
 
 
 
