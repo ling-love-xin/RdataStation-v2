@@ -83,8 +83,10 @@ pub fn parse_connection_url(url: &str) -> Option<UrlParts> {
 
 /// 数据库族 → DuckDB Secret 类型
 ///
-/// 可用性（bundled DuckDB 实测）：POSTGRES / MYSQL / S3 / GCS / R2 / AZURE 内置；
-/// SQLITE / DUCKDB 需扩展（返回类型但注册可能失败，由调用方按警告处理）。
+/// Secret 只服务**远程扫描源**（bundled DuckDB 实测内置：POSTGRES / MYSQL / S3 /
+/// GCS / R2 / AZURE）。`sqlite` / `duckdb` 是本地文件：靠 scanner 直接 ATTACH 文件，
+/// 没有凭据、也没有 Secret 概念（DuckDB 不存在 SQLITE / DUCKDB secret type，强行注册
+/// 会被引擎拒绝），因此映射 `None`，调用方不注册。
 ///
 /// 只认**数据库族**（`data_source_types.id`）与同义写法（`pg` / `mariadb`）；
 /// 驱动实现 id（`mysql_native`）请走 [`secret_type_of`]。
@@ -92,8 +94,6 @@ pub fn db_type_to_secret_type(db_type: &str) -> Option<&'static str> {
     match db_type.to_lowercase().as_str() {
         "postgres" | "postgresql" | "pg" => Some("POSTGRES"),
         "mysql" | "mariadb" => Some("MYSQL"),
-        "sqlite" => Some("SQLITE"),
-        "duckdb" => Some("DUCKDB"),
         "s3" => Some("S3"),
         _ => None,
     }
@@ -356,6 +356,9 @@ mod tests {
         // MariaDB 走 MySQL 协议：同一个 Secret 类型
         assert_eq!(db_type_to_secret_type("mariadb"), Some("MYSQL"));
         assert_eq!(db_type_to_secret_type("oracle"), None);
+        // 本地文件源无 Secret 概念：不映射、不尝试注册（避免引擎报 Secret type 不存在）
+        assert_eq!(db_type_to_secret_type("sqlite"), None);
+        assert_eq!(db_type_to_secret_type("duckdb"), None);
     }
 
     /// 驱动 id → Secret 类型的归一：族 id 走快路径，未命中（驱动 id / 未知值）查驱动目录。

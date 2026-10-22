@@ -169,16 +169,13 @@ impl MetadataCacheManager {
                 })
             })?;
 
-        // 设置 Memory-Mapped I/O（256MB，对于大型数据库效果显著）
-        // 使用 execute 设置 PRAGMA，忽略可能的返回值
-        let _ = conn.execute("PRAGMA mmap_size=268435456", []).map_err(|e| {
+        // 设置 Memory-Mapped I/O（256MB，对于大型数据库效果显著）。
+        // mmap_size 是结果型 PRAGMA（回读当前值），必须走 query_row：execute 遇到
+        // 返回结果集的语句会报 "Execute returned results - did you mean to call query?"
+        // （与 metadata_cache_pool.rs 同一口径）。失败只告警，不阻断建库。
+        if let Err(e) = conn.query_row("PRAGMA mmap_size=268435456", [], |_| Ok(())) {
             tracing::warn!("Failed to set mmap_size: {}", e);
-            CoreError::storage(StorageError::Persistence {
-                store: "sqlite".to_string(),
-                operation: "set_mmap_size".to_string(),
-                reason: e.to_string(),
-            })
-        });
+        }
 
         // 设置缓存大小（-1000 表示 1000KB）
         conn.execute("PRAGMA cache_size=-2000", []).map_err(|e| {

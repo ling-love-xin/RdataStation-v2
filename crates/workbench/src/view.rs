@@ -1719,9 +1719,14 @@ impl WorkbenchView {
         let pt = settings::product_tokens::get(cx);
         let entity = cx.entity();
 
-        // 软件图标（明亮版在 `assets/icons/light/`；暗黑版在 `assets/icons/dark/`，见 theme-design.md）。
+        // 软件图标随当前实际明暗主题取 light/ 或 dark/ 下的 32px PNG：System 策略已在
+        // Theme::change 阶段解析为 Light/Dark，这里以 theme.is_dark() 为准（与取色同源）。
         // 路径走 `paths::assets_dir()`：发布包取可执行文件同级 `assets/`，开发期回退仓库那份。
-        let icon_path = paths::assets_dir().join("icons").join("light").join("32x32.png");
+        let icon_dir = if theme.is_dark() { "dark" } else { "light" };
+        let icon_path = paths::assets_dir()
+            .join("icons")
+            .join(icon_dir)
+            .join("32x32.png");
         let logo = img(icon_path.as_path()).w_5().h_5().rounded_sm();
 
         // 挖空项目槽：产品语义 token `title_bar.slot.background`。

@@ -55,6 +55,21 @@ impl DatabaseLogLayer {
     }
 }
 
+/// 关闭 / 失焦瞬间 GPUI vendor 内部抛出的窗口时序噪音：句柄已销毁、光标取不到、
+/// 把 Win32 成功码误当错误记录。这些不是本产品缺陷，不进 `app_logs`。
+///
+/// 只在 `target == "log"`（vendor 内部事件统一 target）时命中，避免吞掉业务模块
+/// 同名消息；业务事件无论消息文本是什么都照常写库。
+fn is_dismissible_vendor_noise(target: &str, message: &str) -> bool {
+    if target != "log" {
+        return false;
+    }
+    message == "window not found"
+        || message.contains("无效的窗口句柄")
+        || message.contains("unable to get cursor position")
+        || message.contains("操作成功完成")
+}
+
 impl<S> Layer<S> for DatabaseLogLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -63,6 +78,12 @@ where
         let meta = event.metadata();
         let mut visitor = LogFieldVisitor::default();
         event.record(&mut visitor);
+
+        // 关闭 / 失焦瞬间 GPUI vendor 内部抛出的窗口时序噪音不写库（stderr 与文件层
+        // 是独立 Layer，不受这里过滤影响，排障时仍能在控制台 / 文件看到）。
+        if is_dismissible_vendor_noise(meta.target(), &visitor.message) {
+            return;
+        }
 
         let record = LogRecord {
             id: 0,
@@ -586,5 +607,31 @@ mod tests {
         assert!(file_sink.truncated.load(Ordering::Relaxed));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// vendor 窗口时序噪音只在 target == "log" 时过滤；业务模块同名消息不被吞。
+    #[test]
+    fn vendor_window_noise_is_filtered_only_for_log_target() {
+        let noise = [
+            "window not found",
+            "无效的窗口句柄。 (0x80070578)",
+            "无效的窗口句柄 (0x80040102)",
+            "unable to get cursor position: 拒绝访问。 (0x80070005)",
+            "操作成功完成。 (0x00000000)",
+        ];
+        for msg in noise {
+            assert!(is_dismissible_vendor_noise("log", msg), "应过滤: {msg}");
+            // 业务 target 下同名消息照常保留
+            assert!(
+                !is_dismissible_vendor_noise("rds_workbench::x", msg),
+                "业务 target 不应被吞: {msg}"
+            );
+        }
+        // 非噪音消息、以及业务 target 下的噪音文案，均放行写库
+        assert!(!is_dismissible_vendor_noise("log", "数据库连接失败: 超时"));
+        assert!(!is_dismissible_vendor_noise(
+            "rds_workbench::x",
+            "window not found"
+        ));
     }
 }
