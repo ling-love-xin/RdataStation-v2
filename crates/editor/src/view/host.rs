@@ -634,10 +634,20 @@ impl EditorHostPanel {
                 }
                 // 【遗留 #7】「查看完整值」：弹层是宿主的事（对话框生命周期归宿主），
                 // 钩子只把 值 / 列名 / 视图行 带回面板
+                let preview_for_value = preview_weak.clone();
                 state.delegate_mut().set_preview_value_hook(std::rc::Rc::new(
                     move |value: String, column: String, _column_ix: usize, row: usize, app: &mut App| {
-                        _ = preview_weak
+                        _ = preview_for_value
                             .update(app, |panel, cx| panel.open_value_preview(&value, &column, row, cx));
+                    },
+                ));
+                // 【P2-3】列统计：统计文本已由网格算好，弹层复用「查看完整值」的对话框
+                // （标题 = 列名，正文 = 统计行）
+                let preview_for_stats = preview_weak.clone();
+                state.delegate_mut().set_column_stats_hook(std::rc::Rc::new(
+                    move |column: String, text: String, app: &mut App| {
+                        _ = preview_for_stats
+                            .update(app, |panel, cx| panel.open_value_preview(&text, &column, 0, cx));
                     },
                 ));
             });

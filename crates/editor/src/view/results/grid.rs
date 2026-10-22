@@ -108,6 +108,9 @@ pub type InsightColumnHook = Rc<dyn Fn(&str, &mut App)>;
 /// 弹层是宿主的事（对话框生命周期归宿主），网格只负责发意图。
 pub type PreviewValueHook = Rc<dyn Fn(String, String, usize, usize, &mut App)>;
 
+/// 【P2-3】列统计弹层的钩子（宿主开弹层；参数 = 列名、统计文本）
+pub type ColumnStatsHook = Rc<dyn Fn(String, String, &mut App)>;
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -130,6 +133,12 @@ pub enum ContextAction {
     CopyRowInsert(usize),
     /// 冻结 / 取消冻结这一**数据列**
     ToggleFreeze(usize),
+    /// 【P2】隐藏这一**数据列**（从视图列里去掉；数据不动）
+    HideColumn(usize),
+    /// 【P2】把隐藏的列全部放回来（显示全部列）
+    ShowAllColumns,
+    /// 【P2-3】这一**数据列**的统计（count / null / min / max / avg / sum）
+    ColumnStats { column: usize },
     /// 按这一列（列名）排序并**下发重查**
     SortDown { column: String, descending: bool },
     /// 【M8】洞察这一列（列名；宿主据此取样 → 列画像）
@@ -163,6 +172,8 @@ pub struct ContextTarget {
     pub rows: usize,
     /// 这一列冻结了吗（文案随它反向）
     pub frozen: bool,
+    /// 【P2】当前隐藏了多少列（>0 时菜单摆「显示全部列」）
+    pub hidden_columns: usize,
     /// 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样）
     pub insight: bool,
     /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
@@ -260,6 +271,23 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         action: ContextAction::ToggleFreeze(target.column),
         separator_before: false,
     });
+    items.push(ContextMenuItem {
+        label: format!("隐藏「{column_name}」"),
+        action: ContextAction::HideColumn(target.column),
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: format!("列统计「{column_name}」"),
+        action: ContextAction::ColumnStats { column: target.column },
+        separator_before: false,
+    });
+    if target.hidden_columns > 0 {
+        items.push(ContextMenuItem {
+            label: "显示全部列".to_string(),
+            action: ContextAction::ShowAllColumns,
+            separator_before: false,
+        });
+    }
     if target.insight {
         items.push(ContextMenuItem {
             label: format!("洞察「{column_name}」这一列"),
@@ -304,6 +332,8 @@ pub struct ResultGridDelegate {
     context_cell: Option<(usize, usize)>,
     /// 【B15】冻结的数据列（原生 `Column.fixed`：横向滚动时钉在左侧）
     frozen: Vec<usize>,
+    /// 【P2】隐藏的数据列（**数据列序**；显示时跳过它们。只影响视图列序，数据一行不动）
+    hidden: Vec<usize>,
     /// 【B14】按值筛选的钩子（面板注入）
     on_filter_value: Option<FilterValueHook>,
     /// 【B14】排序下发的钩子（面板注入）
@@ -311,7 +341,10 @@ pub struct ResultGridDelegate {
     /// 【M8】「洞察此列」的钩子（宿主接端口时面板才注入）
     on_insight_column: Option<InsightColumnHook>,
     /// 【遗留 #7】「查看完整值」的钩子（面板注入）
+    /// 【遗留 #7】「查看完整值」的钩子（面板注入）：值 / 列名 / 数据列下标 / 视图行
     on_preview_value: Option<PreviewValueHook>,
+    /// 【P2-3】列统计弹层的钩子（宿主开弹层；参数 = 列名、统计文本）
+    on_column_stats: Option<ColumnStatsHook>,
     /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
     /// → 右键不摆「复制整行为 INSERT」）
     result_table: Option<String>,
@@ -363,6 +396,8 @@ impl ResultGridDelegate {
         self.sort = None;
         // 冻结也一样：列都换了一批，钉子留在旧列号上没有意义
         self.frozen.clear();
+        // 【P2】隐藏列同理：换结果 = 换一批列，旧的隐藏清单不再成立
+        self.hidden.clear();
         self.context_cell = None;
         // 【T2a-3/4】数据被新结果顶掉：正在编辑的格子、标脏的集合都随旧数据作废
         self.editing = None;
@@ -441,6 +476,11 @@ impl ResultGridDelegate {
         self.on_preview_value = Some(hook);
     }
 
+    /// 【P2-3】宿主注入列统计弹层的打开钩子（没接 = 菜单不摆这一项）
+    pub fn set_column_stats_hook(&mut self, hook: ColumnStatsHook) {
+        self.on_column_stats = Some(hook);
+    }
+
     /// 【M8】这份结果能不能洞察（面板每次同步结果时设；钩子没装也等于不能）
     pub fn set_insight_available(&mut self, available: bool) {
         self.insight_available = available;
@@ -464,6 +504,58 @@ impl ResultGridDelegate {
     /// 【B15】这一数据列冻结了吗
     pub fn is_frozen(&self, column: usize) -> bool {
         self.frozen.contains(&column)
+    }
+
+    // ---------- 【P2】隐藏列：视图列序 ↔ 数据列序 ----------
+
+    /// 这一数据列被隐藏了吗
+    pub fn is_hidden_column(&self, column: usize) -> bool {
+        self.hidden.contains(&column)
+    }
+
+    /// 当前可见的数据列数（总列数减隐藏；全藏没有意义，hide 会兜底留 1 列）
+    pub fn visible_column_count(&self) -> usize {
+        self.columns.len().saturating_sub(self.hidden.len())
+    }
+
+    /// 隐藏此列（**数据列序**）。隐藏到只剩 1 列时拒绝——全藏了表格没有内容。
+    pub fn hide_column(&mut self, column: usize) {
+        if self.visible_column_count() <= 1 || self.is_hidden_column(column) {
+            return;
+        }
+        self.hidden.push(column);
+        self.hidden.sort_unstable();
+    }
+
+    /// 显示全部列（清空隐藏清单）
+    pub fn show_all_columns(&mut self) {
+        self.hidden.clear();
+    }
+
+    /// 可见数据列序 → 数据列序（跳过隐藏列）。
+    ///
+    /// 组件给的下标是「用户看着的那一列」（不含 `#` 行号槽），而数据、类型、注释、
+    /// 冻结都按**数据列**存——中间隔着隐藏列，换算必须过这里。
+    fn data_column(&self, view_col: usize) -> usize {
+        let mut data = 0;
+        let mut visible = 0;
+        loop {
+            if !self.is_hidden_column(data) {
+                if visible == view_col {
+                    return data;
+                }
+                visible += 1;
+            }
+            data += 1;
+        }
+    }
+
+    /// 数据列序 → 可见数据列序（该列被隐藏 = `None`）
+    fn view_column(&self, data_col: usize) -> Option<usize> {
+        if self.is_hidden_column(data_col) {
+            return None;
+        }
+        Some((0..data_col).filter(|d| !self.is_hidden_column(*d)).count())
     }
 
     /// 【B15】冻结 / 取消冻结（切换；返回切换后的状态）
@@ -639,7 +731,7 @@ impl ResultGridDelegate {
             return ColumnKind::Unknown;
         }
         self.column_types
-            .get(col_ix - 1)
+            .get(self.data_column(col_ix - 1))
             .and_then(Option::as_ref)
             .map_or(ColumnKind::Unknown, |column| column.kind)
     }
@@ -650,7 +742,7 @@ impl ResultGridDelegate {
             return None;
         }
         self.column_types
-            .get(col_ix - 1)
+            .get(self.data_column(col_ix - 1))
             .and_then(Option::as_ref)
             .map(|column| column.name.as_str())
     }
@@ -690,7 +782,7 @@ impl ResultGridDelegate {
         let Some(data_ix) = self.data_row(row_ix) else {
             return false;
         };
-        self.dirty.contains(&(data_ix, col_ix - 1))
+        self.dirty.contains(&(data_ix, self.data_column(col_ix - 1)))
     }
 
     /// 这一格是不是冲突的（提交没写进去；与脏格分开标色）
@@ -701,14 +793,18 @@ impl ResultGridDelegate {
         let Some(data_ix) = self.data_row(row_ix) else {
             return false;
         };
-        self.conflict.contains(&(data_ix, col_ix - 1))
+        self.conflict
+            .contains(&(data_ix, self.data_column(col_ix - 1)))
     }
 
     /// 这一格是否正在编辑（视图行序 + 组件列序匹配）
     pub fn is_editing(&self, row_ix: usize, col_ix: usize) -> bool {
-        self.editing
-            .as_ref()
-            .is_some_and(|edit| edit.view_row == row_ix && edit.column + 1 == col_ix)
+        if Self::is_row_number(col_ix) {
+            return false;
+        }
+        self.editing.as_ref().is_some_and(|edit| {
+            edit.view_row == row_ix && self.view_column(edit.column) == Some(col_ix - 1)
+        })
     }
 
     /// 进入编辑：只设状态（初值同步 / 聚焦由 render_td 首次渲染时一次性做）。
@@ -720,7 +816,7 @@ impl ResultGridDelegate {
         let Some(data_row) = self.data_row(view_row) else {
             return false;
         };
-        let column = col_ix - 1;
+        let column = self.data_column(col_ix - 1);
         let original = self
             .row_cell_text(view_row, col_ix)
             .unwrap_or_default()
@@ -856,7 +952,10 @@ impl ResultGridDelegate {
             return None;
         }
         let data_ix = self.data_row(row_ix)?;
-        self.rows.get(data_ix)?.get(col_ix - 1).map(String::as_str)
+        self.rows
+            .get(data_ix)?
+            .get(self.data_column(col_ix - 1))
+            .map(String::as_str)
     }
 
     /// 结果内查找：从 `after` **之后**找下一处命中，找完一圈回到开头（`None` = 整份结果里没有）
@@ -930,10 +1029,26 @@ impl ResultGridDelegate {
         let Some(data_ix) = self.data_row(row_ix) else {
             return String::new();
         };
-        self.rows
-            .get(data_ix)
-            .map(|row| tsv_row(row))
-            .unwrap_or_default()
+        tsv_row(&self.visible_row_values(data_ix))
+    }
+
+    /// 【P2】按可见列投影一行（隐藏列不参与复制 / 导出——用户看不到的不该拷走）
+    fn visible_row_values(&self, data_ix: usize) -> Vec<String> {
+        let Some(row) = self.rows.get(data_ix) else {
+            return Vec::new();
+        };
+        (0..self.columns.len())
+            .filter(|d| !self.is_hidden_column(*d))
+            .filter_map(|d| row.get(d).cloned())
+            .collect()
+    }
+
+    /// 【P2】可见列名（隐藏列不参与整行 JSON / INSERT）
+    fn visible_column_names(&self) -> Vec<String> {
+        (0..self.columns.len())
+            .filter(|d| !self.is_hidden_column(*d))
+            .filter_map(|d| self.columns.get(d).cloned())
+            .collect()
     }
 
     /// 【A9】这一行拼成 JSON 对象（视图行序，与 [`Self::row_text`] 同口径）
@@ -941,10 +1056,7 @@ impl ResultGridDelegate {
         let Some(data_ix) = self.data_row(row_ix) else {
             return String::new();
         };
-        self.rows
-            .get(data_ix)
-            .map(|row| crate::export::row_to_json(&self.columns, row))
-            .unwrap_or_default()
+        crate::export::row_to_json(&self.visible_column_names(), &self.visible_row_values(data_ix))
     }
 
     /// 【A9】这一行拼成 INSERT（视图行序；表名来自面板同步的 [`Self::result_table`]——
@@ -956,10 +1068,11 @@ impl ResultGridDelegate {
         let Some(table) = self.result_table.as_deref() else {
             return String::new();
         };
-        self.rows
-            .get(data_ix)
-            .map(|row| crate::export::row_to_insert(table, &self.columns, row))
-            .unwrap_or_default()
+        crate::export::row_to_insert(
+            table,
+            &self.visible_column_names(),
+            &self.visible_row_values(data_ix),
+        )
     }
 
     /// 【B14】选中内容的复制文本（`Ctrl+C` 用）：一格给**原文**，一整行给 TSV
@@ -1120,6 +1233,108 @@ fn cell_style(kind: ColumnKind) -> CellStyle {
     }
 }
 
+/// 【P2-3】一列的统计结果（数值字段只在列里有可解析的数值样本时才填）
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ColumnStats {
+    /// 非 NULL 的行数
+    pub count: usize,
+    /// `NULL` 的行数（与渲染同一判定）
+    pub nulls: usize,
+    /// 数值样本的最小值
+    pub min: Option<f64>,
+    /// 数值样本的最大值
+    pub max: Option<f64>,
+    /// 数值样本之和
+    pub sum: Option<f64>,
+    /// 数值样本均值
+    pub avg: Option<f64>,
+}
+
+/// 【P2-3】整列统计：遍历该列一次，`NULL`（与渲染同款判定）计空值，
+/// 其余值能按 f64 解析的参与数值统计；文本 / 日期 / BLOB 只计非空数。
+/// 纯函数（输入只有 rows），方便单测。
+pub fn column_stats(rows: &[Vec<String>], column: usize) -> ColumnStats {
+    let mut stats = ColumnStats::default();
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    let mut numeric = 0usize;
+    for row in rows {
+        let Some(cell) = row.get(column) else {
+            continue;
+        };
+        if cell == "NULL" {
+            stats.nulls += 1;
+            continue;
+        }
+        stats.count += 1;
+        if let Ok(value) = cell.parse::<f64>() {
+            min = min.min(value);
+            max = max.max(value);
+            sum += value;
+            numeric += 1;
+        }
+    }
+    stats.min = (numeric > 0).then_some(min);
+    stats.max = (numeric > 0).then_some(max);
+    stats.sum = (numeric > 0).then_some(sum);
+    stats.avg = (numeric > 0).then_some(sum / numeric as f64);
+    stats
+}
+
+/// 【P2-3】统计的展示行（一行一个键值；数值有则给，没有就不摆那一行）
+pub fn stats_lines(stats: &ColumnStats) -> Vec<String> {
+    let mut lines = vec![
+        format!("值 {} 个", stats.count),
+        format!("NULL {} 个", stats.nulls),
+    ];
+    let mut push_num = |label: &str, value: f64| {
+        lines.push(format!("{label} {}", fmt_stat_num(value)));
+    };
+    if let Some(min) = stats.min {
+        push_num("最小", min);
+    }
+    if let Some(max) = stats.max {
+        push_num("最大", max);
+    }
+    if let Some(avg) = stats.avg {
+        push_num("均值", avg);
+    }
+    if let Some(sum) = stats.sum {
+        push_num("合计", sum);
+    }
+    lines
+}
+
+/// 统计数字的人读格式：固定 6 位小数截尾，去尾零（`1.500000` → `1.5`）
+fn fmt_stat_num(value: f64) -> String {
+    let mut text = format!("{value:.6}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+/// 【P2】BLOB 单元格的摘要文案：`hex → BLOB · N B`
+///
+/// Arrow 的 display 把二进制序列化成**小写 hex**（每字节两位，见 `arrow-cast` 的
+/// `DisplayIndex for GenericBinaryArray`），所以 `len / 2` = 字节数。非偶数 / 含
+/// 非 hex 字符的串（驱动 / 上游异常）退回 `None`，按原文本显示，不猜。
+fn blob_summary(text: &str) -> Option<String> {
+    let hex = text.strip_prefix("0x").unwrap_or(text);
+    if hex.len() >= 2
+        && hex.len() % 2 == 0
+        && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        Some(format!("BLOB · {} B", hex.len() / 2))
+    } else {
+        None
+    }
+}
+
 /// 单元格里找 `needle`（**已小写**）的字节区间：两边都是 ASCII → 零分配
 fn ascii_match_range(cell: &str, needle: &str) -> Option<Range<usize>> {
     let (haystack, needle) = (cell.as_bytes(), needle.as_bytes());
@@ -1159,11 +1374,12 @@ fn cell_matches(cell: &str, needle: &str) -> bool {
 
 impl TableDelegate for ResultGridDelegate {
     fn columns_count(&self, _cx: &App) -> usize {
-        // 首列是行号槽（原型 §2.4）：没有结果时不画它，空态就交回给 `render_empty`
+        // 首列是行号槽（原型 §2.4）：没有结果时不画它，空态就交回给 `render_empty`；
+        // 有结果时 = 数据列 + 行号槽 − 隐藏列
         if self.columns.is_empty() {
             0
         } else {
-            self.columns.len() + 1
+            self.columns.len() + 1 - self.hidden.len()
         }
     }
 
@@ -1184,7 +1400,7 @@ impl TableDelegate for ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return;
         }
-        let column = col_ix - 1;
+        let column = self.data_column(col_ix - 1);
         self.apply_sort(match sort {
             ColumnSort::Default => None,
             ColumnSort::Ascending => Some((column, false)),
@@ -1236,7 +1452,7 @@ impl TableDelegate for ResultGridDelegate {
                 .movable(false)
                 .selectable(false);
         }
-        let index = col_ix - 1;
+        let index = self.data_column(col_ix - 1);
         let name = self
             .columns
             .get(index)
@@ -1270,7 +1486,10 @@ impl TableDelegate for ResultGridDelegate {
         let name = if Self::is_row_number(col_ix) {
             "#".to_string()
         } else {
-            self.columns.get(col_ix - 1).cloned().unwrap_or_default()
+            self.columns
+                .get(self.data_column(col_ix - 1))
+                .cloned()
+                .unwrap_or_default()
         };
         // 类型缺失时 `label` 是 `None`：这一档与今天一模一样（表头就一个列名）
         let label = self.type_label(col_ix).map(str::to_string);
@@ -1369,6 +1588,14 @@ impl TableDelegate for ResultGridDelegate {
 
         // `NULL` 是 SQL 里的一个真实值：灰 + 斜体，与字符串 "NULL" 区分开（原型 §2.4）
         let is_null = text == "NULL";
+        // 【P2】二进制列：格子里不铺一长串 hex，给「BLOB · 大小」摘要；
+        // 悬停 / 查看完整值仍然给完整 hex（那是看全它的路）
+        let is_blob = !is_null && self.column_kind(col_ix) == ColumnKind::Binary;
+        let display = if is_blob {
+            blob_summary(&text).unwrap_or_else(|| text.clone())
+        } else {
+            text.clone()
+        };
         // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
         // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
         let table = cx.entity().clone();
@@ -1410,7 +1637,7 @@ impl TableDelegate for ResultGridDelegate {
             let full = text.clone();
             cell = cell.tooltip(move |window, cx| result_cell_tooltip(full.clone(), window, cx));
         }
-        cell.child(SharedString::from(text)).into_any_element()
+        cell.child(SharedString::from(display)).into_any_element()
     }
 
     /// 【B14】右键菜单：按值筛选 / 复制（此值 / 此列 / 整行）/ 冻结此列（原型 §5.5 的右键入口）
@@ -1430,7 +1657,7 @@ impl TableDelegate for ResultGridDelegate {
         if Self::is_row_number(col) || row >= self.view_len() {
             return menu;
         }
-        let column = col - 1;
+        let column = self.data_column(col - 1);
         let column_name = self
             .columns
             .get(column)
@@ -1447,6 +1674,7 @@ impl TableDelegate for ResultGridDelegate {
             row,
             rows: self.view_len(),
             frozen: self.is_frozen(column),
+            hidden_columns: self.hidden.len(),
             insight: insight_available,
             // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
             table: self.result_table.clone(),
@@ -1558,6 +1786,44 @@ impl TableDelegate for ResultGridDelegate {
                             move |_, _window, app| hook(&column, app),
                         ));
                     }
+                }
+                ContextAction::ColumnStats { column } => {
+                    // 统计是**网格自己算**（纯遍历），弹层由宿主开（复用值预览的对话框通道）
+                    if let Some(hook) = self.on_column_stats.clone() {
+                        let name = self
+                            .columns
+                            .get(column)
+                            .cloned()
+                            .unwrap_or_default();
+                        let text = stats_lines(&column_stats(&self.rows, column)).join("\n");
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| hook(name.clone(), text.clone(), app),
+                        ));
+                    }
+                }
+                ContextAction::HideColumn(column) => {
+                    // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路：点击在独立事件里，
+                    // 可以安全地更新 delegate 并重建列组
+                    let table = cx.entity().clone();
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            table.update(app, |state, cx| {
+                                state.delegate_mut().hide_column(column);
+                                state.refresh(cx);
+                            });
+                        },
+                    ));
+                }
+                ContextAction::ShowAllColumns => {
+                    let table = cx.entity().clone();
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            table.update(app, |state, cx| {
+                                state.delegate_mut().show_all_columns();
+                                state.refresh(cx);
+                            });
+                        },
+                    ));
                 }
             }
         }
@@ -1921,8 +2187,9 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
-        TextAlign, cell_matches, cell_style, compare_cells, context_menu_items, duration_text,
-        find_in_cell, header_tooltip_lines, preview_of, status_segments, thousands, truncated_hint,
+        TextAlign, blob_summary, cell_matches, cell_style, column_stats, compare_cells,
+        context_menu_items, duration_text, find_in_cell, fmt_stat_num, header_tooltip_lines,
+        preview_of, stats_lines, status_segments, thousands, truncated_hint,
     };
     use crate::completion::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
@@ -1962,6 +2229,7 @@ mod tests {
             row: 0,
             rows: 2,
             frozen: false,
+            hidden_columns: 0,
             insight: false,
             table: None,
         }
@@ -2040,6 +2308,8 @@ mod tests {
                 "按「name」升序（下发源库）",
                 "按「name」降序（下发源库）",
                 "冻结「name」",
+                "隐藏「name」",
+                "列统计「name」",
             ]
         );
         assert_eq!(
@@ -2093,11 +2363,37 @@ mod tests {
         );
         assert!(!items[9].separator_before, "冻结与排序同组");
         assert_eq!(items[9].action, ContextAction::ToggleFreeze(1));
+        assert_eq!(
+            items[10].action,
+            ContextAction::HideColumn(1),
+            "【P2】隐藏此列跟在冻结后（都是列级动作）"
+        );
+        assert_eq!(
+            items[11].action,
+            ContextAction::ColumnStats { column: 1 },
+            "【P2-3】列统计与隐藏同组"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|item| item.action == ContextAction::ShowAllColumns),
+            "没有隐藏列时不摆「显示全部列」"
+        );
 
-        let mut done = target;
+        let mut done = target.clone();
         done.frozen = true;
         let items = context_menu_items(&done);
         assert_eq!(items[9].label, "取消冻结此列", "已冻结时给的是反向动作");
+
+        // 【P2】隐藏了列才出现「显示全部列」
+        let mut hidden = target.clone();
+        hidden.hidden_columns = 2;
+        let items = context_menu_items(&hidden);
+        assert_eq!(
+            items[12].action,
+            ContextAction::ShowAllColumns,
+            "隐藏非空时给恢复入口（排在「列统计」之后）"
+        );
     }
 
     /// 【A9】「复制整行为 INSERT」只在表名猜得到时出现（面板从来源 SQL 猜好传来）：
@@ -2714,5 +3010,119 @@ mod tests {
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(1_204), "1,204");
         assert_eq!(thousands(12_345_678), "12,345,678");
+    }
+
+    /// 【P2-2】BLOB 摘要：正常 hex → `BLOB · N B`；异常形态退回 `None`（按原文显示）
+    #[test]
+    fn blob_summary_is_the_binary_badge() {
+        assert_eq!(
+            blob_summary("48656c6c6f"),
+            Some("BLOB · 5 B".to_string()),
+            "10 个 hex 位 = 5 字节"
+        );
+        assert_eq!(blob_summary(""), None, "空串不是二进制");
+        assert_eq!(blob_summary("abc"), None, "奇数位不猜");
+        assert_eq!(blob_summary("zzzzzzzz"), None, "非 hex 字符退回原文");
+        assert_eq!(
+            blob_summary("0x48656c6c6f"),
+            Some("BLOB · 5 B".to_string()),
+            "带 0x 前缀也认得（宽松处理）"
+        );
+    }
+
+    /// 【P2-1】隐藏列：视图列序跳过隐藏列，数据 / 类型 / 冻结仍按数据列走；
+    /// 复制整行不再带隐藏列；换结果清空隐藏清单
+    #[test]
+    fn hidden_columns_are_skipped_in_view_but_kept_in_data() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec![
+                "id".to_string(),
+                "name".to_string(),
+                "blob".to_string(),
+            ],
+            vec![
+                vec!["1".to_string(), "alice".to_string(), "aabb".to_string()],
+                vec!["2".to_string(), "bob".to_string(), "ccdd".to_string()],
+            ],
+        );
+
+        // 隐藏第 1 数据列（name）：表格只剩 # + id + blob 三列
+        grid.hide_column(1);
+        assert_eq!(grid.visible_column_count(), 2, "3 数据列 − 1 隐藏");
+        assert_eq!(grid.data_column(0), 0, "可见列 0 = 数据列 0");
+        assert_eq!(grid.data_column(1), 2, "可见列 1 跳过隐藏列 → 数据列 2");
+        assert_eq!(grid.view_column(0), Some(0));
+        assert_eq!(grid.view_column(1), None, "隐藏列没有可见下标");
+        assert_eq!(grid.cell(0, 2), "aabb", "取值走数据列（blob 的内容还在）");
+
+        // 复制整行：隐藏列不参与（用户看不到的不该拷走）
+        assert_eq!(grid.row_text(0), "1\taabb", "TSV 只含可见列");
+
+        // 换一批数据：隐藏清单作废
+        grid.set_data(
+            vec!["a".to_string(), "b".to_string()],
+            vec![vec!["1".to_string(), "2".to_string()]],
+        );
+        assert_eq!(grid.visible_column_count(), 2, "新结果回到全部列");
+    }
+
+    /// 【P2-3】列统计：NULL 计空值，数值列给 min/max/avg/sum，文本列只给计数
+    #[test]
+    fn column_stats_count_nulls_and_numeric_bounds() {
+        let rows = vec![
+            vec!["10".to_string(), "alice".to_string(), "NULL".to_string()],
+            vec!["20".to_string(), "bob".to_string(), "x".to_string()],
+            vec!["NULL".to_string(), "carol".to_string(), "y".to_string()],
+            vec!["30".to_string(), "dave".to_string(), "z".to_string()],
+        ];
+        let numeric = column_stats(&rows, 0);
+        assert_eq!(numeric.count, 3, "10/20/30 三个非空");
+        assert_eq!(numeric.nulls, 1, "NULL 单计");
+        assert_eq!(numeric.min, Some(10.0));
+        assert_eq!(numeric.max, Some(30.0));
+        assert_eq!(numeric.avg, Some(20.0));
+        assert_eq!(numeric.sum, Some(60.0));
+
+        let text = column_stats(&rows, 1);
+        assert_eq!(text.count, 4);
+        assert_eq!(text.nulls, 0);
+        assert_eq!(text.min, None, "文本列不编数值");
+
+        let mixed = column_stats(&rows, 2);
+        assert_eq!(mixed.count, 3, "x/y/z 三个非空");
+        assert_eq!(mixed.nulls, 1, "NULL 计入空值");
+        assert_eq!(mixed.min, None, "x/y/z 解析不了数字");
+    }
+
+    /// 【P2-3】展示行：数值给全，纯文本列只给计数两行
+    #[test]
+    fn stats_lines_are_key_value_pairs() {
+        let stats = column_stats(
+            &[vec!["1.5".to_string(), "NULL".to_string()]],
+            0,
+        );
+        assert_eq!(
+            stats_lines(&stats),
+            ["值 1 个", "NULL 0 个", "最小 1.5", "最大 1.5", "均值 1.5", "合计 1.5"]
+        );
+        assert_eq!(fmt_stat_num(1.0), "1", "去尾零");
+        assert_eq!(fmt_stat_num(1.500000), "1.5");
+    }
+
+    /// 【P2-1】隐藏到只剩 1 列就拒绝（全藏了表格没有内容）
+    #[test]
+    fn hiding_stops_before_the_last_column() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec!["a".to_string(), "b".to_string()],
+            vec![vec!["1".to_string(), "2".to_string()]],
+        );
+        grid.hide_column(0);
+        assert_eq!(grid.hidden.len(), 1);
+        grid.hide_column(1);
+        assert_eq!(grid.hidden.len(), 1, "只剩 1 列时再藏被拒绝");
+        grid.show_all_columns();
+        assert!(grid.hidden.is_empty(), "显示全部列清空隐藏清单");
     }
 }
