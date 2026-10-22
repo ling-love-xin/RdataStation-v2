@@ -1,0 +1,38 @@
+# Oracle JDBC 驱动插件：通用 JDBC 壳（tools/rds-jdbc-shell）+ ojdbc11 驱动包。
+# 驱动 jar 不进仓库（.gitignore 忽略 lib/），由 install.ps1 从 Maven Central 下载组装。
+# 许可：ojdbc11 为 Oracle Technology Network（OTN）许可，见 README.md 许可说明。
+
+[plugin]
+id = "rds.driver.oracle"
+name = "Oracle JDBC Driver"
+version = "0.1.0"
+publisher = "rds"
+description = "Oracle 数据库 JDBC 驱动插件（通用 JDBC 壳 + ojdbc11）"
+license = "OTN（Oracle Technology Network License）"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "java"
+executable = "lib/rds-jdbc-shell.jar"
+interpreter_args = ["-jar"]
+max_instances = 1
+
+# sidecar 轨：起子进程 + 连网络 + 读自己的数据目录 + 接收数据库凭据
+[permissions]
+sidecar = ["spawn.child_process", "net.connect", "fs.read_plugin_data", "credentials.database"]
+driver = ["driver.query", "driver.metadata", "driver.transaction", "driver.cancel"]
+credentials = "database"
+
+[capabilities.driver]
+concurrency = "serial"
+
+# URL 模板占位符由驱动壳替换（{host}/{port}/{database}/{user}/{password}）
+[[contributes.drivers]]
+id = "oracle"
+display_name = "Oracle Database"
+default_port = 1521
+url_template = "jdbc:oracle:thin:@//{host}:{port}/{database}"
+features = ["transactions", "cancel"]

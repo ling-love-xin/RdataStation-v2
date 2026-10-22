@@ -345,6 +345,10 @@ fn descriptor_for(
     if let Some(port) = driver.default_port {
         descriptor = descriptor.with_default_port(port);
     }
+    // URL 模板：连接表单五件套 → 驱动壳 URL 的桥梁（清单给占位符模板，引擎替换）
+    if let Some(template) = &driver.url_template {
+        descriptor = descriptor.with_url_template(template.clone());
+    }
     if let Some(icon) = &manifest.plugin.icon {
         descriptor = descriptor.with_icon(icon.clone());
     }

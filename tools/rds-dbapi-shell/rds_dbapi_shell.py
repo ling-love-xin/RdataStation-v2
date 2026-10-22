@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-rds-dbapi-shell：rds-driver/1 Python 通用 DB-API 2.0 驱动壳（v1 用标准库 sqlite3 验证）。
+rds-dbapi-shell：rds-driver/1 Python 通用 DB-API 2.0 驱动壳。
+
+v1 内置两种驱动适配（DB-API 2.0 统一接口，execute 全库共用）：
+- sqlite：标准库 sqlite3（无外部依赖，用作插件链路验证载体）
+- postgresql：psycopg2 / psycopg3（import 失败给可读报错与 pip 安装提示；
+  驱动由用户环境提供，壳不内嵌）
 
 与 tools/rds-jdbc-shell 完全同构：
 - 进程形态：sidecar（spawn → initialize → session → meta/query → shutdown）
@@ -9,12 +14,14 @@ rds-dbapi-shell：rds-driver/1 Python 通用 DB-API 2.0 驱动壳（v1 用标准
 - 不内嵌 Python 环境：解释器由宿主 runtime.rs 三级查找（用户指定 → PATH → third_party/python）
 
 线程模型（同 Java 壳）：
-- 主线程只读帧；query.cancel 即时处理（sqlite3 Connection.interrupt() 线程安全、可打断
-  另一线程正在执行的查询）；其余请求入队给 worker 顺序执行（保持 RPC 顺序语义）。
+- 主线程只读帧；query.cancel 即时处理（sqlite3 Connection.interrupt() /
+  psycopg Connection.cancel() 线程安全、可打断另一线程正在执行的查询）；
+  其余请求入队给 worker 顺序执行（保持 RPC 顺序语义）。
 - 响应写回加锁（worker 与主线程并发写 stdout）。
 
 连接配置（session.open 的 params.params）：
-- url_override 优先 → url_template 模板替换 → driver=="sqlite" 用 file_path / :memory:
+- url_override 优先 → url_template 模板替换 → driver 兜底拼 URL
+  （sqlite 用 file_path / :memory:；postgresql 用 postgresql://host:port/db）
 
 内联结果 v1：上限 200 行 / 256 KiB，超出截断 + truncated + notice（Arrow 第二期）。
 """
@@ -22,7 +29,6 @@ rds-dbapi-shell：rds-driver/1 Python 通用 DB-API 2.0 驱动壳（v1 用标准
 import json
 import os
 import queue
-import sqlite3
 import struct
 import sys
 import threading
@@ -94,31 +100,63 @@ class FrameIO:
 
 
 class Session:
-    """一个 DB-API 会话：连接 + 执行 + meta。"""
+    """一个 DB-API 会话：连接 + 执行 + meta（按驱动适配，见 _connect_*）。"""
 
     def __init__(self, session_id, driver_id, config):
         self.id = session_id
         self.driver_id = driver_id
-        database = self._resolve_database(config)
+        # 适配器按「引擎驱动 id 优先、会话 driver_id 兜底」选择（引擎传的才是权威）
+        self.kind = _normalize_driver(config.get("driver") or driver_id)
+        self.conn = self._connect(config)
+        self._cancelled = set()  # 已请求取消的 request_id（execute 异常时区分取消与 SQL 错）
+        self._server_version = self._server_version_of()
+
+    # ---- 连接 ----
+
+    def _connect(self, cfg):
+        if self.kind == "sqlite":
+            return self._connect_sqlite(cfg)
+        if self.kind == "postgresql":
+            return self._connect_postgresql(cfg)
+        raise RpcError(ERR_DRIVER_NOT_SUPPORTED,
+                       f"壳不支持的驱动类型：{self.kind}（支持 sqlite / postgresql）")
+
+    def _connect_sqlite(self, cfg):
+        import sqlite3
+        database = self._resolve_sqlite_path(cfg)
         try:
-            self.conn = sqlite3.connect(database, check_same_thread=False)
+            return sqlite3.connect(database, check_same_thread=False)
         except sqlite3.Error as e:
             raise RpcError(ERR_CONNECT_FAILED, f"连接失败 {database}：{e}")
-        self._cancelled = set()  # 已请求取消的 request_id（execute 异常时区分取消与 SQL 错）
-        self._server_version = sqlite3.sqlite_version
 
-    def _resolve_database(self, cfg):
+    def _connect_postgresql(self, cfg):
+        url = self._resolve_pg_url(cfg)
+        try:
+            import psycopg2  # 用户环境提供；壳不内嵌驱动
+        except ImportError:
+            try:
+                import psycopg  # psycopg 3（binary 版与 2 的 connect 同形）
+                # psycopg3 的 connect 走模块级 connect；这里统一交给下方 connect
+                conn = psycopg.connect(url)
+                # psycopg3 是 autocommit=False，显式标一下（与 psycopg2 默认一致）
+                return conn
+            except ImportError:
+                raise RpcError(
+                    ERR_CONNECT_FAILED,
+                    "未安装 PostgreSQL 驱动：pip install psycopg2-binary（或 psycopg[binary]）。"
+                    "解释器路径可在插件设置里指定（含虚拟环境）。")
+        try:
+            return psycopg2.connect(url)
+        except Exception as e:
+            raise RpcError(ERR_CONNECT_FAILED, f"连接失败 {url}：{e}")
+
+    def _resolve_sqlite_path(self, cfg):
         override = cfg.get("url_override")
         if override:
             return override
         template = cfg.get("url_template")
         if template:
-            return (template.replace("{file}", cfg.get("file_path") or "")
-                            .replace("{host}", cfg.get("host") or "")
-                            .replace("{port}", cfg.get("port") or "")
-                            .replace("{database}", cfg.get("database") or "")
-                            .replace("{user}", cfg.get("username") or "")
-                            .replace("{password}", cfg.get("password") or ""))
+            return self._fill_template(template, cfg)
         if cfg.get("driver") == "sqlite":
             return cfg.get("file_path") or ":memory:"
         if cfg.get("file_path"):
@@ -126,20 +164,57 @@ class Session:
         raise RpcError(ERR_CONNECT_FAILED,
                        "无法确定数据库路径：url_override / url_template / file_path 都没有")
 
+    def _resolve_pg_url(self, cfg):
+        override = cfg.get("url_override")
+        if override:
+            return override
+        template = cfg.get("url_template")
+        if template:
+            return self._fill_template(template, cfg)
+        host = cfg.get("host") or "localhost"
+        port = cfg.get("port") or "5432"
+        database = cfg.get("database") or "postgres"
+        user = cfg.get("username") or "postgres"
+        password = cfg.get("password") or ""
+        auth = f"{user}:{password}@" if password else f"{user}@"
+        return f"postgresql://{auth}{host}:{port}/{database}"
+
+    @staticmethod
+    def _fill_template(template, cfg):
+        return (template.replace("{file}", cfg.get("file_path") or "")
+                        .replace("{host}", cfg.get("host") or "")
+                        .replace("{port}", cfg.get("port") or "")
+                        .replace("{database}", cfg.get("database") or "")
+                        .replace("{user}", cfg.get("username") or "")
+                        .replace("{password}", cfg.get("password") or "")
+                        .replace("{file_path}", cfg.get("file_path") or ""))
+
+    def _server_version_of(self):
+        if self.kind == "sqlite":
+            import sqlite3
+            return sqlite3.sqlite_version
+        if self.kind == "postgresql":
+            try:
+                return self.conn.server_version  # psycopg2 / psycopg3 都是 int
+            except Exception:
+                return "postgresql"
+        return self.kind
+
     def describe(self):
+        caps = {
+            "schemas": True,
+            "views": True,
+            "transactions": True,
+            "cancel": True,
+            "cursor": False,
+            "arrow": False,  # v1 未接 Arrow 附件
+        }
         return {
             "id": self.driver_id,
             "display_name": self.driver_id,
             "server_version": self.server_version,
-            "capabilities": {
-                "schemas": True,
-                "views": True,
-                "transactions": True,
-                "cancel": True,
-                "cursor": False,
-                "arrow": False,  # v1 未接 Arrow 附件
-            },
-            "default_schema": "main",
+            "capabilities": caps,
+            "default_schema": "main" if self.kind == "sqlite" else "public",
         }
 
     @property
@@ -147,9 +222,17 @@ class Session:
         return self._server_version
 
     def cancel(self, request_id):
-        # sqlite3 的 interrupt() 是线程安全的：打断另一线程正在执行的查询
+        # sqlite3 的 interrupt() / psycopg 的 cancel() 都是线程安全的：
+        # 打断另一线程正在执行的查询（按驱动分叉，方法名不同）
         self._cancelled.add(request_id)
-        self.conn.interrupt()
+        try:
+            if self.kind == "sqlite":
+                self.conn.interrupt()
+            else:
+                self.conn.cancel()
+        except Exception:
+            # 有的驱动版本没有 cancel（如未连接状态）；取消标记已记，execute 侧兜底
+            pass
 
     def execute(self, request_id, sql, params, max_rows, timeout_ms):
         limit = max_rows if max_rows and max_rows > 0 else 1000
@@ -211,67 +294,156 @@ class Session:
                 "truncated": truncated,
                 "notices": notices,
             }
-        except sqlite3.OperationalError as e:
-            if "interrupted" in str(e).lower() and request_id in self._cancelled:
+        except Exception as e:
+            # 取消语义：标记已记 + 错误里带 interrupt/cancel 字样 → 取消；否则 SQL 错
+            lowered = str(e).lower()
+            if request_id in self._cancelled and (
+                    "interrupt" in lowered or "cancel" in lowered or "57014" in lowered):
                 raise RpcError(ERR_CANCELLED, f"查询已取消：{e}")
             raise RpcError(ERR_SQL_ERROR, f"SQL 错误：{e}")
-        except sqlite3.Error as e:
-            raise RpcError(ERR_SQL_ERROR, f"SQL 错误：{e}")
 
-    # ---- meta（SQLite：PRAGMA + sqlite_master）----
+    # ---- meta（按驱动分叉：SQLite = PRAGMA + sqlite_master；PG = information_schema）----
 
     def meta_catalogs(self):
+        if self.kind == "postgresql":
+            # PG 单库无 catalog 维度：导航用 schema 层即可，catalogs 给空（宿主会跳过）
+            return {"catalogs": []}
         return {"catalogs": []}
 
     def meta_schemas(self, catalog):
         try:
-            rows = self.conn.execute("PRAGMA database_list").fetchall()
-            return {"schemas": [{"name": r[1]} for r in rows]}
-        except sqlite3.Error as e:
+            if self.kind == "sqlite":
+                rows = self.conn.execute("PRAGMA database_list").fetchall()
+                return {"schemas": [{"name": r[1]} for r in rows]}
+            rows = self.conn.execute(
+                "SELECT nspname FROM pg_namespace "
+                "WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast') "
+                "ORDER BY nspname").fetchall()
+            return {"schemas": [{"name": r[0]} for r in rows]}
+        except Exception as e:
             raise RpcError(ERR_SQL_ERROR, f"meta.schemas 失败：{e}")
 
     def meta_objects(self, catalog, schema):
-        schema = schema or "main"
         try:
+            if self.kind == "sqlite":
+                schema = schema or "main"
+                rows = self.conn.execute(
+                    "SELECT name, type FROM sqlite_master "
+                    "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
+                    "ORDER BY name").fetchall()
+                out = []
+                for name, typ in rows:
+                    out.append({
+                        "name": name,
+                        "kind": "view" if typ == "view" else "table",
+                        "parent": schema,
+                    })
+                return {"objects": out}
+            # PG：表 + 视图（information_schema.tables）
+            schema = schema or "public"
             rows = self.conn.execute(
-                "SELECT name, type FROM sqlite_master "
-                "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
-                "ORDER BY name").fetchall()
+                "SELECT table_name, table_type FROM information_schema.tables "
+                "WHERE table_schema = %s ORDER BY table_name", (schema,)).fetchall()
             out = []
             for name, typ in rows:
-                out.append({
-                    "name": name,
-                    "kind": "view" if typ == "view" else "table",
-                    "parent": schema,
-                })
+                kind = "view" if typ.upper() == "VIEW" else "table"
+                out.append({"name": name, "kind": kind, "parent": schema})
+            # 例程（procedure / function）
+            try:
+                routines = self.conn.execute(
+                    "SELECT routine_name, routine_type FROM information_schema.routines "
+                    "WHERE routine_schema = %s ORDER BY routine_name", (schema,)).fetchall()
+                for name, typ in routines:
+                    kind = "procedure" if typ.upper() == "PROCEDURE" else "function"
+                    out.append({"name": name, "kind": kind, "parent": schema})
+            except Exception:
+                pass  # 老版本 information_schema 无 routines 视图 → 少一类对象不是错误
             return {"objects": out}
-        except sqlite3.Error as e:
+        except Exception as e:
             raise RpcError(ERR_SQL_ERROR, f"meta.objects 失败：{e}")
 
     def meta_object_detail(self, catalog, schema, obj):
-        schema = schema or "main"
         try:
-            columns = []
-            for row in self.conn.execute(f"PRAGMA table_info({_q(obj)})").fetchall():
-                cid, name, typ, notnull, default, pk = row
-                columns.append({
-                    "name": name,
-                    "type_raw": typ or "TEXT",
-                    "nullable": not notnull,
-                    "is_pk": bool(pk),
-                    "is_fk": False,
-                })
-            fks = self.conn.execute(f"PRAGMA foreign_key_list({_q(obj)})").fetchall()
-            fk_cols = {r[3] for r in fks}
-            for col in columns:
-                if col["name"] in fk_cols:
-                    col["is_fk"] = True
-            return {
-                "object": {"name": obj, "kind": "table", "parent": schema},
-                "columns": columns,
-            }
-        except sqlite3.Error as e:
+            if self.kind == "sqlite":
+                return self._meta_object_detail_sqlite(schema, obj)
+            return self._meta_object_detail_pg(schema, obj)
+        except Exception as e:
             raise RpcError(ERR_SQL_ERROR, f"meta.object_detail 失败：{e}")
+
+    def _meta_object_detail_sqlite(self, schema, obj):
+        schema = schema or "main"
+        columns = []
+        for row in self.conn.execute(f"PRAGMA table_info({_q(obj)})").fetchall():
+            cid, name, typ, notnull, default, pk = row
+            columns.append({
+                "name": name,
+                "type_raw": typ or "TEXT",
+                "nullable": not notnull,
+                "is_pk": bool(pk),
+                "is_fk": False,
+            })
+        fks = self.conn.execute(f"PRAGMA foreign_key_list({_q(obj)})").fetchall()
+        fk_cols = {r[3] for r in fks}
+        for col in columns:
+            if col["name"] in fk_cols:
+                col["is_fk"] = True
+        return {
+            "object": {"name": obj, "kind": "table", "parent": schema},
+            "columns": columns,
+        }
+
+    def _meta_object_detail_pg(self, schema, obj):
+        schema = schema or "public"
+        # 主键列
+        pk_rows = self.conn.execute(
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indrelid "
+            "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey) "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE i.indisprimary AND n.nspname = %s AND c.relname = %s",
+            (schema, obj)).fetchall()
+        pks = {r[0] for r in pk_rows}
+        # 外键列
+        fk_rows = self.conn.execute(
+            "SELECT a.attname FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid = con.conrelid "
+            "JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(con.conkey) "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE con.contype = 'f' AND n.nspname = %s AND c.relname = %s",
+            (schema, obj)).fetchall()
+        fks = {r[0] for r in fk_rows}
+        # 列定义
+        rows = self.conn.execute(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+            (schema, obj)).fetchall()
+        columns = []
+        for name, data_type, nullable, default in rows:
+            col = {
+                "name": name,
+                "type_raw": data_type or "text",
+                "nullable": nullable == "YES",
+                "is_pk": name in pks,
+                "is_fk": name in fks,
+            }
+            if default is not None:
+                col["default"] = default
+            columns.append(col)
+        return {
+            "object": {"name": obj, "kind": "table", "parent": schema},
+            "columns": columns,
+        }
+
+
+def _normalize_driver(raw):
+    """引擎驱动 id → 壳适配器名（`sqlite` / `postgresql`）。"""
+    d = (raw or "").lower()
+    if d in ("postgresql", "postgres", "pg"):
+        return "postgresql"
+    if d == "sqlite":
+        return "sqlite"
+    return d
 
 
 def _q(name):
@@ -418,8 +590,7 @@ class Server:
     def _code_of(e):
         if isinstance(e, RpcError):
             return e.code
-        if isinstance(e, sqlite3.Error):
-            return ERR_SQL_ERROR
+        # 非 RpcError 一律按 SQL 错处理（sqlite / psycopg 的异常类型都是驱动私有的）
         return ERR_SQL_ERROR
 
     @staticmethod

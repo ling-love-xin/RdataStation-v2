@@ -217,9 +217,15 @@ impl PluginBackend {
 
         match self.kind {
             BackendKind::Script => {
+                // 声明了 `runtime` 的 script 允许缺省 `interpreter`（validate_backend 已放行）：
+                // 这里先用运行时名占位，supervisor::from_manifest 会用解析出的解释器路径替换
+                // `command.program`。老清单（无 runtime）仍必须显式给 interpreter，报错口径不变。
                 let interpreter = self
                     .interpreter
                     .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| self.runtime.map(|r| r.name().to_string()))
                     .ok_or_else(|| manifest_error("backend.interpreter is required for script"))?;
                 let script = self.resolve_executable(plugin_dir)?;
                 // `interpreter_args` 插在解释器与脚本之间（Java 的 `-jar` 位）；
@@ -448,6 +454,12 @@ pub struct ContributesDriver {
     pub default_port: Option<u16>,
     #[serde(default)]
     pub connection_schema: Option<String>,
+    /// JDBC / DB-API 的 URL 模板（`{host}` `{port}` `{database}` `{username}`
+    /// `{password}` `{file_path}` 占位符由引擎连接配置替换；如
+    /// `jdbc:oracle:thin:@//{host}:{port}/{database}`）。
+    /// 连接表单填的标准五件套据此拼 URL，驱动壳不需要每库写死 URL 形状。
+    #[serde(default)]
+    pub url_template: Option<String>,
     #[serde(default)]
     pub features: Vec<String>,
 }
@@ -1582,5 +1594,95 @@ executable = "bin/agent"
         manifest.validate().expect("老清单应当照常通过");
         assert_eq!(manifest.api, None);
         assert!(manifest.methods.is_empty());
+    }
+
+    /// script + runtime 声明可以缺省 `interpreter`：command() 用运行时名占位 program，
+    /// supervisor::from_manifest 会用解析出的解释器路径替换（validate_backend 已放行的口径，
+    /// 这里验证 command() 真的接得上，不会在部署期炸）。
+    #[test]
+    fn script_with_runtime_allows_missing_interpreter() {
+        let backend: PluginBackend = toml::from_str(
+            r#"
+kind = "script"
+runtime = "java"
+executable = "lib/rds-jdbc-shell.jar"
+interpreter_args = ["-jar"]
+"#,
+        )
+        .unwrap();
+        let command = backend.command(Path::new("plugins/com.example.oracle")).unwrap();
+        assert_eq!(command.program, PathBuf::from("java"), "runtime 名占位 program");
+        assert_eq!(command.args[0], "-jar", "interpreter_args 在脚本路径之前");
+        assert!(
+            command.args[1].ends_with("lib/rds-jdbc-shell.jar"),
+            "脚本路径是相对插件目录解析后的完整路径：{:?}",
+            command.args
+        );
+
+        // 无 runtime 的老清单仍必须显式给 interpreter
+        let legacy: PluginBackend = toml::from_str(
+            r#"
+kind = "script"
+executable = "bin/agent.py"
+"#,
+        )
+        .unwrap();
+        let err = legacy.command(Path::new("plugins/com.example.py")).unwrap_err().to_string();
+        assert!(err.contains("interpreter is required"), "{err}");
+    }
+
+    /// 驱动清单的 url_template 是连接表单五件套 → 驱动壳 URL 的桥梁，解析期就要落在字段上。
+    #[test]
+    fn contributes_driver_parses_url_template() {
+        let manifest: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.oracle"
+name = "Oracle"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "java"
+executable = "lib/rds-jdbc-shell.jar"
+interpreter_args = ["-jar"]
+
+[[contributes.drivers]]
+id = "oracle"
+display_name = "Oracle Database"
+default_port = 1521
+url_template = "jdbc:oracle:thin:@//{host}:{port}/{database}"
+"#,
+        )
+        .unwrap();
+        let driver = &manifest.contributes.drivers[0];
+        assert_eq!(
+            driver.url_template.as_deref(),
+            Some("jdbc:oracle:thin:@//{host}:{port}/{database}")
+        );
+
+        // 没写 url_template 的老清单照常解析（None）
+        let legacy: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.h2"
+name = "H2"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[[contributes.drivers]]
+id = "h2"
+display_name = "H2"
+"#,
+        )
+        .unwrap();
+        assert!(legacy.contributes.drivers[0].url_template.is_none());
     }
 }

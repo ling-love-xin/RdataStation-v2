@@ -1084,3 +1084,13 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 
 **经验教训**：推进时遇到「与既有定案冲突」的方向性决策，应在动码前把矛盾与推翻前提的新事实摆给用户裁决，而不是默认既有拍板（D1-D4 是实现细节拍板）覆盖文档定案。
 
+**驱动插件包第一刀（oracle-jdbc + postgres-py）**（2026-10-22）：
+- 产物：`tools/plugin-drivers/`（`oracle-jdbc/` manifest id=`rds.driver.oracle`、url_template=`jdbc:oracle:thin:@//{host}:{port}/{database}`、
+  `postgres-py/` manifest id=`rds.driver.postgres-py`、url_template=`postgresql://{user}:{password}@{host}:{port}/{database}`、`install.ps1`）。
+- 架构沿用既有 sidecar 轨（协议/进程/生命周期零改动）：通用壳（Java `rds-jdbc-shell` + Python `rds-dbapi-shell`）+ 每库一个打包插件；
+  连接配置原样透传，URL 模板替换发生在壳侧；v1 内联 JSON 结果（200 行 / 256 KiB 阈值），Arrow 第二期。
+- 运行时：不内嵌 Java/Python，manifest `[backend]` 声明 `runtime`，宿主 `runtime.rs` 三级查找（用户指定 → 环境/PATH → `third_party/`），
+  全部缺失给可读引导；`install.ps1` 从 Maven Central 拉 ojdbc11（OTN 许可，已注明）/ h2，测试期用 H2 验证真 JDBC 标准。
+- 修复：`SessionDriver::describe` 补带 `session_id`（真实壳按契约要求会话已存在；Rust 靶子此前容忍漏传，未被发现）。
+- 验证：`cargo test -p rds-plugin --test drivers_packaged` 2 passed（oracle H2 全链路 / pg 部署注册）；rds-plugin 全量 194 lib + 集成全绿。
+- 未接：用户自定 driver jar 路径（三来源之二）v1 未实现；`third_party` 自动下载二期；插件 UI 入口（P4）未动。

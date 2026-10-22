@@ -324,7 +324,9 @@ impl<'a> SessionDriver<'a> {
             .conn
             .call(
                 method::DRIVER_DESCRIBE,
-                json!({ "driver_id": driver_id }),
+                // 带 session_id：描述挂在会话上（真实壳按契约要求会话已存在，
+                // 漏带会让严格实现（如 rds-jdbc-shell）回「会话不存在」）
+                json!({ "session_id": self.session_id, "driver_id": driver_id }),
                 DESCRIBE_RPC_TIMEOUT,
             )
             .await

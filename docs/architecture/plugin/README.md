@@ -158,3 +158,16 @@ cd docs/architecture/plugin/prototype && node check-prototypes.mjs
 
 HTTP 旧路径（`client.rs` + 旧 `manager.rs`）已删除，`rds-plugin` 不再依赖 `reqwest`。
 验收仍是「能连 → 能查 3000 行（Arrow 到宿主）→ 能取消 → **宿主退出无孤儿进程**」（后者靠一条协议级约定：宿主持有 stdin 管道，sidecar 见 EOF 即退，见 dev-plan §4.2.1）。
+
+**驱动插件包第一刀（oracle-jdbc + postgres-py）已落地**（2026-10-22）：
+新增 `tools/plugin-drivers/`（oracle-jdbc / postgres-py 两个打包插件 + `install.ps1` 安装脚本），
+换库 = 换驱动 jar + URL 模板，壳零改动：JDBC 走 `tools/rds-jdbc-shell`（通用 Java 壳，
+`java.sql` 标准接口一次实现协议/执行/meta 映射），DB-API 走 `tools/rds-dbapi-shell`
+（Python 壳，sqlite3 / psycopg 双适配）。manifest 已支持 `runtime` + `interpreter_args`
+（#35/#36，commit `4e3d8118`），宿主按 ①用户指定 → ②环境变量/PATH → ③仓库根 `third_party/`
+三级查找 Java/Python 解释器，不内嵌运行时。宿主加载验证 `tests/drivers_packaged.rs`：
+oracle 用例真连 H2（url_override）查询通过，postgres-py 部署+注册通过；
+rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：`SessionDriver::describe`
+此前不带 `session_id`（Rust 靶子容忍、Java 壳按契约严格校验，暴露为「会话不存在」）。
+未接（如实列出）：用户自定 driver jar 路径白名单 v1 未实现（壳只扫自身目录/lib）；
+`third_party` jre/python 自动下载为二期；插件 UI 入口归档与面板接入未做（P4）。

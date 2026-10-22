@@ -1,0 +1,35 @@
+# PostgreSQL（Python）驱动插件：通用 DB-API 壳（tools/rds-dbapi-shell）+ psycopg 适配。
+# 壳源码入库；psycopg 由用户 Python 环境提供（壳 import 失败给可读报错）。
+
+[plugin]
+id = "rds.driver.postgres-py"
+name = "PostgreSQL Driver (Python)"
+version = "0.1.0"
+publisher = "rds"
+description = "PostgreSQL DB-API 2.0 驱动插件（Python 通用壳 + psycopg）"
+license = "MIT"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+runtime = "python"
+executable = "rds_dbapi_shell.py"
+max_instances = 1
+
+[permissions]
+sidecar = ["spawn.child_process", "net.connect", "fs.read_plugin_data", "credentials.database"]
+driver = ["driver.query", "driver.metadata", "driver.transaction", "driver.cancel"]
+credentials = "database"
+
+[capabilities.driver]
+concurrency = "serial"
+
+# URL 模板占位符由驱动壳替换（{host}/{port}/{database}/{user}/{password}）
+[[contributes.drivers]]
+id = "postgresql"
+display_name = "PostgreSQL"
+default_port = 5432
+url_template = "postgresql://{user}:{password}@{host}:{port}/{database}"
+features = ["transactions", "cancel"]
