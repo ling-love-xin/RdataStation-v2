@@ -72,3 +72,4 @@
 | `cargo test -p rds-workbench` | ✅ 全套件绿 | 含修复后的 `insight_editor_entry`（2）/ `insight_source_real`（2）/ ui_contract（9）等 |
 | 修复项 1 | `crates/insight/src/workspace.rs` 括号失配 | EDA 中间页大改造（+1513/-340）引入，`impl InsightWorkspacePanel` 未闭合；用户侧已修，编译恢复 |
 | 修复项 2 | 7 处旧签名调用 | `profile_source_column` / `profile_source_table` 新增 `full: bool` 参数后，`insight_editor_entry.rs:238` 与 `insight_source_real.rs:153/183/196/335/354` 仍用旧签名 → 本轮补 `false`（保持取样语义），编译通过 |
+| 复核②（双实例，§13）| `cargo check --workspace` ✅ / `cargo test -p rds-analytics-resource --lib` ✅ 169（163 存量 + g001–g006）/ `cargo test -p rds-workbench --lib` ✅ 90 | 双实例服务层 + 接线后全绿；提交 `505e1c9d`（10 files +1637） |
