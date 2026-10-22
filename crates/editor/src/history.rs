@@ -56,6 +56,8 @@ pub struct HistoryItem {
     pub source_text: Option<String>,
     /// 【联邦】参与源文案（`源 mysql_src, pg_warehouse`；不是联邦档就没有这一项）
     pub sources_text: Option<String>,
+    /// 库类型原始值（**筛选输入**：`source_text` 是格式化文本，不能拿它匹配）
+    pub db_type: Option<String>,
     /// 失败原因（成功为 `None`）
     pub error: Option<String>,
     /// 当时绑定的连接（重放时带过去；`None` = 跟随当前连接）
@@ -70,18 +72,50 @@ impl HistoryItem {
 
 /// 加载最近的历史（最新在前）
 pub fn load(limit: usize) -> Result<Vec<HistoryItem>, String> {
-    let now = Utc::now();
-    history_store::get_sql_history(limit)
-        .map(|records| records.iter().map(|record| item_from(record, now)).collect())
-        .map_err(|error| format!("读取历史失败：{error}"))
+    query(&HistoryQuery::default(), limit, 0)
 }
 
 /// 按关键字搜索（引擎侧对 SQL 文本做包含匹配）
 pub fn search(keyword: &str, limit: usize) -> Result<Vec<HistoryItem>, String> {
+    query(
+        &HistoryQuery {
+            keyword: (!keyword.trim().is_empty()).then(|| keyword.trim().to_string()),
+            ..HistoryQuery::default()
+        },
+        limit,
+        0,
+    )
+}
+
+/// 历史查询条件（面板筛选的完整输入；`None` = 不过滤）
+#[derive(Debug, Default, Clone)]
+pub struct HistoryQuery {
+    /// 关键词（匹配 SQL 文本）
+    pub keyword: Option<String>,
+    /// 库类型（`sqlite` / `mysql` / …；`None` = 全部）
+    pub db_type: Option<String>,
+    /// 成败筛选（`None` = 全部；`Some(true)` = 只看成功；`Some(false)` = 只看失败）
+    pub success: Option<bool>,
+}
+
+/// 按条件分页查询历史（最新在前，`offset` 供「加载更多」翻页）
+pub fn query(q: &HistoryQuery, limit: usize, offset: usize) -> Result<Vec<HistoryItem>, String> {
     let now = Utc::now();
-    history_store::search_sql_history(keyword, limit)
+    let mut filter = history_store::HistoryFilter::new();
+    if let Some(ref keyword) = q.keyword {
+        filter = filter.with_keyword(keyword.clone());
+    }
+    if let Some(ref db_type) = q.db_type {
+        filter = filter.with_db_type(db_type.clone());
+    }
+    match q.success {
+        Some(true) => filter = filter.success_only(),
+        Some(false) => filter = filter.failed_only(),
+        None => {}
+    }
+    history_store::query_sql_history(&filter, limit, offset)
         .map(|records| records.iter().map(|record| item_from(record, now)).collect())
-        .map_err(|error| format!("搜索历史失败：{error}"))
+        .map_err(|error| format!("读取历史失败：{error}"))
 }
 
 /// 删除一条
@@ -105,6 +139,7 @@ pub fn item_from(record: &SqlHistoryRecord, now: DateTime<Utc>) -> HistoryItem {
         rows_text: rows_text(record.rows_returned, record.rows_affected),
         source_text: source_text(record.db_type.as_deref(), record.channel.as_deref()),
         sources_text: sources_text(record.channel.as_deref(), record.sources.as_deref()),
+        db_type: record.db_type.clone(),
         error: record.error_message.clone(),
         conn_id: record.conn_id.clone(),
     }

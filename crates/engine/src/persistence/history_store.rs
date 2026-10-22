@@ -939,6 +939,33 @@ pub fn save_sql_history_into(
     store.save()
 }
 
+/// 引擎记录 → 对外形状（`unknown` 占位不当“没有连接/库”，如实给 `None`）
+fn to_public_record(r: &HistoryRecord) -> SqlHistoryRecord {
+    SqlHistoryRecord {
+        id: r.id.clone(),
+        sql: r.sql.clone(),
+        conn_id: if r.connection_id == "unknown" {
+            None
+        } else {
+            Some(r.connection_id.clone())
+        },
+        db_type: if r.db_type == "unknown" {
+            None
+        } else {
+            Some(r.db_type.clone())
+        },
+        channel: r.channel.clone(),
+        sources: r.sources.clone(),
+        executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
+            .unwrap_or_else(chrono::Utc::now),
+        duration_ms: Some(r.duration_ms),
+        success: Some(r.success),
+        error_message: r.error_message.clone(),
+        rows_affected: r.rows_affected,
+        rows_returned: r.rows_returned,
+    }
+}
+
 /// 获取 SQL 历史列表
 pub fn get_sql_history(limit: usize) -> Result<Vec<SqlHistoryRecord>, std::io::Error> {
     let mut store = GLOBAL_HISTORY_STORE
@@ -950,29 +977,35 @@ pub fn get_sql_history(limit: usize) -> Result<Vec<SqlHistoryRecord>, std::io::E
     let records: Vec<SqlHistoryRecord> = store
         .get_records(Some(limit))
         .iter()
-        .map(|r| SqlHistoryRecord {
-            id: r.id.clone(),
-            sql: r.sql.clone(),
-            conn_id: if r.connection_id == "unknown" {
-                None
-            } else {
-                Some(r.connection_id.clone())
-            },
-            db_type: if r.db_type == "unknown" {
-                None
-            } else {
-                Some(r.db_type.clone())
-            },
-            channel: r.channel.clone(),
-            sources: r.sources.clone(),
-            executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
-                .unwrap_or_else(chrono::Utc::now),
-            duration_ms: Some(r.duration_ms),
-            success: Some(r.success),
-            error_message: r.error_message.clone(),
-            rows_affected: r.rows_affected,
-            rows_returned: r.rows_returned,
-        })
+        .map(to_public_record)
+        .collect();
+
+    Ok(records)
+}
+
+/// 按筛选条件分页查询 SQL 历史（最新在前）。
+///
+/// `offset` 供「加载更多」翻页：第 0 页取最近 `limit` 条，下一页把 `offset`
+/// 加 `limit` 继续。`HistoryFilter` 的七维匹配（库类型 / 连接 / 成败 / 时间 /
+/// 关键词）在 [`HistoryStore::filter_records`] 已有，这里只补 offset 语义。
+pub fn query_sql_history(
+    filter: &HistoryFilter,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<SqlHistoryRecord>, std::io::Error> {
+    let mut store = GLOBAL_HISTORY_STORE
+        .lock()
+        .map_err(|_| std::io::Error::other("Failed to lock store"))?;
+
+    store.load()?;
+
+    let records: Vec<SqlHistoryRecord> = store
+        .records
+        .iter()
+        .filter(|r| filter.matches(r))
+        .skip(offset)
+        .take(limit)
+        .map(to_public_record)
         .collect();
 
     Ok(records)
@@ -991,32 +1024,7 @@ pub fn search_sql_history(
 
     let results = store.search(keyword, Some(limit));
 
-    let records: Vec<SqlHistoryRecord> = results
-        .into_iter()
-        .map(|r| SqlHistoryRecord {
-            id: r.id.clone(),
-            sql: r.sql.clone(),
-            conn_id: if r.connection_id == "unknown" {
-                None
-            } else {
-                Some(r.connection_id.clone())
-            },
-            db_type: if r.db_type == "unknown" {
-                None
-            } else {
-                Some(r.db_type.clone())
-            },
-            channel: r.channel.clone(),
-            sources: r.sources.clone(),
-            executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
-                .unwrap_or_else(chrono::Utc::now),
-            duration_ms: Some(r.duration_ms),
-            success: Some(r.success),
-            error_message: r.error_message.clone(),
-            rows_affected: r.rows_affected,
-            rows_returned: r.rows_returned,
-        })
-        .collect();
+    let records: Vec<SqlHistoryRecord> = results.into_iter().map(to_public_record).collect();
 
     Ok(records)
 }

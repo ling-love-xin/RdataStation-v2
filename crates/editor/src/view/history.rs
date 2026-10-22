@@ -13,6 +13,7 @@
 //! 删除 / 清空 / 搜索是自己发起的，直接在动作里重载。
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -22,16 +23,23 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::history::{self, HistoryItem};
+use crate::history::{self, HistoryItem, HistoryQuery};
 
 /// 历史面板的数据端口（默认读引擎历史；测试注入假数据，**不碰真实历史文件**）
 pub trait HistoryPort {
-    /// 按关键词载入（空关键词 = 全部）
-    fn load(&self, keyword: &str, limit: usize) -> Result<Vec<HistoryItem>, String>;
+    /// 按条件分页载入（空条件 = 全部；`offset` 供「加载更多」翻页）
+    fn load(
+        &self,
+        query: &HistoryQuery,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<HistoryItem>, String>;
     /// 删一条（按记录 id）
     fn remove(&self, id: &str) -> Result<(), String>;
     /// 清空
@@ -42,12 +50,13 @@ pub trait HistoryPort {
 struct EngineHistory;
 
 impl HistoryPort for EngineHistory {
-    fn load(&self, keyword: &str, limit: usize) -> Result<Vec<HistoryItem>, String> {
-        if keyword.trim().is_empty() {
-            history::load(limit)
-        } else {
-            history::search(keyword.trim(), limit)
-        }
+    fn load(
+        &self,
+        query: &HistoryQuery,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<HistoryItem>, String> {
+        history::query(query, limit, offset)
     }
 
     fn remove(&self, id: &str) -> Result<(), String> {
@@ -75,6 +84,16 @@ pub struct HistoryView {
     error: Option<String>,
     /// 当前关键词（空 = 全部）
     keyword: String,
+    /// 成败筛选（`None` = 全部；`Some(true)` = 成功；`Some(false)` = 失败）
+    filter_success: Option<bool>,
+    /// 库类型筛选（`None` = 全部）
+    filter_db_type: Option<String>,
+    /// 已加载到第几条（「加载更多」从此处继续）
+    offset: usize,
+    /// 上一页是否满页（满页 = 还有更多可加载）
+    has_more: bool,
+    /// 勾选的记录 id（批量删除用）
+    selected: HashSet<String>,
     query: Entity<InputState>,
     port: Rc<dyn HistoryPort>,
     replay: Rc<RefCell<Option<HistoryReplay>>>,
@@ -107,6 +126,11 @@ impl HistoryView {
             items: Vec::new(),
             error: None,
             keyword: String::new(),
+            filter_success: None,
+            filter_db_type: None,
+            offset: 0,
+            has_more: false,
+            selected: HashSet::new(),
             query,
             port: Rc::new(EngineHistory),
             replay: Rc::new(RefCell::new(None)),
@@ -137,31 +161,114 @@ impl HistoryView {
             return;
         }
         self.keyword = keyword;
+        self.offset = 0;
+        self.selected.clear();
         self.reload(cx);
     }
 
-    /// 重新加载（**事件路径**：会读盘）
-    pub fn reload(&mut self, cx: &mut Context<Self>) {
-        let keyword = self.keyword.clone();
-        let result = self.port.load(&keyword, PAGE);
-        self.loaded_version = history::version();
-        self.loaded_once = true;
+    /// 设置成败筛选（全部 / 成功 / 失败；变化时从头加载）
+    pub fn set_success_filter(&mut self, success: Option<bool>, cx: &mut Context<Self>) {
+        if self.filter_success == success {
+            return;
+        }
+        self.filter_success = success;
+        self.offset = 0;
+        self.selected.clear();
+        self.reload(cx);
+    }
+
+    /// 设置库类型筛选（`None` = 全部）
+    pub fn set_db_filter(&mut self, db_type: Option<String>, cx: &mut Context<Self>) {
+        if self.filter_db_type == db_type {
+            return;
+        }
+        self.filter_db_type = db_type;
+        self.offset = 0;
+        self.selected.clear();
+        self.reload(cx);
+    }
+
+    /// 勾选 / 取消一条（批量删除的选择集）
+    pub fn toggle_select(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.selected.remove(&id) {
+            self.selected.insert(id);
+        }
+        cx.notify();
+    }
+
+    /// 删除选中的全部（逐条走端口；删完回到第一页）
+    pub fn remove_selected(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self.selected.iter().cloned().collect();
+        for id in ids {
+            if let Err(error) = self.port.remove(&id) {
+                self.error = Some(error);
+            }
+        }
+        self.selected.clear();
+        self.offset = 0;
+        self.reload(cx);
+    }
+
+    /// 「加载更多」：从当前 offset 继续取下一页，满页则还有更多
+    pub fn load_more(&mut self, cx: &mut Context<Self>) {
+        let query = self.query();
+        let result = self.port.load(&query, PAGE, self.offset + PAGE);
         match result {
             Ok(items) => {
-                self.items = items;
+                self.has_more = items.len() == PAGE;
+                self.offset += PAGE;
+                self.items.extend(items);
                 self.error = None;
             }
             Err(error) => {
-                self.items.clear();
                 self.error = Some(error);
             }
         }
         cx.notify();
     }
 
-    /// 版本变了就重新加载（轮询泵调用；版本没变什么都不做）
+    /// 当前已勾选条数（「删除选中 (N)」按钮的 N）
+    pub fn selected_count(&self) -> usize {
+        self.selected.len()
+    }
+
+    /// 当前筛选条件（关键词 + 库类型 + 成败 → 面板端查询条件）
+    fn query(&self) -> HistoryQuery {
+        HistoryQuery {
+            keyword: (!self.keyword.trim().is_empty())
+                .then(|| self.keyword.trim().to_string()),
+            db_type: self.filter_db_type.clone(),
+            success: self.filter_success,
+        }
+    }
+
+    /// 重新加载（**事件路径**：会读盘）
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        let query = self.query();
+        let result = self.port.load(&query, PAGE, self.offset);
+        self.loaded_version = history::version();
+        self.loaded_once = true;
+        match result {
+            Ok(items) => {
+                self.has_more = items.len() == PAGE;
+                self.items = items;
+                self.error = None;
+            }
+            Err(error) => {
+                self.items.clear();
+                self.has_more = false;
+                self.error = Some(error);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 版本变了就重新加载（轮询泵调用；版本没变什么都不做）。
+    /// 执行路径写进新记录后版本变化：回到第一页并清空选择（列表整体已不是旧内容）
     fn refresh_if_stale(&mut self, cx: &mut Context<Self>) {
         if self.loaded_version != history::version() {
+            self.offset = 0;
+            self.selected.clear();
             self.reload(cx);
         }
     }
@@ -238,6 +345,10 @@ impl HistoryView {
     pub fn item_count_for_test(&self) -> usize {
         self.items.len()
     }
+
+    pub fn has_more_for_test(&self) -> bool {
+        self.has_more
+    }
 }
 
 impl Render for HistoryView {
@@ -267,7 +378,83 @@ impl Render for HistoryView {
                     })
             });
 
-        // 列表：一行 = 预览 +（时间 · 耗时 · 行数 · 来源），失败的行把原因带出来
+        // 筛选行：成败（全部/成功/失败）+ 库类型下拉 + 「删除选中 (N)」（勾选非空才出现）
+        let success_ix = match self.filter_success {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => 2,
+        };
+        let success_bar = {
+            let entity = cx.entity();
+            TabBar::new("history-success-filter")
+                .segmented()
+                .child(Tab::new().label("全部"))
+                .child(Tab::new().label("成功"))
+                .child(Tab::new().label("失败"))
+                .selected_index(success_ix)
+                .on_click(move |ix, _, app| {
+                    let filter = match ix {
+                        1 => Some(true),
+                        2 => Some(false),
+                        _ => None,
+                    };
+                    entity.update(app, |view, cx| view.set_success_filter(filter, cx));
+                })
+        };
+        let db_label = self
+            .filter_db_type
+            .as_deref()
+            .map(|db| format!("库：{db}"))
+            .unwrap_or_else(|| "库：全部".to_string());
+        let db_button = {
+            let entity = cx.entity();
+            Button::new("history-db-filter")
+                .ghost()
+                .small()
+                .label(db_label)
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu.item(
+                        PopupMenuItem::new("全部库").on_click({
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                entity.update(app, |view, cx| view.set_db_filter(None, cx));
+                            }
+                        }),
+                    );
+                    for db in ["sqlite", "mysql", "postgres", "duckdb", "oracle", "mssql"] {
+                        let entity = entity.clone();
+                        menu = menu.item(PopupMenuItem::new(db).on_click(move |_, _, app| {
+                            entity.update(app, |view, cx| {
+                                view.set_db_filter(Some(db.to_string()), cx);
+                            });
+                        }));
+                    }
+                    menu
+                })
+        };
+        let remove_selected = {
+            let entity = cx.entity();
+            let n = self.selected_count();
+            Button::new("history-remove-selected")
+                .ghost()
+                .small()
+                .label(format!("删除选中 ({n})"))
+                .on_click(move |_, _window, app| {
+                    entity.update(app, |view, cx| view.remove_selected(cx));
+                })
+        };
+        let filter_row = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .child(success_bar)
+            .child(db_button)
+            .when(self.selected_count() > 0, |row| row.child(remove_selected));
+
+        // 列表：一行 = 预览 +（时间 · 耗时 · 行数 · 来源），失败的行把原因带出来。
+        // 单击 = 勾选（批量删除）；双击 = 重放（DBeaver 对象列表口径）；右键 = 复制 / 删除
         let mut list = div()
             .v_flex()
             .flex_1()
@@ -277,10 +464,17 @@ impl Render for HistoryView {
             .debug_selector(|| "history-list".to_string());
         for (index, item) in self.items.iter().enumerate() {
             let entity = cx.entity();
+            // 单击/双击闭包独占一份（`on_mouse_down` 是 move 捕获，用了原 entity
+            // 会让后面的 `context_menu` 拿不到它——两个闭包各 clone 一份）
+            let mouse_entity = entity.clone();
             let remove_entity = cx.entity();
+            let item_id = item.id.clone();
+            let sql = item.sql.clone();
+            let is_selected = self.selected.contains(&item.id);
             let meta = history_meta(item);
             list = list.child(
                 ListItem::new(("history-item", index))
+                    .selected(is_selected)
                     .suffix(move |_window, _cx| {
                         // `suffix` 是 `Fn`（会被反复调用）：每次 clone 一份实体再拿下一次点击
                         let entity = remove_entity.clone();
@@ -293,8 +487,30 @@ impl Render for HistoryView {
                             })
                             .into_any_element()
                     })
-                    .on_click(move |_, _window, app| {
-                        entity.update(app, |view, cx| view.replay_at(index, cx));
+                    // 单击勾选 / 双击重放：gpui 的 `MouseDownEvent.click_count` 区分两次
+                    .on_mouse_down(MouseButton::Left, move |event, _window, app| {
+                        if event.click_count >= 2 {
+                            mouse_entity.update(app, |view, cx| view.replay_at(index, cx));
+                        } else {
+                            mouse_entity.update(app, |view, cx| {
+                                view.toggle_select(item_id.clone(), cx);
+                            });
+                        }
+                    })
+                    .context_menu(move |menu, _, _| {
+                        menu.item(PopupMenuItem::new("复制 SQL").on_click({
+                            let sql = sql.clone();
+                            // 0.8.0 起写剪贴板在 `App` 上（`Window::write_to_clipboard` 已移除）
+                            move |_, _window, app| {
+                                app.write_to_clipboard(ClipboardItem::new_string(sql.clone()));
+                            }
+                        }))
+                        .item(PopupMenuItem::new("删除该条").on_click({
+                            let entity = entity.clone();
+                            move |_, _window, app| {
+                                entity.update(app, |view, cx| view.remove_at(index, cx));
+                            }
+                        }))
                     })
                     .child(
                         div()
@@ -320,12 +536,25 @@ impl Render for HistoryView {
             );
         }
 
+        // 「加载更多」：上一页满页说明后面还有，出按钮继续取
+        let load_more = {
+            let entity = cx.entity();
+            Button::new("history-load-more")
+                .ghost()
+                .small()
+                .label("加载更多")
+                .on_click(move |_, _window, app| {
+                    entity.update(app, |view, cx| view.load_more(cx));
+                })
+        };
+
         div()
             .v_flex()
             .size_full()
             .min_h_0()
             .debug_selector(|| "history-panel".to_string())
             .child(search)
+            .child(filter_row)
             .when(self.items.is_empty(), |panel| {
                 panel.child(
                     div()
@@ -337,7 +566,11 @@ impl Render for HistoryView {
                         .child(SharedString::from(self.empty_text())),
                 )
             })
-            .when(!self.items.is_empty(), |panel| panel.child(list))
+            .when(!self.items.is_empty(), |panel| {
+                panel.child(list).when(self.has_more, |panel| {
+                    panel.child(div().w_full().h_flex().justify_center().py_1().child(load_more))
+                })
+            })
     }
 }
 
@@ -383,7 +616,7 @@ mod tests {
     use gpui_kit::TestAppContext;
 
     use super::{HistoryPort, HistoryView, history_meta};
-    use crate::history::HistoryItem;
+    use crate::history::{HistoryItem, HistoryQuery};
 
     fn item(id: &str, sql: &str) -> HistoryItem {
         HistoryItem {
@@ -395,6 +628,7 @@ mod tests {
             rows_text: Some("返回 1 行".to_string()),
             source_text: Some("MYSQL".to_string()),
             sources_text: None,
+            db_type: Some("mysql".to_string()),
             error: None,
             conn_id: None,
         }
@@ -420,14 +654,29 @@ mod tests {
     }
 
     impl HistoryPort for FakeHistory {
-        fn load(&self, keyword: &str, _limit: usize) -> Result<Vec<HistoryItem>, String> {
-            self.loaded.borrow_mut().push(keyword.to_string());
-            let keyword = keyword.trim();
-            Ok(self
-                .items
-                .borrow()
+        fn load(
+            &self,
+            query: &HistoryQuery,
+            limit: usize,
+            offset: usize,
+        ) -> Result<Vec<HistoryItem>, String> {
+            self.loaded
+                .borrow_mut()
+                .push(query.keyword.clone().unwrap_or_default());
+            let items = self.items.borrow();
+            let keyword = query.keyword.as_deref().unwrap_or("").trim();
+            Ok(items
                 .iter()
-                .filter(|item| keyword.is_empty() || item.sql.contains(keyword))
+                .filter(|item| {
+                    (keyword.is_empty() || item.sql.contains(keyword))
+                        && query
+                            .db_type
+                            .as_deref()
+                            .map_or(true, |db| item.db_type.as_deref() == Some(db))
+                        && query.success.map_or(true, |ok| item.failed() != ok)
+                })
+                .skip(offset)
+                .take(limit)
                 .cloned()
                 .collect())
         }
@@ -562,6 +811,133 @@ mod tests {
         assert!(
             error.as_deref().is_some_and(|text| text.contains("未接入")),
             "要说明未接入，而不是点一下没反应：{error:?}"
+        );
+    }
+
+    /// 成败筛选：只看失败时，成功行被滤掉；切回全部恢复
+    #[gpui_kit::test]
+    fn the_success_filter_narrows_the_list(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let ok = item("ok-1", "SELECT 1");
+        let mut bad = item("bad-1", "SELECT nope");
+        bad.error = Some("no such column: nope".to_string());
+        let fake = FakeHistory::new(vec![ok.clone(), bad.clone()]);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = HistoryView::new(window, cx);
+            view.set_port(Rc::new(FakeHistory {
+                items: fake.items.clone(),
+                loaded: fake.loaded.clone(),
+                removed: fake.removed.clone(),
+                cleared: fake.cleared.clone(),
+            }), cx);
+            view
+        });
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2);
+
+        view.update(cx, |view, cx| view.set_success_filter(Some(false), cx));
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 1);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.items_for_test()[0].id.clone()),
+            "bad-1"
+        );
+
+        view.update(cx, |view, cx| view.set_success_filter(None, cx));
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2, "切回全部恢复");
+    }
+
+    /// 库类型筛选：只看 sqlite 时，mysql 行被滤掉
+    #[gpui_kit::test]
+    fn the_db_filter_narrows_the_list(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut sqlite = item("sq-1", "SELECT 2");
+        sqlite.db_type = Some("sqlite".to_string());
+        let fake = FakeHistory::new(vec![item("my-1", "SELECT 1"), sqlite.clone()]);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = HistoryView::new(window, cx);
+            view.set_port(Rc::new(FakeHistory {
+                items: fake.items.clone(),
+                loaded: fake.loaded.clone(),
+                removed: fake.removed.clone(),
+                cleared: fake.cleared.clone(),
+            }), cx);
+            view
+        });
+
+        view.update(cx, |view, cx| view.set_db_filter(Some("sqlite".to_string()), cx));
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 1);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.items_for_test()[0].id.clone()),
+            "sq-1"
+        );
+
+        // 筛选变化时回到第一页并清空选择（旧选择不再指向可见行）
+        view.update(cx, |view, cx| view.set_db_filter(None, cx));
+        assert_eq!(view.read_with(cx, |view, _| view.selected_count()), 0);
+    }
+
+    /// 多选 + 批量删除：勾两条 → 逐条删到端口 → 列表回到第一页
+    #[gpui_kit::test]
+    fn selecting_then_removing_selected_deletes_each(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let fake = FakeHistory::new(vec![
+            item("rec-1", "SELECT * FROM orders"),
+            item("rec-2", "SELECT * FROM users"),
+            item("rec-3", "SELECT * FROM audit"),
+        ]);
+        let removed = fake.removed.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = HistoryView::new(window, cx);
+            view.set_port(Rc::new(FakeHistory {
+                items: fake.items.clone(),
+                loaded: fake.loaded.clone(),
+                removed: fake.removed.clone(),
+                cleared: fake.cleared.clone(),
+            }), cx);
+            view
+        });
+
+        view.update(cx, |view, cx| view.toggle_select("rec-1".to_string(), cx));
+        view.update(cx, |view, cx| view.toggle_select("rec-3".to_string(), cx));
+        assert_eq!(view.read_with(cx, |view, _| view.selected_count()), 2);
+        // 再点一次同一条 = 取消勾选
+        view.update(cx, |view, cx| view.toggle_select("rec-1".to_string(), cx));
+        assert_eq!(view.read_with(cx, |view, _| view.selected_count()), 1);
+
+        view.update(cx, |view, cx| view.remove_selected(cx));
+        let mut deleted = removed.borrow().clone();
+        deleted.sort();
+        assert_eq!(deleted, ["rec-3".to_string()], "只删勾选的那条");
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 2);
+        assert_eq!(view.read_with(cx, |view, _| view.selected_count()), 0, "删完清空选择");
+    }
+
+    /// 「加载更多」：满页时出入口，下一页追加而不是覆盖
+    #[gpui_kit::test]
+    fn load_more_appends_the_next_page(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let items: Vec<HistoryItem> = (0..201)
+            .map(|i| item(&format!("r{i}"), &format!("SELECT {i}")))
+            .collect();
+        let fake = FakeHistory::new(items);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = HistoryView::new(window, cx);
+            view.set_port(Rc::new(FakeHistory {
+                items: fake.items.clone(),
+                loaded: fake.loaded.clone(),
+                removed: fake.removed.clone(),
+                cleared: fake.cleared.clone(),
+            }), cx);
+            view
+        });
+
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 200, "首屏一页");
+        assert!(view.read_with(cx, |view, _| view.has_more_for_test()), "满页 = 还有更多");
+
+        view.update(cx, |view, cx| view.load_more(cx));
+        assert_eq!(view.read_with(cx, |view, _| view.item_count_for_test()), 201, "追加下一页");
+        assert!(
+            !view.read_with(cx, |view, _| view.has_more_for_test()),
+            "到底了不再出「加载更多」"
         );
     }
 }

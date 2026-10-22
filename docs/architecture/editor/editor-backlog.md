@@ -24,19 +24,22 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 | DBeaver 式参数绑定 | SQL 里 `:name` → 弹参数表单 → 字面替换后执行（与结果区分期无关） | 讨论过未开工 |
 | LSP hover 槽位 | 评估结论：本仓高亮/补全为自研（sqlglot + 关键字表），未接 LSP | 已关闭（#21） |
 
-## 三、历史面板（右 Dock）未接线缺口
+## 三、历史面板（右 Dock）缺口（2026-10-22 已全部接线）
 
 现状：`crates/editor/src/view/history.rs` + `crates/editor/src/history.rs`；
 数据源 `engine::persistence::history_store`。引擎侧 `HistoryFilter` 七维
 （db_type / connection_id / success_only / failed_only / start_time / end_time / keyword）
 匹配逻辑齐全（`HistoryStore::filter_records`），但对外只暴露了 keyword 一维。
 
-| 缺口 | 现状 | 接线方案 |
+| 缺口 | 现状 | 接线结果 |
 | --- | --- | --- |
-| 过滤维度 | UI 只有关键词搜索框；`search_sql_history(keyword, limit)` 只包 keyword | 引擎加 `query_sql_history(filter, limit, offset)`；面板加成功/失败筛选 + 库类型下拉 |
-| 翻页 / 加载更多 | `PAGE = 200` 每次加载最新 200 条，无更多入口 | 面板维护 offset，满页时出「加载更多」 |
-| 多选批量删除 | 只有行内单条删除 + 清空全部 | `ListItem::selected` + 选中集 + 「删除选中」 |
-| 右键菜单 | 无 | `ContextMenuExt`：复制 SQL / 删除该条 |
+| 过滤维度 | UI 只有关键词搜索框；`search_sql_history(keyword, limit)` 只包 keyword | 引擎加 `query_sql_history(filter, limit, offset)`（含 `to_public_record` 公共投影）；面板加成功/失败筛选（TabBar segmented）+ 库类型下拉（DropdownMenu） |
+| 翻页 / 加载更多 | `PAGE = 200` 每次加载最新 200 条，无更多入口 | 面板维护 offset，满页时出「加载更多」（`load_more` 追加下一页） |
+| 多选批量删除 | 只有行内单条删除 + 清空全部 | 单击行 = 勾选（`HashSet` 选中集 + `ListItem::selected`），「删除选中 (N)」按钮逐条删 |
+| 右键菜单 | 无 | `ContextMenuExt`：复制 SQL（写剪贴板）/ 删除该条；双击行 = 重放（对齐 DBeaver 对象列表口径） |
+
+> 交互口径变更：行点击原为**单击重放**，现改**单击勾选 / 双击重放 / 右键菜单**（为多选让路）。
+> 测试：`view::history` 7 例 + `history::tests` 7 例全绿（新增成败筛选 / 库类型筛选 / 多选删除 / 加载更多）。
 
 ## 四、结果网格其它
 
@@ -58,11 +61,11 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 高亮修复（sql/python/rust/rlang/log）→ 分析模式（内核接入 / 渲染分发 / cell 升级 /
 串行队列 / 笔记级动作）→ CSV 表格 → 多文档恢复 → 补全缓存回落实时内省 →
 值查看器 → 结果区高度持久化 → P0 列类型 → P1 字段注释 → 工具栏/状态栏
-对齐 + 图标化 + 微标拆分 + 行号槽收窄 + 左裁修复 → 通用/SQL 模式对齐核对。
+对齐 + 图标化 + 微标拆分 + 行号槽收窄 + 左裁修复 → 通用/SQL 模式对齐核对 →
+历史面板缺口（过滤 / 加载更多 / 多选删除 / 右键菜单，2026-10-22）。
 
 ## 建议优先级
 
 1. P2 结果网格增强（已立项 #37）
-2. 历史面板补缺口（本节三：引擎设施都在，纯接线活）
-3. 参数绑定（方案已确认）
-4. P3 钻取（下期）
+2. 参数绑定（方案已确认）
+3. P3 钻取（下期）
