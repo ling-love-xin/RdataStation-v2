@@ -334,6 +334,10 @@ pub struct ResultGridDelegate {
     frozen: Vec<usize>,
     /// 【P2】隐藏的数据列（**数据列序**；显示时跳过它们。只影响视图列序，数据一行不动）
     hidden: Vec<usize>,
+    /// 【P2-4】单行转置：把选中一行竖排成「# / 字段 / 值」三列（DBeaver 式；只读视图）
+    transposed: bool,
+    /// 【P2-4】转置当前展示的数据行（越界自动夹取）
+    transpose_row: usize,
     /// 【B14】按值筛选的钩子（面板注入）
     on_filter_value: Option<FilterValueHook>,
     /// 【B14】排序下发的钩子（面板注入）
@@ -398,6 +402,9 @@ impl ResultGridDelegate {
         self.frozen.clear();
         // 【P2】隐藏列同理：换结果 = 换一批列，旧的隐藏清单不再成立
         self.hidden.clear();
+        // 【P2-4】转置同理：行与列都换了，旧转置行没有意义（面板侧开关状态不随数据自动关）
+        self.transposed = false;
+        self.transpose_row = 0;
         self.context_cell = None;
         // 【T2a-3/4】数据被新结果顶掉：正在编辑的格子、标脏的集合都随旧数据作废
         self.editing = None;
@@ -530,6 +537,56 @@ impl ResultGridDelegate {
     /// 显示全部列（清空隐藏清单）
     pub fn show_all_columns(&mut self) {
         self.hidden.clear();
+    }
+
+    // ---------- 【P2-4】单行转置（只读视图，DBeaver 式） ----------
+
+    /// 开 / 关转置视图。`row` 为要竖排的数据行（越界自动夹取）；
+    /// 关掉后原网格原样回来（排序 / 冻结 / 隐藏都没动过）。
+    pub fn set_transposed(&mut self, transposed: bool, row: usize) {
+        self.transposed = transposed;
+        if transposed {
+            self.transpose_row = row.min(self.rows.len().saturating_sub(1));
+        }
+    }
+
+    /// 转置行导航：切到另一行（越界夹取）
+    pub fn set_transpose_row(&mut self, row: usize) {
+        self.transpose_row = row.min(self.rows.len().saturating_sub(1));
+    }
+
+    /// 当前是否处于转置视图
+    pub fn is_transposed(&self) -> bool {
+        self.transposed
+    }
+
+    /// 当前转置的数据行（导航 / 状态行读它）
+    pub fn transpose_row(&self) -> usize {
+        self.transpose_row
+    }
+
+    /// 转置投影的数据列（跳过隐藏列——转置也只投影用户看得见的列）
+    fn transpose_columns(&self) -> Vec<usize> {
+        (0..self.columns.len())
+            .filter(|d| !self.is_hidden_column(*d))
+            .collect()
+    }
+
+    /// 转置视图的单元格：第 1 列 = 原列名，第 2 列 = 选中行该列的值
+    /// （`#` 行号槽不是数据，返回 `None`）
+    fn transpose_cell(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
+        if Self::is_row_number(col_ix) {
+            return None;
+        }
+        let data_col = *self.transpose_columns().get(row_ix)?;
+        match col_ix {
+            1 => self.columns.get(data_col).map(String::as_str),
+            _ => self
+                .rows
+                .get(self.transpose_row)?
+                .get(data_col)
+                .map(String::as_str),
+        }
     }
 
     /// 可见数据列序 → 数据列序（跳过隐藏列）。
@@ -727,6 +784,11 @@ impl ResultGridDelegate {
     /// 渲染只读这一条（对齐 / 等宽），每格 O(1)：类型在 `set_column_types` 时就已经解析好了
     /// （每列一次，不是每格一次）。
     fn column_kind(&self, col_ix: usize) -> ColumnKind {
+        // 【P2-4】转置视图的列是混合类型（每行对应一个不同的原列），列级类型不成立——
+        // 单元格自己的类型由 `render_td` 按行取（那里能拿到原列）
+        if self.transposed {
+            return ColumnKind::Unknown;
+        }
         if Self::is_row_number(col_ix) {
             return ColumnKind::Unknown;
         }
@@ -738,6 +800,10 @@ impl ResultGridDelegate {
 
     /// 表头的类型小标签：驱动报的**原始名字**（行号槽 / 没带类型 = `None`，那就一个字也不摆）
     fn type_label(&self, col_ix: usize) -> Option<&str> {
+        // 【P2-4】转置列是混合类型，不给列级标签
+        if self.transposed {
+            return None;
+        }
         if Self::is_row_number(col_ix) {
             return None;
         }
@@ -776,6 +842,10 @@ impl ResultGridDelegate {
 
     /// 这一格是不是脏的（视图行序 + 组件列序 → 数据行 / 数据列比较）
     fn is_dirty(&self, row_ix: usize, col_ix: usize) -> bool {
+        // 【P2-4】转置是只读视图，没有待提交的变更
+        if self.transposed {
+            return false;
+        }
         if Self::is_row_number(col_ix) {
             return false;
         }
@@ -787,6 +857,10 @@ impl ResultGridDelegate {
 
     /// 这一格是不是冲突的（提交没写进去；与脏格分开标色）
     fn is_conflict(&self, row_ix: usize, col_ix: usize) -> bool {
+        // 【P2-4】转置是只读视图，没有提交冲突
+        if self.transposed {
+            return false;
+        }
         if Self::is_row_number(col_ix) {
             return false;
         }
@@ -799,6 +873,10 @@ impl ResultGridDelegate {
 
     /// 这一格是否正在编辑（视图行序 + 组件列序匹配）
     pub fn is_editing(&self, row_ix: usize, col_ix: usize) -> bool {
+        // 【P2-4】转置是只读视图，不进编辑
+        if self.transposed {
+            return false;
+        }
         if Self::is_row_number(col_ix) {
             return false;
         }
@@ -810,7 +888,9 @@ impl ResultGridDelegate {
     /// 进入编辑：只设状态（初值同步 / 聚焦由 render_td 首次渲染时一次性做）。
     /// 返回是否真的进入了（不可编辑 / 点行号槽 / 行越界 = `false`）。
     pub fn begin_edit(&mut self, view_row: usize, col_ix: usize) -> bool {
-        if !self.editable || self.editing.is_some() || Self::is_row_number(col_ix) {
+        // 【P2-4】转置是只读视图，双击不进入编辑
+        if self.transposed || !self.editable || self.editing.is_some() || Self::is_row_number(col_ix)
+        {
             return false;
         }
         let Some(data_row) = self.data_row(view_row) else {
@@ -948,6 +1028,10 @@ impl ResultGridDelegate {
     /// “这一格是什么”只此一份：`cell()` 画它、结果内查找搜它、将来类型化导出也读它。
     /// 行号槽不在这里（它不是一个数据格：显示的是视图行号，而视图行号由渲染现算）。
     fn row_cell_text(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
+        // 【P2-4】转置视图：单元格是「字段名 / 值」，走转置投影
+        if self.transposed {
+            return self.transpose_cell(row_ix, col_ix);
+        }
         if Self::is_row_number(col_ix) {
             return None;
         }
@@ -1026,6 +1110,12 @@ impl ResultGridDelegate {
 
     /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）
     fn row_text(&self, row_ix: usize) -> String {
+        // 【P2-4】转置一行 = 一个字段：字段名 + 值（菜单不摆复制项，这里是兜底）
+        if self.transposed {
+            let field = self.transpose_cell(row_ix, 1).unwrap_or_default();
+            let value = self.transpose_cell(row_ix, 2).unwrap_or_default();
+            return format!("{field}\t{value}");
+        }
         let Some(data_ix) = self.data_row(row_ix) else {
             return String::new();
         };
@@ -1378,12 +1468,19 @@ impl TableDelegate for ResultGridDelegate {
         // 有结果时 = 数据列 + 行号槽 − 隐藏列
         if self.columns.is_empty() {
             0
+        } else if self.transposed {
+            // 转置视图固定三列：`#` 行号槽 · 字段 · 值
+            3
         } else {
             self.columns.len() + 1 - self.hidden.len()
         }
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
+        // 转置视图一行 = 一个可见字段（行数 = 可见列数）
+        if self.transposed {
+            return self.transpose_columns().len();
+        }
         self.view_len()
     }
 
@@ -1397,6 +1494,10 @@ impl TableDelegate for ResultGridDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) {
+        // 【P2-4】转置视图排序无意义（值是各原列，列级排序会打乱字段行），整表禁用
+        if self.transposed {
+            return;
+        }
         if Self::is_row_number(col_ix) {
             return;
         }
@@ -1442,6 +1543,20 @@ impl TableDelegate for ResultGridDelegate {
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        // 【P2-4】转置视图：行号槽照旧（is_row_number(0) 命中下方分支），
+        // 第 1 / 2 列固定是「字段 / 值」——列名就是这两个词，不跟原列走
+        if self.transposed && !Self::is_row_number(col_ix) {
+            return match col_ix {
+                1 => Column::new("transpose-field", "字段")
+                    .width(ui::RESULT_COLUMN_WIDTH)
+                    .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+                    .resizable(true),
+                _ => Column::new("transpose-value", "值")
+                    .width(ui::RESULT_COLUMN_WIDTH)
+                    .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+                    .resizable(true),
+            };
+        }
         if Self::is_row_number(col_ix) {
             // 行号槽：窄、钉在左边、不可拖宽/移动——它是视图辅助，不是数据列
             return Column::new("row-no", "#")
@@ -1485,6 +1600,12 @@ impl TableDelegate for ResultGridDelegate {
     ) -> impl IntoElement {
         let name = if Self::is_row_number(col_ix) {
             "#".to_string()
+        } else if self.transposed {
+            // 转置视图固定两列：字段 / 值（列名不跟原列走）
+            match col_ix {
+                1 => "字段".to_string(),
+                _ => "值".to_string(),
+            }
         } else {
             self.columns
                 .get(self.data_column(col_ix - 1))
@@ -1519,7 +1640,8 @@ impl TableDelegate for ResultGridDelegate {
                         .child(SharedString::from(label)),
                 )
             });
-        if Self::is_row_number(col_ix) || name.is_empty() {
+        // 转置视图只画列名（类型是混合的，注释表头没有意义）；行号槽 / 空列名同理
+        if self.transposed || Self::is_row_number(col_ix) || name.is_empty() {
             return head.into_any_element();
         }
         // 【P1】悬停给全名 + 类型 + 字段元数据（来源 / 注释 / 可空 / 默认）：
@@ -1563,9 +1685,22 @@ impl TableDelegate for ResultGridDelegate {
             return self.render_edit_cell(row_ix, col_ix, window, cx).into_any_element();
         }
         let text = self.cell(row_ix, col_ix);
-        // 类型决定“怎么画”（数字右对齐、布尔 / 时间族等宽）；没带类型就是 `Unknown`
-        // ——那一档与今天完全一致
-        let style = cell_style(self.column_kind(col_ix));
+        // 【P2-4】转置视图每行对应一个不同的原列，类型按「行」取（字段名列是纯文本）；
+        // 普通视图按列取。数值右对齐 / BLOB 摘要 / 等宽因此都随原列走
+        let kind = if self.transposed {
+            match col_ix {
+                1 => ColumnKind::Unknown,
+                _ => self
+                    .transpose_columns()
+                    .get(row_ix)
+                    .and_then(|d| self.column_types.get(*d))
+                    .and_then(Option::as_ref)
+                    .map_or(ColumnKind::Unknown, |column| column.kind),
+            }
+        } else {
+            self.column_kind(col_ix)
+        };
+        let style = cell_style(kind);
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let foreground = theme.colors.foreground;
@@ -1590,7 +1725,7 @@ impl TableDelegate for ResultGridDelegate {
         let is_null = text == "NULL";
         // 【P2】二进制列：格子里不铺一长串 hex，给「BLOB · 大小」摘要；
         // 悬停 / 查看完整值仍然给完整 hex（那是看全它的路）
-        let is_blob = !is_null && self.column_kind(col_ix) == ColumnKind::Binary;
+        let is_blob = !is_null && kind == ColumnKind::Binary;
         let display = if is_blob {
             blob_summary(&text).unwrap_or_else(|| text.clone())
         } else {
@@ -1651,6 +1786,10 @@ impl TableDelegate for ResultGridDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        // 【P2-4】转置是查看视图：右键菜单（筛选 / 排序 / 冻结 / 编辑）对它是错的
+        if self.transposed {
+            return menu;
+        }
         let Some((row, col)) = self.context_cell else {
             return menu;
         };
@@ -1944,6 +2083,8 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 pub struct ResultControls {
     /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
     pub filter: Option<AnyElement>,
+    /// 【P2-4】转置视图开关 +（激活时）上一行 / 下一行导航（单行转置，DBeaver 式）
+    pub transpose: Option<AnyElement>,
     /// 【T2a-7】批量提交/回滚对（有待提交变更才给；参考 DBeaver 的提交/回滚对）
     pub commit: Option<AnyElement>,
     /// 【B15】本地分析（下拉：计数 / 逐列分组计数；数据是桥接过来的行）
@@ -2106,8 +2247,9 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · ⤢ 转置 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
                         .children(controls.filter)
+                        .children(controls.transpose)
                         .children(controls.commit)
                         .children(controls.analysis)
                         .children(controls.export)
@@ -3124,5 +3266,72 @@ mod tests {
         assert_eq!(grid.hidden.len(), 1, "只剩 1 列时再藏被拒绝");
         grid.show_all_columns();
         assert!(grid.hidden.is_empty(), "显示全部列清空隐藏清单");
+    }
+
+    /// 【P2-4】单行转置：选中行竖排成「# / 字段 / 值」，行导航夹取，
+    /// 只读（不脏 / 不冲突 / 不进编辑），关闭后原网格原样回来
+    #[test]
+    fn transpose_shows_one_row_as_field_value_pairs() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string(), "blob".to_string()],
+            vec![
+                vec!["1".to_string(), "alice".to_string(), "aabb".to_string()],
+                vec!["2".to_string(), "bob".to_string(), "ccdd".to_string()],
+            ],
+        );
+        // 竖排第 2 行（数据行序 1）
+        grid.set_transposed(true, 1);
+        assert!(grid.is_transposed());
+        assert_eq!(grid.transpose_row(), 1);
+        // 三行 = 三个可见字段
+        assert_eq!(grid.transpose_columns(), vec![0, 1, 2]);
+        assert_eq!(grid.transpose_cell(0, 1), Some("id"));
+        assert_eq!(grid.transpose_cell(0, 2), Some("2"), "第 2 行的 id 值");
+        assert_eq!(grid.transpose_cell(1, 1), Some("name"));
+        assert_eq!(grid.transpose_cell(1, 2), Some("bob"));
+        assert_eq!(grid.transpose_cell(2, 2), Some("ccdd"));
+        assert_eq!(grid.row_text(0), "id\t2", "转置一行 = 字段名 + 值");
+        // 只读视图：不脏、不冲突、不进编辑（菜单短路在 context_menu 方法）
+        assert!(!grid.is_dirty(0, 2));
+        assert!(!grid.is_conflict(0, 2));
+        assert!(!grid.is_editing(0, 2));
+        assert!(!grid.begin_edit(0, 2));
+        // 行导航：越界夹回最后一行
+        grid.set_transpose_row(99);
+        assert_eq!(grid.transpose_row(), 1);
+        // 关闭：原网格原样（隐藏列也没被改动）
+        grid.set_transposed(false, 0);
+        assert!(!grid.is_transposed());
+        assert_eq!(grid.row_text(0), "1\talice\taabb", "普通视图回来");
+    }
+
+    /// 【P2-4】转置只投影可见列（隐藏列不竖排出来）
+    #[test]
+    fn transpose_skips_hidden_columns() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string(), "blob".to_string()],
+            vec![vec!["1".to_string(), "alice".to_string(), "aabb".to_string()]],
+        );
+        grid.hide_column(1);
+        grid.set_transposed(true, 0);
+        assert_eq!(grid.transpose_columns(), vec![0, 2], "隐藏的 name 不参与转置");
+        assert_eq!(grid.transpose_cell(1, 1), Some("blob"));
+        assert_eq!(grid.transpose_cell(1, 2), Some("aabb"));
+    }
+
+    /// 【P2-4】换数据自动退出转置（行与列都换了，旧转置行无意义）
+    #[test]
+    fn transpose_resets_when_data_changes() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec!["a".to_string(), "b".to_string()],
+            vec![vec!["1".to_string(), "2".to_string()]],
+        );
+        grid.set_transposed(true, 0);
+        assert!(grid.is_transposed());
+        grid.set_data(vec!["x".to_string()], vec![vec!["9".to_string()]]);
+        assert!(!grid.is_transposed(), "换结果自动退出转置");
     }
 }

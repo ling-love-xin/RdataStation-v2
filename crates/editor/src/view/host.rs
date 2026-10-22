@@ -211,6 +211,10 @@ pub struct EditorHostPanel {
     result_is_analysis: bool,
     /// 【B5】当前选中结果集有没有可复制的东西（没有网格就不摆复制按钮）
     result_can_copy: bool,
+    /// 【P2-4】转置视图是否打开（单行转置；数据行随 [`Self::transpose_row`] 竖排）
+    transposed: bool,
+    /// 【P2-4】转置当前展示的数据行（越界由 delegate 夹取）
+    transpose_row: usize,
     /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
     result_error_card: Option<ErrorCard>,
     /// 【2b】脚本执行的输出卡片（通用模式跑完才有；`None` = 没跑过 / 已切走）
@@ -712,6 +716,8 @@ impl EditorHostPanel {
             result_sql: None,
             result_is_analysis: false,
             result_can_copy: false,
+            transposed: false,
+            transpose_row: 0,
             result_error_card: None,
             script_card: None,
             error_site: None,
@@ -5289,6 +5295,10 @@ impl EditorHostPanel {
     }
 
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
+        // 【P2-4】换结果 = 换一批行列：转置视图自动退出（delegate 侧已由 `set_data` 清掉，
+        // 这里把面板开关同步复位——`toggled` 与网格状态保持同一份真值）
+        self.transposed = false;
+        self.transpose_row = 0;
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
         let current_channel = self.channel();        let (
             tabs,
@@ -5623,6 +5633,37 @@ impl EditorHostPanel {
             .unwrap_or(0);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.set_message(Some(format!("已复制 {rows} 行（TSV）")), cx);
+    }
+
+    /// 【P2-4】转置视图开关（单行转置，DBeaver 式）：开 = 把当前行竖排成
+    /// 「# / 字段 / 值」三列；关 = 原网格原样回来（排序 / 冻结 / 隐藏都没动过）。
+    /// 切换在事件路径里改 delegate + `refresh`（render 是纯读，不在这里做状态）
+    fn toggle_transpose(&mut self, cx: &mut Context<Self>) {
+        let open = !self.transposed;
+        self.transposed = open;
+        let row = self.transpose_row;
+        self.grid.update(cx, |state, cx| {
+            state.delegate_mut().set_transposed(open, row);
+            state.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；数据行数来自 delegate）
+    fn transpose_step(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let max = self
+            .grid
+            .read(cx)
+            .delegate()
+            .data_row_count()
+            .saturating_sub(1);
+        let next = (self.transpose_row as isize + delta).clamp(0, max as isize) as usize;
+        self.transpose_row = next;
+        self.grid.update(cx, |state, cx| {
+            state.delegate_mut().set_transpose_row(next);
+            state.refresh(cx);
+        });
+        cx.notify();
     }
 
     /// 【B14】`Ctrl+C`（网格里）：把选中的**一格**或**一整行**拷到剪贴板
@@ -7441,6 +7482,7 @@ impl Render for EditorHostPanel {
                         status,
                         controls: result_grid::ResultControls {
                             filter: Some(filter.into_any_element()),
+                            transpose: None,
                             commit: None,
                             analysis: None,
                             copy: Some(copy),
@@ -7515,6 +7557,57 @@ impl Render for EditorHostPanel {
                         })
                 })
                 .into_any_element();
+
+            // 【P2-4】转置视图（单行转置，DBeaver 式）：有网格才摆。开关本身是个
+            // 图标按钮；**激活时**左边跟上一行 / 下一行导航（看宽表不靠拖横向滚动条）
+            let transpose = self.result_can_copy.then(|| {
+                let toggle = {
+                    let entity = cx.entity();
+                    Button::new("editor-result-transpose")
+                        .ghost()
+                        .small()
+                        .toggled(self.transposed)
+                        .icon(IconName::Table2)
+                        .tooltip("转置视图")
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.toggle_transpose(cx));
+                        })
+                };
+                if !self.transposed {
+                    return toggle.into_any_element();
+                }
+                let prev = {
+                    let entity = cx.entity();
+                    Button::new("editor-result-transpose-prev")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronUp)
+                        .tooltip("上一行")
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.transpose_step(-1, cx));
+                        })
+                };
+                let next = {
+                    let entity = cx.entity();
+                    Button::new("editor-result-transpose-next")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronDown)
+                        .tooltip("下一行")
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.transpose_step(1, cx));
+                        })
+                };
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .debug_selector(|| "editor-result-transpose-group".to_string())
+                    .child(prev)
+                    .child(toggle)
+                    .child(next)
+                    .into_any_element()
+            });
 
             // 【T2a-7】批量提交/回滚对（参考 DBeaver）：有**待提交**变更才摆（改过的格才能
             // 提交/撤销）；提交中提交按钮置灰（回执回来前不重复提交）。
@@ -7782,6 +7875,7 @@ impl Render for EditorHostPanel {
                     status: self.result_status.clone(),
                     controls: result_grid::ResultControls {
                         filter: Some(filter),
+                        transpose,
                         commit,
                         analysis,
                         copy,
