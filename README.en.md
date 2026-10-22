@@ -14,10 +14,10 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.1-4B8BBE)](https://gpui-kit.com)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.8.0-4B8BBE)](https://gpui-kit.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Crates](https://img.shields.io/badge/workspace-16%20crates-6E4AFF)](#architecture)
+[![Crates](https://img.shields.io/badge/workspace-21%20crates-6E4AFF)](#architecture)
 [![Status](https://img.shields.io/badge/status-beta-blue)](#release--verification-progress)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -35,7 +35,7 @@
 ## Contents
 
 - [What this is](#what-this-is)
-- [Seven highlights](#seven-highlights)
+- [Ten highlights](#ten-highlights)
 - [UI preview (design prototypes)](#ui-preview-design-prototypes)
 - [One main line: from connection to conclusion](#one-main-line-from-connection-to-conclusion)
 - [Architecture](#architecture)
@@ -50,7 +50,7 @@
 
 ## What this is
 
-RdataStation v2 is a desktop database workbench rebuilt on **Rust + GPUI-kit**: a single application, 16 crates organized by business capability, dependencies pointing strictly downward with no cycles, and **no telemetry, no cloud sync, no accounts**.
+RdataStation v2 is a desktop database workbench rebuilt on **Rust + GPUI-kit**: a single application, 21 crates organized by business capability, dependencies pointing strictly downward with no cycles, and **no telemetry, no cloud sync, no accounts**.
 
 It does not try to be "yet another do-everything database client." It concentrates on three stages that are usually split apart:
 
@@ -70,13 +70,13 @@ Charts / dashboards / reports (left to the plugin ecosystem) · cross-source wri
 
 | Metric | Value |
 | --- | --- |
-| Workspace crates | **16** (15 business/foundation crates + the `app` assembly layer) |
-| Rust code | **221,971 lines** across 440 `.rs` files (excluding the `v1/` archive) |
+| Workspace crates | **21** (20 business/foundation crates + the `app` assembly layer) |
+| Rust code | **333,742 physical lines** (307,851 non-blank) across 591 `.rs` files (`crates/`, excluding `target/`, the `v1/` archive and `vendor/`; measured on this machine, 2026-10-22) |
 | Migration assets | **4** SQLite / DuckDB migration sets, with two separate version ledgers |
 | Built-in drivers | **6**, covering 4 engine families |
 | Documentation | 5 kinds of module docs (entry / prototype / interactive mockup / architecture / dev plan / user guide) |
 
-## Seven highlights
+## Ten highlights
 
 ### ① Dual engine · two-layer data
 
@@ -102,7 +102,7 @@ Three hard boundaries: generation ≠ writing (generation produces only in-memor
 
 ### ⑤ Insight: one more TOML file, one more rule
 
-Five tabs — column profile, table probe, multi-column, schema report, snapshot history — with **one target, one conclusion**, and the sampling basis always visible on screen (`LIMIT 500`).
+Six tabs — overview, column profile, table probe, multi-column, schema report, snapshot history — with **one target, one conclusion**, and the sampling basis always visible on screen (`LIMIT 500`).
 
 The rule engine has three scopes (16 built-ins → global → project) and treats **files as the single source of truth** for rule bodies: they go into git, they diff, and editing the directory hot-reloads them. Two safety gates: rule SQL passes a parse-time static gate, and project rules pass a trust gate. The quality score is a weighted four-dimension measure (completeness / uniqueness / type consistency / distribution, thresholds 85 / 70 / 50 / 30) — and an **empty table is never given a fake score**.
 
@@ -115,6 +115,33 @@ No telemetry, no cloud sync, no account system. Connection passwords are stored 
 The view layer's core pattern is the **host port** — a feature crate defines `trait XxxHost` and ships its own view, `workbench` only forwards, and `workbench_shell` holds the pure data both sides share. The four background-job modules are isomorphic (a process-level single worker thread, a result slot, and a periodic pump), and **`render` is a pure read path**.
 
 Automated contract tests enforce two rules: **no raw sizes** (dimensions come only from constants in `crates/workbench_shell/src/ui.rs`) and **no raw colors** (color comes only from theme tokens). The project's own documentation keeps a standing rule: "numbers serve the narrative; authority belongs to the module docs."
+
+### ⑧ One kernel, three document modes
+
+The same editor kernel serves three document modes, with three separate command-palette entries: **new query** (`Ctrl+N` = SQL) · **new note** (analysis) · **new file** (general). The mode only decides which services and result chrome are attached; the core text buffer and render pipeline stay identical.
+
+- **General (`.txt`)**: a highlighted notepad that **never talks to a database**; local scripts run on a standalone chain (environment picker + run button → result card), independent of connections.
+- **SQL (`.sql`)**: script + connection + execution + docked result panel; five execution entries (current statement / selection / all / batch / new result tab) across **three channels** (source database · local DuckDB acceleration · federation). Unavailable channels are greyed out with the reason written next to them.
+- **Analysis (`.rdsnote`, badge `NOTE`)**: a notebook-style sequence of cells — add / delete / move up-down / duplicate / run, SQL / text type badges, inline grid capped at 200 rows, empty-state guidance. **In progress**: cell body reuses the editor kernel; the full session and kernel execution are deferred to Phase 1c (see [roadmap](#roadmap-and-known-boundaries)).
+
+### ⑨ Read-only federation
+
+Multiple connected sources are attached to one DuckDB session for **read-only** cross-source queries — no data copy, no writes back to any source database.
+
+- **Two scanner tiers in one pool**: L1 official (MySQL / PostgreSQL / SQLite / DuckDB files / Parquet / CSV / httpfs); L2 community (Oracle and others, `INSTALL … FROM community`). Extensions are managed explicitly: DuckDB's default auto-install / auto-load is off, so nothing silently downloads over the network.
+- **Gate**: the federation tier appears only with at least two connected connections that have DuckDB local acceleration enabled.
+- **Primary-source semantics**: an unqualified table name resolves against the primary source only; cross-source references must be written `<alias>.<schema>.<table>` (L2 two-part `<alias>.<table>`); a name colliding across sources errors instead of guessing ownership.
+- **Credentials and boundary**: credentials live in a session-level secret, never persisted, and are scrubbed before leaving the engine; write statements are rejected at the ATTACH layer (no semantic analysis — refuse an extra statement rather than let a real write through).
+- **Gaps**: L3 bridge (pulling rows into temp tables for sources with no scanner) · SQL Server on real hardware · scan / pulled-row visibility · extension install action and progress display.
+
+### ⑩ Unified tags across three modules
+
+A standalone `rds-tag` crate provides the shared model and definition store: global / project scopes, a partial unique index on `(name, scope) WHERE deleted_at IS NULL`, soft-deleted tags can be rebuilt under the same name, and definitions are resolved in bulk by `tag_id` across databases. All three consumers are wired up:
+
+- **Navigation connections**: lightweight connection-level tags — inline chip (the color dot is a name hash mapped to themed semantic colors, never a raw hex) · tag editor (chip set + append input) · `tag:` search facet · facet tags sorted by reference count. Kept deliberately lightweight, no bulk tagging here.
+- **Analytics resources**: fuller treatment — list filtering by tag · detail tagging · bulk tagging.
+- **Scratchpad**: project-scope tags + the `scratchpad_tags` relation table, list filtering by tag; tags travel across scopes on archive (same name reuses the global definition to avoid same-name different-color).
+- **Management overlay**: opened from the navigation panel header "More (⋯) → Manage tags…" — bulk rename (relations follow by `tag_id` naturally) · clean up empty tags (soft delete) · cross-database reference-count aggregation.
 
 ## UI preview (design prototypes)
 
@@ -155,9 +182,9 @@ flowchart TD
 
 The workbench uses a **five-part layout**: 36 px title bar · 48 px activity bars · left and right docks (starting at 240 px and 280 px, scaled by font size) · status bar. Sidebars have three modes (shown / hidden / collapsed), and the **authoritative sync point is `render`**, flowing one-way from shared state into the dock.
 
-### The editor: one kernel, three capability tiers
+### The editor: one kernel, three document modes
 
-Text mode (a notepad that never talks to a database) ⊂ SQL mode (a script window) ⊂ analysis mode (the document becomes executable units). **The mode only decides which services and result chrome are attached**; SQL is always the core.
+General (`.txt` notepad, no database) · SQL (`.sql` script window) · analysis (`.rdsnote` executable units) share the same text buffer and render pipeline; **the mode only decides which services and result chrome are attached**, and the command palette opens three entries that create the three document types separately (see [highlight ⑧](#⑧-one-kernel-three-document-modes)).
 
 - **Execution**: current statement / selection / all / batch / new result tab — five entry points across **three execution channels** (source database · local DuckDB acceleration · federation). Unavailable channels are greyed out with the reason written next to them.
 - **Results**: at most 5 result sets (the oldest unselected one is evicted) · the first segment is 1,000 rows, scrolling to the bottom continues automatically, and an unknown total is shown as `N+` · local filter and sort · frozen columns · "rows from N" positioning.
@@ -165,7 +192,7 @@ Text mode (a notepad that never talks to a database) ⊂ SQL mode (a script wind
 
 ## Architecture
 
-### Three layers and 16 crates
+### Three layers and 21 crates
 
 ```mermaid
 flowchart TD
@@ -224,6 +251,7 @@ There is a **single gate** for metadata access, `database::MetadataService`, sit
 | `project` (M1) | Project lifecycle, `.RSmeta`, instance lock, registry | engine / shared / paths |
 | `connection` (M3) | Transport: protocol chain (SSH / SSL / proxy), URLs, DuckDB Secrets | shared |
 | `database` (M4) | Navigation domain model + `NavigatorService` + `MetadataService` + cache | engine / shared / workbench_shell |
+| `tag` | Product-level unified tagging (shared by M4 navigation connections / M6 analytics resources / M5 scratchpad): unified model + global / project two-scope definition tables + CRUD / soft delete / partial unique index + bulk cross-database resolution by id + reference-count aggregation; three-module relations and the management overlay are wired up | shared / engine / rusqlite |
 | `engine` (M2) | Dual engine, driver layer, connection management, multi-tier cache, migration, persistence, SQL services, logging | shared / paths |
 | `editor` | SQL editor kernel + execution orchestration + results / history | engine / shared |
 | `scratchpad` (M5) | Scratchpad: file semantics + trash + file watching | shared / gpui-kit / workbench_shell |
@@ -239,13 +267,13 @@ There is a **single gate** for metadata access, `database::MetadataService`, sit
 
 ```
 RdataStation-v2/
-├── Cargo.toml               # workspace: 16 crates + the single dependency entry point
+├── Cargo.toml               # workspace: 21 crates + the single dependency entry point
 ├── .cargo/config.toml       # command aliases / RUST_MIN_STACK / DUCKDB_LIB_DIR / RDS_HOME
-├── .agents/skills/          # 5 in-repo agent skills: architecture / GPUI-kit / layout / theme / UI spec
+├── .agents/skills/          # 6 in-repo agent skills: architecture / GPUI-kit / layout / theme / UI spec / plugin authoring
 ├── assets/
 │   ├── themes/              # theme definitions and product semantic tokens
 │   └── icons/  public/      # app icons and brand assets
-├── crates/                  # the 16 crates (see table above)
+├── crates/                  # the 21 crates (see table above)
 ├── docs/
 │   ├── architecture/        # module doc sets: entry / prototype / mockup / architecture / plan / guide
 │   ├── migration/           # v1 → v2 mapping and retired commands
@@ -262,8 +290,12 @@ RdataStation-v2/
 | Milestone | Status | Notes |
 | --- | --- | --- |
 | **beta 0.1.0** (`RDS-beta-0.1.0`) | ✅ shipped | Windows x86_64 bundle + sha256 attached to the Release; cloud pipeline fixed (beta matrix narrowed to Windows) |
-| **gpui-kit 0.7.0 upgrade** | ✅ verified | Branch `verify/gpui-kit-0.7`: manual `render_dialog_layer` removed (0.7 auto-mounts the dialog layer via `WindowState`), workspace 0 error / 0 warning, ~1328 tests passing on affected crates; awaiting merge to main |
-| **Connection increments** (#A traceability / #B environment policy / #C manager dialogs) | 🟡 prototype finalized, review pending | Authoritative design in `docs/architecture/connection/`; interactive prototype v2.3 and increment plan in `docs/tmp/`, review table Y/N/edit to be filled |
+| **beta 0.2.4** (`RDS-beta-0.2.4`) | 🚀 pending release | 2026-10-22, workspace version `0.2.4` (patch); tenth full-workspace run **108 Running targets + 21 Doc-tests segments / 3161 passed / 48 ignored / 0 failed** (project's own suite 107 targets / 3160 passed); features: SQL named parameters, insight memory-management chain, global analytics-resource instance distribution, left dock panel assembly fix; this round's fixes: two real application-log bugs (mmap_size PRAGMA misuse of `execute`, local-file source wrongly registering secrets), vendor window-close/blur timing noise no longer written to the log, navigation probe connect failure downgraded from error to warn; app icons replaced with the revised master (taskbar/window `icon.ico` + macOS `icon.icns` + title bar switches by theme); pending main push and tag, then the cloud CI builds and attaches the bundle |
+| **beta 0.2.3** (`RDS-beta-0.2.3`) | ✅ shipped | 2026-10-20, workspace version `0.2.3` (patch); eighth full-workspace run **107 targets / 3074 passed / 0 failed** (plugin included in the full green run for the first time); GPUI-kit 0.7.1 → 0.8.0 upgrade, right dock panel assembly fix (`Shared::open_right_panel` dock sync), insight contract registration fix; Windows bundle + sha256 attached by cloud CI |
+| **beta 0.2.2** (`RDS-beta-0.2.2`) | 🟡 tag pushed · Release pending | 2026-10-16, workspace version `0.2.2` (patch); tag `01d3df75` pushed to remote; the Release page and cloud bundle were not backfilled (based on 0.7.1) |
+| **beta 0.2.0 / 0.2.1** (`RDS-beta-0.2.0` / `RDS-beta-0.2.1`) | 🟡 partially shipped | Version line on GPUI-kit 0.7.1; `0.2.0` has a prerelease Release page (`52438336`); `0.2.1` (`8e49dde8`) has only the tag, no Release page |
+| **gpui-kit 0.7.0 → 0.7.1 upgrade** | ✅ merged to main | Branch `verify/gpui-kit-0.7` → main (2026-10-01, `RDS-beta-0.2.0` is based on it); manual `render_dialog_layer` mount removed (0.7 mounts it via Root automatically), workspace 0 error / 0 warning; the 4 `a11y_roles` integration targets all pass under 0.7.1 |
+| **Connection increments** (#A traceability / #B environment policy / #C manager dialogs) | 🟡 prototype finalized, review pending | Authoritative design in `docs/architecture/connection/`; interactive prototype v2.3 and increment plan in `docs/tmp/`, review table Y/N/edit to be filled; the connection dialog itself is finished (decisions #104–#109: lists / collapse / switches fully componentized, 2026-09-20) |
 | **Data-source ID / credentials / network / environment / tags & groups** | 🟡 in design | dual-track three-state ID, AES-256-GCM field-level encryption, recursive network encryption, environment policy 5+1 (masking explicitly not planned) |
 
 ## Modules & progress
@@ -275,15 +307,15 @@ Status vocabulary: **✅ main line live** · **🟡 partial** (with named gaps) 
 | **M1 project** | One instance, one project; registry and body kept apart; OS byte lock | ✅ | Project picker (facet search / pin / recent) · unsaved-draft interception and read-only escape hatch · rename without changing the on-disk directory name · bundled sample project · **window-exit draft fallback** (`✕` / `Alt+F4` stashes every open document's session) | Moving a project directory · promote / snapshot |
 | **M2 engine** | Dual-engine foundation + unified data access layer | ✅ | 6 drivers behind two trait faces · dual migration ledgers · the single `sqlglot` entry point · hand-written statement splitter that handles half-typed SQL | Cache and persistence layers still hold zero-caller items (list in the wiring matrix §7) · incremental sync not wired |
 | **M3 connection** | Getting "how to connect to a data source" right, and honest | ✅ | Five-tab dialog · **test connection performs a real connection** · protocol chain and tunnel registry · DuckDB Secret acceleration channel · zero UI-fabricated data | SSH host keys allowed by default · Secrets lack a gated cleanup |
-| **M4 database** | Making "which sources exist and what's inside" a readable tree | ✅ | Ownership domain `P/G/GP` column · groups = structure, tags = retrieval · dual-channel badge · three-tier cache + index paging · cross-connection search (name tier + `#` content tier) · **locating a search hit in the tree** (with page jumping for large schemas) · warm-up and adjacency prefetch | Virtual list · PostgreSQL cross-database browsing · the navigation panel itself exposes no content tier |
-| **M5 scratchpad** | A scratch area private to a single project | ✅ | Import vs. reference · project-level trash with an undo bar · content search and replace-all · file watching · conflict strip plus line-level diff (judged by content, not mtime) | Phase D (archive / checkout / versions) · OS drag-in import · jumping to a hit's line |
-| **M6 analytics_resource** | A read-only, versioned, provenance-carrying archive | ✅ | The fingerprint decides versioning (unchanged content, no new version) · three-part provenance · index repair for three classes of orphans · triple read-only guard · project-level trash | Phase 4 analysis-table archive · Phase 5 reference archive · content preview |
-| **M7 mock** | Turning table structure into usable test data | ✅ | 143 generators / 15 categories · distribution families and time series · column-level work calendar · 6 scenario templates with column dependencies · cross-database direct write · four exits | Exits are not cancellable · large exports are not streamed · concurrent generation |
-| **M8 insight** | Turning data into conclusions | ✅ | Five-tab panel · four-dimension quality score · 16 built-in rules with three scopes and hot reload · snapshot version comparison · structural insight via driver metadata (works on SQLite) | Analysis-table archive entry · parse-level policy gate · table / schema snapshots |
-| **M9 plugin** | WASM / Sidecar host with four extension points | ⛔ | Design docs and package structure are in place | **No crate depends on it**; two zero-byte modules; awaiting beta 3 planning |
-| **editor** | One kernel, three capability tiers | ✅ | Three execution channels · segmented fetch · real transactions and cancellation · five export formats · formatting / transpiling to 10 dialects / execution plans · completion and snippets · sessions surviving restart | Phase 1c analysis units (deferred) · value preview / editing · lineage persistence |
-| **federation** | Multiple sources attached to one DuckDB session, read-only | 🟡 | Source list overlay · primary-source semantics · tiered strategy L1 / L2 · explicit extension management (auto-download disabled) · credential scrubbing at the exit | L3 bridge · SQL Server on real hardware · scan-volume visibility |
-| **quick_open** | Metadata search and command palette | ✅ | Three prefixes (`>` commands / `#` full-text / `@`) · the name tier runs on `metadata_index` · the content tier runs on `metadata_fts` (trigram) · 100k-object latency **158 ms → 1.5 ms** · **`⌥↵` locates a hit in the tree** | View / routine definition text is not in the FTS corpus · `@` current-connection scoping (Phase 2) · recent items / empty-state suggestions |
+| **M4 database** | Making "which sources exist and what's inside" a readable tree | ✅ | Ownership domain `P/G/GP` column · groups = structure, tags = retrieval · connection tags (inline chip color dot + tag editor + `tag:` search facet + management overlay: bulk rename / clean up empty tags / cross-database reference count) · dual-channel badge · three-tier cache + index paging · cross-connection search (name tier + `#` content tier) · **locating a search hit in the tree** (with page jumping for large schemas) · warm-up and adjacency prefetch | Virtual list · PostgreSQL cross-database browsing · the navigation panel itself exposes no content tier |
+| **M5 scratchpad** | A scratch area private to a single project | ✅ | Import vs. reference · project-level trash with an undo bar · content search and replace-all · file watching · conflict strip plus line-level diff (judged by content, not mtime) · project tags (list filter + tagging dialog) · tags travel across scopes on archive (same name reuses the global definition) | Phase D (archive / checkout / versions) · OS drag-in import · jumping to a hit's line |
+| **M6 analytics_resource** | A read-only, versioned, provenance-carrying archive | ✅ | The fingerprint decides versioning (unchanged content, no new version) · three-part provenance · index repair for three classes of orphans · triple read-only guard · project-level trash · global instance scope (project / global) · global instance distribution · tag system (list filter · detail tagging · bulk tagging) | Phase 4 analysis-table archive · Phase 5 reference archive · content preview |
+| **M7 mock** | Turning table structure into usable test data | ✅ | 143 generators / 15 categories · distribution families and time series · column-level work calendar · 6 scenario templates with column dependencies · persist to the project analysis DB (in-memory temp table written directly via ATTACH · can append to an existing analysis-DB table · **never writes back to a source business DB**) · four exits | Exits are not cancellable · large exports are not streamed · concurrent generation |
+| **M8 insight** | Turning data into conclusions | ✅ | Six-tab panel (overview / column / table / multi-column / schema / history) · four-dimension quality score · 16 built-in rules with three scopes and hot reload · snapshot version comparison · structural insight via driver metadata (works on SQLite) · configurable and persisted DuckDB memory limit · full-scan confirmation dialog | Analysis-table archive entry · parse-level policy gate · table / schema snapshots |
+| **M9 plugin** | WASM / Sidecar host with four extension points | ⛔ | Design docs and package structure are in place | **No crate depends on it**; wasmtime crashes on Windows + rustc 1.98 (compilation constrained, excluded from `cargo test-all`); awaiting beta 3 planning |
+| **editor** | One kernel, three document modes (general / SQL / analysis) | 🟡 | **General** (`.txt` notepad + standalone local-script chain) · **SQL** (`.sql` script + connection + docked results: three execution channels · segmented fetch · real transactions and cancellation · five export formats · formatting / transpiling to 10 dialects / execution plans · completion and snippets · sessions surviving restart · SQL named parameters `:name`) · **analysis** (`.rdsnote` cell sequence + inline output skeleton) | Phase 1c analysis units: cell body reuses the editor kernel · full session and kernel execution (deferred) · value preview / editing · lineage persistence |
+| **federation** | Multiple sources attached to one DuckDB session, read-only cross-source query | 🟡 | L1 official scanners (MySQL / PostgreSQL / SQLite / DuckDB files / Parquet / CSV / httpfs) + L2 community scanners (Oracle) in one pool · federation tier appears only with ≥2 connected sources that have local acceleration on · primary-source semantics (unqualified names resolve in the primary source; cross-source references are `<alias>.<schema>.<table>`) · explicit extension management (auto-download off) · write statements rejected at the ATTACH layer · session-level credentials never persisted and scrubbed at the exit | L3 bridge (pull rows into temp tables for scanner-less sources) · SQL Server on real hardware · scan / pulled-row visibility · extension install action and progress display |
+| **quick_open** | Metadata search and command palette | ✅ | Three tiers (`>` commands / `#` metadata full-text trigram / bare name tier on `metadata_index`) · content tier on `metadata_fts` trigram (≥3 chars) · 100k-object latency **158 ms → 1.5 ms** · **`⌥↵` locates a hit in the tree** | View / routine definition text is not in the FTS corpus · recent items / empty-state suggestions |
 | **settings** | Preference registry + atomic persistence + settings page | ✅ | Three-way scope split (app / project / session) · a registry with five admission rules · atomic writes | The `effect` field has no consumer · no cross-process write lock |
 
 ### The full picture of what isn't wired
@@ -340,7 +372,7 @@ Two things are **deliberately not copied**: keeping the cache in memory only (th
 | Area | Choice | Purpose |
 | --- | --- | --- |
 | Language | Rust · edition 2024 | The whole stack — including the UI; there is no JS runtime |
-| UI | **GPUI-kit 0.7.1** | View layer; version-locked to `gpui-base` / `gpui-component` and upgraded as one set |
+| UI | **GPUI-kit 0.8.0** | View layer; version-locked to `gpui-base` / `gpui-component` and upgraded as one set |
 | Analysis engine | **DuckDB 1.5.5** (dynamically linked; crate `1.10505.0`) | Secondary analysis / federation / profiling / mock data / snapshots |
 | Metadata store | **rusqlite 0.40** (bundled) | Transactional metadata + the L2 tier of the metadata cache |
 | Drivers | sqlx 0.9 (MySQL / PostgreSQL) · `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 drivers; MySQL and PostgreSQL each have two implementations (sqlx and official client) |
@@ -422,6 +454,15 @@ pushed: see §9 of the same document.
 
 Tests are layered in four tiers: **pure unit tests** → **GPUI headless window tests** → **integration / contract tests** → **real-machine probes** (requiring actual databases, `#[ignore]` by default, following the convention that "a default `cargo test` must not require external services").
 
+> **Latest full baseline (2026-10-22, tenth run; see [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.9)**:
+>
+> - `cargo test --workspace -j 2 --no-fail-fast` = **108 Running targets + 21 Doc-tests segments · 3161 passed · 48 ignored · 0 failed** (includes the full `rds-plugin`; the 48 ignored = lib 28: 24 engine real-machine probes · 1 editor · 3 kernel, plus 20 Doc-tests: 16 engine · 1 each of connection / insight / plugin / workbench_shell)
+> - Excluding the local-only diagnostic script `zz_fixture_probe`, **the project's own suite is 107 Running targets / 3160 passed**
+> - Compile gates: `cargo check --workspace --all-targets` 0 error / 3 pre-existing warning heads (plugin `supervisor.rs` unnecessary mut ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var); `clippy` 0 error (lint warnings are pre-existing style debt, not a hard CI gate); this round introduced no new warnings
+> - 0.2.4 features: ① SQL named parameters (`:name` scan-and-substitute + bind dialog + cancel/abort, with pure-function and window state-machine tests); ② insight memory-management chain (configurable DuckDB memory limit + persisted preferences + full-analysis confirmation dialog); ③ global-scope instance distribution for analytics resources (`RowScope` / `InstanceFilter` + distribution job + fixture adaptation); ④ left dock command-panel assembly fix (`apply_left_mode` symmetric active-tab handle; `OpenLeftPanel` registers before syncing the host). This round's logging and asset fixes: ⑤ `metadata_cache` `PRAGMA mmap_size` misuse of `execute` switched to `query_row` with fault tolerance (498 historical WARN eliminated); ⑥ removed the branch that wrongly registered SQLite/DuckDB secrets for local-file sources (64 historical WARN eliminated); ⑦ GPUI vendor window-close / blur timing noise (`window not found` / invalid window handle / cursor-position access denied, etc.) is filtered before write-db, only when `target=="log"` matches, business messages are not swallowed; ⑧ navigation probe connect failure downgraded from `error!` to `warn!` (the failure result is already backfilled to the panel, an environmental state); ⑨ app icons replaced with the revised master, title bar switches the 32px icon by light/dark theme
+
+The table below is the **2026-09-19 per-package snapshot** (same `cargo test-all`; per-target ledger in the history section of `module-status.md`; the two rounds differ in scope — plugin was excluded after 10-16):
+
 | Suite | Measured this round (2026-09-19) |
 | --- | --- |
 | **Whole workspace** | **85 targets · 2005 passed · 51 ignored · 0 failed** (includes 1 local-only diagnostic script, see below) |
@@ -438,7 +479,7 @@ Tests are layered in four tiers: **pure unit tests** → **GPUI headless window 
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract` | **7** (no raw sizes / no raw colors / panel registry / shared-field allowlist) |
 
-> The table above comes from **one single `cargo test-all` run** (Windows · stable · `-j 2`). **The per-target ledger and the reproduction commands are in [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**; the workspace currently compiles with zero warnings (`cargo check --workspace --all-targets`).
+> The table above comes from **one single `cargo test-all` run** (Windows · stable · `-j 2`, 2026-09-19 snapshot). **The per-target ledger and the reproduction commands are in [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**; that round compiled with zero warnings — see the latest baseline section in that ledger for the current warning state.
 >
 > **Scope**: 1 of those 85 targets is `rds-workbench --test zz_fixture_probe` — a **local-only diagnostic script** (self-checking four real connections) that has been removed from version control and added to the ignore rules (the local file is kept). Excluding it, **the project's own suite is 84 targets / 2004 passed**. It passes this round; in the previous round it failed because the target DuckDB file was locked by another program (`File is already open in … dbeaver.exe`), which is **unrelated to the code**. In the same run, that script's MySQL / PostgreSQL / SQLite paths — six checks in total — **all passed**.
 
@@ -486,7 +527,7 @@ This project **labels what it has not done yet**, ordered here by how close each
 
 **Engineering to-dos**
 
-- **No CI and no formatting gate yet** (there is no `.github/`, and the workspace has not been run through `cargo fmt`).
+- **CI is in place** (`.github/workflows/`): `ci.yml` runs the Linux + Windows compile gate (`clippy-all`) on PRs and `main`; `release.yml` builds in the cloud and auto-creates a Release with assets when an `RDS-beta-*` / `v*` tag is pushed (Windows-only during beta). **Still missing**: the workspace has not been run through `cargo fmt` (the formatting gate is not wired up).
 - Per-module test baselines used to be snapshots taken on different dates; they are now consolidated into one measured ledger at `docs/architecture/module-status.md` — please update it when you change the implementation.
 - **License**: **MIT** (see [`LICENSE`](LICENSE)).
 

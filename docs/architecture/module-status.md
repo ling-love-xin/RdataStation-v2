@@ -68,13 +68,13 @@
 
 | 项       | 实测值                                                                                                                                        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 工作区测试目标 | **109**（含 `rds-plugin` 全量；含 Doc-tests 合并行；108 个 Running 目标 + 1 行合并 Doc-tests）                                                                                              |
-| 通过      | **3160**                                                                                                                                   |
+| 工作区测试目标 | **108** 个 Running 目标 + **21** 个 crate 的 Doc-tests 段（含 `rds-plugin` 全量；上一轮 cargo 将 Doc-tests 合并为 1 行输出，本轮逐 crate 展开为 21 段，计数口径不变）                          |
+| 通过      | **3161**                                                                                                                                   |
 | 失败      | **0**（本轮全绿，含 plugin）                                                                                                                          |
 | 忽略      | **48**（lib 28：engine 真机探针 24 · editor 1 · kernel 3；Doc-tests 20：engine 16 · connection/insight/plugin/workbench_shell 各 1）                          |
-| 编译告警    | `cargo check --workspace --all-targets` **3 行 warning 头**（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.8） |
-| 代码规模    | 221,971 行 Rust / 440 个 `.rs` 文件（`crates/`，不含 `v1/`；**2026-09-19 快照，本轮未重测**）                                                                |
-| 口径      | 上表是**原始命令的输出**；本次为 2026-10-22 复跑（§6.8），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 108 个目标 / 3159 项** |
+| 编译告警    | `cargo check --workspace --all-targets` **3 行既有 warning 头**（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.8）；`cargo clippy --workspace --all-targets` **0 error**，205 条存量风格 lint（CI 不设硬门禁）；本轮改动未引入新 warning |
+| 代码规模    | **333,742 物理行**（非空 307,851）/ **591** 个 `.rs` 文件（`crates/`，不含 `target/`、`v1/` 历史区与 `vendor/`；2026-10-22 第十次复跑时重测，脚本 `.rds/tmp/count_code.py`，口径 = `crates/**/*.rs` 物理行含空行与注释） |
+| 口径      | 上表是**原始命令的输出**；本次为 2026-10-22 第十次复跑（§6.9），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 107 个 Running 目标 / 3160 项通过** |
 
 
 
@@ -799,9 +799,64 @@ HEAD `f8f2bf35`（2026-10-15 19:04「feat (property) 属性面板优化」）为
 
 **用例增量说明**：本轮工作区新增 16 个用例（editor 窗口 2 + insight 3 + engine 11：DuckDB 内存 3 + 参数绑定 8，均见上文明细）；通过数较 §6.7 的 3074 增加 86，其余增量来自 0.2.3 tag 之后已提交的 32 个 commit（结果网格单行转置 / 隐藏列 / BLOB 摘要 / 列统计 / 历史面板接线 / 洞察联动 T18–T21 / 双实例服务层 / 用户自定驱动 jar / 分析模式串行队列 / gpui-kit 0.8.0 升级等，commit 清单见 Release 说明）。本轮全量 0 失败，未复现 §6.7 的 `rds-mock` 时序类 flake。
 
+#### 6.9 全仓第十次全量复跑（2026-10-22）：108 Running + 21 Doc-tests 段 / 3161 通过（0 失败，含 plugin 全量）
+
+**基线已更新为本次**（§0 即其数字）。命令：`cargo test --workspace -j 2 --no-fail-fast`（含 `rds-plugin`）。测试日志 `.rds/tmp/test-all-2026-10-22.log`（全绿，exit 0）；check 日志 `.rds/tmp/check-all-2026-10-22.log`（0 error，3 行既有 warning 头，本轮未新增）；clippy 日志 `.rds/tmp/clippy-all-2026-10-22.log`（exit 0，0 error，205 条存量风格 lint，CI 不设硬门禁）。
+
+**本轮工作区改动分两条线（随 0.2.4 一并提交）**：
+
+**A. 应用日志 ERROR/WARN 处置（2 处真 bug 修复 + 1 类 vendor 噪音写库过滤 + 1 处级别降级）**：
+
+1. **`metadata_cache.rs` mmap_size PRAGMA 误用 execute（真 bug，历史累计 498 条 WARN）**：`PRAGMA mmap_size=268435456` 返回一行结果集，rusqlite `execute` 遇结果集即报 `Execute returned results - did you mean to call query?`。改为 `query_row("PRAGMA mmap_size=268435456", [], |_| Ok(()))`，失败仅 `tracing::warn!` 容错，口径对齐同仓 `metadata_cache_pool.rs`；不再构造被 `let _` 丢弃的 `CoreError`。同文件其余 `cache_size` / `foreign_keys` / `synchronous` PRAGMA 无结果集、历史未报错，最小改动未动。
+2. **`secret_integration.rs` 本地文件源错误注册 Secret（真 bug，历史累计 64 条 WARN：`Secret type 'sqlite' not found`）**：`db_type_to_secret_type` 错误地给 `sqlite` / `duckdb` 映射了 secret type；本地文件源无凭据概念，DuckDB 也不存在这两个 secret type。已删除这两个分支落到 `_ => None`，本地文件源在类型层即被 `ensure_secret_registered_at` 的 `secret_type_of().is_none()` 提前 return；scanner 门控 `has_federable_extension`（本地加速 ATTACH 文件的另一道闸）保持不变。`test_db_type_mapping` 补 `sqlite / duckdb → None` 断言。
+3. **GPUI vendor 窗口关闭/失焦时序 ERROR（噪音，历史 38 条，target=`log`）**：`window not found`、`无效的窗口句柄。 (0x80070578)`、`无效的窗口句柄 (0x80040102)`、`unable to get cursor position: 拒绝访问。 (0x80070005)`、`操作成功完成。 (0x00000000)`，均来自 gpui-pre-windows vendor 的 window/events/platform/dispatcher，是关闭瞬间向已销毁窗口发事件，非产品缺陷。`DatabaseLogLayer::on_event` 写库前加纯函数 `is_dismissible_vendor_noise(target, message)`——**仅当 `target == "log"`** 且消息等于 `window not found` 或包含上述四类文案才跳过写库；stderr 与文件层是独立 Layer 不受影响、排障仍可见；业务模块同名消息不被吞。新增单测 `vendor_window_noise_is_filtered_only_for_log_target`（5 类噪音 log target 命中、业务 target 同名不吞、非噪音放行、业务 target 噪音文案放行）。
+4. **`nav_runtime.rs` 导航探针建连失败级别降级（环境/数据性状态，历史 9 条 ERROR）**：离线 / 内网不可达 / 网络档案缺失时探针建连失败，失败结果已经 `submit_connect_outcome(false)` 回填导航面板，不属进程缺陷，`tracing::error!` 降为 `tracing::warn!`。同文件「桥接运行时失败」（L113）与「load_entry_with 失败」（L83）属进程运行时缺陷 / 元数据前置读取失败且错误已向上冒泡，保留 `error!`。
+
+**B. 应用图标替换（新版修复母版）**：
+
+- 母版 `assets/icons/light/app-icon-coral-clean.png`（2048×2048 RGBA，橙红渐变圆角方块 + 白色 Σ 数据库，圆角外透明）。重新生成 `assets/icons/icon.ico`（7 帧 PNG：16 / 24 / 32 / 48 / 64 / 128 / 256，32bpp、planes=1，手写 ICO 容器，目录项自洽与偏移链校验通过）与 `assets/icons/icon.icns`（8 块 PNG：ic07 / ic08 / ic09 / ic10 / ic11 / ic12 / ic13 / ic14，回读 1024×1024 RGBA；旧版 il32 / l8mk / is32 / s8mk BMP+mask 块按 macOS 11+ 口径不再生成）。旧版备份于 `.rds/tmp/backup-2026-10-22/`（过程产物，不入库）。
+- 标题栏图标不再写死 light：`crates/workbench/src/view.rs` 的 `render_title_bar` 按 `theme.is_dark()` 选 `dark/32x32.png` 或 `light/32x32.png`；`ActiveTheme::theme()` / `Theme::is_dark()` 签名经 vendor 0.8.0 源码核实。exe 任务栏 / 窗口类图标仍由 `crates/app/build.rs` 经 winresource 把 `icon.ico` 嵌入资源 ID=1；macOS 包由 `tools/package-release.sh` 拷贝 `icon.icns`。
+- 本轮未动：数据源品牌标 `icons/db/<type_id>.svg`、插件清单 `icon = "icon.png"`、README 文档 logo `assets/public/rds-icon-{light,dark}.png`（已是新版）。
+
+**C. 代码规模重测**：脚本 `.rds/tmp/count_code.py`（`crates/**/*.rs`，物理行含空行与注释，不含 `target/`、`v1/`、`vendor/`）实测 **591 个 `.rs` 文件 / 333,742 物理行 / 307,851 非空行**；§0 旧值（221,971 行 / 440 文件，2026-09-19 快照）已替换为本轮口径。
+
+**数字口径（日志逐条 `Running` / `Doc-tests` ↔ `test result:` 配对复核）**：**108 个 Running 目标 + 21 个 crate 的 Doc-tests 段**；**3161 passed · 0 failed · 48 ignored**。较 §6.8 的 3160 增加 1 = engine 新增 `vendor_window_noise_is_filtered_only_for_log_target` 1 项；connection-dialog `test_db_type_mapping` 在既有测试函数内补 2 条断言，不增用例计数。忽略 48 构成与 §6.8 完全一致：lib 28（engine 真机探针 24 · editor 1 · kernel 3）+ Doc-tests 20（engine 16 · connection / insight / plugin / workbench_shell 各 1）。项目自身套件（去掉本机诊断 `zz_fixture_probe` 1 项）= **107 Running 目标 / 3160 项通过**。
+
+**真机复核记录（2026-10-22 21:55:47 重启 rds-app debug 构建，PID 18812）**：
+
+- **启动阶段增量日志**：以重启前 `MAX(timestamp)=2026-10-22T10:04:14.672Z`（存量 5743 条：INFO 5133 / WARN 562 / ERROR 48）为基线，启动后增量 **64 条 INFO、0 WARN、0 ERROR**；专项复现核对七类在增量内均为 0：`mmap_size` PRAGMA、`Secret type 'sqlite'`、`window not found`、`无效的窗口句柄`、`unable to get cursor position`、`操作成功完成`、探针「引用的网络配置无法解析」。增量 target 覆盖 `rds_engine::persistence::project_db`（项目 SQLite 表迁移完成）、`rds_connection_dialog::services::connection_service`、`rds_workbench::services::nav_runtime`（导航探针运行时）——缓存库打开与连接服务启动路径已走到，排除「无告警 = 路径未走到」的假阴性。
+- **图标嵌入硬证据**：ctypes `FindResourceW` 回读 `target/debug/rds-app.exe` 资源段，`RT_GROUP_ICON(14)` name=1、`RT_ICON(3)` name=1..7，七帧 16 / 24 / 32 / 48 / 64 / 128 / 256、32bpp，字节数 757 / 1440 / 2267 / 4333 / 6900 / 20905 / 69113，与新 `icon.ico` 逐帧一致；`.NET ExtractAssociatedIcon` 回读 32px 为新橙红底白色 Σ 图标。标题栏深色主题 `dark/32x32.png`（深灰底珊瑚橙标）渲染肉眼验收通过。
+- **仍待收尾**：① 标题栏**浅色**主题 32px 图标切换肉眼验收（设置页切浅色后核对 `light/32x32.png` 橙底白标）；② 一轮手动功能操作后**正常关闭应用**，再按增量基线复核窗口关闭 / 失焦时序噪音不再写库（纯函数过滤已有单测 `vendor_window_noise_is_filtered_only_for_log_target` 覆盖）；③ 探针建连失败降级本次启动处于在线 / 未复现失败场景，代码分级保留「桥接运行时失败 / load_entry_with 失败 = ERROR，探针建连失败 = WARN」。
+
+**真机交互链路复核（2026-10-22 晚，命令面板驱动，15 连接全离线）**：
+
+- **命令面板呼出与分档**：先点中央编辑器区交还焦点再 `Ctrl+P`（焦点在编辑器内直按可能不弹）。默认名称档分组「文件（草稿箱）8 条 + 连接 8 条」共 24 条，右侧分类标签 notes / data / duckdb / sqlite，底部操作提示「↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭」；输入 `>` 进命令档再按关键词过滤，命令项右侧渲染快捷键槽位（`打开设置` = `Ctrl+,`，0.7.1+ 行为，已实测可见）。
+- **左 dock 三档命令链路真机验收通过**（§6.8 第 5 条 `apply_left_mode` 对称补丁真机有效）：`>资产` → 资产库，1 条已归档「数据修复 220 B · 8 天前」，状态行「1 项 · 已归档 1」，工具条「搜索存档 / 全部 / 筛选 / 名称↑」；`>草稿` → 草稿箱，草稿 10 条（data / mock / notes / sql / 测试 分组 + 1.py / 1.sql / ceshi.sql / config.yaml / README.md 带字节大小），引用 0 · 回收站 0；`>导航` → 数据库导航，三档互斥切换、tab 句柄登记正确。
+- **右 dock 三档命令链路真机验收通过**：`>洞察` → 六 Tab（摘要 / 列 / 表 / 多列 / 结构 / 历史），空态引导「在结果列表头或导航树上右键，选择洞察」，状态「已洞察表 0 / 30」；`>Mock` → 1 张草稿 `mock_data` 1,000 行 · 未生成，状态五态（未生成 / 生成中 / 已生成 / 已落库 / 引用的表没落库），四出口（持久化到项目分析库 / 追加到既有表 / 保存到草稿箱 / 另存为），底部「生成历史 (6) · 用户模板 (0)」，面板固定文案「数据只写入项目分析库（项目）/.RSmeta/analytics.duckdb 与文件，不回传源库（M7）」；`>历史` → 搜索框 + 清空 + 胶囊（全部 / 成功 / 失败 · 库:全部），存量记录含语句 · 时间 · 耗时 · 返回行 · 引擎（SQLITE / POSTGRES / MYSQL），失败条红色、行尾删除。
+- **编辑器三模式真机验收**：**SQL**（`Ctrl+N`）→ 「SQL」徽标 + 执行位置「源库 · 未绑定连接」+ ▶ 执行按钮；**Analysis**（`>新建笔记`）→ 「分析」徽标 + 「跟随当前连接」+ 状态栏 `NOTE` 徽标，中央「分析笔记」说明 + `+ SQL 单元` / `+ 文本单元` 两按钮；**General**（`>新建文件`）→ 「通用」徽标 + 「选择环境 ▾ · 运行」+ 状态栏「通用」徽标，不绑连接、无 SQL 执行工具栏。已知小瑕疵：General 空态复用 SQL 欢迎文案「开始编写 SQL」，模式徽标区分不受影响，留待后续优化空态文案。
+- **设置页真机验收**：`>设置`（`Ctrl+,`）模态对话框，左侧 9 个分组（外观 / 数据源导航 / 资产库 / 连接默认值 / 项目 / 日志 / 启动 / 草稿箱 / 洞察），右侧外观：主题模式（浅色 / 深色 / 跟随系统，当前深色选中）· 界面字号（13 / 14 / 15 / 16 默认 / 17）· 界面语言（中文 / English）· 标签栏最大宽度（120 / 160 / 200 默认 / 240 / 320 px）· 标签栏样式（标签页 / 描边 / 胶囊 / 分段 / 下划线），底部「修改即时生效并持久化到 settings.json」。
+
+**本轮复核中纠正的两处 README 口径（代码实证，非观感）**：
+
+1. **洞察实为六 Tab（旧注「五 Tab」过期）**：`crates/insight/src/model.rs` `PanelTab::ALL = [Overview, Column, Table, MultiColumn, Schema, History]`，label = 摘要 / 列 / 表 / 多列 / 结构 / 历史；`crates/insight/src/insight_view.rs:8` 文件头注释「列 │ 表 │ 多列 │ 结构 │ 历史」五 Tab 为 Overview 加入前的过期注释（仅注释，不影响行为）。README 亮点⑤、M8 进度行、洞察截图说明已由「五 Tab」改为「六 Tab（摘要 / 列 / 表 / 多列 / 结构 / 历史）」。
+2. **M7「跨库直写」语义澄清（消除与亮点④「不写源库」的表面矛盾）**：`MockEngine::write_temp_table_to_database(db_path, …)`（`crates/mock/src/engine.rs:506`）是内存 DuckDB 会话经 `ATTACH` 直写到**项目分析库** `{项目}/.RSmeta/analytics.duckdb`（测试 `crates/workbench/tests/mock_jobs.rs:227` 落库目标即 `dir/analytics.duckdb`）；「追加到既有表」目标同为分析库既有表；`crates/mock/src/lib.rs:4` 约束「不回传各源数据库（M7）」，代码不存在写回用户源业务库的路径。README M7 进度行原「跨库直写落库」措辞易误解为跨业务库直写，已改为「落库到项目分析库（内存临时表 ATTACH 直写 · 可追加分析库既有表 · 不回写源业务库）」，与亮点④「代码里没有任何一条写回源库的路径」口径一致。
+
+**标签管理入口定位（避免在连接行右键盲点）**：「管理标签…」不在连接行右键菜单，挂在导航面板标题栏「更多（⋯）」按钮的 dropdown_menu（`crates/database/src/nav_view/chrome.rs:372` `Button::new("nav-more").icon(Ellipsis)`，L524 `PopupMenuItem::new("管理标签…")` → `open_tag_manager`）。连接行右键菜单实际为：连接 / 测试连接 / 编辑连接… / 查看属性 / 移动到分组… / 复制连接（模板）… / 共享至项目 / 删除连接 / 复制名称 / 刷新元数据 / 在 SQL 编辑器中打开 / 查看洞察。标签管理对话框真机打开、连接行标签 chip 编辑、`tag:` facet 筛选留手动验收。
+
+**手动收尾清单（2026-10-22 晚待执行）**：① 设置页切浅色肉眼验收标题栏 `light/32x32.png` 橙底白标后切回深色；② 导航「⋯ → 管理标签…」对话框、连接标签 chip 打标 / 改名、`tag:` 搜索 facet；③ 深度交互（连库执行 SQL、SQL 命名参数 `:name` 绑定对话框、联邦只读查询、洞察 / Mock 落库出口）；④ 从标题栏 ✕ 正常退出（不强杀）后，按 `.rds/tmp/log-baseline-before-manual.json`（max_ts `2026-10-22T14:04:39.638Z`）复核关闭瞬间五类 vendor 噪音不再写库。
+
+**测试命令口径注记（2026-10-22 复核）**：权威门禁命令是 `cargo test --workspace -j 2 --no-fail-fast`（§0 3161 通过即此口径，本轮两个新单测 `vendor_window_noise_is_filtered_only_for_log_target`、`secret_integration::tests::test_db_type_mapping` 均在该日志内 ok；`view.rs` 标题栏改动 mtime 19:05 早于基线日志 19:31，已被全量覆盖）。单独 `cargo test -p rds-workbench` 会在集成测试 `tests/a11y_roles.rs` 报 `E0463 can't find crate for rds_workbench / rds_settings`——这是单包测试 target 对主依赖别名（`settings.workspace = true`）解析不全的既有口径现象，全量 workspace 构建下该 target 编译通过、用例全绿（基线日志 `a11y_roles` target 仅 1 条 linker warning）；排查单包报错前先跑全量口径比对，不要据此判定为代码回归。
+
+**发布前第十一次复跑（2026-10-22 晚，0.2.4 打包前复核，数字与 §6.9 基线一致、无回归）**：
+
+- `cargo check --workspace --all-targets`：**0 error**，3 个既有 warning 头（`rds-kernel` unused variable `venv` · `rds-workbench` test `history_editor_entry` unused import `AppContext` · `rds-plugin` lib test `mut` 不必要 ×2），与 §6.9 既有口径一致，本轮未新增 warning；日志 `.rds/tmp/check-all-024-final.log`（exit 0）。
+- `cargo test --workspace -j 2 --no-fail-fast`：**3161 passed · 0 failed · 48 ignored**（108 Running 目标 + 21 crate Doc-tests 段），与 §6.9 基线逐条配对一致；日志 `.rds/tmp/test-all-024-final.log`（exit 0）。项目自身套件（去掉 `zz_fixture_probe`）= 107 Running 目标 / 3160 项通过。
+- `cargo clippy --workspace --all-targets`：**0 error**；存量风格 lint（`result_large_err` / `collapsible_if` 等）为既有技术债，CI 不设硬门禁，本轮不逐条清理；日志 `.rds/tmp/clippy-all-024-final.log`（exit 0）。
+- 口径说明：本次复核前工作区除 §6.9 已编译进 exe 的 5 个 `.rs` 修复（日志 4 处 + 标题栏明暗图标）外，仅文档（`README.md` / `README.en.md` / 本台账）改动；三道门禁确认 0.2.4 打包前代码状态全绿。
 
 
 
+***
 ***
 
 ## 7. 维护约定

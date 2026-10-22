@@ -14,10 +14,10 @@
 *取数立本，分析明道；数不虚取，析不妄断。*
 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.7.1-4B8BBE)](https://gpui-kit.com)
+[![GPUI-kit](https://img.shields.io/badge/GPUI--kit-0.8.0-4B8BBE)](https://gpui-kit.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-1.5.5-FFF000)](https://duckdb.org)
 [![SQLite](https://img.shields.io/badge/SQLite-rusqlite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Crates](https://img.shields.io/badge/workspace-16%20crates-6E4AFF)](#架构)
+[![Crates](https://img.shields.io/badge/workspace-21%20crates-6E4AFF)](#架构)
 [![Status](https://img.shields.io/badge/status-beta-blue)](#发布与验证进度)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -35,7 +35,7 @@
 ## 目录
 
 - [这是什么](#这是什么)
-- [七个亮点](#七个亮点)
+- [十个亮点](#十个亮点)
 - [界面预览](#界面预览)
 - [一条主线：从连接到结论](#一条主线从连接到结论)
 - [架构](#架构)
@@ -50,7 +50,7 @@
 
 ## 这是什么
 
-RdataStation v2 是用 **Rust + GPUI-kit** 重构的桌面数据库工作台：单体应用，16 个按业务能力组织的 crate，依赖只向下、无环，**零遥测、零云同步、零登录**。
+RdataStation v2 是用 **Rust + GPUI-kit** 重构的桌面数据库工作台：单体应用，21 个按业务能力组织的 crate，依赖只向下、无环，**零遥测、零云同步、零登录**。
 
 它不试图做「又一个全能数据库客户端」。它把重心放在三段常被割裂的工作上：
 
@@ -70,13 +70,13 @@ RdataStation v2 是用 **Rust + GPUI-kit** 重构的桌面数据库工作台：�
 
 | 指标 | 数值 |
 | --- | --- |
-| 工作区 crate | **16**（15 个业务/基础 crate + `app` 装配层） |
-| Rust 代码 | **221,971 行**，440 个 `.rs` 文件（不含 `v1/` 历史区） |
+| 工作区 crate | **21**（20 个业务/基础 crate + `app` 装配层） |
+| Rust 代码 | **333,742 物理行**（非空 307,851），591 个 `.rs` 文件（`crates/`，不含 `target/`、`v1/` 历史区与 `vendor/`；2026-10-22 本机实测，口径见 [质量与验证](#质量与验证)） |
 | 迁移资产 | **4 套** SQLite / DuckDB 迁移目录，双版本账本 |
 | 内置驱动 | **6 个**，覆盖 4 类引擎 |
 | 文档 | 5 类模块文档集（入口 / 原型 / 交互稿 / 架构 / 开发方案 / 手册） |
 
-## 七个亮点
+## 十个亮点
 
 ### ① 双引擎 · 双层数据
 
@@ -102,7 +102,7 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 ### ⑤ 洞察：加一个 TOML 就多一种规则
 
-列画像 / 表探查 / 多列 / Schema 报告 / 快照历史五个 Tab，一个目标一份结论，**采样口径永远写在界面上**（`LIMIT 500`）。
+摘要 / 列画像 / 表探查 / 多列 / Schema 报告 / 快照历史六个 Tab，一个目标一份结论，**采样口径永远写在界面上**（`LIMIT 500`）。
 
 规则引擎三层作用域（内置 16 条 → 全局 → 项目），**正文以文件为唯一真相源**（进 git、可 diff、目录一改即热加载）；两道安全门：规则 SQL 过解析期静态门，项目规则过信任门。四维加权质量分（完整度 / 唯一性 / 类型一致性 / 分布，阈值 85 / 70 / 50 / 30），**空表不给假分数**。
 
@@ -116,6 +116,33 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 有自动化契约测试盯着两条硬规矩：**零裸尺寸**（尺寸只走 `crates/workbench_shell/src/ui.rs` 常量）与**零裸色值**（取色只走主题 token）。规则文档写着「宣传稿的铁律：数字只为表达服务，口径以模块文档为准」。
 
+### ⑧ 一个内核，三种文档模式
+
+同一个编辑器内核支撑三种文档模式，命令面板三个入口分开：**新建查询**（`Ctrl+N` = SQL）· **新建笔记**（分析）· **新建文件**（通用）。模式只决定挂哪些服务与结果区，核心始终是同一套文本缓冲与渲染管线。
+
+- **通用（`.txt`）**：带高亮的记事本，**不连数据库**；本地脚本走独立链（环境选择器 + 运行按钮 → 结果卡片），不碰连接。
+- **SQL（`.sql`）**：脚本 + 连接 + 执行 + 停靠结果面板；五条执行入口（当前语句 / 选区 / 全部 / 批量 / 新结果标签页）× 三条执行通道（源库 · 本地 DuckDB 加速 · 联邦），不可用通道置灰并写明原因。
+- **分析（`.rdsnote`，标签 `NOTE`）**：笔记本式单元序列——新增 / 删除 / 上移下移 / 复制 / 运行，SQL / 文本类型徽标，内联网格上限 200 行，空态引导。**进行中**：单元正文复用编辑内核、完整会话与 kernel 执行属 Phase 1c 搁置项（见 [路线图](#路线图与已知边界)）。
+
+### ⑨ 只读联邦查询
+
+把多个已连接的源挂进同一条 DuckDB 会话做跨源**只读**查询，不复制数据、不回写任何源库。
+
+- **两层 scanner 同池**：L1 官方（MySQL / PostgreSQL / SQLite / DuckDB 文件 / Parquet / CSV / httpfs）；L2 社区（Oracle 等，`INSTALL … FROM community`）。扩展显式管理——关掉 DuckDB 默认的自动安装 / 自动加载，不静默联网下载。
+- **门控**：至少两个已连接且开启 DuckDB 本地加速的连接才出联邦档。
+- **主源语义**：未限定表名只在主源解析；跨源必须写 `<别名>.<schema>.<表>`（L2 两段 `<别名>.<表>`），两源同名报错、不猜归属。
+- **凭据与边界**：凭据走会话级 Secret、不落盘，出引擎前脱敏；写语句在 ATTACH 层直接拦下（不做语义分析，宁可多拒一句，不能放过去真写）。
+- **缺口**：L3 桥接（两种 scanner 都没有的源按「拉行 → 临时表」接入）· SQL Server 真机 · 扫描 / 拉取行数可见 · 扩展安装动作与进度呈现。
+
+### ⑩ 三模块统一标签体系
+
+独立 `rds-tag` crate 提供统一模型与定义存储：全局 / 项目两域、`(name, scope) WHERE deleted_at IS NULL` 部分唯一索引、软删后可同名重建、跨库按 `tag_id` 批量解析定义。三个消费方均已接线：
+
+- **导航连接**：连接级轻量标签——行内 chip（色点 = 名称哈希 → 主题语义色分档，不直渲 hex）· 标签编辑器（已加 chip 集合 + 追加输入框）· 搜索 `tag:` facet · facet 标签按引用数降序。**保持轻量，不做批量打标**。
+- **分析资源**：做重——列表按标签筛选 · 详情打标 · 批量打标。
+- **草稿箱**：项目域标签 + `scratchpad_tags` 关联表，列表标签筛选；归档时标签跨域携带（同名复用全局定义，避免同名异色）。
+- **管理覆盖层**：导航面板标题栏「更多（⋯）→ 管理标签…」打开——批量重命名（关联按 `tag_id` 自然跟随）· 清理空标签（软删）· 跨库引用数聚合展示。
+
 ## 界面预览
 
 ### 实际运行截图
@@ -128,11 +155,11 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 | ![数据库导航](assets/screenshots/RDS-beta-0.2.2/database-navigator.png) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
 | ![SQL 编辑器](assets/screenshots/RDS-beta-0.2.2/editor-sql.png) | **SQL 编辑器**：SQL 工具栏（执行 / 全部运行 / 格式化 / 更多）· 执行位置（源库 · 本地加速 · 联邦）· 欢迎引导 |
 | ![资产库](assets/screenshots/RDS-beta-0.2.2/analytics-resource.png) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
-| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：列 / 表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键，选择洞察） |
+| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：摘要 / 列 / 表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键，选择洞察） |
 | ![Mock 生成](assets/screenshots/RDS-beta-0.2.2/mock.png) | **Mock 生成（M7）**：标题栏 **+** 入口打开 Mock 草稿 tab（列定义 / 表名 / 行数 / 预览）· 右侧清单面板（目标行数 · 生成状态（未生成 / 生成中 / 已生成 / 已落库）· 出口选项（持久化 / 追加 / 草稿箱 / 另存）） |
 | ![查询历史](assets/screenshots/RDS-beta-0.2.2/history.png) | **查询历史**：SQL 执行留痕（语句 · 时间 · 耗时 · 返回行 · 引擎）· 搜索与清空 |
 | ![草稿箱](assets/screenshots/RDS-beta-0.2.2/scratchpad.png) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
-| ![Quick Open](assets/screenshots/RDS-beta-0.2.2/quick-open.png) | **Quick Open**：三前缀搜索（`>` 命令 · `#` 全文 · `@`）· 文件与连接结果分类展示 |
+| ![Quick Open](assets/screenshots/RDS-beta-0.2.2/quick-open.png) | **Quick Open**：三档搜索（`>` 命令 · `#` 元数据全文 · 无前缀按名称匹配）· 文件与连接结果分类展示 |
 | ![设置](assets/screenshots/RDS-beta-0.2.2/settings.png) | **设置页**：主题模式（浅色 / 深色 / 跟随系统）· 界面字号 · 界面语言 |
 
 > 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换；未接通模块（如 M9 plugin）暂无截图。
@@ -166,7 +193,7 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 flowchart TD
     A["① 连接<br/>MySQL · PostgreSQL · SQLite · DuckDB<br/>SSH / SSL / SOCKS5 协议链"]
     B["② 导航<br/>数据源树 + 属性面板<br/>元数据三级缓存"]
-    C["③ 编辑与执行<br/>一个内核 · 三档能力<br/>源库 / 本地加速 / 联邦"]
+    C["③ 编辑与执行<br/>一个内核 · 三种模式<br/>源库 / 本地加速 / 联邦"]
     D["④ 结果<br/>多结果集 · 分段抓取<br/>本地筛选排序 · 五种导出"]
     E["⑤ 二次分析<br/>结果集进本地 DuckDB<br/>不重跑源库"]
     F["⑥ 洞察<br/>列 / 表 / 库画像<br/>质量评分 + TOML 规则"]
@@ -176,17 +203,17 @@ flowchart TD
 
 工作台是**五段布局**：标题栏 36px · 左右活动栏 48px · 左右 Dock 边栏（起步 240 / 280，随字号缩放）· 状态栏。边栏三模式（显示 / 隐藏 / 收起），**状态权威同步点在 `render`**，单向从共享状态流向 Dock。
 
-### 编辑器：一个内核，三档能力
+### 编辑器：一个内核，三种文档模式
 
-文本模式（不与数据库通信的记事本）⊂ SQL 模式（脚本窗口）⊂ 分析模式（文档变成可执行单元）。**模式只决定挂上哪些服务与结果区**，核心始终是 SQL。
+通用（`.txt` 记事本，不连库）· SQL（`.sql` 脚本窗口）· 分析（`.rdsnote` 可执行单元）共用同一文本缓冲与渲染管线；**模式只决定挂上哪些服务与结果区**，命令面板三个入口分别新建三类文档（详见 [亮点 ⑧](#⑧-一个内核三种文档模式)）。
 
-- **执行**：当前语句 / 选区 / 全部 / 批量 / 新结果标签页，五条入口 × **三条执行通道**（源库 · 本地 DuckDB 加速 · 联邦），不可用的通道会置灰并写明原因。
+- **执行（SQL 模式）**：当前语句 / 选区 / 全部 / 批量 / 新结果标签页，五条入口 × **三条执行通道**（源库 · 本地 DuckDB 加速 · 联邦），不可用的通道会置灰并写明原因。
 - **结果**：结果集上限 5 个（淘汰最久未选中的）· 首段 1000 行、滚到底自动续取、未知总数写 `N+` · 本地筛选排序 · 冻结列 · 「从 N 行起」按行定位。
 - **真实**：行的来源（血缘）、连接、耗时、影响行数都写在工具栏上；失败也留痕，不回填假值。「注册了才宣传」——没绑定的快捷键不写进文档。
 
 ## 架构
 
-### 三层与 16 个 crate
+### 三层与 21 个 crate
 
 ```mermaid
 flowchart TD
@@ -244,15 +271,20 @@ flowchart TD
 | `workbench_shell` | 纯数据 + 尺寸常量 + 产品 token（零反向依赖） | gpui-kit / serde |
 | `project` (M1) | 项目生命周期、`.RSmeta`、实例锁、名册 | engine / shared / paths |
 | `connection` (M3) | 传输层：协议链（SSH / SSL / 代理）、URL、DuckDB Secret | shared |
+| `connection-dialog` | 连接对话框组件与连接服务层（自 `workbench` 下沉：对话框 / 连接 / 驱动 / 数据源服务 / 工作区装载 / 密钥集成） | engine / connection / shared / workbench_shell |
 | `database` (M4) | 导航域模型 + `NavigatorService` + `MetadataService` + 缓存 | engine / shared / workbench_shell |
+| `property` | 属性面板：对象类型 → 属性页描述模型、数据容器与注册表契约（自 M4 抽取） | serde |
 | `engine` (M2) | 双引擎、驱动层、连接管理、多级缓存、迁移、持久化、SQL 服务、日志 | shared / paths |
-| `editor` | SQL 编辑器内核 + 执行编排 + 结果 / 历史 | engine / shared |
+| `kernel` | Jupyter 内核协议客户端（ZMQ）；分析模式的会话与内核执行属 Phase 1c 搁置项，当前未上线 | jupyter-zmq-client / jupyter-protocol |
+| `editor` | 编辑器内核 + 执行编排 + 结果 / 历史；通用 / SQL / 分析三模式共用文本缓冲与渲染管线 | engine / shared |
 | `scratchpad` (M5) | 草稿箱：文件语义 + 回收站 + 监控 | shared / gpui-kit / workbench_shell |
 | `analytics_resource` (M6) | 资产归档 / 取回 / 版本（sha256 指纹） | engine / shared |
+| `tag` | 产品级统一标签能力（M4 导航连接 / M6 分析资源 / M5 草稿箱共用）：统一模型 + 全局 / 项目两域定义表 + CRUD / 软删 / 部分唯一索引 + 跨库按 id 批量解析 + 引用数聚合；三模块关联与管理覆盖层已接线 | shared / engine / rusqlite |
 | `mock` (M7) | 元数据驱动造数（只进分析引擎） | engine / shared |
 | `insight` (M8) | 列 / 表 / 库画像 + TOML 规则引擎 | engine / shared |
 | `plugin` (M9) | WASM / Sidecar 宿主（**未接通**） | engine / shared |
 | `settings` | 应用级偏好登记 / 持久化 / 设置页 | gpui-kit / workbench_shell / paths |
+| `rds-search` | 内容搜索独立 crate：目录递归扫描 + 内容逐行匹配 + 结果模型 + 后台任务，供命令面板 / 全局搜索复用（不依赖草稿箱视图） | anyhow / regex / tokio |
 | `paths` | 运行时路径唯一解析点（最底层） | dirs |
 | `shared` | 错误 / 模型 / 加密 / 拖放（**≥2 使用方才可进入**） | paths / gpui-kit |
 
@@ -260,14 +292,14 @@ flowchart TD
 
 ```
 RdataStation-v2/
-├── Cargo.toml               # workspace：16 个 crate + 依赖唯一入口 [workspace.dependencies]
+├── Cargo.toml               # workspace：21 个 crate + 依赖唯一入口 [workspace.dependencies]
 ├── .cargo/config.toml       # 命令别名 / RUST_MIN_STACK / DUCKDB_LIB_DIR / RDS_HOME
 ├── .agents/skills/          # 6 份项目内 Agent 技能：架构 / GPUI-kit / 布局 / 主题 / UI 规格 / 插件编写
 ├── assets/
 │   ├── themes/              # 主题定义与产品语义 token
 │   ├── icons/  public/      # 应用图标与品牌资产
-│   └── screenshots/         # 实际运行截图（按版本归档：screenshots/RDS-beta-0.2.2/）
-├── crates/                  # 16 个 crate（见上表）
+│   └── screenshots/         # 实际运行截图（按版本归档：screenshots/RDS-beta-<版本号>/）
+├── crates/                  # 21 个 crate（见上表）
 ├── docs/
 │   ├── architecture/        # 架构说明（模块文档集：入口 / 原型 / 交互稿 / 架构 / 方案 / 手册）
 │   ├── migration/           # v1 → v2 迁移映射与命令退役记录
@@ -284,9 +316,10 @@ RdataStation-v2/
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | **beta 0.1.0**（`RDS-beta-0.1.0`） | ✅ 已发布 | Windows x86_64 分发包 + sha256 挂载 Release；云端构建流水线已修复（beta 阶段矩阵收敛为 Windows） |
-| **beta 0.2.3**（`RDS-beta-0.2.3`） | 🚀 构建中 | 2026-10-21，工作区版本 `0.2.3`（补丁级）；全仓第八次复跑 **107 目标 / 3074 通过 / 0 失败**（plugin 首次纳入全量全绿）；含右 dock 面板化装配修复（`Shared::open_right_panel` dock 同步）与洞察契约登记修复 |
-| **beta 0.2.2**（`RDS-beta-0.2.2`） | ✅ 已发布 | 2026-10-16，工作区版本 `0.2.2`（补丁级）；含 UI 调整进度与 10-16 测试基线更新，Release 由云端 CI 构建挂载 |
-| **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | ✅ 已发布 | 基于 gpui-kit 0.7.1 的版本线；0.2.1 为上一版本（工作区版本 `0.2.1`） |
+| **beta 0.2.4**（`RDS-beta-0.2.4`） | 🚀 待发布 | 2026-10-22，工作区版本 `0.2.4`（补丁级）；全仓第十次复跑 **108 Running 目标 + 21 Doc-tests 段 / 3161 通过 / 48 忽略 / 0 失败**（项目自身 107 目标 / 3160 项）；功能：SQL 命名参数绑定、洞察内存管理链、资产库全局实例分发、左 dock 面板化装配修复；本轮修复：应用日志两类真 bug（mmap_size PRAGMA 误用 execute、本地文件源错误注册 Secret）、vendor 窗口关闭/失焦时序噪音不再写库、导航探针建连失败级别由 error 降 warn；应用图标换新版母版（任务栏/窗口类 `icon.ico` + macOS `icon.icns` + 标题栏按明暗主题切换）；待推 main、打标签后由云端 CI 构建挂载 |
+| **beta 0.2.3**（`RDS-beta-0.2.3`） | ✅ 已发布 | 2026-10-20，工作区版本 `0.2.3`（补丁级）；全仓第八次复跑 **107 目标 / 3074 通过 / 0 失败**（plugin 首次纳入全量全绿）；GPUI-kit 0.7.1 → 0.8.0 升级、右 dock 面板化装配修复（`Shared::open_right_panel` dock 同步）与洞察契约登记修复；Windows 包 + sha256 由云端 CI 挂载 |
+| **beta 0.2.2**（`RDS-beta-0.2.2`） | 🟡 tag 已打 · Release 待补 | 2026-10-16，工作区版本 `0.2.2`（补丁级）；标签 `01d3df75` 已推到远端，Release 页与云端包未补发（基于 0.7.1） |
+| **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | 🟡 部分已发布 | 基于 gpui-kit 0.7.1 的版本线；`0.2.0` 有 prerelease Release 页（`52438336`），`0.2.1`（`8e49dde8`）仅标签、无 Release 页 |
 | **gpui-kit 0.7.0 → 0.7.1 升级** | ✅ 已合入 main | 分支 `verify/gpui-kit-0.7` → main（2026-10-01，`RDS-beta-0.2.0` 基于此）；`render_dialog_layer` 手动挂载移除（0.7 由 Root 自动挂载），全仓 0 error / 0 warning；`a11y_roles` 等 4 项集成目标已在 0.7.1 下全过 |
 | **连接模块增量**（#A 留痕 / #B 环境策略 / #C 管理窗） | 🟡 原型定稿待评审 | 权威设计见 [`docs/architecture/connection/`](docs/architecture/connection/)；交互原型 v2.3（网络测试 / 认证引用与手动二选一 / 四分类 / chain 拓扑）与增量计划见 `docs/tmp/`，评审表 Y/N/改 待填；**连接对话框本体已收尾**（决策 #104–#109：列表 / 折叠 / 开关全组件化，2026-09-20） |
 | **数据源 ID / 认证 / 网络 / 环境 / 标签分组** | 🟡 设计中 | 双轨三态 ID、AES-256-GCM 字段级加密、网络递归加密、环境策略 5+1（脱敏明确不做） |
@@ -298,17 +331,17 @@ RdataStation-v2/
 | 模块 | 一句话定位 | 状态 | 代表性能力 | 已知缺口 |
 | --- | --- | --- | --- | --- |
 | **M1 project** | 一实例一项目；名册与本体分离；OS 字节锁 | ✅ | 项目选择器（facet 搜索 / 固定 / 最近）· 未保存拦截与只读逃生口 · 重命名不改磁盘目录名 · 内置示例项目 · **窗口退出草稿兜底**（点 ✕ / `Alt+F4` 时每份打开文档的会话落库）· **无项目时选择器面板化为中央常驻 tab**（右 Dock 各面板不受项目前提影响） | 项目目录移动 · 提升 / 快照 |
-| **M2 engine** | 双引擎底座 + 统一数据访问层 | ✅ | 6 驱动两层 trait · 双迁移账本 · `sqlglot` 唯一接入点 · 自写语句切分（能吃半截 SQL） | 缓存层与持久化层仍有零调用项（清单见接线矩阵 §7）· 增量同步未接 |
+| **M2 engine** | 双引擎底座 + 统一数据访问层 | ✅ | 6 驱动两层 trait · 双迁移账本 · `sqlglot` 唯一接入点 · 自写语句切分（能吃半截 SQL）· DuckDB 内存上限与用量统计 | 缓存层与持久化层仍有零调用项（清单见接线矩阵 §7）· 增量同步未接 |
 | **M3 connection** | 把「一个数据源该怎么连」做完整、做诚实 | ✅ | 五 Tab 对话框 · **测试连接 = 真实连一次** · 协议链与隧道注册表 · DuckDB Secret 加速通道 · 零 UI 造数据 | SSH 主机密钥默认放行 · Secret 无门控不清理 |
-| **M4 database** | 把「有哪些数据源、里面有什么」做成一眼可读的树 | ✅ | 归属域 `P/G/GP` 列 · 分组=结构 / 标签=检索 · 双通道徽标 · 三级缓存 + 索引分页 · 跨连接搜索（名称档 + 内容档 `#`）· **搜索结果「在树中定位」**（含大 schema 跳页）· 预热与邻接预取 | 虚拟列表（规格见导航 dev-plan §2.5）· PG 跨库浏览 · 导航面板内不提供内容档 |
-| **M5 scratchpad** | 单个项目私有的临时探索工作区 | ✅ | 导入 vs 引用 · 项目级回收站 + 撤销栏 · 内容搜索与全局替换 · 文件监控 · 冲突条 + 行级 diff（判据是内容不是 mtime） | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
-| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | ✅ | 指纹决定版本（未变不增版）· 归档凭证三件套 · 三类孤儿索引修复 · 只读三重守卫 · 项目级回收站 | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
-| **M7 mock** | 把表结构变成可用的测试数据 | ✅ | 143 生成器 / 15 分类 · 分布族与时序 · 列级工作日历 · 6 套场景模板与列依赖 · 跨库直写落库 · 四条出口 · **标题栏 + 新建 Mock 表（草稿 tab）** · **无项目可用（纯生成）** | 出口不可取消 · 大导出非流式 · 并发生成 |
-| **M8 insight** | 把数据变成结论 | ✅ | 五 Tab 面板 · 四维质量分 · 16 条内置规则 + 三层作用域 + 热加载 · 快照版本对比 · 结构洞察走驱动元数据（SQLite 可用） | 分析表型存档入口 · 解析级策略门 · 表 / 库级快照 |
+| **M4 database** | 把「有哪些数据源、里面有什么」做成一眼可读的树 | ✅ | 归属域 `P/G/GP` 列 · 分组=结构 / 标签=检索 · 连接标签（chip 色点 + 标签编辑器 + 搜索 `tag:` facet + 管理标签覆盖层：批量重命名 / 清理空标签 / 跨库引用数）· 双通道徽标 · 三级缓存 + 索引分页 · 跨连接搜索（名称档 + 内容档 `#`）· **搜索结果「在树中定位」**（含大 schema 跳页）· 预热与邻接预取 | 虚拟列表（规格见导航 dev-plan §2.5）· PG 跨库浏览 · 导航面板内不提供内容档 |
+| **M5 scratchpad** | 单个项目私有的临时探索工作区 | ✅ | 导入 vs 引用 · 项目级回收站 + 撤销栏 · 内容搜索与全局替换 · 文件监控 · 冲突条 + 行级 diff（判据是内容不是 mtime）· 项目标签（列表筛选 + 打标弹窗）· 归档时标签跨域携带（同名复用全局定义） | Phase D（归档 / 取回 / 版本）· 系统拖入导入 · 命中跳转到行 |
+| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | ✅ | 指纹决定版本（未变不增版）· 归档凭证三件套 · 三类孤儿索引修复 · 只读三重守卫 · 项目级回收站 · 全局实例归属（项目 / 全局）· 全局实例分发 · 标签体系（列表筛选 · 详情打标 · 批量打标） | Phase 4 分析表档 · Phase 5 引用档 · 内容预览 |
+| **M7 mock** | 把表结构变成可用的测试数据 | ✅ | 143 生成器 / 15 分类 · 分布族与时序 · 列级工作日历 · 6 套场景模板与列依赖 · 落库到项目分析库（内存临时表 ATTACH 直写 · 可追加分析库既有表 · **不回写源业务库**）· 四条出口 · **标题栏 + 新建 Mock 表（草稿 tab）** · **无项目可用（纯生成）** | 出口不可取消 · 大导出非流式 · 并发生成 |
+| **M8 insight** | 把数据变成结论 | ✅ | 六 Tab 面板（摘要 / 列 / 表 / 多列 / 结构 / 历史）· 四维质量分 · 16 条内置规则 + 三层作用域 + 热加载 · 快照版本对比 · 结构洞察走驱动元数据（SQLite 可用）· DuckDB 内存上限可配并持久化 · 全量分析确认弹窗 | 分析表型存档入口 · 解析级策略门 · 表 / 库级快照 |
 | **M9 plugin** | WASM / Sidecar 宿主，四类扩展点 | ⛔ | 设计文档与包结构已就绪 | **整包无调用方**；wasmtime 在 Windows + rustc 1.98 下崩溃（编译受限，未纳入 `cargo test-all`）；等 beta3 立项 |
-| **editor** | 一个内核、三档能力 | ✅ | 三条执行通道 · 分段抓取 · 真实事务与中断 · 五种导出 · 格式化 / 十种方言转译 / 执行计划 · 补全与模板 · 会话跨重启 | Phase 1c 分析单元（搁置）· 值预览 / 编辑 · 血缘持久化 |
-| **federation** | 多源挂进同一条 DuckDB 会话的只读跨源查询 | 🟡 | 源清单浮层 · 主源语义 · 层级策略 L1 / L2 · 扩展显式管理（关掉自动下载）· 凭据脱敏出口 | L3 桥接 · SQL Server 真机 · 扫描量可见 |
-| **quick_open** | 元数据搜索与命令面板 | ✅ | 三前缀（`>` 命令 / `#` 全文档 / `@`）· 名称档走 `metadata_index` · 内容档走 `metadata_fts` trigram · 十万对象延迟 **158ms → 1.5ms** · **命中行 `⌥↵` 在树中定位** | 源码（视图 / 例程定义）未进 FTS · `@` 当前连接限定（Phase 2）· 最近使用 / 空态建议 |
+| **editor** | 一个内核、三种文档模式（通用 / SQL / 分析） | 🟡 | **通用**（`.txt` 记事本 + 本地脚本独立链）· **SQL**（`.sql` 脚本 + 连接 + 停靠结果：三条执行通道 · 分段抓取 · 真实事务与中断 · 五种导出 · 格式化 / 十种方言转译 / 执行计划 · 补全与模板 · 会话跨重启 · SQL 命名参数绑定 `:name`）· **分析**（`.rdsnote` 单元序列 + 内联输出骨架） | Phase 1c 分析单元：单元正文复用编辑内核 · 完整会话与 kernel 执行（搁置）· 值预览 / 编辑 · 血缘持久化 |
+| **federation** | 多源挂进同一条 DuckDB 会话的只读跨源查询 | 🟡 | L1 官方 scanner（MySQL / PostgreSQL / SQLite / DuckDB 文件 / Parquet / CSV / httpfs）+ L2 社区 scanner（Oracle）同池 · ≥2 个已连接且开启本地加速才出联邦档 · 主源语义（未限定名只在主源解析，跨源写 `<别名>.<schema>.<表>`）· 扩展显式管理（关掉自动下载）· 写语句 ATTACH 层拦截 · 凭据会话级 Secret 不落盘、出引擎脱敏 | L3 桥接（无 scanner 源「拉行 → 临时表」）· SQL Server 真机 · 扫描 / 拉取行数可见 · 扩展安装动作与进度呈现 |
+| **quick_open** | 元数据搜索与命令面板 | ✅ | 三档（`>` 命令 · `#` 元数据全文 trigram · 无前缀名称档 `metadata_index`）· 内容档 `metadata_fts` trigram（≥3 字）· 十万对象延迟 **158ms → 1.5ms** · **命中行 `⌥↵` 在树中定位** | 源码（视图 / 例程定义）未进 FTS · 最近使用 / 空态建议 |
 | **settings** | 偏好登记 + 原子持久化 + 设置页 | ✅ | 三分法作用域（应用 / 项目 / 会话）· 登记表 + 准入五条 · 原子写 | `effect` 字段无人消费 · 无跨进程写锁 |
 
 ### 未接通与已知缺口的完整口径
@@ -327,6 +360,8 @@ RdataStation-v2/
 | **结果网格表格编辑** | 🟡 设计中 | 结果网格从只读改为共用表格内建编辑（单元格编辑 + 行内写回 + 批量提交），M4 独立模块不再排期 |
 | **明暗主题** | ✅ 可用 | RDS Light / Dark 双主题，取色只走主题 token（零裸色值契约测试钉住） |
 | **Mock 面板入口修复（2026-10-17）** | ✅ 完成 | 无项目时右 Dock / Mock 面板照常可用（项目选择器面板化为中央常驻 tab，落实 mock 定位「纯生成仍可用」）；Mock 面板标题栏新增 **+** 入口（打开 Mock 草稿 tab，与清单草稿行同一目标、同一去重）；连接探针入口把空字符串 `network_config_id` 规范化为无引用（历史数据 `Some("")` 不再误报「引用的网络配置无法解析」） |
+| **GPUI-kit 0.7.1 → 0.8.0 升级（2026-10-20，0.2.3）** | ✅ 完成 | vendor 由本地源码换为 crates.io 发布包，保留 `gpui-base` 5 项 + `gpui-component` 2 项项目 patch；结果集标签条接入 `TabBar` `track_scroll` 与 overflow 菜单（0.8.0 新能力）；升级差异见 `docs/architecture/ui/gpui-kit-0.8.0-upgrade-report.md` |
+| **左 Dock 命令面板 / 装配修复（2026-10-22，0.2.4）** | ✅ 完成 | `apply_left_mode` 对称右 Dock 补齐 `active_tab` / `active_id` 句柄；`OpenLeftPanel` 先登记 `left_open_panels`、置活动态再调 `apply_left_mode`，强制宿主这一拍同步（此前左 Dock 命令打开面板不挂载 / 不激活） |
 
 ## 与主流工具的对照
 
@@ -378,7 +413,7 @@ RdataStation-v2/
 | 领域 | 选型 | 用途 |
 | --- | --- | --- |
 | 语言 | Rust · edition 2024 | 全栈（前端也是 Rust，无 JS 运行时） |
-| UI | **GPUI-kit 0.7.1** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
+| UI | **GPUI-kit 0.8.0** | 视图层；与 `gpui-base` / `gpui-component` 版本强绑定，整体升降 |
 | 分析引擎 | **DuckDB 1.5.5**（动态链接，crate `1.10505.0`） | 二次分析 / 联邦 / 画像 / 造数 / 快照 |
 | 元数据库 | **rusqlite 0.40**（bundled） | 事务元数据 + 三层缓存的 L2 |
 | 驱动 | sqlx 0.9（MySQL / PostgreSQL）· `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 个驱动，2 个引擎各两条实现（sqlx 版与官方客户端版） |
@@ -467,13 +502,12 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 
 测试分四层：**纯函数单测** → **GPUI headless 窗口测试** → **集成 / 契约测试** → **真机探针**（需真数据库，默认 `#[ignore]`，约定「默认 `cargo test` 不依赖外部服务」）。
 
-> **最新全量基线（2026-10-21，第八次复跑，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.7）**：
+> **最新全量基线（2026-10-22，第十次复跑，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.9）**：
 >
-> - `cargo test --workspace -j 2 --no-fail-fast` = **107 个目标 · 3074 通过 · 48 忽略 · 0 失败**（**含 `rds-plugin` 首次纳入全量并全绿**——第七次排除 plugin 的 `render.rs` raw string 定界符冲突已在用户后续提交中解决）
-> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **106 个目标 · 3073 项通过**
-> - 编译门禁：`cargo check --workspace --all-targets` 0 error / 3 行 warning 头（plugin `supervisor.rs` mut · workbench unused import · kernel unused var）；`clippy` 0 error（lint 告警为存量风格债，CI 不设硬门禁）
-> - 本次修复 2 处回归（测试先行发现）：洞察 `ui_contract` 补 `view/overview.rs` 登记；右 dock 面板化装配修复（`Shared::open_right_panel` 现同步登记 `right_open_panels` 并让宿主挂载激活 tab）
-> - 并发 flake 记录：`rds-mock` 的 `ordered_preview_returns_the_global_top_rows` 在 `-j 2` 全量满载下偶发（DuckDB 全局内存库竞争），单跑 38/38 全过——时序类 flake，非代码缺陷
+> - `cargo test --workspace -j 2 --no-fail-fast` = **108 个 Running 目标 + 21 个 Doc-tests 段 · 3161 通过 · 48 忽略 · 0 失败**（含 `rds-plugin` 全量；48 忽略 = lib 28：engine 真机探针 24 · editor 1 · kernel 3，加 Doc-tests 20：engine 16 · connection / insight / plugin / workbench_shell 各 1）
+> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **107 个 Running 目标 · 3160 项通过**
+> - 编译门禁：`cargo check --workspace --all-targets` 0 error / 3 行既有 warning 头（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var）；`clippy` 0 error（lint 告警为存量风格债，CI 不设硬门禁）；本轮改动未引入新 warning
+> - 0.2.4 功能：① SQL 命名参数绑定（`:name` 扫描替换 + 绑定对话框 + 取消中止，含参数绑定纯函数与窗口状态机测试）；② 洞察内存管理链（DuckDB 内存上限可配 + 偏好持久化 + 全量分析确认弹窗）；③ 资产库全局实例归属与分发（`RowScope` / `InstanceFilter` + 分发任务 + 面板夹具适配）；④ 左 dock 命令面板装配修复（`apply_left_mode` 对称补活动 tab 句柄，`OpenLeftPanel` 先登记再同步宿主）。本轮日志与资源修复：⑤ `metadata_cache` 的 `PRAGMA mmap_size` 误用 `execute` 改 `query_row` 容错（498 条历史 WARN 根除）；⑥ 本地文件源错误注册 SQLite/DuckDB Secret 的分支移除（64 条历史 WARN 根除）；⑦ GPUI vendor 窗口关闭/失焦时序噪音（`window not found` / 无效窗口句柄 / 光标位置拒绝访问等）写库前过滤，仅 `target=="log"` 命中、业务消息不吞；⑧ 导航探针建连失败由 `error!` 降 `warn!`（失败结果已回填面板，属环境性状态）；⑨ 应用图标换新版母版，标题栏按明暗主题切换 32px 图标
 
 下表为 **2026-09-19 的逐包实测快照**（同一套 `cargo test-all`，逐目标台账见 `module-status.md` §6.5 前的历史段；两期数字口径有差异——10-16 起排除 plugin）：
 
@@ -493,7 +527,7 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
-> 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；当前全仓编译零告警（`cargo check --workspace --all-targets`）。
+> 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`，2026-09-19 快照口径）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；该轮次编译 0 告警，最新编译告警口径见上方第九次基块。
 >
 > **2026-10-01 增量更新（gpui-kit 0.7.0 迁移）**：`cargo check --workspace` 0 error / 0 warning；受影响 crate（workbench / editor / project / mock / insight / analytics / connection / settings / scratchpad / app / engine 等）实测 **~1328 通过 / 0 失败**；dialog 打开 / 渲染 / 关闭 / 不重复挂载测试全部通过。2 项非回归：`quick_open` 并行负载下 20s 超时（单跑 0.08s 通过，flaky）；`zz_fixture_probe` 依赖内网真机（环境性）。
 >
