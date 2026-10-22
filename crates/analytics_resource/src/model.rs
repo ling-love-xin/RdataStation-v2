@@ -9,6 +9,18 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
 
+/// 行的实例归属（§13 双实例）：资源要么在项目实例，要么在全局实例。
+///
+/// 决定行的可操作性：项目行 = 可归档 / 取回 / 升级；全局行 = 只读 + 可「分发到本项目」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowScope {
+    /// 项目实例（登记在项目 SQLite，数据在项目 DuckDB / resources/）。
+    #[default]
+    Project,
+    /// 全局实例（登记在全局 SQLite 镜像表，数据在全局 DuckDB）。
+    Global,
+}
+
 /// 存档种类：决定**本体存在哪**，进而决定复现强度（架构 §2.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]

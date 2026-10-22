@@ -59,6 +59,8 @@ use workbench_shell::tree;
 pub struct ArchiveRow {
     pub id: String,
     pub name: String,
+    /// 实例归属（§13）：全局行不可在项目侧修改，只有「分发到本项目」。
+    pub scope: crate::model::RowScope,
     /// 别名（`None` = 没起过）。
     ///
     /// **行上不显示**（面板只有 240px），但它是搜索匹配面的一员（原型 §2.2）：
@@ -166,6 +168,9 @@ impl ArchiveCounts {
 #[derive(Debug, Clone, Default)]
 pub struct ResourcesSnapshot {
     pub rows: Vec<ArchiveRow>,
+    /// 全局实例行（§13）：与 `rows` 分开存——全局行不参与项目标签 / 分组 / 异常扫描，
+    /// 面板按「实例」维度拼接展示（`InstanceFilter`）。
+    pub global_rows: Vec<ArchiveRow>,
     pub counts: ArchiveCounts,
     pub read_only: bool,
     /// 行 id → 详情快照（右侧详情面板用；与 `rows` 同一次取数产出，不在渲染期补取）。
@@ -174,6 +179,28 @@ pub struct ResourcesSnapshot {
     pub tags: Vec<TagOption>,
     /// 分组字典（全部存活分组 + 成员数，按名字升序）：分组折叠区与「移动到分组」菜单共用。
     pub groups: Vec<GroupOption>,
+}
+
+/// 实例维度筛选（§13 双实例展示）：面板头三态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InstanceFilter {
+    /// 项目 + 全局都显示。
+    #[default]
+    All,
+    /// 只显示项目实例行。
+    Project,
+    /// 只显示全局实例行。
+    Global,
+}
+
+impl InstanceFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "全部",
+            Self::Project => "项目",
+            Self::Global => "全局",
+        }
+    }
 }
 
 /// 复现强度徽标文案（原型 §3.2：**行内唯一的颜色信号**）。
@@ -444,6 +471,10 @@ pub trait ResourcesHost: 'static {
     /// 收**面板已有的那条详情**（本体路径与指纹都在它身上）；File 档才可升级
     /// （分析表型升级依赖分析表读取路径，M8 后续批次接）。
     fn request_promote_to_global(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 从全局分发到当前项目（§13：全局 → 项目，跨项目唯一法定路径）。
+    ///
+    /// 只带全局资源的**显示名**（分发只认全局登记的名字；本体在全局 DuckDB）。
+    fn request_distribute_from_global(&self, name: &str, window: &mut Window, cx: &mut App);
 }
 
 /// 行点击归一化后的语义（修饰键与点击数 → 四种行为；纯数据便于单测）。
@@ -885,6 +916,9 @@ impl ListDelegate for ArchiveListDelegate {
             return Some(self.render_group_header(&key, &label, count, depth, collapsed, cx));
         }
         let row = self.row_at(ix)?.clone();
+        // 全局行（§13）：本体在全局 DuckDB / 全局登记，项目侧动作一律不可用，
+        // 徽标显示「全局」——强度徽标语义在全局侧不适用（升级产物 kind 都是 analysis）。
+        let is_global = row.scope == crate::model::RowScope::Global;
         let (foreground, muted, success, info, warning, danger) = {
             let colors = cx.theme().colors;
             (
@@ -896,12 +930,21 @@ impl ListDelegate for ArchiveListDelegate {
                 colors.danger,
             )
         };
-        let badge = strength_badge(row.kind, row.status);
-        let badge_color = match badge_tone(row.kind, row.status) {
-            BadgeTone::Success => success,
-            BadgeTone::Info => info,
-            BadgeTone::Warning => warning,
-            BadgeTone::Danger => danger,
+        // 全局行徽标 = 「全局」；项目行保持复现强度徽标（原型 §3.2）。
+        let badge = if is_global {
+            "全局"
+        } else {
+            strength_badge(row.kind, row.status)
+        };
+        let badge_color = if is_global {
+            info
+        } else {
+            match badge_tone(row.kind, row.status) {
+                BadgeTone::Success => success,
+                BadgeTone::Info => info,
+                BadgeTone::Warning => warning,
+                BadgeTone::Danger => danger,
+            }
         };
         // 缺失的行灰显（不是禁用：它仍可被选中看详情、仍可走索引修复）。
         let name_color = if row.status == ArchiveStatus::Missing {
@@ -929,19 +972,22 @@ impl ListDelegate for ArchiveListDelegate {
         let all_rows: Vec<&ArchiveRow> = self.visible_rows().collect();
         let tag_targets = tag_targets(&all_rows, &self.multi_ids, &row);
         let tag_label = tag_entry_label(multi_count);
+        // 全局行（§13）：本体在全局 DuckDB / 全局登记，项目侧动作（取回 / 改名 / 删除 /
+        // 打标 / 分组 / 拖拽 / 版本历史）一律不可用——只有「分发到本项目」。
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
-        let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
+        let can_checkout =
+            !is_global && row.status == ArchiveStatus::Normal && !self.read_only;
         // 只读项目连标签也不给改（菜单项的置灰判据在闭包内用，故先拷一份）。
         let read_only = self.read_only;
         // 拖到分组头 = 移动（原型 §3.2）：载荷带**一批** id（多选时是整选集）。
         // 只读项目不给拖：拖起来也落不下去（宿主会拒），不如与菜单项一样当场置灰。
-        let drag_payload = (!read_only).then(|| ArchiveDragPayload {
+        let drag_payload = (!is_global && !read_only).then(|| ArchiveDragPayload {
             ids: selection_ids.clone(),
             kind: row.kind,
             label: dnd::drag_label(&row.name, selection_ids.len()),
         });
         // 打开 / 取回都要整条详情（本体路径 / 扩展名在它身上）：渲染期提前拷一份——
-        // 菜单回调触发时面板可能已被借用，不能再回头读。
+        // 菜单回调触发时面板可能已被借用，不能再回头读。全局行不在详情映射里（None）。
         let open_detail = self.details.get(&row.id).cloned();
         // 「打开（只读）」要本体在位（缺失的行没什么可开的，旧行也可能没登记路径）。
         let can_open = open_detail
@@ -957,6 +1003,8 @@ impl ListDelegate for ArchiveListDelegate {
         // （当前名字由宿主的 `row_name` 从快照取——渲染期不把名字搬进闭包）。
         let id_versions = row.id.clone();
         let rename_id = row.id.clone();
+        // 分发要全局资源显示名（全局行本体不在项目库，分发只认全局登记的名字）。
+        let distribute_name = row.name.clone();
 
         let mut line = div()
             .h_flex()
@@ -1069,6 +1117,20 @@ impl ListDelegate for ArchiveListDelegate {
                                     }
                                 }),
                         );
+                        // 「分发到本项目…」（§13）：全局 → 项目，跨项目唯一法定路径。
+                        // 全局行本体在全局 DuckDB，项目侧动作全置灰，分发是唯一可用动作；
+                        // 只读项目也不给分发（分发写项目库）。
+                        menu = menu.item(
+                            PopupMenuItem::new("分发到本项目…")
+                                .disabled(!is_global || multi_count > 1 || read_only)
+                                .on_click({
+                                    let host = host.clone();
+                                    let name = distribute_name.clone();
+                                    move |_, window, cx| {
+                                        host.request_distribute_from_global(&name, window, cx)
+                                    }
+                                }),
+                        );
                         menu = menu.item(
                             PopupMenuItem::new("查看统计")
                                 .disabled(!can_stats || multi_count > 1)
@@ -1114,7 +1176,7 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         menu = menu.item(
                             PopupMenuItem::new("版本历史…")
-                                .disabled(multi_count > 1)
+                                .disabled(multi_count > 1 || is_global)
                                 .on_click({
                                     let host = host.clone();
                                     let id = id_versions.clone();
@@ -1127,7 +1189,7 @@ impl ListDelegate for ArchiveListDelegate {
                         // 多选不给改（改哪一条都是猜），只读项目不给改。
                         menu = menu.item(
                             PopupMenuItem::new("重命名…")
-                                .disabled(!can_rename(multi_count, read_only))
+                                .disabled(!can_rename(multi_count, read_only) || is_global)
                                 .on_click({
                                     let host = host.clone();
                                     let id = rename_id.clone();
@@ -1165,7 +1227,7 @@ impl ListDelegate for ArchiveListDelegate {
                         // 多选时作用于整选集（勾选 = 全部打上，取消 = 全部摘掉）。
                         menu = menu.item(
                             PopupMenuItem::new(tag_label.clone())
-                                .disabled(read_only)
+                                .disabled(read_only || is_global)
                                 .on_click({
                                     let host = host.clone();
                                     let targets = tag_targets.clone();
@@ -1176,8 +1238,10 @@ impl ListDelegate for ArchiveListDelegate {
                         );
                         // 「移动到分组 ›」：子菜单列出各分组 + 未分组 + 新建（原型 §2.4：
                         // 拖拽之外的等价入口；多选也用这一条，批量移动是原型里多选解锁的动作）。
-                        let move_ids: Vec<String> = selection_ids.clone();
-                        menu = menu.submenu("移动到分组", _window, _cx, {
+                        // 全局行没有项目分组归属，整个子菜单不给摆。
+                        if !is_global {
+                            let move_ids: Vec<String> = selection_ids.clone();
+                            menu = menu.submenu("移动到分组", _window, _cx, {
                             let host = host.clone();
                             let move_ids = move_ids.clone();
                             let groups = groups_for_menu.clone();
@@ -1224,8 +1288,10 @@ impl ListDelegate for ArchiveListDelegate {
                                         move |_, window, cx| host.request_create_group(window, cx)
                                     }))
                             }
-                        });
+                            });
+                        }
                         // 删除是**唯一**多选可用的破坏性项（原型 §3.2）：多选时带上数量。
+                        // 全局行不能进项目回收站（本体不在项目侧）。
                         let delete_ids = selection_ids.clone();
                         let delete_label = if multi_count > 1 {
                             format!("移入回收站（{multi_count} 项）")
@@ -1233,7 +1299,7 @@ impl ListDelegate for ArchiveListDelegate {
                             "移入回收站".to_string()
                         };
                         menu.separator()
-                            .item(PopupMenuItem::new(delete_label).on_click({
+                            .item(PopupMenuItem::new(delete_label).disabled(is_global).on_click({
                                 let host = host.clone();
                                 move |_, window, cx| host.request_delete(&delete_ids, window, cx)
                             }))
@@ -1327,6 +1393,8 @@ pub struct ResourcesPanel {
     default_group: Option<String>,
     /// 工具栏条件（搜索词 / 种类 / 只看需处理）。
     filter: ResourcesFilter,
+    /// 实例维度（§13 双实例）：全部 / 项目 / 全局。
+    instance: InstanceFilter,
     sort_field: SortField,
     sort_order: SortOrder,
     /// 搜索框（**首帧渲染时创建**）。
@@ -1373,6 +1441,7 @@ impl ResourcesPanel {
             collapsed: std::collections::HashSet::new(),
             default_group: None,
             filter: ResourcesFilter::default(),
+            instance: InstanceFilter::default(),
             sort_field: SortField::default(),
             sort_order: SortOrder::default(),
             search_input: None,
@@ -1475,12 +1544,24 @@ impl ResourcesPanel {
     /// 选中清理放在这里而不是只放在 `set_snapshot` 里：**筛选与排序也会让行消失**，
     /// 只盯着快照会留下一个指向"看不见的行"的选中态。
     fn refresh_view_rows(&mut self, cx: &mut Context<Self>) {
+        // 实例维度在**面板层**拼接（不进 `filter::apply_view`：全局行没有项目标签 /
+        // 分组 / 异常概念，让它们进 `matches` 只会制造"永远筛不出"的维度）。
+        let source: Vec<ArchiveRow> = match self.instance {
+            InstanceFilter::Project => self.snapshot.rows.clone(),
+            InstanceFilter::Global => self.snapshot.global_rows.clone(),
+            InstanceFilter::All => {
+                let mut merged = self.snapshot.rows.clone();
+                merged.extend(self.snapshot.global_rows.iter().cloned());
+                merged
+            }
+        };
         self.view_rows = filter::apply_view(
-            &self.snapshot.rows,
+            &source,
             &self.filter,
             self.sort_field,
             self.sort_order,
         );
+        // 全局行可被选中但不给详情（详情映射只有项目行）；选中清理按 view_rows 走。
         if let Some(selected) = self.selected.as_deref() {
             if !self.view_rows.iter().any(|row| row.id == selected) {
                 self.selected = None;
@@ -1649,6 +1730,17 @@ impl ResourcesPanel {
     /// 换一套筛选条件（新建 / 清空走这里）。
     pub fn set_filter(&mut self, filter: ResourcesFilter, cx: &mut Context<Self>) {
         self.filter = filter;
+        self.refresh_view_rows(cx);
+        cx.notify();
+    }
+
+    /// 切换实例维度（§13：全部 / 项目 / 全局）。行源变了，悬空选中由
+    /// [`Self::refresh_view_rows`] 顺带清理。
+    pub fn set_instance(&mut self, instance: InstanceFilter, cx: &mut Context<Self>) {
+        if self.instance == instance {
+            return;
+        }
+        self.instance = instance;
         self.refresh_view_rows(cx);
         cx.notify();
     }
@@ -1978,6 +2070,37 @@ impl ResourcesPanel {
         let (field, order) = (self.sort_field, self.sort_order);
         let sort_label = format!("{} {} ▾", field.short_label(), order.arrow());
 
+        // 实例维度（§13）：全部 / 项目 / 全局。独立于筛选/排序——它是**行源**维度，
+        // 全局行没有项目标签 / 分组概念，不能混进 `ResourcesFilter` 的维度里。
+        let instance = self.instance;
+        let instance_button = Button::new("archive-instance")
+            .ghost()
+            .small()
+            .label(format!("{} ▾", instance.label()))
+            .debug_selector(|| "archive-instance".to_string())
+            .dropdown_menu({
+                let panel = panel.clone();
+                move |menu, _window, _cx| {
+                    let mut menu = menu.item(PopupMenuItem::label("实例"));
+                    for candidate in [
+                        InstanceFilter::All,
+                        InstanceFilter::Project,
+                        InstanceFilter::Global,
+                    ] {
+                        let target = panel.clone();
+                        let is_current = candidate == instance;
+                        menu = menu.item(
+                            PopupMenuItem::new(candidate.label())
+                                .checked(is_current)
+                                .on_click(move |_, _, app| {
+                                    target.update(app, |panel, cx| panel.set_instance(candidate, cx));
+                                }),
+                        );
+                    }
+                    menu
+                }
+            });
+
         let filter_button = Button::new("archive-filter")
             .ghost()
             .small()
@@ -2077,6 +2200,7 @@ impl ResourcesPanel {
                         )
                     }),
             )
+            .child(instance_button)
             .child(filter_button)
             .child(sort_button)
     }
@@ -2176,6 +2300,20 @@ impl ResourcesPanel {
         };
         let counts = self.snapshot.counts;
         let has_issues = counts.has_issues();
+        // 「全局」实例下计数行换成全局口径（`ArchiveCounts` 是项目专用：kind 桶 /
+        // 异常桶只对项目行有意义）；异常入口同理只在项目口径下摆。
+        let counts_line = match self.instance {
+            InstanceFilter::Global => {
+                let n = self.snapshot.global_rows.len();
+                if self.loading {
+                    format!("加载中… · 全局 {n} 项")
+                } else {
+                    format!("全局 {n} 项")
+                }
+            }
+            _ => counts.status_line(self.loading),
+        };
+        let has_issues = has_issues && self.instance != InstanceFilter::Global;
         let host = self.host.clone();
 
         div()
@@ -2190,7 +2328,7 @@ impl ResourcesPanel {
                 div()
                     .text_xs()
                     .text_color(if has_issues { warning } else { muted })
-                    .child(counts.status_line(self.loading)),
+                    .child(counts_line),
             )
             .when(has_issues, |bar| {
                 bar.child(
@@ -2485,6 +2623,7 @@ mod tests {
         let row_for_tag = |id: &str, name: &str| ArchiveRow {
             id: id.to_string(),
             name: name.to_string(),
+            scope: crate::model::RowScope::Project,
             kind: ArchiveKind::File,
             version: 1,
             status: ArchiveStatus::Normal,
@@ -2645,6 +2784,7 @@ mod tests {
                 id: "ar_1".to_string(),
                 name: "a.sql".to_string(),
                 alias: None,
+                scope: crate::model::RowScope::Project,
                 kind: ArchiveKind::File,
                 version: 1,
                 status: ArchiveStatus::Normal,

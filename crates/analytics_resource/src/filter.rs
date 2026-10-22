@@ -447,6 +447,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             alias: None,
+            scope: crate::model::RowScope::Project,
             kind,
             version,
             status,

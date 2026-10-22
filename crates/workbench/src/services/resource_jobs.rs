@@ -36,7 +36,7 @@ use analytics_resource::present::{
     build_trash_snapshot, build_version_rows,
 };
 use analytics_resource::preview::{self, Preview};
-use analytics_resource::resource_view::{GroupOption, ResourcesSnapshot};
+use analytics_resource::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
 use analytics_resource::{
     AnalyticsResource, AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService,
     ArchiveStatus, ArchiveUndo, CheckoutRequest, IndexIssue, IndexRepair, KeepVersions, TagTarget,
@@ -1505,8 +1505,13 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
     // 读量上限由 `preview` 模块的常量定——面板说“前 20 行”，就由同一处决定读多少。
     let previews = load_previews(&payload, &rows).await;
 
+    // 全局实例行（§13 展示层）：全局登记读失败 / 全局库未初始化都不弄砸项目刷新
+    // （全局列表是附加视图，不是项目刷新能否成功的前提）。
+    let global_rows = load_global_rows().await;
+
     Ok(build_snapshot(SnapshotInputs {
         resources: &rows,
+        global_rows,
         statuses: &statuses,
         history_counts: &history_counts,
         tags: &tags_by_resource,
@@ -1517,6 +1522,21 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         read_only: job.read_only,
         now: Utc::now(),
     }))
+}
+
+/// 读全局实例行（§13 展示层；工作线程上执行）。
+///
+/// 全局登记读失败 / 全局系统库未初始化（`get_global_db_manager` 为空）时返回空表：
+/// 全局列表是**附加视图**，不参与项目刷新成败。
+async fn load_global_rows() -> Vec<ArchiveRow> {
+    use analytics_resource::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
+    let Ok(store) = GlobalInstanceStore::production().await else {
+        return Vec::new();
+    };
+    match list_global_resources(&store) {
+        Ok(list) => to_global_rows(&list, Utc::now()),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// 读内容预览（工作线程上执行）：只给可预览的行读开头。

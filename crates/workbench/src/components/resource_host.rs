@@ -706,6 +706,20 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.notice("资产库：正在升级到全局…", cx);
     }
 
+    fn request_distribute_from_global(&self, name: &str, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法从全局分发", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能从全局分发", cx);
+            return;
+        }
+        // 分发 = 跨项目唯一法定路径（全局 → 当前项目）；目标重名由工作线程拦下回执。
+        resource_jobs::enqueue_distribute(root, name.to_string());
+        self.shared.refresh_resources(cx);
+        self.notice("资产库：正在从全局分发…", cx);
+    }
+
     fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
         // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
         // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。

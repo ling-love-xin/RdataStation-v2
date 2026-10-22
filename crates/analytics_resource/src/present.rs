@@ -194,6 +194,9 @@ pub type FolderMemberships = std::collections::HashMap<String, String>;
 /// 位置参数到七八个时调用点就没人看得懂了。
 pub struct SnapshotInputs<'a> {
     pub resources: &'a [AnalyticsResource],
+    /// 全局实例行（§13）：已在调用侧转成 `ArchiveRow`（scope = Global）；与项目行
+    /// 分开存，不参与计数 / 标签 / 分组 / 详情映射。
+    pub global_rows: Vec<ArchiveRow>,
     pub statuses: &'a ArchiveStatuses,
     pub history_counts: &'a VersionCounts,
     pub tags: &'a ResourceTags,
@@ -222,6 +225,8 @@ pub fn to_row(
     ArchiveRow {
         id: resource.id.clone(),
         name: resource.name.clone(),
+        // 项目行：本行是项目实例（全局行由双实例路径单独构造，见 resource_jobs）。
+        scope: crate::model::RowScope::Project,
         // 别名与来源表：行上不显示，但它们是**搜索匹配面**的一员（原型 §2.2，见 `filter::search_haystack`）。
         alias: resource.alias.clone(),
         kind,
@@ -514,6 +519,7 @@ fn file_name_of(rel_path: &str) -> String {
 pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
     let SnapshotInputs {
         resources,
+        global_rows,
         statuses,
         history_counts,
         tags: tags_by_resource,
@@ -575,6 +581,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
 
     ResourcesSnapshot {
         rows,
+        global_rows,
         counts,
         read_only,
         details,
@@ -878,6 +885,7 @@ mod tests {
 
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
+            global_rows: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &counts,
             tags: empty_tags(),
@@ -935,6 +943,7 @@ mod tests {
 
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
+            global_rows: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: &tags,
@@ -971,6 +980,7 @@ mod tests {
 
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
+            global_rows: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),
@@ -1014,6 +1024,7 @@ mod tests {
 
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
+            global_rows: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),
@@ -1069,6 +1080,7 @@ mod tests {
 
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
+            global_rows: Vec::new(),
             statuses: &statuses,
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),

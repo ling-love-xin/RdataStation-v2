@@ -141,6 +141,7 @@ mod tests {
             id: id.to_string(),
             name: format!("{id}.sql"),
             alias: None,
+            scope: crate::model::RowScope::Project,
             kind: ArchiveKind::File,
             version: 1,
             status: ArchiveStatus::Normal,

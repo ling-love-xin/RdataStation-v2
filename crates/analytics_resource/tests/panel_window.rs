@@ -26,7 +26,7 @@ use rds_analytics_resource::detail_view::{
 };
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
-use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
+use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, RowScope, TagTarget};
 use rds_analytics_resource::preview::Preview;
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
@@ -156,6 +156,16 @@ impl ResourcesHost for RecordingHost {
     fn request_refresh(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("refresh".to_string());
     }
+    fn request_promote_to_global(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("promote:{}", detail.id));
+    }
+    fn request_distribute_from_global(&self, name: &str, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("distribute:{name}"));
+    }
     fn remember_sort(&self, field: SortField, order: SortOrder, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -177,6 +187,7 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
     ArchiveRow {
         id: id.to_string(),
         name: format!("{id}.sql"),
+        scope: RowScope::Project,
         alias: None,
         kind,
         version,
@@ -212,6 +223,7 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
         .collect();
     ResourcesSnapshot {
         rows,
+        global_rows: Vec::new(),
         counts,
         read_only,
         details,
