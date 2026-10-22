@@ -33,7 +33,7 @@ default-members = ["crates/app"]
 exclude = ["v1"]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 
 # ============================================================================
