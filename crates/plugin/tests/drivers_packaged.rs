@@ -188,3 +188,101 @@ async fn postgres_py_package_deploys_and_registers() {
         .shutdown_all(Instant::now(), Duration::from_secs(10))
         .await;
 }
+
+/// 用户自定驱动 jar（`backend.driver_jars`）全链路：清单 → 部署 env 注入 →
+/// 进程带 `RDS_DRIVER_JARS` 起壳 → 壳从外部目录加载 h2 → 真连查询。
+///
+/// 布置：插件目录 `lib/` 只放壳 jar（同目录扫不到任何驱动 jar），h2 单独放
+/// 外部目录、仅由 driver_jars 指向——能连 H2 即证明外部加载链路完整。
+#[tokio::test]
+async fn driver_jars_inject_env_and_load_external_driver_jar() {
+    // 壳与 h2 必须真实存在（tools/rds-jdbc-shell 已构建，install.ps1 也跑过）
+    let shell_src = repo_root().join("tools/rds-jdbc-shell/lib/rds-jdbc-shell.jar");
+    let h2_src = repo_root().join("tools/rds-jdbc-shell/lib/h2-2.5.252.jar");
+    if !shell_src.exists() || !h2_src.exists() {
+        eprintln!("rds-jdbc-shell 未构建（先跑 tools\\rds-jdbc-shell\\build.ps1），跳过本用例");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!("rds_extjar_it_{}", std::process::id()));
+    let plugin_dir = tmp.join("plugin");
+    let ext_dir = tmp.join("external");
+    let lib = plugin_dir.join("lib");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).expect("清理旧临时目录");
+    }
+    std::fs::create_dir_all(&lib).expect("建 lib 目录");
+    std::fs::create_dir_all(&ext_dir).expect("建 external 目录");
+    std::fs::copy(&shell_src, lib.join("rds-jdbc-shell.jar")).expect("复制壳 jar");
+    std::fs::copy(&h2_src, ext_dir.join("h2-2.5.252.jar")).expect("复制 h2 jar");
+
+    // 路径统一正斜杠（TOML 里反斜杠是转义符）
+    let ext_str = ext_dir.to_string_lossy().replace('\\', "/");
+    let manifest_text = format!(
+        r#"
+[plugin]
+id = "com.example.extjar"
+name = "外部 jar 验证"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/rds-jdbc-shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+driver_jars = ["{ext_str}"]
+
+[capabilities.driver]
+
+[[contributes.drivers]]
+id = "jdbc"
+display_name = "外部 jar JDBC"
+default_port = 1521
+"#
+    );
+    std::fs::write(plugin_dir.join("plugin.toml"), manifest_text).expect("写清单");
+
+    let manifest = ManifestParser::parse(&plugin_dir.join("plugin.toml"))
+        .expect("清单应当可解析");
+    let deployment = Deployment::from_manifest(&manifest, &plugin_dir)
+        .expect("部署应当成功")
+        .expect("应当有子进程形态");
+    assert_eq!(
+        deployment.env,
+        vec![("RDS_DRIVER_JARS".to_string(), ext_str.clone())],
+        "driver_jars 应经环境变量注入"
+    );
+
+    let supervisor = Arc::new(Mutex::new(SidecarSupervisor::new()));
+    let registered = register_sidecar_drivers(Arc::clone(&supervisor), &manifest, &plugin_dir)
+        .await
+        .expect("注册应当成功");
+    assert!(registered.contains(&"jdbc".to_string()), "{registered:?}");
+
+    let factory = DriverRegistry::get("jdbc").expect("注册表里应当有 jdbc");
+    let mut config = DriverConnectionConfig::new("jdbc");
+    config.name = Some("外部 h2".to_string());
+    config.url_override = Some("jdbc:h2:mem:ext_jar_it".to_string());
+    let database = factory.create(config).await.expect("外部 h2 连接应当成功");
+    let result = database
+        .query("select 42 as answer")
+        .await
+        .expect("查询应当成功");
+    assert_eq!(result.total_rows(), 1, "应返回一行");
+    drop(database);
+
+    assert!(
+        wait_until_no_sessions(&supervisor).await,
+        "句柄丢掉之后会话应当被交还"
+    );
+    supervisor
+        .lock()
+        .await
+        .shutdown_all(Instant::now(), Duration::from_secs(10))
+        .await;
+    std::fs::remove_dir_all(&tmp).expect("清理临时目录");
+}

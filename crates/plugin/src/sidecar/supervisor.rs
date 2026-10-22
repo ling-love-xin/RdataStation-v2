@@ -114,11 +114,33 @@ impl Deployment {
             None => None,
         };
 
+        // 用户自定驱动 jar：部署期校验存在性（清单解析期只查绝对路径，这里查真身），
+        // 存在则经 RDS_DRIVER_JARS 环境变量交给 Java 壳（壳启动时读它加载外部 jar）。
+        let mut env = Vec::new();
+        if !backend.driver_jars.is_empty() {
+            let mut bad: Vec<&str> = Vec::new();
+            for jar in &backend.driver_jars {
+                if !std::path::Path::new(jar).exists() {
+                    bad.push(jar.as_str());
+                }
+            }
+            if !bad.is_empty() {
+                return Err(shared::error::CoreError::plugin(
+                    shared::error::PluginError::ExecutionFailed {
+                        plugin_id: manifest.plugin.id.clone(),
+                        function: "Deployment::from_manifest".to_string(),
+                        reason: format!("backend.driver_jars 路径不存在：{}", bad.join("、")),
+                    },
+                ));
+            }
+            env.push(("RDS_DRIVER_JARS".to_string(), backend.driver_jars.join(";")));
+        }
+
         Ok(Some(Self {
             plugin_id: manifest.plugin.id.clone(),
             spec,
             command,
-            env: Vec::new(),
+            env,
             protocol: backend.protocol.clone(),
             runtime_note,
         }))
@@ -1212,6 +1234,76 @@ concurrency = "serial"
         assert_eq!(deployment.spec.max_instances, 1);
         assert!(deployment.command.program.ends_with("bin/agent"));
         assert!(deployment.command.args.is_empty());
+    }
+
+    /// 用户自定驱动 jar：部署期校验存在性，存在的经 `RDS_DRIVER_JARS` 环境变量交给 Java 壳。
+    #[test]
+    fn deployment_injects_driver_jars_env_and_rejects_missing_paths() {
+        // 用 crate 根 Cargo.toml（绝对路径，部署期只查存在性，不验格式）当"存在的 jar"。
+        // file!() 返回 workspace 相对路径，拼 CARGO_MANIFEST_DIR 会重复；Cargo.toml 最稳。
+        // TOML 里反斜杠是转义符，路径统一转正斜杠（Windows 同样认）。
+        let existing = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("Cargo.toml")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let missing = "D:/no/such/dir/ojdbc11.jar";
+
+        let ok: PluginManifest = toml::from_str(&format!(
+            r#"
+[plugin]
+id = "com.example.jdbc"
+name = "JDBC"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+driver_jars = ["{}"]
+
+[capabilities.driver]
+"#,
+            existing
+        ))
+        .unwrap();
+        let deployment = Deployment::from_manifest(&ok, Path::new("."))
+            .expect("解析应当成功")
+            .expect("script 形态应当有部署信息");
+        assert_eq!(deployment.env, vec![("RDS_DRIVER_JARS".to_string(), existing.to_string())]);
+
+        // 反例：路径不存在 → 部署期报错（清单解析期只查绝对路径，这里查真身）
+        let bad: PluginManifest = toml::from_str(&format!(
+            r#"
+[plugin]
+id = "com.example.bad"
+name = "Bad"
+version = "1.0.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+driver_jars = ["{}"]
+
+[capabilities.driver]
+"#,
+            missing
+        ))
+        .unwrap();
+        let err = Deployment::from_manifest(&bad, Path::new("."))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("路径不存在"), "{err}");
     }
 
     #[test]

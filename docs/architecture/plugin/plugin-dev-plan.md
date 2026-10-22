@@ -1094,3 +1094,11 @@ P0 一次性清理完毕（2026-09-20）——下表是**已处置**清单，留
 - 修复：`SessionDriver::describe` 补带 `session_id`（真实壳按契约要求会话已存在；Rust 靶子此前容忍漏传，未被发现）。
 - 验证：`cargo test -p rds-plugin --test drivers_packaged` 2 passed（oracle H2 全链路 / pg 部署注册）；rds-plugin 全量 194 lib + 集成全绿。
 - 未接：用户自定 driver jar 路径（三来源之二）v1 未实现；`third_party` 自动下载二期；插件 UI 入口（P4）未动。
+
+**用户自定驱动 jar（driver_jars）**（2026-10-22）：
+- manifest：`[backend] driver_jars`（仅 java runtime、绝对路径、解析期拒绝相对路径）；
+  `Deployment::from_manifest` 部署期校验存在性（缺失报可读错误）并注入 `RDS_DRIVER_JARS`（`;` 分隔）到进程 env。
+- Java 壳：`DriverRegistry.collectExternal` 读环境变量，文件直接加 URL、目录扫 `*.jar`，与插件包 lib/ 合并。
+- 实证：壳单独目录（无驱动 jar）+ h2 仅在 `RDS_DRIVER_JARS` 指向目录 → initialize/open(H2)/query 全通；
+  `tests/drivers_packaged.rs` 新增全链路用例（临时插件目录 + driver_jars 指向外部 h2，真连查询）。
+- 验证：rds-plugin 全量 196 lib + 71 集成全绿；插件包已重装（壳带新能力）。

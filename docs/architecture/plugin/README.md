@@ -171,3 +171,8 @@ rds-plugin 全量 194 lib 单测 + 集成全绿。修复宿主侧一处漏传：
 此前不带 `session_id`（Rust 靶子容忍、Java 壳按契约严格校验，暴露为「会话不存在」）。
 未接（如实列出）：用户自定 driver jar 路径白名单 v1 未实现（壳只扫自身目录/lib）；
 `third_party` jre/python 自动下载为二期；插件 UI 入口归档与面板接入未做（P4）。
+
+**用户自定驱动 jar（`backend.driver_jars`）已落地**（2026-10-22）：
+清单 `[backend]` 新增 `driver_jars`（仅 `runtime = "java"`，绝对路径，文件或目录），
+宿主部署期校验存在性后经 `RDS_DRIVER_JARS` 环境变量注入 Java 壳进程，壳启动时与插件包
+`lib/` 驱动合并加载（`DriverRegistry.collectExternal`）。兑现「可以指定自己下载 jdbc 包」。

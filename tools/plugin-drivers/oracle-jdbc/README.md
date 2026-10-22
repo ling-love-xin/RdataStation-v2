@@ -39,3 +39,9 @@
 没有 Oracle 服务器时，把连接配置的 url_override 指到 H2（`jdbc:h2:mem:rds`），
 壳会按 `acceptsURL` 匹配到 lib/ 里的 h2 驱动 —— 协议 / 进程 / 会话 / 查询 / meta
 全链路照跑，只是数据面换成嵌入式库。
+
+## 指定自己的 ojdbc 包
+
+不想用 install.ps1 下载的 ojdbc11、或已从 Oracle 官方站点手动下载了驱动 jar 时，
+在 `plugin.toml` 的 `[backend]` 加 `driver_jars = ["<jar 绝对路径>"]`（可多个，目录亦可），
+重装/热插拔后生效。宿主校验路径存在后经 `RDS_DRIVER_JARS` 环境变量交给 Java 壳加载。

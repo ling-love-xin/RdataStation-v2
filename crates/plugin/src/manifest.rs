@@ -88,6 +88,13 @@ pub struct PluginBackend {
     /// `script` 型的解释器参数（如 Java 的 `-jar`），拼在解释器与脚本之间。
     #[serde(default)]
     pub interpreter_args: Vec<String>,
+    /// 用户自定的额外驱动 jar（绝对路径，文件或目录；目录扫 `*.jar`）。
+    ///
+    /// 只对 `runtime = "java"` 有意义：宿主部署期校验存在性后，经环境变量
+    /// `RDS_DRIVER_JARS`（`;` 分隔）交给 Java 壳加载——覆盖「用户自己下载 JDBC 包」
+    /// 的场景，不必把 jar 塞进插件包 `lib/`。相对路径歧义大，当场拒绝。
+    #[serde(default)]
+    pub driver_jars: Vec<String>,
     /// 传输方式；P1 起只有 `framed`（dev-plan §4.2.1）。
     #[serde(default)]
     pub transport: BackendTransport,
@@ -586,6 +593,23 @@ impl PluginManifest {
                                     "backend.interpreter_args is only meaningful for script",
                                 ));
                             }
+                        }
+                    }
+                }
+                // driver_jars 只对 Java runtime 有意义（JDBC jar 由 Java 壳加载）；
+                // 其它运行时声明了属于清单写错。路径必须绝对（相对插件目录解析
+                // 歧义大，且第三方清单给的字符串不许参与路径拼接）。
+                if !backend.driver_jars.is_empty() {
+                    if backend.runtime != Some(BackendRuntime::Java) {
+                        return Err(manifest_error(
+                            "backend.driver_jars is only meaningful for runtime = java",
+                        ));
+                    }
+                    for jar in &backend.driver_jars {
+                        if !std::path::Path::new(jar).is_absolute() {
+                            return Err(manifest_error(
+                                "backend.driver_jars entries must be absolute paths",
+                            ));
                         }
                     }
                 }
@@ -1304,6 +1328,87 @@ interpreter_args = ["-jar"]
         .unwrap();
         let err = manifest.validate().unwrap_err().to_string();
         assert!(err.contains("only meaningful for script"), "{err}");
+    }
+
+    /// `driver_jars` 只对 Java runtime 有意义，且必须绝对路径（解析期校验）。
+    #[test]
+    fn backend_driver_jars_require_java_runtime_and_absolute_paths() {
+        // 正例：Java runtime + 绝对路径（Windows 盘符 / 反斜杠都算绝对）
+        let ok: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.jdbc"
+name = "JDBC"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+driver_jars = ["D:/drivers/oracle/ojdbc11.jar", "C:\\extra\\mysql"]
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        ok.validate().expect("Java runtime + 绝对路径应当通过校验");
+        assert_eq!(ok.backend.as_ref().unwrap().driver_jars.len(), 2);
+
+        // 反例 1：Python runtime 声明 driver_jars → 拒绝
+        let bad_runtime: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.py"
+name = "Py"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "driver.py"
+runtime = "python"
+driver_jars = ["D:/drivers/x.jar"]
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        let err = bad_runtime.validate().unwrap_err().to_string();
+        assert!(err.contains("only meaningful for runtime = java"), "{err}");
+
+        // 反例 2：相对路径 → 拒绝
+        let bad_path: PluginManifest = toml::from_str(
+            r#"
+[plugin]
+id = "com.example.rel"
+name = "Rel"
+version = "0.1.0"
+publisher = "example"
+
+[plugin.engines]
+rdatastation = ">=0.1"
+
+[backend]
+kind = "script"
+executable = "lib/shell.jar"
+runtime = "java"
+interpreter_args = ["-jar"]
+driver_jars = ["drivers/ojdbc11.jar"]
+
+[capabilities.driver]
+"#,
+        )
+        .unwrap();
+        let err = bad_path.validate().unwrap_err().to_string();
+        assert!(err.contains("must be absolute"), "{err}");
     }
 
     /// 不支持的传输 / 平台要在**解析完、起进程前**就说清原因（「不得静默退化」）。

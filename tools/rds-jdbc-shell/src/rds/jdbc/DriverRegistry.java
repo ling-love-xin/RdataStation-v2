@@ -48,6 +48,9 @@ public final class DriverRegistry {
         List<URL> urls = new ArrayList<>();
         collectJars(base, urls);
         collectJars(base.resolve("lib"), urls);
+        // 用户自定驱动 jar（宿主经 RDS_DRIVER_JARS 环境变量传入，';' 分隔，
+        // 文件或目录均可）——覆盖「用户自己下载 JDBC 包、不必塞进插件包 lib/」的场景。
+        collectExternal(urls);
         if (urls.isEmpty()) return;
 
         URLClassLoader loader = new URLClassLoader(urls.toArray(new URL[0]), DriverRegistry.class.getClassLoader());
@@ -105,6 +108,27 @@ public final class DriverRegistry {
                     });
         } catch (Exception ignored) {
             // 目录不可读（权限/占用）就跳过
+        }
+    }
+
+    /** 读 `RDS_DRIVER_JARS` 环境变量（宿主部署期注入），逐个加入加载列表。 */
+    private static void collectExternal(List<URL> urls) {
+        String raw = System.getenv("RDS_DRIVER_JARS");
+        if (raw == null || raw.isBlank()) return;
+        for (String entry : raw.split(";", -1)) {
+            String trimmed = entry.trim();
+            if (trimmed.isEmpty()) continue;
+            Path p = Path.of(trimmed);
+            try {
+                if (Files.isDirectory(p)) {
+                    collectJars(p, urls);
+                } else if (Files.isRegularFile(p)) {
+                    urls.add(p.toUri().toURL());
+                }
+                // 不存在 / 解析失败：跳过（与 collectJars 的容忍口径一致）
+            } catch (Exception ignored) {
+                // 单个条目坏掉不该拖垮整个壳
+            }
         }
     }
 }
