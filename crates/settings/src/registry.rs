@@ -124,6 +124,10 @@ pub enum Slot {
     StartupDefaultLeftPanel,
     /// 草稿箱工具栏布局（复合值：按钮稳定标识 → { visible, side }；读写走 ⋯ 菜单）。
     ScratchpadToolbar,
+    InsightMemoryLimitMb,
+    InsightFullScanConfirm,
+    InsightWorkSetLimit,
+    InsightStatusUsage,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -150,6 +154,10 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "logging.min_level" => Slot::LogMinLevel,
         "startup.default_left_panel" => Slot::StartupDefaultLeftPanel,
         "scratchpad.toolbar" => Slot::ScratchpadToolbar,
+        "insight.memory_limit_mb" => Slot::InsightMemoryLimitMb,
+        "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
+        "insight.work_set_limit" => Slot::InsightWorkSetLimit,
+        "insight.status_usage" => Slot::InsightStatusUsage,
         _ => return None,
     })
 }
@@ -182,6 +190,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::StartupDefaultLeftPanel => KindTag::Enum,
         // 复合值（工具栏按钮布局）：没有页面写入路径，读写走草稿箱 ⋯ 菜单。
         Slot::ScratchpadToolbar => KindTag::Composite,
+        Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
+        Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
     }
 }
 
@@ -621,6 +631,74 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "crates/scratchpad/src/scratchpad_view/chrome.rs::（⋯ 菜单读写）+ scratchpad_view.rs::ScratchpadView::new（启动读入）",
         composite: true,
+    },
+    SettingSpec {
+        key: "insight.memory_limit_mb",
+        section: "insight",
+        section_label: "洞察",
+        label: "分析引擎内存上限",
+        hint: "内存 DuckDB（洞察 / 结果集 / Mock 临时表共享）的内存上限（MB）；超限溢写到磁盘临时目录；改完立即生效，已在内存的数据不因此释放",
+        kind: SettingKind::Number,
+        presets: &[
+            (512, "512 MB"),
+            (1024, "1 GB"),
+            (2048, "2 GB（默认）"),
+            (4096, "4 GB"),
+            (8192, "8 GB"),
+        ],
+        default_json: "2048",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/services/duckdb_host.rs（装配层经 install_insight_memory_limit_sink 应用到 DuckDBManager::set_memory_limit_mb）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "insight.full_scan_confirm",
+        section: "insight",
+        section_label: "洞察",
+        label: "全量统计前确认",
+        hint: "源目标切「全量」口径前先弹确认（大表全量会慢且占内存）；关闭后点「全量统计」直接执行",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/components/insight_actions.rs::insight_full_confirm_requested（宿主弹窗判断）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "insight.work_set_limit",
+        section: "insight",
+        section_label: "洞察",
+        label: "工作集提示阈值",
+        hint: "洞察集合内表数超过该值，集合卡以警告色提示先清理（集合表跳过 TTL / 上限清理，一直占内存）；0 = 不提示",
+        kind: SettingKind::Number,
+        presets: &[
+            (0, "不提示"),
+            (10, "10 张"),
+            (20, "20 张"),
+            (30, "30 张（默认）"),
+            (50, "50 张"),
+        ],
+        default_json: "30",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/components/insight_actions.rs::apply_insight_prefs（宿主推送）+ crates/insight/src/view/set.rs（渲染）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "insight.status_usage",
+        section: "insight",
+        section_label: "洞察",
+        label: "显示内存占用",
+        hint: "中间页工具栏显示分析引擎内存占用（「内存 X MB / 上限 · 临时表 N」）；关闭后停止轮询采样",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/workbench/src/components/insight_actions.rs::apply_insight_prefs（宿主推送）+ crates/insight/src/workspace.rs（轮询与渲染）",
+        composite: false,
     },
 ];
 

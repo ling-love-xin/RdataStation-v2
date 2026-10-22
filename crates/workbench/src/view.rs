@@ -958,6 +958,14 @@ impl WorkbenchView {
             }));
         self._insight_ws_subs
             .push(crate::components::insight_actions::attach(&insight_view, &shared, cx));
+        // 全量统计确认弹窗（subscribe_in 要窗口）+ 装配洞察偏好（设置 → 面板 + 引擎）。
+        // 右栏装配（RightSidebarPanel::new）已做过一次；懒创建路径补做，保证
+        // 中间页先于右栏打开时设置也生效（apply_insight_prefs 幂等）。
+        self._insight_ws_subs
+            .push(crate::components::insight_actions::attach_dialogs(
+                &insight_view, window, cx,
+            ));
+        crate::components::insight_actions::apply_insight_prefs(&shared, cx);
         // D65 双栏单源：中间工作页目标变化（对比点行 / 后续工具栏切换）→ 右栏摘要联动。
         // 观察回调在事件路径触发，比较两栏当前目标，只有不同才同步（避免 set_target
         // 把右栏载荷也清掉重发请求——同目标重复设置会白白重取样）。
@@ -1397,16 +1405,17 @@ impl WorkbenchView {
         let (Some(area), Some(layout)) = (self.area.clone(), self.left_dock_layout(cx)) else {
             return;
         };
-        // Hidden → Expanded 重建 dock 时，把当前激活模块设为 dock 初始 tab
-        //（事件路径的 `select_panel` 在 dock 缺失时安全 no-op，重建发生在 render）。
-        let initial_id = match self.shared.active_left.get() {
-            LeftPanel::Draft => self.left_scratch_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
-            LeftPanel::Database => self.left_nav_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
-            LeftPanel::Resources => {
-                self.left_resource_tab.clone().map(|t| panel_handle(t).panel_id(cx))
-            }
-            LeftPanel::Plugin => self.left_plugin_tab.clone().map(|t| panel_handle(t).panel_id(cx)),
+        // Hidden → Expanded 重建 dock 时，把当前激活模块设为 dock 初始 tab。
+        // 这里同时留句柄：dock 已存在时要把 active 面板**挂载并激活**（与右 dock
+        // 同一补丁——`Shared::open_left_panel` 等无窗口入口只改状态，dock 同步必须
+        // 由宿主这拍完成，否则命令面板切不过去 tab）。
+        let active_tab = match self.shared.active_left.get() {
+            LeftPanel::Draft => self.left_scratch_tab.clone().map(panel_handle),
+            LeftPanel::Database => self.left_nav_tab.clone().map(panel_handle),
+            LeftPanel::Resources => self.left_resource_tab.clone().map(panel_handle),
+            LeftPanel::Plugin => self.left_plugin_tab.clone().map(panel_handle),
         };
+        let active_id = active_tab.as_ref().map(|handle| handle.panel_id(cx));
         area.update(cx, |area, cx| {
             // DockLayout 不可 clone：Expanded / Collapsed 两分支互斥，各自消费 layout。
             if mode == SidebarMode::Expanded {
@@ -1419,11 +1428,19 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    if let Some(id) = initial_id {
+                    if let Some(id) = active_id.clone() {
                         area.select_panel(id, window, cx);
                     }
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
+                } else if let (Some(handle), Some(id)) = (active_tab, active_id) {
+                    // 面板化后左 dock 是动态 tab 集：active 模块未挂载 → 挂载（自动激活）；
+                    // 已挂载但未激活 → 切激活。`select_panel` / `add_panel_view` 幂等。
+                    if area.panel(id.clone()).is_none() {
+                        area.add_panel_view(handle.clone(), DockPlacement::Left, None, window, cx);
+                    } else {
+                        area.select_panel(id.clone(), window, cx);
+                    }
                 }
             } else if mode == SidebarMode::Collapsed {
                 if !area.has_dock(DockPlacement::Left) {
@@ -2252,11 +2269,19 @@ impl WorkbenchView {
             // T-1：设置落盘 → 重应用标签栏外观到 DockSkin（启动值在 `init_workspace`
             // 已应用一次；这里是运行时路径）。皮肤句柄在装配期已存字段。
             let dock_skin = self.dock_skin.clone();
+            // 洞察偏好（`insight.*` 四项）变更也在这里推送：内存上限走 engine 连接级
+            // 设置（即时生效），面板偏好（内存显示开关 / 工作集阈值）转发给面板实体。
+            // 与 sink（`install_insight_memory_limit_sink`）双写幂等，这里兜底启动与面板重建。
+            let shared_for_insight = self.shared.clone();
             let on_settings_changed: std::rc::Rc<dyn Fn(&mut App)> =
                 std::rc::Rc::new(move |app| {
                     if let Some(skin) = &dock_skin {
                         Self::apply_tab_bar_settings(skin, app);
                     }
+                    crate::components::insight_actions::apply_insight_prefs(
+                        &shared_for_insight,
+                        app,
+                    );
                 });
             let host = SettingsHost {
                 on_close,
@@ -2384,12 +2409,23 @@ impl WorkbenchView {
                 self.shared.request_reveal(object);
             }
             Action::OpenLeftPanel(panel) => {
+                // 与右 dock `Shared::open_right_panel` 同一口径：先登记进 `left_open_panels`
+                //（tab 条只显示点过的模块；漏登记 → dock 已存在时新模块永不挂载）。
+                {
+                    let mut open = self.shared.left_open_panels.borrow_mut();
+                    if !open.contains(&panel) {
+                        open.push(panel);
+                    }
+                }
                 self.shared.active_left.set(panel);
                 self.shared.left_mode.set(SidebarMode::Expanded);
                 if panel == LeftPanel::Resources {
                     // 与活动栏点击同一口径：激活即取一次列表（M6）。
                     self.request_resources_refresh(cx);
                 }
+                // 状态改完由宿主这拍同步 dock：挂载 / 激活 active 面板（apply_left_mode
+                // 的已存在分支负责补齐未挂载 tab 并切到激活项）。
+                self.apply_left_mode(window, cx);
             }
             Action::OpenRightPanel(panel) => {
                 // 与右活动栏点击同一口径（Mock 的候选清单与生成历史在展开这一拍重读）。

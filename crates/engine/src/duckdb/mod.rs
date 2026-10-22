@@ -47,7 +47,7 @@ pub use file_reader::file_reader_function;
 pub use federation::{DataSourceConfig, DataSourceType, FederationManager};
 pub use fts::FTSManager;
 pub use import_export::{DataFormat, ExportConfig, ImportConfig, ImportExportManager};
-pub use manager::DuckDBManager;
+pub use manager::{DuckDBManager, MemoryStats};
 pub use metrics::{DuckDBMetrics, MetricsSnapshot};
 pub use plugin::{PluginConnection, PluginManager, PluginPermissionLevel};
 pub use snapshot::{SnapshotInfo, SnapshotManager};

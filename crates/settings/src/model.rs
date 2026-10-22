@@ -42,6 +42,62 @@ pub struct Settings {
     pub startup: Startup,
     #[serde(default)]
     pub scratchpad: Scratchpad,
+    #[serde(default)]
+    pub insight: Insight,
+}
+
+/// 洞察模块资源与交互偏好。
+///
+/// 四个项对应洞察模块的资源占用治理（2026-10 决策）：
+/// - `memory_limit_mb`：分析引擎（进程级内存 DuckDB 单例）的内存上限。洞察 /
+///   编辑器结果集 / Mock 的临时表都在这条连接上，共吃同一个上限；超限溢写
+///   到磁盘临时目录。运行时即时应用（`SET memory_limit`，见 `DuckDBManager::set_memory_limit_mb`）。
+/// - `full_scan_confirm`：源目标切「全量」口径前是否弹确认。全量建表在大表上
+///   慢且占内存，默认确认；关掉则点「全量统计」直接执行（与「取样」同速）。
+/// - `work_set_limit`：洞察集合（会话工作集）的提示阈值。集合内的表跳过 TTL /
+///   上限清理（T21），数量超阈值时集合卡以警告色提示先清理；`0` = 不提示。
+/// - `status_usage`：中间页工具栏是否显示分析引擎内存占用（「内存 X MB / 上限」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Insight {
+    #[serde(default = "default_insight_memory_limit_mb")]
+    pub memory_limit_mb: i64,
+    #[serde(default = "default_insight_full_scan_confirm")]
+    pub full_scan_confirm: bool,
+    #[serde(default = "default_insight_work_set_limit")]
+    pub work_set_limit: i64,
+    #[serde(default = "default_insight_status_usage")]
+    pub status_usage: bool,
+}
+
+impl Default for Insight {
+    fn default() -> Self {
+        Self {
+            memory_limit_mb: default_insight_memory_limit_mb(),
+            full_scan_confirm: default_insight_full_scan_confirm(),
+            work_set_limit: default_insight_work_set_limit(),
+            status_usage: default_insight_status_usage(),
+        }
+    }
+}
+
+/// 分析引擎内存上限（MB）：默认 2GB，与 `DuckDBManager::DEFAULT_MEMORY_LIMIT` 一致。
+fn default_insight_memory_limit_mb() -> i64 {
+    2048
+}
+
+/// 全量统计前确认：默认开启（大表全量是慢操作，值得一道确认）。
+fn default_insight_full_scan_confirm() -> bool {
+    true
+}
+
+/// 洞察集合提示阈值：默认 30 张（工作集超过 30 张提示先清理）。
+fn default_insight_work_set_limit() -> i64 {
+    30
+}
+
+/// 工具栏内存占用显示：默认开启。
+fn default_insight_status_usage() -> bool {
+    true
 }
 
 /// 草稿箱侧栏专属设置（2026-10-11 接线：⋯ 更多设置持久化到用户配置）。

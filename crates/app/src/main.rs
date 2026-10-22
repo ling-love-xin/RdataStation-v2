@@ -143,6 +143,9 @@ fn run_app() {
                     eprintln!("[startup] 日志级别切换失败: {e}");
                 }
             });
+            // 洞察内存上限变更的出口：设置页改上限 → 落盘 + 调这个 sink →
+            // 分析引擎连接级设置即时生效（不重启；进入洞察时装配还会兜底对齐一次）。
+            settings::install_insight_memory_limit_sink(engine::duckdb::DuckDBManager::apply_memory_limit_mb);
             // 退出前把最后一批日志落库：库侧是"每 100 条或每 1 秒"批量提交，
             // 不等这一下，关窗口前最后 1 秒的记录就没了。
             // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。

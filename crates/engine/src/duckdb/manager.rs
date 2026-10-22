@@ -1,6 +1,6 @@
 use super::temp_table::{TempTableManager, TempTableSource, TempTableStats};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use duckdb::Connection;
@@ -37,6 +37,28 @@ static GLOBAL_DUCKDB: OnceLock<Arc<Mutex<duckdb::Connection>>> = OnceLock::new()
 
 /// 全局临时表管理器（单例）
 static GLOBAL_TEMP_TABLE_MANAGER: OnceLock<TempTableManager> = OnceLock::new();
+
+/// 最后一次**显式**设置的内存上限（字节）；`0` = 尚未设置（走环境变量 / 默认路径）。
+///
+/// 为什么要记这一份：`current_setting('memory_limit')` 在 DuckDB 1.5+ 会把值重新
+/// 格式化成「1.8 GiB」这种近似读数（十进制存、二进制显示，一位小数），直接拿它显示
+/// 「内存 X / 上限」会出现「1.9 GB / 2 GB」的怪样。显式设置（设置页 / sink）时记
+/// 精确字节，读数优先用它；`0` 才回退解析 DuckDB 的读数（环境变量覆盖路径）。
+static LAST_MEMORY_LIMIT_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// 内存库的可观测读数（状态栏 / 洞察工具栏「内存 X MB / 上限」）。
+///
+/// `database_bytes` 是 `pragma_database_size('memory')` 的口径——memory catalog 的
+/// 逻辑大小，**近似**进程实际占用（DuckDB 不暴露进程 RSS），上限之下可信。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryStats {
+    /// 当前生效的内存上限（字节；来自 `current_setting('memory_limit')`）。
+    pub limit_bytes: u64,
+    /// 内存 catalog 当前大小（字节）；`None` = 该 pragma 在当前版本不可用。
+    pub database_bytes: Option<u64>,
+    /// 分析临时表数量（查询结果 / 洞察 / Mock / 插件四类合计，登记表口径）。
+    pub table_count: usize,
+}
 
 /// DuckDBManager 管理全局或项目级 DuckDB 实例的连接池。
 ///
@@ -200,6 +222,85 @@ impl DuckDBManager {
     /// 唯一的提前信号（架构 K16 ④）。
     pub fn temp_table_stats() -> TempTableStats {
         Self::global_temp_table_manager().stats()
+    }
+
+    /// 运行时调整内存库上限（MB）：在**已打开的全局内存连接**上 `SET memory_limit`。
+    ///
+    /// 为什么是运行时：上限是连接级设置，随时可改；设置页改完经装配层 sink 落到这里，
+    /// 不必重启。DuckDB 到顶后溢写（`temp_directory` 已钉住），改小不释放已占用的内存——
+    /// 调用方（hint 文案）要把这点讲给用户。
+    /// 设置 sink 适配：把设置页的内存上限（MB）应用到分析引擎，供
+    /// `settings::install_insight_memory_limit_sink` 注册（sink 签名是 `fn(i64)`，
+    /// 不能返回 Result）。失败只记日志——设置页改完立即生效，失败时下一次
+    /// 装配（进入洞察）会再次对齐。
+    pub fn apply_memory_limit_mb(mb: i64) {
+        if let Err(error) = Self::set_memory_limit_mb(mb.max(0) as u64) {
+            tracing::error!("应用洞察内存上限失败（{mb}MB）: {error}");
+        }
+    }
+
+    pub fn set_memory_limit_mb(mb: u64) -> Result<(), CoreError> {
+        let conn = Self::get_or_create_in_memory()?;
+        let guard = conn.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+        })?;
+        guard.execute_batch(&format!("SET memory_limit = '{mb}MB'")).map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "调整分析引擎内存上限失败（{mb}MB）: {e}"
+            )))
+        })?;
+        // 记录精确字节（见 [`LAST_MEMORY_LIMIT_BYTES`] 的说明：读数要回退解析才会用到它）
+        LAST_MEMORY_LIMIT_BYTES.store(mb.saturating_mul(1024 * 1024), Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 内存库可观测读数：上限 + 实际大小 + 临时表数量。
+    ///
+    /// 纯查询、拿锁后一次读完；**调用方不得持有该锁**（与 [`Self::in_memory_temp_tables`]
+    /// 同一约定）。`database_size` 读不到不致命（返回 `None`，界面显示「—」）。
+    pub fn memory_stats() -> Result<MemoryStats, CoreError> {
+        let conn = Self::get_or_create_in_memory()?;
+        let guard = conn.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+        })?;
+        // 上限：优先用显式设置记录的精确值；`0`（环境变量 / 默认路径）才回退解析
+        // DuckDB 的读数（`1.8 GiB` 这类近似值，见 [`LAST_MEMORY_LIMIT_BYTES`]）。
+        let limit_bytes = match LAST_MEMORY_LIMIT_BYTES.load(Ordering::Relaxed) {
+            0 => guard
+                .query_row(
+                    "SELECT current_setting('memory_limit')",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| {
+                    CoreError::common(CommonError::General(format!(
+                        "读取分析引擎内存上限失败: {e}"
+                    )))
+                })
+                .and_then(|raw| {
+                    parse_human_size(&raw).ok_or_else(|| {
+                        CoreError::common(CommonError::General(format!(
+                            "内存上限读数 `{raw}` 解析失败"
+                        )))
+                    })
+                })?,
+            recorded => recorded,
+        };
+        // 实际大小：memory catalog 的逻辑大小（近似内存占用，失败不致命）
+        let database_bytes = guard
+            .query_row(
+                "SELECT database_size FROM pragma_database_size('memory')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+            .map(|bytes| bytes.max(0) as u64);
+        drop(guard);
+        Ok(MemoryStats {
+            limit_bytes,
+            database_bytes,
+            table_count: Self::global_temp_table_manager().stats().total(),
+        })
     }
 
     /// 注册临时表到全局管理器。
@@ -577,6 +678,34 @@ fn parse_size_setting(raw: &str) -> Option<String> {
     (digits_ok && unit_ok).then(|| format!("{num}{}", unit.to_ascii_uppercase()))
 }
 
+/// 把 DuckDB 的 `current_setting('memory_limit')` 值（`2GB` / `2048MB` / `1.8 GiB` /
+/// `1073741824`）解析成字节；认不得返回 `None`（调用方显示「—」而不是编一个数）。
+///
+/// DuckDB 1.5+ 对设置值做**人类可读重格式化**（`SET memory_limit='2GB'` 后读回是
+/// `1.8 GiB`——它按十进制 GB 存 2,000,000,000 字节、按二进制单位显示），所以
+/// 这里必须同时认二进制后缀（KiB / MiB / GiB / TiB，可带小数）与十进制后缀。
+fn parse_human_size(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    let split = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let value: f64 = num.parse().ok()?;
+    let mult = match unit.trim().to_ascii_uppercase().as_str() {
+        "" | "B" => 1.0,
+        "KB" => 1_000.0,
+        "MB" => 1_000_000.0,
+        "GB" => 1_000_000_000.0,
+        "TB" => 1_000_000_000_000.0,
+        "KIB" => 1024.0,
+        "MIB" => 1024.0 * 1024.0,
+        "GIB" => 1024.0 * 1024.0 * 1024.0,
+        "TIB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * mult) as u64)
+}
+
 // ========== 测试 ==========
 #[cfg(test)]
 mod tests {
@@ -708,6 +837,46 @@ mod tests {
         assert_eq!(parse_size_setting("2PB"), None);
         assert_eq!(parse_size_setting("2GB'; DROP TABLE t; --"), None);
         assert_eq!(parse_size_setting("."), None);
+    }
+
+    #[test]
+    fn test_parse_human_size() {
+        // `current_setting('memory_limit')` 的读数解析（大小写 / 空格不敏感）：
+        // 十进制后缀按 10^n、二进制后缀（KiB/MiB/GiB）按 2^10n；DuckDB 1.5+ 回读
+        // 设置值是「1.8 GiB」这种二进制格式化（十进制存、二进制显示，一位小数）。
+        assert_eq!(parse_human_size("2GB"), Some(2_000_000_000));
+        assert_eq!(parse_human_size("2048MB"), Some(2_048_000_000));
+        assert_eq!(parse_human_size("512 mb"), Some(512_000_000));
+        assert_eq!(parse_human_size("1073741824"), Some(1_073_741_824));
+        assert_eq!(
+            parse_human_size("1.8 GiB"),
+            Some((1.8_f64 * 1024.0 * 1024.0 * 1024.0) as u64)
+        );
+        // 认不得返回 None（界面显示「—」，不编一个数）
+        assert_eq!(parse_human_size("garbage"), None);
+        assert_eq!(parse_human_size(""), None);
+        assert_eq!(parse_human_size("-1MB"), None);
+    }
+
+    #[test]
+    fn test_memory_stats_and_set_limit() -> Result<(), CoreError> {
+        // 全局内存库单例：默认上限 2GB（无环境变量覆盖时）
+        let stats = DuckDBManager::memory_stats()?;
+        assert!(stats.limit_bytes > 0, "上限应可读");
+        assert_eq!(
+            stats.table_count,
+            DuckDBManager::temp_table_stats().total(),
+            "表数口径 = 登记表合计"
+        );
+
+        // 运行时改上限再读：应反映新值（1024 MB = 1 GiB）
+        DuckDBManager::set_memory_limit_mb(1024)?;
+        let after = DuckDBManager::memory_stats()?;
+        assert_eq!(after.limit_bytes, 1024 * 1024 * 1024);
+
+        // 恢复默认，避免影响后续测试（上限是连接级设置，改了不自动还原）
+        DuckDBManager::set_memory_limit_mb(2048)?;
+        Ok(())
     }
 
     #[test]

@@ -49,6 +49,27 @@ fn notify_log_level(level: LogMinLevel) {
     }
 }
 
+/// 分析引擎内存上限变更的副作用出口（**由装配层注册一次**，见 `crates/app/src/main.rs`）。
+///
+/// 与 [`LOG_LEVEL_SINK`] 同构：`settings` 不依赖 `engine`，改完内存上限要让
+/// `DuckDBManager::set_memory_limit_mb` 在**已打开的全局内存连接**上 `SET memory_limit`
+/// 即时生效，装配层把这个函数注册进来。参数为 MB。
+static INSIGHT_MEMORY_LIMIT_SINK: RwLock<Option<fn(i64)>> = RwLock::new(None);
+
+/// 注册分析引擎内存上限变更出口（重复注册覆盖前一个；未注册时变更只落盘）。
+pub fn install_insight_memory_limit_sink(sink: fn(i64)) {
+    if let Ok(mut guard) = INSIGHT_MEMORY_LIMIT_SINK.write() {
+        *guard = Some(sink);
+    }
+}
+
+/// 通知内存上限变更（无出口时静默——例如测试环境）。
+fn notify_insight_memory_limit(mb: i64) {
+    if let Some(sink) = INSIGHT_MEMORY_LIMIT_SINK.read().ok().and_then(|guard| *guard) {
+        sink(mb);
+    }
+}
+
 /// 进程级连接默认值快照：供**无 `App` 的异步连接路径**（`ConnectionService`）读取。
 ///
 /// 由 `save_settings` / `SettingsService::init` 发布：async 上下文拿不到 GPUI global，
@@ -231,6 +252,14 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         // 复合值（工具栏按钮布局）：读写走草稿箱 ⋯ 菜单自己的入口。
         Slot::ScratchpadToolbar => return None,
+        Slot::InsightMemoryLimitMb => {
+            SettingValue::Number(settings.insight.memory_limit_mb as f64)
+        }
+        Slot::InsightFullScanConfirm => {
+            SettingValue::Bool(settings.insight.full_scan_confirm)
+        }
+        Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
+        Slot::InsightStatusUsage => SettingValue::Bool(settings.insight.status_usage),
     })
 }
 
@@ -404,6 +433,38 @@ impl SettingsService {
             }
             // 复合值（工具栏按钮布局）：无标量写入路径，由 ⋯ 菜单直接改 global + save。
             Slot::ScratchpadToolbar => return false,
+            Slot::InsightMemoryLimitMb => {
+                let Some(mb) = value.as_number() else {
+                    return false;
+                };
+                // 只认 256–16384 MB（页面只给预设档；设置文件被手改坏时拒绝，不猜）。
+                if !(256.0..=16384.0).contains(&mb) {
+                    return false;
+                }
+                Self::set_memory_limit_mb(mb.round() as i64, cx);
+            }
+            Slot::InsightFullScanConfirm => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_full_scan_confirm(on, cx);
+            }
+            Slot::InsightWorkSetLimit => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                // 0 = 不提示；只认 0–200（页面只给预设档；手改坏时拒绝）。
+                if !(0.0..=200.0).contains(&n) {
+                    return false;
+                }
+                Self::set_work_set_limit(n.round() as i64, cx);
+            }
+            Slot::InsightStatusUsage => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_status_usage(on, cx);
+            }
         }
         true
     }
@@ -425,6 +486,67 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         notify_log_level(level);
+    }
+
+    /// 分析引擎内存上限（MB，默认 2048 = 2GB）。
+    pub fn memory_limit_mb(cx: &App) -> i64 {
+        cx.global::<Settings>().insight.memory_limit_mb
+    }
+
+    /// 设置并持久化分析引擎内存上限，并通知引擎即时应用（`SET memory_limit`）。
+    ///
+    /// 通知走 [`install_insight_memory_limit_sink`] 注册的出口（装配层把
+    /// `engine` 的 `DuckDBManager::set_memory_limit_mb` 接在那里）；没有出口时只落盘。
+    pub fn set_memory_limit_mb(mb: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.insight.memory_limit_mb = mb;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        notify_insight_memory_limit(mb);
+    }
+
+    /// 全量统计前是否弹确认（默认开启）。
+    pub fn full_scan_confirm(cx: &App) -> bool {
+        cx.global::<Settings>().insight.full_scan_confirm
+    }
+
+    /// 设置并持久化全量确认开关（宿主在收到全量请求时读它决定弹窗）。
+    pub fn set_full_scan_confirm(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.insight.full_scan_confirm = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 洞察集合工作集提示阈值（表数超过该值提示先清理；0 = 不提示，默认 30）。
+    pub fn work_set_limit(cx: &App) -> i64 {
+        cx.global::<Settings>().insight.work_set_limit
+    }
+
+    /// 设置并持久化工作集提示阈值。
+    pub fn set_work_set_limit(n: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.insight.work_set_limit = n;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 洞察中间页工具栏是否显示分析引擎内存占用（默认开启）。
+    pub fn status_usage(cx: &App) -> bool {
+        cx.global::<Settings>().insight.status_usage
+    }
+
+    /// 设置并持久化内存占用显示开关。
+    pub fn set_status_usage(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.insight.status_usage = on;
+        }
+        persist(&cx.global::<Settings>().clone());
     }
 
     /// 读取当前主题模式。

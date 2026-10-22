@@ -8,7 +8,9 @@
 //! 回执一律走状态栏（`Shared::say`）：导出是「菜单一点、对话框一关」的动作，
 //! 结果说在状态栏够了，不往 280px 的面板里再塞一行提示。
 
-use gpui_kit::{App, Context, Entity, Subscription};
+use gpui_kit::{App, Context, Entity, Subscription, Window};
+// `open_alert_dialog` 是 WindowExt 提供的方法（gpui-component 的扩展 trait）
+use gpui_kit::component::WindowExt as _;
 
 use analytics_resource::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, KeepVersions, PayloadMode,
@@ -18,6 +20,77 @@ use insight::{InsightEvent, InsightService, SampleSource, SchemaExportFormat};
 
 use crate::panels::Shared;
 use crate::services::resource_jobs;
+
+/// 全量统计确认弹窗（资源治理 2）：订阅 `FullProfileConfirmRequested`。
+///
+/// 与 [`attach`] 分开的原因：确认弹窗要 `Window`（`open_alert_dialog`），而
+/// `attach` 的订阅闭包只有 `App`。这里用 `subscribe_in` 拿到窗口：
+/// - 设置「全量统计前确认」开着 → 弹确认框（说明大表全量慢且占内存）；
+/// - 关着 → 不弹，直接 `confirm_full` 执行。
+///
+/// 行数预估不做：文案说明「大表全量会慢并占用内存」，避免再开 COUNT 通道。
+/// 返回的订阅**必须被装配方持有**（drop 即取消订阅）。
+pub fn attach_dialogs<H: 'static>(
+    panel: &Entity<InsightView>,
+    window: &Window,
+    cx: &mut Context<H>,
+) -> Subscription {
+    let panel_weak = panel.downgrade();
+    cx.subscribe_in(
+        panel,
+        window,
+        move |_host, _panel, event: &InsightEvent, window, cx| {
+            if let InsightEvent::FullProfileConfirmRequested { .. } = event {
+                let confirm = settings::SettingsService::full_scan_confirm(cx);
+                if !confirm {
+                    // 设置关闭确认：直接执行全量（面板 scope 已就绪，`confirm_full` 是幂等的）
+                    if let Some(panel) = panel_weak.upgrade() {
+                        panel.update(cx, |view, cx| view.confirm_full(cx));
+                    }
+                    return;
+                }
+                // 外层是 `FnMut`（可能被多次调用）：弹窗闭包只能拿走 clone
+                let panel_weak_dialog = panel_weak.clone();
+                window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                    let panel = panel_weak_dialog.clone();
+                    alert
+                        .confirm()
+                        .title("全量统计")
+                        .description(
+                            "将对当前表进行全量统计：大表耗时较长，且表会完整导入分析引擎临时表（占用内存）。取样结果将被替换。确定继续？",
+                        )
+                        .on_ok(move |_window, _cx, cx| {
+                            if let Some(panel) = panel.upgrade() {
+                                panel.update(cx, |view, cx| view.confirm_full(cx));
+                            }
+                            true
+                        })
+                });
+            }
+        },
+    )
+}
+
+/// 装配 / 设置变更时把设置页 `insight.*` 推给洞察侧（资源治理 1/3/4）。
+///
+/// - 内存上限：应用到分析引擎连接（`SET memory_limit`，即时生效）；设置页后续
+///   变更由 `install_insight_memory_limit_sink` 的 sink 走同一函数（幂等）。
+/// - 面板偏好：`status_usage`（工具栏内存显示 + 轮询开关）与 `work_set_limit`
+///   （集合卡工作集阈值）经 `InsightView::apply_insight_prefs` 推送。
+///   右栏面板与中间工作页共用同一 `InsightView` 实体（D65 双栏单源），推一次即可。
+pub fn apply_insight_prefs(shared: &Shared, cx: &mut App) {
+    engine::duckdb::DuckDBManager::apply_memory_limit_mb(
+        settings::SettingsService::memory_limit_mb(cx),
+    );
+    let status_usage = settings::SettingsService::status_usage(cx);
+    let work_set_limit = settings::SettingsService::work_set_limit(cx).max(0) as usize;
+    let Some(panel) = shared.insight_panel.borrow().as_ref().and_then(|w| w.upgrade()) else {
+        return;
+    };
+    panel.update(cx, |view, cx| {
+        view.apply_insight_prefs(status_usage, work_set_limit, cx);
+    });
+}
 
 /// 订阅面板事件并落地两个宿主动作。
 ///

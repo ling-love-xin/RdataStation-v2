@@ -14,6 +14,19 @@ impl DuckDbService {
         DuckDBManager::get_or_create_in_memory()
     }
 
+    /// 运行时调整内存库上限（MB）——转发到 [`DuckDBManager::set_memory_limit_mb`]。
+    ///
+    /// 设置页经装配层 sink 调用（`settings` 不依赖 `engine`，出口由装配层注册）。
+    pub fn set_memory_limit_mb(mb: u64) -> Result<(), CoreError> {
+        DuckDBManager::set_memory_limit_mb(mb)
+    }
+
+    /// 内存库可观测读数（上限 / 实际大小 / 临时表数）——转发到
+    /// [`DuckDBManager::memory_stats`]。洞察工具栏的轮询采样走这里。
+    pub fn memory_stats() -> Result<crate::duckdb::MemoryStats, CoreError> {
+        DuckDBManager::memory_stats()
+    }
+
     // 2026-09-19 删除 `accelerate_query`：它零调用，且依赖的 `dbi` 层整体已废弃
     // （2124 行里只有 `DuckDBEngine::file_reader_function` 是活的，现挂在
     // `crate::duckdb::file_reader`）。加速档的实际实现是 `crate::duckdb::accel`，

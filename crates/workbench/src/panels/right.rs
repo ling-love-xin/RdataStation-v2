@@ -36,6 +36,8 @@ pub struct RightSidebarPanel {
     _insight_sub: Subscription,
     /// 洞察面板的**动作类**请求订阅（下钻 / Schema 导出；仅持有）
     _insight_actions_sub: Subscription,
+    /// 洞察面板的**全量确认弹窗**订阅（`subscribe_in` 要窗口；仅持有）
+    _insight_dialog_sub: Subscription,
     /// 规则管理对话框的取数 / 写库请求订阅（仅持有）
     _rules_sub: Subscription,
     /// 历史面板实体（B8）：视图与状态在 editor crate，本面板只转发渲染 + 注入重放端口
@@ -86,6 +88,10 @@ impl RightSidebarPanel {
         // 落在宿主侧（`components::insight_actions`）——与上面的取数订阅各收各的事件。
         let _insight_actions_sub =
             crate::components::insight_actions::attach(&insight_panel, &shared, cx);
+        // 全量统计确认弹窗（`subscribe_in` 需要窗口）+ 装配洞察偏好（设置 → 面板 + 引擎）。
+        let _insight_dialog_sub =
+            crate::components::insight_actions::attach_dialogs(&insight_panel, window, cx);
+        crate::components::insight_actions::apply_insight_prefs(&shared, cx);
         // 规则管理对话框（Phase 2.3）：同一套后台形态，同一个项目根提供者。
         // 取数 / 写库 / 新建 / 打开规则文件都在 insight crate 的接缝里。
         let rules_shared = shared.clone();
@@ -122,6 +128,7 @@ impl RightSidebarPanel {
             insight_panel,
             _insight_sub,
             _insight_actions_sub,
+            _insight_dialog_sub,
             _rules_sub,
             history_panel,
         }

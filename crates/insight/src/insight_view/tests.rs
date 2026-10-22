@@ -1642,3 +1642,114 @@ fn truncate_counts_characters_not_bytes() {
     // 中文按字符计数，不得切出半个字
     assert_eq!(truncate("中文测试", 2), "中文…");
 }
+
+/// 源目标构造（全量两段式测试用）：DuckDB 内存源（conn_id 为 `None`）。
+fn source_target(name: &str) -> InsightTarget {
+    InsightTarget::SourceTable {
+        source: crate::SampleSource::on_duckdb(format!("SELECT * FROM {name}"), name.to_string()),
+        table_name: name.into(),
+    }
+}
+
+/// 全量统计是**两段式**：`request_full` 只发确认请求，不切 scope / 不发画像请求；
+/// 宿主确认后调 `confirm_full` 才真正切换（取消 = 什么都不做）。
+#[gpui_kit::test]
+fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+    let events = crate::test_support::event_sink(&view, cx);
+
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.set_target(source_target("orders"), cx));
+        view.update(cx, |view, cx| view.request_full(cx));
+    });
+    assert!(
+        events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::FullProfileConfirmRequested { .. }
+        )),
+        "第一段：只发确认请求：{:?}",
+        events.borrow()
+    );
+    assert!(
+        !events.borrow().iter().any(|e| matches!(e, InsightEvent::FullProfileRequested { .. })),
+        "确认前不得直接发画像请求"
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.scope(), super::InsightScope::Sample, "确认前口径不变");
+        assert!(view.state().is_loading() || view.state() == &InsightPanelState::Empty);
+    });
+
+    // 宿主确认后：切全量口径 + 发画像请求
+    events.take();
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.confirm_full(cx));
+    });
+    assert!(
+        events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::FullProfileRequested { .. }
+        )),
+        "第二段：确认后才发画像请求"
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.scope(), super::InsightScope::Full);
+        assert!(view.state().is_loading(), "切口径同时进加载态");
+    });
+}
+
+/// 临时表目标没有「取样 / 全量」概念：`request_full` 静默忽略（不发事件、不动状态）。
+#[gpui_kit::test]
+fn request_full_is_noop_for_temp_table_targets(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+    let events = crate::test_support::event_sink(&view, cx);
+
+    cx.update(|_window, cx| {
+        view.update(
+            cx,
+            |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_result_1".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                )
+            },
+        );
+        view.update(cx, |view, cx| view.request_full(cx));
+    });
+    assert!(
+        !events.borrow().iter().any(|e| matches!(
+            e,
+            InsightEvent::FullProfileConfirmRequested { .. } | InsightEvent::FullProfileRequested { .. }
+        )),
+        "临时表目标不发全量类事件（set_target 的普通取数事件不算）：{:?}",
+        events.borrow()
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.scope(), super::InsightScope::Sample);
+    });
+}
+
+/// 偏好推送：`apply_insight_prefs` 落字段；关闭「显示内存占用」时读数清空。
+#[gpui_kit::test]
+fn apply_insight_prefs_updates_fields(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+
+    // 初值与设置默认一致
+    view.read_with(cx, |view, _| {
+        assert!(view.status_usage);
+        assert_eq!(view.work_set_limit, 30);
+    });
+    // 宿主装配时用真实设置覆盖
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.apply_insight_prefs(false, 0, cx));
+    });
+    view.read_with(cx, |view, _| {
+        assert!(!view.status_usage);
+        assert_eq!(view.work_set_limit, 0, "0 = 不提示");
+    });
+}
