@@ -55,6 +55,8 @@ pub const ACTIVITY_ITEM_HEIGHT: f32 = 2.5;
 pub const LEFT_DOCK_WIDTH: f32 = 18.0;
 /// 右侧边栏起步宽度（20rem = 320px，2026-10-19 由 280px 调大）
 pub const RIGHT_DOCK_WIDTH: f32 = 20.0;
+/// 底部结果 dock 起步高度（12rem = 192px，约窗口 1/3；Dock 化阶段 3 用户确认，可拖拽）
+pub const RESULT_DOCK_HEIGHT: f32 = 12.0;
 
 // ===== 标题栏元素（rem 基准） =====
 

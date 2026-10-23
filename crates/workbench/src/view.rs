@@ -38,7 +38,7 @@ use crate::commands::{
 use crate::panels::{
     ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
     PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
-    RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
+    ResultPanelDock, RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
 };
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
@@ -115,6 +115,9 @@ pub struct WorkbenchView {
     editor_service: editor::shared::EditorShared,
     /// 已开的编辑面板（按 `DocumentId` 复用：同文档不重复建面板）。
     editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
+    /// 底部结果 dock 薄壳（Dock 化阶段 3：只渲染活动文档的结果面板；开/关由
+    /// render 权威点 `sync_result_dock` 按「有结果自动开 / 无结果自动关」驱动）
+    result_dock: Option<Entity<ResultPanelDock>>,
     /// 编辑器面板状态变化订阅（#47 状态栏上抛：host 发 `EditorHostEvent::StatusChanged`
     /// 时宿主重绘，全局状态栏活动文档上下文段随之刷新）。句柄必须被持有，drop 即失效；
     /// 面板关闭后订阅随实体 drop 失效，Vec 里留着无害（文档数有限）。
@@ -271,6 +274,7 @@ impl WorkbenchView {
             _insight_rules_watcher: None,
             editor_service,
             editor_hosts: Vec::new(),
+            result_dock: None,
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
             lsp,
@@ -1102,6 +1106,9 @@ impl WorkbenchView {
             HistoryPanelTab::new(shared.clone(), history_entity, cx)
         }));
         self.right_archive_tab = Some(cx.new(|cx| ArchivePanel::new(shared.clone(), cx)));
+        // 底部结果 dock 薄壳（Dock 化阶段 3）：只渲染活动文档的结果面板；
+        // 开/关由 render 权威点 `sync_result_dock` 按「有结果自动开 / 无结果自动关」驱动
+        self.result_dock = Some(cx.new(|cx| ResultPanelDock::new(cx)));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
@@ -1415,6 +1422,64 @@ impl WorkbenchView {
             layout = layout.panel_view(handle, cx);
         }
         Some(layout)
+    }
+
+    /// 底部结果 dock 布局（Dock 化阶段 3）：单面板 = 结果薄壳。
+    fn bottom_dock_layout(&self, cx: &Context<Self>) -> Option<DockLayout> {
+        let Some(dock) = self.result_dock.clone() else {
+            return None;
+        };
+        let mut layout = DockLayout::tabs();
+        layout = layout.panel_view(panel_handle(dock), cx);
+        Some(layout)
+    }
+
+    /// 底部结果 dock 同步（render 权威点，Dock 化阶段 3）：
+    /// 活动文档有结果集 → 自动开（12rem 起步，用户可拖拽）；无结果 / 无活动 → 自动关不占位。
+    /// 结果变化走 `StatusChanged` → 宿主重绘 → 每帧重判（`has_dock` / `is_dock_open` 幂等，
+    /// 不会反复开关）。薄壳槽与渲染共用同一 Rc<RefCell>，这里换槽即换渲染目标。
+    fn sync_result_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dock) = self.result_dock.clone() else {
+            return;
+        };
+        let active_id = self.editor_service.service().active_id().cloned();
+        let active_host = active_id.as_ref().and_then(|id| {
+            self.editor_hosts
+                .iter()
+                .find(|panel| panel.read(cx).document() == id)
+                .cloned()
+        });
+        let has_results = active_host
+            .as_ref()
+            .map(|host| host.read(cx).result_panel().read(cx).has_content())
+            .unwrap_or(false);
+        let slot = dock.read(cx).active_host();
+        *slot.borrow_mut() = active_host.as_ref().map(|host| host.downgrade());
+        let layout = self.bottom_dock_layout(cx);
+        if let Some(area) = self.area.clone()
+            && let Some(layout) = layout
+        {
+            area.update(cx, |area, cx| {
+                if has_results {
+                    if !area.has_dock(DockPlacement::Bottom) {
+                        area.set_dock(DockPlacement::Bottom, layout, window, cx);
+                        // 起步高度 12rem（用户已确认；结构尺寸登记在 ui.rs）
+                        area.set_dock_size(
+                            DockPlacement::Bottom,
+                            cx.theme().font_size * ui::RESULT_DOCK_HEIGHT,
+                            window,
+                            cx,
+                        );
+                    } else if !area.is_dock_open(DockPlacement::Bottom) {
+                        area.toggle_dock(DockPlacement::Bottom, window, cx);
+                    }
+                } else if area.has_dock(DockPlacement::Bottom)
+                    && area.is_dock_open(DockPlacement::Bottom)
+                {
+                    area.toggle_dock(DockPlacement::Bottom, window, cx);
+                }
+            });
+        }
     }
 
     fn apply_left_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3072,6 +3137,8 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
+        // 底部结果 dock 同步（Dock 化阶段 3）：活动文档有结果 → 自动开 / 无 → 自动关。
+        self.sync_result_dock(window, cx);
         // 真面板化：版本 / 修复 / 回收站 / 标签对话框与导航「定位」请求原在
         // `SidebarPanel::render` 消费（外壳已不再渲染），提升到宿主 render——
         // render 仍是权威同步点，副作用不放到事件路径；动作仍经 `sidebar` 实体转发。

@@ -154,7 +154,7 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 归属联动 | **全局单 dock + 活动文档联动**：结果面板展示当前活动编辑器文档的结果，切文档自动切换（对齐 `ResultStore` 按文档分槽） |
 | 打开时机 | **有结果自动开**（执行回执到达即自动打开并聚焦底部结果面板；无结果自动收起） |
 | 旧区处置 | **移除嵌式结果区**（host.rs 的 v_resizable 分栏结果区整体搬出，editor 只留访问口） |
-| 动作接线 | **Shared 事件队列（彻底解耦）**：result_panel 定义请求枚举 + 队列，editor 事件路径 drain 分派；不用注入闭包 |
+| 动作接线 | **editor 宿主订阅面板 notify 自 drain（2026-10-24 定案）**：result_panel 定义请求枚举 + 队列，面板按钮 push 后 `cx.notify()`；editor 宿主构造期 `cx.observe_in(&result_panel, …)` 订阅，回调里 `drain_result_actions` 分派回动作方法。gpui 通知延迟到事务边界派发（`app.rs` notify → pending_effects），不会「cannot update while already being updated」。不用注入闭包、不经 workbench 中转 |
 
 ### 8.2 目标架构
 
@@ -213,11 +213,13 @@ workbench 层薄壳面板 `workbench → editor → result_panel`（结果动作
 
 1. **result_panel 内部**（不碰 editor/workbench，独立可编译）：`ports.rs`（ResultRequest +
    ResultActionQueue + 单测）→ `panel.rs`（ResultPanel 实体：状态 / sync / render，渲染从
-   host.rs 照搬、按钮改入队）→ `lib.rs` 注册。
+   host.rs 照搬、按钮改入队）→ `lib.rs` 注册。✅ 已提交 `88a88999`
 2. **editor 接线**：host.rs 删结果字段与渲染、`drain_result_actions` 分派、投影判据计算
-   `ResultSyncInput`、网格钩子 set、测试访问器转发（保持 585 基线口径）。
-3. **workbench dock**：`ResultDockTab` 薄壳挂 Bottom dock、活动文档联动（editor_service
-   活动文档 → 面板投影）、exec 回执自动开 dock。
+   `ResultSyncInput`、网格钩子 set、测试访问器转发（保持 584 基线口径）。✅ 已提交 `375d6840`
+3. **workbench dock**：`ResultPanelDock` 薄壳挂 Bottom dock（`panels/result_dock.rs`）、
+   活动文档联动（render 权威点 `sync_result_dock`：活动 host → 面板 `has_content` →
+   自动开/自动关；薄壳只渲染活动面板）、起步高度 12rem（`ui::RESULT_DOCK_HEIGHT`）。
+   ✅ 已提交（阶段 3 收尾提交）
 4. 全量回归 + 文档收尾 + 提交（只 add 本线文件）。
 
 ### 8.6 交互对齐 DBeaver（2026-10-23 用户拍板「尽量对齐」）

@@ -350,6 +350,9 @@ pub struct EditorHostPanel {
     _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
     _grid_sub: Option<Subscription>,
+    /// 结果面板观察订阅（Dock 化 §8.5：面板按钮 push 队列 → 面板 notify → 本宿主
+    /// drain 分派回动作方法；句柄即生命周期）
+    _result_panel_sub: Option<Subscription>,
     /// 【T2a-4】编辑框订阅（输入变化 → 同步编辑态；Enter / 失焦 → 提交）。
     /// 句柄即生命周期：不存字段就会被 drop、订阅即刻取消（编辑器内踩过一次）。
     _edit_sub: Option<Subscription>,
@@ -514,6 +517,13 @@ impl EditorHostPanel {
             let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
             panel.set_grids(grid.clone(), Some(compare_grid.clone()));
             panel
+        });
+        // Dock 化 §8.5（用户已确认「editor 宿主订阅自 drain」）：面板按钮 push 队列 →
+        // 面板 notify → 本宿主观察回调 drain 分派回动作方法。gpui 的通知延迟到事务
+        // 边界派发（app.rs notify → pending_effects），回调执行时面板已不在 update 中，
+        // 不会「cannot update while already being updated」。
+        let result_panel_sub = cx.observe_in(&result_panel, window, |this, _panel, _window, cx| {
+            this.drain_result_actions(cx);
         });
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
         let grid_sub = cx.subscribe_in(&grid, window, |panel, grid, event: &TableEvent, window, cx| {
@@ -774,6 +784,7 @@ impl EditorHostPanel {
             error_reason: None,
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
+            _result_panel_sub: Some(result_panel_sub),
             _edit_sub: Some(_edit_sub),
             commit_in_flight: None,
             toolbar: crate::toolbar::ToolbarLayout::default(),
@@ -5124,6 +5135,11 @@ impl EditorHostPanel {
     /// 结果面板实体（测试用：筛选防抖等面板内行为直接驱动面板方法；生产不经此路径）
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn result_panel_for_test(&self) -> Entity<ResultPanel> {
+        self.result_panel.clone()
+    }
+
+    /// 结果面板实体（Dock 化阶段 3：workbench 底部 dock 薄壳经它渲染活动文档的结果区）
+    pub fn result_panel(&self) -> Entity<ResultPanel> {
         self.result_panel.clone()
     }
 
