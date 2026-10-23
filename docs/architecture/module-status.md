@@ -46,7 +46,7 @@
 > ；跑不出来的一律不写。
 > 基线：
 >
-> **2026-10-22**
+> **2026-10-23**
 >
 > （Windows · stable 1.98.0 · 
 >
@@ -54,9 +54,9 @@
 >
 > ）・全仓
 >
-> **第九次**
+> **第十一次（r9）**
 >
-> 复跑（§6.8，**含 `rds-plugin` 全量全绿**）・下表即其数字・此前基线为 2026-10-21（第八次，§6.7，plugin 首次纳入全量）与 2026-10-16（第七次，§6.6，排除 plugin）与 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
+> 复跑（§6.10 A.3，**3162 通过 · 1 失败 · 48 忽略**；唯一失败为现象 1 命令面板鼠标点击暂停用例，0.2.4 不修，非编译错误）・下表即其数字・此前基线为 2026-10-22（第十次，§6.9）与 2026-10-21（第八次，§6.7，plugin 首次纳入全量）与 2026-10-16（第七次，§6.6，排除 plugin）与 2026-10-15（第六次，§6.5）与 2026-10-14（第五次，§6.4）与 2026-09-19（当日四次复跑，§6.3）・维护方式见 §7。
 
 
 
@@ -69,12 +69,12 @@
 | 项       | 实测值                                                                                                                                        |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | 工作区测试目标 | **108** 个 Running 目标 + **21** 个 crate 的 Doc-tests 段（含 `rds-plugin` 全量；上一轮 cargo 将 Doc-tests 合并为 1 行输出，本轮逐 crate 展开为 21 段，计数口径不变）                          |
-| 通过      | **3161**                                                                                                                                   |
-| 失败      | **0**（本轮全绿，含 plugin）                                                                                                                          |
+| 通过      | **3162**                                                                                                                                   |
+| 失败      | **1**：`quick_open::tests::clicking_a_row_executes_the_selected_action`（现象 1 命令面板鼠标点击进右 dock，任务 #21/#25，用户明确暂停、0.2.4 不修；非编译错误，日志无 `error[E`）                                                                                                                        |
 | 忽略      | **48**（lib 28：engine 真机探针 24 · editor 1 · kernel 3；Doc-tests 20：engine 16 · connection/insight/plugin/workbench_shell 各 1）                          |
-| 编译告警    | `cargo check --workspace --all-targets` **3 行既有 warning 头**（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.8）；`cargo clippy --workspace --all-targets` **0 error**，205 条存量风格 lint（CI 不设硬门禁）；本轮改动未引入新 warning |
+| 编译告警    | `cargo check --workspace --all-targets` **3 行既有 warning 头**（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var；见 §6.10 A.3 第 4 点）；`cargo clippy --workspace --all-targets` **0 error**，存量风格 lint（CI 不设硬门禁）；本轮改动未引入新 warning |
 | 代码规模    | **333,742 物理行**（非空 307,851）/ **591** 个 `.rs` 文件（`crates/`，不含 `target/`、`v1/` 历史区与 `vendor/`；2026-10-22 第十次复跑时重测，脚本 `.rds/tmp/count_code.py`，口径 = `crates/**/*.rs` 物理行含空行与注释） |
-| 口径      | 上表是**原始命令的输出**；本次为 2026-10-22 第十次复跑（§6.9），**含 `rds-plugin` 全量**（`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 107 个 Running 目标 / 3160 项通过** |
+| 口径      | 上表是**原始命令的输出**；本次为 2026-10-23 第十一次复跑 r9（§6.10 A.3，`--no-fail-fast`）；其中 `rds-workbench --test zz_fixture_probe` 是**本机诊断脚本**（未跟踪、`.gitignore` 已挡，见 §6.1）——**项目自身套件（去掉 zz）= 107 个 Running 目标 / 3161 项通过** |
 
 
 
@@ -853,6 +853,76 @@ HEAD `f8f2bf35`（2026-10-15 19:04「feat (property) 属性面板优化」）为
 - `cargo test --workspace -j 2 --no-fail-fast`：**3161 passed · 0 failed · 48 ignored**（108 Running 目标 + 21 crate Doc-tests 段），与 §6.9 基线逐条配对一致；日志 `.rds/tmp/test-all-024-final.log`（exit 0）。项目自身套件（去掉 `zz_fixture_probe`）= 107 Running 目标 / 3160 项通过。
 - `cargo clippy --workspace --all-targets`：**0 error**；存量风格 lint（`result_large_err` / `collapsible_if` 等）为既有技术债，CI 不设硬门禁，本轮不逐条清理；日志 `.rds/tmp/clippy-all-024-final.log`（exit 0）。
 - 口径说明：本次复核前工作区除 §6.9 已编译进 exe 的 5 个 `.rs` 修复（日志 4 处 + 标题栏明暗图标）外，仅文档（`README.md` / `README.en.md` / 本台账）改动；三道门禁确认 0.2.4 打包前代码状态全绿。
+
+#### 6.10 第二轮全量复跑（2026-10-23）：真机反馈两问题代码补丁 + 两处并行测试竞态修复，108 Running + 21 Doc-tests 段 / 3162 通过 · 1 失败（现象 1 暂停用例）· 48 忽略
+
+**本轮工作区改动（随 0.2.4 一并提交；现象 2 回执隔离修复已于 2026-10-23 真机复测闭环，现象 1 命令面板鼠标点击问题经用户明确暂停、0.2.4 不修，详见 A.3 与下文卡点段）**：
+
+**A. 真机反馈两个问题（现象 2 已闭环；现象 1 代码层补右 dock 同步但鼠标点击路径未接通，暂停至下一版本）**：
+
+1. **Ctrl+P 右侧三模块命令点了进不去面板（任务 #21，0.2.4 暂停未修）**：`quick_open` 选中「洞察 / Mock / 历史」后，旧 `Action::OpenRightPanel` 分支只调 `Shared::open_right_panel(panel, cx)`，布局同步依赖 `notify_host` 的 defer 重绘；弱引用升级失败或事件时序错位时右 dock 停在收起态，表现为「命令点了进不去」。对照左分支 `Action::OpenLeftPanel`（登记 `left_open_panels` → `active_left` → `left_mode=Expanded` → Resources 刷新 → 同步 `apply_left_mode`），右分支补齐为：先 `open_right_panel` 登记与激活，再**同步** `self.apply_right_mode(window, cx)` 这拍挂载 / 激活 / 展开；补 `tracing::info!`（target=`rds_workbench::quick_open`，字段 panel / right_mode / open_before / open_after）。改动 `crates/workbench/src/view.rs`。**真机与 headless 复核结论**：该同步补丁改善了命令经宿主端口触发后的 dock 装配，但鼠标点击行本身未抵达 `delegate.confirm` / 宿主执行端口（headless 用例 `clicking_a_row_executes_the_selected_action` 断言 `executed=[]`，即现象 1 唯一失败用例）；**键盘回车可正常进入右 dock 面板**。鼠标点击路径定位与修复列入下一版本，0.2.4 不阻塞发布，不把该问题写成已修复。
+2. **编辑器「源库」通道无法执行 SQL、状态混乱、缺日志（任务 #22，先补全链路埋点定位断点，控制流未改）**：
+   - `crates/editor/src/view/host.rs` `execute_labeled`：入口 `info!`（doc / mode / execute_allowed / channel / connection / statements / kind / sql 首条前 80 字符）；模式不可执行、通道不可用或写被拦、项目只读三道闸分别 `warn!`（带 reason）；参数挂起 `info!`；submit Ok `info!`、Err `warn!`。`rds-editor` crate 此前未声明 `tracing` 依赖（E0433，7 个错误全在 host.rs），`crates/editor/Cargo.toml` 补 `tracing.workspace = true`，`Cargo.lock` 反向边 +1。
+   - `crates/workbench/src/services/editor_exec.rs` `run`：入口 `info!`（channel / connection / schema / use_transaction / sql 摘要）；源库成功 `info!`（rows / cols / elapsed_ms）、失败 `error!`（connection / schema / sql 摘要 / elapsed_ms / error）；`run_on_accel`、`run_on_federation` 主路径失败改 match 记 `error!`。
+   - 真机复测按 `global.db` 中 target=`rds_editor::exec` / `rds_workbench::exec` 记录判定断点落在哪一道闸（模式不可执行 / 通道不可用或写被拦 / 项目只读 / 源库执行失败），再决定是否需要补通道能力代码。
+
+**A.3 现象 2 根因定位与回执隔离修复（任务 #26，本地门禁全绿，2026-10-23 真机复测已闭环；控制流已改）**：
+
+1. **根因（真机日志实证）**：`EditorShared.exec: Rc<RefCell<Option<ExecQueue>>>` 全应用一份队列（`crates/editor/src/shared.rs` L121）；每个 `EditorHostPanel` 各自起 60ms 回执泵。旧逻辑每拍 `drain_exec()` 全量取走队列所有回执，未提交过 SQL 的空闲幽灵面板泵连续抢先 `drain`，把别人文档的回执取走后按 `is_mine=false` 丢弃，被抢回执永久丢失——表现为成功结果不回填、失败错误也不回界面，成功 / 失败两路都空。连接、通道、模式、入队、执行器本身均正常（执行器侧已回传 rows / cols / elapsed）。
+2. **修复（方案：队列按文档隔离排空，三处落盘）**：
+   - `crates/editor/src/execution.rs`：紧邻 `drain()`（L1420）新增 `ExecQueue::drain_for(document)`（L1433），只返回归属该文档的回执。
+   - `crates/editor/src/shared.rs`：紧邻 `drain_exec()`（L361）新增 `EditorShared::drain_exec_for(document)`（L390）透传，沿用 `ExecReceipt` 留档口径（同文档回执进 `receipts`，`MAX_EXEC_RECEIPTS=64` 溢出淘汰队首）。
+   - `crates/editor/src/view/host.rs`：`drain_exec_results` 改调 `drain_exec_for(&self.document)`（调用点 L5273）；认领循环重构为埋点后 `if !is_mine { continue; }` 直接跳过非归属回执，成功路径与事务快照 / notice 提取顺接。
+   - **兼容保留未删**：原全量 `drain_exec()` 与 `drain_exec_receipts()` 保留——`crates/workbench/tests/editor_exec_real.rs:212`、`crates/workbench/tests/insight_editor_entry.rs:166` 仍用全量 `drain_exec()`；`scratchpad_meta.rs:26` 用 `drain_exec_receipts()`（宿主回执给草稿箱记最近连接，独立用途）。
+3. **本地门禁实证（r8 口径，日志留档 `.rds/tmp/`，均可重跑复现）**：
+   - `cargo check -p rds-editor`：**exit 0**，2m 11s，0 error 0 warning（`check-editor-r8.log/.exit`、`check-editor-r8-tail.txt`）。
+   - `cargo build -p rds-app`：**exit 0**，51.82s；产物 `target/debug/rds-app.exe` 170,162,688 B，mtime 2026-10-23 04:53:52；唯一 warning 是链接器创建 `.lib/.exp` 的中文 stdout 提示（非代码告警，既有口径）（`build-r8.log/.exit`）。
+   - editor lib 单测：`cargo test -p rds-editor --lib -- --test-threads=1`，**exit 0 · 685 passed · 0 failed · 1 ignored · 21.01s**（`test-editor-r8.log/.exit`、`test-editor-r8-diag.txt`）。
+   - **rlib 符号实证**（ar 归档解包扫描；MSVC 下符号 mangle、调试信息走外置 PDB，exe 明文搜不到属正常现象，`exe-symbols-r8.out` 全 MISS 即此口径）：`librds_editor-eaeee667d77eb8f9.rlib`（04:53:23，261 成员，41,244,980 B）含 `drain_exec_for`×26、`drain_for`×147 及 host/shared/execution 源码路径；`librds_workbench-85bc255189f23a7b.rlib`（04:53:35，261 成员，114,071,116 B）含 `editor_exec.rs`、`view.rs` 埋点源码；源码 → rlib → exe 时间戳逐层闭环（`rlib-symbols-r8.out`、`rebuild-check-r8.txt`、`exe-mtime-r8.txt`）。
+   - **启动冒烟**：r8 基线 `max_id=19245`（`log-baseline-r8.json`，复测增量按 `id > 19245`）；新进程启动期 **66 条全 INFO · 0 WARN · 0 ERROR · 0 panic**（`startup-r8-summary.txt`）；启动预连只自动建立 `G_conn_SQLite_Example`，`P_real_mysql` 未自动连（`conn-r8.out`，#19302–19310），真机复测需在导航树手动连接。
+4. **r9 修复后全量门禁复跑（2026-10-23，日志 `.rds/tmp/check-all-r9.*` / `clippy-all-r9.*` / `test-all-r9.*`，脚本 `gate-r9.ps1`、解析 `parse-test-r9.py`）**：
+   - `cargo check-all`：**exit 0**，4m 36s；本轮 9 个改动文件在 check 告警中 **0 命中**；残余 warning 仅 §6.9 存量三类（kernel `registry.rs` unused `venv` · plugin `supervisor.rs` 两处多余 mut · workbench `history_editor_entry` unused import `AppContext`）。
+   - `cargo clippy-all`：**exit 0**，2m 47s，**0 error**；本轮改动文件命中的 38 处位置全部落在既有函数体、均为存量风格 lint 类别（`type_complexity` · `collapsible_if` · `redundant_closure` · `too_many_arguments` · `clone_on_copy(PanelId)` · `needless_borrow` · `bool_assert_comparison` · doc 缩进等，与 r2 基线 205 条存量风格 lint 同类，CI 不设硬门禁，归类见 `.rds/tmp/clippy-r9-lint.txt`）；现象 2 新增的 `drain_for` / `drain_exec_for` / 认领 `continue` 分支未引入新 clippy 告警。
+   - `cargo test-all --no-fail-fast`：**3162 passed · 1 failed · 48 ignored**，**129 段配对**（108 Running 目标 + 21 crate Doc-tests 段，与基线口径一致）；较 r2 基线 3161 增加 1 个非失败用例。退出码 101 由唯一失败用例导致，**非编译错误**（日志无 `error[E` / `could not compile`）。
+     - 唯一失败：`quick_open::tests::clicking_a_row_executes_the_selected_action`（`crates/workbench/src/quick_open/tests.rs:231`，断言 `left=0, right=1`：鼠标点击行未经宿主端口执行，`executed=[]`）——即现象 1 命令面板鼠标点击问题（任务 #21/#25），**用户已明确暂停、0.2.4 不修**；`rds-workbench --lib` 91 passed / 1 failed。
+     - 现象 2 修复面无回归：`rds-editor --lib` **685 passed · 0 failed · 1 ignored**（与 r8 单包口径一致）；`rds-engine` 605 passed / 24 ignored；ignored 合计 **48** 结构与基线完全一致（lib 28：engine 24 · editor 1 · kernel 3；Doc 20：engine 16 · connection/insight/plugin/workbench_shell 各 1）。项目自身套件（去掉 `zz_fixture_probe` 1 项）= 107 Running 目标 / 3161 项通过。
+5. **真机复测闭环（2026-10-23，PID 15024，基线 `max_id=19398`，增量日志 `.rds/tmp/log-exec-r8.txt` / `.json`，探针 `probe_exec_r8.py`）**：
+   - 总量：增量 84 条，执行链 35 条；链路 `提交 5 → 入队 5 → 执行器接收 5 → 源库成功 3 / 失败 2 → 回执泵 5 → 认领 5 → 投影 5`，全程闭合无缺环。
+   - **回执归属（修复目标）**：认领 `is_mine=true=5`，**跨面板误抢 `is_mine=false=0`**。
+   - **双文档隔离实证**：`doc-10` 两条成功（#19438 `...order LIMIT 200;` 200 行 16 列 55ms；#19447 `...order LIMIT 20` 20 行 16 列 54ms），认领 `receipt_doc=doc-10`；`doc-7` 两条失败 + 一条成功（#19455 `connection=None` 本地方言报错；#19463 选区 `order` MySQL 1064；#19473 `...order` 1000 行 16 列 140ms），认领 `receipt_doc=doc-7`；两文档回执互不串号，结果各自回填。
+   - **投影形状**：成功 3 条 `has_entry=true · has_grid=true · failed=false`（cols=16，rows=200 / 20 / 1000）；失败 2 条 `has_entry=true · has_grid=false · failed=true`（错误卡片回填、无结果网格）。
+   - **2 条 ERROR 定性**：均为输入 SQL 自身语法问题被执行器如实捕获回传、回填失败卡片，**非程序崩溃 / 非连接异常 / 非未捕获错误**——#19458 文档未绑定连接（`connection=None`）落到本地方言解析，`order` 保留字触发 `near "order": syntax error`；#19466 选区仅提交标识符 `order`，MySQL 1064 语法错误。
+   - 与清单出入说明：清单拟用 `SELECT 1` / `SELECT 1 AS v` 等简单语句，真机以 `mall_business.order` 查询为主；核心验收点（成功网格回填、失败错误卡片回填、双文档隔离、零抢回执）全部覆盖通过。
+   - **遗留观察（不阻塞 0.2.4）**：`connection=None`（未绑定且无活动连接）时错误信息来自本地方言而非目标库，后续可在未绑定场景补一条明确提示；归入下一版本观察项。
+6. **遗留同根因债（不阻塞 0.2.4，列入下一版本阶段 1）**：`host.rs` 的 `tx_notes` / `commit_notes` / `source_notes` / `export_notes` 四通道仍是「先全量 `drain` 再按文档 `continue` 过滤」，且 pending 计数在过滤前就 `saturating_sub(1)`，存在与现象 2 同类的跨面板丢回执风险；本轮未改，处置口径见 A.4 决策文档阶段 1。
+
+**A.4 执行上下文模型决策（下一版本规划，不进 0.2.4 代码线）**：
+
+- 已完成 DBeaver 社区版 `devel` 分支源码调研（非产品行为转述；`master` ref 不存在，社区版主分支为 `devel`），对照本仓现状代码实测形成决策文档 [`../connection/execution-context-model.md`](../connection/execution-context-model.md)，并登记 `connection/README.md` §6 文档地图、`editor-backlog.md` 第二节。
+- 核心结论：**不做通用连接池**（桌面查询无并发吞吐压力；池化归还必须重置临时表 / `SET` 变量 / `search_path` / 残留事务 / 未关闭游标等会话状态，复杂度高收益低；DBeaver 社区版 `Driver.connect` 新建、`connection.close()` 直接关闭，同样不池化）。
+- 目标模型：Source 档 per-context 独立物理连接 + 独立事务 + 独立取消（惰性建连 / 关闭释放 / 空闲超时回收 / 语句锁 / 独立元数据上下文）；Accelerated、Federated 两档本地嵌入式会话维持现有复用键（`conn_id` / owner+源指纹），不拆 per-editor 独立实例。
+- 现状差距（实测）：物理连接、事务、取消令牌按 `conn_id` 跨文档共享，执行队列全局一份、单 `busy` 原子位 + 单工作线程 + 单 `running_connection` 槽；结果集 `ResultStore.documents[]` 已按文档分槽（这一层做对了，目标模型维持不动）。
+- 方案 A（per-context 独立连接，推荐）/ B（单连接 + 仅 UI 归属修正）/ C（连接池复用，明确不推荐）与待拍板项（方案选型、独立连接上限与空闲超时时长、元数据上下文是否同批、是否提供单连接模式偏好、事务内语句取消 / 超时缺口）见决策文档 §4、§6；迁移分阶段 0–3 见其 §5，0.2.4 仅含阶段 0（回执按文档隔离排空，即 A.3）。
+
+**B. 两处全量并行下的测试隔离竞态（与本轮真机 bug 生产代码无关，均为存量隔离缺陷被 `-j 2` 并行调度触发；单包复跑均全绿）**：
+
+1. **settings 越界字号用例（`crates/settings/src/lib.rs::out_of_range_font_size_is_rejected`）**：`init` 读共享 `settings_path()`；同进程 `font_size_applies_global_and_persists` 在隔离根上 `set_font_size(14.0)` 的中间态被并行越界用例 init 读到，旧断言硬编码「拒绝后值 = 16.0」失败。`paths` test-support 按进程 id 隔离（`rds-test-root-<pid>`），同一测试进程内所有用例共享同一 settings.json。修复：断言改为保持 `before = SettingsService::font_size(cx)`（init 读到的值），拒绝语义是「不写入」，与读到何值无关；单包 `cargo test -p rds-settings --lib` 31 passed 全绿。
+2. **mock 未知列用例（`crates/mock/tests/mock_engine_tests.rs::ordered_preview_returns_the_global_top_rows`）**：`try_preview_sample` 在内存库 `Mutex<Connection>` 拿锁 `WouldBlock` 时非阻塞返回 `Ok(None)`（`crates/mock/src/engine.rs:333`），绕过 DuckDB `prepare` 对未知排序列的报错；并行竞争锁时测试 `is_err()` 误判。同文件 `sample_preview_when_idle`（L556）已有 200 次 ×20ms 等锁重试兜底，唯独未知列断言那行直调没等锁。修复：未知列断言改为等空闲重试循环——`Err(_)` 记为已拒绝并 break，`Ok(Some(_))` 直接 panic（未知列不能被放行），`Ok(None)` 睡眠 20ms 重试；循环结束断言 `unknown_column_rejected`。单包 `cargo test -p rds-mock --test mock_engine_tests` 38 passed 全绿。
+
+**第二轮门禁（日志 `.rds/tmp/check-024-r2.log` / `clippy-024-r2.log` / `test-024-r2.log`，exit 均 0）**：
+
+- `cargo check --workspace --all-targets`：**0 error**；warning 仍是 §6.9 存量三类（kernel `registry.rs` unused `venv` · plugin `supervisor.rs` 两处多余 mut · workbench `history_editor_entry` unused import `AppContext`），本轮改动文件零告警。
+- `cargo clippy --workspace --all-targets`：**0 error**；命中全是存量 `result_large_err`（CoreError 大 Err）与 MySQL / PG rollback 文案，无一条指向本轮改动的五个文件。
+- `cargo test --workspace -j 2 --no-fail-fast`：**3161 passed · 0 failed · 48 ignored**（108 Running 目标 + 21 crate Doc-tests 段），与 §6.9 基线逐条配对一致；settings `out_of_range_font_size_is_rejected`、mock `ordered_preview_returns_the_global_top_rows` 在全量并行下均 ok。项目自身套件（去掉 `zz_fixture_probe`）= 107 Running 目标 / 3160 项通过。（此为竞态修复时 r2 复跑口径；**最新 r9 全量基线见 A.3 第 4 点：3162 passed · 1 failed · 48 ignored**，唯一失败为现象 1 暂停用例。）
+- `cargo build`：debug `rds-app.exe` 170,149,888 B，2026-10-23 02:01:51 新构建，含本轮补丁，1m41s Finished dev profile，无 error。
+
+**发布卡点闭环状态（2026-10-23）**：现象 2 回执隔离修复真机复测已闭环（A.3 第 5 点）；现象 1 命令面板鼠标点击问题经用户明确暂停、0.2.4 不修，不阻塞发布。以下为启动冒烟、环境留痕与素材归档实况。
+
+- **启动冒烟（本地已完成，2026-10-23 02:05:37 新进程 PID 16492）**：清理断电残留旧进程 PID 19536（共用 `global.db` 会写串日志）后单实例启动；按上一轮基线 `max_ts=2026-10-22T14:04:39.638Z` 分段统计，新进程启动期 **66 条 INFO · 0 WARN · 0 ERROR · 0 panic**；target 覆盖 `rds_app`（启动）· `gpui_component::theme::registry`（主题注册）· `rds_engine::persistence::project_db`（项目库打开/迁移）· `rds_connection_dialog::services::connection_service`（连接服务）· `rds_workbench::services::nav_runtime`（导航探针）· `rds_database::nav_view::actions`（导航树加载）· `rds_plugin::sidecar::runtime`（包结构初始化，本轮不接入 plugin），核心启动路径完整走到，排除「无告警 = 路径未走到」假阴性；启动期无 `mmap_size` / Secret type / vendor 窗口关闭失焦噪音写库。分段日志 `.rds/tmp/log-startup-segments.json/.txt`，探查脚本 `.rds/tmp/probe_startup_segment.py`。
+- **环境备注（本轮自动化桌面操作留痕）**：结束残留进程 19536、Win32 `ShowWindow`/`BringWindowToTop`/`SetForegroundWindow` 置前 PID 16492 主窗口（hwnd 1900760，rect −7,−3,1542,1044，非最小化、Responding True）、关闭第三方 PowerToys 错误弹窗；桌面另有第三方开始菜单增强浮层处于置顶状态，自动化截图与坐标点击无法可靠露出本项目窗口（无 `test_support` 标记、坐标盲点不可靠，与 §6.9 标题栏「更多」按钮同类限制），故交互复测与截图按分工交用户手动，自动化侧只做进程/窗口/日志层面的冒烟核验。
+- **现象 1（0.2.4 暂停，不阻塞发布）**：`Ctrl+P` → `>洞察` / `>Mock` / `>历史` **键盘回车**可正常展开右侧 dock 面板；日志 target=`rds_workbench::quick_open` 记 open_before / open_after。**鼠标点击行未抵达宿主确认端口**（headless 用例 `clicking_a_row_executes_the_selected_action` 即此问题，唯一失败用例），定位与修复列入下一版本；`insight.gif` / `mock.gif` / `history.gif` 画面待该问题闭环后重录。
+- **现象 2（回执隔离修复，已真机闭环，详见 A.3 第 5 点）**：绑定 `P_real_mysql` 的 SQL 文档执行成功网格回填、失败错误卡片回填、双文档结果互不覆盖、零跨文档误抢，均已在 PID 15024 真机复测中实证通过（基线 `max_id=19398`，增量日志 `.rds/tmp/log-exec-r8.txt` / `.json`，探针 `probe_exec_r8.py`）。复测前启动进程 PID 15024，启动期 66 条全 INFO · 0 WARN · 0 ERROR · 0 panic（`startup-r8-summary.txt`）。遗留观察：未绑定连接（`connection=None`）时错误信息来自本地方言而非目标库，下一版本补明确提示；`tx_notes` / `commit_notes` / `source_notes` / `export_notes` 四通道回执隔离列入下一版本阶段 1（A.3 第 6 点）。
+- **素材归档实况（2026-10-23，`assets/screenshots/RDS-beta-0.2.4/`，hex 魔数 / 尺寸 / 帧数实测留档 `.rds/tmp/media-archive-r9.txt`）**：已归档 6 份画面不受现象 1 / 2 影响的素材——`main-window.png`（3150×2014）、`quick-open.png`（3150×2014）、`database-navigator.gif`（1698×1080 · 186 帧）、`analytics-resource.gif`（1698×1080 · 182 帧）、`scratchpad.gif`（1698×1080 · 114 帧）、`settings.gif`（1698×1080 · 102 帧）。**未归档**：`editor-sql.png` 为现象 2 修复前旧件，复测通过后需重录成功网格画面；`editor-error.png` 缺失，需补拍失败错误卡片画面；`insight.gif` / `mock.gif` / `history.gif` 属现象 1 暂停项，闭环后重录。README 截图表本轮只挂已归档 6 份，缺图模块在表下注明待补，不以修复前旧件冒充新成果。
 
 
 

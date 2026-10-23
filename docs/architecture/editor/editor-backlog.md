@@ -23,6 +23,7 @@ P1 边界（已实现，勿当缺口）：`SELECT *` 只展开实体表；表达
 | --- | --- | --- |
 | DBeaver 式参数绑定 | SQL 里 `:name` → 弹参数表单 → 字面替换后执行（与结果区分期无关） | 讨论过未开工 |
 | LSP hover 槽位 | 评估结论：本仓高亮/补全为自研（sqlglot + 关键字表），未接 LSP | 已关闭（#21） |
+| 执行上下文模型（对标 DBeaver） | 现状物理连接 / 事务 / 取消令牌按 `conn_id` 跨文档共享、全局单忙位串行；目标 Source 档 per-context 独立连接 + 独立事务 + 独立取消，**明确不做通用连接池**；Accelerated / Federated 本地会话维持现有复用键。分阶段：① 事务状态 UI 归属文档级 + 清偿四通道同根因回执竞态 → ② 队列按连接分组并发、取消按作业句柄 → ③ 引入 ExecutionContext 独立连接 + 生命周期 + 独立元数据上下文。方案 A（per-context，推荐）/ B（单连接 + UI 归属修正）/ C（池化，不推荐）与待拍板项见 [`../connection/execution-context-model.md`](../connection/execution-context-model.md) | 讨论定稿未开工（下一版本，0.2.4 不实现） |
 
 ## 三、历史面板（右 Dock）缺口（2026-10-22 已全部接线）
 

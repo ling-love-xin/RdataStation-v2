@@ -123,6 +123,7 @@ cargo check --workspace --all-targets -j 2
 | `connection-user-guide.md` | **怎么用**：入口 / 导览 / 典型流程 / FAQ 排查 / USIT 清单 |
 | `connection-prototype-design.md` | **长什么样**：布局 / 五 Tab / 交互 / 主题映射（视觉权威） |
 | `connection-dialog-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型 / 数据流 / 90+ 条决策 / 测试策略 / 数据字典 / 降级矩阵 / **§14 待办（权威）** / **§15 零造数据审计** |
+| `execution-context-model.md` | **执行上下文目标模型（下一版本规划，0.2.4 不实现）**：对标 DBeaver 上下文 / 连接 / 事务 / 取消归属；本仓现状代码实测、是否池化的取舍、方案 A/B/C 与分阶段迁移路线；源库独立连接、加速 / 联邦本地会话复用边界 |
 | `connection-dev-plan.md` | **做到哪了**：Phase A/B/C 任务、逐轮实现记录（含踩过的坑） |
 | `connection-dialog-prototype.html` | 可交互示意稿（非权威，页头带同步戳） |
 | `../database/database-navigator-*.md` | 消费方：导航树 / 分组 / 标签视图（另一模块） |

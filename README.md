@@ -147,22 +147,18 @@ SQLite 记事务元数据（连接、历史、草稿、资源目录、洞察缓�
 
 ### 实际运行截图
 
-> 以下为 **2026-10-18 真实运行中的 rds-app**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
+> 以下为 **2026-10-23 真实运行中的 rds-app**（Windows · 深色主题）截图。界面会随版本演进，以 Release 包为准。
 
 | 截图 | 说明 |
 | --- | --- |
-| ![主工作台](assets/screenshots/RDS-beta-0.2.2/main-window.png) | **主工作台**：左侧数据库导航（数据源树，`[项目]/[共享]` 归属域 + 连接状态）、右侧编辑器（草稿箱文件），顶部项目与工作台标签页、全局搜索 |
-| ![数据库导航](assets/screenshots/RDS-beta-0.2.2/database-navigator.png) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
-| ![SQL 编辑器](assets/screenshots/RDS-beta-0.2.2/editor-sql.png) | **SQL 编辑器**：SQL 工具栏（执行 / 全部运行 / 格式化 / 更多）· 执行位置（源库 · 本地加速 · 联邦）· 欢迎引导 |
-| ![资产库](assets/screenshots/RDS-beta-0.2.2/analytics-resource.png) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
-| ![洞察](assets/screenshots/RDS-beta-0.2.2/insight.png) | **洞察（M8）**：摘要 / 列 / 表 / 多列 / 结构 / 历史 Tab · 空态引导（在结果列表头或导航树上右键，选择洞察） |
-| ![Mock 生成](assets/screenshots/RDS-beta-0.2.2/mock.png) | **Mock 生成（M7）**：标题栏 **+** 入口打开 Mock 草稿 tab（列定义 / 表名 / 行数 / 预览）· 右侧清单面板（目标行数 · 生成状态（未生成 / 生成中 / 已生成 / 已落库）· 出口选项（持久化 / 追加 / 草稿箱 / 另存）） |
-| ![查询历史](assets/screenshots/RDS-beta-0.2.2/history.png) | **查询历史**：SQL 执行留痕（语句 · 时间 · 耗时 · 返回行 · 引擎）· 搜索与清空 |
-| ![草稿箱](assets/screenshots/RDS-beta-0.2.2/scratchpad.png) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
-| ![Quick Open](assets/screenshots/RDS-beta-0.2.2/quick-open.png) | **Quick Open**：三档搜索（`>` 命令 · `#` 元数据全文 · 无前缀按名称匹配）· 文件与连接结果分类展示 |
-| ![设置](assets/screenshots/RDS-beta-0.2.2/settings.png) | **设置页**：主题模式（浅色 / 深色 / 跟随系统）· 界面字号 · 界面语言 |
+| ![主工作台](assets/screenshots/RDS-beta-0.2.4/main-window.png) | **主工作台**：左侧数据库导航（数据源树，`[项目]/[共享]` 归属域 + 连接状态）、右侧编辑器（草稿箱文件），顶部项目与工作台标签页、全局搜索 |
+| ![数据库导航](assets/screenshots/RDS-beta-0.2.4/database-navigator.gif) | **数据库导航（M4）**：数据源分组（全部 / 项目 / 全局 / 共享 / 文件库 / 未分组）· 15 个数据源 · 归属徽标（P / G / GP）与连接状态 |
+| ![资产库](assets/screenshots/RDS-beta-0.2.4/analytics-resource.gif) | **资产库（M6）**：搜索存档 · 筛选 / 排序 · 归档条目（已归档 · 大小 · 修改时间） |
+| ![草稿箱](assets/screenshots/RDS-beta-0.2.4/scratchpad.gif) | **草稿箱（M5）**：文件树（data / notes / sql / 测试）· 文件大小 · 引用 / 回收站 |
+| ![Quick Open](assets/screenshots/RDS-beta-0.2.4/quick-open.png) | **Quick Open**：三档搜索（`>` 命令 · `#` 元数据全文 · 无前缀按名称匹配）· 文件与连接结果分类展示 |
+| ![设置](assets/screenshots/RDS-beta-0.2.4/settings.gif) | **设置页**：主题模式（浅色 / 深色 / 跟随系统）· 界面字号 · 界面语言 |
 
-> 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换；未接通模块（如 M9 plugin）暂无截图。
+> 截图按版本归档在 `assets/screenshots/<版本>/`，后续版本会更新替换；未接通模块（如 M9 plugin）暂无截图。**0.2.4 暂缺**：SQL 编辑器成功网格 / 失败错误卡片画面（现象 2 回执隔离修复后待补录）、洞察（M8）/ Mock 生成（M7）/ 查询历史右 dock 面板画面（命令面板鼠标点击现象 1 暂停，闭环后重录）；未接通模块（如 M9 plugin）暂无截图。
 
 ### 设计原型
 
@@ -316,7 +312,7 @@ RdataStation-v2/
 | 里程碑 | 状态 | 说明 |
 | --- | --- | --- |
 | **beta 0.1.0**（`RDS-beta-0.1.0`） | ✅ 已发布 | Windows x86_64 分发包 + sha256 挂载 Release；云端构建流水线已修复（beta 阶段矩阵收敛为 Windows） |
-| **beta 0.2.4**（`RDS-beta-0.2.4`） | 🚀 待发布 | 2026-10-22，工作区版本 `0.2.4`（补丁级）；全仓第十次复跑 **108 Running 目标 + 21 Doc-tests 段 / 3161 通过 / 48 忽略 / 0 失败**（项目自身 107 目标 / 3160 项）；功能：SQL 命名参数绑定、洞察内存管理链、资产库全局实例分发、左 dock 面板化装配修复；本轮修复：应用日志两类真 bug（mmap_size PRAGMA 误用 execute、本地文件源错误注册 Secret）、vendor 窗口关闭/失焦时序噪音不再写库、导航探针建连失败级别由 error 降 warn；应用图标换新版母版（任务栏/窗口类 `icon.ico` + macOS `icon.icns` + 标题栏按明暗主题切换）；待推 main、打标签后由云端 CI 构建挂载 |
+| **beta 0.2.4**（`RDS-beta-0.2.4`） | 🚀 待发布 | 2026-10-23，工作区版本 `0.2.4`（补丁级）；全仓第十一次复跑 **108 Running 目标 + 21 Doc-tests 段 / 3162 通过 / 1 失败 / 48 忽略**（唯一失败为现象 1 命令面板鼠标点击暂停用例，0.2.4 不修；项目自身 107 目标 / 3161 项）；功能：SQL 命名参数绑定、洞察内存管理链、资产库全局实例分发、左 dock 面板化装配修复；本轮修复：应用日志两类真 bug（mmap_size PRAGMA 误用 execute、本地文件源错误注册 Secret）、vendor 窗口关闭/失焦时序噪音不再写库、导航探针建连失败级别由 error 降 warn、**编辑器回执按文档隔离排空（成功/失败结果回填修复，双文档结果互不覆盖，真机复测闭环）**、settings/mock 两处并行测试竞态；应用图标换新版母版（任务栏/窗口类 `icon.ico` + macOS `icon.icns` + 标题栏按明暗主题切换）；**已知未闭环**：现象 1 命令面板鼠标点击进右 dock 暂停至下一版本，M9 plugin 整包未接入；待推 main、打标签后由云端 CI 构建挂载 |
 | **beta 0.2.3**（`RDS-beta-0.2.3`） | ✅ 已发布 | 2026-10-20，工作区版本 `0.2.3`（补丁级）；全仓第八次复跑 **107 目标 / 3074 通过 / 0 失败**（plugin 首次纳入全量全绿）；GPUI-kit 0.7.1 → 0.8.0 升级、右 dock 面板化装配修复（`Shared::open_right_panel` dock 同步）与洞察契约登记修复；Windows 包 + sha256 由云端 CI 挂载 |
 | **beta 0.2.2**（`RDS-beta-0.2.2`） | 🟡 tag 已打 · Release 待补 | 2026-10-16，工作区版本 `0.2.2`（补丁级）；标签 `01d3df75` 已推到远端，Release 页与云端包未补发（基于 0.7.1） |
 | **beta 0.2.0 / 0.2.1**（`RDS-beta-0.2.0` / `RDS-beta-0.2.1`） | 🟡 部分已发布 | 基于 gpui-kit 0.7.1 的版本线；`0.2.0` 有 prerelease Release 页（`52438336`），`0.2.1`（`8e49dde8`）仅标签、无 Release 页 |
@@ -339,7 +335,7 @@ RdataStation-v2/
 | **M7 mock** | 把表结构变成可用的测试数据 | ✅ | 143 生成器 / 15 分类 · 分布族与时序 · 列级工作日历 · 6 套场景模板与列依赖 · 落库到项目分析库（内存临时表 ATTACH 直写 · 可追加分析库既有表 · **不回写源业务库**）· 四条出口 · **标题栏 + 新建 Mock 表（草稿 tab）** · **无项目可用（纯生成）** | 出口不可取消 · 大导出非流式 · 并发生成 |
 | **M8 insight** | 把数据变成结论 | ✅ | 六 Tab 面板（摘要 / 列 / 表 / 多列 / 结构 / 历史）· 四维质量分 · 16 条内置规则 + 三层作用域 + 热加载 · 快照版本对比 · 结构洞察走驱动元数据（SQLite 可用）· DuckDB 内存上限可配并持久化 · 全量分析确认弹窗 | 分析表型存档入口 · 解析级策略门 · 表 / 库级快照 |
 | **M9 plugin** | WASM / Sidecar 宿主，四类扩展点 | ⛔ | 设计文档与包结构已就绪 | **整包无调用方**；wasmtime 在 Windows + rustc 1.98 下崩溃（编译受限，未纳入 `cargo test-all`）；等 beta3 立项 |
-| **editor** | 一个内核、三种文档模式（通用 / SQL / 分析） | 🟡 | **通用**（`.txt` 记事本 + 本地脚本独立链）· **SQL**（`.sql` 脚本 + 连接 + 停靠结果：三条执行通道 · 分段抓取 · 真实事务与中断 · 五种导出 · 格式化 / 十种方言转译 / 执行计划 · 补全与模板 · 会话跨重启 · SQL 命名参数绑定 `:name`）· **分析**（`.rdsnote` 单元序列 + 内联输出骨架） | Phase 1c 分析单元：单元正文复用编辑内核 · 完整会话与 kernel 执行（搁置）· 值预览 / 编辑 · 血缘持久化 |
+| **editor** | 一个内核、三种文档模式（通用 / SQL / 分析） | 🟡 | **通用**（`.txt` 记事本 + 本地脚本独立链）· **SQL**（`.sql` 脚本 + 连接 + 停靠结果：三条执行通道 · 分段抓取 · 真实事务与中断 · 五种导出 · 格式化 / 十种方言转译 / 执行计划 · 补全与模板 · 会话跨重启 · SQL 命名参数绑定 `:name` · **执行回执按文档隔离排空，双文档结果互不覆盖**）· **分析**（`.rdsnote` 单元序列 + 内联输出骨架） | Phase 1c 分析单元：单元正文复用编辑内核 · 完整会话与 kernel 执行（搁置）· 值预览 / 编辑 · 血缘持久化 · tx/commit/source/export 四通道回执隔离待清偿（见 §6.10 A.3） |
 | **federation** | 多源挂进同一条 DuckDB 会话的只读跨源查询 | 🟡 | L1 官方 scanner（MySQL / PostgreSQL / SQLite / DuckDB 文件 / Parquet / CSV / httpfs）+ L2 社区 scanner（Oracle）同池 · ≥2 个已连接且开启本地加速才出联邦档 · 主源语义（未限定名只在主源解析，跨源写 `<别名>.<schema>.<表>`）· 扩展显式管理（关掉自动下载）· 写语句 ATTACH 层拦截 · 凭据会话级 Secret 不落盘、出引擎脱敏 | L3 桥接（无 scanner 源「拉行 → 临时表」）· SQL Server 真机 · 扫描 / 拉取行数可见 · 扩展安装动作与进度呈现 |
 | **quick_open** | 元数据搜索与命令面板 | ✅ | 三档（`>` 命令 · `#` 元数据全文 trigram · 无前缀名称档 `metadata_index`）· 内容档 `metadata_fts` trigram（≥3 字）· 十万对象延迟 **158ms → 1.5ms** · **命中行 `⌥↵` 在树中定位** | 源码（视图 / 例程定义）未进 FTS · 最近使用 / 空态建议 |
 | **settings** | 偏好登记 + 原子持久化 + 设置页 | ✅ | 三分法作用域（应用 / 项目 / 会话）· 登记表 + 准入五条 · 原子写 | `effect` 字段无人消费 · 无跨进程写锁 |
@@ -502,12 +498,13 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 
 测试分四层：**纯函数单测** → **GPUI headless 窗口测试** → **集成 / 契约测试** → **真机探针**（需真数据库，默认 `#[ignore]`，约定「默认 `cargo test` 不依赖外部服务」）。
 
-> **最新全量基线（2026-10-22，第十次复跑，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.9）**：
+> **最新全量基线（2026-10-23，第十一次复跑 r9，详见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md) §6.10 A.3；上一版 r2 基线见 §6.9）**：
 >
-> - `cargo test --workspace -j 2 --no-fail-fast` = **108 个 Running 目标 + 21 个 Doc-tests 段 · 3161 通过 · 48 忽略 · 0 失败**（含 `rds-plugin` 全量；48 忽略 = lib 28：engine 真机探针 24 · editor 1 · kernel 3，加 Doc-tests 20：engine 16 · connection / insight / plugin / workbench_shell 各 1）
-> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **107 个 Running 目标 · 3160 项通过**
+> - `cargo test --workspace -j 2 --no-fail-fast` = **108 个 Running 目标 + 21 个 Doc-tests 段 · 3162 通过 · 1 失败 · 48 忽略**；唯一失败 `quick_open::tests::clicking_a_row_executes_the_selected_action` 是命令面板鼠标点击进右 dock 的现象 1 用例（任务 #21/#25），**本轮已明确暂停、0.2.4 不修**，非编译错误；48 忽略 = lib 28：engine 真机探针 24 · editor 1 · kernel 3，加 Doc-tests 20：engine 16 · connection / insight / plugin / workbench_shell 各 1
+> - 项目自身套件（去掉本机诊断脚本 `zz_fixture_probe`）= **107 个 Running 目标 · 3161 项通过**
 > - 编译门禁：`cargo check --workspace --all-targets` 0 error / 3 行既有 warning 头（plugin `supervisor.rs` mut 不必要 ×2 · workbench `history_editor_entry` unused import · kernel `registry.rs` unused var）；`clippy` 0 error（lint 告警为存量风格债，CI 不设硬门禁）；本轮改动未引入新 warning
-> - 0.2.4 功能：① SQL 命名参数绑定（`:name` 扫描替换 + 绑定对话框 + 取消中止，含参数绑定纯函数与窗口状态机测试）；② 洞察内存管理链（DuckDB 内存上限可配 + 偏好持久化 + 全量分析确认弹窗）；③ 资产库全局实例归属与分发（`RowScope` / `InstanceFilter` + 分发任务 + 面板夹具适配）；④ 左 dock 命令面板装配修复（`apply_left_mode` 对称补活动 tab 句柄，`OpenLeftPanel` 先登记再同步宿主）。本轮日志与资源修复：⑤ `metadata_cache` 的 `PRAGMA mmap_size` 误用 `execute` 改 `query_row` 容错（498 条历史 WARN 根除）；⑥ 本地文件源错误注册 SQLite/DuckDB Secret 的分支移除（64 条历史 WARN 根除）；⑦ GPUI vendor 窗口关闭/失焦时序噪音（`window not found` / 无效窗口句柄 / 光标位置拒绝访问等）写库前过滤，仅 `target=="log"` 命中、业务消息不吞；⑧ 导航探针建连失败由 `error!` 降 `warn!`（失败结果已回填面板，属环境性状态）；⑨ 应用图标换新版母版，标题栏按明暗主题切换 32px 图标
+> - 0.2.4 功能：① SQL 命名参数绑定（`:name` 扫描替换 + 绑定对话框 + 取消中止，含参数绑定纯函数与窗口状态机测试）；② 洞察内存管理链（DuckDB 内存上限可配 + 偏好持久化 + 全量分析确认弹窗）；③ 资产库全局实例归属与分发（`RowScope` / `InstanceFilter` + 分发任务 + 面板夹具适配）；④ 左 dock 命令面板装配修复（`apply_left_mode` 对称补活动 tab 句柄，`OpenLeftPanel` 先登记再同步宿主）。本轮日志与资源修复：⑤ `metadata_cache` 的 `PRAGMA mmap_size` 误用 `execute` 改 `query_row` 容错（498 条历史 WARN 根除）；⑥ 本地文件源错误注册 SQLite/DuckDB Secret 的分支移除（64 条历史 WARN 根除）；⑦ GPUI vendor 窗口关闭/失焦时序噪音（`window not found` / 无效窗口句柄 / 光标位置拒绝访问等）写库前过滤，仅 `target=="log"` 命中、业务消息不吞；⑧ 导航探针建连失败由 `error!` 降 `warn!`（失败结果已回填面板，属环境性状态）；⑨ 应用图标换新版母版，标题栏按明暗主题切换 32px 图标；⑩ **编辑器回执按文档隔离排空**（修复空闲幽灵面板跨文档抢走回执导致成功网格 / 失败错误卡片都不回填；双文档结果互不覆盖，2026-10-23 真机复测闭环：5 条回执全部归属正确、零跨文档误抢）；⑪ settings 字号越界断言、mock 未知列预览两处并行测试竞态修复
+> - **本轮已知未闭环（0.2.4 如实标注）**：现象 1 命令面板鼠标点击无法进入洞察 / Mock / 历史（键盘回车可进入，鼠标点击未抵达宿主端口，暂停至下一版本）；`tx_notes` / `commit_notes` / `source_notes` / `export_notes` 四通道仍是全量排空后按文档过滤，存在与现象 2 同类的跨面板丢回执风险，列入下一版本阶段 1；M9 plugin 整包未接入应用
 
 下表为 **2026-09-19 的逐包实测快照**（同一套 `cargo test-all`，逐目标台账见 `module-status.md` §6.5 前的历史段；两期数字口径有差异——10-16 起排除 plugin）：
 
@@ -527,7 +524,7 @@ PR 与 `main` 上另有一套轻量编译门禁（Linux + Windows 跑 `clippy-al
 | `rds-shared` · `rds-settings` · `rds-plugin` · `rds-paths` · `rds-workbench-shell` | **22** · **21** · **11** · **11** · **1** |
 | `ui_contract`（界面契约） | **7**（零裸尺寸 / 零裸色值 / 面板登记 / 共享字段白名单） |
 
-> 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`，2026-09-19 快照口径）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；该轮次编译 0 告警，最新编译告警口径见上方第九次基块。
+> 上表是**同一次 `cargo test-all`** 的实测结果（Windows · stable · `-j 2`，2026-09-19 快照口径）。**逐目标台账与复现命令见 [`docs/architecture/module-status.md`](docs/architecture/module-status.md)**；该轮次编译 0 告警，最新编译告警口径见上方第十一次（r9）基块。
 >
 > **2026-10-01 增量更新（gpui-kit 0.7.0 迁移）**：`cargo check --workspace` 0 error / 0 warning；受影响 crate（workbench / editor / project / mock / insight / analytics / connection / settings / scratchpad / app / engine 等）实测 **~1328 通过 / 0 失败**；dialog 打开 / 渲染 / 关闭 / 不重复挂载测试全部通过。2 项非回归：`quick_open` 并行负载下 20s 超时（单跑 0.08s 通过，flaky）；`zz_fixture_probe` 依赖内网真机（环境性）。
 >
