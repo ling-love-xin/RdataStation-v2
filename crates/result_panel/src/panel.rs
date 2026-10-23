@@ -892,6 +892,21 @@ impl ResultPanel {
         self.status.as_ref()
     }
 
+    /// 当前选中结果集的 SQL（「刷新」重跑它；`None` = 无可重跑）
+    pub fn sql(&self) -> Option<&str> {
+        self.result_sql.as_deref()
+    }
+
+    /// 有没有可复制的东西（没网格不摆复制 / 转置 / 导出）
+    pub fn can_copy(&self) -> bool {
+        self.result_can_copy
+    }
+
+    /// 顶部提示行（切通道后「旧结果来自 X」）
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
     /// 结果集标签（测试断言标签条内容）
     pub fn tabs(&self) -> &[ResultSetTab] {
         &self.tabs

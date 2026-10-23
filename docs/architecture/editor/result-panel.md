@@ -220,6 +220,26 @@ workbench 层薄壳面板 `workbench → editor → result_panel`（结果动作
    活动文档 → 面板投影）、exec 回执自动开 dock。
 4. 全量回归 + 文档收尾 + 提交（只 add 本线文件）。
 
+### 8.6 交互对齐 DBeaver（2026-10-23 用户拍板「尽量对齐」）
+
+参考实证：DBeaver 官方文档 + `org.jkiss.dbeaver.ui.editors.data` 源码（ResultSetViewer /
+IResultSetPresentation / LightGrid）。逐项对照结论：
+
+| 项 | DBeaver 行为 | 本项目处理 |
+| --- | --- | --- |
+| 执行替换当前结果 tab | `resultSet.replaceCurrentTab=true` 默认**替换** | **已对齐**：`ResultPlacement::Replace` 是普通执行的既有语义（store.rs），无需改 |
+| 结果面板最大化 | `Ctrl+Shift+6`（results panel 最大化） | **阶段 3 纳入**：底部 dock 加「最大化结果面板」动作（dock 拖拽 + 面板自身可最大化） |
+| 结果面板收起/展开 | `Ctrl+6` | 对齐：底部 dock 关闭/打开按钮天然等价（DockArea `toggle_dock`） |
+| 呈现多视图（Grid/Text/Record） | `IResultSetPresentation` 可插拔 | 预留：`ResultControls` / `ResultPane` 已是呈现接入点雏形；Text/Record 视图后续挂新呈现，不进 dock 化范围 |
+| 取全部行 / 计算总行数 | 底部工具栏按钮 | 记 backlog（现有「取下一段」已覆盖分页语义） |
+| 列头下拉菜单（筛选/排序/隐藏） | 每列箭头菜单 | 记 backlog（现走右键菜单，交互细节可对齐） |
+| 结果面板横竖分栏可配 | `resultSet.orientation` | 记 backlog（dock 布局支持，暂缓） |
+
+> 归属模型差异（重要）：DBeaver 结果是**每个 SQL 编辑器自带 results panel**（多面板并存），
+> 本项目拍板为**全局单 dock 联动活动文档**（单面板切换）。维持拍板；dock 内结果集标签条
+> 覆盖多结果并存的大部分场景；未来要多文档并存时 dock 面板改「每文档 tab」数据层零成本
+> （`ResultStore` 已按文档分槽）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
