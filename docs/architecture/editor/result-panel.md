@@ -139,9 +139,86 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 项 | 状态 |
 | --- | --- |
 | 状态栏合并进全局状态栏 | 另一会话（用户明确）；布局债根因（host.rs 状态栏在 `v_resizable` 之下不在 min 保护链）记录在案 |
-| ResultPanel 实体化 | host.rs 结果区胶水（约 25 个结果字段 + `sync_result_view` + 工具栏组装 + 双栏）迁入 `rds-result-panel`，editor 只留访问口 |
-| 结果面板侧边栏 | 选中列信息（类型 / 字段注释 / 列统计）常驻显示，DBeaver Data Editor 右侧栏 |
+| ResultPanel Dock 化 | 见 §8 方案（用户已拍板：底部 dock + 全局联动 + 有结果自动开 + 移除嵌式结果区） |
+| 结果面板侧边栏 | 选中列信息（类型 / 字段注释 / 列统计）常驻显示，DBeaver Data Editor 右侧栏（用户明确延后，纯搬迁优先） |
 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
+
+## 8. ResultPanel Dock 化方案（2026-10-23 拍板）
+
+### 8.1 决策记录（用户确认）
+
+| 决策点 | 拍板结果 |
+| --- | --- |
+| 面板形态 | 结果面板 = **独立 Dock**（DBeaver Data Editor 那种可停靠/关闭的面板，不是编辑器内嵌分栏） |
+| Dock 位置 | **底部 dock（Bottom）**，SQL IDE 惯例（DataGrip/DBeaver 结果在编辑器下方独立面板） |
+| 归属联动 | **全局单 dock + 活动文档联动**：结果面板展示当前活动编辑器文档的结果，切文档自动切换（对齐 `ResultStore` 按文档分槽） |
+| 打开时机 | **有结果自动开**（执行回执到达即自动打开并聚焦底部结果面板；无结果自动收起） |
+| 旧区处置 | **移除嵌式结果区**（host.rs 的 v_resizable 分栏结果区整体搬出，editor 只留访问口） |
+| 动作接线 | **Shared 事件队列（彻底解耦）**：result_panel 定义请求枚举 + 队列，editor 事件路径 drain 分派；不用注入闭包 |
+
+### 8.2 目标架构
+
+```
+Workbench DockArea（"workspace"）
+├── Left  dock：导航 / 草稿 / 资源 / 插件
+├── Right dock：洞察 / Mock / 历史 / 存档
+├── Center：编辑器文档 tab（EditorHostPanel，仅剩代码/脚本编辑区）
+└── Bottom dock【新增】结果面板（ResultDockTab 薄壳 → ResultPanel 实体）
+      └── ResultPanel（result_panel::panel）
+            ├── 主网格 Entity<TableState<ResultGridDelegate>>（自 host 迁入）
+            ├── 对比网格（compare_mode 时双栏）
+            ├── 投影状态（toolbar / status / tabs / error_card / script_card / transpose / compare）
+            └── ResultActionQueue（面板级动作入队 → editor 事件路径 drain 分派）
+```
+
+依赖方向保持硬约束：`editor → result_panel → engine / gpui-kit / workbench_shell`；
+workbench 层薄壳面板 `workbench → editor → result_panel`（结果动作仍在 editor 端口执行）。
+
+### 8.3 迁移清单（host.rs → result_panel）
+
+| host.rs 现状 | 去向 |
+| --- | --- |
+| 结果区字段 ~25 个（`result_toolbar` / `result_status` / `result_tabs` / `result_active` / `compare_mode` / `compare_grid` / `transposed` / `transpose_row` / `result_sql` / `result_is_analysis` / `result_can_copy` / `result_error_card` / `script_card` / `result_notice` / `fetching_more` / `error_site` / `error_site_key` 等） | `panel::ResultPanel` 字段 |
+| 主网格 `grid` + 对比网格 `compare_grid` 实体 | `ResultPanel` 持有（构造期建，防 window 借用冲突） |
+| `sync_result_view`（L5696，投影 + grid.update + 错误定位 + 消息） | `ResultPanel::sync(cx, input: ResultSyncInput)`；判据（可编辑性 / 连接文本 / 洞察可用 / 错误定位 site）由 editor 在事件路径算好传入 `ResultSyncInput` |
+| 渲染组装（L7680-8146：filter 框 / transpose 组 / compare 开关 / commit 组 / copy / refresh / more / export / analysis / 错误卡 / 脚本卡 / `result_grid::render` + 对比双栏 + v_resizable） | `ResultPanel::render(&self, cx)`（按钮 `on_click` 改为 `queue.push(ResultRequest::…)`） |
+| 结果动作方法（apply_filter_value / toggle_transpose / transpose_step / fetch_more / export_active_result(_all) / run_analysis / insight_column / select_result_set / select_compare_set / toggle_compare_mode / submit_pending_changes / discard_pending_changes / refresh_active_result / copy_active_result / copy_error_message / jump_to_error_site_with） | **留在 editor**（依赖执行链 / engine / 端口）；经 `drain_result_actions` 分派 |
+| 网格 delegate 钩子（filter / sort / insight / preview / stats / load_more / commit_edit） | **保持注入钩子**（`Rc<dyn Fn(...,&mut App)>` 已跨 crate 安全，不重复发明）；editor 创建面板时 set |
+
+### 8.4 ResultRequest 全集（面板级动作队列）
+
+`result_panel::ports::ResultRequest` 枚举，`ResultActionQueue`（`Rc<RefCell<Vec<ResultRequest>>>`，`push` / `drain`）：
+渲染按钮只 `push`（纯读），editor 事件路径 `drain` 后按变体分派到现有动作方法。
+
+| 变体 | 触发 | editor 侧处理 |
+| --- | --- | --- |
+| `SelectSet(usize)` | 结果集标签条 | `select_result_set` |
+| `SelectCompare(usize)` | 对比栏标签条 | `select_compare_set` |
+| `ToggleCompareMode` | 工具栏对比开关 | `toggle_compare_mode` |
+| `ToggleTranspose` / `TransposePrev` / `TransposeNext` | 工具栏转置组 | `toggle_transpose` / `transpose_step` |
+| `Filter{ value }` | 工具栏筛选框提交 | `apply_filter_value` |
+| `CommitPending` / `RollbackPending` | 提交 / 撤销变更对 | `submit_pending_changes` / `discard_pending_changes` |
+| `Analysis{ sql }` / `AnalysisCustom` | 分析菜单项 / 自定义 | `run_analysis` / `request_custom_analysis` |
+| `CopyTsv` | 复制按钮 | `copy_active_result` |
+| `Refresh` | 刷新按钮（重跑 SQL） | `refresh_active_result` |
+| `FetchMore` | 取下一段按钮 | `fetch_more` |
+| `Export{ format, all }` | 导出菜单项 | `export_active_result(_all)` |
+| `CopyError` / `LocateError` | 错误卡两按钮 | `copy_error_message` / `jump_to_error_site_with` |
+| `InsightColumn{ column }` | 网格右键「洞察此列」 | `insight_column`（经既有 delegate 钩子，不入队） |
+
+> 网格内部交互（右键菜单 / 行编辑 / 列统计 / 值预览 / 加载更多）**不走队列**——它们经
+> `ResultGridDelegate` 既有注入钩子直接调 editor（跨 crate 安全，见 §8.3 末行）。
+
+### 8.5 分阶段实施
+
+1. **result_panel 内部**（不碰 editor/workbench，独立可编译）：`ports.rs`（ResultRequest +
+   ResultActionQueue + 单测）→ `panel.rs`（ResultPanel 实体：状态 / sync / render，渲染从
+   host.rs 照搬、按钮改入队）→ `lib.rs` 注册。
+2. **editor 接线**：host.rs 删结果字段与渲染、`drain_result_actions` 分派、投影判据计算
+   `ResultSyncInput`、网格钩子 set、测试访问器转发（保持 585 基线口径）。
+3. **workbench dock**：`ResultDockTab` 薄壳挂 Bottom dock、活动文档联动（editor_service
+   活动文档 → 面板投影）、exec 回执自动开 dock。
+4. 全量回归 + 文档收尾 + 提交（只 add 本线文件）。
 
 ## 8. 协作纪律
 

@@ -27,6 +27,8 @@ pub mod changes;
 pub mod error_card;
 pub mod export;
 pub mod grid;
+pub mod panel;
+pub mod ports;
 pub mod script_card;
 pub mod sets;
 pub mod status;
