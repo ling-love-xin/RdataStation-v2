@@ -601,40 +601,120 @@ pub(super) fn nav_merge_page(loaded: &mut Vec<NavNode>, page: Vec<NavNode>) -> u
     loaded.len() - before
 }
 
-/// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的一段用命中底色标出。
+/// 高亮分段（纯函数，可单测）：把 `name` 中与 `filter`（已小写）匹配的每一段
+/// 标成 `(文本, 是否命中)`。渲染层拿它摆 span，测试层断言分段——不断言 Div 结构。
 ///
 /// 非 ASCII（如 CJK）大小写转换不改变字节长度，故按字节切片安全；
-/// 仅当两端都是 char 边界时才切，否则退化为整体文本。
-pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div {
-    if !filter.is_empty() {
-        let lower = name.to_lowercase();
-        if lower.len() == name.len() {
-            if let Some(pos) = lower.find(filter) {
-                let end = pos + filter.len();
-                if name.is_char_boundary(pos) && name.is_char_boundary(end) {
-                    let before = name[..pos].to_string();
-                    let hit = name[pos..end].to_string();
-                    let after = name[end..].to_string();
-                    return div()
-                        .h_flex()
-                        .items_center()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .text_color(fg)
-                        .child(before)
-                        .child(div().rounded_sm().bg(match_bg).child(hit))
-                        .child(after);
-                }
+/// 仅当两端都是 char 边界时才切，否则跳过该段（循环里也要推进游标防死循环）。
+pub(super) fn nav_highlight_segments(name: &str, filter: &str) -> Vec<(String, bool)> {
+    if filter.is_empty() {
+        return vec![(name.to_string(), false)];
+    }
+    let lower = name.to_lowercase();
+    if lower.len() != name.len() {
+        return vec![(name.to_string(), false)];
+    }
+    let mut segments = Vec::new();
+    let mut cursor = 0usize;
+    let mut lower_cursor = 0usize;
+    while let Some(rel) = lower[lower_cursor..].find(filter) {
+        let start = lower_cursor + rel;
+        let end = start + filter.len();
+        if name.is_char_boundary(start) && name.is_char_boundary(end) {
+            if start > cursor {
+                segments.push((name[cursor..start].to_string(), false));
             }
+            segments.push((name[start..end].to_string(), true));
+            cursor = end;
         }
+        // 无论本段是否可切都推进：命中段已消费，避免同一段无限循环。
+        lower_cursor = end;
+    }
+    if cursor < name.len() {
+        segments.push((name[cursor..].to_string(), false));
+    }
+    if segments.is_empty() {
+        return vec![(name.to_string(), false)];
+    }
+    segments
+}
+
+/// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的**每一段**用命中底色标出。
+pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div {
+    let segments = nav_highlight_segments(name, filter);
+    let has_hit = segments.iter().any(|(_, hit)| *hit);
+    if !has_hit {
+        return div()
+            .min_w_0()
+            .overflow_hidden()
+            .text_ellipsis()
+            .text_color(fg)
+            .child(name.to_string());
     }
     div()
+        .h_flex()
+        .items_center()
         .min_w_0()
         .overflow_hidden()
         .text_ellipsis()
         .text_color(fg)
-        .child(name.to_string())
+        .children(segments.into_iter().map(|(text, hit)| {
+            if hit {
+                div().rounded_sm().bg(match_bg).child(text)
+            } else {
+                div().child(text)
+            }
+        }))
+}
+
+/// 内容档 snippet 的分段（纯函数，可单测）：解析 `<mark>…</mark>` 标记，
+/// 返回 `(文本, 是否命中)` 序列。无标记 / 标记残缺时整体为未命中段。
+pub(super) fn nav_snippet_segments(snippet: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut rest = snippet;
+    while let Some(start) = rest.find("<mark>") {
+        let body_start = start + "<mark>".len();
+        let Some(rel_end) = rest[body_start..].find("</mark>") else {
+            break;
+        };
+        let body_end = body_start + rel_end;
+        if start > 0 {
+            segments.push((rest[..start].to_string(), false));
+        }
+        segments.push((rest[body_start..body_end].to_string(), true));
+        rest = &rest[body_end + "</mark>".len()..];
+    }
+    if !rest.is_empty() {
+        segments.push((rest.to_string(), false));
+    }
+    if segments.is_empty() {
+        return vec![(snippet.to_string(), false)];
+    }
+    segments
+}
+
+/// 内容档（`#` 前缀）命中片段高亮：把 FTS 的 `<mark>…</mark>` 标记解析成命中底色，
+/// 其余文本 muted——用户看到「为什么命中」时，命中词必须一眼可辨。
+///
+/// 无标记（普通片段 / 异常残缺）时整体按 muted 文本渲染，不 panic。
+pub(super) fn nav_snippet_highlight(snippet: &str, match_bg: Hsla, muted: Hsla) -> Div {
+    let segments = nav_snippet_segments(snippet);
+    if !segments.iter().any(|(_, hit)| *hit) {
+        return div().text_color(muted).child(snippet.to_string());
+    }
+    div()
+        .h_flex()
+        .items_center()
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis()
+        .children(segments.into_iter().map(|(text, hit)| {
+            if hit {
+                div().rounded_sm().bg(match_bg).child(text)
+            } else {
+                div().text_color(muted).child(text)
+            }
+        }))
 }
 
 /// 树行下的附加行（「加载中…」/ 错误 / 未连接提示），带缩进。
@@ -782,6 +862,10 @@ pub(super) fn nav_row_height(
                 .add_if(view.loading.contains(&node.key), ui::NAV_SUBLINE)
                 .add_if(view.errors.contains_key(&node.key), ui::NAV_SUBLINE);
         }
+        // 内容档（`#` 前缀）命中带 snippet：附加一行「为什么命中」。
+        NavRow::SearchHit { hit, .. } => {
+            height = height.add_if(hit.snippet.is_some(), ui::NAV_SUBLINE);
+        }
         _ => {}
     }
     height
@@ -815,7 +899,7 @@ pub(super) fn nav_tag_color(name: &str, theme: &gpui_kit::component::Theme) -> H
 #[cfg(test)]
 mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
-    use super::nav_tag_palette_index;
+    use super::{nav_highlight_segments, nav_snippet_segments, nav_tag_palette_index};
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
@@ -827,5 +911,84 @@ mod tests {
             seen.insert(nav_tag_palette_index(n, 8));
         }
         assert!(seen.len() >= 2, "不同标签应落在不同色档（至少两档）");
+    }
+
+    /// 单段命中：整词中缀只标一段，前后文本未命中。
+    #[test]
+    fn highlight_single_hit_segment() {
+        let segs = nav_highlight_segments("order_items", "order");
+        assert_eq!(
+            segs,
+            vec![
+                ("order".to_string(), true),
+                ("_items".to_string(), false),
+            ]
+        );
+    }
+
+    /// 多段命中：每一处都标（不只第一段——旧实现只高亮第一段）。
+    #[test]
+    fn highlight_all_matching_segments() {
+        let segs = nav_highlight_segments("orders_by_orders", "orders");
+        assert_eq!(
+            segs,
+            vec![
+                ("orders".to_string(), true),
+                ("_by_".to_string(), false),
+                ("orders".to_string(), true),
+            ]
+        );
+    }
+
+    /// 空过滤器 = 整段未命中（渲染回退为普通文本）。
+    #[test]
+    fn highlight_empty_filter_means_no_hit() {
+        let segs = nav_highlight_segments("order_items", "");
+        assert_eq!(segs, vec![("order_items".to_string(), false)]);
+    }
+
+    /// 大小写不敏感：`ORDER` 命中 `order`（LIKE 超集口径一致）。
+    #[test]
+    fn highlight_is_case_insensitive() {
+        let segs = nav_highlight_segments("ORDER_ITEMS", "order");
+        assert_eq!(
+            segs,
+            vec![
+                ("ORDER".to_string(), true),
+                ("_ITEMS".to_string(), false),
+            ]
+        );
+    }
+
+    /// snippet 解析：`<mark>` 命中段、前后文本未命中；无标记整体未命中。
+    #[test]
+    fn snippet_marks_become_hit_segments() {
+        let segs = nav_snippet_segments("…下单<mark>渠道</mark>…");
+        assert_eq!(
+            segs,
+            vec![
+                ("…下单".to_string(), false),
+                ("渠道".to_string(), true),
+                ("…".to_string(), false),
+            ]
+        );
+        assert_eq!(
+            nav_snippet_segments("无标记片段"),
+            vec![("无标记片段".to_string(), false)]
+        );
+    }
+
+    /// 多个 mark：逐段解析，不丢不叠。
+    #[test]
+    fn snippet_multiple_marks() {
+        let segs = nav_snippet_segments("<mark>a</mark>x<mark>b</mark>");
+        assert_eq!(
+            segs,
+            vec![
+                ("a".to_string(), true),
+                ("x".to_string(), false),
+                ("b".to_string(), true),
+            ]
+        );
     }
 }

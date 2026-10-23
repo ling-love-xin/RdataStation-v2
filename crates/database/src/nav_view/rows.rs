@@ -2690,7 +2690,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             );
         }
 
-        row.on_click(move |_, window, app| {
+        let row = row.on_click(move |_, window, app| {
             entity.update(app, |this, cx| {
                 // 先选中再开面板：漫游序列里走到这一行时，行态得看得出选的是哪一行。
                 // （命中行是**临时行**，不进落库——`nav_selection_is_persistable`。）
@@ -2707,6 +2707,24 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 }
                 cx.notify();
             });
-        })
+        });
+
+        // 内容档（`#` 前缀）命中带「为什么命中」：主行下附加一行 snippet，
+        // `<mark>` 解析成命中底色（行高预算在 `nav_row_height` 已按 snippet 加一块）。
+        let mut block = div().w_full().child(row);
+        if let Some(snippet) = &hit.snippet {
+            block = block.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .w_full()
+                    .h(rems(ui::NAV_SUBLINE))
+                    .px_1()
+                    .text_xs()
+                    .overflow_hidden()
+                    .child(nav_snippet_highlight(snippet, match_bg, muted)),
+            );
+        }
+        block
     }
 }
