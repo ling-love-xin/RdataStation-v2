@@ -187,15 +187,19 @@ impl NavView {
     /// ——快速连击在窗口内被合并，不会每键发一条索引搜索。
     pub(super) fn nav_schedule_index_search(&self, filter: &str, cx: &mut Context<Self>) {
         let query = filter.trim().to_string();
-        // 搜索签名 =（词, 正则, 大小写）：词没变但开关变了也要重搜
-        // （`Aa` / `.*` toggle 切换时 query 相同，旧 `search_query` 判断会误判“没变”）。
-        let (regex, case_sensitive) = {
+        // 搜索签名 =（词, 正则, 大小写, 仅已连接）：词没变但开关变了也要重搜
+        // （`Aa` / `.*` / 「已连接」toggle 切换时 query 相同，旧 `search_query` 判断会误判“没变”）。
+        let (regex, case_sensitive, connected_only) = {
             let view = self.nav.borrow();
-            (view.search_regex, view.search_case_sensitive)
+            (
+                view.search_regex,
+                view.search_case_sensitive,
+                view.search_connected_only,
+            )
         };
         let started = {
             let mut view = self.nav.borrow_mut();
-            let sig = (query.clone(), regex, case_sensitive);
+            let sig = (query.clone(), regex, case_sensitive, connected_only);
             if !nav_search_query_ready(&query) {
                 view.search_query = None;
                 view.search_sig = None;
@@ -235,12 +239,13 @@ impl NavView {
     /// 为什么排程时不把 targets 组装好带进闭包：防抖窗口内用户可能又改了 chips /
     /// 连接列表（排程时拍下的快照会过期），到期时现取才是用户看到的当前筛选。
     fn nav_run_index_search(&self, cx: &mut Context<Self>) {
-        let (query, case_sensitive, regex) = {
+        let (query, case_sensitive, regex, connected_only) = {
             let view = self.nav.borrow();
             (
                 view.search_query.clone().unwrap_or_default(),
                 view.search_regex,
                 view.search_case_sensitive,
+                view.search_connected_only,
             )
         };
         if !nav_search_query_ready(&query) {
@@ -252,7 +257,12 @@ impl NavView {
         let tags = self.nav.borrow().tags.clone();
         let targets: Vec<nav_jobs::SearchTarget> = conns
             .iter()
-            .filter(|c| self.nav_conn_passes_facets(&conn_filter, c, &tags))
+            // 「仅已连接」开关：只搜当前已连接（索引缓存存在但断开的连接不搜——
+            // 命中行点开还要建连，开关语义 = 用户只关心现在连着的库）。
+            .filter(|c| {
+                (!connected_only || self.host.is_connected(&c.id))
+                    && self.nav_conn_passes_facets(&conn_filter, c, &tags)
+            })
             .map(|c| nav_jobs::SearchTarget {
                 conn_id: c.id.clone(),
                 label: c.name.clone(),

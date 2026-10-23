@@ -780,9 +780,9 @@ impl NavView {
             // 无边框风格，明暗主题下都靠 hover/focus 边框显形。
             // 点击只翻状态 + 重排索引搜索（词没变但签名变了 → `nav_schedule_index_search` 会重搜）；
             // 开关随面板状态持久化（重启后保持）。
-            let (regex, case_sensitive) = {
+            let (regex, case_sensitive, connected_only) = {
                 let v = self.nav.borrow();
-                (v.search_regex, v.search_case_sensitive)
+                (v.search_regex, v.search_case_sensitive, v.search_connected_only)
             };
             let (selected_bg, hover_bg, fg) = {
                 let theme = cx.theme();
@@ -794,6 +794,7 @@ impl NavView {
             };
             let entity_regex = cx.entity();
             let entity_cs = cx.entity();
+            let entity_conn = cx.entity();
             let reg_btn = div()
                 .id("nav-search-regex")
                 .h_flex()
@@ -844,6 +845,32 @@ impl NavView {
                         cx.notify();
                     });
                 });
+            let conn_btn = div()
+                .id("nav-search-connected")
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .px_1()
+                .h_5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if connected_only { fg } else { muted })
+                .when(connected_only, |this| this.bg(selected_bg))
+                .when(!connected_only, move |s| s.hover(move |s| s.bg(hover_bg)))
+                .child("已连接")
+                .on_click(move |_, _, app| {
+                    entity_conn.update(app, |this, cx| {
+                        {
+                            let mut v = this.nav.borrow_mut();
+                            v.search_connected_only = !v.search_connected_only;
+                        }
+                        // 会话级开关不落库（`navigator_state.rs` 有他人改动），
+                        // 但翻转后必须重搜——签名含该开关，`rerun` 自动判变。
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
             search_row = search_row.child(
                 div()
                     .flex_1()
@@ -860,7 +887,8 @@ impl NavView {
                                     .items_center()
                                     .gap_0p5()
                                     .child(case_btn)
-                                    .child(reg_btn),
+                                    .child(reg_btn)
+                                    .child(conn_btn),
                             ),
                     ),
             );

@@ -1046,6 +1046,21 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
     }
 }
 
+/// schema.object 两段拆分（DBeaver TreeFilter 口径，见竞品分析 §5.3-A④）：
+/// 恰好一个点且两边非空才拆；`a.b.c` / `a.` / `.b` 不拆（整串中缀）。
+///
+/// 返回 `(归属段, 名称段)`：归属段优先匹配 `schema`，其次 `catalog`
+/// （MySQL 无 schema 层，`库.表` 是用户直觉，两处都要认）。
+fn nav_split_two_segment(query: &str) -> (Option<&str>, Option<&str>) {
+    if query.matches('.').count() != 1 {
+        return (None, None);
+    }
+    match query.split_once('.') {
+        Some((a, b)) if !a.is_empty() && !b.is_empty() => (Some(a), Some(b)),
+        _ => (None, None),
+    }
+}
+
 /// 搜索一个连接块（单条 scoped 线程内执行；纯函数，便于确定性单测）。
 ///
 /// 返回 `(搜了的连接数, 命中)`：无落盘缓存的连接直接跳过（搜索不建文件）；
@@ -1056,6 +1071,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
 /// 正则同理叠加在候选集上（LIKE 已要求整词中缀命中，故 `^ord` 这类**锚定**模式与
 /// `.` 通配任意字符的语义**不完整**——这是「中缀 + 精筛」架构的已知边界，面板 UI 已注明）。
 /// 正则编译失败（非法模式）时退化为不精筛（日志留痕），避免一次手误让整个搜索报废。
+///
+/// `schema.object` 两段：名称段走 LIKE 中缀，归属段在候选上按 `schema` / `catalog`
+/// 精筛（`Aa` / `.*` 精筛同样只作用于名称段——归属段是系统事实，不做模糊）。
 fn search_targets(
     kind: SearchKind,
     query: &str,
@@ -1077,7 +1095,10 @@ fn search_targets(
         searched += 1;
         match kind {
             SearchKind::Name => {
-                for hit in cache.search_index(query, SEARCH_LIMIT_PER_CONN) {
+                let (segment_schema, segment_name) = nav_split_two_segment(query);
+                // 两段时名称段单独做 LIKE 中缀（整串含 `.` 在对象名里永远中缀不中）。
+                let needle = segment_name.unwrap_or(query);
+                for hit in cache.search_index(needle, SEARCH_LIMIT_PER_CONN) {
                     hits.push(SearchHit {
                         conn_id: target.conn_id.clone(),
                         conn_label: target.label.clone(),
@@ -1090,16 +1111,23 @@ fn search_targets(
                         snippet: None,
                     });
                 }
+                // 归属段精筛：schema 或 catalog 任一精确命中即可（MySQL `库.表`）。
+                if let Some(schema) = segment_schema {
+                    hits.retain(|h| {
+                        h.schema.as_deref() == Some(schema)
+                            || h.catalog.as_deref() == Some(schema)
+                    });
+                }
                 // 「Aa」区分大小写：`contains` 精筛（Rust 字符串比较区分大小写）。
                 if case_sensitive {
-                    hits.retain(|h| h.object_name.contains(query));
+                    hits.retain(|h| h.object_name.contains(needle));
                 }
                 // 「.*」正则：正则精筛（`(?i)` 前缀与「Aa」关联动；编译失败退化为不筛）。
                 if regex {
                     let pattern = if case_sensitive {
-                        query.to_string()
+                        needle.to_string()
                     } else {
-                        format!("(?i){query}")
+                        format!("(?i){needle}")
                     };
                     match regex::Regex::new(&pattern) {
                         Ok(re) => hits.retain(|h| re.is_match(&h.object_name)),
@@ -1698,6 +1726,9 @@ mod tests {
                 is_foreign_key: false,
                 default_value: None,
                 comment: None,
+                is_identity: false,
+                identity_generation: None,
+                collation: None,
                 extra: Default::default(),
                 references: None,
                 ordinal: 0,
@@ -1712,6 +1743,65 @@ mod tests {
             label: conn_id.to_string(),
             driver: "postgres".to_string(),
         }
+    }
+
+    /// schema.object 两段拆分：恰好一个点且两边非空才拆；多段 / 空段 / 无点不拆。
+    #[test]
+    fn split_two_segment_only_on_single_dot() {
+        use super::nav_split_two_segment;
+        assert_eq!(nav_split_two_segment("public.orders"), (Some("public"), Some("orders")));
+        assert_eq!(nav_split_two_segment("orders"), (None, None));
+        assert_eq!(nav_split_two_segment("a.b.c"), (None, None));
+        assert_eq!(nav_split_two_segment("a."), (None, None));
+        assert_eq!(nav_split_two_segment(".b"), (None, None));
+    }
+
+    /// 两段搜索：名称段 LIKE 中缀 + 归属段精筛（schema/catalog 任一命中）。
+    /// seed_cache 把表播在 `public` schema 下：`public.orders` 命中、`other.orders` 不中。
+    #[test]
+    fn two_segment_search_filters_by_schema() {
+        let root = search_temp_root("twoseg");
+        let root_s = root.to_string_lossy().to_string();
+        seed_cache("P_two_0", &root, "orders");
+        let targets = [target("P_two_0")];
+
+        let (_, hits) = search_targets(
+            SearchKind::Name,
+            "public.orders",
+            false,
+            false,
+            Some(&root_s),
+            &targets,
+        );
+        assert!(
+            hits.iter().any(|h| h.object_name == "orders"),
+            "public.orders 应命中 public 下的 orders：{hits:?}"
+        );
+
+        let (_, hits) = search_targets(
+            SearchKind::Name,
+            "other.orders",
+            false,
+            false,
+            Some(&root_s),
+            &targets,
+        );
+        assert!(
+            hits.is_empty(),
+            "other.orders 不得命中 public 下的 orders：{hits:?}"
+        );
+
+        // 单段词不受影响（回归）：`orders` 仍中缀命中。
+        let (_, hits) = search_targets(
+            SearchKind::Name,
+            "orders",
+            false,
+            false,
+            Some(&root_s),
+            &targets,
+        );
+        assert!(hits.iter().any(|h| h.object_name == "orders"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 纯函数 `search_targets`：保序（target 序）、跳过无缓存连接、每连接命中封顶。

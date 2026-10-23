@@ -272,9 +272,12 @@ pub struct NavViewState {
     pub search_regex: bool,
     /// 搜索框「区分大小写（`Aa`）」开关（面板级，随面板状态持久化）。
     pub search_case_sensitive: bool,
-    /// 搜索**签名** =（词, 正则, 大小写）：词没变但开关变了也要重搜
+    /// 索引搜索「仅已连接」开关（会话级，**不落库**——`navigator_state.rs` 有他人
+    /// 未提交改动，落库字段等它稳定后再说；竞品 DBeaver TreeFilter 同款开关）。
+    pub search_connected_only: bool,
+    /// 搜索**签名** =（词, 正则, 大小写, 仅已连接）：词没变但开关变了也要重搜
     /// （旧判断只看 `search_query`，toggle 切换会被误判为“没变”而永远不重搜）。
-    search_sig: Option<(String, bool, bool)>,
+    search_sig: Option<(String, bool, bool, bool)>,
     /// 索引搜索**批次序号**（运行时单调递增，不落库）：真正发起一批搜索时 `+= 1`，
     /// 回填时与结果自带的 `seq` 比对——同词重跑 / toggle 重排时，`query` 判据区分不了
     /// 先后（两次词相同），只有序号能保证「旧批迟到不回填」。
