@@ -1227,7 +1227,7 @@ fn grid_rows(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) -> usi
 
 /// 结果集标签（文案 + 是否失败）
 fn result_tabs(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) -> Vec<(String, bool)> {
-    cx.update(|_window, cx| panel.read(cx).result_tabs_for_test())
+    cx.update(|_window, cx| panel.read(cx).result_tabs_for_test(cx))
 }
 
 /// 在窗口里建面板（宿主建的窗口第一层视图**
@@ -1248,7 +1248,7 @@ fn wait_for_result(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) 
         let done = cx.update(|_window, cx| {
             panel.update(cx, |panel, cx| {
                 panel.drain_exec_results(cx);
-                panel.result_summary_for_test().is_some()
+                panel.result_summary_for_test(cx).is_some()
             })
         });
         if done {
@@ -1300,7 +1300,7 @@ select boom;",
     let summary = cx.update(|_window, cx| {
         panel
             .read(cx)
-            .result_summary_for_test()
+            .result_summary_for_test(cx)
             .map(|text| text.to_string())
     });
     // 【B15】工具栏左段最后跟来源摘要（血缘）：普通执行就是「原查询」
@@ -1358,12 +1358,12 @@ fn a_failing_execution_gets_an_error_card_instead_of_an_empty_grid(cx: &mut Test
 
     // 【B5】工具栏只说“失败”（原型 §2.4 的 `行数 │ 耗时 │ 连接名` 里失败占一段）
     let summary = cx
-        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .update(|_window, cx| panel.read(cx).result_summary_for_test(cx))
         .expect("失败也要有结果区文案");
     assert!(summary.contains("失败"), "{summary}");
     // 【B6】原因在**错误卡片**里（原型 §2.4「错误呈现」），不是一句灰字
     let card = cx
-        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test(cx))
         .expect("失败要有错误卡片");
     assert!(card.message.contains("boom"), "{}", card.message);
     assert!(
@@ -1432,7 +1432,7 @@ fn a_batch_lands_three_statements_in_three_result_sets(cx: &mut TestAppContext) 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(2, cx)));
     assert_eq!(grid_rows(cx, &panel), 3, "第三句的结果真的落地了");
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
         2
     );
     // 界面上真的画出了标签条（两份以上结果才画）
@@ -1477,7 +1477,7 @@ fn compare_mode_shows_two_side_by_side_panes(cx: &mut TestAppContext) {
     // 开对比（驱动入口；按钮接线由真机 / 选择器验证，headless 下直接走入口）
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
     assert!(
-        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()),
+        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)),
         "开关已开"
     );
     assert_eq!(
@@ -1547,7 +1547,7 @@ fn compare_pane_pick_switches_or_clears_the_compare_set(cx: &mut TestAppContext)
         "右栏回到空态"
     );
     assert!(
-        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()),
+        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)),
         "对比模式本身还开着"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1574,12 +1574,12 @@ fn closing_compare_mode_resets_the_switch_and_clears_the_compare_set(cx: &mut Te
     });
     wait_for_all_pending(cx, &panel);
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
-    assert!(cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()));
+    assert!(cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)));
     assert_eq!(shared.results().compare_index(&id), Some(1));
 
     // 关掉：开关复位、对比选中清掉（下次开对比重新选）
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
-    assert!(!cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()));
+    assert!(!cx.update(|_window, cx| panel.read(cx).compare_mode_for_test(cx)));
     assert_eq!(shared.results().compare_index(&id), None, "对比选中跟着清掉");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
@@ -1613,7 +1613,7 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     assert_eq!(shared.results().set_count(&id), 2, "新的一份追加在后面");
     assert_eq!(result_tabs(cx, &panel).len(), 2, "两份结果 → 标签条该出现");
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
         0,
         "原结果集保持选中（新结果放旁边，不打扰在看的那份）"
     );
@@ -1624,11 +1624,11 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(1, cx)));
     assert_eq!(grid_rows(cx, &panel), 5);
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
         1
     );
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_summary_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_summary_for_test(cx)),
         Some("行数 5 · 耗时 3 ms · 原查询".to_string()),
         "状态行跟着选中的结果集走"
     );
@@ -1753,12 +1753,12 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
         "未绑定连接的文档取消的就是“当前活动连接”"
     );
     let summary = cx
-        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .update(|_window, cx| panel.read(cx).result_summary_for_test(cx))
         .expect("中断也要有结果区文案");
     assert!(summary.contains("失败"), "{summary}");
     // 原因在错误卡片里（原型 §2.4）
     let card = cx
-        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test(cx))
         .expect("中断要有错误卡片");
     assert!(card.message.contains("cancel"), "{}", card.message);
     assert!(
@@ -3057,7 +3057,7 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
         "结果记录要带上来源连接"
     );
     let toolbar = cx
-        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test(cx))
         .expect("有结果就有工具栏");
     assert_eq!(
         toolbar.connection.as_deref(),
@@ -3727,7 +3727,7 @@ fn the_execution_plan_lands_in_its_own_labelled_result_set(cx: &mut TestAppConte
     assert_eq!(tabs.len(), 2, "计划该落成一份新结果集：{tabs:?}");
     assert_eq!(tabs[1].0, "执行计划", "标签要说清这是什么：{tabs:?}");
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test(cx)),
         0,
         "计划不抢用户正在看的那份（B2 语义）"
     );
@@ -3952,7 +3952,7 @@ fn a_write_statement_reports_affected_rows_and_offers_no_copy(cx: &mut TestAppCo
     );
 
     let summary = cx
-        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .update(|_window, cx| panel.read(cx).result_summary_for_test(cx))
         .expect("写语句也要有结果区文案");
     assert!(summary.starts_with("影响 3 行"), "{summary}");
     assert!(
@@ -3980,18 +3980,18 @@ fn truncation_is_reported_as_a_warning(cx: &mut TestAppContext) {
     );
 
     let toolbar = cx
-        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test(cx))
         .expect("有结果就有工具栏");
     assert_eq!(toolbar.rows, Some(3), "工具栏报行数");
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("有网格就有状态行");
     assert_eq!(
         status.truncated_hint.as_deref(),
         Some("已截断至 3 行"),
         "截断提示要说清拿到多少行"
     );
-    let (sql, can_copy) = cx.update(|_window, cx| panel.read(cx).result_actions_for_test());
+    let (sql, can_copy) = cx.update(|_window, cx| panel.read(cx).result_actions_for_test(cx));
     assert!(can_copy, "被截断的结果集仍能复制已抓到的行");
     assert_eq!(sql.as_deref(), Some("select truncated"));
 }
@@ -4110,12 +4110,8 @@ fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestApp
     let (shared, id) = shared_with_toolbar_runner("select 1;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    // 还没有结果：结果区整个不占位置（不显示空壳）
+    // 还没有结果：编辑区独占宿主主体（Dock 化后结果区归底部 dock，宿主不再分栏）
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(
-        cx.debug_bounds("editor-result-pane").is_none(),
-        "没结果时不摆空壳"
-    );
     let before = cx
         .debug_bounds("editor-code-area")
         .expect("编辑区在")
@@ -4125,10 +4121,6 @@ fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestApp
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    let pane = cx
-        .debug_bounds("editor-result-pane")
-        .expect("有结果时结果区在");
-    assert!(pane.size.height.as_f32() > 0.0, "结果区要有高度");
     let after = cx
         .debug_bounds("editor-code-area")
         .expect("编辑区还在")
@@ -4139,8 +4131,8 @@ fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestApp
         "编辑区不能被结果区压成 0（实得 {after:?}）"
     );
     assert!(
-        after < before,
-        "分栏生效的标志是编辑区让出了一部分高度（{before:?} → {after:?}）"
+        after >= before,
+        "Dock 化后编辑区不被结果区压缩（v_resizable 分栏已移除：{before:?} → {after:?}）"
     );
 }
 
@@ -4308,13 +4300,13 @@ fn the_status_row_reports_the_selected_row(cx: &mut TestAppContext) {
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
 
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("有网格就有状态行");
     assert_eq!(status.selected_row, None, "刚跑完没选中任何行");
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_grid_row_for_test(0, cx)));
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("有网格就有状态行");
     assert_eq!(status.selected_row, Some(1), "选中第一行（1 基）");
     assert!(
@@ -4347,7 +4339,7 @@ fn the_error_card_offers_a_working_locate_button(cx: &mut TestAppContext) {
     );
 
     let card = cx
-        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test(cx))
         .expect("失败要有错误卡片");
     assert_eq!(card.location.as_deref(), Some("第 1 行 第 17 列"));
     assert!(
@@ -4426,11 +4418,11 @@ fn fetching_the_next_segment_appends_to_the_same_result(cx: &mut TestAppContext)
         "首段两行"
     );
     let summary = cx
-        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .update(|_window, cx| panel.read(cx).result_summary_for_test(cx))
         .expect("有结果");
     assert!(summary.contains("行数 2"), "{summary}");
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("有网格就有状态行");
     assert!(status.has_more, "拿满了 → 还有下一段");
     assert!(
@@ -4454,7 +4446,7 @@ fn fetching_the_next_segment_appends_to_the_same_result(cx: &mut TestAppContext)
     );
     assert_eq!(shared.results().set_count(&id), 1, "取下一段不新开结果集");
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("还有状态行");
     assert_eq!(status.total_rows, 4);
     assert!(!status.has_more, "最后一段没拿满 → 到底了");
@@ -4630,7 +4622,7 @@ fn filtering_hides_non_matching_rows_and_reports_it(cx: &mut TestAppContext) {
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("1", cx)));
     assert_eq!(grid_rows(cx, &panel), 1, "只剩命中的那行（值 = 1）");
     let toolbar = cx
-        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test(cx))
         .expect("有工具栏");
     assert_eq!(
         toolbar.filtered,
@@ -4653,7 +4645,7 @@ fn filtering_hides_non_matching_rows_and_reports_it(cx: &mut TestAppContext) {
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("", cx)));
     assert_eq!(grid_rows(cx, &panel), 3, "清除筛选：三行都回来");
     let toolbar = cx
-        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test(cx))
         .expect("有工具栏");
     assert_eq!(toolbar.filtered, None, "没筛选就不摆那一段");
 }
@@ -4672,7 +4664,9 @@ fn filtering_waits_for_the_debounce(cx: &mut TestAppContext) {
         execution::ResultPlacement::Replace,
     );
     cx.update(|_window, cx| {
-        panel.update(cx, |panel, cx| panel.on_filter_input("1".to_string(), cx))
+        // Dock 化后筛选框与防抖在面板实体（host 只转发面板实体给测试）
+        let result_panel = panel.read(cx).result_panel_for_test();
+        result_panel.update(cx, |p, cx| p.on_filter_input("1".to_string(), cx))
     });
     assert_eq!(grid_rows(cx, &panel), 3, "刚敲下去还没应用（防抖窗口内）");
 
@@ -4871,6 +4865,8 @@ fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("orders", cx);
             panel.set_pushdown(true, cx);
+            // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
+            panel.drain_result_actions(cx);
         });
     });
     wait_for_all_pending(cx, &panel);
@@ -4997,6 +4993,8 @@ fn refreshing_a_filtered_result_keeps_its_shape(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("orders", cx);
             panel.set_pushdown(true, cx);
+            // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
+            panel.drain_result_actions(cx);
         });
     });
     wait_for_all_pending(cx, &panel);
@@ -5081,6 +5079,8 @@ fn pushdown_without_support_says_so(cx: &mut TestAppContext) {
         panel.update(cx, |panel, cx| {
             panel.set_filter_for_test("a", cx);
             panel.set_pushdown(true, cx);
+            // Dock 化：开关翻转只入队 PushdownFilter，drain 才真正重查（对齐生产事件路径）
+            panel.drain_result_actions(cx);
         });
     });
     wait_for_all_pending(cx, &panel);
@@ -5120,7 +5120,7 @@ fn filtering_by_value_from_the_menu_works(cx: &mut TestAppContext) {
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.apply_filter_value("1", cx)));
     assert_eq!(grid_rows(cx, &panel), 1, "按值筛出那一行");
     let toolbar = cx
-        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test(cx))
         .expect("有工具栏");
     assert_eq!(toolbar.filtered, Some((1, 3)), "工具栏明示已筛选");
 }
@@ -5432,7 +5432,7 @@ fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
         execution::ResultPlacement::Replace,
     );
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("有网格就有状态行");
     assert!(status.has_more, "这条假执行器首段拿满");
 
@@ -5462,7 +5462,7 @@ fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
     wait_for_all_pending(cx, &panel);
     let status = cx
-        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .update(|_window, cx| panel.read(cx).result_status_for_test(cx))
         .expect("还有状态行");
     assert!(!status.has_more, "第二段没拿满 → 到底了");
     let labels: Vec<String> = export::menu_items(status.has_more, "4")
@@ -5689,7 +5689,7 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
         "源库档跑的结果要记住自己是源库档"
     );
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test(cx)),
         ["源库"]
     );
 
@@ -5710,11 +5710,11 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
     );
     // 切完那一刻旧结果就已经是“旧”的了（不用等下一次执行）
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test(cx)),
         ["源库·旧"]
     );
     let notice = cx
-        .update(|_window, cx| panel.read(cx).result_notice_for_test())
+        .update(|_window, cx| panel.read(cx).result_notice_for_test(cx))
         .expect("要有顶部提示");
     assert!(notice.contains("旧结果来自源库"), "{notice}");
 
@@ -5724,7 +5724,7 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
     assert_eq!(sets.len(), 2);
     assert_eq!(sets[1].channel, ExecChannel::Accelerated);
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test(cx)),
         ["源库·旧", "加速"]
     );
 
@@ -5734,7 +5734,7 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
     });
     assert_eq!(shared.service().channel_for(&id), ExecChannel::Source);
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test(cx)),
         ["源库", "加速·旧"]
     );
 }
@@ -6065,7 +6065,6 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         schema: None,
         tab_size: None,
         hard_tabs: None,
-        result_height: None,
     };
     cx.update(|window, cx| {
         panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
@@ -6149,7 +6148,6 @@ fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
-        result_height: None,
     };
 
     // ① 连接还在列表里 → 绑定真的写回文档
@@ -6303,7 +6301,6 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         schema: None,
         tab_size: None,
         hard_tabs: None,
-        result_height: None,
     };
     let (panel3, cx) = open_panel(cx, &shared, &id);
     legacy.toolbar = None;
@@ -6314,55 +6311,6 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel3.read(cx).toolbar_layout_for_test()),
         crate::toolbar::ToolbarLayout::default_layout(),
         "旧会话没存布局 → 恢复用默认"
-    );
-}
-
-/// 【遗留 #5】结果区分栏高度随会话走：存了就恢复；**旧会话没存（None）→ 保持面板默认**
-#[gpui_kit::test]
-fn the_result_pane_height_comes_back_with_the_session(cx: &mut TestAppContext) {
-    cx.update(gpui_kit::init);
-
-    // ① 会话带高度 → 恢复写回面板（钳到合法区间：这里给一个超上限的值，应被钳住）
-    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
-    let (panel, cx) = open_panel(cx, &shared, &id);
-    let mut session = crate::session::SavedSession {
-        id: "d:/sql/a.sql".to_string(),
-        path: Some("D:/sql/a.sql".to_string()),
-        mode: EditorMode::Sql,
-        channel: ExecChannel::Source,
-        connection: None,
-        content: "select 1;".to_string(),
-        cursor: 0,
-        selection: None,
-        toolbar: None,
-        schema: None,
-        tab_size: None,
-        hard_tabs: None,
-        result_height: Some(crate::ui::RESULT_MAX_HEIGHT * 2.0),
-    };
-    cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
-    });
-    assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_height_for_test()),
-        crate::ui::RESULT_MAX_HEIGHT,
-        "超上限的高度被钳到上限"
-    );
-
-    // ② 旧会话没有高度字段（None）→ 不覆盖：保持面板默认
-    session.result_height = None;
-    let (panel2, cx2) = {
-        let (shared2, id2, _s, _c) = shared_with_runner("select 1;", EditorMode::Sql);
-        let (panel2, cx2) = open_panel(cx, &shared2, &id2);
-        (panel2, cx2)
-    };
-    cx2.update(|window, cx| {
-        panel2.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
-    });
-    assert_eq!(
-        cx2.update(|_window, cx| panel2.read(cx).result_height_for_test()),
-        crate::ui::RESULT_PANE_HEIGHT,
-        "旧会话没存高度 → 保持面板默认"
     );
 }
 
@@ -6384,7 +6332,6 @@ fn the_schema_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
         schema: schema.map(str::to_string),
         tab_size: None,
         hard_tabs: None,
-        result_height: None,
     };
 
     // ① schema 在列表里 → 绑定真的写回文档
@@ -7683,6 +7630,10 @@ fn commit_controls_appear_with_pending_changes(cx: &mut TestAppContext) {
     // 改两格 → 按钮组出现；计数 = 权威变更集的待提交条数
     seed_cell_change(&shared, &id, 0, 1, "alice", "alice2");
     seed_cell_change(&shared, &id, 1, 1, "bob", "bob2");
+    // 测试直塞变更不走编辑提交路径，投影需手动刷新（生产路径由提交回调自动 sync）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.sync_result_view(cx));
+    });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         cx.debug_bounds("editor-result-commit-group").is_some(),
@@ -8364,7 +8315,7 @@ fn selecting_an_installed_env_runs_the_script_and_shows_a_success_card(
     assert_eq!(seen[0].code, "print('hi')", "请求携带原样代码");
     drop(seen);
 
-    let card = cx.update(|_window, cx| panel.read(cx).script_card_for_test());
+    let card = cx.update(|_window, cx| panel.read(cx).script_card_for_test(cx));
     let card = card.expect("脚本跑完应有卡片");
     assert_eq!(card.env_name, "Python 3.12", "卡片带环境展示名");
     match card.result {
@@ -8415,7 +8366,7 @@ fn an_uninstalled_env_refuses_to_run_with_a_reason(cx: &mut TestAppContext) {
         "未装环境应报未安装：{message:?}"
     );
     assert!(
-        cx.update(|_window, cx| panel.read(cx).script_card_for_test()).is_none(),
+        cx.update(|_window, cx| panel.read(cx).script_card_for_test(cx)).is_none(),
         "未装环境不得产出卡片"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -8442,7 +8393,7 @@ fn a_failed_script_execution_shows_an_error_card_with_the_reason(
     });
     wait_for_all_pending(cx, &panel);
 
-    let card = cx.update(|_window, cx| panel.read(cx).script_card_for_test());
+    let card = cx.update(|_window, cx| panel.read(cx).script_card_for_test(cx));
     let card = card.expect("失败也要有卡片（带原因）");
     match card.result {
         Ok(_) => panic!("应当失败，却拿到了成功输出"),

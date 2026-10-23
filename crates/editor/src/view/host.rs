@@ -7,12 +7,14 @@
 //! 多文档 = 同一个 tab 组里的多个面板：`DockLayout::tabs()` 里逐个 `panel_view` 即可。
 
 use std::cell::RefCell;
+use result_panel::panel::{ExportCtx, GridPayload, ResultPanel, ResultSyncInput};
+use result_panel::ports::{ResultActionQueue, ResultRequest};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::text::TextView;
-use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
@@ -20,12 +22,11 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{Icon};
-use gpui_kit::ScrollHandle;
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
 use gpui_kit::component::input::{
-    Editor, EditorState, Input, InputEvent, InputState, RangeDecoration, RangeDecorationCollection,
+    Editor, EditorState, InputEvent, InputState, RangeDecoration, RangeDecorationCollection,
     RangeDecorationStyle,
 };
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -60,12 +61,11 @@ use crate::view::completion;
 use crate::view::dialogs;
 use crate::view::fold;
 use crate::view::highlight;
-use crate::view::results::error_card::{self, ErrorCard};
-use crate::view::results::script_card;
+use crate::view::results::error_card::ErrorCard;
 use crate::view::results::grid::{
     self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar,
 };
-use crate::view::results::sets::{self as result_sets, ResultSetTab};
+use crate::view::results::sets::{self as result_sets};
 use crate::view::widgets::status_bar;
 
 /// 【B7】「抓全量后导出」的在途状态
@@ -253,6 +253,10 @@ pub struct EditorHostPanel {
     /// 避免常驻 ✕ 与标题内容互相遮挡（见 `title_suffix`）。
     title_hovered: std::cell::Cell<bool>,
     /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
+    ///
+    /// Dock 化后网格实体由面板 [`ResultPanel::set_grids`] 注入同一实体——编辑器动作
+    /// （取段 / 转置 / 筛选 / 复制）与面板渲染读写同一份 `TableState`，靠 `Entity<T>`
+    /// 共享句柄解耦，不复制第二份状态。
     grid: Entity<TableState<ResultGridDelegate>>,
     /// 本文档**已提交、尚未回填**的语句数（B2：批量 = 多条；`> 0` 就是“执行中”）
     pending: usize,
@@ -277,43 +281,21 @@ pub struct EditorHostPanel {
     /// 为什么要队列：执行是**一条语句一个结论**地回到界面的（批量更是好几条），
     /// “这一份是执行计划”这种信息必须**按位**对上，不能拿一个布尔量糊过去。
     pending_labels: std::collections::VecDeque<Option<String>>,
-    /// 【B5】结果区要画的东西（工具栏 ⑥ + 状态行 ⑦ + 错误卡片）
-    ///
-    /// 从选中结果集投影一次就缓在这里：render 是纯读路径，不在渲染期算文案。
-    /// `None` = 还没有结论（结果区不出现）。
-    result_toolbar: Option<ResultToolbar>,
-    /// 【B5】结果状态行（⑦）；只有网格时才给（失败 / 写语句那一行是噪音）
-    result_status: Option<ResultStatus>,
-    /// 结果集标签（从 `ResultStore` 投影；同样不在渲染期重算）
-    result_tabs: Vec<ResultSetTab>,
-    /// 结果集标签条的滚动句柄（标签随查询累积增多，传给 TabBar `track_scroll` 保持跨帧滚动状态）
-    result_tabs_scroll: ScrollHandle,
-    /// 当前选中的结果集下标（标签条的选中态）
-    result_active: usize,
-    /// 【并排对比】对比模式开关（面板内存态）：开启后结果区双栏并排
-    /// （左栏 = 主选中 `result_active`，右栏 = 对比选中，经 `ResultStore::compare_*`）
-    compare_mode: bool,
+    /// 结果面板实体（Dock 化：面板归 workbench dock 渲染；编辑器只做两件事——
+    /// 事件路径算 [`ResultSyncInput`] 投影 + `drain_result_actions` 分派面板动作）
+    result_panel: Entity<ResultPanel>,
+    /// 面板动作队列（面板渲染期 `push`；编辑器事件路径这里 `drain` 分派回动作方法）
+    result_action_queue: ResultActionQueue,
     /// 【并排对比】对比栏的网格（第二份结果集的 delegate；惰性创建，面板生命周期内复用）
     compare_grid: Option<Entity<TableState<ResultGridDelegate>>>,
-    /// 【B5】当前选中结果集的 SQL（工具栏「刷新」重跑它；`None` = 无可重跑的东西）
-    result_sql: Option<String>,
-    /// 【B15】当前选中结果是**本地分析**的产物（不摆“刷新”：重跑它没有意义）
-    result_is_analysis: bool,
-    /// 【B5】当前选中结果集有没有可复制的东西（没有网格就不摆复制按钮）
-    result_can_copy: bool,
-    /// 【P2-4】转置视图是否打开（单行转置；数据行随 [`Self::transpose_row`] 竖排）
-    transposed: bool,
-    /// 【P2-4】转置当前展示的数据行（越界由 delegate 夹取）
-    transpose_row: usize,
     /// 【B16】参数绑定挂起：执行目标里含 `:name` 时记在这里，等参数表单填完
     /// 再替换执行（`None` = 没有在等表单）
     pending_bind: Option<PendingBind>,
-    /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
-    result_error_card: Option<ErrorCard>,
-    /// 【2b】脚本执行的输出卡片（通用模式跑完才有；`None` = 没跑过 / 已切走）
-    script_card: Option<crate::view::results::script_card::ScriptCard>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     error_site: Option<diagnostics::ErrorSite>,
+    /// 【2b】脚本执行输出卡片（通用模式回执写入；sync 时经 `ResultSyncInput` 透传面板——
+    /// 面板的 sync 全量覆写该字段，真值必须留在编辑器这一侧）
+    script_card: Option<crate::view::results::script_card::ScriptCard>,
     /// 【B6】上一次算过的位置是哪条结论（`(这次跑的 SQL, 错误文本)`）
     ///
     /// 位置要拿整篇文档做匹配，而 `sync_result_view` 会被反复调用（回填 / 切标签），
@@ -321,10 +303,6 @@ pub struct EditorHostPanel {
     error_site_key: Option<(String, String)>,
     /// 面板所在窗口（构造时存下：出错回填发生在没有窗口的轮询里，聚焦要用）
     window: AnyWindowHandle,
-    /// 【B5】结果区高度（rem；拖拽分栏后记在这里，下一次渲染用它当初始尺寸）
-    ///
-    /// 只活在这个面板里（尚未随会话持久化——原型同。）
-    result_height: std::rc::Rc<std::cell::Cell<f32>>,
     /// 【遗留 #7】值查看器：右键「查看完整值」弹出的目标（`Some` = 弹层开着）
     value_preview: Option<ValuePreview>,
     /// 【遗留 #14】CSV 表格展示：文档是 CSV 且网格已填（渲染据此走精简结果区；
@@ -338,20 +316,6 @@ pub struct EditorHostPanel {
     pending_export: Option<PendingExport>,
     /// 【B5b】正在取下一段（滚动到底自动加载的防重入真值；同步给网格 delegate）
     fetching_more: bool,
-    /// 【B15】本地筛选框（原型 §5.5 的 `⌕ 筛选`；只作用于视图层，不重查）
-    filter_input: Entity<InputState>,
-    /// 【B15】筛选词的真值（输入框变化 → 防抖 300ms → 应用到网格）
-    filter_text: String,
-    /// 【B15】防抖版本号（连打时只让最后一次生效）
-    filter_version: u64,
-    /// 【B15】防抖任务句柄（仅持有；下一次输入会取代它）
-    filter_debounce: RefCell<Option<Task<()>>>,
-    /// 【B15】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查源库
-    pushdown: bool,
-    /// 【B13】结果区顶部那一行（切通道后“旧结果来自 X”；`None` = 不提示）
-    ///
-    /// 与标签条上那份星徽标互为补充：徽标说“它来自哪档”，这一行说“为什么它现在是旧的”。
-    result_notice: Option<String>,
     /// 【B14】结果网格里**最近一次选中**（`Ctrl+C` 复制谁）
     ///
     /// 组件没给“当前是选格还是选行”的访问器，而它的 `selected_cell()` / `selected_row()`
@@ -386,8 +350,6 @@ pub struct EditorHostPanel {
     _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
     _grid_sub: Option<Subscription>,
-    /// 【B15】筛选框订阅（输入 → 防抖）
-    _filter_sub: Option<Subscription>,
     /// 【T2a-4】编辑框订阅（输入变化 → 同步编辑态；Enter / 失焦 → 提交）。
     /// 句柄即生命周期：不存字段就会被 drop、订阅即刻取消（编辑器内踩过一次）。
     _edit_sub: Option<Subscription>,
@@ -528,22 +490,8 @@ impl EditorHostPanel {
                 .unwrap_or_default(),
         );
 
-        // 【B15】本地筛选框：输入变化走防抖（原型 §5.5 的 300ms），到点才重算视图行序
-        let filter_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx);
-            state.set_placeholder("筛选当前结果…", window, cx);
-            state
-        });
-        let filter_sub = cx.subscribe_in(
-            &filter_input,
-            window,
-            |this, state, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let text = state.read(cx).value().to_string();
-                    this.on_filter_input(text, cx);
-                }
-            },
-        );
+        // 【B15】本地筛选框已随 Dock 化迁入面板实体（`ResultPanel::new` 自建含防抖订阅）；
+        // 编辑器只保留 右键「按值筛选」→ 面板 `apply_filter_value` 的转发（见钩子注入区）。
 
         // 结果网格：构造时一次建成，以后结果变化只 `refresh`（不重建，避免丢掉列宽 / 滚动位置）
         let grid = result_grid::new_table_state(
@@ -558,6 +506,15 @@ impl EditorHostPanel {
             window,
             cx,
         );
+
+        // Dock 化接线：面板实体 + 动作队列（渲染期 push / 事件路径 drain 分派）。
+        // 网格经 `set_grids` 注入**同一实体**——编辑器动作与面板渲染读写同一份 TableState。
+        let result_action_queue = ResultActionQueue::new();
+        let result_panel = cx.new(|cx| {
+            let mut panel = ResultPanel::new(window, cx, result_action_queue.clone());
+            panel.set_grids(grid.clone(), Some(compare_grid.clone()));
+            panel
+        });
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
         let grid_sub = cx.subscribe_in(&grid, window, |panel, grid, event: &TableEvent, window, cx| {
             let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
@@ -605,16 +562,18 @@ impl EditorHostPanel {
                         }
                     }
                     Err(reason) => {
-                        panel.result_notice = Some(format!("编辑被拦：{}", reason.reason()));
+                        // 编辑被拦提示迁入面板（增量写入；sync 全量覆写前保持显示）
+                        panel
+                            .result_panel
+                            .update(cx, |p, cx| p.set_notice(Some(format!("编辑被拦：{}", reason.reason())), cx));
                     }
                 }
             }
-            if let Some(status) = panel.result_status.take() {
-                panel.result_status = Some(ResultStatus {
-                    selected_row,
-                    ..status
-                });
-            }
+            // 行选中 → 状态行「已选第 N 行」增量更新（迁入面板实体：`set_selected_row`
+            // 只补 status.selected_row，sync 全量覆写前的中间态保持一致）
+            panel
+                .result_panel
+                .update(cx, |p, cx| p.set_selected_row(selected_row, cx));
             cx.notify();
         });
 
@@ -637,26 +596,10 @@ impl EditorHostPanel {
                     panel.grid.update(cx, |table, cx| {
                         table.delegate_mut().commit_edit(cx);
                     });
-                    // 【T2a-4】提交完成后再刷新脏格底色（grid 已退出上面的 update，
-                    // 这里可安全再 update；投影数据读权威变更集——与真实状态同一口径）
-                    let dirty = {
-                        let store = panel.shared.results();
-                        let active = store.active_index(&panel.document).unwrap_or(0);
-                        store
-                            .change_set(&panel.document, active)
-                            .map(|changes| {
-                                changes
-                                    .pending()
-                                    .iter()
-                                    .map(|change| (change.row, change.column))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default()
-                    };
-                    panel.grid.update(cx, |table, cx| {
-                        table.delegate_mut().set_dirty(dirty);
-                        cx.notify();
-                    });
+                    // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
+                    // `sync_result_view`；grid 已退出上面的 update，这里可安全 update 面板）。
+                    // Dock 化后提交按钮组 / 脏格底色读面板投影，不刷新就不会出现。
+                    panel.sync_result_view(cx);
                 }
                 _ => {}
             },
@@ -810,35 +753,18 @@ impl EditorHostPanel {
             refresh_pending: 0,
             export_pending: 0,
             pending_labels: std::collections::VecDeque::new(),
-            result_toolbar: None,
-            result_status: None,
-            result_tabs: Vec::new(),
-            result_tabs_scroll: ScrollHandle::default(),
-            result_active: 0,
-            compare_mode: false,
+            result_panel,
+            result_action_queue,
             compare_grid: Some(compare_grid),
-            result_sql: None,
-            result_is_analysis: false,
-            result_can_copy: false,
-            transposed: false,
-            transpose_row: 0,
             pending_bind: None,
-            result_error_card: None,
-            script_card: None,
             error_site: None,
+            script_card: None,
             error_site_key: None,
             window: window.window_handle(),
-            result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             value_preview: None,
             csv_active: false,
             pending_export: None,
             fetching_more: false,
-            filter_input,
-            filter_text: String::new(),
-            filter_version: 0,
-            filter_debounce: RefCell::new(None),
-            pushdown: false,
-            result_notice: None,
             result_selection: None,
             exec_pump: RefCell::new(None),
             scanner: crate::scan::Scanner::new(),
@@ -848,7 +774,6 @@ impl EditorHostPanel {
             error_reason: None,
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
-            _filter_sub: Some(filter_sub),
             _edit_sub: Some(_edit_sub),
             commit_in_flight: None,
             toolbar: crate::toolbar::ToolbarLayout::default(),
@@ -1047,8 +972,6 @@ impl EditorHostPanel {
             // 【T2c-4 余项】缩进随会话走（文档级权威值）
             tab_size: Some(self.shared.document_tab_size(&self.document)),
             hard_tabs: Some(self.shared.document_hard_tabs(&self.document)),
-            // 【遗留 #5】结果区分栏高度随会话走（用户拖出来的比例是布局的一部分）
-            result_height: Some(self.result_height.get()),
         })
     }
 
@@ -1224,11 +1147,6 @@ impl EditorHostPanel {
         if let Some(hard) = session.hard_tabs {
             self.set_hard_tabs(hard, cx);
         }
-        // 【遗留 #5】结果区分栏高度：旧会话没存（`None`）→ 保持默认，不覆盖当前；
-        // 值钳到合法区间（与拖拽条 `size_range` 同一套上下界）
-        if let Some(height) = session.result_height {
-            self.result_height.set(height.clamp(ui::RESULT_MIN_HEIGHT, ui::RESULT_MAX_HEIGHT));
-        }
         cx.notify();
     }
 
@@ -1361,11 +1279,6 @@ impl EditorHostPanel {
             .lsp()
             .semantic_tokens_provider
             .is_some()
-    }
-
-    /// 【遗留 #5】结果区分栏高度（rem；测试断言「会话恢复带高度回来」用）
-    pub fn result_height_for_test(&self) -> f32 {
-        self.result_height.get()
     }
 
     /// 【A4】装上内核的那个着色器声明的 token 名（供测试断言「装的是 SQL 着色器」）
@@ -2408,6 +2321,9 @@ impl EditorHostPanel {
             if self.pending == 0 {
                 self.running_since = None;
             }
+            // Dock 化：脚本卡真值写宿主后投影进面板（面板渲染读投影字段；
+            // 不投影则面板的 script_card 永远是 None，卡片渲染不出来）
+            self.sync_result_view(cx);
         }
         cx.notify();
         cx.emit(EditorHostEvent::StatusChanged);
@@ -3288,7 +3204,7 @@ impl EditorHostPanel {
     /// 清掉变更集里的 Pending 项（Committed 已落库、Conflict 是证据，都保留），
     /// 网格的脏格底色随 [`Self::sync_result_view`] 的投影一起消失。
     pub(crate) fn discard_pending_changes(&mut self, cx: &mut Context<Self>) {
-        let index = self.result_active;
+        let index = self.result_panel.read(cx).active();
         let changed = self.shared.update_results(|store| {
             store.mutate_change_set(&self.document, index, |changes| changes.discard_pending())
         });
@@ -4673,7 +4589,7 @@ impl EditorHostPanel {
             from,
             to,
             &self.editor_text(cx),
-            self.result_toolbar.is_some(),
+            self.result_panel.read(cx).toolbar().is_some(),
             granularity,
         )
     }
@@ -5092,25 +5008,28 @@ impl EditorHostPanel {
     /// 结果工具栏（⑥）的左段文案（供测试断言；`None` = 还没有结论）
     ///
     /// 就是 `ResultToolbar::segments()` 拼起来的那串，原型 §2.4 的 `行数 1,204 │ 耗时 1.2s │ orders`。
-    pub fn result_summary_for_test(&self) -> Option<String> {
-        self.result_toolbar
-            .as_ref()
+    /// Dock 化后状态在面板实体，经只读访问器转发。
+    pub fn result_summary_for_test(&self, cx: &App) -> Option<String> {
+        self.result_panel
+            .read(cx)
+            .toolbar()
             .map(|toolbar| toolbar.segments().join(" · "))
     }
 
     /// 结果工具栏（⑥）的真实输入（供测试断言各段与显隐）
-    pub fn result_toolbar_for_test(&self) -> Option<ResultToolbar> {
-        self.result_toolbar.clone()
+    pub fn result_toolbar_for_test(&self, cx: &App) -> Option<ResultToolbar> {
+        self.result_panel.read(cx).toolbar().cloned()
     }
 
     /// 结果状态行（⑦）的真实输入（供测试断言总行数 / 截断提示）
-    pub fn result_status_for_test(&self) -> Option<ResultStatus> {
-        self.result_status.clone()
+    pub fn result_status_for_test(&self, cx: &App) -> Option<ResultStatus> {
+        self.result_panel.read(cx).status().cloned()
     }
 
     /// 当前选中结果集的可重跑 SQL / 可复制（供测试断言按钮显隐）
-    pub fn result_actions_for_test(&self) -> (Option<String>, bool) {
-        (self.result_sql.clone(), self.result_can_copy)
+    pub fn result_actions_for_test(&self, cx: &App) -> (Option<String>, bool) {
+        let panel = self.result_panel.read(cx);
+        (panel.sql().map(str::to_string), panel.can_copy())
     }
 
     /// 【B9 切片二】补全弹层状态（供测试断言“真的弹了”、查询词与候选）
@@ -5128,14 +5047,16 @@ impl EditorHostPanel {
     }
 
     /// 【B6】错误卡片的内容（供测试断言摘要与定位文案）
-    pub fn result_error_card_for_test(&self) -> Option<ErrorCard> {
-        self.result_error_card.clone()
+    pub fn result_error_card_for_test(&self, cx: &App) -> Option<ErrorCard> {
+        self.result_panel.read(cx).error_card().cloned()
     }
 
     /// 【2b】脚本输出卡片（供测试断言脚本执行的结果形态；`None` = 还没有结论）
     pub fn script_card_for_test(
         &self,
+        _cx: &App,
     ) -> Option<crate::view::results::script_card::ScriptCard> {
+        // 脚本卡真值留在宿主（回执写入；sync 经输入透传面板），这里直接读宿主
         self.script_card.clone()
     }
 
@@ -5146,26 +5067,28 @@ impl EditorHostPanel {
     }
 
     /// 结果集标签（供测试断言“批量跑出三个结果集”与标签文案）
-    pub fn result_tabs_for_test(&self) -> Vec<(String, bool)> {
-        self.result_tabs
+    pub fn result_tabs_for_test(&self, cx: &App) -> Vec<(String, bool)> {
+        self.result_panel
+            .read(cx)
+            .tabs()
             .iter()
             .map(|tab| (tab.label.clone(), tab.failed))
             .collect()
     }
 
     /// 【B13】结果集标签的通道徽标（供测试断言“每份结果记住了自己是哪档跑的”）
-    pub fn result_badges_for_test(&self) -> Vec<String> {
-        self.result_tabs.iter().map(|tab| tab.badge()).collect()
+    pub fn result_badges_for_test(&self, cx: &App) -> Vec<String> {
+        self.result_panel.read(cx).tabs().iter().map(|tab| tab.badge()).collect()
     }
 
     /// 【B13】结果区顶部那一行提示（切通道后旧结果那一条）
-    pub fn result_notice_for_test(&self) -> Option<String> {
-        self.result_notice.clone()
+    pub fn result_notice_for_test(&self, cx: &App) -> Option<String> {
+        self.result_panel.read(cx).notice().map(str::to_string)
     }
 
     /// 当前选中的结果集下标（供测试断言点标签真的切了）
-    pub fn result_active_for_test(&self) -> usize {
-        self.result_active
+    pub fn result_active_for_test(&self, cx: &App) -> usize {
+        self.result_panel.read(cx).active()
     }
 
     /// 还有几条语句没回填（供测试断言“批量执行至少知道自己在跑什么”）
@@ -5180,8 +5103,8 @@ impl EditorHostPanel {
     }
 
     /// 【并排对比】对比模式开关（供测试断言开关真的翻转）
-    pub fn compare_mode_for_test(&self) -> bool {
-        self.compare_mode
+    pub fn compare_mode_for_test(&self, cx: &App) -> bool {
+        self.result_panel.read(cx).compare_mode()
     }
 
     /// 【并排对比】对比栏网格当前行数（供测试断言右栏真的拿到了数据）
@@ -5196,6 +5119,12 @@ impl EditorHostPanel {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grid_for_test(&self) -> Entity<TableState<ResultGridDelegate>> {
         self.grid.clone()
+    }
+
+    /// 结果面板实体（测试用：筛选防抖等面板内行为直接驱动面板方法；生产不经此路径）
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn result_panel_for_test(&self) -> Entity<ResultPanel> {
+        self.result_panel.clone()
     }
 
     /// 把光标放到指定位移（供测试断言“执行的是光标所在那句”；键位路径仍走真按键）
@@ -5630,7 +5559,7 @@ impl EditorHostPanel {
             self.advance_pending_export(segment_reason, cx);
             // 【B6】失败且能定位：把光标送到出错处并聚焦（拿不到位置就只留原因）
             if let Some(sql) = fresh_failure
-                && self.result_sql.as_deref() == Some(sql.as_str())
+                && self.result_panel.read(cx).sql().as_deref() == Some(sql.as_str())
                 && self.error_site.is_some()
             {
                 self.jump_to_error_site(cx);
@@ -5693,11 +5622,7 @@ impl EditorHostPanel {
         self.set_message(Some(format!("已复制 {} 行（TSV）", rows.len())), cx);
     }
 
-    fn sync_result_view(&mut self, cx: &mut Context<Self>) {
-        // 【P2-4】换结果 = 换一批行列：转置视图自动退出（delegate 侧已由 `set_data` 清掉，
-        // 这里把面板开关同步复位——`toggled` 与网格状态保持同一份真值）
-        self.transposed = false;
-        self.transpose_row = 0;
+    pub(crate) fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
         let current_channel = self.channel();        let (
             tabs,
@@ -5797,20 +5722,11 @@ impl EditorHostPanel {
             )
         };
 
-        self.result_tabs = tabs;
-        self.result_active = active;
-        self.result_notice = notice;
-        self.result_toolbar = toolbar;
         // 【B5b】滚动到底自动加载的两个真值要先取出来（`status` 接着就被移动了）
         let has_more = status.as_ref().is_some_and(|status| status.has_more);
         let loading_more = self.fetching_more;
-        self.result_status = status;
-        // 【B15】筛选统计的真值在网格那边（视图行序是它算的）
-        self.refresh_filter_hint(cx);
         let (sql, can_copy) = extra.unwrap_or_default();
-        self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
-        self.result_can_copy = can_copy;
-        self.result_is_analysis = extra_analysis;
+        let sql = Some(sql).filter(|sql| !sql.trim().is_empty());
         // 【T2a-3/4/6】这份结果能不能编辑（入口级判据）+ 脏格 / 冲突格集合（投影自权威变更集）
         //
         // 冲突格与脏格分开投影：冲突格（提交没写进去）不是待提交变更，底色用 danger，
@@ -5843,32 +5759,6 @@ impl EditorHostPanel {
                 .unwrap_or_default();
             (editable, dirty, conflict)
         };
-        self.grid.update(cx, |state, cx| {
-            match grid_data {
-                Some((columns, rows, types, table, annotations)) => {
-                    state.delegate_mut().set_data(columns, rows);
-                    // 【Q6】类型必须**在 set_data 之后**设：`set_data` 会清空类型（防"上一份结果的类型套到新数据上"）
-                    state.delegate_mut().set_column_types(types);
-                    // 【A9】来源表名同理（set_data 会清掉旧的；紧跟同步，漏给 = 不摆 INSERT 项）
-                    state.delegate_mut().set_result_table(table);
-                    // 【P1】字段注释同理（set_data 会清掉旧的；紧跟同步，漏给 = 表头只画列名）
-                    state.delegate_mut().set_column_annotations(annotations);
-                }
-                None => state.delegate_mut().clear(empty),
-            }
-            // 【M8】这份结果能不能洞察（菜单项据此出现 / 消失）
-            state
-                .delegate_mut()
-                .set_insight_available(insight_available);
-            // 【B5b】这份结果还能不能再取一段 / 是不是正在取
-            state.delegate_mut().set_has_more(has_more);
-            state.delegate_mut().set_loading_more(loading_more);
-            // 【T2a-4/6】单元格编辑开关 + 脏格 / 冲突格底色（双击进编辑 / 标脏 / 冲突都看这里）
-            state.delegate_mut().set_editable(editable);
-            state.delegate_mut().set_dirty(dirty);
-            state.delegate_mut().set_conflict(conflict);
-            state.refresh(cx);
-        });
 
         // 【B6】定位：结论没变就不重算（要拿整篇文档做匹配，而这里会被反复调用）
         let site = match &failure {
@@ -5891,7 +5781,7 @@ impl EditorHostPanel {
         self.error_site = site;
         let reason = failure.map(|(_, error)| error);
         // 【B6】错误卡片的两个真值：驱动原话 + “定位到第 N 行”（认不出位置就不给后者）
-        self.result_error_card = reason.as_ref().map(|error| ErrorCard {
+        let error_card = reason.as_ref().map(|error| ErrorCard {
             message: error.clone(),
             location: self.error_site.as_ref().map(|site| site.location_text()),
         });
@@ -5904,6 +5794,86 @@ impl EditorHostPanel {
             None => error,
         });
         self.set_message(message, cx);
+
+        // 【T2a-7】批量提交/回滚对（渲染期计算迁到事件路径：`render` 是纯读路径）
+        let pending_changes = self
+            .shared
+            .results()
+            .change_set(&self.document, active)
+            .map(|changes| changes.pending_count())
+            .unwrap_or(0);
+        let committing = self.commit_pending();
+        // 【B15】分析：对选中那份结果的**已抓行**跑聚合 SQL（本地 DuckDB，不碰源库）。
+        // 菜单项由 `analysis::menu_items` 给（纯函数，可逐项断言）；没网格就不摆。
+        let analysis_items = self
+            .shared
+            .results_active(&self.document)
+            .map(|entry| crate::analysis::menu_items(&entry))
+            .unwrap_or_default();
+        // 【B7】导出上下文：连接 + SQL/序号 + 已抓行文案 + 还有没有下一段 + 键列。
+        // 键列查询（端口读导航 L2 缓存）在 sync 期算好，render 期纯净。
+        let export_ctx = can_copy.then(|| {
+            let conn = self.bound_connection();
+            let entry_sql = self
+                .shared
+                .results_active(&self.document)
+                .map(|entry| (entry.sql.clone(), active + 1));
+            let rows_text = status
+                .as_ref()
+                .map(|status| result_grid::thousands(status.total_rows))
+                .unwrap_or_else(|| "0".to_string());
+            let has_more = status.as_ref().is_some_and(|status| status.has_more);
+            let key = entry_sql.as_ref().and_then(|(sql, index)| {
+                let table = export::default_table_name(Some(sql), *index);
+                conn.as_deref()
+                    .and_then(|conn| self.shared.table_key_columns(Some(conn), &table))
+                    .and_then(|columns| export::RowKey::new(columns))
+            });
+            ExportCtx {
+                connection: conn,
+                entry_sql,
+                rows_text,
+                has_more,
+                key,
+            }
+        });
+
+        // Dock 化投影：全部真值组装成 `ResultSyncInput` 交给面板实体（渲染 / 状态都在面板侧；
+        // 这里不再写宿主结果字段——宿主只留 网格 / 选中事件 / 诊断 等动作侧状态）
+        let input = ResultSyncInput {
+            tabs,
+            active,
+            notice,
+            toolbar,
+            status,
+            grid: grid_data.map(
+                |(columns, rows, column_types, table, annotations)| GridPayload {
+                    columns,
+                    rows,
+                    column_types,
+                    table,
+                    annotations,
+                },
+            ),
+            empty,
+            error_card,
+            // 脚本卡真值留在宿主（回执写入）；sync 全量覆写面板该字段，必须透传
+            script_card: self.script_card.clone(),
+            sql,
+            can_copy,
+            is_analysis: extra_analysis,
+            editable,
+            dirty,
+            conflict,
+            has_more,
+            loading_more,
+            insight_available,
+            pending_changes,
+            committing,
+            analysis_items,
+            export_ctx,
+        };
+        self.result_panel.update(cx, |p, cx| p.sync(cx, input));
 
         // 【并排对比】结果变化（替换 / 追加 / 选中切换）后，对比栏网格跟着同步
         self.sync_compare_grid(cx);
@@ -5946,6 +5916,15 @@ impl EditorHostPanel {
             }
             state.refresh(cx);
         });
+        // 【并排对比】对比选中的下标同步给面板（右栏标签选中态；对比栏不摆独立
+        // toolbar / status——只读对照，数据与选中态在网格 + 标签上）
+        let compare_active = self
+            .shared
+            .results()
+            .compare_index(&self.document)
+            .unwrap_or(0);
+        self.result_panel
+            .update(cx, |p, _| p.set_compare_projection(compare_active, None, None));
     }
 
     /// 【并排对比】工具栏开关：开 = 结果区双栏并排（左主选中 / 右对比选中）
@@ -5953,9 +5932,13 @@ impl EditorHostPanel {
     /// 开启时若还没有对比对象，自动选「除主选中外最近一份」——用户开开关就想看到
     /// 两个东西并排，不让它开在一个空右栏上。关闭则右栏消失、对比选中清掉
     /// （下次开对比重新选）。
+    ///
+    /// Dock 化后开关状态归面板实体（`ResultPanel::compare_mode`）；这里的后续
+    /// （默认对比对象 / 数据同步 / 清理）由编辑器接着做。
     pub fn toggle_compare_mode(&mut self, cx: &mut Context<Self>) {
-        self.compare_mode = !self.compare_mode;
-        if self.compare_mode {
+        self.result_panel.update(cx, |p, cx| p.toggle_compare_mode(cx));
+        let compare_mode = self.result_panel.read(cx).compare_mode();
+        if compare_mode {
             let needs_default = {
                 let store = self.shared.results();
                 store.compare_index(&self.document).is_none()
@@ -5999,6 +5982,92 @@ impl EditorHostPanel {
             self.sync_compare_grid(cx);
             cx.notify();
         }
+    }
+
+    /// 【Dock 化 §8.4】取走在途的结果面板动作并按变体分派到编辑器动作方法
+    ///
+    /// 消费方 = 结果面板按钮（[`ResultActionQueue::push`]，面板不反向依赖编辑器）
+    /// + 宿主事件路径 drain（阶段 3 由 workbench dock 薄壳在面板 notify 后转手调用）。
+    /// 处理中可能**再入队**（如 `SetPushdown` 打开且有词 → 面板入队 `PushdownFilter`），
+    /// 所以循环 drain 直到队列空——新请求落进下一轮，同一次事件里一并消化。
+    #[cfg_attr(not(test), allow(dead_code))] // 阶段 3 dock 接入前生产侧无调用者；测试直接调
+    pub(crate) fn drain_result_actions(&mut self, cx: &mut Context<Self>) {
+        let mut pending = self.result_action_queue.drain();
+        while !pending.is_empty() {
+            for request in std::mem::take(&mut pending) {
+                self.dispatch_result_request(request, cx);
+            }
+            pending = self.result_action_queue.drain();
+        }
+    }
+
+    /// 单条结果动作的分派（语义与渲染区删除前的按钮回调一一对应）
+    fn dispatch_result_request(&mut self, request: ResultRequest, cx: &mut Context<Self>) {
+        match request {
+            ResultRequest::SelectSet(index) => self.select_result_set(index, cx),
+            ResultRequest::SelectCompare(index) => self.select_compare_set(index, cx),
+            ResultRequest::ToggleCompareMode => self.toggle_compare_mode(cx),
+            ResultRequest::ToggleTranspose => self.toggle_transpose(cx),
+            ResultRequest::TransposePrev => self.transpose_step(-1, cx),
+            ResultRequest::TransposeNext => self.transpose_step(1, cx),
+            ResultRequest::ClearFilter => self.clear_filter_via_window(cx),
+            ResultRequest::PushdownFilter { value } => {
+                // 值以队列快照为准（drain 时面板筛选词可能已被用户改掉）；
+                // 定稿后重查走 `pushdown_filter`（读面板的 filter_text = 刚定稿的值）。
+                // 用「静默定稿」：drain 正分派这条下发本身，若再走 `set_filter_value`
+                // 的 apply_filter（开着下发源库）会再入队同款请求，跟 while 循环互相
+                // 喂，队列无限增长（曾实测 4.4GB 分配失败）。
+                self.result_panel
+                    .update(cx, |p, cx| p.set_filter_value_dispatch(&value, cx));
+                self.pushdown_filter(cx);
+            }
+            ResultRequest::CommitPending => {
+                if let Err(reason) = self.submit_pending_changes(cx) {
+                    self.set_message(Some(reason), cx);
+                }
+            }
+            ResultRequest::RollbackPending => self.discard_pending_changes(cx),
+            ResultRequest::Analysis { sql } => self.run_analysis(sql, cx),
+            ResultRequest::AnalysisCustom => self.request_custom_analysis_via_window(cx),
+            ResultRequest::CopyTsv => {
+                // 【遗留 #14】CSV 预览按模式分派：CSV 文档复制的是表格视图那份
+                if self.csv_active {
+                    self.copy_csv_table(cx);
+                } else {
+                    self.copy_active_result(cx);
+                }
+            }
+            ResultRequest::Refresh => self.refresh_active_result(cx),
+            ResultRequest::FetchMore => self.fetch_more(cx),
+            ResultRequest::Export { format, all } => {
+                if all {
+                    self.export_active_result_all(format, cx);
+                } else {
+                    self.export_active_result(format, cx);
+                }
+            }
+            ResultRequest::CopyError => self.copy_error_message(cx),
+            ResultRequest::LocateError => self.jump_to_error_site(cx),
+            ResultRequest::SetPushdown { open } => self.set_pushdown(open, cx),
+        }
+    }
+
+    /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；
+    /// 测试走直接入口 [`Self::clear_filter`]）
+    fn clear_filter_via_window(&mut self, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            panel.update(app, |p, cx| p.clear_filter(window, cx));
+        });
+    }
+
+    /// 分析「自定义」弹输入框同样需要窗口；headless 下跳过（测试走
+    /// [`Self::request_custom_analysis`] 直接入口）
+    fn request_custom_analysis_via_window(&mut self, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        let _ = self.window.update(cx, move |_panel, window, app| {
+            entity.update(app, |this, cx| this.request_custom_analysis(window, cx));
+        });
     }
 
     /// 【B6】把出错范围画进编辑内核（行内高亮 + 悬停弹层；没有位置就只清旧的）
@@ -6081,6 +6150,7 @@ impl EditorHostPanel {
     ///
     /// 真机的自动跳转走上面的窗口句柄路径（回填发生在没有窗口的后台轮询里）；这条入口是
     /// 按下去就有窗口的情况，也是测试能驱动的那一半（与对话框“真点击”同一口径，架构 §12 #29）。
+    #[cfg_attr(not(test), allow(dead_code))] // Dock 化后错误卡按钮走队列 LocateError→jump_to_error_site；本入口保留给测试与阶段 3
     pub(crate) fn jump_to_error_site_with(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self.error_site.clone() else {
             return;
@@ -6142,35 +6212,15 @@ impl EditorHostPanel {
         self.set_message(Some(format!("已复制 {rows} 行（TSV）")), cx);
     }
 
-    /// 【P2-4】转置视图开关（单行转置，DBeaver 式）：开 = 把当前行竖排成
-    /// 「# / 字段 / 值」三列；关 = 原网格原样回来（排序 / 冻结 / 隐藏都没动过）。
-    /// 切换在事件路径里改 delegate + `refresh`（render 是纯读，不在这里做状态）
+    /// 【P2-4】转置视图开关（单行转置，DBeaver 式）：状态与网格同步都在面板实体
+    /// （`drain_result_actions` 分派回来时调用；面板内直接改 delegate + refresh）
     fn toggle_transpose(&mut self, cx: &mut Context<Self>) {
-        let open = !self.transposed;
-        self.transposed = open;
-        let row = self.transpose_row;
-        self.grid.update(cx, |state, cx| {
-            state.delegate_mut().set_transposed(open, row);
-            state.refresh(cx);
-        });
-        cx.notify();
+        self.result_panel.update(cx, |p, cx| p.toggle_transpose(cx));
     }
 
     /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；数据行数来自 delegate）
     fn transpose_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let max = self
-            .grid
-            .read(cx)
-            .delegate()
-            .data_row_count()
-            .saturating_sub(1);
-        let next = (self.transpose_row as isize + delta).clamp(0, max as isize) as usize;
-        self.transpose_row = next;
-        self.grid.update(cx, |state, cx| {
-            state.delegate_mut().set_transpose_row(next);
-            state.refresh(cx);
-        });
-        cx.notify();
+        self.result_panel.update(cx, |p, cx| p.transpose_step(delta, cx));
     }
 
     /// 【B14】`Ctrl+C`（网格里）：把选中的**一格**或**一整行**拷到剪贴板
@@ -6235,7 +6285,8 @@ impl EditorHostPanel {
     /// **接在后面**。忙 / 没结果 / 没有下一段都回绝得可读（不静默）。
     /// 与滚动到底自动加载走的是**同一条路**（那个只负责把意图送到这里）。
     pub(crate) fn fetch_more(&mut self, cx: &mut Context<Self>) {
-        let Some(sql) = self.result_sql.clone() else {
+        let sql = self.result_panel.read(cx).sql().map(str::to_string);
+        let Some(sql) = sql else {
             self.set_message(Some("这份结果没有可重取的 SQL".to_string()), cx);
             return;
         };
@@ -6280,46 +6331,15 @@ impl EditorHostPanel {
         grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(true));
     }
 
-    /// 【B15】筛选框输入（原型 §5.5：本地即时筛选、300ms 防抖、不重查）
+    /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）。
+    /// 状态与网格同步在面板实体（`drain_result_actions` 分派回来时调用；
+    /// 面板 `apply_filter` 含「下发源库开着且有词 → 入队 PushdownFilter」）。
     ///
-    /// 防抖靠“版本号 + 定时任务”：连打时任务会被后来者取代，只有最后一次到点——
-    /// 否则每敲一个字都要重算整份视图行序（大结果集上能看见卡）。
-    pub(crate) fn on_filter_input(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.filter_text == text {
-            return;
-        }
-        self.filter_text = text;
-        self.filter_version = self.filter_version.wrapping_add(1);
-        let version = self.filter_version;
-        let weak = cx.entity().downgrade();
-        let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| {
-            executor.timer(std::time::Duration::from_millis(300)).await;
-            _ = weak.update(cx, |panel, cx| {
-                if panel.filter_version == version {
-                    panel.apply_filter(cx);
-                }
-            });
-        });
-        *self.filter_debounce.borrow_mut() = Some(task);
-    }
-
-    /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）
-    ///
-    /// 【B14】开关开着（且词非空）时，**同一份词也下发一次**：本地筛完再看源库那边——
-    /// 两档语义并存（原型 §5.5），下发产生的是一份**新结果集**，原结果不动。
+    /// 注：筛选框输入与 300ms 防抖已随 Dock 化迁入面板实体（`ResultPanel::on_filter_input`），
+    /// 编辑器不再持有筛选框 / 防抖任务。
+    #[cfg_attr(not(test), allow(dead_code))] // 面板筛选路径自洽；本入口保留给测试与阶段 3 直接调
     pub(crate) fn apply_filter(&mut self, cx: &mut Context<Self>) {
-        let filter = self.filter_text.clone();
-        let grid = self.grid.clone();
-        grid.update(cx, |state, cx| {
-            state.delegate_mut().set_filter(filter);
-            state.refresh(cx);
-        });
-        self.refresh_filter_hint(cx);
-        cx.notify();
-        if self.pushdown && !self.filter_text.trim().is_empty() {
-            self.pushdown_filter(cx);
-        }
+        self.result_panel.update(cx, |p, cx| p.apply_filter(cx));
     }
 
     /// 【B14】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
@@ -6332,7 +6352,7 @@ impl EditorHostPanel {
             self.set_message(Some("没有可下发的结果集".to_string()), cx);
             return;
         };
-        let filter = self.filter_text.trim().to_string();
+        let filter = self.result_panel.read(cx).filter_text().trim().to_string();
         if filter.is_empty() {
             self.set_message(Some("先填一个筛选词再下发".to_string()), cx);
             return;
@@ -6355,15 +6375,14 @@ impl EditorHostPanel {
     /// 菜单点击发生在独立事件里，但没有 `window` 参数（headless 里甚至真的没有窗口），
     /// 拿不到就只改真值，筛选照样生效。
     pub(crate) fn apply_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
-        self.filter_text = value.to_string();
-        // 掐掉在途的防抖：这次是直接定稿，不该再被 300ms 后的旧词覆盖
-        self.filter_version = self.filter_version.wrapping_add(1);
-        let input = self.filter_input.clone();
-        let text = value.to_string();
+        let value = value.to_string();
+        // 真值定稿（掐在途防抖 + 立即应用）不依赖窗口
+        self.result_panel.update(cx, |p, cx| p.set_filter_value(&value, cx));
+        // 输入框回填在窗口可用时做；拿不到（headless / 已关）就跳过，真值已生效
+        let panel = self.result_panel.clone();
         let _ = self.window.update(cx, |_panel, window, app| {
-            input.update(app, |state, cx| state.set_value(text, window, cx));
+            panel.update(app, |p, cx| p.sync_filter_input(&value, window, cx));
         });
-        self.apply_filter(cx);
     }
 
     /// 【遗留 #7】右键「查看完整值」：记录目标并弹值查看器（对话框由 dialogs 层开）
@@ -6569,7 +6588,8 @@ impl EditorHostPanel {
 
     /// 当前结果集在界面上的名字（「洞察此列」的来源标签：面板副标题 / 快照来源用）
     fn result_set_label(&self) -> String {
-        let index = self.result_active;
+        // 选中的下标从权威 store 读（不再经面板——纯读路径不借实体）
+        let index = self.shared.results().active_index(&self.document).unwrap_or(0);
         let titled = self
             .shared
             .results()
@@ -6581,44 +6601,24 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【B14】开关切换：打开时若已有筛选词就立刻下发一次（“打开后把条件拼为 WHERE 重查”）
+    /// 【B14】开关切换：面板内翻转状态；打开时若已有筛选词，面板会入队
+    /// `PushdownFilter`（`drain_result_actions` 分派回来时走 [`Self::pushdown_filter`] 重查）
     pub(crate) fn set_pushdown(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.pushdown = open;
+        self.result_panel.update(cx, |p, _| p.set_pushdown(open));
         cx.notify();
-        if open && !self.filter_text.trim().is_empty() {
-            self.pushdown_filter(cx);
-        }
     }
 
-    /// 【B15】清除筛选（工具栏那个 ✕）：输入框清空也要走 change，所以直接一起做
+    /// 【B15】清除筛选（工具栏那个 ✕）：输入框清空 + 立即应用空词（面板内自洽；
+    /// 需要 `window`——`InputState::set_value` 签名，编辑器分派时转手）
+    #[cfg_attr(not(test), allow(dead_code))] // 生产走队列 ClearFilter→clear_filter_via_window；本入口保留给测试与阶段 3
     pub(crate) fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_text.clear();
-        self.filter_version = self.filter_version.wrapping_add(1);
-        self.filter_input
-            .update(cx, |state, cx| state.set_value("", window, cx));
-        self.apply_filter(cx);
+        self.result_panel.update(cx, |p, cx| p.clear_filter(window, cx));
     }
 
     /// 【B15】测试用：直接应用筛选词（跳过 300ms 防抖，验“应用之后怎样”）
     #[cfg(test)]
     pub(crate) fn set_filter_for_test(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.filter_text = text.to_string();
-        self.apply_filter(cx);
-    }
-
-    /// 【B15】把“已筛选 N / M 行”写进结果工具栏（统计跟随筛选——原型 §5.5 的要求）
-    fn refresh_filter_hint(&mut self, cx: &mut Context<Self>) {
-        let (visible, total, filtering) = {
-            let delegate = self.grid.read(cx).delegate();
-            (
-                delegate.visible_row_count(),
-                delegate.data_row_count(),
-                !delegate.filter().trim().is_empty(),
-            )
-        };
-        if let Some(toolbar) = self.result_toolbar.as_mut() {
-            toolbar.filtered = filtering.then_some((visible, total));
-        }
+        self.result_panel.update(cx, |p, cx| p.set_filter_value(text, cx));
     }
 
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
@@ -6723,7 +6723,7 @@ impl EditorHostPanel {
             return;
         }
         // 结果集序号（1 基）当默认名的兜底：SQL 里能猜出表名就用表名
-        let index = self.result_active + 1;
+        let index = self.result_panel.read(cx).active() + 1;
         let default_name = export::default_file_name(Some(&entry.sql), index, format);
         let Some(path) = self.shared.pick_export_path(format, default_name) else {
             // 用户取消：不是错误，不弹提示（与另存为同口径）
@@ -6737,7 +6737,7 @@ impl EditorHostPanel {
         self.pending_export = Some(PendingExport {
             format,
             path,
-            set: self.result_active,
+            set: self.result_panel.read(cx).active(),
         });
         // 不另外摆一条“正在抓取”提示：状态栏已经在报「执行中 3.4s…」，
         // 而且 `execute` 成功时会清掉提示（设了也会被清）
@@ -6880,7 +6880,7 @@ impl EditorHostPanel {
             return;
         }
         let set = pending.set;
-        if self.result_active != set {
+        if self.result_panel.read(cx).active() != set {
             self.pending_export = None;
             self.set_message(Some("导出取消：结果集已切换".to_string()), cx);
             return;
@@ -6897,7 +6897,8 @@ impl EditorHostPanel {
             return;
         }
         // 还有下一段：接着抓（每次一段，等它回来再推进）
-        let Some(sql) = self.result_sql.clone() else {
+        let sql = self.result_panel.read(cx).sql().map(str::to_string);
+        let Some(sql) = sql else {
             self.pending_export = None;
             return;
         };
@@ -6918,19 +6919,10 @@ impl EditorHostPanel {
         }
     }
 
-    /// 是否要显示结果区（本文档有结果或正在执行；且模式允许通信）
-    fn result_visible(&self) -> bool {
-        // 【2b】通用模式的脚本输出卡片走**独立通道**（本地进程，没有连接概念，不占
-        // `execute` 能力位）：有卡片或脚本在跑时结果区照常显示。其余模式沿用
-        // 「能执行才有结果区」（SQL / 分析模式不会出现 script_card，此分支天然互斥）。
-        let script_showing = self.script_card.is_some() || self.pending > 0;
-        (self.execution_allowed() && (self.pending > 0 || self.result_toolbar.is_some()))
-            || script_showing
-    }
-
     /// 【B6】复制错误原文（错误卡片上的「复制」）：便于拿去搜索 / 报 bug
     pub(crate) fn copy_error_message(&mut self, cx: &mut Context<Self>) {
-        let Some(card) = self.result_error_card.clone() else {
+        // 错误卡真值在面板（sync 投影）；这里只复制文案
+        let Some(card) = self.result_panel.read(cx).error_card().cloned() else {
             self.set_message(Some("这次没有错误可复制".to_string()), cx);
             return;
         };
@@ -7547,647 +7539,37 @@ impl Render for EditorHostPanel {
                     .child(SharedString::from(notice)),
             );
         }
-        // 结果区（B5）：有结果或正在执行时才出现（否则不占位置——不显示空壳）
-        let font_size = cx.theme().font_size;
-        let result_pane = if self.csv_active {
-            // 【遗留 #14】CSV 表格展示：精简结果区（本地筛选 + 复制 + 行数状态）。
-            // 不摆 SQL 语义控件（提交 / 分析 / 导出 / 刷新 / 取下一段）——CSV 没有
-            // 执行语义，那些按钮点了就是错。
-            let row_count = self.grid.read(cx).delegate().data_row_count();
-            let toolbar = ResultToolbar {
-                rows: Some(row_count),
-                affected_rows: None,
-                failed: false,
-                elapsed_ms: None,
-                connection: None,
-                lineage: Some("CSV 预览".to_string()),
-                filtered: None,
-            };
-            let status = Some(ResultStatus {
-                total_rows: row_count,
-                selected_row: None,
-                truncated_hint: None,
-                has_more: false,
-            });
-            // 本地筛选复用 SQL 结果区的同一套（`on_filter_input` 走网格 delegate，
-            // 对 CSV 数据同样生效：只筛选视图行，不重读文件）
-            let filter = div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .debug_selector(|| "editor-result-filter".to_string())
-                .child(
-                    div()
-                        .w(rems(ui::RESULT_FILTER_WIDTH))
-                        .child(Input::new(&self.filter_input)),
-                )
-                .when(!self.filter_text.trim().is_empty(), |row| {
-                    let entity = cx.entity();
-                    row.child(
-                        Button::new("editor-result-filter-clear")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-filter-clear".to_string())
-                            .label("✕")
-                            .on_click(move |_, window, app| {
-                                entity.update(app, |panel, cx| panel.clear_filter(window, cx));
-                            }),
-                    )
-                });
-            let copy = {
-                let entity = cx.entity();
-                Button::new("editor-result-copy")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-result-copy".to_string())
-                    .label("⧉ 复制")
-                    .on_click(move |_, _window, app| {
-                        entity.update(app, |panel, cx| panel.copy_csv_table(cx));
-                    })
-                    .into_any_element()
-            };
-            // 与 SQL 结果区同一渲染入口（`result_grid::render` 消费 `ResultPane`）：
-            // 本分支只准备数据，渲染交给同一个函数，避免两套结果区渲染
-            Some(
-                result_grid::render(
-                    &self.grid,
-                    result_grid::ResultPane {
-                        toolbar,
-                        status,
-                        controls: result_grid::ResultControls {
-                            filter: Some(filter.into_any_element()),
-                            transpose: None,
-                            compare: None,
-                            commit: None,
-                            analysis: None,
-                            copy: Some(copy),
-                            export: None,
-                            refresh: None,
-                            more: None,
-                        },
-                        card: None,
-                        tabs: None,
-                        notice: None,
-                    },
-                    cx,
-                )
-                .into_any_element(),
-            )
-        } else {
-            self.result_visible().then(|| {
-            // ⑥ 工具栏：投影里已经有真值；还没结论时（刚提交）只报“执行中…”
-            let toolbar = self.result_toolbar.clone().unwrap_or(ResultToolbar {
-                elapsed_ms: None,
-                ..Default::default()
-            });
-            // 结果集标签条（⑤）：两份以上结果才画（一份结果不需要切换器）
-            let tabs = (self.result_tabs.len() >= 2).then(|| {
-                let entity = cx.entity();
-                result_sets::render(
-                    &self.result_tabs,
-                    self.result_active,
-                    move |index, _window, app| {
-                        let index = *index;
-                        entity.update(app, |panel, cx| panel.select_result_set(index, cx));
-                    },
-                    cx,
-                    &self.result_tabs_scroll,
-                )
-                .into_any_element()
-            });
-            // 【B15】本地筛选框（原型 §5.5 的 `⌕ 筛选`）：只作用于视图层，不重查数据库；
-            // 输入走 300ms 防抖（`on_filter_input`），有词时给一个 ✕ 清除
-            let filter = div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .debug_selector(|| "editor-result-filter".to_string())
-                .child(
-                    div()
-                        .w(rems(ui::RESULT_FILTER_WIDTH))
-                        .child(Input::new(&self.filter_input)),
-                )
-                .when(!self.filter_text.trim().is_empty(), |row| {
-                    let entity = cx.entity();
-                    row.child(
-                        Button::new("editor-result-filter-clear")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-filter-clear".to_string())
-                            .label("✕")
-                            .on_click(move |_, window, app| {
-                                entity.update(app, |panel, cx| panel.clear_filter(window, cx));
-                            }),
-                    )
-                })
-                // 【B14】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查
-                .child({
-                    let entity = cx.entity();
-                    Switch::new("editor-result-pushdown")
-                        .checked(self.pushdown)
-                        .label("下发源库")
-                        .on_click(move |checked, _window, app| {
-                            let open = *checked;
-                            entity.update(app, |panel, cx| panel.set_pushdown(open, cx));
-                        })
-                })
-                .into_any_element();
-
-            // 【P2-4】转置视图（单行转置，DBeaver 式）：有网格才摆。开关本身是个
-            // 图标按钮；**激活时**左边跟上一行 / 下一行导航（看宽表不靠拖横向滚动条）
-            let transpose = self.result_can_copy.then(|| {
-                let toggle = {
-                    let entity = cx.entity();
-                    Button::new("editor-result-transpose")
-                        .ghost()
-                        .small()
-                        .toggled(self.transposed)
-                        .icon(IconName::Table2)
-                        .tooltip("转置视图")
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.toggle_transpose(cx));
-                        })
-                };
-                if !self.transposed {
-                    return toggle.into_any_element();
-                }
-                let prev = {
-                    let entity = cx.entity();
-                    Button::new("editor-result-transpose-prev")
-                        .ghost()
-                        .small()
-                        .icon(IconName::ChevronUp)
-                        .tooltip("上一行")
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.transpose_step(-1, cx));
-                        })
-                };
-                let next = {
-                    let entity = cx.entity();
-                    Button::new("editor-result-transpose-next")
-                        .ghost()
-                        .small()
-                        .icon(IconName::ChevronDown)
-                        .tooltip("下一行")
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.transpose_step(1, cx));
-                        })
-                };
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    .debug_selector(|| "editor-result-transpose-group".to_string())
-                    .child(prev)
-                    .child(toggle)
-                    .child(next)
-                    .into_any_element()
-            });
-
-            // 【并排对比】工具栏开关：两份以上结果才摆（一份结果没有可比的；对比栏
-            // 数据只读，编辑 / 取段 / 洞察等动作仍只作用于主栏）
-            let compare = (self.result_tabs.len() >= 2).then(|| {
-                let entity = cx.entity();
-                Button::new("editor-result-compare")
-                    .ghost()
-                    .small()
-                    .toggled(self.compare_mode)
-                    .icon(IconName::Columns2)
-                    .tooltip("并排对比")
-                    .debug_selector(|| "editor-result-compare".to_string())
-                    .on_click(move |_, _window, app| {
-                        entity.update(app, |panel, cx| panel.toggle_compare_mode(cx));
-                    })
-                    .into_any_element()
-            });
-
-            // 【T2a-7】批量提交/回滚对（参考 DBeaver）：有**待提交**变更才摆（改过的格才能
-            // 提交/撤销）；提交中提交按钮置灰（回执回来前不重复提交）。
-            let pending_changes = self
-                .shared
-                .results()
-                .change_set(&self.document, self.result_active)
-                .map(|changes| changes.pending_count())
-                .unwrap_or(0);
-            let commit = (pending_changes > 0).then(|| {
-                let entity = cx.entity();
-                let count = pending_changes;
-                let submitting = self.commit_pending();
-                let commit_entity = entity.clone();
-                let discard_entity = entity.clone();
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_1()
-                    // 测试按选择器断言按钮组的出现/消失（有变更才亮）
-                    .debug_selector(|| "editor-result-commit-group".to_string())
-                    .child(
-                        Button::new("editor-result-commit")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-commit".to_string())
-                            .disabled(submitting)
-                            .label(format!("提交变更 ({count})"))
-                            .on_click(move |_, _window, app| {
-                                commit_entity.update(app, |panel, cx| {
-                                    if let Err(reason) = panel.submit_pending_changes(cx) {
-                                        panel.set_message(Some(reason), cx);
-                                    }
-                                });
-                            }),
-                    )
-                    .child(
-                        Button::new("editor-result-discard")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-discard".to_string())
-                            .label("撤销变更")
-                            .on_click(move |_, _window, app| {
-                                discard_entity.update(app, |panel, cx| {
-                                    panel.discard_pending_changes(cx)
-                                });
-                            }),
-                    )
-                    .into_any_element()
-            });
-
-            // 动作：有网格才摆复制（没东西可复制就不摆）；有 SQL 就摆重跑（原位刷新）
-            let copy = self.result_can_copy.then(|| {
-                let entity = cx.entity();
-                Button::new("editor-result-copy")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-result-copy".to_string())
-                    .label("复制")
-                    .on_click(move |_, _window, app| {
-                        entity.update(app, |panel, cx| panel.copy_active_result(cx));
-                    })
-                    .into_any_element()
-            });
-            let refresh = (self.result_sql.is_some() && !self.result_is_analysis).then(|| {
-                let entity = cx.entity();
-                Button::new("editor-result-refresh")
-                    .ghost()
-                    .small()
-                    .debug_selector(|| "editor-result-refresh".to_string())
-                    .label("⟳ 刷新")
-                    .on_click(move |_, _window, app| {
-                        entity.update(app, |panel, cx| panel.refresh_active_result(cx));
-                    })
-                    .into_any_element()
-            });
-            // 【B5b】取下一段：只在这份结果真还有下一段时摆（状态行⑦里）
-            let more = self
-                .result_status
-                .as_ref()
-                .is_some_and(|status| status.has_more)
-                .then(|| {
-                    let entity = cx.entity();
-                    Button::new("editor-result-more")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-result-more".to_string())
-                        .label("取下一段")
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.fetch_more(cx));
-                        })
-                        .into_any_element()
-                });
-
-            // 【B7】导出：格式 × 范围（原型 §2.4 的 `⤓ 导出 ▾`）。没网格就不摆（没东西可导）。
-            // 菜单项由 `export::menu_items` 给（纯函数，可逐项断言）——这里只负责画。
-            let export = self.result_can_copy.then(|| {
-                let entity = cx.entity();
-                // 【B7 切片三】`SQL Updates` 的键列查询只在**菜单弹出时**做（事件路径，
-                // 端口读导航 L2 缓存）：render 里只把「连接 + 表名」算好（纯内存），
-                // 不在这里查端口（render 不做 I/O）
-                let conn = self.bound_connection();
-                let entry_sql = self
-                    .shared
-                    .results_active(&self.document)
-                    .map(|entry| (entry.sql.clone(), self.result_active + 1));
-                let shared = self.shared.clone();
-                let rows_text = self
-                    .result_status
-                    .as_ref()
-                    .map(|status| result_grid::thousands(status.total_rows))
-                    .unwrap_or_else(|| "0".to_string());
-                let has_more = self
-                    .result_status
-                    .as_ref()
-                    .is_some_and(|status| status.has_more);
-                DropdownButton::new("editor-result-export")
-                    .small()
-                    .button(
-                        Button::new("editor-result-export-btn")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-export".to_string())
-                            .label("⤓ 导出"),
-                    )
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        // 【B7 切片三】附加上下文：`SQL Updates` 要有**键列**才摆
-                        // （结果集自己不知道主键，键列由表结构端口给——导航侧 L2 缓存）。
-                        // 查不到 / 没接端口 = 不摆，不猜“拿第一列当键”（改错行的代价太高）
-                        let key = entry_sql.as_ref().and_then(|(sql, index)| {
-                            let table = export::default_table_name(Some(sql), *index);
-                            conn.as_deref()
-                                .and_then(|conn| shared.table_key_columns(Some(conn), &table))
-                                .and_then(|columns| export::RowKey::new(columns))
-                        });
-                        let extras = export::ExportExtras {
-                            sql_text: true,
-                            key,
-                        };
-                        for item in export::menu_items_for(has_more, &rows_text, &extras) {
-                            if item.separator_before {
-                                menu = menu.separator();
-                            }
-                            let Some((format, scope)) = item.action else {
-                                // 分组标题（“已抓取 N 行” / “抓全量后导出”）
-                                menu = menu.item(PopupMenuItem::label(item.label));
-                                continue;
-                            };
-                            let entity = entity.clone();
-                            menu = menu.item(PopupMenuItem::new(item.label).on_click(
-                                move |_, _window, app| {
-                                    entity.update(app, |panel, cx| match scope {
-                                        ExportScope::Fetched => {
-                                            panel.export_active_result(format, cx)
-                                        }
-                                        ExportScope::All => {
-                                            panel.export_active_result_all(format, cx)
-                                        }
-                                    });
-                                },
-                            ));
-                        }
-                        menu
-                    })
-                    .into_any_element()
-            });
-
-            // 【B15】分析：对选中那份结果的**已抓行**跑聚合 SQL（本地 DuckDB，不碰源库）。
-            // 菜单项由 `analysis::menu_items` 给（纯函数，可逐项断言）；没网格就不摆。
-            let analysis_items = self
-                .shared
-                .results_active(&self.document)
-                .map(|entry| crate::analysis::menu_items(&entry))
-                .unwrap_or_default();
-            let analysis = (!analysis_items.is_empty()).then(|| {
-                let entity = cx.entity();
-                let items = analysis_items.clone();
-                DropdownButton::new("editor-result-analysis")
-                    .small()
-                    .button(
-                        Button::new("editor-result-analysis-btn")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-result-analysis".to_string())
-                            .label("⚗ 分析"),
-                    )
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        for item in items.iter() {
-                            let entity = entity.clone();
-                            let sql = item.sql.clone();
-                            menu = menu.item(PopupMenuItem::new(item.label.clone()).on_click(
-                                move |_, _window, app| {
-                                    let sql = sql.clone();
-                                    entity.update(app, |panel, cx| panel.run_analysis(sql, cx));
-                                },
-                            ));
-                        }
-                        // 【B15 切片二】预置项之外，自己写一条（弹输入框，模板预填）
-                        let entity = entity.clone();
-                        menu.separator().item(
-                            PopupMenuItem::new(crate::analysis::CUSTOM_LABEL).on_click(
-                                move |_, window, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.request_custom_analysis(window, cx)
-                                    });
-                                },
-                            ),
-                        )
-                    })
-                    .into_any_element()
-            });
-
-            // 错误卡片（B6，原型 §2.4）：失败时替掉网格；两个按钮都是真的能按的
-            let card = self.result_error_card.clone().map(|card| {
-                let locate = card.location.as_ref().map(|location| {
-                    let entity = cx.entity();
-                    let label = error_card::locate_label(location);
-                    Button::new("editor-result-error-locate")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-result-error-locate".to_string())
-                        .label(label)
-                        .on_click(move |_, window, app| {
-                            entity
-                                .update(app, |panel, cx| panel.jump_to_error_site_with(window, cx));
-                        })
-                        .into_any_element()
-                });
-                let copy = {
-                    let entity = cx.entity();
-                    Button::new("editor-result-error-copy")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-result-error-copy".to_string())
-                        .label("复制")
-                        .on_click(move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.copy_error_message(cx));
-                        })
-                        .into_any_element()
-                };
-                error_card::render(
-                    &card,
-                    error_card::ErrorCardControls {
-                        locate,
-                        copy: Some(copy),
-                    },
-                    cx,
-                )
-                .into_any_element()
-            });
-
-            // 【2b】脚本输出卡片：错误卡片没有时才顶上来（脚本结果也是“替掉网格”的那类卡片）
-            let card = card.or_else(|| {
-                self.script_card.clone().map(|script| {
-                    script_card::render(&script, cx).into_any_element()
-                })
-            });
-
-            result_grid::render(
-                &self.grid,
-                result_grid::ResultPane {
-                    toolbar,
-                    status: self.result_status.clone(),
-                    controls: result_grid::ResultControls {
-                        filter: Some(filter),
-                        transpose,
-                        compare,
-                        commit,
-                        analysis,
-                        copy,
-                        export,
-                        refresh,
-                        more,
-                    },
-                    card,
-                    tabs,
-                    notice: self.result_notice.clone(),
-                },
-                cx,
-            )
-            .into_any_element()
-            })
-        };
-
-        // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
-        // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据来自 ResultStore 的
-        // 对比项，经 `sync_compare_grid` 提前拷进 `compare_grid`（render 只读网格状态）。
-        // 右栏不接 filter/transpose/commit/analysis/export/refresh/more——那些动作的
-        // 语义都归主栏，并排对照不需要第二套动作。
-        let result_pane = result_pane.map(|main| {
-            if !self.compare_mode {
-                return main;
-            }
-            let compare_tabs = (self.result_tabs.len() >= 2).then(|| {
-                let entity = cx.entity();
-                let compare_active = self
-                    .shared
-                    .results()
-                    .compare_index(&self.document)
-                    .unwrap_or(0);
-                result_sets::render(
-                    &self.result_tabs,
-                    compare_active,
-                    move |index, _window, app| {
-                        let index = *index;
-                        entity.update(app, |panel, cx| panel.select_compare_set(index, cx));
-                    },
-                    cx,
-                    &self.result_tabs_scroll,
-                )
-                .into_any_element()
-            });
-            // 对比栏的工具栏 / 状态行：render 期现投影（纯计算，与主栏 sync_result_view
-            // 的投影同口径；只读，`filtered` / 选中行这些互动真值不需要）
-            let results_store = self.shared.results();
-            let compare_entry = results_store.compare_entry(&self.document);
-            let connection = compare_entry.and_then(|entry| {
-                entry
-                    .connection
-                    .as_deref()
-                    .map(|id| self.shared.connection_status_text(Some(id)))
-            });
-            let compare_toolbar = compare_entry.map(|entry| ResultToolbar {
-                rows: entry.has_grid().then(|| entry.row_count()),
-                affected_rows: entry.affected_rows,
-                failed: entry.failed(),
-                elapsed_ms: Some(entry.elapsed_ms),
-                connection,
-                lineage: entry.title.clone().or_else(|| entry.lineage.clone()),
-                filtered: None,
-            });
-            let compare_status = compare_entry
-                .filter(|entry| entry.has_grid())
-                .map(|entry| ResultStatus {
-                    total_rows: entry.row_count(),
-                    selected_row: None,
-                    truncated_hint: entry
-                        .truncated
-                        .then(|| result_grid::truncated_hint(entry.row_count())),
-                    has_more: false,
-                });
-            let compare_grid = self.compare_grid.clone().expect("构造期已建");
-            let compare_pane = result_grid::render(
-                &compare_grid,
-                result_grid::ResultPane {
-                    toolbar: compare_toolbar.unwrap_or_default(),
-                    status: compare_status,
-                    controls: result_grid::ResultControls::default(),
-                    card: None,
-                    tabs: compare_tabs,
-                    notice: None,
-                },
-                cx,
-            )
-            .into_any_element();
-            // 双栏：中间一条竖分隔线（结构元素用 `ui::HAIRLINE`），两栏各占一半
+        // 编辑区：Dock 化（§8）后编辑器宿主只渲染编辑区主体，结果区由底部 dock 薄壳承载
+        // （数据投影照旧走 `sync_result_view` 推进面板实体）。无 `v_resizable` 分栏：
+        // 原「结果高度」拖拽语义随嵌式结果区一并移除（面板在 dock 里，尺寸归 dock）。
+        root = root.child(
             div()
-                .h_flex()
-                .items_stretch()
-                .w_full()
-                .h_full()
+                .flex_1()
                 .min_h_0()
-                // 测试按选择器断言“对比模式双栏在不在”
-                .debug_selector(|| "editor-result-compare-layout".to_string())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .border_r(ui::HAIRLINE)
-                        .child(main),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .debug_selector(|| "editor-result-compare-pane".to_string())
-                        .child(compare_pane),
-                )
-                .into_any_element()
-        });
-
-        // 编辑区 + 结果区：下半区可拖拽改高（原型 §2.1 ④ 分隔条；拖动条是组件库的
-        // `ResizablePanel`，不手搓鼠标拖拽）。没有结果时只有一个面板，编辑区独占。
-        let mut split = v_resizable("editor-result-split").child(
-            resizable_panel().child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    // 测试按选择器断言“结果区没有把编辑区挤掉”
-                    .debug_selector(|| "editor-code-area".to_string())
-                    // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
-                    .px_2()
-                    // 拖放落点（原型 §4.5：拖文件节点到编辑区 → 插入文件内容到光标处）
-                    .on_drop({
-                        let entity = cx.entity();
-                        move |payload: &::shared::InsertFileDrag, window, app| {
-                            entity.update(app, |this, cx| {
-                                this.insert_file_contents(payload, window, cx)
-                            });
-                        }
-                    })
-                    .child(self.render_editor_body(cx)),
-            ),
-        );
-        if let Some(pane) = result_pane {
-            let height = self.result_height.clone();
-            split = split
-                .child(
-                    resizable_panel()
-                        .size(font_size * height.get())
-                        .size_range(
-                            font_size * ui::RESULT_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT,
-                        )
-                        .flex_none()
-                        .child(pane),
-                )
-                // 拖到哪就记到哪：下一次渲染用它当初始尺寸（同一面板内记得住）
-                .on_resize(move |state, _window, app| {
-                    if let Some(last) = state.read(app).sizes().last() {
-                        height.set(last.as_f32() / app.theme().font_size.as_f32());
+                // 测试按选择器断言“结果区没有把编辑区挤掉”
+                .debug_selector(|| "editor-code-area".to_string())
+                // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
+                .px_2()
+                // 拖放落点（原型 §4.5：拖文件节点到编辑区 → 插入文件内容到光标处）
+                .on_drop({
+                    let entity = cx.entity();
+                    move |payload: &::shared::InsertFileDrag, window, app| {
+                        entity.update(app, |this, cx| {
+                            this.insert_file_contents(payload, window, cx)
+                        });
                     }
-                });
+                })
+                .child(self.render_editor_body(cx)),
+        );
+        // 测试保真：Dock 化后结果区归面板实体，但单测仍按「结果区元素」断言
+        // （find / click editor-result-* 系列）。生产不挂——dock 由 workbench 薄壳承载。
+        #[cfg(test)]
+        {
+            let panel_render = self.result_panel.read(cx).render(cx);
+            root = root.child(
+                div().flex_1().min_h_0().overflow_hidden().child(panel_render),
+            );
         }
-        root = root.child(split);
         root
     }
 }

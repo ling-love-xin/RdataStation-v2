@@ -74,8 +74,6 @@ impl Default for Session {
 }
 
 /// 一份可恢复的编辑器会话
-///
-/// 注意：含 `f32`（结果区高度）→ 只派 `PartialEq`，不派 `Eq`。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedSession {
     /// 会话标识：有路径的文档用路径键（重启后仍是同一个文件），未命名文档不保存
@@ -105,8 +103,6 @@ pub struct SavedSession {
     pub tab_size: Option<usize>,
     /// 【T2c-4 余项】缩进是否制表符（默认 false；`None` = 旧会话没存过 → 不覆盖当前）
     pub hard_tabs: Option<bool>,
-    /// 【遗留 #5】结果区分栏高度（rem；`None` = 旧会话没存过 → 不覆盖当前）
-    pub result_height: Option<f32>,
 }
 
 /// 会话存储端口（宿主注入）
@@ -239,7 +235,6 @@ mod tests {
             schema: None,
             tab_size: None,
             hard_tabs: None,
-            result_height: None,
         }
     }
 

@@ -33,9 +33,6 @@ pub enum ResultRequest {
     TransposePrev,
     /// 转置视图「下一行」导航
     TransposeNext,
-    /// 工具栏筛选框定稿（`apply_filter_value`；本地筛选视图层，重查走
-    /// [`Self::PushdownFilter`]）
-    Filter { value: String },
     /// 工具栏筛选框「✕」清除（清空输入框 + 立即应用空词；`window` 由宿主分派时提供）
     ClearFilter,
     /// 下发源库开关翻转后的重查（开着时应用筛选会重查数据库）

@@ -54,12 +54,9 @@ pub struct GridPayload {
     pub annotations: Vec<Option<ColumnAnnotation>>,
 }
 
-/// 分析菜单项（宿主算好传入：只含渲染要的文案与动作载荷）
-#[derive(Debug, Clone)]
-pub struct AnalysisItem {
-    pub label: String,
-    pub sql: String,
-}
+/// 分析菜单项（宿主算好传入：只含渲染要的文案与动作载荷；类型统一用
+/// [`crate::analysis::AnalysisItem`]——编辑器侧的 `analysis::menu_items` 返回同一类型）
+pub use crate::analysis::AnalysisItem;
 
 /// 导出菜单的静态上下文（**render 期纯读素材**；键列查询由宿主在 sync（事件路径）算好）
 #[derive(Debug, Clone)]
@@ -776,6 +773,12 @@ impl ResultPanel {
     /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）。
     /// 下发源库开着且词非空时，同一份词也**入队**一次（编辑器重查，落新结果集）
     pub fn apply_filter(&mut self, cx: &mut Context<Self>) {
+        self.apply_filter_inner(cx, true);
+    }
+
+    /// 【B15】应用筛选的公共实现；`requeue=false` 时不触发「下发源库」重查入队
+    /// （drain 分派路径用，防队列死循环）
+    fn apply_filter_inner(&mut self, cx: &mut Context<Self>, requeue: bool) {
         let filter = self.filter_text.clone();
         let grid = self.grid.clone();
         grid.update(cx, |state, cx| {
@@ -784,7 +787,7 @@ impl ResultPanel {
         });
         self.refresh_filter_hint(cx);
         cx.notify();
-        if self.pushdown && !self.filter_text.trim().is_empty() {
+        if requeue && self.pushdown && !self.filter_text.trim().is_empty() {
             self.queue
                 .push(ResultRequest::PushdownFilter { value: self.filter_text.trim().to_string() });
         }
@@ -848,6 +851,37 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【并排对比】对比模式开关（编辑器 `ToggleCompareMode` 分派回来调；翻转后
+    /// 对比栏投影由编辑器 `sync_compare_grid` 续写——数据源在 ResultStore）
+    pub fn toggle_compare_mode(&mut self, cx: &mut Context<Self>) {
+        self.compare_mode = !self.compare_mode;
+        cx.notify();
+    }
+
+    /// 右键「按值筛选」核心：定稿筛选词并立即应用（不依赖窗口——headless 下窗口
+    /// 不可用时真值照样生效；输入框回填由编辑器在窗口可用时转手调 [`Self::sync_filter_input`]）
+    pub fn set_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.filter_text = value.to_string();
+        self.filter_version = self.filter_version.wrapping_add(1);
+        self.apply_filter(cx);
+    }
+
+    /// 【B15】定稿筛选词但**不**触发「下发源库」重查入队——`drain_result_actions`
+    /// 分派 [`ResultRequest::PushdownFilter`] 时用它：这条请求本身就是下发，再经
+    /// `apply_filter` 入队一次会跟 drain 的 while 循环互相喂，队列无限增长撑爆内存。
+    pub fn set_filter_value_dispatch(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.filter_text = value.to_string();
+        self.filter_version = self.filter_version.wrapping_add(1);
+        self.apply_filter_inner(cx, false);
+    }
+
+    /// 筛选输入框回填（所见即所得；窗口不可用跳过——真值已在 [`Self::set_filter_value`] 定稿）
+    pub fn sync_filter_input(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.filter_input.clone();
+        let text = value.to_string();
+        input.update(cx, |state, cx| state.set_value(text, window, cx));
+    }
+
     /// 【B15】把「已筛选 N / M 行」写进结果工具栏（统计跟随筛选——原型 §5.5）
     fn refresh_filter_hint(&mut self, cx: &mut Context<Self>) {
         let (visible, total, filtering) = {
@@ -905,6 +939,21 @@ impl ResultPanel {
     /// 顶部提示行（切通道后「旧结果来自 X」）
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    /// 行选中 → 状态行「已选第 N 行」增量更新（表格 `TableEvent::SelectRow` 事件路径调用；
+    /// sync 会全量覆写 status，这里只补事件之间的增量）
+    pub fn set_selected_row(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
+        if let Some(status) = self.status.as_mut() {
+            status.selected_row = row;
+        }
+        cx.notify();
+    }
+
+    /// 顶部提示行增量写入（编辑被拦等一次性提示；sync 会全量覆写 notice）
+    pub fn set_notice(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        self.notice = text;
+        cx.notify();
     }
 
     /// 结果集标签（测试断言标签条内容）
