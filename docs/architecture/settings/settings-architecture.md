@@ -129,6 +129,11 @@ graph TD
 | key | 节 | 类型 | 默认 | 生效 | 消费方 | 入口 | 期次 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `appearance.theme_mode` | 外观 | enum `light`/`dark` | `light` | 即时 | `app/src/main.rs`、`SettingsService::set_theme_mode` | 两者 | ✅ 已落地 |
+| `editor.show_line_numbers` | 编辑器 | bool | `true` | 即时 | `crates/editor/src/view/host.rs::EditorHostPanel`（render 同步 `set_line_number`） | 设置页 | ✅ 已落地（2026-10-24，#48） |
+| `editor.default_tab_size` | 编辑器 | i64（1–16） | `4` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
+| `editor.default_hard_tabs` | 编辑器 | bool | `false` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
+| `editor.default_line_ending` | 编辑器 | enum `LF`/`CRLF` | `LF` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
+| `editor.default_encoding` | 编辑器 | enum 编码五档 | `UTF-8` | 下次操作 | `crates/editor/src/view/host.rs::apply_editor_defaults`（新建文档） | 设置页 | ✅ 已落地（2026-10-24，#48） |
 | `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 设置页 | ✅ 已落地 |
 | `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |
 | `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |

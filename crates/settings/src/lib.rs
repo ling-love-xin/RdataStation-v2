@@ -223,6 +223,17 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::AppearanceTabBarVariant => {
             SettingValue::Text(settings.appearance.tab_bar_variant.clone())
         }
+        Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
+        Slot::EditorDefaultTabSize => {
+            SettingValue::Number(settings.editor.default_tab_size as f64)
+        }
+        Slot::EditorDefaultHardTabs => SettingValue::Bool(settings.editor.default_hard_tabs),
+        Slot::EditorDefaultLineEnding => {
+            SettingValue::Text(settings.editor.default_line_ending.clone())
+        }
+        Slot::EditorDefaultEncoding => {
+            SettingValue::Text(settings.editor.default_encoding.clone())
+        }
         Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
         Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
         Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
@@ -356,6 +367,52 @@ impl SettingsService {
                 }
                 persist(&cx.global::<Settings>().clone());
                 // 落盘后由 workbench 的 `on_settings_changed` 装配到 DockSkin。
+            }
+            Slot::EditorShowLineNumbers => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_line_numbers(on, cx);
+            }
+            Slot::EditorDefaultTabSize => {
+                let Some(n) = value.as_number() else {
+                    return false;
+                };
+                if !(1.0..=16.0).contains(&n) {
+                    return false;
+                }
+                Self::set_default_tab_size(n as i64, cx);
+            }
+            Slot::EditorDefaultHardTabs => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_default_hard_tabs(on, cx);
+            }
+            Slot::EditorDefaultLineEnding => {
+                let Some(v) = value.as_text() else {
+                    return false;
+                };
+                // 只认 LF / CRLF（与「重设 ▾」同一套换行档；手改坏时拒绝，不猜）。
+                if !(v == "LF" || v == "CRLF") {
+                    return false;
+                }
+                Self::set_default_line_ending(&v, cx);
+            }
+            Slot::EditorDefaultEncoding => {
+                let Some(v) = value.as_text() else {
+                    return false;
+                };
+                // 只认编码五档（与「重设 ▾」同一套档；手改坏时拒绝，不猜）。
+                if !(v == "UTF-8"
+                    || v == "UTF-8-BOM"
+                    || v == "GBK"
+                    || v == "UTF-16LE"
+                    || v == "UTF-16BE")
+                {
+                    return false;
+                }
+                Self::set_default_encoding(&v, cx);
             }
             Slot::NavigatorSourceShortCode => {
                 let Some(on) = value.as_bool() else {
@@ -550,6 +607,65 @@ impl SettingsService {
     }
 
     /// 读取当前主题模式。
+    /// 当前「显示行号」开关（`EditorHostPanel::render` 渲染同步点读取）。
+    pub fn show_line_numbers(cx: &App) -> bool {
+        cx.global::<Settings>().editor.show_line_numbers
+    }
+
+    /// 编辑器默认值快照（新建文档 / 无会话文档应用；已开文档走「重设 ▾」）。
+    pub fn editor_defaults(cx: &App) -> crate::model::Editor {
+        cx.global::<Settings>().editor.clone()
+    }
+
+    /// 行号开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，
+    /// 与面板内缓存比较后同步到内核 `set_line_number`（值相同不通知，无重绘循环）。
+    pub fn set_show_line_numbers(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.show_line_numbers = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 新文档默认缩进宽度（1–16；仅影响新建文档，已开文档不动）。
+    pub fn set_default_tab_size(n: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.default_tab_size = n.clamp(1, 16);
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 新文档默认是否用制表符缩进。
+    pub fn set_default_hard_tabs(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.default_hard_tabs = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 新文档默认换行（`"LF"` / `"CRLF"`）。
+    pub fn set_default_line_ending(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.default_line_ending = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
+    /// 新文档默认编码（`"UTF-8"` / `"UTF-8-BOM"` / `"GBK"` / `"UTF-16LE"` / `"UTF-16BE"`）。
+    pub fn set_default_encoding(v: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.default_encoding = v.to_string();
+        }
+        persist(&cx.global::<Settings>().clone());
+    }
+
     pub fn theme_mode(cx: &App) -> AppearanceMode {
         cx.global::<Settings>().appearance.theme_mode
     }

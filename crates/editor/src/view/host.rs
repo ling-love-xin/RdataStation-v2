@@ -29,6 +29,27 @@ use gpui_kit::component::input::{
     Editor, EditorState, InputEvent, InputState, RangeDecoration, RangeDecorationCollection,
     RangeDecorationStyle,
 };
+// #48 编辑器常规设置（行号开关即时 / 新文档默认缩进·换行·编码）：settings 不依赖 editor，方向合法
+use settings::SettingsService;
+
+/// #48 读编辑器设置快照（面板构造 / render 调用）：测试环境未注册 Settings global
+/// 时回退出厂默认（生产在 app 启动经 `SettingsService::init` 注册，不走此分支）。
+fn editor_settings_or_default(cx: &App) -> settings::model::Editor {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::editor_defaults(cx)
+    } else {
+        settings::model::Editor::default()
+    }
+}
+
+/// #48 读行号开关（同上：测试环境回退默认 true）。
+fn editor_show_line_numbers_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::show_line_numbers(cx)
+    } else {
+        true
+    }
+}
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableEvent, TableState};
@@ -249,6 +270,8 @@ pub struct EditorHostPanel {
     /// 欢迎页是否已被用户点掉（启动空白文档的“空编辑器”换成欢迎页；
     /// 点「开始编写」或内容非空后回到正常编辑器）
     welcome_dismissed: bool,
+    /// #48 行号开关缓存（设置 → render 权威同步点 → 内核 `set_line_number`）
+    show_line_numbers: bool,
     /// 【2026-10-19】脏态自绘 ✕ 的悬浮开关：鼠标悬停标题才显示关闭按钮，
     /// 避免常驻 ✕ 与标题内容互相遮挡（见 `title_suffix`）。
     title_hovered: std::cell::Cell<bool>,
@@ -749,6 +772,8 @@ impl EditorHostPanel {
             edit_mode: EditMode::Row,
             closed: false,
             welcome_dismissed: false,
+            // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
+            show_line_numbers: editor_show_line_numbers_or_default(cx),
             title_hovered: std::cell::Cell::new(false),
             grid,
             pending: 0,
@@ -805,10 +830,45 @@ impl EditorHostPanel {
         // 【遗留 #14】CSV 表格展示：打开即把内容解析进结果网格（空文本也是合法 CSV，
         // 给一个空表而非不显示）
         panel.sync_csv_grid(cx);
+        // #48 设置默认值落库：新建 / 未动过格式的文档应用（会话恢复在 show_document
+        // 里于面板创建**之后**执行，会话值会覆盖这里的默认——文档级优先）。
+        panel.apply_editor_defaults(cx);
         // 【遗留 #10】单元编辑器**不在构造期创建**：构造上下文里 `cx.new` + 订阅会
         // 触发「面板正在被更新」重入 panic。建实例走事件路径——`on_added_to`
         // （面板进 Dock）与单元增删方法。
         panel
+    }
+
+    /// #48 设置默认值落库：**只有**仍保持出厂默认格式（缩进 2 空格 / 空格缩进 /
+    /// UTF-8+LF）的文档应用设置默认——用户改过或会话恢复过的文档不动。
+    ///
+    /// 三类 setter 都只在值变化时落库且**不标脏**：新建文档不会因此出现未保存提示。
+    /// 缩进走 `set_tab_size` / `set_hard_tabs`（文档 + 内核 TabSize 双写，同「重设 ▾」）；
+    /// 编码 / 换行走 `set_document_save_format`（设置文本解析失败就跳过该项，不猜）。
+    fn apply_editor_defaults(&mut self, cx: &mut Context<Self>) {
+        let defaults = editor_settings_or_default(cx);
+        let pristine = self
+            .with_document(|doc| {
+                doc.tab_size() == 2
+                    && !doc.hard_tabs()
+                    && doc.save_format() == crate::encoding::SaveFormat::default()
+            })
+            .unwrap_or(true);
+        if !pristine {
+            return;
+        }
+        // 宽度下限 1（设置页校验过 1–16；手改坏的设置文件不猜）
+        self.set_tab_size(defaults.default_tab_size.max(1) as usize, cx);
+        self.set_hard_tabs(defaults.default_hard_tabs, cx);
+        if let (Some(encoding), Some(eol)) = (
+            crate::encoding::TextEncoding::from_setting(&defaults.default_encoding),
+            crate::encoding::LineEnding::from_setting(&defaults.default_line_ending),
+        ) {
+            self.shared.set_document_save_format(
+                &self.document,
+                crate::encoding::SaveFormat { encoding, eol },
+            );
+        }
     }
 
     pub fn document(&self) -> &DocumentId {
@@ -7498,7 +7558,16 @@ impl ComponentPanel for EditorHostPanel {
 }
 
 impl Render for EditorHostPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // #48 行号开关：设置 → 面板缓存 → 内核（render 是权威同步点，同 apply_left_mode）。
+        // 只在值变化时调 `set_line_number`（内核值相同内部直接 return，不 notify → 无重绘循环）。
+        let want_line_numbers = editor_show_line_numbers_or_default(cx);
+        if self.show_line_numbers != want_line_numbers {
+            self.show_line_numbers = want_line_numbers;
+            self.editor.update(cx, |state, cx| {
+                state.set_line_number(want_line_numbers, window, cx)
+            });
+        }
         let (bg, primary, muted) = {
             let theme = cx.theme();
             (

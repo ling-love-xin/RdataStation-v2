@@ -37,6 +37,9 @@ tracing.workspace = true
 workbench_shell.workspace = true
 # 结果集面板（结果存储 / 变更集 / 导出随面板独立）：editor 依赖它、它不反向依赖 editor
 result_panel.workspace = true
+# 编辑器常规设置（#48）：行号开关即时生效 / 新文档默认缩进·换行·编码。
+# settings 不依赖 editor（settings 依赖 workbench_shell/shared/paths），方向合法无环。
+settings.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；

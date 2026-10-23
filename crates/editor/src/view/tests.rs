@@ -6406,11 +6406,11 @@ fn the_indent_rides_along_with_the_session(cx: &mut TestAppContext) {
     let (shared, id) = shared_with_document("D:/sql/indent.sql", "select 1;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
-    // 默认：宽度 2、空格缩进
+    // 默认（#48 设置默认：宽度 4、空格缩进）
     let snapshot = cx
         .update(|_window, cx| panel.read(cx).session_snapshot(cx))
         .expect("有路径就该存会话");
-    assert_eq!(snapshot.tab_size, Some(2));
+    assert_eq!(snapshot.tab_size, Some(4));
     assert_eq!(snapshot.hard_tabs, Some(false));
 
     // 改成 4 + 制表符
@@ -7872,8 +7872,8 @@ fn indent_reset_changes_document_and_renders(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 默认：空格 × 2，非制表符
-    assert_eq!(shared.document_tab_size(&id), 2, "默认缩进宽度");
+    // 默认（#48 设置默认：空格 × 4，非制表符；测试环境无 Settings global 走出厂默认 4）
+    assert_eq!(shared.document_tab_size(&id), 4, "默认缩进宽度");
     assert!(!shared.document_hard_tabs(&id), "默认不用制表符");
 
     // 重设空格宽度为 4：文档状态真变 + 渲染正常（内核 set_tab_size 调用不 panic）

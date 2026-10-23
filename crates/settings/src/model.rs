@@ -28,6 +28,9 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     #[serde(default)]
     pub appearance: Appearance,
+    /// 编辑器常规设置（行号 / 新文档缩进 / 换行 / 编码默认值；文档级「重设 ▾」优先）
+    #[serde(default)]
+    pub editor: Editor,
     #[serde(default)]
     pub connection_defaults: ConnectionDefaults,
     #[serde(default)]
@@ -234,6 +237,64 @@ fn default_tab_bar_max_width() -> f32 {
 
 fn default_tab_bar_variant() -> String {
     "tab".to_string()
+}
+
+/// 编辑器常规设置。
+///
+/// 消费方在 editor crate（`EditorHostPanel`）：行号开关即时生效（渲染同步到内核
+/// `set_line_number`），缩进 / 换行 / 编码是**新文档与无会话文档**的默认值——
+/// 已开文档的编码 / 换行 / 缩进仍走「重设 ▾」（文档级优先，见
+/// `crates/editor/src/view/host.rs` 的重设菜单）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Editor {
+    /// 编辑区是否显示行号（即时生效；内核 `LayoutMode::CodeEditor.line_number`）。
+    #[serde(default = "default_show_line_numbers")]
+    pub show_line_numbers: bool,
+    /// 新文档默认缩进宽度（空格数；文档级「重设 ▾」可改单个文档）。
+    #[serde(default = "default_tab_size")]
+    pub default_tab_size: i64,
+    /// 新文档默认是否用制表符缩进（false = 空格）。
+    #[serde(default = "default_hard_tabs")]
+    pub default_hard_tabs: bool,
+    /// 新文档默认换行（`"LF"` / `"CRLF"`；落盘值，消费方按文本解析）。
+    #[serde(default = "default_line_ending")]
+    pub default_line_ending: String,
+    /// 新文档默认编码（`"UTF-8"` / `"UTF-8-BOM"` / `"GBK"` / `"UTF-16LE"` / `"UTF-16BE"`；
+    /// 落盘值，消费方按文本解析）。
+    #[serde(default = "default_encoding")]
+    pub default_encoding: String,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self {
+            show_line_numbers: default_show_line_numbers(),
+            default_tab_size: default_tab_size(),
+            default_hard_tabs: default_hard_tabs(),
+            default_line_ending: default_line_ending(),
+            default_encoding: default_encoding(),
+        }
+    }
+}
+
+fn default_show_line_numbers() -> bool {
+    true
+}
+
+fn default_tab_size() -> i64 {
+    4
+}
+
+fn default_hard_tabs() -> bool {
+    false
+}
+
+fn default_line_ending() -> String {
+    "LF".to_string()
+}
+
+fn default_encoding() -> String {
+    "UTF-8".to_string()
 }
 
 /// 主题模式：显式明暗，或跟随系统外观。

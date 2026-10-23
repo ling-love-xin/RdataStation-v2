@@ -59,6 +59,19 @@ impl TextEncoding {
         }
     }
 
+    /// 从设置文本解析编码（与设置模块 `editor.default_encoding` 落盘值一一对应；
+    /// 未知文本返回 `None`，由调用方按「拒绝不猜」处理）。
+    pub fn from_setting(text: &str) -> Option<Self> {
+        match text {
+            "UTF-8" => Some(Self::Utf8),
+            "UTF-8-BOM" => Some(Self::Utf8Bom),
+            "GBK" => Some(Self::Gbk),
+            "UTF-16LE" => Some(Self::Utf16Le),
+            "UTF-16BE" => Some(Self::Utf16Be),
+            _ => None,
+        }
+    }
+
     /// 按本编码把文本编成字节（含 BOM 的编码会带上 BOM）
     pub fn encode(&self, text: &str) -> Vec<u8> {
         match self {
@@ -127,6 +140,15 @@ impl LineEnding {
             Self::Crlf
         } else {
             Self::Lf
+        }
+    }
+
+    /// 从设置文本解析换行（`"LF"` / `"CRLF"`；未知返回 `None`）。
+    pub fn from_setting(text: &str) -> Option<Self> {
+        match text {
+            "LF" => Some(Self::Lf),
+            "CRLF" => Some(Self::Crlf),
+            _ => None,
         }
     }
 
@@ -234,6 +256,24 @@ fn _placeholder(_text: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_texts_round_trip_encodings_and_line_endings() {
+        // #48：设置模块落盘文本 → 枚举解析（未知文本拒绝，不猜）
+        for (text, want) in [
+            ("UTF-8", TextEncoding::Utf8),
+            ("UTF-8-BOM", TextEncoding::Utf8Bom),
+            ("GBK", TextEncoding::Gbk),
+            ("UTF-16LE", TextEncoding::Utf16Le),
+            ("UTF-16BE", TextEncoding::Utf16Be),
+        ] {
+            assert_eq!(TextEncoding::from_setting(text), Some(want), "{text}");
+        }
+        assert_eq!(TextEncoding::from_setting("Shift-JIS"), None);
+        assert_eq!(LineEnding::from_setting("LF"), Some(LineEnding::Lf));
+        assert_eq!(LineEnding::from_setting("CRLF"), Some(LineEnding::Crlf));
+        assert_eq!(LineEnding::from_setting("lf"), None);
+    }
 
     #[test]
     fn encodings_round_trip_text() {
