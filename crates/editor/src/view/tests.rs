@@ -7818,16 +7818,23 @@ fn breadcrumb_renders_and_switches_schema_binding(cx: &mut TestAppContext) {
     let (panel, cx) = open_panel(cx, &shared, &id);
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 面包屑渲染出来（debug_selector 在 DropdownButton 的按钮上）
+    // 【#47】面包屑已上抛全局状态栏（「连接 ▸ Schema」文本段）：编辑器面板内部不再渲染它
     assert!(
-        cx.debug_bounds("editor-breadcrumb").is_some(),
-        "SQL 模式 + 绑定连接 + 有 schema 列表 → 面包屑应渲染"
+        cx.debug_bounds("editor-breadcrumb").is_none(),
+        "面包屑上抛后，编辑器面板内部不应再渲染它"
     );
-    // 未选 schema：文档绑定保持 None（不拿列表第一个假装是当前）
+    // 未选 schema：文档绑定保持 None（不拿列表第一个假装是当前）；全局状态栏数据源同口径
     assert_eq!(schema_doc(&shared, &id), None);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).status_snapshot(cx))
+            .unwrap()
+            .schema,
+        None,
+        "未选 schema 时全局状态栏快照 schema 应为 None"
+    );
 
     // 菜单项点击与直接调 set_schema 是同一函数（headless 弹菜单不可靠，走提交函数纪律）：
-    // 切到 analytics → 文档绑定真变
+    // 切到 analytics → 文档绑定真变 + 快照可见
     cx.update(|_window, cx| {
         panel.update(cx, |panel, cx| {
             panel.set_schema(Some("analytics".to_string()), cx);
@@ -7837,6 +7844,14 @@ fn breadcrumb_renders_and_switches_schema_binding(cx: &mut TestAppContext) {
         schema_doc(&shared, &id).as_deref(),
         Some("analytics"),
         "切 schema 必须落进文档绑定（不是纯 UI 装饰）"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).status_snapshot(cx))
+            .unwrap()
+            .schema
+            .as_deref(),
+        Some("analytics"),
+        "全局状态栏快照要随绑定变化"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
 

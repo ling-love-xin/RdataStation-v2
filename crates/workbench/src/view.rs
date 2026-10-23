@@ -16,6 +16,8 @@ use gpui_kit::base::{Disableable as _, Selectable, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
+use gpui_kit::base::dock::layout::PaneRef;
+use gpui_kit::base::dock::PanelId;
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
 };
@@ -113,6 +115,10 @@ pub struct WorkbenchView {
     editor_service: editor::shared::EditorShared,
     /// 已开的编辑面板（按 `DocumentId` 复用：同文档不重复建面板）。
     editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
+    /// 编辑器面板状态变化订阅（#47 状态栏上抛：host 发 `EditorHostEvent::StatusChanged`
+    /// 时宿主重绘，全局状态栏活动文档上下文段随之刷新）。句柄必须被持有，drop 即失效；
+    /// 面板关闭后订阅随实体 drop 失效，Vec 里留着无害（文档数有限）。
+    _editor_status_subs: Vec<Subscription>,
     /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
     scratchpad_meta_pump: Option<Task<()>>,
     /// 【LSP】语言服务端口句柄（状态栏 LSP 管理器持有它做启停 / 回收）；
@@ -265,6 +271,7 @@ impl WorkbenchView {
             _insight_rules_watcher: None,
             editor_service,
             editor_hosts: Vec::new(),
+            _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
             lsp,
             lsp_reaper: None,
@@ -572,6 +579,16 @@ impl WorkbenchView {
         let panel =
             cx.new(|cx| editor::view::host::EditorHostPanel::new(service, document, window, cx));
         self.editor_hosts.push(panel.clone());
+        // 状态变化 → 宿主重绘 → 全局状态栏活动文档上下文段刷新
+        // （内容 / 连接 / Schema / 通道 / 事务 / 执行 / 消息都会发 StatusChanged）
+        let _status_sub = cx.subscribe_in(
+            &panel,
+            window,
+            |_this, _panel, _event: &editor::view::host::EditorHostEvent, _window, cx| {
+                cx.notify();
+            },
+        );
+        self._editor_status_subs.push(_status_sub);
 
         if let Some(area) = self.area.clone() {
             // 工程债（用户点名「tab 显示 editor 而非文件名」）：面板必须带 presentation
@@ -2593,10 +2610,45 @@ impl WorkbenchView {
 
     // ===== 状态栏 =====
 
+    /// 中央 Dock 当前激活的编辑面板（没有 = `None`）。
+    ///
+    /// Dock 不向宿主暴露「激活面板」回调（`PanelEvent` 只有 Zoom / Layout 三类），
+    /// 宿主渲染时直接读 Dock 布局树（唯一真相源）——tab 点击切换也覆盖，无需自维护
+    /// 激活索引。与 `editor_hosts` 按 `PanelId` 匹配。
+    fn active_editor_panel(
+        &self,
+        cx: &App,
+    ) -> Option<Entity<editor::view::host::EditorHostPanel>> {
+        let area = self.area.as_ref()?;
+        let layout = area.read(cx).layout(DockPlacement::Center)?;
+        let mut found: Option<gpui_kit::base::dock::PanelId> = None;
+        layout.root().walk(&mut |node| match node.kind() {
+            PaneRef::Tabs { panels, active_ix } => {
+                if let Some(id) = panels.get(active_ix) {
+                    found = Some(*id);
+                }
+            }
+            PaneRef::Split { .. } => {}
+        });
+        let panel_id = found?;
+        // 面板的 PanelId = 面板实体的 EntityId（`EditorHostPanel::focus_self` 同款换算）
+        self.editor_hosts
+            .iter()
+            .find(|panel| PanelId::from(panel.entity_id()) == panel_id)
+            .cloned()
+    }
+
+
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // 【LSP】语言服务指示 + 管理器浮层（未接端口 = 空元素）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let lsp_item = self.lsp_status_item(cx);
+        // 【#47】活动编辑器上下文段：VSCode 式——全局状态栏显示当前文档的语言 / 连接 /
+        // 编码 / 换行 / 缩进 / 行-列 / 事务 / 执行状态与交互控件。必须在 `cx.theme()`
+        // 之前算（那一步把 cx 借出去了）；面板状态变化经订阅重绘宿主，这里每帧重读。
+        let editor_context = self.active_editor_panel(cx).and_then(|panel| {
+            editor::view::host::editor_global_status(&panel, cx)
+        });
         // M7：Mock 任务在跑时给状态栏一个指示 + 取消入口（读面板实体自己的状态，不另存一份）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let mock_chip = self
@@ -2670,6 +2722,7 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .text_xs()
+                    .children(editor_context)
                     .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
                     .child(div().child("DuckDB 就绪"))

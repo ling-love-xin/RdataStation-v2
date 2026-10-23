@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
-use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position, RopeExt as _};
+use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::text::TextView;
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
@@ -66,7 +66,7 @@ use crate::view::results::grid::{
     self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar,
 };
 use crate::view::results::sets::{self as result_sets, ResultSetTab};
-use crate::view::widgets::status_bar::{self, StatusInputs};
+use crate::view::widgets::status_bar;
 
 /// 【B7】「抓全量后导出」的在途状态
 ///
@@ -158,6 +158,66 @@ struct KernelRun {
     /// 目标会话 id（切换会话后回执到了不落）
     session_id: String,
 }
+
+/// 编辑器文档状态栏快照：全局状态栏「活动文档上下文段」的只读数据源。
+///
+/// 与编辑器内部旧状态栏同一套数据口径（模式 / 光标 / 连接 / 通道 / 事务…），
+/// 由 [`EditorHostPanel::status_snapshot`] 构造；渲染路径零副作用
+/// （不触发 I/O、不写 Shared）。
+#[derive(Clone, Debug)]
+pub struct EditorStatusSnapshot {
+    pub mode: EditorMode,
+    pub dirty: bool,
+    pub read_only: crate::model::ReadOnly,
+    /// 语句数（仅 SQL 模式有意义；内容变化时增量计算）
+    pub statements: usize,
+    /// 光标位置（1 基）
+    pub line: usize,
+    pub column: usize,
+    /// 光标数（列编辑 = 多光标）
+    pub cursor_count: usize,
+    /// 缩进宽度（内核 TabSize）
+    pub tab_size: usize,
+    /// 缩进用制表符
+    pub hard_tabs: bool,
+    /// 保存格式（编码 + 换行）
+    pub format: crate::encoding::SaveFormat,
+    /// 是否有执行在跑
+    pub executing: bool,
+    /// 本次执行已跑时长（`None` = 没在跑）
+    pub elapsed: Option<std::time::Duration>,
+    /// 连接段文案（`●P·orders`）；`None` = 无连接概念（文本模式）
+    pub connection: Option<String>,
+    /// 方言（`PostgreSQL`）；`None` = 未绑定连接
+    pub dialect: Option<String>,
+    /// 通道段文案；`None` = 不显示
+    pub channel: Option<String>,
+    /// 当前 Schema（`None` = 用连接默认）
+    pub schema: Option<String>,
+    /// 通用模式环境段；`None` = 非通用 / 未选
+    pub env: Option<String>,
+    /// 通用模式脚本文件类型段；`None` = 非脚本
+    pub file_type: Option<String>,
+    /// 通用模式语言服务状态段；`None` = 不需要语言服务
+    pub lsp: Option<String>,
+    /// 事务区文案；`None` = 无事务语义
+    pub tx: Option<String>,
+    /// 动作失败提示；`None` = 无提示
+    pub message: Option<String>,
+}
+
+/// 编辑器面板状态变化事件：宿主订阅后刷新全局状态栏的活动文档上下文段。
+///
+/// Dock 的 `PanelEvent` 只有 Zoom / Layout 三类，没有「激活」事件；
+/// 宿主渲染时从 Dock 布局树读中央活动面板（唯一真相源），本事件只负责
+/// 「面板状态变了 → 宿主重绘 → 全局段刷新」。
+#[derive(Clone, Debug)]
+pub enum EditorHostEvent {
+    /// 状态栏可见的文档状态变了（内容 / 连接 / 通道 / Schema / 事务 / 执行 / 消息）
+    StatusChanged,
+}
+
+impl EventEmitter<EditorHostEvent> for EditorHostPanel {}
 
 pub struct EditorHostPanel {
     shared: EditorShared,
@@ -454,6 +514,8 @@ impl EditorHostPanel {
                     }
                     // 重绘以刷新标签脏点与状态栏
                     cx.notify();
+                    // 状态栏内容变了（行 / 列 / 脏点 / 语句数）：通知宿主刷新全局状态栏段
+                    cx.emit(EditorHostEvent::StatusChanged);
                 }
             },
         );
@@ -937,6 +999,8 @@ impl EditorHostPanel {
     pub fn set_message(&mut self, text: Option<String>, cx: &mut Context<Self>) {
         self.message = text;
         cx.notify();
+        // 消息是状态栏上下文段的一部分（连接 / 通道 / 事务 / 执行开始都经它留痕）
+        cx.emit(EditorHostEvent::StatusChanged);
     }
 
     /// 清掉状态栏提示（动作成功 / 用户取消时调：旧提示不该继续挂着）
@@ -985,6 +1049,112 @@ impl EditorHostPanel {
             hard_tabs: Some(self.shared.document_hard_tabs(&self.document)),
             // 【遗留 #5】结果区分栏高度随会话走（用户拖出来的比例是布局的一部分）
             result_height: Some(self.result_height.get()),
+        })
+    }
+
+    /// 文档状态栏快照：全局状态栏「活动文档上下文段」的只读数据源。
+    ///
+    /// 与编辑器内部旧状态栏同一套数据口径（模式 / 光标 / 连接 / 通道 / 事务…）；
+    /// 渲染路径零副作用（不触发 I/O、不写 Shared）。
+    pub fn status_snapshot(&self, cx: &App) -> Option<EditorStatusSnapshot> {
+        if self.closed {
+            return None;
+        }
+        let (line, column, cursor_count) = {
+            let state = self.editor.read(cx);
+            let cursor = state.cursor_position();
+            (
+                cursor.line as usize + 1,
+                cursor.character as usize + 1,
+                state.cursor_count(),
+            )
+        };
+        let communicating = self
+            .with_document(|doc| doc.capabilities().execute)
+            .unwrap_or(false);
+        let bound = self
+            .with_document(|doc| doc.connection().map(str::to_string))
+            .flatten();
+        let connection = if communicating {
+            Some(self.shared.connection_status_text(bound.as_deref()))
+        } else {
+            None
+        };
+        let current_channel = self.channel();
+        let channel = communicating
+            .then(|| channel::status_text(current_channel).to_string());
+        let dialect = communicating
+            .then(|| {
+                bound.as_deref().and_then(|conn_id| {
+                    self.shared
+                        .connection_options()
+                        .iter()
+                        .find(|option| option.id == conn_id)
+                        .map(|option| crate::connection::dialect_label(&option.db_type))
+                })
+            })
+            .flatten();
+        let tx_available = communicating
+            && self.shared.has_transactions()
+            && current_channel.allows_transactions();
+        let tx = tx_available.then(|| self.tx_text());
+        let is_general = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General)
+            == EditorMode::General;
+        let env = is_general
+            .then(|| {
+                self.env_for()
+                    .and_then(|id| self.envs().into_iter().find(|env| env.id == id))
+                    .map(|env| format!("环境 {}", env.display_name()))
+            })
+            .flatten();
+        let file_type = is_general
+            .then(|| {
+                self.document_path()
+                    .as_deref()
+                    .and_then(crate::mode::script_file_type)
+                    .map(|t| format!("类型 {}", t.label()))
+            })
+            .flatten();
+        let lsp = is_general
+            .then(|| {
+                self.shared.lsp_wants(&self.document).then(|| {
+                    if self.lsp_alive {
+                        "LSP 就绪".to_string()
+                    } else {
+                        "LSP 未就绪".to_string()
+                    }
+                })
+            })
+            .flatten();
+        let schema = self
+            .with_document(|doc| doc.schema().map(str::to_string))
+            .flatten();
+        Some(EditorStatusSnapshot {
+            mode: self
+                .with_document(|doc| doc.mode())
+                .unwrap_or(EditorMode::General),
+            dirty: self.is_dirty(),
+            read_only: self.read_only_flags(),
+            statements: self.statements,
+            line,
+            column,
+            cursor_count,
+            tab_size: self.shared.document_tab_size(&self.document),
+            hard_tabs: self.shared.document_hard_tabs(&self.document),
+            format: self.shared.document_save_format(&self.document),
+            executing: self.pending > 0,
+            elapsed: self.running_since.map(|since| since.elapsed()),
+            connection,
+            dialect,
+            channel,
+            schema,
+            env,
+            file_type,
+            lsp,
+            tx,
+            message: self.message.clone(),
         })
     }
 
@@ -1946,6 +2116,7 @@ impl EditorHostPanel {
             .update(|service| service.set_schema(&self.document, schema));
         if changed {
             cx.notify();
+            cx.emit(EditorHostEvent::StatusChanged);
         }
     }
 
@@ -2239,6 +2410,7 @@ impl EditorHostPanel {
             }
         }
         cx.notify();
+        cx.emit(EditorHostEvent::StatusChanged);
     }
 
     // ===== 【2d】分析笔记本：单元动作（状态在 `EditorShared` 的笔记本持有器） =====
@@ -2834,6 +3006,7 @@ impl EditorHostPanel {
             self.advance_notebook_queue(cx);
         }
         cx.notify();
+        cx.emit(EditorHostEvent::StatusChanged);
     }
 
     /// 编辑区正文：分析模式 = 笔记本（单元卡片）；其它模式 = 内核编辑器
@@ -3949,6 +4122,8 @@ impl EditorHostPanel {
             sync_fold(&self.shared, &self.document, state, window, cx);
         });
         cx.notify();
+        // 模式变了 = 语言 / 环境 / 能力徽标全变：通知宿主刷新全局段
+        cx.emit(EditorHostEvent::StatusChanged);
     }
 
     /// 按当前文档的能力与档位装 / 摘补全 provider（**唯一开关处**：新建与切模式都走它）
@@ -5461,6 +5636,8 @@ impl EditorHostPanel {
                 self.jump_to_error_site(cx);
             }
         }
+        // 执行收口（executing 徽标 / 耗时消失）：成功无提示时也要通知宿主刷新全局段
+        cx.emit(EditorHostEvent::StatusChanged);
     }
 
     /// 按「当前选中的结果集」刷新结果区（网格数据 + 状态行 + 标签条）
@@ -7324,429 +7501,6 @@ impl Render for EditorHostPanel {
         };
         let _ = (primary, muted);
 
-        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示；Ch = 光标全文字符偏移；
-        // 光标数 = 列编辑多光标真实值；选中行数 = 选区跨行数，供状态栏 `Row N` 微标）
-        let (line, column, cursor_offset, cursor_count, selected_chars, selected_rows) = {
-            let state = self.editor.read(cx);
-            let cursor = state.cursor_position();
-            let range = state.selected_range();
-            let rows = if range.is_empty() {
-                0
-            } else {
-                // 首尾偏移 → 行号差 + 1（0 基行号，差 +1 即跨行数）
-                let start = state.text().offset_to_position(range.start).line;
-                let end = state.text().offset_to_position(range.end).line;
-                (end - start + 1) as usize
-            };
-            (
-                cursor.line as usize + 1,
-                cursor.character as usize + 1,
-                state.selected_range().start,
-                state.cursor_count(),
-                state.selected_text().chars().count(),
-                rows,
-            )
-        };
-        // 连接段只在会通信的模式出现（文本模式没有连接概念，不显示占位）
-        let communicating = self
-            .with_document(|doc| doc.capabilities().execute)
-            .unwrap_or(false);
-        let connection_text = if communicating {
-            let bound = self
-                .with_document(|doc| doc.connection().map(str::to_string))
-                .flatten();
-            Some(self.shared.connection_status_text(bound.as_deref()))
-        } else {
-            None
-        };
-        // 【B13】通道段：会通信的模式才有（文本模式没有“执行位置”这回事）
-        let current_channel = self.channel();
-        let channel_text = communicating.then(|| channel::status_text(current_channel));
-        // 【T2c-2】方言段：从绑定连接的 db_type 解析（会通信 + 绑定连接才有；
-        // 未绑定连接不摆——「跟随当前连接」时方言是谁都说不准，如实不显示）
-        let dialect_text = communicating.then(|| {
-            let bound = self
-                .with_document(|doc| doc.connection().map(str::to_string))
-                .flatten();
-            bound.as_deref().and_then(|conn_id| {
-                self.shared
-                    .connection_options()
-                    .iter()
-                    .find(|option| option.id == conn_id)
-                    .map(|option| crate::connection::dialect_label(&option.db_type))
-            })
-        });
-        // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
-        let dialect_owned = dialect_text.flatten();
-        // TX 区（B4）：会通信 + 执行器真支持事务 + **当前通道支持事务**
-        // （加速 / 联邦没有事务语义，那时摆一个 TX 区就是摆了个假控件）
-        let tx_available = communicating
-            && self.shared.has_transactions()
-            && current_channel.allows_transactions();
-        let tx_text = tx_available.then(|| self.tx_text());
-        // 【2b】通用模式：环境段（环境名 + 版本；非通用 / 未选 = 不显示）。
-        // 环境只在通用模式才有语义（脚本执行目标），其它模式如实不摆。
-        let env_text = (self
-            .with_document(|doc| doc.mode())
-            .unwrap_or(EditorMode::General)
-            == EditorMode::General)
-        .then(|| {
-            self.env_for()
-                .and_then(|id| self.envs().into_iter().find(|env| env.id == id))
-                .map(|env| format!("环境 {}", env.display_name()))
-        });
-        // flatten 结果绑定成具名变量：`as_deref` 借它直到 render（临时值撑不过那条语句，E0716）
-        let env_owned = env_text.flatten();
-        // 【2b/遗留 #14】通用模式：脚本文件类型段（`.py` → `类型 Python`；非脚本扩展名不摆）。
-        // 判定走 `mode::script_file_type` 纯函数；上色本体已接（`view::highlight` 按类型分派
-        // 词法器），这里仍只展示类型名，与高亮互不干扰。
-        let file_type_text = (self
-            .with_document(|doc| doc.mode())
-            .unwrap_or(EditorMode::General)
-            == EditorMode::General)
-            .then(|| {
-                self.document_path()
-                    .as_deref()
-                    .and_then(crate::mode::script_file_type)
-                    .map(|t| format!("类型 {}", t.label()))
-            });
-        let file_type_owned = file_type_text.flatten();
-        // 【LSP】通用模式语言服务状态段（原型 §2.5 左侧环境族第三项「环境 · 文件类型 · LSP」）：
-        // 只有“本文档配了语言服务”（`lsp_wants`，如 Python 脚本）才摆；会话健康显示「就绪」，
-        // 服务没起 / 被停 / 崩溃时如实报「未就绪」——状态栏不假装有服务。
-        let lsp_text = (self
-            .with_document(|doc| doc.mode())
-            .unwrap_or(EditorMode::General)
-            == EditorMode::General)
-            .then(|| {
-                self.shared.lsp_wants(&self.document).then(|| {
-                    if self.lsp_alive { "LSP 就绪" } else { "LSP 未就绪" }
-                })
-            });
-        let lsp_owned = lsp_text.flatten();
-        let status = StatusInputs {
-            mode: self
-                .with_document(|doc| doc.mode())
-                .unwrap_or(EditorMode::General),
-            dirty: self.is_dirty(),
-            read_only: self.read_only_flags(),
-            statements: self.statements,
-            line,
-            column,
-            cursor_offset,
-            cursor_count,
-            // 缩进宽度：文档级权威值（T2c-4 重设后从这读；默认 2）
-            tab_size: self.shared.document_tab_size(&self.document),
-            // 缩进是否制表符：文档级权威值（T2c-4）
-            hard_tabs: self.shared.document_hard_tabs(&self.document),
-            // 【2c】保存格式（编码 + 换行）：状态栏右段微标真实值
-            format: self.shared.document_save_format(&self.document),
-            bytes: self.shared.document_len(&self.document),
-            selected_chars,
-            selected_rows,
-            message: self.message.as_deref(),
-            executing: self.pending > 0,
-            elapsed: self.running_since.map(|since| since.elapsed()),
-            connection: connection_text.as_deref(),
-            dialect: dialect_owned.as_deref(),
-            channel: channel_text.as_deref(),
-            env: env_owned.as_deref(),
-            file_type: file_type_owned.as_deref(),
-            lsp: lsp_owned.as_deref(),
-            tx: tx_text.as_deref(),
-        };
-
-        // 【T2c-1】连接 ▸ 库 ▸ Schema 面包屑（参考 DBeaver）：连接绑定且有 schema 列表才构造
-        // （没有可切项就退化为文本连接段——`labels` 的 `connection` 段兜底，不造一个假控件）。
-        // 点击 schema 段弹出列表：选中写回文档绑定（`None` = 用连接默认 schema）。
-        let breadcrumb = communicating.then(|| {
-            let conn_id = self.bound_connection();
-            let schemas = self.shared.schemas(conn_id.as_deref());
-            if schemas.is_empty() {
-                return None;
-            }
-            let current = self
-                .with_document(|doc| doc.schema().map(str::to_string))
-                .flatten();
-            let crumb = crate::connection::breadcrumb(
-                conn_id.as_deref(),
-                &self.shared.connection_options(),
-                &schemas,
-                current.as_deref(),
-            );
-            let mut label = crumb.connection.clone();
-            if let Some(catalog) = crumb.catalog {
-                label.push_str(" ▸ ");
-                label.push_str(&catalog);
-            }
-            label.push_str(" ▸ ");
-            label.push_str(crumb.schema.as_deref().unwrap_or("schema"));
-            let entity = cx.entity();
-            let items = schemas.clone();
-            let label_clone = label.clone();
-            Some(
-                DropdownButton::new("editor-breadcrumb")
-                    .small()
-                    .button(
-                        Button::new("editor-breadcrumb-btn")
-                            .ghost()
-                            .small()
-                            .debug_selector(|| "editor-breadcrumb".to_string())
-                            .label(label_clone),
-                    )
-                    .dropdown_menu(move |menu, _window, _cx| {
-                        let mut menu = menu;
-                        for item in items.iter() {
-                            let entity = entity.clone();
-                            let schema = item.schema.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(schema.clone()).on_click(move |_, _window, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_schema(Some(schema.clone()), cx);
-                                    });
-                                }),
-                            );
-                        }
-                        // 分隔项：显式回到连接默认 schema（文档绑定解绑）
-                        let entity = entity.clone();
-                        menu.separator().item(
-                            PopupMenuItem::new("使用连接默认").on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| panel.set_schema(None, cx));
-                            }),
-                        )
-                    })
-                    .into_any_element(),
-            )
-        });
-
-        // 【T2c-3 收尾】行｜列编辑切换入口：列编辑 = 多光标（内核 `add_cursor_above|below`
-        // 已由 vendor 补丁公开，`cursor_count` 徽标是真实值）。行编辑 = 单光标（文本变更时
-        // 宿主强制收拢，见 Change 事件处理器）；切回行编辑时立即收拢一次。
-        let edit_mode = {
-            let entity = cx.entity();
-            let mode = self.edit_mode;
-            DropdownButton::new("editor-edit-mode")
-                .small()
-                .button(
-                    Button::new("editor-edit-mode-btn")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-edit-mode".to_string())
-                        .label(format!("{} ▾", mode.short_label())),
-                )
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let row_entity = entity.clone();
-                    let col_entity = entity.clone();
-                    let row = mode == EditMode::Row;
-                    let column = mode == EditMode::Column;
-                    menu.item(
-                        PopupMenuItem::new("行编辑")
-                            .checked(row)
-                            .on_click(move |_, window, app| {
-                                row_entity.update(app, |panel, cx| {
-                                    panel.set_edit_mode(EditMode::Row, cx)
-                                });
-                                // 切回行编辑：立即收拢多光标（走生产代码同一条 `enforce_edit_mode`）
-                                row_entity.update(app, |panel, cx| {
-                                    panel.enforce_edit_mode(window, cx);
-                                });
-                            }),
-                    )
-                    .item(
-                        PopupMenuItem::new("列编辑")
-                            .checked(column)
-                            .on_click(move |_, _window, app| {
-                                col_entity.update(app, |panel, cx| {
-                                    panel.set_edit_mode(EditMode::Column, cx);
-                                });
-                            }),
-                    )
-                })
-                .into_any_element()
-        };
-
-        // 【T2c-4】重设菜单（编码 / 换行 / 缩进 / 显示）：
-        // - 缩进真改内核 TabSize（空格宽或制表符）；
-        // - 编码 / 换行只改**保存契约**（内核文本统一 Unicode，IO 层按 `SaveFormat` 产出字节），
-        //   切换即标脏（`format != saved_format`），见 `set_encoding` / `set_eol`；
-        // - 显示组（空白字符 / 隐藏字符）是视图偏好：双写文档状态 + 内核（见下面各 `set_*`）。
-        let reset_menu = {
-            let entity = cx.entity();
-            let current_tab = self.shared.document_tab_size(&self.document);
-            let hard_tabs = self.shared.document_hard_tabs(&self.document);
-            let format = self.shared.document_save_format(&self.document);
-            let show_whitespaces = self.shared.document_show_whitespaces(&self.document);
-            let show_invisible = self.shared.document_show_invisible(&self.document);
-            DropdownButton::new("editor-reset-menu")
-                .small()
-                .button(
-                    Button::new("editor-reset-menu-btn")
-                        .ghost()
-                        .small()
-                        .debug_selector(|| "editor-reset-menu".to_string())
-                        .label("重设 ▾"),
-                )
-                .dropdown_menu(move |menu, _window, _cx| {
-                    // ── 编码组：5 项全亮；checked 按当前保存格式；on_click 只改保存契约 ──
-                    let mut menu = menu;
-                    let enc = format.encoding;
-                    menu = menu.separator().item(PopupMenuItem::new("编码").disabled(true));
-                    for (label, variant) in [
-                        ("UTF-8", crate::encoding::TextEncoding::Utf8),
-                        ("UTF-8 (BOM)", crate::encoding::TextEncoding::Utf8Bom),
-                        ("GBK", crate::encoding::TextEncoding::Gbk),
-                        ("UTF-16 LE", crate::encoding::TextEncoding::Utf16Le),
-                        ("UTF-16 BE", crate::encoding::TextEncoding::Utf16Be),
-                    ] {
-                        let entity = entity.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(enc == variant)
-                                .on_click(move |_, _, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_encoding(variant, cx);
-                                    });
-                                }),
-                        );
-                    }
-                    // ── 换行组：LF / CRLF ──
-                    let eol = format.eol;
-                    let lf_entity = entity.clone();
-                    let crlf_entity = entity.clone();
-                    menu = menu
-                        .separator()
-                        .item(PopupMenuItem::new("换行").disabled(true))
-                        .item(
-                            PopupMenuItem::new("LF")
-                                .checked(eol == crate::encoding::LineEnding::Lf)
-                                .on_click(move |_, _, app| {
-                                    lf_entity.update(app, |panel, cx| {
-                                        panel.set_eol(crate::encoding::LineEnding::Lf, cx);
-                                    });
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("CRLF")
-                                .checked(eol == crate::encoding::LineEnding::Crlf)
-                                .on_click(move |_, _, app| {
-                                    crlf_entity.update(app, |panel, cx| {
-                                        panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
-                                    });
-                                }),
-                        );
-                    // ── 缩进组：真改内核 TabSize（空格宽 / 制表符）──
-                    menu = menu.separator().item(PopupMenuItem::new("缩进").disabled(true));
-                    menu = menu
-                        .item({
-                            let entity = entity.clone();
-                            PopupMenuItem::new("空格: 2")
-                                .checked(!hard_tabs && current_tab == 2)
-                                .on_click(move |_, _, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_hard_tabs(false, cx);
-                                        panel.set_tab_size(2, cx);
-                                    });
-                                })
-                        })
-                        .item({
-                            let entity = entity.clone();
-                            PopupMenuItem::new("空格: 4")
-                                .checked(!hard_tabs && current_tab == 4)
-                                .on_click(move |_, _, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_hard_tabs(false, cx);
-                                        panel.set_tab_size(4, cx);
-                                    });
-                                })
-                        })
-                        .item({
-                            let entity = entity.clone();
-                            PopupMenuItem::new("空格: 8")
-                                .checked(!hard_tabs && current_tab == 8)
-                                .on_click(move |_, _, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_hard_tabs(false, cx);
-                                        panel.set_tab_size(8, cx);
-                                    });
-                                })
-                        })
-                        .item({
-                            let entity = entity.clone();
-                            PopupMenuItem::new("制表符")
-                                .checked(hard_tabs)
-                                .on_click(move |_, _, app| {
-                                    entity.update(app, |panel, cx| {
-                                        panel.set_hard_tabs(true, cx);
-                                    });
-                                })
-                        });
-                    // ── 显示组：视图偏好（双写文档状态 + 内核）──
-                    let ws_entity = entity.clone();
-                    let inv_entity = entity.clone();
-                    menu.separator()
-                        .item(PopupMenuItem::new("显示").disabled(true))
-                        .item(
-                            PopupMenuItem::new("显示空白字符")
-                                .checked(show_whitespaces)
-                                .on_click(move |_, window, app| {
-                                    ws_entity.update(app, |panel, cx| {
-                                        panel.set_show_whitespaces(!show_whitespaces, window, cx);
-                                    });
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("显示隐藏字符")
-                                .checked(show_invisible)
-                                .on_click(move |_, _window, app| {
-                                    inv_entity.update(app, |panel, cx| {
-                                        panel.set_show_invisible(!show_invisible, cx);
-                                    });
-                                }),
-                        )
-                })
-                .into_any_element()
-        };
-
-        // 中断（B3）：只在本文档真有语句没回填时出现（原型 §5.1：「中断」挂在状态栏■）
-        let interrupt = self.can_interrupt().then(|| {
-            let entity = cx.entity();
-            Button::new("editor-interrupt")
-                .ghost()
-                .small()
-                .debug_selector(|| "editor-interrupt".to_string())
-                .label("■ 中断")
-                .on_click(move |_, _window, app| {
-                    entity.update(app, |panel, cx| panel.interrupt(cx));
-                })
-                .into_any_element()
-        });
-
-        // 事务区控件（B4）：自动提交开关已移到工具栏（原型 §2.2「事务开关常显」——
-        // 它是模式，模式要一直看得见，放工具栏比状态栏更显眼）；状态栏 TX 区只留
-        // 提交 / 回滚（事务真开着时出现，原型 §2.5：事务区）
-        let tx_controls = tx_available.then(|| {
-            let mut row = div().h_flex().items_center().gap_1();
-            if self.tx_open {
-                for (action, id) in [
-                    (execution::TxAction::Commit, "editor-tx-commit"),
-                    (execution::TxAction::Rollback, "editor-tx-rollback"),
-                ] {
-                    let entity = cx.entity();
-                    row = row.child(
-                        Button::new(id)
-                            .ghost()
-                            .small()
-                            .debug_selector(move || id.to_string())
-                            .label(action.label())
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| panel.tx_action(action, cx));
-                            }),
-                    );
-                }
-            }
-            row.into_any_element()
-        });
-
         let mut root = div()
             .id("editor-host-panel")
             .role(gpui::Role::Group)
@@ -8434,16 +8188,373 @@ impl Render for EditorHostPanel {
                 });
         }
         root = root.child(split);
-        root.child(status_bar::render(
-            &status,
-            status_bar::StatusControls {
-                breadcrumb: breadcrumb.flatten(),
-                edit_mode: Some(edit_mode),
-                reset_menu: Some(reset_menu),
-                tx: tx_controls,
-                interrupt,
-            },
-            cx,
-        ))
+        root
     }
+}
+
+
+
+/// 全局状态栏「活动文档上下文段」（VSCode 式徽标 + 文档级交互控件）。
+///
+/// 由宿主（workbench）在渲染全局状态栏时对**中央活动编辑面板**调用：
+/// 纯读构造（不写 Shared / 不做 I/O），控件事件回调统一走 `panel.update`，
+/// 不会重入正在渲染的宿主。返回 `None` = 没有活动文档 / 文档已关。
+///
+/// 交互控件（编辑模式 / 重设菜单 / 事务 / 中断）自编辑器内部状态栏迁出，
+/// 数据与回调仍留在本 crate（workbench 只调用本函数，不触碰面板内部）。
+pub fn editor_global_status(
+    panel: &Entity<EditorHostPanel>,
+    cx: &App,
+) -> Option<AnyElement> {
+    let host = panel.read(cx);
+    if host.closed {
+        return None;
+    }
+    let snapshot = host.status_snapshot(cx)?;
+    let theme = cx.theme();
+    let muted = theme.colors.muted_foreground;
+    let border = theme.colors.border;
+    let panel_entity = panel.clone();
+
+    // ── 左段：连接 ▸ Schema · 通道 · 事务（SQL）/ 环境族（通用）· 未保存 · 执行中 · 消息 ──
+    let mut left_parts: Vec<String> = Vec::new();
+    if snapshot.mode == EditorMode::Sql {
+        if let Some(conn) = &snapshot.connection {
+            let mut segment = conn.clone();
+            if let Some(schema) = &snapshot.schema {
+                segment.push_str(" ▸ ");
+                segment.push_str(schema);
+            }
+            left_parts.push(segment);
+        }
+        if let Some(channel) = &snapshot.channel {
+            left_parts.push(channel.clone());
+        }
+        if let Some(tx) = &snapshot.tx {
+            left_parts.push(tx.clone());
+        }
+    } else if snapshot.mode == EditorMode::General {
+        if let Some(env) = &snapshot.env {
+            left_parts.push(env.clone());
+        }
+        if let Some(file_type) = &snapshot.file_type {
+            left_parts.push(file_type.clone());
+        }
+        if let Some(lsp) = &snapshot.lsp {
+            left_parts.push(lsp.clone());
+        }
+    }
+    if snapshot.dirty {
+        left_parts.push("未保存".to_string());
+    }
+    if snapshot.executing {
+        let running = match snapshot.elapsed {
+            Some(elapsed) => format!("执行中 {}…", status_bar::elapsed_text(elapsed)),
+            None => "执行中…".to_string(),
+        };
+        left_parts.push(running);
+    }
+    if let Some(message) = &snapshot.message {
+        left_parts.push(message.clone());
+    }
+    let left = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(muted)
+        .child(left_parts.join(" · "));
+
+    // ── 右段徽标（VSCode 式独立分段）：行-列 · 编码 · 换行 · 缩进 · 模式 · 脏 ──
+    let mut right = div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(muted);
+    let badges: Vec<(String, Option<IconName>)> = vec![
+        (
+            format!("Ln {}, Col {}", snapshot.line, snapshot.column),
+            None,
+        ),
+        (snapshot.format.encoding.short_label().to_string(), None),
+        (snapshot.format.eol.label().to_string(), None),
+        (
+            if snapshot.hard_tabs {
+                "Tab".to_string()
+            } else {
+                format!("Spaces: {}", snapshot.tab_size)
+            },
+            None,
+        ),
+        (
+            snapshot.mode.short_label().to_string(),
+            Some(crate::toolbar::mode_icon(snapshot.mode)),
+        ),
+    ];
+    for (ix, (text, icon)) in badges.iter().enumerate() {
+        if ix > 0 {
+            right = right.child(
+                div()
+                    .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT * 0.5))
+                    .w_px()
+                    .bg(border),
+            );
+        }
+        let mut content = div().h_flex().items_center().gap_0p5();
+        if let Some(icon) = icon {
+            content = content.child(Icon::new(*icon).size_3().text_color(muted));
+        }
+        content = content.child(text.clone());
+        right = right.child(content.flex_none());
+    }
+    if snapshot.dirty {
+        right = right
+            .child(div().h(rems(ui::EDITOR_STATUS_BAR_HEIGHT * 0.5)).w_px().bg(border))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(Icon::new(IconName::Circle).size_3().text_color(muted))
+                    .child("脏"),
+            );
+    }
+
+    // ── 交互控件：编辑模式 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
+    // 编辑模式（行 / 列编辑；列编辑 = 多光标）
+    let edit_mode_ctrl = {
+        let mode = host.edit_mode;
+        let entity = panel_entity.clone();
+        DropdownButton::new("editor-edit-mode")
+            .small()
+            .button(
+                Button::new("editor-edit-mode-btn")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-edit-mode".to_string())
+                    .label(format!("{} ▾", mode.short_label())),
+            )
+            .dropdown_menu(move |menu, _window, _cx| {
+                let row_entity = entity.clone();
+                let col_entity = entity.clone();
+                let row = mode == EditMode::Row;
+                let column = mode == EditMode::Column;
+                menu.item(
+                    PopupMenuItem::new("行编辑")
+                        .checked(row)
+                        .on_click(move |_, window, app| {
+                            row_entity.update(app, |panel, cx| {
+                                panel.set_edit_mode(EditMode::Row, cx);
+                            });
+                            // 切回行编辑：立即收拢多光标（走生产代码同一条 `enforce_edit_mode`）
+                            row_entity.update(app, |panel, cx| {
+                                panel.enforce_edit_mode(window, cx);
+                            });
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("列编辑")
+                        .checked(column)
+                        .on_click(move |_, _window, app| {
+                            col_entity.update(app, |panel, cx| {
+                                panel.set_edit_mode(EditMode::Column, cx);
+                            });
+                        }),
+                )
+            })
+            .into_any_element()
+    };
+    // 重设菜单（编码 / 换行 / 缩进 / 显示；缩进真改内核 TabSize，编码 / 换行只改保存契约）
+    let reset_ctrl = {
+        let current_tab = snapshot.tab_size;
+        let hard_tabs = snapshot.hard_tabs;
+        let format = snapshot.format;
+        let show_whitespaces = host.shared.document_show_whitespaces(&host.document);
+        let show_invisible = host.shared.document_show_invisible(&host.document);
+        let entity = panel_entity.clone();
+        DropdownButton::new("editor-reset-menu")
+            .small()
+            .button(
+                Button::new("editor-reset-menu-btn")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-reset-menu".to_string())
+                    .label("重设 ▾"),
+            )
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                let enc = format.encoding;
+                menu = menu
+                    .separator()
+                    .item(PopupMenuItem::new("编码").disabled(true));
+                for (label, variant) in [
+                    ("UTF-8", crate::encoding::TextEncoding::Utf8),
+                    ("UTF-8 (BOM)", crate::encoding::TextEncoding::Utf8Bom),
+                    ("GBK", crate::encoding::TextEncoding::Gbk),
+                    ("UTF-16 LE", crate::encoding::TextEncoding::Utf16Le),
+                    ("UTF-16 BE", crate::encoding::TextEncoding::Utf16Be),
+                ] {
+                    let entity = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(enc == variant)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| panel.set_encoding(variant, cx));
+                            }),
+                    );
+                }
+                let eol = format.eol;
+                let lf_entity = entity.clone();
+                let crlf_entity = entity.clone();
+                menu = menu
+                    .separator()
+                    .item(PopupMenuItem::new("换行").disabled(true))
+                    .item(
+                        PopupMenuItem::new("LF")
+                            .checked(eol == crate::encoding::LineEnding::Lf)
+                            .on_click(move |_, _, app| {
+                                lf_entity.update(app, |panel, cx| {
+                                    panel.set_eol(crate::encoding::LineEnding::Lf, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("CRLF")
+                            .checked(eol == crate::encoding::LineEnding::Crlf)
+                            .on_click(move |_, _, app| {
+                                crlf_entity.update(app, |panel, cx| {
+                                    panel.set_eol(crate::encoding::LineEnding::Crlf, cx);
+                                });
+                            }),
+                    );
+                menu = menu
+                    .separator()
+                    .item(PopupMenuItem::new("缩进").disabled(true))
+                    .item({
+                        let entity = entity.clone();
+                        PopupMenuItem::new("空格: 2")
+                            .checked(!hard_tabs && current_tab == 2)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_hard_tabs(false, cx);
+                                    panel.set_tab_size(2, cx);
+                                });
+                            })
+                    })
+                    .item({
+                        let entity = entity.clone();
+                        PopupMenuItem::new("空格: 4")
+                            .checked(!hard_tabs && current_tab == 4)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_hard_tabs(false, cx);
+                                    panel.set_tab_size(4, cx);
+                                });
+                            })
+                    })
+                    .item({
+                        let entity = entity.clone();
+                        PopupMenuItem::new("空格: 8")
+                            .checked(!hard_tabs && current_tab == 8)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.set_hard_tabs(false, cx);
+                                    panel.set_tab_size(8, cx);
+                                });
+                            })
+                    })
+                    .item({
+                        let entity = entity.clone();
+                        PopupMenuItem::new("制表符")
+                            .checked(hard_tabs)
+                            .on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| panel.set_hard_tabs(true, cx));
+                            })
+                    });
+                let ws_entity = entity.clone();
+                let inv_entity = entity.clone();
+                menu.separator()
+                    .item(PopupMenuItem::new("显示").disabled(true))
+                    .item(
+                        PopupMenuItem::new("显示空白字符")
+                            .checked(show_whitespaces)
+                            .on_click(move |_, window, app| {
+                                ws_entity.update(app, |panel, cx| {
+                                    panel.set_show_whitespaces(!show_whitespaces, window, cx);
+                                });
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("显示隐藏字符")
+                            .checked(show_invisible)
+                            .on_click(move |_, _window, app| {
+                                inv_entity.update(app, |panel, cx| {
+                                    panel.set_show_invisible(!show_invisible, cx);
+                                });
+                            }),
+                    )
+            })
+            .into_any_element()
+    };
+    // 事务（提交 / 回滚；只有会通信 + 执行器支持事务 + 通道支持事务才摆）
+    let tx_available = snapshot.connection.is_some()
+        && host.shared.has_transactions()
+        && host.channel().allows_transactions();
+    let tx_ctrl = tx_available.then(|| {
+        let mut row = div().h_flex().items_center().gap_1();
+        if host.tx_open {
+            for (action, id) in [
+                (execution::TxAction::Commit, "editor-tx-commit"),
+                (execution::TxAction::Rollback, "editor-tx-rollback"),
+            ] {
+                let entity = panel_entity.clone();
+                row = row.child(
+                    Button::new(id)
+                        .ghost()
+                        .small()
+                        .debug_selector(move || id.to_string())
+                        .label(action.label())
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.tx_action(action, cx));
+                        }),
+                );
+            }
+        }
+        row.into_any_element()
+    });
+    // 中断（B3）：只在本文档真有语句没回填时出现
+    let interrupt = host.can_interrupt().then(|| {
+        let entity = panel_entity.clone();
+        Button::new("editor-interrupt")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-interrupt".to_string())
+            .label("■ 中断")
+            .on_click(move |_, _window, app| {
+                entity.update(app, |panel, cx| panel.interrupt(cx));
+            })
+            .into_any_element()
+    });
+
+    Some(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .child(left)
+            .child(edit_mode_ctrl)
+            .child(reset_ctrl)
+            .children(tx_ctrl)
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(right)
+                    .children(interrupt),
+            )
+            .into_any_element(),
+    )
 }
