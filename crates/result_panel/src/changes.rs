@@ -168,6 +168,68 @@ impl ChangeSet {
     }
 }
 
+/// 编辑历史（撤销 / 重做栈）：记录每一步单元格编辑（DBeaver 粒度 = 每格一次编辑一步）
+///
+/// 与 [`ChangeSet`] 的区别：`ChangeSet` 是「当前待提交的变更」（同格只留最新一条），
+/// `EditHistory` 是「这格改过的每一步」（A→B→C 记三步，撤销 C 回到 B、撤销 B 回到 A）。
+/// 新编辑入栈时清空重做栈（标准撤销语义）；撤销 / 重做返回要应用的那条变更，由调用方
+/// （编辑器宿主）负责把它写回变更集并刷新网格。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EditHistory {
+    undo: Vec<CellChange>,
+    redo: Vec<CellChange>,
+}
+
+impl EditHistory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 一次编辑提交入栈（`original` = 上一步的值；新编辑清空重做栈）
+    pub fn push(&mut self, change: CellChange) {
+        self.undo.push(change);
+        self.redo.clear();
+    }
+
+    /// 撤销一步：弹出并返回「要把格子恢复成的那条变更」（`None` = 没得撤）。
+    /// 返回的变更 `original` 是上一步的值：调用方把它写回变更集（edited→original）并刷新网格。
+    pub fn undo(&mut self) -> Option<CellChange> {
+        let change = self.undo.pop()?;
+        self.redo.push(change.clone());
+        Some(change)
+    }
+
+    /// 重做一步：重新应用最近撤销的那条（`None` = 没得重做）
+    pub fn redo(&mut self) -> Option<CellChange> {
+        let change = self.redo.pop()?;
+        self.undo.push(change.clone());
+        Some(change)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// 撤销栈深度（工具栏 / 状态行指示用）
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
+
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
+    }
+
+    /// 结果集切换 / 刷新时清空：撤销历史属于「这次抓到的数据」，数据换了历史就该丢
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+}
+
 /// 批量提交生成的 UPDATE 文本（**每行一条**，只 SET 变更列）
 
 /// `commit_updates_rows` 的产物：UPDATE 文本 + 与语句顺序一一对应的行/列索引
@@ -411,5 +473,55 @@ mod tests {
         let by_row = BTreeMap::new();
         let err = commit_updates_rows("t", &key, &columns, &rows, &by_row).unwrap_err();
         assert!(err.contains("没有待提交的变更"));
+    }
+
+    #[test]
+    fn history_undo_redo_round_trips_step_by_step() {
+        let mut h = EditHistory::new();
+        // A→B→C 三步（DBeaver 粒度：每格编辑一步）
+        h.push(change(0, 1, "a", "b"));
+        h.push(change(0, 1, "b", "c"));
+        assert_eq!(h.undo_len(), 2);
+        assert!(!h.can_redo());
+
+        // 撤销 C：恢复 b
+        let step = h.undo().unwrap();
+        assert_eq!((step.original.as_str(), step.edited.as_str()), ("b", "c"));
+        assert!(h.can_redo());
+        // 撤销 B：恢复 a
+        let step = h.undo().unwrap();
+        assert_eq!((step.original.as_str(), step.edited.as_str()), ("a", "b"));
+        assert!(!h.can_undo());
+
+        // 重做 B → 重做 C（顺序复原）
+        let step = h.redo().unwrap();
+        assert_eq!(step.edited, "b");
+        let step = h.redo().unwrap();
+        assert_eq!(step.edited, "c");
+        assert!(!h.can_redo());
+    }
+
+    #[test]
+    fn a_new_edit_clears_the_redo_stack() {
+        let mut h = EditHistory::new();
+        h.push(change(0, 1, "a", "b"));
+        let _ = h.undo();
+        assert!(h.can_redo());
+        // 撤销后又改了一格：重做栈作废（标准撤销语义）
+        h.push(change(1, 2, "x", "y"));
+        assert!(!h.can_redo());
+        assert_eq!(h.undo_len(), 1);
+    }
+
+    #[test]
+    fn history_clear_drops_both_stacks() {
+        let mut h = EditHistory::new();
+        h.push(change(0, 1, "a", "b"));
+        h.push(change(1, 2, "x", "y"));
+        let _ = h.undo();
+        h.clear();
+        assert!(!h.can_undo());
+        assert!(!h.can_redo());
+        assert_eq!(h.undo_len(), 0);
     }
 }
