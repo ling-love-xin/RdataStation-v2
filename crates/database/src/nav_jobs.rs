@@ -222,6 +222,8 @@ impl SearchHit {
 pub struct SearchResult {
     /// 本批次的消费方（诊断用；分发改由槽位承担，见 [`SearchConsumer`]）。
     pub consumer: SearchConsumer,
+    /// 发起批次序号：视图侧据此丢弃**过期批次**（新一批已发出，旧批迟到覆盖）。
+    pub seq: u64,
     /// 本次搜索词；回填方据此丢弃**过期批次**（用户已经把词改了）。
     pub query: String,
     /// 实际搜了的连接数（有缓存的那些；无缓存的连接不建文件、直接跳过）。
@@ -290,6 +292,9 @@ enum Job {
         consumer: SearchConsumer,
         kind: SearchKind,
         query: String,
+        /// 发起批次序号：与视图侧 `search_seq` 配对，回填时丢弃过期批次
+        /// （同词重跑 / toggle 重排时，`query` 判据区分不了先后，seq 才能）。
+        seq: u64,
         /// 搜索框「区分大小写（`Aa`）」：名称档在 LIKE 候选上做 Rust 侧 `contains` 精筛
         /// （SQLite `LIKE` 对 ASCII 不敏感，候选是超集）。
         case_sensitive: bool,
@@ -520,6 +525,8 @@ enum Ticket {
     Search {
         consumer: SearchConsumer,
         query: String,
+        /// 发起批次序号：失败收尾也要带它，让视图侧只收**当前批次**的「搜索中」收尾。
+        seq: u64,
     },
     Warm,
 }
@@ -546,9 +553,15 @@ impl Job {
                 conn_id: conn_id.clone(),
                 name: name.clone(),
             }),
-            Job::SearchIndex { consumer, query, .. } => Some(Ticket::Search {
+            Job::SearchIndex {
+                consumer,
+                query,
+                seq,
+                ..
+            } => Some(Ticket::Search {
                 consumer: *consumer,
                 query: query.clone(),
+                seq: *seq,
             }),
             Job::Warm { .. } => Some(Ticket::Warm),
             Job::WarmCompletion { .. } => None,
@@ -625,13 +638,20 @@ fn report_failure(ticket: Ticket, reason: &str) {
                 result: Err(reason.to_string()),
             });
         }
-        Ticket::Search { consumer, query } => {
-            // 空命中 + `searched = 0`：视图侧据此把「搜索中…」收尾（与空目标同口径）
+        Ticket::Search {
+            consumer,
+            query,
+            seq,
+        } => {
+            // 空命中 + `searched = 0`：视图侧据此把「搜索中…」收尾（与空目标同口径）。
+            // seq 必须带上：过期批次的失败收尾同样要能被序号守卫丢弃，否则「搜索中…」
+            // 会被旧批次提前收掉（新批次还在跑时标题就停了）。
             s.push_search_result(
                 consumer,
                 SearchResult {
                     consumer,
                     query,
+                    seq,
                     searched: 0,
                     hits: Vec::new(),
                 },
@@ -939,6 +959,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             consumer,
             kind,
             query,
+            seq,
             case_sensitive,
             regex,
             project_root,
@@ -999,6 +1020,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 consumer,
                 SearchResult {
                     consumer,
+                    seq,
                     query,
                     searched,
                     hits,
@@ -1322,6 +1344,7 @@ pub fn push_search_results_for_test(consumer: SearchConsumer, result: SearchResu
 /// 让视图侧能把「搜索中…」收尾（否则结果区标题会一直停在那一句）。
 pub fn enqueue_search(
     consumer: SearchConsumer,
+    seq: u64,
     kind: SearchKind,
     query: &str,
     case_sensitive: bool,
@@ -1334,6 +1357,7 @@ pub fn enqueue_search(
         consumer,
         kind,
         query: query.to_string(),
+        seq,
         case_sensitive,
         regex,
         project_root: project_root.map(|s| s.to_string()),
@@ -1450,6 +1474,7 @@ mod tests {
     fn result(consumer: SearchConsumer, query: &str) -> SearchResult {
         SearchResult {
             consumer,
+            seq: 0,
             query: query.to_string(),
             searched: 1,
             hits: Vec::new(),
@@ -1814,6 +1839,7 @@ mod tests {
 
         enqueue_search(
             SearchConsumer::Panel,
+            0,
             SearchKind::Name,
             "order",
             false,

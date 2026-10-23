@@ -134,6 +134,10 @@ pub const NAV_BADGE_PULSE_MS: u64 = 1500;
 /// 逐个写会把点击响应放大成一串磁盘操作（架构 §11 #25 ① 点名的「展开态写库无防抖」）。
 /// 600ms 是「手指离开键盘就落」与「连按不写库」之间的取值。
 pub const NAV_STATE_SAVE_DEBOUNCE_MS: u64 = 600;
+/// 索引搜索的**输入防抖窗口**（毫秒）：快速连击（每个字符一次 `InputEvent::Change`）
+/// 在窗口内被合并成一次真正的搜索任务。对齐竞品取值（navop 250ms / zqlz 150ms，
+/// 见竞品分析 §5.3-A①）；250ms 是「打完一串词就出结果」与「不每键发任务」之间的取值。
+pub const NAV_SEARCH_DEBOUNCE_MS: u64 = 250;
 /// 连接行尾操作按钮尺寸（`+` 加标签 / `✎` 编辑；1.25rem = 20px）。
 ///
 /// 为何不是 16px：可点区下限按 20px 取——宿主行高只有 26px（`NAV_ROW_CONNECTION`），

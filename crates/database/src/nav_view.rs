@@ -275,6 +275,10 @@ pub struct NavViewState {
     /// 搜索**签名** =（词, 正则, 大小写）：词没变但开关变了也要重搜
     /// （旧判断只看 `search_query`，toggle 切换会被误判为“没变”而永远不重搜）。
     search_sig: Option<(String, bool, bool)>,
+    /// 索引搜索**批次序号**（运行时单调递增，不落库）：真正发起一批搜索时 `+= 1`，
+    /// 回填时与结果自带的 `seq` 比对——同词重跑 / toggle 重排时，`query` 判据区分不了
+    /// 先后（两次词相同），只有序号能保证「旧批迟到不回填」。
+    pub(crate) search_seq: u64,
     /// 索引搜索命中（跨连接；命中行进列表最前，见 `NavRow::SearchHit`）。
     search_hits: Vec<nav_jobs::SearchHit>,
     /// 上批结果实际搜了几个连接（有缓存的那些；用于结果区的“已搜 N 个连接”）。
@@ -538,6 +542,9 @@ pub struct NavView {
     nav_pending_scroll: Option<String>,
     /// 状态落库的防抖句柄（`Task` drop = 取消；被下一枚替换即重新计时）。
     state_save: RefCell<Option<Task<()>>>,
+    /// 索引搜索的防抖句柄（同一模式：250ms 无新输入才真正发任务，见
+    /// [`NavView::nav_schedule_index_search`]）。
+    search_debounce: RefCell<Option<Task<()>>>,
     /// 攒批的脏标记：展开态按连接记，面板级（选中 / 搜索词）一个布尔。
     state_dirty: RefCell<NavStateDirty>,
     /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
@@ -579,6 +586,7 @@ impl NavView {
             rows: Vec::new(),
             nav_pending_scroll: None,
             state_save: RefCell::new(None),
+            search_debounce: RefCell::new(None),
             state_dirty: RefCell::new(NavStateDirty::default()),
             list_scroll: Rc::new(VirtualListScrollHandle::new()),
             warm_poll: None,

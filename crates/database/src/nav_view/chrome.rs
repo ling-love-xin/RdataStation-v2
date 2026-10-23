@@ -27,10 +27,7 @@ impl NavView {
                         .as_ref()
                         .map(|s| s.read(cx).value().to_string())
                         .unwrap_or_default();
-                    let conn_filter =
-                        NavConnFilter::snapshot(&this.nav.borrow(), this.nav.borrow().source_filter);
-                    let conns = this.host.connections();
-                    this.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
+                    this.nav_schedule_index_search(&filter, cx);
                     this.mark_panel_state_dirty(cx);
                     cx.notify();
                 }

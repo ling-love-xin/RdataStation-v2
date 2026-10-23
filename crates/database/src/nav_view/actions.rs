@@ -181,13 +181,11 @@ impl NavView {
     /// 方向（已拍板）：搜索 / 命令这类“先输入再选”的交互后续要**独立成一个 crate**
     /// （类 VS Code 的 Quick Open / 命令面板），导航面板只保留这个“够用”版本；
     /// 新特性不要再往这里加。
-    pub(super) fn nav_schedule_index_search(
-        &self,
-        conn_filter: &NavConnFilter,
-        conns: &[ConnectionItem],
-        filter: &str,
-        cx: &mut Context<Self>,
-    ) {
+    ///
+    /// 输入**防抖**（竞品对齐，见 `ui::NAV_SEARCH_DEBOUNCE_MS` 注）：排程只做
+    /// 签名判变与「搜索中」状态置位，真正发任务放到防抖到期后（[`Self::nav_run_index_search`]）
+    /// ——快速连击在窗口内被合并，不会每键发一条索引搜索。
+    pub(super) fn nav_schedule_index_search(&self, filter: &str, cx: &mut Context<Self>) {
         let query = filter.trim().to_string();
         // 搜索签名 =（词, 正则, 大小写）：词没变但开关变了也要重搜
         // （`Aa` / `.*` toggle 切换时 query 相同，旧 `search_query` 判断会误判“没变”）。
@@ -218,10 +216,43 @@ impl NavView {
         if !started {
             return;
         }
+        // 防抖：窗口内还有新输入就把上一枚任务丢掉重新计时（`Task` drop = 取消）。
+        // 到期后才真正发任务（[`Self::nav_run_index_search`] 从状态现取词 / 筛选 /
+        // 连接——窗口内 chips 变了也吃最新）；序号在发任务时递增，连续输入只发一次。
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        let task = cx.spawn(async move |_this, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(ui::NAV_SEARCH_DEBOUNCE_MS))
+                .await;
+            let _ = weak.update(cx, |this, cx| this.nav_run_index_search(cx));
+        });
+        *self.search_debounce.borrow_mut() = Some(task);
+    }
+
+    /// 防抖到期真正发起的索引搜索：从状态现取词 / 筛选 / 连接，递增序号后入队。
+    ///
+    /// 为什么排程时不把 targets 组装好带进闭包：防抖窗口内用户可能又改了 chips /
+    /// 连接列表（排程时拍下的快照会过期），到期时现取才是用户看到的当前筛选。
+    fn nav_run_index_search(&self, cx: &mut Context<Self>) {
+        let (query, case_sensitive, regex) = {
+            let view = self.nav.borrow();
+            (
+                view.search_query.clone().unwrap_or_default(),
+                view.search_regex,
+                view.search_case_sensitive,
+            )
+        };
+        if !nav_search_query_ready(&query) {
+            return;
+        }
+        let conn_filter =
+            NavConnFilter::snapshot(&self.nav.borrow(), self.nav.borrow().source_filter);
+        let conns = self.host.connections();
         let tags = self.nav.borrow().tags.clone();
         let targets: Vec<nav_jobs::SearchTarget> = conns
             .iter()
-            .filter(|c| self.nav_conn_passes_facets(conn_filter, c, &tags))
+            .filter(|c| self.nav_conn_passes_facets(&conn_filter, c, &tags))
             .map(|c| nav_jobs::SearchTarget {
                 conn_id: c.id.clone(),
                 label: c.name.clone(),
@@ -232,8 +263,14 @@ impl NavView {
             .host
             .project_root()
             .map(|p| p.to_string_lossy().to_string());
+        let seq = {
+            let mut view = self.nav.borrow_mut();
+            view.search_seq = view.search_seq.wrapping_add(1);
+            view.search_seq
+        };
         nav_jobs::enqueue_search(
             nav_jobs::SearchConsumer::Navigator,
+            seq,
             nav_jobs::SearchKind::Name,
             &query,
             case_sensitive,
@@ -255,10 +292,7 @@ impl NavView {
             .as_ref()
             .map(|s| s.read(cx).value().to_string())
             .unwrap_or_default();
-        let conn_filter =
-            NavConnFilter::snapshot(&self.nav.borrow(), self.nav.borrow().source_filter);
-        let conns = self.host.connections();
-        self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
+        self.nav_schedule_index_search(&filter, cx);
     }
 
     /// 展开 / 折叠节点；首次展开（或已展开未加载）时排队后台懒加载，并持久化展开态。
@@ -507,6 +541,11 @@ impl NavView {
         {
             let mut view = self.nav.borrow_mut();
             for r in results {
+                // 序号守卫：这不是最新一批搜索的结果（同词重跑 / toggle 重排时旧批
+                // 迟到，`query` 判据区分不了先后）→ 整批丢弃。
+                if r.seq != view.search_seq {
+                    continue;
+                }
                 if view.search_query.as_deref() != Some(r.query.as_str()) {
                     continue;
                 }
@@ -1157,10 +1196,7 @@ impl NavView {
                     s.set_value(state.filter_text.clone(), window, cx)
                 });
                 let filter = state.filter_text.clone();
-                let conn_filter =
-                    NavConnFilter::snapshot(&self.nav.borrow(), self.nav.borrow().source_filter);
-                let conns = self.host.connections();
-                self.nav_schedule_index_search(&conn_filter, &conns, &filter, cx);
+                self.nav_schedule_index_search(&filter, cx);
             }
         }
         cx.notify();
