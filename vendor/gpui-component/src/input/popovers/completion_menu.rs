@@ -409,11 +409,11 @@ impl CompletionMenu {
         .detach();
     }
 
-    /// Sets the trigger start offset if it is not already set.
+    /// Sets the trigger start offset — 移植 tusk 补丁：总是取编辑器最新的
+    /// 词起点（光标处正在输入的那个词），而不是首个补全请求看到的起点。
+    /// 旧逻辑只记录第一次：菜单在文档中续输/移动后 Enter 会用旧起点替换错文本。
     pub(crate) fn update_query(&mut self, start_offset: usize, query: impl Into<SharedString>) {
-        if self.trigger_start_offset.is_none() {
-            self.trigger_start_offset = Some(start_offset);
-        }
+        self.trigger_start_offset = Some(start_offset);
         self.query = query.into();
     }
 
