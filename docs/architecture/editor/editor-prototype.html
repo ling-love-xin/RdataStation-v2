@@ -415,6 +415,18 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
 .exec-group .exec-main.running{background:var(--danger);color:var(--statusbar-fg);}
 .exec-group .exec-caret{background:transparent;border-radius:0;border-left:1px solid color-mix(in srgb,var(--primary-fg) 30%,transparent);color:var(--primary-fg);padding:0 7px;}
 .exec-group .exec-caret:hover{background:color-mix(in srgb,var(--primary-fg) 16%,transparent);}
+/* 执行簇第三位：新开标签执行（显式按钮，视觉并入主按钮组） */
+.exec-group .exec-newtab{background:transparent;border-radius:0;border-left:1px solid color-mix(in srgb,var(--primary-fg) 30%,transparent);color:var(--primary-fg);padding:0 8px;display:inline-flex;align-items:center;}
+.exec-group .exec-newtab:hover{background:color-mix(in srgb,var(--primary-fg) 16%,transparent);}
+/* 连接▸Schema 两级显示（工具栏 + 状态栏共用）：连接名 / 分隔符 / schema 名 */
+.sep-schema{opacity:.55;padding:0 1px;}
+.schema-name{font-weight:600;}
+.schema-name.click{cursor:pointer;}
+.schema-name.click:hover{text-decoration:underline;}
+/* 分析模式：单元执行源指示器（cell 右下角，可点击切换该单元执行源） */
+.cell-src{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:0 6px;height:18px;border-radius:4px;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--fg);cursor:pointer;}
+.cell-src:hover{background:color-mix(in srgb,var(--primary) 24%,transparent);}
+.cell-src svg{width:11px;height:11px;}
 /* 编辑区可点行（切换当前语句） */
 .code .cline{cursor:pointer;}
 .code .cline:hover .ln{color:var(--primary);}
@@ -519,6 +531,8 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></symbol>
   <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="i-newtab" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 8v8M8 12h8"/></symbol>
+  <symbol id="i-chan" viewBox="0 0 24 24"><path d="M4 7h13"/><path d="M13 4l4 3-4 3"/><path d="M20 17H7"/><path d="M11 14l-4 3 4 3"/></symbol>
 </defs></svg>
 
 <div class="page-head">
@@ -666,6 +680,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
             <span class="dot off"></span>文本模式：不与数据库通信——无连接选择器、无执行族、无结果区、无 schema 补全；状态栏也没有连接 / 事务 / 语句数（不发起任何数据库调用，含连接状态检查）
           </div>
         </div>
+        <!-- 编辑器状态栏（文本模式，上抛全局状态栏：无连接 / 事务 / 语句数，仅编辑上下文段） -->
         <div class="editor-statusbar">
           <span class="s">Ln 2, Col 12</span>
           <span class="s">选中 0 字</span>
@@ -699,11 +714,12 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
             </div>
           </div>
           <span class="tb-sep"></span>
-          <!-- 执行级（常驻）：▶ 执行 ▾ —— 主动作 = 执行当前语句，下拉 = 执行族 -->
+          <!-- 执行级（常驻）：▶ 执行 ▾ ⧉ —— 主动作 = 执行当前语句，下拉 = 执行族，⧉ = 新开标签执行（显式，目标同主按钮） -->
           <div class="menu-wrap">
             <span class="exec-group">
               <button class="tb-btn exec-main" id="execBtn"><svg class="ico-sm"><use href="#i-play"/></svg><span class="exec-lb">执行</span></button>
               <button class="tb-btn exec-caret" data-menu title="执行族：执行什么（与执行位置正交）"><span class="chev">▾</span></button>
+              <button class="tb-btn exec-newtab" id="execNewTabBtn" title="在新结果标签中执行：目标同主按钮（选区优先 → 当前语句），结果进新结果集，原结果集保留"><svg class="ico-sm"><use href="#i-newtab"/></svg></button>
             </span>
             <div class="pop">
               <div class="pop-hd">执行族（执行什么）· 与「执行位置」组合生效</div>
@@ -712,7 +728,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
               <div class="pop-item" data-exec="all">执行全部<span class="k">Ctrl+Shift+Enter</span></div>
               <div class="pop-item" data-exec="batch">批量执行（逐条独立，失败不中断）</div>
               <div class="pop-sep"></div>
-              <div class="pop-item" data-exec="newtab">在新结果标签中执行<span class="k">+1 结果集</span></div>
+              <div class="pop-item" data-exec="newtab">在新结果标签中执行<span class="k">同 ⧉ 按钮</span></div>
             </div>
           </div>
           <span class="tb-sep"></span>
@@ -734,7 +750,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
           <span class="tb-spacer"></span>
           <!-- 通道级（右对齐）：执行位置 + 连接 + 锁 -->
           <div class="menu-wrap">
-            <button class="tb-btn" data-menu title="执行位置：通道决定能力边界（写语句 / 事务 / 新鲜度）">执行位置：<span id="chanLabel">源库</span> <span class="chev">▾</span></button>
+            <button class="tb-btn" data-menu title="执行位置：通道决定能力边界（写语句 / 事务 / 新鲜度）"><svg class="ico-sm"><use href="#i-chan"/></svg><span id="chanLabel">源库</span> <span class="chev">▾</span></button>
             <div class="pop right chan-panel" id="chanMenu">
               <div class="pop-hd">执行位置（通道 · 会话/连接级，三者互斥）</div>
               <div class="pop-item" data-chan="src"><span class="dot ok"></span><span class="nm">源库直连</span><span class="k">实时</span></div>
@@ -751,12 +767,17 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
           </div>
           <span class="lock" id="lockIcon" hidden title="连接只读：写语句执行前确认或直接拒绝，状态栏事务区显示锁标记">🔒 只读连接 ⓘ</span>
           <div class="menu-wrap">
-            <button class="tb-btn" data-menu><span class="dot ok" id="connDot"></span><span id="connLabel">orders-主库</span><span class="chev">▾</span></button>
+            <button class="tb-btn" data-menu title="连接▸Schema：连接名点击下拉切连接；schema 段点击切换当前作用域（执行 / 补全 / 血缘同源）"><span class="dot ok" id="connDot"></span><span id="connLabel"><span id="connName">orders-主库</span><span class="sep-schema">▸</span><span id="connSchema" class="schema-name click">analytics</span></span><span class="chev">▾</span></button>
             <div class="pop right" id="connMenu">
               <div class="pop-hd">连接绑定（与 M3/M4 同源，带归属域短码）</div>
               <div class="pop-item on" data-conn="local"><span class="dot ok"></span>orders-主库<span class="code-tag">P</span><span class="k">MySQL</span></div>
               <div class="pop-item" data-conn="prod"><span class="dot ok"></span>生产 PG<span class="code-tag">G</span><span class="k">只读</span></div>
               <div class="pop-item" data-conn="sand"><span class="dot off"></span>沙箱 DuckDB<span class="code-tag">GP</span><span class="k">未运行</span></div>
+              <div class="pop-sep"></div>
+              <div class="pop-hd">当前 Schema（作用域：执行 / 补全 / 血缘）</div>
+              <div class="pop-item on" data-schema="analytics"><span class="nm">analytics</span><span class="k">当前作用域</span></div>
+              <div class="pop-item" data-schema="public"><span class="nm">public</span></div>
+              <div class="pop-item" data-schema="ghost"><span class="nm">ghost</span></div>
             </div>
           </div>
         </div>
@@ -865,9 +886,9 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
           <div class="res-status" id="resStatus"></div>
         </div>
 
-        <!-- ⑧ 编辑器状态栏（24px，面板内，独立于工作台状态栏） -->
+        <!-- ⑧ 编辑器状态栏（24px）→ 已上抛至全局状态栏：本段即工作台状态栏的「活动文档上下文段」（VSCode 口径：状态栏显示上下文，操作留在编辑器内） -->
         <div class="editor-statusbar">
-          <span class="s click" data-demo="连接绑定：点击可重新选择连接（行为为真实建连，同 M4「展开即建连」口径）"><span class="dot ok" id="sbConnDot"></span><span id="sbConn">orders-主库</span></span>
+          <span class="s click" data-demo="连接绑定：点击连接名可重新选择连接（行为为真实建连，同 M4「展开即建连」口径）"><span class="dot ok" id="sbConnDot"></span><span id="sbConn"><span id="sbConnName">orders-主库</span><span class="sep-schema">▸</span><span id="sbSchema" class="schema-name click" title="当前 Schema 作用域：执行 / 补全 / 血缘同源，点击切换">analytics</span></span></span>
           <span class="s" id="sbChan" title="执行通道（§5.7）：源库 = 实时可写可事务；加速 / 联邦 = ATTACH 快照副本（只读、不支持事务）"><span class="dot ok"></span>通道 源库</span>
           <span class="s" id="sbTx">TX 未开启</span>
           <span class="s-prog" id="sbProgress" hidden></span>
@@ -895,7 +916,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
           <span class="tb-sep"></span>
           <span class="tb-note">⚙ 会话：</span>
           <div class="menu-wrap">
-            <button class="tb-btn" data-menu title="会话 = 连接 + 变量空间；通道属会话（切换通道 = 会话状态变化）"><span class="dot ok" id="nbSessDot"></span><span id="nbSession">orders-主库（SQL）</span><span class="chan-tag src" id="nbChanTag">源库</span><span class="chev">▾</span></button>
+            <button class="tb-btn" data-menu title="文档默认执行源（会话 = 连接 + 变量空间）：新建单元继承此源；逐单元可在各自右下角覆盖（cell 级自选）"><span class="dot ok" id="nbSessDot"></span><span id="nbSession">orders-主库（SQL）</span><span class="chan-tag src" id="nbChanTag">源库</span><span class="chev">▾</span></button>
             <div class="pop">
               <div class="pop-hd">会话（连接 + 变量空间；切换后输出全部标 stale）</div>
               <div class="pop-item on" data-session="orders-主库（SQL）" data-sess-conn="local"><span class="dot ok"></span>orders-主库（SQL）<span class="code-tag">P</span></div>
@@ -928,6 +949,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
                 <span class="cell-meta">
                   <span class="stale-badge" title="会话变量空间已变化，输出可能过期">⚠ stale</span>
                   <span class="cell-ms">1.2s</span>
+                  <span class="cell-src" data-cellsrc="1" title="本单元执行源（cell 级自选，默认继承文档）：点击切换"><svg class="ico-sm"><use href="#i-db"/></svg>orders-主库 ▸ analytics</span>
                 </span>
               </div>
               <div class="cell-src">
@@ -968,6 +990,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
                 <span class="cell-meta">
                   <span class="stale-badge">⚠ stale</span>
                   <span class="cell-ms">0.1s</span>
+                  <span class="cell-src" data-cellsrc="2" title="本单元执行源：Markdown 无需执行源，渲染态输出"><svg class="ico-sm"><use href="#i-files"/></svg>纯文本 · Markdown</span>
                 </span>
               </div>
               <div class="cell-src">
@@ -997,6 +1020,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
                 <span class="cell-meta">
                   <span class="stale-badge">⚠ stale</span>
                   <span class="cell-ms">0.8s</span>
+                  <span class="cell-src" data-cellsrc="3" title="本单元执行源（cell 级自选）：点击切换"><svg class="ico-sm"><use href="#i-db"/></svg>orders-主库 ▸ analytics</span>
                 </span>
               </div>
               <div class="cell-src">
@@ -1024,6 +1048,7 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
                   <span class="err-badge" title="执行被拒：作用于源库对象的写语句在本地副本通道下不可执行">⚠ 错误</span>
                   <span class="stale-badge">⚠ stale</span>
                   <span class="cell-ms">0.6s</span>
+                  <span class="cell-src" data-cellsrc="4" title="本单元执行源（cell 级自选）：点击切换"><svg class="ico-sm"><use href="#i-db"/></svg>orders-主库 ▸ analytics</span>
                 </span>
               </div>
               <div class="cell-src">
@@ -1042,9 +1067,9 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
           </div>
         </div>
 
-        <!-- 分析模式状态栏 -->
+        <!-- 分析模式状态栏（上抛全局状态栏）：显示文档默认执行源（新建单元继承；逐单元实际源在各自右下角可覆盖） -->
         <div class="editor-statusbar">
-          <span class="s click" data-demo="连接绑定由会话提供（会话切换 = 变量空间变化）"><span class="dot ok" id="sbNbConnDot"></span><span id="sbNbConn">orders-主库</span></span>
+          <span class="s click" data-demo="文档默认执行源（会话 = 连接 + 变量空间）：点击可切换默认源，已运行单元输出标 stale 由单元徽标负责"><span class="dot ok" id="sbNbConnDot"></span><span id="sbNbConn"><span id="sbNbConnName">orders-主库</span><span class="sep-schema">▸</span><span id="sbNbSchema" class="schema-name click" title="文档默认 Schema 作用域：执行 / 补全 / 血缘同源">analytics</span></span></span>
           <span class="s" id="sbNbChan" title="执行通道（§5.7）：会话级属性，切换后全部单元标 stale"><span class="dot ok"></span>通道 源库</span>
           <span class="s" id="sbNbSess">会话：SQL 就绪</span>
           <span class="s" id="sbNbCells">3 单元（1 stale）</span>
@@ -1241,8 +1266,11 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
     sand:{name:'沙箱 DuckDB',driver:'DuckDB',dialect:'SQL',running:false,readonly:false,accel:'',fed:''}
   };
   var connKey='local';
+  var schemaKey='analytics';
   var connDot=document.getElementById('connDot');
   var connLabel=document.getElementById('connLabel');
+  var connName=document.getElementById('connName');
+  var connSchema=document.getElementById('connSchema');
   var connMenu=document.getElementById('connMenu');
   var chanMenu=document.getElementById('chanMenu');
   var chanLabel=document.getElementById('chanLabel');
@@ -1251,8 +1279,12 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
   var lockIcon=document.getElementById('lockIcon');
   var sbConnDot=document.getElementById('sbConnDot');
   var sbConn=document.getElementById('sbConn');
+  var sbConnName=document.getElementById('sbConnName');
+  var sbSchema=document.getElementById('sbSchema');
   var sbDialect=document.getElementById('sbDialect');
   var sbNbConn=document.getElementById('sbNbConn');
+  var sbNbConnName=document.getElementById('sbNbConnName');
+  var sbNbSchema=document.getElementById('sbNbSchema');
   var sbNbConnDot=document.getElementById('sbNbConnDot');
   var sbChan=document.getElementById('sbChan');
   var sbNbChan=document.getElementById('sbNbChan');
@@ -1311,11 +1343,11 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
   function applyConn(key,silent){
     connKey=key;
     var c=CONN[key];
-    connLabel.textContent=c.name;
+    connName.textContent=c.name;
     connDot.className='dot '+(c.running?'ok':'off');
-    sbConn.textContent=c.name;
+    sbConnName.textContent=c.name;
     sbConnDot.className='dot '+(c.running?'ok':'off');
-    sbNbConn.textContent=c.name;
+    sbNbConnName.textContent=c.name;
     sbNbConnDot.className='dot '+(c.running?'ok':'off');
     sbDialect.textContent=c.dialect;
     resConn.textContent=c.name;
@@ -1343,6 +1375,32 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
   }
   connMenu.addEventListener('click',function(e){
     var it=e.target.closest('[data-conn]');
+    if(!it){return;}
+    e.stopPropagation();
+    closeMenus();
+    applyConn(it.getAttribute('data-conn'));
+  });
+  /* 当前 Schema（作用域：执行 / 补全 / 血缘同源）：切换后同步工具栏 + SQL 状态栏 + 分析模式状态栏 */
+  function applySchema(key,silent){
+    schemaKey=key;
+    connSchema.textContent=key;
+    sbSchema.textContent=key;
+    if(sbNbSchema){sbNbSchema.textContent=key;}
+    document.querySelectorAll('#connMenu [data-schema]').forEach(function(it){
+      it.classList.toggle('on',it.getAttribute('data-schema')===key);
+    });
+    if(!silent){toast('当前 Schema 作用域已切换：'+key+'（执行 / 补全 / 血缘同源；补全缓存按 conn_id + catalog + schema 键控）');}
+  }
+  connMenu.addEventListener('click',function(e){
+    var it=e.target.closest('[data-schema]');
+    if(it){
+      e.stopPropagation();
+      closeMenus();
+      if(it.getAttribute('data-schema')===schemaKey){toast('已是当前 Schema：'+schemaKey);return;}
+      applySchema(it.getAttribute('data-schema'));
+      return;
+    }
+    it=e.target.closest('[data-conn]');
     if(!it){return;}
     e.stopPropagation();
     closeMenus();
@@ -1856,6 +1914,22 @@ svg.ico-lg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke
     if(busy){cancelRun();return;}
     runStmt(curStmt?curStmt.no:'1',false);
   });
+  /* 单元执行源指示器（cell 级）：点击演示切换（原型仅提示，实施时弹执行源选择器） */
+  document.addEventListener('click',function(e){
+    var it=e.target.closest('[data-cellsrc]');
+    if(it){
+      e.stopPropagation();closeMenus();
+      toast('本单元执行源（cell 级自选）：'+it.textContent.trim()+' · 点击将弹出执行源选择器（SQL → 连接▸Schema / Python → 环境 / Markdown → 纯文本）');
+    }
+  });
+  /* 显式「新开标签执行」按钮：目标同主按钮（选区优先 → 当前语句），结果落新结果集 */
+  var execNewTabBtn=document.getElementById('execNewTabBtn');
+  if(execNewTabBtn){execNewTabBtn.addEventListener('click',function(){
+    if(busy){toast('当前有执行在跑：先点「■ 中断」再发起新的执行');return;}
+    var keep=activeResult();
+    runStmt(curStmt?curStmt.no:'1',true);
+    toast('新开标签执行：结果落到新结果集，'+(keep?keep.label:'原结果集')+' 保持选中（与下拉「在新结果标签中执行」同一路径）');
+  });}
   document.addEventListener('click',function(e){
     var it=e.target.closest('[data-exec]');
     if(it){

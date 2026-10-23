@@ -31,7 +31,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use editor::channel::ExecChannel;
-use editor::completion::{Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort, TemplateSnippet};
+use editor::completion::{
+    filter_catalog_by_schema, Candidate, CandidateKind, Catalog, ColumnAnnotation, CompletionPort,
+    TemplateSnippet,
+};
 
 use database::cache::NavCache;
 use engine::duckdb::federation::{registry::MountedSource, session as fed_session};
@@ -192,14 +195,17 @@ impl WorkbenchCompletion {
 }
 
 impl CompletionPort for WorkbenchCompletion {
-    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel) -> Catalog {
+    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel, schema: Option<&str>) -> Catalog {
         let Some(conn_id) = conn_id else {
             // 未绑定连接：执行时跟随“当前连接”，但补全不该猜是哪条（那正是最容易给错的地方）
             return Catalog::default();
         };
         if channel != ExecChannel::Federated {
             // 源库 / 本地加速：`schema.表`（加速档不写限定名也好用，但写了更明确）
-            return self.raw(conn_id).unwrap_or_default();
+            return self
+                .raw(conn_id)
+                .map(|catalog| filter_catalog_by_schema(catalog, schema))
+                .unwrap_or_default();
         }
 
         // 联邦：只给**已挂上**的源，并按别名限定

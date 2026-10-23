@@ -279,7 +279,7 @@ impl EditorShared {
         &self,
         document: crate::model::DocumentId,
         target: &crate::execution::ExecTarget,
-        placement: crate::execution::ResultPlacement,
+        placement: crate::store::ResultPlacement,
         options: crate::execution::RunOptions,
     ) -> Result<(), crate::execution::SubmitError> {
         // 先把文档属性拷出来（不把服务层的 `Ref` 带到下面的借用里）：B1 的连接 + T2c-1 的 schema + B13 的通道
@@ -612,7 +612,7 @@ impl EditorShared {
             &crate::execution::ExecTarget::Cell(request.clone()),
             connection,
             schema,
-            crate::execution::ResultPlacement::Replace,
+            crate::store::ResultPlacement::Replace,
             crate::execution::RunOptions {
                 use_transaction: false,
             },
@@ -1166,16 +1166,20 @@ impl EditorShared {
 
     /// 某文档当前的**候选目录**（**编辑路径可调**：实现必须是内存快照；未绑定连接 = 空目录）
     pub fn completion_catalog(&self, document: &DocumentId) -> Catalog {
-        let (connection, channel) = {
+        let (connection, schema, channel) = {
             let service = self.service.borrow();
             match service.find(document) {
-                Some(doc) => (doc.connection().map(str::to_string), doc.channel()),
+                Some(doc) => (
+                    doc.connection().map(str::to_string),
+                    doc.schema().map(str::to_string),
+                    doc.channel(),
+                ),
                 None => return Catalog::default(),
             }
         };
         let port = self.completion.borrow();
         match port.as_ref() {
-            Some(port) => port.catalog(connection.as_deref(), channel),
+            Some(port) => port.catalog(connection.as_deref(), channel, schema.as_deref()),
             None => Catalog::default(),
         }
     }

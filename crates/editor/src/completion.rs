@@ -100,13 +100,40 @@ impl Catalog {
     }
 }
 
+/// 按当前 Schema 过滤目录（T2c-1 作用域：文档选了 schema，候选就别跨库漏）
+///
+/// 限定名形态 `catalog.schema.table` 或 `schema.table`：schema 是**倒数第二段**。
+/// `schema = None`（未选，用连接默认）时原样返回——不猜默认是哪个库。
+pub fn filter_catalog_by_schema(catalog: Catalog, schema: Option<&str>) -> Catalog {
+    let Some(schema) = schema.filter(|s| !s.is_empty()) else {
+        return catalog;
+    };
+    let in_schema = |label: &str| {
+        let segments: Vec<&str> = label.split('.').collect();
+        segments.len() >= 2 && segments[segments.len() - 2] == schema
+    };
+    Catalog {
+        objects: catalog
+            .objects
+            .into_iter()
+            .filter(|candidate| in_schema(&candidate.label))
+            .collect(),
+        columns: catalog
+            .columns
+            .into_iter()
+            .filter(|(table, _, _)| in_schema(table))
+            .collect(),
+        truncated: catalog.truncated,
+    }
+}
+
 /// 候选来源（宿主注入；未注入 = 只给关键字与函数——**如实不假装有元数据**）
 pub trait CompletionPort: 'static {
     /// 这条连接上的候选目录（`conn_id = None` = 未绑定 → 空目录）
     ///
     /// 实现必须**同步 + 内存**：这是编辑路径（每次按键）。真实元数据由宿主在后台预载，
     /// 没载好就返回空——**宁可这次不补，也不在按键里做 I/O**。
-    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel) -> Catalog;
+    fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel, schema: Option<&str>) -> Catalog;
 
     /// 【B9 切片二】模板片段（宿主从 `sql_template_store` 读；未接 = 空）
     ///
@@ -145,22 +172,8 @@ pub trait CompletionPort: 'static {
     }
 }
 
-/// 【P1】一列的元数据注释（结果集字段注释；`None` = 该列没有来源列 / 表列元数据缺失）
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColumnAnnotation {
-    /// 来源表（限定名 `schema.表` 或裸名；表达式列无来源 = `None`）
-    pub source_table: Option<String>,
-    /// 来源列名（表达式列无来源 = `None`）
-    pub source_column: Option<String>,
-    /// 字段注释（NavCache 列元数据；空 = 无注释）
-    pub comment: Option<String>,
-    /// 列类型（NavCache 的 `data_type`，驱动原始名；区别于渲染层的类型标签）
-    pub data_type: Option<String>,
-    /// 是否可空
-    pub nullable: Option<bool>,
-    /// 默认值
-    pub default_value: Option<String>,
-}
+/// 【P1】一列的元数据注释（下移 `workbench_shell::model`：结果面板等下沉 crate 也命名它）
+pub use workbench_shell::model::ColumnAnnotation;
 
 /// 共享句柄
 pub type CompletionHandle = Rc<dyn CompletionPort>;
@@ -562,8 +575,8 @@ fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        Candidate, CandidateKind, Catalog, Request, candidates, placeholder_range, request_at,
-        word_start,
+        Candidate, CandidateKind, Catalog, Request, candidates, filter_catalog_by_schema,
+        placeholder_range, request_at, word_start,
     };
 
     /// 光标放在句尾：`request_at(&format!("{sql}|"), sql.len())` 的简写
@@ -775,5 +788,39 @@ mod tests {
         assert_eq!(placeholder_range("SELECT 1;"), None);
         // 只认第一个：替换一个就够，剩下的交给用户
         assert_eq!(placeholder_range("{table} {table}"), Some((0, 7)));
+    }
+
+    /// 【T2c-1 作用域】按当前 Schema 过滤目录：限定名倒数第二段匹配，
+    /// 未选 schema 原样放行（不猜默认库）
+    #[test]
+    fn schema_filter_keeps_only_the_current_schema() {
+        let catalog = Catalog {
+            objects: vec![
+                Candidate::new("public.orders", CandidateKind::Table),
+                Candidate::new("analytics.orders", CandidateKind::Table),
+                Candidate::new("analytics.customers", CandidateKind::View),
+                Candidate::new("orders", CandidateKind::Table), // 裸表名：不在任何 schema 段下
+            ],
+            columns: vec![
+                ("public.orders".to_string(), "id".to_string(), None),
+                ("analytics.orders".to_string(), "total".to_string(), None),
+            ],
+            truncated: false,
+        };
+
+        // 未选 schema：原样（对象与列一条不少）
+        let untouched = filter_catalog_by_schema(catalog.clone(), None);
+        assert_eq!(untouched.objects.len(), 4);
+        assert_eq!(untouched.columns.len(), 2);
+
+        // 选 analytics：只留 schema 段 = analytics 的对象与列
+        let filtered = filter_catalog_by_schema(catalog, Some("analytics"));
+        assert_eq!(filtered.objects.len(), 2, "analytics.orders + analytics.customers");
+        assert!(filtered
+            .objects
+            .iter()
+            .all(|c| c.label.starts_with("analytics.")));
+        assert_eq!(filtered.columns.len(), 1, "analytics.orders.total");
+        assert_eq!(filtered.columns[0].0, "analytics.orders");
     }
 }

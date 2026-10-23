@@ -41,7 +41,7 @@ use crate::commands::{
 };
 use crate::diagnostics;
 use crate::edit;
-use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
+use crate::execution::{self, ExecMenuKind, ExecTarget};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
 use crate::language_service;
@@ -52,7 +52,8 @@ use crate::service::Document;
 use crate::shared::{EditorShared, InsightColumnRequest};
 use crate::sources;
 use crate::completion::ColumnAnnotation;
-use crate::store::ResultEntry;
+// 【下移】结果放置 / 下发原料定义已随结果存储搬到 rds-result-panel（经 crate::store 重导出）
+use crate::store::{Pushdown, ResultEntry, ResultPlacement};
 use crate::translate;
 use crate::ui;
 use crate::view::completion;
@@ -229,6 +230,11 @@ pub struct EditorHostPanel {
     result_tabs_scroll: ScrollHandle,
     /// 当前选中的结果集下标（标签条的选中态）
     result_active: usize,
+    /// 【并排对比】对比模式开关（面板内存态）：开启后结果区双栏并排
+    /// （左栏 = 主选中 `result_active`，右栏 = 对比选中，经 `ResultStore::compare_*`）
+    compare_mode: bool,
+    /// 【并排对比】对比栏的网格（第二份结果集的 delegate；惰性创建，面板生命周期内复用）
+    compare_grid: Option<Entity<TableState<ResultGridDelegate>>>,
     /// 【B5】当前选中结果集的 SQL（工具栏「刷新」重跑它；`None` = 无可重跑的东西）
     result_sql: Option<String>,
     /// 【B15】当前选中结果是**本地分析**的产物（不摆“刷新”：重跑它没有意义）
@@ -480,6 +486,13 @@ impl EditorHostPanel {
         // 结果网格：构造时一次建成，以后结果变化只 `refresh`（不重建，避免丢掉列宽 / 滚动位置）
         let grid = result_grid::new_table_state(
             ResultGridDelegate::empty("尚未执行——按 Ctrl+Enter 执行当前语句"),
+            window,
+            cx,
+        );
+        // 【并排对比】对比栏网格：与主网格同处一次建成（复用一个实体，结果变化只 refresh）。
+        // 只在对比模式渲染；数据经 `sync_compare_grid` 从 ResultStore 拷入。
+        let compare_grid = result_grid::new_table_state(
+            ResultGridDelegate::empty("未选择对比结果"),
             window,
             cx,
         );
@@ -740,6 +753,8 @@ impl EditorHostPanel {
             result_tabs: Vec::new(),
             result_tabs_scroll: ScrollHandle::default(),
             result_active: 0,
+            compare_mode: false,
+            compare_grid: Some(compare_grid),
             result_sql: None,
             result_is_analysis: false,
             result_can_copy: false,
@@ -1544,7 +1559,9 @@ impl EditorHostPanel {
             .ghost()
             .small()
             .debug_selector(|| "editor-channel".to_string())
-            .label(format!("执行位置：{} ▾", current.label()))
+            // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
+            .icon(IconName::Locate)
+            .label(format!("{} ▾", current.label()))
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
                 // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
@@ -3154,11 +3171,20 @@ impl EditorHostPanel {
         let bound = self
             .with_document(|doc| doc.connection().map(str::to_string))
             .flatten();
+        // 连接 ▸ 当前 Schema（对齐状态栏面包屑：schema 未选不占段，零 UI 造数据）
+        let schema = self
+            .with_document(|doc| doc.schema().map(str::to_string))
+            .flatten();
         let label = match self.shared.connection_chip(bound.as_deref()) {
-            Some(chip) => format!("{} ▾", chip.text()),
+            Some(chip) => match schema.as_deref() {
+                Some(s) => format!("{} ▸ {} ▾", chip.text(), s),
+                None => format!("{} ▾", chip.text()),
+            },
             None => "未绑定连接 ▾".to_string(),
         };
         let current = bound.clone();
+        let current_schema = schema.clone();
+        let schemas = self.shared.schemas(bound.as_deref());
 
         Button::new("editor-connection")
             .ghost()
@@ -3195,6 +3221,32 @@ impl EditorHostPanel {
                             });
                         },
                     ));
+                }
+                // 【T2c-1 扩展】当前 Schema（作用域：执行 / 补全 / 血缘同源）：切换写回文档绑定
+                if !schemas.is_empty() {
+                    menu = menu.separator().item(
+                        PopupMenuItem::new("当前 Schema（作用域：执行 / 补全 / 血缘）").disabled(true),
+                    );
+                    for item in schemas.iter() {
+                        let entity = entity.clone();
+                        let schema_name = item.schema.clone();
+                        let is_current = current_schema.as_deref() == Some(schema_name.as_str());
+                        menu = menu.item(
+                            PopupMenuItem::new(schema_name.clone())
+                                .checked(is_current)
+                                .on_click(move |_, _window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.set_schema(Some(schema_name.clone()), cx);
+                                    });
+                                }),
+                        );
+                    }
+                    let entity = entity.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("使用连接默认").on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.set_schema(None, cx));
+                        }),
+                    );
                 }
                 menu
             })
@@ -3271,6 +3323,9 @@ impl EditorHostPanel {
             crate::toolbar::ToolbarItemId::ExecBatch => self
                 .render_exec_kind_button(id, ExecMenuKind::Batch, cx)
                 .into_any_element(),
+            crate::toolbar::ToolbarItemId::ExecNewSet => self
+                .render_exec_kind_button(id, ExecMenuKind::NewSet, cx)
+                .into_any_element(),
             crate::toolbar::ToolbarItemId::Explain => {
                 self.render_explain_button(cx).into_any_element()
             }
@@ -3337,7 +3392,8 @@ impl EditorHostPanel {
             crate::toolbar::ToolbarItemId::ExecCurrent => "editor-exec-current",
             crate::toolbar::ToolbarItemId::ExecSelection => "editor-exec-selection",
             crate::toolbar::ToolbarItemId::ExecBatch => "editor-exec-batch",
-            _ => unreachable!("执行族显式目标按钮只有这三种"),
+            crate::toolbar::ToolbarItemId::ExecNewSet => "editor-exec-newset",
+            _ => unreachable!("执行族显式目标按钮只有这四种"),
         };
         Button::new(selector)
             .ghost()
@@ -3380,6 +3436,7 @@ impl EditorHostPanel {
                 self.render_exec_kind_button(head, ExecMenuKind::Selection, cx)
             }
             ToolbarItemId::ExecBatch => self.render_exec_kind_button(head, ExecMenuKind::Batch, cx),
+            ToolbarItemId::ExecNewSet => self.render_exec_kind_button(head, ExecMenuKind::NewSet, cx),
             ToolbarItemId::Explain => self.render_explain_button(cx),
             // 折叠组头只放纯按钮：下拉菜单由 DropdownButton 的 ▾ 半区提供，
             // 完整「方言转换 ▾ / 模板 ▾」本体见 render_translate_button / render_template_button
@@ -4188,6 +4245,7 @@ impl EditorHostPanel {
             ToolbarItemId::ExecCurrent => self.execute_menu_kind(ExecMenuKind::CurrentStatement, cx),
             ToolbarItemId::ExecSelection => self.execute_menu_kind(ExecMenuKind::Selection, cx),
             ToolbarItemId::ExecBatch => self.execute_menu_kind(ExecMenuKind::Batch, cx),
+            ToolbarItemId::ExecNewSet => self.execute_menu_kind(ExecMenuKind::NewSet, cx),
             ToolbarItemId::Format => self.format_document(window, cx),
             // Explain / Translate / Template / TxAutoCommit / History 是带下拉的文档级
             // 按钮（`dropdown_menu` 回调内直接调方法，不走这条兜底）；折叠菜单只收执行族
@@ -4791,7 +4849,7 @@ impl EditorHostPanel {
     fn tx_text(&self) -> String {
         match (self.tx_open, self.tx_since) {
             (true, Some(since)) => {
-                format!("TX 已开启 {}", status_bar::elapsed_text(since.elapsed()))
+                format!("TX 已开启 {}", result_panel::status::elapsed_text(since.elapsed()))
             }
             (true, None) => "TX 已开启".to_string(),
             (false, _) => "TX 未开启".to_string(),
@@ -4944,6 +5002,19 @@ impl EditorHostPanel {
     pub fn grid_row_count_for_test(&self, cx: &App) -> usize {
         // 【B15】看的是**视图行数**：筛选生效时网格里就是命中那些行
         self.grid.read(cx).delegate().visible_row_count()
+    }
+
+    /// 【并排对比】对比模式开关（供测试断言开关真的翻转）
+    pub fn compare_mode_for_test(&self) -> bool {
+        self.compare_mode
+    }
+
+    /// 【并排对比】对比栏网格当前行数（供测试断言右栏真的拿到了数据）
+    pub fn compare_grid_rows_for_test(&self, cx: &App) -> usize {
+        self.compare_grid
+            .as_ref()
+            .map(|grid| grid.read(cx).delegate().visible_row_count())
+            .unwrap_or(0)
     }
 
     /// 网格实体（测试用：滚动到底自动加载得真在表格上调 `load_more` 才算验到链路）
@@ -5656,6 +5727,101 @@ impl EditorHostPanel {
             None => error,
         });
         self.set_message(message, cx);
+
+        // 【并排对比】结果变化（替换 / 追加 / 选中切换）后，对比栏网格跟着同步
+        self.sync_compare_grid(cx);
+    }
+
+    /// 【并排对比】把对比选中的那份结果拷进对比栏网格（只读对照：不接编辑 / 取段 /
+    /// 筛选 / 洞察——那些动作都作用于主栏，对比栏只负责把数据摆出来比）
+    fn sync_compare_grid(&mut self, cx: &mut Context<Self>) {
+        let Some(grid) = self.compare_grid.clone() else {
+            return;
+        };
+        let payload = {
+            let store = self.shared.results();
+            store.compare_entry(&self.document).map(|entry| {
+                (
+                    entry.has_grid(),
+                    entry.columns.clone(),
+                    entry.rows.clone(),
+                    entry.column_types.clone(),
+                    entry.column_annotations.clone(),
+                )
+            })
+        };
+        grid.update(cx, |state, cx| {
+            match payload {
+                Some((true, columns, rows, types, annotations)) => {
+                    state.delegate_mut().set_data(columns, rows);
+                    state.delegate_mut().set_column_types(types);
+                    state.delegate_mut().set_column_annotations(annotations);
+                    // 对比栏只读：类型照摆（表头要看），但编辑 / 取段 / 洞察的语义
+                    // 都归主栏，这里一律不给
+                    state.delegate_mut().set_editable(false);
+                    state.delegate_mut().set_has_more(false);
+                    state.delegate_mut().set_loading_more(false);
+                    state.delegate_mut().set_insight_available(false);
+                }
+                // 对比条目还没有网格数据（未执行 / 已失效）：空态提示，不假装有内容
+                Some((false, _, _, _, _)) => state.delegate_mut().clear("未选择对比结果"),
+                None => state.delegate_mut().clear("未选择对比结果"),
+            }
+            state.refresh(cx);
+        });
+    }
+
+    /// 【并排对比】工具栏开关：开 = 结果区双栏并排（左主选中 / 右对比选中）
+    ///
+    /// 开启时若还没有对比对象，自动选「除主选中外最近一份」——用户开开关就想看到
+    /// 两个东西并排，不让它开在一个空右栏上。关闭则右栏消失、对比选中清掉
+    /// （下次开对比重新选）。
+    pub fn toggle_compare_mode(&mut self, cx: &mut Context<Self>) {
+        self.compare_mode = !self.compare_mode;
+        if self.compare_mode {
+            let needs_default = {
+                let store = self.shared.results();
+                store.compare_index(&self.document).is_none()
+                    && store.set_count(&self.document) >= 2
+            };
+            if needs_default {
+                // fallback 计算包进块：store 的只读 Ref 在块内 drop，
+                // 下面的 update_results（borrow_mut）才不会撞 borrow
+                let fallback = {
+                    let store = self.shared.results();
+                    let active = store.active_index(&self.document).unwrap_or(0);
+                    let sets = store.sets(&self.document);
+                    (0..sets.len()).rev().find(|index| *index != active)
+                };
+                if let Some(index) = fallback {
+                    self.shared.update_results(|store| {
+                        store.select_compare(&self.document, index);
+                    });
+                }
+            }
+            // 对比模式开着就得有第二个网格（构造期已建好；数据同步走 sync_compare_grid）
+            self.sync_compare_grid(cx);
+        } else {
+            // 关闭对比：右栏不画了，对比选中一并清掉
+            let index = self.shared.results().compare_index(&self.document);
+            if let Some(index) = index {
+                self.shared.update_results(|store| {
+                    store.toggle_compare(&self.document, index);
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// 【并排对比】右栏标签条点选：换对比对象（点当前对比项 = 取消对比）
+    pub fn select_compare_set(&mut self, index: usize, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .update_results(|store| store.toggle_compare(&self.document, index));
+        if changed {
+            self.sync_compare_grid(cx);
+            cx.notify();
+        }
     }
 
     /// 【B6】把出错范围画进编辑内核（行内高亮 + 悬停弹层；没有位置就只清旧的）
@@ -5866,14 +6032,14 @@ impl EditorHostPanel {
         // 【A2】保持形态：下发筛选 / 排序下发的结果集带当初的原料重查（不退回全量）；
         // 普通执行 = 原 SQL 重跑。
         let target = match entry.pushdown.clone() {
-            Some(execution::Pushdown::Filtered { filter, columns }) => {
+            Some(Pushdown::Filtered { filter, columns }) => {
                 ExecTarget::Filtered {
                     sql: entry.sql.clone(),
                     filter,
                     columns,
                 }
             }
-            Some(execution::Pushdown::SortedDown {
+            Some(Pushdown::SortedDown {
                 column,
                 descending,
             }) => ExecTarget::SortedDown {
@@ -7697,6 +7863,7 @@ impl Render for EditorHostPanel {
                         controls: result_grid::ResultControls {
                             filter: Some(filter.into_any_element()),
                             transpose: None,
+                            compare: None,
                             commit: None,
                             analysis: None,
                             copy: Some(copy),
@@ -7820,6 +7987,23 @@ impl Render for EditorHostPanel {
                     .child(prev)
                     .child(toggle)
                     .child(next)
+                    .into_any_element()
+            });
+
+            // 【并排对比】工具栏开关：两份以上结果才摆（一份结果没有可比的；对比栏
+            // 数据只读，编辑 / 取段 / 洞察等动作仍只作用于主栏）
+            let compare = (self.result_tabs.len() >= 2).then(|| {
+                let entity = cx.entity();
+                Button::new("editor-result-compare")
+                    .ghost()
+                    .small()
+                    .toggled(self.compare_mode)
+                    .icon(IconName::Columns2)
+                    .tooltip("并排对比")
+                    .debug_selector(|| "editor-result-compare".to_string())
+                    .on_click(move |_, _window, app| {
+                        entity.update(app, |panel, cx| panel.toggle_compare_mode(cx));
+                    })
                     .into_any_element()
             });
 
@@ -8090,6 +8274,7 @@ impl Render for EditorHostPanel {
                     controls: result_grid::ResultControls {
                         filter: Some(filter),
                         transpose,
+                        compare,
                         commit,
                         analysis,
                         copy,
@@ -8106,6 +8291,105 @@ impl Render for EditorHostPanel {
             .into_any_element()
             })
         };
+
+        // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
+        // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据来自 ResultStore 的
+        // 对比项，经 `sync_compare_grid` 提前拷进 `compare_grid`（render 只读网格状态）。
+        // 右栏不接 filter/transpose/commit/analysis/export/refresh/more——那些动作的
+        // 语义都归主栏，并排对照不需要第二套动作。
+        let result_pane = result_pane.map(|main| {
+            if !self.compare_mode {
+                return main;
+            }
+            let compare_tabs = (self.result_tabs.len() >= 2).then(|| {
+                let entity = cx.entity();
+                let compare_active = self
+                    .shared
+                    .results()
+                    .compare_index(&self.document)
+                    .unwrap_or(0);
+                result_sets::render(
+                    &self.result_tabs,
+                    compare_active,
+                    move |index, _window, app| {
+                        let index = *index;
+                        entity.update(app, |panel, cx| panel.select_compare_set(index, cx));
+                    },
+                    cx,
+                    &self.result_tabs_scroll,
+                )
+                .into_any_element()
+            });
+            // 对比栏的工具栏 / 状态行：render 期现投影（纯计算，与主栏 sync_result_view
+            // 的投影同口径；只读，`filtered` / 选中行这些互动真值不需要）
+            let results_store = self.shared.results();
+            let compare_entry = results_store.compare_entry(&self.document);
+            let connection = compare_entry.and_then(|entry| {
+                entry
+                    .connection
+                    .as_deref()
+                    .map(|id| self.shared.connection_status_text(Some(id)))
+            });
+            let compare_toolbar = compare_entry.map(|entry| ResultToolbar {
+                rows: entry.has_grid().then(|| entry.row_count()),
+                affected_rows: entry.affected_rows,
+                failed: entry.failed(),
+                elapsed_ms: Some(entry.elapsed_ms),
+                connection,
+                lineage: entry.title.clone().or_else(|| entry.lineage.clone()),
+                filtered: None,
+            });
+            let compare_status = compare_entry
+                .filter(|entry| entry.has_grid())
+                .map(|entry| ResultStatus {
+                    total_rows: entry.row_count(),
+                    selected_row: None,
+                    truncated_hint: entry
+                        .truncated
+                        .then(|| result_grid::truncated_hint(entry.row_count())),
+                    has_more: false,
+                });
+            let compare_grid = self.compare_grid.clone().expect("构造期已建");
+            let compare_pane = result_grid::render(
+                &compare_grid,
+                result_grid::ResultPane {
+                    toolbar: compare_toolbar.unwrap_or_default(),
+                    status: compare_status,
+                    controls: result_grid::ResultControls::default(),
+                    card: None,
+                    tabs: compare_tabs,
+                    notice: None,
+                },
+                cx,
+            )
+            .into_any_element();
+            // 双栏：中间一条竖分隔线（结构元素用 `ui::HAIRLINE`），两栏各占一半
+            div()
+                .h_flex()
+                .items_stretch()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                // 测试按选择器断言“对比模式双栏在不在”
+                .debug_selector(|| "editor-result-compare-layout".to_string())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .border_r(ui::HAIRLINE)
+                        .child(main),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .debug_selector(|| "editor-result-compare-pane".to_string())
+                        .child(compare_pane),
+                )
+                .into_any_element()
+        });
 
         // 编辑区 + 结果区：下半区可拖拽改高（原型 §2.1 ④ 分隔条；拖动条是组件库的
         // `ResizablePanel`，不手搓鼠标拖拽）。没有结果时只有一个面板，编辑区独占。

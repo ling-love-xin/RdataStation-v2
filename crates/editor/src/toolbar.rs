@@ -48,6 +48,9 @@ pub enum ToolbarItemId {
     ExecSelection,
     /// 批量执行（原型 `runBatchBtn`，默认隐藏）
     ExecBatch,
+    /// 【原型 §2.2 修订】新开标签执行：目标同主按钮（选区优先 → 当前语句），结果落**新结果集**；
+    /// 显式常驻按钮（⧉），与下拉「在新结果标签中执行」同一路径
+    ExecNewSet,
     /// 【原型 §2.2 分析组】执行计划（EXPLAIN）：常驻按钮（2026-10-11 提升常驻，不再进"更多"）
     Explain,
     /// 【原型 §2.2 分析组】方言转换：常驻按钮（目标方言列表；源方言已知排除自身）
@@ -70,6 +73,7 @@ impl ToolbarItemId {
         Self::ExecCurrent,
         Self::ExecSelection,
         Self::ExecBatch,
+        Self::ExecNewSet,
         Self::Explain,
         Self::Translate,
         Self::Template,
@@ -86,6 +90,7 @@ impl ToolbarItemId {
             Self::ExecCurrent => "执行当前语句",
             Self::ExecSelection => "执行选区",
             Self::ExecBatch => "批量执行",
+            Self::ExecNewSet => "在新结果标签中执行",
             Self::Explain => "执行计划",
             Self::Translate => "方言转换",
             Self::Template => "模板",
@@ -103,6 +108,7 @@ impl ToolbarItemId {
             Self::ExecCurrent => IconName::Play,
             Self::ExecSelection => IconName::Square,
             Self::ExecBatch => IconName::Menu,
+            Self::ExecNewSet => IconName::SquarePlus,
             Self::Explain => IconName::Braces,
             Self::Translate => IconName::ArrowRightLeft,
             Self::Template => IconName::FilePlus,
@@ -119,6 +125,7 @@ impl ToolbarItemId {
             self,
             Self::ExecRun
                 | Self::ExecAll
+                | Self::ExecNewSet
                 | Self::Explain
                 | Self::Translate
                 | Self::Template
@@ -209,6 +216,10 @@ impl ToolbarLayout {
                 ToolbarSlot::Item {
                     id: ToolbarItemId::ExecBatch,
                     visible: false,
+                },
+                ToolbarSlot::Item {
+                    id: ToolbarItemId::ExecNewSet,
+                    visible: true,
                 },
                 ToolbarSlot::Separator,
                 ToolbarSlot::Item {
@@ -592,6 +603,10 @@ mod tests {
         assert!(!layout.is_visible(ToolbarItemId::ExecCurrent));
         assert!(!layout.is_visible(ToolbarItemId::ExecSelection));
         assert!(!layout.is_visible(ToolbarItemId::ExecBatch));
+        assert!(
+            layout.is_visible(ToolbarItemId::ExecNewSet),
+            "新开标签执行 = 显式常驻按钮"
+        );
         // 原型 §2.2：分析组 / 事务开关 / 文档级常驻（2026-10-11 修订，不再进"更多"）
         assert!(layout.is_visible(ToolbarItemId::Explain));
         assert!(layout.is_visible(ToolbarItemId::Translate));
@@ -611,6 +626,7 @@ mod tests {
                 ToolbarItemId::ExecCurrent,
                 ToolbarItemId::ExecSelection,
                 ToolbarItemId::ExecBatch,
+                ToolbarItemId::ExecNewSet,
             ]
         );
         assert!(groups[0].tail_separator, "执行簇与分析组之间有一条分隔符");
@@ -735,8 +751,8 @@ mod tests {
         );
         assert_eq!(
             groups[0].visible_items(&layout),
-            vec![ToolbarItemId::ExecRun],
-            "工具栏只渲染可见成员"
+            vec![ToolbarItemId::ExecRun, ToolbarItemId::ExecNewSet],
+            "工具栏只渲染可见成员（隐藏执行全部后，执行 + 新标签仍可见）"
         );
     }
 
@@ -822,7 +838,7 @@ mod tests {
         let code = layout.encode();
         assert_eq!(
             code,
-            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History",
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,History",
             "默认布局的编码应稳定可读"
         );
         let back = ToolbarLayout::decode(&code).expect("默认布局必可解码");
@@ -851,7 +867,7 @@ mod tests {
         // 缺一项
         assert_eq!(
             ToolbarLayout::decode(
-                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format"
+                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format"
             ),
             None,
             "缺项：历史不在"
@@ -859,7 +875,7 @@ mod tests {
         // 重复项
         assert_eq!(
             ToolbarLayout::decode(
-                "ExecRun,ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
+                "ExecRun,ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
             ),
             None,
             "重复项"
@@ -867,7 +883,7 @@ mod tests {
         // 未知 id
         assert_eq!(
             ToolbarLayout::decode(
-                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,Nope"
+                "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,Nope"
             ),
             None,
             "未知 id"
@@ -881,13 +897,13 @@ mod tests {
     /// 【T2c-6】折叠段只收真实组头：脏键解码后不产生折叠（不报错、不丢布局）
     #[test]
     fn decode_drops_folded_keys_that_are_not_group_heads() {
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;TxAutoCommit";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;TxAutoCommit";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
         // TxAutoCommit 是末组组头：折叠应保留
         assert!(layout.is_collapsed(ToolbarItemId::TxAutoCommit));
 
         // ExecCurrent 是组内成员不是组头：折叠键被丢
-        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;ExecCurrent";
+        let code = "ExecRun,ExecAll,ExecCurrent,ExecSelection,ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,History;ExecCurrent";
         let layout = ToolbarLayout::decode(code).expect("折叠脏键不影响布局解码");
         assert!(!layout.is_collapsed(ToolbarItemId::ExecCurrent));
         assert_eq!(layout.folded, Vec::new());

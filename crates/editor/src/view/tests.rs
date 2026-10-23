@@ -1439,6 +1439,151 @@ fn a_batch_lands_three_statements_in_three_result_sets(cx: &mut TestAppContext) 
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+// ===== 【并排对比】双栏并排 =====
+
+/// 两份以上结果 → 开对比模式：双栏并排，右栏自动选中「除主选中外最近一份」
+#[gpui_kit::test]
+fn compare_mode_shows_two_side_by_side_panes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id) = shared_with_sized_runner("select rows=1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 跑三份结果（第一份替换、后两份追加），主选中保持第 0 份
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx)));
+    wait_for_result(cx, &panel);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("select rows=3".to_string()),
+                execution::ResultPlacement::NewSet,
+                cx,
+            )
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("select rows=5".to_string()),
+                execution::ResultPlacement::NewSet,
+                cx,
+            )
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(result_tabs(cx, &panel).len(), 3, "三份结果齐了");
+
+    // 开对比（驱动入口；按钮接线由真机 / 选择器验证，headless 下直接走入口）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()),
+        "开关已开"
+    );
+    assert_eq!(
+        shared.results().compare_index(&id),
+        Some(2),
+        "自动选了除主选中（0）外最近一份（2）"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
+        5,
+        "对比栏摆上了第三份的数据"
+    );
+    assert_eq!(grid_rows(cx, &panel), 1, "主栏还是第一份");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 切主选中到第二份：对比对象不变（对比是显式选择，不随主选中切换）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(1, cx)));
+    assert_eq!(
+        shared.results().compare_index(&id),
+        Some(2),
+        "对比对象不跟着主选中走"
+    );
+    assert_eq!(grid_rows(cx, &panel), 3, "主栏切到第二份");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 右栏标签条换对比对象：点某份 = 切过去；点当前对比项 = 取消对比
+#[gpui_kit::test]
+fn compare_pane_pick_switches_or_clears_the_compare_set(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id) = shared_with_sized_runner("select rows=1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx)));
+    wait_for_result(cx, &panel);
+    for sql in ["select rows=3", "select rows=5"] {
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.execute(
+                    execution::ExecTarget::Statement(sql.to_string()),
+                    execution::ResultPlacement::NewSet,
+                    cx,
+                )
+            })
+        });
+        wait_for_all_pending(cx, &panel);
+    }
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
+    assert_eq!(shared.results().compare_index(&id), Some(2));
+
+    // 右栏标签条点第二份：对比对象切过去（行数跟着换）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(1, cx)));
+    assert_eq!(shared.results().compare_index(&id), Some(1), "切到第二份");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
+        3
+    );
+
+    // 再点当前对比项：取消对比（右栏回空态，但对比模式还开着）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_compare_set(1, cx)));
+    assert_eq!(shared.results().compare_index(&id), None, "再点 = 取消");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).compare_grid_rows_for_test(cx)),
+        0,
+        "右栏回到空态"
+    );
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()),
+        "对比模式本身还开着"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 关闭对比：开关复位、对比选中清掉、右栏消失
+#[gpui_kit::test]
+fn closing_compare_mode_resets_the_switch_and_clears_the_compare_set(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id) = shared_with_sized_runner("select rows=1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx)));
+    wait_for_result(cx, &panel);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("select rows=3".to_string()),
+                execution::ResultPlacement::NewSet,
+                cx,
+            )
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
+    assert!(cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()));
+    assert_eq!(shared.results().compare_index(&id), Some(1));
+
+    // 关掉：开关复位、对比选中清掉（下次开对比重新选）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_compare_mode(cx)));
+    assert!(!cx.update(|_window, cx| panel.read(cx).compare_mode_for_test()));
+    assert_eq!(shared.results().compare_index(&id), None, "对比选中跟着清掉");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
 /// 「在新结果标签中执行」：新结果放旁边，**原结果集仍选中**（原型 §4.4）
 #[gpui_kit::test]
 fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContext) {
@@ -6101,7 +6246,7 @@ fn the_toolbar_layout_rides_along_with_the_session(cx: &mut TestAppContext) {
     assert_eq!(
         snapshot.toolbar.as_deref(),
         Some(
-            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
+            "ExecRun,ExecAll,~ExecCurrent,~ExecSelection,~ExecBatch,ExecNewSet,|,Explain,Translate,Template,|,TxAutoCommit,Format,History"
         ),
         "快照携带默认布局的编码串"
     );
@@ -6354,7 +6499,12 @@ struct FakeCompletion {
 }
 
 impl crate::completion::CompletionPort for FakeCompletion {
-    fn catalog(&self, conn_id: Option<&str>, _channel: ExecChannel) -> Catalog {
+    fn catalog(
+        &self,
+        conn_id: Option<&str>,
+        _channel: ExecChannel,
+        _schema: Option<&str>,
+    ) -> Catalog {
         // 与真实实现同一口径：未绑定连接不给候选
         match conn_id {
             Some(_) => self.catalog.clone(),
