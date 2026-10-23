@@ -134,6 +134,33 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 
 对比模式 = 双栏各一份；主栏保留全部动作，对比栏只读。
 
+### 6.1 DBeaver 风格网格细节（2026-10-24 补充，对齐 8.7 ①）
+
+网格视觉逐项（`#` 行号列 · 焦点格粗边框 · 选中行/列高亮 · 排序指示 · NULL 灰斜体 · 状态行当前格）：
+
+```
+┌───────┬────────────────┬────────────────┬───────────────┐
+│  #    │  id ▾          │  name          │  payload      │  ← 列头：名称+类型小标签+排序▾
+├───────┼────────────────┼────────────────┼───────────────┤
+│  1    │  101           │  Alice         │  BLOB · 1.2K  │  ← 普通格
+│  2    │  102           │  NULL          │  NULL         │  ← NULL 灰斜体（与字符串区分）
+│  3    │  103           │  Bob           │  _binary…     │
+├┼──────┼────────────────┼────────────────┼───────────────┤
+│  4    │ ░104░          │ ░Carol░        │ ░…░           │  ← 焦点格：粗边框(2px)+高亮
+└───────┴────────────────┴────────────────┴───────────────┘
+状态行：共 4 行 · 当前格「104」          已选第 4 行  取下一段
+```
+
+要点：
+
+- **行号列**：面板自有 `#` 列（灰字），组件行头关闭；行号随行高，无数据语义
+- **焦点格**：选中格 = `table_active` 背景 + 2px `table_active_border` 粗边框（组件补丁，见 §8.7 ①）；
+  行选中 = 整行 `table_hover` 底；列选中 = 整列 `table_active` 底（组件原生）
+- **排序指示**：组件内置（`Column.sort` → `render_sort_icon`），列头下拉「按此列排序」走右键菜单
+- **NULL**：灰 + 斜体；BLOB：`BLOB · 大小` 摘要（悬停给完整 hex）
+- **状态行**：左段 `共 N 行` + **当前格值预览**（`· 值`，长值截断 48 字符）+ 截断警告；
+  右段 `已选第 R 行` / `未选中行` + 取下一段（has_more 时）
+
 ## 7. 未完成 / 遗留
 
 | 项 | 状态 |
@@ -241,6 +268,48 @@ IResultSetPresentation / LightGrid）。逐项对照结论：
 > 本项目拍板为**全局单 dock 联动活动文档**（单面板切换）。维持拍板；dock 内结果集标签条
 > 覆盖多结果并存的大部分场景；未来要多文档并存时 dock 面板改「每文档 tab」数据层零成本
 > （`ResultStore` 已按文档分槽）。
+
+### 8.7 DBeaver 对齐 backlog（竞品分析合流，2026-10-24）
+
+背景：用户提供竞品源码目录 `D:\RdataStation\RDS`（dbeaver-ref / rustgrid-ref / cellar-ref /
+blanco-ref / tusk-ref 等），拍板「可以并实现，要文档记录，补充原型」。源码级竞品探查结论
+见仓库根两份文档：`竞品分析-同架构竞品-编辑器与表格模块.md`（cellar/blanco/tusk/rustgrid 四家）
+与 `竞品分析-多面板并发执行阻塞.md`（DBeaver 执行架构）。合并路线 = **视觉层对齐 DBeaver +
+工程层移植四竞品可复用方案**，分三层：
+
+**① 视觉层（DBeaver 当前格 / 行号 / 状态行）——已交付核对**
+
+| 项 | DBeaver 行为 | 本项目现状 |
+| --- | --- | --- |
+| 行号列 | 左侧行号（随行高） | ✅ 已交付：面板自有 `#` 列（`grid.rs::is_row_number` + `Column::new("row-no","#")`），组件行头关闭（`row_header(false)`） |
+| NULL 灰斜体 | NULL 灰斜体与字符串区分 | ✅ 已交付：`render_td` 判 `text == "NULL"` 灰 + 斜体（原型 §2.4） |
+| 焦点格粗边框 | 当前格 2px 边框 + 高亮 | ✅ 本轮补丁：`vendor/gpui-component/src/table/state.rs` 选中格覆盖层加 `border_2` + `table_active_border`（组件仅背景高亮，补丁补边框） |
+| 状态行当前格值 | 状态行左下显示当前格值 | ✅ 本轮实现：`ResultStatus.selected_cell` 字段 + `ResultPanel::set_selected_cell`（`SelectCell` 事件增量更新，值由编辑器读网格 delegate 算好传入，长值截断 48 字符） |
+| 列头排序指示 | 排序箭头 | ✅ 组件内置（`render_sort_icon` + `Column.sort`） |
+| 列头类型标签 / 注释 tooltip | 列头类型与元数据 | ✅ 已交付（P0 类型标签 + P1 分块 tooltip） |
+| 列头筛选箭头菜单 | 每列箭头菜单 | 记 backlog（现走右键菜单；`render_th` 已有接入点） |
+
+**② 工程层（四竞品可移植方案）——backlog**
+
+| 方案 | 竞品实证 | 来源 |
+| --- | --- | --- |
+| 大表窗口化取数 + generation 防抖动 | tusk：窗口取数 + 请求代际（旧响应作废） | `竞品分析-同架构竞品-编辑器与表格模块.md` |
+| pending 变更合并 UPDATE 单事务 | blanco：批量变更集 → 一条 UPDATE 事务 | 同上 |
+| 撤销 / 重做（快照） | tusk `History<T>` 快照栈 | 同上 |
+| 类型感知单元格编辑 | tusk：按列类型出编辑器/校验 | 同上 |
+| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 |
+| IME / 输入法支持 | rustgrid：编辑器输入法路径 | 同上 |
+| 列宽用户设定 | cellar `widths_user_set` | 同上 |
+| 每执行一 Job + 连接级锁 | DBeaver：独立执行 Job、连接级互斥 | `竞品分析-多面板并发执行阻塞.md`（执行架构，与 execution-context-model 衔接） |
+
+**③ 呈现扩展（DBeaver `IResultSetPresentation` 方向）——backlog**
+
+Grid / Text / Record 多视图呈现：`ResultControls` / `ResultPane` 已是呈现接入点雏形
+（§8.6 已记）；Text / Record 视图后续挂新呈现。
+
+> 实施顺序建议：视觉层剩余项（列头筛选菜单）→ 工程层「列布局持久化」与「撤销/重做」
+> （两者独立、收益最直接）→ 大表窗口化取数与 pending 单事务（动 engine 侧，与
+> execution-context-model 下一版本规划衔接）。
 
 ## 8. 协作纪律
 

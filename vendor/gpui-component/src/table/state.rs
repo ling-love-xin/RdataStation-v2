@@ -2238,7 +2238,13 @@ where
                                                             div()
                                                                 .absolute()
                                                                 .inset_0()
-                                                                .bg(cx.theme().tokens.table_active),
+                                                                .bg(cx.theme().tokens.table_active)
+                                                                // RDS 补丁：焦点格 = 背景高亮 + 2px 粗边框
+                                                                //（对齐 DBeaver 当前格视觉，见 result-panel.md §8.6）
+                                                                .border_2()
+                                                                .border_color(
+                                                                    cx.theme().table_active_border,
+                                                                ),
                                                         )
                                                     })
                                                     .when(

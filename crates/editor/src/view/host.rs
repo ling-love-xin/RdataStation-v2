@@ -52,7 +52,7 @@ fn editor_show_line_numbers_or_default(cx: &App) -> bool {
 }
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::table::{TableEvent, TableState};
+use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -551,15 +551,29 @@ impl EditorHostPanel {
         // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
         let grid_sub = cx.subscribe_in(&grid, window, |panel, grid, event: &TableEvent, window, cx| {
             let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
+            // 状态行「当前格值」段走面板增量更新（DBeaver 对齐）：先取一次面板实体，
+            // 各分支复用（`result_panel()` 返回 clone，不借用 panel，可随后写 result_selection）
+            let result_panel = panel.result_panel();
             // 【B14】`Ctrl+C` 复制谁：只认**最近一次选择事件**（组件没公开“当前是选格还是选行”，
             // 而它两个字段可以同时有值）。键位失效之后再选也就自动作废了，不用额外清理。
             panel.result_selection = match event {
-                TableEvent::SelectCell(row, col) => Some(result_grid::GridSelection::Cell {
-                    row: *row,
-                    col: *col,
-                }),
-                TableEvent::SelectRow(row) => Some(result_grid::GridSelection::Row { row: *row }),
-                TableEvent::ClearSelection => None,
+                TableEvent::SelectCell(row, col) => {
+                    // 编辑器在事件里读网格 delegate 算好值传给面板（面板不碰网格；
+                    // 长值截断防状态行被撑爆）
+                    let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
+                    result_panel.update(cx, |panel, cx| {
+                        panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
+                    });
+                    Some(result_grid::GridSelection::Cell { row: *row, col: *col })
+                }
+                TableEvent::SelectRow(row) => {
+                    result_panel.update(cx, |panel, cx| panel.set_selected_cell(None, cx));
+                    Some(result_grid::GridSelection::Row { row: *row })
+                }
+                TableEvent::ClearSelection => {
+                    result_panel.update(cx, |panel, cx| panel.set_selected_cell(None, cx));
+                    None
+                }
                 _ => panel.result_selection,
             };
             // 【T2a-4】双击单元格 → 进入编辑（原生 `DoubleClickedCell` 事件；判据一次
@@ -5773,6 +5787,8 @@ impl EditorHostPanel {
                         total_rows: entry.row_count(),
                         // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
                         selected_row: None,
+                        // sync 时没有格选中：当前格值由 `SelectCell` 事件增量更新（见 grid_sub）
+                        selected_cell: None,
                         truncated_hint: entry
                             .truncated
                             .then(|| result_grid::truncated_hint(entry.row_count())),
@@ -6074,6 +6090,26 @@ impl EditorHostPanel {
                 self.dispatch_result_request(request, cx);
             }
             pending = self.result_action_queue.drain();
+        }
+    }
+
+    /// 状态行「当前格值」截断：长值只留一截（按字符截，避免把多字节字符拦腰切断），
+    /// 防状态行被大字段撑爆（DBeaver 对齐：状态行只给预览，看全值走值预览）
+    fn clip_cell_preview(text: &str) -> String {
+        const MAX: usize = 48;
+        let mut count = 0usize;
+        let mut end = 0usize;
+        for (i, ch) in text.char_indices() {
+            if count >= MAX {
+                break;
+            }
+            count += 1;
+            end = i + ch.len_utf8();
+        }
+        if count >= MAX {
+            format!("{}…", &text[..end])
+        } else {
+            text.to_string()
         }
     }
 

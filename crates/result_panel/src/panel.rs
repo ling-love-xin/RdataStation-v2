@@ -950,6 +950,15 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 格选中 → 状态行「当前格值」段增量更新（`TableEvent::SelectCell` 事件路径调用；
+    /// 值由编辑器在事件里读网格 delegate 算好传入，面板不碰网格）
+    pub fn set_selected_cell(&mut self, value: Option<String>, cx: &mut Context<Self>) {
+        if let Some(status) = self.status.as_mut() {
+            status.selected_cell = value;
+        }
+        cx.notify();
+    }
+
     /// 顶部提示行增量写入（编辑被拦等一次性提示；sync 会全量覆写 notice）
     pub fn set_notice(&mut self, text: Option<String>, cx: &mut Context<Self>) {
         self.notice = text;

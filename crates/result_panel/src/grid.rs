@@ -2065,6 +2065,8 @@ pub struct ResultStatus {
     pub total_rows: usize,
     /// 当前选中的行（1 基；`None` = 没选中）
     pub selected_row: Option<usize>,
+    /// 当前选中的格的值预览（DBeaver 对齐：状态行左下显示当前格；`None` = 没选中格）
+    pub selected_cell: Option<String>,
     /// 截断提示（`Some` = 数据不完整）
     pub truncated_hint: Option<String>,
     /// 【B5b】还能取下一段吗（`true` 时总行数显示成 `1,000+`，并摆「取下一段」）
@@ -2315,6 +2317,16 @@ pub fn render(
                             .gap_2()
                             .min_w_0()
                             .child(SharedString::from(left))
+                            // 当前格值预览（DBeaver 对齐：状态行左下显示当前格，长值已由
+                            // 编辑器截断；`·` 分隔避免与「共 N 行」粘连）
+                            .when_some(status.selected_cell, |row, value| {
+                                row.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(SharedString::from(format!("· {}", value))),
+                                )
+                            })
                             // 截断是**警告**（数据不完整），不是普通说明文字
                             .when_some(status.truncated_hint, |row, hint| {
                                 row.child(
@@ -3124,6 +3136,7 @@ mod tests {
         let idle = ResultStatus {
             total_rows: 1_204,
             selected_row: None,
+            selected_cell: None,
             truncated_hint: None,
             has_more: false,
         };
@@ -3142,6 +3155,7 @@ mod tests {
         let partial = ResultStatus {
             total_rows: 1_000,
             selected_row: None,
+            selected_cell: None,
             truncated_hint: None,
             has_more: true,
         };
