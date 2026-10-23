@@ -32,7 +32,9 @@ actions!(
         ExecuteSql,
         ExecuteAll,
         TriggerCompletion,
-        CopyGridSelection
+        CopyGridSelection,
+        UndoResultEdit,
+        RedoResultEdit
     ]
 );
 

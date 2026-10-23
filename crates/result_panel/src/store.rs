@@ -31,7 +31,7 @@
 
 use ::shared::string::tsv_row;
 
-use crate::changes::ChangeSet;
+use crate::changes::{ChangeSet, EditHistory};
 use crate::export::RowKey;
 use workbench_shell::model::{ColumnAnnotation, DocumentId, ExecChannel};
 
@@ -644,6 +644,9 @@ struct DocumentResults {
     /// 【T2a-3】每份结果集的**未提交变更**（与 `sets` 同序同增减；选中项切换不清空——
     /// 用户切标签看别的结果，回来编辑还在。清空只发生在结果被替换 / 淘汰 / 已提交时）
     changes: Vec<ChangeSet>,
+    /// 【撤销】每份结果集的**编辑历史**（撤销 / 重做双栈；与 `changes` 同序同增减——
+    /// 历史属于“这次抓到的数据”，结果被替换 / 淘汰时作废，切标签不清空）
+    histories: Vec<EditHistory>,
     /// 当前选中的结果集下标（始终指向 `sets` 中的有效位置；`sets` 非空时必有）
     active: usize,
     /// 【并排对比】对比选中的结果集下标（`None` = 未开对比；`Some` ≠ `active` 恒成立）
@@ -679,6 +682,7 @@ impl ResultStore {
                     document,
                     sets: Vec::new(),
                     changes: Vec::new(),
+                    histories: Vec::new(),
                     active: 0,
                     compare: None,
                 });
@@ -695,9 +699,14 @@ impl ResultStore {
                     if let Some(changes) = slot.changes.get_mut(slot.active) {
                         *changes = ChangeSet::new();
                     }
+                    // 【撤销】同理：旧结果的编辑历史随结果作废
+                    if let Some(history) = slot.histories.get_mut(slot.active) {
+                        history.clear();
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
+                    slot.histories.push(EditHistory::new());
                     slot.active = 0;
                 }
             }
@@ -705,6 +714,7 @@ impl ResultStore {
             ResultPlacement::NewSet => {
                 slot.sets.push(entry);
                 slot.changes.push(ChangeSet::new());
+                slot.histories.push(EditHistory::new());
                 if slot.sets.len() == 1 {
                     slot.active = 0;
                 }
@@ -732,9 +742,14 @@ impl ResultStore {
                     if let Some(changes) = slot.changes.get_mut(slot.active) {
                         *changes = ChangeSet::new();
                     }
+                    // 【撤销】旧编辑历史随替换作废
+                    if let Some(history) = slot.histories.get_mut(slot.active) {
+                        history.clear();
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
+                    slot.histories.push(EditHistory::new());
                     slot.active = 0;
                 }
             }
@@ -882,6 +897,37 @@ impl ResultStore {
         true
     }
 
+    /// 某份结果集的编辑历史（撤销 / 重做栈；没有则 `None`）
+    pub fn history(&self, document: &DocumentId, index: usize) -> Option<&EditHistory> {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .and_then(|slot| slot.histories.get(index))
+    }
+
+    /// 【撤销】变更某份结果集的编辑历史（编辑提交入栈 / 撤销 / 重做 / 结果作废清空都走这里）
+    ///
+    /// 与 [`Self::mutate_change_set`] 同口径：文档或结果集下标不存在 = `false`。
+    pub fn mutate_history(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        update: impl FnOnce(&mut EditHistory),
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(history) = slot.histories.get_mut(index) else {
+            return false;
+        };
+        update(history);
+        true
+    }
+
     /// 【T2a】把某一格的新值写进**指定**结果集的行数据（本地应用；返回是否真的改到）
     ///
     /// 提交回执后调用：`index` = 结果集标签条的下标（不是选中项），列按数据列下标。
@@ -931,6 +977,8 @@ fn evict_oldest(slot: &mut DocumentResults) {
         slot.sets.remove(victim);
         // 【T2a-3】变更集跟着结果集一起淘汰（被淘汰那份的编辑没有可提交的对象了）
         slot.changes.remove(victim);
+        // 【撤销】编辑历史跟着结果集一起淘汰（同理）
+        slot.histories.remove(victim);
         if victim < slot.active {
             slot.active -= 1;
         }
@@ -1603,5 +1651,45 @@ mod tests {
             Some(1),
             "淘汰发生在对比项之前 → 对比项下标前移 1"
         );
+    }
+
+    /// 【撤销】编辑历史与变更集同序：新结果带空历史，替换作废旧历史
+    #[test]
+    fn histories_track_sets_lifecycle() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        // 首次执行：历史存在且为空
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(store.history(&document, 0).is_some_and(|h| !h.can_undo()));
+
+        // 追加新结果：历史与 sets 同长
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet);
+        assert_eq!(store.sets(&document).len(), 2);
+        assert!(store.history(&document, 1).is_some_and(|h| !h.can_undo()));
+
+        // 替换选中那份：历史作废（旧编辑没有可撤销的对象了）
+        store.mutate_history(&document, 0, |h| {
+            h.push(crate::changes::CellChange::pending(0, 0, "a", "b"));
+        });
+        assert!(store.history(&document, 0).is_some_and(|h| h.can_undo()));
+        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace);
+        assert!(
+            store.history(&document, 0).is_some_and(|h| !h.can_undo()),
+            "替换后历史清空"
+        );
+    }
+
+    /// 【撤销】mutate_history 与 mutate_change_set 同口径：文档 / 下标不存在返回 false
+    #[test]
+    fn mutate_history_refuses_unknown_slot() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(!store.mutate_history(&document, 7, |_| {}), "下标越界 = false");
+        assert!(
+            !store.mutate_history(&DocumentId::new("nope"), 0, |_| {}),
+            "文档不存在 = false"
+        );
+        assert!(store.mutate_history(&document, 0, |_| {}), "命中 = true");
     }
 }

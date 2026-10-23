@@ -19,7 +19,8 @@ use analytics_resource::commands::{
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument,
-    SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
+    RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
+    UndoResultEdit,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
@@ -243,6 +244,19 @@ fn run_app() {
                 KeyBinding::new(
                     "ctrl-c",
                     CopyGridSelection,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                // 【撤销/重做】结果网格里的 `Ctrl+Z` / `Ctrl+Shift+Z` = 撤销 / 重做单元格编辑。
+                // 同样挂在网格上下文上：编辑框内 `Ctrl+Z` 由输入内核先处理（撤销输入），
+                // 只有焦点在网格（非编辑框）时才走到这两个动作。
+                KeyBinding::new(
+                    "ctrl-z",
+                    editor::commands::UndoResultEdit,
+                    Some(editor::commands::RESULT_GRID_CONTEXT),
+                ),
+                KeyBinding::new(
+                    "ctrl-shift-z",
+                    editor::commands::RedoResultEdit,
                     Some(editor::commands::RESULT_GRID_CONTEXT),
                 ),
                 // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上

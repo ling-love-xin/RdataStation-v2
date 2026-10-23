@@ -59,7 +59,8 @@ use gpui_kit::*;
 use crate::changes::CellChange;
 use crate::channel::{self, ExecChannel};
 use crate::commands::{
-    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment,
+    CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, RedoResultEdit, SaveDocument,
+    ToggleComment, UndoResultEdit,
 };
 use crate::diagnostics;
 use crate::edit;
@@ -668,16 +669,26 @@ impl EditorHostPanel {
                         // Blur 分支）在 commit 完成后做，那里 grid 已退出 update。
                         shared_for_commit.update_results(|store| {
                             let active = store.active_index(&document_for_commit).unwrap_or(0);
+                            let changed = edited != original;
                             store.mutate_change_set(&document_for_commit, active, |changes| {
-                                if edited == original {
+                                if !changed {
                                     // 值没变（改回来）：清掉这条变更
                                     changes.remove(row, column);
                                 } else {
                                     changes.upsert(CellChange::pending(
-                                        row, column, original, edited,
+                                        row, column, original.clone(), edited.clone(),
                                     ));
                                 }
                             });
+                            // 【撤销】值真的变了才记一步历史（改回原值不是新编辑，不入栈；
+                            // 新编辑入栈时 EditHistory 自动清空重做栈——标准撤销语义）
+                            if changed {
+                                store.mutate_history(&document_for_commit, active, |history| {
+                                    history.push(CellChange::pending(
+                                        row, column, original, edited,
+                                    ));
+                                });
+                            }
                         });
                     },
                 ));
@@ -4732,6 +4743,102 @@ impl EditorHostPanel {
         self.copy_grid_selection(cx);
     }
 
+    /// 【撤销】结果网格 `Ctrl+Z`（键位在 `crates/app` 注册，context = `RESULT_GRID_CONTEXT`；
+    /// 编辑框内 `Ctrl+Z` 由输入内核处理，不走到这里）
+    pub(crate) fn on_undo_result_edit(
+        &mut self,
+        _: &UndoResultEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.undo_result_edit(cx);
+    }
+
+    /// 【重做】结果网格 `Ctrl+Shift+Z`（同上；恢复最近一次撤销的编辑）
+    pub(crate) fn on_redo_result_edit(
+        &mut self,
+        _: &RedoResultEdit,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.redo_result_edit(cx);
+    }
+
+    /// 【撤销】撤销一步结果编辑：格子恢复「上一步的值」（DBeaver 粒度 = 每格编辑一步）。
+    ///
+    /// 写回语义：从 [`EditHistory`] 弹出栈顶一步；恢复值对比**数据原值**（`entry.rows`，
+    /// 网格行数据本身就是原值，无需另改）——恢复值 = 原值 → 从变更集移除（没有待提交
+    /// 变更）；否则变更集里这条的 `edited` 改为恢复值。然后 `sync_result_view` 重投影
+    /// （脏格底色 / 待提交计数 / 状态行）。结果集变化导致行 / 列越界时不写回（数据没了）。
+    pub(crate) fn undo_result_edit(&mut self, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            // 从历史栈弹出一步（在 mutate_history 闭包里取，避免跨闭包借用冲突）
+            let mut step = None;
+            store.mutate_history(&document, active, |history| step = history.undo());
+            let Some(change) = step else {
+                return false;
+            };
+            let Some(original_value) = store
+                .active(&document)
+                .and_then(|entry| entry.rows.get(change.row))
+                .and_then(|row| row.get(change.column))
+                .cloned()
+            else {
+                return false;
+            };
+            store.mutate_change_set(&document, active, |changes| {
+                if change.original == original_value {
+                    // 恢复成数据原值：这条变更不存在了
+                    changes.remove(change.row, change.column);
+                } else {
+                    changes.upsert(CellChange::pending(
+                        change.row, change.column, original_value, change.original,
+                    ));
+                }
+            });
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+    /// 【重做】恢复最近撤销的那一步：格子回到「被撤销时的值」（对称写回变更集 + 重投影）
+    pub(crate) fn redo_result_edit(&mut self, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let mut step = None;
+            store.mutate_history(&document, active, |history| step = history.redo());
+            let Some(change) = step else {
+                return false;
+            };
+            let Some(original_value) = store
+                .active(&document)
+                .and_then(|entry| entry.rows.get(change.row))
+                .and_then(|row| row.get(change.column))
+                .cloned()
+            else {
+                return false;
+            };
+            store.mutate_change_set(&document, active, |changes| {
+                if change.edited == original_value {
+                    changes.remove(change.row, change.column);
+                } else {
+                    changes.upsert(CellChange::pending(
+                        change.row, change.column, original_value, change.edited,
+                    ));
+                }
+            });
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
     /// 执行（选区优先 → 当前语句）：快捷键与工具栏主按钮共用同一条路
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
@@ -7634,7 +7741,11 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_execute_all))
             // 【B14】网格里的 `Ctrl+C`：键位绑在 `view/results/grid.rs` 那一层的上下文上，
             // 所以只有焦点在网格里时才会走到这里（编辑区里 `Ctrl+C` 仍归内核的文本复制）
-            .on_action(cx.listener(Self::on_copy_grid_selection));
+            .on_action(cx.listener(Self::on_copy_grid_selection))
+            // 【撤销/重做】网格里的 `Ctrl+Z` / `Ctrl+Shift+Z`：同挂在网格上下文上；
+            // 编辑框内 `Ctrl+Z` 由输入内核处理，只有焦点在网格（非编辑框）时才到这两个
+            .on_action(cx.listener(Self::on_undo_result_edit))
+            .on_action(cx.listener(Self::on_redo_result_edit));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
         let mode = self
             .with_document(|doc| doc.mode())
