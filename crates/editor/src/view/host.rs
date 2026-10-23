@@ -2979,7 +2979,7 @@ impl EditorHostPanel {
 
     /// 中断单元执行（沿执行队列的取消；没在跑 = 如实回绝）
     pub(crate) fn notebook_cancel_run(&mut self, cx: &mut Context<Self>) {
-        match self.shared.cancel() {
+        match self.shared.cancel_for(&self.document) {
             Ok(()) => self.set_message(Some("已请求中断".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),
         }
@@ -5037,7 +5037,7 @@ impl EditorHostPanel {
     /// 同步只回绝“没在跑”；真正的中断在工作线程上做（端口实现允许阻塞）。
     /// 中断之后的剩余语句由通道标“已取消”（不是接着往下跑）。
     pub(crate) fn interrupt(&mut self, cx: &mut Context<Self>) {
-        match self.shared.cancel() {
+        match self.shared.cancel_for(&self.document) {
             Ok(()) => self.set_message(Some("已请求中断…".to_string()), cx),
             Err(reason) => self.set_message(Some(reason), cx),
         }

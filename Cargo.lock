@@ -8290,6 +8290,7 @@ dependencies = [
  "rds-kernel",
  "rds-paths",
  "rds-result-panel",
+ "rds-settings",
  "rds-shared",
  "rds-workbench-shell",
  "serde",

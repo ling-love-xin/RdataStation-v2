@@ -659,11 +659,16 @@ impl EditorShared {
         }
     }
 
-    /// 中断当前执行（B3）；没在跑就回绝（理由可读，不是静默）
-    pub fn cancel(&self) -> Result<(), String> {
+    /// 中断**当前文档绑定的连接**的执行（B3；阶段②：取消按连接，只命中该连接的作业）；
+    /// 没在跑就回绝（理由可读，不是静默）
+    pub fn cancel_for(&self, document: &crate::model::DocumentId) -> Result<(), String> {
+        let connection = {
+            let service = self.service.borrow();
+            service.connection_for(document)
+        };
         let guard = self.exec.borrow();
         match guard.as_ref() {
-            Some(channel) => channel.cancel(),
+            Some(channel) => channel.cancel(connection),
             None => Err("当前未接入执行".to_string()),
         }
     }

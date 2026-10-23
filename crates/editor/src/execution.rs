@@ -17,16 +17,17 @@
 //! 异步驱动跑起来（workbench 的实现内部用 tokio runtime `block_on`）。于是"后台任务"
 //! 这件事在本 crate 里就是普普通通的线程 + 队列，单测能直接跑真线程。
 //!
-//! ## 并发策略（1a）
+//! ## 并发策略（1a → 阶段②）
 //!
-//! 同一通道**同时只跑一个作业**（[`ExecQueue::submit`] 忙时返回 [`SubmitError::Busy`]）。
-//! 一个作业可以带多条语句（[`ExecTarget::Batch`]）：它们在**同一条工作线程上顺序**跑完，
-//! 每条语句各自回填一份结果——因此"批量"既不是驱动能力的猜测，也不会中途被别的提交插队。
+//! **按连接分组并发**：每个连接一条专属工作线程 + mpsc（懒建），不同连接可同时执行；
+//! 同一连接内**排队串行**（单通道天然 FIFO，批量语句在同一 worker 上顺序跑完，不会被别的
+//! 提交插队）。未绑定作业（`None`）统一归 `""` 队列——它们最终都落到同一活动连接，天然串行。
+//! 忙态按连接计数（[`ExecQueue::is_busy_for`]），取消按连接（[`ExecQueue::cancel`]）。
 //! 事务 / 会话亲和（架构 §12 #2）属 1b：那需要 per-session 独占连接，不是这里加锁能解决的。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -913,20 +914,34 @@ impl SubmitError {
     }
 }
 
-/// 执行队列：一条工作线程 + 一个结果队列
+/// 一个连接的执行队列：一条工作线程 + 未完成作业计数 + 独立取消位
+///
+/// 阶段②（按连接分组）的单元：**不同连接各自并行**（各有通道与工作线程），
+/// **同一连接内排队串行**（单通道天然 FIFO，worker 逐个处理，批量的语句之间不视为空闲）。
+struct ConnQueue {
+    /// 该连接的作业通道（worker 循环 `recv`；通道存活即 worker 存活，随宿主一起退出）
+    tx: Sender<ExecJob>,
+    /// 未完成作业数（提交 +1、worker 跑完一个 -1）：>0 即「该连接有执行在跑 / 排队」。
+    /// 它取代旧的全局 `busy` 位 + `running_connection` 单槽——提交线程同步 +1，
+    /// 「刚按执行就按中断」时取消也能立即看到该连接有作业。
+    pending: Arc<AtomicUsize>,
+    /// 已请求中断（B3）：该连接的批量里**剩余语句**据此标"已取消"，而不是接着往下跑
+    cancel_requested: Arc<AtomicBool>,
+}
+
+/// 执行队列：**按连接分组的并发队列**（阶段②） + 一个共享结果队列
 ///
 /// 生命周期：随宿主（面板 / 工作台）存活；`Drop` 时把工作线程放掉（发送端关闭 → 线程退出）。
+/// 每个连接第一次提交时懒建 [`ConnQueue`]（连 worker 一起），连接解绑后队列与 worker 仍在
+/// （空转等新作业；连接数 = 个位数到十几，量级与旧单 worker 相当，生命周期治理留阶段③）。
 ///
 /// **与「执行通道」（[`crate::channel::ExecChannel`]：源库 / 加速 / 联邦）不是一回事**：那个回答
 /// “在哪儿跑”，这个负责“把作业交给线程并收结论”。名字分开是为了不让两件事读起来像同一件。
 pub struct ExecQueue {
-    tx: Option<Sender<ExecJob>>,
+    /// 连接 → 该连接的队列。键 = 作业携带的连接（`None` 未绑定 → 统一键 `""`，
+    /// 未绑定作业最后都落到同一活动连接上，天然该串行）。锁只在 submit / cancel / 查询时短暂持有。
+    conns: Mutex<HashMap<String, Arc<ConnQueue>>>,
     done: Arc<Mutex<VecDeque<ExecOutcome>>>,
-    busy: Arc<AtomicBool>,
-    /// 正在跑的作业的连接（B3）：中断要知道该取消哪个连接（`busy` 为真时才有意义）
-    running_connection: Arc<Mutex<Option<String>>>,
-    /// 已请求中断（B3）：批量里**剩余语句**据此标"已取消"，而不是接着往下跑
-    cancel_requested: Arc<AtomicBool>,
     /// 中断尝试的结果文案（主线程轮询取走：中断失败 / 没在跑 都要留痕）
     cancel_notes: Arc<Mutex<VecDeque<String>>>,
     /// 事务动作的结论（主线程轮询取走：B4）
@@ -951,13 +966,9 @@ impl ExecQueue {
         self.runner.clone()
     }
 
-    /// 用一个执行器起队列
+    /// 用一个执行器起队列（连接队列懒建：第一次提交时才 spawn 对应 worker）
     pub fn new(runner: Arc<dyn QueryRunner>) -> Self {
-        let (tx, rx) = mpsc::channel::<ExecJob>();
         let done: Arc<Mutex<VecDeque<ExecOutcome>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let busy = Arc::new(AtomicBool::new(false));
-        let running_connection: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let cancel_requested = Arc::new(AtomicBool::new(false));
         let cancel_notes: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let source_notes: Arc<Mutex<VecDeque<SourceNote>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -968,135 +979,9 @@ impl ExecQueue {
         let cell_notes: Arc<Mutex<VecDeque<crate::cell::CellNote>>> =
             Arc::new(Mutex::new(VecDeque::new()));
 
-        let worker_done = done.clone();
-        let worker_busy = busy.clone();
-        let worker_running = running_connection.clone();
-        let worker_cancelled = cancel_requested.clone();
-        let worker_runner = runner.clone();
-        let worker_script_done = script_notes.clone();
-        let worker_cell_done = cell_notes.clone();
-        std::thread::Builder::new()
-            .name("rds-editor-exec".to_string())
-            // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                while let Ok(job) = rx.recv() {
-                    // 忙标记覆盖**整批**：批量的语句之间不是“空闲”，否则面板会在中途收起
-                    // 「执行中」并允许第二次提交（那就成了隐藏的并行执行）。
-                    worker_busy.store(true, Ordering::SeqCst);
-                    for sql in job.statements {
-                        // 中断之后**不再往下跑**（架构 §3.4：剩余语句各自回一条“已取消”），
-                        // 否则用户看到的“中断”只是打断了当前那一句。
-                        let result = if worker_cancelled.load(Ordering::SeqCst) {
-                            Err(CANCELED.to_string())
-                        } else if let Some((offset, limit)) = job.segment {
-                            // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
-                            worker_runner.fetch_next(
-                                job.connection.as_deref(),
-                                job.schema.as_deref(),
-                                job.channel,
-                                &sql,
-                                offset,
-                                limit,
-                            )
-                        } else if let Some((filter, columns)) = job.filtered.as_ref() {
-                            // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
-                            worker_runner.run_filtered(
-                                job.connection.as_deref(),
-                                job.schema.as_deref(),
-                                job.channel,
-                                &sql,
-                                filter,
-                                columns,
-                            )
-                        } else if let Some((column, descending)) = job.sorted_down.as_ref() {
-                            // 【B14】排序下发：同上，改写与方言差异都在执行器
-                            worker_runner.run_sorted_down(
-                                job.connection.as_deref(),
-                                job.schema.as_deref(),
-                                job.channel,
-                                &sql,
-                                column,
-                                *descending,
-                            )
-                        } else if let Some(request) = job.analysis.as_ref() {
-                            // 【B15】本地分析：桥接的行 + 分析 SQL 一起交给执行器（不碰源库）
-                            worker_runner.analyze(request)
-                        } else {
-                            // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                            worker_runner.run(
-                                job.connection.as_deref(),
-                                job.schema.as_deref(),
-                                job.channel,
-                                &sql,
-                                job.options,
-                            )
-                        };
-                        // B4：事务状态跟着结论一起回去（界面不必再单独问一句）
-                        let transaction =
-                            worker_runner.transaction_snapshot(job.connection.as_deref());
-                        if let Ok(mut queue) = worker_done.lock() {
-                            // 【A2】下发载荷（filtered / sorted_down）还原成形成原料，随结论回去
-                            let pushdown = Pushdown::from_job(&job.filtered, &job.sorted_down);
-                            queue.push_back(ExecOutcome {
-                                document: job.document.clone(),
-                                connection: job.connection.clone(),
-                                sql,
-                                placement: job.placement,
-                                channel: job.channel,
-                                transaction,
-                                analysis: job.analysis.is_some(),
-                                lineage: job.lineage,
-                                pushdown,
-                                result,
-                            });
-                        }
-                    }
-                    // 【2b】脚本执行：不走上面的 statements 循环（Script 的 `statements` 恒为空），
-                    // 独立跑一次 `run_script`，结论进 `script_notes`（不是网格形状的 `ExecOutcome`）。
-                    if let Some(request) = job.script.as_ref() {
-                        let result = if worker_cancelled.load(Ordering::SeqCst) {
-                            Err(CANCELED.to_string())
-                        } else {
-                            worker_runner.run_script(request)
-                        };
-                        if let Ok(mut queue) = worker_script_done.lock() {
-                            queue.push_back(crate::env::ScriptNote {
-                                document: job.document.clone(),
-                                env_id: request.env_id.clone(),
-                                result,
-                            });
-                        }
-                    }
-                    // 【2d】单元执行：同脚本，独立跑一次 `run_cell`，结论进 `cell_notes`
-                    // （回执带会话 + 单元 id，主线程据此回填内联输出）。
-                    if let Some(request) = job.cell.as_ref() {
-                        let result = if worker_cancelled.load(Ordering::SeqCst) {
-                            Err(CANCELED.to_string())
-                        } else {
-                            worker_runner.run_cell(request)
-                        };
-                        if let Ok(mut queue) = worker_cell_done.lock() {
-                            queue.push_back(crate::cell::CellNote {
-                                document: job.document.clone(),
-                                session_id: request.session_id.clone(),
-                                cell_id: request.cell_id.clone(),
-                                result,
-                            });
-                        }
-                    }
-                    *lock(&worker_running) = None;
-                    worker_busy.store(false, Ordering::SeqCst);
-                }
-            })
-            .expect("failed to spawn editor exec worker");
-
         Self {
-            tx: Some(tx),
+            conns: Mutex::new(HashMap::new()),
             done,
-            busy,
-            running_connection,
-            cancel_requested,
             cancel_notes,
             tx_notes,
             source_notes,
@@ -1106,6 +991,146 @@ impl ExecQueue {
             cell_notes,
             runner,
         }
+    }
+
+    /// 取 / 懒建指定连接的队列（并发提交时建一次；锁内短暂持有）
+    fn conn_queue(&self, connection: &Option<String>) -> Arc<ConnQueue> {
+        let key = connection_key(connection);
+        let runner = self.runner.clone();
+        let done = self.done.clone();
+        let script_notes = self.script_notes.clone();
+        let cell_notes = self.cell_notes.clone();
+        let mut conns = lock(&self.conns);
+        conns
+            .entry(key)
+            .or_insert_with(|| {
+                let (tx, rx) = mpsc::channel::<ExecJob>();
+                let pending = Arc::new(AtomicUsize::new(0));
+                let cancel_requested = Arc::new(AtomicBool::new(false));
+                let worker_pending = pending.clone();
+                let worker_cancelled = cancel_requested.clone();
+                std::thread::Builder::new()
+                    .name("rds-editor-exec".to_string())
+                    // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
+                    .stack_size(16 * 1024 * 1024)
+                    .spawn(move || {
+                        while let Ok(job) = rx.recv() {
+                            for sql in job.statements {
+                                // 中断之后**不再往下跑**（架构 §3.4：剩余语句各自回一条"已取消"），
+                                // 否则用户看到的"中断"只是打断了当前那一句。
+                                let result = if worker_cancelled.load(Ordering::SeqCst) {
+                                    Err(CANCELED.to_string())
+                                } else if let Some((offset, limit)) = job.segment {
+                                    // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
+                                    runner.fetch_next(
+                                        job.connection.as_deref(),
+                                        job.schema.as_deref(),
+                                        job.channel,
+                                        &sql,
+                                        offset,
+                                        limit,
+                                    )
+                                } else if let Some((filter, columns)) = job.filtered.as_ref() {
+                                    // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
+                                    runner.run_filtered(
+                                        job.connection.as_deref(),
+                                        job.schema.as_deref(),
+                                        job.channel,
+                                        &sql,
+                                        filter,
+                                        columns,
+                                    )
+                                } else if let Some((column, descending)) = job.sorted_down.as_ref() {
+                                    // 【B14】排序下发：同上，改写与方言差异都在执行器
+                                    runner.run_sorted_down(
+                                        job.connection.as_deref(),
+                                        job.schema.as_deref(),
+                                        job.channel,
+                                        &sql,
+                                        column,
+                                        *descending,
+                                    )
+                                } else if let Some(request) = job.analysis.as_ref() {
+                                    // 【B15】本地分析：桥接的行 + 分析 SQL 一起交给执行器（不碰源库）
+                                    runner.analyze(request)
+                                } else {
+                                    // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
+                                    runner.run(
+                                        job.connection.as_deref(),
+                                        job.schema.as_deref(),
+                                        job.channel,
+                                        &sql,
+                                        job.options,
+                                    )
+                                };
+                                // B4：事务状态跟着结论一起回去（界面不必再单独问一句）
+                                let transaction =
+                                    runner.transaction_snapshot(job.connection.as_deref());
+                                if let Ok(mut queue) = done.lock() {
+                                    // 【A2】下发载荷（filtered / sorted_down）还原成形成原料，随结论回去
+                                    let pushdown = Pushdown::from_job(&job.filtered, &job.sorted_down);
+                                    queue.push_back(ExecOutcome {
+                                        document: job.document.clone(),
+                                        connection: job.connection.clone(),
+                                        sql,
+                                        placement: job.placement,
+                                        channel: job.channel,
+                                        transaction,
+                                        analysis: job.analysis.is_some(),
+                                        lineage: job.lineage,
+                                        pushdown,
+                                        result,
+                                    });
+                                }
+                            }
+                            // 【2b】脚本执行：不走上面的 statements 循环（Script 的 `statements` 恒为空），
+                            // 独立跑一次 `run_script`，结论进 `script_notes`（不是网格形状的 `ExecOutcome`）。
+                            if let Some(request) = job.script.as_ref() {
+                                let result = if worker_cancelled.load(Ordering::SeqCst) {
+                                    Err(CANCELED.to_string())
+                                } else {
+                                    runner.run_script(request)
+                                };
+                                if let Ok(mut queue) = script_notes.lock() {
+                                    queue.push_back(crate::env::ScriptNote {
+                                        document: job.document.clone(),
+                                        env_id: request.env_id.clone(),
+                                        result,
+                                    });
+                                }
+                            }
+                            // 【2d】单元执行：同脚本，独立跑一次 `run_cell`，结论进 `cell_notes`
+                            // （回执带会话 + 单元 id，主线程据此回填内联输出）。
+                            if let Some(request) = job.cell.as_ref() {
+                                let result = if worker_cancelled.load(Ordering::SeqCst) {
+                                    Err(CANCELED.to_string())
+                                } else {
+                                    runner.run_cell(request)
+                                };
+                                if let Ok(mut queue) = cell_notes.lock() {
+                                    queue.push_back(crate::cell::CellNote {
+                                        document: job.document.clone(),
+                                        session_id: request.session_id.clone(),
+                                        cell_id: request.cell_id.clone(),
+                                        result,
+                                    });
+                                }
+                            }
+                            // 本作业（含批量全部语句）结束：让「该连接有执行」回到按需判定的计数，
+                            // 并清掉取消位——取消只作用于**当前这一批**（剩余语句标"已取消"），
+                            // 同连接排队的下一个作业是新意图，不该被上一批的取消误伤。
+                            worker_pending.fetch_sub(1, Ordering::SeqCst);
+                            worker_cancelled.store(false, Ordering::SeqCst);
+                        }
+                    })
+                    .expect("failed to spawn editor exec worker");
+                Arc::new(ConnQueue {
+                    tx,
+                    pending,
+                    cancel_requested,
+                })
+            })
+            .clone()
     }
 
     /// 【2b】脚本执行的结论（主线程轮询取走；与 `ExecOutcome` 分开）
@@ -1126,11 +1151,12 @@ impl ExecQueue {
         queue.drain(..).collect()
     }
 
-    /// 提交一次执行（忙 / 空目标会被拒，**不排队**：排队会让"再按一次"变成隐藏的批量执行）
+    /// 提交一次执行（空目标会被拒；**同连接内排队**，不同连接并行——阶段②）
     ///
-    /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，执行器回退到“当前活动连接”。
-    /// `placement` 决定结果落到当前结果集还是新结果集（B2）；`options` 携带
-    /// 「自动提交关闭 → 本次执行进事务」（B4）；`channel` 是**执行通道**（B13，原样回到结论里）。
+    /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，进统一未绑定队列，
+    /// 执行器回退到“当前活动连接”。`placement` 决定结果落到当前结果集还是新结果集（B2）；
+    /// `options` 携带「自动提交关闭 → 本次执行进事务」（B4）；`channel` 是**执行通道**
+    /// （B13，原样回到结论里）。
     pub fn submit(
         &self,
         document: DocumentId,
@@ -1145,19 +1171,15 @@ impl ExecQueue {
         if statements.is_empty() && target.script().is_none() && target.cell().is_none() {
             return Err(SubmitError::Empty);
         }
-        if self.is_busy() {
-            return Err(SubmitError::Busy);
-        }
-        let Some(tx) = self.tx.as_ref() else {
-            return Err(SubmitError::Busy);
-        };
-        // 起跑的记号在**提交线程**上同步写（不能等工作线程收到 job 再写）：
-        // 用户可能刚按执行就按中断，那时工作线程还没开始——按“作业里的连接”去取消
-        // 会取到空值，取消就发给了错误的连接。
-        *lock(&self.running_connection) = connection.clone();
-        self.cancel_requested.store(false, Ordering::SeqCst);
-        self.busy.store(true, Ordering::SeqCst);
-        if tx
+        // 提交线程同步 +1 未完成计数（不能等工作线程收到 job 再写）：
+        // 用户可能刚按执行就按中断，那时工作线程还没开始——取消靠“该连接有作业”的计数
+        // 立即看到目标（阶段②：计数按连接隔离，取消只命中目标连接）。
+        let queue = self.conn_queue(&connection);
+        queue.pending.fetch_add(1, Ordering::SeqCst);
+        // 新提交复位取消位：同连接的上一批被取消后，这一批是用户的新意图，不该接着被标“已取消”
+        queue.cancel_requested.store(false, Ordering::SeqCst);
+        if queue
+            .tx
             .send(ExecJob {
                 document,
                 connection,
@@ -1187,7 +1209,8 @@ impl ExecQueue {
             })
             .is_err()
         {
-            self.busy.store(false, Ordering::SeqCst);
+            // 通道已关（worker 退出）不可能把作业送进去：计数回滚，如实报 Busy
+            queue.pending.fetch_sub(1, Ordering::SeqCst);
             return Err(SubmitError::Busy);
         }
         Ok(())
@@ -1203,7 +1226,7 @@ impl ExecQueue {
         action: TxAction,
         connection: Option<String>,
     ) -> Result<(), String> {
-        if self.is_busy() {
+        if self.is_busy_for(&connection) {
             return Err("有执行在跑，先等它结束再操作事务".to_string());
         }
         let runner = self.runner.clone();
@@ -1332,7 +1355,7 @@ impl ExecQueue {
         sql: String,
         updates: String,
     ) -> Result<(), String> {
-        if self.is_busy() {
+        if self.is_busy_for(&connection) {
             return Err("有执行在跑，先等它结束再提交".to_string());
         }
         let runner = self.runner.clone();
@@ -1401,18 +1424,25 @@ impl ExecQueue {
         mine
     }
 
-    /// 中断当前作业（B3）
+    /// 中断指定连接的当前作业（B3；阶段②：取消按连接，只命中目标连接）
     ///
-    /// 同步只做"能不能中断"的判断（没在跑就直接回绝，理由可读）；真正的中断在一条一次性
+    /// 同步只做"能不能中断"的判断（该连接没在跑就直接回绝，理由可读）；真正的中断在一条一次性
     /// 线程上做——端口实现允许阻塞（有的驱动要发 `KILL QUERY` 这样的往返），而 UI 线程不能等。
     ///
     /// 先置中断意图再叫取消：批量里**剩余语句**据此标“已取消”。
-    pub fn cancel(&self) -> Result<(), String> {
-        if !self.is_busy() {
+    /// `connection` 为 `None` 时取消**未绑定队列**（键 `""`）的当前作业。
+    pub fn cancel(&self, connection: Option<String>) -> Result<(), String> {
+        let queue = {
+            let conns = lock(&self.conns);
+            match conns.get(&connection_key(&connection)) {
+                Some(queue) => queue.clone(),
+                None => return Err("当前没有执行在运行".to_string()),
+            }
+        };
+        if queue.pending.load(Ordering::SeqCst) == 0 {
             return Err("当前没有执行在运行".to_string());
         }
-        self.cancel_requested.store(true, Ordering::SeqCst);
-        let connection = lock(&self.running_connection).clone();
+        queue.cancel_requested.store(true, Ordering::SeqCst);
         let runner = self.runner.clone();
         let notes = self.cancel_notes.clone();
         std::thread::Builder::new()
@@ -1442,9 +1472,21 @@ impl ExecQueue {
         queue.drain(..).collect()
     }
 
-    /// 是否有执行在跑（状态栏 / 按钮禁用用）
+    /// 是否有**任一连接**的执行在跑 / 排队（状态栏 / 全局指示用）
     pub fn is_busy(&self) -> bool {
-        self.busy.load(Ordering::SeqCst)
+        let conns = lock(&self.conns);
+        conns
+            .values()
+            .any(|queue| queue.pending.load(Ordering::SeqCst) > 0)
+    }
+
+    /// 指定连接是否有执行在跑 / 排队（事务 / 提交 / 取消的按连接判断；阶段②）
+    pub fn is_busy_for(&self, connection: &Option<String>) -> bool {
+        let conns = lock(&self.conns);
+        match conns.get(&connection_key(connection)) {
+            Some(queue) => queue.pending.load(Ordering::SeqCst) > 0,
+            None => false,
+        }
     }
 
     /// 执行器支不支持事务（B4）：界面据此决定摆不摆 TX 区
@@ -1464,10 +1506,18 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 
+/// 连接 → 队列键：`None`（未绑定）统一归 `""`——未绑定作业最终都落到同一活动连接，
+/// 它们天然该串行（阶段②分组的边界就是“真正的连接”，未绑定是同一目标的别名）。
+fn connection_key(connection: &Option<String>) -> String {
+    connection.clone().unwrap_or_default()
+}
+
 impl Drop for ExecQueue {
     fn drop(&mut self) {
-        // 关掉发送端 → 工作线程 `recv` 返回 Err → 线程自然退出
-        self.tx = None;
+        // 放掉全部连接通道：各 worker 的 `recv` 随即收到关闭，线程自然退出（生命周期：随宿主）
+        if let Ok(conns) = self.conns.get_mut() {
+            conns.clear();
+        }
     }
 }
 
@@ -2023,7 +2073,9 @@ mod tests {
             .expect("提交");
 
         wait_until_started(&calls, 1);
-        channel.cancel().expect("中断应当被接受");
+        channel
+            .cancel(Some("P_orders".to_string()))
+            .expect("中断应当被接受");
         wait_until_cancelled(&seen_cancels);
         assert_eq!(
             seen_cancels.lock().expect("锁").as_slice(),
@@ -2056,7 +2108,9 @@ mod tests {
             .expect("提交");
 
         // 不等工作线程：这一刻正是“工作线程还没开始”的窗口
-        channel.cancel().expect("中断应当被接受");
+        channel
+            .cancel(Some("P_orders".to_string()))
+            .expect("中断应当被接受");
         wait_until_cancelled(&seen_cancels);
         assert_eq!(
             seen_cancels.lock().expect("锁").as_slice(),
@@ -2073,7 +2127,7 @@ mod tests {
     #[test]
     fn cancel_without_a_running_job_is_refused() {
         let (channel, _calls, _seen) = channel();
-        let error = channel.cancel().expect_err("没在跑就该回绝");
+        let error = channel.cancel(None).expect_err("没在跑就该回绝");
         assert!(error.contains("没有执行"), "{error}");
     }
 
@@ -2095,7 +2149,7 @@ mod tests {
             .expect("提交批量");
 
         wait_until_started(&calls, 1);
-        channel.cancel().expect("中断应当被接受");
+        channel.cancel(None).expect("中断应当被接受");
         let done = wait_for(&channel, 3);
 
         let first = done[0].result.as_ref().expect_err("第一句被中断");
@@ -2113,6 +2167,112 @@ mod tests {
             1,
             "剩余语句不得再发给驱动（“中断”应当真的不再往下跑）"
         );
+        wait_until_idle(&channel);
+    }
+
+    /// 阶段②：**不同连接并行**——连接 A 跑慢查询时，连接 B 的作业照常执行（不被全局串行卡住）
+    #[test]
+    fn different_connections_run_in_parallel() {
+        let (runner, _stop, calls, _seen) = CancellableRunner::new();
+        let channel = ExecQueue::new(runner);
+        channel
+            .submit(
+                DocumentId::new("doc-a"),
+                &ExecTarget::Statement("select slow".to_string()),
+                Some("conn-a".to_string()), None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("提交 A");
+        wait_until_started(&calls, 1);
+
+        // A 在跑（5 秒自旋）时提交 B：B 应立即执行并回执，不等 A 结束
+        channel
+            .submit(
+                DocumentId::new("doc-b"),
+                &ExecTarget::Statement("select fast".to_string()),
+                Some("conn-b".to_string()), None,
+                ResultPlacement::NewSet,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("提交 B");
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut b_seen = false;
+        while !b_seen {
+            let done = channel.drain();
+            assert!(
+                done.iter().all(|o| o.document == DocumentId::new("doc-b")),
+                "A 不该在这 1 秒内完成（它在自旋等取消）"
+            );
+            b_seen = !done.is_empty();
+            assert!(
+                Instant::now() < deadline,
+                "B 被 A 阻塞了：1 秒内没等到 B 的回执"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // 收尾：中断 A，等全部回执 + 回到空闲
+        channel
+            .cancel(Some("conn-a".to_string()))
+            .expect("中断 A 应当被接受");
+        wait_for(&channel, 1);
+        wait_until_idle(&channel);
+    }
+
+    /// 阶段②：**同一连接排队串行**——后提交的作业等前一个结束才开跑，且结论保序
+    #[test]
+    fn same_connection_queues_serially_in_order() {
+        let (runner, _stop, calls, _seen) = CancellableRunner::new();
+        let channel = ExecQueue::new(runner);
+        channel
+            .submit(
+                DocumentId::new("doc-1"),
+                &ExecTarget::Statement("select slow".to_string()),
+                Some("conn-s".to_string()), None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("提交第 1 个（慢）");
+        wait_until_started(&calls, 1);
+        channel
+            .submit(
+                DocumentId::new("doc-2"),
+                &ExecTarget::Statement("select fast".to_string()),
+                Some("conn-s".to_string()), None,
+                ResultPlacement::NewSet,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("提交第 2 个（快，排队）");
+
+        // 第 2 个提交时第 1 个还在跑：同连接不得并发，calls 只能是 1
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "同连接排队串行：后提交的作业不得与先行的并发执行"
+        );
+
+        // 中断第 1 个，放行队列：第 2 个接着跑完，结论按提交顺序返回
+        channel
+            .cancel(Some("conn-s".to_string()))
+            .expect("中断应当被接受");
+        let done = wait_for(&channel, 2);
+        assert_eq!(
+            done[0].document,
+            DocumentId::new("doc-1"),
+            "同连接结论保序：先提交的先回"
+        );
+        assert_eq!(
+            done[1].document,
+            DocumentId::new("doc-2"),
+            "同连接结论保序：后提交的后回"
+        );
+        assert!(done[1].result.is_ok(), "第 2 个没有被前面的中断误伤");
         wait_until_idle(&channel);
     }
 
@@ -2156,7 +2316,7 @@ mod tests {
                 crate::channel::ExecChannel::default(),
             )
             .expect("提交");
-        channel.cancel().expect("中断应当被接受");
+        channel.cancel(None).expect("中断应当被接受");
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut notes = Vec::new();
@@ -2499,7 +2659,7 @@ mod tests {
             .expect_err("忙着时不该接事务动作");
         assert!(error.contains("有执行在跑"), "{error}");
 
-        channel.cancel().expect("收尾：中断掉那句慢查询");
+        channel.cancel(None).expect("收尾：中断掉那句慢查询");
         wait_for(&channel, 1);
         wait_until_idle(&channel);
     }
@@ -2810,8 +2970,9 @@ mod tests {
         assert!(!channel.is_busy());
     }
 
+    /// 阶段②：同一连接忙时第二次提交**排队**（不拒绝、不丢作业；与旧 1a「拒绝」语义的差异点）
     #[test]
-    fn a_second_submit_is_refused_while_one_is_running() {
+    fn a_second_submit_on_the_same_connection_queues_while_one_is_running() {
         // 慢执行器：卡住第一次调用，确保第二次提交撞上忙状态
         struct SlowRunner {
             release: Arc<Mutex<bool>>,
@@ -2860,23 +3021,21 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
 
-        assert_eq!(
-            channel
-                .submit(
-                    document,
-                    &target,
-                    None, None,
-                    ResultPlacement::Replace,
-                    RunOptions::default(),
-                    crate::channel::ExecChannel::default(),
-                )
-                .expect_err("忙时应被拒"),
-            SubmitError::Busy
-        );
+        // 阶段②：同一连接第二次提交**排队**而非拒绝（不同连接才并行，同连接串行不丢作业）
+        channel
+            .submit(
+                document,
+                &target,
+                None, None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+                crate::channel::ExecChannel::default(),
+            )
+            .expect("排队成功：同连接第二次提交不拒绝");
 
         *release.lock().unwrap() = true;
-        let done = wait(&channel);
-        assert_eq!(done.len(), 1, "被拒的那次不该产生结果");
+        let done = wait_for(&channel, 2);
+        assert_eq!(done.len(), 2, "两次提交都产生结果");
         assert_eq!(SubmitError::Busy.message(), "已有执行在进行中");
     }
 
@@ -3026,11 +3185,12 @@ mod tests {
         }
 
         let queue = ExecQueue::new(Arc::new(SlowStatementRunner));
+        // 执行与提交同连接（阶段②：忙态按连接判断，只拦同连接的提交）
         queue
             .submit(
                 DocumentId::new("doc-busy"),
                 &ExecTarget::Statement("select 1".to_string()),
-                None, None,
+                Some("P_orders".to_string()), None,
                 ResultPlacement::NewSet,
                 RunOptions::default(),
                 crate::channel::ExecChannel::default(),
