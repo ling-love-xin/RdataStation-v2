@@ -20,6 +20,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath};
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::*;
 
 use crate::commands::QuickOpenLocate;
@@ -612,10 +613,21 @@ impl Render for QuickOpenPalette {
             .inset_0()
             .flex()
             .justify_center()
-            .bg(theme.colors.overlay)
+            // 遮罩与前景是**兄弟**：点遮罩空白才关闭；点在面板上 `mouse_down` 不再冒泡到
+            // 遮罩层（兄弟不冒泡），否则按下即把面板关掉，随后的 `click` 确认就失效了。
+            .child(
+                div()
+                    .id("qo-overlay")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .bg(theme.colors.overlay)
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close(cx))),
+            )
             .child(
                 div()
                     // 示意 v5：面板水平居中、顶部距标题栏 42px。
+                    .relative()
                     .mt(rems(ui::QUICK_OPEN_PANEL_TOP))
                     .w(rems(ui::QUICK_OPEN_PANEL_WIDTH))
                     .max_h(rems(ui::QUICK_OPEN_PANEL_MAX_HEIGHT))
@@ -643,7 +655,6 @@ impl Render for QuickOpenPalette {
                             .child(div().ml_auto().child(hint_right)),
                     ),
             )
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| this.close(cx)))
             // 键盘：焦点在输入框里，单行 Input 不处理 ↑↓ / Esc（会 propagate），
             // 因此这三个 Action 在浮层根上接住；Enter 由输入框事件给出（含 Shift 三态）。
             .on_action(cx.listener(|this, _: &MoveUp, window, cx| {

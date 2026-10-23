@@ -383,6 +383,38 @@ impl EditorShared {
         drained
     }
 
+    /// 只取走**本文档**已完成的执行（面板轮询泵调用；多面板共享队列，按文档隔离互不抢回执）。
+    ///
+    /// 与 [`Self::drain_exec`] 同一回执留档口径：结果归编辑区，回执给宿主；别的文档回执留在
+    /// 队列里，等归属面板自己的泵取走。
+    pub fn drain_exec_for(
+        &self,
+        document: &crate::model::DocumentId,
+    ) -> Vec<crate::execution::ExecOutcome> {
+        let drained = {
+            let guard = self.exec.borrow();
+            guard
+                .as_ref()
+                .map(|channel| channel.drain_for(document))
+                .unwrap_or_default()
+        };
+        if !drained.is_empty() {
+            let mut receipts = self.receipts.borrow_mut();
+            for outcome in &drained {
+                receipts.push(ExecReceipt {
+                    document: outcome.document.clone(),
+                    connection: outcome.connection.clone(),
+                    succeeded: outcome.result.is_ok(),
+                });
+            }
+            let overflow = receipts.len().saturating_sub(MAX_EXEC_RECEIPTS);
+            if overflow > 0 {
+                receipts.drain(0..overflow);
+            }
+        }
+        drained
+    }
+
     /// 取走执行回执（宿主轮询调用；每个回执只交付一次）
     pub fn drain_exec_receipts(&self) -> Vec<ExecReceipt> {
         std::mem::take(&mut self.receipts.borrow_mut())

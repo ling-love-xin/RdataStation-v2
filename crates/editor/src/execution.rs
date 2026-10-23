@@ -1425,6 +1425,25 @@ impl ExecQueue {
         queue.drain(..).collect()
     }
 
+    /// 只取回属于指定文档的回执；其他文档的回执留在队列里，等归属面板自己的泵取走。
+    ///
+    /// 多面板共享同一个队列：若每个面板都全量 [`Self::drain`]，空闲面板会抢先取走别的文档
+    /// 回执并丢弃，归属面板队列被抢空、结果区不再刷新（0.2.4 现象 2 竞态）。按文档隔离排空
+    /// 从根上消除跨面板抢回执。
+    pub fn drain_for(&self, document: &DocumentId) -> Vec<ExecOutcome> {
+        let mut queue = match self.done.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mine: Vec<ExecOutcome> = queue
+            .iter()
+            .filter(|outcome| &outcome.document == document)
+            .cloned()
+            .collect();
+        queue.retain(|outcome| &outcome.document != document);
+        mine
+    }
+
     /// 中断当前作业（B3）
     ///
     /// 同步只做"能不能中断"的判断（没在跑就直接回绝，理由可读）；真正的中断在一条一次性

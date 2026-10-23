@@ -30,6 +30,8 @@ base64.workspace = true
 rds-kernel.workspace = true
 # 内核事件流是 tokio mpsc（shared.rs 的 KernelEntry；UI 线程用 try_recv 轮询）
 tokio.workspace = true
+# 执行链埋点（入口 / 前置闸拒绝 / 入队成败）：与 workbench 同一套 tracing 日志通道
+tracing.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；

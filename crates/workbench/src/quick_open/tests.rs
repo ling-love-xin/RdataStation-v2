@@ -15,6 +15,7 @@ use gpui_kit::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
     ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
+use gpui_kit::test::TestWindowExt as _;
 
 use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
@@ -208,6 +209,46 @@ fn arrow_keys_move_selection_and_enter_executes(cx: &mut TestAppContext) {
         !shared.quick_open.get(),
         "执行后面板要关（下一次打开是全新的）"
     );
+}
+
+/// 鼠标点击结果行：经列表行 `on_click` → 委托 `confirm` → 宿主执行并关面板。
+///
+/// 回归：遮罩关闭监听曾挂在浮层根上，点行时 `mouse_down` 先冒泡到根把面板关掉，
+/// 随后的 `click` 不再命中行，鼠标确认失效（Enter 走输入框事件，所以一直正常）。
+#[gpui_kit::test]
+fn clicking_a_row_executes_the_selected_action(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (host, shared, _harness, cx) = open_palette(cx);
+    cx.simulate_keystrokes("s");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|window, cx| {
+        window.click("qo-row-conn:0:sales", cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let executed = host.taken();
+    assert_eq!(executed.len(), 1, "鼠标点击行应经宿主端口执行一次：{executed:?}");
+    assert_eq!(executed[0].0, Action::SelectConnection(0));
+    assert!(!executed[0].1, "普通点击不保留面板");
+    assert!(!shared.quick_open.get(), "执行后面板要关（下一次打开是全新的）");
+}
+
+/// 点遮罩空白处仍关闭面板，且不派发任何动作（遮罩关闭能力回归）。
+#[gpui_kit::test]
+fn clicking_the_overlay_closes_without_executing(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (host, shared, _harness, cx) = open_palette(cx);
+    cx.simulate_keystrokes("s");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|window, cx| {
+        window.click("qo-overlay", cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(host.taken().is_empty(), "点遮罩不应派发动作：{:?}", host.taken());
+    assert!(!shared.quick_open.get(), "点遮罩空白必须关掉浮层");
 }
 
 /// `⌥↵`（在树中定位）真按键：元数据命中行上派发 `RevealMetadata`，不可定位的行上不动。

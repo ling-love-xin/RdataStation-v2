@@ -2433,8 +2433,36 @@ impl WorkbenchView {
                 self.apply_left_mode(window, cx);
             }
             Action::OpenRightPanel(panel) => {
+                let open_before = self
+                    .shared
+                    .right_open_panels
+                    .borrow()
+                    .iter()
+                    .map(|p| format!("{p:?}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 // 与右活动栏点击同一口径（Mock 的候选清单与生成历史在展开这一拍重读）。
                 self.shared.open_right_panel(panel, cx);
+                // 与 `OpenLeftPanel` 对称：状态改完由宿主这拍同步 dock（挂载 / 激活 / 展开）。
+                // 旧实现只委托 `open_right_panel`，布局同步依赖 `notify_host` 的 defer 重绘——
+                // 弱引用升级失败或事件时序错位时右 dock 会停在收起态，表现为「命令点了进不去面板」。
+                self.apply_right_mode(window, cx);
+                let open_after = self
+                    .shared
+                    .right_open_panels
+                    .borrow()
+                    .iter()
+                    .map(|p| format!("{p:?}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                tracing::info!(
+                    target = "rds_workbench::quick_open",
+                    panel = format!("{panel:?}"),
+                    right_mode = format!("{:?}", self.shared.right_mode.get()),
+                    open_before = open_before,
+                    open_after = open_after,
+                    "命令面板：打开右侧面板"
+                );
             }
             Action::OpenSettings => {
                 self.shared.settings_open.set(true);

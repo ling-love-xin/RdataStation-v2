@@ -145,7 +145,21 @@ impl EngineQueryRunner {
         record_accel_history(&source, sql, elapsed_ms, &outcome);
         // 【B8】历史面板据此重新加载（与源库档同一节拍）
         editor::history::bump();
-        let result = outcome.map_err(|error| error.to_string())?;
+        let result = match outcome {
+            Ok(ok) => ok,
+            Err(error) => {
+                tracing::error!(
+                    target = "rds_workbench::exec",
+                    channel = "accelerated",
+                    connection = ?connection,
+                    source = %source.conn_id,
+                    elapsed_ms,
+                    error = %error,
+                    "本地加速执行失败"
+                );
+                return Err(error.to_string());
+            }
+        };
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = segmented
             && !data.columns.is_empty()
@@ -281,8 +295,22 @@ impl EngineQueryRunner {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
         editor::history::bump();
-        let result =
-            outcome.map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let result = match outcome {
+            Ok(ok) => ok,
+            Err(error) => {
+                let explained = explain_federation_error(&session, error.to_string());
+                tracing::error!(
+                    target = "rds_workbench::exec",
+                    channel = "federated",
+                    connection = ?connection,
+                    owner = %plan.owner,
+                    elapsed_ms,
+                    error = %explained,
+                    "联邦查询执行失败"
+                );
+                return Err(explained);
+            }
+        };
         let mut data = to_data(&result, elapsed_ms, false);
         data.has_more = segmented
             && !data.columns.is_empty()
@@ -355,6 +383,16 @@ impl QueryRunner for EngineQueryRunner {
         sql: &str,
         run_options: editor::execution::RunOptions,
     ) -> Result<QueryData, String> {
+        let sql_preview: String = sql.chars().take(80).collect();
+        tracing::info!(
+            target = "rds_workbench::exec",
+            channel = ?channel,
+            connection = ?connection,
+            schema = ?schema,
+            use_transaction = run_options.use_transaction,
+            sql = sql_preview,
+            "执行器：接收一条语句"
+        );
         // 【B13】本地跑的两档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）。
         // 这两档**不接 schema 上下文**：schema 面包屑是**源库**的概念，DuckDB 侧挂载的
         // 源表名通常已限定（`alias.table`）；等加速/联邦做自己的 schema 语义再接。
@@ -364,6 +402,7 @@ impl QueryRunner for EngineQueryRunner {
         if channel != ExecChannel::Source {
             return self.run_on_accel(connection, sql);
         }
+        let started = std::time::Instant::now();
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             // 历史由引擎侧统一记录（含耗时/行数，真实值）
@@ -391,13 +430,40 @@ impl QueryRunner for EngineQueryRunner {
         // 【B8】不管成败，引擎都记了一条历史（含耗时 / 行数 / 失败原因）——
         // 摇一下版本号：右 Dock 的历史面板据此重新加载（面板不读盘，也不每帧问文件）
         editor::history::bump();
-        let executed = executed.map_err(|error| error.to_string())?;
-        let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
-        // 【B5b】首段拿满了就标“可能还有下一段”（写语句没有分段可言）：
-        // 拿不满 = 这一份结果就这么多，界面不摆「取下一段」。
-        data.has_more =
-            !data.columns.is_empty() && data.rows.len() == editor::execution::SEGMENT_ROWS;
-        Ok(data)
+        match executed {
+            Ok(executed) => {
+                let elapsed_ms = executed.elapsed_ms;
+                let mut data = to_data(&executed.result, elapsed_ms, executed.truncated);
+                // 【B5b】首段拿满了就标“可能还有下一段”（写语句没有分段可言）：
+                // 拿不满 = 这一份结果就这么多，界面不摆「取下一段」。
+                data.has_more =
+                    !data.columns.is_empty() && data.rows.len() == editor::execution::SEGMENT_ROWS;
+                tracing::info!(
+                    target = "rds_workbench::exec",
+                    channel = ?channel,
+                    connection = ?connection,
+                    schema = ?schema,
+                    rows = data.rows.len(),
+                    cols = data.columns.len(),
+                    elapsed_ms,
+                    "源库执行成功"
+                );
+                Ok(data)
+            }
+            Err(error) => {
+                tracing::error!(
+                    target = "rds_workbench::exec",
+                    channel = ?channel,
+                    connection = ?connection,
+                    schema = ?schema,
+                    sql = sql_preview,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    error = %error,
+                    "源库执行失败"
+                );
+                Err(error.to_string())
+            }
+        }
     }
 
     /// 【B14】下发源库：把筛选词拼成 `WHERE` 重查，结果落**新结果集**

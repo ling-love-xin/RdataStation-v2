@@ -516,11 +516,25 @@ async fn ordered_preview_returns_the_global_top_rows() {
     assert_eq!(more_rows.len(), 25, "重查要几行给几行");
     assert_eq!(more_rows[0][0].as_text().unwrap_or_default(), "1");
 
-    assert!(
-        MockEngine::try_preview_sample(&result.temp_table_name, Some(("no_such_column", true)), 10)
-            .is_err(),
-        "列名不存在应报错（而不是默默当成无排序列）"
-    );
+    // 列名不存在应报错（而不是默默当成无排序列）。内存库是进程级一把锁：同进程别的用例
+    // 持锁时 `try_preview_sample` 非阻塞回落 `Ok(None)`，这里跟 `sample_preview_when_idle`
+    // 一样重试到空闲再断言，避免并行竞争把「忙」误判成「未知列被放行」。
+    let mut unknown_column_rejected = false;
+    for _ in 0..200 {
+        match MockEngine::try_preview_sample(
+            &result.temp_table_name,
+            Some(("no_such_column", true)),
+            10,
+        ) {
+            Err(_) => {
+                unknown_column_rejected = true;
+                break;
+            }
+            Ok(Some(_)) => panic!("不存在的排序列必须报错，不能默默当成无排序列"),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+    assert!(unknown_column_rejected, "列名不存在应报错（而不是默默当成无排序列）");
 }
 
 /// 内存库被人占着时**非阻塞回落** `Ok(None)`：面板据此说「稍后再试」，而不是假装重查过了。

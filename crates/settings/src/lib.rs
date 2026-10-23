@@ -1188,6 +1188,10 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::init(cx);
             SettingsService::init(cx);
+            // 同进程并行的写盘用例共享隔离根（`paths` test-support 按进程隔离，不区分测试），
+            // 先记录启动时值；拒绝语义是“不写入”，保持该值即可，不硬编码默认 16.0，
+            // 避免并行用例把隔离盘写成其它字号时本用例误判。
+            let before = SettingsService::font_size(cx);
             let ok = SettingsService::apply_by_key(
                 "appearance.font_size",
                 SettingValue::Number(99.0),
@@ -1195,7 +1199,7 @@ mod tests {
                 cx,
             );
             assert!(!ok, "超范围字号必须拒绝");
-            assert_eq!(SettingsService::font_size(cx), 16.0, "拒绝后值不变");
+            assert_eq!(SettingsService::font_size(cx), before, "拒绝后值不变");
         });
     }
 

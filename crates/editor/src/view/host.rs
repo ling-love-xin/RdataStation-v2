@@ -4552,7 +4552,38 @@ impl EditorHostPanel {
         title: Option<String>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.execution_allowed() {
+        let mode = self.document_mode();
+        let allowed = self.execution_allowed();
+        let channel = self.channel();
+        let conn = self.bound_connection();
+        let stmt_count = target.statements().len();
+        let sql_preview = target
+            .statements()
+            .first()
+            .map(|sql| sql.chars().take(80).collect::<String>())
+            .unwrap_or_default();
+        tracing::info!(
+            target = "rds_editor::exec",
+            doc = %self.document,
+            mode = ?mode,
+            execute_allowed = allowed,
+            channel = ?channel,
+            connection = ?conn,
+            statements = stmt_count,
+            kind = target.label(),
+            sql = sql_preview,
+            "提交执行：进入执行主入口"
+        );
+        if !allowed {
+            tracing::warn!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                mode = ?mode,
+                channel = ?channel,
+                connection = ?conn,
+                kind = target.label(),
+                "执行被拒：当前文档模式不与数据库通信（通用/分析模式无执行能力）"
+            );
             self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
             return false;
         }
@@ -4562,11 +4593,29 @@ impl EditorHostPanel {
             .channel_ready()
             .and_then(|()| self.channel_write_check(&target))
         {
+            tracing::warn!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                channel = ?channel,
+                connection = ?conn,
+                kind = target.label(),
+                reason = %reason,
+                "执行被拒：通道不可用或写语句被通道闸拦下"
+            );
             self.set_message(Some(reason), cx);
             return false;
         }
         // 项目只读（标题栏的锁）：写语句同样在**提交之前**拒（旧 SQL 面板有这道闸，B12 遗失）
         if let Err(reason) = self.project_write_check(&target) {
+            tracing::warn!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                channel = ?channel,
+                connection = ?conn,
+                kind = target.label(),
+                reason = %reason,
+                "执行被拒：项目只读，写语句被项目闸拦下"
+            );
             self.set_message(Some(reason), cx);
             return false;
         }
@@ -4585,6 +4634,14 @@ impl EditorHostPanel {
             seen
         };
         if !names.is_empty() {
+            tracing::info!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                channel = ?channel,
+                connection = ?conn,
+                params = ?names,
+                "执行挂起：参数表单待填，填完后再入队"
+            );
             self.pending_bind = Some(PendingBind {
                 target,
                 placement,
@@ -4593,7 +4650,6 @@ impl EditorHostPanel {
             self.open_bind_dialog(names, cx);
             return false;
         }
-        let channel = self.channel();
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
         let expected = target.statements().len();
         // B4：自动提交关掉时，本次执行进事务（引擎在没有事务时会先自动开一个）；
@@ -4606,6 +4662,16 @@ impl EditorHostPanel {
             .submit(self.document.clone(), &target, placement, options)
         {
             Ok(()) => {
+                tracing::info!(
+                    target = "rds_editor::exec",
+                    doc = %self.document,
+                    channel = ?channel,
+                    connection = ?conn,
+                    statements = expected,
+                    use_transaction = options.use_transaction,
+                    kind = target.label(),
+                    "执行已入队后台线程"
+                );
                 if self.pending == 0 {
                     // 批量期间一直计同一轮的时间：后一句不该把计时清零
                     self.running_since = Some(std::time::Instant::now());
@@ -4618,6 +4684,15 @@ impl EditorHostPanel {
                 true
             }
             Err(error) => {
+                tracing::warn!(
+                    target = "rds_editor::exec",
+                    doc = %self.document,
+                    channel = ?channel,
+                    connection = ?conn,
+                    kind = target.label(),
+                    reason = %error.message(),
+                    "执行提交被队列拒绝"
+                );
                 self.set_message(Some(error.message().to_string()), cx);
                 false
             }
@@ -5193,7 +5268,17 @@ impl EditorHostPanel {
         // 【2d】单元执行的结论：独立通道（结果走内联输出，不是结果区）
         self.drain_cell_notes(cx);
 
-        let outcomes = self.shared.drain_exec();
+        // 多面板共享同一执行队列：只取本文档回执，别文档回执留在队列等归属面板自己取走
+        // （否则空闲面板的泵会抢先 drain 走别的文档结论并丢弃，归属面板结果区不再刷新）。
+        let outcomes = self.shared.drain_exec_for(&self.document);
+        if !outcomes.is_empty() {
+            tracing::info!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                receipts = outcomes.len(),
+                "回执泵：取到待回填执行结论"
+            );
+        }
         let mut mine_arrived = 0usize;
         // 【B6】这一轮新到的失败是哪条语句（回填之后要是有位置就跳过去）
         let mut fresh_failure: Option<String> = None;
@@ -5206,24 +5291,39 @@ impl EditorHostPanel {
         let mut background_failure: Option<String> = None;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
-            if is_mine {
-                mine_arrived += 1;
-                // B4：事务状态跟着结论回来（用户手敲 BEGIN / COMMIT 也走同一路径）
-                self.apply_tx_snapshot(outcome.transaction);
-                // 【B14】提示从**结论**里取（它随这次执行回来，不是猜的）
-                if let Ok(data) = outcome.result.as_ref()
-                    && let Some(notice) = data.notice.clone()
-                {
-                    fresh_notice = Some(notice);
-                }
+            let outcome_ok = outcome.result.is_ok();
+            let (cols, rows) = match &outcome.result {
+                Ok(data) => (data.columns.len(), data.rows.len()),
+                Err(_) => (0, 0),
+            };
+            tracing::info!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                receipt_doc = %outcome.document,
+                is_mine,
+                ok = outcome_ok,
+                cols,
+                rows,
+                placement = ?outcome.placement,
+                "回执认领：判定结论归属与形状"
+            );
+            // 非本文档回执不归本面板处理（`drain_exec_for` 已按文档隔离，这里是双保险）：
+            // 不入库、不探测主键 / 注释、不弹在途标题，避免污染本文档结果存储。
+            if !is_mine {
+                continue;
+            }
+            mine_arrived += 1;
+            // B4：事务状态跟着结论回来（用户手敲 BEGIN / COMMIT 也走同一路径）
+            self.apply_tx_snapshot(outcome.transaction);
+            // 【B14】提示从**结论**里取（它随这次执行回来，不是猜的）
+            if let Ok(data) = outcome.result.as_ref()
+                && let Some(notice) = data.notice.clone()
+            {
+                fresh_notice = Some(notice);
             }
             let placement = outcome.placement;
-            // 【B10】在途标题按位弹出（只有本文档的回填才算数；别的文档那份不能把队列吃了）
-            let title = if is_mine {
-                self.pending_labels.pop_front().flatten()
-            } else {
-                None
-            };
+            // 【B10】在途标题按位弹出
+            let title = self.pending_labels.pop_front().flatten();
             let mut entry = entry_from(outcome);
             if let Some(title) = title {
                 entry = entry.with_title(title);
@@ -5234,7 +5334,7 @@ impl EditorHostPanel {
             entry.key_columns = probe_primary_key(self, &entry);
             // 【P1】字段注释：血缘 + 表列元数据（内存读；长度与 `columns` 一致）
             entry.column_annotations = annotate_columns(self, &entry);
-            if is_mine && entry.failed() {
+            if entry.failed() {
                 // 【B5b】取下一段失败：**已经抓到的行是用户的成果**，不能因为再抓失败就清掉。
                 // 所以这次失败不入存储（选中那份原样不动），只把原因说出来。
                 if placement == ResultPlacement::Append {
@@ -5367,6 +5467,19 @@ impl EditorHostPanel {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
+            tracing::info!(
+                target = "rds_editor::exec",
+                doc = %self.document,
+                active,
+                has_entry = entry.is_some(),
+                has_grid = entry.as_ref().is_some_and(|e| e.has_grid()),
+                failed = entry.as_ref().is_some_and(|e| e.failed()),
+                cols = entry.as_ref().map(|e| e.columns.len()).unwrap_or(0),
+                rows = entry.as_ref().map(|e| e.rows.len()).unwrap_or(0),
+                channel = ?current_channel,
+                entry_channel = ?entry.as_ref().map(|e| e.channel),
+                "结果投影：当前选中结果集形状"
+            );
             let connection = entry.and_then(|entry| {
                 entry
                     .connection
