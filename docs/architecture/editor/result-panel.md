@@ -289,18 +289,18 @@ blanco-ref / tusk-ref 等），拍板「可以并实现，要文档记录，补�
 | 列头类型标签 / 注释 tooltip | 列头类型与元数据 | ✅ 已交付（P0 类型标签 + P1 分块 tooltip） |
 | 列头筛选箭头菜单 | 每列箭头菜单 | 记 backlog（现走右键菜单；`render_th` 已有接入点） |
 
-**② 工程层（四竞品可移植方案）——backlog**
+**② 工程层（四竞品可移植方案）——已交付 / backlog**
 
-| 方案 | 竞品实证 | 来源 |
-| --- | --- | --- |
-| 大表窗口化取数 + generation 防抖动 | tusk：窗口取数 + 请求代际（旧响应作废） | `竞品分析-同架构竞品-编辑器与表格模块.md` |
-| pending 变更合并 UPDATE 单事务 | blanco：批量变更集 → 一条 UPDATE 事务 | 同上 |
-| 撤销 / 重做（快照） | tusk `History<T>` 快照栈 | 同上 |
-| 类型感知单元格编辑 | tusk：按列类型出编辑器/校验 | 同上 |
-| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 |
-| IME / 输入法支持 | rustgrid：编辑器输入法路径 | 同上 |
-| 列宽用户设定 | cellar `widths_user_set` | 同上 |
-| 每执行一 Job + 连接级锁 | DBeaver：独立执行 Job、连接级互斥 | `竞品分析-多面板并发执行阻塞.md`（执行架构，与 execution-context-model 衔接） |
+| 方案 | 竞品实证 | 来源 | 状态 |
+| --- | --- | --- | --- |
+| 大表窗口化取数 + generation 防抖动 | tusk：窗口取数 + 请求代际（旧响应作废） | `竞品分析-同架构竞品-编辑器与表格模块.md` | backlog |
+| pending 变更合并 UPDATE 单事务 | blanco：批量变更集 → 一条 UPDATE 事务 | 同上 | backlog |
+| 撤销 / 重做（快照） | tusk `History<T>` 快照栈 | 同上 | ✅ 已交付：`EditHistory` 双栈（`changes.rs`，每格编辑一步、新编辑清空重做栈、随结果集作废）+ 接线（提交入栈、`Ctrl+Z`/`Ctrl+Shift+Z` 恢复上一步值写回变更集并重投影，store `histories` 槽与 `changes` 同序） |
+| 类型感知单元格编辑 | tusk：按列类型出编辑器/校验 | 同上 | backlog |
+| 列布局持久化（顺序/宽度/隐藏） | blanco `ColumnLayout` 落盘 + 重放 | 同上 | 阻塞：跨会话落盘依赖会话文件（`editor_session.rs` 正被状态栏合并线占用），同会话列宽保留已达成 |
+| IME / 输入法支持 | rustgrid：编辑器输入法路径 | 同上 | backlog |
+| 列宽用户设定 | cellar `widths_user_set` | 同上 | backlog |
+| 每执行一 Job + 连接级锁 | DBeaver：独立执行 Job、连接级互斥 | `竞品分析-多面板并发执行阻塞.md`（执行架构，与 execution-context-model 衔接） | 下一版本规划（execution-context-model） |
 
 **③ 呈现扩展（DBeaver `IResultSetPresentation` 方向）——backlog**
 
@@ -310,6 +310,9 @@ Grid / Text / Record 多视图呈现：`ResultControls` / `ResultPane` 已是呈
 > 实施顺序建议：视觉层剩余项（列头筛选菜单）→ 工程层「列布局持久化」与「撤销/重做」
 > （两者独立、收益最直接）→ 大表窗口化取数与 pending 单事务（动 engine 侧，与
 > execution-context-model 下一版本规划衔接）。
+>
+> 进度（2026-10-24）：① 视觉层三项（焦点格粗边框 / 状态行当前格值 / 列头箭头菜单）已交付；
+> 工程层「撤销/重做」已交付；「列布局持久化」被会话文件并行线占用阻塞。
 
 ## 8. 协作纪律
 
