@@ -30,8 +30,8 @@ rds-editor  ──依赖──>  rds-result-panel  ──依赖──>  rds-engi
 
 ## 测试
 
-- `cargo test -p rds-result-panel --lib`：107 passed（grid 46 / store 17 / export / sets / changes / status / analysis）
-- editor 侧回归：`cargo test -p rds-editor --lib`（581 passed；结果域测试随本 crate 迁出）
+- `cargo test -p rds-result-panel --lib`：111 passed（grid 46 / store 21 / export / sets / changes / status / analysis）
+- editor 侧回归：`cargo test -p rds-editor --lib`（585 passed；结果域测试随本 crate 迁出）
 - 编译/测试前设 `$env:RUST_MIN_STACK='268435456'`
 
 ## 设计要点
