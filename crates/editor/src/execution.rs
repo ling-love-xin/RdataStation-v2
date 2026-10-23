@@ -33,6 +33,10 @@ use std::sync::{Arc, Mutex};
 use crate::channel::ExecChannel;
 use crate::export::RowKey;
 use crate::model::DocumentId;
+// 【下移】ResultPlacement / Pushdown 已随结果存储搬到 rds-result-panel（editor 经
+// `crate::store` 重导出）：执行层与结果存储共用同一份定义，不再各写一份。
+// `pub use` 保持 `crate::execution::ResultPlacement` 旧路径对调用方仍公开。
+pub use crate::store::{Pushdown, ResultPlacement};
 
 // ===== 执行什么 =====
 
@@ -261,53 +265,6 @@ impl ExecTarget {
             | Self::All(_)
             | Self::Batch(_) => "原查询",
         }
-    }
-}
-
-/// 结果落到哪里（B2）：执行族里「批量执行」与「在新结果标签中执行」的差别只在这一维
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResultPlacement {
-    /// 替换当前选中的结果集（1a 口径：一次执行一份结果）
-    Replace,
-    /// 追加一个新结果集，**原结果集仍保持选中**（原型 §4.4：V1 常驻 `＋` 按钮的语义——
-    /// “别动我正在看的东西，新的那份放旁边”）
-    NewSet,
-    /// 【B5b】把这一段**接在选中那份后面**（取下一段：不新开、不替换）
-    ///
-    /// 接的前提是列形状一致（同一份结果的下一段）；形状变了就当一份新结果落下。
-    Append,
-}
-
-/// 【A2】一份结果的「形成方式」原料（刷新 ⟳ 时按它重查，保持用户看到的形态）
-///
-/// 下发筛选 / 排序下发的结果集，其 `sql` 仍是**原 SQL**（改写发生在执行器里，
-/// 回填不拿改写后的语句）——原料不随结论回去的话，刷新会退回全量原始查询。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Pushdown {
-    /// 下发筛选：当初的筛选词 + 结果集的列（执行器拼 `WHERE` 用）
-    Filtered { filter: String, columns: Vec<String> },
-    /// 排序下发：当初点的列与方向
-    SortedDown { column: String, descending: bool },
-}
-
-impl Pushdown {
-    /// 从执行作业的下发载荷还原（`ExecJob` 的两个下发字段互斥：一次只有其一）
-    pub(crate) fn from_job(
-        filtered: &Option<(String, Vec<String>)>,
-        sorted_down: &Option<(String, bool)>,
-    ) -> Option<Self> {
-        filtered
-            .as_ref()
-            .map(|(filter, columns)| Pushdown::Filtered {
-                filter: filter.clone(),
-                columns: columns.clone(),
-            })
-            .or_else(|| {
-                sorted_down.as_ref().map(|(column, descending)| Pushdown::SortedDown {
-                    column: column.clone(),
-                    descending: *descending,
-                })
-            })
     }
 }
 
@@ -1518,12 +1475,14 @@ impl Drop for ExecQueue {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        CommitReport, ExecMenuKind, ExecQueue, ExecTarget, QueryData, QueryRunner, ResultPlacement,
-        RunOptions, SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot,
+        CommitReport, ExecMenuKind, ExecQueue, ExecTarget, QueryData, QueryRunner, RunOptions,
+        SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot,
         all_target, batch_target, resolve_target, statement_target, target_for_menu,
     };
     use crate::channel::ExecChannel;
     use crate::model::DocumentId;
+    // 【下移】ResultPlacement / Pushdown 在 rds-result-panel，经 crate::store 重导出
+    use crate::store::ResultPlacement;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1769,7 +1728,7 @@ mod tests {
     /// 【A2】下发载荷还原成形成原料：filtered / sorted_down 互斥，只有其一
     #[test]
     fn pushdown_round_trips_from_the_job_payload() {
-        use super::Pushdown;
+        use crate::store::Pushdown;
         assert_eq!(
             Pushdown::from_job(
                 &Some(("ab".to_string(), vec!["id".to_string(), "name".to_string()])),

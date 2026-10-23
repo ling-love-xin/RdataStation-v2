@@ -32,6 +32,11 @@ rds-kernel.workspace = true
 tokio.workspace = true
 # 执行链埋点（入口 / 前置闸拒绝 / 入队成败）：与 workbench 同一套 tracing 日志通道
 tracing.workspace = true
+# 共享纯数据模型（DocumentId / ExecChannel / ColumnAnnotation）：结果面板下沉后
+# editor 与结果面板都从 shell 命名，避免「结果面板 → editor」反向依赖
+workbench_shell.workspace = true
+# 结果集面板（结果存储 / 变更集 / 导出随面板独立）：editor 依赖它、它不反向依赖 editor
+result_panel.workspace = true
 
 # 测试专用特性：`host.rs` 的 `commit_in_flight_for_test` 等测试辅助按
 # `#[cfg(any(test, feature = "test-support"))]` 门控（与 paths crate 同口径）；

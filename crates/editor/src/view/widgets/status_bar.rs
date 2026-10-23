@@ -28,6 +28,9 @@ use gpui_kit::*;
 
 use crate::model::{EditorMode, ReadOnly};
 use crate::ui;
+// 耗时文案随结果面板下移（结果状态行与编辑器状态栏共用同一份人读换算）。
+// `pub use` 保持 `status_bar::elapsed_text` 旧路径对调用方仍公开。
+pub use result_panel::status::elapsed_text;
 
 /// 状态栏的输入（全部来自真实状态；无数据源的字段不放进结构体）
 ///
@@ -298,18 +301,8 @@ pub fn human_size(bytes: usize) -> String {
     }
 }
 
-/// 跑多久了（人读的短文案：′10s 一位小数，之后整秒，过分钟折成 `1m42s`）
-pub fn elapsed_text(elapsed: std::time::Duration) -> String {
-    let secs = elapsed.as_secs_f32();
-    if secs < 10.0 {
-        format!("{secs:.1}s")
-    } else if secs < 60.0 {
-        format!("{}s", secs as u64)
-    } else {
-        let total = secs as u64;
-        format!("{}m{}s", total / 60, total % 60)
-    }
-}
+/// 跑多久了（人读的短文案）——实现已下移 `rds-result-panel`（`result_panel::status::elapsed_text`），
+/// 顶部从那里导入；此处旧定义已删除。
 
 /// 画成状态栏（固定高、顶部分隔线；颜色全部来自主题）
 ///
@@ -398,8 +391,10 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**（父模块引入了 gpui，`use super::*` 会把它的 `test` 宏带进来）
-    use super::{StatusInputs, elapsed_text, labels};
+    use super::{StatusInputs, labels};
     use crate::model::{EditorMode, ReadOnly};
+    // 耗时文案已下移结果面板：编辑器状态栏与结果状态行共用同一份实现
+    use result_panel::status::elapsed_text;
 
     fn inputs(read_only: ReadOnly) -> StatusInputs<'static> {
         StatusInputs {

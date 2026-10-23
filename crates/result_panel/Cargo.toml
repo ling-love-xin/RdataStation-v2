@@ -1,0 +1,31 @@
+[package]
+name = "rds-result-panel"
+version.workspace = true
+edition.workspace = true
+description = "结果集面板：DBeaver 式 Data Editor 方向的结果存储 + 网格视图 + 结果工具栏/状态栏（独立于编辑器宿主）"
+
+# 依赖方向（硬约束）：editor → result_panel → engine / gpui-kit / workbench_shell；
+# 本 crate 绝不反向依赖 editor（结果域自洽，editor 只保留访问口）。
+[dependencies]
+gpui-kit.workspace = true
+engine.workspace = true
+# 共享纯数据模型（DocumentId / ExecChannel / ColumnAnnotation）+ 尺寸常量（ui）：
+# 结果面板与编辑器两侧都从 shell 命名，依赖方向只向下
+workbench_shell.workspace = true
+# TSV 转义 / 通用字符串原语（剪贴板与导出共用同一份实现）
+shared.workspace = true
+
+# ===== 时间与标识 =====
+chrono.workspace = true
+
+# 执行链埋点（入口 / 前置闸拒绝 / 入队成败）：与 workbench 同一套 tracing 日志通道
+tracing.workspace = true
+
+# 结果导出写文件 / DuckDB 直灌（B7：TSV/JSON/CSV/SQL Updates/Parquet/XLSX）
+serde_json.workspace = true
+
+[dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }

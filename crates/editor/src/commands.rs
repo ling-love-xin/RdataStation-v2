@@ -42,4 +42,7 @@ actions!(
 /// **编辑区里 `Ctrl+C` 仍是复制 SQL 文本、网格里才是复制选中的一格 / 一整行**。
 /// 组件库的表格自己用的是 `DataTable`（方向键 / 翻页 / `Esc` 清选）——两个上下文
 /// 会同时出现在焦点路径上，各管各的键。
-pub const RESULT_GRID_CONTEXT: &str = "editor-result-grid";
+///
+/// 2026-10-23 下移：定义随结果面板（`result_panel::grid::RESULT_GRID_CONTEXT`），
+/// 这里重导出保持 `crate::commands::RESULT_GRID_CONTEXT` 路径不变（字符串值跨 crate 一致）。
+pub use result_panel::grid::RESULT_GRID_CONTEXT;

@@ -4,30 +4,11 @@
 //! chrome、结果去哪」上不同。这些差异**集中在一张能力表里**（`Capabilities::for_mode`），
 //! 避免 v1 那样把同一套模式判定复制到三处（其规则表还有两条不可达规则）。
 
-use std::fmt;
-
-/// 文档 / 笔记的稳定标识
+/// 文档 / 笔记的稳定标识（下移 `workbench_shell::model`：结果面板等下沉 crate 也命名它）
 ///
 /// **一经生成永不变**，也不得用路径或下标替代：v1 用 `filePath` 派生面板 id，另存为后
 /// 新旧 key 失配（tab 找不到、结果错位），是"用路径当身份"的经典代价。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DocumentId(String);
-
-impl DocumentId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for DocumentId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub use workbench_shell::model::DocumentId;
 
 /// 编辑器模式（通用 = 无连接档（文件编辑 + 本地脚本执行），与 SQL 平行）
 ///
