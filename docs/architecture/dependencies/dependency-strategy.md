@@ -148,6 +148,18 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 - `v1/` 为历史参考实现，自带 workspace 与 `Cargo.lock`，不参与 v2 构建；根 `Cargo.toml` 用 `exclude = ["v1"]` 显式排除（否则在 `v1/backend` 下执行 cargo 会报 “believes it's in a workspace when it's not”），该目录后续删除。
 - 新增 crate 时：先在根表确认依赖是否已有条目，没有再加到根表；crate 内只写 `dep.workspace = true`。
+
+### crate 命名（三层一一对应，2026-10-23 全仓统一）
+
+| 层 | 规则 | 示例 |
+| --- | --- | --- |
+| 目录 | `crates/<name>`，snake_case，= package 名去 `rds-` 前缀 | `crates/result_panel` |
+| package 名 | `rds-` + kebab-case（Cargo 发布名，已全仓统一） | `rds-result-panel` |
+| 依赖键 | 根表 `[workspace.dependencies]` 键 + crate 内 `.workspace` 写法 = 目录名（snake_case） | `result_panel = { path = "crates/result_panel", package = "rds-result-panel" }` → crate 内 `result_panel.workspace = true` |
+
+- 代码内 `use <键名>::`（如 `use result_panel::grid`）；集成测试按 package 名（`use rds_result_panel::…`），不受依赖键名影响。
+- 2026-10-23 统一记录：`crates/rds-search` → `crates/content_search`（键 `rds_search` → `content_search`，package 更名 `rds-content-search`——「search」与 scratchpad 内部 `mod search` 冲突，故取业务语义名）、`crates/connection-dialog` → `crates/connection_dialog`（键连字符 → 下划线）；其余 package 名不变。
+- 新增 crate 三件套检查：目录 / package / 依赖键按上表对齐；改名一律 `git mv`（保留历史）。
 - 项目级 `.cargo/config.toml` 只放「怎么构建 / 命令别名」，不放依赖版本与镜像：
   - 版本归根 `Cargo.toml` + `Cargo.lock`；镜像归机器级配置（本机在 `CARGO_HOME` 的 config.toml 指向 tuna），写进仓库会影响其他网络环境与 CI
   - 不要写 `[profile.*]`：Cargo 1.57 起只认根 `Cargo.toml`（`v1/backend/.cargo/config.toml` 里的 profile 就是这样失效的）
@@ -169,6 +181,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | 编译时间：默认只构建 app 图 | `Cargo.toml` → `workspace.default-members` |
 | 编译时间：依赖不产 debuginfo | `Cargo.toml` → `[profile.dev.package."*"]` |
 | 项目级构建别名 | `.cargo/config.toml` → `[alias]`（`check-all` / `test-all` / `clippy-all`） |
+| crate 命名（目录/键 = 去前缀名） | 根 `Cargo.toml` 成员与依赖键 + 本文件 §6 |
 | 加密后端约束（ring） | `Cargo.toml` → `russh` 条目（`default-features = false`） |
 | native 库约束（links） | `Cargo.toml` → `sqlx` 条目（最小 feature 集） |
 | SQL 生成结果回归 | `crates/engine/src/sql/builder.rs` → `tests::test_generated_sql_is_pinned` |

@@ -296,7 +296,7 @@ use crate::host::ScratchpadHost;
 use crate::jobs::LoadResult;
 use crate::scratchpad_view::primitives::{ScratchpadEdit, scratchpad_type_icon};
 use crate::scratchpad_view::render_scratchpad_search_pane;
-use rds_search::view::SearchHit as ScratchpadSearchHit;
+use content_search::view::SearchHit as ScratchpadSearchHit;
 use crate::ScratchpadView;
 
 /// 最小宿主：记录打开请求、状态栏提示与搜索结果落地（不接编辑器 / 不接洞察）。

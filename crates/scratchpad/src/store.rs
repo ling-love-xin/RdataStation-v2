@@ -1500,7 +1500,7 @@ impl ScratchpadStore {
         })?;
 
         // 全字匹配（VSCode `ab` 开关）：非正则模式转义后包 `\b(?:…)\b`，正则模式
-        // 直接在用户表达式外包 `\b(?:…)\b` —— 与 `rds_search::search_directory` 同口径。
+        // 直接在用户表达式外包 `\b(?:…)\b` —— 与 `content_search::search_directory` 同口径。
         let expression = match (is_regex, whole_word) {
             (true, true) => format!("\\b(?:{pattern})\\b"),
             (false, true) => format!("\\b(?:{})\\b", regex::escape(pattern)),

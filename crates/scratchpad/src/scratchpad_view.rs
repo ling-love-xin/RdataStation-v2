@@ -87,18 +87,20 @@ use primitives::*;
 use search::*;
 
 // 跨 crate 公开面：路径保持 `scratchpad_view::{...}` 不变（`lib.rs` 与编辑器都在用）。
-// 内容搜索面板已迁 `rds_search::view`（第二阶段）：旧名重导保持调用点不换路径；
+// 内容搜索面板已迁 `content_search::view`（第二阶段）：旧名重导保持调用点不换路径；
 // 渲染函数签名比原版多一个 `type_icon` 参数（调用方注入文件类型图标）。
+// 注意：本模块自有子模块 `search`（草稿箱的搜索面板），以下 `search::` 指子模块；
+// 外部内容搜索 crate 只经 `content_search::view` 路径引用。
 pub use search::{
     ScratchpadDiffView, ScratchpadFileInfoView,
     render_scratchpad_diff_pane, render_scratchpad_file_info_pane,
 };
-pub use rds_search::view::{
+pub use content_search::view::{
     SearchHitTarget as ScratchpadSearchHitTarget,
     SearchView as ScratchpadSearchView,
     render_search_pane as render_scratchpad_search_pane,
 };
-// 类型图标：`rds_search::view` 的 `type_icon` 由调用方注入，workbench 从这里取。
+// 类型图标：`content_search::view` 的 `type_icon` 由调用方注入，workbench 从这里取。
 pub use primitives::scratchpad_type_icon;
 
 /// 冲突：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了。

@@ -164,8 +164,8 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定�
   - **结果树（复用 Tree/TreeItem，树状结构；命中片段不带行号）**：目录节点（▾ 目录名）→ 文件节点（类型微标 + 文件名 + 圆形数字 Badge 命中数）→ 命中代码片段预览行（匹配关键字 **Highlight** 背景高亮；点击跳编辑器对应行）；**hover 行尾操作图标（2026-10-11 修正：文字按钮改图标按钮）**——文件节点 **⇄ 替换 / ✕ 取消**（替换该文件内匹配）、文件夹节点 **⇄ 全部替换 / ✕ 取消**（替换该目录下全部匹配），均可点击应用；整体 **ScrollArea** 滚动。
 - **编辑器内全局搜索结果预览视图（2026-10-11 用户描述，独立 EditorTab 全屏形态）**：外层 EditorTab 标签容器（「搜索: created_at」，与文档 tab 并列），主体 ScrollArea；顶部搜索栏 = TextField（回显关键词，**可直接改词实时重搜**）+ ToggleButton（Aa / ab / .*）+ **Badge 当前匹配项序号** + IconButton 列表菜单（切换视图布局 / 导出结果）；统计 Label `5 个结果 - 3 文件`；内容 = 文件标题 **Hyperlink**（点击直接打开目标文件并定位首个匹配）+ **CodeBlock 代码预览块**（内置行号 Label + 代码文本 + Highlight 命中着色 + SyntaxLabel 语法着色：关键字/字符串/数字分色）；点击任意代码行 → 打开文件精准定位至当前行；Toggle 切换规则动态刷新结果。同一搜索能力的两种展示形态（侧栏面板 = 输入+树上折叠浏览；编辑器 Tab = 大面积浏览命中片段、不占侧栏空间）。
 - **文件名模式**（默认）：输入实时过滤树（匹配名称；命中子树自动展开）。
-- **内容模式**：`.*` 切正则、`Aa` 切大小写敏感、`⏎`（或输入框 Enter）运行；调 `search_directory`（`rds_search`，严格白名单正则循环外编译一次；`BufReader` 逐行 / 30s 单文件超时 / 500 条截断 / 深度 ≤4 / 跳隐藏）。
-- 结果（匹配行 + 上下文 + `match_spans`）写入 `Shared::scratchpad_search`，由**中央「搜索: query」独立标签页**渲染——**2026-10-10 起渲染面板迁入独立 crate `rds_search::view`**，并在同日升为**中央 Dock 独立 tab**（`SearchResultsHostPanel`，仿属性面板 `PropertyHostPanel` 模式：面板单实例 + 弱句柄 + `WorkbenchView::render` 检测 `scratchpad_search` 有值且面板未建 → `cx.defer_in` 建面板聚焦；与打开的文档 tab 并列，VSCode 全局搜索形态），侧栏只承载输入与开关。
+- **内容模式**：`.*` 切正则、`Aa` 切大小写敏感、`⏎`（或输入框 Enter）运行；调 `search_directory`（`content_search`，严格白名单正则循环外编译一次；`BufReader` 逐行 / 30s 单文件超时 / 500 条截断 / 深度 ≤4 / 跳隐藏）。
+- 结果（匹配行 + 上下文 + `match_spans`）写入 `Shared::scratchpad_search`，由**中央「搜索: query」独立标签页**渲染——**2026-10-10 起渲染面板迁入独立 crate `content_search::view`**，并在同日升为**中央 Dock 独立 tab**（`SearchResultsHostPanel`，仿属性面板 `PropertyHostPanel` 模式：面板单实例 + 弱句柄 + `WorkbenchView::render` 检测 `scratchpad_search` 有值且面板未建 → `cx.defer_in` 建面板聚焦；与打开的文档 tab 并列，VSCode 全局搜索形态），侧栏只承载输入与开关。
 - **VSCode 对齐（2026-10-10，用户截图 a9538a48）**：侧栏 = 搜索框 + **替换行**（`替换为 [输入] [全部替换]`）+ **高级选项**（**默认展开**：**包含的文件 / 排除的文件** glob 输入，**每项一行 = label 左 + 输入框右**（VSCode「包含的文件 [输入框]」同行形态；修复上轮 label 上/input 下的上下排列）；空 = 不限定；`glob_matches`：`*` 跨目录、`?` 不匹配分隔符、相对路径全串匹配、扫描即过滤）；搜索框下方**统计行** `N 个文件中有 M 个结果 · 扫描 X 个文件`（VSCode「6 文件中有 2092 个结果」；M = 命中行数，N = 去重文件数）；中央标签页 = **去卡片平铺**：tab 标题 = `搜索: query`，内容区头部**不再重复大标题**（2026-10-10 VSCode 对齐）——首行 = 统计行 + `在编辑器中打开`（跳首命中）+ `关闭` 按钮，文件头 = **类型图形微标 + 完整相对路径 + 命中数角标**（点击跳该文件首个命中），命中明细行缩进（行号 + 命中行高亮，点击跳行）。
 - **Dock tab 栏常显（2026-10-10 用户截图：搜索 tab 单独存在时"没有展开页面"）**：默认 `PanelStyle::Auto` 单面板只画简单标题、不画 tab 栏；`WorkbenchView::init_workspace` 改设 **`PanelStyle::TabBar`**——**总是显示 tab 栏**（单 tab 也显示「搜索: query」标签 + ✕，VSCode 编辑区/搜索结果恒有标签页形态；编辑区/左侧面板同步受益）。
 - **关闭语义（2026-10-10 用户拍板）**：搜索标签页 tab ✕ = **只关标签页、保留结果**（`Shared::scratchpad_search` 不清空，`search_results_dismissed` 标志置位，`WorkbenchView::render` 不再自动重建）；**再次搜索**（新结果到达）自动清标志 → 重建标签页并聚焦；面板内「关闭」按钮仍 = 清空结果（显示空态）。
@@ -294,7 +294,7 @@ flowchart TD
 
 ### 6.4 搜索高亮
 
-产品语义 token `search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`，注册于 `crates/workbench_shell/src/product_tokens.rs` + `assets/themes/product-tokens.json`）已落地并消费于内容搜索结果面板（命中段底色；2026-10-10 起在 `rds_search::view::render_search_pane` 的命中行切段渲染）。
+产品语义 token `search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`，注册于 `crates/workbench_shell/src/product_tokens.rs` + `assets/themes/product-tokens.json`）已落地并消费于内容搜索结果面板（命中段底色；2026-10-10 起在 `content_search::view::render_search_pane` 的命中行切段渲染）。
 
 ## 7. GPUI 落点映射
 
@@ -304,7 +304,7 @@ flowchart TD
 | 左 Dock 内容装配 | `crates/workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`，`LeftPanel::Draft` 分支转发渲染） |
 | 面板头 / 工具栏 | gpui-kit `Button`（`.icon().ghost()` 小尺寸） |
 | 搜索输入 | `Input` + `InputState`（`cx.new(InputState::new)`） |
-| 内容搜索结果 + 替换栏 | **`crates/rds-search/src/view.rs::render_search_pane`**（2026-10-10 起迁入独立 crate：文件分组 + 命中数 + 行号命中行 + 替换栏；`type_icon` 注入）+ `crates/workbench/src/panels/editor.rs::replace_scratchpad_all`（替换入口与后台任务；结果展示在编辑区） |
+| 内容搜索结果 + 替换栏 | **`crates/content_search/src/view.rs::render_search_pane`**（2026-10-10 起迁入独立 crate：文件分组 + 命中数 + 行号命中行 + 替换栏；`type_icon` 注入）+ `crates/workbench/src/panels/editor.rs::replace_scratchpad_all`（替换入口与后台任务；结果展示在编辑区） |
 | 文件属性弹窗 | **gpui-kit `Dialog`**（`crates/workbench/src/view.rs::render_scratchpad_file_info_popover`；载荷经 `Shared::scratchpad_file_info`，键值行在 `crates/scratchpad/src/scratchpad_view/search.rs::render_scratchpad_file_info_pane`） |
 | 空态引导 | `ScratchpadView::render_scratchpad_empty_state`（大图标 + 分组 `Button`） |
 | 树 / 分组 / 折叠 | 草稿树用 `v_virtual_list`（`item_sizes` + 可视区渲染，`track_scroll` 支持键盘导航滚入）；分组头为自绘标签行 |

@@ -15,7 +15,7 @@ tag.workspace = true
 rusqlite.workspace = true
 # 内容搜索独立 crate（用户点名 2026-10-10 抽取：后端模型 + 目录扫描 + 逐行匹配；
 # 渲染面板第二阶段迁入，type_icon 由调用方注入）。
-rds_search.workspace = true
+content_search.workspace = true
 # ⋯ 更多设置持久化（2026-10-11 接线：工具栏显示/隐藏与左/右位置写入用户配置）。
 settings.workspace = true
 

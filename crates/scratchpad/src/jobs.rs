@@ -510,7 +510,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 // root 传草稿箱目录：命中 file 是相对模块根的路径（与 replace_in_file 等一致）。
                 let root = project_root.join(crate::MODULE_DIR_NAME);
                 let outcome = rt.block_on(async {
-                    let res = rds_search::search_directory(
+                    let res = content_search::search_directory(
                         &root,
                         &query,
                         case_sensitive,
@@ -559,8 +559,8 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 let outcome = rt.block_on(async {
                     // 先搜（拿到去重文件列表），再逐文件写回，最后重搜返回新结果：
                     // 一次任务里完成，避免“已替换但仍显示旧命中”的中间态。
-                    // 搜索走 rds_search（独立 crate，与草稿箱搜索同一口径）。
-                    let before = rds_search::search_directory(
+                    // 搜索走 search（独立 crate，与草稿箱搜索同一口径）。
+                    let before = content_search::search_directory(
                         &root,
                         &query,
                         case_sensitive,
@@ -596,7 +596,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                             total += r.replaced;
                         }
                     }
-                    let after = rds_search::search_directory(
+                    let after = content_search::search_directory(
                         &root,
                         &query,
                         case_sensitive,
@@ -660,7 +660,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         )
                         .await
                         .map_err(|e| format!("{file}: {e}"))?;
-                    let after = rds_search::search_directory(
+                    let after = content_search::search_directory(
                         &root,
                         &query,
                         case_sensitive,
@@ -703,9 +703,9 @@ fn worker(rx: mpsc::Receiver<Job>) {
     }
 }
 
-/// `rds_search::SearchMatch` → 草稿箱载荷模型（字段名不同：`line_number` vs 后端 `line`，
+/// `content_search::SearchMatch` → 草稿箱载荷模型（字段名不同：`line_number` vs 后端 `line`，
 /// 其余同名；serde 版本留在 models.rs 供跨边界导出）。
-fn search_match_to_payload(m: rds_search::SearchMatch) -> crate::SearchMatch {
+fn search_match_to_payload(m: content_search::SearchMatch) -> crate::SearchMatch {
     crate::SearchMatch {
         file: m.file,
         line_number: m.line_number,

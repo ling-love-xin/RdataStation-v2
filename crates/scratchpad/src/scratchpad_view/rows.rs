@@ -9,7 +9,7 @@
 use super::*;
 
 use gpui_kit::component::Icon;
-use rds_search::view::hit_line;
+use content_search::view::hit_line;
 
 impl ScratchpadRowCtx {
     /// 该显示行是否为内联新建行。
@@ -758,7 +758,7 @@ impl ScratchpadView {
         let entity = cx.entity();
 
         // 文件 → 命中行；目录 → 文件（BTreeMap 保证顺序稳定；根目录 = 空串）。
-        let mut by_file: std::collections::BTreeMap<String, Vec<&rds_search::view::SearchHit>> =
+        let mut by_file: std::collections::BTreeMap<String, Vec<&content_search::view::SearchHit>> =
             std::collections::BTreeMap::new();
         for hit in &search.hits {
             by_file.entry(hit.file.clone()).or_default().push(hit);

@@ -216,39 +216,39 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../src/quick_open/palette.rs"),
         ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
-        // connection-dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
-        // （`crates/connection-dialog/src/components/connection_dialog/`）。
+        // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
+        // （`crates/connection_dialog/src/components/connection_dialog/`）。
         (
             "connection_dialog/render.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/render.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/render.rs"),
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/helpers.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/project_picker.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/project_picker.rs"),
         ),
         (
             "connection_dialog/managers.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/managers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/managers.rs"),
         ),
         (
             "connection_dialog/staging.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/staging.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/staging.rs"),
         ),
         (
             "connection_dialog/type_tree.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/type_tree.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/type_tree.rs"),
         ),
         (
             "connection_dialog/draft_list.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/draft_list.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/draft_list.rs"),
         ),
         (
             "connection_dialog/mod.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/mod.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/mod.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描；UI 尺寸/颜色契约同样适用）
         (
@@ -330,7 +330,7 @@ fn has_literal_px(src: &str) -> bool {
 /// 契约 2b：UI 源码不得直接构造颜色，一律走主题 token（`cx.theme().colors.*`）。
 ///
 /// 覆盖范围比尺寸契约宽（含对话框、项目视图、设置面板）：色值是硬约束，三者都已清零；
-/// 存量欠债只有尺寸字面量（见 `connection-dialog-architecture.md` §14 #14）。
+/// 存量欠债只有尺寸字面量（见 `connection_dialog-architecture.md` §14 #14）。
 #[test]
 fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
@@ -415,39 +415,39 @@ fn ui_sources_have_no_raw_color_literals() {
             "quick_open/palette.rs",
             include_str!("../src/quick_open/palette.rs"),
         ),
-        // connection-dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
-        // （`crates/connection-dialog/src/components/connection_dialog/`）。
+        // connection_dialog 2026-10-15 下沉为独立 crate：扫描路径指向新位置
+        // （`crates/connection_dialog/src/components/connection_dialog/`）。
         (
             "connection_dialog/render.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/render.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/render.rs"),
         ),
         (
             "connection_dialog/helpers.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/helpers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/helpers.rs"),
         ),
         (
             "connection_dialog/project_picker.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/project_picker.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/project_picker.rs"),
         ),
         (
             "connection_dialog/managers.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/managers.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/managers.rs"),
         ),
         (
             "connection_dialog/staging.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/staging.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/staging.rs"),
         ),
         (
             "connection_dialog/type_tree.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/type_tree.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/type_tree.rs"),
         ),
         (
             "connection_dialog/draft_list.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/draft_list.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/draft_list.rs"),
         ),
         (
             "connection_dialog/mod.rs",
-            include_str!("../../connection-dialog/src/components/connection_dialog/mod.rs"),
+            include_str!("../../connection_dialog/src/components/connection_dialog/mod.rs"),
         ),
         ("project/ui.rs", include_str!("../../project/src/ui.rs")),
         (

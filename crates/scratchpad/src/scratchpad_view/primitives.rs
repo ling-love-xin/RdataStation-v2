@@ -392,7 +392,7 @@ pub(super) fn scratchpad_shows_dirty_dot(dirty: &HashSet<String>, entry: &Scratc
 /// 文件名左侧的类型微标（用户点名要 zed / VS Code 那种**图标**，不是文本标签）。
 ///
 /// 无扩展名兜底通用文件图标；文件夹图标在行渲染里单独处理（`icons/folder.svg`）。
-/// `pub`：第二阶段搜索面板迁 `rds_search::view` 后，由 workbench 作 `type_icon` 注入。
+/// `pub`：第二阶段搜索面板迁 `content_search::view` 后，由 workbench 作 `type_icon` 注入。
 pub fn scratchpad_type_icon(name: &str) -> &'static str {
     let ext = name
         .rsplit_once('.')

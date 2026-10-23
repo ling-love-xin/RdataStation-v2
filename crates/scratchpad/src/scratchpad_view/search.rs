@@ -3,13 +3,13 @@
 //! 与侧栏的分工（架构决策 D7）：草稿箱只投载荷（`ScratchpadHost::show_diff` /
 //! `Shared::scratchpad_file_info`），重结果由编辑区渲染。
 //! 内容搜索面板（按文件分组 + 替换栏）已随第二阶段迁入独立 crate
-//! [`rds_search::view`]（用户点名 2026-10-10 抽 crate，命令面板可复用）；
-//! 草稿箱只负责把后端结果组装成 [`rds_search::view::SearchView`]（见 `search_view_from_payload`）。
+//! [`content_search::view`]（用户点名 2026-10-10 抽 crate，命令面板可复用）；
+//! 草稿箱只负责把后端结果组装成 [`content_search::view::SearchView`]（见 `search_view_from_payload`）。
 
 use super::*;
 
 use super::primitives::scratchpad_absolute_time;
-use rds_search::view::{SearchHit, SearchView};
+use content_search::view::{SearchHit, SearchView};
 
 /// 冲突 Diff 面板的载荷（草稿箱经宿主端口投给中央编辑区）。
 ///
@@ -46,7 +46,7 @@ pub struct ScratchpadFileInfoView {
     pub db_connection: Option<String>,
 }
 
-/// 把后台搜索任务的载荷转成结果视图（组装 `rds_search::view::SearchView`）。
+/// 把后台搜索任务的载荷转成结果视图（组装 `content_search::view::SearchView`）。
 ///
 /// 搜索/替换任务的开关与查询词由任务回传，避免再从侧栏输入框反向读状态。
 pub(super) fn search_view_from_payload(

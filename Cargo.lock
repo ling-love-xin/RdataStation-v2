@@ -8246,6 +8246,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-content-search"
+version = "0.2.4"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "rds-workbench-shell",
+ "regex",
+ "tokio",
+]
+
+[[package]]
 name = "rds-database"
 version = "0.2.4"
 dependencies = [
@@ -8278,7 +8289,9 @@ dependencies = [
  "rds-engine",
  "rds-kernel",
  "rds-paths",
+ "rds-result-panel",
  "rds-shared",
+ "rds-workbench-shell",
  "serde",
  "serde_json",
  "tokio",
@@ -8455,6 +8468,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-result-panel"
+version = "0.2.4"
+dependencies = [
+ "chrono",
+ "gpui-kit",
+ "rds-engine",
+ "rds-paths",
+ "rds-shared",
+ "rds-workbench-shell",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "rds-scratchpad"
 version = "0.2.4"
 dependencies = [
@@ -8462,9 +8489,9 @@ dependencies = [
  "gpui-kit",
  "notify 7.0.0",
  "opener",
+ "rds-content-search",
  "rds-engine",
  "rds-paths",
- "rds-search",
  "rds-settings",
  "rds-shared",
  "rds-tag",
@@ -8477,17 +8504,6 @@ dependencies = [
  "specta",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "rds-search"
-version = "0.2.4"
-dependencies = [
- "anyhow",
- "gpui-kit",
- "rds-workbench-shell",
- "regex",
- "tokio",
 ]
 
 [[package]]
