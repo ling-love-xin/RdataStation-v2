@@ -230,7 +230,7 @@ IResultSetPresentation / LightGrid）。逐项对照结论：
 | 项 | DBeaver 行为 | 本项目处理 |
 | --- | --- | --- |
 | 执行替换当前结果 tab | `resultSet.replaceCurrentTab=true` 默认**替换** | **已对齐**：`ResultPlacement::Replace` 是普通执行的既有语义（store.rs），无需改 |
-| 结果面板最大化 | `Ctrl+Shift+6`（results panel 最大化） | **阶段 3 纳入**：底部 dock 加「最大化结果面板」动作（dock 拖拽 + 面板自身可最大化） |
+| 结果面板最大化 | `Ctrl+Shift+6`（results panel 最大化） | 记 backlog：dock 面板 `zoom_control` 可挂「最大化结果面板」动作（薄壳当前返回 None，未实现） |
 | 结果面板收起/展开 | `Ctrl+6` | 对齐：底部 dock 关闭/打开按钮天然等价（DockArea `toggle_dock`） |
 | 呈现多视图（Grid/Text/Record） | `IResultSetPresentation` 可插拔 | 预留：`ResultControls` / `ResultPane` 已是呈现接入点雏形；Text/Record 视图后续挂新呈现，不进 dock 化范围 |
 | 取全部行 / 计算总行数 | 底部工具栏按钮 | 记 backlog（现有「取下一段」已覆盖分页语义） |
