@@ -899,7 +899,10 @@ pub(super) fn nav_tag_color(name: &str, theme: &gpui_kit::component::Theme) -> H
 #[cfg(test)]
 mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
-    use super::{nav_highlight_segments, nav_snippet_segments, nav_tag_palette_index};
+    use std::collections::HashMap;
+
+    use super::{nav_highlight_segments, nav_node_matches, nav_snippet_segments, nav_tag_palette_index};
+    use crate::model::{NavNode, NavNodeKind};
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
@@ -990,5 +993,36 @@ mod tests {
                 ("b".to_string(), true),
             ]
         );
+    }
+
+    /// 搜索过滤命中：节点名中缀命中，或已加载子节点中任一命中。
+    /// 第三个用例锁定「祖先链保留」——搜索态自动展开的树形态下，
+    /// 父节点名不匹配但子命中时父必须显示（否则用户看不到命中的位置）。
+    #[test]
+    fn node_matches_self_or_any_loaded_child() {
+        let mut children: HashMap<String, Vec<NavNode>> = HashMap::new();
+        let schema = NavNode::new(
+            "conn::sales",
+            "sales",
+            "conn",
+            NavNodeKind::Schema,
+            true,
+        );
+        let table = NavNode::new(
+            "conn::sales::orders",
+            "orders",
+            "conn",
+            NavNodeKind::Table { row_estimate: None },
+            false,
+        );
+        children.insert("conn::sales".to_string(), vec![table]);
+
+        // 节点名中缀命中（filter 由调用方预先小写，函数内直接 contains）。
+        assert!(nav_node_matches(&children, &schema, "sales"));
+        assert!(nav_node_matches(&children, &schema, "sale"));
+        // 子节点命中 → 父保留（祖先链）。
+        assert!(nav_node_matches(&children, &schema, "orders"));
+        // 都不匹配 → 隐藏。
+        assert!(!nav_node_matches(&children, &schema, "customers"));
     }
 }
