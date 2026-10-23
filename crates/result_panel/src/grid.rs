@@ -105,6 +105,9 @@ pub struct CellEdit {
     pub value: String,
     /// 编辑框是否已完成首次聚焦与初值同步
     settled: bool,
+    /// 【类型感知】提交校验失败时的错误文案（`Some` = 上次提交被拒，编辑框红框提示；
+    /// 输入一变化就清除）。只影响“这次提交能不能发出去”，不落变更集。
+    pub error: Option<String>,
 }
 
 /// 【B14】「按值筛选」的钩子（面板注入：把值写进筛选框并立刻生效）
@@ -716,9 +719,24 @@ impl ResultGridDelegate {
         self.hidden.sort_unstable();
     }
 
+    /// 单列取消隐藏（**数据列序**；列头菜单「显示全部」是整批，侧栏眼睛要单列粒度）
+    pub fn show_column(&mut self, column: usize) {
+        self.hidden.retain(|c| *c != column);
+    }
+
     /// 显示全部列（清空隐藏清单）
     pub fn show_all_columns(&mut self) {
         self.hidden.clear();
+    }
+
+    /// 列名（**数据列序**；侧栏列结构列表读它，借读不拷）
+    pub fn columns(&self) -> &[String] {
+        &self.columns
+    }
+
+    /// 每列类型（与 [`Self::columns`] 同序；空 = 这份结果没带类型）
+    pub fn column_types(&self) -> &[Option<ColumnType>] {
+        &self.column_types
     }
 
     // ---------- 【P2-4】单行转置（只读视图，DBeaver 式） ----------
@@ -1106,6 +1124,7 @@ impl ResultGridDelegate {
             value: original.clone(),
             original,
             settled: false,
+            error: None,
         });
         true
     }
@@ -1118,19 +1137,42 @@ impl ResultGridDelegate {
     /// 提交编辑（Enter / 失焦）：取当前输入值走钩子交回面板。
     /// 这里先清编辑态——面板落变更集后，编辑框不再渲染，InputState 失焦
     /// 触发的 Blur 看到编辑态已空，不会重复提交。
-    pub fn commit_edit(&mut self, cx: &mut App) {
+    ///
+    /// 【类型感知】提交前按列类型校验（数字列必须数字、布尔列取值受限…）；
+    /// 非法 = **拒绝提交**（编辑态保留 + `error` 记录，渲染红框提示），返回 `false`。
+    /// 返回 `true` 才真的交了。调用方（宿主 Enter / Blur 订阅）拿返回值决定要不要
+    /// 投影刷新：失败时只重绘（显示错误），不去跑整轮结果投影。
+    pub fn commit_edit(&mut self, cx: &mut App) -> bool {
+        // 取编辑态先只读：校验失败要把错误写回它，不能 take 后再补
+        let Some(edit) = &self.editing else {
+            return false;
+        };
+        let kind = self
+            .column_types
+            .get(edit.column)
+            .and_then(|t| t.as_ref())
+            .map(|t| t.kind);
+        if let Some(kind) = kind {
+            if let Some(message) = validate_edit_value(kind, &edit.value) {
+                self.editing.as_mut().unwrap().error = Some(message);
+                return false;
+            }
+        }
         let Some(edit) = self.editing.take() else {
-            return;
+            return false;
         };
         if let Some(hook) = &self.on_commit_edit {
             hook(edit.data_row, edit.column, edit.original, edit.value, cx);
         }
+        true
     }
 
-    /// 编辑框输入值同步（`InputEvent::Change` 时由宿主调；不区分“谁发的”）
+    /// 编辑框输入值同步（`InputEvent::Change` 时由宿主调；不区分“谁发的”）。
+    /// 输入一变化就清掉上次的提交错误——用户已经动手改，红框该撤。
     pub fn sync_edit_value(&mut self, value: String) {
         if let Some(edit) = &mut self.editing {
             edit.value = value;
+            edit.error = None;
         }
     }
 
@@ -1179,9 +1221,18 @@ impl ResultGridDelegate {
             self.mark_edit_settled();
         }
         let theme = cx.theme();
+        // 【类型感知】提交校验失败的错误（红框 + 悬停提示）；无错误 = 与今天完全一致
+        let error = self.editing().and_then(|edit| edit.error.clone());
+        let danger = theme.colors.danger;
         // Escape：输入内核默认 `cx.propagate()`（不消费、不清值），在这里拦下 → 取消编辑。
         // 元素回调没有实体参数，把表格实体抓到闭包里再 update。
         let table = cx.entity().clone();
+        let input = Input::new(&state)
+            .id(format!("editor-result-cell-input-{row_ix}-{col_ix}"))
+            .w_full()
+            .h_full()
+            .bordered(false)
+            .bg(theme.colors.background);
         div()
             .id(format!("editor-result-edit-cell-{row_ix}-{col_ix}"))
             .size_full()
@@ -1198,14 +1249,13 @@ impl ResultGridDelegate {
                     });
                 }
             })
-            .child(
-                Input::new(&state)
-                    .id(format!("editor-result-cell-input-{row_ix}-{col_ix}"))
-                    .w_full()
-                    .h_full()
-                    .bordered(false)
-                    .bg(theme.colors.background),
-            )
+            .when_some(error, |cell, message| {
+                // 提交被拒：1px 红框 + 悬停看错误文案（单元格高度是行高，文本没地方放）
+                cell.border_1()
+                    .border_color(danger)
+                    .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
+            })
+            .child(input)
     }
 
     /// 单元格文案：首列是行号，其余按 `col_ix - 1` 取数据
@@ -1658,6 +1708,87 @@ fn find_in_cell(cell: &str, needle: &str) -> Option<Option<Range<usize>>> {
 /// 单元格命中判据（筛选用：只看有没有）
 fn cell_matches(cell: &str, needle: &str) -> bool {
     find_in_cell(cell, needle).is_some()
+}
+
+/// 【类型感知】按列类型校验编辑值（提交前调用；空 / `NULL` 一律放行——清掉
+/// 这一格是“删值”语义，不该被类型挡住）。返回错误文案（`None` = 合法）。
+pub fn validate_edit_value(kind: ColumnKind, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value == "NULL" {
+        return None;
+    }
+    match kind {
+        ColumnKind::Integer => value
+            .parse::<i64>()
+            .map(|_| ())
+            .map_err(|_| "必须是整数（如 42）".to_string())
+            .err(),
+        ColumnKind::Float | ColumnKind::Decimal => value
+            .parse::<f64>()
+            .map(|_| ())
+            .map_err(|_| "必须是数字（如 3.14）".to_string())
+            .err(),
+        ColumnKind::Boolean => {
+            if matches!(
+                value.to_lowercase().as_str(),
+                "true" | "false" | "1" | "0" | "t" | "f" | "yes" | "no"
+            ) {
+                None
+            } else {
+                Some("布尔列只能填 true / false".to_string())
+            }
+        }
+        ColumnKind::Uuid => {
+            if looks_like_uuid(value) {
+                None
+            } else {
+                Some(
+                    "UUID 格式应为 8-4-4-4-12（如 550e8400-e29b-41d4-a716-446655440000）"
+                        .to_string(),
+                )
+            }
+        }
+        ColumnKind::Date => {
+            if looks_like_date(value) {
+                None
+            } else {
+                Some("日期格式应为 YYYY-MM-DD".to_string())
+            }
+        }
+        // Text / Timestamp / Time / Json / Binary / Unknown：不校验（文本自由、
+        // 时刻格式各驱动不一、JSON / 二进制自由文本——交给源库自己判断）
+        _ => None,
+    }
+}
+
+/// UUID 格式探针（不引 uuid crate：只查形状——`8-4-4-4-12` hex，大小写皆可）
+fn looks_like_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    [8, 13, 18, 23].iter().all(|&at| bytes[at] == b'-')
+        && bytes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| ![8, 13, 18, 23].contains(i))
+            .all(|(_, b)| b.is_ascii_hexdigit())
+}
+
+/// 日期格式探针（`YYYY-MM-DD`，粗查形状 + 月 / 日范围；不引 chrono）
+fn looks_like_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    if !bytes.iter().enumerate().all(|(i, b)| {
+        i == 4 || i == 7 || b.is_ascii_digit()
+    }) {
+        return false;
+    }
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    let day = (bytes[8] - b'0') * 10 + (bytes[9] - b'0');
+    (1..=12).contains(&month) && (1..=31).contains(&day)
 }
 
 impl TableDelegate for ResultGridDelegate {
@@ -2447,6 +2578,10 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 pub struct ResultControls {
     /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
     pub filter: Option<AnyElement>,
+    /// 【侧栏】左栏（列结构）开关（面板构造：翻转 `show_column_sidebar`）
+    pub column_sidebar: Option<AnyElement>,
+    /// 【侧栏】右栏（值详情）开关（面板构造：翻转 `show_value_sidebar`）
+    pub value_sidebar: Option<AnyElement>,
     /// 【P2-4】转置视图开关 +（激活时）上一行 / 下一行导航（单行转置，DBeaver 式）
     pub transpose: Option<AnyElement>,
     /// 【并排对比】对比模式开关（两份以上结果时才给；开启后结果区双栏并排）
@@ -2615,6 +2750,8 @@ pub fn render(
                         .gap_1()
                         // 顺序照原型 §2.4 的右段：⌕ 筛选 · ⤢ 转置 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
                         .children(controls.filter)
+                        .children(controls.column_sidebar)
+                        .children(controls.value_sidebar)
                         .children(controls.transpose)
                         .children(controls.compare)
                         .children(controls.commit)
@@ -2709,7 +2846,7 @@ mod tests {
         TextAlign, blob_summary, cell_matches, cell_style, column_distinct_values, column_stats,
         compare_cells, context_menu_items, duration_text, find_in_cell, fmt_stat_num,
         header_tooltip_lines, column_menu_items, preview_of, stats_lines, status_segments,
-        thousands, truncated_hint,
+        thousands, truncated_hint, validate_edit_value,
     };
     use workbench_shell::model::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
@@ -3685,6 +3822,41 @@ mod tests {
         assert!(grid.column_filter().is_none());
     }
 
+    /// 【类型感知】按列类型校验编辑值：数字列必须数字、布尔取值受限、UUID / 日期
+    /// 查形状；空与 `NULL` 一律放行（清值是“删值”语义）；文本 / 未知列不校验
+    #[test]
+    fn edit_validation_is_type_aware_and_allows_clear() {
+        use crate::store::ColumnKind as K;
+        // 整数：合法 / 非法 / 空与 NULL 放行
+        assert!(validate_edit_value(K::Integer, "42").is_none());
+        assert!(validate_edit_value(K::Integer, "-7").is_none());
+        assert!(validate_edit_value(K::Integer, "3.14").is_some());
+        assert!(validate_edit_value(K::Integer, "abc").is_some());
+        assert!(validate_edit_value(K::Integer, "").is_none());
+        assert!(validate_edit_value(K::Integer, "NULL").is_none());
+        // 浮点 / 定点
+        assert!(validate_edit_value(K::Float, "3.14").is_none());
+        assert!(validate_edit_value(K::Decimal, "1e3").is_none());
+        assert!(validate_edit_value(K::Float, "x").is_some());
+        // 布尔：true/false/1/0/t/f/yes/no（大小写不限）
+        for ok in ["true", "false", "1", "0", "t", "f", "yes", "no", "TRUE"] {
+            assert!(validate_edit_value(K::Boolean, ok).is_none(), "{ok}");
+        }
+        assert!(validate_edit_value(K::Boolean, "maybe").is_some());
+        // UUID 形状（8-4-4-4-12）
+        assert!(validate_edit_value(K::Uuid, "550e8400-e29b-41d4-a716-446655440000").is_none());
+        assert!(validate_edit_value(K::Uuid, "550e8400e29b41d4a716446655440000").is_some());
+        assert!(validate_edit_value(K::Uuid, "hello").is_some());
+        // 日期（YYYY-MM-DD + 月/日范围）
+        assert!(validate_edit_value(K::Date, "2026-10-24").is_none());
+        assert!(validate_edit_value(K::Date, "2026-13-01").is_some());
+        assert!(validate_edit_value(K::Date, "2026/10/24").is_some());
+        assert!(validate_edit_value(K::Date, "2026-10-32").is_some());
+        // 文本 / 未知不校验
+        assert!(validate_edit_value(K::Text, "任意 内容!@#").is_none());
+        assert!(validate_edit_value(K::Unknown, "任意").is_none());
+    }
+
     /// 耗时：不到一秒报毫秒（`0.0s` 什么都没说），过一秒按人读的写法
     #[test]
     fn duration_text_is_readable() {
@@ -3757,6 +3929,28 @@ mod tests {
             vec![vec!["1".to_string(), "2".to_string()]],
         );
         assert_eq!(grid.visible_column_count(), 2, "新结果回到全部列");
+    }
+
+    /// 【侧栏】单列取消隐藏：`show_column` 只放回这一列，其它隐藏列原样保留
+    /// （与「显示全部」整批清空的粒度区别开——左栏的眼睛是单列粒度）
+    #[test]
+    fn show_column_restores_only_that_column() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+            ],
+            vec![vec!["1".to_string(), "2".to_string(), "3".to_string()]],
+        );
+        grid.hide_column(0);
+        grid.hide_column(1);
+        assert!(grid.is_hidden_column(0) && grid.is_hidden_column(1));
+        grid.show_column(0);
+        assert!(!grid.is_hidden_column(0), "第 0 列恢复");
+        assert!(grid.is_hidden_column(1), "第 1 列仍隐藏");
+        assert_eq!(grid.visible_column_count(), 2);
     }
 
     /// 【P2-3】列统计：NULL 计空值，数值列给 min/max/avg/sum，文本列只给计数

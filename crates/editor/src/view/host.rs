@@ -564,15 +564,24 @@ impl EditorHostPanel {
                     let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
                     result_panel.update(cx, |panel, cx| {
                         panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
+                        // 【侧栏】右栏（值详情）要位置：选中格的原生事件就带着
+                        panel.set_selection_pos(Some((*row, *col)), cx);
                     });
                     Some(result_grid::GridSelection::Cell { row: *row, col: *col })
                 }
                 TableEvent::SelectRow(row) => {
-                    result_panel.update(cx, |panel, cx| panel.set_selected_cell(None, cx));
+                    result_panel.update(cx, |panel, cx| {
+                        panel.set_selected_cell(None, cx);
+                        // 【侧栏】选整行不投影单格值详情
+                        panel.set_selection_pos(None, cx);
+                    });
                     Some(result_grid::GridSelection::Row { row: *row })
                 }
                 TableEvent::ClearSelection => {
-                    result_panel.update(cx, |panel, cx| panel.set_selected_cell(None, cx));
+                    result_panel.update(cx, |panel, cx| {
+                        panel.set_selected_cell(None, cx);
+                        panel.set_selection_pos(None, cx);
+                    });
                     None
                 }
                 _ => panel.result_selection,
@@ -633,7 +642,7 @@ impl EditorHostPanel {
         let _edit_sub = cx.subscribe_in(
             &edit_input,
             window,
-            |panel, state, event, _window, cx| match event {
+            |panel, state, event, window, cx| match event {
                 InputEvent::Change => {
                     let value = state.read(cx).value().to_string();
                     panel.grid.update(cx, |table, _cx| {
@@ -641,13 +650,20 @@ impl EditorHostPanel {
                     });
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
-                    panel.grid.update(cx, |table, cx| {
-                        table.delegate_mut().commit_edit(cx);
+                    // 【类型感知】`commit_edit` 返回是否真的交了：类型校验失败 = 编辑态
+                    // 保留 + 红框提示，此时**不能**跑整轮投影（`sync_result_view` 重建网格
+                    // 会把编辑态冲掉）——只请求重绘让红框 / 错误提示上屏。
+                    let committed = panel.grid.update(cx, |table, cx| {
+                        table.delegate_mut().commit_edit(cx)
                     });
-                    // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
-                    // `sync_result_view`；grid 已退出上面的 update，这里可安全 update 面板）。
-                    // Dock 化后提交按钮组 / 脏格底色读面板投影，不刷新就不会出现。
-                    panel.sync_result_view(cx);
+                    if committed {
+                        // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
+                        // `sync_result_view`；grid 已退出上面的 update，这里可安全 update 面板）。
+                        // Dock 化后提交按钮组 / 脏格底色读面板投影，不刷新就不会出现。
+                        panel.sync_result_view(cx);
+                    } else {
+                        window.refresh();
+                    }
                 }
                 _ => {}
             },
@@ -6279,6 +6295,28 @@ impl EditorHostPanel {
             ResultRequest::CopyError => self.copy_error_message(cx),
             ResultRequest::LocateError => self.jump_to_error_site(cx),
             ResultRequest::SetPushdown { open } => self.set_pushdown(open, cx),
+            // 【侧栏】左右栏开合：只翻面板状态
+            ResultRequest::ToggleColumnSidebar => {
+                self.result_panel.update(cx, |p, cx| p.toggle_column_sidebar(cx))
+            }
+            ResultRequest::ToggleValueSidebar => {
+                self.result_panel.update(cx, |p, cx| p.toggle_value_sidebar(cx))
+            }
+            // 【侧栏】左栏「单击一行」：切换该列隐藏 / 显示（网格是另一实体，
+            // update 它安全；面板再 notify 重画左栏的隐藏标记）
+            ResultRequest::ToggleColumnVisibility(column) => {
+                let grid = self.grid.clone();
+                grid.update(cx, |table, cx| {
+                    let delegate = table.delegate_mut();
+                    if delegate.is_hidden_column(column) {
+                        delegate.show_column(column);
+                    } else {
+                        delegate.hide_column(column);
+                    }
+                    table.refresh(cx);
+                });
+                self.result_panel.update(cx, |_, cx| cx.notify());
+            }
         }
     }
 

@@ -27,11 +27,13 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::table::TableState;
+use gpui_kit::component::table::{TableDelegate, TableState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 
 use crate::error_card::{self, ErrorCard};
@@ -145,6 +147,13 @@ pub struct ResultPanel {
     transposed: bool,
     transpose_row: usize,
     compare_mode: bool,
+    /// 【侧栏】结果面板左栏（列结构列表）开关；默认关（不挤网格，工具栏「列结构」可开）
+    show_column_sidebar: bool,
+    /// 【侧栏】结果面板右栏（选中格值详情）开关；默认关（工具栏「值详情」可开）
+    show_value_sidebar: bool,
+    /// 【侧栏】最近选中格位置（**视图行**, 含行号槽列；宿主 `TableEvent::SelectCell`
+    /// 事件写入，选行 / 清选置 `None`）。右栏渲染据此读网格取完整值 / 列名 / 类型。
+    selection_pos: Option<(usize, usize)>,
     /// 【并排对比】对比栏的投影（编辑器 `sync_compare_grid` 时经
     /// [`Self::set_compare_projection`] 写入；render 期只读）
     compare_active: usize,
@@ -226,6 +235,9 @@ impl ResultPanel {
             transposed: false,
             transpose_row: 0,
             compare_mode: false,
+            show_column_sidebar: false,
+            show_value_sidebar: false,
+            selection_pos: None,
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,
@@ -430,6 +442,37 @@ impl ResultPanel {
                     })
             })
             .into_any_element();
+
+        // 【侧栏】左右分栏开关（DBeaver 结果面板的左右辅助区）：默认关（不挤网格），
+        // 点开才让出左右两栏。用文字按钮——眼睛 / 面板类图标不在 kit 图标表，不猜名。
+        let column_sidebar = self.result_can_copy.then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-column-sidebar")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-column-sidebar".to_string())
+                .toggled(self.show_column_sidebar)
+                .label("列结构")
+                .tooltip("左栏：列名 / 类型 / 隐藏切换")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::ToggleColumnSidebar);
+                })
+                .into_any_element()
+        });
+        let value_sidebar = self.result_can_copy.then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-value-sidebar")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-result-value-sidebar".to_string())
+                .toggled(self.show_value_sidebar)
+                .label("值详情")
+                .tooltip("右栏：选中格完整值")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::ToggleValueSidebar);
+                })
+                .into_any_element()
+        });
 
         // 【P2-4】转置视图（单行转置，DBeaver 式）：有网格才摆。开关激活时左
         // 边跟上一行 / 下一行导航（看宽表不靠拖横向滚动条）
@@ -660,6 +703,8 @@ impl ResultPanel {
                 status: self.status.clone(),
                 controls: result_grid::ResultControls {
                     filter: Some(filter),
+                    column_sidebar,
+                    value_sidebar,
                     transpose,
                     compare,
                     commit,
@@ -677,6 +722,26 @@ impl ResultPanel {
         )
         .into_any_element();
 
+        // 【侧栏】左右分栏（DBeaver 结果面板形态）：普通视图 + 侧栏开着 → 三区。
+        // 对比模式已双栏，侧栏让位（四栏会把网格挤没，侧栏信息在双栏里都有）
+        if !self.compare_mode && (self.show_column_sidebar || self.show_value_sidebar) {
+            let mut row = div()
+                .h_flex()
+                .items_stretch()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                .debug_selector(|| "editor-result-sidebars".to_string());
+            if self.show_column_sidebar {
+                row = row.child(self.render_column_sidebar(cx));
+            }
+            // 主 pane 包一层 flex_1：它自身 `w_full`，在 h_flex 里不包会跟侧栏抢宽
+            row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
+            if self.show_value_sidebar {
+                row = row.child(self.render_value_sidebar(cx));
+            }
+            return row.into_any_element();
+        }
         // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
         // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据由编辑器
         // `sync_compare_grid` 提前拷进 `compare_grid`（render 只读网格状态）。
@@ -856,6 +921,187 @@ impl ResultPanel {
     pub fn toggle_compare_mode(&mut self, cx: &mut Context<Self>) {
         self.compare_mode = !self.compare_mode;
         cx.notify();
+    }
+
+    /// 【侧栏】左栏（列结构）开关：只翻面板状态（网格数据不动）
+    pub fn toggle_column_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.show_column_sidebar = !self.show_column_sidebar;
+        cx.notify();
+    }
+
+    /// 【侧栏】右栏（值详情）开关：只翻面板状态（网格数据不动）
+    pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.show_value_sidebar = !self.show_value_sidebar;
+        cx.notify();
+    }
+
+    /// 【侧栏】最近选中格位置（`TableEvent::SelectCell` 事件路径写入；选行 / 清选 =
+    /// `None`）。值详情只跟随**格**选中——选整行时不投影单格。
+    pub fn set_selection_pos(&mut self, pos: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        self.selection_pos = pos;
+        cx.notify();
+    }
+
+    /// 【侧栏】左栏：列结构列表（列名 + 类型 + 隐藏切换）。
+    ///
+    /// 交互 = **单击整行切换隐藏**（隐藏列整行标灰，点击恢复）。不摆图标按钮：
+    /// 眼睛类图标不在 kit 图标表，整行点击 + 标灰是同一件事，少一层控件。
+    /// 隐藏 / 显示走队列交回宿主（宿主 update 网格 + 面板），与其它工具栏动作一致。
+    fn render_column_sidebar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let columns = delegate.columns().to_vec();
+        let types = delegate.column_types().to_vec();
+        let rows: Vec<AnyElement> = columns
+            .iter()
+            .enumerate()
+            .map(|(data_col, name)| {
+                let queue = self.queue.clone();
+                let name = name.clone();
+                let type_name = types
+                    .get(data_col)
+                    .and_then(|t| t.as_ref())
+                    .map(|t| t.name.clone())
+                    .unwrap_or_default();
+                let hidden = delegate.is_hidden_column(data_col);
+                div()
+                    .id(format!("editor-result-col-sidebar-{data_col}"))
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h_6()
+                    .text_xs()
+                    .cursor_pointer()
+                    .debug_selector(move || {
+                        format!("editor-result-col-sidebar-row-{data_col}")
+                    })
+                    .when(hidden, |row| row.text_color(muted))
+                    .on_click(move |_, _window, _cx| {
+                        queue.push(ResultRequest::ToggleColumnVisibility(data_col));
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(SharedString::from(name)),
+                    )
+                    .when(!type_name.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(SharedString::from(type_name)),
+                        )
+                    })
+                    .when(hidden, |row| {
+                        row.child(div().text_xs().text_color(muted).child("(隐)"))
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .w(rems(ui::RESULT_SIDEBAR_LEFT_WIDTH))
+            .h_full()
+            .flex_none()
+            .border_r(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-column-sidebar".to_string())
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .text_xs()
+                    .text_color(muted)
+                    .child("列结构"),
+            )
+            .child(div().flex_1().min_h_0().overflow_y_scrollbar().children(rows))
+            .into_any_element()
+    }
+
+    /// 【侧栏】右栏：选中格的完整值 + 元数据（列名 / 类型 / 位置）。
+    ///
+    /// 与状态行「当前格值」的区别：状态行截断（防撑爆），这里**原样看全**
+    /// （长 JSON / 长文本可滚动读完）。选整行 / 没选中 = 空态。
+    /// 转置视图下 `col` 语义是转置格（0=行号 / 1=字段 / 2=值），列名段让位。
+    fn render_value_sidebar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let Some((row, col)) = self.selection_pos else {
+            return div()
+                .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
+                .h_full()
+                .flex_none()
+                .border_l(ui::HAIRLINE)
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .text_xs()
+                .text_color(muted)
+                .debug_selector(|| "editor-result-value-sidebar".to_string())
+                .child("未选中单元格")
+                .into_any_element();
+        };
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let value = delegate.cell_text(row, col, cx);
+        // 列名 / 类型：普通视图 = columns[col - 1]（col 含行号槽）；行号槽 / 转置
+        // 给不出语义列名，标题只用位置
+        let (name, type_name) = if col == 0 || self.transposed {
+            (None, None)
+        } else {
+            let data_col = col - 1;
+            (
+                delegate.columns().get(data_col).cloned(),
+                delegate
+                    .column_types()
+                    .get(data_col)
+                    .and_then(|t| t.as_ref())
+                    .map(|t| t.name.clone()),
+            )
+        };
+        let title = match (&name, &type_name) {
+            (Some(name), Some(type_name)) => format!("{name} · {type_name}"),
+            (Some(name), None) => name.clone(),
+            _ => "值".to_string(),
+        };
+        div()
+            .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
+            .h_full()
+            .flex_none()
+            .border_l(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-value-sidebar".to_string())
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_1()
+                    .px_2()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(title))
+                    .child(SharedString::from(format!("第 {} 行", row + 1))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .whitespace_normal()
+                    .child(SharedString::from(value)),
+            )
+            .into_any_element()
     }
 
     /// 【筛选】列头菜单「按值筛选此列 / 清除」落点：值非空 = 设置列级筛选，

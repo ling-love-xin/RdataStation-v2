@@ -82,3 +82,11 @@ pub const RESULT_MIN_HEIGHT: f32 = 7.0;
 /// 值查看器弹层：值显示区最大高（22rem = 352px：约 20 行等宽文本；
 /// 再长就滚动——值查看器要的是「原样看全」，不是截断）
 pub const VALUE_PREVIEW_MAX_HEIGHT: f32 = 22.0;
+
+/// 结果面板**左栏（列结构）**宽（10rem = 160px）：列名 + 类型标签 + 隐藏切换，
+/// 窄栏放得下列名就够；比这再宽会挤网格。
+pub const RESULT_SIDEBAR_LEFT_WIDTH: f32 = 10.0;
+
+/// 结果面板**右栏（值详情）**宽（20rem = 320px）：选中格完整值 + 列名 / 类型 / 位置。
+/// 比左栏宽一档：长文本 / JSON 要在这里尽量多显示（截断交给网格，详情看全）。
+pub const RESULT_SIDEBAR_RIGHT_WIDTH: f32 = 20.0;

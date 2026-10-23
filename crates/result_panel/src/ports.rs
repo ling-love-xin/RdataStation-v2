@@ -59,6 +59,12 @@ pub enum ResultRequest {
     LocateError,
     /// 下发源库开关（只翻转状态，不重查——与 [`Self::PushdownFilter`] 区别开）
     SetPushdown { open: bool },
+    /// 工具栏「列结构」开关：结果面板左栏（列名 / 类型 / 隐藏切换）开合
+    ToggleColumnSidebar,
+    /// 工具栏「值详情」开关：结果面板右栏（选中格完整值 + 元数据）开合
+    ToggleValueSidebar,
+    /// 左栏列结构列表的「单击一行」：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
+    ToggleColumnVisibility(usize),
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）
