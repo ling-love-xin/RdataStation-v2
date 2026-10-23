@@ -2247,6 +2247,10 @@ impl MetadataCacheOps {
                     // （同一列属于两个外键时出重复行）—— 在那边收敛之前不从这里给目标
                     references: None,
                     ordinal: u32::try_from(row.get::<_, i32>(8)?).unwrap_or(0),
+                    // 列字段增强（2026-10-24）：该缓存行无标识 / 排序规则列，保守填 false/None
+                    is_identity: false,
+                    identity_generation: None,
+                    collation: None,
                 })
             })
             .map_err(|e| {

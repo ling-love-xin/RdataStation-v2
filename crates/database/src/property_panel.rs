@@ -303,6 +303,7 @@ pub async fn load_properties(
 
     // ── ③ 类别内容合并：categories 声明顺序 + 骨架取数内容 ────────────────
     let qualified = qualify(ref_);
+    let caps = super::property_providers::caps_for(db_type);
     let mut sections: Vec<PropertySection> = Vec::new();
     for cat in categories {
         let table = sections_of(
@@ -314,6 +315,7 @@ pub async fn load_properties(
             &constraints,
             &routine_source,
             &ddl_text,
+            &caps,
         )
         .map(|s| s.table)
         .unwrap_or(cat.table);
@@ -347,12 +349,13 @@ fn sections_of(
     constraints: &[engine::driver::traits::ConstraintDetail],
     routine_source: &Option<String>,
     ddl_text: &Option<String>,
+    caps: &super::property_providers::DriverCapabilities,
 ) -> Option<PropertySection> {
     match page {
         PageId::Columns => Some(PropertySection {
             id: PageId::Columns,
             label: format!("列 ({})", columns.len()),
-            table: columns_table(columns),
+            table: columns_table(columns, caps),
             enabled: true,
         }),
         PageId::Indexes => Some(PropertySection {
@@ -596,19 +599,29 @@ fn text_table(header: &str, text: &str) -> PropertyTable {
     PropertyTable { headers, rows }
 }
 
-fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTable {
+fn columns_table(
+    columns: &[engine::driver::traits::ColumnDetail],
+    caps: &super::property_providers::DriverCapabilities,
+) -> PropertyTable {
     // 「引用」一列同时承载两件事：拿得到目标就写 `表.列`，只拿得到「是外键」（复合外键 ——
     // 配对要按列序做，见 `utils::PG_TABLE_DETAIL_SQL` 的说明）就写 FK。
-    // 不另开一列：面板是等宽 flex 列，9 列会把每格挤到两三个字。
-    let headers = ["#", "名称", "类型", "非空", "主键", "引用", "默认", "注释"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    // 2026-10-24 列字段增强（竞品分析必做 #5）：PG / MySQL 追加「标识 / 排序规则」列
+    // （`identity_generation` / `collation` 真值已入 engine 列序契约 0..=12）；
+    // SQLite / DuckDB 无这两个概念 → 按能力位裁剪，列结构不随驱动漂移。
+    let mut headers = vec!["#", "名称", "类型"];
+    if caps.identity_column {
+        headers.push("标识");
+    }
+    if caps.collation_column {
+        headers.push("排序规则");
+    }
+    headers.extend(["非空", "主键", "引用", "默认", "注释"]);
+    let headers: Vec<String> = headers.into_iter().map(|s| s.to_string()).collect();
     let rows = columns
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            vec![
+            let mut cells = vec![
                 // 驱动给了真序号就用它（内省结果被筛选 / 重排后数组下标会错位），没给才退回下标
                 if c.ordinal > 0 {
                     c.ordinal.to_string()
@@ -617,6 +630,14 @@ fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTa
                 },
                 c.name.clone(),
                 c.data_type.clone(),
+            ];
+            if caps.identity_column {
+                cells.push(c.identity_generation.clone().unwrap_or_default());
+            }
+            if caps.collation_column {
+                cells.push(c.collation.clone().unwrap_or_default());
+            }
+            cells.extend(vec![
                 if c.nullable { "" } else { "✓" }.to_string(),
                 if c.is_primary_key { "PK" } else { "" }.to_string(),
                 match (&c.references, c.is_foreign_key) {
@@ -626,7 +647,8 @@ fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTa
                 },
                 c.default_value.clone().unwrap_or_default(),
                 c.comment.clone().unwrap_or_default(),
-            ]
+            ]);
+            cells
         })
         .collect();
     PropertyTable { headers, rows }
@@ -726,8 +748,43 @@ mod tests {
             PageId::Ddl,
             "public.t",
             &[], &[], &[], &None, &None,
+            &crate::property_providers::DriverCapabilities::default(),
         );
         assert!(s.is_some(), "PG 表无源版时合成 DDL");
         assert_eq!(s.unwrap().label, "DDL（合成）");
+    }
+
+    /// 列字段增强（2026-10-24）：列表按能力位裁剪——pg / mysql 追加「标识 / 排序规则」列，
+    /// sqlite / duckdb 不显示；标识值取 `identity_generation`（BY DEFAULT / AUTO_INCREMENT 等）。
+    #[test]
+    fn columns_table_clips_identity_and_collation_by_caps() {
+        use engine::driver::traits::ColumnDetail;
+        let col = ColumnDetail {
+            name: "id".to_string(),
+            data_type: "bigint".to_string(),
+            nullable: false,
+            is_primary_key: true,
+            is_foreign_key: false,
+            references: None,
+            ordinal: 1,
+            default_value: None,
+            comment: None,
+            is_identity: true,
+            identity_generation: Some("BY DEFAULT".to_string()),
+            collation: Some("default".to_string()),
+            extra: Default::default(),
+        };
+        let pg = super::columns_table(&[col.clone()], &crate::property_providers::DriverCapabilities::pg());
+        assert_eq!(pg.headers.len(), 10, "pg 10 列（含 标识/排序规则）: {:#?}", pg.headers);
+        assert!(pg.headers.contains(&"标识".to_string()));
+        assert!(pg.headers.contains(&"排序规则".to_string()));
+        let pg_row = &pg.rows[0];
+        assert_eq!(pg_row[3], "BY DEFAULT", "标识列展示生成方式");
+        assert_eq!(pg_row[4], "default", "排序规则列展示 collation");
+
+        let sq = super::columns_table(&[col], &crate::property_providers::DriverCapabilities::sqlite());
+        assert_eq!(sq.headers.len(), 8, "sqlite 8 列（无 标识/排序规则）: {:#?}", sq.headers);
+        assert!(!sq.headers.contains(&"标识".to_string()));
+        assert_eq!(sq.rows[0].len(), 8);
     }
 }

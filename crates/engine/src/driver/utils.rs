@@ -79,7 +79,12 @@ where
 /// PostgreSQL：列出某表的列（两个 PG 驱动共用）。
 ///
 /// **列序是本模块的契约**（三个 `*_TABLE_DETAIL_SQL` 必须一致，`columns_from_detail_rows` 按它取值）：
-/// `0 列名 / 1 类型 / 2 可空(YES|NO) / 3 序号(1 基) / 4 主键标记(PRI|空) / 5 默认值 / 6 注释 / 7 引用表 / 8 引用列 / 9 外键标记(1|空，**含复合外键**)`。
+/// `0 列名 / 1 类型 / 2 可空(YES|NO) / 3 序号(1 基) / 4 主键标记(PRI|空) / 5 默认值 / 6 注释 / 7 引用表 / 8 引用列 / 9 外键标记(1|空，**含复合外键**) / 10 标识标记(1|空) / 11 标识生成方式 / 12 排序规则`。
+///
+/// 10..=12 为 2026-10-24 列字段增强新增（属性面板「标识 / 排序规则」列）：
+/// PG 用 `attidentity` + `attcollation`（`pg_collation.collname`），MySQL 用
+/// `EXTRA` 含 `auto_increment` + `COLLATION_NAME`；DuckDB 无这两个概念，用空
+/// 串占位**保持列序契约对齐**（`columns_from_detail_rows` 按位取值，缺列会错位）。
 ///
 /// **PG 的这三条不吃 `catalog` 参数**：一条连接只绑一个库，内省只能在当前库里做
 /// （跨库浏览要靠「按库另开连接」，见 `get_catalogs` 的说明）。
@@ -117,7 +122,13 @@ pub const PG_TABLE_DETAIL_SQL: &str = "\
                    CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_constraint con \
                                       WHERE con.conrelid = c.oid AND con.contype = 'f' \
                                         AND a.attnum = ANY (con.conkey)) \
-                        THEN '1' ELSE '' END AS is_fk \
+                        THEN '1' ELSE '' END AS is_fk, \
+                   CASE WHEN a.attidentity <> '' THEN '1' ELSE '' END AS is_identity, \
+                   CASE a.attidentity WHEN 'd' THEN 'BY DEFAULT' WHEN 'a' THEN 'ALWAYS' \
+                        ELSE '' END AS identity_generation, \
+                   CASE WHEN a.attcollation <> 0::oid THEN \
+                        (SELECT coll.collname FROM pg_catalog.pg_collation coll \
+                          WHERE coll.oid = a.attcollation) ELSE '' END AS collation \
               FROM pg_catalog.pg_class c \
               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
               JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid \
@@ -208,7 +219,11 @@ pub const MY_TABLE_DETAIL_SQL: &str = "\
                                         AND kcu.table_name = c.table_name \
                                         AND kcu.column_name = c.column_name \
                                         AND kcu.referenced_table_name IS NOT NULL) \
-                        THEN '1' ELSE '' END AS is_fk \
+                        THEN '1' ELSE '' END AS is_fk, \
+                   CASE WHEN c.extra LIKE '%auto_increment%' THEN '1' ELSE '' END AS is_identity, \
+                   CASE WHEN c.extra LIKE '%auto_increment%' THEN 'AUTO_INCREMENT' \
+                        ELSE '' END AS identity_generation, \
+                   COALESCE(c.collation_name, '') AS collation \
               FROM information_schema.columns c \
              WHERE c.table_schema = ? AND c.table_name = ? \
              ORDER BY c.ordinal_position";
@@ -245,7 +260,8 @@ pub const DUCK_TABLE_DETAIL_SQL: &str = "\
                                       WHERE k.table_name = c.table_name \
                                         AND k.constraint_type = 'FOREIGN KEY' \
                                         AND list_contains(k.constraint_column_names, c.column_name)) \
-                        THEN '1' ELSE '' END AS is_fk \
+                        THEN '1' ELSE '' END AS is_fk, \
+                   '' AS is_identity, '' AS identity_generation, '' AS collation \
               FROM information_schema.columns c \
              WHERE c.table_schema = 'main' AND c.table_name = ? \
              ORDER BY c.ordinal_position";
@@ -279,6 +295,10 @@ pub fn columns_from_detail_rows(result: &QueryResult) -> Vec<crate::driver::Colu
                     table: ref_table.to_string(),
                     column: cell(8).to_string(),
                 }),
+                // 列序契约 10..=12（2026-10-24）：标识 / 生成方式 / 排序规则。
+                is_identity: cell(10) == "1",
+                identity_generation: (!cell(11).is_empty()).then(|| cell(11).to_string()),
+                collation: (!cell(12).is_empty()).then(|| cell(12).to_string()),
                 extra: std::collections::HashMap::new(),
             }
         })
@@ -1264,5 +1284,120 @@ mod schema_context_tests {
             schema_context_sql("my schema", SqlFlavor::PostgreSql).as_deref(),
             Some("SET search_path TO \"my schema\"")
         );
+    }
+}
+
+#[cfg(test)]
+mod columns_detail_tests {
+    use super::columns_from_detail_rows;
+
+    /// 列序契约 10..=12（2026-10-24 列字段增强）：标识 / 生成方式 / 排序规则映射。
+    /// 行 0 模拟 PG 标识列（`attidentity='d'` → BY DEFAULT，默认 collation）；
+    /// 行 1 模拟普通文本列（显式 `C` 排序规则）。
+    #[test]
+    fn detail_rows_map_identity_and_collation() {
+        use arrow::array::StringArray;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use shared::models::ArrowBatch;
+
+        let values = [
+            // name/type/nullable/ordinal/key/default/comment/ref_table/ref_col/fk/identity/generation/collation
+            vec![
+                "id", "bigint", "NO", "1", "PRI", "", "", "", "", "1",
+                "1", "BY DEFAULT", "default",
+            ],
+            vec![
+                "c", "text", "YES", "2", "", "", "", "", "", "",
+                "", "", "C",
+            ],
+        ];
+        let schema = std::sync::Arc::new(Schema::new(
+            (0..13)
+                .map(|i| Field::new(format!("c{i}"), DataType::Utf8, true))
+                .collect::<Vec<_>>(),
+        ));
+        let arrays: Vec<std::sync::Arc<dyn arrow::array::Array>> = (0..13)
+            .map(|col| {
+                std::sync::Arc::new(StringArray::from(
+                    values.iter().map(|row| row[col]).collect::<Vec<_>>(),
+                )) as std::sync::Arc<dyn arrow::array::Array>
+            })
+            .collect();
+        let qr = shared::models::QueryResult {
+            columns: (0..13).map(|i| format!("c{i}")).collect(),
+            batches: vec![ArrowBatch::try_new(schema, arrays).expect("批")],
+            ..Default::default()
+        };
+
+        let cols = columns_from_detail_rows(&qr);
+        assert_eq!(cols.len(), 2);
+        assert!(cols[0].is_identity, "attidentity 非空 → 标识");
+        assert_eq!(cols[0].identity_generation.as_deref(), Some("BY DEFAULT"));
+        assert_eq!(cols[0].collation.as_deref(), Some("default"));
+        assert!(!cols[1].is_identity, "非标识列如实标记");
+        assert_eq!(cols[1].identity_generation, None);
+        assert_eq!(cols[1].collation.as_deref(), Some("C"));
+    }
+
+    /// MySQL 行：EXTRA 含 auto_increment → 标识 + AUTO_INCREMENT；无排序规则 → None。
+    #[test]
+    fn detail_rows_map_mysql_auto_increment() {
+        use arrow::array::StringArray;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use shared::models::ArrowBatch;
+
+        let values = [vec![
+            "id", "int", "NO", "1", "PRI", "", "", "", "", "1",
+            "1", "AUTO_INCREMENT", "utf8mb4_0900_ai_ci",
+        ]];
+        let schema = std::sync::Arc::new(Schema::new(
+            (0..13)
+                .map(|i| Field::new(format!("c{i}"), DataType::Utf8, true))
+                .collect::<Vec<_>>(),
+        ));
+        let arrays: Vec<std::sync::Arc<dyn arrow::array::Array>> = (0..13)
+            .map(|col| {
+                std::sync::Arc::new(StringArray::from(
+                    values.iter().map(|row| row[col]).collect::<Vec<_>>(),
+                )) as std::sync::Arc<dyn arrow::array::Array>
+            })
+            .collect();
+        let qr = shared::models::QueryResult {
+            columns: (0..13).map(|i| format!("c{i}")).collect(),
+            batches: vec![ArrowBatch::try_new(schema, arrays).expect("批")],
+            ..Default::default()
+        };
+
+        let cols = columns_from_detail_rows(&qr);
+        assert!(cols[0].is_identity);
+        assert_eq!(cols[0].identity_generation.as_deref(), Some("AUTO_INCREMENT"));
+        assert_eq!(cols[0].collation.as_deref(), Some("utf8mb4_0900_ai_ci"));
+    }
+
+    /// 行短于契约（如旧缓存 / 非本模块来源）：缺的单元格按空串处理，不 panic、不吞行。
+    #[test]
+    fn short_rows_fill_empty_cells() {
+        use arrow::array::StringArray;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use shared::models::ArrowBatch;
+
+        let schema = std::sync::Arc::new(Schema::new(vec![Field::new(
+            "c0",
+            DataType::Utf8,
+            true,
+        )]));
+        let arrays: Vec<std::sync::Arc<dyn arrow::array::Array>> =
+            vec![std::sync::Arc::new(StringArray::from(vec!["id"]))];
+        let qr = shared::models::QueryResult {
+            columns: vec!["c0".to_string()],
+            batches: vec![ArrowBatch::try_new(schema, arrays).expect("批")],
+            ..Default::default()
+        };
+
+        let cols = columns_from_detail_rows(&qr);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].name, "id");
+        assert!(!cols[0].is_identity);
+        assert_eq!(cols[0].collation, None);
     }
 }

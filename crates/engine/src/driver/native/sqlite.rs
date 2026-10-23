@@ -839,6 +839,11 @@ impl Database for SqliteDatabase {
                         ordinal: u32::try_from(cid + 1).unwrap_or(0),
                         default_value: default_val,
                         comment: None,
+                        // SQLite 无原生标识 / 排序规则概念：INTEGER PRIMARY KEY 是
+                        // rowid 别名（隐式自增），但不表标识生成方式，一律填保守值。
+                        is_identity: false,
+                        identity_generation: None,
+                        collation: None,
                         extra: std::collections::HashMap::new(),
                     });
                 }

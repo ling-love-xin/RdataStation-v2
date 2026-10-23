@@ -4,7 +4,7 @@
 //! 编辑：列级 RENAME / COMMENT / DEFAULT / NULLABLE（`sql_gen::alter_column_sql`）；
 //! 类别树：驱动能力掩码（列/索引/约束/DDL/数据可用；权限/依赖/触发器/规则/策略/Statistics 先绘制置灰）。
 
-use super::{connection_base_overview, connection_base_rows, connection_categories, editable_row, empty_table, qualified_name, row, stats_cards};
+use super::{connection_base_overview, connection_base_rows, editable_row, empty_table, qualified_name, row, stats_cards};
 use engine::driver::traits::ColumnDetail;
 use property::{
     ExtraQuery, ObjectOverview, OverviewStatus, PageId, PropertyKind, PropertyProvider,
@@ -91,9 +91,8 @@ impl PropertyProvider for PgConnectionProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        let mut cats = connection_categories();
-        cats.insert(0, PropertySection { id: PageId::Dependencies, label: "存储".to_string(), enabled: false, table: empty_table() });
-        cats
+        // 连接级类别按能力位生成（存储 / 权限 / 事件触发器，均灰置——内容批次未接入）。
+        super::connection_categories(&super::DriverCapabilities::pg())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -161,10 +160,8 @@ impl PropertyProvider for PgSchemaProvider {
         // 需要真内容（新 PageId + 内省查询），未接入前不声明。
         // 旧实现把「表」错塞 Columns id、「视图」错塞 Constraints id（类别 id 是
         // provider 增删时的稳定业务键，错位会让未来启用时内容进错分支）——已删除。
-        vec![
-            PropertySection::disabled(PageId::Privileges, "权限"),
-            PropertySection::disabled(PageId::Dependencies, "依赖"),
-        ]
+        // 权限 / 依赖按能力位生成（灰置）。
+        super::schema_categories(&super::DriverCapabilities::pg())
     }
 
     fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
@@ -266,18 +263,10 @@ impl PropertyProvider for PgTableProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![
-            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertySection::disabled(PageId::Source, "触发器"),
-            PropertySection::disabled(PageId::Privileges, "权限"),
-            PropertySection::disabled(PageId::Dependencies, "依赖"),
-            PropertySection::disabled(PageId::Routines, "规则"),
-            PropertySection::disabled(PageId::Partitions, "分区"),
-        ]
+        // 表级类别按能力位生成：可用核心（列/索引/约束/DDL/数据）+ 灰置
+        // （触发器/权限/依赖/规则/分区，均未接入）。触发器此前误用 `Source` id
+        //（例程序源码页），2026-10-24 能力矩阵收敛时修正为 `Trigger`。
+        super::table_categories(&super::DriverCapabilities::pg())
     }
 
     fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
@@ -345,12 +334,7 @@ impl PropertyProvider for PgViewProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![
-            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertySection::disabled(PageId::Privileges, "权限"),
-        ]
+        super::view_categories(&super::DriverCapabilities::pg())
     }
 
     fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
@@ -645,6 +629,9 @@ mod tests {
             ordinal: 1,
             default_value: None,
             comment: None,
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
             extra: Default::default(),
         };
         let t = target(PropertyKind::Column, Some("t"));
@@ -689,7 +676,11 @@ mod tests {
         let col = ColumnDetail {
             name: "c".to_string(), data_type: "INTEGER".to_string(), nullable: true,
             is_primary_key: false, is_foreign_key: false, references: None,
-            ordinal: 1, default_value: None, comment: None, extra: Default::default(),
+            ordinal: 1, default_value: None, comment: None,
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
+            extra: Default::default(),
         };
         let t = target(PropertyKind::Column, Some("t"));
         let input = input(&t, &[], Some(&col as &dyn std::any::Any));

@@ -65,6 +65,21 @@ pub struct ColumnDetail {
     pub ordinal: u32,
     pub default_value: Option<String>,
     pub comment: Option<String>,
+    /// 这一列是否为标识 / 自增列（PG `attidentity` 非空；MySQL `EXTRA` 含
+    /// `auto_increment`；SQLite / DuckDB 无原生标识概念 → false）。
+    ///
+    /// 与 [`ColumnDetail::identity_generation`] 的分工：本字段是「**是不是**标识列」，
+    /// `identity_generation` 是「**怎么生成**」。
+    #[serde(default)]
+    pub is_identity: bool,
+    /// 标识列的生成方式（`is_identity == true` 时有值，否则 `None`）：
+    /// PG `BY DEFAULT` / `ALWAYS`；MySQL `AUTO_INCREMENT`。
+    #[serde(default)]
+    pub identity_generation: Option<String>,
+    /// 列级排序规则（PG `attcollation` → `pg_collation.collname`；MySQL
+    /// `COLLATION_NAME`；SQLite / DuckDB 无原生概念 → `None`）。
+    #[serde(default)]
+    pub collation: Option<String>,
     #[serde(default)]
     pub extra: std::collections::HashMap<String, String>,
 }

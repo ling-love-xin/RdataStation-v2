@@ -32,6 +32,14 @@ pub enum PageId {
     Routines,
     /// 分区（PG 表类别，当前不支持 → 置灰）
     Partitions,
+    /// 触发器（表级类别；2026-10-24 新增——此前「触发器」误用 `Source` /
+    /// `Dependencies` id，类别 id 是 provider 增删时的稳定业务键，错位会让
+    /// 未来启用时内容进错分支。当前不支持 → 置灰）
+    Trigger,
+    /// 存储（连接级类别；2026-10-24 新增——此前误用 `Dependencies` id）
+    Storage,
+    /// 事件触发器（连接级类别；2026-10-24 新增——此前误用 `Dependencies` id）
+    EventTrigger,
 }
 
 #[cfg(test)]

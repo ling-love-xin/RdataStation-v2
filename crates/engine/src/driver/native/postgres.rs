@@ -326,9 +326,9 @@ fn build_query_result(
     ))
 }
 
-/// PgRow → ColumnDetail（列序契约 0..=9：name/type/nullable/ordinal/key/default/
-/// comment/ref_table/ref_column/fk_flag）；行短于契约时缺的单元格按空串处理
-/// （不 panic、不吞行）。`get_table_detail` 与 `list_columns_batch` 共用。
+/// PgRow → ColumnDetail（列序契约 0..=12：name/type/nullable/ordinal/key/default/
+/// comment/ref_table/ref_column/fk_flag/identity/generation/collation）；行短于契约时
+/// 缺的单元格按空串处理（不 panic、不吞行）。`get_table_detail` 与 `list_columns_batch` 共用。
 fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::ColumnDetail> {
     use sqlx::Row as _;
     result
@@ -350,6 +350,10 @@ fn pg_rows_to_columns(result: &[sqlx::postgres::PgRow]) -> Vec<crate::driver::Co
                     table: ref_table,
                     column: cell(8),
                 }),
+                // 列序契约 10..=12（2026-10-24）：标识 / 生成方式 / 排序规则。
+                is_identity: cell(10) == "1",
+                identity_generation: (!cell(11).is_empty()).then(|| cell(11)),
+                collation: (!cell(12).is_empty()).then(|| cell(12)),
                 extra: std::collections::HashMap::new(),
             }
         })

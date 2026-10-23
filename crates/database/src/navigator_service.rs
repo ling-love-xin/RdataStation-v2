@@ -1356,6 +1356,9 @@ mod object_node_tests {
                 ordinal: 0,
                 default_value: None,
                 comment: None,
+                is_identity: false,
+                identity_generation: None,
+                collation: None,
                 extra: Default::default(),
             })
             .collect();
@@ -1442,6 +1445,9 @@ mod l1_tests {
             is_foreign_key: false,
             default_value: None,
             comment: None,
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
             extra: Default::default(),
             references: None,
             ordinal: 0,

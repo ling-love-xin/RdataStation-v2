@@ -433,6 +433,9 @@ impl NavCache {
                     is_foreign_key: c.is_foreign_key,
                     default_value: c.column_default,
                     comment: c.column_comment,
+                    is_identity: false,
+                    identity_generation: None,
+                    collation: None,
                     extra: c.extra,
                     // 同 metadata_cache::load_node_detail 的说明：外键列对在缓存里，
                     // 但那张 join 可能重复行，收敛前不给「引到哪」
@@ -647,6 +650,9 @@ mod tests {
             is_foreign_key: false,
             default_value: None,
             comment: None,
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
             extra: Default::default(),
             references: None,
             ordinal: 0,

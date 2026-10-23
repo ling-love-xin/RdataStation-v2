@@ -2,9 +2,9 @@
 //!
 //! 驱动特异部分：属性行 + 类别掩码；列/索引/约束/DDL/数据取数走通用骨架。
 
-use super::{connection_base_overview, editable_row, empty_table, row, stats_cards};
+use super::{connection_base_overview, editable_row, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PageId, PropertySection, PropertyKind, PropertyProvider,
+    ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
 };
 
@@ -44,7 +44,7 @@ impl PropertyProvider for MysqlConnectionProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        super::connection_categories()
+        super::connection_categories(&super::DriverCapabilities::mysql())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -90,15 +90,7 @@ impl PropertyProvider for MysqlTableProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![
-            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertySection::disabled(PageId::Privileges, "权限"),
-            PropertySection::disabled(PageId::Dependencies, "依赖"),
-        ]
+        super::table_categories(&super::DriverCapabilities::mysql())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {

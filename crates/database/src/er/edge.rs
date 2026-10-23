@@ -149,6 +149,9 @@ mod tests {
             ordinal: 0,
             default_value: None,
             comment: None,
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
             extra: HashMap::new(),
         }
     }

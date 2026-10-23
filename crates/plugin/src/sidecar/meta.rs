@@ -178,6 +178,10 @@ impl MetaColumn {
             // 外键只知道「有没有」（`is_fk`）—— 要真值得先扩协议，不在这里猜
             references: None,
             ordinal: 0,
+            // 列字段增强（2026-10-24）：sidecar 线格式无标识 / 排序规则概念，保守填 false/None
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
         }
     }
 }

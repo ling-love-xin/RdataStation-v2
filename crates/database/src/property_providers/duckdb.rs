@@ -2,9 +2,9 @@
 //!
 //! 与 SQLite 同族（文件库），差异：版本 / 文件路径 由调用方 counts 填充。
 
-use super::{connection_base_overview, empty_table, row, stats_cards};
+use super::{connection_base_overview, row, stats_cards};
 use property::{
-    ObjectOverview, OverviewStatus, PageId, PropertySection, PropertyKind, PropertyProvider,
+    ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
 };
 /// 注册 DuckDB provider。
@@ -43,7 +43,7 @@ impl PropertyProvider for DuckDbConnectionProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        super::connection_categories()
+        super::connection_categories(&super::DriverCapabilities::duckdb())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -88,15 +88,7 @@ impl PropertyProvider for DuckDbTableProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![
-            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertySection::disabled(PageId::Privileges, "权限"),
-            PropertySection::disabled(PageId::Dependencies, "依赖"),
-        ]
+        super::table_categories(&super::DriverCapabilities::duckdb())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -141,12 +133,7 @@ impl PropertyProvider for DuckDbViewProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![
-            PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-            PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
-            PropertySection::disabled(PageId::Privileges, "权限"),
-        ]
+        super::view_categories(&super::DriverCapabilities::duckdb())
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {

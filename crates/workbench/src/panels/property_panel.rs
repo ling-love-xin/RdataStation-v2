@@ -826,7 +826,7 @@ impl PropertyHostPanel {
                     s.table
                         .headers
                         .iter()
-                        .map(|h| div().flex_1().min_w_0().child(h.clone())),
+                        .map(|h| div().flex_1().min_w_0().text_ellipsis().child(h.clone())),
                 ),
         );
         for data_row in &s.table.rows {
@@ -840,7 +840,7 @@ impl PropertyHostPanel {
                     .children(
                         data_row
                             .iter()
-                            .map(|c| div().flex_1().min_w_0().child(c.clone())),
+                            .map(|c| div().flex_1().min_w_0().text_ellipsis().child(c.clone())),
                     ),
             );
         }

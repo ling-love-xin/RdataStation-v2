@@ -286,9 +286,9 @@ fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::MySql)
 }
 
-/// MySqlRow → ColumnDetail（列序契约 0..=9：name/type/nullable/ordinal/key/default/
-/// comment/ref_table/ref_column/fk_flag）；行短于契约时缺的单元格按空串处理。
-/// `get_table_detail` 与 `list_columns_batch` 共用。
+/// MySqlRow → ColumnDetail（列序契约 0..=12：name/type/nullable/ordinal/key/default/
+/// comment/ref_table/ref_column/fk_flag/identity/generation/collation）；行短于契约时
+/// 缺的单元格按空串处理。`get_table_detail` 与 `list_columns_batch` 共用。
 fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::driver::ColumnDetail> {
     use sqlx::Row as _;
     result
@@ -310,6 +310,10 @@ fn mysql_rows_to_columns(result: &[sqlx::mysql::MySqlRow]) -> Vec<crate::driver:
                     table: ref_table,
                     column: cell(8),
                 }),
+                // 列序契约 10..=12（2026-10-24）：标识 / 生成方式 / 排序规则。
+                is_identity: cell(10) == "1",
+                identity_generation: (!cell(11).is_empty()).then(|| cell(11)),
+                collation: (!cell(12).is_empty()).then(|| cell(12)),
                 extra: std::collections::HashMap::new(),
             }
         })
