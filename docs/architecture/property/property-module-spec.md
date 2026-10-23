@@ -194,8 +194,14 @@ pub struct PropertySection {
 
 - `PropertySection::supported(id, label, table)`：可用分区（默认形态）。
 - `PropertySection::disabled(id, label)`：置灰分区（内容区显示「暂不可用」占位）。
-- provider 的 `categories()` 返回 `Vec<PropertySection>`（连接级灰置分区由
-  `database::property_providers::connection_categories()` 统一提供：权限 / 事件触发器）。
+- provider 的 `categories()` 返回 `Vec<PropertySection>`。**2026-10-24 起类别结构收敛到
+  `database::property_providers` 的生成函数**（`table_categories` / `view_categories` /
+  `schema_categories` / `connection_categories`），由 [`DriverCapabilities`] 能力位驱动：
+  每个类别声明 `Some(true)` = 已实现（enabled）、`Some(false)` = 灰置声明（disabled）、
+  `None` = 该驱动不声明；pg / sqlite / mysql / duckdb 各填一份 caps，类别结构与顺序
+  只写一份，不再随 provider 手写 `disabled(...)` 漂移。新增数据库类型 = 补一份 caps。
+- 列级展示同样按能力位裁剪：`DriverCapabilities::identity_column` / `collation_column`
+  控制「列」分区表格的 标识 / 排序规则 两列（PG / MySQL 有真值，SQLite / DuckDB 无）。
 - **动态渲染原则**：渲染层只遍历 `ObjectProperties.sections`，不按 `kind` 写分支；
   新增对象类型 / 新增属性 = provider 加条目（或新注册一个 provider），渲染零改动。
 
