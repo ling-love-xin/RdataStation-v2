@@ -119,14 +119,16 @@ mod tests {
         }
     }
 
-    /// 对照：**单条接口对脚本确实会截断**（把已知缺陷钉住，防止有人“简化”回去）
+    /// 对照：**单条接口对脚本必须报错**——0.10.33 起上游不再静默截断（旧缺陷已修复），
+    /// 明确报解析错误；项目转译一律走 [`transpile_with_report`]（先切分再逐条），不碰单条接口。
+    /// 若哪天它又「宽恕」脚本了，这段注释与架构 §12 #19 都该再更新。
     #[test]
-    fn the_single_statement_api_truncates_a_script() {
-        let truncated = transpile("SELECT 1; SELECT 2;", SqlDialect::Ansi, SqlDialect::Postgres)
-            .expect("单条接口对脚本也不报错——这正是它危险的地方");
+    fn the_single_statement_api_rejects_a_script() {
+        let error = transpile("SELECT 1; SELECT 2;", SqlDialect::Ansi, SqlDialect::Postgres)
+            .expect_err("单条接口对脚本必须报错（不再静默截断）");
         assert!(
-            !truncated.contains('2'),
-            "若哪天它不再截断了，这段注释与架构 §12 #19 都该更新：{truncated:?}"
+            error.contains("Unexpected token"),
+            "报错要可读：{error}"
         );
     }
 

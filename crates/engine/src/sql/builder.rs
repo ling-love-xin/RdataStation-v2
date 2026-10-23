@@ -50,6 +50,8 @@ fn qualified_table_ref(catalog: Option<&str>, schema: Option<&str>, name: &str) 
         schema: schema.map(str::to_string),
         name: name.to_string(),
         alias: None,
+        // 0.10.33 新增：表级时态 / 版本选择器。此处无时态引用，取 `None`
+        temporal: None,
         name_quote_style: QuoteStyle::DoubleQuote,
         // 0.10 新增：别名引号风格。此处无别名，取默认（不加引号）
         alias_quote_style: QuoteStyle::None,
