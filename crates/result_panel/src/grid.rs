@@ -43,6 +43,7 @@ use std::rc::Rc;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
@@ -291,6 +292,74 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         action: ContextAction::ColumnStats { column: target.column },
         separator_before: false,
     });
+    if target.hidden_columns > 0 {
+        items.push(ContextMenuItem {
+            label: "显示全部列".to_string(),
+            action: ContextAction::ShowAllColumns,
+            separator_before: false,
+        });
+    }
+    if target.insight {
+        items.push(ContextMenuItem {
+            label: format!("洞察「{column_name}」这一列"),
+            action: ContextAction::InsightColumn {
+                column: column_name.to_string(),
+            },
+            separator_before: true,
+        });
+    }
+    items
+}
+
+/// 列头下拉菜单的项（**纯函数**；DBeaver 列头箭头菜单 = 右键菜单的列级子集）：
+/// 排序升/降 · 复制此列 · 冻结/取消冻结 · 隐藏此列 · 显示全部列 · 列统计 · 洞察此列。
+/// 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制整行）只属于右键——它们依赖
+/// “当前格”，列头没有当前格。条件与右键同口径（hidden>0 才摆「显示全部列」、
+/// insight 才摆「洞察此列」）。
+pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let column_name = target.column_name.as_str();
+    let mut items = vec![
+        ContextMenuItem {
+            label: format!("按「{column_name}」升序（下发源库）"),
+            action: ContextAction::SortDown {
+                column: column_name.to_string(),
+                descending: false,
+            },
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("按「{column_name}」降序（下发源库）"),
+            action: ContextAction::SortDown {
+                column: column_name.to_string(),
+                descending: true,
+            },
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("复制此列（{} 个取值）", target.rows),
+            action: ContextAction::CopyColumn(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: if target.frozen {
+                "取消冻结此列".to_string()
+            } else {
+                format!("冻结「{column_name}」")
+            },
+            action: ContextAction::ToggleFreeze(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("隐藏「{column_name}」"),
+            action: ContextAction::HideColumn(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("列统计「{column_name}」"),
+            action: ContextAction::ColumnStats { column: target.column },
+            separator_before: false,
+        },
+    ];
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
             label: "显示全部列".to_string(),
@@ -1654,6 +1723,133 @@ impl TableDelegate for ResultGridDelegate {
         if self.transposed || Self::is_row_number(col_ix) || name.is_empty() {
             return head.into_any_element();
         }
+        // 【列头菜单】DBeaver 列头箭头：排序 / 复制此列 / 冻结 / 隐藏 / 统计 / 洞察
+        // （= 右键菜单的列级子集，见 `column_menu_items`）。外包一层 `stop_propagation`：
+        // 组件列头点击会排一次序（on_col_head_click），点箭头菜单不能顺带排。
+        // 菜单闭包是 move，依赖 self 的文本（复制整列 / 统计）在闭包外算好再捕获。
+        let column = self.data_column(col_ix - 1);
+        let table = cx.entity().clone();
+        let column_menu_target = ContextTarget {
+            value: String::new(),
+            column_name: name.clone(),
+            column,
+            row: 0,
+            rows: self.view_len(),
+            frozen: self.is_frozen(column),
+            hidden_columns: self.hidden.len(),
+            insight: self.insight_available(),
+            table: self.result_table.clone(),
+        };
+        let menu_items = column_menu_items(&column_menu_target);
+        let copy_column_text = self.column_text(column);
+        let stats_text = stats_lines(&column_stats(&self.rows, column)).join("\n");
+        let column_name_for_menu = name.clone();
+        let on_sort_down = self.on_sort_down.clone();
+        let on_column_stats = self.on_column_stats.clone();
+        let on_insight_column = self.on_insight_column.clone();
+        let head = head.child(
+            // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
+            // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
+            div()
+                .id(("editor-result-col-menu-guard", col_ix))
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(
+                    DropdownButton::new(("editor-result-col-menu", col_ix))
+                        .ghost()
+                        .small()
+                        .menu_accessibility_label(format!("列菜单：{column_name_for_menu}"))
+                        .dropdown_menu(move |mut menu, _window, _app| {
+                            // builder 是 Fn（可能被调多次）：items 只能 clone 不能消费
+                            for item in menu_items.clone() {
+                                let label = item.label.clone();
+                                match item.action {
+                                    ContextAction::SortDown { column, descending } => {
+                                        // 与右键「按此列排序」同口径：没接钩子就不摆
+                                        if let Some(hook) = on_sort_down.clone() {
+                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                                move |_, _window, app| {
+                                                    hook(&column, descending, app)
+                                                },
+                                            ));
+                                        }
+                                    }
+                                    ContextAction::CopyColumn(_) => {
+                                        // 列头菜单只针对当前列：复制整列文本在闭包外已算好
+                                        let text = copy_column_text.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                app.write_to_clipboard(ClipboardItem::new_string(
+                                                    text.clone(),
+                                                ));
+                                            },
+                                        ));
+                                    }
+                                    ContextAction::ToggleFreeze(column) => {
+                                        // 冻结是**表格自己的事**（改 `Column.fixed`）：点击在
+                                        // 独立事件里，可安全更新它并重建列组
+                                        let table = table.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                table.update(app, |state, cx| {
+                                                    state.delegate_mut().toggle_freeze(column);
+                                                    state.refresh(cx);
+                                                });
+                                            },
+                                        ));
+                                    }
+                                    ContextAction::HideColumn(column) => {
+                                        // 隐藏是**表格自己的事**（改视图列序），与冻结同一条路
+                                        let table = table.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                table.update(app, |state, cx| {
+                                                    state.delegate_mut().hide_column(column);
+                                                    state.refresh(cx);
+                                                });
+                                            },
+                                        ));
+                                    }
+                                    ContextAction::ShowAllColumns => {
+                                        let table = table.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                table.update(app, |state, cx| {
+                                                    state.delegate_mut().show_all_columns();
+                                                    state.refresh(cx);
+                                                });
+                                            },
+                                        ));
+                                    }
+                                    ContextAction::ColumnStats { column: _ } => {
+                                        // 统计是**网格自己算**（纯遍历），弹层由宿主开
+                                        if let Some(hook) = on_column_stats.clone() {
+                                            let name = column_name_for_menu.clone();
+                                            let text = stats_text.clone();
+                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                                move |_, _window, app| {
+                                                    hook(name.clone(), text.clone(), app)
+                                                },
+                                            ));
+                                        }
+                                    }
+                                    ContextAction::InsightColumn { column } => {
+                                        // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆
+                                        if let Some(hook) = on_insight_column.clone() {
+                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                                move |_, _window, app| hook(&column, app),
+                                            ));
+                                        }
+                                    }
+                                    _ => {
+                                        // 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制行）
+                                        // 只属于右键菜单；列头菜单不渲染它们
+                                    }
+                                }
+                            }
+                            menu
+                        }),
+                ),
+        );
         // 【P1】悬停给全名 + 类型 + 字段元数据（来源 / 注释 / 可空 / 默认）：
         // 有注释才追加分块行（没有 = 与今天的单行一致）；注释块里的类型是 NavCache 原始名，
         // 与表头小标签（渲染层语义标签）并存不冲突。
@@ -2356,7 +2552,7 @@ mod tests {
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
         TextAlign, blob_summary, cell_matches, cell_style, column_stats, compare_cells,
         context_menu_items, duration_text, find_in_cell, fmt_stat_num, header_tooltip_lines,
-        preview_of, stats_lines, status_segments, thousands, truncated_hint,
+        column_menu_items, preview_of, stats_lines, status_segments, thousands, truncated_hint,
     };
     use workbench_shell::model::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
@@ -3132,8 +3328,7 @@ mod tests {
 
     /// 状态行：`共 N 行` │ `已选第 M 行`，没选中就直说
     #[test]
-    fn status_segments_report_total_and_selection() {
-        let idle = ResultStatus {
+    fn status_segments_report_total_and_selection() {        let idle = ResultStatus {
             total_rows: 1_204,
             selected_row: None,
             selected_cell: None,
@@ -3160,6 +3355,62 @@ mod tests {
             has_more: true,
         };
         assert_eq!(status_segments(&partial).0, "共 1,000+ 行");
+    }
+
+    /// 列头菜单（DBeaver 箭头）：列级子集——排序升/降、复制此列、冻结、隐藏、
+    /// 统计；值与行动作（预览 / 按值筛选 / 复制整行）不属于列头；没隐藏列就不摆
+    /// 「显示全部列」
+    #[test]
+    fn column_menu_is_the_column_level_subset() {
+        let target = ContextTarget {
+            value: "x".to_string(),
+            column_name: "id".to_string(),
+            column: 1,
+            row: 3,
+            rows: 12,
+            frozen: false,
+            hidden_columns: 0,
+            insight: false,
+            table: None,
+        };
+        let items = column_menu_items(&target);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"按「id」升序（下发源库）"));
+        assert!(labels.contains(&"按「id」降序（下发源库）"));
+        assert!(labels.contains(&"复制此列（12 个取值）"));
+        assert!(labels.contains(&"冻结「id」"));
+        assert!(labels.contains(&"隐藏「id」"));
+        assert!(labels.contains(&"列统计「id」"));
+        // 值与行动作不属于列头
+        assert!(!labels.iter().any(|l| l.contains("查看完整值")));
+        assert!(!labels.iter().any(|l| l.contains("按值筛选")));
+        assert!(!labels.iter().any(|l| l.contains("复制整行")));
+        // 没隐藏列就不摆「显示全部列」
+        assert!(!labels.contains(&"显示全部列"));
+    }
+
+    /// 列头菜单的条件项：隐藏了列 → 摆「显示全部列」；可洞察 → 摆「洞察此列」；
+    /// 冻结中 → 文案反向（取消冻结）
+    #[test]
+    fn column_menu_shows_conditional_items() {
+        let target = ContextTarget {
+            value: String::new(),
+            column_name: "name".to_string(),
+            column: 2,
+            row: 0,
+            rows: 5,
+            frozen: true,
+            hidden_columns: 2,
+            insight: true,
+            table: Some("t_user".to_string()),
+        };
+        let items = column_menu_items(&target);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"显示全部列"));
+        assert!(labels.contains(&"洞察「name」这一列"));
+        assert!(labels.contains(&"取消冻结此列"));
+        // 表名只喂给 INSERT（右键项）；列头菜单不含它
+        assert!(!labels.iter().any(|l| l.contains("INSERT")));
     }
 
     /// 耗时：不到一秒报毫秒（`0.0s` 什么都没说），过一秒按人读的写法
