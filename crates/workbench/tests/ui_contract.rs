@@ -206,6 +206,8 @@ fn view_layer_has_no_raw_size_literals() {
         ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
         ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // 结果集 Dock 薄壳（并行线结果面板下沉新增；尺寸/颜色契约一并覆盖）
+        ("panels/result_dock.rs", include_str!("../src/panels/result_dock.rs")),
         // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
         (
             "quick_open/delegate.rs",
@@ -407,6 +409,7 @@ fn ui_sources_have_no_raw_color_literals() {
         ("panels/property_panel.rs", include_str!("../src/panels/property_panel.rs")),
         ("panels/search_results.rs", include_str!("../src/panels/search_results.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        ("panels/result_dock.rs", include_str!("../src/panels/result_dock.rs")),
         (
             "quick_open/delegate.rs",
             include_str!("../src/quick_open/delegate.rs"),

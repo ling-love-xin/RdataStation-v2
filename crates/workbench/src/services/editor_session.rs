@@ -72,8 +72,10 @@ impl WorkbenchSessionStore {
             // 【T2c-4 余项】缩进宽度 / 制表符（`None` = 旧会话没存过 → 列默认）
             tab_size: session.tab_size.unwrap_or(2),
             hard_tabs: session.hard_tabs.unwrap_or(false),
-            // 【遗留 #5】结果区分栏高度（rem；`None` = 旧会话没存过 → 列默认 18）
-            result_height: session.result_height.unwrap_or(18.0),
+            // 【遗留 #5】结果区高度：editor 会话模型已随结果面板下沉移除该字段
+            //（结果区高度由结果面板自持）；engine 持久化列保留供旧库兼容，
+            // 桥接层固定写列默认 18——editor 不再消费它。
+            result_height: 18.0,
             updated_at_ms: now_ms(),
         }
     }
@@ -100,8 +102,6 @@ impl WorkbenchSessionStore {
             // 缩进列总有值（默认 2 / false）：旧会话恢复成默认而不是不覆盖——列默认即语义默认
             tab_size: Some(context.tab_size),
             hard_tabs: Some(context.hard_tabs),
-            // 【遗留 #5】结果区高度列总有值：旧会话恢复默认高度（列默认即语义默认）
-            result_height: Some(context.result_height),
         }
     }
 }
