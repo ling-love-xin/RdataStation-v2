@@ -25,10 +25,24 @@
 //! | 联邦 | `别名.schema.表`（L2 源是 **`别名.表`**，两段） | 联邦档的写作规范（原型 §4） |
 //!
 //! 联邦档还要读会话快照：只有**挂上了**的源才给候选——挂不上的源给出来只会让人写出跑不通的 SQL。
+//!
+//! ## 【#53】L1 新鲜度（TTL + generation）
+//!
+//! L1 三份数据（`loaded` / `keys` / `meta`）同源同代（同一遍 `load_raw_catalog` 产出），
+//! 新鲜度只记一份 `cache_meta`：
+//!
+//! - **TTL**：命中后检查条目年龄 > [`COMPLETION_CACHE_TTL_SECS`]（5 分钟，对齐 engine
+//!   `MetadataCache` 默认）→ 视为未命中，安排后台重载，本次给空。语义同 blanco `cache.rs`：
+//!   **过期 = 未命中，宁缺毋滥**——不为了“看起来还有”给陈旧候选（用户 DDL 建了新表，
+//!   最多 5 分钟补全就能跟上）。当前 `loading` 已挡「同连接并发载入」。
+//! - **generation**：每次载入代际 +1；写回前发现已有**更高代**（未来若放开并发载入时，
+//!   先开始的载入晚回来）→ 丢弃本次结果，防止旧结果覆盖新结果。
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use editor::channel::ExecChannel;
 use editor::completion::{
@@ -46,6 +60,29 @@ use crate::panels::Shared;
 const MAX_OBJECTS: usize = 3_000;
 /// 单条连接最多装多少列
 const MAX_COLUMNS: usize = 30_000;
+
+/// 【#53】L1 补全缓存 TTL（秒）：对齐 engine `MetadataCache` 默认 5 分钟。
+///
+/// 语义：过期 = 未命中（blanco `cache.rs` 同款）——本次返回空并安排后台重载，
+/// 下一次按键就有候选；宁可这次不补，也不在按键路径上做 I/O、更不给陈旧候选。
+/// 效果：用户 DDL 建表 / 改表后，补全最多 5 分钟跟上（此前 L1 载入后**永不刷新**）。
+const COMPLETION_CACHE_TTL_SECS: i64 = 300;
+
+/// 【#53】一条 L1 补全缓存条目的新鲜度元信息（`loaded` / `keys` / `meta` 三份同源同代，只记一份）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CacheEntryMeta {
+    /// 载入代际：每次 `schedule_load` +1；写回时发现已有更高代（期间被重载过）→ 丢弃本次
+    generation: u64,
+    /// 载入完成时间（Unix 秒，`SystemTime` 基准）
+    loaded_at_secs: i64,
+}
+
+impl CacheEntryMeta {
+    /// 条目是否新鲜（未超 TTL）。`now_secs` 由调用方注入，便于测试钉边界。
+    fn fresh(&self, now_secs: i64) -> bool {
+        now_secs.saturating_sub(self.loaded_at_secs) <= COMPLETION_CACHE_TTL_SECS
+    }
+}
 
 /// 工作台实现：候选目录（内存读；首次未命中时后台预载）
 pub struct WorkbenchCompletion {
@@ -66,6 +103,16 @@ pub struct WorkbenchCompletion {
     /// 查列注释 / 可空 / 默认，候选目录只有列名 + 类型，装不下这些位；数据来自同一份导航缓存，
     /// 所以**同一线程同一遍遍历**一起装（零额外 I/O），只是存三处、各取所需。
     meta: Arc<Mutex<HashMap<String, HashMap<String, Vec<ColumnMeta>>>>>,
+    /// 【#53】L1 条目的新鲜度元信息（按 conn_id；`loaded` / `keys` / `meta` 三份共用一份）
+    ///
+    /// 载入完成时写入（generation + 时间戳）；`raw` / `keys_map` / `meta_map` 命中后
+    /// 先查这里——超 TTL 视为未命中，安排重载（见 [`CacheEntryMeta::fresh`]）。
+    cache_meta: Arc<Mutex<HashMap<String, CacheEntryMeta>>>,
+    /// 【#53】载入代际计数（`cache_meta` 里 generation 的来源）
+    ///
+    /// 防御方向：当前 `loading` 已挡「同连接并发载入」，此计数为「未来放开并发载入」
+    /// 预留的旧覆盖新防线——写回前比对代际，已有更高代则丢弃本次结果。
+    generation: Arc<AtomicU64>,
     /// 【§710】已提交过「补全实时内省」的 conn_id（等 NavCache 被导航队列填上）。
     ///
     /// 与 `loading` 的差别：`loading` 挡**并发**（载完即移除）；这个挡**串行重试**
@@ -85,6 +132,8 @@ impl WorkbenchCompletion {
             loading: Arc::new(Mutex::new(HashSet::new())),
             warm_submitted: Arc::new(Mutex::new(HashSet::new())),
             meta: Arc::new(Mutex::new(HashMap::new())),
+            cache_meta: Arc::new(Mutex::new(HashMap::new())),
+            generation: Arc::new(AtomicU64::new(0)),
             templates: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -103,10 +152,11 @@ impl WorkbenchCompletion {
         });
     }
 
-    /// 原始目录（命中即给；未命中就安排一次后台预载，本次给空）
+    /// 原始目录（命中且新鲜即给；未命中 / 超 TTL 就安排一次后台预载，本次给空）
     fn raw(&self, conn_id: &str) -> Option<Catalog> {
         if let Ok(loaded) = self.loaded.lock()
             && let Some(catalog) = loaded.get(conn_id)
+            && self.entry_fresh(conn_id)
         {
             return Some(catalog.clone());
         }
@@ -114,13 +164,14 @@ impl WorkbenchCompletion {
         None
     }
 
-    /// 【T2a-2】主键映射（命中即给；未命中就安排一次后台预载，本次给空）
+    /// 【T2a-2】主键映射（命中且新鲜即给；未命中就安排一次后台预载，本次给空）
     ///
     /// 与 [`Self::raw`] 同一策略：预载是**一次性的**（`loaded` / `keys` 同线程同遍历），
     /// 这里未命中时 `schedule_load` 已在上一次 `raw` 命中检查里去重——重复调用是 no-op。
     fn keys_map(&self, conn_id: &str) -> Option<HashMap<String, Vec<String>>> {
         if let Ok(keys) = self.keys.lock()
             && let Some(map) = keys.get(conn_id)
+            && self.entry_fresh(conn_id)
         {
             return Some(map.clone());
         }
@@ -128,17 +179,33 @@ impl WorkbenchCompletion {
         None
     }
 
-    /// 【P1】列元数据映射（命中即给；未命中就安排一次后台预载，本次给空）
+    /// 【P1】列元数据映射（命中且新鲜即给；未命中就安排一次后台预载，本次给空）
     ///
     /// 与 [`Self::keys_map`] 同一策略：未命中时 `schedule_load` 已去重，重复调用是 no-op。
     fn meta_map(&self, conn_id: &str) -> Option<HashMap<String, Vec<ColumnMeta>>> {
         if let Ok(meta) = self.meta.lock()
             && let Some(map) = meta.get(conn_id)
+            && self.entry_fresh(conn_id)
         {
             return Some(map.clone());
         }
         self.schedule_load(conn_id);
         None
+    }
+
+    /// 【#53】该连接的 L1 条目是否新鲜（未超 [`COMPLETION_CACHE_TTL_SECS`]）。
+    ///
+    /// 条目缺失 = 不新鲜（未载入过）；时间源用 `SystemTime`（与写回同一基准）。
+    /// 锁失败按不新鲜处理——命中检查路径宁可触发一次重载，也不给陈旧的候选。
+    fn entry_fresh(&self, conn_id: &str) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.cache_meta
+            .lock()
+            .map(|meta| meta.get(conn_id).map(|entry| entry.fresh(now)).unwrap_or(false))
+            .unwrap_or(false)
     }
 
     /// 起一次后台预载（**同一连接只起一次**；完成前重复调用都是 no-op）
@@ -158,10 +225,15 @@ impl WorkbenchCompletion {
         let loaded = self.loaded.clone();
         let keys = self.keys.clone();
         let meta = self.meta.clone();
+        let cache_meta = self.cache_meta.clone();
+        let generation = self.generation.clone();
         let loading = self.loading.clone();
         let warm_submitted = self.warm_submitted.clone();
         let conn_id = conn_id.to_string();
         std::thread::spawn(move || {
+            // 【#53】取本次载入代际：写回前若发现已有更高代（期间被重载过）→ 丢弃本次结果。
+            // 当前 `loading` 已挡同连接并发，此分支防御未来放开并发载入时的「旧覆盖新」。
+            let load_gen = generation.fetch_add(1, Ordering::Relaxed) + 1;
             // 【T2a-2 / P1】一次遍历同时产出候选目录 / 主键映射 / 列元数据（同一份导航缓存，零额外 I/O）
             let (catalog, keys_map, meta_map) = load_raw_catalog(&conn_id, project_root.as_deref());
             if catalog.objects.is_empty() && keys_map.is_empty() {
@@ -178,6 +250,27 @@ impl WorkbenchCompletion {
                     submitted.remove(&conn_id);
                 }
             }
+            // 【#53】写回前代际比对：已有更高代（期间另一次载入已写回）→ 本次结果作废
+            {
+                let stale = cache_meta
+                    .lock()
+                    .map(|meta| {
+                        meta.get(&conn_id)
+                            .map(|entry| entry.generation > load_gen)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if stale {
+                    if let Ok(mut loading) = loading.lock() {
+                        loading.remove(&conn_id);
+                    }
+                    return;
+                }
+            }
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
             if let Ok(mut loaded) = loaded.lock() {
                 loaded.insert(conn_id.clone(), catalog);
             }
@@ -186,6 +279,15 @@ impl WorkbenchCompletion {
             }
             if let Ok(mut slot) = meta.lock() {
                 slot.insert(conn_id.clone(), meta_map);
+            }
+            if let Ok(mut slot) = cache_meta.lock() {
+                slot.insert(
+                    conn_id.clone(),
+                    CacheEntryMeta {
+                        generation: load_gen,
+                        loaded_at_secs: now,
+                    },
+                );
             }
             if let Ok(mut loading) = loading.lock() {
                 loading.remove(&conn_id);
@@ -519,7 +621,7 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         driver_to_dialect, find_table, load_raw_catalog, lookup_column, lookup_primary_key,
-        WorkbenchCompletion,
+        CacheEntryMeta, WorkbenchCompletion, COMPLETION_CACHE_TTL_SECS,
     };
     use std::collections::HashMap;
     use database::cache::NavCache;
@@ -573,6 +675,9 @@ mod tests {
                     is_foreign_key: false,
                     default_value: None,
                     comment: None,
+                    is_identity: false,
+                    identity_generation: None,
+                    collation: None,
                     extra: Default::default(),
                     references: None,
                     ordinal: 0,
@@ -585,6 +690,9 @@ mod tests {
                     is_foreign_key: false,
                     default_value: None,
                     comment: Some("总额".to_string()),
+                    is_identity: false,
+                    identity_generation: None,
+                    collation: None,
                     extra: Default::default(),
                     references: None,
                     ordinal: 1,
@@ -912,6 +1020,77 @@ mod tests {
                 .contains("P_warm_hit_710"),
             "命中缓存后标记要移除（允许未来元数据变化后再内省）"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 【#53】TTL 边界：恰好 TTL 秒内新鲜，超过即过期（blanco 同款：过期 = 未命中）
+    #[test]
+    fn cache_entry_fresh_boundary() {
+        let entry = CacheEntryMeta {
+            generation: 1,
+            loaded_at_secs: 1_000,
+        };
+        assert!(entry.fresh(1_000), "同一秒新鲜");
+        assert!(
+            entry.fresh(1_000 + COMPLETION_CACHE_TTL_SECS),
+            "恰好 TTL 仍新鲜（含边界）"
+        );
+        assert!(
+            !entry.fresh(1_000 + COMPLETION_CACHE_TTL_SECS + 1),
+            "超过 TTL 即过期"
+        );
+        // 时钟回拨（异常环境）：saturating_sub 保证不 panic，仍视为新鲜
+        assert!(entry.fresh(999), "时钟回拨仍新鲜");
+    }
+
+    /// 【#53】L1 不再「载入一次永不刷新」：过期条目触发重载，代际递增、时间戳刷新。
+    #[test]
+    fn an_expired_entry_reloads_with_a_new_generation() {
+        let root = temp_root("ttl");
+        seed("P_ttl_53", &root);
+        let shared = Shared::with_connections(Vec::new(), None);
+        *shared.project.borrow_mut() = Some(OpenProject::new(root.clone(), "t"));
+        let port = WorkbenchCompletion::new(shared);
+
+        // 首次命中：等预载落笔，记下第一代
+        wait_until(|| port.raw("P_ttl_53").is_some(), "首次载好目录");
+        let first_gen = {
+            let meta = port.cache_meta.lock().unwrap_or_else(|p| p.into_inner());
+            meta.get("P_ttl_53").expect("条目存在").generation
+        };
+        assert_eq!(first_gen, 1, "首次载入代际 = 1");
+
+        // 模拟 TTL 过期：把时间戳拨回 TTL 之外（不改代际——过期判定只看时间戳）
+        {
+            let mut meta = port.cache_meta.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = meta.get_mut("P_ttl_53").expect("条目存在");
+            entry.loaded_at_secs =
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+                    - COMPLETION_CACHE_TTL_SECS
+                    - 60;
+        }
+
+        // 过期 → 视为未命中（本次给空）并触发重载；等重载落笔
+        assert!(
+            port.raw("P_ttl_53").is_none(),
+            "过期条目不再直接给（宁缺毋滥，下一键刷新）"
+        );
+        wait_until(|| port.raw("P_ttl_53").is_some(), "重载后再次命中");
+
+        let second_gen = {
+            let meta = port.cache_meta.lock().unwrap_or_else(|p| p.into_inner());
+            meta.get("P_ttl_53").expect("条目存在").generation
+        };
+        assert!(
+            second_gen > first_gen,
+            "重载代际递增（{first_gen} → {second_gen}），证明不是拿旧条目应付"
+        );
+        // 重载后时间戳回到 TTL 内（否则下一次 raw 又判过期）
+        assert!(port.entry_fresh("P_ttl_53"), "重载后条目新鲜");
 
         let _ = std::fs::remove_dir_all(&root);
     }
