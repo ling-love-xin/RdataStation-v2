@@ -20,3 +20,9 @@
 ## 过程产物约定
 
 过程产物（验证日志、一次性脚本、命令输出）落盘位置遵循 `.agents/AGENTS.md`：一律 `.rds/tmp/` 或 `tools/_archive/`，不入库、不留当前工作目录。
+
+## 文档组织约定
+
+- 仓库根目录不放置文档（README / LICENSE / AGENTS 等仓库元文件除外）；文档一律进 `docs/` 对应主题目录（architecture / migration / reports）。
+- 竞品研究、竞品分析与对标建议类文档统一放 `docs/analysis/`（该目录已 gitignore，不入库，属过程性研究资料）。
+- 临时产物（日志、截图、一次性脚本、嵌套仓库）不进 `docs/`，一律走 `.rds/tmp/` 或 `tools/_archive/`。
