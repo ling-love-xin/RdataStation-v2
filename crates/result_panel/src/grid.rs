@@ -70,6 +70,10 @@ use workbench_shell::model::ColumnAnnotation;
 /// 2026-10-23 下移：key context 字符串跨 crate 匹配（editor 的 `commands.rs` 从这里重导出）。
 pub const RESULT_GRID_CONTEXT: &str = "editor-result-grid";
 
+/// 【筛选】列头菜单「按值筛选此列」值列表的上限（DBeaver 值列表筛选取前若干去重值，
+/// 不把整列几百个值全塞进菜单——要全量用全局筛选框）
+pub const COLUMN_FILTER_VALUE_LIMIT: usize = 8;
+
 /// 滚动到底要更多数据时的回调（面板注入：它才知道当前选中哪份结果、忙不忙）
 ///
 /// 组件库在**可见范围接近末尾**时调 delegate 的 [`TableDelegate::load_more`]，
@@ -105,6 +109,9 @@ pub struct CellEdit {
 
 /// 【B14】「按值筛选」的钩子（面板注入：把值写进筛选框并立刻生效）
 pub type FilterValueHook = Rc<dyn Fn(&str, &mut App)>;
+
+/// 【筛选】列级筛选钩子（列头菜单「按值筛选此列 / 清除」交回面板；参数 = 数据列、值）
+pub type ColumnFilterHook = Rc<dyn Fn(usize, &str, &mut App)>;
 
 /// 【B14】「排序下发」的钩子（面板注入：按列名重查源库；入参 = （列名，是否降序））
 pub type SortDownHook = Rc<dyn Fn(&str, bool, &mut App)>;
@@ -154,6 +161,11 @@ pub enum ContextAction {
     SortDown { column: String, descending: bool },
     /// 【M8】洞察这一列（列名；宿主据此取样 → 列画像）
     InsightColumn { column: String },
+    /// 【筛选】此列按给定值过滤（**本地列级筛选**，不动源库——与「按值筛选」的
+    /// 全局词不同：它限定在这一个数据列上）
+    FilterColumnValue { column: usize, value: String },
+    /// 【筛选】清除此列的列级筛选（数据恢复显示）
+    ClearColumnFilter { column: usize },
 }
 
 /// 右键菜单里的一项
@@ -190,6 +202,11 @@ pub struct ContextTarget {
     /// 【A9】这份结果的来源表名（面板从结果 SQL 猜好传来；`None` = 猜不到
     /// →「复制整行为 INSERT」不摆——宁可没有也不给一条插错表的语句）
     pub table: Option<String>,
+    /// 【筛选】这一列当前有没有列级筛选生效（`true` → 菜单摆「清除此列筛选」）
+    pub column_filter_active: bool,
+    /// 【筛选】这一列的去重取值（前 `COLUMN_FILTER_VALUE_LIMIT` 个；列头菜单
+    /// 「按值筛选此列」的值列表——由网格从已抓行算好传入，纯函数不碰数据）
+    pub column_values: Vec<String>,
 }
 
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
@@ -335,31 +352,60 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             },
             separator_before: false,
         },
-        ContextMenuItem {
-            label: format!("复制此列（{} 个取值）", target.rows),
-            action: ContextAction::CopyColumn(target.column),
-            separator_before: false,
-        },
-        ContextMenuItem {
-            label: if target.frozen {
-                "取消冻结此列".to_string()
-            } else {
-                format!("冻结「{column_name}」")
-            },
-            action: ContextAction::ToggleFreeze(target.column),
-            separator_before: false,
-        },
-        ContextMenuItem {
-            label: format!("隐藏「{column_name}」"),
-            action: ContextAction::HideColumn(target.column),
-            separator_before: false,
-        },
-        ContextMenuItem {
-            label: format!("列统计「{column_name}」"),
-            action: ContextAction::ColumnStats { column: target.column },
-            separator_before: false,
-        },
     ];
+    // 【筛选】列级筛选段（DBeaver 列头筛选）：值列表 + 清除项。
+    // 值列表来自已抓行的去重取值（`target.column_values`，网格算好传入）；
+    // 有值才摆（没数据这一列自然没有可选值）。清除项只在筛选生效时摆——
+    // 「没有筛」还摆「清除」是僵尸入口。
+    let mut values = target
+        .column_values
+        .iter()
+        .map(|value| ContextMenuItem {
+            label: format!("按值筛选「{}」", preview_of(value)),
+            action: ContextAction::FilterColumnValue {
+                column: target.column,
+                value: value.clone(),
+            },
+            separator_before: false,
+        })
+        .collect::<Vec<_>>();
+    if !values.is_empty() {
+        values[0].separator_before = true;
+    }
+    if target.column_filter_active {
+        values.push(ContextMenuItem {
+            label: "清除此列筛选".to_string(),
+            action: ContextAction::ClearColumnFilter {
+                column: target.column,
+            },
+            separator_before: true,
+        });
+    }
+    items.extend(values);
+    items.push(ContextMenuItem {
+        label: format!("复制此列（{} 个取值）", target.rows),
+        action: ContextAction::CopyColumn(target.column),
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: if target.frozen {
+            "取消冻结此列".to_string()
+        } else {
+            format!("冻结「{column_name}」")
+        },
+        action: ContextAction::ToggleFreeze(target.column),
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: format!("隐藏「{column_name}」"),
+        action: ContextAction::HideColumn(target.column),
+        separator_before: false,
+    });
+    items.push(ContextMenuItem {
+        label: format!("列统计「{column_name}」"),
+        action: ContextAction::ColumnStats { column: target.column },
+        separator_before: false,
+    });
     if target.hidden_columns > 0 {
         items.push(ContextMenuItem {
             label: "显示全部列".to_string(),
@@ -377,6 +423,27 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         });
     }
     items
+}
+
+/// 【筛选】这一列的去重取值（纯函数）：按出现顺序去重，最多 `limit` 个；
+/// 列越界 / 无行 = 空切片。`NULL` 是字面量，原样计入（值列表里能筛 NULL）。
+pub fn column_distinct_values(
+    rows: &[Vec<String>],
+    column: usize,
+    limit: usize,
+) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for row in rows {
+        if let Some(value) = row.get(column) {
+            if !seen.iter().any(|v| v == value) {
+                seen.push(value.clone());
+                if seen.len() >= limit {
+                    break;
+                }
+            }
+        }
+    }
+    seen
 }
 
 /// 网格数据（表头 + 行）
@@ -404,6 +471,9 @@ pub struct ResultGridDelegate {
     on_load_more: Option<LoadMoreHook>,
     /// 【B15】本地筛选词（视图层：只影响看见与导出的行，**不重查数据库**）
     filter: String,
+    /// 【筛选】列级筛选（`(数据列, 值)`；本地包含匹配，与全局 `filter` 叠加取交集）。
+    /// 独立于全局筛选词：列头菜单的「按值筛选此列」走它，清空也不动筛选框。
+    column_filter: Option<(usize, String)>,
     /// 【B15】本地排序（列下标按**数据列**算，`0` = 第一数据列；`None` = 原顺序）
     sort: Option<(usize, bool /* 降序 */)>,
     /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
@@ -419,6 +489,8 @@ pub struct ResultGridDelegate {
     transpose_row: usize,
     /// 【B14】按值筛选的钩子（面板注入）
     on_filter_value: Option<FilterValueHook>,
+    /// 【筛选】列级筛选的钩子（面板注入；列头菜单 FilterColumnValue / ClearColumnFilter）
+    on_column_filter: Option<ColumnFilterHook>,
     /// 【B14】排序下发的钩子（面板注入）
     on_sort_down: Option<SortDownHook>,
     /// 【M8】「洞察此列」的钩子（宿主接端口时面板才注入）
@@ -552,6 +624,11 @@ impl ResultGridDelegate {
         self.on_filter_value = Some(hook);
     }
 
+    /// 【筛选】注入「列级筛选」钩子（面板构造时一次；列头菜单据此把动作交回面板）
+    pub fn set_column_filter_hook(&mut self, hook: ColumnFilterHook) {
+        self.on_column_filter = Some(hook);
+    }
+
     /// 【M8】注入「洞察此列」钩子（宿主接了端口时面板构造一次）
     pub fn set_insight_column_hook(&mut self, hook: InsightColumnHook) {
         self.on_insight_column = Some(hook);
@@ -590,6 +667,32 @@ impl ResultGridDelegate {
     /// 【B15】这一数据列冻结了吗
     pub fn is_frozen(&self, column: usize) -> bool {
         self.frozen.contains(&column)
+    }
+
+    /// 【筛选】这一数据列当前有没有列级筛选生效（列头菜单据此摆「清除此列筛选」）
+    pub fn has_column_filter(&self, column: usize) -> bool {
+        self.column_filter
+            .as_ref()
+            .is_some_and(|(filtered, _)| *filtered == column)
+    }
+
+    /// 【筛选】生效中的列级筛选（`(数据列, 值)`；`None` = 没有列筛选）
+    pub fn column_filter(&self) -> Option<(usize, &str)> {
+        self.column_filter
+            .as_ref()
+            .map(|(column, value)| (*column, value.as_str()))
+    }
+
+    /// 【筛选】设置列级筛选（本地包含匹配，只改视图行序；`None` = 清除）
+    pub fn set_column_filter(&mut self, column: Option<(usize, String)>) {
+        self.column_filter = column;
+        self.rebuild_view_rows();
+    }
+
+    /// 【筛选】这一列的去重取值（列头菜单值列表）：已抓行里按出现顺序去重，最多
+    /// `COLUMN_FILTER_VALUE_LIMIT` 个；列越界 = 空切片。只读行数据，不碰网格状态。
+    pub fn column_distinct_values(&self, column: usize) -> Vec<String> {
+        column_distinct_values(&self.rows, column, COLUMN_FILTER_VALUE_LIMIT)
     }
 
     // ---------- 【P2】隐藏列：视图列序 ↔ 数据列序 ----------
@@ -740,12 +843,17 @@ impl ResultGridDelegate {
         let filter = self.filter.trim().to_lowercase();
         // 既没筛选也没排序：视图行序就是数据行序——**不物化**那份映射（`None` 即恒等）。
         // 入库 / 切结果集时这一步占了整一轮逐行工作，而绝大多数时候根本用不上。
-        if filter.is_empty() && self.sort.is_none() {
+        if filter.is_empty() && self.column_filter.is_none() && self.sort.is_none() {
             self.view_rows = None;
             return;
         }
         let mut view: Vec<usize> = (0..self.rows.len())
-            .filter(|ix| filter.is_empty() || self.row_matches(*ix, &filter))
+            .filter(|ix| {
+                // 全局筛选词（所有列包含匹配）与列级筛选（单列包含匹配）**叠加取交集**：
+                // 一个词卡所有列，一个值卡一列，同时生效时行要两个都过。
+                (filter.is_empty() || self.row_matches(*ix, &filter))
+                    && self.column_filter_matches(*ix)
+            })
             .collect();
         if let Some((column, descending)) = self.sort {
             // 稳定排序：同值时按原顺序（用数据行号做 tie-break，与快排的不稳定性无关）
@@ -766,6 +874,17 @@ impl ResultGridDelegate {
         self.rows
             .get(row_ix)
             .is_some_and(|row| row.iter().any(|cell| cell_matches(cell, needle)))
+    }
+
+    /// 【筛选】这一行是否过列级筛选（单列包含匹配；没有列筛选 = 恒过）
+    fn column_filter_matches(&self, row_ix: usize) -> bool {
+        let Some((column, value)) = &self.column_filter else {
+            return true;
+        };
+        self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(*column))
+            .is_some_and(|cell| cell_matches(cell, value))
     }
 
     /// 【B15】该数据列在表头上的排序标记
@@ -1693,6 +1812,12 @@ impl TableDelegate for ResultGridDelegate {
         };
         // 类型缺失时 `label` 是 `None`：这一档与今天一模一样（表头就一个列名）
         let label = self.type_label(col_ix).map(str::to_string);
+        // 【筛选】列筛选指示要按数据列查，这里先折算（行号槽 / 转置视图没有列筛选）
+        let column = if Self::is_row_number(col_ix) || self.transposed {
+            usize::MAX
+        } else {
+            self.data_column(col_ix - 1)
+        };
         let muted = cx.theme().colors.muted_foreground;
 
         let head = div()
@@ -1710,6 +1835,13 @@ impl TableDelegate for ResultGridDelegate {
                     .truncate()
                     .child(SharedString::from(name.clone())),
             )
+            .when(self.has_column_filter(column), |head| {
+                // 列级筛选生效：列名后加 muted 小标记（DBeaver 列头筛选指示的轻量版；
+                // 不用 emoji——`▽` 是几何字符，与排序箭头的 `▾/▴` 区分）
+                head.child(
+                    div().text_xs().text_color(muted).child(SharedString::from("▽")),
+                )
+            })
             .when_some(label.clone(), |head, label| {
                 head.child(
                     div()
@@ -1727,7 +1859,6 @@ impl TableDelegate for ResultGridDelegate {
         // （= 右键菜单的列级子集，见 `column_menu_items`）。外包一层 `stop_propagation`：
         // 组件列头点击会排一次序（on_col_head_click），点箭头菜单不能顺带排。
         // 菜单闭包是 move，依赖 self 的文本（复制整列 / 统计）在闭包外算好再捕获。
-        let column = self.data_column(col_ix - 1);
         let table = cx.entity().clone();
         let column_menu_target = ContextTarget {
             value: String::new(),
@@ -1739,6 +1870,8 @@ impl TableDelegate for ResultGridDelegate {
             hidden_columns: self.hidden.len(),
             insight: self.insight_available(),
             table: self.result_table.clone(),
+            column_filter_active: self.has_column_filter(column),
+            column_values: self.column_distinct_values(column),
         };
         let menu_items = column_menu_items(&column_menu_target);
         let copy_column_text = self.column_text(column);
@@ -1747,6 +1880,7 @@ impl TableDelegate for ResultGridDelegate {
         let on_sort_down = self.on_sort_down.clone();
         let on_column_stats = self.on_column_stats.clone();
         let on_insight_column = self.on_insight_column.clone();
+        let on_column_filter = self.on_column_filter.clone();
         let head = head.child(
             // guard 层带 id：`on_click` 是 StatefulInteractiveElement 方法（裸 div 只有
             // `on_mouse_down`）；点击落在 guard 上时截住冒泡，列头排序收不到
@@ -1837,6 +1971,23 @@ impl TableDelegate for ResultGridDelegate {
                                         if let Some(hook) = on_insight_column.clone() {
                                             menu = menu.item(PopupMenuItem::new(label).on_click(
                                                 move |_, _window, app| hook(&column, app),
+                                            ));
+                                        }
+                                    }
+                                    ContextAction::FilterColumnValue { column, value } => {
+                                        // 列级筛选交回面板（统一 set + 刷新筛选统计 + notify）；
+                                        // 没接钩子就不摆（面板构造时一定接，防御性分支）
+                                        if let Some(hook) = on_column_filter.clone() {
+                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                                move |_, _window, app| hook(column, &value, app),
+                                            ));
+                                        }
+                                    }
+                                    ContextAction::ClearColumnFilter { column } => {
+                                        // 清除走同一钩子：值传空串（面板端约定「空 = 清除」）
+                                        if let Some(hook) = on_column_filter.clone() {
+                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                                move |_, _window, app| hook(column, "", app),
                                             ));
                                         }
                                     }
@@ -2023,6 +2174,9 @@ impl TableDelegate for ResultGridDelegate {
             insight: insight_available,
             // 【A9】表名给菜单（猜不到 = None → 不摆 INSERT 项）
             table: self.result_table.clone(),
+            // 右键菜单不摆列级筛选段（右键的「按值筛选」是全局词）：两字段留空
+            column_filter_active: false,
+            column_values: Vec::new(),
         };
         for item in context_menu_items(&target) {
             if item.separator_before {
@@ -2170,6 +2324,8 @@ impl TableDelegate for ResultGridDelegate {
                         },
                     ));
                 }
+                // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
+                ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
             }
         }
         menu
@@ -2550,9 +2706,10 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
-        TextAlign, blob_summary, cell_matches, cell_style, column_stats, compare_cells,
-        context_menu_items, duration_text, find_in_cell, fmt_stat_num, header_tooltip_lines,
-        column_menu_items, preview_of, stats_lines, status_segments, thousands, truncated_hint,
+        TextAlign, blob_summary, cell_matches, cell_style, column_distinct_values, column_stats,
+        compare_cells, context_menu_items, duration_text, find_in_cell, fmt_stat_num,
+        header_tooltip_lines, column_menu_items, preview_of, stats_lines, status_segments,
+        thousands, truncated_hint,
     };
     use workbench_shell::model::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
@@ -2595,6 +2752,8 @@ mod tests {
             hidden_columns: 0,
             insight: false,
             table: None,
+            column_filter_active: false,
+            column_values: Vec::new(),
         }
     }
 
@@ -3372,6 +3531,8 @@ mod tests {
             hidden_columns: 0,
             insight: false,
             table: None,
+            column_filter_active: false,
+            column_values: Vec::new(),
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -3403,6 +3564,8 @@ mod tests {
             hidden_columns: 2,
             insight: true,
             table: Some("t_user".to_string()),
+            column_filter_active: false,
+            column_values: Vec::new(),
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -3411,6 +3574,115 @@ mod tests {
         assert!(labels.contains(&"取消冻结此列"));
         // 表名只喂给 INSERT（右键项）；列头菜单不含它
         assert!(!labels.iter().any(|l| l.contains("INSERT")));
+    }
+
+    /// 列头菜单筛选段：值列表（去重取值，按出现顺序）平铺成「按值筛选「值」」项，
+    /// 第一项带分隔线；筛选生效时才摆「清除此列筛选」
+    #[test]
+    fn column_menu_lists_distinct_values_and_clear_only_when_active() {
+        let target = ContextTarget {
+            value: String::new(),
+            column_name: "status".to_string(),
+            column: 1,
+            row: 0,
+            rows: 9,
+            frozen: false,
+            hidden_columns: 0,
+            insight: false,
+            table: None,
+            column_filter_active: false,
+            column_values: vec!["paid".to_string(), "NULL".to_string(), "refunded".to_string()],
+        };
+        let items = column_menu_items(&target);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"按值筛选「paid」"));
+        assert!(labels.contains(&"按值筛选「NULL」"));
+        assert!(labels.contains(&"按值筛选「refunded」"));
+        // 值列表第一项带分隔线（与上方排序段隔开）
+        let first_value = items
+            .iter()
+            .find(|i| i.label.contains("按值筛选"))
+            .unwrap();
+        assert!(first_value.separator_before);
+        // 没筛不摆清除项
+        assert!(!labels.contains(&"清除此列筛选"));
+
+        // 筛选生效：摆「清除此列筛选」（分隔线隔开），值列表照旧
+        let active = ContextTarget {
+            column_filter_active: true,
+            ..target.clone()
+        };
+        let items = column_menu_items(&active);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"清除此列筛选"));
+        let clear = items.iter().find(|i| i.label == "清除此列筛选").unwrap();
+        assert!(clear.separator_before);
+        // 空值列表 = 不摆筛选段（没数据这一列自然没有可选值）
+        let empty = ContextTarget {
+            column_values: Vec::new(),
+            ..target
+        };
+        assert!(!column_menu_items(&empty)
+            .iter()
+            .any(|i| i.label.contains("按值筛选")));
+    }
+
+    /// 【筛选】去重取值：按出现顺序去重、到 `limit` 就停；列越界 / 无行 = 空
+    #[test]
+    fn column_distinct_values_dedupes_in_order_and_limits() {
+        let rows: Vec<Vec<String>> = vec![
+            vec!["a".into(), "x".into()],
+            vec!["b".into(), "x".into()],
+            vec!["c".into(), "y".into()],
+            vec!["d".into(), "z".into()],
+            vec!["e".into(), "z".into()],
+        ];
+        // 第 1 列：x, y, z（x 去重）
+        let got = column_distinct_values(&rows, 1, 8);
+        assert_eq!(got, ["x", "y", "z"].map(String::from));
+        // limit 生效：最多 2 个
+        let got = column_distinct_values(&rows, 1, 2);
+        assert_eq!(got, ["x", "y"].map(String::from));
+        // 列越界 / 无行 = 空
+        assert!(column_distinct_values(&rows, 9, 8).is_empty());
+        assert!(column_distinct_values(&[], 0, 8).is_empty());
+        // NULL 是字面量，原样计入（值列表里能筛 NULL）
+        let rows = vec![vec!["NULL".to_string()], vec!["NULL".to_string()], vec!["ok".to_string()]];
+        let got = column_distinct_values(&rows, 0, 8);
+        assert_eq!(got, ["NULL", "ok"].map(String::from));
+    }
+
+    /// 【筛选】列级筛选只命中目标列（包含匹配），且与全局筛选词叠加取交集
+    #[test]
+    fn column_filter_scopes_to_column_and_stacks_with_global() {
+        let mut grid = grid_with(&[
+            &["1", "alice"],
+            &["2", "bob"],
+            &["3", "alice"],
+            &["4", "carol"],
+        ]);
+        // 列筛选 = 第 1 列（name）含 "ali" → 行 0、2
+        grid.set_column_filter(Some((1, "ali".to_string())));
+        assert_eq!(
+            grid.visible_rows(),
+            vec![
+                vec!["1".to_string(), "alice".to_string()],
+                vec!["3".to_string(), "alice".to_string()],
+            ]
+        );
+        assert!(grid.has_column_filter(1));
+        assert!(!grid.has_column_filter(0));
+        assert_eq!(grid.column_filter(), Some((1, "ali")));
+
+        // 叠加全局筛选（id 列含 "3"）→ 只剩行 2
+        grid.set_filter("3");
+        assert_eq!(grid.visible_rows(), vec![vec!["3".to_string(), "alice".to_string()]]);
+
+        // 清除列筛选 → 全局筛选单独生效
+        grid.set_column_filter(None);
+        assert_eq!(grid.visible_rows(), vec![vec!["3".to_string(), "alice".to_string()]]);
+        assert!(!grid.has_column_filter(1));
+        assert!(grid.column_filter().is_none());
     }
 
     /// 耗时：不到一秒报毫秒（`0.0s` 什么都没说），过一秒按人读的写法

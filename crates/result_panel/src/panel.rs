@@ -858,6 +858,21 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【筛选】列头菜单「按值筛选此列 / 清除」落点：值非空 = 设置列级筛选，
+    /// 空串 = 清除（grid 端约定，见 `set_column_filter_hook` 注释）。
+    /// 只改视图行序，不重查源库；顺带刷新工具栏「已筛选 N/M 行」统计。
+    pub fn apply_column_filter(&mut self, column: usize, value: &str, cx: &mut Context<Self>) {
+        self.grid.update(cx, |grid, _| {
+            grid.delegate_mut().set_column_filter(if value.is_empty() {
+                None
+            } else {
+                Some((column, value.to_string()))
+            });
+        });
+        self.refresh_filter_hint(cx);
+        cx.notify();
+    }
+
     /// 右键「按值筛选」核心：定稿筛选词并立即应用（不依赖窗口——headless 下窗口
     /// 不可用时真值照样生效；输入框回填由编辑器在窗口可用时转手调 [`Self::sync_filter_input`]）
     pub fn set_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
@@ -882,14 +897,15 @@ impl ResultPanel {
         input.update(cx, |state, cx| state.set_value(text, window, cx));
     }
 
-    /// 【B15】把「已筛选 N / M 行」写进结果工具栏（统计跟随筛选——原型 §5.5）
+    /// 【B15】把「已筛选 N / M 行」写进结果工具栏（统计跟随筛选——原型 §5.5；
+    /// 全局筛选词与列级筛选任一生效都算“已筛选”）
     fn refresh_filter_hint(&mut self, cx: &mut Context<Self>) {
         let (visible, total, filtering) = {
             let delegate = self.grid.read(cx).delegate();
             (
                 delegate.visible_row_count(),
                 delegate.data_row_count(),
-                !delegate.filter().trim().is_empty(),
+                !delegate.filter().trim().is_empty() || delegate.column_filter().is_some(),
             )
         };
         if let Some(toolbar) = self.toolbar.as_mut() {

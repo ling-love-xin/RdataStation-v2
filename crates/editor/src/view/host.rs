@@ -702,6 +702,8 @@ impl EditorHostPanel {
         {
             let load_weak = cx.entity().downgrade();
             let filter_weak = cx.entity().downgrade();
+            // 【筛选】列头筛选钩子与「按值筛选」共用宿主弱引用：两个闭包各要一份（WeakEntity 非 Copy）
+            let filter_weak_col = filter_weak.clone();
             let sort_weak = cx.entity().downgrade();
             let insight_weak = cx.entity().downgrade();
             let preview_weak = cx.entity().downgrade();
@@ -718,6 +720,15 @@ impl EditorHostPanel {
                         let value = value.to_string();
                         _ = filter_weak
                             .update(app, |panel, cx| panel.apply_filter_value(&value, cx));
+                    },
+                ));
+                // 【筛选】列头菜单「按值筛选此列 / 清除」交回面板（空串 = 清除）
+                let filter_weak = filter_weak_col;
+                state.delegate_mut().set_column_filter_hook(std::rc::Rc::new(
+                    move |column: usize, value: &str, app: &mut App| {
+                        let value = value.to_string();
+                        _ = filter_weak
+                            .update(app, |panel, cx| panel.apply_column_filter(column, &value, cx));
                     },
                 ));
                 let sort_weak = sort_weak;
@@ -6602,6 +6613,13 @@ impl EditorHostPanel {
         let _ = self.window.update(cx, |_panel, window, app| {
             panel.update(app, |p, cx| p.sync_filter_input(&value, window, cx));
         });
+    }
+
+    /// 【筛选】列头菜单「按值筛选此列 / 清除」落点：代理到结果面板（空串 = 清除）
+    pub(crate) fn apply_column_filter(&mut self, column: usize, value: &str, cx: &mut Context<Self>) {
+        let value = value.to_string();
+        self.result_panel
+            .update(cx, |p, cx| p.apply_column_filter(column, &value, cx));
     }
 
     /// 【遗留 #7】右键「查看完整值」：记录目标并弹值查看器（对话框由 dialogs 层开）
