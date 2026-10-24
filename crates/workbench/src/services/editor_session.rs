@@ -170,7 +170,6 @@ mod tests {
             schema: None,
             tab_size: None,
             hard_tabs: None,
-            result_height: None,
         }
     }
 

@@ -946,13 +946,17 @@ mod tests {
         let port = WorkbenchCompletion::new(shared);
 
         assert!(
-            port.catalog(None, ExecChannel::Source).is_empty(),
+            port.catalog(None, ExecChannel::Source, None).is_empty(),
             "未绑定连接不给候选（不猜是哪条）"
         );
         // 第一次问：内存里没有 → 空目录（后台开始载；这里只断言不阻塞、不 panic）
-        assert!(port.catalog(Some("P_nope"), ExecChannel::Source).is_empty());
+        assert!(port
+            .catalog(Some("P_nope"), ExecChannel::Source, None)
+            .is_empty());
         // 再问一次仍给空（预载还在跑或已失败），但不该 panic
-        assert!(port.catalog(Some("P_nope"), ExecChannel::Source).is_empty());
+        assert!(port
+            .catalog(Some("P_nope"), ExecChannel::Source, None)
+            .is_empty());
     }
 
     /// 【§710】空 NavCache（导航从未展开过 / 预热只暖 schema）→ 补全未命中时提交

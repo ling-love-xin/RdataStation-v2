@@ -293,6 +293,7 @@ fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
         database::nav_jobs::SearchConsumer::QuickOpen,
         database::nav_jobs::SearchResult {
             consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+            seq: 1,
             query: "or".to_string(),
             searched: 1,
             hits: vec![table_hit()],
@@ -309,6 +310,7 @@ fn locate_key_dispatches_reveal_for_metadata_rows(cx: &mut TestAppContext) {
             database::nav_jobs::SearchConsumer::QuickOpen,
             database::nav_jobs::SearchResult {
                 consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+                seq: 1,
                 query: "or".to_string(),
                 searched: 1,
                 hits: vec![table_hit()],
