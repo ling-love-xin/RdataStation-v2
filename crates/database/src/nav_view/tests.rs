@@ -1984,3 +1984,79 @@ fn retry_clears_the_failure_bookkeeping() {
     assert!(!s.attempted.contains(key), "不然下一次请求会被拦回去");
     assert!(!s.loading.contains(key));
 }
+
+// ---------- S4-N3 前缀跳转纯函数矩阵 ----------
+
+/// 组装最小行序（key + 可选显示名；无名称行 = 「更多 / 已定位 / 搜索命中」类）。
+/// 只填前缀跳转用到的字段，其余字段给缺省值（`conn_id` 空、无路径、无子节点）。
+fn order_with_names(pairs: &[(&str, Option<&str>)]) -> Vec<super::NavOrderItem> {
+    pairs
+        .iter()
+        .map(|(k, n)| super::NavOrderItem {
+            key: (*k).to_string(),
+            conn_id: String::new(),
+            path: None,
+            property: None,
+            has_children: false,
+            expanded: false,
+            name: n.map(|s| s.to_string()),
+        })
+        .collect()
+}
+
+#[test]
+fn prefix_match_finds_accumulated_prefix_case_insensitive() {
+    let order = order_with_names(&[
+        ("a", Some("Alpha")),
+        ("b", Some("beta")),
+        ("c", Some("AlphaPrime")),
+    ]);
+    // 「al」前缀应命中 Alpha 而非 AlphaPrime；大小写不敏感。
+    assert_eq!(super::nav_match_prefix(&order, "AL", 0), Some(0));
+    // 「alpha」前缀从 0 起也只会命中 Alpha（AlphaPrime 前缀更长但第一个匹配即停）。
+    assert_eq!(super::nav_match_prefix(&order, "alpha", 0), Some(0));
+}
+
+#[test]
+fn prefix_match_wraps_around_and_skips_nameless_rows() {
+    let order = order_with_names(&[
+        ("x", Some("Xray")),
+        ("skip", None), // 无名称行不参与
+        ("y", Some("Yankee")),
+        ("z", Some("Xylophone")),
+    ]);
+    // 从 1 起循环：1 是无名称行跳过 → 2 Yankee 不匹配 → 3 Xylophone 命中（环绕语义）。
+    assert_eq!(super::nav_match_prefix(&order, "x", 1), Some(3));
+    // 从 0 起首行即命中。
+    assert_eq!(super::nav_match_prefix(&order, "x", 0), Some(0));
+}
+
+#[test]
+fn prefix_match_respects_start_after_selected_row() {
+    let order = order_with_names(&[("a", Some("Apple")), ("b", Some("Apricot")), ("c", Some("Acer"))]);
+    // 选中 a（start=1）：下一个「ap」前缀是 Apricot；不会回跳到 Apple（start 已越过它）。
+    assert_eq!(super::nav_match_prefix(&order, "ap", 1), Some(1));
+    // 选中 b（start=2）：ap 无后续匹配 → 环绕到 a（Apple）。
+    assert_eq!(super::nav_match_prefix(&order, "ap", 2), Some(0));
+}
+
+#[test]
+fn prefix_match_handles_empty_and_unmatched() {
+    let order = order_with_names(&[("a", Some("Apple")), ("b", Some("Banana"))]);
+    assert_eq!(super::nav_match_prefix(&order, "", 0), None);
+    assert_eq!(super::nav_match_prefix(&order, "zz", 0), None);
+    assert_eq!(super::nav_match_prefix(&[], "a", 0), None);
+}
+
+#[test]
+fn prefix_match_matches_full_prefix_not_first_char() {
+    let order = order_with_names(&[
+        ("a", Some("Alpha")),
+        ("b", Some("Beta")),
+        ("c", Some("Bravo")),
+    ]);
+    // 「br」前缀只命中 Bravo（Beta 不匹配 br）。
+    assert_eq!(super::nav_match_prefix(&order, "br", 0), Some(2));
+    // 单字符与旧首字母行为视觉等价：命中第一个以 b 开头的行。
+    assert_eq!(super::nav_match_prefix(&order, "b", 0), Some(1));
+}

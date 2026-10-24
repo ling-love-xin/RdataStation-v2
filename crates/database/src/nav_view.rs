@@ -213,6 +213,28 @@ impl RevealTarget {
     }
 }
 
+/// S4-N3 前缀跳转纯函数：从 `start`（选中行后一位）起**循环**找第一个名称以 `buf`
+/// 为前缀的行索引。
+///
+/// - 无名称行（「更多 / 已定位 / 搜索命中」）跳过；
+/// - 大小写不敏感（两侧 `to_lowercase` 后按前缀比对）；
+/// - 找不到返回 `None`。不持有视图状态、不触发选中 / 滚动——副作用在调用方事件路径。
+pub(crate) fn nav_match_prefix(order: &[NavOrderItem], buf: &str, start: usize) -> Option<usize> {
+    if order.is_empty() || buf.is_empty() {
+        return None;
+    }
+    let lower = buf.to_lowercase();
+    (0..order.len())
+        .map(|step| (start + step) % order.len())
+        .find(|&ix| {
+            order[ix]
+                .name
+                .as_deref()
+                .map(|n| n.to_lowercase().starts_with(&lower))
+                .unwrap_or(false)
+        })
+}
+
 /// 数据库导航面板状态（M4）。
 ///
 /// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
@@ -301,6 +323,9 @@ pub struct NavViewState {
     pub(crate) search_seq: u64,
     /// 索引搜索命中（跨连接；命中行进列表最前，见 `NavRow::SearchHit`）。
     search_hits: Vec<nav_jobs::SearchHit>,
+    /// S4-N3 前缀跳转累积缓冲：连续字母键拼成名称前缀（匹配时按前缀整体比对，
+    /// 不再是单首字母）；800ms 无新键由计时器清空（`prefix_debounce`）。
+    pub(crate) prefix_buf: String,
     /// 上批结果实际搜了几个连接（有缓存的那些；用于结果区的“已搜 N 个连接”）。
     search_searched: usize,
     /// 待定位目标（搜索结果行的「定位」→ 展开链路并选中它）。跨帧推进，见
@@ -573,6 +598,9 @@ pub struct NavView {
     /// 索引搜索的防抖句柄（同一模式：250ms 无新输入才真正发任务，见
     /// [`NavView::nav_schedule_index_search`]）。
     search_debounce: RefCell<Option<Task<()>>>,
+    /// S4-N3 前缀跳转超时计时（`Task` drop = 取消）：800ms 无新键清空
+    /// `NavViewState::prefix_buf`，下次按键重新起前缀。
+    prefix_debounce: RefCell<Option<Task<()>>>,
     /// 攒批的脏标记：展开态按连接记，面板级（选中 / 搜索词）一个布尔。
     state_dirty: RefCell<NavStateDirty>,
     /// 树区滚动句柄（虚拟列表自带滚动；「滚到眼前」类需求走它，见导航开发方案 §2.5 S5）。
@@ -617,6 +645,7 @@ impl NavView {
             nav_pending_scroll: None,
             state_save: RefCell::new(None),
             search_debounce: RefCell::new(None),
+            prefix_debounce: RefCell::new(None),
             state_dirty: RefCell::new(NavStateDirty::default()),
             list_scroll: Rc::new(VirtualListScrollHandle::new()),
             warm_poll: None,
@@ -714,39 +743,49 @@ impl NavView {
         cx.notify();
     }
 
-    /// S4-② 键盘补全：前缀跳转——按首字母跳到**下一个**以此开头的行（从选中行之后循环）。
+    /// S4-②③ 前缀跳转：连续字母键**累积**成名称前缀，跳到下一个以该前缀开头的行
+    /// （从选中行之后循环）。800ms 无新键清空缓冲，下次按键重新起前缀。
     ///
     /// 不区分大小写；只匹配带显示名的行（连接 / 树行），「更多 / 已定位 / 搜索命中」跳过。
+    /// 匹配逻辑在纯函数 [`nav_match_prefix`]，这里只做缓冲迁移与选中 / 滚动副作用。
     fn nav_jump_prefix(&mut self, ch: char, cx: &mut Context<Self>) {
+        // 累积缓冲（S4-N3）：先 append 本次按键，再整体按前缀匹配。
+        // 空序直接返回（缓冲留到超时自然清空，无害）。
         let order = self.nav_order.borrow();
         if order.is_empty() {
             return;
         }
-        let lower = ch.to_lowercase().next().unwrap_or(ch);
+        let buf = {
+            let mut nav = self.nav.borrow_mut();
+            nav.prefix_buf.push(ch);
+            nav.prefix_buf.to_lowercase()
+        };
         let current = self.nav.borrow().selected_key.clone();
         let start = current
             .and_then(|k| order.iter().position(|i| i.key == k))
             .map(|i| i + 1)
             .unwrap_or(0);
-        // 从当前位置之后循环找第一个匹配项。
-        let hit = (0..order.len())
-            .map(|step| (start + step) % order.len())
-            .find(|&ix| {
-                order[ix]
-                    .name
-                    .as_deref()
-                    .and_then(|n| n.chars().next())
-                    .map(|c| c.to_lowercase().next() == Some(lower))
-                    .unwrap_or(false)
+        let hit = nav_match_prefix(&order, &buf, start);
+        if let Some(ix) = hit {
+            let key = order[ix].key.clone();
+            drop(order);
+            self.set_nav_selected(Some(key.clone()), cx);
+            self.nav_scroll_to_key(&key);
+            cx.notify();
+        }
+        // 超时重置：800ms 无新键清空缓冲（`Task` drop = 取消上一枚计时）。
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        let task = cx.spawn(async move |_this, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(ui::NAV_PREFIX_TIMEOUT_MS))
+                .await;
+            let _ = weak.update(cx, |this, cx| {
+                this.nav.borrow_mut().prefix_buf.clear();
+                cx.notify();
             });
-        let Some(ix) = hit else {
-            return;
-        };
-        let key = order[ix].key.clone();
-        drop(order);
-        self.set_nav_selected(Some(key.clone()), cx);
-        self.nav_scroll_to_key(&key);
-        cx.notify();
+        });
+        *self.prefix_debounce.borrow_mut() = Some(task);
     }
 
     /// 当前选中项（克隆，避免跨借用）。
