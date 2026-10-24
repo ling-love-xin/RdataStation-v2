@@ -1455,6 +1455,9 @@ impl EditorHostPanel {
     fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
+        // 模式指示器的 dropdown_menu 闭包会 move 走 `entity`，工具栏按钮也要用宿主：
+        // 先克隆一份，避免「move 之后再 borrow」（E0382）
+        let toolbar_entity = entity.clone();
         let current_channel = self.channel();
 
         let mut toolbar = div()
@@ -1500,6 +1503,23 @@ impl EditorHostPanel {
             crate::model::ToolbarStyle::Full => {
             // 左区：组列表（T2c-5）。只有 SQL 模式的执行是“对当前文档执行”：
             // 文本模式按能力表不通信，分析模式的执行是**笔记级**动作（1c 落地）。
+            // 函数手册（#54-C5）：SQL 模式独有入口（通用/分析模式的能力表里没有它）。
+            toolbar = toolbar.child(
+                Button::new("editor-function-manual")
+                    .ghost()
+                    .small()
+                    .icon(IconName::BookMarked)
+                    .tooltip("函数手册")
+                    .debug_selector(|| "editor-function-manual".to_string())
+                    .on_click({
+                        let toolbar_entity = toolbar_entity.clone();
+                        move |_, window, cx| {
+                            toolbar_entity.update(cx, |panel, cx| {
+                                _ = panel.open_function_manual(window, cx);
+                            });
+                        }
+                    }),
+            );
             let groups = self.toolbar.groups();
             for group in &groups {
                 toolbar = toolbar.child(self.render_toolbar_group(group, cx));
@@ -4655,6 +4675,59 @@ impl EditorHostPanel {
         self.shared
             .update(|service| service.set_content(&self.document, new_text));
         self.set_message(Some(format!("已插入 {}", payload.label)), cx);
+    }
+
+    // ===== 函数手册（#54-C5）=====
+    //
+    // Quick Open 式中文语义搜索（输入「截取」→ SUBSTR），确认后把函数名插到光标处。
+    // 数据与排序全在 engine（157 条 / 9 类静态手册），editor 只做弹层与插入。
+
+    /// `Ctrl+Shift+M` / 工具栏按钮：打开函数手册
+    pub(crate) fn on_function_manual(
+        &mut self,
+        _: &crate::commands::FunctionManual,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        _ = self.open_function_manual(window, cx);
+    }
+
+    /// 打开函数手册对话框（返回 ListState 实体，测试可直接驱动搜索/确认）
+    ///
+    /// 确认回调捕获宿主实体，把函数名交给 [`Self::insert_manual_function`]。
+    pub(crate) fn open_function_manual(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<gpui_kit::component::list::ListState<
+        crate::view::function_manual::ManualDelegate,
+    >> {
+        let entity = cx.entity();
+        crate::view::function_manual::open_function_manual(
+            window,
+            cx,
+            move |name, window, cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.insert_manual_function(name, window, cx);
+                });
+            },
+        )
+    }
+
+    /// 手册确认 → 光标处插入函数名 + 同步服务层（同「插入片段」口径，幂等）
+    fn insert_manual_function(
+        &mut self,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |state, cx| state.insert(name.clone(), window, cx));
+        let new_text = self.editor.read(cx).value().to_string();
+        self.statements = count_statements(&new_text);
+        self.shared
+            .update(|service| service.set_content(&self.document, new_text));
+        self.set_message(Some(format!("已插入函数 {}", name)), cx);
     }
 
     // ===== 模式切换（A5 的矩阵 + A9 的确认对话框）=====
@@ -7840,6 +7913,8 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_trigger_completion))
             .on_action(cx.listener(Self::on_execute_sql))
             .on_action(cx.listener(Self::on_execute_all))
+            // 【#54-C5】函数手册：`Ctrl+Shift+M`（键位在 crates/app 注册，context 同为 editor）
+            .on_action(cx.listener(Self::on_function_manual))
             // 【B14】网格里的 `Ctrl+C`：键位绑在 `view/results/grid.rs` 那一层的上下文上，
             // 所以只有焦点在网格里时才会走到这里（编辑区里 `Ctrl+C` 仍归内核的文本复制）
             .on_action(cx.listener(Self::on_copy_grid_selection))

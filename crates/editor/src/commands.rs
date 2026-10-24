@@ -34,7 +34,8 @@ actions!(
         TriggerCompletion,
         CopyGridSelection,
         UndoResultEdit,
-        RedoResultEdit
+        RedoResultEdit,
+        FunctionManual
     ]
 );
 

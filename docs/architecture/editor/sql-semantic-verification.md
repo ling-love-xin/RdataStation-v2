@@ -81,7 +81,7 @@ cargo test -p rds-engine --lib          # 653 项全绿
 | C2 | 悬停表名 | 目录真实限定名 + 列列表 | ⏳ 无目录时只显示引用词；列列表待目录注入 |
 | C3 | 悬停列 | 所属表 + 列名 | ⏳ 同上 |
 | C4 | 输入 `(`（函数调用处） | 签名帮助弹层（多参数高亮当前位） | ⏳ 内核无签名槽位，需自建弹层 |
-| C5 | `Ctrl+Shift+M` / 工具栏书本图标打开函数手册，输入「截取」→ `SUBSTR` 命中，回车插入函数名到光标 | ⏳ 代码已接（待并行线 result_panel 交口后编译验证） |
+| C5 | `Ctrl+Shift+M` / 工具栏书本图标打开函数手册，输入「截取」→ `SUBSTR` 命中，回车插入函数名到光标 | ✅ 代码完成 `cargo check` 通过；测试被系统内存阻塞（见 §六），跑通后提交即**可测** |
 | C6 | Ctrl+Click 表名 | 跳转导航树定位到该表（限定名） | ⏳ 待做 |
 | C7 | Ctrl+Click 列名 | 定位所属表并选中该列 | ⏳ 待做 |
 
@@ -97,3 +97,11 @@ cargo test -p rds-engine --lib          # 653 项全绿
 - 函数手册官方文档 URL：由 workbench 按「引擎+函数名」生成（真实环境验证后定，不写死链接）。
 - 列类型进目录后 hover 补类型：`annotate_types` 现对多数表达式返回 Unknown，展示价值低，暂不做。
 - 方言注入链路：workbench 文档绑定连接时把 `driver_to_dialect(驱动)` 写进文档状态 → `scan::Job.dialect` → 语义诊断生效（editor 侧字段已就位）。
+
+## 六、C5 编译验证环境记录（2026-10-24）
+
+- 代码：`function_manual.rs` + host.rs 工具栏书本按钮 + `FunctionManual` action + `Ctrl+Shift+M` + ui.rs 常量 + 测试 `opens_searches_and_confirms`。
+- **编译已验证**：`cargo check -p rds-editor` Finished（依赖 `gpui-component 0.8.0` 升级 + check 覆盖 build 缓存，需完整重建）。
+- **测试未跑**：系统 **Commit Charge 199%**（32.5GB/16.4GB，Windows 承诺超限）→ `cargo build`/`test` 完整 codegen 时 `rustc-LLVM ERROR: out of memory`（gpui-component 单 crate LLVM 内存不足）。非代码问题。
+- 恢复条件：释放系统内存（关 chrome 标签 / 非必要 Doubao 窗口）或临时调大页文件后，跑 `cargo test -p rds-editor --lib` 全量回归（含 `opens_searches_and_confirms`）→ 绿后提交。
+- 教训：依赖闭包大时**不要用 `cargo check` 混在 build 流程里**（check 产物覆盖 build rmeta，导致依赖全量重建）。

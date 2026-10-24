@@ -7,6 +7,7 @@ pub mod analysis;
 pub mod completion;
 pub mod dialogs;
 pub mod fold;
+pub mod function_manual;
 pub mod highlight;
 pub mod history;
 pub mod host;

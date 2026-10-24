@@ -141,3 +141,10 @@ pub const NOTEBOOK_OUTPUT_IMAGE_MAX_WIDTH: f32 = 36.0;
 /// 【遗留 #7】值查看器弹层：值显示区最大高（22rem = 352px：约 20 行等宽文本；
 /// 再长就滚动——值查看器要的是「原样看全」，不是截断）
 pub const VALUE_PREVIEW_MAX_HEIGHT: f32 = 22.0;
+
+/// 【#54-C5】函数手册对话框宽度（38rem = 608px，与「管理环境」同档：搜索框 +
+/// 两行结果（函数名+分类 / 中文描述）需要横向余量）
+pub const FUNCTION_MANUAL_DIALOG_WIDTH: f32 = 38.0;
+
+/// 【#54-C5】函数手册结果行高（3.0rem = 48px：两行式——函数名+分类标签 / 中文描述）
+pub const FUNCTION_MANUAL_ROW_HEIGHT: f32 = 3.0;

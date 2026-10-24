@@ -18,7 +18,8 @@ use analytics_resource::commands::{
     ClearSearch, DeleteSelected, FocusSearch, RenameSelected, SelectAllRows,
 };
 use editor::commands::{
-    CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument,
+    CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
+    OpenDocument,
     RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
     UndoResultEdit,
 };
@@ -235,6 +236,8 @@ fn run_app() {
                 KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
                 // B10 格式化：`Ctrl+Shift+F`（A10 表里预留给它的键，已核对内核未占用）
                 KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
+                // 【#54-C5】函数手册：`Ctrl+Shift+M`（已核对内核与 editor 现有键位无冲突）
+                KeyBinding::new("ctrl-shift-m", FunctionManual, Some("editor")),
                 // 【B9 切片二】手动补全：`Ctrl+Space`（内核没占用：grep 过 `input/` 下的 `ctrl-space` /
                 // `"space"` 均为空；打字触发那条路由内核自己管，这条只是“再请一次候选”）
                 KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
