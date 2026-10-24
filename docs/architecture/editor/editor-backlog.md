@@ -72,7 +72,7 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 ## 建议优先级
 
 1. ~~阻塞阶段②：队列按连接分组并发 + 取消按作业句柄（任务 #52，进行中）~~ ✅ 已提交 `7ac86854`（2026-10-24）
-2. 补全缓存 MetadataCache TTL/generation（任务 #53）：代码已提交 `75c8bb07`，**测试未验**（当时被并行线中间态阻断；现 workbench 可编译，`cargo test -p rds-workbench --lib editor_completion` 单命令可验）
+2. 补全缓存 MetadataCache TTL/generation（任务 #53）：代码已提交 `75c8bb07`，**测试未验**——`cargo test -p rds-workbench --lib editor_completion` 被并行线中间态挡住（workbench 编译失败：nav 线 `b4ae6929` 给 `nav_jobs::SearchResult` 加 `seq`、结果集线 `375d6840` 移除 `SavedSession.result_height`，workbench 侧 quick_open/editor_completion/editor_session/property_panel 适配未提交；非 editor 线引入，等并行线交口后可验）
 3. #54 语义层（engine 四能力全部完成：`c7de3e06` 诊断 / `129eb656` hover / `d69a971f` 签名 / `2f90e066` 手册 / `1136862f` 跳转 + refs）——**editor 侧接线全部完成**：
    - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试）；B 批目录注入端口已提交（`76b59ac1`：`EditorShared::set_catalog_snapshot` + scan 提交链带目录与方言 + `sql_dialect_for_document` 统一口径）——**运行时语义诊断待 workbench 注入目录快照**（并行线设计；空目录 → 语义段跳过）
    - ② SQL hover 已接（`cd23301e`：`lsp/sql_hover.rs` + `install_hover` 泛型化 + Sql 分支挂载，函数签名/中文可测；表/列列列表待目录注入）
