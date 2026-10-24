@@ -368,7 +368,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 ### 8.10 左缘竖条 + 右栏页签新序与关闭（2026-10-24，#25）
 
-对齐 DBeaver Data Editor 截图基准（左缘独立窄竖条三图标、右栏页签重排与可关闭、底部三段式动作组）。本轮落地竖条与页签段；底部三段式与本地行级动作口径见本节「后续项」。
+对齐 DBeaver Data Editor 截图基准（左缘独立窄竖条三图标、右栏页签重排与可关闭、底部三段式动作组）。#25 落地竖条与页签段；#26 落地底部三段式视图骨架（③），本地行级动作模型归 #28（④）。
 
 **① 左缘竖条（替代原左栏视图区 + 工具栏两个入口按钮）**
 
@@ -388,36 +388,44 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。
 - 「引用」页（外键面包屑 + 引用表只读预览）本轮不做，留 backlog。
 
-**③ 底部三段式动作组（目标形态，本轮仅原型先行；Rust 侧未改布局）**
+**③ 底部三段式动作组（#26 Rust 视图骨架已落地；动作模型归 #28）**
 
-对齐 DBeaver 截图基准的三段结构，原型 `docs/analysis/结果面板-DBeaver风格原型.html` 已呈现目标形态：
+对齐 DBeaver 截图基准的三段结构，`grid.rs` 状态行（`editor-result-status-row`）已重排为左动作组 / 中段行数框 / 右段元信息；原型 `docs/analysis/结果面板-DBeaver风格原型.html` 同步目标形态：
 
-| 段 | DBeaver 内容 | 本轮口径 |
+| 段 | DBeaver 内容 | #26 落地口径 |
 | --- | --- | --- |
-| 左·动作组 | 刷新▾ / 保存 / 取消 / 新增行 / 复制行 / 删除行 / 撤销 / 重做 / 首页 / 上页 / 下页 / 末页 / 导出▾ / 设置 | 灰态占位，待动作模型落地后逐个接线（见下） |
-| 中段 | 行数输入框（只读）+ `N+` 标记 | 待落地 |
-| 右段 | `N 行已获取 - 总耗时 (获取耗时), 时间戳` + 当前格预览 + 已选行 | 现有状态行已含当前格预览 / 已选行；耗时元信息在工具栏段，待归位 |
+| 左·动作组 | 刷新▾ / 保存 / 取消 / 新增行 / 复制行 / 删除行 / 撤销 / 重做 / 首页 / 上页 / 下页 / 末页 / 导出▾ / 设置 | 12 枚占位幽灵钮全部 `disabled(true)`（纯函数 `status_action_placeholders` 给清单与顺序，分组分界 `FIRST_PAGER_ACTION=7` / `FIRST_SYSTEM_ACTION=10`）；写操作段 保存·取消·新增行·复制行·删除行·撤销·重做 ‖ 翻页段 首页·上页·**下页=现有 `FetchMore` 真钮**·末页 ‖ 系统段 导出·设置；段间发丝分隔线。刷新 / 导出 / 提交 / 撤销重做的底部入口待 #28 行级模型落地后逐个接线，本轮不重复挂载顶部已有真钮 |
+| 中段 | 行数输入框（只读）+ `N+` 标记 | 已落地只读槽位（`ui::RESULT_ROW_COUNT_BOX_WIDTH = 4.5rem`），显示 `status_segments().0`（共 N[+] 行）；行号跳转输入是 backlog |
+| 右段 | `N 行已获取 - 总耗时 (获取耗时), 时间戳` + 当前格预览 + 已选行 | 保留现有当前格预览 / 截断警告 / 已选行；耗时元信息仍在工具栏段，归位右段留 backlog |
 
 **翻页导航口径（已拍板）**：取数是窗口化模型（`FetchMore` 取下一段，无页号概念），首页 / 上页 / 末页置灰占位，下页 = 现有 `FetchMore`；不实现段导航（需要 engine 支持 offset 重查，超出本线范围）。
 
-**④ 本地行级动作（新增 / 复制 / 删除 + 行级撤销重做）——模型岔路，待确认后落地**
+**④ 本地行级动作（新增 / 复制 / 删除 + 行级撤销重做）——方案 A 已拍板，叠加层模型归 #28**
 
-本轮**未写**代码。现状模型与阻塞点：
+2026-10-24 用户拍板：#26 先落地底部三段式**视图骨架**（③ 已完成）；叠加层模型与动作接线归下一轮任务 #28：
 
-- 变更集只持格级 `CellChange(row, column, original, edited, status)`；`EditHistory` 是格级双栈；`commit_updates_rows` 只生成 UPDATE、依赖键列 WHERE 定位；无主键结果集整份只读。
-- delegate 的 `view_rows: Option<Vec<usize>>` 是「底层数据行号 → 视图行」映射（`None` = 恒等）；本地新增行**没有底层行号可映射**，删除行需要在筛选 / 排序 / 导出 / 列统计 / 分组 / 值预览全链路分叉。
-- INSERT 编码在导出层有单行先例（`export.rs`），DELETE 编码不存在；现有 `FetchMore` 窗口模型无页号。
+| 决策点 | 拍板口径 |
+| --- | --- |
+| 模型方案 | **A 叠加层**：底层 `rows` 与格级 `ChangeSet` 完全不动；delegate 内新增本地行集合 + 删除标记集合；行身份扩成 `RowRef { Data(底层号) \| Local(稳定 id) }`，`view_rows` 映射同步扩展；本地行格编辑单独存、不进提交批次；行级动作走独立 `RowHistory` 双栈；删除只打标记不真删，底层行号不滑移。否决方案 B（新增直接进 `rows` + 行号偏移账本平移）——全链路平移错位风险高、本地行易漏排除混入下发 / 统计 |
+| 删除行呈现 | 灰显 + 删除线保留在网格内，撤销可恢复（对齐 DBeaver 默认；不直接移出网格） |
+| 新增行落点 | 插到当前选中行紧下方；无选中行时追加末尾（对齐 DBeaver 默认） |
+| 撤销 / 重做 | 单组按钮：格级 `EditHistory` 优先，栈空再走本地行栈 |
 
-**拍板的行为口径（确认模型方案后照此实现）**：
+**行为口径（实现时照此）**：
 
 - 新增 / 复制 / 删除**只改本地网格与撤销栈，不进提交批次、不下发 INSERT / DELETE**；UPDATE 路径完全不动。
 - 提交时本地行级变更被忽略并提示「行级变更暂未支持下发」。
 - 无主键结果集（`editable = false`）禁用三个行级按钮。
-- 撤销 / 重做优先格级 `EditHistory`，栈空再走本地行栈。
 
-> 待确认方案点：本地叠加层（新增行集合 / 待删除行集合 / 行操作历史栈）挂在 delegate 还是 store 槽；视图行号映射如何扩展「底层行 / 本地新行」双态；删除行灰显 + 删除线样式与本地新增行的行号槽口径。确认前不硬写。
+**现状模型与阻塞点（#28 实现背景）**：
 
-**测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **127 passed / 0 failed**；`cargo test -p rds-editor --lib` = **590 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例；此前并行线 engine 提交导致的 1 个失败项本轮已恢复通过）。
+- 变更集只持格级 `CellChange(row, column, original, edited, status)`；`EditHistory` 是格级双栈；`commit_updates_rows` 只生成 UPDATE、依赖键列 WHERE 定位；无主键结果集整份只读。
+- delegate 的 `view_rows: Option<Vec<usize>>` 是「底层数据行号 → 视图行」映射（`None` = 恒等）；本地新增行**没有底层行号可映射**，删除行需要在筛选 / 排序 / 导出 / 列统计 / 分组 / 值预览全链路分叉到 `RowRef`。
+- INSERT 编码在导出层有单行先例（`export.rs`），DELETE 编码不存在；现有 `FetchMore` 窗口模型无页号。
+
+**测试基线（#26 回归）**：`cargo test -p rds-result-panel --lib` = **128 passed / 0 failed**（+1：`status_action_placeholders_follow_dbeaver_group_order` 断言三段顺序 / 下页不在占位清单 / tooltip 非空）；`cargo test -p rds-editor --lib` = **590 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例；状态行内部三段重排不影响窗口测试——仅断言 `editor-result-status-row` 存在、`editor-result-more` 按 `has_more` 渲染、`selected_row` 状态字段）。
+
+## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
   `crates/app/src/main.rs`、`crates/settings/*`、`workbench/src/components/insight_actions.rs`、

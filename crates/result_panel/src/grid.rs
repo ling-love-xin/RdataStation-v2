@@ -40,10 +40,12 @@
 use std::ops::Range;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::button::{ButtonVariants as _, DropdownButton};
+use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
@@ -2624,6 +2626,38 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
     (left, right)
 }
 
+/// 底部动作状态行的**占位动作钮**（#26 视图骨架：本轮全部禁用灰态）。
+///
+/// 顺序对齐 DBeaver 底部动作条，三段：
+/// - 写操作段（0..7）：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做；
+/// - 翻页段（7..10）：首页 · 上页 · 末页——「下页」是现有取下一段真钮，由
+///   `ResultControls.more` 注入，不进占位清单；
+/// - 系统段（10..）：导出 · 设置。
+///
+/// 行级叠加层模型（新增 / 复制 / 删除 + 行级撤销重做）是下一轮任务，见
+/// `result-panel.md` §8.10 ④；本轮只摆位、不接线，按钮一律 `disabled(true)`。
+pub fn status_action_placeholders() -> Vec<(IconName, &'static str)> {
+    vec![
+        (IconName::Save, "保存（待行级模型落地）"),
+        (IconName::X, "取消（回滚待提交变更）"),
+        (IconName::Plus, "新增行（暂未支持下发）"),
+        (IconName::CopyPlus, "复制行（暂未支持下发）"),
+        (IconName::Trash, "删除行（暂未支持下发）"),
+        (IconName::Undo2, "撤销"),
+        (IconName::Redo2, "重做"),
+        (IconName::SkipBack, "首页（窗口化取数暂不支持）"),
+        (IconName::ChevronLeft, "上页（窗口化取数暂不支持）"),
+        (IconName::SkipForward, "末页（窗口化取数暂不支持）"),
+        (IconName::Download, "导出"),
+        (IconName::Settings, "设置"),
+    ]
+}
+
+/// 占位动作钮分组下标的分界（写操作段 `0..FIRST_PAGER_ACTION`；翻页段 `FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION`；
+/// 系统段 `FIRST_SYSTEM_ACTION..`）。render 层据此在段间插发丝分隔线。
+const FIRST_PAGER_ACTION: usize = 7;
+const FIRST_SYSTEM_ACTION: usize = 10;
+
 /// 结果工具栏右段的动作控件（由面板构造：它知道点击该干什么）
 ///
 /// 与状态栏的 `StatusControls` 同口径：文案交给可穷举的纯函数，控件交给面板。
@@ -2839,26 +2873,98 @@ pub fn render(
         .when_some(status, |pane, status| {
             let (left, right) = status_segments(&status);
             let warning = theme.colors.warning;
+            let border = theme.colors.border;
+
+            // 【#26 视图骨架】底部动作状态行三段：左动作组（占位灰钮 + 取下一段真钮）、
+            // 中段只读行数框、右段当前格 / 截断 / 选中行元信息。占位钮全部 disabled，
+            // 行级叠加层模型落地后逐个接线（result-panel.md §8.10 ④）。
+            let placeholders = status_action_placeholders();
+            let placeholder_btn = |(icon, tooltip): (IconName, &'static str)| {
+                let id = format!("editor-result-action-{:?}", icon);
+                Button::new(id)
+                    .ghost()
+                    .small()
+                    .icon(icon)
+                    .tooltip(tooltip)
+                    .disabled(true)
+                    .debug_selector(|| format!("editor-result-action-{:?}", icon))
+                    .into_any_element()
+            };
+            let separator = || {
+                div()
+                    .w_px()
+                    .h_3()
+                    .flex_none()
+                    .bg(border)
+                    .into_any_element()
+            };
+            // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
+            let write_ops = placeholders[0..FIRST_PAGER_ACTION]
+                .iter()
+                .copied()
+                .map(placeholder_btn)
+                .collect::<Vec<_>>();
+            // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
+            let pager_before = [
+                placeholder_btn(placeholders[FIRST_PAGER_ACTION]),
+                placeholder_btn(placeholders[FIRST_PAGER_ACTION + 1]),
+            ];
+            let last_pager = placeholder_btn(placeholders[FIRST_SYSTEM_ACTION - 1]);
+            // 系统段：导出 · 设置
+            let system_ops = placeholders[FIRST_SYSTEM_ACTION..]
+                .iter()
+                .copied()
+                .map(placeholder_btn)
+                .collect::<Vec<_>>();
+
             pane.child(
                 div()
                     .h_flex()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .px_2()
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
                     .text_xs()
                     .text_color(muted)
                     .debug_selector(|| "editor-result-status-row".to_string())
+                    // 左·动作组（写操作 ‖ 翻页 ‖ 系统，段间发丝分隔）
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .flex_none()
+                            .children(write_ops)
+                            .child(separator())
+                            .children(pager_before)
+                            // 【B5b】下页 = 取下一段真钮（只在还有下一段时由面板注入）
+                            .children(controls.more)
+                            .child(last_pager)
+                            .child(separator())
+                            .children(system_ops),
+                    )
+                    // 中段·只读行数框（行号跳转输入是 backlog；本轮只摆槽位与共 N[+] 行文案）
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_none()
+                            .w(rems(ui::RESULT_ROW_COUNT_BOX_WIDTH))
+                            .border_b(ui::HAIRLINE)
+                            .border_color(border)
+                            .child(SharedString::from(left)),
+                    )
+                    // 右·元信息：当前格预览 · 截断警告 · 已选行
                     .child(
                         div()
                             .h_flex()
                             .items_center()
                             .gap_2()
                             .min_w_0()
-                            .child(SharedString::from(left))
-                            // 当前格值预览（DBeaver 对齐：状态行左下显示当前格，长值已由
-                            // 编辑器截断；`·` 分隔避免与「共 N 行」粘连）
+                            .ml_auto()
+                            // 当前格值预览（DBeaver 对齐：状态行显示当前格，长值已由
+                            // 编辑器截断；`·` 分隔避免与选中行文案粘连）
                             .when_some(status.selected_cell, |row, value| {
                                 row.child(
                                     div()
@@ -2870,20 +2976,10 @@ pub fn render(
                             // 截断是**警告**（数据不完整），不是普通说明文字
                             .when_some(status.truncated_hint, |row, hint| {
                                 row.child(
-                                    div()
-                                        .text_color(warning)
-                                        .child(SharedString::from(hint)),
+                                    div().text_color(warning).child(SharedString::from(hint)),
                                 )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(SharedString::from(right))
-                            // 【B5b】取下一段就在状态行里（原型 §2.4 的 ⑦ 是分页与“取下一段”的家）
-                            .children(controls.more),
+                            })
+                            .child(SharedString::from(right)),
                     ),
             )
         })
@@ -2896,9 +2992,11 @@ mod tests {
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
         TextAlign, blob_summary, cell_matches, cell_style, column_distinct_values, column_stats,
         compare_cells, context_menu_items, duration_text, find_in_cell, fmt_stat_num,
-        header_tooltip_lines, column_menu_items, preview_of, stats_lines, status_segments,
-        thousands, truncated_hint, validate_edit_value,
+        header_tooltip_lines, column_menu_items, preview_of, stats_lines, status_action_placeholders,
+        status_segments, thousands, truncated_hint, validate_edit_value, FIRST_PAGER_ACTION,
+        FIRST_SYSTEM_ACTION,
     };
+    use gpui_kit::assets::IconName;
     use workbench_shell::model::ColumnAnnotation;
     use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
@@ -3702,6 +3800,50 @@ mod tests {
             has_more: true,
         };
         assert_eq!(status_segments(&partial).0, "共 1,000+ 行");
+    }
+
+    /// 【#26】底部动作状态行占位钮清单：顺序对齐 DBeaver 三段（写操作 ‖ 翻页 ‖ 系统），
+    /// 「下页」是现有取下一段真钮，不进占位清单；本轮全部 disabled，接线归下一轮行级模型
+    #[test]
+    fn status_action_placeholders_follow_dbeaver_group_order() {
+        let slots = status_action_placeholders();
+        assert_eq!(slots.len(), 12, "占位钮共 12 个（下页真钮另由 controls.more 注入）");
+
+        // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
+        let write: Vec<IconName> = slots[0..FIRST_PAGER_ACTION]
+            .iter()
+            .map(|(icon, _)| *icon)
+            .collect();
+        assert_eq!(
+            write,
+            vec![
+                IconName::Save,
+                IconName::X,
+                IconName::Plus,
+                IconName::CopyPlus,
+                IconName::Trash,
+                IconName::Undo2,
+                IconName::Redo2,
+            ]
+        );
+
+        // 翻页段：首页 · 上页 · 末页（下页 = 取下一段真钮，占位清单里没有 ChevronRight）
+        let pager: Vec<IconName> = slots[FIRST_PAGER_ACTION..FIRST_SYSTEM_ACTION]
+            .iter()
+            .map(|(icon, _)| *icon)
+            .collect();
+        assert_eq!(pager, vec![IconName::SkipBack, IconName::ChevronLeft, IconName::SkipForward]);
+        assert!(!slots.iter().any(|(icon, _)| *icon == IconName::ChevronRight));
+
+        // 系统段：导出 · 设置
+        let system: Vec<IconName> = slots[FIRST_SYSTEM_ACTION..]
+            .iter()
+            .map(|(icon, _)| *icon)
+            .collect();
+        assert_eq!(system, vec![IconName::Download, IconName::Settings]);
+
+        // 每个占位钮都带可读 tooltip（说明为何禁用 / 待哪一轮接线）
+        assert!(slots.iter().all(|(_, tooltip)| !tooltip.is_empty()));
     }
 
     /// 列头菜单（DBeaver 箭头）：列级子集——排序升/降、复制此列、冻结、隐藏、
