@@ -73,11 +73,13 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 1. ~~阻塞阶段②：队列按连接分组并发 + 取消按作业句柄（任务 #52，进行中）~~ ✅ 已提交 `7ac86854`（2026-10-24）
 2. 补全缓存 MetadataCache TTL/generation（任务 #53）：代码已提交 `75c8bb07`，**测试未验**（当时被并行线中间态阻断；现 workbench 可编译，`cargo test -p rds-workbench --lib editor_completion` 单命令可验）
-3. #54 语义层（engine 四能力全部完成：`c7de3e06` 诊断 / `129eb656` hover / `d69a971f` 签名 / `2f90e066` 手册 / `1136862f` 跳转 + refs）——**上层接线进行中**：
-   - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试），**运行时待 workbench 注入目录快照 + `driver_to_dialect` 方言**（scan 路径空目录 → 语义段跳过）
+3. #54 语义层（engine 四能力全部完成：`c7de3e06` 诊断 / `129eb656` hover / `d69a971f` 签名 / `2f90e066` 手册 / `1136862f` 跳转 + refs）——**editor 侧接线全部完成**：
+   - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试）；B 批目录注入端口已提交（`76b59ac1`：`EditorShared::set_catalog_snapshot` + scan 提交链带目录与方言 + `sql_dialect_for_document` 统一口径）——**运行时语义诊断待 workbench 注入目录快照**（并行线设计；空目录 → 语义段跳过）
    - ② SQL hover 已接（`cd23301e`：`lsp/sql_hover.rs` + `install_hover` 泛型化 + Sql 分支挂载，函数签名/中文可测；表/列列列表待目录注入）
-   - ③+ 函数手册 Dialog **代码已接待验**（`function_manual.rs` + `FunctionManual` action + `Ctrl+Shift+M` + 工具栏书本按钮 + 测试；编译验证被并行线 result_panel 重构中间态阻塞，等交口后 `cargo test -p rds-editor --lib` 验证提交）
-   - ③ 签名帮助 / ④ 跳转：未接（内核无签名槽位需自建弹层；跳转定位在 workbench/database 侧）
+   - ③ 函数手册 Dialog 已提交（C5：`function_manual.rs` + `FunctionManual` action + `Ctrl+Shift+M` + 工具栏书本按钮，597→602 测试全绿）
+   - ③ 签名帮助已提交（C4：`signature_help.rs` + `SignatureHelp` action + `Ctrl+Shift+Space`，当前参数位高亮；「输入 `(` 自动弹」留二期）
+   - ④ 跳转定义已提交（C6/C7：`lsp/sql_definition.rs` + `install_definition`，`rds://navigator` 由 workbench show_document handler 解析定位导航树）
+   - ④ 收尾：workbench 侧注入（文档绑定连接→目录快照推送 + show_document 的 rds://navigator 定位）属并行线设计，注入后 B1-B4 / C2 / C3 / C6 / C7 实测解锁
 4. P3 钻取（下期）
 
 ## 七、文档残留（#54 相关，措辞过时待改）
