@@ -416,16 +416,24 @@ impl ResultPanel {
         // （可选中复制）；标签条保留（可切结果集）；侧栏让位（无选中格语义——
         // 文本没有「格」）。分支放这里因为 `tabs` 随后会被 `ResultPane` 拿走。
         if self.presentation == Presentation::Text && !self.compare_mode {
-            let mut body = div()
-                .v_flex()
+            let body = div()
+                .h_flex()
+                .items_stretch()
                 .w_full()
                 .h_full()
                 .min_h_0()
-                .debug_selector(|| "editor-result-text-view".to_string());
-            if let Some(tabs) = tabs {
-                body = body.child(tabs);
-            }
-            body = body.child(self.render_text_view(cx));
+                .debug_selector(|| "editor-result-text-view".to_string())
+                .child(self.render_vertical_bar(cx))
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .min_h_0()
+                        .when_some(tabs, |body, tabs| body.child(tabs))
+                        .child(self.render_text_view(cx)),
+                );
             return body.into_any_element();
         }
 
@@ -494,68 +502,6 @@ impl ResultPanel {
                 .tooltip("右栏：选中格完整值")
                 .on_click(move |_, _window, _app| {
                     queue.push(ResultRequest::ToggleValueSidebar);
-                })
-                .into_any_element()
-        });
-
-        // 【P2-4】转置视图（单行转置，DBeaver 式）：有网格才摆。开关激活时左
-        // 边跟上一行 / 下一行导航（看宽表不靠拖横向滚动条）
-        let transpose = self.result_can_copy.then(|| {
-            let queue = self.queue.clone();
-            let toggle = Button::new("editor-result-transpose")
-                .ghost()
-                .small()
-                .toggled(self.transposed)
-                .icon(IconName::Table2)
-                .tooltip("转置视图")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::ToggleTranspose);
-                });
-            if !self.transposed {
-                return toggle.into_any_element();
-            }
-            let queue = self.queue.clone();
-            let prev = Button::new("editor-result-transpose-prev")
-                .ghost()
-                .small()
-                .icon(IconName::ChevronUp)
-                .tooltip("上一行")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::TransposePrev);
-                });
-            let queue = self.queue.clone();
-            let next = Button::new("editor-result-transpose-next")
-                .ghost()
-                .small()
-                .icon(IconName::ChevronDown)
-                .tooltip("下一行")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::TransposeNext);
-                });
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .debug_selector(|| "editor-result-transpose-group".to_string())
-                .child(prev)
-                .child(toggle)
-                .child(next)
-                .into_any_element()
-        });
-
-        // 【呈现】显示方式切换（DBeaver 左栏「显示方式」，工具栏同给一个入口）：
-        // 文本视图 = 当前结果（可见列 + 可见行）拼 TSV 纯文本，可选中复制
-        let presentation = self.result_can_copy.then(|| {
-            let queue = self.queue.clone();
-            Button::new("editor-result-presentation")
-                .ghost()
-                .small()
-                .toggled(self.presentation == Presentation::Text)
-                .debug_selector(|| "editor-result-presentation".to_string())
-                .label("文本")
-                .tooltip("显示方式：网格 / 文本")
-                .on_click(move |_, _window, _app| {
-                    queue.push(ResultRequest::SetPresentation(Presentation::Text));
                 })
                 .into_any_element()
         });
@@ -746,8 +692,6 @@ impl ResultPanel {
                     filter: Some(filter),
                     column_sidebar,
                     value_sidebar,
-                    presentation,
-                    transpose,
                     compare,
                     commit,
                     analysis,
@@ -764,8 +708,10 @@ impl ResultPanel {
         )
         .into_any_element();
 
-        // 【侧栏】左右分栏（DBeaver 结果面板形态）：普通视图 + 侧栏开着 → 三区。
-        // 对比模式已双栏，侧栏让位（四栏会把网格挤没，侧栏信息在双栏里都有）
+        // 【侧栏】左右分栏（DBeaver 结果面板形态）：普通视图 + 侧栏开着 → 竖条 +
+        // 列结构栏 + 主 pane + 右栏。对比模式已双栏，侧栏让位（四栏会把网格挤没，
+        // 侧栏信息在双栏里都有）。竖条常驻网格左缘（视图方式切换入口），列结构栏
+        // 在竖条右侧、可独立开合。
         if !self.compare_mode && (self.show_column_sidebar || self.show_value_sidebar) {
             let mut row = div()
                 .h_flex()
@@ -774,6 +720,7 @@ impl ResultPanel {
                 .h_full()
                 .min_h_0()
                 .debug_selector(|| "editor-result-sidebars".to_string());
+            row = row.child(self.render_vertical_bar(cx));
             if self.show_column_sidebar {
                 row = row.child(self.render_column_sidebar(cx));
             }
@@ -783,6 +730,19 @@ impl ResultPanel {
                 row = row.child(self.render_right_sidebar(cx));
             }
             return row.into_any_element();
+        }
+        // 无侧栏：竖条 + 主 pane
+        if !self.compare_mode {
+            return div()
+                .h_flex()
+                .items_stretch()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                .debug_selector(|| "editor-result-body".to_string())
+                .child(self.render_vertical_bar(cx))
+                .child(div().flex_1().min_w_0().h_full().child(result_pane))
+                .into_any_element();
         }
         // 【并排对比】对比模式双栏：左栏 = 主选中（上面组装好的主 pane），
         // 右栏 = 对比选中（自己的标签条 + 只读网格）。右栏数据由编辑器
@@ -837,11 +797,16 @@ impl ResultPanel {
             .debug_selector(|| "editor-result-compare-layout".to_string())
             .child(
                 div()
+                    .h_flex()
+                    .items_stretch()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .border_r(ui::HAIRLINE)
-                    .child(result_pane),
+                    .debug_selector(|| "editor-result-compare-main".to_string())
+                    // 对比模式竖条只挂主栏左侧：视图方式切换只作用于主栏，对比栏只读
+                    .child(self.render_vertical_bar(cx))
+                    .child(div().flex_1().min_w_0().h_full().child(result_pane)),
             )
             .child(
                 div()
@@ -1065,6 +1030,98 @@ impl ResultPanel {
     /// 交互 = **单击整行切换隐藏**（隐藏列整行标灰，点击恢复）。不摆图标按钮：
     /// 眼睛类图标不在 kit 图标表，整行点击 + 标灰是同一件事，少一层控件。
     /// 隐藏 / 显示走队列交回宿主（宿主 update 网格 + 面板），与其它工具栏动作一致。
+    /// 【左缘竖条】DBeaver 左缘独立窄条：网格 / 文本 / 记录三图标竖排。
+    ///
+    /// 状态口径（拍板「保留双轨」）：`Presentation{Grid,Text}` 与 `transposed` 仍是
+    /// 两条独立状态——网格 / 文本由 `SetPresentation` 显式目标值切换；记录（转置视图）
+    /// 由 `ToggleTranspose` 翻转，高亮跟随 `transposed`。转置激活时按钮下方跟上一行 /
+    /// 下一行导航（记录视图里翻记录用）。文本态下记录按钮禁用（文本没有记录语义）。
+    fn render_vertical_bar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let is_text = self.presentation == Presentation::Text;
+        let queue = self.queue.clone();
+        let grid_btn = Button::new("editor-result-bar-grid")
+            .ghost()
+            .small()
+            .icon(IconName::Table2)
+            .debug_selector(|| "editor-result-bar-grid".to_string())
+            .toggled(!self.transposed && !is_text)
+            .tooltip("网格视图")
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::SetPresentation(Presentation::Grid));
+            });
+        let queue = self.queue.clone();
+        let text_btn = Button::new("editor-result-bar-text")
+            .ghost()
+            .small()
+            .icon(IconName::FileText)
+            .debug_selector(|| "editor-result-bar-text".to_string())
+            .toggled(is_text)
+            .tooltip("文本视图")
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::SetPresentation(Presentation::Text));
+            });
+        let queue = self.queue.clone();
+        let record_btn = Button::new("editor-result-bar-record")
+            .ghost()
+            .small()
+            .icon(IconName::UserRound)
+            .debug_selector(|| "editor-result-bar-record".to_string())
+            .disabled(is_text)
+            .toggled(self.transposed)
+            .tooltip("记录视图（单行转置）")
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::ToggleTranspose);
+            });
+        // 记录视图激活时：竖条按钮下方跟上一行 / 下一行导航（与原工具栏转置组同功能，
+        // 只是位置从顶部迁到竖条——动作仍是队列里的 TransposePrev / Next）。
+        let record_nav = self.transposed.then(|| {
+            let queue = self.queue.clone();
+            let prev = Button::new("editor-result-bar-record-prev")
+                .ghost()
+                .small()
+                .icon(IconName::ChevronUp)
+                .debug_selector(|| "editor-result-bar-record-prev".to_string())
+                .tooltip("上一行")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::TransposePrev);
+                });
+            let queue = self.queue.clone();
+            let next = Button::new("editor-result-bar-record-next")
+                .ghost()
+                .small()
+                .icon(IconName::ChevronDown)
+                .debug_selector(|| "editor-result-bar-record-next".to_string())
+                .tooltip("下一行")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::TransposeNext);
+                });
+            div()
+                .v_flex()
+                .gap_1()
+                .items_center()
+                .child(prev)
+                .child(next)
+                .into_any_element()
+        });
+        div()
+            .w(rems(ui::RESULT_VERTICAL_BAR_WIDTH))
+            .h_full()
+            .flex_none()
+            .border_r(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-vertical-bar".to_string())
+            .v_flex()
+            .items_center()
+            .gap_1()
+            .pt_2()
+            .child(grid_btn)
+            .child(text_btn)
+            .child(record_btn)
+            .children(record_nav)
+            .into_any_element()
+    }
+
     fn render_column_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
@@ -1121,51 +1178,6 @@ impl ResultPanel {
                     .into_any_element()
             })
             .collect();
-        // 【侧栏左栏·顶部】显示方式（DBeaver 左栏第一行）：网格 / 文本。
-        // 与工具栏「文本」同状态；显式 SetPresentation——点「网格」就是回网格。
-        let queue = self.queue.clone();
-        let view_grid = Button::new("editor-result-sidebar-view-grid")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-result-sidebar-view-grid".to_string())
-            .toggled(self.presentation == Presentation::Grid)
-            .label("网格")
-            .on_click(move |_, _window, _app| {
-                queue.push(ResultRequest::SetPresentation(Presentation::Grid));
-            });
-        let queue = self.queue.clone();
-        let view_text = Button::new("editor-result-sidebar-view-text")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-result-sidebar-view-text".to_string())
-            .toggled(self.presentation == Presentation::Text)
-            .label("文本")
-            .on_click(move |_, _window, _app| {
-                queue.push(ResultRequest::SetPresentation(Presentation::Text));
-            });
-        let view_seg = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .child(view_grid)
-            .child(view_text);
-
-        // 【侧栏左栏】记录模式开关（DBeaver 左栏下方）：与工具栏转置同状态
-        // （单行记录视图 = 转置视图；只读，Row view 可编辑是已知差距）
-        let queue = self.queue.clone();
-        let record_mode = div()
-            .px_2()
-            .py_1()
-            .child(
-                Switch::new("editor-result-record-mode")
-                    .checked(self.transposed)
-                    .label("记录模式")
-                    .on_click(move |_, _window, _app| {
-                        queue.push(ResultRequest::ToggleTranspose);
-                    }),
-            );
 
         div()
             .w(rems(ui::RESULT_SIDEBAR_LEFT_WIDTH))
@@ -1174,8 +1186,6 @@ impl ResultPanel {
             .border_r(ui::HAIRLINE)
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-column-sidebar".to_string())
-            .child(view_seg)
-            .child(record_mode)
             .child(
                 div()
                     .px_2()
@@ -1190,16 +1200,17 @@ impl ResultPanel {
     }
 
     /// 【侧栏】右栏：DBeaver Data Editor 的右侧辅助区，四页签——
-    /// 值详情（数值查看器）/ 计算（列统计）/ 分组（本地 groupby）/ 元数据。
+    /// 值详情（数值查看器）/ 计算（列统计）/ 元数据 / 分组（顺序对齐 DBeaver）。
     ///
     /// 页签用 kit `TabBar`（不手搓）；切页走队列交宿主 `set_right_tab`。
-    /// 计算 / 分组是纯函数（`column_stats` / `group_by_count`，不引 polars——
-    /// 见 result-panel.md §8.8）；每次渲染按当前可见行现算（中小结果集可接受，
-    /// 大表本地聚合的缓存 / 下发 GROUP BY 是后续项，记在文档）。
+    /// 「引用」页留 backlog（见 result-panel.md §8.10）。计算 / 分组是纯函数
+    /// （`column_stats` / `group_by_count`，不引 polars——见 result-panel.md §8.8）；
+    /// 每次渲染按当前可见行现算（中小结果集可接受，大表本地聚合的缓存 / 下发
+    /// GROUP BY 是后续项，记在文档）。
     fn render_right_sidebar(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let queue = self.queue.clone();
-        let labels = ["值详情", "计算", "分组", "元数据"];
+        let labels = ["值详情", "计算", "元数据", "分组"];
         let children: Vec<Tab> = labels
             .iter()
             .map(|label| Tab::new().label(SharedString::from(*label)))
@@ -1215,9 +1226,24 @@ impl ResultPanel {
         let content = match self.right_tab {
             RightTab::Value => self.render_value_tab(cx),
             RightTab::Stats => self.render_stats_tab(cx),
-            RightTab::Group => self.render_group_tab(cx),
             RightTab::Metadata => self.render_metadata_tab(cx),
+            RightTab::Group => self.render_group_tab(cx),
         };
+        // 【页签关闭】非默认「值详情」页时，行尾给一个 ×：退回默认页（不收起右栏——
+        // 拍板口径：× 只退页，右栏开合仍由工具栏「值详情」开关控制）。
+        let close = (self.right_tab != RightTab::Value).then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-right-tab-close")
+                .ghost()
+                .small()
+                .icon(IconName::X)
+                .debug_selector(|| "editor-result-right-tab-close".to_string())
+                .tooltip("关闭页签，返回值详情")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::SetRightTab(RightTab::Value));
+                })
+                .into_any_element()
+        });
         div()
             .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
             .h_full()
@@ -1229,9 +1255,13 @@ impl ResultPanel {
                 div()
                     .h_flex()
                     .items_center()
+                    .gap_1()
                     .px_2()
                     .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
-                    .child(tab_bar),
+                    .flex_1()
+                    .min_w_0()
+                    .child(div().flex_1().min_w_0().child(tab_bar))
+                    .children(close),
             )
             .child(content)
             .into_any_element()
@@ -1677,12 +1707,12 @@ impl ResultPanel {
 }
 
 /// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
-/// Value=0 / Stats=1 / Group=2 / Metadata=3）
+/// Value=0 / Stats=1 / Metadata=2 / Group=3，对齐 DBeaver 页签顺序）
 fn right_tab_from_index(index: usize) -> RightTab {
     match index {
         1 => RightTab::Stats,
-        2 => RightTab::Group,
-        3 => RightTab::Metadata,
+        2 => RightTab::Metadata,
+        3 => RightTab::Group,
         _ => RightTab::Value,
     }
 }

@@ -2635,10 +2635,6 @@ pub struct ResultControls {
     pub column_sidebar: Option<AnyElement>,
     /// 【侧栏】右栏（值详情）开关（面板构造：翻转 `show_value_sidebar`）
     pub value_sidebar: Option<AnyElement>,
-    /// 【呈现】显示方式切换（网格 / 文本；DBeaver 左栏「显示方式」，工具栏同给一个入口）
-    pub presentation: Option<AnyElement>,
-    /// 【P2-4】转置视图开关 +（激活时）上一行 / 下一行导航（单行转置，DBeaver 式）
-    pub transpose: Option<AnyElement>,
     /// 【并排对比】对比模式开关（两份以上结果时才给；开启后结果区双栏并排）
     pub compare: Option<AnyElement>,
     /// 【T2a-7】批量提交/回滚对（有待提交变更才给；参考 DBeaver 的提交/回滚对）
@@ -2803,12 +2799,11 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · ⤢ 转置 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列结构 · 值详情 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                        // （网格 / 文本 / 记录视图切换已迁到左缘竖条，不在顶部工具栏）
                         .children(controls.filter)
                         .children(controls.column_sidebar)
                         .children(controls.value_sidebar)
-                        .children(controls.presentation)
-                        .children(controls.transpose)
                         .children(controls.compare)
                         .children(controls.commit)
                         .children(controls.analysis)

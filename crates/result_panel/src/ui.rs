@@ -83,6 +83,10 @@ pub const RESULT_MIN_HEIGHT: f32 = 7.0;
 /// 再长就滚动——值查看器要的是「原样看全」，不是截断）
 pub const VALUE_PREVIEW_MAX_HEIGHT: f32 = 22.0;
 
+/// 结果面板**左缘竖条**宽（2.25rem = 36px，对齐 DBeaver 左缘独立窄条）：
+/// 网格 / 文本 / 记录三图标竖排互斥；常驻网格左缘，不与列结构栏挤在同一栏
+pub const RESULT_VERTICAL_BAR_WIDTH: f32 = 2.25;
+
 /// 结果面板**左栏（列结构）**宽（10rem = 160px）：列名 + 类型标签 + 隐藏切换，
 /// 窄栏放得下列名就够；比这再宽会挤网格。
 pub const RESULT_SIDEBAR_LEFT_WIDTH: f32 = 10.0;

@@ -83,7 +83,8 @@ pub enum Presentation {
     Text,
 }
 
-/// 结果面板右栏的标签页（DBeaver Data Editor 右侧辅助区）
+/// 结果面板右栏的标签页（DBeaver Data Editor 右侧辅助区；顺序对齐 DBeaver：
+/// 数值 → 计算 → 元数据 → 分组；「引用」页留 backlog，见 result-panel.md §8.10）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RightTab {
     /// 数值查看器：选中格完整值（默认）
@@ -91,10 +92,10 @@ pub enum RightTab {
     Value,
     /// 计算：选中列的 count / null / min / max / avg / sum（纯函数，不引 polars）
     Stats,
-    /// 分组：按一列本地 groupby 计数（纯函数；DBeaver 大表口径是下发 GROUP BY）
-    Group,
     /// 元数据：列名 / 类型 / 来源表 / 注释 / 可空 / 默认值
     Metadata,
+    /// 分组：按一列本地 groupby 计数（纯函数；DBeaver 大表口径是下发 GROUP BY）
+    Group,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）
