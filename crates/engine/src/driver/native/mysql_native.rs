@@ -9,6 +9,7 @@ use arrow::array::{ArrayRef, BinaryArray, BooleanArray, Float64Array, Int64Array
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
 
@@ -204,6 +205,14 @@ impl MySqlNativeDatabase {
 // SQL 工具函数
 // ============================================================================
 
+/// 查询级超时：15 秒无响应即熔断（任务层 30s 之外的驱动层早熔断，对齐 `mysql.rs` /
+/// `postgres.rs` 既有口径；B-2-2 方案 C 补齐 mysql_async 池路径缺口）。
+///
+/// 池连接超时后由 recycler 自动识别脏连接清理（排空未读完结果包 / 回滚事务，清理失败即
+/// 丢弃重建），业务侧不手动 reset、不做连接置空——与 sqlx 单连接复用路径的 `*guard = None`
+/// 销毁重建语义不同。
+const MYSQL_NATIVE_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// 只读语句判定：口径表在 [`crate::driver::utils::is_read_only_sql`]（六个驱动共用一份）。
 fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::MySql)
@@ -222,6 +231,17 @@ fn mysql_native_query_error(sql: &str, error: &mysql_async::Error) -> CoreError 
     let message = error.to_string();
     let location = crate::driver::error_location::mysql(&message);
     CoreError::database(DatabaseError::query(sql, message).with_location(location))
+}
+
+/// 查询超时错误：池路径不销毁重建连接，文案不带「连接已重建」，与 sqlx 单连接复用路径区分。
+fn mysql_native_timeout_error(sql: &str) -> CoreError {
+    CoreError::database(DatabaseError::query(
+        sql.to_string(),
+        format!(
+            "查询超时（{} 秒无响应），请重试",
+            MYSQL_NATIVE_QUERY_TIMEOUT.as_secs()
+        ),
+    ))
 }
 
 async fn execute_writing(
@@ -477,21 +497,29 @@ impl Database for MySqlNativeDatabase {
             return execute_writing(&mut conn, sql, mysql_async::Params::Empty).await;
         }
 
-        let mut result = conn
-            .query_iter(sql)
-            .await
-            .map_err(|e| mysql_native_query_error(sql, &e))?;
-
-        let columns: Vec<String> = result
-            .columns_ref()
-            .iter()
-            .map(|c| c.name_str().to_string())
-            .collect();
-
-        let rows: Vec<mysql_async::Row> = result
-            .collect()
-            .await
-            .map_err(|e| mysql_native_query_error(sql, &e))?;
+        // 查询级 15s 超时：包「发查询 + 拉完全部行」整段；取连接等待与写语句在超时外，
+        // 对齐 `mysql.rs:333-344` 口径。超时后 conn 局部 drop，由池 recycler 自动清理脏连接。
+        let (columns, rows) = tokio::time::timeout(
+            MYSQL_NATIVE_QUERY_TIMEOUT,
+            async {
+                let mut result = conn
+                    .query_iter(sql)
+                    .await
+                    .map_err(|e| mysql_native_query_error(sql, &e))?;
+                let columns: Vec<String> = result
+                    .columns_ref()
+                    .iter()
+                    .map(|c| c.name_str().to_string())
+                    .collect();
+                let rows: Vec<mysql_async::Row> = result
+                    .collect()
+                    .await
+                    .map_err(|e| mysql_native_query_error(sql, &e))?;
+                Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
+            },
+        )
+        .await
+        .map_err(|_| mysql_native_timeout_error(sql))??;
 
         build_query_result(&columns, &rows, is_read_only)
     }
@@ -535,21 +563,28 @@ impl Database for MySqlNativeDatabase {
 
         let params_ref: Vec<&mysql_async::Value> = mysql_params.iter().collect();
 
-        let mut result = conn
-            .exec_iter(sql, params_ref)
-            .await
-            .map_err(|e| mysql_native_query_error(sql, &e))?;
-
-        let columns: Vec<String> = result
-            .columns_ref()
-            .iter()
-            .map(|c| c.name_str().to_string())
-            .collect();
-
-        let rows: Vec<mysql_async::Row> = result
-            .collect()
-            .await
-            .map_err(|e| mysql_native_query_error(sql, &e))?;
+        // 查询级 15s 超时：包「发查询 + 拉完全部行」整段，口径同 `query`。
+        let (columns, rows) = tokio::time::timeout(
+            MYSQL_NATIVE_QUERY_TIMEOUT,
+            async {
+                let mut result = conn
+                    .exec_iter(sql, params_ref)
+                    .await
+                    .map_err(|e| mysql_native_query_error(sql, &e))?;
+                let columns: Vec<String> = result
+                    .columns_ref()
+                    .iter()
+                    .map(|c| c.name_str().to_string())
+                    .collect();
+                let rows: Vec<mysql_async::Row> = result
+                    .collect()
+                    .await
+                    .map_err(|e| mysql_native_query_error(sql, &e))?;
+                Ok::<(Vec<String>, Vec<mysql_async::Row>), CoreError>((columns, rows))
+            },
+        )
+        .await
+        .map_err(|_| mysql_native_timeout_error(sql))??;
 
         build_query_result(&columns, &rows, is_read_only)
     }
@@ -608,6 +643,11 @@ impl Database for MySqlNativeDatabase {
                     position: None,
                     location: None,
                 }))
+            }
+            // 查询级 15s 超时兜底：与取消分支并列竞争，先到先胜出；查询完成后 sleep 被 drop，
+            // 无副作用。超时错误与 `Query cancelled` 分属两类，不混类。
+            _ = tokio::time::sleep(MYSQL_NATIVE_QUERY_TIMEOUT) => {
+                Err(mysql_native_timeout_error(&sql_for_cancel))
             }
         }
     }

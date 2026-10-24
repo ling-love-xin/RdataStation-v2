@@ -12,6 +12,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
 
@@ -199,6 +200,13 @@ fn is_read_only_sql(sql: &str) -> bool {
     shared_is_read_only_sql(sql, SqlFlavor::PostgreSql)
 }
 
+/// 查询级超时：15 秒无响应即熔断（任务层 30s 之外的驱动层早熔断，对齐 `postgres.rs`
+/// 既有口径；B-2-2 方案 C 补齐 tokio-postgres 单连接路径缺口）。
+///
+/// 超时打断 `Client::query` 后，后台连接任务会把本查询响应排空到 `ReadyForQuery`，协议状态
+/// 保持一致、Client 可复用——**不置空、不重建**，与 sqlx 池变体超时销毁重建语义不同。
+const PG_NATIVE_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// 写语句（不返回行）走 `Client::execute`，拿**真实影响行数**（B5 / P0.6）
 ///
 /// `execute` 会丢弃结果集，只回报 `CommandComplete` 里的行数；
@@ -246,6 +254,17 @@ fn query_error(sql: &str, error: tokio_postgres::Error) -> CoreError {
         mapped = mapped.with_position(offset);
     }
     CoreError::database(mapped)
+}
+
+/// 查询超时错误：单连接路径不重建 Client，文案不带「连接已重建」，与 sqlx 池变体区分。
+fn postgres_native_timeout_error(sql: &str) -> CoreError {
+    CoreError::database(DatabaseError::query(
+        sql.to_string(),
+        format!(
+            "查询超时（{} 秒无响应），请重试",
+            PG_NATIVE_QUERY_TIMEOUT.as_secs()
+        ),
+    ))
 }
 
 // ============================================================================
@@ -579,9 +598,11 @@ impl Database for PostgresNativeDatabase {
             return execute_writing(&client, sql).await;
         }
 
-        let rows = client
-            .query(sql, &[])
+        // 查询级 15s 超时：包主查询；锁等待、写语句与空结果集 describe 二次内省在超时外，
+        // 对齐 `postgres.rs:368-380` 口径。超时后 Client 可复用，不置空不重建。
+        let rows = tokio::time::timeout(PG_NATIVE_QUERY_TIMEOUT, client.query(sql, &[]))
             .await
+            .map_err(|_| postgres_native_timeout_error(sql))?
             .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
@@ -640,9 +661,10 @@ impl Database for PostgresNativeDatabase {
             return Ok(affected_rows_result(affected));
         }
 
-        let rows = client
-            .query(sql, &param_refs)
+        // 查询级 15s 超时：包主查询，口径同 `query`。
+        let rows = tokio::time::timeout(PG_NATIVE_QUERY_TIMEOUT, client.query(sql, &param_refs))
             .await
+            .map_err(|_| postgres_native_timeout_error(sql))?
             .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
@@ -715,6 +737,11 @@ impl Database for PostgresNativeDatabase {
                     position: None,
                     location: None,
                 }))
+            }
+            // 查询级 15s 超时兜底：与取消分支并列竞争，先到先胜出；查询完成后 sleep 被 drop，
+            // 无副作用。超时错误与 `Query cancelled` 分属两类，不混类。
+            _ = tokio::time::sleep(PG_NATIVE_QUERY_TIMEOUT) => {
+                Err(postgres_native_timeout_error(&sql_for_cancel))
             }
         }
     }
