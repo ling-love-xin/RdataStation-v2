@@ -339,6 +339,35 @@ impl NavHost for WorkbenchNavHost {
         crate::components::tag_manager_dialog::open_tag_manager_dialog(window, cx, &self.shared);
     }
 
+    fn open_visible_databases_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App) {
+        // 弹框候选清单按「当前项目根」定位元数据缓存（None = 全局连接缓存）。
+        let root = self.shared.project_root().map(|p| p.to_string_lossy().to_string());
+        let nav_view = self
+            .shared
+            .nav_panel
+            .borrow()
+            .clone()
+            .and_then(|w| w.upgrade())
+            .map(|e| e.downgrade());
+        let conn_name = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| conn_id.to_string());
+        crate::components::visible_databases_dialog::open_visible_databases_dialog(
+            conn_id,
+            &conn_name,
+            root.as_deref(),
+            nav_view,
+            window,
+            cx,
+            &self.shared,
+        );
+    }
+
     fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
         self.shared.open_right_panel(panel, cx);
     }

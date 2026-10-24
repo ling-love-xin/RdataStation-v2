@@ -1831,4 +1831,13 @@ impl NavView {
         self.host.notice("已刷新全部元数据".to_string(), cx);
         cx.notify();
     }
+
+    /// 可见库白名单变更后（S3-①b 弹框确定）：重载该连接的整棵子树。
+    ///
+    /// 白名单变化影响 catalog / schema 两级展示，必须清掉已加载子节点重新按
+    /// 新快照过滤；连接行 key 就是 `conn_id`（树顶层以连接为根）。
+    pub fn refresh_connection_after_filter(&self, conn_id: &str, cx: &mut Context<Self>) {
+        self.refresh_node(conn_id, conn_id, Some(NavPath::Connection), cx);
+        cx.notify();
+    }
 }

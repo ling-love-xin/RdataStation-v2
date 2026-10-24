@@ -477,6 +477,48 @@ impl NavigatorService {
             .collect())
     }
 
+    /// 可见库管理弹框（S3-①b）用：**全量** catalog 清单（不过滤系统对象）。
+    ///
+    /// 与 [`Self::load_catalogs`] 的区别只在于不应用 `nav_is_system_catalog` 过滤——
+    /// 弹框要列出全部库供勾选（含系统库，由「显示系统对象」开关控制展示）。
+    /// 同样走 L1 → 实时内省（Catalog 不在 L2 缓存范围），有缓存时零 I/O。
+    pub async fn list_all_catalogs(&self, conn_id: &str) -> Result<Vec<String>, CoreError> {
+        let catalogs = match self.l1_read(|c| c.get_catalogs(conn_id)) {
+            Some(names) => names,
+            None => {
+                let live = self.metadata.list_catalogs(conn_id).await?;
+                if !live.is_empty() {
+                    let backfill = live.clone();
+                    self.l1_write(move |c| c.set_catalogs(conn_id, backfill));
+                }
+                live
+            }
+        };
+        let names = if catalogs.is_empty() {
+            vec![FALLBACK_CONTAINER.to_string()]
+        } else {
+            catalogs
+        };
+        Ok(names)
+    }
+
+    /// 可见库管理弹框（S3-①b）用：某 catalog 下**全量** schema 清单（不过滤系统 schema）。
+    ///
+    /// 与 [`Self::load_schemas`] 的区别只在于不应用 `nav_is_system_schema` 过滤。
+    pub async fn list_all_schemas(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+    ) -> Result<Vec<String>, CoreError> {
+        let names = self.schema_names(conn_id, catalog).await?;
+        let names = if names.is_empty() {
+            vec![FALLBACK_CONTAINER.to_string()]
+        } else {
+            names
+        };
+        Ok(names)
+    }
+
     /// schema 名称（cache-aside：非刷新时命中缓存直接返回；未命中内省并回写）。
     async fn schema_names(&self, conn_id: &str, catalog: &str) -> Result<Vec<String>, CoreError> {
         // L1

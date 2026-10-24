@@ -203,6 +203,10 @@ pub const GAP_MD: f32 = 0.5;
 pub const GAP_LG: f32 = 0.75;
 /// 面板内容内边距（0.5rem = 8px）
 pub const PANEL_PADDING: f32 = 0.5;
+/// 可见库管理弹框：候选列表最大高度（18.75rem = 300px，超过滚动）
+pub const VIS_DIALOG_LIST_MAX_H: f32 = 18.75;
+/// 可见库管理弹框：schema 行相对 catalog 行的缩进（1.25rem = 20px）
+pub const VIS_DIALOG_SCHEMA_INDENT: f32 = 1.25;
 
 // ===== 固定描边（不随字号缩放） =====
 

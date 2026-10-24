@@ -614,6 +614,7 @@ fn shared_fields_are_whitelisted() {
         "mock_details",
         "mock_panel",
         "nav_cache_epoch",
+        "nav_panel",
         "notice",
         "open_mock_detail",
         "open_property",

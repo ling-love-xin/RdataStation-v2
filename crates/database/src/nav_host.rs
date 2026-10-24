@@ -241,6 +241,11 @@ pub trait NavHost: 'static {
     /// 洞察侧负责取样成临时表并出画像（架构 D58）。
     fn open_insight_table(&self, source: ObjectRef, cx: &mut App);
 
+    /// 打开「数据库可见性」对话框（S3-①b）：勾选该连接树显示的库 / schema。
+    ///
+    /// 宿主负责拿 `NavView` 实体（确定后重载该连接）与项目根（元数据缓存定位）。
+    fn open_visible_databases_dialog(&self, conn_id: &str, window: &mut Window, cx: &mut App);
+
     /// 【M8】在洞察面板里看这个 Schema 的**结构**（导航右键「结构洞察」）。
     ///
     /// 期望 `kind` = `Schema`。与上一条的区别：那个看**数据**（取样 → 表探查），

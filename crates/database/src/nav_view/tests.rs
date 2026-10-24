@@ -160,6 +160,7 @@ mod stub_host {
         fn open_cache_dialog(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_group_manager(&self, _window: &mut Window, _cx: &mut App) {}
         fn open_tag_manager(&self, _window: &mut Window, _cx: &mut App) {}
+        fn open_visible_databases_dialog(&self, _conn_id: &str, _window: &mut Window, _cx: &mut App) {}
         fn saved_views(&self, _cx: &App) -> Vec<SavedViewMeta> {
             Vec::new()
         }

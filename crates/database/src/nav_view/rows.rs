@@ -1600,7 +1600,7 @@ impl NavView {
                         });
                     }
                 })
-                // 右键菜单（连接节点）：连接/断开、编辑、查看属性、分组/标签、复制、刷新。
+                // 右键菜单（连接节点）：连接/断开、编辑、数据库可见性、查看属性、分组/标签、复制、刷新。
                 .context_menu({
                     let entity = cx.entity();
                     let host = self.host.clone();
@@ -1624,6 +1624,8 @@ impl NavView {
                         let root_connect = root.clone();
                         let e_edit = entity.clone();
                         let cid_edit = conn_id.clone();
+                        let host_vis = host.clone();
+                        let cid_vis = conn_id.clone();
                         let e_prop = entity.clone();
                         let prop_own = prop.clone();
                         let label_prop = conn_name.clone();
@@ -1675,6 +1677,13 @@ impl NavView {
                                     this.host.edit_connection(&cid, window, cx);
                                 });
                             }))
+                            .item(
+                                PopupMenuItem::new("数据库可见性…").on_click(move |_, window, app| {
+                                    let cid = cid_vis.clone();
+                                    let host_vis = host_vis.clone();
+                                    host_vis.open_visible_databases_dialog(&cid, window, app);
+                                }),
+                            )
                             .separator()
                             .item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
                                 let prop = prop_own.clone();

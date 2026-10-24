@@ -243,6 +243,9 @@ pub struct Shared {
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
     pub nav_cache_epoch: Rc<Cell<u64>>,
+    /// 导航面板实体弱引用（S3-①b 弹框确定后重载该连接树用；`SidebarPanel::new`
+    /// 装配完成后写入，弹框打开前保证非空）。
+    pub nav_panel: Rc<RefCell<Option<gpui::WeakEntity<database::nav_view::NavView>>>>,
     /// 编辑区命令端口（`None` = 装配未完成，调用方需容忍空端口）。
     pub editor_bridge: Rc<RefCell<Option<EditorBridge>>>,
     /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
@@ -373,6 +376,7 @@ impl Shared {
             connections: Rc::new(RefCell::new(connections)),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
+            nav_panel: Rc::new(RefCell::new(None)),
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),

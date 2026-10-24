@@ -91,6 +91,9 @@ impl SidebarPanel {
             shared.clone(),
         ));
         let nav_panel = cx.new(|cx| NavView::new(nav_host, cx));
+        // S3-①b：弹框（可见库管理）确定后要重载导航树，经 Shared 拿弱引用——
+        // 弹框由 NavHost trait 打开，宿主侧只有 Shared 可共享实体。
+        *shared.nav_panel.borrow_mut() = Some(nav_panel.downgrade());
         // M5：草稿箱面板实体（同上；重活走 `scratchpad::jobs` 的工作线程）。
         // 编辑器共享状态只用于脏点（编辑器里未保存修改 → 草稿树上的点）。
         let scratchpad_host = crate::components::scratchpad_host::build_host(&shared, editor);

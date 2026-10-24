@@ -454,6 +454,41 @@ fn service(project_root: Option<String>) -> crate::navigator_service::NavigatorS
     )
 }
 
+/// 可见库管理弹框（S3-①b）的候选清单：`catalog → schemas` 两级全量（不过滤系统对象）。
+///
+/// 同步 `block_on` 查询（对齐 `run_job` 的桥接运行时模式）：弹框打开是**模态事件**，
+/// 短暂阻塞可接受；有 L1/L2 缓存时瞬时返回，首次（连接未展开过）会内省一次。
+/// 返回空 = 查询失败（提示由调用方展示，弹框显示空列表而不是卡死）。
+pub fn picker_catalog_schemas(
+    conn_id: &str,
+    project_root: Option<&str>,
+) -> Vec<(String, Vec<String>)> {
+    let svc = service(project_root.map(|s| s.to_string()));
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return Vec::new(),
+    };
+    let outcome = rt.block_on(async {
+        let catalogs = tokio::time::timeout(JOB_TIMEOUT, svc.list_all_catalogs(conn_id)).await;
+        let catalogs = match catalogs {
+            Ok(Ok(names)) => names,
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::with_capacity(catalogs.len());
+        for catalog in catalogs {
+            let schemas =
+                tokio::time::timeout(JOB_TIMEOUT, svc.list_all_schemas(conn_id, &catalog)).await;
+            let schemas = match schemas {
+                Ok(Ok(names)) => names,
+                _ => Vec::new(),
+            };
+            out.push((catalog, schemas));
+        }
+        out
+    });
+    outcome
+}
+
 /// 起一个 worker 线程（`Shared` 初始化与「重启」共用）。
 ///
 /// 线程退出时（正常返回 / panic）由 `Drop` 把存活标志落下 —— 下一次投递会把它重启。
