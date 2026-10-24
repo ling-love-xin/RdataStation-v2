@@ -467,11 +467,15 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 
 ### 16.5 已知限制 / 下一步（相对 15.6 的新增项）
 
-1. `counts` 已由调用方填充（2026-10-09）：连接级（`connected`/`server_version`/`url` 来自
-   连接元信息）+ provider 声明的懒加载查询（`extra_queries`：PG 表级 `row_estimate`/`size`，
-   取首行首列入洞察指标卡）；其余驱动 / 对象的统计随内省逐步接入；
+1. `counts` 已由调用方填充（2026-10-09；**2026-10-24 连接对象扩 P0-3**）：连接级
+   （`connected`/`server_version`/`version`/`url`/`description`/`auth_method`/`auth_ref`/
+   `env_ref`/`network_ref` 来自 `ConnectionInfo`）+ provider 声明的懒加载查询
+   （`extra_queries`：PG 表级 `row_estimate`/`size`，取首行首列入洞察指标卡）；
+   其余驱动 / 对象的统计随内省逐步接入；
 2. 连接级属性编辑（描述/管理员/连接限制/允许连接）待 settings 接入——**当前渲染为只读占位**，
    值标注「待接入」（避免"可点但提交报错"），编辑链路 `apply_property_edit` 已按类型 id 分派；
+   连接对象常规行已接 `ConnectionInfo` 真值（描述 / 认证方法+引用 ID / 环境引用 / 网络引用 /
+   连接串，引用字段只读，2026-10-24 P0-3）；
 3. `PropertySection`（原 `PropertyCategory`）的「左栏子标签 + 右栏内容」DBeaver 形态已落地
    （多分区时左栏竖排子标签 + 右栏表格；单分区退化为直接堆叠）；
 4. **Oracle 暂不接入**（驱动内省未就绪；壳 provider 已移除，后续按「注册 provider」机制接入）；

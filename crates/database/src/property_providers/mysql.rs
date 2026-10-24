@@ -2,7 +2,7 @@
 //!
 //! 驱动特异部分：属性行 + 类别掩码；列/索引/约束/DDL/数据取数走通用骨架。
 
-use super::{connection_base_overview, editable_row, row, stats_cards};
+use super::{connection_base_overview, connection_base_rows, editable_row, row, stats_cards};
 use property::{
     ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
@@ -22,17 +22,12 @@ impl PropertyProvider for MysqlConnectionProvider {
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
-        vec![
-            row("名称", input.conn_label),
-            row("数据库类型", input.db_type.unwrap_or("MySQL")),
-            row("归属域", &input.target.source),
-            row("驱动", "MySQL"),
-            row("版本", input.count("version").unwrap_or("-")),
-            row("字符集", input.count("charset").unwrap_or("utf8mb4")),
-            row("校对规则", input.count("collation").unwrap_or("utf8mb4_0900_ai_ci")),
-            editable_row("Mysql.sql_mode", "SQL 模式", "-",
-                property::PropertyValueKind::Text, Vec::new()),
-        ]
+        let mut rows = connection_base_rows(input, "MySQL");
+        rows.push(row("字符集", input.count("charset").unwrap_or("utf8mb4")));
+        rows.push(row("校对规则", input.count("collation").unwrap_or("utf8mb4_0900_ai_ci")));
+        rows.push(editable_row("Mysql.sql_mode", "SQL 模式", "-",
+            property::PropertyValueKind::Text, Vec::new()));
+        rows
     }
 
     fn overview(&self, input: &ProviderInput) -> ObjectOverview {

@@ -2,7 +2,7 @@
 //!
 //! 与 SQLite 同族（文件库），差异：版本 / 文件路径 由调用方 counts 填充。
 
-use super::{connection_base_overview, row, stats_cards};
+use super::{connection_base_overview, connection_base_rows, row, stats_cards};
 use property::{
     ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
@@ -22,13 +22,7 @@ impl PropertyProvider for DuckDbConnectionProvider {
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
-        vec![
-            row("名称", input.conn_label),
-            row("数据库类型", input.db_type.unwrap_or("DuckDB")),
-            row("归属域", &input.target.source),
-            row("驱动", "DuckDB"),
-            row("版本", input.count("version").unwrap_or("-")),
-        ]
+        connection_base_rows(input, "DuckDB")
     }
 
     fn overview(&self, input: &ProviderInput) -> ObjectOverview {

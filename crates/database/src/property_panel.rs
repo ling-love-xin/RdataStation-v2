@@ -223,8 +223,10 @@ pub async fn load_properties(
     let provider =
         global_registry().provider(type_id.unwrap_or(driver), ref_.kind);
 
-    // 调用方统计（洞察指标）：连接元信息（在线状态 / 服务端版本 / URL）
-    // + provider 声明的懒加载查询（行估计 / 表大小等，SQL 由 provider 按方言生成）。
+    // 调用方统计（洞察指标）：连接元信息（在线状态 / 服务端版本 / URL / 描述 /
+    // 认证·环境·网络引用） + provider 声明的懒加载查询（行估计 / 表大小等）。
+    // 连接对象 provider 从 `counts` 组装常规 + 引用行（引用显示来源 ID 且只读，
+    // 2026-10-24 连接对象属性组装 P0-3）；`version` 供 duckdb/mysql 连接行读。
     let mut counts: Vec<(&str, String)> = Vec::new();
     if let Some(info) = metadata
         .manager()
@@ -233,9 +235,35 @@ pub async fn load_properties(
     {
         counts.push(("connected", "true".to_string()));
         if let Some(v) = info.server_version {
-            counts.push(("server_version", v));
+            counts.push(("server_version", v.clone()));
+            counts.push(("version", v));
         }
         counts.push(("url", info.url));
+        if let Some(v) = info.description {
+            if !v.is_empty() {
+                counts.push(("description", v));
+            }
+        }
+        if let Some(v) = info.auth_method {
+            if !v.is_empty() {
+                counts.push(("auth_method", v));
+            }
+        }
+        if let Some(v) = info.auth_config_id {
+            if !v.is_empty() {
+                counts.push(("auth_ref", v));
+            }
+        }
+        if let Some(v) = info.environment_id {
+            if !v.is_empty() {
+                counts.push(("env_ref", v));
+            }
+        }
+        if let Some(v) = info.network_config_id {
+            if !v.is_empty() {
+                counts.push(("network_ref", v));
+            }
+        }
     }
     // Select 候选（骨架执行 provider 的补充查询时按行收集首列全量）。
     let mut candidates: Vec<(&str, Vec<String>)> = Vec::new();

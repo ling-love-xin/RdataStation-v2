@@ -73,7 +73,12 @@ pub(crate) fn qualified_name(t: &PropertyTargetRef) -> String {
     crate::sql_gen::qualified_name(t.catalog.as_deref(), t.schema.as_deref(), &t.name)
 }
 
-/// 基础连接信息行（各驱动通用：名称 / 数据库类型 / 归属域 / 驱动）。
+/// 基础连接信息行（各驱动通用，2026-10-24 起接真值）：
+/// 名称 / 数据库类型 / 归属域 / 驱动 + 调用方 counts 带值才加的
+/// 版本 / 文件路径 / 连接串 / 描述 / 认证（方法 + 引用 ID，只读）/ 环境引用 / 网络引用。
+///
+/// 引用字段语义（对齐 DBeaver 连接属性）：显示来源 ID 且只读——`auth_ref` / `env_ref` /
+/// `network_ref` 由 `load_properties` 从 `ConnectionInfo` 填入（认证/环境/网络三管理器引用）。
 pub(crate) fn connection_base_rows(
     input: &ProviderInput,
     driver_label: &str,
@@ -86,6 +91,46 @@ pub(crate) fn connection_base_rows(
     }
     rows.push(row("归属域", &input.target.source));
     rows.push(row("驱动", driver_label));
+    if let Some(v) = input.count("version") {
+        if !v.is_empty() {
+            rows.push(row("版本", v));
+        }
+    }
+    if let Some(v) = input.count("path") {
+        if !v.is_empty() {
+            rows.push(row("文件路径", v));
+        }
+    }
+    if let Some(v) = input.count("url") {
+        if !v.is_empty() {
+            rows.push(row("连接串", v));
+        }
+    }
+    if let Some(v) = input.count("description") {
+        if !v.is_empty() {
+            rows.push(row("描述", v));
+        }
+    }
+    if let Some(v) = input.count("auth_method") {
+        if !v.is_empty() {
+            rows.push(row("认证", v));
+            if let Some(r) = input.count("auth_ref") {
+                if !r.is_empty() {
+                    rows.push(row("认证引用", r));
+                }
+            }
+        }
+    }
+    if let Some(v) = input.count("env_ref") {
+        if !v.is_empty() {
+            rows.push(row("环境", v));
+        }
+    }
+    if let Some(v) = input.count("network_ref") {
+        if !v.is_empty() {
+            rows.push(row("网络", v));
+        }
+    }
     rows
 }
 

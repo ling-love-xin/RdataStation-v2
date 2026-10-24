@@ -59,7 +59,6 @@ impl PropertyProvider for PgConnectionProvider {
         let mut rows = connection_base_rows(input, "PostgreSQL");
         // 以下为 DBeaver PostgreDatabase 可编辑配置行；真值来自连接配置。
         // settings 接入前渲染为只读占位（值带「待接入」标注，避免"可点但提交报错"）。
-        rows.push(row("描述", "待接入"));
         rows.push(row("数据库管理员", "待接入"));
         rows.push(row("模板", "template1"));
         rows.push(row("默认表空间", "pg_default"));
@@ -595,22 +594,42 @@ mod tests {
         }
     }
 
-    /// 连接 provider：DBeaver 可编辑项在 settings 接入前渲染为只读占位（值带「待接入」）。
+    /// 连接 provider：DBeaver 可编辑项在 settings 接入前渲染为只读占位（值带「待接入」）；
+    /// 基础行接 `ConnectionInfo` 真值（描述 / 认证 / 环境 / 网络 / 连接串，2026-10-24 P0-3）。
     #[test]
     fn connection_provider_rows_match_dbeaver_shape() {
         let t = target(PropertyKind::Connection, None);
-        let rows = PgConnectionProvider.property_defs(&input(&t, &[], None));
+        let counts = [
+            ("url", "postgres://localhost:5432/mydb".to_string()),
+            ("description", "开发库".to_string()),
+            ("auth_method", "password".to_string()),
+            ("auth_ref", "auth-1".to_string()),
+            ("env_ref", "env-1".to_string()),
+            ("network_ref", "net-1".to_string()),
+        ];
+        let rows = PgConnectionProvider.property_defs(&input(&t, &counts, None));
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
-        for want in ["名称", "驱动", "描述", "数据库管理员", "连接限制", "允许连接"] {
+        for want in [
+            "名称", "驱动", "连接串", "描述", "认证", "认证引用", "环境", "网络",
+            "数据库管理员", "连接限制", "允许连接",
+        ] {
             assert!(labels.contains(&want), "缺 {want}: {labels:?}");
         }
-        // settings 接入前：配置行只读占位（不可点编辑），值标注「待接入」
+        // 基础行接真值；引用字段显示来源 ID（只读，见 `row` 构造）
+        let val = |label: &str| rows.iter().find(|r| r.label == label).map(|r| r.value.as_str());
+        assert_eq!(val("连接串"), Some("postgres://localhost:5432/mydb"));
+        assert_eq!(val("描述"), Some("开发库"));
+        assert_eq!(val("认证"), Some("password"));
+        assert_eq!(val("认证引用"), Some("auth-1"));
+        assert_eq!(val("环境"), Some("env-1"));
+        assert_eq!(val("网络"), Some("net-1"));
+        // settings 接入前：配置行只读占位（值标注「待接入」）
         let pending: Vec<&str> = rows
             .iter()
             .filter(|r| r.value == "待接入")
             .map(|r| r.label.as_str())
             .collect();
-        for want in ["描述", "数据库管理员", "连接限制", "允许连接"] {
+        for want in ["数据库管理员", "连接限制", "允许连接"] {
             assert!(pending.contains(&want), "缺待接入行 {want}: {pending:?}");
         }
         let editable: Vec<&str> = rows.iter().filter(|r| r.editable).map(|r| r.id.as_str()).collect();

@@ -2,7 +2,7 @@
 //!
 //! 驱动特异部分最小化：属性行 + 类别掩码；列/索引/约束/DDL/数据取数走通用骨架。
 
-use super::{connection_base_overview, editable_row, row, stats_cards};
+use super::{connection_base_overview, connection_base_rows, editable_row, row, stats_cards};
 use property::{
     ObjectOverview, OverviewStatus, PropertySection, PropertyKind, PropertyProvider,
     PropertyRow, ProviderInput, ProviderRegistry,
@@ -23,14 +23,10 @@ impl PropertyProvider for SqliteConnectionProvider {
     fn kind(&self) -> PropertyKind { PropertyKind::Connection }
 
     fn property_defs(&self, input: &ProviderInput) -> Vec<PropertyRow> {
-        vec![
-            row("名称", input.conn_label),
-            row("数据库类型", input.db_type.unwrap_or("SQLite")),
-            row("归属域", &input.target.source),
-            row("驱动", "SQLite"),
-            editable_row("Sqlite.read_only", "只读", "false",
-                property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()]),
-        ]
+        let mut rows = connection_base_rows(input, "SQLite");
+        rows.push(editable_row("Sqlite.read_only", "只读", "false",
+            property::PropertyValueKind::Boolean, vec!["true".to_string(), "false".to_string()]));
+        rows
     }
 
     fn overview(&self, input: &ProviderInput) -> ObjectOverview {
