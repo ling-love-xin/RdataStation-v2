@@ -24,6 +24,7 @@ pub mod bridge;
 pub mod client;
 pub mod frame;
 pub mod host;
+pub mod sql_definition;
 pub mod sql_hover;
 
 pub use client::{

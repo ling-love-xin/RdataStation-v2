@@ -4239,10 +4239,20 @@ impl EditorHostPanel {
                     state,
                     crate::lsp::sql_hover::SqlHoverProvider::new(dialect),
                 );
+                // 【#54 C6/C7】跳转定义与 hover 同源（自研语义层，同一方言）：一起挂。
+                // 内核 hover 预取自动出「下划线 + Ctrl+Click hitbox」（definitions.rs），
+                // 键盘 GoToDefinition 同槽位；目标编码成 rds://navigator/<限定表名> 虚拟
+                // scheme，由 workbench 侧 show_document handler 定位导航树（返回 true
+                // 自处理 / false 内核默认文档内移动）。
+                crate::lsp::bridge::install_definition(
+                    state,
+                    crate::lsp::sql_definition::SqlDefinitionProvider::new(dialect),
+                );
             }
             crate::lsp::CompletionChoice::None => {
                 crate::lsp::bridge::uninstall(state);
                 crate::lsp::bridge::uninstall_hover(state);
+                crate::lsp::bridge::uninstall_definition(state);
                 completion::uninstall(state);
             }
         }

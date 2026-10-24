@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui_kit::component::input::{
-    CompletionProvider, EditorState, HoverProvider, Rope, RopeExt as _,
+    CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope, RopeExt as _,
 };
 use gpui_kit::*;
 use lsp_types::{CompletionContext, CompletionResponse, Diagnostic, Hover, Position};
@@ -201,6 +201,18 @@ pub fn install_hover<P: HoverProvider + 'static>(state: &mut EditorState, provid
 /// 摘掉 hover（语言服务不可用时）
 pub fn uninstall_hover(state: &mut EditorState) {
     state.lsp_mut().hover_provider = None;
+}
+
+/// 【#54 C6】装 definition provider（内核槽位 `Option<Rc<dyn DefinitionProvider>>`，
+/// 与 hover 并列的独立槽位，互不影响）。泛型：SQL 自研语义（[`super::sql_definition`]）
+/// 挂这个槽位；宿主按模式决策。
+pub fn install_definition<P: DefinitionProvider + 'static>(state: &mut EditorState, provider: Rc<P>) {
+    state.lsp_mut().definition_provider = Some(provider);
+}
+
+/// 摘掉 definition（语言服务不可用时）
+pub fn uninstall_definition(state: &mut EditorState) {
+    state.lsp_mut().definition_provider = None;
 }
 
 #[cfg(test)]
