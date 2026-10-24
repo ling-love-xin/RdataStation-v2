@@ -132,6 +132,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         let auth_list = self.auth_list.clone();
         let network_list = self.network_list.clone();
         let duckdb_fed = self.duckdb_fed.clone();
+        let save_credentials = self.save_credentials.clone();
         let cache_path = self.cache_path.clone();
         let props = self.props.clone();
         let props_synced = self.props_synced.clone();
@@ -1294,7 +1295,24 @@ impl<H: 'static> ConnectionDialogState<H> {
                                     // 掩码只影响显示，`value()` 仍是真实文本（保存/测试拿到的是明文）。
                                     Input::new(&pass).mask_toggle().disabled(form_disabled),
                                 ))
-                        });
+                        })
+                        // 「保存凭据」开关（P0-4，2026-10-24，对齐 DBeaver `setSavePassword(true)`）：
+                        // 关 = 密码不落库（仅本次会话可用）；引用档案时密文在档案里，开关置灰。
+                        .child(form_row(
+                            theme,
+                            tr("保存凭据"),
+                            Switch::new("save-credentials")
+                                .checked(save_credentials.get())
+                                .disabled(form_disabled || is_auth_ref)
+                                .on_click({
+                                    let save_credentials = save_credentials.clone();
+                                    let entity = entity.clone();
+                                    move |want, _window, app| {
+                                        save_credentials.set(*want);
+                                        entity.update(app, |_, cx| cx.notify());
+                                    }
+                                }),
+                        ));
 
                     // 卡片 3：连接安全（SSL/TLS）——**按驱动声明显示**（supported_auth_types 含 ssl）。
                     let driver_declares_ssl = derived.auth_types.iter().any(|m| m == "ssl");
@@ -2100,7 +2118,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), cache_path.clone(), props.clone(),
+                    duckdb_fed.clone(), save_credentials.clone(), cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),
@@ -2240,7 +2258,7 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), cache_path.clone(), props.clone(),
+                    duckdb_fed.clone(), save_credentials.clone(), cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),

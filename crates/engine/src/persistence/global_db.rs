@@ -395,6 +395,9 @@ pub struct GlobalConnectionSaveInput<'a> {
     pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<&'a str>,
     pub schema_name: Option<&'a str>,
+    /// 是否保存凭据（2026-10-24 P0-4，对齐 DBeaver `setSavePassword(true)`）：
+    /// `false` 时密码（含 URL 内解析的凭据）不落库——下次打开连接需重输。
+    pub save_password: bool,
 }
 
 /// 全局系统数据库管理器
@@ -673,11 +676,17 @@ impl GlobalDatabaseManager {
 
         // 优先使用传入的 username/password，如果为空则使用 URL 中解析的
         let final_username = input.username.or(url_username.as_deref()).unwrap_or("");
-        let final_password = match input.password.or(url_password.as_deref()) {
-            Some(p) if !p.is_empty() => shared::crypto::encrypt_password(p).map_err(|e| {
-                CoreError::common(CommonError::General(format!("密码加密失败: {}", e)))
-            })?,
-            _ => String::new(),
+        // P0-4（2026-10-24）：`save_password=false` 时凭据不落库（对齐 DBeaver
+        // `setSavePassword(false)`：本次会话可用、重启后需重输）。
+        let final_password = if input.save_password {
+            match input.password.or(url_password.as_deref()) {
+                Some(p) if !p.is_empty() => shared::crypto::encrypt_password(p).map_err(|e| {
+                    CoreError::common(CommonError::General(format!("密码加密失败: {}", e)))
+                })?,
+                _ => String::new(),
+            }
+        } else {
+            String::new()
         };
 
         // 默认标签：如果没有提供标签，添加 "global" 标签
@@ -2193,6 +2202,96 @@ mod tests {
         manager.restore_project("p1").await.unwrap();
         assert_eq!(manager.get_all_projects().await.unwrap().len(), 2);
         assert!(manager.list_removed_projects().await.unwrap().is_empty());
+
+        manager.close().await.unwrap();
+    }
+
+    /// P0-4（2026-10-24）：`save_password` 开关决定密码是否加密落库——
+    /// 开 = 加密写入 `password_encrypted`；关 = 空串（下次需重输，对齐 DBeaver `setSavePassword(false)`）。
+    #[tokio::test]
+    async fn test_global_save_password_switch() {
+        let base = test_temp_dir("save_password");
+        let sqlite_path = base.join("system.db");
+        let duckdb_path = base.join("analytics.duckdb");
+        let _ = std::fs::remove_file(&sqlite_path);
+        let _ = std::fs::remove_file(&duckdb_path);
+
+        let manager = GlobalDatabaseManager::new(sqlite_path, duckdb_path, 2)
+            .await
+            .unwrap();
+
+        // 开：密码加密落库（password_encrypted 非空）。
+        manager
+            .save_global_connection(GlobalConnectionSaveInput {
+                conn_id: "g_pwd_on",
+                name: "开关开",
+                db_type: "postgres",
+                url: "postgres://u:p@h:5432/db",
+                username: Some("u"),
+                password: Some("p"),
+                save_password: true,
+                tags: None,
+                server_version: None,
+                description: None,
+                driver_id: None,
+                environment_id: None,
+                auth_config_id: None,
+                auth_method: None,
+                network_config_id: None,
+                options: None,
+                driver_properties: None,
+                advanced_options: None,
+                use_duckdb_fed: None,
+                metadata_path: None,
+                schema_name: None,
+            })
+            .await
+            .unwrap();
+        // 关：密码不落库（password_encrypted 空）。
+        manager
+            .save_global_connection(GlobalConnectionSaveInput {
+                conn_id: "g_pwd_off",
+                name: "开关关",
+                db_type: "postgres",
+                url: "postgres://u2:p2@h2:5432/db2",
+                username: Some("u2"),
+                password: Some("p2"),
+                save_password: false,
+                tags: None,
+                server_version: None,
+                description: None,
+                driver_id: None,
+                environment_id: None,
+                auth_config_id: None,
+                auth_method: None,
+                network_config_id: None,
+                options: None,
+                driver_properties: None,
+                advanced_options: None,
+                use_duckdb_fed: None,
+                metadata_path: None,
+                schema_name: None,
+            })
+            .await
+            .unwrap();
+
+        let conns = manager.get_global_connections(None, None).await.unwrap();
+        let on = conns
+            .iter()
+            .find(|c| c.id == "g_pwd_on")
+            .expect("开用例应在库");
+        let off = conns
+            .iter()
+            .find(|c| c.id == "g_pwd_off")
+            .expect("关用例应在库");
+        assert!(
+            !on.password_encrypted.as_deref().unwrap_or("").is_empty(),
+            "开关开 → 密码应加密落库"
+        );
+        assert!(
+            off.password_encrypted.as_deref().unwrap_or("").is_empty(),
+            "开关关 → 密码不落库"
+        );
 
         manager.close().await.unwrap();
     }

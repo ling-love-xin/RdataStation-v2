@@ -124,6 +124,10 @@ pub struct DataSourceSaveInput {
     pub options: Option<String>,
     pub tags: Option<String>,
     pub use_duckdb_fed: Option<bool>,
+    /// 是否保存凭据（P0-4，2026-10-24）：`false` 时密码（含落库加密）不写入，
+    /// 仅本次会话可用、下次需重输；默认保存（对齐 DBeaver `setSavePassword(true)`）。
+    #[serde(default)]
+    pub save_password: Option<bool>,
     pub schema_name: Option<String>,
     /// DuckDB 联邦加速的元数据缓存路径（对应 global_connections.metadata_path）。
     pub metadata_path: Option<String>,
@@ -150,6 +154,7 @@ impl DataSourceSaveInput {
             options: None,
             tags: None,
             use_duckdb_fed: None,
+            save_password: None,
             schema_name: None,
             metadata_path: None,
         }

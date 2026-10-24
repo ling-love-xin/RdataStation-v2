@@ -109,6 +109,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             auth_list: Rc::new(RefCell::new(Vec::new())),
             network_list: Rc::new(RefCell::new(Vec::new())),
             duckdb_fed: Rc::new(Cell::new(true)),
+            save_credentials: Rc::new(Cell::new(true)),
             cache_path,
             env_policies: Rc::new(RefCell::new(Vec::new())),
             policy_override_keys: Rc::new(RefCell::new(Vec::new())),
@@ -1000,6 +1001,7 @@ pub(crate) struct ClonedDialogState {
     network_list: Rc<RefCell<Vec<NetworkConfig>>>,
     env_list: Rc<RefCell<Vec<Environment>>>,
     duckdb_fed: Rc<Cell<bool>>,
+    save_credentials: Rc<Cell<bool>>,
     cache_path: Entity<InputState>,
     props: Rc<RefCell<Vec<(String, String)>>>,
     // ---- Phase C ----
@@ -1033,6 +1035,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         network_list: Rc<RefCell<Vec<NetworkConfig>>>,
         env_list: Rc<RefCell<Vec<Environment>>>,
         duckdb_fed: Rc<Cell<bool>>,
+        save_credentials: Rc<Cell<bool>>,
         cache_path: Entity<InputState>,
         props: Rc<RefCell<Vec<(String, String)>>>,
         scope: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -1055,6 +1058,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             network_list,
             env_list,
             duckdb_fed,
+            save_credentials,
             cache_path,
             props,
             scope,
@@ -1273,6 +1277,9 @@ impl ClonedDialogState {
             advanced_options,
             options: None,
             use_duckdb_fed: Some(self.duckdb_fed.get()),
+            // P0-4（2026-10-24）：表单「保存凭据」开关——关 = 密码不落库
+            // （对齐 DBeaver `setSavePassword(false)`）。
+            save_password: Some(self.save_credentials.get()),
             schema_name: None,
             metadata_path,
         };
@@ -1399,6 +1406,7 @@ impl ClonedDialogState {
             advanced_options,
             options: None,
             use_duckdb_fed: Some(d.duckdb_fed),
+            save_password: Some(d.save_credentials),
             schema_name: None,
             metadata_path: if d.cache_path.trim().is_empty() {
                 None
@@ -1545,6 +1553,7 @@ mod tests {
             dialog.network_list.clone(),
             dialog.env_list.clone(),
             dialog.duckdb_fed.clone(),
+            dialog.save_credentials.clone(),
             dialog.cache_path.clone(),
             dialog.props.clone(),
             dialog.scope.clone(),
@@ -1605,10 +1614,16 @@ mod tests {
         assert_eq!(input.auth_method.as_deref(), Some("password"));
         assert_eq!(input.metadata_path.as_deref(), Some("/cache"));
         assert_eq!(input.use_duckdb_fed, Some(true), "草稿 duckdb_fed 默认 true");
+        assert_eq!(input.save_password, Some(true), "草稿 save_credentials 默认 true（P0-4）");
         // ssl_mode=verify-full（驱动声明 ssl）→ advanced_options 含 ssl.mode。
         let adv = input.advanced_options.as_deref().unwrap_or_default();
         assert!(adv.contains("\"ssl\"") && adv.contains("verify-full"), "{adv}");
         assert!(!adv.contains("policy_overrides"), "无策略覆盖时不写");
+        // P0-4（2026-10-24）：关「保存凭据」→ save_password=false（密码不落库）。
+        let mut draft_off = draft.clone();
+        draft_off.save_credentials = false;
+        let input_off = cl.draft_to_save_input(&draft_off).expect("应可提交");
+        assert_eq!(input_off.save_password, Some(false), "关开关应不落库");
     }
 
     /// 文件型（sqlite）：残留凭据 / 引用一律清噪，不落库。

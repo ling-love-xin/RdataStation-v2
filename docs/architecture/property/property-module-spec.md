@@ -490,6 +490,16 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
    「外部表→Indexes」「物化视图→Ddl」「索引→Source」的错位 PageId 灰置声明（类别 id
    是 provider 增删时的稳定业务键，错位会让未来启用时内容进错分支）；表/视图/函数/
    序列等 Schema 子项类别待新 PageId + 内省查询接入后再声明。
+8. **「保存凭据」开关（2026-10-24，P0-4，对齐 DBeaver `setSavePassword(true)`）**：
+   连接对话框认证卡尾部新增 `Switch`；**关 = 密码不落库**（仅本次会话可用、下次需重输），
+   开 = 密码 AES-256-GCM 加密后落库（原行为）。语义边界：URL 内用户显式放置的凭据
+   **不剥离**（避免隐式篡改）；引用认证档案时开关**置灰**（密文在档案里，开关无意义）。
+   链路：`GlobalConnectionSaveInput.save_password`（engine，必填）→
+   `SaveGlobalConnectionInput.save_password`（connection_service 透传）→
+   `DataSourceSaveInput.save_password: Option<bool>`（新字段，`None` 兼容旧调用，
+   `project_connection_from_input` 以 `unwrap_or(true)` 守卫）→
+   `ConnectionDialogState.save_credentials`（默认 true）+ 草稿 `ConnectionDraft.save_credentials`
+   往返（草稿行无此列，回读默认 true）。
 
 ### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
 
@@ -501,6 +511,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |
 | 三部分渲染 / 双栏网格 / 子项类别（隐藏式不产出）/ 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
+| 「保存凭据」开关（P0-4，2026-10-24） | `crates/engine/src/persistence/global_db.rs`（`GlobalConnectionSaveInput.save_password` + `final_password` 分支）、`crates/connection_dialog/src/services/{connection_service,data_source_service}.rs`、`crates/connection/src/model.rs`（`DataSourceSaveInput.save_password`）、`crates/connection_dialog/src/components/connection_dialog/{mod.rs,state.rs,render.rs,staging.rs}` |
 
 ## 17. 属性面板卡片规范（2026-10-09，连接编辑器 / 洞察 / Mock 同规范）
 

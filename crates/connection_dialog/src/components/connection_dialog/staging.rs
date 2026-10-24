@@ -114,6 +114,8 @@ pub struct ConnectionDraft {
     pub auth_ref: Option<String>,
     pub network_ref: Option<String>,
     pub env: Option<String>,
+    /// 「保存凭据」开关（P0-4，2026-10-24）：`false` = 密码不落库。
+    pub save_credentials: bool,
 }
 
 impl ConnectionDraft {
@@ -121,6 +123,7 @@ impl ConnectionDraft {
     pub fn empty() -> Self {
         Self {
             duckdb_fed: true,
+            save_credentials: true,
             sec_overrides: Vec::new(),
             ..Default::default()
         }
@@ -209,6 +212,8 @@ impl<H: 'static> ConnectionDialogState<H> {
             ssl_key: r.ssl_key.clone(),
             cache_path: r.cache_path.clone(),
             duckdb_fed: r.duckdb_fed,
+            // 草稿行无此列：编辑回读默认保存凭据（P0-4；用户可再关）。
+            save_credentials: true,
             active_tab: r.active_tab.max(0) as usize,
             // `r.hops_json` 列保留但不再回填（旧草稿里的占位链直接忽略）。
             props: serde_json::from_str(&r.props_json).unwrap_or_default(),
@@ -284,6 +289,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             ssl_key: self.ssl_key.read(cx).value().to_string(),
             cache_path: self.cache_path.read(cx).value().to_string(),
             duckdb_fed: self.duckdb_fed.get(),
+            save_credentials: self.save_credentials.get(),
             active_tab: self.active_tab.get(),
             props: self.props.borrow().clone(),
             sec_overrides: self.policy_override_keys.borrow().clone(),

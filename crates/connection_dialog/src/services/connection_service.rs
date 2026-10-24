@@ -36,6 +36,8 @@ pub struct SaveGlobalConnectionInput<'a> {
     pub use_duckdb_fed: Option<bool>,
     pub metadata_path: Option<&'a str>,
     pub schema_name: Option<&'a str>,
+    /// 是否保存凭据（P0-4，2026-10-24）：`false` 时密码不落库。
+    pub save_password: bool,
 }
 
 /// 连接请求 — 消除 connect_with_type 的 22 参数反模式
@@ -584,6 +586,8 @@ impl ConnectionService {
                     use_duckdb_fed,
                     metadata_path: metadata_path.as_deref(),
                     schema_name: schema_name.as_deref(),
+                    // 连接时保存路径：凭据刚输入，默认保存（P0-4 开关只管对话框显式保存）。
+                    save_password: true,
                 })
                 .await
             {
@@ -649,6 +653,7 @@ impl ConnectionService {
                 use_duckdb_fed: input.use_duckdb_fed,
                 metadata_path: input.metadata_path,
                 schema_name: input.schema_name,
+                save_password: input.save_password,
             })
             .await
     }

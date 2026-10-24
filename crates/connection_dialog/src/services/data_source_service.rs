@@ -578,6 +578,7 @@ impl DataSourceService {
                     use_duckdb_fed: input.use_duckdb_fed,
                     metadata_path: input.metadata_path.as_deref(),
                     schema_name: input.schema_name.as_deref(),
+                    save_password: input.save_password.unwrap_or(true),
                 })
                 .await?;
             // Secret 联动：门控注册（2026-10-03 规则 = 加速开 + 有对应 DuckDB 扩展才注册；
@@ -999,6 +1000,7 @@ impl DataSourceService {
             use_duckdb_fed: Some(ds.use_duckdb_fed),
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
+            save_password: None,
         };
         let new_id = self.save(&input, project_path).await?;
         tracing::info!(
@@ -1178,6 +1180,7 @@ impl DataSourceService {
             use_duckdb_fed: Some(ds.use_duckdb_fed),
             schema_name: ds.schema_name.clone(),
             metadata_path: ds.metadata_path.clone(),
+            save_password: None,
         };
         Ok(self.test(&input, project_path).await)
     }
@@ -1447,9 +1450,15 @@ fn project_connection_from_input(
     url: &str,
 ) -> Result<ProjectConnection, CoreError> {
     let (host, port, database) = parse_url_host_port_db(&input.db_type, url);
-    let password_encrypted = match &input.password {
-        Some(p) if !p.is_empty() => Some(shared::crypto::encrypt_password(p)?),
-        _ => None,
+    // P0-4（2026-10-24）：`save_password=false` 时凭据不落库（对齐 DBeaver
+    // `setSavePassword(false)`；URL 内凭据属用户显式放入，不在此剥离）。
+    let password_encrypted = if input.save_password.unwrap_or(true) {
+        match &input.password {
+            Some(p) if !p.is_empty() => Some(shared::crypto::encrypt_password(p)?),
+            _ => None,
+        }
+    } else {
+        None
     };
     Ok(ProjectConnection {
         id: id.to_string(),

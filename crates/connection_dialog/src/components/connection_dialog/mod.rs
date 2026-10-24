@@ -342,6 +342,8 @@ pub struct ConnectionDialogState<H: 'static> {
     pub auth_list: Rc<RefCell<Vec<AuthConfig>>>,
     pub network_list: Rc<RefCell<Vec<NetworkConfig>>>,
     pub duckdb_fed: Rc<Cell<bool>>,
+    /// 「保存凭据」开关（P0-4，2026-10-24）：`false` = 密码不落库（仅会话可用）。
+    pub save_credentials: Rc<Cell<bool>>,
     pub cache_path: Entity<InputState>,
     /// 当前选中环境下的启用策略（来自 `environment_policies`，供高级 Tab 覆盖勾选）。
     /// 元素：(策略类型, 中文标签, 配置摘要)。
