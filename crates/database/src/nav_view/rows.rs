@@ -1892,14 +1892,22 @@ impl NavView {
                             host_copy.notice(format!("已复制：{name}"), app);
                             e_copy.update(app, |_, cx| cx.notify());
                         }))
-                        .item(PopupMenuItem::new("刷新元数据").on_click(move |_, _, app| {
-                            let cid = cid_refresh.clone();
-                            let name = name_refresh.clone();
-                            e_refresh.update(app, |this, cx| {
-                                this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
-                                this.host.notice(format!("已刷新：{name}"), cx);
-                            });
-                        }))
+                        .item(
+                            PopupMenuItem::new("刷新元数据")
+                                // S4-N4：断连无元数据可刷，置灰（本地配置类动作不置灰）。
+                                .disabled(!super::nav_conn_menu_enabled(
+                                    super::NavObjMenuAction::Refresh,
+                                    is_connected,
+                                ))
+                                .on_click(move |_, _, app| {
+                                    let cid = cid_refresh.clone();
+                                    let name = name_refresh.clone();
+                                    e_refresh.update(app, |this, cx| {
+                                        this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
+                                        this.host.notice(format!("已刷新：{name}"), cx);
+                                    });
+                                }),
+                        )
                         // 通用模块入口（与连接状态无关）：SQL 编辑器 / 洞察。
                         // Mock 只针对表 / 视图，见 `render_nav_node` 的对象菜单。
                         .separator()
@@ -2264,6 +2272,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let conn_label = m_conn_label.clone();
             let driver = m_driver.clone();
             let data_like = matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
+            // S4-N4 连接态门控：回源库动作断连置灰（判定走纯函数矩阵，见
+            // [`super::nav_obj_menu_enabled`]；`connected` 在闭包外算好，供 move 进 'static 闭包）。
+            let obj_connected =
+                self.nav.borrow().connected.contains(&node.connection_id);
             // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
             let dml_target = match &menu_path {
                 Some(NavPath::Table {
@@ -2318,7 +2330,13 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         let sql = format!("SELECT * FROM {q} LIMIT 200;");
                         let host_sql = host.clone();
                         let cid_view = conn_id.clone();
-                        menu = menu.item(PopupMenuItem::new("查看数据（LIMIT 200）").on_click(
+                        menu = menu.item(
+                            PopupMenuItem::new("查看数据（LIMIT 200）")
+                                .disabled(!super::nav_obj_menu_enabled(
+                                    super::NavObjMenuAction::DataView,
+                                    obj_connected,
+                                ))
+                                .on_click(
                             move |_, _, app| {
                                 // B11：打开一份绑定该连接的查询并**自动执行**
                                 // （M4 遗留的“查看数据不自动执行”在此关闭）
@@ -2344,7 +2362,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         let key = nkey.clone();
                         let cid = conn_id.clone();
                         let root = dml_root.clone();
-                        menu = menu.submenu("生成 SQL", window, cx, move |m, _w, _c| {
+                        // S4-N4：submenu 入口断连置灰（`PopupMenuItem::submenu` 支持
+                        // disabled；先 `build` 拿实体再挂 `.disabled`）。
+                        let sub_entity = PopupMenu::build(window, cx, move |m, _w, _c| {
                             let mut m = m;
                             for kind in [DmlKind::Insert, DmlKind::Update, DmlKind::Delete] {
                                 let e = e.clone();
@@ -2373,6 +2393,14 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             }
                             m
                         });
+                        let gen_sql_enabled = super::nav_obj_menu_enabled(
+                            super::NavObjMenuAction::GenSql,
+                            obj_connected,
+                        );
+                        menu = menu.item(
+                            PopupMenuItem::submenu("生成 SQL", sub_entity)
+                                .disabled(!gen_sql_enabled),
+                        );
                     }
                 }
                 {
@@ -2401,15 +2429,22 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     let e = entity.clone();
                     let cid = conn_id.clone();
                     let key = nkey.clone();
-                    menu =
-                        menu.item(PopupMenuItem::new("刷新元数据").on_click(move |_, _, app| {
-                            let cid = cid.clone();
-                            let key = key.clone();
-                            let p = p.clone();
-                            e.update(app, |this, cx| {
-                                this.refresh_node(&cid, &key, Some(p.clone()), cx);
-                            });
-                        }));
+                    menu = menu.item(
+                        PopupMenuItem::new("刷新元数据")
+                            // S4-N4：回源库动作断连置灰（刷新无元数据可刷）。
+                            .disabled(!super::nav_obj_menu_enabled(
+                                super::NavObjMenuAction::Refresh,
+                                obj_connected,
+                            ))
+                            .on_click(move |_, _, app| {
+                                let cid = cid.clone();
+                                let key = key.clone();
+                                let p = p.clone();
+                                e.update(app, |this, cx| {
+                                    this.refresh_node(&cid, &key, Some(p.clone()), cx);
+                                });
+                            }),
+                    );
                 }
                 // 通用模块入口（所有对象节点都有，与节点类型 / 连接状态无关）：
                 // SQL 编辑器 / 洞察；Mock 只针对表 / 视图（`data_like`）。
@@ -2436,33 +2471,56 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     let request = data_target.clone();
                     // 洞察那份先克隆出来：Mock 的闭包会把 `request` move 进去
                     let request_for_insight = request.clone();
-                    menu = menu.item(PopupMenuItem::new("生成 Mock 数据").on_click(
-                        move |_, _, app| {
-                            let request = request.clone();
-                            e.update(app, |this, cx| {
-                                this.host.open_mock_panel(request, cx);
-                            });
-                        },
-                    ));
+                    menu = menu.item(
+                        PopupMenuItem::new("生成 Mock 数据")
+                            // S4-N4：读源库结构，断连置灰。
+                            .disabled(!super::nav_obj_menu_enabled(
+                                super::NavObjMenuAction::Mock,
+                                obj_connected,
+                            ))
+                            .on_click(move |_, _, app| {
+                                let request = request.clone();
+                                e.update(app, |this, cx| {
+                                    this.host.open_mock_panel(request, cx);
+                                });
+                            }),
+                    );
                     // 【M8】看这张源表的统计：取样（LIMIT 500 → 分析临时表）由洞察侧完成，
                     // 这里只给「哪条连接 + 哪张表」（D58 的统一入口）。
                     if let Some(source) = request_for_insight {
                         let e = entity.clone();
-                        menu =
-                            menu.item(PopupMenuItem::new("查看统计").on_click(move |_, _, app| {
-                                let source = source.clone();
-                                e.update(app, |this, cx| this.host.open_insight_table(source, cx));
-                            }));
+                        menu = menu.item(
+                            PopupMenuItem::new("查看统计")
+                                // S4-N4：取样读源库，断连置灰。
+                                .disabled(!super::nav_obj_menu_enabled(
+                                    super::NavObjMenuAction::Stats,
+                                    obj_connected,
+                                ))
+                                .on_click(move |_, _, app| {
+                                    let source = source.clone();
+                                    e.update(app, |this, cx| {
+                                        this.host.open_insight_table(source, cx)
+                                    });
+                                }),
+                        );
                     }
                 }
                 // 【M8】结构洞察（Schema 级）：表 / 视图用它所在的 schema，schema 节点用自己。
                 // 与「查看统计」分工：那个看**数据**（取样），这个看**结构**（源库内省）。
                 if let Some(target) = insight_schema.clone() {
                     let e = entity.clone();
-                    menu = menu.item(PopupMenuItem::new("结构洞察").on_click(move |_, _, app| {
-                        let target = target.clone();
-                        e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
-                    }));
+                    menu = menu.item(
+                        PopupMenuItem::new("结构洞察")
+                            // S4-N4：源库内省，断连置灰。
+                            .disabled(!super::nav_obj_menu_enabled(
+                                super::NavObjMenuAction::InsightSchema,
+                                obj_connected,
+                            ))
+                            .on_click(move |_, _, app| {
+                                let target = target.clone();
+                                e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
+                            }),
+                    );
                 }
                 menu = menu.item({
                     let e = entity.clone();

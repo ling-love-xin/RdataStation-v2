@@ -2060,3 +2060,49 @@ fn prefix_match_matches_full_prefix_not_first_char() {
     // 单字符与旧首字母行为视觉等价：命中第一个以 b 开头的行。
     assert_eq!(super::nav_match_prefix(&order, "b", 0), Some(1));
 }
+
+// ---------- S4-N4 菜单连接态门控矩阵 ----------
+
+#[test]
+fn obj_menu_gates_source_actions_on_disconnect() {
+    use super::{NavObjMenuAction, nav_obj_menu_enabled};
+    // 回源库动作：断连全部置灰、连接可用。
+    for action in [
+        NavObjMenuAction::DataView,
+        NavObjMenuAction::GenSql,
+        NavObjMenuAction::Refresh,
+        NavObjMenuAction::Mock,
+        NavObjMenuAction::Stats,
+        NavObjMenuAction::InsightSchema,
+    ] {
+        assert!(!nav_obj_menu_enabled(action, false), "{action:?} 断连应置灰");
+        assert!(nav_obj_menu_enabled(action, true), "{action:?} 连接应可用");
+    }
+}
+
+#[test]
+fn obj_menu_keeps_local_actions_on_disconnect() {
+    use super::{NavObjMenuAction, nav_obj_menu_enabled};
+    // 缓存 / 本地 / 面板导航动作：断连保持可用（置灰清单不可越界）。
+    for action in [
+        NavObjMenuAction::Props,
+        NavObjMenuAction::CopyName,
+        NavObjMenuAction::OpenSql,
+        NavObjMenuAction::InsightPanel,
+    ] {
+        assert!(nav_obj_menu_enabled(action, false), "{action:?} 断连不应置灰");
+        assert!(nav_obj_menu_enabled(action, true), "{action:?} 连接应可用");
+    }
+}
+
+#[test]
+fn conn_menu_gates_only_refresh_on_disconnect() {
+    use super::{NavObjMenuAction, nav_conn_menu_enabled};
+    // 连接菜单只有「刷新元数据」断连置灰，其余无条件项保持可用。
+    assert!(!nav_conn_menu_enabled(NavObjMenuAction::Refresh, false));
+    assert!(nav_conn_menu_enabled(NavObjMenuAction::Refresh, true));
+    assert!(nav_conn_menu_enabled(NavObjMenuAction::OpenSql, false));
+    assert!(nav_conn_menu_enabled(NavObjMenuAction::CopyName, false));
+    assert!(nav_conn_menu_enabled(NavObjMenuAction::InsightPanel, false));
+    assert!(nav_conn_menu_enabled(NavObjMenuAction::Props, false));
+}

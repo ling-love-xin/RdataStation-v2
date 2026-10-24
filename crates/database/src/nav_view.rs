@@ -235,6 +235,57 @@ pub(crate) fn nav_match_prefix(order: &[NavOrderItem], buf: &str, start: usize) 
         })
 }
 
+/// 对象菜单动作（S4-N4 门控矩阵的输入维度；渲染只按它查 `nav_obj_menu_enabled`）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NavObjMenuAction {
+    /// 查看数据（LIMIT 200）——回源库执行查询，断连置灰。
+    DataView,
+    /// 生成 SQL ▸——需列信息，断连置灰。
+    GenSql,
+    /// 刷新元数据——断连无元数据可刷，置灰。
+    Refresh,
+    /// 生成 Mock 数据——读源库结构，断连置灰。
+    Mock,
+    /// 查看统计——取样读源库，断连置灰。
+    Stats,
+    /// 结构洞察——源库内省，断连置灰。
+    InsightSchema,
+    /// 查看属性——L2 缓存可渲染，断连可用。
+    Props,
+    /// 复制名称 / 复制限定名——本地剪贴板，断连可用。
+    CopyName,
+    /// 在 SQL 编辑器中打开——空查询壳，断连可用。
+    OpenSql,
+    /// 查看洞察——纯面板导航，断连可用。
+    InsightPanel,
+}
+
+/// S4-N4 对象菜单连接态门控（纯函数，单测钉矩阵）：
+/// 回源库动作断连置灰，缓存 / 本地 / 面板导航动作保持可用。
+/// 置灰而非隐藏（保持菜单结构稳定，DBeaver 不可用项置灰同口径）。
+pub(crate) fn nav_obj_menu_enabled(action: NavObjMenuAction, connected: bool) -> bool {
+    match action {
+        NavObjMenuAction::DataView
+        | NavObjMenuAction::GenSql
+        | NavObjMenuAction::Refresh
+        | NavObjMenuAction::Mock
+        | NavObjMenuAction::Stats
+        | NavObjMenuAction::InsightSchema => connected,
+        NavObjMenuAction::Props
+        | NavObjMenuAction::CopyName
+        | NavObjMenuAction::OpenSql
+        | NavObjMenuAction::InsightPanel => true,
+    }
+}
+
+/// S4-N4 连接菜单连接态门控（纯函数）：刷新元数据断连置灰，其余无条件项保持可用。
+pub(crate) fn nav_conn_menu_enabled(action: NavObjMenuAction, connected: bool) -> bool {
+    match action {
+        NavObjMenuAction::Refresh => connected,
+        _ => true,
+    }
+}
+
 /// 数据库导航面板状态（M4）。
 ///
 /// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
