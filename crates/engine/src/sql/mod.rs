@@ -27,6 +27,7 @@ mod formatter;
 mod highlight;
 mod parser;
 mod script;
+mod semantic;
 mod split;
 mod transpiler;
 
@@ -39,5 +40,6 @@ pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
+pub use semantic::{diagnose, CatalogTable, SemanticIssue};
 pub use split::{split_statements, SqlStatement};
 pub use transpiler::TranspileReport;
