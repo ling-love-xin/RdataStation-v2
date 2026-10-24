@@ -24,6 +24,7 @@ mod engine;
 mod explain;
 mod filter;
 mod formatter;
+mod function_manual;
 mod functions;
 mod highlight;
 mod parser;
@@ -42,6 +43,7 @@ pub use functions::{
     builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,
     ParamInfo,
 };
+pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
