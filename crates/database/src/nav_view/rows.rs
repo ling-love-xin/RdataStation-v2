@@ -8,6 +8,7 @@
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
 use super::*;
+use crate::nav_jobs::JobPriority;
 
 impl NavView {
     /// 把某一行滚进视口（虚拟列表换来的可编程滚动入口）。
@@ -431,7 +432,15 @@ impl NavView {
             )
         };
         if expanded && connected {
-            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
+            // render 路径的恢复展开（展开态已落库）：后台路径，让位用户手点（S2-①）。
+            self.ensure_nav_loaded(
+                &conn.id,
+                &conn.id,
+                NavPath::Connection,
+                false,
+                JobPriority::Background,
+                cx,
+            );
         }
         rows.push(NavRow::Connection {
             conn: Box::new(conn.clone()),
@@ -2488,6 +2497,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         .project_root()
                         .map(|p| p.to_string_lossy().to_string());
                     this.nav.borrow_mut().loading.insert(k.clone());
+                    // 「加载更多」是用户手点：高优先（S2-①），插到后台批次前面。
                     nav_jobs::enqueue_load_page(
                         &conn_id,
                         root.as_deref(),
@@ -2496,6 +2506,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         false,
                         loaded,
                         nav_jobs::PAGE_SIZE,
+                        JobPriority::User,
                     );
                     this.ensure_nav_pump(cx);
                     cx.notify();
@@ -2568,6 +2579,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         .project_root()
                         .map(|p| p.to_string_lossy().to_string());
                     this.nav.borrow_mut().loading.insert(k.clone());
+                    // 「回开头」也是用户手点：高优先（S2-①）。
                     nav_jobs::enqueue_load_page(
                         &conn_id,
                         root.as_deref(),
@@ -2576,6 +2588,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         false,
                         0,
                         nav_jobs::PAGE_SIZE,
+                        JobPriority::User,
                     );
                     this.ensure_nav_pump(cx);
                     cx.notify();

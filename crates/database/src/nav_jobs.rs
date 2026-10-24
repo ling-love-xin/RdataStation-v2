@@ -21,7 +21,8 @@
 //!
 //! 缓存写入由 `NavigatorService` 的 cache-aside 完成；本模块不直接碰缓存。
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
@@ -358,7 +359,8 @@ enum Job {
 struct Shared {
     /// 发件端。**包一层 `Mutex`**：worker 线程一旦退出（panic / 异常返回），
     /// 通道就废了 —— 那时要换一条新通道并把发件端替换掉（见 [`restart_worker`]）。
-    tx: Mutex<Sender<Job>>,
+    /// 消息是带优先级的 [`QueuedJob`]（worker 侧堆调度，S2-①）。
+    tx: Mutex<Sender<QueuedJob>>,
     /// worker 是否活着。投递前先看它：不活就先重启。
     worker_alive: AtomicBool,
     // 预热进度 / 取消
@@ -397,7 +399,7 @@ static JOBS: OnceLock<Shared> = OnceLock::new();
 
 fn shared() -> &'static Shared {
     JOBS.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<Job>();
+        let (tx, rx) = mpsc::channel::<QueuedJob>();
         spawn_worker(rx);
         Shared {
             tx: Mutex::new(tx),
@@ -437,7 +439,7 @@ fn service(project_root: Option<String>) -> crate::navigator_service::NavigatorS
 /// 起一个 worker 线程（`Shared` 初始化与「重启」共用）。
 ///
 /// 线程退出时（正常返回 / panic）由 `Drop` 把存活标志落下 —— 下一次投递会把它重启。
-fn spawn_worker(rx: mpsc::Receiver<Job>) {
+fn spawn_worker(rx: mpsc::Receiver<QueuedJob>) {
     let spawned = std::thread::Builder::new()
         .name("rds-nav-jobs".to_string())
         // 驱动内省在 debug 下递归较深，给足栈避免溢出。
@@ -461,12 +463,64 @@ fn spawn_worker(rx: mpsc::Receiver<Job>) {
 /// 换一条通道并把 worker 重新起起来（投递失败时走这里）。
 fn restart_worker() {
     let s = shared();
-    let (tx, rx) = mpsc::channel::<Job>();
+    let (tx, rx) = mpsc::channel::<QueuedJob>();
     *lock(&s.tx) = tx;
     s.worker_alive.store(true, Ordering::SeqCst);
     spawn_worker(rx);
     tracing::warn!("导航后台线程已重启（上一个线程已退出）");
 }
+
+/// 任务优先级（S2-① 竞品差异化：9 家竞品都没有优先级，我们第一个做）。
+///
+/// 用户主动动作（展开 / 重试 / 加载更多 / 搜索）必须插到后台任务前面——
+/// 否则恢复展开态 / 定位链 / 预取的一大批低优任务会把用户手点的响应堵在
+/// `LOAD_CONCURRENCY` 信号量后面（FIFO 先到先执行，正是遗留 #5 的症状）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum JobPriority {
+    /// 用户主动动作：先执行。
+    User,
+    /// 后台恢复 / 定位 / 刷新 / 预取：让位。
+    Background,
+}
+
+/// 排队中的任务（带优先级与全局序号）。
+///
+/// `seq` 保证**同优先级内部仍按入队序执行**（FIFO 公平）：高优插队不破坏低优彼此的顺序。
+/// `Ord` 取 `priority` 升序（User < Background → User 先出）、同优先 `seq` 升序。
+struct QueuedJob {
+    priority: JobPriority,
+    seq: u64,
+    job: Job,
+}
+
+impl Ord for QueuedJob {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // BinaryHeap 是 max-heap（pop 出最大者）：让「更优先、seq 更小」的任务**更大**，
+        // 堆顶就是下一个该执行的。priority 升序（User < Background）经 `other` 侧反转后，
+        // User 的 QueuedJob 恒大于 Background 的。
+        other
+            .priority
+            .cmp(&self.priority)
+            .then_with(|| other.seq.cmp(&self.seq))
+    }
+}
+
+impl PartialOrd for QueuedJob {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for QueuedJob {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.seq == other.seq
+    }
+}
+
+impl Eq for QueuedJob {}
+
+/// 全局单调递增序号：同优先级任务按入队先后执行（公平性）。
+static NEXT_JOB_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 提交一个任务（所有 `enqueue_*` 的统一出口）。
 ///
@@ -475,21 +529,23 @@ fn restart_worker() {
 /// 2. 投递失败（通道已断）→ 重启后**重投一次**；
 /// 3. 还失败 → 按任务的凭据回填一条**可见的错误**并配平计数 ——
 ///    绝不留下一个永远「加载中」的节点。
-fn submit(job: Job) {
+fn submit(job: Job, priority: JobPriority) {
     let s = shared();
-    let mut job = job;
+    let seq = NEXT_JOB_SEQ.fetch_add(1, Ordering::SeqCst);
+    let mut queued = QueuedJob { priority, seq, job };
     for attempt in 0..2 {
         let tx = lock(&s.tx).clone();
-        match tx.send(job) {
+        match tx.send(queued) {
             Ok(()) => return,
             Err(back) => {
-                job = back.0;
+                queued = back.0;
                 if attempt == 0 {
                     restart_worker();
                 }
             }
         }
     }
+    let job = queued.job;
     let reason = "导航后台线程不可用（已重启仍投递失败）".to_string();
     tracing::error!(reason = %reason, "导航任务投递失败");
     if let Some(ticket) = job.ticket() {
@@ -674,8 +730,27 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     "（未知 panic 载荷）".to_string()
 }
 
-fn worker(rx: mpsc::Receiver<Job>) {
-    while let Ok(job) = rx.recv() {
+fn worker(rx: mpsc::Receiver<QueuedJob>) {
+    // 优先级调度（S2-①）：通道进来的任务先进二叉堆，每次取**最高优**执行；
+    // 同优先级按入队序（`QueuedJob.seq`）保持 FIFO 公平。高优任务（用户手点）到了
+    // 就能插到低优（恢复展开 / 定位 / 刷新）前面——`LOAD_CONCURRENCY=1` 信号量
+    // 的 FCFS 跟随 spawn 顺序，所以**重排 spawn 顺序即重排执行顺序**。
+    let mut heap: BinaryHeap<QueuedJob> = BinaryHeap::new();
+    loop {
+        let queued = if let Some(top) = heap.pop() {
+            // 顺手把通道里已排队的全收进堆：下一轮 pop 时优先级全局可见
+            // （否则高优任务在通道里干等低优先执行）。
+            while let Ok(j) = rx.try_recv() {
+                heap.push(j);
+            }
+            top
+        } else {
+            match rx.recv() {
+                Ok(j) => j,
+                Err(_) => break,
+            }
+        };
+        let job = queued.job;
         // 每任务独立线程：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
         // 分发线程立即接下一任务——tokio `timeout` 对同步阻塞不生效（实测：一个
         // 卡住的查询会让整个 worker 排队、树全卡，JOB_TIMEOUT 兜不住）。
@@ -1151,18 +1226,23 @@ fn search_targets(
     (searched, hits)
 }
 
-/// 提交导航树懒加载（首屏）。
+/// 提交导航树懒加载（首屏 / 恢复展开态）。
 pub fn enqueue_load(
     conn_id: &str,
     project_root: Option<&str>,
     key: &str,
     path: NavPath,
     fresh: bool,
+    priority: JobPriority,
 ) {
-    enqueue_load_page(conn_id, project_root, key, path, fresh, 0, PAGE_SIZE);
+    enqueue_load_page(conn_id, project_root, key, path, fresh, 0, PAGE_SIZE, priority);
 }
 
 /// 提交导航树分页加载（`offset` = 已加载条数，即可「加载更多」）。
+///
+/// `priority`：用户手点（展开 / 加载更多）传 [`JobPriority::User`]，
+/// 后台恢复（展开态恢复 / 刷新 / 定位链）传 [`JobPriority::Background`]——
+/// 高优任务在 worker 侧插到低优前面（见 [`worker`] 的堆调度）。
 #[allow(clippy::too_many_arguments)]
 pub fn enqueue_load_page(
     conn_id: &str,
@@ -1172,25 +1252,30 @@ pub fn enqueue_load_page(
     fresh: bool,
     offset: usize,
     limit: usize,
+    priority: JobPriority,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
-    tracing::info!(conn_id = %conn_id, key = %key, fresh, "导航任务入队");
-    submit(Job::LoadChildren {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-        key: key.to_string(),
-        path,
-        fresh,
-        offset,
-        limit,
-        object: None,
-    });
+    tracing::info!(conn_id = %conn_id, key = %key, fresh, priority = ?priority, "导航任务入队");
+    submit(
+        Job::LoadChildren {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            key: key.to_string(),
+            path,
+            fresh,
+            offset,
+            limit,
+            object: None,
+        },
+        priority,
+    );
 }
 
 /// 提交「定位到某个对象」的页加载。
 ///
 /// 与 [`enqueue_load_page`] 分开命名（而不是加个 `Option` 参数）：调用点的意图不同——
 /// 一个是在当前窗口往后翻，另一个是**换窗跳到目标**；混在一个签名里最容易接错。
+/// 定位链是后台路径（用户的目标是最终定位，中间层展开不该插到手点前面）。
 pub fn enqueue_locate_page(
     conn_id: &str,
     project_root: Option<&str>,
@@ -1200,16 +1285,19 @@ pub fn enqueue_locate_page(
     limit: usize,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
-    submit(Job::LoadChildren {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-        key: key.to_string(),
-        path,
-        fresh: false,
-        offset: 0,
-        limit,
-        object: Some(object.to_string()),
-    });
+    submit(
+        Job::LoadChildren {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            key: key.to_string(),
+            path,
+            fresh: false,
+            offset: 0,
+            limit,
+            object: Some(object.to_string()),
+        },
+        JobPriority::Background,
+    );
 }
 
 /// 提交属性加载。
@@ -1226,33 +1314,42 @@ pub fn enqueue_properties(
     data: Option<crate::table_data::TableDataRequest>,
 ) {
     shared().pending_props.fetch_add(1, Ordering::SeqCst);
-    submit(Job::LoadProperties {
-        key: key.to_string(),
-        property,
-        conn_label: conn_label.to_string(),
-        driver: driver.to_string(),
-        type_id: type_id.map(str::to_string),
-        db_type: db_type.map(str::to_string),
-        data,
-    });
+    submit(
+        Job::LoadProperties {
+            key: key.to_string(),
+            property,
+            conn_label: conn_label.to_string(),
+            driver: driver.to_string(),
+            type_id: type_id.map(str::to_string),
+            db_type: db_type.map(str::to_string),
+            data,
+        },
+        JobPriority::User,
+    );
 }
 
 /// 连接成功后提交预热（C1）。重复连接会重新排队。
 pub fn warm_after_connect(conn_id: &str, project_root: Option<&str>) {
-    submit(Job::Warm {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-    });
+    submit(
+        Job::Warm {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+        },
+        JobPriority::Background,
+    );
 }
 
 /// 编辑器补全的实时内省回退（§710）：提交「整条连接的表 / 视图 / 列 cache-aside
 /// 内省」到导航队列。与导航内省共享信号量并让位；完成前补全只给关键字与函数
 /// （如实，不假装有元数据），写进 L2 后下一次按键就有候选。
 pub fn enqueue_warm_completion(conn_id: &str, project_root: Option<&str>) {
-    submit(Job::WarmCompletion {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-    });
+    submit(
+        Job::WarmCompletion {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+        },
+        JobPriority::Background,
+    );
 }
 
 /// 提交列预取（C2）。空列表不排队。
@@ -1260,11 +1357,14 @@ pub fn prefetch_columns(conn_id: &str, project_root: Option<&str>, targets: Vec<
     if targets.is_empty() {
         return;
     }
-    submit(Job::PrefetchColumns {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-        targets,
-    });
+    submit(
+        Job::PrefetchColumns {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            targets,
+        },
+        JobPriority::Background,
+    );
 }
 
 /// 提交「生成 INSERT/UPDATE/DELETE」（右键，表 / 视图）。
@@ -1280,16 +1380,19 @@ pub fn enqueue_generate_dml(
     kind: DmlKind,
 ) {
     shared().pending_sql.fetch_add(1, Ordering::SeqCst);
-    submit(Job::GenerateDml {
-        key: key.to_string(),
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-        catalog: catalog.to_string(),
-        schema: schema.to_string(),
-        table: table.to_string(),
-        qualified: qualified.to_string(),
-        kind,
-    });
+    submit(
+        Job::GenerateDml {
+            key: key.to_string(),
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            table: table.to_string(),
+            qualified: qualified.to_string(),
+            kind,
+        },
+        JobPriority::User,
+    );
 }
 
 /// 提交「测试连接」（右键）。
@@ -1303,12 +1406,15 @@ pub fn enqueue_test_connection(
     probe: ConnectionProbe,
 ) {
     shared().pending_test.fetch_add(1, Ordering::SeqCst);
-    submit(Job::TestConnection {
-        conn_id: conn_id.to_string(),
-        project_root: project_root.map(|s| s.to_string()),
-        name: name.to_string(),
-        probe,
-    });
+    submit(
+        Job::TestConnection {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            name: name.to_string(),
+            probe,
+        },
+        JobPriority::User,
+    );
 }
 
 /// 是否仍有未完成的树加载（排队或执行中）。
@@ -1381,16 +1487,20 @@ pub fn enqueue_search(
     targets: Vec<SearchTarget>,
 ) {
     shared().pending_search[consumer.ix()].fetch_add(1, Ordering::SeqCst);
-    submit(Job::SearchIndex {
-        consumer,
-        kind,
-        query: query.to_string(),
-        seq,
-        case_sensitive,
-        regex,
-        project_root: project_root.map(|s| s.to_string()),
-        targets,
-    });
+    submit(
+        Job::SearchIndex {
+            consumer,
+            kind,
+            query: query.to_string(),
+            seq,
+            case_sensitive,
+            regex,
+            project_root: project_root.map(|s| s.to_string()),
+            targets,
+        },
+        // 搜索是用户敲出来的：高优先（插到恢复展开/预取前面，结果尽快上屏）。
+        JobPriority::User,
+    );
 }
 
 /// 取走已完成的树加载结果。
@@ -1476,7 +1586,7 @@ mod tests {
 
     /// 测试用 `Shared`：不起 worker（不发 job），只验「分发 / 取走」两件事。
     fn test_shared() -> Shared {
-        let (tx, _rx) = mpsc::channel::<Job>();
+        let (tx, _rx) = mpsc::channel::<QueuedJob>();
         Shared {
             tx: Mutex::new(tx),
             worker_alive: AtomicBool::new(true),
@@ -1507,6 +1617,46 @@ mod tests {
             searched: 1,
             hits: Vec::new(),
         }
+    }
+
+    fn queued(priority: JobPriority, seq: u64) -> QueuedJob {
+        QueuedJob {
+            priority,
+            seq,
+            job: Job::Warm {
+                conn_id: "P_conn".to_string(),
+                project_root: None,
+            },
+        }
+    }
+
+    /// S2-① 排序契约：用户手点（User）排在后台（Background）前面；
+    /// 同一优先级内按入队序号（seq）FIFO 公平——高优插队不破坏低优彼此的顺序。
+    /// （Ord 面向 max-heap：越优先、seq 越小 → 越大。）
+    #[test]
+    fn queued_job_orders_priority_then_fifo() {
+        use super::{JobPriority, QueuedJob};
+        assert!(
+            queued(JobPriority::User, 1) > queued(JobPriority::Background, 0),
+            "User 必须排在 Background 前面（即使 Background 先入队）"
+        );
+        assert!(
+            queued(JobPriority::User, 0) > queued(JobPriority::User, 1),
+            "同优先级按入队序 FIFO（seq 小者先出）"
+        );
+        assert!(
+            queued(JobPriority::Background, 0) > queued(JobPriority::Background, 1),
+            "Background 内部同样 FIFO"
+        );
+        // BinaryHeap 是 max-heap：`pop` 出**最大**者；Ord 里比较的是「谁更优先」，
+        // 堆顶应是最优先的那个（User、seq 最小）。
+        let mut heap = std::collections::BinaryHeap::new();
+        heap.push(queued(JobPriority::Background, 2));
+        heap.push(queued(JobPriority::User, 9));
+        heap.push(queued(JobPriority::Background, 1));
+        assert_eq!(heap.pop().unwrap().seq, 9, "User(seq=9) 插到 Background 前面");
+        assert_eq!(heap.pop().unwrap().seq, 1, "Background 内部 seq=1 先于 seq=2");
+        assert_eq!(heap.pop().unwrap().seq, 2);
     }
 
     /// 三个消费方的槽互不可见：取走自己的批次不会动到对方（本仓曾经的“互抢”就是这里错的）。
@@ -1613,15 +1763,25 @@ mod tests {
     #[test]
     fn worker_isolates_panics_and_recovers_from_a_dead_channel() {
         let path = NavPath::Connection;
-        submit(Job::PanicForTest {
-            key: "panic-test".to_string(),
-            conn_id: "P_no_such_conn".to_string(),
-            project_root: None,
-            path: path.clone(),
-        });
+        submit(
+            Job::PanicForTest {
+                key: "panic-test".to_string(),
+                conn_id: "P_no_such_conn".to_string(),
+                project_root: None,
+                path: path.clone(),
+            },
+            JobPriority::User,
+        );
         shared().pending_loads.fetch_add(1, Ordering::SeqCst);
         // 贴着生产入口再投一个正常任务
-        enqueue_load("P_no_such_conn", None, "after-panic", path, false);
+        enqueue_load(
+            "P_no_such_conn",
+            None,
+            "after-panic",
+            path,
+            false,
+            JobPriority::Background,
+        );
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut results = Vec::new();
@@ -1648,7 +1808,7 @@ mod tests {
 
         // ---- 自愈：把发件端换到一条**接收端已丢弃**的通道（模拟 worker 线程已退出），
         // 下一次投递应当自动换通道 + 重启 worker，任务照样有回音。
-        let (dead_tx, dead_rx) = mpsc::channel::<Job>();
+        let (dead_tx, dead_rx) = mpsc::channel::<QueuedJob>();
         drop(dead_rx);
         *lock(&shared().tx) = dead_tx;
         shared().worker_alive.store(false, Ordering::SeqCst);
@@ -1659,6 +1819,7 @@ mod tests {
             "after-restart",
             NavPath::Connection,
             false,
+            JobPriority::Background,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut recovered = Vec::new();

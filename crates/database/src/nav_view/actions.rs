@@ -4,6 +4,7 @@
 //! 渲染期只读的纪律（render 内不做 I/O）在 `chrome.rs` / `rows.rs` 的注释里。
 
 use super::*;
+use crate::nav_jobs::JobPriority;
 
 impl NavView {
     /// 写回 facet 筛选到 `settings.json`（chips 状态为准；搜索 token 不持久化）。
@@ -368,7 +369,8 @@ impl NavView {
                 let mut view = self.nav.borrow_mut();
                 view.attempted.remove(key);
             }
-            self.ensure_nav_loaded(conn_id, key, path, false, cx);
+            // 用户手点展开：最高优先（S2-①），不被后台恢复/预取堵住。
+            self.ensure_nav_loaded(conn_id, key, path, false, JobPriority::User, cx);
         }
         self.mark_nav_state_dirty(conn_id, cx);
     }
@@ -469,7 +471,14 @@ impl NavView {
                 // 用户展开时走 L1/L2 秒开；自动加载会让恢复的展开态全树并发回源，
                 // 压垮连接池（真机见过 `pool timed out` / 30s 加载超时）。
                 if conn_expanded && !was_prewarm {
-                    self.ensure_nav_loaded(&r.conn_id, &r.conn_id, NavPath::Connection, false, cx);
+                    self.ensure_nav_loaded(
+                        &r.conn_id,
+                        &r.conn_id,
+                        NavPath::Connection,
+                        false,
+                        JobPriority::Background,
+                        cx,
+                    );
                 }
                 // **连接成功不自动预热**（对齐 DBeaver「点哪个展开哪个」：下一层由点击驱动）：
                 // 展开连接根时 cache-aside 会实时内省并写 L2（等于把预热推迟到用户真正查看时，
@@ -491,12 +500,16 @@ impl NavView {
     /// 排队后台懒加载子节点（已请求过则跳过；render 路径不做 I/O）。
     ///
     /// `fresh`（刷新模式）跳过 L2 读缓存并重写。结果由 [`Self::apply_load_results`] 回填。
+    /// `priority`：用户手点（展开 / 重试）传 [`JobPriority::User`]；
+    /// 后台路径（恢复展开态 / 连接成功自动展开 / 定位链 / 刷新）传
+    /// [`JobPriority::Background`]——S2-① 优先级队列保证手点响应不被后台批次堵住。
     pub(super) fn ensure_nav_loaded(
         &self,
         conn_id: &str,
         key: &str,
         path: NavPath,
         fresh: bool,
+        priority: JobPriority,
         cx: &mut Context<Self>,
     ) {
         {
@@ -514,7 +527,7 @@ impl NavView {
             .host
             .project_root()
             .map(|p| p.to_string_lossy().to_string());
-        nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh);
+        nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh, priority);
         self.ensure_nav_pump(cx);
     }
 
@@ -538,7 +551,8 @@ impl NavView {
             let mut view = self.nav.borrow_mut();
             nav_forget_attempt(&mut view, key);
         }
-        self.ensure_nav_loaded(conn_id, key, path, false, cx);
+        // 用户点红字重试：手点优先（S2-①）。
+        self.ensure_nav_loaded(conn_id, key, path, false, JobPriority::User, cx);
         cx.notify();
     }
 
@@ -641,11 +655,13 @@ impl NavView {
                     tracing::info!(key = %conn_key, "【探针】expanded.insert(pump_reveal ① 连接)");
                     // 定位途中展开的链路也要落库（否则重启后收回去，跟“定位完停在那里”不一致）。
                     self.mark_nav_state_dirty(&target.conn_id, cx);
+                    // 定位链：后台路径，让位用户手点（S2-①）。
                     self.ensure_nav_loaded(
                         &target.conn_id,
                         &conn_key,
                         NavPath::Connection,
                         false,
+                        JobPriority::Background,
                         cx,
                     );
                     return;
@@ -684,7 +700,15 @@ impl NavView {
                 return;
             }
             if !self.nav.borrow().children.contains_key(key) {
-                self.ensure_nav_loaded(&target.conn_id, key, path.clone(), false, cx);
+                // 定位链逐层加载：后台路径，让位用户手点（S2-①）。
+                self.ensure_nav_loaded(
+                    &target.conn_id,
+                    key,
+                    path.clone(),
+                    false,
+                    JobPriority::Background,
+                    cx,
+                );
                 return;
             }
         }
@@ -909,7 +933,8 @@ impl NavView {
                     error = %r.result.as_ref().err().map(|s| s.as_str()).unwrap_or(""),
                     "导航加载连接类失败（自动重试一次）"
                 );
-                self.ensure_nav_loaded(&conn_id, &key, r.path.clone(), false, cx);
+                // 加载结果的后续链（连接层成功后继续展开下层）：后台路径（S2-①）。
+                self.ensure_nav_loaded(&conn_id, &key, r.path.clone(), false, JobPriority::Background, cx);
                 continue;
             }
             {
@@ -1737,7 +1762,8 @@ impl NavView {
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
         }
         if let Some(p) = path {
-            self.ensure_nav_loaded(conn_id, key, p, true, cx);
+            // 刷新（fresh）：后台路径，让位用户手点（S2-①）。
+            self.ensure_nav_loaded(conn_id, key, p, true, JobPriority::Background, cx);
         }
         self.host.notice("已刷新元数据".to_string(), cx);
         cx.notify();
@@ -1762,7 +1788,8 @@ impl NavView {
             view.child_total.clear();
         }
         for cid in roots {
-            self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, cx);
+            // 刷新全部：后台路径（S2-①）。
+            self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, JobPriority::Background, cx);
         }
         self.host.notice("已刷新全部元数据".to_string(), cx);
         cx.notify();
