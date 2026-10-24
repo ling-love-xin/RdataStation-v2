@@ -1124,10 +1124,15 @@ impl DataSourceService {
         {
             Ok(v) => v,
             // 网络档案建不起隧道：真实连接同样会失败，直接把原因作为测试结果
-            Err(e) => return TestResult::err(e.to_string()),
+            Err(e) => return TestResult::err(test_failure_message(&e)),
         };
 
-        let mut result = engine::services::connection_probe::test_connection_result(config).await;
+        let mut result = match engine::services::connection_probe::test_connection(config).await {
+            Ok(r) => r,
+            // P1（2026-10-24）：失败时按 `ConnectionError` 分类附「常见原因」，
+            // 对齐 DBeaver ConnectionTestJob 的错误明细 + 原因提示（明细在下、原因在上）。
+            Err(e) => return TestResult::err(test_failure_message(&e)),
+        };
         // 探测结束：立即释放隧道（守卫 drop 关闭本地端口与后台任务）
         drop(guards);
         if !notes.is_empty() {
@@ -1136,6 +1141,9 @@ impl DataSourceService {
         result
     }
 
+    /// 测试连接失败的可读消息：错误明细 + 常见原因提示（P1，2026-10-24）。
+    ///
+    /// 按 `ConnectionError` 变体分类给排查方向；非连接域错误只保留明细。
     /// 测试**已保存**连接（导航侧入口）：回读记录 → 组装 `DataSourceSaveInput` → 走
     /// [`Self::test`]（同一套凭据注入 / 隧道 / 驱动属性规则，不注册连接池、不写库）。
     ///
@@ -1211,6 +1219,69 @@ impl DataSourceService {
 }
 
 // ==================== 私有工具 ====================
+
+/// 测试连接失败的可读消息：错误明细 + 常见原因提示（P1，2026-10-24）。
+///
+/// 按 `ConnectionError` 变体分类给排查方向；非连接域错误只保留明细。
+fn test_failure_message(e: &CoreError) -> String {
+    let hint = match e {
+        CoreError::Connection(c) => match c {
+            shared::error::ConnectionError::Refused { .. } => {
+                "确认目标服务已启动、主机端口正确；远程库检查防火墙 / 安全组是否放行"
+            }
+            shared::error::ConnectionError::Timeout { .. } => {
+                "网络不可达或服务响应过慢：确认主机可达，或到高级选项调大连接超时"
+            }
+            shared::error::ConnectionError::AuthenticationFailed { .. } => {
+                "用户名 / 密码不正确，或认证方式与库端不匹配：核对账号、认证方法（密码 / SSL）与库内授权"
+            }
+            shared::error::ConnectionError::Network { .. } => {
+                "网络链路异常：检查本机网络、代理设置与网络档案（隧道）状态"
+            }
+            shared::error::ConnectionError::HostNotFound { .. } => {
+                "主机名无法解析：检查主机地址拼写与 DNS；文件型库检查文件路径是否存在"
+            }
+            shared::error::ConnectionError::PortUnreachable { .. } => {
+                "端口不可达：确认服务监听该端口，且防火墙 / 安全组未拦截"
+            }
+            shared::error::ConnectionError::Tls { .. } => {
+                "SSL/TLS 握手失败：核对 SSL 模式与证书配置（CA / 证书 / 私钥），确认服务端支持的 TLS 版本"
+            }
+            shared::error::ConnectionError::NotFound(_) => {
+                "连接不存在：该连接可能已被删除，请刷新导航树后重试"
+            }
+            shared::error::ConnectionError::DriverNotFound { .. } => {
+                "驱动未安装或未注册：到「驱动目录」检查该驱动的安装状态"
+            }
+            shared::error::ConnectionError::NoActiveConnection => {
+                "没有活动连接：请先连接目标数据源"
+            }
+            shared::error::ConnectionError::PoolError { .. } => {
+                "连接池异常：稍后重试；持续失败可重启应用释放连接池"
+            }
+            shared::error::ConnectionError::PoolExhausted { .. } => {
+                "连接池已满：稍后重试，或关闭未使用的连接"
+            }
+            shared::error::ConnectionError::PoolClosed => {
+                "连接池已关闭：重新连接后再试"
+            }
+            shared::error::ConnectionError::Io { .. } => {
+                "I/O 错误：检查文件 / 目录是否可读（文件型库）及磁盘状态"
+            }
+            shared::error::ConnectionError::InvalidConfig { .. } => {
+                "连接配置无效：核对连接 URL、驱动属性与高级选项"
+            }
+            shared::error::ConnectionError::NotSupported(_) => {
+                "当前驱动不支持该操作：确认驱动版本与能力"
+            }
+            shared::error::ConnectionError::Other { .. } => {
+                "未知连接错误：查看下方明细，或检查服务端日志"
+            }
+        },
+        _ => return e.to_string(),
+    };
+    format!("{e}\n\n常见原因：{hint}")
+}
 
 /// 解析 tags JSON 数组（非法 / None → 空集）。
 fn parse_tags_json(tags: Option<&str>) -> Vec<String> {
@@ -1573,6 +1644,42 @@ fn map_project_connection_to_data_source(row: ProjectConnection) -> DataSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P1（2026-10-24）：测试连接失败按 `ConnectionError` 变体附「常见原因」。
+    #[test]
+    fn test_failure_message_classifies_connection_errors() {
+        use shared::error::{CommonError, ConnectionError};
+
+        // 连接域：分类 hint 必现，且明细保留。
+        let refused = CoreError::Connection(ConnectionError::refused("g_x", "Connection refused"));
+        let msg = test_failure_message(&refused);
+        assert!(msg.contains("Connection refused"), "明细保留: {msg}");
+        assert!(msg.contains("常见原因"), "{msg}");
+        assert!(msg.contains("防火墙"), "{msg}");
+
+        let auth = CoreError::Connection(ConnectionError::auth_failed("g_x", "root"));
+        let msg = test_failure_message(&auth);
+        assert!(msg.contains("常见原因") && msg.contains("认证"), "{msg}");
+
+        let tls = CoreError::Connection(ConnectionError::Tls {
+            conn_id: "g_x".into(),
+            reason: "handshake".into(),
+        });
+        let msg = test_failure_message(&tls);
+        assert!(msg.contains("SSL/TLS"), "{msg}");
+
+        let drv = CoreError::Connection(ConnectionError::DriverNotFound {
+            driver: "no_such".into(),
+        });
+        let msg = test_failure_message(&drv);
+        assert!(msg.contains("驱动目录"), "{msg}");
+
+        // 非连接域：只保留明细（CoreError Display 带错误码前缀），不硬套 hint。
+        let common = CoreError::Common(CommonError::General("generic boom".into()));
+        let msg = test_failure_message(&common);
+        assert!(msg.contains("generic boom"), "明细保留: {msg}");
+        assert!(!msg.contains("常见原因"), "非连接域不套 hint: {msg}");
+    }
 
     #[test]
     fn test_build_effective_url_file_db_stays_bare_path() {
