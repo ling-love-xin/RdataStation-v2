@@ -160,6 +160,10 @@ pub struct EditorShared {
     kernel_port: Rc<RefCell<Option<Rc<dyn crate::kernel::KernelsPort>>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
+    /// 【#54 B】语义诊断目录快照：宿主（workbench）按文档绑定连接注入；`None` =
+    /// 扫描不参与语义诊断（与「空目录退化」同一口径，宁缺毋滥）。目录是纯数据
+    /// （`Vec<String>`），可跨扫描工作线程 `Arc` 传递。
+    catalog_snapshot: Rc<RefCell<Option<Arc<Catalog>>>>,
 }
 
 impl Clone for EditorShared {
@@ -188,6 +192,7 @@ impl Clone for EditorShared {
             kernels: self.kernels.clone(),
             kernel_port: self.kernel_port.clone(),
             receipts: self.receipts.clone(),
+            catalog_snapshot: self.catalog_snapshot.clone(),
         }
     }
 }
@@ -222,6 +227,7 @@ impl EditorShared {
             kernels: Rc::new(RefCell::new(std::collections::HashMap::new())),
             kernel_port: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
+            catalog_snapshot: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -1235,6 +1241,17 @@ impl EditorShared {
         doc.capabilities().completion
             && doc.read_only().can_edit()
             && !doc.tier().disables_completion()
+    }
+
+    /// 【#54 B】注入语义诊断目录快照（幂等：覆盖旧快照）。宿主在「文档绑定连接 /
+    /// Schema 切换 / 导航树目录刷新」时推给 editor；editor 侧不主动向 database 要目录。
+    pub fn set_catalog_snapshot(&self, catalog: Option<Arc<Catalog>>) {
+        *self.catalog_snapshot.borrow_mut() = catalog;
+    }
+
+    /// 【#54 B】取当前目录快照（`None` = 未注入，扫描不参与语义诊断——空目录退化口径）
+    pub fn catalog_snapshot(&self) -> Option<Arc<Catalog>> {
+        self.catalog_snapshot.borrow().clone()
     }
 
     /// 折叠开不开：能力表 + 文件档位

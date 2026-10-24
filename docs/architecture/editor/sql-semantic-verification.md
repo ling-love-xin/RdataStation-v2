@@ -66,6 +66,10 @@ cargo test -p rds-engine --lib          # 653 项全绿
 
 ### 批次 B：待宿主注入后测（语义诊断上线）
 
+> 2026-10-24 更新：**editor 侧端口已就绪**（`EditorShared::set_catalog_snapshot` + scan 提交链带目录与
+> 方言，host `sql_dialect_for_document` 统一方言口径）；workbench 侧「文档绑定连接 → 目录快照推送」
+> 为并行线设计，注入后 B1-B4 可测。
+
 | # | 步骤 | 预期 |
 | --- | --- | --- |
 | B1 | 绑定连接 + 选 Schema，写 `SELECT missing FROM no_such_table` | `no_such_table` 报「未知表」、`missing` 报「未知列」红波浪线，区间精确指向原文 |

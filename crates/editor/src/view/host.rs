@@ -4222,19 +4222,9 @@ impl EditorHostPanel {
             crate::lsp::CompletionChoice::Sql => {
                 completion::install(state, self.shared.clone(), self.document.clone());
                 // 【#54 ②】SQL 模式 hover 走自研语义层（函数签名+中文描述+示例；
-                // 表/列 hover 待目录注入）。方言按文档绑定连接的驱动给；未绑定 /
-                // 驱动未知 → Ansi（解析失败返回 None，安全）。None 分支会摘掉旧 provider。
-                let dialect = self
-                    .with_document(|doc| doc.connection().map(str::to_string))
-                    .flatten()
-                    .and_then(|conn_id| {
-                        self.shared
-                            .connection_options()
-                            .iter()
-                            .find(|option| option.id == conn_id)
-                            .and_then(|option| crate::connection::sql_dialect(&option.db_type))
-                    })
-                    .unwrap_or(engine::sql::SqlDialect::Ansi);
+                // 表/列 hover 待目录注入）。方言 = 文档绑定连接的驱动（`sql_dialect_for_document`，
+                // 与跳转/语义诊断同一口径）；未绑定 / 驱动未知 → Ansi（解析失败返回 None，安全）。
+                let dialect = self.sql_dialect_for_document();
                 crate::lsp::bridge::install_hover(
                     state,
                     crate::lsp::sql_hover::SqlHoverProvider::new(dialect),
@@ -5532,12 +5522,34 @@ impl EditorHostPanel {
         let channel = self
             .with_document(|doc| doc.channel())
             .unwrap_or_else(Default::default);
+        // 【#54 B】语义诊断目录快照 + 方言：宿主注入过就给（随快照进扫描线程），
+        // 没注入 = 空目录 + Ansi（语义段跳过，词法诊断照常）。
+        let catalog = self
+            .shared
+            .catalog_snapshot()
+            .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
+        let dialect = self.sql_dialect_for_document();
         self.scan_revision = self.scan_revision.wrapping_add(1);
         self.scanner
-            .submit(self.scan_revision, text, channel, scope);
+            .submit(self.scan_revision, text, channel, scope, catalog, dialect);
         self.scan_pending = true;
         // 扫描不是“执行”，但它也要人按节拍把回执取回来——共用同一条轮询泵
         self.ensure_exec_pump(cx);
+    }
+
+    /// 【#54】文档绑定连接的 SQL 方言（未绑定 / 驱动未知 → Ansi 兜底，解析失败返回
+    /// None 安全）。hover / 跳转 / 语义诊断共用这一个口径。
+    fn sql_dialect_for_document(&self) -> engine::sql::SqlDialect {
+        self.with_document(|doc| doc.connection().map(str::to_string))
+            .flatten()
+            .and_then(|conn_id| {
+                self.shared
+                    .connection_options()
+                    .iter()
+                    .find(|option| option.id == conn_id)
+                    .and_then(|option| crate::connection::sql_dialect(&option.db_type))
+            })
+            .unwrap_or(engine::sql::SqlDialect::Ansi)
     }
 
     fn ensure_exec_pump(&self, cx: &mut Context<Self>) {

@@ -90,6 +90,10 @@ struct Job {
     text: String,
     channel: ExecChannel,
     scope: ScanScope,
+    /// 【#54 B】语义诊断目录快照（`Catalog::default()` = 空目录，语义段跳过）
+    catalog: Arc<Catalog>,
+    /// 【#54 B】语义诊断方言（宿主按文档绑定连接的驱动给；Ansi = 通用兜底）
+    dialect: engine::sql::SqlDialect,
 }
 
 /// 待算槽位 + 唤醒信号 + 停机标志
@@ -131,8 +135,17 @@ impl Scanner {
         }
     }
 
-    /// 提交一份文本（**覆盖**尚未开算的那一份）
-    pub fn submit(&self, revision: u64, text: String, channel: ExecChannel, scope: ScanScope) {
+    /// 提交一份文本（**覆盖**尚未开算的那一份）；`catalog` / `dialect` = 语义诊断的
+    /// 目录快照与方言（宿主按文档绑定连接注入；空目录 + Ansi = 语义段跳过）
+    pub fn submit(
+        &self,
+        revision: u64,
+        text: String,
+        channel: ExecChannel,
+        scope: ScanScope,
+        catalog: Arc<Catalog>,
+        dialect: engine::sql::SqlDialect,
+    ) {
         let mut guard = self
             .shared
             .slot
@@ -143,6 +156,8 @@ impl Scanner {
             text,
             channel,
             scope,
+            catalog,
+            dialect,
         });
         self.shared.signal.notify_one();
     }
@@ -223,17 +238,16 @@ fn run(job: &Job) -> ScanReport {
         Vec::new()
     };
     let diagnostics = if job.scope.diagnostics {
-        // 诊断只要文本本身（目录与连接是补全面的事，这里给空的就是"不参与"）
+        // 诊断：词法层看文本本身；语义层（未知表/列）看目录快照——快照为空目录 =
+        // 不参与（与无目录退化同一口径）。方言由宿主按连接驱动注入（`job.dialect`）。
         language_service::diagnostics(&Request {
             text: &job.text,
             cursor: 0,
             selection: None,
-            catalog: &Catalog::default(),
+            catalog: &job.catalog,
             connection: None,
             channel: job.channel,
-            // 语义诊断方言：宿主按连接驱动注入后走 `job` 链路；scan 路径目录为空，
-            // 语义段本来就跳过，这里给 Ansi 只是占位（不会产生语义诊断）
-            dialect: engine::sql::SqlDialect::Ansi,
+            dialect: job.dialect,
         })
     } else {
         Vec::new()
@@ -251,6 +265,7 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{Job, ScanScope, Scanner, is_current, run};
     use crate::channel::ExecChannel;
+    use crate::completion::Catalog;
     use std::time::{Duration, Instant};
 
     fn wait_for(scanner: &Scanner, revision: u64) -> Option<super::ScanReport> {
@@ -278,6 +293,8 @@ mod tests {
             "SELECT (\n  1\n);\nSELECT 2;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            std::sync::Arc::new(Catalog::default()),
+            engine::sql::SqlDialect::Ansi,
         );
         let report = wait_for(&scanner, 7).expect("回执应当回来");
         assert_eq!(report.revision, 7);
@@ -296,6 +313,8 @@ mod tests {
             "SELECT (\n  1\n);\nSELECT 'x".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            std::sync::Arc::new(Catalog::default()),
+            engine::sql::SqlDialect::Ansi,
         );
         let report = wait_for(&scanner, 9).expect("回执应当回来");
         assert!(report.folds.is_empty(), "词法失败就不给候选");
@@ -309,6 +328,8 @@ mod tests {
             text: "SELECT (\n  1\n)".to_string(),
             channel: ExecChannel::Source,
             scope: ScanScope::none(),
+            catalog: std::sync::Arc::new(Catalog::default()),
+            dialect: engine::sql::SqlDialect::Ansi,
         };
         let report = run(&job);
         assert!(report.folds.is_empty(), "关掉折叠就不该算候选");
@@ -329,6 +350,8 @@ mod tests {
                 format!("SELECT {revision};"),
                 ExecChannel::Source,
                 ScanScope::full(),
+                std::sync::Arc::new(Catalog::default()),
+                engine::sql::SqlDialect::Ansi,
             );
         }
         let report = wait_for(&scanner, 3).expect("最新一份的回执应当回来");
@@ -348,6 +371,8 @@ mod tests {
             "SELECT 1;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            std::sync::Arc::new(Catalog::default()),
+            engine::sql::SqlDialect::Ansi,
         );
         let report = wait_for(&scanner, 3).expect("回执应当回来");
         assert!(is_current(&report, 3), "与当前修订号相等才采用");
@@ -364,6 +389,8 @@ mod tests {
             "SELECT 1;".to_string(),
             ExecChannel::Source,
             ScanScope::full(),
+            std::sync::Arc::new(Catalog::default()),
+            engine::sql::SqlDialect::Ansi,
         );
         let start = Instant::now();
         drop(scanner);
