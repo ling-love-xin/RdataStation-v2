@@ -552,7 +552,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - 小数 / Decimal 整数部分分组——延后，先只对可解析 `i64` 的整数值分组。
 - 结果落盘恢复（dbdelve `StoredGrid`）→ P1 另立项；全量流式拉入（dbdelve 4GB 持有）→ 不采纳，保留窗口模式内存界住；polars 不引入（§8.8 选型记录）。
 
-**测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **164 passed / 0 failed**（161 + 千分位 1 例 + 列级口径一致性 2 例）；`cargo check -p rds-editor` Finished 无 error（宿主侧仅 `ColumnWidthsChanged` 分派小段，与既有事件分支同范式）。
+**测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **164 passed / 0 failed**（161 + 千分位 1 例 + 列级口径一致性 2 例）；`cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**，编译无 error（宿主侧仅 `ColumnWidthsChanged` 分派小段，与既有事件分支同范式；唯一 `unused import: signature_view` warning 属并行线未提交改动，非本线符号；603 与历史 683 基线的差额来自并行线工作区状态，本线未删改 editor 测试模块）。
 
 ## 8. 协作纪律
 

@@ -146,6 +146,5 @@ dbdelve 同款取舍（`result_grid.rs:1313-1333,1555-1602`）：`clip` 只影�
 ### 5.2 回归基线
 
 - `cargo test -p rds-result-panel --lib` = **164 passed / 0 failed / 0 ignored**。
-- `cargo check -p rds-editor` Finished 无 error（宿主仅 `ColumnWidthsChanged` 分派小段）。
-- `cargo test -p rds-editor --lib` 整包若被并行线未提交改动阻塞，按纪律如实上报、不绕过、不替并行线修。
+- `cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**，编译无 error；本线宿主侧仅 `ColumnWidthsChanged` 分派小段。历史 683 基线与 603 的差额来自并行线未提交改动，非本线因果；后续整包若被并行线阻塞，按纪律如实上报、不绕过、不替并行线修。
 
