@@ -406,10 +406,13 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 | 决策点 | 拍板口径 |
 | --- | --- |
-| 模型方案 | **A 叠加层**：底层 `rows` 与格级 `ChangeSet` 完全不动；delegate 内新增本地行集合 + 删除标记集合；行身份扩成 `RowRef { Data(底层号) \| Local(稳定 id) }`，`view_rows` 映射同步扩展；本地行格编辑单独存、不进提交批次；行级动作走独立 `RowHistory` 双栈；删除只打标记不真删，底层行号不滑移。否决方案 B（新增直接进 `rows` + 行号偏移账本平移）——全链路平移错位风险高、本地行易漏排除混入下发 / 统计 |
+| 模型方案 | **A 叠加层**：底层 `rows` 与格级 `ChangeSet` 完全不动；行身份扩成 `RowRef { Data(底层号) \| Local(稳定 id) }`，`view_rows` 映射同步扩展；本地行格编辑单独存、不进提交批次；行级动作走独立 `RowHistory` 双栈；删除只打标记不真删，底层行号不滑移。否决方案 B（新增直接进 `rows` + 行号偏移账本平移）——全链路平移错位风险高、本地行易漏排除混入下发 / 统计 |
 | 删除行呈现 | 灰显 + 删除线保留在网格内，撤销可恢复（对齐 DBeaver 默认；不直接移出网格） |
 | 新增行落点 | 插到当前选中行紧下方；无选中行时追加末尾（对齐 DBeaver 默认） |
 | 撤销 / 重做 | 单组按钮：格级 `EditHistory` 优先，栈空再走本地行栈 |
+| 权威层归属（2026-10-24 二次确认，**修正**草图「delegate 内」口径） | 本地行集合 + 删除标记 + 行级历史挂 **store 结果集槽位**（与 `ChangeSet` / `EditHistory` 并列）；delegate 只在 `sync` 时投影、不持本地行真值。原因：`set_data` 每次投影重建 delegate 行状态，本地行挂视图层会在切标签 / 提交 / 撤销 / 重投影后丢失；与现有「delegate 只投影、不缓存第二份真值」约定一致 |
+| 纳入范围（2026-10-24 确认） | 本地行进入网格视图（筛选 / 排序 / 分组 / 统计 / 预览 / 转置 / 复制 TSV / 文本视图）；**被删行全链路排除**（仅网格内灰显删除线可见，不进分组 / 统计 / 导出 / 复制）；提交批次与 SQL 导出一律排除本地行与被删行，不下发 INSERT / DELETE |
+| 交付边界（2026-10-24 确认） | 分两轮：本轮（#28-A）只做模型层——`RowRef` + `LocalRowSet` + `RowHistory` + store 槽位 + 纯函数单测；动作按钮接线、删除线渲染、本地行格编辑、全链路 `RowRef` 分叉归下一轮（#28-B） |
 
 **行为口径（实现时照此）**：
 
@@ -423,7 +426,25 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - delegate 的 `view_rows: Option<Vec<usize>>` 是「底层数据行号 → 视图行」映射（`None` = 恒等）；本地新增行**没有底层行号可映射**，删除行需要在筛选 / 排序 / 导出 / 列统计 / 分组 / 值预览全链路分叉到 `RowRef`。
 - INSERT 编码在导出层有单行先例（`export.rs`），DELETE 编码不存在；现有 `FetchMore` 窗口模型无页号。
 
-**测试基线（#26 回归）**：`cargo test -p rds-result-panel --lib` = **128 passed / 0 failed**（+1：`status_action_placeholders_follow_dbeaver_group_order` 断言三段顺序 / 下页不在占位清单 / tooltip 非空）；`cargo test -p rds-editor --lib` = **590 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例；状态行内部三段重排不影响窗口测试——仅断言 `editor-result-status-row` 存在、`editor-result-more` 按 `has_more` 渲染、`selected_row` 状态字段）。
+**#28-A 模型层已落地（2026-10-24，本轮只交付模型 + 单测，无可见 UI 变化）**：
+
+- 新模块 `crates/result_panel/src/rowset.rs`：
+  - `RowRef { Data(usize), Local(u64) }`：行身份判别 / 取值访问器（`data_index` / `local_id` / `is_data` / `is_local`）；本地行 id 与底层行号不做偏移账本（方案 B 已否决）。
+  - `LocalRow { id, cells }`：本地行快照（新增 = 全空；复制 = 来源行展示值快照，独立拷贝、不引用底层行）。
+  - `LocalRowSet`：本地行登记 / 取号 / 移除快照 / 本地行就地改值；底层行删除标记 `BTreeSet<usize>`（`mark_deleted` / `unmark_deleted` / `is_deleted`）；`clear` 清空集合但 id 计数器不归零（新 id 继续递增，不与已作废快照撞号）。
+  - `RowOp`：行级动作快照（`InsertLocal { local_id, anchor }` / `DuplicateLocal { local_id, source, snapshot, anchor }` / `DeleteData(usize)` / `RemoveLocal { local_id, cells, anchor }`）；`anchor` = 锚定底层行号（插其下方，`None` = 末尾），撤销重做恢复位置用，落点排序归下一轮视图接线。
+  - `RowHistory`：行级撤销 / 重做双栈（`push` 清空重做栈、`undo` / `redo` / `can_undo` / `can_redo` / `clear`）；与格级 `EditHistory` 并列、互不混栈。
+  - `visible_refs(data_row_count, local)`：基准叠加序列 = 底层未删行按原序 + 本地行按登记序；被删行不出现。筛选 / 排序 / 锚点落点由视图层在序列上再加工。
+- `store.rs` 槽位：`DocumentResults` 新增 `locals: Vec<LocalRowSet>`、`row_histories: Vec<RowHistory>`，与 `sets` / `changes` / `histories` 同序同增减；`Replace` / `NewSet` / `Append`（形状不符替换）/ `evict_oldest` 生命周期同步清空 / 淘汰；访问器 `local_rows` / `mutate_local_rows` / `row_history` / `mutate_row_history`（不存在返回 `false`，口径同 `mutate_change_set`）。`Append` 可追加路径不清空本地叠加层（与格级变更集现状一致：底层行追加，本地行保留）。
+
+**#28-B 接线待办（下一轮，本轮不做）**：
+
+- 动作按钮接线：新增行 / 复制行 / 删除行 / 行级撤销 / 重做（底部三段式占位钮 + 右键菜单行级入口）；无主键结果集（`editable = false`）禁用三个行级按钮。
+- delegate 视图序列 `view_rows` 由 `Vec<usize>` 分叉到 `Vec<RowRef>`；取值 / 脏格 / 右键整行 / 转置 / 筛选排序 / 分组统计 / 值预览 / 选中态 / 复制 TSV / 文本视图 / 导出共 12 处行号依赖点逐一分叉；被删行排除在统计 / 分组 / 导出 / 复制之外。
+- 删除行灰显 + 删除线渲染；本地行格编辑入 `LocalRowSet`（不进 `ChangeSet`、不进提交批次）；单组撤销组合 = 格级 `EditHistory` 优先、栈空再走 `RowHistory`。
+- 提交批次忽略本地行级变更并提示「行级变更暂未支持下发」；SQL 导出排除本地行与被删行。
+
+**测试基线（#28-A 回归）**：`cargo test -p rds-result-panel --lib` = **147 passed / 0 failed**（新增 `rowset` 模型 13 例 + `store` 槽位生命周期 4 例）；`cargo test -p rds-editor --lib` = **592 passed / 1 failed / 1 ignored**——失败用例 `named_parameters_hold_execution_until_filled` 属并行线 `engine/driver/*`、`editor/connection.rs`、`editor/view/host.rs` 未提交改动的参数绑定下发链路，本线 diff 为 `result_panel` 纯新增（`store.rs` 195+/0−、`lib.rs` +2、新文件 `rowset.rs`），未改 editor 既有逻辑，与该失败无因果；1 ignored = 需本机 ipykernel 的 python notebook 用例。
 
 ## 8. 协作纪律
 

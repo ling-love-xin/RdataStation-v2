@@ -14,6 +14,7 @@
 //!
 //! - [`store`]：结果存储（`ResultStore` 按文档分槽 + `ResultEntry` 结果集 + 列类型/列注释）
 //! - [`changes`]：结果集就地编辑的变更集（pending / committed / conflict 三态）
+//! - [`rowset`]：行级叠加层（本地新增 / 复制行 + 删除标记 + 行级撤销重做双栈）
 //! - [`grid`]：结果网格（`ResultGridDelegate` + DataTable）与结果工具栏 / 状态行 / 渲染
 //! - [`sets`]：结果集标签条（TabBar 投影，不持有数据）
 //! - [`error_card`] / [`script_card`]：结果区两张卡片（失败 / 脚本输出）
@@ -29,6 +30,7 @@ pub mod export;
 pub mod grid;
 pub mod panel;
 pub mod ports;
+pub mod rowset;
 pub mod script_card;
 pub mod sets;
 pub mod status;

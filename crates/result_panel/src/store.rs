@@ -33,6 +33,7 @@ use ::shared::string::tsv_row;
 
 use crate::changes::{ChangeSet, EditHistory};
 use crate::export::RowKey;
+use crate::rowset::{LocalRowSet, RowHistory};
 use workbench_shell::model::{ColumnAnnotation, DocumentId, ExecChannel};
 
 /// 结果落到哪里（B2）：执行族里「批量执行」与「在新结果标签中执行」的差别只在这一维
@@ -647,6 +648,12 @@ struct DocumentResults {
     /// 【撤销】每份结果集的**编辑历史**（撤销 / 重做双栈；与 `changes` 同序同增减——
     /// 历史属于“这次抓到的数据”，结果被替换 / 淘汰时作废，切标签不清空）
     histories: Vec<EditHistory>,
+    /// 【#28 行级叠加层】每份结果集的本地行集合 + 删除标记（与 `sets` 同序同增减；
+    /// 生命周期同格级变更集：结果被替换 / 淘汰时作废，切标签不清空）
+    locals: Vec<LocalRowSet>,
+    /// 【#28】每份结果集的**行级历史**（新增 / 复制 / 删除双栈；与格级 `histories`
+    /// 并列、互不混栈；同序同增减，结果作废时清空）
+    row_histories: Vec<RowHistory>,
     /// 当前选中的结果集下标（始终指向 `sets` 中的有效位置；`sets` 非空时必有）
     active: usize,
     /// 【并排对比】对比选中的结果集下标（`None` = 未开对比；`Some` ≠ `active` 恒成立）
@@ -683,6 +690,8 @@ impl ResultStore {
                     sets: Vec::new(),
                     changes: Vec::new(),
                     histories: Vec::new(),
+                    locals: Vec::new(),
+                    row_histories: Vec::new(),
                     active: 0,
                     compare: None,
                 });
@@ -703,10 +712,19 @@ impl ResultStore {
                     if let Some(history) = slot.histories.get_mut(slot.active) {
                         history.clear();
                     }
+                    // 【#28】本地叠加层与行级历史随旧结果一起作废
+                    if let Some(local) = slot.locals.get_mut(slot.active) {
+                        local.clear();
+                    }
+                    if let Some(row_history) = slot.row_histories.get_mut(slot.active) {
+                        row_history.clear();
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
                     slot.histories.push(EditHistory::new());
+                    slot.locals.push(LocalRowSet::new());
+                    slot.row_histories.push(RowHistory::new());
                     slot.active = 0;
                 }
             }
@@ -715,6 +733,8 @@ impl ResultStore {
                 slot.sets.push(entry);
                 slot.changes.push(ChangeSet::new());
                 slot.histories.push(EditHistory::new());
+                slot.locals.push(LocalRowSet::new());
+                slot.row_histories.push(RowHistory::new());
                 if slot.sets.len() == 1 {
                     slot.active = 0;
                 }
@@ -746,10 +766,19 @@ impl ResultStore {
                     if let Some(history) = slot.histories.get_mut(slot.active) {
                         history.clear();
                     }
+                    // 【#28】本地叠加层与行级历史随替换作废
+                    if let Some(local) = slot.locals.get_mut(slot.active) {
+                        local.clear();
+                    }
+                    if let Some(row_history) = slot.row_histories.get_mut(slot.active) {
+                        row_history.clear();
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
                     slot.histories.push(EditHistory::new());
+                    slot.locals.push(LocalRowSet::new());
+                    slot.row_histories.push(RowHistory::new());
                     slot.active = 0;
                 }
             }
@@ -928,6 +957,68 @@ impl ResultStore {
         true
     }
 
+    /// 【#28】某份结果集的本地叠加层（本地行 + 删除标记；只读投影 / 计数用）
+    pub fn local_rows(&self, document: &DocumentId, index: usize) -> Option<&LocalRowSet> {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .and_then(|slot| slot.locals.get(index))
+    }
+
+    /// 【#28】变更某份结果集的本地叠加层（新增 / 复制 / 删除标记都走这里）
+    ///
+    /// 与 [`Self::mutate_change_set`] 同口径：文档或结果集下标不存在 = `false`。
+    pub fn mutate_local_rows(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        update: impl FnOnce(&mut LocalRowSet),
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(local) = slot.locals.get_mut(index) else {
+            return false;
+        };
+        update(local);
+        true
+    }
+
+    /// 【#28】某份结果集的行级历史（新增 / 复制 / 删除撤销重做双栈；没有则 `None`）
+    pub fn row_history(&self, document: &DocumentId, index: usize) -> Option<&RowHistory> {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .and_then(|slot| slot.row_histories.get(index))
+    }
+
+    /// 【#28】变更某份结果集的行级历史（行级动作入栈 / 撤销 / 重做 / 结果作废清空）
+    ///
+    /// 与 [`Self::mutate_history`] 同口径：文档或结果集下标不存在 = `false`。
+    pub fn mutate_row_history(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        update: impl FnOnce(&mut RowHistory),
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(history) = slot.row_histories.get_mut(index) else {
+            return false;
+        };
+        update(history);
+        true
+    }
+
     /// 【T2a】把某一格的新值写进**指定**结果集的行数据（本地应用；返回是否真的改到）
     ///
     /// 提交回执后调用：`index` = 结果集标签条的下标（不是选中项），列按数据列下标。
@@ -979,6 +1070,9 @@ fn evict_oldest(slot: &mut DocumentResults) {
         slot.changes.remove(victim);
         // 【撤销】编辑历史跟着结果集一起淘汰（同理）
         slot.histories.remove(victim);
+        // 【#28】本地叠加层与行级历史跟着结果集一起淘汰（同理）
+        slot.locals.remove(victim);
+        slot.row_histories.remove(victim);
         if victim < slot.active {
             slot.active -= 1;
         }
@@ -1691,5 +1785,104 @@ mod tests {
             "文档不存在 = false"
         );
         assert!(store.mutate_history(&document, 0, |_| {}), "命中 = true");
+    }
+
+    /// 【#28】本地叠加层与变更集同序：新结果带空集合，替换作废旧叠加层
+    #[test]
+    fn locals_track_sets_lifecycle() {
+        use crate::rowset::LocalRow;
+
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        // 首次执行：本地叠加层存在且为空
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(store
+            .local_rows(&document, 0)
+            .is_some_and(|set| set.is_empty()));
+
+        // 追加新结果：叠加层与 sets 同长
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet);
+        assert_eq!(store.sets(&document).len(), 2);
+        assert!(store.local_rows(&document, 1).is_some_and(|set| set.is_empty()));
+
+        // 往第 0 份写本地行 + 删除标记
+        store.mutate_local_rows(&document, 0, |set| {
+            let id = set.next_id();
+            set.push_local(LocalRow::new(id, vec!["".to_string()]));
+            set.mark_deleted(0);
+        });
+        assert!(store
+            .local_rows(&document, 0)
+            .is_some_and(|set| !set.is_empty()));
+
+        // 替换选中那份：本地叠加层作废（新数据是新结果，旧本地行没有可归属的对象）
+        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace);
+        assert!(
+            store
+                .local_rows(&document, 0)
+                .is_some_and(|set| set.is_empty()),
+            "替换后本地叠加层清空"
+        );
+    }
+
+    /// 【#28】行级历史与格级历史同生命周期：替换作废旧行级历史
+    #[test]
+    fn row_histories_track_sets_lifecycle() {
+        use crate::rowset::RowOp;
+
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(store
+            .row_history(&document, 0)
+            .is_some_and(|h| !h.can_undo()));
+
+        store.push(entry("doc-1", "select 2", 2), ResultPlacement::NewSet);
+        assert_eq!(store.sets(&document).len(), 2);
+        assert!(store.row_history(&document, 1).is_some_and(|h| !h.can_undo()));
+
+        store.mutate_row_history(&document, 0, |h| {
+            h.push(RowOp::InsertLocal {
+                local_id: 1,
+                anchor: None,
+            });
+        });
+        assert!(store.row_history(&document, 0).is_some_and(|h| h.can_undo()));
+
+        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace);
+        assert!(
+            store
+                .row_history(&document, 0)
+                .is_some_and(|h| !h.can_undo()),
+            "替换后行级历史清空"
+        );
+    }
+
+    /// 【#28】mutate_local_rows 与 mutate_change_set 同口径：文档 / 下标不存在返回 false
+    #[test]
+    fn mutate_local_rows_refuses_unknown_slot() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(!store.mutate_local_rows(&document, 7, |_| {}), "下标越界 = false");
+        assert!(
+            !store.mutate_local_rows(&DocumentId::new("nope"), 0, |_| {}),
+            "文档不存在 = false"
+        );
+        assert!(store.mutate_local_rows(&document, 0, |_| {}), "命中 = true");
+    }
+
+    /// 【#28】mutate_row_history 同上口径
+    #[test]
+    fn mutate_row_history_refuses_unknown_slot() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace);
+        assert!(!store.mutate_row_history(&document, 7, |_| {}), "下标越界 = false");
+        assert!(
+            !store.mutate_row_history(&DocumentId::new("nope"), 0, |_| {}),
+            "文档不存在 = false"
+        );
+        assert!(store.mutate_row_history(&document, 0, |_| {}), "命中 = true");
     }
 }
