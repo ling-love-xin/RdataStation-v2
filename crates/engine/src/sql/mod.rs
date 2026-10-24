@@ -28,7 +28,9 @@ mod function_manual;
 mod functions;
 mod highlight;
 mod hover;
+mod jump;
 mod parser;
+mod refs;
 mod script;
 mod semantic;
 mod split;
@@ -47,6 +49,7 @@ pub use functions::{
 pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use hover::{hover_at, HoverInfo, HoverKind};
+pub use jump::{jump_at, JumpKind, JumpTarget};
 pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
 pub use semantic::{diagnose, CatalogTable, SemanticIssue};

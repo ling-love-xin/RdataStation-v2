@@ -27,13 +27,13 @@
 //! - 非 SELECT（INSERT / UPDATE / DDL / 解析失败）不产语义诊断，与
 //!   `projection_sources` 同口径。
 
-use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef, TableSource};
+use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef};
 use sqlglot_rust::optimizer::qualify_columns::qualify_columns;
 use sqlglot_rust::schema::MappingSchema;
-use sqlglot_rust::tokens::{Token, TokenType, Tokenizer};
-use sqlglot_rust::{parse, Dialect};
+use sqlglot_rust::parse;
 
 use super::engine::SqlDialect;
+use super::refs::{collect_table_refs, locate, qualify_table_name, same_table, to_inner_dialect, tokenize};
 
 /// 一条语义诊断（**字节区间**，行列为派生，与 `editor::Diagnostic` 同构）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,43 +161,6 @@ pub fn diagnose(sql: &str, dialect: SqlDialect, tables: &[CatalogTable]) -> Vec<
     }
 
     issues
-}
-
-/// 顶层表引用收集（LATERAL 内层也收，子查询 / 表函数 / UNNEST 不在本版范围）
-fn collect_table_refs<'a>(source: &'a TableSource, out: &mut Vec<&'a TableRef>) {
-    match source {
-        TableSource::Table(table) => out.push(table),
-        TableSource::Lateral { source } => collect_table_refs(source, out),
-        TableSource::Subquery { .. }
-        | TableSource::TableFunction { .. }
-        | TableSource::Unnest { .. }
-        | TableSource::Pivot { .. }
-        | TableSource::Unpivot { .. } => {}
-    }
-}
-
-/// 表引用 → 限定名（`catalog.schema.table` 截到 `schema.table`，与
-/// `parser::single_from_table` 同口径——NavCache 键是 `schema.表` 真实名）
-fn qualify_table_name(table: &TableRef) -> String {
-    match (&table.schema, &table.catalog) {
-        (Some(schema), _) => format!("{}.{}", schema, table.name),
-        (None, Some(catalog)) => format!("{}.{}", catalog, table.name),
-        (None, None) => table.name.clone(),
-    }
-}
-
-/// 目录表名与引用名同表判定：目录 `public.orders`、引用裸名 `orders` 也认
-/// （两边末段相同即可——不同 schema 的同名表在本目录粒度上不区分）
-fn same_table(catalog: &str, referenced: &str) -> bool {
-    if catalog == referenced {
-        return true;
-    }
-    catalog
-        .rsplit('.')
-        .next()
-        .zip(referenced.rsplit('.').next())
-        .map(|(a, b)| a == b)
-        .unwrap_or(false)
 }
 
 /// qualify 后遍历：收集仍是 `Column { table: None }` 的列（解析不到来源），
@@ -362,55 +325,8 @@ fn walk_expr(
     }
 }
 
-// ---------- token 层定位 ----------
+// ---------- token 层定位（原语在 refs：tokenize / locate / to_inner_dialect） ----------
 
-/// 分词（失败返回空：词法失败 = 诊断退化，与高亮同口径）
-fn tokenize(sql: &str) -> Vec<Token> {
-    let mut tokenizer = Tokenizer::new(sql);
-    tokenizer.tokenize().unwrap_or_default()
-}
-
-/// 找 `name`（单词 token，大小写不敏感）在语句中的**首次**字节区间
-///
-/// `Token::position` 是字符下标；字节偏移换算与 `highlight.rs::byte_offsets` 一致。
-/// 限定名（`schema.t`）取末段匹配——FROM 处 `public.orders` 命中 `orders` token。
-fn locate(sql: &str, tokens: &[Token], name: &str) -> Option<(usize, usize)> {
-    let needle = name.rsplit('.').next().unwrap_or(name).to_lowercase();
-    // 字符下标 → 字节偏移（顺序扫描，同 highlight::byte_offsets）
-    let mut byte = 0usize;
-    let mut char_indices = sql.char_indices();
-    let mut next_byte = char_indices.next().map(|(b, _)| b);
-    for token in tokens {
-        while byte < token.position {
-            next_byte = char_indices.next().map(|(b, _)| b);
-            byte += 1;
-        }
-        let start = next_byte.unwrap_or(sql.len());
-        // 只匹配未加引号的标识符（引号标识符 token 值不带引号，但带引号的列名
-        // 精确性由调用方负责；本版不判引号标识符）
-        if token.token_type == TokenType::Identifier
-            && token.value.to_lowercase() == needle
-        {
-            return Some((start, start + needle.len()));
-        }
-    }
-    None
-}
-
-fn to_inner_dialect(dialect: SqlDialect) -> Dialect {
-    match dialect {
-        SqlDialect::Ansi => Dialect::Ansi,
-        SqlDialect::Mysql => Dialect::Mysql,
-        SqlDialect::Postgres => Dialect::Postgres,
-        SqlDialect::Sqlite => Dialect::Sqlite,
-        SqlDialect::Duckdb => Dialect::DuckDb,
-        SqlDialect::MsSQL => Dialect::Tsql,
-        SqlDialect::Oracle => Dialect::Oracle,
-        SqlDialect::Snowflake => Dialect::Snowflake,
-        SqlDialect::BigQuery => Dialect::BigQuery,
-        SqlDialect::Redshift => Dialect::Redshift,
-    }
-}
 
 #[cfg(test)]
 mod tests {

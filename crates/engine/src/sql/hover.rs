@@ -21,15 +21,19 @@
 //!   ——与 semantic「只做顶层」口径一致，打字期价值在顶层。
 //! - 无目录时表 hover 退化为「仅表名」（列列表不可得），函数 hover 不受影响。
 
-use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef, TableSource};
+use sqlglot_rust::ast::{DataType, Expr, SelectItem, Statement, TableRef};
 use sqlglot_rust::optimizer::qualify_columns::qualify_columns;
 use sqlglot_rust::schema::MappingSchema;
-use sqlglot_rust::tokens::{Token, TokenType, Tokenizer};
-use sqlglot_rust::{parse, Dialect};
+use sqlglot_rust::tokens::TokenType;
+use sqlglot_rust::parse;
 
 use super::engine::SqlDialect;
 use super::function_manual::search_manual;
 use super::functions::builtin_signatures;
+use super::refs::{
+    collect_column_refs, collect_table_refs, qualify_table_name, same_table, to_inner_dialect,
+    token_byte_spans, tokenize,
+};
 use super::semantic::CatalogTable;
 
 /// hover 目标类别（UI 决定图标/配色）
@@ -279,117 +283,6 @@ fn column_hover(word: &str, select: &sqlglot_rust::ast::SelectStatement) -> Opti
     }
     lines.push("类型信息待目录携带列类型后补充".to_string());
     Some(lines)
-}
-
-// ---------- 收集与定位（semantic 同口径，独立副本避免跨模块私有依赖） ----------
-
-fn collect_table_refs<'a>(source: &'a TableSource, out: &mut Vec<&'a TableRef>) {
-    match source {
-        TableSource::Table(table) => out.push(table),
-        TableSource::Lateral { source } => collect_table_refs(source, out),
-        _ => {}
-    }
-}
-
-fn qualify_table_name(table: &TableRef) -> String {
-    match (&table.schema, &table.catalog) {
-        (Some(schema), _) => format!("{}.{}", schema, table.name),
-        (None, Some(catalog)) => format!("{}.{}", catalog, table.name),
-        (None, None) => table.name.clone(),
-    }
-}
-
-/// 目录表名与引用名同表判定（末段相同即认，与 semantic::same_table 同口径）
-fn same_table(catalog: &str, referenced: &str) -> bool {
-    if catalog == referenced {
-        return true;
-    }
-    catalog
-        .rsplit('.')
-        .next()
-        .zip(referenced.rsplit('.').next())
-        .map(|(a, b)| a == b)
-        .unwrap_or(false)
-}
-
-/// 顶层 SELECT 表达式层里的列引用（带限定符），子查询 / CTE 内部不收集
-///
-/// 返回 owned（列名, 限定表名）——`Expr::walk` 的 visitor 是 HRTB（for<'a>），
-/// 从闭包参数里借不出与外部生命周期匹配的引用，收集时 clone 值。
-fn collect_column_refs(
-    select: &sqlglot_rust::ast::SelectStatement,
-    out: &mut Vec<(String, Option<String>)>,
-) {
-    let mut exprs: Vec<&Expr> = Vec::new();
-    for item in &select.columns {
-        if let SelectItem::Expr { expr, .. } = item {
-            exprs.push(expr);
-        }
-    }
-    for join in &select.joins {
-        if let Some(on) = &join.on {
-            exprs.push(on);
-        }
-    }
-    if let Some(w) = &select.where_clause {
-        exprs.push(w);
-    }
-    for g in &select.group_by {
-        exprs.push(g);
-    }
-    if let Some(h) = &select.having {
-        exprs.push(h);
-    }
-    for o in &select.order_by {
-        exprs.push(&o.expr);
-    }
-    for expr in exprs {
-        expr.walk(&mut |e| {
-            if let Expr::Column { table, name, .. } = e {
-                out.push((name.clone(), table.clone()));
-            }
-            true
-        });
-    }
-}
-
-/// 分词（失败返回空：词法失败 = hover 退化，与 semantic 同口径）
-fn tokenize(sql: &str) -> Vec<Token> {
-    let mut tokenizer = Tokenizer::new(sql);
-    tokenizer.tokenize().unwrap_or_default()
-}
-
-/// 每个 token 的字节区间（`Token::position` 是字符下标；换算同
-/// `highlight::byte_offsets` / `semantic::locate`——顺序扫描 char_indices）
-fn token_byte_spans(sql: &str, tokens: &[Token]) -> Vec<(usize, usize)> {
-    let mut spans = Vec::with_capacity(tokens.len());
-    let mut byte = 0usize;
-    let mut char_indices = sql.char_indices();
-    let mut next_byte = char_indices.next().map(|(b, _)| b);
-    for token in tokens {
-        while byte < token.position {
-            next_byte = char_indices.next().map(|(b, _)| b);
-            byte += 1;
-        }
-        let start = next_byte.unwrap_or(sql.len());
-        spans.push((start, start + token.value.len()));
-    }
-    spans
-}
-
-fn to_inner_dialect(dialect: SqlDialect) -> Dialect {
-    match dialect {
-        SqlDialect::Ansi => Dialect::Ansi,
-        SqlDialect::Mysql => Dialect::Mysql,
-        SqlDialect::Postgres => Dialect::Postgres,
-        SqlDialect::Sqlite => Dialect::Sqlite,
-        SqlDialect::Duckdb => Dialect::DuckDb,
-        SqlDialect::MsSQL => Dialect::Tsql,
-        SqlDialect::Oracle => Dialect::Oracle,
-        SqlDialect::Snowflake => Dialect::Snowflake,
-        SqlDialect::BigQuery => Dialect::BigQuery,
-        SqlDialect::Redshift => Dialect::Redshift,
-    }
 }
 
 #[cfg(test)]
