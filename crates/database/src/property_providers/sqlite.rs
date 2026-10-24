@@ -37,8 +37,8 @@ impl PropertyProvider for SqliteConnectionProvider {
         ov
     }
 
-    fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        super::connection_categories(&super::DriverCapabilities::sqlite())
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertySection> {
+        super::connection_categories(&super::DriverCapabilities::sqlite(), input)
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {

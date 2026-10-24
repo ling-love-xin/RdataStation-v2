@@ -16,8 +16,9 @@ pub mod pg;
 pub mod sqlite;
 
 use property::{
-    ObjectOverview, OverviewCard, OverviewStatus, PageId, PropertyRow, PropertySection,
-    PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderRegistry,
+    ObjectOverview, OverviewCard, OverviewStatus, PageId, PropertyKind, PropertyRow,
+    PropertySection, PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput,
+    ProviderRegistry, ProviderStats,
 };
 use std::sync::OnceLock;
 
@@ -75,10 +76,10 @@ pub(crate) fn qualified_name(t: &PropertyTargetRef) -> String {
 
 /// 基础连接信息行（各驱动通用，2026-10-24 起接真值）：
 /// 名称 / 数据库类型 / 归属域 / 驱动 + 调用方 counts 带值才加的
-/// 版本 / 文件路径 / 连接串 / 描述 / 认证（方法 + 引用 ID，只读）/ 环境引用 / 网络引用。
+/// 版本 / 文件路径 / 连接串 / 描述。
 ///
-/// 引用字段语义（对齐 DBeaver 连接属性）：显示来源 ID 且只读——`auth_ref` / `env_ref` /
-/// `network_ref` 由 `load_properties` 从 `ConnectionInfo` 填入（认证/环境/网络三管理器引用）。
+/// 认证 / 网络 / 环境自 2026-10-25（P0-3 深化）起由 [`connection_meta_sections`]
+/// 独立分节承载（方法 / 引用名 / 策略覆盖），不再混入常规行。
 pub(crate) fn connection_base_rows(
     input: &ProviderInput,
     driver_label: &str,
@@ -109,26 +110,6 @@ pub(crate) fn connection_base_rows(
     if let Some(v) = input.count("description") {
         if !v.is_empty() {
             rows.push(row("描述", v));
-        }
-    }
-    if let Some(v) = input.count("auth_method") {
-        if !v.is_empty() {
-            rows.push(row("认证", v));
-            if let Some(r) = input.count("auth_ref") {
-                if !r.is_empty() {
-                    rows.push(row("认证引用", r));
-                }
-            }
-        }
-    }
-    if let Some(v) = input.count("env_ref") {
-        if !v.is_empty() {
-            rows.push(row("环境", v));
-        }
-    }
-    if let Some(v) = input.count("network_ref") {
-        if !v.is_empty() {
-            rows.push(row("网络", v));
         }
     }
     rows
@@ -166,12 +147,101 @@ pub(crate) fn connection_base_overview(input: &ProviderInput, driver_label: &str
 ///
 /// 2026-10-24 起按 [`DriverCapabilities`] 生成：驱动差异（是否声明该类别、是否已
 /// 实现）只体现在能力位，类别结构与顺序只写一份。
-pub(crate) fn connection_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
-    section_list(&caps.connection, &[
+/// 2026-10-25（P0-3 深化）：认证 / 网络 / 环境分节由 [`connection_meta_sections`]
+/// 按 counts（引用存在与否）追加，非能力位驱动。
+pub(crate) fn connection_categories(
+    caps: &DriverCapabilities,
+    input: &ProviderInput,
+) -> Vec<PropertySection> {
+    let mut v = section_list(&caps.connection, &[
         ("存储", PageId::Storage),
         ("权限", PageId::Privileges),
         ("事件触发器", PageId::EventTrigger),
-    ])
+    ]);
+    v.extend(connection_meta_sections(input));
+    v
+}
+
+/// 连接对象「认证 / 网络 / 环境」分节（P0-3 深化，2026-10-25）。
+///
+/// 引用字段语义对齐 DBeaver：显示来源**名称**（解析失败时回落引用 ID）且只读；
+/// 有对应 counts 才产出分节（无引用的密码认证只有认证方法一行）。
+pub(crate) fn connection_meta_sections(input: &ProviderInput) -> Vec<PropertySection> {
+    let mut v = Vec::new();
+    // 认证：方法 + 引用档案（无档案时仅方法）。
+    if input.count("auth_method").is_some() || input.count("auth_ref").is_some() {
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        if let Some(m) = input.count("auth_method") {
+            if !m.is_empty() {
+                rows.push(vec!["认证方法".into(), m.to_string()]);
+            }
+        }
+        if let Some(r) = input.count("auth_ref") {
+            if !r.is_empty() {
+                rows.push(vec!["引用档案".into(), input.count("auth_name").unwrap_or(r).to_string()]);
+            }
+        }
+        v.push(PropertySection {
+            id: PageId::Auth,
+            label: "认证".into(),
+            table: PropertyTable {
+                headers: vec!["项".into(), "值".into()],
+                rows,
+            },
+        });
+    }
+    // 网络：档案名 + 类型。
+    if let Some(r) = input.count("network_ref") {
+        if !r.is_empty() {
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            rows.push(vec![
+                "网络档案".into(),
+                input.count("network_name").unwrap_or(r).to_string(),
+            ]);
+            if let Some(t) = input.count("network_type") {
+                if !t.is_empty() {
+                    rows.push(vec!["网络类型".into(), t.to_string()]);
+                }
+            }
+            v.push(PropertySection {
+                id: PageId::Network,
+                label: "网络".into(),
+                table: PropertyTable {
+                    headers: vec!["项".into(), "值".into()],
+                    rows,
+                },
+            });
+        }
+    }
+    // 环境：名称 + 标识色 + 策略覆盖标记。
+    if let Some(r) = input.count("env_ref") {
+        if !r.is_empty() {
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            rows.push(vec![
+                "环境名称".into(),
+                input.count("env_name").unwrap_or(r).to_string(),
+            ]);
+            if let Some(c) = input.count("env_color") {
+                if !c.is_empty() {
+                    rows.push(vec!["标识色".into(), c.to_string()]);
+                }
+            }
+            if let Some(p) = input.count("env_policies") {
+                if !p.is_empty() {
+                    rows.push(vec!["策略覆盖".into(), p.to_string()]);
+                }
+            }
+            v.push(PropertySection {
+                id: PageId::Environment,
+                label: "环境".into(),
+                table: PropertyTable {
+                    headers: vec!["项".into(), "值".into()],
+                    rows,
+                },
+            });
+        }
+    }
+    v
 }
 
 /// 表级类别：可用核心（列 / 索引 / 约束 / DDL / 数据）+ 按能力位声明的已实现类别。
@@ -401,14 +471,103 @@ mod tests {
     /// 连接级：pg 声明 存储/权限/事件触发器 但未实现 → 全部隐藏（空）；接线位保留。
     #[test]
     fn connection_categories_hide_unimplemented_and_keep_caps() {
-        let pg = connection_categories(&DriverCapabilities::pg());
+        let target = test_target();
+        let empty = meta_input(&target, &[]);
+        let pg = connection_categories(&DriverCapabilities::pg(), &empty);
         assert!(pg.is_empty(), "pg 连接级子项未实现应全部隐藏");
         let caps = DriverCapabilities::pg();
         assert_eq!(caps.connection.get(PageId::Storage), Some(false));
         assert_eq!(caps.connection.get(PageId::EventTrigger), Some(false));
         // sqlite 无「存储」声明；事件触发器声明未实现 → 隐藏。
         assert_eq!(DriverCapabilities::sqlite().connection.get(PageId::Storage), None);
-        assert!(connection_categories(&DriverCapabilities::sqlite()).is_empty());
+        assert!(connection_categories(&DriverCapabilities::sqlite(), &empty).is_empty());
+    }
+
+    /// P0-3 深化（2026-10-25）：认证 / 网络 / 环境分节按引用 counts 产出，
+    /// 名称优先（`auth_name` 等）、解析失败回落引用 ID；无引用不产出。
+    #[test]
+    fn connection_meta_sections_follow_reference_counts() {
+        let target = test_target();
+        // 全引用 + 名称：三分节齐全，显示解析后的名称。
+        let counts = &[
+            ("auth_method", "password".into()),
+            ("auth_ref", "auth-1".into()),
+            ("auth_name", "生产库凭据".into()),
+            ("network_ref", "net-1".into()),
+            ("network_name", "跳板隧道".into()),
+            ("network_type", "ssh".into()),
+            ("env_ref", "env-1".into()),
+            ("env_name", "prod".into()),
+            ("env_policies", "只读模式, 阻断DML".into()),
+        ];
+        let input = meta_input(&target, counts);
+        let sections = connection_meta_sections(&input);
+        let ids: Vec<PageId> = sections.iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![PageId::Auth, PageId::Network, PageId::Environment]);
+        // 认证分节：方法 + 引用档案名（非裸 ID）。
+        let auth = &sections[0];
+        assert_eq!(auth.label, "认证");
+        let auth_rows = auth.table.rows.clone();
+        assert!(auth_rows.contains(&vec!["认证方法".into(), "password".into()]));
+        assert!(auth_rows.contains(&vec!["引用档案".into(), "生产库凭据".into()]));
+        // 网络分节：档案名 + 类型。
+        let net = &sections[1];
+        assert!(net.table.rows.contains(&vec!["网络档案".into(), "跳板隧道".into()]));
+        assert!(net.table.rows.contains(&vec!["网络类型".into(), "ssh".into()]));
+        // 环境分节：名称 + 策略覆盖。
+        let env = &sections[2];
+        assert!(env.table.rows.contains(&vec!["环境名称".into(), "prod".into()]));
+        assert!(env.table.rows.contains(&vec!["策略覆盖".into(), "只读模式, 阻断DML".into()]));
+
+        // 有引用但名称缺失：回落引用 ID（不显示空行）。
+        let counts = &[
+            ("auth_method", "password".into()),
+            ("auth_ref", "auth-1".into()),
+            ("env_ref", "env-1".into()),
+            ("network_ref", "net-1".into()),
+        ];
+        let input = meta_input(&target, counts);
+        let sections = connection_meta_sections(&input);
+        assert!(sections[0].table.rows.contains(&vec!["引用档案".into(), "auth-1".into()]));
+        assert!(sections[1].table.rows.contains(&vec!["网络档案".into(), "net-1".into()]));
+        assert!(sections[2].table.rows.contains(&vec!["环境名称".into(), "env-1".into()]));
+
+        // 无引用：不产出任何分节。
+        let counts = &[("url", "postgres://h/db".into())];
+        let input = meta_input(&target, counts);
+        assert!(connection_meta_sections(&input).is_empty());
+    }
+
+    /// 测试用连接目标引用；调用方先持有 owned 值，再把引用传给 [`meta_input`]，
+    /// 避免返回值借用函数局部变量（E0515）。
+    fn test_target() -> PropertyTargetRef {
+        PropertyTargetRef {
+            kind: PropertyKind::Connection,
+            name: "连接".into(),
+            catalog: None,
+            schema: None,
+            parent: None,
+            conn_id: "g_test".into(),
+            source: "G".into(),
+        }
+    }
+
+    /// 测试用连接 ProviderInput（引用 counts 走 meta 分节断言）。
+    /// `target` 与 `counts` 均由调用方在同一作用域持有，保证返回引用不悬空。
+    fn meta_input<'a>(
+        target: &'a PropertyTargetRef,
+        counts: &'a [(&'a str, String)],
+    ) -> ProviderInput<'a> {
+        ProviderInput {
+            target,
+            conn_label: "测试连接",
+            type_id: Some("postgresql"),
+            db_type: Some("postgres"),
+            stats: ProviderStats::default(),
+            counts,
+            candidates: &[],
+            detail: None,
+        }
     }
 
     /// 能力位驱动列展示：pg / mysql 有标识 / 排序规则；sqlite / duckdb 无。

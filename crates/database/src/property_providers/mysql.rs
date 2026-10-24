@@ -38,8 +38,8 @@ impl PropertyProvider for MysqlConnectionProvider {
         ov
     }
 
-    fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        super::connection_categories(&super::DriverCapabilities::mysql())
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertySection> {
+        super::connection_categories(&super::DriverCapabilities::mysql(), input)
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {

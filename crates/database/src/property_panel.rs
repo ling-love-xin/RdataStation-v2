@@ -244,24 +244,64 @@ pub async fn load_properties(
                 counts.push(("description", v));
             }
         }
-        if let Some(v) = info.auth_method {
+        if let Some(v) = info.auth_method.as_deref() {
             if !v.is_empty() {
-                counts.push(("auth_method", v));
+                counts.push(("auth_method", v.to_string()));
             }
         }
-        if let Some(v) = info.auth_config_id {
+        if let Some(v) = info.auth_config_id.as_deref() {
             if !v.is_empty() {
-                counts.push(("auth_ref", v));
+                counts.push(("auth_ref", v.to_string()));
             }
         }
-        if let Some(v) = info.environment_id {
+        if let Some(v) = info.environment_id.as_deref() {
             if !v.is_empty() {
-                counts.push(("env_ref", v));
+                counts.push(("env_ref", v.to_string()));
             }
         }
-        if let Some(v) = info.network_config_id {
+        if let Some(v) = info.network_config_id.as_deref() {
             if !v.is_empty() {
-                counts.push(("network_ref", v));
+                counts.push(("network_ref", v.to_string()));
+            }
+        }
+        // P0-3 深化（2026-10-25）：分节显示名称 / 类型 / 策略覆盖，而非裸引用 ID——
+        // 经全局管理器单例解析（未初始化 / 查无档案时降级为 ID 行，不失败）。
+        if let Some(global) = engine::migration::global_init::get_global_db_manager() {
+            if let Some(id) = info.auth_config_id.as_deref() {
+                if let Ok(Some(a)) = global.get_auth_config(id).await {
+                    counts.push(("auth_name", a.name.clone().unwrap_or_else(|| id.to_string())));
+                    if !a.auth_type.is_empty() {
+                        counts.push(("auth_type", a.auth_type.clone()));
+                    }
+                }
+            }
+            if let Some(id) = info.network_config_id.as_deref() {
+                if let Ok(Some(n)) = global.get_network_config(id).await {
+                    counts.push(("network_name", n.name.clone().unwrap_or_else(|| id.to_string())));
+                    if !n.network_type.is_empty() {
+                        counts.push(("network_type", n.network_type.clone()));
+                    }
+                }
+            }
+            if let Some(id) = info.environment_id.as_deref() {
+                if let Ok(Some(e)) = global.get_environment(id).await {
+                    counts.push(("env_name", e.name.clone()));
+                    if let Some(c) = e.color.as_deref() {
+                        if !c.is_empty() {
+                            counts.push(("env_color", c.to_string()));
+                        }
+                    }
+                }
+                if let Ok(policies) = global.list_environment_policies(id).await {
+                    let enabled: Vec<String> = policies
+                        .iter()
+                        .filter(|p| p.enabled)
+                        .map(|p| p.policy_type.clone())
+                        .collect();
+                    if !enabled.is_empty() {
+                        counts.push(("env_policies", enabled.join(", ")));
+                    }
+                }
             }
         }
     }

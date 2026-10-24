@@ -500,6 +500,14 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
    `project_connection_from_input` 以 `unwrap_or(true)` 守卫）→
    `ConnectionDialogState.save_credentials`（默认 true）+ 草稿 `ConnectionDraft.save_credentials`
    往返（草稿行无此列，回读默认 true）。
+9. **连接对象属性分节（2026-10-25，P0-3 深化）**：认证 / 网络 / 环境从常规行拆为
+   `PageId::{Auth,Network,Environment}` 三独立分节（`connection_meta_sections`），
+   引用字段语义对齐 DBeaver 连接属性——显示来源**名称**（经 engine 全局单例
+   `get_global_db_manager()` 解析 `AuthConfig.name` / `NetworkConfig.name` /
+   `Environment.name`，解析失败回落引用 ID）且**只读**；有对应 counts 才产出分节
+   （无档案的密码认证只显示「认证方法」一行）。环境分节额外带**标识色**（color 非空时）
+   与**策略覆盖**标记（`list_environment_policies` 过滤 enabled 后 join）。
+   常规行 `connection_base_rows` 移除原认证/环境/网络三组行（改分节承载）。
 
 ### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
 
@@ -512,6 +520,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | 三部分渲染 / 双栏网格 / 子项类别（隐藏式不产出）/ 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 | 「保存凭据」开关（P0-4，2026-10-24） | `crates/engine/src/persistence/global_db.rs`（`GlobalConnectionSaveInput.save_password` + `final_password` 分支）、`crates/connection_dialog/src/services/{connection_service,data_source_service}.rs`、`crates/connection/src/model.rs`（`DataSourceSaveInput.save_password`）、`crates/connection_dialog/src/components/connection_dialog/{mod.rs,state.rs,render.rs,staging.rs}` |
+| 连接属性分节 认证/网络/环境（P0-3 深化，2026-10-25） | `crates/property/src/descriptor.rs`（`PageId::{Auth,Network,Environment}`）、`crates/database/src/property_panel.rs`（counts 解析 auth_name/auth_type/network_name/network_type/env_name/env_color/env_policies）、`crates/database/src/property_providers/mod.rs`（`connection_categories` 双参 + `connection_meta_sections`） |
 
 ## 17. 属性面板卡片规范（2026-10-09，连接编辑器 / 洞察 / Mock 同规范）
 

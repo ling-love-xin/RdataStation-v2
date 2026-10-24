@@ -89,9 +89,10 @@ impl PropertyProvider for PgConnectionProvider {
         ov
     }
 
-    fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        // 连接级类别按能力位生成（存储 / 权限 / 事件触发器，均灰置——内容批次未接入）。
-        super::connection_categories(&super::DriverCapabilities::pg())
+    fn categories(&self, input: &ProviderInput) -> Vec<PropertySection> {
+        // 连接级类别按能力位生成（存储 / 权限 / 事件触发器，均灰置——内容批次未接入）
+        // + 认证 / 网络 / 环境分节（P0-3 深化：按引用 counts 产出）。
+        super::connection_categories(&super::DriverCapabilities::pg(), input)
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -609,20 +610,17 @@ mod tests {
         ];
         let rows = PgConnectionProvider.property_defs(&input(&t, &counts, None));
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
-        for want in [
-            "名称", "驱动", "连接串", "描述", "认证", "认证引用", "环境", "网络",
-            "数据库管理员", "连接限制", "允许连接",
-        ] {
+        for want in ["名称", "驱动", "连接串", "描述", "数据库管理员", "连接限制", "允许连接"] {
             assert!(labels.contains(&want), "缺 {want}: {labels:?}");
         }
-        // 基础行接真值；引用字段显示来源 ID（只读，见 `row` 构造）
+        // P0-3 深化（2026-10-25）：认证 / 网络 / 环境不再混入常规行，改 `categories` 分节承载。
+        for gone in ["认证", "认证引用", "环境", "网络"] {
+            assert!(!labels.contains(&gone), "{gone} 应移出常规行: {labels:?}");
+        }
+        // 基础行接真值。
         let val = |label: &str| rows.iter().find(|r| r.label == label).map(|r| r.value.as_str());
         assert_eq!(val("连接串"), Some("postgres://localhost:5432/mydb"));
         assert_eq!(val("描述"), Some("开发库"));
-        assert_eq!(val("认证"), Some("password"));
-        assert_eq!(val("认证引用"), Some("auth-1"));
-        assert_eq!(val("环境"), Some("env-1"));
-        assert_eq!(val("网络"), Some("net-1"));
         // settings 接入前：配置行只读占位（值标注「待接入」）
         let pending: Vec<&str> = rows
             .iter()
@@ -635,6 +633,16 @@ mod tests {
         let editable: Vec<&str> = rows.iter().filter(|r| r.editable).map(|r| r.id.as_str()).collect();
         assert!(!editable.contains(&"Database.description"), "连接描述应只读：{editable:?}");
         assert!(!editable.contains(&"Database.allow_connections"), "允许连接应只读：{editable:?}");
+
+        // 分节承载认证/网络/环境（无解析名称 → 回落引用 ID）。
+        let cats = PgConnectionProvider.categories(&input(&t, &counts, None));
+        let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![PageId::Auth, PageId::Network, PageId::Environment]);
+        let auth = &cats[0].table.rows;
+        assert!(auth.contains(&vec!["认证方法".into(), "password".into()]));
+        assert!(auth.contains(&vec!["引用档案".into(), "auth-1".into()]));
+        assert!(cats[1].table.rows.contains(&vec!["网络档案".into(), "net-1".into()]));
+        assert!(cats[2].table.rows.contains(&vec!["环境名称".into(), "env-1".into()]));
     }
 
     /// 列 provider：detail 命中时渲染完整 DBeaver 行；未命中给提示。
