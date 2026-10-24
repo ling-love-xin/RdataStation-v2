@@ -290,7 +290,11 @@ impl NavHost for WorkbenchNavHost {
     fn delete_connection(&self, conn_id: &str) -> Result<String, String> {
         let root = self.root_text();
         let service = DataSourceService::global().map_err(|e| e.to_string())?;
-        Self::block_on(service.delete(conn_id, root.as_deref())).map(|r| r.message)
+        let message =
+            Self::block_on(service.delete(conn_id, root.as_deref())).map(|r| r.message)?;
+        // 删除记录即回收 per-conn 信号量条目；随后调用方还会走 disconnect，双调幂等无害。
+        database::nav_jobs::drop_conn_sem(conn_id);
+        Ok(message)
     }
 
     // ==================== 宿主命令 ====================

@@ -185,7 +185,11 @@ pub fn disconnect_entry(conn_id: &str) -> Result<(), String> {
     let rt = bridge_runtime()?;
     let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
     rt.block_on(conn_service.close_connection(conn_id))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // 回收 per-conn 信号量条目：重连后 entry 新建全新信号量，不复用残留令牌；
+    // 在途任务持有的 Arc 克隆不受影响。断开失败不回收（连接仍可能在途使用）。
+    database::nav_jobs::drop_conn_sem(conn_id);
+    Ok(())
 }
 
 /// 测试一条已保存数据源（导航右键「测试连接」）。
