@@ -577,6 +577,46 @@ impl MetadataCacheOps {
     }
 
 
+    /// 保存表元数据并携带分区/继承父表信息（S3-②）。
+    ///
+    /// 与 [`Self::save_table`] 的区别只在多写 `parent_table` / `is_partition` 两列
+    /// （015 迁移新增）；其余驱动无此概念时两列保持 NULL / 0。非 PG 驱动不调本方法
+    /// 也不会出错——两列允许 NULL。
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_table_with_parent(
+        &self,
+        schema_id: i64,
+        table_name: &str,
+        table_type: &str,
+        comment: Option<&str>,
+        engine: Option<&str>,
+        row_count_estimate: Option<i64>,
+        parent_table: Option<&str>,
+        is_partition: bool,
+    ) -> Result<i64, CoreError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!("获取系统时间失败: {}", e)))
+            })?
+            .as_secs() as i64;
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tables
+             (schema_id, table_name, table_type, table_comment, engine, row_count_estimate, parent_table, is_partition, introspect_level, is_loaded, last_sync, last_accessed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 3, 1, ?9, ?9)",
+            rusqlite::params![schema_id, table_name, table_type, comment, engine, row_count_estimate, parent_table, is_partition as i64, now],
+        ).map_err(|e| CoreError::storage(
+            StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "save_table_with_parent".to_string(),
+                reason: e.to_string(),
+            }
+        ))?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// 保存表元数据并填充统计信息
     #[allow(clippy::too_many_arguments)]
     pub fn save_table_with_stats(
@@ -724,12 +764,14 @@ impl MetadataCacheOps {
         let query = match table_type {
             Some(_t) => "SELECT t.id, t.table_name, t.table_type, t.table_comment, t.engine, t.row_count_estimate, \
                         t.created_at, t.last_altered_at, t.last_sync, s.schema_name, \
-                        t.data_length, t.index_length, t.display_order, t.hidden, t.favorite, t.color_label, t.user_comment
+                        t.data_length, t.index_length, t.display_order, t.hidden, t.favorite, t.color_label, t.user_comment, \
+                        t.parent_table, t.is_partition \
                         FROM tables t INNER JOIN schemata s ON t.schema_id = s.id
                         WHERE t.schema_id = ?1 AND t.table_type = ?2 ORDER BY t.table_name",
             None => "SELECT t.id, t.table_name, t.table_type, t.table_comment, t.engine, t.row_count_estimate, \
                      t.created_at, t.last_altered_at, t.last_sync, s.schema_name, \
-                     t.data_length, t.index_length, t.display_order, t.hidden, t.favorite, t.color_label, t.user_comment
+                     t.data_length, t.index_length, t.display_order, t.hidden, t.favorite, t.color_label, t.user_comment, \
+                     t.parent_table, t.is_partition \
                      FROM tables t INNER JOIN schemata s ON t.schema_id = s.id
                      WHERE t.schema_id = ?1 ORDER BY t.table_name",
         };
@@ -4077,6 +4119,10 @@ pub struct TableDetailInfo {
     pub favorite: Option<bool>,
     pub color_label: Option<String>,
     pub user_comment: Option<String>,
+    /// S3-②：分区/继承父表（015 迁移；非 PG 驱动为 None）。
+    pub parent_table: Option<String>,
+    /// S3-②：是否为分区子表（`parent_table` 非空时才有意义）。
+    pub is_partition: bool,
 }
 
 impl TableDetailInfo {
@@ -4099,6 +4145,8 @@ impl TableDetailInfo {
             favorite: row.get::<_, Option<i32>>(14)?.map(|v| v != 0),
             color_label: row.get(15)?,
             user_comment: row.get(16)?,
+            parent_table: row.get(17)?,
+            is_partition: row.get::<_, Option<i32>>(18)?.map(|v| v != 0).unwrap_or(false),
         })
     }
 }
@@ -4515,6 +4563,57 @@ mod tests {
         let db_path = manager.db_path().clone();
         let conn = manager.open().expect("打开缓存库（含迁移与 PRAGMA）");
         (MetadataCacheOps::new(conn), db_path, dir)
+    }
+
+    /// S3-②：`save_table_with_parent` 落分区/继承父表两列，`list_tables_normalized` 读回。
+    #[test]
+    fn save_table_with_parent_roundtrips() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("parent_col");
+
+        let schema_id = ops.save_schema("main", "public", None, None)?;
+        ops.save_table_with_parent(schema_id, "orders", "TABLE", None, None, None, None, false)?;
+        ops.save_table_with_parent(
+            schema_id,
+            "orders_2024",
+            "TABLE",
+            None,
+            None,
+            None,
+            Some("orders"),
+            true,
+        )?;
+        ops.save_table_with_parent(
+            schema_id,
+            "orders_archive",
+            "TABLE",
+            None,
+            None,
+            None,
+            Some("orders"),
+            false,
+        )?;
+
+        let rows = ops.list_tables_normalized(schema_id, None)?;
+        let parent_of = |name: &str| {
+            rows.iter()
+                .find(|t| t.table_name == name)
+                .map(|t| (t.parent_table.clone(), t.is_partition))
+        };
+        assert_eq!(parent_of("orders"), Some((None, false)), "父表两列保持空/0");
+        assert_eq!(
+            parent_of("orders_2024"),
+            Some((Some("orders".to_string()), true)),
+            "分区子表带父表 + 分区标记"
+        );
+        assert_eq!(
+            parent_of("orders_archive"),
+            Some((Some("orders".to_string()), false)),
+            "继承子表带父表、非分区"
+        );
+
+        drop(ops);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     /// 回归：`delete_schema` 必须真正删掉表 / 视图 / 列。

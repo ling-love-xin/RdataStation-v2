@@ -2118,6 +2118,26 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child(meta),
             );
         }
+        // S3-② 分区/继承徽标：子表折叠进父表后，父表行尾显示「分区 N / 继承 N」
+        // （两半都为零时不显示——普通表无徽标）。
+        if matches!(&node.kind, NavNodeKind::Table { .. }) {
+            let mut badges = Vec::new();
+            if node.child_partitions > 0 {
+                badges.push(format!("分区 {}", node.child_partitions));
+            }
+            if node.child_inherited > 0 {
+                badges.push(format!("继承 {}", node.child_inherited));
+            }
+            if !badges.is_empty() {
+                row = row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(badges.join("  ")),
+                );
+            }
+        }
         if let Some(payload) = drag_payload {
             // 幽灵用同一个类别图标（`&'static str` 是 `Copy`，可直接进闭包）。
             let ghost_icon = kind_icon;

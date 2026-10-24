@@ -130,6 +130,11 @@ pub struct NodeInfo {
     ///
     /// 不演成任意 KV 背包：只放驱动内省时**已经查到**、界面真会显示的那一项。
     pub parent_name: Option<String>,
+    /// 子表是否为**分区**子表（PG `relispartition`；`parent_name` 非空时才有意义）。
+    ///
+    /// S3-② 分区/继承折叠：分区子表与继承子表在父表徽标上分开计数
+    /// （`ChildTables { count, are_partitions }` 同形）。非 PG 驱动恒为 `false`。
+    pub is_partition: bool,
 }
 
 /// 一次建连批量内省的 schema 全部对象类别（`Database::introspect_schema_objects`）。
@@ -153,6 +158,7 @@ impl NodeInfo {
             kind,
             comment: None,
             parent_name: None,
+            is_partition: false,
         }
     }
     /// 带注释。
@@ -165,6 +171,12 @@ impl NodeInfo {
     pub fn with_parent(mut self, parent: impl Into<String>) -> Self {
         let parent = parent.into();
         self.parent_name = (!parent.is_empty()).then_some(parent);
+        self
+    }
+
+    /// 标记为分区子表（`parent_name` 非空时配合使用）。
+    pub fn with_partition(mut self) -> Self {
+        self.is_partition = true;
         self
     }
 }

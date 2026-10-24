@@ -1121,10 +1121,30 @@ impl MetadataBrowser for PostgresNativeDatabase {
                         } else {
                             SchemaObjectKind::Table
                         };
-                        nodes.push(NodeInfo::new(
+                        // S3-②：第 3/4 列 = 父表名 / 分区标记（PG 子表折叠进父表）。
+                        // arrow StringArray 对 NULL 的 `value()` 返回空串，无需判 is_null。
+                        let mut node = NodeInfo::new(
                             name_arr.value(row_idx).to_string(),
                             kind,
-                        ));
+                        );
+                        if let Some(parent_arr) =
+                            batch.column(2).as_any().downcast_ref::<StringArray>()
+                        {
+                            let parent = parent_arr.value(row_idx);
+                            if !parent.is_empty() {
+                                node = node.with_parent(parent);
+                                if let Some(part_arr) = batch
+                                    .column(3)
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::BooleanArray>()
+                                {
+                                    if part_arr.value(row_idx) {
+                                        node = node.with_partition();
+                                    }
+                                }
+                            }
+                        }
+                        nodes.push(node);
                     }
                 }
             }

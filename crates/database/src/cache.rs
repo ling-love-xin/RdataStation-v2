@@ -247,16 +247,19 @@ impl NavCache {
     // ==================== 表 / 视图 ====================
 
     /// 读取某 schema 下的对象（`want_view` 区分表 / 视图；空结果视为未命中）。
+    ///
+    /// 元组 = `(表名, 注释, 分区/继承父表, 是否分区子表)`——S3-② 折叠信息随对象落库
+    /// （`save_table_with_parent`），L2 命中时才能还原「子表已折叠、父表带计数」。
     pub fn objects(
         &self,
         schema_id: i64,
         want_view: bool,
-    ) -> Option<Vec<(String, Option<String>)>> {
+    ) -> Option<Vec<(String, Option<String>, Option<String>, bool)>> {
         let rows = self.ops.list_tables_normalized(schema_id, None).ok()?;
-        let out: Vec<(String, Option<String>)> = rows
+        let out: Vec<(String, Option<String>, Option<String>, bool)> = rows
             .into_iter()
             .filter(|t| (t.table_type == TABLE_TYPE_VIEW) == want_view)
-            .map(|t| (t.table_name, t.table_comment))
+            .map(|t| (t.table_name, t.table_comment, t.parent_table, t.is_partition))
             .collect();
         if out.is_empty() {
             None
@@ -386,14 +389,29 @@ impl NavCache {
             } else {
                 TABLE_TYPE_BASE
             };
-            match self.ops.save_table(
-                schema_id,
-                &obj.name,
-                table_type,
-                obj.comment.as_deref(),
-                None,
-                None,
-            ) {
+            // S3-②：子表的分区/继承父表信息随对象落库（L2 命中时折叠结果不丢）。
+            let write = if obj.parent_name.is_some() {
+                self.ops.save_table_with_parent(
+                    schema_id,
+                    &obj.name,
+                    table_type,
+                    obj.comment.as_deref(),
+                    None,
+                    None,
+                    obj.parent_name.as_deref(),
+                    obj.is_partition,
+                )
+            } else {
+                self.ops.save_table(
+                    schema_id,
+                    &obj.name,
+                    table_type,
+                    obj.comment.as_deref(),
+                    None,
+                    None,
+                )
+            };
+            match write {
                 Ok(table_id) => {
                     if is_view {
                         if let Err(e) = self.ops.save_view(table_id, "", None, None) {
@@ -733,7 +751,7 @@ mod tests {
         );
         assert_eq!(
             cache.objects(sid, false),
-            Some(vec![("t1".to_string(), Some("表注释".to_string()))])
+            Some(vec![("t1".to_string(), Some("表注释".to_string()), None, false)])
         );
         // 视图维度为空 → 视为未命中（由调用方回落实时内省）。
         assert!(cache.objects(sid, true).is_none());
@@ -755,6 +773,36 @@ mod tests {
     #[test]
     fn project_connection_without_root_has_no_cache() {
         assert!(NavCache::open("P_conn_no_root", None).is_none());
+    }
+
+    /// S3-② 折叠信息随对象落库：子表带父表与分区标记写入，`objects` 读回同样四元组
+    /// （L2 命中时折叠结果不丢——折叠发生在服务层，缓存只负责原样存取）。
+    #[test]
+    fn put_objects_roundtrips_partition_parent() {
+        let root = temp_root("part_parent");
+        let root_s = root.to_string_lossy().to_string();
+
+        let cache = NavCache::open("P_conn_part", Some(&root_s)).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
+        let sid = cache.schema_id("main", "public").expect("schema_id");
+
+        cache.put_objects(
+            sid,
+            &[
+                NodeInfo::new("orders", SchemaObjectKind::Table),
+                NodeInfo::new("orders_2024", SchemaObjectKind::Table)
+                    .with_parent("orders")
+                    .with_partition(),
+                NodeInfo::new("orders_archive", SchemaObjectKind::Table)
+                    .with_parent("orders"),
+            ],
+        );
+        let got = cache.objects(sid, false).expect("应命中");
+        assert!(got.contains(&("orders_2024".to_string(), None, Some("orders".to_string()), true)));
+        assert!(got.contains(&("orders_archive".to_string(), None, Some("orders".to_string()), false)));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 刷新路径：`prune_schema` 必须真正清掉旧行。

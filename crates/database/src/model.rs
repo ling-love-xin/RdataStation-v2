@@ -188,6 +188,10 @@ pub struct NavNode {
     pub expand_path: Option<NavPath>,
     /// 属性面板定位信息（双击 / 右键「查看属性」时使用）
     pub property: Option<PropertyRef>,
+    /// S3-②：分区子表数（PG 分区表折叠进父表后，父表行尾徽标「分区 N」）。
+    pub child_partitions: u32,
+    /// S3-②：继承子表数（PG 继承子表折叠进父表后，父表行尾徽标「继承 N」）。
+    pub child_inherited: u32,
 }
 
 impl NavNode {
@@ -211,6 +215,8 @@ impl NavNode {
             error: None,
             expand_path: None,
             property: None,
+            child_partitions: 0,
+            child_inherited: 0,
         }
     }
 
@@ -229,6 +235,13 @@ impl NavNode {
     /// 指定属性面板定位信息。
     pub fn with_property(mut self, property: PropertyRef) -> Self {
         self.property = Some(property);
+        self
+    }
+
+    /// 带分区/继承子表计数（S3-②：子表折叠进父表后的徽标数据）。
+    pub fn with_child_counts(mut self, partitions: u32, inherited: u32) -> Self {
+        self.child_partitions = partitions;
+        self.child_inherited = inherited;
         self
     }
 

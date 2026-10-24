@@ -176,14 +176,22 @@ pub const PG_LIST_SCHEMAS_SQL: &str = "\
 /// `relkind` → 展示类型的映射：`r` 普通表 / `p` 分区表 / `f` 外部表 → `BASE TABLE`；
 /// `v` 视图与 `m` **物化视图**都 → `VIEW`（我们的导航把物化视图并入「视图」，见
 /// `docs/architecture/references/README.md` 的对照口径）。
+///
+/// 第 3/4 列（S3-② 分区/继承折叠）：`parent_name` = `pg_inherits` 的父表（单继承，
+/// 一个子表至多一条记录，JOIN 不放大行数）；`is_partition` = `c.relispartition`
+/// （PG 10+，小于该版本的本列恒为 `false`，折叠退化为「不区分分区/继承」）。
 pub const PG_LIST_TABLES_SQL: &str = "\
             SELECT c.relname, \
                    CASE c.relkind \
                         WHEN 'v' THEN 'VIEW' \
                         WHEN 'm' THEN 'VIEW' \
-                        ELSE 'BASE TABLE' END AS table_type \
+                        ELSE 'BASE TABLE' END AS table_type, \
+                   p.relname AS parent_name, \
+                   c.relispartition AS is_partition \
               FROM pg_catalog.pg_class c \
               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+              LEFT JOIN pg_catalog.pg_inherits i ON i.inhrelid = c.oid \
+              LEFT JOIN pg_catalog.pg_class p ON p.oid = i.inhparent \
              WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') \
              ORDER BY c.relname";
 

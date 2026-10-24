@@ -650,6 +650,10 @@ impl NavigatorService {
     }
 
     /// 对象 → 导航节点（分页路径与全量路径共用，保证同一个对象在两路上长得一样）。
+    ///
+    /// S3-② 分区/继承折叠：有 `parent_name` 的表 = 子表（分区或继承），**不单独列出**，
+    /// 折叠进父表——父表行尾徽标显示「分区 N / 继承 N」。折叠先于分页，保证
+    /// 父表无论落在哪一页，计数都是该 schema 的全量（与 blanco 的 `ChildTables` 同形）。
     fn object_nodes(
         conn_id: &str,
         catalog: &str,
@@ -657,9 +661,33 @@ impl NavigatorService {
         folder: NavFolder,
         objects: Vec<NodeInfo>,
     ) -> Vec<NavNode> {
+        // 先统计父表计数（子表按 parent_name 归并），再逐对象产出节点。
+        // 计数 map 用 owned String 键：`&str` 键会借用 `objects`，后续 `into_iter()`
+        // 无法 move（E0505）。
+        let (child_partitions, child_inherited) = if folder == NavFolder::Tables {
+            let mut part: std::collections::BTreeMap<String, u32> = Default::default();
+            let mut inh: std::collections::BTreeMap<String, u32> = Default::default();
+            for obj in &objects {
+                if let Some(p) = obj.parent_name.as_deref() {
+                    if obj.is_partition {
+                        *part.entry(p.to_string()).or_default() += 1;
+                    } else {
+                        *inh.entry(p.to_string()).or_default() += 1;
+                    }
+                }
+            }
+            (part, inh)
+        } else {
+            (Default::default(), Default::default())
+        };
+
         objects
             .into_iter()
-            .map(|obj| {
+            .filter_map(|obj| {
+                // 子表不产出节点（折叠进父表徽标）。
+                if folder == NavFolder::Tables && obj.parent_name.is_some() {
+                    return None;
+                }
                 let (kind, has_children) = match folder {
                     NavFolder::Tables => (NavNodeKind::Table { row_estimate: None }, true),
                     NavFolder::Views => (NavNodeKind::View, true),
@@ -693,18 +721,23 @@ impl NavigatorService {
                         NavFolder::Triggers => PropertyKind::Trigger,
                     },
                 };
-                let node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
+                let mut node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
                     .with_comment(obj.comment)
                     .with_property(kind_prop);
                 if has_children {
-                    node.with_expand_path(NavPath::Table {
+                    node = node.with_expand_path(NavPath::Table {
                         catalog: catalog.to_string(),
                         schema: schema.to_string(),
-                        table: name,
-                    })
-                } else {
-                    node
+                        table: name.clone(),
+                    });
                 }
+                // 父表带上折叠计数（两半都为零时也成立——普通表不带徽标）。
+                if folder == NavFolder::Tables {
+                    let partitions = child_partitions.get(&name).copied().unwrap_or(0);
+                    let inherited = child_inherited.get(&name).copied().unwrap_or(0);
+                    node = node.with_child_counts(partitions, inherited);
+                }
+                Some(node)
             })
             .collect()
     }
@@ -884,8 +917,8 @@ impl NavigatorService {
                         if let Some(rows) = c.objects(sid, want_view) {
                             let objs: Vec<NodeInfo> = rows
                                 .into_iter()
-                                .map(|(name, comment)| {
-                                    NodeInfo::new(
+                                .map(|(name, comment, parent, is_partition)| {
+                                    let mut node = NodeInfo::new(
                                         name,
                                         if want_view {
                                             SchemaObjectKind::View
@@ -893,7 +926,15 @@ impl NavigatorService {
                                             SchemaObjectKind::Table
                                         },
                                     )
-                                    .with_comment(comment)
+                                    .with_comment(comment);
+                                    // S3-②：L2 命中还原子表的父表与分区标记（折叠结果不丢）。
+                                    if let Some(p) = parent {
+                                        node = node.with_parent(p);
+                                        if is_partition {
+                                            node = node.with_partition();
+                                        }
+                                    }
+                                    node
                                 })
                                 .collect();
                             // 命中 L2 → 回填 L1
@@ -1457,6 +1498,57 @@ mod object_node_tests {
             nodes[0].property.as_ref().and_then(|p| p.parent.clone()),
             None
         );
+    }
+
+    /// S3-② 分区/继承折叠：有 `parent_name` 的表不单独产出节点，父表带计数徽标。
+    ///
+    /// 入参：`orders`（父表）+ 两个分区子表 + 一个继承子表 + `line_items`（父表）+ 一个分区子表。
+    /// 期望：只产出 2 个父表节点；`orders` 计数 = 分区 2 / 继承 1；`line_items` = 分区 1 / 继承 0。
+    #[test]
+    fn partition_children_collapse_into_parent_with_counts() {
+        let nodes = NavigatorService::object_nodes(
+            "P_1",
+            "main",
+            "public",
+            NavFolder::Tables,
+            vec![
+                NodeInfo::new("orders", SchemaObjectKind::Table),
+                NodeInfo::new("orders_2024", SchemaObjectKind::Table)
+                    .with_parent("orders")
+                    .with_partition(),
+                NodeInfo::new("orders_2025", SchemaObjectKind::Table)
+                    .with_parent("orders")
+                    .with_partition(),
+                NodeInfo::new("orders_archive", SchemaObjectKind::Table)
+                    .with_parent("orders"),
+                NodeInfo::new("line_items", SchemaObjectKind::Table),
+                NodeInfo::new("line_items_2024", SchemaObjectKind::Table)
+                    .with_parent("line_items")
+                    .with_partition(),
+            ],
+        );
+
+        assert_eq!(nodes.len(), 2, "子表不单独列出，只留下父表");
+        let orders = nodes.iter().find(|n| n.name == "orders").expect("父表 orders 存在");
+        assert_eq!(orders.child_partitions, 2);
+        assert_eq!(orders.child_inherited, 1);
+        let line_items = nodes.iter().find(|n| n.name == "line_items").expect("父表 line_items 存在");
+        assert_eq!(line_items.child_partitions, 1);
+        assert_eq!(line_items.child_inherited, 0, "继承子表计数归零不缺失");
+    }
+
+    /// S3-②：普通表（无子表）计数两半都为零——行尾不显示徽标的前置条件。
+    #[test]
+    fn plain_table_has_zero_child_counts() {
+        let nodes = NavigatorService::object_nodes(
+            "P_1",
+            "main",
+            "public",
+            NavFolder::Tables,
+            vec![NodeInfo::new("t1", SchemaObjectKind::Table)],
+        );
+        assert_eq!(nodes[0].child_partitions, 0);
+        assert_eq!(nodes[0].child_inherited, 0);
     }
 
     /// 大 schema 阈值（>50 列）：不逐列生成节点，改单个提示节点跳表属性面板。

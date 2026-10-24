@@ -799,14 +799,24 @@ impl Database for PostgresDatabase {
         for r in &rows {
             let name: String = r.get(0);
             let ty: String = r.get(1);
-            tables.push(crate::driver::NodeInfo::new(
+            // S3-②：第 3/4 列 = 父表名 / 分区标记（子表折叠进父表，见 PG_LIST_TABLES_SQL）。
+            let parent: Option<String> = r.get::<Option<String>, _>(2);
+            let is_partition: bool = r.get::<Option<bool>, _>(3).unwrap_or(false);
+            let mut node = crate::driver::NodeInfo::new(
                 name,
                 if ty == "VIEW" {
                     crate::driver::SchemaObjectKind::View
                 } else {
                     crate::driver::SchemaObjectKind::Table
                 },
-            ));
+            );
+            if let Some(p) = parent.filter(|p| !p.is_empty()) {
+                node = node.with_parent(p);
+                if is_partition {
+                    node = node.with_partition();
+                }
+            }
+            tables.push(node);
         }
 
         // 2) 过程（prokind='p'）
@@ -1438,10 +1448,30 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
                         } else {
                             crate::driver::SchemaObjectKind::Table
                         };
-                        nodes.push(crate::driver::NodeInfo::new(
+                        // S3-②：第 3/4 列 = 父表名 / 分区标记（PG 子表折叠进父表）。
+                        // arrow StringArray 对 NULL 的 `value()` 返回空串，无需判 is_null。
+                        let mut node = crate::driver::NodeInfo::new(
                             name_arr.value(row_idx).to_string(),
                             kind,
-                        ));
+                        );
+                        if let Some(parent_arr) =
+                            batch.column(2).as_any().downcast_ref::<StringArray>()
+                        {
+                            let parent = parent_arr.value(row_idx);
+                            if !parent.is_empty() {
+                                node = node.with_parent(parent);
+                                if let Some(part_arr) = batch
+                                    .column(3)
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::BooleanArray>()
+                                {
+                                    if part_arr.value(row_idx) {
+                                        node = node.with_partition();
+                                    }
+                                }
+                            }
+                        }
+                        nodes.push(node);
                     }
                 }
             }

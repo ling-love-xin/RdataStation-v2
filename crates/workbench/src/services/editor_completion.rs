@@ -539,7 +539,8 @@ fn load_raw_catalog(
             let Some(objects) = cache.objects(schema_id, want_view) else {
                 continue;
             };
-            for (name, comment) in objects {
+            for (name, comment, _parent, _is_partition) in objects {
+                // S3-② 折叠信息（parent / is_partition）对补全候选无意义，只取名字与注释。
                 let kind = if want_view {
                     CandidateKind::View
                 } else {
