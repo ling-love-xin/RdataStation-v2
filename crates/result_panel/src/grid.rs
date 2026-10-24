@@ -37,6 +37,7 @@
 //! 需要**整表真值**的出口仍然是整表，但它们都是用户动作触发的（复制整列 / 整行 · 导出 ·
 //! 筛选 · 排序），不是入库时预支的。
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -75,6 +76,13 @@ pub const RESULT_GRID_CONTEXT: &str = "editor-result-grid";
 /// 【筛选】列头菜单「按值筛选此列」值列表的上限（DBeaver 值列表筛选取前若干去重值，
 /// 不把整列几百个值全塞进菜单——要全量用全局筛选框）
 pub const COLUMN_FILTER_VALUE_LIMIT: usize = 8;
+
+/// 单元格**展示**文本的字符上限（对齐 dbdelve `result_grid.rs` `CELL_DISPLAY_LIMIT=300`）。
+///
+/// 只裁「画出来的这一格」：复制 / 导出 / 编辑初值 / 悬停全文 / 按值筛选 / 统计仍走完整值
+/// （[`crate::ResultGridDelegate::cell`] 与 `row_cell_text` 均不经过这个裁剪）。超长
+/// JSONB / PostGIS 几何 / 大文本因此不参与 GPUI 文本测量，可见格每帧布局成本有硬上界。
+pub const CELL_DISPLAY_LIMIT: usize = 300;
 
 /// 滚动到底要更多数据时的回调（面板注入：它才知道当前选中哪份结果、忙不忙）
 ///
@@ -559,6 +567,10 @@ pub struct ResultGridDelegate {
     frozen: Vec<usize>,
     /// 【P2】隐藏的数据列（**数据列序**；显示时跳过它们。只影响视图列序，数据一行不动）
     hidden: Vec<usize>,
+    /// 【P1-5】会话内列宽记忆：按**列名**记（隐藏列 / 列序变化后回填仍对得上），
+    /// `None` 不算——空表 = 用户没拖过，走默认档。切结果集由 `set_data` 清空。
+    /// 行号槽不进表（宽度钉死）；本机制不做落盘持久化（见 backlog）。
+    column_widths: HashMap<String, Pixels>,
     /// 【P2-4】单行转置：把选中一行竖排成「# / 字段 / 值」三列（DBeaver 式；只读视图）
     transposed: bool,
     /// 【P2-4】转置当前展示的数据行（越界自动夹取）
@@ -629,6 +641,8 @@ impl ResultGridDelegate {
         self.frozen.clear();
         // 【P2】隐藏列同理：换结果 = 换一批列，旧的隐藏清单不再成立
         self.hidden.clear();
+        // 【P1-5】列宽按列名记：新结果列集合变了，旧宽度不成立（与隐藏 / 冻结同口径）
+        self.column_widths.clear();
         // 【P2-4】转置同理：行与列都换了，旧转置行没有意义（面板侧开关状态不随数据自动关）
         self.transposed = false;
         self.transpose_row = 0;
@@ -662,6 +676,24 @@ impl ResultGridDelegate {
     /// 面板紧跟给新的一份；漏给 = 表头只画列名，不套旧注释。
     pub fn set_column_annotations(&mut self, annotations: Vec<Option<ColumnAnnotation>>) {
         self.column_annotations = annotations;
+    }
+
+    /// 【P1-5】记下组件拖宽后报来的全部列宽（会话内记忆；不做落盘持久化，见 backlog）。
+    ///
+    /// `all` 下标是组件视图列序（`0` = 行号槽，钉死不记）；其余先经
+    /// [`Self::data_column`] 落到数据列、再按**列名**存——隐藏列调整后回填仍对得上。
+    /// 越界 / 列名取不到就跳过那一列，不打断别的列。
+    pub fn set_column_widths(&mut self, all: &[Pixels]) {
+        for (ix, width) in all.iter().enumerate() {
+            let Some(view_col) = ix.checked_sub(1) else {
+                continue;
+            };
+            let data = self.data_column(view_col);
+            let Some(name) = self.columns.get(data).cloned() else {
+                continue;
+            };
+            self.column_widths.insert(name, *width);
+        }
     }
 
     /// 【A9】同步结果来源表名（与 `set_data` 同一次同步里、在它之后调）
@@ -987,16 +1019,11 @@ impl ResultGridDelegate {
         if first.len() <= column {
             return Vec::new();
         }
-        let mut groups: Vec<(String, usize)> = Vec::new();
-        for row in rows {
-            let value = row.get(column).cloned().unwrap_or_default();
-            if let Some((_, count)) = groups.iter_mut().find(|(v, _)| *v == value) {
-                *count += 1;
-            } else {
-                groups.push((value, 1));
-            }
-        }
-        groups
+        let values: Vec<String> = rows
+            .iter()
+            .map(|row| row.get(column).cloned().unwrap_or_default())
+            .collect();
+        group_by_values(&values)
     }
 
     /// 【B15】当前排序（数据列下标，是否降序）
@@ -1516,6 +1543,32 @@ impl ResultGridDelegate {
         text
     }
 
+    /// 【P2-2】当前视图行序下，某数据列的全部取值：只 clone 目标列字符串，
+    /// 不物化整行矩阵。计算页统计 / 分组页计数共用这份访问器——原先 `visible_rows()`
+    /// 会把每行全列都拷一遍，万行 × 多列时是每帧 render 的冗余 O(行×列) 拷贝。
+    pub fn column_values(&self, column: usize) -> Vec<String> {
+        (0..self.view_len())
+            .filter_map(|view_ix| self.data_row(view_ix))
+            .map(|data_ix| {
+                self.rows
+                    .get(data_ix)
+                    .and_then(|row| row.get(column))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// 【P2-2】计算页：某数据列统计（列级访问器 → 列级纯函数，口径与矩阵版一致）
+    pub fn column_stats_for(&self, column: usize) -> ColumnStats {
+        column_stats_from_values(&self.column_values(column))
+    }
+
+    /// 【P2-2】分组页：某数据列本地分组计数（同上，不物化整行矩阵）
+    pub fn group_by_for(&self, column: usize) -> Vec<(String, usize)> {
+        group_by_values(&self.column_values(column))
+    }
+
     /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）
     fn row_text(&self, row_ix: usize) -> String {
         // 【P2-4】转置一行 = 一个字段：字段名 + 值（菜单不摆复制项，这里是兜底）
@@ -1752,15 +1805,22 @@ pub struct ColumnStats {
 /// 其余值能按 f64 解析的参与数值统计；文本 / 日期 / BLOB 只计非空数。
 /// 纯函数（输入只有 rows），方便单测。
 pub fn column_stats(rows: &[Vec<String>], column: usize) -> ColumnStats {
+    let values: Vec<String> = rows
+        .iter()
+        .map(|row| row.get(column).cloned().unwrap_or_default())
+        .collect();
+    column_stats_from_values(&values)
+}
+
+/// 【P2-3】列级统计内核：输入已经是「一列取值」，不必再套二维矩阵。
+/// delegate 的列级访问器（`column_stats_for`）与矩阵版 `column_stats` 共用这份口径。
+pub fn column_stats_from_values(values: &[String]) -> ColumnStats {
     let mut stats = ColumnStats::default();
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut sum = 0.0;
     let mut numeric = 0usize;
-    for row in rows {
-        let Some(cell) = row.get(column) else {
-            continue;
-        };
+    for cell in values {
         if cell == "NULL" {
             stats.nulls += 1;
             continue;
@@ -1778,6 +1838,19 @@ pub fn column_stats(rows: &[Vec<String>], column: usize) -> ColumnStats {
     stats.sum = (numeric > 0).then_some(sum);
     stats.avg = (numeric > 0).then_some(sum / numeric as f64);
     stats
+}
+
+/// 【分组】列级计数内核：输入已经是「一列取值」；保留首现顺序，`NULL` 独立成组。
+pub fn group_by_values(values: &[String]) -> Vec<(String, usize)> {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for value in values {
+        if let Some((_, count)) = groups.iter_mut().find(|(v, _)| *v == *value) {
+            *count += 1;
+        } else {
+            groups.push((value.clone(), 1));
+        }
+    }
+    groups
 }
 
 /// 【P2-3】统计的展示行（一行一个键值；数值有则给，没有就不摆那一行）
@@ -1814,6 +1887,34 @@ fn fmt_stat_num(value: f64) -> String {
         text.pop();
     }
     text
+}
+
+/// 单元格展示文本字符级裁剪：超过 `limit` 个字符时取前 `limit` 个字符并补省略号 `…`。
+///
+/// 按 `char` 边界取前若干个，不会裁断中文 / emoji / 组合字符的多字节序列；省略号不占
+/// `limit` 额度（与 dbdelve `clip` 同口径：300 字符 + 一个尾巴符号）。未达上限原样返回，
+/// 不做换行展平或其它改写——换行由单元格样式自己处理。
+fn clip_cell_display(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    let mut clipped: String = value.chars().take(limit).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// 【P1-4】格内 JSON 美化展示：仅当文本以 `{` / `[` 开头且能解析成 JSON 时，
+/// 返回缩进格式化串；非 JSON / 解析失败一律 `None`（按普通文本走裁剪，不猜）。
+///
+/// 只改**展示**：复制 / 悬停 / 右键 / 导出 / 编辑仍取原始 `text`（见 `render_td`）。
+/// 裸标量（数字 / 布尔 / 引号串）本来就短，不进这条路径；解析失败不抛错、不 panic。
+fn pretty_json_display(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !matches!(trimmed.chars().next(), Some('{') | Some('[')) {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    serde_json::to_string_pretty(&value).ok()
 }
 
 /// 【P2】BLOB 单元格的摘要文案：`hex → BLOB · N B`
@@ -2062,8 +2163,14 @@ impl TableDelegate for ResultGridDelegate {
             .get(index)
             .cloned()
             .unwrap_or_else(|| format!("列 {}", index + 1));
+        // 【P1-5】拖过的列按列名回填用户宽度；没拖过走默认档（行号槽 / 转置列在上面分支已返回）
+        let width = self
+            .column_widths
+            .get(&name)
+            .copied()
+            .unwrap_or(ui::RESULT_COLUMN_WIDTH);
         Column::new(format!("col-{index}"), name)
-            .width(ui::RESULT_COLUMN_WIDTH)
+            .width(width)
             .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
             // 【B15】可本地排序：组件库点列头时会在 Default → Descending → Ascending 里循环，
             // 并回调 `perform_sort`（排序状态存在它那边，这里只把当前态回去，refresh 后指示器不丢）
@@ -2393,7 +2500,17 @@ impl TableDelegate for ResultGridDelegate {
         let display = if is_blob {
             blob_summary(&text).unwrap_or_else(|| text.clone())
         } else {
-            text.clone()
+            // 展示派生顺序：JSON 美化 → 数值列整数分组 → 原文；最后统一字符级裁剪。
+            // `text` 原文仍给悬停 tooltip / 右键菜单 / 复制 / 导出 / 编辑（下方 full = text.clone()）。
+            let shown = match pretty_json_display(&text) {
+                Some(pretty) => pretty,
+                // 【P2】数值列整数值加千分位；解析不成整数（小数 / 异常样本）回退原文
+                None if kind.is_numeric() => {
+                    format_integer_cell(&text).unwrap_or_else(|| text.clone())
+                }
+                None => text.clone(),
+            };
+            clip_cell_display(&shown, CELL_DISPLAY_LIMIT)
         };
         // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
         // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
@@ -2762,6 +2879,40 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
     (left, right)
 }
 
+/// 单次查询的行数上限（对齐 engine `services/sql_service.rs` 的 `MAX_QUERY_ROWS = 10_000`；
+/// 本 crate 不跨模块搬 engine 常量，仅状态行文案引用同一口径）。
+pub const MAX_SINGLE_SEGMENT_ROWS: usize = 10_000;
+
+/// 窗口分段加载的代价说明（落实 engine `sql_service.rs:78-79`「这条取舍要写在界面上，
+/// 不能假装它和游标等价」）：每段重跑一次查询，`ORDER BY` 不稳时两段之间可能重复 /
+/// 跳过行。只挂在「还有更多」/「截断」提示的 tooltip 上，不常驻占状态行宽度。
+pub const WINDOW_FETCH_NOTICE: &str =
+    "分段加载：每段重跑查询；无稳定 ORDER BY 时行可能重复或跳过";
+
+/// 状态行「还有更多」提示：这段拿满、可能还有下一段（`has_more`）。
+pub fn fetch_more_hint(status: &ResultStatus) -> Option<&'static str> {
+    status.has_more.then_some("还有更多 · 滚动到底继续加载")
+}
+
+/// 撞单段上限且已到底（`truncated_hint` 有值、`!has_more`）：文案明确是「被截断、结果
+/// 不完整」，区别于「正常取完」。分段中同时挂截断信号属防御组合，此处不重复出警告
+/// （旧 `truncated_hint` 由渲染层兜底显示）。
+pub fn truncation_notice(status: &ResultStatus) -> Option<String> {
+    if status.truncated_hint.is_some() && !status.has_more {
+        Some(format!(
+            "已达单段上限 {} 行 · 结果不完整",
+            thousands(MAX_SINGLE_SEGMENT_ROWS)
+        ))
+    } else {
+        None
+    }
+}
+
+/// 是否需要挂窗口代价 tooltip：分段中或被截断时给。
+pub fn window_fetch_active(status: &ResultStatus) -> bool {
+    status.has_more || status.truncated_hint.is_some()
+}
+
 /// 底部动作状态行的**占位动作钮**（#26 视图骨架：本轮全部禁用灰态）。
 ///
 /// 顺序对齐 DBeaver 底部动作条，三段：
@@ -2842,9 +2993,13 @@ pub fn truncated_hint(rows: usize) -> String {
     format!("已截断至 {} 行", thousands(rows))
 }
 
-/// 千分位（原型里的 `1,204`）
+/// 千分位（原型里的 `1,204`；用于行数 / 统计计数等非负整数）
 pub fn thousands(value: usize) -> String {
-    let digits = value.to_string();
+    group_digits(&value.to_string())
+}
+
+/// 纯数字串按三位一组插逗号（分组内核；`thousands` 与单元格整数展示共用一份口径）
+fn group_digits(digits: &str) -> String {
     let mut text = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index) % 3 == 0 {
@@ -2853,6 +3008,21 @@ pub fn thousands(value: usize) -> String {
         text.push(ch);
     }
     text
+}
+
+/// 【P2】整数单元格展示千分位：能解析成 `i64` 的整数值加分组逗号，负数保留负号。
+///
+/// 只改**展示**：复制 / 悬停 / 导出 / 编辑仍取原始 `text`（见 `render_td`）。浮点 / 文本 /
+/// `NULL` / 空串返回 `None`，交回普通展示路径；小数本轮不分组，避免破坏精度与科学计数法口径。
+fn format_integer_cell(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let value: i64 = trimmed.parse().ok()?;
+    let (sign, abs) = if value < 0 {
+        ("-", value.unsigned_abs().to_string())
+    } else {
+        ("", value.to_string())
+    };
+    Some(format!("{sign}{}", group_digits(&abs)))
 }
 
 /// 耗时文案（原型 §2.4 的 `1.2s`）
@@ -3006,6 +3176,16 @@ pub fn render(
         // ⑦ 结果状态行
         .when_some(status, |pane, status| {
             let (left, right) = status_segments(&status);
+            let fetch_hint = fetch_more_hint(&status);
+            let truncation = truncation_notice(&status);
+            let window_tip = window_fetch_active(&status).then_some(WINDOW_FETCH_NOTICE);
+            let window_tip_text = window_tip.map(str::to_string);
+            // 防御组合（分段中同时挂截断信号）才留旧 hint；正常到底已由 truncation 接管
+            let legacy_hint = if truncation.is_none() {
+                status.truncated_hint.clone()
+            } else {
+                None
+            };
             let warning = theme.colors.warning;
             let border = theme.colors.border;
 
@@ -3107,10 +3287,48 @@ pub fn render(
                                         .child(SharedString::from(format!("· {}", value))),
                                 )
                             })
-                            // 截断是**警告**（数据不完整），不是普通说明文字
-                            .when_some(status.truncated_hint, |row, hint| {
+                            // 【B5b】还有更多：次级说明；悬停看窗口分段代价（不等价于游标）。
+                            // `.id(...)` 先把裸 div 转成 Stateful<Div>，tooltip 是交互态方法
+                            .when_some(fetch_hint, |row, hint| {
                                 row.child(
-                                    div().text_color(warning).child(SharedString::from(hint)),
+                                    div()
+                                        .id("editor-result-fetch-hint")
+                                        .min_w_0()
+                                        .truncate()
+                                        .when_some(window_tip_text.clone(), |cell, tip| {
+                                            let tip = tip.clone();
+                                            cell.tooltip(move |window, cx| {
+                                                Tooltip::new(tip.clone()).build(window, cx)
+                                            })
+                                        })
+                                        .child(SharedString::from(hint)),
+                                )
+                            })
+                            // 撞单段上限、已到底：警告色（数据不完整）；悬停看窗口代价
+                            .when_some(truncation, |row, hint| {
+                                row.child(
+                                    div()
+                                        .id("editor-result-truncation")
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(warning)
+                                        .when_some(window_tip_text.clone(), |cell, tip| {
+                                            let tip = tip.clone();
+                                            cell.tooltip(move |window, cx| {
+                                                Tooltip::new(tip.clone()).build(window, cx)
+                                            })
+                                        })
+                                        .child(SharedString::from(hint)),
+                                )
+                            })
+                            // 防御组合：分段中同时挂截断信号时旧 hint 兜底显示（正常到底已走上面 notice）
+                            .when_some(legacy_hint, |row, hint| {
+                                row.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(warning)
+                                        .child(SharedString::from(hint)),
                                 )
                             })
                             .child(SharedString::from(right)),
@@ -3123,12 +3341,14 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
-        TextAlign, blob_summary, cell_matches, cell_style, column_distinct_values, column_stats,
-        compare_cells, context_menu_items, duration_text, find_in_cell, fmt_stat_num,
-        header_tooltip_lines, column_menu_items, column_browser_menu_items, preview_of, stats_lines,
-        status_action_placeholders, status_segments, thousands, truncated_hint, validate_edit_value,
-        FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
+        CELL_DISPLAY_LIMIT, MAX_SINGLE_SEGMENT_ROWS, ContextAction, ContextTarget,
+        ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, TextAlign, WINDOW_FETCH_NOTICE,
+        blob_summary, cell_matches, cell_style, clip_cell_display, column_distinct_values,
+        column_stats, column_stats_from_values, compare_cells, context_menu_items, duration_text, fetch_more_hint,
+        find_in_cell, fmt_stat_num, group_by_values, header_tooltip_lines, column_menu_items,
+        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of, stats_lines, status_action_placeholders,
+        status_segments, thousands, truncation_notice, truncated_hint, validate_edit_value,
+        window_fetch_active, FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
     };
     use gpui_kit::assets::IconName;
     use workbench_shell::model::ColumnAnnotation;
@@ -3826,6 +4046,64 @@ mod tests {
         });
     }
 
+    /// 【P1-5】拖过的列宽按列名记进 delegate，重建表头（`column()` 重取）时恢复；
+    /// 行号槽宽度钉死不跟事件；换结果集后旧宽度清空回默认档。
+    #[gpui_kit::test]
+    fn dragged_column_widths_are_remembered_by_column_name(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut grid = grid();
+        // 没拖过：数据列走默认档，行号槽钉死
+        cx.update(|cx: &mut App| {
+            assert_eq!(grid.column(1, cx).width, crate::ui::RESULT_COLUMN_WIDTH);
+            assert_eq!(grid.column(2, cx).width, crate::ui::RESULT_COLUMN_WIDTH);
+            assert_eq!(grid.column(0, cx).width, crate::ui::RESULT_ROW_NUMBER_WIDTH);
+        });
+
+        // 组件拖完 mouse-up 报全部列宽：下标 0 = 行号槽，1 = id，2 = name
+        grid.set_column_widths(&[
+            crate::ui::RESULT_ROW_NUMBER_WIDTH,
+            gpui_kit::px(240.),
+            gpui_kit::px(96.),
+        ]);
+        cx.update(|cx: &mut App| {
+            assert_eq!(grid.column(1, cx).width, gpui_kit::px(240.), "id 列回填用户宽度");
+            assert_eq!(grid.column(2, cx).width, gpui_kit::px(96.), "name 列回填用户宽度");
+            assert_eq!(
+                grid.column(0, cx).width,
+                crate::ui::RESULT_ROW_NUMBER_WIDTH,
+                "行号槽宽度钉死，不跟事件跑"
+            );
+        });
+
+        // 换一份结果集：列集合变了，旧宽度清空，回到默认档
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string()],
+            vec![vec!["1".to_string(), "a".to_string()]],
+        );
+        cx.update(|cx: &mut App| {
+            assert_eq!(grid.column(1, cx).width, crate::ui::RESULT_COLUMN_WIDTH);
+            assert_eq!(grid.column(2, cx).width, crate::ui::RESULT_COLUMN_WIDTH);
+        });
+    }
+
+    /// 【P1-5】列宽事件下标是视图列序：隐藏列后要经 `data_column` 换算，
+    /// 宽度才落到对得上名的数据列上（否则隐藏一列后续列宽度整体错位）。
+    #[gpui_kit::test]
+    fn column_widths_map_around_hidden_columns(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut grid = grid();
+        // 隐藏数据列 0（id）：视图只剩 name（数据列 1），视图列 1 = name
+        grid.hide_column(0);
+        grid.set_column_widths(&[crate::ui::RESULT_ROW_NUMBER_WIDTH, gpui_kit::px(200.)]);
+        cx.update(|cx: &mut App| {
+            assert_eq!(
+                grid.column(1, cx).width,
+                gpui_kit::px(200.),
+                "隐藏 id 后，视图第一列 name 拿到对应的用户宽度"
+            );
+        });
+    }
+
     /// 列数与行数要和真实数据一致（delegate 是网格唯一的取数口）
     ///
     /// **列数比数据列多 1**：首列是行号槽（原型 §2.4）。
@@ -3935,6 +4213,54 @@ mod tests {
             has_more: true,
         };
         assert_eq!(status_segments(&partial).0, "共 1,000+ 行");
+    }
+
+    /// 【P0-2a】状态行分段语义：分段中提示「还有更多」；撞单段上限且到底才出「不完整」警告；
+    /// 正常取完两者都不提示；窗口代价 tooltip 只在分段中 / 截断时挂。
+    #[test]
+    fn status_fetch_and_truncation_hints_follow_state_combination() {
+        // 正常取完：无任何额外提示
+        let done = ResultStatus {
+            total_rows: 120,
+            selected_row: None,
+            selected_cell: None,
+            truncated_hint: None,
+            has_more: false,
+        };
+        assert_eq!(fetch_more_hint(&done), None);
+        assert_eq!(truncation_notice(&done), None);
+        assert!(!window_fetch_active(&done));
+
+        // 分段中：「还有更多」，不出截断警告
+        let partial = ResultStatus { has_more: true, ..done.clone() };
+        assert_eq!(fetch_more_hint(&partial), Some("还有更多 · 滚动到底继续加载"));
+        assert_eq!(truncation_notice(&partial), None);
+        assert!(window_fetch_active(&partial));
+
+        // 撞上限、已到底：出「不完整」警告，文案点明 10,000 上限口径
+        let capped = ResultStatus {
+            truncated_hint: Some("已截断至 10,000 行".to_string()),
+            has_more: false,
+            ..done.clone()
+        };
+        assert_eq!(fetch_more_hint(&capped), None);
+        let notice = truncation_notice(&capped).expect("到底且截断必出警告");
+        assert!(notice.contains("10,000"), "文案须点明单段上限口径");
+        assert!(notice.contains("不完整"));
+        assert!(window_fetch_active(&capped));
+
+        // 防御组合（分段中 + 截断信号）：截断警告让位给「还有更多」，不重复出警告
+        let mixed = ResultStatus {
+            truncated_hint: Some("已截断至 10,000 行".to_string()),
+            has_more: true,
+            ..done.clone()
+        };
+        assert!(truncation_notice(&mixed).is_none());
+        assert!(window_fetch_active(&mixed));
+
+        // 窗口代价文案与 engine 分段取舍一致；上限口径对齐 engine MAX_QUERY_ROWS
+        assert!(WINDOW_FETCH_NOTICE.contains("ORDER BY"));
+        assert_eq!(MAX_SINGLE_SEGMENT_ROWS, 10_000);
     }
 
     /// 【#26】底部动作状态行占位钮清单：顺序对齐 DBeaver 三段（写操作 ‖ 翻页 ‖ 系统），
@@ -4287,6 +4613,97 @@ mod tests {
         );
     }
 
+    /// 【P0-1】展示裁剪只裁画面串：按 `char` 边界不裁断中文 / emoji；完整值另走
+    /// `cell()` / `row_cell_text`（复制 / 导出 / 悬停 / 筛选 / 统计），BLOB 优先摘要由
+    /// `render_td` 的分支结构保证，不在这个纯函数里。
+    #[test]
+    fn clip_cell_display_respects_char_boundary_and_limit() {
+        // 恰好上限：原样返回，不加省略号
+        let exact = "a".repeat(CELL_DISPLAY_LIMIT);
+        assert_eq!(clip_cell_display(&exact, CELL_DISPLAY_LIMIT), exact);
+
+        // 超 1 个字符：前 300 字符 + …，省略号不占额度
+        let over = "a".repeat(CELL_DISPLAY_LIMIT + 1);
+        let clipped = clip_cell_display(&over, CELL_DISPLAY_LIMIT);
+        assert_eq!(clipped.chars().count(), CELL_DISPLAY_LIMIT + 1);
+        let body = clipped.strip_suffix('…').expect("超长必带省略号");
+        assert_eq!(body, "a".repeat(CELL_DISPLAY_LIMIT));
+
+        // 中文 + emoji：按 char 计数，边界落在字符上，超界 emoji 整字符裁掉、不出现半个
+        let unicode = "中".repeat(CELL_DISPLAY_LIMIT) + "😀";
+        let u = clip_cell_display(&unicode, CELL_DISPLAY_LIMIT);
+        assert!(u.ends_with('…'));
+        assert!(!u.contains('😀'));
+        assert_eq!(u.chars().count(), CELL_DISPLAY_LIMIT + 1);
+
+        // 多行值：中间换行保留，只截断尾部补省略号
+        let multiline = "第一行\n第二行\n".repeat(40);
+        let m = clip_cell_display(&multiline, CELL_DISPLAY_LIMIT);
+        assert!(m.contains('\n'), "中间换行不应被破坏");
+        assert!(m.ends_with('…'));
+
+        // 短串 / NULL / 空串原样返回
+        assert_eq!(clip_cell_display("NULL", CELL_DISPLAY_LIMIT), "NULL");
+        assert_eq!(clip_cell_display("", CELL_DISPLAY_LIMIT), "");
+
+        // 通用小 limit：5 字符取前 5 + …
+        assert_eq!(clip_cell_display("abcdef", 5), "abcde…");
+    }
+
+    /// 【P1-4】格内 JSON 美化：对象 / 数组压缩串展开成缩进多行；非 JSON 与裸标量原样交回 None，
+    /// 由上层按普通文本裁剪；解析失败不抛错。
+    #[test]
+    fn pretty_json_only_formats_parseable_objects_and_arrays() {
+        // 对象：两空格缩进 + 换行展开
+        let obj = r#"{"a":1,"b":"x"}"#;
+        assert_eq!(
+            pretty_json_display(obj).as_deref(),
+            Some("{\n  \"a\": 1,\n  \"b\": \"x\"\n}"),
+            "压缩对象展开成缩进多行"
+        );
+        // 数组同样美化
+        let arr = r#"[1,2,3]"#;
+        assert_eq!(
+            pretty_json_display(arr).as_deref(),
+            Some("[\n  1,\n  2,\n  3\n]"),
+            "压缩数组展开成缩进多行"
+        );
+        // 前后空白包裹仍识别（trim 后解析）
+        assert!(pretty_json_display("  {\"k\": null}  ").is_some());
+
+        // `{` 开头但不是合法 JSON：返回 None，不猜成 JSON
+        assert!(pretty_json_display("{oops").is_none());
+        // 裸标量 / 普通文本 / NULL / 空串：不进美化路径
+        assert!(pretty_json_display("123").is_none());
+        assert!(pretty_json_display("true").is_none());
+        assert!(pretty_json_display("\"plain\"").is_none());
+        assert!(pretty_json_display("plain text").is_none());
+        assert!(pretty_json_display("NULL").is_none());
+        assert!(pretty_json_display("").is_none());
+    }
+
+    /// 【P2】整数单元格千分位：整数值三位一组加逗号、负数保留负号；小数 / 科学计数 /
+    /// 文本 / NULL / 空串返回 None（交回普通展示路径，不强行分组）。
+    #[test]
+    fn integer_cell_values_get_thousands_separators_others_stay_raw() {
+        assert_eq!(format_integer_cell("1234567").as_deref(), Some("1,234,567"));
+        assert_eq!(format_integer_cell("1234").as_deref(), Some("1,234"));
+        assert_eq!(format_integer_cell("42").as_deref(), Some("42"));
+        assert_eq!(format_integer_cell("0").as_deref(), Some("0"));
+        // 负数：负号保留，绝对值分组
+        assert_eq!(format_integer_cell("-1234").as_deref(), Some("-1,234"));
+        assert_eq!(format_integer_cell("-42").as_deref(), Some("-42"));
+        // 前后空白先 trim 再解析
+        assert_eq!(format_integer_cell("  1000  ").as_deref(), Some("1,000"));
+
+        // 小数 / 科学计数 / 文本 / NULL / 空串：不分组
+        assert!(format_integer_cell("3.14").is_none());
+        assert!(format_integer_cell("1e3").is_none());
+        assert!(format_integer_cell("abc").is_none());
+        assert!(format_integer_cell("NULL").is_none());
+        assert!(format_integer_cell("").is_none());
+    }
+
     /// 【P2-1】隐藏列：视图列序跳过隐藏列，数据 / 类型 / 冻结仍按数据列走；
     /// 复制整行不再带隐藏列；换结果清空隐藏清单
     #[test]
@@ -4431,6 +4848,47 @@ mod tests {
         assert_eq!(mixed.count, 3, "x/y/z 三个非空");
         assert_eq!(mixed.nulls, 1, "NULL 计入空值");
         assert_eq!(mixed.min, None, "x/y/z 解析不了数字");
+    }
+
+    /// 【P2-2】列级纯函数与矩阵版同口径：抽列后统计 / 分组结果逐项相等。
+    #[test]
+    fn column_level_stats_and_grouping_match_matrix_versions() {
+        let rows = vec![
+            vec!["10".to_string(), "a".to_string()],
+            vec!["20".to_string(), "NULL".to_string()],
+            vec!["NULL".to_string(), "a".to_string()],
+            vec!["30".to_string(), "b".to_string()],
+        ];
+        let values: Vec<String> = rows.iter().map(|row| row[0].clone()).collect();
+        assert_eq!(column_stats_from_values(&values), column_stats(&rows, 0), "统计列级内核与矩阵版一致");
+
+        let name_values: Vec<String> = rows.iter().map(|row| row[1].clone()).collect();
+        assert_eq!(group_by_values(&name_values), ResultGridDelegate::group_by_count(&rows, 1), "分组列级内核与矩阵版一致");
+    }
+
+    /// 【P2-2】delegate 列级访问器跟随筛选 / 排序后的**视图行序**，结果与矩阵
+    /// `visible_rows()` 现算一致——消除整行物化后口径不能变。
+    #[test]
+    fn delegate_column_accessors_follow_view_rows_like_matrix_version() {
+        let mut grid = grid_with(&[&["10", "a"], &["20", "b"], &["NULL", "a"], &["30", "b"]]);
+
+        // 全量视图：统计 / 分组与矩阵版逐项相等
+        let rows = grid.visible_rows();
+        assert_eq!(grid.column_stats_for(0), column_stats(&rows, 0));
+        assert_eq!(grid.group_by_for(1), ResultGridDelegate::group_by_count(&rows, 1));
+        assert_eq!(
+            grid.group_by_for(1),
+            vec![("a".to_string(), 2), ("b".to_string(), 2)],
+            "首现顺序 + 计数"
+        );
+
+        // 筛选后只剩 name 含 a 的两行：访问器同样只统计视图行
+        grid.set_filter("a");
+        let filtered = grid.visible_rows();
+        assert_eq!(grid.column_stats_for(0), column_stats(&filtered, 0), "统计跟随筛选行序");
+        assert_eq!(grid.group_by_for(1), ResultGridDelegate::group_by_count(&filtered, 1), "分组跟随筛选行序");
+        assert_eq!(grid.column_stats_for(0).count, 1, "10 那行非空");
+        assert_eq!(grid.column_stats_for(0).nulls, 1, "NULL 那行被筛进来");
     }
 
     /// 【P2-3】展示行：数值给全，纯文本列只给计数两行

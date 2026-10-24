@@ -584,6 +584,14 @@ impl EditorHostPanel {
                     });
                     None
                 }
+                TableEvent::ColumnWidthsChanged(widths) => {
+                    // 【P1-5】拖宽把列宽记进 delegate：排序 / 改行数重建表头时不被打回默认档。
+                    // 组件发完事件已自刷新，这里不再 notify；只记宽度，不改动选中状态。
+                    grid.update(cx, |state, _cx| {
+                        state.delegate_mut().set_column_widths(widths)
+                    });
+                    panel.result_selection
+                }
                 _ => panel.result_selection,
             };
             // 【T2a-4】双击单元格 → 进入编辑（原生 `DoubleClickedCell` 事件；判据一次

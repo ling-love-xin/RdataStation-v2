@@ -1699,7 +1699,8 @@ impl ResultPanel {
     /// 【右栏】计算页（DBeaver「计算」）：选中列的 count / NULL / min / max / avg / sum。
     ///
     /// 作用列 = 网格选中格优先（`selection_pos`），列浏览器清单选中列（`selected_col`）兜底；
-    /// 转置视图不给语义列。数据 = `column_stats(可见行, 数据列)`（纯函数；与列头菜单弹层同口径）。
+    /// 转置视图不给语义列。数据 = 列级访问器 `column_stats_for`（只取目标列取值，
+    /// 不物化整行矩阵；纯函数口径与列头菜单弹层一致）。
     /// 数值统计只在列里有可解析数值样本时才填（文本 / BLOB 只计 count / NULL）。
     fn render_stats_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
@@ -1709,8 +1710,8 @@ impl ResultPanel {
         let Some(data_col) = self.inspect_column(delegate) else {
             return self.sidebar_empty("选中一个数据列查看统计", cx);
         };
-        let rows = delegate.visible_rows();
-        let stats = result_grid::column_stats(&rows, data_col);
+        // 【P2-2】列级访问器：只取目标列取值，不再 `visible_rows()` 物化整行矩阵
+        let stats = delegate.column_stats_for(data_col);
         let name = delegate
             .columns()
             .get(data_col)
@@ -1760,8 +1761,8 @@ impl ResultPanel {
         let Some(data_col) = self.inspect_column(delegate) else {
             return self.sidebar_empty("选中一个数据列查看分组", cx);
         };
-        let rows = delegate.visible_rows();
-        let groups = ResultGridDelegate::group_by_count(&rows, data_col);
+        // 【P2-2】列级访问器：只取目标列取值，不再 `visible_rows()` 物化整行矩阵
+        let groups = delegate.group_by_for(data_col);
         let name = delegate
             .columns()
             .get(data_col)
