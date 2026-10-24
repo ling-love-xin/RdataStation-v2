@@ -7,8 +7,9 @@
 //! 每任务独立线程的原因：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
 //! 不拖累其他任务。**代价是并发无上限**——多节点同时展开会并发 acquire 撞满连接池
 //! （真机：3 个 schema 展开 → 15 个 folder 任务抢 2 条池连接 → 排队 30s 超时）。
-//! 因此 `LoadChildren` 执行前过全局信号量（[`LOAD_CONCURRENCY`]），执行并发受限，
-//! 超出的任务在许可处排队（loading 状态保持，UI 显示「加载中」，不丢任务）。
+//! 调度分两层（B-2-1）：每连接容量 1 的 per-conn 信号量保证同连接元数据任务串行；
+//! 外层全局软帽 [`LOAD_GLOBAL_CAP`] 限制跨连接并发上界；两层都忙的任务在许可处排队
+//! （loading 状态保持，UI 显示「加载中」，不丢任务）。
 //!
 //! 任务类型：
 //! - `LoadChildren`：导航树懒加载 / 分页加载（主线程 render 不再做 I/O）；
@@ -21,10 +22,10 @@
 //!
 //! 缓存写入由 `NavigatorService` 的 cache-aside 完成；本模块不直接碰缓存。
 
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::model::{NavNodeKind, NavPath, ObjectRef, PropertyRef};
 use crate::nav_host::ConnectionProbe;
@@ -32,14 +33,16 @@ use property::ObjectProperties;
 use crate::sql_gen::DmlKind;
 use engine::persistence::FtsSearchResult;
 
-/// 导航加载任务的全局并发上限。
-///
-/// 对齐 DBeaver/DataGrip 的**串行内省**（用户决策 2026-10-08：除缓存设计外全参考
-/// DBeaver）：内省查询逐个执行，天然不撞连接资源、不超建服务端连接。
-/// 值为 1 = 严格串行（展开多个节点时逐个加载，每次 100~300ms，用户感知可接受；
-/// 此前的并行 + 池的组合在真机上反复出现 30s 超时 / pool timed out）。
-const LOAD_CONCURRENCY: usize = 1;
-static LOAD_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+/// 每连接元数据任务并发上限 = 1：同连接内省 / 属性 / 取列严格串行（驱动单连接 Mutex
+/// 语义保持），不并发占池。信号量只代表「同连接任务串行」，不持有连接句柄 / 配置、
+/// 无会话状态；条目随连接断开 / 删除回收（见 [`drop_conn_sem`]）。
+const PER_CONN_CONCURRENCY: usize = 1;
+
+/// 全局软帽：跨连接并发上界（B-2-A 起步 K=3，真机 V3 数据复测后定稿；不取消软帽）。
+/// 在 per-conn 信号量之外套一层，只挡排队、不改变 per-conn 互斥；防止连接数多时
+/// 任务线程 / 独立 Runtime 数失控。
+const LOAD_GLOBAL_CAP: usize = 3;
+static GLOBAL_LOAD_SEM: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 /// 预热起步延迟（S2-③，zqlz `schema_service.rs:49` 同值 3s）。
 ///
@@ -52,13 +55,15 @@ static LOAD_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
 /// 遍历（无 unfiltered 全量扫描），结构上已规避该问题，加了阈值反而多一次预查询。
 const WARM_START_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
 
-fn load_semaphore() -> &'static tokio::sync::Semaphore {
-    LOAD_SEM.get_or_init(|| tokio::sync::Semaphore::new(LOAD_CONCURRENCY))
+fn global_load_semaphore() -> Arc<tokio::sync::Semaphore> {
+    GLOBAL_LOAD_SEM
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(LOAD_GLOBAL_CAP)))
+        .clone()
 }
 
 /// 列预取独立并发上限（2026-10-08 卡顿根治，app_run70 铁证）。
 ///
-/// 背景：`PrefetchColumns` 原先**与导航共用 LOAD_CONCURRENCY(=1) 信号量**——表展开
+/// 背景：`PrefetchColumns` 原先**与导航共用旧全局串行信号量（容量 1）**——表展开
 /// 后提交的列预取（每表 5s 超时 × N 表）把唯一信号量占住 10s+，用户紧接着点其他
 /// schema 的 `LoadChildren` 只能 `acquire` 阻塞排队——真机：crm schema 入队 6.26s、
 /// logistics 入队 7.27s 才开始执行（任务本身 0ms，卡顿感全来自信号量排队）。
@@ -69,6 +74,54 @@ static PREFETCH_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
 
 fn prefetch_semaphore() -> &'static tokio::sync::Semaphore {
     PREFETCH_SEM.get_or_init(|| tokio::sync::Semaphore::new(PREFETCH_CONCURRENCY))
+}
+
+/// 取（必要时新建）所属连接的信号量。
+///
+/// 同一 `conn_id` 复用同一 `Arc`；断开 / 删除经 [`drop_conn_sem`] 移除条目后，
+/// 重连经 `entry` 新建全新信号量，不复用旧条目残留令牌。
+fn per_conn_semaphore(conn_id: &str) -> Arc<tokio::sync::Semaphore> {
+    let mut map = lock(&shared().conn_sems);
+    map.entry(conn_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(PER_CONN_CONCURRENCY)))
+        .clone()
+}
+
+/// 断开 / 删除连接后回收信号量条目：`Arc` 计数归零即释放；在途任务持有的克隆不受影响。
+/// 两条生命周期路径（disconnect / delete_connection）都调本函数，幂等：重复调用无害。
+pub fn drop_conn_sem(conn_id: &str) {
+    lock(&shared().conn_sems).remove(conn_id);
+}
+
+/// 阻塞族元数据任务取锁（`LoadChildren` / `LoadProperties` / `GenerateDml`）：
+/// 先取所属连接信号量（同连接串行），再取全局软帽（跨连接上界）。
+///
+/// 取锁层级固定为 per-conn → 全局、单向获取，不存在反向加锁，无死锁；先占 per-conn
+/// 再抢全局，避免排队任务占住全局名额饿死其他连接。两个许可保活到任务结束，退出作用域
+/// 即依次归还。
+fn acquire_meta_permit(
+    rt: &tokio::runtime::Runtime,
+    conn_id: &str,
+) -> (
+    tokio::sync::OwnedSemaphorePermit,
+    tokio::sync::OwnedSemaphorePermit,
+) {
+    let per_conn = per_conn_semaphore(conn_id);
+    rt.block_on(async move {
+        let per = per_conn.acquire_owned().await.expect("per-conn 信号量不会关闭");
+        let global = global_load_semaphore()
+            .acquire_owned()
+            .await
+            .expect("全局软帽不会关闭");
+        (per, global)
+    })
+}
+
+/// 让位族任务取锁（`Warm` / `WarmCompletion`）：所属连接忙即跳过本批，不排队、
+/// 不套全局软帽（B-2-C：维持现状 `try_acquire` 口径，不引入新等待）。
+/// 返回持锁许可（`None` = 跳过）；许可保活到任务结束。
+fn try_acquire_warm_permit(conn_id: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    per_conn_semaphore(conn_id).try_acquire_owned().ok()
 }
 
 /// 预取目标（catalog / schema / 表或视图名）。
@@ -399,6 +452,9 @@ struct Shared {
     test_results: Mutex<Vec<TestConnResult>>,
     connect_results: Mutex<Vec<ConnectResult>>,
     search_results: [Mutex<Vec<SearchResult>>; SearchConsumer::COUNT],
+    /// 每连接信号量表：key = `conn_id`，value = 容量 1 的 per-conn 信号量。
+    /// 挂本结构（不另开 `OnceLock` 静态全局）；条目由 [`drop_conn_sem`] 回收。
+    conn_sems: Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
 }
 
 impl Shared {
@@ -438,6 +494,7 @@ fn shared() -> &'static Shared {
             test_results: Mutex::new(Vec::new()),
             connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
+            conn_sems: Mutex::new(HashMap::new()),
         }
     })
 }
@@ -527,7 +584,7 @@ fn restart_worker() {
 ///
 /// 用户主动动作（展开 / 重试 / 加载更多 / 搜索）必须插到后台任务前面——
 /// 否则恢复展开态 / 定位链 / 预取的一大批低优任务会把用户手点的响应堵在
-/// `LOAD_CONCURRENCY` 信号量后面（FIFO 先到先执行，正是遗留 #5 的症状）。
+/// `per-conn` / 全局软帽信号量后面（FIFO 先到先执行，正是遗留 #5 的症状）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum JobPriority {
     /// 用户主动动作：先执行。
@@ -787,7 +844,7 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 fn worker(rx: mpsc::Receiver<QueuedJob>) {
     // 优先级调度（S2-①）：通道进来的任务先进二叉堆，每次取**最高优**执行；
     // 同优先级按入队序（`QueuedJob.seq`）保持 FIFO 公平。高优任务（用户手点）到了
-    // 就能插到低优（恢复展开 / 定位 / 刷新）前面——`LOAD_CONCURRENCY=1` 信号量
+    // 就能插到低优（恢复展开 / 定位 / 刷新）前面——per-conn / 全局软帽信号量
     // 的 FCFS 跟随 spawn 顺序，所以**重排 spawn 顺序即重排执行顺序**。
     let mut heap: BinaryHeap<QueuedJob> = BinaryHeap::new();
     loop {
@@ -808,7 +865,8 @@ fn worker(rx: mpsc::Receiver<QueuedJob>) {
         // 每任务独立线程：同步阻塞（rusqlite / 驱动查询）卡住时只挂起该线程，
         // 分发线程立即接下一任务——tokio `timeout` 对同步阻塞不生效（实测：一个
         // 卡住的查询会让整个 worker 排队、树全卡，JOB_TIMEOUT 兜不住）。
-        // 并发由 [`LOAD_CONCURRENCY`] 信号量在 `run_job` 内限制（LoadChildren）。
+        // 并发由 per-conn 信号量（同连接串行）+ 全局软帽（跨连接上界）在 `run_job`
+        // 内限制（阻塞族元数据任务）。
         std::thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Runtime::new() else {
                 return;
@@ -849,10 +907,10 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             object,
             visible_databases,
         } => {
-            // 限流：同一时刻最多 LOAD_CONCURRENCY 个加载任务执行（其余在信号量处排队，
-            // loading 状态保持，UI 显示「加载中」）。不排队的话，多节点同时展开会
-            // 并发 acquire 撞满连接池（真机：15 个 folder 任务抢 2 条池连接，30s 超时）。
-            let _permit = rt.block_on(async { load_semaphore().acquire().await });
+            // 调度（B-2-1 per-conn 分片）：先取所属连接信号量（同连接内省串行，保持驱动
+            // 单连接 Mutex 语义），再取全局软帽（跨连接并发上界 K=3）；两层都忙时在此
+            // 排队，loading 状态保持、UI 显示「加载中」，不丢任务。
+            let (_per_conn, _global) = acquire_meta_permit(rt, &conn_id);
             // 竞态守卫（2026-10-08 真机）：点击连接 → `ensure_connected_for_browse`
             // 乐观标记 connected → 渲染驱动立即入队 Connection/Schema 层任务 → 建连线程
             // （50-100ms）尚未注册连接 → 任务在连接未注册时执行 → CONN_NOT_FOUND 红字
@@ -953,10 +1011,11 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             db_type,
             data,
         } => {
-            // 属性面板详情也是元数据查询：与导航内省共用同一串行信号量
-            // （DBeaver 的 Metadata 连接语义——所有元数据查询走唯一通道，不并发占池。
-            // 真机：详情卡并行 acquire 会把池占满，内省任务 5s acquire 超时）。
-            let _permit = rt.block_on(async { load_semaphore().acquire().await });
+            // 属性面板详情也是元数据查询：与导航内省共用所属连接信号量（B-2-B，保持
+            // 「同连接元数据通道唯一」语义，避免属性查询与内省抢同一条单连接），再套
+            // 全局软帽。
+            let conn_id = property.conn_id.clone();
+            let (_per_conn, _global) = acquire_meta_permit(rt, &conn_id);
             let svc = service(None);
             let outcome = rt.block_on(async {
                 tokio::time::timeout(
@@ -982,9 +1041,10 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             conn_id,
             project_root,
         } => {
-            // 预热也是元数据内省：与导航共用串行信号量但**让位**（不阻塞排队）。
-            // 内省忙时放弃本批（下次展开时 cache-aside 会补写 L2），不让后台线程堆积。
-            let Ok(_permit) = load_semaphore().try_acquire() else {
+            // 预热也是元数据内省：取所属连接信号量但**让位**（B-2-C 忙即跳，不阻塞
+            // 排队、不套全局软帽）。同连接内省忙时放弃本批（下次展开时 cache-aside 会
+            // 补写 L2），不让后台线程堆积。
+            let Some(_permit) = try_acquire_warm_permit(&conn_id) else {
                 tracing::debug!(conn_id = %conn_id, "预热让位导航内省（跳过本批）");
                 return;
             };
@@ -1006,9 +1066,10 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             conn_id,
             project_root,
         } => {
-            // 补全内省也是元数据内省：与导航共用串行信号量但**让位**（不阻塞排队）。
-            // 内省忙时放弃本批（补全下回按键会再试），不让后台线程堆积、不抢源库。
-            let Ok(_permit) = load_semaphore().try_acquire() else {
+            // 补全内省也是元数据内省：取所属连接信号量但**让位**（B-2-C 忙即跳，不阻塞
+            // 排队、不套全局软帽）。同连接忙时放弃本批（补全下回按键会再试），不让后台
+            // 线程堆积、不抢源库。
+            let Some(_permit) = try_acquire_warm_permit(&conn_id) else {
                 tracing::debug!(conn_id = %conn_id, "补全内省让位导航（跳过本批）");
                 return;
             };
@@ -1025,8 +1086,8 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 .into_iter()
                 .map(|t| (t.catalog, t.schema, t.table))
                 .collect();
-            // 预取与内省**互不抢信号量**（2026-10-08 卡顿根治）：导航用 LOAD_SEM
-            // 严格串行（DBeaver 语义），列预取用独立 PREFETCH_SEM（并发 2）——表展开
+            // 预取与内省**互不抢信号量**（2026-10-08 卡顿根治）：导航用 per-conn
+            // 信号量串行 + 全局软帽，列预取用独立 PREFETCH_SEM（并发 2）——表展开
             // 后的列预取不再把唯一信号量占住 10s+ 而阻塞用户点别的 schema。
             // 仍 `try_acquire`（尽力而为）：预取信号量也忙时放弃本批（下次展开再预取）。
             let Ok(_permit) = prefetch_semaphore().try_acquire() else {
@@ -1056,9 +1117,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             qualified,
             kind,
         } => {
-            // 取列也是元数据查询：与导航内省共用同一串行信号量（对齐 DBeaver
-            // Metadata 连接语义——元数据查询走唯一通道，不并发占池）。
-            let _permit = rt.block_on(async { load_semaphore().acquire().await });
+            // 取列也是元数据查询：先取所属连接信号量（同连接串行），再套全局软帽
+            // （对齐 DBeaver Metadata 连接语义——元数据查询走唯一通道，不并发占池）。
+            let (_per_conn, _global) = acquire_meta_permit(rt, &conn_id);
             let svc = service(project_root);
             let result = rt.block_on(async {
                 // 列走导航同一套 cache-aside（命中 L2 不发查询）；取列那次 I/O 包超时。
@@ -1106,7 +1167,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             // scoped 线程**直开临时缓存连接**（`NavCache::open_direct`，不走池——搜索目标
             // 是全部可见连接，池会让从未浏览过的连接也永久注册并预热，白占句柄）。
             // 线程只读各自连接自己的缓存文件（不同缓存文件 = 不同 SQLite 库），无共享可变
-            // 状态，也无需抢 `LOAD_SEM` / `PREFETCH_SEM`。
+            // 状态，也无需抢 per-conn 信号量 / 全局软帽 / `PREFETCH_SEM`。
             //
             // 排序：合并按「chunk 序 + target 序」保持确定性（并行只提速，不重排结果）；
             // 每目标限额固定 `SEARCH_LIMIT_PER_CONN`，全局 300 截断放在合并后统一做——
@@ -1716,6 +1777,7 @@ mod tests {
             test_results: Mutex::new(Vec::new()),
             connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
+            conn_sems: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2271,5 +2333,71 @@ mod tests {
         );
         assert!(!has_pending_search(SearchConsumer::Panel), "计数必须配平");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// B-2-1 per-conn 信号量：同一 `conn_id` 复用同一 `Arc`，不同连接各自独立。
+    #[test]
+    fn per_conn_semaphore_reuses_arc_for_same_conn_and_isolates_others() {
+        drop_conn_sem("sem_a");
+        drop_conn_sem("sem_b");
+
+        let a1 = per_conn_semaphore("sem_a");
+        let a2 = per_conn_semaphore("sem_a");
+        let b = per_conn_semaphore("sem_b");
+
+        assert!(Arc::ptr_eq(&a1, &a2), "同一连接应复用同一信号量 Arc");
+        assert!(!Arc::ptr_eq(&a1, &b), "不同连接信号量必须相互独立");
+
+        drop_conn_sem("sem_a");
+        drop_conn_sem("sem_b");
+    }
+
+    /// B-2-1 per-conn 容量 = 1：占用中第二次取锁失败，释放后可再取（让位族据此跳过）。
+    #[test]
+    fn per_conn_semaphore_capacity_one_blocks_second_acquire_until_release() {
+        drop_conn_sem("sem_cap");
+        let sem = per_conn_semaphore("sem_cap");
+
+        let first = sem
+            .clone()
+            .try_acquire_owned()
+            .expect("首次取锁应当成功");
+        let second = sem.clone().try_acquire_owned();
+        assert!(
+            second.is_err(),
+            "容量为 1：占用中第二次 try_acquire 必须失败"
+        );
+
+        drop(first);
+        let third = sem.clone().try_acquire_owned();
+        assert!(third.is_ok(), "许可归还后应当能再次取锁");
+
+        drop_conn_sem("sem_cap");
+    }
+
+    /// B-2-1 条目回收：`drop_conn_sem` 移除后再取为全新信号量，旧残留令牌不继承；
+    /// 在途任务持有的旧 Arc 克隆不受回收影响。
+    #[test]
+    fn drop_conn_sem_resets_to_fresh_semaphore_without_inflight_leak() {
+        drop_conn_sem("sem_reset");
+        let old = per_conn_semaphore("sem_reset");
+        let old_permit = old
+            .clone()
+            .try_acquire_owned()
+            .expect("旧信号量首次取锁成功");
+
+        // 断开 / 删除路径只回收 map 条目；在途持有的旧许可仍占住旧信号量、不被打断，
+        // 旧 Arc 克隆随许可存活直到任务结束。
+        drop_conn_sem("sem_reset");
+        assert!(
+            old.clone().try_acquire_owned().is_err(),
+            "在途任务持有的旧许可仍占住旧信号量，不应被回收打断"
+        );
+
+        let fresh = per_conn_semaphore("sem_reset");
+        assert!(!Arc::ptr_eq(&old, &fresh), "回收后重建必须是全新信号量");
+
+        drop(old_permit);
+        drop_conn_sem("sem_reset");
     }
 }
