@@ -27,6 +27,7 @@ mod formatter;
 mod function_manual;
 mod functions;
 mod highlight;
+mod hover;
 mod parser;
 mod script;
 mod semantic;
@@ -45,6 +46,7 @@ pub use functions::{
 };
 pub use function_manual::{search_manual, ManualCategory, ManualEntry, MANUAL};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
+pub use hover::{hover_at, HoverInfo, HoverKind};
 pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
 pub use semantic::{diagnose, CatalogTable, SemanticIssue};
