@@ -7,11 +7,11 @@
 
 | 能力 | engine 层 | editor 接线 | UI | 实测状态 |
 | --- | --- | --- | --- | --- |
-| ① 语义诊断（未知表/未知列） | ✅ `c7de3e06` + 本轮 | ✅ 纯函数层（`Request.dialect` + 目录转换）+ B 批目录注入端口（`76b59ac1`） | ⏳ 波浪线渲染待宿主注入目录+方言 | ⏳ 运行时暂不生效 |
-| ② hover（函数/表/列） | ✅ `129eb656` | ✅ 已接（`cd23301e`，`lsp/sql_hover.rs`） | ✅ 函数/签名可测；表/列列列表待目录注入 | ⏳ 函数 hover 可测，表/列待注入 |
+| ① 语义诊断（未知表/未知列） | ✅ `c7de3e06` + 本轮 | ✅ 纯函数层（`Request.dialect` + 目录转换）+ B 批目录注入端口（`76b59ac1`） | ✅ 目录快照泵已注入（`003a8300` 后本轮：`editor_catalog::pump` 每 1s 按文档推 + retain） | ⏳ 待真机实测（注入后红波浪线应出现） |
+| ② hover（函数/表/列） | ✅ `129eb656` | ✅ 已接（`cd23301e`，`lsp/sql_hover.rs`） | ✅ 函数/签名可测；表/列列列表随目录快照注入解锁 | ⏳ 函数 hover 可测；表/列随注入后实测 |
 | ③ 函数签名目录 | ✅ `d69a971f` | ✅ 已接（`32658350`，`signature_help.rs` + `Ctrl+Shift+Space`） | ✅ Dialog：签名 + 参数表（当前参数位高亮） | ✅ 可测（C4） |
 | ③+ 函数手册（中文） | ✅ `2f90e066` | ✅ 已接（C5，`function_manual.rs` + `Ctrl+Shift+M` + 工具栏书本按钮） | ✅ Dialog 搜索/插入 | ✅ 可测（C5） |
-| ④ 跳转定义 | ✅ `1136862f` | ✅ 已接（`f7b3c6c2`，`lsp/sql_definition.rs`，`rds://navigator` 由 workbench 解析） | ⏳ 导航树定位待 workbench show_document 注入 | ⏳ 待注入实测 |
+| ④ 跳转定义 | ✅ `1136862f` | ✅ 已接（`f7b3c6c2`，`lsp/sql_definition.rs`，`rds://navigator` 由 workbench 解析） | ✅ show_document 端口已注入（本轮：`editor_catalog::attach_jump` → `request_reveal` → 导航树定位） | ⏳ 待真机实测（Ctrl+Click 表名 → 左 Dock 展开并选中） |
 
 > ⚠️ **运行时语义诊断为什么暂不生效（重要）**：编辑器诊断的唯一生产路径是 `editor/src/scan.rs` 扫描线程，
 > 它按既有约定给**空目录** + `connection: None`（注释「目录与连接是补全面的，给空的不参与」）。
@@ -66,9 +66,8 @@ cargo test -p rds-engine --lib          # 653 项全绿
 
 ### 批次 B：待宿主注入后测（语义诊断上线）
 
-> 2026-10-24 更新：**editor 侧端口已就绪**（`EditorShared::set_catalog_snapshot` + scan 提交链带目录与
-> 方言，host `sql_dialect_for_document` 统一方言口径）；workbench 侧「文档绑定连接 → 目录快照推送」
-> 为并行线设计，注入后 B1-B4 可测。
+> 2026-10-24 更新：**注入已上线**（`editor_catalog::pump` 每 1s 按活动文档绑定连接推目录快照
+> + `retain` 清残留；方言由 host `sql_dialect_for_document` 统一口径），B1-B4 可真机实测。
 
 | # | 步骤 | 预期 |
 | --- | --- | --- |
@@ -86,8 +85,8 @@ cargo test -p rds-engine --lib          # 653 项全绿
 | C3 | 悬停列 | 所属表 + 列名 | ⏳ 同上 |
 | C4 | `Ctrl+Shift+Space`（函数调用处） | 签名帮助 Dialog：签名 + 参数表（当前参数位高亮）+ 中文描述 | ✅ 已接（本轮提交，`signature_help.rs` + 键位）**可测**；「输入 `(` 自动弹」留二期 |
 | C5 | `Ctrl+Shift+M` / 工具栏书本图标打开函数手册，输入「截取」→ `SUBSTR` 命中，回车插入函数名到光标 | ✅ 已提交（C5）**可测** |
-| C6 | Ctrl+Click 表名 | 跳转导航树定位到该表（限定名） | ✅ 已接（`sql_definition.rs`，`rds://navigator` 由 workbench 解析）**待目录/导航注入后实测** |
-| C7 | Ctrl+Click 列名 | 定位所属表并选中该列 | ✅ 已接同上 **待实测** |
+| C6 | Ctrl+Click 表名 | 跳转导航树定位到该表（限定名） | ✅ 已接 + 注入上线（本轮 `attach_jump`：`rds://navigator/<限定名>` → `request_reveal` → 导航树展开选中）**待真机实测** |
+| C7 | Ctrl+Click 列名 | 定位所属表并选中该列 | ✅ 已接 + 注入上线（限定名携带列所属表；「选中列」动作留导航树能力对齐）**待实测** |
 
 ## 四、关联遗留（#52/#53，与 #54 并行推进）
 

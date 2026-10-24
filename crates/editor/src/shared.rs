@@ -66,6 +66,17 @@ pub type InsightColumnPort = Rc<dyn Fn(InsightColumnRequest, &mut gpui_kit::App)
 /// 工具栏「⟲ 历史」按钮点击后经它通知宿主——编辑器不依赖工作台的 Dock。
 pub type OpenHistoryPort = Rc<dyn Fn(&mut gpui_kit::App)>;
 
+/// 【#54 C6/C7】「跳转定义目标解析」端口（由宿主注入：workbench 接到导航树定位）。
+///
+/// 内核 `go_to_definition` 对非 http/https 的 `target_uri` **先问 `show_document`
+/// handler**（返回 `true` = 宿主自处理，跳转就此结束；`false` = 内核走默认——
+/// 当前文档内移动光标，见 vendor gpui-base `input/editor/lsp/definitions.rs`）。
+/// 编辑器只负责桥接：签名对齐内核 `ShowDocumentHandler`
+/// （`Rc<dyn Fn(&ShowDocumentParams, &mut Window, &mut App) -> bool>`，输入
+/// `input/mod.rs` 实测），宿主实现按需忽略 `Window`。
+pub type ShowDocumentPort =
+    Rc<dyn Fn(&lsp_types::ShowDocumentParams, &mut gpui_kit::Window, &mut gpui_kit::App) -> bool>;
+
 /// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
 ///
 /// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
@@ -160,10 +171,13 @@ pub struct EditorShared {
     kernel_port: Rc<RefCell<Option<Rc<dyn crate::kernel::KernelsPort>>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
-    /// 【#54 B】语义诊断目录快照：宿主（workbench）按文档绑定连接注入；`None` =
-    /// 扫描不参与语义诊断（与「空目录退化」同一口径，宁缺毋滥）。目录是纯数据
-    /// （`Vec<String>`），可跨扫描工作线程 `Arc` 传递。
-    catalog_snapshot: Rc<RefCell<Option<Arc<Catalog>>>>,
+    /// 【#54 B】语义诊断目录快照（**按文档存**：多文档可各绑各连接，扫描只认
+    /// 自己那份文档的目录，不跨文档串）。宿主（workbench）按文档绑定连接注入；
+    /// 无条目 = 扫描不参与语义诊断（与「空目录退化」同一口径，宁缺毋滥）。目录是
+    /// 纯数据（`Vec<String>`），可跨扫描工作线程 `Arc` 传递。
+    catalog_snapshots: Rc<RefCell<std::collections::HashMap<crate::model::DocumentId, Arc<Catalog>>>>,
+    /// 【#54 C6/C7】跳转定义目标解析端口（宿主注入；未注入 = 内核走默认文档内移动）
+    show_document_port: Rc<RefCell<Option<ShowDocumentPort>>>,
 }
 
 impl Clone for EditorShared {
@@ -192,7 +206,8 @@ impl Clone for EditorShared {
             kernels: self.kernels.clone(),
             kernel_port: self.kernel_port.clone(),
             receipts: self.receipts.clone(),
-            catalog_snapshot: self.catalog_snapshot.clone(),
+            catalog_snapshots: self.catalog_snapshots.clone(),
+            show_document_port: self.show_document_port.clone(),
         }
     }
 }
@@ -227,7 +242,8 @@ impl EditorShared {
             kernels: Rc::new(RefCell::new(std::collections::HashMap::new())),
             kernel_port: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
-            catalog_snapshot: Rc::new(RefCell::new(None)),
+            catalog_snapshots: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            show_document_port: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -856,6 +872,18 @@ impl EditorShared {
         self.open_history.borrow().clone()
     }
 
+    /// 【#54 C6/C7】注入「跳转定义目标解析」端口（宿主在装配期调用一次；
+    /// 未注入 = 内核走默认文档内移动，见 [`ShowDocumentPort`]）
+    pub fn attach_show_document(&self, port: ShowDocumentPort) {
+        *self.show_document_port.borrow_mut() = Some(port);
+    }
+
+    /// 【#54 C6/C7】「跳转定义目标解析」端口（host 装配编辑器内核时读一次，
+    /// 有则挂 `lsp_mut().show_document`，无则内核默认）
+    pub fn show_document_port(&self) -> Option<ShowDocumentPort> {
+        self.show_document_port.borrow().clone()
+    }
+
     /// 【M8】文档未绑定连接时执行会落到哪条连接上（口径在执行器：绑定优先 → 回退活动连接）
     pub fn active_connection(&self) -> Option<String> {
         let guard = self.exec.borrow();
@@ -1243,15 +1271,34 @@ impl EditorShared {
             && !doc.tier().disables_completion()
     }
 
-    /// 【#54 B】注入语义诊断目录快照（幂等：覆盖旧快照）。宿主在「文档绑定连接 /
-    /// Schema 切换 / 导航树目录刷新」时推给 editor；editor 侧不主动向 database 要目录。
-    pub fn set_catalog_snapshot(&self, catalog: Option<Arc<Catalog>>) {
-        *self.catalog_snapshot.borrow_mut() = catalog;
+    /// 【#54 B】注入某文档的语义诊断目录快照（幂等：覆盖旧快照）。宿主在「文档
+    /// 绑定连接 / Schema 切换 / 导航树目录刷新」时按文档推给 editor；editor 侧不
+    /// 主动向 database 要目录。
+    ///
+    /// `None` = 该文档不参与语义诊断（未绑定连接 / 目录未载好——如实降级，
+    /// 宁缺毋滥）。同一文档重复推同目录是零成本覆盖（`HashMap` insert）。
+    pub fn set_catalog_snapshot(&self, doc: &crate::model::DocumentId, catalog: Option<Arc<Catalog>>) {
+        match catalog {
+            Some(catalog) => {
+                self.catalog_snapshots.borrow_mut().insert(doc.clone(), catalog);
+            }
+            None => {
+                self.catalog_snapshots.borrow_mut().remove(doc);
+            }
+        }
     }
 
-    /// 【#54 B】取当前目录快照（`None` = 未注入，扫描不参与语义诊断——空目录退化口径）
-    pub fn catalog_snapshot(&self) -> Option<Arc<Catalog>> {
-        self.catalog_snapshot.borrow().clone()
+    /// 【#54 B】取某文档的目录快照（无条目 = 未注入，该文档扫描不参与语义诊断）
+    pub fn catalog_snapshot_for(&self, doc: &crate::model::DocumentId) -> Option<Arc<Catalog>> {
+        self.catalog_snapshots.borrow().get(doc).cloned()
+    }
+
+    /// 【#54 B】残留快照清理：保留 `alive` 里的文档条目，清掉其余（宿主泵每拍把
+    /// 现存文档 id 传进来——关闭文档的目录快照不积内存；文档 id 不复用，残留本
+    /// 无害，关一个清一个更干净）
+    pub fn retain_catalog_snapshots(&self, alive: &[crate::model::DocumentId]) {
+        let mut snapshots = self.catalog_snapshots.borrow_mut();
+        snapshots.retain(|doc, _| alive.contains(doc));
     }
 
     /// 折叠开不开：能力表 + 文件档位
@@ -1447,5 +1494,46 @@ mod tests {
         shared.switch_notebook_session(&doc, Session::default_session());
         let cells = shared.notebook_cells(&doc);
         assert_eq!(cells[0].state, CellState::Stale, "切换会话 → 有输出单元 stale");
+    }
+
+    /// 【#54 B】语义诊断目录快照按文档存取：互不串；推 None 即移除；retain 清残留
+    #[test]
+    fn catalog_snapshots_are_per_document_and_retained() {
+        let shared = EditorShared::new();
+        let doc_a = DocumentId::new("a.sql");
+        let doc_b = DocumentId::new("b.sql");
+        let catalog = |name: &str| {
+            std::sync::Arc::new(crate::completion::Catalog {
+                objects: vec![crate::completion::Candidate {
+                    label: name.to_string(),
+                    kind: crate::completion::CandidateKind::Table,
+                    detail: None,
+                }],
+                columns: vec![(name.to_string(), "id".to_string(), Some("INTEGER".to_string()))],
+                truncated: false,
+            })
+        };
+
+        // 文档 A 注入后只有 A 读得到（B 无条目 = 语义段跳过）
+        shared.set_catalog_snapshot(&doc_a, Some(catalog("t_a")));
+        assert!(shared.catalog_snapshot_for(&doc_a).is_some());
+        assert!(
+            shared.catalog_snapshot_for(&doc_b).is_none(),
+            "文档 B 没注入过：不拿 A 的目录猜"
+        );
+
+        // 推 None = 移除该文档条目
+        shared.set_catalog_snapshot(&doc_a, None);
+        assert!(shared.catalog_snapshot_for(&doc_a).is_none());
+
+        // retain：只留现存文档；已关闭文档（不在 alive 里）清掉
+        shared.set_catalog_snapshot(&doc_a, Some(catalog("t_a")));
+        shared.set_catalog_snapshot(&doc_b, Some(catalog("t_b")));
+        shared.retain_catalog_snapshots(&[doc_a.clone()]);
+        assert!(shared.catalog_snapshot_for(&doc_a).is_some());
+        assert!(
+            shared.catalog_snapshot_for(&doc_b).is_none(),
+            "b.sql 已关闭 → 残留快照被清"
+        );
     }
 }

@@ -48,6 +48,10 @@ rfd.workspace = true
 # 在系统文件管理器里打开日志目录（设置页的动作行）
 opener.workspace = true
 
+# ===== LSP（#54 C6/C7 跳转定义目标解析：`rds://navigator` Uri 解析）=====
+# 版本/features 对齐 workspace（须与 gpui-base 同 0.97.0 + `proposed`）
+lsp-types.workspace = true
+
 # ===== Async 运行时 =====
 tokio.workspace = true
 

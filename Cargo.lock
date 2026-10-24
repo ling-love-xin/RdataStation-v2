@@ -8567,6 +8567,7 @@ dependencies = [
  "chrono",
  "duckdb",
  "gpui-kit",
+ "lsp-types",
  "opener",
  "percent-encoding",
  "rds-analytics-resource",

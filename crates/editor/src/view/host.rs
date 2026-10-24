@@ -4238,11 +4238,16 @@ impl EditorHostPanel {
                     state,
                     crate::lsp::sql_definition::SqlDefinitionProvider::new(dialect),
                 );
+                // 【#54 C6/C7】show_document handler：内核跳转对 `rds://navigator/…`
+                // 虚拟 URI 先问宿主（端口已注入则解析成导航树定位并返回 true）；未注入
+                // / 其他 scheme → None（内核走默认文档内移动，无副作用）。
+                crate::lsp::bridge::install_show_document(state, self.shared.show_document_port());
             }
             crate::lsp::CompletionChoice::None => {
                 crate::lsp::bridge::uninstall(state);
                 crate::lsp::bridge::uninstall_hover(state);
                 crate::lsp::bridge::uninstall_definition(state);
+                crate::lsp::bridge::uninstall_show_document(state);
                 completion::uninstall(state);
             }
         }
@@ -5536,11 +5541,12 @@ impl EditorHostPanel {
         let channel = self
             .with_document(|doc| doc.channel())
             .unwrap_or_else(Default::default);
-        // 【#54 B】语义诊断目录快照 + 方言：宿主注入过就给（随快照进扫描线程），
-        // 没注入 = 空目录 + Ansi（语义段跳过，词法诊断照常）。
+        // 【#54 B】语义诊断目录快照 + 方言：宿主按文档注入过就给（随快照进扫描线程），
+        // 没注入 = 空目录 + Ansi（语义段跳过，词法诊断照常）。按文档取：多文档各绑
+        // 各连接，扫描不跨文档串目录。
         let catalog = self
             .shared
-            .catalog_snapshot()
+            .catalog_snapshot_for(&self.document)
             .unwrap_or_else(|| std::sync::Arc::new(crate::completion::Catalog::default()));
         let dialect = self.sql_dialect_for_document();
         self.scan_revision = self.scan_revision.wrapping_add(1);

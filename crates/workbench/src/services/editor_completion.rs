@@ -164,6 +164,22 @@ impl WorkbenchCompletion {
         None
     }
 
+    /// 【#54 B】语义诊断目录快照：该连接当前已载好且新鲜的原始目录（`Arc` 便于跨
+    /// 扫描线程共享）；未载好 / 超 TTL = `None`（扫描语义段跳过，如实降级）。
+    ///
+    /// 与 [`Self::raw`] 的区别：**不安排预载**——目录注入是宿主按文档绑连推的
+    /// 一次性动作，不该在注入路径上起后台线程；用户敲补全时 `raw` 自然触发预载，
+    /// 下一拍注入就有快照（语义诊断晚一拍，与补全「晚一拍」同一哲学）。
+    pub fn catalog_snapshot(&self, conn_id: &str) -> Option<Arc<Catalog>> {
+        if let Ok(loaded) = self.loaded.lock()
+            && let Some(catalog) = loaded.get(conn_id)
+            && self.entry_fresh(conn_id)
+        {
+            return Some(Arc::new(catalog.clone()));
+        }
+        None
+    }
+
     /// 【T2a-2】主键映射（命中且新鲜即给；未命中就安排一次后台预载，本次给空）
     ///
     /// 与 [`Self::raw`] 同一策略：预载是**一次性的**（`loaded` / `keys` 同线程同遍历），
@@ -610,11 +626,15 @@ fn to_snippet(template: engine::persistence::sql_template_store::SqlTemplate) ->
 }
 
 /// 把补全端口接到编辑器共享状态上（**启动装配调用一次**）
-pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
-    let port = WorkbenchCompletion::new(workbench.clone());
+///
+/// 返回 `Rc<WorkbenchCompletion>`：语义诊断目录快照注入（`editor_catalog`）复用
+/// 同一份 L1 目录（同一预载 / 同一条 TTL 防线），不另起一套读取。
+pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) -> Rc<WorkbenchCompletion> {
+    let port = Rc::new(WorkbenchCompletion::new(workbench.clone()));
     // 模板预载一次（内存读给菜单用；读不到就空着）
     port.schedule_template_load();
-    shared.attach_completion(Rc::new(port));
+    shared.attach_completion(port.clone());
+    port
 }
 
 #[cfg(test)]

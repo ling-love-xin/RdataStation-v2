@@ -43,6 +43,7 @@ use crate::panels::{
 use crate::quick_open::model::Action;
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
+use crate::services::editor_completion::WorkbenchCompletion;
 use crate::ui;
 use mock::mock_view::{MockDetailView, MockPanel, focus_detail_tab, status_chip_text};
 use settings::commands::{CloseSettings, OpenSettings, ToggleThemeMode};
@@ -124,6 +125,12 @@ pub struct WorkbenchView {
     _editor_status_subs: Vec<Subscription>,
     /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
     scratchpad_meta_pump: Option<Task<()>>,
+    /// 【#54 B】语义诊断目录快照注入泵（1 s 一拍；句柄必须被持有，drop 即停）。
+    /// 复用 [`editor_completion`] 的 L1 目录：补全端口实例由本字段持有，
+    /// 泵每拍读「活动文档绑定连接 → 推快照」（见 `services/editor_catalog.rs`）。
+    catalog_pump: Option<Task<()>>,
+    /// 【#54 B】补全端口实例（`editor_completion::attach` 的返回值；目录快照唯一来源）。
+    editor_completion: Option<Rc<WorkbenchCompletion>>,
     /// 【LSP】语言服务端口句柄（状态栏 LSP 管理器持有它做启停 / 回收）；
     /// 测试装配 / 未启用 = `None`（状态栏不摆这一项）。
     lsp: Option<Rc<WorkbenchLsp>>,
@@ -216,7 +223,13 @@ impl WorkbenchView {
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
         crate::services::editor_project::attach(&editor_service, &shared);
         // B9：把补全端口接上（连接级元数据缓存 → 候选目录；未接时只有关键字与函数）
-        crate::services::editor_completion::attach(&editor_service, &shared);
+        let completion = crate::services::editor_completion::attach(&editor_service, &shared);
+        // #54 B：语义诊断目录快照注入（复用补全的 L1 目录；活动文档绑连变化 → 按文档推）。
+        // completion 存入视图字段（泵每拍取用；见 `ensure_catalog_pump`）
+        let editor_completion = Some(completion);
+        // #54 C6/C7：跳转定义目标解析注入（`rds://navigator/<限定表名>` → 导航树定位，
+        // 复用 Quick Open `⌥↵` 的 `request_reveal`；未接 = 内核默认文档内移动）
+        crate::services::editor_catalog::attach_jump(&editor_service, &shared);
         // T2c-1：把库 / schema 端口接上（导航缓存 → 状态栏面包屑可切项；未接时退文本连接段）
         crate::services::editor_schema::attach(&editor_service, &shared);
         // #20：内核注册表端口（后台探测一次 + 内存快照；未接时执行源「内核」档菜单置灰）
@@ -277,6 +290,8 @@ impl WorkbenchView {
             result_dock: None,
             _editor_status_subs: Vec::new(),
             scratchpad_meta_pump: None,
+            catalog_pump: None,
+            editor_completion,
             lsp,
             lsp_reaper: None,
             last_lsp_epoch: 0,
@@ -850,6 +865,42 @@ impl WorkbenchView {
         self.scratchpad_meta_pump = Some(task);
     }
 
+    /// 启动「语义诊断目录快照注入」泵（装配期一次）。
+    ///
+    /// 每 1 秒推一次活动文档绑定连接的目录快照（复用补全 L1 目录）。**不挂在编辑
+    /// 面板上**：侧栅切到别的工具时面板不渲染，而语义诊断（扫描线程）照样会跑。
+    /// 目录未载好 → 推 `None`（语义段跳过）；文档关闭 → 残留清理（见
+    /// `services/editor_catalog.rs` 的边界说明）。
+    fn ensure_catalog_pump(&mut self, cx: &mut Context<Self>) {
+        if self.catalog_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(1000)).await;
+                let alive = weak
+                    .update(cx, |this, _cx| {
+                        // 补全实例已装配（assemble 里 attach 过）；测试装配不接则跳过
+                        let Some(completion) = this.editor_completion.clone() else {
+                            return true;
+                        };
+                        crate::services::editor_catalog::pump(
+                            &this.editor_service,
+                            &completion,
+                        );
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    return;
+                }
+            }
+        });
+        self.catalog_pump = Some(task);
+    }
+
     /// 搜索结果标签页（VSCode「搜索: query」）：面板未建 → 建并加入中央 tab 组 + 聚焦；
     /// 已建（弱句柄有效）→ 只聚焦不重建。
     ///
@@ -1120,6 +1171,8 @@ impl WorkbenchView {
         crate::panels::install_resources_bridge(&shared, sidebar.clone());
         // M5 Phase C-2 后半：草稿执行回执 → 元数据回写（1 s 一拍，与侧栅是否渲染无关）。
         self.ensure_scratchpad_meta_pump(cx);
+        // #54 B：语义诊断目录快照注入（1 s 一拍；复用补全 L1 目录）。
+        self.ensure_catalog_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //

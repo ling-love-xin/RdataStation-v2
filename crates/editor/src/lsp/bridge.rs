@@ -215,6 +215,24 @@ pub fn uninstall_definition(state: &mut EditorState) {
     state.lsp_mut().definition_provider = None;
 }
 
+/// 【#54 C6/C7】挂「跳转目标解析」handler（内核 `go_to_definition` 对非 http/https
+/// 的 `target_uri` 先问这里；返回 `true` = 宿主自处理 / `false` = 内核默认文档内移动）。
+///
+/// 类型与内核 `ShowDocumentHandler` 同构（`Rc<dyn Fn(&ShowDocumentParams, &mut Window,
+/// &mut App) -> bool>`，见 registry `gpui-base` `input/mod.rs` 实测）。SQL 分支挂、
+/// None 分支摘；端口未注入时传 `None`（等价摘掉，内核默认）。
+pub fn install_show_document(
+    state: &mut EditorState,
+    handler: Option<crate::shared::ShowDocumentPort>,
+) {
+    state.lsp_mut().show_document = handler;
+}
+
+/// 摘掉「跳转目标解析」handler（语言服务不可用时）
+pub fn uninstall_show_document(state: &mut EditorState) {
+    state.lsp_mut().show_document = None;
+}
+
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**

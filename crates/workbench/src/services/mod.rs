@@ -20,6 +20,7 @@ pub use connection_dialog::services::connection_service;
 pub use connection_dialog::services::data_source_service;
 pub mod db_navigator;
 pub use connection_dialog::services::driver_service;
+pub mod editor_catalog;
 pub mod editor_channels;
 pub mod editor_completion;
 pub mod editor_connections;
