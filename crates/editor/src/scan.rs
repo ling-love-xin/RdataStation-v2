@@ -231,6 +231,9 @@ fn run(job: &Job) -> ScanReport {
             catalog: &Catalog::default(),
             connection: None,
             channel: job.channel,
+            // 语义诊断方言：宿主按连接驱动注入后走 `job` 链路；scan 路径目录为空，
+            // 语义段本来就跳过，这里给 Ansi 只是占位（不会产生语义诊断）
+            dialect: engine::sql::SqlDialect::Ansi,
         })
     } else {
         Vec::new()

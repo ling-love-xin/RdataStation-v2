@@ -61,7 +61,8 @@ impl SemanticIssue {
 pub struct CatalogTable<'a> {
     /// 限定表名：`t` / `schema.t` / `catalog.schema.t`（与 NavCache 键同形）
     pub qualified_name: &'a str,
-    pub columns: &'a [&'a str],
+    /// 列名（owned 容器 + 借用元素：调用方可从自己的元数据直接 borrow）
+    pub columns: Vec<&'a str>,
 }
 
 /// 语义诊断入口
@@ -336,11 +337,11 @@ mod tests {
         vec![
             CatalogTable {
                 qualified_name: "orders",
-                columns: &["id", "total", "status"],
+                columns: vec!["id", "total", "status"],
             },
             CatalogTable {
                 qualified_name: "public.customers",
-                columns: &["id", "name"],
+                columns: vec!["id", "name"],
             },
         ]
     }

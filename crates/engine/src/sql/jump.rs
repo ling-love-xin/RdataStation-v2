@@ -167,11 +167,11 @@ mod tests {
         vec![
             CatalogTable {
                 qualified_name: "orders",
-                columns: &["id", "total", "status"],
+                columns: vec!["id", "total", "status"],
             },
             CatalogTable {
                 qualified_name: "public.customers",
-                columns: &["id", "name"],
+                columns: vec!["id", "name"],
             },
         ]
     }

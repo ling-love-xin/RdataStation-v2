@@ -51,10 +51,13 @@
 //! - **括号按语句判**，一条语句只报一处（后面的错互相牵连，报多了是噪音）。
 //! - 超过 [`SCAN_MAX_BYTES`] 不扫（与折叠 / 着色同一量级：大文件不每键全扫）。
 
-use engine::sql::{HighlightSpan, SqlStatement, TokenClass, highlight_spans, split_statements};
+use engine::sql::{
+    CatalogTable, HighlightSpan, SqlDialect, SqlStatement, TokenClass, diagnose, highlight_spans,
+    split_statements,
+};
 
 use crate::channel::{ExecChannel, statement_allowed};
-use crate::completion::{self, Candidate, Catalog};
+use crate::completion::{self, Candidate, CandidateKind, Catalog};
 
 /// 补全面最多给几条（与 `view/completion.rs` 的 `MAX_ITEMS` 同量级：够选就行）
 pub const MAX_CANDIDATES: usize = 60;
@@ -83,6 +86,8 @@ pub struct Request<'a> {
     pub connection: Option<&'a str>,
     /// 执行通道（限定名按它给 + 写语句在它上面可能被拒）
     pub channel: ExecChannel,
+    /// 源方言（语义诊断 / 未来跳转按它解析；宿主按连接驱动注入，见 `diagnostics`）
+    pub dialect: SqlDialect,
 }
 
 /// 一次请求的三类结果
@@ -177,6 +182,11 @@ pub fn complete(request: &Request) -> Vec<Candidate> {
 // ---------------------------------------------------------------------------
 
 /// 打字期诊断（按位置升序；**整篇都判**，与光标无关）
+///
+/// 两段：词法层（未闭合引用 / 括号不平衡）+ 语义层（#54-① 未知表 / 未知列，
+/// 走 `engine::sql::diagnose`）。语义段**目录为空即跳过**——scan 路径按注释给空目录
+/// 就是"不参与"，符合"无目录宁缺毋滥"口径；方言由宿主按连接驱动注入，注入前
+/// 默认 Ansi（对非 ANSI 语法解析失败返回空，不会误报）。
 pub fn diagnostics(request: &Request) -> Vec<Diagnostic> {
     let text = request.text;
     if text.len() > SCAN_MAX_BYTES || text.trim().is_empty() {
@@ -192,8 +202,38 @@ pub fn diagnostics(request: &Request) -> Vec<Diagnostic> {
         }
     }
 
+    // 语义层：有表目录才做（未知表 / 未知列）。目录为空 = 调用方没有元数据
+    // （scan / 未绑定连接）→ 跳过，与 engine::sql::diagnose 的无目录退化同口径
+    if !request.catalog.is_empty() {
+        let tables = catalog_to_semantic(request.catalog);
+        for issue in diagnose(text, request.dialect, &tables) {
+            found.push(Diagnostic::new(issue.code, &issue.message, issue.start, issue.end));
+        }
+    }
+
     found.sort_by(|a, b| (a.start, a.end, a.code).cmp(&(b.start, b.end, b.code)));
     found
+}
+
+/// 补全目录 → 语义诊断的表目录（只取表/视图类候选；列按限定名聚到表下）
+///
+/// 目录列出的 `table` 限定名与 `objects.label` 同形（宿主按当前通道写好），
+/// 列找不到所属表就丢弃（目录截断场景宁缺毋滥，不产出孤儿列诊断）。
+fn catalog_to_semantic(catalog: &Catalog) -> Vec<CatalogTable<'_>> {
+    catalog
+        .objects
+        .iter()
+        .filter(|c| matches!(c.kind, CandidateKind::Table | CandidateKind::View))
+        .map(|obj| CatalogTable {
+            qualified_name: &obj.label,
+            columns: catalog
+                .columns
+                .iter()
+                .filter(|(table, _, _)| table == &obj.label)
+                .map(|(_, column, _)| column.as_str())
+                .collect(),
+        })
+        .collect()
 }
 
 /// 括号不平衡（**按语句判**：语句是执行的单位，整篇配平可能只是两条错互相抵消）
@@ -713,6 +753,7 @@ mod tests {
         complete, diagnostics, line_column, report,
     };
     use crate::completion::{Candidate, CandidateKind};
+    use engine::sql::SqlDialect;
 
     /// 起手：光标在文末、绑了连接、源库通道、无选区（测试里按需改字段）
     fn ask<'a>(text: &'a str, catalog: &'a Catalog) -> Request<'a> {
@@ -723,6 +764,7 @@ mod tests {
             catalog,
             connection: Some("P_orders"),
             channel: ExecChannel::Source,
+            dialect: SqlDialect::Ansi,
         }
     }
 
@@ -855,6 +897,74 @@ mod tests {
         for text in cases {
             assert!(codes(text).is_empty(), "不该报：{text:?}");
         }
+    }
+
+    // ---------------- 诊断：语义层（#54-①，有目录才做） ----------------
+
+    /// 带表/列目录（未知表 / 未知列能解析出来）
+    fn catalog_with_tables() -> Catalog {
+        Catalog {
+            objects: vec![
+                Candidate {
+                    label: "orders".into(),
+                    kind: CandidateKind::Table,
+                    detail: None,
+                },
+                Candidate {
+                    label: "public.customers".into(),
+                    kind: CandidateKind::View,
+                    detail: None,
+                },
+            ],
+            columns: vec![
+                ("orders".into(), "id".into(), None),
+                ("orders".into(), "total".into(), None),
+                ("public.customers".into(), "name".into(), None),
+            ],
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn semantic_diagnostics_report_unknown_table_and_column() {
+        let text = "SELECT missing FROM no_such_table";
+        let all = diagnostics(&ask(text, &catalog_with_tables()));
+        let codes: Vec<&'static str> = all.iter().map(|one| one.code).collect();
+        assert!(
+            codes.contains(&"unknown_table"),
+            "未知表要报（实际 {codes:?}）"
+        );
+        assert!(
+            codes.contains(&"unqualified_column"),
+            "未知列要报（实际 {codes:?}）"
+        );
+        // 区间指向原文（位置映射没跑偏）
+        let table = all.iter().find(|d| d.code == "unknown_table").unwrap();
+        assert_eq!(&text[table.start..table.end], "no_such_table");
+        let column = all.iter().find(|d| d.code == "unqualified_column").unwrap();
+        assert_eq!(&text[column.start..column.end], "missing");
+    }
+
+    #[test]
+    fn semantic_diagnostics_skip_clean_sql_even_with_catalog() {
+        // 有目录但 SQL 干净：裸列能归位就不是错
+        let text = "SELECT id, total FROM orders";
+        let all = diagnostics(&ask(text, &catalog_with_tables()));
+        assert!(
+            all.is_empty(),
+            "干净 SQL 不该有语义诊断（实际 {all:?}）"
+        );
+    }
+
+    #[test]
+    fn semantic_diagnostics_degrade_without_catalog() {
+        // 空目录（scan / 未绑定连接路径）→ 无语义诊断，与现有词法诊断不打架
+        let text = "SELECT missing FROM no_such_table";
+        let all = diagnostics(&ask(text, &Catalog::default()));
+        assert!(
+            all.is_empty(),
+            "空目录不产语义诊断（实际 {all:?}）"
+        );
     }
 
     #[test]
