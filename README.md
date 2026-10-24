@@ -414,7 +414,7 @@ RdataStation-v2/
 | 元数据库 | **rusqlite 0.40**（bundled） | 事务元数据 + 三层缓存的 L2 |
 | 驱动 | sqlx 0.9（MySQL / PostgreSQL）· `mysql_async` · `tokio-postgres` · rusqlite · duckdb-rs | 6 个驱动，2 个引擎各两条实现（sqlx 版与官方客户端版） |
 | 连接安全 | russh 0.63（ring 后端）· native-tls · tokio-socks · x509-parser | SSH 隧道 / TLS / SOCKS5 代理 / 证书解析 |
-| SQL 工具链 | **sqlglot-rust 0.10.29**（精确锁定） | 解析 / 格式化 / 转译 / 令牌化高亮 / 筛选改写 / DDL 构造 |
+| SQL 工具链 | **sqlglot-rust 0.10.33**（精确锁定） | 解析 / 格式化 / 转译 / 令牌化高亮 / 筛选改写 / DDL 构造 / SQL 语义层（optimizer） |
 | 异步 | tokio 1.53 · tokio-util · futures · async-trait | 全域异步；导航侧另有进程级桥接运行时 |
 | 加密 | aes-gcm 0.11 · sha2 · hex · base64 | 凭据 AES-256-GCM；资产 sha256 内容指纹 |
 | 可观测 | tracing · tracing-subscriber · tracing-appender | 一条事件三出口（stderr / 按天文件 / `app_logs` 表）+ 脱敏 |
