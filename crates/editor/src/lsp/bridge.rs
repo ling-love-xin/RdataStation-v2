@@ -191,7 +191,10 @@ pub fn uninstall(state: &mut EditorState) {
 }
 
 /// 【#21】装 hover provider（`EditorState::lsp_mut`；与补全并列的独立槽位，互不影响）
-pub fn install_hover(state: &mut EditorState, provider: Rc<LspHoverProvider>) {
+///
+/// 泛型：LSP 转发（[`LspHoverProvider`]）与 SQL 自研语义（[`super::sql_hover::SqlHoverProvider`]）
+/// 都挂同一个槽位（内核槽位是 `Rc<dyn HoverProvider>`），宿主按模式决策挂谁。
+pub fn install_hover<P: HoverProvider + 'static>(state: &mut EditorState, provider: Rc<P>) {
     state.lsp_mut().hover_provider = Some(provider);
 }
 

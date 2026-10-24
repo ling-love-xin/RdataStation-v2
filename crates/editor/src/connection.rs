@@ -155,6 +155,20 @@ pub fn dialect_label(db_type: &str) -> String {
     }
 }
 
+/// 驱动 → 语义引擎方言（#54 hover / 未来诊断的解析依据）
+///
+/// 与 `workbench::editor_completion::driver_to_dialect` 同表（editor 不依赖
+/// workbench，这里登记同一映射）；未知驱动返回 `None`——不猜（Ansi 兜底由调用方定）。
+pub fn sql_dialect(db_type: &str) -> Option<engine::sql::SqlDialect> {
+    match db_type {
+        "mysql_native" | "mysql" => Some(engine::sql::SqlDialect::Mysql),
+        "postgres_native" | "postgresql" | "postgres" => Some(engine::sql::SqlDialect::Postgres),
+        "sqlite" => Some(engine::sql::SqlDialect::Sqlite),
+        "duckdb" => Some(engine::sql::SqlDialect::Duckdb),
+        _ => None,
+    }
+}
+
 /// 把绑定的 id 解析成展示数据；`None` = 解析不出（宿主没给这个连接 / 没接端口）
 pub fn chip_for(
     conn_id: Option<&str>,

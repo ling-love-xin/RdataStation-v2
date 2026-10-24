@@ -4201,6 +4201,24 @@ impl EditorHostPanel {
             }
             crate::lsp::CompletionChoice::Sql => {
                 completion::install(state, self.shared.clone(), self.document.clone());
+                // 【#54 ②】SQL 模式 hover 走自研语义层（函数签名+中文描述+示例；
+                // 表/列 hover 待目录注入）。方言按文档绑定连接的驱动给；未绑定 /
+                // 驱动未知 → Ansi（解析失败返回 None，安全）。None 分支会摘掉旧 provider。
+                let dialect = self
+                    .with_document(|doc| doc.connection().map(str::to_string))
+                    .flatten()
+                    .and_then(|conn_id| {
+                        self.shared
+                            .connection_options()
+                            .iter()
+                            .find(|option| option.id == conn_id)
+                            .and_then(|option| crate::connection::sql_dialect(&option.db_type))
+                    })
+                    .unwrap_or(engine::sql::SqlDialect::Ansi);
+                crate::lsp::bridge::install_hover(
+                    state,
+                    crate::lsp::sql_hover::SqlHoverProvider::new(dialect),
+                );
             }
             crate::lsp::CompletionChoice::None => {
                 crate::lsp::bridge::uninstall(state);

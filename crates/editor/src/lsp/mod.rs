@@ -24,6 +24,7 @@ pub mod bridge;
 pub mod client;
 pub mod frame;
 pub mod host;
+pub mod sql_hover;
 
 pub use client::{
     CallError, LspClient, LspEvent, LspHandle, LspNotification, LspReader, LspWriter, ProcessIo,
