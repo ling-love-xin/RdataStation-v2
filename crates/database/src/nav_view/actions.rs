@@ -940,6 +940,31 @@ impl NavView {
             {
                 let mut view = self.nav.borrow_mut();
                 view.loading.remove(&key);
+                // S2-② 迟到 stale guard（fluxDB `connection_tree.rs:305-344` 参照）：
+                // 任务在排队 / 执行期间，用户可能已删除、断开或改配置该连接——
+                // 回填前校验「仍存在 + 仍连接 + 配置指纹未变」，不过则丢弃这次写回
+                // （树保持原状，只清 loading）。此前这类结果会照常进树：连接行都删了，
+                // children 还挂着，重连后出现孤儿行 / 旧配置数据。
+                let fp_at_issue = r.conn_fingerprint.clone();
+                let conn_exists = self.host.connections().iter().any(|c| c.id == conn_id);
+                let conn_connected = self.host.is_connected(&conn_id);
+                let fp_now = engine::persistence::identity_fingerprint(&conn_id);
+                let stale = nav_jobs::nav_result_is_stale(
+                    conn_exists,
+                    conn_connected,
+                    fp_at_issue.as_deref(),
+                    fp_now.as_deref(),
+                );
+                if stale {
+                    tracing::info!(
+                        conn_id = %conn_id,
+                        key = %key,
+                        conn_exists,
+                        conn_connected,
+                        "导航结果已过期（连接删除 / 断开 / 改配置），丢弃迟到写回"
+                    );
+                    continue;
+                }
                 match r.result {
                     Ok(page) => {
                         view.errors.remove(&key);

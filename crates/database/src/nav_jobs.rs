@@ -41,6 +41,17 @@ use engine::persistence::FtsSearchResult;
 const LOAD_CONCURRENCY: usize = 1;
 static LOAD_SEM: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
 
+/// 预热起步延迟（S2-③，zqlz `schema_service.rs:49` 同值 3s）。
+///
+/// 连接成功后的整库预热 / 补全内省**延迟 3s 再入队**：让用户连接后的首次浏览查询
+/// 先走（它才是关键路径），预热再进场与内省竞争信号量。延迟用独立短线程实现——
+/// 不占 worker 主循环、不堵优先级队列（S2-① 的插队不受影响）。
+///
+/// 规模阈值（zqlz `BULK_COLUMN_TABLE_LIMIT=1500`）已评估**无需引入**：zqlz 用它切换
+/// 「bulk 全量扫描 → 逐表 paced」两条取数路径；我们的 `warm_schemas` 本就是逐 schema
+/// 遍历（无 unfiltered 全量扫描），结构上已规避该问题，加了阈值反而多一次预查询。
+const WARM_START_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
 fn load_semaphore() -> &'static tokio::sync::Semaphore {
     LOAD_SEM.get_or_init(|| tokio::sync::Semaphore::new(LOAD_CONCURRENCY))
 }
@@ -82,6 +93,9 @@ pub struct LoadResult {
     /// 加载更多是**追加**语义（并到已有行后面），定位是**换窗**语义
     /// （当前只展示这一窗，界顶那行说清「已定位到第 N 条」并可回到开头）。
     pub jumped_to: Option<usize>,
+    /// S2-② 迟到 stale guard：**执行时**的连接配置指纹快照（`None` = 连接未注册 /
+    /// 不可共享，跳过指纹比对）。回填前与当前指纹比对：配置已变更 → 丢弃这次写回。
+    pub conn_fingerprint: Option<String>,
     pub result: Result<crate::navigator_service::NavPage, String>,
 }
 
@@ -672,6 +686,7 @@ fn report_failure(ticket: Ticket, reason: &str) {
                 path,
                 offset: 0,
                 jumped_to: None,
+                conn_fingerprint: None,
                 result: Err(reason.to_string()),
             });
         }
@@ -874,6 +889,10 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                     });
                 });
             }
+            // S2-② 执行时指纹快照：任务在队列里排队 / 执行期间用户可能改配置，
+            // 回填时比对（见 `apply_load_results` 的 stale guard）——配置已变就丢弃，
+            // 不让旧配置下的元数据覆盖新配置的树。
+            let conn_fingerprint = engine::persistence::identity_fingerprint(&conn_id);
             lock(&shared().load_results).push(LoadResult {
                 key,
                 conn_id,
@@ -881,6 +900,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 path,
                 offset,
                 jumped_to,
+                conn_fingerprint,
                 result,
             });
         }
@@ -1226,6 +1246,20 @@ fn search_targets(
     (searched, hits)
 }
 
+/// S2-② 迟到 stale guard 判定（纯函数，fluxDB `connection_tree.rs:305-344` 参照）：
+/// 任务在排队 / 执行期间连接被删除、断开或改配置 → 结果为**过期**，回填方应丢弃。
+///
+/// 指纹规则：发起/执行时的快照是 `Some` 才比对（`None` = 连接未注册 / 不可共享，
+/// 跳过指纹项）；存在性 / 连接态永远比对（它们是权威来源）。
+pub fn nav_result_is_stale(
+    conn_exists: bool,
+    conn_connected: bool,
+    fp_at_issue: Option<&str>,
+    fp_now: Option<&str>,
+) -> bool {
+    !conn_exists || !conn_connected || (fp_at_issue.is_some() && fp_at_issue != fp_now)
+}
+
 /// 提交导航树懒加载（首屏 / 恢复展开态）。
 pub fn enqueue_load(
     conn_id: &str,
@@ -1329,27 +1363,42 @@ pub fn enqueue_properties(
 }
 
 /// 连接成功后提交预热（C1）。重复连接会重新排队。
+///
+/// S2-③ 起步延迟：延迟 [`WARM_START_DELAY`] 再入队，让用户首次浏览查询先走。
+/// 独立短线程 sleep——不占 worker 主循环（worker 只跑已入队任务）、不堵 UI 线程。
 pub fn warm_after_connect(conn_id: &str, project_root: Option<&str>) {
-    submit(
-        Job::Warm {
-            conn_id: conn_id.to_string(),
-            project_root: project_root.map(|s| s.to_string()),
-        },
-        JobPriority::Background,
-    );
+    let conn_id = conn_id.to_string();
+    let project_root = project_root.map(|s| s.to_string());
+    std::thread::spawn(move || {
+        std::thread::sleep(WARM_START_DELAY);
+        submit(
+            Job::Warm {
+                conn_id,
+                project_root,
+            },
+            JobPriority::Background,
+        );
+    });
 }
 
 /// 编辑器补全的实时内省回退（§710）：提交「整条连接的表 / 视图 / 列 cache-aside
 /// 内省」到导航队列。与导航内省共享信号量并让位；完成前补全只给关键字与函数
 /// （如实，不假装有元数据），写进 L2 后下一次按键就有候选。
+///
+/// S2-③ 起步延迟与 [`warm_after_connect`] 同理：3s 后再入队，不抢用户编辑关键路径。
 pub fn enqueue_warm_completion(conn_id: &str, project_root: Option<&str>) {
-    submit(
-        Job::WarmCompletion {
-            conn_id: conn_id.to_string(),
-            project_root: project_root.map(|s| s.to_string()),
-        },
-        JobPriority::Background,
-    );
+    let conn_id = conn_id.to_string();
+    let project_root = project_root.map(|s| s.to_string());
+    std::thread::spawn(move || {
+        std::thread::sleep(WARM_START_DELAY);
+        submit(
+            Job::WarmCompletion {
+                conn_id,
+                project_root,
+            },
+            JobPriority::Background,
+        );
+    });
 }
 
 /// 提交列预取（C2）。空列表不排队。
@@ -1628,6 +1677,32 @@ mod tests {
                 project_root: None,
             },
         }
+    }
+
+    /// S2-② stale guard 判定：删除 / 断开 / 改配置任一命中即过期；指纹 `None` 跳过比对。
+    #[test]
+    fn stale_guard_drops_removed_disconnected_or_reconfigured_connections() {
+        use super::nav_result_is_stale;
+        // 正常：存在 + 已连 + 指纹一致（或双方都无指纹）→ 不丢弃
+        assert!(!nav_result_is_stale(true, true, Some("fp-a"), Some("fp-a")));
+        assert!(!nav_result_is_stale(true, true, None, None), "无指纹跳过比对");
+        // 连接被删 / 断开：与指纹无关，直接过期
+        assert!(nav_result_is_stale(false, true, None, None), "删除 → 丢弃");
+        assert!(nav_result_is_stale(true, false, None, None), "断开 → 丢弃");
+        // 配置变更：指纹不一致 → 过期
+        assert!(
+            nav_result_is_stale(true, true, Some("fp-a"), Some("fp-b")),
+            "改配置 → 丢弃"
+        );
+        // 指纹从有到无也算变更（连接重注册为不可共享）——但 `None` 快照不比对
+        assert!(
+            nav_result_is_stale(true, true, Some("fp-a"), None),
+            "指纹消失 → 丢弃"
+        );
+        assert!(
+            !nav_result_is_stale(true, true, None, Some("fp-b")),
+            "快照无指纹时不做反向比对（连接是后注册的，结果仍可用）"
+        );
     }
 
     /// S2-① 排序契约：用户手点（User）排在后台（Background）前面；
