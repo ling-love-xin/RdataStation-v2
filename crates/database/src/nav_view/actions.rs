@@ -1225,6 +1225,8 @@ impl NavView {
             }
         };
         if changed {
+            // 选中切换 = 关闭未提交的行内重命名（S4-④：编辑态只对当前行有效）。
+            self.cancel_object_rename(cx);
             self.mark_panel_state_dirty(cx);
         }
     }

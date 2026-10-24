@@ -359,9 +359,116 @@ pub fn alter_column_sql(
     Ok(sql)
 }
 
+/// 对象重命名 DDL（S4-④ 导航 F2 行内重命名；rustgrid 行内重命名参照）。
+///
+/// 方言矩阵（各驱动 RENAME 语法，按对象类别分支）：
+/// - 表：SQLite / PG / DuckDB 走 `ALTER TABLE … RENAME TO`；MySQL 走
+///   `RENAME TABLE`（8.0 起 `ALTER TABLE … RENAME` 亦可，但 `RENAME TABLE`
+///   对视图同样有效，两态一语句）。
+/// - 视图：SQLite(3.25+) / PG / DuckDB 走 `ALTER VIEW … RENAME TO`；
+///   MySQL 无独立 `ALTER VIEW … RENAME`，复用 `RENAME TABLE`。
+/// - 序列：PG / DuckDB 走 `ALTER SEQUENCE … RENAME TO`。
+/// - 触发器：仅 PG `ALTER TRIGGER … ON <父表> RENAME TO`（需 `parent` 限定名）；
+///   SQLite / DuckDB 不支持触发器改名，明确报错。
+/// - 例程（存储过程 / 函数）：无跨方言的简单改名（PG 需函数签名），报暂不支持。
+///
+/// 不支持的驱动 / 类别**明确报错**（不静默吞、不生成方言错误的语句）。
+/// 限定名拼法：PG / MySQL 拼 `schema.name`（目标库由 `database_for` 切库承载，
+/// 与 `alter_column_sql` 同规则）；SQLite / DuckDB 单库场景不拼前缀。
+pub fn rename_object_sql(
+    driver: &str,
+    kind: crate::model::NavFolder,
+    schema: Option<&str>,
+    name: &str,
+    parent: Option<&str>,
+    new_name: &str,
+) -> Result<String, CoreError> {
+    let driver_l = driver.to_ascii_lowercase();
+    let pg = matches!(driver_l.as_str(), "postgresql" | "postgres" | "pg" | "postgres_native");
+    let mysql = driver_l.contains("mysql");
+    let sqlite = driver_l.contains("sqlite");
+    let duckdb = driver_l.contains("duckdb");
+    if !(pg || mysql || sqlite || duckdb) {
+        return Err(CoreError::database(shared::error::DatabaseError::Driver {
+            db_type: driver.to_string(),
+            operation: "rename_object_sql".to_string(),
+            source: "该驱动暂不支持对象重命名".to_string(),
+        }));
+    }
+    let ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let new_ident = ident(new_name);
+    let qual = |n: &str| {
+        if pg || mysql {
+            if let Some(s) = schema {
+                if !s.is_empty() {
+                    return format!("{}.{}", ident(s), ident(n));
+                }
+            }
+        }
+        ident(n)
+    };
+    let q = qual(name);
+    use crate::model::NavFolder;
+    let sql = match kind {
+        NavFolder::Tables => {
+            if mysql {
+                format!("RENAME TABLE {q} TO {}", ident(new_name))
+            } else {
+                format!("ALTER TABLE {q} RENAME TO {new_ident}")
+            }
+        }
+        NavFolder::Views => {
+            if mysql {
+                // MySQL 无独立 `ALTER VIEW … RENAME`；视图走 `RENAME TABLE`。
+                format!("RENAME TABLE {q} TO {}", ident(new_name))
+            } else {
+                format!("ALTER VIEW {q} RENAME TO {new_ident}")
+            }
+        }
+        NavFolder::Sequences => {
+            if pg || duckdb {
+                format!("ALTER SEQUENCE {q} RENAME TO {new_ident}")
+            } else {
+                return Err(CoreError::database(shared::error::DatabaseError::Driver {
+                    db_type: driver.to_string(),
+                    operation: "rename_object_sql".to_string(),
+                    source: "该驱动不支持序列重命名（SQLite 无序列概念，MySQL 自增无独立序列对象）".to_string(),
+                }));
+            }
+        }
+        NavFolder::Triggers => {
+            if pg {
+                let Some(parent) = parent else {
+                    return Err(CoreError::database(shared::error::DatabaseError::Driver {
+                        db_type: driver.to_string(),
+                        operation: "rename_object_sql".to_string(),
+                        source: "触发器重命名需要父表限定名（parent 缺失）".to_string(),
+                    }));
+                };
+                format!("ALTER TRIGGER {} ON {} RENAME TO {new_ident}", ident(name), qual(parent))
+            } else {
+                return Err(CoreError::database(shared::error::DatabaseError::Driver {
+                    db_type: driver.to_string(),
+                    operation: "rename_object_sql".to_string(),
+                    source: "该驱动不支持触发器重命名".to_string(),
+                }));
+            }
+        }
+        NavFolder::Routines => {
+            return Err(CoreError::database(shared::error::DatabaseError::Driver {
+                db_type: driver.to_string(),
+                operation: "rename_object_sql".to_string(),
+                source: "例程重命名需函数签名（PG `ALTER FUNCTION name(args) RENAME TO`），暂不支持".to_string(),
+            }));
+        }
+    };
+    Ok(sql)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::NavFolder;
 
     fn cols(spec: &[(&str, bool)]) -> Vec<DmlColumn> {
         spec.iter()
@@ -758,5 +865,174 @@ mod tests {
         let err = super::alter_column_sql("mysql", None, "t", "c", "Column.comment", "x")
             .expect_err("mysql 应明确拒绝");
         assert!(err.to_string().contains("暂不支持"), "{err}");
+    }
+
+    // ── rename_object_sql（S4-④ 对象重命名 DDL）──────────────────────
+
+    #[test]
+    fn rename_table_across_dialects() {
+        // PG / SQLite / DuckDB：ALTER TABLE；MySQL：RENAME TABLE。
+        assert_eq!(
+            super::rename_object_sql(
+                "postgres",
+                NavFolder::Tables,
+                Some("public"),
+                "t_user",
+                None,
+                "t_account",
+            )
+            .unwrap(),
+            "ALTER TABLE \"public\".\"t_user\" RENAME TO \"t_account\""
+        );
+        assert_eq!(
+            super::rename_object_sql(
+                "sqlite",
+                NavFolder::Tables,
+                None,
+                "t_user",
+                None,
+                "t_account",
+            )
+            .unwrap(),
+            "ALTER TABLE \"t_user\" RENAME TO \"t_account\""
+        );
+        assert_eq!(
+            super::rename_object_sql(
+                "duckdb",
+                NavFolder::Tables,
+                Some("main"),
+                "t_user",
+                None,
+                "t_account",
+            )
+            .unwrap(),
+            // DuckDB 单库：不拼 schema 前缀（与 SQLite 同规则）。
+            "ALTER TABLE \"t_user\" RENAME TO \"t_account\""
+        );
+        assert_eq!(
+            super::rename_object_sql(
+                "mysql",
+                NavFolder::Tables,
+                Some("biz"),
+                "t_user",
+                None,
+                "t_account",
+            )
+            .unwrap(),
+            "RENAME TABLE \"biz\".\"t_user\" TO \"t_account\""
+        );
+    }
+
+    #[test]
+    fn rename_view_uses_rename_table_on_mysql_only() {
+        assert_eq!(
+            super::rename_object_sql(
+                "postgres",
+                NavFolder::Views,
+                Some("public"),
+                "v_active",
+                None,
+                "v_enabled",
+            )
+            .unwrap(),
+            "ALTER VIEW \"public\".\"v_active\" RENAME TO \"v_enabled\""
+        );
+        assert_eq!(
+            super::rename_object_sql(
+                "mysql",
+                NavFolder::Views,
+                Some("biz"),
+                "v_active",
+                None,
+                "v_enabled",
+            )
+            .unwrap(),
+            // MySQL 无独立 ALTER VIEW RENAME，视图走 RENAME TABLE。
+            "RENAME TABLE \"biz\".\"v_active\" TO \"v_enabled\""
+        );
+    }
+
+    #[test]
+    fn rename_sequence_only_pg_and_duckdb() {
+        let pg = super::rename_object_sql(
+            "postgres",
+            NavFolder::Sequences,
+            Some("public"),
+            "seq_id",
+            None,
+            "seq_uid",
+        )
+        .unwrap();
+        assert_eq!(pg, "ALTER SEQUENCE \"public\".\"seq_id\" RENAME TO \"seq_uid\"");
+        let ok = super::rename_object_sql("duckdb", NavFolder::Sequences, None, "seq_id", None, "seq_uid");
+        assert!(ok.is_ok(), "{ok:?}");
+        let err = super::rename_object_sql("sqlite", NavFolder::Sequences, None, "seq_id", None, "seq_uid")
+            .expect_err("SQLite 无序列概念，应拒绝");
+        assert!(err.to_string().contains("序列重命名"), "{err}");
+    }
+
+    #[test]
+    fn rename_trigger_requires_pg_and_parent() {
+        let sql = super::rename_object_sql(
+            "postgres",
+            NavFolder::Triggers,
+            Some("public"),
+            "trg_audit",
+            Some("t_user"),
+            "trg_audit_v2",
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "ALTER TRIGGER \"trg_audit\" ON \"public\".\"t_user\" RENAME TO \"trg_audit_v2\""
+        );
+        let no_parent = super::rename_object_sql(
+            "postgres",
+            NavFolder::Triggers,
+            Some("public"),
+            "trg_audit",
+            None,
+            "trg_audit_v2",
+        )
+        .expect_err("缺父表应拒绝");
+        assert!(no_parent.to_string().contains("父表"), "{no_parent}");
+        let err = super::rename_object_sql("duckdb", NavFolder::Triggers, None, "trg_audit", Some("t_user"), "trg_audit_v2")
+            .expect_err("DuckDB 无触发器，应拒绝");
+        assert!(err.to_string().contains("触发器重命名"), "{err}");
+    }
+
+    #[test]
+    fn rename_rejects_routines_and_unknown_driver() {
+        let routines = super::rename_object_sql(
+            "postgres",
+            NavFolder::Routines,
+            Some("public"),
+            "sp_do",
+            None,
+            "sp_run",
+        )
+        .expect_err("例程重命名需签名，应拒绝");
+        assert!(routines.to_string().contains("暂不支持"), "{routines}");
+        let unknown = super::rename_object_sql("redis", NavFolder::Tables, None, "t", None, "t2")
+            .expect_err("未知驱动应拒绝");
+        assert!(unknown.to_string().contains("暂不支持"), "{unknown}");
+    }
+
+    /// 标识符转义：双引号加倍（与 alter_column_sql 的 ident 同规则）。
+    #[test]
+    fn rename_escapes_identifiers() {
+        let sql = super::rename_object_sql(
+            "postgres",
+            NavFolder::Tables,
+            Some("public"),
+            "we\"ird",
+            None,
+            "new\"name",
+        )
+        .unwrap();
+        assert_eq!(
+            sql,
+            "ALTER TABLE \"public\".\"we\"\"ird\" RENAME TO \"new\"\"name\""
+        );
     }
 }

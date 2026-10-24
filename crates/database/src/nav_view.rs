@@ -217,6 +217,23 @@ impl RevealTarget {
 ///
 /// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
 /// 来源标签页、展开态、加载结果与错误就地保存在此，重启持久化在后续切片接入。
+/// 对象行内重命名上下文（S4-④）：F2 触发时由选中行构造，提交时生成 DDL 并执行。
+///
+/// `folder` 决定 DDL 方言分支（`sql_gen::rename_object_sql`）；`parent` 仅触发器需要
+/// （PG `ALTER TRIGGER … ON <父表>`）。驱动 id 取自连接清单（对象行节点不带驱动）。
+#[derive(Clone, Debug)]
+pub(super) struct ObjectRenameCtx {
+    /// 树节点 key（行渲染用它在标题位置替换为输入框）。
+    pub key: String,
+    pub conn_id: String,
+    pub driver: String,
+    pub folder: crate::model::NavFolder,
+    pub catalog: String,
+    pub schema: String,
+    pub name: String,
+    pub parent: Option<String>,
+}
+
 #[derive(Default)]
 pub struct NavViewState {
     /// 来源筛选（None = 全部）。
@@ -316,6 +333,8 @@ pub struct NavViewState {
     copy_for: Option<String>,
     /// 正在内联重命名的分组 ID（None = 未打开）。
     group_rename_for: Option<String>,
+    /// 正在内联重命名的树对象（S4-④；F2 置位，渲染建输入框预填当前名）。
+    object_rename_for: Option<ObjectRenameCtx>,
     /// 已发起列预取（C2）的类别文件夹 key（避免重复排队）。
     prefetched: HashSet<String>,
     /// 当前选中的节点 key（键盘导航与选中高亮）。
@@ -537,6 +556,9 @@ pub struct NavView {
     /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
     nav_group_input: Option<Entity<InputState>>,
     _nav_group_sub: Option<Subscription>,
+    /// 树对象内联重命名输入框（S4-④；F2 置位时创建，提交 / 取消时销毁）。
+    nav_rename_input: Option<Entity<InputState>>,
+    _nav_rename_sub: Option<Subscription>,
     /// 渲染顺序重建的可见项（键盘 ↑↓ 移动 / 展开折叠 / 打开属性）。
     nav_order: Rc<RefCell<Vec<NavOrderItem>>>,
     /// 本次可见行（[`Self::collect_nav_rows`] 在 render 里写入；虚拟列表与漫游序列都读它）。
@@ -588,6 +610,8 @@ impl NavView {
             _nav_copy_sub: None,
             nav_group_input: None,
             _nav_group_sub: None,
+            nav_rename_input: None,
+            _nav_rename_sub: None,
             nav_order: Rc::new(RefCell::new(Vec::new())),
             rows: Vec::new(),
             nav_pending_scroll: None,

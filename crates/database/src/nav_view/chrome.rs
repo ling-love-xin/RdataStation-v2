@@ -214,6 +214,32 @@ impl NavView {
             }
         }
 
+        // 树对象内联重命名输入框（S4-④）：F2 置位时按当前名预填，提交 / 取消时销毁。
+        let object_rename_for = self.nav.borrow().object_rename_for.clone();
+        match &object_rename_for {
+            Some(ctx) => {
+                if self.nav_rename_input.is_none() {
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("新名称"));
+                    input.update(cx, |s, cx| s.set_value(ctx.name.clone(), window, cx));
+                    let sub = cx.subscribe_in(
+                        &input,
+                        window,
+                        |this, _e, ev: &InputEvent, _w, cx| match ev {
+                            InputEvent::Change => cx.notify(),
+                            InputEvent::PressEnter { .. } => this.commit_object_rename(cx),
+                            _ => {}
+                        },
+                    );
+                    self.nav_rename_input = Some(input);
+                    self._nav_rename_sub = Some(sub);
+                }
+            }
+            None => {
+                self.nav_rename_input = None;
+                self._nav_rename_sub = None;
+            }
+        }
+
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
@@ -997,12 +1023,49 @@ impl NavView {
             .on_action(cx.listener(|this, _: &NavClearSearch, window, cx| {
                 this.clear_nav_search(window, cx);
             }))
-            // `F2`：重命名。树对象的重命名属引擎能力（无 DDL 编辑入口），暂只对连接行
-            // 提供——与行尾 `✎` 同一入口（编辑对话框）。
+            // `F2`：重命名。连接行走编辑对话框（与行尾 `✎` 同一入口）；
+            // 树对象（S4-④）走行内重命名——需已连接（DDL 要活连接），未连接不进入。
             .on_action(cx.listener(|this, _: &NavRename, window, cx| {
                 if let Some(item) = this.nav_selected() {
-                    if matches!(item.path, Some(NavPath::Connection)) {
-                        this.host.edit_connection(&item.conn_id, window, cx);
+                    match item.path.as_ref() {
+                        Some(NavPath::Connection) => {
+                            this.host.edit_connection(&item.conn_id, window, cx);
+                        }
+                        _ => {
+                            let Some(prop) = &item.property else { return; };
+                            let folder = match prop.kind {
+                                PropertyKind::Table => Some(NavFolder::Tables),
+                                PropertyKind::View => Some(NavFolder::Views),
+                                PropertyKind::Routine => Some(NavFolder::Routines),
+                                PropertyKind::Sequence => Some(NavFolder::Sequences),
+                                PropertyKind::Trigger => Some(NavFolder::Triggers),
+                                _ => None,
+                            };
+                            let Some(folder) = folder else { return; };
+                            if !this.host.is_connected(&item.conn_id) {
+                                this.host.notice("对象重命名需要先建立连接".into(), cx);
+                                return;
+                            }
+                            let driver = this
+                                .host
+                                .connections()
+                                .iter()
+                                .find(|c| c.id == item.conn_id)
+                                .map(|c| c.driver.clone())
+                                .unwrap_or_default();
+                            this.nav.borrow_mut().object_rename_for = Some(ObjectRenameCtx {
+                                key: item.key.clone(),
+                                conn_id: item.conn_id.clone(),
+                                driver,
+                                folder,
+                                catalog: prop.catalog.clone().unwrap_or_default(),
+                                schema: prop.schema.clone().unwrap_or_default(),
+                                name: prop.name.clone(),
+                                parent: prop.parent.clone(),
+                            });
+                            this.focus_handle.focus(window, cx);
+                            cx.notify();
+                        }
                     }
                 }
             }))

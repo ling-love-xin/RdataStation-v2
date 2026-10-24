@@ -2119,23 +2119,45 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             })
             .when(!selected, move |s| s.hover(move |s| s.bg(hover)))
             .child(nav_disclosure(node.has_children, tree_open, muted))
-            .child(nav_icon(kind_icon, ui::ICON_SIZE_SM, icon_color))
-            .child(
-                div()
+            .child(nav_icon(kind_icon, ui::ICON_SIZE_SM, icon_color));
+
+        // 行内重命名（S4-④）：F2 置位后本行标题替换为输入框（Enter 提交 / 关闭时销毁，
+        // 与分组重命名同一范式）。输入框有独立 ElementId（InputState 实体），虚拟列表
+        // 复用行不冲突。
+        let renaming = self
+            .nav
+            .borrow()
+            .object_rename_for
+            .as_ref()
+            .map(|c| c.key == node.key)
+            .unwrap_or(false);
+        let title = if renaming {
+            match &self.nav_rename_input {
+                Some(input) => div().flex_1().min_w_0().child(Input::new(input)),
+                // 建框晚一帧（render_nav 建框在列表渲染前）：空帧给占位，避免闪缩。
+                None => div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
                     .text_xs()
                     .text_color(fg)
-                    .text_ellipsis()
-                    // 行高由虚拟列表钉死（`NAV_ROW_TREE`），长名必须截断而不是换行。
-                    .child(nav_name_highlight(
-                        &node.name,
-                        &filter,
-                        product_tokens::get(cx).search_match_background(cx.theme()),
-                        fg,
-                    )),
-            );
+                    .child(node.name.clone()),
+            }
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_xs()
+                .text_color(fg)
+                .text_ellipsis()
+                .child(nav_name_highlight(
+                    &node.name,
+                    &filter,
+                    product_tokens::get(cx).search_match_background(cx.theme()),
+                    fg,
+                ))
+        };
+        row = row.child(title);
         if let Some((meta, is_pk)) = right_meta {
             row = row.child(
                 div()

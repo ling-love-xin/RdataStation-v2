@@ -396,4 +396,82 @@ impl NavView {
         self.nav.borrow_mut().group_rename_for = None;
         cx.notify();
     }
+
+    /// 取消树对象内联重命名（重新选中其他行 / 关闭面板时一并清态）。
+    pub(super) fn cancel_object_rename(&mut self, cx: &mut Context<Self>) {
+        if self.nav.borrow().object_rename_for.is_some() {
+            self.nav.borrow_mut().object_rename_for = None;
+            self.nav_rename_input = None;
+            self._nav_rename_sub = None;
+            cx.notify();
+        }
+    }
+
+    /// 提交树对象内联重命名（S4-④）：
+    /// 生成 DDL → `background_executor` 执行（对齐 `property_panel::run_property_edit` 模式，
+    /// 不阻塞 UI 线程）→ 成功刷新该连接树，失败提示。
+    pub(super) fn commit_object_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(ctx) = self.nav.borrow().object_rename_for.clone() else {
+            return;
+        };
+        let Some(input) = self.nav_rename_input.clone() else {
+            return;
+        };
+        let new_name = input.read(cx).value().trim().to_string();
+        // 空串 / 未改动：静默关闭（不算失败，不打扰）。
+        if new_name.is_empty() || new_name == ctx.name {
+            self.cancel_object_rename(cx);
+            return;
+        }
+        // DDL 生成失败（例程需签名、驱动不支持等）直接提示并关闭。
+        let sql = match crate::sql_gen::rename_object_sql(
+            &ctx.driver,
+            ctx.folder,
+            Some(&ctx.schema),
+            &ctx.name,
+            ctx.parent.as_deref(),
+            &new_name,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                self.host.notice(format!("重命名失败: {e}"), cx);
+                self.cancel_object_rename(cx);
+                return;
+            }
+        };
+
+        // 先关编辑态（行立刻恢复正常渲染），结果异步回来再刷新树。
+        self.cancel_object_rename(cx);
+        let conn_id = ctx.conn_id.clone();
+        let catalog = ctx.catalog.clone();
+        let host = self.host.clone();
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let metadata = crate::metadata_service::MetadataService::new(
+            engine::get_connection_manager().clone(),
+        );
+        cx.spawn(async move |_this, cx| {
+            // 执行用的副本（`conn_id` 外层还要用：回 UI 线程刷新）。
+            let exec_conn = conn_id.clone();
+            let result = executor
+                .spawn(async move {
+                    metadata
+                        .execute_query(&exec_conn, &catalog, &sql)
+                        .await
+                        .map(|_| ())
+                })
+                .await;
+            let _ = weak.update(cx, |view, cx| {
+                match result {
+                    Ok(()) => {
+                        host.notice(format!("已重命名为“{new_name}”"), cx);
+                        view.refresh_connection_after_filter(&conn_id, cx);
+                    }
+                    Err(e) => {
+                        host.notice(format!("重命名失败: {e}"), cx);
+                    }
+                }
+            });
+        });
+    }
 }
