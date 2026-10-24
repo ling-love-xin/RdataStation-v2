@@ -60,7 +60,7 @@ pub(crate) fn editable_row(
     }
 }
 
-/// 空表（灰置类别 / 无内容类别用）。
+/// 空表（无内容类别用）。
 pub(crate) fn empty_table() -> property::PropertyTable {
     property::PropertyTable {
         headers: Vec::new(),
@@ -117,7 +117,7 @@ pub(crate) fn connection_base_overview(input: &ProviderInput, driver_label: &str
     }
 }
 
-/// 连接级灰置分区（权限 / 事件触发器——先绘制，能力未实现）。
+/// 连接级类别（按 [`DriverCapabilities`] 生成：已实现的产出分区，未实现不产出）。
 ///
 /// 2026-10-24 起按 [`DriverCapabilities`] 生成：驱动差异（是否声明该类别、是否已
 /// 实现）只体现在能力位，类别结构与顺序只写一份。
@@ -129,19 +129,22 @@ pub(crate) fn connection_categories(caps: &DriverCapabilities) -> Vec<PropertySe
     ])
 }
 
-/// 表级类别：可用核心（列 / 索引 / 约束 / DDL / 数据）+ 按能力位声明的灰置 / 已启用类别。
+/// 表级类别：可用核心（列 / 索引 / 约束 / DDL / 数据）+ 按能力位声明的已实现类别。
 ///
 /// 收敛来源（2026-10-24，竞品分析必做 #3）：旧实现各 provider `categories()` 手写
 /// `PropertySection::disabled(...)`，pg / sqlite / mysql / duckdb 结构漂移（触发器在
 /// pg 挂 `Source`、sqlite 挂 `Dependencies`，连接「存储 / 事件触发器」都挂
 /// `Dependencies`——类别 id 错位）；统一为声明池 + 能力位，新增驱动填一份 caps 即可。
+///
+/// 展示策略（2026-10-24 拍板）：**未实现类别不产出**——`Some(false)` 只作接线位
+/// （caps 注释说明未来接入点），不进 `sections`；渲染层不再有灰置分支。
 pub(crate) fn table_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Indexes, label: "索引".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Constraints, label: "约束".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
+        PropertySection { id: PageId::Columns, label: "列".into(), table: empty_table() },
+        PropertySection { id: PageId::Indexes, label: "索引".into(), table: empty_table() },
+        PropertySection { id: PageId::Constraints, label: "约束".into(), table: empty_table() },
+        PropertySection { id: PageId::Ddl, label: "DDL".into(), table: empty_table() },
+        PropertySection { id: PageId::Data, label: "数据".into(), table: empty_table() },
     ];
     v.extend(section_list(&caps.table, &[
         ("触发器", PageId::Trigger),
@@ -153,12 +156,12 @@ pub(crate) fn table_categories(caps: &DriverCapabilities) -> Vec<PropertySection
     v
 }
 
-/// 视图级类别：可用核心（列 / DDL / 数据）+ 按能力位声明的灰置 / 已启用类别。
+/// 视图级类别：可用核心（列 / DDL / 数据）+ 按能力位声明的已实现类别。
 pub(crate) fn view_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     let mut v = vec![
-        PropertySection { id: PageId::Columns, label: "列".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Ddl, label: "DDL".into(), enabled: true, table: empty_table() },
-        PropertySection { id: PageId::Data, label: "数据".into(), enabled: true, table: empty_table() },
+        PropertySection { id: PageId::Columns, label: "列".into(), table: empty_table() },
+        PropertySection { id: PageId::Ddl, label: "DDL".into(), table: empty_table() },
+        PropertySection { id: PageId::Data, label: "数据".into(), table: empty_table() },
     ];
     v.extend(section_list(&caps.view, &[
         ("权限", PageId::Privileges),
@@ -166,7 +169,7 @@ pub(crate) fn view_categories(caps: &DriverCapabilities) -> Vec<PropertySection>
     v
 }
 
-/// Schema 级类别：仅按能力位声明的灰置 / 已启用类别（内容批次未接入前，
+/// Schema 级类别：仅按能力位声明的已实现类别（内容批次未接入前，
 /// Schema 的表 / 视图 / 例程等子项类别不声明，见 pg.rs 的说明）。
 pub(crate) fn schema_categories(caps: &DriverCapabilities) -> Vec<PropertySection> {
     section_list(&caps.schema, &[
@@ -175,23 +178,20 @@ pub(crate) fn schema_categories(caps: &DriverCapabilities) -> Vec<PropertySectio
     ])
 }
 
-/// 按能力位生成一组类别：`Some(true)` = 已实现（enabled）；`Some(false)` = 灰置声明；
-/// `None` = 该驱动不声明此类别。
+/// 按能力位生成一组类别：`Some(true)` = 已实现（产出分区）；`Some(false)` = 未实现
+/// **不产出**（接线位，仅 caps 注释承载）；`None` = 该驱动不声明此类别。
 fn section_list(
     caps: &CapSet,
     decls: &[(&'static str, PageId)],
 ) -> Vec<PropertySection> {
     let mut v = Vec::new();
     for (label, id) in decls {
-        match caps.get(*id) {
-            Some(true) => v.push(PropertySection {
+        if caps.get(*id) == Some(true) {
+            v.push(PropertySection {
                 id: *id,
                 label: (*label).to_string(),
-                enabled: true,
                 table: empty_table(),
-            }),
-            Some(false) => v.push(PropertySection::disabled(*id, label)),
-            None => {}
+            });
         }
     }
     v
@@ -240,8 +240,8 @@ pub struct DriverCapabilities {
 impl DriverCapabilities {
     /// PostgreSQL：唯一有「标识 / 排序规则」真值的驱动；表级 触发器 / 规则 / 分区、
     /// 连接级 存储 / 事件触发器、Schema 级 权限 / 依赖 等对象存在但**内容批次未接入**
-    /// → 声明为灰置（`Some(false)`，展示策略保持现状：灰置先绘制，用户拍板后再定
-    /// 灰置 vs 隐藏）。
+    /// → 声明 `Some(false)`（接线位：展示策略 2026-10-24 拍板隐藏——未实现类别不产出
+    /// 页签，能力接入时把对应位翻 `true` 即自动出现）。
     pub fn pg() -> Self {
         Self {
             identity_column: true,
@@ -330,58 +330,40 @@ pub(crate) fn caps_for(db_type: Option<&str>) -> DriverCapabilities {
 mod tests {
     use super::*;
 
-    /// 能力矩阵收敛：表级类别声明集按驱动区分——pg 声明 触发器/权限/依赖/规则/分区
-    /// 全灰置；mysql / duckdb 只声明 权限/依赖；sqlite 只声明 权限/触发器。类别结构与
-    /// 顺序由生成函数统一维护，驱动差异只体现在 caps。
+    /// 展示策略（2026-10-24 拍板隐藏式）：未实现类别**不产出**页签——pg 表级只剩
+    /// 可用核心（列/索引/约束/DDL/数据），触发器/权限/依赖/规则/分区都不出现；
+    /// 能力接线位保留在 caps（`get` 返回 `Some(false)`，翻 `true` 即自动产出）。
     #[test]
-    fn table_categories_declaration_sets_follow_caps() {
-        let pg: Vec<PageId> = table_categories(&DriverCapabilities::pg())
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert!(pg.contains(&PageId::Trigger), "pg 表级声明触发器（原型类别）");
-        assert!(pg.contains(&PageId::Routines), "pg 表级声明规则（原型类别）");
-        assert!(pg.contains(&PageId::Partitions), "pg 表级声明分区（原型类别）");
-
-        let my: Vec<PageId> = table_categories(&DriverCapabilities::mysql())
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert!(my.contains(&PageId::Privileges) && my.contains(&PageId::Dependencies));
-        assert!(!my.contains(&PageId::Trigger), "mysql 不声明触发器类别");
-        assert!(!my.contains(&PageId::Partitions));
-
-        let sq: Vec<PageId> = table_categories(&DriverCapabilities::sqlite())
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert!(sq.contains(&PageId::Trigger), "sqlite 表级声明触发器（沿旧实现）");
-        assert!(!sq.contains(&PageId::Routines), "sqlite 不声明规则类别");
-        assert!(!sq.contains(&PageId::Partitions));
-
-        // 未接入的类别全部灰置（enabled=false）；可用核心（列/索引/约束/DDL/数据）常驻。
-        let cats = table_categories(&DriverCapabilities::pg());
-        assert!(cats.iter().any(|c| c.id == PageId::Columns && c.enabled));
-        assert!(cats.iter().all(|c| !c.enabled || matches!(c.id, PageId::Columns
-            | PageId::Indexes | PageId::Constraints | PageId::Ddl | PageId::Data)));
+    fn table_categories_hide_unimplemented_and_keep_caps() {
+        let pg = table_categories(&DriverCapabilities::pg());
+        let ids: Vec<PageId> = pg.iter().map(|c| c.id).collect();
+        assert!(!ids.contains(&PageId::Trigger), "触发器未实现应隐藏");
+        assert!(!ids.contains(&PageId::Routines));
+        assert!(!ids.contains(&PageId::Partitions));
+        assert!(!ids.contains(&PageId::Privileges));
+        assert!(ids.contains(&PageId::Columns) && ids.contains(&PageId::Data));
+        // 接线位不丢：声明仍在 caps 里。
+        let caps = DriverCapabilities::pg();
+        assert_eq!(caps.table.get(PageId::Trigger), Some(false));
+        assert_eq!(caps.table.get(PageId::Routines), Some(false));
+        // 驱动差异仍体现在声明集：mysql 表级不声明触发器；sqlite 声明触发器但未实现。
+        assert_eq!(DriverCapabilities::mysql().table.get(PageId::Trigger), None);
+        assert_eq!(DriverCapabilities::sqlite().table.get(PageId::Trigger), Some(false));
+        // 已实现声明（Some(true)）才产出——当前无任何 Some(true)，断言总数为核心数。
+        assert_eq!(ids.len(), 5, "pg 表级只有 5 个可用核心: {ids:?}");
     }
 
-    /// 连接级：pg 声明 存储/权限/事件触发器 三灰置；sqlite / mysql / duckdb 无「存储」类别。
+    /// 连接级：pg 声明 存储/权限/事件触发器 但未实现 → 全部隐藏（空）；接线位保留。
     #[test]
-    fn connection_categories_follow_caps() {
-        let pg: Vec<PageId> = connection_categories(&DriverCapabilities::pg())
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert!(pg.contains(&PageId::Storage), "pg 连接级声明存储");
-        assert!(pg.contains(&PageId::EventTrigger), "pg 连接级声明事件触发器");
-
-        let sq: Vec<PageId> = connection_categories(&DriverCapabilities::sqlite())
-            .iter()
-            .map(|c| c.id)
-            .collect();
-        assert!(!sq.contains(&PageId::Storage), "sqlite 不声明存储类别");
-        assert!(sq.contains(&PageId::EventTrigger));
+    fn connection_categories_hide_unimplemented_and_keep_caps() {
+        let pg = connection_categories(&DriverCapabilities::pg());
+        assert!(pg.is_empty(), "pg 连接级子项未实现应全部隐藏");
+        let caps = DriverCapabilities::pg();
+        assert_eq!(caps.connection.get(PageId::Storage), Some(false));
+        assert_eq!(caps.connection.get(PageId::EventTrigger), Some(false));
+        // sqlite 无「存储」声明；事件触发器声明未实现 → 隐藏。
+        assert_eq!(DriverCapabilities::sqlite().connection.get(PageId::Storage), None);
+        assert!(connection_categories(&DriverCapabilities::sqlite()).is_empty());
     }
 
     /// 能力位驱动列展示：pg / mysql 有标识 / 排序规则；sqlite / duckdb 无。

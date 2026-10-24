@@ -212,12 +212,19 @@ impl ProviderRegistry {
 mod tests {
     use super::*;
     use crate::descriptor::PageId;
+    use crate::model::PropertyTable;
 
-    /// 置灰分区辅助：enabled=false + 空表。
+    /// 分区构造辅助（struct 字面量语义；隐藏式后无灰置分支，2026-10-24）。
     #[test]
-    fn disabled_section_has_empty_table() {
-        let c = PropertySection::disabled(PageId::Privileges, "权限");
-        assert!(!c.enabled);
+    fn section_with_empty_table_has_no_rows() {
+        let c = PropertySection {
+            id: PageId::Privileges,
+            label: "权限".to_string(),
+            table: PropertyTable {
+                headers: Vec::new(),
+                rows: Vec::new(),
+            },
+        };
         assert!(c.table.headers.is_empty());
         assert!(c.table.rows.is_empty());
     }

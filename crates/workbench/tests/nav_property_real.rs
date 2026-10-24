@@ -403,7 +403,8 @@ async fn run_nav_property_chain(driver: &str) {
     );
     println!("[{driver}] 连接属性面板 OK");
 
-    // 5) 驱动属性源（provider 类别：数据可用；权限 / 依赖灰置）
+    // 5) 驱动属性源（provider 类别：可用核心常驻；权限 / 依赖等未实现类别隐藏式
+    //    不产出——2026-10-24 拍板，对齐 DBeaver 只显示有内容页签）
     let provider = global_registry()
         .provider(driver, PropertyKind::Table)
         .unwrap_or_else(|| panic!("{driver} 表属性源已注册"));
@@ -427,16 +428,13 @@ async fn run_nav_property_chain(driver: &str) {
     });
     let ids: Vec<PageId> = cats.iter().map(|c| c.id).collect();
     assert!(
-        ids.contains(&PageId::Data) && ids.contains(&PageId::Privileges) && ids.contains(&PageId::Dependencies),
-        "{driver} 表类别含数据与权限/依赖：{ids:?}"
+        ids.contains(&PageId::Data) && ids.contains(&PageId::Columns),
+        "{driver} 表类别含可用核心（数据/列）：{ids:?}"
     );
     assert!(
-        ids.iter().position(|p| *p == PageId::Data).unwrap() < ids.iter().position(|p| *p == PageId::Privileges).unwrap(),
-        "{driver} 数据类别在权限之前"
+        !ids.contains(&PageId::Privileges) && !ids.contains(&PageId::Dependencies),
+        "{driver} 权限/依赖未实现应隐藏：{ids:?}"
     );
-    assert!(cats.iter().all(|c| {
-        c.enabled || matches!(c.id, PageId::Privileges | PageId::Dependencies)
-    }));
     println!("[{driver}] 属性源类别 OK：{ids:?}");
 
     // 6) 二次加载命中 L2（cache-aside：结果一致）

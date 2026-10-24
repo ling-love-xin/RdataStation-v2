@@ -420,7 +420,8 @@ impl PropertyProvider for PgColumnProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![PropertySection::disabled(PageId::Privileges, "权限")]
+        // 列对象无可展示子项（权限等未实现类别隐藏，见 mod.rs 展示策略）。
+        Vec::new()
     }
 
     fn apply_edit_sql(&self, input: &ProviderInput, row_id: &str, value: &str) -> Result<String, String> {
@@ -471,7 +472,7 @@ impl PropertyProvider for PgRoutineProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![PropertySection { id: PageId::Source, label: "源码".into(), enabled: true, table: empty_table() }]
+        vec![PropertySection { id: PageId::Source, label: "源码".into(), table: empty_table() }]
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -509,7 +510,8 @@ impl PropertyProvider for PgSequenceProvider {
     }
 
     fn categories(&self, _input: &ProviderInput) -> Vec<PropertySection> {
-        vec![PropertySection::disabled(PageId::Privileges, "权限")]
+        // 序列对象无可展示子项（同列对象，见 mod.rs 展示策略）。
+        Vec::new()
     }
 
     fn apply_edit_sql(&self, _input: &ProviderInput, _id: &str, _v: &str) -> Result<String, String> {
@@ -647,15 +649,17 @@ mod tests {
         assert!(missing.iter().any(|r| r.label == "提示"));
     }
 
-    /// 表 provider：类别含可用（列/索引/约束/DDL/数据）+ 灰置（权限/依赖/规则/分区）。
+    /// 表 provider：类别含可用核心（列/索引/约束/DDL/数据）；权限/依赖/规则/分区
+    /// 等未实现类别**不产出**（隐藏式，2026-10-24 拍板）。
     #[test]
-    fn table_categories_mix_supported_and_disabled() {
+    fn table_categories_hide_unimplemented() {
         let t = target(PropertyKind::Table, None);
         let cats = PgTableProvider.categories(&input(&t, &[], None));
-        assert!(cats.iter().any(|c| c.id == PageId::Columns && c.enabled));
-        assert!(cats.iter().any(|c| c.id == PageId::Data && c.enabled));
-        assert!(cats.iter().any(|c| c.id == PageId::Privileges && !c.enabled), "权限灰置");
-        assert!(cats.iter().any(|c| c.id == PageId::Partitions && !c.enabled), "分区灰置");
+        assert!(cats.iter().any(|c| c.id == PageId::Columns));
+        assert!(cats.iter().any(|c| c.id == PageId::Data));
+        assert!(!cats.iter().any(|c| c.id == PageId::Privileges), "权限未实现应隐藏");
+        assert!(!cats.iter().any(|c| c.id == PageId::Partitions), "分区未实现应隐藏");
+        assert!(!cats.iter().any(|c| c.id == PageId::Trigger), "触发器未实现应隐藏");
     }
 
     /// 洞察卡：stats 非零才显示（列/索引/约束）；counts 命中补充（行估计）。
@@ -806,7 +810,7 @@ mod tests {
     }
 
     /// Schema 类别：不再复用错位 PageId（表→Columns / 视图→Constraints 等）；
-    /// 内容未接入前仅声明语义正确的灰置类（权限 / 依赖）。
+    /// 内容未接入前**不产出任何子项类别**（隐藏式，2026-10-24 拍板）。
     #[test]
     fn schema_categories_have_no_mismatched_page_ids() {
         let t = target(PropertyKind::Schema, None);
@@ -817,6 +821,6 @@ mod tests {
         assert!(!ids.contains(&PageId::Indexes));
         assert!(!ids.contains(&PageId::Ddl));
         assert!(!ids.contains(&PageId::Source));
-        assert!(cats.iter().all(|c| !c.enabled), "Schema 子项内容未接入前全部灰置");
+        assert!(cats.is_empty(), "Schema 子项内容未接入前全部隐藏");
     }
 }

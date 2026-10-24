@@ -76,38 +76,16 @@ pub struct PropertyTable {
 }
 
 /// 子实体分区（带页 id，供描述模型映射「页 → 内容」）。
+///
+/// 2026-10-24 展示策略拍板：**未实现类别不产出**（隐藏式，对齐 DBeaver 只显示有内容
+/// 页签的呈现语义）——能力接线位只留在 `database::property_providers::DriverCapabilities`
+/// （`Some(false)` 声明 + 注释），不进入 `sections`；`sections` 里的分区全部可用，
+/// 故不再有 `enabled` 字段。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertySection {
     pub id: PageId,
     pub label: String,
     pub table: PropertyTable,
-    /// `false` = 先绘制、置灰标注（权限 / 依赖等能力未实现）
-    pub enabled: bool,
-}
-
-impl PropertySection {
-    /// 可用分区（默认形态）。
-    pub fn supported(id: PageId, label: String, table: PropertyTable) -> Self {
-        Self {
-            id,
-            label,
-            table,
-            enabled: true,
-        }
-    }
-
-    /// 置灰分区（能力未实现；内容区显示「暂不可用」占位，DBeaver 同样有灰置页）。
-    pub fn disabled(id: PageId, label: &str) -> Self {
-        Self {
-            id,
-            label: label.to_string(),
-            enabled: false,
-            table: PropertyTable {
-                headers: Vec::new(),
-                rows: Vec::new(),
-            },
-        }
-    }
 }
 
 /// 表数据预览的一列（名称 + 类型）。

@@ -60,6 +60,8 @@ mock（未来）────────► property（消费 ObjectProperties /
 2. **静态硬编码**：`load_properties` 是 300 行大 `match ref_.kind`，每类对象的行、分区写死；
    渲染层（editor.rs）也跟着逐行拼 —— 新增对象类型要改取数与渲染两处。
 3. **不支持的能力直接消失**：权限、依赖等完全没有，用户无法感知「这能力存在但暂不可用」。
+   （2026-10-24 决策反转：隐藏式成为拍板策略——未实现类别不产出页签，对齐 DBeaver
+   呈现语义；能力存在感由代码侧接线位 `DriverCapabilities` 与 §8 承载，见 §7。）
 4. 无可复用公开边界：Quick Open 已通过 `database::model::PropertyRequest` 打开属性面板，
    Mock 结构预览需要复用列结构 —— 模型埋在 database 里，跨 crate 消费不干净。
 
@@ -178,8 +180,9 @@ pub struct PropertyState {
 ## 7. 能力掩码（子项分区）
 
 > 2026-10-15：描述模型（`PropertyPage` / `PropertyEntry` / `SupportState` / `PropertyRegistry` trait）已删除，
-> 能力掩码由 **provider 的分区声明**承担——每个子项分区 = `PropertySection`（`id` / `label` / `table` / `enabled`），
-> `enabled=false` 即「先绘制、置灰标注」（原 `SupportState::Unsupported` 的语义，不再需要双份模型）。
+> 能力掩码由 **provider 的分区声明**承担；**2026-10-24 展示策略拍板**：未实现类别**不产出**
+> 分区（隐藏式，对齐 DBeaver 只显示有内容页签的呈现语义）——`PropertySection` 不再有
+> `enabled` 字段，`sections` 里全是可用类别。
 
 ```text
 /// 子实体分区（带页 id，供渲染映射「分区 → 内容」）。
@@ -187,31 +190,31 @@ pub struct PropertySection {
     pub id: PageId,
     pub label: String,
     pub table: PropertyTable,
-    /// `false` = 先绘制、置灰标注（权限 / 依赖等能力未实现）
-    pub enabled: bool,
 }
 ```
 
-- `PropertySection::supported(id, label, table)`：可用分区（默认形态）。
-- `PropertySection::disabled(id, label)`：置灰分区（内容区显示「暂不可用」占位）。
-- provider 的 `categories()` 返回 `Vec<PropertySection>`。**2026-10-24 起类别结构收敛到
-  `database::property_providers` 的生成函数**（`table_categories` / `view_categories` /
+- provider 的 `categories()` 返回 `Vec<PropertySection>`。类别结构收敛到
+  `database::property_providers` 的生成函数（`table_categories` / `view_categories` /
   `schema_categories` / `connection_categories`），由 [`DriverCapabilities`] 能力位驱动：
-  每个类别声明 `Some(true)` = 已实现（enabled）、`Some(false)` = 灰置声明（disabled）、
-  `None` = 该驱动不声明；pg / sqlite / mysql / duckdb 各填一份 caps，类别结构与顺序
-  只写一份，不再随 provider 手写 `disabled(...)` 漂移。新增数据库类型 = 补一份 caps。
+  每个类别声明 `Some(true)` = 已实现（产出分区）、`Some(false)` = 未实现（**接线位，
+  不产出**，注释说明未来接入点）、`None` = 该驱动不声明；pg / sqlite / mysql / duckdb
+  各填一份 caps，类别结构与顺序只写一份。新增数据库类型 = 补一份 caps；接入某能力 =
+  把对应位翻 `true`，页签自动出现，渲染零改动。
 - 列级展示同样按能力位裁剪：`DriverCapabilities::identity_column` / `collation_column`
   控制「列」分区表格的 标识 / 排序规则 两列（PG / MySQL 有真值，SQLite / DuckDB 无）。
 - **动态渲染原则**：渲染层只遍历 `ObjectProperties.sections`，不按 `kind` 写分支；
   新增对象类型 / 新增属性 = provider 加条目（或新注册一个 provider），渲染零改动。
 
-## 8. 权限页灰置规格（示例）
+## 8. 未实现能力规格（示例：权限页）
 
-- provider 的 `categories()` 对 `Table` / `View` / `Connection` 返回含 `Privileges` 分区，`enabled = false`
-  （`engine::MetadataBrowser` 暂无 `get_privileges` 内省实现）。
-- 渲染：左栏子标签以 muted 色呈现（可点，点了内容区显示「（暂不可用）」）。
-- 将来驱动补上 `get_privileges` 能力位后，把该分区 `enabled` 翻为 `true`（provider 填充真实表格），渲染零改动自动激活。
-- `Dependencies`（依赖 / 被引用）分区同理先灰置。
+- **展示策略（2026-10-24 拍板）**：未实现类别不产出页签——用户只看到有内容的子项，
+  面板无「暂不可用」噪音；未实现能力的感知由代码侧接线位（caps `Some(false)` 注释）与
+  本 spec 承载，UI 不再画灰置页。
+- **接线位示例**：`DriverCapabilities::pg()` 的表级 触发器 / 权限 / 依赖 / 规则 / 分区、
+  连接级 存储 / 权限 / 事件触发器均为 `Some(false)`——内容批次接入时把对应位翻 `true`，
+  `table_categories` / `connection_categories` 自动产出分区，渲染零改动激活。
+- 渲染兜底：`sections` 为空（列 / 序列等无可展示子项的对象）→ 子项卡显示「（无）」；
+  未注册 provider → 仅 General 类别（`fallback_categories`）。
 
 ## 9. 数据流
 
@@ -244,7 +247,6 @@ pub struct PropertySection {
    - `General` → `ObjectProperties`：① 洞察总览卡（`overview`）+ ② General 网格（`properties`，
      双栏/三栏）+ ③ 子项分区列表（`sections`，多分区时左栏子标签 + 右栏表格）；
    - `Data` → `data` 网格（行号 + 列名 + 单元格；NULL 灰置；列头排序；分页按钮）；
-   - `enabled=false` 的分区 → 灰置占位内容（左栏标签置灰 + 内容区「（暂不可用）」）；
    - 找不到对应 section → 空态文案（不报错）。
 3. 宽高沿用右 Dock（280px 基准，宽度可拖拽记忆），行内无裸 px / 裸色值（走 `workbench_shell::ui` 与主题 token）。
 
@@ -258,18 +260,19 @@ pub struct PropertySection {
 
 ## 12. 测试
 
-- `rds-property`：kind 覆盖 / provider 契约（`ProviderInput.candidates` 查表、registry 分派、灰置分区空表）/ `PropertyState` 默认值。
+- `rds-property`：kind 覆盖 / provider 契约（`ProviderInput.candidates` 查表、registry 分派）/ `PropertyState` 默认值。
 - `rds-database`：`property_ref_of` 映射（kind 全量）、`load_properties` 各类型分区、列表 / 索引 / 约束表渲染、
   `table_data` 分页抓取（quote_ident 转义 / has_more 探测 / COUNT / 排序补齐）。
 - `rds-workbench`：Quick Open `ShowProperties` 构造、`apply_props_results` 过期 key 丢弃、
   `nav_property_real` 真机全链路（SQLite / DuckDB：导航 → 属性 → 数据页分页 / 排序 / NULL / 视图数据）。
-- 窗口级（`#[gpui_kit::test]`）：tab 切换渲染、灰置页占位、数据页懒加载。
+- 窗口级（`#[gpui_kit::test]`）：tab 切换渲染、空 sections 兜底、数据页懒加载。
 
 ## 13. 已知问题与限制
 
 1. `PropertyRef` / `PropertyRequest` 仍留在 `database::model`（依赖 `NavSource`）；若未来出现
    非导航域的属性请求方，再评估把定位参数下沉（引入 `SourceScope` 与转换点）。
-2. 权限 / 依赖页为灰置占位，**不发起任何内省查询**（能力未实现，不做假数据）。
+2. 未实现能力（权限 / 依赖 / 触发器 / 规则 / 分区 / 存储 / 事件触发器）不产出分区、
+   **不发起任何内省查询**（能力未实现，不做假数据）；接线位在 `DriverCapabilities`。
 3. `ObjectProperties.sections` 的 id 与描述模型 `PageId` 是一一映射；新增分区类型需同时
    扩展 `PageId` 与注册表（渲染不动）。
 4. 列表格「引用」列语义（`表.列` / `FK` / 空）与列序号回退逻辑是既有行为，抽取不改语义。
@@ -441,11 +444,12 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | --- | --- | --- |
 | ① 洞察总览 | 状态点 + 标题 + meta 芯片（驱动/作用域/分组/标签）+ 指标卡 + 关键信息 + 口径注脚 | `ObjectOverview`（provider 组装；cards 用 stats/counts） |
 | ② General 双栏网格 | 定义属性；行数 > 8 自动三栏（面积使用率） | `properties`（provider） |
-| ③ 子项类别列表 | 类别纵向堆叠：可用 → 标题+表头+行；灰置 → 标题置灰 + 「暂不可用」 | `sections`（categories 顺序 + 骨架内容合并） |
+| ③ 子项类别列表 | 类别纵向堆叠：可用 → 标题+表头+行；无类别对象 → 「（无）」 | `sections`（categories 顺序 + 骨架内容合并；未实现类别隐藏式不产出，2026-10-24） |
 
 - **表 / 视图两页签【属性 | 数据】**（去掉旧「图」页签；数据页懒加载，首屏 200 行）；
 - 其余对象为单属性视图（无页签条）；
-- 灰置类别（权限/依赖/触发器/规则/策略/分区/Statistics）先绘制、置灰标注，不发内省查询；
+- 未实现类别（权限/依赖/触发器/规则/策略/分区/Statistics）隐藏式不产出，不发内省查询；
+  接线位在 `DriverCapabilities`（`Some(false)`），接入时翻 `true` 自动出现；
 - 编辑控件：Boolean → Switch（即改即提交）；Select → 常驻下拉（`use_keyed_state` 惰性创建，
   选中即提交，2026-10-15 接入；空候选回退文本）；Text/LongText → 值 + 编辑按钮 → 行内输入 + 保存/取消。
 
@@ -487,10 +491,10 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | 设计决策 | 代码文件 |
 | --- | --- |
 | `PropertyProvider` trait / `ProviderRegistry` / `ProviderInput` / `ObjectOverview` / `PropertySection` | `crates/property/src/provider.rs` |
-| `ObjectProperties.overview` / `PropertySection.enabled` / `PageId::{Routines,Partitions}` | `crates/property/src/{model,descriptor}.rs` |
+| `ObjectProperties.overview` / `PropertySection` / `PageId::{Routines,Partitions,Trigger,Storage,EventTrigger}` | `crates/property/src/{model,descriptor}.rs` |
 | 全局注册表 + 各驱动 provider（pg/sqlite/duckdb/mysql） | `crates/database/src/property_providers/{mod,pg,sqlite,duckdb,mysql}.rs` |
 | 通用骨架（取数 + provider 分派 + 类别合并 + fallback + 编辑执行） | `crates/database/src/property_panel.rs` |
-| 三部分渲染 / 双栏网格 / 子项灰置 / 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
+| 三部分渲染 / 双栏网格 / 子项类别（隐藏式不产出）/ 两页签 / 编辑控件 | `crates/workbench/src/panels/property_panel.rs::{render_property_panel, render_property_view, render_overview_section, render_general_grid, render_category_list, render_category_section, render_property_cell}`（`PropertyHostPanel`，中央 Dock 独立 tab，2026-10-09） |
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 
 ## 17. 属性面板卡片规范（2026-10-09，连接编辑器 / 洞察 / Mock 同规范）
@@ -505,7 +509,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | --- | --- | --- | --- |
 | 洞察卡 | `border_1 + rounded_md + bg(sidebar)`，内距 `p_2` | 标题 `text_xs` 中字重 `fg` + 状态点 / 副标题 | meta 芯片（`border + rounded_md + px_2 py_px`）、指标卡（`bg(background)` 提亮）、kv 键值行 |
 | General 卡 | 同上 | `card_header("通用", 尾注)` | 双栏 / 三栏网格（行数 > 8 三栏），单元格 = muted 标签 + fg 值 / 编辑控件 |
-| 子项卡 | 同上 | `card_header("子项")` | 左栏子标签（选中 `list_active` + 2px 激活条，灰置 muted +「暂不可用」）+ 右栏内容（`bg(background)` 内层表） |
+| 子项卡 | 同上 | `card_header("子项")` | 左栏子标签（选中 `list_active` + 2px 激活条 + 尾注计数）+ 右栏内容（`bg(background)` 内层表）；sections 为空 → 「（无）」 |
 | 数据卡 | 同上 | `card_header("数据")` | 行号 + 列名表头（排序可点）+ 数据行 + 分页脚 |
 
 统一实现点：`PropertyHostPanel::card_header(title, note, theme)`（标题 + 右对齐尾注）；
@@ -521,7 +525,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 
 ### 17.3 分层与用色
 
-- 卡片底 = `sidebar`；卡片内层区块（指标卡 / 子项右栏表 / 灰置占位）= `background`（在侧栏底上提亮一级）；
+- 卡片底 = `sidebar`；卡片内层区块（指标卡 / 子项右栏表）= `background`（在侧栏底上提亮一级）；
 - 不另起边框色：全部 `border` token；状态色（成功 / 危险 / 警告）只用于洞察状态点与语义文案；
 - 零裸色值 / 零裸 px（`ui_contract` 已扫描本文件）。
 

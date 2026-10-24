@@ -15,7 +15,7 @@ use std::rc::Rc;
 use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
@@ -426,7 +426,7 @@ impl PropertyHostPanel {
     /// 属性视图（三部分布局，DBeaver 之上加「洞察总览」——见 §16 设计）：
     /// ① 洞察总览（运行时 / 统计事实，provider 组装）
     /// ② General 双栏网格（定义属性；行数多时自动三栏，增加面积使用率）
-    /// ③ 子项类别列表（驱动能力掩码；灰置类别先绘制、标注「暂不可用」）
+    /// ③ 子项类别列表（驱动能力掩码；未实现类别隐藏式不产出，2026-10-24 拍板）
     ///
     /// 大区块统一「卡片语言」：`border + rounded + sidebar 底 + 标题头`（与洞察卡一致，
     /// 连接编辑器 / 洞察 / Mock 模块同规范，见 `property-module-spec.md` §17）。
@@ -674,7 +674,7 @@ impl PropertyHostPanel {
             .rounded_md()
             .overflow_y_scrollbar();
         for (ix, s) in props.sections.iter().enumerate() {
-            rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme, cx));
+            rail = rail.child(self.render_category_tab(entity.clone(), s, ix, ix == active, theme));
         }
         // 右栏：选中类别内容。
         let content = div().flex_1().min_w_0().child(self.render_category_section(&props.sections[active], theme));
@@ -685,10 +685,7 @@ impl PropertyHostPanel {
 
     /// 左栏单个子标签（「子 tab + 内容」的 tab 本体）：
     /// 选中态 = `Button` toggled 底色 + 左侧 2px 激活条（与导航树行同原语）；
-    /// 灰置态 = custom 变体置灰文字 + 「暂不可用」尾注，仍可点（切过去看占位说明）。
-    ///
-    /// 2026-10-15 由自绘可点行迁移到语义 `Button`：拿到 hover / 焦点 / 键盘（Enter/Space
-    /// 在 KeyUp 激活）；计数徽标 / 尾注外置行尾（不并入按钮命中区，保持右对齐）。
+    /// 尾注计数（sections 只含可用类别，未实现类别隐藏式不产出，2026-10-24 拍板）。
     fn render_category_tab(
         &self,
         entity: gpui::Entity<PropertyHostPanel>,
@@ -696,31 +693,20 @@ impl PropertyHostPanel {
         ix: usize,
         selected: bool,
         theme: &Theme,
-        cx: &mut Context<Self>,
     ) -> Div {
         let muted = theme.colors.muted_foreground;
         let active_border = theme.colors.sidebar_accent;
         let count = s.table.rows.len();
 
         // 按钮本体：id 用类别名（业务键，provider 增删类别时焦点 / hover 态不串位）。
-        let mut btn = Button::new(format!("property-cat-{}", s.label))
+        let btn = Button::new(format!("property-cat-{}", s.label))
             .ghost()
             .toggled(selected)
             .small()
             .flex_1()
             .min_w_0()
             .label(s.label.clone());
-        // 灰置类别：`Button` 无公开前景色 setter，走 `ButtonCustomVariant` 保持置灰文字
-        //（hover / active 底色与可用行同一套，避免“灰置行点了没反馈”）。
-        if !s.enabled {
-            btn = btn.custom(
-                ButtonCustomVariant::new(&**cx)
-                    .foreground(muted)
-                    .hover(theme.colors.list_hover)
-                    .active(theme.colors.list_active),
-            );
-        }
-        let mut tab = div()
+        let tab = div()
             .relative()
             .h_flex()
             .items_center()
@@ -736,22 +722,19 @@ impl PropertyHostPanel {
                         cx.notify();
                     });
                 }),
-            );
-        if !s.enabled {
-            tab = tab.child(div().flex_none().text_xs().text_color(muted).child("暂不可用"));
-        } else {
-            tab = tab.child(
+            )
+            .child(
                 div()
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
                     .child(count.to_string()),
             );
-        }
         tab
     }
 
-    /// 单个子项类别：可用 → 标题 + 表头 + 行；灰置 → 标题置灰 + 「暂不可用」占位。
+    /// 单个子项类别：标题 + 表头 + 行（sections 只含可用类别，未实现类别隐藏式
+    /// 不产出，2026-10-24 拍板）。
     fn render_category_section(
         &self,
         s: &PropertySection,
@@ -760,36 +743,6 @@ impl PropertyHostPanel {
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let border = theme.colors.border;
-
-        if !s.enabled {
-            // 能力未实现：先绘制、置灰标注（不发起任何内省查询）。
-            return div()
-                .v_flex()
-                .w_full()
-                .gap_1()
-                .p_2()
-                .rounded_md()
-                .bg(theme.colors.background)
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .w_full()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(s.label.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("（暂不可用）"),
-                        ),
-                );
-        }
 
         let mut section = div()
             .v_flex()

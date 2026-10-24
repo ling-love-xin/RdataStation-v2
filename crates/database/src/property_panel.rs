@@ -297,7 +297,7 @@ pub async fn load_properties(
         None => (
             fallback_properties(ref_, conn_label, driver, db_type, &source, &columns, &indexes, &constraints, &routine_source, &ddl_text),
             fallback_overview(ref_, &title, &object_type, &source, &stats),
-            fallback_categories(ref_.kind),
+            fallback_categories(),
         ),
     };
 
@@ -323,7 +323,6 @@ pub async fn load_properties(
             id: cat.id,
             label: cat.label,
             table,
-            enabled: cat.enabled,
         });
     }
 
@@ -356,19 +355,16 @@ fn sections_of(
             id: PageId::Columns,
             label: format!("列 ({})", columns.len()),
             table: columns_table(columns, caps),
-            enabled: true,
         }),
         PageId::Indexes => Some(PropertySection {
             id: PageId::Indexes,
             label: format!("索引 ({})", indexes.len()),
             table: indexes_table(indexes),
-            enabled: true,
         }),
         PageId::Constraints => Some(PropertySection {
             id: PageId::Constraints,
             label: format!("约束 ({})", constraints.len()),
             table: constraints_table(constraints),
-            enabled: true,
         }),
         PageId::Ddl => {
             if let Some(text) = ddl_text {
@@ -376,7 +372,6 @@ fn sections_of(
                     id: PageId::Ddl,
                     label: "DDL（源版）".to_string(),
                     table: text_table("DDL", text),
-                    enabled: true,
                 })
             } else if kind == PropertyKind::Table {
                 // 取不到源（PostgreSQL 无 SHOW CREATE 等价物）→ 目录信息合成。
@@ -390,7 +385,6 @@ fn sections_of(
                     id: PageId::Ddl,
                     label: "DDL（合成）".to_string(),
                     table: text_table("DDL", &composed),
-                    enabled: true,
                 })
             } else {
                 None
@@ -400,7 +394,6 @@ fn sections_of(
             id: PageId::Source,
             label: "源码".to_string(),
             table: text_table("源码", text),
-            enabled: true,
         }),
         _ => None,
     }
@@ -496,18 +489,13 @@ fn fallback_overview(
     }
 }
 
-/// 未注册 provider 时的通用类别（fallback：仅 General）。
-fn fallback_categories(kind: PropertyKind) -> Vec<PropertySection> {
-    let mut cats = vec![PropertySection {
+/// 未注册 provider 时的通用类别（fallback：仅 General；未实现类别隐藏式不产出）。
+fn fallback_categories() -> Vec<PropertySection> {
+    vec![PropertySection {
         id: PageId::General,
         label: "通用".to_string(),
-        enabled: true,
         table: PropertyTable { headers: Vec::new(), rows: Vec::new() },
-    }];
-    if matches!(kind, PropertyKind::Table | PropertyKind::View | PropertyKind::Routine) {
-        cats.push(PropertySection::disabled(PageId::Privileges, "权限"));
-    }
-    cats
+    }]
 }
 
 /// 应用属性编辑（DBeaver `setPropertyValue` 对齐，2026-10-09）。
