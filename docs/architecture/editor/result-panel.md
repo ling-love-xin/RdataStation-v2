@@ -366,7 +366,58 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试**：rds-result-panel 127 passed / 0 failed（+2：`text_presentation_skips_hidden_columns_and_follows_view_rows`、`group_by_count_keeps_order_and_null_group`）；rds-editor 586 passed / 1 failed（`named_parameters_hold_execution_until_filled` 归因并行线 engine 提交，与本线无交集，如实上报不修）。
 
-## 8. 协作纪律
+### 8.10 左缘竖条 + 右栏页签新序与关闭（2026-10-24，#25）
+
+对齐 DBeaver Data Editor 截图基准（左缘独立窄竖条三图标、右栏页签重排与可关闭、底部三段式动作组）。本轮落地竖条与页签段；底部三段式与本地行级动作口径见本节「后续项」。
+
+**① 左缘竖条（替代原左栏视图区 + 工具栏两个入口按钮）**
+
+- 布局：主内容行最左挂 `render_vertical_bar`（`panel.rs`），宽 `ui::RESULT_VERTICAL_BAR_WIDTH = 2.25rem`（36px），`flex_none`，`sidebar` 底色，右发丝线；有 / 无侧栏、对比模式、文本视图分支均挂主栏左侧。
+- 三枚幽灵小钮竖排互斥：
+  - 网格 `IconName::Table2` → `SetPresentation(Presentation::Grid)`；
+  - 文本 `IconName::FileText` → `SetPresentation(Presentation::Text)`；
+  - 记录 `IconName::UserRound` → `ToggleTranspose`，**文本态置灰**（记录视图只在网格呈现下可用）。
+- **三态模型保留双轨**（拍板口径，未改语义）：`Presentation { Grid, Text }` 与 `ToggleTranspose` 仍是两个独立状态，竖条只做入口位置迁移，不合并成单枚举；记录钮高亮跟随 `transposed`。
+- 记录激活时，竖条记录钮下方追加 `ChevronUp` / `ChevronDown` 上下行导航（`TransposePrev` / `TransposeNext`，动作队列原样复用）。
+- 顶部工具栏的「文本」「转置」按钮段已删除；`ResultControls` 同步移除 `presentation` / `transpose` 字段；左栏 `render_column_sidebar` 去掉视图区，只留「列结构」标题 + 列名列表。
+
+**② 右栏页签新序与关闭**
+
+- `RightTab` 顺序重排为 `Value(0, 默认) / Stats(1) / Metadata(2) / Group(3)`，映射 `right_tab_from_index` 同步；`render_right_sidebar` labels = `["值详情", "计算", "元数据", "分组"]`，match 顺序 Value / Stats / Metadata / Group。
+- 非默认「值详情」页时，页签行尾挂 `IconName::X` 关闭钮（`editor-result-right-tab-close`），点击入队 `SetRightTab(RightTab::Value)`。**拍板口径：× 只退回默认页，不收起整个右栏**；右栏开合仍由工具栏「值详情」开关控制。
+- 实现备注：`TabBar` 的 suffix 槽内子按钮点击会冒泡触发页签切换（vendor `tab.rs` 已核实），故关闭钮挂在 TabBar 行右侧独立元素，不用 suffix 内嵌。
+- 「引用」页（外键面包屑 + 引用表只读预览）本轮不做，留 backlog。
+
+**③ 底部三段式动作组（目标形态，本轮仅原型先行；Rust 侧未改布局）**
+
+对齐 DBeaver 截图基准的三段结构，原型 `docs/analysis/结果面板-DBeaver风格原型.html` 已呈现目标形态：
+
+| 段 | DBeaver 内容 | 本轮口径 |
+| --- | --- | --- |
+| 左·动作组 | 刷新▾ / 保存 / 取消 / 新增行 / 复制行 / 删除行 / 撤销 / 重做 / 首页 / 上页 / 下页 / 末页 / 导出▾ / 设置 | 灰态占位，待动作模型落地后逐个接线（见下） |
+| 中段 | 行数输入框（只读）+ `N+` 标记 | 待落地 |
+| 右段 | `N 行已获取 - 总耗时 (获取耗时), 时间戳` + 当前格预览 + 已选行 | 现有状态行已含当前格预览 / 已选行；耗时元信息在工具栏段，待归位 |
+
+**翻页导航口径（已拍板）**：取数是窗口化模型（`FetchMore` 取下一段，无页号概念），首页 / 上页 / 末页置灰占位，下页 = 现有 `FetchMore`；不实现段导航（需要 engine 支持 offset 重查，超出本线范围）。
+
+**④ 本地行级动作（新增 / 复制 / 删除 + 行级撤销重做）——模型岔路，待确认后落地**
+
+本轮**未写**代码。现状模型与阻塞点：
+
+- 变更集只持格级 `CellChange(row, column, original, edited, status)`；`EditHistory` 是格级双栈；`commit_updates_rows` 只生成 UPDATE、依赖键列 WHERE 定位；无主键结果集整份只读。
+- delegate 的 `view_rows: Option<Vec<usize>>` 是「底层数据行号 → 视图行」映射（`None` = 恒等）；本地新增行**没有底层行号可映射**，删除行需要在筛选 / 排序 / 导出 / 列统计 / 分组 / 值预览全链路分叉。
+- INSERT 编码在导出层有单行先例（`export.rs`），DELETE 编码不存在；现有 `FetchMore` 窗口模型无页号。
+
+**拍板的行为口径（确认模型方案后照此实现）**：
+
+- 新增 / 复制 / 删除**只改本地网格与撤销栈，不进提交批次、不下发 INSERT / DELETE**；UPDATE 路径完全不动。
+- 提交时本地行级变更被忽略并提示「行级变更暂未支持下发」。
+- 无主键结果集（`editable = false`）禁用三个行级按钮。
+- 撤销 / 重做优先格级 `EditHistory`，栈空再走本地行栈。
+
+> 待确认方案点：本地叠加层（新增行集合 / 待删除行集合 / 行操作历史栈）挂在 delegate 还是 store 槽；视图行号映射如何扩展「底层行 / 本地新行」双态；删除行灰显 + 删除线样式与本地新增行的行号槽口径。确认前不硬写。
+
+**测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **127 passed / 0 failed**；`cargo test -p rds-editor --lib` = **590 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例；此前并行线 engine 提交导致的 1 个失败项本轮已恢复通过）。
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
   `crates/app/src/main.rs`、`crates/settings/*`、`workbench/src/components/insight_actions.rs`、
