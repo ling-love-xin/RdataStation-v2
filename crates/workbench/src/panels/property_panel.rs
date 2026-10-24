@@ -442,7 +442,7 @@ impl PropertyHostPanel {
         let mut body = div().v_flex().w_full().gap_3();
         body = body.child(self.render_overview_section(props, theme));
         body = body.child(self.render_general_grid(entity.clone(), props, theme, window, cx));
-        body = body.child(self.render_category_list(entity.clone(), props, theme, cx));
+        body = body.child(self.render_category_list(entity.clone(), props, theme));
         body
     }
 
@@ -633,7 +633,7 @@ impl PropertyHostPanel {
 
     /// ③ 子项类别区（DBeaver 表属性页形态：**子 tab + 内容**）。
     ///
-    /// 多类别 → 左侧竖排子标签栏（名称 + 行数徽标 + 灰置态）+ 右侧内容区，
+    /// 多类别 → 左侧竖排子标签栏（名称 + 行数徽标）+ 右侧内容区，
     /// 点击左栏切换右侧表格；单类别 / 无类别 → 退化为直接堆叠（不显示左栏）。
     /// 整体卡片化（与洞察 / General 同语言）。
     fn render_category_list(
@@ -641,7 +641,6 @@ impl PropertyHostPanel {
         entity: gpui::Entity<PropertyHostPanel>,
         props: &ObjectProperties,
         theme: &Theme,
-        cx: &mut Context<Self>,
     ) -> Div {
         let mut section = div()
             .v_flex()
