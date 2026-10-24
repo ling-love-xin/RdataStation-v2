@@ -65,6 +65,36 @@ pub enum ResultRequest {
     ToggleValueSidebar,
     /// 左栏列结构列表的「单击一行」：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
+    /// 呈现方式切换（DBeaver 左栏「显示方式」：网格 / 文本）。显式目标值——
+    /// 网格 / 文本两个入口（左栏按钮组、工具栏按钮）都要能精确切到目标，
+    /// 翻转语义在「已在该呈现」时会把用户点反。
+    SetPresentation(Presentation),
+    /// 右栏标签页切换（值详情 / 列统计 / 分组 / 元数据）
+    SetRightTab(RightTab),
+}
+
+/// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Presentation {
+    /// 默认网格（gpui-kit DataTable）
+    #[default]
+    Grid,
+    /// 文本视图：当前结果（可见列 + 可见行）渲染为 TSV 纯文本，可选中复制
+    Text,
+}
+
+/// 结果面板右栏的标签页（DBeaver Data Editor 右侧辅助区）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightTab {
+    /// 数值查看器：选中格完整值（默认）
+    #[default]
+    Value,
+    /// 计算：选中列的 count / null / min / max / avg / sum（纯函数，不引 polars）
+    Stats,
+    /// 分组：按一列本地 groupby 计数（纯函数；DBeaver 大表口径是下发 GROUP BY）
+    Group,
+    /// 元数据：列名 / 类型 / 来源表 / 注释 / 可空 / 默认值
+    Metadata,
 }
 
 /// 结果动作队列（`Rc<RefCell<Vec<_>>>` 共享句柄）

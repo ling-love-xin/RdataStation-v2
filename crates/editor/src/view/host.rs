@@ -6317,6 +6317,15 @@ impl EditorHostPanel {
                 });
                 self.result_panel.update(cx, |_, cx| cx.notify());
             }
+            // 【呈现】显示方式（网格 / 文本）：纯面板状态，宿主只转发
+            ResultRequest::SetPresentation(presentation) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.set_presentation(presentation, cx));
+            }
+            // 【右栏】标签页切换（值详情 / 计算 / 分组 / 元数据）：纯面板状态
+            ResultRequest::SetRightTab(tab) => {
+                self.result_panel.update(cx, |p, cx| p.set_right_tab(tab, cx));
+            }
         }
     }
 

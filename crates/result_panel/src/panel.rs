@@ -26,8 +26,8 @@ use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::Sizable as _;
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Size, Sizable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
@@ -39,7 +39,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use crate::error_card::{self, ErrorCard};
 use crate::export;
 use crate::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
-use crate::ports::{ResultActionQueue, ResultRequest};
+use crate::ports::{Presentation, ResultActionQueue, ResultRequest, RightTab};
 use crate::script_card::{self, ScriptCard};
 use crate::sets::{self as result_sets, ResultSetTab};
 use crate::ui;
@@ -154,6 +154,11 @@ pub struct ResultPanel {
     /// 【侧栏】最近选中格位置（**视图行**, 含行号槽列；宿主 `TableEvent::SelectCell`
     /// 事件写入，选行 / 清选置 `None`）。右栏渲染据此读网格取完整值 / 列名 / 类型。
     selection_pos: Option<(usize, usize)>,
+    /// 【呈现】显示方式（DBeaver 左栏「显示方式」）：网格 / 文本。面板级持续——
+    /// 切结果集不重置（用户选择的是「怎么看结果」，不是某份结果的属性）。
+    presentation: Presentation,
+    /// 【右栏】当前标签页（DBeaver Data Editor 右侧辅助区：数值查看器 / 计算 / 分组 / 元数据）
+    right_tab: RightTab,
     /// 【并排对比】对比栏的投影（编辑器 `sync_compare_grid` 时经
     /// [`Self::set_compare_projection`] 写入；render 期只读）
     compare_active: usize,
@@ -238,6 +243,8 @@ impl ResultPanel {
             show_column_sidebar: false,
             show_value_sidebar: false,
             selection_pos: None,
+            presentation: Presentation::Grid,
+            right_tab: RightTab::Value,
             compare_active: 0,
             compare_toolbar: None,
             compare_status: None,
@@ -405,6 +412,23 @@ impl ResultPanel {
             .into_any_element()
         });
 
+        // 【呈现】文本视图（DBeaver「显示方式 → 文本」）：主区换成 TSV 纯文本
+        // （可选中复制）；标签条保留（可切结果集）；侧栏让位（无选中格语义——
+        // 文本没有「格」）。分支放这里因为 `tabs` 随后会被 `ResultPane` 拿走。
+        if self.presentation == Presentation::Text && !self.compare_mode {
+            let mut body = div()
+                .v_flex()
+                .w_full()
+                .h_full()
+                .min_h_0()
+                .debug_selector(|| "editor-result-text-view".to_string());
+            if let Some(tabs) = tabs {
+                body = body.child(tabs);
+            }
+            body = body.child(self.render_text_view(cx));
+            return body.into_any_element();
+        }
+
         // 【B15】本地筛选框：只作用于视图层，不重查数据库；输入走 300ms 防抖
         // （`on_filter_input`），有词时给一个 ✕ 清除；「下发源库」开关开着时应用
         // 筛选会重查（入队，结果落新结果集）
@@ -516,6 +540,23 @@ impl ResultPanel {
                 .child(prev)
                 .child(toggle)
                 .child(next)
+                .into_any_element()
+        });
+
+        // 【呈现】显示方式切换（DBeaver 左栏「显示方式」，工具栏同给一个入口）：
+        // 文本视图 = 当前结果（可见列 + 可见行）拼 TSV 纯文本，可选中复制
+        let presentation = self.result_can_copy.then(|| {
+            let queue = self.queue.clone();
+            Button::new("editor-result-presentation")
+                .ghost()
+                .small()
+                .toggled(self.presentation == Presentation::Text)
+                .debug_selector(|| "editor-result-presentation".to_string())
+                .label("文本")
+                .tooltip("显示方式：网格 / 文本")
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::SetPresentation(Presentation::Text));
+                })
                 .into_any_element()
         });
 
@@ -705,6 +746,7 @@ impl ResultPanel {
                     filter: Some(filter),
                     column_sidebar,
                     value_sidebar,
+                    presentation,
                     transpose,
                     compare,
                     commit,
@@ -738,7 +780,7 @@ impl ResultPanel {
             // 主 pane 包一层 flex_1：它自身 `w_full`，在 h_flex 里不包会跟侧栏抢宽
             row = row.child(div().flex_1().min_w_0().h_full().child(result_pane));
             if self.show_value_sidebar {
-                row = row.child(self.render_value_sidebar(cx));
+                row = row.child(self.render_right_sidebar(cx));
             }
             return row.into_any_element();
         }
@@ -929,6 +971,19 @@ impl ResultPanel {
         cx.notify();
     }
 
+    /// 【呈现】显示方式切换（网格 ↔ 文本）。面板级持续——切结果集不重置
+    /// （用户选的是「怎么看结果」，不是某份结果的属性）。
+    pub fn set_presentation(&mut self, presentation: Presentation, cx: &mut Context<Self>) {
+        self.presentation = presentation;
+        cx.notify();
+    }
+
+    /// 【右栏】标签页切换（数值查看器 / 计算 / 分组 / 元数据）
+    pub fn set_right_tab(&mut self, tab: RightTab, cx: &mut Context<Self>) {
+        self.right_tab = tab;
+        cx.notify();
+    }
+
     /// 【侧栏】右栏（值详情）开关：只翻面板状态（网格数据不动）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         self.show_value_sidebar = !self.show_value_sidebar;
@@ -940,6 +995,69 @@ impl ResultPanel {
     pub fn set_selection_pos(&mut self, pos: Option<(usize, usize)>, cx: &mut Context<Self>) {
         self.selection_pos = pos;
         cx.notify();
+    }
+
+    /// 【呈现】文本视图（DBeaver「显示方式 → 文本」）：当前结果拼 TSV 纯文本。
+    ///
+    /// 头部工具行只放「网格」切换（工具栏按钮在网格模式才有，文本模式必须自带
+    /// 出口，否则进了文本出不来）；文本区等宽字体、可滚动、可选中复制——原样
+    /// 文本不经表格，长结果也能全文选中。
+    fn render_text_view(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let queue = self.queue.clone();
+        let grid = self.grid.read(cx);
+        let text = grid.delegate().text_presentation();
+        div()
+            .v_flex()
+            .h_full()
+            .min_h_0()
+            .debug_selector(|| "editor-result-text-view-body".to_string())
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h_6()
+                    .border_b(ui::HAIRLINE)
+                    .child(
+                        Button::new("editor-result-text-head-grid")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-text-head-grid".to_string())
+                            .label("网格")
+                            .on_click({
+                                let queue = queue.clone();
+                                move |_, _window, _app| {
+                                    queue.push(ResultRequest::SetPresentation(Presentation::Grid));
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("editor-result-text-head-text")
+                            .ghost()
+                            .small()
+                            .toggled(true)
+                            .label("文本"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .font_family(mono)
+                            .text_xs()
+                            .whitespace_normal()
+                            .child(SharedString::from(text)),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// 【侧栏】左栏：列结构列表（列名 + 类型 + 隐藏切换）。
@@ -1003,6 +1121,52 @@ impl ResultPanel {
                     .into_any_element()
             })
             .collect();
+        // 【侧栏左栏·顶部】显示方式（DBeaver 左栏第一行）：网格 / 文本。
+        // 与工具栏「文本」同状态；显式 SetPresentation——点「网格」就是回网格。
+        let queue = self.queue.clone();
+        let view_grid = Button::new("editor-result-sidebar-view-grid")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-result-sidebar-view-grid".to_string())
+            .toggled(self.presentation == Presentation::Grid)
+            .label("网格")
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::SetPresentation(Presentation::Grid));
+            });
+        let queue = self.queue.clone();
+        let view_text = Button::new("editor-result-sidebar-view-text")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-result-sidebar-view-text".to_string())
+            .toggled(self.presentation == Presentation::Text)
+            .label("文本")
+            .on_click(move |_, _window, _app| {
+                queue.push(ResultRequest::SetPresentation(Presentation::Text));
+            });
+        let view_seg = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .child(view_grid)
+            .child(view_text);
+
+        // 【侧栏左栏】记录模式开关（DBeaver 左栏下方）：与工具栏转置同状态
+        // （单行记录视图 = 转置视图；只读，Row view 可编辑是已知差距）
+        let queue = self.queue.clone();
+        let record_mode = div()
+            .px_2()
+            .py_1()
+            .child(
+                Switch::new("editor-result-record-mode")
+                    .checked(self.transposed)
+                    .label("记录模式")
+                    .on_click(move |_, _window, _app| {
+                        queue.push(ResultRequest::ToggleTranspose);
+                    }),
+            );
+
         div()
             .w(rems(ui::RESULT_SIDEBAR_LEFT_WIDTH))
             .h_full()
@@ -1010,6 +1174,8 @@ impl ResultPanel {
             .border_r(ui::HAIRLINE)
             .bg(theme.colors.sidebar)
             .debug_selector(|| "editor-result-column-sidebar".to_string())
+            .child(view_seg)
+            .child(record_mode)
             .child(
                 div()
                     .px_2()
@@ -1023,29 +1189,64 @@ impl ResultPanel {
             .into_any_element()
     }
 
-    /// 【侧栏】右栏：选中格的完整值 + 元数据（列名 / 类型 / 位置）。
+    /// 【侧栏】右栏：DBeaver Data Editor 的右侧辅助区，四页签——
+    /// 值详情（数值查看器）/ 计算（列统计）/ 分组（本地 groupby）/ 元数据。
+    ///
+    /// 页签用 kit `TabBar`（不手搓）；切页走队列交宿主 `set_right_tab`。
+    /// 计算 / 分组是纯函数（`column_stats` / `group_by_count`，不引 polars——
+    /// 见 result-panel.md §8.8）；每次渲染按当前可见行现算（中小结果集可接受，
+    /// 大表本地聚合的缓存 / 下发 GROUP BY 是后续项，记在文档）。
+    fn render_right_sidebar(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let queue = self.queue.clone();
+        let labels = ["值详情", "计算", "分组", "元数据"];
+        let children: Vec<Tab> = labels
+            .iter()
+            .map(|label| Tab::new().label(SharedString::from(*label)))
+            .collect();
+        let tab_bar = TabBar::new("editor-result-right-tabs")
+            .segmented()
+            .with_size(Size::Small)
+            .selected_index(self.right_tab as usize)
+            .children(children)
+            .on_click(move |index, _window, _app| {
+                queue.push(ResultRequest::SetRightTab(right_tab_from_index(*index)));
+            });
+        let content = match self.right_tab {
+            RightTab::Value => self.render_value_tab(cx),
+            RightTab::Stats => self.render_stats_tab(cx),
+            RightTab::Group => self.render_group_tab(cx),
+            RightTab::Metadata => self.render_metadata_tab(cx),
+        };
+        div()
+            .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
+            .h_full()
+            .flex_none()
+            .border_l(ui::HAIRLINE)
+            .bg(theme.colors.sidebar)
+            .debug_selector(|| "editor-result-value-sidebar".to_string())
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .px_2()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .child(tab_bar),
+            )
+            .child(content)
+            .into_any_element()
+    }
+
+    /// 【右栏】值详情页（数值查看器）：选中格的完整值 + 元数据（列名 / 类型 / 位置）。
     ///
     /// 与状态行「当前格值」的区别：状态行截断（防撑爆），这里**原样看全**
     /// （长 JSON / 长文本可滚动读完）。选整行 / 没选中 = 空态。
     /// 转置视图下 `col` 语义是转置格（0=行号 / 1=字段 / 2=值），列名段让位。
-    fn render_value_sidebar(&self, cx: &App) -> AnyElement {
+    fn render_value_tab(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.colors.muted_foreground;
         let Some((row, col)) = self.selection_pos else {
-            return div()
-                .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
-                .h_full()
-                .flex_none()
-                .border_l(ui::HAIRLINE)
-                .v_flex()
-                .items_center()
-                .justify_center()
-                .gap_1()
-                .text_xs()
-                .text_color(muted)
-                .debug_selector(|| "editor-result-value-sidebar".to_string())
-                .child("未选中单元格")
-                .into_any_element();
+            return self.sidebar_empty("未选中单元格", cx);
         };
         let grid = self.grid.read(cx);
         let delegate = grid.delegate();
@@ -1071,12 +1272,10 @@ impl ResultPanel {
             _ => "值".to_string(),
         };
         div()
-            .w(rems(ui::RESULT_SIDEBAR_RIGHT_WIDTH))
-            .h_full()
-            .flex_none()
-            .border_l(ui::HAIRLINE)
-            .bg(theme.colors.sidebar)
-            .debug_selector(|| "editor-result-value-sidebar".to_string())
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .debug_selector(|| "editor-result-value-tab".to_string())
             .child(
                 div()
                     .h_flex()
@@ -1101,6 +1300,220 @@ impl ResultPanel {
                     .whitespace_normal()
                     .child(SharedString::from(value)),
             )
+            .into_any_element()
+    }
+
+    /// 【右栏】计算页（DBeaver「计算」）：选中列的 count / NULL / min / max / avg / sum。
+    ///
+    /// 数据 = `column_stats(可见行, 数据列)`（纯函数；与列头菜单弹层同口径）。
+    /// 数值统计只在列里有可解析数值样本时才填（文本 / BLOB 只计 count / NULL）。
+    fn render_stats_tab(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let Some((_, col)) = self.selection_pos.filter(|(_, col)| *col > 0 && !self.transposed)
+        else {
+            return self.sidebar_empty("选中一个数据列查看统计", cx);
+        };
+        let data_col = col - 1;
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let rows = delegate.visible_rows();
+        let stats = result_grid::column_stats(&rows, data_col);
+        let name = delegate
+            .columns()
+            .get(data_col)
+            .cloned()
+            .unwrap_or_else(|| "列".to_string());
+        let items: Vec<(String, String)> = vec![
+            ("非空".into(), stats.count.to_string()),
+            ("NULL".into(), stats.nulls.to_string()),
+            ("最小值".into(), fmt_stat(stats.min)),
+            ("最大值".into(), fmt_stat(stats.max)),
+            ("均值".into(), fmt_stat(stats.avg)),
+            ("合计".into(), fmt_stat(stats.sum)),
+        ];
+        div()
+            .flex_1()
+            .min_h_0()
+            .debug_selector(|| "editor-result-stats-tab".to_string())
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(format!("「{name}」统计"))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .children(items.into_iter().map(|(k, v)| kv_row(&k, &v, cx))),
+            )
+            .into_any_element()
+    }
+
+    /// 【右栏】分组页（DBeaver「分组」）：按选中列本地 groupby 计数。
+    ///
+    /// 纯函数 `group_by_count`（保留首现顺序，NULL 独立成组）；大表口径是
+    /// 下发 GROUP BY 重查（见 §8.8），本地页只服务中小结果集的即时分组。
+    fn render_group_tab(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let Some((_, col)) = self.selection_pos.filter(|(_, col)| *col > 0 && !self.transposed)
+        else {
+            return self.sidebar_empty("选中一个数据列查看分组", cx);
+        };
+        let data_col = col - 1;
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let rows = delegate.visible_rows();
+        let groups = ResultGridDelegate::group_by_count(&rows, data_col);
+        let name = delegate
+            .columns()
+            .get(data_col)
+            .cloned()
+            .unwrap_or_else(|| "列".to_string());
+        let rows_el: Vec<AnyElement> = groups
+            .iter()
+            .map(|(value, count)| {
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .h_6()
+                    .text_xs()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(SharedString::from(value.clone())),
+                    )
+                    .child(div().text_xs().text_color(muted).child(count.to_string()))
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .flex_1()
+            .min_h_0()
+            .debug_selector(|| "editor-result-group-tab".to_string())
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(format!("按「{name}」分组 · {} 组", groups.len()))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .children(rows_el),
+            )
+            .into_any_element()
+    }
+
+    /// 【右栏】元数据页（DBeaver「元数据」）：选中列的列名 / 类型 / 来源表 /
+    /// 来源列 / 注释 / 可空 / 默认值（驱动没报注释时只给列名 / 类型 / 隐藏态）。
+    fn render_metadata_tab(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let Some((_, col)) = self.selection_pos.filter(|(_, col)| *col > 0 && !self.transposed)
+        else {
+            return self.sidebar_empty("选中一个数据列查看元数据", cx);
+        };
+        let data_col = col - 1;
+        let grid = self.grid.read(cx);
+        let delegate = grid.delegate();
+        let name = delegate
+            .columns()
+            .get(data_col)
+            .cloned()
+            .unwrap_or_else(|| "列".to_string());
+        let type_name = delegate
+            .column_types()
+            .get(data_col)
+            .and_then(|t| t.as_ref())
+            .map(|t| t.name.clone());
+        let annotation = delegate.column_annotations().get(data_col).and_then(|a| a.clone());
+        let mut items: Vec<(String, String)> = vec![
+            ("列名".into(), name.clone()),
+            (
+                "类型".into(),
+                type_name.unwrap_or_else(|| "未知".to_string()),
+            ),
+            (
+                "可见".into(),
+                if delegate.is_hidden_column(data_col) {
+                    "隐藏".to_string()
+                } else {
+                    "显示".to_string()
+                },
+            ),
+        ];
+        if let Some(annotation) = annotation {
+            if let Some(table) = annotation.source_table {
+                items.push(("来源表".into(), table));
+            }
+            if let Some(source) = annotation.source_column {
+                items.push(("来源列".into(), source));
+            }
+            if let Some(comment) = annotation.comment {
+                items.push(("注释".into(), comment));
+            }
+            if let Some(data_type) = annotation.data_type {
+                items.push(("驱动类型".into(), data_type));
+            }
+            if let Some(nullable) = annotation.nullable {
+                items.push(("可空".into(), if nullable { "是".into() } else { "否".into() }));
+            }
+            if let Some(default_value) = annotation.default_value {
+                items.push(("默认值".into(), default_value));
+            }
+        }
+        div()
+            .flex_1()
+            .min_h_0()
+            .debug_selector(|| "editor-result-metadata-tab".to_string())
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::from(name)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .children(items.into_iter().map(|(k, v)| kv_row(&k, &v, cx))),
+            )
+            .into_any_element()
+    }
+
+    /// 【侧栏】右栏各页共用的空态（居中灰字；页内容区 `flex_1`）
+    fn sidebar_empty(&self, text: &str, cx: &App) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .px_2()
+            .text_xs()
+            .text_color(cx.theme().colors.muted_foreground)
+            .child(SharedString::from(text))
             .into_any_element()
     }
 
@@ -1261,4 +1674,55 @@ impl ResultPanel {
     pub fn pushdown(&self) -> bool {
         self.pushdown
     }
+}
+
+/// 【右栏】页签下标 → 枚举（TabBar 回调用；与 `RightTab` 定义顺序一致——
+/// Value=0 / Stats=1 / Group=2 / Metadata=3）
+fn right_tab_from_index(index: usize) -> RightTab {
+    match index {
+        1 => RightTab::Stats,
+        2 => RightTab::Group,
+        3 => RightTab::Metadata,
+        _ => RightTab::Value,
+    }
+}
+
+/// 【右栏】键值行（计算页 / 元数据页共用）：左标签右值，值超长截断防挤
+fn kv_row(label: &str, value: &str, cx: &App) -> AnyElement {
+    let muted = cx.theme().colors.muted_foreground;
+    div()
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .h_5()
+        .text_xs()
+        .child(
+            div()
+                .w(rems(ui::RESULT_SIDEBAR_KV_LABEL_WIDTH))
+                .flex_none()
+                .text_color(muted)
+                .child(SharedString::from(label)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .child(SharedString::from(value)),
+        )
+        .into_any_element()
+}
+
+/// 【右栏】统计值格式化：整数样去尾零（1.0 → 1），否则保留两位；无数值样本 = —
+fn fmt_stat(value: Option<f64>) -> String {
+    value
+        .map(|v| {
+            if v.fract() == 0.0 {
+                format!("{}", v as i64)
+            } else {
+                format!("{:.2}", v)
+            }
+        })
+        .unwrap_or_else(|| "—".to_string())
 }

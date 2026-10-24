@@ -845,6 +845,59 @@ impl ResultGridDelegate {
             .collect()
     }
 
+    /// 【元数据】列注释访问器（与 `columns` 同序；空 = 这份结果没报注释）。
+    /// 面板右栏「元数据」页用它画来源表 / 来源列 / 注释 / 类型 / 可空 / 默认值。
+    pub fn column_annotations(&self) -> &[Option<ColumnAnnotation>] {
+        &self.column_annotations
+    }
+
+    /// 【呈现】文本视图：当前结果拼成 TSV 纯文本（DBeaver「显示方式 → 文本」）。
+    ///
+    /// 列头 = 可见数据列名；行 = `visible_rows()`（已滤筛选 / 排序）按可见列取。
+    /// 约定与导出一致：NULL 原样输出、Tab 分隔、行末不带 `\t`。隐藏列不参与。
+    pub fn text_presentation(&self) -> String {
+        let visible: Vec<usize> = (0..self.columns.len())
+            .filter(|col| !self.hidden.contains(col))
+            .collect();
+        let header: Vec<&str> = visible
+            .iter()
+            .map(|col| self.columns[*col].as_str())
+            .collect();
+        let mut lines = vec![header.join("\t")];
+        for row in self.visible_rows() {
+            let cells: Vec<&str> = visible
+                .iter()
+                .filter_map(|col| row.get(*col).map(String::as_str))
+                .collect();
+            lines.push(cells.join("\t"));
+        }
+        lines.join("\n")
+    }
+
+    /// 【分组】按一列本地分组计数（纯函数，不引 polars——见 result-panel.md §8.8 选型记录）。
+    ///
+    /// 保留首次出现顺序（与网格行序一致）；NULL 作为独立组值原样输出；
+    /// 越界列返回空组（面板侧先取可见列，防御性兜底）。
+    pub fn group_by_count(rows: &[Vec<String>], column: usize) -> Vec<(String, usize)> {
+        // 越界列：首行都没有这一列，说明列不存在（面板侧先取可见列，防御性兜底）
+        let Some(first) = rows.first() else {
+            return Vec::new();
+        };
+        if first.len() <= column {
+            return Vec::new();
+        }
+        let mut groups: Vec<(String, usize)> = Vec::new();
+        for row in rows {
+            let value = row.get(column).cloned().unwrap_or_default();
+            if let Some((_, count)) = groups.iter_mut().find(|(v, _)| *v == value) {
+                *count += 1;
+            } else {
+                groups.push((value, 1));
+            }
+        }
+        groups
+    }
+
     /// 【B15】当前排序（数据列下标，是否降序）
     pub fn sort_state(&self) -> Option<(usize, bool)> {
         self.sort
@@ -2582,6 +2635,8 @@ pub struct ResultControls {
     pub column_sidebar: Option<AnyElement>,
     /// 【侧栏】右栏（值详情）开关（面板构造：翻转 `show_value_sidebar`）
     pub value_sidebar: Option<AnyElement>,
+    /// 【呈现】显示方式切换（网格 / 文本；DBeaver 左栏「显示方式」，工具栏同给一个入口）
+    pub presentation: Option<AnyElement>,
     /// 【P2-4】转置视图开关 +（激活时）上一行 / 下一行导航（单行转置，DBeaver 式）
     pub transpose: Option<AnyElement>,
     /// 【并排对比】对比模式开关（两份以上结果时才给；开启后结果区双栏并排）
@@ -2752,6 +2807,7 @@ pub fn render(
                         .children(controls.filter)
                         .children(controls.column_sidebar)
                         .children(controls.value_sidebar)
+                        .children(controls.presentation)
                         .children(controls.transpose)
                         .children(controls.compare)
                         .children(controls.commit)
@@ -3951,6 +4007,65 @@ mod tests {
         assert!(!grid.is_hidden_column(0), "第 0 列恢复");
         assert!(grid.is_hidden_column(1), "第 1 列仍隐藏");
         assert_eq!(grid.visible_column_count(), 2);
+    }
+
+    /// 【呈现】文本视图：可见列头 + 可见行拼 TSV；隐藏列不参与；行序随筛选
+    #[test]
+    fn text_presentation_skips_hidden_columns_and_follows_view_rows() {
+        let mut grid = ResultGridDelegate::default();
+        grid.set_data(
+            vec![
+                "id".to_string(),
+                "name".to_string(),
+                "blob".to_string(),
+            ],
+            vec![
+                vec!["1".to_string(), "alice".to_string(), "aabb".to_string()],
+                vec!["2".to_string(), "bob".to_string(), "ccdd".to_string()],
+            ],
+        );
+        let text = grid.text_presentation();
+        assert_eq!(
+            text,
+            "id\tname\tblob\n1\talice\taabb\n2\tbob\tccdd",
+            "全列 TSV（列头 + 行）"
+        );
+        grid.hide_column(2);
+        assert_eq!(
+            grid.text_presentation(),
+            "id\tname\n1\talice\n2\tbob",
+            "隐藏列不参与文本"
+        );
+        grid.set_filter("bob");
+        assert_eq!(grid.text_presentation(), "id\tname\n2\tbob", "筛选只留命中的行");
+    }
+
+    /// 【分组】本地 groupby 计数：保留首次出现顺序，NULL 独立成组
+    #[test]
+    fn group_by_count_keeps_order_and_null_group() {
+        let rows = vec![
+            vec!["a".to_string(), "x".to_string()],
+            vec!["b".to_string(), "NULL".to_string()],
+            vec!["a".to_string(), "x".to_string()],
+            vec!["c".to_string(), "y".to_string()],
+        ];
+        let groups = ResultGridDelegate::group_by_count(&rows, 0);
+        assert_eq!(
+            groups,
+            vec![
+                ("a".to_string(), 2),
+                ("b".to_string(), 1),
+                ("c".to_string(), 1),
+            ],
+            "首现顺序 + 计数"
+        );
+        let by_null = ResultGridDelegate::group_by_count(&rows, 1);
+        assert_eq!(
+            by_null,
+            vec![("x".to_string(), 2), ("NULL".to_string(), 1), ("y".to_string(), 1)],
+            "NULL 独立成组"
+        );
+        assert!(ResultGridDelegate::group_by_count(&rows, 9).is_empty(), "越界列空组");
     }
 
     /// 【P2-3】列统计：NULL 计空值，数值列给 min/max/avg/sum，文本列只给计数

@@ -90,3 +90,7 @@ pub const RESULT_SIDEBAR_LEFT_WIDTH: f32 = 10.0;
 /// 结果面板**右栏（值详情）**宽（20rem = 320px）：选中格完整值 + 列名 / 类型 / 位置。
 /// 比左栏宽一档：长文本 / JSON 要在这里尽量多显示（截断交给网格，详情看全）。
 pub const RESULT_SIDEBAR_RIGHT_WIDTH: f32 = 20.0;
+
+/// 右栏「计算 / 元数据」键值行的**标签列宽**（4.5rem = 72px）：
+/// 「最小值 / 来源表 / 默认值」这类最长约四个字，72px 放下不挤值列
+pub const RESULT_SIDEBAR_KV_LABEL_WIDTH: f32 = 4.5;
