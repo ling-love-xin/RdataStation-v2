@@ -185,6 +185,8 @@ fn main() {
                 use_duckdb_fed: Some(c.use_duckdb_fed),
                 metadata_path: None,
                 schema_name: None,
+                // 演示种子按生产默认口径保存凭据（对齐 data_source_service 的 unwrap_or(true)）。
+                save_password: true,
             })
             .await
             .unwrap_or_else(|e| panic!("写入连接 {} 失败: {e}", c.id));

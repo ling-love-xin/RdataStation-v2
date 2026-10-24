@@ -452,7 +452,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         // 等它真的开始跑（取消要中断的是“跑着的查询”，不是“刚提交”那个瞬间）
         std::thread::sleep(Duration::from_millis(400));
         let cancel_started = Instant::now();
-        shared.cancel().expect("中断应当被接受");
+        shared.cancel_for(&document).expect("中断应当被接受");
         let cancelled = collect_outcomes(&shared, 1);
         let cancel_waited = cancel_started.elapsed();
         let error = cancelled[0]

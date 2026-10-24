@@ -49,6 +49,8 @@ fn save_input<'a>(
         use_duckdb_fed: Some(true),
         metadata_path: None,
         schema_name: None,
+        // 测试按生产默认口径保存凭据（对齐 data_source_service 的 unwrap_or(true)）。
+        save_password: true,
     }
 }
 
