@@ -71,7 +71,28 @@ DBeaver 式参数绑定（B16，2026-10-24 盘点确认已落地）→
 
 ## 建议优先级
 
-1. 阻塞阶段②：队列按连接分组并发 + 取消按作业句柄（任务 #52，进行中）
-2. 补全缓存 MetadataCache TTL/generation（任务 #53）
-3. LSP 接入：通用模式 python 诊断+补全+hover（任务 #54）
+1. ~~阻塞阶段②：队列按连接分组并发 + 取消按作业句柄（任务 #52，进行中）~~ ✅ 已提交 `7ac86854`（2026-10-24）
+2. 补全缓存 MetadataCache TTL/generation（任务 #53）：代码已提交 `75c8bb07`，**测试未验**（当时被并行线中间态阻断；现 workbench 可编译，`cargo test -p rds-workbench --lib editor_completion` 单命令可验）
+3. #54 语义层（engine 四能力全部完成：`c7de3e06` 诊断 / `129eb656` hover / `d69a971f` 签名 / `2f90e066` 手册 / `1136862f` 跳转 + refs）——**上层接线进行中**：
+   - ① 语义诊断 editor 层已接（`96be41a8`：`Request.dialect` + Catalog→CatalogTable + diagnostics 语义段 + 3 测试），**运行时待 workbench 注入目录快照 + `driver_to_dialect` 方言**（scan 路径空目录 → 语义段跳过）
+   - ② SQL hover 已接（`cd23301e`：`lsp/sql_hover.rs` + `install_hover` 泛型化 + Sql 分支挂载，函数签名/中文可测；表/列列列表待目录注入）
+   - ③+ 函数手册 Dialog **代码已接待验**（`function_manual.rs` + `FunctionManual` action + `Ctrl+Shift+M` + 工具栏书本按钮 + 测试；编译验证被并行线 result_panel 重构中间态阻塞，等交口后 `cargo test -p rds-editor --lib` 验证提交）
+   - ③ 签名帮助 / ④ 跳转：未接（内核无签名槽位需自建弹层；跳转定位在 workbench/database 侧）
 4. P3 钻取（下期）
+
+## 七、文档残留（#54 相关，措辞过时待改）
+
+| 位置 | 内容 |
+| --- | --- |
+| `editor-dev-plan.md` L29 / L30 / L199 | 描述「0.10.33 前静默丢语句」（sqlglot 已升 0.10.33，`d411cfb3`） |
+| `README.md` L86 | 同上措辞 |
+| `editor-prototype-design.md` L601 | 同上措辞 |
+
+## 八、未决项（不编造，记录现状）
+
+- AGENTS.md 标「GPUI-kit 0.8.x」而 vendor / 代码按 0.7.1（版本口径是否有意，未确认）
+- 执行上下文模型（DBeaver per-context 独立连接）：讨论定稿未开工（0.2.4 不实现，见 `../connection/execution-context-model.md`）
+- 列宽持久化（DataTable 拖拽现成，不持久化）：待评估是否落 NavCache/会话
+- analyze 路径结果无列类型/注释（`ResultSet` 无类型字段，已知边界）
+- 函数手册官方文档 URL：workbench 按「引擎+函数名」生成（真实环境验证后定）
+- 列类型进目录后 hover 补类型：`annotate_types` 现多数表达式返回 Unknown，暂不做
