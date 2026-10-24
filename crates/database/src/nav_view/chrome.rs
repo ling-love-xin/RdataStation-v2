@@ -942,6 +942,45 @@ impl NavView {
                     entity.update(app, |this, cx| this.nav_open_properties(window, cx));
                 }
             })
+            // S4-② 键盘补全：Home / End 跳首尾、PageUp / PageDown 翻页。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavHome, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move_edge(true, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavEnd, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move_edge(false, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavPageUp, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move_page(-1, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavPageDown, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move_page(1, cx));
+                }
+            })
+            // S4-② 前缀跳转：树获得焦点时按字母键跳到下一个以此开头的行。
+            // 搜索框有自己的 Input 焦点（字符进搜索框不落这里）；这里只收
+            // 「树键盘漫游中」的单字符键（gpui 的 `KeyDownEvent` 在 bubble 阶段）。
+            .on_key_down({
+                let entity = cx.entity();
+                move |ev, _window, app| {
+                    let key = ev.keystroke.key.chars().next();
+                    if let Some(ch) = key {
+                        if ch.is_alphabetic() {
+                            entity.update(app, |this, cx| this.nav_jump_prefix(ch, cx));
+                        }
+                    }
+                }
+            })
             .on_action({
                 let entity = cx.entity();
                 move |_: &NavReorderUp, _window, app| {

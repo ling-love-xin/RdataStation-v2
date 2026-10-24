@@ -1164,6 +1164,16 @@ impl crate::driver::MetadataBrowser for SqliteDatabase {
         false
     }
 
+    // S5-A① 能力位：SQLite 无存储过程 / 序列概念（自增走 AUTOINCREMENT），
+    // 视图与触发器支持（sqlite_master 内省）。default true 的类别不覆写。
+    fn supports_routines(&self) -> bool {
+        false
+    }
+
+    fn supports_sequences(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         Ok(vec![crate::driver::NodeInfo::new(
             "main",

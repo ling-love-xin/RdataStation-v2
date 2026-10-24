@@ -922,6 +922,11 @@ impl MetadataBrowser for MySqlNativeDatabase {
         false
     }
 
+    // S5-A① 能力位：与 sqlx 版同（MySQL 无序列概念；存储过程 / 函数与触发器支持）。
+    fn supports_sequences(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")

@@ -1171,6 +1171,16 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         false
     }
 
+    // S5-A① 能力位：DuckDB 支持视图 / 序列内省；无存储过程（标量/表函数
+    // 走宏，无独立例程序语义）与触发器（`CREATE TRIGGER` 不支持）。
+    fn supports_routines(&self) -> bool {
+        false
+    }
+
+    fn supports_triggers(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         Ok(vec![crate::driver::NodeInfo::new(
             "main",

@@ -130,7 +130,7 @@ impl NavView {
         let mut order = self.nav_order.borrow_mut();
         order.clear();
         for row in &self.rows {
-            let (conn_id, path, property, has_children) = match row {
+            let (conn_id, path, property, has_children, name) = match row {
                 NavRow::GroupHeader { .. } => continue,
                 NavRow::Connection { conn, .. } => (
                     conn.id.clone(),
@@ -145,18 +145,20 @@ impl NavView {
                         kind: PropertyKind::Connection,
                     }),
                     true,
+                    Some(conn.name.clone()),
                 ),
                 // 引用行只指路：不展开、不打开属性（Enter / ←→ 落在它上面是无操作）。
-                NavRow::Reference { conn, .. } => (conn.id.clone(), None, None, false),
+                NavRow::Reference { conn, .. } => (conn.id.clone(), None, None, false, None),
                 NavRow::Tree { node, .. } => (
                     node.connection_id.clone(),
                     node.expand_path.clone(),
                     node.property.clone(),
                     node.has_children,
+                    Some(node.name.clone()),
                 ),
                 // 「更多」/「已定位」行自己带点击行为（见 `render_more_row`）。
                 NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
-                    (node.connection_id.clone(), None, None, false)
+                    (node.connection_id.clone(), None, None, false, None)
                 }
                 // 搜索命中行：Enter 开属性面板（与行单击同一件事）；它不在树上，
                 // 没有展开路径（←→ 落在它上面是无操作，要定位得点行尾的「定位」）。
@@ -165,6 +167,7 @@ impl NavView {
                     None,
                     nav_search_hit_property(hit),
                     false,
+                    None,
                 ),
             };
             order.push(NavOrderItem {
@@ -174,6 +177,7 @@ impl NavView {
                 path,
                 property,
                 has_children,
+                name,
             });
         }
     }
@@ -1601,6 +1605,24 @@ impl NavView {
                     }
                 })
                 // 右键菜单（连接节点）：连接/断开、编辑、数据库可见性、查看属性、分组/标签、复制、刷新。
+                // S4-① 右键先选中：`context_menu` 的右键 handler 会 `stop_propagation`
+                // （gpui-component context_menu.rs），必须先注册 `on_mouse_down(Right)`
+                // 把行置为选中（VS Code 同款：右键不取消选中、单选时选中该行），再弹菜单。
+                .on_mouse_down(
+                    MouseButton::Right,
+                    {
+                        let entity = cx.entity();
+                        let key = conn.id.clone();
+                        move |_event, _window, app| {
+                            entity.update(app, |this, cx| {
+                                if this.nav.borrow().selected_key.as_deref() != Some(key.as_str()) {
+                                    this.set_nav_selected(Some(key.clone()), cx);
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    },
+                )
                 .context_menu({
                     let entity = cx.entity();
                     let host = self.host.clone();
@@ -1678,11 +1700,16 @@ impl NavView {
                                 });
                             }))
                             .item(
-                                PopupMenuItem::new("数据库可见性…").on_click(move |_, window, app| {
-                                    let cid = cid_vis.clone();
-                                    let host_vis = host_vis.clone();
-                                    host_vis.open_visible_databases_dialog(&cid, window, app);
-                                }),
+                                // S4-③ 能力门控（blanco 参照）：可见性弹框要**同步查库**（打开时
+                                // 逐 catalog 取 schema），未连接时点开必超时——禁用而非隐藏，
+                                // 保持菜单结构稳定（DBeaver 同款：不可用项置灰）。
+                                PopupMenuItem::new("数据库可见性…")
+                                    .disabled(!is_connected)
+                                    .on_click(move |_, window, app| {
+                                        let cid = cid_vis.clone();
+                                        let host_vis = host_vis.clone();
+                                        host_vis.open_visible_databases_dialog(&cid, window, app);
+                                    }),
                             )
                             .separator()
                             .item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
@@ -2186,7 +2213,24 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             }
         });
         // 右键菜单（对象节点）：查看数据 / 属性 / 复制 / 刷新。
-        block = block.child(row.context_menu({
+        // S4-① 右键先选中（同连接行）：`context_menu` 会 stop 传播，须先注册右键按下。
+        block = block.child(
+            row.on_mouse_down(
+                MouseButton::Right,
+                {
+                    let entity = cx.entity();
+                    let key = node.key.clone();
+                    move |_event, _window, app| {
+                        entity.update(app, |this, cx| {
+                            if this.nav.borrow().selected_key.as_deref() != Some(key.as_str()) {
+                                this.set_nav_selected(Some(key.clone()), cx);
+                                cx.notify();
+                            }
+                        });
+                    }
+                },
+            )
+            .context_menu({
             let entity = cx.entity();
             let host = self.host.clone();
             let conn_id = node.connection_id.clone();

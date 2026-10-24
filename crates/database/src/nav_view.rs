@@ -54,8 +54,8 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 use crate::commands::{
-    NavClearSearch, NavCollapse, NavDown, NavExpand, NavOpenProperties, NavRename,
-    NavReorderDown, NavReorderUp, NavUp,
+    NavClearSearch, NavCollapse, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties,
+    NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp, NavUp,
 };
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
@@ -380,6 +380,9 @@ pub struct NavOrderItem {
     property: Option<PropertyRef>,
     has_children: bool,
     expanded: bool,
+    /// 显示名（S4-② 前缀跳转用：按首字母跳到下一个以此开头的行）。
+    /// 连接行 = 连接名，树行 = 节点名；「更多 / 已定位 / 搜索命中」无稳定名称，置空不参与。
+    name: Option<String>,
 }
 
 /// 「未分组」固定分组的伪 ID（收纳不属于任何自定义分组的连接）。
@@ -646,6 +649,78 @@ impl NavView {
         // 选中走唯一入口（写状态 + 排一次防抖落库）。
         self.set_nav_selected(Some(key.clone()), cx);
         // 键盘漫游跟着滚：列表只画视口内的行，不滚的话选中会跑到屏外。
+        self.nav_scroll_to_key(&key);
+        cx.notify();
+    }
+
+    /// S4-② 键盘补全：跳到首 / 尾行（`Home` / `End`）。
+    fn nav_move_edge(&mut self, home: bool, cx: &mut Context<Self>) {
+        let order = self.nav_order.borrow();
+        if order.is_empty() {
+            return;
+        }
+        let idx = if home { 0 } else { order.len() - 1 };
+        let key = order[idx].key.clone();
+        drop(order);
+        self.set_nav_selected(Some(key.clone()), cx);
+        self.nav_scroll_to_key(&key);
+        cx.notify();
+    }
+
+    /// S4-② 键盘补全：按页跳（`PageUp` / `PageDown`）。
+    ///
+    /// 步长 = 固定 10 行：虚拟列表不暴露「可视行数」（`list_scroll` 无对应查询 API），
+    /// 取与终端同款的固定步长；DBeaver 是按视口翻页，这里做固定步长属有意取舍。
+    fn nav_move_page(&mut self, delta: isize, cx: &mut Context<Self>) {
+        const NAV_PAGE_STEP: isize = 10;
+        let order = self.nav_order.borrow();
+        if order.is_empty() {
+            return;
+        }
+        let current = self.nav.borrow().selected_key.clone();
+        let idx = current.and_then(|k| order.iter().position(|i| i.key == k));
+        let next = match idx {
+            None => 0,
+            Some(i) => (i as isize + delta * NAV_PAGE_STEP).clamp(0, order.len() as isize - 1) as usize,
+        };
+        let key = order[next].key.clone();
+        drop(order);
+        self.set_nav_selected(Some(key.clone()), cx);
+        self.nav_scroll_to_key(&key);
+        cx.notify();
+    }
+
+    /// S4-② 键盘补全：前缀跳转——按首字母跳到**下一个**以此开头的行（从选中行之后循环）。
+    ///
+    /// 不区分大小写；只匹配带显示名的行（连接 / 树行），「更多 / 已定位 / 搜索命中」跳过。
+    fn nav_jump_prefix(&mut self, ch: char, cx: &mut Context<Self>) {
+        let order = self.nav_order.borrow();
+        if order.is_empty() {
+            return;
+        }
+        let lower = ch.to_lowercase().next().unwrap_or(ch);
+        let current = self.nav.borrow().selected_key.clone();
+        let start = current
+            .and_then(|k| order.iter().position(|i| i.key == k))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        // 从当前位置之后循环找第一个匹配项。
+        let hit = (0..order.len())
+            .map(|step| (start + step) % order.len())
+            .find(|&ix| {
+                order[ix]
+                    .name
+                    .as_deref()
+                    .and_then(|n| n.chars().next())
+                    .map(|c| c.to_lowercase().next() == Some(lower))
+                    .unwrap_or(false)
+            });
+        let Some(ix) = hit else {
+            return;
+        };
+        let key = order[ix].key.clone();
+        drop(order);
+        self.set_nav_selected(Some(key.clone()), cx);
         self.nav_scroll_to_key(&key);
         cx.notify();
     }

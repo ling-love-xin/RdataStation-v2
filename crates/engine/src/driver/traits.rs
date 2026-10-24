@@ -271,6 +271,36 @@ pub trait MetadataBrowser: Send + Sync {
         Ok(vec![])
     }
 
+    // ---- S5-A① 对象类别能力位（导航据此短路内省，免一次无谓查询）----
+    //
+    // 默认全 `true`（A② 能力降级模式：未知驱动保底保留全部类别，不藏对象）；
+    // 明确不支持的驱动覆写为 `false`。文件夹在树上**仍然固定显示**（用户决策
+    // 2026-10-08：所有类别固定显示，点击空类别显示空态）——能力位只省查询，
+    // 不做显隐。
+    //
+    // 为什么落在 `MetadataBrowser` 而不是 `DataSourceMeta`：导航消费的是「这个
+    // 连接跑起来的内省能力」，与驱动静态 meta 分开（连接可用性 / 指纹影响前者）。
+
+    /// 是否支持视图内省（`get_tables` 已含视图时可忽略本位，默认 `true`）。
+    fn supports_views(&self) -> bool {
+        true
+    }
+
+    /// 是否支持存储过程 / 函数内省（`get_routines`）。
+    fn supports_routines(&self) -> bool {
+        true
+    }
+
+    /// 是否支持序列内省（`get_sequences`）。
+    fn supports_sequences(&self) -> bool {
+        true
+    }
+
+    /// 是否支持触发器内省（`get_triggers`）。
+    fn supports_triggers(&self) -> bool {
+        true
+    }
+
     /// 这条连接是否**只覆盖一个 catalog**。
     ///
     /// `true` 的驱动（PostgreSQL：一条连接绑定一个数据库，`information_schema` 只看得到当前库）：
@@ -732,5 +762,56 @@ impl PoolStatus {
             max_connections: 10,
             min_connections: 2,
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_browser_capability_tests {
+    //! S5-A①/A②：能力位默认值（保底全开）+ 覆写路径。
+    //!
+    //! 新驱动接入时只覆写「明确不支持」的类别；不覆写 = 全部支持（保底，不藏对象）。
+
+    use super::*;
+    use crate::driver::NodeInfo;
+
+    struct DummyBrowser;
+
+    #[async_trait::async_trait]
+    impl MetadataBrowser for DummyBrowser {
+        async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
+            Ok(vec![])
+        }
+        async fn get_schemas(&self, _catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
+            Ok(vec![])
+        }
+        async fn get_tables(
+            &self,
+            _catalog: &str,
+            _schema: &str,
+        ) -> Result<Vec<NodeInfo>, CoreError> {
+            Ok(vec![])
+        }
+        async fn get_table_detail(
+            &self,
+            _catalog: &str,
+            _schema: &str,
+            _table: &str,
+        ) -> Result<NodeDetail, CoreError> {
+            Ok(NodeDetail {
+                node: NodeInfo::new(_table, SchemaObjectKind::Table),
+                columns: vec![],
+                index_count: None,
+                row_count_estimate: None,
+            })
+        }
+    }
+
+    #[test]
+    fn default_capabilities_are_all_true() {
+        let b = DummyBrowser;
+        assert!(b.supports_views(), "保底不藏对象：视图默认支持");
+        assert!(b.supports_routines(), "保底不藏对象：例程默认支持");
+        assert!(b.supports_sequences(), "保底不藏对象：序列默认支持");
+        assert!(b.supports_triggers(), "保底不藏对象：触发器默认支持");
     }
 }

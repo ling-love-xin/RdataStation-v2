@@ -92,6 +92,30 @@ impl MetadataService {
             .unwrap_or(true))
     }
 
+    /// S5-A① 对象类别能力位：驱动是否支持该类别的内省。
+    ///
+    /// 未知驱动保底返回 `true`（不藏对象）；导航据此**短路内省**（省一次无谓查询），
+    /// 文件夹仍固定显示（用户决策 2026-10-08），点开空类别显示空态。
+    pub async fn supports_object_folder(
+        &self,
+        conn_id: &str,
+        folder: crate::model::NavFolder,
+    ) -> Result<bool, CoreError> {
+        let db = self.get_database(conn_id).await?;
+        let Some(browser) = db.as_metadata_browser() else {
+            return Ok(true);
+        };
+        let supported = match folder {
+            crate::model::NavFolder::Tables | crate::model::NavFolder::Views => {
+                browser.supports_views() || matches!(folder, crate::model::NavFolder::Tables)
+            }
+            crate::model::NavFolder::Routines => browser.supports_routines(),
+            crate::model::NavFolder::Sequences => browser.supports_sequences(),
+            crate::model::NavFolder::Triggers => browser.supports_triggers(),
+        };
+        Ok(supported)
+    }
+
     pub async fn list_schemas(
         &self,
         conn_id: &str,

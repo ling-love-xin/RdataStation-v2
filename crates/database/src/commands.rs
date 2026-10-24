@@ -24,6 +24,14 @@ actions!(
         /// 语义与资产库的 `ClearSearch` 一致（原型设计 §6.3 的「`Esc` 清空」）。
         NavClearSearch,
         /// 重命名（`F2`）：选中连接 → 打开编辑对话框（与行尾 `✎` 同一入口）。
-        NavRename
+        NavRename,
+        /// S4-② 键盘补全：跳到首行（`Home`）。
+        NavHome,
+        /// S4-② 键盘补全：跳到末行（`End`）。
+        NavEnd,
+        /// S4-② 键盘补全：上翻一页（`PageUp`，固定 10 行步长）。
+        NavPageUp,
+        /// S4-② 键盘补全：下翻一页（`PageDown`，固定 10 行步长）。
+        NavPageDown
     ]
 );

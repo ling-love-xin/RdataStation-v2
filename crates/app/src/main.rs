@@ -31,8 +31,8 @@ use settings::model::AppearanceMode;
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavClearSearch, NavCollapse,
-    NavDown, NavExpand, NavOpenProperties, NavRename, NavReorderDown, NavReorderUp, NavUp,
-    QuickOpenLocate,
+    NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties, NavPageDown, NavPageUp, NavRename,
+    NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate,
     SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile,
     ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject,
     TestConnection, ToggleQuickOpen,
@@ -282,6 +282,11 @@ fn run_app() {
                 KeyBinding::new("enter", NavOpenProperties, Some("database-nav")),
                 // F2 重命名：选中连接 → 编辑对话框（`database-nav` 专属，与草稿箱/资产库的 F2 不冲突）。
                 KeyBinding::new("f2", NavRename, Some("database-nav")),
+                // S4-② 键盘补全：Home/End 跳首尾、PageUp/PageDown 翻页（仅导航面板焦点内生效）。
+                KeyBinding::new("home", NavHome, Some("database-nav")),
+                KeyBinding::new("end", NavEnd, Some("database-nav")),
+                KeyBinding::new("pageup", NavPageUp, Some("database-nav")),
+                KeyBinding::new("pagedown", NavPageDown, Some("database-nav")),
                 // 清空搜索框（只清搜索词，facet 筛选不动；语义与资产库的 `Esc` 一致）。
                 KeyBinding::new("escape", NavClearSearch, Some("database-nav")),
                 // 条目重排（对齐 VS Code 的 Alt+↑/↓）：只改顺序，不改光标位置。

@@ -1436,6 +1436,12 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         false
     }
 
+    // S5-A① 能力位：MySQL 的 database 即 schema（无独立 Schema 层）；无序列概念
+    // （自增走 AUTO_INCREMENT），存储过程 / 函数与触发器支持。
+    fn supports_sequences(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")

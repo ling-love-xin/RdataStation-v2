@@ -66,6 +66,18 @@ pub struct NavigatorService {
     project_root: Option<String>,
     /// 刷新模式：跳过读缓存，并用实时结果重写缓存。
     fresh: bool,
+    /// S5-A① 对象类别能力位缓存（连接级）：驱动能力是静态属性，连接切换/刷新
+    /// 都不变，惰性填充后常驻——避免每次展开都开连接句柄查一次。
+    object_caps: std::cell::RefCell<std::collections::HashMap<String, ObjectCaps>>,
+}
+
+/// 对象类别能力位（S5-A①；`Tables` 恒支持，不进缓存）。
+#[derive(Clone, Copy, Default)]
+struct ObjectCaps {
+    views: bool,
+    routines: bool,
+    sequences: bool,
+    triggers: bool,
 }
 
 /// 系统 catalog 判定（S3-①，fluxDB `tree_helpers.rs:1281-1286` 同清单，大小写不敏感）。
@@ -108,6 +120,7 @@ impl NavigatorService {
             metadata: MetadataService::new(manager),
             project_root: None,
             fresh: false,
+            object_caps: Default::default(),
         }
     }
 
@@ -121,6 +134,7 @@ impl NavigatorService {
             metadata: MetadataService::new(manager),
             project_root,
             fresh,
+            object_caps: Default::default(),
         }
     }
 
@@ -884,6 +898,40 @@ impl NavigatorService {
     /// `batch` 是本次 `load_folders` 的批量内省缓存：某类别未命中 L1/L2 时，
     /// 若 batch 为空则先调 `introspect_schema_objects`（一次建连拿全部类别），
     /// 再从中取当前类别——一次展开至多一次建连，且无「同 SQL 二次执行」。
+    /// S5-A① 对象类别能力位（惰性填充 + 连接级缓存）。
+    ///
+    /// 能力位是驱动静态属性（不随连接状态变），故缓存无失效期；查询失败保底全开
+    /// （未知驱动不藏对象）。
+    async fn caps_for(&self, conn_id: &str) -> ObjectCaps {
+        if let Some(c) = self.object_caps.borrow().get(conn_id) {
+            return *c;
+        }
+        let caps = ObjectCaps {
+            views: self
+                .metadata
+                .supports_object_folder(conn_id, NavFolder::Views)
+                .await
+                .unwrap_or(true),
+            routines: self
+                .metadata
+                .supports_object_folder(conn_id, NavFolder::Routines)
+                .await
+                .unwrap_or(true),
+            sequences: self
+                .metadata
+                .supports_object_folder(conn_id, NavFolder::Sequences)
+                .await
+                .unwrap_or(true),
+            triggers: self
+                .metadata
+                .supports_object_folder(conn_id, NavFolder::Triggers)
+                .await
+                .unwrap_or(true),
+        };
+        self.object_caps.borrow_mut().insert(conn_id.to_string(), caps);
+        caps
+    }
+
     async fn collect_objects(
         &self,
         conn_id: &str,
@@ -892,6 +940,19 @@ impl NavigatorService {
         folder: NavFolder,
         batch: &mut Option<SchemaObjects>,
     ) -> Result<Vec<NodeInfo>, CoreError> {
+        // S5-A① 能力位短路：驱动不支持的对象类别直接返回空（文件夹固定显示，
+        // 点开是空态）——省一次无谓内省查询（视图位挂在表维度查询上，独立判断）。
+        let caps = self.caps_for(conn_id).await;
+        let supported = match folder {
+            NavFolder::Tables => true,
+            NavFolder::Views => caps.views,
+            NavFolder::Routines => caps.routines,
+            NavFolder::Sequences => caps.sequences,
+            NavFolder::Triggers => caps.triggers,
+        };
+        if !supported {
+            return Ok(vec![]);
+        }
         match folder {
             NavFolder::Tables | NavFolder::Views => {
                 let want_view = folder == NavFolder::Views;
