@@ -2166,7 +2166,16 @@ impl<H: 'static> ConnectionDialogState<H> {
                             let (ok, msg) = work.await;
                             cx.update(|_window, app| {
                                 busy_c.set(BusyOp::None);
-                                set_result_ok(&result_c, ok, msg);
+                                // P1（2026-10-24）：失败消息（明细 + 常见原因，可能多行）——
+                                // 首行进摘要，全文进「详情」（复用 #28 展开 / 复制机制）。
+                                let line = if ok {
+                                    ResultLine::new(ResultLevel::Success, msg)
+                                } else {
+                                    let head = msg.split('\n').next().unwrap_or("").to_string();
+                                    ResultLine::new(ResultLevel::Error, head)
+                                        .with_detail(msg.clone())
+                                };
+                                *result_c.borrow_mut() = Some(line);
                                 // 结果行 / 按钮状态变了：面板与宿主都要重绘（层挂在宿主 render 上）。
                                 shared_c.dialog_redraw(app);
                                 let _ = editor.update(app, |_, cx| cx.notify());
