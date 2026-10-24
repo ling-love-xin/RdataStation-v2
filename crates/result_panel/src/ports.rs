@@ -59,17 +59,22 @@ pub enum ResultRequest {
     LocateError,
     /// 下发源库开关（只翻转状态，不重查——与 [`Self::PushdownFilter`] 区别开）
     SetPushdown { open: bool },
-    /// 工具栏「列结构」开关：结果面板左栏（列名 / 类型 / 隐藏切换）开合
-    ToggleColumnSidebar,
-    /// 工具栏「值详情」开关：结果面板右栏（选中格完整值 + 元数据）开合
+    /// 工具栏「辅助栏」开关：结果面板右侧辅助栏（列浏览器 / 值详情 / 计算 / 分组）开合
     ToggleValueSidebar,
-    /// 左栏列结构列表的「单击一行」：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
+    /// 左栏列浏览器清单行眼睛：切换该列隐藏 / 显示（宿主 update 网格 + 面板）
     ToggleColumnVisibility(usize),
+    /// 列浏览器清单单击选中一列（数据列序）：写清单选中态 + 网格列高亮联动
+    SelectColumn(usize),
+    /// 列浏览器清单双击定位：网格滚到该列首行并选中
+    LocateColumn(usize),
+    /// 列浏览器搜索框「✕」清除（清空输入框 + 搜索词；`window` 由宿主分派时提供）
+    ClearColumnSearch,
     /// 呈现方式切换（DBeaver 左栏「显示方式」：网格 / 文本）。显式目标值——
     /// 网格 / 文本两个入口（左栏按钮组、工具栏按钮）都要能精确切到目标，
     /// 翻转语义在「已在该呈现」时会把用户点反。
     SetPresentation(Presentation),
-    /// 右栏标签页切换（值详情 / 列统计 / 分组 / 元数据）
+    /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
+    /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),
 }
 
@@ -83,17 +88,18 @@ pub enum Presentation {
     Text,
 }
 
-/// 结果面板右栏的标签页（DBeaver Data Editor 右侧辅助区；顺序对齐 DBeaver：
-/// 数值 → 计算 → 元数据 → 分组；「引用」页留 backlog，见 result-panel.md §8.10）
+/// 结果面板右侧辅助栏的标签页（对齐 DBeaver `resultset/panel/` 右侧面板组：
+/// metadata / valueviewer / aggregate / grouping 同栏页签切换；「引用」页留 backlog，
+/// 见 result-panel.md §8.12）。顺序：列浏览器 → 值详情 → 计算 → 分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RightTab {
-    /// 数值查看器：选中格完整值（默认）
+    /// 列浏览器：搜索框 + 列清单 + 底部元数据明细（默认；对齐 DBeaver metadata 面板）
     #[default]
+    Browser,
+    /// 数值查看器：选中格完整值
     Value,
     /// 计算：选中列的 count / null / min / max / avg / sum（纯函数，不引 polars）
     Stats,
-    /// 元数据：列名 / 类型 / 来源表 / 注释 / 可空 / 默认值
-    Metadata,
     /// 分组：按一列本地 groupby 计数（纯函数；DBeaver 大表口径是下发 GROUP BY）
     Group,
 }

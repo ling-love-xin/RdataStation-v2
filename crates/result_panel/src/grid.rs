@@ -171,6 +171,8 @@ pub enum ContextAction {
     FilterColumnValue { column: usize, value: String },
     /// 【筛选】清除此列的列级筛选（数据恢复显示）
     ClearColumnFilter { column: usize },
+    /// 【排序】取消本地排序（回原顺序；不下发源库重查，对齐 DBeaver 排序 `NONE`）
+    ClearSort,
 }
 
 /// 右键菜单里的一项
@@ -209,6 +211,8 @@ pub struct ContextTarget {
     pub table: Option<String>,
     /// 【筛选】这一列当前有没有列级筛选生效（`true` → 菜单摆「清除此列筛选」）
     pub column_filter_active: bool,
+    /// 【排序】这份结果当前是否正按这一列排序（`true` → 菜单摆「取消排序」）
+    pub sort_active: bool,
     /// 【筛选】这一列的去重取值（前 `COLUMN_FILTER_VALUE_LIMIT` 个；列头菜单
     /// 「按值筛选此列」的值列表——由网格从已抓行算好传入，纯函数不碰数据）
     pub column_values: Vec<String>,
@@ -295,6 +299,14 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         },
         separator_before: false,
     });
+    // 【排序】当前正按此列排时补「取消排序」（DBeaver 排序子菜单的 NONE 项）
+    if target.sort_active {
+        items.push(ContextMenuItem {
+            label: format!("取消排序「{column_name}」"),
+            action: ContextAction::ClearSort,
+            separator_before: true,
+        });
+    }
     items.push(ContextMenuItem {
         label: if target.frozen {
             "取消冻结此列".to_string()
@@ -358,6 +370,14 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             separator_before: false,
         },
     ];
+    // 【排序】当前正按此列排时补「取消排序」（本地回原顺序，不下发重查）
+    if target.sort_active {
+        items.push(ContextMenuItem {
+            label: format!("取消排序「{column_name}」"),
+            action: ContextAction::ClearSort,
+            separator_before: true,
+        });
+    }
     // 【筛选】列级筛选段（DBeaver 列头筛选）：值列表 + 清除项。
     // 值列表来自已抓行的去重取值（`target.column_values`，网格算好传入）；
     // 有值才摆（没数据这一列自然没有可选值）。清除项只在筛选生效时摆——
@@ -425,6 +445,57 @@ pub fn column_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                 column: column_name.to_string(),
             },
             separator_before: true,
+        });
+    }
+    items
+}
+
+/// 左栏「列浏览器」清单行右键菜单的项（**纯函数**；对齐 DBeaver 元数据面板清单右键口径：
+/// 清单不承担排序下发 / 筛选 / 洞察——那些属于列头与单元格，清单只暴露列级本地动作）：
+/// 复制此列 · 冻结 / 解冻 · 隐藏此列 · 列统计 · 显示全部列（有隐藏列才摆）· 取消排序（生效才摆）。
+///
+/// 与列头菜单共用 [`ContextTarget`] 同一份数据语义；排序 / 筛选 / 洞察 / 值与行相关动作
+/// 在清单入口不生成（`target.insight` / `column_values` / `column_filter_active` 留空即可）。
+pub fn column_browser_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
+    let column_name = target.column_name.as_str();
+    let mut items = vec![
+        ContextMenuItem {
+            label: format!("复制此列（{} 个取值）", target.rows),
+            action: ContextAction::CopyColumn(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: if target.frozen {
+                "取消冻结此列".to_string()
+            } else {
+                format!("冻结「{column_name}」")
+            },
+            action: ContextAction::ToggleFreeze(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("隐藏「{column_name}」"),
+            action: ContextAction::HideColumn(target.column),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: format!("列统计「{column_name}」"),
+            action: ContextAction::ColumnStats { column: target.column },
+            separator_before: false,
+        },
+    ];
+    if target.sort_active {
+        items.push(ContextMenuItem {
+            label: format!("取消排序「{column_name}」"),
+            action: ContextAction::ClearSort,
+            separator_before: true,
+        });
+    }
+    if target.hidden_columns > 0 {
+        items.push(ContextMenuItem {
+            label: "显示全部列".to_string(),
+            action: ContextAction::ShowAllColumns,
+            separator_before: false,
         });
     }
     items
@@ -712,6 +783,11 @@ impl ResultGridDelegate {
         self.columns.len().saturating_sub(self.hidden.len())
     }
 
+    /// 已隐藏的数据列数（列浏览器清单菜单「显示全部列」出现条件）
+    pub fn hidden_count(&self) -> usize {
+        self.hidden.len()
+    }
+
     /// 隐藏此列（**数据列序**）。隐藏到只剩 1 列时拒绝——全藏了表格没有内容。
     pub fn hide_column(&mut self, column: usize) {
         if self.visible_column_count() <= 1 || self.is_hidden_column(column) {
@@ -739,6 +815,28 @@ impl ResultGridDelegate {
     /// 每列类型（与 [`Self::columns`] 同序；空 = 这份结果没带类型）
     pub fn column_types(&self) -> &[Option<ColumnType>] {
         &self.column_types
+    }
+
+    /// 列统计：网格本地算完转交宿主钩子开弹层（列头菜单与列浏览器清单共用同一条路）。
+    /// 没接钩子 = 静默返回（与现有「没接钩子就不摆入口」口径一致；清单菜单上这一项
+    /// 只在钩子存在时生成，见 [`crate::grid::column_browser_menu_items`] 的使用方）。
+    pub fn fire_column_stats(&self, column: usize, app: &mut App) {
+        let Some(hook) = self.on_column_stats.clone() else {
+            return;
+        };
+        let name = self.columns.get(column).cloned().unwrap_or_default();
+        let text = stats_lines(&column_stats(&self.rows, column)).join("\n");
+        hook(name, text, app);
+    }
+
+    /// 列统计菜单载荷（列浏览器清单菜单构造期用）：钩子 + 列名 + 统计文本一次取好，
+    /// 点击时直接 `hook(name, text, app)`——不经过 `grid_entity.update` 闭包，
+    /// 避免闭包内二次可变借用 `app`（与列头菜单 L2241 同一条范式）。没接钩子 = `None`。
+    pub fn column_stats_payload(&self, column: usize) -> Option<(ColumnStatsHook, String, String)> {
+        let hook = self.on_column_stats.clone()?;
+        let name = self.columns.get(column).cloned().unwrap_or_default();
+        let text = stats_lines(&column_stats(&self.rows, column)).join("\n");
+        Some((hook, name, text))
     }
 
     // ---------- 【P2-4】单行转置（只读视图，DBeaver 式） ----------
@@ -794,8 +892,9 @@ impl ResultGridDelegate {
     /// 可见数据列序 → 数据列序（跳过隐藏列）。
     ///
     /// 组件给的下标是「用户看着的那一列」（不含 `#` 行号槽），而数据、类型、注释、
-    /// 冻结都按**数据列**存——中间隔着隐藏列，换算必须过这里。
-    fn data_column(&self, view_col: usize) -> usize {
+    /// 冻结都按**数据列**存——中间隔着隐藏列，换算必须过这里。面板列浏览器联动
+    /// （网格选中格 → 清单选中列）同样走它。
+    pub fn data_column(&self, view_col: usize) -> usize {
         let mut data = 0;
         let mut visible = 0;
         loop {
@@ -809,8 +908,8 @@ impl ResultGridDelegate {
         }
     }
 
-    /// 数据列序 → 可见数据列序（该列被隐藏 = `None`）
-    fn view_column(&self, data_col: usize) -> Option<usize> {
+    /// 数据列序 → 可见数据列序（该列被隐藏 = `None`；清单双击定位网格用）
+    pub fn view_column(&self, data_col: usize) -> Option<usize> {
         if self.is_hidden_column(data_col) {
             return None;
         }
@@ -911,6 +1010,11 @@ impl ResultGridDelegate {
         self.rebuild_view_rows();
     }
 
+    /// 【排序】取消当前本地排序（对齐 DBeaver 排序 `NONE`；只回原顺序，不下发源库重查）
+    pub fn clear_sort(&mut self) {
+        self.apply_sort(None);
+    }
+
     /// 【B15】重算视图行序（筛选 → 排序；数据不动）
     fn rebuild_view_rows(&mut self) {
         let filter = self.filter.trim().to_lowercase();
@@ -983,7 +1087,7 @@ impl ResultGridDelegate {
     }
 
     /// 视图行数（没筛选/排序时就是数据行数）
-    fn view_len(&self) -> usize {
+    pub fn view_len(&self) -> usize {
         self.view_rows.as_ref().map_or(self.rows.len(), Vec::len)
     }
 
@@ -1390,7 +1494,8 @@ impl ResultGridDelegate {
     ///
     /// 只给**已抓到的行**、不重查源库（与 mock 预览「复制此列」同一口径）：
     /// 一份十万行的结果整列就是十万个值，粘到哪里都不好用——真要全列就导出。
-    fn column_text(&self, column: usize) -> String {
+    /// 列浏览器清单「复制此列」与右键菜单共用这份文本。
+    pub fn column_text(&self, column: usize) -> String {
         let mut text = String::new();
         for (index, data_ix) in (0..self.view_len())
             .filter_map(|view_ix| self.data_row(view_ix))
@@ -2058,6 +2163,9 @@ impl TableDelegate for ResultGridDelegate {
             table: self.result_table.clone(),
             column_filter_active: self.has_column_filter(column),
             column_values: self.column_distinct_values(column),
+            sort_active: self
+                .sort_state()
+                .is_some_and(|(sort_col, _)| sort_col == column),
         };
         let menu_items = column_menu_items(&column_menu_target);
         let copy_column_text = self.column_text(column);
@@ -2176,6 +2284,19 @@ impl TableDelegate for ResultGridDelegate {
                                                 move |_, _window, app| hook(column, "", app),
                                             ));
                                         }
+                                    }
+                                    ContextAction::ClearSort => {
+                                        // 取消排序是本地动作（回原顺序，不下发源库重查）：
+                                        // 与冻结 / 隐藏同一条独立事件路径，可安全更新 delegate 并刷新
+                                        let table = table.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, _window, app| {
+                                                table.update(app, |state, cx| {
+                                                    state.delegate_mut().clear_sort();
+                                                    state.refresh(cx);
+                                                });
+                                            },
+                                        ));
                                     }
                                     _ => {
                                         // 值与行相关的动作（预览 / 按值筛选 / 复制值 / 复制行）
@@ -2363,6 +2484,9 @@ impl TableDelegate for ResultGridDelegate {
             // 右键菜单不摆列级筛选段（右键的「按值筛选」是全局词）：两字段留空
             column_filter_active: false,
             column_values: Vec::new(),
+            sort_active: self
+                .sort_state()
+                .is_some_and(|(sort_col, _)| sort_col == column),
         };
         for item in context_menu_items(&target) {
             if item.separator_before {
@@ -2505,6 +2629,18 @@ impl TableDelegate for ResultGridDelegate {
                         move |_, _window, app| {
                             table.update(app, |state, cx| {
                                 state.delegate_mut().show_all_columns();
+                                state.refresh(cx);
+                            });
+                        },
+                    ));
+                }
+                ContextAction::ClearSort => {
+                    // 取消排序 = 本地回原顺序（与列头菜单同一条路，不下发源库重查）
+                    let table = cx.entity().clone();
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            table.update(app, |state, cx| {
+                                state.delegate_mut().clear_sort();
                                 state.refresh(cx);
                             });
                         },
@@ -2665,9 +2801,8 @@ const FIRST_SYSTEM_ACTION: usize = 10;
 pub struct ResultControls {
     /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
     pub filter: Option<AnyElement>,
-    /// 【侧栏】左栏（列结构）开关（面板构造：翻转 `show_column_sidebar`）
-    pub column_sidebar: Option<AnyElement>,
-    /// 【侧栏】右栏（值详情）开关（面板构造：翻转 `show_value_sidebar`）
+    /// 【侧栏】右侧辅助栏开关（面板构造：翻转 `show_value_sidebar`；列浏览器 / 值详情 /
+    /// 计算 / 分组共用这一栏、页签切换）
     pub value_sidebar: Option<AnyElement>,
     /// 【并排对比】对比模式开关（两份以上结果时才给；开启后结果区双栏并排）
     pub compare: Option<AnyElement>,
@@ -2833,10 +2968,9 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列结构 · 值详情 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · 列浏览器 · ⧉ 对比 · 提交变更 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
                         // （网格 / 文本 / 记录视图切换已迁到左缘竖条，不在顶部工具栏）
                         .children(controls.filter)
-                        .children(controls.column_sidebar)
                         .children(controls.value_sidebar)
                         .children(controls.compare)
                         .children(controls.commit)
@@ -2992,9 +3126,9 @@ mod tests {
         ContextAction, ContextTarget, ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar,
         TextAlign, blob_summary, cell_matches, cell_style, column_distinct_values, column_stats,
         compare_cells, context_menu_items, duration_text, find_in_cell, fmt_stat_num,
-        header_tooltip_lines, column_menu_items, preview_of, stats_lines, status_action_placeholders,
-        status_segments, thousands, truncated_hint, validate_edit_value, FIRST_PAGER_ACTION,
-        FIRST_SYSTEM_ACTION,
+        header_tooltip_lines, column_menu_items, column_browser_menu_items, preview_of, stats_lines,
+        status_action_placeholders, status_segments, thousands, truncated_hint, validate_edit_value,
+        FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
     };
     use gpui_kit::assets::IconName;
     use workbench_shell::model::ColumnAnnotation;
@@ -3040,6 +3174,7 @@ mod tests {
             table: None,
             column_filter_active: false,
             column_values: Vec::new(),
+            sort_active: false,
         }
     }
 
@@ -3863,6 +3998,7 @@ mod tests {
             table: None,
             column_filter_active: false,
             column_values: Vec::new(),
+            sort_active: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -3878,6 +4014,68 @@ mod tests {
         assert!(!labels.iter().any(|l| l.contains("复制整行")));
         // 没隐藏列就不摆「显示全部列」
         assert!(!labels.contains(&"显示全部列"));
+    }
+
+    /// 列浏览器清单菜单 = 列头菜单的本地动作子集：复制 / 冻结 / 隐藏 / 列统计；
+    /// 排序下发 / 值筛选 / 洞察 / 查看完整值 / 复制整行不进清单入口（前者依赖宿主
+    /// 钩子，后者属于格 / 行交互，见拍板口径）。
+    #[test]
+    fn column_browser_menu_is_local_column_subset() {
+        let target = target("x", "id", 1);
+        let items = column_browser_menu_items(&target);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"复制此列（2 个取值）"));
+        assert!(labels.contains(&"冻结「id」"));
+        assert!(labels.contains(&"隐藏「id」"));
+        assert!(labels.contains(&"列统计「id」"));
+        // 不摆排序下发 / 值筛选 / 洞察 / 值与行动作
+        assert!(!labels.iter().any(|l| l.contains("升序") || l.contains("降序")));
+        assert!(!labels.iter().any(|l| l.contains("按值筛选")));
+        assert!(!labels.iter().any(|l| l.contains("洞察")));
+        assert!(!labels.iter().any(|l| l.contains("查看完整值")));
+        assert!(!labels.iter().any(|l| l.contains("复制整行")));
+        // 无隐藏列 / 未排序 → 不摆条件项
+        assert!(!labels.contains(&"显示全部列"));
+        assert!(!labels.iter().any(|l| l.contains("取消排序")));
+    }
+
+    /// 清单菜单条件项：排序生效 → 取消排序；有隐藏列 → 显示全部列；冻结中 → 文案反向。
+    #[test]
+    fn column_browser_menu_shows_conditional_items() {
+        let mut target = target("", "name", 2);
+        target.frozen = true;
+        target.hidden_columns = 2;
+        target.sort_active = true;
+        let items = column_browser_menu_items(&target);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"取消冻结此列"));
+        assert!(labels.contains(&"显示全部列"));
+        assert!(labels.contains(&"取消排序「name」"));
+    }
+
+    /// 清单菜单动作归属：本地动作直接映射到对应 `ContextAction`，列号不串位。
+    #[test]
+    fn column_browser_menu_actions_map_to_local_column_actions() {
+        let target = target("", "name", 3);
+        let items = column_browser_menu_items(&target);
+        let by_label: std::collections::HashMap<&str, &ContextAction> =
+            items.iter().map(|i| (i.label.as_str(), &i.action)).collect();
+        assert!(matches!(
+            by_label["复制此列（2 个取值）"],
+            ContextAction::CopyColumn(3)
+        ));
+        assert!(matches!(
+            by_label["冻结「name」"],
+            ContextAction::ToggleFreeze(3)
+        ));
+        assert!(matches!(
+            by_label["隐藏「name」"],
+            ContextAction::HideColumn(3)
+        ));
+        assert!(matches!(
+            by_label["列统计「name」"],
+            ContextAction::ColumnStats { column: 3 }
+        ));
     }
 
     /// 列头菜单的条件项：隐藏了列 → 摆「显示全部列」；可洞察 → 摆「洞察此列」；
@@ -3896,6 +4094,7 @@ mod tests {
             table: Some("t_user".to_string()),
             column_filter_active: false,
             column_values: Vec::new(),
+            sort_active: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -3922,6 +4121,7 @@ mod tests {
             table: None,
             column_filter_active: false,
             column_values: vec!["paid".to_string(), "NULL".to_string(), "refunded".to_string()],
+            sort_active: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();

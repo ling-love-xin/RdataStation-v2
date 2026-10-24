@@ -564,7 +564,7 @@ impl EditorHostPanel {
                     let text = grid.read(cx).delegate().cell_text(*row, *col, cx);
                     result_panel.update(cx, |panel, cx| {
                         panel.set_selected_cell(Some(Self::clip_cell_preview(&text)), cx);
-                        // 【侧栏】右栏（值详情）要位置：选中格的原生事件就带着
+                        // 【侧栏】右侧辅助栏（值详情 / 列浏览器）要位置：选中格的原生事件就带着
                         panel.set_selection_pos(Some((*row, *col)), cx);
                     });
                     Some(result_grid::GridSelection::Cell { row: *row, col: *col })
@@ -6313,15 +6313,12 @@ impl EditorHostPanel {
             ResultRequest::CopyError => self.copy_error_message(cx),
             ResultRequest::LocateError => self.jump_to_error_site(cx),
             ResultRequest::SetPushdown { open } => self.set_pushdown(open, cx),
-            // 【侧栏】左右栏开合：只翻面板状态
-            ResultRequest::ToggleColumnSidebar => {
-                self.result_panel.update(cx, |p, cx| p.toggle_column_sidebar(cx))
-            }
+            // 【侧栏】右侧辅助栏开合：只翻面板状态
             ResultRequest::ToggleValueSidebar => {
                 self.result_panel.update(cx, |p, cx| p.toggle_value_sidebar(cx))
             }
-            // 【侧栏】左栏「单击一行」：切换该列隐藏 / 显示（网格是另一实体，
-            // update 它安全；面板再 notify 重画左栏的隐藏标记）
+            // 【侧栏】清单行眼睛：切换该列隐藏 / 显示（网格是另一实体，
+            // update 它安全；面板再 notify 重画列浏览器的隐藏标记）
             ResultRequest::ToggleColumnVisibility(column) => {
                 let grid = self.grid.clone();
                 grid.update(cx, |table, cx| {
@@ -6340,11 +6337,32 @@ impl EditorHostPanel {
                 self.result_panel
                     .update(cx, |p, cx| p.set_presentation(presentation, cx));
             }
-            // 【右栏】标签页切换（值详情 / 计算 / 分组 / 元数据）：纯面板状态
+            // 【右栏】标签页切换（列浏览器 / 值详情 / 计算 / 分组）：纯面板状态
             ResultRequest::SetRightTab(tab) => {
                 self.result_panel.update(cx, |p, cx| p.set_right_tab(tab, cx));
             }
+            // 【列浏览器】清单单击选中列：面板写选中态 + 网格列高亮联动（方法内部已联动网格）
+            ResultRequest::SelectColumn(column) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.select_column(column, cx));
+            }
+            // 【列浏览器】清单双击定位：网格滚到该列首行并选中
+            ResultRequest::LocateColumn(column) => {
+                self.result_panel
+                    .update(cx, |p, cx| p.locate_column(column, cx));
+            }
+            // 【列浏览器】搜索框 ✕ 清除：需要 window（`InputState::set_value` 签名），走窗口句柄转手
+            ResultRequest::ClearColumnSearch => self.clear_column_search_via_window(cx),
         }
+    }
+
+    /// 列浏览器搜索框清除同样需要窗口句柄（headless / 窗口已关时静默跳过；
+    /// 与 [`Self::clear_filter_via_window`] 同口径）
+    fn clear_column_search_via_window(&mut self, cx: &mut Context<Self>) {
+        let panel = self.result_panel.clone();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            panel.update(app, |p, cx| p.clear_column_search(window, cx));
+        });
     }
 
     /// 需要 `&mut Window` 的动作走窗口句柄转手（headless / 窗口已关时静默跳过；
