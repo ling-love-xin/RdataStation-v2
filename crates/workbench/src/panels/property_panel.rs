@@ -16,6 +16,7 @@ use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
@@ -735,11 +736,18 @@ impl PropertyHostPanel {
 
     /// 单个子项类别：标题 + 表头 + 行（sections 只含可用类别，未实现类别隐藏式
     /// 不产出，2026-10-24 拍板）。
+    ///
+    /// DDL / 源码（`PageId::Ddl` / `PageId::Source`）是长文本段落：走代码块渲染
+    /// （等宽 + 复制 + 长行折行不截断），其余类别走通用表格（列 / 索引 / 约束）。
+    /// 区分的是**分区展示形态**而非对象类型，`sections` 遍历 / 零分支原则不变。
     fn render_category_section(
         &self,
         s: &PropertySection,
         theme: &Theme,
     ) -> Div {
+        if matches!(s.id, PageId::Ddl | PageId::Source) {
+            return self.render_text_section(s, theme);
+        }
         let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
         let border = theme.colors.border;
@@ -797,6 +805,82 @@ impl PropertyHostPanel {
                     ),
             );
         }
+        section
+    }
+
+    /// 长文本段落（DDL / 源码）：等宽代码块 + 复制按钮，长行折行不截断——
+    /// 对齐 DBeaver 的 DDL 只读代码视图（2026-10-24；DDL 是用户要读要复制的，
+    /// 挂 `text_ellipsis` 会截断 SQL，故此处不截断）。
+    fn render_text_section(
+        &self,
+        s: &PropertySection,
+        theme: &Theme,
+    ) -> Div {
+        let fg = theme.colors.foreground;
+        let border = theme.colors.border;
+        let mono = theme.mono_font_family.clone();
+
+        // 复制值 = 原始行拼接（`text_table` 已按行切好；不含「（空）」占位）。
+        let copy_value = s
+            .table
+            .rows
+            .iter()
+            .map(|r| r.first().map(String::as_str).unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut section = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .p_2()
+            .rounded_md()
+            .bg(theme.colors.background)
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .w_full()
+                    .child(
+                        div()
+                            .pt_1()
+                            .pb_1()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(fg)
+                            .child(s.label.clone()),
+                    )
+                    .child(
+                        Clipboard::new(format!("property-copy-{}", s.label))
+                            .value(copy_value)
+                            .tooltip("复制")
+                            .accessibility_label("复制属性文本"),
+                    ),
+            );
+
+        let mut block = div()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_0p5()
+            .p_2()
+            .rounded_sm()
+            .border_1()
+            .border_color(border)
+            .font_family(mono)
+            .text_xs()
+            .text_color(fg);
+        for line in s
+            .table
+            .rows
+            .iter()
+            .map(|r| r.first().cloned().unwrap_or_default())
+        {
+            // 不挂 `text_ellipsis`：长行折行完整显示（DDL 语义是可读可复制）。
+            block = block.child(div().w_full().min_w_0().child(line));
+        }
+        section = section.child(block);
         section
     }
 

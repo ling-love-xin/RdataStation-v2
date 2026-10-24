@@ -245,7 +245,8 @@ pub struct PropertySection {
 1. 顶部 tab 条：`属性 | 数据`（仅表 / 视图两页签，gpui-kit TabBar）；当前页 = `PropertyState.active_page`。
 2. 当前页内容：
    - `General` → `ObjectProperties`：① 洞察总览卡（`overview`）+ ② General 网格（`properties`，
-     双栏/三栏）+ ③ 子项分区列表（`sections`，多分区时左栏子标签 + 右栏表格）；
+     双栏/三栏）+ ③ 子项分区列表（`sections`，多分区时左栏子标签 + 右栏表格；
+     **DDL / 源码分区 = 等宽代码块 + 复制按钮**，长行折行不截断，2026-10-24）；
    - `Data` → `data` 网格（行号 + 列名 + 单元格；NULL 灰置；列头排序；分页按钮）；
    - 找不到对应 section → 空态文案（不报错）。
 3. 宽高沿用右 Dock（280px 基准，宽度可拖拽记忆），行内无裸 px / 裸色值（走 `workbench_shell::ui` 与主题 token）。
@@ -444,7 +445,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | --- | --- | --- |
 | ① 洞察总览 | 状态点 + 标题 + meta 芯片（驱动/作用域/分组/标签）+ 指标卡 + 关键信息 + 口径注脚 | `ObjectOverview`（provider 组装；cards 用 stats/counts） |
 | ② General 双栏网格 | 定义属性；行数 > 8 自动三栏（面积使用率） | `properties`（provider） |
-| ③ 子项类别列表 | 类别纵向堆叠：可用 → 标题+表头+行；无类别对象 → 「（无）」 | `sections`（categories 顺序 + 骨架内容合并；未实现类别隐藏式不产出，2026-10-24） |
+| ③ 子项类别列表 | 类别纵向堆叠：可用 → 标题+表头+行；无类别对象 → 「（无）」；**DDL / 源码分区 = 等宽代码块 + 复制按钮**（2026-10-24） | `sections`（categories 顺序 + 骨架内容合并；未实现类别隐藏式不产出，2026-10-24） |
 
 - **表 / 视图两页签【属性 | 数据】**（去掉旧「图」页签；数据页懒加载，首屏 200 行）；
 - 其余对象为单属性视图（无页签条）；
