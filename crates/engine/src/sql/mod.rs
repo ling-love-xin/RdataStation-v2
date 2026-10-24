@@ -24,6 +24,7 @@ mod engine;
 mod explain;
 mod filter;
 mod formatter;
+mod functions;
 mod highlight;
 mod parser;
 mod script;
@@ -37,6 +38,10 @@ pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, 
 pub use explain::explain_sql;
 pub use formatter::FormatReport;
 pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
+pub use functions::{
+    builtin_signatures, catalog_query, parameter_query, parse_catalog_rows, FunctionSignature,
+    ParamInfo,
+};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use parser::ProjectionSource;
 pub use script::ScriptRewrite;
