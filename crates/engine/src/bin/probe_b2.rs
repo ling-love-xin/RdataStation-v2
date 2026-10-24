@@ -51,7 +51,7 @@ use rds_engine::driver::native::mysql_native::MySqlNativeDatabase;
 use rds_engine::driver::native::postgres::PostgresDatabase;
 use rds_engine::driver::native::sqlite::SqliteDatabase;
 use rds_engine::driver::{Database, MetadataBrowser, Transaction, DynDatabase};
-use rds_engine::{common_err, CommonError, CoreError};
+use rds_engine::{common_err, CommonError, CoreError, DatabaseError};
 
 /// 任务超时，照抄现状 `nav_jobs.rs:150` 的 `JOB_TIMEOUT = 30s`。
 const JOB_TIMEOUT: Duration = Duration::from_secs(30);
@@ -183,9 +183,21 @@ impl Default for ProbeMetrics {
 }
 
 /// 错误归类：与方案 §3.3.1「超时与错误分类」口径一致，分连接 / 查询驱动 / 超时 / 通用。
+///
+/// 驱动把「构造 / 建连失败」包装成 `Database::Driver` 且 `operation="connect"`
+/// （postgres.rs:95、mysql_native.rs:142、sqlite.rs:290、duckdb.rs:270 实证），
+/// 按口径归连接类；其余 Driver 与查询错误归查询/驱动类。
 fn classify_error(e: &CoreError) -> &'static str {
     match e {
         CoreError::Connection(_) => "连接类",
+        CoreError::Database(DatabaseError::Driver { operation, source, .. })
+            if operation == "connect"
+                || source.contains("10061")
+                || source.contains("拒绝")
+                || source.to_lowercase().contains("refused") =>
+        {
+            "连接类"
+        }
         CoreError::Database(_) => "查询/驱动类",
         CoreError::Common(CommonError::Timeout { .. }) => "超时",
         CoreError::Common(_) => "通用类",
@@ -798,7 +810,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rds_engine::ConnectionError;
+    use rds_engine::{ConnectionError, DatabaseError};
 
     #[test]
     fn median_of_odd_and_even_samples() {
@@ -816,5 +828,21 @@ mod tests {
             duration_ms: 1000,
         });
         assert_eq!(classify_error(&common), "超时");
+    }
+
+    #[test]
+    fn classify_driver_connect_as_connection_and_query_as_driver() {
+        let connect = CoreError::Database(DatabaseError::Driver {
+            db_type: "postgres".to_string(),
+            operation: "connect".to_string(),
+            source: "os error 10061".to_string(),
+        });
+        assert_eq!(classify_error(&connect), "连接类");
+        let query = CoreError::Database(DatabaseError::Driver {
+            db_type: "postgres".to_string(),
+            operation: "query".to_string(),
+            source: "relation x does not exist".to_string(),
+        });
+        assert_eq!(classify_error(&query), "查询/驱动类");
     }
 }
