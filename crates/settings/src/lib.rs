@@ -244,6 +244,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorFilters => return None,
         // 复合值（已保存视图）：同上。
         Slot::NavigatorSavedViews => return None,
+        // 复合值（可见库白名单，S3-①）：读写走 SettingsService。
+        Slot::NavigatorVisibleDatabases => return None,
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -439,7 +441,9 @@ impl SettingsService {
                 Self::set_show_name_type_short(on, cx);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
-            Slot::NavigatorFilters | Slot::NavigatorSavedViews => return false,
+            Slot::NavigatorFilters
+            | Slot::NavigatorSavedViews
+            | Slot::NavigatorVisibleDatabases => return false,
             Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
             Slot::ResourcesKeepVersions => {
                 let Some(value) = value.as_number() else {
@@ -951,6 +955,44 @@ impl SettingsService {
         Ok(())
     }
 
+    /// 某连接的可见库白名单（S3-①）。键不存在 = 默认模式（`None`）；
+    /// 键存在 = 白名单模式（`Some(集合)`，可空 = 全隐藏）。
+    pub fn visible_databases(conn_id: &str, cx: &App) -> Option<Vec<String>> {
+        cx.global::<Settings>()
+            .navigator
+            .visible_databases
+            .get(conn_id)
+            .cloned()
+    }
+
+    /// 保存某连接的可见库白名单并持久化（S3-①）。
+    ///
+    /// `None` = 删除该连接的白名单记录（回到默认模式）；
+    /// `Some(空)` = 显式空白名单（弹框里全取消 = 默认隐藏系统库，但不删记录）。
+    pub fn set_visible_databases(
+        conn_id: &str,
+        visible: Option<Vec<String>>,
+        cx: &mut App,
+    ) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            match visible {
+                Some(v) => {
+                    settings
+                        .navigator
+                        .visible_databases
+                        .insert(conn_id.to_string(), v);
+                }
+                None => {
+                    settings.navigator.visible_databases.remove(conn_id);
+                }
+            }
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
     /// 每份存档保留的历史内容副本份数（`-1` = 全留，`0` = 只留元数据）。
     ///
     /// 返回的是**落盘口径的原始数**：转成领域类型的那一步在宿主侧做
@@ -1397,6 +1439,42 @@ mod tests {
             assert!(SettingsService::saved_views(cx).is_empty());
             // 删不存在的视图 → Err。
             assert!(SettingsService::delete_saved_view("没有的视图", cx).is_err());
+        });
+    }
+
+    /// S3-① 可见库白名单访问器：未设置 → None；设置 → Some；置 None 清除 → None。
+    #[gpui_kit::test]
+    fn visible_databases_accessors_roundtrip(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            SettingsService::init(cx);
+            assert_eq!(
+                SettingsService::visible_databases("P_conn", cx),
+                None,
+                "未设置 = 默认模式"
+            );
+
+            SettingsService::set_visible_databases(
+                "P_conn",
+                Some(vec!["postgres".into(), "analytics".into()]),
+                cx,
+            );
+            let got = SettingsService::visible_databases("P_conn", cx).expect("已设置");
+            assert_eq!(got, vec!["postgres", "analytics"], "roundtrip 保序");
+
+            // 显式空白名单：键保留、值为空（弹框全取消的口径）。
+            SettingsService::set_visible_databases("P_conn", Some(vec![]), cx);
+            assert_eq!(
+                SettingsService::visible_databases("P_conn", cx),
+                Some(vec![]),
+                "空集合 = 显式全隐藏"
+            );
+
+            // 置 None = 清除记录（回到默认模式）。
+            SettingsService::set_visible_databases("P_conn", None, cx);
+            assert_eq!(SettingsService::visible_databases("P_conn", cx), None);
+            // 其他连接的记录互不影响。
+            assert_eq!(SettingsService::visible_databases("P_other", cx), None);
         });
     }
 }

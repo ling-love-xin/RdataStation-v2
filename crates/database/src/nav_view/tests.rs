@@ -118,8 +118,7 @@ mod stub_host {
         fn set_nav_filters(&self, _filters: NavFilters, _cx: &mut App) {}
         fn is_connected(&self, conn_id: &str) -> bool {
             self.connected.borrow().contains(conn_id)
-        }
-        fn connect(&self, _conn_id: &str) -> Result<(), String> {
+        }        fn connect(&self, _conn_id: &str) -> Result<(), String> {
             Ok(())
         }
         fn disconnect(&self, _conn_id: &str) -> Result<(), String> {
@@ -178,6 +177,17 @@ mod stub_host {
         fn open_saved_view_dialog(&self, _filters: NavFilters, _window: &mut Window, _cx: &mut App) {
         }
         fn open_manage_views_dialog(&self, _window: &mut Window, _cx: &mut App) {}
+        fn visible_databases(&self, _conn_id: &str, _cx: &App) -> Option<std::collections::BTreeSet<String>> {
+            // 测试替身：默认模式（None）——不干扰现有用例的树加载。
+            None
+        }
+        fn set_visible_databases(
+            &self,
+            _conn_id: &str,
+            _visible: Option<Vec<String>>,
+            _cx: &mut App,
+        ) {
+        }
         fn open_right_panel(&self, _panel: RightPanel, _cx: &mut App) {}
         fn open_mock_panel(&self, _source: Option<ObjectRef>, _cx: &mut App) {}
         fn open_insight_table(&self, _source: ObjectRef, _cx: &mut App) {}

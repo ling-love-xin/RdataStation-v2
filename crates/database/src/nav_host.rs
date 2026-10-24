@@ -138,6 +138,19 @@ pub trait NavHost: 'static {
     /// 打开「管理视图」对话框（列表 + 删除；删除动作经 `delete_saved_view`）。
     fn open_manage_views_dialog(&self, window: &mut Window, cx: &mut App);
 
+    /// 某连接的可见库白名单（S3-①）：`None` = 默认模式（树隐藏系统库 / 系统 schema）；
+    /// `Some(集合)` = 白名单模式（原样展示集合里的库，含系统对象）。
+    /// 集合可同时含 catalog 名与 schema 名（层级不同但同表存储，按名匹配各自层）。
+    fn visible_databases(&self, conn_id: &str, cx: &App) -> Option<std::collections::BTreeSet<String>>;
+
+    /// 保存可见库白名单（`None` = 回到默认模式）。保存后调用方负责刷新树。
+    fn set_visible_databases(
+        &self,
+        conn_id: &str,
+        visible: Option<Vec<String>>,
+        cx: &mut App,
+    );
+
     // ==================== 连接生命周期 ====================
 
     /// 运行时是否已连接。

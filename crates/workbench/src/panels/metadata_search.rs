@@ -75,6 +75,9 @@ pub struct MetadataSearchHostPanel {
     snapshot: Option<MetadataSearchView>,
     /// 结果回填泵（60ms 轮询 `drain_search_results(Panel)` → `Shared`）。
     pump: Option<Task<()>>,
+    /// S1-① 批次序号：每次独立搜索 +1，回填时丢弃旧批次（同词重跑 / 开关重排时
+    /// query 判据区分不了先后，序号是唯一权威；语义同导航会话 `search_seq`）。
+    search_seq: u64,
 }
 
 impl MetadataSearchHostPanel {
@@ -95,6 +98,7 @@ impl MetadataSearchHostPanel {
             query,
             snapshot,
             pump: None,
+            search_seq: 0,
         };
         this.ensure_pump(cx);
         this
@@ -140,8 +144,9 @@ impl MetadataSearchHostPanel {
             return;
         }
         for result in results {
-            // 过期批次：词已经被改了（收尾交给当前词的那一批）
-            if Some(&result.query) != self.query.as_ref() {
+            // 过期批次：序号不是最新（词已经被改 / 开关重排后重跑），
+            // 收尾交给当前序号的那一批（query 判据兜底同词场景）。
+            if result.seq != self.search_seq || Some(&result.query) != self.query.as_ref() {
                 continue;
             }
             self.shared.publish_metadata_search(
@@ -187,6 +192,8 @@ impl MetadataSearchHostPanel {
             .map(|p| p.to_string_lossy().to_string());
         nav_jobs::enqueue_search(
             SearchConsumer::Panel,
+            // S1-① 序号守卫：每次搜索 +1，泵回填按序号丢弃旧批次。
+            self.search_seq + 1,
             kind,
             &query,
             // 工作台全局搜索（跨连接索引）：无 `.*` / `Aa` 开关，走默认关。
@@ -195,6 +202,7 @@ impl MetadataSearchHostPanel {
             project_root.as_deref(),
             targets,
         );
+        self.search_seq += 1;
         self.shared.notify_host(cx);
         let _ = window;
     }

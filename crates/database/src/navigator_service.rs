@@ -68,6 +68,39 @@ pub struct NavigatorService {
     fresh: bool,
 }
 
+/// 系统 catalog 判定（S3-①，fluxDB `tree_helpers.rs:1281-1286` 同清单，大小写不敏感）。
+///
+/// 命中即默认隐藏（未设置可见库白名单时）；白名单模式原样展示。
+/// `main`（FALLBACK_CONTAINER 与 SQLite/DuckDB 的单一库）不在清单里，永不隐藏。
+pub fn nav_is_system_catalog(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "information_schema" | "mysql" | "performance_schema" | "sys" | "admin" | "local"
+    )
+}
+
+/// 系统 schema 判定（S3-①）：PG 侧系统 schema 与临时 schema 前缀。
+///
+/// `main` 与普通用户 schema 不在清单里。MySQL / SQLite / DuckDB 无 schema 层，
+/// 该函数只对 PG（及未来支持 schema 层的驱动）生效。
+pub fn nav_is_system_schema(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "pg_catalog" | "pg_toast" | "information_schema"
+    ) || lower.starts_with("pg_temp_")
+        || lower.starts_with("pg_toast_temp_")
+}
+
+/// S3-① 可见性过滤：`None`（默认模式）= 隐藏系统库 / 系统 schema；
+/// `Some(集合)`（白名单模式）= 只保留集合里的名字（含系统对象，原样展示）。
+fn nav_keep_object(name: &str, visible: Option<&std::collections::BTreeSet<String>>, is_system: fn(&str) -> bool) -> bool {
+    match visible {
+        Some(set) => set.contains(name),
+        None => !is_system(name),
+    }
+}
+
 impl NavigatorService {
     /// 用共享的连接管理器构造（无项目根、非刷新；仅全局连接的缓存在此可用）。
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
@@ -138,10 +171,14 @@ impl NavigatorService {
     }
 
     /// 按展开路径加载子节点。
+    ///
+    /// `visible`（S3-①）：`None` = 默认模式隐藏系统库 / 系统 schema；
+    /// `Some(集合)` = 白名单模式（只保留集合里的名字，含系统对象）。
     pub async fn load_children(
         &self,
         conn_id: &str,
         path: &NavPath,
+        visible: Option<&std::collections::BTreeSet<String>>,
     ) -> Result<Vec<NavNode>, CoreError> {
         // 刷新语义：以实时内省为准，先清该连接的 L1（L2 由各路径重写）。
         if self.fresh {
@@ -149,12 +186,12 @@ impl NavigatorService {
         }
 
         match path {
-            NavPath::Connection => self.load_catalogs(conn_id).await,
+            NavPath::Connection => self.load_catalogs(conn_id, visible).await,
             NavPath::Catalog { catalog } => {
                 // 层级按数据库类型动态决定：无独立 Schema 层的驱动（MySQL / SQLite /
                 // DuckDB）让 Catalog 直接承载类别文件夹，避免出现同名重复的 Schema 层。
                 if self.metadata.has_schema_level(conn_id).await? {
-                    self.load_schemas(conn_id, catalog).await
+                    self.load_schemas(conn_id, catalog, visible).await
                 } else {
                     self.load_folders(conn_id, catalog, catalog).await
                 }
@@ -185,6 +222,7 @@ impl NavigatorService {
         path: &NavPath,
         offset: usize,
         limit: usize,
+        visible: Option<&std::collections::BTreeSet<String>>,
     ) -> Result<NavPage, CoreError> {
         match path {
             NavPath::Folder {
@@ -196,7 +234,7 @@ impl NavigatorService {
                     .await
             }
             _ => {
-                let nodes = self.load_children(conn_id, path).await?;
+                let nodes = self.load_children(conn_id, path, visible).await?;
                 let total = nodes.len();
                 Ok(NavPage {
                     nodes,
@@ -322,7 +360,11 @@ impl NavigatorService {
     }
 
     /// 连接根 → Catalog 列表；无 Catalog 时退化为单一 `main` 容器。
-    async fn load_catalogs(&self, conn_id: &str) -> Result<Vec<NavNode>, CoreError> {
+    async fn load_catalogs(
+        &self,
+        conn_id: &str,
+        visible: Option<&std::collections::BTreeSet<String>>,
+    ) -> Result<Vec<NavNode>, CoreError> {
         // L1 → L3（Catalogs 不在 L2 缓存范围内）
         let catalogs = match self.l1_read(|c| c.get_catalogs(conn_id)) {
             Some(names) => names,
@@ -338,7 +380,18 @@ impl NavigatorService {
         let names = if catalogs.is_empty() {
             vec![FALLBACK_CONTAINER.to_string()]
         } else {
+            // S3-① 可见性过滤：默认隐藏系统库；白名单模式只留白名单。
             catalogs
+                .into_iter()
+                .filter(|name| nav_keep_object(name, visible, nav_is_system_catalog))
+                .collect::<Vec<_>>()
+        };
+        // 过滤后为空（全部是系统库且默认模式）也要有落脚点：保底给单一容器，
+        // 树仍可下钻（MySQL 的 information_schema 等全隐藏后至少能看到一个容器）。
+        let names = if names.is_empty() {
+            vec![FALLBACK_CONTAINER.to_string()]
+        } else {
+            names
         };
         Ok(names
             .into_iter()
@@ -369,10 +422,32 @@ impl NavigatorService {
     }
 
     /// Catalog → Schema 列表；无 Schema 时退化为单一 `main`。
-    async fn load_schemas(&self, conn_id: &str, catalog: &str) -> Result<Vec<NavNode>, CoreError> {
+    async fn load_schemas(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        visible: Option<&std::collections::BTreeSet<String>>,
+    ) -> Result<Vec<NavNode>, CoreError> {
         // 部分驱动（SQLite/DuckDB）不区分 catalog/schema，查询可能返回空；
         // 空结果按单一 `main` schema 处理，保证树仍可下钻。
         let names = self.schema_names(conn_id, catalog).await?;
+        // S3-① schema 层可见性：默认（`visible = None`）隐藏 PG 系统 schema
+        // （pg_catalog / pg_toast / information_schema / pg_temp_*）。
+        // 白名单模式：所属 catalog 已被勾选（整库放行，含系统 schema——用户明确要
+        // 显示这个库）或该 schema 名本身在白名单里，才保留。
+        let names = names
+            .into_iter()
+            .filter(|name| {
+                let in_visible_catalog =
+                    visible.is_some_and(|set| set.contains(catalog));
+                in_visible_catalog || nav_keep_object(name, visible, nav_is_system_schema)
+            })
+            .collect::<Vec<_>>();
+        let names = if names.is_empty() {
+            vec![FALLBACK_CONTAINER.to_string()]
+        } else {
+            names
+        };
         Ok(names
             .into_iter()
             .map(|name| {
@@ -1466,7 +1541,7 @@ mod l1_tests {
 
         let svc = offline_service(false);
         let nodes = svc
-            .load_children(conn_id, &NavPath::Connection)
+            .load_children(conn_id, &NavPath::Connection, None)
             .await
             .expect("L1 命中应成功（无需真实连接）");
         assert_eq!(nodes.len(), 1);
@@ -1474,7 +1549,7 @@ mod l1_tests {
 
         // 反证：同一服务下，没有 L1 条目的连接必须失败（否则上面的断言无意义）
         assert!(svc
-            .load_children("P_l1_test_no_such_conn", &NavPath::Connection)
+            .load_children("P_l1_test_no_such_conn", &NavPath::Connection, None)
             .await
             .is_err());
     }
@@ -1501,6 +1576,7 @@ mod l1_tests {
                     schema: "public".to_string(),
                     folder: NavFolder::Tables,
                 },
+                None,
             )
             .await
             .expect("表文件夹应从 L1 命中");
@@ -1514,6 +1590,7 @@ mod l1_tests {
                     schema: "public".to_string(),
                     table: "t1".to_string(),
                 },
+                None,
             )
             .await
             .expect("列应从 L1 命中");
@@ -1533,7 +1610,7 @@ mod l1_tests {
 
         let svc = offline_service(true);
         assert!(
-            svc.load_children(conn_id, &NavPath::Connection)
+            svc.load_children(conn_id, &NavPath::Connection, None)
                 .await
                 .is_err(),
             "刷新模式不得吃 L1，应走实时内省（空连接管理器下必然失败）"
@@ -1551,7 +1628,7 @@ mod l1_tests {
         }
 
         let svc = offline_service(true);
-        let _ = svc.load_children(conn_id, &NavPath::Connection).await;
+        let _ = svc.load_children(conn_id, &NavPath::Connection, None).await;
 
         let cache = l1();
         let mut guard = cache.lock().expect("锁 L1");
@@ -1586,6 +1663,7 @@ mod l1_tests {
                     catalog: "main".to_string(),
                     schema: "public".to_string(),
                 },
+                None,
             )
             .await
             .expect("静态文件夹永不失败");
@@ -1615,6 +1693,7 @@ mod l1_tests {
                     catalog: "main".to_string(),
                     schema: "public".to_string(),
                 },
+                None,
             )
             .await
             .expect("静态文件夹不依赖库，恒成功");
@@ -1775,6 +1854,7 @@ mod paging_tests {
                 &folder("public", NavFolder::Tables),
                 0,
                 PAGE,
+                None,
             )
             .await
             .expect("应从 L2 索引分页，不该回源库");
@@ -1811,7 +1891,7 @@ mod paging_tests {
         let page_size = PAGE;
         let offset = position - (position % page_size);
         let page = svc
-            .load_children_page(conn_id, &path, offset, page_size)
+            .load_children_page(conn_id, &path, offset, page_size, None)
             .await
             .expect("应从 L2 索引取页");
         assert!(
@@ -1852,11 +1932,11 @@ mod paging_tests {
         let svc = service(&root_s, false);
 
         let first = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None)
             .await
             .expect("首屏");
         let second = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), PAGE, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), PAGE, PAGE, None)
             .await
             .expect("第二页");
         assert_eq!(second.nodes.len(), PAGE);
@@ -1870,7 +1950,7 @@ mod paging_tests {
         );
 
         let last = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 2 * PAGE, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 2 * PAGE, PAGE, None)
             .await
             .expect("末页");
         assert_eq!(last.nodes.len(), BIG - 2 * PAGE);
@@ -1888,7 +1968,7 @@ mod paging_tests {
         seed(conn_id, &root_s, "public", BIG, true, true);
 
         let page = service(&root_s, false)
-            .load_children_page(conn_id, &folder("public", NavFolder::Views), 0, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Views), 0, PAGE, None)
             .await
             .expect("视图文件夹应能从索引分页");
         assert_eq!(page.nodes.len(), PAGE);
@@ -1913,7 +1993,7 @@ mod paging_tests {
         seed(conn_id, &root_s, "public", 3, false, true);
 
         let page = service(&root_s, false)
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None)
             .await
             .expect("小 schema 应从 L2 全量返回");
         assert_eq!(page.nodes.len(), 3);
@@ -1934,7 +2014,7 @@ mod paging_tests {
 
         assert!(
             service(&root_s, true)
-                .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+                .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None)
                 .await
                 .is_err(),
             "刷新模式必须以实时内省为准，不得直接返回索引里的旧列表"
@@ -1955,7 +2035,7 @@ mod paging_tests {
 
         let svc = service(&root_s, false);
         let page = svc
-            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE, None)
             .await
             .expect("索引缺失时应回退 L2 全量（仍不应回源库）");
         assert_eq!(page.total, BIG);
@@ -2053,7 +2133,7 @@ mod cached_folder_tests {
 
         let svc = service(conn_id, &root_s, false);
         let nodes = svc
-            .load_children(conn_id, &folder("public", NavFolder::Routines))
+            .load_children(conn_id, &folder("public", NavFolder::Routines), None)
             .await
             .expect("例程文件夹应从 L2 命中");
 
@@ -2088,7 +2168,7 @@ mod cached_folder_tests {
 
         let svc = service(conn_id, &root_s, false);
         let nodes = svc
-            .load_children(conn_id, &folder("public", NavFolder::Sequences))
+            .load_children(conn_id, &folder("public", NavFolder::Sequences), None)
             .await
             .expect("序列文件夹应从 L2 命中");
 
@@ -2119,7 +2199,7 @@ mod cached_folder_tests {
 
         let svc = service(conn_id, &root_s, false);
         let nodes = svc
-            .load_children(conn_id, &folder("public", NavFolder::Triggers))
+            .load_children(conn_id, &folder("public", NavFolder::Triggers), None)
             .await
             .expect("触发器文件夹应从 L2 命中");
 
@@ -2148,12 +2228,71 @@ mod cached_folder_tests {
 
         let svc = service(conn_id, &root_s, true);
         assert!(
-            svc.load_children(conn_id, &folder("public", NavFolder::Sequences))
+            svc.load_children(conn_id, &folder("public", NavFolder::Sequences), None)
                 .await
                 .is_err(),
             "刷新模式应走实时内省（空连接管理器下必然失败）"
         );
 
         cleanup(&root, conn_id);
+    }
+}
+
+#[cfg(test)]
+mod system_catalog_filter_tests {
+    //! S3-① 系统库 / 系统 schema 判定与可见性过滤（纯函数，无 I/O）。
+
+    use std::collections::BTreeSet;
+
+    use super::{nav_is_system_catalog, nav_is_system_schema, nav_keep_object};
+
+    #[test]
+    fn system_catalogs_are_detected_case_insensitively() {
+        for sys in ["information_schema", "mysql", "performance_schema", "sys", "admin", "local"] {
+            assert!(nav_is_system_catalog(sys), "小写命中: {sys}");
+            assert!(
+                nav_is_system_catalog(&sys.to_ascii_uppercase()),
+                "大写命中（大小写不敏感）: {sys}"
+            );
+        }
+        // main 是 SQLite/DuckDB 的单一库与 FALLBACK_CONTAINER，永不隐藏。
+        assert!(!nav_is_system_catalog("main"));
+        assert!(!nav_is_system_catalog("postgres"));
+        assert!(!nav_is_system_catalog("analytics"));
+    }
+
+    #[test]
+    fn system_schemas_are_detected_with_temp_prefixes() {
+        for sys in ["pg_catalog", "pg_toast", "information_schema"] {
+            assert!(nav_is_system_schema(sys), "命中: {sys}");
+        }
+        assert!(nav_is_system_schema("pg_temp_1"), "PG 临时 schema 前缀");
+        assert!(nav_is_system_schema("pg_toast_temp_1234"), "PG toast 临时前缀");
+        assert!(!nav_is_system_schema("public"));
+        assert!(!nav_is_system_schema("main"));
+        assert!(!nav_is_system_schema("app_public"));
+    }
+
+    #[test]
+    fn keep_object_default_mode_hides_system_objects() {
+        let none = None;
+        // 默认模式（未设置白名单）：系统对象隐藏、用户对象保留。
+        assert!(!nav_keep_object("mysql", none, nav_is_system_catalog));
+        assert!(nav_keep_object("postgres", none, nav_is_system_catalog));
+        assert!(!nav_keep_object("pg_catalog", none, nav_is_system_schema));
+        assert!(nav_keep_object("public", none, nav_is_system_schema));
+    }
+
+    #[test]
+    fn keep_object_whitelist_mode_shows_exactly_the_set() {
+        let set = BTreeSet::from(["mysql".to_string(), "analytics".to_string()]);
+        let visible = Some(&set);
+        // 白名单模式：原样展示集合里的名字（含系统对象）。
+        assert!(nav_keep_object("mysql", visible, nav_is_system_catalog));
+        assert!(nav_keep_object("analytics", visible, nav_is_system_catalog));
+        assert!(!nav_keep_object("postgres", visible, nav_is_system_catalog));
+        // 空集合 = 显式全隐藏（弹框里全部取消勾选）。
+        let empty = BTreeSet::new();
+        assert!(!nav_keep_object("analytics", Some(&empty), nav_is_system_catalog));
     }
 }

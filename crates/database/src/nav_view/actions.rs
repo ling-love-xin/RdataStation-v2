@@ -527,7 +527,17 @@ impl NavView {
             .host
             .project_root()
             .map(|p| p.to_string_lossy().to_string());
-        nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh, priority);
+        // S3-① 可见库白名单快照：入队时从宿主 settings 取一次（None = 默认隐藏系统库）。
+        let visible_databases = self.host.visible_databases(conn_id, cx);
+        nav_jobs::enqueue_load(
+            conn_id,
+            project_root.as_deref(),
+            key,
+            path,
+            fresh,
+            priority,
+            visible_databases,
+        );
         self.ensure_nav_pump(cx);
     }
 
@@ -766,6 +776,8 @@ impl NavView {
                 path,
                 &target.name,
                 nav_jobs::PAGE_SIZE,
+                // S3-① 定位也带白名单快照：定位页的过滤口径与首屏一致。
+                self.host.visible_databases(&target.conn_id, cx),
             );
             self.ensure_nav_pump(cx);
             return;

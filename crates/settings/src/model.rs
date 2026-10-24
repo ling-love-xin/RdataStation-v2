@@ -400,6 +400,13 @@ pub struct Navigator {
     /// 按此顺序展示。读写走导航面板自己的入口。
     #[serde(default)]
     pub saved_views: BTreeMap<String, NavigatorFilters>,
+    /// 每连接的可见库白名单（S3-①）：`conn_id → 可见集合`。
+    ///
+    /// 键不存在 = 默认模式（树隐藏系统库 / 系统 schema）；键存在 = 白名单模式
+    /// （原样展示集合里的名字，含系统对象）。集合里可同时含 catalog 名与 schema 名。
+    /// 空集合 = 显式「全部隐藏」，等价于默认模式但对用户可见（弹框里全部取消勾选）。
+    #[serde(default)]
+    pub visible_databases: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Navigator {
@@ -412,6 +419,7 @@ impl Default for Navigator {
             type_short_map: default_type_short_map(),
             filters: NavigatorFilters::default(),
             saved_views: BTreeMap::new(),
+            visible_databases: BTreeMap::new(),
         }
     }
 }

@@ -287,6 +287,10 @@ enum Job {
         /// 「定位到某个对象」：按名字先算位次，再把 `offset` 改为它所在的那一页。
         /// `None` = 普通分页（首屏 / 加载更多）。
         object: Option<String>,
+        /// S3-① 可见库白名单快照（入队时从宿主取）：`None` = 默认模式隐藏系统库 /
+        /// 系统 schema；`Some` = 白名单模式。与任务一起快照——执行时连接配置可能
+        /// 已变（白名单本身在 settings，不随连接配置走，但保持一致的成本极低）。
+        visible_databases: Option<std::collections::BTreeSet<String>>,
     },
     LoadProperties {
         key: String,
@@ -808,6 +812,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             offset,
             limit,
             object,
+            visible_databases,
         } => {
             // 限流：同一时刻最多 LOAD_CONCURRENCY 个加载任务执行（其余在信号量处排队，
             // loading 状态保持，UI 显示「加载中」）。不排队的话，多节点同时展开会
@@ -856,7 +861,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             let outcome = rt.block_on(async {
                 tokio::time::timeout(
                     JOB_TIMEOUT,
-                    svc.load_children_page(&conn_id, &path, offset, limit),
+                    svc.load_children_page(&conn_id, &path, offset, limit, visible_databases.as_ref()),
                 )
                 .await
             });
@@ -1031,6 +1036,8 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                             schema,
                             table,
                         },
+                        // 列层无系统对象，不过滤（S3-① 只作用于 catalog / schema 层）。
+                        None,
                     ),
                 )
                 .await
@@ -1261,6 +1268,8 @@ pub fn nav_result_is_stale(
 }
 
 /// 提交导航树懒加载（首屏 / 恢复展开态）。
+///
+/// `visible_databases`（S3-①）：入队时的可见库白名单快照（`None` = 默认隐藏系统库）。
 pub fn enqueue_load(
     conn_id: &str,
     project_root: Option<&str>,
@@ -1268,8 +1277,19 @@ pub fn enqueue_load(
     path: NavPath,
     fresh: bool,
     priority: JobPriority,
+    visible_databases: Option<std::collections::BTreeSet<String>>,
 ) {
-    enqueue_load_page(conn_id, project_root, key, path, fresh, 0, PAGE_SIZE, priority);
+    enqueue_load_page(
+        conn_id,
+        project_root,
+        key,
+        path,
+        fresh,
+        0,
+        PAGE_SIZE,
+        priority,
+        visible_databases,
+    );
 }
 
 /// 提交导航树分页加载（`offset` = 已加载条数，即可「加载更多」）。
@@ -1277,6 +1297,7 @@ pub fn enqueue_load(
 /// `priority`：用户手点（展开 / 加载更多）传 [`JobPriority::User`]，
 /// 后台恢复（展开态恢复 / 刷新 / 定位链）传 [`JobPriority::Background`]——
 /// 高优任务在 worker 侧插到低优前面（见 [`worker`] 的堆调度）。
+/// `visible_databases`（S3-①）：入队时的可见库白名单快照。
 #[allow(clippy::too_many_arguments)]
 pub fn enqueue_load_page(
     conn_id: &str,
@@ -1287,6 +1308,7 @@ pub fn enqueue_load_page(
     offset: usize,
     limit: usize,
     priority: JobPriority,
+    visible_databases: Option<std::collections::BTreeSet<String>>,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
     tracing::info!(conn_id = %conn_id, key = %key, fresh, priority = ?priority, "导航任务入队");
@@ -1300,6 +1322,7 @@ pub fn enqueue_load_page(
             offset,
             limit,
             object: None,
+            visible_databases,
         },
         priority,
     );
@@ -1310,6 +1333,7 @@ pub fn enqueue_load_page(
 /// 与 [`enqueue_load_page`] 分开命名（而不是加个 `Option` 参数）：调用点的意图不同——
 /// 一个是在当前窗口往后翻，另一个是**换窗跳到目标**；混在一个签名里最容易接错。
 /// 定位链是后台路径（用户的目标是最终定位，中间层展开不该插到手点前面）。
+/// `visible_databases`（S3-①）：入队时的可见库白名单快照。
 pub fn enqueue_locate_page(
     conn_id: &str,
     project_root: Option<&str>,
@@ -1317,6 +1341,7 @@ pub fn enqueue_locate_page(
     path: NavPath,
     object: &str,
     limit: usize,
+    visible_databases: Option<std::collections::BTreeSet<String>>,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
     submit(
@@ -1329,6 +1354,7 @@ pub fn enqueue_locate_page(
             offset: 0,
             limit,
             object: Some(object.to_string()),
+            visible_databases,
         },
         JobPriority::Background,
     );
@@ -1856,6 +1882,7 @@ mod tests {
             path,
             false,
             JobPriority::Background,
+            None,
         );
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -1895,6 +1922,7 @@ mod tests {
             NavPath::Connection,
             false,
             JobPriority::Background,
+            None,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut recovered = Vec::new();

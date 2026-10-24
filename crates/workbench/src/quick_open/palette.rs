@@ -76,6 +76,9 @@ pub(crate) struct QuickOpenPalette {
     debounce: Option<Task<()>>,
     /// 结果回填泵（打开时启动；关闭期间降频空转）。
     pump: Option<Task<()>>,
+    /// S1-① 批次序号：每次发搜索 +1，回填时丢弃旧批次（同词重跑被
+    /// `sent_query` 拦截，但防抖窗口内开关/目标重排后重发同词时，序号是唯一权威）。
+    search_seq: u64,
 }
 
 impl QuickOpenPalette {
@@ -98,6 +101,7 @@ impl QuickOpenPalette {
             rows_dirty: false,
             debounce: None,
             pump: None,
+            search_seq: 0,
         };
         this.ensure_pump(cx);
         this
@@ -370,6 +374,10 @@ impl QuickOpenPalette {
         self.searching = true;
         let executor = cx.background_executor().clone();
         let weak = cx.entity().downgrade();
+        // S1-① 序号守卫：防抖窗口内的重排（开关 / 连接目标变化）会重发同词，
+        // 回填时以序号为准，词判据兜底。
+        let seq = self.search_seq + 1;
+        self.search_seq += 1;
         // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）
         let task = cx.spawn(async move |_this, cx| {
             executor
@@ -378,6 +386,7 @@ impl QuickOpenPalette {
             let _ = weak.update(cx, |_this, _cx| {
                 database::nav_jobs::enqueue_search(
                     database::nav_jobs::SearchConsumer::QuickOpen,
+                    seq,
                     kind,
                     &needle,
                     // 快速打开（Quick Open）：无 `.*` / `Aa` 开关，走默认关。
@@ -434,8 +443,8 @@ impl QuickOpenPalette {
             .unwrap_or_default();
         let mut changed = false;
         for result in results {
-            // 过期批次：词已经被改了（收尾交给当前词的那一批）
-            if result.query != current {
+            // 过期批次：序号不是最新（同词重排后重发）或词已被改（收尾交给当前词）。
+            if result.seq != self.search_seq || result.query != current {
                 continue;
             }
             self.searching = false;

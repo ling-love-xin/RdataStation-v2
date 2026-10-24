@@ -2498,6 +2498,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         .map(|p| p.to_string_lossy().to_string());
                     this.nav.borrow_mut().loading.insert(k.clone());
                     // 「加载更多」是用户手点：高优先（S2-①），插到后台批次前面。
+                    // S3-①：白名单快照与首屏一致（否则追加页的过滤口径会漂移）。
+                    let visible = this.host.visible_databases(&conn_id, cx);
                     nav_jobs::enqueue_load_page(
                         &conn_id,
                         root.as_deref(),
@@ -2507,6 +2509,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         loaded,
                         nav_jobs::PAGE_SIZE,
                         JobPriority::User,
+                        visible,
                     );
                     this.ensure_nav_pump(cx);
                     cx.notify();
@@ -2579,7 +2582,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         .project_root()
                         .map(|p| p.to_string_lossy().to_string());
                     this.nav.borrow_mut().loading.insert(k.clone());
-                    // 「回开头」也是用户手点：高优先（S2-①）。
+                    // 「回开头」也是用户手点：高优先（S2-①）；白名单快照同首屏（S3-①）。
+                    let visible = this.host.visible_databases(&conn_id, cx);
                     nav_jobs::enqueue_load_page(
                         &conn_id,
                         root.as_deref(),
@@ -2589,6 +2593,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         0,
                         nav_jobs::PAGE_SIZE,
                         JobPriority::User,
+                        visible,
                     );
                     this.ensure_nav_pump(cx);
                     cx.notify();

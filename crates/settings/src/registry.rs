@@ -118,6 +118,8 @@ pub enum Slot {
     NavigatorFilters,
     /// 已保存视图（复合值：命名 facet 快照列表；读写走导航面板自己的入口）。
     NavigatorSavedViews,
+    /// 每连接可见库白名单（S3-① 复合值：`conn_id → 名字集合`；读写走 SettingsService）。
+    NavigatorVisibleDatabases,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
     ResourcesCollapsedGroups,
@@ -154,6 +156,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.show_name_type_short" => Slot::NavigatorShowNameTypeShort,
         "navigator.filters" => Slot::NavigatorFilters,
         "navigator.saved_views" => Slot::NavigatorSavedViews,
+        "navigator.visible_databases" => Slot::NavigatorVisibleDatabases,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
         "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
@@ -197,6 +200,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ResourcesDefaultGroup => KindTag::Composite,
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::NavigatorSavedViews => KindTag::Composite,
+        Slot::NavigatorVisibleDatabases => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
@@ -214,6 +218,7 @@ pub fn slot_is_scalar(slot: Slot) -> bool {
         slot,
         Slot::NavigatorFilters
             | Slot::NavigatorSavedViews
+            | Slot::NavigatorVisibleDatabases
             | Slot::ResourcesCollapsedGroups
             | Slot::ScratchpadToolbar
     )
@@ -548,6 +553,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
         consumer: "workbench/src/components/saved_view_dialog.rs + nav_view/chrome.rs（⋯ 菜单视图组）",
+        composite: true,
+    },
+    SettingSpec {
+        key: "navigator.visible_databases",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "可见库白名单",
+        hint: "每连接的可见库白名单（空 / 未设置 = 默认隐藏系统库与系统 schema；设置后原样展示白名单，含系统对象）。连接行右键「数据库可见性…」维护",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{}",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "database/src/navigator_service.rs（树加载过滤，经 NavHost 快照传入）+ workbench/src/components/visible_databases_dialog.rs",
         composite: true,
     },
     SettingSpec {

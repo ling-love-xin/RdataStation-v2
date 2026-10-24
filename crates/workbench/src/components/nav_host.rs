@@ -196,6 +196,25 @@ impl NavHost for WorkbenchNavHost {
         crate::components::saved_view_dialog::open_manage_views_dialog(window, cx, &self.shared);
     }
 
+    // ==================== 可见库白名单（S3-①） ====================
+
+    fn visible_databases(
+        &self,
+        conn_id: &str,
+        cx: &App,
+    ) -> Option<std::collections::BTreeSet<String>> {
+        settings::SettingsService::visible_databases(conn_id, cx).map(|v| v.into_iter().collect())
+    }
+
+    fn set_visible_databases(
+        &self,
+        conn_id: &str,
+        visible: Option<Vec<String>>,
+        cx: &mut App,
+    ) {
+        settings::SettingsService::set_visible_databases(conn_id, visible, cx);
+    }
+
     // ==================== 连接生命周期 ====================
 
     fn is_connected(&self, conn_id: &str) -> bool {
