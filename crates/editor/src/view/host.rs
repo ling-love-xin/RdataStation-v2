@@ -4682,7 +4682,21 @@ impl EditorHostPanel {
     // Quick Open 式中文语义搜索（输入「截取」→ SUBSTR），确认后把函数名插到光标处。
     // 数据与排序全在 engine（157 条 / 9 类静态手册），editor 只做弹层与插入。
 
-    /// `Ctrl+Shift+M` / 工具栏按钮：打开函数手册
+    /// `Ctrl+Shift+Space`：签名帮助（识别光标前函数调用 → 内置签名目录 → Dialog；
+    /// 识别不出 / 查不到 = 静默，不打扰）
+    pub(crate) fn on_signature_help(
+        &mut self,
+        _: &crate::commands::SignatureHelp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.editor.read(cx).value().to_string();
+        // 活动光标在前（多光标取第一个即可——签名帮助是"看当前调用"的辅助）
+        let cursor = self.editor.read(cx).cursor_offsets().first().copied().unwrap_or(0);
+        if let Some(view) = crate::view::signature_help::current_call(&text, cursor) {
+            crate::view::signature_help::open_signature_help(window, cx, view);
+        }
+    }
     pub(crate) fn on_function_manual(
         &mut self,
         _: &crate::commands::FunctionManual,
@@ -7937,6 +7951,8 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_execute_all))
             // 【#54-C5】函数手册：`Ctrl+Shift+M`（键位在 crates/app 注册，context 同为 editor）
             .on_action(cx.listener(Self::on_function_manual))
+            // 【#54-C4】签名帮助：`Ctrl+Shift+Space`
+            .on_action(cx.listener(Self::on_signature_help))
             // 【B14】网格里的 `Ctrl+C`：键位绑在 `view/results/grid.rs` 那一层的上下文上，
             // 所以只有焦点在网格里时才会走到这里（编辑区里 `Ctrl+C` 仍归内核的文本复制）
             .on_action(cx.listener(Self::on_copy_grid_selection))

@@ -19,6 +19,7 @@ use analytics_resource::commands::{
 };
 use editor::commands::{
     CloseDocument, CopyGridSelection, ExecuteAll, ExecuteSql, FormatDocument, FunctionManual,
+    SignatureHelp,
     OpenDocument,
     RedoResultEdit, SaveDocument, SaveDocumentAs, ToggleComment, TriggerCompletion,
     UndoResultEdit,
@@ -238,6 +239,9 @@ fn run_app() {
                 KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
                 // 【#54-C5】函数手册：`Ctrl+Shift+M`（已核对内核与 editor 现有键位无冲突）
                 KeyBinding::new("ctrl-shift-m", FunctionManual, Some("editor")),
+                // 【#54-C4】签名帮助：`Ctrl+Shift+Space`（已核对：内核无 `ctrl-shift-space`，
+                // 项目内仅 `ctrl-space` 被 TriggerCompletion 占用，Shift 档空闲）
+                KeyBinding::new("ctrl-shift-space", SignatureHelp, Some("editor")),
                 // 【B9 切片二】手动补全：`Ctrl+Space`（内核没占用：grep 过 `input/` 下的 `ctrl-space` /
                 // `"space"` 均为空；打字触发那条路由内核自己管，这条只是“再请一次候选”）
                 KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),

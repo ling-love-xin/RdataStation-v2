@@ -148,3 +148,7 @@ pub const FUNCTION_MANUAL_DIALOG_WIDTH: f32 = 38.0;
 
 /// 【#54-C5】函数手册结果行高（3.0rem = 48px：两行式——函数名+分类标签 / 中文描述）
 pub const FUNCTION_MANUAL_ROW_HEIGHT: f32 = 3.0;
+
+/// 【#54-C4】签名帮助对话框宽度（32rem = 512px：签名 + 参数表 + 描述，无需函数手册
+/// 那么宽——没有搜索框与结果列表）
+pub const SIGNATURE_HELP_DIALOG_WIDTH: f32 = 32.0;

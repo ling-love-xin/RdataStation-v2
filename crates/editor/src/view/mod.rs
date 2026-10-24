@@ -13,6 +13,7 @@ pub mod history;
 pub mod host;
 pub mod manage_env;
 pub mod results;
+pub mod signature_help;
 pub mod widgets;
 
 #[cfg(test)]

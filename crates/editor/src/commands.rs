@@ -35,7 +35,8 @@ actions!(
         CopyGridSelection,
         UndoResultEdit,
         RedoResultEdit,
-        FunctionManual
+        FunctionManual,
+        SignatureHelp
     ]
 );
 
