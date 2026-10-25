@@ -24,8 +24,8 @@ members = [
     "crates/workbench_shell",
     "crates/result_panel",
 ]
-# 默认构建只覆盖 app 依赖图：plugin（extism → wasmtime）不在 app 图上，
-# 裸 `cargo build/check/run` 不必为它付出编译时间。
+# 默认构建只覆盖 app 依赖图；plugin 的 wasm 轨（extism → wasmtime）已由 `wasm` feature
+# 门控、**默认不编译**（见 crates/plugin/Cargo.toml），裸 `cargo build/check/run` 不碰 wasmtime。
 # 注意：`cargo test` 默认只覆盖这些成员，需要全量时显式加 `--workspace`。
 default-members = ["crates/app"]
 
@@ -253,6 +253,9 @@ fake = { version = "5.1.0", features = [
     "rust_decimal",
     "time",
 ] }
+# wasm 插件运行时（Extism PDK 宿主）：只在 rds-plugin 的 `wasm` feature 下启用、默认关闭
+# （extism 1.30 强绑定 wasmtime v43 且无 wasmi/wasm3 后端，单它就为发布二进制贡献约 20–40MB；
+# 门控细节见 crates/plugin/Cargo.toml 与 docs/architecture/plugin/README.md Q10）
 extism = "1.30.0"
 reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
 

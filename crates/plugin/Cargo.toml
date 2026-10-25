@@ -25,8 +25,14 @@ specta.workspace = true
 # 反向 Host API 的 secret 一次性值走 base64（见 sidecar/host.rs）
 base64.workspace = true
 
-# ===== WASM 运行时 =====
-extism.workspace = true
+# ===== WASM 运行时（可选轨，默认关闭）=====
+# wasm 轨已冻结为「可选性能轨」（docs/architecture/plugin/README.md Q10，2026-10-16 定案）：
+# 宿主侧 render_document 尚未接线（随 D7 暂缓），实际发布插件走 sidecar 轨。
+# extism 1.30 强绑定 wasmtime v43（非 optional，无 wasmi/wasm3 后端），单是它就为发布
+# 二进制贡献约 20–40MB（估）。因此把 extism 做成 optional，由 `wasm` feature 启用；
+# 默认构建（含 `cargo build/check/run` 与发布流水线的 `-p rds-app`）不再编译 wasmtime。
+# 需要时：`cargo build -p rds-app --features rds-plugin/wasm`（或给依赖方统一开 feature）。
+extism = { workspace = true, optional = true }
 
 # ===== 其他 =====
 tracing.workspace = true
@@ -39,6 +45,11 @@ toml.workspace = true
 zip.workspace = true
 tar.workspace = true
 flate2.workspace = true
+
+[features]
+# 默认不启用 wasm 轨（wasmtime 不进编译图，见上方 extism 注释）；需要 wasm 插件时显式开启。
+default = []
+wasm = ["dep:extism"]
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

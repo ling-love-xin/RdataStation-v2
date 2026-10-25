@@ -31,13 +31,15 @@ use shared::error::{CommonError, CoreError, PluginError};
 use super::manifest::{ManifestParser, PluginManifest};
 use crate::sidecar::factory::register_sidecar_drivers;
 use crate::sidecar::supervisor::SidecarSupervisor;
-use crate::wasm::extism::PluginState;
-use crate::wasm::{ExtismPluginManager, PluginMetadata, PluginType};
+use crate::wasm::{PluginMetadata, PluginState, PluginType};
+#[cfg(feature = "wasm")]
+use crate::wasm::ExtismPluginManager;
 
 /// 插件形态（三轨）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginKind {
-    /// 进程内沙箱（Extism）
+    /// 进程内沙箱（Extism；仅 `wasm` feature 下编译，见 detect_plugin_kind）
+    #[cfg(feature = "wasm")]
     Wasm,
     /// 独立子进程（sidecar / script，进进程池）
     Sidecar,
@@ -111,7 +113,8 @@ pub enum LoadStatus {
 
 /// 插件管理器核心：发现 → 加载 → 激活 → 停用 → 卸载，单一入口。
 pub struct PluginManager {
-    /// wasm 运行时（Extism；进程内沙箱）
+    /// wasm 运行时（Extism；进程内沙箱；仅 `wasm` feature 下存在）
+    #[cfg(feature = "wasm")]
     wasm_manager: Arc<ExtismPluginManager>,
     /// sidecar 运行时（P1 的 `SidecarSupervisor`；构造期创建，部署 / 注册是幂等的）
     sidecar: Arc<tokio::sync::Mutex<SidecarSupervisor>>,
@@ -147,10 +150,20 @@ fn not_found(id: &str) -> CoreError {
     CoreError::common(CommonError::Internal(format!("Plugin {id} not found")))
 }
 
+/// 无 `wasm` feature 时遇到 wasm 形态插件的统一报错（诚实口径：不是不支持，
+/// 是本构建没编入 wasm 轨；需要 `--features rds-plugin/wasm` 的构建）。
+#[cfg(not(feature = "wasm"))]
+fn wasm_not_compiled(id: &str) -> CoreError {
+    CoreError::common(CommonError::Internal(format!(
+        "wasm 插件需要带 `wasm` feature 的构建（当前构建未启用，见 crates/plugin/Cargo.toml）: {id}"
+    )))
+}
+
 impl PluginManager {
     /// 创建插件管理器；`install_dir` 是插件安装目录（`paths::plugins_dir()`）。
     pub fn new(install_dir: PathBuf) -> Self {
         Self {
+            #[cfg(feature = "wasm")]
             wasm_manager: Arc::new(ExtismPluginManager::new()),
             sidecar: Arc::new(tokio::sync::Mutex::new(SidecarSupervisor::new())),
             plugin_dirs: RwLock::new(Vec::new()),
@@ -255,14 +268,22 @@ impl PluginManager {
     /// 面板 / 命令 / 设置扩展（D1 三轨的「扩展宿主进程」形态），不是驱动子进程。
     fn detect_plugin_kind(&self, manifest: &PluginManifest) -> Result<PluginKind, CoreError> {
         if let Some(backend) = &manifest.backend {
-            return Ok(match backend.kind {
-                crate::manifest::BackendKind::Wasm => PluginKind::Wasm,
+            match backend.kind {
+                crate::manifest::BackendKind::Wasm => {
+                    #[cfg(feature = "wasm")]
+                    return Ok(PluginKind::Wasm);
+                    #[cfg(not(feature = "wasm"))]
+                    return Err(wasm_not_compiled(&manifest.plugin.id));
+                }
                 crate::manifest::BackendKind::Sidecar
-                | crate::manifest::BackendKind::Script => PluginKind::Sidecar,
-            });
+                | crate::manifest::BackendKind::Script => return Ok(PluginKind::Sidecar),
+            }
         }
         if manifest.capabilities.wasm.is_some() {
+            #[cfg(feature = "wasm")]
             return Ok(PluginKind::Wasm);
+            #[cfg(not(feature = "wasm"))]
+            return Err(wasm_not_compiled(&manifest.plugin.id));
         }
         if manifest.capabilities.frontend.is_some() {
             return Ok(PluginKind::Frontend);
@@ -387,6 +408,7 @@ impl PluginManager {
             .ok_or_else(|| not_found(id))?;
 
         let result = match kind {
+            #[cfg(feature = "wasm")]
             PluginKind::Wasm => self.activate_wasm(id),
             PluginKind::Sidecar => self.activate_sidecar(id).await,
             PluginKind::Frontend => Ok(()),
@@ -413,6 +435,7 @@ impl PluginManager {
     }
 
     /// wasm 激活路径：从安装态缓存取清单（`capabilities.wasm.entry`）+ 目录，读字节进 Extism。
+    #[cfg(feature = "wasm")]
     fn activate_wasm(&self, id: &str) -> Result<(), CoreError> {
         // 幂等：已在 Active 的插件重复激活直接返回
         if self
@@ -497,6 +520,7 @@ impl PluginManager {
             .ok_or_else(|| not_found(id))?;
 
         match kind {
+            #[cfg(feature = "wasm")]
             PluginKind::Wasm => {
                 self.wasm_manager.deactivate_plugin(id)?;
             }
@@ -539,6 +563,9 @@ impl PluginManager {
 
     /// 卸载插件：先停用，再从运行时 / 缓存 / 索引移除。
     pub async fn unload_plugin(&self, id: &str) -> Result<(), CoreError> {
+        // 形态判定只在 wasm 轨需要（sidecar / frontend 的卸载统一走 deactivate）。
+        // cfg(not(wasm)) 时不读 `kind`，避免 unused variable。
+        #[cfg(feature = "wasm")]
         let kind = self
             .plugin_index
             .read()
@@ -549,6 +576,7 @@ impl PluginManager {
 
         self.deactivate_plugin(id).await?;
 
+        #[cfg(feature = "wasm")]
         if kind == PluginKind::Wasm {
             self.wasm_manager.unload_plugin(id)?;
         }
@@ -842,30 +870,34 @@ impl PluginManager {
     pub fn list_plugins(&self) -> Result<Vec<PluginInfo>, CoreError> {
         let mut plugins = Vec::new();
 
-        // wasm：运行时里真实存在、且还在形态索引里的
-        let wasm_plugins: Vec<_> = self
-            .wasm_manager
-            .list_plugins()
-            .map_err(|e| CoreError::common(CommonError::Internal(format!(
-                "Failed to list plugins: {}",
-                e
-            ))))?
-            .into_iter()
-            .map(|(meta, state)| PluginInfo {
-                id: meta.id.clone(),
-                name: meta.name.clone(),
-                version: meta.version.clone(),
-                kind: PluginKind::Wasm,
-                metadata: meta,
-                state,
-            })
-            .collect();
-        plugins.extend(wasm_plugins);
+        // wasm：运行时里真实存在、且还在形态索引里的（仅 `wasm` feature 下才有运行时）
+        #[cfg(feature = "wasm")]
+        {
+            let wasm_plugins: Vec<_> = self
+                .wasm_manager
+                .list_plugins()
+                .map_err(|e| CoreError::common(CommonError::Internal(format!(
+                    "Failed to list plugins: {}",
+                    e
+                ))))?
+                .into_iter()
+                .map(|(meta, state)| PluginInfo {
+                    id: meta.id.clone(),
+                    name: meta.name.clone(),
+                    version: meta.version.clone(),
+                    kind: PluginKind::Wasm,
+                    metadata: meta,
+                    state,
+                })
+                .collect();
+            plugins.extend(wasm_plugins);
+        }
 
         // sidecar / frontend：形态索引里有、但不在 wasm 运行时里的
         let index = self.plugin_index.read().map_err(|_| lock_err("plugin_index"))?;
         let loaded = self.loaded_plugins.read().map_err(|_| lock_err("loaded_plugins"))?;
         for (id, kind) in index.iter() {
+            #[cfg(feature = "wasm")]
             if matches!(kind, PluginKind::Wasm) {
                 continue; // 上面已经列了
             }
@@ -906,7 +938,8 @@ impl PluginManager {
             .unwrap_or_default()
     }
 
-    /// 获取 WASM 管理器引用
+    /// 获取 WASM 管理器引用（仅 `wasm` feature 下存在；宿主接入 wasm 渲染轨用）
+    #[cfg(feature = "wasm")]
     pub fn wasm_manager(&self) -> Arc<ExtismPluginManager> {
         Arc::clone(&self.wasm_manager)
     }

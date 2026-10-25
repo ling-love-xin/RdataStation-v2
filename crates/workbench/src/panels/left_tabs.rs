@@ -23,7 +23,7 @@ use crate::view::LeftPanel;
 
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
-use plugin::wasm::extism::PluginState;
+use plugin::wasm::PluginState;
 use plugin::PluginInfo;
 use scratchpad::ScratchpadView;
 

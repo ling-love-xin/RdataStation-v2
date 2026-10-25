@@ -1,24 +1,10 @@
 use std::collections::HashMap;
 
 use extism::{Function, Manifest, Plugin, UserData, ValType, Wasm};
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
-use super::{PluginMetadata};
+use super::{PluginMetadata, PluginState};
 use shared::error::{CommonError, CoreError};
-
-/// 插件状态枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PluginState {
-    /// 已加载但未激活
-    Loaded,
-    /// 已激活，正在运行
-    Active,
-    /// 已停用
-    Inactive,
-    /// 发生错误
-    Error,
-}
 
 /// 插件实例包装
 struct ManagedPlugin {

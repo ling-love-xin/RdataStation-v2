@@ -26,6 +26,8 @@ pub mod installer;
 pub mod manager;
 pub mod manifest;
 pub mod permission;
+// 渲染计算服务（wasm 轨）：随 `wasm` feature 门控（默认不编译，见 Cargo.toml 注释）
+#[cfg(feature = "wasm")]
 pub mod render;
 pub mod runtime;
 

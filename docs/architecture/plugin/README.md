@@ -52,7 +52,7 @@
 | --- | --- | --- |
 | Q1 | 项目引用表：迁移到 `project_resources(kind,id,version,enabled,enforce,config_json)` vs 沿用现有两表 | P0 是否含一次迁移（现无生产调用方，建议迁） |
 | Q9 | 键位贡献是否开放 | 命令面板之外的可见性 |
-| Q10 | wasm 轨：**已定案**（2026-10-16，方案 A）降为**可选性能轨**：仅保留「一次性渲染 / 导出」实证（`tools/plugin-render-mermaid`，Mermaid 文本 → SVG）；**不再扩建** wasm 轨（冻结口径不变，等真有需求再启） | wasm 轨场景收敛为纯计算 / 导出 |
+| Q10 | wasm 轨：**已定案**（2026-10-16，方案 A）降为**可选性能轨**：仅保留「一次性渲染 / 导出」实证（`tools/plugin-render-mermaid`，Mermaid 文本 → SVG）；**不再扩建** wasm 轨（冻结口径不变，等真有需求再启）。**2026-10-25：feature 门控落地**——`crates/plugin` 的 `wasm` feature（`extism` 改 optional，默认关闭）把 wasmtime v43 移出默认编译图（发布二进制估省 20–40MB，见 `plugin/Cargo.toml` 注释）；需要时 `--features rds-plugin/wasm` 整轨启用，`render` 服务与 `ExtismPluginManager` 均随该 feature 编译 | wasm 轨场景收敛为纯计算 / 导出 |
 | Q11 | ER 建模视图渲染路线：**已定案**（2026-10-16，方案 A）webview 轨**已否决**（用户定调不引入前端栈）；主路线 = **GPUI 原生渲染**（`crates/database/src/er/` 已启动）；**Mermaid 降为导出轨**——mermaid-rs-renderer 纯 Rust 可编 wasm（原否决前提「需 webview」已被推翻），仅服务一次性渲染/导出，不承载交互画布 | 交互画布走原生，一次性产出走导出轨；宿主侧接入仍随 D7 暂缓 |
 
 ## 4. 代码地图（`crates/plugin/`，现状实测）

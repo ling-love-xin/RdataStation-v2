@@ -26,10 +26,13 @@
 //! 2. **驱动插件**: 自定义数据库驱动
 //! 3. **工具插件**: SQL 格式化、代码生成
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // 导出子模块
 pub mod api;
+// `extism` 运行时只在 `wasm` feature 下编译（extism 强绑定 wasmtime，默认构建不进编译图；
+// 见 crates/plugin/Cargo.toml 的 feature 注释与 docs/architecture/plugin/README.md Q10）。
+#[cfg(feature = "wasm")]
 pub mod extism;
 // 注：`host_functions` 已于 P0 删除。原有 4 个 host function 全是“无条件返回错误”的占位
 // （签名也不对：Extism 读宿主内存要走 `host_fn!` + `Memory`，不是 Val 数组），且全仓零调用。
@@ -42,7 +45,22 @@ pub mod extism;
 // allowed_host_functions）一起重建 —— 那是「运行期强制」，不是一张自维护的表。
 
 // 重新导出核心类型
+#[cfg(feature = "wasm")]
 pub use self::extism::ExtismPluginManager;
+
+/// 插件状态枚举（无运行时依赖：manager / workbench 在**默认构建**也要用它显示状态徽标，
+/// 所以不随 `extism` 一起门控）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginState {
+    /// 已加载但未激活
+    Loaded,
+    /// 已激活，正在运行
+    Active,
+    /// 已停用
+    Inactive,
+    /// 发生错误
+    Error,
+}
 
 /// 插件类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
