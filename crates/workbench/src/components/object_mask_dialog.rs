@@ -1,8 +1,9 @@
 //! 对象名过滤器对话框（B-1）：连接级与全局级共用一套结构。
 //!
-//! 连接级：include / exclude 两个多行 Textarea（每行一条 glob，空行忽略），
+//! 连接级：include / exclude 两个多行 Textarea（每行一条模式，空行忽略），
+//! 「按正则匹配」开关决定 glob（`*` / `?`）还是正则（`(?i)` 大小写不敏感）；
 //! 保存 → `SettingsService::set_object_mask`；「清空」= 删除该连接规则（回到不过滤）。
-//! 全局级：同结构，保存 → `set_global_mask`；「清空」= 空规则（不启用）。
+//! 全局级：同结构，保存 → `set_global_mask`；「清空」= 空规则（不启用，glob 档）。
 //!
 //! 对话框不读导航树（纯 settings 读写）；保存后由调用方刷新树 / 搜索命中区
 //! （本对话框不持有导航视图句柄，刷新动作留在打开它的菜单回调里）。
@@ -14,18 +15,46 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use settings::model::ObjectMaskRule;
 
-/// 解析 Textarea 文本为 glob 列表（每行一条、trim、空行忽略）。
+/// 解析 Textarea 文本为模式列表（每行一条、trim、空行忽略）。
 fn parse_lines(raw: &str) -> Vec<String> {
     raw.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// include 输入框占位文案：glob / 正则两档。
+fn include_placeholder(use_regex: bool) -> &'static str {
+    if use_regex {
+        "每行一条正则（如 ^ord.*）"
+    } else {
+        "每行一条 glob（如 orders*）"
+    }
+}
+
+/// exclude 输入框占位文案：glob / 正则两档。
+fn exclude_placeholder(use_regex: bool) -> &'static str {
+    if use_regex {
+        "排除（每行一条正则）"
+    } else {
+        "排除（每行一条 glob）"
+    }
+}
+
+/// 由两个输入框文本与正则开关态构造保存规则（每行一条、trim、空行忽略）。
+fn build_rule(include_raw: &str, exclude_raw: &str, use_regex: bool) -> ObjectMaskRule {
+    ObjectMaskRule {
+        include: parse_lines(include_raw),
+        exclude: parse_lines(exclude_raw),
+        use_regex,
+    }
 }
 
 /// 打开连接级「对象名过滤器」对话框。
@@ -46,14 +75,18 @@ pub fn open_object_mask_dialog(
         _ => "全局对象名过滤器".to_string(),
     };
 
+    // 正则开关受控态：初值取持久化规则；切换时写回并刷新占位文案与对话框层。
+    let use_regex = Rc::new(RefCell::new(rule.use_regex));
     let include_input = cx.new(|cx| {
-        let mut state = TextareaState::new(window, cx).placeholder("每行一条 glob（如 orders*）");
+        let mut state =
+            TextareaState::new(window, cx).placeholder(include_placeholder(rule.use_regex));
         // set_value 内部 emit_events=false、清空 undo 栈：对话框打开初始化不触发 Change 副作用。
         state.set_value(rule.include.join("\n"), window, cx);
         state
     });
     let exclude_input = cx.new(|cx| {
-        let mut state = TextareaState::new(window, cx).placeholder("排除（每行一条 glob）");
+        let mut state =
+            TextareaState::new(window, cx).placeholder(exclude_placeholder(rule.use_regex));
         state.set_value(rule.exclude.join("\n"), window, cx);
         state
     });
@@ -66,12 +99,13 @@ pub fn open_object_mask_dialog(
     let save = {
         let submitted = submitted.clone();
         let conn_id = conn_id.map(str::to_string);
+        let use_regex = use_regex.clone();
         move |cx: &mut App| -> bool {
-            let rule = ObjectMaskRule {
-                include: parse_lines(&include_for_save.read(cx).value()),
-                exclude: parse_lines(&exclude_for_save.read(cx).value()),
-                use_regex: false,
-            };
+            let rule = build_rule(
+                &include_for_save.read(cx).value(),
+                &exclude_for_save.read(cx).value(),
+                *use_regex.borrow(),
+            );
             match &conn_id {
                 Some(id) => settings::SettingsService::set_object_mask(id, Some(rule), cx),
                 None => settings::SettingsService::set_global_mask(rule, cx),
@@ -106,6 +140,33 @@ pub fn open_object_mask_dialog(
             .child(Textarea::new(&include_input).h(rems(5.0)))
             .child(field_label(theme, "排除（优先于只显示）"))
             .child(Textarea::new(&exclude_input).h(rems(5.0)))
+            .child(
+                div().h_flex().items_center().gap_2().child(
+                    Switch::new("object-mask-use-regex")
+                        .checked(*use_regex.borrow())
+                        .label("按正则匹配")
+                        .on_click({
+                            let use_regex = use_regex.clone();
+                            let include_input = include_input.clone();
+                            let exclude_input = exclude_input.clone();
+                            move |on, window, cx| {
+                                let next = *on;
+                                *use_regex.borrow_mut() = next;
+                                // 占位文案随开关档切换；`set_placeholder` 内部 notify 输入框。
+                                include_input.update(cx, |state, cx| {
+                                    state.set_placeholder(include_placeholder(next), window, cx);
+                                });
+                                exclude_input.update(cx, |state, cx| {
+                                    state.set_placeholder(exclude_placeholder(next), window, cx);
+                                });
+                                // 对话框闭包挂在宿主视图 render 的 dialog 层，`cx.notify()`
+                                // 只标脏子树、刷不到本层；与 log_dialog 一致靠 refresh_windows
+                                // 让窗口重建闭包，受控 `checked` 才会翻到新值。
+                                cx.refresh_windows();
+                            }
+                        }),
+                ),
+            )
             .child(
                 div()
                     .text_xs()
@@ -156,4 +217,42 @@ fn field_label(theme: &Theme, text: &str) -> impl IntoElement {
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    // 显式列举依赖（**不通配导入**）：`super::*` 会把 `use gpui_kit::*` 带进来，
+    // 于是 `#[test]` 解析成 gpui 的 `test` 宏，展开到递归上限——见 gpui-kit-dev skill。
+    use super::{build_rule, exclude_placeholder, include_placeholder, parse_lines};
+    use settings::model::ObjectMaskRule;
+
+    /// 保存规则透传正则开关，逐行解析（trim、空行忽略）。
+    #[test]
+    fn build_rule_parses_lines_and_passes_through_regex_flag() {
+        let regex = build_rule("orders*\n\n  customers*\n", "temp_*\n", true);
+        assert_eq!(regex.include, vec!["orders*", "customers*"]);
+        assert_eq!(regex.exclude, vec!["temp_*"]);
+        assert!(regex.use_regex);
+
+        let glob = build_rule("orders*", "temp_*", false);
+        assert_eq!(glob.include, vec!["orders*"]);
+        assert!(!glob.use_regex);
+    }
+
+    /// 占位文案随 glob / 正则两档切换，include 与 exclude 各自独立。
+    #[test]
+    fn placeholders_switch_between_glob_and_regex() {
+        assert_eq!(include_placeholder(false), "每行一条 glob（如 orders*）");
+        assert_eq!(include_placeholder(true), "每行一条正则（如 ^ord.*）");
+        assert_eq!(exclude_placeholder(false), "排除（每行一条 glob）");
+        assert_eq!(exclude_placeholder(true), "排除（每行一条正则）");
+    }
+
+    /// 「清空」走默认规则：正则开关重置回 glob 档；空文本解析为空列表。
+    #[test]
+    fn cleared_rule_defaults_to_glob_and_empty_lines() {
+        assert!(!ObjectMaskRule::default().use_regex);
+        assert!(parse_lines("").is_empty());
+        assert!(parse_lines("  \n\t\n").is_empty());
+    }
 }

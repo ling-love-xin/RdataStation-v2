@@ -425,21 +425,21 @@ pub struct Navigator {
     pub global_mask: ObjectMaskRule,
 }
 
-/// 对象名过滤规则（B-1，v1 仅 glob）。
+/// 对象名过滤规则（B-1，glob / 正则双档，由 `use_regex` 切换）。
 ///
-/// 匹配语义：`*` 任意多字符 / `?` 单字符，大小写不敏感；include 为空 = 全部候选
-/// 进入候选集；exclude 为空 = 不排除；**exclude 优先于 include**（命中 include 且
-/// 未命中 exclude 的对象保留）。`use_regex` v1 恒 `false`（UI 不暴露，随 B-1-A
-/// 正则挂 v2）。
+/// 匹配语义：include 为空 = 全部候选进入候选集；exclude 为空 = 不排除；**exclude 优先于
+/// include**（命中 include 且未命中 exclude 的对象保留）。`use_regex=false` 走 glob
+///（`*` 任意多字符 / `?` 单字符，大小写不敏感）；`use_regex=true` 走正则（`(?i)`
+/// 大小写不敏感，编译失败条目视为永不命中）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ObjectMaskRule {
-    /// include glob 列表（每行一条，空行忽略；空 = 全量候选）。
+    /// include 模式列表（每行一条，空行忽略；空 = 全量候选；glob / 正则由 `use_regex` 决定）。
     #[serde(default)]
     pub include: Vec<String>,
-    /// exclude glob 列表（每行一条，空行忽略；空 = 不排除）。
+    /// exclude 模式列表（每行一条，空行忽略；空 = 不排除；glob / 正则由 `use_regex` 决定）。
     #[serde(default)]
     pub exclude: Vec<String>,
-    /// v1 恒 `false`：正则模式随 B-1-A 挂 v2。
+    /// `true` = 正则匹配；`false` = glob 匹配。
     #[serde(default)]
     pub use_regex: bool,
 }

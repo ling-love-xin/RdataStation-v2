@@ -10,6 +10,7 @@
 use super::*;
 use crate::nav::family_profile;
 use crate::nav_host::ObjectMaskRule;
+use regex::Regex;
 
 /// 解析搜索框文本：拆出 `scope:` / `type:` / `driver:` / `tag:` token，其余为自由文本。
 ///
@@ -903,16 +904,83 @@ pub(super) fn nav_glob_match(pattern: &str, name: &str) -> bool {
     rec(&p, &n)
 }
 
-/// B-1 单条规则判定：include 为空 = 全量候选；exclude 为空 = 不排除；
-/// **exclude 优先于 include**（命中 include 且未命中 exclude 的对象保留）。
-pub(super) fn nav_mask_passes(rule: &ObjectMaskRule, name: &str) -> bool {
-    if rule.exclude.iter().any(|pat| nav_glob_match(pat, name)) {
+/// 规则编译产物：include / exclude 两路分开承载，`use_regex` 决定匹配分支。
+///
+/// - 正则模式：编译成功的模式进 `*_re`；**编译失败的条目不进向量，视为永不命中**
+///   （不 panic、不使整规则失效，单行坏正则只废掉它自己）。
+/// - glob 模式：原始模式串进 `*_glob`，匹配期逐条走 [`nav_glob_match`]。
+/// - `include_is_empty` 记录**原始**规则列表是否为空：不能用编译后的正则向量判定——
+///   编译失败会丢弃条目，若拿「正则向量非空」当「规则非空」，一条全坏的 include 会被
+///   误判为空规则而放行全部对象。
+pub(super) struct CompiledMask {
+    use_regex: bool,
+    include_is_empty: bool,
+    include_re: Vec<Regex>,
+    exclude_re: Vec<Regex>,
+    include_glob: Vec<String>,
+    exclude_glob: Vec<String>,
+}
+
+/// 编译一条 mask 规则（纯函数、无副作用、不缓存）。
+///
+/// 正则逐条 `Regex::new("(?i){pattern}")`：`(?i)` 大小写不敏感，与 glob 现状口径一致；
+/// 编译失败的条目丢弃，匹配期等价于「该条永不命中」。glob 模式原样留存模式串。
+pub(super) fn compile_mask(rule: &ObjectMaskRule) -> CompiledMask {
+    if rule.use_regex {
+        let compile = |patterns: &[String]| {
+            patterns
+                .iter()
+                .filter_map(|p| Regex::new(&format!("(?i){p}")).ok())
+                .collect()
+        };
+        CompiledMask {
+            use_regex: true,
+            include_is_empty: rule.include.is_empty(),
+            include_re: compile(&rule.include),
+            exclude_re: compile(&rule.exclude),
+            include_glob: Vec::new(),
+            exclude_glob: Vec::new(),
+        }
+    } else {
+        CompiledMask {
+            use_regex: false,
+            include_is_empty: rule.include.is_empty(),
+            include_re: Vec::new(),
+            exclude_re: Vec::new(),
+            include_glob: rule.include.clone(),
+            exclude_glob: rule.exclude.clone(),
+        }
+    }
+}
+
+/// 编译产物判定：exclude 任一命中 → 隐藏；include 原始为空 → 全量候选；
+/// include 任一命中 → 保留。**exclude 优先于 include**。
+pub(super) fn mask_passes(compiled: &CompiledMask, name: &str) -> bool {
+    let excluded = if compiled.use_regex {
+        compiled.exclude_re.iter().any(|r| r.is_match(name))
+    } else {
+        compiled.exclude_glob.iter().any(|p| nav_glob_match(p, name))
+    };
+    if excluded {
         return false;
     }
-    if rule.include.is_empty() {
+    if compiled.include_is_empty {
         return true;
     }
-    rule.include.iter().any(|pat| nav_glob_match(pat, name))
+    if compiled.use_regex {
+        compiled.include_re.iter().any(|r| r.is_match(name))
+    } else {
+        compiled.include_glob.iter().any(|p| nav_glob_match(p, name))
+    }
+}
+
+/// B-1 单条规则判定：先 [`compile_mask`] 再委托 [`mask_passes`]，保留既有签名供调用点不动。
+///
+/// 规则集合在规则变更（`set_object_mask` / `set_global_mask` 事件路径）时才会变；
+/// 渲染期每次调用重编译代价可接受，暂不在视图状态内缓存编译产物（若 profile 显示高频
+/// 编译开销，再按规则快照缓存，见设计备忘 R6）。
+pub(super) fn nav_mask_passes(rule: &ObjectMaskRule, name: &str) -> bool {
+    mask_passes(&compile_mask(rule), name)
 }
 
 /// B-1 组合判定（per-conn + 全局，AND）：任一**启用**的规则不通过 = 隐藏。
@@ -1250,9 +1318,9 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::{
-        batches_present, comment_subline_text, folder_count_label, format_data_length,
-        format_row_estimate, host_subline_text, key_in_subtree, more_row_label, nav_glob_match,
-        nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
+        batches_present, compile_mask, comment_subline_text, folder_count_label, format_data_length,
+        format_row_estimate, host_subline_text, key_in_subtree, mask_passes, more_row_label,
+        nav_glob_match, nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
         nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
         placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
         size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER,
@@ -1584,6 +1652,81 @@ mod tests {
             ..Default::default()
         };
         assert!(!nav_mask_passes(&r3, "customers"));
+    }
+
+    /// 正则分支：精确（`^…$`）/ 前缀 / 后缀 / 子串锚点语义，`(?i)` 大小写不敏感。
+    #[test]
+    fn mask_regex_matches_anchors_and_is_case_insensitive() {
+        let regex = |include: Vec<&str>, exclude: Vec<&str>| ObjectMaskRule {
+            include: include.into_iter().map(str::to_string).collect(),
+            exclude: exclude.into_iter().map(str::to_string).collect(),
+            use_regex: true,
+        };
+        // 精确整串（锚点由模式自带；裸正则是子串 search，与 DBeaver 正则语义一致）。
+        let exact = regex(vec!["^orders$"], vec![]);
+        assert!(nav_mask_passes(&exact, "orders"));
+        assert!(!nav_mask_passes(&exact, "orders_2024"));
+        // 前缀 `^ord`。
+        let prefix = regex(vec!["^ord"], vec![]);
+        assert!(nav_mask_passes(&prefix, "orders"));
+        assert!(!nav_mask_passes(&prefix, "customers"));
+        // 后缀 `id$`。
+        let suffix = regex(vec!["id$"], vec![]);
+        assert!(nav_mask_passes(&suffix, "order_id"));
+        assert!(!nav_mask_passes(&suffix, "idle"));
+        // 子串 `.*order.*`。
+        let contains = regex(vec![".*order.*"], vec![]);
+        assert!(nav_mask_passes(&contains, "order_items"));
+        assert!(!nav_mask_passes(&contains, "customers"));
+        // `(?i)` 前缀：大写模式命中小写名，小写模式同样命中大写名。
+        let insensitive = regex(vec!["^ORD"], vec![]);
+        assert!(nav_mask_passes(&insensitive, "orders"));
+        assert!(nav_mask_passes(&insensitive, "ORDERS"));
+    }
+
+    /// 正则分支 exclude 优先于 include。
+    #[test]
+    fn mask_regex_exclude_still_beats_include() {
+        let rule = ObjectMaskRule {
+            include: vec!["order.*".into()],
+            exclude: vec![".*_bak".into()],
+            use_regex: true,
+        };
+        assert!(nav_mask_passes(&rule, "order_2024"));
+        assert!(!nav_mask_passes(&rule, "order_bak"));
+    }
+
+    /// 编译失败的正则条目丢弃、永不命中、不 panic；include 全坏不被误判为空而放行。
+    #[test]
+    fn mask_regex_bad_pattern_never_matches_and_does_not_panic() {
+        // exclude 坏正则：该条不命中，其余名字不被排除（不 panic）。
+        let bad_exclude = ObjectMaskRule {
+            include: vec![],
+            exclude: vec!["[未闭合".into()],
+            use_regex: true,
+        };
+        assert!(nav_mask_passes(&bad_exclude, "orders"));
+        // include 一条坏 + 一条好：坏的丢弃，好的照常参与。
+        let mixed = ObjectMaskRule {
+            include: vec!["[bad".into(), "^good".into()],
+            exclude: vec![],
+            use_regex: true,
+        };
+        assert!(nav_mask_passes(&mixed, "good_table"));
+        assert!(!nav_mask_passes(&mixed, "other_table"));
+        // include 全坏：原始规则非空但编译后无可用正则，仍按「非空 include」判定隐藏，
+        // 不被 `include_is_empty` 误判为空规则放行全部。
+        let all_bad_include = ObjectMaskRule {
+            include: vec!["[bad".into(), "(unclosed".into()],
+            exclude: vec![],
+            use_regex: true,
+        };
+        assert!(!nav_mask_passes(&all_bad_include, "orders"));
+        // 直接走编译产物：坏条被丢弃，include_is_empty 仍反映原始规则非空。
+        let compiled = compile_mask(&all_bad_include);
+        assert!(!compiled.include_is_empty);
+        assert!(compiled.include_re.is_empty());
+        assert!(!mask_passes(&compiled, "orders"));
     }
 
     /// 组合判定：per-conn + 全局 AND，任一启用规则不通过即隐藏；空规则不参与。

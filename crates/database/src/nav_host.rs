@@ -60,21 +60,22 @@ pub struct NavFilters {
     pub tag: Option<String>,
 }
 
-/// B-1 对象名 mask 规则（v1 仅 glob）。
+/// B-1 对象名 mask 规则（glob / 正则双档，由 `use_regex` 切换）。
 ///
 /// 与 `settings::model::ObjectMaskRule` 字段一一对应——不直接复用那个类型，
 /// 是为了不引入 `database → settings` 依赖；宿主实现负责两侧互转。
 ///
-/// 匹配语义：`*` 任意多字符 / `?` 单字符，大小写不敏感；include 为空 = 全部候选
-/// 进入候选集；exclude 为空 = 不排除；**exclude 优先于 include**。`use_regex` v1
-/// 恒 `false`（UI 不暴露，正则随 B-1-A 挂 v2）。
+/// 匹配语义：include 为空 = 全部候选进入候选集；exclude 为空 = 不排除；**exclude 优先于
+/// include**。`use_regex=false` 走 glob（`*` 任意多字符 / `?` 单字符，大小写不敏感）；
+/// `use_regex=true` 走正则（`(?i)` 大小写不敏感，编译失败条目视为永不命中）。匹配实现见
+/// `nav_view::primitives::{compile_mask, mask_passes}`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectMaskRule {
-    /// include glob 列表（空 = 全量候选）。
+    /// include 模式列表（空 = 全量候选；glob / 正则由 `use_regex` 决定）。
     pub include: Vec<String>,
-    /// exclude glob 列表（空 = 不排除）。
+    /// exclude 模式列表（空 = 不排除；glob / 正则由 `use_regex` 决定）。
     pub exclude: Vec<String>,
-    /// v1 恒 `false`。
+    /// `true` = 正则匹配；`false` = glob 匹配。
     pub use_regex: bool,
 }
 
