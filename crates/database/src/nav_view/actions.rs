@@ -1182,8 +1182,8 @@ impl NavView {
                 return;
             }
         }
-        // 驱动判定：取连接条目的 driver id（`postgresql` / `mysql` 才支持，
-        // 判定逻辑与 `sql_gen::row_estimate_sql` 保持一致，双保险）。
+        // 驱动判定：取连接条目的 driver id；族是否支持行估计由 L3 方言 SPI 的
+        // `row_estimate_sql` 返回 `None` 判定（SQLite / DuckDB / JDBC / wasm 不支持）。
         let driver = self
             .host
             .connections()
@@ -1191,7 +1191,7 @@ impl NavView {
             .find(|c| c.id == conn_id)
             .map(|c| c.driver.clone())
             .unwrap_or_default();
-        if crate::sql_gen::row_estimate_sql(&driver, schema).is_none() {
+        if crate::nav::dialect_of(&driver).row_estimate_sql(schema).is_none() {
             return;
         }
         let seq;

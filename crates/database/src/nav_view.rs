@@ -302,8 +302,8 @@ pub(crate) fn nav_conn_menu_enabled(action: NavObjMenuAction, connected: bool) -
 /// 来源标签页、展开态、加载结果与错误就地保存在此，重启持久化在后续切片接入。
 /// 对象行内重命名上下文（S4-④）：F2 触发时由选中行构造，提交时生成 DDL 并执行。
 ///
-/// `folder` 决定 DDL 方言分支（`sql_gen::rename_object_sql`）；`parent` 仅触发器需要
-/// （PG `ALTER TRIGGER … ON <父表>`）。驱动 id 取自连接清单（对象行节点不带驱动）。
+/// `folder` 经 `folder_to_object_kind` 转身份后交 L3 方言 SPI 生成 DDL；`parent` 仅
+/// 触发器需要（PG `ALTER TRIGGER … ON <父表>`）。驱动 id 取自连接清单（对象行节点不带驱动）。
 #[derive(Clone, Debug)]
 pub(super) struct ObjectRenameCtx {
     /// 树节点 key（行渲染用它在标题位置替换为输入框）。

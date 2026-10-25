@@ -32,23 +32,12 @@ pub struct TableDataRequest {
     pub order_by: Vec<(String, bool)>,
 }
 
-/// 引号转义标识符（表名 / 列名不能参数化；内嵌引号双写——A15 敌意标识符用例）。
+/// 引号转义标识符（fallback 双引号兜底；方言感知路径见 `load_table_data` 内 L3 方言 SPI）。
+///
+/// 仅保留为无方言上下文的兼容入口；表 / 列引号策略随族走 `nav::dialect_of`，
+/// MySQL 反引号等族差异不经过本函数。
 pub fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// 引号转义的限定名（跳过空段；catalog 与 schema 相同时去重——与 `sql_gen::qualified_name` 同规则，
-/// 但本函数输出**可执行 SQL** 的引用形态，那个函数是展示用）。
-fn quoted_qualified(catalog: &str, schema: &str, table: &str) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if !catalog.is_empty() {
-        parts.push(quote_ident(catalog));
-    }
-    if !schema.is_empty() && schema != catalog {
-        parts.push(quote_ident(schema));
-    }
-    parts.push(quote_ident(table));
-    parts.join(".")
+    crate::nav::dialect_of("").quote_ident(name)
 }
 
 /// 单元格 → 展示文本：JSON `null` → `None`（渲染置灰），字符串取内部值，
@@ -67,14 +56,17 @@ fn cell_text(value: &serde_json::Value) -> Option<String> {
 /// 加载表数据的一页（只读）。
 ///
 /// 表 / 视图都走这条（视图无主键时 `is_ordered` 由用户排序决定）。
+/// `driver` 仅用于分派 L3 方言 SPI（引号 / 限定名策略），不参与查询通道。
 pub async fn load_table_data(
     metadata: &MetadataService,
     conn_id: &str,
     catalog: &str,
     schema: &str,
     table: &str,
+    driver: &str,
     req: &TableDataRequest,
 ) -> Result<TableDataPage, CoreError> {
+    let dialect = crate::nav::dialect_of(driver);
     let limit = if req.limit == 0 { DEFAULT_PAGE_LIMIT } else { req.limit };
 
     // 1) 列定义 + 主键（排序补齐用）。列是数据网格的骨架，取不到直接报错（不给空表）。
@@ -90,25 +82,25 @@ pub async fn load_table_data(
         .map(|c| c.name.as_str())
         .collect();
 
-    // 2) SELECT：标识符引号转义 + 用户排序在前、主键补齐在后 + limit+1 探测。
+    // 2) SELECT：标识符引号转义（方言策略）+ 用户排序在前、主键补齐在后 + limit+1 探测。
     let select_list = columns
         .iter()
-        .map(|c| quote_ident(&c.name))
+        .map(|c| dialect.quote_ident(&c.name))
         .collect::<Vec<_>>()
         .join(", ");
-    let from = quoted_qualified(catalog, schema, table);
+    let from = dialect.qualified_sql(catalog, schema, table);
     let mut sql = format!("SELECT {select_list} FROM {from}");
     let mut order: Vec<String> = Vec::new();
     for (col, asc) in &req.order_by {
         order.push(format!(
             "{} {}",
-            quote_ident(col),
+            dialect.quote_ident(col),
             if *asc { "ASC" } else { "DESC" }
         ));
     }
     for p in &pk {
         if !req.order_by.iter().any(|(c, _)| c == p) {
-            order.push(format!("{} ASC", quote_ident(p)));
+            order.push(format!("{} ASC", dialect.quote_ident(p)));
         }
     }
     if !order.is_empty() {
@@ -160,25 +152,12 @@ pub async fn load_table_data(
 mod tests {
     use super::*;
 
-    /// 敌意标识符：列名 / 表名里的引号必须双写，且整个被引号包住（A15）。
+    /// 兼容入口 fallback 双引号：列名 / 表名里的引号必须双写，且整个被引号包住（A15）。
+    /// 方言感知路径（MySQL 反引号等）由 L3 方言 SPI 覆盖，见 `nav/dialect/` 单测。
     #[test]
     fn quote_ident_doubles_embedded_quotes() {
         assert_eq!(quote_ident("orders"), "\"orders\"");
         assert_eq!(quote_ident("o\"rder\"s"), "\"o\"\"rder\"\"s\"");
-    }
-
-    /// 限定名：去重 catalog / schema（SQLite / DuckDB 把 schema 传成 catalog）。
-    #[test]
-    fn quoted_qualified_deduplicates_schema_equals_catalog() {
-        assert_eq!(
-            quoted_qualified("main", "main", "orders"),
-            "\"main\".\"orders\""
-        );
-        assert_eq!(
-            quoted_qualified("cat", "sch", "orders"),
-            "\"cat\".\"sch\".\"orders\""
-        );
-        assert_eq!(quoted_qualified("", "", "orders"), "\"orders\"");
     }
 
     /// 单元格：JSON null → None，字符串取内部值（避免 JSON 序列化自带的引号），

@@ -321,7 +321,10 @@ pub fn alter_column_sql(
     }
     parts.push(table);
     let qual = parts.join(".");
-    let ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    // 引号策略复用 L3 方言 SPI（本函数本体仍属属性面板通道，Q4-A 不迁）；
+    // 走到此处 driver 已判定为 PG 族，方言引号为双引号，与现状断言等价。
+    let dialect = crate::nav::dialect_of(driver);
+    let ident = |s: &str| dialect.quote_ident(s);
     let col_ident = ident(column);
     let sql = match property_id {
         "Column.name" => {
@@ -361,141 +364,39 @@ pub fn alter_column_sql(
 
 /// 对象重命名 DDL（S4-④ 导航 F2 行内重命名；rustgrid 行内重命名参照）。
 ///
-/// 方言矩阵（各驱动 RENAME 语法，按对象类别分支）：
-/// - 表：SQLite / PG / DuckDB 走 `ALTER TABLE … RENAME TO`；MySQL 走
-///   `RENAME TABLE`（8.0 起 `ALTER TABLE … RENAME` 亦可，但 `RENAME TABLE`
-///   对视图同样有效，两态一语句）。
-/// - 视图：SQLite(3.25+) / PG / DuckDB 走 `ALTER VIEW … RENAME TO`；
-///   MySQL 无独立 `ALTER VIEW … RENAME`，复用 `RENAME TABLE`。
-/// - 序列：PG / DuckDB 走 `ALTER SEQUENCE … RENAME TO`。
-/// - 触发器：仅 PG `ALTER TRIGGER … ON <父表> RENAME TO`（需 `parent` 限定名）；
-///   SQLite / DuckDB 不支持触发器改名，明确报错。
-/// - 例程（存储过程 / 函数）：无跨方言的简单改名（PG 需函数签名），报暂不支持。
+/// 薄包装：族识别、引号策略、对象类别 × 方言分支已下沉 L3 方言 SPI
+///（`crate::nav::dialect_of`）；本函数只做 `NavFolder → ObjectKind` 身份转换并委托，
+/// 保留现有公开签名，`editors.rs` 调用点不大改。
 ///
-/// 不支持的驱动 / 类别**明确报错**（不静默吞、不生成方言错误的语句）。
-/// 限定名拼法：PG / MySQL 拼 `schema.name`（目标库由 `database_for` 切库承载，
-/// 与 `alter_column_sql` 同规则）；SQLite / DuckDB 单库场景不拼前缀。
-pub fn rename_object_sql(    driver: &str,
+/// 方言矩阵见 `nav/dialect/` 各族 provider；不支持的族 / 类别由 provider 返回显式
+/// `Err(CoreError::Driver)`，不生成半截 SQL。
+pub fn rename_object_sql(
+    driver: &str,
     kind: crate::model::NavFolder,
     schema: Option<&str>,
     name: &str,
     parent: Option<&str>,
     new_name: &str,
 ) -> Result<String, CoreError> {
-    let driver_l = driver.to_ascii_lowercase();
-    let pg = matches!(driver_l.as_str(), "postgresql" | "postgres" | "pg" | "postgres_native");
-    let mysql = driver_l.contains("mysql");
-    let sqlite = driver_l.contains("sqlite");
-    let duckdb = driver_l.contains("duckdb");
-    if !(pg || mysql || sqlite || duckdb) {
-        return Err(CoreError::database(shared::error::DatabaseError::Driver {
-            db_type: driver.to_string(),
-            operation: "rename_object_sql".to_string(),
-            source: "该驱动暂不支持对象重命名".to_string(),
-        }));
-    }
-    let ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-    let new_ident = ident(new_name);
-    let qual = |n: &str| {
-        if pg || mysql {
-            if let Some(s) = schema {
-                if !s.is_empty() {
-                    return format!("{}.{}", ident(s), ident(n));
-                }
-            }
-        }
-        ident(n)
-    };
-    let q = qual(name);
-    use crate::model::NavFolder;
-    let sql = match kind {
-        NavFolder::Tables => {
-            if mysql {
-                format!("RENAME TABLE {q} TO {}", ident(new_name))
-            } else {
-                format!("ALTER TABLE {q} RENAME TO {new_ident}")
-            }
-        }
-        NavFolder::Views => {
-            if mysql {
-                // MySQL 无独立 `ALTER VIEW … RENAME`；视图走 `RENAME TABLE`。
-                format!("RENAME TABLE {q} TO {}", ident(new_name))
-            } else {
-                format!("ALTER VIEW {q} RENAME TO {new_ident}")
-            }
-        }
-        NavFolder::Sequences => {
-            if pg || duckdb {
-                format!("ALTER SEQUENCE {q} RENAME TO {new_ident}")
-            } else {
-                return Err(CoreError::database(shared::error::DatabaseError::Driver {
-                    db_type: driver.to_string(),
-                    operation: "rename_object_sql".to_string(),
-                    source: "该驱动不支持序列重命名（SQLite 无序列概念，MySQL 自增无独立序列对象）".to_string(),
-                }));
-            }
-        }
-        NavFolder::Triggers => {
-            if pg {
-                let Some(parent) = parent else {
-                    return Err(CoreError::database(shared::error::DatabaseError::Driver {
-                        db_type: driver.to_string(),
-                        operation: "rename_object_sql".to_string(),
-                        source: "触发器重命名需要父表限定名（parent 缺失）".to_string(),
-                    }));
-                };
-                format!("ALTER TRIGGER {} ON {} RENAME TO {new_ident}", ident(name), qual(parent))
-            } else {
-                return Err(CoreError::database(shared::error::DatabaseError::Driver {
-                    db_type: driver.to_string(),
-                    operation: "rename_object_sql".to_string(),
-                    source: "该驱动不支持触发器重命名".to_string(),
-                }));
-            }
-        }
-        NavFolder::Routines => {
-            return Err(CoreError::database(shared::error::DatabaseError::Driver {
-                db_type: driver.to_string(),
-                operation: "rename_object_sql".to_string(),
-                source: "例程重命名需函数签名（PG `ALTER FUNCTION name(args) RENAME TO`），暂不支持".to_string(),
-            }));
-        }
-    };
-    Ok(sql)
+    let dialect = crate::nav::dialect_of(driver);
+    let object_kind = crate::nav::folder_to_object_kind(kind);
+    dialect.rename_sql(object_kind, schema, name, parent, new_name)
 }
 
 /// S3-④ 行估计目录级统计 SQL（一次查询取整 schema 的表名 + 优化器估计）。
 ///
-/// - PostgreSQL：`pg_class.reltuples`（与属性面板同源，`property_providers/pg.rs`），
-///   `relkind IN ('r','p')` 覆盖普通表与分区父表（分区子表已折叠进父表徽标，不进列表）；
-///   视图无独立统计、由触发方排除（只对 Tables 文件夹入队）。
-/// - MySQL：`information_schema.TABLES.TABLE_ROWS`（InnoDB 为优化器估计、MyISAM
-///   近似精确，v1 不区分引擎口径）。
+/// 薄包装：族特异 SQL 已下沉 L3 方言 SPI（`crate::nav::dialect_of`）；本函数只按驱动
+/// 分派并透传 `Option<String>`。
+///
+/// - PostgreSQL：`pg_class.reltuples`，`relkind IN ('r','p')` 覆盖普通表与分区父表；
+/// - MySQL：`information_schema.TABLES.TABLE_ROWS`；
 /// - 其余驱动（SQLite / DuckDB / JDBC / wasm）：`None` = 不支持，**不发真 `COUNT(*)`**
 ///   （大库逐表 COUNT 秒级以上，与「名单先上屏」目标冲突，见 B 档文档 §1.3）。
 ///
-/// schema 名直接拼进 SQL（带单引号转义）：值来自内省结果，无需参数化通道
+/// schema 名单引号转义由各族 provider 负责；值来自内省结果，无需参数化通道
 /// （`Database::query` 是裸 SQL 接口，与 `property_providers` 同写法）。
 pub fn row_estimate_sql(driver: &str, schema: &str) -> Option<String> {
-    let esc = schema.replace('\'', "''");
-    let driver_l = driver.to_ascii_lowercase();
-    if matches!(
-        driver_l.as_str(),
-        "postgresql" | "postgres" | "pg" | "postgres_native"
-    ) {
-        Some(format!(
-            "SELECT c.relname, c.reltuples::bigint AS est FROM pg_class c \
-             JOIN pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = '{esc}' AND c.relkind IN ('r','p')"
-        ))
-    } else if driver_l.contains("mysql") {
-        Some(format!(
-            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES \
-             WHERE TABLE_SCHEMA = '{esc}'"
-        ))
-    } else {
-        None
-    }
+    crate::nav::dialect_of(driver).row_estimate_sql(schema)
 }
 
 #[cfg(test)]
@@ -952,7 +853,8 @@ mod tests {
                 "t_account",
             )
             .unwrap(),
-            "RENAME TABLE \"biz\".\"t_user\" TO \"t_account\""
+            // MySQL 反引号引号（B3 补齐现状双引号欠账）。
+            "RENAME TABLE `biz`.`t_user` TO `t_account`"
         );
     }
 
@@ -980,8 +882,8 @@ mod tests {
                 "v_enabled",
             )
             .unwrap(),
-            // MySQL 无独立 ALTER VIEW RENAME，视图走 RENAME TABLE。
-            "RENAME TABLE \"biz\".\"v_active\" TO \"v_enabled\""
+            // MySQL 无独立 ALTER VIEW RENAME，视图走 RENAME TABLE；反引号引号。
+            "RENAME TABLE `biz`.`v_active` TO `v_enabled`"
         );
     }
 

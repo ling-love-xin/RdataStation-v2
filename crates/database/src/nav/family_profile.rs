@@ -135,6 +135,19 @@ pub fn object_kind_to_folder(kind: ObjectKind) -> Option<NavFolder> {
     }
 }
 
+/// M9 反向：文件夹分组 → 身份类别（B3 方言 SPI `rename_sql` 入参用，Q1-A 与 L2/L4 同源 `ObjectKind`）。
+///
+/// 五个文件夹一一对应五类叶子对象；Catalog / Schema / Column 不属于文件夹层，不在此映射内。
+pub fn folder_to_object_kind(folder: NavFolder) -> ObjectKind {
+    match folder {
+        NavFolder::Tables => ObjectKind::Table,
+        NavFolder::Views => ObjectKind::View,
+        NavFolder::Routines => ObjectKind::Routine,
+        NavFolder::Sequences => ObjectKind::Sequence,
+        NavFolder::Triggers => ObjectKind::Trigger,
+    }
+}
+
 /// M5：索引命中类别 → 合成展示节点（`primitives.rs:549-561` 等价迁移；只为取图标 / 形状）。
 ///
 /// 列节点用默认字段兜底（命中行不内联列细节）；其余不可直接挂载的类别回退 Schema 形状。
@@ -446,6 +459,23 @@ mod tests {
         // MySQL 档案不声明序列（内省能力位归 B2，此处仅档案事实）。
         assert!(reg.profile_of("mysql", ObjectKind::Sequence).is_none());
         assert!(reg.profile_of("mysql", ObjectKind::Table).is_some());
+    }
+
+    /// M9 反向映射：五个文件夹一一对应五类叶子身份（B3 方言 rename_sql 入参用）。
+    #[test]
+    fn folder_to_object_kind_matches_each_leaf_folder() {
+        let cases = [
+            (NavFolder::Tables, ObjectKind::Table),
+            (NavFolder::Views, ObjectKind::View),
+            (NavFolder::Routines, ObjectKind::Routine),
+            (NavFolder::Sequences, ObjectKind::Sequence),
+            (NavFolder::Triggers, ObjectKind::Trigger),
+        ];
+        for (folder, kind) in cases {
+            assert_eq!(folder_to_object_kind(folder), kind, "{folder:?} 应映射到 {kind:?}");
+            // 与正向映射闭环：叶子类别经 folder 再回 kind 一致（Column 归并 Tables 的特例除外）。
+            assert_eq!(object_kind_to_folder(kind), Some(folder));
+        }
     }
 
     // ---- M1 文件夹 → 形状 / 子节点 ----

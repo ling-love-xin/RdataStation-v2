@@ -204,6 +204,7 @@ pub async fn load_properties(
                     &catalog,
                     &schema,
                     &ref_.name,
+                    driver,
                     req,
                 )
                 .await?,

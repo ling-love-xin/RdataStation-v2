@@ -12,9 +12,12 @@
 //! - 新增数据库族：在本模块补一份 [`DbFamilyProfile`] 并注册一次，消费方零改动。
 
 pub mod capability;
+pub mod dialect;
 pub mod family_profile;
 
 pub use capability::{NavOp, OpSet, family_ops, nav_node_object_kind};
+pub use dialect::{DialectRegistry, DialectSpi, dialect_of};
 pub use family_profile::{
-    DbFamilyProfile, FamilyRegistry, FolderProfile, NodeShape, TypeProfile, registry,
+    DbFamilyProfile, FamilyRegistry, FolderProfile, NodeShape, TypeProfile, folder_to_object_kind,
+    object_kind_to_folder, registry,
 };

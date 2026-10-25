@@ -1186,9 +1186,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                 return;
             };
             // 驱动不支持（SQLite / DuckDB / JDBC / wasm）：直接空结果收尾，**不发真 COUNT**
-            // （大库逐表 COUNT 秒级以上）。SQL 生成是纯函数（`sql_gen::row_estimate_sql`），
-            // 驱动矩阵单测钉在那里。
-            let Some(sql) = crate::sql_gen::row_estimate_sql(&driver, &schema) else {
+            // （大库逐表 COUNT 秒级以上）。族支持位与 SQL 生成都在 L3 方言 SPI
+            // （`nav::dialect_of`），矩阵单测钉在 `nav/dialect/`。
+            let Some(sql) = crate::nav::dialect_of(&driver).row_estimate_sql(&schema) else {
                 lock(&shared().row_estimates).push(RowEstimateResult {
                     conn_id,
                     catalog,
@@ -1808,7 +1808,7 @@ pub fn enqueue_row_estimate(
     driver: &str,
     seq: u64,
 ) {
-    if crate::sql_gen::row_estimate_sql(driver, schema).is_none() {
+    if crate::nav::dialect_of(driver).row_estimate_sql(schema).is_none() {
         return;
     }
     shared().pending_row_estimates.fetch_add(1, Ordering::SeqCst);
