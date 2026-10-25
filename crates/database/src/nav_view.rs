@@ -61,6 +61,7 @@ use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
     PropertyRequest,
 };
+use crate::nav::capability::{NavOp, OpSet};
 use crate::nav::family_profile;
 use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
@@ -257,17 +258,27 @@ pub(crate) enum NavObjMenuAction {
     InsightPanel,
 }
 
-/// S4-N4 对象菜单连接态门控（纯函数，单测钉矩阵）：
-/// 回源库动作断连置灰，缓存 / 本地 / 面板导航动作保持可用。
+/// S4-N4 / B2 对象菜单门控（纯函数，单测钉矩阵）。
+///
+/// 判定顺序（方案稿 §4.3 门控顺序）：
+/// 1. 本地动作（属性 / 剪贴板 / 面板导航 / 编辑器空查询壳）恒可用，不查连接、不查能力集；
+/// 2. 类型敏感回源库动作：`connected` 前置 + 当前族 × 类型能力集声明（`ops`）；
+/// 3. 容器刷新（Refresh）维持连接前置——它的类型适用性归 B4 动作注册表 `applies`，
+///    本批不按能力集收窄。
+///
 /// 置灰而非隐藏（保持菜单结构稳定，DBeaver 不可用项置灰同口径）。
-pub(crate) fn nav_obj_menu_enabled(action: NavObjMenuAction, connected: bool) -> bool {
+pub(crate) fn nav_obj_menu_enabled(
+    action: NavObjMenuAction,
+    connected: bool,
+    ops: &OpSet,
+) -> bool {
     match action {
-        NavObjMenuAction::DataView
-        | NavObjMenuAction::GenSql
-        | NavObjMenuAction::Refresh
-        | NavObjMenuAction::Mock
-        | NavObjMenuAction::Stats
-        | NavObjMenuAction::InsightSchema => connected,
+        NavObjMenuAction::DataView => connected && ops.has(NavOp::ViewData),
+        NavObjMenuAction::GenSql => connected && ops.has(NavOp::GenDml),
+        NavObjMenuAction::Mock => connected && ops.has(NavOp::MockData),
+        NavObjMenuAction::Stats => connected && ops.has(NavOp::Stats),
+        NavObjMenuAction::InsightSchema => connected && ops.has(NavOp::InsightSchema),
+        NavObjMenuAction::Refresh => connected,
         NavObjMenuAction::Props
         | NavObjMenuAction::CopyName
         | NavObjMenuAction::OpenSql
@@ -276,6 +287,8 @@ pub(crate) fn nav_obj_menu_enabled(action: NavObjMenuAction, connected: bool) ->
 }
 
 /// S4-N4 连接菜单连接态门控（纯函数）：刷新元数据断连置灰，其余无条件项保持可用。
+///
+/// 连接根无对象类型维度，不查 L2 能力集。
 pub(crate) fn nav_conn_menu_enabled(action: NavObjMenuAction, connected: bool) -> bool {
     match action {
         NavObjMenuAction::Refresh => connected,

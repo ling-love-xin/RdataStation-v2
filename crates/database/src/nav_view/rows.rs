@@ -8,6 +8,7 @@
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
 use super::*;
+use crate::nav::capability::{family_ops, nav_node_object_kind};
 use crate::nav_jobs::JobPriority;
 
 impl NavView {
@@ -2332,6 +2333,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // [`super::nav_obj_menu_enabled`]；`connected` 在闭包外算好，供 move 进 'static 闭包）。
             let obj_connected =
                 self.nav.borrow().connected.contains(&node.connection_id);
+            // B2：族 × 类型静态操作集（断连只查静态位；动作「是否出现」的类型条件仍由下方
+            // 各分支保留，归 B4 动作注册表 `applies`）。`driver` 即连接记录的驱动 type_id，
+            // 档案注册表归一处理别名与未知族回退。
+            let obj_ops = family_ops(&driver, nav_node_object_kind(&node.kind));
             // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
             let dml_target = match &menu_path {
                 Some(NavPath::Table {
@@ -2391,6 +2396,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 .disabled(!super::nav_obj_menu_enabled(
                                     super::NavObjMenuAction::DataView,
                                     obj_connected,
+                                    &obj_ops,
                                 ))
                                 .on_click(
                             move |_, _, app| {
@@ -2452,6 +2458,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         let gen_sql_enabled = super::nav_obj_menu_enabled(
                             super::NavObjMenuAction::GenSql,
                             obj_connected,
+                            &obj_ops,
                         );
                         menu = menu.item(
                             PopupMenuItem::submenu("生成 SQL", sub_entity)
@@ -2491,6 +2498,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             .disabled(!super::nav_obj_menu_enabled(
                                 super::NavObjMenuAction::Refresh,
                                 obj_connected,
+                                &obj_ops,
                             ))
                             .on_click(move |_, _, app| {
                                 let cid = cid.clone();
@@ -2533,6 +2541,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             .disabled(!super::nav_obj_menu_enabled(
                                 super::NavObjMenuAction::Mock,
                                 obj_connected,
+                                &obj_ops,
                             ))
                             .on_click(move |_, _, app| {
                                 let request = request.clone();
@@ -2551,6 +2560,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                 .disabled(!super::nav_obj_menu_enabled(
                                     super::NavObjMenuAction::Stats,
                                     obj_connected,
+                                    &obj_ops,
                                 ))
                                 .on_click(move |_, _, app| {
                                     let source = source.clone();
@@ -2571,6 +2581,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             .disabled(!super::nav_obj_menu_enabled(
                                 super::NavObjMenuAction::InsightSchema,
                                 obj_connected,
+                                &obj_ops,
                             ))
                             .on_click(move |_, _, app| {
                                 let target = target.clone();

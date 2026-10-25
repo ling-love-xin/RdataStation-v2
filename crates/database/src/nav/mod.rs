@@ -6,12 +6,15 @@
 //!
 //! 分层边界：
 //! - 本模块只承载**静态档案与族无关身份字典**，无样式代码、无运行时 I/O；
-//! - 运行时能力门控（该连接是否支持某类别内省）归 L2（B2，`metadata_service` 桥接
-//!   `MetadataBrowser` 能力位）；方言 SQL 归 L3（B3）；动作注册归 L4（B4）。
+//! - 运行时能力门控（该连接是否支持某类别内省）归 L2（B2，`capability` 静态规则 +
+//!   `metadata_service` 桥接 `MetadataBrowser` 能力位）；方言 SQL 归 L3（B3）；
+//!   动作注册归 L4（B4）。
 //! - 新增数据库族：在本模块补一份 [`DbFamilyProfile`] 并注册一次，消费方零改动。
 
+pub mod capability;
 pub mod family_profile;
 
+pub use capability::{NavOp, OpSet, family_ops, nav_node_object_kind};
 pub use family_profile::{
     DbFamilyProfile, FamilyRegistry, FolderProfile, NodeShape, TypeProfile, registry,
 };
