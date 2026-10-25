@@ -137,14 +137,39 @@ impl QuickOpenPalette {
         cx.notify();
     }
 
-    /// 委托回传的确认（鼠标点击 / 组件内回车）→ 交给宿主执行；不保留则自行关闭。
+    /// 委托回传的确认（键盘 ↵：此时不在列表更新栈帧内，可回读列表取动作）→ 交给宿主执行；
+    /// 不保留则自行关闭。
     pub(crate) fn confirm(&mut self, keep_open: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(action) = self.selected_action(cx) else {
             return;
         };
+        self.finish_confirm(action, keep_open, window, cx);
+    }
+
+    /// 鼠标点击行的确认路径：动作已由委托在列表更新栈帧内解析好传入。
+    ///
+    /// 不能复用 [`Self::confirm`]：那条路径会回读列表实体取动作，而鼠标确认正发生在
+    /// 列表实体被 `update` 的栈帧里，重入读取会触发「实体正在被更新」panic。
+    pub(crate) fn confirm_with(
+        &mut self,
+        action: Action,
+        keep_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_confirm(action, keep_open, window, cx);
+    }
+
+    /// 执行动作并按「不保留则关面板」收尾。关闭是浮层自己的行为（与 Esc / 点遮罩同一组），
+    /// 不依赖宿主实现——宿主可能只想记录/转发动作。
+    fn finish_confirm(
+        &mut self,
+        action: Action,
+        keep_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.host.execute(action, keep_open, window, cx);
-        // 「执行后关面板」是浮层自己的行为（与 Esc / 点遮罩同一组收尾），
-        // 不依赖宿主实现——宿主可能只想记录/转发动作。
         if !keep_open {
             self.close(cx);
         }
@@ -636,7 +661,10 @@ impl Render for QuickOpenPalette {
             .child(
                 div()
                     // 示意 v5：面板水平居中、顶部距标题栏 42px。
+                    // 命中面板矩形内时遮挡后方遮罩 hitbox：否则遮罩 `on_mouse_down`
+                    // 会把面板关掉、随后的行 `click` 落空（鼠标确认失效，Enter 不受影响）。
                     .relative()
+                    .occlude()
                     .mt(rems(ui::QUICK_OPEN_PANEL_TOP))
                     .w(rems(ui::QUICK_OPEN_PANEL_WIDTH))
                     .max_h(rems(ui::QUICK_OPEN_PANEL_MAX_HEIGHT))

@@ -423,17 +423,28 @@ impl ListDelegate for QuickOpenDelegate {
             .update(cx, |palette, cx| palette.set_selection(key, cx));
     }
 
-    /// ↵ / 点击：交回浮层执行（浮层按自己的选中锚点取动作，它就是权威）。
+    /// 点击：在列表更新栈帧内解析当前行动作，交回浮层执行。
+    ///
+    /// 动作必须在这里（委托持有的行集合上）解析好再传入浮层：不能让浮层回头回读列表实体——
+    /// 鼠标确认正发生在列表被 `update` 的栈帧里，重入读取会触发「实体正在被更新」panic。
+    /// 键盘 ↵ 不经过这里：由输入框事件直接调浮层 `confirm`（那时不在列表栈帧内，可安全回读）。
     fn confirm(
         &mut self,
         secondary: bool,
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
-        // 确认时保留面板：输入框的 Shift+↵，或列表里的 Ctrl+点击。
+        let Some(action) = self
+            .selected_key
+            .as_deref()
+            .and_then(|key| self.action_of(key))
+        else {
+            return;
+        };
+        // 确认时保留面板：列表里的 Ctrl+点击。
         // （Ctrl+↵ 的「后台打开」待编辑器支持后与 Shift 细分。）
         let _ = self
             .host
-            .update(cx, |palette, cx| palette.confirm(secondary, window, cx));
+            .update(cx, |palette, cx| palette.confirm_with(action, secondary, window, cx));
     }
 }
