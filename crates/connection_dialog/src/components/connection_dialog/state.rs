@@ -110,6 +110,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             network_list: Rc::new(RefCell::new(Vec::new())),
             duckdb_fed: Rc::new(Cell::new(true)),
             save_credentials: Rc::new(Cell::new(true)),
+            show_system_objects: Rc::new(Cell::new(false)),
             cache_path,
             env_policies: Rc::new(RefCell::new(Vec::new())),
             policy_override_keys: Rc::new(RefCell::new(Vec::new())),
@@ -985,6 +986,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                         .collect();
                     *self.policy_override_keys.borrow_mut() = keys;
                 }
+                // P1 导航设置（2026-10-25）：回读连接级导航偏好（缺失回退默认 = 隐藏系统对象）。
+                let nav = connection::model::NavigatorSettings::from_advanced_options(Some(adv));
+                self.show_system_objects.set(nav.show_system_objects);
             }
         }
     }
@@ -1002,6 +1006,7 @@ pub(crate) struct ClonedDialogState {
     env_list: Rc<RefCell<Vec<Environment>>>,
     duckdb_fed: Rc<Cell<bool>>,
     save_credentials: Rc<Cell<bool>>,
+    show_system_objects: Rc<Cell<bool>>,
     cache_path: Entity<InputState>,
     props: Rc<RefCell<Vec<(String, String)>>>,
     // ---- Phase C ----
@@ -1036,6 +1041,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         env_list: Rc<RefCell<Vec<Environment>>>,
         duckdb_fed: Rc<Cell<bool>>,
         save_credentials: Rc<Cell<bool>>,
+        show_system_objects: Rc<Cell<bool>>,
         cache_path: Entity<InputState>,
         props: Rc<RefCell<Vec<(String, String)>>>,
         scope: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -1059,6 +1065,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             env_list,
             duckdb_fed,
             save_credentials,
+            show_system_objects,
             cache_path,
             props,
             scope,
@@ -1238,6 +1245,15 @@ impl ClonedDialogState {
                 serde_json::Value::Array(overrides),
             );
         }
+        // P1 导航设置（2026-10-25）：连接级导航偏好写入 `navigator` 子对象。
+        adv.insert(
+            "navigator".into(),
+            serde_json::to_value(NavigatorSettings {
+                show_system_objects: self.show_system_objects.get(),
+                ..Default::default()
+            })
+            .unwrap_or_else(|_| serde_json::json!({})),
+        );
         let advanced_options = if adv.is_empty() {
             None
         } else {
@@ -1375,6 +1391,16 @@ impl ClonedDialogState {
                 serde_json::Value::Array(overrides),
             );
         }
+        // P1 导航设置（2026-10-25）：连接级导航偏好写入 `navigator` 子对象
+        // （serde 全字段序列化，二期 hide_schemas 等开开关后自动带上）。
+        adv.insert(
+            "navigator".into(),
+            serde_json::to_value(NavigatorSettings {
+                show_system_objects: d.show_system_objects,
+                ..Default::default()
+            })
+            .unwrap_or_else(|_| serde_json::json!({})),
+        );
         let advanced_options = if adv.is_empty() {
             None
         } else {
@@ -1554,6 +1580,7 @@ mod tests {
             dialog.env_list.clone(),
             dialog.duckdb_fed.clone(),
             dialog.save_credentials.clone(),
+            dialog.show_system_objects.clone(),
             dialog.cache_path.clone(),
             dialog.props.clone(),
             dialog.scope.clone(),

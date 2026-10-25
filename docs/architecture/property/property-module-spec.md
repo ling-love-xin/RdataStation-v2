@@ -508,6 +508,16 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
    （无档案的密码认证只显示「认证方法」一行）。环境分节额外带**标识色**（color 非空时）
    与**策略覆盖**标记（`list_environment_policies` 过滤 enabled 后 join）。
    常规行 `connection_base_rows` 移除原认证/环境/网络三组行（改分节承载）。
+10. **连接级导航设置（2026-10-25，P1「导航设置并入连接设置」，方案 C）**：连接对话框
+    基础页新增「导航」分组（`Switch`「显示系统对象」），`NavigatorSettings`
+    （`show_system_objects` / `hide_schemas` / `show_only_entities`，后两者声明不渲染）
+    经 serde 序列化进 `DataSource.advanced_options.navigator` 子对象（零 schema 变更，
+    `ssl` / `policy_overrides` 等其他键保留；缺失 / 非法 JSON 回退默认 = 隐藏系统对象）。
+    **双通道并存**：`visible_databases`（可见库白名单）走 SettingsService（按连接 ID 键），
+    `show_system_objects` 走连接档案 advanced_options。导航快照流：入队时从宿主
+    `NavHost::show_system_objects` 取一次随任务快照，`nav_keep_object` 第 4 参
+    `show_system` **只影响默认模式**（`None` = 白名单未设时 `!is_system || show_system`），
+    与白名单模式正交（`Some` 白名单行为不变，集合含系统对象时原样展示）。
 
 ### 16.6 实现位置映射（本轮新增/变更 → 代码文件）
 
@@ -521,6 +531,7 @@ PostgreSQL 8 类（连接/Schema/表/视图/列/例程/序列/触发器）；SQL
 | 真机链路测试（SQLite/DuckDB 全链路 + provider 类别断言） | `crates/workbench/tests/nav_property_real.rs` |
 | 「保存凭据」开关（P0-4，2026-10-24） | `crates/engine/src/persistence/global_db.rs`（`GlobalConnectionSaveInput.save_password` + `final_password` 分支）、`crates/connection_dialog/src/services/{connection_service,data_source_service}.rs`、`crates/connection/src/model.rs`（`DataSourceSaveInput.save_password`）、`crates/connection_dialog/src/components/connection_dialog/{mod.rs,state.rs,render.rs,staging.rs}` |
 | 连接属性分节 认证/网络/环境（P0-3 深化，2026-10-25） | `crates/property/src/descriptor.rs`（`PageId::{Auth,Network,Environment}`）、`crates/database/src/property_panel.rs`（counts 解析 auth_name/auth_type/network_name/network_type/env_name/env_color/env_policies）、`crates/database/src/property_providers/mod.rs`（`connection_categories` 双参 + `connection_meta_sections`） |
+| 连接级导航设置（P1，2026-10-25） | `crates/connection/src/model.rs`（`NavigatorSettings` + `DataSource::navigator_settings`）、`crates/connection_dialog/src/components/connection_dialog/{mod,state,render,staging}.rs`（开关 / 草稿往返 / 两处保存路径 / 编辑回读）、`crates/database/src/nav_host.rs`（`show_system_objects` 端口）、`crates/workbench/src/components/nav_host.rs`（经 `nav_runtime::load_entry` 读档案）、`crates/database/src/nav_jobs.rs`（`Job::LoadChildren.show_system_objects` 快照 + 三入队函数透传）、`crates/database/src/navigator_service.rs`（`nav_keep_object` 第 4 参 + `load_children_page`/`load_children`/`load_catalogs`/`load_schemas` 透传）、`crates/database/src/nav_view/{actions,rows}.rs`（入队实参） |
 
 ## 17. 属性面板卡片规范（2026-10-09，连接编辑器 / 洞察 / Mock 同规范）
 

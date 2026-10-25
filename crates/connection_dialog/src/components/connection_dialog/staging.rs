@@ -116,6 +116,8 @@ pub struct ConnectionDraft {
     pub env: Option<String>,
     /// 「保存凭据」开关（P0-4，2026-10-24）：`false` = 密码不落库。
     pub save_credentials: bool,
+    /// 「显示系统对象」开关（P1 导航设置，2026-10-25）：`true` = 导航树不隐藏系统 catalog/schema。
+    pub show_system_objects: bool,
 }
 
 impl ConnectionDraft {
@@ -124,6 +126,7 @@ impl ConnectionDraft {
         Self {
             duckdb_fed: true,
             save_credentials: true,
+            show_system_objects: false,
             sec_overrides: Vec::new(),
             ..Default::default()
         }
@@ -214,6 +217,8 @@ impl<H: 'static> ConnectionDialogState<H> {
             duckdb_fed: r.duckdb_fed,
             // 草稿行无此列：编辑回读默认保存凭据（P0-4；用户可再关）。
             save_credentials: true,
+            // 草稿行无此列：编辑回读默认现状（隐藏系统对象；用户可再开）。
+            show_system_objects: false,
             active_tab: r.active_tab.max(0) as usize,
             // `r.hops_json` 列保留但不再回填（旧草稿里的占位链直接忽略）。
             props: serde_json::from_str(&r.props_json).unwrap_or_default(),
@@ -290,6 +295,7 @@ impl<H: 'static> ConnectionDialogState<H> {
             cache_path: self.cache_path.read(cx).value().to_string(),
             duckdb_fed: self.duckdb_fed.get(),
             save_credentials: self.save_credentials.get(),
+            show_system_objects: self.show_system_objects.get(),
             active_tab: self.active_tab.get(),
             props: self.props.borrow().clone(),
             sec_overrides: self.policy_override_keys.borrow().clone(),

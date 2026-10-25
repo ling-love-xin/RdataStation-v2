@@ -41,7 +41,7 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use connection::model::{ConnectionScope, DataSourceSaveInput};
+use connection::model::{ConnectionScope, DataSourceSaveInput, NavigatorSettings};
 use engine::persistence::auth_store::AuthConfig;
 use engine::persistence::connection_org_store::ConnectionGroup;
 use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -344,6 +344,8 @@ pub struct ConnectionDialogState<H: 'static> {
     pub duckdb_fed: Rc<Cell<bool>>,
     /// 「保存凭据」开关（P0-4，2026-10-24）：`false` = 密码不落库（仅会话可用）。
     pub save_credentials: Rc<Cell<bool>>,
+    /// 「显示系统对象」开关（P1 导航设置，2026-10-25）：`true` = 导航树不隐藏系统 catalog/schema。
+    pub show_system_objects: Rc<Cell<bool>>,
     pub cache_path: Entity<InputState>,
     /// 当前选中环境下的启用策略（来自 `environment_policies`，供高级 Tab 覆盖勾选）。
     /// 元素：(策略类型, 中文标签, 配置摘要)。

@@ -133,6 +133,13 @@ pub struct DataSourceSaveInput {
     pub metadata_path: Option<String>,
 }
 
+impl DataSource {
+    /// 连接级导航偏好（P1，2026-10-25）：从 `advanced_options` JSON 解析，缺失回退默认。
+    pub fn navigator_settings(&self) -> NavigatorSettings {
+        NavigatorSettings::from_advanced_options(self.advanced_options.as_deref())
+    }
+}
+
 impl DataSourceSaveInput {
     /// 快速构造（对话框默认路径）
     pub fn new(name: impl Into<String>, db_type: impl Into<String>, url: impl Into<String>) -> Self {
@@ -158,6 +165,59 @@ impl DataSourceSaveInput {
             schema_name: None,
             metadata_path: None,
         }
+    }
+}
+
+/// 连接级导航偏好（P1「导航设置并入连接设置」，2026-10-25，对齐 DBeaver `DBNBrowseSettings`）。
+///
+/// 序列化进 `DataSource.advanced_options` JSON 的 `navigator` 子对象（其余键保留）；
+/// 缺省 = 全 `false` = 现状（隐藏系统对象）。只建模 RDS 有语义的字段——DBeaver 的
+/// `hideFolders` / `mergeEntities` / `showUtilityObjects` / `hideVirtualModel` 在 RDS
+/// 导航结构（NavPath：Connection→Catalog→Schema→Folder→Table）下无对应物，不建模。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub struct NavigatorSettings {
+    /// 显示系统对象（默认 `false` = 隐藏系统 catalog / schema，现状）。
+    pub show_system_objects: bool,
+    /// 隐藏 schema 层（PG 单 schema 库展平；二期，声明不渲染）。
+    pub hide_schemas: bool,
+    /// 只显示实体（二期，声明不渲染）。
+    pub show_only_entities: bool,
+}
+
+impl NavigatorSettings {
+    /// advanced_options JSON 中承载本设置组的键。
+    pub const KEY: &'static str = "navigator";
+
+    /// 从 `advanced_options` JSON 解析（缺失 / 非法 JSON / 无 `navigator` 键 → 全默认，
+    /// 不 panic、不静默丢数据——与 `strip_file_db_noise` 同一策略）。
+    pub fn from_advanced_options(raw: Option<&str>) -> Self {
+        let Some(raw) = raw else {
+            return Self::default();
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            return Self::default();
+        };
+        value
+            .get(Self::KEY)
+            .and_then(|n| serde_json::from_value::<NavigatorSettings>(n.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// 把本设置组**并入** `advanced_options` JSON（保留 ssl / network_chain / policy_overrides
+    /// 等其他键；原值为非对象或非法 JSON 时以全新对象开始）。
+    pub fn apply_to_advanced_options(&self, raw: Option<&str>) -> Option<String> {
+        let mut value = raw
+            .and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                Self::KEY.into(),
+                serde_json::to_value(*self).unwrap_or_else(|_| serde_json::json!({})),
+            );
+        }
+        Some(value.to_string())
     }
 }
 
@@ -205,6 +265,94 @@ pub struct DeleteResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== P1 导航设置（2026-10-25）=====
+
+    #[test]
+    fn navigator_settings_serde_roundtrip() {
+        let s = NavigatorSettings {
+            show_system_objects: true,
+            ..Default::default()
+        };
+        let raw = s.apply_to_advanced_options(None).expect("序列化");
+        assert!(raw.contains("\"navigator\""));
+        let back = NavigatorSettings::from_advanced_options(Some(&raw));
+        assert!(back.show_system_objects);
+        // 默认全 false 序列化也产出 navigator 键（关=现状，与显式写 true 可区分）。
+        let off = NavigatorSettings::default().apply_to_advanced_options(None).unwrap();
+        assert!(!NavigatorSettings::from_advanced_options(Some(&off)).show_system_objects);
+    }
+
+    #[test]
+    fn navigator_settings_missing_or_bad_json_falls_back() {
+        assert_eq!(NavigatorSettings::from_advanced_options(None), Default::default());
+        assert_eq!(
+            NavigatorSettings::from_advanced_options(Some("not-json")),
+            Default::default()
+        );
+        // 有 advanced_options 但无 navigator 键 → 默认（不 panic）。
+        assert_eq!(
+            NavigatorSettings::from_advanced_options(Some(r#"{"ssl":{"mode":"disable"}}"#)),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn navigator_settings_preserves_other_advanced_keys() {
+        let raw = Some(r#"{"ssl":{"mode":"verify-full"},"policy_overrides":["read_only"]}"#);
+        let merged = NavigatorSettings {
+            show_system_objects: true,
+            ..Default::default()
+        }
+        .apply_to_advanced_options(raw)
+        .expect("并入");
+        let v: serde_json::Value = serde_json::from_str(&merged).expect("json");
+        assert_eq!(v["ssl"]["mode"], "verify-full");
+        assert_eq!(v["policy_overrides"][0], "read_only");
+        assert_eq!(v["navigator"]["show_system_objects"], true);
+    }
+
+    #[test]
+    fn data_source_navigator_settings_accessor() {
+        let mut ds = DataSource {
+            id: "G_conn_1".to_string(),
+            name: "prod".to_string(),
+            db_type: "postgres".to_string(),
+            host: None,
+            port: None,
+            database: None,
+            schema_name: None,
+            username: None,
+            password_encrypted: None,
+            description: None,
+            driver_id: None,
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: None,
+            network_config_id: None,
+            driver_properties: None,
+            advanced_options: None,
+            options: None,
+            tags: None,
+            use_duckdb_fed: false,
+            metadata_path: None,
+            server_version: None,
+            scope: ConnectionScope::Global,
+            is_active: false,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        assert!(!ds.navigator_settings().show_system_objects);
+        ds.advanced_options = Some(
+            NavigatorSettings {
+                show_system_objects: true,
+                ..Default::default()
+            }
+            .apply_to_advanced_options(None)
+            .unwrap(),
+        );
+        assert!(ds.navigator_settings().show_system_objects);
+    }
 
     #[test]
     fn test_scope_semantics() {

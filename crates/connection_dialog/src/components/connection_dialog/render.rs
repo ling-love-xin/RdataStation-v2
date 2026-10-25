@@ -133,6 +133,7 @@ impl<H: 'static> ConnectionDialogState<H> {
         let network_list = self.network_list.clone();
         let duckdb_fed = self.duckdb_fed.clone();
         let save_credentials = self.save_credentials.clone();
+        let show_system_objects = self.show_system_objects.clone();
         let cache_path = self.cache_path.clone();
         let props = self.props.clone();
         let props_synced = self.props_synced.clone();
@@ -1043,6 +1044,37 @@ impl<H: 'static> ConnectionDialogState<H> {
                             theme.colors.warning,
                             "DuckDB 直连（本地加速 / 用作联邦源）",
                             accel_body,
+                        ));
+                    }
+                    // 分组④ 导航（P1，2026-10-25）：连接级导航偏好——「显示系统对象」，
+                    // 默认关 = 现状（导航树隐藏系统 catalog / schema），对齐 DBeaver `showSystemObjects`。
+                    {
+                        let nav_toggle = Switch::new("nav-show-system")
+                            .checked(show_system_objects.get())
+                            .disabled(form_disabled)
+                            .on_click({
+                                let show_system_objects = show_system_objects.clone();
+                                let entity = entity.clone();
+                                move |want, _window, app| {
+                                    show_system_objects.set(*want);
+                                    entity.update(app, |_, cx| cx.notify());
+                                }
+                            });
+                        let nav_body = div()
+                            .w_full()
+                            .v_flex()
+                            .gap(rems(GAP_SM))
+                            .child(hint_line(
+                                theme,
+                                "开启后：导航树显示系统 catalog / schema（如 information_schema、pg_catalog）；默认隐藏",
+                            ))
+                            .child(form_row(theme, tr("显示系统对象"), nav_toggle));
+                        content = content.child(make_section(
+                            "nav",
+                            lucide("icons/database.svg"),
+                            theme.colors.info,
+                            tr("导航"),
+                            nav_body,
                         ));
                     }
                     content
@@ -2118,7 +2150,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), save_credentials.clone(), cache_path.clone(), props.clone(),
+                    duckdb_fed.clone(), save_credentials.clone(), show_system_objects.clone(),
+                    cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),
@@ -2267,7 +2300,8 @@ impl<H: 'static> ConnectionDialogState<H> {
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
-                    duckdb_fed.clone(), save_credentials.clone(), cache_path.clone(), props.clone(),
+                    duckdb_fed.clone(), save_credentials.clone(), show_system_objects.clone(),
+                    cache_path.clone(), props.clone(),
                     scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),

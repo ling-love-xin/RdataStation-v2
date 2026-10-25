@@ -2534,7 +2534,7 @@ mod tests {
         i.auth_config_id = Some("auth_1".into());
         i.network_config_id = Some("net_1".into());
         i.advanced_options = Some(
-            r#"{"ssl":{"mode":"require"},"network_chain":[{"kind":"ssh"}],"policy_overrides":["security"]}"#
+            r#"{"ssl":{"mode":"require"},"network_chain":[{"kind":"ssh"}],"policy_overrides":["security"],"navigator":{"show_system_objects":true}}"#
                 .into(),
         );
         strip_file_db_noise(&mut i);
@@ -2545,6 +2545,10 @@ mod tests {
             serde_json::from_str(i.advanced_options.as_deref().expect("adv 保留")).expect("json");
         assert!(adv.get("ssl").is_none() && adv.get("network_chain").is_none());
         assert!(adv.get("policy_overrides").is_some(), "策略覆盖仍然有效");
+        assert!(
+            adv.get("navigator").is_some(),
+            "P1 导航设置不随文件型噪音剥离（连接级偏好与 TLS/隧道无关）"
+        );
         // 无高级选项/非法 JSON：不 panic，不静默丢数据。
         let mut empty = DataSourceSaveInput::new("b", "duckdb", ":memory:");
         strip_file_db_noise(&mut empty);
