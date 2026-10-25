@@ -1340,6 +1340,11 @@ impl NavView {
                                 *row_estimate = *est;
                             }
                         }
+                        // D12 表大小：与行估计同一批次、同一表名匹配口径回填节点级
+                        // `data_length`；`None` = 本次未给，徽标安静消失。
+                        if let Some((_, size)) = r.sizes.iter().find(|(n, _)| n == &node.name) {
+                            node.data_length = *size;
+                        }
                     }
                 }
             }

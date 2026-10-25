@@ -234,6 +234,104 @@ pub(super) fn format_row_estimate(n: u64) -> String {
     }
 }
 
+/// D12：表数据段大小（字节）→ 紧凑徽标文本，二进制 1024 档位（B / KB / MB / GB）。
+///
+/// 与 [`format_row_estimate`] 的行数档位不同：行数按 1000 千进制 B/M，大小是字节
+/// 单位，按 1024 二进制进制；`< 1024` 走整数 B（`0` → `0 B`，如实不隐藏），其余
+/// 档位保留 1 位小数。本函数只格式化 `Some` 数值；`None`（未回填 / 驱动不支持）
+/// 由渲染处决定「显 … 占位」还是「徽标安静消失」，不在此把 `None` 文本化。
+pub(super) fn format_data_length(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    match bytes {
+        b if b < KB => format!("{b} B"),
+        b if b < MB => format!("{:.1} KB", b as f64 / KB as f64),
+        b if b < GB => format!("{:.1} MB", b as f64 / MB as f64),
+        b => format!("{:.1} GB", b as f64 / GB as f64),
+    }
+}
+
+/// D12 连接行主机名副标文本（纯函数）：档案 `show_host_name` 开启且 host 非空才返回；
+/// port 非空拼 `host:port`，空则只显 host；host 为 `None` / 空串 → `None`（整槽不挂）。
+pub(super) fn host_subline_text(
+    profile: &family_profile::InlineStatsProfile,
+    host: Option<&str>,
+    port: Option<i32>,
+) -> Option<String> {
+    if !profile.show_host_name {
+        return None;
+    }
+    let host = host?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    Some(match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+/// D12 对象行注释副标文本（纯函数）：档案 `show_description` 开启 + 描述类对象
+/// （表 / 视图 / 例程 / 序列 / 触发器；列 / 文件夹 / 连接等不显）+ 注释非空才返回。
+pub(super) fn comment_subline_text(
+    profile: &family_profile::InlineStatsProfile,
+    kind: &NavNodeKind,
+    comment: Option<&str>,
+) -> Option<String> {
+    if !profile.show_description {
+        return None;
+    }
+    let visible = matches!(
+        kind,
+        NavNodeKind::Table { .. }
+            | NavNodeKind::View
+            | NavNodeKind::Routine { .. }
+            | NavNodeKind::Sequence
+            | NavNodeKind::Trigger
+    );
+    if !visible {
+        return None;
+    }
+    let comment = comment?.trim();
+    if comment.is_empty() {
+        return None;
+    }
+    Some(comment.to_string())
+}
+
+/// D12 表大小徽标文本（纯函数）：档案 `show_size` 开启 + 已回填才返回；未回填 / 驱动
+/// 不支持安静消失。在途「…」占位由行估计槽统一承担（两查询同批次、同一在途集合），
+/// 本函数不重复占位。
+pub(super) fn size_badge_text(
+    profile: &family_profile::InlineStatsProfile,
+    data_length: Option<u64>,
+) -> Option<String> {
+    if !profile.show_size {
+        return None;
+    }
+    data_length.map(format_data_length)
+}
+
+/// D12 文件夹子计数徽标文本（纯函数）：档案 `show_child_count` 开启 + 文件夹类型 +
+/// 计数大于 0 才返回；候选总数优先（`child_total`，分页前由数据侧告知），缺省回退已
+/// 加载子节点数；零个不显。
+pub(super) fn folder_count_label(
+    profile: &family_profile::InlineStatsProfile,
+    kind: &NavNodeKind,
+    total: Option<usize>,
+    loaded: usize,
+) -> Option<String> {
+    if !profile.show_child_count {
+        return None;
+    }
+    if !matches!(kind, NavNodeKind::Folder(_)) {
+        return None;
+    }
+    let count = total.unwrap_or(loaded);
+    (count > 0).then(|| count.to_string())
+}
+
 /// 「加载更多」行文案（纯函数；DBeaver `visible/total` 口径，D:13）。
 ///
 /// - `fetching`：本轮点过「加载更多」、后台在途 → 取数中文案，禁用其余计数口径；
@@ -1152,13 +1250,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::{
-        batches_present, format_row_estimate, key_in_subtree, more_row_label, nav_glob_match,
+        batches_present, comment_subline_text, folder_count_label, format_data_length,
+        format_row_estimate, host_subline_text, key_in_subtree, more_row_label, nav_glob_match,
         nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
         nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
         placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
-        NavHitBadgeRole, PUMP_BATCH_ORDER,
+        size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER,
     };
-    use crate::model::{NavNode, NavNodeKind, NavPath};
+    use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath};
+    use crate::nav::family_profile::InlineStatsProfile;
     use crate::nav_host::ObjectMaskRule;
     use crate::nav_rows::PlaceholderKind;
     use crate::navigator_service::NavPage;
@@ -1300,6 +1400,144 @@ mod tests {
         assert_eq!(format_row_estimate(1_000_000), "1.0M");
         assert_eq!(format_row_estimate(1_200_000_000), "1.2B");
         assert_eq!(format_row_estimate(1_000_000_000), "1.0B");
+    }
+
+    /// D12 大小格式：B / KB / MB / GB 二进制 1024 档位 + 0 如实显 B。
+    #[test]
+    fn data_length_formatting() {
+        assert_eq!(format_data_length(0), "0 B");
+        assert_eq!(format_data_length(512), "512 B");
+        assert_eq!(format_data_length(1_023), "1023 B");
+        assert_eq!(format_data_length(1_024), "1.0 KB");
+        assert_eq!(format_data_length(1_536), "1.5 KB");
+        assert_eq!(format_data_length(1_048_576), "1.0 MB");
+        assert_eq!(format_data_length(1_572_864), "1.5 MB");
+        assert_eq!(format_data_length(1_073_741_824), "1.0 GB");
+        assert_eq!(format_data_length(1_610_612_736), "1.5 GB");
+    }
+
+    // ---- D12 行内统计元素门控纯函数 ----
+
+    /// 全开档案位测试夹具。
+    fn inline_all_on() -> InlineStatsProfile {
+        InlineStatsProfile {
+            show_description: true,
+            show_size: true,
+            show_host_name: true,
+            show_child_count: true,
+        }
+    }
+
+    #[test]
+    fn host_subline_gated_by_profile_and_host_presence() {
+        let on = inline_all_on();
+        let off = InlineStatsProfile { show_host_name: false, ..on };
+
+        // 档案关闭：即便有 host 也不显。
+        assert_eq!(host_subline_text(&off, Some("db.local"), Some(5432)), None);
+        // host 缺失 / 空白串：不显。
+        assert_eq!(host_subline_text(&on, None, Some(5432)), None);
+        assert_eq!(host_subline_text(&on, Some("  "), Some(5432)), None);
+        // port 非空：拼 `host:port`。
+        assert_eq!(
+            host_subline_text(&on, Some("db.local"), Some(5432)).as_deref(),
+            Some("db.local:5432")
+        );
+        // port 缺失：只显 host；host 两侧空白被修剪。
+        assert_eq!(host_subline_text(&on, Some("db.local"), None).as_deref(), Some("db.local"));
+        assert_eq!(
+            host_subline_text(&on, Some("  db.local  "), None).as_deref(),
+            Some("db.local")
+        );
+    }
+
+    #[test]
+    fn comment_subline_gated_by_profile_kind_and_comment() {
+        let on = inline_all_on();
+        let off = InlineStatsProfile { show_description: false, ..on };
+
+        // 档案关闭：描述类对象也不显。
+        assert_eq!(comment_subline_text(&off, &NavNodeKind::View, Some("备注")), None);
+
+        // 描述类白名单：表 / 视图 / 例程 / 序列 / 触发器显。
+        let visible = [
+            NavNodeKind::Table { row_estimate: None },
+            NavNodeKind::View,
+            NavNodeKind::Routine { routine_type: "function".into() },
+            NavNodeKind::Sequence,
+            NavNodeKind::Trigger,
+        ];
+        for kind in &visible {
+            assert_eq!(
+                comment_subline_text(&on, kind, Some("备注")).as_deref(),
+                Some("备注"),
+                "{kind:?}"
+            );
+        }
+
+        // 非描述类：列 / 文件夹 / Schema / Catalog 不显。
+        let hidden = [
+            NavNodeKind::Column {
+                data_type: "int".into(),
+                nullable: true,
+                primary: false,
+                foreign: false,
+            },
+            NavNodeKind::Folder(NavFolder::Tables),
+            NavNodeKind::Schema,
+            NavNodeKind::Catalog,
+        ];
+        for kind in &hidden {
+            assert_eq!(comment_subline_text(&on, kind, Some("备注")), None, "{kind:?}");
+        }
+
+        // 注释缺失 / 空白串：不显。
+        let table = NavNodeKind::Table { row_estimate: None };
+        assert_eq!(comment_subline_text(&on, &table, None), None);
+        assert_eq!(comment_subline_text(&on, &table, Some("  ")), None);
+    }
+
+    #[test]
+    fn size_badge_gated_by_profile_and_presence() {
+        let on = inline_all_on();
+        let off = InlineStatsProfile { show_size: false, ..on };
+
+        // 档案关闭：即便有大小也不显。
+        assert_eq!(size_badge_text(&off, Some(1_048_576)), None);
+        // 未回填：安静消失（在途「…」由行估计槽统一承担，本函数不重复占位）。
+        assert_eq!(size_badge_text(&on, None), None);
+        // 已回填：走二进制档位格式化。
+        assert_eq!(size_badge_text(&on, Some(1_048_576)).as_deref(), Some("1.0 MB"));
+    }
+
+    #[test]
+    fn folder_count_label_gated_by_profile_kind_and_zero() {
+        let on = inline_all_on();
+        let off = InlineStatsProfile { show_child_count: false, ..on };
+
+        // 档案关闭：不显。
+        assert_eq!(
+            folder_count_label(&off, &NavNodeKind::Folder(NavFolder::Tables), Some(7), 3),
+            None
+        );
+        // 非文件夹：不显。
+        assert_eq!(folder_count_label(&on, &NavNodeKind::View, Some(7), 3), None);
+        // 候选总数优先于已加载数。
+        assert_eq!(
+            folder_count_label(&on, &NavNodeKind::Folder(NavFolder::Tables), Some(7), 3)
+                .as_deref(),
+            Some("7")
+        );
+        // 缺省回退已加载子节点数。
+        assert_eq!(
+            folder_count_label(&on, &NavNodeKind::Folder(NavFolder::Tables), None, 3).as_deref(),
+            Some("3")
+        );
+        // 零个不显。
+        assert_eq!(
+            folder_count_label(&on, &NavNodeKind::Folder(NavFolder::Tables), Some(0), 0),
+            None
+        );
     }
 
     // ==================== B-1 对象名 mask 规则矩阵 ====================
@@ -1485,6 +1723,7 @@ mod tests {
             schema: String::new(),
             seq: 0,
             estimates: vec![],
+            sizes: vec![],
         }];
         let connect = vec![nav_jobs::ConnectResult {
             conn_id: "c".into(),

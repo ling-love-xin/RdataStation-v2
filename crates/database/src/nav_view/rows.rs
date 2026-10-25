@@ -1446,6 +1446,14 @@ impl NavView {
                 .child(err.clone())
         });
 
+        // D12 连接行主机名副标：档案默认开（SQLite / DuckDB 本地库默认关）；host 为空不显，
+        // port 非空拼 `host:port`。与错误摘要同槽位同行，不增行高；门控判定走纯函数。
+        let host_subline = host_subline_text(
+            crate::nav::family_profile::family_inline_profile(&type_id),
+            conn.host.as_deref(),
+            conn.port,
+        );
+
         // 行尾操作：`+` 加标签 · `✎` 编辑 · 失败连接另带 `⟳ 重试`（仅 hover / 选中显；
         // 连接 / 断开走右键菜单）。
         //
@@ -1638,6 +1646,20 @@ impl NavView {
                         .text_ellipsis()
                         .child(nav_name_highlight(&conn_disp_name, &filter, match_bg, fg)),
                 )
+                // D12 主机名副标（同行右侧，弱色截断；档案关闭或无 host 时整槽不挂）。
+                .when_some(host_subline, |s, text| {
+                    s.child(
+                        div()
+                            .flex_none()
+                            .min_w_0()
+                            .max_w(rems(ui::NAV_HOST_SUBLINE_W))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(text),
+                    )
+                })
                 // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
                 .when_some(err_summary, |s, e| s.child(e))
                 .when(scope_visible, |s| {
@@ -2192,6 +2214,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .find(|c| c.id == node.connection_id)
             .map(|c| c.driver.clone())
             .unwrap_or_default();
+        // D12 行内元素档案位：按连接驱动归一查表（描述 / 大小 / 主机名 / 子计数静态默认开关）。
+        let inline = crate::nav::family_profile::family_inline_profile(&n_driver);
         // 供右键菜单使用（双击处理器已消费 `n_conn_label` / `n_driver`）。
         let m_conn_label = n_conn_label.clone();
         let m_driver = n_driver.clone();
@@ -2214,6 +2238,26 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             }
             _ => None,
         };
+
+        // D12 对象注释副标：档案 `show_description` 开启 + 描述类对象（表 / 视图 / 例程 /
+        // 序列 / 触发器；列不显）才挂；斜体弱色同行截断，属性面板看全量；门控判定走纯函数。
+        let comment_subline: Option<Div> = comment_subline_text(
+            &inline,
+            &node.kind,
+            node.comment.as_deref(),
+        )
+        .map(|comment| {
+            div()
+                .flex_none()
+                .min_w_0()
+                .max_w(rems(ui::NAV_COMMENT_SUBLINE_W))
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_xs()
+                .italic()
+                .text_color(muted)
+                .child(comment)
+        });
 
         // 拖拽载荷：仅表 / 视图（原型 §6.1「拖拽表到编辑器」）。
         let drag_payload = match &node.kind {
@@ -2299,6 +2343,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child(meta),
             );
         }
+        if let Some(comment) = comment_subline {
+            row = row.child(comment);
+        }
         // S3-② 分区/继承徽标：子表折叠进父表后，父表行尾显示「分区 N / 继承 N」
         // （两半都为零时不显示——普通表无徽标）。
         // S3-④ 行估计徽标：同槽追加「≈ N」（已回填）或「…」（在途占位）。
@@ -2340,6 +2387,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     }
                 }
             }
+            // D12 表大小徽标：档案开启 + 已回填才显；未回填 / 驱动不支持安静消失，
+            // 在途「…」占位由行估计槽统一承担（两查询同批次、同一在途集合，不重复占位）。
+            if let Some(text) = size_badge_text(&inline, node.data_length) {
+                badges.push(text);
+            }
             if !badges.is_empty() {
                 row = row.child(
                     div()
@@ -2349,6 +2401,22 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         .child(badges.join("  ")),
                 );
             }
+        }
+        // D12 文件夹子计数徽标：档案开启才显；候选总数优先（`child_total`，分页前由
+        // 数据侧告知），缺省回退已加载子节点长度；零个不显；门控判定走纯函数。
+        if let Some(label) = folder_count_label(
+            &inline,
+            &node.kind,
+            self.nav.borrow().child_total.get(&node.key).copied(),
+            node.children.len(),
+        ) {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(label),
+            );
         }
         if let Some(payload) = drag_payload {
             // 幽灵用同一个类别图标（`&'static str` 是 `Copy`，可直接进闭包）。

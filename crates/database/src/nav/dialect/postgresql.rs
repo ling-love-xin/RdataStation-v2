@@ -74,6 +74,17 @@ impl DialectSpi for PostgresqlDialect {
              WHERE n.nspname = '{esc}' AND c.relkind IN ('r','p')"
         ))
     }
+
+    /// 目录级表大小：`pg_total_relation_size(oid)`（整表占用，含索引与 toast；
+    /// 与 MySQL `DATA_LENGTH` 仅数据段的口径差异挂账，跨族大小对比不做严格等价）。
+    fn table_size_sql(&self, schema: &str) -> Option<String> {
+        let esc = schema.replace('\'', "''");
+        Some(format!(
+            "SELECT c.relname, pg_total_relation_size(c.oid) FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = '{esc}' AND c.relkind IN ('r','p')"
+        ))
+    }
 }
 
 pub(crate) fn register(registry: &mut DialectRegistry) {
@@ -157,6 +168,17 @@ mod tests {
         assert!(sql.contains("relkind IN ('r','p')"), "{sql}");
         assert!(sql.contains("'public'"), "{sql}");
         let escaped = d.row_estimate_sql("a'b").unwrap();
+        assert!(escaped.contains("'a''b'"), "{escaped}");
+    }
+
+    #[test]
+    fn table_size_uses_pg_total_relation_size_and_escapes_schema() {
+        let d = PostgresqlDialect;
+        let sql = d.table_size_sql("public").unwrap();
+        assert!(sql.contains("pg_total_relation_size"), "{sql}");
+        assert!(sql.contains("relkind IN ('r','p')"), "{sql}");
+        assert!(sql.contains("'public'"), "{sql}");
+        let escaped = d.table_size_sql("a'b").unwrap();
         assert!(escaped.contains("'a''b'"), "{escaped}");
     }
 }

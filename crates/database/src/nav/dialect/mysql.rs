@@ -66,6 +66,16 @@ impl DialectSpi for MysqlDialect {
              WHERE TABLE_SCHEMA = '{esc}'"
         ))
     }
+
+    /// 目录级表大小：`information_schema.TABLES.DATA_LENGTH`（仅数据段，不含索引；
+    /// 视图行为 NULL，任务层解析为 `None` 后徽标安静消失）。
+    fn table_size_sql(&self, schema: &str) -> Option<String> {
+        let esc = schema.replace('\'', "''");
+        Some(format!(
+            "SELECT TABLE_NAME, DATA_LENGTH FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = '{esc}'"
+        ))
+    }
 }
 
 pub(crate) fn register(registry: &mut DialectRegistry) {
@@ -124,6 +134,16 @@ mod tests {
         assert!(sql.contains("TABLE_ROWS"), "{sql}");
         assert!(sql.contains("'warehouse'"), "{sql}");
         let escaped = d.row_estimate_sql("it's").unwrap();
+        assert!(escaped.contains("'it''s'"), "{escaped}");
+    }
+
+    #[test]
+    fn table_size_uses_data_length_and_escapes_schema() {
+        let d = MysqlDialect;
+        let sql = d.table_size_sql("warehouse").unwrap();
+        assert!(sql.contains("DATA_LENGTH"), "{sql}");
+        assert!(sql.contains("'warehouse'"), "{sql}");
+        let escaped = d.table_size_sql("it's").unwrap();
         assert!(escaped.contains("'it''s'"), "{escaped}");
     }
 }

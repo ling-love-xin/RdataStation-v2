@@ -156,6 +156,28 @@ impl NavCache {
         }
     }
 
+    /// D12：批量回写表数据段大小到 L2（`tables.data_length`），口径与
+    /// [`Self::update_row_estimates`] 一致；失败静默（内存回填不受影响）。
+    pub fn update_table_sizes(
+        &mut self,
+        catalog: &str,
+        schema: &str,
+        sizes: &[(String, Option<u64>)],
+    ) {
+        let l2: Vec<(String, Option<i64>)> = sizes
+            .iter()
+            .map(|(n, s)| (n.clone(), s.map(|v| v as i64)))
+            .collect();
+        if let Err(e) = self.ops.update_table_sizes(catalog, schema, &l2) {
+            tracing::warn!(
+                catalog,
+                schema,
+                error = %e,
+                "表大小回写 L2 失败（内存回填不受影响）"
+            );
+        }
+    }
+
     /// 该 schema 是否已**完整扫描**（`is_loaded = 1`）。
     ///
     /// 写侧用它判断「重写前要不要清旧行」：半成品（未完成）时先 `prune_schema`

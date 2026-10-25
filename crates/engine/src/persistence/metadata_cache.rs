@@ -741,6 +741,66 @@ impl MetadataCacheOps {
         Ok(())
     }
 
+    /// D12：批量回写表大小到 L2（`tables.data_length`），供导航行尾大小徽标跨会话复用。
+    ///
+    /// 与 [`Self::update_table_row_estimates`] 同一事务批量口径；`None` = 驱动本次没给
+    /// （把旧值置空，避免陈旧大小继续显示）。schema 从未落过缓存时静默跳过。
+    /// 本批只接 `data_length`，`index_length` 不回写（大小口径对齐 DBeaver 数据段体积）。
+    pub fn update_table_sizes(
+        &mut self,
+        catalog_name: &str,
+        schema_name: &str,
+        sizes: &[(String, Option<i64>)],
+    ) -> Result<(), CoreError> {
+        let Some(schema_id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM schemata WHERE catalog_name = ?1 AND schema_name = ?2",
+                rusqlite::params![catalog_name, schema_name],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "update_table_sizes".to_string(),
+                    reason: e.to_string(),
+                })
+            })?
+        else {
+            return Ok(());
+        };
+        // 一次事务批量更新（与行估计同一口径，大 schema 逐条提交太慢）。
+        let tx = self.conn.transaction().map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "update_table_sizes".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        for (name, size) in sizes {
+            tx.execute(
+                "UPDATE tables SET data_length = ?1 WHERE schema_id = ?2 AND table_name = ?3",
+                rusqlite::params![size, schema_id, name],
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "update_table_sizes".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        }
+        tx.commit().map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "update_table_sizes".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        Ok(())
+    }
+
     /// 获取 Schema 对象数量统计
     pub fn get_schema_stats(&self, schema_id: i64) -> Result<Option<SchemaInfo>, CoreError> {
         let schema = self

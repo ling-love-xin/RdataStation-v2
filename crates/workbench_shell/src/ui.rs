@@ -175,6 +175,10 @@ pub const NAV_EDITOR_GROUP: f32 = 5.5;
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 /// 失败连接行的行内错误摘要最大宽（6.5rem ≈ 104px；超出省略，hover 卡看全量）。
 pub const NAV_ERR_SUMMARY_W: f32 = 6.5;
+/// 连接行主机名副标（`host:port`）最大宽（6rem ≈ 96px；超出省略，双击连接看全量）。
+pub const NAV_HOST_SUBLINE_W: f32 = 6.0;
+/// 对象行注释副标最大宽（8rem ≈ 128px；超出省略，属性面板看全量）。
+pub const NAV_COMMENT_SUBLINE_W: f32 = 8.0;
 
 // ===== 控件与图标（rem 基准） =====
 

@@ -98,5 +98,6 @@ mod tests {
     #[test]
     fn row_estimate_not_supported() {
         assert!(SqliteDialect.row_estimate_sql("main").is_none());
+        assert!(SqliteDialect.table_size_sql("main").is_none());
     }
 }

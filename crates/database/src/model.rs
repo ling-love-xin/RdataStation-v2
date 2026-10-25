@@ -192,6 +192,9 @@ pub struct NavNode {
     pub child_partitions: u32,
     /// S3-②：继承子表数（PG 继承子表折叠进父表后，父表行尾徽标「继承 N」）。
     pub child_inherited: u32,
+    /// D12：表数据段大小（字节，来自后台大小批次；`None` = 未回填 / 驱动不支持，
+    /// 徽标安静消失）。节点级承载，当前仅 Table 行渲染，视图大小后续可复用。
+    pub data_length: Option<u64>,
 }
 
 impl NavNode {
@@ -217,6 +220,7 @@ impl NavNode {
             property: None,
             child_partitions: 0,
             child_inherited: 0,
+            data_length: None,
         }
     }
 
@@ -242,6 +246,12 @@ impl NavNode {
     pub fn with_child_counts(mut self, partitions: u32, inherited: u32) -> Self {
         self.child_partitions = partitions;
         self.child_inherited = inherited;
+        self
+    }
+
+    /// D12：指定表数据段大小（字节；`None` = 未回填 / 驱动不支持）。
+    pub fn with_data_length(mut self, size: Option<u64>) -> Self {
+        self.data_length = size;
         self
     }
 

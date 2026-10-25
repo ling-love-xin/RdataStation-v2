@@ -61,6 +61,24 @@ pub struct SearchScopeProfile {
     pub definitions: &'static [ObjectKind],
 }
 
+/// 一族数据库在「行内统计元素」上的静态默认开关（D12 档案位）。
+///
+/// 口径对齐 DBeaver `UINavigatorPreferencesInitializer` 默认值：主机名 / 对象统计（大小）
+/// 默认开，对象描述 / 子节点计数默认关。档案只表达「该族默认显不显示」；运行时是否
+/// 真有数据可给由方言 / 数据源兜底（方言 `table_size_sql` 返回 `None` 时徽标安静消失）。
+/// 用户偏好开关归宿主 settings，本批只落档案静态默认位 + 渲染接线。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InlineStatsProfile {
+    /// 对象行尾是否显示注释描述（斜体弱色副标；仅表 / 视图 / 例程 / 序列 / 触发器）。
+    pub show_description: bool,
+    /// 对象行尾是否显示表数据段大小徽标。
+    pub show_size: bool,
+    /// 连接行是否显示主机名副标（本地库 SQLite / DuckDB 无主机，默认关）。
+    pub show_host_name: bool,
+    /// 文件夹行尾是否显示子节点总数徽标。
+    pub show_child_count: bool,
+}
+
 /// 一族数据库的静态档案（层级形态 + 类型全集 + 文件夹顺序 + 搜索范围）。
 #[derive(Clone, Copy, Debug)]
 pub struct DbFamilyProfile {
@@ -78,6 +96,8 @@ pub struct DbFamilyProfile {
     pub folders: &'static [FolderProfile],
     /// 注释 / 定义搜索维度的类型集合（D11）。
     pub search: SearchScopeProfile,
+    /// 行内统计元素静态默认开关（D12）。
+    pub inline: InlineStatsProfile,
 }
 
 // =====================================================================================
@@ -311,6 +331,40 @@ const FALLBACK_SEARCH: SearchScopeProfile = SearchScopeProfile {
     definitions: &[],
 };
 
+// ---- D12 行内统计元素静态默认开关（口径见 `InlineStatsProfile` 文档） ----
+// 对齐 DBeaver 默认：主机名 / 大小开，描述 / 子计数关；本地库无主机名。
+
+const PG_INLINE: InlineStatsProfile = InlineStatsProfile {
+    show_description: false,
+    show_size: true,
+    show_host_name: true,
+    show_child_count: false,
+};
+const MYSQL_INLINE: InlineStatsProfile = InlineStatsProfile {
+    show_description: false,
+    show_size: true,
+    show_host_name: true,
+    show_child_count: false,
+};
+const SQLITE_INLINE: InlineStatsProfile = InlineStatsProfile {
+    show_description: false,
+    show_size: true,
+    show_host_name: false,
+    show_child_count: false,
+};
+const DUCKDB_INLINE: InlineStatsProfile = InlineStatsProfile {
+    show_description: false,
+    show_size: true,
+    show_host_name: false,
+    show_child_count: false,
+};
+const FALLBACK_INLINE: InlineStatsProfile = InlineStatsProfile {
+    show_description: false,
+    show_size: false,
+    show_host_name: false,
+    show_child_count: false,
+};
+
 /// PostgreSQL：独立 Schema 层，Catalog 连接作用域内，八类全量。
 static POSTGRESQL: DbFamilyProfile = DbFamilyProfile {
     family: "postgresql",
@@ -335,6 +389,7 @@ static POSTGRESQL: DbFamilyProfile = DbFamilyProfile {
         FOLDER_TRIGGERS,
     ],
     search: PG_SEARCH,
+    inline: PG_INLINE,
 };
 
 /// MySQL：无独立 Schema 层（库即 Schema），不支持序列内省。
@@ -354,6 +409,7 @@ static MYSQL: DbFamilyProfile = DbFamilyProfile {
     ],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_ROUTINES, FOLDER_TRIGGERS],
     search: MYSQL_SEARCH,
+    inline: MYSQL_INLINE,
 };
 
 /// SQLite：单库、无例程与序列内省。
@@ -365,6 +421,7 @@ static SQLITE: DbFamilyProfile = DbFamilyProfile {
     types: &[TYPE_TABLE, TYPE_VIEW, TYPE_COLUMN, TYPE_TRIGGER],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_TRIGGERS],
     search: SQLITE_SEARCH,
+    inline: SQLITE_INLINE,
 };
 
 /// DuckDB：固定 main、无例程与触发器内省。
@@ -376,6 +433,7 @@ static DUCKDB: DbFamilyProfile = DbFamilyProfile {
     types: &[TYPE_TABLE, TYPE_VIEW, TYPE_COLUMN, TYPE_SEQUENCE],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_SEQUENCES],
     search: DUCKDB_SEARCH,
+    inline: DUCKDB_INLINE,
 };
 
 /// 未知族回退通用档案：保底不藏对象，层级形态取宽口径（有 Schema 层）。
@@ -402,6 +460,7 @@ static FALLBACK: DbFamilyProfile = DbFamilyProfile {
         FOLDER_TRIGGERS,
     ],
     search: FALLBACK_SEARCH,
+    inline: FALLBACK_INLINE,
 };
 
 /// 族档案注册表：内置四族 + 未知族回退档案。
@@ -449,6 +508,11 @@ impl FamilyRegistry {
     pub fn family_search_scope(&self, type_id: &str) -> &'static SearchScopeProfile {
         &self.family_of(type_id).search
     }
+
+    /// 按族 id 查行内统计元素开关档案；别名归一命中，未注册族回退 FALLBACK（全关）。
+    pub fn family_inline_profile(&self, type_id: &str) -> &'static InlineStatsProfile {
+        &self.family_of(type_id).inline
+    }
 }
 
 /// 全局族档案注册表（首次访问时注册全部内置族）。
@@ -467,6 +531,11 @@ pub fn registry() -> &'static FamilyRegistry {
 /// 族 × 注释 / 定义搜索范围（D11）：按族 id 查档案位；别名归一、未注册族回退空集合。
 pub fn family_search_scope(type_id: &str) -> &'static SearchScopeProfile {
     &registry().family_search_scope(type_id)
+}
+
+/// 族 × 行内统计元素开关（D12）：按族 id 查档案位；别名归一、未注册族回退全关。
+pub fn family_inline_profile(type_id: &str) -> &'static InlineStatsProfile {
+    &registry().family_inline_profile(type_id)
 }
 
 #[cfg(test)]
@@ -736,6 +805,51 @@ mod tests {
         assert_eq!(
             registry().family_search_scope("mysql_native").definitions,
             registry().family_search_scope("mysql").definitions
+        );
+    }
+
+    // ---- D12 行内统计元素开关档案位 ----
+
+    #[test]
+    fn family_inline_profile_matches_pinned_matrix() {
+        let reg = registry();
+
+        // PostgreSQL / MySQL：主机名、大小默认开；描述、子计数默认关（对齐 DBeaver 默认）。
+        for family in ["postgresql", "mysql"] {
+            let inline = reg.family_inline_profile(family);
+            assert!(inline.show_host_name, "{family} 主机名应默认开");
+            assert!(inline.show_size, "{family} 大小应默认开");
+            assert!(!inline.show_description, "{family} 描述应默认关");
+            assert!(!inline.show_child_count, "{family} 子计数应默认关");
+        }
+
+        // SQLite / DuckDB：本地库无主机名（关）；大小默认开；描述、子计数关。
+        for family in ["sqlite", "duckdb"] {
+            let inline = reg.family_inline_profile(family);
+            assert!(!inline.show_host_name, "{family} 无主机名应默认关");
+            assert!(inline.show_size, "{family} 大小应默认开");
+            assert!(!inline.show_description, "{family} 描述应默认关");
+            assert!(!inline.show_child_count, "{family} 子计数应默认关");
+        }
+
+        // 未知族回退：四项全关（不默认开放未验证维度）。
+        let fallback = reg.family_inline_profile("oracle");
+        assert!(!fallback.show_host_name);
+        assert!(!fallback.show_size);
+        assert!(!fallback.show_description);
+        assert!(!fallback.show_child_count);
+    }
+
+    #[test]
+    fn family_inline_profile_resolves_aliases() {
+        // 别名归一后查到对应族开关（与 family_of 归一同一套规则）。
+        assert_eq!(
+            registry().family_inline_profile("postgres_native"),
+            registry().family_inline_profile("postgresql")
+        );
+        assert_eq!(
+            registry().family_inline_profile("mysql_native"),
+            registry().family_inline_profile("mysql")
         );
     }
 }

@@ -83,6 +83,15 @@ pub trait DialectSpi: Send + Sync {
         let _ = schema;
         None
     }
+
+    /// 目录级表数据段大小 SQL；`None` = 本族不查大小（徽标安静消失，不报错）。
+    ///
+    /// 返回两列：表名 + 数据段字节数（可为 `NULL`，由任务层解析为 `None`）；schema 转义
+    /// 口径与 [`Self::row_estimate_sql`] 一致。本批只接数据段体积，不接索引体积。
+    fn table_size_sql(&self, schema: &str) -> Option<String> {
+        let _ = schema;
+        None
+    }
 }
 
 /// 构造「驱动不支持」错误（provider 共用；operation 固定 `rename_sql`，source 写族特异原因）。
@@ -196,6 +205,7 @@ mod tests {
             .rename_sql(ObjectKind::Table, None, "t", None, "t2")
             .is_err());
         assert!(dialect.row_estimate_sql("main").is_none());
+        assert!(dialect.table_size_sql("main").is_none());
     }
 
     /// 通用三段限定名：空段跳过、schema==catalog 去重（与现状 `quoted_qualified` 等价）。

@@ -192,6 +192,31 @@ pub struct RowEstimateResult {
     /// 刷新顶掉），丢弃不写回。
     pub seq: u64,
     pub estimates: Vec<(String, Option<u64>)>,
+    /// D12：表数据段大小（字节）回填结果，与 `estimates` 同批次、同表名匹配口径；
+    /// 驱动不支持 / 本次未给时为空或 `None`，徽标安静消失。
+    pub sizes: Vec<(String, Option<u64>)>,
+}
+
+/// 解析「表名 + 数值」两列结果为 `(名, 数值)` 对：首列须为 `Text`；第二列 `Int` /
+/// `Float` / `Text` 三型兼容（`reltuples` / `TABLE_ROWS` / `DATA_LENGTH` /
+/// `pg_total_relation_size` 口径各异，联邦回传也可能给文本）；`NULL` / 非数值解析失败
+/// → `None`（徽标安静消失，不显 0）。行估计与表大小共用本解析口径。
+fn parse_name_value_pairs(rows: Vec<Vec<shared::models::Value>>) -> Vec<(String, Option<u64>)> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let name = match row.first() {
+                Some(shared::models::Value::Text(n)) => n.clone(),
+                _ => return None,
+            };
+            let value = match row.get(1) {
+                Some(shared::models::Value::Int(i)) => Some(*i as u64),
+                Some(shared::models::Value::Float(f)) => Some(*f as u64),
+                Some(shared::models::Value::Text(t)) => t.parse::<u64>().ok(),
+                _ => None,
+            };
+            Some((name, value))
+        })
+        .collect()
 }
 
 /// 导航建连结果（回传主线程）。
@@ -937,6 +962,7 @@ fn report_failure(ticket: Ticket, reason: &str) {
                 schema,
                 seq,
                 estimates: Vec::new(),
+                sizes: Vec::new(),
             });
         }
     }
@@ -1215,70 +1241,80 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                     schema,
                     seq,
                     estimates: Vec::new(),
+                    sizes: Vec::new(),
                 });
                 return;
             };
-            // 驱动不支持（SQLite / DuckDB / JDBC / wasm）：直接空结果收尾，**不发真 COUNT**
-            // （大库逐表 COUNT 秒级以上）。族支持位与 SQL 生成都在 L3 方言 SPI
-            // （`nav::dialect_of`），矩阵单测钉在 `nav/dialect/`。
-            let Some(sql) = crate::nav::dialect_of(&driver).row_estimate_sql(&schema) else {
+            // 行估计 / 大小两个查询独立：方言各自 None 兜底，互不牵连；两者都不支持才
+            // 直接空结果收尾（入队侧已判一次，这里是兜底——不发真 COUNT / 大小查询）。
+            let dialect = crate::nav::dialect_of(&driver);
+            let est_sql = dialect.row_estimate_sql(&schema);
+            let size_sql = dialect.table_size_sql(&schema);
+            if est_sql.is_none() && size_sql.is_none() {
                 lock(&shared().row_estimates).push(RowEstimateResult {
                     conn_id,
                     catalog,
                     schema,
                     seq,
                     estimates: Vec::new(),
+                    sizes: Vec::new(),
                 });
                 return;
-            };
+            }
             let svc = crate::metadata_service::MetadataService::new(
                 engine::get_connection_manager().clone(),
             );
-            let outcome = rt.block_on(async {
-                tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql)).await
-            });
-            // 失败 / 超时 → 空结果（不显示 0、不报红字）；成功 → 解析 (名, 估计)。
-            let estimates = match outcome {
-                Ok(Ok(result)) => {
-                    let parsed: Vec<(String, Option<u64>)> = result
-                        .rows
-                        .into_iter()
-                        .filter_map(|row| {
-                            let name = match row.first() {
-                                Some(shared::models::Value::Text(n)) => n.clone(),
-                                _ => return None,
-                            };
-                            // reltuples::bigint / TABLE_ROWS 是整数；DuckDB 联邦回传可能给
-                            // Float / Text（`::text` 版），三种都认。
-                            let est = match row.get(1) {
-                                Some(shared::models::Value::Int(i)) => Some(*i as u64),
-                                Some(shared::models::Value::Float(f)) => Some(*f as u64),
-                                Some(shared::models::Value::Text(t)) => t.parse::<u64>().ok(),
-                                _ => None,
-                            };
-                            Some((name, est))
-                        })
-                        .collect();
-                    // S3-④-C（拍板回写 L2）：估计值落 `metadata_index.tables.row_count_estimate`，
-                    // 重开连接复用；刷新元数据时由新批次覆盖。失败静默（尽力而为——
-                    // 内存回填已成功，L2 只是跨会话复用通道）。
-                    if !parsed.is_empty() {
-                        if let Some(mut cache) =
-                            crate::cache::NavCache::open_direct(&conn_id, project_root.as_deref())
-                        {
-                            cache.update_row_estimates(&catalog, &schema, &parsed);
-                        }
+            // 行估计：Some 才发查询；失败 / 超时 → 空列表（不显 0、不报红字）。
+            let estimates = match est_sql {
+                Some(sql) => {
+                    let outcome = rt.block_on(async {
+                        tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql))
+                            .await
+                    });
+                    match outcome {
+                        Ok(Ok(result)) => parse_name_value_pairs(result.rows),
+                        _ => Vec::new(),
                     }
-                    parsed
                 }
-                _ => Vec::new(),
+                None => Vec::new(),
             };
+            // D12 表大小：与行估计同一批次、同一让位通道，独立查询独立解析。
+            let sizes = match size_sql {
+                Some(sql) => {
+                    let outcome = rt.block_on(async {
+                        tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql))
+                            .await
+                    });
+                    match outcome {
+                        Ok(Ok(result)) => parse_name_value_pairs(result.rows),
+                        _ => Vec::new(),
+                    }
+                }
+                None => Vec::new(),
+            };
+            // S3-④-C（拍板回写 L2）：估计值 / 大小落缓存表，重开连接复用；刷新元数据时
+            // 由新批次覆盖。失败静默（尽力而为——内存回填已成功，L2 只是跨会话复用通道）。
+            if !estimates.is_empty() {
+                if let Some(mut cache) =
+                    crate::cache::NavCache::open_direct(&conn_id, project_root.as_deref())
+                {
+                    cache.update_row_estimates(&catalog, &schema, &estimates);
+                }
+            }
+            if !sizes.is_empty() {
+                if let Some(mut cache) =
+                    crate::cache::NavCache::open_direct(&conn_id, project_root.as_deref())
+                {
+                    cache.update_table_sizes(&catalog, &schema, &sizes);
+                }
+            }
             lock(&shared().row_estimates).push(RowEstimateResult {
                 conn_id,
                 catalog,
                 schema,
                 seq,
                 estimates,
+                sizes,
             });
         }
         Job::PrefetchColumns {
@@ -1903,10 +1939,11 @@ pub fn has_pending_row_estimates() -> bool {
     shared().pending_row_estimates.load(Ordering::SeqCst) > 0
 }
 
-/// S3-④ 提交某 schema 的行估计（后台补填，优先级 = 后台）。
+/// S3-④ 提交某 schema 的行估计 + D12 表大小补填（后台补填，优先级 = 后台）。
 ///
-/// 驱动不支持时**不入队**（SQL 生成即判定）：视图侧也判了一次，这里是兜底——
-/// 避免不支持驱动白排一批让位任务。
+/// 行估计与大小两个方言 SQL **都**为 `None` 时**不入队**（SQL 生成即判定）：视图侧也
+/// 判了一次，这里是兜底——避免不支持驱动白排一批让位任务；仅其一支持时本批仍入队，
+/// 任务内各自 None 兜底。
 pub fn enqueue_row_estimate(
     conn_id: &str,
     project_root: Option<&str>,
@@ -1915,7 +1952,8 @@ pub fn enqueue_row_estimate(
     driver: &str,
     seq: u64,
 ) {
-    if crate::nav::dialect_of(driver).row_estimate_sql(schema).is_none() {
+    let dialect = crate::nav::dialect_of(driver);
+    if dialect.row_estimate_sql(schema).is_none() && dialect.table_size_sql(schema).is_none() {
         return;
     }
     shared().pending_row_estimates.fetch_add(1, Ordering::SeqCst);
