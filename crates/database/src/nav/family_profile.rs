@@ -46,7 +46,22 @@ pub struct FolderProfile {
     pub order: u8,
 }
 
-/// 一族数据库的静态档案（层级形态 + 类型全集 + 文件夹顺序）。
+/// 一族数据库在「注释 / 定义」两个搜索维度上支持的对象类型集合（D11 档案位）。
+///
+/// 口径对齐 DBeaver `supportsSearchInCommentsFor/DefinitionsFor`：注释 / 定义开关开启后，
+/// 并入名称档的 FTS 候选只保留本族在该维度声明支持的类型；未声明类型不进榜。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchScopeProfile {
+    /// 注释搜索覆盖的对象类型。
+    pub comments: &'static [ObjectKind],
+    /// 定义搜索覆盖的对象类型。
+    ///
+    /// 当前批量内省链路尚未采集视图 / 例程定义（`save_view` 写空串、`save_routine`
+    /// definition 为 `None`），本批档案位先建档、定义候选为空；采集链路接通后即生效。
+    pub definitions: &'static [ObjectKind],
+}
+
+/// 一族数据库的静态档案（层级形态 + 类型全集 + 文件夹顺序 + 搜索范围）。
 #[derive(Clone, Copy, Debug)]
 pub struct DbFamilyProfile {
     /// 族 id（归一后）：`postgresql` / `mysql` / `sqlite` / `duckdb`。
@@ -61,6 +76,8 @@ pub struct DbFamilyProfile {
     pub types: &'static [TypeProfile],
     /// 文件夹顺序与标题。
     pub folders: &'static [FolderProfile],
+    /// 注释 / 定义搜索维度的类型集合（D11）。
+    pub search: SearchScopeProfile,
 }
 
 // =====================================================================================
@@ -271,6 +288,29 @@ const FOLDER_TRIGGERS: FolderProfile = FolderProfile {
     order: 4,
 };
 
+// ---- D11 注释 / 定义搜索范围静态集合（口径见 `SearchScopeProfile` 文档） ----
+
+const PG_SEARCH: SearchScopeProfile = SearchScopeProfile {
+    comments: &[ObjectKind::Table, ObjectKind::View, ObjectKind::Column, ObjectKind::Routine],
+    definitions: &[ObjectKind::Routine, ObjectKind::View],
+};
+const MYSQL_SEARCH: SearchScopeProfile = SearchScopeProfile {
+    comments: &[ObjectKind::Table, ObjectKind::Column, ObjectKind::Routine],
+    definitions: &[ObjectKind::Routine],
+};
+const SQLITE_SEARCH: SearchScopeProfile = SearchScopeProfile {
+    comments: &[ObjectKind::Table, ObjectKind::Column],
+    definitions: &[],
+};
+const DUCKDB_SEARCH: SearchScopeProfile = SearchScopeProfile {
+    comments: &[ObjectKind::Table, ObjectKind::Column],
+    definitions: &[],
+};
+const FALLBACK_SEARCH: SearchScopeProfile = SearchScopeProfile {
+    comments: &[],
+    definitions: &[],
+};
+
 /// PostgreSQL：独立 Schema 层，Catalog 连接作用域内，八类全量。
 static POSTGRESQL: DbFamilyProfile = DbFamilyProfile {
     family: "postgresql",
@@ -294,6 +334,7 @@ static POSTGRESQL: DbFamilyProfile = DbFamilyProfile {
         FOLDER_SEQUENCES,
         FOLDER_TRIGGERS,
     ],
+    search: PG_SEARCH,
 };
 
 /// MySQL：无独立 Schema 层（库即 Schema），不支持序列内省。
@@ -312,6 +353,7 @@ static MYSQL: DbFamilyProfile = DbFamilyProfile {
         TYPE_TRIGGER,
     ],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_ROUTINES, FOLDER_TRIGGERS],
+    search: MYSQL_SEARCH,
 };
 
 /// SQLite：单库、无例程与序列内省。
@@ -322,6 +364,7 @@ static SQLITE: DbFamilyProfile = DbFamilyProfile {
     catalog_is_connection_scoped: false,
     types: &[TYPE_TABLE, TYPE_VIEW, TYPE_COLUMN, TYPE_TRIGGER],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_TRIGGERS],
+    search: SQLITE_SEARCH,
 };
 
 /// DuckDB：固定 main、无例程与触发器内省。
@@ -332,6 +375,7 @@ static DUCKDB: DbFamilyProfile = DbFamilyProfile {
     catalog_is_connection_scoped: false,
     types: &[TYPE_TABLE, TYPE_VIEW, TYPE_COLUMN, TYPE_SEQUENCE],
     folders: &[FOLDER_TABLES, FOLDER_VIEWS, FOLDER_SEQUENCES],
+    search: DUCKDB_SEARCH,
 };
 
 /// 未知族回退通用档案：保底不藏对象，层级形态取宽口径（有 Schema 层）。
@@ -357,6 +401,7 @@ static FALLBACK: DbFamilyProfile = DbFamilyProfile {
         FOLDER_SEQUENCES,
         FOLDER_TRIGGERS,
     ],
+    search: FALLBACK_SEARCH,
 };
 
 /// 族档案注册表：内置四族 + 未知族回退档案。
@@ -399,6 +444,11 @@ impl FamilyRegistry {
             .iter()
             .find(|entry| entry.kind == kind)
     }
+
+    /// 按族 id 查注释 / 定义搜索范围档案；别名归一命中，未注册族回退 FALLBACK（空集合）。
+    pub fn family_search_scope(&self, type_id: &str) -> &'static SearchScopeProfile {
+        &self.family_of(type_id).search
+    }
 }
 
 /// 全局族档案注册表（首次访问时注册全部内置族）。
@@ -412,6 +462,11 @@ pub fn registry() -> &'static FamilyRegistry {
         registry.register(&DUCKDB);
         registry
     })
+}
+
+/// 族 × 注释 / 定义搜索范围（D11）：按族 id 查档案位；别名归一、未注册族回退空集合。
+pub fn family_search_scope(type_id: &str) -> &'static SearchScopeProfile {
+    &registry().family_search_scope(type_id)
 }
 
 #[cfg(test)]
@@ -630,5 +685,57 @@ mod tests {
         ] {
             assert_eq!(object_kind_icon(kind), None);
         }
+    }
+
+    // ---- D11 注释 / 定义搜索范围档案位 ----
+
+    #[test]
+    fn family_search_scope_matches_pinned_matrix() {
+        let reg = registry();
+        let contains = |scope: &[ObjectKind], kind: ObjectKind| scope.contains(&kind);
+
+        // PostgreSQL：注释覆盖表 / 视图 / 列 / 例程；定义覆盖例程 / 视图。
+        let pg = reg.family_search_scope("postgresql");
+        for kind in [ObjectKind::Table, ObjectKind::View, ObjectKind::Column, ObjectKind::Routine] {
+            assert!(contains(pg.comments, kind), "PG 注释应覆盖 {kind:?}");
+        }
+        for kind in [ObjectKind::Routine, ObjectKind::View] {
+            assert!(contains(pg.definitions, kind), "PG 定义应覆盖 {kind:?}");
+        }
+        assert!(!contains(pg.definitions, ObjectKind::Table));
+
+        // MySQL：注释覆盖表 / 列 / 例程；定义仅例程（视图不进定义集合）。
+        let mysql = reg.family_search_scope("mysql");
+        for kind in [ObjectKind::Table, ObjectKind::Column, ObjectKind::Routine] {
+            assert!(contains(mysql.comments, kind), "MySQL 注释应覆盖 {kind:?}");
+        }
+        assert!(contains(mysql.definitions, ObjectKind::Routine));
+        assert!(!contains(mysql.definitions, ObjectKind::View));
+
+        // SQLite / DuckDB：注释覆盖表 / 列；定义集合为空（内省未采集定义）。
+        for family in ["sqlite", "duckdb"] {
+            let scope = reg.family_search_scope(family);
+            assert!(contains(scope.comments, ObjectKind::Table));
+            assert!(contains(scope.comments, ObjectKind::Column));
+            assert!(scope.definitions.is_empty(), "{family} 定义集合应为空");
+        }
+
+        // 未知族回退：注释 / 定义集合均为空（不默认开放未验证维度）。
+        let fallback = reg.family_search_scope("oracle");
+        assert!(fallback.comments.is_empty());
+        assert!(fallback.definitions.is_empty());
+    }
+
+    #[test]
+    fn family_search_scope_resolves_aliases() {
+        // 别名归一后查到对应族范围（与 family_of 归一同一套规则）。
+        assert_eq!(
+            registry().family_search_scope("postgres_native").comments,
+            registry().family_search_scope("postgresql").comments
+        );
+        assert_eq!(
+            registry().family_search_scope("mysql_native").definitions,
+            registry().family_search_scope("mysql").definitions
+        );
     }
 }

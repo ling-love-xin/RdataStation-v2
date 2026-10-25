@@ -3008,16 +3008,50 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child(nav_name_highlight(&hit.object_name, &filter, match_bg, fg)),
             )
             // 类别 / 归属元信息：可缩可截（旧写法 `flex_shrink_0` 无上限，会把名称挤没）。
-            .child(
-                div()
+            // 注释 / 定义命中在类别前加一枚 why 徽标；名称命中不加（默认通道，不冗余标注）。
+            .child({
+                let badge = nav_hit_source_badge(hit.hit_source);
+                let mut meta = div()
                     .flex_shrink_1()
                     .min_w_0()
                     .overflow_hidden()
                     .text_xs()
                     .text_color(muted)
-                    .text_ellipsis()
-                    .child(format!("{kind_label} · {scope}")),
-            );
+                    .text_ellipsis();
+                if let Some((label, role)) = badge {
+                    let (role_color, role_bg) = match role {
+                        NavHitBadgeRole::Comment => (
+                            cx.theme().colors.info,
+                            cx.theme().colors.info.alpha(0.14),
+                        ),
+                        NavHitBadgeRole::Definition => (
+                            cx.theme().colors.warning,
+                            cx.theme().colors.warning.alpha(0.14),
+                        ),
+                    };
+                    meta = meta
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .px_1()
+                                .rounded_sm()
+                                .bg(role_bg)
+                                .text_color(role_color)
+                                .text_xs()
+                                .child(label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_ellipsis()
+                                .child(format!("{kind_label} · {scope}")),
+                        );
+                } else {
+                    meta = meta.child(format!("{kind_label} · {scope}"));
+                }
+                meta
+            });
 
         // 「定位」只在**真能定位**时摆出（判据与状态机同一处：`RevealTarget::from_hit`）——
         // 摆了却点了没反应，比不摆更伤。

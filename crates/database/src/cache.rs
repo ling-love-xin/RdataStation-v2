@@ -16,8 +16,7 @@
 use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
 use engine::persistence::{
     ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
-    MetadataCacheOps,
-    MetadataCachePool, SchemaObjectCounts,
+    MetadataCacheOps, MetadataCachePool, NameMatchMode, SchemaObjectCounts,
 };
 
 use crate::model::NavSource;
@@ -364,12 +363,20 @@ impl NavCache {
         }
     }
 
-    /// 按名称搜索该连接的索引（跨 schema 中缀匹配）。
+    /// 按名称搜索该连接的索引（`mode` 选定前缀 / 包含匹配，见 [`NameMatchMode`]）。
     ///
     /// 失败 / 无命中都返回空表：搜索是尽力而为的交互操作，不该因为某条连接缓存损坏
     /// 就整体报错（但要告警留痕，否则“搜不到”会被当成“库里没有”）。
-    pub fn search_index(&self, needle: &str, limit: usize) -> Vec<IndexSearchHit> {
-        match self.ops.search_index(&self.conn_id, needle, limit as i64) {
+    pub fn search_index(
+        &self,
+        needle: &str,
+        limit: usize,
+        mode: NameMatchMode,
+    ) -> Vec<IndexSearchHit> {
+        match self
+            .ops
+            .search_index(&self.conn_id, needle, limit as i64, mode)
+        {
             Ok(hits) => hits,
             Err(e) => {
                 tracing::warn!(
@@ -733,7 +740,7 @@ mod tests {
             "内省并落盘后应能看到缓存文件"
         );
 
-        let hits = cache.search_index("order", 50);
+        let hits = cache.search_index("order", 50, NameMatchMode::Contains);
         let names: Vec<&str> = hits.iter().map(|h| h.object_name.as_str()).collect();
         assert!(names.contains(&"order_items"), "表应命中（得到：{names:?}）");
         assert!(names.contains(&"order_id"), "列也应命中（得到：{names:?}）");
@@ -751,7 +758,9 @@ mod tests {
         assert_eq!(column.parent_name.as_deref(), Some("order_items"));
 
         // 无命中即空表（调用方据此显示“无命中”，不报错）
-        assert!(cache.search_index("zzz_不存在", 50).is_empty());
+        assert!(cache
+            .search_index("zzz_不存在", 50, NameMatchMode::Contains)
+            .is_empty());
 
         drop(cache);
         let _ = std::fs::remove_dir_all(&root);

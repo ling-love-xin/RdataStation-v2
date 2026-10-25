@@ -24,7 +24,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use database::model::{property_ref_of, PropertyRequest};
-use database::nav_jobs::{self, SearchConsumer, SearchHit, SearchKind, SearchTarget};
+use database::nav_jobs::{self, NameMatchMode, SearchConsumer, SearchHit, SearchKind, SearchTarget};
 use database::nav_view::search_hit_locatable;
 use engine::ObjectRef;
 
@@ -197,6 +197,10 @@ impl MetadataSearchHostPanel {
             kind,
             &query,
             // 工作台全局搜索（跨连接索引）：无 `.*` / `Aa` 开关，走默认关。
+            false,
+            false,
+            // D11：无匹配模式 / 注释 / 定义开关，走默认前缀、不搜语料。
+            NameMatchMode::StartsWith,
             false,
             false,
             project_root.as_deref(),

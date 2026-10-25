@@ -52,7 +52,7 @@ pub use global_db::{
 };
 pub use metadata_cache::{
     ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
-    MetadataCacheOps, SchemaObjectCounts, TriggerInfo,
+    MetadataCacheOps, NameMatchMode, SchemaObjectCounts, TriggerInfo,
 };
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
 pub use metadata_identity::{

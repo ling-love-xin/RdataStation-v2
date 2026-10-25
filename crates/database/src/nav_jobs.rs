@@ -28,10 +28,13 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::model::{NavNodeKind, NavPath, ObjectRef, PropertyRef};
+use crate::nav::family_profile::family_search_scope;
 use crate::nav_host::ConnectionProbe;
 use property::ObjectProperties;
 use crate::sql_gen::DmlKind;
 use engine::persistence::FtsSearchResult;
+pub use engine::persistence::NameMatchMode;
+use engine::ObjectKind;
 
 /// 每连接元数据任务并发上限 = 1：同连接内省 / 属性 / 取列严格串行（驱动单连接 Mutex
 /// 语义保持），不并发占池。信号量只代表「同连接任务串行」，不持有连接句柄 / 配置、
@@ -256,6 +259,21 @@ pub struct SearchTarget {
     pub driver: String,
 }
 
+/// 一条命中的来源维度（D11 why 三态：名称 / 注释 / 定义）。
+///
+/// 名称档原生命中记 [`HitSource::Name`]；注释 / 定义开关并入的 FTS 候选分别记
+/// [`HitSource::Comment`] / [`HitSource::Definition`]，视图侧据此在副标区打来源徽标。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HitSource {
+    /// 名称匹配（默认）。
+    #[default]
+    Name,
+    /// 注释匹配（FTS 注释语料）。
+    Comment,
+    /// 定义匹配（FTS 定义语料；本批内省链路尚未采集定义，候选恒为空）。
+    Definition,
+}
+
 /// 搜索档：名称（`metadata_index` 中缀）与内容（FTS5，注释 / 数据类型）。
 ///
 /// 两档不是同一种结果形态：名称档给短名字列表，内容档要让用户看到**为什么命中**
@@ -283,6 +301,8 @@ pub struct SearchHit {
     pub schema: Option<String>,
     /// 内容档命中片段（带 `<mark>` 标记）；名称档为 `None`。
     pub snippet: Option<String>,
+    /// 命中来源维度（D11 why 三态）：名称 / 注释 / 定义。
+    pub hit_source: HitSource,
 }
 
 impl SearchHit {
@@ -401,6 +421,14 @@ enum Job {
         /// （LIKE 中缀候选先取，正则再过滤；锚定 / 转义类模式受候选集约束，见
         /// [`search_targets`] 注）。
         regex: bool,
+        /// 名称档匹配方式（D11）：前缀 / 包含；默认前缀（对齐 DBeaver starts-with）。
+        name_mode: NameMatchMode,
+        /// 搜索框「注释」开关：开启后把 FTS 注释候选并入名称档（按族档案 comments 集合
+        /// 过滤类型；开关关闭时不并入）。
+        include_comments: bool,
+        /// 搜索框「定义」开关：本批内省链路尚未采集定义，开关默认关闭、不产生定义候选；
+        /// 字段先随任务透传，采集链路接通后再启用并入。
+        include_definitions: bool,
         project_root: Option<String>,
         targets: Vec<SearchTarget>,
     },
@@ -1339,6 +1367,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             seq,
             case_sensitive,
             regex,
+            name_mode,
+            include_comments,
+            include_definitions,
             project_root,
             targets,
         } => {
@@ -1360,9 +1391,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                     .chunks(chunk_size)
                     .map(|chunk| {
                         // 每块克隆查询词与项目根（至多 SEARCH_PARALLEL 份，开销可忽略）；
-                        // `kind` / `case_sensitive` / `regex` 是 Copy 直接带上。scoped 线程
-                        // 在 `scope` 结束前必先 join，克隆的是 String 值本身，不借 `chunk`
-                        // 之外的任何栈变量。
+                        // `kind` / `case_sensitive` / `regex` / `name_mode` / 注释 / 定义开关
+                        // 都是 Copy 直接带上。scoped 线程在 `scope` 结束前必先 join，克隆的是
+                        // String 值本身，不借 `chunk` 之外的任何栈变量。
                         let query = query.clone();
                         let project_root = project_root.clone();
                         s.spawn(move || {
@@ -1371,6 +1402,9 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                                 &query,
                                 case_sensitive,
                                 regex,
+                                name_mode,
+                                include_comments,
+                                include_definitions,
                                 project_root.as_deref(),
                                 chunk,
                             )
@@ -1443,19 +1477,27 @@ fn nav_split_two_segment(query: &str) -> (Option<&str>, Option<&str>) {
 /// 返回 `(搜了的连接数, 命中)`：无落盘缓存的连接直接跳过（搜索不建文件）；
 /// 每连接命中封顶 [`SEARCH_LIMIT_PER_CONN`]（全局 300 截断由调用方在合并后统一做）。
 ///
-/// `case_sensitive` / `regex`（搜索框 `Aa` / `.*` 开关）：名称档在 **LIKE 中缀候选**上
+/// `case_sensitive` / `regex`（搜索框 `Aa` / `.*` 开关）：名称档在 **LIKE 候选**上
 /// 再做 Rust 侧精筛——SQLite `LIKE` 对 ASCII 不区分大小写，候选是超集，精筛不会漏；
 /// 正则同理叠加在候选集上（LIKE 已要求整词中缀命中，故 `^ord` 这类**锚定**模式与
 /// `.` 通配任意字符的语义**不完整**——这是「中缀 + 精筛」架构的已知边界，面板 UI 已注明）。
 /// 正则编译失败（非法模式）时退化为不精筛（日志留痕），避免一次手误让整个搜索报废。
 ///
-/// `schema.object` 两段：名称段走 LIKE 中缀，归属段在候选上按 `schema` / `catalog`
+/// `schema.object` 两段：名称段走索引档，归属段在候选上按 `schema` / `catalog`
 /// 精筛（`Aa` / `.*` 精筛同样只作用于名称段——归属段是系统事实，不做模糊）。
+///
+/// D11 注释 / 定义并入：`include_comments` 开启后，名称档额外并入 FTS 注释候选，
+/// 按族档案 `comments` 集合过滤类型、按身份 `key()` 去重；`include_definitions` 本批
+/// 内省链路尚未采集定义，开关不产生候选（字段先透传，采集链路接通后在此并入）。
+#[allow(clippy::too_many_arguments)]
 fn search_targets(
     kind: SearchKind,
     query: &str,
     case_sensitive: bool,
     regex: bool,
+    name_mode: NameMatchMode,
+    include_comments: bool,
+    include_definitions: bool,
     project_root: Option<&str>,
     targets: &[SearchTarget],
 ) -> (usize, Vec<SearchHit>) {
@@ -1473,9 +1515,11 @@ fn search_targets(
         match kind {
             SearchKind::Name => {
                 let (segment_schema, segment_name) = nav_split_two_segment(query);
-                // 两段时名称段单独做 LIKE 中缀（整串含 `.` 在对象名里永远中缀不中）。
+                // 两段时名称段单独做索引档（整串含 `.` 在对象名里永远中缀不中）。
                 let needle = segment_name.unwrap_or(query);
-                for hit in cache.search_index(needle, SEARCH_LIMIT_PER_CONN) {
+
+                // 名称候选：按选定匹配方式走索引档。
+                for hit in cache.search_index(needle, SEARCH_LIMIT_PER_CONN, name_mode) {
                     hits.push(SearchHit {
                         conn_id: target.conn_id.clone(),
                         conn_label: target.label.clone(),
@@ -1486,6 +1530,7 @@ fn search_targets(
                         catalog: hit.catalog_name,
                         schema: hit.schema_name,
                         snippet: None,
+                        hit_source: HitSource::Name,
                     });
                 }
                 // 归属段精筛：schema 或 catalog 任一精确命中即可（MySQL `库.表`）。
@@ -1512,20 +1557,77 @@ fn search_targets(
                             tracing::warn!(
                                 pattern = %pattern,
                                 error = %e,
-                                "导航搜索正则编译失败，本轮退化为中缀匹配"
+                                "导航搜索正则编译失败，本轮退化为名称匹配"
                             );
                         }
                     }
                 }
+
+                // 注释候选并入：按族 comments 集合过滤 FTS 类型，业务身份去重后并入名称档。
+                if include_comments {
+                    let scope = family_search_scope(&target.driver);
+                    // 去重键用业务身份四元组（类别 / 父对象 / 名字 / schema），不拼 catalog：
+                    // 名称索引行带 `catalog_name`、FTS 行 catalog 恒 `None`，`key()` 会把同一
+                    // 对象因 catalog 填充差异判成两个身份；去重只认四元组即可识别重复。
+                    let known: std::collections::BTreeSet<(String, Option<String>, String, Option<String>)> =
+                        hits
+                            .iter()
+                            .map(|h| {
+                                (
+                                    h.object_type.clone(),
+                                    h.parent_name.clone(),
+                                    h.object_name.clone(),
+                                    h.schema.clone(),
+                                )
+                            })
+                            .collect();
+                    for fts in cache.search_fts(needle, SEARCH_LIMIT_PER_CONN) {
+                        let Some(fts_kind) = fts_type_to_object_kind(&fts.search_type) else {
+                            continue;
+                        };
+                        if !scope.comments.contains(&fts_kind) {
+                            continue;
+                        }
+                        let hit = fts_hit_to_search_hit(target, fts, HitSource::Comment);
+                        let identity = (
+                            hit.object_type.clone(),
+                            hit.parent_name.clone(),
+                            hit.object_name.clone(),
+                            hit.schema.clone(),
+                        );
+                        if !known.contains(&identity) {
+                            hits.push(hit);
+                        }
+                    }
+                }
+                // 定义候选：本批内省链路尚未采集视图 / 例程定义，开关不产生候选；
+                // 采集链路接通后在此按 `scope.definitions` 过滤并入（与注释候选同构）。
+                let _ = include_definitions;
             }
             SearchKind::FullText => {
                 for hit in cache.search_fts(query, SEARCH_LIMIT_PER_CONN) {
-                    hits.push(fts_hit_to_search_hit(target, hit));
+                    hits.push(fts_hit_to_search_hit(target, hit, HitSource::Name));
                 }
             }
         }
     }
     (searched, hits)
+}
+
+/// FTS `search_type` 字符串 → 身份类别（注释候选按族 `comments` 集合过滤时用）。
+///
+/// 取值与 `rebuild_fts_schema` 写入侧一致：`table` / `view` / `column` / `routine` /
+/// `schema` / `catalog`；未识别串返回 `None`（不进注释候选，安全兜底）。
+fn fts_type_to_object_kind(search_type: &str) -> Option<ObjectKind> {
+    match search_type {
+        "table" => Some(ObjectKind::Table),
+        "view" => Some(ObjectKind::View),
+        "column" => Some(ObjectKind::Column),
+        "routine" => Some(ObjectKind::Routine),
+        "schema" => Some(ObjectKind::Schema),
+        "catalog" => Some(ObjectKind::Catalog),
+        _ => None,
+    }
 }
 
 /// S2-② 迟到 stale guard 判定（纯函数，fluxDB `connection_tree.rs:305-344` 参照）：
@@ -1835,7 +1937,11 @@ pub fn enqueue_row_estimate(
 /// 两处不对称要当心：
 /// - FTS 行的 `schema_name` / `parent_name` 是**空串**（不是 NULL），转成 `Option` 时要过滤；
 /// - FTS 表里没有 catalog（名称档靠 JOIN `schemata` 拿），所以内容档的 `catalog` 为 `None`。
-fn fts_hit_to_search_hit(target: &SearchTarget, hit: FtsSearchResult) -> SearchHit {
+fn fts_hit_to_search_hit(
+    target: &SearchTarget,
+    hit: FtsSearchResult,
+    source: HitSource,
+) -> SearchHit {
     let non_empty = |s: String| if s.is_empty() { None } else { Some(s) };
     SearchHit {
         conn_id: target.conn_id.clone(),
@@ -1847,6 +1953,7 @@ fn fts_hit_to_search_hit(target: &SearchTarget, hit: FtsSearchResult) -> SearchH
         catalog: None,
         schema: non_empty(hit.schema_name),
         snippet: Some(hit.snippet),
+        hit_source: source,
     }
 }
 
@@ -1876,6 +1983,9 @@ pub fn enqueue_search(
     query: &str,
     case_sensitive: bool,
     regex: bool,
+    name_mode: NameMatchMode,
+    include_comments: bool,
+    include_definitions: bool,
     project_root: Option<&str>,
     targets: Vec<SearchTarget>,
 ) {
@@ -1888,6 +1998,9 @@ pub fn enqueue_search(
             seq,
             case_sensitive,
             regex,
+            name_mode,
+            include_comments,
+            include_definitions,
             project_root: project_root.map(|s| s.to_string()),
             targets,
         },
@@ -2150,7 +2263,9 @@ mod tests {
                 parent_name: String::new(), // FTS 行里的“无父对象”是空串
                 snippet: "…下单<mark>渠道</mark>…".to_string(),
             },
+            HitSource::Comment,
         );
+        assert_eq!(mapped.hit_source, HitSource::Comment);
         assert_eq!(mapped.conn_id, "P_conn");
         assert_eq!(mapped.object_type, "column");
         assert_eq!(mapped.object_name, "channel_code");
@@ -2362,6 +2477,9 @@ mod tests {
             "public.orders",
             false,
             false,
+            NameMatchMode::Contains,
+            false,
+            false,
             Some(&root_s),
             &targets,
         );
@@ -2373,6 +2491,9 @@ mod tests {
         let (_, hits) = search_targets(
             SearchKind::Name,
             "other.orders",
+            false,
+            false,
+            NameMatchMode::Contains,
             false,
             false,
             Some(&root_s),
@@ -2387,6 +2508,9 @@ mod tests {
         let (_, hits) = search_targets(
             SearchKind::Name,
             "orders",
+            false,
+            false,
+            NameMatchMode::Contains,
             false,
             false,
             Some(&root_s),
@@ -2409,6 +2533,9 @@ mod tests {
         let (searched, hits) = search_targets(
             SearchKind::Name,
             "order",
+            false,
+            false,
+            NameMatchMode::Contains,
             false,
             false,
             Some(&root_s),
@@ -2454,7 +2581,17 @@ mod tests {
 
         // 默认（LIKE 不敏感）：三种大小写/字形都命中（列 order_id 不含 "orders" 字面，不中）。
         let (_, hits) =
-            search_targets(SearchKind::Name, "orders", false, false, Some(&root_s), &targets);
+            search_targets(
+                SearchKind::Name,
+                "orders",
+                false,
+                false,
+                NameMatchMode::Contains,
+                false,
+                false,
+                Some(&root_s),
+                &targets,
+            );
         assert_eq!(
             names(&hits),
             ["Orders", "orders", "orders["]
@@ -2466,7 +2603,17 @@ mod tests {
 
         // `Aa`：只留精确小写（`contains` 是中缀，`orders[` 含 `orders` 也在列）。
         let (_, hits) =
-            search_targets(SearchKind::Name, "orders", true, false, Some(&root_s), &targets);
+            search_targets(
+                SearchKind::Name,
+                "orders",
+                true,
+                false,
+                NameMatchMode::Contains,
+                false,
+                false,
+                Some(&root_s),
+                &targets,
+            );
         assert_eq!(
             names(&hits),
             ["orders", "orders["].into_iter().map(String::from).collect(),
@@ -2476,7 +2623,17 @@ mod tests {
         // 正则（忽略大小写）：pattern = "(?i)orders"，`(?i)` 生效——`Orders` 保留
         //（若没 (?i) 会被正则大小写敏感排除）；中缀无锚定，`orders[` 也在。
         let (_, hits) =
-            search_targets(SearchKind::Name, "orders", false, true, Some(&root_s), &targets);
+            search_targets(
+                SearchKind::Name,
+                "orders",
+                false,
+                true,
+                NameMatchMode::Contains,
+                false,
+                false,
+                Some(&root_s),
+                &targets,
+            );
         assert_eq!(
             names(&hits),
             ["Orders", "orders", "orders["]
@@ -2489,7 +2646,17 @@ mod tests {
         // 正则 + 大小写：pattern = "orders"（无 (?i)）→ `Orders` 被正则敏感排除，
         // `orders[` 仍中（无锚定）。
         let (_, hits) =
-            search_targets(SearchKind::Name, "orders", true, true, Some(&root_s), &targets);
+            search_targets(
+                SearchKind::Name,
+                "orders",
+                true,
+                true,
+                NameMatchMode::Contains,
+                false,
+                false,
+                Some(&root_s),
+                &targets,
+            );
         assert_eq!(
             names(&hits),
             ["orders", "orders["].into_iter().map(String::from).collect(),
@@ -2498,7 +2665,17 @@ mod tests {
 
         // 非法正则：退化为不筛（候选 `orders[` 保留，不 panic）。
         let (_, hits) =
-            search_targets(SearchKind::Name, "orders[", false, true, Some(&root_s), &targets);
+            search_targets(
+                SearchKind::Name,
+                "orders[",
+                false,
+                true,
+                NameMatchMode::Contains,
+                false,
+                false,
+                Some(&root_s),
+                &targets,
+            );
         assert_eq!(
             names(&hits),
             ["orders["].into_iter().map(String::from).collect(),
@@ -2524,6 +2701,9 @@ mod tests {
             0,
             SearchKind::Name,
             "order",
+            false,
+            false,
+            NameMatchMode::Contains,
             false,
             false,
             Some(&root_s),
@@ -2630,5 +2810,114 @@ mod tests {
 
         drop(old_permit);
         drop_conn_sem("sem_reset");
+    }
+
+    /// D11 FTS 类型串 → 身份类别映射：六类识别，未识别 / 空串返回 `None`。
+    #[test]
+    fn fts_type_maps_to_object_kind_and_unknown_yields_none() {
+        assert_eq!(fts_type_to_object_kind("table"), Some(ObjectKind::Table));
+        assert_eq!(fts_type_to_object_kind("view"), Some(ObjectKind::View));
+        assert_eq!(fts_type_to_object_kind("column"), Some(ObjectKind::Column));
+        assert_eq!(fts_type_to_object_kind("routine"), Some(ObjectKind::Routine));
+        assert_eq!(fts_type_to_object_kind("schema"), Some(ObjectKind::Schema));
+        assert_eq!(fts_type_to_object_kind("catalog"), Some(ObjectKind::Catalog));
+        assert_eq!(fts_type_to_object_kind("index"), None);
+        assert_eq!(fts_type_to_object_kind(""), None);
+    }
+
+    /// D11 注释候选并入：族 `comments` 集合放行类型；名称已命中去重；注释命中标
+    /// [`HitSource::Comment`] 并带 snippet；关闭注释开关时只走名称档、不并入注释候选。
+    #[test]
+    fn comments_candidates_merged_filtered_and_deduped() {
+        use engine::driver::traits::{ColumnDetail, NodeInfo, SchemaObjectKind};
+        let root = search_temp_root("cmt");
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut cache = crate::cache::NavCache::open("P_cmt_0", Some(&root_s)).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        cache.mark_schema_complete("main", "public");
+        let sid = cache.schema_id("main", "public").expect("schema_id");
+        cache.put_objects(sid, &[NodeInfo::new("orders", SchemaObjectKind::Table)]);
+        let mk_col = |name: &str, comment: Option<&str>| ColumnDetail {
+            name: name.to_string(),
+            data_type: "VARCHAR".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            is_foreign_key: false,
+            default_value: None,
+            comment: comment.map(str::to_string),
+            is_identity: false,
+            identity_generation: None,
+            collation: None,
+            extra: Default::default(),
+            references: None,
+            ordinal: 0,
+        };
+        cache.put_columns(
+            sid,
+            "orders",
+            &[
+                mk_col("channel_code", Some("channel code")),
+                mk_col("region", Some("channel region")),
+            ],
+        );
+        cache.rebuild_index("main", "public");
+        drop(cache);
+
+        let targets = [SearchTarget {
+            conn_id: "P_cmt_0".into(),
+            label: "本地库".into(),
+            driver: "postgres".into(),
+        }];
+
+        // 注释开关开启：名称候选 channel_code 先入；region 注释命中独立并入；channel_code 去重。
+        let (_, hits) = search_targets(
+            SearchKind::Name,
+            "channel",
+            false,
+            false,
+            NameMatchMode::Contains,
+            true,
+            false,
+            Some(&root_s),
+            &targets,
+        );
+        let by_name: std::collections::BTreeMap<String, &SearchHit> =
+            hits.iter().map(|h| (h.object_name.clone(), h)).collect();
+
+        let code = by_name
+            .get("channel_code")
+            .expect("名称候选 channel_code 应命中");
+        assert_eq!(code.hit_source, HitSource::Name, "名称先入，来源 = Name");
+        let region = by_name
+            .get("region")
+            .expect("注释候选 region 应并入");
+        assert_eq!(region.hit_source, HitSource::Comment, "注释命中来源 = Comment");
+        assert!(region.snippet.is_some(), "注释候选带 snippet 副行");
+        assert_eq!(
+            by_name.len(),
+            2,
+            "channel_code 去重后只剩两条：{by_name:?}"
+        );
+
+        // 注释开关关闭：不并入 region，名称档只出 channel_code。
+        let (_, hits) = search_targets(
+            SearchKind::Name,
+            "channel",
+            false,
+            false,
+            NameMatchMode::Contains,
+            false,
+            false,
+            Some(&root_s),
+            &targets,
+        );
+        assert!(
+            hits.iter().all(|h| h.object_name != "region"),
+            "关闭注释开关不得并入 region"
+        );
+        assert!(hits.iter().any(|h| h.object_name == "channel_code"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

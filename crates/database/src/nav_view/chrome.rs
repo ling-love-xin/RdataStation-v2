@@ -809,6 +809,9 @@ impl NavView {
             .px_2()
             .py_1p5()
             .bg(cx.theme().colors.group_box);
+        // D11 搜索选项条：匹配模式（前缀 / 包含）+ 搜注释开关 + 搜定义（置灰待内省采集）。
+        // 仅在输入框存在时渲染；会话级开关不落库（与「仅已连接」同档）。
+        let mut search_options: Option<Div> = None;
         if let Some(input) = &self.nav_search {
             // 搜索框前导放大镜（原型 §2 的 `[🔍 …]`）：面板头部三行控件里
             // 只有这一行是输入框，给个形状信号比只靠 placeholder 更快认出。
@@ -818,9 +821,16 @@ impl NavView {
             // 无边框风格，明暗主题下都靠 hover/focus 边框显形。
             // 点击只翻状态 + 重排索引搜索（词没变但签名变了 → `nav_schedule_index_search` 会重搜）；
             // 开关随面板状态持久化（重启后保持）。
-            let (regex, case_sensitive, connected_only) = {
+            let (regex, case_sensitive, connected_only, name_mode, include_comments, include_definitions) = {
                 let v = self.nav.borrow();
-                (v.search_regex, v.search_case_sensitive, v.search_connected_only)
+                (
+                    v.search_regex,
+                    v.search_case_sensitive,
+                    v.search_connected_only,
+                    v.search_name_mode,
+                    v.search_comments,
+                    v.search_definitions,
+                )
             };
             let (selected_bg, hover_bg, fg) = {
                 let theme = cx.theme();
@@ -909,6 +919,98 @@ impl NavView {
                         cx.notify();
                     });
                 });
+
+            // D11 匹配模式两档（前缀 / 包含，互斥）：默认前缀，对齐 DBeaver starts-with。
+            // 会话级不落库；切换后重搜——签名含模式，`rerun` 自动判变。
+            let prefix_active = matches!(name_mode, nav_jobs::NameMatchMode::StartsWith);
+            let contains_active = matches!(name_mode, nav_jobs::NameMatchMode::Contains);
+            let entity_prefix = cx.entity();
+            let prefix_btn = Button::new("nav-search-mode-prefix")
+                .ghost()
+                .xsmall()
+                .rounded_full()
+                .px_1p5()
+                .selected(prefix_active)
+                .toggled(prefix_active)
+                .label("前缀")
+                .bg(if prefix_active { selected_bg } else { transparent_black() })
+                .text_color(if prefix_active { fg } else { muted })
+                .on_click(move |_, _, app| {
+                    entity_prefix.update(app, |this, cx| {
+                        this.nav.borrow_mut().search_name_mode = nav_jobs::NameMatchMode::StartsWith;
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
+            let entity_contains = cx.entity();
+            let contains_btn = Button::new("nav-search-mode-contains")
+                .ghost()
+                .xsmall()
+                .rounded_full()
+                .px_1p5()
+                .selected(contains_active)
+                .toggled(contains_active)
+                .label("包含")
+                .bg(if contains_active { selected_bg } else { transparent_black() })
+                .text_color(if contains_active { fg } else { muted })
+                .on_click(move |_, _, app| {
+                    entity_contains.update(app, |this, cx| {
+                        this.nav.borrow_mut().search_name_mode = nav_jobs::NameMatchMode::Contains;
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
+
+            // D11 搜注释开关：开启时名称档并入 FTS 注释命中（类型按族 comments 档案过滤）。
+            let entity_comments = cx.entity();
+            let comments_btn = Button::new("nav-search-comments")
+                .ghost()
+                .xsmall()
+                .rounded_full()
+                .px_1p5()
+                .selected(include_comments)
+                .toggled(include_comments)
+                .label("注释")
+                .bg(if include_comments { selected_bg } else { transparent_black() })
+                .text_color(if include_comments { fg } else { muted })
+                .on_click(move |_, _, app| {
+                    entity_comments.update(app, |this, cx| {
+                        let current = this.nav.borrow().search_comments;
+                        this.nav.borrow_mut().search_comments = !current;
+                        this.rerun_nav_search(cx);
+                        cx.notify();
+                    });
+                });
+
+            // D11 搜定义：本批内省链路尚未采集视图 / 例程定义，开关置灰不可点、标注
+            // 「待内省采集」；采集链路接通后改为可点（与注释开关同构）。
+            let definition_btn = Button::new("nav-search-definitions")
+                .ghost()
+                .xsmall()
+                .rounded_full()
+                .px_1p5()
+                .disabled(true)
+                .label("定义")
+                .text_color(muted)
+                .tooltip("待内省采集：视图 / 例程定义批量采集链路接通后启用");
+            let _ = include_definitions;
+
+            search_options = Some(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .px_2()
+                    .pb_1p5()
+                    .bg(cx.theme().colors.group_box)
+                    .child(prefix_btn)
+                    .child(contains_btn)
+                    .child(div().h(rems(1.)).w(ui::HAIRLINE).bg(border))
+                    .child(comments_btn)
+                    .child(definition_btn),
+            );
+
             search_row = search_row.child(
                 div()
                     .flex_1()
@@ -941,6 +1043,7 @@ impl NavView {
             .pt_1()
             .child(header)
             .child(search_row)
+            .when_some(search_options, |this, options| this.child(options))
             .child(chips)
             .child(div().h(ui::HAIRLINE).w_full().bg(border))
             .child(body)

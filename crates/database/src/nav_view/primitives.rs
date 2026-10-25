@@ -622,6 +622,26 @@ pub(super) fn nav_object_type_label(object_type: &str) -> &'static str {
         .unwrap_or("对象")
 }
 
+/// 命中维度徽标的语义角色：注释 / 定义两类（名称命中是默认通道，不标注）。
+/// 颜色在渲染侧按角色取主题 token，纯函数不碰 theme。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NavHitBadgeRole {
+    Comment,
+    Definition,
+}
+
+/// 命中维度 → 徽标文案与角色：名称命中不额外标注；注释 / 定义命中给「注释」「定义」
+/// 小标签，让用户一眼看出结果是按哪个维度命中的（对齐 DBeaver 搜注释 / 搜定义口径）。
+pub(super) fn nav_hit_source_badge(
+    source: nav_jobs::HitSource,
+) -> Option<(&'static str, NavHitBadgeRole)> {
+    match source {
+        nav_jobs::HitSource::Name => None,
+        nav_jobs::HitSource::Comment => Some(("注释", NavHitBadgeRole::Comment)),
+        nav_jobs::HitSource::Definition => Some(("定义", NavHitBadgeRole::Definition)),
+    }
+}
+
 /// 搜索词是否够格打一次索引搜索（太短时命中面过大，且首字符几乎必然还要改）。
 pub(super) fn nav_search_query_ready(query: &str) -> bool {
     query.trim().chars().count() >= 2
@@ -1133,9 +1153,10 @@ mod tests {
 
     use super::{
         batches_present, format_row_estimate, key_in_subtree, more_row_label, nav_glob_match,
-        nav_highlight_segments, nav_mask_passes, nav_node_matches, nav_object_masked,
-        nav_snippet_segments, nav_tag_palette_index, placeholder_decision, placeholder_message,
-        prune_expanded, prune_subtree_keys, selected_key_in_subtree, PUMP_BATCH_ORDER,
+        nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
+        nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
+        placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
+        NavHitBadgeRole, PUMP_BATCH_ORDER,
     };
     use crate::model::{NavNode, NavNodeKind, NavPath};
     use crate::nav_host::ObjectMaskRule;
@@ -1579,5 +1600,20 @@ mod tests {
         assert!(kept.contains("C_1/shop/public/orders"));
         assert!(kept.contains("C_2"));
         assert!(!kept.contains("C_1/shop/public/deleted"));
+    }
+
+    /// D11 why 三态：名称命中不标注；注释 / 定义命中给对应文案与角色（定义分支仅由
+    /// 档案位与本测试钉住，本批生产序列不产生定义候选）。
+    #[test]
+    fn hit_source_badge_labels_comment_and_definition_only() {
+        assert_eq!(nav_hit_source_badge(nav_jobs::HitSource::Name), None);
+        assert_eq!(
+            nav_hit_source_badge(nav_jobs::HitSource::Comment),
+            Some(("注释", NavHitBadgeRole::Comment))
+        );
+        assert_eq!(
+            nav_hit_source_badge(nav_jobs::HitSource::Definition),
+            Some(("定义", NavHitBadgeRole::Definition))
+        );
     }
 }

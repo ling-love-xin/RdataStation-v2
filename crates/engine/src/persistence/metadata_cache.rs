@@ -2689,13 +2689,19 @@ impl MetadataCacheOps {
             )
             .map_err(|e| fts_err("sync_fts_table", e))?;
 
-        // 视图（视图是 `tables` 里 table_type='VIEW' 的行；注释在 `table_comment`）
+        // 视图（视图是 `tables` 里 table_type='VIEW' 的行；注释在 `table_comment`）。
+        // 定义语料预留：`LEFT JOIN view_definitions` 拼入 `view_definition`——当前批量内省
+        // 链路尚未采集视图定义（`save_view` 写空串，见 database cache.rs），此处先把 JOIN 与
+        // 语料位就位，采集链路接通后即生效；LEFT JOIN 保证无定义行的视图不被剔除，空串兜底。
         inserted += tx
             .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'view', s.schema_name, t.table_name, s.schema_name,
                         s.schema_name || ' ' || t.table_name || ' ' || COALESCE(t.table_comment, '')
-                 FROM tables t INNER JOIN schemata s ON t.schema_id = s.id
+                        || ' ' || COALESCE(v.view_definition, '')
+                 FROM tables t
+                 INNER JOIN schemata s ON t.schema_id = s.id
+                 LEFT JOIN view_definitions v ON t.id = v.id
                  WHERE s.schema_name = ?1 AND t.is_loaded = 1 AND t.table_type = 'VIEW'",
                 rusqlite::params![schema],
             )
@@ -2716,13 +2722,14 @@ impl MetadataCacheOps {
             )
             .map_err(|e| fts_err("sync_fts_column", e))?;
 
-        // 例程
+        // 例程：定义语料预留（`routine_definition` 当前内省链路未采集、恒为空，先把语料位
+        // 就位；采集链路接通后定义即可被 FTS 命中，空串兜底不影响注释 / 名称命中）。
         inserted += tx
             .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'routine', s.schema_name, r.routine_name, s.schema_name,
                         s.schema_name || ' ' || r.routine_name || ' ' || COALESCE(r.routine_type, '') || ' '
-                        || COALESCE(r.routine_comment, '')
+                        || COALESCE(r.routine_comment, '') || ' ' || COALESCE(r.routine_definition, '')
                  FROM routines r INNER JOIN schemata s ON r.schema_id = s.id
                  WHERE s.schema_name = ?1 AND r.is_loaded = 1",
                 rusqlite::params![schema],
@@ -3676,22 +3683,12 @@ impl MetadataCacheOps {
         }
     }
 
-    /// 名称档**中缀回落段** SQL（模板，同上按类别替换 `{category}`）：前缀段没装满 `limit` 时
-    /// 补足剩余名额（名额 = limit - 前缀命中数）。
+    /// 名称档**包含段** SQL（`Contains` 专用，模板按类别替换 `{category}`）：任意位置
+    /// 含查询词即命中（含前缀 / 相等行）。`LIKE '%needle%'` 前导通配符本身用不上索引定位，
+    /// 但**排序用得上**——沿索引名序走、把 LIKE 当过滤谓词，取够 `limit` 条即停，免全量排序。
     ///
-    /// `NOT (范围)` 与前缀段的**并集**互补，两段的排序口径一致（完全相等 → 类别 → 名序），
-    /// 所以「前缀段 + 回落段」拼接起来就是优化前那条单语句的结果（逐条相同，见
-    /// `search_index_two_stage_matches_single_query_oracle`）。
-    ///
-    /// 为什么也按类别扫：`LIKE '%needle%'` 本身用不上索引（前导通配符），但**排序用得上**——
-    /// 沿索引名序走、把 LIKE 当过滤谓词，取够 `limit` 条即停（实测 10 万对象 / debug：
-    /// 单类 0.2 ms 级，对比「全表扫 + 全量排序」的 40 ms 级）；且免排序后中缀行的次序与
-    /// 前缀段同口径（都是 `LOWER(object_name)` 名序），不再是 `object_name` 原始串序。
-    /// 只有在前缀没填满时才会走到这里；命中的是稀疏词时最坏要扫完该类整段（与旧写法的
-    /// 全表扫同量级，仍免了排序）。
-    ///
-    /// 参数顺序：连接 / 中缀模式（已转义） / 下界 / 上界 / 剩余名额。
-    const SQL_SEARCH_INDEX_FALLBACK_TEMPLATE: &str = "
+    /// 参数顺序：连接 / 中缀模式（已转义）/ 名额。
+    const SQL_SEARCH_INDEX_CONTAINS_TEMPLATE: &str = "
         SELECT mi.object_type, mi.object_name, mi.parent_name,
                s.catalog_name, s.schema_name, mi.row_count_estimate
         FROM metadata_index mi
@@ -3699,9 +3696,8 @@ impl MetadataCacheOps {
         WHERE mi.connection_id = ?1
           AND {category}
           AND LOWER(mi.object_name) LIKE ?2 ESCAPE '\\'
-          AND NOT (LOWER(mi.object_name) >= ?3 AND LOWER(mi.object_name) <= ?4)
         ORDER BY LOWER(mi.object_name)
-        LIMIT ?5";
+        LIMIT ?3";
 
     /// 把模板里的 `{category}` 换成实参，得到一段查询（实参来自编译期常量，无注入面）。
     fn search_index_category_sql(template: &str, category: &str) -> String {
@@ -3774,26 +3770,24 @@ impl MetadataCacheOps {
     /// 按名称模糊搜索索引（跨 schema；结果带定位所需的 catalog / schema / 父对象）。
     ///
     /// **为什么名称档用 `metadata_index` 而不是 `metadata_fts`**：
-    /// - 用户要的是「按名字找对象」：敲 `ord` 应当命中 `order_items`（**中缀**匹配）。
-    ///   `metadata_index` + LIKE 天然支持；trigram 的 FTS 虽是子串匹配，但 **< 3 字查不到**
-    ///   （不足一个 trigram），而名称档恰恰经常只敲一两个字；
-    /// - 名称档还要给「完全相等→前缀」的稳定排序与类别权重（见下），LIKE 一次性算完。
+    /// - 用户要的是「按名字找对象」；`metadata_index` + 范围 / LIKE 天然支持前缀与包含，
+    ///   且常只敲一两个字——trigram 的 FTS **< 3 字查不到**（不足一个 trigram），承担不了名称档；
+    /// - 名称档还要给「完全相等→前缀→中缀」的稳定排序与类别权重（见下），一次性算完。
     ///
-    /// FTS 的独有价值是**内容**（注释 / 数据类型）：写入侧已接线
-    /// （`rebuild_fts_schema` 跟内省同批，见 `rebuild_schema_index`），读侧 `search_fts`
-    /// 用于 Quick Open 的 `#` 全文档档；重建后由 `fts_rebuild_is_schema_scoped_and_idempotent`
-    /// 与 `search_fts_returns_identity_snippet_and_survives_operator_input` 两项测试钉住。
+    /// FTS 的独有价值是**内容**（注释 / 数据类型 / 定义）：写入侧已接线
+    /// （`rebuild_fts_schema` 跟内省同批），读侧 `search_fts` 供注释候选并入名称档与
+    /// Quick Open 的 `#` 全文档档使用。
     ///
     /// 排序：名称完全相等 → 前缀命中 → 其余；同档内按类别（表 / 视图 / schema / 列 / 其余）、
     /// 名称，末位用 `id` 兜底（同名同长的列很多，如各表的 `id`：没有这层兜底，
     /// 同分行的相对次序由扫描路径决定，按键重搜时结果会跳）。
     /// `limit` 是硬上限（搜索是交互操作，不应被超大 schema 拖死）；非正数按空结果处理。
     ///
-    /// **两段式（优化）**：
-    /// - 前缀段：按类别各扫一段索引（等值连接 + 范围名序，输出即索引序、取够 `limit` 即停）；
-    /// - 回落段：前缀没装满 `limit` 才跑，同样按类别扫（`LIKE` 当过滤谓词、排序仍靠索引），
-    ///   补齐剩余名额。两段合并后在 Rust 侧按「档位 → 类别」稳定排序——**全程无 SQL 排序、
-    /// 无窗口**，前缀命中多少都不影响耗时。
+    /// 匹配方式由 `mode` 选定：
+    /// - [`NameMatchMode::StartsWith`]：只走索引**前缀段**（范围名序，输出即索引序、
+    ///   取够 `limit` 即停）；
+    /// - [`NameMatchMode::Contains`]：只走**包含段**（沿索引名序扫、`LIKE` 当过滤谓词，
+    ///   取够 `limit` 即停）；不再做「前缀优先、中缀兜底」的混合两段。
     ///
     /// 排序键里**没有 `LENGTH(object_name)`**（曾经的「短名优先」）：保留它则前缀段必须
     /// 把全部命中取回来排序，要么慢、要么靠名序窗口取近似（实测 8 万命中时前者 178 ms、
@@ -3804,6 +3798,7 @@ impl MetadataCacheOps {
         connection_id: &str,
         needle: &str,
         limit: i64,
+        mode: NameMatchMode,
     ) -> Result<Vec<IndexSearchHit>, CoreError> {
         let needle = needle.trim().to_lowercase();
         if needle.is_empty() || limit <= 0 {
@@ -3812,32 +3807,30 @@ impl MetadataCacheOps {
         let escaped = Self::like_escape(&needle);
         // 上界 = needle || U+10FFFF（`char::MAX`，合法 UTF-8 的最大字符）
         let upper = format!("{needle}{}", char::MAX);
-
-        // 前缀段：每个类别各取「名序前 limit 条」（走索引、取够即停）。
-        // 每类取满 limit 条就够：排序是「档位优先、档内按类别」，任何一类最多也就能占满整页。
-        let mut hits = Vec::new();
-        for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
-            let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_PREFIX_TEMPLATE, category);
-            hits.extend(self.query_index_hits(
-                &sql,
-                &[&connection_id, &needle, &upper, &limit],
-            )?);
-        }
-        if hits.len() as i64 >= limit {
-            // 前缀段已装满一页：中缀命中档位更低，不可能进榜，直接收尾
-            Self::sort_and_truncate(&mut hits, &needle, &upper, limit);
-            return Ok(hits);
-        }
-
-        // 中缀回落段：只补剩余名额（此时前缀命中已全部到手，且都排在前面）
         let contains = format!("%{escaped}%");
-        let rest = limit - hits.len() as i64;
-        for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
-            let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_FALLBACK_TEMPLATE, category);
-            hits.extend(self.query_index_hits(
-                &sql,
-                &[&connection_id, &contains, &needle, &upper, &rest],
-            )?);
+
+        // 每个类别各取「名序前 limit 条」（走索引、取够即停）：排序是「档位优先、档内按类别」，
+        // 任何一类最多也就占满整页。
+        let mut hits = Vec::new();
+        match mode {
+            NameMatchMode::StartsWith => {
+                for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
+                    let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_PREFIX_TEMPLATE, category);
+                    hits.extend(self.query_index_hits(
+                        &sql,
+                        &[&connection_id, &needle, &upper, &limit],
+                    )?);
+                }
+            }
+            NameMatchMode::Contains => {
+                for category in Self::SEARCH_INDEX_CATEGORY_PREDICATES {
+                    let sql = Self::search_index_category_sql(Self::SQL_SEARCH_INDEX_CONTAINS_TEMPLATE, category);
+                    hits.extend(self.query_index_hits(
+                        &sql,
+                        &[&connection_id, &contains, &limit],
+                    )?);
+                }
+            }
         }
         Self::sort_and_truncate(&mut hits, &needle, &upper, limit);
         Ok(hits)
@@ -3915,6 +3908,20 @@ pub struct IndexBuildResult {
     pub table_count: usize,
     pub column_count: usize,
     pub total_entries: usize,
+}
+
+/// 名称档匹配方式（对齐 DBeaver `SearchMetadataPage`：starts-with 默认 / contains）。
+///
+/// 现状两档分开成独立 SQL 路径：`StartsWith` 只走索引范围前缀段，`Contains` 只走
+/// `LIKE` 中缀段；不再做「前缀优先、中缀兜底」的混合两段（混合是旧默认口径，
+/// D11 起默认 `StartsWith`，与 DBeaver starts-with(0) 默认对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NameMatchMode {
+    /// 前缀匹配：只命中以查询词开头的对象名（默认档）。
+    #[default]
+    StartsWith,
+    /// 包含匹配：命中名称中任意位置含查询词的对象名。
+    Contains,
 }
 
 /// FTS 搜索结果
@@ -4756,7 +4763,8 @@ mod tests {
         Ok(())
     }
 
-    /// 索引名称搜索：中缀命中、通配符按字面量、排序（相等 → 前缀 → 其余，同类再按名称）。
+    /// 索引名称搜索：包含档（相等 → 前缀 → 中缀排序、类别序、定位信息、通配符字面量、
+    /// 大小写不敏感、limit 硬上限）；前缀档只命中以词开头的对象。
     #[test]
     fn search_index_matches_infix_and_escapes_wildcards() -> Result<(), CoreError> {
         let (mut ops, _db_path, dir) = fresh_ops("index_search");
@@ -4772,7 +4780,8 @@ mod tests {
         ops.save_column(t, "order_id", "INTEGER", 0, false, true, false, None, None)?;
         ops.rebuild_schema_index(conn_id, "main", "public")?;
 
-        let hits = ops.search_index(conn_id, "order", 50)?;
+        // —— 包含档：相等 → 前缀 → 中缀，前缀整体优先于中缀 ——
+        let hits = ops.search_index(conn_id, "order", 50, NameMatchMode::Contains)?;
         let names: Vec<&str> = hits.iter().map(|h| h.object_name.as_str()).collect();
         assert_eq!(
             names.first().copied(),
@@ -4805,21 +4814,37 @@ mod tests {
         assert_eq!(col_hit.parent_name.as_deref(), Some("orders"));
 
         // 通配符按字面量：`a%b` 不得匹配 `aXXXb`（而真表名 a%b 必须命中）
-        let literal = ops.search_index(conn_id, "a%b", 50)?;
+        let literal = ops.search_index(conn_id, "a%b", 50, NameMatchMode::Contains)?;
         assert_eq!(
             literal.iter().map(|h| h.object_name.as_str()).collect::<Vec<_>>(),
             vec!["a%b"],
             "% 应被转义为字面量"
         );
-        let underscore = ops.search_index(conn_id, "a_", 50)?;
+        let underscore = ops.search_index(conn_id, "a_", 50, NameMatchMode::Contains)?;
         assert!(underscore.is_empty(), "`_` 是单字符通配符，必须转义");
 
         // 大小写不敏感 + 空词不搜
-        assert!(!ops.search_index(conn_id, "ORDERS", 50)?.is_empty());
-        assert!(ops.search_index(conn_id, "   ", 50)?.is_empty());
+        assert!(!ops.search_index(conn_id, "ORDERS", 50, NameMatchMode::Contains)?.is_empty());
+        assert!(ops.search_index(conn_id, "   ", 50, NameMatchMode::Contains)?.is_empty());
 
         // limit 是硬上限
-        assert_eq!(ops.search_index(conn_id, "order", 2)?.len(), 2);
+        assert_eq!(ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?.len(), 2);
+
+        // —— 前缀档：只命中以 `order` 开头的对象；中缀 `customer_orders` 不进榜 ——
+        let prefix = ops.search_index(conn_id, "order", 50, NameMatchMode::StartsWith)?;
+        let prefix_names: Vec<&str> = prefix.iter().map(|h| h.object_name.as_str()).collect();
+        assert_eq!(
+            prefix_names.first().copied(),
+            Some("order"),
+            "前缀档相等行仍排最前（得到：{prefix_names:?}）"
+        );
+        assert!(
+            !prefix_names.contains(&"customer_orders"),
+            "前缀档不得命中仅中缀包含的对象（得到：{prefix_names:?}）"
+        );
+        for want in ["order", "orders", "order_items", "order_view", "order_id"] {
+            assert!(prefix_names.contains(&want), "前缀档漏命中 {want}（得到：{prefix_names:?}）");
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
@@ -4881,12 +4906,13 @@ mod tests {
         Ok(out)
     }
 
-    /// 两段式（分类索引序前缀段 + 中缀回落）必须与优化前的单条查询**逐条相同**。
+    /// 包含档（`Contains`）必须与优化前那条单条中缀 LIKE 查询**逐条相同**；前缀档
+    /// （`StartsWith`）单独钉住「只返回前缀 / 相等行」的边界。
     ///
-    /// 现在**没有窗口**：前缀段是「每类取名序前 limit 条」的并集，对任意多命中都精确
+    /// 现在**没有窗口**：每个类别是「取名序前 limit 条」的并集，对任意多命中都精确
     /// （超大数据集另见 `search_index_prefix_stage_is_exact_and_category_first`）。
     ///
-    /// 覆盖：前缀装满 `limit`（早退）/ 前缀不足（回落）/ 零前缀 / 转义字符 / 大小写 /
+    /// 覆盖：前缀装满 `limit` / 零前缀 / 转义字符 / 大小写 /
     /// 同名同类同长的列（排序完全同分，靠行号与 `id` 同序兜底）。
     #[test]
     fn search_index_two_stage_matches_single_query_oracle() -> Result<(), CoreError> {
@@ -4931,26 +4957,26 @@ mod tests {
             "   ",
         ] {
             for limit in [1i64, 2, 3, 5, 50] {
-                let got = ops.search_index(conn_id, needle, limit)?;
+                let got = ops.search_index(conn_id, needle, limit, NameMatchMode::Contains)?;
                 let want = oracle_search_index(&ops, conn_id, needle, limit)?;
                 assert_eq!(
                     got, want,
-                    "needle={needle:?} limit={limit}：两段式必须与单条查询逐条相同"
+                    "needle={needle:?} limit={limit}：包含档必须与单条查询逐条相同"
                 );
             }
         }
 
-        // 两条分支都真的被走到：前缀装满 → 早退；零前缀 → 全靠回落段
-        assert_eq!(ops.search_index(conn_id, "order", 2)?.len(), 2, "前缀段应填满 limit");
+        // 包含档两条边界：前缀装满 → 早退不影响；零前缀（`reorder`）→ 中缀段独立兜底命中
+        assert_eq!(ops.search_index(conn_id, "order", 2, NameMatchMode::Contains)?.len(), 2, "包含档应填满 limit");
         assert_eq!(
-            ops.search_index(conn_id, "reorder", 5)?.len(),
+            ops.search_index(conn_id, "reorder", 5, NameMatchMode::Contains)?.len(),
             1,
-            "无前缀命中时全靠回落段"
+            "无前缀命中时包含档仍应靠中缀段兜底"
         );
 
-        // 前缀命中整体优先于中缀命中（两段式正确性的前提）
+        // 前缀命中整体优先于中缀命中（包含档 Rust 侧 rank 分档保证）
         let names: Vec<String> = ops
-            .search_index(conn_id, "order", 50)?
+            .search_index(conn_id, "order", 50, NameMatchMode::Contains)?
             .into_iter()
             .map(|h| h.object_name)
             .collect();
@@ -4963,20 +4989,32 @@ mod tests {
         assert!(pos("orders_archive") < pos("reorder_point"), "前缀应在前：{names:?}");
         assert!(pos("order_id") < pos("reorder_point"), "前缀应在前：{names:?}");
 
+        // 前缀档：只返回以词开头的对象，中缀 `reorder_point` 不进榜
+        let prefix_names: Vec<String> = ops
+            .search_index(conn_id, "order", 50, NameMatchMode::StartsWith)?
+            .into_iter()
+            .map(|h| h.object_name)
+            .collect();
+        assert!(
+            !prefix_names.iter().any(|n| n == "reorder_point"),
+            "前缀档不得命中仅中缀包含的对象：{prefix_names:?}"
+        );
+        assert!(prefix_names.iter().any(|n| n == "order_items"), "前缀档漏命中前缀对象：{prefix_names:?}");
+
         // limit 非正数按空结果（而不是 SQLite 的「-1 = 不限」）
-        assert!(ops.search_index(conn_id, "order", 0)?.is_empty());
-        assert!(ops.search_index(conn_id, "order", -1)?.is_empty());
+        assert!(ops.search_index(conn_id, "order", 0, NameMatchMode::Contains)?.is_empty());
+        assert!(ops.search_index(conn_id, "order", -1, NameMatchMode::Contains)?.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
-    /// 两段的 SQL 都必须真的走 `idx_metadata_index_conn_type_object_lower`，且**不排序**。
+    /// 前缀段与包含段的 SQL 都必须真的走 `idx_metadata_index_conn_type_object_lower`，且**不排序**。
     ///
     /// 用 `EXPLAIN QUERY PLAN` 钉住三件事：① 用本索引而非 `idx_metadata_index_level`；
     /// ② 等值条件参与索引定位（`connection_id=? AND object_type=?`）；
     /// ③ 不出现 `TEMP B-TREE`——输出序就是索引序，这是「无需窗口、无需排序」的全部依据
-    ///   （中缀段同样靠它：`LIKE` 只作为过滤谓词，排序仍由索引提供）。
+    ///   （包含段同样靠它：`LIKE` 只作为过滤谓词，排序仍由索引提供）。
     /// 量级问题（10 万对象全表扫百毫秒级）只靠用例测不出来，但计划能断言：
     /// 初版单列表达式索引就被规划器弃用过（改用 `connection_id` 等值扫），改成复合索引才生效。
     #[test]
@@ -5024,12 +5062,12 @@ mod tests {
             &[&"P_plan", &"ord", &upper, &10i64],
         )?;
         check(
-            "回落段",
+            "包含段",
             MetadataCacheOps::search_index_category_sql(
-                MetadataCacheOps::SQL_SEARCH_INDEX_FALLBACK_TEMPLATE,
+                MetadataCacheOps::SQL_SEARCH_INDEX_CONTAINS_TEMPLATE,
                 category,
             ),
-            &[&"P_plan", &"%ord%", &"ord", &upper, &10i64],
+            &[&"P_plan", &"%ord%", &10i64],
         )?;
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -5085,29 +5123,30 @@ mod tests {
         ops.save_index_entries_batch(entries)?;
 
         // ① 精确：限足不截断时，名序靠后的 `win_zz` 与列 `win_0000` 都在（旧窗口会把它们挡在外面）
-        let all = ops.search_index(conn_id, "win", 5_000)?;
+        let all = ops.search_index(conn_id, "win", 5_000, NameMatchMode::StartsWith)?;
         let names: Vec<&str> = all.iter().map(|h| h.object_name.as_str()).collect();
         assert_eq!(names.len(), tables + 3, "应取回全部命中：{names:?}");
         assert!(names.contains(&"win_zz"), "名序靠后的短名不得丢：{names:?}");
         assert!(names.contains(&"win_0000"), "列命中不得丢：{names:?}");
-        // 与「一次全量排序」的参照物逐条相同（无窗口 → 任何限制下都应相同）
+        // 与「一次全量排序」的参照物逐条相同（夹具对象全为 `win` 前缀，两档结果集一致；
+        // 无窗口 → 任何限制下都应相同）
         for limit in [1i64, 5, 50, 5_000] {
             assert_eq!(
-                ops.search_index(conn_id, "win", limit)?,
+                ops.search_index(conn_id, "win", limit, NameMatchMode::StartsWith)?,
                 oracle_search_index(&ops, conn_id, "win", limit)?,
                 "无窗口后任意 limit 都应与全量排序逐条相同（limit={limit}）"
             );
         }
 
         // ② 先类别：`win` 是列（完全相等 → 跨类别第一）
-        let first = ops.search_index(conn_id, "win", 1)?;
+        let first = ops.search_index(conn_id, "win", 1, NameMatchMode::StartsWith)?;
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].object_name, "win");
         assert_eq!(first[0].object_type, "column", "完全相等优先于类别权重");
 
         // ② 先类别：列 `win_0000` 在名序上比所有 `win_0000x` 表都靠前，但它是列 → 表仍先出
         //    （逗号）`win_000` 本身不是任何对象的名字，所以这里无 rank 0 干扰）
-        let first = ops.search_index(conn_id, "win_000", 1)?;
+        let first = ops.search_index(conn_id, "win_000", 1, NameMatchMode::StartsWith)?;
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].object_type, "table", "同档内先类别：表先于列");
         assert_eq!(first[0].object_name, "win_00000", "表档内按名序");
@@ -5463,7 +5502,7 @@ mod tests {
         // 并排跑旧写法（单条中缀 LIKE + 全排序）：两者同一轮同一台机器才有可比性
         for needle in ["table_", "table_000042", "zzz_no_hit", "_0042"] {
             let t = Instant::now();
-            let hits = ops.search_index(conn_id, needle, 50)?;
+            let hits = ops.search_index(conn_id, needle, 50, NameMatchMode::Contains)?;
             let now = t.elapsed();
             let t = Instant::now();
             let old = oracle_search_index(&ops, conn_id, needle, 50)?;
@@ -5475,9 +5514,9 @@ mod tests {
             );
         }
 
-        // 拆开看两段的成本（选型依据；改搜索实现时重跑对比）：
-        //   ① 前缀段：一类（表档）一段索引扫，取够 limit 即停，与命中总数无关
-        //   ② 回落段：同类扫但用 LIKE 过滤（排序仍靠索引、免全量排序）
+        // 拆开看两档的成本（选型依据；改搜索实现时重跑对比）：
+        //   ① 前缀档：一类（表档）一段索引扫，取够 limit 即停，与命中总数无关
+        //   ② 包含档：同类扫但用 LIKE 过滤（排序仍靠索引、免全量排序）
         {
             let conn = ops.get_connection();
             let upper = format!("table_{}", char::MAX);
@@ -5494,7 +5533,7 @@ mod tests {
                     |r| r.get::<_, String>(0),
                 )?
                 .count();
-            println!("[分解] 前缀段·表档一段索引扫（取到 {n} 条，8 万命中下）: {:?}", t.elapsed());
+            println!("[分解] 前缀档·表档一段索引扫（取到 {n} 条，8 万命中下）: {:?}", t.elapsed());
 
             let t = Instant::now();
             let n: i64 = conn.query_row(
@@ -5506,18 +5545,18 @@ mod tests {
             println!("[分解] 中缀 LIKE 全扫（{n} 命中）: {:?}", t.elapsed());
 
             let t = Instant::now();
-            let infix_sql = MetadataCacheOps::search_index_category_sql(
-                MetadataCacheOps::SQL_SEARCH_INDEX_FALLBACK_TEMPLATE,
+            let contains_sql = MetadataCacheOps::search_index_category_sql(
+                MetadataCacheOps::SQL_SEARCH_INDEX_CONTAINS_TEMPLATE,
                 MetadataCacheOps::SEARCH_INDEX_CATEGORY_PREDICATES[0],
             );
             let n = conn
-                .prepare(&infix_sql)?
+                .prepare(&contains_sql)?
                 .query_map(
-                    rusqlite::params![conn_id, "%table_%", "table_", upper, 50i64],
+                    rusqlite::params![conn_id, "%table_%", 50i64],
                     |r| r.get::<_, String>(0),
                 )?
                 .count();
-            println!("[分解] 中缀段·表档索引名序走（取到 {n} 条，同 8 万命中）: {:?}", t.elapsed());
+            println!("[分解] 包含档·表档索引名序走（取到 {n} 条，同 8 万命中）: {:?}", t.elapsed());
         }
 
         let _ = std::fs::remove_dir_all(&dir);

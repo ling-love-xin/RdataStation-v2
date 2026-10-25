@@ -74,6 +74,7 @@ fn table_hit() -> database::nav_jobs::SearchHit {
         catalog: Some("shop".into()),
         schema: Some("public".into()),
         snippet: None,
+        hit_source: database::nav_jobs::HitSource::Name,
     }
 }
 

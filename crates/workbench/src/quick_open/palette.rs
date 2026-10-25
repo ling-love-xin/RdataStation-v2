@@ -452,6 +452,10 @@ impl QuickOpenPalette {
                     // 快速打开（Quick Open）：无 `.*` / `Aa` 开关，走默认关。
                     false,
                     false,
+                    // D11：无匹配模式 / 注释 / 定义开关，走默认前缀、不搜语料。
+                    database::nav_jobs::NameMatchMode::StartsWith,
+                    false,
+                    false,
                     project_root.as_deref(),
                     targets,
                 );

@@ -815,6 +815,7 @@ mod tests {
             catalog: Some("main".to_string()),
             schema: Some("public".to_string()),
             snippet: None,
+            hit_source: database::nav_jobs::HitSource::Name,
         }
     }
 

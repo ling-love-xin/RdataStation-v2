@@ -188,19 +188,31 @@ impl NavView {
     /// ——快速连击在窗口内被合并，不会每键发一条索引搜索。
     pub(super) fn nav_schedule_index_search(&self, filter: &str, cx: &mut Context<Self>) {
         let query = filter.trim().to_string();
-        // 搜索签名 =（词, 正则, 大小写, 仅已连接）：词没变但开关变了也要重搜
-        // （`Aa` / `.*` / 「已连接」toggle 切换时 query 相同，旧 `search_query` 判断会误判“没变”）。
-        let (regex, case_sensitive, connected_only) = {
+        // 搜索签名 =（词, 正则, 大小写, 仅已连接, 匹配模式, 搜注释, 搜定义）：
+        // 词没变但开关变了也要重搜（`Aa` / `.*` / 「已连接」/ 模式 / 注释 toggle 切换时
+        // query 相同，旧 `search_query` 判断会误判“没变”）。
+        let (regex, case_sensitive, connected_only, name_mode, include_comments, include_definitions) = {
             let view = self.nav.borrow();
             (
                 view.search_regex,
                 view.search_case_sensitive,
                 view.search_connected_only,
+                view.search_name_mode,
+                view.search_comments,
+                view.search_definitions,
             )
         };
         let started = {
             let mut view = self.nav.borrow_mut();
-            let sig = (query.clone(), regex, case_sensitive, connected_only);
+            let sig = (
+                query.clone(),
+                regex,
+                case_sensitive,
+                connected_only,
+                name_mode,
+                include_comments,
+                include_definitions,
+            );
             if !nav_search_query_ready(&query) {
                 view.search_query = None;
                 view.search_sig = None;
@@ -240,13 +252,16 @@ impl NavView {
     /// 为什么排程时不把 targets 组装好带进闭包：防抖窗口内用户可能又改了 chips /
     /// 连接列表（排程时拍下的快照会过期），到期时现取才是用户看到的当前筛选。
     fn nav_run_index_search(&self, cx: &mut Context<Self>) {
-        let (query, case_sensitive, regex, connected_only) = {
+        let (query, case_sensitive, regex, connected_only, name_mode, include_comments, include_definitions) = {
             let view = self.nav.borrow();
             (
                 view.search_query.clone().unwrap_or_default(),
                 view.search_regex,
                 view.search_case_sensitive,
                 view.search_connected_only,
+                view.search_name_mode,
+                view.search_comments,
+                view.search_definitions,
             )
         };
         if !nav_search_query_ready(&query) {
@@ -286,6 +301,9 @@ impl NavView {
             &query,
             case_sensitive,
             regex,
+            name_mode,
+            include_comments,
+            include_definitions,
             root.as_deref(),
             targets,
         );

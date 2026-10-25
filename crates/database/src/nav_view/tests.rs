@@ -1177,6 +1177,7 @@ fn hit(
         catalog: catalog.map(str::to_string),
         schema: schema.map(str::to_string),
         snippet: None,
+        hit_source: crate::nav_jobs::HitSource::Name,
     }
 }
 
@@ -1704,6 +1705,7 @@ fn search_hit_maps_to_property_ref() {
         catalog: Some("main".to_string()),
         schema: Some("public".to_string()),
         snippet: None,
+        hit_source: crate::nav_jobs::HitSource::Name,
     };
 
     let table = nav_search_hit_property(&hit("table", "orders", None)).expect("表命中应可定位");
@@ -1821,6 +1823,7 @@ fn search_hit_ref_agrees_with_tree_side_ref() {
         catalog: Some("shop".to_string()),
         schema: Some("public".to_string()),
         snippet: None,
+        hit_source: crate::nav_jobs::HitSource::Name,
     };
     let from_hit = nav_search_hit_ref(&hit).expect("列命中应可寻址");
     let from_tree = ObjectRef::column("P_1", "shop", "public", "orders", "order_id");
@@ -2446,4 +2449,92 @@ fn placeholder_filter_empty_lands_inside_the_matching_container(cx: &mut gpui_ki
         ids(&[conn, catalog_key, schema_key]),
         "占位行不可漫游，序列只剩树行"
     );
+}
+
+/// D11：搜索签名纳入匹配模式 / 搜注释 / 搜定义——词相同但任一标志翻转都判变更并重搜；
+/// 词与全部标志都相同时不判变更（旧三字段签名漏掉后三者，toggle 会被误判为“没变”）。
+/// 定义开关本批虽置灰不产生候选，签名仍纳入，采集链路接通后无需再改签名口径。
+#[gpui_kit::test]
+fn search_signature_flips_on_mode_and_corpus_flags(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    use crate::nav_jobs::NameMatchMode;
+
+    // 首轮排程：默认前缀、不搜注释 / 定义。
+    cx.update(|_window, cx| {
+        view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
+    });
+    let first = cx
+        .update(|_window, cx| view.read(cx).nav.borrow().search_sig.clone())
+        .expect("首轮排程应写入签名");
+    assert_eq!(first.0, "ord");
+    assert!(matches!(first.4, NameMatchMode::StartsWith));
+    assert!(!first.5 && !first.6);
+
+    // 预置一条已有命中；词与标志都不变 → 不判变更，命中保留、签名不换。
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            view.nav.borrow_mut().search_hits = vec![hit(
+                "table",
+                "orders",
+                None,
+                Some("public"),
+                Some("shop"),
+            )];
+        });
+        view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
+    });
+    let unchanged = cx.update(|_window, cx| {
+        let nav = view.read(cx).nav.borrow();
+        (nav.search_hits.len(), nav.search_sig.clone())
+    });
+    assert_eq!(unchanged.0, 1, "签名未变时不清空已有命中");
+    assert_eq!(unchanged.1, Some(first.clone()), "签名未变时不更换签名");
+
+    // 翻到包含模式 → 判变更，命中清空、签名模式换成 Contains。
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            view.nav.borrow_mut().search_name_mode = NameMatchMode::Contains;
+        });
+        view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
+    });
+    let contains = cx.update(|_window, cx| {
+        let nav = view.read(cx).nav.borrow();
+        (nav.search_hits.len(), nav.search_sig.clone())
+    });
+    assert_eq!(contains.0, 0, "模式变更应清空旧命中重搜");
+    assert!(matches!(
+        contains.1.as_ref().unwrap().4,
+        NameMatchMode::Contains
+    ));
+
+    // 翻回前缀 + 开搜注释 → 判变更，签名 comments=true。
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            let mut nav = view.nav.borrow_mut();
+            nav.search_name_mode = NameMatchMode::StartsWith;
+            nav.search_comments = true;
+        });
+        view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
+    });
+    let comments = cx
+        .update(|_window, cx| view.read(cx).nav.borrow().search_sig.clone())
+        .unwrap();
+    assert!(comments.5, "签名应纳入搜注释标志");
+    assert!(!comments.6);
+
+    // 关注释 + 开搜定义 → 判变更，签名 definitions=true（本批无定义候选，仅签名占位）。
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            let mut nav = view.nav.borrow_mut();
+            nav.search_comments = false;
+            nav.search_definitions = true;
+        });
+        view.update(cx, |view, cx| view.nav_schedule_index_search("ord", cx));
+    });
+    let definitions = cx
+        .update(|_window, cx| view.read(cx).nav.borrow().search_sig.clone())
+        .unwrap();
+    assert!(!definitions.5);
+    assert!(definitions.6, "签名应纳入搜定义标志");
 }

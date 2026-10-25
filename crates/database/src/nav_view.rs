@@ -324,9 +324,27 @@ pub struct NavViewState {
     /// 索引搜索「仅已连接」开关（会话级，**不落库**——`navigator_state.rs` 有他人
     /// 未提交改动，落库字段等它稳定后再说；竞品 DBeaver TreeFilter 同款开关）。
     pub search_connected_only: bool,
-    /// 搜索**签名** =（词, 正则, 大小写, 仅已连接）：词没变但开关变了也要重搜
-    /// （旧判断只看 `search_query`，toggle 切换会被误判为“没变”而永远不重搜）。
-    search_sig: Option<(String, bool, bool, bool)>,
+    /// 名称匹配模式：前缀（`StartsWith`，默认，对齐 DBeaver starts-with）/ 包含
+    /// （`Contains`，任意位置命中）。会话级，本批不落库（跨重启持久化挂偏好体系另案）。
+    pub search_name_mode: nav_jobs::NameMatchMode,
+    /// 「搜注释」开关：开启时名称档结果序列并入 FTS 注释命中候选（按族 `comments`
+    /// 档案集合过滤类型）。会话级，本批不落库。
+    pub search_comments: bool,
+    /// 「搜定义」开关：本批内省链路尚未采集视图 / 例程定义，开关默认关、UI 置灰标注
+    /// 「待内省采集」，不产生候选；采集链路接通后启用。会话级，本批不落库。
+    pub search_definitions: bool,
+    /// 搜索**签名** =（词, 正则, 大小写, 仅已连接, 匹配模式, 搜注释, 搜定义）：
+    /// 词没变但开关变了也要重搜（旧判断只看 `search_query`，toggle 切换会被误判为
+    /// “没变”而永远不重搜）。
+    search_sig: Option<(
+        String,
+        bool,
+        bool,
+        bool,
+        nav_jobs::NameMatchMode,
+        bool,
+        bool,
+    )>,
     /// 索引搜索**批次序号**（运行时单调递增，不落库）：真正发起一批搜索时 `+= 1`，
     /// 回填时与结果自带的 `seq` 比对——同词重跑 / toggle 重排时，`query` 判据区分不了
     /// 先后（两次词相同），只有序号能保证「旧批迟到不回填」。
