@@ -8,6 +8,7 @@
 //! 根模块用 `use self::primitives::*;` 收回来，**调用点一字未改**。
 
 use super::*;
+use crate::nav::family_profile;
 use crate::nav_host::ObjectMaskRule;
 
 /// 解析搜索框文本：拆出 `scope:` / `type:` / `driver:` / `tag:` token，其余为自由文本。
@@ -289,6 +290,19 @@ pub(super) fn nav_icon(path: &'static str, size: f32, color: Hsla) -> Icon {
 /// 资产取自 `gpui-kit-assets` 全量 Lucide（`AllAssets` 已注册，无需新增）。
 /// `expanded` 只影响文件夹的开 / 合形状，其余类别恒定。
 pub(super) fn nav_kind_icon(kind: &NavNodeKind, expanded: bool) -> &'static str {
+    // M3：五个叶子对象的图标 key 来自 L1 族档案；连接根 / Schema / 文件夹开合 / 列 /
+    // 列溢出提示属展示特例，不属于数据库对象身份，由下方特例分支兜底。
+    let object_kind = match kind {
+        NavNodeKind::Table { .. } => Some(ObjectKind::Table),
+        NavNodeKind::View => Some(ObjectKind::View),
+        NavNodeKind::Routine { .. } => Some(ObjectKind::Routine),
+        NavNodeKind::Sequence => Some(ObjectKind::Sequence),
+        NavNodeKind::Trigger => Some(ObjectKind::Trigger),
+        _ => None,
+    };
+    if let Some(icon) = object_kind.and_then(family_profile::object_kind_icon) {
+        return icon;
+    }
     match kind {
         NavNodeKind::Connection { .. } | NavNodeKind::Catalog => "icons/database.svg",
         NavNodeKind::Schema => "icons/folder-tree.svg",
@@ -299,13 +313,10 @@ pub(super) fn nav_kind_icon(kind: &NavNodeKind, expanded: bool) -> &'static str 
                 "icons/folder.svg"
             }
         }
-        NavNodeKind::Table { .. } => "icons/table.svg",
-        NavNodeKind::View => "icons/eye.svg",
         NavNodeKind::Column { .. } => "icons/columns-3.svg",
         NavNodeKind::ColumnOverflow => "icons/info.svg",
-        NavNodeKind::Routine { .. } => "icons/square-function.svg",
-        NavNodeKind::Sequence => "icons/list-ordered.svg",
-        NavNodeKind::Trigger => "icons/zap.svg",
+        // 档案已覆盖对象类别不会落到这里；`_` 仅满足 match 穷尽。
+        _ => "icons/info.svg",
     }
 }
 
@@ -547,17 +558,10 @@ pub(super) fn nav_search_hit_property(hit: &nav_jobs::SearchHit) -> Option<Prope
 
 /// 索引命中 → 合成节点类别（只为取图标颜色，不参与树挂载）。
 pub(super) fn nav_search_hit_kind(hit: &nav_jobs::SearchHit) -> NavNodeKind {
-    match nav_search_hit_ref(hit).map(|r| r.kind) {
-        Some(ObjectKind::Table) => NavNodeKind::Table { row_estimate: None },
-        Some(ObjectKind::View) => NavNodeKind::View,
-        Some(ObjectKind::Column) => NavNodeKind::Column {
-            data_type: String::new(),
-            nullable: true,
-            primary: false,
-            foreign: false,
-        },
-        _ => NavNodeKind::Schema,
-    }
+    // M5：ObjectKind → 展示节点形状，查表自 L1 族档案；无引用回退 Schema 形状。
+    nav_search_hit_ref(hit)
+        .map(|r| family_profile::search_hit_node_kind(r.kind))
+        .unwrap_or(NavNodeKind::Schema)
 }
 
 /// 命中行的类别短标签（表 / 视图 / 模式 / 列）。

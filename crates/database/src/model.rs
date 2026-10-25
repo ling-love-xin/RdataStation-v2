@@ -331,16 +331,8 @@ pub struct PropertyRequest {
 /// `PropertyKind`（`rds-property`）是属性面板的**展示类别**（多一个 `Connection`，并被面板的分支判断用）。
 /// 所以映射只留这一份，导航搜索结果（`nav_view`）与 Quick Open（`workbench`）都调它。
 pub fn property_ref_of(object: &ObjectRef) -> PropertyRef {
-    let kind = match object.kind {
-        ObjectKind::Catalog => PropertyKind::Catalog,
-        ObjectKind::Schema => PropertyKind::Schema,
-        ObjectKind::Table => PropertyKind::Table,
-        ObjectKind::View => PropertyKind::View,
-        ObjectKind::Column => PropertyKind::Column,
-        ObjectKind::Routine => PropertyKind::Routine,
-        ObjectKind::Sequence => PropertyKind::Sequence,
-        ObjectKind::Trigger => PropertyKind::Trigger,
-    };
+    // M7：ObjectKind → PropertyKind 查表自 L1 族档案（八类同名一一对应）。
+    let kind = crate::nav::family_profile::object_kind_to_property_kind(object.kind);
     // 空串 = 该层不存在（引用用普通字符串表达同一件事，`PropertyRef` 用 `Option`）。
     let opt = |segment: &str| Some(segment.to_string()).filter(|value| !value.is_empty());
     PropertyRef {

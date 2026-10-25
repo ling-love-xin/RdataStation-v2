@@ -61,6 +61,7 @@ use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
     PropertyRequest,
 };
+use crate::nav::family_profile;
 use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
 use crate::nav_rows::{NavRow, search_hit_row_id, search_hit_row_key};
@@ -126,16 +127,12 @@ impl RevealTarget {
     fn from_ref(object: &ObjectRef) -> Option<Self> {
         // 没有 schema 归属的对象定位不了：树的第一层是 catalog，第二层就是 schema。
         let schema = (!object.schema.is_empty()).then(|| object.schema.clone())?;
-        let folder = match object.kind {
-            ObjectKind::Schema => None,
-            ObjectKind::Table | ObjectKind::Column => Some(NavFolder::Tables),
-            ObjectKind::View => Some(NavFolder::Views),
-            ObjectKind::Routine => Some(NavFolder::Routines),
-            ObjectKind::Sequence => Some(NavFolder::Sequences),
-            ObjectKind::Trigger => Some(NavFolder::Triggers),
-            // catalog 层不做定位：它在树上只有「唯一容器」这一层语义，没有可定位的“那一行”。
-            ObjectKind::Catalog => return None,
-        };
+        // Catalog 层不做定位：它在树上只有「唯一容器」这一层语义，没有可定位的“那一行”。
+        if object.kind == ObjectKind::Catalog {
+            return None;
+        }
+        // M9：类别 → 定位文件夹，查表自 L1 族档案；Schema 与非文件夹类别返回 None。
+        let folder = family_profile::object_kind_to_folder(object.kind);
         Some(Self {
             conn_id: object.conn_id.clone(),
             // 空串 = 该命中没有 catalog（内容档没有这一列），定位时从连接已加载的 catalog 取

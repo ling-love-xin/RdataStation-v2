@@ -13,6 +13,7 @@ pub mod database_view;
 // ER 建模视图（原生 GPUI，不引入 webview）：模型 / 桥 / 布局已落地，渲染与面板后续切片。
 pub mod er;
 pub mod model;
+pub mod nav;
 pub mod navigator_service;
 pub mod nav_host;
 pub mod nav_jobs;

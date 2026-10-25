@@ -30,6 +30,7 @@ use crate::metadata_service::MetadataService;
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyRef,
 };
+use crate::nav::family_profile::{self, NodeShape};
 use property::PropertyKind;
 
 /// 无 Catalog 层级时的退化容器名（SQLite / DuckDB 等）。
@@ -714,17 +715,16 @@ impl NavigatorService {
                 if folder == NavFolder::Tables && obj.parent_name.is_some() {
                     return None;
                 }
-                let (kind, has_children) = match folder {
-                    NavFolder::Tables => (NavNodeKind::Table { row_estimate: None }, true),
-                    NavFolder::Views => (NavNodeKind::View, true),
-                    NavFolder::Routines => (
-                        NavNodeKind::Routine {
-                            routine_type: format!("{:?}", obj.kind),
-                        },
-                        false,
-                    ),
-                    NavFolder::Sequences => (NavNodeKind::Sequence, false),
-                    NavFolder::Triggers => (NavNodeKind::Trigger, false),
+                // M1：文件夹 → 展示变体形状 / 子节点有无，查表自 L1 族档案。
+                let (shape, has_children) = family_profile::folder_to_shape(folder);
+                let kind = match shape {
+                    NodeShape::Table => NavNodeKind::Table { row_estimate: None },
+                    NodeShape::View => NavNodeKind::View,
+                    NodeShape::Routine => NavNodeKind::Routine {
+                        routine_type: format!("{:?}", obj.kind),
+                    },
+                    NodeShape::Sequence => NavNodeKind::Sequence,
+                    NodeShape::Trigger => NavNodeKind::Trigger,
                 };
                 let name = obj.name;
                 let key = NavNode::child_key(conn_id, &[catalog, schema, name.as_str()]);
@@ -739,13 +739,8 @@ impl NavigatorService {
                     schema: Some(schema.to_string()),
                     parent: obj.parent_name.clone(),
                     name: name.clone(),
-                    kind: match folder {
-                        NavFolder::Tables => PropertyKind::Table,
-                        NavFolder::Views => PropertyKind::View,
-                        NavFolder::Routines => PropertyKind::Routine,
-                        NavFolder::Sequences => PropertyKind::Sequence,
-                        NavFolder::Triggers => PropertyKind::Trigger,
-                    },
+                    // M2：文件夹 → 属性面板类别，查表自 L1 族档案。
+                    kind: family_profile::folder_to_property_kind(folder),
                 };
                 let mut node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
                     .with_comment(obj.comment)

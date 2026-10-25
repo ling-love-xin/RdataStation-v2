@@ -5,6 +5,7 @@
 //! 本模块只留结果区的**标题行**（“搜索中 / 无命中 / 共几条”）。
 
 use super::*;
+use crate::nav::family_profile;
 
 impl NavView {
     /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
@@ -1044,15 +1045,11 @@ impl NavView {
                         }
                         _ => {
                             let Some(prop) = &item.property else { return; };
-                            let folder = match prop.kind {
-                                PropertyKind::Table => Some(NavFolder::Tables),
-                                PropertyKind::View => Some(NavFolder::Views),
-                                PropertyKind::Routine => Some(NavFolder::Routines),
-                                PropertyKind::Sequence => Some(NavFolder::Sequences),
-                                PropertyKind::Trigger => Some(NavFolder::Triggers),
-                                _ => None,
+                            // M6：属性类别 → 文件夹，查表自 L1 族档案；不可重命名类别直接关闭。
+                            let Some(folder) = family_profile::property_kind_to_folder(prop.kind)
+                            else {
+                                return;
                             };
-                            let Some(folder) = folder else { return; };
                             if !this.host.is_connected(&item.conn_id) {
                                 this.host.notice("对象重命名需要先建立连接".into(), cx);
                                 return;
