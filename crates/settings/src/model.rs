@@ -407,6 +407,48 @@ pub struct Navigator {
     /// 空集合 = 显式「全部隐藏」，等价于默认模式但对用户可见（弹框里全部取消勾选）。
     #[serde(default)]
     pub visible_databases: BTreeMap<String, Vec<String>>,
+    /// 表/视图行是否显示行估计徽标（S3-④，默认开）：PG `reltuples` / MySQL
+    /// `TABLE_ROWS` 后台回填，行尾「≈ N」弱色徽标；关闭后不排估计任务、不显示徽标。
+    #[serde(default = "default_true")]
+    pub row_estimate: bool,
+    /// 每连接的对象名 mask（B-1）：`conn_id → 规则`。
+    ///
+    /// 键不存在 = 该连接不过滤；键存在 = 按规则过滤**已加载**的对象行（表 / 视图 /
+    /// 例程 / 序列 / 触发器，只作用于对象层，catalog / schema 层不进 mask）。
+    /// 过滤是纯内存操作：只滤已加载进 `children` 的子集，`child_total`（分页判断）
+    /// 保持原始候选计数不变。断连连接的缓存对象照常过滤（B-1-E）。
+    #[serde(default)]
+    pub object_masks: BTreeMap<String, ObjectMaskRule>,
+    /// 面板全局对象名 mask（B-1）：对面板内全部可见连接的对象名兜底过滤。
+    /// 空规则 = 不启用；与 per-conn mask、facet 均为 AND。
+    #[serde(default)]
+    pub global_mask: ObjectMaskRule,
+}
+
+/// 对象名过滤规则（B-1，v1 仅 glob）。
+///
+/// 匹配语义：`*` 任意多字符 / `?` 单字符，大小写不敏感；include 为空 = 全部候选
+/// 进入候选集；exclude 为空 = 不排除；**exclude 优先于 include**（命中 include 且
+/// 未命中 exclude 的对象保留）。`use_regex` v1 恒 `false`（UI 不暴露，随 B-1-A
+/// 正则挂 v2）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ObjectMaskRule {
+    /// include glob 列表（每行一条，空行忽略；空 = 全量候选）。
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// exclude glob 列表（每行一条，空行忽略；空 = 不排除）。
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// v1 恒 `false`：正则模式随 B-1-A 挂 v2。
+    #[serde(default)]
+    pub use_regex: bool,
+}
+
+impl ObjectMaskRule {
+    /// 规则是否「启用」：include 或 exclude 任一非空（空规则 = 该层不过滤）。
+    pub fn is_active(&self) -> bool {
+        !self.include.is_empty() || !self.exclude.is_empty()
+    }
 }
 
 impl Default for Navigator {
@@ -420,6 +462,9 @@ impl Default for Navigator {
             filters: NavigatorFilters::default(),
             saved_views: BTreeMap::new(),
             visible_databases: BTreeMap::new(),
+            row_estimate: true,
+            object_masks: BTreeMap::new(),
+            global_mask: ObjectMaskRule::default(),
         }
     }
 }

@@ -120,6 +120,10 @@ pub enum Slot {
     NavigatorSavedViews,
     /// 每连接可见库白名单（S3-① 复合值：`conn_id → 名字集合`；读写走 SettingsService）。
     NavigatorVisibleDatabases,
+    /// 表/视图行估计徽标开关（S3-④ 标量布尔，默认开；只上设置页）。
+    NavigatorRowEstimate,
+    /// 面板全局对象名 mask（B-1 复合值；读写走对象名过滤器对话框，不上设置页）。
+    NavigatorGlobalMask,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
     ResourcesCollapsedGroups,
@@ -157,6 +161,8 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.filters" => Slot::NavigatorFilters,
         "navigator.saved_views" => Slot::NavigatorSavedViews,
         "navigator.visible_databases" => Slot::NavigatorVisibleDatabases,
+        "navigator.row_estimate" => Slot::NavigatorRowEstimate,
+        "navigator.global_mask" => Slot::NavigatorGlobalMask,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
         "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
@@ -189,7 +195,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
         Slot::NavigatorShowTags
         | Slot::NavigatorShowScope
-        | Slot::NavigatorShowNameTypeShort => KindTag::Bool,
+        | Slot::NavigatorShowNameTypeShort
+        | Slot::NavigatorRowEstimate => KindTag::Bool,
         Slot::ConnectTimeoutMs => KindTag::Number,
         // 保留份数是有符号数：`-1` = 全留（哨兵值，不是"少一份"）。
         Slot::ResourcesKeepVersions => KindTag::Number,
@@ -201,6 +208,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::NavigatorSavedViews => KindTag::Composite,
         Slot::NavigatorVisibleDatabases => KindTag::Composite,
+        Slot::NavigatorGlobalMask => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
         Slot::LogMinLevel => KindTag::Enum,
@@ -219,6 +227,7 @@ pub fn slot_is_scalar(slot: Slot) -> bool {
         Slot::NavigatorFilters
             | Slot::NavigatorSavedViews
             | Slot::NavigatorVisibleDatabases
+            | Slot::NavigatorGlobalMask
             | Slot::ResourcesCollapsedGroups
             | Slot::ScratchpadToolbar
     )
@@ -567,6 +576,34 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
         consumer: "database/src/navigator_service.rs（树加载过滤，经 NavHost 快照传入）+ workbench/src/components/visible_databases_dialog.rs",
+        composite: true,
+    },
+    SettingSpec {
+        key: "navigator.row_estimate",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "行估计徽标",
+        hint: "表/视图行尾显示后台回填的行数估计（≈ N）；关闭后不排估计任务、不显示徽标。PG 取 reltuples、MySQL 取 TABLE_ROWS，其余驱动不支持",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "database/src/nav_view/actions.rs（row_estimate 门控估计任务）+ nav_view/rows.rs（≈ N 徽标渲染）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "navigator.global_mask",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "全局对象名过滤器",
+        hint: "面板内全部连接对象名的兜底 glob 过滤（include/exclude 每行一条，exclude 优先于 include）；空规则 = 不启用，与每连接 mask 取 AND。经导航面板 ⋯ 菜单「全局对象名过滤器…」维护",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{\"include\":[],\"exclude\":[],\"use_regex\":false}",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Module,
+        consumer: "workbench/src/components/object_mask_dialog.rs + database/src/nav_view/actions.rs / rows.rs（每连接 mask 与全局 mask 叠加过滤）",
         composite: true,
     },
     SettingSpec {

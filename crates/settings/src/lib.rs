@@ -24,7 +24,8 @@ pub mod settings_page;
 pub use workbench_shell::product_tokens;
 
 use crate::model::{
-    AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, SavedView, Settings,
+    AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, ObjectMaskRule,
+    SavedView, Settings,
 };
 use crate::registry::{SettingValue, Slot};
 
@@ -240,12 +241,15 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::NavigatorShowNameTypeShort => {
             SettingValue::Bool(settings.navigator.show_name_type_short)
         }
+        Slot::NavigatorRowEstimate => SettingValue::Bool(settings.navigator.row_estimate),
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
         // 复合值（已保存视图）：同上。
         Slot::NavigatorSavedViews => return None,
         // 复合值（可见库白名单，S3-①）：读写走 SettingsService。
         Slot::NavigatorVisibleDatabases => return None,
+        // 复合值（全局对象名 mask，B-1）：读写走对象名过滤器对话框。
+        Slot::NavigatorGlobalMask => return None,
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
@@ -440,10 +444,17 @@ impl SettingsService {
                 };
                 Self::set_show_name_type_short(on, cx);
             }
+            Slot::NavigatorRowEstimate => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_row_estimate(on, cx);
+            }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters
             | Slot::NavigatorSavedViews
-            | Slot::NavigatorVisibleDatabases => return false,
+            | Slot::NavigatorVisibleDatabases
+            | Slot::NavigatorGlobalMask => return false,
             Slot::ResourcesCollapsedGroups | Slot::ResourcesDefaultGroup => return false,
             Slot::ResourcesKeepVersions => {
                 let Some(value) = value.as_number() else {
@@ -963,6 +974,71 @@ impl SettingsService {
             .visible_databases
             .get(conn_id)
             .cloned()
+    }
+
+    /// S3-④ 行估计徽标开关（默认开）：关闭后导航不排估计任务、行尾不显示「≈ N」。
+    pub fn row_estimate(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.row_estimate
+    }
+
+    /// 设置并持久化「行估计徽标」开关。
+    pub fn set_row_estimate(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.row_estimate = on;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
+    /// B-1 某连接的对象名 mask（键不存在 = 该连接不过滤，返回默认空规则）。
+    pub fn object_mask(conn_id: &str, cx: &App) -> ObjectMaskRule {
+        cx.global::<Settings>()
+            .navigator
+            .object_masks
+            .get(conn_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// B-1 面板全局对象名 mask（空规则 = 不启用）。
+    pub fn global_mask(cx: &App) -> ObjectMaskRule {
+        cx.global::<Settings>().navigator.global_mask.clone()
+    }
+
+    /// B-1 保存某连接的对象名 mask 并持久化。
+    ///
+    /// `None` = 删除该连接的规则记录（回到不过滤）。
+    pub fn set_object_mask(conn_id: &str, rule: Option<ObjectMaskRule>, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            match rule {
+                Some(r) => {
+                    settings
+                        .navigator
+                        .object_masks
+                        .insert(conn_id.to_string(), r);
+                }
+                None => {
+                    settings.navigator.object_masks.remove(conn_id);
+                }
+            }
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
+    /// B-1 保存面板全局对象名 mask 并持久化。
+    pub fn set_global_mask(rule: ObjectMaskRule, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.global_mask = rule;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
     }
 
     /// 保存某连接的可见库白名单并持久化（S3-①）。
