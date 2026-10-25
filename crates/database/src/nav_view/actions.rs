@@ -1052,6 +1052,22 @@ impl NavView {
                             view.jumped.remove(&key);
                             view.children.insert(key.clone(), page.nodes);
                             view.child_total.insert(key.clone(), page.total);
+                            // D9：回收 expanded 中已不存在节点的残留 key（避免状态集膨胀、
+                            // 恢复展开态时对不存在 key 空排队）。白名单 = 现存容器 key ∪
+                            // 现存节点 key ∪ 连接根 key；追加页 / 定位换窗分支不回收。
+                            let existing: HashSet<String> = view
+                                .children
+                                .keys()
+                                .cloned()
+                                .chain(view.children.values().flatten().map(|n| n.key.clone()))
+                                .collect();
+                            let root_keys: HashSet<String> = self
+                                .host
+                                .connections()
+                                .iter()
+                                .map(|c| c.id.clone())
+                                .collect();
+                            view.expanded = prune_expanded(&view.expanded, &existing, &root_keys);
                         } else {
                             // 追加页：去重后并入（见 `nav_merge_page`）。
                             let entry = view.children.entry(key.clone()).or_default();
@@ -1987,6 +2003,7 @@ impl NavView {
         let prefix = format!("{key}/");
         {
             let mut view = self.nav.borrow_mut();
+            let outside = |k: &str| !key_in_subtree(k, key, &prefix);
             view.children
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
             view.attempted
@@ -1997,6 +2014,15 @@ impl NavView {
             // 报出已不存在的余量（甚至对着空列表显示“余 5000”）。
             view.child_total
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
+            // D9：定位窗 / 在途标记同口径按子树回收；旧实现漏清，刷新后残留旧定位提示
+            // 与旧「加载中…」占位。
+            view.jumped.retain(|k, _| outside(k));
+            view.loading.retain(|k| outside(k));
+            // 选中锚点落在被刷新子树内则清空；子树外的选中保持不动。
+            if selected_key_in_subtree(view.selected_key.as_deref(), key, &prefix) {
+                view.selected_key = None;
+            }
+            // expanded 保留（DBeaver diff-merge 口径：刷新不收起用户已展开的层级）。
         }
         if let Some(p) = path {
             // 刷新（fresh）：后台路径，让位用户手点（S2-①）。
@@ -2023,6 +2049,11 @@ impl NavView {
             view.attempted.clear();
             view.errors.clear();
             view.child_total.clear();
+            // D9：定位窗 / 在途标记 / 选中锚点整盘清掉；expanded 保留（仍展开的连接根
+            // 由下面按 roots 重载，子层展开态在回填后沿 expanded 再次懒加载）。
+            view.jumped.clear();
+            view.loading.clear();
+            view.selected_key = None;
         }
         for cid in roots {
             // 刷新全部：后台路径（S2-①）。

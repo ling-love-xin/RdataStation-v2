@@ -979,6 +979,44 @@ pub(super) fn nav_forget_attempt(view: &mut NavViewState, key: &str) {
     view.loading.remove(key);
 }
 
+/// 判断 key 是否落在被刷新子树内：等于根 key，或位于根 key 的 `root/` 前缀之下。
+pub(super) fn key_in_subtree(key: &str, root: &str, prefix: &str) -> bool {
+    key == root || key.starts_with(prefix)
+}
+
+/// 刷新某节点子树：回收集合中落在该子树范围内的 key，保留其余部分。
+/// 供 `refresh_node` 清 `loading` 等 `HashSet` 簿记复用（与 children/attempted 同口径 retain）。
+pub(super) fn prune_subtree_keys(
+    set: &HashSet<String>,
+    root: &str,
+    prefix: &str,
+) -> HashSet<String> {
+    set.iter()
+        .filter(|k| !key_in_subtree(k.as_str(), root, prefix))
+        .cloned()
+        .collect()
+}
+
+/// 当前选中锚点是否落在被刷新子树内；是则刷新后清空，避免指向已被清掉子树的锚点残留。
+pub(super) fn selected_key_in_subtree(selected: Option<&str>, root: &str, prefix: &str) -> bool {
+    selected.is_some_and(|k| key_in_subtree(k, root, prefix))
+}
+
+/// 首屏整体替换后回收 `expanded` 残留：保留白名单 = 现存容器/节点 key 全集 ∪ 连接根 key，
+/// 剔除新回填树里已不存在的旧节点 key——避免状态集长期膨胀、恢复展开态时对不存在 key 空排队。
+/// 父链容器 key 已在现存 key 全集内（自身既是上层子节点、又是下层容器），不会被误清。
+pub(super) fn prune_expanded(
+    expanded: &HashSet<String>,
+    existing_keys: &HashSet<String>,
+    root_keys: &HashSet<String>,
+) -> HashSet<String> {
+    expanded
+        .iter()
+        .filter(|k| existing_keys.contains(k.as_str()) || root_keys.contains(k.as_str()))
+        .cloned()
+        .collect()
+    }
+
 /// 加载失败是否为「连接类」错误（可自动重试一次）。
 ///
 /// 背景（app_run57/58 铁证）：池连接被网络层静默丢弃后，`test_before_acquire`
@@ -1091,13 +1129,13 @@ pub(super) fn nav_tag_color(name: &str, theme: &gpui_kit::component::Theme) -> H
 #[cfg(test)]
 mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use super::{
-        batches_present, format_row_estimate, more_row_label, nav_glob_match,
+        batches_present, format_row_estimate, key_in_subtree, more_row_label, nav_glob_match,
         nav_highlight_segments, nav_mask_passes, nav_node_matches, nav_object_masked,
         nav_snippet_segments, nav_tag_palette_index, placeholder_decision, placeholder_message,
-        PUMP_BATCH_ORDER,
+        prune_expanded, prune_subtree_keys, selected_key_in_subtree, PUMP_BATCH_ORDER,
     };
     use crate::model::{NavNode, NavNodeKind, NavPath};
     use crate::nav_host::ObjectMaskRule;
@@ -1471,5 +1509,75 @@ mod tests {
             PUMP_BATCH_ORDER,
             ["load", "sql", "test", "row_estimate", "connect", "search"]
         );
+    }
+
+    /// D9：子树判定——根 key 与前缀内命中，前缀外保留；前缀与根不混判。
+    #[test]
+    fn key_in_subtree_matches_root_and_prefix_only() {
+        let root = "C_1/shop";
+        let prefix = "C_1/shop/";
+        assert!(key_in_subtree(root, root, prefix));
+        assert!(key_in_subtree("C_1/shop/public", root, prefix));
+        assert!(key_in_subtree("C_1/shop/public/orders", root, prefix));
+        assert!(!key_in_subtree("C_1/other", root, prefix));
+        assert!(!key_in_subtree("C_1", root, prefix));
+    }
+
+    /// D9：`prune_subtree_keys` 回收集合内根与前缀 key，保留其余（refresh_node 清
+    /// jumped/loading 同口径）。
+    #[test]
+    fn prune_subtree_keys_drops_root_and_descendants_only() {
+        let set: HashSet<String> = [
+            "C_1/shop".to_string(),
+            "C_1/shop/public".to_string(),
+            "C_1/other".to_string(),
+            "C_2".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let kept = prune_subtree_keys(&set, "C_1/shop", "C_1/shop/");
+        assert_eq!(kept, ["C_1/other".to_string(), "C_2".to_string()].into_iter().collect());
+    }
+
+    /// D9：选中锚点落子树内命中清空；子树外保持；None 不命中。
+    #[test]
+    fn selected_key_in_subtree_detects_inside_and_outside() {
+        let root = "C_1/shop";
+        let prefix = "C_1/shop/";
+        assert!(selected_key_in_subtree(Some("C_1/shop"), root, prefix));
+        assert!(selected_key_in_subtree(Some("C_1/shop/public/orders"), root, prefix));
+        assert!(!selected_key_in_subtree(Some("C_1/other"), root, prefix));
+        assert!(!selected_key_in_subtree(None, root, prefix));
+    }
+
+    /// D9：`prune_expanded` 保留现存 key 与连接根白名单，剔除已删节点残留；
+    /// 父链容器 key 在现存集合内不会被误清（R2 风险反证）。
+    #[test]
+    fn prune_expanded_keeps_existing_and_roots_drops_orphans() {
+        let expanded: HashSet<String> = [
+            "C_1".to_string(),                 // 连接根：root 白名单保留
+            "C_1/shop".to_string(),            // 现存容器：保留
+            "C_1/shop/public".to_string(),      // 现存容器：保留
+            "C_1/shop/public/orders".to_string(), // 现存节点：保留
+            "C_1/shop/public/deleted".to_string(), // 已删节点：剔除
+            "C_2".to_string(),                 // 另一连接根：root 白名单保留
+        ]
+        .into_iter()
+        .collect();
+        let existing: HashSet<String> = [
+            "C_1/shop".to_string(),
+            "C_1/shop/public".to_string(),
+            "C_1/shop/public/orders".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let roots: HashSet<String> = ["C_1".to_string(), "C_2".to_string()].into_iter().collect();
+        let kept = prune_expanded(&expanded, &existing, &roots);
+        assert!(kept.contains("C_1"));
+        assert!(kept.contains("C_1/shop"));
+        assert!(kept.contains("C_1/shop/public"));
+        assert!(kept.contains("C_1/shop/public/orders"));
+        assert!(kept.contains("C_2"));
+        assert!(!kept.contains("C_1/shop/public/deleted"));
     }
 }

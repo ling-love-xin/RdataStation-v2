@@ -7,10 +7,10 @@
 // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::nav_type_badge;
 use super::{
-    NavBadgeStatus, NavViewState, RevealTarget, insight_schema_target, nav_badge_pulses,
-    nav_data_target, nav_forget_attempt, nav_kind_icon, nav_load_is_retry, nav_merge_page,
-    nav_object_type_label, nav_order_members, nav_relative_time, nav_reorder, nav_scope_tooltip,
-    nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
+    NavBadgeStatus, NavViewState, RevealTarget, insight_schema_target, key_in_subtree,
+    nav_badge_pulses, nav_data_target, nav_forget_attempt, nav_kind_icon, nav_load_is_retry,
+    nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time, nav_reorder,
+    nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
     nav_selection_is_persistable, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
     search_hit_row_id, search_hit_row_key,
 };
@@ -440,6 +440,187 @@ fn connect_success_skips_collapsed_root(cx: &mut gpui_kit::TestAppContext) {
     assert!(
         !attempted,
         "未展开的连接根不自动重载"
+    );
+}
+
+/// D9（#64）：`refresh_node` 刷新 catalog 子树——expanded 逐层保留（diff-merge 口径），
+/// 子树内的定位窗 / 在途标记 / 选中锚点一并清空；子树外簿记不动。
+#[gpui_kit::test]
+fn refresh_node_keeps_expanded_and_clears_subtree_bookkeeping(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    let catalog_key = NavNode::child_key(conn, &["shop"]);
+    let schema_key = NavNode::child_key(conn, &["shop", "public"]);
+    let folder_key = NavNode::child_key(conn, &["shop", "public", NavFolder::Tables.key()]);
+    let selected = NavNode::child_key(conn, &["shop", "public", "orders"]);
+    let prefix = format!("{catalog_key}/");
+    cx.update(|_window, cx| {
+        let mut s = view.read(cx).nav.borrow_mut();
+        for key in [conn, &catalog_key, &schema_key, &folder_key] {
+            s.expanded.insert(key.to_string());
+        }
+        s.jumped.insert(folder_key.clone(), 3);
+        s.loading.insert(schema_key.clone());
+        s.selected_key = Some(selected.clone());
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            // path = None：不重新入队后台加载，只验证清场口径。
+            v.refresh_node(conn, &catalog_key, None, cx);
+        });
+    });
+    let snapshot = cx.update(|_window, cx| {
+        let s = view.read(cx).nav.borrow();
+        (
+            s.expanded.iter().cloned().collect::<Vec<_>>(),
+            s.jumped.keys().cloned().collect::<Vec<_>>(),
+            s.loading.iter().cloned().collect::<Vec<_>>(),
+            s.selected_key.clone(),
+        )
+    });
+    let (expanded, jumped, loading, selected_key) = snapshot;
+    for key in [conn, &catalog_key, &schema_key, &folder_key] {
+        assert!(expanded.contains(&key.to_string()), "expanded 应保留子树展开态：{key}");
+    }
+    assert!(jumped.is_empty(), "子树内定位窗应随刷新清空");
+    // 子树内在途标记应清空；子树外（连接根）由 render 恢复机制重新入队，属正常在途。
+    let subtree_loading: Vec<_> = loading
+        .iter()
+        .filter(|k| key_in_subtree(k, &catalog_key, &prefix))
+        .cloned()
+        .collect();
+    assert!(
+        subtree_loading.is_empty(),
+        "子树内在途标记应随刷新清空，残留 {subtree_loading:?}"
+    );
+    assert_eq!(selected_key, None, "落子树内的选中锚点应清空");
+}
+
+/// D9（#64）：`refresh_node` 不清子树外的选中锚点（刷新局部子树，不打断别处选中）。
+#[gpui_kit::test]
+fn refresh_node_keeps_selection_outside_subtree(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    let catalog_key = NavNode::child_key(conn, &["shop"]);
+    cx.update(|_window, cx| {
+        view.read(cx)
+            .nav
+            .borrow_mut()
+            .selected_key = Some(conn.to_string());
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.refresh_node(conn, &catalog_key, None, cx);
+        });
+    });
+    let selected = cx.update(|_window, cx| view.read(cx).nav.borrow().selected_key.clone());
+    assert_eq!(
+        selected,
+        Some(conn.to_string()),
+        "子树外的选中锚点应保持不动"
+    );
+}
+
+/// D9（#64）：`refresh_all` 整盘清场——定位窗 / 选中锚点清空，子层在途标记回收；
+/// 仍展开的连接根 expanded 保留（下面按 roots 重载）。
+#[gpui_kit::test]
+fn refresh_all_clears_bookkeeping_keeps_root_expanded(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    let orphan_loading = NavNode::child_key(conn, &["shop", "public"]);
+    cx.update(|_window, cx| {
+        let mut s = view.read(cx).nav.borrow_mut();
+        s.expanded.insert(conn.to_string());
+        s.jumped.insert(conn.to_string(), 0);
+        s.loading.insert(orphan_loading.clone());
+        s.selected_key = Some(conn.to_string());
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.refresh_all(cx));
+    });
+    let snapshot = cx.update(|_window, cx| {
+        let s = view.read(cx).nav.borrow();
+        (
+            s.expanded.contains(conn),
+            s.jumped.is_empty(),
+            !s.loading.contains(&orphan_loading),
+            s.selected_key.is_none(),
+        )
+    });
+    let (root_expanded, jumped_cleared, orphan_loading_cleared, selection_cleared) = snapshot;
+    assert!(root_expanded, "仍展开的连接根 expanded 应保留");
+    assert!(jumped_cleared, "定位窗应整盘清空");
+    assert!(orphan_loading_cleared, "子层在途标记应随刷新清空");
+    assert!(selection_cleared, "选中锚点应整盘清空");
+}
+
+/// D9（#64）：首屏整体替换后回收 expanded 残留——旧回填树里已不存在的节点 key 剔除，
+/// 父链容器与新回填节点保留（R2：白名单不足误伤父链的反证）。
+#[gpui_kit::test]
+fn first_page_replace_prunes_orphan_expanded_keys(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    let catalog_key = NavNode::child_key(conn, &["shop"]);
+    let schema_key = NavNode::child_key(conn, &["shop", "public"]);
+    let folder_key = NavNode::child_key(conn, &["shop", "public", NavFolder::Tables.key()]);
+    let old_tab = NavNode::child_key(conn, &["shop", "public", "deleted"]);
+    cx.update(|_window, cx| {
+        seed_reveal_state(
+            &view.read(cx),
+            conn,
+            "shop",
+            "public",
+            vec![table_node(conn, "shop", "public", "deleted")],
+            Some(1),
+        );
+        let mut s = view.read(cx).nav.borrow_mut();
+        for key in [conn, &catalog_key, &schema_key, &folder_key, &old_tab] {
+            s.expanded.insert(key.to_string());
+        }
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_load_results(
+                vec![crate::nav_jobs::LoadResult {
+                    key: folder_key.clone(),
+                    conn_id: conn.to_string(),
+                    project_root: None,
+                    path: NavPath::Folder {
+                        catalog: "shop".to_string(),
+                        schema: "public".to_string(),
+                        folder: NavFolder::Tables,
+                    },
+                    offset: 0,
+                    jumped_to: None,
+                    conn_fingerprint: None,
+                    result: Ok(crate::navigator_service::NavPage {
+                        nodes: vec![table_node(conn, "shop", "public", "orders")],
+                        total: 1,
+                        offset: 0,
+                        has_more: false,
+                    }),
+                }],
+                cx,
+            );
+        });
+    });
+    let expanded = cx.update(|_window, cx| {
+        view.read(cx)
+            .nav
+            .borrow()
+            .expanded
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    // 父链容器 key 在现存集合 / 连接根白名单内，必须保留；旧节点 key 已不在新回填树内，
+    // 必须剔除。新回填的叶子节点默认收起、本就不在 expanded（回收只剔除残留，不新增）。
+    for key in [conn, &catalog_key, &schema_key, &folder_key] {
+        assert!(expanded.contains(&key.to_string()), "父链容器应保留：{key}");
+    }
+    assert!(
+        !expanded.contains(&old_tab),
+        "已不在新回填树内的旧节点 key 应被回收"
     );
 }
 
