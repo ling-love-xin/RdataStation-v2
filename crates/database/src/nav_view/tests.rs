@@ -19,7 +19,7 @@ use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef,
 };
 use property::PropertyKind;
-use crate::nav_rows::NavRow;
+use crate::nav_rows::{NavRow, PlaceholderKind};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 // 窗口级验收要用的两个 trait（显式导入，不通配：`use gpui_kit::*` 会把 `test` 宏带进来）。
@@ -2107,4 +2107,162 @@ fn conn_menu_gates_only_refresh_on_disconnect() {
     assert!(nav_conn_menu_enabled(NavActionId::CopyName, false));
     assert!(nav_conn_menu_enabled(NavActionId::InsightPanel, false));
     assert!(nav_conn_menu_enabled(NavActionId::ShowProperties, false));
+}
+
+// ---------- B5-2 D7 空态占位行 ----------
+
+/// 顶层本地筛选无匹配：摆一条 FilterEmpty 占位；占位行不可选、不进键盘漫游。
+#[gpui_kit::test]
+fn placeholder_filter_empty_at_root_is_not_selectable_and_skipped_by_roaming(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            let mut nav = view.nav.borrow_mut();
+            nav.groups_loaded = true;
+            nav.loading.clear();
+            nav.attempted.clear();
+            nav.expanded.clear();
+        });
+    });
+    // 走输入框写筛选词：render 每帧从输入框重算 `filter`，直接改状态会被冲掉（1 字不达
+    // 索引搜索 2 字门槛，`search_query` 保持 None）。
+    cx.update(|window, cx| set_search_text(&view, "z", window, cx));
+    let rows = assert_collect_matches_render(&view, cx, "顶层筛选空态");
+    assert_eq!(rows.len(), 1, "连接壳被滤掉后只剩一条占位行，实际：{:?}", all_keys(&rows));
+    let NavRow::Placeholder {
+        kind,
+        depth,
+        scope_key,
+        message,
+    } = &rows[0]
+    else {
+        panic!("首行应为占位行，实际：{:?}", all_keys(&rows));
+    };
+    assert_eq!(*kind, PlaceholderKind::FilterEmpty);
+    assert_eq!(*depth, 0);
+    assert_eq!(scope_key, "root");
+    assert_eq!(message, "当前筛选无匹配对象");
+    assert!(!rows[0].selectable(), "占位行不可选中");
+    assert!(rows[0].node().is_none());
+    assert!(rows[0].conn_id().is_none());
+    assert!(
+        roam_keys(&rows).is_empty(),
+        "占位行不进键盘漫游序列"
+    );
+}
+
+/// 顶层索引搜索完成且无命中：连接壳仍可见，但对象行无 → SearchEmpty 占位排在连接行之后；
+/// 占位行不进漫游，消息带上原词。
+#[gpui_kit::test]
+fn placeholder_search_empty_lands_after_connection_shell_and_carries_query(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |view, _cx| {
+            let mut nav = view.nav.borrow_mut();
+            nav.groups_loaded = true;
+            nav.loading.clear();
+            nav.attempted.clear();
+            nav.expanded.clear();
+            nav.filter = String::new();
+            nav.search_query = Some("abc".to_string());
+            nav.search_searched = 1;
+            nav.search_hits.clear();
+        });
+    });
+    let rows = assert_collect_matches_render(&view, cx, "顶层搜索空态");
+    let placeholder = rows
+        .iter()
+        .find(|row| matches!(row, NavRow::Placeholder { .. }))
+        .expect("应有一条搜索空态占位");
+    let NavRow::Placeholder {
+        kind,
+        depth,
+        scope_key,
+        message,
+    } = placeholder
+    else {
+        unreachable!()
+    };
+    assert_eq!(*kind, PlaceholderKind::SearchEmpty);
+    assert_eq!(*depth, 0);
+    assert_eq!(scope_key, "root");
+    assert_eq!(message, "索引中未找到「abc」");
+    // 未分组头 + 连接壳在前、占位在后；漫游序列只含连接壳，占位不进序列。
+    let group_header = format!("group:{}", engine::persistence::UNGROUPED_SCOPE);
+    assert_eq!(
+        all_keys(&rows),
+        ids(&[&group_header, conn, &placeholder.key()])
+    );
+    assert_eq!(roam_keys(&rows), ids(&[conn]));
+}
+
+/// 容器内本地筛选：连接壳靠标签通过、schema 自身名命中、子层对象全不匹配 →
+/// schema 下摆容器级 FilterEmpty；分页未拉完或在途加载时不摆（由 `collect_node_rows`
+/// 门控，此处钉住摆出来的那一条）。
+#[gpui_kit::test]
+fn placeholder_filter_empty_lands_inside_the_matching_container(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let catalog_key = "G_1/shop";
+    let schema_key = "G_1/shop/public";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        seed_reveal_state(
+            &view.read(cx),
+            conn,
+            "shop",
+            "public",
+            vec![table_node(conn, "shop", "public", "customers")],
+            None,
+        );
+        view.update(cx, |view, _cx| {
+            let mut nav = view.nav.borrow_mut();
+            nav.groups_loaded = true;
+            nav.loading.clear();
+            nav.attempted.clear();
+            nav.expanded.clear();
+            // 标签名与筛选词一致：连接壳靠标签通过；schema 名 "public" 命中、表名不命中。
+            nav.tags.insert(
+                conn.to_string(),
+                vec![tag::Tag {
+                    id: "t1".to_string(),
+                    name: "public".to_string(),
+                    color: None,
+                    icon: None,
+                    scope: tag::SCOPE_GLOBAL.to_string(),
+                    created_at: String::new(),
+                    deleted_at: None,
+                }],
+            );
+            for key in [conn, catalog_key, schema_key] {
+                nav.expanded.insert(key.to_string());
+            }
+        });
+    });
+    // 1 字 "p"：命中标签与 schema 名 "public"，不命中表 customers；不达索引 2 字门槛。
+    cx.update(|window, cx| set_search_text(&view, "p", window, cx));
+    let rows = assert_collect_matches_render(&view, cx, "容器内筛选空态");
+    let placeholder = rows
+        .iter()
+        .find(|row| matches!(row, NavRow::Placeholder { .. }))
+        .expect("schema 下应有一条容器级占位");
+    let NavRow::Placeholder {
+        kind,
+        depth,
+        scope_key,
+        ..
+    } = placeholder
+    else {
+        unreachable!()
+    };
+    assert_eq!(*kind, PlaceholderKind::FilterEmpty);
+    assert_eq!(*depth, 3, "占位缩进与 schema 子节点同档");
+    assert_eq!(scope_key, schema_key, "占位挂在命中的 schema 容器名下");
+    // 连接壳 / catalog / schema 三行可漫游，占位不进序列。
+    assert_eq!(
+        roam_keys(&rows),
+        ids(&[conn, catalog_key, schema_key]),
+        "占位行不可漫游，序列只剩树行"
+    );
 }

@@ -25,6 +25,32 @@ use workbench_shell::model::ConnectionItem;
 
 use crate::model::NavNode;
 
+/// 树内空态占位行类别。
+///
+/// 与 DBeaver `TreeNodeFilter / TreeNodeSearch / TreeNodeFilterSearch` 三态对应（D:156-159）；
+/// 本批不设独立 Loading 占位行——加载中状态由节点行内 subline 紧凑承载（定高行体系约束，
+/// 见 `.rds/tmp/b5-design.md` §4.5）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PlaceholderKind {
+    /// 本地筛选词非空，已加载对象无一匹配。
+    FilterEmpty,
+    /// 索引搜索已完成且无命中，树内也无可见对象行。
+    SearchEmpty,
+    /// 本地筛选与索引搜索同时为空态。
+    FilterSearchEmpty,
+}
+
+impl PlaceholderKind {
+    /// 业务键后缀（`{scope}#placeholder:{slug}`）。
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            PlaceholderKind::FilterEmpty => "filter-empty",
+            PlaceholderKind::SearchEmpty => "search-empty",
+            PlaceholderKind::FilterSearchEmpty => "filter-search-empty",
+        }
+    }
+}
+
 /// 一行的身份与类别（决定渲染时交给哪个 `render_*`）。
 ///
 /// 载荷按类别带：分组头要计数、连接 / 引用行要连接本体、树行要节点与层级。
@@ -85,6 +111,15 @@ pub(crate) enum NavRow {
         /// 重复的业务键会让键盘漫游在原地来回弹（`nav_move` 按 `position` 找当前位置）。
         ix: usize,
     },
+    /// 空态占位行（筛选无匹配 / 索引搜索无命中 / 两者叠加）。
+    ///
+    /// 不可选中、不进键盘漫游、不挂右键菜单；只承担「这里确实没有东西」的状态可见性。
+    Placeholder {
+        kind: PlaceholderKind,
+        depth: usize,
+        scope_key: String,
+        message: String,
+    },
 }
 
 /// 搜索命中行的业务键（`search:{位次}:{引用}`）。
@@ -118,6 +153,9 @@ impl NavRow {
             NavRow::More { node, .. } => format!("{}#more", node.key),
             NavRow::Jump { node, .. } => format!("{}#jump", node.key),
             NavRow::SearchHit { hit, ix } => search_hit_row_key(*ix, hit),
+            NavRow::Placeholder {
+                kind, scope_key, ..
+            } => format!("{scope_key}#placeholder:{}", kind.slug()),
         }
     }
 
@@ -139,6 +177,11 @@ impl NavRow {
                 node, scope_key, ..
             } => format!("nav-jumped-{scope_key}::{}", node.key),
             NavRow::SearchHit { hit, ix } => search_hit_row_id(*ix, hit),
+            NavRow::Placeholder {
+                kind,
+                scope_key,
+                ..
+            } => format!("nav-placeholder-{scope_key}::{}", kind.slug()),
         }
     }
 
@@ -156,15 +199,17 @@ impl NavRow {
                 Some(node.connection_id.as_str())
             }
             NavRow::SearchHit { hit, .. } => Some(hit.conn_id.as_str()),
+            NavRow::Placeholder { .. } => None,
         }
     }
 
-    /// 能不能被键盘漫游选中（分组头是容器标题，不参与漫游；「更多」「定位」「搜索命中」可点可选中）。
+    /// 能不能被键盘漫游选中（分组头 / 占位行是容器标题或提示，不参与漫游；
+    /// 「更多」「定位」「搜索命中」可点可选中）。
     pub(crate) fn selectable(&self) -> bool {
-        !matches!(self, NavRow::GroupHeader { .. })
+        !matches!(self, NavRow::GroupHeader { .. } | NavRow::Placeholder { .. })
     }
 
-    /// 树行 / 「更多」/「定位」行携带的节点（连接 / 分组头 / 搜索命中为 `None`）。
+    /// 树行 / 「更多」/「定位」行携带的节点（连接 / 分组头 / 搜索命中 / 占位行为 `None`）。
     pub(crate) fn node(&self) -> Option<&NavNode> {
         match self {
             NavRow::Tree { node, .. } | NavRow::More { node, .. } | NavRow::Jump { node, .. } => {
@@ -179,7 +224,8 @@ impl NavRow {
         match self {
             NavRow::Tree { depth, .. }
             | NavRow::More { depth, .. }
-            | NavRow::Jump { depth, .. } => *depth,
+            | NavRow::Jump { depth, .. }
+            | NavRow::Placeholder { depth, .. } => *depth,
             _ => 0,
         }
     }

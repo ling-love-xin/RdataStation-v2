@@ -84,6 +84,14 @@ impl NavView {
             NavRow::SearchHit { hit, ix } => {
                 self.render_search_hit(hit, *ix, cx).into_any_element()
             }
+            NavRow::Placeholder {
+                kind,
+                depth,
+                scope_key,
+                message,
+            } => self
+                .render_placeholder_row(*kind, *depth, scope_key, message, cx)
+                .into_any_element(),
         }
     }
 
@@ -134,7 +142,7 @@ impl NavView {
         order.clear();
         for row in &self.rows {
             let (conn_id, path, property, has_children, name) = match row {
-                NavRow::GroupHeader { .. } => continue,
+                NavRow::GroupHeader { .. } | NavRow::Placeholder { .. } => continue,
                 NavRow::Connection { conn, .. } => (
                     conn.id.clone(),
                     Some(NavPath::Connection),
@@ -390,6 +398,52 @@ impl NavView {
                 }
             }
         }
+
+        // 顶层空态：整棵树无可见行时，按「本地筛选 / 索引搜索 / 两者叠加」三态摆一条
+        // 占位行（分组头 / 搜索命中 / 已有占位不算树行；任一在途加载先不摆空态）。
+        {
+            let view = self.nav.borrow();
+            let filter_active = !view.filter.is_empty();
+            let search_active = view.search_query.is_some();
+            let search_done = view.search_searched > 0;
+            let hits_empty = view.search_hits.is_empty();
+            let loading = !view.loading.is_empty();
+            // 树行 = 连接壳 / 引用行 / 对象行（筛选空态口径）；对象行 = 树容器与叶子
+            // （搜索空态口径：搜索模式下连接壳不算「对象」）。
+            let tree_rows = rows.iter().any(|row| {
+                matches!(
+                    row,
+                    NavRow::Connection { .. }
+                        | NavRow::Reference { .. }
+                        | NavRow::Tree { .. }
+                        | NavRow::More { .. }
+                        | NavRow::Jump { .. }
+                )
+            });
+            let object_rows = rows.iter().any(|row| {
+                matches!(
+                    row,
+                    NavRow::Tree { .. } | NavRow::More { .. } | NavRow::Jump { .. }
+                )
+            });
+            if let Some(kind) = placeholder_decision(
+                filter_active,
+                search_active,
+                search_done,
+                hits_empty,
+                tree_rows,
+                object_rows,
+                loading,
+            ) {
+                let query = view.search_query.as_deref().unwrap_or_default().to_string();
+                rows.push(NavRow::Placeholder {
+                    kind,
+                    depth: 0,
+                    scope_key: "root".to_string(),
+                    message: placeholder_message(kind, &query),
+                });
+            }
+        }
         rows
     }
 
@@ -456,8 +510,27 @@ impl NavView {
         if !expanded {
             return;
         }
+        let (filter_active, search_active, loading) = {
+            let view = self.nav.borrow();
+            (
+                !view.filter.is_empty(),
+                view.search_query.is_some(),
+                view.loading.contains(&conn.id),
+            )
+        };
+        let before = rows.len();
         for child in &children {
             self.collect_node_rows(rows, child, 1, scope_key, cx);
+        }
+        // 连接根展开、顶层对象无一被本地筛选命中：连接级空态兜底（folder / schema 层
+        // 各自的容器占位已由 `collect_node_rows` 负责；索引空命中由顶层统一判定）。
+        if !search_active && filter_active && !loading && rows.len() == before {
+            rows.push(NavRow::Placeholder {
+                kind: PlaceholderKind::FilterEmpty,
+                depth: 1,
+                scope_key: conn.id.clone(),
+                message: placeholder_message(PlaceholderKind::FilterEmpty, ""),
+            });
         }
     }
 
@@ -476,7 +549,7 @@ impl NavView {
         // 同一帧把全部展开节点入队（真机：展开连接根 → 6 个 schema 任务瞬间入队 →
         // 池被打爆 / acquire 8s 超时）。内容加载只由点击（`toggle_nav_node`）触发。
         let expanded = self.nav.borrow().expanded.contains(&node.key);
-        let (skip, expanded_eff, children) = {
+        let (skip, expanded_eff, children, pending_more, search_active) = {
             let view = self.nav.borrow();
             let children = view.children.get(&node.key).cloned().unwrap_or_default();
             // 分页未拉完时，本地过滤只能覆盖**已加载**部分：此时不能因“已加载的都不匹配”
@@ -489,7 +562,13 @@ impl NavView {
             let skip = !filter.is_empty()
                 && !pending_more
                 && !nav_node_matches(&view.children, node, &filter);
-            (skip, expanded || !filter.is_empty(), children)
+            (
+                skip,
+                expanded || !filter.is_empty(),
+                children,
+                pending_more,
+                view.search_query.is_some(),
+            )
         };
         if skip {
             return;
@@ -536,8 +615,25 @@ impl NavView {
                 position,
             });
         }
+        let before = rows.len();
         for child in &children {
             self.collect_node_rows(rows, child, depth + 1, scope_key, cx);
+        }
+        // 本地筛选下容器自身可见、子层无一匹配：摆一条容器级空态占位。
+        // 索引搜索空命中属整面板语义，由 `collect_nav_rows` 顶层统一判定，容器内不重复摆。
+        let loading = self.nav.borrow().loading.contains(&node.key);
+        if !pending_more
+            && !search_active
+            && !filter.is_empty()
+            && !loading
+            && rows.len() == before
+        {
+            rows.push(NavRow::Placeholder {
+                kind: PlaceholderKind::FilterEmpty,
+                depth: depth + 1,
+                scope_key: node.key.clone(),
+                message: placeholder_message(PlaceholderKind::FilterEmpty, ""),
+            });
         }
         // 「加载更多」只剩一个意思：数据侧还有没取的。
         // **定位窗口例外**：那时的行集是一窗不是前缀，按条数往后翻会跳错地方，
@@ -2638,22 +2734,12 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let indent = ui::TREE_BASE_PADDING + (depth as f32 + 1.0) * ui::TREE_INDENT;
         let entity = cx.entity();
         let key = node.key.clone();
-        let to_fetch = total.saturating_sub(loaded);
         // 带筛选时，本地过滤只能命中**已加载**的那些：这一点必须说出口，
         // 否则用户会以为“搜不到 = 库里没有”。
         let filtering = !self.nav.borrow().filter.is_empty();
-        let scope = if filtering {
-            "；筛选仅覆盖已加载"
-        } else {
-            ""
-        };
         // 取数中的那一帧改文案：否则行外观不变、再点也静默无反应（单线程串行队列）。
         let fetching = self.nav.borrow().loading.contains(&key);
-        let label = if fetching {
-            "加载中…".to_string()
-        } else {
-            format!("加载更多（余 {to_fetch} / 共 {total}{scope}）")
-        };
+        let label = more_row_label(loaded, total, filtering, fetching);
         let selected = self.nav_row_selected(&key);
         let conn_id = node.connection_id.clone();
         let path = node.expand_path.clone();
@@ -2807,6 +2893,42 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     cx.notify();
                 });
             })
+    }
+
+    /// 空态占位行：不可选中、不进漫游、不挂菜单；只承担「这里确实没有东西」的状态可见性。
+    ///
+    /// 版式与「已定位」说明行同一档（muted 文本 + 定高槽位 + 缩进公式），但不挂点击 /
+    /// 悬停 / 选中反馈——它不是可操作对象。
+    pub(super) fn render_placeholder_row(
+        &self,
+        kind: PlaceholderKind,
+        depth: usize,
+        scope_key: &str,
+        message: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let indent = ui::TREE_BASE_PADDING + (depth as f32 + 1.0) * ui::TREE_INDENT;
+        div()
+            .id(format!("nav-placeholder-{scope_key}::{}", kind.slug()))
+            .debug_selector(|| "nav-row-placeholder".to_string())
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(rems(ui::NAV_ROW_TREE))
+            .pl(rems(indent))
+            .pr_1()
+            .rounded_md()
+            .relative()
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(message.to_string()),
+            )
     }
 
     /// 一条搜索命中行（索引搜索）：类别图标 + 名称（高亮命中）+ 类别 / 归属（`schema · 连接`）。

@@ -65,7 +65,7 @@ use crate::nav::actions::NavActionId;
 use crate::nav::family_profile;
 use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
-use crate::nav_rows::{NavRow, search_hit_row_id, search_hit_row_key};
+use crate::nav_rows::{NavRow, PlaceholderKind, search_hit_row_id, search_hit_row_key};
 use crate::sql_gen::DmlKind;
 use engine::persistence::driver_catalog::DriverMeta;
 

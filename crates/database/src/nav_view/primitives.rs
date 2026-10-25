@@ -234,6 +234,24 @@ pub(super) fn format_row_estimate(n: u64) -> String {
     }
 }
 
+/// 「加载更多」行文案（纯函数；DBeaver `visible/total` 口径，D:13）。
+///
+/// - `fetching`：本轮点过「加载更多」、后台在途 → 取数中文案，禁用其余计数口径；
+/// - `filtering`：本地筛选词非空且分页未拉完 → 追加「筛选仅覆盖已加载」，避免用户误以为
+///   “搜不到 = 库里没有”；
+/// - 常规：`可见 {loaded} / 共 {total}`。
+pub(super) fn more_row_label(loaded: usize, total: usize, filtering: bool, fetching: bool) -> String {
+    if fetching {
+        return "加载中…".to_string();
+    }
+    let base = format!("可见 {loaded} / 共 {total}");
+    if filtering {
+        format!("{base}；筛选仅覆盖已加载")
+    } else {
+        base
+    }
+}
+
 /// 类型徽标映射：数据库类型 id →（形状资产路径，2 字母缩写）。
 ///
 /// 形状取自 `gpui-kit-assets` 全量 Lucide（`AllAssets` 已注册，无需新增资产）；
@@ -577,6 +595,47 @@ pub(super) fn nav_object_type_label(object_type: &str) -> &'static str {
 /// 搜索词是否够格打一次索引搜索（太短时命中面过大，且首字符几乎必然还要改）。
 pub(super) fn nav_search_query_ready(query: &str) -> bool {
     query.trim().chars().count() >= 2
+}
+
+/// 树内空态占位判定（纯函数；在途加载中 / 已有可见行时不摆占位）。
+///
+/// 参数口径：
+/// - `filter_active`：本地筛选词非空；
+/// - `search_active`：索引搜索词非空；
+/// - `search_done`：一批索引搜索已回填（`search_searched > 0`；进行中不摆空态）；
+/// - `hits_empty`：索引命中为空；
+/// - `tree_rows_rendered`：当前作用域内已有树行（连接壳 / 分组内对象行；筛选空态用）；
+/// - `object_rows_rendered`：已有对象行（表 / 视图等叶子与容器；搜索空态用——搜索模式下
+///   连接壳不算「对象」，见 `.rds/tmp/b5-design.md` §4.5）；
+/// - `loading`：当前作用域仍在后台取数。
+pub(super) fn placeholder_decision(
+    filter_active: bool,
+    search_active: bool,
+    search_done: bool,
+    hits_empty: bool,
+    tree_rows_rendered: bool,
+    object_rows_rendered: bool,
+    loading: bool,
+) -> Option<PlaceholderKind> {
+    if loading {
+        return None;
+    }
+    let search_missing = search_active && search_done && hits_empty;
+    match (filter_active, search_missing) {
+        (true, false) => (!tree_rows_rendered).then_some(PlaceholderKind::FilterEmpty),
+        (false, true) => (!object_rows_rendered).then_some(PlaceholderKind::SearchEmpty),
+        (true, true) => (!object_rows_rendered).then_some(PlaceholderKind::FilterSearchEmpty),
+        (false, false) => None,
+    }
+}
+
+/// 占位行文案（索引空态带上原词；其余两类为固定说明）。
+pub(super) fn placeholder_message(kind: PlaceholderKind, query: &str) -> String {
+    match kind {
+        PlaceholderKind::FilterEmpty => "当前筛选无匹配对象".to_string(),
+        PlaceholderKind::SearchEmpty => format!("索引中未找到「{query}」"),
+        PlaceholderKind::FilterSearchEmpty => "筛选与索引搜索均无匹配对象".to_string(),
+    }
 }
 
 /// 选中的这一行**值不值得跨重启记住**。
@@ -932,7 +991,8 @@ pub(super) fn nav_row_height(
         NavRow::Tree { .. }
         | NavRow::More { .. }
         | NavRow::Jump { .. }
-        | NavRow::SearchHit { .. } => ui::NAV_ROW_TREE,
+        | NavRow::SearchHit { .. }
+        | NavRow::Placeholder { .. } => ui::NAV_ROW_TREE,
     };
     let mut height = tree::RowHeight::new(base);
     match row {
@@ -1004,11 +1064,13 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        format_row_estimate, nav_glob_match, nav_highlight_segments, nav_mask_passes,
-        nav_node_matches, nav_object_masked, nav_snippet_segments, nav_tag_palette_index,
+        format_row_estimate, more_row_label, nav_glob_match, nav_highlight_segments,
+        nav_mask_passes, nav_node_matches, nav_object_masked, nav_snippet_segments,
+        nav_tag_palette_index, placeholder_decision, placeholder_message,
     };
     use crate::model::{NavNode, NavNodeKind};
     use crate::nav_host::ObjectMaskRule;
+    use crate::nav_rows::PlaceholderKind;
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
@@ -1215,5 +1277,67 @@ mod tests {
         assert!(!nav_object_masked(None, Some(&global), "orders"));
         // 两层都空 → 显示。
         assert!(!nav_object_masked(None, None, "orders"));
+    }
+
+    /// 三态占位判定：本地筛选空 / 索引搜索空 / 两者叠加；其余条件一律不摆。
+    #[test]
+    fn placeholder_decision_picks_the_right_empty_state() {
+        // 本地筛选无匹配（索引未触发；树行全空）。
+        assert_eq!(
+            placeholder_decision(true, false, false, true, false, false, false),
+            Some(PlaceholderKind::FilterEmpty)
+        );
+        // 索引搜索已完成且无命中，树内也无对象行（连接壳不算对象行）。
+        assert_eq!(
+            placeholder_decision(false, true, true, true, true, false, false),
+            Some(PlaceholderKind::SearchEmpty)
+        );
+        // 两者叠加。
+        assert_eq!(
+            placeholder_decision(true, true, true, true, true, false, false),
+            Some(PlaceholderKind::FilterSearchEmpty)
+        );
+        // 已有可见行：不摆任何占位。
+        assert!(placeholder_decision(true, false, false, true, true, false, false).is_none());
+        assert!(placeholder_decision(false, true, true, true, false, true, false).is_none());
+        assert!(placeholder_decision(true, true, true, true, false, true, false).is_none());
+        // 在途加载中：先不摆空态，避免结果回填瞬间空态闪现。
+        assert!(placeholder_decision(true, false, false, true, false, false, true).is_none());
+        assert!(placeholder_decision(false, true, true, true, true, false, true).is_none());
+        // 索引搜索进行中（未回填）：不摆搜索空态。
+        assert!(placeholder_decision(false, true, false, true, true, false, false).is_none());
+        // 索引已有命中：不摆搜索空态。
+        assert!(placeholder_decision(false, true, true, false, true, false, false).is_none());
+        // 两个通道都不活跃：不摆。
+        assert!(placeholder_decision(false, false, false, true, false, false, false).is_none());
+    }
+
+    /// 占位文案：索引空态带上原词，其余两类为固定说明。
+    #[test]
+    fn placeholder_message_mentions_the_query_for_search_empty() {
+        assert_eq!(
+            placeholder_message(PlaceholderKind::FilterEmpty, ""),
+            "当前筛选无匹配对象"
+        );
+        assert_eq!(
+            placeholder_message(PlaceholderKind::SearchEmpty, "orders"),
+            "索引中未找到「orders」"
+        );
+        assert_eq!(
+            placeholder_message(PlaceholderKind::FilterSearchEmpty, ""),
+            "筛选与索引搜索均无匹配对象"
+        );
+    }
+
+    /// 「加载更多」行文案：常规可见/共；筛选追加覆盖范围提示；取数中固定文案。
+    #[test]
+    fn more_row_label_follows_filter_and_fetching_state() {
+        assert_eq!(more_row_label(2, 5, false, false), "可见 2 / 共 5");
+        assert_eq!(
+            more_row_label(2, 5, true, false),
+            "可见 2 / 共 5；筛选仅覆盖已加载"
+        );
+        assert_eq!(more_row_label(2, 5, false, true), "加载中…");
+        assert_eq!(more_row_label(2, 5, true, true), "加载中…");
     }
 }
