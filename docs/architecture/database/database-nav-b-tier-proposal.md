@@ -27,9 +27,9 @@
 | --- | --- | --- |
 | 搜索正则 / 大小写 / 仅已连接三开关 | 已实现，面板级持久化（仅已连接会话级不落库） | `crates/database/src/nav_view.rs:272-277`；`crates/database/src/nav_view/chrome.rs:783-872` |
 | 索引搜索防抖 250ms + 签名判变 + 批次序号过期丢弃 | 已实现 | `crates/workbench_shell/src/ui.rs:140`；`crates/database/src/nav_view/actions.rs:189-236,242-293` |
-| 右键先选中（连接行 / 对象行） | 已实现 | `crates/database/src/nav_view/rows.rs:1611-1624`、`:2218-2231` |
-| Home / End / PageUp / PageDown | 已实现（固定 10 行步长） | `crates/database/src/commands.rs:29-35`；`crates/app/src/main.rs:286-289`；`crates/database/src/nav_view/chrome.rs:948-968`；`crates/database/src/nav_view.rs:657-691` |
-| 前缀跳转基础版（单字符首字母、循环下一个） | 已实现，缺累积匹配与超时重置 | `crates/database/src/nav_view/chrome.rs:973-983`；`crates/database/src/nav_view.rs:696-726` |
+| 右键先选中（连接行 / 对象行） | 已实现 | `crates/database/src/nav_view/rows.rs:1611-1625`、`:2218-2232` |
+| Home / End / PageUp / PageDown | 已实现（固定 10 行步长） | `crates/database/src/commands.rs:29-35`；`crates/app/src/main.rs:289-292`；`crates/database/src/nav_view/chrome.rs:948-968`；`crates/database/src/nav_view.rs:657-691` |
+| 前缀跳转基础版（单字符首字母、循环下一个） | 已实现，缺累积匹配与超时重置 | `crates/database/src/nav_view/chrome.rs:973-983`；`crates/database/src/nav_view.rs:720-749` |
 | 系统 catalog / schema 过滤 + 可见库白名单 | 已实现（S3-①） | `crates/database/src/navigator_service.rs:87-114`；`crates/settings/src/model.rs:403-409` |
 | 列预取独立信号量（并发 2，让位语义） | 已实现 | `crates/database/src/nav_jobs.rs:67-72,1032-1035` |
 | 索引搜索独立并行（8 块 scoped 线程，不占导航信号量） | 已实现 | `crates/database/src/nav_jobs.rs:170,1095-1128` |
@@ -39,7 +39,7 @@
 - `render` 期零 I/O：新增回填 / 过滤 / 任务全部走 `nav_jobs` 入队 + 结果队列回填（README §4 第 1 条；`crates/database/src/nav_jobs.rs:787-836` worker 模型）。
 - 视图只依赖 `gpui-kit`；颜色一律主题 token，结构尺寸登记 `workbench_shell/src/ui.rs`，裸 `px(` / 裸 hex 被 `ui_contract` 拦下。
 - 类型差异落在服务层与驱动能力位，`NavNode` / 渲染层不为数据库类型分叉。
-- 注释与文档简体中文；过程产物（探针、一次性脚本、验证日志）落 `.rds/tmp/` 或 `tools/_archive/`，不入库；架构文档进 `docs/architecture/database/`。
+- 注释与文档简体中文；过程产物（探针原始日志、一次性脚本、验证日志）落 `.rds/tmp/` 或 `tools/_archive/`，不入库；临时探针 bin 归档后即删（见 §3.3.1）；架构文档进 `docs/architecture/database/`。
 - 后续每批独立 `cargo check` + 单测 + commit；`cargo` 固定 `-j 2`。
 
 ---
@@ -59,7 +59,7 @@
 | 内省 trait | `NodeInfo`（`name/kind/comment/parent_name/is_partition`）**没有**行估计字段；`SchemaObjects` 同样没有；`NodeDetail.row_count_estimate: Option<u32>` 属懒详情路径 | `crates/engine/src/driver/traits.rs:125-138,145-151,186-191,227-232` |
 | 六个原生驱动 `get_table_detail` | `row_count_estimate: None` 全部未实现 | `crates/engine/src/driver/native/postgres.rs:1520`、`native/postgres_native.rs:1178`、`native/mysql.rs:1563`、`native/mysql_native.rs:995`、`native/sqlite.rs:1212`、`native/duckdb.rs:1254` |
 | 属性面板 PG 路径 | 打开表属性时懒取 `reltuples` 推一张「行估计 · reltuples」卡片；这是**属性面板路径**，不是树路径 | `crates/database/src/property_providers/pg.rs:227,233-235,247-248`；测试 `:669` |
-| 树内行尾徽标 | 只有「分区 N / 继承 N」，无行计数徽标 | `crates/database/src/nav_view/rows.rs:2148-2166` |
+| 树内行尾徽标 | 只有「分区 N / 继承 N」，无行计数徽标 | `crates/database/src/nav_view/rows.rs:2172-2188` |
 | 结果网格行数 | 真 `COUNT(*)` 独立一问，拿不到如实留空（A12/A13 口径），不编 0 | `crates/database/src/table_data.rs:11-12` |
 | L2 索引列 | `metadata_index.row_count_estimate` 列已存在（迁移 004 / 006），导航内省链路不回填；现有写值链路属统计同步：schema / 列条目写 `None`（`persistence/metadata_cache.rs:3058,3087`），表条目透传 `table.row_count_estimate`（`:3073`），`tables` 表 upsert 覆盖该列（`:1836`），读回 i64→u32 转换（`:2321`）；`crates/engine/src/cache/metadata_cache.rs` 中 `row_count_estimate` 零命中 | `crates/engine/migrations/connection_metadata/004_refactor_to_normalized.sql:43`、`006_add_metadata_index.sql:30` |
 
@@ -69,7 +69,7 @@
 
 - **rustgrid 两阶段发布**：表名单先上屏，`table_statuses`（含 `COUNT(*)` 概览，大库可能耗时数秒）由后台独立任务返回后回填，期间列表保持可交互；补填完成后通知对象面板并刷新滚动条。证据：`docs/analysis/competitor-analysis/nav-analysis-cellar-rustgrid-sqlab.md:151`（源码 `tree.rs:1306-1372`）；任务粒度参照 `:174-176`。
 - **任务分级建议**：展开行优先 > 分类预热 > 列补填 > 概览统计；重元数据（COUNT、列计数、定义扫描）拆第二阶段任务先发布名单。证据：`nav-analysis-cellar-rustgrid-sqlab.md:320`。
-- **DBeaver 统计后台化**：`StatReadJob` 用 `IdentityHashMap<DBSObject, StatReadJob>` 按父去重，未读渲染占位 `"..."`，完成后 `asyncExec` 写 `TREE_DATA_STAT_MAX_SIZE` + 父树 redraw。证据：`nav-analysis-dbeaver.md:106`（源码行号实现时回读 DBeaver 仓库再落码）。
+- **DBeaver 统计后台化**：`StatReadJob` 用 `IdentityHashMap<DBSObject, StatReadJob>` 按父去重，未读渲染占位 `"..."`，完成后 `asyncExec` 写 `TREE_DATA_STAT_MAX_SIZE` + 父树 redraw。证据：`nav-analysis-dbeaver.md:106`（源码行号实现时回读 DBeaver 仓库再落码）；我方去重落点与粒度见 §1.4.2（按 `(conn_id, schema)` 键集合，不照搬其 `IdentityHashMap` 结构）。
 
 ### 1.3 结论：做不做
 
@@ -89,30 +89,33 @@
 
 - 视图层：回填 `NavNodeKind::Table.row_estimate: Option<u64>`（字段已存在，`model.rs:143`）；`None` = 未回填 / 无估计可用 / 失败留空，三态不细分（UI 只画「占位 `…`」与「≈ N」两种）。
 - 传输层：`NodeInfo` **不扩**行估计字段——内省名单路径保持一次批量轻查询；估计值由新的第二阶段任务单独取回，避免把重元数据塞回首屏批次。
+- 通道边界：RowEstimate 任务直走 `Database::query` 跑目录级统计 SQL（§1.4.3 矩阵），**不扩展** `MetadataBrowser::get_table_detail` 懒详情通道（`traits.rs:227-232`，`NodeDetail.row_count_estimate:190` 属属性面板单表详情，列 / 索引 / 行数同取）；两条通道触发时机、字段、回填目标各自独立，v1 不互相回填。
 - 缓存层：估计值回写 L2 `metadata_index.row_count_estimate`（列已存在，`006_add_metadata_index.sql:30`；upsert 落点 `crates/engine/src/persistence/metadata_cache.rs:1836`）；L1 内存状态在结果队列回填时刷新；断开 / 刷新不删缓存（README §4 第 5 条「缓存只增不删」）。
 
 #### 1.4.2 任务族与状态机
 
 - 新增 `Job::RowEstimate { conn_id, project_root, catalog, schema, tables: Vec<(name, qualified)> }`，`JobPriority::Background`（用户展开任务插队优先，`nav_jobs.rs:526-537` 既有优先级模型复用）。
+- 信号量归属：v1 落地复用现状全局 `LOAD_SEM=1`，`try_acquire` 让位（仿 `Warm` / `WarmCompletion` 口径，`nav_jobs.rs:987,1011`：内省忙即跳过本批、下轮再补，不阻塞用户展开任务）；B-2-1 真机验证通过后，转 per-conn=1 + `try_acquire` 让位 → 全局软帽 K（同 `Warm` 口径，归属对照见 §3.4.2）。
 - 触发时机：表/视图文件夹名单首屏回填完成后，对该 schema 入队一批估计任务；大 schema 按 `PREFETCH_BATCH` 同类分批（`nav_jobs.rs:133` 先例），不在一个任务里扫整库。
 - 单任务超时沿用 `JOB_TIMEOUT`（`nav_jobs.rs:150`，30s）；失败 / 超时 / 驱动不支持 → `None` 留空，**不显示 0、不报错红字**（对照 `table_data.rs:12`「拿不到如实留空」口径）。
 - 回填路径：任务线程 → 结果队列 → 主线程 `pump` 回填 `children` 对应节点 → `cx.notify()`；render 不直接读远程状态。
-- 去重：同一 `(conn_id, schema)` 的在途估计任务复用 `pending_*` 原子计数范式（`nav_jobs.rs:389-395`）登记在途，重复展开不重复入队；刷新元数据时作废该 schema 的在途批次。
+- 去重：现状 `pending_*`（`nav_jobs.rs:389-395`）全是 `AtomicUsize` 数量计数器，不登记任务键；schema 级去重落状态层——`NavViewState` 新增 `estimated_schemas: HashSet<(conn_id, schema)>`（视图层 `expanded` 集合同范式，`actions.rs:325,332,341`），入队前查键、在途不重复入队；任务层另加 `pending_row_estimates: AtomicUsize` 仅用于空闲判定（仿 `pending_loads:390`）。刷新元数据时从集合移除该 schema 键并作废在途批次。
 
 #### 1.4.3 驱动支持矩阵（v1 口径）
 
 | 驱动 | 估计来源 | v1 口径 |
 | --- | --- | --- |
 | PostgreSQL | `pg_class.reltuples`（属性面板已有同款 SQL，`property_providers/pg.rs:247-248`） | 回填；文案标「估计」；统计未 `ANALYZE` 时 reltuples 失真属已知口径，不二次修正 |
-| MySQL | `information_schema.TABLES.TABLE_ROWS`（InnoDB 为优化器估计，MyISAM 近似精确） | 回填；v1 不区分引擎口径 |
-| SQLite | 无存储统计信息 | 留空，不发真 `COUNT` |
-| DuckDB | 无存储统计信息 | 留空，不发真 `COUNT` |
-| 视图 / 分区表 | 视图无独立统计；分区父表 `reltuples` 口径单列说明 | 视图留空；分区父表取父表估计 |
+| MySQL | `information_schema.TABLES.TABLE_ROWS`（InnoDB 为优化器估计，MyISAM 近似精确）；**现有代码零参照**（全仓仅 `pg.rs:247-248` 有 reltuples），属新写 SQL，落码批次先真机跑通再接入 | 回填；v1 不区分引擎口径 |
+| SQLite | `sqlite_master` 现状只取 `name / type / sql`（`native/sqlite.rs:712,1150`），无统计列 | 留空，不发真 `COUNT` |
+| DuckDB | `duckdb_tables()` 现状只 SELECT `sql` 列取 DDL（`native/duckdb.rs:1011`），未取 `row_count`；v1 不接入该视图统计口径，v2 再评估 | 留空，不发真 `COUNT` |
+| 视图 / 分区表 | 视图无独立统计；分区父表 `reltuples` 口径单列说明；分区子表标记 `NodeInfo.is_partition:137`（PG `relispartition`，非 PG 恒 `false`） | 视图留空；分区父表取父表估计；分区子表 v1 留空（子表 `reltuples` 口径与父表不同，v1 不细分，挂 v2 评估） |
 | 例程 / 序列 / 触发器 | 不适用 | 不参与 |
 
 #### 1.4.4 UI 表现（草案，尺寸 / 颜色落码时再登记 `ui.rs` 与主题 token）
 
-- 表/视图行尾：未回填显示弱色占位 `…`；回填显示 `≈ N`（千分位格式化，数字过长截断，与「分区 N / 继承 N」徽标同槽位，`rows.rs:2148-2166` 既有布局旁挂）。
+- 表/视图行尾：未回填显示弱色占位 `…`；回填显示 `≈ N`，作为 Table 行尾 `badges` 第三枚徽标挂进现状分区 / 继承徽标同一槽位（`rows.rs:2172-2188`：`flex_none` + `text_xs` + `muted` 弱色 `:2183-2186`，两枚徽标 `join("  ")`），不新开布局槽、不新增颜色 token。
+- 格式化纯函数落 `crates/database` 的 `nav_view` 模块本地（与 `nav_name_highlight` 同层同可见性档，`nav_view/primitives.rs:643`，`pub(super)`）：`format_row_estimate(n: u64) -> String`（千分位 + 超长截断，单测钉边界值）；**不跨 crate 复用** `result_panel/grid.rs:2846`、`editor/history.rs:257`、`analytics_resource/present.rs:71`、`mock/mock_view.rs:1057` 四份既有重复实现（签名 `usize/i32/u64` 不一、分属不同 crate，database 不反向依赖）；四份重复技术债的跨 crate 抽取合并属另案，不在本批。
 - 列表在第二阶段回填期间保持可交互（rustgrid 范式，`nav-analysis-cellar-rustgrid-sqlab.md:151`）；不阻塞滚动、不重排行序（排序权重另案，不在本批）。
 - 估计值不得参与名称排序或默认分组（`sort_weight` 列存在但本批不写，`006_add_metadata_index.sql:33`）。
 
@@ -149,7 +152,7 @@
 - **树内 `TreeFilter extends PatternFilter`**：`setPattern` 补 `*` 前后缀构造 `TextMatcherExt`；`split("\\.")` 两段即 `schema.object` 匹配；`isMatchingNeeded` 四态（connection / container / 默认排除容器·文件夹·列 / file）；`isPatternMatched` 顺序 = 标签通配 → 两段沿父链找 `DBSStructContainer` → 回退 description；`filterShowConnected` 隐藏断连源；`CustomFilteredTree` 工具栏类型切换 + 已连接开关。证据：`nav-analysis-dbeaver.md:14,61`（源码 `TreeFilter` `DatabaseNavigatorTree.java:795-970`、`CustomFilteredTree:972-1080`，见 `:71`）。
 - **include / exclude 双向标记**：`NavigatorUtils.filterSelection` 第 438–512 行。证据：`nav-analysis-dbeaver.md:67,219,228`（`NavigatorHandlerFilterInclude.java` 管 include/exclude；`NavigatorHandlerFilterConfig.java` 父节点回溯、`EditObjectFilterDialog`、全局过滤器、`SHOW_GLOBAL_FILTERS_ID` 分支，`:75`）。
 - **过滤态持久化**：筛选功能清单含「过滤态持久化」一项（`nav-analysis-dbeaver.md:219`）；竞品笔记未单独定位其代码锚点，机制实现时回读 `NavigatorHandlerFilterConfig` / `NavigatorUtils` 源码再落码（注意 `:62` 是展开态 `NAVIGATOR_RESTORE_STATE_DEPTH`，与过滤器无关，勿混用）。
-- **事件合并（对照项，结论见 2.3.5）**：`DBNModel.EventProcessingJob` system Job 每 100ms 批量合并事件快照后 `executeInMainThread` 分发；`LoadingUIJob` `DELAY=100ms`；`NodeLoadersPainter` `REPAINT_DELAY=100ms` / `WAIT_DELAY=500ms`。证据：`nav-analysis-dbeaver.md:16,102-115,146,174`（`DBNModel.java:550-557,610-645`，`:115`）。
+- **事件合并（对照项，结论见 2.3.5）**：`DBNModel.EventProcessingJob` system Job 每 100ms 批量合并事件快照后 `executeInMainThread` 分发；`LoadingUIJob` `DELAY=100ms`；`NodeLoadersPainter` `REPAINT_DELAY=100ms` / `WAIT_DELAY=500ms`。证据：`nav-analysis-dbeaver.md:16,110,115,146,174`（`DBNModel.java:550-557,610-645`，`:115`）。
 
 ### 2.3 架构决策建议
 
@@ -163,23 +166,27 @@
 
 两层与 facet 之间为 **AND**：先过 facet 得到连接集合 → 连接 mask 过滤对象名 → 全局 mask 再过滤。
 
+**持久化兼容口径**（实证 `settings/model.rs`）：`Navigator` 现有字段全部 `#[serde(default)]`（`:361-409`），旧配置缺键反序列化走默认值；新增 `object_masks` / `global_mask` 照此挂 `#[serde(default)]`，旧配置无键 = 空规则、过滤不启用。`Navigator` 是**手动** `impl Default`（`:412-425`，逐字段初始化），新增两个字段必须同步补进该 `Default::default()` 实现，否则编译缺字段；`ObjectMaskRule` 自身 derive `Default`（`include/exclude` 空 `Vec`、`use_regex: false`）。
+
 #### 2.3.2 匹配语义（建议）
 
 - 默认 glob：`*`（任意多字符）/ `?`（单字符），大小写不敏感；空规则 = 不启用该层。
-- 可选正则开关：复用现有搜索正则设施（`nav_jobs.rs:320-323,1270` 的 `regex` 路径与 `regex` crate 用法）；开关 per 规则层，不与面板搜索的 `.*` 开关共享状态。
+- **glob 实现选型**：不引入 `glob` / `globset` 新依赖（`crates/database/Cargo.toml:35-37` 现有仅 `regex`）；database 本地写纯函数 `nav_glob_match(pattern: &str, name: &str) -> bool`，递归实现 `*` 任意序列 / `?` 单字符 / 其余字面全串匹配，结构参照 `content_search/src/lib.rs:60-76`（现状 `glob_matches` 是路径语义且大小写敏感，仅参照递归骨架、不跨 crate 调用；对象名场景比较前两侧 `to_lowercase()` 折叠，`?` 不做路径分隔符排除）。
+- 正则匹配挂 v2（见 B-1-A）：v1 规则结构预留 `use_regex` 布尔位但 UI 不暴露；启用时复用现有搜索正则设施（`nav_jobs.rs:320-323,1270` 的 `regex` 路径与 `regex` crate 用法，`database/Cargo.toml:37` 已依赖，不新增），开关 per 规则层，不与面板搜索的 `.*` 开关共享状态。
 - **include / exclude 优先级**：exclude 优先于 include；include 为空 = 全部候选进入候选集；exclude 为空 = 不排除；include 非空 = 只保留命中 include 且未命中 exclude 的对象。
-- v1 **不做** `schema.object` 两段匹配（DBeaver `TreeFilter` 两段逻辑，`nav-analysis-dbeaver.md:61`）：v1 只匹配对象短名；两段匹配挂 v2，理由是现有树路径携带 `PropertyRef` / `NavPath`（`navigator_service.rs` 路径字段），两段匹配需要沿父链回退，工作量与边界另立。
+- v1 **不做** `schema.object` 两段匹配（DBeaver `TreeFilter` 两段逻辑，`nav-analysis-dbeaver.md:61`）：v1 只匹配对象短名；两段匹配挂 v2，理由是现有树路径携带 `PropertyRef` / `NavPath`（`navigator_service.rs:31` 导入；`NavPath` 分支匹配 `:194-221`；`PropertyRef` 构造 `:416,472,723,847,869`），两段匹配需要沿父链回退，工作量与边界另立。
 - 过滤层级边界：mask 只作用于对象层；catalog / schema 层不进 mask（系统库 / 系统 schema 归 S3-① 白名单与待办 #14，`architecture.md:396`）。
+- **规则结构草案**（v1 仅 glob）：`ObjectMaskRule { include: Vec<String>, exclude: Vec<String>, use_regex: bool }`；`include` 每行一条 glob、空行忽略（B-1-B）；`use_regex` v1 恒 `false`。per-connection 规则存 `Navigator.object_masks: BTreeMap<conn_id, ObjectMaskRule>`，面板全局规则存 `Navigator.global_mask: ObjectMaskRule`（字段落点见 §2.3.1）。
 
 #### 2.3.3 管线插入点
 
-- **树路径**：`NavigatorService` 组装 `NavPage` 后、返回视图前，用纯函数 `nav_mask_passes(rule, name) -> bool` 过滤（与 `nav_keep_object:109-114` 同一纯函数范式，便于单测钉规则矩阵）。过滤后 `child_total` 口径 = **过滤后条数**（与 DBeaver「隐藏即不占计数」语义一致，`nav-analysis-dbeaver.md:61`）；v1 不提供「被隐藏 N 条」计数提示，留 v2。
-- **搜索命中路径**：在 `hits.retain(...)`（`nav_jobs.rs:1260,1270`）同一精筛层追加连接 mask + 全局 mask retain；不改动 SQL / L2 索引本身。
+- **树路径**：`NavigatorService` 组装 `NavPage` 后、返回视图前，用纯函数 `nav_mask_passes(rule, name) -> bool` 过滤（与 `nav_keep_object:109-114` 同一纯函数范式，便于单测钉规则矩阵）。mask 只过滤**已加载进 `children` 的子集**；`child_total` 保持候选池原始计数不变——它是分页 / 「加载更多」判断依据（`nav_view.rs:260-268` 注释：数据侧还有没取的），不得按过滤后条数改写；DBeaver「隐藏即不占计数」是全量加载树语义（`nav-analysis-dbeaver.md:61`），我方大 schema 分页模型不照搬。v1 不提供「被隐藏 N 条」计数提示，留 v2；候选池非空但已加载子集全被滤掉时，树顶只给一句当前规则口径（§2.3.4）。
+- **搜索命中路径**：在现有三档精筛（schema 段 `:1252-1257`、大小写 contains `:1259-1261`、正则 `:1263-1270`）之后追加连接 mask + 全局 mask retain；按 `hit.conn_id`（`SearchHit.conn_id:197`）取 per-connection 规则，再套全局规则过滤 `object_name`；不改动 SQL / L2 索引本身。
 - **存储读写**：`NavHost` 仿 `visible_databases` / `set_visible_databases`（`nav_host.rs:144-152`）新增 `object_mask(conn_id)` / `set_object_mask(...)` 与全局 mask 读写；workbench 侧仿 `nav_host.rs:129-149,201-216` 做两侧互转（`database` crate 不反向依赖 `settings`，`nav_host.rs:47-50` 既有边界）。
 
 #### 2.3.4 UI 入口（草案，组件选型走 gpui-kit 标准件，不手搓）
 
-- 连接右键新增「对象名过滤器…」项（对话框：include 多行输入、exclude 多行输入、正则开关、清空 / 重置按钮）；入口挂在连接菜单 `rows.rs:1643-1928` 段，与「数据库可见性…」（`:1702-1713`）相邻。
+- 连接右键新增「对象名过滤器…」项（对话框：include 多行输入、exclude 多行输入、清空 / 重置按钮；v1 不暴露正则开关，随 B-1-A 挂 v2）；入口挂在连接菜单 `rows.rs:1643-1928` 段，与「数据库可见性…」（`:1702-1713`）相邻。该项是本地配置动作、不回源库，断连也可编辑、不置灰（类比「编辑连接…」无条件，`rows.rs:1695-1701`）；与 N4 连接态置灰清单区分：置灰只针对回源库动作，配置类动作不置灰。
 - 面板头「筛选 ▾」弹层内补全局过滤器入口与规则摘要 chip；有规则时在面板头显弱色标识；空规则不显示标识。
 - 规则生效后树顶 / 空态给一句当前过滤口径（对照 §V12 筛空空态「当前筛选清单 + 清除筛选」先例，`architecture.md` §11 #25 第三轮）。
 
@@ -227,23 +234,31 @@
 
 - `connection_manager.rs:114` `connections: RwLock<HashMap<ConnId, DynDatabase>>` 单实例；`cancel_tokens: RwLock<HashMap<ConnId, CancellationToken>>`（`:130`）；`transactions: Mutex<HashMap<ConnId, ActiveTransaction>>`（`:136`）；`scoped: RwLock<HashMap<(ConnId, String), DynDatabase>>`（`:144`）。
 - 四个主路径驱动都是**单连接 + Mutex 串行**：`postgres.rs:53`、`mysql.rs:56`、`sqlite.rs:245`、`duckdb.rs:214`；PG `query()` 在 `lock_pg_conn` 持锁跨 await 执行 `fetch_all`（`postgres.rs:376-393`，查询级 15s 超时 `:380`）——同一实例并发查询被 Mutex 串行化，不同实例（不同连接）互不抢锁。
-- **主路径已主动摒弃连接池**：`factory.rs:138-159` 记录 2026-10-08 用户拍板全参考 DBeaver Main + Metadata 单连接；旧池 min3/max6 的真机教训（app_run51~58：30s `acquire_timeout` 静默卡死、`test_before_acquire` 对 TCP 半开连接验证仍超时）写明在注释中。`postgres_pool.rs` / `standard_pool.rs` / `smart_pool.rs` / `duckdb_pool.rs` 存在但**非主路径**。
+- **主路径已主动摒弃连接池**：`factory.rs:138-159` 记录 2026-10-08 用户拍板全参考 DBeaver Main + Metadata 单连接；旧池 min3/max6 的真机教训（app_run51~58：30s `acquire_timeout` 静默卡死、`test_before_acquire` 对 TCP 半开连接验证仍超时）写明在注释中。旧池文件实测共 7 个、均**非主路径**：`native/postgres_pool.rs`、`native/mysql_pool.rs`、`native/sqlite_pool.rs`、`native/duckdb_pool.rs`、`smart_pool.rs`、`standard_pool.rs`、`wasm/pool.rs`。
 - L1 缓存是进程级全局 `Arc<Mutex<MetadataCache>>`（`crates/engine/src/cache/cache_manager.rs:66-73,83,104-118`），只做 CPU 内访问序列化，不构成 DB 瓶颈。
 
 ### 3.2 竞品证据
 
 - **navop 会话复用池**：`sessions: HashMap<config_id, Vec<ConnectionSession>>`，`create_session` 复用空闲会话、`release` 归还；本地文件型驱动按 `physical_open_lock_key` 互斥串行物理打开。证据：`nav-analysis-navop.md:62`（`manager.rs:368-370,427-507,511-578,650-658`）。负向证据：navop 无并发上限、无优先级、无取消，大 schema 连续展开在会话池上无序竞争——朴素并发模型不宜整体照搬，`nav-analysis-navop.md:65,90`。
 - **blanco 连接池化**：`DatabaseService` 按 `(config_id, database_name)` 池化活连接，`last_used` 触达，30s 周期清扫 + 空闲超时 / 断连驱逐；SSH 复用前先做隧道健康检查，不健康即丢弃重建。证据：`nav-analysis-fluxdb-blanco.md:139-140,210,213`。其调度层同样无队列、无优先级、无分片，需我方自己设计（`:213`）。
-- **DBeaver family 分组取消**：后台 Job 按 `dataSource` family 归属，可按连接批量取消；模型事件 100ms 合并见 §2.2。证据：`nav-analysis-dbeaver.md:16`。
+- **DBeaver family 分组取消**：后台 Job 按 `dataSource` family 归属，可按连接批量取消；模型事件 100ms 合并见 §2.2。证据：`nav-analysis-dbeaver.md:16`。其「无优先级、无锁」是已知弱点（大预取可能挤占 worker，`:178`），我方调度须保留任务优先级与分片隔离，不照搬该弱点。
 
 ### 3.3 前置真机验证（立项闸门：先出验证报告，再动调度代码）
 
 **硬约束（用户指定）**：先真机验证连接池 / 并发容量，再决定；方案不得回退到全局池扩容；驱动层单连接 Mutex 保持不变。
 
-#### 3.3.1 验证形态
+#### 3.3.1 探针形态、落点与采集指标
 
-- 独立诊断探针（参照既有 `crates/engine/src/bin/pg_probe.rs:1-62` 探针范式：独立 Runtime、跨任务复用、timeout 实测）；过程产物落 `.rds/tmp/`，不入库；验证报告成文进 `docs/analysis/`（gitignore 过程研究）。
-- 矩阵：PG（仓内真机端点 `192.168.3.138`，`pg_probe.rs:15` 先例）、MySQL 同网段真机、本地 SQLite 文件、本地 DuckDB；JDBC / wasm 路径本期排除，单列后续清单。
+- **落点与生命周期**：探针临时入库 `crates/engine/src/bin/probe_b2.rs`，`cargo run -p rds-engine --bin probe_b2 -j 2` 直跑。`engine/Cargo.toml` 无显式 `[[bin]]` 段，`src/bin/*.rs` 由 Cargo 目录约定自动注册为 bin target，落码时**不改 Cargo.toml**；复用 engine 既有驱动 trait / 连接管理器与 `shared::crypto::decrypt_password`（`pg_probe.rs:5` 先例），不新增 dev-dependency；不依赖 database crate 的 `nav_jobs` / NavHost（隔离边界见下条）。与既有 `pg_probe.rs:1-62` 同范式（独立 Runtime、跨任务复用、timeout 实测）。报告归档后探针即从 `bin/` 删除，不长期滞留（`pg_probe.rs` 是历史遗留例外，不复制为长期惯例）；旧池化 7 个死文件清理另归 B-2-E，与本探针解耦。原始日志 / 中间脚本 / 采集数据落 `.rds/tmp/`（`.gitignore:12` `/.rds/` 整体忽略），不入库；验证报告成文 `docs/analysis/`（`.gitignore:50`，过程研究不入库）。
+- **隔离边界**：探针只直连驱动层 `Database` / `MetadataBrowser`（`traits.rs:201-325,438-706`），不接 `nav_jobs` 队列、不接 NavHost / 视图层；场景由探针内手工编排（并发两任务、同连接排队、混合在途、锁等待、半开断连），不改动生产代码路径。
+- **采集指标**（V1–V5 判据的量化口径）：
+  - 墙钟：单连接基线完成时刻、两连接并发各自完成时刻与总墙钟、相对基线加速比；
+  - 服务端连接数：PG `pg_stat_activity`、MySQL `SHOW PROCESSLIST`、本地库文件句柄数，确认并发连接数 ≤ 实例数；
+  - 线程 / Runtime 上界：`Runtime::new()` 次数、在途任务峰值（对照现状每任务一个 Runtime，`nav_jobs.rs:812-815`）；
+  - 等待分布：同连接第二任务等待时长 min / median / max、是否饿死、User 优先级插队是否生效；
+  - 超时与错误分类：`JOB_TIMEOUT`（`nav_jobs.rs:150`）触发次数、错误归类（连接 / 查询 / 锁等待）；
+  - 断连场景：半开探测耗时、错误返回路径是否落到节点失败态。
+- **端点矩阵**：PG 真机 `192.168.3.138:5432/warehouse_supply_chain`（`pg_probe.rs:15` 先例）；MySQL 同网段真机端点（连接串待提供）；SQLite / DuckDB 本地临时文件；JDBC / wasm 本期排除（B-2-D）。
 
 #### 3.3.2 验证场景与判据
 
@@ -264,6 +279,8 @@
 #### 3.4.1 调度分层
 
 - **per-connection 信号量**：`HashMap<ConnId, Arc<Semaphore>>`，每连接信号量容量 = 1；`LoadChildren` / `LoadProperties` / `GenerateDml` 先取所属连接信号量，再进任务执行。
+  - 映射落点挂现有 `Shared` 共享结构（`nav_jobs.rs:377-401`）：`conn_sems: Mutex<HashMap<String, Arc<Semaphore>>>`，`entry(conn_id).or_insert_with(|| Arc::new(Semaphore::new(1)))`；不另开 `OnceLock` 静态全局（现状 `LOAD_SEM`/`PREFETCH_SEM` 见 `:42,68`）。信号量只代表「同连接任务串行」，不持有连接句柄 / 配置，无会话状态。
+  - 条目回收：`disconnect`（`nav_host.rs:163`）与 `delete_connection`（`nav_host.rs:195`，:194 注释要求调用方随后 `disconnect`）两条路径都调 `nav_jobs::drop_conn_sem(conn_id)` 移除条目，`Arc` 计数归零即释放；重连经 `entry` 新建全新信号量，不复用旧条目残留令牌。不在断开 / 删除路径挂钩会导致 `conn_sems` 随已删连接 id 长期累积，回收钩子与信号量改造同批上（B-2-1），不挂 v2。断开时在途任务的 family 批量取消归 §3.4.3（v2），与信号量条目回收是两件独立事。
   - `LoadProperties` 与 `LoadChildren` **共用**所属连接信号量（现状二者共用全局 `LOAD_SEM`，`nav_jobs.rs:855,959`；分片后保持「同连接元数据通道唯一」语义，避免属性查询与内省抢同一条单连接）。
   - `Warm` / `WarmCompletion` 维持 `try_acquire` 让位语义，改为取所属连接信号量的 `try_acquire`，忙则跳过本批（现状 `:987,1011` 口径不变）。
   - `PrefetchColumns` 维持独立 `PREFETCH_SEM = 2`；`SearchIndex` 维持独立 scoped 线程池。
@@ -277,6 +294,7 @@
 | `LoadChildren` | 全局 `LOAD_SEM=1` | per-conn=1 → 全局软帽 K |
 | `LoadProperties` | 全局 `LOAD_SEM=1` | per-conn=1 → 全局软帽 K |
 | `GenerateDml` | 全局 `LOAD_SEM=1` | per-conn=1 → 全局软帽 K |
+| `RowEstimate`（S3-④ v1 新增） | 全局 `LOAD_SEM=1`，`try_acquire` 让位（仿 `Warm` `:987`） | per-conn=1 + `try_acquire` 让位 → 全局软帽 K（同 `Warm` 口径，不阻塞用户任务） |
 | `Warm` | `try_acquire` 全局让位 | `try_acquire` per-conn 让位 |
 | `WarmCompletion` | `try_acquire` 全局让位 | `try_acquire` per-conn 让位 |
 | `PrefetchColumns` | `PREFETCH_SEM=2` 独立 | 不变 |
@@ -286,7 +304,7 @@
 #### 3.4.3 取消与分组（本期只登记，不实现）
 
 - 按连接 family 批量取消参照 DBeaver `belongsTo(family)=dataSource`（`nav-analysis-dbeaver.md:16`）；落点候选为现有 `cancel_tokens: HashMap<ConnId, CancellationToken>`（`connection_manager.rs:130`）。
-- 断开连接时取消该连接在途 `LoadChildren` / `LoadProperties` / `GenerateDml`；本期不实现，挂 v2。
+- 断开连接时取消该连接在途 `LoadChildren` / `LoadProperties` / `GenerateDml` / `RowEstimate`；本期不实现，挂 v2。
 
 ### 3.5 未决拍板项（B-2）
 
@@ -296,7 +314,7 @@
 | B-2-B | `LoadProperties` 是否与 `LoadChildren` 共用 per-conn 信号量 | 共用 / 独立 | 共用，保持单连接元数据通道语义 |
 | B-2-C | 预热让位阈值：per-conn 忙即跳，还是排队 N 毫秒 | 忙即跳 / 短等 | 忙即跳（现状 `try_acquire` 口径，不引入新等待） |
 | B-2-D | JDBC / wasm 路径何时纳入分片矩阵 | v1 含 / v1 排除 | v1 排除，原生四驱动验证通过后另立探针批次 |
-| B-2-E | 旧 `postgres_pool.rs` / `standard_pool.rs` / `smart_pool.rs` / `duckdb_pool.rs` 死代码是否本期清理 | 清理 / 保留观察 | 保留观察，与本议题解耦另立清理批 |
+| B-2-E | 旧 7 个池文件（`native/{postgres,mysql,sqlite,duckdb}_pool.rs`、`smart_pool.rs`、`standard_pool.rs`、`wasm/pool.rs`）死代码是否本期清理 | 清理 / 保留观察 | 保留观察，与本议题解耦另立清理批 |
 
 ---
 
@@ -317,9 +335,9 @@
 
 **现状证据**：
 
-- 连接行：`on_mouse_down(Right)` 在未选中时先 `set_nav_selected`，再由 `context_menu` 弹菜单（`rows.rs:1611-1624`，注释 `:1607-1610`；vendor `context_menu.rs:403-405` 右键只 `stop_propagation` + 开菜单、不选中，是该处理必须前置的原因）。
-- 对象行：同款处理（`rows.rs:2218-2231`，注释 `:2215-2216`）。
-- 分组头：`context_menu` 存在（`rows.rs:825-954`），但分组头本就不可选中（不进 `nav_order`，`rows.rs:134`），无右键先选中动作属设计如此；搜索命中行无右键菜单。
+- 连接行：`on_mouse_down(Right)` 在未选中时先 `set_nav_selected`，再由 `context_menu` 弹菜单（`rows.rs:1611-1625`，注释 `:1608-1610`；vendor `context_menu.rs:403-405` 右键只 `stop_propagation` + 开菜单、不选中，是该处理必须前置的原因）。
+- 对象行：同款处理（`rows.rs:2218-2232`，注释 `:2216`）。
+- 分组头：`context_menu` 存在（`rows.rs:825-954`），但分组头本就不可选中（不进 `nav_order`，`rows.rs:134`），无右键先选中动作属设计如此；搜索命中行无右键菜单（`render_search_hit` 仅挂 `on_click` 与定位按钮，`rows.rs:2685-2820`）。
 - 选中模型为单选：`selected_key: Option<String>`（`nav_view.rs:322`），无多选集合。
 
 **竞品对照**：tusk 右键先选中行再弹菜单、菜单目标即高亮（`nav-analysis-zqlz-tusk.md:124,198`）；rustgrid 多选（单击 / Ctrl / Shift / 框选）属另一量级能力（`nav-analysis-cellar-rustgrid-sqlab.md:141,189`）。
@@ -333,7 +351,7 @@
 
 **现状证据**：
 
-- 动作定义 `NavHome / NavEnd / NavPageUp / NavPageDown`（`commands.rs:29-35`）；按键绑定 `main.rs:286-289`；视图接线 `nav_move_edge(true/false)`（`nav_move_edge:657-668`，跳首/尾 + 居中滚动）、`nav_move_page(±1)`（`nav_move_page:674-691`）。
+- 动作定义 `NavHome / NavEnd / NavPageUp / NavPageDown`（`commands.rs:29-35`）；按键绑定 `main.rs:289-292`；视图接线 `nav_move_edge(true/false)`（`nav_move_edge:657-668`，跳首/尾 + 居中滚动）、`nav_move_page(±1)`（`nav_move_page:674-691`）。
 - 步长 `NAV_PAGE_STEP = 10` 固定值（`nav_view.rs:675`）；注释 `:672-673` 已记录有意取舍：虚拟列表不暴露可视行数（`list_scroll` 无对应查询 API），DBeaver 按视口翻页，我方取终端同款固定步长。
 
 **建议**：
@@ -346,18 +364,18 @@
 **现状证据**：
 
 - 面板 `on_key_down` 取首字符，仅 `is_alphabetic()` 进 `nav_jump_prefix`（`chrome.rs:973-983`；注释 `:971-972`：搜索框 Input 有自己焦点，字符不落这里）。
-- `nav_jump_prefix`（`nav_view.rs:696-726`）：大小写不敏感；只匹配带显示名的行（连接行 = 连接名，树行 = 节点名；Reference / More / Jump / SearchHit 置空不参与，`rows.rs:151,161,170`）；从选中行之后循环找第一个**首字母**匹配项；未命中原样返回。
+- `nav_jump_prefix`（`nav_view.rs:720-749`）：大小写不敏感；只匹配带显示名的行（连接行 = 连接名，树行 = 节点名；Reference / More / Jump / SearchHit 置空不参与，`rows.rs:151,160-161,170`）；从选中行之后循环找第一个**首字母**匹配项；未命中原样返回。
 - `NavOrderItem.name: Option<String>` 已存在（`nav_view.rs:383-385`），累积匹配的数据条件已具备。
 
 **竞品对照**：rustgrid 裸字符前缀跳转带**超时重置**、**连续字符累积匹配前缀**；按键不抢占以免抑制行内编辑器字符输入（`nav-analysis-cellar-rustgrid-sqlab.md:140`，`keymap.rs:176-202`、`sidebar.rs:505-571`）。
 
 **规格草案（v1 增强）**：
 
-1. 状态：`NavViewState` 新增 `prefix_buf: String` + 后台计时句柄（空闲超时建议 800ms，参照 rustgrid 实现取数后再定值；超时清空缓冲并重置计时）。
-2. 匹配语义：缓冲作为**名称前缀**（不再只比首字母）；大小写不敏感；从选中行之后循环；缓冲为空时按键回到现有「首字母下一个」行为作为兜底。
+1. 状态：`NavViewState` 新增 `prefix_buf: String` + `prefix_debounce: RefCell<Option<Task<()>>>` 计时句柄（仿 `search_debounce:553`，初始化 `:595`）；复用现有搜索防抖范式（`background_executor().timer` + `cx.spawn` + `Task` drop 取消，`actions.rs:227-235`；阈值常量登记 `ui.rs`，参照 `NAV_SEARCH_DEBOUNCE_MS:140` 先例），不新造独立线程 / 动画帧。超时建议 800ms，参照 rustgrid 实现取数后再定值；到期由事件路径清空缓冲并重置计时。
+2. 匹配语义：缓冲作为**名称前缀**（不再只比首字母）；大小写不敏感；从选中行之后循环。匹配谓词**只保留一套前缀实现**：缓冲长度 1 时前缀 = 名称首字符前缀，与现状首字母下一个视觉等价，不另留一份独立首字母兜底谓词；缓冲为空（刚超时重置）时下一次按键重新累积成长度 1。
 3. 字符集：v1 保留 `is_alphabetic()`；数字 / 符号字符是否纳入列入未决项（`nav_jump_prefix` 现状跳过它们，`chrome.rs:978`）。
 4. 焦点保护：`Input`（搜索框 / 行内编辑器）持有焦点时直接 return，不抢占字符输入；行内编辑器聚焦路径在 v1 补事件测试（现状注释只声明了搜索框焦点，`chrome.rs:971-972`）。
-5. 纯函数化：`nav_match_prefix(order: &[NavOrderItem], buf: &str, start: usize) -> Option<usize>` 抽纯函数，单测钉：累积匹配、循环、无名称行跳过、超时清空、大小写不敏感；菜单 / 键盘断言规范遵循 `gpui-kit-dev` skill「不读 PopupMenu / 内部状态」的既有要求。
+5. 纯函数化与现状替换边界：`nav_match_prefix(order: &[NavOrderItem], buf: &str, start: usize) -> Option<usize>` 抽纯函数，单测钉：累积前缀匹配、环绕循环、无名称行跳过、大小写不敏感。现状 `nav_jump_prefix` 视图方法**只保留事件骨架**——borrow `nav_order`、空序返回、从 `selected_key` 算出 `start = 选中后一位`、命中后 `set_nav_selected` + `nav_scroll_to_key` + `cx.notify()`（现状 `nav_view.rs:721-724,726-730,745-748`）；现状内联首字母谓词（`:732-741`）删除，改为调纯函数取索引。纯函数不持有 `NavViewState`、不读 `selected_key`、不触发选中 / 滚动 / notify；缓冲读写、超时定时器、缓冲清空属事件路径状态迁移，不进纯函数。菜单 / 键盘断言规范遵循 `gpui-kit-dev` skill「不读 PopupMenu / 内部状态」的既有要求。
 
 **未决拍板 S4-N3**：数字 / 符号字符是否纳入前缀跳转（建议 v1 不纳入，保持与字母漫游一致）；超时阈值 800ms 是否采纳。
 
@@ -401,7 +419,7 @@
 | 结构洞察 | `insight_schema` 才摆；**无连接态门控** | `:2438-2444` |
 | 查看洞察 | 无条件（面板导航） | `:2445-2451` |
 
-**动作路径现状**：`ensure_connected_for_browse`（`actions.rs:387-401`）只用于连接根展开（`:360`）、失败重试（`:557`）、定位链路（`:688`）；对象菜单上述六个在线动作**不经过**它，断连时点按会走到任务失败路径（而非菜单层提前置灰）。
+**动作路径现状**：`ensure_connected_for_browse`（`actions.rs:387-414`）只用于连接根展开（`:360`）、失败重试（`:557`）、定位链路（`:688`）；对象菜单上述六个在线动作**不经过**它，断连时点按会走到任务失败路径（而非菜单层提前置灰）。
 
 **能力位现状**：`CAPABILITY_DICTIONARY` 共 15 键（`capability.rs:155-285`）：`tree / health_check / transactions / index_analysis(NotBuilt) / sql_autocomplete / schema_browser / table_editor(NotBuilt) / analytics / federation / export(App 归属) / mock(App 归属) / resource(App 归属) / ssh_tunnel / ssl_tls / proxy`——`NotBuilt` 是 `Stage`（阶段），`App` 是 `Scope`（应用级归属，与驱动级并列），两个维度不要混读；6 个 `MetaBit`（`Transaction / Streaming / Arrow / Federated / ConcurrentWrite / InMemory`，`:30-37`）；**没有** rename / drop / truncate / table_operations 键。`DriverMeta` 只带 `type_id / name / type_name / type_category`，**不含 capabilities**（`driver_catalog.rs:30-41`）；运行时能力键在引擎内存注册表，导航侧未直接读取。
 
@@ -411,7 +429,10 @@
   - 对象菜单：查看数据、生成 SQL ▸、刷新元数据、生成 Mock、查看统计、结构洞察。
   - 连接菜单：刷新元数据（断连无元数据可刷；其余无条件项按上表保留：测试连接 / 编辑连接 / 复制名称 / 面板导航类不置灰）。
 - 保持可用（断连不禁用）：查看属性（L2 缓存可渲染）、复制名称 / 限定名、在 SQL 编辑器中打开（空查询壳）、查看洞察入口（纯面板导航，不回源库）、连接组织类动作（分组 / 共享 / 删除 / 模板复制，本地元数据动作）。
-- 实现纪律：菜单条目抽纯函数（输入 = 节点 kind / qualified / menu_prop / connected / 能力键；输出 = 条目顺序 / 文案 / disabled 布尔），渲染只挂事件；单测钉状态矩阵（连接态 × 对象类型 × 门控条件），不读 `PopupMenu` 内部（`gpui-kit-dev` skill 窗口测试节既有规范；项目内 `project_menu_entries` + `menu_spec_*` 先例）。
+- 实现纪律：连接菜单与对象菜单各抽一个纯函数规格（不混用签名，输入维度照 §4.4.1 审计表现状条件归纳）：
+  - 连接菜单输入 = `connected`、`source`（None / Global / Shared 三态）、`menu_groups` 是否非空；输出 = 条目顺序 / 文案 / `disabled` 布尔；
+  - 对象菜单输入 = `kind`、`qualified`、`menu_prop`、`menu_path`、`data_like`、`insight_schema`、`request`、`connected`；输出同上；
+  - 渲染只挂事件；单测钉状态矩阵（连接态 × 对象类型 × 各摆显条件），不读 `PopupMenu` 内部（`gpui-kit-dev` skill 窗口测试节既有规范；项目内 `project_menu_entries` + `menu_spec_*` 先例）。能力键属 v2 输入（§4.4.3），v1 规格函数不引入。
 
 #### 4.4.3 v2 建议：驱动能力位门控（挂对象 DDL 批次，不与 v1 同批）
 
@@ -434,22 +455,22 @@
 **竞品对照**：
 
 - DBeaver `INLINE_RENAME_ENABLED = false`：行内编辑器代码存在但默认关闭，实际走模态 `EnterNameDialog` + `DBEObjectRenamer` 命令链 + 可选脚本预览 + `TasksJob` 后台保存，`supportsRename` 判定（`nav-analysis-dbeaver.md:71,225`，`DatabaseNavigatorTree.java` 开关）。
-- blanco：表重命名走带 SQL 预览的弹窗；只读 / 生产环境 DDL 二次确认提示（`nav-analysis-fluxdb-blanco.md:51`，`connections.rs:796-891,821-826`）。
+- blanco：连接组名 / 表文件夹名行内重命名，表重命名走带 SQL 预览的弹窗（`nav-analysis-fluxdb-blanco.md:51-52`，SQL 预览源码 `navicat_main/table_actions.rs:27-48,229-233,286-367`）；只读 / 生产环境 DDL 二次确认提示与确认弹窗（`:170,173,204`，`connections.rs:796-891` 确认弹窗主体、`821-826` 环境提示；`delegate.rs:750-788` Rename / Truncate / Drop 派发）。
 - tusk：行内重命名 Input 替换行，Enter / Blur 提交进 pending 队列（`nav-analysis-zqlz-tusk.md:124,198`）；rustgrid F2 行内重命名分组行与表行，连接档案走对话框（`nav-analysis-cellar-rustgrid-sqlab.md:139`，`sidebar.rs:573-579`、`objects.rs:2217-2225`、`dialogs.rs:853`）；zqlz 表 / 视图重命名走独立模态 `RenameWindow`（`nav-analysis-zqlz-tusk.md:42`，`rename_window.rs:6,107,195,275`）。
 
 **建议**：
 
 - v1 **维持现状**：不新增对象行内重命名；分组 / 标签 / 复制模板的行内直接提交模型不变；连接重命名保持对话框路径。
-- 对象 DDL 重命名随未来「对象编辑批次」一并立项，前置条件：① 驱动能力契约（renames 支持判定，对齐 4.4.3 v2）；② staged 草稿模型（S4-N6）；③ 确认弹窗 + SQL 预览 + 只读 / 生产环境二次确认（blanco 参照，`nav-analysis-fluxdb-blanco.md:51`）；④ 不复制 DBeaver「默认关闭行内」结论到我方——我方分组 / 标签行内编辑已是既定交互，区别只在源库写操作需要确认与草稿。
+- 对象 DDL 重命名随未来「对象编辑批次」一并立项，前置条件：① 驱动能力契约（renames 支持判定，对齐 4.4.3 v2）；② staged 草稿模型（S4-N6）；③ 确认弹窗 + SQL 预览 + 只读 / 生产环境二次确认（blanco 参照：SQL 预览 `:51-52`；确认弹窗与输入框 `:173`；只读 / 生产二次确认 `:170,:204`）；④ 不复制 DBeaver「默认关闭行内」结论到我方——我方分组 / 标签行内编辑已是既定交互，区别只在源库写操作需要确认与草稿。
 
 ### 4.6 S4-N6 staged 提交模型
 
 **现状证据**：
 
 - 四个直接提交模型：分组表单 `render_group_editor:13` / `save_group_form:288` / `delete_group:336`；标签 `render_tag_editor:158` / `commit_nav_tags:251`；复制模板 `render_copy_editor:191` / `commit_copy_connection:350` / `cancel_copy_connection:375`；分组重命名 `commit_group_rename:381`（`editors.rs`）。
-- `staged` / `undo` / `redo` 在 `crates/database/src` 全量零命中：无草稿集合、无撤销栈、无行级着色状态。现存 `dirty`（`state_dirty` 防抖落库标记，承载选中 / 搜索词，`actions.rs:1199-1209,1292-1302`）与 `pending`（后台任务计数、`nav_pending_scroll` 待定位滚动键，`actions.rs:746,1252`）均不是对象编辑草稿缓冲，与 tusk staged 模型不是一回事。
+- `staged` / `undo` / `redo` 在 `crates/database/src` 全量零命中：无草稿集合、无撤销栈、无行级着色状态。现存 `dirty`（`state_dirty` 防抖落库标记，承载选中 / 搜索词，`actions.rs:1199-1211,1292-1302`）与 `pending`（后台任务计数、`nav_pending_scroll` 待定位滚动键，`actions.rs:746,1252`）均不是对象编辑草稿缓冲，与 tusk staged 模型不是一回事。
 
-**竞品对照**：tusk 待提交事务模型——重命名 / 删除 / 网格编辑先 staged，行级着色（绿 = 新增草稿、蓝 = 改名、红 = 删除线），`⌘S` 统一提交，带历史撤销；行内重命名 Enter / Blur 进 pending 队列（`nav-analysis-zqlz-tusk.md:124,196-200,210,221`，`app_objects.rs:1-516,690-728`、`app_edit.rs:817-869`、`app.rs:3075-3147`、`actions.rs:292-297`、`app.rs:274-275`）。
+**竞品对照**：tusk 待提交事务模型——重命名 / 删除 / 网格编辑先 staged，行级着色（绿 = 新增草稿、蓝 = 改名、红 = 删除线），`⌘S` 统一提交，带历史撤销；行内重命名 Enter / Blur 进 pending 队列（`nav-analysis-zqlz-tusk.md:124,198-200,210,221`，`app_objects.rs:1-516,690-728`、`app_edit.rs:817-869`、`app.rs:3075-3147`、`actions.rs:292-297`、`app.rs:274-275`）。
 
 **建议（边界判断，不是现在开工）**：
 
@@ -473,18 +494,18 @@
 3. 颜色 / 尺寸：新增徽标颜色先确认主题 JSON 已定义，代码零裸 hex；结构尺寸登记 `workbench_shell/src/ui.rs`；契约测试 `cargo test -p rds-workbench --test ui_contract`。
 4. 测试骨架：窗口测试不用 `use gpui_kit::*` 通配导入；菜单断言不读 `PopupMenu` 内部；键盘激活在 KeyUp 上断言业务状态真的变了（`gpui-kit-dev` skill 窗口测试节）。
 5. 每批独立：`cargo check --workspace --all-targets -j 2` → 单测 → 简体中文提交信息；批次之间不跨改未授权模块。
-6. 过程产物：探针 / 验证日志 / 一次性脚本落 `.rds/tmp/` 或 `tools/_archive/`；竞品研究报告进 `docs/analysis/`；架构变更回写 `database-navigator-architecture.md` §11 权威清单。
+6. 过程产物：探针原始日志 / 验证脚本 / 采集数据落 `.rds/tmp/` 或 `tools/_archive/`；临时探针 bin 归档后即删（见 §3.3.1）；竞品研究报告进 `docs/analysis/`；架构变更回写 `database-navigator-architecture.md` §11 权威清单。
 
 ### 5.2 建议批次顺序（依赖关系自上而下）
 
 | 批次 | 内容 | 前置闸门 | 交付物 |
 | --- | --- | --- | --- |
-| B-2-0 | 真机并发验证（V1–V5 探针 + 报告） | 本稿 §3.3 | 验证报告（`docs/analysis/`）；通过才进 B-2-1 |
-| S3-④ v1 | 统计估计后台回填（PG / MySQL；SQLite / DuckDB 留空；L2 回写；占位 + 徽标） | 无 | 任务族 + 纯函数 + 驱动矩阵单测 + 真机四库走查 |
-| B-1 v1 | per-connection + 全局 glob include/exclude mask；树路径与搜索命中叠加；对话框与面板头入口；持久化 | 无 | `nav_mask_passes` 规则矩阵单测；settings / NavHost / workbench 三层接线单测 |
+| B-2-0 | 真机并发验证（V1–V5 探针 + 报告） | 本稿 §3.3 | 临时探针 bin（归档后即删）+ `.rds/tmp/` 原始采集；验证报告（`docs/analysis/`）；通过才进 B-2-1 |
+| S3-④ v1 | 统计估计后台回填（PG / MySQL；SQLite / DuckDB 留空；L2 回写；占位 + 徽标） | 无独立闸门；MySQL `TABLE_ROWS` 属新写 SQL，先在本批次驱动适配子步骤真机跑通（§1.4.3） | 任务族 + `format_row_estimate` 纯函数单测 + 驱动矩阵单测 + 真机四库走查 |
+| B-1 v1 | per-connection + 全局 glob include/exclude mask；树路径与搜索命中叠加；对话框与面板头入口；持久化 | 无 | `nav_glob_match` 通配匹配单测；`nav_mask_passes` 规则矩阵单测；settings / NavHost / workbench 三层接线单测 |
 | S4-N3 v1 | 前缀累积匹配 + 超时重置 + 焦点保护 + 纯函数单测 | 无 | 键盘漫游单测矩阵 |
 | S4-N4 v1 | 对象 / 连接菜单连接态置灰 + 菜单规格纯函数 + 状态矩阵单测 | 无 | 菜单条目规格单测 |
-| B-2-1 | per-conn 信号量 + 全局软帽（仅 B-2-0 报告通过后） | B-2-0 通过 | 调度改造 + 并发实测记录回写架构文档 |
+| B-2-1 | per-conn 信号量 + 全局软帽 + disconnect / delete_connection 两条路径信号量条目回收（仅 B-2-0 报告通过后） | B-2-0 通过 | 调度改造 + 回收钩子 + 并发实测记录回写架构文档 |
 | 后续 v2（另立） | 两段 mask 匹配；视口翻页；驱动能力位门控；对象 DDL 重命名 + staged；多选；按连接 family 批量取消 | 各自前置条件 | 另行立项书 |
 
 ### 5.3 明确不在本稿范围
@@ -532,61 +553,67 @@
 | --- | --- |
 | 视图状态全字段 | `crates/database/src/nav_view.rs:220-341` |
 | 搜索开关 / 签名 / 序号 | `crates/database/src/nav_view.rs:272-284`；`crates/database/src/nav_view/chrome.rs:783-872` |
-| `NavOrderItem.name` | `crates/database/src/nav_view.rs:376-385` |
+| `NavOrderItem.name` | `crates/database/src/nav_view.rs:376-386` |
 | facet 过滤纯函数 | `crates/database/src/nav_view.rs:448-507` |
-| 键盘动作实现 | `crates/database/src/nav_view.rs:636-726` |
+| 键盘动作实现（移动 / 边缘 / 翻页 / 前缀） | `crates/database/src/nav_view.rs:636-654,657-668,674-691,720-749` |
 | 键盘接线 | `crates/database/src/nav_view/chrome.rs:915-1008` |
-| 命令定义 / 按键绑定 | `crates/database/src/commands.rs:27,29-35`；`crates/app/src/main.rs:284,286-289` |
-| 行序同步 / 分组头菜单 / 渲染入口 | `crates/database/src/nav_view/rows.rs:128-181`；分组头 `:825-954`（重命名项 `:861-867`）；`render_connection_row:1076`、`render_nav_node:2001` |
-| 连接 / 对象行右键先选中 | `crates/database/src/nav_view/rows.rs:1611-1624`、`:2218-2231` |
+| 命令定义 / 按键绑定 | `crates/database/src/commands.rs:27,29-35`；`crates/app/src/main.rs:287,289-292` |
+| 行序同步 / 分组头菜单 / 渲染入口 | `crates/database/src/nav_view/rows.rs:128-181`；分组头 `:825-954`（重命名项 `:861-867`）；`render_connection_row:1076`、`render_nav_node:2001`；`render_search_hit:2685-2820`（无右键菜单） |
+| 连接 / 对象行右键先选中 | `crates/database/src/nav_view/rows.rs:1611-1625`、`:2218-2232` |
 | vendor 右键菜单（只 stop_propagation + 开菜单，不选中） | `vendor/gpui-component/src/menu/context_menu.rs:403-405` |
-| 连接菜单 / 对象菜单 | `crates/database/src/nav_view/rows.rs:1643-1928`、`:2268-2455` |
-| 分区 / 继承徽标 | `crates/database/src/nav_view/rows.rs:2148-2166` |
+| 连接菜单 / 对象菜单 | `crates/database/src/nav_view/rows.rs:1643-1928`；对象条件准备 `:2235-2267`、菜单闭包 `:2268-2455` |
+| 分区 / 继承徽标槽位（Table 行尾 badges，muted 弱色） | `crates/database/src/nav_view/rows.rs:2172-2188`；分区子表标记 `traits.rs:137` |
+| 千分位既有重复实现（技术债，本批不跨 crate 抽取） | `result_panel/src/grid.rs:2846`；`editor/src/history.rs:257`；`analytics_resource/src/present.rs:71`；`mock/src/mock_view.rs:1057` |
 | 行内编辑器与直接提交 | `crates/database/src/nav_view/editors.rs:13,158,191,251,288,336,350,375,381` |
-| 搜索命中合成节点 / 测试夹具 `None` | `crates/database/src/nav_view/primitives.rs:521,1015`；`crates/database/src/nav_view/tests.rs:263,1439,1556,1632,1850` |
-| 搜索防抖 / 签名 / seq | `crates/database/src/nav_view/actions.rs:189-236,242-293` |
-| 连接补建连辅助 | `crates/database/src/nav_view/actions.rs:360,557,688,387-401` |
-| 面板状态防抖落库 / 待定位滚动 | `crates/database/src/nav_view/actions.rs:746,1199-1209,1252,1292-1302` |
-| 任务枚举 / 计数 / 优先级 | `crates/database/src/nav_jobs.rs:276-374,389-395,526-571` |
+| 视图纯函数 / 搜索命中合成节点 / 测试夹具 `None` | `nav_view/primitives.rs:643`（`nav_name_highlight`）；`:521,1015`；`crates/database/src/nav_view/tests.rs:263,1439,1556,1632,1850` |
+| 搜索防抖 / 签名 / seq / 句柄字段 | `crates/database/src/nav_view/actions.rs:189-236,242-293`；`nav_view.rs:553,595`（`search_debounce`） |
+| 展开集合去重先例（`expanded`） | `crates/database/src/nav_view/actions.rs:325,332,341` |
+| 连接补建连辅助 | `crates/database/src/nav_view/actions.rs:360,557,688,387-414` |
+| 面板状态防抖落库 / 待定位滚动 | `crates/database/src/nav_view/actions.rs:746,1199-1211,1252,1292-1302` |
+| 任务枚举 / 共享状态 / 计数 / 优先级 | `crates/database/src/nav_jobs.rs:276-374,377-401,389-395,526-571` |
 | 三信号量与任务归属 | `crates/database/src/nav_jobs.rs:41-72,133,139,150,161,164,170,855,959,987,1011,1032,1061,1095-1128` |
 | worker / 线程模型 / 建连等待 | `crates/database/src/nav_jobs.rs:787-836,861-876` |
-| 搜索命中精筛点 | `crates/database/src/nav_jobs.rs:1238-1270` |
-| 内省服务与系统过滤 | `crates/database/src/navigator_service.rs:44,87-114,706,1027-1088` |
+| 搜索命中结构 / 精筛点 | `crates/database/src/nav_jobs.rs:196-209`（`conn_id:197`）；`:1238-1270`（schema `:1252-1257` → contains `:1259-1261` → 正则 `:1263-1270`） |
+| 内省服务与系统过滤 / 路径类型 | `crates/database/src/navigator_service.rs:31,44,87-114,194-221,416,472,706,723,847,869,1027-1088` |
 | 导航模型 | `crates/database/src/model.rs:129,143,167-195` |
 | trait 内省 / 详情 / 事务 / 连接 | `crates/engine/src/driver/traits.rs:125-138,145-151,186-191,201-325,425-434,438-706` |
 | 驱动单连接 Mutex | `crates/engine/src/driver/native/postgres.rs:53,376-393`；`mysql.rs:56`；`sqlite.rs:245`；`duckdb.rs:214` |
 | 六驱动 `get_table_detail` 未回填行估计（全 `None`） | `native/postgres.rs:1520`、`native/postgres_native.rs:1178`、`native/mysql.rs:1563`、`native/mysql_native.rs:995`、`native/sqlite.rs:1212`、`native/duckdb.rs:1254` |
-| 弃池决策 | `crates/engine/src/driver/factory.rs:138-159` |
+| 现状内省 SQL 参照（无行数统计先例） | `native/sqlite.rs:712,1150`（`sqlite_master` 取 `name/type/sql`）；`native/duckdb.rs:1011`（`duckdb_tables()` 仅 SELECT `sql`） |
+| 弃池决策（主路径单连接） | `crates/engine/src/driver/factory.rs:138-159` |
+| 旧池文件（非主路径，7 个） | `native/postgres_pool.rs`、`native/mysql_pool.rs`、`native/sqlite_pool.rs`、`native/duckdb_pool.rs`、`smart_pool.rs`、`standard_pool.rs`、`wasm/pool.rs` |
 | 连接管理器 | `crates/engine/src/connection_manager.rs:114,130,136,144` |
 | L1 缓存全局锁 | `crates/engine/src/cache/cache_manager.rs:66-73,83,104-118` |
 | L2 统计同步写值链路 | `crates/engine/src/persistence/metadata_cache.rs:1836,2321,3058,3073,3087` |
 | L2 / 索引迁移列 | `migrations/connection_metadata/004_refactor_to_normalized.sql:43`；`006_add_metadata_index.sql:30,33` |
 | 能力字典 / 位 / 阶段 | `crates/engine/src/driver/capability.rs:30-37,116-135,155-285` |
 | 驱动目录元数据 | `crates/engine/src/persistence/driver_catalog.rs:30-41` |
-| 驱动注册表 / 描述符能力串 | `crates/engine/src/driver/registry/mod.rs:90,163`；`crates/engine/src/driver/registry/descriptors.rs:149-194,185` |
+| 驱动注册表 / 描述符能力串 / 派生函数 | `crates/engine/src/driver/registry/mod.rs:90,163`；`crates/engine/src/driver/registry/descriptors.rs:149-194,185,369` |
 | PG 属性面板 reltuples | `crates/database/src/property_providers/pg.rs:227,233-248,669` |
 | 网格行数口径 | `crates/database/src/table_data.rs:11-12` |
-| 设置模型 | `crates/settings/src/model.rs:359-409` |
-| NavHost 端口 | `crates/database/src/nav_host.rs:51-61,79,121-122,144-152,157,160,163,206,247` |
+| 设置模型（facet / Navigator / 手动 Default） | `crates/settings/src/model.rs:359-372,376-410,412-425` |
+| glob 匹配先例（路径语义、仅参照递归骨架） | `crates/content_search/src/lib.rs:55-76` |
+| NavHost 端口（含 disconnect `:163` / delete_connection `:195` 信号量回收挂钩点） | `crates/database/src/nav_host.rs:52-61,79,121-122,144-152,157,160,163,195,206,247` |
 | workbench 互转先例 | `crates/workbench/src/components/nav_host.rs:129-149,201-216` |
-| 导航 UI 常量 | `crates/workbench_shell/src/ui.rs:118,123,125,130,140,151-155` |
-| 真机并发探针参照形态 | `crates/engine/src/bin/pg_probe.rs:1-62`（端点 `:15`、独立 Runtime `:53`、入口 `main:50`） |
+| 导航 UI 常量 | `crates/workbench_shell/src/ui.rs:118,123,125,130,136,140,151-155` |
+| 真机并发探针参照形态（`src/bin/*.rs` 目录约定自动注册，`engine/Cargo.toml` 无显式 `[[bin]]`） | `crates/engine/src/bin/pg_probe.rs:1-62`（端点 `:15`、独立 Runtime `:53`、入口 `main:50`；密码解密 `shared::crypto:5`） |
 
 ### 7.2 竞品分析文档（`docs/analysis/competitor-analysis/`，gitignore）
 
 | 主题 | 文档:行号 |
 | --- | --- |
-| DBeaver 四套搜索机制 / TreeFilter / 事件合并 / 过滤器配置 / 行内关闭 | `nav-analysis-dbeaver.md:14,16,57,61,67,71,75,102-115,146,174,178,219,225,228` |
-| rustgrid 两阶段 / 键盘 / 描述符能力门控 / 分级建议 | `nav-analysis-cellar-rustgrid-sqlab.md:139,140,141,151,159,164,174-181,189,320` |
-| tusk staged / 右键先选中 / 行内重命名；zqlz 模态重命名 | `nav-analysis-zqlz-tusk.md:42,124,196-200,210,221` |
-| navop 会话复用池 / 朴素并发负向证据 / manifest 动作 | `nav-analysis-navop.md:62,65,72,90` |
-| blanco 池化 / 无队列负向证据 / 方向键 / 能力门控 / 重命名弹窗 | `nav-analysis-fluxdb-blanco.md:17,51,139-140,142,166,168,196,210,213` |
+| DBeaver 四套搜索机制 / TreeFilter / 事件合并 / 过滤器配置 / 行内关闭 / 统计后台化 | `nav-analysis-dbeaver.md:14,16,57,61,67,71,75,106,110,115,146,174,178,219,225,228` |
+| rustgrid 两阶段 / 键盘 / 描述符能力门控 / 分级建议 | `nav-analysis-cellar-rustgrid-sqlab.md:139,140,141,151,159,164,174-176,189,320` |
+| tusk staged / 右键先选中 / 行内重命名；zqlz 模态重命名 | `nav-analysis-zqlz-tusk.md:42,124,198-200,210,221` |
+| navop 会话复用池 / 朴素并发负向证据 | `nav-analysis-navop.md:62,65,90` |
+| blanco 池化 / 无队列负向证据 / 能力门控 / 重命名弹窗与确认 | `nav-analysis-fluxdb-blanco.md:17,51-52,139-140,166,168,170,173,196,204,210,213` |
 
 ### 7.3 本仓架构文档与计划先例
 
 | 主题 | 文件:行号 |
 | --- | --- |
 | 导航模块纪律（§4 第 1 条 render 零 I/O、第 5 条缓存只增不删） | `docs/architecture/database/README.md:94,98` |
+| 过程产物忽略口径（`.rds/` 整体忽略；`docs/analysis/` 不入库） | `.gitignore:12,50` |
 | 权威待办 #8（facet 为全局 UI 偏好，不进 `navigator_state`） | `docs/architecture/database/database-navigator-architecture.md:390` |
 | 权威待办 #14（系统库 / 系统 schema 过滤） | `docs/architecture/database/database-navigator-architecture.md:396` |
 | 权威待办 #23（搜索结果在树中定位 + 可编程滚动入口先例） | `docs/architecture/database/database-navigator-architecture.md:405` |

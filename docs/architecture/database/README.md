@@ -135,6 +135,7 @@ cargo check --workspace --all-targets -j 2
 | `database-navigator-prototype-design.md` | **长什么样**：面板布局 / 连接行解剖（v6/v7 降密）/ 双通道徽标 / 树模型 / 三级元数据管线 / **§6.2 右键菜单** / 主题映射 / GPUI 落点 |
 | `database-navigator-user-guide.md` | **怎么用**：入口 / 界面导览（连接行怎么读 · 状态色 · 类型形状 · 层级）/ 典型流程 / 快捷键 / 显示开关 / FAQ / 验收清单 |
 | `database-nav-dev-plan.md` | **做到哪了**：Phase A/B/C 与 v6/v7 任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景、风险 |
+| `database-nav-b-tier-proposal.md` | **B 档后续批次立项方案（待拍板）**：S3-④ 统计估计两阶段回填 / B-1 include-exclude 双向过滤器 / B-2 按连接分片并发（真机 V1–V5 验证闸门，未过闸不改调度）/ S4-N 树交互六项现状与规格；附 20 项待拍板决策汇总与本地源码 / 竞品取证索引 |
 | `database-navigator-prototype.html` | 可交互示意稿（明暗双主题；密度对比） |
 | `database-navigator-showcase.html` | **宣传版（视觉）**：一页看懂特点 / 剧本 / 流程 / 架构 / **三级缓存与大库（索引分页 · 计数 · 跨连接搜索）**；自包含、离线可开、首屏可在归属域 facet 间切换并展示索引搜索结果区 |
 | `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版（含 mermaid 流程图），章节一一对应，适合贴 PR / wiki |
