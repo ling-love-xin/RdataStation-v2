@@ -2091,108 +2091,20 @@ fn prefix_match_matches_full_prefix_not_first_char() {
     assert_eq!(super::nav_match_prefix(&order, "b", 0), Some(1));
 }
 
-// ---------- S4-N4 / B2 菜单连接态门控矩阵 ----------
-
-#[test]
-fn obj_menu_gates_source_actions_on_disconnect() {
-    use super::{NavObjMenuAction, nav_obj_menu_enabled};
-    use crate::nav::capability::family_ops;
-
-    // PostgreSQL 表能力集：覆盖类型敏感回源动作 + 容器刷新。
-    let table_ops = family_ops("postgresql", Some(ObjectKind::Table));
-    // 断连：回源库动作全部置灰（含容器刷新）。
-    for action in [
-        NavObjMenuAction::DataView,
-        NavObjMenuAction::GenSql,
-        NavObjMenuAction::Refresh,
-        NavObjMenuAction::Mock,
-        NavObjMenuAction::Stats,
-        NavObjMenuAction::InsightSchema,
-    ] {
-        assert!(
-            !nav_obj_menu_enabled(action, false, &table_ops),
-            "{action:?} 断连应置灰"
-        );
-    }
-    // 连接：表能力集覆盖的类型敏感动作 + 容器刷新可用。
-    for action in [
-        NavObjMenuAction::DataView,
-        NavObjMenuAction::GenSql,
-        NavObjMenuAction::Refresh,
-        NavObjMenuAction::Mock,
-        NavObjMenuAction::Stats,
-        NavObjMenuAction::InsightSchema,
-    ] {
-        assert!(
-            nav_obj_menu_enabled(action, true, &table_ops),
-            "{action:?} 连接应可用"
-        );
-    }
-}
-
-#[test]
-fn obj_menu_disabled_when_family_ops_lack_the_action() {
-    use super::{NavObjMenuAction, nav_obj_menu_enabled};
-    use crate::nav::capability::family_ops;
-
-    // MySQL 档案不声明序列 → 空集；即便已连接，类型敏感回源动作仍置灰。
-    let empty = family_ops("mysql", Some(ObjectKind::Sequence));
-    assert!(empty.is_empty());
-    for action in [
-        NavObjMenuAction::DataView,
-        NavObjMenuAction::GenSql,
-        NavObjMenuAction::Mock,
-        NavObjMenuAction::Stats,
-        NavObjMenuAction::InsightSchema,
-    ] {
-        assert!(
-            !nav_obj_menu_enabled(action, true, &empty),
-            "{action:?} 族不支持应置灰"
-        );
-    }
-    // 容器刷新不按能力集收窄：连接即可用（类型适用性归 B4 动作注册表 applies）。
-    assert!(nav_obj_menu_enabled(NavObjMenuAction::Refresh, true, &empty));
-}
-
-#[test]
-fn view_ops_without_dml_template_gates_gensql() {
-    use super::{NavObjMenuAction, nav_obj_menu_enabled};
-    use crate::nav::capability::family_ops;
-
-    let view_ops = family_ops("postgresql", Some(ObjectKind::View));
-    assert!(nav_obj_menu_enabled(NavObjMenuAction::DataView, true, &view_ops));
-    assert!(!nav_obj_menu_enabled(NavObjMenuAction::GenSql, true, &view_ops));
-}
-
-#[test]
-fn obj_menu_keeps_local_actions_on_disconnect() {
-    use super::{NavObjMenuAction, nav_obj_menu_enabled};
-    use crate::nav::capability::OpSet;
-
-    // 本地动作不查能力集：空集下断连保持可用。
-    let empty = OpSet::EMPTY;
-    for action in [
-        NavObjMenuAction::Props,
-        NavObjMenuAction::CopyName,
-        NavObjMenuAction::OpenSql,
-        NavObjMenuAction::InsightPanel,
-    ] {
-        assert!(
-            nav_obj_menu_enabled(action, false, &empty),
-            "{action:?} 断连不应置灰"
-        );
-        assert!(nav_obj_menu_enabled(action, true, &empty), "{action:?} 连接应可用");
-    }
-}
+// ---------- B4 连接菜单连接态门控 ----------
+//
+// 对象菜单的类型白名单 / 门控 / 分组顺序已并入 L4 动作注册表（`crate::nav::actions`），
+// 纯函数矩阵断言见 `nav/actions/registry.rs` 的 `#[cfg(test)]`；此处仅保留连接根菜单门控。
 
 #[test]
 fn conn_menu_gates_only_refresh_on_disconnect() {
-    use super::{NavObjMenuAction, nav_conn_menu_enabled};
+    use super::nav_conn_menu_enabled;
+    use crate::nav::actions::NavActionId;
     // 连接菜单只有「刷新元数据」断连置灰，其余无条件项保持可用。
-    assert!(!nav_conn_menu_enabled(NavObjMenuAction::Refresh, false));
-    assert!(nav_conn_menu_enabled(NavObjMenuAction::Refresh, true));
-    assert!(nav_conn_menu_enabled(NavObjMenuAction::OpenSql, false));
-    assert!(nav_conn_menu_enabled(NavObjMenuAction::CopyName, false));
-    assert!(nav_conn_menu_enabled(NavObjMenuAction::InsightPanel, false));
-    assert!(nav_conn_menu_enabled(NavObjMenuAction::Props, false));
+    assert!(!nav_conn_menu_enabled(NavActionId::RefreshProps, false));
+    assert!(nav_conn_menu_enabled(NavActionId::RefreshProps, true));
+    assert!(nav_conn_menu_enabled(NavActionId::OpenSql, false));
+    assert!(nav_conn_menu_enabled(NavActionId::CopyName, false));
+    assert!(nav_conn_menu_enabled(NavActionId::InsightPanel, false));
+    assert!(nav_conn_menu_enabled(NavActionId::ShowProperties, false));
 }

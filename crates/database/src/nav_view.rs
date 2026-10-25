@@ -61,7 +61,7 @@ use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
     PropertyRequest,
 };
-use crate::nav::capability::{NavOp, OpSet};
+use crate::nav::actions::NavActionId;
 use crate::nav::family_profile;
 use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
@@ -233,65 +233,14 @@ pub(crate) fn nav_match_prefix(order: &[NavOrderItem], buf: &str, start: usize) 
         })
 }
 
-/// 对象菜单动作（S4-N4 门控矩阵的输入维度；渲染只按它查 `nav_obj_menu_enabled`）。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum NavObjMenuAction {
-    /// 查看数据（LIMIT 200）——回源库执行查询，断连置灰。
-    DataView,
-    /// 生成 SQL ▸——需列信息，断连置灰。
-    GenSql,
-    /// 刷新元数据——断连无元数据可刷，置灰。
-    Refresh,
-    /// 生成 Mock 数据——读源库结构，断连置灰。
-    Mock,
-    /// 查看统计——取样读源库，断连置灰。
-    Stats,
-    /// 结构洞察——源库内省，断连置灰。
-    InsightSchema,
-    /// 查看属性——L2 缓存可渲染，断连可用。
-    Props,
-    /// 复制名称 / 复制限定名——本地剪贴板，断连可用。
-    CopyName,
-    /// 在 SQL 编辑器中打开——空查询壳，断连可用。
-    OpenSql,
-    /// 查看洞察——纯面板导航，断连可用。
-    InsightPanel,
-}
-
-/// S4-N4 / B2 对象菜单门控（纯函数，单测钉矩阵）。
+/// S4-N4 / B4 连接菜单连接态门控（纯函数）：刷新元数据断连置灰，其余无条件项保持可用。
 ///
-/// 判定顺序（方案稿 §4.3 门控顺序）：
-/// 1. 本地动作（属性 / 剪贴板 / 面板导航 / 编辑器空查询壳）恒可用，不查连接、不查能力集；
-/// 2. 类型敏感回源库动作：`connected` 前置 + 当前族 × 类型能力集声明（`ops`）；
-/// 3. 容器刷新（Refresh）维持连接前置——它的类型适用性归 B4 动作注册表 `applies`，
-///    本批不按能力集收窄。
-///
-/// 置灰而非隐藏（保持菜单结构稳定，DBeaver 不可用项置灰同口径）。
-pub(crate) fn nav_obj_menu_enabled(
-    action: NavObjMenuAction,
-    connected: bool,
-    ops: &OpSet,
-) -> bool {
+/// 连接根无对象类型维度，不查 L2 能力集。对象菜单门控已并入 L4 动作注册表
+/// [`crate::nav::action_registry`] 的 `entries_for`，本函数仅服务连接根菜单（后续批次
+/// 连接动作族纳入注册表后一并退役）。
+pub(crate) fn nav_conn_menu_enabled(action: NavActionId, connected: bool) -> bool {
     match action {
-        NavObjMenuAction::DataView => connected && ops.has(NavOp::ViewData),
-        NavObjMenuAction::GenSql => connected && ops.has(NavOp::GenDml),
-        NavObjMenuAction::Mock => connected && ops.has(NavOp::MockData),
-        NavObjMenuAction::Stats => connected && ops.has(NavOp::Stats),
-        NavObjMenuAction::InsightSchema => connected && ops.has(NavOp::InsightSchema),
-        NavObjMenuAction::Refresh => connected,
-        NavObjMenuAction::Props
-        | NavObjMenuAction::CopyName
-        | NavObjMenuAction::OpenSql
-        | NavObjMenuAction::InsightPanel => true,
-    }
-}
-
-/// S4-N4 连接菜单连接态门控（纯函数）：刷新元数据断连置灰，其余无条件项保持可用。
-///
-/// 连接根无对象类型维度，不查 L2 能力集。
-pub(crate) fn nav_conn_menu_enabled(action: NavObjMenuAction, connected: bool) -> bool {
-    match action {
-        NavObjMenuAction::Refresh => connected,
+        NavActionId::RefreshProps => connected,
         _ => true,
     }
 }

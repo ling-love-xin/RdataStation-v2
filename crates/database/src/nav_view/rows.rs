@@ -8,6 +8,8 @@
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
 use super::*;
+use crate::nav::action_registry;
+use crate::nav::actions::{ActionGroup, NavActionId};
 use crate::nav::capability::{family_ops, nav_node_object_kind};
 use crate::nav_jobs::JobPriority;
 
@@ -1922,7 +1924,7 @@ impl NavView {
                             PopupMenuItem::new("刷新元数据")
                                 // S4-N4：断连无元数据可刷，置灰（本地配置类动作不置灰）。
                                 .disabled(!super::nav_conn_menu_enabled(
-                                    super::NavObjMenuAction::Refresh,
+                                    NavActionId::RefreshProps,
                                     is_connected,
                                 ))
                                 .on_click(move |_, _, app| {
@@ -2328,22 +2330,22 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let qualified = node.property.as_ref().map(nav_qualified_name);
             let conn_label = m_conn_label.clone();
             let driver = m_driver.clone();
-            let data_like = matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
-            // S4-N4 连接态门控：回源库动作断连置灰（判定走纯函数矩阵，见
-            // [`super::nav_obj_menu_enabled`]；`connected` 在闭包外算好，供 move 进 'static 闭包）。
+            // S4-N4 连接态：闭包外算好供 'static 闭包捕获。
             let obj_connected =
                 self.nav.borrow().connected.contains(&node.connection_id);
-            // B2：族 × 类型静态操作集（断连只查静态位；动作「是否出现」的类型条件仍由下方
-            // 各分支保留，归 B4 动作注册表 `applies`）。`driver` 即连接记录的驱动 type_id，
-            // 档案注册表归一处理别名与未知族回退。
-            let obj_ops = family_ops(&driver, nav_node_object_kind(&node.kind));
+            // B2：族 × 类型静态操作集；B4：动作类型白名单 + 门控 + 分组排序全部由 L4
+            // 动作注册表 `entries_for` 产出，视图层不再写类型 `if` 与散落门控判定。
+            let kind = nav_node_object_kind(&node.kind);
+            let obj_ops = family_ops(&driver, kind);
             // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
             let dml_target = match &menu_path {
                 Some(NavPath::Table {
                     catalog,
                     schema,
                     table,
-                }) if data_like => Some((catalog.clone(), schema.clone(), table.clone())),
+                }) if matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View) => {
+                    Some((catalog.clone(), schema.clone(), table.clone()))
+                }
                 _ => None,
             };
             let dml_root = if dml_target.is_some() {
@@ -2360,243 +2362,223 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let data_target = dml_target.clone().and_then(|(catalog, schema, name)| {
                 nav_data_target(&node.kind, &conn_id, catalog, schema, name)
             });
+            // L4 注册表装配结果：类型白名单过滤 → 门控 → 分组分段 + 组内排序。
+            // 靶可用性（property / qualified / 路径靶是否 `Some`）属视图运行时判定，
+            // 在下方闭包 match 臂内保留现状 `if let Some` 口径。
+            let entries = action_registry().entries_for(kind, obj_connected, &obj_ops);
             move |menu, window, cx| {
                 let mut menu = menu;
-                if let Some(prop0) = menu_prop.clone() {
-                    let e = entity.clone();
-                    let label0 = conn_label.clone();
-                    let drv0 = driver.clone();
-                    menu = menu.item(PopupMenuItem::new("查看属性").on_click(move |_, window, app| {
-                        let prop = prop0.clone();
-                        let label = label0.clone();
-                        let drv = drv0.clone();
-                        e.update(app, |this, cx| {
-                            this.host.show_properties(
-                                PropertyRequest {
-                                    property: prop.clone(),
-                                    conn_label: label.clone(),
-                                    driver: drv.clone(),
-                                    type_id: None,
-                                    data: None,
-                                },
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }));
-                }
-                if data_like {
-                    if let Some(q) = qualified.clone() {
-                        let sql = format!("SELECT * FROM {q} LIMIT 200;");
-                        let host_sql = host.clone();
-                        let cid_view = conn_id.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new("查看数据（LIMIT 200）")
-                                .disabled(!super::nav_obj_menu_enabled(
-                                    super::NavObjMenuAction::DataView,
-                                    obj_connected,
-                                    &obj_ops,
-                                ))
-                                .on_click(
-                            move |_, _, app| {
-                                // B11：打开一份绑定该连接的查询并**自动执行**
-                                // （M4 遗留的“查看数据不自动执行”在此关闭）
-                                host_sql.open_query(
-                                    QueryRequest {
-                                        conn_id: Some(cid_view.clone()),
-                                        sql: sql.clone(),
-                                        run: true,
-                                    },
-                                    app,
-                                );
-                            },
-                        ));
-                    }
-                    // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板（只注入不执行）。
-                    if let Some((catalog, schema, table)) = dml_target.clone() {
-                        let q = crate::sql_gen::qualified_name(
-                            Some(catalog.as_str()),
-                            Some(schema.as_str()),
-                            &table,
-                        );
-                        let e = entity.clone();
-                        let key = nkey.clone();
-                        let cid = conn_id.clone();
-                        let root = dml_root.clone();
-                        // S4-N4：submenu 入口断连置灰（`PopupMenuItem::submenu` 支持
-                        // disabled；先 `build` 拿实体再挂 `.disabled`）。
-                        let sub_entity = PopupMenu::build(window, cx, move |m, _w, _c| {
-                            let mut m = m;
-                            for kind in [DmlKind::Insert, DmlKind::Update, DmlKind::Delete] {
-                                let e = e.clone();
-                                let key = key.clone();
-                                let cid = cid.clone();
-                                let root = root.clone();
-                                let catalog = catalog.clone();
-                                let schema = schema.clone();
-                                let table = table.clone();
-                                let q = q.clone();
-                                m = m.item(PopupMenuItem::new(kind.label()).on_click(
-                                    move |_, _, app| {
-                                        nav_jobs::enqueue_generate_dml(
-                                            &key,
-                                            &cid,
-                                            root.as_deref(),
-                                            &catalog,
-                                            &schema,
-                                            &table,
-                                            &q,
-                                            kind,
+                // 注册表序列已按 Primary → Generate → Object 分组排序；prev_group 记录上一个
+                // 实际渲染的分组，被靶条件跳过的组不更新它，避免组间残留分隔线。
+                let mut prev_group: Option<ActionGroup> = None;
+                for entry in &entries {
+                    let d = entry.descriptor;
+                    // 靶可用性判定保留在视图层：注册表只声明类型白名单，property / qualified /
+                    // 路径靶是否 `Some` 由运行时节点身份决定。各臂 on_click 处理器与现状逐条等价。
+                    let item: Option<PopupMenuItem> = match d.id {
+                        NavActionId::ShowProperties => menu_prop.clone().map(|prop0| {
+                            let e = entity.clone();
+                            let label0 = conn_label.clone();
+                            let drv0 = driver.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, window, app| {
+                                    let prop = prop0.clone();
+                                    let label = label0.clone();
+                                    let drv = drv0.clone();
+                                    e.update(app, |this, cx| {
+                                        this.host.show_properties(
+                                            PropertyRequest {
+                                                property: prop.clone(),
+                                                conn_label: label.clone(),
+                                                driver: drv.clone(),
+                                                type_id: None,
+                                                data: None,
+                                            },
+                                            window,
+                                            cx,
                                         );
-                                        e.update(app, |this, cx| this.ensure_nav_pump(cx));
-                                    },
-                                ));
+                                        cx.notify();
+                                    });
+                                })
+                        }),
+                        NavActionId::ViewData => qualified.clone().map(|q| {
+                            let sql = format!("SELECT * FROM {q} LIMIT 200;");
+                            let host_sql = host.clone();
+                            let cid_view = conn_id.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, _, app| {
+                                    // B11：打开一份绑定该连接的查询并**自动执行**
+                                    // （M4 遗留的“查看数据不自动执行”在此关闭）
+                                    host_sql.open_query(
+                                        QueryRequest {
+                                            conn_id: Some(cid_view.clone()),
+                                            sql: sql.clone(),
+                                            run: true,
+                                        },
+                                        app,
+                                    );
+                                })
+                        }),
+                        NavActionId::OpenSql => {
+                            let host = host.clone();
+                            let cid = conn_id.clone();
+                            Some(
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, _, app| {
+                                        // B11：只入队，宿主开文档并聚焦
+                                        host.open_query(
+                                            QueryRequest {
+                                                conn_id: Some(cid.clone()),
+                                                sql: String::new(),
+                                                run: false,
+                                            },
+                                            app,
+                                        );
+                                    }),
+                            )
+                        }
+                        NavActionId::InsightPanel => {
+                            let e = entity.clone();
+                            Some(
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, _, app| {
+                                        e.update(app, |this, cx| {
+                                            this.host.open_right_panel(RightPanel::Insight, cx);
+                                        });
+                                    }),
+                            )
+                        }
+                        NavActionId::GenDml => match dml_target.clone() {
+                            Some((catalog, schema, table)) => {
+                                let q = crate::sql_gen::qualified_name(
+                                    Some(catalog.as_str()),
+                                    Some(schema.as_str()),
+                                    &table,
+                                );
+                                let e = entity.clone();
+                                let key = nkey.clone();
+                                let cid = conn_id.clone();
+                                let root = dml_root.clone();
+                                // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板
+                                // （只注入不执行）；submenu 入口断连置灰由注册表门控给出。
+                                let sub_entity = PopupMenu::build(window, cx, move |m, _w, _c| {
+                                    let mut m = m;
+                                    for kind in [DmlKind::Insert, DmlKind::Update, DmlKind::Delete] {
+                                        let e = e.clone();
+                                        let key = key.clone();
+                                        let cid = cid.clone();
+                                        let root = root.clone();
+                                        let catalog = catalog.clone();
+                                        let schema = schema.clone();
+                                        let table = table.clone();
+                                        let q = q.clone();
+                                        m = m.item(PopupMenuItem::new(kind.label()).on_click(
+                                            move |_, _, app| {
+                                                nav_jobs::enqueue_generate_dml(
+                                                    &key,
+                                                    &cid,
+                                                    root.as_deref(),
+                                                    &catalog,
+                                                    &schema,
+                                                    &table,
+                                                    &q,
+                                                    kind,
+                                                );
+                                                e.update(app, |this, cx| this.ensure_nav_pump(cx));
+                                            },
+                                        ));
+                                    }
+                                    m
+                                });
+                                Some(
+                                    PopupMenuItem::submenu(d.label, sub_entity)
+                                        .disabled(!entry.enabled),
+                                )
                             }
-                            m
-                        });
-                        let gen_sql_enabled = super::nav_obj_menu_enabled(
-                            super::NavObjMenuAction::GenSql,
-                            obj_connected,
-                            &obj_ops,
-                        );
-                        menu = menu.item(
-                            PopupMenuItem::submenu("生成 SQL", sub_entity)
-                                .disabled(!gen_sql_enabled),
-                        );
-                    }
-                }
-                {
-                    let e = entity.clone();
-                    let host_copy = host.clone();
-                    let name_copy = dname.clone();
-                    menu = menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
-                        let name = name_copy.clone();
-                        app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
-                        host_copy.notice(format!("已复制：{name}"), app);
-                        e.update(app, |_, cx| cx.notify());
-                    }));
-                }
-                if let Some(q) = qualified.clone() {
-                    let e = entity.clone();
-                    let host_copy = host.clone();
-                    menu =
-                        menu.item(PopupMenuItem::new("复制限定名").on_click(move |_, _, app| {
-                            let q = q.clone();
-                            app.write_to_clipboard(ClipboardItem::new_string(q.clone()));
-                            host_copy.notice(format!("已复制：{q}"), app);
-                            e.update(app, |_, cx| cx.notify());
-                        }));
-                }
-                if let Some(p) = menu_path.clone() {
-                    let e = entity.clone();
-                    let cid = conn_id.clone();
-                    let key = nkey.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("刷新元数据")
-                            // S4-N4：回源库动作断连置灰（刷新无元数据可刷）。
-                            .disabled(!super::nav_obj_menu_enabled(
-                                super::NavObjMenuAction::Refresh,
-                                obj_connected,
-                                &obj_ops,
-                            ))
-                            .on_click(move |_, _, app| {
-                                let cid = cid.clone();
-                                let key = key.clone();
-                                let p = p.clone();
-                                e.update(app, |this, cx| {
-                                    this.refresh_node(&cid, &key, Some(p.clone()), cx);
-                                });
-                            }),
-                    );
-                }
-                // 通用模块入口（所有对象节点都有，与节点类型 / 连接状态无关）：
-                // SQL 编辑器 / 洞察；Mock 只针对表 / 视图（`data_like`）。
-                menu = menu.separator().item({
-                    // `host` 是上层块里的局部（`self` 不能进 'static 闭包）
-                    let host = host.clone();
-                    let cid = conn_id.clone();
-                    PopupMenuItem::new("在 SQL 编辑器中打开").on_click(move |_, _, app| {
-                        // B11：同上方连接菜单——只入队，宿主开文档并聚焦
-                        host.open_query(
-                            QueryRequest {
-                                conn_id: Some(cid.clone()),
-                                sql: String::new(),
-                                run: false,
-                            },
-                            app,
-                        );
-                    })
-                });
-                if data_like {
-                    let e = entity.clone();
-                    // 定向请求：连接 + 源库对象（catalog / schema / 名字）——Mock 面板据此
-                    // 读源库结构并预填目标表名（v1 主路径：源库结构 → 造新数据）。
-                    let request = data_target.clone();
-                    // 洞察那份先克隆出来：Mock 的闭包会把 `request` move 进去
-                    let request_for_insight = request.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("生成 Mock 数据")
-                            // S4-N4：读源库结构，断连置灰。
-                            .disabled(!super::nav_obj_menu_enabled(
-                                super::NavObjMenuAction::Mock,
-                                obj_connected,
-                                &obj_ops,
-                            ))
-                            .on_click(move |_, _, app| {
-                                let request = request.clone();
-                                e.update(app, |this, cx| {
-                                    this.host.open_mock_panel(request, cx);
-                                });
-                            }),
-                    );
-                    // 【M8】看这张源表的统计：取样（LIMIT 500 → 分析临时表）由洞察侧完成，
-                    // 这里只给「哪条连接 + 哪张表」（D58 的统一入口）。
-                    if let Some(source) = request_for_insight {
-                        let e = entity.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new("查看统计")
-                                // S4-N4：取样读源库，断连置灰。
-                                .disabled(!super::nav_obj_menu_enabled(
-                                    super::NavObjMenuAction::Stats,
-                                    obj_connected,
-                                    &obj_ops,
-                                ))
+                            None => None,
+                        },
+                        NavActionId::MockData => data_target.clone().map(|request| {
+                            let e = entity.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, _, app| {
+                                    let request = request.clone();
+                                    e.update(app, |this, cx| this.host.open_mock_panel(Some(request), cx));
+                                })
+                        }),
+                        NavActionId::Stats => data_target.clone().map(|source| {
+                            let e = entity.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
                                 .on_click(move |_, _, app| {
                                     let source = source.clone();
+                                    e.update(app, |this, cx| this.host.open_insight_table(source, cx));
+                                })
+                        }),
+                        NavActionId::InsightSchema => insight_schema.clone().map(|target| {
+                            let e = entity.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, _, app| {
+                                    let target = target.clone();
+                                    e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
+                                })
+                        }),
+                        NavActionId::CopyName => {
+                            let e = entity.clone();
+                            let host_copy = host.clone();
+                            let name_copy = dname.clone();
+                            Some(
+                                PopupMenuItem::new(d.label)
+                                    .disabled(!entry.enabled)
+                                    .on_click(move |_, _, app| {
+                                        let name = name_copy.clone();
+                                        app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+                                        host_copy.notice(format!("已复制：{name}"), app);
+                                        e.update(app, |_, cx| cx.notify());
+                                    }),
+                            )
+                        }
+                        NavActionId::CopyQualified => qualified.clone().map(|q| {
+                            let e = entity.clone();
+                            let host_copy = host.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, _, app| {
+                                    let q = q.clone();
+                                    app.write_to_clipboard(ClipboardItem::new_string(q.clone()));
+                                    host_copy.notice(format!("已复制：{q}"), app);
+                                    e.update(app, |_, cx| cx.notify());
+                                })
+                        }),
+                        NavActionId::RefreshProps => menu_path.clone().map(|p| {
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            let key = nkey.clone();
+                            PopupMenuItem::new(d.label)
+                                .disabled(!entry.enabled)
+                                .on_click(move |_, _, app| {
+                                    let cid = cid.clone();
+                                    let key = key.clone();
+                                    let p = p.clone();
                                     e.update(app, |this, cx| {
-                                        this.host.open_insight_table(source, cx)
+                                        this.refresh_node(&cid, &key, Some(p.clone()), cx);
                                     });
-                                }),
-                        );
+                                })
+                        }),
+                    };
+                    if let Some(item) = item {
+                        if prev_group.is_some() && prev_group != Some(d.group) {
+                            menu = menu.separator();
+                        }
+                        menu = menu.item(item);
+                        prev_group = Some(d.group);
                     }
                 }
-                // 【M8】结构洞察（Schema 级）：表 / 视图用它所在的 schema，schema 节点用自己。
-                // 与「查看统计」分工：那个看**数据**（取样），这个看**结构**（源库内省）。
-                if let Some(target) = insight_schema.clone() {
-                    let e = entity.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new("结构洞察")
-                            // S4-N4：源库内省，断连置灰。
-                            .disabled(!super::nav_obj_menu_enabled(
-                                super::NavObjMenuAction::InsightSchema,
-                                obj_connected,
-                                &obj_ops,
-                            ))
-                            .on_click(move |_, _, app| {
-                                let target = target.clone();
-                                e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
-                            }),
-                    );
-                }
-                menu = menu.item({
-                    let e = entity.clone();
-                    PopupMenuItem::new("查看洞察").on_click(move |_, _, app| {
-                        e.update(app, |this, cx| {
-                            this.host.open_right_panel(RightPanel::Insight, cx);
-                        });
-                    })
-                });
                 menu
             }
         }));
