@@ -19,7 +19,7 @@ use gpui_kit::test::TestWindowExt as _;
 
 use crate::commands::QuickOpenLocate;
 use crate::panels::Shared;
-use crate::quick_open::model::Action;
+use crate::quick_open::model::{Action, Mode};
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::view::ConnectionItem;
 
@@ -106,7 +106,7 @@ fn open_palette(
     Entity<Harness>,
     &mut VisualTestContext,
 ) {
-    open_palette_in(cx, None)
+    open_palette_in(cx, None, Mode::Default)
 }
 
 /// 同上，但带项目根（文件源要真项目目录：草稿箱是项目级能力）。
@@ -119,12 +119,25 @@ fn open_palette_in_project(
     Entity<Harness>,
     &mut VisualTestContext,
 ) {
-    open_palette_in(cx, Some(project_root))
+    open_palette_in(cx, Some(project_root), Mode::Default)
+}
+
+/// 「跳转到对象」档打开（`Ctrl+Shift+O` 路径）：仅元数据、主动作 = 回树定位。
+fn open_palette_goto(
+    cx: &mut TestAppContext,
+) -> (
+    Rc<StubHost>,
+    Shared,
+    Entity<Harness>,
+    &mut VisualTestContext,
+) {
+    open_palette_in(cx, None, Mode::Goto)
 }
 
 fn open_palette_in(
     cx: &mut TestAppContext,
     project_root: Option<std::path::PathBuf>,
+    mode: Mode,
 ) -> (
     Rc<StubHost>,
     Shared,
@@ -150,7 +163,7 @@ fn open_palette_in(
     let (harness, cx) = cx.add_window_view(|_window, cx| {
         let palette = cx
             .new(|cx| QuickOpenPalette::new(shared_for_palette, palette_host, cx));
-        palette.update(cx, |palette, cx| palette.on_opened(cx));
+        palette.update(cx, |palette, cx| palette.on_opened(mode, cx));
         Harness { palette }
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -414,6 +427,115 @@ fn metadata_search_starts_only_from_two_chars(cx: &mut TestAppContext) {
     });
     assert!(searching, "两字符应进入「搜索中」");
     assert_eq!(sent.as_deref(), Some("sa"), "发的应是当前词");
+}
+
+/// Goto 档：空词不发后台搜索（`search_seq` 仍为 0），伪造一条空词命中并推泵上列，返回业务键。
+fn push_goto_meta_row(
+    cx: &mut VisualTestContext,
+    palette: Entity<QuickOpenPalette>,
+) -> String {
+    database::nav_jobs::push_search_results_for_test(
+        database::nav_jobs::SearchConsumer::QuickOpen,
+        database::nav_jobs::SearchResult {
+            consumer: database::nav_jobs::SearchConsumer::QuickOpen,
+            seq: 0,
+            query: String::new(),
+            searched: 1,
+            hits: vec![table_hit()],
+        },
+    );
+    cx.update(|_window, cx| palette.update(cx, |palette, cx| palette.pump_results(cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    cx.update(|_window, cx| {
+        palette
+            .read(cx)
+            .row_keys(cx)
+            .into_iter()
+            .find(|key| key.starts_with("meta:"))
+            .expect("元数据行应已上列")
+    })
+}
+
+/// Goto 档接线：打开即锁定 `Goto` 模式，且不出连接行（默认档连接行由既有输入用例覆盖）。
+#[gpui_kit::test]
+fn goto_palette_locks_metadata_only_without_connection_rows(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (_host, _shared, harness, cx) = open_palette_goto(cx);
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    let (mode, keys) = cx.update(|_window, cx| {
+        let palette = palette.read(cx);
+        (palette.current_mode(), palette.row_keys(cx))
+    });
+    assert_eq!(
+        mode,
+        Some(Mode::Goto),
+        "Ctrl+Shift+O 打开应锁定 Goto 档"
+    );
+    assert!(
+        keys.iter().all(|key| !key.starts_with("conn:")),
+        "Goto 档不出连接行：{keys:?}"
+    );
+}
+
+/// Goto 档 `↵`：主动作 = 在导航树中定位（`RevealMetadata`），执行后面板关闭。
+#[gpui_kit::test]
+fn goto_enter_reveals_metadata_into_tree(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (host, shared, harness, cx) = open_palette_goto(cx);
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    let key = push_goto_meta_row(cx, palette.clone());
+    cx.update(|_window, cx| {
+        palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx))
+    });
+
+    cx.simulate_keystrokes("enter");
+
+    let executed = host.taken();
+    assert_eq!(executed.len(), 1, "↵ 应经宿主端口执行一次：{executed:?}");
+    match &executed[0].0 {
+        Action::RevealMetadata(object) => {
+            assert_eq!(object.name, "orders");
+            assert_eq!(object.schema, "public");
+            assert_eq!(object.catalog, "shop");
+        }
+        other => panic!("Goto ↵ 主动作应是回树定位，实际 {other:?}"),
+    }
+    assert!(!executed[0].1, "主动作不保留面板");
+    assert!(!shared.quick_open.get(), "执行后面板要关（下一拍才看得到树）");
+}
+
+/// Goto 档 `⌥↵`：次级动作 = 打开属性面板（`ShowProperties`），与默认档「⌥↵ 定位」方向相反。
+#[gpui_kit::test]
+fn goto_alt_enter_opens_properties_secondary_action(cx: &mut TestAppContext) {
+    let _queue_guard = scratchpad::jobs::test_lock();
+    let (host, shared, harness, cx) = open_palette_goto(cx);
+    let palette = cx.update(|_window, cx| harness.read(cx).palette.clone());
+    let key = push_goto_meta_row(cx, palette.clone());
+    cx.update(|_, cx| {
+        cx.bind_keys([KeyBinding::new(
+            "alt-enter",
+            QuickOpenLocate,
+            Some("workbench"),
+        )])
+    });
+    cx.update(|_window, cx| {
+        palette.update(cx, |palette, cx| palette.set_selection(Some(key), cx))
+    });
+
+    cx.simulate_keystrokes("alt-enter");
+
+    let executed = host.taken();
+    assert_eq!(executed.len(), 1, "⌥↵ 应经宿主端口执行一次：{executed:?}");
+    match &executed[0].0 {
+        Action::ShowProperties(request) => {
+            assert_eq!(request.conn_label, "营销");
+            assert_eq!(request.driver, "mysql");
+        }
+        other => panic!("Goto ⌥↵ 次级动作应是属性面板，实际 {other:?}"),
+    }
+    assert!(!shared.quick_open.get(), "次级动作执行后面板要关");
 }
 
 /// 文件源端到端：打开面板 → 为当前项目排一次扁平清单 → 回填后出「文件」行。

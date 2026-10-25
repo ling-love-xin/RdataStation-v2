@@ -94,6 +94,15 @@ impl QuickOpenDelegate {
             .and_then(|row| row.locate.clone())
     }
 
+    /// 业务键 → 次级动作（Goto 档 `Alt+Enter` = 属性面板；`None` = 该行没有次级动作）。
+    pub(crate) fn secondary_action_of(&self, key: &str) -> Option<Action> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .find(|row| row.key == key)
+            .and_then(|row| row.secondary_action.clone())
+    }
+
     /// 宿主开始把选中镜像进列表（镜像期间组件回调不回写宿主）。
     pub(crate) fn begin_host_sync(&mut self) {
         self.syncing_from_host = true;
@@ -201,9 +210,16 @@ impl QuickOpenDelegate {
                 .text_color(muted)
                 .child(row.secondary.clone()),
         );
-        // 「在树中定位」是**选中行专属**的键位提示：只在能定位的行 + 它是当前选中时出现。
+        // 「次级动作」是**选中行专属**的键位提示：只在可定位 / 带次级动作的行 + 它是当前选中时出现。
         // 不做成行内按钮：`List` 自己管指针与选中，行内可点元素会和它的确认抢事件。
-        if row.locate.is_some() && self.selected_key.as_deref() == Some(row.key.as_str()) {
+        // 默认档 ⌥↵ = 在树中定位；Goto 档主动作已是定位，⌥↵ = 打开属性面板。
+        if (row.locate.is_some() || row.secondary_action.is_some())
+            && self.selected_key.as_deref() == Some(row.key.as_str())
+        {
+            let hint = match self.mode {
+                Mode::Goto => "⌥↵ 属性",
+                _ => "⌥↵ 定位",
+            };
             first = first.child(
                 div()
                     .flex_none()
@@ -213,7 +229,7 @@ impl QuickOpenDelegate {
                     .px_1()
                     .text_xs()
                     .text_color(muted)
-                    .child("⌥↵ 定位"),
+                    .child(hint),
             );
         }
 
@@ -387,6 +403,7 @@ impl ListDelegate for QuickOpenDelegate {
                 "无匹配全文命中",
                 "元数据可能没有注释文本；试试名称搜索，或去掉 # 前缀",
             ),
+            Mode::Goto => ("无匹配对象", "试试输入表名 / 视图名 / 例程名 / 序列名"),
             Mode::Default => ("无匹配结果", "试试输入 > 搜命令 · # 搜元数据全文"),
         };
         div()

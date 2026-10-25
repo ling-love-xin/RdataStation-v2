@@ -142,6 +142,7 @@ pub(crate) fn command_rows() -> Vec<Row> {
             why: None,
             locate: None,
             action: spec.action,
+            secondary_action: None,
         })
         .collect()
 }

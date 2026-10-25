@@ -56,6 +56,9 @@ pub(crate) struct QuickOpenPalette {
     pending_open: bool,
     /// 打开时「聚焦输入框」的待办标记。
     focus_pending: bool,
+    /// 打开时锁定的初始模式：`Some(Mode::Goto)` 由 `Ctrl+Shift+O` 置位，本档内文本前缀
+    /// 不再切换模式；`None` = 默认档（文本前缀 `>` / `#` 照常解析）。
+    mode_override: Option<model::Mode>,
     /// 选中的行业务键（跨重算跟随的权威；组件的选中索引只是渲染锚点）。
     selected_key: Option<String>,
     /// 元数据命中（宿主缓存；后台回填后在 render 重建成行）。
@@ -91,6 +94,7 @@ impl QuickOpenPalette {
             list: None,
             pending_open: false,
             focus_pending: false,
+            mode_override: None,
             selected_key: None,
             meta: Vec::new(),
             files: None,
@@ -109,10 +113,13 @@ impl QuickOpenPalette {
 
     /// 打开边沿：宿主置位 `Shared::quick_open` 后调它。
     ///
-    /// 真正的清输入 / 落选中 / 聚焦在下一帧 render 里做（输入框可能还没创建）。
-    pub(crate) fn on_opened(&mut self, cx: &mut Context<Self>) {
+    /// `mode` 锁定本次打开的档位：`Default`（`Ctrl+P`，文本前缀可切命令 / 全文）或
+    /// `Goto`（`Ctrl+Shift+O`，本档内前缀不再切换）。真正的清输入 / 落选中 / 聚焦在下一帧
+    /// render 里做（输入框可能还没创建）。
+    pub(crate) fn on_opened(&mut self, mode: model::Mode, cx: &mut Context<Self>) {
         self.pending_open = true;
         self.focus_pending = true;
+        self.mode_override = Some(mode);
         self.selected_key = None;
         // 文件清单每次打开重取一次（面板关着的时候草稿可能被外部改过）；
         // 在途时不置位——否则一次打开会发两份清单，后到的那份白算。
@@ -180,14 +187,28 @@ impl QuickOpenPalette {
         Some(self.list.as_ref()?.read(cx).delegate().action_of(key)?)
     }
 
-    /// `⌥↵`：在导航树中定位选中行（只有元数据命中行可定位）。
+    /// `⌥↵`：默认档 = 在导航树中定位选中行（只有元数据命中行可定位）；
+    /// Goto 档主动作已是回树定位，`⌥↵` 改走次级属性动作。
     ///
-    /// 与 `confirm` 分开而不是把它塞进 `Row.action`：同一行有两个动作（↵ 看属性 /
-    /// ⌥↵ 定位入树），挤进一个字段执行侧就得猜“用户按的是哪个键”。
+    /// 与 `confirm` 分开而不是把它塞进 `Row.action`：同一行有两个动作（默认档 ↵ 属性 /
+    /// ⌥↵ 定位；Goto 档 ↵ 定位 / ⌥↵ 属性），挤进一个字段执行侧就得猜“用户按的是哪个键”。
     fn confirm_locate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected_key.clone() else {
             return;
         };
+        // Goto 档：次级动作（属性面板）；无次级动作的行不动选中也不关面板。
+        if self.mode_override == Some(model::Mode::Goto) {
+            let Some(action) = self
+                .list
+                .as_ref()
+                .and_then(|list| list.read(cx).delegate().secondary_action_of(&key))
+            else {
+                return;
+            };
+            self.host.execute(action, false, window, cx);
+            self.close(cx);
+            return;
+        }
         let Some(object) = self
             .list
             .as_ref()
@@ -269,7 +290,15 @@ impl QuickOpenPalette {
         let (Some(input), Some(list)) = (self.input.clone(), self.list.clone()) else {
             return;
         };
-        let query = model::parse(&input.read(cx).value());
+        // 模式锁定：Goto 档只取文本作词，`>` / `#` 前缀不切档；默认档照常解析前缀。
+        let raw = input.read(cx).value();
+        let query = match self.mode_override {
+            Some(mode) => model::Query {
+                mode,
+                needle: model::parse(&raw).needle,
+            },
+            None => model::parse(&raw),
+        };
         let connections: Vec<(String, String)> = self
             .shared
             .connections
@@ -284,6 +313,12 @@ impl QuickOpenPalette {
             files: self.visible_files(),
             files_note: self.files_note(),
         };
+        // 占位文案随档位切换（Goto 只描述可跳转对象类别；默认档提示前缀命令）。
+        let placeholder = match query.mode {
+            model::Mode::Goto => "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）",
+            _ => "搜索对象、命令…（> 命令 · # 全文）",
+        };
+        input.update(cx, |state, cx| state.set_placeholder(placeholder, window, cx));
         let groups = model::build_groups(&query, &sources);
         let selected = self
             .selected_key
@@ -563,6 +598,12 @@ impl QuickOpenPalette {
         self.selected_key.clone()
     }
 
+    /// 测试只读访问器：当前锁定模式（`None` = 默认档，文本前缀解析）。
+    #[cfg(test)]
+    pub(crate) fn current_mode(&self) -> Option<model::Mode> {
+        self.mode_override
+    }
+
     /// 测试只读访问器：是否处于「元数据搜索中」。
     #[cfg(test)]
     pub(crate) fn searching(&self) -> bool {
@@ -606,7 +647,15 @@ impl Render for QuickOpenPalette {
         let theme = cx.theme().clone();
         let input = self.input.clone().expect("input lazy init");
         let list = self.list.clone().expect("list lazy init");
-        let query = model::parse(&input.read(cx).value());
+        // 与 `refresh` 同一口径：Goto 档锁定模式，前缀不切档。
+        let raw = input.read(cx).value();
+        let query = match self.mode_override {
+            Some(mode) => model::Query {
+                mode,
+                needle: model::parse(&raw).needle,
+            },
+            None => model::parse(&raw),
+        };
         let rows = list.read(cx).delegate().row_count();
         // 词长达不到本档门槛：本地源照常，这里给还差几个字的提示。
         let hint_right = if !query.needle.is_empty() && !query.async_ready() {
@@ -620,6 +669,7 @@ impl Render for QuickOpenPalette {
         let mode_chip = match query.mode {
             model::Mode::Command => Some((">", "命令")),
             model::Mode::FullText => Some(("#", "元数据全文")),
+            model::Mode::Goto => Some(("⌖", "跳转")),
             model::Mode::Default => None,
         };
 

@@ -90,6 +90,9 @@ pub const QUICK_OPEN_HINT_HEIGHT: f32 = 1.5;
 pub const QUICK_OPEN_MAX_ROWS_PER_GROUP: usize = 8;
 /// Quick Open 总渲染上限（条）。
 pub const QUICK_OPEN_MAX_ROWS: usize = 50;
+/// Quick Open「跳转到对象」档（`Ctrl+Shift+O`）渲染上限（条）：面向全库可寻址对象，
+/// 预算比默认档宽；超出仍在组尾提示「结果较多，请细化搜索词」。
+pub const QUICK_OPEN_GOTO_MAX_ROWS: usize = 1000;
 /// Quick Open 内容档（`#`）的行高：两行式（标题行 + snippet 行；2.75rem = 44px）。
 ///
 /// 高度按档切而不是按行：`List` 只量一个样本行并要求同行同高。

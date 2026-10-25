@@ -33,14 +33,15 @@ use scratchpad::scratchpad_view::render_scratchpad_file_info_pane;
 use insight::InsightWorkspacePanel;
 
 use crate::commands::{
-    CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
+    CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickGoto,
+    ToggleQuickOpen,
 };
 use crate::panels::{
     ArchivePanel, DatabaseNavPanel, EditorPanel, HistoryPanelTab, InsightPanelTab, MockPanelTab,
     PluginPanel, ProjectActionRequest, PropertyRequest, QueryRequest, ResourcePanelTab,
     ResultPanelDock, RightSidebarPanel, ScratchPanel, Shared, SidebarPanel,
 };
-use crate::quick_open::model::Action;
+use crate::quick_open::model::{Action, Mode};
 use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::services::editor_lsp::{LspBlock, WorkbenchLsp};
 use crate::services::editor_completion::WorkbenchCompletion;
@@ -81,6 +82,8 @@ pub struct WorkbenchView {
     quick_open_palette: Option<Entity<QuickOpenPalette>>,
     /// 打开后待办：通知浮层去清输入 / 落选中 / 聚焦（浮层可能上一帧才创建）。
     quick_open_open_pending: bool,
+    /// 本次打开待生效的浮层档位（`Default` = Ctrl+P，`Goto` = Ctrl+Shift+O）。
+    quick_open_mode_pending: Mode,
     /// 设置页实体（首次打开时懒创建）。
     settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
@@ -277,6 +280,7 @@ impl WorkbenchView {
             right_archive_tab: None,
             quick_open_palette: None,
             quick_open_open_pending: false,
+            quick_open_mode_pending: Mode::Default,
             settings_page: None,
             project_inputs: None,
             project_picker: None,
@@ -1956,7 +1960,7 @@ impl WorkbenchView {
             .on_click(move |_, window, app| {
                 qo_entity.update(app, |this, cx| {
                     let _ = window;
-                    this.toggle_quick_open(cx)
+                    this.toggle_quick_open(Mode::Default, cx)
                 });
             })
             // 2026-10-19 修复：gpui-kit TitleBar 把整个 bar（含全部 children）标记为
@@ -2456,14 +2460,17 @@ impl WorkbenchView {
     // 这里只负责：懒创建、挂 overlay、注入动作端口、开关（`Shared::quick_open` 是全应用一份的权威）。
     // 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`。
 
-    /// 打开 / 关闭 Quick Open（标题栏入口与 `Ctrl+P` 共用）。
-    fn toggle_quick_open(&mut self, cx: &mut Context<Self>) {
+    /// 打开 / 关闭 Quick Open（标题栏入口与 `Ctrl+P` 共用默认档；`Ctrl+Shift+O` 开跳转档）。
+    ///
+    /// `mode` 只在**打开边沿**落给浮层；关闭由共享开关统一收口（浮层 Esc / 点遮罩 / 执行完）。
+    fn toggle_quick_open(&mut self, mode: Mode, cx: &mut Context<Self>) {
         let open = !self.shared.quick_open.get();
         self.shared.quick_open.set(open);
         // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）。
         self.shared.settings_open.set(false);
         if open {
             self.quick_open_open_pending = true;
+            self.quick_open_mode_pending = mode;
         }
         cx.notify();
     }
@@ -2490,7 +2497,9 @@ impl WorkbenchView {
         let palette = self.ensure_quick_open_palette(cx);
         if self.quick_open_open_pending {
             self.quick_open_open_pending = false;
-            palette.update(cx, |palette, cx| palette.on_opened(cx));
+            palette.update(cx, |palette, cx| {
+                palette.on_opened(self.quick_open_mode_pending, cx)
+            });
         }
         Some(palette.into_any_element())
     }
@@ -3279,7 +3288,13 @@ impl Render for WorkbenchView {
             .on_action({
                 let entity = cx.entity();
                 move |_: &ToggleQuickOpen, _window, cx| {
-                    entity.update(cx, |this, cx| this.toggle_quick_open(cx));
+                    entity.update(cx, |this, cx| this.toggle_quick_open(Mode::Default, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &ToggleQuickGoto, _window, cx| {
+                    entity.update(cx, |this, cx| this.toggle_quick_open(Mode::Goto, cx));
                 }
             })
             // M4：Ctrl+F 聚焦数据源导航搜索（先切到数据源面板并展开左侧 Dock）。

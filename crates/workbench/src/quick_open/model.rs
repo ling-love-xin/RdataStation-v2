@@ -40,6 +40,11 @@ pub(crate) enum Mode {
     Command,
     /// `#`：元数据全文档（注释 / 类型 / 定义）——Phase 1 接线 FTS 后才会有结果。
     FullText,
+    /// `Ctrl+Shift+O` 唤起的「跳转到对象」：仅元数据、不含列，主动作 = 回树定位。
+    ///
+    /// 不由文本前缀进入（`parse` 不会产出本模式）：由打开动作置位，本档内敲 `>` / `#`
+    /// 也不切换到命令 / 全文档，避免三模式前缀互相污染。
+    Goto,
 }
 
 /// 名称档最小词长（本地源不受限；对齐导航搜索框的口径）。
@@ -179,6 +184,12 @@ pub(crate) struct Row {
     /// 反推要再写一份 `PropertyKind → ObjectKind` 映射，两处口径早晚会分叉。
     pub locate: Option<engine::ObjectRef>,
     pub action: Action,
+    /// 次级动作（`Alt+Enter` 触发；`None` = 该行没有次级动作）。
+    ///
+    /// Goto 档元数据行：主动作 = 回树定位（`RevealMetadata`），次级 = 属性面板（`ShowProperties`）；
+    /// 其余档位 / 命令 / 文件 / 连接行均为 `None`。与 `action` 分开：主动作与次级动作面向不同
+    /// 键位，塞进同一个枚举变体就得在执行侧猜「按的是哪个键」。
+    pub secondary_action: Option<Action>,
 }
 
 /// 草稿箱文件命中（跨进程边界前的一层映射；源数据是 `scratchpad::FlatFile`）。
@@ -250,6 +261,20 @@ pub(crate) fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
             .into_iter()
             .collect()
         }
+        Mode::Goto => {
+            let note = if sources.meta_searching && q.async_ready() {
+                "搜索中…"
+            } else {
+                ""
+            };
+            non_empty(
+                "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）",
+                goto_rows(sources.meta, &q.needle),
+                note,
+            )
+            .into_iter()
+            .collect()
+        }
         Mode::Default => {
             let mut groups = Vec::new();
             let note = if sources.meta_searching && q.async_ready() {
@@ -282,7 +307,7 @@ pub(crate) fn build_groups(q: &Query, sources: &Sources<'_>) -> Vec<Group> {
             groups
         }
     };
-    cap_groups(groups)
+    cap_groups(groups, q.mode)
 }
 
 fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
@@ -298,15 +323,26 @@ fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
     }
 }
 
-/// 施加渲染上限：单组 ≤ `QUICK_OPEN_MAX_ROWS_PER_GROUP`、总计 ≤ `QUICK_OPEN_MAX_ROWS`。
+/// 施加渲染上限：默认档单组 ≤ `QUICK_OPEN_MAX_ROWS_PER_GROUP`、总计 ≤ `QUICK_OPEN_MAX_ROWS`；
+/// Goto 档单组 / 总计 ≤ `QUICK_OPEN_GOTO_MAX_ROWS`（跳转对话框面向全库对象，预算比默认档宽）。
 ///
 /// 被截的条数记在 `hidden` 上（组尾一行「还有 N 条」），**不静默丢**：
 /// 后台侧另有上限（单连接 50 / 总计 300），那是防止把渲染拖垮的硬闸，
 /// 这里是呈现层的闸，两者都不是「结果少」的借口。
-fn cap_groups(mut groups: Vec<Group>) -> Vec<Group> {
-    let mut budget = crate::ui::QUICK_OPEN_MAX_ROWS;
+fn cap_groups(mut groups: Vec<Group>, mode: Mode) -> Vec<Group> {
+    let (budget_cap, per_group) = if mode == Mode::Goto {
+        (
+            crate::ui::QUICK_OPEN_GOTO_MAX_ROWS,
+            crate::ui::QUICK_OPEN_GOTO_MAX_ROWS,
+        )
+    } else {
+        (
+            crate::ui::QUICK_OPEN_MAX_ROWS,
+            crate::ui::QUICK_OPEN_MAX_ROWS_PER_GROUP,
+        )
+    };
+    let mut budget = budget_cap;
     for group in &mut groups {
-        let per_group = crate::ui::QUICK_OPEN_MAX_ROWS_PER_GROUP;
         let allowed = budget.min(per_group).min(group.rows.len());
         group.hidden = group.rows.len() - allowed;
         group.rows.truncate(allowed);
@@ -332,6 +368,7 @@ fn file_rows(files: &[FileObject]) -> Vec<Row> {
             why: None,
             locate: None,
             action: Action::OpenDocument(file.path.clone()),
+            secondary_action: None,
         })
         .collect()
 }
@@ -349,8 +386,61 @@ fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
             why: None,
             locate: Some(m.object.clone()),
             action: Action::ShowProperties(Box::new(m.request.clone())),
+            secondary_action: None,
         })
         .collect()
+}
+
+/// Goto 档元数据行：**不含列**（列是表的从属细节，跳转对话框面向可独立寻址的对象）；
+/// 主动作 = 回树定位（`RevealMetadata`），次级动作 = 属性面板（`ShowProperties`，`Alt+Enter`）。
+///
+/// 排序不用默认档的匹配评分档：跳转场景按限定名字典序排列更符合「按名字找对象」的预期，
+/// 命中过滤仍走 `rank_row`（词不达意的行不出现），排序由 [`sort_goto`] 接管。
+fn goto_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
+    let mut rows: Vec<Row> = meta
+        .iter()
+        .filter(|m| m.kind != RowKind::Column)
+        .map(|m| Row {
+            key: meta_key(&m.object),
+            kind: m.kind,
+            title: m.title.clone(),
+            match_text: m.title.clone(),
+            secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
+            snippet: None,
+            why: None,
+            locate: Some(m.object.clone()),
+            action: Action::RevealMetadata(m.object.clone()),
+            secondary_action: Some(Action::ShowProperties(Box::new(m.request.clone()))),
+        })
+        .collect();
+    rows.retain(|row| rank_row(row, needle).is_some());
+    sort_goto(&mut rows);
+    rows
+}
+
+/// Goto 档排序：限定名 ignoreCase 字典序；同名并列时按类别序兜底（表 → 视图 → 例程 →
+/// 序列 → 触发器 → 模式），最后再按原文标题稳定兜底。
+fn sort_goto(rows: &mut [Row]) {
+    rows.sort_by(|a, b| {
+        a.title
+            .to_lowercase()
+            .cmp(&b.title.to_lowercase())
+            .then_with(|| goto_kind_order(a.kind).cmp(&goto_kind_order(b.kind)))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+}
+
+/// Goto 档类别兜底顺序（数值小者靠前）；列已在 [`goto_rows`] 过滤，其余未列类别排最后。
+fn goto_kind_order(kind: RowKind) -> u8 {
+    match kind {
+        RowKind::Table => 0,
+        RowKind::View => 1,
+        RowKind::Routine => 2,
+        RowKind::Sequence => 3,
+        RowKind::Trigger => 4,
+        RowKind::Schema => 5,
+        _ => 9,
+    }
 }
 
 /// 内容档行：多带 snippet（含命中标记）与「为什么命中」标签。
@@ -372,6 +462,7 @@ fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
                 why: Some(if matched_name { "名称" } else { "内容" }),
                 locate: Some(m.object.clone()),
                 action: Action::ShowProperties(Box::new(m.request.clone())),
+                secondary_action: None,
             }
         })
         .collect()
@@ -500,6 +591,7 @@ fn connection_rows(connections: &[(String, String)]) -> Vec<Row> {
             why: None,
             locate: None,
             action: Action::SelectConnection(ix),
+            secondary_action: None,
         })
         .collect()
 }
@@ -685,6 +777,7 @@ mod tests {
                         why: None,
                         locate: None,
                         action: Action::OpenSettings,
+                        secondary_action: None,
                     })
                     .collect(),
                 needle,
@@ -1102,5 +1195,99 @@ mod tests {
                 spec.id
             );
         }
+    }
+
+    /// Goto 档：只出元数据一组、列不上屏；主动作 = 回树定位，次级动作 = 属性面板。
+    #[test]
+    fn goto_mode_lists_only_metadata_and_drops_columns() {
+        let objects: Vec<MetaObject> = [
+            hit("table", "orders", None),
+            hit("column", "order_id", Some("orders")),
+            hit("view", "v_report", None),
+            hit("routine", "fn_x", None),
+        ]
+        .iter()
+        .filter_map(meta_object)
+        .collect();
+        let groups = build_groups(
+            &Query {
+                mode: Mode::Goto,
+                needle: String::new(),
+            },
+            &Sources {
+                meta: &objects,
+                ..Default::default()
+            },
+        );
+        assert_eq!(groups.len(), 1, "Goto 只出元数据一组");
+        assert_eq!(
+            groups[0].title,
+            "跳转到对象（表 · 视图 · 例程 · 序列 · 触发器）"
+        );
+        assert!(
+            groups[0].rows.iter().all(|r| r.kind != RowKind::Column),
+            "列是从属细节，不进 Goto 档"
+        );
+        for row in &groups[0].rows {
+            match &row.action {
+                Action::RevealMetadata(_) => {}
+                other => panic!("Goto 主动作应是回树定位，实际 {other:?}"),
+            }
+            match &row.secondary_action {
+                Some(Action::ShowProperties(_)) => {}
+                other => panic!("Goto 次级应是属性面板，实际 {other:?}"),
+            }
+        }
+    }
+
+    /// Goto 排序：限定名 ignoreCase 字典序；折叠后并列按类别序兜底（表 → 视图 → 例程 → 序列）。
+    #[test]
+    fn goto_sort_ignorecase_dictionary_with_category_tiebreak() {
+        let objects: Vec<MetaObject> = [
+            hit("table", "zebra", None),
+            hit("view", "Apple", None),
+            hit("table", "apple", None),
+            hit("sequence", "seq_x", None),
+        ]
+        .iter()
+        .filter_map(meta_object)
+        .collect();
+        let groups = build_groups(
+            &Query {
+                mode: Mode::Goto,
+                needle: String::new(),
+            },
+            &Sources {
+                meta: &objects,
+                ..Default::default()
+            },
+        );
+        let titles: Vec<String> = groups[0].rows.iter().map(|r| r.title.clone()).collect();
+        assert_eq!(
+            titles,
+            vec!["public.apple", "public.Apple", "public.seq_x", "public.zebra"],
+            "折叠后 apple 与 Apple 并列，类别兜底表先于视图；其余按字典序"
+        );
+    }
+
+    /// Goto 档渲染上限 1000：超出条数记在组尾 `hidden`，不静默丢。
+    #[test]
+    fn goto_caps_at_one_thousand_and_reports_hidden() {
+        let objects: Vec<MetaObject> = (0..1001)
+            .map(|i| meta_object(&hit("table", &format!("t_{i:04}"), None)))
+            .flatten()
+            .collect();
+        let groups = build_groups(
+            &Query {
+                mode: Mode::Goto,
+                needle: String::new(),
+            },
+            &Sources {
+                meta: &objects,
+                ..Default::default()
+            },
+        );
+        assert_eq!(groups[0].rows.len(), 1000, "Goto 单组上限 1000 行");
+        assert_eq!(groups[0].hidden, 1, "被截的 1 条要记下来（组尾提示）");
     }
 }

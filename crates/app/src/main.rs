@@ -37,7 +37,7 @@ use workbench::commands::{
     NavReorderDown, NavReorderUp, NavUp, QuickOpenLocate,
     SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile,
     ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject,
-    TestConnection, ToggleQuickOpen,
+    TestConnection, ToggleQuickGoto, ToggleQuickOpen,
 };
 
 mod assets;
@@ -208,6 +208,8 @@ fn run_app() {
             //    只有焦点在工作区编辑面板内才生效，不抢导航树/草稿箱的同名键。
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
+                // 「跳转到对象」档（仅元数据、主动作回树定位），与默认档共用浮层通道。
+                KeyBinding::new("ctrl-shift-o", ToggleQuickGoto, Some("workbench")),
                 // 浮层里的 `⌥↵`：在导航树中定位选中的元数据命中（只有元数据行可定位）。
                 // 绑在 workbench 而不是浮层自己的 context：浮层不单独占 key_context，
                 // 它渲染在工作台根下，焦点链会穿过工作台根到这个 on_action。

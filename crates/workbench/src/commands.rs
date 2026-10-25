@@ -1,7 +1,8 @@
 //! rds-workbench — commands。
 //!
 //! 工作台全局动作（GPUI Action）：
-//! - `ToggleQuickOpen`：唤起 / 关闭 Quick Open（搜索 + 命令融合，Ctrl+P 绑定于 app 层）；
+//! - `ToggleQuickOpen`：唤起 / 关闭 Quick Open 默认档（`Ctrl+P`，搜索 + 命令融合）；
+//! - `ToggleQuickGoto`：唤起 / 关闭「跳转到对象」档（`Ctrl+Shift+O`，仅元数据、主动作回树定位）；
 //! - `HideSidebars` / `RestoreSidebars`：三模式之"完全隐藏 / 恢复"；
 //! - `FocusNavSearch`：聚焦数据源导航搜索框（Ctrl+F，先切到数据源面板）；
 //! - `Nav*`（`NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties` /
@@ -19,6 +20,7 @@ actions!(
     workbench,
     [
         ToggleQuickOpen,
+        ToggleQuickGoto,
         QuickOpenLocate,
         HideSidebars,
         RestoreSidebars,
