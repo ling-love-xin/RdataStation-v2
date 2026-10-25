@@ -20,7 +20,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Window};
 
 use database::model::{ObjectRef, PropertyRequest};
-use database::nav_host::{ConnectionProbe, NavFilters, NavHost, SavedViewMeta};
+use database::nav_host::{ConnectionProbe, NavFilters, NavHost, ObjectMaskRule, SavedViewMeta};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
 use crate::panels::Shared;
@@ -213,6 +213,82 @@ impl NavHost for WorkbenchNavHost {
         cx: &mut App,
     ) {
         settings::SettingsService::set_visible_databases(conn_id, visible, cx);
+    }
+
+    fn row_estimate(&self, cx: &App) -> bool {
+        settings::SettingsService::row_estimate(cx)
+    }
+
+    // ==================== P1 连接级导航偏好 ====================
+
+    fn show_system_objects(&self, conn_id: &str, _cx: &App) -> bool {
+        // 与对话框编辑回读同源：走 `load_entry`（项目侧连接带项目根），
+        // 读连接档案 advanced_options.navigator；缺失 / 解析失败回退默认（隐藏系统对象）。
+        let root = self
+            .shared
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
+        crate::services::nav_runtime::load_entry(conn_id, root.as_deref())
+            .map(|ds| ds.navigator_settings().show_system_objects)
+            .unwrap_or(false)
+    }
+
+    // ==================== B-1 对象名 mask ====================
+
+    fn object_mask(&self, conn_id: &str, cx: &App) -> ObjectMaskRule {
+        let r = settings::SettingsService::object_mask(conn_id, cx);
+        ObjectMaskRule {
+            include: r.include,
+            exclude: r.exclude,
+            use_regex: r.use_regex,
+        }
+    }
+
+    fn set_object_mask(&self, conn_id: &str, rule: Option<ObjectMaskRule>, cx: &mut App) {
+        let mapped = rule.map(|r| settings::model::ObjectMaskRule {
+            include: r.include,
+            exclude: r.exclude,
+            use_regex: r.use_regex,
+        });
+        settings::SettingsService::set_object_mask(conn_id, mapped, cx);
+    }
+
+    fn global_mask(&self, cx: &App) -> ObjectMaskRule {
+        let r = settings::SettingsService::global_mask(cx);
+        ObjectMaskRule {
+            include: r.include,
+            exclude: r.exclude,
+            use_regex: r.use_regex,
+        }
+    }
+
+    fn set_global_mask(&self, rule: ObjectMaskRule, cx: &mut App) {
+        settings::SettingsService::set_global_mask(
+            settings::model::ObjectMaskRule {
+                include: rule.include,
+                exclude: rule.exclude,
+                use_regex: rule.use_regex,
+            },
+            cx,
+        );
+    }
+
+    fn open_object_mask_dialog(&self, conn_id: Option<&str>, window: &mut Window, cx: &mut App) {
+        let conn_name = conn_id.map(|id| {
+            self.shared
+                .connections
+                .borrow()
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        });
+        crate::components::object_mask_dialog::open_object_mask_dialog(
+            conn_id,
+            conn_name.as_deref(),
+            window,
+            cx,
+        );
     }
 
     // ==================== 连接生命周期 ====================

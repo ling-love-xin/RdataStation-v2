@@ -10,6 +10,7 @@ pub mod group_manager_dialog;
 pub mod tag_manager_dialog;
 pub mod saved_view_dialog;
 pub mod visible_databases_dialog;
+pub mod object_mask_dialog;
 pub mod insight_actions;
 pub mod log_dialog;
 pub mod mock_host;
