@@ -189,6 +189,36 @@ mod stub_host {
             _cx: &mut App,
         ) {
         }
+        fn row_estimate(&self, _cx: &App) -> bool {
+            // 测试替身：默认开（行估计用例按此断言）。
+            true
+        }
+        fn show_system_objects(&self, _conn_id: &str, _cx: &App) -> bool {
+            // 测试替身：默认关（隐藏系统对象，不干扰现有用例的树加载）。
+            false
+        }
+        fn object_mask(&self, _conn_id: &str, _cx: &App) -> crate::nav_host::ObjectMaskRule {
+            // 测试替身：空规则 = 不过滤（mask 用例自行覆盖）。
+            crate::nav_host::ObjectMaskRule::default()
+        }
+        fn set_object_mask(
+            &self,
+            _conn_id: &str,
+            _rule: Option<crate::nav_host::ObjectMaskRule>,
+            _cx: &mut App,
+        ) {
+        }
+        fn global_mask(&self, _cx: &App) -> crate::nav_host::ObjectMaskRule {
+            crate::nav_host::ObjectMaskRule::default()
+        }
+        fn set_global_mask(&self, _rule: crate::nav_host::ObjectMaskRule, _cx: &mut App) {}
+        fn open_object_mask_dialog(
+            &self,
+            _conn_id: Option<&str>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
         fn open_right_panel(&self, _panel: RightPanel, _cx: &mut App) {}
         fn open_mock_panel(&self, _source: Option<ObjectRef>, _cx: &mut App) {}
         fn open_insight_table(&self, _source: ObjectRef, _cx: &mut App) {}

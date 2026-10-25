@@ -529,6 +529,8 @@ impl NavView {
             .map(|p| p.to_string_lossy().to_string());
         // S3-① 可见库白名单快照：入队时从宿主 settings 取一次（None = 默认隐藏系统库）。
         let visible_databases = self.host.visible_databases(conn_id, cx);
+        // P1 连接级导航偏好快照：入队时从宿主连接档案取一次（2026-10-25）。
+        let show_system_objects = self.host.show_system_objects(conn_id, cx);
         nav_jobs::enqueue_load(
             conn_id,
             project_root.as_deref(),
@@ -537,6 +539,7 @@ impl NavView {
             fresh,
             priority,
             visible_databases,
+            show_system_objects,
         );
         self.ensure_nav_pump(cx);
     }
@@ -583,7 +586,25 @@ impl NavView {
                 if view.search_query.as_deref() != Some(r.query.as_str()) {
                     continue;
                 }
-                view.search_hits = r.hits;
+                // B-1 搜索命中叠加 mask：按 `hit.conn_id` 取 per-conn 规则，再套全局
+                // 规则过滤对象名——与树路径同一对纯函数（`nav_object_masked`）。
+                // 事件路径读 settings 属纯读（无 I/O）；mask 变更会刷新搜索区。
+                let per_conns = &self
+                    .host
+                    .connections()
+                    .into_iter()
+                    .map(|c| (c.id.clone(), self.host.object_mask(&c.id, cx)))
+                    .collect::<HashMap<String, ObjectMaskRule>>();
+                let global = self.host.global_mask(cx);
+                let hits: Vec<nav_jobs::SearchHit> = r
+                    .hits
+                    .into_iter()
+                    .filter(|h| {
+                        let per = per_conns.get(&h.conn_id);
+                        !nav_object_masked(per, Some(&global), &h.object_name)
+                    })
+                    .collect();
+                view.search_hits = hits;
                 view.search_searched = r.searched;
                 // 新一批结果 = 新一轮搜索：上一轮的定位提示不再适用
                 view.reveal_note = None;
@@ -778,6 +799,8 @@ impl NavView {
                 nav_jobs::PAGE_SIZE,
                 // S3-① 定位也带白名单快照：定位页的过滤口径与首屏一致。
                 self.host.visible_databases(&target.conn_id, cx),
+                // P1 导航设置快照：定位页过滤口径与首屏一致（2026-10-25）。
+                self.host.show_system_objects(&target.conn_id, cx),
             );
             self.ensure_nav_pump(cx);
             return;
@@ -838,6 +861,17 @@ impl NavView {
                 {
                     return;
                 }
+                // S3-④ 行估计：同一轮询泵回填（表名单加载完自动触发，无需用户动作）。
+                let row_estimates = nav_jobs::drain_row_estimates();
+                if !row_estimates.is_empty()
+                    && weak
+                        .update(cx, |this, cx| {
+                            this.apply_row_estimate_results(row_estimates, cx)
+                        })
+                        .is_err()
+                {
+                    return;
+                }
                 // 导航建连（后台线程执行，2026-10-03）：结果回填——成功 → 预热，失败 → 回滚 + 提示。
                 let connect_results = nav_jobs::drain_connect_results();
                 if !connect_results.is_empty()
@@ -861,6 +895,7 @@ impl NavView {
                     && !nav_jobs::has_pending_sql()
                     && !nav_jobs::has_pending_test()
                     && !nav_jobs::has_pending_connect()
+                    && !nav_jobs::has_pending_row_estimates()
                     && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator);
                 if idle {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
@@ -869,6 +904,7 @@ impl NavView {
                         && !nav_jobs::has_pending_sql()
                         && !nav_jobs::has_pending_test()
                         && !nav_jobs::has_pending_connect()
+                        && !nav_jobs::has_pending_row_estimates()
                         && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator)
                     {
                         // 退出前最后消费一次：job 可能在「多等一拍」期间入队并完成，
@@ -1025,6 +1061,10 @@ impl NavView {
             // C2：「表」文件夹首次加载成功后，排队预取前 N 张表的列。
             if is_tables_folder {
                 self.maybe_prefetch(&conn_id, &key, &catalog, &schema, project_root.as_deref());
+                // S3-④：表名单首屏回填后，对整 schema 排一批**行估计**（PG reltuples /
+                // MySQL TABLE_ROWS），行尾补「≈ N」徽标。预取与估计互不冲突：预取走
+                // 独立 PREFETCH_SEM，估计走 per-conn 让位，各自尽力而为。
+                self.maybe_estimate(&conn_id, &key, &catalog, &schema, cx);
             }
         }
         // 定位：这一批回执可能正好把目标送到了（或送来了它所在的那一页），推进一步。
@@ -1112,6 +1152,120 @@ impl NavView {
                 .unwrap_or_default()
         };
         nav_jobs::prefetch_columns(conn_id, project_root, targets);
+    }
+
+    /// S3-④：对刚加载完的「表」文件夹排一批行估计（per-conn 让位任务）。
+    ///
+    /// 触发口径（B 档文档 §1.4.2）：表数 ≥ [`ROW_ESTIMATE_MIN_TABLES`] 才排（小 schema
+    /// 不值得一次目录查询）；驱动不支持（SQLite / DuckDB / JDBC / wasm）不排；宿主
+    /// 设置开关关掉不排；同 `(conn_id, schema)` 已在途不重复排。
+    pub(super) fn maybe_estimate(
+        &mut self,
+        conn_id: &str,
+        key: &str,
+        catalog: &str,
+        schema: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.host.row_estimate(cx) {
+            return;
+        }
+        // 表数阈值：< ROW_ESTIMATE_MIN_TABLES 不排（小 schema 不值得一次目录查询）。
+        {
+            let view = self.nav.borrow();
+            let count = view
+                .children
+                .get(key)
+                .map(|kids| kids.len())
+                .unwrap_or(0);
+            if count < nav_jobs::ROW_ESTIMATE_MIN_TABLES {
+                return;
+            }
+        }
+        // 驱动判定：取连接条目的 driver id（`postgresql` / `mysql` 才支持，
+        // 判定逻辑与 `sql_gen::row_estimate_sql` 保持一致，双保险）。
+        let driver = self
+            .host
+            .connections()
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.driver.clone())
+            .unwrap_or_default();
+        if crate::sql_gen::row_estimate_sql(&driver, schema).is_none() {
+            return;
+        }
+        let seq;
+        {
+            let mut view = self.nav.borrow_mut();
+            let pair = (conn_id.to_string(), schema.to_string());
+            // 在途去重（同 schema 重复展开 / 刷新连发时只排一批）。
+            if view.estimated_schemas.contains(&pair) {
+                return;
+            }
+            view.estimated_schemas.insert(pair);
+            // 批次序号单调递增：旧批迟到时回填端据此丢弃。
+            view.estimate_seq += 1;
+            seq = view.estimate_seq;
+        }
+        let project_root = self.host.project_root();
+        nav_jobs::enqueue_row_estimate(
+            conn_id,
+            project_root.as_ref().and_then(|p| p.to_str()),
+            catalog,
+            schema,
+            &driver,
+            seq,
+        );
+    }
+
+    /// S3-④：回填行估计结果（主线程）。
+    ///
+    /// 过期批次（`seq` 小于当前值，被刷新 / 重展开顶掉）直接丢弃；有效批次按表名
+    /// 回填 `children` 里 Table 节点的 `row_estimate`，并从在途集合移除（「…」占位消失）。
+    /// 失败 / 超时 / 驱动不支持（空 `estimates`）同样移除在途集合——徽标消失即安静的失败。
+    pub(super) fn apply_row_estimate_results(
+        &mut self,
+        results: Vec<nav_jobs::RowEstimateResult>,
+        cx: &mut Context<Self>,
+    ) {
+        for r in results {
+            // 序号守卫（仿 search_seq）：只有「当前在途」的最新批次可写回。
+            {
+                let view = self.nav.borrow();
+                if r.seq < view.estimate_seq {
+                    tracing::debug!(
+                        conn_id = %r.conn_id,
+                        schema = %r.schema,
+                        seq = r.seq,
+                        current = view.estimate_seq,
+                        "行估计结果已过期（刷新 / 重展开顶掉），丢弃"
+                    );
+                    continue;
+                }
+            }
+            {
+                let mut view = self.nav.borrow_mut();
+                view.estimated_schemas
+                    .remove(&(r.conn_id.clone(), r.schema.clone()));
+                // 按表名回填已加载的 Table 节点（文件夹 key 与 service 侧同构：
+                // `child_key(conn_id, &[catalog, schema, "tables"])`）。
+                let parent_key = NavNode::child_key(
+                    &r.conn_id,
+                    &[r.catalog.as_str(), r.schema.as_str(), "tables"],
+                );
+                if let Some(nodes) = view.children.get_mut(&parent_key) {
+                    for node in nodes.iter_mut() {
+                        if let NavNodeKind::Table { row_estimate } = &mut node.kind {
+                            if let Some((_, est)) = r.estimates.iter().find(|(n, _)| n == &node.name)
+                            {
+                                *row_estimate = *est;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。

@@ -8,6 +8,7 @@
 //! 根模块用 `use self::primitives::*;` 收回来，**调用点一字未改**。
 
 use super::*;
+use crate::nav_host::ObjectMaskRule;
 
 /// 解析搜索框文本：拆出 `scope:` / `type:` / `driver:` / `tag:` token，其余为自由文本。
 ///
@@ -201,6 +202,35 @@ pub(super) fn nav_type_short_label(type_id: &str, from_catalog: Option<(&str, &s
     }
     let full = nav_type_label(type_id, None);
     full.split('（').next().unwrap_or(&full).to_string()
+}
+
+/// S3-④ 行估计徽标文本：千分位 + 超长截断（B 档文档 §1.4.4）。
+///
+/// - `0`（驱动给 0 / 空表）→ `"0"`（如实，不隐藏；它也是信息）；
+/// - `≥ 1_000_000_000` → `"{:.1}B"`（如 `1.2B`）；
+/// - `≥ 1_000_000` → `"{:.1}M"`（如 `3.4M`）；
+/// - 其余 → 千分位（`1,234,567`）。
+///
+/// 前缀 `≈` 由渲染处统一加（表行徽标与属性面板共用本函数时各自加，不写死在文本里）。
+pub(super) fn format_row_estimate(n: u64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B", n as f64 / 1_000_000_000.0)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else {
+        // 千分位：分组从低位起每 3 位插 `,`（u64 无负数，直接按位组）。
+        let digits = n.to_string();
+        let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+        for (i, ch) in digits.chars().enumerate() {
+            let from_left = i;
+            let remaining = digits.len() - from_left;
+            out.push(ch);
+            if remaining > 1 && remaining % 3 == 1 {
+                out.push(',');
+            }
+        }
+        out
+    }
 }
 
 /// 类型徽标映射：数据库类型 id →（形状资产路径，2 字母缩写）。
@@ -639,6 +669,74 @@ pub(super) fn nav_highlight_segments(name: &str, filter: &str) -> Vec<(String, b
     segments
 }
 
+/// B-1 对象名 glob 匹配（v1 仅 `*` / `?`，大小写不敏感）。
+///
+/// 递归实现：`*` 匹配任意多字符（含空）、`?` 匹配单字符、其余字面全串匹配。
+/// 与 `content_search::glob_matches`（路径语义、大小写敏感）只是递归结构同源，
+/// 不跨 crate 调用；对象名场景没有路径分隔符，`?` 不做分隔排除。
+pub(super) fn nav_glob_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let n: Vec<char> = name.to_lowercase().chars().collect();
+    fn rec(p: &[char], n: &[char]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some('*') => {
+                // 贪心不必要：`*` 之后的内容尝试在任意截断点续配，任一成功即整体匹配。
+                let rest = &p[1..];
+                (0..=n.len()).any(|take| rec(rest, &n[take..]))
+            }
+            Some('?') => !n.is_empty() && rec(&p[1..], &n[1..]),
+            Some(c) => n.first() == Some(c) && rec(&p[1..], &n[1..]),
+        }
+    }
+    rec(&p, &n)
+}
+
+/// B-1 单条规则判定：include 为空 = 全量候选；exclude 为空 = 不排除；
+/// **exclude 优先于 include**（命中 include 且未命中 exclude 的对象保留）。
+pub(super) fn nav_mask_passes(rule: &ObjectMaskRule, name: &str) -> bool {
+    if rule.exclude.iter().any(|pat| nav_glob_match(pat, name)) {
+        return false;
+    }
+    if rule.include.is_empty() {
+        return true;
+    }
+    rule.include.iter().any(|pat| nav_glob_match(pat, name))
+}
+
+/// B-1 组合判定（per-conn + 全局，AND）：任一**启用**的规则不通过 = 隐藏。
+///
+/// 规则不启用（空）不参与判断；只在**对象层**调用（catalog / schema / 列不进 mask）。
+pub(super) fn nav_object_masked(
+    per_conn: Option<&ObjectMaskRule>,
+    global: Option<&ObjectMaskRule>,
+    name: &str,
+) -> bool {
+    if let Some(r) = per_conn {
+        if r.is_active() && !nav_mask_passes(r, name) {
+            return true;
+        }
+    }
+    if let Some(r) = global {
+        if r.is_active() && !nav_mask_passes(r, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// B-1 该节点类型是否参与对象名 mask（只对象层；列 / 结构层不进 mask）。
+pub(super) fn nav_object_kind_masked(kind: &crate::model::NavNodeKind) -> bool {
+    matches!(
+        kind,
+        crate::model::NavNodeKind::Table { .. }
+            | crate::model::NavNodeKind::View
+            | crate::model::NavNodeKind::Routine { .. }
+            | crate::model::NavNodeKind::Sequence
+            | crate::model::NavNodeKind::Trigger
+    )
+}
+
 /// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的**每一段**用命中底色标出。
 pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div {
     let segments = nav_highlight_segments(name, filter);
@@ -901,8 +999,12 @@ mod tests {
     // 不 `use super::*`：通配会把 gpui 的 `test` 宏带进作用域（gpui-kit-dev §窗口测试）。
     use std::collections::HashMap;
 
-    use super::{nav_highlight_segments, nav_node_matches, nav_snippet_segments, nav_tag_palette_index};
+    use super::{
+        format_row_estimate, nav_glob_match, nav_highlight_segments, nav_mask_passes,
+        nav_node_matches, nav_object_masked, nav_snippet_segments, nav_tag_palette_index,
+    };
     use crate::model::{NavNode, NavNodeKind};
+    use crate::nav_host::ObjectMaskRule;
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
@@ -1024,5 +1126,90 @@ mod tests {
         assert!(nav_node_matches(&children, &schema, "orders"));
         // 都不匹配 → 隐藏。
         assert!(!nav_node_matches(&children, &schema, "customers"));
+    }
+
+    /// S3-④ 行估计格式：千分位 / M / B 三档 + 0。
+    #[test]
+    fn row_estimate_formatting() {
+        assert_eq!(format_row_estimate(0), "0");
+        assert_eq!(format_row_estimate(9), "9");
+        assert_eq!(format_row_estimate(999), "999");
+        assert_eq!(format_row_estimate(1_000), "1,000");
+        assert_eq!(format_row_estimate(12_345), "12,345");
+        assert_eq!(format_row_estimate(999_999), "999,999");
+        assert_eq!(format_row_estimate(1_234_567), "1.2M");
+        assert_eq!(format_row_estimate(3_400_000), "3.4M");
+        assert_eq!(format_row_estimate(1_000_000), "1.0M");
+        assert_eq!(format_row_estimate(1_200_000_000), "1.2B");
+        assert_eq!(format_row_estimate(1_000_000_000), "1.0B");
+    }
+
+    // ==================== B-1 对象名 mask 规则矩阵 ====================
+
+    /// glob：`*` 任意多字符（含空）、`?` 单字符、大小写不敏感、字面全串。
+    #[test]
+    fn glob_matches_wildcards_and_case() {
+        assert!(nav_glob_match("orders*", "orders_2024"));
+        assert!(nav_glob_match("orders*", "orders"));
+        assert!(nav_glob_match("*", "anything"));
+        assert!(nav_glob_match("order?_items", "orderX_items"));
+        assert!(!nav_glob_match("order?_items", "orderXY_items"));
+        assert!(nav_glob_match("ORDERS*", "orders_2024"));
+        assert!(nav_glob_match("*temp*", "x_temp_x"));
+        assert!(!nav_glob_match("orders*", "customers"));
+        assert!(!nav_glob_match("", "orders")); // 空 pattern 只匹配空名
+    }
+
+    /// exclude 优先于 include；include 空 = 全量候选。
+    #[test]
+    fn mask_exclude_beats_include_and_empty_include_passes_all() {
+        // 空规则 = 不过滤。
+        assert!(nav_mask_passes(&ObjectMaskRule::default(), "orders"));
+        // include 命中 + exclude 未命中 → 保留。
+        let r = ObjectMaskRule {
+            include: vec!["orders*".into()],
+            exclude: vec!["orders_old*".into()],
+            ..Default::default()
+        };
+        assert!(nav_mask_passes(&r, "orders_2024"));
+        assert!(!nav_mask_passes(&r, "orders_old_2024")); // exclude 优先
+        // 只 exclude：其余全保留。
+        let r2 = ObjectMaskRule {
+            include: vec![],
+            exclude: vec!["temp_*".into()],
+            ..Default::default()
+        };
+        assert!(nav_mask_passes(&r2, "orders"));
+        assert!(!nav_mask_passes(&r2, "temp_table"));
+        // include 非空且不命中 → 隐藏。
+        let r3 = ObjectMaskRule {
+            include: vec!["orders*".into()],
+            exclude: vec![],
+            ..Default::default()
+        };
+        assert!(!nav_mask_passes(&r3, "customers"));
+    }
+
+    /// 组合判定：per-conn + 全局 AND，任一启用规则不通过即隐藏；空规则不参与。
+    #[test]
+    fn object_masked_combines_layers_and_ignores_inactive() {
+        let per_conn = ObjectMaskRule {
+            include: vec!["orders*".into()],
+            ..Default::default()
+        };
+        let global = ObjectMaskRule {
+            exclude: vec!["*_archive".into()],
+            ..Default::default()
+        };
+        // 两层都过 → 显示。
+        assert!(!nav_object_masked(Some(&per_conn), Some(&global), "orders_2024"));
+        // 全局 exclude 命中 → 隐藏（即使 per-conn include 命中）。
+        assert!(nav_object_masked(Some(&per_conn), Some(&global), "orders_archive"));
+        // per-conn 不命中 → 隐藏。
+        assert!(nav_object_masked(Some(&per_conn), Some(&global), "customers"));
+        // 空 per-conn（不启用）→ 只看全局。
+        assert!(!nav_object_masked(None, Some(&global), "orders"));
+        // 两层都空 → 显示。
+        assert!(!nav_object_masked(None, None, "orders"));
     }
 }

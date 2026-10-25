@@ -62,7 +62,7 @@ use crate::model::{
     PropertyRequest,
 };
 use property::PropertyKind;
-use crate::nav_host::{NavFilters, NavHost};
+use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
 use crate::nav_rows::{NavRow, search_hit_row_id, search_hit_row_key};
 use crate::sql_gen::DmlKind;
 use engine::persistence::driver_catalog::DriverMeta;
@@ -433,6 +433,12 @@ pub struct NavViewState {
     /// 为何不用缓存文件 mtime：render 期禁止 I/O，而这条信息每帧都要用；它回答的是
     /// 「我看到的树是什么时候取的」，与缓存文件写入时间在体感上等价。
     last_loaded_at: Option<SystemTime>,
+    /// S3-④ 已入队行估计的 `(conn_id, schema)` 集合：在途期间行尾显示「…」占位，
+    /// 回填后移除；刷新 / 重新展开会重入队（新 seq 顶掉旧批）。
+    estimated_schemas: HashSet<(String, String)>,
+    /// S3-④ 行估计批次序号（运行时单调递增）：入队时 `+= 1` 随任务带走，回填时
+    /// 小于当前值 = 过期批次（被刷新 / 重展开顶掉），丢弃不写回。
+    estimate_seq: u64,
 }
 
 /// 附加 facet 种类（facet 弹层与持久化共用）。

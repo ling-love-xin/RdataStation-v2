@@ -145,7 +145,7 @@ async fn run_nav_property_chain(driver: &str) {
 
     // 3) 导航加载（与树展开同源，cache-aside 写穿 L2）
     let nav = NavigatorService::new(manager.clone());
-    let catalogs = nav.load_children(&cid, &NavPath::Connection, None).await
+    let catalogs = nav.load_children(&cid, &NavPath::Connection, None, false).await
         .unwrap_or_else(|e| panic!("{driver} 加载 catalogs 失败：{e}"));
     assert!(!catalogs.is_empty(), "{driver} catalogs 非空");
     let catalog = catalogs
@@ -154,7 +154,7 @@ async fn run_nav_property_chain(driver: &str) {
         .unwrap_or_else(|| panic!("{driver} catalogs 应含 Catalog 节点：{catalogs:?}"));
     println!("[{driver}] Catalog 层 OK：{}", catalog.name);
 
-    let folders = nav.load_children(&cid, &NavPath::Catalog { catalog: catalog.name.clone() }, None)
+    let folders = nav.load_children(&cid, &NavPath::Catalog { catalog: catalog.name.clone() }, None, false)
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载文件夹失败：{e}"));
     let folder_names: Vec<&str> = folders.iter().map(|n| n.name.as_str()).collect();
@@ -174,6 +174,7 @@ async fn run_nav_property_chain(driver: &str) {
                 folder: NavFolder::Tables,
             },
             None,
+            false,
         )
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载表失败：{e}"));
@@ -192,6 +193,7 @@ async fn run_nav_property_chain(driver: &str) {
                 folder: NavFolder::Views,
             },
             None,
+            false,
         )
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载视图失败：{e}"));
@@ -209,6 +211,7 @@ async fn run_nav_property_chain(driver: &str) {
                 table: "orders".to_string(),
             },
             None,
+            false,
         )
         .await
         .unwrap_or_else(|e| panic!("{driver} 加载列失败：{e}"));
@@ -450,6 +453,7 @@ async fn run_nav_property_chain(driver: &str) {
                 folder: NavFolder::Tables,
             },
             None,
+            false,
         )
         .await
         .unwrap_or_else(|e| panic!("{driver} 二次加载失败：{e}"));

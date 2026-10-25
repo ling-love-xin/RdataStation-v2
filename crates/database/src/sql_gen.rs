@@ -375,8 +375,7 @@ pub fn alter_column_sql(
 /// 不支持的驱动 / 类别**明确报错**（不静默吞、不生成方言错误的语句）。
 /// 限定名拼法：PG / MySQL 拼 `schema.name`（目标库由 `database_for` 切库承载，
 /// 与 `alter_column_sql` 同规则）；SQLite / DuckDB 单库场景不拼前缀。
-pub fn rename_object_sql(
-    driver: &str,
+pub fn rename_object_sql(    driver: &str,
     kind: crate::model::NavFolder,
     schema: Option<&str>,
     name: &str,
@@ -463,6 +462,40 @@ pub fn rename_object_sql(
         }
     };
     Ok(sql)
+}
+
+/// S3-④ 行估计目录级统计 SQL（一次查询取整 schema 的表名 + 优化器估计）。
+///
+/// - PostgreSQL：`pg_class.reltuples`（与属性面板同源，`property_providers/pg.rs`），
+///   `relkind IN ('r','p')` 覆盖普通表与分区父表（分区子表已折叠进父表徽标，不进列表）；
+///   视图无独立统计、由触发方排除（只对 Tables 文件夹入队）。
+/// - MySQL：`information_schema.TABLES.TABLE_ROWS`（InnoDB 为优化器估计、MyISAM
+///   近似精确，v1 不区分引擎口径）。
+/// - 其余驱动（SQLite / DuckDB / JDBC / wasm）：`None` = 不支持，**不发真 `COUNT(*)`**
+///   （大库逐表 COUNT 秒级以上，与「名单先上屏」目标冲突，见 B 档文档 §1.3）。
+///
+/// schema 名直接拼进 SQL（带单引号转义）：值来自内省结果，无需参数化通道
+/// （`Database::query` 是裸 SQL 接口，与 `property_providers` 同写法）。
+pub fn row_estimate_sql(driver: &str, schema: &str) -> Option<String> {
+    let esc = schema.replace('\'', "''");
+    let driver_l = driver.to_ascii_lowercase();
+    if matches!(
+        driver_l.as_str(),
+        "postgresql" | "postgres" | "pg" | "postgres_native"
+    ) {
+        Some(format!(
+            "SELECT c.relname, c.reltuples::bigint AS est FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = '{esc}' AND c.relkind IN ('r','p')"
+        ))
+    } else if driver_l.contains("mysql") {
+        Some(format!(
+            "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = '{esc}'"
+        ))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1034,5 +1067,32 @@ mod tests {
             sql,
             "ALTER TABLE \"public\".\"we\"\"ird\" RENAME TO \"new\"\"name\""
         );
+    }
+
+    /// S3-④ 行估计 SQL 驱动矩阵：PG / MySQL 生成、其余驱动返回 `None`（不发真 COUNT）。
+    #[test]
+    fn row_estimate_sql_driver_matrix() {
+        let pg = super::row_estimate_sql("postgresql", "public").unwrap();
+        assert!(pg.contains("reltuples"), "{pg}");
+        assert!(pg.contains("relkind IN ('r','p')"), "{pg}");
+        assert!(pg.contains("'public'"), "{pg}");
+        // 驱动别名同源（rename 侧同款归一）。
+        assert!(super::row_estimate_sql("postgres", "public").is_some());
+        let my = super::row_estimate_sql("mysql", "warehouse").unwrap();
+        assert!(my.contains("TABLE_ROWS"), "{my}");
+        assert!(my.contains("'warehouse'"), "{my}");
+        // 不支持驱动：SQLite / DuckDB / JDBC / wasm / 未知一律 None。
+        for d in ["sqlite", "duckdb", "jdbc", "wasm", "redis"] {
+            assert!(super::row_estimate_sql(d, "main").is_none(), "{d} 不应支持");
+        }
+    }
+
+    /// S3-④ schema 名单引号转义：含 `'` 的 schema 名不会把 SQL 拼坏。
+    #[test]
+    fn row_estimate_sql_escapes_schema() {
+        let sql = super::row_estimate_sql("mysql", "it's").unwrap();
+        assert!(sql.contains("'it''s'"), "{sql}");
+        let pg = super::row_estimate_sql("postgresql", "a'b").unwrap();
+        assert!(pg.contains("'a''b'"), "{pg}");
     }
 }

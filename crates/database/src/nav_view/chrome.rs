@@ -725,6 +725,8 @@ impl NavView {
                 let tl = type_menu_label.clone();
                 let dl = driver_menu_label.clone();
                 let gl = tag_menu_label.clone();
+                // B-1 全局对象名过滤器入口（`None` = 全局级）。
+                let host_mask = self.host.clone();
                 move |menu, window, cx| {
                     let e_clear = entity.clone();
                     let input_clear = input.clone();
@@ -770,7 +772,7 @@ impl NavView {
                             )
                         }
                     });
-                    menu.submenu(gl.clone(), window, cx, {
+                    menu = menu.submenu(gl.clone(), window, cx, {
                         let e = entity.clone();
                         let cur = ctg.clone();
                         let c = tags.clone();
@@ -783,7 +785,16 @@ impl NavView {
                                 c.clone(),
                             )
                         }
-                    })
+                    });
+                    // B-1 全局对象名过滤器入口（面板偏好，跨项目；空规则 = 不启用）。
+                    let host_global = host_mask.clone();
+                    menu = menu.separator();
+                    menu.item(
+                        PopupMenuItem::new("对象名过滤器（全局）…")
+                            .on_click(move |_, window, app| {
+                                host_global.open_object_mask_dialog(None, window, app);
+                            }),
+                    )
                 }
             });
 

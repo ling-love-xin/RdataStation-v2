@@ -680,6 +680,67 @@ impl MetadataCacheOps {
         Ok(())
     }
 
+    /// S3-④：批量回写表行估计到 L2（`tables.row_count_estimate`），供导航行尾徽标
+    /// 跨会话复用（刷新元数据时作废重取，断开不删）。
+    ///
+    /// `estimates` = `(表名, Option<i64>)`；`None` = 驱动没给（把旧值置空，避免陈旧
+    /// 估计继续显示）。schema 从未落过缓存（首次内省还没发生）时静默跳过——
+    /// 无行可更新，等内省落地后自然覆盖。
+    pub fn update_table_row_estimates(
+        &mut self,
+        catalog_name: &str,
+        schema_name: &str,
+        estimates: &[(String, Option<i64>)],
+    ) -> Result<(), CoreError> {
+        let Some(schema_id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM schemata WHERE catalog_name = ?1 AND schema_name = ?2",
+                rusqlite::params![catalog_name, schema_name],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "update_table_row_estimates".to_string(),
+                    reason: e.to_string(),
+                })
+            })?
+        else {
+            return Ok(());
+        };
+        // 一次事务批量更新（大 schema 表可能上百张，逐条提交太慢）。
+        let tx = self.conn.transaction().map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "update_table_row_estimates".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        for (name, est) in estimates {
+            tx.execute(
+                "UPDATE tables SET row_count_estimate = ?1 WHERE schema_id = ?2 AND table_name = ?3",
+                rusqlite::params![est, schema_id, name],
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "update_table_row_estimates".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        }
+        tx.commit().map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "update_table_row_estimates".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        Ok(())
+    }
+
     /// 获取 Schema 对象数量统计
     pub fn get_schema_stats(&self, schema_id: i64) -> Result<Option<SchemaInfo>, CoreError> {
         let schema = self

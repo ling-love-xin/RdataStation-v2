@@ -132,6 +132,31 @@ impl NavCache {
         }
     }
 
+    /// S3-④：批量回写表行估计到 L2（`tables.row_count_estimate`），供导航行尾徽标
+    /// 跨会话复用。失败静默（内存回填已成功，L2 只是跨会话复用通道）。
+    pub fn update_row_estimates(
+        &mut self,
+        catalog: &str,
+        schema: &str,
+        estimates: &[(String, Option<u64>)],
+    ) {
+        let l2: Vec<(String, Option<i64>)> = estimates
+            .iter()
+            .map(|(n, e)| (n.clone(), e.map(|v| v as i64)))
+            .collect();
+        if let Err(e) = self
+            .ops
+            .update_table_row_estimates(catalog, schema, &l2)
+        {
+            tracing::warn!(
+                catalog,
+                schema,
+                error = %e,
+                "行估计回写 L2 失败（内存回填不受影响）"
+            );
+        }
+    }
+
     /// 该 schema 是否已**完整扫描**（`is_loaded = 1`）。
     ///
     /// 写侧用它判断「重写前要不要清旧行」：半成品（未完成）时先 `prune_schema`

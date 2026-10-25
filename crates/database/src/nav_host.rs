@@ -60,6 +60,31 @@ pub struct NavFilters {
     pub tag: Option<String>,
 }
 
+/// B-1 对象名 mask 规则（v1 仅 glob）。
+///
+/// 与 `settings::model::ObjectMaskRule` 字段一一对应——不直接复用那个类型，
+/// 是为了不引入 `database → settings` 依赖；宿主实现负责两侧互转。
+///
+/// 匹配语义：`*` 任意多字符 / `?` 单字符，大小写不敏感；include 为空 = 全部候选
+/// 进入候选集；exclude 为空 = 不排除；**exclude 优先于 include**。`use_regex` v1
+/// 恒 `false`（UI 不暴露，正则随 B-1-A 挂 v2）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectMaskRule {
+    /// include glob 列表（空 = 全量候选）。
+    pub include: Vec<String>,
+    /// exclude glob 列表（空 = 不排除）。
+    pub exclude: Vec<String>,
+    /// v1 恒 `false`。
+    pub use_regex: bool,
+}
+
+impl ObjectMaskRule {
+    /// 规则是否「启用」：include 或 exclude 任一非空（空规则 = 该层不过滤）。
+    pub fn is_active(&self) -> bool {
+        !self.include.is_empty() || !self.exclude.is_empty()
+    }
+}
+
 /// 一个已保存视图的展示信息（宿主从 settings 转换而来；视图侧只渲染，不读 settings）。
 #[derive(Debug, Clone)]
 pub struct SavedViewMeta {
@@ -150,6 +175,32 @@ pub trait NavHost: 'static {
         visible: Option<Vec<String>>,
         cx: &mut App,
     );
+
+    /// S3-④ 行估计徽标开关（默认开）：关闭后不排估计任务、行尾不显示「≈ N」。
+    fn row_estimate(&self, cx: &App) -> bool;
+
+    /// P1 连接级导航偏好（2026-10-25）：`show_system_objects` 开启时，默认模式
+    /// （`visible_databases() == None`）下导航树也显示系统 catalog / schema。
+    /// 白名单模式不受此开关影响（白名单集合里含系统对象时原样展示）。
+    /// 读取走连接档案 `advanced_options.navigator`（与 settings 的可见库白名单两通道并存）。
+    fn show_system_objects(&self, conn_id: &str, cx: &App) -> bool;
+
+    /// B-1 某连接的对象名 mask（键不存在 = 该连接不过滤，返回默认空规则）。
+    fn object_mask(&self, conn_id: &str, cx: &App) -> ObjectMaskRule;
+
+    /// B-1 保存某连接的对象名 mask（`None` = 删除该连接规则，回到不过滤）。
+    /// 保存后调用方负责刷新树 / 搜索命中区。
+    fn set_object_mask(&self, conn_id: &str, rule: Option<ObjectMaskRule>, cx: &mut App);
+
+    /// B-1 面板全局对象名 mask（空规则 = 不启用）。
+    fn global_mask(&self, cx: &App) -> ObjectMaskRule;
+
+    /// B-1 保存面板全局对象名 mask。保存后调用方负责刷新树 / 搜索命中区。
+    fn set_global_mask(&self, rule: ObjectMaskRule, cx: &mut App);
+
+    /// B-1 打开「对象名过滤器」对话框（`conn_id = Some` 连接级 / `None` 全局级；
+    /// 宿主实现负责查连接名并刷新导航面板）。
+    fn open_object_mask_dialog(&self, conn_id: Option<&str>, window: &mut Window, cx: &mut App);
 
     // ==================== 连接生命周期 ====================
 

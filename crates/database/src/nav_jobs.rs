@@ -171,6 +171,21 @@ pub struct TestConnResult {
     pub result: Result<String, String>,
 }
 
+/// S3-④ 行估计结果（回传主线程）。
+///
+/// `estimates` = `(表名, 估计行数)` 列表（`None` 值 = 该表无可用统计 / 驱动没给）；
+/// **空列表** = 整批失败 / 超时 / 驱动不支持——视图侧据此收掉「…」占位
+/// （不显示 0、不报红字，见 B 档文档 §1.4.4）。
+pub struct RowEstimateResult {
+    pub conn_id: String,
+    pub catalog: String,
+    pub schema: String,
+    /// 发起批次序号（视图侧 `estimate_seq`）：回填时小于当前值 = 过期批次（被更新 /
+    /// 刷新顶掉），丢弃不写回。
+    pub seq: u64,
+    pub estimates: Vec<(String, Option<u64>)>,
+}
+
 /// 导航建连结果（回传主线程）。
 ///
 /// 由宿主（`workbench::services::nav_runtime`）在**后台线程**完成建连后提交：
@@ -184,6 +199,10 @@ pub struct ConnectResult {
 
 /// 单个类别文件夹一次最多预取的表数量（避免大 schema 触发长时间后台 IO）。
 pub const PREFETCH_BATCH: usize = 20;
+
+/// S3-④ 行估计触发表数下限：表名单 ≥ 该值才排估计任务（小 schema 不值得一次
+/// 目录级统计查询；对齐 B 档文档 §1.4.2「阈值 20 张」）。
+pub const ROW_ESTIMATE_MIN_TABLES: usize = 20;
 
 /// 一页导航对象数。
 ///
@@ -344,6 +363,9 @@ enum Job {
         /// 系统 schema；`Some` = 白名单模式。与任务一起快照——执行时连接配置可能
         /// 已变（白名单本身在 settings，不随连接配置走，但保持一致的成本极低）。
         visible_databases: Option<std::collections::BTreeSet<String>>,
+        /// P1 导航设置快照（2026-10-25）：连接级「显示系统对象」开关。
+        /// `true` = 默认模式下也不隐藏系统 catalog / schema（与白名单模式正交）。
+        show_system_objects: bool,
     },
     LoadProperties {
         key: String,
@@ -424,6 +446,20 @@ enum Job {
         name: String,
         probe: ConnectionProbe,
     },
+    /// S3-④ 行估计后台补填：对某 schema 的已加载表名单做**目录级**统计查询
+    /// （PG `pg_class.reltuples` / MySQL `TABLE_ROWS`），回填行尾「≈ N」徽标。
+    ///
+    /// 与 Warm 同调度（per-conn 让位、不套全局软帽）：同连接元数据通道忙即跳过本批
+    /// （下次展开 / 刷新会再触发），不抢导航内省、不堆积后台线程。
+    /// 大 schema 由视图按 PREFETCH_BATCH 分批入队；`seq` 供回填端丢弃过期批次。
+    RowEstimate {
+        conn_id: String,
+        project_root: Option<String>,
+        catalog: String,
+        schema: String,
+        driver: String,
+        seq: u64,
+    },
 }
 
 /// 共享状态：任务队列 + 进度 + 结果队列。
@@ -446,12 +482,17 @@ struct Shared {
     pending_test: AtomicUsize,
     pending_connect: AtomicUsize,
     pending_search: [AtomicUsize; SearchConsumer::COUNT],
+    /// S3-④ 行估计（后台补填）未完成计数：`has_pending_row_estimates` 供空闲判定。
+    pending_row_estimates: AtomicUsize,
     load_results: Mutex<Vec<LoadResult>>,
     props_results: Mutex<Vec<PropsResult>>,
     sql_results: Mutex<Vec<SqlGenResult>>,
     test_results: Mutex<Vec<TestConnResult>>,
     connect_results: Mutex<Vec<ConnectResult>>,
     search_results: [Mutex<Vec<SearchResult>>; SearchConsumer::COUNT],
+    /// S3-④ 行估计结果（回传主线程；`estimates` 为空 = 失败 / 超时 / 驱动不支持，
+    /// 视图侧据此收掉「…」占位）。
+    row_estimates: Mutex<Vec<RowEstimateResult>>,
     /// 每连接信号量表：key = `conn_id`，value = 容量 1 的 per-conn 信号量。
     /// 挂本结构（不另开 `OnceLock` 静态全局）；条目由 [`drop_conn_sem`] 回收。
     conn_sems: Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
@@ -488,12 +529,14 @@ fn shared() -> &'static Shared {
             pending_test: AtomicUsize::new(0),
             pending_connect: AtomicUsize::new(0),
             pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
+            pending_row_estimates: AtomicUsize::new(0),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
             connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
+            row_estimates: Mutex::new(Vec::new()),
             conn_sems: Mutex::new(HashMap::new()),
         }
     })
@@ -695,6 +738,13 @@ enum Ticket {
         seq: u64,
     },
     Warm,
+    /// S3-④ 行估计：失败 / panic 也要回一条空结果，否则视图的「…」占位收不掉。
+    RowEstimate {
+        conn_id: String,
+        catalog: String,
+        schema: String,
+        seq: u64,
+    },
 }
 
 impl Job {
@@ -732,6 +782,18 @@ impl Job {
             Job::Warm { .. } => Some(Ticket::Warm),
             Job::WarmCompletion { .. } => None,
             Job::PrefetchColumns { .. } => None,
+            Job::RowEstimate {
+                conn_id,
+                catalog,
+                schema,
+                seq,
+                ..
+            } => Some(Ticket::RowEstimate {
+                conn_id: conn_id.clone(),
+                catalog: catalog.clone(),
+                schema: schema.clone(),
+                seq: *seq,
+            }),
             #[cfg(test)]
             Job::PanicForTest {
                 key,
@@ -759,6 +821,7 @@ impl Job {
             Job::TestConnection { .. } => Some(&shared().pending_test),
             Job::SearchIndex { consumer, .. } => Some(&shared().pending_search[consumer.ix()]),
             Job::Warm { .. } | Job::PrefetchColumns { .. } | Job::WarmCompletion { .. } => None,
+            Job::RowEstimate { .. } => Some(&shared().pending_row_estimates),
             #[cfg(test)]
             Job::PanicForTest { .. } => Some(&shared().pending_loads),
         }
@@ -826,6 +889,22 @@ fn report_failure(ticket: Ticket, reason: &str) {
         }
         Ticket::Warm => {
             s.warm_active.store(false, Ordering::SeqCst);
+        }
+        Ticket::RowEstimate {
+            conn_id,
+            catalog,
+            schema,
+            seq,
+        } => {
+            // 失败收尾 = 空结果：视图据 `(conn_id, schema, seq)` 清掉「…」占位
+            // （估计失败不该留红字，徽标消失即最安静的失败）。
+            lock(&s.row_estimates).push(RowEstimateResult {
+                conn_id,
+                catalog,
+                schema,
+                seq,
+                estimates: Vec::new(),
+            });
         }
     }
 }
@@ -906,6 +985,7 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             limit,
             object,
             visible_databases,
+            show_system_objects,
         } => {
             // 调度（B-2-1 per-conn 分片）：先取所属连接信号量（同连接内省串行，保持驱动
             // 单连接 Mutex 语义），再取全局软帽（跨连接并发上界 K=3）；两层都忙时在此
@@ -954,7 +1034,14 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             let outcome = rt.block_on(async {
                 tokio::time::timeout(
                     JOB_TIMEOUT,
-                    svc.load_children_page(&conn_id, &path, offset, limit, visible_databases.as_ref()),
+                    svc.load_children_page(
+                        &conn_id,
+                        &path,
+                        offset,
+                        limit,
+                        visible_databases.as_ref(),
+                        show_system_objects,
+                    ),
                 )
                 .await
             });
@@ -1076,6 +1163,91 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
             let svc = service(project_root);
             let _ = rt.block_on(svc.warm_completion_metadata(&conn_id));
         }
+        Job::RowEstimate {
+            conn_id,
+            project_root,
+            catalog,
+            schema,
+            driver,
+            seq,
+        } => {
+            // 与 Warm 同调度（per-conn 让位，不套全局软帽）：同连接元数据通道忙即跳过
+            // 本批——估计是「名单先上屏」之后的补填，不该反过来堵住导航内省。
+            // 跳过也回空结果（视图清「…」占位），只是不执行查询。
+            let Some(_permit) = try_acquire_warm_permit(&conn_id) else {
+                tracing::debug!(conn_id = %conn_id, schema = %schema, "行估计让位导航内省（跳过本批）");
+                lock(&shared().row_estimates).push(RowEstimateResult {
+                    conn_id,
+                    catalog,
+                    schema,
+                    seq,
+                    estimates: Vec::new(),
+                });
+                return;
+            };
+            // 驱动不支持（SQLite / DuckDB / JDBC / wasm）：直接空结果收尾，**不发真 COUNT**
+            // （大库逐表 COUNT 秒级以上）。SQL 生成是纯函数（`sql_gen::row_estimate_sql`），
+            // 驱动矩阵单测钉在那里。
+            let Some(sql) = crate::sql_gen::row_estimate_sql(&driver, &schema) else {
+                lock(&shared().row_estimates).push(RowEstimateResult {
+                    conn_id,
+                    catalog,
+                    schema,
+                    seq,
+                    estimates: Vec::new(),
+                });
+                return;
+            };
+            let svc = crate::metadata_service::MetadataService::new(
+                engine::get_connection_manager().clone(),
+            );
+            let outcome = rt.block_on(async {
+                tokio::time::timeout(JOB_TIMEOUT, svc.execute_query(&conn_id, &catalog, &sql)).await
+            });
+            // 失败 / 超时 → 空结果（不显示 0、不报红字）；成功 → 解析 (名, 估计)。
+            let estimates = match outcome {
+                Ok(Ok(result)) => {
+                    let parsed: Vec<(String, Option<u64>)> = result
+                        .rows
+                        .into_iter()
+                        .filter_map(|row| {
+                            let name = match row.first() {
+                                Some(shared::models::Value::Text(n)) => n.clone(),
+                                _ => return None,
+                            };
+                            // reltuples::bigint / TABLE_ROWS 是整数；DuckDB 联邦回传可能给
+                            // Float / Text（`::text` 版），三种都认。
+                            let est = match row.get(1) {
+                                Some(shared::models::Value::Int(i)) => Some(*i as u64),
+                                Some(shared::models::Value::Float(f)) => Some(*f as u64),
+                                Some(shared::models::Value::Text(t)) => t.parse::<u64>().ok(),
+                                _ => None,
+                            };
+                            Some((name, est))
+                        })
+                        .collect();
+                    // S3-④-C（拍板回写 L2）：估计值落 `metadata_index.tables.row_count_estimate`，
+                    // 重开连接复用；刷新元数据时由新批次覆盖。失败静默（尽力而为——
+                    // 内存回填已成功，L2 只是跨会话复用通道）。
+                    if !parsed.is_empty() {
+                        if let Some(mut cache) =
+                            crate::cache::NavCache::open_direct(&conn_id, project_root.as_deref())
+                        {
+                            cache.update_row_estimates(&catalog, &schema, &parsed);
+                        }
+                    }
+                    parsed
+                }
+                _ => Vec::new(),
+            };
+            lock(&shared().row_estimates).push(RowEstimateResult {
+                conn_id,
+                catalog,
+                schema,
+                seq,
+                estimates,
+            });
+        }
         Job::PrefetchColumns {
             conn_id,
             project_root,
@@ -1134,6 +1306,8 @@ fn run_job(rt: &tokio::runtime::Runtime, job: Job) {
                         },
                         // 列层无系统对象，不过滤（S3-① 只作用于 catalog / schema 层）。
                         None,
+                        // 同上：列层无系统对象，开关不影响（P1，2026-10-25）。
+                        false,
                     ),
                 )
                 .await
@@ -1366,6 +1540,8 @@ pub fn nav_result_is_stale(
 /// 提交导航树懒加载（首屏 / 恢复展开态）。
 ///
 /// `visible_databases`（S3-①）：入队时的可见库白名单快照（`None` = 默认隐藏系统库）。
+/// `show_system_objects`（P1，2026-10-25）：连接级「显示系统对象」开关快照。
+#[allow(clippy::too_many_arguments)]
 pub fn enqueue_load(
     conn_id: &str,
     project_root: Option<&str>,
@@ -1374,6 +1550,7 @@ pub fn enqueue_load(
     fresh: bool,
     priority: JobPriority,
     visible_databases: Option<std::collections::BTreeSet<String>>,
+    show_system_objects: bool,
 ) {
     enqueue_load_page(
         conn_id,
@@ -1385,6 +1562,7 @@ pub fn enqueue_load(
         PAGE_SIZE,
         priority,
         visible_databases,
+        show_system_objects,
     );
 }
 
@@ -1394,6 +1572,7 @@ pub fn enqueue_load(
 /// 后台恢复（展开态恢复 / 刷新 / 定位链）传 [`JobPriority::Background`]——
 /// 高优任务在 worker 侧插到低优前面（见 [`worker`] 的堆调度）。
 /// `visible_databases`（S3-①）：入队时的可见库白名单快照。
+/// `show_system_objects`（P1，2026-10-25）：连接级「显示系统对象」开关快照。
 #[allow(clippy::too_many_arguments)]
 pub fn enqueue_load_page(
     conn_id: &str,
@@ -1405,6 +1584,7 @@ pub fn enqueue_load_page(
     limit: usize,
     priority: JobPriority,
     visible_databases: Option<std::collections::BTreeSet<String>>,
+    show_system_objects: bool,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
     tracing::info!(conn_id = %conn_id, key = %key, fresh, priority = ?priority, "导航任务入队");
@@ -1419,6 +1599,7 @@ pub fn enqueue_load_page(
             limit,
             object: None,
             visible_databases,
+            show_system_objects,
         },
         priority,
     );
@@ -1438,6 +1619,7 @@ pub fn enqueue_locate_page(
     object: &str,
     limit: usize,
     visible_databases: Option<std::collections::BTreeSet<String>>,
+    show_system_objects: bool,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
     submit(
@@ -1451,6 +1633,7 @@ pub fn enqueue_locate_page(
             limit,
             object: Some(object.to_string()),
             visible_databases,
+            show_system_objects,
         },
         JobPriority::Background,
     );
@@ -1608,6 +1791,40 @@ pub fn has_pending_test() -> bool {
     shared().pending_test.load(Ordering::SeqCst) > 0
 }
 
+/// 是否仍有未完成的 S3-④ 行估计（后台补填，不阻塞任何交互；供空闲判定与测试）。
+pub fn has_pending_row_estimates() -> bool {
+    shared().pending_row_estimates.load(Ordering::SeqCst) > 0
+}
+
+/// S3-④ 提交某 schema 的行估计（后台补填，优先级 = 后台）。
+///
+/// 驱动不支持时**不入队**（SQL 生成即判定）：视图侧也判了一次，这里是兜底——
+/// 避免不支持驱动白排一批让位任务。
+pub fn enqueue_row_estimate(
+    conn_id: &str,
+    project_root: Option<&str>,
+    catalog: &str,
+    schema: &str,
+    driver: &str,
+    seq: u64,
+) {
+    if crate::sql_gen::row_estimate_sql(driver, schema).is_none() {
+        return;
+    }
+    shared().pending_row_estimates.fetch_add(1, Ordering::SeqCst);
+    submit(
+        Job::RowEstimate {
+            conn_id: conn_id.to_string(),
+            project_root: project_root.map(|s| s.to_string()),
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            driver: driver.to_string(),
+            seq,
+        },
+        JobPriority::Background,
+    );
+}
+
 /// FTS 命中 → 统一命中形状（纯映射，便于单测）。
 ///
 /// 两处不对称要当心：
@@ -1694,6 +1911,11 @@ pub fn drain_test_results() -> Vec<TestConnResult> {
     std::mem::take(&mut *lock(&shared().test_results))
 }
 
+/// 取走已完成的 S3-④ 行估计结果。
+pub fn drain_row_estimates() -> Vec<RowEstimateResult> {
+    std::mem::take(&mut *lock(&shared().row_estimates))
+}
+
 /// 取走已完成的「导航建连」结果。
 pub fn drain_connect_results() -> Vec<ConnectResult> {
     std::mem::take(&mut *lock(&shared().connect_results))
@@ -1771,12 +1993,14 @@ mod tests {
             pending_test: AtomicUsize::new(0),
             pending_connect: AtomicUsize::new(0),
             pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
+            pending_row_estimates: AtomicUsize::new(0),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
             connect_results: Mutex::new(Vec::new()),
             search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
+            row_estimates: Mutex::new(Vec::new()),
             conn_sems: Mutex::new(HashMap::new()),
         }
     }
@@ -1833,7 +2057,7 @@ mod tests {
     /// （Ord 面向 max-heap：越优先、seq 越小 → 越大。）
     #[test]
     fn queued_job_orders_priority_then_fifo() {
-        use super::{JobPriority, QueuedJob};
+        use super::JobPriority;
         assert!(
             queued(JobPriority::User, 1) > queued(JobPriority::Background, 0),
             "User 必须排在 Background 前面（即使 Background 先入队）"
@@ -1980,6 +2204,7 @@ mod tests {
             false,
             JobPriority::Background,
             None,
+            false,
         );
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -2020,6 +2245,7 @@ mod tests {
             false,
             JobPriority::Background,
             None,
+            false,
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut recovered = Vec::new();

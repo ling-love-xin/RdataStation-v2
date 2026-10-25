@@ -16,9 +16,8 @@ pub mod pg;
 pub mod sqlite;
 
 use property::{
-    ObjectOverview, OverviewCard, OverviewStatus, PageId, PropertyKind, PropertyRow,
-    PropertySection, PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput,
-    ProviderRegistry, ProviderStats,
+    ObjectOverview, OverviewCard, OverviewStatus, PageId, PropertyRow, PropertySection,
+    PropertyTable, PropertyTargetRef, PropertyValueKind, ProviderInput, ProviderRegistry,
 };
 use std::sync::OnceLock;
 
@@ -444,6 +443,7 @@ pub(crate) fn caps_for(db_type: Option<&str>) -> DriverCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use property::{PropertyKind, ProviderStats};
 
     /// 展示策略（2026-10-24 拍板隐藏式）：未实现类别**不产出**页签——pg 表级只剩
     /// 可用核心（列/索引/约束/DDL/数据），触发器/权限/依赖/规则/分区都不出现；

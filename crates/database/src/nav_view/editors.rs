@@ -450,7 +450,7 @@ impl NavView {
         let metadata = crate::metadata_service::MetadataService::new(
             engine::get_connection_manager().clone(),
         );
-        cx.spawn(async move |_this, cx| {
+        let _ = cx.spawn(async move |_this, cx| {
             // 执行用的副本（`conn_id` 外层还要用：回 UI 线程刷新）。
             let exec_conn = conn_id.clone();
             let result = executor
