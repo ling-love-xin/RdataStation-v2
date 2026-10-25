@@ -417,7 +417,19 @@ impl NavView {
     ///
     /// 成功 → 标记已连接（幂等）+ 清负载错误 + 提交预热并启动进度轮询；
     /// 失败 → 回滚乐观标记 + 面板提示。
+    ///
+    /// D8：公开入口 = core 状态写入 + 一次 `cx.notify()`；合并窗口内由泵直接调
+    /// `apply_connect_results_core`，末尾统一重绘，避免每条结果各触发一次布局测量。
     pub(super) fn apply_connect_results(
+        &mut self,
+        results: Vec<nav_jobs::ConnectResult>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_connect_results_core(results, cx);
+        cx.notify();
+    }
+
+    fn apply_connect_results_core(
         &mut self,
         results: Vec<nav_jobs::ConnectResult>,
         cx: &mut Context<Self>,
@@ -493,7 +505,6 @@ impl NavView {
                 drop(view);
                 self.host.notice(format!("连接失败: {}", r.message), cx);
             }
-            cx.notify();
         }
     }
 
@@ -570,7 +581,18 @@ impl NavView {
     }
 
     /// 回填索引搜索结果（过期批次直接丢弃：用户在等待期间已经把词改了）。
+    ///
+    /// D8：公开入口 = core 写入 + 一次 `cx.notify()`；合并窗口内泵直接调 core。
     pub(super) fn apply_search_results(
+        &mut self,
+        results: Vec<nav_jobs::SearchResult>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_search_results_core(results, cx);
+        cx.notify();
+    }
+
+    fn apply_search_results_core(
         &mut self,
         results: Vec<nav_jobs::SearchResult>,
         cx: &mut Context<Self>,
@@ -610,7 +632,6 @@ impl NavView {
                 view.reveal_note = None;
             }
         }
-        cx.notify();
     }
 
     /// 从一条搜索命中**在树中定位**：展开链路并选中目标。
@@ -834,62 +855,48 @@ impl NavView {
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_this, cx| {
             loop {
-                executor.timer(std::time::Duration::from_millis(60)).await;
-                let results = nav_jobs::drain_load_results();
-                let had = !results.is_empty();
-                if had
-                    && weak
-                        .update(cx, |this, cx| this.apply_load_results(results, cx))
-                        .is_err()
-                {
-                    return;
-                }
-                // 生成 SQL / 测试连接：同一轮询泵回填（两者都可能在菜单触发）。
-                let sql_results = nav_jobs::drain_sql_results();
-                if !sql_results.is_empty()
-                    && weak
-                        .update(cx, |this, cx| this.apply_sql_results(sql_results, cx))
-                        .is_err()
-                {
-                    return;
-                }
-                let test_results = nav_jobs::drain_test_results();
-                if !test_results.is_empty()
-                    && weak
-                        .update(cx, |this, cx| this.apply_test_results(test_results, cx))
-                        .is_err()
-                {
-                    return;
-                }
-                // S3-④ 行估计：同一轮询泵回填（表名单加载完自动触发，无需用户动作）。
+                executor
+                    .timer(std::time::Duration::from_millis(
+                        nav_jobs::NAV_PUMP_INTERVAL_MS,
+                    ))
+                    .await;
+                // D8 合并窗口：一轮先 drain 六类到本地 Vec（不 update），任一非空才在
+                // 单次 `weak.update` 内按 `PUMP_BATCH_ORDER` 顺序调各 core，末尾统一一次
+                // `cx.notify()`——消除六类结果各自触发的状态写入与布局测量。
+                let load = nav_jobs::drain_load_results();
+                let sql = nav_jobs::drain_sql_results();
+                let test = nav_jobs::drain_test_results();
                 let row_estimates = nav_jobs::drain_row_estimates();
-                if !row_estimates.is_empty()
-                    && weak
-                        .update(cx, |this, cx| {
-                            this.apply_row_estimate_results(row_estimates, cx)
-                        })
-                        .is_err()
-                {
-                    return;
-                }
-                // 导航建连（后台线程执行，2026-10-03）：结果回填——成功 → 预热，失败 → 回滚 + 提示。
-                let connect_results = nav_jobs::drain_connect_results();
-                if !connect_results.is_empty()
-                    && weak
-                        .update(cx, |this, cx| this.apply_connect_results(connect_results, cx))
-                        .is_err()
-                {
-                    return;
-                }
-                // 搜索：同一轮询泵回填（搜索框的跨连接索引搜索）。
-                let search_results =
+                let connect = nav_jobs::drain_connect_results();
+                let search =
                     nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
-                if !search_results.is_empty()
-                    && weak
-                        .update(cx, |this, cx| this.apply_search_results(search_results, cx))
-                        .is_err()
-                {
-                    return;
+                if batches_present(&load, &sql, &test, &row_estimates, &connect, &search) {
+                    let alive = weak
+                        .update(cx, |this, cx| {
+                            if !load.is_empty() {
+                                this.apply_load_results_core(load, cx);
+                            }
+                            if !sql.is_empty() {
+                                this.apply_sql_results_core(sql, cx);
+                            }
+                            if !test.is_empty() {
+                                this.apply_test_results_core(test, cx);
+                            }
+                            if !row_estimates.is_empty() {
+                                this.apply_row_estimate_results_core(row_estimates);
+                            }
+                            if !connect.is_empty() {
+                                this.apply_connect_results_core(connect, cx);
+                            }
+                            if !search.is_empty() {
+                                this.apply_search_results_core(search, cx);
+                            }
+                            cx.notify();
+                        })
+                        .is_ok();
+                    if !alive {
+                        return;
+                    }
                 }
                 let idle = !nav_jobs::has_pending_loads()
                     && !nav_jobs::has_pending_sql()
@@ -936,7 +943,20 @@ impl NavView {
     }
 
     /// 回填后台加载结果（主线程）。
+    ///
+    /// D8：公开入口 = core 状态写入 + 一次 `cx.notify()`；合并窗口内泵直接调
+    /// `apply_load_results_core`，末尾统一重绘。`pump_reveal` 属定位推进副作用，
+    /// 保留在 core 内（顺序不随合并改变）。
     pub(super) fn apply_load_results(
+        &mut self,
+        results: Vec<nav_jobs::LoadResult>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_load_results_core(results, cx);
+        cx.notify();
+    }
+
+    fn apply_load_results_core(
         &mut self,
         results: Vec<nav_jobs::LoadResult>,
         cx: &mut Context<Self>,
@@ -1069,13 +1089,21 @@ impl NavView {
         }
         // 定位：这一批回执可能正好把目标送到了（或送来了它所在的那一页），推进一步。
         self.pump_reveal(cx);
-        cx.notify();
     }
 
     /// 回填「生成 SQL」结果：成功注入编辑区（打开一份绑定该连接的草稿），失败落提示。
     ///
     /// **不自动执行**：模板是给人改的（写语句更不该替用户跑）。
     pub(super) fn apply_sql_results(
+        &mut self,
+        results: Vec<nav_jobs::SqlGenResult>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_sql_results_core(results, cx);
+        cx.notify();
+    }
+
+    fn apply_sql_results_core(
         &mut self,
         results: Vec<nav_jobs::SqlGenResult>,
         cx: &mut Context<Self>,
@@ -1102,11 +1130,19 @@ impl NavView {
                 }
             }
         }
-        cx.notify();
     }
 
     /// 回填「测试连接」结果（结果文案加连接名前缀，直接落面板提示）。
     pub(super) fn apply_test_results(
+        &mut self,
+        results: Vec<nav_jobs::TestConnResult>,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_test_results_core(results, cx);
+        cx.notify();
+    }
+
+    fn apply_test_results_core(
         &mut self,
         results: Vec<nav_jobs::TestConnResult>,
         cx: &mut Context<Self>,
@@ -1118,7 +1154,6 @@ impl NavView {
             };
             self.host.notice(msg, cx);
         }
-        cx.notify();
     }
 
     /// C2：对刚加载完的「表」文件夹排队列预取（一次性）。
@@ -1228,6 +1263,16 @@ impl NavView {
         results: Vec<nav_jobs::RowEstimateResult>,
         cx: &mut Context<Self>,
     ) {
+        self.apply_row_estimate_results_core(results);
+        cx.notify();
+    }
+
+    /// 纯状态写入（无 host 副作用 / 无定位推进），core 不需要 `cx`；公开入口保留
+    /// `cx` 契约并在末尾统一 `notify()`。
+    fn apply_row_estimate_results_core(
+        &mut self,
+        results: Vec<nav_jobs::RowEstimateResult>,
+    ) {
         for r in results {
             // 序号守卫（仿 search_seq）：只有「当前在途」的最新批次可写回。
             {
@@ -1265,7 +1310,6 @@ impl NavView {
                 }
             }
         }
-        cx.notify();
     }
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。

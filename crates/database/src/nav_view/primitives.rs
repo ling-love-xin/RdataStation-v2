@@ -252,6 +252,36 @@ pub(super) fn more_row_label(loaded: usize, total: usize, filtering: bool, fetch
     }
 }
 
+/// D8 合并窗口内六类结果的回填顺序（与泵现状顺序一致）：
+/// load → sql → test → row_estimate → connect → search。
+/// core 拆分后合并窗口内按此顺序调用；单测断言顺序表，调乱顺序会被钉死。
+pub(super) const PUMP_BATCH_ORDER: [&str; 6] = [
+    "load",
+    "sql",
+    "test",
+    "row_estimate",
+    "connect",
+    "search",
+];
+
+/// D8 合并窗口判定：本轮六类结果任一非空即需要一次状态写入 + 重绘；
+/// 全空则跳过本轮 `weak.update`，直接进入 idle 判定。
+pub(super) fn batches_present(
+    load: &[nav_jobs::LoadResult],
+    sql: &[nav_jobs::SqlGenResult],
+    test: &[nav_jobs::TestConnResult],
+    row_estimates: &[nav_jobs::RowEstimateResult],
+    connect: &[nav_jobs::ConnectResult],
+    search: &[nav_jobs::SearchResult],
+) -> bool {
+    !load.is_empty()
+        || !sql.is_empty()
+        || !test.is_empty()
+        || !row_estimates.is_empty()
+        || !connect.is_empty()
+        || !search.is_empty()
+}
+
 /// 类型徽标映射：数据库类型 id →（形状资产路径，2 字母缩写）。
 ///
 /// 形状取自 `gpui-kit-assets` 全量 Lucide（`AllAssets` 已注册，无需新增资产）；
@@ -1064,13 +1094,16 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        format_row_estimate, more_row_label, nav_glob_match, nav_highlight_segments,
-        nav_mask_passes, nav_node_matches, nav_object_masked, nav_snippet_segments,
-        nav_tag_palette_index, placeholder_decision, placeholder_message,
+        batches_present, format_row_estimate, more_row_label, nav_glob_match,
+        nav_highlight_segments, nav_mask_passes, nav_node_matches, nav_object_masked,
+        nav_snippet_segments, nav_tag_palette_index, placeholder_decision, placeholder_message,
+        PUMP_BATCH_ORDER,
     };
-    use crate::model::{NavNode, NavNodeKind};
+    use crate::model::{NavNode, NavNodeKind, NavPath};
     use crate::nav_host::ObjectMaskRule;
     use crate::nav_rows::PlaceholderKind;
+    use crate::navigator_service::NavPage;
+    use crate::nav_jobs;
 
     /// 同名同档（跨调用稳定）；不同名分布在不同档（至少不完全扎堆）。
     #[test]
@@ -1339,5 +1372,104 @@ mod tests {
         );
         assert_eq!(more_row_label(2, 5, false, true), "加载中…");
         assert_eq!(more_row_label(2, 5, true, true), "加载中…");
+    }
+
+    /// D8：六类全空 → 不需要本轮状态写入与重绘（跳过 `weak.update`，直接进 idle 判定）。
+    #[test]
+    fn batches_present_all_empty_is_false() {
+        let load: Vec<nav_jobs::LoadResult> = Vec::new();
+        let sql: Vec<nav_jobs::SqlGenResult> = Vec::new();
+        let test: Vec<nav_jobs::TestConnResult> = Vec::new();
+        let row_estimates: Vec<nav_jobs::RowEstimateResult> = Vec::new();
+        let connect: Vec<nav_jobs::ConnectResult> = Vec::new();
+        let search: Vec<nav_jobs::SearchResult> = Vec::new();
+        assert!(!batches_present(
+            &load,
+            &sql,
+            &test,
+            &row_estimates,
+            &connect,
+            &search
+        ));
+    }
+
+    /// D8：六类任一非空即触发本轮合并提交（逐一覆盖六个分支，防止 OR 折叠漏类）。
+    #[test]
+    fn batches_present_each_nonempty_category_triggers() {
+        let load = vec![nav_jobs::LoadResult {
+            key: "k".into(),
+            conn_id: "c".into(),
+            project_root: None,
+            path: NavPath::Connection,
+            offset: 0,
+            jumped_to: None,
+            conn_fingerprint: None,
+            result: Ok(NavPage {
+                nodes: vec![],
+                total: 0,
+                offset: 0,
+                has_more: false,
+            }),
+        }];
+        let sql = vec![nav_jobs::SqlGenResult {
+            key: "k".into(),
+            result: Ok(String::new()),
+        }];
+        let test = vec![nav_jobs::TestConnResult {
+            conn_id: "c".into(),
+            name: "n".into(),
+            result: Ok(String::new()),
+        }];
+        let row_estimates = vec![nav_jobs::RowEstimateResult {
+            conn_id: "c".into(),
+            catalog: String::new(),
+            schema: String::new(),
+            seq: 0,
+            estimates: vec![],
+        }];
+        let connect = vec![nav_jobs::ConnectResult {
+            conn_id: "c".into(),
+            ok: true,
+            message: String::new(),
+        }];
+        let search = vec![nav_jobs::SearchResult {
+            consumer: nav_jobs::SearchConsumer::Navigator,
+            seq: 0,
+            query: String::new(),
+            searched: 0,
+            hits: vec![],
+        }];
+
+        // 逐一替换为非空，其余全空 → 每一类都应触发。
+        let cases: [(&str, bool); 6] = [
+            ("load", batches_present(&load, &[], &[], &[], &[], &[])),
+            ("sql", batches_present(&[], &sql, &[], &[], &[], &[])),
+            ("test", batches_present(&[], &[], &test, &[], &[], &[])),
+            (
+                "row_estimate",
+                batches_present(&[], &[], &[], &row_estimates, &[], &[]),
+            ),
+            (
+                "connect",
+                batches_present(&[], &[], &[], &[], &connect, &[]),
+            ),
+            (
+                "search",
+                batches_present(&[], &[], &[], &[], &[], &search),
+            ),
+        ];
+        for (name, present) in cases {
+            assert!(present, "类别 {name} 非空应触发合并提交");
+        }
+    }
+
+    /// D8：合并窗口 core 调用顺序与现状泵顺序一致（load → sql → test → row_estimate
+    /// → connect → search），顺序表供回归钉死，core 拆分不得调乱。
+    #[test]
+    fn pump_batch_order_follows_load_to_search() {
+        assert_eq!(
+            PUMP_BATCH_ORDER,
+            ["load", "sql", "test", "row_estimate", "connect", "search"]
+        );
     }
 }

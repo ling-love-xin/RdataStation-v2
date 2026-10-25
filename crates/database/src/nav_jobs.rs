@@ -42,6 +42,11 @@ const PER_CONN_CONCURRENCY: usize = 1;
 /// 在 per-conn 信号量之外套一层，只挡排队、不改变 per-conn 互斥；防止连接数多时
 /// 任务线程 / 独立 Runtime 数失控。
 const LOAD_GLOBAL_CAP: usize = 3;
+
+/// 结果回填泵间隔（D8，对齐 DBeaver `DBNModel` 事件批量合并窗口 100ms 口径）：
+/// 一轮内 drain 全部六类结果后单次重绘，避免每类结果各自触发一次状态写入与
+/// 布局测量。可配置口径 = 常量集中一处，本批不接 settings 面板。
+pub(crate) const NAV_PUMP_INTERVAL_MS: u64 = 100;
 static GLOBAL_LOAD_SEM: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 /// 预热起步延迟（S2-③，zqlz `schema_service.rs:49` 同值 3s）。
