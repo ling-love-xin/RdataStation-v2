@@ -1092,6 +1092,7 @@ impl ResultPanel {
     /// 同时把选中格反推成**数据列序**写入 [`Self::selected_col`]，驱动右栏列浏览器
     /// 清单高亮与底部明细；选行 / 清选 / 转置视图 / 行号槽列时不反推（保持清单当前选中）。
     pub fn set_selection_pos(&mut self, pos: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        tracing::info!(pos = ?pos, "【探针】set_selection_pos：结果网格格选中变化");
         self.selection_pos = pos;
         if let Some((_row, col)) = pos {
             if col > 0 {
@@ -2066,6 +2067,7 @@ impl ResultPanel {
     /// 行选中 → 状态行「已选第 N 行」增量更新（表格 `TableEvent::SelectRow` 事件路径调用；
     /// sync 会全量覆写 status，这里只补事件之间的增量）
     pub fn set_selected_row(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
+        tracing::info!(row = ?row, "【探针】set_selected_row：结果网格行选中变化");
         if let Some(status) = self.status.as_mut() {
             status.selected_row = row;
         }

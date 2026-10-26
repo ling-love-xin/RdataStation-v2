@@ -450,6 +450,7 @@ impl InsightView {
     /// 留着旧载荷会直接渲染出上一个目标的数据（比空白更坏：看起来像新目标的结果）。
     /// 折叠偏好不在此列：它们是用户口味，不随目标变。
     pub fn set_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
+        tracing::info!(target = %target.title(), "【探针】洞察面板目标切换");
         self.tab = target.default_tab();
         self.target = Some(target);
         self.data = PanelData::default();
@@ -479,6 +480,7 @@ impl InsightView {
         work_set_limit: usize,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(status_usage, work_set_limit, "【探针】洞察设置项变更（宿主转发 prefs）");
         self.status_usage = status_usage;
         self.work_set_limit = work_set_limit;
         if !status_usage {
@@ -567,6 +569,7 @@ impl InsightView {
         ) {
             return;
         }
+        tracing::info!(target = %target.title(), "【探针】洞察确认全量口径（confirm_full）");
         self.scope = InsightScope::Full;
         self.state = InsightPanelState::Loading;
         cx.emit(InsightEvent::FullProfileRequested { target });
@@ -578,6 +581,7 @@ impl InsightView {
         let Some(target) = self.target.clone() else {
             return;
         };
+        tracing::info!(target = %target.title(), "【探针】洞察切回取样口径（request_sample）");
         self.scope = InsightScope::Sample;
         self.state = InsightPanelState::Loading;
         cx.emit(InsightEvent::ProfileRequested { target });
@@ -869,6 +873,7 @@ impl InsightView {
             return;
         };
         let source_label = target.source().map(|source| source.label().to_string());
+        tracing::info!(column = %column, temp_table = %temp_table, "【探针】历史 Tab 保存快照请求");
         self.history_saving = true;
         self.history_notice = None;
         cx.emit(InsightEvent::SnapshotSaveRequested {
@@ -1176,6 +1181,7 @@ impl InsightView {
     ///
     /// 不能放在 render 里做：那会造成「渲染一次发一次请求」。
     pub fn set_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
+        tracing::info!(tab = ?tab, old = ?self.tab, "【探针】洞察面板 Tab 切换");
         if self.tab != tab {
             self.tab = tab;
             cx.notify();

@@ -266,6 +266,13 @@ pub fn open_archive_dialog_with(
             let Some(result) = submit_archive(&inputs, cx) else {
                 return false;
             };
+            tracing::info!(
+                name = %result.name,
+                mode = ?result.payload_mode,
+                group_id = ?result.group_id,
+                tags = result.tags.len(),
+                "【探针】归档对话框「归档」提交（校验通过）"
+            );
             on_submit(result, cx);
             true
         })

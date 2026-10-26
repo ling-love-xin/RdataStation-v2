@@ -920,6 +920,17 @@ impl ScratchpadView {
             cx.notify();
             return;
         }
+        let edit_kind = match &edit {
+            ScratchpadEdit::NewFile => "new_file",
+            ScratchpadEdit::NewFolder => "new_folder",
+            ScratchpadEdit::Rename { .. } => "rename",
+            ScratchpadEdit::NewReference { .. } => "new_reference",
+            ScratchpadEdit::RenameReference { .. } => "rename_reference",
+        };
+        tracing::info!(
+            edit = edit_kind,
+            "【探针】草稿箱 start_scratchpad_edit 触发（新建/重命名）"
+        );
         self.ensure_scratchpad_inputs(window, cx);
         // 新建落点：唯一选中且为文件夹 → 该目录（并展开，使内联行可见）；否则模块根。
         if matches!(edit, ScratchpadEdit::NewFile | ScratchpadEdit::NewFolder) {
@@ -1080,6 +1091,11 @@ impl ScratchpadView {
             return;
         }
         paths.sort();
+        tracing::info!(
+            count = paths.len(),
+            first = %paths[0],
+            "【探针】草稿箱 delete_scratchpad_selection 触发（删除入回收站）"
+        );
         let label = if paths.len() == 1 {
             scratchpad_basename(&paths[0])
         } else {
@@ -1509,6 +1525,10 @@ impl ScratchpadView {
         let Some(path) = path else {
             return;
         };
+        tracing::info!(
+            path = %path,
+            "【探针】草稿箱 scratchpad_open_selection 触发（打开/展开选中）"
+        );
         let is_folder = self
             .scratchpad
             .borrow()

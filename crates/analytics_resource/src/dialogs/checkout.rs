@@ -153,6 +153,9 @@ pub fn open_checkout_dialog_with(
         let file_name = file_name.clone();
         let open_after = open_after.clone();
         let on_submit = on_submit.clone();
+        // 探针字段：在闭包外 clone 所需标识（'static move 闭包不能借用局部 seed）。
+        let resource_name = seed.resource_name.clone();
+        let version = seed.version;
         Rc::new(move |cx: &mut App| -> bool {
             let inputs = CheckoutDialogInputs {
                 file_name: file_name.clone(),
@@ -161,6 +164,13 @@ pub fn open_checkout_dialog_with(
             let Some(result) = submit_checkout(&inputs, cx) else {
                 return false;
             };
+            tracing::info!(
+                file_name = %result.file_name,
+                open_after = result.open_after,
+                resource = %resource_name,
+                version,
+                "【探针】取回对话框「取回」提交（校验通过）"
+            );
             on_submit(result, cx);
             true
         })

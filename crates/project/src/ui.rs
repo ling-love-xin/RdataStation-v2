@@ -616,6 +616,7 @@ fn sort_items(items: &mut [ProjectSummary], sort: ProjectSort) {
 
 /// 切换 Tab 并刷新。
 pub fn set_tab(host: &ProjectUiHost, tab: PickerTab, cx: &mut App) {
+    tracing::info!(tab = %tab.key(), "【探针】项目选择器切换 Tab");
     host.state.borrow_mut().picker.tab = tab;
     refresh_picker(host, cx);
 }
@@ -1039,6 +1040,7 @@ fn sample_project_dir() -> PathBuf {
 /// 从示例项目开始（内置最小示例：示例 SQL 草稿）。
 pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
     let path = sample_project_dir();
+    tracing::info!(path = %path.display(), "【探针】项目选择器「从示例项目开始」触发");
     if !project_service::is_valid_project(&path) {
         let input = project_service::CreateProjectInput::new("示例项目", path.clone())
             .with_description(Some("RdataStation 内置示例".to_string()))
@@ -1068,6 +1070,7 @@ pub fn request_open(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, c
 
 /// 直接打开（不再拦截）。
 pub fn open_path(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: &mut App) {
+    tracing::info!(path = %path.display(), "【探针】项目选择器 open_path 打开项目");
     match project_service::open(path) {
         Ok(OpenOutcome::Opened(opened)) => apply_opened(host, opened, cx),
         Ok(OpenOutcome::Busy(info)) => {

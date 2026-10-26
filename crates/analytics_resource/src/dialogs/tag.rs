@@ -292,11 +292,18 @@ pub fn open_tag_dialog(
         let state = state.clone();
         let on_action = on_action.clone();
         let input = name_input.clone();
+        let resource_name = resource_name.clone();
         move |window: &mut Window, cx: &mut App| {
             let name = input.read(cx).value().trim().to_string();
             if name.is_empty() || state.busy() || state.read_only() {
                 return;
             }
+            tracing::info!(
+                tag = %name,
+                target_count,
+                resource = %resource_name,
+                "【探针】标签对话框「新建并打标」提交"
+            );
             state.set_busy(true);
             state.set_note(Some("正在新建…".to_string()));
             input.update(cx, |input, cx| input.set_value("", window, cx));
@@ -307,11 +314,19 @@ pub fn open_tag_dialog(
     let dispatch_apply = {
         let state = state.clone();
         let on_action = on_action.clone();
+        let resource_name = resource_name.clone();
         move |window: &mut Window, cx: &mut App| {
             let (add, remove) = state.diff();
             if add.is_empty() && remove.is_empty() {
                 return;
             }
+            tracing::info!(
+                add = add.len(),
+                remove = remove.len(),
+                target_count,
+                resource = %resource_name,
+                "【探针】标签对话框「应用」提交打标差集"
+            );
             state.set_busy(true);
             state.set_note(Some("正在打标签…".to_string()));
             on_action(TagDialogEvent::Apply { add, remove }, window, cx);

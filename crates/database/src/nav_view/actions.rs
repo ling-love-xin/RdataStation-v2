@@ -349,6 +349,9 @@ impl NavView {
         path: NavPath,
         cx: &mut Context<Self>,
     ) {
+        // 手动点击行 → 展开/折叠（连接行单击、对象行单击、键盘 →/← 均汇此）。
+        let was_expanded = self.nav.borrow().expanded.contains(key);
+        tracing::info!(conn_id = %conn_id, key = %key, was_expanded, "【探针】toggle_nav_node 行展开/折叠");
         let do_load = {
             let mut view = self.nav.borrow_mut();
             if view.expanded.contains(key) {
@@ -685,6 +688,7 @@ impl NavView {
         name: &str,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(name = %name, has_target = target.is_some(), "【探针】begin_reveal 在树中定位对象");
         match target {
             Some(target) => {
                 {
@@ -1463,6 +1467,7 @@ impl NavView {
     /// 抽出来的两个理由：① 落库（搜索行那种瞬时键不写，见 [`nav_selection_is_persistable`]）；
     /// ② 只有一个地方记「选中变了」——旧写法是五处各自 `borrow_mut().selected_key = ...`。
     pub(super) fn set_nav_selected(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        tracing::info!(key = ?key, "【探针】set_nav_selected 树行选中/点击");
         let changed = {
             let mut view = self.nav.borrow_mut();
             if view.selected_key == key {
@@ -1915,6 +1920,7 @@ impl NavView {
 
     /// 删除连接（物理删除；元数据缓存保留）。
     pub(super) fn delete_connection(&mut self, conn_id: &str, name: &str, cx: &mut Context<Self>) {
+        tracing::info!(conn_id = %conn_id, name = %name, "【探针】右键菜单「删除连接」确认后执行");
         let result = self.host.delete_connection(conn_id);
         // 运行时连接一并断开（缓存保留，可在「缓存管理」清理）。
         self.host.disconnect(conn_id).ok();
@@ -2034,6 +2040,7 @@ impl NavView {
         path: Option<NavPath>,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(conn_id = %conn_id, key = %key, "【探针】refresh_node 刷新节点元数据");
         let prefix = format!("{key}/");
         {
             let mut view = self.nav.borrow_mut();
@@ -2077,6 +2084,7 @@ impl NavView {
                 .map(|c| c.id.clone())
                 .collect()
         };
+        tracing::info!(root_count = roots.len(), "【探针】refresh_all 刷新全部已展开连接");
         {
             let mut view = self.nav.borrow_mut();
             view.children.clear();
@@ -2235,6 +2243,7 @@ impl NavView {
     /// 判存在：成功移除找不到条目自然空操作，失败回写定位不到条目也静默跳过。
     pub(super) fn commit_staged(&mut self, cx: &mut Context<Self>) {
         let plan = self.nav.borrow().commit_plan();
+        tracing::info!(total = plan.len(), "【探针】commit_staged 提交待变更 DDL");
         if plan.is_empty() {
             self.host.notice("待提交清单为空".to_string(), cx);
             return;

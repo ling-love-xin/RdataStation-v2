@@ -1138,6 +1138,7 @@ impl ListDelegate for ArchiveListDelegate {
                                     let detail = open_detail.clone();
                                     move |_, window, cx| {
                                         if let Some(detail) = detail.as_ref() {
+                                            tracing::info!(?detail, "【探针】资源行菜单「打开（只读）」触发");
                                             host.request_open(detail, window, cx);
                                         }
                                     }
@@ -1327,7 +1328,15 @@ impl ListDelegate for ArchiveListDelegate {
                         menu.separator()
                             .item(PopupMenuItem::new(delete_label).disabled(is_global).on_click({
                                 let host = host.clone();
-                                move |_, window, cx| host.request_delete(&delete_targets, window, cx)
+                                let targets = delete_targets.clone();
+                                move |_, window, cx| {
+                                    tracing::info!(
+                                        count = targets.len(),
+                                        ids = ?targets,
+                                        "【探针】资源行菜单「移入回收站」触发"
+                                    );
+                                    host.request_delete(&targets, window, cx)
+                                }
                             }))
                     }),
             ),

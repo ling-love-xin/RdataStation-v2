@@ -393,6 +393,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        tracing::info!(path = %path.display(), read_only = !read_only.can_edit(), "【探针】open_in_editor_with 进入：在编辑器打开文件");
         let mode = editor::mode::resolve_mode(&path, None);
         let outcome = if read_only.can_edit() {
             editor::persist::open_file(&self.editor_service, &path, mode)
@@ -722,6 +723,7 @@ impl WorkbenchView {
         let Some(id) = self.editor_service.service().active_id().cloned() else {
             return;
         };
+        tracing::info!(doc = %id, "【探针】close_active_editor 进入：关闭当前编辑器文档（Ctrl+W）");
         let Some(panel) = self
             .editor_hosts
             .iter()
@@ -793,6 +795,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(mode = ?mode, "【探针】new_editor_document 进入：新建未命名文档");
         let mut request = editor::service::OpenRequest::untitled("", mode);
         if mode == editor::model::EditorMode::Sql
             && let Some(id) = self.selected_connection_id()
@@ -821,6 +824,7 @@ impl WorkbenchView {
         let Some(path) = crate::services::editor_files::pick_open_path() else {
             return;
         };
+        tracing::info!(path = %path.display(), "【探针】open_file_via_dialog：系统文件对话框已选定路径（Ctrl+O）");
         if let Err(error) = self.open_in_editor(path, window, cx) {
             *self.shared.notice.borrow_mut() = Some(format!("打开文件失败：{error}"));
         }
@@ -2466,6 +2470,7 @@ impl WorkbenchView {
     fn toggle_quick_open(&mut self, mode: Mode, cx: &mut Context<Self>) {
         let open = !self.shared.quick_open.get();
         self.shared.quick_open.set(open);
+        tracing::info!(open, mode = ?mode, "【探针】toggle_quick_open：Quick Open 浮层开关");
         // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）。
         self.shared.settings_open.set(false);
         if open {
@@ -2544,6 +2549,7 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(action = ?action, keep_open, "【探针】execute_quick_open_action：命令面板执行一条动作");
         match action {
             Action::NewDocument(mode) => self.new_editor_document(mode, window, cx),
             Action::ShowProperties(request) => {
@@ -3353,6 +3359,7 @@ impl Render for WorkbenchView {
                 move |_: &OpenSettings, _window, cx| {
                     entity.update(cx, |this, cx| {
                         let open = this.shared.settings_open.get();
+                        tracing::info!(open = !open, "【探针】OpenSettings：打开/关闭设置页（Ctrl+,）");
                         this.shared.settings_open.set(!open);
                         // 互斥：设置页与 Quick Open 不同时显示
                         this.shared.quick_open.set(false);
@@ -3382,6 +3389,7 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &SwitchProject, window, cx| {
                     entity.update(cx, |this, cx| {
+                        tracing::info!("【探针】SwitchProject：切换项目动作触发（关闭当前回选择器）");
                         let host = this.project_host().clone();
                         project::ui::request_close(&host, window, cx);
                     });
@@ -3392,6 +3400,7 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &CloseProject, window, cx| {
                     entity.update(cx, |this, cx| {
+                        tracing::info!("【探针】CloseProject：关闭项目动作触发");
                         let host = this.project_host().clone();
                         project::ui::request_close(&host, window, cx);
                     });

@@ -115,6 +115,9 @@ pub fn open_conflict_dialog(
 
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
+        // 探针字段：在闭包外备好（on_click 闭包需 'static，不能借用局部 seed）。
+        let seed_kind = seed.kind;
+        let seed_name = seed.name.clone();
         let value = name_input.read(cx).value().trim().to_string();
         let gate = conflict_gate(&seed.name, &value);
         let (hint, hint_color, can_rename) = match gate {
@@ -130,7 +133,10 @@ pub fn open_conflict_dialog(
         // 覆盖闭包：不碰输入框，直接回宿主重入队覆盖任务。
         let overwrite = {
             let on_choice = on_choice.clone();
+            let kind = seed_kind;
+            let name = seed_name.clone();
             move |window: &mut Window, cx: &mut App| {
+                tracing::info!(kind = ?kind, name = %name, "【探针】冲突对话框「覆盖」按钮触发");
                 on_choice(ConflictChoice::Overwrite, window, cx);
             }
         };
@@ -139,11 +145,13 @@ pub fn open_conflict_dialog(
             let on_choice = on_choice.clone();
             let input = name_input.clone();
             let current = seed.name.clone();
+            let kind = seed_kind;
             move |window: &mut Window, cx: &mut App| {
                 let name = input.read(cx).value().trim().to_string();
                 if !matches!(conflict_gate(&current, &name), ConflictRenameGate::Ready) {
                     return false;
                 }
+                tracing::info!(kind = ?kind, old = %current, new = %name, "【探针】冲突对话框「改名」按钮触发");
                 on_choice(ConflictChoice::Rename(name), window, cx);
                 true
             }
@@ -198,7 +206,14 @@ pub fn open_conflict_dialog(
                             .small()
                             .debug_selector(|| "conflict-dialog-cancel".to_string())
                             .label("取消")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                            .on_click({
+                                let kind = seed_kind;
+                                let name = seed_name.clone();
+                                move |_, window, cx| {
+                                    tracing::info!(kind = ?kind, name = %name, "【探针】冲突对话框「取消」按钮触发");
+                                    window.close_dialog(cx);
+                                }
+                            }),
                     )
                     .child(
                         Button::new("conflict-dialog-overwrite")

@@ -418,6 +418,7 @@ impl NavView {
             return;
         };
         let new_name = input.read(cx).value().trim().to_string();
+        tracing::info!(conn_id = %ctx.conn_id, old = %ctx.name, new = %new_name, "【探针】commit_object_rename 对象重命名提交");
         // 空串 / 未改动：静默关闭（不算失败，不打扰）。
         if new_name.is_empty() || new_name == ctx.name {
             self.cancel_object_rename(cx);

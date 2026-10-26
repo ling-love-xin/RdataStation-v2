@@ -46,6 +46,12 @@ impl ConnectionFactory {
         &self,
         config: ConnectionConfig,
     ) -> Result<Connection, CoreError> {
+        tracing::info!(
+            host = %config.host,
+            port = config.port,
+            method = ?config.method,
+            "【探针】ConnectionFactory::create_connection 建立连接"
+        );
         let connector = self.find_connector(&config.method)?;
         let stream = connector.connect(&config).await?;
 

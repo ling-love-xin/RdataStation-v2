@@ -2336,6 +2336,13 @@ impl MockPanel {
     ///
     /// 不在事件路径里写库：真正落库是出口的事（不变式 I5）。
     pub fn run_generate(&mut self, cx: &mut Context<Self>) {
+        let table = self.draft().table_name.clone();
+        let rows = self.draft().options.rows;
+        tracing::info!(
+            table = %table,
+            rows = rows,
+            "【探针】Mock「生成」on_click 触发（生成到内存临时表）"
+        );
         self.start_job(MockJobKind::Generate, cx);
     }
 
@@ -2600,6 +2607,10 @@ impl MockPanel {
             self.fail("关系里没有待落库的表", cx);
             return;
         }
+        tracing::info!(
+            tables = ?pending,
+            "【探针】Mock「落库这些表」(persist_related) 触发"
+        );
         let infos: Vec<MockGenInfo> = self
             .results
             .iter()

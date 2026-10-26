@@ -96,6 +96,8 @@ pub fn build_host(
         let shared = shared.clone();
         let view = entity.clone();
         Rc::new(move |cx: &mut App| {
+            let root = shared.project.borrow().as_ref().map(|p| p.root.clone());
+            tracing::info!(root = ?root, "【探针】on_opened：项目已打开/切换完成，宿主刷新连接与资源");
             refresh_after_open(&shared, cx);
             // M6：资产库列表随项目切换重新取数——面板可能正开着，不重取会一直
             // 显示上一项目的存档（“切了项目但内容没变”是最难发现的一类错）。

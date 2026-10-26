@@ -306,6 +306,7 @@ pub fn open_trash_dialog_with(
                                 .show_cancel(true),
                         )
                         .on_ok(move |_, window, cx| {
+                            tracing::info!(count, "【探针】回收站对话框「清空回收站」确认");
                             state.set_busy(true);
                             state.set_note(Some("正在清空…".to_string()));
                             on_action(TrashAction::Empty, window, cx);
@@ -391,6 +392,7 @@ fn trash_line(
         let state = state.clone();
         let on_action = on_action.clone();
         let trash_id = row.trash_id.clone();
+        let name = row.name.clone();
         // 还原口径按粒度区分（§12.1.1 ③）：copy 把副本从回收站取回原位；
         // reference 本体一直留在源位置，还原只是复活登记行。
         let restore_note = match row.payload_mode {
@@ -398,6 +400,11 @@ fn trash_line(
             PayloadMode::Copy => "正在还原…".to_string(),
         };
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            tracing::info!(
+                trash_id = %trash_id,
+                name = %name,
+                "【探针】回收站对话框「还原」触发"
+            );
             state.set_busy(true);
             state.set_note(Some(restore_note.clone()));
             on_action(
@@ -435,6 +442,9 @@ fn trash_line(
                 let state = state.clone();
                 let on_action = on_action.clone();
                 let trash_id = trash_id.clone();
+                // 外层是 `Fn` 闭包（可被多次调用）：探针用的 name 在此克隆一份，
+                // 不能让内层 on_ok 把外层捕获的 name move 走。
+                let name_for_log = name.clone();
                 alert
                     .confirm()
                     .title(format!("永久删除「{name}」？"))
@@ -446,6 +456,11 @@ fn trash_line(
                             .show_cancel(true),
                     )
                     .on_ok(move |_, window, cx| {
+                        tracing::info!(
+                            trash_id = %trash_id,
+                            name = %name_for_log,
+                            "【探针】回收站对话框「永久删除」确认"
+                        );
                         state.set_busy(true);
                         state.set_note(Some("正在永久删除…".to_string()));
                         on_action(

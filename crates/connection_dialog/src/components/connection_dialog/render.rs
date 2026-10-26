@@ -2167,6 +2167,17 @@ impl<H: 'static> ConnectionDialogState<H> {
                     if busy.get() != BusyOp::None {
                         return;
                     }
+                    let driver_now = driver
+                        .read(app)
+                        .selected_value()
+                        .cloned()
+                        .unwrap_or_default();
+                    let url_now = url.read(app).value().to_string();
+                    tracing::info!(
+                        driver = %driver_now,
+                        url = %url_now,
+                        "【探针】连接对话框「测试连接」on_click 触发"
+                    );
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
                         // 拦截文案按**当前缺口**给，并把缺口字段的标签标红（见 `blocker`）。
                         blocked_hint.set(true);
@@ -2246,6 +2257,11 @@ impl<H: 'static> ConnectionDialogState<H> {
                     if busy.get() != BusyOp::None {
                         return;
                     }
+                    let editing = editing_id.borrow().is_some();
+                    tracing::info!(
+                        editing = editing,
+                        "【探针】连接对话框「保存」(Ctrl+Enter 暂存草稿) on_click 触发"
+                    );
                     // 编辑模式：修改不落草稿箱（已保存连接从导航栏编辑），「保存并退出」时统一 update。
                     if editing_id.borrow().is_some() {
                         set_result(
@@ -2322,6 +2338,9 @@ impl<H: 'static> ConnectionDialogState<H> {
                     if busy.get() != BusyOp::None {
                         return;
                     }
+                    tracing::info!(
+                        "【探针】连接对话框「保存并退出」(批量提交暂存) on_click 触发"
+                    );
                     // 1) 收集待提交条目：编辑中的连接（表单实时 collect）＋ 草稿箱全部条目。
                     let mut pending: Vec<(
                         Option<usize>,   // 草稿箱下标（编辑条目为 None，不在草稿箱）

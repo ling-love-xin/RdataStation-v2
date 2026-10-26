@@ -206,6 +206,12 @@ pub fn open_version_dialog_with(
     }
     let on_action: Rc<dyn Fn(VersionAction, &mut Window, &mut App)> = Rc::new(on_action);
     let on_close: Rc<dyn Fn(&mut App)> = Rc::new(on_close);
+    tracing::info!(
+        name = %seed.name,
+        current_version = seed.current_version,
+        rows = seed.rows.len(),
+        "【探针】版本历史对话框打开"
+    );
     let name = seed.name.clone();
     let current_version = seed.current_version;
 

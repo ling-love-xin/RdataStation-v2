@@ -142,6 +142,13 @@ pub fn open_rename_dialog(
                 if !matches!(rename_gate(field, &current, &name), RenameGate::Ready) {
                     return;
                 }
+                tracing::info!(
+                    id = %id,
+                    field = ?field,
+                    old = %current,
+                    new = %name,
+                    "【探针】重命名对话框「保存」提交（过闸）"
+                );
                 on_confirm(
                     RenameEvent {
                         id: id.clone(),

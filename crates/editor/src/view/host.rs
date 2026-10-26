@@ -4472,6 +4472,7 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_save：保存文档（Ctrl+S）");
         match self.save(cx) {
             Ok(_) => {
                 // A12：保存时顺便把会话（光标/选区/模式）落库——用户按 Ctrl+S 是最自然的时机
@@ -4492,6 +4493,7 @@ impl EditorHostPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_format：格式化文档（Ctrl+Shift+F）");
         self.format_document(window, cx);
     }
 
@@ -4506,6 +4508,7 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_trigger_completion：手动请求补全（Ctrl+Space）");
         self.trigger_completion(cx);
     }
 
@@ -4794,6 +4797,7 @@ impl EditorHostPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_signature_help：签名帮助（Ctrl+Shift+Space）");
         let text = self.editor.read(cx).value().to_string();
         // 活动光标在前（多光标取第一个即可——签名帮助是"看当前调用"的辅助）
         let cursor = self.editor.read(cx).cursor_offsets().first().copied().unwrap_or(0);
@@ -4807,6 +4811,7 @@ impl EditorHostPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_function_manual：打开函数手册对话框");
         _ = self.open_function_manual(window, cx);
     }
 
@@ -4976,6 +4981,7 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_copy_grid_selection：结果网格复制（Ctrl+C）");
         self.copy_grid_selection(cx);
     }
 
@@ -4987,6 +4993,7 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_undo_result_edit：结果网格撤销（Ctrl+Z）");
         self.undo_result_edit(cx);
     }
 
@@ -4997,6 +5004,7 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(doc = %self.document, "【探针】on_redo_result_edit：结果网格重做（Ctrl+Shift+Z）");
         self.redo_result_edit(cx);
     }
 
@@ -7576,6 +7584,7 @@ impl EditorHostPanel {
 
     /// 导出的共同开头：选路径（用户取消 = 什么都不做）→ 直接落盘 / 先抓全量
     fn start_export(&mut self, format: ExportFormat, scope: ExportScope, cx: &mut Context<Self>) {
+        tracing::info!(doc = %self.document, format = format.label(), scope = ?scope, "【探针】start_export：导出当前结果集进入");
         if !self.shared.has_export_path_picker() {
             self.set_message(Some("导出未接入（宿主未注入路径选择器）".to_string()), cx);
             return;

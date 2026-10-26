@@ -590,6 +590,7 @@ impl RulesView {
     /// 视图**不自己改 `pending`**：真值只能来自「库里的决定 + 重新装配」——
     /// 就地改会做出一个库与注册表都没跟上的假象。
     pub fn request_trust(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        tracing::info!(trusted, "【探针】规则信任门决定（request_trust）");
         self.trust_prompted = true;
         cx.emit(RulesEvent::TrustDecided { trusted });
         cx.notify();
@@ -692,6 +693,7 @@ impl RulesView {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
+        tracing::info!(rule_id = %rule_id, scope = ?scope, enabled, "【探针】规则对话框启用/禁用切换（request_toggle）");
         for group in self
             .data
             .groups
@@ -716,10 +718,12 @@ impl RulesView {
     }
 
     pub fn request_create_rule(&mut self, scope: RuleScope, cx: &mut Context<Self>) {
+        tracing::info!(scope = ?scope, "【探针】规则对话框新建规则（request_create_rule）");
         cx.emit(RulesEvent::CreateRuleRequested { scope });
     }
 
     pub fn request_open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        tracing::info!(path = %path.display(), "【探针】规则对话框打开规则文件（request_open_file）");
         cx.emit(RulesEvent::OpenFileRequested { path });
     }
 

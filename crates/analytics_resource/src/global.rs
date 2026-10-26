@@ -290,6 +290,12 @@ impl GlobalInstanceStore {
     /// 3. 全局登记（scope = 'global'，kind = 'analysis'）+ 全局版本快照；
     /// 4. 返回结果（冲突未覆盖时返回 [`InstanceOpError::Conflict`]，由 UI 弹询问）。
     pub async fn promote(&self, req: &PromoteRequest) -> Result<PromoteOutcome, InstanceOpError> {
+        tracing::info!(
+            name = %req.name,
+            kind = ?req.kind,
+            rel_path = ?req.rel_path,
+            "【探针】升级到全局 promote 进入"
+        );
         // ---- 冲突检测（先查登记，再查 DuckDB 表，双保险）----
         let existing: Option<i32> = self.with_sqlite(|conn| {
             conn.query_row(
@@ -396,6 +402,7 @@ impl GlobalInstanceStore {
     /// 覆盖语义（§13.2 冲突询问「覆盖」分支）：旧表删除、登记行软删，新升级
     /// 成为新版本（版本号接续旧链）。
     pub async fn promote_overwrite(&self, req: &PromoteRequest) -> Result<PromoteOutcome, InstanceOpError> {
+        tracing::info!(name = %req.name, "【探针】升级到全局 promote_overwrite 进入（覆盖）");
         self.drop_global_table(&req.name).await?;
         self.with_sqlite(|conn| {
             conn.execute(
@@ -430,6 +437,7 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
+        tracing::info!(name = %name, target = ?target, "【探针】从全局分发 distribute 进入");
         // 项目侧落库名：未填改名 = 沿用全局名（§13.6 冲突询问「改名」分支才带新名）。
         let target_name = target.unwrap_or(name).to_string();
 
@@ -572,6 +580,7 @@ impl GlobalInstanceStore {
         name: &str,
         target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
+        tracing::info!(name = %name, target = ?target, "【探针】从全局分发 distribute_overwrite 进入（覆盖）");
         let target_name = target.unwrap_or(name).to_string();
 
         // 项目侧旧本体移除（表或文件都删；文件在 resources/ 下，删前先探存在）。

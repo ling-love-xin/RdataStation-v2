@@ -499,6 +499,7 @@ impl NavViewState {
     /// - 已入 Drop 再入 Truncate → `Ignored`（drop 已含清空）；
     /// - 已入 Truncate 再入 Drop → `Replaced`（同对象只保留最终状态 Drop，原位替换、顺序不挪）。
     pub(super) fn enqueue_staged(&mut self, op: StagedOp) -> EnqueueOutcome {
+        tracing::info!(key = %op.key, op = ?op.op, "【探针】enqueue_staged 待变更入队（删除/清空）");
         let Some(index) = self.staged_ops.iter().position(|existing| existing.key == op.key)
         else {
             self.staged_ops.push(op);
@@ -1032,6 +1033,7 @@ impl NavView {
         let Some(property) = item.property else {
             return;
         };
+        tracing::info!(conn_id = %item.conn_id, key = %item.key, "【探针】nav_open_properties 打开属性面板（Enter/F4）");
         let (conn_label, driver) = self
             .host
             .connections()

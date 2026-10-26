@@ -72,6 +72,7 @@ impl BasePanel for DatabaseNavPanel {
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if active {
+            tracing::info!(panel = "database_nav", "【探针】左 dock Tab 激活：数据源导航");
             let shared = self.shared.clone();
             shared.active_left.set(LeftPanel::Database);
             shared.notify_host(cx);
@@ -147,6 +148,7 @@ impl BasePanel for ScratchPanel {
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if active {
+            tracing::info!(panel = "scratchpad", "【探针】左 dock Tab 激活：草稿箱");
             let shared = self.shared.clone();
             shared.active_left.set(LeftPanel::Draft);
             shared.notify_host(cx);
@@ -227,6 +229,7 @@ impl BasePanel for ResourcePanelTab {
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if active {
+            tracing::info!(panel = "resources", "【探针】左 dock Tab 激活：资产库");
             let shared = self.shared.clone();
             shared.active_left.set(LeftPanel::Resources);
             shared.notify_host(cx);
@@ -513,6 +516,7 @@ impl BasePanel for PluginPanel {
 
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if active {
+            tracing::info!(panel = "plugin", "【探针】左 dock Tab 激活：插件");
             let shared = self.shared.clone();
             shared.active_left.set(LeftPanel::Plugin);
             shared.notify_host(cx);
