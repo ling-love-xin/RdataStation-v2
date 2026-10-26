@@ -46,8 +46,8 @@ use analytics_resource::dialogs::rename::{
 };
 use analytics_resource::filter::{SortField, SortOrder};
 use analytics_resource::model::{
-    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
-    TagTarget,
+    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, DeleteTarget,
+    KeepVersions, PayloadMode, TagTarget,
 };
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
 use analytics_resource::resource_view::{GroupOption, ResourcesHost};
@@ -74,15 +74,19 @@ fn archive_seed(
     rel_path: &str,
     display_name: &str,
     source_connection: Option<String>,
+    kind: ArchiveKind,
     groups: Vec<GroupOption>,
     group_id: Option<String>,
     initial_tags: Vec<String>,
+    source_abs_path: Option<String>,
 ) -> (ArchiveDialogSeed, String) {
     let resolved = PayloadStore::new(root.to_path_buf()).free_rel_path(rel_path);
     let conflict = (resolved != rel_path).then(|| ArchiveConflict {
         taken_rel_path: format!("{RESOURCES_DIR_NAME}/{rel_path}"),
         resolved_rel_path: format!("{RESOURCES_DIR_NAME}/{resolved}"),
     });
+    // 引用模式只对受管文件开放（§12.1.1 ①）：分析快照固定复制，不提供引用选项。
+    let allow_reference = kind == ArchiveKind::File;
     let seed = ArchiveDialogSeed {
         source_label,
         rel_path: format!("{RESOURCES_DIR_NAME}/{resolved}"),
@@ -92,6 +96,9 @@ fn archive_seed(
         groups,
         group_id,
         initial_tags,
+        allow_reference,
+        default_mode: PayloadMode::DEFAULT,
+        source_abs_path,
     };
     (seed, resolved)
 }
@@ -316,23 +323,45 @@ impl WorkbenchResourceHost {
             .map(|detail| detail.alias.clone())
     }
 
-    /// 本体绝对路径（越界 / 点前缀守卫由 `PayloadStore::resolve` 把关）。
+    /// 本体绝对路径（按归档模式分派；越界 / 点前缀守卫由 `PayloadStore` 把关）。
+    ///
+    /// - **copy**：`resources/` 相对路径 → `resolve`（需要项目根）；
+    /// - **reference**：源**绝对**路径 → `resolve_source`（不依赖项目根；源不存在 / 已移动
+    ///   由守卫报错，宿主回执说明快照失效）。
     ///
     /// 拿不到就**给回执**：旧行可能没登记路径，或项目已关闭——两种都要说清，不能静默。
     fn payload_path(&self, detail: &ArchiveDetail, cx: &mut App) -> Option<PathBuf> {
-        let Some(root) = self.shared.project_root() else {
-            self.pending("无法定位本体", "：还没有打开项目", cx);
-            return None;
-        };
-        let Some(rel) = detail.payload_rel_path.as_deref() else {
-            self.notice("资产库：这条存档没有登记本体路径（旧行）", cx);
-            return None;
-        };
-        match PayloadStore::new(root).resolve(rel) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                self.notice(format!("资产库：无法定位本体（{error}）"), cx);
-                None
+        match detail.payload_mode {
+            PayloadMode::Copy => {
+                let Some(root) = self.shared.project_root() else {
+                    self.pending("无法定位本体", "：还没有打开项目", cx);
+                    return None;
+                };
+                let Some(rel) = detail.payload_rel_path.as_deref() else {
+                    self.notice("资产库：这条存档没有登记本体路径（旧行）", cx);
+                    return None;
+                };
+                match PayloadStore::new(root).resolve(rel) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.notice(format!("资产库：无法定位本体（{error}）"), cx);
+                        None
+                    }
+                }
+            }
+            PayloadMode::Reference => {
+                let Some(source) = detail.source_path.as_deref() else {
+                    self.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+                    return None;
+                };
+                // resolve_source 不读项目根（源在模块管辖目录之外）；空 root 只为满足构造签名。
+                match PayloadStore::new(PathBuf::new()).resolve_source(source) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        self.notice(format!("资产库：引用源不可用（{error}）"), cx);
+                        None
+                    }
+                }
             }
         }
     }
@@ -375,15 +404,19 @@ impl ResourcesHost for WorkbenchResourceHost {
                         .tags_of_entry(&draft.rel_path)
                         .map(|tags| tags.into_iter().map(|t| t.name).collect())
                         .unwrap_or_default();
+                    let kind = archive_kind_for(&draft.abs_path);
+                    let source_abs = draft.abs_path.to_string_lossy().to_string();
                     let (seed, resolved_rel) = archive_seed(
                         &root,
                         format!("草稿箱：{}", draft.rel_path),
                         &draft.rel_path,
                         &draft.display_name,
                         draft.connection_id.clone(),
+                        kind,
                         known_groups.clone(),
                         default_group.clone(),
                         inherited_tags,
+                        Some(source_abs),
                     );
                     let shared = shared.clone();
                     let draft = draft.clone();
@@ -397,8 +430,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                             name: result.name,
                             alias: result.alias,
                             // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
-                            kind: archive_kind_for(&draft.abs_path),
-                            payload_mode: analytics_resource::model::PayloadMode::Copy,
+                            kind,
+                            payload_mode: result.payload_mode,
                             analysis: None,
                             binding: ArchiveBinding {
                                 // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
@@ -443,7 +476,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                             alias: None,
                             // 数据文件按分析档登记（P4.5）：探测由作业在工作线程上做。
                             kind: archive_kind_for(&draft.abs_path),
-                            payload_mode: analytics_resource::model::PayloadMode::Copy,
+                            payload_mode: PayloadMode::Copy,
                             analysis: None,
                             binding: ArchiveBinding {
                                 promoted_from: Some(format!(
@@ -508,6 +541,8 @@ impl ResourcesHost for WorkbenchResourceHost {
             .to_string();
         // 目标相对路径：`rel_path` **相对 `resources/`**（`PayloadStore::resolve` 的口径），
         // 这里只给文件名——本地文件没有草稿相对路径可保留。
+        let kind = archive_kind_for(&source);
+        let source_abs = source.to_string_lossy().to_string();
         let (seed, resolved_rel) = archive_seed(
             &root,
             format!("本地文件：{}", source.display()),
@@ -515,10 +550,12 @@ impl ResourcesHost for WorkbenchResourceHost {
             &default_name,
             // 本地文件没有"来源草稿的连接"可带出：**不猜**当前活动连接（那不一定是它的来路）。
             None,
+            kind,
             self.known_groups(cx),
             self.default_group_for_archive(cx),
             // 本地文件没有草稿标签可继承。
             Vec::new(),
+            Some(source_abs),
         );
 
         let shared = self.shared.clone();
@@ -530,8 +567,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                 name: result.name,
                 alias: result.alias,
                 // 同上：数据文件走分析档（探测在工作线程上做）。
-                kind: archive_kind_for(&source),
-                payload_mode: analytics_resource::model::PayloadMode::Copy,
+                kind,
+                payload_mode: result.payload_mode,
                 analysis: None,
                 binding: ArchiveBinding {
                     promoted_from: None,
@@ -551,6 +588,37 @@ impl ResourcesHost for WorkbenchResourceHost {
         let Some(path) = self.payload_path(detail, cx) else {
             return;
         };
+        // reference 懒校验（§12.1.1 ②）：源在位（`payload_path` 已守卫存在性）但内容与登记
+        // 指纹不一致时**不打开**，置失效槽位交详情面板处置；旧行无指纹基准就不挡（与
+        // indexer 旧行口径一致）。校验只在主动打开时做，不进索引状态统计。
+        if detail.payload_mode == PayloadMode::Reference {
+            if let Some(expected) = detail.content_hash.as_deref() {
+                match PayloadStore::content_hash_sync(&path) {
+                    Ok(actual) if actual != expected => {
+                        self.shared
+                            .reference_stale
+                            .borrow_mut()
+                            .insert(detail.id.clone());
+                        self.shared.refresh_resources(cx);
+                        self.notice(
+                            "资产库：源已变更，快照失效——可在详情面板「接受当前内容」或「从历史还原」",
+                            cx,
+                        );
+                        return;
+                    }
+                    Ok(_) => {
+                        self.shared
+                            .reference_stale
+                            .borrow_mut()
+                            .remove(&detail.id);
+                    }
+                    Err(error) => {
+                        self.notice(format!("资产库：引用源校验失败（{error}）"), cx);
+                        return;
+                    }
+                }
+            }
+        }
         // 分析表（数据文件）**不走编辑器文本**：双击/打开要看的是数据本身。
         //
         // 走洞察的取样入口（与右键「查看统计」同一个）：那边把本体当只读源表读出来
@@ -701,6 +769,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                     .unwrap_or_default(),
                 file_size: None,
             },
+            false,
         );
         self.shared.refresh_resources(cx);
         self.notice("资产库：正在升级到全局…", cx);
@@ -715,9 +784,52 @@ impl ResourcesHost for WorkbenchResourceHost {
             return;
         }
         // 分发 = 跨项目唯一法定路径（全局 → 当前项目）；目标重名由工作线程拦下回执。
-        resource_jobs::enqueue_distribute(root, name.to_string());
+        resource_jobs::enqueue_distribute(root, name.to_string(), None, false);
         self.shared.refresh_resources(cx);
         self.notice("资产库：正在从全局分发…", cx);
+    }
+
+    fn is_reference_stale(&self, resource_id: &str) -> bool {
+        self.shared.reference_stale.borrow().contains(resource_id)
+    }
+
+    fn accept_reference_current(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法接受当前内容", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能接受当前内容", cx);
+            return;
+        }
+        let Some(source) = detail.source_path.as_deref() else {
+            self.notice("资产库：引用型存档没有登记源路径（数据异常）", cx);
+            return;
+        };
+        // 接受当前内容 = 以当前源绝对路径为基准再归档（reference 分支：旧源留版本副本，
+        // 只更新指纹 / 规模 / 版本，不覆盖本体；服务层 `archive_into_existing` 口径）。
+        // 标签 / 分组沿用现状：空 tags + None group_id 时服务层不改动既有归属。
+        let request = ArchiveRequest {
+            source_path: PathBuf::from(source),
+            rel_path: detail.payload_rel_path.clone().unwrap_or_default(),
+            name: detail.name.clone(),
+            alias: detail.alias.clone(),
+            kind: detail.kind,
+            payload_mode: PayloadMode::Reference,
+            analysis: None,
+            binding: ArchiveBinding {
+                promoted_from: None,
+                source_connection_id: None,
+                source_table: None,
+            },
+            tags: Vec::new(),
+            group_id: None,
+            keep_versions: None,
+            existing_resource_id: Some(detail.id.clone()),
+        };
+        let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
+        resource_jobs::enqueue_archive(root, self.read_only(), request, keep_versions, false);
+        self.shared.refresh_resources(cx);
+        self.notice("资产库：正在接受当前内容并生成新版本…", cx);
     }
 
     fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
@@ -730,7 +842,7 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.notice("资产库：正在读取版本历史…", cx);
     }
 
-    fn request_delete(&self, resource_ids: &[String], _window: &mut Window, cx: &mut App) {
+    fn request_delete(&self, targets: &[DeleteTarget], window: &mut Window, cx: &mut App) {
         let Some(root) = self.require_project("无法移入回收站", cx) else {
             return;
         };
@@ -738,18 +850,52 @@ impl ResourcesHost for WorkbenchResourceHost {
             self.notice("资产库：项目为只读模式，不能移入回收站", cx);
             return;
         }
-        // 多选批量与单选同一条路：一次提交整批（服务层逐条走，部分成功会在错误里交代）。
-        let ids = resource_ids.to_vec();
-        let scope = match ids.len() {
-            0 => return,
-            1 => String::new(),
-            count => format!("（已选 {count} 项）"),
+        if targets.is_empty() {
+            return;
+        }
+
+        // 文案按归档粒度区分本体命运（§12.1.1 ③）：copy 搬副本进回收站；reference 本体
+        // 留原位、只删登记行。混合时分组说清各有几项。
+        let copy_count = targets.iter().filter(|t| t.mode == PayloadMode::Copy).count();
+        let reference_count = targets.len() - copy_count;
+        let description = match (copy_count, reference_count) {
+            (_, 0) => "将删除 resources/ 副本与登记记录，之后可从回收站还原。".to_string(),
+            (0, _) => "本体留在源位置不动，只删除登记记录，之后可从回收站还原登记行。".to_string(),
+            _ => format!(
+                "{copy_count} 项副本将删除 resources/ 副本与登记记录；{reference_count} 项引用本体留在源位置、只删除登记记录。之后均可从回收站还原。"
+            ),
         };
+        let title = match targets.len() {
+            1 => "移入回收站？".to_string(),
+            count => format!("移入回收站（{count} 项）？"),
+        };
+
+        let ids: Vec<String> = targets.iter().map(|t| t.id.clone()).collect();
+        let shared = self.shared.clone();
+        let read_only = self.read_only();
         // 回收站是**项目级**的（与草稿箱共用 `.RSmeta/trash`）：搬本体与软删登记行
         // 都在服务层一次完成，宿主不自己拼回收站路径（不做两套回收站）。
-        resource_jobs::enqueue_trash(root, self.read_only(), ids);
-        self.shared.refresh_resources(cx);
-        self.notice(format!("资产库：正在移入回收站{scope}…"), cx);
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let shared = shared.clone();
+            let root = root.clone();
+            let ids = ids.clone();
+            alert
+                .confirm()
+                .title(title.clone())
+                .description(description.clone())
+                .button_props(
+                    gpui_kit::component::dialog::DialogButtonProps::default()
+                        .ok_text("移入回收站")
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _window, cx| {
+                    resource_jobs::enqueue_trash(root.clone(), read_only, ids.clone());
+                    shared.refresh_resources(cx);
+                    say(&shared, "资产库：正在移入回收站…", cx);
+                    true
+                })
+        });
     }
 
     fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {

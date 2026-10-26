@@ -18,7 +18,7 @@ use gpui_kit::{
     VisualTestContext, Window, div,
 };
 
-use rds_analytics_resource::KeepVersions;
+use rds_analytics_resource::{KeepVersions, PayloadMode};
 use rds_analytics_resource::dialogs::archive::{
     ArchiveConflict, ArchiveDialogResult, ArchiveDialogSeed, build_inputs,
     open_archive_dialog_with, submit_archive,
@@ -89,6 +89,10 @@ fn archive_seed(conflict: Option<ArchiveConflict>) -> ArchiveDialogSeed {
         ],
         group_id: None,
         initial_tags: Vec::new(),
+        // 窗口用例走 File 档：允许选引用模式（单选渲染与回传由单测在纯函数层覆盖）。
+        allow_reference: true,
+        default_mode: PayloadMode::DEFAULT,
+        source_abs_path: Some("D:\\work\\月报.sql".to_string()),
     }
 }
 
@@ -210,6 +214,7 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     assert_eq!(prefilled.name, "月报");
     assert!(prefilled.tags.is_empty());
     assert_eq!(prefilled.keep_versions, None, "留空 = 跟随设置默认");
+    assert_eq!(prefilled.payload_mode, PayloadMode::Copy, "归档方式默认复制");
 
     // 清空显示名：不通过（对话框的按钮回调走的就是这个函数），宿主也收不到回调。
     cx.update(|window, cx| {
@@ -240,6 +245,8 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
             .update(cx, |state, cx| state.set_value("3", window, cx));
         // 分组选择走下拉菜单（headless 下程序性写单元格，与渲染共用同一份状态）。
         *inputs_for_submit.group_id.borrow_mut() = Some("af_month".to_string());
+        // 归档方式单选同一纪律：程序性切到引用，提交结果要带回选中的模式。
+        *inputs_for_submit.mode.borrow_mut() = PayloadMode::Reference;
     });
     let result = cx
         .update(|_window, cx| submit_archive(&inputs_for_submit, cx))
@@ -253,6 +260,7 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         "选中的分组 id"
     );
     assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
+    assert_eq!(result.payload_mode, PayloadMode::Reference, "选中的引用模式带回结果");
 
     // 别名留空 = 不设（空串入库会让详情面板多一个空行）。
     cx.update(|window, cx| {
@@ -522,6 +530,9 @@ fn trash_row(id: &str) -> TrashRow {
         kind_label: "文件".to_string(),
         time_label: "2026-09-18 10:00".to_string(),
         size_label: "1.2 KB".to_string(),
+        payload_mode: PayloadMode::Copy,
+        resource_id: String::new(),
+        has_payload: true,
     }
 }
 

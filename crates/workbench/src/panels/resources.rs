@@ -19,6 +19,7 @@ use gpui_kit::*;
 
 use analytics_resource::KeepVersions;
 use analytics_resource::dialogs::index_repair::RepairAction;
+use analytics_resource::dialogs::conflict::ConflictChoice;
 use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
@@ -27,7 +28,7 @@ use analytics_resource::model::TagTarget;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
 
 use super::SidebarPanel;
-use crate::services::resource_jobs::{self, TagJobAction};
+use crate::services::resource_jobs::{self, ConflictContext, TagJobAction};
 
 impl SidebarPanel {
     /// 创建资产库面板实体（在 `SidebarPanel::new` 里调用，无 I/O）。
@@ -67,6 +68,9 @@ impl SidebarPanel {
         let Some(root) = self.shared.project_root() else {
             return;
         };
+        // 失效槽位是项目级的：每次刷新（含切换项目后的重载）清掉，避免旧项目的失效
+        // 标记残留；重新检测由下次主动打开触发，与索引懒校验口径一致。
+        self.shared.reference_stale.borrow_mut().clear();
         let read_only = self.shared.project_ui.borrow().read_only;
         // 入队即置"加载中"：首个快照到达前状态行给提示、空态不闪（原型 §5）。
         let panel = self.resources_panel.clone();
@@ -178,6 +182,59 @@ impl SidebarPanel {
         };
         resource_jobs::enqueue_tag_action(root, read_only, targets.to_vec(), action);
         self.ensure_resources_pump(cx);
+    }
+
+    /// 冲突对话框选定后的重入队（§13.3 升级 / §13.6 分发）。
+    ///
+    /// 覆盖 = 带 `overwrite` 重入队；改名 = 换新名后非覆盖重入队；取消由对话框直接关窗、
+    /// 不走这里。项目根缺失时只回一句状态栏提示，不发空队列。
+    pub(crate) fn request_conflict_choice(
+        &self,
+        context: &ConflictContext,
+        choice: ConflictChoice,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.shared.project_root() else {
+            *self.shared.notice.borrow_mut() =
+                Some("资产库：还没有打开项目，无法继续".to_string());
+            self.shared.notify_host(cx);
+            return;
+        };
+        match context {
+            ConflictContext::Promote(req) => match choice {
+                ConflictChoice::Overwrite => {
+                    resource_jobs::enqueue_promote(root, req.clone(), true);
+                    *self.shared.notice.borrow_mut() =
+                        Some("资产库：正在覆盖升级到全局…".to_string());
+                }
+                ConflictChoice::Rename(name) => {
+                    let mut req = req.clone();
+                    req.name = name;
+                    resource_jobs::enqueue_promote(root, req, false);
+                    *self.shared.notice.borrow_mut() =
+                        Some("资产库：正在升级到全局…".to_string());
+                }
+            },
+            ConflictContext::Distribute { global_name, target } => match choice {
+                ConflictChoice::Overwrite => {
+                    resource_jobs::enqueue_distribute(root, global_name.clone(), target.clone(), true);
+                    *self.shared.notice.borrow_mut() =
+                        Some("资产库：正在覆盖分发到本项目…".to_string());
+                }
+                ConflictChoice::Rename(name) => {
+                    resource_jobs::enqueue_distribute(
+                        root,
+                        global_name.clone(),
+                        Some(name),
+                        false,
+                    );
+                    *self.shared.notice.borrow_mut() =
+                        Some("资产库：正在从全局分发…".to_string());
+                }
+            },
+        }
+        self.shared.refresh_resources(cx);
+        self.shared.notify_host(cx);
     }
 
     /// 收掉标签对话框的忙态并给状态栏回执（入队被挡、取数 / 动作失败都走它）。
@@ -486,14 +543,31 @@ impl SidebarPanel {
         let panel = self.resources_panel.clone();
         panel.update(cx, |panel, cx| panel.set_undo(undo, cx));
 
+        // 同名冲突：不写失败回执，把凭据落 `pending`，下一帧由 `ensure_conflict_dialog`
+        // 开三选对话框（覆盖 / 改名 / 取消；§13.3、§13.6）。
+        if let resource_jobs::OpOutcome::Conflict { context, name } = &outcome {
+            self.shared.conflict_dialog.borrow_mut().pending = Some(context.clone());
+            *self.shared.notice.borrow_mut() =
+                Some(format!("资产库：「{name}」同名冲突，请选择处理方式"));
+            self.shared.notify_host(cx);
+            return;
+        }
+
         let message = match outcome {
             resource_jobs::OpOutcome::Archived {
+                resource_id,
                 name,
                 version,
                 rel_path,
                 undo: _,
                 notes,
             } => {
+                // 接受当前内容（reference 再归档）成功后清失效槽位；首次归档没有失效记录，
+                // 移除是空操作。
+                self.shared
+                    .reference_stale
+                    .borrow_mut()
+                    .remove(&resource_id);
                 let base = format!("资产库：已归档「{name}」v{version} → {rel_path}");
                 // 附属项（标签 / 分组）没落上时写进同一句回执：归档成功了，但用户得知道
                 // 那两项没生效（都能在面板上补做，所以不单独弹窗）。
@@ -560,6 +634,10 @@ impl SidebarPanel {
             ),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
+            }
+            // 冲突已在前面拦截并转三选对话框，走不到这里；补齐 match 穷尽性。
+            resource_jobs::OpOutcome::Conflict { .. } => {
+                unreachable!("冲突回执已在前面转对话框处理")
             }
         };
         *self.shared.notice.borrow_mut() = Some(message);

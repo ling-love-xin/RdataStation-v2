@@ -26,7 +26,7 @@ use rds_analytics_resource::detail_view::{
 };
 use rds_analytics_resource::dnd::GroupDrop;
 use rds_analytics_resource::filter::{SortField, SortOrder};
-use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, RowScope, TagTarget};
+use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, PayloadMode, RowScope, TagTarget};
 use rds_analytics_resource::preview::Preview;
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
@@ -80,10 +80,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("versions:{resource_id}"));
     }
-    fn request_delete(&self, resource_ids: &[String], _window: &mut Window, _cx: &mut App) {
+    fn request_delete(&self, targets: &[DeleteTarget], _window: &mut Window, _cx: &mut App) {
+        let ids: Vec<&str> = targets.iter().map(|t| t.id.as_str()).collect();
         self.calls
             .borrow_mut()
-            .push(format!("delete:{}", resource_ids.join(",")));
+            .push(format!("delete:{}", ids.join(",")));
     }
     fn request_edit_tags(&self, targets: &[TagTarget], _window: &mut Window, _cx: &mut App) {
         // 记录**整批目标**（批量打标签的验收靠它：多选时是不是真的把选集送下去了）。
@@ -166,6 +167,14 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("distribute:{name}"));
     }
+    fn is_reference_stale(&self, _resource_id: &str) -> bool {
+        false
+    }
+    fn accept_reference_current(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("accept-reference:{}", detail.id));
+    }
     fn remember_sort(&self, field: SortField, order: SortOrder, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -242,6 +251,9 @@ fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
         version: row.version,
         status: row.status,
         readonly: true,
+        payload_mode: PayloadMode::Copy,
+        source_path: None,
+        scope: RowScope::Project,
         size_label: "1.2 KB".to_string(),
         modified_label: "2026-09-17 08:00".to_string(),
         archived_label: "2026-09-17 08:00".to_string(),

@@ -16,7 +16,7 @@ use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
-use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
+use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES, PayloadMode, RowScope, TRASH_ID_REF_PREFIX};
 use crate::payload::RESOURCES_DIR_NAME;
 use crate::preview::Preview;
 use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnapshot, TagOption};
@@ -147,41 +147,86 @@ pub fn build_trash_snapshot(entries: &[TrashEntry]) -> TrashSnapshot {
     let mut rows = Vec::new();
     let mut foreign: Vec<(String, usize)> = Vec::new();
     for entry in entries {
-        let manifest = &entry.manifest;
-        if manifest.origin != ORIGIN_RESOURCES {
-            match foreign
-                .iter_mut()
-                .find(|(origin, _)| origin == &manifest.origin)
-            {
+        if entity_trash_row(entry).is_none() {
+            let origin = entry.manifest.origin.clone();
+            match foreign.iter_mut().find(|(o, _)| o == &origin) {
                 Some((_, count)) => *count += 1,
-                None => foreign.push((manifest.origin.clone(), 1)),
+                None => foreign.push((origin, 1)),
             }
             continue;
         }
-        // “原位置”回答的是“还原到哪”：rel_path 为空（极端旧条目）时退回到文件名。
-        let original_label = if manifest.original_rel_path.trim().is_empty() {
-            manifest.name.clone()
-        } else {
-            format!("{RESOURCES_DIR_NAME}/{}", manifest.original_rel_path)
-        };
-        rows.push(TrashRow {
-            trash_id: manifest.id.clone(),
-            name: manifest.name.clone(),
-            original_label,
-            kind_label: match manifest.kind {
-                TrashKind::File => "文件".to_string(),
-                TrashKind::Folder => "目录".to_string(),
-            },
-            // 绝对时间：回收站是查凭证的地方（行上用相对时间的口径不适用于对话框）。
-            time_label: format_timestamp(manifest.deleted_at),
-            size_label: match manifest.kind {
-                TrashKind::File => format_size(Some(manifest.size.min(i32::MAX as u64) as i32)),
-                // 目录的“大小”没意义（要递归统计才有值），留空而不是写 0。
-                TrashKind::Folder => String::new(),
-            },
-        });
+        rows.push(entity_trash_row(entry).expect("上面已判 Some").1);
     }
     TrashSnapshot { rows, foreign }
+}
+
+/// 实体回收站条目 → 对话框行（copy 口径：本体在 `ProjectTrash`）。
+///
+/// 返回删除时间供双来源归并排序；非本模块条目返回 `None`（留给 `build_trash_snapshot`
+/// 统计 foreign 条数）。
+pub fn entity_trash_row(entry: &TrashEntry) -> Option<(DateTime<Utc>, TrashRow)> {
+    let manifest = &entry.manifest;
+    if manifest.origin != ORIGIN_RESOURCES {
+        return None;
+    }
+    // “原位置”回答的是“还原到哪”：rel_path 为空（极端旧条目）时退回到文件名。
+    let original_label = if manifest.original_rel_path.trim().is_empty() {
+        manifest.name.clone()
+    } else {
+        format!("{RESOURCES_DIR_NAME}/{}", manifest.original_rel_path)
+    };
+    let row = TrashRow {
+        trash_id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        original_label,
+        kind_label: match manifest.kind {
+            TrashKind::File => "文件".to_string(),
+            TrashKind::Folder => "目录".to_string(),
+        },
+        // 绝对时间：回收站是查凭证的地方（行上用相对时间的口径不适用于对话框）。
+        time_label: format_timestamp(manifest.deleted_at),
+        size_label: match manifest.kind {
+            TrashKind::File => format_size(Some(manifest.size.min(i32::MAX as u64) as i32)),
+            // 目录的“大小”没意义（要递归统计才有值），留空而不是写 0。
+            TrashKind::Folder => String::new(),
+        },
+        payload_mode: PayloadMode::Copy,
+        resource_id: String::new(),
+        has_payload: true,
+    };
+    Some((manifest.deleted_at, row))
+}
+
+/// reference 软删登记行 → 回收站行（第二来源；§12.1.1 ③）。
+///
+/// 这类条目没有实体 manifest（本体一直在源位置），回收站清单要把它们一并列出；
+/// copy 软删行已由实体条目覆盖，这里只收 reference，避免双来源重复。返回删除时间供归并。
+pub fn reference_trash_rows(deleted: &[AnalyticsResource]) -> Vec<(DateTime<Utc>, TrashRow)> {
+    deleted
+        .iter()
+        .filter(|r| PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference)
+        .map(|r| {
+            let kind = ArchiveKind::from_db_str(&r.kind);
+            let original_label = r
+                .source_path
+                .clone()
+                .or_else(|| r.file_rel_path.clone())
+                .unwrap_or_else(|| r.name.clone());
+            let when = r.deleted_at.unwrap_or(r.updated_at);
+            let row = TrashRow {
+                trash_id: format!("{TRASH_ID_REF_PREFIX}{}", r.id),
+                name: r.name.clone(),
+                original_label,
+                kind_label: crate::detail_view::kind_label(kind).to_string(),
+                time_label: format_timestamp(when),
+                size_label: format_size(r.file_size),
+                payload_mode: PayloadMode::Reference,
+                resource_id: r.id.clone(),
+                has_payload: false,
+            };
+            (when, row)
+        })
+        .collect()
 }
 
 /// 按资源的分组映射：`resource_id → folder_id`（来自 `folders_by_resource`，一次查完；
@@ -195,8 +240,11 @@ pub type FolderMemberships = std::collections::HashMap<String, String>;
 pub struct SnapshotInputs<'a> {
     pub resources: &'a [AnalyticsResource],
     /// 全局实例行（§13）：已在调用侧转成 `ArchiveRow`（scope = Global）；与项目行
-    /// 分开存，不参与计数 / 标签 / 分组 / 详情映射。
+    /// 分开存，不参与计数 / 标签 / 分组统计。
     pub global_rows: Vec<ArchiveRow>,
+    /// 全局实例**原始登记行**（与 `global_rows` 一一对应）：详情面板要展示基本信息，
+    /// 行模型已丢原始字段，所以这里单独带回一份装配轻量 `ArchiveDetail`。
+    pub global_resources: Vec<AnalyticsResource>,
     pub statuses: &'a ArchiveStatuses,
     pub history_counts: &'a VersionCounts,
     pub tags: &'a ResourceTags,
@@ -310,6 +358,9 @@ pub fn to_detail(
         version: resource.version,
         status,
         readonly: resource.readonly != 0,
+        payload_mode: PayloadMode::from_db_str(&resource.payload_mode),
+        source_path: resource.source_path.clone(),
+        scope: RowScope::from_db_str(&resource.scope),
         size_label,
         modified_label: format_timestamp(resource.updated_at),
         archived_label: resource
@@ -520,6 +571,7 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
     let SnapshotInputs {
         resources,
         global_rows,
+        global_resources,
         statuses,
         history_counts,
         tags: tags_by_resource,
@@ -577,6 +629,25 @@ pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
             ),
         );
         rows.push(row);
+    }
+
+    // 全局行详情（§13 收尾 A4）：轻量基本信息区——全局共享层无项目侧标签 / 分组 / 预览，
+    // 历史版本计数也不进项目版本表；动作区由渲染层按 `scope` 收敛到「分发到本项目」。
+    for resource in &global_resources {
+        let preview = previews.get(&resource.id).cloned().unwrap_or_default();
+        details.insert(
+            resource.id.clone(),
+            to_detail(
+                resource,
+                ArchiveStatus::Normal,
+                0,
+                DetailExtras {
+                    tags: Vec::new(),
+                    group: None,
+                    preview,
+                },
+            ),
+        );
     }
 
     ResourcesSnapshot {
@@ -886,6 +957,7 @@ mod tests {
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
             global_rows: Vec::new(),
+            global_resources: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &counts,
             tags: empty_tags(),
@@ -944,6 +1016,7 @@ mod tests {
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
             global_rows: Vec::new(),
+            global_resources: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: &tags,
@@ -981,6 +1054,7 @@ mod tests {
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
             global_rows: Vec::new(),
+            global_resources: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),
@@ -1025,6 +1099,7 @@ mod tests {
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
             global_rows: Vec::new(),
+            global_resources: Vec::new(),
             statuses: &ArchiveStatuses::new(),
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),
@@ -1081,6 +1156,7 @@ mod tests {
         let snapshot = build_snapshot(SnapshotInputs {
             resources: &resources,
             global_rows: Vec::new(),
+            global_resources: Vec::new(),
             statuses: &statuses,
             history_counts: &VersionCounts::new(),
             tags: empty_tags(),

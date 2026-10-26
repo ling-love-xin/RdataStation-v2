@@ -11,6 +11,7 @@
 //! {项目}/.RSmeta/resources/versions/<id>/<v>/ ← 历史内容副本（隐藏，按 keep 份数裁剪）
 //! ```
 
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -490,6 +491,24 @@ impl PayloadStore {
                 .read(&mut buf)
                 .await
                 .map_err(|e| io_err(path, "hash_read", e))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buf[..read]);
+        }
+        Ok(hex::encode(hasher.finalize()))
+    }
+
+    /// 同步内容指纹（事件路径懒校验用：reference 打开时比对源文件与登记指纹）。
+    ///
+    /// 与 [`Self::content_hash`] 同一 sha256 口径；这里不走 tokio，供宿主事件路径直接调用
+    /// （单文件、块大小相同，代价与异步版一致）。
+    pub fn content_hash_sync(path: &Path) -> Result<String, CoreError> {
+        let mut file = std::fs::File::open(path).map_err(|e| io_err(path, "hash_open", e))?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; HASH_CHUNK];
+        loop {
+            let read = file.read(&mut buf).map_err(|e| io_err(path, "hash_read", e))?;
             if read == 0 {
                 break;
             }

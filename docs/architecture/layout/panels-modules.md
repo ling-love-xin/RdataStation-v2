@@ -67,12 +67,14 @@
 > `open_property` 回调与 `open_mock_detail` 同列：中央 tab「已建则聚焦、未建则新建」的创建/聚焦通道。
 > 新增同类句柄只需更新 `ui_contract.rs` 的白名单，不必改本表。
 >
-> 同类还有 M6 的四个对话框流转字段（`version_dialog` / `repair_dialog` / `trash_dialog` / `tag_dialog`）：它们不跨模块——轮询写、
+> 同类还有 M6 的五个对话框流转字段（`version_dialog` / `repair_dialog` / `trash_dialog` / `tag_dialog` / `conflict_dialog`）：它们不跨模块——轮询写、
 > 侧栏 render 消费与清会话，crate 拿到的只是对话框状态的克隆——但它们是
 > “取数在后台、开窗在 render”的**两段式**例子：轮询里没有 `Window`，所以只置 `pending`。
 >
 > M7 的 `pending_temp_cleanup` 也在此列：切项目时拿不到内存库连接锁（出口任务不可取消且整段持锁）
 > 就置位，等任务收尾那一拍由 `mock_host::take_job_done` 重试——两边都在 workbench 内部，不跨模块。
+> M6 的 `reference_stale` 同属宿主内部资源槽位：按 `resource_id` 记 reference 快照失效集合，
+> 懒校验写入、接受成功或切项目清除，不进索引状态统计，也不跨模块。
 
 ## 4. 与 gpui-kit 约束的差距（审计）
 

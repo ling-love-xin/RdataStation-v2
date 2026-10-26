@@ -21,6 +21,24 @@ pub enum RowScope {
     Global,
 }
 
+impl RowScope {
+    /// 落库值（迁移 025 的 `scope` 列）。
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Global => "global",
+        }
+    }
+
+    /// 从库值解析：未知 / 空值回退 `Project`（旧行与脏数据不致整表失败）。
+    pub fn from_db_str(value: &str) -> Self {
+        match value {
+            "global" => Self::Global,
+            _ => Self::Project,
+        }
+    }
+}
+
 /// 存档种类：决定**本体存在哪**，进而决定复现强度（架构 §2.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +180,22 @@ impl PayloadMode {
             Self::Reference => "引用",
         }
     }
+
+    /// 归档对话框单选行的说明小字（回答"选了之后会怎样"）。
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Copy => "复制进 resources/ 并变只读；源文件保留为工作副本，回溯永不失效",
+            Self::Reference => "只登记元数据与指纹，本体留在源位置；打开时校验源文件指纹",
+        }
+    }
+
+    /// 选中后表单下方的整段说明（规格 §12.1.1 ①：随模式切换，与单选行小字互补）。
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Copy => "草稿保留为工作副本，可继续编辑；再次归档将生成新版本",
+            Self::Reference => "本体留原位，只存元数据（地址 + 指纹 + 版本）；源变更后快照失效",
+        }
+    }
 }
 
 /// 历史内容副本的保留策略（设置项 `resources.keep_versions` 的领域口径，架构 §5.2）。
@@ -287,6 +321,16 @@ pub struct TagTarget {
     pub name: String,
 }
 
+/// 移入回收站的选集条目（§12.1.1 ③）：带上归档粒度，确认框文案按 copy / reference 区分
+/// 本体命运（copy 搬副本进回收站；reference 本体留原位、只删登记行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteTarget {
+    /// 存档 id。
+    pub id: String,
+    /// 归档粒度（视图从详情快照取；缺省回退 `Copy`）。
+    pub mode: PayloadMode,
+}
+
 /// 归档结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveOutcome {
@@ -346,6 +390,10 @@ pub struct TrashArchiveEntry {
     /// 回收站条目 id（还原要用它）。
     pub trash_id: String,
 }
+
+/// reference 型条目的回收站 id 前缀：这类条目没有实体回收站 manifest，
+/// id 由登记行 id 合成，还原 / 永久删除据此分派到"只动登记行"的分支（§12.1.1 ③）。
+pub const TRASH_ID_REF_PREFIX: &str = "ref:";
 
 /// 变更原因：事件必须带原因，面板据此决定局部更新还是整表刷新（架构 §6.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -78,5 +78,7 @@ pub const TAG_DIALOG_WIDTH: f32 = 26.0;
 /// 同一形状（一个输入框 + 一行提示），所以共用一个常量——两处各写一份就会长出两个同值常量，
 /// 而“同一形状两个值”迟早会漂。
 pub const NAME_DIALOG_WIDTH: f32 = 24.0;
+/// 同名冲突三选对话框宽（30.0rem = 480px）：冲突说明 + 改名输入框 + 取消 / 覆盖 / 改名三按钮。
+pub const CONFLICT_DIALOG_WIDTH: f32 = 30.0;
 /// 标签列表最大高度（16.0rem = 256px）：标签可能几十个，靠滚动而不是加高对话框。
 pub const TAG_LIST_MAX_HEIGHT: f32 = 16.0;

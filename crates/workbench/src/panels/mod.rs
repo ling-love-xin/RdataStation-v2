@@ -27,6 +27,9 @@ use gpui_kit::*;
 use crate::view::LeftPanel;
 
 use analytics_resource::dialogs::index_repair::{RepairDialogState, open_index_repair_dialog};
+use analytics_resource::dialogs::conflict::{
+    ConflictKind, ConflictSeed, open_conflict_dialog,
+};
 use analytics_resource::dialogs::tag::{TagDialogState, open_tag_dialog};
 use analytics_resource::dialogs::trash::{TrashDialogState, open_trash_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
@@ -340,6 +343,62 @@ impl SidebarPanel {
         );
     }
 
+    /// 消费「待开的同名冲突对话框」（§13.3 升级 / §13.6 分发）：与其余对话框同一形态
+    /// （见 `ensure_tag_dialog`）——工作线程拦下冲突 → 事件路径落 `pending` → 本帧开窗。
+    ///
+    /// 覆盖 / 改名后的重入队由 `SidebarPanel::request_conflict_choice` 执行（需要项目根与
+    /// 宿主刷新端口，都在面板层，不放进对话框 crate）。
+    pub(crate) fn ensure_conflict_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(context) = self.shared.conflict_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        // 冲突类型与展示名从凭据推导：升级 = 原始请求名；分发 = 目标名（未改名时 = 全局名）。
+        let (kind, conflict_name) = match &context {
+            crate::services::resource_jobs::ConflictContext::Promote(req) => {
+                (ConflictKind::Promote, req.name.clone())
+            }
+            crate::services::resource_jobs::ConflictContext::Distribute {
+                global_name,
+                target,
+            } => (
+                ConflictKind::Distribute,
+                target.clone().unwrap_or_else(|| global_name.clone()),
+            ),
+        };
+        let seed = ConflictSeed {
+            kind,
+            name: conflict_name.clone(),
+        };
+        let name_input = cx.new(|cx| {
+            let mut state = gpui_kit::component::input::InputState::new(window, cx);
+            state.set_value(conflict_name, window, cx);
+            state
+        });
+        {
+            let mut flow = self.shared.conflict_dialog.borrow_mut();
+            flow.session = Some(shared::ConflictDialogSession {
+                context: context.clone(),
+            });
+        }
+
+        let entity = cx.entity();
+        let shared_for_close = self.shared.clone();
+        open_conflict_dialog(
+            window,
+            cx,
+            seed,
+            name_input,
+            move |choice, _window, cx| {
+                entity.update(cx, |this, cx| {
+                    this.request_conflict_choice(&context, choice, cx)
+                });
+            },
+            move |_cx| {
+                shared_for_close.conflict_dialog.borrow_mut().session = None;
+            },
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -386,6 +445,7 @@ impl Render for SidebarPanel {
         self.ensure_repair_dialog(window, cx);
         self.ensure_trash_dialog(window, cx);
         self.ensure_tag_dialog(window, cx);
+        self.ensure_conflict_dialog(window, cx);
         // 「在导航树中定位」（Quick Open 的 ⌥↵）在这一帧被消费：render 是权威同步点，
         // 不在事件路径上碰面板状态。发起侧已把左 Dock 切到数据源；这里不再判断面板是否在前台，
         // 因为请求一旦落在这里就应当被完成（漏掉就会「点了没反应」）。

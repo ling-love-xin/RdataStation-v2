@@ -545,6 +545,25 @@ impl AnalyticsResourceStore {
         }
     }
 
+    /// 列出全部**已软删**的登记行（回收站第二来源：reference 型没有实体回收站条目，
+    /// 回收站清单要把这些行一并列出；按删除时间倒序，与实体条目排序口径一致）。
+    pub async fn list_deleted_archives(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
+        let conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
+             WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        );
+        let mut stmt = conn
+            .inner()?
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
+        let rows = stmt
+            .query_map([], map_resource_row)
+            .map_err(|e| persistence_err("select", e))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| persistence_err("select", e))
+    }
+
     /// 硬删除一行**存活**登记（不写回收站、不留痕）。
     ///
     /// 两个调用方语义不同但动作相同：**撤销归档**（刚发生的那次，本体已移回）与

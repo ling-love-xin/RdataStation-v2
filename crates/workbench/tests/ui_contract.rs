@@ -599,6 +599,7 @@ fn shared_fields_are_whitelisted() {
     let expected: Vec<&str> = vec![
         "active_left",
         "active_right",
+        "conflict_dialog",
         "connections",
         "driver_catalog",
         "editor_bridge",
@@ -627,6 +628,7 @@ fn shared_fields_are_whitelisted() {
         "project_ui",
         "property_panel",
         "quick_open",
+        "reference_stale",
         "repair_dialog",
         "resources_bridge",
         "resources_panel",

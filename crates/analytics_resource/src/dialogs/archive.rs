@@ -21,8 +21,9 @@ use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::model::KeepVersions;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::radio::Radio;
+use crate::model::{KeepVersions, PayloadMode};
 use crate::resource_view::GroupOption;
 use crate::ui;
 
@@ -58,6 +59,15 @@ pub struct ArchiveDialogSeed {
     pub group_id: Option<String>,
     /// 标签输入框的**继承预填**（草稿箱归档时带草稿条目标签名；用户可改可删）。
     pub initial_tags: Vec<String>,
+    /// 是否允许选「引用」模式（§12.1.1 ①）：File 档为真；分析快照固定复制、不提供引用选项。
+    pub allow_reference: bool,
+    /// 归档方式初值（默认复制；宿主可按来源预设）。
+    pub default_mode: PayloadMode,
+    /// 源文件绝对路径（引用态「源位置」行展示用；复制态不读它）。
+    ///
+    /// 与 `source_label` 的区别：后者是"草稿箱：reports/a.sql"这类一句话来路描述，
+    /// 不承担路径展示；引用本体留原位，表单要给出可核对的绝对路径。
+    pub source_abs_path: Option<String>,
 }
 
 /// 目标占用：不静默覆盖，也不让用户手改路径——由宿主给出确定的改名落点。
@@ -81,6 +91,8 @@ pub struct ArchiveDialogResult {
     pub group_id: Option<String>,
     /// `None` = 跟随设置默认（输入框留空即此意；`-1` = 全部保留）。
     pub keep_versions: Option<KeepVersions>,
+    /// 用户选定的归档粒度（复制 / 引用）。
+    pub payload_mode: PayloadMode,
 }
 
 /// 表单的输入实体（开窗前建好；测试可复核同一批实体）。
@@ -95,6 +107,8 @@ pub struct ArchiveDialogInputs {
     /// 分组选择：下拉菜单不是 `InputState`，选择结果住在共享单元格里（开窗是 `Fn` 重建，
     /// 状态不能在闭包里）。`None` = 未分组。
     pub group_id: Rc<std::cell::RefCell<Option<String>>>,
+    /// 归档方式选择：与分组同一纪律——状态住共享单元格，builder 每帧从它读。
+    pub mode: Rc<std::cell::RefCell<PayloadMode>>,
 }
 
 /// 标签输入解析：`,` / `，` / 空白分隔；去空、**去重保序**（顺序是用户敲的，别打乱）。
@@ -166,6 +180,7 @@ pub fn build_inputs(
         tags,
         keep_versions,
         group_id: Rc::new(std::cell::RefCell::new(seed.group_id.clone())),
+        mode: Rc::new(std::cell::RefCell::new(seed.default_mode)),
     }
 }
 
@@ -187,6 +202,7 @@ pub fn submit_archive(
         tags: parse_tags(&inputs.tags.read(cx).value()),
         group_id: inputs.group_id.borrow().clone(),
         keep_versions: keep,
+        payload_mode: *inputs.mode.borrow(),
     })
 }
 
@@ -217,6 +233,7 @@ pub fn open_archive_dialog_with(
         tags,
         keep_versions,
         group_id,
+        mode,
     } = inputs;
     let on_submit = Rc::new(on_submit);
     // 分组名单只在开窗时取一份：分组是单层的，一份列表就是这个对话框的生命周期里真实可选项。
@@ -235,6 +252,7 @@ pub fn open_archive_dialog_with(
         let tags = tags.clone();
         let keep_versions = keep_versions.clone();
         let group_id = group_id.clone();
+        let mode = mode.clone();
         let on_submit = on_submit.clone();
         Rc::new(move |cx: &mut App| -> bool {
             let inputs = ArchiveDialogInputs {
@@ -243,6 +261,7 @@ pub fn open_archive_dialog_with(
                 tags: tags.clone(),
                 keep_versions: keep_versions.clone(),
                 group_id: group_id.clone(),
+                mode: mode.clone(),
             };
             let Some(result) = submit_archive(&inputs, cx) else {
                 return false;
@@ -282,6 +301,21 @@ pub fn open_archive_dialog_with(
             .child(Input::new(&alias))
             .child(field_label(theme, "分组"))
             .child(group_picker(&group_id, &groups))
+            .when(seed.allow_reference, |this| {
+                this.child(field_label(theme, "归档方式"))
+                    .child(mode_picker(theme, &mode))
+                    .child(hint_line(
+                        mode.borrow().note(),
+                        theme.colors.muted_foreground,
+                    ))
+            })
+            .when(!seed.allow_reference, |this| {
+                this.child(field_label(theme, "归档方式"))
+                    .child(hint_line(
+                        "分析快照固定为复制存档",
+                        theme.colors.muted_foreground,
+                    ))
+            })
             .child(field_label(theme, "标签"))
             .child(Input::new(&tags))
             .child(field_label(theme, "保留历史内容"))
@@ -301,7 +335,7 @@ pub fn open_archive_dialog_with(
                     .v_flex()
                     .w_full()
                     .gap_3()
-                    .child(readonly_block(theme, &seed))
+                    .child(readonly_block(theme, &seed, &mode))
                     .when_some(seed.conflict.as_ref(), |this, conflict| {
                         this.child(hint_line(
                             &format!(
@@ -344,23 +378,39 @@ pub fn open_archive_dialog_with(
     });
 }
 
-/// 只读信息区：来源 / 目标位置 / 来源连接。
+/// 只读信息区：来源 / 落点或源位置 / 来源连接。
 ///
 /// 与表单区的形状刻意不同（标签在上是"要你填"，标签在左是"告诉你"），
-/// 用户扫一眼就知道哪几行动不了。
-fn readonly_block(theme: &Theme, seed: &ArchiveDialogSeed) -> Div {
-    let mut rows = div().v_flex().w_full().gap_2();
-    for (label, value) in [
+/// 用户扫一眼就知道哪几行动不了。第二行随归档模式切换（§12.1.1 ①）：
+/// 复制 = `resources/` 目标相对路径；引用 = 源文件绝对路径（本体留原位）。
+fn readonly_block(
+    theme: &Theme,
+    seed: &ArchiveDialogSeed,
+    mode: &Rc<std::cell::RefCell<PayloadMode>>,
+) -> Div {
+    let body_mode = *mode.borrow();
+    let (second_label, second_value) = match body_mode {
+        PayloadMode::Copy => ("目标位置", seed.rel_path.clone()),
+        PayloadMode::Reference => (
+            "源位置",
+            seed.source_abs_path
+                .clone()
+                .unwrap_or_else(|| seed.source_label.clone()),
+        ),
+    };
+    let rows: Vec<(&str, String)> = vec![
         ("来源", seed.source_label.clone()),
-        ("目标位置", seed.rel_path.clone()),
+        (second_label, second_value),
         (
             "来源连接",
             seed.source_connection
                 .clone()
                 .unwrap_or_else(|| "未记录".to_string()),
         ),
-    ] {
-        rows = rows.child(
+    ];
+    let mut out = div().v_flex().w_full().gap_2();
+    for (label, value) in rows {
+        out = out.child(
             div()
                 .h_flex()
                 .w_full()
@@ -382,7 +432,7 @@ fn readonly_block(theme: &Theme, seed: &ArchiveDialogSeed) -> Div {
                 ),
         );
     }
-    rows
+    out
 }
 
 /// 分组选择：一个下拉按钮（未分组 / 各分组），当前项打勾。
@@ -440,6 +490,59 @@ fn group_picker(
         });
 
     div().w_full().child(button)
+}
+
+/// 归档方式单选（复制 / 引用，§12.1.1 ①）。
+///
+/// 与 `group_picker` 同一纪律：选择结果住在共享单元格（builder 是 `Fn` 每帧重建，状态不能
+/// 放闭包）；点选项后 `window.refresh()` 重画一帧，选中态跟着单元格走。仅 File 档渲染
+/// （`allow_reference = true`）；分析快照固定复制，不摆单选。
+fn mode_picker(theme: &Theme, mode: &Rc<std::cell::RefCell<PayloadMode>>) -> Div {
+    let current = *mode.borrow();
+    let mut list = div().v_flex().w_full().gap_1();
+    for candidate in [PayloadMode::Copy, PayloadMode::Reference] {
+        let checked = current == candidate;
+        let target = mode.clone();
+        let picked = candidate;
+        list = list.child(
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .items_start()
+                .py_1()
+                .child(
+                    Radio::new(ElementId::Name(
+                        format!("archive-mode-{}", candidate.as_db_str()).into(),
+                    ))
+                    .checked(checked)
+                    .on_click(move |_, window, _cx| {
+                        *target.borrow_mut() = picked;
+                        window.refresh();
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .v_flex()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.colors.foreground)
+                                .child(candidate.label().to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child(candidate.hint().to_string()),
+                        ),
+                ),
+        );
+    }
+    list
 }
 
 /// 字段名（弱化色，与它下面的输入框一组）。

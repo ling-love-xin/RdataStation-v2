@@ -23,6 +23,7 @@ use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::model::PayloadMode;
 use crate::ui;
 
 /// 列表最多列多少条：回收站条目只增不减（谁也不会常来清），超出的**明说**，
@@ -44,6 +45,12 @@ pub struct TrashRow {
     pub time_label: String,
     /// 大小（目录为空）。
     pub size_label: String,
+    /// 归档粒度（copy / reference，§12.1.1 ③）：决定还原 / 永久删除的本体命运与文案分派。
+    pub payload_mode: PayloadMode,
+    /// 登记行 id（reference 条目按它复活 / 永久删除；copy 条目一并带上，动作分派统一口径）。
+    pub resource_id: String,
+    /// 是否有受管本体在回收站：copy = true（本体在 `ProjectTrash`）；reference = false（本体留源位置）。
+    pub has_payload: bool,
 }
 
 /// 别的模块留在项目级回收站里的条目（**只做说明，不列行**）。
@@ -384,9 +391,15 @@ fn trash_line(
         let state = state.clone();
         let on_action = on_action.clone();
         let trash_id = row.trash_id.clone();
+        // 还原口径按粒度区分（§12.1.1 ③）：copy 把副本从回收站取回原位；
+        // reference 本体一直留在源位置，还原只是复活登记行。
+        let restore_note = match row.payload_mode {
+            PayloadMode::Reference => "正在还原登记记录…".to_string(),
+            PayloadMode::Copy => "正在还原…".to_string(),
+        };
         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
             state.set_busy(true);
-            state.set_note(Some("正在还原…".to_string()));
+            state.set_note(Some(restore_note.clone()));
             on_action(
                 TrashAction::Restore {
                     trash_id: trash_id.clone(),
@@ -394,6 +407,15 @@ fn trash_line(
                 window,
                 cx,
             );
+        }
+    };
+    // 永久删除口径按粒度区分：copy 连本体一起删；reference 本体留原位，只删登记行与版本元数据。
+    let purge_description = match row.payload_mode {
+        PayloadMode::Reference => {
+            "本体留在源位置不受影响；登记记录与版本元数据将彻底删除，不可恢复。".to_string()
+        }
+        PayloadMode::Copy => {
+            "本体将从回收站里彻底删除，不可恢复；登记记录一并删除。".to_string()
         }
     };
     let purge = {
@@ -408,6 +430,7 @@ fn trash_line(
             let trash_id = trash_id.clone();
             // 外层闭包是 `Fn`（按钮可能被点多次）：要移进内层的东西每帧各拿一份。
             let name = name.clone();
+            let purge_description = purge_description.clone();
             window.open_alert_dialog(cx, move |alert, _window, _cx| {
                 let state = state.clone();
                 let on_action = on_action.clone();
@@ -415,7 +438,7 @@ fn trash_line(
                 alert
                     .confirm()
                     .title(format!("永久删除「{name}」？"))
-                    .description("本体将从回收站里彻底删除，不可恢复；登记记录一并删除。")
+                    .description(purge_description.clone())
                     .button_props(
                         DialogButtonProps::default()
                             .ok_text("永久删除")
@@ -531,6 +554,7 @@ fn trash_line(
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `gpui_kit` 的 `test` 宏展开自相残杀，`resource_view` 踩过）。
     use super::{ForeignTrash, TrashDialogState, TrashRow};
+    use crate::model::PayloadMode;
 
     fn row(id: &str) -> TrashRow {
         TrashRow {
@@ -540,6 +564,9 @@ mod tests {
             kind_label: "文件".to_string(),
             time_label: "2026-09-18 10:00".to_string(),
             size_label: "1.2 KB".to_string(),
+            payload_mode: PayloadMode::Copy,
+            resource_id: String::new(),
+            has_payload: true,
         }
     }
 

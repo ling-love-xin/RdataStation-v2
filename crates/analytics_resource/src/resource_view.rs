@@ -22,6 +22,7 @@
 //! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行内 hover 动作（原型 §2.3 的 hover 版，
 //! 随详情面板批）、批量多选。
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
@@ -47,7 +48,7 @@ use crate::commands;
 use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::dnd::{self, ArchiveDragGhost, ArchiveDragPayload, GroupDrop};
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
-use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, TagTarget};
+use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo, DeleteTarget, PayloadMode, TagTarget};
 use crate::ui;
 // 行级共用原语（展开指示槽 / 图标）：与 M4 导航、M5 草稿箱同一份，不各自手搓（见 `workbench_shell::tree` 头注）。
 use workbench_shell::tree;
@@ -390,9 +391,10 @@ pub trait ResourcesHost: 'static {
     fn request_undo_archive(&self, undo: &ArchiveUndo, window: &mut Window, cx: &mut App);
     /// 移入回收站（单选一行或多选 N 行）。
     ///
-    /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）；
+    /// 收条目切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）；
     /// 批量中途失败的错误里会带“本批已移入 N 项”，**不做预回滚**（部分成功就部分成功）。
-    fn request_delete(&self, resource_ids: &[String], window: &mut Window, cx: &mut App);
+    /// 每条带上归档粒度：确认框文案按 copy / reference 区分本体命运（§12.1.1 ③）。
+    fn request_delete(&self, targets: &[DeleteTarget], window: &mut Window, cx: &mut App);
     /// 移动到分组（`None` = 移回未分组）：右键菜单「移动到分组」。
     ///
     /// 收切片而不是单个 id：多选也走这一条（批量移动是原型里多选解锁的动作之一）。
@@ -475,6 +477,17 @@ pub trait ResourcesHost: 'static {
     ///
     /// 只带全局资源的**显示名**（分发只认全局登记的名字；本体在全局 DuckDB）。
     fn request_distribute_from_global(&self, name: &str, window: &mut Window, cx: &mut App);
+
+    /// reference 快照是否已失效（打开时懒校验发现源内容与登记指纹不一致，§12.1.1 ②）。
+    ///
+    /// 只做**只读查询**：失效槽位由宿主维护（按 `resource_id` 存内存，不进索引状态统计）；
+    /// 面板渲染期问一句，不触发任何取数。源被删 / 被移由 `ArchiveStatus::Missing` 表达，
+    /// 不走这个槽位。
+    fn is_reference_stale(&self, resource_id: &str) -> bool;
+
+    /// reference 失效后「接受当前内容」：以当前源绝对路径为基准再归档，指纹 / 版本落库
+    /// （走 `archive_into_existing` 的 reference 分支），成功后清失效槽位并刷新快照。
+    fn accept_reference_current(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
 }
 
 /// 行点击归一化后的语义（修饰键与点击数 → 四种行为；纯数据便于单测）。
@@ -971,6 +984,19 @@ impl ListDelegate for ArchiveListDelegate {
         // 打标签要连**显示名**一起给宿主（对话框标题与回执要报“哪几项”）：同样按选集顺序取。
         let all_rows: Vec<&ArchiveRow> = self.visible_rows().collect();
         let tag_targets = tag_targets(&all_rows, &self.multi_ids, &row);
+        // 删除选集条目：带上归档粒度，确认框文案按 copy / reference 区分本体命运（§12.1.1 ③）。
+        // 详情映射缺项（全局行 / 异常旧行）回退 Copy，不臆造模式。
+        let delete_targets: Vec<DeleteTarget> = selection_ids
+            .iter()
+            .map(|id| DeleteTarget {
+                id: id.clone(),
+                mode: self
+                    .details
+                    .get(id)
+                    .map(|detail| detail.payload_mode)
+                    .unwrap_or(PayloadMode::DEFAULT),
+            })
+            .collect();
         let tag_label = tag_entry_label(multi_count);
         // 全局行（§13）：本体在全局 DuckDB / 全局登记，项目侧动作（取回 / 改名 / 删除 /
         // 打标 / 分组 / 拖拽 / 版本历史）一律不可用——只有「分发到本项目」。
@@ -1292,7 +1318,7 @@ impl ListDelegate for ArchiveListDelegate {
                         }
                         // 删除是**唯一**多选可用的破坏性项（原型 §3.2）：多选时带上数量。
                         // 全局行不能进项目回收站（本体不在项目侧）。
-                        let delete_ids = selection_ids.clone();
+                        let delete_targets = delete_targets.clone();
                         let delete_label = if multi_count > 1 {
                             format!("移入回收站（{multi_count} 项）")
                         } else {
@@ -1301,7 +1327,7 @@ impl ListDelegate for ArchiveListDelegate {
                         menu.separator()
                             .item(PopupMenuItem::new(delete_label).disabled(is_global).on_click({
                                 let host = host.clone();
-                                move |_, window, cx| host.request_delete(&delete_ids, window, cx)
+                                move |_, window, cx| host.request_delete(&delete_targets, window, cx)
                             }))
                     }),
             ),
@@ -1425,6 +1451,9 @@ pub struct ResourcesPanel {
     ///
     /// 由宿主在归档成功后推进来（面板不自己造），过期或下一次动作时清掉。
     undo: Option<ArchiveUndo>,
+    /// 索引异常提示条是否已在本会话提示过（D2：首次进入一次性弹出，关闭后不再出现；
+    /// 纯内存、不进持久层，也不随项目切换重置——提示的是"当前打开项目里的异常"）。
+    announced_index_issue: Cell<bool>,
     focus_handle: FocusHandle,
     group: Option<WeakEntity<TabGroup>>,
 }
@@ -1453,6 +1482,7 @@ impl ResourcesPanel {
             notice: None,
             loading: false,
             undo: None,
+            announced_index_issue: Cell::new(false),
             focus_handle: cx.focus_handle(),
             group: None,
         }
@@ -2340,6 +2370,63 @@ impl ResourcesPanel {
             })
     }
 
+    /// D2：索引异常首次进入的一次性提示条（仅项目实例；全局实例没有本地索引口径）。
+    ///
+    /// 与状态行「修复…」同源数据：这里只在首次进入时把异常"叫出来"一次，关闭后会话内
+    /// 不再出现；纯内存标记，不进快照、不进索引统计口径。
+    fn render_index_issue_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.instance == InstanceFilter::Global {
+            return None;
+        }
+        let counts = &self.snapshot.counts;
+        if !counts.has_issues() || self.announced_index_issue.get() {
+            return None;
+        }
+        let (warning, muted, border) = {
+            let colors = cx.theme().colors;
+            (colors.warning, colors.muted_foreground, colors.border)
+        };
+        let mut parts = Vec::new();
+        if counts.missing > 0 {
+            parts.push(format!("本体缺失 {} 项", counts.missing));
+        }
+        if counts.drifted > 0 {
+            parts.push(format!("内容已变 {} 项", counts.drifted));
+        }
+        let summary = parts.join("、");
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_b(ui::HAIRLINE)
+                .border_color(border)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(warning)
+                        .child(format!("发现{summary}，可在状态行「修复…」处理。")),
+                )
+                .child(
+                    Button::new("index-issue-banner-close")
+                        .ghost()
+                        .xsmall()
+                        .label("×")
+                        .text_color(muted)
+                        .on_click(cx.listener(|panel, _event, _window, cx| {
+                            panel.announced_index_issue.set(true);
+                            cx.notify();
+                        })),
+                ),
+        )
+    }
+
     /// 加载中骨架（原型 §5）：3 行灰条，**不用转圈**——形状直接提示"这里将要出现行"，
     /// 宽度递减以免看着像真行。
     ///
@@ -2370,43 +2457,62 @@ impl ResourcesPanel {
     fn render_empty(&self, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let read_only = self.snapshot.read_only;
-        // 两个按钮各拿一份（`Rc` 不是 `Copy`：两个闭包都要 `move` 走它）。
-        let host_for_drafts = self.host.clone();
-        let host_for_file = self.host.clone();
+        // 空态按实例分流（§13.2）：全局实例不直接归档，只给一句"升级上来"的引导，
+        // 不摆草稿箱 / 本地文件两个项目侧入口；项目与「全部」视图保持原归档引导。
+        let is_global = self.instance == InstanceFilter::Global;
+        let (title, hint) = if is_global {
+            (
+                "全局实例还没有存档",
+                "把项目里值得共享的存档升级到全局后会出现在这里；全局实例不直接归档，跨项目分发都从这里选。",
+            )
+        } else {
+            (
+                "还没有任何存档",
+                "把草稿箱里值得留存的文件归档进来，它就变成只读、带版本、可追溯的存档",
+            )
+        };
 
-        div()
+        let mut body = div()
             .flex_1()
             .v_flex()
             .items_center()
             .justify_center()
             .gap_2()
-            .child(div().text_sm().text_color(muted).child("还没有任何存档"))
+            .child(div().text_sm().text_color(muted).child(title))
             .child(
                 div()
                     .px_4()
                     .text_xs()
                     .text_color(muted)
-                    .child("把草稿箱里值得留存的文件归档进来，它就变成只读、带版本、可追溯的存档"),
-            )
-            .child(
-                Button::new("archive-for-empty")
-                    .primary()
-                    .debug_selector(|| "archive-empty-action".to_string())
-                    .label("从草稿箱归档…")
-                    .disabled(read_only)
-                    .on_click(move |_, window, cx| {
-                        host_for_drafts.request_archive_from_drafts(window, cx)
-                    }),
-            )
-            .child(
-                Button::new("archive-for-empty-file")
-                    .secondary()
-                    .label("从本地文件归档…")
-                    .disabled(read_only)
-                    .on_click(move |_, window, cx| {
-                        host_for_file.request_archive_from_file(window, cx)
-                    }),
-            )
+                    .child(hint),
+            );
+
+        if !is_global {
+            // 两个按钮各拿一份（`Rc` 不是 `Copy`：两个闭包都要 `move` 走它）。
+            let host_for_drafts = self.host.clone();
+            let host_for_file = self.host.clone();
+            body = body
+                .child(
+                    Button::new("archive-for-empty")
+                        .primary()
+                        .debug_selector(|| "archive-empty-action".to_string())
+                        .label("从草稿箱归档…")
+                        .disabled(read_only)
+                        .on_click(move |_, window, cx| {
+                            host_for_drafts.request_archive_from_drafts(window, cx)
+                        }),
+                )
+                .child(
+                    Button::new("archive-for-empty-file")
+                        .secondary()
+                        .label("从本地文件归档…")
+                        .disabled(read_only)
+                        .on_click(move |_, window, cx| {
+                            host_for_file.request_archive_from_file(window, cx)
+                        }),
+                );
+        }
+        body
     }
 
     /// 搜索 / 筛选无结果：**不是空库态**（原型 §5 状态与空态矩阵）。
@@ -2487,6 +2593,7 @@ impl Render for ResourcesPanel {
         let header = self.render_header(cx);
         let toolbar = self.render_toolbar(cx);
         let notice = self.render_notice(cx);
+        let issue_banner = self.render_index_issue_banner(cx);
         // 两种空：**空库**（条件为空，没有东西可用）与**无匹配**（条件非空，东西被挡住了）。
         // `ResourcesFilter::is_empty` 就是为这行判定存在的（见 `filter.rs` 模块头）。
         let body = if self.view_rows.is_empty() {
@@ -2557,7 +2664,19 @@ impl Render for ResourcesPanel {
                     // 多选时对整个选择集生效（原型 §3.2：删除是唯一多选可用的项）。
                     let ids = panel.selected_ids();
                     if !ids.is_empty() {
-                        host.request_delete(&ids, window, cx);
+                        let targets: Vec<DeleteTarget> = ids
+                            .iter()
+                            .map(|id| DeleteTarget {
+                                id: id.clone(),
+                                mode: panel
+                                    .snapshot
+                                    .details
+                                    .get(id)
+                                    .map(|detail| detail.payload_mode)
+                                    .unwrap_or(PayloadMode::DEFAULT),
+                            })
+                            .collect();
+                        host.request_delete(&targets, window, cx);
                     }
                 }
             }))
@@ -2598,6 +2717,7 @@ impl Render for ResourcesPanel {
             .child(header)
             .child(toolbar)
             .when_some(notice, |panel, notice| panel.child(notice))
+            .when_some(issue_banner, |panel, banner| panel.child(banner))
             .child(body)
             .when_some(undo_bar, |panel, bar| panel.child(bar))
             .child(status)
@@ -2614,7 +2734,7 @@ mod tests {
     };
     use crate::detail_view::ArchiveDetail;
     use crate::filter::VisibleItem;
-    use crate::model::{ArchiveKind, ArchiveStatus};
+    use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
     use gpui_kit::Modifiers;
     use gpui_kit::component::IndexPath;
 
@@ -2949,6 +3069,9 @@ mod tests {
             version: 1,
             status,
             readonly: true,
+            payload_mode: PayloadMode::Copy,
+            source_path: None,
+            scope: RowScope::Project,
             size_label: String::new(),
             modified_label: String::new(),
             archived_label: String::new(),

@@ -8472,6 +8472,7 @@ dependencies = [
 name = "rds-result-panel"
 version = "0.2.4"
 dependencies = [
+ "arrow",
  "chrono",
  "gpui-kit",
  "rds-engine",
@@ -8564,6 +8565,7 @@ dependencies = [
 name = "rds-workbench"
 version = "0.2.4"
 dependencies = [
+ "arrow",
  "chrono",
  "duckdb",
  "gpui-kit",

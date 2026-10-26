@@ -141,9 +141,61 @@ pub fn write_project_file(
     Ok(())
 }
 
-/// 项目 DuckDB 表行数 / 列数统计（分发建表后）。
-async fn project_table_stats(
+/// 项目侧重名双保险探测（§13.6 冲突询问）：SQLite 未删登记 + DuckDB 表 + resources 文件，
+/// 任一命中即视为冲突。与升级侧 `promote` 的"登记层 + 本体层"口径一致，不静默覆盖。
+///
+/// `rel_path` 只用于脚本档文件存在性探测（文件路径固定、不随改名变化）；分析表档传 `None`。
+async fn project_name_taken(
     project: &ProjectDuckConn,
+    project_root: &Path,
+    name: &str,
+    rel_path: Option<&str>,
+) -> Result<bool, InstanceOpError> {
+    // 1. SQLite 登记层（scope = 'project'，未软删）。
+    let pool = project.1.clone();
+    let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
+    let inner = conn.inner().map_err(InstanceOpError::Core)?;
+    let registered: i64 = inner
+        .query_row(
+            "SELECT count(*) FROM analytics_resources \
+             WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
+            rusqlite::params![name],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_err("check_project_conflict"))?;
+    if registered > 0 {
+        return Ok(true);
+    }
+
+    // 2. DuckDB 表存在（分析表档；标识符规范化为小写，与 `table_exists` 同口径）。
+    let mut guard = project.0.lock().await;
+    let Some(duck) = guard.as_mut() else {
+        return Err(InstanceOpError::Core(CoreError::common(CommonError::General(
+            "项目 DuckDB 连接已关闭".to_string(),
+        ))));
+    };
+    let table_exists = duck
+        .prepare("SELECT count(*) FROM information_schema.tables WHERE table_name = ?1")
+        .map_err(|e| duckdb_err("prepare_project_table_exists", &e.to_string()))?
+        .query_row(duckdb::params![name.to_lowercase()], |row| row.get::<_, i64>(0))
+        .map_err(|e| duckdb_err("query_project_table_exists", &e.to_string()))?
+        > 0;
+    drop(guard);
+    if table_exists {
+        return Ok(true);
+    }
+
+    // 3. resources 文件存在（脚本档；路径固定，不随显示名变化）。
+    if let Some(rel) = rel_path {
+        if project_root.join("resources").join(rel).is_file() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 项目 DuckDB 表行数 / 列数统计（分发建表后）。
+async fn project_table_stats(    project: &ProjectDuckConn,
     name: &str,
 ) -> Result<(Option<i32>, Option<i32>), CoreError> {
     let mut guard = project.0.lock().await;
@@ -376,7 +428,11 @@ impl GlobalInstanceStore {
         project: &ProjectDuckConn,
         project_root: &Path,
         name: &str,
+        target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
+        // 项目侧落库名：未填改名 = 沿用全局名（§13.6 冲突询问「改名」分支才带新名）。
+        let target_name = target.unwrap_or(name).to_string();
+
         // ---- 读全局登记行（最新版本）----
         let global_row = self
             .with_sqlite(|conn| {
@@ -414,6 +470,14 @@ impl GlobalInstanceStore {
                 name: name.to_string(),
             })?;
 
+        // ---- 项目侧重名双保险探测（SQLite 未删登记 + DuckDB 表 + resources 文件）----
+        // 与升级侧 `promote` 同口径：登记层与本体层任一命中都按冲突走询问，不静默覆盖。
+        if project_name_taken(project, project_root, &target_name, rel_path.as_deref()).await? {
+            return Err(InstanceOpError::Conflict {
+                name: target_name,
+            });
+        }
+
         // ---- 形态判定 + 落项目 ----
         let shape = if let Some(rel) = rel_path.as_deref() {
             // 脚本内容表 → 重建为文件（File 档）。
@@ -421,12 +485,12 @@ impl GlobalInstanceStore {
                 .read_script_content(name)
                 .await
                 .map_err(InstanceOpError::Core)?;
-            write_project_file(project_root, rel, &content, name)
+            write_project_file(project_root, rel, &content, &target_name)
                 .map_err(InstanceOpError::Core)?;
             let outcome = self
                 .register_project_file(
                     project,
-                    name,
+                    &target_name,
                     rel,
                     global_id.as_str(),
                     global_version,
@@ -461,7 +525,7 @@ impl GlobalInstanceStore {
 
             let create_sql = format!(
                 "CREATE TABLE {} AS SELECT * FROM read_parquet('{}');",
-                quote_ident(name),
+                quote_ident(&target_name),
                 tmp.to_string_lossy().replace('\\', "/")
             );
             let mut guard = project.0.lock().await;
@@ -479,10 +543,10 @@ impl GlobalInstanceStore {
             let _ = std::fs::remove_file(&tmp);
             project_result?;
 
-            let (rows, cols) = project_table_stats(&project, name).await?;
+            let (rows, cols) = project_table_stats(&project, &target_name).await?;
             self.register_project_table(
                 project,
-                name,
+                &target_name,
                 global_id.as_str(),
                 global_version,
                 global_hash.as_deref(),
@@ -506,13 +570,19 @@ impl GlobalInstanceStore {
         project: &ProjectDuckConn,
         project_root: &Path,
         name: &str,
+        target: Option<&str>,
     ) -> Result<DistributeOutcome, InstanceOpError> {
+        let target_name = target.unwrap_or(name).to_string();
+
         // 项目侧旧本体移除（表或文件都删；文件在 resources/ 下，删前先探存在）。
         {
             let mut guard = project.0.lock().await;
             if let Some(conn) = guard.as_mut() {
-                conn.execute_batch(&format!("DROP TABLE IF EXISTS {};", quote_ident(name)))
-                    .map_err(|e| duckdb_err("drop_project_table", &e.to_string()))?;
+                conn.execute_batch(&format!(
+                    "DROP TABLE IF EXISTS {};",
+                    quote_ident(&target_name)
+                ))
+                .map_err(|e| duckdb_err("drop_project_table", &e.to_string()))?;
             }
         }
         if let Some(rel) = self
@@ -539,8 +609,20 @@ impl GlobalInstanceStore {
                 })?;
             }
         }
-        // 软删项目登记。
-        self.distribute(project, project_root, name).await
+        // 软删项目旧登记（按目标名；不清掉旧链，下面 `distribute` 的重名探测会命中未删旧行）。
+        {
+            let pool = project.1.clone();
+            let conn = pool.acquire().await.map_err(InstanceOpError::Core)?;
+            let inner = conn.inner().map_err(InstanceOpError::Core)?;
+            inner
+                .execute(
+                    "UPDATE analytics_resources SET deleted_at = ?1 \
+                     WHERE name = ?2 AND scope = 'project' AND deleted_at IS NULL",
+                    rusqlite::params![Utc::now().to_rfc3339(), target_name],
+                )
+                .map_err(sqlite_err("soft_delete_project"))?;
+        }
+        self.distribute(project, project_root, name, Some(&target_name)).await
     }
 
     // ==================== 分发内部 ====================
@@ -575,7 +657,7 @@ impl GlobalInstanceStore {
 
         let next_version: i32 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project'",
+                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
                 rusqlite::params![name],
                 |row| row.get::<_, i32>(0),
             )
@@ -656,7 +738,7 @@ impl GlobalInstanceStore {
 
         let next_version: i32 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project'",
+                "SELECT COALESCE(MAX(version), 0) FROM analytics_resources WHERE name = ?1 AND scope = 'project' AND deleted_at IS NULL",
                 rusqlite::params![name],
                 |row| row.get::<_, i32>(0),
             )
@@ -1230,7 +1312,7 @@ mod tests {
         );
         let outcome = env
             .store
-            .distribute(&project_conn, &env.project_root, "shared_orders")
+            .distribute(&project_conn, &env.project_root, "shared_orders", None)
             .await
             .expect("distribute");
         assert_eq!(outcome.shape, DistributeShape::Table);
@@ -1273,7 +1355,7 @@ mod tests {
         );
         let outcome = env
             .store
-            .distribute(&project_conn, &env.project_root, "weekly_note")
+            .distribute(&project_conn, &env.project_root, "weekly_note", None)
             .await
             .expect("distribute script");
         assert_eq!(outcome.shape, DistributeShape::File, "脚本分发重建为文件");
@@ -1319,7 +1401,7 @@ mod tests {
         );
         let err = env
             .store
-            .distribute(&project_conn, &env.project_root, "never_promoted")
+            .distribute(&project_conn, &env.project_root, "never_promoted", None)
             .await
             .expect_err("must not find");
         assert!(

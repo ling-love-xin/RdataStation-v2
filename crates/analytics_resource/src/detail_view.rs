@@ -12,7 +12,7 @@ use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Icon, Size, Sizable as _};
 use gpui_kit::*;
 
-use crate::model::{ArchiveKind, ArchiveStatus};
+use crate::model::{ArchiveKind, ArchiveStatus, DeleteTarget, PayloadMode, RowScope};
 use crate::preview::Preview;
 use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge};
 use crate::ui;
@@ -43,6 +43,12 @@ pub struct ArchiveDetail {
     pub status: ArchiveStatus,
     /// 归档后只读（`kind = analysis` 也可能为 false：表本身不可加只读属性）。
     pub readonly: bool,
+    /// File 档归档粒度（copy / reference，迁移 023）；决定本体位置与详情文案分派。
+    pub payload_mode: PayloadMode,
+    /// reference 模式的源绝对路径（copy 为 `None`）。
+    pub source_path: Option<String>,
+    /// 实例归属（§13 双实例）：项目行可操作，全局行只读 + 可分发。
+    pub scope: RowScope,
     /// 大小（文件型）或规模（分析表型，如 "12,480 行 × 18 列"）；旧行可能为空。
     pub size_label: String,
     pub modified_label: String,
@@ -100,11 +106,27 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
         ("种类", kind_label(detail.kind).to_string()),
         ("版本", format!("v{}", detail.version)),
         (
+            "实例",
+            match detail.scope {
+                RowScope::Project => "当前项目".to_string(),
+                RowScope::Global => "全局实例（只读，可分发到本项目）".to_string(),
+            },
+        ),
+        (
             "只读",
             if detail.readonly {
                 "归档后不可写，需取回编辑".to_string()
             } else {
                 "可写（非文件型本体不带只读属性）".to_string()
+            },
+        ),
+        (
+            "归档方式",
+            match detail.payload_mode {
+                PayloadMode::Copy => "复制存档（本体在 resources/ 下，只读）".to_string(),
+                PayloadMode::Reference => {
+                    "引用存档（本体留在源位置，快照指向源路径）".to_string()
+                }
             },
         ),
     ];
@@ -129,6 +151,10 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     }
     if let Some(table) = detail.source_table.as_deref() {
         source.push(("来源表", table.to_string()));
+    }
+    // reference 模式的本体在源位置：把源绝对路径摆出来，方便判断引用对象是谁。
+    if let Some(src) = detail.source_path.as_deref() {
+        source.push(("源路径", src.to_string()));
     }
     source.push((HASH_LABEL, short_hash(detail.content_hash.as_deref())));
     sections.push(("来源".to_string(), source));
@@ -182,6 +208,10 @@ pub fn alert_line(detail: &ArchiveDetail) -> Option<String> {
         // 引用型复现强度最弱：常态就提示，不等它失效。
         (ArchiveStatus::Normal, ArchiveKind::TableRef) => {
             Some("这是引用：源表可能已变更或被删除，使用前建议立即校验".to_string())
+        }
+        // 本地文件引用（§12.1.1 末段）：常态即说明本体归属与失效条件；与旧 TableRef 正交。
+        (ArchiveStatus::Normal, _) if detail.payload_mode == PayloadMode::Reference => {
+            Some("引用型：本体在源位置，源变更后快照失效".to_string())
         }
         _ => None,
     }
@@ -485,6 +515,64 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         );
     }
 
+    // reference 失效条（§12.1.1 ②：打开时懒校验发现源已变更；不进索引状态统计，
+    // 也不属于 `ArchiveStatus`——槽位由宿主按 `resource_id` 维护，切换项目 / 接受当前内容
+    // 后清除）。处置只有两条：接受当前内容（源生成新版本）、从历史还原（复用版本历史对话框）。
+    let stale = actions
+        .as_ref()
+        .map(|a| a.host.is_reference_stale(&detail.id))
+        .unwrap_or(false);
+    if stale {
+        let Some(actions) = actions.as_ref() else {
+            unreachable!("无宿主时 stale 必然为 false（槽位由宿主维护）");
+        };
+        let detail_for_accept = detail.clone();
+        let detail_for_history = detail.clone();
+        let host_for_accept = actions.host.clone();
+        let host_for_history = actions.host.clone();
+        body = body.child(
+            div()
+                .v_flex()
+                .w_full()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .border_1()
+                .border_color(tone_color.warning)
+                .text_color(tone_color.warning)
+                .child(
+                    div().text_xs().child(
+                        "源已变更，快照失效：当前源文件与归档时的指纹不一致。",
+                    ),
+                )
+                .child(
+                    div().h_flex().w_full().gap_2().child(
+                        Button::new("archive-stale-accept")
+                            .ghost()
+                            .xsmall()
+                            .label("接受当前内容")
+                            .on_click(move |_, window, cx| {
+                                host_for_accept.accept_reference_current(
+                                    &detail_for_accept,
+                                    window,
+                                    cx,
+                                )
+                            }),
+                    ),
+                )
+                .child(
+                    Button::new("archive-stale-history")
+                        .ghost()
+                        .xsmall()
+                        .label("从历史还原")
+                        .on_click(move |_, window, cx| {
+                            host_for_history
+                                .request_version_history(&detail_for_history.id, window, cx)
+                        }),
+                ),
+        );
+    }
+
     // 分区
     for (title, rows) in detail_rows(detail) {
         // 「这个分区要多一个入口吗」得在 `title` 被 move 进子元素之前定下。
@@ -547,7 +635,8 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         }
         // 版本分区多一个入口（原型 §3.1 的「查看全部…」）：打开版本历史对话框。
         // 只读项目下也可用——历史读取与还原是两件事，后者在对话框里自己管。
-        if is_version_section {
+        // 全局行没有本地版本历史（本体在全局实例），入口不摆（§13.4 动作收敛）。
+        if is_version_section && detail.scope != RowScope::Global {
             if let Some(actions) = actions.as_ref() {
                 let host = actions.host.clone();
                 let resource_id = detail.id.clone();
@@ -567,116 +656,164 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     }
 
     // 标签分区（原型 §3.1 的“标签与分组”里的标签那一半）：chips 可逐个去掉，「＋ 标签」开打标对话框。
-    body = body.child(render_tag_section(detail, actions.as_ref(), cx));
+    // 全局行不带本地标签、也不允许打标（§13.4 动作收敛），整块分区不渲染。
+    if detail.scope != RowScope::Global {
+        body = body.child(render_tag_section(detail, actions.as_ref(), cx));
+    }
 
     // 内容预览（原型 §3.1 的最后一块，摆在标签与危险区之间）：文本型给前 20 行，
     // 二进制 / 大文件给一句说明。预览**只读**：这里没有任何编辑入口（原型 §1 原则 3）。
     body = body.child(render_preview_section(detail, cx));
 
-    // 动作区：只读存档的两个真动作（打开（只读）/ 取回（检出）…）——
-    // 取回是**唯一的编辑入口**；其余动作各自有各自的批（标签 / 重命名 = Phase 2）。
+    // 动作区：项目行 = 打开（只读）/ 取回（检出）+ 危险区；全局行（§13.4）只读，
+    // 唯一动作 = 分发到本项目，打开 / 取回 / 删除 / 打标 / 分组 / 版本历史一律不摆。
     if let Some(actions) = actions {
-        let missing = detail.status == ArchiveStatus::Missing;
-        let changed = detail.status == ArchiveStatus::ContentChanged;
-        let can_open = !missing && detail.payload_rel_path.is_some();
-        let can_checkout = !missing && !changed && !actions.read_only;
-        // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
-        // 引用型没有本体，回收站里没有它的东西；本体缺失的该去索引修复（服务层也会拒）。
-        let has_payload = detail.payload_rel_path.is_some();
-        let can_delete = !missing && has_payload && !actions.read_only;
-        // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
-        let hint = if missing {
-            "本体缺失，先在状态行「修复…」处理"
-        } else if actions.read_only {
-            "项目处于只读模式"
-        } else if changed {
-            "内容已变：先在状态行「修复…」接受当前内容或从历史还原，再取回"
-        } else {
-            "打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）"
-        };
-        let delete_hint = if missing {
-            "本体缺失：先走索引修复（回收站里没有它的本体）"
-        } else if !has_payload {
-            "引用型没有本体，没有可移入回收站的东西"
-        } else if actions.read_only {
-            "项目处于只读模式"
-        } else {
-            "本体与登记记录一起进项目级回收站，之后可从面板头「⋯ → 回收站…」还原"
-        };
         let host = actions.host.clone();
-        // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
-        let detail_for_open = detail.clone();
-        let detail_for_checkout = detail.clone();
-        let detail_for_delete = detail.clone();
-        body = body.child(
-            div()
-                .v_flex()
-                .w_full()
-                .gap_1()
-                .border_t(ui::HAIRLINE)
-                .border_color(border)
-                .pt_2()
-                .child(
-                    div()
-                        .h_flex()
-                        .w_full()
-                        .gap_2()
-                        .child(
-                            Button::new("archive-detail-open")
-                                .ghost()
-                                .label("打开（只读）")
-                                .disabled(!can_open)
-                                .on_click({
-                                    let host = host.clone();
-                                    let detail = detail_for_open.clone();
-                                    move |_, window, cx| host.request_open(&detail, window, cx)
-                                }),
-                        )
-                        .child(
-                            Button::new("archive-detail-checkout")
-                                .ghost()
-                                .label("取回（检出）…")
-                                .disabled(!can_checkout)
-                                .on_click({
-                                    let host = host.clone();
-                                    let detail = detail_for_checkout.clone();
-                                    move |_, window, cx| host.request_checkout(&detail, window, cx)
-                                }),
+        if detail.scope == RowScope::Global {
+            let detail_for_distribute = detail.clone();
+            body = body.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .border_t(ui::HAIRLINE)
+                    .border_color(border)
+                    .pt_2()
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Button::new("archive-detail-distribute")
+                                    .ghost()
+                                    .label("分发到本项目…")
+                                    .on_click(move |_, window, cx| {
+                                        host.request_distribute_from_global(
+                                            &detail_for_distribute.name,
+                                            window,
+                                            cx,
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div().text_xs().text_color(muted).child(
+                            "全局实例只读：本体不可打开、取回或删除；需要内容时先分发到本项目。",
                         ),
-                )
-                .child(div().text_xs().text_color(muted).child(hint))
-                .child(
-                    div()
-                        .v_flex()
-                        .w_full()
-                        .gap_1()
-                        .mt_2()
-                        .pt_2()
-                        .border_t(ui::HAIRLINE)
-                        .border_color(border)
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(tone_color.danger)
-                                .child("危险区"),
-                        )
-                        .child(
-                            Button::new("archive-detail-delete")
-                                .with_variant(ButtonVariant::Danger)
-                                .label("移入回收站")
-                                .disabled(!can_delete)
-                                .on_click({
-                                    let host = host.clone();
-                                    let detail = detail_for_delete.clone();
-                                    move |_, window, cx| {
-                                        host.request_delete(&[detail.id.clone()], window, cx)
-                                    }
-                                }),
-                        )
-                        .child(div().text_xs().text_color(muted).child(delete_hint)),
-                ),
-        );
+                    ),
+            );
+        } else {
+            let missing = detail.status == ArchiveStatus::Missing;
+            let changed = detail.status == ArchiveStatus::ContentChanged;
+            let can_open = !missing && detail.payload_rel_path.is_some();
+            let can_checkout = !missing && !changed && !actions.read_only;
+            // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
+            // copy 与 reference 都可移入回收站（B3 服务层已支持）：copy 搬本体进回收站，
+            // reference 只删登记行 + 版本元数据，本体留在源位置。
+            let has_payload = detail.payload_rel_path.is_some();
+            let can_delete = !missing && has_payload && !actions.read_only;
+            let is_reference = detail.payload_mode == PayloadMode::Reference;
+            // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
+            let hint = if missing {
+                "本体缺失，先在状态行「修复…」处理"
+            } else if actions.read_only {
+                "项目处于只读模式"
+            } else if changed {
+                "内容已变：先在状态行「修复…」接受当前内容或从历史还原，再取回"
+            } else {
+                "打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）"
+            };
+            let delete_hint = if missing {
+                "本体缺失：先走索引修复（回收站里没有它的本体）"
+            } else if actions.read_only {
+                "项目处于只读模式"
+            } else if is_reference {
+                "只删除登记记录与版本元数据，源文件留在原位置不受影响；可从回收站还原登记"
+            } else {
+                "本体与登记记录一起进项目级回收站，之后可从面板头「⋯ → 回收站…」还原"
+            };
+            // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
+            let detail_for_open = detail.clone();
+            let detail_for_checkout = detail.clone();
+            let detail_for_delete = detail.clone();
+            body = body.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .border_t(ui::HAIRLINE)
+                    .border_color(border)
+                    .pt_2()
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Button::new("archive-detail-open")
+                                    .ghost()
+                                    .label("打开（只读）")
+                                    .disabled(!can_open)
+                                    .on_click({
+                                        let host = host.clone();
+                                        let detail = detail_for_open.clone();
+                                        move |_, window, cx| host.request_open(&detail, window, cx)
+                                    }),
+                            )
+                            .child(
+                                Button::new("archive-detail-checkout")
+                                    .ghost()
+                                    .label("取回（检出）…")
+                                    .disabled(!can_checkout)
+                                    .on_click({
+                                        let host = host.clone();
+                                        let detail = detail_for_checkout.clone();
+                                        move |_, window, cx| host.request_checkout(&detail, window, cx)
+                                    }),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(muted).child(hint))
+                    .child(
+                        div()
+                            .v_flex()
+                            .w_full()
+                            .gap_1()
+                            .mt_2()
+                            .pt_2()
+                            .border_t(ui::HAIRLINE)
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(tone_color.danger)
+                                    .child("危险区"),
+                            )
+                            .child(
+                                Button::new("archive-detail-delete")
+                                    .with_variant(ButtonVariant::Danger)
+                                    .label("移入回收站")
+                                    .disabled(!can_delete)
+                                    .on_click({
+                                        let host = host.clone();
+                                        let detail = detail_for_delete.clone();
+                                        move |_, window, cx| {
+                                            host.request_delete(
+                                                &[DeleteTarget {
+                                                    id: detail.id.clone(),
+                                                    mode: detail.payload_mode,
+                                                }],
+                                                window,
+                                                cx,
+                                            )
+                                        }
+                                    }),
+                            )
+                            .child(div().text_xs().text_color(muted).child(delete_hint)),
+                    ),
+            );
+        }
     }
 
     div()
@@ -693,7 +830,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
 mod tests {
     // 安全模式：测试模块不通配导入。
     use super::{ArchiveDetail, ArchiveTagChip, alert_line, detail_rows, kind_label, short_hash};
-    use crate::model::{ArchiveKind, ArchiveStatus};
+    use crate::model::{ArchiveKind, ArchiveStatus, PayloadMode, RowScope};
 
     fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
         ArchiveDetail {
@@ -704,6 +841,9 @@ mod tests {
             version: 2,
             status,
             readonly: true,
+            payload_mode: PayloadMode::Copy,
+            source_path: None,
+            scope: RowScope::Project,
             size_label: "1.2 KB".to_string(),
             modified_label: "3 天前".to_string(),
             archived_label: "3 天前".to_string(),

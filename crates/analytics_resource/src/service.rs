@@ -17,6 +17,7 @@ use shared::error::{CoreError, StorageError};
 use crate::model::{
     ArchiveKind, ArchiveOutcome, ArchiveRequest, ArchiveUndo, ChangeReason, CheckoutOutcome,
     CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, PayloadMode, ResourcesChanged,
+    TRASH_ID_REF_PREFIX,
     TrashArchiveEntry,
 };
 use crate::payload::PayloadStore;
@@ -650,18 +651,20 @@ impl ArchiveService {
                 &format!("「{}」已经在回收站里", resource.name),
             ));
         }
-        // reference 模式的本体在源位置（可能是用户工作区 / 外部路径），M6 不能把它
-        // 搬进项目回收站——那等于未经同意移动用户的文件。删除引用 = 删登记记录（血缘一起清），
-        // 出口是详情面板 / 版本历史的删除（后续刀接入），这里明确拒绝而不是假成功。
-        if PayloadMode::from_db_str(&resource.payload_mode) == PayloadMode::Reference {
-            return Err(service_err(
-                "trash",
-                &format!(
-                    "「{}」是引用型存档（本体在源位置），不支持移入回收站；删除请走「删除登记记录」",
-                    resource.name
-                ),
-            ));
+        let mode = PayloadMode::from_db_str(&resource.payload_mode);
+
+        // reference 型：本体在源位置（用户工作区 / 外部路径），M6 不能未经同意移动用户文件；
+        // 移入回收站 = 只软删登记行（血缘标签随登记行留着，还原时一并复活）。
+        // 还原 = 复活登记行；永久删除 = 仅删登记行 + 版本元数据（§12.1.1 ③）。
+        if mode == PayloadMode::Reference {
+            self.store.soft_delete_archive(&resource.id).await?;
+            return Ok(TrashArchiveEntry {
+                resource_id: resource.id.clone(),
+                name: resource.name,
+                trash_id: format!("{TRASH_ID_REF_PREFIX}{}", resource.id),
+            });
         }
+
         let rel_path = resource.file_rel_path.clone().ok_or_else(|| {
             service_err(
                 "trash",
@@ -718,6 +721,20 @@ impl ArchiveService {
         &self,
         trash_id: &str,
     ) -> Result<AnalyticsResource, CoreError> {
+        // reference 条目：没有实体 manifest，本体一直在源位置，还原只是复活登记行。
+        if let Some(resource_id) = trash_id.strip_prefix(TRASH_ID_REF_PREFIX) {
+            let record = self.store.get_resource_by_id(resource_id).await?;
+            if record.deleted_at.is_none() {
+                return Err(service_err(
+                    "untrash",
+                    &format!("「{}」不在回收站里", record.name),
+                ));
+            }
+            self.store.undelete_archive(resource_id, None).await?;
+            self.emit(ChangeReason::Untrashed, Some(record.id.clone()));
+            return self.store.get_resource_by_id(resource_id).await;
+        }
+
         let trash = self.payload.trash();
         let entry = trash.get(trash_id).await?;
         if entry.manifest.origin != ORIGIN_RESOURCES {
@@ -816,6 +833,20 @@ impl ArchiveService {
     /// 顺序：先删本体（不可逆的那一步），再清登记行——登记行没清掉只是一条看不见的幽灵行，
     /// 下次「清空」还会收它；反过来（先清行、本体留下）才是真的收不了场。
     pub async fn purge_archive(&self, trash_id: &str) -> Result<(), CoreError> {
+        // reference 条目：本体留在源位置不受影响，永久删除只清登记行 + 标签 / 分组归属
+        // + 版本元数据（§12.1.1 ③）；没有实体 manifest 可删。
+        if let Some(resource_id) = trash_id.strip_prefix(TRASH_ID_REF_PREFIX) {
+            let row = self.store.get_resource_by_id(resource_id).await?;
+            if row.deleted_at.is_none() {
+                return Err(service_err(
+                    "purge",
+                    &format!("「{}」不在回收站里", row.name),
+                ));
+            }
+            self.store.purge_deleted_row(resource_id).await?;
+            return Ok(());
+        }
+
         let trash = self.payload.trash();
         let entry = trash.get(trash_id).await?;
         if entry.manifest.origin != ORIGIN_RESOURCES {
@@ -856,6 +887,22 @@ impl ArchiveService {
         }
         self.store.purge_all_deleted().await?;
         Ok(entries.len())
+    }
+
+    /// 列出软删的 reference 存档（回收站第二来源；§12.1.1 ③）。
+    ///
+    /// copy 软删行都有实体 `ProjectTrash` 条目，回收站清单由实体条目承载；reference 没有
+    /// 本体可搬，回收站清单要把这些软删登记行一并列出。
+    pub async fn deleted_reference_archives(
+        &self,
+    ) -> Result<Vec<AnalyticsResource>, CoreError> {
+        Ok(self
+            .store
+            .list_deleted_archives()
+            .await?
+            .into_iter()
+            .filter(|r| PayloadMode::from_db_str(&r.payload_mode) == PayloadMode::Reference)
+            .collect())
     }
 
     /// 撤销一次归档（原型 §4.1：归档的立即反悔窗口）。
@@ -2373,9 +2420,10 @@ mod tests {
         let _ = fs::remove_file(&outside).await;
     }
 
-    /// reference 移入回收站：明确拒绝（本体在源位置，M6 不能搬用户的文件）。
+    /// reference 移入回收站（§12.1.1 ③）：本体留原位，只软删登记行；还原只复活登记行；
+    /// 永久删除只清登记行 + 版本元数据——全流程都不碰源文件（与 copy 同一进回收站判据）。
     #[tokio::test]
-    async fn t138_reference_trash_is_refused() {
+    async fn t138_reference_trash_cycles_without_touching_source() {
         let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
         let outside = std::env::temp_dir().join(format!("ref_src_{}.csv", uuid::Uuid::new_v4().simple()));
         fs::write(&outside, b"a,b\n1,2\n").await.expect("write external source");
@@ -2383,25 +2431,61 @@ mod tests {
             .archive(reference_req(&outside, "data/big.csv"))
             .await
             .expect("reference archive");
+        let id = archived.resource_id.clone();
 
-        let error = service
-            .move_to_trash(&[archived.resource_id.clone()])
+        // 1) 移入回收站：成功，本体不动，登记行进入软删态；条目带 ref: 前缀。
+        let trashed = service
+            .move_to_trash(&[id.clone()])
             .await
-            .expect_err("reference trash must be refused");
+            .expect("reference 可进回收站（与 copy 同一判据）");
+        let trash_id = trashed[0].trash_id.clone();
         assert!(
-            error.to_string().contains("引用型存档"),
-            "错误要说明是引用型：{error}"
+            trash_id.starts_with(crate::model::TRASH_ID_REF_PREFIX),
+            "reference 回收站条目带 ref: 前缀"
         );
-        assert!(outside.is_file(), "源不动");
+        assert!(outside.is_file(), "本体留原位");
         assert!(
             service
                 .store()
-                .get_resource_by_id(&archived.resource_id)
+                .get_resource_by_id(&id)
+                .await
+                .expect("row")
+                .deleted_at
+                .is_some(),
+            "登记行进入软删态"
+        );
+
+        // 2) 还原：只复活登记行，本体仍在源位置。
+        let restored = service
+            .restore_archive_from_trash(&trash_id)
+            .await
+            .expect("reference 还原登记行");
+        assert_eq!(restored.id, id);
+        assert!(outside.is_file(), "本体仍在源位置");
+        assert!(
+            service
+                .store()
+                .get_resource_by_id(&id)
                 .await
                 .expect("row")
                 .deleted_at
                 .is_none(),
-            "被拒的行不能变成软删态"
+            "登记行复活"
+        );
+
+        // 3) 再次移入 → 永久删除：只清登记行与版本元数据，本体不动、登记行不再可查。
+        let trashed_again = service
+            .move_to_trash(&[id.clone()])
+            .await
+            .expect("reference 再次移入回收站");
+        service
+            .purge_archive(&trashed_again[0].trash_id)
+            .await
+            .expect("reference 永久删除只清登记行");
+        assert!(outside.is_file(), "永久删除不碰本体");
+        assert!(
+            service.store().get_resource_by_id(&id).await.is_err(),
+            "登记行已被清除"
         );
 
         let _ = fs::remove_dir_all(&dir).await;

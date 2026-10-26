@@ -22,18 +22,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use engine::persistence::project_db::ProjectDatabaseManager;
 
 use analytics_resource::analysis::AnalysisFacts;
 use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
 use analytics_resource::dialogs::tag::{TagChoice, TagDialogSeed};
-use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed};
+use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed, TrashRow};
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
 use analytics_resource::present::{
     ArchiveStatuses, PreviewMap, SnapshotInputs, build_repair_rows, build_snapshot,
-    build_trash_snapshot, build_version_rows,
+    build_trash_snapshot, build_version_rows, entity_trash_row, reference_trash_rows,
 };
 use analytics_resource::preview::{self, Preview};
 use analytics_resource::resource_view::{ArchiveRow, GroupOption, ResourcesSnapshot};
@@ -239,12 +239,18 @@ enum Job {
 struct PromoteJob {
     project_root: PathBuf,
     request: analytics_resource::global::PromoteRequest,
+    /// true = 同名冲突经「覆盖」确认后重入队（旧表删、版本接续）。
+    overwrite: bool,
 }
 
 /// 一次「从全局分发」任务（§13：全局 → 项目；跨项目唯一法定路径）。
 struct DistributeJob {
     project_root: PathBuf,
     name: String,
+    /// 项目侧落库名（冲突询问「改名」分支填入；None = 沿用全局名）。
+    target: Option<String>,
+    /// true = 同名冲突经「覆盖」确认后重入队（旧本体移除、登记软删）。
+    overwrite: bool,
 }
 
 /// 改显示名（不需要对话框取数：目标与当前名字都在事件路径上拿到）。
@@ -267,10 +273,11 @@ struct SetAliasJob {
 ///
 /// **结果与最终落点在工作线程上定好**（重名避让、版本号都在那里发生），文案由事件路径组装
 /// ——它才有项目根可以换算相对路径、才有状态栏可以写。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum OpOutcome {
     /// 已归档：显示名 / 版本 / 最终相对路径（可能因重名避让与用户填的不同）。
     Archived {
+        resource_id: String,
         name: String,
         version: i32,
         rel_path: String,
@@ -318,6 +325,27 @@ pub enum OpOutcome {
     Failed {
         action: &'static str,
         reason: String,
+    },
+    /// 同名冲突：事件路径据此弹「覆盖 / 改名 / 取消」（§13.3 / §13.6）。
+    ///
+    /// 上下文带重试凭据：覆盖 = 带 `overwrite` 重入队；改名 = 换新名后非覆盖重入队；
+    /// 取消 = 只回执，不再入队。
+    Conflict {
+        context: ConflictContext,
+        /// 冲突名（对话框标题与回执用；改名后以新名为准）。
+        name: String,
+    },
+}
+
+/// 冲突重试凭据（覆盖 / 改名重入队所需的原始上下文；随回执回事件路径）。
+#[derive(Debug, Clone)]
+pub enum ConflictContext {
+    /// 升级冲突：原始请求（改名 = 复制一份、替换 `name` 后重入队）。
+    Promote(analytics_resource::global::PromoteRequest),
+    /// 分发冲突：全局资源名 + 本次目标名（None = 沿用全局名）。
+    Distribute {
+        global_name: String,
+        target: Option<String>,
     },
 }
 
@@ -564,14 +592,16 @@ async fn run_promote(job: &PromoteJob) -> OpOutcome {
             };
         }
     };
-    let outcome = match gstore.promote(&job.request).await {
+    let outcome = match job.overwrite {
+        true => gstore.promote_overwrite(&job.request).await,
+        false => gstore.promote(&job.request).await,
+    };
+    let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(InstanceOpError::Conflict { name }) => {
-            return OpOutcome::Failed {
-                action: "升级到全局",
-                reason: format!(
-                    "全局已有同名资源「{name}」；请改名后重试，或先在全局实例中移除旧资源（覆盖询问对话框待补）"
-                ),
+            return OpOutcome::Conflict {
+                context: ConflictContext::Promote(job.request.clone()),
+                name,
             };
         }
         Err(reason) => {
@@ -628,7 +658,23 @@ async fn run_distribute(job: &DistributeJob) -> OpOutcome {
         }
     };
     let project = ProjectDuckConn(duck_conn, manager.sqlite_pool());
-    match gstore.distribute(&project, &job.project_root, &job.name).await {
+    let result = match job.overwrite {
+        true => gstore.distribute_overwrite(
+            &project,
+            &job.project_root,
+            &job.name,
+            job.target.as_deref(),
+        )
+        .await,
+        false => gstore.distribute(
+            &project,
+            &job.project_root,
+            &job.name,
+            job.target.as_deref(),
+        )
+        .await,
+    };
+    match result {
         Ok(outcome) => OpOutcome::Distributed {
             name: outcome.name,
             version: outcome.version,
@@ -637,11 +683,12 @@ async fn run_distribute(job: &DistributeJob) -> OpOutcome {
                 DistributeShape::File => DistributeShape::File,
             },
         },
-        Err(InstanceOpError::Conflict { name }) => OpOutcome::Failed {
-            action: "从全局分发",
-            reason: format!(
-                "当前项目已有同名资源「{name}」；请改名后重试，或先移除项目旧资源（覆盖询问对话框待补）"
-            ),
+        Err(InstanceOpError::Conflict { name }) => OpOutcome::Conflict {
+            context: ConflictContext::Distribute {
+                global_name: job.name.clone(),
+                target: job.target.clone(),
+            },
+            name,
         },
         Err(InstanceOpError::NotFound { name }) => OpOutcome::Failed {
             action: "从全局分发",
@@ -741,6 +788,7 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
                     source_path: job.request.source_path.clone(),
                 });
             OpOutcome::Archived {
+                resource_id: outcome.resource_id.clone(),
                 name,
                 version: outcome.version,
                 rel_path: outcome.file_rel_path,
@@ -1066,8 +1114,10 @@ async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
 
 /// 取回收站条目 → 对话框种子（工作线程上执行）。
 ///
-/// 只需本体层：回收站是文件系统上的目录（`ProjectTrash`），不碰项目库——
-/// 这也是“回收站不依赖索引”的另一面（本体是权威）。
+/// 两个来源（§12.1.1 ③）：
+/// - **实体条目**：`ProjectTrash` 目录里的 copy 型本体（回收站是文件系统目录，不碰项目库）；
+/// - **软删登记行**：reference 型没有本体可搬，回收站清单要把软删登记行一并列出。
+/// 两路都按删除时间倒序返回，这里双指针归并成一份统一倒序清单。
 async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, String> {
     let entries = PayloadStore::new(job.project_root.clone())
         .trash()
@@ -1075,8 +1125,43 @@ async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, String> {
         .await
         .map_err(|e| format!("读取回收站失败：{e}"))?;
     let snapshot = build_trash_snapshot(&entries);
+
+    // 项目库读不到时不弄砸实体清单：第二来源缺失只表现为 reference 条目不显示。
+    let reference: Vec<(DateTime<Utc>, TrashRow)> = match open_service(job.project_root.clone(), None).await {
+        Ok(service) => match service.deleted_reference_archives().await {
+            Ok(rows) => reference_trash_rows(&rows),
+            Err(error) => {
+                tracing::warn!(error = %error, "读取软删 reference 回收站条目失败");
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+
+    let entity: Vec<(DateTime<Utc>, TrashRow)> =
+        entries.iter().filter_map(entity_trash_row).collect();
+    let mut entity_i = 0;
+    let mut ref_i = 0;
+    let mut rows: Vec<TrashRow> = Vec::with_capacity(entity.len() + reference.len());
+    while entity_i < entity.len() || ref_i < reference.len() {
+        let take_entity = match (entity.get(entity_i), reference.get(ref_i)) {
+            (Some(e), Some(r)) => e.0 >= r.0,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            // while 条件已保证至少一项存在，此臂不可达；补齐穷尽性。
+            (None, None) => false,
+        };
+        if take_entity {
+            rows.push(entity[entity_i].1.clone());
+            entity_i += 1;
+        } else {
+            rows.push(reference[ref_i].1.clone());
+            ref_i += 1;
+        }
+    }
+
     Ok(TrashDialogSeed {
-        rows: snapshot.rows,
+        rows,
         foreign: snapshot
             .foreign
             .into_iter()
@@ -1507,11 +1592,12 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
 
     // 全局实例行（§13 展示层）：全局登记读失败 / 全局库未初始化都不弄砸项目刷新
     // （全局列表是附加视图，不是项目刷新能否成功的前提）。
-    let global_rows = load_global_rows().await;
+    let (global_rows, global_resources) = load_global_rows().await;
 
     Ok(build_snapshot(SnapshotInputs {
         resources: &rows,
         global_rows,
+        global_resources,
         statuses: &statuses,
         history_counts: &history_counts,
         tags: &tags_by_resource,
@@ -1528,14 +1614,14 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
 ///
 /// 全局登记读失败 / 全局系统库未初始化（`get_global_db_manager` 为空）时返回空表：
 /// 全局列表是**附加视图**，不参与项目刷新成败。
-async fn load_global_rows() -> Vec<ArchiveRow> {
+async fn load_global_rows() -> (Vec<ArchiveRow>, Vec<AnalyticsResource>) {
     use analytics_resource::global::{GlobalInstanceStore, list_global_resources, to_global_rows};
     let Ok(store) = GlobalInstanceStore::production().await else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     match list_global_resources(&store) {
-        Ok(list) => to_global_rows(&list, Utc::now()),
-        Err(_) => Vec::new(),
+        Ok(list) => (to_global_rows(&list, Utc::now()), list),
+        Err(_) => (Vec::new(), Vec::new()),
     }
 }
 
@@ -1615,18 +1701,40 @@ pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {    jobs().pendi
 }
 
 /// 提交一次「升级到全局」（§13；事件路径调用：右键菜单确认之后）。
-pub fn enqueue_promote(project_root: PathBuf, request: analytics_resource::global::PromoteRequest) {
+///
+/// `overwrite = true` 走覆盖式升级（冲突询问「覆盖」确认后重入队）。
+pub fn enqueue_promote(
+    project_root: PathBuf,
+    request: analytics_resource::global::PromoteRequest,
+    overwrite: bool,
+) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Promote(PromoteJob {
         project_root,
         request,
+        overwrite,
     }));
 }
 
 /// 提交一次「从全局分发」（§13；事件路径调用：全局实例列表动作之后）。
-pub fn enqueue_distribute(project_root: PathBuf, name: String) {
+///
+/// `target` = 项目侧落库名（None = 沿用全局名；冲突询问「改名」分支填入）；
+/// `overwrite = true` 走覆盖式分发（冲突询问「覆盖」确认后重入队）。
+pub fn enqueue_distribute(
+    project_root: PathBuf,
+    name: String,
+    target: Option<String>,
+    overwrite: bool,
+) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
-    let _ = jobs().tx.send(Job::Distribute(DistributeJob { project_root, name }));
+    let _ = jobs()
+        .tx
+        .send(Job::Distribute(DistributeJob {
+            project_root,
+            name,
+            target,
+            overwrite,
+        }));
 }
 
 /// 提交一次归档（**事件路径**调用：对话框确认之后）。
