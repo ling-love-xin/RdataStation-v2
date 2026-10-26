@@ -85,6 +85,12 @@ pub struct StatusInputs<'a> {
     pub lsp: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
     pub tx: Option<&'a str>,
+    /// 【§2.5 分析】会话段（`会话 orders-主库` / `会话 默认会话`）；`None` = 非分析模式
+    pub session: Option<&'a str>,
+    /// 【§2.5 分析】内核段（`内核 python`）；`None` = 未启动内核（不占位）
+    pub kernel: Option<&'a str>,
+    /// 【§2.5 分析】单元计数段（`3 单元` / `3 单元（1 stale）`）；`None` = 非分析模式
+    pub units: Option<&'a str>,
 }
 
 /// 状态栏里的可交互控件（由面板构造：它知道点击该干什么）
@@ -100,6 +106,8 @@ pub struct StatusControls {
     pub reset_menu: Option<AnyElement>,
     /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
     pub tx: Option<AnyElement>,
+    /// 【B13】执行方式控件（源库 / 加速 / 联邦可切），挂在**左段**（方言之后、正文之前）
+    pub channel: Option<AnyElement>,
     /// 【B3】中断按钮，挂在**右段**
     pub interrupt: Option<AnyElement>,
 }
@@ -253,6 +261,19 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         body.push_str(lsp);
         body.push_str(" · ");
     }
+    // 【§2.5 分析】会话 / 内核 / 单元计数（含 stale）：分析模式叠加段；`None` 不占位
+    if let Some(session) = inputs.session {
+        body.push_str(session);
+        body.push_str(" · ");
+    }
+    if let Some(kernel) = inputs.kernel {
+        body.push_str(kernel);
+        body.push_str(" · ");
+    }
+    if let Some(units) = inputs.units {
+        body.push_str(units);
+        body.push_str(" · ");
+    }
     if inputs.dirty {
         body.push_str("未保存 · ");
     }
@@ -336,6 +357,8 @@ pub fn render(
         .when(text.dialect.is_some(), |row| {
             row.child(text.dialect.clone().unwrap())
         })
+        // 执行方式控件（源库 / 加速 / 联邦可切）：有控件时替代正文里的通道文本段
+        .children(controls.channel)
         // 正文超宽时收缩截断而不是把右段推出窗口（VSCode 左段同款行为）
         .child(
             div()
@@ -426,6 +449,9 @@ mod tests {
             file_type: None,
             lsp: None,
             tx: None,
+            session: None,
+            kernel: None,
+            units: None,
         }
     }
 
@@ -710,6 +736,57 @@ mod tests {
 
         // 没绑定连接（文本模式 / 未绑定）→ 方言段不占位
         assert!(labels(&inputs(ReadOnly::none())).dialect.is_none());
+    }
+
+    /// 【§2.5 分析】会话 / 内核 / 单元计数（含 stale）叠加段：有数据才摆，无数据不占位
+    #[test]
+    fn analysis_segments_only_when_supplied() {
+        // 非分析模式 / 未给值：不占位
+        let plain = labels(&inputs(ReadOnly::none()));
+        assert!(!plain.body.contains("会话"), "{}", plain.body);
+        assert!(!plain.body.contains("内核"), "{}", plain.body);
+        assert!(!plain.body.contains("单元"), "{}", plain.body);
+
+        let mut analysis = inputs(ReadOnly::none());
+        analysis.mode = EditorMode::Analysis;
+        analysis.session = Some("会话 orders-主库");
+        analysis.kernel = Some("内核 python3");
+        analysis.units = Some("3 单元（1 stale）");
+        let text = labels(&analysis);
+        assert!(text.body.contains("会话 orders-主库"), "{}", text.body);
+        assert!(text.body.contains("内核 python3"), "{}", text.body);
+        assert!(text.body.contains("3 单元（1 stale）"), "{}", text.body);
+        // 模式名在右段微标（分析 = NOTE）
+        assert!(
+            text.right.iter().any(|b| b.contains("NOTE")),
+            "{:?}",
+            text.right
+        );
+
+        // 无 stale 的计数形态：不带括号
+        let mut clean = analysis;
+        clean.units = Some("3 单元");
+        let text = labels(&clean);
+        assert!(text.body.contains("3 单元"), "{}", text.body);
+        assert!(!text.body.contains("stale"));
+    }
+
+    /// 【§2.5 分析】右段在分析模式下仍是通用微标（全模式一致）
+    #[test]
+    fn analysis_mode_keeps_the_common_right_segment() {
+        let mut analysis = inputs(ReadOnly::none());
+        analysis.mode = EditorMode::Analysis;
+        let text = labels(&analysis);
+        assert!(
+            text.right.iter().any(|b| b.contains("Ln 12, Col 4")),
+            "{:?}",
+            text.right
+        );
+        assert!(
+            text.right.iter().any(|b| b.contains("UTF-8")),
+            "{:?}",
+            text.right
+        );
     }
 
     /// 【T2c-3】字节数人读微标：B / K / M / G 四档，纯函数可穷举

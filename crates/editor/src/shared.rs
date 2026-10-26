@@ -928,6 +928,16 @@ impl EditorShared {
             .unwrap_or_default()
     }
 
+    /// 【连接菜单】实时在线连接 id 集合（**事件路径专用**：宿主实现会同步查连接管理器，
+    /// 导航建连成功不回写快照 `connected`——菜单“只列在线”必须拿真状态；禁止 render 调用）
+    pub fn online_ids(&self) -> std::collections::HashSet<String> {
+        let guard = self.connections.borrow();
+        guard
+            .as_ref()
+            .map(|port| port.online_ids())
+            .unwrap_or_default()
+    }
+
     /// 【T2c-1】注入 schema 端口（**宿主调用一次**：workbench 从导航缓存读库 / schema 列表）
     pub fn attach_schemas(&self, port: crate::connection::SchemasHandle) {
         *self.schemas.borrow_mut() = Some(port);

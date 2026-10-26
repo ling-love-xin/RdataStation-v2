@@ -46,6 +46,20 @@ pub trait ConnectionsPort {
 
     /// 确保某个连接已建连（未连则建连）；失败给**可读原因**（自动建连同 M4 口径）
     fn ensure_connected(&self, conn_id: &str) -> Result<(), String>;
+
+    /// **实时**在线连接 id 集合（事件路径专用：连接菜单打开时调用）。
+    ///
+    /// 默认实现从 [`options`](Self::options) 快照推导（渲染安全）；宿主实现可覆盖为
+    /// 运行时真查——导航建连成功只回写导航快照、不一定回写 [`options`] 的 `connected`，
+    /// 菜单要“只列在线”就必须在这里拿真状态。**禁止在 render 路径调用**（宿主实现
+    /// 可能同步查连接管理器）。
+    fn online_ids(&self) -> std::collections::HashSet<String> {
+        self.options()
+            .into_iter()
+            .filter(|option| option.connected)
+            .map(|option| option.id)
+            .collect()
+    }
 }
 
 /// 端口句柄（与 `QueryRunner` / `SessionStore` 同一模式：宿主注入、可缺省）

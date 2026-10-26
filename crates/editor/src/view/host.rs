@@ -256,6 +256,12 @@ pub struct EditorStatusSnapshot {
     pub lsp: Option<String>,
     /// 事务区文案；`None` = 无事务语义
     pub tx: Option<String>,
+    /// 【§2.5 分析】会话段（`会话 orders-主库` / `会话 默认会话`）；`None` = 非分析模式
+    pub session: Option<String>,
+    /// 【§2.5 分析】内核段（`内核 python`）；`None` = 未启动内核
+    pub kernel: Option<String>,
+    /// 【§2.5 分析】单元计数段（`3 单元` / `3 单元（1 stale）`）；`None` = 非分析模式
+    pub units: Option<String>,
     /// 动作失败提示；`None` = 无提示
     pub message: Option<String>,
 }
@@ -1178,6 +1184,9 @@ impl EditorHostPanel {
         if self.closed {
             return None;
         }
+        let mode = self
+            .with_document(|doc| doc.mode())
+            .unwrap_or(EditorMode::General);
         let (line, column, cursor_count) = {
             let state = self.editor.read(cx);
             let cursor = state.cursor_position();
@@ -1249,10 +1258,42 @@ impl EditorHostPanel {
         let schema = self
             .with_document(|doc| doc.schema().map(str::to_string))
             .flatten();
+        // 【§2.5 分析】会话 / 内核 / 单元计数（含 stale）：有真实数据源才摆。
+        // 变量数暂无内核变量表数据源——按“零 UI 造数据”口径不显示（内核支持后再接）。
+        let (session, kernel, units) = if mode == EditorMode::Analysis {
+            let notebook = self.notebook_state();
+            let session = match notebook.session.default_connection.as_deref() {
+                Some(conn_id) => {
+                    let name = self
+                        .shared
+                        .connection_options()
+                        .iter()
+                        .find(|option| option.id == conn_id)
+                        .map(|option| option.name.clone())
+                        .unwrap_or_else(|| conn_id.to_string());
+                    Some(format!("会话 {name}"))
+                }
+                None => Some("会话 默认会话".to_string()),
+            };
+            let kernel = self
+                .kernel_running
+                .as_ref()
+                .map(|run| format!("内核 {}", run.kernel_id));
+            let units = Some({
+                let total = notebook.cells.len();
+                let stale = notebook.stale_count();
+                if stale > 0 {
+                    format!("{total} 单元（{stale} stale）")
+                } else {
+                    format!("{total} 单元")
+                }
+            });
+            (session, kernel, units)
+        } else {
+            (None, None, None)
+        };
         Some(EditorStatusSnapshot {
-            mode: self
-                .with_document(|doc| doc.mode())
-                .unwrap_or(EditorMode::General),
+            mode,
             dirty: self.is_dirty(),
             read_only: self.read_only_flags(),
             statements: self.statements,
@@ -1272,6 +1313,9 @@ impl EditorHostPanel {
             file_type,
             lsp,
             tx,
+            session,
+            kernel,
+            units,
             message: self.message.clone(),
         })
     }
@@ -1607,8 +1651,12 @@ impl EditorHostPanel {
                     .when(current_channel == ExecChannel::Federated, |row| {
                         row.child(self.render_sources_picker(cx))
                     })
-                    // 连接选择器已迁到状态栏面包屑（执行通道：连接 ▸ Schema）——工具栏去拥挤
-                    .child(self.render_channel_picker(cx)),
+                    // 执行通道面包屑（连接 ▸ 库 ▸ Schema）在工具栏右区；执行方式选择器已迁状态栏
+                    .children(render_breadcrumb_control(
+                        self,
+                        &cx.entity(),
+                        cx.theme(),
+                    )),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
@@ -1847,45 +1895,7 @@ impl EditorHostPanel {
     ///
     /// 本地跑的那两档额外给一个**维护动作**：`重新挂载源库（刷新表清单）`（见
     /// [`channel::refresh_item_label`]）——源库新建的表要重挂才看得见。
-    fn render_channel_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity();
-        let current = self.channel();
-        let items = self.channel_menu();
-        let refresh_label = channel::refresh_item_label(current);
-
-        Button::new("editor-channel")
-            .ghost()
-            .small()
-            .debug_selector(|| "editor-channel".to_string())
-            // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
-            .icon(IconName::Locate)
-            .label(format!("{} ▾", current.label()))
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu;
-                // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
-                for item in items.iter() {
-                    let entity = entity.clone();
-                    let channel = item.channel;
-                    menu = menu.item(
-                        PopupMenuItem::new(item.label.clone())
-                            .checked(item.current)
-                            .disabled(!item.available)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |panel, cx| panel.set_channel(channel, cx));
-                            }),
-                    );
-                }
-                if let Some(label) = refresh_label {
-                    let entity = entity.clone();
-                    menu = menu.separator().item(PopupMenuItem::new(label).on_click(
-                        move |_, _window, app| {
-                            entity.update(app, |panel, cx| panel.refresh_source(cx));
-                        },
-                    ));
-                }
-                menu
-            })
-    }
+    /// 渲染入口已迁状态栏左段（见 [`render_channel_control`]）。
 
     /// 本文档绑定的连接 id（`None` = 未绑定，执行跟随当前活动连接）
     fn bound_connection(&self) -> Option<String> {
@@ -8412,16 +8422,21 @@ pub(crate) fn render_editor_status_bar(
         elapsed: snapshot.elapsed,
         connection: snapshot.connection.as_deref(),
         dialect: snapshot.dialect.as_deref(),
-        channel: snapshot.channel.as_deref(),
+        // 执行方式由左段 channel 控件表达（可点切换）；文本段不再重复显示
+        channel: None,
         env: snapshot.env.as_deref(),
         file_type: snapshot.file_type.as_deref(),
         lsp: snapshot.lsp.as_deref(),
         tx: snapshot.tx.as_deref(),
+        session: snapshot.session.as_deref(),
+        kernel: snapshot.kernel.as_deref(),
+        units: snapshot.units.as_deref(),
     };
 
-    // 面包屑（执行通道）：仅 SQL 模式——连接 ▸ [库] ▸ Schema，替代纯文本连接段。
-    let breadcrumb = (snapshot.mode == EditorMode::Sql)
-        .then(|| render_breadcrumb_control(host, &panel_entity, cx))
+    // 执行方式控件（源库 / 加速 / 联邦）：面包屑已回工具栏，通道选择器迁到状态栏左段
+    // （§2.5 左段 = 方言 · 事务 · 执行方式）。
+    let channel_ctrl = (snapshot.mode == EditorMode::Sql)
+        .then(|| render_channel_control(host, &panel_entity))
         .flatten();
 
     // ── 交互控件：编辑模式 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
@@ -8641,27 +8656,32 @@ pub(crate) fn render_editor_status_bar(
     });
 
     let controls = status_bar::StatusControls {
-        breadcrumb,
+        // 连接 ▸ 库 ▸ Schema 面包屑已迁工具栏；状态栏不再占执行通道路径段
+        breadcrumb: None,
         edit_mode: Some(edit_mode_ctrl),
         reset_menu: Some(reset_ctrl),
         tx: tx_ctrl,
+        channel: channel_ctrl,
         interrupt,
     };
     Some(status_bar::render(&inputs, controls, cx).into_any_element())
 }
 
-/// SQL 模式状态栏左段面包屑（§2.5 / 执行通道）：连接 ▸ [库] ▸ Schema。
+/// 工具栏面包屑（执行通道）：连接 ▸ [库] ▸ Schema（2026-10-27 自状态栏迁回工具栏）。
 ///
-/// - 连接段 = **短码+名称**（不显示 ●/○ 点：列表只列在线连接，点信息冗余）；
-///   菜单只列**已建连**连接 +「跟随当前连接」（默认态，未绑即跟随活动连接）。
+/// - 连接段 = **短码+名称**，菜单只列**实时在线**连接 +「跟随当前连接」（默认态）；
+///   在线判定走 `online_ids`（事件路径实时查连接管理器）——导航建连成功不回写
+///   快照 `connected`，若按快照过滤会看不到刚连上的连接（真机复现）。
 /// - 库段 = 连接隐含的绑定库，非可切段（有 catalog 才显；跨库切换是后续项）。
 /// - Schema 段 = 可切（schemas + 使用连接默认）；未选给可点「schema ▾」占位。
+/// - 段名过长统一截断（工具栏空间有限），容器限宽 + overflow_hidden 兜底。
 fn render_breadcrumb_control(
     host: &EditorHostPanel,
     panel_entity: &Entity<EditorHostPanel>,
-    cx: &App,
+    theme: &gpui_kit::component::Theme,
 ) -> Option<AnyElement> {
     let entity = panel_entity.clone();
+    let shared = host.shared.clone();
     let options = host.shared.connection_options();
     let has_port = host.shared.has_connections();
     let bound = host
@@ -8672,23 +8692,16 @@ fn render_breadcrumb_control(
         .flatten();
     let has_bound = bound.is_some();
     let schemas = host.shared.schemas(bound.as_deref());
-    let muted = cx.theme().colors.muted_foreground;
+    let muted = theme.colors.muted_foreground;
 
-    // 在线连接预算成 (label, id) 列表，移进菜单闭包（避免 move 整个 options）。
-    let online_conns: Vec<(String, String)> = options
-        .iter()
-        .filter(|o| o.connected)
-        .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
-        .collect();
-
-    // 连接段标签：短码+名称；未绑 = 跟随当前连接。
+    // 连接段标签：短码+名称（长名截断）；未绑 = 跟随当前连接。
     let conn_label = bound
         .as_deref()
         .and_then(|id| {
             options
                 .iter()
                 .find(|o| o.id == id)
-                .map(|o| format!("{}·{}", o.short, o.name))
+                .map(|o| truncate_label(&format!("{}·{}", o.short, o.name), 20))
         })
         .unwrap_or_else(|| "跟随当前连接".to_string());
 
@@ -8715,6 +8728,13 @@ fn render_breadcrumb_control(
                     }),
             );
             menu = menu.separator();
+            // 实时在线（菜单打开时查，事件路径）：只列真在线连接
+            let online = shared.online_ids();
+            let online_conns: Vec<(String, String)> = options
+                .iter()
+                .filter(|o| online.contains(&o.id))
+                .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
+                .collect();
             if online_conns.is_empty() {
                 return menu.item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
             }
@@ -8741,7 +8761,7 @@ fn render_breadcrumb_control(
         let current_schema = schema.clone();
         let entity = entity.clone();
         let label = match &schema {
-            Some(s) => format!("{s} ▾"),
+            Some(s) => format!("{} ▾", truncate_label(s, 20)),
             None => "schema ▾".to_string(),
         };
         Button::new("editor-status-schema")
@@ -8781,13 +8801,16 @@ fn render_breadcrumb_control(
             })
     });
 
-    // 组装：连接 ▸ [库名] ▸ Schema（库名非可切段；连接隐含其绑定库）。
+    // 组装：连接 ▸ [库名] ▸ Schema（库名非可切段；连接隐含其绑定库）；
+    // 容器限宽 + overflow_hidden：长名截断之外的兜底（不把工具栏挤出窗口）。
     let mut breadcrumb = div()
         .h_flex()
         .items_center()
         .gap_1()
         .text_xs()
         .text_color(muted)
+        .max_w(rems(28.0))
+        .overflow_hidden()
         .child(conn_button);
     if let Some(catalog) = schema.as_ref().and_then(|s| {
         schemas
@@ -8795,10 +8818,72 @@ fn render_breadcrumb_control(
             .find(|item| item.schema == *s)
             .and_then(|item| item.catalog.clone())
     }) {
-        breadcrumb = breadcrumb.child(div().child("▸")).child(div().child(catalog));
+        breadcrumb = breadcrumb
+            .child(div().child("▸"))
+            .child(div().child(truncate_label(&catalog, 20)));
     }
     if let Some(schema_button) = schema_button {
         breadcrumb = breadcrumb.child(div().child("▸")).child(schema_button);
     }
     Some(breadcrumb.into_any_element())
+}
+
+/// 工具栏面包屑段长名截断（> `max` 字符 → 前 `max-1` + …；完整名靠菜单项 / 工具提示）
+fn truncate_label(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        let mut shortened: String = text.chars().take(max.saturating_sub(1)).collect();
+        shortened.push('…');
+        shortened
+    }
+}
+
+/// 状态栏左段「执行方式」控件（源库 / 加速 / 联邦可切；2026-10-27 自工具栏迁入）。
+///
+/// 菜单构建发生在点击时（事件路径）——`channel_menu` 的门控真值来自宿主注入的
+/// `ChannelsPort`；未注入端口时如实报「尚未接入」，不假装有通道可选。
+fn render_channel_control(
+    host: &EditorHostPanel,
+    panel_entity: &Entity<EditorHostPanel>,
+) -> Option<AnyElement> {
+    let entity = panel_entity.clone();
+    let current = host.channel();
+    let items = host.channel_menu();
+    let refresh_label = channel::refresh_item_label(current);
+    Some(
+        Button::new("editor-channel")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-channel".to_string())
+            // 执行位置图标化：图标（Locate = 定位执行到哪里）+ 通道短标签，去「执行位置：」文字前缀
+            .icon(IconName::Locate)
+            .label(format!("{} ▾", current.label()))
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
+                for item in items.iter() {
+                    let entity = entity.clone();
+                    let channel = item.channel;
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label.clone())
+                            .checked(item.current)
+                            .disabled(!item.available)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| panel.set_channel(channel, cx));
+                            }),
+                    );
+                }
+                if let Some(label) = refresh_label {
+                    let entity = entity.clone();
+                    menu = menu.separator().item(PopupMenuItem::new(label).on_click(
+                        move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.refresh_source(cx));
+                        },
+                    ));
+                }
+                menu
+            })
+            .into_any_element(),
+    )
 }

@@ -66,6 +66,22 @@ impl ConnectionsPort for WorkbenchConnections {
         }
         Ok(())
     }
+
+    /// **事件路径专用**（连接菜单打开时调用，**禁止 render 路径调用**）：实时查连接管理器。
+    ///
+    /// 导航建连成功只回写导航快照（`submit_connect_outcome`），**不回写**
+    /// [`Shared::connections`] 的 `connected` 字段——所以“只列在线”不能看快照缓存，
+    /// 否则刚在导航里连上的连接在编辑器菜单里看不到（真机复现）。此处一次性批量查询
+    /// 运行时的全部连接 id（`get_all_connection_ids` 只查内存表，无池副作用）。
+    fn online_ids(&self) -> std::collections::HashSet<String> {
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            return std::collections::HashSet::new();
+        };
+        runtime
+            .block_on(engine::get_connection_manager().get_all_connection_ids())
+            .into_iter()
+            .collect()
+    }
 }
 
 /// id 前缀 → 作用域短码（口径同 `engine::persistence::id_prefix`）

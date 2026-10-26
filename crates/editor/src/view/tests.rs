@@ -8539,6 +8539,9 @@ fn status_bar_shows_the_env_segment_in_general_mode(cx: &mut TestAppContext) {
             file_type: Some("类型 Python"),
             lsp: None,
             tx: None,
+            session: None,
+            kernel: None,
+            units: None,
         },
     );
     assert!(
@@ -8609,6 +8612,9 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             file_type: Some("类型 Python"),
             lsp: None,
             tx: None,
+            session: None,
+            kernel: None,
+            units: None,
         },
     );
     assert!(
@@ -8645,6 +8651,9 @@ fn status_bar_shows_the_script_file_type_segment_in_general_mode(cx: &mut TestAp
             file_type: None,
             lsp: None,
             tx: None,
+            session: None,
+            kernel: None,
+            units: None,
         },
     );
     assert!(

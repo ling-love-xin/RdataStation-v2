@@ -335,8 +335,10 @@ fn run_app() {
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),
                 // M3 连接对话框（独立于 workbench 的元素层）：
                 // 仅在对话框容器的 key_context("connection-dialog") 内生效；
-                // secondary-enter 在 Windows/Linux 即 Ctrl+Enter。
-                KeyBinding::new("secondary-enter", SaveConnection, Some("connection-dialog")),
+                // Ctrl+Enter 保存（= 旧 `secondary-enter`；gpui-pre 0.3.10 静态绑定
+                // 不再解析 `secondary-` 前缀——动态解析需 `KeyBinding::load` 按 OS 解析，
+                // Windows/Linux 下 Ctrl+Enter 语义一致，直接写显式键）。
+                KeyBinding::new("ctrl-enter", SaveConnection, Some("connection-dialog")),
                 KeyBinding::new("ctrl-t", TestConnection, Some("connection-dialog")),
                 KeyBinding::new("up", DraftPrev, Some("connection-dialog")),
                 KeyBinding::new("down", DraftNext, Some("connection-dialog")),
