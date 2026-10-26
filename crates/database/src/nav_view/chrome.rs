@@ -248,6 +248,8 @@ impl NavView {
         let border = cx.theme().colors.border;
         let accent = cx.theme().colors.primary;
         let source_filter = self.nav.borrow().source_filter;
+        // B6 staged：待提交条目数（面板头「提交 N」按钮预算；空集不渲染、不占槽位）。
+        let staged_count = self.nav.borrow().staged_count();
 
         // 面板头「⟳ 刷新元数据」「断开当前连接」的作用目标：当前选中的连接。
         let current_conn = self.nav_current_connection();
@@ -393,6 +395,50 @@ impl NavView {
                         }
                     }),
             )
+            // B6 staged：有待提交条目时显示「提交 N」；空集不渲染、不占槽位（常态零干扰）。
+            // 点击走两阶段：Context 内拍快照与文案，App 作用域开汇总确认对话框；OK 回调
+            // 触发后台逐条提交执行（同 B6-4 DeleteToStaged 开窗口径）。
+            .when(staged_count > 0, |h| {
+                h.child(
+                    Button::new("nav-commit-staged")
+                        .ghost()
+                        .small()
+                        .label(format!("提交 {staged_count}"))
+                        .tooltip(format!("提交 {staged_count} 项待变更（提交后不可恢复）"))
+                        .on_click({
+                            let entity = cx.entity();
+                            move |_, window, app| {
+                                let Some(prepared) =
+                                    entity.update(app, |this, cx| this.prepare_commit_staged(cx))
+                                else {
+                                    return;
+                                };
+                                let entity = entity.clone();
+                                window.open_alert_dialog(app, move |alert, _window, _cx| {
+                                    let entity = entity.clone();
+                                    let prepared = prepared.clone();
+                                    let rows = staged_commit_rows(&prepared.plan, muted);
+                                    alert
+                                        .confirm()
+                                        .title(prepared.title)
+                                        .description(prepared.description)
+                                        .button_props(
+                                            DialogButtonProps::default()
+                                                .ok_text(prepared.ok_text)
+                                                .ok_variant(ButtonVariant::Danger)
+                                                .show_cancel(true),
+                                        )
+                                        .children(rows)
+                                        .on_ok(move |_, _, app| {
+                                            let entity = entity.clone();
+                                            entity.update(app, |this, cx| this.commit_staged(cx));
+                                            true
+                                        })
+                                });
+                            }
+                        }),
+                )
+            })
             .child(
                 // 更多（⋯）：刷新全部元数据 / 显示开关 / 缓存管理 / 删除当前连接（原型对齐）。
                 Button::new("nav-more")
@@ -1216,6 +1262,40 @@ impl NavView {
                                 entity.update(app, |this, cx| {
                                     this.apply_staged_enqueue(staged, cx)
                                 });
+                                true
+                            })
+                    });
+                }
+            })
+            // B6 staged：`Ctrl+S` 打开汇总确认对话框；空集由 `prepare_commit_staged` 记提示返回
+            // None，不开窗。两阶段口径同 `DeleteToStaged`：Context 内拍快照，App 作用域开窗。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavCommitStaged, window, app| {
+                    let Some(prepared) =
+                        entity.update(app, |this, cx| this.prepare_commit_staged(cx))
+                    else {
+                        return;
+                    };
+                    let entity = entity.clone();
+                    window.open_alert_dialog(app, move |alert, _window, _cx| {
+                        let entity = entity.clone();
+                        let prepared = prepared.clone();
+                        let rows = staged_commit_rows(&prepared.plan, muted);
+                        alert
+                            .confirm()
+                            .title(prepared.title)
+                            .description(prepared.description)
+                            .button_props(
+                                DialogButtonProps::default()
+                                    .ok_text(prepared.ok_text)
+                                    .ok_variant(ButtonVariant::Danger)
+                                    .show_cancel(true),
+                            )
+                            .children(rows)
+                            .on_ok(move |_, _, app| {
+                                let entity = entity.clone();
+                                entity.update(app, |this, cx| this.commit_staged(cx));
                                 true
                             })
                     });

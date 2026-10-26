@@ -4,9 +4,18 @@
 //! 渲染期只读的纪律（render 内不做 I/O）在 `chrome.rs` / `rows.rs` 的注释里。
 
 use super::*;
-use super::{EnqueueOutcome, PreparedStaged, StagedOp};
+use super::{EnqueueOutcome, PreparedCommit, PreparedStaged, StagedOp};
 use crate::nav::capability::{NavOp, property_kind_to_object_kind};
 use crate::nav_jobs::JobPriority;
+
+/// 单条待提交动作的后台执行结果（批量提交收口时回 UI 线程批量回写状态机用；仅本模块内部）。
+struct StagedCommitOutcome {
+    key: String,
+    conn_id: String,
+    ok: bool,
+    qualified: String,
+    error: Option<String>,
+}
 
 impl NavView {
     /// 写回 facet 筛选到 `settings.json`（chips 状态为准；搜索 token 不持久化）。
@@ -2197,5 +2206,133 @@ impl NavView {
             description,
             ok_text,
         })
+    }
+
+    /// `Ctrl+S` 路径的 Context 内校验段：拍快照 → 空集提示返回 `None`；否则组装汇总对话框
+    /// 候选。返回 `None` 时由动作处理器在 App 作用域决定是否开窗（同 B6-4 两阶段口径：
+    /// Context 回调拿不到 `&mut App`）。
+    pub(super) fn prepare_commit_staged(&mut self, cx: &mut Context<Self>) -> Option<PreparedCommit> {
+        let plan = self.nav.borrow().commit_plan();
+        if plan.is_empty() {
+            self.host.notice("待提交清单为空".to_string(), cx);
+            return None;
+        }
+        let total = plan.len();
+        Some(PreparedCommit {
+            plan,
+            title: format!("提交 {total} 项变更"),
+            description: "以下操作提交后不可恢复，请逐项核对清单。".to_string(),
+            ok_text: format!("提交 {total} 项变更"),
+        })
+    }
+
+    /// 确认汇总对话框后真正逐条执行待提交 DDL（§4.8 D8：逐条独立、成功移除、失败保留附错、
+    /// 部分失败不中断；不包整批事务——MySQL InnoDB DDL 隐式提交不可回滚，四驱动事务口径不成立）。
+    ///
+    /// 执行模型：快照 → 按连接分组 → 后台串行逐条生成 DDL 并执行 → 回 UI 线程批量回写状态机 →
+    /// 涉及连接去重逐个刷新 → 汇总提示。v1 组内 / 组间均串行；跨连接并行留 v2（连接池 per-conn
+    /// 信号量已就位，本批不引跨连接并发）。确认间隙用户单项移除 / 撤销过的条目，回写时按 key
+    /// 判存在：成功移除找不到条目自然空操作，失败回写定位不到条目也静默跳过。
+    pub(super) fn commit_staged(&mut self, cx: &mut Context<Self>) {
+        let plan = self.nav.borrow().commit_plan();
+        if plan.is_empty() {
+            self.host.notice("待提交清单为空".to_string(), cx);
+            return;
+        }
+        let groups = NavViewState::group_by_conn(plan);
+
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        let host = self.host.clone();
+        let manager = engine::get_connection_manager().clone();
+
+        let _ = cx.spawn(async move |_this, cx| {
+            let mut outcomes: Vec<StagedCommitOutcome> = Vec::new();
+            for (_cid, entries) in groups {
+                for entry in entries {
+                    // 进 future 的字段在闭包外提前克隆：`async move` 按值捕获，条目本体要留给
+                    // 后续 outcome 回写（成功移除 / 失败附错），不能被第一次迭代 move 走。
+                    let key = entry.key.clone();
+                    let conn_id = entry.conn_id.clone();
+                    let qualified = staged_qualified_name(&entry);
+                    let catalog = entry.catalog.clone().unwrap_or_default();
+                    let sql: Result<String, shared::error::CoreError> = match entry.op {
+                        NavOp::Drop => crate::sql_gen::drop_object_sql(
+                            &entry.driver,
+                            entry.object_kind,
+                            entry.schema.as_deref(),
+                            &entry.object_name,
+                            entry.parent.as_deref(),
+                        ),
+                        NavOp::Truncate => crate::sql_gen::truncate_table_sql(
+                            &entry.driver,
+                            entry.schema.as_deref(),
+                            &entry.object_name,
+                        ),
+                        // 兜底：本地动作（复制 / 属性 / 打开 SQL 等）按 D5 不进 staged 族，
+                        // 理论上不会到达这里；命中即记失败、不发查询，保证 match 穷尽。
+                        _ => Err(shared::error::CoreError::Common(
+                            shared::error::CommonError::NotSupported(
+                                "非破坏性动作不得进入待提交清单".to_string(),
+                            ),
+                        )),
+                    };
+                    let mgr = manager.clone();
+                    let conn_id_for_query = conn_id.clone();
+                    let result = match sql {
+                        Ok(sql) => executor
+                            .spawn(async move {
+                                crate::metadata_service::MetadataService::new(mgr)
+                                    .execute_query(&conn_id_for_query, &catalog, &sql)
+                                    .await
+                                    .map(|_| ())
+                            })
+                            .await,
+                        Err(e) => Err(e),
+                    };
+                    match result {
+                        Ok(()) => outcomes.push(StagedCommitOutcome {
+                            key,
+                            conn_id,
+                            ok: true,
+                            qualified,
+                            error: None,
+                        }),
+                        Err(e) => outcomes.push(StagedCommitOutcome {
+                            key,
+                            conn_id,
+                            ok: false,
+                            qualified,
+                            error: Some(e.to_string()),
+                        }),
+                    }
+                }
+            }
+            let _ = weak.update(cx, |view, cx| {
+                let mut ok = 0usize;
+                let mut failed: Vec<(String, String)> = Vec::new();
+                let mut touched: Vec<String> = Vec::new();
+                for outcome in outcomes {
+                    if outcome.ok {
+                        view.nav.borrow_mut().dismiss_staged(&outcome.key);
+                        ok += 1;
+                    } else {
+                        let err = outcome.error.unwrap_or_default();
+                        view.nav
+                            .borrow_mut()
+                            .mark_staged_failed(&outcome.key, err.clone());
+                        failed.push((outcome.qualified, err));
+                    }
+                    if !touched.contains(&outcome.conn_id) {
+                        touched.push(outcome.conn_id.clone());
+                    }
+                }
+                for cid in touched {
+                    view.refresh_connection_after_filter(&cid, cx);
+                }
+                host.notice(staged_commit_summary(ok, &failed), cx);
+                cx.notify();
+            });
+        });
     }
 }

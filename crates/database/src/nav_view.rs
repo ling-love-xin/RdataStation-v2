@@ -54,8 +54,8 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 use crate::commands::{
-    NavClearSearch, NavCollapse, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome,
-    NavOpenProperties, NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp,
+    NavClearSearch, NavCollapse, NavCommitStaged, NavDeleteToStaged, NavDown, NavEnd, NavExpand,
+    NavHome, NavOpenProperties, NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp,
     NavRevertAllStaged, NavUp,
 };
 use crate::model::{
@@ -315,6 +315,18 @@ pub(super) struct PreparedStaged {
     pub ok_text: &'static str,
 }
 
+/// 汇总确认对话框的校验候选（两阶段开窗，同 [`PreparedStaged`] 口径：Context 内取快照与
+/// 文案，App 作用域开窗；OK 回调再回状态机触发后台提交执行）。
+#[derive(Clone, Debug)]
+pub(super) struct PreparedCommit {
+    /// 快照条目（确认对话框 children 清单据此渲染；执行时再从状态机取最新快照，
+    /// 避免确认间隙用户单项移除 / 撤销后仍执行旧清单）。
+    pub plan: Vec<StagedOp>,
+    pub title: String,
+    pub description: String,
+    pub ok_text: String,
+}
+
 #[derive(Default)]
 pub struct NavViewState {
     /// 来源筛选（None = 全部）。
@@ -521,6 +533,34 @@ impl NavViewState {
     /// 提交计划快照（克隆；不与内部集合共享可变引用，供 B6-5 分组后台执行）。
     pub(super) fn commit_plan(&self) -> Vec<StagedOp> {
         self.staged_ops.clone()
+    }
+
+    /// 提交执行失败回写：按 key 定位条目并附上错误文案；未命中（执行间隙被用户单项移除 /
+    /// 撤销）则静默不动。成功条目由 [`Self::dismiss_staged`] 移除，错误随之消失。
+    pub(super) fn mark_staged_failed(&mut self, key: &str, error: String) {
+        if let Some(entry) = self.staged_ops.iter_mut().find(|op| op.key == key) {
+            entry.error = Some(error);
+        }
+    }
+
+    /// 提交计划按 `conn_id` 分组（B6-5）：组序 = 连接在快照中**首次出现**的顺序，组内保持
+    /// 原入队顺序；供后台逐条执行与收尾时连接去重刷新共用同一份分组结果。
+    pub(super) fn group_by_conn(plan: Vec<StagedOp>) -> Vec<(String, Vec<StagedOp>)> {
+        let mut order: Vec<String> = Vec::new();
+        let mut buckets: HashMap<String, Vec<StagedOp>> = HashMap::new();
+        for entry in plan {
+            if !buckets.contains_key(&entry.conn_id) {
+                order.push(entry.conn_id.clone());
+            }
+            buckets.entry(entry.conn_id.clone()).or_default().push(entry);
+        }
+        order
+            .into_iter()
+            .map(|cid| {
+                let entries = buckets.remove(&cid).unwrap_or_default();
+                (cid, entries)
+            })
+            .collect()
     }
 }
 

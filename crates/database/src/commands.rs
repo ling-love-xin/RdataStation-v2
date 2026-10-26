@@ -36,6 +36,8 @@ actions!(
         /// B6 staged：撤销全部待提交变更（`ctrl-z`，单层撤销，回到未入队状态）。
         NavRevertAllStaged,
         /// B6 staged：把当前选中对象加入待提交删除清单（`delete`，走单项确认对话框）。
-        NavDeleteToStaged
+        NavDeleteToStaged,
+        /// B6 staged：提交待提交清单（`ctrl-s`，先弹汇总确认对话框，逐条独立执行、部分失败保留）。
+        NavCommitStaged
     ]
 );

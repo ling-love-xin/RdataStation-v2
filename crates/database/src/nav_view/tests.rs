@@ -1486,6 +1486,49 @@ fn staged_commit_plan_is_independent_snapshot() {
     assert_eq!(state.staged_count(), 0);
 }
 
+#[test]
+fn staged_group_by_conn_preserves_first_seen_order_and_within_order() {
+    let a = mk_staged("G_1/shop/public/orders", NavOp::Drop);
+    let mut b = mk_staged("G_2/warehouse/public/items", NavOp::Truncate);
+    let c = mk_staged("G_1/shop/public/logs", NavOp::Drop);
+    b.conn_id = "G_2".to_string();
+    let plan = vec![a, b, c];
+    let groups = NavViewState::group_by_conn(plan);
+    // 组序 = 连接首次出现顺序；组内保持入队顺序。
+    let group_ids: Vec<&str> = groups.iter().map(|(cid, _)| cid.as_str()).collect();
+    assert_eq!(group_ids, vec!["G_1", "G_2"]);
+    let g1: Vec<&str> = groups[0].1.iter().map(|e| e.key.as_str()).collect();
+    let g2: Vec<&str> = groups[1].1.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(g1, vec!["G_1/shop/public/orders", "G_1/shop/public/logs"]);
+    assert_eq!(g2, vec!["G_2/warehouse/public/items"]);
+}
+
+#[test]
+fn staged_mark_failed_attaches_error_and_unknown_key_is_noop() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    state.mark_staged_failed("G_1/shop/public/orders", "连接已断开".to_string());
+    let entry = state.staged_lookup("G_1/shop/public/orders").expect("条目应保留");
+    assert_eq!(entry.error.as_deref(), Some("连接已断开"));
+    // 未命中 key（执行间隙被单项移除 / 撤销）静默不动，不 panic。
+    state.mark_staged_failed("G_1/shop/public/missing", "x".to_string());
+    assert_eq!(state.staged_count(), 1);
+}
+
+#[test]
+fn staged_success_dismiss_and_failure_mark_coexist_in_commit_writeback() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    state.enqueue_staged(mk_staged("G_1/shop/public/items", NavOp::Truncate));
+    // 模拟提交回写编排：成功条目移除，失败条目保留并附错，两条互不干扰。
+    state.dismiss_staged("G_1/shop/public/orders");
+    state.mark_staged_failed("G_1/shop/public/items", "关系不存在".to_string());
+    assert!(state.staged_lookup("G_1/shop/public/orders").is_none(), "成功应移除");
+    let kept = state.staged_lookup("G_1/shop/public/items").expect("失败应保留");
+    assert_eq!(kept.error.as_deref(), Some("关系不存在"));
+    assert_eq!(state.staged_count(), 1);
+}
+
 // ---------- B6-4 视图方法接线（薄包装委托状态机；stub 宿主 notice 走空实现，不记录文案）----------
 
 /// 窗口级：确认回调经 `apply_staged_enqueue` 入队后，视图状态集合可查回。
@@ -1567,6 +1610,47 @@ fn staged_revert_empty_set_is_noop(cx: &mut gpui_kit::TestAppContext) {
     });
     let count = cx.update(|_window, cx| view.read(cx).nav.borrow().staged_count());
     assert_eq!(count, 0);
+}
+
+/// 窗口级：空集合 `commit_staged` 在守卫内直接返回，不触达后台执行、不 panic（stub 宿主不接真实库）。
+#[gpui_kit::test]
+fn staged_commit_empty_set_is_noop(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.commit_staged(cx));
+    });
+    let count = cx.update(|_window, cx| view.read(cx).nav.borrow().staged_count());
+    assert_eq!(count, 0);
+}
+
+/// 窗口级：`prepare_commit_staged` 空集记提示返回 `None`；非空返回汇总候选（标题 / OK 文案带计数、
+/// 清单快照条数一致、描述为固定不可恢复警告）。后台执行编排不在 headless 断言（D10 口径）。
+#[gpui_kit::test]
+fn staged_prepare_commit_candidate_copy_matches_count(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    // 空集：不开窗。
+    let empty = cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.prepare_commit_staged(cx))
+    });
+    assert!(empty.is_none(), "空集不得产出汇总候选");
+
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_staged_enqueue(mk_staged("G_1/shop/public/orders", NavOp::Drop), cx);
+        });
+    });
+    let prepared = cx
+        .update(|_window, cx| view.update(cx, |v, cx| v.prepare_commit_staged(cx)))
+        .expect("非空应产出汇总候选");
+    assert_eq!(prepared.title, "提交 1 项变更");
+    assert_eq!(prepared.ok_text, "提交 1 项变更");
+    assert_eq!(
+        prepared.description,
+        "以下操作提交后不可恢复，请逐项核对清单。"
+    );
+    assert_eq!(prepared.plan.len(), 1);
 }
 
 /// 窗口级：`Esc`（`NavClearSearch`）只清搜索框，facet 与选中不动。

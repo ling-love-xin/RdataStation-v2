@@ -33,11 +33,11 @@ use settings::model::AppearanceMode;
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, GenerateMock, NavClearSearch, NavCollapse,
-    NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties, NavPageDown,
-    NavPageUp, NavRename, NavReorderDown, NavReorderUp, NavRevertAllStaged, NavUp, QuickOpenLocate,
-    SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile,
-    ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp, SwitchProject,
-    TestConnection, ToggleQuickGoto, ToggleQuickOpen,
+    NavCommitStaged, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties,
+    NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp, NavRevertAllStaged, NavUp,
+    QuickOpenLocate, SaveConnection, ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown,
+    ScratchpadNewFile, ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
+    SwitchProject, TestConnection, ToggleQuickGoto, ToggleQuickOpen,
 };
 
 mod assets;
@@ -302,11 +302,12 @@ fn run_app() {
                 KeyBinding::new("alt-up", NavReorderUp, Some("database-nav")),
                 KeyBinding::new("alt-down", NavReorderDown, Some("database-nav")),
                 // B6 staged：`Delete` 把当前选中对象加入待提交删除清单（单项确认后入队）；
-                // `Ctrl+Z` 撤销全部待提交变更。两者只在 database-nav 焦点内生效——
-                // `delete` 的 scratchpad / analytics-resource 绑定、`ctrl-z` 的结果网格
-                // 绑定都在各自更深 context，互不抢占。
+                // `Ctrl+Z` 撤销全部待提交变更；`Ctrl+S` 打开汇总确认对话框提交清单。三者只在
+                // database-nav 焦点内生效——`delete` 的 scratchpad / analytics-resource 绑定、
+                // `ctrl-z` 的结果网格绑定、`ctrl-s` 的编辑器保存绑定都在各自更深 context，互不抢占。
                 KeyBinding::new("delete", NavDeleteToStaged, Some("database-nav")),
                 KeyBinding::new("ctrl-z", NavRevertAllStaged, Some("database-nav")),
+                KeyBinding::new("ctrl-s", NavCommitStaged, Some("database-nav")),
                 // M5 草稿箱：全选 / 重命名 / 删除 / 取消编辑 / 树内导航（仅当焦点在草稿箱面板内时生效）。
                 KeyBinding::new("ctrl-a", ScratchpadSelectAll, Some("scratchpad")),
                 KeyBinding::new("f2", ScratchpadRename, Some("scratchpad")),

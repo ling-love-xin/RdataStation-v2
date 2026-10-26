@@ -32,8 +32,8 @@ actions!(
 
 // 数据源导航（M4）局部动作：定义在 `database::commands`（随导航视图归位），此处重导。
 pub use database::commands::{
-    NavClearSearch, NavCollapse, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome,
-    NavOpenProperties, NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp,
+    NavClearSearch, NavCollapse, NavCommitStaged, NavDeleteToStaged, NavDown, NavEnd, NavExpand,
+    NavHome, NavOpenProperties, NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp,
     NavRevertAllStaged, NavUp,
 };
 

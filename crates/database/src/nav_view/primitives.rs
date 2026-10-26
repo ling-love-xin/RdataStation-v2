@@ -1108,6 +1108,81 @@ pub(super) fn staged_dialog_copy(
     Some((title, description, ok_text))
 }
 
+/// B6 汇总确认清单 / 失败提示里的**动作标签**（纯函数，无菜单省略号「…」）。
+///
+/// 与 [`staged_menu_label`] 的区别：菜单文案带 `…` 表示会弹对话框；清单行只陈述要执行的
+/// 动作，故用「删除表 / 清空表 / 删除视图 / 删除序列」。动作 × 类别不匹配时返回 `None`
+/// （注册表 `applies` 同源，正常路径不会出现）。
+pub(super) fn staged_action_label(op: NavOp, kind: ObjectKind) -> Option<&'static str> {
+    match (op, kind) {
+        (NavOp::Drop, ObjectKind::Table) => Some("删除表"),
+        (NavOp::Drop, ObjectKind::View) => Some("删除视图"),
+        (NavOp::Drop, ObjectKind::Sequence) => Some("删除序列"),
+        (NavOp::Truncate, ObjectKind::Table) => Some("清空表"),
+        _ => None,
+    }
+}
+
+/// 待提交条目的展示限定名（`catalog.schema.name`，无引号转义；执行 DDL 的引号转义由
+/// L3 方言 provider 完成）。与 [`nav_qualified_name`] 同口径，入参是自存身份字段的条目。
+pub(super) fn staged_qualified_name(op: &StagedOp) -> String {
+    crate::sql_gen::qualified_name(op.catalog.as_deref(), op.schema.as_deref(), &op.object_name)
+}
+
+/// 批量提交汇总提示文案（纯函数；成功 / 失败计数 + 失败明细，超 5 条折叠）。
+///
+/// - 全成功：单行「已提交 X 项变更」；
+/// - 有失败：首行「成功 X 项、失败 Y 项」，随后逐条 `· 限定名：错误`；失败 > 5 条只列前 5，
+///   末行折叠为「…等 Y 项失败，详见日志」（§4.8 D8：失败明细进汇总 notice，v1 不做行级失败气泡）。
+pub(super) fn staged_commit_summary(ok: usize, failed: &[(String, String)]) -> String {
+    let failed_total = failed.len();
+    if failed_total == 0 {
+        return format!("已提交 {ok} 项变更");
+    }
+    let mut lines = vec![format!("成功 {ok} 项、失败 {failed_total} 项")];
+    const DETAIL_LIMIT: usize = 5;
+    let shown = failed.iter().take(DETAIL_LIMIT);
+    for (qualified, error) in shown {
+        lines.push(format!("· {qualified}：{error}"));
+    }
+    if failed_total > DETAIL_LIMIT {
+        lines.push(format!("…等 {failed_total} 项失败，详见日志"));
+    }
+    lines.join("\n")
+}
+
+/// 汇总确认对话框清单行（纯函数；动作标签弱色固定宽列 + 限定名省略号截断）。
+///
+/// 面板头「提交 N」按钮与 `Ctrl+S` 键盘入口共用同一份行构造，避免两处各写一遍布局；
+/// 标签由 [`staged_action_label`] 兜底 `None`（注册表 `applies` 同源，正常路径不出现）。
+pub(super) fn staged_commit_rows(plan: &[StagedOp], muted: Hsla) -> Vec<AnyElement> {
+    plan.iter()
+        .filter_map(|entry| {
+            staged_action_label(entry.op, entry.object_kind).map(|label| {
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .text_xs()
+                    .items_start()
+                    .child(
+                        div()
+                            .w_12()
+                            .flex_none()
+                            .text_color(muted)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(staged_qualified_name(entry)),
+                    )
+                    .into_any_element()
+            })
+        })
+        .collect()
+}
+
 /// 内容档 snippet 的分段（纯函数，可单测）：解析 `<mark>…</mark>` 标记，
 /// 返回 `(文本, 是否命中)` 序列。无标记 / 标记残缺时整体为未命中段。
 pub(super) fn nav_snippet_segments(snippet: &str) -> Vec<(String, bool)> {
@@ -1387,7 +1462,8 @@ mod tests {
         nav_glob_match, nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
         nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
         placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
-        staged_dialog_copy, staged_menu_label, size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER,
+        staged_action_label, staged_commit_summary, staged_dialog_copy, staged_menu_label,
+        staged_qualified_name, size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER, StagedOp,
     };
     use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, ObjectKind};
     use crate::nav::capability::NavOp;
@@ -2141,5 +2217,88 @@ mod tests {
         // 不适用组合不产出对话框。
         assert!(staged_dialog_copy(NavOp::Truncate, ObjectKind::View, "v").is_none());
         assert!(staged_dialog_copy(NavOp::Drop, ObjectKind::Routine, "f").is_none());
+    }
+
+    #[test]
+    fn staged_action_label_maps_four_families_and_rejects_mismatch() {
+        // 清单行动作标签不带菜单省略号「…」（与 `staged_menu_label` 区分）。
+        assert_eq!(
+            staged_action_label(NavOp::Drop, ObjectKind::Table),
+            Some("删除表")
+        );
+        assert_eq!(
+            staged_action_label(NavOp::Drop, ObjectKind::View),
+            Some("删除视图")
+        );
+        assert_eq!(
+            staged_action_label(NavOp::Drop, ObjectKind::Sequence),
+            Some("删除序列")
+        );
+        assert_eq!(
+            staged_action_label(NavOp::Truncate, ObjectKind::Table),
+            Some("清空表")
+        );
+        // 不适用组合不产出标签（注册表 `applies` 同源，正常路径不出现）。
+        assert!(staged_action_label(NavOp::Truncate, ObjectKind::View).is_none());
+        assert!(staged_action_label(NavOp::Drop, ObjectKind::Routine).is_none());
+    }
+
+    #[test]
+    fn staged_qualified_name_builds_catalog_schema_name_by_availability() {
+        let full = StagedOp {
+            key: "k1".to_string(),
+            conn_id: "G_1".to_string(),
+            driver: "postgresql".to_string(),
+            catalog: Some("shop".to_string()),
+            schema: Some("public".to_string()),
+            parent: None,
+            object_name: "orders".to_string(),
+            object_kind: ObjectKind::Table,
+            op: NavOp::Drop,
+            error: None,
+        };
+        assert_eq!(staged_qualified_name(&full), "shop.public.orders");
+
+        let no_catalog = StagedOp {
+            catalog: None,
+            ..full.clone()
+        };
+        assert_eq!(staged_qualified_name(&no_catalog), "public.orders");
+
+        let no_schema = StagedOp {
+            schema: None,
+            ..full
+        };
+        assert_eq!(staged_qualified_name(&no_schema), "shop.orders");
+    }
+
+    #[test]
+    fn staged_commit_summary_single_line_when_all_succeed() {
+        let text = staged_commit_summary(3, &[]);
+        assert_eq!(text, "已提交 3 项变更");
+    }
+
+    #[test]
+    fn staged_commit_summary_lists_failures_up_to_five_then_collapses() {
+        let two: Vec<(String, String)> = vec![
+            ("shop.public.orders".to_string(), "连接已断开".to_string()),
+            ("shop.public.items".to_string(), "关系不存在".to_string()),
+        ];
+        let text = staged_commit_summary(1, &two);
+        assert!(text.starts_with("成功 1 项、失败 2 项"));
+        assert!(text.contains("· shop.public.orders：连接已断开"));
+        assert!(text.contains("· shop.public.items：关系不存在"));
+        assert!(!text.contains("等 2 项失败"), "≤5 条不得折叠");
+
+        let seven: Vec<(String, String)> = (0..7)
+            .map(|i| (format!("shop.public.t{i}"), "执行超时".to_string()))
+            .collect();
+        let text = staged_commit_summary(2, &seven);
+        assert!(text.starts_with("成功 2 项、失败 7 项"));
+        assert!(text.contains("· shop.public.t0：执行超时"));
+        assert!(text.contains("· shop.public.t4：执行超时"), "前 5 条全列");
+        assert!(!text.contains("t5"), "第 6 条起折叠不展开");
+        assert!(!text.contains("t6"));
+        assert!(text.contains("…等 7 项失败，详见日志"), "超 5 条折叠行");
     }
 }
