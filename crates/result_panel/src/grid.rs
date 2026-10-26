@@ -40,6 +40,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
@@ -57,6 +58,8 @@ use gpui_kit::*;
 // TSV 转义（剪贴板 / 导出的唯一实现，与 mock 预览表共用）：本 crate 根部有同名模块
 // `crate::shared`，所以 `shared` 得从 crate 外路径（`::`）进来
 use ::shared::string::{tsv_cell, tsv_row};
+// 【B5】事实帧只读引用：交互派生（列式统计 / 原生数值排序）时读取；不进每帧 render 路径
+use ::shared::{CurrentTier, FactColumnStats, FactFrame, FactKind};
 
 use crate::store::{ColumnKind, ColumnType};
 use crate::status::elapsed_text;
@@ -619,6 +622,10 @@ pub struct ResultGridDelegate {
     /// 与 `dirty` 分开：冲突格**不是**待提交的变更（提交已结束），它是「这一格没写进去、
     /// 源库里的旧值已被别人改过」的**提示**——底色用 danger 而不是 warning，一眼能分清。
     conflict: Vec<(usize, usize)>,
+    /// 【B5】这份结果的事实帧只读句柄（面板在 `set_data` **之后**同步进来，与类型 / 注释
+    /// 同口径时序）。仅用于交互派生时的列式取值（数值统计 / 原生数值排序）；render 纯读路径
+    /// 不解析它。表档帧 batches 已释放，此时本地统计 / 排序回退显示矩阵口径。
+    fact: Option<Arc<FactFrame>>,
 }
 
 impl ResultGridDelegate {
@@ -658,6 +665,9 @@ impl ResultGridDelegate {
         self.column_annotations.clear();
         // 【A9】来源表名同理（面板随后紧跟 set_result_table；漏给 = 不摆 INSERT 项）
         self.result_table = None;
+        // 【B5】事实帧同理：换结果不套上一份的列式数据（面板随后紧跟 set_fact；
+        // 漏给 = 本地统计 / 排序回退显示矩阵口径）
+        self.fact = None;
         self.rebuild_view_rows();
     }
 
@@ -704,6 +714,14 @@ impl ResultGridDelegate {
         self.result_table = table;
     }
 
+    /// 【B5】同步事实帧只读句柄（与 `set_data` 同一次同步里、在它之后调，与类型 / 注释同口径）。
+    ///
+    /// 面板只传共享句柄，不克隆 batches；本地数值统计 / 原生数值排序在交互派生时读取，
+    /// render 纯读路径不解析它。表档帧 batches 已释放，调用侧按空批回退矩阵口径。
+    pub fn set_fact(&mut self, fact: Option<Arc<FactFrame>>) {
+        self.fact = fact;
+    }
+
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
@@ -711,6 +729,8 @@ impl ResultGridDelegate {
         self.column_types.clear();
         // 【A9】来源表名跟着清（没有结果就没有 INSERT 目标）
         self.result_table = None;
+        // 【B5】事实帧跟着清：空网格不套上一份的列式数据
+        self.fact = None;
         self.view_rows = None;
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
@@ -1062,15 +1082,30 @@ impl ResultGridDelegate {
         if let Some((column, descending)) = self.sort {
             // 稳定排序：同值时按原顺序（用数据行号做 tie-break，与快排的不稳定性无关）
             view.sort_by(|left, right| {
-                let ordering = compare_cells(
-                    self.rows.get(*left).and_then(|row| row.get(column)),
-                    self.rows.get(*right).and_then(|row| row.get(column)),
-                );
+                let ordering = self.compare_rows(*left, *right, column);
                 let ordering = if descending { ordering.reverse() } else { ordering };
                 ordering.then(left.cmp(right))
             });
         }
         self.view_rows = Some(view);
+    }
+
+    /// 【B5】两行在某列上的比较：内存档数值列取事实帧原生 `f64` 比较（避免 `"1"` 与
+    /// `"1.0"` 字符串分裂、避免大整数被 parse 截断口径外的字符串误判）；任一格取不到原生
+    /// 数值（NULL / 文本族 / 表档 / 无事实档）整对回退显示矩阵的 [`compare_cells`]，
+    /// 不出现同一列两套排序口径混排。
+    fn compare_rows(&self, left: usize, right: usize, column: usize) -> std::cmp::Ordering {
+        if let Some(frame) = self.fact.as_ref() {
+            if let (Some(a), Some(b)) =
+                (frame.column_number(left, column), frame.column_number(right, column))
+            {
+                return a.total_cmp(&b);
+            }
+        }
+        compare_cells(
+            self.rows.get(left).and_then(|row| row.get(column)),
+            self.rows.get(right).and_then(|row| row.get(column)),
+        )
     }
 
     /// 这一行有没有单元格命中筛选词（大小写不敏感的子串，与 DBeaver 的本地筛选同类）
@@ -1560,12 +1595,47 @@ impl ResultGridDelegate {
     }
 
     /// 【P2-2】计算页：某数据列统计（列级访问器 → 列级纯函数，口径与矩阵版一致）
+    /// 【P2-2】计算页：某数据列统计。
+    ///
+    /// 【B5】内存档数值列走事实帧列式原生聚合（不经过显示字符串 parse）；无事实档、表档
+    /// （batches 已释放）或文本 / 二进制 / 其他族回退显示矩阵口径，行为与起步档一致。
     pub fn column_stats_for(&self, column: usize) -> ColumnStats {
+        if let Some(frame) = self.fact.as_ref() {
+            if let Some(fact_stats) = frame.column_stats(column) {
+                return stats_from_fact(fact_stats);
+            }
+        }
         column_stats_from_values(&self.column_values(column))
     }
 
-    /// 【P2-2】分组页：某数据列本地分组计数（同上，不物化整行矩阵）
+    /// 【P2-2】分组页：某数据列本地分组计数（不物化整行矩阵）。
+    ///
+    /// 【B5】内存档 Int / Float 列按原生数值归一化键分组（整数统一写成整数字面量，避免
+    /// `"1"` 与 `"1.0"` 被字符串等值拆成两组）；文本 / 二进制 / 其他族、表档（batches 已
+    /// 释放）、无事实档回退显示矩阵的字符串等值口径。
     pub fn group_by_for(&self, column: usize) -> Vec<(String, usize)> {
+        if let Some(frame) = self.fact.as_ref() {
+            if let Ok(FactKind::Int | FactKind::Float) = frame.column_kind(column) {
+                let mut keys: Vec<String> = Vec::with_capacity(self.view_len());
+                let mut native = true;
+                for view_ix in 0..self.view_len() {
+                    let Some(data_ix) = self.data_row(view_ix) else {
+                        continue;
+                    };
+                    match frame.column_number(data_ix, column) {
+                        Some(number) => keys.push(number_group_key(number)),
+                        // NULL / 取不到原生数值：整列回退矩阵，避免原生键与文本键混排。
+                        None => {
+                            native = false;
+                            break;
+                        }
+                    }
+                }
+                if native {
+                    return group_by_values(&keys);
+                }
+            }
+        }
         group_by_values(&self.column_values(column))
     }
 
@@ -1840,6 +1910,19 @@ pub fn column_stats_from_values(values: &[String]) -> ColumnStats {
     stats
 }
 
+/// 【B5】事实档列式统计 → 网格展示统计（字段一一对应；shared 不反向依赖本 crate，
+/// 故在此做一次窄映射，不把 `FactColumnStats` 泄漏到渲染层）。
+pub fn stats_from_fact(stats: FactColumnStats) -> ColumnStats {
+    ColumnStats {
+        count: stats.count,
+        nulls: stats.nulls,
+        min: stats.min,
+        max: stats.max,
+        sum: stats.sum,
+        avg: stats.avg,
+    }
+}
+
 /// 【分组】列级计数内核：输入已经是「一列取值」；保留首现顺序，`NULL` 独立成组。
 pub fn group_by_values(values: &[String]) -> Vec<(String, usize)> {
     let mut groups: Vec<(String, usize)> = Vec::new();
@@ -1851,6 +1934,16 @@ pub fn group_by_values(values: &[String]) -> Vec<(String, usize)> {
         }
     }
     groups
+}
+
+/// 【B5】数值分组键归一化：有限整数写成整数字面量（`2.0` → `"2"`），避免与 `2` 被拆成两组；
+/// 非整数 / 超大整数用标准浮点文本。`NaN` / `Infinity` 不进入本路径（事实帧数值族不含它们）。
+fn number_group_key(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.0e18 {
+        (value as i64).to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 /// 【P2-3】统计的展示行（一行一个键值；数值有则给，没有就不摆那一行）
@@ -2811,6 +2904,10 @@ pub struct ResultToolbar {
     pub lineage: Option<String>,
     /// 【B15】本地筛选生效时的（视图行数，已抓总行数）——原型 §5.5 要求“统计跟随并明示已筛选”
     pub filtered: Option<(usize, usize)>,
+    /// 【B5】事实档载体档位（`None` = 无事实档，回退显示矩阵降级档；不摆载体段）。
+    pub fact_tier: Option<CurrentTier>,
+    /// 【B5】事实档 Rust 堆估算字节：仅内存档有意义；表档 batches 已释放报 0，段上不摆字节。
+    pub fact_bytes: usize,
 }
 
 impl ResultToolbar {
@@ -2834,6 +2931,19 @@ impl ResultToolbar {
         }
         if let Some(elapsed_ms) = self.elapsed_ms {
             parts.push(format!("耗时 {}", duration_text(elapsed_ms)));
+        }
+        // 【B5】事实档载体可见性：内存档报列式占用；表档只标载体（表内占用归 DuckDB 侧，
+        // 不在这里估一份会失真的 Rust 堆字节）；无事实档不摆段。
+        match self.fact_tier {
+            Some(CurrentTier::InMemory) => {
+                if self.fact_bytes > 0 {
+                    parts.push(format!("内存档 {}", bytes_text(self.fact_bytes)));
+                } else {
+                    parts.push("内存档".to_string());
+                }
+            }
+            Some(CurrentTier::OnDuckDb) => parts.push("表档".to_string()),
+            Some(CurrentTier::None) | None => {}
         }
         // 【B15】血缘（原型 §2.4：结果集要带来源摘要）——排在连接之前：
         // “这份是怎么来的”比“从哪条连接来”更常被问
@@ -3033,6 +3143,24 @@ pub fn duration_text(elapsed_ms: u64) -> String {
         format!("{elapsed_ms} ms")
     } else {
         elapsed_text(std::time::Duration::from_millis(elapsed_ms))
+    }
+}
+
+/// 【B5】事实档占用字节归一化文案（KiB / MiB / GiB；保留一位小数，小于 1 KiB 报字节）。
+/// 表档 batches 已释放、Rust 堆占用为 0，调用方只摆「表档」标签、不摆字节段。
+pub fn bytes_text(bytes: usize) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -3343,10 +3471,11 @@ mod tests {
     use super::{
         CELL_DISPLAY_LIMIT, MAX_SINGLE_SEGMENT_ROWS, ContextAction, ContextTarget,
         ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, TextAlign, WINDOW_FETCH_NOTICE,
-        blob_summary, cell_matches, cell_style, clip_cell_display, column_distinct_values,
+        blob_summary, bytes_text, cell_matches, cell_style, clip_cell_display, column_distinct_values,
         column_stats, column_stats_from_values, compare_cells, context_menu_items, duration_text, fetch_more_hint,
         find_in_cell, fmt_stat_num, group_by_values, header_tooltip_lines, column_menu_items,
-        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of, stats_lines, status_action_placeholders,
+        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of, stats_from_fact,
+        stats_lines, status_action_placeholders,
         status_segments, thousands, truncation_notice, truncated_hint, validate_edit_value,
         window_fetch_active, FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
     };
@@ -3355,6 +3484,30 @@ mod tests {
     use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
+    // 【B5】事实档 fixture 构造（arrow 仅 dev-dependency，产品代码不引）
+    use ::shared::{CurrentTier, FactFrame};
+    use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
+    use arrow::datatypes::{Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    /// 【B5】由同构数组构造内存档事实帧（测试辅助；列名与数组顺序一一对应）。
+    fn fact_frame(columns: &[&str], arrays: Vec<ArrayRef>) -> Arc<FactFrame> {
+        let fields: Vec<Field> = columns
+            .iter()
+            .zip(arrays.iter())
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema, arrays).expect("构造 RecordBatch");
+        Arc::new(
+            FactFrame::new(
+                columns.iter().map(|n| n.to_string()).collect(),
+                vec![batch],
+            )
+            .expect("构造事实档"),
+        )
+    }
 
     fn grid() -> ResultGridDelegate {
         let mut grid = ResultGridDelegate::empty("尚未执行");
@@ -4987,5 +5140,141 @@ mod tests {
         assert!(grid.is_transposed());
         grid.set_data(vec!["x".to_string()], vec![vec!["9".to_string()]]);
         assert!(!grid.is_transposed(), "换结果自动退出转置");
+    }
+
+    // ===== 【B5】事实档列式保真分流 =====
+
+    /// 工具栏载体段：内存档报列式占用，表档只标载体，无事实档不摆段。
+    #[test]
+    fn toolbar_segments_show_fact_tier_and_occupancy() {
+        let memory = ResultToolbar {
+            rows: Some(2),
+            fact_tier: Some(CurrentTier::InMemory),
+            fact_bytes: 1_258_291,
+            ..Default::default()
+        };
+        assert_eq!(memory.segments(), ["行数 2", "内存档 1.2 MiB"]);
+
+        let table = ResultToolbar {
+            rows: Some(2),
+            fact_tier: Some(CurrentTier::OnDuckDb),
+            fact_bytes: 0,
+            ..Default::default()
+        };
+        assert_eq!(table.segments(), ["行数 2", "表档"]);
+
+        let none = ResultToolbar { rows: Some(2), ..Default::default() };
+        assert_eq!(none.segments(), ["行数 2"]);
+    }
+
+    /// 【B5】内存档数值列统计走事实档原生聚合：NULL 判定来自事实帧，不看矩阵文本。
+    #[test]
+    fn column_stats_uses_fact_native_numeric_when_present() {
+        let fact = fact_frame(
+            &["id", "name"],
+            vec![
+                Arc::new(Int64Array::from(vec![Some(3), None, Some(7)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ],
+        );
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string()],
+            vec![
+                vec!["3".to_string(), "a".to_string()],
+                // 矩阵第二格写失真文本：事实档该行为 NULL，统计应以事实帧为准
+                vec!["missing".to_string(), "b".to_string()],
+                vec!["7".to_string(), "c".to_string()],
+            ],
+        );
+        grid.set_fact(Some(fact));
+        let stats = grid.column_stats_for(0);
+        assert_eq!(stats.count, 2, "事实档非空两行");
+        assert_eq!(stats.nulls, 1, "NULL 来自事实档，不被矩阵文本误判成非空");
+        assert_eq!(stats.min, Some(3.0));
+        assert_eq!(stats.max, Some(7.0));
+        assert_eq!(stats.sum, Some(10.0));
+        assert_eq!(stats.avg, Some(5.0));
+    }
+
+    /// 【B5】事实档文本列回退矩阵口径：只计非空，不填数值字段。
+    #[test]
+    fn column_stats_falls_back_to_matrix_for_text_fact_column() {
+        let fact = fact_frame(
+            &["name"],
+            vec![Arc::new(StringArray::from(vec![Some("a"), Some("b")]))],
+        );
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["name".to_string()],
+            vec![vec!["a".to_string()], vec!["b".to_string()]],
+        );
+        grid.set_fact(Some(fact));
+        let stats = grid.column_stats_for(0);
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.nulls, 0);
+        assert_eq!(stats.min, None);
+    }
+
+    /// 【B5】表档帧 batches 已释放：统计回退显示矩阵，不回读 Rust 堆。
+    #[test]
+    fn column_stats_backs_off_to_matrix_when_fact_released() {
+        let mut fact = fact_frame(
+            &["id"],
+            vec![Arc::new(Int64Array::from(vec![Some(3), Some(7)]))],
+        );
+        Arc::get_mut(&mut fact).expect("测试独占事实帧").release_batches();
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["id".to_string()],
+            vec![vec!["3".to_string()], vec!["7".to_string()]],
+        );
+        grid.set_fact(Some(fact));
+        let stats = grid.column_stats_for(0);
+        assert_eq!(stats.count, 2, "矩阵口径两行非空");
+        assert_eq!(stats.min, Some(3.0));
+    }
+
+    /// 【B5】内存档数值列分组按原生值归一化键分组：整数统一写成整数字面量，
+    /// 避免 `1.0` 与 `1` 被字符串等值拆成两组。
+    #[test]
+    fn group_by_fact_normalizes_integer_keys() {
+        let fact = fact_frame(
+            &["price"],
+            vec![Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), Some(1.0)]))],
+        );
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["price".to_string()],
+            vec![
+                vec!["1.0".to_string()],
+                vec!["2.0".to_string()],
+                vec!["1.0".to_string()],
+            ],
+        );
+        grid.set_fact(Some(fact));
+        assert_eq!(
+            grid.group_by_for(0),
+            vec![("1".to_string(), 2), ("2".to_string(), 1)],
+            "整数归一化后 1.0 与 1 同组"
+        );
+    }
+
+    /// 【B5】内存档数值列排序走原生数值比较（回归保护：事实档存在时排序仍正确）。
+    #[test]
+    fn sort_fact_orders_native_numeric() {
+        let fact = fact_frame(
+            &["id"],
+            vec![Arc::new(Int64Array::from(vec![Some(10), Some(2)]))],
+        );
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["id".to_string()],
+            vec![vec!["10".to_string()], vec!["2".to_string()]],
+        );
+        grid.set_fact(Some(fact));
+        grid.apply_sort(Some((0, false)));
+        assert_eq!(grid.visible_rows()[0][0], "2");
+        assert_eq!(grid.visible_rows()[1][0], "10");
     }
 }

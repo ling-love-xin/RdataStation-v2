@@ -649,7 +649,9 @@ impl ResultEntry {
 ///   internal 猜型降级档，界面与报告显式标注；
 /// - [`FactState::InMemory`]：内存档，持有共享事实帧；触发式物化（分析 / 带类型导出 /
 ///   IronCalc 快照）后常驻复用，重复分析不重建；
-/// - [`FactState::OnDuckDb`]：表档占位（B 批接通：持 DuckDB 常驻临时表句柄；A 批无构造路径）。
+/// - [`FactState::OnDuckDb`]：表档（B2 接通）：常驻表已物化，帧上挂表名且 batches 已
+///   释放，只保留 schema / 列名 / 行数供元数据与类型族访问；表档上的本地交互一律 SQL
+///   下推，不把表读回 Rust 堆（方案 §4.1 表档边界）。
 ///
 /// 【A3】分段追加不改动帧的 `Arc` 所有权：可追加分支把旧段 + 新段 batches 合并后重建帧
 /// （[`FactFrame::new`] 统一做形状校验；校验失败整档作废 `None`），不要求 `FactFrame: Clone`。
@@ -657,7 +659,7 @@ impl ResultEntry {
 pub enum FactState {
     None,
     InMemory(Arc<FactFrame>),
-    OnDuckDb,
+    OnDuckDb(Arc<FactFrame>),
 }
 
 impl FactState {
@@ -678,7 +680,7 @@ impl FactState {
         matches!(self, Self::None)
     }
 
-    /// 内存档事实帧引用；非内存档（`None` / 表档占位）返回 `None`
+    /// 内存档事实帧引用；表档 / 无事实档返回 `None`
     pub fn in_memory(&self) -> Option<&FactFrame> {
         match self {
             Self::InMemory(frame) => Some(frame),
@@ -686,7 +688,40 @@ impl FactState {
         }
     }
 
-    /// 已占用的事实档估算字节（`None` / 表档占位暂报 0；表档占用 B 批补入）
+    /// 表档事实帧引用；内存档 / 无事实档返回 `None`
+    pub fn on_duckdb(&self) -> Option<&FactFrame> {
+        match self {
+            Self::OnDuckDb(frame) => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// 统一取事实帧的 `Arc` 句柄（内存档 / 表档都给；无事实档 = `None`）。
+    /// 调用方克隆 `Arc` 出借用边界后只读 schema / 列名 / 行数 / 表名；取行列值必须先区分
+    /// 载体（表档不回读 Rust 堆）。
+    pub fn fact(&self) -> Option<&Arc<FactFrame>> {
+        match self {
+            Self::InMemory(frame) | Self::OnDuckDb(frame) => Some(frame),
+            Self::None => None,
+        }
+    }
+
+    /// 常驻表名（`None` = 尚未物化；内存档挂表名后也会回这里）。
+    pub fn temp_table(&self) -> Option<&str> {
+        self.fact().and_then(|frame| frame.temp_table())
+    }
+
+    /// 当前载体标签（状态栏 / 右栏占用可见性展示用；方案 §4.1 三态对齐）。
+    pub fn tier(&self) -> ::shared::CurrentTier {
+        match self {
+            Self::None => ::shared::CurrentTier::None,
+            Self::InMemory(_) => ::shared::CurrentTier::InMemory,
+            Self::OnDuckDb(_) => ::shared::CurrentTier::OnDuckDb,
+        }
+    }
+
+    /// 已占用的事实档估算字节：内存档按列式 buffers 估算；表档 batches 已释放，
+    /// Rust 堆占用报 0（表内占用归 DuckDB 侧统计，不在这里估）；无事实档报 0。
     pub fn estimated_bytes(&self) -> usize {
         match self {
             Self::InMemory(frame) => frame.estimated_bytes(),
@@ -701,7 +736,8 @@ impl FactState {
 /// - 旧档 `None` + 新段 `Some`：直接挂新帧；
 /// - 旧内存档 + 新段 `Some`：两段 batches 合并后由 [`FactFrame::new`] 统一形状校验，
 ///   校验失败整档作废 `None`（不保留可能错位的旧帧）；
-/// - `OnDuckDb` 为 B 批占位：A 阶段不改动表档状态，段追加由 B 批接通。
+/// - 旧表档 + 新段 `Some`：第一期保守落**替换**——不向已有常驻表 appender 追加
+///   （表档追加需复用原表 schema 与 Appender 句柄，属后置细化项）；新段 `None` 时表档保留。
 fn merge_fact_state(current: &mut FactState, incoming: Option<Arc<FactFrame>>) {
     let Some(incoming) = incoming else {
         return;
@@ -716,7 +752,7 @@ fn merge_fact_state(current: &mut FactState, incoming: Option<Arc<FactFrame>>) {
             }
         }
         FactState::None => *current = FactState::InMemory(incoming),
-        FactState::OnDuckDb => {}
+        FactState::OnDuckDb(_) => *current = FactState::InMemory(incoming),
     }
 }
 
@@ -942,6 +978,74 @@ impl ResultStore {
             .iter()
             .find(|slot| &slot.document == document)
             .and_then(|slot| slot.facts.get(slot.active))
+    }
+
+    /// 【B2】物化回写：把常驻表名挂到指定槽位事实帧（分析 / 带类型导出直灌成功后，
+    /// 由主线程回填路径调用；重复分析据此复用同一张表、不重建）。
+    ///
+    /// - 内存档帧：重建一份挂表名的新帧替换槽位句柄（`Arc` 内帧不可变，不能原地改）；
+    /// - 表档帧：表名以既有句柄为准，不再二次变更；
+    /// - 无事实档 / 越界返回 `false`。
+    pub fn set_fact_table(&mut self, document: &DocumentId, index: usize, table: String) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(state) = slot.facts.get_mut(index) else {
+            return false;
+        };
+        match state {
+            FactState::None => false,
+            FactState::OnDuckDb(_) => true,
+            FactState::InMemory(old) => {
+                let Ok(mut frame) =
+                    FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
+                else {
+                    return false;
+                };
+                frame.set_temp_table(table);
+                *state = FactState::InMemory(Arc::new(frame));
+                true
+            }
+        }
+    }
+
+    /// 【B2】把指定槽位内存档提升为表档：挂常驻表名后释放 batches，状态切 [`FactState::OnDuckDb`]。
+    /// 只对内存档生效；无事实档 / 已是表档返回 `false`（已是表档视为成功复用）。
+    pub fn promote_fact_to_table(
+        &mut self,
+        document: &DocumentId,
+        index: usize,
+        table: String,
+    ) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(state) = slot.facts.get_mut(index) else {
+            return false;
+        };
+        match state {
+            FactState::None => false,
+            FactState::OnDuckDb(_) => true,
+            FactState::InMemory(old) => {
+                let Ok(mut frame) =
+                    FactFrame::new(old.columns().to_vec(), old.batches().to_vec())
+                else {
+                    return false;
+                };
+                frame.set_temp_table(table);
+                frame.release_batches();
+                *state = FactState::OnDuckDb(Arc::new(frame));
+                true
+            }
+        }
     }
 
     /// 选中某个结果集（标签条点击；下标越界 = 不改，返回是否真的改了）
@@ -2062,18 +2166,100 @@ mod tests {
         assert!(store.active_fact(&DocumentId::new("nope")).is_none());
     }
 
-    /// 【A2】None 档与表档占位都不带事实帧、占用报 0（表档占用 B 批补入）
+    /// 【A2/B2】None 档不带事实帧、占用报 0；表档持释放后的帧，Rust 堆占用同样报 0。
     #[test]
-    fn none_and_placeholder_states_carry_no_frame() {
+    fn none_and_table_states_report_no_rust_heap_bytes() {
         let none = FactState::none();
         assert!(none.is_none());
         assert!(none.in_memory().is_none());
+        assert!(none.on_duckdb().is_none());
         assert_eq!(none.estimated_bytes(), 0);
 
-        let placeholder = FactState::OnDuckDb;
-        assert!(!placeholder.is_none());
-        assert!(placeholder.in_memory().is_none());
-        assert_eq!(placeholder.estimated_bytes(), 0);
+        let mut frame = fact_frame(&[1, 2]);
+        frame.set_temp_table("tmp_q_result_9".to_string());
+        frame.release_batches();
+        let table = FactState::OnDuckDb(Arc::new(frame));
+        assert!(!table.is_none());
+        assert!(table.in_memory().is_none());
+        assert!(table.on_duckdb().is_some());
+        assert_eq!(table.estimated_bytes(), 0, "表档 batches 已释放，Rust 堆占用报 0");
+        assert_eq!(table.temp_table(), Some("tmp_q_result_9"));
+        assert_eq!(
+            table.on_duckdb().expect("表档帧").row_count(),
+            2,
+            "行数缓存随表档保留"
+        );
+    }
+
+    /// 【B2】`set_fact_table` 把常驻表名挂到内存档帧；重复调用复用同一句柄。
+    #[test]
+    fn set_fact_table_attaches_table_name_to_in_memory_slot() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 2),
+            ResultPlacement::Replace,
+            Some(Arc::new(fact_frame(&[1, 2]))),
+        );
+
+        assert!(store.set_fact_table(&document, 0, "tmp_q_result_3".to_string()));
+        let fact = store.active_fact(&document).expect("有事实档");
+        assert_eq!(fact.temp_table(), Some("tmp_q_result_3"));
+        assert!(fact.in_memory().is_some(), "挂表名不释放 batches，仍为内存档");
+
+        // 无事实档 / 越界 = false
+        assert!(!store.set_fact_table(&document, 7, "tmp_q_result_x".to_string()));
+        assert!(!store.set_fact_table(&DocumentId::new("nope"), 0, "tmp_q_result_x".to_string()));
+    }
+
+    /// 【B2】`promote_fact_to_table`：内存档挂表名后释放 batches，状态切表档；
+    /// 已是表档复用成功，无事实档拒绝提升。
+    #[test]
+    fn promote_fact_to_table_releases_batches_and_switches_tier() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(
+            entry("doc-1", "select 1", 2),
+            ResultPlacement::Replace,
+            Some(Arc::new(fact_frame(&[1, 2]))),
+        );
+
+        assert!(store.promote_fact_to_table(&document, 0, "tmp_q_result_5".to_string()));
+        let fact = store.active_fact(&document).expect("有事实档");
+        assert!(fact.on_duckdb().is_some(), "状态切表档");
+        assert!(fact.in_memory().is_none());
+        assert_eq!(fact.temp_table(), Some("tmp_q_result_5"));
+        assert_eq!(fact.estimated_bytes(), 0, "表档 Rust 堆占用归零");
+        assert_eq!(
+            fact.on_duckdb().expect("表档帧").row_count(),
+            2,
+            "释放后行数保留"
+        );
+
+        // 已是表档：再提升视为成功复用，不报错
+        assert!(store.promote_fact_to_table(&document, 0, "tmp_q_result_5".to_string()));
+    }
+
+    /// 【B2】无事实档槽位拒绝提升；新结果入槽后旧表档随旧结果作废。
+    #[test]
+    fn promote_refuses_none_fact_slot_and_resets_on_replace() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+        store.push(entry("doc-1", "select 1", 1), ResultPlacement::Replace, None);
+        assert!(
+            !store.promote_fact_to_table(&document, 0, "tmp_q_result_x".to_string()),
+            "无事实档不能提升"
+        );
+
+        store.push(
+            entry("doc-1", "select 1", 2),
+            ResultPlacement::Replace,
+            Some(Arc::new(fact_frame(&[1, 2]))),
+        );
+        store.promote_fact_to_table(&document, 0, "tmp_q_result_8".to_string());
+        // 无候选回执替换：表档帧随旧结果作废回 None
+        store.push(entry("doc-1", "select 1b", 1), ResultPlacement::Replace, None);
+        assert!(store.active_fact(&document).is_some_and(|fact| fact.is_none()));
     }
 
     /// 【A2】淘汰最旧结果集时事实档平行缩短：不存在“set 没了、fact 残留”的错位

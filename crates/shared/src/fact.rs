@@ -73,11 +73,19 @@ pub enum FactError {
 ///
 /// **不 derive `Clone`**：batches 深拷贝代价高，槽位侧用 `Arc<FactFrame>` 共享
 /// （`result_panel` 的 `FactState::InMemory`）；需要副本时先想清楚是否真要物化两份。
+///
+/// 【B2】`temp_table` 挂本地 DuckDB 常驻表名：进分析 / 带类型导出触发物化后回挂，
+/// 重复分析复用同一张表、不重建；`None` = 尚未物化。表档物化后 `release_batches`
+/// 释放 Rust 堆上的 batches，只保留 schema / 列名 / 行数 / 表名供元数据与类型族访问。
 #[derive(Debug)]
 pub struct FactFrame {
     columns: Vec<String>,
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
+    /// 常驻表名（`tmp_q_` 前缀；`None` = 尚未物化）。
+    temp_table: Option<String>,
+    /// 行数缓存：表档释放 batches 后仍要报出真实行数，不能按空批累加回 0。
+    row_count: usize,
 }
 
 impl FactFrame {
@@ -98,10 +106,13 @@ impl FactFrame {
         for batch in &batches[1..] {
             ensure_same_schema(&schema, batch.schema())?;
         }
+        let row_count = batches.iter().map(|batch| batch.num_rows()).sum();
         Ok(Self {
             columns,
             schema,
             batches,
+            temp_table: None,
+            row_count,
         })
     }
 
@@ -116,6 +127,7 @@ impl FactFrame {
     }
 
     /// 底层 batches 只读引用；渲染 / 派生路径通过访问器取值，不直接拆批。
+    /// 表档释放后返回空切片（表档不回读 Rust 堆，方案 §4.1 表档边界）。
     pub fn batches(&self) -> &[RecordBatch] {
         &self.batches
     }
@@ -124,9 +136,32 @@ impl FactFrame {
         self.columns.len()
     }
 
-    /// 全局行数：各批 `num_rows` 累加。
+    /// 全局行数（构造 / 追加时缓存；表档释放 batches 后仍返回真实行数）。
     pub fn row_count(&self) -> usize {
-        self.batches.iter().map(|batch| batch.num_rows()).sum()
+        self.row_count
+    }
+
+    /// 常驻表名（`None` = 尚未物化；已物化 = 重复分析复用这张表，不重建）。
+    pub fn temp_table(&self) -> Option<&str> {
+        self.temp_table.as_deref()
+    }
+
+    /// 回挂常驻表名（分析 / 带类型导出触发物化后由主线程回填路径调用）。
+    pub fn set_temp_table(&mut self, table: String) {
+        self.temp_table = Some(table);
+    }
+
+    /// 是否已经释放 batches（表档状态；`true` 时不允许再走 Rust 堆取值路径）。
+    pub fn is_released(&self) -> bool {
+        self.batches.is_empty()
+    }
+
+    /// 表档物化后释放 Rust 堆上的 batches：schema / 列名 / 行数 / 表名保留，
+    /// 供元数据页、类型族判断与状态栏占用展示；数据本体留在本地 DuckDB 常驻表里。
+    ///
+    /// 表档上的排序 / 统计 / 分组一律 SQL 下推，不把表读回 Rust 堆（方案 §4.1 表档边界）。
+    pub fn release_batches(&mut self) {
+        self.batches.clear();
     }
 
     /// 列类型族；列索引越界返回 [`FactError::ColumnIndexOutOfRange`]。
@@ -138,8 +173,16 @@ impl FactFrame {
     }
 
     /// 按全局行号 + 列号取值；行索引跨批定位（批内偏移累加）。
+    ///
+    /// 表档（batches 已释放）不回读 Rust 堆：这里按行越界报错，调用方应走 SQL 下推路径。
     pub fn value_at(&self, row: usize, col: usize) -> Result<FactValue, FactError> {
         self.check_col(col)?;
+        if self.batches.is_empty() {
+            return Err(FactError::RowIndexOutOfRange {
+                row,
+                total: self.row_count,
+            });
+        }
         let mut remaining = row;
         for batch in &self.batches {
             let batch_rows = batch.num_rows();
@@ -150,14 +193,19 @@ impl FactFrame {
         }
         Err(FactError::RowIndexOutOfRange {
             row,
-            total: self.row_count(),
+            total: self.row_count,
         })
     }
 
     /// 派生显示矩阵的唯一入口：值按 `Display` 渲染，`NULL` → `"NULL"`，
     /// 口径对齐现状 `editor_exec.rs` 的 `cell_text = Display`；渲染层不另写一套取值规则。
+    ///
+    /// 表档（batches 已释放）不回读：返回空矩阵，调用方应保持显示矩阵口径。
     pub fn rows_as_text(&self) -> Vec<Vec<String>> {
-        let total = self.row_count();
+        if self.batches.is_empty() {
+            return Vec::new();
+        }
+        let total = self.row_count;
         let cols = self.column_count();
         let mut rows = Vec::with_capacity(total);
         for row in 0..total {
@@ -179,6 +227,7 @@ impl FactFrame {
         for batch in &new {
             ensure_same_schema(&self.schema, batch.schema())?;
         }
+        self.row_count += new.iter().map(|batch| batch.num_rows()).sum::<usize>();
         self.batches.extend(new);
         Ok(())
     }
@@ -186,6 +235,7 @@ impl FactFrame {
     /// 列式占用估算（字节）：逐列 buffers 长度 + null 位图长度；
     /// 不含 Schema / Arc 元信息（量级小，水位估算可忽略）。
     ///
+    /// 表档 batches 已释放：Rust 堆占用报 0，表内占用由 DuckDB 侧统计（方案 §4.1）。
     /// 双份估算（事实档 + 显示矩阵）由分流层按 `batches × 5` 系数折算，本方法只报事实档列式字节。
     pub fn estimated_bytes(&self) -> usize {
         let mut total = 0usize;
@@ -211,6 +261,87 @@ impl FactFrame {
             Ok(())
         }
     }
+
+    /// 【B5】内存档列式列统计：Int / Float 族从原生数值聚合 min / max / sum / avg；
+    /// Bool 族只计非空与 NULL（无数值聚合）；Utf8 / Binary / Other 族返回 `None`，
+    /// 由调用方回退显示矩阵的文本口径。
+    ///
+    /// 表档（batches 已释放）一律 `None`：表档本地统计走 SQL 下推，不回读 Rust 堆
+    /// （方案 §4.1 表档边界）。
+    pub fn column_stats(&self, col: usize) -> Option<FactColumnStats> {
+        self.check_col(col).ok()?;
+        if self.batches.is_empty() {
+            return None;
+        }
+        let kind = self.column_kind(col).ok()?;
+        if matches!(kind, FactKind::Utf8 | FactKind::Binary | FactKind::Other) {
+            return None;
+        }
+        let mut stats = FactColumnStats::default();
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        let mut sum = 0.0;
+        let mut numeric = 0usize;
+        for row in 0..self.row_count {
+            let Ok(value) = self.value_at(row, col) else {
+                continue;
+            };
+            if matches!(value, Value::Null) {
+                stats.nulls += 1;
+                continue;
+            }
+            stats.count += 1;
+            if matches!(kind, FactKind::Int | FactKind::Float) {
+                if let Some(number) = value.as_float() {
+                    min = min.min(number);
+                    max = max.max(number);
+                    sum += number;
+                    numeric += 1;
+                }
+            }
+        }
+        if numeric > 0 {
+            stats.min = Some(min);
+            stats.max = Some(max);
+            stats.sum = Some(sum);
+            stats.avg = Some(sum / numeric as f64);
+        }
+        Some(stats)
+    }
+
+    /// 【B5】内存档某格原生数值（排序用）：Int / Float 族返回 `f64`；Bool / 文本 /
+    /// 二进制 / 其他族与 NULL 返回 `None`，调用方回退显示矩阵比较口径。
+    ///
+    /// 表档（batches 已释放）返回 `None`，不回读 Rust 堆。
+    pub fn column_number(&self, row: usize, col: usize) -> Option<f64> {
+        self.check_col(col).ok()?;
+        if self.batches.is_empty() {
+            return None;
+        }
+        let kind = self.column_kind(col).ok()?;
+        if !matches!(kind, FactKind::Int | FactKind::Float) {
+            return None;
+        }
+        self.value_at(row, col).ok()?.as_float()
+    }
+}
+
+/// 【B5】事实档列式列统计（与网格层 `ColumnStats` 字段对齐，便于直接映射；
+/// shared 不反向依赖 result_panel，故在此另立一份窄结构）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct FactColumnStats {
+    /// 非 NULL 的行数
+    pub count: usize,
+    /// NULL 的行数
+    pub nulls: usize,
+    /// 数值样本最小值（无数值样本 = `None`）
+    pub min: Option<f64>,
+    /// 数值样本最大值
+    pub max: Option<f64>,
+    /// 数值样本之和
+    pub sum: Option<f64>,
+    /// 数值样本均值
+    pub avg: Option<f64>,
 }
 
 /// 形状校验：列数、列名、数据类型逐项一致；nullable 不参与（显示 / 分析路径不区分可空性）。
@@ -505,6 +636,44 @@ mod fact_tests {
         assert!(fact.estimated_bytes() > first, "追加后列式占用随批数增长");
     }
 
+    /// 【B2】常驻表名回挂：物化后挂表名，重复分析据此复用、不重建。
+    #[test]
+    fn temp_table_name_is_recorded_on_materialize() {
+        let mut fact = fact_from_arrays(&["id"], vec![Arc::new(Int64Array::from(vec![1i64]))]);
+        assert_eq!(fact.temp_table(), None, "未物化 = 无表名");
+        fact.set_temp_table("tmp_q_result_42".to_string());
+        assert_eq!(fact.temp_table(), Some("tmp_q_result_42"));
+    }
+
+    /// 【B2】表档释放 batches：行数 / schema / 表名保留，Rust 堆占用归零；
+    /// 释放后取值路径按"表档不回读"报错，显示矩阵派生为空。
+    #[test]
+    fn release_batches_keeps_row_count_and_drops_rust_heap() {
+        let mut fact = fact_from_arrays(
+            &["id", "name"],
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        );
+        fact.set_temp_table("tmp_q_result_7".to_string());
+        let before = fact.estimated_bytes();
+        assert!(before > 0);
+        assert_eq!(fact.row_count(), 2);
+
+        fact.release_batches();
+        assert!(fact.is_released());
+        assert_eq!(fact.row_count(), 2, "行数缓存保留，不随 batches 清空回 0");
+        assert_eq!(fact.estimated_bytes(), 0, "表档 Rust 堆占用报 0");
+        assert_eq!(fact.temp_table(), Some("tmp_q_result_7"));
+        assert_eq!(fact.column_count(), 2, "列名 / schema 保留供元数据与类型族访问");
+        assert!(fact.rows_as_text().is_empty(), "表档不回读显示矩阵");
+        assert!(matches!(
+            fact.value_at(0, 0),
+            Err(FactError::RowIndexOutOfRange { .. })
+        ));
+    }
+
     /// 水位口径探针（A0 实测迁移入正式测试）：量化三类典型结果集的列式字节 vs 显示矩阵字节，
     /// 为 8 / 3 MiB 水位标定留回归依据；数值只进测试日志，不参与运行时分流。
     #[test]
@@ -700,5 +869,77 @@ mod fact_tests {
             storage_choice(0, StoragePref::Auto, CurrentTier::OnDuckDb),
             FactTier::OnDuckDb
         );
+    }
+
+    /// 【B5】Int 列列式统计：原生数值聚合 min / max / sum / avg，NULL 单列计数。
+    #[test]
+    fn column_stats_aggregates_native_int_values() {
+        let fact = fact_from_arrays(
+            &["score"],
+            vec![Arc::new(Int64Array::from(vec![Some(3), None, Some(7)]))],
+        );
+        let stats = fact.column_stats(0).expect("Int 列给列式统计");
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.nulls, 1);
+        assert_eq!(stats.min, Some(3.0));
+        assert_eq!(stats.max, Some(7.0));
+        assert_eq!(stats.sum, Some(10.0));
+        assert_eq!(stats.avg, Some(5.0));
+    }
+
+    /// 【B5】文本列返回 `None`：调用方回退显示矩阵文本口径，不在事实档猜数值。
+    #[test]
+    fn column_stats_returns_none_for_text_column() {
+        let fact = fact_from_arrays(
+            &["name"],
+            vec![Arc::new(StringArray::from(vec![Some("a"), Some("b")]))],
+        );
+        assert!(fact.column_stats(0).is_none());
+        assert!(fact.column_number(0, 0).is_none());
+    }
+
+    /// 【B5】Bool 列只计非空 / NULL，不填数值聚合字段。
+    #[test]
+    fn column_stats_bool_counts_nulls_without_numeric() {
+        let fact = fact_from_arrays(
+            &["flag"],
+            vec![Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]))],
+        );
+        let stats = fact.column_stats(0).expect("Bool 列给计数统计");
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.nulls, 1);
+        assert_eq!(stats.min, None);
+        assert_eq!(stats.max, None);
+        assert_eq!(stats.sum, None);
+        assert_eq!(stats.avg, None);
+    }
+
+    /// 【B5】`column_number` 读原生数值；文本族与越界行 / 列返回 `None`。
+    #[test]
+    fn column_number_reads_native_numeric() {
+        let fact = fact_from_arrays(
+            &["id", "name"],
+            vec![
+                Arc::new(Int64Array::from(vec![Some(3), Some(7)])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        );
+        assert_eq!(fact.column_number(0, 0), Some(3.0));
+        assert_eq!(fact.column_number(1, 0), Some(7.0));
+        assert!(fact.column_number(0, 1).is_none(), "文本列无数值");
+        assert!(fact.column_number(9, 0).is_none(), "越界行无数值");
+        assert!(fact.column_number(0, 9).is_none(), "越界列无数值");
+    }
+
+    /// 【B5】表档释放 batches 后列式统计 / 数值取数一律 `None`：本地交互回退矩阵口径。
+    #[test]
+    fn column_stats_none_after_releasing_batches() {
+        let mut fact = fact_from_arrays(
+            &["id"],
+            vec![Arc::new(Int64Array::from(vec![Some(3), Some(7)]))],
+        );
+        fact.release_batches();
+        assert!(fact.column_stats(0).is_none());
+        assert!(fact.column_number(0, 0).is_none());
     }
 }

@@ -21,6 +21,7 @@
 //! [`ResultSyncInput`] 传入——面板只写状态，不反向依赖 editor。
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use gpui_kit::*;
 use gpui_kit::assets::IconName;
@@ -35,6 +36,9 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableDelegate, TableState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
+
+// 【B5】事实帧只读句柄随网格投影进 delegate（列式统计 / 原生数值排序交互派生时读取）
+use ::shared::FactFrame;
 
 use crate::error_card::{self, ErrorCard};
 use crate::export;
@@ -54,6 +58,9 @@ pub struct GridPayload {
     pub column_types: Vec<Option<crate::store::ColumnType>>,
     pub table: Option<String>,
     pub annotations: Vec<Option<ColumnAnnotation>>,
+    /// 【B5】事实帧只读句柄（`None` = 无事实档 / 表档已释放 batches 回退矩阵口径）。
+    /// 与类型 / 注释同口径：在 `set_data` 之后由 `set_fact` 注入。
+    pub fact: Option<Arc<FactFrame>>,
 }
 
 /// 分析菜单项（宿主算好传入：只含渲染要的文案与动作载荷；类型统一用
@@ -358,6 +365,8 @@ impl ResultPanel {
                     state.delegate_mut().set_result_table(payload.table);
                     // 【P1】字段注释同理（set_data 会清掉旧的）
                     state.delegate_mut().set_column_annotations(payload.annotations);
+                    // 【B5】事实帧同理（set_data 会清掉旧的）；交互派生时才读取，render 不解析
+                    state.delegate_mut().set_fact(payload.fact);
                 }
                 None => state.delegate_mut().clear(input.empty),
             }

@@ -36,7 +36,7 @@ use engine::persistence::history_store::{self, SqlHistoryEntry};
 use engine::services::execution_service::DuckDbExportFormat;
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
-use shared::FactFrame;
+use shared::{dual_estimate, storage_choice, CurrentTier, FactFrame, FactTier};
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
 struct EngineQueryRunner {
@@ -817,27 +817,82 @@ impl QueryRunner for EngineQueryRunner {
         }
     }
 
-    /// 【B15】本地分析：把桥接过来的行建成 DuckDB 临时表，再跑分析 SQL（**不碰源库**）
+    /// 【B15】本地分析：在内存 DuckDB 上对当前结果集跑一条聚合 SQL（**不碰源库**）。
     ///
-    /// 引擎侧 `execute_duckdb_analysis` 已经在内存 DuckDB 上跑（`DuckDBManager::get_or_create_in_memory`），
-    /// 临时表由 `TempTableManager` 登记（上限 / TTL / 关项目清场都走那一套）。
+    /// 引擎侧临时表由 `DuckDBManager` 登记（上限 / TTL / 关项目清场都走那一套）；
     /// `{table}` 占位符由引擎替换成真正的临时表名。
     ///
-    /// 值的类型：`NULL` 字面量→真 NULL，其余按**展示文本**进库（与 B7 导出同一口径）；
-    /// 数字列会被引擎按整列推断成数值，要按原样比较就在分析 SQL 里 `CAST(... AS VARCHAR)`。
+    /// 【B4】三分支选源（方案 §7-B②）：
+    /// 1. **表档复用**：事实档已挂常驻表名 → 直接复用，不重复建表；
+    /// 2. **内存档直灌**：事实档在 Rust 堆 → 按偏好 + 双份估算分流（`storage_choice`），
+    ///    batches 经 Arrow Appender 直灌新建表；目标表档（`OnDuckDb`）时回带释放信号，
+    ///    host 据此把原槽位提升表档并释放 batches；
+    /// 3. **显示矩阵猜型降级档**：无事实档 / batches 已释放 / 空批 → 走逐行 internal 建表，
+    ///    整列落 `VARCHAR`（`infer_type` 只认 JSON 值类型、不 parse 文本），数字列被收窄成
+    ///    文本；notice 显式标注降级档。
+    ///
+    /// 分析产物本身只回列名 + JSON 行、没有原始 batches，所以 `fact: None`——后续对分析
+    /// 结果再做分析 / 带类型导出仍走显示矩阵降级档（链式产物新 FactFrame 依赖引擎
+    /// `query_duckdb` 回 Arrow，属后置增强项）。
     fn analyze(&self, request: &AnalysisRequest) -> Result<QueryData, String> {
-        let rows: Vec<Vec<serde_json::Value>> = request
-            .rows
-            .iter()
-            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
-            .collect();
-        let result = crate::services::result_service::ResultService::execute_duckdb_analysis(
-            "",
-            &request.sql,
-            Some(request.columns.clone()),
-            Some(rows),
-        )
-        .map_err(|error| error.to_string())?;
+        let mut source_fact_table: Option<String> = None;
+        let mut source_fact_release = false;
+        let mut degraded = false;
+
+        let result = match &request.fact {
+            // ①② 有事实档且 batches 未释放、非空批
+            Some(frame) if !frame.is_released() && !frame.batches().is_empty() => {
+                if let Some(table) = frame.temp_table() {
+                    // ① 表档常驻表复用：不重复建表，表名原样回挂（无需新信号）
+                    source_fact_table = Some(table.to_string());
+                    crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+                        Some(table),
+                        &request.sql,
+                        frame.batches(),
+                    )
+                    .map_err(|error| error.to_string())?
+                } else {
+                    // ② 内存档：按偏好 + 双份估算分流后直灌新建表
+                    let dual = dual_estimate(frame.estimated_bytes());
+                    let tier = storage_choice(dual, request.pref, CurrentTier::InMemory);
+                    source_fact_release = tier == FactTier::OnDuckDb;
+                    let res =
+                        crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+                            None,
+                            &request.sql,
+                            frame.batches(),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    source_fact_table = Some(res.temp_table.clone());
+                    res
+                }
+            }
+            // ③ 无事实档 / 已释放 / 空批：显示矩阵猜型降级档
+            _ => {
+                degraded = true;
+                let rows: Vec<Vec<serde_json::Value>> = request
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+                    .collect();
+                crate::services::result_service::ResultService::execute_duckdb_analysis(
+                    "",
+                    &request.sql,
+                    Some(request.columns.clone()),
+                    Some(rows),
+                )
+                .map_err(|error| error.to_string())?
+            }
+        };
+
+        // 降级档在原有桥接说明后追加一句口径标注（不掩盖“基于已抓取 N 行”主文案）；
+        // `notice()` 总是返回拼好的文案（不是 Option），降级档只做字符串追加。
+        let notice = if degraded {
+            let mark = "文本猜型降级档：整列按文本存储，数字类型可能失真";
+            Some(format!("{}；{mark}", request.notice()))
+        } else {
+            Some(request.notice())
+        };
 
         Ok(QueryData {
             columns: result.columns,
@@ -854,10 +909,13 @@ impl QueryRunner for EngineQueryRunner {
             affected_rows: None,
             // 分析结果没有“下一段”可言（它一次算完）
             has_more: false,
-            notice: Some(request.notice()),
-            // 【A3】本地 DuckDB 分析产物只回列名 + JSON 行，没有原始 batches → 事实档 `None`，
-            // 后续分析 / 带类型导出走显示矩阵降级档（方案跳 5 降级路径）。
+            notice,
+            // 【A3】本地 DuckDB 分析产物只回列名 + JSON 行，没有原始 batches → 事实档 `None`。
             fact: None,
+            // 【B4】物化回执：host 回填原槽位挂表名；释放信号仅目标表档时置真
+            source_fact_table,
+            source_fact_release,
+            source_fact_set: request.source_set,
         })
     }
 
@@ -876,10 +934,12 @@ impl QueryRunner for EngineQueryRunner {
         ))
     }
 
-    /// 【B7 切片二】经 DuckDB 落盘（Parquet / XLSX）
+    /// 【D 批待改造】经 DuckDB 落盘（Parquet / XLSX）
     ///
-    /// 行按**展示文本**桥接（与本地分析同一口径：`"NULL"` → 真 null，其余按字符串；
-    /// 引擎按整列推断类型——所以数字列在 Parquet / XLSX 里就是数）。
+    /// 现状走显示矩阵：`"NULL"` → 真 null，其余经 `cell_json` 一律包成字符串，internal
+    /// 建表 `infer_type` 只认 JSON 值类型、不 parse 文本，整列落 `VARCHAR`——数字列在
+    /// Parquet / XLSX 里也是文本（类型收窄失真）。D 批将切事实档 batches 直灌建表 COPY，
+    /// 本路径仅作无事实档回退（方案 §7-D）。
     /// 同步阻塞（XLSX 首次装扩展要联网几秒）：调用方把它放在一次性线程上。
     fn export_via_duckdb(&self, request: &DuckDbExportRequest) -> Result<usize, String> {
         let format = match request.format {
@@ -1325,6 +1385,10 @@ fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData 
         // 【B14】下发筛选的“已去掉 LIMIT”之类提示由调用方另设
         notice: None,
         fact,
+        // 【B4】源库直取回执不是分析产物：不带物化回执信号
+        source_fact_table: None,
+        source_fact_release: false,
+        source_fact_set: 0,
     }
 }
 
@@ -1363,6 +1427,23 @@ mod analysis_tests {
     use super::EngineQueryRunner;
     use editor::analysis::AnalysisRequest;
     use editor::execution::QueryRunner as _;
+    use ::shared::{FactFrame, StoragePref};
+    use std::sync::Arc;
+
+    /// 单列 Int64、两行的事实档（类型来自 Arrow schema，不猜型）。
+    fn fact_frame() -> Arc<FactFrame> {
+        use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).expect("批能建出来");
+        Arc::new(FactFrame::new(vec!["id".to_string()], vec![batch]).expect("事实档"))
+    }
 
     /// 桥接的行真能落到内存 DuckDB 上跑出结果（**不需要任何服务器**）
     ///
@@ -1379,6 +1460,9 @@ mod analysis_tests {
             columns: vec!["id".to_string()],
             rows: vec![vec!["1".to_string()], vec!["NULL".to_string()]],
             dropped_rows: 0,
+            fact: None,
+            pref: StoragePref::Auto,
+            source_set: 0,
         };
         let data = runner.analyze(&request).expect("本地分析该跑通");
         assert_eq!(data.columns, vec!["总".to_string(), "非空".to_string()]);
@@ -1390,6 +1474,65 @@ mod analysis_tests {
         assert!(!data.has_more, "分析一次算完，没有下一段");
         let notice = data.notice.clone().unwrap_or_default();
         assert!(notice.contains("基于已抓取的 2 行"), "{notice}");
+        // 无事实档 = 显示矩阵猜型降级档：notice 必须显式标注口径，不静默混进保真档
+        assert!(notice.contains("文本猜型降级档"), "{notice}");
+    }
+
+    /// 【B4】内存档事实档走 batches 直灌（保真档）：表名信号回传、目标内存档不释放
+    /// batches、原槽位下标随回执透传，notice 不带降级档标注。
+    #[test]
+    fn in_memory_fact_ingests_batches_and_reports_table_handle() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            eprintln!("⏭️ 建不出执行器 runtime，跳过本地分析探针");
+            return;
+        };
+        let request = AnalysisRequest {
+            sql: "SELECT count(*) AS \"n\" FROM {table}".to_string(),
+            columns: vec!["id".to_string()],
+            // 显示矩阵仍随请求带上（契约在），但事实档在场时不参与建表
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            dropped_rows: 0,
+            fact: Some(fact_frame()),
+            // 强制内存档：分流目标 = InMemory → 不释放 batches（release=false）
+            pref: StoragePref::Memory,
+            source_set: 7,
+        };
+        let data = runner.analyze(&request).expect("事实档直灌分析该跑通");
+        assert_eq!(data.rows, vec![vec!["2".to_string()]], "两行事实档聚合出 2");
+        assert!(
+            data.source_fact_table.is_some(),
+            "新建常驻表名要回传给 host 挂回原槽位"
+        );
+        assert!(!data.source_fact_release, "内存档目标不释放 batches");
+        assert_eq!(data.source_fact_set, 7, "原槽位下标随回执透传");
+        let notice = data.notice.clone().unwrap_or_default();
+        assert!(
+            !notice.contains("文本猜型降级档"),
+            "保真档不挂降级标注：{notice}"
+        );
+    }
+
+    /// 【B4】强制表档偏好：分流目标 = OnDuckDb → 回执置释放信号，host 据此提升表档。
+    #[test]
+    fn table_pref_signals_release_back_to_the_host() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            return;
+        };
+        let request = AnalysisRequest {
+            sql: "SELECT count(*) AS \"n\" FROM {table}".to_string(),
+            columns: vec!["id".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            dropped_rows: 0,
+            fact: Some(fact_frame()),
+            pref: StoragePref::Table,
+            source_set: 0,
+        };
+        let data = runner.analyze(&request).expect("表档直灌分析该跑通");
+        assert!(
+            data.source_fact_table.is_some(),
+            "常驻表名回传；表档复用 / 新建都要给 host 一个句柄"
+        );
+        assert!(data.source_fact_release, "强制表档目标要释放 Rust 堆 batches");
     }
 
     /// 分析 SQL 写错：如实报错（不静默出空网格）
@@ -1403,6 +1546,9 @@ mod analysis_tests {
             columns: vec!["id".to_string()],
             rows: vec![vec!["1".to_string()]],
             dropped_rows: 0,
+            fact: None,
+            pref: StoragePref::Auto,
+            source_set: 0,
         };
         let error = runner.analyze(&request).expect_err("该报错");
         assert!(!error.is_empty(), "错误要说清原因：{error}");
@@ -1430,6 +1576,8 @@ mod export_tests {
                 vec!["2".to_string(), "NULL".to_string()],
             ],
             filtered: false,
+            // 测试走显示矩阵猜型降级档：无事实档快照
+            fact: None,
         }
     }
 

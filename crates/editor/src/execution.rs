@@ -44,7 +44,11 @@ pub use crate::store::{Pushdown, ResultPlacement};
 // ===== 执行什么 =====
 
 /// 一次执行的目标
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 【B3】`Analysis` 变体携带 `Option<Arc<FactFrame>>` 事实档快照，不可逐值比较；因此不再
+/// derive `PartialEq/Eq`，改由下方手工实现：除 `Analysis` 的 `fact` 快照外逐字段比较，
+/// 快照是引用、不代表请求语义差异。
+#[derive(Debug, Clone)]
 pub enum ExecTarget {
     /// 没有可执行的内容（空文档 / 只有注释与空白）
     Empty,
@@ -123,6 +127,45 @@ pub enum ExecTarget {
         /// 生成的 UPDATE 语句文本（逐条执行，同一事务）
         updates: String,
     },
+}
+
+impl PartialEq for ExecTarget {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Empty, Self::Empty) => true,
+            (Self::Selection(a), Self::Selection(b)) => a == b,
+            (Self::Statement(a), Self::Statement(b)) => a == b,
+            (Self::All(a), Self::All(b)) => a == b,
+            (Self::Batch(a), Self::Batch(b)) => a == b,
+            (
+                Self::Segment { sql: a, offset: oa, limit: la },
+                Self::Segment { sql: b, offset: ob, limit: lb },
+            ) => a == b && oa == ob && la == lb,
+            (
+                Self::Filtered { sql: a, filter: fa, columns: ca },
+                Self::Filtered { sql: b, filter: fb, columns: cb },
+            ) => a == b && fa == fb && ca == cb,
+            (
+                Self::SortedDown { sql: a, column: ca, descending: da },
+                Self::SortedDown { sql: b, column: cb, descending: db },
+            ) => a == b && ca == cb && da == db,
+            // 事实档快照（`fact`）是引用、不参与语义比较；其余字段逐一对上即相等
+            (Self::Analysis(a), Self::Analysis(b)) => {
+                a.sql == b.sql
+                    && a.columns == b.columns
+                    && a.rows == b.rows
+                    && a.dropped_rows == b.dropped_rows
+                    && a.pref == b.pref
+            }
+            (Self::Script(a), Self::Script(b)) => a == b,
+            (Self::Cell(a), Self::Cell(b)) => a == b,
+            (
+                Self::Commit { sql: a, table: ta, key: ka, updates: ua },
+                Self::Commit { sql: b, table: tb, key: kb, updates: ub },
+            ) => a == b && ta == tb && ka == kb && ua == ub,
+            _ => false,
+        }
+    }
 }
 
 impl ExecTarget {
@@ -508,6 +551,14 @@ pub struct QueryData {
     /// 【A3】事实帧候选：源库回执带 batches 时由 `to_data` 构造；其余路径 `None`。
     /// 渲染第一期不读它；分析 / 带类型导出按它选保真路径（A 阶段不消费）。
     pub fact: Option<Arc<FactFrame>>,
+    /// 【B4】本次分析触发物化后，回挂**原槽位**的常驻表名（`None` = 未触发 / 复用已有表
+    /// 无需回挂新名）。host 回填到 `source_fact_set` 对应的原结果集槽位。
+    pub source_fact_table: Option<String>,
+    /// 【B4】是否把原槽位提升到表档（释放 Rust 堆 batches）：`true` 时 host 调
+    /// `promote_fact_to_table`；`false` 只挂表名、保留 batches（内存档 + 复用表）。
+    pub source_fact_release: bool,
+    /// 【B4】物化回执归属的原结果集槽位下标（分析触发时的选中结果集）。
+    pub source_fact_set: usize,
 }
 
 /// 执行端口：**宿主提供"怎么把 SQL 跑出结果集"**
@@ -794,7 +845,11 @@ pub struct SourceNote {
 /// 而 XLSX 首次要 `INSTALL excel`（联网一次；探针实测本机 3–11 秒）——在 UI 线程上等它
 /// 就是界面假死。所以走**一次性线程 + 回执队列**（与源动作同一套），**不占执行位**
 /// （它不产结果集，也不该把“执行中”灯点亮）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 【B3】`fact` 是当前结果集事实档快照：带类型档（Parquet / XLSX）优先按 batches 直灌
+/// 建表 COPY；`None` 回退显示矩阵猜型降级档。含 `Arc<FactFrame>` 后不可逐值比较，去
+/// `PartialEq, Eq`（与 `AnalysisRequest` / `QueryData` 同一口径）。
+#[derive(Debug, Clone)]
 pub struct DuckDbExportRequest {
     pub document: DocumentId,
     /// 结果集序号（1 基；回执用「结果 N」指代，与标签同口径）
@@ -802,10 +857,12 @@ pub struct DuckDbExportRequest {
     pub format: crate::export::ExportFormat,
     pub path: std::path::PathBuf,
     pub columns: Vec<String>,
-    /// 行（已字符串化，与网格一致：`NULL` 是字面量；桥接成 JSON 在执行器里做）
+    /// 行（已字符串化，与网格一致：`NULL` 是字面量；仅事实档缺失的降级档使用）
     pub rows: Vec<Vec<String>>,
     /// 这次导的是**筛后的行集**（回执按 B7 的口径要明示）
     pub filtered: bool,
+    /// 事实档快照（`None` = 无事实档，走显示矩阵猜型降级档并在报告中标注）
+    pub fact: Option<Arc<FactFrame>>,
 }
 
 /// 【B7 切片二】一次 DuckDB 导出的回执
@@ -1860,6 +1917,9 @@ mod tests {
                 columns: vec!["c".to_string()],
                 rows: vec![vec!["1".to_string()]],
                 dropped_rows: 0,
+                fact: None,
+                pref: ::shared::StoragePref::Auto,
+                source_set: 0,
             })
             .lineage(),
             "本地分析"
@@ -1904,6 +1964,9 @@ mod tests {
                 has_more: false,
                 notice: None,
                 fact: None,
+                source_fact_table: None,
+                source_fact_release: false,
+                source_fact_set: 0,
             })
         }
 
@@ -1934,6 +1997,9 @@ mod tests {
                 has_more: false,
                 notice: None,
                 fact: None,
+                source_fact_table: None,
+                source_fact_release: false,
+                source_fact_set: 0,
             })
         }
     }
@@ -2055,6 +2121,9 @@ mod tests {
                 has_more: false,
                 notice: None,
                 fact: None,
+                source_fact_table: None,
+                source_fact_release: false,
+                source_fact_set: 0,
             })
         }
 

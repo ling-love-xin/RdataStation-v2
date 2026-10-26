@@ -50,6 +50,34 @@ fn editor_show_line_numbers_or_default(cx: &App) -> bool {
         true
     }
 }
+
+/// 【B3】读事实档载体偏好快照（分析 / 带类型导出在事件路径上取一次，随请求带入工作线程：
+/// `QueryRunner` 是 `Send + Sync + 'static` 且方法签名无 `cx`，工作线程内不能自己读 global）。
+/// 测试环境未注册 Settings global 时回退 `Auto`（生产在 app 启动经 `SettingsService::init` 注册）。
+fn fact_storage_pref_or_default(cx: &App) -> ::shared::StoragePref {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::get(cx).result_panel.fact_storage.to_shared()
+    } else {
+        ::shared::StoragePref::Auto
+    }
+}
+
+/// 【B3】取当前选中结果集的事实档 `Arc` 快照（无事实档 = `None`，执行器走显示矩阵降级档）。
+/// 克隆 `Arc` 即出 `Ref` 借用边界，不在 `results()` 引用存活期间回写 store。
+fn active_fact_snapshot(
+    shared: &EditorShared,
+    document: &crate::model::DocumentId,
+) -> Option<std::sync::Arc<::shared::FactFrame>> {
+    shared
+        .results()
+        .active_fact(document)
+        .and_then(|state| state.fact().map(std::sync::Arc::clone))
+}
+
+/// 【B4】当前选中结果集的槽位下标（无结果集回退 0）：分析 / 导出物化回执据此回挂原槽位。
+fn active_set_index(shared: &EditorShared, document: &crate::model::DocumentId) -> usize {
+    shared.results().active_index(document).unwrap_or(0)
+}
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::{TableDelegate as _, TableEvent, TableState};
@@ -5864,6 +5892,14 @@ impl EditorHostPanel {
             let placement = outcome.placement;
             // 【B10】在途标题按位弹出
             let title = self.pending_labels.pop_front().flatten();
+            // 【B4】物化回执信号先取出（`entry_from` 会消费 `outcome`，之后不能再读）；
+            // 失败回执不带表名信号 = `None`，回填段整体跳过。
+            let fact_receipt = match &outcome.result {
+                Ok(data) => data.source_fact_table.clone().map(|table| {
+                    (data.source_fact_set, data.source_fact_release, table)
+                }),
+                Err(_) => None,
+            };
             let (mut entry, fact) = entry_from(outcome);
             if let Some(title) = title {
                 entry = entry.with_title(title);
@@ -5894,6 +5930,17 @@ impl EditorHostPanel {
             }
             self.shared
                 .update_results(|store| store.push(entry, placement, fact));
+            // 【B4】分析触发的物化回执：常驻表名回挂**原槽位**（`source_fact_set`），
+            // 不挂到本次分析落的新结果集；目标表档时提升档位并释放 Rust 堆 batches。
+            if let Some((set, release, table)) = fact_receipt {
+                self.shared.update_results(|store| {
+                    if release {
+                        store.promote_fact_to_table(&self.document, set, table);
+                    } else {
+                        store.set_fact_table(&self.document, set, table);
+                    }
+                });
+            }
         }
         if mine_arrived > 0 {
             self.pending = self.pending.saturating_sub(mine_arrived);
@@ -6005,6 +6052,13 @@ impl EditorHostPanel {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
+            // 【B5】当前槽位事实档快照：帧句柄随网格投影进 delegate（列式统计 / 原生数值排序
+            // 交互派生时读取）；档位 + 估算字节进工具栏载体段。表档帧 batches 已释放，
+            // 这里只给句柄（schema / 表名 / 行数可读），数值取数在 delegate 侧回退矩阵。
+            let fact_state = store.fact_at(&self.document, active);
+            let fact_snapshot = fact_state.and_then(|state| state.fact().cloned());
+            let fact_tier = fact_state.map(|state| state.tier());
+            let fact_bytes = fact_state.map_or(0, |state| state.estimated_bytes());
             tracing::info!(
                 target = "rds_editor::exec",
                 doc = %self.document,
@@ -6037,6 +6091,8 @@ impl EditorHostPanel {
                         crate::export::table_from_sql(&entry.sql),
                         // 【P1】字段注释（表头 tooltip；与列同序，空 vec = 没报）
                         entry.column_annotations.clone(),
+                        // 【B5】事实帧只读句柄（与列 / 行同一次投影；无事实档 = None）
+                        fact_snapshot.clone(),
                     )
                 }),
                 entry
@@ -6054,6 +6110,9 @@ impl EditorHostPanel {
                     lineage: entry.title.clone().or_else(|| entry.lineage.clone()),
                     // 【B15】筛选统计随后由 `refresh_filter_hint` 从网格真值填上
                     filtered: None,
+                    // 【B5】事实档载体段（内存档报列式占用；表档只标载体；无事实档不摆）
+                    fact_tier,
+                    fact_bytes,
                 }),
                 // 【B5】状态行（⑦）：只有网格才给（写语句的“共 0 行”、失败时的“共 0 行”都是噪音）
                 entry
@@ -6214,12 +6273,13 @@ impl EditorHostPanel {
             toolbar,
             status,
             grid: grid_data.map(
-                |(columns, rows, column_types, table, annotations)| GridPayload {
+                |(columns, rows, column_types, table, annotations, fact)| GridPayload {
                     columns,
                     rows,
                     column_types,
                     table,
                     annotations,
+                    fact,
                 },
             ),
             empty,
@@ -7088,9 +7148,18 @@ impl EditorHostPanel {
             self.set_message(Some("这份结果没有行可分析".to_string()), cx);
             return;
         }
-        // 用模板先算一遍桥接，只为把“多少行参与”说准（真的那次在 `run_analysis` 里重算）
-        let bridged =
-            crate::analysis::request_for(&entry, crate::analysis::CUSTOM_DEFAULT_SQL.to_string());
+        // 用模板先算一遍桥接，只为把“多少行参与”说准（真的那次在 `run_analysis` 里重算）。
+        // fact / pref / source_set 一并取快照：纯函数签名要求传入，这里不参与分流决策。
+        let fact = active_fact_snapshot(&self.shared, &self.document);
+        let pref = fact_storage_pref_or_default(cx);
+        let source_set = active_set_index(&self.shared, &self.document);
+        let bridged = crate::analysis::request_for(
+            &entry,
+            crate::analysis::CUSTOM_DEFAULT_SQL.to_string(),
+            fact,
+            pref,
+            source_set,
+        );
         let entity = cx.entity();
         dialogs::open_analysis_sql(
             window,
@@ -7123,7 +7192,13 @@ impl EditorHostPanel {
             self.set_message(Some("当前没有可分析的结果".to_string()), cx);
             return;
         };
-        let request = crate::analysis::request_for(&entry, sql);
+        // 【B3】事实档快照 + 偏好随请求带入工作线程：执行器据此选 batches 直灌保真档，
+        // 无事实档才回退显示矩阵猜型降级档；工作线程无 `cx`，不能自己读 global。
+        // 【B4】source_set = 当前选中槽位下标：物化回执据此回挂原结果集。
+        let fact = active_fact_snapshot(&self.shared, &self.document);
+        let pref = fact_storage_pref_or_default(cx);
+        let source_set = active_set_index(&self.shared, &self.document);
+        let request = crate::analysis::request_for(&entry, sql, fact, pref, source_set);
         self.execute_labeled(
             ExecTarget::Analysis(request),
             ResultPlacement::NewSet,
@@ -7226,6 +7301,13 @@ impl EditorHostPanel {
         };
         // 筛选中导出的是**筛后的行集**（原型 §5.5）：这个事实要跟着请求走，回执里要明示
         let filtered = !self.grid.read(cx).delegate().filter().trim().is_empty();
+        // 【B3】按槽位下标取事实档快照：带类型档（Parquet / XLSX）优先 batches 直灌建表 COPY，
+        // 无事实档回退显示矩阵猜型降级档；index 即结果集槽位，不取 active（与筛选口径一致）。
+        let fact = self
+            .shared
+            .results()
+            .fact_at(&self.document, index)
+            .and_then(|state| state.fact().map(std::sync::Arc::clone));
         let request = execution::DuckDbExportRequest {
             document: self.document.clone(),
             set: index,
@@ -7234,6 +7316,7 @@ impl EditorHostPanel {
             columns: entry.columns.clone(),
             rows,
             filtered,
+            fact,
         };
         match self.shared.request_duckdb_export(request) {
             // 说一句“在跑”：导出可能几秒（首次装扩展），不能点完什么都不说

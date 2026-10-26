@@ -33,8 +33,9 @@ pub use models::{QueryResult, Row, Value};
 
 // 重新导出结果集事实层（L0 事实档，见 docs/analysis/结果集数据流-事实层显示层分离方案.md）
 pub use fact::{
-    dual_estimate, storage_choice, BATCHES_DUAL_FACTOR, CurrentTier, FactError, FactFrame,
-    FactKind, FactTier, FactValue, MEMORY_HIGH_WATERMARK, MEMORY_LOW_WATERMARK, StoragePref,
+    dual_estimate, storage_choice, BATCHES_DUAL_FACTOR, CurrentTier, FactColumnStats, FactError,
+    FactFrame, FactKind, FactTier, FactValue, MEMORY_HIGH_WATERMARK, MEMORY_LOW_WATERMARK,
+    StoragePref,
 };
 
 // 重新导出拖动载体（编辑器 / 草稿箱的文件拖入）

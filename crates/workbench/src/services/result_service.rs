@@ -46,6 +46,17 @@ impl ResultService {
         engine::services::execution_service::execute_duckdb_analysis(temp_table, sql, columns, rows)
     }
 
+    /// 【B4】事实档 batches 直灌建表后跑分析（保真档；`Some(table)` = 复用已有常驻表）。
+    pub fn execute_duckdb_analysis_from_batches(
+        temp_table: Option<&str>,
+        sql: &str,
+        batches: &[shared::models::ArrowBatch],
+    ) -> Result<ResultSet, CoreError> {
+        engine::services::execution_service::execute_duckdb_analysis_from_batches(
+            temp_table, sql, batches,
+        )
+    }
+
     /// 【B7 切片二】结果行 → Parquet / XLSX（DuckDB `COPY … TO …`）
     ///
     /// 同步阻塞（XLSX 首次装扩展要联网几秒）：调用方在**一次性线程**上跑它。

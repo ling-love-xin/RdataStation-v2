@@ -5,18 +5,18 @@
 //! 结果集 → 「分析 ▾」→ 在**本地 DuckDB** 上对这份结果跑一条聚合 SQL → 落**新结果集**。
 //! 原结果一行不动（与下发筛选 / 排序同一口径：产生新结果集，不就地替换）。
 //!
-//! ## 数据从哪来（**桥接已抓到的行**）
+//! ## 数据从哪来（**优先走事实档 batches 直灌，显示矩阵为降级档**）
 //!
-//! 分析**不重跑源库查询**：把当前结果集已经抓到的行（`columns` + `rows`）建成一张 DuckDB
-//! 临时表，再在它上面跑分析 SQL。这样三件事同时成立：
+//! 分析**不重跑源库查询**：优先把当前结果集的事实档 Arrow batches 直灌本地 DuckDB
+//! 常驻表（类型来自驱动上报的 schema，不猜型）；事实档缺失（失败 / 写语句 / 加速档 /
+//! 联邦档 / JSON 往返）才回退到显示矩阵字符串逐行建表（internal 猜型降级档，界面与报告
+//! 须显式标注）。两条路径都只覆盖**已抓到的行**，与「只导已抓取的行」（B7）口径一致——
+//! 没抓到的行不参与，并在结果里说清楚。
 //!
-//! 1. 源库连接断了 / 慢查询不想再跑一遍，分析照样能用；
-//! 2. 分析的对象**就是用户眼前这份数据**（不会悄悄换成“重新查一遍”的结果）；
-//! 3. 与「只导已抓取的行」（B7）口径一致——**没抓到的行不参与**，并在结果里说清楚。
-//!
-//! 代价也得说清楚：**值按展示文本进 DuckDB**（`NULL` → 真 NULL，其余是字符串）。
-//! 数字列会被推断成数值类型（引擎按整列推断），但 `id = "007"` 这类**前导零的文本**会按
-//! 数字落库；要按原样比较就在分析 SQL 里 `CAST(... AS VARCHAR)`。
+//! 降级档失真边界（事实档缺失时才出现）：值按展示文本进 DuckDB（`NULL` → 真 NULL，
+//! 其余是字符串），`infer_type` 只认 JSON 值类型、整列落 `VARCHAR`——数字列被收窄成
+//! 文本、类型失真；要按数值比较就在分析 SQL 里 `CAST(... AS DOUBLE)`。事实档直灌路径
+//! 不存在这条失真。
 //!
 //! ## 为什么只给这几条预置
 //!
@@ -24,18 +24,31 @@
 //! （切片二的自定义分析 SQL），而不是在这里猜用户想算什么。
 
 use crate::store::ResultEntry;
+use ::shared::{FactFrame, StoragePref};
+use std::sync::Arc;
 
-/// 一次分析请求：分析 SQL + 桥接用的行集（`{table}` 会被执行器替换成临时表名）
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 一次分析请求：分析 SQL + 桥接原料（`{table}` 会被执行器替换成临时表名）
+///
+/// 【B3】`fact` 是当前结果集事实档的 `Arc` 快照（工作线程内只读，不回写原槽位）；
+/// `pref` 是宿主事件路径读设置快照带入的载体偏好（工作线程无 `cx`，不能自己读 global）。
+/// 【B4】`source_set` 是触发分析时的原槽位下标：物化回执据此回挂原结果集（不猜当前选中）。
+/// 含 `Arc<FactFrame>` 后不可逐值比较，故去掉 `PartialEq, Eq`（与 `QueryData` 同一口径）。
+#[derive(Debug, Clone)]
 pub struct AnalysisRequest {
     /// 分析 SQL（引擎把 `{table}` 换成真正的临时表名）
     pub sql: String,
-    /// 桥接的行集列名
+    /// 桥接的行集列名（降级档猜型建表用；事实档直灌以 schema 为准）
     pub columns: Vec<String>,
-    /// 桥接的行集（**已字符串化**，与网格一致；`NULL` 是字面量）
+    /// 桥接的行集（**已字符串化**，与网格一致；`NULL` 是字面量；仅降级档使用）
     pub rows: Vec<Vec<String>>,
     /// 因为太大被截掉了多少行（0 = 没截）
     pub dropped_rows: usize,
+    /// 事实档快照（`None` = 无事实档，走显示矩阵猜型降级档）
+    pub fact: Option<Arc<FactFrame>>,
+    /// 载体偏好快照（工作线程内按它 + 事实档估算字节分流，见 `shared::storage_choice`）
+    pub pref: StoragePref,
+    /// 触发分析时的原结果集槽位下标（物化回执回挂定位用）
+    pub source_set: usize,
 }
 
 impl AnalysisRequest {
@@ -140,7 +153,17 @@ pub fn menu_items(entry: &ResultEntry) -> Vec<AnalysisItem> {
 }
 
 /// 结果集 → 分析请求（**纯函数**：桥接当前已抓到的行，超出上限就截断并计数）
-pub fn request_for(entry: &ResultEntry, sql: String) -> AnalysisRequest {
+///
+/// `fact` / `pref` 由宿主事件路径取当前槽位事实档快照与设置偏好传入（纯函数不读 `cx`、
+/// 不碰 store）；无事实档时执行器回退显示矩阵猜型降级档。`source_set` 是原槽位下标，
+/// 供物化回执回挂定位。
+pub fn request_for(
+    entry: &ResultEntry,
+    sql: String,
+    fact: Option<Arc<FactFrame>>,
+    pref: StoragePref,
+    source_set: usize,
+) -> AnalysisRequest {
     let total = entry.rows.len();
     let rows: Vec<Vec<String>> = if total > ANALYSIS_MAX_ROWS {
         entry.rows[..ANALYSIS_MAX_ROWS].to_vec()
@@ -152,12 +175,21 @@ pub fn request_for(entry: &ResultEntry, sql: String) -> AnalysisRequest {
         columns: entry.columns.clone(),
         rows,
         dropped_rows: total.saturating_sub(ANALYSIS_MAX_ROWS),
+        fact,
+        pref,
+        source_set,
     }
 }
 
 /// 结果集 → 分析请求（按菜单项；刻意不猜“分析哪份结果”——调用方给的就是选中那份）
-pub fn request_for_item(entry: &ResultEntry, item: &AnalysisItem) -> AnalysisRequest {
-    request_for(entry, item.sql.clone())
+pub fn request_for_item(
+    entry: &ResultEntry,
+    item: &AnalysisItem,
+    fact: Option<Arc<FactFrame>>,
+    pref: StoragePref,
+    source_set: usize,
+) -> AnalysisRequest {
+    request_for(entry, item.sql.clone(), fact, pref, source_set)
 }
 
 /// SQL 标识符加引号（内部双引号按 SQL 标准双写）
@@ -173,6 +205,8 @@ mod tests {
         request_for_item,
     };
     use crate::store::ResultEntry;
+    use ::shared::{FactFrame, StoragePref};
+    use std::sync::Arc;
     use workbench_shell::model::DocumentId;
 
     fn entry(columns: &[&str], rows: &[&[&str]]) -> ResultEntry {
@@ -245,6 +279,9 @@ mod tests {
                 label: "计数行数".to_string(),
                 sql: "SELECT count(*) FROM {table}".to_string(),
             },
+            None,
+            StoragePref::Auto,
+            0,
         );
         assert_eq!(small.bridged_rows(), 2);
         assert_eq!(small.dropped_rows, 0);
@@ -262,10 +299,48 @@ mod tests {
             vec!["id".to_string()],
             rows,
         );
-        let capped = request_for(&big, "SELECT count(*) FROM {table}".to_string());
+        let capped = request_for(
+            &big,
+            "SELECT count(*) FROM {table}".to_string(),
+            None,
+            StoragePref::Auto,
+            0,
+        );
         assert_eq!(capped.bridged_rows(), super::ANALYSIS_MAX_ROWS);
         assert_eq!(capped.dropped_rows, 5);
         assert!(capped.notice().contains("5 行超出上限未参与"), "{}", capped.notice());
+    }
+
+    /// 【B3】事实档快照与偏好随请求透传（工作线程据此选保真 / 降级档，不读 global）。
+    #[test]
+    fn request_carries_fact_snapshot_and_pref() {
+        use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+        use arrow::datatypes::{Field, Schema};
+
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).expect("构造 RecordBatch");
+        let fact = Arc::new(FactFrame::new(vec!["id".to_string()], vec![batch]).expect("事实档"));
+
+        let request = request_for(
+            &entry(&["id"], &[&["1"]]),
+            "SELECT count(*) FROM {table}".to_string(),
+            Some(fact.clone()),
+            StoragePref::Table,
+            0,
+        );
+        assert!(request.fact.is_some(), "事实档快照随请求带入");
+        assert_eq!(request.pref, StoragePref::Table);
+        assert_eq!(request.source_set, 0, "原槽位下标随请求带入");
+        assert_eq!(
+            request.fact.expect("有事实档").row_count(),
+            2,
+            "快照帧行列数不被显示矩阵覆盖"
+        );
     }
 
     #[test]

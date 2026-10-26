@@ -797,6 +797,9 @@ impl QueryRunner for ScriptRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -873,6 +876,9 @@ impl QueryRunner for SizedRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -911,6 +917,9 @@ impl QueryRunner for ToolbarRunner {
                 has_more: false,
                 notice: None,
                 fact: None,
+                source_fact_table: None,
+                source_fact_release: false,
+                source_fact_set: 0,
             });
         }
         if sql.contains("truncated") {
@@ -924,6 +933,9 @@ impl QueryRunner for ToolbarRunner {
                 has_more: false,
                 notice: None,
                 fact: None,
+                source_fact_table: None,
+                source_fact_release: false,
+                source_fact_set: 0,
             });
         }
         Ok(QueryData {
@@ -936,6 +948,9 @@ impl QueryRunner for ToolbarRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -982,6 +997,9 @@ impl QueryRunner for SegmentRunner {
             has_more: true,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -1005,6 +1023,9 @@ impl QueryRunner for SegmentRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -1051,6 +1072,9 @@ impl QueryRunner for MoreUnsupportedRunner {
             has_more: true,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -1079,6 +1103,9 @@ impl QueryRunner for LocatedFailureRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -1833,6 +1860,9 @@ impl QueryRunner for TxRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -4798,6 +4828,9 @@ impl QueryRunner for PushdownRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -4825,6 +4858,9 @@ impl QueryRunner for PushdownRunner {
             // 下发的执行器会带上“已去掉 LIMIT”这类说明
             notice: Some("已去掉原查询的 LIMIT 10（下发筛选要能查到全部行）".to_string()),
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -4851,6 +4887,9 @@ impl QueryRunner for PushdownRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -6682,6 +6721,9 @@ impl QueryRunner for DuckDbExportRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -6883,6 +6925,9 @@ impl QueryRunner for AnalysisRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 
@@ -6899,6 +6944,9 @@ impl QueryRunner for AnalysisRunner {
             // 与宿主同一口径：说明由执行器带回来
             notice: Some(request.notice()),
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -7107,6 +7155,9 @@ impl QueryRunner for OrdersRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 }
@@ -7327,6 +7378,9 @@ impl QueryRunner for CommitOrdersRunner {
             has_more: false,
             notice: None,
             fact: None,
+            source_fact_table: None,
+            source_fact_release: false,
+            source_fact_set: 0,
         })
     }
 

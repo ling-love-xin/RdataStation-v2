@@ -77,3 +77,5 @@ percent-encoding.workspace = true
 paths = { workspace = true, features = ["test-support"] }
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
 gpui-kit = { workspace = true, features = ["test-support"] }
+# 【B4】analysis_tests 手搓事实档批（Int64Array / RecordBatch）；仅测试构建，不进产品二进制
+arrow = { workspace = true }

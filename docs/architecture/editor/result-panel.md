@@ -598,6 +598,35 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - `cargo check -p rds-workbench --lib --jobs 2` = **Finished，0 error / 0 warning**。
 - `cargo check -p rds-workbench --tests --jobs 2` = **Finished，0 error**；仅 1 个存量 warning `unused import: AppContext`（`crates/workbench/tests/history_editor_entry.rs:11:16`，并行线存量，本线只补 `push` 第三参 `None`，未动 import）；整包测试未随 A5 执行（insight 线工作区状态以 lib / tests 编译通过为准，不绕过阻塞项）。
 
+### 8.15 事实层 / 显示层分离 · B 批保真链（B2–B6，2026-10-26）
+
+> 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md` §7-B / 跳 4 / 跳 5；本节记录 B 批已落地架构口径，D 批开工前回读该方案 §7-D。A 批底座见 §8.14。
+
+**B 批落点（源码锚点，行号以当前基线为准）**
+
+| 批次 | 内容 | 锚点 |
+| --- | --- | --- |
+| B2 | 常驻表句柄回挂 `FactFrame`（`temp_table` / `row_count` 缓存）；`OnDuckDb(Arc<FactFrame>)` 变体接通；store `set_fact_table` / `promote_fact_to_table`（表档释放 batches、回挂表名） | `crates/shared/src/fact.rs`（`temp_table` / `row_count`）；`crates/result_panel/src/store.rs`（`FactState::OnDuckDb`、`promote_fact_to_table`、`set_fact_table`） |
+| B3 | `AnalysisRequest` 增 `fact` / `pref`，`DuckDbExportRequest` 增 `fact`；host 事件路径读偏好与事实档快照随请求带入工作线程；`ExecTarget` 去 derive 比较改手工 `PartialEq` | `crates/editor/src/execution.rs`（`AnalysisRequest` / `DuckDbExportRequest` / `ExecTarget`）；`crates/editor/src/view/host.rs`（分析 / 导出入口取 `fact_at` 快照） |
+| B4 | 分析保真三分支：表档复用常驻表不重建；内存档 batches 经 `create_temp_table_from_batches` Arrow Appender 直灌新建表、按 `storage_choice` 分流决定是否回带释放信号；无事实档 / 已释放 / 空批回退 internal 猜型降级档，notice 显式标注「文本猜型降级档：整列按文本存储，数字类型可能失真」 | `crates/workbench/src/services/editor_exec.rs`（`analyze` 三分支 + 降级标注）；`crates/engine/src/services/execution_service.rs`（`execute_duckdb_analysis_from_batches`）；`crates/engine/src/services/duckdb_service.rs`（`create_temp_table_from_batches`） |
+| B5 | 内存档列式保真：shared `FactFrame::column_stats` / `column_number`（Int / Float 原生 min / max / sum / avg，Bool 只计 count / nulls，文本 / 二进制 / 其他族与表档返回 `None`）；delegate `column_stats_for` / `compare_rows` / `group_by_for` 三路分流，任一取不到原生数值整对回退显示矩阵口径，不出现同一列两套口径混排；分组整数归一化键（`1.0` 与 `1` 同组）；工具栏载体段：内存档 `内存档 X MiB`、表档只摆 `表档`、无事实档不摆段 | `crates/shared/src/fact.rs`（`FactColumnStats` / `column_stats` / `column_number`）；`crates/result_panel/src/grid.rs`（`fact` 句柄 / `set_fact` / 三路分流 / `stats_from_fact` / `number_group_key` / `bytes_text` / `ResultToolbar.fact_tier` / `fact_bytes`）；`crates/result_panel/src/panel.rs`（`GridPayload.fact` + `sync` 注入）；`crates/editor/src/view/host.rs`（事实档快照投影到网格与工具栏） |
+| B6 | 漂移注释勘误：旧注释承诺「数字列在 Parquet / XLSX 里就是数、前导零文本被推成数字」与现状不符——`cell_json` 只产 Null / String，`infer_type` 只认 JSON 值类型、不 parse 文本，整列落 `VARCHAR`，失真方向是**数字列被收窄成文本**；注释与降级档 notice 文案按实证口径改写 | `crates/workbench/src/services/editor_exec.rs`（分析 / 导出两段 + 降级标注文案）；`crates/engine/src/services/execution_service.rs`（导出口径段注释）；`crates/editor/src/analysis.rs` / `crates/result_panel/src/analysis.rs`（模块头失真边界） |
+
+**口径边界（B 批守住的不做项）**
+
+- 列式聚合纯函数下沉 shared；`arrow` 在 `result_panel` 仅 `[dev-dependencies]`（测试 fixture 用），产品代码不 `use arrow`；delegate 只调 shared 纯函数分流，不新增 result_panel 产品 arrow 依赖。
+- 表档本地交互（排序 / 统计 / 分组）第一期回退显示矩阵口径；SQL 下推不读回 Rust 属后置项。筛选 / 列隐藏 / 冻结 / 列宽不涉及类型，未改动。
+- 分析产物当前只回列名 + JSON 行、不带 batches，新结果集 `fact: None`；链式产物新 FactFrame 依赖引擎 `query_duckdb` 回 Arrow，属后置增强项。
+- insight 切回复用宿主表属并行线，本批未碰；编辑器状态栏并入全局状态栏属另一会话任务，本批未动。
+
+**测试基线（B 批回归，2026-10-26）**
+
+- `cargo test -p rds-shared --lib` = **40 passed / 0 failed**（含 B5 列式统计 / 数值取数 5 例）。
+- `cargo test -p rds-result-panel --lib` = **181 passed / 0 failed**（含 B5 分流 / 归一化 / 载体段 6 例）。
+- `cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**；全量偶发 1 例 `named_parameters_hold_execution_until_filled` 单跑复现通过，定性工作线程 mpsc 排队时序，非本线回归。
+- `cargo test -p rds-engine --lib` = **658 passed / 0 failed / 24 ignored**。
+- `cargo test -p rds-workbench --lib analysis_tests` = **4 passed / 0 failed**；`cargo check -p rds-workbench --lib --tests --jobs 2` = 0 error（1 个 unused import warning 属并行线 `history_editor_entry.rs`，非本线符号）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、

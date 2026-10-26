@@ -100,6 +100,51 @@ pub fn execute_duckdb_analysis(
     })
 }
 
+/// 【B4】事实档 Arrow batches 直灌建表后跑分析（**保真档**：类型来自 Arrow schema，不猜型）。
+///
+/// 与 [`execute_duckdb_analysis`] 的分工：
+/// - `temp_table` 非空 = 复用已有常驻表（表档重复分析，**不重复建表**，batches 参数只作留位）；
+/// - `None` = 用 `batches` 经 `create_temp_table_from_batches` 直灌新建（列类型来自 schema，
+///   不支持的类型直接报错，不静默落 VARCHAR）；
+/// - 无事实档 / 显示矩阵猜型降级档仍走 [`execute_duckdb_analysis`]，两条路径互不替代。
+///
+/// 回执 `temp_table` 带回实际使用的表名：上层据此把表名回挂原结果集槽位。
+pub fn execute_duckdb_analysis_from_batches(
+    temp_table: Option<&str>,
+    sql: &str,
+    batches: &[shared::models::ArrowBatch],
+) -> Result<ResultSet, CoreError> {
+    let start = std::time::Instant::now();
+    let duckdb = duckdb_service::DuckDbService::get_or_create_duckdb()?;
+    let mut conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+
+    let actual_table = match temp_table {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => duckdb_service::DuckDbService::create_temp_table_from_batches(&mut conn, batches)?,
+    };
+
+    let analysis_sql = sql
+        .replace("{table}", &actual_table)
+        .replace("result_temp", &actual_table);
+
+    DuckDBManager::validate_analysis_sql(&analysis_sql)?;
+
+    let (cols_out, rws_out) =
+        duckdb_service::DuckDbService::query_duckdb(&mut conn, &analysis_sql)?;
+    let elapsed = start.elapsed().as_millis() as u64;
+    let row_count = rws_out.len();
+
+    Ok(ResultSet {
+        columns: cols_out,
+        rows: rws_out,
+        row_count: row_count as u32,
+        elapsed_ms: elapsed as u32,
+        temp_table: actual_table,
+    })
+}
+
 /// 【B7 切片二】DuckDB 导出格式（引擎只认这两个名字，不依赖编辑器的 `ExportFormat`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DuckDbExportFormat {
@@ -140,9 +185,11 @@ pub struct ExportStats {
 ///
 /// ## 三条口径
 ///
-/// - **值仍按展示文本进库**（与本地分析同一口径）：`NULL`→真 NULL，其余是字符串；
-///   列类型由引擎按整列推断，所以数字列在 Parquet / XLSX 里就是数（这是比 CSV / JSON 多出来的好处），
-///   代价是 `007` 这类前导零文本会被推成数字。
+/// - **值仍按展示文本进库**：`NULL`→真 NULL，其余由编辑器侧 `cell_json` 一律包成字符串，
+///   `infer_type` 只认 JSON 值类型、不 parse 文本内容，所以整列落 `VARCHAR`——数字列在
+///   Parquet / XLSX 里也是文本（数字精度 / 类型在这一跳收窄失真）；前导零文本反而保持原样。
+///   带类型档（Parquet / XLSX / typed JSON）将在 D 批切事实档 batches 直灌建表，本 internal
+///   路径只作无事实档回退（方案 §7-D）。
 /// - **临时表必收**：无论 `COPY` 成不成功都 `DROP`（`with_analysis_temp_table` 同款承诺）——
 ///   否则每次导出都在进程级内存库里漏一张 `tmp_q_*`。
 /// - **不静默联网**：连接建时就关了 `autoinstall_known_extensions`（见 `configure_connection`），
@@ -278,5 +325,73 @@ mod export_tests {
 
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod analysis_batches_tests {
+    // 安全模式：**不通配导入**
+    use super::execute_duckdb_analysis_from_batches;
+
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+    use arrow::datatypes::{Field, Schema, DataType};
+    use shared::models::ArrowBatch;
+    use std::sync::Arc;
+
+    /// 单列 Int64、两行的事实档批（类型来自 schema，不猜型）。
+    fn id_batch() -> ArrowBatch {
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        RecordBatch::try_new(schema, vec![array]).expect("批能建出来")
+    }
+
+    /// 【B4】事实档 batches 直灌新建表跑聚合：类型保真、表名回传、结果行数对上。
+    #[test]
+    fn batches_land_and_aggregate_on_a_fresh_table() {
+        let batch = id_batch();
+        let result = execute_duckdb_analysis_from_batches(
+            None,
+            "SELECT count(*) AS \"行数\" FROM {table}",
+            &[batch],
+        )
+        .expect("直灌建表 + 聚合应当成功");
+
+        assert_eq!(result.columns, vec!["行数".to_string()]);
+        assert_eq!(result.rows.len(), 1);
+        let count = result.rows[0][0].as_i64().expect("count 是整数");
+        assert_eq!(count, 2, "两行事实档聚合出 2");
+        assert!(!result.temp_table.is_empty(), "回执带回实际表名");
+    }
+
+    /// 【B4】已有常驻表名直接复用：不重复建表，表名原样返回、结果一致。
+    ///
+    /// 刻意用 `count(*)`（BIGINT，已在 `duckdb_value_to_json` 映射表内）：`sum(BIGINT)` 在
+    /// DuckDB 返回 HUGEINT，尚落在"其余变体回 Null"的遗留 backlog（方案 §10.2 #12），
+    /// 本用例不扩面修它，只钉住复用链路本身。
+    #[test]
+    fn existing_temp_table_is_reused_without_rebuilding() {
+        let batch = id_batch();
+        let first = execute_duckdb_analysis_from_batches(
+            None,
+            "SELECT count(*) AS \"行数\" FROM {table}",
+            &[batch],
+        )
+        .expect("首轮直灌成功");
+
+        // 复用上一轮回传的表名：传入 `Some(...)`，函数不新建表
+        let reused = execute_duckdb_analysis_from_batches(
+            Some(first.temp_table.as_str()),
+            "SELECT count(*) AS \"计数\" FROM {table}",
+            &[],
+        )
+        .expect("复用常驻表聚合应当成功");
+
+        assert_eq!(reused.temp_table, first.temp_table, "复用同一表名");
+        let count = reused.rows[0][0].as_i64().expect("count 是整数");
+        assert_eq!(count, 2, "复用表里的两行没丢");
     }
 }

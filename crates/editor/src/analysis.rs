@@ -5,18 +5,18 @@
 //! 结果集 → 「分析 ▾」→ 在**本地 DuckDB** 上对这份结果跑一条聚合 SQL → 落**新结果集**。
 //! 原结果一行不动（与下发筛选 / 排序同一口径：产生新结果集，不就地替换）。
 //!
-//! ## 数据从哪来（**桥接已抓到的行**）
+//! ## 数据从哪来（**优先走事实档 batches 直灌，显示矩阵为降级档**）
 //!
-//! 分析**不重跑源库查询**：把当前结果集已经抓到的行（`columns` + `rows`）建成一张 DuckDB
-//! 临时表，再在它上面跑分析 SQL。这样三件事同时成立：
+//! 分析**不重跑源库查询**：优先把当前结果集的事实档 Arrow batches 直灌本地 DuckDB
+//! 常驻表（类型来自驱动上报的 schema，不猜型）；事实档缺失（失败 / 写语句 / 加速档 /
+//! 联邦档 / JSON 往返）才回退到显示矩阵字符串逐行建表（internal 猜型降级档，界面与报告
+//! 须显式标注）。两条路径都只覆盖**已抓到的行**，与「只导已抓取的行」（B7）口径一致——
+//! 没抓到的行不参与，并在结果里说清楚。
 //!
-//! 1. 源库连接断了 / 慢查询不想再跑一遍，分析照样能用；
-//! 2. 分析的对象**就是用户眼前这份数据**（不会悄悄换成“重新查一遍”的结果）；
-//! 3. 与「只导已抓取的行」（B7）口径一致——**没抓到的行不参与**，并在结果里说清楚。
-//!
-//! 代价也得说清楚：**值按展示文本进 DuckDB**（`NULL` → 真 NULL，其余是字符串）。
-//! 数字列会被推断成数值类型（引擎按整列推断），但 `id = "007"` 这类**前导零的文本**会按
-//! 数字落库；要按原样比较就在分析 SQL 里 `CAST(... AS VARCHAR)`。
+//! 降级档失真边界（事实档缺失时才出现）：值按展示文本进 DuckDB（`NULL` → 真 NULL，
+//! 其余是字符串），`infer_type` 只认 JSON 值类型、整列落 `VARCHAR`——数字列被收窄成
+//! 文本、类型失真；要按数值比较就在分析 SQL 里 `CAST(... AS DOUBLE)`。事实档直灌路径
+//! 不存在这条失真。
 //!
 //! ## 为什么只给这几条预置
 //!
@@ -64,6 +64,7 @@ mod tests {
     use super::{AnalysisRequest, result_entry};
     use crate::execution::QueryData;
     use crate::model::DocumentId;
+    use ::shared::StoragePref;
 
     #[test]
     fn an_analysis_result_is_marked_and_titled_by_the_caller() {
@@ -72,6 +73,9 @@ mod tests {
             columns: vec!["id".to_string()],
             rows: vec![vec!["1".to_string()]],
             dropped_rows: 0,
+            fact: None,
+            pref: StoragePref::Auto,
+            source_set: 0,
         };
         let data = QueryData {
             columns: vec!["行数".to_string()],
