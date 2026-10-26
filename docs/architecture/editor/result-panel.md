@@ -173,6 +173,7 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 事实层 / 显示层分离 · A 批底座 | ✅ 本轮交付（§8.14）：A1 `FactFrame` 类型与访问器落 shared；A2 `facts` 平行槽位 + `FactState` 三态；A3 `QueryData.fact` 双产物入槽；A4 `fact_storage` 三档偏好 + Auto 分流纯函数与高低水位；B（DuckDB 分析保真链 / 表档接通）、D（导出分级）待开工；C（IronCalc）待拍板；E（engine 第一跳失真）另立项 |
 | 事实层 / 显示层分离 · B 批保真链 | ✅ 已交付（§8.15，提交 `84a81572`）：常驻表句柄回挂、分析三分支保真、内存档列式统计 / 排序 / 分组、表档占用可见、漂移注释勘误 |
 | 事实层 / 显示层分离 · D1 导出分级 | ✅ 本轮交付（§8.16，提交 `83655b26`）：Parquet / XLSX 事实档三分支保真直灌，无事实档猜型降级档回执标注；文本档不动；typed JSON 新档后置 |
+| 行级叠加层 · #28-B 接线 | ✅ 本轮交付（§8.10 ④）：视图序列 `RowRef` 分叉、新增 / 复制 / 删除本地行、行级撤销重做组合、删除线灰显、本地行格编辑入 `LocalRowSet`；全链路排除矩阵收口（本地行 / 被删行在统计 / 分组 / 导出 / 提交 / 分析各链路的纳入与排除口径）；遗留：锚点插入落点、本地行进统计分组、fact 原生整表聚合逐行排除 |
 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
 
 ## 8. ResultPanel Dock 化方案（2026-10-23 拍板）
@@ -426,7 +427,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 | 新增行落点 | 插到当前选中行紧下方；无选中行时追加末尾（对齐 DBeaver 默认） |
 | 撤销 / 重做 | 单组按钮：格级 `EditHistory` 优先，栈空再走本地行栈 |
 | 权威层归属（2026-10-24 二次确认，**修正**草图「delegate 内」口径） | 本地行集合 + 删除标记 + 行级历史挂 **store 结果集槽位**（与 `ChangeSet` / `EditHistory` 并列）；delegate 只在 `sync` 时投影、不持本地行真值。原因：`set_data` 每次投影重建 delegate 行状态，本地行挂视图层会在切标签 / 提交 / 撤销 / 重投影后丢失；与现有「delegate 只投影、不缓存第二份真值」约定一致 |
-| 纳入范围（2026-10-24 确认） | 本地行进入网格视图（筛选 / 排序 / 分组 / 统计 / 预览 / 转置 / 复制 TSV / 文本视图）；**被删行全链路排除**（仅网格内灰显删除线可见，不进分组 / 统计 / 导出 / 复制）；提交批次与 SQL 导出一律排除本地行与被删行，不下发 INSERT / DELETE |
+| 纳入范围（2026-10-24 确认；**2026-10-26 修正**：排序 / 分组 / 统计本期排除本地行，见下方 B5 排除矩阵） | 本地行进入网格视图（筛选命中才显示 / 预览 / 转置 / 复制 TSV / 文本视图）；**被删行全链路排除**（仅网格内灰显删除线可见，不进分组 / 统计 / 导出 / 复制）；提交批次与 SQL 导出一律排除本地行与被删行，不下发 INSERT / DELETE。排序只作用底层未删行（本地行锚定末尾区段），统计 / 分组本期排除本地行，后置批次再补 |
 | 交付边界（2026-10-24 确认） | 分两轮：本轮（#28-A）只做模型层——`RowRef` + `LocalRowSet` + `RowHistory` + store 槽位 + 纯函数单测；动作按钮接线、删除线渲染、本地行格编辑、全链路 `RowRef` 分叉归下一轮（#28-B） |
 
 **行为口径（实现时照此）**：
@@ -452,14 +453,47 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
   - `visible_refs(data_row_count, local)`：基准叠加序列 = 底层未删行按原序 + 本地行按登记序；被删行不出现。筛选 / 排序 / 锚点落点由视图层在序列上再加工。
 - `store.rs` 槽位：`DocumentResults` 新增 `locals: Vec<LocalRowSet>`、`row_histories: Vec<RowHistory>`，与 `sets` / `changes` / `histories` 同序同增减；`Replace` / `NewSet` / `Append`（形状不符替换）/ `evict_oldest` 生命周期同步清空 / 淘汰；访问器 `local_rows` / `mutate_local_rows` / `row_history` / `mutate_row_history`（不存在返回 `false`，口径同 `mutate_change_set`）。`Append` 可追加路径不清空本地叠加层（与格级变更集现状一致：底层行追加，本地行保留）。
 
-**#28-B 接线待办（下一轮，本轮不做）**：
+**#28-B 接线已落地（2026-10-26，B2 → B4 → B3 → B5 顺序；模型层 #28-A 见上节）**：
 
-- 动作按钮接线：新增行 / 复制行 / 删除行 / 行级撤销 / 重做（底部三段式占位钮 + 右键菜单行级入口）；无主键结果集（`editable = false`）禁用三个行级按钮。
-- delegate 视图序列 `view_rows` 由 `Vec<usize>` 分叉到 `Vec<RowRef>`；取值 / 脏格 / 右键整行 / 转置 / 筛选排序 / 分组统计 / 值预览 / 选中态 / 复制 TSV / 文本视图 / 导出共 12 处行号依赖点逐一分叉；被删行排除在统计 / 分组 / 导出 / 复制之外。
-- 删除行灰显 + 删除线渲染；本地行格编辑入 `LocalRowSet`（不进 `ChangeSet`、不进提交批次）；单组撤销组合 = 格级 `EditHistory` 优先、栈空再走 `RowHistory`。
-- 提交批次忽略本地行级变更并提示「行级变更暂未支持下发」；SQL 导出排除本地行与被删行。
+| 批次 | 内容 | 源码锚点 |
+| --- | --- | --- |
+| B2 视图序列分叉 | delegate `view_rows: Option<Vec<RowRef>>` 由 `Vec<usize>` 分叉；`row_ref` / `data_row` / `cell` / `row_cell_text` / 脏格 / 选中态 / 右键目标 / 转置三方法 / 行文本 / JSON / INSERT / 选区文本全部按 `RowRef` 身份分叉；`GridPayload.local` 快照随 `sync` 注入，对比栏不传本地快照（D8 排除）；转置步长夹取基准改 `view_len` | `crates/result_panel/src/grid.rs`（`rebuild_view_rows` / `row_ref` / 各取值分叉）；`crates/result_panel/src/panel.rs`（`GridPayload.local` + `sync` 注入）；`crates/editor/src/view/host.rs`（投影元组带本地快照） |
+| B4 删除线渲染 + 本地格编辑 | 被删行灰显 + 元素层 `line_through()` 删除线保留在网格内；本地新增 / 复制行走专用底色 token `result.local_row_background`（明暗两套，缺失回退 `theme.colors.accent`）；本地行格编辑提交走独立 `CommitLocalEditHook`，只写 `LocalRowSet.cells`，**不进**格级 `ChangeSet`、**不进**格级 / 行级撤销栈；`begin_edit` 闸口拒绝本地行以外的被删底层行；右栏值详情标题按身份标注「本地行 / 已删除」 | `crates/result_panel/src/grid.rs`（`on_commit_local_edit` / `begin_edit` / `commit_edit` 分叉 / `render_td` 底色与删除线叠加）；`crates/result_panel/src/panel.rs`（身份标注）；`crates/editor/src/view/host.rs`（本地格编辑钩子注入）；`crates/workbench_shell/src/product_tokens.rs` + `assets/themes/product-tokens.json`（本地行底色角色） |
+| B3 行级动作接线 | 端口五变体 `InsertRowBelow(Option<usize>)` / `DuplicateRow(usize)` / `DeleteRow(usize)` / `UndoAction` / `RedoAction`；右键菜单在复制段之后、排序段之前插入行级独立分组（`separator_before: true`），`editable && !is_deleted` 闸口；`RowActionHook` + delegate 访问器 `reference_of`；底部五槽真钮；宿主五方法 `insert_local_row` / `duplicate_local_row` / `delete_local_row` / `undo_row_action` / `redo_row_action`；撤销 / 重做组合语义 = 格级 `EditHistory` 非空先走格级，栈空再走 `RowHistory`，两栈互不混栈；`ResultStatus.total_rows = row_count - deleted_count + local_count`；无主键结果集（`editable = false`）三个行级入口同步禁用 | `crates/result_panel/src/ports.rs`（五变体）；`crates/result_panel/src/grid.rs`（`ContextTarget.row_ref/editable/is_deleted` / `ContextAction` 三变体 / `context_menu_items` 行级分组 / `on_row_action` / `reference_of`）；`crates/result_panel/src/panel.rs`（`ResultSyncInput.can_undo/can_redo` + 五槽真钮）；`crates/editor/src/view/host.rs`（钩子注入 / 五宿主方法 / dispatch 五分支 / 组合态投影） |
+| B5 全链路排除收口 | 按 §8.10 ④ 拍板矩阵逐链路口径收口：网格渲染保留被删行灰显删除线可见；全局词 / 列级筛选命中本地行才显示、被删行排除；列排序只作用底层未删行；统计 / 分组本期排除本地行、排除被删行（fact 原生整列聚合在被删集合非空时回退矩阵分支）；复制单格 / 整行 TSV / 复制列 / 行 JSON 纳入本地行、排除被删行；整行 INSERT 排除本地与被删；工具栏整份复制 `active_result_tsv()` 纳入本地行、排除被删行；文本视图 / 转置纳入本地行、排除被删行；CSV / JSON / INSERT / Updates / Where 与 Parquet / XLSX 导出序列 = 底层未删行（本地 / 被删都排除）；提交 UPDATE 批次过滤被删底层行的格级变更，本地行天然不在 `ChangeSet`；提交成功回执追加「本地新增 / 复制 / 删除的行未随本次提交落库」提示 | `crates/result_panel/src/grid.rs`（`visible_rows` / `visible_rows_for_export` / `column_text` / `column_values` / `column_stats_for` / `group_by_for` / `selection_text` / `row_text` / `row_json_text` / `row_insert_text` / `transpose_cell` / `find_next` / `active_result_tsv`）；`crates/editor/src/view/host.rs`（`copy_active_result` 走 `active_result_tsv`、`visible_rows_for_export` 恒返回底层未删序列、`submit_pending_changes` 过滤被删 pending + `local_pending` 探测、`CommitInFlight.local_pending` + 回执文案） |
 
-**测试基线（#28-A 回归）**：`cargo test -p rds-result-panel --lib` = **147 passed / 0 failed**（新增 `rowset` 模型 13 例 + `store` 槽位生命周期 4 例）；`cargo test -p rds-editor --lib` = **592 passed / 1 failed / 1 ignored**——失败用例 `named_parameters_hold_execution_until_filled` 属并行线 `engine/driver/*`、`editor/connection.rs`、`editor/view/host.rs` 未提交改动的参数绑定下发链路，本线 diff 为 `result_panel` 纯新增（`store.rs` 195+/0−、`lib.rs` +2、新文件 `rowset.rs`），未改 editor 既有逻辑，与该失败无因果；1 ignored = 需本机 ipykernel 的 python notebook 用例。
+**排除矩阵（B5 收口口径，实现照此）**：
+
+| 链路 | 本地行 | 被删行 |
+| --- | --- | --- |
+| 网格渲染 | 纳入（专用底色） | 灰显 + 删除线保留可见 |
+| 全局词 / 列级筛选 | 命中才显示 | 排除 |
+| 列排序 | 排除（始终锚定末尾区段） | 排除 |
+| 列统计 / 分组 | 本期排除（后置批次补） | 排除 |
+| 复制单格 / 整行 TSV / 复制列 / 行 JSON | 纳入 | 排除 |
+| 整行 INSERT | 排除 | 排除 |
+| 工具栏整份复制（CopyTsv） | 纳入 | 排除 |
+| 文本视图 / 转置视图 | 纳入 | 排除 |
+| CSV / JSON / INSERT / Updates / Where 导出 | 排除 | 排除 |
+| Parquet / XLSX 导出 | 排除 | 排除（fact 原生 batches 整表对齐，降级档矩阵序列排除） |
+| 提交 UPDATE 批次 | 排除（不进 `ChangeSet`） | 排除（pending 过滤） |
+| 本地 DuckDB 分析 / 并排对比栏 | 排除 | 排除（fact 原生整表聚合无法逐行排除，属已知边界，后置批次补行集合过滤） |
+
+**口径边界（#28-B 守住的不做项）**：
+
+- 新增 / 复制 / 删除只改本地网格与撤销栈，不进提交批次、不下发 INSERT / DELETE；UPDATE 路径完全不动；提交时本地行级变更被忽略并在回执提示「未随本次提交落库」。
+- 本地行格编辑不进任何撤销栈（格级 `EditHistory` 与行级 `RowHistory` 都不进），提交即落快照；格级撤销 / 重做与行级撤销 / 重做经单组按钮组合分派，两栈互不混栈。
+- 本地行 `cells` 列数 = `entry.columns.len()`；新增行全空串（不套 NULL 灰斜体，NULL 判定 = 文本 `NULL`）；复制行带源行展示值快照；本地行同列套同一套 `validate_edit_value` 类型校验，失败保留编辑态。
+- 已知边界（后置批次）：① 锚点插入落点本期只落末尾区段，`RowOp.anchor` 作为历史元信息保留，未实现锚定行下方插入；② 本地行纳入统计 / 分组后置；③ fact 原生整列 / 整表聚合（统计原生分支、分析临时表、Parquet/XLSX batches 直灌）无法逐行排除被删行，本期被删集合非空时统计原生分支回退矩阵，分析与带类型导出原生路径保留全量行集合；④ 转置导航步长基准含被删行，锚到被删行时取值落空（后置批次在导航步长上跳过被删行）。
+- 编辑器状态栏并入全局状态栏属另一会话任务，本线未动；insight / plugin / 分析资源等并行线改动不随本线提交。
+
+**测试基线（#28-B 回归，2026-10-26）**：
+
+- `cargo test -p rds-shared --lib` = **41 passed / 0 failed**；`cargo test -p rds-settings --lib` = **35 passed / 0 failed**（locale 用例组合并行偶发，单跑复现通过，非本线回归）。
+- `cargo test -p rds-result-panel --lib` = **195 passed / 0 failed**（#28-A 147 + B2/B4/B3/B5 新增 48 例，含 B5 排除矩阵 6 例：文本视图纳入本地排除被删、导出序列双排除、统计取值双排除、整份复制纳入本地排除被删、复制列口径、被删行复制落空）。
+- `cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例）。
+- `cargo test -p rds-engine --lib` = **660 passed / 0 failed / 24 ignored**；`cargo test -p rds-workbench --lib analysis_tests` = **4 passed / 0 failed**；`cargo test -p rds-workbench --lib export_tests` = **4 passed / 0 failed**。
+- 整包 `cargo test -p rds-workbench` 未随本线执行（insight 线未提交 test-cfg 可能阻塞整包，被阻塞时如实上报不绕过）。
 
 ### 8.11 列浏览器（方案 A：左栏搜索 + 清单 + 底部明细，2026-10-24，已被 §8.12 取代）
 
