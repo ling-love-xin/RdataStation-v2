@@ -695,6 +695,34 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - `cargo test -p rds-editor --lib` = **602 passed / 1 failed / 1 ignored**；唯一失败 `named_parameters_hold_execution_until_filled` 为工作线程 mpsc 排队时序偶发，单跑复现 1 passed，非本线回归；两条 D1 替身导出用例（`parquet_export_goes_through_the_runner` / `duckdb_export_follows_the_local_filter`）通过。
 - `cargo check -p rds-editor --lib --jobs 2` = 0 error / 0 warning；`cargo check -p rds-workbench --lib --tests --jobs 2` = 0 error（1 个 unused import warning 属并行线 `crates/workbench/tests/history_editor_entry.rs`，非本线符号）。整包测试未执行（insight 线未提交 test-cfg 可能阻塞整包，被阻塞时如实上报不绕过）。
 
+### 8.14 C1：结果集 tab 标签重命名 + 钉住（会话级，2026-10-27）
+
+**拍板口径（用户确认）**：
+- 默认标签保持 `结果 N`，不自动拼 SQL 片段（SQL 片段对齐 DBeaver hover tooltip，不在默认标签上）；
+- 重命名走 tab suffix 末尾「⋯」ghost 按钮 → tab 条下方内联输入框（✓ 提交 / ✕ 取消）；
+- 钉住独立于分组（C2 才做），pinned tab 不被 FIFO evict 淘汰；prefix 加图钉小图标；
+- **会话级持久化，不落盘**（对齐 DBeaver / DataGrip：重命名与钉住只在当前会话有效，重启恢复 `结果 N` + 全未钉住）；
+- 手动 tab 分组（C2）后置：数据模型 `groups: Vec<ResultGroup{id,name,members,collapsed}>`、折叠组合成 tab + Popover 列组内、右键移动到新组/已有组/移出组；C3 拖放分组/组颜色更后置。
+
+**代码落点**：
+- `store.rs`：`DocumentResults` 加 `pinned: Vec<bool>` 平行槽位（与 sets 同序）；构造 / Replace / NewSet / Append 三分支联动 push `false`；Replace 覆盖 active 时重置 `pinned=false`（新结果不继承钉住）；`evict_oldest` 找 victim 时排除 `slot.pinned[victim]`，全钉住则 break（不硬淘汰用户钉住的）；新增方法 `set_title(doc, idx, Option<String>)`（空白串归一为 `None` 恢复序号）、`toggle_pin(doc, idx)`、`is_pinned(doc, idx)`、`pinned(doc) -> &[bool]`。
+- `ports.rs`：`ResultRequest` 加 `RenameSet(usize, Option<String>)` / `TogglePin(usize)` / `BeginRename(usize)` / `CommitRename` / `CancelRename` 五变体。
+- `sets.rs`：`ResultSetTab` 加 `pinned: bool`；`tabs()` 签名加 `pinned: &[bool]` 参数（越界按未钉住）；新增 `TabActions { on_rename: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>, on_toggle_pin: Option<Rc<dyn Fn(usize)>> }`；`render()` 加 `actions: TabActions` 参数；tab suffix 末尾加 ⋯ 按钮（Ellipsis 图标，ghost small）；tab pinned 时 prefix 加图钉图标（`Icon::default().data(PIN_ICON_SVG)` 内联 SVG，因 `gpui-component::IconName` 兼容宏只暴露 default-icons.txt 子集，无 Pin 变体）；新增测试 `pinned_slice_projects_into_tabs`。
+- `panel.rs`：`ResultPanel` 加字段 `renaming: Option<usize>` / `renaming_input: Option<Entity<InputState>>`（懒创建复用）；新增 `begin_rename(index, window, cx)`（预填当前 label）/ `commit_rename(cx)`（读输入框值，空串归一 `None`，push RenameSet）/ `cancel_rename(cx)`；主 tab 条传 `TabActions`（on_rename → push BeginRename，on_toggle_pin → push TogglePin）；对比 tab 条传 `TabActions::default()`（None，不画 ⋯ 按钮）；renaming 态时 tabs 外包 v_flex，下方插输入框条（Input + ✓ Check + ✕ Close）。
+- `host.rs`：`result_sets::tabs()` 调用补 `store.pinned(&self.document)` 第三参数；`dispatch_result_request` match 加 5 个 C1 分支——`RenameSet` / `TogglePin` 直接 update_results；`BeginRename` 走 `window.update` 转手调 `panel.begin_rename`（需要 window 创建/回填 InputState）；`CommitRename` / `CancelRename` 调 `panel` 方法。
+
+**关键技术决策**：
+- **不用右键菜单**：gpui Tab 是封装组件，render 内部挂 on_click，外部无法注入 context_menu；改用 suffix 末尾 ⋯ ghost 按钮（符合「组件选型禁手搓」，用 Button 不是自绘 div）。
+- **render 闭包是 `&self`，不能调 &mut Self 方法**：进入 renaming 态走 BeginRename 端口事件路径（host dispatch → window.update 转手 → panel.begin_rename）；提交/取消走 CommitRename/CancelRename 端口。
+- **Pin 图标不在 gpui-component::IconName 默认集**：用 `Icon::default().data(PIN_ICON_SVG)` 内联 SVG 字节（lucide pin 路径），零额外资产文件。
+- **evict 全钉住时不硬淘汰**：break 出循环（用户钉住的结果集不被 FIFO 干掉；新结果进不来是显式语义——用户可以取消钉住旧结果再跑新 SQL）。
+
+**已知遗留（C2 之前不做）**：
+- 重命名输入框 Enter 提交 / Esc 取消键盘支持尚未实现（当前只有 ✓/✕ 按钮）；
+- renaming 时切换其他 tab 是否自动取消 renaming 未处理（切换 tab 后 renaming 条仍在，用户可点 ✕ 取消）；
+- renaming 输入框预填值是当前 label（含自定义标题或自动序号），用户清空后提交 = 恢复序号；
+- 手动 tab 分组（C2）与拖放分组（C3）后置。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
