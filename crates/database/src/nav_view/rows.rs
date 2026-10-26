@@ -8,9 +8,10 @@
 //! 分开后，改行样式不必跨过整个面板的脚手架。
 
 use super::*;
+use super::StagedOp;
 use crate::nav::action_registry;
 use crate::nav::actions::{ActionGroup, NavActionId};
-use crate::nav::capability::{family_ops, nav_node_object_kind};
+use crate::nav::capability::{NavOp, family_ops, nav_node_object_kind};
 use crate::nav_jobs::JobPriority;
 
 impl NavView {
@@ -1644,7 +1645,7 @@ impl NavView {
                         .text_xs()
                         .text_color(fg)
                         .text_ellipsis()
-                        .child(nav_name_highlight(&conn_disp_name, &filter, match_bg, fg)),
+                        .child(nav_name_highlight(&conn_disp_name, &filter, match_bg, fg, false)),
                 )
                 // D12 主机名副标（同行右侧，弱色截断；档案关闭或无 host 时整槽不挂）。
                 .when_some(host_subline, |s, text| {
@@ -2165,15 +2166,18 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let pri = cx.theme().colors.primary;
         let danger = cx.theme().colors.danger;
         let active_border = cx.theme().colors.list_active_border;
+        // B6 待提交删除态文字色（明暗两套 token，缺失回退标准 danger；§4.9）。
+        let staged_drop = product_tokens::get(cx).staged_drop(cx.theme());
 
         let filter = self.nav.borrow().filter.to_lowercase();
         // 展开态按**过滤生效后**的那份看：带筛选时所有行都当展开（否则命中的行藏在关着的支里）。
         // 「要不要加载」「这一行可不可见」不在这里——它们归 `collect_nav_rows`。
-        let (expanded, error) = {
+        let (expanded, error, staged_hit) = {
             let view = self.nav.borrow();
             (
                 view.expanded.contains(&node.key) || !filter.is_empty(),
                 view.errors.get(&node.key).cloned(),
+                view.staged_lookup(&node.key).is_some(),
             )
         };
         // #31 节点行图标与**真实子树**同步：`expanded`（跨重启恢复 / 筛选激活）只是意图；
@@ -2319,18 +2323,23 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child(node.name.clone()),
             }
         } else {
+            // B6 待提交删除态：文字换弱 danger 色 + 删除线；命中分段由高亮函数内部分段补挂
+            // （删除线不穿透内层 Div，R2 风险在纯函数层闭环）。
+            let title_fg = if staged_hit { staged_drop } else { fg };
             div()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()
                 .text_xs()
-                .text_color(fg)
+                .when(staged_hit, |s| s.line_through())
+                .text_color(title_fg)
                 .text_ellipsis()
                 .child(nav_name_highlight(
                     &node.name,
                     &filter,
                     product_tokens::get(cx).search_match_background(cx.theme()),
-                    fg,
+                    title_fg,
+                    staged_hit,
                 ))
         };
         row = row.child(title);
@@ -2345,6 +2354,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         }
         if let Some(comment) = comment_subline {
             row = row.child(comment);
+        }
+        // B6 通用待提交徽标：命中 staged 清单的对象（表 / 视图 / 序列统一走此段，不并入
+        // Table 专用 badges 向量——后者只承担分区 / 继承 / ≈N / 大小统计，职责分离；§4.9）。
+        if staged_hit {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(staged_drop)
+                    .child("待删除"),
+            );
         }
         // S3-② 分区/继承徽标：子表折叠进父表后，父表行尾显示「分区 N / 继承 N」
         // （两半都为零时不显示——普通表无徽标）。
@@ -2497,6 +2517,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             // S4-N4 连接态：闭包外算好供 'static 闭包捕获。
             let obj_connected =
                 self.nav.borrow().connected.contains(&node.connection_id);
+            // B6：是否已在待提交清单（命中后菜单项切换为「从待提交移除」，单项撤销不弹确认）。
+            let staged_hit = self.nav.borrow().staged_lookup(&nkey).is_some();
             // B2：族 × 类型静态操作集；B4：动作类型白名单 + 门控 + 分组排序全部由 L4
             // 动作注册表 `entries_for` 产出，视图层不再写类型 `if` 与散落门控判定。
             let kind = nav_node_object_kind(&node.kind);
@@ -2734,10 +2756,151 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                     });
                                 })
                         }),
-                        // B6-3 占位：DeleteObject / EmptyTable 已登记注册表与 staged 状态机，
-                        // 菜单接线（单项确认对话框 + 入队处理器）在 B6-4；本批返回 None 不渲染
-                        // 菜单项、不挂事件，不留可点击死入口。
-                        NavActionId::DeleteObject | NavActionId::EmptyTable => None,
+                        // B6 staged：删除对象（表 / 视图 / 序列）。已入队 → 单项移除；
+                        // 未入队 → 单项确认对话框，OK 后入队（不立即执行 DDL）。
+                        // 臂体用 `and_then`/`?` 求值为 `Option<PopupMenuItem>`；`return` 只在
+                        // 本闭包内返回，不外层越层到菜单构造闭包。
+                        NavActionId::DeleteObject => kind.and_then(|kind| {
+                            staged_menu_label(NavOp::Drop, kind, staged_hit).and_then(|label| {
+                                if staged_hit {
+                                    let entity = entity.clone();
+                                    let key = nkey.clone();
+                                    return Some(
+                                        PopupMenuItem::new(label)
+                                            .disabled(!entry.enabled)
+                                            .on_click(move |_, _, app| {
+                                                entity.update(app, |this, cx| {
+                                                    this.dismiss_staged_entry(&key, cx)
+                                                });
+                                            }),
+                                    );
+                                }
+                                let prop = menu_prop.clone()?;
+                                let qualified = qualified.clone()?;
+                                let (title, description, ok_text) =
+                                    staged_dialog_copy(NavOp::Drop, kind, &qualified)?;
+                                let entity = entity.clone();
+                                let staged = StagedOp {
+                                    key: nkey.clone(),
+                                    conn_id: conn_id.clone(),
+                                    driver: driver.clone(),
+                                    catalog: prop.catalog.clone(),
+                                    schema: prop.schema.clone(),
+                                    parent: prop.parent.clone(),
+                                    object_name: prop.name.clone(),
+                                    object_kind: kind,
+                                    op: NavOp::Drop,
+                                    error: None,
+                                };
+                                Some(
+                                    PopupMenuItem::new(label)
+                                        .disabled(!entry.enabled)
+                                        .on_click(move |_, window, app| {
+                                            let entity = entity.clone();
+                                            let staged = staged.clone();
+                                            // `on_click` 是 `Fn`（可多次触发），`description` 为 `String`
+                                            // 不可被内层 builder 闭包 move；先复制一份再移入。
+                                            let description = description.clone();
+                                            window.open_alert_dialog(
+                                                app,
+                                                move |alert, _window, _cx| {
+                                                    let entity = entity.clone();
+                                                    let staged = staged.clone();
+                                                    alert
+                                                        .confirm()
+                                                        .title(title)
+                                                        .description(description.clone())
+                                                        .button_props(
+                                                            DialogButtonProps::default()
+                                                                .ok_text(ok_text)
+                                                                .ok_variant(ButtonVariant::Danger)
+                                                                .show_cancel(true),
+                                                        )
+                                                        .on_ok(move |_, _, app| {
+                                                            let staged = staged.clone();
+                                                            entity.update(app, |this, cx| {
+                                                                this.apply_staged_enqueue(
+                                                                    staged, cx,
+                                                                )
+                                                            });
+                                                            true
+                                                        })
+                                                },
+                                            );
+                                        }),
+                                )
+                            })
+                        }),
+                        // B6 staged：清空表（仅 Table；类型白名单由注册表 applies 过滤）。
+                        NavActionId::EmptyTable => kind.and_then(|kind| {
+                            staged_menu_label(NavOp::Truncate, kind, staged_hit).and_then(|label| {
+                                if staged_hit {
+                                    let entity = entity.clone();
+                                    let key = nkey.clone();
+                                    return Some(
+                                        PopupMenuItem::new(label)
+                                            .disabled(!entry.enabled)
+                                            .on_click(move |_, _, app| {
+                                                entity.update(app, |this, cx| {
+                                                    this.dismiss_staged_entry(&key, cx)
+                                                });
+                                            }),
+                                    );
+                                }
+                                let prop = menu_prop.clone()?;
+                                let qualified = qualified.clone()?;
+                                let (title, description, ok_text) =
+                                    staged_dialog_copy(NavOp::Truncate, kind, &qualified)?;
+                                let entity = entity.clone();
+                                let staged = StagedOp {
+                                    key: nkey.clone(),
+                                    conn_id: conn_id.clone(),
+                                    driver: driver.clone(),
+                                    catalog: prop.catalog.clone(),
+                                    schema: prop.schema.clone(),
+                                    parent: prop.parent.clone(),
+                                    object_name: prop.name.clone(),
+                                    object_kind: kind,
+                                    op: NavOp::Truncate,
+                                    error: None,
+                                };
+                                Some(
+                                    PopupMenuItem::new(label)
+                                        .disabled(!entry.enabled)
+                                        .on_click(move |_, window, app| {
+                                            let entity = entity.clone();
+                                            let staged = staged.clone();
+                                            let description = description.clone();
+                                            window.open_alert_dialog(
+                                                app,
+                                                move |alert, _window, _cx| {
+                                                    let entity = entity.clone();
+                                                    let staged = staged.clone();
+                                                    alert
+                                                        .confirm()
+                                                        .title(title)
+                                                        .description(description.clone())
+                                                        .button_props(
+                                                            DialogButtonProps::default()
+                                                                .ok_text(ok_text)
+                                                                .ok_variant(ButtonVariant::Danger)
+                                                                .show_cancel(true),
+                                                        )
+                                                        .on_ok(move |_, _, app| {
+                                                            let staged = staged.clone();
+                                                            entity.update(app, |this, cx| {
+                                                                this.apply_staged_enqueue(
+                                                                    staged, cx,
+                                                                )
+                                                            });
+                                                            true
+                                                        })
+                                                },
+                                            );
+                                        }),
+                                )
+                            })
+                        })
                     };
                     if let Some(item) = item {
                         if prev_group.is_some() && prev_group != Some(d.group) {
@@ -3077,7 +3240,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .text_xs()
                     .text_color(fg)
                     .text_ellipsis()
-                    .child(nav_name_highlight(&hit.object_name, &filter, match_bg, fg)),
+                    .child(nav_name_highlight(&hit.object_name, &filter, match_bg, fg, false)),
             )
             // 类别 / 归属元信息：可缩可截（旧写法 `flex_shrink_0` 无上限，会把名称挤没）。
             // 注释 / 定义命中在类别前加一枚 why 徽标；名称命中不加（默认通道，不冗余标注）。

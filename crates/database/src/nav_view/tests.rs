@@ -1486,6 +1486,89 @@ fn staged_commit_plan_is_independent_snapshot() {
     assert_eq!(state.staged_count(), 0);
 }
 
+// ---------- B6-4 视图方法接线（薄包装委托状态机；stub 宿主 notice 走空实现，不记录文案）----------
+
+/// 窗口级：确认回调经 `apply_staged_enqueue` 入队后，视图状态集合可查回。
+///
+/// 菜单与 `Delete` 键两条入口的确认 OK 都收口到这个方法；幂等 / 归并规则由 B6-3
+/// 状态机纯函数测试钉死，本用例只钉视图方法正确委托、不丢条目。
+#[gpui_kit::test]
+fn staged_apply_enqueue_adds_entry_to_view_state(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    let staged = mk_staged("G_1/shop/public/orders", NavOp::Drop);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.apply_staged_enqueue(staged, cx));
+    });
+    let count = cx.update(|_window, cx| view.read(cx).nav.borrow().staged_count());
+    assert_eq!(count, 1);
+    let hit = cx.update(|_window, cx| {
+        view.read(cx)
+            .nav
+            .borrow()
+            .staged_lookup("G_1/shop/public/orders")
+            .is_some()
+    });
+    assert!(hit, "入队后按 key 应可查回");
+}
+
+/// 窗口级：`dismiss_staged_entry` 只移除目标条目，同集合其他条目保留（菜单「从待提交移除」）。
+#[gpui_kit::test]
+fn staged_dismiss_entry_via_view_method_removes_only_target(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_staged_enqueue(mk_staged("G_1/shop/public/orders", NavOp::Drop), cx);
+            v.apply_staged_enqueue(mk_staged("G_1/shop/public/items", NavOp::Truncate), cx);
+        });
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.dismiss_staged_entry("G_1/shop/public/orders", cx));
+    });
+    let (count, gone, kept) = cx.update(|_window, cx| {
+        let s = view.read(cx).nav.borrow();
+        (
+            s.staged_count(),
+            s.staged_lookup("G_1/shop/public/orders").is_none(),
+            s.staged_lookup("G_1/shop/public/items").is_some(),
+        )
+    });
+    assert_eq!(count, 1);
+    assert!(gone, "目标条目应已移除");
+    assert!(kept, "其余条目保留");
+}
+
+/// 窗口级：`revert_staged` 清空全部待提交条目（`Ctrl+Z` 撤销全部，单层回退到未入队状态）。
+#[gpui_kit::test]
+fn staged_revert_clears_all_entries(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| {
+            v.apply_staged_enqueue(mk_staged("G_1/shop/public/orders", NavOp::Drop), cx);
+            v.apply_staged_enqueue(mk_staged("G_1/shop/public/items", NavOp::Truncate), cx);
+        });
+    });
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.revert_staged(cx));
+    });
+    let count = cx.update(|_window, cx| view.read(cx).nav.borrow().staged_count());
+    assert_eq!(count, 0);
+}
+
+/// 窗口级：空集合 `revert_staged` 不产生移除、不 panic（只记中性提示，stub notice 丢弃）。
+#[gpui_kit::test]
+fn staged_revert_empty_set_is_noop(cx: &mut gpui_kit::TestAppContext) {
+    let conn = "G_1";
+    let (view, cx) = open_nav_view(cx, conn);
+    cx.update(|_window, cx| {
+        view.update(cx, |v, cx| v.revert_staged(cx));
+    });
+    let count = cx.update(|_window, cx| view.read(cx).nav.borrow().staged_count());
+    assert_eq!(count, 0);
+}
+
 /// 窗口级：`Esc`（`NavClearSearch`）只清搜索框，facet 与选中不动。
 ///
 /// 为何要铉：与资产库的 `ClearSearch` 同一条口径——facet 在 chips 与「筛选 ▾」里看得见，

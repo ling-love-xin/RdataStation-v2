@@ -32,6 +32,10 @@ actions!(
         /// S4-② 键盘补全：上翻一页（`PageUp`，固定 10 行步长）。
         NavPageUp,
         /// S4-② 键盘补全：下翻一页（`PageDown`，固定 10 行步长）。
-        NavPageDown
+        NavPageDown,
+        /// B6 staged：撤销全部待提交变更（`ctrl-z`，单层撤销，回到未入队状态）。
+        NavRevertAllStaged,
+        /// B6 staged：把当前选中对象加入待提交删除清单（`delete`，走单项确认对话框）。
+        NavDeleteToStaged
     ]
 );

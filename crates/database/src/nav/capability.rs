@@ -10,6 +10,7 @@
 //! 新增数据库族：静态规则自动随 L1 档案类型全集派生，视图层零改动。
 
 use engine::ObjectKind;
+use property::PropertyKind;
 
 use crate::model::NavNodeKind;
 use crate::nav::family_profile::registry;
@@ -112,6 +113,23 @@ pub fn nav_node_object_kind(kind: &NavNodeKind) -> Option<ObjectKind> {
         NavNodeKind::Connection { .. }
         | NavNodeKind::Folder(_)
         | NavNodeKind::ColumnOverflow => None,
+    }
+}
+
+/// 属性档案类别 → 可寻址身份类别（键盘快捷键路径无节点本体时用 `PropertyRef.kind` 反推）。
+///
+/// 连接根不属于可寻址对象，返回 `None`；其余类别与 [`nav_node_object_kind`] 一一对应。
+pub fn property_kind_to_object_kind(kind: PropertyKind) -> Option<ObjectKind> {
+    match kind {
+        PropertyKind::Catalog => Some(ObjectKind::Catalog),
+        PropertyKind::Schema => Some(ObjectKind::Schema),
+        PropertyKind::Table => Some(ObjectKind::Table),
+        PropertyKind::View => Some(ObjectKind::View),
+        PropertyKind::Column => Some(ObjectKind::Column),
+        PropertyKind::Routine => Some(ObjectKind::Routine),
+        PropertyKind::Sequence => Some(ObjectKind::Sequence),
+        PropertyKind::Trigger => Some(ObjectKind::Trigger),
+        PropertyKind::Connection => None,
     }
 }
 
@@ -351,6 +369,25 @@ mod tests {
         assert!(mysql_sequence.is_empty());
         assert!(!mysql_sequence.has(NavOp::Drop));
         assert!(!mysql_sequence.has(NavOp::Truncate));
+    }
+
+    /// 属性档案类别 → 身份类别映射：八类一一对应，连接根返回 `None`（键盘路径反推用）。
+    #[test]
+    fn property_kind_maps_to_object_kind_one_to_one() {
+        let cases = [
+            (PropertyKind::Catalog, ObjectKind::Catalog),
+            (PropertyKind::Schema, ObjectKind::Schema),
+            (PropertyKind::Table, ObjectKind::Table),
+            (PropertyKind::View, ObjectKind::View),
+            (PropertyKind::Column, ObjectKind::Column),
+            (PropertyKind::Routine, ObjectKind::Routine),
+            (PropertyKind::Sequence, ObjectKind::Sequence),
+            (PropertyKind::Trigger, ObjectKind::Trigger),
+        ];
+        for (pk, ok) in cases {
+            assert_eq!(property_kind_to_object_kind(pk), Some(ok), "{pk:?} 应映射到 {ok:?}");
+        }
+        assert_eq!(property_kind_to_object_kind(PropertyKind::Connection), None);
     }
 
     #[test]

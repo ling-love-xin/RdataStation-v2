@@ -54,8 +54,9 @@ use gpui_kit::*;
 use std::rc::Rc;
 
 use crate::commands::{
-    NavClearSearch, NavCollapse, NavDown, NavEnd, NavExpand, NavHome, NavOpenProperties,
-    NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp, NavUp,
+    NavClearSearch, NavCollapse, NavDeleteToStaged, NavDown, NavEnd, NavExpand, NavHome,
+    NavOpenProperties, NavPageDown, NavPageUp, NavRename, NavReorderDown, NavReorderUp,
+    NavRevertAllStaged, NavUp,
 };
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef, PropertyRef,
@@ -298,6 +299,20 @@ pub(super) enum EnqueueOutcome {
     Replaced,
     /// 幂等重复，或已入 Drop 再入 Truncate（drop 已含清空）：不改动集合。
     Ignored,
+}
+
+/// 待提交确认对话框的校验候选（事件路径两阶段：Context 内构造候选 → App 作用域开窗）。
+///
+/// 为何拆两段：`cx.listener` 回调第三参是 `&mut Context<Self>`，拿不到 `&mut App`，
+/// 而 `window.open_alert_dialog` 第一参必须是 `&mut App`（vendor `window_ext.rs:101`）；
+/// 故 Context 内只做状态校验与身份构造，返回候选后由动作处理器在 App 作用域开窗，
+/// OK 回调再经 `entity.update(app, …)` 回到状态写入路径。
+#[derive(Clone, Debug)]
+pub(super) struct PreparedStaged {
+    pub staged: StagedOp,
+    pub title: &'static str,
+    pub description: String,
+    pub ok_text: &'static str,
 }
 
 #[derive(Default)]

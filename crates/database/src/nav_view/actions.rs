@@ -4,6 +4,8 @@
 //! 渲染期只读的纪律（render 内不做 I/O）在 `chrome.rs` / `rows.rs` 的注释里。
 
 use super::*;
+use super::{EnqueueOutcome, PreparedStaged, StagedOp};
+use crate::nav::capability::{NavOp, property_kind_to_object_kind};
 use crate::nav_jobs::JobPriority;
 
 impl NavView {
@@ -2093,5 +2095,107 @@ impl NavView {
     pub fn refresh_connection_after_filter(&self, conn_id: &str, cx: &mut Context<Self>) {
         self.refresh_node(conn_id, conn_id, Some(NavPath::Connection), cx);
         cx.notify();
+    }
+
+    // ---- B6 staged 破坏性动作族（菜单 / 快捷键共用的状态写入路径）----
+
+    /// 把已确认的待提交条目写入状态机；按入队结果三态记提示并通知重渲染。
+    ///
+    /// 菜单与快捷键两条入口的确认对话框 OK 回调都收口到这里：去重 / 冲突归并规则
+    /// 只在状态机一处实现（§4.7），视图层不重复判定。
+    pub(super) fn apply_staged_enqueue(&mut self, staged: StagedOp, cx: &mut Context<Self>) {
+        let outcome = self.nav.borrow_mut().enqueue_staged(staged);
+        match outcome {
+            EnqueueOutcome::Added => self.host.notice("已加入待提交清单".to_string(), cx),
+            EnqueueOutcome::Replaced => {
+                self.host.notice("已更新为待删除（替换原清空项）".to_string(), cx)
+            }
+            EnqueueOutcome::Ignored => self.host.notice("该对象已在待提交清单".to_string(), cx),
+        }
+        cx.notify();
+    }
+
+    /// 单项撤销：把指定节点从待提交集合移除（菜单「从待提交移除」，不弹确认）。
+    pub(super) fn dismiss_staged_entry(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.nav.borrow_mut().dismiss_staged(key);
+        self.host.notice("已从待提交清单移除".to_string(), cx);
+        cx.notify();
+    }
+
+    /// 撤销全部待提交变更（`Ctrl+Z`，单层撤销：只回退到未入队状态，不恢复已执行项）。
+    ///
+    /// 空集合给一条中性提示，不弹对话框、不产生空操作通知噪音。
+    pub(super) fn revert_staged(&mut self, cx: &mut Context<Self>) {
+        if self.nav.borrow().staged_count() == 0 {
+            self.host.notice("待提交清单为空".to_string(), cx);
+            return;
+        }
+        self.nav.borrow_mut().clear_staged();
+        self.host.notice("已撤销全部待提交变更".to_string(), cx);
+        cx.notify();
+    }
+
+    /// 快捷键（`Delete`）路径的 Context 内校验段：取当前选中对象 → 类型 / 连接态 /
+    /// 重复入队校验 → 构造确认候选；校验失败记对应提示并返回 `None`，由动作处理器在
+    /// App 作用域决定是否开窗（Context 回调拿不到 `&mut App`，见 `PreparedStaged` 注释）。
+    ///
+    /// 菜单路径由 `rows.rs` 闭包直接持有节点身份构造 `StagedOp`，不经过本方法；类型白名单
+    /// 由 `staged_dialog_copy` 纯函数兜底返回 `None`，与注册表 `applies` 同源。
+    pub(super) fn prepare_staged_enqueue(
+        &mut self,
+        op: NavOp,
+        cx: &mut Context<Self>,
+    ) -> Option<PreparedStaged> {
+        let Some(item) = self.nav_selected() else {
+            self.host.notice("请先选择要操作的对象".to_string(), cx);
+            return None;
+        };
+        let Some(prop) = item.property.clone() else {
+            self.host.notice("当前选中项不支持该操作".to_string(), cx);
+            return None;
+        };
+        let Some(kind) = property_kind_to_object_kind(prop.kind) else {
+            self.host.notice("当前选中项不支持该操作".to_string(), cx);
+            return None;
+        };
+        if !self.host.is_connected(&item.conn_id) {
+            self.host.notice("该操作需要先建立连接".to_string(), cx);
+            return None;
+        }
+        if self.nav.borrow().staged_lookup(&item.key).is_some() {
+            self.host.notice("该对象已在待提交清单".to_string(), cx);
+            return None;
+        }
+        let qualified = nav_qualified_name(&prop);
+        let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified)
+        else {
+            self.host.notice("当前对象类型不支持该操作".to_string(), cx);
+            return None;
+        };
+        let driver = self
+            .host
+            .connections()
+            .iter()
+            .find(|c| c.id == item.conn_id)
+            .map(|c| c.driver.clone())
+            .unwrap_or_default();
+        let staged = StagedOp {
+            key: item.key.clone(),
+            conn_id: item.conn_id.clone(),
+            driver,
+            catalog: prop.catalog.clone(),
+            schema: prop.schema.clone(),
+            parent: prop.parent.clone(),
+            object_name: prop.name.clone(),
+            object_kind: kind,
+            op,
+            error: None,
+        };
+        Some(PreparedStaged {
+            staged,
+            title,
+            description,
+            ok_text,
+        })
     }
 }

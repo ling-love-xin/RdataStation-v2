@@ -8,6 +8,7 @@
 //! 根模块用 `use self::primitives::*;` 收回来，**调用点一字未改**。
 
 use super::*;
+use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 use crate::nav_host::ObjectMaskRule;
 use regex::Regex;
@@ -1017,7 +1018,17 @@ pub(super) fn nav_object_kind_masked(kind: &crate::model::NavNodeKind) -> bool {
 }
 
 /// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的**每一段**用命中底色标出。
-pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div {
+///
+/// `strike` = true（B6 待提交删除态）时，父段与各分段统一挂删除线：删除线是父元素
+/// text_style 位、不会穿透到内层分段 Div（与文字色继承不是同一通道），故分段显式补挂，
+/// 避免命中段漏掉删除线（风险 R2 落码闭环，不靠首帧视觉核对）。
+pub(super) fn nav_name_highlight(
+    name: &str,
+    filter: &str,
+    match_bg: Hsla,
+    fg: Hsla,
+    strike: bool,
+) -> Div {
     let segments = nav_highlight_segments(name, filter);
     let has_hit = segments.iter().any(|(_, hit)| *hit);
     if !has_hit {
@@ -1025,6 +1036,7 @@ pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: H
             .min_w_0()
             .overflow_hidden()
             .text_ellipsis()
+            .when(strike, |s| s.line_through())
             .text_color(fg)
             .child(name.to_string());
     }
@@ -1034,14 +1046,66 @@ pub(super) fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: H
         .min_w_0()
         .overflow_hidden()
         .text_ellipsis()
+        .when(strike, |s| s.line_through())
         .text_color(fg)
         .children(segments.into_iter().map(|(text, hit)| {
+            let segment = div().when(strike, |s| s.line_through());
             if hit {
-                div().rounded_sm().bg(match_bg).child(text)
+                segment.rounded_sm().bg(match_bg).child(text)
             } else {
-                div().child(text)
+                segment.child(text)
             }
         }))
+}
+
+/// B6 待提交破坏性动作的菜单项文案（纯函数，供菜单装配与单测钉死）。
+///
+/// - 已在待提交清单（`staged_hit`）→ 「从待提交移除」（单项撤销，不弹确认）；
+/// - 未入队：按动作 × 对象类别给「删除表…/删除视图…/删除序列…/清空表…」；
+/// - 动作与类别不匹配（如 Truncate 挂到视图 / 序列）→ `None`，菜单不渲染该项。
+pub(super) fn staged_menu_label(op: NavOp, kind: ObjectKind, staged_hit: bool) -> Option<&'static str> {
+    if staged_hit {
+        return Some("从待提交移除");
+    }
+    match (op, kind) {
+        (NavOp::Drop, ObjectKind::Table) => Some("删除表…"),
+        (NavOp::Drop, ObjectKind::View) => Some("删除视图…"),
+        (NavOp::Drop, ObjectKind::Sequence) => Some("删除序列…"),
+        (NavOp::Truncate, ObjectKind::Table) => Some("清空表…"),
+        _ => None,
+    }
+}
+
+/// B6 单项确认对话框文案（纯函数）：返回 `(标题, 描述, OK 按钮文案)`。
+///
+/// 描述内限定名用展示形态（`nav_qualified_name`，无引号转义）；执行 DDL 的引号转义
+/// 由 L3 方言 provider 在提交执行时完成（§4.4）。动作 × 类别不匹配时返回 `None`。
+pub(super) fn staged_dialog_copy(
+    op: NavOp,
+    kind: ObjectKind,
+    qualified: &str,
+) -> Option<(&'static str, String, &'static str)> {
+    let ok_text = "确认加入待提交";
+    let (title, description) = match (op, kind) {
+        (NavOp::Drop, ObjectKind::Table) => (
+            "删除表",
+            format!("确定删除表 `{qualified}`？表及其数据将被永久删除，提交后不可恢复。"),
+        ),
+        (NavOp::Truncate, ObjectKind::Table) => (
+            "清空表",
+            format!("确定清空表 `{qualified}`？表内全部数据将被删除，提交后不可恢复。"),
+        ),
+        (NavOp::Drop, ObjectKind::View) => (
+            "删除视图",
+            format!("确定删除视图 `{qualified}`？提交后不可恢复。"),
+        ),
+        (NavOp::Drop, ObjectKind::Sequence) => (
+            "删除序列",
+            format!("确定删除序列 `{qualified}`？提交后不可恢复。"),
+        ),
+        _ => return None,
+    };
+    Some((title, description, ok_text))
 }
 
 /// 内容档 snippet 的分段（纯函数，可单测）：解析 `<mark>…</mark>` 标记，
@@ -1323,9 +1387,10 @@ mod tests {
         nav_glob_match, nav_highlight_segments, nav_hit_source_badge, nav_mask_passes, nav_node_matches,
         nav_object_masked, nav_snippet_segments, nav_tag_palette_index, placeholder_decision,
         placeholder_message, prune_expanded, prune_subtree_keys, selected_key_in_subtree,
-        size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER,
+        staged_dialog_copy, staged_menu_label, size_badge_text, NavHitBadgeRole, PUMP_BATCH_ORDER,
     };
-    use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath};
+    use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, ObjectKind};
+    use crate::nav::capability::NavOp;
     use crate::nav::family_profile::InlineStatsProfile;
     use crate::nav_host::ObjectMaskRule;
     use crate::nav_rows::PlaceholderKind;
@@ -1997,5 +2062,84 @@ mod tests {
             nav_hit_source_badge(nav_jobs::HitSource::Definition),
             Some(("定义", NavHitBadgeRole::Definition))
         );
+    }
+
+    /// B6 菜单标签矩阵：已入队统一切「从待提交移除」；未入队按动作 × 类别给细分文案；
+    /// 不适用组合返回 `None`（菜单不渲染该项，类型白名单与注册表 `applies` 同源）。
+    #[test]
+    fn staged_menu_label_follows_action_kind_and_staged_state() {
+        // 已入队：适用类别一律切移除臂，不再区分 Drop / Truncate。
+        for (op, kind) in [
+            (NavOp::Drop, ObjectKind::Table),
+            (NavOp::Drop, ObjectKind::View),
+            (NavOp::Drop, ObjectKind::Sequence),
+            (NavOp::Truncate, ObjectKind::Table),
+        ] {
+            assert_eq!(
+                staged_menu_label(op, kind, true),
+                Some("从待提交移除"),
+                "{op:?}/{kind:?} 已入队应切移除臂"
+            );
+        }
+        // 未入队：动作 × 类别细分文案。
+        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::Table, false), Some("删除表…"));
+        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::View, false), Some("删除视图…"));
+        assert_eq!(staged_menu_label(NavOp::Drop, ObjectKind::Sequence, false), Some("删除序列…"));
+        assert_eq!(staged_menu_label(NavOp::Truncate, ObjectKind::Table, false), Some("清空表…"));
+        // 不适用：Truncate 只挂表；其余类别不产生破坏性菜单项。
+        for (op, kind) in [
+            (NavOp::Truncate, ObjectKind::View),
+            (NavOp::Truncate, ObjectKind::Sequence),
+            (NavOp::Truncate, ObjectKind::Routine),
+            (NavOp::Drop, ObjectKind::Routine),
+            (NavOp::Drop, ObjectKind::Trigger),
+            (NavOp::Drop, ObjectKind::Column),
+            (NavOp::Drop, ObjectKind::Schema),
+        ] {
+            assert_eq!(
+                staged_menu_label(op, kind, false),
+                None,
+                "{op:?}/{kind:?} 不应出现菜单项"
+            );
+        }
+    }
+
+    /// B6 单项确认对话框文案矩阵：标题按动作 × 类别分派；描述含限定名与对应不可恢复警告；
+    /// OK 按钮文案统一「确认加入待提交」；不适用组合返回 `None`。
+    #[test]
+    fn staged_dialog_copy_follows_action_kind_with_qualified_name() {
+        let (title, desc, ok) = staged_dialog_copy(NavOp::Drop, ObjectKind::Table, "shop.orders")
+            .expect("删除表应给出文案");
+        assert_eq!(title, "删除表");
+        assert!(desc.contains("shop.orders"), "描述应含限定名");
+        assert!(desc.contains("表及其数据将被永久删除"), "表删除警告口径");
+        assert_eq!(ok, "确认加入待提交");
+
+        let (title, desc, ok) =
+            staged_dialog_copy(NavOp::Truncate, ObjectKind::Table, "shop.orders")
+                .expect("清空表应给出文案");
+        assert_eq!(title, "清空表");
+        assert!(desc.contains("shop.orders"));
+        assert!(desc.contains("表内全部数据将被删除"), "清空表警告口径");
+        assert_eq!(ok, "确认加入待提交");
+
+        let (title, desc, ok) = staged_dialog_copy(NavOp::Drop, ObjectKind::View, "shop.v_orders")
+            .expect("删除视图应给出文案");
+        assert_eq!(title, "删除视图");
+        assert!(desc.contains("shop.v_orders"));
+        assert!(desc.contains("提交后不可恢复"));
+        assert_eq!(ok, "确认加入待提交");
+
+        let (title, desc, ok) =
+            staged_dialog_copy(NavOp::Drop, ObjectKind::Sequence, "shop.seq_id")
+                .expect("删除序列应给出文案");
+        assert_eq!(title, "删除序列");
+        assert!(desc.contains("shop.seq_id"));
+        assert!(desc.contains("提交后不可恢复"));
+        assert_eq!(ok, "确认加入待提交");
+
+        // 不适用组合不产出对话框。
+        assert!(staged_dialog_copy(NavOp::Truncate, ObjectKind::View, "v").is_none());
+        assert!(staged_dialog_copy(NavOp::Drop, ObjectKind::Routine, "f").is_none());
     }
 }

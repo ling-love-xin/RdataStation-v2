@@ -5,6 +5,8 @@
 //! 本模块只留结果区的**标题行**（“搜索中 / 无命中 / 共几条”）。
 
 use super::*;
+use super::PreparedStaged;
+use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 
 impl NavView {
@@ -1180,6 +1182,45 @@ impl NavView {
                     }
                 }
             }))
+            // B6 staged：`Ctrl+Z` 撤销全部待提交变更（纯状态操作，Context 内完成）。
+            .on_action(cx.listener(|this, _: &NavRevertAllStaged, _window, cx| {
+                this.revert_staged(cx);
+            }))
+            // B6 staged：`Delete` 把当前选中对象加入待提交删除清单。
+            // 两阶段：Context 内 `prepare_staged_enqueue` 完成校验并返回候选；
+            // 校验通过后在 App 作用域开单项确认对话框（Context 回调拿不到 `&mut App`）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavDeleteToStaged, window, app| {
+                    let Some(prepared) =
+                        entity.update(app, |this, cx| this.prepare_staged_enqueue(NavOp::Drop, cx))
+                    else {
+                        return;
+                    };
+                    let entity = entity.clone();
+                    window.open_alert_dialog(app, move |alert, _window, _cx| {
+                        let entity = entity.clone();
+                        let prepared: PreparedStaged = prepared.clone();
+                        alert
+                            .confirm()
+                            .title(prepared.title)
+                            .description(prepared.description)
+                            .button_props(
+                                DialogButtonProps::default()
+                                    .ok_text(prepared.ok_text)
+                                    .ok_variant(ButtonVariant::Danger)
+                                    .show_cancel(true),
+                            )
+                            .on_ok(move |_, _, app| {
+                                let staged = prepared.staged.clone();
+                                entity.update(app, |this, cx| {
+                                    this.apply_staged_enqueue(staged, cx)
+                                });
+                                true
+                            })
+                    });
+                }
+            })
             .id("nav-panel")
             .role(gpui::Role::Group)
     }
