@@ -300,9 +300,6 @@ pub struct EditorHostPanel {
     edit_mode: EditMode,
     /// 是否已被 Dock 移除（移除即关闭文档，见 `Panel::on_removed`）
     pub(crate) closed: bool,
-    /// 欢迎页是否已被用户点掉（启动空白文档的“空编辑器”换成欢迎页；
-    /// 点「开始编写」或内容非空后回到正常编辑器）
-    welcome_dismissed: bool,
     /// #48 行号开关缓存（设置 → render 权威同步点 → 内核 `set_line_number`）
     show_line_numbers: bool,
     /// 【2026-10-19】脏态自绘 ✕ 的悬浮开关：鼠标悬停标题才显示关闭按钮，
@@ -899,7 +896,6 @@ impl EditorHostPanel {
             message: None,
             edit_mode: EditMode::Row,
             closed: false,
-            welcome_dismissed: false,
             // #48 面板创建即取设置当前值（与内核默认一致；后续变化由 render 同步）
             show_line_numbers: editor_show_line_numbers_or_default(cx),
             title_hovered: std::cell::Cell::new(false),
@@ -3150,12 +3146,6 @@ impl EditorHostPanel {
             .with_document(|doc| doc.mode())
             .unwrap_or(EditorMode::General);
         if mode != EditorMode::Analysis {
-            // 欢迎页：启动空白文档（未命名 + 空内容 + 未点过「开始编写」）显示欢迎页
-            // 而不是光秃秃的空编辑器（2026-10-14 用户点名）。点按钮或输入内容后
-            // 回到正常编辑器（`welcome_dismissed` 置位 / 内容非空即退出欢迎态）。
-            if self.show_welcome() {
-                return self.render_welcome_page(cx);
-            }
             // 【遗留】通用模式 Markdown 文档的渲染态：渲染视图（只读）替代源码编辑器。
             // 判据 = 预览开关 + 文档类型是 Markdown；其余文档一律走编辑器。
             if self.markdown_preview && self.is_markdown_document() {
@@ -3170,13 +3160,20 @@ impl EditorHostPanel {
                     .child(TextView::markdown("md-preview", source).scrollable(true).size_full())
                     .into_any_element();
             }
+            // 需求② 打开即编辑态：不再用欢迎页挡路（点「开始编写」才进编辑），空白文档
+            // 直接可编辑（导航打开的 SQL 同理，免点按钮直接进编辑期 SQL 模式）。
+            // 写入模式提示作为居中水印叠加在空编辑器背景上，输入任意字符即消失。
             let read_only = self.editor_read_only();
-            return Editor::new(&self.editor)
+            let editor = Editor::new(&self.editor)
                 .appearance(false)
                 .bordered(false)
                 .readonly(read_only)
-                .size_full()
-                .into_any_element();
+                .size_full();
+            let mut body = div().relative().size_full().child(editor);
+            if !read_only && self.editor_is_empty() {
+                body = body.child(self.render_write_hint(cx));
+            }
+            return body.into_any_element();
         }
         // 分析模式：笔记本正文（单元卡片列表 / 空态引导卡）。编辑区可滚动。
         let state = self.notebook_state();
@@ -3198,76 +3195,31 @@ impl EditorHostPanel {
         .into_any_element()
     }
 
-    /// 是否显示欢迎页：启动空白文档（未命名 + 内容为空 + 用户没点过「开始编写」）。
-    ///
-    /// 判据特意用**服务层的文档路径与内容**：路径为空 = 未命名，内容空 = 还没写东西。
-    /// 用户一旦开始输入（内容非空）或点了欢迎页按钮（`welcome_dismissed`），立即退出欢迎态。
-    pub(crate) fn show_welcome(&self) -> bool {
-        if self.welcome_dismissed || self.document_path().is_some() {
-            return false;
-        }
+    /// 写入模式提示的显示条件（需求②）：编辑器可编辑且内容为空——输入任意字符即消失。
+    pub(crate) fn editor_is_empty(&self) -> bool {
         self.with_document(|doc| doc.content().trim().is_empty())
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 
-    /// 点掉欢迎页（「开始编写」按钮）：置位后回到正常编辑器。
-    pub(crate) fn dismiss_welcome(&mut self, cx: &mut Context<Self>) {
-        self.welcome_dismissed = true;
-        cx.notify();
-    }
-
-    /// 欢迎页：启动空白文档的“空编辑器”换成一页引导（2026-10-14 用户点名）。
-    ///
-    /// 内容：居中品牌字 + 短标语 + 「开始编写」按钮（点掉欢迎态、聚焦编辑内核）。
-    /// 不接任何工作台级动作（打开草稿 / 搜索等要宿主能力，留到后续版本），
-    /// 按钮只做“从欢迎页进入编辑”这一件事。
-    fn render_welcome_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// 写入模式背景水印（需求②）：空白编辑器的居中弱色提示，替代原欢迎页的「开始编写」
+    /// 挡路按钮——打开即编辑态，提示只作背景说明、不拦截输入；内容非空后不再渲染。
+    /// 无任何鼠标 / 键盘 handler：gpui 命中测试只认带 handler 的元素，故水印不会挡住
+    /// 下方的编辑内核获取焦点（非交互覆盖层的通行做法）。
+    fn render_write_hint(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let fg = theme.colors.foreground;
         let muted = theme.colors.muted_foreground;
-        let primary = theme.colors.primary;
-        let entity = cx.entity();
-
-        let start = {
-            let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
-                entity.update(app, |this, cx| this.dismiss_welcome(cx));
-                // 关掉欢迎页后把焦点交给编辑内核，用户可以直接开始打字
-                entity.update(app, |this, cx| {
-                    let handle = this.editor.read(cx).focus_handle(cx);
-                    handle.focus(window, cx);
-                });
-            }
-        };
-
         div()
-            .size_full()
-            .v_flex()
+            .absolute()
+            .inset_0()
+            .flex()
             .items_center()
             .justify_center()
-            .gap_3()
-            .text_color(fg)
-            .child(
-                Icon::new(IconName::Database)
-                    .size(rems(2.5))
-                    .text_color(primary),
-            )
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(gpui_kit::FontWeight::MEDIUM)
-                    .child("欢迎使用 RdataStation"),
-            )
             .child(
                 div()
                     .text_sm()
+                    .italic()
                     .text_color(muted)
-                    .child("连接数据，分析洞察——从一段 SQL 开始"),
-            )
-            .child(
-                Button::new("welcome-start")
-                    .label("开始编写 SQL")
-                    .on_click(start),
+                    .child("写入模式 · 直接输入开始编写"),
             )
             .into_any_element()
     }
@@ -8485,25 +8437,44 @@ impl Render for EditorHostPanel {
                 div().flex_1().min_h_0().overflow_hidden().child(panel_render),
             );
         }
+        // 编辑器自身状态栏（需求③ / 状态栏去杂乱）：文档级上下文迁出全局栏、
+        // 挂到编辑器 tab 底部。控件事件回调走实体句柄更新，不重入本次 render。
+        if let Some(status_bar) = render_editor_status_bar(self, &cx.entity(), cx) {
+            // 栏样式：侧栏底色 + 顶部分隔线 + 固定高——编辑器栏是内嵌表面，
+            // 与全局珊瑚色栏区分；文字色随内容（`render_editor_status_bar` 内取 muted）。
+            let theme = cx.theme();
+            let bar_bg = theme.colors.sidebar;
+            let bar_border = theme.colors.border;
+            root = root.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .px_2()
+                    .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
+                    .border_t(ui::HAIRLINE)
+                    .border_color(bar_border)
+                    .bg(bar_bg)
+                    .child(status_bar),
+            );
+        }
         root
     }
 }
 
 
 
-/// 全局状态栏「活动文档上下文段」（VSCode 式徽标 + 文档级交互控件）。
+/// 编辑器自身状态栏（需求③ / 状态栏去杂乱）：把文档级上下文（连接·通道·事务 /
+/// 环境族·未保存·执行中·消息 + 右段 行-列·编码·换行·缩进·模式·脏 + 编辑模式 /
+/// 重设 / 事务 / 中断控件）迁到编辑器 tab 底部自己的状态栏，不再塞进工作台全局栏。
 ///
-/// 由宿主（workbench）在渲染全局状态栏时对**中央活动编辑面板**调用：
-/// 纯读构造（不写 Shared / 不做 I/O），控件事件回调统一走 `panel.update`，
-/// 不会重入正在渲染的宿主。返回 `None` = 没有活动文档 / 文档已关。
-///
-/// 交互控件（编辑模式 / 重设菜单 / 事务 / 中断）自编辑器内部状态栏迁出，
-/// 数据与回调仍留在本 crate（workbench 只调用本函数，不触碰面板内部）。
-pub fn editor_global_status(
-    panel: &Entity<EditorHostPanel>,
+/// 由编辑器宿主自身的 `render` 挂载（把 `&self` 与自身实体句柄传入）：纯读构造
+/// （不写 Shared / 不做 I/O），控件事件回调统一走 `panel.update`，不会重入正在
+/// 渲染的宿主。返回 `None` = 没有活动文档 / 文档已关。
+pub(crate) fn render_editor_status_bar(
+    host: &EditorHostPanel,
+    panel_entity: &Entity<EditorHostPanel>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let host = panel.read(cx);
     if host.closed {
         return None;
     }
@@ -8511,7 +8482,7 @@ pub fn editor_global_status(
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
     let border = theme.colors.border;
-    let panel_entity = panel.clone();
+    let panel_entity = panel_entity.clone();
 
     // ── 左段：连接 ▸ Schema · 通道 · 事务（SQL）/ 环境族（通用）· 未保存 · 执行中 · 消息 ──
     let mut left_parts: Vec<String> = Vec::new();

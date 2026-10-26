@@ -702,10 +702,10 @@ fn focusing_a_non_active_tab_in_a_multi_tab_group_does_not_panic(cx: &mut TestAp
     );
 }
 
-/// 欢迎页（2026-10-14 用户点名）：启动空白文档（未命名 + 空内容 + 未点过「开始编写」）
-/// 显示欢迎页，而不是光秃秃的空编辑器；一旦内容非空或点了按钮，立即退出欢迎态。
+/// 写入模式提示（需求②）：空白文档显示提示、内容非空即消失；空编辑器能正常画出
+/// （替代原「开始编写」欢迎页挡路按钮——打开即编辑态）。
 #[gpui_kit::test]
-fn welcome_page_shows_only_for_a_pristine_untitled_document(cx: &mut TestAppContext) {
+fn write_hint_shows_for_empty_and_hides_after_typing(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
 
     let shared = EditorShared::new();
@@ -722,27 +722,26 @@ fn welcome_page_shows_only_for_a_pristine_untitled_document(cx: &mut TestAppCont
         })
     };
 
-    // 空白未命名文档：欢迎页判定成立
+    // 空白未命名文档：写入模式提示判定成立（可编辑且内容空）
     assert!(
-        cx.update(|_window, cx| panel.read(cx).show_welcome()),
-        "空白未命名文档应显示欢迎页"
+        cx.update(|_window, cx| panel.read(cx).editor_is_empty()),
+        "空白未命名文档应显示写入模式提示"
     );
-    // 欢迎页要真能画出来（render 路径不 panic）
+    // 提示要真能画出来（render 路径不 panic）
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
-    // 内容非空 → 退出欢迎态（判据读服务层内容）
+    // 内容非空 → 提示消失（判据读服务层内容）
     shared.update(|service| service.set_content(&blank, "select 9".to_string()));
     assert!(
-        !cx.update(|_window, cx| panel.read(cx).show_welcome()),
-        "内容非空后不再显示欢迎页"
+        !cx.update(|_window, cx| panel.read(cx).editor_is_empty()),
+        "内容非空后不再显示提示"
     );
 
-    // 点掉欢迎页（`welcome_dismissed` 置位）→ 不再显示，即使内容又变空
+    // 内容清空 → 提示重新出现
     shared.update(|service| service.set_content(&blank, String::new()));
-    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.dismiss_welcome(cx)));
     assert!(
-        !cx.update(|_window, cx| panel.read(cx).show_welcome()),
-        "点掉欢迎页后不再显示"
+        cx.update(|_window, cx| panel.read(cx).editor_is_empty()),
+        "内容清空后提示重新出现"
     );
 
     // 回到正常编辑器后也要能画出来

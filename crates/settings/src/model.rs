@@ -494,6 +494,14 @@ pub struct Navigator {
     /// （PG 档案默认开 size、方言支持行估计；SQLite/DuckDB 档案关 size 且不支持行估计）。
     #[serde(default = "default_true")]
     pub show_inline_stats: bool,
+    /// 表行「注释副标」子开关（需求②，默认开）：总开关 `show_inline_stats` 开时仍受
+    /// 此项门控；关时表/视图行的注释副标不显示（其余统计项不受影响）。
+    #[serde(default = "default_true")]
+    pub show_inline_comment: bool,
+    /// 表行「大小徽标」子开关（需求②，默认开）：总开关开时仍受此项门控；关时
+    /// 表行的 `≈ KB` 大小徽标不显示。「行数」子项由既有 `row_estimate` 独立承担。
+    #[serde(default = "default_true")]
+    pub show_inline_size: bool,
     /// 每连接的对象名 mask（B-1）：`conn_id → 规则`。
     ///
     /// 键不存在 = 该连接不过滤；键存在 = 按规则过滤**已加载**的对象行（表 / 视图 /
@@ -547,6 +555,8 @@ impl Default for Navigator {
             visible_databases: BTreeMap::new(),
             row_estimate: true,
             show_inline_stats: true,
+            show_inline_comment: true,
+            show_inline_size: true,
             object_masks: BTreeMap::new(),
             global_mask: ObjectMaskRule::default(),
         }

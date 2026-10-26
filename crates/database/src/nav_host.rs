@@ -138,6 +138,18 @@ pub trait NavHost: 'static {
     fn show_inline_stats(&self, cx: &App) -> bool;
     fn set_show_inline_stats(&self, value: bool, cx: &mut App);
 
+    /// 表行「注释副标」子开关（需求②）：总开关开时仍受此项门控。
+    fn show_inline_comment(&self, cx: &App) -> bool;
+    fn set_show_inline_comment(&self, value: bool, cx: &mut App);
+
+    /// 表行「大小徽标」子开关（需求②）。
+    fn show_inline_size(&self, cx: &App) -> bool;
+    fn set_show_inline_size(&self, value: bool, cx: &mut App);
+
+    /// 表行「行数（≈N）」子开关设置（需求②）：关时不排估计任务、行尾不显「≈ N」。
+    /// 读取走 [`Self::row_estimate`]。
+    fn set_row_estimate(&self, value: bool, cx: &mut App);
+
     /// 归属域用短码（`P`）还是文字（`项目`）。
     fn source_short_code(&self, cx: &App) -> bool;
     fn set_source_short_code(&self, value: bool, cx: &mut App);

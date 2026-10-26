@@ -118,6 +118,22 @@ impl NavHost for WorkbenchNavHost {
         settings::SettingsService::set_show_inline_stats(value, cx);
     }
 
+    fn show_inline_comment(&self, cx: &App) -> bool {
+        settings::SettingsService::show_inline_comment(cx)
+    }
+
+    fn set_show_inline_comment(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_show_inline_comment(value, cx);
+    }
+
+    fn show_inline_size(&self, cx: &App) -> bool {
+        settings::SettingsService::show_inline_size(cx)
+    }
+
+    fn set_show_inline_size(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_show_inline_size(value, cx);
+    }
+
     fn source_short_code(&self, cx: &App) -> bool {
         settings::SettingsService::source_short_code(cx)
     }
@@ -225,6 +241,10 @@ impl NavHost for WorkbenchNavHost {
 
     fn row_estimate(&self, cx: &App) -> bool {
         settings::SettingsService::row_estimate(cx)
+    }
+
+    fn set_row_estimate(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_row_estimate(value, cx);
     }
 
     // ==================== P1 连接级导航偏好 ====================

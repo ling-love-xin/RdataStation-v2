@@ -537,6 +537,9 @@ impl NavView {
                         let host_groups = self.host.clone();
                         let host_views = self.host.clone();
                         let host_stats = self.host.clone();
+                        let host_comment = self.host.clone();
+                        let host_size = self.host.clone();
+                        let host_rowest = self.host.clone();
                         // 保存视图的筛选快照：菜单构建瞬间的 chips 状态（与 write_nav_filters 同构）。
                         let cur_filters = {
                             let v = self.nav.borrow();
@@ -556,6 +559,10 @@ impl NavView {
                         let show_scope = self.host.show_scope(cx);
                         let source_short = self.host.source_short_code(cx);
                         let show_inline_stats = self.host.show_inline_stats(cx);
+                        // 需求② 表行统计各子项开关：总开关开时仍受各自子项门控。
+                        let show_inline_comment = self.host.show_inline_comment(cx);
+                        let show_inline_size = self.host.show_inline_size(cx);
+                        let show_row_estimate = self.host.row_estimate(cx);
                         let del_conn = current_conn.clone();
                         let del_name = current_conn.as_deref().and_then(|id| {
                             self.host
@@ -615,6 +622,37 @@ impl NavView {
                                         let host_stats = host_stats.clone();
                                         move |_, _, app| {
                                             host_stats.set_show_inline_stats(!show_inline_stats, app);
+                                        }
+                                    }),
+                            )
+                            // 需求② 表行统计子项独立开关：总开关开时仍受各自子项门控。
+                            .item(
+                                PopupMenuItem::new("注释副标")
+                                    .checked(show_inline_comment)
+                                    .on_click({
+                                        let host_comment = host_comment.clone();
+                                        move |_, _, app| {
+                                            host_comment.set_show_inline_comment(!show_inline_comment, app);
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("大小徽标")
+                                    .checked(show_inline_size)
+                                    .on_click({
+                                        let host_size = host_size.clone();
+                                        move |_, _, app| {
+                                            host_size.set_show_inline_size(!show_inline_size, app);
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("行数估计")
+                                    .checked(show_row_estimate)
+                                    .on_click({
+                                        let host_rowest = host_rowest.clone();
+                                        move |_, _, app| {
+                                            host_rowest.set_row_estimate(!show_row_estimate, app);
                                         }
                                     }),
                             )

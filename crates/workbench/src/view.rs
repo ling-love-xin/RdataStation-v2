@@ -16,7 +16,6 @@ use gpui_kit::base::{Disableable as _, Selectable, StyledExt};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::dialog::{Dialog, DialogButtonProps, DialogContent};
-use gpui_kit::base::dock::layout::PaneRef;
 use gpui_kit::base::dock::PanelId;
 use gpui_kit::component::dock::{
     DockArea, DockLayout, DockPlacement, DockSkin, PanelStyle, panel_handle,
@@ -2743,45 +2742,10 @@ impl WorkbenchView {
 
     // ===== 状态栏 =====
 
-    /// 中央 Dock 当前激活的编辑面板（没有 = `None`）。
-    ///
-    /// Dock 不向宿主暴露「激活面板」回调（`PanelEvent` 只有 Zoom / Layout 三类），
-    /// 宿主渲染时直接读 Dock 布局树（唯一真相源）——tab 点击切换也覆盖，无需自维护
-    /// 激活索引。与 `editor_hosts` 按 `PanelId` 匹配。
-    fn active_editor_panel(
-        &self,
-        cx: &App,
-    ) -> Option<Entity<editor::view::host::EditorHostPanel>> {
-        let area = self.area.as_ref()?;
-        let layout = area.read(cx).layout(DockPlacement::Center)?;
-        let mut found: Option<gpui_kit::base::dock::PanelId> = None;
-        layout.root().walk(&mut |node| match node.kind() {
-            PaneRef::Tabs { panels, active_ix } => {
-                if let Some(id) = panels.get(active_ix) {
-                    found = Some(*id);
-                }
-            }
-            PaneRef::Split { .. } => {}
-        });
-        let panel_id = found?;
-        // 面板的 PanelId = 面板实体的 EntityId（`EditorHostPanel::focus_self` 同款换算）
-        self.editor_hosts
-            .iter()
-            .find(|panel| PanelId::from(panel.entity_id()) == panel_id)
-            .cloned()
-    }
-
-
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // 【LSP】语言服务指示 + 管理器浮层（未接端口 = 空元素）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let lsp_item = self.lsp_status_item(cx);
-        // 【#47】活动编辑器上下文段：VSCode 式——全局状态栏显示当前文档的语言 / 连接 /
-        // 编码 / 换行 / 缩进 / 行-列 / 事务 / 执行状态与交互控件。必须在 `cx.theme()`
-        // 之前算（那一步把 cx 借出去了）；面板状态变化经订阅重绘宿主，这里每帧重读。
-        let editor_context = self.active_editor_panel(cx).and_then(|panel| {
-            editor::view::host::editor_global_status(&panel, cx)
-        });
         // M7：Mock 任务在跑时给状态栏一个指示 + 取消入口（读面板实体自己的状态，不另存一份）——
         // 必须在 `cx.theme()` 之前算：那一步把 cx 借出去了（gpui-kit-dev 的借用约定）。
         let mock_chip = self
@@ -2855,11 +2819,11 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .text_xs()
-                    .children(editor_context)
+                    // 状态栏去杂乱（需求）：文档级上下文已迁到编辑器自身状态栏，
+                    // 全局栏只留应用级信息——Mock 任务 / 选中连接 / LSP / 右侧开关，
+                    // 去掉静态的「DuckDB 就绪」「UTF-8」。
                     .children(mock_chip)
                     .child(div().child(format!("连接：{selected}")))
-                    .child(div().child("DuckDB 就绪"))
-                    .child(div().child("UTF-8"))
                     .child(lsp_item)
                     .child(right_toggle),
             )

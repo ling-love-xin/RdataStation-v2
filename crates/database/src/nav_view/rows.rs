@@ -1377,6 +1377,18 @@ impl NavView {
                     .font_weight(FontWeight::BOLD)
                     .text_color(badge_color)
                     .child(badge_letters),
+            )
+            // 需求③ 连接状态点：徽标右上角小圆点，把「连接 / 断开」显式点出来
+            // （与徽标同一 `badge_status` 取色——已连=绿 / 未连=灰 / 失败=红 /
+            // 连接中=info 且徽标整体呼吸）。形状仍表达库类型，圆点承担「连/断」语义。
+            .child(
+                div()
+                    .absolute()
+                    .top(gpui_kit::px(-1.0))
+                    .right(gpui_kit::px(-1.0))
+                    .size_1p5()
+                    .rounded_full()
+                    .bg(badge_color),
             );
 
         // 「连接中」才呼吸（原型设计 §2.3：`info` + 脉冲）。
@@ -1737,24 +1749,25 @@ impl NavView {
                                     fg,
                                     false,
                                 )),
-                        ),
+                        )
+                        // D12 主机名副标（需求①：紧跟连接名、同一左缘；斜体弱色截断，
+                        // 档案关闭或无 host 时整槽不挂）。放进名称容器内、紧随名称之后，
+                        // 不再被 `flex_1` 名称区推到行尾；名称可收缩为其让位。
+                        .when_some(host_subline, |s, text| {
+                            s.child(
+                                div()
+                                    .flex_none()
+                                    .min_w_0()
+                                    .max_w(rems(ui::NAV_HOST_SUBLINE_W))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_xs()
+                                    .italic()
+                                    .text_color(muted)
+                                    .child(text),
+                            )
+                        }),
                 )
-                // D12 主机名副标（同行右侧，斜体弱色截断；档案关闭或无 host 时整槽不挂）。
-                // 斜体：与连接名（常规字重）区隔，一眼看出「ip:port 是地址、不是名字」。
-                .when_some(host_subline, |s, text| {
-                    s.child(
-                        div()
-                            .flex_none()
-                            .min_w_0()
-                            .max_w(rems(ui::NAV_HOST_SUBLINE_W))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_xs()
-                            .italic()
-                            .text_color(muted)
-                            .child(text),
-                    )
-                })
                 // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
                 .when_some(err_summary, |s, e| s.child(e))
                 // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
@@ -2319,6 +2332,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         // 需求④ 表 / 视图行右侧统计徽标总开关：关闭后 meta / 注释副标 /
         // 分区·继承 / ≈N / 大小徽标全部不显（`row_estimate` 是更内层独立开关）。
         let show_stats = self.host.show_inline_stats(cx);
+        // 需求② 注释副标子开关：总开关开时仍受此项门控。
+        let show_inline_comment = self.host.show_inline_comment(cx);
+        // 需求② 大小徽标子开关 + 行数（≈N）子开关（复用既有 row_estimate）。
+        let show_inline_size = self.host.show_inline_size(cx);
+        let show_row_estimate = self.host.row_estimate(cx);
         // 供右键菜单使用（双击处理器已消费 `n_conn_label` / `n_driver`）。
         let m_conn_label = n_conn_label.clone();
         let m_driver = n_driver.clone();
@@ -2454,9 +2472,11 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 )
             });
         }
-        // 需求④ 注释副标随总开关显隐。
-        if let Some(comment) = comment_subline {
-            row = row.when(show_stats, |row| row.child(comment));
+        // 需求④ 注释副标随总开关显隐；需求② 再受「注释副标」子开关单独门控。
+        if show_inline_comment {
+            if let Some(comment) = comment_subline {
+                row = row.when(show_stats, |row| row.child(comment));
+            }
         }
         // B6 通用待提交徽标：命中 staged 清单的对象（表 / 视图 / 序列统一走此段，不并入
         // Table 专用 badges 向量——后者只承担分区 / 继承 / ≈N / 大小统计，职责分离；§4.9）。
@@ -2469,7 +2489,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child("待删除"),
             );
         }
-        // 需求④ 分区/继承 / ≈N / 大小徽标（Table 专用槽）随总开关整体显隐。
+        // 需求④ 分区/继承 / ≈N / 大小徽标（Table 专用槽）随总开关整体显隐；
+        // 需求② 再把 ≈N 与 大小 分别按子开关单独门控（分区/继承仍随总开关）。
         if show_stats && matches!(&node.kind, NavNodeKind::Table { .. }) {
             let mut badges = Vec::new();
             if node.child_partitions > 0 {
@@ -2478,40 +2499,44 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             if node.child_inherited > 0 {
                 badges.push(format!("继承 {}", node.child_inherited));
             }
-            let estimate = if let NavNodeKind::Table { row_estimate } = &node.kind {
-                *row_estimate
-            } else {
-                None
-            };
-            match estimate {
-                Some(n) => badges.push(format!("≈ {}", format_row_estimate(n))),
-                // 在途未回填 → 弱色「…」占位；回填完成 / 失败 / 驱动不支持都会移除
-                // `estimated_schemas` 条目，占位随之消失（不显示 0、不报红字）。
-                None => {
-                    let in_flight = {
-                        let view = self.nav.borrow();
-                        let schema = node
-                            .expand_path
-                            .as_ref()
-                            .and_then(|p| match p {
-                                NavPath::Table { schema, .. } => Some(schema.as_str()),
-                                _ => None,
-                            });
-                        schema.map(|s| {
-                            view.estimated_schemas
-                                .contains(&(node.connection_id.clone(), s.to_string()))
-                        })
-                        .unwrap_or(false)
-                    };
-                    if in_flight {
-                        badges.push("…".to_string());
+            // 需求② 行数（≈N）子开关：关时不取估计、不显徽标与占位。
+            if show_row_estimate {
+                let estimate = if let NavNodeKind::Table { row_estimate } = &node.kind {
+                    *row_estimate
+                } else {
+                    None
+                };
+                match estimate {
+                    Some(n) => badges.push(format!("≈ {}", format_row_estimate(n))),
+                    // 在途未回填 → 弱色「…」占位；回填完成 / 失败 / 驱动不支持都会移除
+                    // `estimated_schemas` 条目，占位随之消失（不显示 0、不报红字）。
+                    None => {
+                        let in_flight = {
+                            let view = self.nav.borrow();
+                            let schema = node
+                                .expand_path
+                                .as_ref()
+                                .and_then(|p| match p {
+                                    NavPath::Table { schema, .. } => Some(schema.as_str()),
+                                    _ => None,
+                                });
+                            schema.map(|s| {
+                                view.estimated_schemas
+                                    .contains(&(node.connection_id.clone(), s.to_string()))
+                            })
+                            .unwrap_or(false)
+                        };
+                        if in_flight {
+                            badges.push("…".to_string());
+                        }
                     }
                 }
             }
-            // D12 表大小徽标：档案开启 + 已回填才显；未回填 / 驱动不支持安静消失，
-            // 在途「…」占位由行估计槽统一承担（两查询同批次、同一在途集合，不重复占位）。
-            if let Some(text) = size_badge_text(&inline, node.data_length) {
-                badges.push(text);
+            // 需求② 大小徽标子开关：关时不显大小徽标。
+            if show_inline_size {
+                if let Some(text) = size_badge_text(&inline, node.data_length) {
+                    badges.push(text);
+                }
             }
             if !badges.is_empty() {
                 row = row.child(

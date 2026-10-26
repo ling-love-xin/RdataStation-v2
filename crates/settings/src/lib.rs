@@ -941,6 +941,38 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 表行「注释副标」子开关（需求②）：总开关开时仍受此项门控。
+    pub fn show_inline_comment(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_inline_comment
+    }
+
+    /// 设置并持久化「注释副标」子开关。
+    pub fn set_show_inline_comment(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_inline_comment = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
+    /// 表行「大小徽标」子开关（需求②）。
+    pub fn show_inline_size(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_inline_size
+    }
+
+    /// 设置并持久化「大小徽标」子开关。
+    pub fn set_show_inline_size(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_inline_size = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
     /// 导航 facet 筛选（类型 / 驱动 / 标签 / 归属域）。
     pub fn nav_filters(cx: &App) -> NavigatorFilters {
         cx.global::<Settings>().navigator.filters.clone()
