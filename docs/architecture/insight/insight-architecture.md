@@ -1,25 +1,27 @@
 # 洞察模块（M8）· 设计理念与架构
 
-> 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · **洞察承载形态决策已更新**（2026-10-18：D63 右栏摘要保留 + 中间洞察工作页并存、D64 三阶段落地、D65 入口语义变更） · 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）、`insight-workspace-prototype.html`（中间工作页可交互原型，2026-10-18 新增）
+> 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · **洞察承载形态决策已更新**（2026-10-18：D63 右栏摘要保留 + 中间洞察工作页并存、D64 三阶段落地、D65 入口语义变更） · **去评级化收口**（2026-10-25：表 / 列画像撤总分环与五档等级，只留事实统计与检查器四态命中；审计 / 评级归 M6 资产库） · 关联文件：`README.md`（模块入口）、`insight-eda-prototype.html`（现行对齐基准原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）、`insight-cleanup-2026-10.md`（本轮收口清单）
 > 本文回答**为什么这样设计 / 怎么运转**：概念模型 → 不变式 → 分层与归属 → 状态所有权 → 数据流 → 决策表 → 并发 → 降级 → 测试 → 实现映射 → 已知问题（权威）。
-> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59），Schema 报告的**导出与下钻**已接（D60）。宿主侧入口全部接线：编辑器结果集列头「洞察此列」（2026-09-18，§10 #6，不物化）；仍欠**分析表型存档**（等 M6 P4.1 本体层，见开发方案 §10 #7）。
+> 现状口径：**画像 / 检查器事实 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 六 Tab 面板、中间 EDA 工作页与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59），Schema 报告的**导出与下钻**已接（D60）。宿主侧入口全部接线：编辑器结果集列头「洞察此列」（2026-09-18，§10 #6，不物化）；仍欠**分析表型存档**（等 M6 P4.1 本体层，见开发方案 §10 #7）。
 
 ## 1. 定位与边界
 
-M1~M5 解决「连得上、看得见、查得动」；**M8 解决「这份数据能不能用、哪里有问题」**——把数据变成结论。
+M1~M5 解决「连得上、看得见、查得动」；**M8 解决「这份数据长什么样、哪里值得关注」**——会话级 EDA 探索（YData-Profiling 式），对当前这份数据出画像事实与检查器命中。**「能不能用」的审计、评级、长期归档归 M6 资产库**，本模块不合成质量总分与等级。
 
 能力分四层，由内向外：
 
 | 层 | 能力 | 输入 | 输出 |
 | --- | --- | --- | --- |
 | L1 描述统计 | 列画像：类型识别 → 统计量 → 分布 → 样本 | DuckDB 临时表 | `ColumnInsightFull` |
-| L2 质量判断 | 四维加权评分（完整性 .35 / 唯一性 .25 / 类型一致 .20 / 分布 .20）→ 单列分 → 表聚合分 | L1 结果 | `QualityScore` / `TableQuality` |
-| L3 关系与结构 | 多列规则（相关性 / 交叉表 / 分组）、Schema 洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | 源库 + 规则 | `SchemaInsightReport` |
+| L2 检查器事实 | 内置检查规则按列类型适用，四态命中（Hit / Miss / NotApplicable / Excluded），只统计适用数与命中数等**事实计数**，不合成总分、不出等级 | L1 结果 | `ColumnChecker` / `TableQualityView` |
+| L3 关系与结构 | 多列规则（相关性 / 交叉表 / 分组 / Spearman / Cramér's V）、Schema 洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 结构健康分，`Grade` 独立于表 / 列画像） | 源库 + 规则 | `SchemaInsightReport` |
 | L4 规则引擎（横切） | TOML 声明式：SQL 模板 + 输出映射 + 质量门控 + 渲染提示 | 规则文件 | `ExecutionResult` |
+
+> **去评级化边界（2026-10-25 定案）**：旧 `QualityScore` / `TableQuality` / 四维加权（.35/.25/.20/.20）/ 五档等级（85/70/50/30）模型在表 / 列画像 UI 已全部撤除；领域结构仅保留用于**历史快照 JSON schema 只读兼容**（旧快照不重算分）与 Schema 结构健康分独立域。详见 `insight-cleanup-2026-10.md` A6 节。
 
 **L4 是本模块的架构特色**：把「新增一种洞察」从「改 Rust + 重编译」降级为「加一个 `.toml`」，且用户可覆盖内置规则。这也是它区别于「一堆统计函数」的地方。
 
-**边界**：做画像 / 评分 / 规则 / 报告 / 快照历史；**不做** SQL 执行与结果集（M5）、对象树与内省（M4）、连接与只读策略（M3）、Mock 生成（M7）、资源目录（M6）、图表可视化（洞察只出 `RenderHint`，渲染归 M5/M6）。
+**边界**：做画像 / 检查器事实 / 规则 / 报告 / 快照历史 / 会话内集合与对比；**不做** SQL 执行与结果集（M5）、对象树与内省（M4）、连接与只读策略（M3）、Mock 生成（M7）、资源目录与审计评级归档（M6）、图表可视化（洞察只出 `RenderHint`，渲染归 M5/M6）。
 
 ### 1.1 可分析范围（口径，2026-09-18 修正）
 
@@ -47,7 +49,7 @@ M1~M5 解决「连得上、看得见、查得动」；**M8 解决「这份数据
 ### 2.2 九条不变式
 
 1. **一次分析 = 一个目标 + 一份结论**——面板头部永显当前目标，杜绝「这数是哪来的」。
-2. **结论可追溯**——每个数字来自统计量、评分维度或规则之一；UI 不发明结论。
+2. **结论可追溯**——每个数字来自统计量、检查器命中或规则之一；UI 不发明结论。
 3. **规则正文以文件为唯一真相源**——库表只存索引与状态（`checksum` / `enabled` / 校验结果），正文永不入库。
 4. **同名整体覆盖**——`meta.id` 相同即视为同一条规则，后加载层整体替换前者；**不做字段级合并、不加命名空间前缀**。
 5. **单条规则失败不连坐**——解析失败只标记该条并记录错误原文，其余规则照常可用（含「坏规则必须能被看见」，见 D6）。
@@ -118,7 +120,7 @@ engine 侧只剩**连接与迁移**（`ProjectDatabaseManager` 及其 SQLite/Duc
 registry_for(project_root)
   ├─ 缓存命中 → 直接返回
   └─ 未命中 → build_registry：
-       ① builtin_registry()            内层：include_dir 编译期嵌入（16 条，只读）
+       ① builtin_registry()            内层：include_dir 编译期嵌入（18 条：列 9 · 多列 6 · 表 3，只读）
        ② get_system_dir() → {system}/insight-rules/    全局层（跨项目）
        ③ get_project_rules_dir(root) → {项目}/.RSmeta/insight-rules/   项目层
           · **信任门**（D53）：project_rule_trust(root) 不是 Trusted 就**不装配**，
@@ -250,10 +252,10 @@ ProjectInsightStores::save_column_snapshot(insight, entity_source, row_count, el
 batch_evaluate_columns(root, conn_id, db, schema, table)
   ① 采样 LIMIT 500 → 建 DuckDB 临时表
   ② with_rules(root, |reg| { 逐列 get_column_insight_full(reg, ...) })  ← 规则集只取一次
-  ③ compute_table_quality(table, &stats_list) → 最差列排在前的加权聚合分
+  ③ finish_evaluation().with_checker(逐列检查器四态) → 回填事实明细 + 检查器适用/命中计数（不合成加权总分与等级）
 ```
 
-**串行逐列是刻意的**：并发上限为 4 且快速失败，并行会把「部分列静默缺失」变成常态；串行虽慢，但「哪些列没评上」是确定的（单列失败记日志并继续）。
+**串行逐列是刻意的**：并发上限为 4 且快速失败，并行会把「部分列静默缺失」变成常态；串行虽慢，但「哪些列没评上」是确定的（单列失败记日志并继续）。进度用独立 `done_count` 计数器逐列回填，不依赖评分模型。
 
 ### 5.6 规则热加载（目录监听）
 
@@ -310,7 +312,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D33 | 多列规则的“吃不吃这几列”只做**展示层判定**（列数 + 类型族逐位比对），不在服务层拦 | 用户选错类型时 SQL 自己会给可读错误；服务层再拦一道只会把「为什么不行」变成两处口径 | `MultiRuleView::accepts` / `arity`，界面据此置灰执行入口 |
 | D34 | 多列结果按**数据形态**渲染，不看声明的 `result_type` | 声明与事实不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」的空白表 | 表头取各行键的并集，缺键补「—」（不错位） |
 | D35 | 数据态**按 Tab 分开存载荷**（`PanelData { column, table, multi, schema }`） | Tab 条是「同一目标的多个视角」而数据态只有一个格子；合在一起就要求“切 Tab 重新取数”，切回去就把已取到的内容丢了（实测：切「表」再切回「多列」丢表单与结果） | 渲染以载荷为准、状态只管错误/骨架；切 Tab 时载荷缺失才取数（事件路径）。**换目标必须清载荷**：载荷只对旧目标成立，留着会比空白更坏 |
-| D36 | Schema 报告的等级与导出都从**视图模型**出发 | 分档阀值只有 `quality_scorer` 一份（顺手把 `schema_analyzer` 自带的「需改进」换成同一份）；导出的是「用户看到的这份结论」，与界面同源，不会出现界面说 3 个孤立表而 JSON 里 4 个 | JSON 分组键取稳定英文，不拿中文展示名当键 |
+| D36 | Schema 报告的等级与导出都从**视图模型**出发 | 结构健康分分档阀值只有 `quality_scorer::Grade` 一份（**仅限 Schema 结构报告独立域**，表 / 列画像不使用该等级；顺手把 `schema_analyzer` 自带的「需改进」换成同一份）；导出的是「用户看到的这份结论」，与界面同源，不会出现界面说 3 个孤立表而 JSON 里 4 个 | JSON 分组键取稳定英文，不拿中文展示名当键 |
 | D37 | 下钻只报「看哪张表」，不自己拼临时表名 | 把**源表**变成面板能分析的临时表是宿主的活（它才知道连接与临时表约定）；洞察 crate 自拼会有第二套命名约定 | 事件 `TableDrilldownRequested` 带 conn / db / schema / table。**D60 收尾时改为源取样**：宿主不再建临时表，只给「在哪条连接上查哪张表」（D58 之后建临时表是多余的一步） |
 | D38 | 历史列表的**顺序与条数口径单一来源**：顺序由存储层 `ORDER BY` 决定（视图不重排），条数由 `HISTORY_PAGE_SIZE` 决定（查询与界面提示共用） | 「谁是最新」两处各写一份，迟早在撞秒（D18）时给出互相矛盾的答案；被截断的列表必须明示（与 D15 同一立场：别让人把截断当成全部） | 满一页时列表下方写「只列出最近 N 条」；列表**不另设内层滚动**（面板主体已是滚动区） |
 | D39 | 取数请求**发不出去也要落一个状态**：`emit_request_for_tab` 发得出去进加载态，发不出去落空态 | 调用方为了「点了有反应」已先摆上骨架；沉默返回会让骨架**一直转下去**（无项目时切「历史」即此：那是「没得看」，不是「在加载」） | 空态文案按 Tab + 项目状态给（同一 Tab 两句话） |
@@ -377,7 +379,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 快照**双写失败**（正文成了、元数据没成） | **回滚正文**（要么都成、要么都不留），错误向上抛且写清已回滚（D55） | 「快照未保存：…（已回滚刚写入的正文，未留下半写快照）」 |
 | 全 NULL / BLOB / ARRAY 列 | `Unknown` 变体，只出计数 | 「类型未识别」，**不生成分布** |
 | 空表 | `TableQuality` 返回「表为空或无数据」 | 不产假分数 |
-| 规则目录为空（首次使用） | 只有 16 条内置规则 | 全局层需用户自行创建目录 |
+| 规则目录为空（首次使用） | 只有 18 条内置规则 | 全局层需用户自行创建目录 |
 
 ## 9. 测试策略
 
@@ -385,13 +387,13 @@ RulesWatcher（后台线程，drop 即停）：
 
 | 层 | 对象 | 手段 | 现状 |
 | --- | --- | --- | --- |
-| 纯函数 | 规则解析 / 覆盖 / 分类派生 / `plan_index` / 评分算法 / Schema 检测 | 进程内直接断言；不依赖文件系统与全局状态 | 高覆盖 |
+| 纯函数 | 规则解析 / 覆盖 / 分类派生 / `plan_index` / 检查器四态判定 / 统计量纯函数 / Schema 检测 | 进程内直接断言；不依赖文件系统与全局状态 | 高覆盖 |
 | 文件系统 | `scan_scope_dir` / `load_from_dir` / 索引合并 | **每测试独占临时目录**（目录名含 pid + tag），避开并发下的同目录竞争 | 已覆盖 |
 | 存储 | 索引表读写、快照双写与版本链 | 临时项目目录 + `ProjectDatabaseManager::open`（迁移会建表） | 已覆盖 |
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
-| 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
+| 契约 | 零裸色 / 零裸 `px(` / 视图清单登记 | 外壳 `cargo test -p rds-workbench --test ui_contract`；洞察自有 `cargo test -p rds-insight --test ui_contract`（常量契约 + 裸 px / 裸色 / 视图清单守卫） | 已覆盖 |
 
-**基线**：`cargo test -p rds-insight` 当前 **218 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
+**基线**（2026-10-25 实测，target 清空后分 target 重跑）：`cargo test -p rds-insight --lib` **244 项**；集成测试 `column_profile_e2e` **14 项**；洞察契约 `ui_contract` **4 项**；新增功能不得减少。关联宿主 / 依赖回归同批实测：`cargo test -p rds-settings --lib` **32 项**；`cargo test -p rds-engine --lib duckdb::manager::tests` **11 项**（仅此 manager 子集，engine 全量 669 项未在本轮重跑，台账见 `../module-status.md`）；外壳契约 `cargo test -p rds-workbench --test ui_contract` **9 项**。历史累加台账见 `insight-dev-plan.md` §0。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -417,7 +419,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D55 双写失败回滚 | `crates/insight/src/store/mod.rs`（`rollback_snapshot_body`）、`service/persistence.rs`（`save_column_insight_snapshot` 的接入点） |
 | D56 保留期常量 | `crates/insight/src/model.rs`（`SNAPSHOT_RETENTION_DAYS`）、`jobs.rs` / `insight_view.rs`（确认框与执行取同一个常量） |
 | D57 剪链头部标注 | `crates/insight/src/model.rs`（`HistoryEntryView.chain_truncated` + `HISTORY_PAGE_SIZE` 判据）、`view/history.rs`（`history_entry_row` 的三档标记） |
-| D1 目标分派 / D15 采样明示 | `crates/insight/src/insight_view.rs`（状态宿主）+ `view/`（渲染：头部 / Tab 条 / 五路 Tab / 四态）、`model.rs`（视图模型 `PanelTab` / `InsightTarget` / `InsightPanelState` / `ColumnProfileView`） |
+| D1 目标分派 / D15 采样明示 | `crates/insight/src/insight_view.rs`（状态宿主）+ `view/`（渲染：头部 / Tab 条 / 六 Tab 摘要 / 检查器四态）、`model.rs`（视图模型 `PanelTab` / `InsightTarget` / `InsightPanelState` / `ColumnProfileView`） |
 | D21 视图归属（方案 A） | `crates/insight/Cargo.toml`（`gpui-kit`）、`insight_view.rs`（状态宿主）+ `view/`（渲染片段，§11 位移）、`ui.rs`（M8 尺寸常量）、`commands.rs`（`OpenInsight` / `InsightRefresh` / `ReloadInsightRules`） |
 | D22/D23 目录监听与索引解耦 | `crates/insight/src/service/watcher.rs`（`RulesWatcher` / `rules_fingerprint` / `watch_dirs` / `set_watched_project_root` / `index_is_stale`）；接线在 `workbench/src/view.rs`（构造期启动）与 `workbench/src/components/project_host.rs`（项目切换告知） |
 | D20 不自己取数 | `engine/src/services/{duckdb_service,sql_service}.rs` 为唯一数据入口 |
@@ -426,7 +428,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D29～D31 表探查与评估全表 | `insight_engine.rs`（`get_temp_table_profile` / `*_on`）、`model.rs`（`TableProfileView` / `TableColumnView` / `TableQualityView` / `TableEvalProgress` / `PanelData`）、`view/table.rs`（`render_table_profile` + 列名下钻）、`jobs.rs`（`ProfileRequest::Table` / `request_table_evaluation` 的串行进度）、`service/mod.rs`（`profile_table_view`）、`ui.rs`（`INSIGHT_TABLE_*`） |
 | D32～D34 多列分析 | `service/mod.rs`（`multi_column_view` / `list_multi_rules` / `run_multi_rule` / `rule_params`）、`model.rs`（`MultiColumnView` / `MultiRuleView` / `MultiResultView` / `KeyValueRow` / `quality_notes`）、`view/multi.rs`（`render_multi_view` + 列多选/规则单选）、`jobs.rs`（`MultiColumnRequested` / `MultiRunRequested`） |
 | D35 数据态按 Tab 分栏 | `model.rs`（`PanelData` + `InsightPanelState::Data` 无载荷）、`view/mod.rs`（`render_body` 以载荷为准）+ `insight_view.rs`（`emit_request_for_tab` / `ensure_data_for_tab`）、`test_support.rs`（记录型宿主） |
-| D36/D37 Schema 健康报告 | `schema_view.rs`（新：视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（等级共用 `Grade`）、`service/mod.rs`（`schema_report_view`）、`view/schema.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
+| D36/D37 Schema 健康报告 | `schema_view.rs`（视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（结构健康分独立域，等级 `Grade` 仅供 Schema 报告使用，**不与表 / 列画像混用**）、`service/mod.rs`（`schema_report_view`）、`view/schema.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
 | 6.1 交叉校验（内置 `SUMMARIZE`） | `crates/insight/tests/column_profile_e2e.rs`（`summarize` / `exact_distinct` / `stats_agree_with_duckdb_summarize`）——**只做测试级**，不把 `SUMMARIZE` 接进产品路径（它是校验参照，不是实现，D61） |
 | D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`view/history.rs`（`render_history` + `history_entry_row` / `history_chip`）+ `insight_view.rs`（`set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
 | D43/D44 版本对比 | `model.rs`（`VersionDiffView` / `DiffRowView` / `DeltaView` / `VersionDiffView::between` + `display_number` / `CANONICAL_LABELS`）、`view/history.rs`（`render_version_diff` / `diff_row_value`）+ `insight_view.rs`（`toggle_compare_version` / `dismiss_diff` / `set_compare_notice` / `is_latest_version`）、`jobs.rs`（`VersionCompareRequested` → `request_version_compare`）、`service/mod.rs`（`compare_column_snapshots` / `history_entries`）、`ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
@@ -446,15 +448,14 @@ RulesWatcher（后台线程，drop 即停）：
 | 结构洞察入口（§10 #5） | `database/src/model.rs`（`SchemaRef`）、`database/src/nav_host.rs`（`open_insight_schema`）、`database/src/nav_view.rs`（`insight_schema_target` + 菜单项）、`workbench/src/components/nav_host.rs`、`workbench/src/panels/shared.rs`（`Shared::open_insight_schema`） |
 | 结构洞察取数（D62） | `insight/src/schema_analyzer.rs`（`analyze` → `ensure_target_exists` + `fetch_metadata` → 驱动接口；`TableColumnInfo::from_detail` 把 `ColumnDetail` 映射成报告行；`report_title`）。**没有方言分支、没有任何手写 SQL**——方言差异全在驱动层 |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
-| D63～D65 洞察工作页 / 多表对比 / 入口语义（2026-10-18 决策） | **阶段①已实现（2026-10-18）**：中间工作页面板 `crates/insight/src/workspace.rs`（`InsightWorkspacePanel`，持 `InsightView` 完整画像宿主 + 工具栏[画像/对比切换、刷新] + Dock 面板协议）、装配与入口语义 `crates/workbench/src/view.rs`（`ensure_insight_workspace_panel`：消费 `Shared::pending_insight_target` → defer 建 / 激活中央洞察 tab；`insight_workspace_panel` 弱句柄）、`panels/shared.rs`（四入口 `open_insight_*` → 右栏同步 `set_right_insight_target` + 登记 `pending_insight_target` 双栏单源；`queue_workspace_insight`）；右栏联动 observe 在 `view.rs` ensure 内（目标变化才同步，避免重取样）。**阶段②对比 v1 已实现**：候选 = 会话内已进入洞察的目标（`OpenedTarget` / `target_key` 去重，**导航树不加勾选框**——用户否决，只有进入过洞察的表才能选择对比）；聚合 = 会话内已完成的画像摘要（`TargetSummary`：行数 / 列数 / 评分 / 等级，`archive_summary` 切目标前存档，不重新取数 D64）；历史快照候选留待 `InsightTableReportStore` 落库后接入（K6）。**阶段③（真并发取数对比）与表/列对比表达**：延后，见 `insight-dev-plan.md` |
-| 视图按 Tab 位移（§11） | `insight_view.rs`（**状态宿主**：目标 / 五态 / 各 Tab 载荷 / 折叠与选择 + `Render` 转发）、`view/{mod,header,column,table,multi,schema,history}.rs`（渲染片段；共用助手在 `view/mod.rs`）、`insight_view/tests.rs`（窗口级测试，宿主的子模块） |
+| D63～D66 洞察工作页 / 多表对比 / 入口语义 / 去评级化（2026-10-18 决策，2026-10-25 收口） | **阶段①已实现（2026-10-18）**：中间工作页面板 `crates/insight/src/workspace.rs`（`InsightWorkspacePanel`，持 `InsightView` 完整画像宿主 + 工具栏[画像/对比切换、刷新] + Dock 面板协议）、装配与入口语义 `crates/workbench/src/view.rs`（`ensure_insight_workspace_panel`：消费 `Shared::pending_insight_target` → defer 建 / 激活中央洞察 tab；`insight_workspace_panel` 弱句柄）、`panels/shared.rs`（四入口 `open_insight_*` → 右栏同步 `set_right_insight_target` + 登记 `pending_insight_target` 双栏单源；`queue_workspace_insight`）；右栏联动 observe 在 `view.rs` ensure 内（目标变化才同步，避免重取样）。**阶段②对比 v1 已实现**：候选 = 会话内已进入洞察的目标（`OpenedTarget` / `target_key` 去重，**导航树不加勾选框**——用户否决，只有进入过洞察的表才能选择对比）；聚合 = 会话内已完成的画像摘要（`TargetSummary`：行数 / 列数 / 检查器适用与命中数 / 缺失率 / 唯一率 / 值得关注列数，`archive_summary` 切目标前存档，不重新取数 D64；**无评分 / 等级字段**）；历史快照候选留待 `InsightTableReportStore` 落库后接入（K6）。**阶段③（真并发取数对比）与表/列对比表达**：延后，见 `insight-dev-plan.md`。**2026-10-25 去评级化**：列卡 / 表画像 / 摘要列卡撤除总分环与五档等级，四维只留事实占比条；检查器四态保留 |
+| 视图按 Tab 位移（§11） | `insight_view.rs`（**状态宿主**：目标 / 状态机 / 各 Tab 载荷 / 折叠与选择 + `Render` 转发）、`view/{mod,header,overview,column,table,multi,schema,history,set}.rs`（渲染片段；共用助手在 `view/mod.rs`）、`workspace.rs`（中间 EDA 工作页 `InsightWorkspacePanel`）、`insight_view/tests.rs`（窗口级测试，宿主的子模块） |
 | 面板头 ⚙ 入口 | `view/header.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
-| 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
-| 评分卡视图模型（`ScoreView` / `DimensionView`；全空列不产分） | `crates/insight/src/model.rs`（`ColumnProfileView::score`） |
-| 评分卡渲染（钉在滚动区之外；四维细条） | `crates/insight/src/view/column.rs`（`render_score_card` / `dimension_row`）+ `view/mod.rs`（`ratio_bar`） |
+| 检查器四态判定（事实命中，不评级） | `crates/insight/src/quality_scorer.rs`（`compute_column_checks`：Hit / Miss / NotApplicable / Excluded，适用数与命中数现算） |
+| 历史质量模型（兼容保留，表 / 列画像 UI 不调用） | `crates/insight/src/quality_scorer.rs`（旧四维加权 `compute_column_quality` / `compute_table_quality` / `Grade` 阈值 85/70/50/30）、`model/types.rs`（`QualityScore` / `QualityDimension` / `TableQuality` / `ColumnQualityEntry`，历史快照 JSON schema 只读兼容）；`Grade` 另供 Schema 结构健康分独立域使用。`ScoreView` / `DimensionView` 与列卡评分卡 / 四维细条渲染已于 2026-10-25 撤除 |
 | 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`；源库内省路径已于 2026-09-18 **删除**——零调用且未跑通） |
 | Schema 洞察 | `crates/insight/src/schema_analyzer.rs` |
-| 规则资产（16 条） | `crates/insight/insight-rules/` |
+| 规则资产（18 条：列 9 · 多列 6 · 表 3） | `crates/insight/insight-rules/` |
 | 服务层统一入口 | `crates/insight/src/service/mod.rs`（`with_rules` 契约） |
 
 ## 11. 已知问题与后续项（**权威清单**）
@@ -464,7 +465,7 @@ RulesWatcher（后台线程，drop 即停）：
 | # | 问题 | 影响 | 状态 |
 | --- | --- | --- | --- |
 | K1 | ~~**无 SQL 沙箱**~~ | — | **已收口**（2026-09-17）：① 原来的「禁用扩展 / 只读连接」选项（Q1-b）**在现有共享连接上不可行**——`register_external_database`（`ATTACH`）、`load_file_source`（`read_csv_auto`/`read_parquet`/`read_excel_auto`）与 `INSTALL`/`LOAD` 都跑在洞察所在的**同一个内存单例**上；② **解析期静态门已落地**（D52）：多语句 / DDL / 文件与远端表函数在解析期被拒；③ **项目规则信任门已落地**（D53）：未信任的项目规则不装配、不执行，决定记在全局库。剩下的是**已知取舍**而非缺口：静态门是防呆（黑名单有漏）、信任绑路径而非内容（`git pull` 带进的新规则不重新确认） |
-| K2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**，全仓零代码引用 | 后来者可能改错副本 | 待删除确认 |
+| K2 | ~~`crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的逐字节重复副本，全仓零代码引用~~ | — | **✅ 已删**（提交 `e3684d67`；2026-10-25 复核 `crates/engine/insight-rules/` 不存在，规则资产唯一来源 `crates/insight/insight-rules/{column,multi,table}/`） |
 | K3 | ~~`table-quality-overview` 的 SQL 引用表 `insight_column_stats`，该表不存在~~ | — | ✅ 已处置（2026-09-17）：**下线**。那条 SQL 要从一张「逐列统计物化表」里读，而静态 SQL 不可能对任意表的每一列算统计（需动态 SQL）；能力本身已在 Rust 侧（「评估全表」+ 表质量摘要）。规则文件已删，需要时从 git 历史取 |
 | K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
 | K5 | ~~目录监听热加载未做~~ | — | ✅ 已实现（Phase 0 / 0.6，D22/D23） |
@@ -483,8 +484,8 @@ RulesWatcher（后台线程，drop 即停）：
 | K17 | **洞察侧取数照 v1 的 JSON 形态读引擎结果**：`json["batches"][0]["columns"\|"rows"]`——而 v2 `QueryResult` 的 `Serialize` 是**契约层扁平序列**（`columns` / `column_types` / `rows` / `affected_rows` / `is_read_only` / `total_rows`），**Arrow `batches` 不参与** | 高（**静默失败**）：native 驱动只填 `batches`、`rows` 字段恒空 → 结构洞察恒报「0 张表」、源取样恒报「取样没有拿到列」（导航树 / 存档 / 草稿箱「查看统计」与结构报告下钻**全走这条**）；不报错，只是拿不到数据 | **已修（2026-09-18）**：新增 `service::result_columns_and_rows`（进程内直读 `columns` + `to_rows()`），四个调用点全部改走它；回归用例用手造 Arrow 批钉住（`service::tests::rows_come_from_arrow_batches_without_a_json_round_trip`）+ 两个真机用例（`insight_schema_real` / `insight_source_real`）。**教训**：`QueryResult` 有两套形态（内存态靠 `batches`、契约态靠 `rows`）——要序列化就先把行物化（`to_rows()`），不要指望 `to_value` 带出 `batches` |
 | K19 | **PostgreSQL 偶现「报告后第一条语句卡 ~30s」**（2026-09-18 发现，**同日已修**） | 已消除 | **已修**。根因：洞察门面 `service/mod.rs::block_on` **每次调用新建一个 Tokio runtime**，而它驱动的是**宿主建的 sqlx 池**——池里连接的 I/O 任务绑在创建它的 runtime 上，临时 runtime 一 drop，那条连接的后台任务被一并干掉，池还以为它是好的 → 下一条语句在「僵尸连接」上等到超时才重建（≈ sqlx `acquire_timeout`，语句最终成功）。**对照实验**（交替跑同一段元数据取数，PostgreSQL）：走门面 `ping = 30.2s / 30.2s`，直调分析器（宿主 runtime）`104ms / 123ms`。修法：`block_on` 改用**进程级单例 runtime**（惰性建、永不 drop，两条 worker 线程）——修后门面路径 `16ms / 11ms`，四库真机用例总时长 **32.4s → 2.39s**。**同类写法仍在别处**（`scratchpad/src/scratchpad_view/actions.rs::scratchpad_store`、`workbench/src/panels/shared.rs::scratchpad_store`、`mock/src/history.rs::drive`、`workbench/src/components/connection_dialog/managers.rs`、`workbench/src/services/db_navigator.rs::load_navigator_tree` 等：每次调用新建 runtime 去驱动宿主资源；`project/src/service.rs::runtime` **已修**——随 P0.3 改进程级单例 `OnceLock`，见 `service.rs` L9-10 / L125-147 注释）——各自要按同一判据（下一条语句是否被拖慢）验一遍，不在本批范围 |
 | K20 | **native 驱动 0 行结果把列名也清空**：`rows.is_empty()` 时 MySQL / PostgreSQL 的 sqlx 版与 tokio-postgres 版（`postgres_native.rs`）直接回 `columns: vec![]`——空表 / 过滤后无行的 `SELECT` 本应给出「有列无行」的结果集结构 | 高（**静默失败**）：洞察空表取样（`SELECT * FROM t LIMIT 500` 落在空表上）`result_columns_and_rows` 拿到空 columns → 报「取样没有拿到列」，空表业务表「查看统计」必现 | **已修（2026-10-18）**：0 行分支退回 `prepare` 取 statement 列描述（sqlx `Executor::prepare` + `Statement::columns()`；tokio-postgres `Client::prepare` + `statement.columns()`）——只准备不执行，列名与有行时同源。覆盖 `mysql.rs`（query / query_with_params / query_with_cancel / 事务）、`postgres.rs`（三处）、`postgres_native.rs`（query / query_with_params / query_with_cancel / 事务）；`mysql_native.rs` 无此问题（`columns_ref` 在 collect 前已取）。回归用例 `engine/tests/zero_row_columns_reach_query_result.rs`（四库真机，`WHERE 1=0` 钉列名顺序契约） |
-| K21 | **debug 下导航树表/视图节点右键必崩**：`set_focus called more than once in a single frame`（panic 于 `gpui-pre-0.3.8/src/window/a11y.rs:533`，release 仅 `log::warn` 不崩）——「查看统计 / 结构洞察 / 查看洞察」右键入口在 debug 构建不可用 | 高（阻塞 debug 可用性 + 「带真实数据的洞察面板」截图场景） | **机制已查明（2026-10-18），未修**：双常驻 `.track_focus` 容器——导航树外层 `database/src/nav_view/chrome.rs:623` 与 PopupMenu 根 `vendor/gpui-component/src/menu/popup_menu.rs:1472`；`div.rs:2326-2344` 凡 `track_focus` + `is_focused` + a11y active 即 `a11y.set_focus(node_id)`（每帧至多一次）；右键打开菜单路径上 `context_menu.rs:176-181`（`build_menu` 对菜单 `focus_handle.focus`）+ `popup_menu.rs:999/:1030`（submenu/parent focus）与树主体 handle 同帧双 claim。vendor 已有 blur 补丁（`context_menu.rs:410-420`）**未拦住**：blur 只清右键事件帧的焦点，PopupMenu 的 `focus()` 发生在下一帧 deferred 构建回调里，跨帧后树主体仍可能在 prepaint 时命中。修复方向三选一待拍板：A 业务侧右键入口前 blur / B vendor 补丁增强（build_menu focus 菜单前也清一次）/ C 参照 K18 思路改树主体 track_focus 条件（`database/src/nav_view/chrome.rs:623`） |
-| K22 | **`set_target` 切换洞察目标未清 `loading_note`**（`crates/insight/src/insight_view.rs` ~263）：从源目标切到另一目标时，上一目标的取样提示可能残留 | 中（诚实性：换目标后界面还挂着上一个目标的「正在取样」说明） | 待修：切换目标时 `set_loading_note(None)`；配套契约测试（目标切换后 loading_note 必须为空） |
+| K21 | **debug 下导航树表/视图节点右键必崩**：`set_focus called more than once in a single frame`（panic 于 `gpui-pre-0.3.8/src/window/a11y.rs:533`，release 仅 `log::warn` 不崩）——「查看统计 / 结构洞察 / 查看洞察」右键入口在 debug 构建不可用 | 高（阻塞 debug 可用性 + 「带真实数据的洞察面板」截图场景） | **机制已查明（2026-10-18），待真机复现定性（2026-10-25 复核：任务 #16 的 completed 标记与本表状态不一致，以本表为准）**：双常驻 `.track_focus` 容器——导航树外层 `database/src/nav_view/chrome.rs:623` 与 PopupMenu 根 `vendor/gpui-component/src/menu/popup_menu.rs:1472`；`div.rs:2326-2344` 凡 `track_focus` + `is_focused` + a11y active 即 `a11y.set_focus(node_id)`（每帧至多一次）；右键打开菜单路径上 `context_menu.rs:176-181`（`build_menu` 对菜单 `focus_handle.focus`）+ `popup_menu.rs:999/:1030`（submenu/parent focus）与树主体 handle 同帧双 claim。vendor 已有 blur 补丁（`context_menu.rs:410-420`）**未拦住**：blur 只清右键事件帧的焦点，PopupMenu 的 `focus()` 发生在下一帧 deferred 构建回调里，跨帧后树主体仍可能在 prepaint 时命中。**未在真机复现前不改 vendor**；修复方向：先试 B6-a 业务侧右键入口前 blur（改动限业务侧、回滚容易）→ 拦不住再 B6-b vendor 补丁增强（build_menu focus 菜单前也清一次）→ 最后 B6-c 改树主体 track_focus 条件（需重验键盘可达） |
+| K22 | ~~`set_target` 切换洞察目标未清 `loading_note`~~：从源目标切到另一目标时，上一目标的取样提示可能残留 | — | **✅ 已修（2026-10-25，A1）**：`set_target` 内重置 `loading_note = None`（`insight_view.rs:460`），配套窗口契约测试钉住「目标切换后 loading_note 必须为空」 |
 
 ## 12. 待确认
 

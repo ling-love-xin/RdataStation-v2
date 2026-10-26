@@ -1,9 +1,9 @@
-# 洞察模块（M8）· 开发方案（Phase 0–5）
+# 洞察模块（M8）· 开发方案（Phase 0–5 + 中间工作页 + 去评级化收口）
 
-> 状态：**设计定稿（2026-09-15）**，代码尚未开始 · 关联文件：`insight-prototype-design.md`（原型）、`insight-prototype.html`（可交互原型）
+> 状态：**Phase 0–5 已完成**；2026-10-18 落地中间 EDA 工作页 / 多表对比 v1 / 会话集合模型；2026-10-25 收口检查器四态、DuckDB-only 科研统计、四个缺口与**去评级化**（表 / 列画像撤总分与等级，审计评级归 M6）。关联文件：`insight-eda-prototype.html`（现行对齐基准原型）、`insight-architecture.md`（设计理念与架构）、`insight-cleanup-2026-10.md`（本轮收口清单）
 > 前置：v1 行为蓝本 `v1/backend/src/core/insight/` + `core/services/{insight_engine,quality_scorer,table_profile_service}.rs`，已迁移至 `crates/insight`；v1 前端蓝本 `v1/frontend/extensions/builtin/workbench/ui/components/panels/`（7 个 Vue 组件 + `insight-store.ts`）
 > 复用 `project-dev-plan.md` / `editor-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
-> **范围**：库 / 表 / 列画像、质量评分、规则引擎与规则管理、Schema 洞察报告、洞察快照历史。**不含** SQL 执行（M5 编辑器）、对象树内省（M4）、Mock 生成（M7）、资源目录（M6）——只经服务与命令协作。
+> **范围**：库 / 表 / 列画像（事实统计 + 分布 + 样本）、检查器四态命中事实、规则引擎与规则管理、多列关系分析、Schema 结构洞察报告、会话内集合与多表对比、洞察快照历史。**不含** SQL 执行（M5 编辑器）、对象树内省（M4）、Mock 生成（M7）、资源目录与审计 / 评级 / 长期归档（M6）——只经服务与命令协作。**表 / 列画像不出质量总分与等级**。
 
 ### 已确认决策（2026-09-15）
 
@@ -22,6 +22,26 @@
 ---
 
 ## 0. 进度记录（最近在前）
+
+### 2026-10-25 — 收口批次：检查器四态 + 科研统计 + 四缺口 + 去评级化（A 类必修 + 拍板 B 类）
+
+**背景**：按 `insight-cleanup-2026-10.md` 清单一次性收口。定位再次校准为**会话级 EDA 探索**（YData-Profiling 式）：对当前这份数据出画像事实与检查器命中；审计、评级、长期快照归档归 M6 资产库；统计边界限定 DuckDB 原生可提供量。
+
+**已完成并验证**（target 清空后分 target 重跑：`rds-insight --lib` **244 项** · `column_profile_e2e` **14 项** · `rds-insight --test ui_contract` **4 项** · `rds-settings --lib` **32 项** · `rds-engine --lib duckdb::manager::tests` **11 项**（manager 子集）· `rds-workbench --test ui_contract` **9 项** · `cargo fmt -p rds-insight --check` exit 0 · lib check 零 error 零 warning）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 检查器四态（T28–T31） | `ColumnChecker { column, name, state, detail }`，`ColumnCheckState` = Hit / Miss / NotApplicable / Excluded；`compute_column_checks` 按列类型适用；`TableQualityView` 只留 checker / applicable / hits；右栏检查器环 + 四态列表 | `quality_scorer.rs` / `model.rs` / `jobs.rs` / `view/overview.rs` |
+| DuckDB-only 科研统计（T24） | 偏度 / 峰度（样本）、Spearman 秩相关、Cramér's V；多列规则扩至 6 条，内置规则当前 **18 条**（列 9 · 多列 6 · 表 3） | `insight_engine.rs` / `insight-rules/multi/` |
+| 中间 EDA 工作页（D63–D66，T15） | `InsightWorkspacePanel`：工具栏[画像 / 对比切换、刷新] + 概览五卡 + 值得关注跳列 + 列分布 + 缺失矩阵 + 关联 + 样本 + 多表对比三态；候选仅会话内已洞察表（导航树不加勾选框）；双栏单源 | `workspace.rs` / `model.rs` / `view/set.rs` / `workbench` 装配 |
+| 集合模型 + 关系排查 + 归档（T18–T20） | 会话内已洞察表登记 / `target_key` 去重；跨表值重叠关系排查；快照归档路径接 M6 方向 | `model.rs` / `service/` / `view/set.rs` |
+| 四缺口（T33–T37） | ① 报告导出（Markdown，5 列事实口径）；② 列卡四区 + 只看规则过滤；③ 探索价值徽标（缺失权重 + 高基数 + 检查器命中，事实性提示，非质量总分）；④ 跳列建议行改标准 `Button`（键盘可达） | `workspace.rs` / `view/column.rs` / `view/overview.rs` / `insight_view.rs` |
+| 资源治理设置（T38–T41） | settings 新增 insight 节四项（取样行数 / 大表全量两段确认 / 内存上限 / 工作集提示阈值）；engine 内存上限动态设置 + 统计 API；全量两段式确认 + 内存显示 | `crates/settings` / `crates/engine/duckdb` / `workbench` 确认弹窗 |
+| 基础修复（A1–A3 / B1-a / B4-a / B7-a） | A1 切目标清 `loading_note`（K22 收口）；A2 裸 px 改 rem 并登记 `ui.rs`；A3 视图 import 拆行；B1-a 多列空态引导；B4-a 列选择弹层内搜索框；B7-a 跳列建议行键盘可达 | 各视图文件 + `ui.rs` |
+| **去评级化（A6，方案 A）** | 列卡 / 表画像 / 摘要列卡撤除总分环、五档等级（优秀 / 良好 / 一般 / 较差 / 差）与加权合成分；四维只留纯事实占比条；模型层裁 `ScoreView` / `DimensionView` / `TableColumnView.score`；`finish_evaluation()` + `with_checker()` 替代旧 `evaluated(&quality)`；Markdown 报告删评分列；旧领域结构仅留历史快照只读兼容 + Schema 健康分独立域 | `model.rs` / `types.rs` / `jobs.rs` / `view/*` / `quality_scorer.rs`（保留兼容） |
+| 跨 crate 回归 + 契约补登 | settings 32 / engine manager 11 / workbench ui_contract 9 全绿；补登 `Shared` 白名单漏登的宿主级字段 `conflict_dialog`（M6 冲突对话框流转）、`reference_stale`（M6 reference 失效槽位），同步 `panels-modules.md` §3 同类注记 | `crates/workbench/tests/ui_contract.rs` / `panels-modules.md` |
+
+**二期预留**（已拍板后置，登记在 §10，本批不实现）：Kendall τ、分组聚合统计、解析级 SQL 门控替代关键字黑名单、200+ 列虚拟列表、表 / 列表达式规则、多列真并发取数对比、历史快照作为对比候选（待 K6 存储落地）。
 
 ### 2026-09-18 — §10 #11 `insight_view.rs` 按 Tab 位移（收口）
 
@@ -349,7 +369,7 @@
 | --- | --- | --- |
 | 方向定案 | 对比方向固定为**「选中的那一版 → 最新一版」**（D43）：这个 Tab 问的是「和上次比变了什么」，两个方向都能选只是多一个状态（还要多一套「谁是基准」的文案）。最新那一版**不给点击入口**（`ListItem` 的 disabled 态），状态层也兜一道底——拿最新当基准无从比 | `insight_view.rs` + `service/mod.rs` |
 | 视图模型 | `VersionDiffView` / `DiffRowView` / `DeltaView`：行集合与「列」Tab 的**基础统计同源**（同一个 `ColumnProfileView`），所以对比里的数字就是用户已读过的那几个（D44） | `model.rs` |
-| 行集合 | 质量分（头号结论，两侧都算得出才给）→ 总行数 / 非空值 / 空值 / 空值率 / 唯一值 / 类型 → 类型专属行（平均 / 长度范围 / 跨度 …）。「空值」与「空值率」在「列」Tab 里合成一行（`12（14.3%）`）便于阅读，而对比要的是**能对齐的两个数**，故拆开；旧版有、新版没有的行（类型变了）如实列出并在新版侧写「—」 | `model.rs` |
+| 行集合 | ~~质量分（头号结论，两侧都算得出才给）~~ 2026-10-25 去评级化后该首行已撤除；现行首行为总行数 / 非空值 / 空值 / 空值率 / 唯一值 / 类型 → 类型专属行（平均 / 长度范围 / 跨度 …）。「空值」与「空值率」在「列」Tab 里合成一行（`12（14.3%）`）便于阅读，而对比要的是**能对齐的两个数**，故拆开；旧版有、新版没有的行（类型变了）如实列出并在新版侧写「—」 | `model.rs` |
 | 差值口径 | 一律**按展示精度算**（计数取整、占比 1 位小数、评分取整）：否则会出现「显示 62 → 62 却 +0.4」「显示 8.2% → 8.2% 却 +0.01」这种自相矛盾。解不出数字的行（`3 ~ 8` / `2.5（右偏）` / 类型串）只说「已变」，**不编差值** | `model.rs` |
 | 三态着色 | 方向 ≠ 好坏（空值率上升是坏、唯一值上升不一定是好）→ 增 / 减 / 变化无数值 / 不变 用 `info` / `warning` / `primary` / `muted_foreground`，**不用** `success` / `danger` 预设评价；箭头（▲ ▼ ◆ ●）才是方向 | `insight_view.rs` |
 | 组件 | 可点版本行用 `ListItem`（hover / 选中 / 禁用三态与其它列表同一套视觉）；对比面板用 `DescriptionList`（`columns(1)` + `bordered(false)` + `label_width` 常量），不手搭表格 | `insight_view.rs` + `ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
@@ -482,6 +502,8 @@
 
 
 ### 2026-09-16 — Phase 2 第一批：质量评分卡（列级）
+
+> **2026-10-25 口径**：本批落地的评分卡 / 总分 / 五档等级 / 四维细条已随去评级化撤除（见 §0 2026-10-25 条与架构 §1 D36）；`Grade` 阈值与旧领域类型仅保留给历史快照只读兼容与 Schema 结构健康分独立域。下方为当时实现记录，不回改。
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **130 项** + 集成 4 项全绿；`cargo clippy -p rds-insight --all-targets` 对本批文件零告警）
 
@@ -720,6 +742,8 @@
 
 ## 1. 现状结论（盘点摘要）
 
+> **口径注记（2026-10-25）**：本节是 2026-09 v1 → v2 迁移期的历史盘点快照，其中「16 条规则」「QualityScoreCard 四维评分重接」等表述为当时口径；当前内置规则 **18 条**（列 9 · 多列 6 · 表 3），表 / 列画像的四维评分卡与五档等级已随去评级化撤除（见 §0 2026-10-25 条），本节历史处置记录不回改。
+
 ### 1.1 后端（已迁移，质量高）
 
 | 层 | 状态 |
@@ -819,7 +843,7 @@ workbench ──► insight ──► engine ──► shared
 
 | 层 | 存储位置 | 作用域 | 可写 | 优先级 |
 | --- | --- | --- | --- | --- |
-| `Builtin` | `crates/insight/insight-rules/`（`include_dir!` 编译期嵌入，16 条） | 所有项目 | ❌ | 最低 |
+| `Builtin` | `crates/insight/insight-rules/`（`include_dir!` 编译期嵌入，18 条：列 9 · 多列 6 · 表 3） | 所有项目 | ❌ | 最低 |
 | `Global` | `{data_dir}/RdataStation/system/insight-rules/` | 所有项目 | ✅ | 中 |
 | `Project` | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ | 最高 |
 
@@ -921,12 +945,12 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 **验收**：从结果表右键到列画像出数全链路可走；空态 / 加载 / 错误三态可复现。
 
-### Phase 2 — 质量评分与规则管理
+### Phase 2 — 规则管理（质量评分卡已于 2026-10-25 去评级化撤除，见 §0 2026-10-25 条）
 
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
-| 2.1 | 质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20） | `insight/src/{quality_scorer,model,insight_view,ui}.rs` | ✅ 第一批 |
-| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs`、`jobs.rs` | ✅ Phase 3 一批（入口在表探查上） |
+| 2.1 | ~~质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20）~~ | `insight/src/{quality_scorer,model,insight_view,ui}.rs` | **已撤除（2026-10-25，方案 A）**：表 / 列画像不再出总分与等级；旧领域函数 `compute_column_quality` / `compute_table_quality` / `Grade` 阈值仅保留给历史快照只读兼容与 Schema 结构健康分独立域，生产画像链路不调用 |
+| 2.2 | 表级评估：「评估全表」→ 逐列事实明细 + 检查器四态命中（`finish_evaluation().with_checker(...)`）+ 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs`、`jobs.rs` | ✅ Phase 3 一批（入口在表探查上）；2026-10-25 由旧 `TableQuality` 加权聚合改为检查器事实口径 |
 | 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） | ✅ 第二批 |
 | 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` | ✅ 第二批 |
 
@@ -936,7 +960,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
-| 3.1 | 表探查视图：列元数据表（序号 / 列名 + PK 角标 / 类型 / 可空 / 质量分）+ 行数 + 评估入口 | `insight/src/insight_view.rs` | ✅ Phase 3 一批 |
+| 3.1 | 表探查视图：列元数据表（序号 / 列名 + PK 角标 / 类型 / 可空 / 缺失率事实列，未统计中性「—」）+ 行数 + 评估入口 | `insight/src/insight_view.rs` | ✅ Phase 3 一批；2026-10-25 旧「质量分」列改为缺失率事实列（去评级化） |
 | 3.2 | 多列分析**重新设计**：列清单来源改为「当前结果集 / DuckDB 临时表的真实列元数据」（v1 的 `availableColumns` 恒空是该项从未跑通的根因） | `insight/src/service/mod.rs` | ✅ Phase 3 二/三批 |
 | 3.3 | 规则选择与结果渲染：单值 KV / `result_type = "list"` 表格 | `insight/src/insight_view.rs` | ✅ Phase 3 三批 |
 | 3.4 | 表探查 → 列画像下钻（点列名） | 同上 | ✅ Phase 3 一批 |
@@ -962,7 +986,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 ### Phase 6（候选，不在本期）
 
-类型覆盖补齐（BLOB / 全 NULL 列 P0，JSON 列基础统计 P1，ARRAY 元素分布 P2）、异常检测（IQR + Z-Score）、时序分析、质量评分权重可配置、规则数量扩充（18 → 30+）、报告导出（PDF / HTML）、洞察结果缓存。均见 v1 `design.md` §十二 路线图，**v1 未实现，v2 不承诺**。
+类型覆盖补齐（BLOB / 全 NULL 列 P0，JSON 列基础统计 P1，ARRAY 元素分布 P2）、异常检测（IQR + Z-Score）、时序分析、规则数量扩充（18 → 30+）、报告导出（PDF / HTML）、洞察结果缓存。均见 v1 `design.md` §十二 路线图，**v1 未实现，v2 不承诺**。质量评分权重可配置项随去评级化移出范围（本模块不再做质量评分）。
 
 ## 6. 测试场景清单
 
@@ -975,11 +999,11 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | T5 | 禁用内置规则：抑制记录生效，`rules_for_column_type` 不再返回该 id | 单测 |
 | T6 | `registry_for(project_root)` 缓存与项目切换（同根同实例、异根异实例） | 单测 |
 | T7 | 列画像五类型分派（Numeric / Text / DateTime / Boolean / 全 NULL → Unknown） | 单测（现有 10 项扩充） |
-| T8 | 质量评分四维权重与等级边界（85 / 70 / 50 / 30） | 单测（现有 7 项） |
+| T8 | ~~质量评分四维权重与等级边界（85 / 70 / 50 / 30）~~ | 已随去评级化移除（2026-10-25）；旧阈值边界单测仅作为 `quality_scorer` 领域兼容函数保留，生产画像链路不调用 |
 | T9 | 快照保存 → 历史 → 版本详情 → 对比（版本链 `parent_version_id`） | 集成 |
 | T10 | `SchemaAnalyzer` 健康分与四类检测（现有 16 项） | 单测 |
 | T11 | 并发超限时的 UI 语义（排队或可读错误，不出现英文重试文案） | 集成 |
-| T12 | 契约：洞察视图零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` |
+| T12 | 契约：洞察视图零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` + `cargo test -p rds-insight --test ui_contract`（insight 自有守卫：常量契约 / 裸 px / 裸色 / 清单登记） |
 | T13 | 空态 / 加载 / 错误三态渲染（无数据、非表临时表、连接断开） | 窗口测试（参照 `project/src/ui/tests.rs`） |
 | T14 | 多列分析：列清单来自真实临时表、规则选择、结果渲染（单值 + list） | 集成 |
 
@@ -1009,13 +1033,13 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 快照存储归位 | `crates/insight/src/store/{column_store.rs,table_store.rs,schema_store.rs,meta_store.rs}` |
 | 异常值检测归位 | `crates/insight/src/engine/stats.rs`（自 `engine/services/duckdb_service.rs::detect_extremes`） |
 | 洞察服务门面 | `crates/insight/src/service/mod.rs`（自 `workbench/services/{result,persistence}_service.rs` 的洞察部分） |
-| 列画像 / 质量卡 / 表探查 | `crates/insight/src/insight_view.rs`（状态）+ `crates/insight/src/view/{column,table}.rs`（渲染，按 Tab 位移见 §11） |
-| Schema 报告与导出 | `crates/insight/src/schema_view.rs` |
+| 列画像 / 检查器事实 / 表探查 | `crates/insight/src/insight_view.rs`（状态）+ `crates/insight/src/view/{column,table}.rs`（渲染，按 Tab 位移见 §11）；表 / 列画像不含质量总分与等级（去评级化，2026-10-25） |
+| Schema 报告与导出 | `crates/insight/src/schema_view.rs`（结构健康分与 `Grade` 为独立域，不与表 / 列画像混用） |
 | Action 与快捷键 | `crates/insight/src/commands.rs`、`crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}`（`RightSidebarPanel`） |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（新增「洞察（M8）专用尺寸」节） |
-| 规则资产 | `crates/insight/insight-rules/`（16 条） |
-| 协议契约测试 | `crates/workbench/tests/ui_contract.rs` |
+| 规则资产 | `crates/insight/insight-rules/`（18 条：列 9 · 多列 6 · 表 3） |
+| 协议契约测试 | `crates/workbench/tests/ui_contract.rs` + `crates/insight/tests/ui_contract.rs`（insight 自有守卫：常量契约 / 裸 px / 裸色 / 清单登记） |
 
 ## 9. 验证方式
 
@@ -1026,8 +1050,9 @@ cargo test -p rds-insight -p rds-engine --lib -j 2
 # 全工作区编译守卫
 cargo check --workspace --all-targets -j 2
 
-# 契约（零裸色 / 零裸 px）
+# 契约（零裸色 / 零裸 px）：workbench 外壳守卫 + insight crate 自有守卫
 cargo test -p rds-workbench --test ui_contract -j 2
+cargo test -p rds-insight --test ui_contract -j 2
 ```
 
 **真机（四库）**：两个用例都按环境变量自跳过，未设不算失败；**sh / bash 下一律加单引号**
@@ -1063,26 +1088,32 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 > **定位**：本表是「接口状态」的**唯一权威**——哪些东西写好了但**没有入口 / 没有调用者**、哪些是预留、每项的「接 / 删 / 等」建议与量级。架构 §11 的 K 表是**问题视角**（缺陷与取舍），本表是**施工视角**（接口与入口）；两表互相引用，不重复。
 > **使用约定**：做完一项 → 在 §0 加一条进度记录 → **从本表删掉该行**（本表只列还没做的）；新增预留接口时同步加行，否则会出现「看起来有、实际没有」的错觉。
-> **最近核对**：2026-09-18（逐项用 grep 核实调用者 / 构造点）。
+> **最近核对**：2026-10-25（逐项用 grep 核实调用者 / 构造点；本轮收口后刷新）。
 
 | # | 项 | 现状证据 | 建议 | 量级 / 阻塞 |
 | --- | --- | --- | --- | --- |
 | 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **维持**：编辑器入口走**不物化**（洞察侧重跑取样，2026-09-18），所以没有可回收的临时表；定向口留着——将来真接「结果集 → DuckDB 分析」（物化）时再用 | 小（无阻塞） |
 | 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **定为二期，且 UI / 资产模型归 M6（分析归档）**（2026-09-18 用户拍板：快照对比属二期；洞察是“对此刻的库表给结论”，把某一刻存下来再比较是**资产管理**的语义）。**但 diff 不拄第二份**：差异计算与展示口径继续用洞察的 `VersionDiffView::between`，存储（正文+元数据成对写 / 版本链 / 清理）用洞察 `store` —— 归档调它，将来若要搬就连同那套一起搬 | 中（一期不动） |
-| 6 | ~~编辑器结果集「洞察此列」~~ + 临时表直连入口 | 已于 2026-09-18 接线（见 §0）：菜单项 + 宿主端口 + 「跟随活动连接」口径 + 真机用例。`InsightTarget::Column\|Table`（临时表直连）仍无构造者——**留着**（面板内部与测试在用，且「结果集 → DuckDB 分析」真要物化时就是它） | — | 小 |
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false；本体层与四条上游都在 M6（`analytics-resource-dev-plan.md` §6 **Phase 4**：P4.1 本体层 · P4.2 Mock · P4.3 编辑器结果 · **P4.5 草稿箱数据文件** · **P4.6 导航表**），代码均未做 | **等 M6 P4.1**：本体命名 / 存在性 / `definition_sql` 定了，洞察侧就很小（放开 `can_view_stats` + 宿主 ATTACH `analytics.duckdb` + `SampleSource::on_duckdb` 取样）。**储存口径已建议不复制**（存配方 + 指纹）——那样洞察取样就是 DuckDB 直接读本体文件，连 ATTACH 都省了 | 小（依赖 M6 P4.1） |
-| 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
-| 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
+| 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **维持并在 UI 提示**：本批不抢先自取样（避免与列 / 表目标重复取数）；多列表单已带空态引导（B1-a） | 小 |
+| 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **二期加强**：解析级策略检查（解析能力 `engine/src/sql` 已有），替代纯关键字黑名单 | 中 |
+| 12 | Kendall τ 秩相关（多列） | 现多列规则已含 Pearson 相关 / Spearman / Cramér's V / 交叉表 / 分组统计 / 散点样本 | **二期**：Spearman 已覆盖常规秩场景，Kendall τ 留作科研补充；只接 DuckDB 原生可提供量，不引扩展 | 小 |
+| 13 | 分组聚合统计（EDA 分组求和 / 均值等） | 现多列规则 `grouped-stats` 仅出基础分组量 | **二期**：与 DBeaver 右侧统计区对齐的轻分组 / 求和 / 计数面板；先定字段选择器交互（下拉多选，不内嵌 200+ 列全量列表） | 中 |
+| 14 | 200+ 列虚拟列表 | 列分布 / 列卡当前为全量渲染 | **二期**：大表（200+ 字段）接 `virtual_list`；本轮先用搜索 + 下拉多选定位，不内嵌全量列表 | 中 |
+| 15 | 表 / 列表达式规则 | 规则体系当前只支持内置统计量与 SQL 模板结果映射 | **二期**：用户对选定字段写表达式派生列 / 规则；需先定表达式沙箱口径 | 中 |
+| 16 | 多列真并发取数对比 | 对比 v1 只聚合会话内已完成画像摘要（`TargetSummary`），不重新取数 | **二期**：阶段③真并发取数对比 + 表 / 列对比表达；历史快照作为对比候选随 #4 一起接 M6 | 大 |
+| 17 | 科研统计扩展层（DuckDB 社区扩展） | DuckDB 原生聚合已覆盖描述统计 / 偏峰 / Pearson / Spearman / Cramér's V；正态检验 / ANOVA / Kendall τ / 效应量原生无。社区扩展 `stats_duck`（假设检验 + R 风格分布 + OLS）、`duckfn_statrs`（Rust statrs 封装 34 aggregates + 509 scalars）、`anofox_statistics`（GLM/混合效应）可补，但均为**社区个人维护**、需 `INSTALL FROM community` 网络下载、版本跟进 DuckDB 最新 stable | **本期不做，登记为预留**：EDA 核心画像（高频路径）继续纯原生聚合，不依赖外部扩展；科研统计增强归二期科研分析模式。前置条件：① DuckDB 引擎版本与社区扩展 ABI 对齐；② 扩展随应用 bundle 预下载（离线可用）或首次在线安装；③ 加载失败降级显示「扩展未安装，跳过」，不阻塞核心画像。选型实测在二期启动时做（stats_duck vs duckfn_statrs vs Rust 侧手写三选一） | 大（依赖二期科研分析模式） |
 
-> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）；#6 编辑器结果集「洞察此列」（2026-09-18，真机验证）；#11 `insight_view.rs` 按 Tab 位移（2026-09-18，纯位移，验收三项计数不变）。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）；#6 编辑器结果集「洞察此列」（2026-09-18，真机验证）；#11 `insight_view.rs` 按 Tab 位移（2026-09-18，纯位移）；**2026-10-25 批次**：中间 EDA 工作页 / 集合模型 / 关系排查 / 归档路径 / 检查器四态 / 科研统计 / 四缺口 / 资源治理设置 / A1–A3 与 B1-a / B4-a / B7-a 基础修复 / 去评级化（记录见 §0 2026-10-25 条）。
 
-**建议顺序**（性价比）：7（分析表型存档，**等 M6 P4.1 本体层**）→ 4（二期，UI 归 M6）→ 其余。
+**建议顺序**：7（分析表型存档，**等 M6 P4.1 本体层**）→ 4（二期，UI 归 M6）→ 13 / 14（大表 EDA 体验）→ 12 / 15 / 16 → 17（科研统计扩展层，等二期科研分析模式）→ 其余。
 
 ## 11. `insight_view.rs` 按 Tab 位移（规格 · **已完成 2026-09-18**）
 
 > **结果**：`insight_view.rs` **4225 → 915 行**（只剩状态宿主）；片段在 `view/{mod,header,column,table,multi,schema,history}.rs`（288 / 160 / 338 / 285 / 343 / 213 / 368 行）；测试整块搬到 `insight_view/tests.rs`（1481 行，照 `mock_view/tests.rs` 先例，仍是宿主的子模块，所以状态入口**没有**为了测试放宽可见性）。
+> **现行口径（2026-10-25 复核）**：后续批次又补 `view/overview.rs`（摘要 Tab）、`view/set.rs`（集合 / 对比管理）与 `workspace.rs`（中间 EDA 工作页）；下方规格中提到的 `render_score_card` / `dimension_row` 评分卡函数已随去评级化撤除，`ScoreView` / `DimensionView` 已从视图模型移除——本段数字与函数名是 2026-09-18 位移当时的历史记录，仅作结构判据保留。
 > **实际可见性口径**（比下方规格多出的两条，已写进 `view/mod.rs` 台账）：片段入口（`render_header` / `render_tab_bar` / `render_body` / `render_score_card`）是 `pub(crate)`——宿主的 `impl Render` 要调；`InsightView` 的字段是 `pub(crate)`——片段与宿主不同模块，读字段必须如此（**对外 API 与引用面零改动**）。
-> **验证**：`rds-insight --lib` **227** · `column_profile_e2e` **14** · `ui_contract` **7** · `cargo check --workspace --all-targets` 零告警 · `grep -rn "insight_view::" crates/` 的宿主引用零改动。
+> **验证**（2026-09-18 当时基线）：`rds-insight --lib` **227** · `column_profile_e2e` **14** · `ui_contract` **7** · `cargo check --workspace --all-targets` 零告警 · `grep -rn "insight_view::" crates/` 的宿主引用零改动。现行基线见 §0 2026-10-25 条（244 / 14 / 4）。
 >
 > 下方为规格原文（保留作判据记录）。
 
