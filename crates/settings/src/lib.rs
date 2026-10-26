@@ -225,6 +225,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Text(settings.appearance.tab_bar_variant.clone())
         }
         Slot::EditorShowLineNumbers => SettingValue::Bool(settings.editor.show_line_numbers),
+        Slot::EditorShowFolds => SettingValue::Bool(settings.editor.show_folds),
         Slot::EditorDefaultTabSize => {
             SettingValue::Number(settings.editor.default_tab_size as f64)
         }
@@ -242,6 +243,13 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
             SettingValue::Bool(settings.navigator.show_name_type_short)
         }
         Slot::NavigatorRowEstimate => SettingValue::Bool(settings.navigator.row_estimate),
+        Slot::NavigatorShowInlineStats => {
+            SettingValue::Bool(settings.navigator.show_inline_stats)
+        }
+        Slot::NavigatorShowInlineComment => {
+            SettingValue::Bool(settings.navigator.show_inline_comment)
+        }
+        Slot::NavigatorShowInlineSize => SettingValue::Bool(settings.navigator.show_inline_size),
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
         // 复合值（已保存视图）：同上。
@@ -383,6 +391,12 @@ impl SettingsService {
                 };
                 Self::set_show_line_numbers(on, cx);
             }
+            Slot::EditorShowFolds => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_folds(on, cx);
+            }
             Slot::EditorDefaultTabSize => {
                 let Some(n) = value.as_number() else {
                     return false;
@@ -452,6 +466,24 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_row_estimate(on, cx);
+            }
+            Slot::NavigatorShowInlineStats => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_inline_stats(on, cx);
+            }
+            Slot::NavigatorShowInlineComment => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_inline_comment(on, cx);
+            }
+            Slot::NavigatorShowInlineSize => {
+                let Some(on) = value.as_bool() else {
+                    return false;
+                };
+                Self::set_show_inline_size(on, cx);
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters
@@ -658,6 +690,25 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.editor.show_line_numbers = on;
+        }
+        persist(&cx.global::<Settings>().clone());
+        cx.refresh_windows();
+    }
+
+    /// 读取「代码折叠」开关（2026-10-27 起设在设置页；`EditorHostPanel::render` 渲染
+    /// 权威同步点读取 → 同步 `shared.show_folds` → `sync_fold` 重跑）。
+    pub fn show_folds(cx: &App) -> bool {
+        cx.global::<Settings>().editor.show_folds
+    }
+
+    /// 折叠开关：更新 global → 持久化 → 立即重绘所有窗口。
+    ///
+    /// 即时生效靠 `refresh_windows`：下一帧 `EditorHostPanel::render` 读到新值，与
+    /// `shared.show_folds` 比较后重跑 `sync_fold`（install / set_folding(false)）。
+    pub fn set_show_folds(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.editor.show_folds = on;
         }
         persist(&cx.global::<Settings>().clone());
         cx.refresh_windows();

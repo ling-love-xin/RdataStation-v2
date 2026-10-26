@@ -103,6 +103,8 @@ impl SettingValue {
 pub enum Slot {
     AppearanceThemeMode,
     EditorShowLineNumbers,
+    /// 【2026-10-27】代码折叠开关（标量布尔，默认开；设在设置页，编辑器 render 同步）。
+    EditorShowFolds,
     EditorDefaultTabSize,
     EditorDefaultHardTabs,
     EditorDefaultLineEnding,
@@ -122,6 +124,12 @@ pub enum Slot {
     NavigatorVisibleDatabases,
     /// 表/视图行估计徽标开关（S3-④ 标量布尔，默认开；只上设置页）。
     NavigatorRowEstimate,
+    /// 表/视图行右侧统计徽标整体开关（需求④，默认开；设置页「表行统计」）。
+    NavigatorShowInlineStats,
+    /// 表行「注释副标」子开关（需求②，默认开；总开关开时仍受此开关）。
+    NavigatorShowInlineComment,
+    /// 表行「≈ KB 大小」徽标开关（需求②，默认开；总开关开时仍受此开关）。
+    NavigatorShowInlineSize,
     /// 面板全局对象名 mask（B-1 复合值；读写走对象名过滤器对话框，不上设置页）。
     NavigatorGlobalMask,
     ResourcesKeepVersions,
@@ -149,6 +157,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
     Some(match key {
         "appearance.theme_mode" => Slot::AppearanceThemeMode,
         "editor.show_line_numbers" => Slot::EditorShowLineNumbers,
+        "editor.show_folds" => Slot::EditorShowFolds,
         "editor.default_tab_size" => Slot::EditorDefaultTabSize,
         "editor.default_hard_tabs" => Slot::EditorDefaultHardTabs,
         "editor.default_line_ending" => Slot::EditorDefaultLineEnding,
@@ -165,6 +174,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.saved_views" => Slot::NavigatorSavedViews,
         "navigator.visible_databases" => Slot::NavigatorVisibleDatabases,
         "navigator.row_estimate" => Slot::NavigatorRowEstimate,
+        "navigator.show_inline_stats" => Slot::NavigatorShowInlineStats,
+        "navigator.show_inline_comment" => Slot::NavigatorShowInlineComment,
+        "navigator.show_inline_size" => Slot::NavigatorShowInlineSize,
         "navigator.global_mask" => Slot::NavigatorGlobalMask,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
@@ -189,7 +201,9 @@ pub fn slot_for(key: &str) -> Option<Slot> {
 pub fn slot_kind(slot: Slot) -> KindTag {
     match slot {
         Slot::AppearanceThemeMode => KindTag::Enum,
-        Slot::EditorShowLineNumbers | Slot::EditorDefaultHardTabs => KindTag::Bool,
+        Slot::EditorShowLineNumbers | Slot::EditorDefaultHardTabs | Slot::EditorShowFolds => {
+            KindTag::Bool
+        }
         Slot::EditorDefaultTabSize => KindTag::Number,
         Slot::EditorDefaultLineEnding | Slot::EditorDefaultEncoding => KindTag::Enum,
         Slot::AppearanceFontSize => KindTag::Number,
@@ -200,7 +214,10 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorShowTags
         | Slot::NavigatorShowScope
         | Slot::NavigatorShowNameTypeShort
-        | Slot::NavigatorRowEstimate => KindTag::Bool,
+        | Slot::NavigatorRowEstimate
+        | Slot::NavigatorShowInlineStats
+        | Slot::NavigatorShowInlineComment
+        | Slot::NavigatorShowInlineSize => KindTag::Bool,
         Slot::ConnectTimeoutMs => KindTag::Number,
         // 保留份数是有符号数：`-1` = 全留（哨兵值，不是"少一份"）。
         Slot::ResourcesKeepVersions => KindTag::Number,
@@ -417,6 +434,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         composite: false,
     },
     SettingSpec {
+        key: "editor.show_folds",
+        section: "editor",
+        section_label: "编辑器",
+        label: "代码折叠",
+        hint: "显示/隐藏代码折叠（默认开；关闭时折叠槽与 chevron 一并消失，大文件档位仍自动降级）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/editor/src/view/host.rs::EditorHostPanel（render 同步 shared.show_folds → sync_fold）",
+        composite: false,
+    },
+    SettingSpec {
         key: "editor.default_tab_size",
         section: "editor",
         section_label: "编辑器",
@@ -595,6 +626,48 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
         consumer: "database/src/nav_view/actions.rs（row_estimate 门控估计任务）+ nav_view/rows.rs（≈ N 徽标渲染）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "navigator.show_inline_stats",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "表行统计徽标",
+        hint: "表/视图行右侧统计徽标总开关（注释副标、≈ KB 大小、分区·继承等）；关闭则全部不显，子开关语义不冲突",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "database/src/nav_view/rows.rs::render_nav_node（表行右侧徽标总闸）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "navigator.show_inline_comment",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "表行注释副标",
+        hint: "表/视图行显示对象注释副标（总开关开时仍受此开关）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "database/src/nav_view/rows.rs::render_nav_node（comment_subline）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "navigator.show_inline_size",
+        section: "navigator",
+        section_label: "数据源导航",
+        label: "表行大小徽标",
+        hint: "表/视图行显示 ≈ KB 大小徽标（总开关开时仍受此开关）",
+        kind: SettingKind::Bool,
+        presets: &[],
+        default_json: "true",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "database/src/nav_view/rows.rs::render_nav_node（≈ KB 徽标）",
         composite: false,
     },
     SettingSpec {

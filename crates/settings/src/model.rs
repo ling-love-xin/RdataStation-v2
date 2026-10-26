@@ -326,6 +326,11 @@ pub struct Editor {
     /// 编辑区是否显示行号（即时生效；内核 `LayoutMode::CodeEditor.line_number`）。
     #[serde(default = "default_show_line_numbers")]
     pub show_line_numbers: bool,
+    /// 是否启用代码折叠（2026-10-27 起开关移到设置页；默认开）。
+    /// 即时生效：编辑器 render 权威同步点把设置值同步到 `shared.show_folds` →
+    /// `sync_fold` 重跑（install / set_folding(false)）。
+    #[serde(default = "default_show_folds")]
+    pub show_folds: bool,
     /// 新文档默认缩进宽度（空格数；文档级「重设 ▾」可改单个文档）。
     #[serde(default = "default_tab_size")]
     pub default_tab_size: i64,
@@ -345,6 +350,7 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             show_line_numbers: default_show_line_numbers(),
+            show_folds: default_show_folds(),
             default_tab_size: default_tab_size(),
             default_hard_tabs: default_hard_tabs(),
             default_line_ending: default_line_ending(),
@@ -354,6 +360,11 @@ impl Default for Editor {
 }
 
 fn default_show_line_numbers() -> bool {
+    true
+}
+
+/// 折叠默认开（2026-10-27：能力表置回 true 后，开关只控制是否显示，不关掉能力）
+fn default_show_folds() -> bool {
     true
 }
 
