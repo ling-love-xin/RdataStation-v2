@@ -598,7 +598,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - `cargo check -p rds-workbench --lib --jobs 2` = **Finished，0 error / 0 warning**。
 - `cargo check -p rds-workbench --tests --jobs 2` = **Finished，0 error**；仅 1 个存量 warning `unused import: AppContext`（`crates/workbench/tests/history_editor_entry.rs:11:16`，并行线存量，本线只补 `push` 第三参 `None`，未动 import）；整包测试未随 A5 执行（insight 线工作区状态以 lib / tests 编译通过为准，不绕过阻塞项）。
 
-### 8.15 事实层 / 显示层分离 · B 批保真链（B2–B6，2026-10-26）
+### 8.15 事实层 / 显示层分离 · B 批保真链（B2–B6，2026-10-26，提交 `84a81572`）
 
 > 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md` §7-B / 跳 4 / 跳 5；本节记录 B 批已落地架构口径，D 批开工前回读该方案 §7-D。A 批底座见 §8.14。
 
