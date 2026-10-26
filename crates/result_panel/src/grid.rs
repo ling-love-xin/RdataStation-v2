@@ -61,10 +61,12 @@ use ::shared::string::{tsv_cell, tsv_row};
 // 【B5】事实帧只读引用：交互派生（列式统计 / 原生数值排序）时读取；不进每帧 render 路径
 use ::shared::{CurrentTier, FactColumnStats, FactFrame, FactKind};
 
+use crate::rowset::{LocalRow, LocalRowSet, RowRef};
 use crate::store::{ColumnKind, ColumnType};
 use crate::status::elapsed_text;
 use crate::ui;
 use workbench_shell::model::ColumnAnnotation;
+use workbench_shell::product_tokens;
 
 /// 结果网格的 key context（`crates/app` 把 `Ctrl+C` 绑在它上面，两边成对）
 ///
@@ -96,20 +98,25 @@ pub type LoadMoreHook = Rc<dyn Fn(&mut App)>;
 
 /// 【T2a-4】单元格编辑**提交**的回调（面板注入：把（数据行序、数据列序、原值、新值）
 /// 交给面板落变更集；面板自己在变更集里决定 upsert 还是移除）
-pub type CommitEditHook = Rc<dyn Fn(usize, usize, String, String, &mut App)>;
+pub type CommitEditHook = Rc<dyn Fn(usize, usize, String, String)>;
+
+/// 【#28-B4】本地行格编辑**提交**的回调（面板注入：把（本地行 id、数据列序、新值）
+/// 写回本地行快照；不进变更集、不进格级 / 行级撤销栈——本地行格编辑提交即落快照，
+/// 与底层行格编辑走 `CommitEditHook` 平行、互不混栈）
+pub type CommitLocalEditHook = Rc<dyn Fn(u64, usize, String)>;
 
 /// 【T2a-4】正在编辑的单元格（编辑态由网格持有；提交 / 取消走钩子交回面板）
 ///
-/// - 行号存两序：**视图行序**管渲染匹配（组件只懂视图行），**数据行序**管变更集与写回
-///   （筛选 / 排序之后视图行与数据行可以不同，而变更集的“行”必须是数据行）。
+/// - 行号存两序：**视图行序**管渲染匹配（组件只懂视图行），**行身份**管写回路径
+///   （`Data` 走变更集钩子，`Local` 走本地行快照钩子；筛选 / 排序之后视图行与身份可以不同）。
 /// - 列下标是**数据列序**（不含 `#` 行号槽；进入编辑时从组件列序折算掉）。
 /// - `settled`：编辑框的初值同步与聚焦是幂等一次性动作（在 render_td 里做），
 ///   做过了就不再碰——免得每次重渲染都重设值 / 抢焦点。
 pub struct CellEdit {
     /// 视图行序（渲染匹配用）
     view_row: usize,
-    /// 数据行序（变更集与写回用）
-    data_row: usize,
+    /// 行身份（底层行号 / 本地行 id；决定提交走哪条钩子）
+    reference: RowRef,
     /// 数据列序
     column: usize,
     /// 进入编辑时的原值（提交时若没变，面板据此不落变更）
@@ -144,6 +151,11 @@ pub type PreviewValueHook = Rc<dyn Fn(String, String, usize, usize, &mut App)>;
 
 /// 【P2-3】列统计弹层的钩子（宿主开弹层；参数 = 列名、统计文本）
 pub type ColumnStatsHook = Rc<dyn Fn(String, String, &mut App)>;
+
+/// 【#28-B3】行级动作钩子（面板注入：把入队请求交回宿主分派；新增 / 复制 / 删除一行）。
+/// 网格不持本地行真值，动作意图打包成 [`crate::ports::ResultRequest`] 经钩子入队，
+/// 宿主在权威 store 槽位落地叠加层变更。
+pub type RowActionHook = Rc<dyn Fn(crate::ports::ResultRequest, &mut App)>;
 
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +196,12 @@ pub enum ContextAction {
     ClearColumnFilter { column: usize },
     /// 【排序】取消本地排序（回原顺序；不下发源库重查，对齐 DBeaver 排序 `NONE`）
     ClearSort,
+    /// 【#28-B3】在该行下方插入一条本地空行（视图行号；动作由宿主落到叠加层）
+    InsertRowBelow(usize),
+    /// 【#28-B3】复制该行（视图行号）为一条本地行快照
+    DuplicateRow(usize),
+    /// 【#28-B3】删除该行（视图行号；底层行打删除标记，本地行移出叠加层）
+    DeleteRow(usize),
 }
 
 /// 右键菜单里的一项
@@ -227,6 +245,12 @@ pub struct ContextTarget {
     /// 【筛选】这一列的去重取值（前 `COLUMN_FILTER_VALUE_LIMIT` 个；列头菜单
     /// 「按值筛选此列」的值列表——由网格从已抓行算好传入，纯函数不碰数据）
     pub column_values: Vec<String>,
+    /// 【#28-B3】目标行身份（底层行 / 本地行；行级动作菜单按它区分可用性）
+    pub row_ref: RowRef,
+    /// 【#28-B3】这份结果能不能编辑（`false` 时右键不摆新增 / 复制 / 删除三项）
+    pub editable: bool,
+    /// 【#28-B3】目标底层行是否已被标记删除（被删行不摆复制 / 删除行级动作）
+    pub is_deleted: bool,
 }
 
 /// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
@@ -291,6 +315,27 @@ pub fn context_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         items.push(ContextMenuItem {
             label: format!("复制整行为 INSERT（{table}）"),
             action: ContextAction::CopyRowInsert(target.row),
+            separator_before: false,
+        });
+    }
+    // 【#28-B3】行级动作独立分组（对齐 DBeaver 行操作段）：新增 · 复制 · 删除一行。
+    // 只读结果集（`!editable`）整组不摆；已标记删除的底层行不再摆复制 / 删除——
+    // 新增空行也一并收起（被删行区段不再产生新的叠加动作）。动作只改本地叠加层，
+    // 不下发 INSERT / DELETE。
+    if target.editable && !target.is_deleted {
+        items.push(ContextMenuItem {
+            label: "在下方插入新行".to_string(),
+            action: ContextAction::InsertRowBelow(target.row),
+            separator_before: true,
+        });
+        items.push(ContextMenuItem {
+            label: "复制此行".to_string(),
+            action: ContextAction::DuplicateRow(target.row),
+            separator_before: false,
+        });
+        items.push(ContextMenuItem {
+            label: "删除此行".to_string(),
+            action: ContextAction::DeleteRow(target.row),
             separator_before: false,
         });
     }
@@ -576,8 +621,8 @@ pub struct ResultGridDelegate {
     column_widths: HashMap<String, Pixels>,
     /// 【P2-4】单行转置：把选中一行竖排成「# / 字段 / 值」三列（DBeaver 式；只读视图）
     transposed: bool,
-    /// 【P2-4】转置当前展示的数据行（越界自动夹取）
-    transpose_row: usize,
+    /// 【P2-4】转置当前展示的行身份（底层行 / 本地行；越界自动夹取到视图序列末位）
+    transpose_row: RowRef,
     /// 【B14】按值筛选的钩子（面板注入）
     on_filter_value: Option<FilterValueHook>,
     /// 【筛选】列级筛选的钩子（面板注入；列头菜单 FilterColumnValue / ClearColumnFilter）
@@ -596,15 +641,17 @@ pub struct ResultGridDelegate {
     result_table: Option<String>,
     /// 【M8】这份结果能不能洞察（面板同步数据时算：见 `ResultEntry::can_insight_column`）
     insight_available: bool,
-    /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
+    /// 【B15】视图行序：当前看着的这一串行身份（底层数据行 `RowRef::Data` / 本地行
+    /// `RowRef::Local`）。
     ///
-    /// `None` = **与数据行序相同**（既没筛选也没排序）：这时不物化那份映射——
+    /// `None` = **与基准序列相同**（既没筛选也没排序）：这时不物化那份映射——
     /// 10 万行的结果切一次结果集就为它分配一个 10 万元素的表，而绝大多数时候视图
-    /// 与数据是同一个顺序，那份表一次也用不上（入库 / 切换结果集时不该做这件事）。
+    /// 与基准是同一个顺序，那份表一次也用不上（入库 / 切换结果集时不该做这件事）。
     ///
-    /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
+    /// 筛选与排序都只改这个映射，**底层数据行一行不动**（所以清除筛选能原样恢复，
     /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
-    view_rows: Option<Vec<usize>>,
+    /// 排序只作用底层行；本地行参与筛选命中、始终登记序追加末尾（#28-B1 拍板 D1）。
+    view_rows: Option<Vec<RowRef>>,
     /// 【T2a-4】这份结果能不能编辑（面板同步数据时算：`ResultEntry` 编辑判据 +
     /// 面板当前连接 / 项目只读防线；`false` 时双击不进入编辑）
     editable: bool,
@@ -615,6 +662,10 @@ pub struct ResultGridDelegate {
     edit_input: Option<Entity<InputState>>,
     /// 【T2a-4】提交回调（面板注入：落变更集）
     on_commit_edit: Option<CommitEditHook>,
+    /// 【#28-B4】本地行格编辑提交回调（面板注入：写回本地行快照；不进变更集 / 撤销栈）
+    on_commit_local_edit: Option<CommitLocalEditHook>,
+    /// 【#28-B3】行级动作回调（面板注入：新增 / 复制 / 删除一行打包成请求交回宿主分派）
+    on_row_action: Option<RowActionHook>,
     /// 【T2a-3】脏格集合（**数据行序**，含列序；面板从权威变更集投影，标底色）
     dirty: Vec<(usize, usize)>,
     /// 【T2a-6】冲突格集合（提交回执标过 `Conflict` 的格子；面板从权威变更集投影）
@@ -626,6 +677,10 @@ pub struct ResultGridDelegate {
     /// 同口径时序）。仅用于交互派生时的列式取值（数值统计 / 原生数值排序）；render 纯读路径
     /// 不解析它。表档帧 batches 已释放，此时本地统计 / 排序回退显示矩阵口径。
     fact: Option<Arc<FactFrame>>,
+    /// 【#28】本地叠加层投影快照（面板在 `set_data` **之后**同步进来；delegate 只读、
+    /// 不持真值——真值在 store 结果集槽位，切换结果集 / 刷新由宿主重新投影）。
+    /// `None` = 纯底层结果集（现状行为不变）。本地行参与网格视图与筛选命中，不参与列排序。
+    local: Option<LocalRowSet>,
 }
 
 impl ResultGridDelegate {
@@ -652,7 +707,7 @@ impl ResultGridDelegate {
         self.column_widths.clear();
         // 【P2-4】转置同理：行与列都换了，旧转置行没有意义（面板侧开关状态不随数据自动关）
         self.transposed = false;
-        self.transpose_row = 0;
+        self.transpose_row = RowRef::Data(0);
         self.context_cell = None;
         // 【T2a-3/4】数据被新结果顶掉：正在编辑的格子、标脏的集合都随旧数据作废
         self.editing = None;
@@ -668,6 +723,8 @@ impl ResultGridDelegate {
         // 【B5】事实帧同理：换结果不套上一份的列式数据（面板随后紧跟 set_fact；
         // 漏给 = 本地统计 / 排序回退显示矩阵口径）
         self.fact = None;
+        // 【#28】本地叠加层同理：换结果不套上一份的本地行（面板随后紧跟 set_local_snapshot）
+        self.local = None;
         self.rebuild_view_rows();
     }
 
@@ -722,6 +779,22 @@ impl ResultGridDelegate {
         self.fact = fact;
     }
 
+    /// 【#28】同步本地叠加层投影快照（与 `set_data` 同一次同步里、在它之后调，与
+    /// 类型 / 事实帧同口径时序）。
+    ///
+    /// delegate 只读这份投影、不持真值：新增 / 复制 / 删除动作由面板经事件回写 store 槽位，
+    /// 再由宿主重新投影进来。`None` = 纯底层结果集（未接行级动作时行为与现状一致）。
+    /// 注入后立即重算视图序列：本地行追加在底层行之后（筛选命中才出现，排序不参与）。
+    pub fn set_local_snapshot(&mut self, local: Option<LocalRowSet>) {
+        self.local = local;
+        self.rebuild_view_rows();
+    }
+
+    /// 当前投影里的本地行个数（不参与底层行数 / 统计口径，仅供视图序列长度与导航夹取）
+    fn local_count(&self) -> usize {
+        self.local.as_ref().map_or(0, |set| set.local_count())
+    }
+
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
@@ -731,6 +804,8 @@ impl ResultGridDelegate {
         self.result_table = None;
         // 【B5】事实帧跟着清：空网格不套上一份的列式数据
         self.fact = None;
+        // 【#28】本地叠加层跟着清：空网格不套上一份的本地行
+        self.local = None;
         self.view_rows = None;
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
@@ -740,6 +815,9 @@ impl ResultGridDelegate {
         self.editing = None;
         self.dirty.clear();
         self.conflict.clear();
+        // 【P2-4】转置行身份复位（空结果里没有可竖排的行）
+        self.transposed = false;
+        self.transpose_row = RowRef::Data(0);
     }
 
     /// 【B14】记下最近右键的单元格（由 `render_td` 上的右键处理调用）
@@ -895,16 +973,25 @@ impl ResultGridDelegate {
 
     /// 开 / 关转置视图。`row` 为要竖排的数据行（越界自动夹取）；
     /// 关掉后原网格原样回来（排序 / 冻结 / 隐藏都没动过）。
+    ///
+    /// `row` 是**视图行号**（含本地行区段）：内部折成行身份存下，后续筛选 / 排序改了
+    /// 视图序列，转置锚定的仍是原来那一行（底层行号 / 本地行 id 不随序列滑移）。
     pub fn set_transposed(&mut self, transposed: bool, row: usize) {
         self.transposed = transposed;
         if transposed {
-            self.transpose_row = row.min(self.rows.len().saturating_sub(1));
+            self.transpose_row = self.resolve_transpose_ref(row);
         }
     }
 
-    /// 转置行导航：切到另一行（越界夹取）
+    /// 转置行导航：切到另一行（按视图行号夹取到视图序列末位后折成身份）
     pub fn set_transpose_row(&mut self, row: usize) {
-        self.transpose_row = row.min(self.rows.len().saturating_sub(1));
+        self.transpose_row = self.resolve_transpose_ref(row);
+    }
+
+    /// 视图行号夹取到当前视图序列内并折成行身份；空序列兜底 `RowRef::Data(0)`。
+    fn resolve_transpose_ref(&self, view_row: usize) -> RowRef {
+        let clamped = view_row.min(self.view_len().saturating_sub(1));
+        self.row_ref(clamped).unwrap_or(RowRef::Data(0))
     }
 
     /// 当前是否处于转置视图
@@ -912,8 +999,8 @@ impl ResultGridDelegate {
         self.transposed
     }
 
-    /// 当前转置的数据行（导航 / 状态行读它）
-    pub fn transpose_row(&self) -> usize {
+    /// 当前转置锚定的行身份（导航 / 测试读它；底层行 / 本地行两类都可能）
+    pub fn transpose_row(&self) -> RowRef {
         self.transpose_row
     }
 
@@ -924,8 +1011,8 @@ impl ResultGridDelegate {
             .collect()
     }
 
-    /// 转置视图的单元格：第 1 列 = 原列名，第 2 列 = 选中行该列的值
-    /// （`#` 行号槽不是数据，返回 `None`）
+    /// 转置视图的单元格：第 1 列 = 原列名，第 2 列 = 锚定行该列的值
+    /// （`#` 行号槽不是数据，返回 `None`）；锚定本地行时从本地快照取值。
     fn transpose_cell(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
         if Self::is_row_number(col_ix) {
             return None;
@@ -933,11 +1020,19 @@ impl ResultGridDelegate {
         let data_col = *self.transpose_columns().get(row_ix)?;
         match col_ix {
             1 => self.columns.get(data_col).map(String::as_str),
-            _ => self
-                .rows
-                .get(self.transpose_row)?
-                .get(data_col)
-                .map(String::as_str),
+            _ => match self.transpose_row {
+                RowRef::Data(data_ix) => {
+                    // 被删底层行不进转置视图（#28-B1 排除矩阵：转置排除被删行）
+                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                        return None;
+                    }
+                    self.rows
+                        .get(data_ix)?
+                        .get(data_col)
+                        .map(String::as_str)
+                }
+                RowRef::Local(id) => self.local_cell(id, data_col),
+            },
         }
     }
 
@@ -991,10 +1086,37 @@ impl ResultGridDelegate {
     }
 
     /// 【B15】筛选后的行（导出跟随筛选：原型 §5.5 的口径）
+    /// 文本视图序列：底层未删行 + 本地行（#28-B1 拍板 D2：文本视图纳入本地行、排除被删行）。
+    /// 隐藏列投影在调用方（[`Self::text_presentation`]）。
     pub fn visible_rows(&self) -> Vec<Vec<String>> {
         (0..self.view_len())
-            .filter_map(|view_ix| self.data_row(view_ix))
-            .filter_map(|data_ix| self.rows.get(data_ix).cloned())
+            .filter_map(|view_ix| match self.row_ref(view_ix)? {
+                RowRef::Data(data_ix) => {
+                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                        return None;
+                    }
+                    self.rows.get(data_ix).cloned()
+                }
+                RowRef::Local(id) => self
+                    .local
+                    .as_ref()
+                    .and_then(|set| set.local_row(id))
+                    .map(|row| row.cells.clone()),
+            })
+            .collect()
+    }
+
+    /// 导出序列：只含底层未删行——本地行不进任何导出档、被删行排除（#28-B1 排除矩阵）。
+    /// 与 [`Self::visible_rows`] 的差别只在本地行是否纳入。
+    pub fn visible_rows_for_export(&self) -> Vec<Vec<String>> {
+        (0..self.view_len())
+            .filter_map(|view_ix| {
+                let data_ix = self.data_row(view_ix)?;
+                if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    return None;
+                }
+                self.rows.get(data_ix).cloned()
+            })
             .collect()
     }
 
@@ -1025,6 +1147,37 @@ impl ResultGridDelegate {
             lines.push(cells.join("\t"));
         }
         lines.join("\n")
+    }
+
+    /// 工具栏整份复制（#28-B1 拍板 D7）：**全列**、底层未删行 + 本地行、排除被删行。
+    ///
+    /// 返回 `(TSV 文本, 数据行数)`，计数与文本同一口径；不再走 `entry.to_tsv()` 全量底层行
+    /// （那条路既漏本地行、又把被删行拷走）。表头一行 + 数据行，Tab 分隔、行末不带 `\t`。
+    pub fn active_result_tsv(&self) -> (String, usize) {
+        let mut lines = vec![self.columns.join("\t")];
+        let mut count = 0usize;
+        for view_ix in 0..self.view_len() {
+            let Some(reference) = self.row_ref(view_ix) else {
+                continue;
+            };
+            let cells: Vec<String> = match reference {
+                RowRef::Data(data_ix) => {
+                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                        continue;
+                    }
+                    self.rows.get(data_ix).cloned().unwrap_or_default()
+                }
+                RowRef::Local(id) => self
+                    .local
+                    .as_ref()
+                    .and_then(|set| set.local_row(id))
+                    .map(|row| row.cells.clone())
+                    .unwrap_or_default(),
+            };
+            lines.push(tsv_row(&cells));
+            count += 1;
+        }
+        (lines.join("\n"), count)
     }
 
     /// 【分组】按一列本地分组计数（纯函数，不引 polars——见 result-panel.md §8.8 选型记录）。
@@ -1063,31 +1216,67 @@ impl ResultGridDelegate {
     }
 
     /// 【B15】重算视图行序（筛选 → 排序；数据不动）
+    ///
+    /// 行身份两类：`RowRef::Data` 底层未删行、`RowRef::Local` 本地行。
+    /// - 全局词 / 列级筛选对两类行都生效（命中才出现）；
+    /// - 列排序**只作用底层行**（#28-B1 拍板 D1）：本地行不参与比较，始终登记序追加在
+    ///   底层区段末尾；
+    /// - 被删底层行不在此排除——网格内保留灰显删除线可见（排除序列供统计 / 分组 / 导出 /
+    ///   复制出口使用，那是另一套序列，见 B5 批次）。
     fn rebuild_view_rows(&mut self) {
         let filter = self.filter.trim().to_lowercase();
-        // 既没筛选也没排序：视图行序就是数据行序——**不物化**那份映射（`None` 即恒等）。
+        // 既没筛选也没排序：视图行序就是基准序列——**不物化**那份映射（`None` 即恒等）。
         // 入库 / 切结果集时这一步占了整一轮逐行工作，而绝大多数时候根本用不上。
         if filter.is_empty() && self.column_filter.is_none() && self.sort.is_none() {
             self.view_rows = None;
             return;
         }
-        let mut view: Vec<usize> = (0..self.rows.len())
+        // 底层行：全局筛选词（所有列包含匹配）与列级筛选（单列包含匹配）**叠加取交集**：
+        // 一个词卡所有列，一个值卡一列，同时生效时行要两个都过。被删底层行不进筛选 /
+        // 排序序列（#28-B1 排除矩阵：筛选命中、列排序都排除被删行；网格内灰显删除线保留可见）。
+        let mut data: Vec<usize> = (0..self.rows.len())
             .filter(|ix| {
-                // 全局筛选词（所有列包含匹配）与列级筛选（单列包含匹配）**叠加取交集**：
-                // 一个词卡所有列，一个值卡一列，同时生效时行要两个都过。
-                (filter.is_empty() || self.row_matches(*ix, &filter))
+                !self.local.as_ref().is_some_and(|set| set.is_deleted(*ix))
+                    && (filter.is_empty() || self.row_matches(*ix, &filter))
                     && self.column_filter_matches(*ix)
             })
             .collect();
         if let Some((column, descending)) = self.sort {
             // 稳定排序：同值时按原顺序（用数据行号做 tie-break，与快排的不稳定性无关）
-            view.sort_by(|left, right| {
+            data.sort_by(|left, right| {
                 let ordering = self.compare_rows(*left, *right, column);
                 let ordering = if descending { ordering.reverse() } else { ordering };
                 ordering.then(left.cmp(right))
             });
         }
+        let mut view: Vec<RowRef> = data.into_iter().map(RowRef::Data).collect();
+        // 本地行：命中筛选才出现，不参与排序，按登记序追加在底层区段末尾
+        if let Some(local) = &self.local {
+            for row in local.local_rows() {
+                if (filter.is_empty() || self.local_row_matches(row, &filter))
+                    && self.local_column_filter_matches(row)
+                {
+                    view.push(RowRef::Local(row.id));
+                }
+            }
+        }
         self.view_rows = Some(view);
+    }
+
+    /// 本地行是否命中全局筛选词（大小写不敏感子串，与底层行同一套口径）
+    fn local_row_matches(&self, row: &LocalRow, needle: &str) -> bool {
+        row.cells.iter().any(|cell| cell_matches(cell, needle))
+    }
+
+    /// 【筛选】本地行是否过列级筛选（单列包含匹配；没有列筛选 = 恒过）
+    fn local_column_filter_matches(&self, row: &LocalRow) -> bool {
+        match &self.column_filter {
+            Some((column, value)) => row
+                .cells
+                .get(*column)
+                .is_some_and(|cell| cell_matches(cell, value)),
+            None => true,
+        }
     }
 
     /// 【B5】两行在某列上的比较：内存档数值列取事实帧原生 `f64` 比较（避免 `"1"` 与
@@ -1137,20 +1326,59 @@ impl ResultGridDelegate {
         }
     }
 
-    /// 视图行号 → 数据行号（`None` = 没有这一行）
+    /// 视图行号 → 行身份（`None` = 没有这一行）。
     ///
-    /// 视图行序没物化时（既没筛选也没排序）就是**恒等**：越界要按数据行数判，
-    /// 不能直接把行号当数据行号返回。
-    fn data_row(&self, row_ix: usize) -> Option<usize> {
+    /// 视图序列没物化时（既没筛选也没排序）走基准序列：底层行按原序排前、本地行按登记序
+    /// 追加在后；越界按基准长度判，不能把行号当身份直接返回。
+    fn row_ref(&self, row_ix: usize) -> Option<RowRef> {
         match &self.view_rows {
             Some(view) => view.get(row_ix).copied(),
-            None => (row_ix < self.rows.len()).then_some(row_ix),
+            None => {
+                if row_ix < self.rows.len() {
+                    Some(RowRef::Data(row_ix))
+                } else {
+                    let local = self.local.as_ref()?;
+                    local
+                        .local_rows()
+                        .get(row_ix - self.rows.len())
+                        .map(|row| RowRef::Local(row.id))
+                }
+            }
         }
     }
 
-    /// 视图行数（没筛选/排序时就是数据行数）
+    /// 视图行号 → 底层数据行号（本地行返回 `None`：脏格 / 冲突 / 提交批次只认底层行）
+    fn data_row(&self, row_ix: usize) -> Option<usize> {
+        self.row_ref(row_ix).and_then(|reference| reference.data_index())
+    }
+
+    /// 视图行号 → 行身份（底层行 / 本地行；越界 `None`）。宿主分派行级动作时
+    /// 经它把视图行号翻译成 `RowRef`，再决定落 `LocalRowSet` 的哪一条。
+    pub fn reference_of(&self, row_ix: usize) -> Option<RowRef> {
+        self.row_ref(row_ix)
+    }
+
+    /// 这一视图行是不是本地新增 / 复制行（渲染底色区分用；底层行 = `false`）
+    pub fn row_is_local(&self, row_ix: usize) -> bool {
+        self.row_ref(row_ix).is_some_and(|reference| reference.is_local())
+    }
+
+    /// 这一视图行是不是被标记删除的底层行（本地行永不标记删除；渲染灰显 + 删除线用）
+    pub fn is_deleted_row(&self, row_ix: usize) -> bool {
+        let Some(RowRef::Data(data_ix)) = self.row_ref(row_ix) else {
+            return false;
+        };
+        self.local
+            .as_ref()
+            .is_some_and(|set| set.is_deleted(data_ix))
+    }
+
+    /// 视图行数（没筛选 / 排序时 = 底层行数 + 本地行数）
     pub fn view_len(&self) -> usize {
-        self.view_rows.as_ref().map_or(self.rows.len(), Vec::len)
+        match &self.view_rows {
+            Some(view) => view.len(),
+            None => self.rows.len() + self.local_count(),
+        }
     }
 
     /// 这份结果还能不能取下一段（面板在结果变化时同步；`true` 才启用滚动到底加载）
@@ -1267,6 +1495,16 @@ impl ResultGridDelegate {
         self.on_commit_edit = Some(hook);
     }
 
+    /// 【#28-B4】本地行格编辑提交回调（宿主注入：写回本地行快照，不进变更集 / 撤销栈）
+    pub fn set_commit_local_edit_hook(&mut self, hook: CommitLocalEditHook) {
+        self.on_commit_local_edit = Some(hook);
+    }
+
+    /// 【#28-B3】注入行级动作钩子（新增 / 复制 / 删除一行交回宿主分派）
+    pub fn set_row_action_hook(&mut self, hook: RowActionHook) {
+        self.on_row_action = Some(hook);
+    }
+
     /// 【T2a-3】脏格集合（面板从权威变更集投影；**数据行序**，含数据列序）
     pub fn set_dirty(&mut self, dirty: Vec<(usize, usize)>) {
         self.dirty = dirty;
@@ -1323,16 +1561,26 @@ impl ResultGridDelegate {
     }
 
     /// 进入编辑：只设状态（初值同步 / 聚焦由 render_td 首次渲染时一次性做）。
-    /// 返回是否真的进入了（不可编辑 / 点行号槽 / 行越界 = `false`）。
+    /// 返回是否真的进入了（不可编辑 / 点行号槽 / 行越界 / 被标记删除 = `false`）。
     pub fn begin_edit(&mut self, view_row: usize, col_ix: usize) -> bool {
         // 【P2-4】转置是只读视图，双击不进入编辑
         if self.transposed || !self.editable || self.editing.is_some() || Self::is_row_number(col_ix)
         {
             return false;
         }
-        let Some(data_row) = self.data_row(view_row) else {
+        let Some(reference) = self.row_ref(view_row) else {
             return false;
         };
+        // 【#28-B4】被标记删除的底层行不再进编辑（撤销删除后才恢复可编辑）
+        if let RowRef::Data(data_ix) = reference {
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|set| set.is_deleted(data_ix))
+            {
+                return false;
+            }
+        }
         let column = self.data_column(col_ix - 1);
         let original = self
             .row_cell_text(view_row, col_ix)
@@ -1340,7 +1588,7 @@ impl ResultGridDelegate {
             .to_string();
         self.editing = Some(CellEdit {
             view_row,
-            data_row,
+            reference,
             column,
             value: original.clone(),
             original,
@@ -1363,7 +1611,7 @@ impl ResultGridDelegate {
     /// 非法 = **拒绝提交**（编辑态保留 + `error` 记录，渲染红框提示），返回 `false`。
     /// 返回 `true` 才真的交了。调用方（宿主 Enter / Blur 订阅）拿返回值决定要不要
     /// 投影刷新：失败时只重绘（显示错误），不去跑整轮结果投影。
-    pub fn commit_edit(&mut self, cx: &mut App) -> bool {
+    pub fn commit_edit(&mut self) -> bool {
         // 取编辑态先只读：校验失败要把错误写回它，不能 take 后再补
         let Some(edit) = &self.editing else {
             return false;
@@ -1382,8 +1630,22 @@ impl ResultGridDelegate {
         let Some(edit) = self.editing.take() else {
             return false;
         };
-        if let Some(hook) = &self.on_commit_edit {
-            hook(edit.data_row, edit.column, edit.original, edit.value, cx);
+        match edit.reference {
+            // 底层行：走变更集钩子（原值 / 新值一并交回，面板据此 upsert 或移除）
+            RowRef::Data(data_row) => {
+                if let Some(hook) = &self.on_commit_edit {
+                    hook(data_row, edit.column, edit.original, edit.value);
+                }
+            }
+            // 【#28-B4】本地行：走本地快照钩子；值没变就不落（避免无谓重投影），
+            // 不进 ChangeSet、不进格级 / 行级撤销栈（#28-B4 拍板口径）
+            RowRef::Local(local_id) => {
+                if edit.original != edit.value {
+                    if let Some(hook) = &self.on_commit_local_edit {
+                        hook(local_id, edit.column, edit.value);
+                    }
+                }
+            }
         }
         true
     }
@@ -1442,6 +1704,12 @@ impl ResultGridDelegate {
             self.mark_edit_settled();
         }
         let theme = cx.theme();
+        // 【#28-B4】本地行编辑框沿用本地行底色；被删行不会进入编辑（begin_edit 已拒）。
+        let edit_bg = if self.row_is_local(row_ix) {
+            product_tokens::get(cx).result_local_row_background(theme)
+        } else {
+            theme.colors.background
+        };
         // 【类型感知】提交校验失败的错误（红框 + 悬停提示）；无错误 = 与今天完全一致
         let error = self.editing().and_then(|edit| edit.error.clone());
         let danger = theme.colors.danger;
@@ -1453,7 +1721,7 @@ impl ResultGridDelegate {
             .w_full()
             .h_full()
             .bordered(false)
-            .bg(theme.colors.background);
+            .bg(edit_bg);
         div()
             .id(format!("editor-result-edit-cell-{row_ix}-{col_ix}"))
             .size_full()
@@ -1496,6 +1764,7 @@ impl ResultGridDelegate {
     ///
     /// “这一格是什么”只此一份：`cell()` 画它、结果内查找搜它、将来类型化导出也读它。
     /// 行号槽不在这里（它不是一个数据格：显示的是视图行号，而视图行号由渲染现算）。
+    /// 底层行从 `rows` 取，本地行从本地快照取（同一列序，不含隐藏列换算在这里完成）。
     fn row_cell_text(&self, row_ix: usize, col_ix: usize) -> Option<&str> {
         // 【P2-4】转置视图：单元格是「字段名 / 值」，走转置投影
         if self.transposed {
@@ -1504,10 +1773,25 @@ impl ResultGridDelegate {
         if Self::is_row_number(col_ix) {
             return None;
         }
-        let data_ix = self.data_row(row_ix)?;
-        self.rows
-            .get(data_ix)?
-            .get(self.data_column(col_ix - 1))
+        let column = self.data_column(col_ix - 1);
+        match self.row_ref(row_ix)? {
+            RowRef::Data(data_ix) => self
+                .rows
+                .get(data_ix)?
+                .get(column)
+                .map(String::as_str),
+            RowRef::Local(id) => self.local_cell(id, column),
+        }
+    }
+
+    /// 本地行某一列的展示值（行 / 列身份取不到 = `None`；本地行未编辑的空格与已编辑
+    /// 空格同口径走快照里的空串）
+    fn local_cell(&self, id: u64, column: usize) -> Option<&str> {
+        self.local
+            .as_ref()?
+            .local_row(id)?
+            .cells
+            .get(column)
             .map(String::as_str)
     }
 
@@ -1542,6 +1826,10 @@ impl ResultGridDelegate {
         for step in 0..cells {
             let flat = (start + step) % cells;
             let (row, col) = (flat / per_row, flat % per_row);
+            // 被删底层行不进搜索带（#28-B1 排除矩阵：搜索排除被删行）
+            if self.is_deleted_row(row) {
+                continue;
+            }
             let Some(text) = self.row_cell_text(row, col) else {
                 continue;
             };
@@ -1559,37 +1847,61 @@ impl ResultGridDelegate {
     /// 列浏览器清单「复制此列」与右键菜单共用这份文本。
     pub fn column_text(&self, column: usize) -> String {
         let mut text = String::new();
-        for (index, data_ix) in (0..self.view_len())
-            .filter_map(|view_ix| self.data_row(view_ix))
-            .enumerate()
-        {
-            if index > 0 {
+        let mut first = true;
+        for view_ix in 0..self.view_len() {
+            let Some(reference) = self.row_ref(view_ix) else {
+                continue;
+            };
+            let cell: String = match reference {
+                RowRef::Data(data_ix) => {
+                    // 被删行不参与复制列（#28-B1 排除矩阵）
+                    if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                        continue;
+                    }
+                    self.rows
+                        .get(data_ix)
+                        .and_then(|row| row.get(column))
+                        .map(String::as_str)
+                        .map(tsv_cell)
+                        .unwrap_or_default()
+                }
+                RowRef::Local(id) => self
+                    .local
+                    .as_ref()
+                    .and_then(|set| set.local_row(id))
+                    .and_then(|row| row.cells.get(column))
+                    .map(String::as_str)
+                    .map(tsv_cell)
+                    .unwrap_or_default(),
+            };
+            if !first {
                 text.push('\n');
             }
-            let cell = self
-                .rows
-                .get(data_ix)
-                .and_then(|row| row.get(column))
-                .map(String::as_str)
-                .map(tsv_cell)
-                .unwrap_or_default();
+            first = false;
             text.push_str(&cell);
         }
         text
     }
 
     /// 【P2-2】当前视图行序下，某数据列的全部取值：只 clone 目标列字符串，
-    /// 不物化整行矩阵。计算页统计 / 分组页计数共用这份访问器——原先 `visible_rows()`
-    /// 会把每行全列都拷一遍，万行 × 多列时是每帧 render 的冗余 O(行×列) 拷贝。
+    /// 不物化整行矩阵。计算页统计 / 分组页计数共用这份访问器。
+    ///
+    /// 【#28-B1 排除矩阵】统计 / 分组本期只覆盖底层未删行：本地行经 `data_row` 天然排除，
+    /// 被删底层行在此跳过（D9：本地行纳入统计分组后置批次）。
     pub fn column_values(&self, column: usize) -> Vec<String> {
         (0..self.view_len())
-            .filter_map(|view_ix| self.data_row(view_ix))
-            .map(|data_ix| {
-                self.rows
-                    .get(data_ix)
-                    .and_then(|row| row.get(column))
-                    .cloned()
-                    .unwrap_or_default()
+            .filter_map(|view_ix| {
+                let data_ix = self.data_row(view_ix)?;
+                if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                    return None;
+                }
+                Some(
+                    self.rows
+                        .get(data_ix)
+                        .and_then(|row| row.get(column))
+                        .cloned()
+                        .unwrap_or_default(),
+                )
             })
             .collect()
     }
@@ -1600,9 +1912,17 @@ impl ResultGridDelegate {
     /// 【B5】内存档数值列走事实帧列式原生聚合（不经过显示字符串 parse）；无事实档、表档
     /// （batches 已释放）或文本 / 二进制 / 其他族回退显示矩阵口径，行为与起步档一致。
     pub fn column_stats_for(&self, column: usize) -> ColumnStats {
-        if let Some(frame) = self.fact.as_ref() {
-            if let Some(fact_stats) = frame.column_stats(column) {
-                return stats_from_fact(fact_stats);
+        // 被删行存在时，fact 原生整列聚合无法逐行排除（#28-B1 矩阵要求被删排除）：
+        // 回退显示矩阵口径，由 [`Self::column_values`] 先把被删行滤掉再统计。
+        let has_deleted = self
+            .local
+            .as_ref()
+            .is_some_and(|set| set.deleted_count() > 0);
+        if !has_deleted {
+            if let Some(frame) = self.fact.as_ref() {
+                if let Some(fact_stats) = frame.column_stats(column) {
+                    return stats_from_fact(fact_stats);
+                }
             }
         }
         column_stats_from_values(&self.column_values(column))
@@ -1614,32 +1934,40 @@ impl ResultGridDelegate {
     /// `"1"` 与 `"1.0"` 被字符串等值拆成两组）；文本 / 二进制 / 其他族、表档（batches 已
     /// 释放）、无事实档回退显示矩阵的字符串等值口径。
     pub fn group_by_for(&self, column: usize) -> Vec<(String, usize)> {
-        if let Some(frame) = self.fact.as_ref() {
-            if let Ok(FactKind::Int | FactKind::Float) = frame.column_kind(column) {
-                let mut keys: Vec<String> = Vec::with_capacity(self.view_len());
-                let mut native = true;
-                for view_ix in 0..self.view_len() {
-                    let Some(data_ix) = self.data_row(view_ix) else {
-                        continue;
-                    };
-                    match frame.column_number(data_ix, column) {
-                        Some(number) => keys.push(number_group_key(number)),
-                        // NULL / 取不到原生数值：整列回退矩阵，避免原生键与文本键混排。
-                        None => {
-                            native = false;
-                            break;
+        // 被删行存在时原生键分支同样回退矩阵口径（与 [`Self::column_stats_for`] 同理由）。
+        let has_deleted = self
+            .local
+            .as_ref()
+            .is_some_and(|set| set.deleted_count() > 0);
+        if !has_deleted {
+            if let Some(frame) = self.fact.as_ref() {
+                if let Ok(FactKind::Int | FactKind::Float) = frame.column_kind(column) {
+                    let mut keys: Vec<String> = Vec::with_capacity(self.view_len());
+                    let mut native = true;
+                    for view_ix in 0..self.view_len() {
+                        let Some(data_ix) = self.data_row(view_ix) else {
+                            continue;
+                        };
+                        match frame.column_number(data_ix, column) {
+                            Some(number) => keys.push(number_group_key(number)),
+                            // NULL / 取不到原生数值：整列回退矩阵，避免原生键与文本键混排。
+                            None => {
+                                native = false;
+                                break;
+                            }
                         }
                     }
-                }
-                if native {
-                    return group_by_values(&keys);
+                    if native {
+                        return group_by_values(&keys);
+                    }
                 }
             }
         }
         group_by_values(&self.column_values(column))
     }
 
-    /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）
+    /// 这一行拼成 TSV（**视图行序**：复制的是用户看着的那一行，不是数据行序）；
+    /// 本地行同样参与整行 TSV 复制（#28-B1 拍板 D7）。
     fn row_text(&self, row_ix: usize) -> String {
         // 【P2-4】转置一行 = 一个字段：字段名 + 值（菜单不摆复制项，这里是兜底）
         if self.transposed {
@@ -1647,21 +1975,41 @@ impl ResultGridDelegate {
             let value = self.transpose_cell(row_ix, 2).unwrap_or_default();
             return format!("{field}\t{value}");
         }
-        let Some(data_ix) = self.data_row(row_ix) else {
+        let Some(reference) = self.row_ref(row_ix) else {
             return String::new();
         };
-        tsv_row(&self.visible_row_values(data_ix))
+        // 被删底层行不参与整行复制（#28-B1 排除矩阵）
+        if let RowRef::Data(data_ix) = reference {
+            if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                return String::new();
+            }
+        }
+        tsv_row(&self.visible_row_values(reference))
     }
 
-    /// 【P2】按可见列投影一行（隐藏列不参与复制 / 导出——用户看不到的不该拷走）
-    fn visible_row_values(&self, data_ix: usize) -> Vec<String> {
-        let Some(row) = self.rows.get(data_ix) else {
-            return Vec::new();
-        };
-        (0..self.columns.len())
+    /// 【P2】按可见列投影一行（隐藏列不参与复制 / 导出——用户看不到的不该拷走）；
+    /// 行身份两类：底层行从 `rows` 取，本地行从本地快照取，同一套可见列序。
+    fn visible_row_values(&self, reference: RowRef) -> Vec<String> {
+        let visible: Vec<usize> = (0..self.columns.len())
             .filter(|d| !self.is_hidden_column(*d))
-            .filter_map(|d| row.get(d).cloned())
-            .collect()
+            .collect();
+        match reference {
+            RowRef::Data(data_ix) => visible
+                .into_iter()
+                .filter_map(|d| self.rows.get(data_ix)?.get(d).cloned())
+                .collect(),
+            RowRef::Local(id) => self
+                .local
+                .as_ref()
+                .and_then(|set| set.local_row(id))
+                .map(|row| {
+                    visible
+                        .iter()
+                        .filter_map(|d| row.cells.get(*d).cloned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
 
     /// 【P2】可见列名（隐藏列不参与整行 JSON / INSERT）
@@ -1672,27 +2020,43 @@ impl ResultGridDelegate {
             .collect()
     }
 
-    /// 【A9】这一行拼成 JSON 对象（视图行序，与 [`Self::row_text`] 同口径）
+    /// 【A9】这一行拼成 JSON 对象（视图行序，与 [`Self::row_text`] 同口径；本地行参与复制）
     fn row_json_text(&self, row_ix: usize) -> String {
-        let Some(data_ix) = self.data_row(row_ix) else {
+        let Some(reference) = self.row_ref(row_ix) else {
             return String::new();
         };
-        crate::export::row_to_json(&self.visible_column_names(), &self.visible_row_values(data_ix))
+        // 被删底层行不参与行 JSON 复制（#28-B1 排除矩阵）
+        if let RowRef::Data(data_ix) = reference {
+            if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+                return String::new();
+            }
+        }
+        crate::export::row_to_json(
+            &self.visible_column_names(),
+            &self.visible_row_values(reference),
+        )
     }
 
     /// 【A9】这一行拼成 INSERT（视图行序；表名来自面板同步的 [`Self::result_table`]——
-    /// 菜单摆出这一项时表名必然已确定，这里只是按当时的行取值）
+    /// 菜单摆出这一项时表名必然已确定，这里只是按当时的行取值）。
+    ///
+    /// 本地行不下发 INSERT：行级新增 / 删除本期只改本地网格，不进提交批次、不下发
+    /// INSERT/DELETE（#28-B1 排除矩阵）；这里只认底层行身份。
     fn row_insert_text(&self, row_ix: usize) -> String {
         let Some(data_ix) = self.data_row(row_ix) else {
             return String::new();
         };
+        // 被删底层行同样不拼 INSERT（#28-B1 排除矩阵：INSERT 排除被删行）
+        if self.local.as_ref().is_some_and(|set| set.is_deleted(data_ix)) {
+            return String::new();
+        }
         let Some(table) = self.result_table.as_deref() else {
             return String::new();
         };
         crate::export::row_to_insert(
             table,
             &self.visible_column_names(),
-            &self.visible_row_values(data_ix),
+            &self.visible_row_values(RowRef::Data(data_ix)),
         )
     }
 
@@ -1705,8 +2069,9 @@ impl ResultGridDelegate {
         let row = match selection {
             GridSelection::Cell { row, .. } | GridSelection::Row { row } => row,
         };
-        // 行不在了就说清“没东西可复制”，而不是安静地拷一个空串（用户会粘出一片空白）
-        if self.data_row(row).is_none() {
+        // 行不在了就说清“没东西可复制”，而不是安静地拷一个空串（用户会粘出一片空白）；
+        // 被删底层行同样不参与复制（#28-B1 排除矩阵：复制单格 / 整行 TSV / 行 JSON 排除被删行）。
+        if self.row_ref(row).is_none() || self.is_deleted_row(row) {
             return None;
         }
         Some(match selection {
@@ -2366,6 +2731,11 @@ impl TableDelegate for ResultGridDelegate {
             sort_active: self
                 .sort_state()
                 .is_some_and(|(sort_col, _)| sort_col == column),
+            // 列头菜单没有行身份：行级三项只出现在单元格右键菜单（`context_menu_items`），
+            // 这里占位即可，不参与行级菜单项判定。
+            row_ref: RowRef::default(),
+            editable: self.editable,
+            is_deleted: false,
         };
         let menu_items = column_menu_items(&column_menu_target);
         let copy_column_text = self.column_text(column);
@@ -2573,12 +2943,18 @@ impl TableDelegate for ResultGridDelegate {
 
         // 行号槽永远是灰的（它不是数据）
         if Self::is_row_number(col_ix) {
+            let is_local = self.row_is_local(row_ix);
+            let is_deleted = self.is_deleted_row(row_ix);
+            let local_bg = is_local
+                .then(|| product_tokens::get(cx).result_local_row_background(theme));
             return div()
                 .px_2()
                 .h_full()
                 .truncate()
                 .text_xs()
                 .text_color(muted)
+                .when_some(local_bg, |cell, bg| cell.bg(bg))
+                .when(is_deleted, |cell| cell.line_through())
                 // 用例按它量行高（`.id()` 不登记坐标）：这是「表格密度」那条口径的回归哨兵
                 .debug_selector(move || format!("editor-result-rowno-{row_ix}"))
                 .child(SharedString::from(text))
@@ -2587,6 +2963,12 @@ impl TableDelegate for ResultGridDelegate {
 
         // `NULL` 是 SQL 里的一个真实值：灰 + 斜体，与字符串 "NULL" 区分开（原型 §2.4）
         let is_null = text == "NULL";
+        // 【#28-B4】行身份渲染标记：本地新增 / 复制行铺专用底色；被删底层行灰字 + 删除线，
+        // 保留在网格内可见（对齐 DBeaver 默认删除呈现；撤销可恢复）。两类身份互斥。
+        let is_deleted = self.is_deleted_row(row_ix);
+        let is_local = self.row_is_local(row_ix);
+        let local_bg = is_local
+            .then(|| product_tokens::get(cx).result_local_row_background(theme));
         // 【P2】二进制列：格子里不铺一长串 hex，给「BLOB · 大小」摘要；
         // 悬停 / 查看完整值仍然给完整 hex（那是看全它的路）
         let is_blob = !is_null && kind == ColumnKind::Binary;
@@ -2619,7 +3001,10 @@ impl TableDelegate for ResultGridDelegate {
             .px_2()
             .truncate()
             .text_xs()
-            .text_color(if is_null { muted } else { foreground })
+            // 被删行灰字（与 NULL 同走 muted；NULL 斜体口径不变）
+            .text_color(if is_null || is_deleted { muted } else { foreground })
+            // 【#28-B4】本地行底色（先铺，脏格 / 冲突格后续底色覆盖其上）
+            .when_some(local_bg, |cell, bg| cell.bg(bg))
             // 【T2a-3】脏格（未提交变更）：浅警告底色，一眼看出哪些格子会被写回
             .when(self.is_dirty(row_ix, col_ix), |cell| {
                 cell.bg(theme.colors.warning.opacity(0.16))
@@ -2634,6 +3019,8 @@ impl TableDelegate for ResultGridDelegate {
             // 【类型感知】布尔 / 时间族用主题的等宽字体（两列放一起时字形对得齐）
             .when_some(mono_family, |cell, family| cell.font_family(family))
             .when(is_null, |cell| cell.italic())
+            // 【#28-B4】被删行整格删除线（颜色跟随文字色，gpui-pre 无独立删除线色 builder）
+            .when(is_deleted, |cell| cell.line_through())
             // 用例按它点/量真单元格（`Ctrl+C` 复制选中、行距口径都从这里进去）
             .debug_selector(move || format!("editor-result-cell-{row_ix}-{col_ix}"))
             .on_mouse_down(MouseButton::Right, move |_, _window, app| {
@@ -2697,6 +3084,10 @@ impl TableDelegate for ResultGridDelegate {
             sort_active: self
                 .sort_state()
                 .is_some_and(|(sort_col, _)| sort_col == column),
+            // 【#28-B3】行身份 + 编辑闸口 + 删除标记：行级三项菜单按这三个字段判定
+            row_ref: self.row_ref(row).unwrap_or(RowRef::default()),
+            editable: self.editable,
+            is_deleted: self.is_deleted_row(row),
         };
         for item in context_menu_items(&target) {
             if item.separator_before {
@@ -2855,6 +3246,35 @@ impl TableDelegate for ResultGridDelegate {
                             });
                         },
                     ));
+                }
+                // 【#28-B3】行级动作：网格不持本地行真值，打包成请求交回宿主分派；
+                // 没接钩子（只读结果集）时菜单项已被 `context_menu_items` 收起，这里兜底忽略。
+                ContextAction::InsertRowBelow(row) => {
+                    if let Some(hook) = self.on_row_action.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| {
+                                hook(crate::ports::ResultRequest::InsertRowBelow(Some(row)), app);
+                            },
+                        ));
+                    }
+                }
+                ContextAction::DuplicateRow(row) => {
+                    if let Some(hook) = self.on_row_action.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| {
+                                hook(crate::ports::ResultRequest::DuplicateRow(row), app);
+                            },
+                        ));
+                    }
+                }
+                ContextAction::DeleteRow(row) => {
+                    if let Some(hook) = self.on_row_action.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| {
+                                hook(crate::ports::ResultRequest::DeleteRow(row), app);
+                            },
+                        ));
+                    }
                 }
                 // 列级筛选只属于列头菜单（右键的「按值筛选」是全局词）：右键收到即忽略
                 ContextAction::FilterColumnValue { .. } | ContextAction::ClearColumnFilter { .. } => {}
@@ -3079,6 +3499,16 @@ pub struct ResultControls {
     pub refresh: Option<AnyElement>,
     /// 【B5b】取下一段（只在这份结果还有下一段时给）
     pub more: Option<AnyElement>,
+    /// 【#28-B3】新增行（面板注入；只读结果集不注入 → 回退禁用占位钮）
+    pub insert_row: Option<AnyElement>,
+    /// 【#28-B3】复制当前选中行为本地行（同上）
+    pub duplicate_row: Option<AnyElement>,
+    /// 【#28-B3】删除当前选中行（同上）
+    pub delete_row: Option<AnyElement>,
+    /// 【#28-B3】撤销（组合语义：格级栈优先，空走行级栈；面板注入禁用态由栈状态决定）
+    pub undo: Option<AnyElement>,
+    /// 【#28-B3】重做（组合语义与撤销对称）
+    pub redo: Option<AnyElement>,
 }
 
 /// 结果区一次要画的东西（面板一次读齐；`render` 只负责画）
@@ -3340,12 +3770,28 @@ pub fn render(
                     .bg(border)
                     .into_any_element()
             };
-            // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做
-            let write_ops = placeholders[0..FIRST_PAGER_ACTION]
-                .iter()
-                .copied()
-                .map(placeholder_btn)
-                .collect::<Vec<_>>();
+            // 写操作段：保存 · 取消 · 新增行 · 复制行 · 删除行 · 撤销 · 重做。
+            // 保存 / 取消复用工具栏的提交 / 回滚对（状态栏不重复挂载），槽位保留禁用占位；
+            // 新增 / 复制 / 删除 / 撤销 / 重做由面板注入真钮，未注入（只读结果集等）回退占位。
+            let write_ops = vec![
+                placeholder_btn(placeholders[0]),
+                placeholder_btn(placeholders[1]),
+                controls
+                    .insert_row
+                    .unwrap_or_else(|| placeholder_btn(placeholders[2])),
+                controls
+                    .duplicate_row
+                    .unwrap_or_else(|| placeholder_btn(placeholders[3])),
+                controls
+                    .delete_row
+                    .unwrap_or_else(|| placeholder_btn(placeholders[4])),
+                controls
+                    .undo
+                    .unwrap_or_else(|| placeholder_btn(placeholders[5])),
+                controls
+                    .redo
+                    .unwrap_or_else(|| placeholder_btn(placeholders[6])),
+            ];
             // 翻页段占位：首页 · 上页（下页 = 现有取下一段真钮；末页占位）
             let pager_before = [
                 placeholder_btn(placeholders[FIRST_PAGER_ACTION]),
@@ -3469,20 +3915,22 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        CELL_DISPLAY_LIMIT, MAX_SINGLE_SEGMENT_ROWS, ContextAction, ContextTarget,
+        CELL_DISPLAY_LIMIT, MAX_SINGLE_SEGMENT_ROWS, ContextAction, ContextTarget, GridSelection,
         ResultGridDelegate, ResultMatch, ResultStatus, ResultToolbar, TextAlign, WINDOW_FETCH_NOTICE,
-        blob_summary, bytes_text, cell_matches, cell_style, clip_cell_display, column_distinct_values,
+        blob_summary, cell_matches, cell_style, clip_cell_display, column_distinct_values,
         column_stats, column_stats_from_values, compare_cells, context_menu_items, duration_text, fetch_more_hint,
         find_in_cell, fmt_stat_num, group_by_values, header_tooltip_lines, column_menu_items,
-        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of, stats_from_fact,
+        column_browser_menu_items, format_integer_cell, pretty_json_display, preview_of,
         stats_lines, status_action_placeholders,
         status_segments, thousands, truncation_notice, truncated_hint, validate_edit_value,
         window_fetch_active, FIRST_PAGER_ACTION, FIRST_SYSTEM_ACTION,
     };
     use gpui_kit::assets::IconName;
     use workbench_shell::model::ColumnAnnotation;
+    use crate::rowset::{LocalRow, LocalRowSet, RowRef};
     use crate::store::{ColumnKind, ColumnType};
     use gpui_kit::App;
+    use std::rc::Rc;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
     // 【B5】事实档 fixture 构造（arrow 仅 dev-dependency，产品代码不引）
     use ::shared::{CurrentTier, FactFrame};
@@ -3548,6 +3996,10 @@ mod tests {
             column_filter_active: false,
             column_values: Vec::new(),
             sort_active: false,
+            row_ref: RowRef::default(),
+            // 默认只读：既有菜单断言不摆行级三项；可编辑用例在测试里显式覆盖
+            editable: false,
+            is_deleted: false,
         }
     }
 
@@ -3730,6 +4182,100 @@ mod tests {
             .expect("表名已知时要摆 INSERT 项");
         assert_eq!(insert.label, "复制整行为 INSERT（orders）", "表名写进文案");
         assert!(!insert.separator_before, "与复制组同组（紧跟整行 JSON 后）");
+    }
+
+    /// 【#28-B3】行级动作（新增 / 复制 / 删除一行）的菜单闸口：
+    /// - 只读结果集（`!editable`）整组不摆；
+    /// - 已标记删除的底层行三项全不摆；
+    /// - 可编辑且未删时三项都摆，独立分组（新增项带分隔线），排在复制段之后、排序段之前；
+    /// - 动作携带视图行号（与复制整行同口径，不是列下标）。
+    #[test]
+    fn context_menu_row_actions_gate_on_editable_and_deleted() {
+        // 只读：三项都不摆
+        let read_only = context_menu_items(&target("orders", "name", 1));
+        assert!(
+            !read_only
+                .iter()
+                .any(|item| matches!(
+                    item.action,
+                    ContextAction::InsertRowBelow(_)
+                        | ContextAction::DuplicateRow(_)
+                        | ContextAction::DeleteRow(_)
+                )),
+            "只读结果集不摆行级动作"
+        );
+
+        // 可编辑、未删：三项都摆
+        let mut editable = target("orders", "name", 1);
+        editable.editable = true;
+        let items = context_menu_items(&editable);
+        let insert = items
+            .iter()
+            .find(|item| matches!(item.action, ContextAction::InsertRowBelow(_)))
+            .expect("可编辑结果集要摆新增行");
+        let duplicate = items
+            .iter()
+            .find(|item| matches!(item.action, ContextAction::DuplicateRow(_)))
+            .expect("可编辑结果集要摆复制行");
+        let delete = items
+            .iter()
+            .find(|item| matches!(item.action, ContextAction::DeleteRow(_)))
+            .expect("可编辑结果集要摆删除行");
+        assert_eq!(insert.action, ContextAction::InsertRowBelow(0));
+        assert_eq!(duplicate.action, ContextAction::DuplicateRow(0));
+        assert_eq!(delete.action, ContextAction::DeleteRow(0));
+        assert!(insert.separator_before, "行级动作独立分组，新增项前带分隔线");
+        assert!(!duplicate.separator_before, "复制 / 删除与新增同组");
+        assert!(!delete.separator_before, "复制 / 删除与新增同组");
+
+        // 分组位置：复制段（CopyRowJson / CopyRowInsert）之后、排序段（SortDown）之前
+        let row_action_indexes = [insert, duplicate, delete]
+            .iter()
+            .map(|item| items.iter().position(|candidate| candidate.action == item.action))
+            .collect::<Option<Vec<_>>>()
+            .expect("三项都在菜单里");
+        let first_row_action = *row_action_indexes.iter().min().unwrap();
+        let last_row_action = *row_action_indexes.iter().max().unwrap();
+        let last_copy = items
+            .iter()
+            .rposition(|item| {
+                matches!(
+                    item.action,
+                    ContextAction::CopyRow(_)
+                        | ContextAction::CopyRowJson(_)
+                        | ContextAction::CopyRowInsert(_)
+                )
+            })
+            .expect("复制段至少有一项");
+        let first_sort = items
+            .iter()
+            .position(|item| matches!(item.action, ContextAction::SortDown { .. }))
+            .expect("排序段至少有一项");
+        assert!(
+            last_copy < first_row_action,
+            "行级动作排在复制段之后"
+        );
+        assert!(
+            last_row_action < first_sort,
+            "行级动作排在排序段之前"
+        );
+
+        // 已删除：三项全不摆
+        let mut deleted = target("orders", "name", 1);
+        deleted.editable = true;
+        deleted.is_deleted = true;
+        let deleted_items = context_menu_items(&deleted);
+        assert!(
+            !deleted_items
+                .iter()
+                .any(|item| matches!(
+                    item.action,
+                    ContextAction::InsertRowBelow(_)
+                        | ContextAction::DuplicateRow(_)
+                        | ContextAction::DeleteRow(_)
+                )),
+            "已删除行不再摆行级动作"
+        );
     }
 
     /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：
@@ -4478,6 +5024,9 @@ mod tests {
             column_filter_active: false,
             column_values: Vec::new(),
             sort_active: false,
+            row_ref: RowRef::default(),
+            editable: true,
+            is_deleted: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4574,6 +5123,9 @@ mod tests {
             column_filter_active: false,
             column_values: Vec::new(),
             sort_active: false,
+            row_ref: RowRef::default(),
+            editable: true,
+            is_deleted: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -4601,6 +5153,9 @@ mod tests {
             column_filter_active: false,
             column_values: vec!["paid".to_string(), "NULL".to_string(), "refunded".to_string()],
             sort_active: false,
+            row_ref: RowRef::default(),
+            editable: true,
+            is_deleted: false,
         };
         let items = column_menu_items(&target);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
@@ -5090,7 +5645,7 @@ mod tests {
         // 竖排第 2 行（数据行序 1）
         grid.set_transposed(true, 1);
         assert!(grid.is_transposed());
-        assert_eq!(grid.transpose_row(), 1);
+        assert_eq!(grid.transpose_row(), RowRef::Data(1));
         // 三行 = 三个可见字段
         assert_eq!(grid.transpose_columns(), vec![0, 1, 2]);
         assert_eq!(grid.transpose_cell(0, 1), Some("id"));
@@ -5106,7 +5661,7 @@ mod tests {
         assert!(!grid.begin_edit(0, 2));
         // 行导航：越界夹回最后一行
         grid.set_transpose_row(99);
-        assert_eq!(grid.transpose_row(), 1);
+        assert_eq!(grid.transpose_row(), RowRef::Data(1));
         // 关闭：原网格原样（隐藏列也没被改动）
         grid.set_transposed(false, 0);
         assert!(!grid.is_transposed());
@@ -5140,6 +5695,268 @@ mod tests {
         assert!(grid.is_transposed());
         grid.set_data(vec!["x".to_string()], vec![vec!["9".to_string()]]);
         assert!(!grid.is_transposed(), "换结果自动退出转置");
+    }
+
+    // ===== 【#28-B2】本地叠加层行身份分叉 =====
+
+    /// 造一行本地行快照（cells 与列同序；id 由叠加层取号）
+    fn local_snapshot(cells: Vec<String>) -> LocalRowSet {
+        let mut local = LocalRowSet::new();
+        let id = local.next_id();
+        local.push_local(LocalRow::new(id, cells));
+        local
+    }
+
+    /// 视图序列 = 底层行按原序在前、本地行登记序追加末尾；身份与取值分叉正确，
+    /// 本地行不占底层行号。
+    #[test]
+    fn local_rows_append_after_data_rows_and_resolve_identity() {
+        let mut grid = grid_with(&[&["1", "alice"], &["2", "bob"]]);
+        grid.set_local_snapshot(Some(local_snapshot(vec![
+            "3".to_string(),
+            "zoe".to_string(),
+        ])));
+
+        assert_eq!(grid.view_len(), 3, "底层 2 行 + 本地 1 行");
+        assert_eq!(grid.data_row_count(), 2, "底层总数不变");
+        assert_eq!(grid.row_ref(0), Some(RowRef::Data(0)));
+        assert_eq!(grid.row_ref(1), Some(RowRef::Data(1)));
+        assert_eq!(grid.row_ref(2), Some(RowRef::Local(1)));
+        assert_eq!(grid.data_row(2), None, "本地行没有底层行号");
+
+        // 取值分叉：本地行从快照取，不串底层行
+        assert_eq!(grid.cell(2, 1), "3");
+        assert_eq!(grid.cell(2, 2), "zoe");
+        assert_eq!(grid.row_text(2), "3\tzoe", "整行 TSV 纳入本地行");
+        assert!(
+            grid.row_json_text(2).contains("zoe"),
+            "行 JSON 纳入本地行"
+        );
+    }
+
+    /// 本地行参与全局词 / 列级筛选（命中才出现）；不参与列排序，始终登记序追加末尾。
+    #[test]
+    fn local_rows_match_filters_but_are_excluded_from_sorting() {
+        let mut grid = grid_with(&[&["1", "alice"], &["2", "bob"], &["3", "carol"]]);
+        grid.set_local_snapshot(Some(local_snapshot(vec![
+            "9".to_string(),
+            "zoe".to_string(),
+        ])));
+
+        // 排序（按 id 降序）只作用底层行；本地行保持登记序追加末尾
+        grid.apply_sort(Some((0, true)));
+        assert_eq!(grid.row_ref(0), Some(RowRef::Data(2)));
+        assert_eq!(grid.row_ref(1), Some(RowRef::Data(1)));
+        assert_eq!(grid.row_ref(2), Some(RowRef::Data(0)));
+        assert_eq!(
+            grid.row_ref(3),
+            Some(RowRef::Local(1)),
+            "本地行不参与排序，落在末尾"
+        );
+
+        // 全局词命中本地行 → 本地行单独出现；底层不命中
+        grid.apply_sort(None);
+        grid.set_filter("zoe");
+        assert_eq!(grid.view_len(), 1);
+        assert_eq!(grid.row_ref(0), Some(RowRef::Local(1)));
+
+        // 列级筛选同理（列 1 = name）
+        grid.set_filter("");
+        grid.set_column_filter(Some((1, "zoe".to_string())));
+        assert_eq!(grid.view_len(), 1);
+        assert_eq!(grid.row_ref(0), Some(RowRef::Local(1)));
+    }
+
+    /// 本地行不脏、不冲突：格级 ChangeSet 只管底层行；本地行格编辑走本地快照钩子，
+    /// 不进待提交变更集与格级冲突集合。
+    #[test]
+    fn local_rows_are_never_dirty_or_conflict() {
+        let mut grid = grid_with(&[&["1", "alice"]]);
+        grid.set_local_snapshot(Some(local_snapshot(vec![
+            String::new(),
+            "zoe".to_string(),
+        ])));
+        assert!(!grid.is_dirty(1, 1));
+        assert!(!grid.is_conflict(1, 1));
+    }
+
+    /// 【#28-B4】本地行身份辅助：`row_is_local` 标本地行，`is_deleted_row` 只认被删底层行；
+    /// 编辑闸口：editable=false 时本地行也不进编辑；editable=true 时本地行可进入本地编辑态。
+    #[test]
+    fn local_row_identity_and_edit_gate() {
+        let mut grid = grid_with(&[&["1", "alice"], &["2", "bob"]]);
+        // 标记底层第 1 行（视图行号 1）为待删除；本地行追加到视图末位
+        let mut local = LocalRowSet::new();
+        local.mark_deleted(1);
+        let id = local.next_id();
+        local.push_local(LocalRow::new(id, vec!["3".to_string(), "zoe".to_string()]));
+        grid.set_local_snapshot(Some(local));
+
+        assert!(grid.row_is_local(2), "视图末位 = 本地行");
+        assert!(!grid.row_is_local(0));
+        assert!(grid.is_deleted_row(1), "底层第 2 行被标记删除");
+        assert!(!grid.is_deleted_row(0));
+        assert!(!grid.is_deleted_row(2), "本地行永不标删除");
+
+        // 关闭编辑闸口：本地行与被删行都不进编辑
+        assert!(!grid.begin_edit(2, 1));
+        assert!(!grid.begin_edit(1, 1));
+
+        // 打开闸口：本地行可进入；被删底层行仍拒绝（撤销删除后才恢复可编辑）
+        grid.set_editable(true);
+        assert!(grid.begin_edit(2, 1), "本地行双击进入本地编辑态");
+        assert!(!grid.begin_edit(1, 1), "被删行拒绝进入编辑");
+        assert!(grid.is_editing(2, 1));
+    }
+
+    /// 【#28-B4】本地行格编辑提交走本地钩子：收到本地行 id / 列 / 新值，不触发底层
+    /// 变更集钩子；值没变不落钩子。钩子为空时空安全，不 panic。
+    #[test]
+    fn local_row_edit_commit_branches_to_local_hook() {
+        let mut grid = grid_with(&[&["1", "alice"]]);
+        grid.set_editable(true);
+        let mut local = LocalRowSet::new();
+        let id = local.next_id();
+        local.push_local(LocalRow::new(id, vec!["3".to_string(), "zoe".to_string()]));
+        grid.set_local_snapshot(Some(local));
+
+        // 记录本地钩子入参；底层钩子被调 = 测试失败（不进变更集路径）
+        let seen = Rc::new(std::cell::RefCell::new(Vec::<(u64, usize, String)>::new()));
+        let seen_for_hook = seen.clone();
+        grid.set_commit_local_edit_hook(Rc::new(move |local_id, column, value| {
+            seen_for_hook.borrow_mut().push((local_id, column, value));
+        }));
+        let data_called = Rc::new(std::cell::RefCell::new(false));
+        let data_for_hook = data_called.clone();
+        grid.set_commit_edit_hook(Rc::new(move |_row, _col, _orig, _edited| {
+            *data_for_hook.borrow_mut() = true;
+        }));
+
+        // 本地行改值 → 走本地钩子
+        assert!(grid.begin_edit(1, 2));
+        grid.sync_edit_value("zoe2".to_string());
+        assert!(grid.commit_edit(), "类型校验通过即提交");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[(id, 1, "zoe2".to_string())],
+            "本地钩子收到本地行 id / 数据列 / 新值"
+        );
+        assert!(!*data_called.borrow(), "底层变更集钩子未被调用");
+
+        // 值没变（改回原值）→ 不落本地钩子。纯 delegate 快照不联动钩子回写，这里在
+        // 原始快照「zoe」上验证 original == value 分支，不模拟宿主重投影后的新初值。
+        seen.borrow_mut().clear();
+        assert!(grid.begin_edit(1, 2));
+        grid.sync_edit_value("zoe".to_string());
+        assert!(grid.commit_edit());
+        assert!(seen.borrow().is_empty(), "原值 == 新值不写本地快照");
+    }
+
+    /// 转置锚定本地行时从本地快照取值（#28-B1 拍板 D2：转置纳入本地行）。
+    #[test]
+    fn transpose_reads_local_row_cells_when_anchored_to_local() {
+        let mut grid = grid_with(&[&["1", "alice"]]);
+        grid.set_local_snapshot(Some(local_snapshot(vec![
+            "9".to_string(),
+            "zoe".to_string(),
+        ])));
+        grid.set_transposed(true, 1);
+        assert_eq!(grid.transpose_row(), RowRef::Local(1));
+        assert_eq!(grid.transpose_cell(0, 1), Some("id"));
+        assert_eq!(grid.transpose_cell(0, 2), Some("9"), "本地行 id 列快照值");
+        assert_eq!(grid.transpose_cell(1, 2), Some("zoe"));
+    }
+
+    /// 本地行不下发 INSERT：行级新增本期不进提交批次（#28-B1 排除矩阵）。
+    #[test]
+    fn insert_text_skips_local_rows() {
+        let mut grid = grid_with(&[&["1", "alice"]]);
+        grid.set_result_table(Some("orders".to_string()));
+        grid.set_local_snapshot(Some(local_snapshot(vec![
+            "9".to_string(),
+            "zoe".to_string(),
+        ])));
+        assert!(
+            grid.row_insert_text(1).is_empty(),
+            "本地行不拼 INSERT"
+        );
+        assert!(
+            !grid.row_insert_text(0).is_empty(),
+            "底层行照常拼 INSERT"
+        );
+    }
+
+    // ===== 【#28-B5】全链路排除本地行 / 被删行（排除矩阵收口） =====
+
+    /// 构造：底层 3 行，标记底层第 2 行（Data(1)，bob）删除，追加 1 个本地行（zoe）。
+    fn grid_with_deleted_and_local() -> ResultGridDelegate {
+        let mut grid = grid_with(&[&["1", "alice"], &["2", "bob"], &["3", "carol"]]);
+        let mut local = LocalRowSet::new();
+        local.mark_deleted(1);
+        let id = local.next_id();
+        local.push_local(LocalRow::new(
+            id,
+            vec!["9".to_string(), "zoe".to_string()],
+        ));
+        grid.set_local_snapshot(Some(local));
+        grid
+    }
+
+    /// 文本视图序列：底层未删行 + 本地行；被删行排除（拍板 D2）。
+    #[test]
+    fn text_view_sequence_keeps_local_rows_and_drops_deleted() {
+        let rows = grid_with_deleted_and_local().visible_rows();
+        assert_eq!(rows.len(), 3, "底层未删 2 行 + 本地 1 行");
+        assert_eq!(rows[0], vec!["1", "alice"]);
+        assert_eq!(rows[1], vec!["3", "carol"]);
+        assert_eq!(rows[2], vec!["9", "zoe"], "本地行纳入文本视图");
+    }
+
+    /// 导出序列：只含底层未删行；本地行与被删行都排除。
+    #[test]
+    fn export_sequence_drops_both_local_and_deleted_rows() {
+        let rows = grid_with_deleted_and_local().visible_rows_for_export();
+        assert_eq!(rows, vec![vec!["1", "alice"], vec!["3", "carol"]]);
+    }
+
+    /// 统计 / 分组取值（column_values）：本地排除、被删排除（D9 本期口径）。
+    #[test]
+    fn column_values_excludes_local_and_deleted_rows() {
+        let grid = grid_with_deleted_and_local();
+        assert_eq!(grid.column_values(0), vec!["1", "3"]);
+        assert_eq!(grid.column_values(1), vec!["alice", "carol"]);
+    }
+
+    /// 工具栏整份复制（active_result_tsv）：本地纳入、被删排除；计数同口径（拍板 D7）。
+    #[test]
+    fn active_result_copy_keeps_local_rows_and_drops_deleted() {
+        let (text, count) = grid_with_deleted_and_local().active_result_tsv();
+        assert_eq!(count, 3, "底层未删 2 行 + 本地 1 行");
+        assert!(text.contains("alice"));
+        assert!(text.contains("carol"));
+        assert!(text.contains("zoe"), "本地行进整份复制");
+        assert!(!text.contains("bob"), "被删行不进整份复制");
+    }
+
+    /// 复制列：本地纳入、被删排除。
+    #[test]
+    fn column_text_keeps_local_and_drops_deleted() {
+        let grid = grid_with_deleted_and_local();
+        assert_eq!(grid.column_text(1), "alice\ncarol\nzoe");
+    }
+
+    /// 被删行整行 TSV / 行 JSON / 选中复制 / INSERT 全部落空（不拷走被删行）。
+    #[test]
+    fn copy_text_rejects_deleted_rows() {
+        let grid = grid_with_deleted_and_local();
+        assert!(grid.row_text(1).is_empty(), "被删行整行 TSV 为空");
+        assert!(grid.row_json_text(1).is_empty(), "被删行行 JSON 为空");
+        assert_eq!(
+            grid.selection_text(GridSelection::Row { row: 1 }),
+            None,
+            "被删行整行复制返回 None"
+        );
+        assert!(grid.row_insert_text(1).is_empty(), "被删行不拼 INSERT");
     }
 
     // ===== 【B5】事实档列式保真分流 =====

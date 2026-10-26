@@ -42,6 +42,8 @@ pub struct TokenMap {
     pub search_match_background: Option<String>,
     #[serde(rename = "staged.drop")]
     pub staged_drop: Option<String>,
+    #[serde(rename = "result.local_row_background")]
+    pub result_local_row_background: Option<String>,
 }
 
 /// 解析后的产品角色（缺失为 `None`，消费方经访问器回退标准字段）。
@@ -55,6 +57,7 @@ pub struct ProductTokens {
     pub quick_open_group_header: Option<Hsla>,
     pub search_match_background: Option<Hsla>,
     pub staged_drop: Option<Hsla>,
+    pub result_local_row_background: Option<Hsla>,
 }
 
 impl ProductTokens {
@@ -69,6 +72,7 @@ impl ProductTokens {
             quick_open_group_header: parse(&map.quick_open_group_header),
             search_match_background: parse(&map.search_match_background),
             staged_drop: parse(&map.staged_drop),
+            result_local_row_background: parse(&map.result_local_row_background),
         }
     }
 
@@ -120,6 +124,13 @@ impl ProductTokens {
     /// 删除线颜色跟随文字色，见 B6 设计 §4.9）。资产缺失回退标准 danger。
     pub fn staged_drop(&self, theme: &Theme) -> Hsla {
         self.staged_drop.unwrap_or(theme.colors.danger)
+    }
+
+    /// 结果集本地新增 / 复制行的底色（未下发、仅存网格内的叠加行，与底层行区分）。
+    /// 资产缺失回退品牌强调底 `accent`。
+    pub fn result_local_row_background(&self, theme: &Theme) -> Hsla {
+        self.result_local_row_background
+            .unwrap_or(theme.colors.accent)
     }
 }
 

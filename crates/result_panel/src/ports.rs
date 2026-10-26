@@ -76,6 +76,17 @@ pub enum ResultRequest {
     /// 右栏标签页切换（列浏览器 / 值详情 / 计算 / 分组；对齐 DBeaver 右侧 metadata /
     /// valueviewer / aggregate / grouping 同栏页签体系）
     SetRightTab(RightTab),
+    /// 【#28-B3】在指定视图行下方插入一条本地空行（`None` = 追加到末尾区段）。
+    /// 宿主经网格 `RowRef` 翻译身份后落到 `LocalRowSet`；只改叠加层，不下发 INSERT。
+    InsertRowBelow(Option<usize>),
+    /// 【#28-B3】复制指定视图行（视图行号）为一条本地行，携带源行展示值快照。
+    DuplicateRow(usize),
+    /// 【#28-B3】删除指定视图行：底层行只打删除标记（可撤销恢复）；本地行直接移出叠加层。
+    DeleteRow(usize),
+    /// 【#28-B3】撤销（组合语义：格级 `EditHistory` 非空先走格级，栈空再走行级 `RowHistory`）
+    UndoAction,
+    /// 【#28-B3】重做（组合语义与 [`Self::UndoAction`] 对称）
+    RedoAction,
 }
 
 /// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）

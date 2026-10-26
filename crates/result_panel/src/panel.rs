@@ -61,6 +61,9 @@ pub struct GridPayload {
     /// 【B5】事实帧只读句柄（`None` = 无事实档 / 表档已释放 batches 回退矩阵口径）。
     /// 与类型 / 注释同口径：在 `set_data` 之后由 `set_fact` 注入。
     pub fact: Option<Arc<FactFrame>>,
+    /// 【#28】本地叠加层快照（本地行 + 删除标记；`None` = 纯底层结果集）。
+    /// 与事实帧同口径时序：在 `set_data` 之后由 `set_local_snapshot` 注入；对比栏不传。
+    pub local: Option<crate::rowset::LocalRowSet>,
 }
 
 /// 分析菜单项（宿主算好传入：只含渲染要的文案与动作载荷；类型统一用
@@ -126,6 +129,11 @@ pub struct ResultSyncInput {
     pub pending_changes: usize,
     /// 提交中（提交按钮置灰，回执回来前不重复提交）
     pub committing: bool,
+    /// 【#28-B3】组合撤销栈是否非空（格级 `EditHistory` 优先，空走行级 `RowHistory`；
+    /// 宿主在 sync 时算好传入，面板只读以决定状态栏撤销钮禁用态）
+    pub can_undo: bool,
+    /// 【#28-B3】组合重做栈是否非空（与 [`Self::can_undo`] 对称）
+    pub can_redo: bool,
     /// 分析菜单项（空 = 不摆分析按钮）
     pub analysis_items: Vec<AnalysisItem>,
     /// 导出菜单上下文（`None` = 不摆导出按钮）
@@ -190,6 +198,11 @@ pub struct ResultPanel {
     pending_changes: usize,
     /// 提交中（sync 写入；提交按钮置灰）
     committing: bool,
+    /// 【#28-B3】组合撤销 / 重做栈是否非空（sync 写入；状态栏撤销 / 重做钮禁用态据此）
+    can_undo: bool,
+    can_redo: bool,
+    /// 【#28-B3】这份结果能不能编辑（sync 写入；行级新增 / 复制 / 删除钮据此决定是否注入）
+    editable: bool,
 
     // 【B15】本地筛选框（视图层自洽：防抖 + 清除 + 统计回填都在面板内）
     filter_input: Entity<InputState>,
@@ -291,6 +304,9 @@ impl ResultPanel {
             analysis_items: Vec::new(),
             pending_changes: 0,
             committing: false,
+            can_undo: false,
+            can_redo: false,
+            editable: false,
             filter_input,
             filter_text: String::new(),
             filter_version: 0,
@@ -350,6 +366,9 @@ impl ResultPanel {
         self.analysis_items = input.analysis_items;
         self.pending_changes = input.pending_changes;
         self.committing = input.committing;
+        self.can_undo = input.can_undo;
+        self.can_redo = input.can_redo;
+        self.editable = input.editable;
         self.fetching_more = input.loading_more;
 
         // 【B15】筛选统计的真值在网格那边（视图行序是它算的）——写入 toolbar 前先回填
@@ -367,6 +386,8 @@ impl ResultPanel {
                     state.delegate_mut().set_column_annotations(payload.annotations);
                     // 【B5】事实帧同理（set_data 会清掉旧的）；交互派生时才读取，render 不解析
                     state.delegate_mut().set_fact(payload.fact);
+                    // 【#28】本地叠加层同理（set_data 会清掉旧的）；未接行级动作时为 None
+                    state.delegate_mut().set_local_snapshot(payload.local);
                 }
                 None => state.delegate_mut().clear(input.empty),
             }
@@ -627,6 +648,93 @@ impl ResultPanel {
                     .into_any_element()
             });
 
+        // 【#28-B3】状态栏行级动作钮：新增 / 复制 / 删除一行。只读结果集（`!editable`）
+        // 不注入，回退 grid.rs 的禁用占位钮；复制 / 删除必须有选中行才可用。
+        // 选中行号取状态行 1 基记录（格选中与行选中都记行；0 基交给宿主翻译身份）。
+        let selected_view_row = self
+            .status
+            .as_ref()
+            .and_then(|status| status.selected_row)
+            .map(|row| row.saturating_sub(1));
+        let insert_row = self.editable.then(|| {
+            let queue = self.queue.clone();
+            let anchor = selected_view_row;
+            Button::new("editor-result-insert-row")
+                .ghost()
+                .small()
+                .icon(IconName::Plus)
+                .tooltip("在下方插入新行")
+                .debug_selector(|| "editor-result-insert-row".to_string())
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::InsertRowBelow(anchor));
+                })
+                .into_any_element()
+        });
+        let duplicate_row = self.editable.then(|| {
+            let queue = self.queue.clone();
+            let row = selected_view_row;
+            Button::new("editor-result-duplicate-row")
+                .ghost()
+                .small()
+                .icon(IconName::CopyPlus)
+                .tooltip("复制此行")
+                .disabled(row.is_none())
+                .debug_selector(|| "editor-result-duplicate-row".to_string())
+                .on_click(move |_, _window, _app| {
+                    if let Some(row) = row {
+                        queue.push(ResultRequest::DuplicateRow(row));
+                    }
+                })
+                .into_any_element()
+        });
+        let delete_row = self.editable.then(|| {
+            let queue = self.queue.clone();
+            let row = selected_view_row;
+            Button::new("editor-result-delete-row")
+                .ghost()
+                .small()
+                .icon(IconName::Trash)
+                .tooltip("删除此行")
+                .disabled(row.is_none())
+                .debug_selector(|| "editor-result-delete-row".to_string())
+                .on_click(move |_, _window, _app| {
+                    if let Some(row) = row {
+                        queue.push(ResultRequest::DeleteRow(row));
+                    }
+                })
+                .into_any_element()
+        });
+        // 撤销 / 重做组合钮：格级栈优先、空走行级栈（宿主分派时判定）；常驻注入，
+        // 栈空由 `can_undo` / `can_redo` 置灰，槽位不消失。
+        let undo = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-undo")
+                .ghost()
+                .small()
+                .icon(IconName::Undo2)
+                .tooltip("撤销")
+                .disabled(!self.can_undo)
+                .debug_selector(|| "editor-result-undo".to_string())
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::UndoAction);
+                })
+                .into_any_element()
+        };
+        let redo = {
+            let queue = self.queue.clone();
+            Button::new("editor-result-redo")
+                .ghost()
+                .small()
+                .icon(IconName::Redo2)
+                .tooltip("重做")
+                .disabled(!self.can_redo)
+                .debug_selector(|| "editor-result-redo".to_string())
+                .on_click(move |_, _window, _app| {
+                    queue.push(ResultRequest::RedoAction);
+                })
+                .into_any_element()
+        };
+
         // 【B7】导出：格式 × 范围。菜单项由 `export::menu_items_for` 给（纯函数），
         // 静态上下文（连接 / 键列 / 行数）在 sync 时由编辑器算好——render 期只读
         let export = self.export_ctx.as_ref().map(|ctx| {
@@ -727,6 +835,11 @@ impl ResultPanel {
                     export,
                     refresh,
                     more,
+                    insert_row,
+                    duplicate_row,
+                    delete_row,
+                    undo: Some(undo),
+                    redo: Some(redo),
                 },
                 card,
                 tabs,
@@ -928,13 +1041,14 @@ impl ResultPanel {
         cx.notify();
     }
 
-    /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；数据行数来自 delegate）
+    /// 【P2-4】转置行导航：上一行 / 下一行（越界夹取；基准 = 当前视图序列长度，
+    /// 本地行区段也纳入导航范围——#28-B1 拍板 D2 转置纳入本地行）
     pub fn transpose_step(&mut self, delta: isize, cx: &mut Context<Self>) {
         let max = self
             .grid
             .read(cx)
             .delegate()
-            .data_row_count()
+            .view_len()
             .saturating_sub(1);
         let next = (self.transpose_row as isize + delta).clamp(0, max as isize) as usize;
         self.transpose_row = next;
@@ -1319,6 +1433,10 @@ impl ResultPanel {
                     column_filter_active: false,
                     column_values: Vec::new(),
                     sort_active,
+                    // 列浏览器菜单没有行身份：行级三项只出现在单元格右键菜单
+                    row_ref: crate::rowset::RowRef::default(),
+                    editable: false,
+                    is_deleted: false,
                 };
                 let menu_items = result_grid::column_browser_menu_items(&target);
                 // 复制整列文本在闭包外算好：菜单闭包活到比这一次 render 长，
@@ -1673,6 +1791,15 @@ impl ResultPanel {
             (Some(name), None) => name.clone(),
             _ => "值".to_string(),
         };
+        // 【#28-B4】位置标注：本地新增 / 复制行标「本地」，被删底层行标「已删除」；
+        // 行号仍是视图行号（D6：不另造本地序号体系，身份靠标注与网格底色 / 删除线区分）。
+        let row_marker = if delegate.row_is_local(row) {
+            format!("第 {} 行 · 本地", row + 1)
+        } else if delegate.is_deleted_row(row) {
+            format!("第 {} 行 · 已删除", row + 1)
+        } else {
+            format!("第 {} 行", row + 1)
+        };
         div()
             .flex_1()
             .min_h_0()
@@ -1689,7 +1816,7 @@ impl ResultPanel {
                     .text_xs()
                     .text_color(muted)
                     .child(SharedString::from(title))
-                    .child(SharedString::from(format!("第 {} 行", row + 1))),
+                    .child(SharedString::from(row_marker)),
             )
             .child(
                 div()

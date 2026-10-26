@@ -26,12 +26,22 @@ use std::collections::BTreeSet;
 /// 整行动作、转置、筛选排序、分组统计、导出、选中态都要能区分两类行。id 用变体
 /// 区分而不是编号空间平移：本地行 id 与底层行号不做偏移账本（方案 B 已否决——
 /// 平移错位风险高、本地行易漏排除混入下发 / 统计）。
+///
+/// `Default` = `Data(0)`：与委托结构 `#[derive(Default)]` 配套，空结果里兜底指向
+/// 第一底层行；转置锚定的实际取值在越界时由 delegate 再夹取。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowRef {
     /// 底层数据行（`ResultEntry.rows` 下标；排序 / 筛选后的视图行要先还原成它）
     Data(usize),
     /// 本地行（叠加层分配的稳定 id；不随其它本地行增删滑移）
     Local(u64),
+}
+
+impl Default for RowRef {
+    /// 空结果兜底指向第一底层行；转置锚定的实际取值在越界时由 delegate 再夹取。
+    fn default() -> Self {
+        Self::Data(0)
+    }
 }
 
 impl RowRef {

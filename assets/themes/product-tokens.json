@@ -8,7 +8,8 @@
     "title_bar.slot.background": "#FFFFFF",
     "quick_open.group.header": "#ECECEC",
     "search.match.background": "#FFF3C4",
-    "staged.drop": "#B91C1C"
+    "staged.drop": "#B91C1C",
+    "result.local_row_background": "#F7E9E5"
   },
   "dark": {
     "activity_bar.background": "#181818",
@@ -18,6 +19,7 @@
     "title_bar.slot.background": "#1F1F1F",
     "quick_open.group.header": "#3A3D41",
     "search.match.background": "#4A3F00",
-    "staged.drop": "#F87171"
+    "staged.drop": "#F87171",
+    "result.local_row_background": "#382620"
   }
 }

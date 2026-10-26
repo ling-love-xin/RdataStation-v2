@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use result_panel::panel::{ExportCtx, GridPayload, ResultPanel, ResultSyncInput};
 use result_panel::ports::{ResultActionQueue, ResultRequest};
+use result_panel::rowset::{LocalRow, RowOp, RowRef};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Disableable as _;
@@ -141,6 +142,9 @@ struct CommitInFlight {
     per_line: Vec<(usize, Vec<usize>)>,
     /// 生成时跳过的行数（键值 NULL 定位不到）——回执文案要如实说出来
     skipped: usize,
+    /// 提交时是否存在本地叠加层动作（新增 / 复制 / 删除的本地行）：本期这些行级动作不下发，
+    /// 回执文案据此提示「本地行级变更未随本次提交落库」（#28-B1 排除矩阵）。
+    local_pending: bool,
 }
 
 /// 【遗留 #7】值查看器的目标（右键「查看完整值」弹出；`value_preview` 为 `Some` 时
@@ -689,8 +693,8 @@ impl EditorHostPanel {
                     // 【类型感知】`commit_edit` 返回是否真的交了：类型校验失败 = 编辑态
                     // 保留 + 红框提示，此时**不能**跑整轮投影（`sync_result_view` 重建网格
                     // 会把编辑态冲掉）——只请求重绘让红框 / 错误提示上屏。
-                    let committed = panel.grid.update(cx, |table, cx| {
-                        table.delegate_mut().commit_edit(cx)
+                    let committed = panel.grid.update(cx, |table, _cx| {
+                        table.delegate_mut().commit_edit()
                     });
                     if committed {
                         // 【T2a-4】提交完成后投影刷新（脏格 + 待提交计数 + 网格数据一起走
@@ -714,7 +718,7 @@ impl EditorHostPanel {
             let document_for_commit = document.clone();
             grid.update(cx, |state, _cx| {
                 state.delegate_mut().set_commit_edit_hook(std::rc::Rc::new(
-                    move |row, column, original, edited, _cx| {
+                    move |row, column, original, edited| {
                         // 【T2a-4】提交落权威变更集：只动 Shared（独立实体，可安全 update）。
                         // 钩子是在网格 delegate 内部（`commit_edit`）被调用的——这里再
                         // update 网格就是重入 panic；脏格重投影由订阅闭包（PressEnter /
@@ -745,6 +749,29 @@ impl EditorHostPanel {
                     },
                 ));
             });
+            // 【#28-B4】本地行格编辑提交：只写回本地行快照，不进变更集、不进格级 /
+            // 行级撤销栈（本地行格编辑提交即落快照，拍板口径；重投影复用 Enter / Blur 后
+            // 的 `sync_result_view`，与底层格编辑同一条刷新路径）。
+            let shared_for_local = shared.clone();
+            let document_for_local = document.clone();
+            grid.update(cx, |state, _cx| {
+                state.delegate_mut().set_commit_local_edit_hook(std::rc::Rc::new(
+                    move |local_id, column, edited| {
+                        shared_for_local.update_results(|store| {
+                            let active = store
+                                .active_index(&document_for_local)
+                                .unwrap_or(0);
+                            store.mutate_local_rows(&document_for_local, active, |set| {
+                                if let Some(row) = set.local_row_mut(local_id) {
+                                    if let Some(cell) = row.cells.get_mut(column) {
+                                        *cell = edited;
+                                    }
+                                }
+                            });
+                        });
+                    },
+                ));
+            });
         }
 
         // 【B5b】滚动到底自动加载：组件库在可见范围接近末尾时调 delegate 的 `load_more`，
@@ -759,6 +786,9 @@ impl EditorHostPanel {
             let sort_weak = cx.entity().downgrade();
             let insight_weak = cx.entity().downgrade();
             let preview_weak = cx.entity().downgrade();
+            // 【#28-B3】右键行级动作（新增 / 复制 / 删除）：delegate 已打包成 ResultRequest，
+            // 这里转投结果动作队列并让面板 notify 一下，由 observe 回调统一 drain 分派落库。
+            let row_action_weak = cx.entity().downgrade();
             // 【M8】宿主没接「洞察此列」端口就不装钩子——菜单据此不摆那一项（能力没有就不给入口）
             let insight_port = shared.insight_column_port();
             grid.update(cx, |state, _cx| {
@@ -820,6 +850,16 @@ impl EditorHostPanel {
                             .update(app, |panel, cx| panel.open_value_preview(&text, &column, 0, cx));
                     },
                 ));
+                // 【#28-B3】右键新增 / 复制 / 删除行：动作已在 delegate 打包，转投队列后 notify，
+                // 由面板 observe 回调 drain 落库（与状态栏按钮同一条分派路径）。
+                state
+                    .delegate_mut()
+                    .set_row_action_hook(std::rc::Rc::new(move |request, app| {
+                        _ = row_action_weak.update(app, |host, cx| {
+                            host.result_action_queue.push(request);
+                            host.result_panel.update(cx, |_, cx| cx.notify());
+                        });
+                    }));
             });
         }
 
@@ -3333,13 +3373,35 @@ impl EditorHostPanel {
 
         // ⑥ 生成 UPDATE 文本（含语句→行/列索引）；表名与主键探测同一处猜测（probe_primary_key）
         let table = crate::export::default_table_name(Some(&entry.sql), 0);
-        // pending 克隆出借用边界（不拖住 results() 的 Ref）
-        let pending: Vec<crate::changes::CellChange> = {
+        // pending 克隆出借用边界（不拖住 results() 的 Ref）；被删底层行的格级变更不再生成
+        // UPDATE（该行已在本地标记删除，#28-B1 排除矩阵：提交批次排除被删行）。同时探测本地
+        // 叠加层动作（新增 / 复制 / 删除的本地行）——本期不下发，回执文案据此提示。
+        let (pending, local_pending): (Vec<crate::changes::CellChange>, bool) = {
             let results = self.shared.results();
-            results
+            let deleted: std::collections::BTreeSet<usize> = results
+                .local_rows(&self.document, set_index)
+                .map(|set| set.deleted_rows().iter().copied().collect())
+                .unwrap_or_default();
+            let pending = results
                 .change_set(&self.document, set_index)
-                .map(|changes| changes.pending().iter().map(|c| (*c).clone()).collect())
-                .unwrap_or_default()
+                .map(|changes| {
+                    changes
+                        .pending()
+                        .iter()
+                        .filter(|c| !deleted.contains(&c.row))
+                        .map(|c| (*c).clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let local_pending = results
+                .local_rows(&self.document, set_index)
+                .map(|set| !set.is_empty())
+                .unwrap_or(false)
+                || results
+                    .row_history(&self.document, set_index)
+                    .map(|history| history.can_undo() || history.can_redo())
+                    .unwrap_or(false);
+            (pending, local_pending)
         };
         if pending.is_empty() {
             return Err("没有待提交的变更".to_string());
@@ -3369,6 +3431,7 @@ impl EditorHostPanel {
             set_index,
             per_line: updates.per_line,
             skipped: updates.skipped,
+            local_pending,
         });
         Ok(())
     }
@@ -5012,7 +5075,249 @@ impl EditorHostPanel {
         }
     }
 
-    /// 执行（选区优先 → 当前语句）：快捷键与工具栏主按钮共用同一条路
+    /// 【#28-B3】新增一条本地空行：只落本地叠加层 + 行级历史，不下发 INSERT、不进格级变更集。
+    /// `anchor_view` = 选中视图行（0 基）；`None` = 末尾区段。本期落点即末尾区段，
+    /// anchor 只作为历史元信息留档（D5）。
+    fn insert_local_row(&mut self, anchor_view: Option<usize>, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        // 锚点身份先从网格真值翻译成 RowRef（store 闭包内不能再借 grid 实体）
+        let anchor_ref = anchor_view.and_then(|view| {
+            self.grid.read(cx).delegate().reference_of(view)
+        });
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let Some(entry) = store.active(&document) else {
+                return false;
+            };
+            let cols = entry.columns.len();
+            // D5：锚定底层行号；锚到本地行本期记 None（区段始终在末尾，不细算前一个底层号）
+            let anchor_data = match anchor_ref {
+                Some(RowRef::Data(ix)) => Some(ix),
+                Some(RowRef::Local(_)) => None,
+                None => None,
+            };
+            let mut local_id = 0u64;
+            store.mutate_local_rows(&document, active, |set| {
+                local_id = set.next_id();
+                set.push_local(LocalRow::new(local_id, vec![String::new(); cols]));
+            });
+            store.mutate_row_history(&document, active, |history| {
+                history.push(RowOp::InsertLocal {
+                    local_id,
+                    anchor: anchor_data,
+                });
+            });
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+    /// 【#28-B3】复制当前选中行为一条本地行：底层行取 `rows` 全量快照，本地行取本地 cells 快照。
+    fn duplicate_local_row(&mut self, view: usize, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let Some(reference) = self.grid.read(cx).delegate().reference_of(view) else {
+            return;
+        };
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let snapshot = match reference {
+                RowRef::Data(ix) => store
+                   .active(&document)
+                    .and_then(|entry| entry.rows.get(ix))
+                    .cloned()
+                    .unwrap_or_default(),
+                RowRef::Local(id) => store
+                    .local_rows(&document, active)
+                    .and_then(|set| set.local_row(id))
+                    .map(|row| row.cells.clone())
+                    .unwrap_or_default(),
+            };
+            let anchor = match reference {
+                RowRef::Data(ix) => Some(ix),
+                RowRef::Local(_) => None,
+            };
+            let mut local_id = 0u64;
+            store.mutate_local_rows(&document, active, |set| {
+                local_id = set.next_id();
+                set.push_local(LocalRow::new(local_id, snapshot.clone()));
+            });
+            store.mutate_row_history(&document, active, |history| {
+                history.push(RowOp::DuplicateLocal {
+                    local_id,
+                    source: reference,
+                    snapshot,
+                    anchor,
+                });
+            });
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+    /// 【#28-B3】删除当前选中行：底层行只打删除标记（可撤销恢复），本地行直接移除并凭快照入栈。
+    fn delete_local_row(&mut self, view: usize, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let Some(reference) = self.grid.read(cx).delegate().reference_of(view) else {
+            return;
+        };
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            match reference {
+                RowRef::Data(ix) => {
+                    // 已被标记删除的行不重复入栈（撤销栈里不出现重复动作）
+                    let already = store
+                        .local_rows(&document, active)
+                        .is_some_and(|set| set.is_deleted(ix));
+                    if already {
+                        return false;
+                    }
+                    store.mutate_local_rows(&document, active, |set| set.mark_deleted(ix));
+                    store.mutate_row_history(&document, active, |history| {
+                        history.push(RowOp::DeleteData(ix));
+                    });
+                    true
+                }
+                RowRef::Local(id) => {
+                    let mut removed: Option<LocalRow> = None;
+                    store.mutate_local_rows(&document, active, |set| {
+                        removed = set.remove_local(id);
+                    });
+                    let Some(row) = removed else {
+                        return false;
+                    };
+                    store.mutate_row_history(&document, active, |history| {
+                        history.push(RowOp::RemoveLocal {
+                            local_id: id,
+                            cells: row.cells.clone(),
+                            anchor: None,
+                        });
+                    });
+                    true
+                }
+            }
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+    /// 【#28-B3】组合撤销：格级 `EditHistory` 非空先走格级（现有 [`Self::undo_result_edit`]），
+    /// 栈空再走行级 `RowHistory`；两个栈互不混栈。
+    fn undo_row_action(&mut self, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let active = self
+            .shared
+            .results()
+            .active_index(&document)
+            .unwrap_or(0);
+        let cell_can_undo = self
+            .shared
+            .results()
+            .history(&document, active)
+            .is_some_and(|history| history.can_undo());
+        if cell_can_undo {
+            self.undo_result_edit(cx);
+            return;
+        }
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let mut op = None;
+            store.mutate_row_history(&document, active, |history| op = history.undo());
+            let Some(op) = op else {
+                return false;
+            };
+            match op {
+                RowOp::InsertLocal { local_id, .. } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.remove_local(local_id);
+                    });
+                }
+                RowOp::DuplicateLocal { local_id, .. } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.remove_local(local_id);
+                    });
+                }
+                RowOp::DeleteData(ix) => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.unmark_deleted(ix);
+                    });
+                }
+                RowOp::RemoveLocal { local_id, cells, .. } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.push_local(LocalRow::new(local_id, cells));
+                    });
+                }
+            }
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+    /// 【#28-B3】组合重做：与 [`Self::undo_row_action`] 对称；格级栈优先，空走行级栈。
+    fn redo_row_action(&mut self, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let active = self
+            .shared
+            .results()
+            .active_index(&document)
+            .unwrap_or(0);
+        let cell_can_redo = self
+            .shared
+            .results()
+            .history(&document, active)
+            .is_some_and(|history| history.can_redo());
+        if cell_can_redo {
+            self.redo_result_edit(cx);
+            return;
+        }
+        let applied = self.shared.update_results(|store| {
+            let active = store.active_index(&document).unwrap_or(0);
+            let mut op = None;
+            store.mutate_row_history(&document, active, |history| op = history.redo());
+            let Some(op) = op else {
+                return false;
+            };
+            match op {
+                // 重做只恢复动作本身，不回格编辑状态（本地行格编辑不进栈，拍板口径）
+                RowOp::InsertLocal { local_id, .. } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.push_local(LocalRow::new(local_id, Vec::new()));
+                    });
+                }
+                RowOp::DuplicateLocal {
+                    local_id,
+                    snapshot,
+                    ..
+                } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.push_local(LocalRow::new(local_id, snapshot));
+                    });
+                }
+                RowOp::DeleteData(ix) => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.mark_deleted(ix);
+                    });
+                }
+                RowOp::RemoveLocal { local_id, .. } => {
+                    store.mutate_local_rows(&document, active, |set| {
+                        set.remove_local(local_id);
+                    });
+                }
+            }
+            true
+        });
+        if applied {
+            self.sync_result_view(cx);
+        }
+    }
+
+
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
         let target = execution::resolve_target(&text, selection);
@@ -5783,6 +6088,10 @@ impl EditorHostPanel {
                     if inflight.skipped > 0 {
                         message.push_str(&format!("（{} 行键值为空，已跳过）", inflight.skipped));
                     }
+                    // 本地新增 / 复制 / 删除的行本期不下发（#28-B1 排除矩阵）：回执如实提示
+                    if inflight.local_pending {
+                        message.push_str("（本地新增 / 复制 / 删除的行未随本次提交落库）");
+                    }
                     // 先同步网格（冲突格标色）再落文案：`sync_result_view` 末尾会按结果成败
                     // 重写状态栏（本次无失败 → `set_message(None)`），顺序反了文案会被清掉
                     self.sync_result_view(cx);
@@ -6065,6 +6374,8 @@ impl EditorHostPanel {
             let fact_snapshot = fact_state.and_then(|state| state.fact().cloned());
             let fact_tier = fact_state.map(|state| state.tier());
             let fact_bytes = fact_state.map_or(0, |state| state.estimated_bytes());
+            // 【#28】本地叠加层快照（本地行 + 删除标记；行级动作未接时槽位为空集合）
+            let local_snapshot = store.local_rows(&self.document, active).cloned();
             tracing::info!(
                 target = "rds_editor::exec",
                 doc = %self.document,
@@ -6099,6 +6410,8 @@ impl EditorHostPanel {
                         entry.column_annotations.clone(),
                         // 【B5】事实帧只读句柄（与列 / 行同一次投影；无事实档 = None）
                         fact_snapshot.clone(),
+                        // 【#28】本地叠加层快照（与列 / 行同一次投影；空集合 = 纯底层结果集）
+                        local_snapshot.clone(),
                     )
                 }),
                 entry
@@ -6124,7 +6437,11 @@ impl EditorHostPanel {
                 entry
                     .filter(|entry| entry.has_grid())
                     .map(|entry| ResultStatus {
-                        total_rows: entry.row_count(),
+                        // 【#28-B3】状态行总行数口径 = 底层未删行 + 本地行（被删底层行不计入；
+                        // 本地行始终纳入）。删除标记只从计数里剔除，不参与下推 / 统计链。
+                        total_rows: entry.row_count()
+                            - local_snapshot.as_ref().map_or(0, |local| local.deleted_count())
+                            + local_snapshot.as_ref().map_or(0, |local| local.local_count()),
                         // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
                         selected_row: None,
                         // sync 时没有格选中：当前格值由 `SelectCell` 事件增量更新（见 grid_sub）
@@ -6235,6 +6552,25 @@ impl EditorHostPanel {
             .map(|changes| changes.pending_count())
             .unwrap_or(0);
         let committing = self.commit_pending();
+        // 【#28-B3】组合撤销 / 重做栈状态：格级 `EditHistory` 与行级 `RowHistory` 任一非空即可撤销；
+        // 分派时同样格级优先、空走行级（见 [`Self::undo_row_action`]）。借用收窄在块内，
+        // 避免 Ref 活到函数末尾挡住后续 `self` 可变借用。
+        let (can_undo, can_redo) = {
+            let store = self.shared.results();
+            let cell_undo = store
+                .history(&self.document, active)
+                .is_some_and(|history| history.can_undo());
+            let cell_redo = store
+                .history(&self.document, active)
+                .is_some_and(|history| history.can_redo());
+            let row_undo = store
+                .row_history(&self.document, active)
+                .is_some_and(|history| history.can_undo());
+            let row_redo = store
+                .row_history(&self.document, active)
+                .is_some_and(|history| history.can_redo());
+            (cell_undo || row_undo, cell_redo || row_redo)
+        };
         // 【B15】分析：对选中那份结果的**已抓行**跑聚合 SQL（本地 DuckDB，不碰源库）。
         // 菜单项由 `analysis::menu_items` 给（纯函数，可逐项断言）；没网格就不摆。
         let analysis_items = self
@@ -6279,13 +6615,14 @@ impl EditorHostPanel {
             toolbar,
             status,
             grid: grid_data.map(
-                |(columns, rows, column_types, table, annotations, fact)| GridPayload {
+                |(columns, rows, column_types, table, annotations, fact, local)| GridPayload {
                     columns,
                     rows,
                     column_types,
                     table,
                     annotations,
                     fact,
+                    local,
                 },
             ),
             empty,
@@ -6303,6 +6640,8 @@ impl EditorHostPanel {
             insight_available,
             pending_changes,
             committing,
+            can_undo,
+            can_redo,
             analysis_items,
             export_ctx,
         };
@@ -6542,6 +6881,15 @@ impl EditorHostPanel {
             }
             // 【列浏览器】搜索框 ✕ 清除：需要 window（`InputState::set_value` 签名），走窗口句柄转手
             ResultRequest::ClearColumnSearch => self.clear_column_search_via_window(cx),
+            // 【#28-B3】行级动作：新增 / 复制 / 删除一行（只改本地叠加层，不下发 SQL）
+            ResultRequest::InsertRowBelow(anchor_view) => {
+                self.insert_local_row(anchor_view, cx);
+            }
+            ResultRequest::DuplicateRow(view) => self.duplicate_local_row(view, cx),
+            ResultRequest::DeleteRow(view) => self.delete_local_row(view, cx),
+            // 组合撤销 / 重做：格级栈优先，空走行级栈（两个栈互不混栈）
+            ResultRequest::UndoAction => self.undo_row_action(cx),
+            ResultRequest::RedoAction => self.redo_row_action(cx),
         }
     }
 
@@ -6693,23 +7041,22 @@ impl EditorHostPanel {
     ///
     /// 复制的是**已抓到的行**（被截断的那份就只有那些行）——不假装能拿到没抓的部分。
     pub(crate) fn copy_active_result(&mut self, cx: &mut Context<Self>) {
-        let text = self
+        // 【#28-B1 拍板 D7】整份复制纳入本地行、排除被删行：走 delegate 视图序列拼全列 TSV，
+        // 不再用 `entry.to_tsv()`（那条路是全量底层行，漏本地行、把被删行也拷走）。
+        let has_grid = self
             .shared
-            .results()
-            .active(&self.document)
-            .filter(|entry| entry.has_grid())
-            .map(ResultEntry::to_tsv)
-            .filter(|text| !text.is_empty());
-        let Some(text) = text else {
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+            .is_some();
+        if !has_grid {
             self.set_message(Some("没有可复制的结果集".to_string()), cx);
             return;
-        };
-        let rows = self
-            .shared
-            .results()
-            .active(&self.document)
-            .map(ResultEntry::row_count)
-            .unwrap_or(0);
+        }
+        let (text, rows) = self.grid.read(cx).delegate().active_result_tsv();
+        if rows == 0 {
+            self.set_message(Some("没有可复制的结果集".to_string()), cx);
+            return;
+        }
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.set_message(Some(format!("已复制 {rows} 行（TSV）")), cx);
     }
@@ -7282,10 +7629,12 @@ impl EditorHostPanel {
         }
     }
 
-    /// 【B7】筛选中时导出的是**筛后的行集**（原型 §5.5）；没筛选就是 `None`（导全部已抓行）
-    fn visible_rows_for_export(&self, cx: &mut Context<Self>) -> Option<Vec<Vec<String>>> {
-        let delegate = self.grid.read(cx).delegate();
-        (!delegate.filter().trim().is_empty()).then(|| delegate.visible_rows())
+    /// 【B7】筛选中时导出的是**筛后的行集**（原型 §5.5）。
+    ///
+    /// 【#28-B1 排除矩阵】导出序列 = 底层未删行：本地行不进任何导出档、被删行排除；
+    /// 筛选态与恒等态同一口径，不再回退 `entry.rows` 全量底层行（那条路会把被删行导走）。
+    fn visible_rows_for_export(&self, cx: &mut Context<Self>) -> Vec<Vec<String>> {
+        self.grid.read(cx).delegate().visible_rows_for_export()
     }
 
     /// 【B7 切片二】把行交给 DuckDB 落成 Parquet / XLSX（**后台线程**，不占执行位）
@@ -7298,13 +7647,9 @@ impl EditorHostPanel {
         format: ExportFormat,
         index: usize,
         path: &std::path::Path,
-        visible: Option<Vec<Vec<String>>>,
+        rows: Vec<Vec<String>>,
         cx: &mut Context<Self>,
     ) {
-        let rows = match visible {
-            Some(rows) => rows,
-            None => entry.rows.clone(),
-        };
         // 筛选中导出的是**筛后的行集**（原型 §5.5）：这个事实要跟着请求走，回执里要明示
         let filtered = !self.grid.read(cx).delegate().filter().trim().is_empty();
         // 【B3】按槽位下标取事实档快照：带类型档（Parquet / XLSX）优先 batches 直灌建表 COPY，
@@ -7358,9 +7703,9 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         // 【B7 切片二】筛选中就导出筛后的行（原型 §5.5：导出的就是当前筛选后的行集，并且要明示）
-        let visible = self.visible_rows_for_export(cx);
+        let rows = self.visible_rows_for_export(cx);
         if format.is_duckdb_backed() {
-            self.start_duckdb_export(entry, format, index, path, visible, cx);
+            self.start_duckdb_export(entry, format, index, path, rows, cx);
             return;
         }
         let table = export::default_table_name(Some(&entry.sql), index);
@@ -7375,10 +7720,7 @@ impl EditorHostPanel {
                     .table_key_columns(Some(conn), &table)
             })
             .and_then(|columns| export::RowKey::new(columns));
-        let text = match &visible {
-            Some(rows) => export::encode_rows_with_key(entry, format, &table, key.as_ref(), rows),
-            None => export::encode_rows_with_key(entry, format, &table, key.as_ref(), &entry.rows),
-        };
+        let text = export::encode_rows_with_key(entry, format, &table, key.as_ref(), &rows);
         // INSERT 对空结果给空串（没有行就没有语句）；CSV / JSON 空结果仍有表头 / `[]`
         if text.is_empty() {
             self.set_message(Some("这份结果没有可导出的行".to_string()), cx);
@@ -7386,10 +7728,7 @@ impl EditorHostPanel {
         }
         match std::fs::write(path, text) {
             Ok(()) => {
-                let rows_text = match &visible {
-                    Some(rows) => format!("{} 行（已筛选）", rows.len()),
-                    None => format!("{} 行", entry.row_count()),
-                };
+                let rows_text = format!("{} 行（已筛选）", rows.len());
                 self.set_message(
                     Some(format!(
                         "已导出 {rows_text}（{}）→ {}",
