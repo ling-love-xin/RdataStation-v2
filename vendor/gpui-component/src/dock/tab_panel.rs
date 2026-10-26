@@ -481,10 +481,6 @@ impl TabGroupSkin {
 
         TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
-            // RdataStation vendor patch (0.8.0): apply RDS appearance settings
-            // (标签栏样式 / 标签栏最大宽度).
-            .with_variant(self.shared.tab_bar_variant())
-            .max_width(px(self.shared.tab_bar_max_width()))
             .when(has_leading, |this| {
                 this.prefix(
                     h_flex()
