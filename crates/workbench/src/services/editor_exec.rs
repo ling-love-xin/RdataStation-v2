@@ -36,6 +36,7 @@ use engine::persistence::history_store::{self, SqlHistoryEntry};
 use engine::services::execution_service::DuckDbExportFormat;
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
+use shared::FactFrame;
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
 struct EngineQueryRunner {
@@ -854,6 +855,9 @@ impl QueryRunner for EngineQueryRunner {
             // 分析结果没有“下一段”可言（它一次算完）
             has_more: false,
             notice: Some(request.notice()),
+            // 【A3】本地 DuckDB 分析产物只回列名 + JSON 行，没有原始 batches → 事实档 `None`，
+            // 后续分析 / 带类型导出走显示矩阵降级档（方案跳 5 降级路径）。
+            fact: None,
         })
     }
 
@@ -1297,8 +1301,12 @@ pub fn runner_for_test() -> Option<Arc<dyn QueryRunner>> {
     EngineQueryRunner::new().map(|runner| Arc::new(runner) as Arc<dyn QueryRunner>)
 }
 
-/// 引擎结果 → 编辑器结果（列 + 字符串化行；不读 `rows` 字段）
+/// 引擎结果 → 编辑器数据（列 + 字符串化行；不读 `rows` 字段）
+///
+/// 【A3】同时构造事实帧候选（方案跳 1）：`batches` 非空才挂 `fact`；空批 / 形状不一致
+/// → `None` 走显示矩阵降级档。渲染第一期不读 `fact`，分析 / 带类型导出在 A 阶段后消费。
 fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData {
+    let fact = FactFrame::from_query_result(result).map(Arc::new);
     QueryData {
         columns: column_names(result),
         // 【Q6】列类型：`QueryResult` 已由驱动/Arrow schema 填好（空 = 报不出，界面按无类型档渲染）
@@ -1316,6 +1324,7 @@ fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData 
         has_more: false,
         // 【B14】下发筛选的“已去掉 LIMIT”之类提示由调用方另设
         notice: None,
+        fact,
     }
 }
 

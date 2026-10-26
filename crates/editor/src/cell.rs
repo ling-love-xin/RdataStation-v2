@@ -259,7 +259,9 @@ pub struct CellRequest {
 }
 
 /// 一次单元执行的结论（宿主给的真实值；编辑器据此拼 `Output::Table` / `Error`）
-#[derive(Debug, Clone, PartialEq, Eq)]
+// 【A3】去掉 PartialEq / Eq：内嵌 `QueryData` 持 `Arc<FactFrame>` 事实句柄，不做整帧逐值
+// 比较；现状也没有整体比较 `CellOutcome` 的调用方（仅字段读取）。
+#[derive(Debug, Clone)]
 pub struct CellOutcome {
     /// 实际执行的 SQL（内联表格标题与血缘用）
     pub sql: String,

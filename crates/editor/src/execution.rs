@@ -31,6 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
+use ::shared::FactFrame;
+
 use crate::channel::ExecChannel;
 use crate::export::RowKey;
 use crate::model::DocumentId;
@@ -478,7 +480,12 @@ fn trimmed(text: &str) -> Option<&str> {
 // ===== 谁来跑 =====
 
 /// 一次执行的产物（结果集）
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// 【A3】`fact` 持事实帧候选（L0 事实层，方案跳 1）：`None` = 无 batches 回执（DML /
+/// DDL、加速档、联邦档、跨进程往返），显示矩阵照旧从 `rows` 派生。故意不派生
+/// `PartialEq / Eq`：事实帧是 `Arc<FactFrame>` 共享句柄，整帧逐值比较语义不对；现状也
+/// 没有整体比较 `QueryData` 的调用方。
+#[derive(Debug, Clone, Default)]
 pub struct QueryData {
     pub columns: Vec<String>,
     /// 【Q6】每列的**驱动原始类型名**（`bigint` / `numeric(38,10)` / `timestamp with time zone` …）
@@ -498,6 +505,9 @@ pub struct QueryData {
     pub has_more: bool,
     /// 【B14】这次执行附带的一句话说明（如“已去掉原查询的 LIMIT”）；没有就是 `None`
     pub notice: Option<String>,
+    /// 【A3】事实帧候选：源库回执带 batches 时由 `to_data` 构造；其余路径 `None`。
+    /// 渲染第一期不读它；分析 / 带类型导出按它选保真路径（A 阶段不消费）。
+    pub fact: Option<Arc<FactFrame>>,
 }
 
 /// 执行端口：**宿主提供"怎么把 SQL 跑出结果集"**
@@ -1893,6 +1903,7 @@ mod tests {
                 affected_rows: None,
                 has_more: false,
                 notice: None,
+                fact: None,
             })
         }
 
@@ -1922,6 +1933,7 @@ mod tests {
                 affected_rows: None,
                 has_more: false,
                 notice: None,
+                fact: None,
             })
         }
     }
@@ -2042,6 +2054,7 @@ mod tests {
                 affected_rows: None,
                 has_more: false,
                 notice: None,
+                fact: None,
             })
         }
 

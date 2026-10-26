@@ -333,8 +333,8 @@ fn arrow_type_to_column_type(data_type: &DataType) -> String {
     .to_string()
 }
 
-/// 从 Arrow 数组中提取值
-fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
+/// 从 Arrow 数组中提取值（crate 内事实档访问器复用同一取值口径）
+pub(crate) fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
     if array.is_null(index) {
         return Value::Null;
     }

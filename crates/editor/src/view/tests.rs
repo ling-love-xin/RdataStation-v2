@@ -796,6 +796,7 @@ impl QueryRunner for ScriptRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -871,6 +872,7 @@ impl QueryRunner for SizedRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -908,6 +910,7 @@ impl QueryRunner for ToolbarRunner {
                 affected_rows: Some(3),
                 has_more: false,
                 notice: None,
+                fact: None,
             });
         }
         if sql.contains("truncated") {
@@ -920,6 +923,7 @@ impl QueryRunner for ToolbarRunner {
                 affected_rows: None,
                 has_more: false,
                 notice: None,
+                fact: None,
             });
         }
         Ok(QueryData {
@@ -931,6 +935,7 @@ impl QueryRunner for ToolbarRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -976,6 +981,7 @@ impl QueryRunner for SegmentRunner {
             affected_rows: None,
             has_more: true,
             notice: None,
+            fact: None,
         })
     }
 
@@ -998,6 +1004,7 @@ impl QueryRunner for SegmentRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -1043,6 +1050,7 @@ impl QueryRunner for MoreUnsupportedRunner {
             affected_rows: None,
             has_more: true,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -1070,6 +1078,7 @@ impl QueryRunner for LocatedFailureRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -1823,6 +1832,7 @@ impl QueryRunner for TxRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 
@@ -4787,6 +4797,7 @@ impl QueryRunner for PushdownRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 
@@ -4813,6 +4824,7 @@ impl QueryRunner for PushdownRunner {
             has_more: false,
             // 下发的执行器会带上“已去掉 LIMIT”这类说明
             notice: Some("已去掉原查询的 LIMIT 10（下发筛选要能查到全部行）".to_string()),
+            fact: None,
         })
     }
 
@@ -4838,6 +4850,7 @@ impl QueryRunner for PushdownRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -6668,6 +6681,7 @@ impl QueryRunner for DuckDbExportRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 
@@ -6868,6 +6882,7 @@ impl QueryRunner for AnalysisRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 
@@ -6883,6 +6898,7 @@ impl QueryRunner for AnalysisRunner {
             has_more: false,
             // 与宿主同一口径：说明由执行器带回来
             notice: Some(request.notice()),
+            fact: None,
         })
     }
 }
@@ -7090,6 +7106,7 @@ impl QueryRunner for OrdersRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 }
@@ -7309,6 +7326,7 @@ impl QueryRunner for CommitOrdersRunner {
             affected_rows: None,
             has_more: false,
             notice: None,
+            fact: None,
         })
     }
 

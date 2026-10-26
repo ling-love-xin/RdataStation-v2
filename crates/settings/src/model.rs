@@ -47,6 +47,10 @@ pub struct Settings {
     pub scratchpad: Scratchpad,
     #[serde(default)]
     pub insight: Insight,
+    /// 结果集面板偏好（事实档载体分流；A 批仅注册偏好，分流纯函数在 `shared::fact`，
+    /// 触发物化路径 B 批接通消费）。
+    #[serde(default)]
+    pub result_panel: ResultPanel,
 }
 
 /// 洞察模块资源与交互偏好。
@@ -101,6 +105,78 @@ fn default_insight_work_set_limit() -> i64 {
 /// 工具栏内存占用显示：默认开启。
 fn default_insight_status_usage() -> bool {
     true
+}
+
+/// 结果集面板偏好（事实档载体分流；方案 §4.1 / §8.3）。
+///
+/// A 批只注册偏好与 `shared::fact::storage_choice` 纯函数；触发物化路径（进分析 /
+/// 带类型导出 / IronCalc 快照）在 B 批接通消费，渲染与文本导出不读本偏好。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultPanel {
+    /// 事实档载体：`auto`（默认，按双份估算水位分流）/ `memory`（强制内存档）/
+    /// `table`（强制表档；B 批接通后直灌常驻表，A 批未接通时按降级档处理）。
+    #[serde(default = "default_result_fact_storage")]
+    pub fact_storage: FactStoragePref,
+}
+
+impl Default for ResultPanel {
+    fn default() -> Self {
+        Self {
+            fact_storage: default_result_fact_storage(),
+        }
+    }
+}
+
+/// 事实档载体偏好（落盘 `auto` / `memory` / `table`，serde snake_case）。
+///
+/// 决策层枚举是 `shared::StoragePref`（纯函数入参，不引 serde）；这里独立定义持久化形态，
+/// 经 [`FactStoragePref::to_shared`] 映射——设置层不把 serde 序列化约束拖进事实层。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FactStoragePref {
+    /// 自动：按双份估算水位分流（8 MiB 上界 / 3 MiB 滞回线）。
+    #[default]
+    Auto,
+    /// 强制内存档：即使超水位也驻 Rust 堆。
+    Memory,
+    /// 强制表档：即使在水位内也走常驻表（B 批接通）。
+    Table,
+}
+
+impl FactStoragePref {
+    /// 映射到决策层 [`shared::StoragePref`]。
+    pub fn to_shared(self) -> ::shared::StoragePref {
+        match self {
+            Self::Auto => ::shared::StoragePref::Auto,
+            Self::Memory => ::shared::StoragePref::Memory,
+            Self::Table => ::shared::StoragePref::Table,
+        }
+    }
+
+    /// 全部取值（登记表枚举项、测试穷尽遍历用）。
+    pub const ALL: [FactStoragePref; 3] = [
+        FactStoragePref::Auto,
+        FactStoragePref::Memory,
+        FactStoragePref::Table,
+    ];
+
+    /// 落盘值文本（登记表枚举落盘值 / `value_by_key` 回读用）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Memory => "memory",
+            Self::Table => "table",
+        }
+    }
+
+    /// 解析落盘值；未知值返回 `None`，由写入路径拒绝而不是猜。
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.as_str() == s.trim())
+    }
+}
+
+fn default_result_fact_storage() -> FactStoragePref {
+    FactStoragePref::Auto
 }
 
 /// 草稿箱侧栏专属设置（2026-10-11 接线：⋯ 更多设置持久化到用户配置）。
@@ -712,5 +788,41 @@ mod tests {
         // 旧配置（无 saved_views 节）回退空 map，不 panic。
         let legacy: Settings = serde_json::from_str("{}").expect("旧配置可读");
         assert!(legacy.navigator.saved_views.is_empty());
+    }
+
+    /// 事实档载体默认 `auto`；旧配置（无 `result_panel` 节）回退默认，不报错。
+    #[test]
+    fn fact_storage_defaults_to_auto() {
+        assert_eq!(Settings::default().result_panel.fact_storage, FactStoragePref::Auto);
+
+        let legacy: Settings = serde_json::from_str("{}").expect("旧配置可读");
+        assert_eq!(legacy.result_panel.fact_storage, FactStoragePref::Auto);
+    }
+
+    /// 三档序列化往返；落盘文本为 snake_case（auto / memory / table）。
+    #[test]
+    fn fact_storage_roundtrip_three_tiers() {
+        for pref in FactStoragePref::ALL {
+            let mut settings = Settings::default();
+            settings.result_panel.fact_storage = pref;
+            let text = serde_json::to_string(&settings).expect("序列化");
+            let back: Settings = serde_json::from_str(&text).expect("反序列化");
+            assert_eq!(back.result_panel.fact_storage, pref);
+            assert!(text.contains(&format!(r#""fact_storage":"{}""#, pref.as_str())));
+        }
+    }
+
+    /// 三档映射到决策层 `shared::StoragePref`；未知落盘值拒绝解析，不猜。
+    #[test]
+    fn fact_storage_maps_to_shared_and_rejects_unknown() {
+        assert_eq!(FactStoragePref::Auto.to_shared(), ::shared::StoragePref::Auto);
+        assert_eq!(FactStoragePref::Memory.to_shared(), ::shared::StoragePref::Memory);
+        assert_eq!(FactStoragePref::Table.to_shared(), ::shared::StoragePref::Table);
+
+        assert!(FactStoragePref::parse("disk").is_none());
+        assert!(FactStoragePref::parse("").is_none());
+        for pref in FactStoragePref::ALL {
+            assert_eq!(FactStoragePref::parse(pref.as_str()), Some(pref));
+        }
     }
 }

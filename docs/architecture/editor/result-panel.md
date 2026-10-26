@@ -170,6 +170,7 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 结果面板侧边栏 | ✅ 早期交付（`ee3077fa`）：左右分栏——左栏列结构、右栏选中格值详情；该形态后被 §8.11 / §8.12 取代 |
 | 列浏览器（右栏页签） | ✅ 本轮交付（§8.12）：列浏览器并入右侧辅助栏，与值详情 / 计算 / 分组同栏四页签切换；清单 ↔ 网格双向选中联动；隐藏走眼睛、冻结/排序/筛选/列统计走右键；左栏已整体移除、宽度全部还给网格；遗留：多选批量动作、列序拖拽 |
 | 渲染改进批次（clip / 分段语义 / JSON 美化 / 列宽记忆 / 千分位 / 列级统计） | ✅ 本轮交付（§8.13）：单元格 300 字符裁剪、状态行分段提示、JSON pretty、会话内列宽记忆、整数千分位、计算 / 分组列级访问器；延后：COUNT 精确总数、列宽落盘、跨帧统计缓存、小数分组 |
+| 事实层 / 显示层分离 · A 批底座 | ✅ 本轮交付（§8.14）：A1 `FactFrame` 类型与访问器落 shared；A2 `facts` 平行槽位 + `FactState` 三态；A3 `QueryData.fact` 双产物入槽；A4 `fact_storage` 三档偏好 + Auto 分流纯函数与高低水位；B（DuckDB 分析保真链 / 表档接通）、D（导出分级）待开工；C（IronCalc）待拍板；E（engine 第一跳失真）另立项 |
 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
 
 ## 8. ResultPanel Dock 化方案（2026-10-23 拍板）
@@ -554,12 +555,57 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **164 passed / 0 failed**（161 + 千分位 1 例 + 列级口径一致性 2 例）；`cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**，编译无 error（宿主侧仅 `ColumnWidthsChanged` 分派小段，与既有事件分支同范式；唯一 `unused import: signature_view` warning 属并行线未提交改动，非本线符号；603 与历史 683 基线的差额来自并行线工作区状态，本线未删改 editor 测试模块）。
 
+### 8.14 事实层 / 显示层分离 · A 批底座（A1–A4，2026-10-26）
+
+> 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md`（分层模型 / 三态状态机 / 水位实测 / A·B·C·D·E 分期）；本节约束 A 批已落地口径，B / D 开工前回读该方案对应章节。
+
+**分层口径（单向派生 L0 → L1，L1 永不回写 L0）**
+
+- **L0 事实层** `FactFrame`（`crates/shared/src/fact.rs`）：复用 Arrow batches 引用 + schema + 列名，是类型保真的唯一来源；不 derive `Clone`（batches 深拷贝代价高），槽位侧 `Arc<FactFrame>` 共享；事实值起步档复用 `shared::Value` 六变体（Null / Bool / Int(i64) / Float(f64) / Text(String) / Bytes(Vec<u8>)），日期 / Decimal / Timestamp 类型族扩展属 E 阶段。
+- **L1 显示层** `ResultEntry`（现状不动）：columns + `rows: Vec<Vec<String>>` + column_types + annotations + 血缘 / 原料 / 连接 / 通道；网格渲染、文本档导出、现状本地交互继续只读显示矩阵。
+- **叠加层归属**：#28 行级新增 / 复制 / 删除、格级变更集继续挂显示槽位（`changes` / `histories` / `locals` / `row_histories` 同口径），提交落库时按行键回源，不污染事实档。
+
+**A 批落点（源码锚点，行号以当前基线为准）**
+
+| 批次 | 内容 | 锚点 |
+| --- | --- | --- |
+| A1 | `FactFrame` / `FactKind` / `FactValue` 类型定义 + 访问器 `column_kind` / `value_at` / `rows_as_text` / `append_batches` / `row_count` / `estimated_bytes`；`from_query_result`（batches 空 → `None` 降级档）；8 例单测 + 水位探针测试 | `crates/shared/src/fact.rs:77`（`FactFrame`）、`:85`（`from_query_result`）、`:190`（`estimated_bytes`）；`crates/shared/src/models.rs` `arrow_value_at` 放开 `pub(crate)` 复用 |
+| A2 | `FactState { None, InMemory(Arc<FactFrame>), OnDuckDb }` 三态枚举；`facts: Vec<FactState>` 与 `sets` 同序同增减平行槽位；`merge_fact_state` 处理新段 None 保留旧档 / 旧 None+新 Some 挂新帧 / 旧内存档+新 Some 两段合并重建（形状校验失败整档作废 None）；只读访问器 `fact_at` / `active_fact`；淘汰 / 清空平行同步；4 例槽位生命周期单测 | `crates/result_panel/src/store.rs:657`（`FactState`）、`:705`（`merge_fact_state`）、`:742`（`facts` 槽位）、`:768`（`push` 第三参）、`:932` / `:940`（访问器）、`:1191`（`evict_oldest`） |
+| A3 | `QueryData` 内嵌 `fact: Option<Arc<FactFrame>>` 字段；derive 由 `Debug, Clone, PartialEq, Eq, Default` 改为 `Debug, Clone, Default`（事实帧不参与整帧深拷贝与逐值比较）；`to_data` 内 `FactFrame::from_query_result` 装入 fact；`analyze` 本地 DuckDB 分析产物 `fact: None`（无原始 batches 降级档）；`entry_from` 返回 `(ResultEntry, Option<Arc<FactFrame>>)` 元组入槽；五处入槽映射同步；失败 Append 分支随失败回执丢弃 fact；3 例入槽 / 合并 / 形状不匹配单测；`QueryRunner` trait 签名不变 | `crates/editor/src/execution.rs:488`（derive）、`:489`（struct）、`:510`（`fact` 字段）；`crates/editor/src/cell.rs` `CellOutcome` 连带去 `PartialEq, Eq`；`crates/workbench/src/services/editor_exec.rs:1308`（`to_data`）、`:1309`（构造 fact）、`:828`（`analyze`）、`:860`（`fact: None`）；`crates/editor/src/view/host.rs:5867`（解构）、`:5896`（`push(entry, placement, fact)`）、`:7466`（`entry_from`） |
+| A4 | 偏好 `fact_storage: Auto(默认) / Memory / Table` 注册；分流纯函数 `storage_choice(dual_bytes, pref, current) -> FactTier` + `dual_estimate`；高低水位滞回；强制档优先于 Auto；5 例分流单测 + 3 例偏好持久化 / 映射 / 未知值拒绝单测；设置页「结果集面板 · 事实档载体」，`NextUse` 生效方式（下次触发物化才读，无需即时通知重绘） | `crates/shared/src/fact.rs:242`（`StoragePref`）、`:256`（`CurrentTier`）、`:264`（`FactTier`）、`:274`（8 MiB 上界）、`:278`（3 MiB 滞回线）、`:283`（×5 系数）、`:286`（`dual_estimate`）、`:303`（`storage_choice`）；`crates/settings/src/model.rs:53`（顶层分节）、`:136`（`FactStoragePref`）；`crates/settings/src/registry.rs:144` / `:183` / `:224` / `:858`；`crates/settings/src/lib.rs:280`（读）、`:543`（写） |
+
+**分流规则（`storage_choice`，方案 §4.1 / §8.3）**
+
+- 强制 `Memory` → `InMemory`（不看水位）；强制 `Table` → `OnDuckDb`（不看水位）。
+- `Auto` + 当前 `InMemory`：估算 < 低水位 → `None` 回落；低–高区间保持 `InMemory`（滞回防抖动）；超 高水位 → `OnDuckDb`。
+- `Auto` + 当前 `None`（新结果集 / 已降级）：估算 ≤ 高水位 → `InMemory`；超 高水位 → `OnDuckDb`。
+- `Auto` + 当前 `OnDuckDb`：保持 `OnDuckDb`（表档不回读 Rust 堆；回落内存档属 B 批细化）。
+- 端点含端点：等于低水位保持内存档、等于高水位保持内存档。
+
+**A 批边界（明确不做，B / C / D / E 开工前不越界）**
+
+- `OnDuckDb` 变体 A 批留空壳不构造、不接线；**A 批未接触发物化调用点**：`storage_choice` 的消费（进分析 / 带类型导出 / IronCalc 快照时读偏好、估双份、按规则构造 `InMemory` 候选或 `OnDuckDb` 意向）属 B 批跳 5 路径；A 批 Auto 超水位时不构造事实档，按 `None` 降级处理。
+- 网格渲染、CSV / JSON / INSERT / SQL Updates / WHERE 文本导出不触发物化；渲染路径一行不改。
+- 不扩第一跳 Arrow 类型族、不修驱动硬错（E 阶段 engine 跨线 backlog，本线不擅动 `crates/engine/src/driver/native/*`）；不引入 polars；不做 mmap 文件档 / 后台异步物化 / 后台预取；表档不随机读回 Rust 堆。
+- 不改编辑器状态栏归属（另一会话任务）；不碰 insight / plugin / 编辑器文档内核。
+
+**测试基线（A5 回归，2026-10-26）**
+
+- `cargo test -p rds-shared --lib` = **33 passed / 0 failed**（A1 八例 + 探针 + A4 五例分流）。
+- `cargo test -p rds-settings --lib` = **35 passed / 0 failed**（契约护栏 `every_model_leaf_is_registered` / `every_registered_key_exists_in_the_model` / `registered_defaults_match_the_model` / `sections_are_contiguous` / `every_registered_key_has_a_matching_slot` / `page_rows_are_scalar_and_writable` 全绿 + A4 三例偏好）。
+- `cargo test -p rds-result-panel --lib` = **171 passed / 0 failed**（持平 A3 基线；A4 未动面板生产代码）。
+- `cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**（1 ignored = 需本机 ipykernel 的 python notebook 用例；3 个 warning——`signature_view` unused import、`apply_filter` / `clear_filter` never used、`substr_sig` never used——均属并行线存量，非本线符号）。
+- `cargo check -p rds-workbench --lib --jobs 2` = **Finished，0 error / 0 warning**。
+- `cargo check -p rds-workbench --tests --jobs 2` = **Finished，0 error**；仅 1 个存量 warning `unused import: AppContext`（`crates/workbench/tests/history_editor_entry.rs:11:16`，并行线存量，本线只补 `push` 第三参 `None`，未动 import）；整包测试未随 A5 执行（insight 线工作区状态以 lib / tests 编译通过为准，不绕过阻塞项）。
+
 ## 8. 协作纪律
 
 - 提交只 add 表格模块相关文件；并行线未提交改动（`insight/*`、`plugin/*`、
-  `crates/app/src/main.rs`、`crates/settings/*`、`workbench/src/components/insight_actions.rs`、
+  `crates/app/src/main.rs`、`workbench/src/components/insight_actions.rs`、
   `README`、`docs/architecture/connection/execution-context-model.md`、
-  `Cargo.lock` 等）不随本模块提交。
-- 回归以 `cargo test -p rds-result-panel -p rds-editor --lib` 为准；
-  整包（`rds-workbench`）若被 insight 线未提交编译错误阻塞，如实上报而非绕过。
+  `Cargo.lock` 等）不随本模块提交。`crates/settings/*` 自 A4 起本线合法持有
+  `result_panel.fact_storage` 偏好注册 hunk（model / registry / lib 三文件），提交时只摘
+  本线 hunk，settings 内其余并行线改动不随本线提交。
+- 回归以 `cargo test -p rds-shared -p rds-settings -p rds-result-panel -p rds-editor --lib`
+  为准；整包（`rds-workbench`）若被 insight 线未提交编译错误阻塞，如实上报而非绕过。
 - 注释 / commit 信息简体中文（`feat:` / `fix:` / `refactor:` 前缀）。

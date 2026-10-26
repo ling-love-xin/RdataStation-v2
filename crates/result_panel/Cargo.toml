@@ -29,3 +29,5 @@ serde_json.workspace = true
 paths = { workspace = true, features = ["test-support"] }
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
 gpui-kit = { workspace = true, features = ["test-support"] }
+# 仅测试 fixture：事实档入槽 / 分段合并用例需要直接构造 Arrow 批；生产依赖图不引 arrow
+arrow.workspace = true

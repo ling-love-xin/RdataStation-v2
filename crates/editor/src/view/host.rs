@@ -5864,7 +5864,7 @@ impl EditorHostPanel {
             let placement = outcome.placement;
             // 【B10】在途标题按位弹出
             let title = self.pending_labels.pop_front().flatten();
-            let mut entry = entry_from(outcome);
+            let (mut entry, fact) = entry_from(outcome);
             if let Some(title) = title {
                 entry = entry.with_title(title);
             }
@@ -5893,7 +5893,7 @@ impl EditorHostPanel {
                 }
             }
             self.shared
-                .update_results(|store| store.push(entry, placement));
+                .update_results(|store| store.push(entry, placement, fact));
         }
         if mine_arrived > 0 {
             self.pending = self.pending.saturating_sub(mine_arrived);
@@ -7459,7 +7459,14 @@ fn annotate_columns(panel: &EditorHostPanel, entry: &ResultEntry) -> Vec<Option<
         .column_annotations_for(Some(connection), entry.channel, &entry.sql, entry.columns.len())
 }
 
-fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connection = outcome.connection.clone();
+/// 执行结论 → 结果条目；同时回执事实帧候选（方案跳 1：无 batches 回执为 `None`）。
+///
+/// 事实档不挂进 [`ResultEntry`]（避免连带进它的 `Clone` / 等价比较与深拷贝），由入槽点
+/// 单独传给 `ResultStore::push` 落到平行事实槽位。
+fn entry_from(
+    outcome: execution::ExecOutcome,
+) -> (ResultEntry, Option<std::sync::Arc<::shared::FactFrame>>) {
+    let connection = outcome.connection.clone();
     // 【B13】通道也随结论回来：标签星徽标与“切通道后标灰”靠它
     let channel = outcome.channel;
     // 【B15】血缘：失败也照样带（“这句话是下发筛选发出去的”对排查同样有用）
@@ -7467,28 +7474,35 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {    let connectio
     // 【A2】形成原料（下发筛选 / 排序下发）：刷新 ⟳ 按它重查，保持形态
     let pushdown = outcome.pushdown;
     match outcome.result {
-        Ok(data) => ResultEntry::success(
-            outcome.document,
-            outcome.sql,
-            data.elapsed_ms,
-            data.truncated,
-            data.columns,
-            data.rows,
-        )
-        .with_affected_rows(data.affected_rows)
-        .with_has_more(data.has_more)
-        // 【Q6】列类型随结果一起进结果集（空 = 驱动报不出 → 网格走“无类型档”）
-        .with_column_types(&data.column_types)
-        .with_connection(connection)
-        .with_channel(channel)
-        .with_analysis(outcome.analysis)
-        .with_lineage(lineage)
-        .with_pushdown(pushdown),
-        Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+        Ok(data) => {
+            let fact = data.fact;
+            let entry = ResultEntry::success(
+                outcome.document,
+                outcome.sql,
+                data.elapsed_ms,
+                data.truncated,
+                data.columns,
+                data.rows,
+            )
+            .with_affected_rows(data.affected_rows)
+            .with_has_more(data.has_more)
+            // 【Q6】列类型随结果一起进结果集（空 = 驱动报不出 → 网格走“无类型档”）
+            .with_column_types(&data.column_types)
             .with_connection(connection)
             .with_channel(channel)
+            .with_analysis(outcome.analysis)
             .with_lineage(lineage)
-            .with_pushdown(pushdown),
+            .with_pushdown(pushdown);
+            (entry, fact)
+        }
+        Err(error) => {
+            let entry = ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+                .with_connection(connection)
+                .with_channel(channel)
+                .with_lineage(lineage)
+                .with_pushdown(pushdown);
+            (entry, None)
+        }
     }
 }
 

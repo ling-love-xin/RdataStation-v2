@@ -187,7 +187,7 @@ fn the_editor_entry_re_samples_on_the_active_connection(cx: &mut TestAppContext)
                 )
                 .with_channel(channel),
             };
-            editor_shared.update_results(|store| store.push(entry, outcome.placement));
+            editor_shared.update_results(|store| store.push(entry, outcome.placement, None));
         }
         if let Some(entry) = editor_shared
             .results_active(&document)

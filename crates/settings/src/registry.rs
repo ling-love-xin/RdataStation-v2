@@ -139,6 +139,9 @@ pub enum Slot {
     InsightFullScanConfirm,
     InsightWorkSetLimit,
     InsightStatusUsage,
+    /// 结果集事实档载体偏好（auto / memory / table；分流纯函数在 `shared::fact`，
+    /// 触发物化路径 B 批接通消费）。
+    ResultPanelFactStorage,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -177,6 +180,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "insight.full_scan_confirm" => Slot::InsightFullScanConfirm,
         "insight.work_set_limit" => Slot::InsightWorkSetLimit,
         "insight.status_usage" => Slot::InsightStatusUsage,
+        "result_panel.fact_storage" => Slot::ResultPanelFactStorage,
         _ => return None,
     })
 }
@@ -217,6 +221,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::ScratchpadToolbar => KindTag::Composite,
         Slot::InsightMemoryLimitMb | Slot::InsightWorkSetLimit => KindTag::Number,
         Slot::InsightFullScanConfirm | Slot::InsightStatusUsage => KindTag::Bool,
+        Slot::ResultPanelFactStorage => KindTag::Enum,
     }
 }
 
@@ -847,6 +852,24 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
         consumer: "crates/workbench/src/components/insight_actions.rs::apply_insight_prefs（宿主推送）+ crates/insight/src/workspace.rs（轮询与渲染）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "result_panel.fact_storage",
+        section: "result_panel",
+        section_label: "结果集面板",
+        label: "事实档载体",
+        hint: "进分析 / 带类型导出 / 表格快照时事实数据的存放方式：自动按估算水位分流（8 MiB 上界 / 3 MiB 滞回线）；强制内存档常驻 Rust 堆；强制表档进 DuckDB 常驻表（表档 B 批接通，未接通时按降级档处理）；网格渲染与文本导出不受此偏好影响",
+        kind: SettingKind::Enum(&[
+            ("auto", "自动"),
+            ("memory", "内存档"),
+            ("table", "表档"),
+        ]),
+        presets: &[],
+        default_json: "\"auto\"",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "crates/shared/src/fact.rs::storage_choice / dual_estimate（分流纯函数）；B 批由 workbench 装配层在触发物化路径读取本偏好并映射到 shared::StoragePref",
         composite: false,
     },
 ];

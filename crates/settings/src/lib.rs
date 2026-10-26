@@ -24,8 +24,8 @@ pub mod settings_page;
 pub use workbench_shell::product_tokens;
 
 use crate::model::{
-    AppearanceMode, ConnectionDefaults, LogMinLevel, NavigatorFilters, ObjectMaskRule,
-    SavedView, Settings,
+    AppearanceMode, ConnectionDefaults, FactStoragePref, LogMinLevel, NavigatorFilters,
+    ObjectMaskRule, SavedView, Settings,
 };
 use crate::registry::{SettingValue, Slot};
 
@@ -277,6 +277,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::InsightWorkSetLimit => SettingValue::Number(settings.insight.work_set_limit as f64),
         Slot::InsightStatusUsage => SettingValue::Bool(settings.insight.status_usage),
+        Slot::ResultPanelFactStorage => SettingValue::Text(
+            settings.result_panel.fact_storage.as_str().to_string(),
+        ),
     })
 }
 
@@ -536,6 +539,21 @@ impl SettingsService {
                     return false;
                 };
                 Self::set_status_usage(on, cx);
+            }
+            Slot::ResultPanelFactStorage => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                // 落盘值只认登记表枚举三档；未知值拒绝（设置文件被手改坏时不让写入）。
+                let Some(pref) = FactStoragePref::parse(text) else {
+                    return false;
+                };
+                {
+                    let settings = cx.global_mut::<Settings>();
+                    settings.result_panel.fact_storage = pref;
+                }
+                persist(&cx.global::<Settings>().clone());
+                // NextUse：下次触发物化路径读取；渲染与文本导出不读本偏好，无需通知重绘。
             }
         }
         true

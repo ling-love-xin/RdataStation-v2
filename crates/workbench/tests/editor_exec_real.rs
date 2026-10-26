@@ -234,7 +234,7 @@ fn collect_with_snapshots(
                 .with_channel(channel),
             };
             // 落位来自结论自己（"结果放哪"是执行时的语义，不是调用方事后猜的）
-            shared.update_results(|store| store.push(entry.clone(), outcome.placement));
+            shared.update_results(|store| store.push(entry.clone(), outcome.placement, None));
             collected.push((entry, transaction));
         }
         if collected.len() >= expected {
