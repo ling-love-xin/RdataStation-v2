@@ -40,21 +40,61 @@ impl DialectSpi for MysqlDialect {
             )),
             ObjectKind::Sequence => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "序列重命名（MySQL 自增无独立序列对象）",
             )),
             ObjectKind::Trigger => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "触发器重命名（MySQL 无独立触发器改名语句）",
             )),
             ObjectKind::Routine => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "例程重命名需函数签名，暂不支持",
             )),
             other => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 format!("该类型 {other:?} 暂不支持对象重命名"),
             )),
         }
+    }
+
+    fn drop_sql(
+        &self,
+        kind: ObjectKind,
+        schema: Option<&str>,
+        name: &str,
+        _parent: Option<&str>,
+    ) -> Result<String, CoreError> {
+        // 库即 Schema：schema 非空时拼 `schema.name`。
+        let qual = |n: &str| match schema {
+            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(n)),
+            _ => self.quote_ident(n),
+        };
+        match kind {
+            ObjectKind::Table => Ok(format!("DROP TABLE {}", qual(name))),
+            ObjectKind::View => Ok(format!("DROP VIEW {}", qual(name))),
+            ObjectKind::Sequence => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                "删除序列（MySQL 自增无独立序列对象）",
+            )),
+            other => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                format!("该类型 {other:?} 暂不支持删除"),
+            )),
+        }
+    }
+
+    fn truncate_table_sql(&self, schema: Option<&str>, name: &str) -> Result<String, CoreError> {
+        let qual = match schema {
+            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(name)),
+            _ => self.quote_ident(name),
+        };
+        Ok(format!("TRUNCATE TABLE {qual}"))
     }
 
     /// 目录级行估计：`information_schema.TABLES.TABLE_ROWS`（InnoDB 为优化器估计、
@@ -145,5 +185,57 @@ mod tests {
         assert!(sql.contains("'warehouse'"), "{sql}");
         let escaped = d.table_size_sql("it's").unwrap();
         assert!(escaped.contains("'it''s'"), "{escaped}");
+    }
+
+    #[test]
+    fn drop_table_and_view_use_backtick_schema_prefix() {
+        let d = MysqlDialect;
+        assert_eq!(
+            d.drop_sql(ObjectKind::Table, Some("biz"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE `biz`.`t_user`"
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::View, Some("biz"), "v_active", None)
+                .unwrap(),
+            "DROP VIEW `biz`.`v_active`"
+        );
+    }
+
+    #[test]
+    fn drop_rejects_sequence_and_non_drop_types() {
+        let d = MysqlDialect;
+        let seq = d
+            .drop_sql(ObjectKind::Sequence, Some("biz"), "seq_id", None)
+            .expect_err("MySQL 无独立序列对象，应拒绝删除序列");
+        assert!(seq.to_string().contains("序列"), "{seq}");
+        for kind in [ObjectKind::Routine, ObjectKind::Trigger, ObjectKind::Schema] {
+            assert!(
+                d.drop_sql(kind, Some("biz"), "x", None).is_err(),
+                "{kind:?} 删除应拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn truncate_table_uses_backtick_schema_prefix() {
+        let d = MysqlDialect;
+        assert_eq!(
+            d.truncate_table_sql(Some("biz"), "t_user").unwrap(),
+            "TRUNCATE TABLE `biz`.`t_user`"
+        );
+        assert_eq!(
+            d.truncate_table_sql(None, "t_user").unwrap(),
+            "TRUNCATE TABLE `t_user`"
+        );
+    }
+
+    #[test]
+    fn drop_escapes_embedded_backticks() {
+        let d = MysqlDialect;
+        let sql = d
+            .drop_sql(ObjectKind::Table, Some("biz"), "o`rder`s", None)
+            .unwrap();
+        assert_eq!(sql, "DROP TABLE `biz`.`o``rder``s`");
     }
 }

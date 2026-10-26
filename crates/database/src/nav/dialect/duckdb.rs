@@ -37,17 +37,43 @@ impl DialectSpi for DuckdbDialect {
             )),
             ObjectKind::Trigger => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "触发器重命名（DuckDB 不支持触发器改名）",
             )),
             ObjectKind::Routine => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "例程重命名需函数签名，暂不支持",
             )),
             other => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 format!("该类型 {other:?} 暂不支持对象重命名"),
             )),
         }
+    }
+
+    fn drop_sql(
+        &self,
+        kind: ObjectKind,
+        _schema: Option<&str>,
+        name: &str,
+        _parent: Option<&str>,
+    ) -> Result<String, CoreError> {
+        match kind {
+            ObjectKind::Table => Ok(format!("DROP TABLE {}", self.quote_ident(name))),
+            ObjectKind::View => Ok(format!("DROP VIEW {}", self.quote_ident(name))),
+            ObjectKind::Sequence => Ok(format!("DROP SEQUENCE {}", self.quote_ident(name))),
+            other => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                format!("该类型 {other:?} 暂不支持删除"),
+            )),
+        }
+    }
+
+    fn truncate_table_sql(&self, _schema: Option<&str>, name: &str) -> Result<String, CoreError> {
+        Ok(format!("TRUNCATE TABLE {}", self.quote_ident(name)))
     }
     // 行估计：None（DuckDB 目录统计口径另案，不发真 COUNT）。
 }
@@ -94,5 +120,44 @@ mod tests {
     fn row_estimate_not_supported() {
         assert!(DuckdbDialect.row_estimate_sql("main").is_none());
         assert!(DuckdbDialect.table_size_sql("main").is_none());
+    }
+
+    #[test]
+    fn drop_table_view_sequence_omit_schema_prefix() {
+        let d = DuckdbDialect;
+        // DuckDB 固定 main：schema 段不拼前缀（等价 rename 现状口径）。
+        assert_eq!(
+            d.drop_sql(ObjectKind::Table, Some("main"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE \"t_user\""
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::View, None, "v_active", None).unwrap(),
+            "DROP VIEW \"v_active\""
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::Sequence, None, "seq_id", None).unwrap(),
+            "DROP SEQUENCE \"seq_id\""
+        );
+    }
+
+    #[test]
+    fn drop_rejects_non_drop_types() {
+        let d = DuckdbDialect;
+        for kind in [ObjectKind::Routine, ObjectKind::Trigger, ObjectKind::Schema] {
+            assert!(
+                d.drop_sql(kind, None, "x", None).is_err(),
+                "{kind:?} 删除应拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn truncate_table_omits_schema_prefix() {
+        let d = DuckdbDialect;
+        assert_eq!(
+            d.truncate_table_sql(Some("main"), "t_user").unwrap(),
+            "TRUNCATE TABLE \"t_user\""
+        );
     }
 }

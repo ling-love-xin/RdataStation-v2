@@ -9,8 +9,8 @@
 //! - 本模块只承载**纯字符串拼装**：无 I/O、无异步、不持连接状态（与 B2 能力层同一口径）；
 //! - 展示用无引号中性限定名（`sql_gen::qualified_name`）属通用展示层，不进本 SPI；
 //! - DML 模板、`CREATE TABLE` 合成器属通用模板层，不进本 SPI；
-//! - `drop_sql` / `truncate_sql` / `routine_source_sql` / `view_data_sql` 现状未实现，
-//!   本批不预留签名（拍板 Q3-A）；B6 落码 Drop / Truncate、D24 补例程签名时按需补 trait 方法。
+//! - `drop_sql` / `truncate_table_sql` 在 B6 落地（删除表 / 视图 / 序列、清空表）；
+//!   `routine_source_sql` / `view_data_sql` 仍未实现，D24 补例程签名时按需补 trait 方法。
 //!
 //! ## 分派键
 //!
@@ -77,6 +77,23 @@ pub trait DialectSpi: Send + Sync {
         new: &str,
     ) -> Result<String, CoreError>;
 
+    /// 删除对象 DDL（表 / 视图 / 序列）。不支持的类别 / 族返回 `Err(CoreError::Driver)`，
+    /// 不生成半截 SQL；标识符引号由各 provider 经 `quote_ident` 转义。
+    ///
+    /// - `schema`：所属模式（无独立 Schema 层的族收到 `None` 或空串，provider 不拼前缀）；
+    /// - `parent`：父对象限定名预留位（当前 Drop 族 v1 不消费，结构保留供触发器等扩展）。
+    fn drop_sql(
+        &self,
+        kind: ObjectKind,
+        schema: Option<&str>,
+        name: &str,
+        parent: Option<&str>,
+    ) -> Result<String, CoreError>;
+
+    /// 清空表 DDL（仅 Table）。SQLite 无 `TRUNCATE` 语句，provider 返回 `DELETE FROM` 形态；
+    /// 非表类型 / 不支持的族返回 `Err`。
+    fn truncate_table_sql(&self, schema: Option<&str>, name: &str) -> Result<String, CoreError>;
+
     /// 目录级行估计 SQL；`None` = 本族不做后台估计（不发真 `COUNT(*)`，大库逐表 COUNT
     /// 秒级以上，与「名单先上屏」目标冲突）。schema 名单引号转义由 provider 负责。
     fn row_estimate_sql(&self, schema: &str) -> Option<String> {
@@ -94,11 +111,16 @@ pub trait DialectSpi: Send + Sync {
     }
 }
 
-/// 构造「驱动不支持」错误（provider 共用；operation 固定 `rename_sql`，source 写族特异原因）。
-pub(crate) fn unsupported_err(family: &str, source: impl Into<String>) -> CoreError {
+/// 构造「驱动不支持」错误（provider 共用；`operation` 传当前 trait 方法名，便于错误定位，
+/// source 写族特异原因）。
+pub(crate) fn unsupported_err(
+    family: &str,
+    operation: &str,
+    source: impl Into<String>,
+) -> CoreError {
     CoreError::database(DatabaseError::Driver {
         db_type: family.to_string(),
-        operation: "rename_sql".to_string(),
+        operation: operation.to_string(),
         source: source.into(),
     })
 }
@@ -135,7 +157,7 @@ impl DialectRegistry {
     }
 }
 
-/// 未知族回退方言：双引号策略；不提供重命名 / 行估计（安全网，不生成方言错误语句）。
+/// 未知族回退方言：双引号策略；不提供重命名 / 删除 / 清空 / 行估计（安全网，不生成方言错误语句）。
 struct FallbackDialect;
 
 impl DialectSpi for FallbackDialect {
@@ -153,7 +175,30 @@ impl DialectSpi for FallbackDialect {
     ) -> Result<String, CoreError> {
         Err(unsupported_err(
             "fallback",
+            "rename_sql",
             "该驱动暂不支持对象重命名",
+        ))
+    }
+
+    fn drop_sql(
+        &self,
+        _kind: ObjectKind,
+        _schema: Option<&str>,
+        _name: &str,
+        _parent: Option<&str>,
+    ) -> Result<String, CoreError> {
+        Err(unsupported_err(
+            "fallback",
+            "drop_sql",
+            "该驱动暂不支持删除对象",
+        ))
+    }
+
+    fn truncate_table_sql(&self, _schema: Option<&str>, _name: &str) -> Result<String, CoreError> {
+        Err(unsupported_err(
+            "fallback",
+            "truncate_table_sql",
+            "该驱动暂不支持清空表",
         ))
     }
 }
@@ -195,7 +240,7 @@ mod tests {
         assert_eq!(dialect_of("redis").family(), "fallback");
     }
 
-    /// fallback 方言：双引号策略；重命名 / 行估计一律拒绝或 None。
+    /// fallback 方言：双引号策略；重命名 / 删除 / 清空 / 行估计一律拒绝或 None。
     #[test]
     fn fallback_dialect_safe_defaults() {
         let dialect = dialect_of("redis");
@@ -203,6 +248,12 @@ mod tests {
         assert_eq!(dialect.qualified_sql("", "", "orders"), "\"orders\"");
         assert!(dialect
             .rename_sql(ObjectKind::Table, None, "t", None, "t2")
+            .is_err());
+        assert!(dialect
+            .drop_sql(ObjectKind::Table, None, "t", None)
+            .is_err());
+        assert!(dialect
+            .truncate_table_sql(None, "t")
             .is_err());
         assert!(dialect.row_estimate_sql("main").is_none());
         assert!(dialect.table_size_sql("main").is_none());

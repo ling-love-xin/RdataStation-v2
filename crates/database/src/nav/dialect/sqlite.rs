@@ -34,21 +34,53 @@ impl DialectSpi for SqliteDialect {
             )),
             ObjectKind::Sequence => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "序列重命名（SQLite 无序列概念）",
             )),
             ObjectKind::Trigger => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "触发器重命名（SQLite 触发器依附父表，无独立改名语句）",
             )),
             ObjectKind::Routine => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "例程重命名需函数签名，暂不支持",
             )),
             other => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 format!("该类型 {other:?} 暂不支持对象重命名"),
             )),
         }
+    }
+
+    fn drop_sql(
+        &self,
+        kind: ObjectKind,
+        _schema: Option<&str>,
+        name: &str,
+        _parent: Option<&str>,
+    ) -> Result<String, CoreError> {
+        match kind {
+            ObjectKind::Table => Ok(format!("DROP TABLE {}", self.quote_ident(name))),
+            ObjectKind::View => Ok(format!("DROP VIEW {}", self.quote_ident(name))),
+            ObjectKind::Sequence => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                "删除序列（SQLite 无序列概念）",
+            )),
+            other => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                format!("该类型 {other:?} 暂不支持删除"),
+            )),
+        }
+    }
+
+    fn truncate_table_sql(&self, _schema: Option<&str>, name: &str) -> Result<String, CoreError> {
+        // SQLite 无 TRUNCATE 语句：清空表走 DELETE FROM；VACUUM 回收空间 v1 不做（§7.1 挂账）。
+        Ok(format!("DELETE FROM {}", self.quote_ident(name)))
     }
     // 行估计：None（SQLite 无目录统计视图，不发真 COUNT）。
 }
@@ -99,5 +131,45 @@ mod tests {
     fn row_estimate_not_supported() {
         assert!(SqliteDialect.row_estimate_sql("main").is_none());
         assert!(SqliteDialect.table_size_sql("main").is_none());
+    }
+
+    #[test]
+    fn drop_table_and_view_omit_schema_prefix() {
+        let d = SqliteDialect;
+        // SQLite 单库：即使上层传入 schema 段也不拼前缀（等价 rename 现状口径）。
+        assert_eq!(
+            d.drop_sql(ObjectKind::Table, Some("main"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE \"t_user\""
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::View, None, "v_active", None).unwrap(),
+            "DROP VIEW \"v_active\""
+        );
+    }
+
+    #[test]
+    fn drop_rejects_sequence_and_non_drop_types() {
+        let d = SqliteDialect;
+        let seq = d
+            .drop_sql(ObjectKind::Sequence, None, "seq_id", None)
+            .expect_err("SQLite 无序列概念，应拒绝删除序列");
+        assert!(seq.to_string().contains("序列"), "{seq}");
+        for kind in [ObjectKind::Routine, ObjectKind::Trigger, ObjectKind::Schema] {
+            assert!(
+                d.drop_sql(kind, None, "x", None).is_err(),
+                "{kind:?} 删除应拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn truncate_uses_delete_from_without_schema_prefix() {
+        let d = SqliteDialect;
+        // SQLite 无 TRUNCATE 语句：清空表走 DELETE FROM，不拼 schema 前缀。
+        assert_eq!(
+            d.truncate_table_sql(Some("main"), "t_user").unwrap(),
+            "DELETE FROM \"t_user\""
+        );
     }
 }

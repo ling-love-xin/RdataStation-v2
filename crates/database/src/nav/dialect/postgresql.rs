@@ -44,6 +44,7 @@ impl DialectSpi for PostgresqlDialect {
                 let Some(parent) = parent else {
                     return Err(unsupported_err(
                         self.family(),
+                        "rename_sql",
                         "触发器重命名需要父表限定名（parent 缺失）",
                     ));
                 };
@@ -56,13 +57,47 @@ impl DialectSpi for PostgresqlDialect {
             // 例程改名需函数签名（`ALTER FUNCTION name(args) RENAME TO`），参数签名采集挂 D24 后续。
             ObjectKind::Routine => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 "例程重命名需函数签名（PG `ALTER FUNCTION name(args) RENAME TO`），暂不支持",
             )),
             other => Err(unsupported_err(
                 self.family(),
+                "rename_sql",
                 format!("该类型 {other:?} 暂不支持对象重命名"),
             )),
         }
+    }
+
+    fn drop_sql(
+        &self,
+        kind: ObjectKind,
+        schema: Option<&str>,
+        name: &str,
+        _parent: Option<&str>,
+    ) -> Result<String, CoreError> {
+        // PG 有独立 Schema 层：schema 非空时拼 `schema.name`。
+        let qual = |n: &str| match schema {
+            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(n)),
+            _ => self.quote_ident(n),
+        };
+        match kind {
+            ObjectKind::Table => Ok(format!("DROP TABLE {}", qual(name))),
+            ObjectKind::View => Ok(format!("DROP VIEW {}", qual(name))),
+            ObjectKind::Sequence => Ok(format!("DROP SEQUENCE {}", qual(name))),
+            other => Err(unsupported_err(
+                self.family(),
+                "drop_sql",
+                format!("该类型 {other:?} 暂不支持删除"),
+            )),
+        }
+    }
+
+    fn truncate_table_sql(&self, schema: Option<&str>, name: &str) -> Result<String, CoreError> {
+        let qual = match schema {
+            Some(s) if !s.is_empty() => format!("{}.{}", self.quote_ident(s), self.quote_ident(name)),
+            _ => self.quote_ident(name),
+        };
+        Ok(format!("TRUNCATE TABLE {qual}"))
     }
 
     /// 目录级行估计：`pg_class.reltuples`，`relkind IN ('r','p')` 覆盖普通表与分区父表。
@@ -180,5 +215,67 @@ mod tests {
         assert!(sql.contains("'public'"), "{sql}");
         let escaped = d.table_size_sql("a'b").unwrap();
         assert!(escaped.contains("'a''b'"), "{escaped}");
+    }
+
+    #[test]
+    fn drop_table_view_sequence_with_schema_prefix() {
+        let d = PostgresqlDialect;
+        assert_eq!(
+            d.drop_sql(ObjectKind::Table, Some("public"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE \"public\".\"t_user\""
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::View, Some("public"), "v_active", None)
+                .unwrap(),
+            "DROP VIEW \"public\".\"v_active\""
+        );
+        assert_eq!(
+            d.drop_sql(ObjectKind::Sequence, Some("public"), "seq_id", None)
+                .unwrap(),
+            "DROP SEQUENCE \"public\".\"seq_id\""
+        );
+    }
+
+    #[test]
+    fn drop_rejects_non_drop_types() {
+        let d = PostgresqlDialect;
+        for kind in [
+            ObjectKind::Routine,
+            ObjectKind::Trigger,
+            ObjectKind::Schema,
+            ObjectKind::Column,
+        ] {
+            assert!(
+                d.drop_sql(kind, Some("public"), "x", None).is_err(),
+                "{kind:?} 删除应拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn truncate_table_uses_schema_prefix() {
+        let d = PostgresqlDialect;
+        assert_eq!(
+            d.truncate_table_sql(Some("public"), "t_user").unwrap(),
+            "TRUNCATE TABLE \"public\".\"t_user\""
+        );
+        assert_eq!(
+            d.truncate_table_sql(None, "t_user").unwrap(),
+            "TRUNCATE TABLE \"t_user\""
+        );
+    }
+
+    #[test]
+    fn drop_and_truncate_escape_embedded_quotes() {
+        let d = PostgresqlDialect;
+        let drop = d
+            .drop_sql(ObjectKind::Table, Some("public"), "we\"ird", None)
+            .unwrap();
+        assert_eq!(drop, "DROP TABLE \"public\".\"we\"\"ird\"");
+        let trunc = d
+            .truncate_table_sql(Some("public"), "we\"ird")
+            .unwrap();
+        assert_eq!(trunc, "TRUNCATE TABLE \"public\".\"we\"\"ird\"");
     }
 }

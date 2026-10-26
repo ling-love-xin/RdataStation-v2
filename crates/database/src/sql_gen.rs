@@ -6,6 +6,7 @@
 //! 设计对应 `docs/architecture/database/database-navigator-prototype-design.md` §6.2
 //! （表 / 视图右键「生成 INSERT/UPDATE/DELETE」）。
 
+use engine::ObjectKind;
 use shared::error::CoreError;
 
 /// 生成模板所需的列信息（只用名称与主键标记）。
@@ -383,6 +384,29 @@ pub fn rename_object_sql(
     dialect.rename_sql(object_kind, schema, name, parent, new_name)
 }
 
+/// 删除对象 DDL 薄包装（B6）：族特异 SQL 由 L3 方言 SPI 生成；本函数只按驱动分派并透传
+/// `ObjectKind`（菜单层已持有身份，不再做 `NavFolder → ObjectKind` 反推）。
+///
+/// 不支持的族 / 类别由 provider 返回显式 `Err(CoreError::Driver)`，不生成半截 SQL。
+pub fn drop_object_sql(
+    driver: &str,
+    kind: ObjectKind,
+    schema: Option<&str>,
+    name: &str,
+    parent: Option<&str>,
+) -> Result<String, CoreError> {
+    crate::nav::dialect_of(driver).drop_sql(kind, schema, name, parent)
+}
+
+/// 清空表 DDL 薄包装（B6）：仅 Table；SQLite 由 provider 返回 `DELETE FROM` 形态。
+pub fn truncate_table_sql(
+    driver: &str,
+    schema: Option<&str>,
+    name: &str,
+) -> Result<String, CoreError> {
+    crate::nav::dialect_of(driver).truncate_table_sql(schema, name)
+}
+
 /// S3-④ 行估计目录级统计 SQL（一次查询取整 schema 的表名 + 优化器估计）。
 ///
 /// 薄包装：族特异 SQL 已下沉 L3 方言 SPI（`crate::nav::dialect_of`）；本函数只按驱动
@@ -403,6 +427,7 @@ pub fn row_estimate_sql(driver: &str, schema: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::model::NavFolder;
+    use engine::ObjectKind;
 
     fn cols(spec: &[(&str, bool)]) -> Vec<DmlColumn> {
         spec.iter()
@@ -996,5 +1021,109 @@ mod tests {
         assert!(sql.contains("'it''s'"), "{sql}");
         let pg = super::row_estimate_sql("postgresql", "a'b").unwrap();
         assert!(pg.contains("'a''b'"), "{pg}");
+    }
+
+    // ── drop_object_sql / truncate_table_sql（B6 破坏性 DDL 薄包装）──────────────
+
+    /// PG：表 / 视图 / 序列均可删除，带 schema 双引号前缀；清空表 TRUNCATE TABLE。
+    #[test]
+    fn drop_and_truncate_postgresql_matrix() {
+        assert_eq!(
+            super::drop_object_sql(
+                "postgresql",
+                ObjectKind::Table,
+                Some("public"),
+                "t_user",
+                None
+            )
+            .unwrap(),
+            "DROP TABLE \"public\".\"t_user\""
+        );
+        assert_eq!(
+            super::drop_object_sql(
+                "postgresql",
+                ObjectKind::View,
+                Some("public"),
+                "v_active",
+                None
+            )
+            .unwrap(),
+            "DROP VIEW \"public\".\"v_active\""
+        );
+        assert_eq!(
+            super::drop_object_sql(
+                "postgresql",
+                ObjectKind::Sequence,
+                Some("public"),
+                "seq_id",
+                None
+            )
+            .unwrap(),
+            "DROP SEQUENCE \"public\".\"seq_id\""
+        );
+        assert_eq!(
+            super::truncate_table_sql("postgresql", Some("public"), "t_user").unwrap(),
+            "TRUNCATE TABLE \"public\".\"t_user\""
+        );
+        // 别名同源（与 rename / row_estimate 同一分派归一）。
+        assert!(super::drop_object_sql("postgres", ObjectKind::Table, None, "t", None).is_ok());
+    }
+
+    /// MySQL：表 / 视图可删（反引号前缀），序列无独立对象应拒绝；清空 TRUNCATE TABLE。
+    #[test]
+    fn drop_mysql_rejects_sequence() {
+        assert_eq!(
+            super::drop_object_sql("mysql", ObjectKind::Table, Some("biz"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE `biz`.`t_user`"
+        );
+        assert_eq!(
+            super::drop_object_sql("mysql", ObjectKind::View, Some("biz"), "v_active", None)
+                .unwrap(),
+            "DROP VIEW `biz`.`v_active`"
+        );
+        assert!(super::drop_object_sql("mysql", ObjectKind::Sequence, Some("biz"), "seq", None)
+            .is_err());
+        assert_eq!(
+            super::truncate_table_sql("mysql", Some("biz"), "t_user").unwrap(),
+            "TRUNCATE TABLE `biz`.`t_user`"
+        );
+    }
+
+    /// SQLite：表 / 视图可删、序列拒绝；清空表无 TRUNCATE，走 DELETE FROM，不拼 schema 前缀。
+    #[test]
+    fn sqlite_truncate_uses_delete_from_and_rejects_sequence() {
+        assert_eq!(
+            super::drop_object_sql("sqlite", ObjectKind::Table, Some("main"), "t_user", None)
+                .unwrap(),
+            "DROP TABLE \"t_user\""
+        );
+        assert!(super::drop_object_sql("sqlite", ObjectKind::Sequence, None, "seq", None)
+            .is_err());
+        assert_eq!(
+            super::truncate_table_sql("sqlite", Some("main"), "t_user").unwrap(),
+            "DELETE FROM \"t_user\""
+        );
+    }
+
+    /// DuckDB：表 / 视图 / 序列均可删；清空 TRUNCATE TABLE，不拼 schema 前缀。
+    #[test]
+    fn drop_and_truncate_duckdb_matrix() {
+        assert_eq!(
+            super::drop_object_sql("duckdb", ObjectKind::Sequence, None, "seq_id", None)
+                .unwrap(),
+            "DROP SEQUENCE \"seq_id\""
+        );
+        assert_eq!(
+            super::truncate_table_sql("duckdb", None, "t_user").unwrap(),
+            "TRUNCATE TABLE \"t_user\""
+        );
+    }
+
+    /// 未知驱动：删除与清空一律拒绝（fallback 安全网，不生成半截 SQL）。
+    #[test]
+    fn drop_and_truncate_unknown_driver_rejected() {
+        assert!(super::drop_object_sql("redis", ObjectKind::Table, None, "t", None).is_err());
+        assert!(super::truncate_table_sql("redis", None, "t").is_err());
     }
 }
