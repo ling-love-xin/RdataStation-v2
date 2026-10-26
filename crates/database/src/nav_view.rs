@@ -62,6 +62,7 @@ use crate::model::{
     PropertyRequest,
 };
 use crate::nav::actions::NavActionId;
+use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 use property::PropertyKind;
 use crate::nav_host::{NavFilters, NavHost, ObjectMaskRule};
@@ -266,6 +267,39 @@ pub(super) struct ObjectRenameCtx {
     pub parent: Option<String>,
 }
 
+/// 待提交破坏性动作（会话内运行时态，不落库；同 `object_rename_for` 范式）。
+///
+/// 身份字段缓存 `driver`（DDL 生成走 L3 `dialect_of(driver)`）与 `catalog`
+/// （提交执行 `execute_query(conn_id, catalog, ddl)` 第二入参）；`parent` 仅
+/// Column / Routine 类使用，Drop / Truncate 族 v1 不消费但结构保留（§2.14）。
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct StagedOp {
+    /// 树节点稳定 key（着色 / 去重 / 单项移除判据）。
+    pub key: String,
+    pub conn_id: String,
+    pub driver: String,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+    pub parent: Option<String>,
+    pub object_name: String,
+    pub object_kind: ObjectKind,
+    /// 仅 `NavOp::Drop` / `NavOp::Truncate`。
+    pub op: NavOp,
+    /// 提交执行失败回写的错误文案（`None` = 待提交；B6-5 执行路径回写，成功条目随后移除）。
+    pub error: Option<String>,
+}
+
+/// 入队结果（去重 / 冲突归并三态；事件路径据此决定是否弹确认 / 记日志）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EnqueueOutcome {
+    /// 新对象首次入队。
+    Added,
+    /// 同对象已入 Truncate、再入 Drop：原位替换为最终状态 Drop（顺序不挪）。
+    Replaced,
+    /// 幂等重复，或已入 Drop 再入 Truncate（drop 已含清空）：不改动集合。
+    Ignored,
+}
+
 #[derive(Default)]
 pub struct NavViewState {
     /// 来源筛选（None = 全部）。
@@ -416,6 +450,63 @@ pub struct NavViewState {
     /// S3-④ 行估计批次序号（运行时单调递增）：入队时 `+= 1` 随任务带走，回填时
     /// 小于当前值 = 过期批次（被刷新 / 重展开顶掉），丢弃不写回。
     estimate_seq: u64,
+    /// B6 staged 待提交破坏性动作（会话内运行时态，不落库；同 `object_rename_for` 范式）。
+    staged_ops: Vec<StagedOp>,
+}
+
+impl NavViewState {
+    /// 按树节点 key 查待提交条目（行级着色 / 菜单「从待提交移除」判定）。
+    pub(super) fn staged_lookup(&self, key: &str) -> Option<&StagedOp> {
+        self.staged_ops.iter().find(|op| op.key == key)
+    }
+
+    /// 待提交条目总数（面板头「提交 N」预算；空集不渲染按钮）。
+    pub(super) fn staged_count(&self) -> usize {
+        self.staged_ops.len()
+    }
+
+    /// 入队一个破坏性动作；按 §4.7 去重 / 冲突归并规则归并，返回结果三态。
+    ///
+    /// - 新对象首次入队 → `Added`；
+    /// - 同动作重复入队（幂等）→ `Ignored`；
+    /// - 已入 Drop 再入 Truncate → `Ignored`（drop 已含清空）；
+    /// - 已入 Truncate 再入 Drop → `Replaced`（同对象只保留最终状态 Drop，原位替换、顺序不挪）。
+    pub(super) fn enqueue_staged(&mut self, op: StagedOp) -> EnqueueOutcome {
+        let Some(index) = self.staged_ops.iter().position(|existing| existing.key == op.key)
+        else {
+            self.staged_ops.push(op);
+            return EnqueueOutcome::Added;
+        };
+        let existing_op = self.staged_ops[index].op;
+        match (existing_op, op.op) {
+            // 幂等：同一对象同一动作重复入队。
+            (a, b) if a == b => EnqueueOutcome::Ignored,
+            // 已 Drop 再入 Truncate：drop 已含清空，忽略。
+            (NavOp::Drop, NavOp::Truncate) => EnqueueOutcome::Ignored,
+            // 已 Truncate 再入 Drop：原位替换为最终状态 Drop。
+            (NavOp::Truncate, NavOp::Drop) => {
+                self.staged_ops[index] = op;
+                EnqueueOutcome::Replaced
+            }
+            // 其余组合理论上不出现（staged 只收 Drop / Truncate），保守忽略。
+            _ => EnqueueOutcome::Ignored,
+        }
+    }
+
+    /// 单项撤销：按 key 从待提交集合移除（菜单「从待提交移除」）。
+    pub(super) fn dismiss_staged(&mut self, key: &str) {
+        self.staged_ops.retain(|op| op.key != key);
+    }
+
+    /// 清空全部待提交条目（撤销全部；提交成功后由执行路径逐条移除失败保留项）。
+    pub(super) fn clear_staged(&mut self) {
+        self.staged_ops.clear();
+    }
+
+    /// 提交计划快照（克隆；不与内部集合共享可变引用，供 B6-5 分组后台执行）。
+    pub(super) fn commit_plan(&self) -> Vec<StagedOp> {
+        self.staged_ops.clone()
+    }
 }
 
 /// 附加 facet 种类（facet 弹层与持久化共用）。

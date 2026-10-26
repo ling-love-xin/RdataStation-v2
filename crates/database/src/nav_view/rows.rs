@@ -2734,6 +2734,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                                     });
                                 })
                         }),
+                        // B6-3 占位：DeleteObject / EmptyTable 已登记注册表与 staged 状态机，
+                        // 菜单接线（单项确认对话框 + 入队处理器）在 B6-4；本批返回 None 不渲染
+                        // 菜单项、不挂事件，不留可点击死入口。
+                        NavActionId::DeleteObject | NavActionId::EmptyTable => None,
                     };
                     if let Some(item) = item {
                         if prev_group.is_some() && prev_group != Some(d.group) {

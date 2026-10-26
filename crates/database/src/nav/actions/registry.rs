@@ -33,6 +33,10 @@ pub enum NavActionId {
     CopyQualified,
     /// 刷新元数据——容器刷新，连接前置但不按能力集收窄。
     RefreshProps,
+    /// 删除对象（B6 staged 缓冲：表 / 视图 / 序列）。
+    DeleteObject,
+    /// 清空表（B6 staged 缓冲：仅表，不删对象本身）。
+    EmptyTable,
 }
 
 /// 动作产出的靶类型（文档性声明；靶构造函数维持 `nav_view/primitives.rs` 现状，B4 不迁）。
@@ -59,7 +63,7 @@ pub enum ActionGroup {
     Generate,
     /// 对象本地操作：复制名称、复制限定名、刷新。
     Object,
-    /// 重命名 / 删除 / 清空（B6 staged 动作预留，本批不登记）。
+    /// 删除 / 清空（B6 staged 缓冲；rename 仍预留，不入本批）。
     Manage,
 }
 
@@ -84,7 +88,7 @@ pub struct NavActionDescriptor {
     pub target: TargetKind,
     /// 快捷键 GPUI Action id（可选；仅元数据声明，绑定注册仍集中 `app/main.rs`）。
     pub shortcut: Option<&'static str>,
-    /// 是否破坏性动作（B6 入 staged 缓冲；本批全部 `false`）。
+    /// 是否破坏性动作（B6 入 staged 缓冲；仅 DeleteObject / EmptyTable 为 true，其余 false）。
     pub destructive: bool,
 }
 
@@ -161,8 +165,7 @@ fn gate(op: Option<NavOp>, connected: bool, ops: &OpSet) -> bool {
     }
 }
 
-/// 静态登记表（B4 现状对象菜单十动作、十一条目；`CopyQualified` 从现状 `CopyName` 复用
-/// 枚举中拆出，与 L2 `NavOp::CopyQualified` 对齐）。
+/// 静态登记表（B4 对象菜单十一条目；B6 追加 DeleteObject / EmptyTable 两条 Manage 破坏性动作，共十三条）。
 static ENTRIES: &[NavActionDescriptor] = &[
     NavActionDescriptor {
         id: NavActionId::ShowProperties,
@@ -302,6 +305,30 @@ static ENTRIES: &[NavActionDescriptor] = &[
         shortcut: None,
         destructive: false,
     },
+    NavActionDescriptor {
+        id: NavActionId::DeleteObject,
+        slug: "nav.delete-object",
+        label: "删除…",
+        group: ActionGroup::Manage,
+        order: 0,
+        applies: &[ObjectKind::Table, ObjectKind::View, ObjectKind::Sequence],
+        op: Some(NavOp::Drop),
+        target: TargetKind::PropertyRef,
+        shortcut: None,
+        destructive: true,
+    },
+    NavActionDescriptor {
+        id: NavActionId::EmptyTable,
+        slug: "nav.empty-table",
+        label: "清空…",
+        group: ActionGroup::Manage,
+        order: 1,
+        applies: &[ObjectKind::Table],
+        op: Some(NavOp::Truncate),
+        target: TargetKind::PropertyRef,
+        shortcut: None,
+        destructive: true,
+    },
 ];
 
 /// 全局动作注册表（静态登记表，无需运行时注册；预留 `register` 供 B6 追加破坏性动作）。
@@ -323,7 +350,7 @@ mod tests {
     fn registry_covers_all_action_ids() {
         // 登记表覆盖 NavActionId 全部变体（新增变体漏登记会在编译期穷尽性之外被本测试钉住）。
         let all = registry().all();
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 13);
         for id in [
             NavActionId::ShowProperties,
             NavActionId::ViewData,
@@ -336,6 +363,8 @@ mod tests {
             NavActionId::CopyName,
             NavActionId::CopyQualified,
             NavActionId::RefreshProps,
+            NavActionId::DeleteObject,
+            NavActionId::EmptyTable,
         ] {
             assert!(all.iter().any(|d| d.id == id), "缺动作 {id:?}");
         }
@@ -374,6 +403,34 @@ mod tests {
             NavActionId::InsightSchema,
         ] {
             assert!(got.contains(&id), "视图应出现 {id:?}");
+        }
+    }
+
+    /// B6 破坏性动作类型白名单（§4.3）：表挂删除 + 清空；视图 / 序列仅删除；其余类型两条都不出现。
+    #[test]
+    fn destructive_actions_follow_applies_matrix() {
+        // 表：两条都出现。
+        let table = ids(&registry().entries_for(Some(ObjectKind::Table), true, &OpSet::EMPTY));
+        assert!(table.contains(&NavActionId::DeleteObject), "表应出现删除");
+        assert!(table.contains(&NavActionId::EmptyTable), "表应出现清空");
+        // 视图：仅删除，无清空。
+        let view = ids(&registry().entries_for(Some(ObjectKind::View), true, &OpSet::EMPTY));
+        assert!(view.contains(&NavActionId::DeleteObject), "视图应出现删除");
+        assert!(!view.contains(&NavActionId::EmptyTable), "视图不出现清空");
+        // 序列：仅删除，无清空。
+        let sequence = ids(&registry().entries_for(Some(ObjectKind::Sequence), true, &OpSet::EMPTY));
+        assert!(sequence.contains(&NavActionId::DeleteObject), "序列应出现删除");
+        assert!(!sequence.contains(&NavActionId::EmptyTable), "序列不出现清空");
+        // 例程 / 触发器 / 模式 / 列：两条都不出现。
+        for kind in [
+            ObjectKind::Routine,
+            ObjectKind::Trigger,
+            ObjectKind::Schema,
+            ObjectKind::Column,
+        ] {
+            let got = ids(&registry().entries_for(Some(kind), true, &OpSet::EMPTY));
+            assert!(!got.contains(&NavActionId::DeleteObject), "{kind:?} 不应出现删除");
+            assert!(!got.contains(&NavActionId::EmptyTable), "{kind:?} 不应出现清空");
         }
     }
 
@@ -465,6 +522,17 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_gates_destructive_actions_explicitly() {
+        // B6：删除 / 清空属回源破坏性动作，断连一律置灰（不依赖 `_` 兜底，显式钉死）。
+        let table_ops = family_ops("postgresql", Some(ObjectKind::Table));
+        let entries = registry().entries_for(Some(ObjectKind::Table), false, &table_ops);
+        let by_id: std::collections::HashMap<_, _> =
+            entries.iter().map(|e| (e.descriptor.id, e.enabled)).collect();
+        assert!(!by_id[&NavActionId::DeleteObject], "断连删除应置灰");
+        assert!(!by_id[&NavActionId::EmptyTable], "断连清空应置灰");
+    }
+
+    #[test]
     fn connected_source_actions_need_family_ops() {
         // 族不认识该类型 → 空能力集；即便已连接，回源动作仍置灰；本地动作恒可用；
         // 刷新只查连接态，不查能力集。
@@ -536,7 +604,7 @@ mod tests {
     fn entries_are_grouped_and_ordered() {
         let entries = registry().entries_for(Some(ObjectKind::Table), true, &OpSet::EMPTY);
         let groups: Vec<ActionGroup> = entries.iter().map(|e| e.descriptor.group).collect();
-        // 分组非递减：Primary → Generate → Object。
+        // 分组非递减：Primary → Generate → Object → Manage。
         for pair in groups.windows(2) {
             assert!(pair[0] <= pair[1], "分组顺序错乱：{:?} → {:?}", pair[0], pair[1]);
         }
@@ -545,6 +613,7 @@ mod tests {
             ActionGroup::Primary,
             ActionGroup::Generate,
             ActionGroup::Object,
+            ActionGroup::Manage,
         ] {
             let orders: Vec<u16> = entries
                 .iter()
@@ -564,6 +633,20 @@ mod tests {
         assert_eq!(props.shortcut, Some("NavOpenProperties"));
         for d in all.iter().filter(|d| d.id != NavActionId::ShowProperties) {
             assert!(d.shortcut.is_none(), "{:?} 不应登记快捷键", d.id);
+        }
+    }
+
+    #[test]
+    fn destructive_flag_true_only_for_delete_and_empty() {
+        // B6：仅删除对象 / 清空表两条为破坏性；其余十一条均为 false（回源读 / 本地动作不进 staged 族）。
+        let all = registry().all();
+        for d in all {
+            match d.id {
+                NavActionId::DeleteObject | NavActionId::EmptyTable => {
+                    assert!(d.destructive, "{:?} 应为破坏性", d.id);
+                }
+                _ => assert!(!d.destructive, "{:?} 不应为破坏性", d.id),
+            }
         }
     }
 }

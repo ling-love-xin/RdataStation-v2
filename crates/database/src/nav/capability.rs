@@ -147,16 +147,33 @@ pub fn family_ops(family_id: &str, kind: Option<ObjectKind>) -> OpSet {
         .add(NavOp::InsightPanel);
 
     match kind {
-        ObjectKind::Table | ObjectKind::View => {
+        ObjectKind::Table => {
             ops = ops
                 .add(NavOp::CopyQualified)
                 .add(NavOp::ViewData)
                 .add(NavOp::MockData)
                 .add(NavOp::Stats)
-                .add(NavOp::InsightSchema);
+                .add(NavOp::InsightSchema)
+                // B6 破坏性：表可删除、可清空（族档案未声明表的族在此之前已被安全网拦截）。
+                .add(NavOp::Drop)
+                .add(NavOp::Truncate);
+        }
+        ObjectKind::View => {
+            ops = ops
+                .add(NavOp::CopyQualified)
+                .add(NavOp::ViewData)
+                .add(NavOp::MockData)
+                .add(NavOp::Stats)
+                .add(NavOp::InsightSchema)
+                // 视图可删除；清空视图无意义，不挂 Truncate（§4.3 类型适用矩阵据此钉死）。
+                .add(NavOp::Drop);
         }
         ObjectKind::Routine | ObjectKind::Sequence | ObjectKind::Trigger => {
             ops = ops.add(NavOp::CopyQualified);
+            // 仅序列可删除；例程 / 触发器保持仅复制限定名（两位置均不出现破坏性位，§7.1 挂账依据）。
+            if kind == ObjectKind::Sequence {
+                ops = ops.add(NavOp::Drop);
+            }
         }
         _ => {}
     }
@@ -305,6 +322,35 @@ mod tests {
                 assert!(!ops.has(op), "{kind:?} 不应声明 {op:?}");
             }
         }
+    }
+
+    /// B6 破坏性能力位类型矩阵（§4.3）：表 Drop+Truncate；视图仅 Drop；序列仅 Drop；
+    /// 例程 / 触发器不挂破坏性位；族档案未声明的类型由安全网返回空集。
+    #[test]
+    fn destructive_ops_follow_type_matrix() {
+        // PG 表：删除 + 清空都声明。
+        let table = family_ops("postgresql", Some(ObjectKind::Table));
+        assert!(table.has(NavOp::Drop), "表应声明 Drop");
+        assert!(table.has(NavOp::Truncate), "表应声明 Truncate");
+        // PG 视图：仅 Drop，不挂 Truncate。
+        let view = family_ops("postgresql", Some(ObjectKind::View));
+        assert!(view.has(NavOp::Drop), "视图应声明 Drop");
+        assert!(!view.has(NavOp::Truncate), "视图不挂清空");
+        // PG 序列：仅 Drop，不挂 Truncate。
+        let sequence = family_ops("postgresql", Some(ObjectKind::Sequence));
+        assert!(sequence.has(NavOp::Drop), "序列应声明 Drop");
+        assert!(!sequence.has(NavOp::Truncate), "序列不挂清空");
+        // PG 例程 / 触发器：两个破坏性位都不出现。
+        for kind in [ObjectKind::Routine, ObjectKind::Trigger] {
+            let ops = family_ops("postgresql", Some(kind));
+            assert!(!ops.has(NavOp::Drop), "{kind:?} 不应声明 Drop");
+            assert!(!ops.has(NavOp::Truncate), "{kind:?} 不应声明 Truncate");
+        }
+        // MySQL 档案不声明序列：安全网空集，破坏性位自然不存在。
+        let mysql_sequence = family_ops("mysql", Some(ObjectKind::Sequence));
+        assert!(mysql_sequence.is_empty());
+        assert!(!mysql_sequence.has(NavOp::Drop));
+        assert!(!mysql_sequence.has(NavOp::Truncate));
     }
 
     #[test]

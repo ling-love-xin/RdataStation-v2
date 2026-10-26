@@ -7,10 +7,10 @@
 // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
 use super::nav_type_badge;
 use super::{
-    NavBadgeStatus, NavViewState, RevealTarget, insight_schema_target, key_in_subtree,
-    nav_badge_pulses, nav_data_target, nav_forget_attempt, nav_kind_icon, nav_load_is_retry,
-    nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time, nav_reorder,
-    nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
+    NavBadgeStatus, NavViewState, RevealTarget, StagedOp, EnqueueOutcome, insight_schema_target,
+    key_in_subtree, nav_badge_pulses, nav_data_target, nav_forget_attempt, nav_kind_icon,
+    nav_load_is_retry, nav_merge_page, nav_object_type_label, nav_order_members, nav_relative_time,
+    nav_reorder, nav_scope_tooltip, nav_search_hit_property, nav_search_hit_ref, nav_search_query_ready,
     nav_selection_is_persistable, nav_step, nav_type_label, nav_type_short_label, parse_nav_search,
     search_hit_row_id, search_hit_row_key,
 };
@@ -18,6 +18,7 @@ use crate::commands::NavClearSearch;
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, ObjectKind, ObjectRef,
 };
+use crate::nav::capability::NavOp;
 use property::PropertyKind;
 use crate::nav_rows::{NavRow, PlaceholderKind};
 use std::collections::HashSet;
@@ -1363,6 +1364,126 @@ fn search_hit_row_identity_matches_the_tree_and_stays_unique() {
     // 索引里可能出现不可寻址的类别串（渲染得出来、定位不了）：身份仍要唯一，不能是空串。
     let weird = hit("weird_type", "x", None, None, None);
     assert!(!weird.key().is_empty());
+}
+
+// ===== B6 staged 待提交状态机（纯函数，无窗口） =====
+
+/// 构造一条最小可行的待提交动作；`object_kind` 与身份字段按表对象填，归并规则只看 key 与 op。
+fn mk_staged(key: &str, op: NavOp) -> StagedOp {
+    StagedOp {
+        key: key.to_string(),
+        conn_id: "G_1".to_string(),
+        driver: "postgresql".to_string(),
+        catalog: Some("shop".to_string()),
+        schema: Some("public".to_string()),
+        parent: None,
+        object_name: key.rsplit('/').next().unwrap_or(key).to_string(),
+        object_kind: ObjectKind::Table,
+        op,
+        error: None,
+    }
+}
+
+#[test]
+fn staged_enqueue_adds_new_object_and_lookup_hits() {
+    let mut state = NavViewState::default();
+    let outcome = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    assert_eq!(outcome, EnqueueOutcome::Added);
+    assert_eq!(state.staged_count(), 1);
+    let found = state
+        .staged_lookup("G_1/shop/public/orders")
+        .expect("入队后应可查回");
+    assert_eq!(found.op, NavOp::Drop);
+    assert!(found.error.is_none());
+}
+
+#[test]
+fn staged_enqueue_is_idempotent_for_same_op() {
+    let mut state = NavViewState::default();
+    let first = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    let second = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    assert_eq!(first, EnqueueOutcome::Added);
+    assert_eq!(second, EnqueueOutcome::Ignored);
+    assert_eq!(state.staged_count(), 1, "幂等重复入队不得追加第二条");
+}
+
+#[test]
+fn staged_drop_blocks_later_truncate() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    let outcome = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Truncate));
+    assert_eq!(outcome, EnqueueOutcome::Ignored, "drop 已含清空，再入 truncate 忽略");
+    assert_eq!(state.staged_count(), 1);
+    assert_eq!(
+        state.staged_lookup("G_1/shop/public/orders").unwrap().op,
+        NavOp::Drop
+    );
+}
+
+#[test]
+fn staged_truncate_then_drop_replaces_entry() {
+    let mut state = NavViewState::default();
+    let first = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Truncate));
+    let second = state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    assert_eq!(first, EnqueueOutcome::Added);
+    assert_eq!(second, EnqueueOutcome::Replaced, "同对象最终状态以 Drop 为准");
+    assert_eq!(state.staged_count(), 1, "原位替换不得追加");
+    assert_eq!(
+        state.staged_lookup("G_1/shop/public/orders").unwrap().op,
+        NavOp::Drop
+    );
+}
+
+#[test]
+fn staged_entries_are_independent_across_objects_and_connections() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    let mut other = mk_staged("G_2/warehouse/public/items", NavOp::Truncate);
+    other.conn_id = "G_2".to_string();
+    state.enqueue_staged(other);
+    assert_eq!(state.staged_count(), 2, "跨对象 / 跨连接互不归并");
+}
+
+#[test]
+fn staged_dismiss_removes_single_entry_only() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    state.enqueue_staged(mk_staged("G_1/shop/public/items", NavOp::Truncate));
+    state.dismiss_staged("G_1/shop/public/orders");
+    assert_eq!(state.staged_count(), 1);
+    assert!(state.staged_lookup("G_1/shop/public/orders").is_none());
+    assert!(state.staged_lookup("G_1/shop/public/items").is_some());
+}
+
+#[test]
+fn staged_clear_removes_all_entries() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    state.enqueue_staged(mk_staged("G_1/shop/public/items", NavOp::Truncate));
+    state.clear_staged();
+    assert_eq!(state.staged_count(), 0);
+    assert!(state.staged_lookup("G_1/shop/public/orders").is_none());
+}
+
+#[test]
+fn staged_lookup_misses_unknown_key() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    assert!(state.staged_lookup("G_1/shop/public/missing").is_none());
+}
+
+#[test]
+fn staged_commit_plan_is_independent_snapshot() {
+    let mut state = NavViewState::default();
+    state.enqueue_staged(mk_staged("G_1/shop/public/orders", NavOp::Drop));
+    let mut plan = state.commit_plan();
+    // 快照克隆：改动快照（追加一条）不回写内部集合。
+    plan.push(mk_staged("G_1/shop/public/ghost", NavOp::Drop));
+    assert_eq!(state.staged_count(), 1, "快照与内部集合不共享可变引用");
+    // 清空内部集合后，已取出的快照仍保留原条目。
+    state.clear_staged();
+    assert_eq!(plan.len(), 2, "提交计划快照不随内部集合清空");
+    assert_eq!(state.staged_count(), 0);
 }
 
 /// 窗口级：`Esc`（`NavClearSearch`）只清搜索框，facet 与选中不动。
