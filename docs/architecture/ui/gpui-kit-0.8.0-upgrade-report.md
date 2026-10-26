@@ -92,3 +92,38 @@ TabBar 5 处消费点均未接线 0.8.0 新能力（升级后建议补）：
 | main 工作区暂存改动 | `crates/editor/src/shared.rs / view/host.rs / view/tests.rs`（用户【2d-笔记级】功能，324 行未提交）——合并升级分支前需先提交或处理，避免与升级分支合并冲突 |
 | 旧分支 refactor/ui-standalone | 删留待用户拍板 |
 | TabBar 视觉复核 | 依赖用户运行 app 人工确认（B7 回归项） |
+
+## 9. 0.8.0 → 0.8.1 升级（2026-10-27）
+
+- 分支：`upgrade/gpui-kit-0.8.1`
+- worktree：`D:\rds-upgrade-work-081`（独立 target，不干扰 main 工作区与用户并行探针改动）
+- 提交：`c8c2b134`（vendor 替换 + secondary() 适配）
+
+| 项 | 值 |
+| --- | --- |
+| 版本 | `gpui-kit = "0.8.1"`（2026-10-26 crates.io 发布，patch 增量） |
+| vendor | `gpui-base` / `gpui-component` 0.8.1 替换，私有 patch 重打（state.rs 游标/列块、dock tab_bar 配置），MD5 自检仅差这两处 patch 文件 |
+| 依赖连带 | `gpui-pre` 0.3.9 → 0.3.10（连带全部 `gpui-pre-*` 平台 crate）；wgpu/taffy 底层升级；proptest 1.11→1.12 |
+| 符号兼容 | 消费组件（button/input/tab/list/select/combobox/menu/table/dock/tooltip/dialog/theme）无被删 pub 符号，`cargo tree` 确认 patch 命中、无弃用警告 |
+
+### 9.1 API 适配（唯一硬断）
+
+`gpui-pre` 0.3.10 起 `Modifiers::secondary()` 需 `&App` 参数（原无参）。项目唯一调用点：
+
+- `crates/analytics_resource/src/resource_view.rs::classify_click`（纯函数，无 cx）
+- 适配：改用编译期平台等价判断 `cfg!(target_os = "macos") ? platform : control`，与 0.3.10 语义一致，且与既有测试构造（`cfg!` 分支）完全吻合
+
+### 9.2 验证结果
+
+- `cargo build --workspace`：**全绿**（2m03s；2 个既有 warning：dock patch 方法未用、app 未用导入，均非本次引入）
+- `cargo test --workspace -j 2`：**除 1 个既有失败外全部通过**
+- 既有失败：`rds-engine` `sqlglot_capabilities::probe_format_comment_fidelity`（sqlglot 格式化尾随注释丢失）——**已在 0.8.0 基线（main）实测同样稳定失败**；`sqlglot-rust` 升级前后均 `0.10.33` 未变，确证非升级回归
+- 新能力随 0.8.1 引入：Tab 制表宽度跨平台修复、InputAccessibility、编辑器自定义滚动条（EditorScrollbarRenderer）、平台化 ctrl/cmd-enter 键
+
+### 9.3 遗留
+
+| 项 | 状态 |
+| --- | --- |
+| 合并回 main | 待用户拍板（main 工作区有用户/并行会话 27 个 crate 未提交「探针」日志改动，需先处理或按独立分支隔离） |
+| main 探针改动 | 本升级全程未触碰（worktree 隔离） |
+| 0.7x 源码归档 | 升级验证已通过，可归档 `GPUIKIT-src` 下 0.7x（优先 0.7.1）；删除不影响构建，仅影响 MCP 索引做 0.7x vs 0.8x 版本对比 |
