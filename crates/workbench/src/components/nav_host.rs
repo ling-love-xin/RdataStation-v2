@@ -110,6 +110,14 @@ impl NavHost for WorkbenchNavHost {
         settings::SettingsService::set_show_scope(value, cx);
     }
 
+    fn show_inline_stats(&self, cx: &App) -> bool {
+        settings::SettingsService::show_inline_stats(cx)
+    }
+
+    fn set_show_inline_stats(&self, value: bool, cx: &mut App) {
+        settings::SettingsService::set_show_inline_stats(value, cx);
+    }
+
     fn source_short_code(&self, cx: &App) -> bool {
         settings::SettingsService::source_short_code(cx)
     }

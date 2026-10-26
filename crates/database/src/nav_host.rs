@@ -132,6 +132,12 @@ pub trait NavHost: 'static {
     fn show_scope(&self, cx: &App) -> bool;
     fn set_show_scope(&self, value: bool, cx: &mut App);
 
+    /// 表 / 视图行右侧统计徽标整体开关（需求④，默认开）：关闭后右侧 meta /
+    /// 注释副标 / 分区·继承 / ≈N / 大小徽标全部不显。`row_estimate` 是更内层
+    /// 的独立开关，此处是更上层总闸。
+    fn show_inline_stats(&self, cx: &App) -> bool;
+    fn set_show_inline_stats(&self, value: bool, cx: &mut App);
+
     /// 归属域用短码（`P`）还是文字（`项目`）。
     fn source_short_code(&self, cx: &App) -> bool;
     fn set_source_short_code(&self, value: bool, cx: &mut App);

@@ -842,6 +842,59 @@ impl NavView {
                         }
                     }),
             )
+            .child(
+                // 组内全部断开（需求⑥）：遍历组成员，已连的逐条断开。
+                // 判据与工具栏「全部断开」一致（运行时真值或会话内已标连）；
+                // 仅记录标可用而未真连的连接不会在此被反向连上。
+                Button::new(format!("nav-group-disconnectall-{group_id}"))
+                    .ghost()
+                    .xsmall()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/unplug.svg")
+                            .text_color(muted),
+                    )
+                    .on_click({
+                        let entity = entity.clone();
+                        // 闭包 move 自己的拷贝，不动原 `gid`（后面拖排序还要用它）。
+                        let gid_for_disconnect = gid.clone();
+                        let ungrouped_for_disconnect = is_ungrouped;
+                        move |_, _, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                // 未分组 = 伪分组，成员走 `ungrouped_order`；自定义分组走 `group_order`。
+                                let member_ids: Vec<String> = {
+                                    let view = this.nav.borrow();
+                                    if ungrouped_for_disconnect {
+                                        view.ungrouped_order.clone()
+                                    } else {
+                                        view.group_order
+                                            .get(&gid_for_disconnect)
+                                            .cloned()
+                                            .unwrap_or_default()
+                                    }
+                                };
+                                let conns = this.host.connections();
+                                let connected: std::collections::HashSet<String> =
+                                    this.nav.borrow().connected.iter().cloned().collect();
+                                let mut pending = 0usize;
+                                for c in &conns {
+                                    if member_ids.contains(&c.id) {
+                                        let already = this.host.is_connected(&c.id)
+                                            || connected.contains(&c.id);
+                                        if already {
+                                            pending += 1;
+                                            this.toggle_connection(&c.id, None, cx);
+                                        }
+                                    }
+                                }
+                                if pending == 0 {
+                                    this.host
+                                        .notice("该分组没有已连接的连接".to_string(), cx);
+                                }
+                            });
+                        }
+                    }),
+            )
             // 全折叠：一键折叠 / 展开全部同层分组（v5）。
             // 命中区按行高上限取 24×24（`w_6 h_6`）：旧写法 10×10 不仅难点中，
             // 而且 `⇅` 字形漏写 `text_xs`，以 16px 字号渲染进 10px 盒必然溢出。
@@ -1275,19 +1328,20 @@ impl NavView {
         drop(nav_view);
 
         // #3 连接显示名：区域前缀（`[项目]/[共享]/[全局]`）功能已移除（区域由归属域列承载）；
-        // 类型简称以方括号短标识显示（`[MY] 192.168.3.138`），与原先区域前缀同形态，
+        // 类型简称以带背景胶囊显示在名字前（`[MY] 192.168.3.138`），与归属域列同形态；
         // 简称来自设置「类型简称映射」表（默认同徽标缩写），可整体关闭。
-        let conn_disp_name = {
+        // 拆成两个分量：简称胶囊单独渲染（状态色：未连灰 / 已连彩），基名走高亮分段。
+        let (type_short_opt, conn_base_name) = {
             let base = strip_nav_scope_prefix(&conn.name);
             if self.host.show_name_type_short(cx) {
                 let short = self.host.type_short(&type_id, cx);
                 if !short.is_empty() {
-                    format!("[{short}] {base}")
+                    (Some(short), base)
                 } else {
-                    base
+                    (None, base)
                 }
             } else {
-                base
+                (None, base)
             }
         };
 
@@ -1642,12 +1696,51 @@ impl NavView {
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
-                        .text_xs()
-                        .text_color(fg)
-                        .text_ellipsis()
-                        .child(nav_name_highlight(&conn_disp_name, &filter, match_bg, fg, false)),
+                        .h_flex()
+                        .items_center()
+                        .gap_0p5()
+                        // 简称胶囊（需求⑤）：未连接 = 中性灰底灰字（无色），已连接 = 状态色
+                        // 文字 + 同色淡底（与徽标同一 `badge_status` 取色，连接/未连/失败/连接中
+                        // 各有语义色）；开关关闭无胶囊。比归属域胶囊更贴「连接状态」表达。
+                        .when_some(type_short_opt, {
+                            let badge_color = badge_color;
+                            move |name, short| {
+                                let col = badge_color;
+                                let bg = if connected {
+                                    badge_color.alpha(0.14)
+                                } else {
+                                    muted.alpha(0.12)
+                                };
+                                name.child(
+                                    div()
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded_sm()
+                                        .text_xs()
+                                        .text_color(col)
+                                        .bg(bg)
+                                        .child(short),
+                                )
+                            }
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_xs()
+                                .text_color(fg)
+                                .text_ellipsis()
+                                .child(nav_name_highlight(
+                                    &conn_base_name,
+                                    &filter,
+                                    match_bg,
+                                    fg,
+                                    false,
+                                )),
+                        ),
                 )
-                // D12 主机名副标（同行右侧，弱色截断；档案关闭或无 host 时整槽不挂）。
+                // D12 主机名副标（同行右侧，斜体弱色截断；档案关闭或无 host 时整槽不挂）。
+                // 斜体：与连接名（常规字重）区隔，一眼看出「ip:port 是地址、不是名字」。
                 .when_some(host_subline, |s, text| {
                     s.child(
                         div()
@@ -1657,14 +1750,19 @@ impl NavView {
                             .overflow_hidden()
                             .text_ellipsis()
                             .text_xs()
+                            .italic()
                             .text_color(muted)
                             .child(text),
                     )
                 })
                 // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
                 .when_some(err_summary, |s, e| s.child(e))
+                // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
+                // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
+                .child(ops)
                 .when(scope_visible, |s| {
-                    // 列本身包在 hover 卡里（§2.3）：短码不是自解释的，hover 给一句人话。
+                    // 归属域列置最右（需求③）：固定宽度右对齐列；短码不是自解释的，
+                    // hover 卡给一句人话（§2.3）。
                     // #30 来源标识加背景框：未连接时中性底 + 灰字（不显示颜色）；
                     // 连接成功才给来源色文字 + 同色淡底（胶囊）。
                     let scope_badge = if connected {
@@ -1703,8 +1801,6 @@ impl NavView {
                         nav_scope_tooltip(source),
                     ))
                 })
-                // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
-                .child(ops)
                 // 拖拽（归组 + 组内排序）：拖起本行；落点 = 行（插到该行之前）/ 分组头（见 `render_group_header`）。
                 .on_drag(
                     NavConnDragPayload {
@@ -2220,6 +2316,9 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .unwrap_or_default();
         // D12 行内元素档案位：按连接驱动归一查表（描述 / 大小 / 主机名 / 子计数静态默认开关）。
         let inline = crate::nav::family_profile::family_inline_profile(&n_driver);
+        // 需求④ 表 / 视图行右侧统计徽标总开关：关闭后 meta / 注释副标 /
+        // 分区·继承 / ≈N / 大小徽标全部不显（`row_estimate` 是更内层独立开关）。
+        let show_stats = self.host.show_inline_stats(cx);
         // 供右键菜单使用（双击处理器已消费 `n_conn_label` / `n_driver`）。
         let m_conn_label = n_conn_label.clone();
         let m_driver = n_driver.clone();
@@ -2343,17 +2442,21 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 ))
         };
         row = row.child(title);
+        // 需求④ 右侧 meta（列类型 + PK/FK）随总开关显隐。
         if let Some((meta, is_pk)) = right_meta {
-            row = row.child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(if is_pk { pri } else { muted })
-                    .child(meta),
-            );
+            row = row.when(show_stats, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(if is_pk { pri } else { muted })
+                        .child(meta),
+                )
+            });
         }
+        // 需求④ 注释副标随总开关显隐。
         if let Some(comment) = comment_subline {
-            row = row.child(comment);
+            row = row.when(show_stats, |row| row.child(comment));
         }
         // B6 通用待提交徽标：命中 staged 清单的对象（表 / 视图 / 序列统一走此段，不并入
         // Table 专用 badges 向量——后者只承担分区 / 继承 / ≈N / 大小统计，职责分离；§4.9）。
@@ -2366,10 +2469,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     .child("待删除"),
             );
         }
-        // S3-② 分区/继承徽标：子表折叠进父表后，父表行尾显示「分区 N / 继承 N」
-        // （两半都为零时不显示——普通表无徽标）。
-        // S3-④ 行估计徽标：同槽追加「≈ N」（已回填）或「…」（在途占位）。
-        if matches!(&node.kind, NavNodeKind::Table { .. }) {
+        // 需求④ 分区/继承 / ≈N / 大小徽标（Table 专用槽）随总开关整体显隐。
+        if show_stats && matches!(&node.kind, NavNodeKind::Table { .. }) {
             let mut badges = Vec::new();
             if node.child_partitions > 0 {
                 badges.push(format!("分区 {}", node.child_partitions));

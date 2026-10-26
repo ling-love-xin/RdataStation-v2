@@ -924,6 +924,23 @@ impl SettingsService {
         cx.refresh_windows();
     }
 
+    /// 表/视图行右侧统计徽标是否整体显示（需求④）：分区 / 继承 / ≈行估计 / 大小 /
+    /// 注释副标 的总开关。开启时仍受各驱动档案门控（PG 支持、SQLite/DuckDB 无）。
+    pub fn show_inline_stats(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_inline_stats
+    }
+
+    /// 设置并持久化「表行统计徽标」总开关。
+    pub fn set_show_inline_stats(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_inline_stats = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        cx.refresh_windows();
+    }
+
     /// 导航 facet 筛选（类型 / 驱动 / 标签 / 归属域）。
     pub fn nav_filters(cx: &App) -> NavigatorFilters {
         cx.global::<Settings>().navigator.filters.clone()

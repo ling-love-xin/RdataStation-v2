@@ -487,6 +487,13 @@ pub struct Navigator {
     /// `TABLE_ROWS` 后台回填，行尾「≈ N」弱色徽标；关闭后不排估计任务、不显示徽标。
     #[serde(default = "default_true")]
     pub row_estimate: bool,
+    /// 表/视图行右侧统计徽标**整体**开关（需求④，默认开）：分区 / 继承 / ≈行估计 /
+    /// 大小(B/KB) / 注释副标 一并开或关。关时即使驱动档案默认开也不显示；
+    /// 开时仍受各驱动档案（`family_inline_profile`）的 show_size / show_description 门控。
+    /// 「为何只有 PG 有」：分区/继承/大小/行估计由驱动档案 + 方言查询支持度共同决定
+    /// （PG 档案默认开 size、方言支持行估计；SQLite/DuckDB 档案关 size 且不支持行估计）。
+    #[serde(default = "default_true")]
+    pub show_inline_stats: bool,
     /// 每连接的对象名 mask（B-1）：`conn_id → 规则`。
     ///
     /// 键不存在 = 该连接不过滤；键存在 = 按规则过滤**已加载**的对象行（表 / 视图 /
@@ -539,6 +546,7 @@ impl Default for Navigator {
             saved_views: BTreeMap::new(),
             visible_databases: BTreeMap::new(),
             row_estimate: true,
+            show_inline_stats: true,
             object_masks: BTreeMap::new(),
             global_mask: ObjectMaskRule::default(),
         }

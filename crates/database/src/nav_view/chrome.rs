@@ -9,6 +9,15 @@ use super::PreparedStaged;
 use crate::nav::capability::NavOp;
 use crate::nav::family_profile;
 
+/// 面板头连接汇总面板的单行快照（需求①）：`id` 供行尾按钮定位，`connected` 用于
+/// 排序（在线排前）与按钮文案（已连「断开」/ 未连「连接」）。
+struct NavConnSummaryRow {
+    id: String,
+    name: String,
+    status: NavBadgeStatus,
+    connected: bool,
+}
+
 impl NavView {
     /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
     pub fn render_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -395,6 +404,80 @@ impl NavView {
                         }
                     }),
             )
+            .child(
+                // 全部连接（需求⑥）：遍历当前作用域连接，未连的逐条后台建连。
+                // 语义与分组头「连接组内所有」一致，这里扩到面板全量；
+                // 已连（运行时真值或会话内已标连）跳过，避免 toggle 反成断开。
+                Button::new("nav-connect-all")
+                    .ghost()
+                    .small()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/plug-2.svg")
+                            .text_color(muted),
+                    )
+                    .tooltip("全部连接")
+                    .on_click({
+                        let entity = cx.entity();
+                        let root = project_root.clone();
+                        move |_, _, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                let conns = this.host.connections();
+                                let connected: std::collections::HashSet<String> =
+                                    this.nav.borrow().connected.iter().cloned().collect();
+                                let mut pending = 0usize;
+                                for c in &conns {
+                                    let already =
+                                        this.host.is_connected(&c.id) || connected.contains(&c.id);
+                                    if !already {
+                                        pending += 1;
+                                        this.toggle_connection(&c.id, root.as_deref(), cx);
+                                    }
+                                }
+                                if pending == 0 {
+                                    this.host
+                                        .notice("连接均已就绪，无需重复连接".to_string(), cx);
+                                }
+                            });
+                        }
+                    }),
+            )
+            .child(
+                // 全部断开（需求⑥）：遍历当前作用域连接，已连的逐条断开。
+                // 判据取「toggle 会断开的那些」（运行时真值或会话内已标连），
+                // 避免把仅记录标可用而未真连的连接反向连上。
+                Button::new("nav-disconnect-all")
+                    .ghost()
+                    .small()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/unplug.svg")
+                            .text_color(muted),
+                    )
+                    .tooltip("全部断开")
+                    .on_click({
+                        let entity = cx.entity();
+                        move |_, _, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                let conns = this.host.connections();
+                                let connected: std::collections::HashSet<String> =
+                                    this.nav.borrow().connected.iter().cloned().collect();
+                                let mut pending = 0usize;
+                                for c in &conns {
+                                    let already =
+                                        this.host.is_connected(&c.id) || connected.contains(&c.id);
+                                    if already {
+                                        pending += 1;
+                                        this.toggle_connection(&c.id, None, cx);
+                                    }
+                                }
+                                if pending == 0 {
+                                    this.host.notice("没有已连接的连接".to_string(), cx);
+                                }
+                            });
+                        }
+                    }),
+            )
             // B6 staged：有待提交条目时显示「提交 N」；空集不渲染、不占槽位（常态零干扰）。
             // 点击走两阶段：Context 内拍快照与文案，App 作用域开汇总确认对话框；OK 回调
             // 触发后台逐条提交执行（同 B6-4 DeleteToStaged 开窗口径）。
@@ -453,6 +536,7 @@ impl NavView {
                         let host_cache = self.host.clone();
                         let host_groups = self.host.clone();
                         let host_views = self.host.clone();
+                        let host_stats = self.host.clone();
                         // 保存视图的筛选快照：菜单构建瞬间的 chips 状态（与 write_nav_filters 同构）。
                         let cur_filters = {
                             let v = self.nav.borrow();
@@ -471,6 +555,7 @@ impl NavView {
                         let show_tags = self.host.show_tags(cx);
                         let show_scope = self.host.show_scope(cx);
                         let source_short = self.host.source_short_code(cx);
+                        let show_inline_stats = self.host.show_inline_stats(cx);
                         let del_conn = current_conn.clone();
                         let del_name = current_conn.as_deref().and_then(|id| {
                             self.host
@@ -520,6 +605,18 @@ impl NavView {
                                         host_tags.set_show_tags(!show_tags, app);
                                     }
                                 }),
+                            )
+                            .item(
+                                // 表行统计徽标总开关（需求④）：关闭后表 / 视图行右侧的
+                                // meta / 注释副标 / 分区·继承 / ≈N / 大小徽标全部不显。
+                                PopupMenuItem::new("表行统计徽标")
+                                    .checked(show_inline_stats)
+                                    .on_click({
+                                        let host_stats = host_stats.clone();
+                                        move |_, _, app| {
+                                            host_stats.set_show_inline_stats(!show_inline_stats, app);
+                                        }
+                                    }),
                             )
                             .separator()
                             .item(
@@ -1356,72 +1453,94 @@ impl NavView {
         })
     }
 
-    /// 面板头连接状态徽标（原型建议①）：`N 连接 · M 在线`，hover 出逐连接明细。
+    /// 面板头连接状态徽标（需求①）：`N 连接 · M 在线` 常驻一眼可见，**点击**弹出
+    /// 逐连接下拉面板——每连接一行（状态点 + 名称 + 状态 + 行尾「连接/断开」按钮），
+    /// **在线（已连）排前**；按钮调用 [`NavView::toggle_connection`]（与面板头
+    /// 断开按钮同一入口，乐观语义 + 后台建连）。
     ///
     /// 口径与 [`Self::render_nav_status_bar`] 完全一致（本会话建过连或记录标可用）；
     /// 状态判定与连接行徽标同一函数族（`loading` → 连接中 / `errors` → 失败 / `connected` → 已连）。
     /// 无连接时不显示（底部状态行同规则，空态已在说明同一件事）。
+    ///
+    /// 为什么用 `Popover` 而不是 hover：需求①要求「可操作」，面板里要放行内按钮；
+    /// `Popover::content` 的闭包每帧重建，能实时反映连接状态变化（菜单实体是缓存
+    /// 的，切换后内容会陈旧）。
     pub(super) fn render_nav_conn_badge(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        use gpui_kit::component::hover_card::HoverCard;
+        use gpui_kit::component::popover::Popover;
         let conns = self.host.connections();
         if conns.is_empty() {
             return None;
         }
-        // 逐连接快照一次取好：HoverCard 的 content 闭包是 'static，不能在闭包里 borrow `nav`。
-        let rows: Vec<(String, NavBadgeStatus, Option<String>)> = {
+        // 逐连接快照一次取好：Popover 的 content 闭包是 'static，不能在闭包里 borrow `nav`。
+        let rows: Vec<NavConnSummaryRow> = {
             let view = self.nav.borrow();
-            conns
+            let mut rows: Vec<NavConnSummaryRow> = conns
                 .iter()
                 .map(|c| {
                     let err = view.errors.get(&c.id).cloned();
+                    let connected = view.connected.contains(&c.id) || c.connected;
                     let status = if view.loading.contains(&c.id) {
                         NavBadgeStatus::Connecting
                     } else if err.is_some() {
                         NavBadgeStatus::Failed
-                    } else if view.connected.contains(&c.id) || c.connected {
+                    } else if connected {
                         NavBadgeStatus::Connected
                     } else {
                         NavBadgeStatus::Idle
                     };
-                    (c.name.clone(), status, err)
+                    NavConnSummaryRow {
+                        id: c.id.clone(),
+                        name: c.name.clone(),
+                        status,
+                        connected,
+                    }
                 })
-                .collect()
+                .collect();
+            // 在线（已连）排前，其余保持原顺序（`sort_by_key` 稳定，不扰动分组序）。
+            rows.sort_by_key(|r| !r.connected);
+            rows
         };
-        let online = rows
-            .iter()
-            .filter(|(_, s, _)| matches!(s, NavBadgeStatus::Connected))
-            .count();
+        let online = rows.iter().filter(|r| r.connected).count();
         let total = rows.len();
         let muted = cx.theme().colors.muted_foreground;
         let hover_bg = cx.theme().colors.list_hover;
-        let trigger = div()
+        let danger = cx.theme().colors.danger;
+        let entity = cx.entity();
+        let project_root = self.host.project_root();
+        // 触发按钮：保留「N 连接 · M 在线」胶囊观感；Button 骨架自带 hover / 焦点 /
+        // 键盘可达（可点元素优先 `Button`，禁手搓 div）。
+        let trigger = Button::new("nav-conn-summary")
+            .ghost()
+            .xsmall()
             .px_1p5()
-            .py_0p5()
             .rounded_full()
             .bg(hover_bg)
-            .text_xs()
             .text_color(muted)
-            .child(format!("{total} 连接 · {online} 在线"));
+            .label(format!("{total} 连接 · {online} 在线"))
+            .tooltip("点击管理各连接：在线排前，行尾可连接 / 断开");
         Some(
-            HoverCard::new(SharedString::from("nav-conn-summary"))
-                .open_delay(std::time::Duration::from_millis(300))
+            Popover::new("nav-conn-summary-popover")
                 .trigger(trigger)
-                .content(move |_, _window, cx| {
+                .content(move |_state, _window, cx| {
                     let fg = cx.theme().colors.foreground;
                     let muted = cx.theme().colors.muted_foreground;
-                    let danger = cx.theme().colors.danger;
                     let mut list = div()
                         .v_flex()
                         .gap(rems(0.125))
-                        .min_w(rems(12.))
+                        .min_w(rems(14.))
+                        .py_1()
                         .text_xs();
-                    for (name, status, err) in &rows {
-                        let color = status.color(cx.theme());
-                        let status_label = status.label();
-                        let mut line = div()
+                    for r in &rows {
+                        let color = r.status.color(cx.theme());
+                        let status_label = r.status.label();
+                        let entity = entity.clone();
+                        let cid = r.id.clone();
+                        let root = project_root.clone();
+                        let line = div()
                             .h_flex()
                             .items_center()
                             .gap_1()
+                            .px_1()
                             .child(
                                 div()
                                     .w(rems(0.5))
@@ -1437,19 +1556,35 @@ impl NavView {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .text_color(fg)
-                                    .child(name.clone()),
+                                    .child(r.name.clone()),
+                            )
+                            // 状态列：失败用 danger 色，其余 muted（错误详情由连接行 hover 承载）。
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(if matches!(r.status, NavBadgeStatus::Failed) {
+                                        danger
+                                    } else {
+                                        muted
+                                    })
+                                    .child(status_label),
+                            )
+                            // 行尾按钮：已连显示「断开」，未连显示「连接」。
+                            .child(
+                                Button::new(format!("nav-conn-toggle-{}", r.id))
+                                    .ghost()
+                                    .xsmall()
+                                    .label(if r.connected { "断开" } else { "连接" })
+                                    .on_click(move |_, _, app| {
+                                        entity.update(app, |this, cx| {
+                                            this.toggle_connection(
+                                                &cid,
+                                                root.as_deref().and_then(|p| p.to_str()),
+                                                cx,
+                                            );
+                                        });
+                                    }),
                             );
-                        line = line.child(if let Some(err) = err {
-                            div()
-                                .flex_none()
-                                .max_w(rems(16.))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_color(danger)
-                                .child(format!("{status_label}：{err}"))
-                        } else {
-                            div().flex_none().text_color(muted).child(status_label)
-                        });
                         list = list.child(line);
                     }
                     list
