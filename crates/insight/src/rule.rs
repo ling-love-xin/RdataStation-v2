@@ -5,7 +5,7 @@
 //!
 //! | 作用域 | 位置 | 可见范围 | 可写 |
 //! | --- | --- | --- | --- |
-//! | [`RuleScope::Builtin`] | 应用内嵌（`include_dir!`，随二进制分发，16 条） | 所有项目 | ❌ |
+//! | [`RuleScope::Builtin`] | 应用内嵌（`include_dir!`，随二进制分发，18 条：列 9 · 多列 6 · 表 3） | 所有项目 | ❌ |
 //! | [`RuleScope::Global`] | `{系统目录}/insight-rules/` | 所有项目 | ✅ |
 //! | [`RuleScope::Project`] | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ |
 //!
@@ -18,7 +18,9 @@
 use serde::{Deserialize, Serialize};
 
 /// 规则作用域；枚举顺序即覆盖优先级（由低到高）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, specta::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, specta::Type,
+)]
 pub enum RuleScope {
     /// 应用内嵌规则（`include_dir!`），所有项目可见、只读。
     Builtin,
@@ -30,11 +32,8 @@ pub enum RuleScope {
 
 impl RuleScope {
     /// 加载顺序：先加载者优先级低，被后加载的同名规则覆盖。
-    pub const LOAD_ORDER: [RuleScope; 3] = [
-        RuleScope::Builtin,
-        RuleScope::Global,
-        RuleScope::Project,
-    ];
+    pub const LOAD_ORDER: [RuleScope; 3] =
+        [RuleScope::Builtin, RuleScope::Global, RuleScope::Project];
 
     /// 界面展示用中文名。
     pub fn label(self) -> &'static str {

@@ -25,8 +25,8 @@ use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::{ColumnProfileView, InsightTarget, TableProfileView};
 use crate::rule::RuleScope;
 use crate::rule_view::{RulesEvent, RulesView};
-use crate::service::rule_trust::RuleTrust;
 use crate::service::InsightService;
+use crate::service::rule_trust::RuleTrust;
 
 /// 一次画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,9 +101,7 @@ impl ProfileRequest {
                 temp_table: temp_table.clone(),
                 table_name: table_name.clone(),
             }),
-            InsightTarget::SourceColumn {
-                source, column, ..
-            } => Some(Self::SourceColumn {
+            InsightTarget::SourceColumn { source, column, .. } => Some(Self::SourceColumn {
                 source: source.clone(),
                 column: column.clone(),
                 full,
@@ -199,20 +197,13 @@ pub fn handle_event(
             conn_id,
             database,
             schema,
-        } => request_schema_report(
-            view,
-            conn_id.clone(),
-            database.clone(),
-            schema.clone(),
-            cx,
-        ),
+        } => request_schema_report(view, conn_id.clone(), database.clone(), schema.clone(), cx),
         InsightEvent::HistoryRequested { column } => {
             request_history(view, project_root, column.clone(), cx)
         }
-        InsightEvent::VersionCompareRequested {
-            column,
-            version_id,
-        } => request_version_compare(view, project_root, column.clone(), version_id.clone(), cx),
+        InsightEvent::VersionCompareRequested { column, version_id } => {
+            request_version_compare(view, project_root, column.clone(), version_id.clone(), cx)
+        }
         InsightEvent::SnapshotCleanupRequested { column } => {
             request_cleanup(view, project_root, column.clone(), cx)
         }
@@ -307,10 +298,13 @@ pub fn attach_rules<H: 'static>(
 ) -> Subscription {
     let rules = panel.read(host_cx).rules_view().clone();
     let subscribed = rules.clone();
-    host_cx.subscribe(&subscribed, move |_this, _emitter, event: &RulesEvent, cx| {
-        let root = project_root();
-        handle_rules_event(&rules, root, event, cx);
-    })
+    host_cx.subscribe(
+        &subscribed,
+        move |_this, _emitter, event: &RulesEvent, cx| {
+            let root = project_root();
+            handle_rules_event(&rules, root, event, cx);
+        },
+    )
 }
 
 /// 规则事件 → 执行动作。
@@ -410,7 +404,10 @@ pub fn request_rule_toggle(
         let _ = weak.update(cx, |view, cx| match result {
             Ok(data) => view.set_data(data, cx),
             Err(err) => view.set_notice(
-                format!("启停未保存：{}", InsightService::describe_error(&err).message),
+                format!(
+                    "启停未保存：{}",
+                    InsightService::describe_error(&err).message
+                ),
                 cx,
             ),
         });
@@ -439,7 +436,10 @@ pub fn request_create_rule(
                 open_in_system_editor(&path);
             }
             Err(err) => view.set_notice(
-                format!("新建规则失败：{}", InsightService::describe_error(&err).message),
+                format!(
+                    "新建规则失败：{}",
+                    InsightService::describe_error(&err).message
+                ),
                 cx,
             ),
         });
@@ -572,11 +572,10 @@ pub fn request_profile(
     let task = cx.background_executor().spawn(async move {
         let root = project_root.as_deref();
         match request {
-            ProfileRequest::Column {
-                temp_table,
-                column,
-            } => InsightService::profile_column_view(root, &temp_table, &column)
-                .map(ProfileOutcome::Column),
+            ProfileRequest::Column { temp_table, column } => {
+                InsightService::profile_column_view(root, &temp_table, &column)
+                    .map(ProfileOutcome::Column)
+            }
             ProfileRequest::Table {
                 temp_table,
                 table_name,
@@ -625,11 +624,12 @@ enum ProfileOutcome {
     },
 }
 
-/// 「评估全表」：**逐列串行**算质量分，每列回来就回填一次（真实进度，不是转动图标）。
+/// 「评估全表」：**逐列串行**回填事实明细并跑检查器，每列回来就回填一次（真实进度，不是转动图标）。
 ///
 /// 串行是刻意选择：并发会撞上引擎的并发上限（D12），而失败重试反而让用户更困惑；
 /// 一列一列跑既不会超限，又能把进度如实给出来。为了让进度真的动起来，每列单独 dispatch
 /// 到后台执行器（而不是一整个循环全在后台），算完一列就回头更新一次面板。
+/// 本模块只回填事实统计与检查器命中，**不合成质量总分 / 等级**（评级归归档后的资产库审计侧）。
 pub fn request_table_evaluation(
     view: &Entity<InsightView>,
     project_root: Option<PathBuf>,
@@ -653,15 +653,17 @@ pub fn request_table_evaluation(
             Ok(profile) => profile,
             Err(err) => {
                 let info = InsightService::describe_error(&err);
-                let _ = weak.update(cx, |panel, cx| panel.set_error(info.message, info.retryable, cx));
+                let _ = weak.update(cx, |panel, cx| {
+                    panel.set_error(info.message, info.retryable, cx)
+                });
                 return;
             }
         };
 
         let total = base.columns.len();
-        let mut evaluated: Vec<crate::model::types::ColumnInsightFull> = Vec::with_capacity(total);
-        // 列检查器聚合（评估完成后再随表级摘要一起写入；见下方 `with_checker`）
+        // 列检查器聚合（评估完成后随表级事实摘要一起写入；见下方 `with_checker`）
         let mut column_checks: Vec<crate::model::ColumnChecker> = Vec::new();
+        let mut done_count = 0usize;
         let mut current = base.evaluating(0, total);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
 
@@ -674,32 +676,27 @@ pub fn request_table_evaluation(
             });
             match task.await {
                 Ok(full) => {
-                    let score = InsightService::compute_column_quality(&full).overall_score;
-                    column_checks.extend(
-                        crate::quality_scorer::compute_column_checks(&full),
-                    );
-                    // 明细回填（借用）先行，`evaluated` 收尾 move：`ColumnStats` 无 Clone，
-                    // 不能先 push 再借（会要求 full.clone()）
+                    column_checks.extend(crate::quality_scorer::compute_column_checks(&full));
+                    // 明细回填 + 进度推进：本模块只回填事实统计与检查器，不合成质量总分
+                    done_count += 1;
                     current = current
-                        .with_column_score(&column.name, score)
                         .with_column_detail(&column.name, &full)
-                        .evaluating(evaluated.len() + 1, total);
-                    evaluated.push(full);
+                        .evaluating(done_count, total);
                 }
                 Err(err) => {
                     // 单列失败不报废整表：直接报错（用户的下一步是重试或修正数据）
                     let info = InsightService::describe_error(&err);
-                    let _ =
-                        weak.update(cx, |panel, cx| panel.set_error(info.message, info.retryable, cx));
+                    let _ = weak.update(cx, |panel, cx| {
+                        panel.set_error(info.message, info.retryable, cx)
+                    });
                     return;
                 }
             }
             let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
         }
 
-        // 表级摘要：与列分数的打分同源（`compute_table_quality` 内部逐列调用同一函数）
-        let quality = InsightService::compute_table_quality(&table_name, &evaluated);
-        let done = current.evaluated(&quality).with_checker(column_checks);
+        // 评估收尾：清进度、挂空事实摘要位，再由检查器聚合填充命中 / 适用计数
+        let done = current.finish_evaluation().with_checker(column_checks);
         let _ = weak.update(cx, |panel, cx| panel.set_table_profile(done, cx));
     })
     .detach();
@@ -770,9 +767,9 @@ pub fn request_schema_report(
     cx: &mut App,
 ) {
     let weak = view.downgrade();
-    let task = cx.background_executor().spawn(async move {
-        InsightService::schema_report_view(conn_id, &database, &schema)
-    });
+    let task = cx
+        .background_executor()
+        .spawn(async move { InsightService::schema_report_view(conn_id, &database, &schema) });
     cx.spawn(async move |cx| {
         let result = task.await;
         let _ = weak.update(cx, |panel, cx| match result {
@@ -961,7 +958,8 @@ mod tests {
     /// 源目标也要能解析出请求（否则入口给了目标却没人取数）。
     #[test]
     fn source_targets_map_to_sampling_requests() {
-        let source = crate::model::SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
+        let source =
+            crate::model::SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
 
         let col = InsightTarget::SourceColumn {
             source: source.clone(),
@@ -1016,8 +1014,10 @@ mod tests {
     fn seed_probe_table(table: &str, columns: &str, values: &str) {
         let conn = crate::insight_engine::get_or_create_duckdb().expect("内存 DuckDB");
         let conn = conn.lock().expect("DuckDB 锁不应中毒");
-        conn.execute_batch(&format!("CREATE OR REPLACE TEMP TABLE \"{table}\" ({columns})"))
-            .expect("建探针表");
+        conn.execute_batch(&format!(
+            "CREATE OR REPLACE TEMP TABLE \"{table}\" ({columns})"
+        ))
+        .expect("建探针表");
         conn.execute_batch(&format!("INSERT INTO \"{table}\" {values}"))
             .expect("插数据");
     }
@@ -1064,18 +1064,22 @@ mod tests {
             assert_eq!(table.row_count, 3);
             assert_eq!(table.columns.len(), 3);
             assert_eq!(table.columns[0].kind, crate::model::ColumnKind::Numeric);
+            // 探查阶段只回填缺失率 / 唯一率摘要（一次聚合查询）；列级明细（直方图 /
+            // 样本 / 分布）等用户点「评估全表」才逐列串行跑。
             assert!(
-                table.columns.iter().all(|c| c.score.is_none()),
-                "只是探查，不跑规则：分数得等用户点「评估全表」"
+                table.columns.iter().all(|c| {
+                    c.stats_detail.is_none() && c.histogram.is_none() && c.sample_values.is_empty()
+                }),
+                "只是探查，不跑列级明细：直方图 / 样本 / 分布得等用户点「评估全表」"
             );
         });
     }
 
-    /// 「评估全表」：逐列串行 + 真实进度，最后给出表级质量。
+    /// 「评估全表」：逐列串行 + 真实进度，最后回填列明细与检查器事实。
     ///
     /// 进度不是假的：观察者按 notify 记录每一帧的 `progress`，必须看到**中间态**。
     #[gpui_kit::test]
-    fn table_evaluation_reports_progress_and_final_quality(cx: &mut TestAppContext) {
+    fn table_evaluation_reports_progress_and_final_facts(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         seed_probe_table(
             "t_insight_jobs_eval",
@@ -1096,7 +1100,12 @@ mod tests {
             // 评估还没开始观察就没了（本仓踩过的同一个坑）
             let obs = host.update(cx, |_host, host_cx| {
                 host_cx.observe(&panel_for_obs, move |_this, panel, cx| {
-                    let progress = panel.read(cx).data().table.as_ref().and_then(|t| t.progress);
+                    let progress = panel
+                        .read(cx)
+                        .data()
+                        .table
+                        .as_ref()
+                        .and_then(|t| t.progress);
                     seen.lock().unwrap().push(progress);
                 })
             });
@@ -1131,24 +1140,29 @@ mod tests {
                 .expect("评估后仍是表探查数据")
                 .clone();
             assert!(table.progress.is_none(), "跑完进度行必须消失");
-            let quality = table.quality.expect("应有表级质量摘要");
-            assert_eq!(quality.scored_columns, 3, "三列都应评到分");
+            let quality = table.quality.expect("应有表级事实摘要位");
             assert!(
-                (0.0..=100.0).contains(&quality.overall),
-                "总分应在 0–100：{}",
-                quality.overall
+                quality.checker.len() > 0,
+                "评估后检查器事实应已聚合：{:?}",
+                quality.checker
             );
+            assert!(quality.checker_hits <= quality.checker_applicable);
             assert!(
-                table.columns.iter().all(|c| c.score.is_some()),
-                "每列都应带上自己的分数：{:?}",
-                table.columns.iter().map(|c| c.score).collect::<Vec<_>>()
+                table.columns.iter().all(|c| c.stats_detail.is_some()),
+                "每列都应回填事实明细：{:?}",
+                table
+                    .columns
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect::<Vec<_>>()
             );
-            assert_eq!(quality.grade, crate::quality_scorer::Grade::of(quality.overall));
         });
 
         let traces = traces.lock().unwrap().clone();
         assert!(
-            traces.iter().any(|p| matches!(p, Some(p) if p.done > 0 && p.done < p.total)),
+            traces
+                .iter()
+                .any(|p| matches!(p, Some(p) if p.done > 0 && p.done < p.total)),
             "必须能观察到中间进度（不是只有开始与结束）：{traces:?}"
         );
         assert_eq!(
@@ -1247,11 +1261,7 @@ mod tests {
         let _guard = crate::tests::rule_state_guard();
         cx.update(gpui_kit::init);
         let table = "t_insight_jobs_history";
-        seed_probe_table(
-            table,
-            "amount DECIMAL(12,2)",
-            "VALUES (1.5), (2.5), (NULL)",
-        );
+        seed_probe_table(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5), (NULL)");
         let root = temp_project("history");
         let root_for_host = root.clone();
 
@@ -1446,7 +1456,11 @@ mod tests {
             });
         });
         cx.update(|_cx| {
-            assert_eq!(*calls.lock().unwrap(), 1, "订阅应被触发（项目根提供者被问了一次）");
+            assert_eq!(
+                *calls.lock().unwrap(),
+                1,
+                "订阅应被触发（项目根提供者被问了一次）"
+            );
         });
         cx.run_until_parked();
 
@@ -1546,8 +1560,10 @@ value_type = "i64"
 
         // 开关：写索引 → 重新同步 → 推进启停集合 → 注册表失效（下次取数就不再包含它）
         assert!(
-            crate::with_rules(Some(&root), |registry| Ok(registry.get("demo-rule").is_some()))
-                .expect("取规则集")
+            crate::with_rules(Some(&root), |registry| Ok(registry
+                .get("demo-rule")
+                .is_some()))
+            .expect("取规则集")
         );
         cx.update(|cx| {
             rules.update(cx, |view, cx| {

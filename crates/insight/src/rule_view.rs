@@ -30,7 +30,7 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Size, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::rule::RuleScope;
@@ -52,7 +52,9 @@ pub const GROUP_ORDER: [RuleScope; 3] = [RuleScope::Project, RuleScope::Global, 
 pub enum RuleRowStatus {
     Ok,
     /// 文件在、解析失败（`error` 是 TOML 报错原文，含行列信息）
-    Invalid { error: String },
+    Invalid {
+        error: String,
+    },
     /// 索引里有记录、磁盘上文件已不在
     Missing,
 }
@@ -150,13 +152,16 @@ impl PendingRulesView {
 impl Default for RulesData {
     fn default() -> Self {
         Self {
-            groups: GROUP_ORDER.iter().map(|&scope| RuleGroupView {
-                scope,
-                title: group_title(scope),
-                location: String::new(),
-                dir_missing: false,
-                rows: Vec::new(),
-            }).collect(),
+            groups: GROUP_ORDER
+                .iter()
+                .map(|&scope| RuleGroupView {
+                    scope,
+                    title: group_title(scope),
+                    location: String::new(),
+                    dir_missing: false,
+                    rows: Vec::new(),
+                })
+                .collect(),
             total: 0,
             disabled: 0,
             broken: 0,
@@ -387,7 +392,9 @@ pub enum RulesDialogState {
     /// 首次取数中（已有数据时不回退到这个态：开关后的刷新不该让列表闪白）
     Loading,
     Ready,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// 对话框向接缝发出的请求。
@@ -613,10 +620,7 @@ impl RulesView {
                     .child(
                         div()
                             .text_color(theme.colors.foreground)
-                            .child(format!(
-                                "该项目带了 {} 条规则，是否加载？",
-                                pending.count()
-                            )),
+                            .child(format!("该项目带了 {} 条规则，是否加载？", pending.count())),
                     )
                     .child(
                         div()
@@ -681,7 +685,13 @@ impl RulesView {
 
     /// 开关：先**就地翻位**（避免等一次后台往返才动的视觉回弹），再发请求；
     /// 写库失败时接缝回填真值（[`Self::set_data`] 会整体替换）。
-    pub fn request_toggle(&mut self, scope: RuleScope, rule_id: &str, enabled: bool, cx: &mut Context<Self>) {
+    pub fn request_toggle(
+        &mut self,
+        scope: RuleScope,
+        rule_id: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
         for group in self
             .data
             .groups
@@ -744,7 +754,12 @@ impl RulesView {
         let colors = theme.colors;
         let mut bar = div().h_flex().w_full().gap_2();
         if let Some(input) = self.search_input.clone() {
-            bar = bar.child(div().flex_1().min_w_0().child(Input::new(&input).cleanable(true)));
+            bar = bar.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&input).cleanable(true)),
+            );
         } else {
             bar = bar.child(div().flex_1());
         }
@@ -829,10 +844,7 @@ impl RulesView {
     fn render_status(&self, theme: &Theme) -> Div {
         let colors = theme.colors;
         let data = &self.data;
-        let mut line = format!(
-            "共 {} 条 · {} 条禁用",
-            data.total, data.disabled
-        );
+        let mut line = format!("共 {} 条 · {} 条禁用", data.total, data.disabled);
         if data.broken > 0 {
             line.push_str(&format!(" · {} 条异常", data.broken));
         }
@@ -894,9 +906,7 @@ impl RulesView {
                     .label("重试")
                     .on_click({
                         let entity = entity.clone();
-                        move |_, _, app| {
-                            entity.update(app, |view, cx| view.request_reload(cx))
-                        }
+                        move |_, _, app| entity.update(app, |view, cx| view.request_reload(cx))
                     }),
             )
     }
@@ -909,7 +919,8 @@ impl Render for RulesView {
         let body = match &self.state {
             RulesDialogState::Error { message } => {
                 let message = message.clone();
-                self.render_error(&message, &entity, theme).into_any_element()
+                self.render_error(&message, &entity, theme)
+                    .into_any_element()
             }
             RulesDialogState::Loading if self.data.total == 0 => div()
                 .v_flex()
@@ -962,20 +973,21 @@ fn pending_banner(pending: &PendingRulesView, entity: &Entity<RulesView>, theme:
                 .text_sm()
                 .text_color(colors.foreground)
                 .child(if pending.declined {
-                    format!("该项目带了 {} 条规则；你此前选择了不加载。", pending.count())
+                    format!(
+                        "该项目带了 {} 条规则；你此前选择了不加载。",
+                        pending.count()
+                    )
                 } else {
-                    format!("该项目带了 {} 条规则，尚未加载（未信任）。", pending.count())
+                    format!(
+                        "该项目带了 {} 条规则，尚未加载（未信任）。",
+                        pending.count()
+                    )
                 }),
         )
-        .child(
-            div()
-                .text_xs()
-                .text_color(colors.muted_foreground)
-                .child(
-                    "规则 SQL 会在本机执行——只放行单条只读查询，但仍能读到本机能读到的数据。\
+        .child(div().text_xs().text_color(colors.muted_foreground).child(
+            "规则 SQL 会在本机执行——只放行单条只读查询，但仍能读到本机能读到的数据。\
                      确认来源可信后再加载；项目规则随项目走，克隆别人的仓库时尤其要看一眼。",
-                ),
-        )
+        ))
         .child(
             div()
                 .text_xs()
@@ -1090,9 +1102,7 @@ fn empty_group_hint(group: &RuleGroupView, entity: &Entity<RulesView>, theme: &T
             .tooltip("目录尚不存在；创建后会写一份模板规则并打开")
             .on_click({
                 let entity = entity.clone();
-                move |_, _, app| {
-                    entity.update(app, |view, cx| view.request_create_rule(scope, cx))
-                }
+                move |_, _, app| entity.update(app, |view, cx| view.request_create_rule(scope, cx))
             }),
         );
     }
@@ -1104,12 +1114,7 @@ fn empty_group_hint(group: &RuleGroupView, entity: &Entity<RulesView>, theme: &T
 /// 名称（类型 / v版本）                  [开] [⧉]
 /// ⚠ 第 3 行未知字段 `outputs`（期望 output）
 /// ```
-fn rule_row(
-    scope: RuleScope,
-    row: &RuleRowView,
-    entity: &Entity<RulesView>,
-    theme: &Theme,
-) -> Div {
+fn rule_row(scope: RuleScope, row: &RuleRowView, entity: &Entity<RulesView>, theme: &Theme) -> Div {
     let colors = theme.colors;
     let status_color = match row.status {
         RuleRowStatus::Ok => colors.foreground,
@@ -1194,7 +1199,12 @@ fn rule_row(
     match &row.status {
         RuleRowStatus::Ok => {}
         RuleRowStatus::Invalid { error } => {
-            body = body.child(broken_line(IconName::TriangleAlert, error, colors.danger, theme));
+            body = body.child(broken_line(
+                IconName::TriangleAlert,
+                error,
+                colors.danger,
+                theme,
+            ));
         }
         RuleRowStatus::Missing => {
             body = body.child(broken_line(
@@ -1233,8 +1243,8 @@ mod tests {
     };
 
     use super::{
-        GROUP_ORDER, PendingProjectRules, PendingRulesView, RuleDataInput, RuleRowStatus, RulesData,
-        RulesEvent, RulesView, build_rules_data, row_matches,
+        GROUP_ORDER, PendingProjectRules, PendingRulesView, RuleDataInput, RuleRowStatus,
+        RulesData, RulesEvent, RulesView, build_rules_data, row_matches,
     };
     use crate::rule::RuleScope;
     use crate::rule_types::RuleMeta;
@@ -1289,7 +1299,10 @@ mod tests {
             global_dir: Some(PathBuf::from("/g/insight-rules")),
             project_rows: vec![index_row("my-rule", RuleScope::Project, true)],
             global_rows: vec![index_row("shared-rule", RuleScope::Global, true)],
-            builtin: vec![meta("null-check", "空值检查"), meta("numeric-stats", "数值统计")],
+            builtin: vec![
+                meta("null-check", "空值检查"),
+                meta("numeric-stats", "数值统计"),
+            ],
             pending: None,
             trust_declined: false,
         }
@@ -1327,7 +1340,11 @@ mod tests {
         let builtin = data.group(RuleScope::Builtin).unwrap();
         let null_check = builtin.rows.iter().find(|r| r.id == "null-check").unwrap();
         assert!(!null_check.enabled, "抑制记录应让内置规则显示为已禁用");
-        let numeric = builtin.rows.iter().find(|r| r.id == "numeric-stats").unwrap();
+        let numeric = builtin
+            .rows
+            .iter()
+            .find(|r| r.id == "numeric-stats")
+            .unwrap();
         assert!(numeric.enabled);
         assert!(numeric.file.is_none(), "内置规则没有可打开的文件");
         assert_eq!(data.disabled, 1);
@@ -1337,7 +1354,9 @@ mod tests {
     #[test]
     fn a_project_file_with_a_builtin_id_is_a_real_rule() {
         let mut input = input();
-        input.project_rows.push(index_row("null-check", RuleScope::Project, true));
+        input
+            .project_rows
+            .push(index_row("null-check", RuleScope::Project, true));
 
         let data = build_rules_data(input);
         let project = data.group(RuleScope::Project).unwrap();
@@ -1407,9 +1426,7 @@ mod tests {
             dir: "/p/.RSmeta/insight-rules".into(),
             declined: false,
         });
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_data(data.clone(), cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(data.clone(), cx)));
         draw(cx);
 
         // 首次拿到带 pending 的数据 → 叠一个确认框（规则对话框仍在下面）
@@ -1421,7 +1438,10 @@ mod tests {
         // 两个按钮共用的那条路：只发事件，不改本视图的 pending
         cx.update(|_window, cx| rules.update(cx, |view, cx| view.request_trust(true, cx)));
         let seen = sink.read_with(cx, |sink, _| sink.events.borrow().clone());
-        assert_eq!(seen.last(), Some(&RulesEvent::TrustDecided { trusted: true }));
+        assert_eq!(
+            seen.last(),
+            Some(&RulesEvent::TrustDecided { trusted: true })
+        );
         rules.update(cx, |view, _| {
             assert!(
                 view.data().pending.is_some(),
@@ -1431,16 +1451,17 @@ mod tests {
         });
 
         // 第二次回填（例如 ⟳ 刷新）不该重开确认框；横幅照旧可渲染
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_data(data.clone(), cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(data.clone(), cx)));
         draw(cx);
         rules.update(cx, |view, _| assert!(view.trust_prompted));
 
         // 改主意（拒绝）走同一条路
         cx.update(|_window, cx| rules.update(cx, |view, cx| view.request_trust(false, cx)));
         let seen = sink.read_with(cx, |sink, _| sink.events.borrow().clone());
-        assert_eq!(seen.last(), Some(&RulesEvent::TrustDecided { trusted: false }));
+        assert_eq!(
+            seen.last(),
+            Some(&RulesEvent::TrustDecided { trusted: false })
+        );
     }
 
     /// 搜索不该把信任门横幅过滤掉（它不属于任何分组）。
@@ -1471,7 +1492,10 @@ mod tests {
         };
         assert_eq!(view.count(), 8);
         let summary = view.summary();
-        assert!(summary.contains("rule-0") && summary.contains("rule-5"), "{summary}");
+        assert!(
+            summary.contains("rule-0") && summary.contains("rule-5"),
+            "{summary}"
+        );
         assert!(!summary.contains("rule-6"), "只列前 6 条：{summary}");
         assert!(summary.contains("等 8 条"), "多的部分要收尾：{summary}");
     }
@@ -1480,7 +1504,9 @@ mod tests {
     fn statistics_count_every_layer() {
         let mut input = input();
         input.project_rows.push(suppression("null-check", false));
-        input.project_rows.push(index_row("off", RuleScope::Project, false));
+        input
+            .project_rows
+            .push(index_row("off", RuleScope::Project, false));
         input.builtin.push(meta("table-rows", "表行数"));
 
         let data = build_rules_data(input);
@@ -1626,7 +1652,7 @@ mod tests {
         })
     }
 
-    /// ⚙ → 弹窗 + 发一次取数请求；数据回填后逐帧可渲染（四态都不 panic）
+    /// ⚙ → 弹窗 + 发一次取数请求；数据回填后逐帧可渲染（三态都不 panic）
     #[gpui_kit::test]
     fn dialog_opens_requests_data_and_renders(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
@@ -1647,16 +1673,12 @@ mod tests {
         );
 
         // 取数失败 → 错误态可渲染，重试仍是一个事件
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_error("项目库被占用", cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_error("项目库被占用", cx)));
         draw(cx);
         cx.update(|_window, cx| rules.update(cx, |view, cx| view.request_reload(cx)));
 
         // 取数成功 → 数据态：三组 + 开关 + 状态行
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_data(sample_data(), cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(sample_data(), cx)));
         draw(cx);
         rules.update(cx, |view, _| {
             assert_eq!(view.state(), &super::RulesDialogState::Ready);
@@ -1675,11 +1697,11 @@ mod tests {
         rules.update(cx, |view, _| assert_eq!(view.visible().visible_rows(), 2));
 
         // 折叠分组：Accordion 回调给的是「当前展开的下标集合」
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_open_groups(&[1], cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_open_groups(&[1], cx)));
         draw(cx);
-        rules.update(cx, |view, _| assert_eq!(view.groups_open(), [false, true, false]));
+        rules.update(cx, |view, _| {
+            assert_eq!(view.groups_open(), [false, true, false])
+        });
     }
 
     /// 开关：就地翻位（不等后台往返）+ 发事件；写入失败时列表不消失
@@ -1688,9 +1710,7 @@ mod tests {
         cx.update(gpui_kit::init);
         let (rules, sink, cx) = open_dialog_harness(cx);
         cx.update(|window, cx| rules.update(cx, |view, cx| view.begin_load(window, cx)));
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_data(sample_data(), cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(sample_data(), cx)));
         cx.update(|_window, cx| {
             rules.update(cx, |view, cx| {
                 view.request_toggle(RuleScope::Project, "my-rule", false, cx)
@@ -1724,9 +1744,7 @@ mod tests {
         draw(cx);
 
         // 下一次成功刷新会清掉提示
-        cx.update(|_window, cx| {
-            rules.update(cx, |view, cx| view.set_data(sample_data(), cx))
-        });
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.set_data(sample_data(), cx)));
         rules.update(cx, |view, _| assert!(view.notice().is_none()));
     }
 

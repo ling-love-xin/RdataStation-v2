@@ -10,7 +10,7 @@
 //! # 规则作用域与注册表生命周期
 //!
 //! 规则分三层，后加载者整体覆盖前者（见 [`RuleScope`]）：
-//! `Builtin`（内嵌，16 条）→ `Global`（`{系统目录}/insight-rules/`）→ `Project`（`{项目}/.RSmeta/insight-rules/`）。
+//! `Builtin`（内嵌，18 条：列 9 · 多列 6 · 表 3）→ `Global`（`{系统目录}/insight-rules/`）→ `Project`（`{项目}/.RSmeta/insight-rules/`）。
 //!
 //! 注册表**按项目根缓存**（[`registry_for`]），不是进程级单例：
 //! 「一实例一项目」下切换项目必须换规则集，而进程单例只能靠调用方记得手动重载——
@@ -46,7 +46,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use shared::error::{CommonError, CoreError};
 
 pub use model::types::{
@@ -54,28 +54,28 @@ pub use model::types::{
     DateTimeStats, DistributionBin, ExtremeValue, NumericStats, QualityDimension, QualityScore,
     TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
 };
-pub use store::{ProjectInsightStores, InsightMetaStore, InsightSnapshotMeta, InsightStorage};
+pub use store::{InsightMetaStore, InsightSnapshotMeta, InsightStorage, ProjectInsightStores};
 
 pub use insight_engine::{detect_extremes, get_temp_table_profile};
 pub use rule::{RuleLoadFailure, RuleScope, RuleSource};
 pub use rule_executor::RuleExecutor;
 pub use rule_registry::{
-    get_global_rules_dir, get_project_rules_dir, parse_rule_toml, PendingProjectRules, RuleRegistry,
-    RULES_DIR_NAME,
+    PendingProjectRules, RULES_DIR_NAME, RuleRegistry, get_global_rules_dir, get_project_rules_dir,
+    parse_rule_toml,
 };
 pub use service::indexer::{
-    plan_index, scan_scope_dir, sync_project_rules, RuleIndexEntry, RuleIndexStore, RuleLoadStatus,
-    SyncOutcome,
+    RuleIndexEntry, RuleIndexStore, RuleLoadStatus, SyncOutcome, plan_index, scan_scope_dir,
+    sync_project_rules,
 };
-pub use service::{InsightErrorInfo, InsightService};
 pub use service::rule_trust::RuleTrust;
 pub use service::watcher::{
-    clear_index_stale, index_is_stale, rules_fingerprint, set_watched_project_root, watch_dirs,
-    watched_project_root, RulesWatcher, DEFAULT_POLL_INTERVAL,
+    DEFAULT_POLL_INTERVAL, RulesWatcher, clear_index_stale, index_is_stale, rules_fingerprint,
+    set_watched_project_root, watch_dirs, watched_project_root,
 };
+pub use service::{InsightErrorInfo, InsightService};
 pub use store::{
-    snapshot_checksum, InsightColumnStore, InsightSchemaReportStore, InsightStorageStats,
-    InsightTableReportStore, InsightVersionEntry,
+    InsightColumnStore, InsightSchemaReportStore, InsightStorageStats, InsightTableReportStore,
+    InsightVersionEntry, snapshot_checksum,
 };
 
 // ===== 视图层（M8 Phase 1；归属决策 D21 = 方案 A：视图随 crate）=====
@@ -83,31 +83,31 @@ pub use store::{
 // 宿主（workbench）经这些类型装配右 Dock 面板：面板自身不做 I/O，取数由宿主发起。
 pub use insight_view::{InsightEvent, InsightView};
 pub use model::{
-    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
-    InsightTarget, KeyValueRow, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel,
-    PanelData, PanelTab, QualityNote, SampleCell, SampleSource, ScoreView, StatRow,
-    TableColumnView, TableEvalProgress, TableProfileView, TableQualityView,
+    ColumnKind, ColumnProfileView, DistributionBar, Emphasis, InsightPanelState, InsightTarget,
+    KeyValueRow, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab,
+    QualityNote, SampleCell, SampleSource, StatRow, TableColumnView, TableEvalProgress,
+    TableProfileView, TableQualityView,
 };
-pub use service::rule_params;
 pub use quality_scorer::Grade;
-pub use rule_view::{
-    build_rules_data, RuleDataInput, RuleGroupView, RuleRowStatus, RuleRowView, RulesData,
-    RulesDialogState, RulesEvent, RulesView,
-};
 pub use rule_types::{
     ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
     RuleMeta, RuleQuery,
+};
+pub use rule_view::{
+    RuleDataInput, RuleGroupView, RuleRowStatus, RuleRowView, RulesData, RulesDialogState,
+    RulesEvent, RulesView, build_rules_data,
 };
 pub use schema_analyzer::{
     ForeignKeyCandidate, OrphanTable, RedundantColumn, SchemaAnalyzer, SchemaInsightReport,
     TableColumnInfo, TypeMismatch, TypeMismatchEntry,
 };
 pub use schema_view::{
-    confidence_label, schema_export_file_stem, SchemaExportFormat, SchemaGroupView,
-    SchemaReportView, SchemaRowView, SchemaSection, SchemaTone,
+    SchemaExportFormat, SchemaGroupView, SchemaReportView, SchemaRowView, SchemaSection,
+    SchemaTone, confidence_label, schema_export_file_stem,
 };
+pub use service::rule_params;
 pub use workspace::{
-    focus_insight_workspace_tab, InsightWorkspacePanel, OpenedTarget, TargetSummary, WorkspaceMode,
+    InsightWorkspacePanel, OpenedTarget, TargetSummary, WorkspaceMode, focus_insight_workspace_tab,
 };
 
 pub const BUILTIN_RULES_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/insight-rules");
@@ -251,7 +251,11 @@ fn build_registry(project_root: Option<&Path>) -> RuleRegistry {
             let dir = get_global_rules_dir(&system_dir);
             match registry.load_from_dir(&dir, RuleScope::Global) {
                 Ok(0) => {}
-                Ok(count) => tracing::info!("Loaded {} global insight rules from {}", count, dir.display()),
+                Ok(count) => tracing::info!(
+                    "Loaded {} global insight rules from {}",
+                    count,
+                    dir.display()
+                ),
                 Err(e) => tracing::warn!(
                     "Failed to load global insight rules from {}: {}",
                     dir.display(),
@@ -259,7 +263,10 @@ fn build_registry(project_root: Option<&Path>) -> RuleRegistry {
                 ),
             }
         }
-        Err(e) => tracing::warn!("System dir unavailable, skipping global insight rules: {}", e),
+        Err(e) => tracing::warn!(
+            "System dir unavailable, skipping global insight rules: {}",
+            e
+        ),
     }
 
     // 项目层：{项目}/.RSmeta/insight-rules/。
@@ -376,10 +383,7 @@ pub fn with_rules<T>(
 ) -> Result<T, CoreError> {
     let registry = registry_for(project_root);
     let guard = registry.read().map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "规则注册表锁定失败：{}",
-            e
-        )))
+        CoreError::common(CommonError::General(format!("规则注册表锁定失败：{}", e)))
     })?;
     f(&guard)
 }
@@ -389,7 +393,10 @@ pub fn with_rules<T>(
 /// 由索引同步器在写完 `insight_rule_index` 后调用：
 /// `扫描磁盘 → plan_index → 写库 → apply_disabled_rules → 下次 registry_for 按新集合重建`。
 /// 缓存失效是必需的——注册表是「已应用启停后的结果」，禁用集合变了它就不再有效。
-pub fn apply_disabled_rules(project_root: Option<&Path>, disabled: impl IntoIterator<Item = String>) {
+pub fn apply_disabled_rules(
+    project_root: Option<&Path>,
+    disabled: impl IntoIterator<Item = String>,
+) {
     let key = cache_key(project_root);
     let set: std::collections::HashSet<String> = disabled.into_iter().collect();
 
@@ -542,7 +549,9 @@ mod tests {
         // 基线：内置规则齐全（机器上若另有全局规则会比内置更多，故只断言下界）
         let before = with_rules(Some(&root), |reg| Ok(reg.rule_count()))?;
         assert!(before >= rule_types::BUILTIN_RULE_COUNT);
-        assert!(with_rules(Some(&root), |reg| Ok(reg.get("null-check").is_some()))?);
+        assert!(with_rules(Some(&root), |reg| Ok(reg
+            .get("null-check")
+            .is_some()))?);
 
         // 禁用一条内置规则（正是「抑制记录」的场景）
         apply_disabled_rules(Some(&root), ["null-check".to_string()]);

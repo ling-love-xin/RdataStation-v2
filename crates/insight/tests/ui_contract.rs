@@ -28,14 +28,22 @@ fn ui_size_constants_match_design() {
         (INSIGHT_RATIO_BAR_HEIGHT, 6.0, "单条占比条高度"),
         (INSIGHT_INLINE_ICON_SIZE, 14.0, "行内小图标"),
         (INSIGHT_SECTION_TITLE_FONT, 12.0, "分区标题字号"),
-        (INSIGHT_SCORE_FONT, 28.0, "评分卡总分字号"),
+        (INSIGHT_CARD_VALUE_FONT, 28.0, "概览五卡主数值基准字号"),
         (INSIGHT_HEALTH_SCORE_FONT, 36.0, "Schema 健康分字号"),
         (INSIGHT_RULES_DIALOG_WIDTH, 640.0, "规则管理对话框宽度"),
         (INSIGHT_TABLE_INDEX_WIDTH, 20.0, "表探查序号列宽"),
         (INSIGHT_TABLE_TYPE_WIDTH, 72.0, "表探查类型列宽"),
         (INSIGHT_TABLE_FLAG_WIDTH, 28.0, "表探查可空列宽"),
-        (INSIGHT_TABLE_QUALITY_WIDTH, 52.0, "表探查质量列宽"),
+        (INSIGHT_TABLE_NULL_RATE_WIDTH, 52.0, "表探查缺失率列宽"),
         (INSIGHT_DIFF_LABEL_WIDTH, 64.0, "版本对比标签列宽"),
+        (INSIGHT_WS_RING_SIZE, 88.0, "中间工作页检查器命中环直径"),
+        (INSIGHT_WS_TITLE_MAX_WIDTH, 240.0, "中间工作页标题最大宽度"),
+        (INSIGHT_OVERVIEW_RING_SIZE, 68.0, "右栏摘要检查器命中环直径"),
+        (INSIGHT_PICKER_WIDTH, 216.0, "列选择浮层宽度"),
+        (INSIGHT_WS_NUM_WIDTH, 72.0, "中间工作页数值列宽"),
+        (INSIGHT_WS_FACT_WIDTH, 52.0, "中间工作页事实指标列宽"),
+        (INSIGHT_WS_STATUS_WIDTH, 52.0, "中间工作页状态词列宽"),
+        (INSIGHT_WS_SOURCE_WIDTH, 56.0, "中间工作页数据源列宽"),
     ];
 
     for (ratio, expected_px, label) in cases {
@@ -111,6 +119,12 @@ fn view_sources() -> Vec<(String, &'static str)> {
         (
             "rule_view.rs".to_string(),
             include_str!("../src/rule_view.rs"),
+        ),
+        (
+            // 中间 EDA 工作页（工具栏 / 概览 / 列分布 / 关联 / 样本 / 对比 / 集合），
+            // 不在 view/ 目录下，必须显式登记，否则裸 px / 裸色守卫对它静默失效。
+            "workspace.rs".to_string(),
+            include_str!("../src/workspace.rs"),
         ),
     ];
 

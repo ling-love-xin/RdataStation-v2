@@ -12,17 +12,17 @@ pub const INSIGHT_TAB_HEIGHT: f32 = 1.75;
 /// 直方图条高度（0.5rem = 8px；**已由 `Progress` 的 `Size::Medium` 档消费**，
 /// 保留作设计值登记，与 `view/mod.rs::ratio_bar` 的档位映射注释互证）
 pub const INSIGHT_HISTOGRAM_BAR_HEIGHT: f32 = 0.5;
-/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布与评分卡四维共用。
+/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布事实条共用。
 /// **已由 `Progress` 的 `Size::Small` 档消费**，保留作设计值登记）
 pub const INSIGHT_RATIO_BAR_HEIGHT: f32 = 0.375;
 /// 样本单元格最大字符数（超出截断，长文本不得撑破面板）
 pub const INSIGHT_SAMPLE_MAX_CHARS: usize = 200;
-/// 行内小图标（0.875rem = 14px；提示行与质量提示前的图标）
+/// 行内小图标（0.875rem = 14px；提示行与事实提示前的图标）
 pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 /// 分区标题字号（0.75rem = 12px，对齐面板内的次级信息层级）
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
-/// 评分卡总分字号（1.75rem = 28px；四档取色）
-pub const INSIGHT_SCORE_FONT: f32 = 1.75;
+/// 概览五卡主数值基准字号（1.75rem；卡片内再乘 0.75 得实际约 21px，纯事实数值，无评级语义）
+pub const INSIGHT_CARD_VALUE_FONT: f32 = 1.75;
 /// Schema 健康分字号（2.25rem = 36px；结构洞察的头号结论）
 pub const INSIGHT_HEALTH_SCORE_FONT: f32 = 2.25;
 /// 结构报告每行最多给几个表名下钻热点（再多就改成一条链接列表了）
@@ -35,22 +35,24 @@ pub const INSIGHT_TABLE_INDEX_WIDTH: f32 = 1.25;
 pub const INSIGHT_TABLE_TYPE_WIDTH: f32 = 4.5;
 /// 表探查：可空列宽（1.75rem = 28px，「YES / NO」）
 pub const INSIGHT_TABLE_FLAG_WIDTH: f32 = 1.75;
-/// 表探查：质量列宽（3.25rem = 52px，容得下「95 优秀」）
-pub const INSIGHT_TABLE_QUALITY_WIDTH: f32 = 3.25;
+/// 表探查：缺失率列宽（3.25rem = 52px，容得下「12.3%」）
+pub const INSIGHT_TABLE_NULL_RATE_WIDTH: f32 = 3.25;
 /// 版本对比：标签列宽（4rem = 64px，容得下「长度范围」四个中文字）
 pub const INSIGHT_DIFF_LABEL_WIDTH: f32 = 4.0;
 /// 中间工作页对比表：数值列宽（行数 / 列数，4.5rem = 72px）
 pub const INSIGHT_WS_NUM_WIDTH: f32 = 4.5;
-/// 中间工作页对比表：评分列宽（3.25rem = 52px，容得下「95 优秀」）
-pub const INSIGHT_WS_SCORE_WIDTH: f32 = 3.25;
-/// 中间工作页对比表：等级列宽（3.25rem = 52px）
-pub const INSIGHT_WS_GRADE_WIDTH: f32 = 3.25;
+/// 中间工作页对比表：事实指标列宽（3.25rem = 52px，检查器命中比 / 缺失率 / 唯一率）
+pub const INSIGHT_WS_FACT_WIDTH: f32 = 3.25;
+/// 中间工作页对比表：状态词列宽（3.25rem = 52px，命中 / 未命中 / 已评估等短词）
+pub const INSIGHT_WS_STATUS_WIDTH: f32 = 3.25;
 /// 中间工作页：数据源列宽（3.5rem = 56px，容得下「来源 MySQL …」截断）
 pub const INSIGHT_WS_SOURCE_WIDTH: f32 = 3.5;
-/// 中间工作页质量评分环直径（5.5rem = 88px，对齐原型中央评分环 viewBox 88；
-/// 经 `ProgressCircle::Size::Size` 消费，环内数字随主题字号缩放）
+/// 中间工作页检查器命中环直径（5.5rem = 88px；经 `ProgressCircle::Size::Size` 消费，
+/// 环内数字随主题字号缩放；只呈现适用 / 命中计数，无评级语义）
 pub const INSIGHT_WS_RING_SIZE: f32 = 5.5;
-/// 右栏摘要 Tab 评分环直径（4.25rem = 68px，对齐原型右栏 score-ring viewBox 68）
+/// 中间工作页标题栏超长表名最大宽度（15rem = 240px；VS Code 约束：长标题省略 + hover 提示全名）
+pub const INSIGHT_WS_TITLE_MAX_WIDTH: f32 = 15.0;
+/// 右栏摘要 Tab 检查器命中环直径（4.25rem = 68px；适用 / 命中计数，无评级语义）
 pub const INSIGHT_OVERVIEW_RING_SIZE: f32 = 4.25;
 /// 列多选 / 列对选择浮层宽度（13.5rem = 216px；Checkbox 行 + 中文列名不换行）
 pub const INSIGHT_PICKER_WIDTH: f32 = 13.5;

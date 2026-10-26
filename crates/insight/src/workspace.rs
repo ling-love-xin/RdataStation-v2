@@ -1,15 +1,16 @@
 //! 洞察**中间工作页**（D63 落地：右栏摘要版保留，中央可停靠洞察 tab 并存；
-//! D66 完全对齐 `docs/architecture/insight/insight-workspace-prototype.html`）。
+//! D66 对齐 `docs/architecture/insight/insight-eda-prototype.html`）。
 //!
 //! 承载形态（D63 / D65 / D66）：
 //! - 面板持有一个 [`InsightView`] 实体作为**画像状态宿主**（取数链同右栏），
-//!   但中间页**不渲染右栏的五 Tab**，而是渲染原型规定的画像版式：
+//!   但中间页**不渲染右栏的六 Tab**，而是渲染原型规定的画像版式：
 //!   工具栏（刷新 / 取样 / 导出 + 目标切换 + 当前目标 chip）、两段式取样进度、
-//!   表画像四卡 + 质量评分环 + 列类型分布 + 列画像表 + 质量提示（列目标走列画像版式）。
+//!   表画像五卡 + 检查器命中环 + 列类型分布 + 列画像表 + 事实提示（列目标走列画像版式）。
 //! - 多表对比（D64 阶段② / D66）：候选**只收「已进入洞察的目标」**，三态对齐原型
-//!   （候选表勾选 → 运行中进度 → 结果表带健康着色，点行重开该表画像）。
+//!   （候选表勾选 → 运行中进度 → 结果表按事实指标着色，点行重开该表画像）。
 //!   聚合会话内已完成的画像摘要（不重新取数）；负载大时退化为多 tab 切换。
 //! - 用户口径：**导航树表行前不加勾选框**，对比候选 = 已打开过洞察的目标。
+//! - 本页只呈现事实统计与检查器命中，不合成质量总分 / 等级（评级归归档后的资产库）。
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -21,31 +22,30 @@ use gpui_kit::base::{Disableable as _, StyledExt as _};
 // `StatefulInteractiveElement`，元素必须带稳定 id 才能挂（滚动容器与列卡锚点均已加 id）。
 // kit 的 `Scrollable` 组件内部持有自己的 handle，外部 `ScrollAnchor` 挂不上去，
 // 因此中间页滚动容器用 gpui 基座滚动而非 `overflow_y_scrollbar`。
+use gpui::{Anchor, ScrollAnchor, ScrollHandle};
+use gpui_kit::assets::IconName as CatalogIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::switch::Switch;
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::assets::IconName as CatalogIcon;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use gpui::{Anchor, ScrollAnchor, ScrollHandle};
 
 use crate::insight_view::InsightView;
 use crate::model::{
-    fmt_int, fmt_num, fmt_pct, fmt_rows, kurt_direction, normality_judge, skew_direction,
     ColumnCheckState, ColumnChecker, ColumnKind, InsightPanelState, InsightSetEntry,
-    InsightSetKind, InsightTarget, MultiResultView, TableColumnView, TableProfileView,
-    NULL_RATE_NOTE,
+    InsightSetKind, InsightTarget, MultiResultView, NULL_RATE_NOTE, TableColumnView,
+    TableProfileView, fmt_int, fmt_num, fmt_pct, fmt_rows, kurt_direction, normality_judge,
+    skew_direction,
 };
-use crate::quality_scorer::Grade;
 use crate::service::persistence::SOURCE_SAMPLE_LIMIT;
 use crate::ui;
 use crate::view::{error_block, skeleton};
@@ -74,14 +74,11 @@ pub struct OpenedTarget {
 }
 
 /// 画像摘要：对比聚合的最小事实集（行数 / 列数 / 检查器命中 / 缺失率 / 唯一率 /
-/// 值得关注列数），**不重新取数**。
+/// 值得关注列数），**不重新取数**；不含质量总分或等级（评级归归档后的资产库）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TargetSummary {
     pub row_count: Option<u64>,
     pub column_count: Option<usize>,
-    /// 表级质量分（「评估全表」完成后才有，未评估不是 0 分）
-    pub score: Option<f64>,
-    pub grade: Option<Grade>,
     /// 检查器命中计数（适用且通过；无评级语义）
     pub checker_hits: Option<usize>,
     pub checker_applicable: Option<usize>,
@@ -89,7 +86,7 @@ pub struct TargetSummary {
     pub null_rate: Option<f64>,
     /// 表级唯一率均值（0–1；列统计未跑为 `None`）
     pub unique_rate: Option<f64>,
-    /// 值得关注列数（评分低于阈值的列，评估后才有）
+    /// 值得关注列数（缺失率高于阈值 / 检查器未命中的列，评估后才有）
     pub attention_columns: Option<usize>,
 }
 
@@ -112,16 +109,30 @@ impl TargetSummary {
                 (uniq_n > 0).then_some(uniq_sum / uniq_n as f64),
             )
         };
+        // 值得关注列：缺失率 > 20% 或检查器未命中（事实口径，不依赖旧评分等级）
+        let attention_columns = profile.quality.as_ref().map(|q| {
+            let miss: std::collections::HashSet<&str> = q
+                .checker
+                .iter()
+                .filter(|c| c.state == ColumnCheckState::Miss)
+                .map(|c| c.column.as_str())
+                .collect();
+            profile
+                .columns
+                .iter()
+                .filter(|c| {
+                    miss.contains(c.name.as_str()) || c.null_rate.map(|r| r > 0.2).unwrap_or(false)
+                })
+                .count()
+        });
         Self {
             row_count: Some(profile.row_count),
             column_count: Some(profile.columns.len()),
-            score: profile.quality.as_ref().map(|q| q.overall),
-            grade: profile.quality.as_ref().map(|q| q.grade),
             checker_hits: profile.quality.as_ref().map(|q| q.checker_hits),
             checker_applicable: profile.quality.as_ref().map(|q| q.checker_applicable),
             null_rate,
             unique_rate,
-            attention_columns: profile.quality.as_ref().map(|q| q.problem_columns),
+            attention_columns,
         }
     }
 }
@@ -176,8 +187,13 @@ impl OpenedTarget {
 /// 目标的稳定业务键：跨种类唯一、与连接 / 来源区分（同表不同连接不合并）。
 fn target_key(t: &InsightTarget) -> String {
     match t {
-        InsightTarget::Column { temp_table, column, .. } => format!("column:{temp_table}:{column}"),
-        InsightTarget::Table { temp_table, table_name } => {
+        InsightTarget::Column {
+            temp_table, column, ..
+        } => format!("column:{temp_table}:{column}"),
+        InsightTarget::Table {
+            temp_table,
+            table_name,
+        } => {
             format!("table:{temp_table}:{table_name}")
         }
         InsightTarget::SourceColumn { source, column, .. } => format!(
@@ -190,7 +206,10 @@ fn target_key(t: &InsightTarget) -> String {
             source.conn_id().unwrap_or("mem"),
             source.label()
         ),
-        InsightTarget::MultiColumn { temp_table, columns } => {
+        InsightTarget::MultiColumn {
+            temp_table,
+            columns,
+        } => {
             format!("multi:{temp_table}:{}", columns.join(","))
         }
         InsightTarget::Schema {
@@ -226,6 +245,10 @@ pub struct InsightWorkspacePanel {
     kind_filter: Option<ColumnKind>,
     /// 列分布：搜索定位（子串命中列名）
     col_q: String,
+    /// 列多选弹层内：列名过滤词（独立于 `col_q`——弹层只影响勾选清单，不驱动卡片列表）
+    picker_q: String,
+    /// 弹层内搜索框订阅（同键只挂一次订阅；`picker_q` 的只读镜像）
+    picker_search_subs: RefCell<Vec<Subscription>>,
     /// 关联性：子 Tab（数值相关 / 分类关联 / 值重叠）
     rel_tab: RelTab,
     /// 关联性：数值相关的列对（2 列执行相关系数规则）
@@ -307,7 +330,8 @@ impl ColZone {
 
 /// 关联性子 Tab（原型 .rel-tabs：数值相关 / 分类关联 / 值重叠）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RelTab {    #[default]
+pub enum RelTab {
+    #[default]
     Corr,
     Assoc,
     Overlap,
@@ -345,6 +369,8 @@ impl InsightWorkspacePanel {
             sel_cols: Vec::new(),
             kind_filter: None,
             col_q: String::new(),
+            picker_q: String::new(),
+            picker_search_subs: RefCell::new(Vec::new()),
             rel_tab: RelTab::default(),
             corr_cols: Vec::new(),
             rel_rule: None,
@@ -550,12 +576,7 @@ impl InsightWorkspacePanel {
     /// - 导出报告尚无宿主写文件通道（列 / 结构导出各有事件，表画像导出未接）——
     ///   disabled + tooltip 标注，不做点了没反应的按钮。
     /// - 目标切换用语义 `Button::dropdown_menu`：方向键 / Escape / 焦点恢复由组件负责。
-    fn render_toolbar(
-        &self,
-        entity: &Entity<Self>,
-        theme: &Theme,
-        cx: &Context<Self>,
-    ) -> Div {
+    fn render_toolbar(&self, entity: &Entity<Self>, theme: &Theme, cx: &Context<Self>) -> Div {
         let colors = theme.colors;
         // 菜单构造需要 opened 快照（闭包 'static，不能借面板状态）：只带 key + 标题
         let candidates: Vec<(String, String)> = self
@@ -565,12 +586,11 @@ impl InsightWorkspacePanel {
             .collect();
         let current_key = self.view.read(cx).target().map(target_key);
         // chip 文本：连接 / 来源描述 · 表名（原型「连接 · 表」）
-        let chip = self.view.read(cx).target().map(|t| {
-            (
-                t.detail().unwrap_or_else(|| "DuckDB".into()),
-                t.title(),
-            )
-        });
+        let chip = self
+            .view
+            .read(cx)
+            .target()
+            .map(|t| (t.detail().unwrap_or_else(|| "DuckDB".into()), t.title()));
 
         div()
             .flex_none()
@@ -633,7 +653,12 @@ impl InsightWorkspacePanel {
                                 .target()
                                 .map(|t| t.title())
                                 .unwrap_or_default();
-                            let content = view.read(app).data().table.as_ref().map(render_markdown_report);
+                            let content = view
+                                .read(app)
+                                .data()
+                                .table
+                                .as_ref()
+                                .map(render_markdown_report);
                             if let Some(content) = content {
                                 view.update(app, |v, cx| {
                                     v.request_report_export(content, cx);
@@ -743,7 +768,10 @@ impl InsightWorkspacePanel {
         let used_mb = stats.database_bytes.unwrap_or(0) / (1024 * 1024);
         let limit_mb = stats.limit_bytes / (1024 * 1024);
         let text = if limit_mb > 0 {
-            format!("内存 {used_mb} MB / {limit_mb} MB · 表 {}", stats.table_count)
+            format!(
+                "内存 {used_mb} MB / {limit_mb} MB · 表 {}",
+                stats.table_count
+            )
         } else {
             format!("内存 {used_mb} MB · 表 {}", stats.table_count)
         };
@@ -757,8 +785,8 @@ impl InsightWorkspacePanel {
 
     /// 中间页画像版式（D66）：按载荷分派——错误 / 取样加载 / 骨架 / 表画像 / 列画像 / 空态。
     ///
-    /// 注意：与右栏 `InsightView` 的五 Tab 不同，中间页是**原型画像版式**：
-    /// 表目标显示四卡 + 质量评分环 + 列类型分布 + 列画像表 + 质量提示；
+    /// 注意：与右栏 `InsightView` 的六 Tab 不同，中间页是**原型画像版式**：
+    /// 表目标显示五卡 + 检查器命中环 + 列类型分布 + 列画像表 + 事实提示；
     /// 列目标复用列画像四区（`render_column_profile`，宽版）。
     fn render_insight_content(
         &self,
@@ -779,9 +807,7 @@ impl InsightWorkspacePanel {
         if matches!(self.view.read(cx).state(), InsightPanelState::Loading) {
             return match self.view.read(cx).loading_note() {
                 // 源目标取样：两段式进度（源取样 → 画像）
-                Some(note) if !note.is_empty() => {
-                    self.render_sample_progress(cx, theme)
-                }
+                Some(note) if !note.is_empty() => self.render_sample_progress(cx, theme),
                 // 临时表目标画像通常很快：纯骨架
                 _ => div().p(rems(ui::PANEL_PADDING)).child(skeleton(theme)),
             };
@@ -835,7 +861,7 @@ impl InsightWorkspacePanel {
     ///
     /// 与原型的字段差异（数据模型无 → 用真实字段等价替代，不编假值）：
     /// - 原型「探索价值」分卡 → 概览第五卡「值得关注」列数（缺失 / 高基数现算）；
-    /// - 原型列卡「直方图 / 极值」→ 列卡折叠态统计行（类型 / 缺失 / 唯一 / 评分）；
+    /// - 原型列卡「直方图 / 极值」→ 列卡折叠态统计行（类型 / 缺失 / 唯一）；
     /// - 原型关联矩阵 → 关联性子 Tab（数值 / 分类走多列规则执行，值重叠走右栏集合）。
     fn render_table_overview(
         &self,
@@ -857,15 +883,7 @@ impl InsightWorkspacePanel {
             .child(self.render_type_bar(profile, theme))
             .child(self.render_worth_section(profile, &entity, theme))
             .child(self.render_eda_tabs(cx, entity, theme))
-            .child(self.render_eda_body(
-                window,
-                cx,
-                profile,
-                entity,
-                &theme,
-                inline_icon,
-                ring_px,
-            ))
+            .child(self.render_eda_body(window, cx, profile, entity, &theme, inline_icon, ring_px))
     }
 
     /// 报告头（原型 .report-head）：kind 徽标 + scope 徽标 + 取样↔全量切换 + 生成报告。
@@ -930,8 +948,16 @@ impl InsightWorkspacePanel {
                     Button::new("insight-ws-scope")
                         .ghost()
                         .xsmall()
-                        .icon(if go_full { CatalogIcon::Expand } else { CatalogIcon::Shrink })
-                        .label(if go_full { "全量统计" } else { "取样统计" })
+                        .icon(if go_full {
+                            CatalogIcon::Expand
+                        } else {
+                            CatalogIcon::Shrink
+                        })
+                        .label(if go_full {
+                            "全量统计"
+                        } else {
+                            "取样统计"
+                        })
                         .tooltip(if go_full {
                             "大表默认取样 500 行；全量需手动触发（可能较慢）"
                         } else {
@@ -959,20 +985,12 @@ impl InsightWorkspacePanel {
         let total = columns.len().max(1);
         let with_stats = columns.iter().filter(|c| c.null_rate.is_some()).count();
         let missing_avg = if with_stats > 0 {
-            columns
-                .iter()
-                .filter_map(|c| c.null_rate)
-                .sum::<f64>()
-                / with_stats as f64
+            columns.iter().filter_map(|c| c.null_rate).sum::<f64>() / with_stats as f64
         } else {
             0.0
         };
         let unique_avg = if with_stats > 0 {
-            columns
-                .iter()
-                .filter_map(|c| c.unique_rate)
-                .sum::<f64>()
-                / with_stats as f64
+            columns.iter().filter_map(|c| c.unique_rate).sum::<f64>() / with_stats as f64
         } else {
             0.0
         };
@@ -995,7 +1013,12 @@ impl InsightWorkspacePanel {
                 fmt_rows(profile.row_count),
                 "当前口径行数",
             ))
-            .child(summary_card(theme, "列数", total.to_string(), "含主键 / 索引"))
+            .child(summary_card(
+                theme,
+                "列数",
+                total.to_string(),
+                "含主键 / 索引",
+            ))
             .child(summary_card(
                 &theme,
                 "缺失率",
@@ -1028,7 +1051,12 @@ impl InsightWorkspacePanel {
             ColumnKind::Unknown,
         ]
         .into_iter()
-        .map(|kind| (kind, profile.columns.iter().filter(|c| c.kind == kind).count()))
+        .map(|kind| {
+            (
+                kind,
+                profile.columns.iter().filter(|c| c.kind == kind).count(),
+            )
+        })
         .collect();
         let bar_colors: Vec<Hsla> = vec![
             colors.success,
@@ -1044,12 +1072,7 @@ impl InsightWorkspacePanel {
             }
             let w_ratio = (*count as f32 / total as f32).max(0.01);
             // 类型占比条：相对父宽（`w(relative(..))`），不引入绝对像素
-            segs = segs.child(
-                div()
-                    .h_full()
-                    .w(relative(w_ratio))
-                    .bg(bar_colors[ix]),
-            );
+            segs = segs.child(div().h_full().w(relative(w_ratio)).bg(bar_colors[ix]));
         }
         let mut legend = div().h_flex().w_full().items_center().gap_3();
         for (ix, (kind, count)) in counts.iter().enumerate() {
@@ -1086,7 +1109,9 @@ impl InsightWorkspacePanel {
             let mut by_col: Vec<(&str, usize)> = Vec::new();
             for check in &quality.checker {
                 if check.state == ColumnCheckState::Miss {
-                    if let Some((_, n)) = by_col.iter_mut().find(|(c, _)| *c == check.column.as_str()) {
+                    if let Some((_, n)) =
+                        by_col.iter_mut().find(|(c, _)| *c == check.column.as_str())
+                    {
                         *n += 1;
                     } else {
                         by_col.push((check.column.as_str(), 1));
@@ -1111,7 +1136,11 @@ impl InsightWorkspacePanel {
             .iter()
             .filter(|c| c.null_rate.map(|n| n > 0.2).unwrap_or(false))
             .collect();
-        missing.sort_by(|a, b| b.null_rate.partial_cmp(&a.null_rate).unwrap_or(std::cmp::Ordering::Equal));
+        missing.sort_by(|a, b| {
+            b.null_rate
+                .partial_cmp(&a.null_rate)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for col in missing.iter().take(3) {
             lines = lines.child(self.render_worth_row(
                 entity,
@@ -1136,7 +1165,11 @@ impl InsightWorkspacePanel {
             lines = lines.child(self.render_worth_row(
                 entity,
                 IconName::FileText,
-                format!("{} 高基数（唯一率 {:.0}%）", col.name, col.unique_rate.unwrap_or(0.0) * 100.0),
+                format!(
+                    "{} 高基数（唯一率 {:.0}%）",
+                    col.name,
+                    col.unique_rate.unwrap_or(0.0) * 100.0
+                ),
                 &col.name,
                 theme,
             ));
@@ -1171,8 +1204,9 @@ impl InsightWorkspacePanel {
 
     /// 值得关注行：点击展开该列卡 + 滚动定位（`ScrollAnchor::scroll_to` 下一帧生效）。
     ///
-    /// 行级导航用 `div.on_click`（数据行，非标准控件）；滚动锚点取渲染时快照，
-    /// 若该列不在当前筛选结果里则只展开不滚动（列卡不在树中，滚动无目标）。
+    /// 用标准 `Button`（ghost / xsmall）承载导航动作：自带 `track_focus` / `tab_stop` /
+    /// Enter·Space 在 KeyUp 激活 / 焦点环 / `role=button` 与无障碍标签，不再手搓可点 div。
+    /// 滚动锚点取渲染时快照；若该列不在当前筛选结果里则只展开不滚动（列卡不在树中，滚动无目标）。
     fn render_worth_row(
         &self,
         entity: &Entity<Self>,
@@ -1185,18 +1219,22 @@ impl InsightWorkspacePanel {
         let anchor = self.col_anchors.borrow().get(column).cloned();
         let entity = entity.clone();
         let column = column.to_string();
-        div()
-            .id(SharedString::from(format!("insight-ws-worth-{column}")))
-            .h_flex()
+        let label = text.clone();
+        Button::new(SharedString::from(format!("insight-ws-worth-{column}")))
+            .ghost()
+            .xsmall()
             .w_full()
-            .items_center()
-            .gap_2()
+            .justify_start()
             .px_2()
             .py_0p5()
-            .cursor_pointer()
             .rounded(theme.radius)
-            .hover(|style| style.bg(colors.list_hover))
-            .child(Icon::new(icon).with_size(Size::Size(theme.font_size * ui::INSIGHT_INLINE_ICON_SIZE)).text_color(colors.info))
+            .accessibility_label(label.clone())
+            .tooltip(text.clone())
+            .child(
+                Icon::new(icon)
+                    .with_size(Size::Size(theme.font_size * ui::INSIGHT_INLINE_ICON_SIZE))
+                    .text_color(colors.info),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1204,7 +1242,7 @@ impl InsightWorkspacePanel {
                     .text_xs()
                     .text_ellipsis()
                     .text_color(colors.foreground)
-                    .child(text),
+                    .child(label),
             )
             .child(
                 div()
@@ -1242,7 +1280,11 @@ impl InsightWorkspacePanel {
                     });
                 }
             });
-        div().w_full().border_b_1().border_color(theme.colors.border).child(tabs)
+        div()
+            .w_full()
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .child(tabs)
     }
 
     /// 报告主体：按主 Tab 分派四段内容。
@@ -1298,7 +1340,9 @@ impl InsightWorkspacePanel {
                 div()
                     // anchor_scroll 在 `StatefulInteractiveElement` 上（0.8.0
                     // gpui-fast div.rs:1557），元素必须带 id 才能挂锚点
-                    .id(SharedString::from(format!("insight-ws-col-anchor-{col_name}")))
+                    .id(SharedString::from(format!(
+                        "insight-ws-col-anchor-{col_name}"
+                    )))
                     .anchor_scroll(anchor)
                     .child(self.render_col_card(profile, col, entity, theme)),
             );
@@ -1326,7 +1370,7 @@ impl InsightWorkspacePanel {
     }
 
     /// 列卡（原型 .col-card）：折叠态 = 列名 + 类型徽标 + 探索价值徽标 + 统计行
-    /// （缺失率 / 唯一率 / 质量分）；展开态 = 「只看规则属性」开关 + 四区
+    /// （缺失率 / 唯一率）；展开态 = 「只看规则属性」开关 + 四区
     /// （基础统计 / 分布 / 检查器 / 样本，对齐原型 `.cc-zones`）。
     fn render_col_card(
         &self,
@@ -1336,7 +1380,6 @@ impl InsightWorkspacePanel {
         theme: &Theme,
     ) -> impl IntoElement {
         let colors = theme.colors;
-        let score = col.score.map(|s| format!("{:.0}", s)).unwrap_or_else(|| "—".into());
         let checker = column_checkers(profile, col);
         let explore = col_explore_score(col, &checker);
         let open = self.col_open.borrow().contains(&col.name);
@@ -1394,7 +1437,9 @@ impl InsightWorkspacePanel {
                     .text_color(colors.muted_foreground)
                     .child(format!(
                         "缺失 {}%",
-                        col.null_rate.map(|n| format!("{:.0}", n * 100.0)).unwrap_or_else(|| "—".into())
+                        col.null_rate
+                            .map(|n| format!("{:.0}", n * 100.0))
+                            .unwrap_or_else(|| "—".into())
                     )),
             )
             .child(
@@ -1404,15 +1449,10 @@ impl InsightWorkspacePanel {
                     .text_color(colors.muted_foreground)
                     .child(format!(
                         "唯一 {}%",
-                        col.unique_rate.map(|u| format!("{:.0}", u * 100.0)).unwrap_or_else(|| "—".into())
+                        col.unique_rate
+                            .map(|u| format!("{:.0}", u * 100.0))
+                            .unwrap_or_else(|| "—".into())
                     )),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child(format!("评分 {score}")),
             )
             .when_some(explore_badge, |this, badge| this.child(badge))
             // 展开切换（语义 Button，键盘可达；原型为整行点击，等价交互）
@@ -1420,26 +1460,40 @@ impl InsightWorkspacePanel {
                 let entity = entity.clone();
                 let name = col.name.clone();
                 let toggled = open;
-                Button::new(SharedString::from(format!("insight-ws-col-toggle-{}", name)))
-                    .ghost()
-                    .xsmall()
-                    .icon(if toggled { IconName::ChevronDown } else { IconName::ChevronRight })
-                    .tooltip(if toggled { "收起" } else { "展开四区（基础统计 / 分布 / 检查器 / 样本）" })
-                    .on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| {
-                            let mut open = panel.col_open.borrow_mut();
-                            if toggled {
-                                open.remove(&name);
-                            } else {
-                                open.insert(name.clone());
-                            }
-                            cx.notify();
-                        });
-                    })
+                Button::new(SharedString::from(format!(
+                    "insight-ws-col-toggle-{}",
+                    name
+                )))
+                .ghost()
+                .xsmall()
+                .icon(if toggled {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .tooltip(if toggled {
+                    "收起"
+                } else {
+                    "展开四区（基础统计 / 分布 / 检查器 / 样本）"
+                })
+                .on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| {
+                        let mut open = panel.col_open.borrow_mut();
+                        if toggled {
+                            open.remove(&name);
+                        } else {
+                            open.insert(name.clone());
+                        }
+                        cx.notify();
+                    });
+                })
             });
         let body = self.render_col_card_body(col, &checker, zone, entity, theme);
         Collapsible::new()
-            .motion_id(SharedString::from(format!("insight-ws-col-motion-{}", col.name)))
+            .motion_id(SharedString::from(format!(
+                "insight-ws-col-motion-{}",
+                col.name
+            )))
             .open(open)
             .child(header)
             .content(body)
@@ -1458,41 +1512,44 @@ impl InsightWorkspacePanel {
         entity: &Entity<Self>,
         theme: &Theme,
     ) -> Div {
-        let rule_toggle = div()
-            .h_flex()
-            .w_full()
-            .items_center()
-            .gap_2()
-            .child(
-                div().flex_1().min_w_0().child(
-                    Switch::new(SharedString::from(format!(
-                        "insight-ws-rule-only-{}",
-                        col.name
-                    )))
-                    .checked(self.col_rule_only.borrow().get(&col.name).copied().unwrap_or(false))
-                    .label("只看规则属性")
-                    .on_click({
-                        let entity = entity.clone();
-                        let name = col.name.clone();
-                        move |_, _, app| {
-                            entity.update(app, |panel, cx| {
-                                let on = panel
-                                    .col_rule_only
-                                    .borrow()
-                                    .get(&name)
-                                    .copied()
-                                    .unwrap_or(false);
-                                panel
-                                    .col_rule_only
-                                    .borrow_mut()
-                                    .insert(name.clone(), !on);
-                                cx.notify();
-                            });
-                        }
-                    }),
-                ),
-            );
-        let rule_only = self.col_rule_only.borrow().get(&col.name).copied().unwrap_or(false);
+        let rule_toggle = div().h_flex().w_full().items_center().gap_2().child(
+            div().flex_1().min_w_0().child(
+                Switch::new(SharedString::from(format!(
+                    "insight-ws-rule-only-{}",
+                    col.name
+                )))
+                .checked(
+                    self.col_rule_only
+                        .borrow()
+                        .get(&col.name)
+                        .copied()
+                        .unwrap_or(false),
+                )
+                .label("只看规则属性")
+                .on_click({
+                    let entity = entity.clone();
+                    let name = col.name.clone();
+                    move |_, _, app| {
+                        entity.update(app, |panel, cx| {
+                            let on = panel
+                                .col_rule_only
+                                .borrow()
+                                .get(&name)
+                                .copied()
+                                .unwrap_or(false);
+                            panel.col_rule_only.borrow_mut().insert(name.clone(), !on);
+                            cx.notify();
+                        });
+                    }
+                }),
+            ),
+        );
+        let rule_only = self
+            .col_rule_only
+            .borrow()
+            .get(&col.name)
+            .copied()
+            .unwrap_or(false);
         if rule_only {
             return div()
                 .v_flex()
@@ -1504,23 +1561,26 @@ impl InsightWorkspacePanel {
                 .child(self.render_checker_list(col, checker, theme));
         }
         // 四区 Tab（segmented；id 带列名防跨列串台）+ 当前区内容 + 检查器汇总
-        let tabs = TabBar::new(SharedString::from(format!("insight-ws-col-zones-{}", col.name)))
-            .segmented()
-            .selected_index(zone.index())
-            .children(ColZone::ALL.iter().map(|z| Tab::new().label(z.label())))
-            .on_click({
-                let entity = entity.clone();
-                let name = col.name.clone();
-                move |index, _, app| {
-                    entity.update(app, |panel, cx| {
-                        panel
-                            .col_detail_zone
-                            .borrow_mut()
-                            .insert(name.clone(), *index);
-                        cx.notify();
-                    });
-                }
-            });
+        let tabs = TabBar::new(SharedString::from(format!(
+            "insight-ws-col-zones-{}",
+            col.name
+        )))
+        .segmented()
+        .selected_index(zone.index())
+        .children(ColZone::ALL.iter().map(|z| Tab::new().label(z.label())))
+        .on_click({
+            let entity = entity.clone();
+            let name = col.name.clone();
+            move |index, _, app| {
+                entity.update(app, |panel, cx| {
+                    panel
+                        .col_detail_zone
+                        .borrow_mut()
+                        .insert(name.clone(), *index);
+                    cx.notify();
+                });
+            }
+        });
         div()
             .v_flex()
             .w_full()
@@ -1562,9 +1622,18 @@ impl InsightWorkspacePanel {
                 ("最大".into(), fmt_num(n.max)),
                 ("P25".into(), fmt_num(n.p25)),
                 ("P75".into(), fmt_num(n.p75)),
-                ("标准差".into(), n.stddev.map(fmt_num).unwrap_or_else(|| "—".into())),
-                ("偏度".into(), n.skewness.map(fmt_num).unwrap_or_else(|| "—".into())),
-                ("峰度".into(), n.kurtosis.map(fmt_num).unwrap_or_else(|| "—".into())),
+                (
+                    "标准差".into(),
+                    n.stddev.map(fmt_num).unwrap_or_else(|| "—".into()),
+                ),
+                (
+                    "偏度".into(),
+                    n.skewness.map(fmt_num).unwrap_or_else(|| "—".into()),
+                ),
+                (
+                    "峰度".into(),
+                    n.kurtosis.map(fmt_num).unwrap_or_else(|| "—".into()),
+                ),
             ],
             crate::model::types::ColumnStatsDetail::Text(t) => vec![
                 ("最短长度".into(), fmt_int(t.min_length)),
@@ -1589,7 +1658,9 @@ impl InsightWorkspacePanel {
                 ("假".into(), fmt_int(b.false_count)),
                 ("真占比".into(), fmt_pct(b.true_ratio)),
             ],
-            crate::model::types::ColumnStatsDetail::Unknown => vec![("统计".into(), "无可用统计".into())],
+            crate::model::types::ColumnStatsDetail::Unknown => {
+                vec![("统计".into(), "无可用统计".into())]
+            }
         };
         zone_rows(theme, rows)
     }
@@ -1707,11 +1778,19 @@ impl InsightWorkspacePanel {
     ) -> Div {
         let colors = theme.colors;
         if checker.is_empty() {
-            return div().text_xs().text_color(colors.muted_foreground)
+            return div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
                 .child("该列无检查器属性（未评估全表）");
         }
-        let hits = checker.iter().filter(|c| c.state == ColumnCheckState::Hit).count();
-        let applicable = checker.iter().filter(|c| c.state != ColumnCheckState::NotApplicableType).count();
+        let hits = checker
+            .iter()
+            .filter(|c| c.state == ColumnCheckState::Hit)
+            .count();
+        let applicable = checker
+            .iter()
+            .filter(|c| c.state != ColumnCheckState::NotApplicableType)
+            .count();
         let nas = checker.len() - applicable;
         div()
             .v_flex()
@@ -1726,7 +1805,11 @@ impl InsightWorkspacePanel {
                     .text_color(colors.muted_foreground)
                     .child(format!(
                         "检查器 {hits}/{applicable} 命中{}",
-                        if nas > 0 { format!(" · {nas} 不适用") } else { String::new() }
+                        if nas > 0 {
+                            format!(" · {nas} 不适用")
+                        } else {
+                            String::new()
+                        }
                     )),
             )
             .child(self.render_checker_list(col, checker, theme))
@@ -1741,7 +1824,9 @@ impl InsightWorkspacePanel {
     ) -> Div {
         let colors = theme.colors;
         if checker.is_empty() {
-            return div().text_xs().text_color(colors.muted_foreground)
+            return div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
                 .child("该列无检查器属性");
         }
         let mut rows = div().v_flex().w_full().gap_1();
@@ -1761,7 +1846,7 @@ impl InsightWorkspacePanel {
                     .child(
                         div()
                             .flex_none()
-                            .w(rems(ui::INSIGHT_WS_GRADE_WIDTH))
+                            .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
                             .text_xs()
                             .text_color(color)
                             .child(state_text),
@@ -1817,7 +1902,11 @@ impl InsightWorkspacePanel {
                             .flex_none()
                             .text_xs()
                             .text_ellipsis()
-                            .text_color(if highlight { colors.warning } else { colors.muted_foreground })
+                            .text_color(if highlight {
+                                colors.warning
+                            } else {
+                                colors.muted_foreground
+                            })
                             .child(col.name.clone()),
                     )
                     .child(
@@ -1827,7 +1916,11 @@ impl InsightWorkspacePanel {
                                 col.name
                             )))
                             .value(ratio)
-                            .color(if highlight { colors.warning } else { colors.success }),
+                            .color(if highlight {
+                                colors.warning
+                            } else {
+                                colors.success
+                            }),
                         ),
                     )
                     .child(
@@ -1835,7 +1928,11 @@ impl InsightWorkspacePanel {
                             .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
                             .flex_none()
                             .text_xs()
-                            .text_color(if highlight { colors.warning } else { colors.muted_foreground })
+                            .text_color(if highlight {
+                                colors.warning
+                            } else {
+                                colors.muted_foreground
+                            })
                             .child(format!("{:.0}%", ratio * 100.0)),
                     ),
             );
@@ -1845,7 +1942,11 @@ impl InsightWorkspacePanel {
         let note = if with_stats == 0 {
             "列统计摘要不可用（查询失败或表为空）".to_string()
         } else if with_stats < total {
-            format!("显示缺失最多的 {} 列（共 {} 列）", with_stats.min(12), total)
+            format!(
+                "显示缺失最多的 {} 列（共 {} 列）",
+                with_stats.min(12),
+                total
+            )
         } else {
             format!("共 {total} 列")
         };
@@ -2309,7 +2410,12 @@ impl InsightWorkspacePanel {
         let Some(target) = self.view.read(cx).target().cloned() else {
             return;
         };
-        let Some(temp_table) = self.view.read(cx).data().sample_table(&target).map(|s| s.to_string())
+        let Some(temp_table) = self
+            .view
+            .read(cx)
+            .data()
+            .sample_table(&target)
+            .map(|s| s.to_string())
         else {
             return;
         };
@@ -2340,7 +2446,11 @@ impl InsightWorkspacePanel {
                     .w_full()
                     .items_center()
                     .gap_2()
-                    .child(Icon::new(CatalogIcon::Table).with_size(Size::Size(inline_icon)).text_color(colors.muted_foreground))
+                    .child(
+                        Icon::new(CatalogIcon::Table)
+                            .with_size(Size::Size(inline_icon))
+                            .text_color(colors.muted_foreground),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -2372,12 +2482,21 @@ impl InsightWorkspacePanel {
                     .text_ellipsis()
                     .text_color(colors.foreground)
                     .child(name.clone())
-                    .when(ix == 0, |this| this.w(rems(ui::INSIGHT_WS_SOURCE_WIDTH)).flex_none()),
+                    .when(ix == 0, |this| {
+                        this.w(rems(ui::INSIGHT_WS_SOURCE_WIDTH)).flex_none()
+                    }),
             );
         }
         let mut body = div().v_flex().w_full();
         for row in &sample.rows {
-            let mut line = div().h_flex().w_full().gap_2().px_2().py_1().border_t_1().border_color(colors.border);
+            let mut line = div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .border_t_1()
+                .border_color(colors.border);
             for (ix, cell) in row.iter().enumerate() {
                 line = line.child(
                     div()
@@ -2385,9 +2504,15 @@ impl InsightWorkspacePanel {
                         .min_w_0()
                         .text_xs()
                         .text_ellipsis()
-                        .text_color(if cell == "NULL" { colors.muted_foreground } else { colors.foreground })
+                        .text_color(if cell == "NULL" {
+                            colors.muted_foreground
+                        } else {
+                            colors.foreground
+                        })
                         .child(cell.clone())
-                        .when(ix == 0, |this| this.w(rems(ui::INSIGHT_WS_SOURCE_WIDTH)).flex_none()),
+                        .when(ix == 0, |this| {
+                            this.w(rems(ui::INSIGHT_WS_SOURCE_WIDTH)).flex_none()
+                        }),
                 );
             }
             body = body.child(line);
@@ -2395,7 +2520,11 @@ impl InsightWorkspacePanel {
         panel_box(
             theme,
             "样本",
-            format!("前 {} 行（共 {} 行）", sample.rows.len(), fmt_rows(profile.row_count)),
+            format!(
+                "前 {} 行（共 {} 行）",
+                sample.rows.len(),
+                fmt_rows(profile.row_count)
+            ),
             div().v_flex().w_full().child(head).child(body),
         )
     }
@@ -2450,6 +2579,27 @@ impl InsightWorkspacePanel {
             );
             self.col_search_subs.borrow_mut().push(sub);
         }
+        // 弹层内列名过滤框：独立于 `col_q`（只影响勾选清单，不驱动卡片列表）；
+        // state 在主体惰性创建、同键只挂一次订阅，弹层 content 直接复用同一实体。
+        let picker_search_state = window.use_keyed_state(
+            SharedString::from("insight-ws-picker-search"),
+            cx,
+            |window, cx| InputState::new(window, cx).placeholder("筛选列名"),
+        );
+        if self.picker_search_subs.borrow().is_empty() {
+            let sub = cx.subscribe_in(
+                &picker_search_state,
+                window,
+                |this: &mut Self, emitter, event: &InputEvent, _window, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    this.picker_q = emitter.read(cx).value().to_string();
+                    cx.notify();
+                },
+            );
+            self.picker_search_subs.borrow_mut().push(sub);
+        }
         let kind_label = kind_items
             .iter()
             .find(|(_, k)| *k == self.kind_filter)
@@ -2500,9 +2650,12 @@ impl InsightWorkspacePanel {
                         menu
                     })
             })
-            // 列多选浮层：Popover（trigger = Button，content = Checkbox 列表）
+            // 列多选浮层：Popover（trigger = Button，content = 搜索框 + Checkbox 列表）
             .child({
                 let entity = entity.clone();
+                let picker_search_state = picker_search_state.clone();
+                // 弹层内过滤词快照（渲染期只读；输入权威在 InputState，订阅回写 picker_q）
+                let panel_q = self.picker_q.clone();
                 // 当前显式选集（空 = 全选，此时回显全选）；浮层内容闭包捕获此快照
                 let current: Vec<String> = if self.sel_cols.is_empty() {
                     col_names.clone()
@@ -2579,10 +2732,28 @@ impl InsightWorkspacePanel {
                                             }),
                                     ),
                             )
-                            .child(div().w_full().h_px().bg(colors.border));
-                        for name in &names {
+                            .child(div().w_full().h_px().bg(colors.border))
+                            .child(Input::new(&picker_search_state).cleanable(true));
+                        // 弹层内列名子串过滤（大小写不敏感）；只定位勾选清单，
+                        // 不改变全选 / 反选作用的全集口径。
+                        let filtered: Vec<&String> = names
+                            .iter()
+                            .filter(|n| {
+                                panel_q.is_empty()
+                                    || n.to_lowercase().contains(&panel_q.to_lowercase())
+                            })
+                            .collect();
+                        if filtered.is_empty() {
+                            body = body.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(colors.muted_foreground)
+                                    .child("没有匹配的列"),
+                            );
+                        }
+                        for name in filtered {
                             let entity = entity.clone();
-                            let name = name.clone();
+                            let name = (*name).clone();
                             let label = name.clone();
                             let all = all_names.clone();
                             let checked = current.contains(&name);
@@ -2596,30 +2767,29 @@ impl InsightWorkspacePanel {
                                             "insight-ws-col-{name}"
                                         )))
                                         .checked(checked)
-                                        .on_click(move |_, _, app| {
-                                            entity.update(app, |panel, cx| {
-                                                // 首次点选时把「隐式全选」物化为显式清单
-                                                if panel.sel_cols.is_empty() {
-                                                    panel.sel_cols = all.clone();
-                                                }
-                                                if let Some(pos) = panel
-                                                    .sel_cols
-                                                    .iter()
-                                                    .position(|n| n == &name)
-                                                {
-                                                    panel.sel_cols.remove(pos);
-                                                } else {
-                                                    panel.sel_cols.push(name.clone());
-                                                }
-                                                cx.notify();
-                                            });
-                                        }),
+                                        .on_click(
+                                            move |_, _, app| {
+                                                entity.update(app, |panel, cx| {
+                                                    // 首次点选时把「隐式全选」物化为显式清单
+                                                    if panel.sel_cols.is_empty() {
+                                                        panel.sel_cols = all.clone();
+                                                    }
+                                                    if let Some(pos) = panel
+                                                        .sel_cols
+                                                        .iter()
+                                                        .position(|n| n == &name)
+                                                    {
+                                                        panel.sel_cols.remove(pos);
+                                                    } else {
+                                                        panel.sel_cols.push(name.clone());
+                                                    }
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ),
                                     )
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(colors.foreground)
-                                            .child(label),
+                                        div().text_xs().text_color(colors.foreground).child(label),
                                     ),
                             );
                         }
@@ -2663,10 +2833,9 @@ impl InsightWorkspacePanel {
                     .gap_4()
                     .text_xs()
                     .text_color(colors.muted_foreground)
-                    .child(
-                        div()
-                            .child(format!("取样行数 {SOURCE_SAMPLE_LIMIT} / {SOURCE_SAMPLE_LIMIT}")),
-                    )
+                    .child(div().child(format!(
+                        "取样行数 {SOURCE_SAMPLE_LIMIT} / {SOURCE_SAMPLE_LIMIT}"
+                    )))
                     .child(div().child(format!("源目标 {detail}")))
                     .child(div().child(format!("临时表 {temp}"))),
             )
@@ -2692,10 +2861,12 @@ impl InsightWorkspacePanel {
                             .child("洞察分析中"),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted_foreground)
-                            .child(target.as_ref().map(|t| t.title()).unwrap_or_else(|| "…".into())),
+                        div().text_xs().text_color(colors.muted_foreground).child(
+                            target
+                                .as_ref()
+                                .map(|t| t.title())
+                                .unwrap_or_else(|| "…".into()),
+                        ),
                     ),
             )
             .child(
@@ -2704,7 +2875,12 @@ impl InsightWorkspacePanel {
                     .items_center()
                     .gap_2()
                     .child(step_dot("源取样", stage == 0, stage >= 1, theme))
-                    .child(div().w(rems(ui::INSIGHT_WS_NUM_WIDTH)).h_px().bg(colors.border))
+                    .child(
+                        div()
+                            .w(rems(ui::INSIGHT_WS_NUM_WIDTH))
+                            .h_px()
+                            .bg(colors.border),
+                    )
                     .child(step_dot("画像", stage == 1, stage >= 2, theme)),
             )
             .child(
@@ -2740,17 +2916,24 @@ impl InsightWorkspacePanel {
     ) -> Div {
         let colors = theme.colors;
         let view = self.view.clone();
-        let rendered = view.read(cx).render_column_profile(profile, &view, theme, inline_icon);
-        div().v_flex().w_full().p(rems(ui::PANEL_PADDING)).child(rendered).child(
-            div()
-                .text_xs()
-                .text_color(colors.muted_foreground)
-                .child("列画像 · 右键结果表中的列可查看"),
-        )
+        let rendered = view
+            .read(cx)
+            .render_column_profile(profile, &view, theme, inline_icon);
+        div()
+            .v_flex()
+            .w_full()
+            .p(rems(ui::PANEL_PADDING))
+            .child(rendered)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child("列画像 · 右键结果表中的列可查看"),
+            )
     }
 
     /// 对比页（D66 三态对齐原型）：
-    /// 候选态（勾选表 + 开始对比）→ 运行态（进度示意）→ 结果态（健康着色 + 点行开画像）。
+    /// 候选态（勾选表 + 开始对比）→ 运行态（进度示意）→ 结果态（事实指标着色 + 点行开画像）。
     fn render_compare(&self, cx: &Context<Self>, entity: &Entity<Self>, theme: &Theme) -> Div {
         let colors = theme.colors;
         if self.opened.is_empty() {
@@ -2931,7 +3114,7 @@ impl InsightWorkspacePanel {
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_GRADE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
                                             .flex_none()
                                             .text_xs()
                                             .text_color(color)
@@ -3002,10 +3185,7 @@ impl InsightWorkspacePanel {
                             .children(selected.into_iter().enumerate().map(|(i, entry)| {
                                 let running = i == 0;
                                 div()
-                                    .id(SharedString::from(format!(
-                                        "insight-ws-run-{}",
-                                        entry.key
-                                    )))
+                                    .id(SharedString::from(format!("insight-ws-run-{}", entry.key)))
                                     .h(rems(ui::ROW_HEIGHT))
                                     .w_full()
                                     .flex()
@@ -3041,11 +3221,16 @@ impl InsightWorkspacePanel {
             )
     }
 
-    /// 对比结果态：表名 / 数据源 / 行数 / 列数 / 健康分 / 评级（健康着色）+ 点行重开画像。
-    ///
-    /// 原型阈值 85 / 70 硬编码；本实现按 `Grade` 语义取色（`grade_color`），
-    /// 阈值由 `quality_scorer` 一处提供，不在视图里再写一份。
-    fn render_compare_result(&self, _cx: &Context<Self>, entity: &Entity<Self>, theme: &Theme) -> Div {
+    /// 对比结果态：表名 / 数据源 / 行数 / 列数 / 检查器命中比 / 缺失率 / 唯一率 /
+    /// 值得关注列数 + 点行重开画像。阈值（缺失率 `NULL_RATE_NOTE`、唯一率
+    /// `CHECKER_UNIQUE_MAX`）由 `quality_scorer` 一处提供，不在视图里再写一份；
+    /// 本表不呈现质量总分或等级。
+    fn render_compare_result(
+        &self,
+        _cx: &Context<Self>,
+        entity: &Entity<Self>,
+        theme: &Theme,
+    ) -> Div {
         let colors = theme.colors;
         let selected: Vec<_> = self
             .opened
@@ -3139,19 +3324,19 @@ impl InsightWorkspacePanel {
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .child("检查器"),
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .child("缺失率"),
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .child("唯一率"),
                                     )
@@ -3247,7 +3432,7 @@ impl InsightWorkspacePanel {
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .text_xs()
                                             .text_color(checker_color)
@@ -3255,7 +3440,7 @@ impl InsightWorkspacePanel {
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .text_xs()
                                             .text_color(miss_color)
@@ -3267,7 +3452,7 @@ impl InsightWorkspacePanel {
                                     )
                                     .child(
                                         div()
-                                            .w(rems(ui::INSIGHT_WS_SCORE_WIDTH))
+                                            .w(rems(ui::INSIGHT_WS_FACT_WIDTH))
                                             .flex_none()
                                             .text_xs()
                                             .text_color(uniq_color)
@@ -3315,7 +3500,7 @@ fn divider(theme: &Theme) -> Div {
         .mx_1()
 }
 
-/// 四卡之一（原型 .card：键 + 值 + 说明）
+/// 概览五卡之一（原型 .card：键 + 值 + 说明）
 fn summary_card(theme: &Theme, key: &str, value: String, sub: impl Into<String>) -> Div {
     let colors = theme.colors;
     let sub = sub.into();
@@ -3328,10 +3513,15 @@ fn summary_card(theme: &Theme, key: &str, value: String, sub: impl Into<String>)
         .rounded_sm()
         .border_1()
         .border_color(colors.border)
-        .child(div().text_xs().text_color(colors.muted_foreground).child(key.to_string()))
         .child(
             div()
-                .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.75))
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(key.to_string()),
+        )
+        .child(
+            div()
+                .text_size(rems(ui::INSIGHT_CARD_VALUE_FONT * 0.75))
                 .text_color(colors.foreground)
                 .child(value),
         )
@@ -3442,11 +3632,7 @@ fn column_checkers(profile: &TableProfileView, col: &TableColumnView) -> Vec<Col
 /// 不适用-类型与排除态不计——它们不代表数据有问题。系数待原型定稿。
 fn col_explore_score(col: &TableColumnView, checker: &[ColumnChecker]) -> f64 {
     let mut score = explore_missing_weight(col);
-    if col
-        .unique_rate
-        .map(|u| u > 0.9)
-        .unwrap_or(false) && !col.primary_key
-    {
+    if col.unique_rate.map(|u| u > 0.9).unwrap_or(false) && !col.primary_key {
         score += 2.0;
     }
     if col.kind == ColumnKind::Unknown {
@@ -3503,7 +3689,8 @@ fn zone_rows(theme: &Theme, rows: Vec<(String, String)>) -> Div {
 
 /// 分布条（直方图 / Top 值 / 月度 / 布尔共用）：label + 条 + 计数。
 /// 条用原生 flex 宽度（布局不是控件，不必组件化）；取前 `limit` 条防爆版面。
-fn dist_bars(theme: &Theme, bins: &[crate::model::types::DistributionBin], limit: usize) -> Div {    let colors = theme.colors;
+fn dist_bars(theme: &Theme, bins: &[crate::model::types::DistributionBin], limit: usize) -> Div {
+    let colors = theme.colors;
     let mut body = div().v_flex().w_full().gap_1();
     for bin in bins.iter().take(limit) {
         body = body.child(
@@ -3523,12 +3710,9 @@ fn dist_bars(theme: &Theme, bins: &[crate::model::types::DistributionBin], limit
                 )
                 .child(
                     div().flex_1().min_w_0().child(
-                        Progress::new(SharedString::from(format!(
-                            "insight-ws-dist-{}",
-                            bin.label
-                        )))
-                        .value(bin.ratio.clamp(0.0, 1.0) as f32)
-                        .color(colors.primary),
+                        Progress::new(SharedString::from(format!("insight-ws-dist-{}", bin.label)))
+                            .value(bin.ratio.clamp(0.0, 1.0) as f32)
+                            .color(colors.primary),
                     ),
                 )
                 .child(
@@ -3573,7 +3757,9 @@ fn render_markdown_report(profile: &TableProfileView) -> String {
             .iter()
             .filter(|c| c.state == ColumnCheckState::Miss)
             .count();
-        md.push_str(&format!("## 检查器命中\n\n{hits}/{applicable} 命中，其中未命中 {misses} 条。\n\n"));
+        md.push_str(&format!(
+            "## 检查器命中\n\n{hits}/{applicable} 命中，其中未命中 {misses} 条。\n\n"
+        ));
     }
     // 值得关注：检查器未命中 / 缺失 >20% / 高基数（非主键）/ 类型未识别
     let mut worth: Vec<String> = Vec::new();
@@ -3581,10 +3767,7 @@ fn render_markdown_report(profile: &TableProfileView) -> String {
         let mut by_col: Vec<(&str, usize)> = Vec::new();
         for check in &q.checker {
             if check.state == ColumnCheckState::Miss {
-                if let Some((_, n)) = by_col
-                    .iter_mut()
-                    .find(|(c, _)| *c == check.column.as_str())
-                {
+                if let Some((_, n)) = by_col.iter_mut().find(|(c, _)| *c == check.column.as_str()) {
                     *n += 1;
                 } else {
                     by_col.push((check.column.as_str(), 1));
@@ -3636,22 +3819,23 @@ fn render_markdown_report(profile: &TableProfileView) -> String {
         md.push('\n');
     }
     // 列明细表：检查器列给出「命中/未命中/不适用」统计
-    md.push_str("## 列明细\n\n| 列 | 类型 | 缺失% | 唯一% | 评分 | 检查器 |\n|---|---|---|---|---|---|\n");
+    md.push_str("## 列明细\n\n| 列 | 类型 | 缺失% | 唯一% | 检查器 |\n|---|---|---|---|---|\n");
     for col in &profile.columns {
-        let checker_text = column_checkers(profile, col)
-            .iter()
-            .fold((0usize, 0usize), |(hit, miss), c| match c.state {
-                ColumnCheckState::Hit => (hit + 1, miss),
-                ColumnCheckState::Miss => (hit, miss + 1),
-                _ => (hit, miss),
-            });
+        let checker_text =
+            column_checkers(profile, col)
+                .iter()
+                .fold((0usize, 0usize), |(hit, miss), c| match c.state {
+                    ColumnCheckState::Hit => (hit + 1, miss),
+                    ColumnCheckState::Miss => (hit, miss + 1),
+                    _ => (hit, miss),
+                });
         let checker_cell = if profile.quality.is_some() {
             format!("{}/{}", checker_text.0, checker_text.0 + checker_text.1)
         } else {
             "—".into()
         };
         md.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} |\n",
             escape_md(&col.name),
             escape_md(&col.data_type),
             col.null_rate
@@ -3660,7 +3844,6 @@ fn render_markdown_report(profile: &TableProfileView) -> String {
             col.unique_rate
                 .map(|u| format!("{:.0}", u * 100.0))
                 .unwrap_or_else(|| "—".into()),
-            col.score.map(|s| format!("{s:.0}")).unwrap_or_else(|| "—".into()),
             checker_cell,
         ));
     }
@@ -3689,8 +3872,7 @@ fn render_markdown_report(profile: &TableProfileView) -> String {
 
 /// Markdown 转义：`|` 换成全角竖线（表格 cell 不串列），换行改空格。
 fn escape_md(text: &str) -> String {
-    text.replace('|', "｜")
-        .replace(['\r', '\n'], " ")
+    text.replace('|', "｜").replace(['\r', '\n'], " ")
 }
 
 /// 文本 / 时间分布条（Top 值、月度分布）：把 `TextFrequency` 转成占比条。
@@ -3706,7 +3888,11 @@ fn dist_text_bars(
         .map(|f| crate::model::types::DistributionBin {
             label: f.value.clone(),
             count: f.count,
-            ratio: if total > 0 { f.count as f64 / total as f64 } else { 0.0 },
+            ratio: if total > 0 {
+                f.count as f64 / total as f64
+            } else {
+                0.0
+            },
         })
         .collect();
     dist_bars(theme, &bins, limit)
@@ -3899,7 +4085,7 @@ fn compare_table_header(theme: &Theme) -> Div {
         )
         .child(
             div()
-                .w(rems(ui::INSIGHT_WS_GRADE_WIDTH))
+                .w(rems(ui::INSIGHT_WS_STATUS_WIDTH))
                 .flex_none()
                 .child("状态"),
         )
@@ -3961,7 +4147,7 @@ impl ComponentPanel for InsightWorkspacePanel {
         div()
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
-            .max_w(px(240.))
+            .max_w(rems(ui::INSIGHT_WS_TITLE_MAX_WIDTH))
             .overflow_hidden()
             .text_ellipsis()
             .child(name)
@@ -4006,7 +4192,7 @@ mod tests {
 
     use gpui_kit::{AppContext as _, TestAppContext};
 
-    use super::{target_key, InsightWorkspacePanel};
+    use super::{InsightWorkspacePanel, target_key};
     use crate::model::{InsightTarget, SampleSource, TableColumnView, TableProfileView};
 
     fn table_target(name: &str) -> InsightTarget {
@@ -4030,7 +4216,6 @@ mod tests {
                     kind: crate::model::ColumnKind::Numeric,
                     nullable: false,
                     primary_key: false,
-                    score: None,
                     null_rate: None,
                     unique_rate: None,
                     stats_detail: None,
@@ -4047,7 +4232,10 @@ mod tests {
     #[test]
     fn target_key_is_stable_and_distinguishes_sources() {
         // 同目标两次构造 → 同 key（去重前提）
-        assert_eq!(target_key(&table_target("orders")), target_key(&table_target("orders")));
+        assert_eq!(
+            target_key(&table_target("orders")),
+            target_key(&table_target("orders"))
+        );
         // 同表不同连接 → 不同 key（双栏 / 多连接下不误合并）
         let other_conn = InsightTarget::SourceTable {
             source: SampleSource::new("conn-2", "SELECT * FROM orders", "analytics"),
@@ -4070,8 +4258,9 @@ mod tests {
         // 开 A → 注入画像 → 切 B：A 的摘要应存档进 opened
         panel.update(cx, |p, cx| p.open_target(table_target("orders"), cx));
         panel.update(cx, |p, cx| {
-            p.insight_view()
-                .update(cx, |v, cx| v.set_table_profile(profile("orders", 1000, 8), cx));
+            p.insight_view().update(cx, |v, cx| {
+                v.set_table_profile(profile("orders", 1000, 8), cx)
+            });
         });
         panel.update(cx, |p, cx| p.open_target(table_target("users"), cx));
         panel.update(cx, |p, _| {
@@ -4101,14 +4290,19 @@ mod tests {
         let orders_key = target_key(&table_target("orders"));
         // 勾选 → 选中集变化；再点一次 → 取消
         panel.update(cx, |p, cx| p.toggle_candidate(&orders_key, cx));
-        panel.update(cx, |p, _| assert_eq!(p.compare_selected(), &[orders_key.clone()]));
+        panel.update(cx, |p, _| {
+            assert_eq!(p.compare_selected(), &[orders_key.clone()])
+        });
         panel.update(cx, |p, cx| p.toggle_candidate(&orders_key, cx));
         panel.update(cx, |p, _| assert!(p.compare_selected().is_empty()));
         // 点候选行 → 切回画像形态并指向该目标
         panel.update(cx, |p, cx| p.open_candidate(&orders_key, cx));
         panel.update(cx, |p, cx| {
             assert_eq!(p.mode(), crate::workspace::WorkspaceMode::Insight);
-            assert_eq!(p.insight_view().read(cx).target().map(|t| t.title()), Some("orders".into()));
+            assert_eq!(
+                p.insight_view().read(cx).target().map(|t| t.title()),
+                Some("orders".into())
+            );
         });
     }
 
@@ -4116,14 +4310,8 @@ mod tests {
     fn markdown_report_carries_same_facts_and_escapes_cells() {
         // 出口事实（D36）：报告里出现与渲染一致的表名 / 行数 / 列数与检查器状态
         use crate::model::{ColumnCheckState, TableQualityView};
-        use crate::quality_scorer::Grade;
         let mut p = profile("orders", 1_234, 3);
         p.quality = Some(TableQualityView {
-            overall: 62.0,
-            grade: Grade::Fair,
-            summary: "2 个问题列".into(),
-            problem_columns: 1,
-            scored_columns: 3,
             checker: vec![
                 crate::model::ColumnChecker {
                     column: "c0".into(),
@@ -4148,9 +4336,9 @@ mod tests {
         assert!(md.contains("1/2 命中，其中未命中 1 条"));
         assert!(md.contains("c0 检查器未命中 1 条"), "值得关注应含未命中列");
         assert!(md.contains("c0 缺失率 30%"), "值得关注应含高缺失列");
-        // 列明细表头与状态计数
-        assert!(md.contains("| 列 | 类型 | 缺失% | 唯一% | 评分 | 检查器 |"));
-        assert!(md.contains("| c0 | INTEGER | 30 | — | — | 1/2 |"));
+        // 列明细表头与状态计数（无评分列，只呈现事实统计）
+        assert!(md.contains("| 列 | 类型 | 缺失% | 唯一% | 检查器 |"));
+        assert!(md.contains("| c0 | INTEGER | 30 | — | 1/2 |"));
         // 转义：含 | 的表名不应串列
         assert_eq!(super::escape_md("a|b\nc"), "a｜b c");
     }

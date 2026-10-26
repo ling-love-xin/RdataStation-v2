@@ -3,14 +3,14 @@ use std::sync::OnceLock;
 
 use tokio::sync::Semaphore;
 
-use shared::error::{CommonError, CoreError};
 use crate as insight;
 use crate::{RuleExecutor, RuleRegistry};
-use engine::services::duckdb_service::{duckdb_value_to_json, DuckDbService};
+use engine::services::duckdb_service::{DuckDbService, duckdb_value_to_json};
+use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{
-    ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin, ExtremeValue,
-    NumericStats, TableColumnMeta, TableProfile, TextFrequency, TextStats,
+    ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin,
+    ExtremeValue, NumericStats, TableColumnMeta, TableProfile, TextFrequency, TextStats,
 };
 
 /// Default number of sample rows pulled from a column for display
@@ -42,8 +42,8 @@ fn insight_semaphore() -> &'static Semaphore {
 /// 实现为 `DuckDBManager` 的**进程级单例**（`Arc<Mutex<Connection>>`），
 /// 不是连接池：所有调用方共享同一条内存连接，访问由 `std::sync::Mutex` 串行化。
 /// 因此临时表在同一进程内全局可见——在一条调用链上创建的表，后续调用能直接读到。
-pub fn get_or_create_duckdb(
-) -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
+pub fn get_or_create_duckdb()
+-> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
     DuckDbService::get_or_create_duckdb()
 }
 
@@ -62,9 +62,9 @@ pub fn get_column_insight_full(
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnInsightFull, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
@@ -110,9 +110,9 @@ pub fn get_column_insight_full_on(
 /// 走 `DESCRIBE` 而不是 `information_schema`：前者对临时表 / 视图 / CTE 一视同仁，
 /// 也不需要自己按 `table_catalog = 'memory'` 过滤（`ATTACH` 进来的文件库表不该混进来）。
 pub fn get_temp_table_profile(temp_table: &str) -> Result<TableProfile, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
@@ -167,9 +167,11 @@ pub fn get_temp_table_profile_on(
 
     // 行数失败不算致命：列清单仍可看，只是没行数（与源库内省同一取舍）
     let row_count: i64 = conn
-        .query_row(&format!("SELECT COUNT(*) FROM \"{}\"", temp_table), [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            &format!("SELECT COUNT(*) FROM \"{}\"", temp_table),
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(0);
 
     Ok(TableProfile {
@@ -200,9 +202,7 @@ pub fn compute_table_column_summary_on(
         select_parts.push(format!(
             "AVG(CAST(\"{quoted}\" IS NULL AS INTEGER)) AS \"__n{ix}\""
         ));
-        select_parts.push(format!(
-            "COUNT(DISTINCT \"{quoted}\") AS \"__u{ix}\""
-        ));
+        select_parts.push(format!("COUNT(DISTINCT \"{quoted}\") AS \"__u{ix}\""));
     }
     let sql = format!(
         "SELECT {} FROM \"{}\"",
@@ -254,9 +254,9 @@ pub fn compute_table_column_summary(
     temp_table: &str,
     columns: &[String],
 ) -> Result<Vec<ColumnStatBrief>, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
@@ -271,9 +271,9 @@ pub fn compute_table_column_summary(
 /// 值经 `ValueRef` 手动文本化（`duckdb::types::Value` 没有 `Display`）；
 /// 空值显示为 `NULL` 字样，未覆盖类型兜底用 Debug 表示（不编假值）。
 pub fn get_temp_table_sample(temp_table: &str) -> Result<crate::model::TableSample, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
@@ -288,7 +288,10 @@ pub fn get_temp_table_sample_on(
     temp_table: &str,
 ) -> Result<crate::model::TableSample, CoreError> {
     use crate::model::TableSample;
-    let sql = format!("SELECT * FROM \"{}\" LIMIT 5", temp_table.replace('"', "\"\""));
+    let sql = format!(
+        "SELECT * FROM \"{}\" LIMIT 5",
+        temp_table.replace('"', "\"\"")
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| {
         CoreError::common(CommonError::General(format!(
             "DuckDB sample prepare failed: {}",
@@ -310,7 +313,10 @@ pub fn get_temp_table_sample_on(
         .map(|s| s.column_names().iter().map(|s| s.to_string()).collect())
         .unwrap_or_default();
     while let Some(row) = q.next().map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB sample row failed: {}", e)))
+        CoreError::common(CommonError::General(format!(
+            "DuckDB sample row failed: {}",
+            e
+        )))
     })? {
         let mut cells = Vec::with_capacity(columns.len());
         for ix in 0..columns.len() {
@@ -362,9 +368,9 @@ pub fn get_column_insights(
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStats, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
@@ -701,7 +707,9 @@ fn compute_boolean_stats(
 //
 // 已迁至 `crate::model`（唯一来源）：列画像与表探查都要用它，
 // 放在下层（领域词汇）后依赖方向才单一。此处仅导入使用。
-use crate::model::{is_array_type, is_binary_type, is_datetime_type, is_numeric_type, ColumnStatBrief};
+use crate::model::{
+    ColumnStatBrief, is_array_type, is_binary_type, is_datetime_type, is_numeric_type,
+};
 
 /// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
 ///
@@ -799,9 +807,9 @@ pub fn execute_insight_rule(
     conn: &duckdb::Connection,
     params: &HashMap<String, String>,
 ) -> Result<insight::ExecutionResult, CoreError> {
-    let _permit = insight_semaphore()
-        .try_acquire()
-        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+    let _permit = insight_semaphore().try_acquire().map_err(|_| {
+        CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string()))
+    })?;
 
     let rule = registry.get(rule_id).ok_or_else(|| {
         CoreError::common(CommonError::General(format!(
@@ -882,16 +890,17 @@ fn temp_table_column_types(
          WHERE table_catalog IN ('memory', 'temp') AND table_schema = 'main' AND table_name = ? \
          ORDER BY ordinal_position"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
-    })?;
-    let mut rows = stmt.query(duckdb::params![table]).map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
-    })?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB error: {e}"))))?;
+    let mut rows = stmt
+        .query(duckdb::params![table])
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB error: {e}"))))?;
     let mut map = HashMap::new();
-    while let Some(row) = rows.next().map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
-    })? {
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB error: {e}"))))?
+    {
         let name: String = row.get(0).unwrap_or_default();
         let ty: String = row.get(1).unwrap_or_default();
         map.insert(name, ty);
@@ -912,7 +921,11 @@ fn same_type_family(a: &str, b: &str) -> bool {
             2
         } else if t.starts_with("bool") {
             3
-        } else if t.starts_with("varchar") || t.starts_with("text") || t == "string" || t.contains("char") {
+        } else if t.starts_with("varchar")
+            || t.starts_with("text")
+            || t == "string"
+            || t.contains("char")
+        {
             4
         } else {
             0
@@ -964,9 +977,7 @@ pub fn compute_column_overlap(
                     row.get::<_, i64>(2).unwrap_or(0),
                 ))
             })
-            .map_err(|e| {
-                CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
-            })?;
+            .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB error: {e}"))))?;
         if inter == 0 {
             continue; // 无重叠的列不进结果（值域不同是常态，不刷屏）
         }
@@ -1144,21 +1155,19 @@ mod tests {
                 null_count: 2,
                 null_rate: 0.02,
                 unique_count: Some(95),
-                stats_detail: ColumnStatsDetail::Numeric(
-                    crate::model::types::NumericStats {
-                        min: 1.0,
-                        max: 100.0,
-                        avg: 50.0,
-                        median: 50.5,
-                        p25: 25.0,
-                        p75: 75.0,
-                        sum: 4900.0,
-                        stddev: Some(28.0),
-                        skewness: None,
-                        kurtosis: None,
-                        is_extreme: vec![],
-                    },
-                ),
+                stats_detail: ColumnStatsDetail::Numeric(crate::model::types::NumericStats {
+                    min: 1.0,
+                    max: 100.0,
+                    avg: 50.0,
+                    median: 50.5,
+                    p25: 25.0,
+                    p75: 75.0,
+                    sum: 4900.0,
+                    stddev: Some(28.0),
+                    skewness: None,
+                    kurtosis: None,
+                    is_extreme: vec![],
+                }),
             },
             sample: vec![serde_json::json!(50.0)],
             histogram: Some(vec![
@@ -1209,13 +1218,11 @@ mod tests {
                 null_count: 60,
                 null_rate: 0.6,
                 unique_count: Some(1),
-                stats_detail: ColumnStatsDetail::Text(
-                    crate::model::types::TextStats {
-                        min_length: 3,
-                        max_length: 3,
-                        top_values: vec![],
-                    },
-                ),
+                stats_detail: ColumnStatsDetail::Text(crate::model::types::TextStats {
+                    min_length: 3,
+                    max_length: 3,
+                    top_values: vec![],
+                }),
             },
             sample: vec![],
             histogram: None,
@@ -1238,21 +1245,19 @@ mod tests {
                 null_count: ((1.0 - score / 100.0) * 100.0) as u32,
                 null_rate: 1.0 - score / 100.0,
                 unique_count: Some((score * 0.9) as u32),
-                stats_detail: ColumnStatsDetail::Numeric(
-                    crate::model::types::NumericStats {
-                        min: 0.0,
-                        max: 100.0,
-                        avg: 50.0,
-                        median: 50.0,
-                        p25: 25.0,
-                        p75: 75.0,
-                        sum: 5000.0,
-                        stddev: Some(10.0),
-                        skewness: None,
-                        kurtosis: None,
-                        is_extreme: vec![],
-                    },
-                ),
+                stats_detail: ColumnStatsDetail::Numeric(crate::model::types::NumericStats {
+                    min: 0.0,
+                    max: 100.0,
+                    avg: 50.0,
+                    median: 50.0,
+                    p25: 25.0,
+                    p75: 75.0,
+                    sum: 5000.0,
+                    stddev: Some(10.0),
+                    skewness: None,
+                    kurtosis: None,
+                    is_extreme: vec![],
+                }),
             },
             sample: vec![],
             histogram: Some(vec![
@@ -1371,10 +1376,7 @@ mod tests {
         for rule in &column_rules {
             assert_eq!(rule["category"].as_str(), Some("column"));
         }
-        assert!(
-            list_insight_rules(&registry, Some("nonexistent-category"))?
-                .is_empty()
-        );
+        assert!(list_insight_rules(&registry, Some("nonexistent-category"))?.is_empty());
         Ok(())
     }
 
@@ -1426,7 +1428,10 @@ mod tests {
 
         let rows = compute_column_overlap(&conn, "t_overlap_a", "t_overlap_b")?;
         // id：A=7 行、B=5 行，交集 {1,2,3} = 3
-        let id = rows.iter().find(|r| r.column == "id").expect("id 列应进结果");
+        let id = rows
+            .iter()
+            .find(|r| r.column == "id")
+            .expect("id 列应进结果");
         assert_eq!(id.overlap, 3);
         assert!((id.rate_a - 3.0 / 7.0).abs() < 1e-9);
         assert!((id.rate_b - 3.0 / 5.0).abs() < 1e-9);

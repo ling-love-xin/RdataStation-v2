@@ -15,7 +15,7 @@
 //!   `theme.colors.*`。
 //! - **渲染零副作用**：点击只改自身状态 + `emit` 事件，宿主收到事件后再动数据。
 //!
-//! 本文件只放**状态**：目标 / 五态 / 各 Tab 载荷 / 折叠与选择，以及把它们推进去的那些方法。
+//! 本文件只放**状态**：目标 / 四态 / 各 Tab 载荷 / 折叠与选择，以及把它们推进去的那些方法。
 //! 渲染按 Tab 拆在 `crate::view` 下（位移规格见
 //! `docs/architecture/insight/insight-dev-plan.md` §11）——视图侧读得到字段，所以字段是
 //! `pub(crate)`；对外 API 仍是那些 `pub` 方法。
@@ -33,8 +33,7 @@ use gpui_kit::*;
 use crate::commands::InsightRefresh;
 use crate::model::{
     ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
-    MultiResultView, PanelData, PanelTab, QualityNote, TableProfileView,
-    SNAPSHOT_RETENTION_DAYS,
+    MultiResultView, PanelData, PanelTab, QualityNote, SNAPSHOT_RETENTION_DAYS, TableProfileView,
 };
 use crate::rule_view::RulesView;
 use crate::schema_view::{SchemaExportFormat, SchemaSection};
@@ -457,6 +456,8 @@ impl InsightView {
         // 取样口径跟着目标重置（新目标默认取样）；对比基准只对旧目标成立，跟着载荷清
         self.scope = InsightScope::Sample;
         self.compare_target = None;
+        // 阶段说明随目标生命周期走：旧目标的「取样中 / 画像中」提示不得挂到新目标上（K22）
+        self.loading_note = None;
         self.state = InsightPanelState::Loading;
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
@@ -505,7 +506,9 @@ impl InsightView {
             loop {
                 // 先采样再睡：启动即有读数，不必等第一轮 5 秒
                 let stats = executor
-                    .spawn(async { engine::services::duckdb_service::DuckDbService::memory_stats() })
+                    .spawn(async {
+                        engine::services::duckdb_service::DuckDbService::memory_stats()
+                    })
                     .await
                     .ok();
                 let keep = weak.update(cx, |view, cx| {
@@ -540,8 +543,10 @@ impl InsightView {
         let Some(target) = self.target.clone() else {
             return;
         };
-        if !matches!(target, InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. })
-        {
+        if !matches!(
+            target,
+            InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. }
+        ) {
             return;
         }
         cx.emit(InsightEvent::FullProfileConfirmRequested { target });
@@ -556,8 +561,10 @@ impl InsightView {
         let Some(target) = self.target.clone() else {
             return;
         };
-        if !matches!(target, InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. })
-        {
+        if !matches!(
+            target,
+            InsightTarget::SourceTable { .. } | InsightTarget::SourceColumn { .. }
+        ) {
             return;
         }
         self.scope = InsightScope::Full;
@@ -903,7 +910,8 @@ impl InsightView {
     ///
     /// 修剪而不是清空：临时表重建后列可能没变，把用户的选择无差别抹掉是坏体验。
     pub fn set_multi_view(&mut self, view: MultiColumnView, cx: &mut Context<Self>) {
-        self.multi_selected.retain(|name| view.column(name).is_some());
+        self.multi_selected
+            .retain(|name| view.column(name).is_some());
         if let Some(rule) = self.multi_rule.clone()
             && !view.rules.iter().any(|r| r.id == rule)
         {
@@ -1038,7 +1046,12 @@ impl InsightView {
     }
 
     /// 出错（`retryable` 决定是否给「重试」入口）
-    pub fn set_error(&mut self, message: impl Into<String>, retryable: bool, cx: &mut Context<Self>) {
+    pub fn set_error(
+        &mut self,
+        message: impl Into<String>,
+        retryable: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.state = InsightPanelState::Error {
             message: message.into(),
             retryable,
@@ -1092,7 +1105,9 @@ impl InsightView {
             },
             PanelTab::Table => match &target {
                 // 已经有源目标 → 原样再发（取样在接缝里做）
-                InsightTarget::SourceTable { .. } => Some(InsightEvent::ProfileRequested { target }),
+                InsightTarget::SourceTable { .. } => {
+                    Some(InsightEvent::ProfileRequested { target })
+                }
                 // 源列目标看整表：同一个来源，换成表目标（取样口径一致）
                 InsightTarget::SourceColumn { source, .. } => {
                     Some(InsightEvent::ProfileRequested {
@@ -1131,7 +1146,8 @@ impl InsightView {
             },
             PanelTab::History => match &target {
                 // 历史是「某列的历次快照」：只有列目标（含源列）说得清“看谁的历史”
-                InsightTarget::Column { column, .. } | InsightTarget::SourceColumn { column, .. }
+                InsightTarget::Column { column, .. }
+                | InsightTarget::SourceColumn { column, .. }
                     if self.project_open =>
                 {
                     Some(InsightEvent::HistoryRequested {
@@ -1276,6 +1292,5 @@ impl Render for InsightView {
                             )),
                     ),
             )
-            .children(self.render_score_card(theme))
     }
 }

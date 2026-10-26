@@ -11,13 +11,13 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::tag::{Tag, TagVariant};
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
 use super::{muted_line, section_title};
 use crate::insight_view::InsightView;
 use crate::model::{
-    DeltaView, DiffRowView, HistoryEntryView, HistoryView, VersionDiffView, HISTORY_PAGE_SIZE,
+    DeltaView, DiffRowView, HISTORY_PAGE_SIZE, HistoryEntryView, HistoryView, VersionDiffView,
 };
 use crate::ui;
 
@@ -264,36 +264,36 @@ fn history_entry_row(
     let mut row = ListItem::new(ElementId::Name(
         format!("insight-history-{}", entry.version_id).into(),
     ))
-        .selected(selected)
-        .disabled(entry.is_latest)
-        .px_1()
-        .text_xs()
-        .child(
-            div()
-                .h_flex()
-                .w_full()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .text_color(colors.foreground)
-                        .child(entry.created_at.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(colors.muted_foreground)
-                        .child(entry.short_version.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(colors.muted_foreground)
-                        .child(entry.data_type.clone()),
-                ),
-        );
+    .selected(selected)
+    .disabled(entry.is_latest)
+    .px_1()
+    .text_xs()
+    .child(
+        div()
+            .h_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .text_color(colors.foreground)
+                    .child(entry.created_at.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(colors.muted_foreground)
+                    .child(entry.short_version.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(colors.muted_foreground)
+                    .child(entry.data_type.clone()),
+            ),
+    );
 
     // 标记只给「值得一眼看出」的几行：最新一版、首版、链被剪过的头部。
     // 其余行都挂在链上（有父版本），逐行打标只是噪声。

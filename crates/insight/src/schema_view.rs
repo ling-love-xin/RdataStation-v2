@@ -352,7 +352,11 @@ impl SchemaReportView {
             self.health,
             self.grade.label()
         );
-        let _ = writeln!(out, "- 规模：{} 张表 / {} 个列", self.table_count, self.total_columns);
+        let _ = writeln!(
+            out,
+            "- 规模：{} 张表 / {} 个列",
+            self.table_count, self.total_columns
+        );
         let _ = writeln!(out, "- 需关注：{} 项", self.issue_count());
         let _ = writeln!(out);
         let _ = writeln!(out, "{}", self.summary);
@@ -465,11 +469,26 @@ mod tests {
         let view = SchemaReportView::from_report(&report());
         let sections: Vec<SchemaSection> = view.groups.iter().map(|g| g.section).collect();
         assert_eq!(sections, SchemaSection::ALL.to_vec());
-        assert_eq!(view.group(SchemaSection::ForeignKeys).unwrap().rows.len(), 1);
-        assert_eq!(view.group(SchemaSection::TypeMismatches).unwrap().rows.len(), 2);
-        assert_eq!(view.group(SchemaSection::OrphanTables).unwrap().rows.len(), 1);
         assert_eq!(
-            view.group(SchemaSection::RedundantColumns).unwrap().rows.len(),
+            view.group(SchemaSection::ForeignKeys).unwrap().rows.len(),
+            1
+        );
+        assert_eq!(
+            view.group(SchemaSection::TypeMismatches)
+                .unwrap()
+                .rows
+                .len(),
+            2
+        );
+        assert_eq!(
+            view.group(SchemaSection::OrphanTables).unwrap().rows.len(),
+            1
+        );
+        assert_eq!(
+            view.group(SchemaSection::RedundantColumns)
+                .unwrap()
+                .rows
+                .len(),
             1
         );
         assert_eq!(view.schema_name, "public");
@@ -538,20 +557,28 @@ mod tests {
         assert_eq!(view.groups.len(), 4);
         assert!(view.groups.iter().all(|g| g.is_empty()));
         assert_eq!(view.issue_count(), 0);
-        assert_eq!(view.grade, Grade::Bad, "0 分就是最差，不另立「空Schema」等级");
+        assert_eq!(
+            view.grade,
+            Grade::Bad,
+            "0 分就是最差，不另立「空Schema」等级"
+        );
     }
 
     #[test]
     fn json_export_keeps_stable_keys_and_counts() {
         let view = SchemaReportView::from_report(&report());
-        let json: serde_json::Value = serde_json::from_str(&view.to_json()).expect("导出应是合法 JSON");
+        let json: serde_json::Value =
+            serde_json::from_str(&view.to_json()).expect("导出应是合法 JSON");
         assert_eq!(json["schema"], "public");
         assert_eq!(json["health_score"], 68.0);
         assert_eq!(json["health_level"], "一般", "等级取现算的那一份");
         assert_eq!(json["issue_count"], 4);
         let groups = json["groups"].as_array().expect("应有分组");
         assert_eq!(groups.len(), 4);
-        assert_eq!(groups[0]["section"], "foreign_key_candidates", "分组键用稳定英文");
+        assert_eq!(
+            groups[0]["section"], "foreign_key_candidates",
+            "分组键用稳定英文"
+        );
         assert_eq!(groups[1]["rows"][0]["tone"], "danger");
         assert_eq!(groups[3]["rows"][0]["tables"][2], "logs");
     }
@@ -562,7 +589,9 @@ mod tests {
         assert!(md.starts_with("# Schema 健康报告 · public"));
         assert!(md.contains("- 健康评分：**68**（一般）"));
         assert!(md.contains("## 外键候选（1）"));
-        assert!(md.contains("| orders.user_id → users.id | 高置信 · 命名模式 {table}_id | orders、users |"));
+        assert!(md.contains(
+            "| orders.user_id → users.id | 高置信 · 命名模式 {table}_id | orders、users |"
+        ));
         assert!(md.contains("## 类型不一致（2）"));
         assert!(md.contains("## 孤立表（1）"));
         assert!(md.contains("## 冗余列（1）"));
@@ -580,7 +609,10 @@ mod tests {
             md.contains("{table}_id ｜ 变体"),
             "竖线要换成全角，否则 Markdown 表会断列：{md}"
         );
-        assert!(md.contains("同名列的声明类型在各表一致"), "空分区要解释「空」的含义");
+        assert!(
+            md.contains("同名列的声明类型在各表一致"),
+            "空分区要解释「空」的含义"
+        );
         assert!(md.contains("每张表都至少与另一张表有关联"));
     }
 
@@ -589,7 +621,11 @@ mod tests {
         assert_eq!(confidence_label("high"), "高置信");
         assert_eq!(confidence_label("medium"), "中置信");
         assert_eq!(confidence_label("low"), "低置信");
-        assert_eq!(confidence_label("very-high"), "very-high", "加了新档也不至于空白");
+        assert_eq!(
+            confidence_label("very-high"),
+            "very-high",
+            "加了新档也不至于空白"
+        );
     }
 
     /// 导出格式的标签与扩展名：菜单与保存对话框共用一处口径。
@@ -614,6 +650,10 @@ mod tests {
         );
         assert_eq!(schema_export_file_stem("a/b:c"), "schema-a-b-c");
         assert_eq!(schema_export_file_stem("   "), "schema", "空名兜底");
-        assert_eq!(schema_export_file_stem("///"), "schema", "全是非法字符也兜底");
+        assert_eq!(
+            schema_export_file_stem("///"),
+            "schema",
+            "全是非法字符也兜底"
+        );
     }
 }

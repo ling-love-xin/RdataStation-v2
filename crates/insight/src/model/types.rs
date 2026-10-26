@@ -122,7 +122,10 @@ pub struct TableColumnMeta {
     pub ordinal_position: i32,
 }
 
-// ==================== 质量评分 ====================
+// ==================== 历史质量模型（兼容保留） ====================
+// 下列结构仅用于：①历史画像快照 JSON schema 只读兼容（旧快照不重算分）；
+// ②Schema 结构健康分独立域（`schema_analyzer` 现算 `Grade`）。
+// 表 / 列画像的会话级 EDA 视图模型已不合成总分 / 等级 / 加权评分（见 `model.rs`）。
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Type)]
 pub struct QualityScore {

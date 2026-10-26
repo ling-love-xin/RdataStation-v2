@@ -7,7 +7,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
 use super::{grade_color, muted_line};
@@ -31,73 +31,76 @@ impl InsightView {
         let color = grade_color(report.grade, theme);
 
         // 健康条：分数是这张报告的头号结论
-        let body = div().v_flex().w_full().gap_2().child(
-            div()
-                .v_flex()
-                .w_full()
-                .gap_1()
-                .p_2()
-                .rounded_sm()
-                .bg(colors.list_hover)
-                .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_size(rems(ui::INSIGHT_HEALTH_SCORE_FONT))
-                                .text_color(color)
-                                .child(format!("{:.0}", report.health)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(color)
-                                .child(report.grade.label()),
-                        )
-                        .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
-                            format!(
-                                "{} 表 · {} 列 · 需关注 {} 项",
-                                report.table_count,
-                                report.total_columns,
-                                report.issue_count()
-                            ),
-                        ))
-                        // 导出入口：没报告时不渲染（结构 Tab 只在有报告时走到这）
-                        .child(
-                            Button::new("insight-schema-export")
-                                .ghost()
-                                .xsmall()
-                                .label("导出 ▾")
-                                .tooltip("把这份报告存成文件（导出的是你看到的这份结论）")
-                                .dropdown_menu({
-                                    let entity = entity.clone();
-                                    move |menu, _window, _cx| {
-                                        let mut menu = menu;
-                                        for format in SchemaExportFormat::ALL {
-                                            let entity = entity.clone();
-                                            menu = menu.item(
-                                                PopupMenuItem::new(format.label()).on_click(
-                                                    move |_, _, app| {
-                                                        entity.update(app, |view, cx| {
-                                                            view.request_schema_export(format, cx)
-                                                        })
-                                                    },
-                                                ),
-                                            );
+        let body =
+            div().v_flex().w_full().gap_2().child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .p_2()
+                    .rounded_sm()
+                    .bg(colors.list_hover)
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(rems(ui::INSIGHT_HEALTH_SCORE_FONT))
+                                    .text_color(color)
+                                    .child(format!("{:.0}", report.health)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(color)
+                                    .child(report.grade.label()),
+                            )
+                            .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
+                                format!(
+                                    "{} 表 · {} 列 · 需关注 {} 项",
+                                    report.table_count,
+                                    report.total_columns,
+                                    report.issue_count()
+                                ),
+                            ))
+                            // 导出入口：没报告时不渲染（结构 Tab 只在有报告时走到这）
+                            .child(
+                                Button::new("insight-schema-export")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("导出 ▾")
+                                    .tooltip("把这份报告存成文件（导出的是你看到的这份结论）")
+                                    .dropdown_menu({
+                                        let entity = entity.clone();
+                                        move |menu, _window, _cx| {
+                                            let mut menu = menu;
+                                            for format in SchemaExportFormat::ALL {
+                                                let entity = entity.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(format.label()).on_click(
+                                                        move |_, _, app| {
+                                                            entity.update(app, |view, cx| {
+                                                                view.request_schema_export(
+                                                                    format, cx,
+                                                                )
+                                                            })
+                                                        },
+                                                    ),
+                                                );
+                                            }
+                                            menu
                                         }
-                                        menu
-                                    }
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(report.summary.clone()),
-                ),
-        );
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.muted_foreground)
+                            .child(report.summary.clone()),
+                    ),
+            );
 
         // 四个折叠区（默认全展开：报告本身不长，折起来反而多点一下）
         let mut accordion = Accordion::new("insight-schema-sections")
@@ -185,7 +188,13 @@ fn schema_row(
                 .text_sm()
                 .text_color(colors.foreground)
                 .child(Icon::new(icon).size(inline_icon).text_color(tone_color))
-                .child(div().flex_1().min_w_0().text_ellipsis().child(row.title.clone())),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(row.title.clone()),
+                ),
         )
         .child(
             div()
@@ -214,8 +223,9 @@ fn schema_row(
                         let entity = entity.clone();
                         let table = table.clone();
                         move |_, _, app| {
-                            entity
-                                .update(app, |view, cx| view.request_table_drilldown(table.clone(), cx))
+                            entity.update(app, |view, cx| {
+                                view.request_table_drilldown(table.clone(), cx)
+                            })
                         }
                     }),
             );

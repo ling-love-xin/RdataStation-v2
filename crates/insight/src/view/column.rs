@@ -1,74 +1,22 @@
-//! 列画像（Tab「列」）：评分卡 + 四个折叠区
-//!
-//! 评分卡**钉在滚动区之外**（由宿主的 `render` 组装）：分数是这一列的头号结论，不该滚走。
-//! 四区（基础统计 / 数据分布 / 数据质量 / 样本数据）在滚动区内，折叠态属用户偏好。
+//! 列画像（Tab「列」）：四个折叠区（基础统计 / 数据分布 / 质量提示 / 样本数据）。
 //!
 //! 这里的每一条都是「有就说，没有就说没有」：不算假分布（[`distribution_zone`] 说明原因）、
-//! 不产假分数（`ColumnProfileView::score` 在全空列上不给分）、NULL 显式呈现。
+//! 不编假统计（未识别类型只给计数）、NULL 显式呈现；本视图不合成质量总分或等级。
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::accordion::Accordion;
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
-use super::{grade_color, muted_line, ratio_bar};
+use super::{muted_line, ratio_bar};
 use crate::insight_view::{ColumnSection, InsightView};
 use crate::model::{
-    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, NoteLevel, PanelTab,
-    QualityNote, SampleCell, StatRow,
+    ColumnKind, ColumnProfileView, DistributionBar, Emphasis, NoteLevel, QualityNote, SampleCell,
+    StatRow,
 };
-use crate::quality_scorer::Grade;
 use crate::ui;
 
 impl InsightView {
-    /// 评分卡（Phase 2）：**钉在滚动区之外**——分数是这列的头号结论，不该滚走。
-    ///
-    /// 只有「列」Tab 且列非全空时出现（后者见 `ColumnProfileView::score`：不产假分数）。
-    pub(crate) fn render_score_card(&self, theme: &Theme) -> Option<Div> {
-        if self.tab != PanelTab::Column {
-            return None;
-        }
-        let score = self.data.column.as_ref()?.score.as_ref()?;
-        let colors = theme.colors;
-        let color = grade_color(score.grade, theme);
-
-        let mut card = div()
-            .flex_none()
-            .v_flex()
-            .w_full()
-            .gap_1()
-            .px(rems(ui::PANEL_PADDING))
-            .py_1()
-            .border_t_1()
-            .border_color(colors.border)
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_size(rems(ui::INSIGHT_SCORE_FONT))
-                            .text_color(color)
-                            .child(format!("{:.0}", score.overall)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(color)
-                            .child(score.grade.label()),
-                    ),
-            );
-        for dim in &score.dimensions {
-            card = card.child(dimension_row(dim, theme));
-        }
-        Some(card.child(
-            div()
-                .text_xs()
-                .text_color(colors.muted_foreground)
-                .child(score.summary.clone()),
-        ))
-    }
-
     /// 列画像四区
     ///
     /// `pub(crate)`：中间工作页（`workspace.rs`）对列目标复用同一版式（宽版）。
@@ -101,42 +49,6 @@ impl InsightView {
 
         div().v_flex().w_full().gap_2().child(accordion)
     }
-}
-
-/// 评分卡的一维：名称 + 细条 + 分数（条色按**该维自己的**等级，便于一眼看出短板）
-fn dimension_row(dim: &DimensionView, theme: &Theme) -> Div {
-    let colors = theme.colors;
-    let color = grade_color(Grade::of(dim.score), theme);
-    div()
-        .v_flex()
-        .w_full()
-        .gap_1()
-        .child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(dim.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(color)
-                        .child(format!("{:.0}", dim.score)),
-                ),
-        )
-        .child(ratio_bar(
-            format!("insight-score-dim-{}", dim.name),
-            (dim.score / 100.0).clamp(0.0, 1.0) as f32,
-            Size::Small,
-            color,
-        ))
 }
 
 fn zone_title(title: &str, theme: &Theme) -> Div {

@@ -1,7 +1,7 @@
 use engine::driver::{ColumnDetail, DynDatabase};
 use engine::get_connection_manager;
-use shared::error::{CommonError, ConnectionError, CoreError};
 use serde::{Deserialize, Serialize};
+use shared::error::{CommonError, ConnectionError, CoreError};
 use specta::Type;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -164,8 +164,7 @@ impl SchemaAnalyzer {
         let has_browser = db.as_metadata_browser().is_some();
         let metadata = tokio::time::timeout(METADATA_TIMEOUT, async {
             let catalogs_answered = Self::ensure_target_exists(&db, database, schema).await?;
-            let (tables, columns, unreadable) =
-                Self::fetch_metadata(&db, database, schema).await?;
+            let (tables, columns, unreadable) = Self::fetch_metadata(&db, database, schema).await?;
             Ok::<_, CoreError>((tables, columns, unreadable, catalogs_answered))
         })
         .await
@@ -869,18 +868,21 @@ mod tests {
             ordinal: 0,
         };
 
-        let pk = TableColumnInfo::from_detail("orders", 0, &detail("id", "int", false, true, false));
+        let pk =
+            TableColumnInfo::from_detail("orders", 0, &detail("id", "int", false, true, false));
         assert_eq!(pk.column_name, "id");
         assert_eq!(pk.data_type, "int");
         assert_eq!(pk.is_nullable, "NO");
         assert_eq!(pk.column_key, "PRI", "主键角标（原来是 MySQL COLUMN_KEY）");
         assert_eq!(pk.ordinal_position, 1, "序数取列表下标 + 1");
 
-        let fk = TableColumnInfo::from_detail("orders", 1, &detail("user_id", "int", true, false, true));
+        let fk =
+            TableColumnInfo::from_detail("orders", 1, &detail("user_id", "int", true, false, true));
         assert_eq!(fk.column_key, "MUL", "外键给 MUL：外键置信度用它分档");
         assert_eq!(fk.is_nullable, "YES");
 
-        let plain = TableColumnInfo::from_detail("orders", 2, &detail("note", "text", true, false, false));
+        let plain =
+            TableColumnInfo::from_detail("orders", 2, &detail("note", "text", true, false, false));
         assert_eq!(plain.column_key, "");
         assert_eq!(plain.ordinal_position, 3);
         assert_eq!(plain.table_name, "orders");
@@ -891,12 +893,20 @@ mod tests {
     #[test]
     fn an_empty_report_is_not_a_missing_capability_when_the_driver_answers() {
         // 有 MetadataBrowser：空就是真空（这个 schema 里确实没表）
-        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(true, false));
-        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(true, true));
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(
+            true, false
+        ));
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(
+            true, true
+        ));
         // 没 browser 但库清单答得出：只实现了 `Database::list_*` 的自定义驱动，不误伤
-        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(false, true));
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(
+            false, true
+        ));
         // 两个信号都缺：真没内省能力（桥接驱动的典型形态）
-        assert!(SchemaAnalyzer::blank_report_is_a_missing_capability(false, false));
+        assert!(SchemaAnalyzer::blank_report_is_a_missing_capability(
+            false, false
+        ));
     }
 
     /// 「名写错了」的文案：要把可见取值列出来，用户才知道该填什么。

@@ -1,27 +1,26 @@
 //! 右栏「摘要」Tab（D66 对齐原型右栏六 Tab 的 Overview：首置，汇总当前目标的画像摘要）。
 //!
-//! 版式对齐 `insight-workspace-prototype.html` 的 `renderRightBody` overview 分支：
-//! - 表目标 → 三张摘要卡：①表名 / 来源 + kv（总行数 / 列数 / 取样）
-//!   ②质量评分（68px 评分环 + 等级 + 四维条）③质量提示（前 2 条）。
-//! - 列目标 → 列摘要卡（列名 + 类型徽标 + 总行数 / 空值率 + 列质量环 + 维度条）。
+//! 版式对齐 `insight-eda-prototype.html` 的 Overview 分支：
+//! - 表目标 → 摘要卡：①表名 / 来源 + kv（总行数 / 列数 / 取样）
+//!   ②检查器命中（环 + 四态列表 + 元数据事实占比条）③事实提示（高空值 / 未识别等）。
+//! - 列目标 → 列事实卡（列名 + 类型徽标 + 总行数 / 空值率 / 样本）。
 //! - 其它载荷 / 无目标 → `None`（走空态引导，不编假摘要）。
 //!
-//! 真实字段口径与中间工作页一致：四维从列元数据现算；未评估 = 空环 + 引导，
-//! 不显示「0 分」。摘要**不触发取数**（`emit_request_for_tab` 对 Overview 返回
-//! `None`），只用已加载的载荷渲染。
+//! 本视图只呈现事实统计与检查器命中，**不合成质量总分 / 等级 / 加权评分**
+//! （评级归归档后的资产库审计侧）。摘要**不触发取数**（`emit_request_for_tab` 对
+//! Overview 返回 `None`），只用已加载的载荷渲染。
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::progress::{Progress, ProgressCircle};
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::insight_view::InsightView;
 use crate::model::{ColumnCheckState, ColumnKind, ColumnProfileView, TableProfileView};
-use crate::quality_scorer::Grade;
 use crate::ui;
 
-use super::{grade_color, kind_badge};
+use super::kind_badge;
 
 impl InsightView {
     /// 摘要 Tab 的载荷：表 / 列画像任一份已有就渲染对应摘要；都没有 → 空态。
@@ -39,8 +38,7 @@ impl InsightView {
                 .and_then(|t| t.detail())
                 .unwrap_or_else(|| profile.source_label.into());
             return Some(
-                overview_table(profile, source, theme, inline_icon, ring_px)
-                    .into_any_element(),
+                overview_table(profile, source, theme, inline_icon, ring_px).into_any_element(),
             );
         }
         if let Some(profile) = self.data.as_column() {
@@ -50,7 +48,7 @@ impl InsightView {
     }
 }
 
-/// 表目标摘要（原型三卡：概要 / 质量评分 / 质量提示）
+/// 表目标摘要（概要 / 检查器命中 / 事实提示）
 fn overview_table(
     profile: &TableProfileView,
     source: String,
@@ -62,49 +60,64 @@ fn overview_table(
     let quality = profile.quality.as_ref();
     let total = profile.columns.len().max(1);
 
-    // 四维条（与中间工作页同口径：需关注 / 可空 / 主键 / 未识别，从列元数据现算）
-    let dims: Vec<(String, f64, Hsla)> = {
-        let problem = quality.map(|q| q.problem_columns).unwrap_or(0);
-        let nullable = profile.columns.iter().filter(|c| c.nullable).count();
-        let pk = profile.columns.iter().filter(|c| c.primary_key).count();
-        let unknown = profile
-            .columns
-            .iter()
-            .filter(|c| c.kind == ColumnKind::Unknown)
-            .count();
-        vec![
-            (
-                "需关注".into(),
-                (problem as f64 / total as f64) * 100.0,
-                colors.danger,
-            ),
-            (
-                "可空列".into(),
-                (nullable as f64 / total as f64) * 100.0,
-                colors.warning,
-            ),
-            (
-                "主键列".into(),
-                (pk as f64 / total as f64) * 100.0,
-                colors.success,
-            ),
-            (
-                "未识别".into(),
-                (unknown as f64 / total as f64) * 100.0,
-                colors.muted_foreground,
-            ),
-        ]
-    };
+    // 元数据现算事实计数（与中间工作页「值得关注」同口径：缺失率 > 20% 计入需关注）
+    let high_null = profile
+        .columns
+        .iter()
+        .filter(|c| c.null_rate.map(|r| r > 0.2).unwrap_or(false))
+        .count();
+    let nullable = profile.columns.iter().filter(|c| c.nullable).count();
+    let pk = profile.columns.iter().filter(|c| c.primary_key).count();
+    let unknown = profile
+        .columns
+        .iter()
+        .filter(|c| c.kind == ColumnKind::Unknown)
+        .count();
 
-    // 质量提示：前 2 条（真实数据，不编多条）
+    // 事实占比条：需关注 / 可空 / 主键 / 未识别，均为列占比事实，不合成评分
+    let dims: Vec<(String, f64, Hsla)> = vec![
+        (
+            "需关注".into(),
+            (high_null as f64 / total as f64) * 100.0,
+            colors.danger,
+        ),
+        (
+            "可空列".into(),
+            (nullable as f64 / total as f64) * 100.0,
+            colors.warning,
+        ),
+        (
+            "主键列".into(),
+            (pk as f64 / total as f64) * 100.0,
+            colors.success,
+        ),
+        (
+            "未识别".into(),
+            (unknown as f64 / total as f64) * 100.0,
+            colors.muted_foreground,
+        ),
+    ];
+
+    // 事实提示：检查器未命中列 / 高空值列 / 未识别类型列（真实计数，不编多条）
+    let miss_columns: std::collections::HashSet<String> = quality
+        .map(|q| {
+            q.checker
+                .iter()
+                .filter(|c| c.state == ColumnCheckState::Miss)
+                .map(|c| c.column.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let mut notes = Vec::new();
-    if let Some(q) = quality {
-        notes.push(q.summary.clone());
-        if q.problem_columns > 0 {
-            notes.push(format!("{} 列需关注（评分低于阈值）", q.problem_columns));
+    if quality.is_some() {
+        if !miss_columns.is_empty() {
+            notes.push(format!("{} 列检查器未命中", miss_columns.len()));
         }
-        if q.scored_columns == 0 {
-            notes.push("暂无可评分的列（类型均未识别）".into());
+        if high_null > 0 {
+            notes.push(format!("{} 列缺失率高于 20%", high_null));
+        }
+        if unknown > 0 {
+            notes.push(format!("{} 列类型未识别", unknown));
         }
     }
 
@@ -141,7 +154,10 @@ fn overview_table(
         })
         .collect();
 
-    div().v_flex().w_full().gap_2()
+    div()
+        .v_flex()
+        .w_full()
+        .gap_2()
         // 卡①概要：表名 + 来源 + kv
         .child(
             summary_card(theme)
@@ -170,9 +186,13 @@ fn overview_table(
                 )
                 .child(kv_row("总行数", format!("{}", profile.row_count), theme))
                 .child(kv_row("列数", profile.columns.len().to_string(), theme))
-                .child(kv_row("取样", crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(), theme)),
+                .child(kv_row(
+                    "取样",
+                    crate::service::persistence::SOURCE_SAMPLE_LIMIT.to_string(),
+                    theme,
+                )),
         )
-        // 卡②检查器命中：68px 环（适用/命中计数，无评级）+ 检查器四态列表 + 四维条
+        // 卡②检查器命中：68px 环（适用/命中计数，无评级）+ 检查器四态列表 + 事实占比条
         .child(
             summary_card(theme)
                 .child(
@@ -218,89 +238,91 @@ fn overview_table(
                                 .color(ring_color)
                                 .with_size(Size::Size(ring_px))
                                 .accessibility_label("检查器命中")
-                                .child(
-                                    div()
-                                        .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.6))
-                                        .text_color(ring_color)
-                                        .child(match quality {
-                                            Some(_) => format!("{checker_hits}/{checker_applicable}"),
-                                            None => "—".into(),
-                                        }),
-                                ),
+                                .child(div().text_sm().text_color(ring_color).child(
+                                    match quality {
+                                        Some(_) => format!("{checker_hits}/{checker_applicable}"),
+                                        None => "—".into(),
+                                    },
+                                )),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(colors.muted_foreground)
-                                .child(match quality {
-                                    Some(q) if q.checker_applicable > 0 => {
-                                        format!("适用 {} 条 · 命中 {} 条", q.checker_applicable, q.checker_hits)
-                                    }
-                                    Some(_) => "评估全表后统计检查器命中".to_string(),
-                                    None => "评估全表后统计检查器命中".to_string(),
-                                }),
-                        ),
+                        .child(div().text_xs().text_color(colors.muted_foreground).child(
+                            match quality {
+                                Some(q) if q.checker_applicable > 0 => {
+                                    format!(
+                                        "适用 {} 条 · 命中 {} 条",
+                                        q.checker_applicable, q.checker_hits
+                                    )
+                                }
+                                Some(_) => "评估全表后统计检查器命中".to_string(),
+                                None => "评估全表后统计检查器命中".to_string(),
+                            },
+                        )),
                 )
                 .when(!checker_rows.is_empty(), |card| {
                     card.child(
-                        div()
-                            .w_full()
-                            .v_flex()
-                            .gap_0p5()
-                            .children(checker_rows.into_iter().take(6).map(|(name, label, color)| {
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(color)
-                                            .child(label),
-                                    )
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .text_xs()
-                                            .text_color(colors.foreground)
-                                            .text_ellipsis()
-                                            .child(name),
-                                    )
-                            })),
-                            )
-                        })
-                        .child(div().w_full().v_flex().gap_1().children(dims.into_iter().map(
-                    |(name, ratio, fill)| {
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(colors.muted_foreground)
-                                    .child(name.clone()),
-                            )
-                            .child(
-                                Progress::new(SharedString::from(format!(
-                                    "insight-overview-dim-{name}"
-                                )))
-                                .value(ratio as f32)
-                                .color(fill)
-                                .with_size(Size::Small)
-                                .flex_1(),
-                            )
-                    },
-                ))),
+                        div().w_full().v_flex().gap_0p5().children(
+                            checker_rows
+                                .into_iter()
+                                .take(6)
+                                .map(|(name, label, color)| {
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                                                .flex_none()
+                                                .text_xs()
+                                                .text_color(color)
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .text_xs()
+                                                .text_color(colors.foreground)
+                                                .text_ellipsis()
+                                                .child(name),
+                                        )
+                                }),
+                        ),
+                    )
+                })
+                .child(
+                    div()
+                        .w_full()
+                        .v_flex()
+                        .gap_1()
+                        .children(dims.into_iter().map(|(name, ratio, fill)| {
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
+                                        .flex_none()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child(name.clone()),
+                                )
+                                .child(
+                                    Progress::new(SharedString::from(format!(
+                                        "insight-overview-dim-{name}"
+                                    )))
+                                    .value(ratio as f32)
+                                    .color(fill)
+                                    .with_size(Size::Small)
+                                    .flex_1(),
+                                )
+                        })),
+                ),
         )
-        // 卡③质量提示（前 2 条）
+        // 卡③事实提示（检查器未命中 / 高空值 / 未识别）
         .child(
             summary_card(theme)
                 .child(
@@ -314,7 +336,7 @@ fn overview_table(
                             div()
                                 .text_sm()
                                 .text_color(colors.foreground)
-                                .child("质量提示"),
+                                .child("事实提示"),
                         ),
                 )
                 .child(
@@ -333,166 +355,44 @@ fn overview_table(
                                 div()
                                     .text_xs()
                                     .text_color(colors.muted_foreground)
-                                    .child("· 评估全表后查看质量提示"),
+                                    .child("· 评估全表后查看事实提示"),
                             )
                         }),
                 ),
         )
 }
 
-/// 列目标摘要：列名 + 类型 + 总行数 / 空值率 + 列质量环 + 维度条 + 结论
+/// 列目标事实卡：列名 + 类型徽标 + 总行数 / 空值率 / 样本（不渲染评分环或等级）
 fn overview_column(
     profile: &ColumnProfileView,
     theme: &Theme,
     inline_icon: Pixels,
-    ring_px: Pixels,
+    _ring_px: Pixels,
 ) -> Div {
     let colors = theme.colors;
-    let score = profile.score.as_ref();
     let null_rate = format!("{:.1}%", profile.null_rate * 100.0);
 
-    div().v_flex().w_full().gap_2()
+    summary_card(theme)
         .child(
-            summary_card(theme)
+            div()
+                .h_flex()
+                .w_full()
+                .gap_1()
+                .items_center()
+                .child(Icon::new(IconName::FileText).size(inline_icon))
                 .child(
                     div()
-                        .h_flex()
-                        .w_full()
-                        .gap_1()
-                        .items_center()
-                        .child(Icon::new(IconName::FileText).size(inline_icon))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(colors.foreground)
-                                .text_ellipsis()
-                                .child(profile.column.clone()),
-                        )
-                        .child(div().flex_1())
-                        .child(kind_badge(profile.kind)),
+                        .text_sm()
+                        .text_color(colors.foreground)
+                        .text_ellipsis()
+                        .child(profile.column.clone()),
                 )
-                .child(kv_row("总行数", profile.total_count.to_string(), theme))
-                .child(kv_row("空值率", null_rate, theme))
-                .child(kv_row("样本", profile.sample.len().to_string(), theme)),
+                .child(div().flex_1())
+                .child(kind_badge(profile.kind)),
         )
-        .child(
-            summary_card(theme)
-                .child(
-                    div()
-                        .h_flex()
-                        .w_full()
-                        .gap_1()
-                        .items_center()
-                        .child(Icon::new(IconName::Eye).size(inline_icon))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(colors.foreground)
-                                .child("列质量评分"),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(match score {
-                                    Some(s) => grade_color(s.grade, theme),
-                                    None => colors.muted_foreground,
-                                })
-                                .child(match score {
-                                    Some(s) => s.grade.label(),
-                                    None => "—",
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .v_flex()
-                        .items_center()
-                        .gap_1()
-                        .py_1()
-                        .child(
-                            ProgressCircle::new("insight-overview-column-ring")
-                                .value(score.map(|s| s.overall as f32).unwrap_or(0.0))
-                                .color(match score {
-                                    Some(s) => grade_color(s.grade, theme),
-                                    None => colors.muted_foreground,
-                                })
-                                .with_size(Size::Size(ring_px))
-                                .accessibility_label("列质量评分")
-                                .child(
-                                    div()
-                                        .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.6))
-                                        .text_color(match score {
-                                            Some(s) => grade_color(s.grade, theme),
-                                            None => colors.muted_foreground,
-                                        })
-                                        .child(match score {
-                                            Some(s) => format!("{:.0}", s.overall),
-                                            None => "—".into(),
-                                        }),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .v_flex()
-                        .gap_1()
-                        .children(score.map(|s| s.dimensions.clone()).unwrap_or_default().into_iter().map(
-                            |dim| {
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .w(rems(ui::INSIGHT_WS_SOURCE_WIDTH))
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(dim.name.clone()),
-                                    )
-                                    .child(
-                                        Progress::new(SharedString::from(format!(
-                                            "insight-overview-coldim-{}",
-                                            dim.name
-                                        )))
-                                        .value(dim.score as f32)
-                                        .color(grade_color(Grade::of(dim.score), theme))
-                                        .with_size(Size::Small)
-                                        .flex_1(),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_xs()
-                                            .text_color(colors.muted_foreground)
-                                            .child(format!("{:.0}", dim.score)),
-                                    )
-                            },
-                        ))
-                        .when(score.is_none(), |this| {
-                            this.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(colors.muted_foreground)
-                                    .child("该列无评分数据（列全空或未评估）"),
-                            )
-                        }),
-                ),
-        )
-        .when_some(score, |this, s| {
-            this.child(
-                summary_card(theme).child(
-                    div()
-                        .text_xs()
-                        .text_color(colors.muted_foreground)
-                        .child(format!("· {}", s.summary)),
-                ),
-            )
-        })
+        .child(kv_row("总行数", profile.total_count.to_string(), theme))
+        .child(kv_row("空值率", null_rate, theme))
+        .child(kv_row("样本", profile.sample.len().to_string(), theme))
 }
 
 /// 摘要卡容器（原型 .summary-card）

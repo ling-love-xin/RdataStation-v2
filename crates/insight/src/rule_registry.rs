@@ -75,11 +75,7 @@ impl RuleRegistry {
     /// 从文件系统目录加载一层规则（`Global` 或 `Project`）。
     ///
     /// 目录不存在返回 0 条而不是报错：项目无自有规则是常态。
-    pub fn load_from_dir(
-        &mut self,
-        dir: &Path,
-        scope: RuleScope,
-    ) -> Result<usize, CoreError> {
+    pub fn load_from_dir(&mut self, dir: &Path, scope: RuleScope) -> Result<usize, CoreError> {
         if !dir.exists() || !dir.is_dir() {
             return Ok(0);
         }
@@ -183,7 +179,8 @@ impl RuleRegistry {
 
     /// 插入/覆盖一条规则，并同步其来源。
     fn insert_rule(&mut self, id: String, rule: RuleFile, scope: RuleScope, path: String) {
-        self.sources.insert(id.clone(), RuleSource::new(scope, path));
+        self.sources
+            .insert(id.clone(), RuleSource::new(scope, path));
         self.rules.insert(id, rule);
     }
 
@@ -325,9 +322,8 @@ pub const VALUE_TYPES: [&str; 11] = [
 /// 独立成自由函数而非注册表方法：**索引器需要它**——索引要覆盖「解析失败的规则文件」
 /// （这正是索引存在的意义：把静默跳过的规则变成可见的错误），所以不能只依赖注册表。
 pub fn parse_rule_toml(content: &str) -> Result<RuleFile, CoreError> {
-    let rule: RuleFile = toml::from_str(content).map_err(|e| {
-        CoreError::common(CommonError::General(format!("TOML parse error: {}", e)))
-    })?;
+    let rule: RuleFile = toml::from_str(content)
+        .map_err(|e| CoreError::common(CommonError::General(format!("TOML parse error: {}", e))))?;
     validate_rule(&rule)?;
     Ok(rule)
 }
@@ -337,10 +333,34 @@ pub fn parse_rule_toml(content: &str) -> Result<RuleFile, CoreError> {
 /// 收的是「会碰外部世界或写库」的那一类，不是 SQL 全集——规则只该做只读聚合。
 /// 事务控制（`BEGIN`/`COMMIT`/`ROLLBACK`）也一并收：单条查询里写它们没有正当用途。
 const SQL_FORBIDDEN_KEYWORDS: [&str; 28] = [
-    "ATTACH", "DETACH", "COPY", "EXPORT", "IMPORT", "INSTALL", "LOAD", "UNLOAD", "PRAGMA",
-    "CALL", "SET", "CREATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
-    "REPLACE", "MERGE", "GRANT", "REVOKE", "VACUUM", "CHECKPOINT", "SECRET", "BEGIN",
-    "COMMIT", "ROLLBACK",
+    "ATTACH",
+    "DETACH",
+    "COPY",
+    "EXPORT",
+    "IMPORT",
+    "INSTALL",
+    "LOAD",
+    "UNLOAD",
+    "PRAGMA",
+    "CALL",
+    "SET",
+    "CREATE",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "ALTER",
+    "TRUNCATE",
+    "REPLACE",
+    "MERGE",
+    "GRANT",
+    "REVOKE",
+    "VACUUM",
+    "CHECKPOINT",
+    "SECRET",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
 ];
 
 /// 校验规则 SQL：**只读聚合是唯一被允许的形态**（架构 D52 / K1）。
@@ -580,9 +600,9 @@ pub const RULES_DIR_NAME: &str = "insight-rules";
 mod tests {
     use super::*;
     // 测试需要真实文件系统：显式导入，不依赖父模块 use 的 glob 传递
+    use shared::error::CoreError;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use shared::error::CoreError;
 
     fn sample_toml() -> &'static str {
         r#"
@@ -670,8 +690,8 @@ max = 0.1
             "SELECT COUNT(*) FROM {table}",
             "WITH t AS (SELECT 1 AS x) SELECT * FROM t",
             "SELECT COUNT(*) FROM {table} WHERE \"{col}\" IS NOT NULL;", // 末尾分号放行
-            "SELECT 'copy' AS label FROM {table}", // 字面量不算关键字
-            "SELECT \"read_csv\" FROM {table}",    // 双引号标识符不算表函数
+            "SELECT 'copy' AS label FROM {table}",                       // 字面量不算关键字
+            "SELECT \"read_csv\" FROM {table}",                          // 双引号标识符不算表函数
             "SELECT * FROM {table} -- 注释里写 DROP TABLE 也不算\n",
             "SELECT /* ATTACH 藏在块注释里 */ COUNT(*) FROM {table}",
         ] {
@@ -699,8 +719,8 @@ max = 0.1
             ("SELECT * FROM {table} WHERE copy = 1 AND x = 2", "COPY"),
         ];
         for (sql, needle) in cases {
-            let err = validate_rule_sql("gate-bad", sql)
-                .expect_err(&format!("应被静态门拒掉: {sql}"));
+            let err =
+                validate_rule_sql("gate-bad", sql).expect_err(&format!("应被静态门拒掉: {sql}"));
             let text = err.to_string();
             assert!(text.contains(needle), "报错要点出原因（{needle}）: {text}");
             assert!(text.contains("gate-bad"), "报错要点出规则 id: {text}");
@@ -765,11 +785,8 @@ max = 0.1
 
     /// 建一个本次调用专属的临时规则目录（测试并行安全：目录名含 pid 与 tag）。
     fn temp_rules_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_insight_rules_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_insight_rules_{}_{}", std::process::id(), tag));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp rules dir");
         dir
@@ -900,10 +917,7 @@ max = 0.1
             "失败记录应包含出错文件路径: {}",
             failure.path
         );
-        assert!(
-            !failure.error.is_empty(),
-            "失败记录应包含解析错误原文"
-        );
+        assert!(!failure.error.is_empty(), "失败记录应包含解析错误原文");
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())
@@ -1018,7 +1032,9 @@ max = 0.1
         );
         assert_eq!(registry.list_by_scope(RuleScope::Builtin).len(), loaded);
 
-        let source = registry.source_of("null-check").expect("内置规则 null-check");
+        let source = registry
+            .source_of("null-check")
+            .expect("内置规则 null-check");
         assert_eq!(source.scope, RuleScope::Builtin);
         assert!(
             source.path.starts_with("<builtin>/"),

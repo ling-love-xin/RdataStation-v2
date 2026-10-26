@@ -2,7 +2,9 @@ use crate::model::types::{
     ColumnInsightFull, ColumnQualityEntry, ColumnStatsDetail, QualityDimension, QualityScore,
     TableQuality,
 };
-use crate::model::{kurt_direction, skew_direction, ColumnCheckState, ColumnChecker, KURT_NOTABLE, SKEW_NOTABLE};
+use crate::model::{
+    ColumnCheckState, ColumnChecker, KURT_NOTABLE, SKEW_NOTABLE, kurt_direction, skew_direction,
+};
 
 /// Dimension weights for quality scoring (must sum to 1.0).
 pub const WEIGHT_COMPLETENESS: f64 = 0.35;
@@ -120,11 +122,7 @@ pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
         }
         ColumnStatsDetail::DateTime(_) => {
             let has_range = stats.histogram.as_ref().is_some_and(|h| h.len() > 1);
-            if has_range {
-                85.0
-            } else {
-                60.0
-            }
+            if has_range { 85.0 } else { 60.0 }
         }
         ColumnStatsDetail::Boolean(_) => 95.0,
         ColumnStatsDetail::Unknown => 50.0,
@@ -242,7 +240,11 @@ pub fn compute_column_checks(stats: &ColumnInsightFull) -> Vec<ColumnChecker> {
         } else {
             ColumnCheckState::Miss
         },
-        detail: format!("非空率 {:.1}%（阈值 ≥ {:.0}%）", non_null * 100.0, (1.0 - crate::model::NULL_RATE_NOTE) * 100.0),
+        detail: format!(
+            "非空率 {:.1}%（阈值 ≥ {:.0}%）",
+            non_null * 100.0,
+            (1.0 - crate::model::NULL_RATE_NOTE) * 100.0
+        ),
     });
 
     // 2) 唯一率（唯一值 / 非空行数）：未知类型列无类型推断 → 不适用-类型
@@ -266,7 +268,11 @@ pub fn compute_column_checks(stats: &ColumnInsightFull) -> Vec<ColumnChecker> {
                 } else {
                     ColumnCheckState::Miss
                 },
-                detail: format!("唯一率 {:.1}%（阈值 ≤ {:.0}%）", ratio * 100.0, CHECKER_UNIQUE_MAX * 100.0),
+                detail: format!(
+                    "唯一率 {:.1}%（阈值 ≤ {:.0}%）",
+                    ratio * 100.0,
+                    CHECKER_UNIQUE_MAX * 100.0
+                ),
             });
         }
     }
@@ -285,7 +291,11 @@ pub fn compute_column_checks(stats: &ColumnInsightFull) -> Vec<ColumnChecker> {
                         ColumnCheckState::Miss
                     },
                     detail: if normal {
-                        format!("偏度 {} · 峰度 {}", skew_direction(skew), kurt_direction(kurt))
+                        format!(
+                            "偏度 {} · 峰度 {}",
+                            skew_direction(skew),
+                            kurt_direction(kurt)
+                        )
                     } else {
                         format!("偏度 {skew:.2} · 峰度 {kurt:.2}（偏离正态）")
                     },
@@ -308,10 +318,7 @@ pub fn compute_column_checks(stats: &ColumnInsightFull) -> Vec<ColumnChecker> {
 /// Computes aggregate quality for a table by scoring each column and
 /// producing a weighted average. Columns are sorted worst→best for
 /// quick identification of data problems. Unscoreable columns are skipped.
-pub fn compute_table_quality(
-    table_name: &str,
-    stats_list: &[ColumnInsightFull],
-) -> TableQuality {
+pub fn compute_table_quality(table_name: &str, stats_list: &[ColumnInsightFull]) -> TableQuality {
     let mut entries: Vec<ColumnQualityEntry> = stats_list
         .iter()
         .map(|s| {
@@ -506,7 +513,8 @@ mod tests {
             tq.column_scores[0].quality_score <= tq.column_scores[1].quality_score,
             "column scores must be sorted ascending (worst first)"
         );
-        assert!(tq.column_scores[1].quality_score <= tq.column_scores[2].quality_score);    }
+        assert!(tq.column_scores[1].quality_score <= tq.column_scores[2].quality_score);
+    }
 
     #[test]
     fn test_table_quality_empty() {
@@ -564,10 +572,8 @@ mod tests {
     /// 四维权重合计 1.0：否则总分不再是 0–100 标度，等级阈值也跟着失去意义。
     #[test]
     fn dimension_weights_sum_to_one() {
-        let sum = WEIGHT_COMPLETENESS
-            + WEIGHT_UNIQUENESS
-            + WEIGHT_TYPE_CONSISTENCY
-            + WEIGHT_DISTRIBUTION;
+        let sum =
+            WEIGHT_COMPLETENESS + WEIGHT_UNIQUENESS + WEIGHT_TYPE_CONSISTENCY + WEIGHT_DISTRIBUTION;
         assert!((sum - 1.0).abs() < 1e-9, "权重合计应为 1.0，实际 {sum}");
     }
 

@@ -1,23 +1,26 @@
 //! 洞察面板的渲染片段（按 Tab 位移，规格见 `docs/architecture/insight/insight-dev-plan.md` §11）
 //!
 //! 状态宿主仍是 [`crate::insight_view::InsightView`]（它持 target / state / data / tab 与
-//! 五个 Tab 的载荷）；本目录只放**渲染与片段助手**：一组 Tab 一个文件，共用的助手在本文件。
+//! 六个 Tab 的载荷）；本目录只放**渲染与片段助手**：一组 Tab 一个文件，共用的助手在本文件。
 //!
 //! ```text
 //! 面板头（36px）  → header.rs（「洞察」 · ⚙ 规则管理 · ⟳ 重算）
 //! 无项目提示      → header.rs
 //! 目标头          → header.rs（目标名 + 类型徽标 + 空值率 / 行数）
-//! Tab 条（28px）  → mod.rs（列 │ 表 │ 多列 │ 结构 │ 历史）
+//! Tab 条（28px）  → mod.rs（摘要 │ 列 │ 表 │ 多列 │ 结构 │ 历史）
 //! 内容四态分派    → mod.rs（render_body：错误态整页接管，否则以载荷为准）
-//!   列画像四区    → column.rs（评分卡 + zone_* / stat_row / distribution_* / quality_zone / sample_zone）
+//!   摘要          → overview.rs（首置：汇总当前目标画像事实与检查器命中，不触发取数）
+//!   列画像四区    → column.rs（事实卡 + zone_* / stat_row / distribution_* / quality_zone / sample_zone）
 //!   表探查        → table.rs（评估入口与进度 + 列名下钻热点）
 //!   多列分析      → multi.rs（列多选 + 规则单选 + 结果与提示）
 //!   结构报告      → schema.rs（健康条 + 四区 + 下钻热点 + 导出菜单）
 //!   快照历史      → history.rs（列表 + 对比面板 + 清理 + 存储用量）
+//! 会话集合管理卡  → set.rs（已洞察表入列 + 对比 / 关系排查 / 归档；body 顶部，不属任一 Tab）
 //! ```
 //!
-//! 共用助手（本文件）：`kind_badge` · `grade_color` · `ratio_bar` · `section_title` ·
-//! `muted_line` · `tab_hint` · `empty_state` · `skeleton` · `error_block`。
+//! 共用助手（本文件）：`kind_badge` · `ratio_bar` · `section_title` ·
+//! `muted_line` · `tab_hint` · `empty_state` · `skeleton` · `error_block`；
+//! `grade_color` 仅供结构报告（Schema 健康分独立域）使用，表 / 列画像不再取等级色。
 //!
 //! ## 为什么不做成独立 crate
 //!
@@ -27,7 +30,7 @@
 //!
 //! ## 可见性约定（位移时定的，不是随手写的）
 //!
-//! - **片段入口**（`render_header` / `render_tab_bar` / `render_body` / `render_score_card`）
+//! - **片段入口**（`render_header` / `render_tab_bar` / `render_body`）
 //!   对 crate 可见：宿主的 `impl Render` 在 `insight_view.rs` 里转发。
 //! - 只在本目录内用的片段是 `pub(in crate::view)`（如 `render_table_profile`）；Tab 内部的
 //!   小片段与助手是**模块私有**，子模块用 `use super::…` 取用（父模块私有项对子模块可见）。
@@ -49,7 +52,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
 use crate::insight_view::InsightView;
@@ -111,10 +114,40 @@ impl InsightView {
                 self.render_table_profile(profile, entity, theme, inline_icon)
                     .into_any_element()
             }),
-            PanelTab::MultiColumn => self.data.as_multi().map(|view| {
-                self.render_multi_view(view, entity, theme, inline_icon)
-                    .into_any_element()
-            }),
+            PanelTab::MultiColumn => {
+                if let Some(view) = self.data.as_multi() {
+                    Some(
+                        self.render_multi_view(view, entity, theme, inline_icon)
+                            .into_any_element(),
+                    )
+                } else if self
+                    .target
+                    .as_ref()
+                    .map(|t| self.data.sample_table(t).is_some())
+                    .unwrap_or(false)
+                {
+                    // 样本表已解析、多列结果未出：落到 loading 骨架或通用空态；
+                    // 本分支不隐式自取一次样（与摘要「不触发取数」同口径）。
+                    None
+                } else {
+                    // 源目标尚未完成列画像 / 表探查取样，没有可分析的样本表：专门引导，
+                    // 不渲染假结果，也不在切 Tab 时静默发一次请求。
+                    Some(
+                        div()
+                            .id(ElementId::Name(SharedString::from(
+                                "insight-multi-need-sample",
+                            )))
+                            .test_support()
+                            .child(empty_state(
+                                IconName::Info,
+                                "请先在「列」或「表」完成一次取样画像，再回到多列分析",
+                                theme,
+                                empty_icon,
+                            ))
+                            .into_any_element(),
+                    )
+                }
+            }
             PanelTab::Schema => self.data.as_schema().map(|report| {
                 self.render_schema_report(report, entity, theme, inline_icon)
                     .into_any_element()
@@ -167,7 +200,8 @@ fn kind_badge(kind: ColumnKind) -> impl IntoElement {
 
 /// 等级 → 主题角色（四档取色；「较差」与「差」共用 danger）
 ///
-/// `pub(crate)`：中间工作页（`workspace.rs`）的质量分与对比结果同用这套语义色。
+/// `pub(crate)`：仅供结构报告（Schema 健康分独立域）取色；表 / 列画像的事实统计
+/// 不合成等级，不调用本助手。
 pub(crate) fn grade_color(grade: Grade, theme: &Theme) -> Hsla {
     let colors = theme.colors;
     match grade {
@@ -178,7 +212,7 @@ pub(crate) fn grade_color(grade: Grade, theme: &Theme) -> Hsla {
     }
 }
 
-/// 比例条（语义进度条）：评分卡维度 / 分布条 / 评估进度共用。
+/// 比例条（语义进度条）：事实占比维度 / 分布条 / 评估进度共用。
 ///
 /// `Progress` 自带进度指示器 a11y 与数值补间，替代自绘底槽 + 填充（track 色取
 /// 填充色的 20% 透明度，是标准进度条视觉）。高度档位映射：
@@ -186,7 +220,10 @@ pub(crate) fn grade_color(grade: Grade, theme: &Theme) -> Hsla {
 /// `INSIGHT_HISTOGRAM_BAR_HEIGHT`（0.5rem = 8px）→ `Size::Medium`。
 /// 元素 id 由调用方给业务键（维度名 / 值域标签 / 固定进度条）。
 fn ratio_bar(id: impl Into<ElementId>, ratio: f32, size: Size, fill: Hsla) -> impl IntoElement {
-    Progress::new(id).value(ratio * 100.0).color(fill).with_size(size)
+    Progress::new(id)
+        .value(ratio * 100.0)
+        .color(fill)
+        .with_size(size)
 }
 
 fn section_title(text: &str, theme: &Theme) -> Div {
@@ -290,21 +327,22 @@ pub(crate) fn error_block(
     theme: &Theme,
     icon_px: Pixels,
 ) -> Div {
-    let mut block = div()
-        .v_flex()
-        .gap_2()
-        .py_2()
-        .child(
-            div()
-                .h_flex()
-                .gap_1()
-                .child(
-                    Icon::new(IconName::TriangleAlert)
-                        .with_size(Size::Size(icon_px))
-                        .text_color(theme.colors.danger),
-                )
-                .child(div().text_xs().text_color(theme.colors.danger).child(message.to_string())),
-        );
+    let mut block = div().v_flex().gap_2().py_2().child(
+        div()
+            .h_flex()
+            .gap_1()
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .with_size(Size::Size(icon_px))
+                    .text_color(theme.colors.danger),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.danger)
+                    .child(message.to_string()),
+            ),
+    );
     if retryable {
         block = block.child(
             Button::new("insight-retry")

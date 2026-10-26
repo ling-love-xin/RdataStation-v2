@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use duckdb::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use shared::error::{CommonError, CoreError};
 
@@ -678,9 +678,7 @@ mod tests {
         let result = RuleExecutor::execute_qualified(&rule, &conn, &params)?;
         assert_eq!(result.data["total_count"], json!(4));
         assert_eq!(result.data["null_rate"], json!(0.5));
-        let quality = result
-            .quality
-            .expect("这条规则带门控，必须给出报告");
+        let quality = result.quality.expect("这条规则带门控，必须给出报告");
         assert!(
             !quality.passed,
             "50% 空值率应当触发 max=0.1 的门控（K11 就是不触发）"

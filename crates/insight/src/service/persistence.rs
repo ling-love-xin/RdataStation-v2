@@ -54,9 +54,9 @@ async fn sample_from_connection(
     sample_sql: &str,
     label: &str,
 ) -> Result<String, CoreError> {
+    use engine::SqlService;
     use engine::get_connection_manager;
     use engine::services::sql_service::SqlExecuteOptions;
-    use engine::SqlService;
 
     let service = SqlService::new(get_connection_manager().clone());
     let opts = SqlExecuteOptions {
@@ -121,11 +121,12 @@ pub async fn profile_source_table(
     let profile = insight_engine::get_temp_table_profile(&temp_table)?;
     let mut view = TableProfileView::from_profile(&profile, table_name);
     // EDA 列统计摘要（缺失率 / 唯一率）：失败不阻塞画像（保留 None）
-    let column_names: Vec<String> =
-        profile.columns.iter().map(|c| c.column_name.clone()).collect();
-    if let Ok(stats) =
-        insight_engine::compute_table_column_summary(&temp_table, &column_names)
-    {
+    let column_names: Vec<String> = profile
+        .columns
+        .iter()
+        .map(|c| c.column_name.clone())
+        .collect();
+    if let Ok(stats) = insight_engine::compute_table_column_summary(&temp_table, &column_names) {
         view.fill_column_stats(&stats);
     }
     // EDA 样本（前 5 行）：失败不阻塞画像（样本区给空态）
@@ -253,9 +254,9 @@ pub async fn profile_column_from_table(
     table: &str,
     column_name: &str,
 ) -> Result<ColumnInsightFull, CoreError> {
+    use engine::SqlService;
     use engine::get_connection_manager;
     use engine::services::sql_service::SqlExecuteOptions;
-    use engine::SqlService;
 
     let manager = get_connection_manager().clone();
     let service = SqlService::new(manager);
@@ -293,9 +294,9 @@ pub async fn profile_column_from_table(
     // 样本表用**分析临时表**的姿势建：带 `tmp_i_` 前缀（TTL / 上限 / 按来源清理才认它），
     // 并且算完就收掉——它是纯中间产物，留在内存库里只会越积越多（架构 K16）。
     let duckdb = insight_engine::get_or_create_duckdb()?;
-    let conn = duckdb.lock().map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
-    })?;
+    let conn = duckdb
+        .lock()
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
     engine::duckdb::analysis::with_analysis_temp_table(
         &conn,
         &columns,
@@ -318,9 +319,9 @@ pub async fn batch_evaluate_columns(
     schema: &str,
     table: &str,
 ) -> Result<crate::model::types::TableQuality, CoreError> {
+    use engine::SqlService;
     use engine::get_connection_manager;
     use engine::services::sql_service::SqlExecuteOptions;
-    use engine::SqlService;
 
     let manager = get_connection_manager().clone();
     let service = SqlService::new(manager);
@@ -360,9 +361,9 @@ pub async fn batch_evaluate_columns(
 
     // 同上：整表评估也是一次性的样本表（逐列串行跑完就收）
     let duckdb = insight_engine::get_or_create_duckdb()?;
-    let conn = duckdb.lock().map_err(|e| {
-        CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
-    })?;
+    let conn = duckdb
+        .lock()
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
     engine::duckdb::analysis::with_analysis_temp_table(
         &conn,
         &col_names,
@@ -376,10 +377,7 @@ pub async fn batch_evaluate_columns(
                 let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
                 for col_name in &col_names {
                     let stats = insight_engine::get_column_insight_full_on(
-                        registry,
-                        &conn,
-                        temp_table,
-                        col_name,
+                        registry, &conn, temp_table, col_name,
                     );
                     match stats {
                         Ok(stats) => stats_list.push(stats),

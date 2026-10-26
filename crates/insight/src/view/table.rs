@@ -1,21 +1,21 @@
-//! 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口 + 表级质量
+//! 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口。
 //!
 //! 列名是下钻热点（点它切到该列的「列」Tab）——表 → 列是用户最常走的下一步。
-//! 「评估全表」逐列串行（避免撞后端并发上限），进度一列列回填；已经算出来的列分数
-//! 不清空（清空会让面板闪一下空白）。
+//! 「评估全表」逐列串行（避免撞后端并发上限），进度一列列回填；已经算出来的列明细
+//! 不清空（清空会让面板闪一下空白）。本视图只呈现事实统计，不合成质量总分或等级。
 
 use gpui_kit::base::{Disableable as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{Icon, IconName, Sizable as _, Size, Theme};
 use gpui_kit::*;
 
-use super::{grade_color, ratio_bar};
+use super::ratio_bar;
 use crate::insight_view::InsightView;
 use crate::model::{ColumnKind, InsightTarget, TableColumnView, TableProfileView};
 use crate::ui;
 
 impl InsightView {
-    /// 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口 + 表级质量。
+    /// 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口。
     ///
     /// 列名是下钻热点（点它切到该列的「列」Tab）——表→列是用户最常走的下一步。
     pub(in crate::view) fn render_table_profile(
@@ -40,9 +40,13 @@ impl InsightView {
                     } else {
                         IconName::TriangleAlert
                     })
-                    .label(if evaluating { "评估中…" } else { "评估全表" })
+                    .label(if evaluating {
+                        "评估中…"
+                    } else {
+                        "评估全表"
+                    })
                     .disabled(evaluating || profile.columns.is_empty())
-                    .tooltip("逐列串行评分（避免撞后端并发上限），进度会一列列回填")
+                    .tooltip("逐列串行统计（避免撞后端并发上限），进度会一列列回填")
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| {
@@ -51,45 +55,6 @@ impl InsightView {
                     }),
             ),
         );
-
-        // 表级质量：评估完才有（没评估就是没有，不是 0 分）
-        if let Some(quality) = &profile.quality {
-            let color = grade_color(quality.grade, theme);
-            body = body.child(
-                div()
-                    .v_flex()
-                    .w_full()
-                    .gap_1()
-                    .p_2()
-                    .rounded_sm()
-                    .bg(colors.list_hover)
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.75))
-                                    .text_color(color)
-                                    .child(format!("{:.0}", quality.overall)),
-                            )
-                            .child(div().text_xs().text_color(color).child(quality.grade.label()))
-                            .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
-                                if quality.problem_columns > 0 {
-                                    format!("{} 列需关注", quality.problem_columns)
-                                } else {
-                                    "无问题列".to_string()
-                                },
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(colors.muted_foreground)
-                            .child(quality.summary.clone()),
-                    ),
-            );
-        }
 
         // 进度行（进行中）：进度条 + 文字，让用户知道还在动
         if let Some(progress) = profile.progress {
@@ -113,7 +78,7 @@ impl InsightView {
             );
         }
 
-        // 列元数据表：# 列名（PK） / 类型 / 可空 / 质量
+        // 列元数据表：# 列名（PK） / 类型 / 可空 / 缺失率
         body = body.child(table_header_row(theme));
         if profile.columns.is_empty() {
             body = body.child(
@@ -138,7 +103,7 @@ impl InsightView {
             div()
                 .text_xs()
                 .text_color(colors.muted_foreground)
-                .child("行数与质量分基于全量统计；样本值为前 5 行，直方图至少 10 行"),
+                .child("行数与缺失率基于全量统计；样本值为前 5 行，直方图至少 10 行"),
         )
     }
 }
@@ -166,8 +131,9 @@ fn table_header_row(theme: &Theme) -> Div {
         .child(div().w(rems(ui::INSIGHT_TABLE_FLAG_WIDTH)).child("可空"))
         .child(
             div()
-                .w(rems(ui::INSIGHT_TABLE_QUALITY_WIDTH))
-                .child("质量"),
+                .w(rems(ui::INSIGHT_TABLE_NULL_RATE_WIDTH))
+                .text_ellipsis()
+                .child("缺失率"),
         )
 }
 
@@ -180,11 +146,16 @@ fn table_column_row(
     inline_icon: Pixels,
 ) -> Div {
     let colors = theme.colors;
-    let quality = match (column.score, column.grade()) {
-        (Some(score), Some(grade)) => div()
-            .text_color(grade_color(grade, theme))
-            .child(format!("{:.0} {}", score, grade.label())),
-        _ => div().text_color(colors.muted_foreground).child("—"),
+    // 缺失率事实：未统计为 `None` 时显示中性占位，不编假值
+    let null_rate_cell = match column.null_rate {
+        Some(rate) => div()
+            .text_xs()
+            .text_color(colors.foreground)
+            .child(format!("{:.1}%", rate * 100.0)),
+        None => div()
+            .text_xs()
+            .text_color(colors.muted_foreground)
+            .child("—"),
     };
 
     let mut row = div()
@@ -222,7 +193,9 @@ fn table_column_row(
                             entity.update(app, |view, cx| {
                                 // 表头里的临时表名与目标一致：目标已换时以当前目标为准
                                 let temp = match &view.target {
-                                    Some(InsightTarget::Table { temp_table, .. }) => temp_table.clone(),
+                                    Some(InsightTarget::Table { temp_table, .. }) => {
+                                        temp_table.clone()
+                                    }
                                     _ => temp_table.clone(),
                                 };
                                 view.set_target(
@@ -268,12 +241,12 @@ fn table_column_row(
         )
         .child(
             div()
-                .w(rems(ui::INSIGHT_TABLE_QUALITY_WIDTH))
+                .w(rems(ui::INSIGHT_TABLE_NULL_RATE_WIDTH))
                 .text_xs()
-                .child(quality),
+                .child(null_rate_cell),
         );
 
-    // 类型未识别：给一个可点的提示（不是所有列都能算质量）
+    // 类型未识别：给一个提示（不是所有列都能识别类型并统计分布）
     if column.kind == ColumnKind::Unknown {
         row = row.child(
             Icon::new(IconName::Info)

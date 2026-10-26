@@ -34,16 +34,16 @@ use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableQuality};
 use crate::model::{
-    ColumnProfileView, HistoryView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote,
-    TableProfileView, HISTORY_PAGE_SIZE,
+    ColumnProfileView, HISTORY_PAGE_SIZE, HistoryView, MultiColumnView, MultiResultView,
+    MultiRuleView, QualityNote, TableProfileView,
 };
 use crate::rule::RuleScope;
 use crate::rule_types::RuleMeta;
-use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
+use crate::rule_view::{RuleDataInput, RulesData, build_rules_data};
 use crate::schema_view::SchemaReportView;
-use crate::service::indexer::{rule_dir, sync_project_rules, RuleIndexStore, SyncOutcome};
+use crate::service::indexer::{RuleIndexStore, SyncOutcome, rule_dir, sync_project_rules};
 use crate::service::rule_trust::RuleTrust;
-use crate::{with_rules, ExecutionResult};
+use crate::{ExecutionResult, with_rules};
 
 pub use persistence::{
     batch_evaluate_columns, cleanup_old_insight_snapshots, get_column_insight_history,
@@ -157,12 +157,14 @@ impl InsightService {
         let mut view = TableProfileView::from_profile(&profile, table_name);
         // EDA 列统计摘要（缺失率 / 唯一率）：查询失败不阻塞画像——列清单仍可看，
         // 只是概览卡 / 缺失矩阵少两列数字（保留 None，不编假值）。
-        let column_names: Vec<String> =
-            profile.columns.iter().map(|c| c.column_name.clone()).collect();
-        if let Ok(stats) = crate::insight_engine::compute_table_column_summary(
-            temp_table,
-            &column_names,
-        ) {
+        let column_names: Vec<String> = profile
+            .columns
+            .iter()
+            .map(|c| c.column_name.clone())
+            .collect();
+        if let Ok(stats) =
+            crate::insight_engine::compute_table_column_summary(temp_table, &column_names)
+        {
             view.fill_column_stats(&stats);
         }
         // EDA 样本（前 5 行）：同样失败不阻塞画像（样本区给空态即可）
@@ -233,19 +235,15 @@ impl InsightService {
 
         let dir = project_root.join(".RSmeta").join("insight-archive");
         std::fs::create_dir_all(&dir).map_err(|e| {
-            CoreError::common(CommonError::General(format!(
-                "创建洞察归档目录失败: {e}"
-            )))
+            CoreError::common(CommonError::General(format!("创建洞察归档目录失败: {e}")))
         })?;
         let stamp = Local::now().format("%Y%m%d%H%M%S");
         let file_name = format!("{table_name}_{stamp}.json");
         let path = dir.join(&file_name);
-        let bytes = serde_json::to_vec_pretty(&json).map_err(|e| {
-            CoreError::common(CommonError::General(format!("快照序列化失败: {e}")))
-        })?;
-        std::fs::write(&path, bytes).map_err(|e| {
-            CoreError::common(CommonError::General(format!("快照写入失败: {e}")))
-        })?;
+        let bytes = serde_json::to_vec_pretty(&json)
+            .map_err(|e| CoreError::common(CommonError::General(format!("快照序列化失败: {e}"))))?;
+        std::fs::write(&path, bytes)
+            .map_err(|e| CoreError::common(CommonError::General(format!("快照写入失败: {e}"))))?;
         Ok((path, table_name.to_string()))
     }
 
@@ -286,10 +284,7 @@ impl InsightService {
         let parameters = {
             let registry = crate::registry_for(project_root);
             let guard = registry.read().map_err(|e| {
-                CoreError::common(CommonError::General(format!(
-                    "规则注册表锁定失败：{}",
-                    e
-                )))
+                CoreError::common(CommonError::General(format!("规则注册表锁定失败：{}", e)))
             })?;
             let rule = guard.get(rule_id).ok_or_else(|| {
                 CoreError::common(CommonError::General(format!("规则 '{}' 不存在", rule_id)))
@@ -509,13 +504,17 @@ impl InsightService {
         }
     }
 
-    // ==================== 质量评分 ====================
+    // ==================== 历史质量模型门面（兼容保留，表/列画像 UI 已不调用） ====================
+    // 仅历史快照批量评估（旧快照只读兼容，新快照不重算分）使用；会话级 EDA 不出总分 / 等级。
 
     pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
         crate::quality_scorer::compute_column_quality(stats)
     }
 
-    pub fn compute_table_quality(table_name: &str, stats_list: &[ColumnInsightFull]) -> TableQuality {
+    pub fn compute_table_quality(
+        table_name: &str,
+        stats_list: &[ColumnInsightFull],
+    ) -> TableQuality {
         crate::quality_scorer::compute_table_quality(table_name, stats_list)
     }
 
@@ -830,7 +829,10 @@ pub fn rule_params(
     temp_table: &str,
     columns: &[String],
 ) -> Result<HashMap<String, String>, CoreError> {
-    let column_params: Vec<&String> = parameters.iter().filter(|p| p.as_str() != "table").collect();
+    let column_params: Vec<&String> = parameters
+        .iter()
+        .filter(|p| p.as_str() != "table")
+        .collect();
     if column_params.len() != columns.len() {
         return Err(CoreError::common(CommonError::General(format!(
             "该规则需要 {} 列，实际选了 {} 列",
@@ -878,7 +880,11 @@ pub fn result_columns_and_rows(
     let rows = result
         .to_rows()
         .into_iter()
-        .map(|row| row.into_iter().map(shared::models::Value::to_json).collect())
+        .map(|row| {
+            row.into_iter()
+                .map(shared::models::Value::to_json)
+                .collect()
+        })
         .collect();
     (columns, rows)
 }
@@ -887,7 +893,7 @@ pub fn result_columns_and_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::{result_columns_and_rows, rule_params, strip_error_code, InsightService};
+    use super::{InsightService, result_columns_and_rows, rule_params, strip_error_code};
     use crate::insight_engine::ERR_TOO_MANY_CONCURRENT;
     use crate::service::rule_trust::RuleTrust;
     use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
@@ -920,7 +926,11 @@ mod tests {
 
         let (columns, rows) = result_columns_and_rows(&result);
         assert_eq!(columns, vec!["id".to_string(), "name".to_string()]);
-        assert_eq!(rows.len(), 2, "行必须来自 batches（走 JSON 契约序列化会是 0 行）");
+        assert_eq!(
+            rows.len(),
+            2,
+            "行必须来自 batches（走 JSON 契约序列化会是 0 行）"
+        );
         assert_eq!(rows[0][0], serde_json::json!(1));
         assert_eq!(rows[0][1], serde_json::json!("a"));
         assert_eq!(rows[1][1], serde_json::Value::Null, "NULL 要原样保留");
@@ -987,7 +997,10 @@ mod tests {
     fn unknown_error_keeps_wording_without_promising_retry() {
         let err = CoreError::Common(CommonError::General("规则 numeric-stats 执行失败".into()));
         let info = InsightService::describe_error(&err);
-        assert_eq!(info.message, "规则 numeric-stats 执行失败", "原文往往自己就能定位");
+        assert_eq!(
+            info.message, "规则 numeric-stats 执行失败",
+            "原文往往自己就能定位"
+        );
         assert!(!info.retryable);
     }
 
@@ -1019,7 +1032,10 @@ mod tests {
             &["amount".into()],
         )
         .expect_err("只选一列不该通过");
-        assert!(err.to_string().contains("需要 2 列"), "报错要说清差多少：{err}");
+        assert!(
+            err.to_string().contains("需要 2 列"),
+            "报错要说清差多少：{err}"
+        );
 
         let err = rule_params(&["table".into(), "col".into()], "t", &[]).expect_err("没选列");
         assert!(err.to_string().contains("需要 1 列"), "{err}");
@@ -1052,7 +1068,12 @@ mod tests {
             InsightService::export_table_snapshot(&root, "t_archive_snapshot_probe", "orders")?;
         assert_eq!(name, "orders");
         assert!(path.starts_with(root.join(".RSmeta").join("insight-archive")));
-        assert!(path.file_name().unwrap().to_string_lossy().starts_with("orders_"));
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("orders_")
+        );
         let text = std::fs::read_to_string(&path).expect("快照文件可读");
         let json: serde_json::Value = serde_json::from_str(&text).expect("快照是合法 JSON");
         assert_eq!(json["kind"], "insight_table_snapshot");

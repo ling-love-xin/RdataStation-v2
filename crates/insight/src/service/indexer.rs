@@ -704,11 +704,8 @@ parameters = []
 "#;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_rule_index_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_rule_index_{}_{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
@@ -738,7 +735,10 @@ parameters = []
         let rows = scan_scope_dir(&dir, RuleScope::Project);
         assert_eq!(rows.len(), 2, "合法与非法文件都要进索引");
 
-        let ok = rows.iter().find(|r| r.rule_id == "demo-rule").expect("合法规则");
+        let ok = rows
+            .iter()
+            .find(|r| r.rule_id == "demo-rule")
+            .expect("合法规则");
         assert_eq!(ok.load_status, RuleLoadStatus::Ok);
         assert_eq!(ok.category, "column");
         assert_eq!(ok.name, "示例规则");
@@ -755,7 +755,10 @@ parameters = []
         assert_eq!(bad.load_status, RuleLoadStatus::Invalid);
         assert!(bad.load_error.is_some(), "必须记下错误原文");
         assert!(
-            bad.load_error.as_deref().unwrap().contains("TOML parse error"),
+            bad.load_error
+                .as_deref()
+                .unwrap()
+                .contains("TOML parse error"),
             "错误原文应可读: {:?}",
             bad.load_error
         );
@@ -836,7 +839,10 @@ parameters = []
         let second = create_rule_file(Some(&root), RuleScope::Project)?;
         assert_ne!(first, second, "第二次新建不得覆盖第一份模板");
         assert!(first.exists() && second.exists());
-        assert!(first.to_string_lossy().ends_with("new-rule.rule.toml"), "{first:?}");
+        assert!(
+            first.to_string_lossy().ends_with("new-rule.rule.toml"),
+            "{first:?}"
+        );
         assert!(
             second.to_string_lossy().ends_with("new-rule-2.rule.toml"),
             "{second:?}"
@@ -947,11 +953,7 @@ parameters = []
         store.set_enabled("rule-a", true).await?;
         store.replace(&rows).await?;
         assert!(
-            store
-                .load()
-                .await?
-                .iter()
-                .all(|r| r.enabled),
+            store.load().await?.iter().all(|r| r.enabled),
             "replace 会重置启停状态，故它只应由同步器在校准磁盘现状时调用"
         );
 

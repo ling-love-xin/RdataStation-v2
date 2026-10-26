@@ -13,11 +13,12 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{IconName, Sizable as _, Theme};use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{IconName, Sizable as _, Theme};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::insight_view::{InsightEvent, InsightView};
-use crate::model::{fmt_rows, InsightSetKind, OverlapView};
+use crate::model::{InsightSetKind, OverlapView, fmt_rows};
 use crate::ui;
 
 impl InsightView {
@@ -30,7 +31,11 @@ impl InsightView {
         // 上限清理，长期占用分析引擎内存——这正是设置「工作集提示阈值」的用途）。
         let over_limit = self.work_set_limit > 0 && self.insight_set.len() > self.work_set_limit;
         let count_label = if self.work_set_limit > 0 {
-            format!("已洞察表 {} / {}", self.insight_set.len(), self.work_set_limit)
+            format!(
+                "已洞察表 {} / {}",
+                self.insight_set.len(),
+                self.work_set_limit
+            )
         } else {
             format!("已洞察表 {}", self.insight_set.len())
         };
@@ -126,9 +131,7 @@ impl InsightView {
             .px_1()
             .rounded_sm()
             .h(rems(ui::ROW_HEIGHT))
-            .when(entry.is_current, |row| {
-                row.bg(colors.list_active)
-            })
+            .when(entry.is_current, |row| row.bg(colors.list_active))
             .child(
                 badge
                     .outline()
@@ -183,44 +186,60 @@ impl InsightView {
         let key_archive = entry.key.clone();
         let sampled = entry.temp_table.is_some();
         row.child(
-            Button::new(SharedString::from(format!("insight-set-compare-{}", entry.key)))
-                .ghost()
-                .xsmall()
-                .label("对比")
-                .on_click(move |_, _, app| {
-                    entity_compare.update(app, |_view, cx| {
-                        cx.emit(InsightEvent::CompareRequested { key: key_compare.clone() });
+            Button::new(SharedString::from(format!(
+                "insight-set-compare-{}",
+                entry.key
+            )))
+            .ghost()
+            .xsmall()
+            .label("对比")
+            .on_click(move |_, _, app| {
+                entity_compare.update(app, |_view, cx| {
+                    cx.emit(InsightEvent::CompareRequested {
+                        key: key_compare.clone(),
                     });
-                }),
+                });
+            }),
         )
         .child(
-            Button::new(SharedString::from(format!("insight-set-relation-{}", entry.key)))
-                .ghost()
-                .xsmall()
-                .label("关系")
-                .disabled(!sampled)
-                .on_click(move |_, _, app| {
-                    entity_relation.update(app, |_view, cx| {
-                        cx.emit(InsightEvent::RelationRequested { key: key_relation.clone() });
+            Button::new(SharedString::from(format!(
+                "insight-set-relation-{}",
+                entry.key
+            )))
+            .ghost()
+            .xsmall()
+            .label("关系")
+            .disabled(!sampled)
+            .on_click(move |_, _, app| {
+                entity_relation.update(app, |_view, cx| {
+                    cx.emit(InsightEvent::RelationRequested {
+                        key: key_relation.clone(),
                     });
-                }),
+                });
+            }),
         )
         .child(
-            Button::new(SharedString::from(format!("insight-set-archive-{}", entry.key)))
-                .ghost()
-                .xsmall()
-                .label("归档")
-                .disabled(!sampled)
-                .on_click(move |_, _, app| {
-                    entity_archive.update(app, |_view, cx| {
-                        cx.emit(InsightEvent::ArchiveRequested { key: key_archive.clone() });
+            Button::new(SharedString::from(format!(
+                "insight-set-archive-{}",
+                entry.key
+            )))
+            .ghost()
+            .xsmall()
+            .label("归档")
+            .disabled(!sampled)
+            .on_click(move |_, _, app| {
+                entity_archive.update(app, |_view, cx| {
+                    cx.emit(InsightEvent::ArchiveRequested {
+                        key: key_archive.clone(),
                     });
-                }),
+                });
+            }),
         )
     }
 
     /// 关系排查结果区（集合卡下方）：loading / 失败 / 结果三态。
-    fn render_overlap_zone(&self, entity: &Entity<Self>, theme: &Theme) -> Div {        let colors = theme.colors;
+    fn render_overlap_zone(&self, entity: &Entity<Self>, theme: &Theme) -> Div {
+        let colors = theme.colors;
         let mut zone = div()
             .w_full()
             .v_flex()

@@ -15,12 +15,10 @@ pub mod types;
 use std::fmt::Write as _;
 
 use types::{
-    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, DistributionBin, NumericStats,
-    QualityScore, TableProfile, TableQuality, TextStats,
+    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, DistributionBin,
+    NumericStats, TableProfile, TextStats,
 };
 
-// 等级是 `quality_scorer` 的定义（阈值与文案的唯一来源），这里只借用类型
-use crate::quality_scorer::Grade;
 use crate::rule_types::{ExecutionResult, QualityReport};
 
 // ==================== 阈值（原型 §3.1） ====================
@@ -204,7 +202,11 @@ pub struct SampleSource {
 
 impl SampleSource {
     /// 源库连接上的取样（导航树 / 结果集 / 存档里的表）。
-    pub fn new(conn_id: impl Into<String>, sql: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn new(
+        conn_id: impl Into<String>,
+        sql: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
         Self {
             conn_id: Some(conn_id.into()),
             sql: sql.into(),
@@ -233,10 +235,10 @@ impl SampleSource {
         let path = path.as_ref();
         let display = path.display().to_string();
         let reader = engine::file_reader_function(&display).ok_or_else(|| {
-                shared::error::CoreError::common(shared::error::CommonError::General(format!(
-                    "这个格式还不能分析：{display}（支持 CSV / Parquet / Excel / JSON）"
-                )))
-            })?;
+            shared::error::CoreError::common(shared::error::CommonError::General(format!(
+                "这个格式还不能分析：{display}（支持 CSV / Parquet / Excel / JSON）"
+            )))
+        })?;
         let escaped = display.replace('\'', "''");
         Ok(Self::on_duckdb(
             format!("SELECT * FROM {reader}('{escaped}')"),
@@ -318,7 +320,9 @@ impl InsightTarget {
             InsightTarget::Table { table_name, .. }
             | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
             InsightTarget::MultiColumn { columns, .. } => format!("{} 列", columns.len()),
-            InsightTarget::Schema { schema, .. } => schema.clone().unwrap_or_else(|| "全部结构".into()),
+            InsightTarget::Schema { schema, .. } => {
+                schema.clone().unwrap_or_else(|| "全部结构".into())
+            }
         }
     }
 
@@ -454,7 +458,10 @@ impl PanelData {
 
     /// 三个 Tab 都还没取过数
     pub fn is_empty(&self) -> bool {
-        self.column.is_none() && self.table.is_none() && self.multi.is_none() && self.schema.is_none()
+        self.column.is_none()
+            && self.table.is_none()
+            && self.multi.is_none()
+            && self.schema.is_none()
     }
 
     // 写入用链式构造：新数据只换它自己那一格，别的 Tab 的载荷不动
@@ -612,12 +619,18 @@ pub fn is_numeric_type(dt_lower: &str) -> bool {
 /// 但它们都是时间戳。
 pub fn is_datetime_type(dt_lower: &str) -> bool {
     let base = type_base(dt_lower);
-    base == "date" || base == "datetime" || base.starts_with("timestamp") || base.starts_with("time")
+    base == "date"
+        || base == "datetime"
+        || base.starts_with("timestamp")
+        || base.starts_with("time")
 }
 
 /// 二进制族（不参与列统计）
 pub fn is_binary_type(dt_lower: &str) -> bool {
-    matches!(type_base(dt_lower), "blob" | "bytea" | "binary" | "varbinary")
+    matches!(
+        type_base(dt_lower),
+        "blob" | "bytea" | "binary" | "varbinary"
+    )
 }
 
 /// 数组族：DuckDB 的 `INTEGER[]`，以及外部源的 `ARRAY` / `LIST` 写法
@@ -675,29 +688,6 @@ pub struct SampleCell {
     pub value: Option<String>,
 }
 
-/// 质量评分卡（Phase 2）：总分 + 等级 + 四维。
-///
-/// 等级是类型（[`Grade`]）而不是字符串：视图按它取主题色，
-/// 而阈值与文案由 `quality_scorer` 一处提供，不在这里再写一份。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScoreView {
-    pub overall: f64,
-    pub grade: Grade,
-    pub summary: String,
-    pub dimensions: Vec<DimensionView>,
-}
-
-/// 评分卡的一维（完整性 / 唯一性 / 类型一致 / 分布均匀）
-#[derive(Debug, Clone, PartialEq)]
-pub struct DimensionView {
-    pub name: String,
-    /// 0–100
-    pub score: f64,
-    /// 权重（四维合计 1.0）
-    pub weight: f64,
-    pub detail: String,
-}
-
 // ==================== 表探查视图模型（Phase 3.1） ====================
 
 /// 表探查（「表」Tab）：列元数据表 + 行数 + 表级质量（评估后才有）。
@@ -734,8 +724,6 @@ pub struct TableColumnView {
     pub kind: ColumnKind,
     pub nullable: bool,
     pub primary_key: bool,
-    /// 该列的质量分：未评估为 `None`（不显示假分值）
-    pub score: Option<f64>,
     /// EDA 列统计摘要：空值率（0–1）。表画像时由引擎一次查询回填；
     /// 查询失败 / 未跑为 `None`（不编假值）。
     pub null_rate: Option<f64>,
@@ -748,12 +736,6 @@ pub struct TableColumnView {
     pub histogram: Option<Vec<DistributionBin>>,
     /// 该列样本值（评估后从全量画像的样本列取前 5 条；未评估为空）。
     pub sample_values: Vec<String>,
-}
-
-impl TableColumnView {
-    pub fn grade(&self) -> Option<Grade> {
-        self.score.map(Grade::of)
-    }
 }
 
 /// EDA 列统计摘要：引擎对临时表所有列一次查询得到的最小统计集。
@@ -795,16 +777,13 @@ pub struct ColumnChecker {
     pub detail: String,
 }
 
-/// 表级质量摘要（由各列分数聚合而来）
+/// 表级事实摘要：只挂检查器命中事实，**不含总分 / 等级 / 加权合成**。
+///
+/// 定位口径：洞察是会话级 EDA 探索，只回答「这份数据长什么样」；
+/// 质量评级、归档打分归 M6 资产库，本视图模型不承载评级结论。
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableQualityView {
-    pub overall: f64,
-    pub grade: Grade,
-    pub summary: String,
-    /// 评分低于 [`TABLE_PROBLEM_SCORE`] 的列数
-    pub problem_columns: usize,
-    pub scored_columns: usize,
-    /// 列检查器（评估后逐列内置判定聚合）；无评级，只有事实计数
+    /// 列检查器（评估后逐列内置判定聚合）
     pub checker: Vec<ColumnChecker>,
     /// 适用检查器数（排除不适用-类型 / 列排除）
     pub checker_applicable: usize,
@@ -812,7 +791,7 @@ pub struct TableQualityView {
     pub checker_hits: usize,
 }
 
-/// 「评估全表」的进度（串行评分，避免撞后端并发上限）
+/// 「评估全表」的进度（串行逐列统计，避免撞后端并发上限）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableEvalProgress {
     pub done: usize,
@@ -827,9 +806,6 @@ impl TableEvalProgress {
         (self.done as f32 / self.total as f32).clamp(0.0, 1.0)
     }
 }
-
-/// 表级「需要关注」的分数阀：与评分卡四档同源（低于「一般」即算问题列）
-pub const TABLE_PROBLEM_SCORE: f64 = 50.0;
 
 impl TableProfileView {
     /// 从领域结果构建（纯函数）。
@@ -847,7 +823,6 @@ impl TableProfileView {
                 kind: ColumnKind::of_type_name(&column.data_type),
                 nullable: column.is_nullable,
                 primary_key: column.is_primary_key,
-                score: None,
                 null_rate: None,
                 unique_rate: None,
                 stats_detail: None,
@@ -885,16 +860,7 @@ impl TableProfileView {
         next
     }
 
-    /// 写入一列的分数
-    pub fn with_column_score(&self, column: &str, score: f64) -> Self {
-        let mut next = self.clone();
-        if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
-            row.score = Some(score);
-        }
-        next
-    }
-
-    /// 写入一列的级联明细（评估循环里与分数同批回填）。
+    /// 写入一列的级联明细（评估循环里与进度同批回填）。
     ///
     /// `stats_detail` / `histogram` 直接来自该列的 `ColumnInsightFull`（同一次查询，
     /// 不重复取数）；`sample_values` 从全量画像的样本列截前 5 条文本值。
@@ -917,23 +883,14 @@ impl TableProfileView {
         next
     }
 
-    /// 评估完成：写表级摘要。
+    /// 评估完成：清进度、挂一个空的表级事实摘要位。
     ///
-    /// 列分数不在这里重算——它与 `compute_table_quality` 内部的打分同源
-    /// （都是 `compute_column_quality`），两处各算一次迟早在阈值上分岔。
-    pub fn evaluated(&self, quality: &TableQuality) -> Self {
+    /// 表级摘要只承载检查器事实计数，由 [`with_checker`](Self::with_checker) 填充；
+    /// 本模块不合成总分、不出等级——评级结论归归档后的资产库（M6）。
+    pub fn finish_evaluation(&self) -> Self {
         let mut next = self.clone();
         next.progress = None;
         next.quality = Some(TableQualityView {
-            overall: quality.overall_score,
-            grade: Grade::of(quality.overall_score),
-            summary: quality.summary.clone(),
-            problem_columns: quality
-                .column_scores
-                .iter()
-                .filter(|entry| entry.quality_score < TABLE_PROBLEM_SCORE)
-                .count(),
-            scored_columns: quality.scored_count as usize,
             checker: Vec::new(),
             checker_applicable: 0,
             checker_hits: 0,
@@ -951,9 +908,7 @@ impl TableProfileView {
         if let Some(quality) = next.quality.as_mut() {
             let applicable = checks
                 .iter()
-                .filter(|c| {
-                    c.state == ColumnCheckState::Hit || c.state == ColumnCheckState::Miss
-                })
+                .filter(|c| c.state == ColumnCheckState::Hit || c.state == ColumnCheckState::Miss)
                 .count();
             let hits = checks
                 .iter()
@@ -1045,13 +1000,16 @@ impl MultiRuleView {
         if kinds.len() != self.arity() {
             return false;
         }
-        kinds.iter().enumerate().all(|(ix, kind)| match self.applies_to.get(ix) {
-            None => true,
-            Some(expected) => {
-                expected.eq_ignore_ascii_case("any")
-                    || expected.eq_ignore_ascii_case(kind.family_name())
-            }
-        })
+        kinds
+            .iter()
+            .enumerate()
+            .all(|(ix, kind)| match self.applies_to.get(ix) {
+                None => true,
+                Some(expected) => {
+                    expected.eq_ignore_ascii_case("any")
+                        || expected.eq_ignore_ascii_case(kind.family_name())
+                }
+            })
     }
 
     /// 列表里那一行右侧的类型提示（如 `数值 · 数值`）
@@ -1177,10 +1135,7 @@ pub fn json_cell(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "—".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n
-            .as_f64()
-            .map(fmt_num)
-            .unwrap_or_else(|| n.to_string()),
+        serde_json::Value::Number(n) => n.as_f64().map(fmt_num).unwrap_or_else(|| n.to_string()),
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     }
@@ -1202,7 +1157,12 @@ pub fn quality_notes(report: Option<&QualityReport>) -> Vec<QualityNote> {
             text: match &check.message {
                 message if !message.trim().is_empty() => message.clone(),
                 _ => match check.actual {
-                    Some(actual) => format!("{} 未过 {}（实际 {}）", check.field, check.rule, fmt_num(actual)),
+                    Some(actual) => format!(
+                        "{} 未过 {}（实际 {}）",
+                        check.field,
+                        check.rule,
+                        fmt_num(actual)
+                    ),
                     None => format!("{} 未过 {}", check.field, check.rule),
                 },
             },
@@ -1245,7 +1205,11 @@ impl MultiColumnView {
         !self.temp_table.is_empty() && self.temp_table == temp_table
     }
 
-    pub fn from_profile(profile: &TableProfile, table_name: &str, rules: Vec<MultiRuleView>) -> Self {
+    pub fn from_profile(
+        profile: &TableProfile,
+        table_name: &str,
+        rules: Vec<MultiRuleView>,
+    ) -> Self {
         let table = TableProfileView::from_profile(profile, table_name);
         Self {
             temp_table: profile.table_name.clone(),
@@ -1453,11 +1417,6 @@ impl VersionDiffView {
 
         let mut rows = Vec::new();
 
-        // 头号结论先给：质量分（两侧都算得出才有——全空列不产分，D2 口径）
-        if let (Some(old_score), Some(new_score)) = (&old.score, &new.score) {
-            rows.push(DiffRowView::scored("质量分", old_score.overall, new_score.overall));
-        }
-
         rows.push(DiffRowView::count(
             "总行数",
             s.total_count as f64,
@@ -1558,17 +1517,6 @@ impl DiffRowView {
         }
     }
 
-    /// 评分行（与评分卡同一精度：整数）
-    fn scored(label: &str, old: f64, new: f64) -> Self {
-        let (a, b) = (old.round(), new.round());
-        Self {
-            label: label.to_string(),
-            old: format!("{a:.0}"),
-            new: format!("{b:.0}"),
-            delta: delta_of(a, b, |v| format!("{v:.0}"), ""),
-        }
-    }
-
     /// 纯文本行（类型 / 唯一值这类两侧都是字符串的）
     fn text(label: &str, old: &str, new: &str) -> Self {
         Self::from_display(label, Some(old), new)
@@ -1663,12 +1611,9 @@ impl HistoryView {
                         let page_complete = entries.len() < HISTORY_PAGE_SIZE;
                         is_oldest
                             && page_complete
-                            && entry
-                                .parent_version_id
-                                .as_deref()
-                                .is_some_and(|parent| {
-                                    !entries.iter().any(|other| other.version_id == parent)
-                                })
+                            && entry.parent_version_id.as_deref().is_some_and(|parent| {
+                                !entries.iter().any(|other| other.version_id == parent)
+                            })
                     },
                     is_latest: index == 0,
                 })
@@ -1729,14 +1674,14 @@ pub struct ColumnProfileView {
     pub notes: Vec<QualityNote>,
     /// 四区之四：样本数据
     pub sample: Vec<SampleCell>,
-    /// 评分卡：`None` 表示**无数据不产假分数**（列全空时）
-    pub score: Option<ScoreView>,
 }
 
 impl ColumnProfileView {
     /// 从领域结果构建视图模型。
     ///
     /// 纯函数：不读 I/O、不碰主题、不依赖窗口——阈值与文案因此可单测。
+    /// 本视图只承载事实统计（基础 / 分布 / 检查器提示 / 样本），
+    /// 不合成质量总分或等级（评级归归档后的资产库）。
     pub fn from_domain(full: &ColumnInsightFull) -> Self {
         let stats = &full.stats;
         let kind = ColumnKind::of(&stats.stats_detail);
@@ -1751,7 +1696,6 @@ impl ColumnProfileView {
             distribution: Vec::new(),
             notes: Vec::new(),
             sample: sample_cells(&full.sample),
-            score: None,
         };
 
         view.basics.push(StatRow {
@@ -1766,7 +1710,11 @@ impl ColumnProfileView {
         });
         view.basics.push(StatRow {
             label: "空值",
-            value: format!("{}（{}）", fmt_int(stats.null_count), fmt_pct(stats.null_rate)),
+            value: format!(
+                "{}（{}）",
+                fmt_int(stats.null_count),
+                fmt_pct(stats.null_rate)
+            ),
             emphasis: if stats.null_rate > NULL_RATE_WARN {
                 Emphasis::Warning
             } else {
@@ -1808,30 +1756,7 @@ impl ColumnProfileView {
             );
         }
 
-        // 评分卡（Phase 2）：列全空时不给分数（「表为空或无数据不产假分数」的口径）
-        view.score = (stats.total_count > 0)
-            .then(|| score_view(&crate::quality_scorer::compute_column_quality(full)));
-
         view
-    }
-}
-
-/// 评分卡的领域结果 → 视图模型（等级按分数现算，不去解析 `level` 字符串）
-fn score_view(score: &QualityScore) -> ScoreView {
-    ScoreView {
-        overall: score.overall_score,
-        grade: Grade::of(score.overall_score),
-        summary: score.summary.clone(),
-        dimensions: score
-            .dimensions
-            .iter()
-            .map(|d| DimensionView {
-                name: d.name.clone(),
-                score: d.score,
-                weight: d.weight,
-                detail: d.detail.clone(),
-            })
-            .collect(),
     }
 }
 
@@ -2126,9 +2051,7 @@ fn sample_cells(sample: &[serde_json::Value]) -> Vec<SampleCell> {
 
 #[cfg(test)]
 mod tests {
-    use super::types::{
-        ColumnQualityEntry, DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency,
-    };
+    use super::types::{DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency};
     use super::*;
     use crate::rule_types::{ExecutionResult, QualityCheck, QualityReport};
     use crate::store::{InsightStorageStats, InsightVersionEntry};
@@ -2252,12 +2175,13 @@ mod tests {
     /// 文件来源（CSV / Parquet / Excel / JSON）：**不走源库连接**，靠 DuckDB 扩展直接读。
     #[test]
     fn file_source_picks_the_duckdb_reader_by_extension() {
-        let xlsx = SampleSource::duckdb_file("C:/data/2026 预算.xlsx", "预算表")
-            .expect("xlsx 应能识别");
+        let xlsx =
+            SampleSource::duckdb_file("C:/data/2026 预算.xlsx", "预算表").expect("xlsx 应能识别");
         assert_eq!(xlsx.conn_id(), None, "文件不需要源库连接");
         assert_eq!(xlsx.label(), "预算表");
         assert!(
-            xlsx.sql.contains("read_excel_auto('C:/data/2026 预算.xlsx')"),
+            xlsx.sql
+                .contains("read_excel_auto('C:/data/2026 预算.xlsx')"),
             "Excel 靠 excel 扩展读: {}",
             xlsx.sql
         );
@@ -2321,8 +2245,18 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "总行数", "非空值", "空值", "唯一值", "平均", "中位", "最小", "最大", "P25", "P75",
-                "标准差", "偏度"
+                "总行数",
+                "非空值",
+                "空值",
+                "唯一值",
+                "平均",
+                "中位",
+                "最小",
+                "最大",
+                "P25",
+                "P75",
+                "标准差",
+                "偏度"
             ]
         );
         assert_eq!(view.basics[0].value, "1,000");
@@ -2374,8 +2308,8 @@ mod tests {
 
     #[test]
     fn extreme_values_are_listed_with_overflow_count() {
-        let view = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Numeric(
-            numeric(
+        let view =
+            ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Numeric(numeric(
                 None,
                 vec![
                     ExtremeValue {
@@ -2391,8 +2325,7 @@ mod tests {
                         kind: "高".into(),
                     },
                 ],
-            ),
-        )));
+            ))));
         let note = view
             .notes
             .iter()
@@ -2442,29 +2375,31 @@ mod tests {
             },
         )));
         assert_eq!(view.kind, ColumnKind::DateTime);
-        assert!(view.basics.iter().any(|r| r.label == "跨度" && r.value == "90 天"));
+        assert!(
+            view.basics
+                .iter()
+                .any(|r| r.label == "跨度" && r.value == "90 天")
+        );
         assert_eq!(view.distribution.len(), 1);
     }
 
     #[test]
     fn boolean_imbalance_is_flagged_both_ways() {
-        let balanced = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Boolean(
-            BooleanStats {
+        let balanced =
+            ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Boolean(BooleanStats {
                 true_count: 500,
                 false_count: 500,
                 true_ratio: 0.5,
-            },
-        )));
+            })));
         assert!(balanced.notes.iter().all(|n| !n.text.contains("不平衡")));
         assert_eq!(balanced.distribution[0].label, "True 占比");
 
-        let lopsided = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Boolean(
-            BooleanStats {
+        let lopsided =
+            ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Boolean(BooleanStats {
                 true_count: 990,
                 false_count: 10,
                 true_ratio: 0.99,
-            },
-        )));
+            })));
         assert!(lopsided.notes.iter().any(|n| n.text.contains("不平衡")));
     }
 
@@ -2531,9 +2466,15 @@ mod tests {
     /// 表探查只拿得到类型名：类型名 → 类型族要与列画像的路由同口径
     #[test]
     fn type_name_maps_to_the_same_families() {
-        assert_eq!(ColumnKind::of_type_name("DECIMAL(12,2)"), ColumnKind::Numeric);
+        assert_eq!(
+            ColumnKind::of_type_name("DECIMAL(12,2)"),
+            ColumnKind::Numeric
+        );
         assert_eq!(ColumnKind::of_type_name("BIGINT"), ColumnKind::Numeric);
-        assert_eq!(ColumnKind::of_type_name("TIMESTAMP_NS"), ColumnKind::DateTime);
+        assert_eq!(
+            ColumnKind::of_type_name("TIMESTAMP_NS"),
+            ColumnKind::DateTime
+        );
         assert_eq!(ColumnKind::of_type_name("BOOLEAN"), ColumnKind::Boolean);
         assert_eq!(ColumnKind::of_type_name("VARCHAR(255)"), ColumnKind::Text);
         assert_eq!(ColumnKind::of_type_name("BLOB"), ColumnKind::Unknown);
@@ -2576,7 +2517,7 @@ mod tests {
     }
 
     #[test]
-    fn table_view_lists_columns_with_families_and_no_fake_scores() {
+    fn table_view_lists_columns_with_families_and_no_fake_stats() {
         let view = TableProfileView::from_profile(&table_profile_fixture(), "orders");
         assert_eq!(view.table_name, "orders");
         assert_eq!(view.row_count, 124_000);
@@ -2584,71 +2525,77 @@ mod tests {
         assert_eq!(view.columns[0].kind, ColumnKind::Numeric);
         assert!(view.columns[0].primary_key);
         assert!(!view.columns[0].nullable);
-        assert_eq!(view.columns[2].kind, ColumnKind::Unknown, "BLOB 不参与列统计");
-        assert!(
-            view.columns.iter().all(|c| c.score.is_none()),
-            "没评估就是没分，不给假分值"
+        assert_eq!(
+            view.columns[2].kind,
+            ColumnKind::Unknown,
+            "BLOB 不参与列统计"
         );
+        // 只探查元数据：列统计 / 表级事实摘要 / 进度都不预先编造
+        assert!(view.columns.iter().all(|c| c.null_rate.is_none()));
         assert!(view.quality.is_none());
         assert!(view.progress.is_none());
     }
 
     #[test]
-    fn evaluation_progress_is_monotonic_and_keeps_scores() {
+    fn evaluation_progress_is_monotonic_and_column_details_persist() {
         let base = TableProfileView::from_profile(&table_profile_fixture(), "orders");
         let started = base.evaluating(0, 3);
-        assert_eq!(started.progress, Some(TableEvalProgress { done: 0, total: 3 }));
+        assert_eq!(
+            started.progress,
+            Some(TableEvalProgress { done: 0, total: 3 })
+        );
         assert_eq!(started.progress.unwrap().ratio(), 0.0);
 
-        let one = started.with_column_score("id", 95.0);
-        let two = one
-            .with_column_score("amount", 72.0)
-            .evaluating(2, 3);
-        assert_eq!(two.columns[0].score, Some(95.0), "先算出来的分不得被覆盖");
-        assert_eq!(two.columns[1].score, Some(72.0));
-        assert_eq!(two.columns[0].grade(), Some(Grade::Excellent));
-        assert_eq!(two.columns[1].grade(), Some(Grade::Good));
+        let full = base_stats(ColumnStatsDetail::Numeric(numeric(None, Vec::new())));
+        let one = started.with_column_detail("id", &full);
+        let two = one.with_column_detail("amount", &full).evaluating(2, 3);
+        assert!(
+            two.columns[0].stats_detail.is_some(),
+            "先回填的明细不得被覆盖"
+        );
+        assert!(two.columns[1].stats_detail.is_some());
+        assert!(two.columns[2].stats_detail.is_none(), "未回填列保持空");
         assert_eq!(two.progress.unwrap().ratio(), 2.0 / 3.0);
-        assert!(two.columns[2].score.is_none());
 
         // 未知列名不造行也不 panic（列清单可能刚变）
-        assert_eq!(two.with_column_score("不存在", 10.0).columns.len(), 3);
+        assert_eq!(two.with_column_detail("不存在", &full).columns.len(), 3);
     }
 
     #[test]
-    fn evaluated_writes_the_summary_and_counts_problem_columns() {
+    fn finish_evaluation_clears_progress_and_checker_fills_facts() {
         let base = TableProfileView::from_profile(&table_profile_fixture(), "orders");
-        let quality = TableQuality {
-            table_name: "orders".into(),
-            overall_score: 68.4,
-            level: "一般".into(),
-            column_scores: vec![
-                ColumnQualityEntry {
-                    column_name: "payload".into(),
-                    quality_score: 30.0,
-                    level: "较差".into(),
-                    null_rate: 0.2,
-                },
-                ColumnQualityEntry {
-                    column_name: "amount".into(),
-                    quality_score: 72.0,
-                    level: "良好".into(),
-                    null_rate: 0.05,
-                },
-            ],
-            summary: "表质量一般 (68分)，2 列已评估 (1风险列)".into(),
-            scored_count: 2,
-            total_columns: 2,
-        };
 
-        let done = base.evaluating(2, 2).evaluated(&quality);
+        let done = base.evaluating(2, 2).finish_evaluation();
         assert!(done.progress.is_none(), "评估完进度行必须消失");
-        let view = done.quality.expect("应有表级摘要");
-        assert_eq!(view.overall, 68.4);
-        assert_eq!(view.grade, Grade::Fair);
-        assert_eq!(view.problem_columns, 1, "低于 50 分才算问题列");
-        assert_eq!(view.scored_columns, 2);
-        assert!(view.summary.contains("一般"));
+        let view = done.quality.as_ref().expect("应有表级事实摘要位");
+        assert_eq!(view.checker.len(), 0, "检查器由 with_checker 单独填充");
+        assert_eq!(view.checker_applicable, 0);
+        assert_eq!(view.checker_hits, 0);
+
+        let filled = done.with_checker(vec![
+            ColumnChecker {
+                column: "id".into(),
+                name: "非空率".into(),
+                state: ColumnCheckState::Hit,
+                detail: "非空率 98.2% ≥ 90%".into(),
+            },
+            ColumnChecker {
+                column: "amount".into(),
+                name: "近似正态".into(),
+                state: ColumnCheckState::Miss,
+                detail: "偏度 2.1（高度右偏）".into(),
+            },
+            ColumnChecker {
+                column: "payload".into(),
+                name: "唯一率".into(),
+                state: ColumnCheckState::Excluded,
+                detail: "列被规则排除".into(),
+            },
+        ]);
+        let view = filled.quality.expect("检查器回填后摘要仍在");
+        assert_eq!(view.checker.len(), 3);
+        assert_eq!(view.checker_applicable, 2, "不适用 / 排除不计入适用数");
+        assert_eq!(view.checker_hits, 1, "命中只统计通过的条数");
     }
 
     #[test]
@@ -2740,8 +2687,14 @@ mod tests {
         let MultiResultView::Single(rows) = view else {
             panic!("对象形态应转成键值行");
         };
-        let map: Vec<(&str, &str)> = rows.iter().map(|r| (r.label.as_str(), r.value.as_str())).collect();
-        assert!(map.contains(&("相关系数", "0.8765")), "已知字段名给中文标签：{map:?}");
+        let map: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.value.as_str()))
+            .collect();
+        assert!(
+            map.contains(&("相关系数", "0.8765")),
+            "已知字段名给中文标签：{map:?}"
+        );
         assert!(map.contains(&("样本量", "120")), "整数不带小数点：{map:?}");
         assert!(
             map.contains(&("note", "—")),
@@ -2805,7 +2758,10 @@ mod tests {
                 message: "不该出现".into(),
             }],
         };
-        assert!(quality_notes(Some(&passed)).is_empty(), "通过的检查不占提示行");
+        assert!(
+            quality_notes(Some(&passed)).is_empty(),
+            "通过的检查不占提示行"
+        );
 
         let failed = QualityReport {
             passed: false,
@@ -2831,7 +2787,10 @@ mod tests {
         let notes = quality_notes(Some(&failed));
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].text, "相关系数偏低", "有文案就用规则自己的文案");
-        assert_eq!(notes[1].text, "sample_size 未过 min=30（实际 12）", "没文案就拼一条可定位的");
+        assert_eq!(
+            notes[1].text, "sample_size 未过 min=30（实际 12）",
+            "没文案就拼一条可定位的"
+        );
         assert!(notes.iter().all(|n| n.level == NoteLevel::Warning));
         assert!(quality_notes(None).is_empty(), "规则没有门控时没有提示");
     }
@@ -2850,7 +2809,10 @@ mod tests {
             view.rules[0].accepts(&view.kinds_of(&["id".into(), "amount".into()])),
             "两列数值应满足 Pearson 的要求"
         );
-        assert!(!view.rules[0].accepts(&view.kinds_of(&["id".into()])), "只选一列不行");
+        assert!(
+            !view.rules[0].accepts(&view.kinds_of(&["id".into()])),
+            "只选一列不行"
+        );
 
         let done = view.with_result(
             MultiResultView::Single(vec![KeyValueRow {
@@ -2910,37 +2872,22 @@ mod tests {
     }
 
     #[test]
-    fn score_card_is_built_for_non_empty_columns() {
+    fn non_empty_column_fills_fact_basics_and_sample() {
         let view = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Numeric(
             numeric(None, Vec::new()),
         )));
-        let score = view.score.expect("有数据就应产出评分卡");
-        assert_eq!(score.dimensions.len(), 4, "评分卡固定四维");
-        let weights: f64 = score.dimensions.iter().map(|d| d.weight).sum();
-        assert!((weights - 1.0).abs() < 1e-9, "权重合计应为 1.0");
-        for dim in &score.dimensions {
-            assert!(
-                (0.0..=100.0).contains(&dim.score),
-                "维度得分应在 0–100：{}={}",
-                dim.name,
-                dim.score
-            );
-            assert!(!dim.detail.is_empty(), "维度应带明细文案：{}", dim.name);
-        }
-        assert!(
-            (0.0..=100.0).contains(&score.overall),
-            "总分应在 0–100：{}",
-            score.overall
-        );
-        // 等级按分数现算，与领域结果里的 `level` 字符串同源
-        assert_eq!(score.grade, Grade::of(score.overall));
-        assert!(!score.summary.is_empty());
+        // 只承载事实统计：基础行非空、样本来自真实取值，不合成评分结论
+        assert_eq!(view.total_count, 1000);
+        assert!(!view.basics.is_empty());
+        assert!(!view.sample.is_empty());
+        let labels: Vec<&str> = view.basics.iter().map(|r| r.label).collect();
+        assert!(labels.contains(&"总行数"));
+        assert!(labels.contains(&"平均"));
     }
 
     #[test]
-    fn empty_column_has_no_score() {
-        // 「表为空或无数据不产假分数」：全空列若给 0 分，用户会误以为数据质量差，
-        // 实际是根本没有数据——视图据此不渲染评分卡。
+    fn empty_column_still_reports_zero_counts_without_fake_conclusion() {
+        // 全空列：不编质量结论；计数与空值率仍然照给（基础统计不依赖有无数据）
         let mut full = base_stats(ColumnStatsDetail::Numeric(numeric(None, Vec::new())));
         full.stats.total_count = 0;
         full.stats.null_count = 0;
@@ -2948,8 +2895,6 @@ mod tests {
         full.stats.unique_count = None;
         full.sample.clear();
         let view = ColumnProfileView::from_domain(&full);
-        assert!(view.score.is_none());
-        // 计数与空值率仍然照给（基础统计不依赖有无数据）
         assert_eq!(view.total_count, 0);
         let labels: Vec<&str> = view.basics.iter().map(|r| r.label).collect();
         assert_eq!(&labels[..4], ["总行数", "非空值", "空值", "唯一值"]);
@@ -3042,10 +2987,7 @@ mod tests {
             ),
         ];
         let view = HistoryView::from_entries("amount", &cleaned, None);
-        assert!(
-            !view.entries[0].chain_truncated,
-            "不是最旧一版，不标"
-        );
+        assert!(!view.entries[0].chain_truncated, "不是最旧一版，不标");
         assert!(view.entries[1].chain_truncated, "最旧一版的父版不在列表里");
 
         // 父版就在列表里（正常的链） → 不标
@@ -3185,7 +3127,6 @@ mod tests {
         let (old, new) = compare_pair();
         let diff = VersionDiffView::between(&old, "2026-09-14 09:10", &new, "2026-09-15 14:22")
             .with_baseline_version("v-1");
-
         assert_eq!(diff.baseline_version, "v-1");
         assert_eq!(diff.baseline_label, "2026-09-14 09:10");
         // 总行数 1000 → 2000：千分位与「列」Tab 同一口径
@@ -3203,13 +3144,8 @@ mod tests {
         );
         assert_eq!(row_of(&diff, "类型").delta, DeltaView::Same);
 
-        // 质量分排在最前（它才是「到底变好了没」的结论），展示精度与评分卡一致
-        let scored = ColumnProfileView::from_domain(&old)
-            .score
-            .expect("有数据就有分")
-            .overall;
-        assert_eq!(diff.rows[0].label, "质量分");
-        assert_eq!(diff.rows[0].old, format!("{:.0}", scored.round()));
+        // 对比只列事实行，不合成质量分；首行即总行数
+        assert_eq!(diff.rows[0].label, "总行数");
 
         // 变化行数与摘要是同一口径，不数第二遍
         assert_eq!(
@@ -3254,7 +3190,10 @@ mod tests {
 
         let kind = row_of(&diff, "类型");
         assert_eq!(kind.delta, DeltaView::Changed, "类型变了就是变了");
-        assert_eq!((kind.old.as_str(), kind.new.as_str()), ("DECIMAL(12,2)", "VARCHAR"));
+        assert_eq!(
+            (kind.old.as_str(), kind.new.as_str()),
+            ("DECIMAL(12,2)", "VARCHAR")
+        );
 
         // 旧版独有的行保留，新版侧写「—」（不假装还有值）
         let avg = row_of(&diff, "平均");
@@ -3278,6 +3217,9 @@ mod tests {
         let diff = VersionDiffView::between(&old, "09-14", &new, "09-15");
         assert_eq!(row_of(&diff, "空值").delta, DeltaView::Down("-10".into()));
         assert_eq!(row_of(&diff, "空值率").new, "0.5%");
-        assert_eq!(row_of(&diff, "非空值").delta, DeltaView::Up("+1,010".into()));
+        assert_eq!(
+            row_of(&diff, "非空值").delta,
+            DeltaView::Up("+1,010".into())
+        );
     }
 }

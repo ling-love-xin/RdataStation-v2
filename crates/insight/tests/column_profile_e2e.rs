@@ -25,7 +25,9 @@ use rds_insight::{ColumnKind, InsightService};
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 建临时表并插数据。
@@ -34,10 +36,8 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 fn seed(table: &str, ddl: &str, values: &str) {
     let duckdb = get_or_create_duckdb().expect("应能拿到内存 DuckDB 连接");
     let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
-    conn.execute_batch(&format!(
-        "CREATE OR REPLACE TEMP TABLE \"{table}\" ({ddl})"
-    ))
-    .expect("建临时表");
+    conn.execute_batch(&format!("CREATE OR REPLACE TEMP TABLE \"{table}\" ({ddl})"))
+        .expect("建临时表");
     conn.execute_batch(&format!("INSERT INTO \"{table}\" {values}"))
         .expect("插数据");
 }
@@ -51,7 +51,11 @@ fn numeric_column_reaches_the_view_model() {
     let mut rows: Vec<String> = (1..=12).map(|i| format!("({i})")).collect();
     rows.push("(NULL)".into());
     rows.push("(NULL)".into());
-    seed(table, "amount DECIMAL(12,2)", &format!("VALUES {}", rows.join(",")));
+    seed(
+        table,
+        "amount DECIMAL(12,2)",
+        &format!("VALUES {}", rows.join(",")),
+    );
 
     let view = InsightService::profile_column_view(None, table, "amount").expect("列画像应成功");
 
@@ -167,11 +171,7 @@ fn missing_result_set_is_reported_with_a_friendly_message() {
 /// 不能复用别的用例的目录：`ProjectDatabaseManager::open` 会跑迁移并独占
 /// DuckDB 文件锁，两个用例同时开同一个 `analytics.duckdb` 会互相失败。
 fn temp_project_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "rds_insight_e2e_{}_{}",
-        std::process::id(),
-        tag
-    ));
+    let dir = std::env::temp_dir().join(format!("rds_insight_e2e_{}_{}", std::process::id(), tag));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时项目目录");
     dir
@@ -188,11 +188,7 @@ fn snapshot_history_round_trip_over_a_real_project() {
     let _serial = serial();
     let table = "t_insight_e2e_history";
     let root = temp_project_dir("history");
-    seed(
-        table,
-        "amount DECIMAL(12,2)",
-        "VALUES (1.5), (2.5), (NULL)",
-    );
+    seed(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5), (NULL)");
 
     // 首版：库里空空，保存后列表只此一条
     let first =
@@ -213,8 +209,8 @@ fn snapshot_history_round_trip_over_a_real_project() {
     assert!(!first.truncated, "一条不需要截断提示");
 
     // 第二次保存：新的一版挂到首版之后，且非空值统计确实来自本次重算
-    let second =
-        InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("保存第二版");
+    let second = InsightService::save_column_snapshot(Some(&root), table, "amount", None)
+        .expect("保存第二版");
     assert_eq!(second.entries.len(), 2);
     assert!(second.entries[0].is_latest, "最新一版在最前");
     assert!(second.entries[0].has_parent, "第二版应有父版本");
@@ -236,8 +232,7 @@ fn snapshot_history_round_trip_over_a_real_project() {
     assert!(line.contains('2'), "用量行应带上快照数：{line}");
 
     // 没存过的列：空历史不是错误（面板显示「还没有快照」）
-    let other = InsightService::column_history_view(Some(&root), "note")
-        .expect("别的列也应可读");
+    let other = InsightService::column_history_view(Some(&root), "note").expect("别的列也应可读");
     assert!(other.is_empty());
     assert!(other.stats.is_some(), "统计是整个库的，与列无关");
 
@@ -252,13 +247,10 @@ fn snapshot_comparison_reads_both_stored_bodies() {
     let _serial = serial();
     let table = "t_insight_e2e_history_compare";
     let root = temp_project_dir("history_compare");
-    seed(
-        table,
-        "amount DECIMAL(12,2)",
-        "VALUES (1.5), (2.5), (NULL)",
-    );
+    seed(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5), (NULL)");
 
-    let first = InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("首版");
+    let first =
+        InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("首版");
     let baseline = first.entries[0].version_id.clone();
 
     // 数据变了再存一版：插一行 + 把空值补上
@@ -292,9 +284,15 @@ fn snapshot_comparison_reads_both_stored_bodies() {
             .unwrap_or_else(|| panic!("应变到「{label}」：{:?}", diff.rows))
     };
     // 3 行 → 4 行；空值 1 → 0（把 NULL 补成了 3.5）
-    assert_eq!((row("总行数").old.as_str(), row("总行数").new.as_str()), ("3", "4"));
+    assert_eq!(
+        (row("总行数").old.as_str(), row("总行数").new.as_str()),
+        ("3", "4")
+    );
     assert!(row("总行数").delta.is_changed());
-    assert_eq!((row("空值").old.as_str(), row("空值").new.as_str()), ("1", "0"));
+    assert_eq!(
+        (row("空值").old.as_str(), row("空值").new.as_str()),
+        ("1", "0")
+    );
     assert!(diff.changed > 0, "明明改了数据，不该说「完全一致」");
 
     // 拿最新一版当基准：方向固定为「选中 → 最新」，与自身比没有意义
@@ -302,7 +300,9 @@ fn snapshot_comparison_reads_both_stored_bodies() {
     let err = InsightService::compare_column_snapshots(Some(&root), "amount", &latest)
         .expect_err("最新一版没有可比的对象");
     assert!(
-        InsightService::describe_error(&err).message.contains("最新一版"),
+        InsightService::describe_error(&err)
+            .message
+            .contains("最新一版"),
         "错误要说清为什么：{err}"
     );
 
@@ -310,7 +310,9 @@ fn snapshot_comparison_reads_both_stored_bodies() {
     let err = InsightService::compare_column_snapshots(Some(&root), "amount", "ffffffff-0000")
         .expect_err("不存在的版本应报错");
     assert!(
-        InsightService::describe_error(&err).message.contains("已不在历史里"),
+        InsightService::describe_error(&err)
+            .message
+            .contains("已不在历史里"),
         "错误要指向「这一版没了」：{err}"
     );
 
@@ -329,8 +331,9 @@ fn cleanup_with_a_30_day_window_leaves_fresh_snapshots_alone() {
     seed(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5)");
 
     InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("保存一版");
-    let view = InsightService::cleanup_old_snapshots(Some(&root), "amount", SNAPSHOT_RETENTION_DAYS)
-        .expect("清理应成功");
+    let view =
+        InsightService::cleanup_old_snapshots(Some(&root), "amount", SNAPSHOT_RETENTION_DAYS)
+            .expect("清理应成功");
 
     let receipt = view.cleanup.as_ref().expect("回执应在载荷里");
     assert_eq!(receipt.days, SNAPSHOT_RETENTION_DAYS);
@@ -366,7 +369,11 @@ fn snapshot_without_a_project_explains_itself() {
         "要告诉用户怎么办：{}",
         info.message
     );
-    assert!(!info.message.contains('['), "不展示内部错误码：{}", info.message);
+    assert!(
+        !info.message.contains('['),
+        "不展示内部错误码：{}",
+        info.message
+    );
 }
 
 // ==================== 表探查（Phase 3.1 / 2.2） ====================
@@ -387,12 +394,23 @@ fn table_profile_lists_columns_without_fake_scores() {
     assert_eq!(view.row_count, 2);
     let names: Vec<&str> = view.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["id", "amount", "note", "payload"]);
-    assert_eq!(view.columns[1].kind, ColumnKind::Numeric, "DECIMAL 归数值族");
+    assert_eq!(
+        view.columns[1].kind,
+        ColumnKind::Numeric,
+        "DECIMAL 归数值族"
+    );
     assert_eq!(view.columns[2].kind, ColumnKind::Text);
-    assert_eq!(view.columns[3].kind, ColumnKind::Unknown, "BLOB 不参与列统计");
+    assert_eq!(
+        view.columns[3].kind,
+        ColumnKind::Unknown,
+        "BLOB 不参与列统计"
+    );
+    // 探查阶段只回填缺失率 / 唯一率摘要；列级明细（直方图 / 样本 / 分布）等评估全表。
     assert!(
-        view.columns.iter().all(|c| c.score.is_none()),
-        "只是探查：分数要等用户点「评估全表」"
+        view.columns.iter().all(|c| {
+            c.stats_detail.is_none() && c.histogram.is_none() && c.sample_values.is_empty()
+        }),
+        "只是探查：列级明细要等用户点「评估全表」"
     );
     assert!(view.quality.is_none());
 }
@@ -505,17 +523,15 @@ fn multi_rule_list_result_becomes_a_table() {
     );
 }
 
-/// 评估全表：逐列统计 → 每列分数 + 表级摘要。
+/// 评估全表：逐列统计 → 回填列级事实明细 + 检查器事实计数（不合成总分 / 等级）。
 ///
-/// 这条用例同时钉住「表级分数与列级分数同源」：`compute_table_quality` 内部逐列调用
-/// 同一个 `compute_column_quality`，所以列上的分数必须与摘要里的聚合对得上。
+/// 与 `jobs.rs` 后台评估循环同口径：逐列 `get_column_insight_full` 取明细，
+/// `compute_column_checks` 现算四态并聚合命中 / 适用计数；表级摘要只承载这些事实。
 #[test]
-fn table_evaluation_scores_every_column() {
+fn table_evaluation_fills_column_details_and_checker_facts() {
     let _serial = serial();
     let table = "t_insight_e2e_table_eval";
-    let rows: Vec<String> = (1..=12)
-        .map(|i| format!("({i}, {i}.5, 'v{i}')"))
-        .collect();
+    let rows: Vec<String> = (1..=12).map(|i| format!("({i}, {i}.5, 'v{i}')")).collect();
     seed(
         table,
         "id BIGINT, amount DECIMAL(12,2), note VARCHAR",
@@ -523,26 +539,24 @@ fn table_evaluation_scores_every_column() {
     );
 
     let view = InsightService::profile_table_view(None, table, "orders").expect("表探查");
-    let mut evaluated = Vec::new();
+    let mut checks = Vec::new();
+    let mut current = view.evaluating(0, view.columns.len());
     for column in &view.columns {
-        let full = InsightService::get_column_insight_full(None, table, &column.name)
-            .expect("逐列统计");
-        evaluated.push(full);
+        let full =
+            InsightService::get_column_insight_full(None, table, &column.name).expect("逐列统计");
+        checks.extend(rds_insight::quality_scorer::compute_column_checks(&full));
+        current = current.with_column_detail(&column.name, &full);
     }
-    let quality = InsightService::compute_table_quality("orders", &evaluated);
-    let done = view.evaluating(evaluated.len(), evaluated.len()).evaluated(&quality);
+    let done = current.finish_evaluation().with_checker(checks);
 
     assert!(done.progress.is_none(), "评估完进度行必须消失");
-    let summary = done.quality.expect("应有表级摘要");
-    assert_eq!(summary.scored_columns, 3);
-    assert!(summary.summary.contains("表质量"), "摘要：{}", summary.summary);
-    // 全量非空、无重复的三列：分数应明显偏高（不写死具体数值，只钉区间关系）
+    let summary = done.quality.expect("应有表级事实摘要位");
+    assert!(summary.checker_applicable > 0, "检查器应覆盖可判定列");
+    assert!(summary.checker_hits <= summary.checker_applicable);
     assert!(
-        summary.overall > 50.0,
-        "干净数据不该被判成差：{}",
-        summary.overall
+        done.columns.iter().all(|c| c.stats_detail.is_some()),
+        "每列都应回填事实明细"
     );
-    assert_eq!(summary.grade, rds_insight::Grade::of(summary.overall));
 }
 
 // ==================== 6.1 交叉校验：内置 `SUMMARIZE` ====================
@@ -651,9 +665,7 @@ fn stats_agree_with_duckdb_summarize() {
     let _serial = serial();
     let table = "t_insight_e2e_summarize";
     // 20 行：`amount` 18 个非空值 + 2 个空值（空值率 10%）；`tag` 有重复值
-    let mut rows: Vec<String> = (1..=18)
-        .map(|i| format!("({i}, 'v{}')", i % 3))
-        .collect();
+    let mut rows: Vec<String> = (1..=18).map(|i| format!("({i}, 'v{}')", i % 3)).collect();
     rows.push("(NULL, 'v0')".into());
     rows.push("(NULL, NULL)".into());
     seed(
@@ -719,11 +731,20 @@ fn stats_agree_with_duckdb_summarize() {
     );
     // 均值 / 极值：同一份数据，应当逐位一致（给 1e-9 只抵浮点表示）
     let avg = SummaryRow::f64_of(&amount.avg).expect("avg");
-    assert!((avg - basic(&view, "平均")).abs() < 1e-9, "均值不一致：{avg}");
+    assert!(
+        (avg - basic(&view, "平均")).abs() < 1e-9,
+        "均值不一致：{avg}"
+    );
     let min = SummaryRow::f64_of(&amount.min).expect("min");
-    assert!((min - basic(&view, "最小")).abs() < 1e-9, "最小值不一致：{min}");
+    assert!(
+        (min - basic(&view, "最小")).abs() < 1e-9,
+        "最小值不一致：{min}"
+    );
     let max = SummaryRow::f64_of(&amount.max).expect("max");
-    assert!((max - basic(&view, "最大")).abs() < 1e-9, "最大值不一致：{max}");
+    assert!(
+        (max - basic(&view, "最大")).abs() < 1e-9,
+        "最大值不一致：{max}"
+    );
     // 标准差：样本 / 总体在小表上有差 → 相对容差 5%
     if let Some(std) = SummaryRow::f64_of(&amount.std) {
         let ours = basic(&view, "标准差");

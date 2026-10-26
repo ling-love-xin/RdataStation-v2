@@ -275,11 +275,8 @@ template = "SELECT 2"
 "#;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_rules_watch_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_rules_watch_{}_{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
@@ -305,7 +302,11 @@ template = "SELECT 2"
         std::fs::write(&file, RULE_A).expect("write");
 
         let fp1 = rules_fingerprint(&[dir.clone()]);
-        assert_eq!(rules_fingerprint(&[dir.clone()]), fp1, "内容未变，指纹必须稳定");
+        assert_eq!(
+            rules_fingerprint(&[dir.clone()]),
+            fp1,
+            "内容未变，指纹必须稳定"
+        );
 
         // 重写同样内容（模拟编辑器保存）不应改变指纹
         std::fs::write(&file, RULE_A).expect("rewrite same");
@@ -346,7 +347,11 @@ template = "SELECT 2"
         std::fs::write(dir.join("README.md"), "not a rule").expect("write md");
         let before = rules_fingerprint(&[dir.clone()]);
         std::fs::write(dir.join("README.md"), "changed").expect("rewrite md");
-        assert_eq!(rules_fingerprint(&[dir.clone()]), before, "非 toml 不参与指纹");
+        assert_eq!(
+            rules_fingerprint(&[dir.clone()]),
+            before,
+            "非 toml 不参与指纹"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

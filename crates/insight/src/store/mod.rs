@@ -36,8 +36,8 @@ pub mod body;
 pub mod meta;
 
 pub use body::{
-    snapshot_checksum, InsightColumnStore, InsightSchemaReportStore, InsightStorage,
-    InsightStorageStats, InsightTableReportStore, InsightVersionEntry,
+    InsightColumnStore, InsightSchemaReportStore, InsightStorage, InsightStorageStats,
+    InsightTableReportStore, InsightVersionEntry, snapshot_checksum,
 };
 pub use meta::{InsightMetaStore, InsightSnapshotMeta};
 
@@ -181,11 +181,8 @@ mod tests {
     /// 不能复用别的测试目录：`ProjectDatabaseManager::open` 会跑迁移并独占
     /// DuckDB 文件锁，两个测试同时开同一个 `analytics.duckdb` 会互相失败。
     fn temp_project_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "rds_insight_store_{}_{}",
-            std::process::id(),
-            tag
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rds_insight_store_{}_{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp project dir");
         dir
@@ -231,7 +228,12 @@ mod tests {
 
         let insight = sample_insight("amount");
         let (snapshot_id, version_id) = stores
-            .save_column_snapshot(&insight, Some("conn=c1,db=analytics"), Some(10_000), Some(42))
+            .save_column_snapshot(
+                &insight,
+                Some("conn=c1,db=analytics"),
+                Some(10_000),
+                Some(42),
+            )
             .await?;
         assert!(!snapshot_id.is_empty(), "应返回 snapshot_id");
         assert!(!version_id.is_empty(), "应返回 version_id");
@@ -292,8 +294,12 @@ mod tests {
             "第二次保存应挂在上一次版本之后"
         );
 
-        let history = stores.storage.columns.get_history("amount", Some(10)).await?;
-        assert_eq!(history.len(), 2, "历史应有两条" );
+        let history = stores
+            .storage
+            .columns
+            .get_history("amount", Some(10))
+            .await?;
+        assert_eq!(history.len(), 2, "历史应有两条");
         // 历史条目能解析回完整画像（版本对比的前提）
         let parsed = history[0].parse_insight()?;
         assert_eq!(parsed.stats.column_name, "amount");
@@ -328,7 +334,13 @@ mod tests {
                 .await?
                 .is_none()
         );
-        assert!(stores.meta.get_latest_meta("column", "whatever").await?.is_none());
+        assert!(
+            stores
+                .meta
+                .get_latest_meta("column", "whatever")
+                .await?
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -387,7 +399,8 @@ mod tests {
         backdate(&db, 40).await;
 
         let (body, meta) =
-            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta).await?;
+            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta)
+                .await?;
         assert_eq!((body, meta), (2, 2), "两侧删的条数必须一致（成对删）");
         assert!(
             stores
@@ -399,7 +412,12 @@ mod tests {
             "旧快照应从历史里消失"
         );
         assert_eq!(
-            stores.storage.columns.get_storage_stats().await?.total_snapshots,
+            stores
+                .storage
+                .columns
+                .get_storage_stats()
+                .await?
+                .total_snapshots,
             0
         );
 
@@ -408,7 +426,8 @@ mod tests {
             .save_column_snapshot(&sample_insight("amount"), None, None, None)
             .await?;
         let (body, meta) =
-            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta).await?;
+            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta)
+                .await?;
         assert_eq!((body, meta), (0, 0), "刚存的快照不该被 30 天档删掉");
         assert_eq!(
             stores
@@ -467,7 +486,12 @@ mod tests {
             "孤儿正文应已收回去"
         );
         assert_eq!(
-            stores.storage.columns.get_storage_stats().await?.total_snapshots,
+            stores
+                .storage
+                .columns
+                .get_storage_stats()
+                .await?
+                .total_snapshots,
             0,
             "存储用量也该跟着回到原样"
         );

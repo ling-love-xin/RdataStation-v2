@@ -43,13 +43,7 @@ impl InsightView {
                 .iter()
                 .position(|name| name.as_str() == column.name.as_str())
                 .map(|ix| ix + 1);
-            body = body.child(multi_column_row(
-                column,
-                picked,
-                entity,
-                theme,
-                inline_icon,
-            ));
+            body = body.child(multi_column_row(column, picked, entity, theme, inline_icon));
         }
 
         // 2) 规则单选
@@ -77,7 +71,11 @@ impl InsightView {
             div().h_flex().w_full().gap_2().child(div().flex_1()).child(
                 Button::new("insight-multi-run")
                     .small()
-                    .label(if self.multi_running { "分析中…" } else { "执行分析" })
+                    .label(if self.multi_running {
+                        "分析中…"
+                    } else {
+                        "执行分析"
+                    })
                     .disabled(!self.multi_ready() || self.multi_running)
                     .tooltip("按选中顺序把列对位到规则的 col1 / col2 …")
                     .on_click({
@@ -104,10 +102,12 @@ impl InsightView {
         // 5) 结果
         match &view.result {
             None => {
-                body = body.child(div()
-                    .text_xs()
-                    .text_color(colors.muted_foreground)
-                    .child("选好列与规则后点「执行分析」"));
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child("选好列与规则后点「执行分析」"),
+                );
             }
             Some(result) if result.is_empty() => {
                 body = body.child(muted_line("规则没有返回数据", theme));
@@ -191,9 +191,7 @@ fn multi_column_row(
             .on_click({
                 let entity = entity.clone();
                 let name = name.clone();
-                move |_, _, app| {
-                    entity.update(app, |view, cx| view.toggle_multi_column(&name, cx))
-                }
+                move |_, _, app| entity.update(app, |view, cx| view.toggle_multi_column(&name, cx))
             }),
         )
         .child(

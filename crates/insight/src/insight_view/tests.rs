@@ -9,23 +9,23 @@
 //! 而 `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己（recursion limit）。
 
 use gpui_kit::{
-    div, AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    TestAppContext, Window,
+    AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+    Window, div,
 };
 
 use super::{InsightEvent, InsightView};
 use crate::model::{
-    ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
-    MultiResultView, MultiRuleView, PanelTab, TableProfileView, VersionDiffView,
-    SNAPSHOT_RETENTION_DAYS,
+    ColumnCheckState, ColumnChecker, ColumnProfileView, HistoryView, InsightPanelState,
+    InsightTarget, MultiColumnView, MultiResultView, MultiRuleView, PanelTab,
+    SNAPSHOT_RETENTION_DAYS, TableProfileView, VersionDiffView,
 };
 use crate::view::column::truncate;
 
 // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
 use crate::{
-    BooleanStats, ColumnInsightFull, ColumnQualityEntry, ColumnStats, ColumnStatsDetail,
-    DateTimeStats, DistributionBin, KeyValueRow, NoteLevel, NumericStats, QualityNote,
-    SchemaExportFormat, TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
+    BooleanStats, ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats,
+    DistributionBin, KeyValueRow, NoteLevel, NumericStats, QualityNote, SchemaExportFormat,
+    TableColumnMeta, TableProfile, TextFrequency, TextStats,
 };
 
 /// 结构报告的典型形态：四区各一行（外键候选 / critical 不一致 / 孤立表 / 冗余列）
@@ -354,7 +354,7 @@ fn project_state_gates_rules_management(cx: &mut TestAppContext) {
     view.update(cx, |view, _| assert!(!view.project_open()));
 }
 
-/// 四态 + 五个 Tab 都能渲染一帧而不 panic（渲染是纯读路径，不许有副作用）
+/// 四态 + 六个 Tab 都能渲染一帧而不 panic（渲染是纯读路径，不许有副作用）
 #[gpui_kit::test]
 fn renders_every_state_and_tab(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -379,7 +379,7 @@ fn renders_every_state_and_tab(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.set_error("连接已断开", true, cx));
         window.draw(cx).clear(cx);
     });
-    // 数据态：列 Tab 四区 + 其余四个 Tab 的期次提示
+    // 数据态：列 Tab 四区 + 其余五个 Tab 的期次提示
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.set_target(column_target(), cx);
@@ -525,6 +525,120 @@ fn source_loading_renders_sample_note_only_when_set(cx: &mut TestAppContext) {
     assert!(note.visible(), "画像阶段说明行应可见");
 }
 
+/// K22：切换洞察目标时，旧目标留下的阶段说明（loading_note）必须一并清空，
+/// 不得挂到新目标上——换目标后界面不该还显示上一个目标的「正在取样」说明。
+#[gpui_kit::test]
+fn set_target_clears_previous_loading_note(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+
+    let first = crate::model::SampleSource::new("G_1", "SELECT 1", "shop.orders");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::SourceTable {
+                    source: first,
+                    table_name: "orders".into(),
+                },
+                cx,
+            );
+            view.set_loading_note(Some("正在取样并建分析临时表…".into()), cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    let note = cx.update(|window, _| {
+        window.find(ElementId::Name(SharedString::from(
+            "insight-sample-loading-note",
+        )))
+    });
+    assert!(note.visible(), "前置：旧目标的阶段说明先渲染出来");
+
+    // 切到另一张源表目标：说明行必须随目标清空
+    let second = crate::model::SampleSource::new("G_1", "SELECT 2", "shop.items");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::SourceTable {
+                    source: second,
+                    table_name: "items".into(),
+                },
+                cx,
+            );
+        });
+        window.draw(cx).clear(cx);
+    });
+    let note = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from(
+            "insight-sample-loading-note",
+        )))
+    });
+    assert!(
+        note.is_none(),
+        "切换目标后上一目标的 loading_note 不得残留渲染"
+    );
+}
+
+/// B1-a：源目标尚未取样（无样本表）时切到「多列」Tab，渲染专门取样引导空态，
+/// 且不隐式发一次 `MultiColumnRequested`（与摘要「不触发取数」同口径）。
+#[gpui_kit::test]
+fn multi_tab_shows_sample_guide_without_request_when_no_sample_table(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ElementId, SharedString};
+
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+    let events = crate::test_support::event_sink(&view, cx);
+
+    let source = crate::model::SampleSource::new("G_1", "SELECT 1", "shop.orders");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::SourceTable {
+                    source,
+                    table_name: "orders".into(),
+                },
+                cx,
+            );
+            view.set_tab(PanelTab::MultiColumn, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+
+    assert!(
+        !events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, InsightEvent::MultiColumnRequested { .. })),
+        "样本表缺失时不得隐式发多列取数请求：{:?}",
+        events.borrow()
+    );
+
+    let guide = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from(
+            "insight-multi-need-sample",
+        )))
+    });
+    assert!(guide.is_some(), "样本表缺失时应渲染专门取样引导空态");
+
+    // 样本表就位后：专门引导消失（落到通用空态 / 骨架，不再是「先取样」提示）
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.set_source_sample("tmp_i_sample_1", cx);
+            view.set_tab(PanelTab::MultiColumn, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    let guide = cx.update(|window, _| {
+        window.try_find(ElementId::Name(SharedString::from(
+            "insight-multi-need-sample",
+        )))
+    });
+    assert!(guide.is_none(), "样本表就位后专门引导应消失");
+}
+
 /// 表探查（Tab「表」）：四类状态（未评估 / 评估中 / 评估完 / 空列清单）都能渲染一帧。
 ///
 /// 四种都由**同一份视图模型**的不同字段组合而成，所以这里逐帧画过去；
@@ -548,7 +662,7 @@ fn table_tab_renders_every_evaluation_state(cx: &mut TestAppContext) {
                 },
                 cx,
             );
-            // 1) 刚探查出来：有列清单、没有分数
+            // 1) 刚探查出来：有列清单、表级事实摘要为空（不编分数 / 等级）
             view.set_table_profile(base.clone(), cx);
         });
     });
@@ -556,41 +670,48 @@ fn table_tab_renders_every_evaluation_state(cx: &mut TestAppContext) {
     view.update(cx, |view, _| {
         assert_eq!(view.tab(), PanelTab::Table, "表目标应落到「表」Tab");
         let table = view.data().table.as_ref().expect("表探查数据）；");
-        assert!(table.columns.iter().all(|c| c.score.is_none()));
+        assert!(table.quality.is_none(), "未评估不应出现表级事实摘要");
     });
 
-    // 2) 评估中：进度行 + 已算出的分数
+    // 2) 评估中：进度行（逐列串行统计，不依赖旧评分合成）
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| {
-            view.set_table_profile(base.with_column_score("id", 95.0).evaluating(1, 3), cx)
+            view.set_table_profile(base.evaluating(1, 3), cx)
         });
     });
     draw(cx);
 
-    // 3) 评估完：表级摘要 + 每列分数
-    let quality = TableQuality {
-        table_name: "orders".into(),
-        overall_score: 72.0,
-        level: "良好".into(),
-        column_scores: vec![ColumnQualityEntry {
-            column_name: "id".into(),
-            quality_score: 95.0,
-            level: "优秀".into(),
-            null_rate: 0.0,
-        }],
-        summary: "表质量良好 (72分)，3 列已评估".into(),
-        scored_count: 3,
-        total_columns: 3,
-    };
+    // 3) 评估完：表级事实摘要 + 检查器四态计数（无总分 / 等级）
+    let checks = vec![
+        ColumnChecker {
+            column: "id".into(),
+            name: "非空率".into(),
+            state: ColumnCheckState::Hit,
+            detail: "非空率 100% ≥ 90%".into(),
+        },
+        ColumnChecker {
+            column: "amount".into(),
+            name: "近似正态".into(),
+            state: ColumnCheckState::Miss,
+            detail: "偏度 2.1（高度右偏）".into(),
+        },
+    ];
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| {
-            view.set_table_profile(base.evaluating(3, 3).evaluated(&quality), cx)
+            view.set_table_profile(
+                base.evaluating(3, 3)
+                    .finish_evaluation()
+                    .with_checker(checks),
+                cx,
+            )
         });
     });
     draw(cx);
     view.update(cx, |view, _| {
         let table = view.data().table.as_ref().unwrap();
-        assert!(table.quality.is_some());
+        let quality = table.quality.as_ref().expect("评估完应挂表级事实摘要");
+        assert_eq!(quality.checker_hits, 1);
+        assert_eq!(quality.checker_applicable, 2);
         assert!(table.progress.is_none());
     });
 
@@ -632,13 +753,9 @@ fn switching_to_the_multi_tab_loads_the_form(cx: &mut TestAppContext) {
         });
     });
     // 先到达表探查数据（真实接线会在稍后回填）
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_table_profile(table_view(), cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_table_profile(table_view(), cx)));
 
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx)));
     assert!(
         view.read_with(cx, |view, _| view.state().is_loading()),
         "切到还没数据的 Tab 应先进加载态"
@@ -653,14 +770,10 @@ fn switching_to_the_multi_tab_loads_the_form(cx: &mut TestAppContext) {
     );
 
     // 数据回填后再切回来：不再重复请求（这份数据就是这个临时表的）
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx)));
     events.take();
     cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::Table, cx)));
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx)));
     assert!(
         !events
             .borrow()
@@ -710,9 +823,7 @@ fn multi_selection_order_drives_the_run_request(cx: &mut TestAppContext) {
     assert!(events.borrow().is_empty(), "没选规则不该发请求");
 
     // 选一条数值规则 → 可跑
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_multi_rule("pair-numeric", cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_multi_rule("pair-numeric", cx)));
     cx.update(|_window, cx| view.update(cx, |view, cx| view.run_multi(cx)));
     assert!(view.read_with(cx, |view, _| view.multi_running()));
     assert!(
@@ -846,9 +957,7 @@ fn multi_tab_renders_form_results_and_notice(cx: &mut TestAppContext) {
     draw(cx);
 
     // 2) 正常表单：未选任何列 / 规则
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx)));
     draw(cx);
 
     // 3) 选中两列 + 一条规则（序号与单选框都要画出来）
@@ -954,9 +1063,7 @@ fn schema_tab_requests_the_report_and_drills_down(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.set_schema_report(schema_report(), cx))
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.request_table_drilldown("orders", cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.request_table_drilldown("orders", cx)));
     assert!(
         events.borrow().iter().any(|e| matches!(
             e,
@@ -968,9 +1075,7 @@ fn schema_tab_requests_the_report_and_drills_down(cx: &mut TestAppContext) {
     );
 
     // 四区展开态可同步（Accordion 给的是当前展开的下标集合）
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_open_schema_sections(&[1, 3], cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_open_schema_sections(&[1, 3], cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     view.update(cx, |view, _| {
         assert_eq!(
@@ -1108,9 +1213,7 @@ fn schema_export_carries_encoded_content_and_a_safe_name(cx: &mut TestAppContext
     // 回填报告：JSON 带真内容与保留中文的文件名
     let mut report = schema_report();
     report.schema_name = "订单库".into();
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_schema_report(report, cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_schema_report(report, cx)));
     events.take();
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| {
@@ -1125,14 +1228,16 @@ fn schema_export_carries_encoded_content_and_a_safe_name(cx: &mut TestAppContext
                 format,
                 file_stem,
                 content,
-            } if *format == SchemaExportFormat::Json => {
-                Some((file_stem.clone(), content.clone()))
-            }
+            } if *format == SchemaExportFormat::Json => Some((file_stem.clone(), content.clone())),
             _ => None,
         })
         .expect("应发出 JSON 导出请求");
     assert_eq!(json.0, "schema-订单库", "文件名保留中文（只挡非法字符）");
-    assert!(json.1.contains("\"health_score\""), "内容应是真报告：{}", json.1);
+    assert!(
+        json.1.contains("\"health_score\""),
+        "内容应是真报告：{}",
+        json.1
+    );
 
     // Markdown 走同一个事件、不同编码
     events.take();
@@ -1161,9 +1266,7 @@ fn history_tab_saves_and_loads_only_with_a_project(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
     let events = crate::test_support::event_sink(&view, cx);
 
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_target(column_target(), cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_target(column_target(), cx)));
     events.take();
 
     // 尚未告知项目状态（`project_open` 初值为 false）：切到历史**不请求、不转圈**，
@@ -1203,9 +1306,7 @@ fn history_tab_saves_and_loads_only_with_a_project(cx: &mut TestAppContext) {
     events.take();
 
     // 保存：先置「保存中」（按钮置灰），发事件
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.request_snapshot_save(cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.request_snapshot_save(cx)));
     assert!(
         events.borrow().iter().any(|e| matches!(
             e,
@@ -1249,19 +1350,23 @@ fn history_tab_saves_and_loads_only_with_a_project(cx: &mut TestAppContext) {
     };
     cx.update(|_window, cx| {
         view.update(cx, |view, cx| {
-            view.set_history(HistoryView::from_entries("amount", &entries, Some(&stats)), cx)
+            view.set_history(
+                HistoryView::from_entries("amount", &entries, Some(&stats)),
+                cx,
+            )
         });
     });
     view.update(cx, |view, _| {
-        assert!(!view.history_saving(), "出数就认为保存结束（失败另有行内提示）");
+        assert!(
+            !view.history_saving(),
+            "出数就认为保存结束（失败另有行内提示）"
+        );
         assert_eq!(view.data().as_history().map(|h| h.entries.len()), Some(2));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
     // 保存失败：只挂行内提示（目标头与已有历史照旧可见）
-    cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_history_notice("磁盘写满了", cx))
-    });
+    cx.update(|_window, cx| view.update(cx, |view, cx| view.set_history_notice("磁盘写满了", cx)));
     view.update(cx, |view, _| {
         assert!(!view.history_saving());
         assert_eq!(view.state(), &InsightPanelState::Data, "失败不抢整页错误态");
@@ -1367,7 +1472,9 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
 
     // 最新那一版不给比：方向固定为「选中 → 最新」，拿它当基准无从比
     cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.toggle_compare_version("aaaaaaaa-1111", cx))
+        view.update(cx, |view, cx| {
+            view.toggle_compare_version("aaaaaaaa-1111", cx)
+        })
     });
     assert!(
         events.take().is_empty(),
@@ -1377,7 +1484,9 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
 
     // 点更早的一版：选中位亮起 + 发请求（差值由接缝读两版正文后回填）
     cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.toggle_compare_version("bbbbbbbb-2222", cx))
+        view.update(cx, |view, cx| {
+            view.toggle_compare_version("bbbbbbbb-2222", cx)
+        })
     });
     assert_eq!(
         view.read_with(cx, |view, _| view.compare_target().map(str::to_string)),
@@ -1419,7 +1528,11 @@ fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContex
         "出数后对比面板应在"
     );
     view.update(cx, |view, _| {
-        assert_eq!(view.compare_target(), Some("bbbbbbbb-2222"), "选中位跟载荷走");
+        assert_eq!(
+            view.compare_target(),
+            Some("bbbbbbbb-2222"),
+            "选中位跟载荷走"
+        );
         assert_eq!(view.state(), &InsightPanelState::Data, "对比不抢整页状态");
     });
 
@@ -1493,7 +1606,9 @@ fn compare_failure_releases_the_selection(cx: &mut TestAppContext) {
         });
     });
     cx.update(|_window, cx| {
-        view.update(cx, |view, cx| view.set_compare_notice("这一版已不在历史里", cx))
+        view.update(cx, |view, cx| {
+            view.set_compare_notice("这一版已不在历史里", cx)
+        })
     });
     view.update(cx, |view, _| {
         assert!(view.compare_target().is_none());
@@ -1585,9 +1700,7 @@ fn cleanup_asks_first_and_reports_in_payload(cx: &mut TestAppContext) {
     assert!(!panel.read_with(cx, |view, _| view.history_cleaning()));
 
     // 确认后才发请求（确认按钮的回调就是这个方法）
-    cx.update(|_window, cx| {
-        panel.update(cx, |view, cx| view.request_cleanup(cx))
-    });
+    cx.update(|_window, cx| panel.update(cx, |view, cx| view.request_cleanup(cx)));
     assert!(
         panel.read_with(cx, |view, _| view.history_cleaning()),
         "确认后立即进入「清理中」（按钮置灰的依据）"
@@ -1664,15 +1777,18 @@ fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.request_full(cx));
     });
     assert!(
-        events.borrow().iter().any(|e| matches!(
-            e,
-            InsightEvent::FullProfileConfirmRequested { .. }
-        )),
+        events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, InsightEvent::FullProfileConfirmRequested { .. })),
         "第一段：只发确认请求：{:?}",
         events.borrow()
     );
     assert!(
-        !events.borrow().iter().any(|e| matches!(e, InsightEvent::FullProfileRequested { .. })),
+        !events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, InsightEvent::FullProfileRequested { .. })),
         "确认前不得直接发画像请求"
     );
     view.read_with(cx, |view, _| {
@@ -1686,10 +1802,10 @@ fn request_full_waits_for_host_confirmation(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| view.confirm_full(cx));
     });
     assert!(
-        events.borrow().iter().any(|e| matches!(
-            e,
-            InsightEvent::FullProfileRequested { .. }
-        )),
+        events
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, InsightEvent::FullProfileRequested { .. })),
         "第二段：确认后才发画像请求"
     );
     view.read_with(cx, |view, _| {
@@ -1706,24 +1822,22 @@ fn request_full_is_noop_for_temp_table_targets(cx: &mut TestAppContext) {
     let events = crate::test_support::event_sink(&view, cx);
 
     cx.update(|_window, cx| {
-        view.update(
-            cx,
-            |view, cx| {
-                view.set_target(
-                    InsightTarget::Table {
-                        temp_table: "t_result_1".into(),
-                        table_name: "orders".into(),
-                    },
-                    cx,
-                )
-            },
-        );
+        view.update(cx, |view, cx| {
+            view.set_target(
+                InsightTarget::Table {
+                    temp_table: "t_result_1".into(),
+                    table_name: "orders".into(),
+                },
+                cx,
+            )
+        });
         view.update(cx, |view, cx| view.request_full(cx));
     });
     assert!(
         !events.borrow().iter().any(|e| matches!(
             e,
-            InsightEvent::FullProfileConfirmRequested { .. } | InsightEvent::FullProfileRequested { .. }
+            InsightEvent::FullProfileConfirmRequested { .. }
+                | InsightEvent::FullProfileRequested { .. }
         )),
         "临时表目标不发全量类事件（set_target 的普通取数事件不算）：{:?}",
         events.borrow()
