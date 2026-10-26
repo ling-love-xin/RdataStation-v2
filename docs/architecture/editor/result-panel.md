@@ -555,7 +555,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 **测试基线（本轮回归）**：`cargo test -p rds-result-panel --lib` = **164 passed / 0 failed**（161 + 千分位 1 例 + 列级口径一致性 2 例）；`cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**，编译无 error（宿主侧仅 `ColumnWidthsChanged` 分派小段，与既有事件分支同范式；唯一 `unused import: signature_view` warning 属并行线未提交改动，非本线符号；603 与历史 683 基线的差额来自并行线工作区状态，本线未删改 editor 测试模块）。
 
-### 8.14 事实层 / 显示层分离 · A 批底座（A1–A4，2026-10-26）
+### 8.14 事实层 / 显示层分离 · A 批底座（A1–A4，2026-10-26，提交 `39c15033`）
 
 > 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md`（分层模型 / 三态状态机 / 水位实测 / A·B·C·D·E 分期）；本节约束 A 批已落地口径，B / D 开工前回读该方案对应章节。
 
