@@ -648,6 +648,10 @@ impl NavView {
         }
     }
 
+    /// 【想法记录 · 2026-10-27 · 仅记录不实现】分组头「动态显示点信息」：按成员状态
+    /// 在分组头动态呈现点状信息。注：分组头现已有聚合**状态点**（下方
+    /// `render_group_header` 内 `dot ok/off/err/load`，点色 = 该组最差状态）；
+    /// 本条只是把用户想法留档，本轮与后续均不做改动。
     /// 分组头：左侧统一色条 + 略深底 + **状态点 + 计数胶囊** + 全折叠；右键菜单（重命名 / 新建 / 删除）。
     pub(super) fn render_group_header(
         &self,
@@ -1756,20 +1760,20 @@ impl NavView {
                         .when_some(host_subline, |s, text| {
                             s.child(
                                 div()
+                                    // 完整显示不剪切（需求：IP/端口 不截断、左对齐）：
+                                    // 去掉 max_w/ellipsis，flex_none 元素宽度=内容，
+                                    // 名称（min_w_0）可收缩为其让位；超长仍由容器 overflow_hidden 兜底。
                                     .flex_none()
-                                    .min_w_0()
-                                    .max_w(rems(ui::NAV_HOST_SUBLINE_W))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
                                     .text_xs()
                                     .italic()
                                     .text_color(muted)
                                     .child(text),
                             )
-                        }),
+                        })
+                        // 失败连接：错误摘要放进名称容器（紧跟名称/host），
+                        // 行尾操作（`+` 新建标签 / `✎` 编辑）因此不随错误状态左右移动、保持对齐。
+                        .when_some(err_summary, |s, e| s.child(e)),
                 )
-                // 失败连接：名称后跟一行 danger 错误摘要（截断；hover 卡看全量）。
-                .when_some(err_summary, |s, e| s.child(e))
                 // 行尾操作组（`+` 加标签 / `✎` 编辑）：仅 hover / 选中显。
                 // 需求③：归在归属域列**之前**（归属域置最右），操作按钮与名称更近。
                 .child(ops)
