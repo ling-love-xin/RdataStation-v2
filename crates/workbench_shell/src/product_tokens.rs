@@ -40,6 +40,8 @@ pub struct TokenMap {
     pub quick_open_group_header: Option<String>,
     #[serde(rename = "search.match.background")]
     pub search_match_background: Option<String>,
+    #[serde(rename = "staged.drop")]
+    pub staged_drop: Option<String>,
 }
 
 /// 解析后的产品角色（缺失为 `None`，消费方经访问器回退标准字段）。
@@ -52,6 +54,7 @@ pub struct ProductTokens {
     pub title_bar_slot_background: Option<Hsla>,
     pub quick_open_group_header: Option<Hsla>,
     pub search_match_background: Option<Hsla>,
+    pub staged_drop: Option<Hsla>,
 }
 
 impl ProductTokens {
@@ -65,6 +68,7 @@ impl ProductTokens {
             title_bar_slot_background: parse(&map.title_bar_slot_background),
             quick_open_group_header: parse(&map.quick_open_group_header),
             search_match_background: parse(&map.search_match_background),
+            staged_drop: parse(&map.staged_drop),
         }
     }
 
@@ -110,6 +114,12 @@ impl ProductTokens {
     pub fn search_match_background(&self, theme: &Theme) -> Hsla {
         self.search_match_background
             .unwrap_or(theme.colors.list_active)
+    }
+
+    /// 待提交删除对象文字色（弱 danger；gpui-pre 无独立删除线颜色 builder，
+    /// 删除线颜色跟随文字色，见 B6 设计 §4.9）。资产缺失回退标准 danger。
+    pub fn staged_drop(&self, theme: &Theme) -> Hsla {
+        self.staged_drop.unwrap_or(theme.colors.danger)
     }
 }
 
@@ -170,17 +180,20 @@ mod tests {
     #[test]
     fn parses_roles_and_tolerates_missing() {
         let json = r##"{
-            "light": { "activity_bar.background": "#ECECEC", "search.match.background": "#FFF3C4" },
+            "light": { "activity_bar.background": "#ECECEC", "search.match.background": "#FFF3C4", "staged.drop": "#B91C1C" },
             "dark":  { "activity_bar.background": "#333333" }
         }"##;
         let file: ProductTokenFile = serde_json::from_str(json).expect("解析");
         let light = ProductTokens::from_map(&file.light);
         assert!(light.activity_bar_background.is_some());
         assert!(light.search_match_background.is_some());
+        assert!(light.staged_drop.is_some());
         // 未定义角色为 None（消费方回退标准字段）。
         assert!(light.activity_bar_active_border.is_none());
         let dark = ProductTokens::from_map(&file.dark);
         assert!(dark.activity_bar_background.is_some());
         assert!(dark.search_match_background.is_none());
+        // dark 未定义 staged.drop：缺失为 None，访问器回退标准 danger。
+        assert!(dark.staged_drop.is_none());
     }
 }
