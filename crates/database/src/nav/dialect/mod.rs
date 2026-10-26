@@ -51,9 +51,15 @@ pub trait DialectSpi: Send + Sync {
     /// 限定名拼法不随对象类别变化，只随族的引号策略变化；schema 段是否出现由入参空值决定，
     /// 不由族策略隐藏。rename 专用的 schema 前缀策略（PG / MySQL 带、SQLite / DuckDB 不带）
     /// 由各 provider 在 `rename_sql` 内部实现，不走本方法。
+    ///
+    /// **2026-10-27（表格无数据根因）**：`catalog_is_connection_scoped` 的族（PostgreSQL）
+    /// catalog = 当前连接 database，写进 SQL 即跨库三段式（PG 无跨库），此处跳过 catalog 段，
+    /// 只拼 `schema.name`。MySQL（库即 schema）等族不受影响，保留 catalog。
     fn qualified_sql(&self, catalog: &str, schema: &str, name: &str) -> String {
         let mut parts: Vec<String> = Vec::new();
-        if !catalog.is_empty() {
+        let scoped =
+            crate::nav::family_profile::family_catalog_is_connection_scoped(self.family());
+        if !scoped && !catalog.is_empty() {
             parts.push(self.quote_ident(catalog));
         }
         if !schema.is_empty() && schema != catalog {
@@ -259,16 +265,27 @@ mod tests {
         assert!(dialect.table_size_sql("main").is_none());
     }
 
-    /// 通用三段限定名：空段跳过、schema==catalog 去重（与现状 `quoted_qualified` 等价）。
+    /// 通用三段限定名：空段跳过、schema==catalog 去重；catalog 连接作用域族（PG）跳过 catalog 段。
+    /// 后者为 2026-10-27 表格无数据根因修复——PG catalog=连接 database，写进 SQL 即跨库三段式。
     #[test]
     fn qualified_sql_dedupes_repeated_segment_and_skips_empty() {
-        let dialect = dialect_of("postgresql");
-        assert_eq!(dialect.qualified_sql("main", "main", "orders"), "\"main\".\"orders\"");
+        // 非 catalog 连接作用域族（SQLite 库即 schema）：保留 catalog 三段 / 去重。
+        let sqlite = dialect_of("sqlite");
         assert_eq!(
-            dialect.qualified_sql("cat", "sch", "orders"),
+            sqlite.qualified_sql("cat", "sch", "orders"),
             "\"cat\".\"sch\".\"orders\""
         );
-        assert_eq!(dialect.qualified_sql("", "", "orders"), "\"orders\"");
-        assert_eq!(dialect.qualified_sql("", "main", "orders"), "\"main\".\"orders\"");
+        assert_eq!(
+            sqlite.qualified_sql("main", "main", "orders"),
+            "\"main\".\"orders\""
+        );
+        assert_eq!(sqlite.qualified_sql("", "", "orders"), "\"orders\"");
+        assert_eq!(sqlite.qualified_sql("", "main", "orders"), "\"main\".\"orders\"");
+
+        // PostgreSQL（catalog=连接 database，连接作用域）：跳过 catalog，只到 schema.name。
+        let pg = dialect_of("postgresql");
+        assert_eq!(pg.qualified_sql("cat", "sch", "orders"), "\"sch\".\"orders\"");
+        assert_eq!(pg.qualified_sql("", "", "orders"), "\"orders\"");
+        assert_eq!(pg.qualified_sql("", "main", "orders"), "\"main\".\"orders\"");
     }
 }

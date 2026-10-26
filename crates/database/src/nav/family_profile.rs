@@ -538,6 +538,15 @@ pub fn family_inline_profile(type_id: &str) -> &'static InlineStatsProfile {
     &registry().family_inline_profile(type_id)
 }
 
+/// 族 × catalog 是否连接作用域（2026-10-27 表格无数据根因修复）：
+/// 为 true 的族（PostgreSQL）catalog = 当前连接 database，**SQL 标识符不能含 catalog 段**
+/// —— 拼进去就是跨库引用（PG 无跨库，报「未实现跨数据库关联」）。
+/// 导航把 database 放 catalog 层、schema 独立；执行 SQL 的限定名应跳过 catalog，只到
+/// `schema.name`。为 false 的族（MySQL 库即 schema 等）保留 catalog 段。
+pub fn family_catalog_is_connection_scoped(type_id: &str) -> bool {
+    registry().family_of(type_id).catalog_is_connection_scoped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

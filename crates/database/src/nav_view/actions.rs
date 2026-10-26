@@ -2183,12 +2183,6 @@ impl NavView {
             self.host.notice("该对象已在待提交清单".to_string(), cx);
             return None;
         }
-        let qualified = nav_qualified_name(&prop);
-        let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified)
-        else {
-            self.host.notice("当前对象类型不支持该操作".to_string(), cx);
-            return None;
-        };
         let driver = self
             .host
             .connections()
@@ -2196,6 +2190,12 @@ impl NavView {
             .find(|c| c.id == item.conn_id)
             .map(|c| c.driver.clone())
             .unwrap_or_default();
+        let qualified = nav_qualified_name(&prop, &driver);
+        let Some((title, description, ok_text)) = staged_dialog_copy(op, kind, &qualified)
+        else {
+            self.host.notice("当前对象类型不支持该操作".to_string(), cx);
+            return None;
+        };
         let staged = StagedOp {
             key: item.key.clone(),
             conn_id: item.conn_id.clone(),

@@ -486,20 +486,17 @@ pub(super) fn nav_disclosure(has_children: bool, expanded: bool, color: Hsla) ->
 ///
 /// 无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，
 /// 相等时只留一份，避免出现 `db.db.name`。
-pub(super) fn nav_qualified_name(prop: &PropertyRef) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    if let Some(c) = prop.catalog.as_deref() {
-        if !c.is_empty() {
-            parts.push(c);
-        }
-    }
-    if let Some(s) = prop.schema.as_deref() {
-        if !s.is_empty() && Some(s) != prop.catalog.as_deref() {
-            parts.push(s);
-        }
-    }
-    parts.push(prop.name.as_str());
-    parts.join(".")
+///
+/// **2026-10-27（表格无数据根因）**：执行类 SQL 的限定名对 `catalog_is_connection_scoped`
+/// 的族（PostgreSQL）跳过 catalog 段（catalog = 当前连接 database，拼进 SQL 即跨库三段式）。
+/// 经 [`crate::sql_gen::sql_qualified_name`] 按驱动分派。
+pub(super) fn nav_qualified_name(prop: &PropertyRef, driver: &str) -> String {
+    crate::sql_gen::sql_qualified_name(
+        driver,
+        prop.catalog.as_deref(),
+        prop.schema.as_deref(),
+        &prop.name,
+    )
 }
 
 /// 徽标是否挂呼吸动画（原型设计 §2.3：`连接中` = `info` + 脉冲）。

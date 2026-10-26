@@ -2388,7 +2388,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let drag_payload = match &node.kind {
             NavNodeKind::Table { .. } | NavNodeKind::View => {
                 node.property.as_ref().map(|p| NavDragPayload {
-                    qualified: nav_qualified_name(p),
+                    qualified: nav_qualified_name(p, &n_driver),
                     label: node.name.clone(),
                 })
             }
@@ -2641,7 +2641,10 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             let dname = node.name.clone();
             let menu_path = node.expand_path.clone();
             let menu_prop = node.property.clone();
-            let qualified = node.property.as_ref().map(nav_qualified_name);
+            let qualified = node
+                .property
+                .as_ref()
+                .map(|p| nav_qualified_name(p, &m_driver));
             let conn_label = m_conn_label.clone();
             let driver = m_driver.clone();
             // S4-N4 连接态：闭包外算好供 'static 闭包捕获。
@@ -2770,7 +2773,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         }
                         NavActionId::GenDml => match dml_target.clone() {
                             Some((catalog, schema, table)) => {
-                                let q = crate::sql_gen::qualified_name(
+                                let q = crate::sql_gen::sql_qualified_name(
+                                    &driver,
                                     Some(catalog.as_str()),
                                     Some(schema.as_str()),
                                     &table,

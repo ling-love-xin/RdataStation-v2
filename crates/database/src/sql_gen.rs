@@ -55,6 +55,26 @@ pub fn qualified_name(catalog: Option<&str>, schema: Option<&str>, name: &str) -
     parts.join(".")
 }
 
+/// 按驱动生成**可执行**限定名（2026-10-27 表格无数据根因修复）：
+///
+/// `catalog_is_connection_scoped` 的族（PostgreSQL）catalog = 当前连接 database，写进
+/// SQL 即跨库三段式（PG 无跨库），此处丢弃 catalog 段只拼 `schema.name`；其余族与
+/// [`Self::qualified_name`] 一致。导航表右键「查看数据 / 生成 SQL / 拖拽」等执行类
+/// SQL 用它；纯展示 / 复制限定名按需选 [`Self::qualified_name`]。
+pub fn sql_qualified_name(
+    driver: &str,
+    catalog: Option<&str>,
+    schema: Option<&str>,
+    name: &str,
+) -> String {
+    let scoped = crate::nav::family_profile::family_catalog_is_connection_scoped(driver);
+    qualified_name(
+        if scoped { None } else { catalog },
+        schema,
+        name,
+    )
+}
+
 /// 主键列的 `WHERE` 条件；无主键时退化为恒假（避免生成会误伤全表的语句）。
 fn where_expr(keys: &[&str]) -> String {
     if keys.is_empty() {
@@ -451,6 +471,30 @@ mod tests {
         assert_eq!(qualified_name(None, Some("main"), "t"), "main.t");
         assert_eq!(qualified_name(Some("main"), None, "t"), "main.t");
         assert_eq!(qualified_name(None, None, "t"), "t");
+    }
+
+    /// 族感知可执行限定名：PG（catalog=连接 database，连接作用域）丢 catalog 段，
+    /// MySQL（库即 schema）等保留——2026-10-27 表格无数据根因修复。
+    #[test]
+    fn sql_qualified_name_drops_connection_scoped_catalog() {
+        // PostgreSQL：别名归一后均判定连接作用域，SQL 标识符只到 schema.name。
+        assert_eq!(
+            sql_qualified_name("postgresql", Some("db"), Some("sch"), "t"),
+            "sch.t"
+        );
+        assert_eq!(
+            sql_qualified_name("postgres", Some("db"), Some("sch"), "t"),
+            "sch.t"
+        );
+        assert_eq!(
+            sql_qualified_name("PG", Some("db"), None, "t"),
+            "t"
+        );
+        // MySQL（库即 schema，非连接作用域）：保留 catalog 段。
+        assert_eq!(
+            sql_qualified_name("mysql", Some("db"), Some("sch"), "t"),
+            "db.sch.t"
+        );
     }
 
     #[test]

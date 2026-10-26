@@ -103,6 +103,19 @@ mod stub_host {
             false
         }
         fn set_show_scope(&self, _value: bool, _cx: &mut App) {}
+        fn show_inline_stats(&self, _cx: &App) -> bool {
+            false
+        }
+        fn set_show_inline_stats(&self, _value: bool, _cx: &mut App) {}
+        fn show_inline_comment(&self, _cx: &App) -> bool {
+            false
+        }
+        fn set_show_inline_comment(&self, _value: bool, _cx: &mut App) {}
+        fn show_inline_size(&self, _cx: &App) -> bool {
+            false
+        }
+        fn set_show_inline_size(&self, _value: bool, _cx: &mut App) {}
+        fn set_row_estimate(&self, _value: bool, _cx: &mut App) {}
         fn source_short_code(&self, _cx: &App) -> bool {
             false
         }
