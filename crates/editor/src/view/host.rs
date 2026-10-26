@@ -5818,9 +5818,15 @@ impl EditorHostPanel {
                 Ok(rows) => {
                     // “（已筛选）”照 B7 的口径明示（导的是筛后的行集）
                     let filtered = if note.filtered { "（已筛选）" } else { "" };
+                    // 【D1】猜型降级档在成功文案里追加口径说明：整列按文本存储，数字类型可能失真
+                    let degraded = if note.degraded {
+                        "；文本猜型降级档：数字列按文本存储"
+                    } else {
+                        ""
+                    };
                     self.set_message(
                         Some(format!(
-                            "已导出 {rows} 行{filtered}（{}）→ {}",
+                            "已导出 {rows} 行{filtered}（{}）{degraded}→ {}",
                             note.format.label(),
                             note.path.display()
                         )),
@@ -7308,6 +7314,9 @@ impl EditorHostPanel {
             .results()
             .fact_at(&self.document, index)
             .and_then(|state| state.fact().map(std::sync::Arc::clone));
+        // 【D1】提交侧纯判定降级档口径（与 workbench 执行分流共用 `fact_export_mode`，
+        // 不依赖工作线程回执回传口径）；成功回执据此追加降级说明文案。
+        let degraded = ::shared::fact_export_mode(fact.as_deref()).is_degraded();
         let request = execution::DuckDbExportRequest {
             document: self.document.clone(),
             set: index,
@@ -7317,6 +7326,7 @@ impl EditorHostPanel {
             rows,
             filtered,
             fact,
+            degraded,
         };
         match self.shared.request_duckdb_export(request) {
             // 说一句“在跑”：导出可能几秒（首次装扩展），不能点完什么都不说

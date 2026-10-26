@@ -6803,12 +6803,15 @@ fn parquet_export_goes_through_the_runner(cx: &mut TestAppContext) {
     assert_eq!(seen[0].rows.len(), 3, "已抓到的三行都过去");
     assert_eq!(seen[0].rows[0], vec!["1".to_string(), "alpha".to_string()]);
     assert!(!seen[0].filtered, "没筛选就不该说“已筛选”");
+    // 【D1】无事实档 = 猜型降级档：标记随请求走，回执文案明示口径
+    assert!(seen[0].degraded, "无事实档要置降级标记");
 
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("回执要落到状态栏");
     assert!(message.contains("已导出 3 行"), "{message}");
     assert!(message.contains("Parquet"), "{message}");
+    assert!(message.contains("数字列按文本存储"), "降级档要在回执明示：{message}");
     assert!(!path.exists(), "假执行器不写文件（真写是引擎那条路的事）");
 }
 
@@ -6851,6 +6854,7 @@ fn duckdb_export_follows_the_local_filter(cx: &mut TestAppContext) {
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].format, ExportFormat::Xlsx);
     assert!(seen[0].filtered, "筛选中导出要带上这个事实");
+    assert!(seen[0].degraded, "无事实档要置降级标记");
     assert_eq!(
         seen[0].rows,
         vec![vec!["3".to_string(), "gamma".to_string()]],
@@ -6860,6 +6864,7 @@ fn duckdb_export_follows_the_local_filter(cx: &mut TestAppContext) {
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("回执要落到状态栏");
     assert!(message.contains("已导出 1 行（已筛选）"), "{message}");
+    assert!(message.contains("数字列按文本存储"), "降级档要在回执明示：{message}");
 }
 
 /// 【B7 切片二】执行器不支持这条路时，如实说原因（不静默失败）

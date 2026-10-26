@@ -324,6 +324,21 @@ impl FactFrame {
         }
         self.value_at(row, col).ok()?.as_float()
     }
+
+    /// 【D1】带类型档导出（Parquet / XLSX）的事实档可用模式：host 回执标注与
+    /// workbench 执行分流共用同一口径，避免两处判定漂移（方案 §7-D）。
+    ///
+    /// 判定顺序与 B4 分析分支对齐：已挂常驻表名即复用（无论 batches 是否已释放），
+    /// 其次才按内存档 batches 直灌；其余归显示矩阵猜型降级档。
+    pub fn export_mode(&self) -> FactExportMode {
+        if self.temp_table.is_some() {
+            FactExportMode::ExistingTable
+        } else if !self.is_released() && !self.batches.is_empty() {
+            FactExportMode::Batches
+        } else {
+            FactExportMode::Matrix
+        }
+    }
 }
 
 /// 【B5】事实档列式列统计（与网格层 `ColumnStats` 字段对齐，便于直接映射；
@@ -396,6 +411,33 @@ pub enum FactTier {
     None,
     InMemory,
     OnDuckDb,
+}
+
+/// 【D1】带类型档导出（Parquet / XLSX）的事实档分流模式（方案 §7-D）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactExportMode {
+    /// 内存档：batches 经 Arrow Appender 直灌新建临时表 → `COPY` → 临时表即用即收。
+    Batches,
+    /// 表档：复用已有常驻表 `COPY`，不新建表、不回收常驻表（归事实档生命周期管）。
+    ExistingTable,
+    /// 无事实档 / 已释放且无表名 / 空批：显示矩阵 internal 猜型降级档，整列落 `VARCHAR`，
+    /// 回执须显式标注口径（数字列被收窄成文本）。
+    Matrix,
+}
+
+impl FactExportMode {
+    /// 是否为显示矩阵猜型降级档（回执标注用；保真两档返回 `false`）。
+    pub fn is_degraded(self) -> bool {
+        matches!(self, Self::Matrix)
+    }
+}
+
+/// 【D1】`Option<&FactFrame>` 口径的导出分流：`None` 与不可用事实档统一归降级档。
+pub fn fact_export_mode(fact: Option<&FactFrame>) -> FactExportMode {
+    match fact {
+        Some(frame) => frame.export_mode(),
+        None => FactExportMode::Matrix,
+    }
 }
 
 /// Auto 分流上界（双份估算字节；方案 §8.3 实测标定）。
@@ -941,5 +983,28 @@ mod fact_tests {
         fact.release_batches();
         assert!(fact.column_stats(0).is_none());
         assert!(fact.column_number(0, 0).is_none());
+    }
+
+    /// 【D1】导出分流三态：内存档 = Batches；释放挂表名 = ExistingTable；无事实档 = Matrix。
+    #[test]
+    fn export_mode_distinguishes_batches_existing_and_matrix() {
+        let memory = fact_from_arrays(&["id"], vec![Arc::new(Int64Array::from(vec![1, 2]))]);
+        assert_eq!(memory.export_mode(), FactExportMode::Batches);
+        assert!(!memory.export_mode().is_degraded());
+
+        let mut table = fact_from_arrays(&["id"], vec![Arc::new(Int64Array::from(vec![1, 2]))]);
+        table.set_temp_table("tmp_q_9".to_string());
+        table.release_batches();
+        assert_eq!(table.export_mode(), FactExportMode::ExistingTable);
+        assert!(!table.export_mode().is_degraded());
+
+        // 已释放但没挂表名（异常兜底）：回退降级档
+        let mut orphan = fact_from_arrays(&["id"], vec![Arc::new(Int64Array::from(vec![1, 2]))]);
+        orphan.release_batches();
+        assert_eq!(orphan.export_mode(), FactExportMode::Matrix);
+        assert!(orphan.export_mode().is_degraded());
+
+        assert_eq!(fact_export_mode(None), FactExportMode::Matrix);
+        assert_eq!(fact_export_mode(Some(&memory)), FactExportMode::Batches);
     }
 }

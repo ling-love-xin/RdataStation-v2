@@ -36,7 +36,10 @@ use engine::persistence::history_store::{self, SqlHistoryEntry};
 use engine::services::execution_service::DuckDbExportFormat;
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
-use shared::{dual_estimate, storage_choice, CurrentTier, FactFrame, FactTier};
+use shared::{
+    dual_estimate, fact_export_mode, storage_choice, CurrentTier, FactExportMode, FactFrame,
+    FactTier,
+};
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
 struct EngineQueryRunner {
@@ -937,9 +940,14 @@ impl QueryRunner for EngineQueryRunner {
     /// 【D 批待改造】经 DuckDB 落盘（Parquet / XLSX）
     ///
     /// 现状走显示矩阵：`"NULL"` → 真 null，其余经 `cell_json` 一律包成字符串，internal
-    /// 建表 `infer_type` 只认 JSON 值类型、不 parse 文本，整列落 `VARCHAR`——数字列在
-    /// Parquet / XLSX 里也是文本（类型收窄失真）。D 批将切事实档 batches 直灌建表 COPY，
-    /// 本路径仅作无事实档回退（方案 §7-D）。
+    /// 【D1】Parquet / XLSX 经 DuckDB `COPY` 落盘，按事实档状态三分支分流（方案 §7-D）：
+    ///
+    /// - 内存档（batches 未释放、非空批、未挂表名）：batches 直灌新建临时表 → `COPY` →
+    ///   临时表成败都收、即用即收；列类型来自 Arrow schema，不猜型；
+    /// - 表档（已挂常驻表名，含分析过回挂的内存档）：复用常驻表 `COPY`，不新建、不回收；
+    /// - 无事实档 / 已释放且无表名 / 空批：显示矩阵 internal 猜型降级档，整列落 `VARCHAR`，
+    ///   回执由提交侧标注降级口径。
+    ///
     /// 同步阻塞（XLSX 首次装扩展要联网几秒）：调用方把它放在一次性线程上。
     fn export_via_duckdb(&self, request: &DuckDbExportRequest) -> Result<usize, String> {
         let format = match request.format {
@@ -952,20 +960,47 @@ impl QueryRunner for EngineQueryRunner {
                 ));
             }
         };
-        let rows: Vec<Vec<serde_json::Value>> = request
-            .rows
-            .iter()
-            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
-            .collect();
-        let stats = crate::services::result_service::ResultService::export_rows_via_duckdb(
-            &request.columns,
-            &rows,
-            &request.path,
-            format,
-        )
+
+        let fact = request.fact.as_deref();
+        let mode = fact_export_mode(fact);
+        let stats = match mode {
+            FactExportMode::Batches => {
+                let frame = fact.expect("Batches 分支必有事实档");
+                crate::services::result_service::ResultService::export_batches_via_duckdb(
+                    frame.batches(),
+                    &request.path,
+                    format,
+                )
+            }
+            FactExportMode::ExistingTable => {
+                let frame = fact.expect("ExistingTable 分支必有事实档");
+                let table = frame.temp_table().expect("表档必有常驻表名");
+                crate::services::result_service::ResultService::export_existing_table_via_duckdb(
+                    table,
+                    frame.row_count(),
+                    &request.path,
+                    format,
+                )
+            }
+            FactExportMode::Matrix => {
+                let rows: Vec<Vec<serde_json::Value>> = request
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+                    .collect();
+                crate::services::result_service::ResultService::export_rows_via_duckdb(
+                    &request.columns,
+                    &rows,
+                    &request.path,
+                    format,
+                )
+            }
+        }
         .map_err(|error| error.to_string())?;
+
         tracing::info!(
             format = request.format.label(),
+            mode = ?mode,
             rows = stats.rows,
             path = %request.path.display(),
             "结果集已导出（经 DuckDB COPY）"
@@ -1562,6 +1597,23 @@ mod export_tests {
     use editor::execution::{DuckDbExportRequest, QueryRunner as _};
     use editor::export::ExportFormat;
     use editor::model::DocumentId;
+    use ::shared::FactFrame;
+    use std::sync::Arc;
+
+    /// 单列 Int64、两行的事实档（类型来自 Arrow schema，不猜型）。
+    fn fact_frame() -> FactFrame {
+        use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![array]).expect("批能建出来");
+        FactFrame::new(vec!["id".to_string()], vec![batch]).expect("事实档")
+    }
 
     fn request(format: ExportFormat, path: std::path::PathBuf) -> DuckDbExportRequest {
         DuckDbExportRequest {
@@ -1578,6 +1630,7 @@ mod export_tests {
             filtered: false,
             // 测试走显示矩阵猜型降级档：无事实档快照
             fact: None,
+            degraded: true,
         }
     }
 
@@ -1635,6 +1688,110 @@ mod export_tests {
             .expect_err("CSV 不该走 DuckDB");
         assert!(error.contains("不走 DuckDB"), "{error}");
         assert!(!path.exists(), "回绝时不该留下文件");
+    }
+
+    /// 【D1】内存档事实帧走 batches 直灌导出：数字列保留 BIGINT，不挂降级口径。
+    #[test]
+    fn batches_fact_export_writes_parquet_with_native_type() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
+            return;
+        };
+        let path = std::env::temp_dir().join(format!(
+            "rds_export_batches_{}.parquet",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+
+        let request = DuckDbExportRequest {
+            document: DocumentId::new("doc"),
+            set: 1,
+            format: ExportFormat::Parquet,
+            path: path.clone(),
+            columns: vec!["id".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            filtered: false,
+            fact: Some(Arc::new(fact_frame())),
+            // 保真档：不标降级
+            degraded: false,
+        };
+        let rows = runner.export_via_duckdb(&request).expect("batches 直灌导出该跑通");
+        assert_eq!(rows, 2);
+
+        let duckdb = engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()
+            .expect("内存库");
+        let mut conn = duckdb.lock().expect("锁");
+        let file = path.to_string_lossy().replace('\\', "/");
+        let (cols, types) = engine::services::duckdb_service::DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT typeof(id) AS t FROM read_parquet('{file}') LIMIT 1"),
+        )
+        .expect("读回类型");
+        assert_eq!(cols, vec!["t".to_string()]);
+        assert_eq!(types[0][0].as_str(), Some("BIGINT"), "数字列保留数值类型，不被收窄成文本");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 【D1】表档事实帧复用常驻表导出：不新建表、不 DROP，行数按帧缓存报出。
+    #[test]
+    fn existing_table_fact_export_reuses_the_resident_table() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
+            return;
+        };
+        use engine::duckdb::{TempTableSource, drop_temp_table};
+
+        let mut frame = fact_frame();
+        let batches = frame.batches().to_vec();
+        // 先经分析设施把 batches 灌进常驻表，拿到真实表名（表档复用的前提）
+        let analysis = crate::services::result_service::ResultService::execute_duckdb_analysis_from_batches(
+            None,
+            "SELECT * FROM {table}",
+            &batches,
+        )
+        .expect("常驻表应当建出来");
+        let table = analysis.temp_table.clone();
+
+        // 表档帧：挂表名、释放 batches（与 B2 回挂口径一致）
+        frame.set_temp_table(table.clone());
+        frame.release_batches();
+        let fact = Arc::new(frame);
+
+        let path = std::env::temp_dir().join(format!(
+            "rds_export_table_{}.parquet",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+        let request = DuckDbExportRequest {
+            document: DocumentId::new("doc"),
+            set: 1,
+            format: ExportFormat::Parquet,
+            path: path.clone(),
+            columns: vec!["id".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            filtered: false,
+            fact: Some(fact),
+            degraded: false,
+        };
+        let rows = runner
+            .export_via_duckdb(&request)
+            .expect("常驻表复用导出该跑通");
+        assert_eq!(rows, 2, "行数按事实帧缓存报出");
+
+        // 常驻表仍在：导出路径不回收表（归事实档生命周期管）
+        let duckdb = engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()
+            .expect("内存库");
+        let mut conn = duckdb.lock().expect("锁");
+        let (_, count_rows) = engine::services::duckdb_service::DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT count(*) AS n FROM \"{table}\""),
+        )
+        .expect("复用表应当还能查");
+        assert_eq!(count_rows[0][0].as_i64(), Some(2), "表没被导出路径 DROP");
+
+        drop_temp_table(&conn, TempTableSource::Query, &table).expect("测试收尾清场");
+        std::fs::remove_file(&path).ok();
     }
 }
 

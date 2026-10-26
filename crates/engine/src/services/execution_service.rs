@@ -229,6 +229,72 @@ pub fn export_rows_via_duckdb(
     })
 }
 
+/// 【D1】事实档 batches 直灌建表后 `COPY` 落盘（保真档：列类型来自 Arrow schema，不猜型）。
+///
+/// 与 [`export_rows_via_duckdb`] 的分工：本路径类型保真；临时表是导出专用中间产物，
+/// 成败都收、即用即收，不回挂事实档句柄（导出临时表与分析常驻表生命周期不同，方案 §7-D）。
+pub fn export_batches_via_duckdb(
+    batches: &[shared::models::ArrowBatch],
+    path: &std::path::Path,
+    format: DuckDbExportFormat,
+) -> Result<ExportStats, CoreError> {
+    let start = std::time::Instant::now();
+    let duckdb = duckdb_service::DuckDbService::get_or_create_duckdb()?;
+    let mut conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+
+    if format.needs_excel_extension() {
+        ensure_excel_extension(&conn)?;
+    }
+
+    let table = duckdb_service::DuckDbService::create_temp_table_from_batches(&mut conn, batches)?;
+    let row_count = batches.iter().map(|batch| batch.num_rows()).sum();
+    let outcome = copy_table_to_file(&conn, &table, path, format);
+    // 临时表成败都收（与 internal 路径同一承诺）；收不掉只记日志，不盖主流程的错
+    if let Err(error) = crate::duckdb::drop_temp_table(
+        &conn,
+        crate::duckdb::TempTableSource::Query,
+        &table,
+    ) {
+        tracing::warn!("[export] 收掉直灌临时表 {table} 失败: {error}");
+    }
+    outcome?;
+
+    Ok(ExportStats {
+        rows: row_count,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+/// 【D1】表档常驻表直接 `COPY` 落盘（保真档：复用常驻表，不新建、不回收）。
+///
+/// 常驻表归事实档生命周期管（槽位淘汰 / 文档关闭 / 项目切换清场），本路径只借表导出，
+/// 不 `DROP`；行数由调用方从事实帧行数缓存带入（表档 batches 已释放，不回读 Rust 堆计数）。
+pub fn export_existing_table_via_duckdb(
+    table: &str,
+    row_count: usize,
+    path: &std::path::Path,
+    format: DuckDbExportFormat,
+) -> Result<ExportStats, CoreError> {
+    let start = std::time::Instant::now();
+    let duckdb = duckdb_service::DuckDbService::get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+
+    if format.needs_excel_extension() {
+        ensure_excel_extension(&conn)?;
+    }
+
+    copy_table_to_file(&conn, table, path, format)?;
+
+    Ok(ExportStats {
+        rows: row_count,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
 /// `COPY (SELECT * FROM <表>) TO '<文件>' (FORMAT <格式>)`
 ///
 /// **XLSX 要写表头**：探针实测（2026-09-18）不传 `HEADER` 时写出来的工作簿第一行就是数据，
@@ -281,9 +347,17 @@ fn ensure_excel_extension(conn: &duckdb::Connection) -> Result<(), CoreError> {
 #[cfg(test)]
 mod export_tests {
     // 安全模式：**不通配导入**
-    use super::{DuckDbExportFormat, export_rows_via_duckdb};
+    use super::{
+        DuckDbExportFormat, export_batches_via_duckdb, export_existing_table_via_duckdb,
+        export_rows_via_duckdb,
+    };
+    use crate::duckdb::{TempTableSource, drop_temp_table};
     use crate::services::duckdb_service::DuckDbService;
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
     use serde_json::{Value, json};
+    use shared::models::ArrowBatch;
+    use std::sync::Arc;
 
     /// Parquet 导出**不需要任何服务器也不需要扩展**（内核自带）：写出去再读回来，
     /// 值的类型与 NULL 都要对上——这是本地分析那条桥接口径在导出侧的回归。
@@ -323,6 +397,100 @@ mod export_tests {
         assert_eq!(got[0], vec![json!(1), json!("alpha")]);
         assert_eq!(got[2], vec![json!(3), Value::Null], "NULL 要真是 NULL");
 
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 混合列事实档批（id Int64 + name Utf8，第三行 name 为 NULL）。
+    fn mixed_batch() -> ArrowBatch {
+        let id: ArrayRef = Arc::new(Int64Array::from(vec![Some(1i64), Some(2), None]));
+        let name: ArrayRef = Arc::new(StringArray::from(vec![Some("alpha"), None, Some("gamma")]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        RecordBatch::try_new(schema, vec![id, name]).expect("批能建出来")
+    }
+
+    /// 【D1】内存档 batches 直灌导出 Parquet：列类型来自 Arrow schema，数字列落 BIGINT，
+    /// 不是 internal 猜型档的 VARCHAR；临时表成败都收、即用即收。
+    #[test]
+    fn batches_parquet_export_keeps_native_integer_type() {
+        let dir = std::env::temp_dir().join(format!("rds_export_batches_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("batches.parquet");
+        std::fs::remove_file(&path).ok();
+
+        let batch = mixed_batch();
+        let stats = export_batches_via_duckdb(&[batch], &path, DuckDbExportFormat::Parquet)
+            .expect("batches 直灌导出应当成功");
+        assert_eq!(stats.rows, 3);
+
+        let duckdb = DuckDbService::get_or_create_duckdb().expect("内存库");
+        let mut conn = duckdb.lock().expect("锁");
+        let file = path.to_string_lossy().replace('\\', "/");
+
+        // 类型保真：id 是 BIGINT、name 是 VARCHAR（对照 internal 猜型档整列落 VARCHAR）
+        let (cols, types) = DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT typeof(id) AS id_type, typeof(name) AS name_type FROM read_parquet('{file}') LIMIT 1"),
+        )
+        .expect("读回类型应当成功");
+        assert_eq!(cols, vec!["id_type".to_string(), "name_type".to_string()]);
+        assert_eq!(types[0][0].as_str(), Some("BIGINT"), "数字列要保留数值类型");
+        assert_eq!(types[0][1].as_str(), Some("VARCHAR"), "文本列仍是文本");
+
+        // 值与 NULL 对上（按 id 排，NULL 行在最后）
+        let (_, got) = DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT id, name FROM read_parquet('{file}') ORDER BY id NULLS LAST"),
+        )
+        .expect("读回值应当成功");
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], vec![json!(1), json!("alpha")]);
+        assert_eq!(got[1], vec![json!(2), Value::Null]);
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 【D1】表档常驻表复用导出：直接 `COPY` 常驻表，不新建、不 DROP；导出后表仍可查询。
+    #[test]
+    fn existing_table_parquet_export_reuses_without_dropping_table() {
+        let dir = std::env::temp_dir().join(format!("rds_export_table_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("reused.parquet");
+        std::fs::remove_file(&path).ok();
+
+        let duckdb = DuckDbService::get_or_create_duckdb().expect("内存库");
+        let batch = mixed_batch();
+        // 先建常驻表（函数内部取锁，建完即放，不跨调用持锁避免死锁）
+        let table = {
+            let mut conn = duckdb.lock().expect("锁");
+            DuckDbService::create_temp_table_from_batches(&mut conn, &[batch])
+                .expect("常驻表应当建出来")
+        };
+
+        let stats = export_existing_table_via_duckdb(
+            &table,
+            3,
+            &path,
+            DuckDbExportFormat::Parquet,
+        )
+        .expect("常驻表复用导出应当成功");
+        assert_eq!(stats.rows, 3);
+
+        // 导出后常驻表仍在（本路径不回收表，归事实档生命周期管）
+        let mut conn = duckdb.lock().expect("锁");
+        let (cols, count_rows) = DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT count(*) AS n FROM \"{table}\""),
+        )
+        .expect("复用表应当还能查");
+        assert_eq!(cols, vec!["n".to_string()]);
+        assert_eq!(count_rows[0][0].as_i64(), Some(3), "表没被导出路径 DROP");
+
+        drop_temp_table(&conn, TempTableSource::Query, &table).expect("测试收尾清场");
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir_all(&dir).ok();
     }

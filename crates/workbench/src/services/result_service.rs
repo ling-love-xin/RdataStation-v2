@@ -69,6 +69,27 @@ impl ResultService {
         engine::services::execution_service::export_rows_via_duckdb(columns, rows, path, format)
     }
 
+    /// 【D1】事实档 batches 直灌建表后 `COPY` 落盘（保真档；临时表即用即收）。
+    pub fn export_batches_via_duckdb(
+        batches: &[shared::models::ArrowBatch],
+        path: &std::path::Path,
+        format: engine::services::execution_service::DuckDbExportFormat,
+    ) -> Result<engine::services::execution_service::ExportStats, CoreError> {
+        engine::services::execution_service::export_batches_via_duckdb(batches, path, format)
+    }
+
+    /// 【D1】表档常驻表直接 `COPY` 落盘（保真档；复用常驻表，不新建、不回收）。
+    pub fn export_existing_table_via_duckdb(
+        table: &str,
+        row_count: usize,
+        path: &std::path::Path,
+        format: engine::services::execution_service::DuckDbExportFormat,
+    ) -> Result<engine::services::execution_service::ExportStats, CoreError> {
+        engine::services::execution_service::export_existing_table_via_duckdb(
+            table, row_count, path, format,
+        )
+    }
+
     pub fn get_or_create_duckdb(
     ) -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
         engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()

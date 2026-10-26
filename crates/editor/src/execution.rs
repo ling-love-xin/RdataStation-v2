@@ -863,6 +863,9 @@ pub struct DuckDbExportRequest {
     pub filtered: bool,
     /// 事实档快照（`None` = 无事实档，走显示矩阵猜型降级档并在报告中标注）
     pub fact: Option<Arc<FactFrame>>,
+    /// 【D1】是否走显示矩阵猜型降级档（提交侧按 `fact_export_mode` 纯判定置位，
+    /// 与 workbench 执行分流同口径；成功回执据此追加降级口径说明）。
+    pub degraded: bool,
 }
 
 /// 【B7 切片二】一次 DuckDB 导出的回执
@@ -873,6 +876,8 @@ pub struct ExportNote {
     pub path: std::path::PathBuf,
     /// 这次导的是筛后的行集（回执要按 B7 的口径明示）
     pub filtered: bool,
+    /// 【D1】是否为猜型降级档（`true` = 整列按文本存储，数字类型可能失真）
+    pub degraded: bool,
     /// 成功时是写出去的行数，失败时是原因
     pub result: Result<usize, String>,
 }
@@ -1388,6 +1393,7 @@ impl ExecQueue {
                         format: request.format,
                         path: request.path.clone(),
                         filtered: request.filtered,
+                        degraded: request.degraded,
                         result,
                     });
                 }
