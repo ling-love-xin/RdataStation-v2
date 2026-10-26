@@ -519,7 +519,14 @@ fn classify_click(click_count: usize, modifiers: Modifiers) -> RowClick {
     if modifiers.shift {
         return RowClick::Range;
     }
-    if modifiers.secondary() {
+    // gpui-pre 0.3.10 起 `secondary()` 需 `&App` 参数；本函数为纯函数（无 cx），
+    // 改用编译期平台判断实现相同语义（macOS = Command 键，其余 = Ctrl）。
+    let secondary = if cfg!(target_os = "macos") {
+        modifiers.platform
+    } else {
+        modifiers.control
+    };
+    if secondary {
         return RowClick::Toggle;
     }
     RowClick::Select

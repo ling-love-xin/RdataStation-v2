@@ -140,7 +140,7 @@ pub(crate) struct SkinShared {
     /// Whether that dock was open when the drag began, so the release can
     /// tell whether the drag opened or closed it.
     resize_started_open: Cell<bool>,
-    /// RdataStation vendor patch (0.8.0): per-tab maximum width (px) and tab
+    /// RdataStation vendor patch (0.8.1): per-tab maximum width (px) and tab
     /// variant for dock tab bars, consumed by the tab bar renderer. RDS
     /// settings "appearance.tab_bar_max_width" / "appearance.tab_bar_variant".
     tab_bar_max_width: Cell<f32>,
@@ -271,14 +271,14 @@ impl DockSkin {
         self.shared.notify(cx);
     }
 
-    /// RdataStation vendor patch (0.8.0): per-tab maximum width (px). RDS
+    /// RdataStation vendor patch (0.8.1): per-tab maximum width (px). RDS
     /// setting "标签栏最大宽度" consumption point.
     pub fn set_tab_bar_max_width(&self, width_px: f32, cx: &mut App) {
         self.shared.tab_bar_max_width.set(width_px);
         self.shared.notify(cx);
     }
 
-    /// RdataStation vendor patch (0.8.0): tab variant for dock tab bars. RDS
+    /// RdataStation vendor patch (0.8.1): tab variant for dock tab bars. RDS
     /// setting "标签栏样式" consumption point.
     pub fn set_tab_bar_variant(&self, variant: crate::tab::TabVariant, cx: &mut App) {
         self.shared.tab_bar_variant.set(variant);

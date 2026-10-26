@@ -77,7 +77,10 @@ result_panel = { path = "crates/result_panel", package = "rds-result-panel" }
 # 0.7.1：在 refactor/ui-standalone 分支随 UI 治理一起升级（2026-10-11），patch 级增量、符号零删除。
 # 0.8.0：在 upgrade/gpui-kit-0.8.0 分支升级（2026-10-21）。vendor 为 crates.io 发布包
 # （归一化 Cargo.toml，非仓库源码），项目 vendor patch 已重打于发布包源码。
-gpui-kit = "0.8.0"
+# 0.8.1：在 upgrade/gpui-kit-0.8.1 分支升级（2026-10-27）。符号兼容 patch 增量
+# （gpui-base +4 文件/84 变更、gpui-component 112 文件变更，均 0 删除），vendor 换 0.8.1
+# 发布包并重打私有 patch；gpui-pre 0.3.9→0.3.10（ScrollEvent 改名，项目不直接用）。
+gpui-kit = "0.8.1"
 
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），

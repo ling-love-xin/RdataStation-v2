@@ -2,12 +2,12 @@ use std::{ops::Range, rc::Rc};
 
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
+    HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
     RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window, deferred, div,
     prelude::FluentBuilder, px, rems,
 };
 use gpui_base::TestSupportExt as _;
-use gpui_base::input::{CompletionHighlighter, HighlightStyleResolver as _};
+use gpui_base::input::CompletionHighlighter;
 use lsp_types::CompletionItem;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
@@ -46,28 +46,6 @@ fn retained_highlight_ranges(
         merged.push(range);
     }
     merged
-}
-
-/// Kind glyph + syntax capture for a completion kind.
-///
-/// 从 tusk 的本地补丁移植：行首小字形按 `CompletionItemKind` 映射，
-/// 字形对应的语法捕获名决定 label 的取色（与编辑器内该符号的高亮一致）。
-fn kind_glyph(kind: Option<lsp_types::CompletionItemKind>) -> (&'static str, &'static str) {
-    use lsp_types::CompletionItemKind as K;
-    match kind {
-        Some(K::FUNCTION) | Some(K::METHOD) | Some(K::CONSTRUCTOR) => ("ƒ", "function"),
-        Some(K::CLASS) | Some(K::STRUCT) => ("T", "type"),
-        Some(K::INTERFACE) => ("V", "type"),
-        Some(K::FIELD) | Some(K::PROPERTY) => ("c", "property"),
-        Some(K::MODULE) => ("S", "title"),
-        Some(K::KEYWORD) | Some(K::OPERATOR) => ("k", "keyword"),
-        Some(K::VARIABLE) => ("v", "variable"),
-        Some(K::CONSTANT) | Some(K::ENUM_MEMBER) | Some(K::VALUE) => ("C", "constant"),
-        Some(K::ENUM) | Some(K::TYPE_PARAMETER) => ("e", "type"),
-        Some(K::SNIPPET) => ("s", "string"),
-        Some(K::TEXT) | None => ("·", ""),
-        Some(_) => ("·", ""),
-    }
 }
 
 use crate::{
@@ -148,16 +126,6 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
-
-        // 移植 tusk 补丁：label 取 kind 对应的语法捕获色（与编辑器内该符号
-        // 高亮一致），匹配前缀粗体；行首小字形引导，detail 弱化。
-        let (glyph, capture) = kind_glyph(item.kind);
-        let label_color = cx
-            .theme()
-            .highlight_theme
-            .style(capture)
-            .and_then(|s| s.color)
-            .unwrap_or(cx.theme().foreground);
         let highlights = retained_highlight_ranges(
             &item.label,
             (self.highlight)(self.query.as_ref(), item.as_ref()),
@@ -167,13 +135,12 @@ impl RenderOnce for CompletionMenuItem {
             (
                 range,
                 HighlightStyle {
-                    font_weight: Some(FontWeight::BOLD),
+                    color: Some(cx.theme().blue),
                     ..Default::default()
                 },
             )
         })
         .collect::<Vec<_>>();
-        let muted = cx.theme().muted_foreground;
 
         MenuItemElement::new(self.ix)
             .aria_label(item.label.clone())
@@ -190,26 +157,7 @@ impl RenderOnce for CompletionMenuItem {
                     .w_full()
                     .gap_3()
                     .justify_between()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(12.))
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(glyph),
-                            )
-                            .child(
-                                div()
-                                    .text_color(label_color)
-                                    .child(
-                                        StyledText::new(item.label.clone())
-                                            .with_highlights(highlights),
-                                    ),
-                            ),
-                    )
+                    .child(StyledText::new(item.label.clone()).with_highlights(highlights))
                     .when_some(item.detail.as_ref(), |this, detail| {
                         this.child(
                             Label::new(detail.clone())
@@ -409,11 +357,11 @@ impl CompletionMenu {
         .detach();
     }
 
-    /// Sets the trigger start offset — 移植 tusk 补丁：总是取编辑器最新的
-    /// 词起点（光标处正在输入的那个词），而不是首个补全请求看到的起点。
-    /// 旧逻辑只记录第一次：菜单在文档中续输/移动后 Enter 会用旧起点替换错文本。
+    /// Sets the trigger start offset if it is not already set.
     pub(crate) fn update_query(&mut self, start_offset: usize, query: impl Into<SharedString>) {
-        self.trigger_start_offset = Some(start_offset);
+        if self.trigger_start_offset.is_none() {
+            self.trigger_start_offset = Some(start_offset);
+        }
         self.query = query.into();
     }
 
