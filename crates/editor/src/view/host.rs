@@ -1651,12 +1651,11 @@ impl EditorHostPanel {
                     .when(current_channel == ExecChannel::Federated, |row| {
                         row.child(self.render_sources_picker(cx))
                     })
-                    // 执行通道面包屑（连接 ▸ 库 ▸ Schema）在工具栏右区；执行方式选择器已迁状态栏
-                    .children(render_breadcrumb_control(
-                        self,
-                        &cx.entity(),
-                        cx.theme(),
-                    )),
+                    // 通道级 + 连接（原型 §2.2 通道级+连接层，工具栏右区）：
+                    // 执行通道 pill（源库/加速/联邦，互斥）+ 连接选择器（运行点 + 短码·名称，
+                    // 只列实时在线、默认跟随当前连接）；连接 ▸ 库 ▸ Schema 面包屑回状态栏最左（原型）。
+                    .children(render_channel_control(self, &cx.entity()))
+                    .children(render_conn_select(self, &cx.entity(), cx.theme())),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
@@ -8433,11 +8432,8 @@ pub(crate) fn render_editor_status_bar(
         units: snapshot.units.as_deref(),
     };
 
-    // 执行方式控件（源库 / 加速 / 联邦）：面包屑已回工具栏，通道选择器迁到状态栏左段
-    // （§2.5 左段 = 方言 · 事务 · 执行方式）。
-    let channel_ctrl = (snapshot.mode == EditorMode::Sql)
-        .then(|| render_channel_control(host, &panel_entity))
-        .flatten();
+    // 执行方式（通道）由工具栏右区连接选择器旁的通道 pill 表达；状态栏不再占它
+    let channel_ctrl = None;
 
     // ── 交互控件：编辑模式 / 重设 / 事务 / 中断（事件走 panel.update，不重入宿主）──
     // 编辑模式（行 / 列编辑；列编辑 = 多光标）
@@ -8656,8 +8652,11 @@ pub(crate) fn render_editor_status_bar(
     });
 
     let controls = status_bar::StatusControls {
-        // 连接 ▸ 库 ▸ Schema 面包屑已迁工具栏；状态栏不再占执行通道路径段
-        breadcrumb: None,
+        // 连接 ▸ 库 ▸ Schema 面包屑（原型状态栏最左，同 DBeaver）：仅 SQL 模式有连接定位语义；
+        // 通用模式是脚本环境（环境族），分析模式是会话/单元——都不摆连接面包屑
+        breadcrumb: (snapshot.mode == EditorMode::Sql)
+            .then(|| render_breadcrumb_control(host, &panel_entity, cx.theme()))
+            .flatten(),
         edit_mode: Some(edit_mode_ctrl),
         reset_menu: Some(reset_ctrl),
         tx: tx_ctrl,
@@ -8667,14 +8666,15 @@ pub(crate) fn render_editor_status_bar(
     Some(status_bar::render(&inputs, controls, cx).into_any_element())
 }
 
-/// 工具栏面包屑（执行通道）：连接 ▸ [库] ▸ Schema（2026-10-27 自状态栏迁回工具栏）。
+/// 状态栏面包屑（连接定位）：连接 ▸ [库] ▸ Schema（原型状态栏最左，同 DBeaver）。
 ///
 /// - 连接段 = **短码+名称**，菜单只列**实时在线**连接 +「跟随当前连接」（默认态）；
 ///   在线判定走 `online_ids`（事件路径实时查连接管理器）——导航建连成功不回写
 ///   快照 `connected`，若按快照过滤会看不到刚连上的连接（真机复现）。
 /// - 库段 = 连接隐含的绑定库，非可切段（有 catalog 才显；跨库切换是后续项）。
 /// - Schema 段 = 可切（schemas + 使用连接默认）；未选给可点「schema ▾」占位。
-/// - 段名过长统一截断（工具栏空间有限），容器限宽 + overflow_hidden 兜底。
+/// - 段名过长统一截断（状态栏空间有限），容器限宽 + overflow_hidden 兜底。
+/// 工具栏右区的连接**选择器**见 [`render_conn_select`]（更紧凑：运行点 + 短码·名称）。
 fn render_breadcrumb_control(
     host: &EditorHostPanel,
     panel_entity: &Entity<EditorHostPanel>,
@@ -8839,7 +8839,7 @@ fn truncate_label(text: &str, max: usize) -> String {
     }
 }
 
-/// 状态栏左段「执行方式」控件（源库 / 加速 / 联邦可切；2026-10-27 自工具栏迁入）。
+/// 工具栏右区「执行通道」pill（源库 / 加速 / 联邦可切；原型 §2.2 通道级+连接层）。
 ///
 /// 菜单构建发生在点击时（事件路径）——`channel_menu` 的门控真值来自宿主注入的
 /// `ChannelsPort`；未注入端口时如实报「尚未接入」，不假装有通道可选。
@@ -8884,6 +8884,107 @@ fn render_channel_control(
                 }
                 menu
             })
+            .into_any_element(),
+    )
+}
+
+/// 工具栏右区「连接选择器」（原型 conn-select）：运行点 + 短码·名称 + caret。
+///
+/// 比状态栏面包屑紧凑（不展开 ▸库▸Schema）：只反映当前文档绑定的连接；菜单只列
+/// **实时在线**连接（事件路径 `online_ids`）+「跟随当前连接」（默认态）。
+/// 运行点是**静态绑定指示**（绑定即亮；不在 render 内做实时在线判定——避免
+/// `block_on` 阻塞 UI 线程；在线判定留给菜单打开时的事件路径）。
+fn render_conn_select(
+    host: &EditorHostPanel,
+    panel_entity: &Entity<EditorHostPanel>,
+    theme: &gpui_kit::component::Theme,
+) -> Option<AnyElement> {
+    let entity = panel_entity.clone();
+    let shared = host.shared.clone();
+    let options = host.shared.connection_options();
+    let has_port = host.shared.has_connections();
+    let bound = host
+        .with_document(|doc| doc.connection().map(str::to_string))
+        .flatten();
+
+    let label = bound
+        .as_deref()
+        .and_then(|id| {
+            options
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| format!("{}·{}", o.short, o.name))
+        })
+        .unwrap_or_else(|| "跟随当前连接".to_string());
+    // 运行点：绑定即亮（success）；未绑定跟随当前连接 → 灰点
+    let dot_color = if bound.is_some() {
+        theme.colors.success
+    } else {
+        theme.colors.muted_foreground
+    };
+
+    let conn_entity = entity.clone();
+    Some(
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .child(div().size(px(8.)).rounded_full().bg(dot_color).flex_none())
+            .child(
+                Button::new("editor-conn-select")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-conn-select".to_string())
+                    .label(format!("{} ▾", truncate_label(&label, 24)))
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        if !has_port {
+                            return menu
+                                .item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+                        }
+                        let follow_entity = conn_entity.clone();
+                        let unbound = bound.is_none();
+                        menu = menu.item(
+                            PopupMenuItem::new("跟随当前连接")
+                                .checked(unbound)
+                                .on_click(move |_, _window, app| {
+                                    follow_entity.update(app, |panel, cx| {
+                                        panel.bind_connection(None, cx);
+                                    });
+                                }),
+                        );
+                        menu = menu.separator();
+                        // 实时在线（菜单打开时查，事件路径）：只列真在线连接
+                        let online = shared.online_ids();
+                        let online_conns: Vec<(String, String)> = options
+                            .iter()
+                            .filter(|o| online.contains(&o.id))
+                            .map(|o| (format!("{}·{}", o.short, o.name), o.id.clone()))
+                            .collect();
+                        if online_conns.is_empty() {
+                            return menu
+                                .item(PopupMenuItem::new("（暂无在线连接）").disabled(true));
+                        }
+                        for (label, id) in &online_conns {
+                            let entity = conn_entity.clone();
+                            let is_current = bound.as_deref() == Some(id.as_str());
+                            let label = label.clone();
+                            let id = id.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(is_current)
+                                    .on_click(move |_, _window, app| {
+                                        let id = id.clone();
+                                        entity.update(app, |panel, cx| {
+                                            panel.bind_connection(Some(id), cx);
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element(),
+            )
             .into_any_element(),
     )
 }
