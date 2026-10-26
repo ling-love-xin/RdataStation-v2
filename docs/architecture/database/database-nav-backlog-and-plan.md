@@ -1,6 +1,6 @@
 # 数据库导航栏现状台账与遗留清单（B0–B6 收口 · 2026-10-26）
 
-> **状态**：B0–B6 可插拔底座与破坏性动作 staged 模型已全部入库（HEAD `4ef7dea1`）；本文档替代 2026-10-24 旧 B 档待办口径，记录**当前现状**、动作与能力覆盖、耦合核对结论、与 DBeaver 态势、遗留挂账与另案清单。
+> **状态**：B0–B6 可插拔底座与破坏性动作 staged 模型已全部入库，B7 全量回归收口完成（HEAD `aa9fa0c4`，父提交 `4ef7dea1` B6-5）；本文档替代 2026-10-24 旧 B 档待办口径，记录**当前现状**、动作与能力覆盖、耦合核对结论、与 DBeaver 态势、遗留挂账与另案清单。
 > **证据口径**：本地源码以 `crates/...:行号` 引用；竞品证据见 `docs/analysis/competitor-analysis/<文件>.md:行号`（gitignore，PowerShell 读取需 `-Encoding UTF8`）；立项方案历史稿见 `database-nav-b-tier-proposal.md`（B0 档案，保留不回写）。
 > **边界**：本文档只覆盖导航模块（`crates/database` 导航链路 + `crates/workbench` 导航宿主接线）；连接新建/编辑对话框属 M3，SQL 编辑器 / Mock / 洞察 / DuckDB 分析资产本体属各自模块。
 > **未决口径**：rename 是否纳入 staged（决策 R1-a1，维持直接提交、不入 staged、本批不补确认框；评审可改判，回退成本见 `b6-design.md` §6.2，落 `.rds/tmp/` 不入库）。
@@ -96,6 +96,7 @@
 - `entries_for(kind, connected, ops)`（`:116-139`）：`applies_to` 类型白名单过滤 → `gate` 门控 → 分组序 `ActionGroup` → 组内 `order` 稳定排序；视图层 `rows.rs:2554` 只遍历产出序列装配菜单，不再写类型 `if`。
 - 描述符字段：`id` / `slug` / `label` / `group` / `order` / `applies` / `op` / `target` / `shortcut` / `destructive`。
 - 靶可用性（property / qualified / 路径靶是否 `Some`）属视图运行时判定，在 `rows.rs` 闭包 match 臂内保留 `if let Some` 口径（`:2562-2563` 注释）；注册表只声明类型白名单，不表达运行时靶条件。
+- **职责边界**：注册表仅装配**对象右键菜单动作**；树键盘漫游命令（`NavUp/Down/Expand/Collapse/Home/End/PageUp/PageDown/ClearSearch`）与本地归组命令（`NavReorderUp/ReorderDown`）属独立命令族，不经 GPUI Action 菜单装配、不进 `ENTRIES`，门控留视图层命令回调判定（决策依据 `b4-design.md` §2.3：GPUI Action 全是漫游动作，对象菜单走 `PopupMenuItem::on_click` 闭包）。
 
 ### 2.6 视图层纪律
 
@@ -122,10 +123,11 @@
 | Object | CopyName | 复制名称 | 全部可寻址类型 | CopyName | None | — | 否 |
 | Object | CopyQualified | 复制限定名 | Table / View / Routine / Sequence / Trigger | CopyQualified | QualifiedName | — | 否 |
 | Object | RefreshProps | 刷新元数据 | Table / View / Schema | `op = None`（连接前置） | None | — | 否 |
-| Manage | DeleteObject | 删除… | Table / View / Sequence | Drop | PropertyRef | Delete（@ database-nav） | **是** |
+| Manage | DeleteObject | 删除… | Table / View / Sequence | Drop | PropertyRef | — | **是** |
 | Manage | EmptyTable | 清空… | Table | Truncate | PropertyRef | — | **是** |
 
 > `destructive` 位 B6 仅登记与测试断言；菜单渲染暂不读取该位（D3 口径），后续可据此统一 Danger 视觉与确认强度。
+> 注册表 `shortcut` 字段是元数据声明（`registry.rs:89` 注释），键位绑定集中在 `app/main.rs` §3.2；`Delete` 键（`NavDeleteToStaged`，`main.rs:308`）不在该字段重复声明，故上表 DeleteObject / EmptyTable 两行 `shortcut` 字段均为 `None`。
 
 ### 3.2 键盘绑定（`crates/app/src/main.rs:286-310`，`database-nav` context）
 
@@ -149,7 +151,7 @@
 
 - **入队范围**：仅 Drop（删除表 / 视图 / 序列）与 Truncate（清空表）；Mock / Stats / ViewData / GenDml / InsightSchema 等回源读操作与本地动作不进 staged 族（D5）。
 - **状态机**（`nav_view.rs`）：`StagedOp`（`:277`，key / conn_id / driver / catalog / schema / parent / object_name / object_kind / op / `error: Option<String>`）；`EnqueueOutcome`（`:295`，Added / Replaced / Ignored）；`staged_ops: Vec<StagedOp>`（`:481`）。访问器：`staged_lookup`（`:486`）、`staged_count`（`:491`）、`enqueue_staged`（`:501`）、`dismiss_staged`（`:524`）、`clear_staged`（`:529`）、`commit_plan` 快照（`:534`）、`mark_staged_failed`（`:540`）、`group_by_conn`（`:548`）。
-- **去重归并**：去重键 `(conn_id, schema, object_name, op)`；已入队 Drop 再入 Truncate → Ignored；已入队 Truncate 再入 Drop → Replaced 为 Drop；同操作重复入队 → Ignored 幂等。
+- **去重归并**：去重判据 = 树节点稳定 key（`model.rs:264` `child_key` = `{conn_id}/{catalog}/{schema}/{parent}/{name}` 层级段转义拼接，`/` → `%2F`、`%` → `%25`；staged 构造直接复用 `item.key.clone()`，`actions.rs:2192`）；`op` **不进 key**——同节点只能有一条 staged 条目，key 命中后再按 `(existing_op, op.op)` 二元组归并：同操作重复入队 → Ignored 幂等；已入队 Drop 再入 Truncate → Ignored；已入队 Truncate 再入 Drop → 原位 Replaced 为 Drop（`nav_view.rs:502-519`）。
 - **双层确认**：右键菜单 / Delete 键 → 单项确认对话框（命令式标题 + 限定名 + 不可恢复警告一行，OK「确认加入待提交」Danger）→ 入队；Ctrl+S / 面板头「提交 N」→ 汇总确认对话框（标题「提交 N 项变更」+ 全量滚动清单：动作标签 + 限定名；OK「提交 N 项变更」Danger）。已入队对象的破坏性菜单切换为「从待提交移除」，单项撤销不弹确认。
 - **执行模型**：`commit_plan` 快照 → 按 conn_id 分组（首次出现顺序、组内保序）→ 后台 `cx.spawn` 串行逐条 `execute_query` → 成功移除、失败保留附 `error`；整批跑完一次批量回写，涉及连接去重逐个 `refresh_connection_after_filter` → 汇总 notice（成功 X / 失败 Y，失败逐条限定名 + 错误，超 5 条折叠）。**不包整批事务**（MySQL InnoDB DDL 隐式提交不可回滚，四驱动事务口径不成立）；不采用首条失败即中止；断连不清空集合；会话内不落库。
 - **视觉**：命中待提交集合的行标题 `.line_through()` + `staged.drop` 弱 danger 色 + 通用「待删除」徽标段；面板头「提交 N」ghost 按钮仅在 `staged_count > 0` 时渲染，空集不占槽位。明暗对比度已本地复算 ≥4.5:1（`b6-design.md` §9.2）。
@@ -248,6 +250,7 @@
 | 菜单 Danger 文字色 | vendor `menu_item.rs` 无 variant / color API；破坏性菜单项视觉未区分 | 上游组件受限（§6.2） |
 | 多级撤销栈 / 整体丢弃快捷键 / 预览 SQL / 断连未提交量提示 | staged 单层撤销；无 `lost_work` 提示 | v2 产品功能（§6.1） |
 | 行值搜索 / Set active catalog/schema / 多 Transfer 拖拽与文件拖入 | 明确边界排除，L4 预留 `SetActive` 位 | §6.5 |
+| DBeaver 工作区专属命令快捷键（Ctrl+9 选连接 / Ctrl+0 选模式 / Ctrl+Shift+, 链接编辑器 / Ctrl+Shift+A 设默认模式 / Alt+Insert 新建向导） | 我方导航模型无「选模式 / 默认模式」对应交互；Alt+Insert 随新建对象族另案评估；其余不纳入补齐清单 | §6.5 |
 
 ---
 
@@ -288,13 +291,16 @@
 - **D11**：定义采集链路（`NodeInfo` 增 `definition` → 四族批量采集视图 / 例程源码 → 缓存先查后增量更新 → 先定「定义是否进 L2 缓存」架构决策 → FTS 定义候选接入）单独立项；DBeaver 第三档 LIKE 通配表达式模式。
 - **D12**：行估计 + 大小合并单条三列 SQL 减少一轮往返；统计进度条、classFormatMap 按类缓存 formatter、节点行内动作图标组、大小信息 L2 跨会话缓存。
 - **D13**：规则级编译缓存——当前渲染期每次现编 `compile_mask` 纯函数无缓存；profile 显示高频编译开销后，再在 NavView 状态内按规则快照缓存 `CompiledMask`、规则变更事件路径刷新缓存，render 回调内不允许入队任务；坏正则条目静默丢弃、该条不生效且无 UI 提示，后续可在对话框内做逐条 pattern 编译校验与错误提示。
+- **竞品矩阵对照（文档级，低优先级）**：我方动作 × 四族适用类型矩阵已由 B2 / B4 / B6-3 纯函数单测钉死；尚未出「现有动作 × 四族适用类型 vs DBeaver 菜单条件」逐项对照表（方案稿 §9 遗留指针）。后续新增族或菜单动作前补对照，确认无条件误放行 / 误置灰。
+- **已闭环指针（不再挂账）**：`qualified_name` / `qualified_sql` 空 catalog / schema / parent 分支行为已由五分支单测钉死；`ensure_nav_pump` 调用点已在 D8 落码时全量盘点并纳入泵通道；MetadataBrowser 默认实现兼容性归 C18 引擎层保留决策；`nav_name_highlight` 分段态删除线继承已由 B6-4 父段 + 分段双挂 `line_through()` 闭环。
 
 ### 6.5 另案缺口（不属导航底座，全程不碰、不提交）
 
 - B-2-E 旧 7 个池文件死代码清理；
 - 跨 crate 千分位四份重复实现抽取合并（`result_panel/grid.rs:2846`、`editor/history.rs:257`、`analytics_resource/present.rs:71`、`mock/mock_view.rs:1057`）；
 - 行值搜索、Set active catalog/schema、新建中对象跨刷新保留、多 Transfer 拖拽与文件拖入（边界排除项，随新建对象动作族一并评估）；
-- analytics_resource / insight / workbench resource 面板半成品改动（另案 63 项，明细见 §8.2）。
+- analytics_resource / insight / workbench resource 面板半成品改动（另案 63 项，明细见 §8.2）；
+- 存量调试探针（非 B5 引入、不进常规测试与生产二进制，后续清理另案）：`engine/src/persistence/metadata_cache.rs:5454` `#[ignore]` 手动基准 `scale_baseline_100k_objects` 内计时 `println!`（`--ignored --nocapture` 手动跑才执行）；`nav_view/rows.rs:1782` 右键菜单 `tracing::info!` 探针。
 
 ---
 
@@ -366,3 +372,4 @@ cargo check --workspace --all-targets -j 1
 - **提交口径**：主题前缀 `feat/refactor/fix/docs(数据库导航):`；正文简体中文，说明动作与对标项；注释简体中文；编译产物 target 删除直接不进回收站。
 - **过程产物**：验证日志、一次性脚本、探针落 `.rds/tmp/`（已 gitignore，不入库）；竞品研究落 `docs/analysis/`（整目录 gitignore，PowerShell 读取需 `-Encoding UTF8`）。
 - **文档分工**：本台账记录现状与遗留；立项方案历史稿见 `database-nav-b-tier-proposal.md`；模块总入口见 `README.md`；设计决策与落码偏差见 `.rds/tmp/b6-design.md` §9（不入库）。
+- **README 文档地图待同步（文档级另案，不随代码批次提交）**：`docs/architecture/database/README.md` 当前三处口径过时——① 行 6 模块状态仍停在 2026-09-14「Phase A/B/C + v6/v7 完成」；② 行 138 把 `database-nav-b-tier-proposal.md` 标为「B 档后续批次立项方案（待拍板）」并沿用 S3-④ / B-1 / B-2 / S4-N 旧四议题口径，B1–B6 落地后该稿已是 B0 历史档案；③ 文档地图未列入本台账 `database-nav-backlog-and-plan.md`（现行权威现状台账）。后续单独同步 README，不在导航代码批次内夹带。
