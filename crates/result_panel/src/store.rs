@@ -776,6 +776,9 @@ struct DocumentResults {
     /// 【A2】每份结果集的事实档状态（与 `sets` 同序同增减；替换 / 淘汰时随结果作废，
     /// 切标签不清空）。渲染第一期不读它，分析 / 导出按它选保真路径（A3 接线后生效）
     facts: Vec<FactState>,
+    /// 【C1】每份结果集是否被用户钉住（与 `sets` 同序同增减；钉住的 tab 在
+    /// [`evict_oldest`] 里跳过——用户显式保留的结果不能被 FIFO 挤掉；会话级，不落盘）
+    pinned: Vec<bool>,
     /// 当前选中的结果集下标（始终指向 `sets` 中的有效位置；`sets` 非空时必有）
     active: usize,
     /// 【并排对比】对比选中的结果集下标（`None` = 未开对比；`Some` ≠ `active` 恒成立）
@@ -823,6 +826,7 @@ impl ResultStore {
                     locals: Vec::new(),
                     row_histories: Vec::new(),
                     facts: Vec::new(),
+                    pinned: Vec::new(),
                     active: 0,
                     compare: None,
                 });
@@ -855,6 +859,10 @@ impl ResultStore {
                     if let Some(fact_state) = slot.facts.get_mut(slot.active) {
                         *fact_state = FactState::from_fact(fact.clone());
                     }
+                    // 【C1】被覆盖的是新结果：钉住态不继承（旧结果已被替换为新结果）
+                    if let Some(pinned) = slot.pinned.get_mut(slot.active) {
+                        *pinned = false;
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
@@ -862,6 +870,7 @@ impl ResultStore {
                     slot.locals.push(LocalRowSet::new());
                     slot.row_histories.push(RowHistory::new());
                     slot.facts.push(FactState::from_fact(fact));
+                    slot.pinned.push(false);
                     slot.active = 0;
                 }
             }
@@ -873,6 +882,7 @@ impl ResultStore {
                 slot.locals.push(LocalRowSet::new());
                 slot.row_histories.push(RowHistory::new());
                 slot.facts.push(FactState::from_fact(fact));
+                slot.pinned.push(false);
                 if slot.sets.len() == 1 {
                     slot.active = 0;
                 }
@@ -919,6 +929,10 @@ impl ResultStore {
                     if let Some(fact_state) = slot.facts.get_mut(slot.active) {
                         *fact_state = FactState::from_fact(fact.clone());
                     }
+                    // 【C1】替换分支同 Replace：新结果不继承旧钉住
+                    if let Some(pinned) = slot.pinned.get_mut(slot.active) {
+                        *pinned = false;
+                    }
                 } else {
                     slot.sets.push(entry);
                     slot.changes.push(ChangeSet::new());
@@ -926,6 +940,7 @@ impl ResultStore {
                     slot.locals.push(LocalRowSet::new());
                     slot.row_histories.push(RowHistory::new());
                     slot.facts.push(FactState::from_fact(fact));
+                    slot.pinned.push(false);
                     slot.active = 0;
                 }
             }
@@ -1127,6 +1142,78 @@ impl ResultStore {
         false
     }
 
+    /// 【C1】重命名结果集标签（会话级，不落盘）。
+    ///
+    /// - `Some(name)`：覆盖自动标签（`结果 N`），同名 / 空白串会被归一为 `None`（恢复自动标签）；
+    /// - `None`：清空自定义标题，回到 `结果 N`。
+    ///
+    /// 返回是否真的改到（文档不存在 / 下标越界 = `false`）。
+    pub fn set_title(&mut self, document: &DocumentId, index: usize, title: Option<String>) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(entry) = slot.sets.get_mut(index) else {
+            return false;
+        };
+        // 空白串视同恢复自动标签（用户清空输入框 = 不想要别名）
+        let normalized = match title {
+            Some(name) => {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            None => None,
+        };
+        if entry.title == normalized {
+            return false;
+        }
+        entry.title = normalized;
+        true
+    }
+
+    /// 【C1】切换钉住态（钉住的结果集不被 FIFO 淘汰；会话级，不落盘）。
+    ///
+    /// 返回是否真的改到（文档不存在 / 下标越界 = `false`）。
+    pub fn toggle_pin(&mut self, document: &DocumentId, index: usize) -> bool {
+        let Some(slot) = self
+            .documents
+            .iter_mut()
+            .find(|slot| &slot.document == document)
+        else {
+            return false;
+        };
+        let Some(pinned) = slot.pinned.get_mut(index) else {
+            return false;
+        };
+        *pinned = !*pinned;
+        true
+    }
+
+    /// 【C1】读某份结果集是否被钉住（越界 = `false`）
+    pub fn is_pinned(&self, document: &DocumentId, index: usize) -> bool {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .and_then(|slot| slot.pinned.get(index).copied())
+            .unwrap_or(false)
+    }
+
+    /// 【C1】整份文档的钉住标记切片（与 `sets` 同序；投影给 [`crate::sets::tabs`] 用）
+    pub fn pinned(&self, document: &DocumentId) -> &[bool] {
+        self.documents
+            .iter()
+            .find(|slot| &slot.document == document)
+            .map(|slot| slot.pinned.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// 【T2a-3】某份结果集的**未提交变更**（只读：UI 标脏格 / 变更计数都读它）
     pub fn change_set(&self, document: &DocumentId, index: usize) -> Option<&ChangeSet> {
         self.documents
@@ -1292,11 +1379,17 @@ impl ResultStore {
 }
 
 /// 超过上限就淘汰**最旧的未选中**结果集（选中项保留，选中下标跟着修正）
+///
+/// 【C1】用户显式钉住（[`DocumentResults::pinned`]）的结果集**永不被 FIFO 淘汰**：
+/// 找 victim 时跳过它们；若全被钉住且还超上限就不再淘汰（钉住是用户的硬约束，
+/// 内存压力由用户自己去解钉 / 关文档，界面不替他决定）。
 fn evict_oldest(slot: &mut DocumentResults) {
     while slot.sets.len() > MAX_RESULT_SETS {
-        let victim = (0..slot.sets.len())
-            .find(|index| *index != slot.active)
-            .expect("选中项只有一个，上限 > 1 时必有可淘汰项");
+        let Some(victim) = (0..slot.sets.len())
+            .find(|index| *index != slot.active && !slot.pinned.get(*index).copied().unwrap_or(false))
+        else {
+            break;
+        };
         slot.sets.remove(victim);
         // 【T2a-3】变更集跟着结果集一起淘汰（被淘汰那份的编辑没有可提交的对象了）
         slot.changes.remove(victim);
@@ -1307,6 +1400,8 @@ fn evict_oldest(slot: &mut DocumentResults) {
         slot.row_histories.remove(victim);
         // 【A2】事实档跟着结果集一起淘汰（被淘汰那份的帧没有可归属的结果集了）
         slot.facts.remove(victim);
+        // 【C1】钉住标记跟着结果集一起淘汰（被淘汰那份的标记没对象了）
+        slot.pinned.remove(victim);
         if victim < slot.active {
             slot.active -= 1;
         }

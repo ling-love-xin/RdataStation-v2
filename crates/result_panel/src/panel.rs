@@ -213,6 +213,10 @@ pub struct ResultPanel {
     filter_debounce: RefCell<Option<Task<()>>>,
     /// 【B14】下发源库开关（开着时应用筛选会重查源库——重查经队列交回编辑器）
     pushdown: bool,
+    /// 【C1】正在重命名哪个结果集 tab（`None` = 不在重命名态）；会话级
+    renaming: Option<usize>,
+    /// 【C1】重命名输入框实体（懒创建：第一次进重命名态时建；重命名态关闭后保留实体复用）
+    renaming_input: Option<Entity<InputState>>,
 }
 
 impl ResultPanel {
@@ -312,6 +316,8 @@ impl ResultPanel {
             filter_version: 0,
             filter_debounce: RefCell::new(None),
             pushdown: false,
+            renaming: None,
+            renaming_input: None,
         }
     }
 
@@ -459,19 +465,79 @@ impl ResultPanel {
             ..Default::default()
         });
         let tabs = (self.tabs.len() >= 2).then(|| {
-            let queue = self.queue.clone();
+            let queue_pick = self.queue.clone();
+            let queue_rename = self.queue.clone();
+            let queue_pin = self.queue.clone();
+            let actions = result_sets::TabActions {
+                // 「⋯」按钮：进入重命名态（事件路径；render 闭包拿不到 &mut App）
+                on_rename: Some(std::rc::Rc::new(move |index, _w, _app| {
+                    queue_rename.push(ResultRequest::BeginRename(index));
+                })),
+                on_toggle_pin: Some(std::rc::Rc::new(move |index| {
+                    queue_pin.push(ResultRequest::TogglePin(index));
+                })),
+            };
             result_sets::render(
                 &self.tabs,
                 self.active,
                 move |index, _window, _app| {
                     let index = *index;
-                    queue.push(ResultRequest::SelectSet(index));
+                    queue_pick.push(ResultRequest::SelectSet(index));
                 },
+                actions,
                 cx,
                 &self.tabs_scroll,
             )
             .into_any_element()
         });
+
+        // 【C1】重命名态：tab 条下方插入一个输入框条（输入框 + ✓ 提交 + ✕ 取消）
+        let tabs = match (tabs, self.renaming) {
+            (Some(tabs_el), Some(_index)) => {
+                let input = self.renaming_input.clone();
+                let queue_confirm = self.queue.clone();
+                let queue_cancel = self.queue.clone();
+                Some(
+                    div()
+                        .v_flex()
+                        .child(tabs_el)
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .px_2()
+                                .py_1()
+                                .debug_selector(|| "editor-result-rename-bar".to_string())
+                                .child(
+                                    div()
+                                        .w(rems(ui::RESULT_FILTER_WIDTH))
+                                        .children(input.as_ref().map(|i| Input::new(i))),
+                                )
+                                .child(
+                                    Button::new("editor-result-rename-confirm")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Check)
+                                        .on_click(move |_e, _w, _app| {
+                                            queue_confirm.push(ResultRequest::CommitRename);
+                                        }),
+                                )
+                                .child(
+                                    Button::new("editor-result-rename-cancel")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Close)
+                                        .on_click(move |_e, _w, _app| {
+                                            queue_cancel.push(ResultRequest::CancelRename);
+                                        }),
+                                ),
+                        )
+                        .into_any_element(),
+                )
+            }
+            (tabs, _) => tabs,
+        };
 
         // 【呈现】文本视图（DBeaver「显示方式 → 文本」）：主区换成 TSV 纯文本
         // （可选中复制）；标签条保留（可切结果集）；侧栏让位（无选中格语义——
@@ -898,6 +964,7 @@ impl ResultPanel {
                     let index = *index;
                     queue.push(ResultRequest::SelectCompare(index));
                 },
+                result_sets::TabActions::default(),
                 cx,
                 &self.tabs_scroll,
             )
@@ -1083,6 +1150,58 @@ impl ResultPanel {
     /// 【侧栏】右侧辅助栏开关：只翻面板状态（网格数据不动）
     pub fn toggle_value_sidebar(&mut self, cx: &mut Context<Self>) {
         self.show_value_sidebar = !self.show_value_sidebar;
+        cx.notify();
+    }
+
+    /// 【C1】进入第 `index` 份结果集 tab 的重命名态（预填当前 label；会话级）。
+    ///
+    /// 输入框实体懒创建：第一次进时建，后续复用。提交走 [`Self::commit_rename`]，
+    /// 取消走 [`Self::cancel_rename`]（都由面板渲染的 ✓/✕ 按钮触发）。
+    pub fn begin_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        // 预填当前 label（自定义标题或自动序号都显示出来供改）
+        let prefill = self.tabs[index].label.clone();
+        if self.renaming_input.is_none() {
+            let input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx);
+                state.set_placeholder("结果集标题（留空恢复序号）…", window, cx);
+                state
+            });
+            self.renaming_input = Some(input);
+        }
+        if let Some(input) = self.renaming_input.clone() {
+            input.update(cx, |state, cx| state.set_value(prefill, window, cx));
+        }
+        self.renaming = Some(index);
+        cx.notify();
+    }
+
+    /// 【C1】提交重命名：把输入框当前值发回宿主（空串 = 恢复自动标签）。
+    pub fn commit_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.renaming else {
+            return;
+        };
+        let value = self
+            .renaming_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        // 空串 / 纯空白 → None（恢复自动标签）
+        let normalized = if value.trim().is_empty() {
+            None
+        } else {
+            Some(value.trim().to_string())
+        };
+        self.queue.push(ResultRequest::RenameSet(index, normalized));
+        self.renaming = None;
+        cx.notify();
+    }
+
+    /// 【C1】取消重命名（不发请求，输入框内容保留下次再进）。
+    pub fn cancel_rename(&mut self, cx: &mut Context<Self>) {
+        self.renaming = None;
         cx.notify();
     }
 

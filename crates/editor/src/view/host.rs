@@ -52,6 +52,15 @@ fn editor_show_line_numbers_or_default(cx: &App) -> bool {
     }
 }
 
+/// 【2026-10-27】读折叠开关（设置在设置页；测试环境回退默认 true）。
+fn editor_show_folds_or_default(cx: &App) -> bool {
+    if cx.has_global::<settings::model::Settings>() {
+        SettingsService::show_folds(cx)
+    } else {
+        true
+    }
+}
+
 /// 【B3】读事实档载体偏好快照（分析 / 带类型导出在事件路径上取一次，随请求带入工作线程：
 /// `QueryRunner` 是 `Send + Sync + 'static` 且方法签名无 `cx`，工作线程内不能自己读 global）。
 /// 测试环境未注册 Settings global 时回退 `Auto`（生产在 app 启动经 `SettingsService::init` 注册）。
@@ -1664,8 +1673,8 @@ impl EditorHostPanel {
                     // （2026-10-27；连接定位自状态栏迁此，状态栏左段只留方言/事务等）
                     .children(render_channel_control(self, &cx.entity()))
                     .children(render_conn_slots(self, &cx.entity(), cx.theme()))
-                    .child(self.render_ro_lock_button(cx))
-                    .child(self.render_fold_toggle_button(cx)),
+                    // 2026-10-27：roLock 在工具栏；折叠开关已移设置页（render 权威同步点）
+                    .child(self.render_ro_lock_button(cx)),
             );
             // 最右：`···` 定制面板（布局自定义；低频动作已全部提升常驻，见原型 §2.2 修订）
             toolbar = toolbar.child(self.render_toolbar_customize(cx));
@@ -1684,9 +1693,8 @@ impl EditorHostPanel {
                     })
                     .child(self.render_env_picker(cx))
                     .child(self.render_run_script_button(cx))
-                    // 2026-10-27：roLock + 折叠开关也挂通用模式工具栏（两模式都可用）
-                    .child(self.render_ro_lock_button(cx))
-                    .child(self.render_fold_toggle_button(cx)),
+                    // 2026-10-27：roLock 也挂通用模式工具栏；折叠开关已移设置页
+                    .child(self.render_ro_lock_button(cx)),
             );
             }
             // Notebook：笔记级工具栏（会话 ▾ / 全部运行 / 重启）——1c 落地。
@@ -1726,29 +1734,6 @@ impl EditorHostPanel {
             })
             .on_click(move |_, _window, app| {
                 entity.update(app, |panel, cx| panel.toggle_user_ro_lock(cx));
-            })
-    }
-
-    /// 【2026-10-27】用户折叠开关（工具栏按钮）：`toggled` = 折叠显示中
-    ///
-    /// 点击在 显示/隐藏折叠 间翻转（`shared.show_folds` → `sync_fold` 落内核；
-    /// 关掉时折叠槽与 chevron 一并消失，见 [`Self::toggle_show_folds`]）。
-    fn render_fold_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity();
-        let show = self.shared.show_folds();
-        Button::new("editor-fold-toggle")
-            .ghost()
-            .small()
-            .label("折叠")
-            .toggled(show)
-            .debug_selector(|| "editor-fold-toggle".to_string())
-            .tooltip(if show {
-                "代码折叠：点击关闭"
-            } else {
-                "代码折叠：点击开启"
-            })
-            .on_click(move |_, window, app| {
-                entity.update(app, |panel, cx| panel.toggle_show_folds(window, cx));
             })
     }
 
@@ -3355,20 +3340,6 @@ impl EditorHostPanel {
         let read_only = self.editor_read_only();
         self.editor.update(cx, |state, cx| {
             state.set_readonly(read_only, cx);
-        });
-        cx.notify();
-    }
-
-    /// 【2026-10-27】用户折叠开关（工具栏按钮）：点击在 显示/隐藏折叠 间翻转
-    ///
-    /// 关掉时 [`EditorShared::folding_enabled`] 恒 false → `sync_fold` 落 `set_folding(false)`：
-    /// 折叠槽与 chevron 一并消失（与能力表关闭同口径，不是"只看不折"）；再开则重新喂候选。
-    pub(crate) fn toggle_show_folds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shared = &self.shared;
-        let document = self.document.clone();
-        shared.set_show_folds(!shared.show_folds());
-        self.editor.update(cx, |state, cx| {
-            sync_fold(shared, &document, state, window, cx);
         });
         cx.notify();
     }
@@ -6361,7 +6332,7 @@ impl EditorHostPanel {
                     .map(|id| self.shared.connection_status_text(Some(id)))
             });
             (
-                result_sets::tabs(store.sets(&self.document), current_channel),
+                result_sets::tabs(store.sets(&self.document), current_channel, store.pinned(&self.document)),
                 active,
                 entry.filter(|entry| entry.has_grid()).map(|entry| {
                     (
@@ -6855,6 +6826,32 @@ impl EditorHostPanel {
             // 组合撤销 / 重做：格级栈优先，空走行级栈（两个栈互不混栈）
             ResultRequest::UndoAction => self.undo_row_action(cx),
             ResultRequest::RedoAction => self.redo_row_action(cx),
+            // 【C1】重命名第 index 份结果集标签（会话级；空白串宿主侧归一为恢复序号）
+            ResultRequest::RenameSet(index, title) => {
+                self.shared
+                    .update_results(|store| store.set_title(&self.document, index, title));
+                cx.notify();
+            }
+            // 【C1】切换第 index 份结果集的钉住态（钉住不被 FIFO 淘汰）
+            ResultRequest::TogglePin(index) => {
+                self.shared
+                    .update_results(|store| store.toggle_pin(&self.document, index));
+                cx.notify();
+            }
+            // 【C1】进入重命名态（需要 window 创建/回填输入框，走窗口句柄转手）
+            ResultRequest::BeginRename(index) => {
+                let panel = self.result_panel.clone();
+                let _ = self.window.update(cx, |_panel, window, app| {
+                    panel.update(app, |p, cx| p.begin_rename(index, window, cx));
+                });
+            }
+            // 【C1】提交 / 取消重命名（纯面板态，host 只转发）
+            ResultRequest::CommitRename => {
+                self.result_panel.update(cx, |p, cx| p.commit_rename(cx));
+            }
+            ResultRequest::CancelRename => {
+                self.result_panel.update(cx, |p, cx| p.cancel_rename(cx));
+            }
         }
     }
 
@@ -8345,6 +8342,18 @@ impl Render for EditorHostPanel {
             self.show_line_numbers = want_line_numbers;
             self.editor.update(cx, |state, cx| {
                 state.set_line_number(want_line_numbers, window, cx)
+            });
+        }
+        // 【2026-10-27】折叠开关：设置 → shared.show_folds → 内核（render 权威同步点，
+        // 同 #48 行号）。只开关在设置页（工具栏按钮已移除）；仅在值变化时重跑
+        // `sync_fold`（install / set_folding），不 notify → 无重绘循环。
+        let want_folds = editor_show_folds_or_default(cx);
+        if self.shared.show_folds() != want_folds {
+            self.shared.set_show_folds(want_folds);
+            let shared = &self.shared;
+            let document = self.document.clone();
+            self.editor.update(cx, |state, cx| {
+                sync_fold(shared, &document, state, window, cx);
             });
         }
         let (bg, primary, muted) = {

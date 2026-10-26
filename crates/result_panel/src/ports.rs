@@ -87,6 +87,20 @@ pub enum ResultRequest {
     UndoAction,
     /// 【#28-B3】重做（组合语义与 [`Self::UndoAction`] 对称）
     RedoAction,
+    /// 【C1】重命名第 `index` 份结果集标签。
+    /// `Some(name)` = 覆盖自动标签（空白串宿主侧归一为恢复 `结果 N`）；`None` = 恢复自动标签。
+    /// 会话级，不落盘。
+    RenameSet(usize, Option<String>),
+    /// 【C1】切换第 `index` 份结果集的钉住态（钉住不被 FIFO 淘汰；会话级）。
+    TogglePin(usize),
+    /// 【C1】进入第 `index` 份结果集的重命名态（面板弹输入框；输入确认后再发
+    /// [`Self::RenameSet`]）。单独走一条事件路径是因为 render 闭包拿不到 `&mut App`，
+    /// 不能在 render 里直接改面板状态。
+    BeginRename(usize),
+    /// 【C1】提交重命名（读面板输入框当前值，发 RenameSet 回 store；空串恢复序号）
+    CommitRename,
+    /// 【C1】取消重命名（不发请求，面板退出 renaming 态）
+    CancelRename,
 }
 
 /// 结果集呈现方式（DBeaver Data Editor 的显示方式：网格 / 文本）
