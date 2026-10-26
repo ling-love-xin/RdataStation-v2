@@ -171,6 +171,8 @@ editor-result-compare-layout（h_flex，对比模式开启时）
 | 列浏览器（右栏页签） | ✅ 本轮交付（§8.12）：列浏览器并入右侧辅助栏，与值详情 / 计算 / 分组同栏四页签切换；清单 ↔ 网格双向选中联动；隐藏走眼睛、冻结/排序/筛选/列统计走右键；左栏已整体移除、宽度全部还给网格；遗留：多选批量动作、列序拖拽 |
 | 渲染改进批次（clip / 分段语义 / JSON 美化 / 列宽记忆 / 千分位 / 列级统计） | ✅ 本轮交付（§8.13）：单元格 300 字符裁剪、状态行分段提示、JSON pretty、会话内列宽记忆、整数千分位、计算 / 分组列级访问器；延后：COUNT 精确总数、列宽落盘、跨帧统计缓存、小数分组 |
 | 事实层 / 显示层分离 · A 批底座 | ✅ 本轮交付（§8.14）：A1 `FactFrame` 类型与访问器落 shared；A2 `facts` 平行槽位 + `FactState` 三态；A3 `QueryData.fact` 双产物入槽；A4 `fact_storage` 三档偏好 + Auto 分流纯函数与高低水位；B（DuckDB 分析保真链 / 表档接通）、D（导出分级）待开工；C（IronCalc）待拍板；E（engine 第一跳失真）另立项 |
+| 事实层 / 显示层分离 · B 批保真链 | ✅ 已交付（§8.15，提交 `84a81572`）：常驻表句柄回挂、分析三分支保真、内存档列式统计 / 排序 / 分组、表档占用可见、漂移注释勘误 |
+| 事实层 / 显示层分离 · D1 导出分级 | ✅ 本轮交付（§8.16，提交 `83655b26`）：Parquet / XLSX 事实档三分支保真直灌，无事实档猜型降级档回执标注；文本档不动；typed JSON 新档后置 |
 | 并排对比增强 | 双栏等宽 → 可拖拽分隔；右栏列宽/滚动独立记忆 |
 
 ## 8. ResultPanel Dock 化方案（2026-10-23 拍板）
@@ -600,7 +602,7 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 
 ### 8.15 事实层 / 显示层分离 · B 批保真链（B2–B6，2026-10-26，提交 `84a81572`）
 
-> 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md` §7-B / 跳 4 / 跳 5；本节记录 B 批已落地架构口径，D 批开工前回读该方案 §7-D。A 批底座见 §8.14。
+> 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md` §7-B / 跳 4 / 跳 5；本节记录 B 批已落地架构口径。A 批底座见 §8.14；D1 导出分级见 §8.16。
 
 **B 批落点（源码锚点，行号以当前基线为准）**
 
@@ -626,6 +628,38 @@ DBeaver Data Editor 四区形态已落地（左栏 / 右栏 / 工具栏 / 状态
 - `cargo test -p rds-editor --lib` = **603 passed / 0 failed / 1 ignored**；全量偶发 1 例 `named_parameters_hold_execution_until_filled` 单跑复现通过，定性工作线程 mpsc 排队时序，非本线回归。
 - `cargo test -p rds-engine --lib` = **658 passed / 0 failed / 24 ignored**。
 - `cargo test -p rds-workbench --lib analysis_tests` = **4 passed / 0 failed**；`cargo check -p rds-workbench --lib --tests --jobs 2` = 0 error（1 个 unused import warning 属并行线 `history_editor_entry.rs`，非本线符号）。
+
+### 8.16 事实层 / 显示层分离 · D1 导出分级（Parquet / XLSX 三分支保真，2026-10-26，提交 `83655b26`）
+
+> 方案定稿与逐跳口径：`docs/analysis/结果集数据流-事实层显示层分离方案.md` §7-D；本节记录 D1 已落地架构口径。B 批保真链见 §8.15，A 批底座见 §8.14。
+
+**D1 落点（源码锚点，行号以当前基线为准）**
+
+| 批次 | 内容 | 锚点 |
+| --- | --- | --- |
+| D1-a | shared 新增 `FactExportMode` 三态（`Batches` / `ExistingTable` / `Matrix`）、`FactFrame::export_mode()` 与纯函数 `fact_export_mode(Option<&FactFrame>)`；`is_degraded()` 仅 `Matrix` 返回 true；判定顺序与 B4 分析分支对齐：先判已挂常驻表名 → 复用，其次未释放且非空批 → 直灌，其余归降级档；1 例三态判定单测（内存档 Batches / 释放挂表名 ExistingTable / 无表名孤儿 Matrix / `None` → Matrix） | `crates/shared/src/fact.rs`（`FactExportMode` / `export_mode` / `fact_export_mode` / `is_degraded`）；`crates/shared/src/lib.rs`（重导出） |
+| D1-b | engine 新增 `export_batches_via_duckdb`（batches 经 Arrow Appender 直灌新建临时表 → `COPY` → 成败都 `DROP`、即用即收，不回挂事实档句柄）与 `export_existing_table_via_duckdb`（复用常驻表 `COPY`，不新建、不回收；行数由调用方按事实帧 `row_count` 缓存带入）；2 例保真导出单测：batches 读回 `typeof(id)=BIGINT`（对照 internal 档整列 VARCHAR）、常驻表导出后仍可查询未被 DROP | `crates/engine/src/services/execution_service.rs`（两导出函数 + `export_tests` 两例） |
+| D1-c | workbench `ResultService` 两透传；`export_via_duckdb` 改三分支分流：`Batches` 走 batches 直灌、`ExistingTable` 走常驻表复用、`Matrix` 走既有 `cell_json` 桥接 `export_rows_via_duckdb` 降级档；info 日志带 `mode`；`export_tests` 补 2 例（内存档读回 BIGINT、表档复用不 DROP 并清场） | `crates/workbench/src/services/result_service.rs`（两透传）；`crates/workbench/src/services/editor_exec.rs`（`export_via_duckdb` 三分支 + `export_tests`） |
+| D1-d | editor `DuckDbExportRequest` / `ExportNote` 增 `degraded: bool`；host 提交侧按 `fact_export_mode(fact).is_degraded()` 纯判定置位（与 workbench 执行分流共用同一纯函数，不依赖工作线程回执回传口径）；成功回执追加「文本猜型降级档：数字列按文本存储」说明；替身导出用例补 `degraded` 标记断言与文案断言 | `crates/editor/src/execution.rs`（两结构字段 + 线程内透传）；`crates/editor/src/view/host.rs`（提交侧判定 + 回执文案）；`crates/editor/src/view/tests.rs`（两例替身断言） |
+
+**口径边界（D1 守住的不做项）**
+
+- 文本档（CSV / JSON / INSERT / SQL Updates / WHERE）维持显示矩阵纯函数编码，不触发物化；`crates/result_panel/src/export.rs` 一行未改。
+- 本期只覆盖 Parquet / XLSX 两档事实档直灌；方案 §7-D 第 2 条提到的 `typed JSON` 属新增格式档，**后置不扩面**；现状 `Json` 档仍走文本档纯函数。
+- 导出范围仍只导已抓取段；全量导出另立取数路径，本批不做。
+- 降级档失真（整列落 `VARCHAR`、数字列被收窄成文本）只在两个保真分支消除；前导零文本在降级档保持原样（不被推成数字）。
+- 表档常驻表回收归事实档生命周期（槽位淘汰 / 文档关闭 / 项目切换清场），导出路径不 `DROP`；导出专用临时表（Batches 分支）即用即收，与分析常驻表生命周期不同。
+- insight 切回复用宿主表属并行线，本批未碰；编辑器状态栏并入全局状态栏属另一会话任务，本批未动。
+
+**测试基线（D1 回归，2026-10-26）**
+
+- `cargo test -p rds-shared --lib` = **41 passed / 0 failed**（基线 40 + D1 三态判定 1 例）。
+- `cargo test -p rds-settings --lib` = **35 passed / 0 failed**（D1 未动 settings，基线持平）。
+- `cargo test -p rds-result-panel --lib` = **181 passed / 0 failed**（D1 未动面板产品代码，基线持平）。
+- `cargo test -p rds-engine --lib` = **660 passed / 0 failed / 24 ignored**（基线 658 + D1 保真导出 2 例）。
+- `cargo test -p rds-workbench --lib analysis_tests` = **4 passed / 0 failed**；`cargo test -p rds-workbench --lib export_tests` = **4 passed / 0 failed**（2 例存量降级档 + 2 例 D1 保真档）。
+- `cargo test -p rds-editor --lib` = **602 passed / 1 failed / 1 ignored**；唯一失败 `named_parameters_hold_execution_until_filled` 为工作线程 mpsc 排队时序偶发，单跑复现 1 passed，非本线回归；两条 D1 替身导出用例（`parquet_export_goes_through_the_runner` / `duckdb_export_follows_the_local_filter`）通过。
+- `cargo check -p rds-editor --lib --jobs 2` = 0 error / 0 warning；`cargo check -p rds-workbench --lib --tests --jobs 2` = 0 error（1 个 unused import warning 属并行线 `crates/workbench/tests/history_editor_entry.rs`，非本线符号）。整包测试未执行（insight 线未提交 test-cfg 可能阻塞整包，被阻塞时如实上报不绕过）。
 
 ## 8. 协作纪律
 
